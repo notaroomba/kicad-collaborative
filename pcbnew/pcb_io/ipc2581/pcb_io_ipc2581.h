@@ -29,6 +29,7 @@
 
 #include <eda_shape.h>
 #include <layer_ids.h> // PCB_LAYER_ID
+#include <drill/drill_span.h>
 #include <font/font.h>
 #include <geometry/shape_segment.h>
 #include <stroke_params.h>
@@ -38,10 +39,14 @@
 #include <memory>
 #include <map>
 #include <set>
+#include <tuple>
 
 class BOARD;
 class BOARD_ITEM;
 class BOARD_STACKUP_ITEM;
+class FAB_STACKUP;
+class FAB_DRILL_MODEL;
+struct DRILL_OPERATION;
 class EDA_TEXT;
 class FOOTPRINT;
 class PROGRESS_REPORTER;
@@ -93,11 +98,7 @@ public:
     /// references the write and the release  The export subtracts the phases that it skips
     static constexpr int EXPORT_PHASES = 12;
 
-    // BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-    //                   const std::map<std::string, UTF8>* aProperties = nullptr,
-    //                   PROJECT* aProject = nullptr ) override;
-
-    void SaveBoard( const wxString& aFileName, BOARD* aBoard,
+    void SaveBoard( const wxString& aFileName, BOARD& aBoard,
                     const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     const IO_BASE::IO_FILE_DESC GetBoardFileDesc() const override
@@ -209,7 +210,7 @@ private:
 
     void generateLayerSetDrill( wxXmlNode* aStepNode );
 
-    void generateLayerSetNet( wxXmlNode* aLayerNode, PCB_LAYER_ID aLayer, std::vector<BOARD_ITEM*>& aItems );
+    void generateLayerSetNet( wxXmlNode* aLayerNode, PCB_LAYER_ID aLayer, const std::vector<BOARD_ITEM*>& aItems );
 
     void generateLayerSetAuxilliary( wxXmlNode* aStepNode );
 
@@ -265,7 +266,7 @@ private:
     /**
      * True if a Component keeps a designator that a reference can name
      *
-     * Since rev B makes Component@refDes mandatory the export only replaces the name
+     * Since rev B makes Component\@refDes mandatory the export only replaces the name
      */
     bool refDesEmitted() const
     {
@@ -295,6 +296,8 @@ private:
     void ensureBackdrillSpecs( const wxString& aPadstackName, const PADSTACK& aPadstack );
 
     void addBackdrillSpecRefs( wxXmlNode* aHoleNode, const wxString& aPadstackName );
+
+    void addPostMachiningSpecRefs( wxXmlNode* aHoleNode, const DRILL_OPERATION& aOperation );
 
     void pruneUnusedBackdrillSpecs();
 
@@ -334,8 +337,6 @@ private:
 
     size_t lineHash( int aWidth, LINE_STYLE aDashType );
 
-    size_t shapeHash( const PCB_SHAPE& aShape );
-
     wxString sanitizeId( const wxString& aStr ) const;
     wxString genString( const wxString& aStr, const char* aPrefix = nullptr ) const;
     wxString genLayerString( PCB_LAYER_ID aLayer, const char* aPrefix ) const;
@@ -368,7 +369,6 @@ private:
 
     void addLayerAttributes( wxXmlNode* aNode, PCB_LAYER_ID aLayer );
 
-    bool isValidLayerFor2581( PCB_LAYER_ID aLayer );
 private:
 
     size_t                  m_total_bytes;  //<! Total number of bytes to be written
@@ -394,12 +394,14 @@ private:
     wxString                m_distpn;       //<! If set, field name containing the distributor part number
     wxString                m_dist;         //<! If set, field name containing the distributor name
     wxString                m_bomRev;       //<! BOM revision string for the BomHeader element
+    wxString                m_variantName;  //<! BOM population variant or board current
 
     // Node pointer to the main enterprise node to be used for adding
     // enterprises later when forming the AVL
     wxXmlNode*              m_enterpriseNode;
 
     BOARD*                  m_board;
+    const FAB_STACKUP*                  m_fabStackup = nullptr;
     std::vector<FOOTPRINT*> m_loaded_footprints;
     const std::map<std::string, UTF8>*  m_props;
 
@@ -420,6 +422,7 @@ private:
     std::map<wxString, wxXmlNode*>                    m_backdrill_spec_nodes;
     std::set<wxString>                                m_backdrill_spec_used;
     int                                               m_backdrill_spec_index;
+    std::map<std::tuple<bool, int, int, int, int>, wxString> m_post_machining_specs;
     wxXmlNode*                                        m_cad_header_node;
 
     std::map<size_t, wxString>
@@ -440,8 +443,8 @@ private:
     std::map<PCB_LAYER_ID, wxString>
             m_layer_name_map; //<! Mapping layer name in 2581 to the internal layer id
 
-    std::map<std::pair<PCB_LAYER_ID, PCB_LAYER_ID>, std::vector<BOARD_ITEM*>>
-            m_drill_layers; //<! Drill sets are output as layers (to/from pairs)
+    std::map<DRILL_SPAN, std::vector<BOARD_ITEM*>> m_drill_layers; //<! Drill sets are output as layers, one per span
+    const FAB_DRILL_MODEL* m_fabDrillModel = nullptr;
 
     std::map<std::pair<PCB_LAYER_ID, PCB_LAYER_ID>, std::vector<PAD*>>
             m_slot_holes; //<! Storage vector of slotted holes that need to be output as cutouts
@@ -451,8 +454,8 @@ private:
 
     PROGRESS_REPORTER*      m_progress_reporter;
 
-    mutable std::set<wxString>           m_element_names;   //<! Track generated element names
-    mutable std::map<wxString, wxString> m_generated_names; //<! Map input keys to unique names
+    mutable std::map<wxString, std::set<wxString>> m_element_names;   //<! Track generated names by namespace
+    mutable std::map<wxString, wxString>           m_generated_names; //<! Map input keys to unique names
 
     std::set<wxUniChar>     m_acceptable_chars;     //<! IPC2581B and C have differing sets of allowed characters in names
 

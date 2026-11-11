@@ -32,6 +32,7 @@
 #include <kiface_base.h>
 #include <sch_edit_frame.h>
 #include <sch_group.h>
+#include <variant_proxy_undo_item.h>
 #include <widgets/wx_infobar.h>
 #include <sch_reference_list.h>
 #include <tools/sch_editor_control.h>
@@ -50,6 +51,7 @@
 #include <project/project_file.h>
 #include <jobs/job_export_bom.h>
 #include <tools/sch_actions.h>
+#include <tool/tool_manager.h>
 #include <tools/sch_selection_tool.h>
 #include <sch_sheet_path.h>
 
@@ -252,7 +254,7 @@ DIALOG_SYMBOL_FIELDS_TABLE::DIALOG_SYMBOL_FIELDS_TABLE( SCH_EDIT_FRAME* aParent,
     // Get all symbols from the list of schematic sheets
     m_parent->Schematic().Hierarchy().GetSymbols( m_symbolsList, SYMBOL_FILTER_NON_POWER );
 
-    if( auto conflicts = DetectFieldCaseConflicts( m_symbolsList ); !conflicts.empty() )
+    if( std::vector<FIELD_CASE_CONFLICT> conflicts = DetectFieldCaseConflicts( m_symbolsList ); !conflicts.empty() )
     {
         DIALOG_RESOLVE_FIELD_CASE_CONFLICTS resolver( this, m_parent, std::move( conflicts ) );
 
@@ -366,6 +368,9 @@ DIALOG_SYMBOL_FIELDS_TABLE::~DIALOG_SYMBOL_FIELDS_TABLE()
 {
     if( m_aborted )
         return;
+
+    if( !m_job )
+        m_parent->Schematic().RemoveListener( this );
 
     SavePanelLayout();
     SaveColumnWidths();
@@ -522,9 +527,8 @@ bool DIALOG_SYMBOL_FIELDS_TABLE::TransferDataFromWindow()
 
     SCH_COMMIT     commit( m_parent );
     SCH_SHEET_PATH currentSheet = m_parent->GetCurrentSheet();
-    wxString       currentVariant = m_parent->Schematic().GetCurrentVariant();
 
-    m_dataModel->ApplyData( commit, m_templateFieldNames, currentVariant );
+    m_dataModel->ApplyData( commit, m_templateFieldNames );
 
     if( !commit.Empty() )
     {
@@ -885,7 +889,7 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsAdded( SCHEMATIC& aSch, std::vector<S
     std::set<KIID_PATH> savedSelection = SaveGridSelection();
 
     SCH_REFERENCE_LIST allRefs;
-    m_parent->Schematic().Hierarchy().GetSymbols( allRefs, SYMBOL_FILTER_ALL );
+    m_parent->Schematic().Hierarchy().GetSymbols( allRefs, SYMBOL_FILTER_NON_POWER );
 
     for( SCH_ITEM* item : aSchItem )
     {
@@ -953,7 +957,7 @@ void DIALOG_SYMBOL_FIELDS_TABLE::OnSchItemsChanged( SCHEMATIC& aSch, std::vector
     std::set<KIID_PATH> savedSelection = SaveGridSelection();
 
     SCH_REFERENCE_LIST allRefs;
-    m_parent->Schematic().Hierarchy().GetSymbols( allRefs, SYMBOL_FILTER_ALL );
+    m_parent->Schematic().Hierarchy().GetSymbols( allRefs, SYMBOL_FILTER_NON_POWER );
 
     for( SCH_ITEM* item : aSchItem )
     {
@@ -1094,6 +1098,9 @@ SCH_REFERENCE_LIST DIALOG_SYMBOL_FIELDS_TABLE::getSheetSymbolReferences( SCH_SHE
 
 void DIALOG_SYMBOL_FIELDS_TABLE::onAddVariant( wxCommandEvent& aEvent )
 {
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
     if( !m_parent->ShowAddVariantDialog( this ) )
         return;
 
@@ -1103,41 +1110,52 @@ void DIALOG_SYMBOL_FIELDS_TABLE::onAddVariant( wxCommandEvent& aEvent )
     for( const wxString& variant : m_parent->Schematic().GetVariantNames() )
         ctrlContents.Add( variant );
 
-    ctrlContents.Sort( SortVariantNames );
+    ctrlContents.Sort( SortVariantNames );  // SortVariantNames ensures the default is always first
     m_variantListBox->Set( ctrlContents );
 
     wxString currentVariant = m_parent->Schematic().GetCurrentVariant();
-    int      newSelection = m_variantListBox->FindString(
-                currentVariant.IsEmpty() ? GetDefaultVariantName() : currentVariant );
 
-    if( newSelection != wxNOT_FOUND )
-        m_variantListBox->SetSelection( newSelection );
+    if( !m_variantListBox->SetStringSelection( currentVariant ) )
+        m_variantListBox->SetSelection( 0 );
 
-    updateVariantButtonStates();
+    onVariantSelectionChange( aEvent );
 }
 
 
 void DIALOG_SYMBOL_FIELDS_TABLE::onDeleteVariant( wxCommandEvent& aEvent )
 {
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
     int selection = m_variantListBox->GetSelection();
 
     // An empty or default selection cannot be deleted.
     if( ( selection == wxNOT_FOUND ) || ( selection == 0 ) )
     {
-        m_parent->GetInfoBar()->ShowMessageFor( _( "Cannot delete the default variant." ),
-                                                 10000, wxICON_ERROR );
+        m_parent->GetInfoBar()->ShowMessageFor( _( "Cannot delete the default variant." ), 10000, wxICON_ERROR );
         return;
     }
 
     wxString variantName = m_variantListBox->GetString( selection );
+    m_dataModel->DeleteStoredVariant( variantName );
     m_variantListBox->Delete( selection );
 
-    SCH_COMMIT commit( m_parent );
+    VARIANT_PROXY_UNDO_ITEM* undoItem = new VARIANT_PROXY_UNDO_ITEM( &m_parent->Schematic() );
+    SCH_COMMIT               commit( m_parent );
+    bool                     append = false;
 
     m_parent->Schematic().DeleteVariant( variantName, &commit );
 
     if( !commit.Empty() )
-        commit.Push( wxString::Format( wxS( "Delete Variant '%s'" ), variantName ) );
+    {
+        commit.Push();
+        append = true;
+    }
+
+    PICKED_ITEMS_LIST undoCmd;
+    undoCmd.PushItem( ITEM_PICKER( m_parent->GetScreen(), undoItem, UNDO_REDO::VARIANTS ) );
+    undoCmd.SetDescription( _( "Delete Variant" ) );
+    m_parent->SaveCopyInUndoList( undoCmd, UNDO_REDO::VARIANTS, append );
 
     m_parent->OnModify();
 
@@ -1171,70 +1189,69 @@ void DIALOG_SYMBOL_FIELDS_TABLE::onRenameVariant( wxCommandEvent& aEvent )
     // An empty or default selection cannot be renamed.
     if( ( selection == wxNOT_FOUND ) || ( selection == 0 ) )
     {
-        m_parent->GetInfoBar()->ShowMessageFor( _( "Cannot rename the default variant." ),
-                                                 10000, wxICON_ERROR );
+        m_parent->GetInfoBar()->ShowMessageFor( _( "Cannot rename the default variant." ), 10000, wxICON_ERROR );
         return;
     }
 
     wxString oldVariantName = m_variantListBox->GetString( selection );
 
-    wxTextEntryDialog dlg( this, _( "Enter new variant name:" ), _( "Rename Design Variant" ),
-                           oldVariantName, wxOK | wxCANCEL | wxCENTER );
+    wxTextEntryDialog dlg( this, _( "Enter new variant name:" ), _( "Rename Design Variant" ), oldVariantName,
+                           wxOK | wxCANCEL | wxCENTER );
 
     if( dlg.ShowModal() == wxID_CANCEL )
         return;
 
     wxString newVariantName = dlg.GetValue().Trim().Trim( false );
 
-    // Empty name is not allowed.
-    if( newVariantName.IsEmpty() )
-    {
-        m_parent->GetInfoBar()->ShowMessageFor( _( "Variant name cannot be empty." ), 10000, wxICON_ERROR );
-        return;
-    }
-
-    // Reserved name is not allowed (case-insensitive).
-    if( newVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 )
-    {
-        m_parent->GetInfoBar()->ShowMessageFor( wxString::Format( _( "'%s' is a reserved variant name." ),
-                                                                  GetDefaultVariantName() ),
-                                                10000, wxICON_ERROR );
-        return;
-    }
-
     // Same name (exact match) - nothing to do
     if( newVariantName == oldVariantName )
         return;
 
-    // Duplicate name is not allowed (case-insensitive).
-    for( const wxString& existingName : m_parent->Schematic().GetVariantNames() )
+    if( !m_parent->ValidateNewVariantName( newVariantName, oldVariantName ) )
+        return;
+
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
+    bool wasCurrent = m_parent->Schematic().GetCurrentVariant() == oldVariantName;
+
+    m_dataModel->RenameStoredVariant( oldVariantName, newVariantName );
+
+    VARIANT_PROXY_UNDO_ITEM* undoItem = new VARIANT_PROXY_UNDO_ITEM( &m_parent->Schematic() );
+    SCH_COMMIT               commit( m_parent );
+    PICKED_ITEMS_LIST*       undoCmd = nullptr;
+
+    m_parent->Schematic().RenameVariant( oldVariantName, newVariantName, &commit );
+
+    if( !commit.Empty() )
     {
-        if( existingName.CmpNoCase( newVariantName ) == 0
-            && existingName.CmpNoCase( oldVariantName ) != 0 )
-        {
-            m_parent->GetInfoBar()->ShowMessageFor( wxString::Format( _( "Variant '%s' already exists." ),
-                                                                      existingName ),
-                                                    0000, wxICON_ERROR );
-            return;
-        }
+        commit.Push();
+        undoCmd = m_parent->PopCommandFromUndoList();
+    }
+    else
+    {
+        undoCmd = new PICKED_ITEMS_LIST();
     }
 
-    m_parent->Schematic().RenameVariant( oldVariantName, newVariantName );
+    undoCmd->PushItem( ITEM_PICKER( m_parent->GetScreen(), undoItem, UNDO_REDO::VARIANTS ) );
+    undoCmd->SetDescription( _( "Rename Variant" ) );
+    m_parent->PushCommandToUndoList( undoCmd );
+
     m_parent->OnModify();
 
     wxArrayString ctrlContents = m_variantListBox->GetStrings();
     ctrlContents.Remove( oldVariantName );
     ctrlContents.Add( newVariantName );
-    ctrlContents.Sort( SortVariantNames );
+    ctrlContents.Sort( SortVariantNames );  // SortVariantNames ensures the default is always first
     m_variantListBox->Set( ctrlContents );
 
-    int newSelection = m_variantListBox->FindString( newVariantName );
-
-    if( newSelection != wxNOT_FOUND )
-        m_variantListBox->SetSelection( newSelection );
+    m_variantListBox->SetStringSelection( newVariantName );
 
     updateVariantButtonStates();
     m_parent->UpdateVariantSelectionCtrl( m_parent->Schematic().GetVariantNamesForUI() );
+
+    if( wasCurrent )
+        m_parent->SetCurrentVariant( newVariantName );
 }
 
 
@@ -1245,8 +1262,7 @@ void DIALOG_SYMBOL_FIELDS_TABLE::onCopyVariant( wxCommandEvent& aEvent )
     // An empty or default selection cannot be copied.
     if( ( selection == wxNOT_FOUND ) || ( selection == 0 ) )
     {
-        m_parent->GetInfoBar()->ShowMessageFor( _( "Cannot copy the default variant." ),
-                                                 10000, wxICON_ERROR );
+        m_parent->GetInfoBar()->ShowMessageFor( _( "Cannot copy the default variant." ), 10000, wxICON_ERROR );
         return;
     }
 
@@ -1276,20 +1292,20 @@ void DIALOG_SYMBOL_FIELDS_TABLE::onCopyVariant( wxCommandEvent& aEvent )
         return;
     }
 
-    m_parent->Schematic().CopyVariant( sourceVariantName, newVariantName );
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
+    m_parent->Schematic().CopyVariant( sourceVariantName, newVariantName, nullptr /* no undo */ );
     m_parent->OnModify();
 
     wxArrayString ctrlContents = m_variantListBox->GetStrings();
     ctrlContents.Add( newVariantName );
-    ctrlContents.Sort( SortVariantNames );
+    ctrlContents.Sort( SortVariantNames );  // SortVariantNames ensures the default is always first
     m_variantListBox->Set( ctrlContents );
 
-    int newSelection = m_variantListBox->FindString( newVariantName );
+    m_variantListBox->SetStringSelection( newVariantName );
 
-    if( newSelection != wxNOT_FOUND )
-        m_variantListBox->SetSelection( newSelection );
-
-    updateVariantButtonStates();
+    onVariantSelectionChange( aEvent );
     m_parent->UpdateVariantSelectionCtrl( m_parent->Schematic().GetVariantNamesForUI() );
 }
 
@@ -1344,65 +1360,26 @@ void DIALOG_SYMBOL_FIELDS_TABLE::onEditVariantDescription( wxCommandEvent& aEven
 
 void DIALOG_SYMBOL_FIELDS_TABLE::onVariantSelectionChange( wxCommandEvent& aEvent )
 {
-    wxString currentVariant;
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
     wxString selectedVariant = getSelectedVariant();
 
+    // Activating a variant only selects its staged values. Apply writes all edited variants.
+    m_dataModel->SetCurrentVariant( selectedVariant );
+
+    if( !m_job && m_parent )
+        m_parent->SetCurrentVariant( selectedVariant );
+
+    m_dataModel->RebuildRows();
+
+    if( m_nbPages->GetSelection() == 1 )
+        PreviewRefresh();
+    else
+        m_grid->ForceRefresh();
+
     updateVariantButtonStates();
-
-    if( m_job )
-    {
-        m_grid->CommitPendingChanges( true );
-
-        if( m_parent )
-            m_parent->SetCurrentVariant( selectedVariant );
-
-        m_dataModel->SetCurrentVariant( selectedVariant );
-        m_dataModel->UpdateReferences( m_dataModel->GetReferenceList() );
-        m_dataModel->RebuildRows();
-
-        if( m_nbPages->GetSelection() == 1 )
-            PreviewRefresh();
-        else
-            m_grid->ForceRefresh();
-
-        syncBomFmtPresetSelection();
-        return;
-    }
-
-    if( m_parent )
-    {
-        currentVariant = m_parent->Schematic().GetCurrentVariant();
-
-        if( currentVariant != selectedVariant )
-            m_parent->SetCurrentVariant( selectedVariant );
-    }
-
-    if( currentVariant != selectedVariant )
-    {
-        m_grid->CommitPendingChanges( true );
-
-        SCH_COMMIT     commit( m_parent );
-
-        m_dataModel->ApplyData( commit, m_templateFieldNames, currentVariant );
-
-        if( !commit.Empty() )
-        {
-            commit.Push( wxS( "Symbol Fields Table Edit" ) );  // Push clears the commit buffer.
-            m_parent->OnModify();
-        }
-
-        // Update the data model's current variant for field highlighting
-        m_dataModel->SetCurrentVariant( selectedVariant );
-        m_dataModel->UpdateReferences( m_dataModel->GetReferenceList() );
-        m_dataModel->RebuildRows();
-
-        if( m_nbPages->GetSelection() == 1 )
-            PreviewRefresh();
-        else
-            m_grid->ForceRefresh();
-
-        syncBomFmtPresetSelection();
-    }
+    syncBomFmtPresetSelection();
 }
 
 

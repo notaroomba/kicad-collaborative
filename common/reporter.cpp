@@ -21,6 +21,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <cwchar>
 #include <mutex>
 #include <macros.h>
 #include <reporter.h>
@@ -30,10 +31,15 @@
 #include <widgets/wx_infobar.h>
 #include <wx/crt.h>
 #include <wx/log.h>
+#include <wx/msgout.h>
 #include <wx/textctrl.h>
 #include <wx/statusbr.h>
 #include <wx/tokenzr.h>
 #include <wx/weakref.h>
+
+#ifdef __WXMSW__
+#include <io.h>
+#endif
 
 
 /**
@@ -222,10 +228,27 @@ REPORTER& CLI_REPORTER::Report( const wxString& aMsg, SEVERITY aSeverity )
     if( aSeverity == RPT_SEVERITY_ERROR )
         target = stderr;
 
+#ifdef __WXMSW__
+    const int fd = _fileno( target );
+
+    if( fd >= 0 && !_isatty( fd ) )
+    {
+        wxMessageOutputStderr( target, wxConvUTF8 ).Output( aMsg );
+        return *this;
+    }
+#else
+    // Tracing can orient the stream for byte output before the first report.
+    if( std::fwide( target, 0 ) < 0 )
+    {
+        wxMessageOutputStderr( target ).Output( aMsg );
+        return *this;
+    }
+#endif
+
     if( aMsg.EndsWith( wxS( "\n" ) ) )
-        wxFprintf( target, aMsg );
+        wxFprintf( target, wxS( "%s" ), aMsg );
     else
-        wxFprintf( target, aMsg + wxS( "\n" ) );
+        wxFprintf( target, wxS( "%s" ), aMsg + wxS( "\n" ) );
 
     // Needed  after wxPrintf (or printf) to be sure the message is immediately printed
     // (i.e. not stored in some i/o buffer)

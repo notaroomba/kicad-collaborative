@@ -77,10 +77,9 @@ BOOST_AUTO_TEST_CASE( SignalTerminalPadsRoundTrip )
     PCB_TRACK* t2 = new PCB_TRACK( board.get() ); t2->SetNetCode( 2 ); t2->SetStart( p1a->GetPosition() ); t2->SetEnd( p2a->GetPosition() ); board->Add( t2 );
 
     auto tmpFile = std::filesystem::temp_directory_path() / "net_chain_terminal_pads_roundtrip.kicad_pcb";
-    plugin.SaveBoard( tmpFile.string(), board.get() );
+    plugin.SaveBoard( tmpFile.string(), *board );
 
-    std::unique_ptr<BOARD> loaded = std::make_unique<BOARD>();
-    plugin.LoadBoard( tmpFile.string(), loaded.get() );
+    std::unique_ptr<BOARD> loaded = plugin.LoadBoard( tmpFile.string() );
 
     NETINFO_ITEM* ln1 = loaded->FindNet( 1 );
     NETINFO_ITEM* ln2 = loaded->FindNet( 2 );
@@ -134,10 +133,9 @@ BOOST_AUTO_TEST_CASE( SingleNetSignalNamePersists )
     PCB_TRACK* t = new PCB_TRACK( board.get() ); t->SetNetCode( 1 ); t->SetStart( VECTOR2I(0,0) ); t->SetEnd( VECTOR2I(1000000,0) ); board->Add( t );
 
     auto tmpFile = std::filesystem::temp_directory_path() / "single_net_chain_roundtrip.kicad_pcb";
-    plugin.SaveBoard( tmpFile.string(), board.get() );
+    plugin.SaveBoard( tmpFile.string(), *board );
 
-    std::unique_ptr<BOARD> loaded = std::make_unique<BOARD>();
-    plugin.LoadBoard( tmpFile.string(), loaded.get() );
+    std::unique_ptr<BOARD> loaded = plugin.LoadBoard( tmpFile.string() );
     NETINFO_ITEM* ln1 = loaded->FindNet( 1 );
     BOOST_REQUIRE( ln1 );
     BOOST_CHECK_EQUAL( ln1->GetNetChain(), wxS( "CLK_REF" ) );
@@ -169,10 +167,9 @@ BOOST_AUTO_TEST_CASE( SignalsSurviveBuildListOfNets )
     }
 
     auto tmpFile = std::filesystem::temp_directory_path() / "net_chains_survive_buildlist.kicad_pcb";
-    plugin.SaveBoard( tmpFile.string(), board.get() );
+    plugin.SaveBoard( tmpFile.string(), *board );
 
-    std::unique_ptr<BOARD> loaded = std::make_unique<BOARD>();
-    plugin.LoadBoard( tmpFile.string(), loaded.get() );
+    std::unique_ptr<BOARD> loaded = plugin.LoadBoard( tmpFile.string() );
 
     // Simulate GUI post-load rebuild that previously cleared signals
     loaded->BuildListOfNets();

@@ -166,7 +166,7 @@ void NETCLASS::Serialize( kiapi::common::project::NetClass& nc ) const
     nc.set_name( m_Name.ToUTF8() );
     nc.set_priority( m_Priority );
 
-    nc.set_type( m_constituents.empty() ? project::NCT_EXPLICIT : project::NCT_IMPLICIT );
+    nc.set_type( m_constituents.size() <= 1 ? project::NCT_EXPLICIT : project::NCT_IMPLICIT );
 
     for( NETCLASS* member : m_constituents )
         nc.add_constituents( member->GetName() );
@@ -233,7 +233,9 @@ void NETCLASS::Serialize( google::protobuf::Any &aContainer ) const
 {
     kiapi::common::project::NetClass nc;
     Serialize( nc );
-    aContainer.PackFrom( nc );
+
+    if( !aContainer.PackFrom( nc ) )
+        wxFAIL_MSG( wxT( "Failed to pack NETCLASS" ) );
 }
 
 
@@ -249,7 +251,7 @@ bool NETCLASS::Deserialize( const kiapi::common::project::NetClass& nc )
     if( nc.type() == project::NCT_IMPLICIT )
         return false;
 
-    SetConstituentNetclasses( {} );
+    SetConstituentNetclasses( { this } );
 
     if( nc.board().has_clearance() )
         m_Clearance = nc.board().clearance().value_nm();
@@ -318,6 +320,18 @@ const std::vector<NETCLASS*>& NETCLASS::GetConstituentNetclasses() const
 void NETCLASS::SetConstituentNetclasses( std::vector<NETCLASS*>&& constituents )
 {
     m_constituents = std::move( constituents );
+    m_constituentOwners.clear();
+}
+
+
+void NETCLASS::SetConstituentOwners( std::vector<std::shared_ptr<NETCLASS>>&& aConstituents )
+{
+    m_constituents.clear();
+
+    for( const std::shared_ptr<NETCLASS>& nc : aConstituents )
+        m_constituents.push_back( nc.get() );
+
+    m_constituentOwners = std::move( aConstituents );
 }
 
 
@@ -389,4 +403,33 @@ const wxString NETCLASS::GetName() const
     }
 
     return name;
+}
+
+
+bool NETCLASS::NameEquals( const wxString& aName ) const
+{
+    if( m_constituents.size() <= 1 )
+        return m_Name == aName;
+
+    size_t offset = 0;
+
+    for( size_t i = 0; i < m_constituents.size(); ++i )
+    {
+        if( i > 0 )
+        {
+            if( offset >= aName.length() || aName[offset] != wxS( ',' ) )
+                return false;
+
+            ++offset;
+        }
+
+        const wxString& constituentName = m_constituents[i]->m_Name;
+
+        if( aName.compare( offset, constituentName.length(), constituentName ) != 0 )
+            return false;
+
+        offset += constituentName.length();
+    }
+
+    return offset == aName.length();
 }

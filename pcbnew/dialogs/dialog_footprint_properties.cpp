@@ -41,6 +41,7 @@
 #include <widgets/text_ctrl_eval.h>
 #include <widgets/std_bitmap_button.h>
 #include <settings/settings_manager.h>
+#include <template_fieldnames.h>
 #include <panel_embedded_files.h>
 #include <panel_fp_properties_3d_model.h>
 #include <dialogs/panel_preview_3d_model.h>
@@ -59,6 +60,7 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
         m_posX( aParent, m_XPosLabel, m_ModPositionX, m_XPosUnit ),
         m_posY( aParent, m_YPosLabel, m_ModPositionY, m_YPosUnit ),
         m_orientation( aParent, m_orientationLabel, m_orientationCtrl, nullptr ),
+        m_height( aParent, m_heightLabel, m_heightCtrl, m_heightUnits ),
         m_netClearance( aParent, m_NetClearanceLabel, m_NetClearanceCtrl, m_NetClearanceUnits ),
         m_solderMask( aParent, m_SolderMaskMarginLabel, m_SolderMaskMarginCtrl, m_SolderMaskMarginUnits ),
         m_solderPaste( aParent, m_SolderPasteMarginLabel, m_SolderPasteMarginCtrl, m_SolderPasteMarginUnits ),
@@ -77,8 +79,8 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
     m_posY.SetCoordType( ORIGIN_TRANSFORMS::ABS_Y_COORD );
 
     std::vector<EMBEDDED_FILES*> embeddedFilesStack;
-    embeddedFilesStack.push_back( m_embeddedFiles->GetLocalFiles() );
     embeddedFilesStack.push_back( m_frame->GetBoard()->GetEmbeddedFiles() );
+    embeddedFilesStack.push_back( m_embeddedFiles->GetLocalFiles() );
 
     m_fields = new PCB_FIELDS_GRID_TABLE( m_frame, this, std::move( embeddedFilesStack ) );
 
@@ -96,6 +98,7 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
     m_itemsGrid->SetTable( m_fields );
     m_itemsGrid->OverrideMinSize( 1.0, 1.0 );
     m_itemsGrid->PushEventHandler( new GRID_TRICKS( m_itemsGrid ) );
+    m_itemsGrid->Bind( wxEVT_GRID_CELL_CHANGING, &DIALOG_FOOTPRINT_PROPERTIES::OnGridCellChanging, this );
     m_itemsGrid->SetupColumnAutosizer( PFC_VALUE );
     m_itemsGrid->ShowHideColumns( "0 1 2 3 4 5 7" );
 
@@ -152,6 +155,7 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
         m_ModPositionY,
         m_orientationCtrl,
         m_BoardSideCtrl,
+        m_heightCtrl,
         m_cbLocked,
         m_componentType,
         m_cbExcludeFromSim,
@@ -180,6 +184,8 @@ DIALOG_FOOTPRINT_PROPERTIES::DIALOG_FOOTPRINT_PROPERTIES( PCB_EDIT_FRAME* aParen
 
 DIALOG_FOOTPRINT_PROPERTIES::~DIALOG_FOOTPRINT_PROPERTIES()
 {
+    m_itemsGrid->Unbind( wxEVT_GRID_CELL_CHANGING, &DIALOG_FOOTPRINT_PROPERTIES::OnGridCellChanging, this );
+
     // Prevents crash bug in wxGrid's d'tor
     m_itemsGrid->DestroyTable( m_fields );
 
@@ -286,6 +292,11 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
     m_cbLocked->SetToolTip( _( "Locked footprints cannot be freely moved or oriented on the canvas and can only be "
                                "selected when the 'Locked items' checkbox is checked in the selection filter." ) );
 
+    if( m_footprint->GetHeight() != 0 )
+        m_height.SetValue( m_footprint->GetHeight() );
+    else
+        m_height.SetValue( wxEmptyString );
+
     if( m_footprint->GetAttributes() & FP_THROUGH_HOLE )
         m_componentType->SetSelection( 0 );
     else if( m_footprint->GetAttributes() & FP_SMD )
@@ -331,11 +342,11 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataToWindow()
     if( m_footprint->GetDuplicatePadNumbersAreJumpers() )
         jumperGroups = _( "all pads with duplicate numbers" );
 
-    for( const std::set<wxString>& group : m_footprint->JumperPadGroups() )
+    for( const JUMPER_GROUP& group : m_footprint->JumperPadGroups().GetAll() )
     {
         wxString groupTxt;
 
-        for( const wxString& pinNumber : group )
+        for( const wxString& pinNumber : group.GetNames() )
         {
             if( !groupTxt.IsEmpty() )
                 groupTxt << ", ";
@@ -500,6 +511,14 @@ bool DIALOG_FOOTPRINT_PROPERTIES::Validate()
     if( !m_netClearance.Validate( 0, INT_MAX ) )
         return false;
 
+    if( wxString error = m_solderPaste.Validate(); !error.IsEmpty() )
+    {
+        m_NoteBook->SetSelection( FindNotebookPage( m_NoteBook, m_SolderPasteMarginCtrl ) );
+        wxSafeYield( this );
+        DisplayError( nullptr, error );
+        return false;
+    }
+
     return true;
 }
 
@@ -509,7 +528,14 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     if( !Validate() )
         return false;
 
-    if( !m_itemsGrid->CommitPendingChanges() )
+    if( !m_itemsGrid->CommitPendingChanges()
+        || !m_3dPanel->CommitPendingChanges()
+        || !m_embeddedFiles->CommitPendingChanges() )
+    {
+        return false;
+    }
+
+    if( !m_3dPanel->Validate() )
         return false;
 
     KIGFX::PCB_VIEW*    view = m_frame->GetCanvas()->GetView();
@@ -518,11 +544,9 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     commit.Modify( m_footprint );
 
     // Make sure this happens inside a commit to capture any changed files
-    if( !m_3dPanel->TransferDataFromWindow() )
-        return false;
+    (void) m_3dPanel->TransferDataFromWindow();
 
-    if( !m_embeddedFiles->TransferDataFromWindow() )
-        return false;
+    (void) m_embeddedFiles->TransferDataFromWindow();
 
     // Clear out embedded files that are no longer in use
     std::set<wxString> files;
@@ -599,7 +623,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
         }
 
         if( !field.IsMandatory() )
-            newField.SetOrdinal( ordinal++ );
+            newField.SetOrdinal( ordinal++, FIELD_T::USER );
     }
 
     std::vector<PCB_FIELD*> addedFields;
@@ -666,6 +690,7 @@ bool DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow()
     VECTOR2I pos( m_posX.GetValue(), m_posY.GetValue() );
     m_footprint->SetPosition( pos );
     m_footprint->SetLocked( m_cbLocked->GetValue() );
+    m_footprint->SetHeight( static_cast<int>( m_height.GetValue() ) );
 
     int attributes = 0;
 
@@ -802,14 +827,47 @@ void DIALOG_FOOTPRINT_PROPERTIES::OnDeleteField( wxCommandEvent&  )
             },
             [&]( int row )
             {
-                m_fields->erase( m_fields->begin() + row );
-
-                // notify the grid
-                wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_DELETED, row, 1 );
-                m_itemsGrid->ProcessTableMessage( msg );
+                m_fields->DeleteRows( row );
             } );
 
     OnModify();
+}
+
+
+void DIALOG_FOOTPRINT_PROPERTIES::OnGridCellChanging( wxGridEvent& aEvent )
+{
+    wxGridCellEditor* editor = m_itemsGrid->GetCellEditor( aEvent.GetRow(), aEvent.GetCol() );
+    wxControl*        control = editor->GetControl();
+
+    if( control && control->GetValidator() && !control->GetValidator()->Validate( control ) )
+    {
+        aEvent.Veto();
+        m_delayedFocusGrid = m_itemsGrid;
+        m_delayedFocusRow = aEvent.GetRow();
+        m_delayedFocusColumn = aEvent.GetCol();
+    }
+    else if( aEvent.GetCol() == PFC_NAME )
+    {
+        wxString newName = aEvent.GetString();
+
+        for( int row = 0; row < m_itemsGrid->GetNumberRows(); ++row )
+        {
+            if( row == aEvent.GetRow() )
+                continue;
+
+            if( FieldNamesAreDuplicates( newName, m_itemsGrid->GetCellValue( row, PFC_NAME ) ) )
+            {
+                aEvent.Veto();
+                m_delayedFocusGrid = m_itemsGrid;
+                m_delayedFocusRow = aEvent.GetRow();
+                m_delayedFocusColumn = aEvent.GetCol();
+                m_delayedErrorMessage = wxString::Format( _( "Field name '%s' already in use." ), newName );
+                break;
+            }
+        }
+    }
+
+    editor->DecRef();
 }
 
 
@@ -876,6 +934,8 @@ void DIALOG_FOOTPRINT_PROPERTIES::OnPageChanging( wxNotebookEvent& aEvent )
 {
     if( !m_itemsGrid->CommitPendingChanges() )
         aEvent.Veto();
+
+    m_3dPanel->UpdateEmbeddedFiles();
 }
 
 

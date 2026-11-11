@@ -17,13 +17,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef UNIT_TEST_UTILS__H
-#define UNIT_TEST_UTILS__H
+#pragma once
 
 #define BOOST_NO_AUTO_PTR
 
 #include <boost/test/unit_test.hpp>
-#include <turtle/mock.hpp>
 
 #include <qa_utils/wx_utils/wx_assert.h>
 
@@ -34,7 +32,10 @@
 #include <vector>
 
 #include <wx/gdicmn.h>
+#include <wx/log.h>
 #include <wx/string.h>
+
+#include <wx_log_utils.h>
 
 
 template<class T>
@@ -131,6 +132,22 @@ std::ostream& boost_test_print_type( std::ostream& os, std::pair<K, V> const& aP
     return os;
 }
 
+/**
+ * Boost print helper for generic sets
+ */
+template <typename T>
+std::ostream& boost_test_print_type( std::ostream& os, std::set<T> const& aSet )
+{
+    os << "set size " << aSet.size() << " [";
+    for( const auto& i : aSet )
+    {
+        os << "\n    " << i;
+    }
+
+    os << "]";
+    return os;
+}
+
 } // namespace std
 
 
@@ -166,6 +183,19 @@ std::ostream& boost_test_print_type( std::ostream& os, const wchar_t ( &ws )[N] 
 }
 
 
+namespace boost { namespace unit_test
+{
+/**
+ * wxString looks like a container to Boost.Test because it has begin()/end().
+ *
+ * But we actually want to treat it NOT like a container so that it prints the
+ * value in constructions like BOOST_TEST( strA == strB )
+ */
+template<> struct is_forward_iterable<wxString> : public mpl::false_ {};
+
+}} // namespace boost::unit_test
+
+
 namespace boost { namespace test_tools { namespace tt_detail {
 
 template<std::size_t N>
@@ -186,7 +216,7 @@ struct print_log_value<wchar_t[ N ]>
 
 
 /**
- * Boost print helper for wxPoint. Note operator<< for this type doesn't
+ * Boost print helper for wxPoint. Note operator\<\< for this type doesn't
  * exist in non-DEBUG builds.
  */
 std::ostream& boost_test_print_type( std::ostream& os, wxPoint const& aVec );
@@ -227,7 +257,7 @@ using MATCH_PRED = std::function<bool( const EXP_OBJ&, const FOUND_OBJ& )>;
  * and a function to check if a given "found" object corresponds to a given
  * "expected object". Conditions:
  *
- * * The expected object type needs `operator<<` (for logging)
+ * * The expected object type needs `operator\<\<` (for logging)
  * * The expected object container does not contain multiple references to the
  *   same object.
  * * Identical values are also can't be present as the predicate can't tell which
@@ -244,11 +274,10 @@ using MATCH_PRED = std::function<bool( const EXP_OBJ&, const FOUND_OBJ& )>;
  * When you have two containers of identical types (or you have a suitable
  * `operator==`) and ordering is important, you can use `BOOST_CHECK_EQUAL_COLLECTIONS`
  *
- *@param aExpected  a container of "expected" items, usually from a test case
- *@param aMatched   a container of "found" items, usually the result of some
- *                  routine under test
- *@param aMatchPredicate a predicate that determines if a given "found" object
- *                  matches a given "expected" object.
+ * @param aExpected  a container of "expected" items, usually from a test case
+ * @param aFound     a container of "found" items, usually the result of some routine under test
+ * @param aMatchPredicate a predicate that determines if a given "found" object
+ *                        matches a given "expected" object.
  */
 template <typename EXP_CONT, typename FOUND_CONT, typename MATCH_PRED>
 void CheckUnorderedMatches( const EXP_CONT& aExpected, const FOUND_CONT& aFound,
@@ -327,16 +356,85 @@ struct NAMED_CASE
 /**
  * A test macro to check a wxASSERT is thrown.
  *
- * wxCHECK/wxASSERT only fire when wxDEBUG_LEVEL > 0, so the macro must key off
+ * wxCHECK/wxASSERT only fire when wxDEBUG_LEVEL \> 0, so the macro must key off
  * that rather than KiCad's own DEBUG define. QABUILD defines neither DEBUG nor
  * NDEBUG but is still built against a wxWidgets with assertions enabled, so the
- * previous #ifdef DEBUG gate silently skipped checks in that configuration.
+ * previous \#ifdef DEBUG gate silently skipped checks in that configuration.
  */
 #if wxDEBUG_LEVEL > 0
 #define CHECK_WX_ASSERT( STATEMENT ) BOOST_CHECK_THROW( STATEMENT, KI_TEST::WX_ASSERT_ERROR );
 #else
 #define CHECK_WX_ASSERT( STATEMENT )
 #endif
+
+
+/**
+ * Counts error-level records so a failed save can be checked for reports beyond the one it
+ * throws. Warnings are ignored; only errors reach the user as a dialog.
+ */
+class COUNTING_WXLOG : public wxLog
+{
+public:
+    COUNTING_WXLOG( wxLogLevelValues aMaxLevel ) :
+            m_maxLevel( aMaxLevel )
+    {
+    }
+
+    unsigned GetCount() const { return m_count; }
+
+protected:
+    void DoLogRecord( wxLogLevel aLevel, const wxString&, const wxLogRecordInfo& ) override
+    {
+        if( aLevel <= m_maxLevel )
+            m_count++;
+    }
+
+private:
+    wxLogLevelValues m_maxLevel;
+    unsigned         m_count = 0;
+};
+
+
+/**
+ * A scoped application of a wxLog target that counts error-level messages.
+ *
+ * On destruction, the number of error-level messages logged is written to
+ * the given reference.
+ */
+class SCOPED_COUNTING_WXLOG : public SCOPED_WXLOG_TARGET
+{
+public:
+    /**
+     * @param aLogCount pointer to the counter. Will be written-back at destruction.
+     *                  If null, the count is not written back. This is useful if you
+     *                  have a tightly-defined scope and want to check the count after
+     *                  the scope ends.
+     * @param aMaxLevel the maximum log level to count (default: wxLOG_Error)
+     */
+    SCOPED_COUNTING_WXLOG( unsigned* aLogCount, wxLogLevelValues aMaxLevel = wxLOG_Error ) :
+            SCOPED_WXLOG_TARGET( &m_logger ),
+            m_logger( aMaxLevel ),
+            m_logCountRef( aLogCount )
+    {
+    }
+
+    ~SCOPED_COUNTING_WXLOG()
+    {
+        // Update the caller's log count reference with the number of logs recorded
+        if( m_logCountRef )
+            *m_logCountRef = m_logger.GetCount();
+    }
+
+    /*
+     * Gets the current count of matching log messages.
+     */
+    unsigned GetCount() const { return m_logger.GetCount(); }
+
+private:
+    COUNTING_WXLOG m_logger;
+    unsigned*      m_logCountRef;
+};
+
 
 /**
  * Get the configured location of Eeschema test data.
@@ -360,8 +458,20 @@ std::string GetTestDataRootDir();
  */
 std::vector<uint8_t> LoadBinaryData( const std::string& aFilePath, std::optional<size_t> aLoadBytes = std::nullopt );
 
-void SetMockConfigDir();
-
+/**
+ * Load the contents of a file into a string.
+ *
+ * The file is read in binary mode, so the string is byte-exact.
+ * This is a thin wrapper around #KI_TEST::LoadBinaryData(),
+ * so it fails in the same way.
+ *
+ * No assumptions are made about the encoding of the file: it is up
+ * to the caller to interpret the string as appropriate.
+ *
+ * @param aPath the path to the file to load
+ * @return the file's contents
+ */
+std::string LoadStringData( const wxString& aPath );
 
 /**
  * Some tests on some platforms require a display connection to run.
@@ -373,5 +483,3 @@ void SetMockConfigDir();
 bool CanDoDisplayTests();
 
 } // namespace KI_TEST
-
-#endif // UNIT_TEST_UTILS__H

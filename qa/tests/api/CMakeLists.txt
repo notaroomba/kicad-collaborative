@@ -21,6 +21,7 @@ set( QA_API_SRCS
     test_api_proto.cpp
     test_api_e2e.cpp
     test_api_handler_pcb.cpp
+    test_api_tasks.cpp
     test_api_jobs.cpp
     test_api_run_action.cpp
     test_api_wizards.cpp
@@ -33,7 +34,10 @@ add_executable( qa_api
     ${QA_API_SRCS}
     )
 
-add_dependencies( qa_api pcbnew )
+add_dependencies( qa_api
+    pcbnew
+    kicad-cli
+    )
 
 target_link_libraries( qa_api
     kiapi
@@ -47,7 +51,6 @@ target_link_libraries( qa_api
     pnsrouter
     gal
     common
-    idf3
     markdown_lib
     ${PCBNEW_IO_LIBRARIES}
     ${wxWidgets_LIBRARIES}

@@ -17,6 +17,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "erc/erc_report.h"
+
 #include <wx/ffile.h>
 #include <wx/string.h>
 
@@ -26,7 +28,7 @@
 #include <schematic.h>
 #include <string_utils.h>
 #include <build_version.h>
-#include "erc_report.h"
+#include <erc/erc_item.h>
 #include <eda_units.h>
 #include <erc/erc.h>
 #include <fstream>
@@ -68,14 +70,12 @@ wxString ERC_REPORT::GetTextReport()
     msg += wxString::Format( wxT( "Report includes: %s\n" ),
                              formatSeverities( m_reportedSeverities ) );
 
-    std::map<KIID, EDA_ITEM*> itemMap;
-
     int            err_count = 0;
     int            warn_count = 0;
     int            total_count = 0;
     SCH_SHEET_LIST sheetList = m_sch->BuildSheetListSortedByPageNumbers();
 
-    sheetList.FillItemMap( itemMap );
+    SCH_RC_ITEM_RESOLVER itemResolver( sheetList );
 
     ERC_SETTINGS& settings = m_sch->ErcSettings();
 
@@ -87,16 +87,18 @@ wxString ERC_REPORT::GetTextReport()
         {
             if( item->MainItemHasSheetPath() )
                 orderedItems[item->GetMainItemSheetPath()].emplace_back( item );
+            else if( item->IsSheetSpecific() )
+                orderedItems[item->GetSpecificSheetPath()].emplace_back( item );
             else
                 orderedItems[sheetList[0]].emplace_back( item );
         }
     }
 
-    for( unsigned i = 0; i < sheetList.size(); i++ )
+    for( const SCH_SHEET_PATH& sheet : sheetList )
     {
-        msg << wxString::Format( wxT( "\n***** Sheet %s\n" ), sheetList[i].PathHumanReadable() );
+        msg << wxString::Format( wxT( "\n***** Sheet %s\n" ), sheet.PathHumanReadable() );
 
-        for( ERC_ITEM* item : orderedItems[sheetList[i]] )
+        for( ERC_ITEM* item : orderedItems[sheet] )
         {
             SEVERITY severity = settings.GetSeverity( item->GetErrorCode() );
 
@@ -109,7 +111,7 @@ wxString ERC_REPORT::GetTextReport()
             default:                                 break;
             }
 
-            msg << item->ShowReport( &unitsProvider, severity, itemMap );
+            msg << item->ShowReport( &unitsProvider, severity, itemResolver );
         }
     }
 
@@ -122,13 +124,13 @@ wxString ERC_REPORT::GetTextReport()
 
     bool hasIgnored = false;
 
-    for( const RC_ITEM& item : ERC_ITEM::GetItemsWithSeverities() )
+    for( const std::reference_wrapper<RC_ITEM>& item : ERC_ITEM::GetItemsWithSeverities() )
     {
-        int code = item.GetErrorCode();
+        int code = item.get().GetErrorCode();
 
         if( code > 0 && settings.GetSeverity( code ) == RPT_SEVERITY_IGNORE )
         {
-            msg << wxString::Format( wxT( "    - %s\n" ), item.GetErrorMessage( false ) );
+            msg << wxString::Format( wxT( "    - %s\n" ), item.get().GetErrorMessage( false ) );
             hasIgnored = true;
         }
     }
@@ -158,8 +160,7 @@ bool ERC_REPORT::WriteJsonReport( const wxString& aFullFileName )
 {
     std::ofstream jsonFileStream( aFullFileName.fn_str() );
 
-    UNITS_PROVIDER            unitsProvider( pcbIUScale, m_reportUnits );
-    std::map<KIID, EDA_ITEM*> itemMap;
+    UNITS_PROVIDER            unitsProvider( schIUScale, m_reportUnits );
 
     RC_JSON::ERC_REPORT reportHead;
     wxFileName          fn( m_sch->GetFileName() );
@@ -179,8 +180,8 @@ bool ERC_REPORT::WriteJsonReport( const wxString& aFullFileName )
     if( m_reportedSeverities & RPT_SEVERITY_EXCLUSION )
         reportHead.included_severities.push_back( wxS( "exclusion" ) );
 
-    SCH_SHEET_LIST sheetList = m_sch->Hierarchy();
-    sheetList.FillItemMap( itemMap );
+    SCH_SHEET_LIST       sheetList = m_sch->Hierarchy();
+    SCH_RC_ITEM_RESOLVER itemResolver( sheetList );
 
     ERC_SETTINGS& settings = m_sch->ErcSettings();
 
@@ -192,23 +193,25 @@ bool ERC_REPORT::WriteJsonReport( const wxString& aFullFileName )
         {
             if( item->MainItemHasSheetPath() )
                 orderedItems[item->GetMainItemSheetPath()].emplace_back( item );
+            else if( item->IsSheetSpecific() )
+                orderedItems[item->GetSpecificSheetPath()].emplace_back( item );
             else
                 orderedItems[sheetList[0]].emplace_back( item );
         }
     }
 
-    for( unsigned i = 0; i < sheetList.size(); i++ )
+    for( const SCH_SHEET_PATH& sheet : sheetList )
     {
         RC_JSON::ERC_SHEET jsonSheet;
-        jsonSheet.path = sheetList[i].PathHumanReadable();
-        jsonSheet.uuid_path = sheetList[i].Path().AsString();
+        jsonSheet.path = sheet.PathHumanReadable();
+        jsonSheet.uuid_path = sheet.Path().AsString();
 
-        for( ERC_ITEM* item : orderedItems[sheetList[i]] )
+        for( ERC_ITEM* item : orderedItems[sheet] )
         {
             SEVERITY severity = settings.GetSeverity( item->GetErrorCode() );
 
             RC_JSON::VIOLATION violation;
-            item->GetJsonViolation( violation, &unitsProvider, severity, itemMap );
+            item->GetJsonViolation( violation, &unitsProvider, severity, itemResolver );
 
             jsonSheet.violations.push_back( violation );
         }
@@ -216,15 +219,15 @@ bool ERC_REPORT::WriteJsonReport( const wxString& aFullFileName )
         reportHead.sheets.push_back( jsonSheet );
     }
 
-    for( const RC_ITEM& item : ERC_ITEM::GetItemsWithSeverities() )
+    for( const std::reference_wrapper<RC_ITEM>& item : ERC_ITEM::GetItemsWithSeverities() )
     {
-        int code = item.GetErrorCode();
+        int code = item.get().GetErrorCode();
 
         if( code > 0 && settings.GetSeverity( code ) == RPT_SEVERITY_IGNORE )
         {
             RC_JSON::IGNORED_CHECK ignoredCheck;
-            ignoredCheck.key = item.GetSettingsKey();
-            ignoredCheck.description = item.GetErrorMessage( false );
+            ignoredCheck.key = item.get().GetSettingsKey();
+            ignoredCheck.description = item.get().GetErrorMessage( false );
             reportHead.ignored_checks.push_back( ignoredCheck );
         }
     }

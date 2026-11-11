@@ -30,7 +30,7 @@
 #include <api/api_utils.h>
 #include <eda_text.h>    // for EDA_TEXT, TEXT_EFFECTS, GR_TEXT_VJUSTIF...
 #include <gal/color4d.h> // for COLOR4D, COLOR4D::BLACK
-#include <font/glyph.h>
+#include <font/glyph_types.h>
 #include <gr_text.h>
 #include <string_utils.h> // for UnescapeString
 #include <text_eval/text_eval_wrapper.h>
@@ -115,6 +115,8 @@ EDA_TEXT::EDA_TEXT( const EDA_TEXT& aText ) :
     m_shown_text_has_text_var_refs = aText.m_shown_text_has_text_var_refs;
     m_text_var_refs = aText.m_text_var_refs;
 
+    m_hyperlink = aText.m_hyperlink;
+
     m_attributes = aText.m_attributes;
     m_pos = aText.m_pos;
     m_visible = aText.m_visible;
@@ -145,6 +147,9 @@ EDA_TEXT& EDA_TEXT::operator=( const EDA_TEXT& aText )
     m_shown_text = aText.m_shown_text;
     m_shown_text_has_text_var_refs = aText.m_shown_text_has_text_var_refs;
     m_text_var_refs = aText.m_text_var_refs;
+
+    m_hyperlink = aText.m_hyperlink;
+    m_activeUrl = wxEmptyString;
 
     m_attributes = aText.m_attributes;
     m_pos = aText.m_pos;
@@ -182,7 +187,6 @@ void EDA_TEXT::Serialize( kiapi::common::types::Text& text, const EDA_IU_SCALE& 
 
     PackTextAttributes( *attrs, GetAttributes(), aScale );
     attrs->set_visible( true );
-
 }
 
 
@@ -190,7 +194,9 @@ void EDA_TEXT::Serialize( google::protobuf::Any& aContainer, const EDA_IU_SCALE&
 {
     kiapi::common::types::Text text;
     Serialize( text, aScale );
-    aContainer.PackFrom( text );
+
+    if( !aContainer.PackFrom( text ) )
+        wxFAIL_MSG( wxT( "Failed to pack EDA_TEXT" ) );
 }
 
 
@@ -478,6 +484,14 @@ bool EDA_TEXT::Replace( const EDA_SEARCH_DATA& aSearchData )
 }
 
 
+void EDA_TEXT::SetAttributes( const TEXT_ATTRIBUTES& aTextAttrs )
+{
+    m_attributes = aTextAttrs;
+    ClearRenderCache();
+    ClearBoundingBoxCache();
+}
+
+
 void EDA_TEXT::SetFont( KIFONT::FONT* aFont )
 {
     m_attributes.m_Font = aFont;
@@ -492,6 +506,10 @@ bool EDA_TEXT::ResolveFont( const std::vector<wxString>* aEmbeddedFonts )
     {
         m_attributes.m_Font = KIFONT::FONT::GetFont( m_unresolvedFontName, IsBold(), IsItalic(), aEmbeddedFonts );
 
+        // The resolved font may not be the same as the original font, so we want to continue to
+        // use the existing glyph cache to preserve the existing geometry (important on the board,
+        // even if not so much on the schematic).  We need to update the font so that KiCad will
+        // decide the cache is still valid.  (It will get regenerated if the user edits the text.)
         if( m_render_cache && !m_render_cache->glyphs.empty() )
             m_render_cache->font = m_attributes.m_Font;
 
@@ -771,7 +789,7 @@ BOX2I EDA_TEXT::GetTextBox( const RENDER_SETTINGS* aSettings, int aLine ) const
 
     BOX2I         bbox;
     wxArrayString strings;
-    wxString      text = GetShownText( true );
+    wxString      text = GetShownText( FOR_CANVAS );
     int           thickness = GetEffectiveTextPenWidth();
 
     if( IsMultilineAllowed() )
@@ -918,7 +936,7 @@ void EDA_TEXT::Print( const RENDER_SETTINGS* aSettings, const VECTOR2I& aOffset,
     {
         std::vector<VECTOR2I> positions;
         wxArrayString         strings;
-        wxStringSplit( GetShownText( true ), strings, '\n' );
+        wxStringSplit( GetShownText( FOR_CANVAS ), strings, '\n' );
 
         positions.reserve( strings.Count() );
 
@@ -929,7 +947,7 @@ void EDA_TEXT::Print( const RENDER_SETTINGS* aSettings, const VECTOR2I& aOffset,
     }
     else
     {
-        printOneLineOfText( aSettings, aOffset, aColor, GetShownText( true ), GetDrawPos() );
+        printOneLineOfText( aSettings, aOffset, aColor, GetShownText( FOR_CANVAS ), GetDrawPos() );
     }
 }
 
@@ -1014,7 +1032,7 @@ bool recursiveDescent( const std::unique_ptr<MARKUP::NODE>& aNode )
 
 bool EDA_TEXT::containsURL() const
 {
-    wxString showntext = GetShownText( false );
+    wxString showntext = GetShownText( FOR_GUI );
     MARKUP::MARKUP_PARSER markupParser( TO_UTF8( showntext ) );
     return recursiveDescent( markupParser.Parse() );
 }
@@ -1167,7 +1185,7 @@ std::shared_ptr<SHAPE_COMPOUND> EDA_TEXT::GetEffectiveTextShape( bool aTriangula
     KIGFX::GAL_DISPLAY_OPTIONS      empty_opts;
     KIFONT::FONT*                   font = GetDrawFont( nullptr );
     int                             penWidth = GetEffectiveTextPenWidth();
-    wxString                        shownText( GetShownText( true ) );
+    wxString                        shownText( GetShownText( FOR_CANVAS ) );
     VECTOR2I                        drawPos = GetDrawPos();
     TEXT_ATTRIBUTES                 attrs = GetAttributes();
 
@@ -1263,6 +1281,11 @@ int EDA_TEXT::Compare( const EDA_TEXT* aOther ) const
     if( val != 0 )
         return val;
 
+    val = m_hyperlink.Cmp( aOther->m_hyperlink );
+
+    if( val != 0 )
+        return val;
+
     return m_text.Cmp( aOther->m_text );
 }
 
@@ -1327,6 +1350,9 @@ double EDA_TEXT::Similarity( const EDA_TEXT& aOther ) const
     double retval = 1.0;
 
     if( !( m_attributes == aOther.m_attributes ) )
+        retval *= 0.9;
+
+    if( !m_hyperlink.IsSameAs( aOther.m_hyperlink, false ) )
         retval *= 0.9;
 
     if( m_pos != aOther.m_pos )

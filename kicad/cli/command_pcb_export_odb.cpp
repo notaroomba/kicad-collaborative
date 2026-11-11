@@ -28,35 +28,40 @@
 #include <locale_io.h>
 
 #define ARG_COMPRESS "--compression"
-#define ARG_UNITS "--units"
+#define ARG_VARIANT_PACKAGING "--variant-packaging"
+#define ARG_ORIGIN "--origin"
+#define ARG_PRODUCT_NAME "--product-name"
 
 CLI::PCB_EXPORT_ODB_COMMAND::PCB_EXPORT_ODB_COMMAND() :
         PCB_EXPORT_BASE_COMMAND( "odb" )
 {
     addDrawingSheetArg();
     addDefineArg();
+    addFabExportArgs( JOB_EXPORT_PCB_ODB() );
 
     m_argParser.add_description( std::string( "Export the PCB in ODB++ format" ) );
-
-    m_argParser.add_argument( ARG_PRECISION )
-            .help( std::string( "Precision" ) )
-            .scan<'i', int>()
-            .default_value( 2 )
-            .metavar( "PRECISION" );
 
     m_argParser.add_argument( ARG_COMPRESS )
             .default_value( std::string( "zip" ) )
             .help( std::string( "Compression mode" ) )
             .choices( "none", "zip", "tgz" );
 
-    m_argParser.add_argument( ARG_UNITS )
-            .default_value( std::string( "mm" ) )
-            .help( std::string( "Units" ) )
-            .choices( "mm", "in" );
+    m_argParser.add_argument( ARG_VARIANT_PACKAGING )
+            .default_value( std::string( "separate" ) )
+            .help( std::string( "Package variants separately or together" ) )
+            .choices( "separate", "combined" );
 
-    m_argParser.add_argument( ARG_CHECK_ZONES ).help( UTF8STDSTR( _( ARG_CHECK_ZONES_DESC ) ) ).flag();
+    m_argParser.add_argument( ARG_ORIGIN )
+            .default_value( std::string( "absolute" ) )
+            .help( std::string( "Coordinate origin" ) )
+            .choices( "absolute", "aux", "grid" );
 
-    addVariantsArg();
+    m_argParser.add_argument( ARG_PRODUCT_NAME )
+            .default_value( std::string() )
+            .help( std::string( "ODB++ product model name" ) )
+            .metavar( "NAME" );
+
+    addVariantsArg( false );
 }
 
 
@@ -64,29 +69,15 @@ int CLI::PCB_EXPORT_ODB_COMMAND::doPerform( KIWAY& aKiway )
 {
     std::unique_ptr<JOB_EXPORT_PCB_ODB> job( new JOB_EXPORT_PCB_ODB() );
 
-    job->m_filename = m_argInput;
+    applyFabExportArgs( *job );
     job->SetConfiguredOutputPath( m_argOutput );
-    job->m_drawingSheet = m_argDrawingSheet;
     job->SetVarOverrides( m_argDefineVars );
-
-    if( !m_argVariantNames.empty() )
-        job->m_variant = m_argVariantNames.front();
 
     if( !wxFile::Exists( job->m_filename ) )
     {
         wxFprintf( stderr, _( "Board file does not exist or is not accessible\n" ) );
         return EXIT_CODES::ERR_INVALID_INPUT_FILE;
     }
-
-    job->m_precision = m_argParser.get<int>( ARG_PRECISION );
-    job->m_checkZonesBeforeExport = m_argParser.get<bool>( ARG_CHECK_ZONES );
-
-    wxString units = From_UTF8( m_argParser.get<std::string>( ARG_UNITS ).c_str() );
-
-    if( units == "mm" )
-        job->m_units = JOB_EXPORT_PCB_ODB::ODB_UNITS::MM;
-    else if( units == "in" )
-        job->m_units = JOB_EXPORT_PCB_ODB::ODB_UNITS::INCH;
 
     wxString compression = From_UTF8( m_argParser.get<std::string>( ARG_COMPRESS ).c_str() ).Lower();
 
@@ -96,6 +87,18 @@ int CLI::PCB_EXPORT_ODB_COMMAND::doPerform( KIWAY& aKiway )
         job->m_compressionMode = JOB_EXPORT_PCB_ODB::ODB_COMPRESSION::TGZ;
     else if( compression == "none" )
         job->m_compressionMode = JOB_EXPORT_PCB_ODB::ODB_COMPRESSION::NONE;
+
+    if( m_argParser.get<std::string>( ARG_VARIANT_PACKAGING ) == "combined" )
+        job->m_variantPackaging = JOB_EXPORT_PCB_ODB::VARIANT_PACKAGING::COMBINED;
+
+    std::string origin = m_argParser.get<std::string>( ARG_ORIGIN );
+
+    if( origin == "aux" )
+        job->m_origin = JOB_EXPORT_PCB_ODB::ORIGIN::AUX;
+    else if( origin == "grid" )
+        job->m_origin = JOB_EXPORT_PCB_ODB::ORIGIN::GRID;
+
+    job->m_productName = From_UTF8( m_argParser.get<std::string>( ARG_PRODUCT_NAME ).c_str() );
 
     LOCALE_IO dummy;
     return aKiway.ProcessJob( KIWAY::FACE_PCB, job.get() );

@@ -36,13 +36,14 @@ bool SaveClipboard( const std::string& aTextUTF8 )
     if( wxTheClipboard->Open() )
     {
         // Store the UTF8 string as Unicode string in clipboard:
-        wxTheClipboard->SetData(
+        bool saved = wxTheClipboard->SetData(
                 new wxTextDataObject( wxString( aTextUTF8.c_str(), wxConvUTF8 ) ) );
 
-        wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
-        wxTheClipboard->Close();
+        if( saved )
+            wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
 
-        return true;
+        wxTheClipboard->Close();
+        return saved;
     }
 
     return false;
@@ -67,18 +68,6 @@ bool SaveClipboard( const std::string& aTextUTF8, const std::vector<CLIPBOARD_MI
             if( entry.m_data.GetDataLen() == 0 && !entry.m_image.has_value() )
                 continue;
 
-            // Handle pre-encoded PNG data (GTK optimization path).
-            // Use wxDF_BITMAP to prevent wx from setting the type to Private
-            if( entry.m_useRawPngData && entry.m_data.GetDataLen() > 0 )
-            {
-                wxCustomDataObject* custom = new wxCustomDataObject( wxDF_BITMAP );
-                custom->Alloc( entry.m_data.GetDataLen() );
-                custom->SetData( entry.m_data.GetDataLen(), entry.m_data.GetData() );
-                data->Add( custom );
-
-                continue;
-            }
-
             // Handle bitmap image data using platform-native clipboard format.
             // wxBitmapDataObject automatically converts to the appropriate format:
             // - Windows: CF_DIB
@@ -102,11 +91,13 @@ bool SaveClipboard( const std::string& aTextUTF8, const std::vector<CLIPBOARD_MI
             data->Add( custom );
         }
 
-        wxTheClipboard->SetData( data );
-        wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
-        wxTheClipboard->Close();
+        bool saved = wxTheClipboard->SetData( data );
 
-        return true;
+        if( saved )
+            wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
+
+        wxTheClipboard->Close();
+        return saved;
     }
 
     return false;
@@ -242,11 +233,13 @@ bool SaveTabularDataToClipboard( const std::vector<std::vector<wxString>>& aData
         // even with wxCustomDataObject( wxDataFormat( "mime/type" ) ), which just ends up as
         // wxDF_PRIVATE, and wxDF_SYLK/DIF aren't mapped on GTK.
 
-        wxTheClipboard->SetData( data );
-        wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
-        wxTheClipboard->Close();
+        bool saved = wxTheClipboard->SetData( data );
 
-        return true;
+        if( saved )
+            wxTheClipboard->Flush(); // Allow data to be available after closing KiCad
+
+        wxTheClipboard->Close();
+        return saved;
     }
 
     return false;
@@ -300,10 +293,7 @@ bool EncodeImageToPng( const wxImage& aImage, wxMemoryBuffer& aOutput )
     wxBufferedOutputStream bufferedStream( memStream );
 
     if( !imageCopy.SaveFile( bufferedStream, wxBITMAP_TYPE_PNG ) )
-    {
-        wxLogDebug( wxS( "Failed to encode PNG" ) );
         return false;
-    }
 
     bufferedStream.Close();
 
@@ -315,6 +305,33 @@ bool EncodeImageToPng( const wxImage& aImage, wxMemoryBuffer& aOutput )
 }
 
 
+#if defined( __WXMSW__ )
+// CF_DIB has no usable alpha, so blend onto white
+static wxImage FlattenAlphaOnWhite( const wxImage& aImage )
+{
+    wxImage flat = aImage.Copy();
+
+    if( !flat.HasAlpha() )
+        return flat;
+
+    unsigned char*       rgb = flat.GetData();
+    const unsigned char* alpha = flat.GetAlpha();
+    const size_t         count = static_cast<size_t>( flat.GetWidth() ) * flat.GetHeight();
+
+    for( size_t i = 0; i < count; ++i )
+    {
+        const int a = alpha[i];
+
+        for( int c = 0; c < 3; ++c )
+            rgb[i * 3 + c] = static_cast<unsigned char>( ( rgb[i * 3 + c] * a + 255 * ( 255 - a ) + 127 ) / 255 );
+    }
+
+    flat.ClearAlpha();
+    return flat;
+}
+#endif
+
+
 bool AddPngToClipboardData( wxDataObjectComposite* aData, const wxMemoryBuffer& aPngData,
                             const wxImage* aFallbackImage )
 {
@@ -322,11 +339,14 @@ bool AddPngToClipboardData( wxDataObjectComposite* aData, const wxMemoryBuffer& 
     wxCHECK( aPngData.GetDataLen() > 0, false );
 
 #if defined( __WXMSW__ )
-    aData->Add( new wxCustomDataObject( wxDataFormat( wxDataFormatId::wxDF_BITMAP ) ) );
-
+    // PNG goes first so image consumers that take the first image format get the alpha channel
     wxCustomDataObject* pngObj = new wxCustomDataObject( wxDataFormat( "PNG" ) );
     pngObj->SetData( aPngData.GetDataLen(), aPngData.GetData() );
     aData->Add( pngObj );
+
+    // CF_DIB for readers without PNG support, Windows synthesizes CF_BITMAP and CF_DIBV5 from it
+    if( aFallbackImage && aFallbackImage->IsOk() )
+        aData->Add( new wxBitmapDataObject( wxBitmap( FlattenAlphaOnWhite( *aFallbackImage ) ) ) );
 #elif defined( __WXGTK__ )
     wxCustomDataObject* pngObj = new wxCustomDataObject( wxDF_BITMAP );
     pngObj->SetData( aPngData.GetDataLen(), aPngData.GetData() );
@@ -351,7 +371,7 @@ bool AddTransparentImageToClipboardData( wxDataObjectComposite* aData, wxImage a
     if( !EncodeImageToPng( aImage, pngData ) )
         return false;
 
-    return AddPngToClipboardData( aData, pngData );
+    return AddPngToClipboardData( aData, pngData, &aImage );
 #else // __WXOSX__
     aData->Add( new wxBitmapDataObject( wxBitmap( aImage ) ) );
     return true;

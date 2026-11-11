@@ -55,9 +55,10 @@ DRC_RULE_SAVER::DRC_RULE_SAVER()
 
 bool DRC_RULE_SAVER::SaveFile( const wxString&                               aPath,
                                 const std::vector<DRC_RE_LOADED_PANEL_ENTRY>& aEntries,
-                                const BOARD*                                  aBoard )
+                                const BOARD*                                  aBoard,
+                                const DRC_RE_FILE_TRIVIA&                     aTrivia )
 {
-    wxString    content = GenerateRulesText( aEntries, aBoard );
+    wxString    content = GenerateRulesText( aEntries, aBoard, aTrivia );
     std::string utf8 = std::string( content.mb_str( wxConvUTF8 ) );
 
     return KIPLATFORM::IO::AtomicWriteFile( aPath, utf8.data(), utf8.size() );
@@ -65,14 +66,18 @@ bool DRC_RULE_SAVER::SaveFile( const wxString&                               aPa
 
 
 wxString DRC_RULE_SAVER::GenerateRulesText( const std::vector<DRC_RE_LOADED_PANEL_ENTRY>& aEntries,
-                                             const BOARD*                                  aBoard )
+                                             const BOARD*                                  aBoard,
+                                             const DRC_RE_FILE_TRIVIA&                     aTrivia )
 {
-    wxString result = "(version 2)\n";
+    wxString result = aTrivia.header;
 
-    // Group entries by (ruleName, condition, layerSource) for merging same-rule constraints.
+    if( result.IsEmpty() )
+        result = wxS( "(version 2)" );
+
+    // Group entries by (sourceRule, ruleName, condition, layerSource) for merging same-rule constraints.
     // Including the layer source prevents rules with different layer scopes from being
     // incorrectly merged (e.g. separate "outer" and "inner" rules must remain distinct).
-    using GroupKey = std::tuple<wxString, wxString, wxString>;
+    using GroupKey = std::tuple<int, wxString, wxString, wxString>;
 
     std::vector<std::pair<GroupKey, std::vector<const DRC_RE_LOADED_PANEL_ENTRY*>>>
             groupedEntries;
@@ -80,7 +85,7 @@ wxString DRC_RULE_SAVER::GenerateRulesText( const std::vector<DRC_RE_LOADED_PANE
 
     for( const DRC_RE_LOADED_PANEL_ENTRY& entry : aEntries )
     {
-        auto key = std::make_tuple( entry.ruleName, entry.condition, entry.layerSource );
+        auto key = std::make_tuple( entry.sourceRule, entry.ruleName, entry.condition, entry.layerSource );
         auto it = groupIndex.find( key );
 
         if( it == groupIndex.end() )
@@ -93,6 +98,8 @@ wxString DRC_RULE_SAVER::GenerateRulesText( const std::vector<DRC_RE_LOADED_PANE
             groupedEntries[it->second].second.push_back( &entry );
         }
     }
+
+    size_t nextTrivia = 0;
 
     // Generate rule text for each group
     for( const auto& [key, entries] : groupedEntries )
@@ -110,9 +117,33 @@ wxString DRC_RULE_SAVER::GenerateRulesText( const std::vector<DRC_RE_LOADED_PANE
             ruleText = generateMergedRuleText( entries, aBoard );
         }
 
-        if( !ruleText.IsEmpty() )
-            result += ruleText + "\n";
+        if( ruleText.IsEmpty() )
+            continue;
+
+        // Comments of deleted rules are kept, and a file rule split by an edit emits its own only once
+        int source = entries[0]->sourceRule;
+
+        if( source >= 0 && static_cast<size_t>( source ) >= nextTrivia
+            && static_cast<size_t>( source ) < aTrivia.leadingTrivia.size() )
+        {
+            while( nextTrivia <= static_cast<size_t>( source ) )
+                result += aTrivia.leadingTrivia[nextTrivia++];
+        }
+        else
+        {
+            result += wxS( "\n" );
+        }
+
+        result += ruleText;
     }
+
+    while( nextTrivia < aTrivia.leadingTrivia.size() )
+        result += aTrivia.leadingTrivia[nextTrivia++];
+
+    if( aTrivia.header.IsEmpty() )
+        result += wxS( "\n" );
+    else
+        result += aTrivia.trailer;
 
     return result;
 }
@@ -121,8 +152,9 @@ wxString DRC_RULE_SAVER::GenerateRulesText( const std::vector<DRC_RE_LOADED_PANE
 wxString DRC_RULE_SAVER::generateRuleText( const DRC_RE_LOADED_PANEL_ENTRY& aEntry,
                                             const BOARD*                     aBoard )
 {
-    // Round-trip preservation: return original text if not edited
-    if( !aEntry.wasEdited && !aEntry.originalRuleText.IsEmpty() )
+    // Round-trip preservation: return original text if not edited. A rule that was split
+    // into several entries must be regenerated once any of them is gone.
+    if( !aEntry.wasEdited && !aEntry.originalRuleText.IsEmpty() && aEntry.originalEntryCount == 1 )
         return aEntry.originalRuleText;
 
     // Otherwise, regenerate from panel data
@@ -177,7 +209,7 @@ wxString DRC_RULE_SAVER::generateRuleText( const DRC_RE_LOADED_PANEL_ENTRY& aEnt
             if( !aEntry.layerSource.IsEmpty() )
                 ctx.layerClause = formatLayerClause( aEntry.layerSource );
             else
-                ctx.layerClause = generateLayerClause( aEntry.layerCondition, aBoard );
+                ctx.layerClause = generateLayerClause( aEntry.layerCondition );
         }
 
         ruleText = aEntry.constraintData->GenerateRule( ctx );
@@ -205,9 +237,10 @@ wxString DRC_RULE_SAVER::generateRuleText( const DRC_RE_LOADED_PANEL_ENTRY& aEnt
 }
 
 
-wxString DRC_RULE_SAVER::generateLayerClause( const LSET& aLayers, const BOARD* aBoard )
+wxString DRC_RULE_SAVER::generateLayerClause( const LSET& aLayers )
 {
-    if( !aBoard || !aLayers.any() )
+    // The parser gives a rule without a layer clause every layer
+    if( !aLayers.any() || aLayers == LSET::AllLayersMask() )
         return wxEmptyString;
 
     if( ( aLayers & LSET::AllCuMask() ) == LSET::ExternalCuMask() )
@@ -216,10 +249,10 @@ wxString DRC_RULE_SAVER::generateLayerClause( const LSET& aLayers, const BOARD* 
     if( ( aLayers & LSET::AllCuMask() ) == LSET::InternalCuMask() )
         return wxString::Format( wxS( "(layer %s)" ), DRC_RULES_LEXER::TokenName( DRCRULE_T::T_inner ) );
 
-    // The parser only accepts a single layer name, so emit the first matching layer.
-    // Multi-layer conditions should use "outer" or "inner" keywords above.
+    // The parser only accepts a single layer name, and a user name only where the board registered
+    // it, so emit the canonical name of the first layer. Multi-layer sets use outer or inner above
     for( PCB_LAYER_ID layer : aLayers.Seq() )
-        return wxString::Format( wxS( "(layer \"%s\")" ), aBoard->GetLayerName( layer ) );
+        return wxString::Format( wxS( "(layer \"%s\")" ), LSET::Name( layer ) );
 
     return wxEmptyString;
 }
@@ -258,8 +291,11 @@ wxString DRC_RULE_SAVER::generateMergedRuleText(
         }
     }
 
-    if( allUnedited && !aEntries[0]->originalRuleText.IsEmpty() )
+    if( allUnedited && !aEntries[0]->originalRuleText.IsEmpty()
+        && static_cast<int>( aEntries.size() ) == aEntries[0]->originalEntryCount )
+    {
         return aEntries[0]->originalRuleText;
+    }
 
     // Otherwise, merge constraint clauses from all entries
     const DRC_RE_LOADED_PANEL_ENTRY* firstEntry = aEntries[0];
@@ -277,7 +313,7 @@ wxString DRC_RULE_SAVER::generateMergedRuleText(
             if( !entry->layerSource.IsEmpty() )
                 ctx.layerClause = formatLayerClause( entry->layerSource );
             else
-                ctx.layerClause = generateLayerClause( entry->layerCondition, aBoard );
+                ctx.layerClause = generateLayerClause( entry->layerCondition );
 
             break;
         }

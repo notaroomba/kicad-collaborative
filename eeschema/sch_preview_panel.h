@@ -39,14 +39,13 @@ class SCH_PREVIEW_PANEL : public EDA_DRAW_PANEL_GAL
 public:
     SCH_PREVIEW_PANEL( wxWindow* aParentWindow, wxWindowID aWindowId, const wxPoint& aPosition,
                        const wxSize& aSize, KIGFX::GAL_DISPLAY_OPTIONS& aOptions,
-                       GAL_TYPE aGalType = GAL_TYPE_OPENGL );
+                       GAL_TYPE aGalType = GAL_TYPE_MODERN );
 
     ~SCH_PREVIEW_PANEL() override;
 
-    ///< @copydoc EDA_DRAW_PANEL_GAL::OnShow()
+    /// @copydoc EDA_DRAW_PANEL_GAL::OnShow()
     void OnShow() override;
 
-    /// @copydoc wxWindow::Refresh()
     void Refresh( bool aEraseBackground, const wxRect* aRect ) override;
 
     SCH_RENDER_SETTINGS* GetRenderSettings() const;
@@ -57,10 +56,10 @@ protected:
 
     KIGFX::SCH_VIEW* view() const;
 
-    ///< Reassign layer order to the initial settings.
+    /// Reassign layer order to the initial settings.
     void setDefaultLayerOrder();
 
-    ///< Set rendering targets & dependencies for layers.
+    /// Set rendering targets & dependencies for layers.
     void setDefaultLayerDeps();
 };
 

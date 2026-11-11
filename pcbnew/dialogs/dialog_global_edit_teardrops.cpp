@@ -19,6 +19,7 @@
 
 #include <algorithm>
 
+#include <bitmaps.h>
 #include <widgets/unit_binder.h>
 #include <pcb_edit_frame.h>
 #include <board.h>
@@ -384,7 +385,9 @@ bool DIALOG_GLOBAL_EDIT_TEARDROPS::TransferDataFromWindow()
                 visitItem( &commit, pad, false );
             }
             else if( m_smdPads->GetValue() && ( pad->GetAttribute() == PAD_ATTRIB::SMD
-                                                || pad->GetAttribute() == PAD_ATTRIB::CONN ) )
+                                                || pad->GetAttribute() == PAD_ATTRIB::CONN
+                                                || pad->GetAttribute() == PAD_ATTRIB::NON_COMPONENT
+                                             ) )
             {
                 visitItem( &commit, pad, false );
             }

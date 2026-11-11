@@ -17,9 +17,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <memory>
 #include <pcbnew_utils/board_test_utils.h>
 #include <pcbnew_utils/board_file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
+#include <qa_utils/file_utils.h>
 
 #include <pcb_io/pads/pcb_io_pads_binary.h>
 #include <pcb_io/pads/pcb_io_pads.h>
@@ -49,7 +51,6 @@
 #include <project/net_settings.h>
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -123,13 +124,10 @@ static std::shared_ptr<BOARD> CachedLoad( const wxString& aFilename, bool aBinar
     {
         if( aBinary )
         {
-            static const std::filesystem::path stagedRoot =
-                    std::filesystem::temp_directory_path()
-                    / ( "kicad_pads_binary_cached_"
-                        + std::to_string( std::chrono::steady_clock::now().time_since_epoch().count() ) );
-            const std::filesystem::path source( aFilename.ToStdString() );
-            const std::filesystem::path stagedDirectory =
-                    stagedRoot / std::to_string( std::hash<std::string>{}( key ) );
+            static const KI_TEST::SCOPED_TEMP_DIR stagedRoot( wxS( "kicad_pads_binary_cached" ) );
+            const std::filesystem::path           source( aFilename.ToStdString() );
+            const std::filesystem::path           stagedDirectory =
+                    stagedRoot.Path() / std::to_string( std::hash<std::string>{}( key ) );
             const std::filesystem::path stagedPath = stagedDirectory / source.filename();
 
             std::filesystem::create_directories( stagedDirectory );
@@ -138,12 +136,12 @@ static std::shared_ptr<BOARD> CachedLoad( const wxString& aFilename, bool aBinar
                                           std::filesystem::perm_options::add );
 
             PCB_IO_PADS_BINARY plugin;
-            board.reset( plugin.LoadBoard( wxString::FromUTF8( stagedPath.string() ), nullptr, nullptr, nullptr ) );
+            board.reset( plugin.LoadBoard( wxString::FromUTF8( stagedPath.string() ), nullptr ).release() );
         }
         else
         {
             PCB_IO_PADS plugin;
-            board.reset( plugin.LoadBoard( aFilename, nullptr, nullptr, nullptr ) );
+            board.reset( plugin.LoadBoard( aFilename, nullptr ).release() );
         }
     }
     catch( const std::exception& )
@@ -2999,45 +2997,6 @@ BOOST_AUTO_TEST_CASE( ViaSpanSurvivesOnlyWhenTypeSetFirst )
 
     BOOST_CHECK_EQUAL( static_cast<int>( spanFirst.TopLayer() ), static_cast<int>( F_Cu ) );
     BOOST_CHECK_EQUAL( static_cast<int>( spanFirst.BottomLayer() ), static_cast<int>( B_Cu ) );
-}
-
-
-// LoadBoard must never own the board it is appending to. PCB_CONTROL::AppendBoard passes the live
-// editor board, catches IO_ERROR and keeps using it, so a plugin that deletes it on the throw path
-// leaves a dangling pointer. The flag observes the destructor directly rather than relying on the
-// undefined behaviour a double free would produce.
-namespace
-{
-struct TRACKED_BOARD : public BOARD
-{
-    explicit TRACKED_BOARD( bool& aDestroyed ) : m_destroyed( aDestroyed ) {}
-    ~TRACKED_BOARD() override { m_destroyed = true; }
-
-    bool& m_destroyed;
-};
-}
-
-
-BOOST_AUTO_TEST_CASE( FailedAppendDoesNotDestroyCallerBoard )
-{
-    bool           destroyed = false;
-    TRACKED_BOARD* caller = new TRACKED_BOARD( destroyed );
-
-    caller->SetCopperLayerCount( 6 );
-
-    PCB_IO_PADS_BINARY plugin;
-
-    // An ASCII PADS export is not a binary container, so the parse throws
-    wxString notBinary = GetAscPath( PADS_BINARY_BOARDS[0] );
-
-    BOOST_CHECK_THROW( plugin.LoadBoard( notBinary, caller, nullptr, nullptr ), IO_ERROR );
-    BOOST_CHECK( !destroyed );
-
-    if( !destroyed )
-    {
-        BOOST_CHECK_EQUAL( caller->GetCopperLayerCount(), 6 );
-        delete caller;
-    }
 }
 
 

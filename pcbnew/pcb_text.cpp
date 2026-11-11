@@ -140,7 +140,9 @@ void PCB_TEXT::Serialize( google::protobuf::Any& aContainer ) const
 {
     kiapi::board::types::BoardText boardText;
     Serialize( boardText );
-    aContainer.PackFrom( boardText );
+
+    if( !aContainer.PackFrom( boardText ) )
+        wxFAIL_MSG( wxT( "Failed to pack PCB_TEXT" ) );
 }
 
 
@@ -175,7 +177,7 @@ bool PCB_TEXT::Deserialize( const google::protobuf::Any& aContainer )
 }
 
 
-wxString PCB_TEXT::GetShownText( bool aAllowExtraText, int aDepth ) const
+wxString PCB_TEXT::GetShownText( RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
     const FOOTPRINT* parentFootprint = GetParentFootprint();
     const BOARD*     board = GetBoard();
@@ -199,12 +201,12 @@ wxString PCB_TEXT::GetShownText( bool aAllowExtraText, int aDepth ) const
                 return false;
             };
 
-    wxString text = EDA_TEXT::GetShownText( aAllowExtraText, aDepth );
+    wxString text = EDA_TEXT::GetShownText( aContext, aDepth );
 
-    if( HasTextVars() )
+    if( HasTextVars() && aContext != RAW_VALUE )
     {
         text = ResolveTextVars( text, &resolver, aDepth );
-        FinalizeTextVarExpansion( text, aAllowExtraText );
+        FinalizeTextVarExpansion( text, aContext );
     }
 
     return text;
@@ -368,14 +370,14 @@ int PCB_TEXT::getKnockoutMargin() const
 }
 
 
-void PCB_TEXT::StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide )
+void PCB_TEXT::StyleFromSettings( const BOARD_DESIGN_SETTINGS& aSettings, bool aCheckSide )
 {
-    SetTextSize( settings.GetTextSize( GetLayer() ) );
-    SetTextThickness( settings.GetTextThickness( GetLayer() ) );
-    SetItalic( settings.GetTextItalic( GetLayer() ) );
+    SetTextSize( aSettings.GetTextSize( GetLayer() ) );
+    SetTextThickness( aSettings.GetTextThickness( GetLayer() ) );
+    SetItalic( aSettings.GetTextItalic( GetLayer() ) );
 
     if( GetParentFootprint() )
-        SetKeepUpright( settings.GetTextUpright( GetLayer() ) );
+        SetKeepUpright( aSettings.GetTextUpright( GetLayer() ) );
 
     if( aCheckSide )
     {
@@ -560,9 +562,12 @@ void PCB_TEXT::SetLibTextThickness( int aWidth )
 EDA_ANGLE PCB_TEXT::GetTextAngle() const
 {
     if( const FOOTPRINT* fp = GetParentFootprint() )
-        return m_libTextAngle + fp->GetOrientation();
+    {
+        EDA_ANGLE angle = m_libTextAngle.GetAngle() + fp->GetOrientation();
+        return angle.Normalize();
+    }
 
-    return m_libTextAngle;
+    return m_libTextAngle.GetAngle();
 }
 
 
@@ -573,7 +578,6 @@ void PCB_TEXT::SetTextAngle( const EDA_ANGLE& aAngle )
     else
         m_libTextAngle = aAngle;
 
-    m_libTextAngle.Normalize();
     EDA_TEXT::SetTextAngle( aAngle );
 }
 
@@ -592,22 +596,32 @@ void PCB_TEXT::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 
 void PCB_TEXT::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
+    Mirror( MIRROR_AXIS( aCentre, aFlipDirection ) );
+}
+
+
+void PCB_TEXT::Mirror( const SEG& aAxis )
+{
     // the position and justification are mirrored, but not the text itself
 
-    if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
-    {
-        if( GetTextAngle() == ANGLE_VERTICAL )
-            SetHorizJustify( (GR_TEXT_H_ALIGN_T) -GetHorizJustify() );
+    const VECTOR2I newPos = aAxis.ReflectPoint( GetTextPos() );
 
-        SetTextY( MIRRORVAL( GetTextPos().y, aCentre.y ) );
-    }
+    if( const FOOTPRINT* fp = GetParentFootprint() )
+        SetLibTextPos( fp->GetTransform().InverseApply( newPos ) );
     else
-    {
-        if( GetTextAngle() == ANGLE_HORIZONTAL )
-            SetHorizJustify( (GR_TEXT_H_ALIGN_T) -GetHorizJustify() );
+        SetTextPos( newPos );
 
-        SetTextX( MIRRORVAL( GetTextPos().x, aCentre.x ) );
+    const EDA_ANGLE axisAngle = -EDA_ANGLE( aAxis.B - aAxis.A );
+    EDA_ANGLE       newAngle = GetTextAngle().Reflect( axisAngle ).Normalized();
+
+    // If we're mirroring "left-right-ish", swap the justification and fix the text orientation.
+    if( newAngle > ANGLE_90 && newAngle <= ANGLE_270 )
+    {
+        newAngle -= ANGLE_180;
+        SetHorizJustify( (GR_TEXT_H_ALIGN_T) -GetHorizJustify() );
     }
+
+    SetTextAngle( newAngle );
 }
 
 
@@ -628,37 +642,21 @@ void PCB_TEXT::OnFootprintTransformed()
 
 void PCB_TEXT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
-    if( const FOOTPRINT* fp = GetParentFootprint() )
-    {
-        // Mirror the library-frame position (rotation-independent).
-        const VECTOR2I libAxis = fp->GetTransform().InverseApply( aCentre );
-        VECTOR2I       libPos = EDA_TEXT::GetTextPos();
+    // The position mirrors in the library or board frame depending on if this is in a FP.
+    const FOOTPRINT* fp = GetParentFootprint();
+    const VECTOR2I   libCentre = fp ? fp->GetTransform().InverseApply( aCentre ) : aCentre;
+    const EDA_ANGLE  axis = MIRROR_AXIS( aFlipDirection );
 
-        if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
-            libPos.x = 2 * libAxis.x - libPos.x;
-        else
-            libPos.y = 2 * libAxis.y - libPos.y;
+    VECTOR2I libPos = EDA_TEXT::GetTextPos();
+    MIRROR( libPos, libCentre, aFlipDirection );
+    SetLibTextPos( libPos );
 
-        SetLibTextPos( libPos );
-    }
-    else if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
-    {
-        SetTextX( MIRRORVAL( GetTextPos().x, aCentre.x ) );
-    }
-    else
-    {
-        SetTextY( MIRRORVAL( GetTextPos().y, aCentre.y ) );
-    }
+    // A flip changes the side it is read from, so add a half turn on top of the reflection.
+    m_libTextAngle = m_libTextAngle.Reflect( axis ) + ANGLE_180;
 
-    if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
-        m_libTextAngle = -m_libTextAngle;
-    else
-        m_libTextAngle = ANGLE_180 - m_libTextAngle;
-
-    m_libTextAngle.Normalize();
     EDA_TEXT::SetTextAngle( GetTextAngle() );
 
-    SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+    SetLayer( GetFlippedLayer( GetLayer() ) );
 
     if( IsSideSpecific() )
         SetMirrored( !IsMirrored() );
@@ -673,7 +671,7 @@ wxString PCB_TEXT::GetTextTypeDescription() const
 
 wxString PCB_TEXT::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
-    wxString content = aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() );
+    wxString content = aFull ? GetShownText( FOR_GUI ) : KIUI::EllipsizeMenuText( GetText() );
 
     if( FOOTPRINT* parentFP = GetParentFootprint() )
     {
@@ -790,7 +788,7 @@ void PCB_TEXT::TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, 
     KIFONT::FONT*              font = GetDrawFont( nullptr );
     int                        penWidth = GetEffectiveTextPenWidth();
     TEXT_ATTRIBUTES            attrs = GetAttributes();
-    wxString                   shownText = GetShownText( true );
+    wxString                   shownText = GetShownText( FOR_CANVAS );
 
     attrs.m_Angle = GetDrawRotation();
     attrs.m_Size = GetTextSize();
@@ -845,6 +843,14 @@ void PCB_TEXT::TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, 
 
         aBuffer.Append( textShape );
     }
+}
+
+
+double PCB_TEXT::GetCoverageArea( int aTextMargin ) const
+{
+    SHAPE_POLY_SET poly;
+    TransformTextToPolySet( poly, aTextMargin, ARC_LOW_DEF, ERROR_INSIDE );
+    return polygonArea( poly );
 }
 
 

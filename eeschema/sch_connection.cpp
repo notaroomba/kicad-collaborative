@@ -52,7 +52,7 @@
  *
  *     MEMORY{A[15..0] D[7..0] RW CE OE}
  *
- * In named bus groups, the net names are expanded as <BUS_NAME>.<NET_NAME>
+ * In named bus groups, the net names are expanded as \<BUS_NAME\>.\<NET_NAME\>
  * In the above example, the nets would be named like MEMORY.A15, MEMORY.D0, etc.
  *
  *     {USB_DP USB_DN}
@@ -160,13 +160,14 @@ void SCH_CONNECTION::ConfigureFromLabel( const wxString& aLabel )
         for( const wxString& vector_member : members )
         {
             std::shared_ptr<SCH_CONNECTION> member = std::make_shared<SCH_CONNECTION>( m_parent, m_sheet );
+            wxString escapedMember = EscapeString( vector_member, CTX_NETNAME );
 
             member->m_type         = CONNECTION_TYPE::NET;
             member->m_prefix       = m_prefix;
-            member->m_local_name   = vector_member;
+            member->m_local_name   = escapedMember;
             member->m_local_prefix = m_prefix;
             member->m_vector_index = i++;
-            member->SetName( vector_member );
+            member->SetName( escapedMember );
             member->SetGraph( m_graph );
             m_members.push_back( std::move( member ) );
         }
@@ -199,7 +200,7 @@ void SCH_CONNECTION::ConfigureFromLabel( const wxString& aLabel )
                 std::shared_ptr<SCH_CONNECTION> member = std::make_shared<SCH_CONNECTION>( m_parent, m_sheet );
                 member->SetPrefix( prefix );
                 member->SetGraph( m_graph );
-                member->ConfigureFromLabel( group_member );
+                member->ConfigureFromLabel( EscapeString( group_member, CTX_NETNAME ) );
                 m_members.push_back( std::move( member ) );
             }
         }
@@ -252,11 +253,11 @@ void SCH_CONNECTION::Clone( const SCH_CONNECTION& aOther )
     CONNECTION_TYPE origType = m_type;
     m_type   = aOther.m_type;
 
-    // Note: m_local_name is not cloned if not set yet
+    // Note: m_local_name is not cloned if already set in the target
     if( m_local_name.IsEmpty() )
     {
-        m_local_name   = aOther.LocalName();
-        m_local_prefix = aOther.Prefix();
+        m_local_name   = aOther.m_local_name;
+        m_local_prefix = aOther.m_local_prefix;
     }
 
     m_prefix       = aOther.Prefix();
@@ -356,20 +357,7 @@ bool SCH_CONNECTION::IsDriver() const
     case SCH_HIER_LABEL_T:
     case SCH_SHEET_PIN_T:
     case SCH_SHEET_T:
-        return true;
-
-    case SCH_PIN_T:
-    {
-        const SCH_PIN* pin = static_cast<const SCH_PIN*>( Parent() );
-
-        if( const SCH_SYMBOL* symbol = dynamic_cast<const SCH_SYMBOL*>( pin->GetParentSymbol() ) )
-        {
-            // Only annotated symbols should drive nets.
-            return pin->IsPower() || symbol->IsAnnotated( &m_sheet );
-        }
-
-        return true;
-    }
+    case SCH_PIN_T: return true;
 
     default:
         return false;

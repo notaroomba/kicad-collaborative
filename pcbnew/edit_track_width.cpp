@@ -31,6 +31,7 @@ void PCB_EDIT_FRAME::SetTrackSegmentWidth( PCB_TRACK* aItem, PICKED_ITEMS_LIST* 
                                            bool aUseDesignRules )
 {
     PCB_VIA* via = dynamic_cast<PCB_VIA*>( aItem );
+    int      current_width = via ? via->GetWidth( PADSTACK::ALL_LAYERS ) : aItem->GetWidth();
     int      new_width = -1;
     int      new_drill = -1;
 
@@ -39,7 +40,7 @@ void PCB_EDIT_FRAME::SetTrackSegmentWidth( PCB_TRACK* aItem, PICKED_ITEMS_LIST* 
         MINOPTMAX<int> constraint = aItem->GetWidthConstraint();
 
         if( constraint.HasOpt() )
-            new_width = constraint.Opt();
+            new_width = constraint.PinnedOpt();
         else if( constraint.Min() > 0 )
             new_width = constraint.Min();
 
@@ -48,15 +49,21 @@ void PCB_EDIT_FRAME::SetTrackSegmentWidth( PCB_TRACK* aItem, PICKED_ITEMS_LIST* 
             constraint = via->GetDrillConstraint();
 
             if( constraint.HasOpt() )
-                new_drill = constraint.Opt();
+                new_drill = constraint.PinnedOpt();
             else if( constraint.Min() > 0 )
                 new_drill = constraint.Min();
         }
     }
     else if( via && via->GetViaType() == VIATYPE::MICROVIA )
     {
-        new_width = aItem->GetEffectiveNetClass()->GetuViaDiameter();
-        new_drill = aItem->GetEffectiveNetClass()->GetuViaDrill();
+        NETCLASS* netClass = via->GetEffectiveNetClass();
+        PCB_VIA   original( *via );
+
+        // Resolve on the live via, since rules such as fromTo() match board items only
+        via->SetSizeFromRules( netClass->GetuViaDiameter(), netClass->GetuViaDrill() );
+        new_width = via->GetWidth( PADSTACK::ALL_LAYERS );
+        new_drill = via->GetDrillValue();
+        via->CopyFrom( &original );
     }
     else if( via )
     {
@@ -69,12 +76,12 @@ void PCB_EDIT_FRAME::SetTrackSegmentWidth( PCB_TRACK* aItem, PICKED_ITEMS_LIST* 
     }
 
     if( new_width <= 0 )
-        new_width = aItem->GetWidth();
+        new_width = current_width;
 
     if( via && new_drill <= 0 )
         new_drill = via->GetDrillValue();
 
-    if( aItem->GetWidth() != new_width || ( via && via->GetDrillValue() != new_drill ) )
+    if( current_width != new_width || ( via && via->GetDrillValue() != new_drill ) )
     {
         ITEM_PICKER picker( nullptr, aItem, UNDO_REDO::CHANGED );
         picker.SetLink( aItem->Clone() );

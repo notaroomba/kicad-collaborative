@@ -54,8 +54,9 @@ struct KICOMMON_API TEXT_VAR_REF_KEY
      * - LOCAL:        `${VALUE}`, `${REFERENCE}` etc. — resolved against the
      *                 item's own context (a footprint's fields, a symbol's
      *                 fields). Changes fan out only to self.
-     * - CROSS_REF:    `${REFDES:FIELD}` — primary=refdes, secondary=field.
-     *                 Keyed by refdes string so renames fire on both old/new.
+     * - CROSS_REF:    `${SOURCE:FIELD}` — primary=SOURCE (a refdes or a
+     *                 KIID path), secondary unused. The field is left out
+     *                 of the key because sources fan out on any change.
      * - PROJECT_VAR:  user-defined text var in project settings. Invalidated
      *                 when PROJECT::IncrementTextVarsTicker fires.
      * - ENV_VAR:      `${KICAD_FOOTPRINT_DIR}` etc. — OS/KiCad env vars.
@@ -106,8 +107,7 @@ struct KICOMMON_API TEXT_VAR_REF_KEY
  * (drops OP and any future non-trackable kinds). Shared helper so per-module
  * adapters don't each re-implement the filter.
  */
-KICOMMON_API std::vector<TEXT_VAR_REF_KEY> FilterTrackable(
-        const std::vector<TEXT_VAR_REF_KEY>& aRefs );
+KICOMMON_API std::vector<TEXT_VAR_REF_KEY> FilterTrackable( const std::vector<TEXT_VAR_REF_KEY>& aRefs );
 
 
 struct KICOMMON_API TEXT_VAR_REF_KEY_HASH
@@ -296,6 +296,7 @@ public:
 private:
     void fanOutSourceKeys( EDA_ITEM* aItem );
 
+private:
     TEXT_VAR_DEPENDENCY_INDEX                              m_index;
     SourceKeyExtractor                                     m_extractSourceKeys;
 

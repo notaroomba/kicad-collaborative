@@ -54,7 +54,13 @@ public:
 
     bool CanAcceptApiCommands() const override { return true; }
 
+    bool IsContentModified() const override { return m_contentModified; }
+
+    void SetContentModified( bool aModified = true ) override;
+
     bool SaveBoard() override;
+
+    bool SaveBoardAs( const wxString& aFileName ) override;
 
     bool SavePcbCopy( const wxString& aFileName, bool aCreateProject, bool aHeadless ) override;
 
@@ -64,11 +70,17 @@ public:
 
     void OnNetlistChanged( BOARD_NETLIST_UPDATER& aUpdater ) override;
 
+    bool RevertToSaved() override;
+
 private:
     std::unique_ptr<BOARD> m_board;
     PROJECT* m_project;
     KIWAY* m_kiway;
     std::unique_ptr<TOOL_MANAGER> m_toolManager;
+
+    // Board currently doesn't track its own modification state the way SCH_SCREEN does
+    // This could be cleaned up in the future
+    bool m_contentModified = false;
 };
 
 #endif

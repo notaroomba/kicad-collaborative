@@ -35,6 +35,7 @@ class PCB_TEXT;
 class PCB_BARCODE;
 class PAD;
 class PCB_SHAPE;
+class PCB_DRILL_CHART;
 class PCB_TABLE;
 class PCB_DIMENSION_BASE;
 class FOOTPRINT;
@@ -60,7 +61,7 @@ class METRICS;
 class BRDITEMS_PLOTTER : public PCB_PLOT_PARAMS
 {
 public:
-    BRDITEMS_PLOTTER( PLOTTER* aPlotter, BOARD* aBoard, const PCB_PLOT_PARAMS& aPlotOpts ) :
+    BRDITEMS_PLOTTER( PLOTTER* aPlotter, const BOARD* aBoard, const PCB_PLOT_PARAMS& aPlotOpts ) :
             PCB_PLOT_PARAMS( aPlotOpts ),
             m_plotter( aPlotter ),
             m_board( aBoard )
@@ -81,17 +82,17 @@ public:
 
     // Basic functions to plot a board item
     void SetLayerSet( const LSET& aLayerMask ) { m_layerMask = aLayerMask; }
-    void PlotFootprintGraphicItems( const FOOTPRINT* aFootprint );
-    void PlotFootprintTextItems( const FOOTPRINT* aFootprint );
+    void PlotFootprintGraphicItems( const FOOTPRINT* aFootprint ) const;
+    void PlotFootprintTextItems( const FOOTPRINT* aFootprint ) const;
 
-    void PlotDimension( const PCB_DIMENSION_BASE* aDim );
-    void PlotPcbTarget( const PCB_TARGET* aMire );
-    void PlotZone( const ZONE* aZone, PCB_LAYER_ID aLayer, const SHAPE_POLY_SET& aPolysList );
-    void PlotText( const EDA_TEXT* aText, PCB_LAYER_ID aLayer, bool aIsKnockout,
-                   const KIFONT::METRICS& aFontMetrics, bool aStrikeout = false );
-    void PlotShape( const PCB_SHAPE* aShape );
-    void PlotTableBorders( const PCB_TABLE* aTable );
-    void PlotBarCode( const PCB_BARCODE* aBarCode );
+    void PlotDimension( const PCB_DIMENSION_BASE* aDim ) const;
+    void PlotPcbTarget( const PCB_TARGET* aMire ) const;
+    void PlotZone( const ZONE* aZone, PCB_LAYER_ID aLayer, const SHAPE_POLY_SET& aPolysList ) const;
+    void PlotText( const EDA_TEXT* aText, PCB_LAYER_ID aLayer, bool aIsKnockout, const KIFONT::METRICS& aFontMetrics,
+                   bool aStrikeout = false ) const;
+    void PlotShape( const PCB_SHAPE* aShape ) const;
+    void PlotTableBorders( const PCB_TABLE* aTable ) const;
+    void PlotBarCode( const PCB_BARCODE* aBarCode ) const;
 
     /**
      * Plot a pad.
@@ -99,15 +100,14 @@ public:
      * Unlike other items, a pad had not a specific color and be drawn as a non filled item
      * although the plot mode is filled color and plot mode are needed by this function.
      */
-    void PlotPad( const PAD* aPad, PCB_LAYER_ID aLayer, const COLOR4D& aColor,
-                  bool aSketchMode );
+    void PlotPad( const PAD* aPad, PCB_LAYER_ID aLayer, const COLOR4D& aColor, bool aSketchMode ) const;
 
-    void PlotPadNumber( const PAD* aPad, const COLOR4D& aColor );
+    void PlotPadNumber( const PAD* aPad, const COLOR4D& aColor ) const;
 
     /**
      * Plot items like text and graphics but not tracks and footprints.
      */
-    void PlotBoardGraphicItem( const BOARD_ITEM* item );
+    void PlotBoardGraphicItem( const BOARD_ITEM* item ) const;
 
     /**
      * Draw a drill mark for pads and vias.
@@ -115,7 +115,17 @@ public:
      * Must be called after all drawings, because it redraws the drill mark on a pad or via, as
      * a negative (i.e. white) shape in FILLED plot mode (for PS and PDF outputs).
      */
-    void PlotDrillMarks();
+    void PlotDrillMarks() const;
+
+    /**
+     * Draw each hole's chart symbol on aLayer, from the board's shared symbol profile.
+     */
+    void PlotDrillSymbols( PCB_LAYER_ID aLayer ) const;
+
+    /**
+     * Shape marks in a chart's symbol column, which carry no cell text of their own.
+     */
+    void PlotChartSymbols( const PCB_DRILL_CHART* aChart ) const;
 
     /**
      * White color is special because it cannot be seen on a white paper in B&W mode. It is
@@ -128,12 +138,12 @@ public:
     COLOR4D getColor( int aLayer ) const;
 
 private:
-    bool hideDNPItems( PCB_LAYER_ID aLayer )
+    bool hideDNPItems( PCB_LAYER_ID aLayer ) const
     {
         return GetHideDNPFPsOnFabLayers() && ( aLayer == F_Fab || aLayer == B_Fab );
     }
 
-    bool crossoutDNPItems( PCB_LAYER_ID aLayer )
+    bool crossoutDNPItems( PCB_LAYER_ID aLayer ) const
     {
         return GetCrossoutDNPFPsOnFabLayers() && ( aLayer == F_Fab || aLayer == B_Fab );
     }
@@ -143,13 +153,12 @@ private:
      *
      * It compensate and clamp the drill mark size depending on the current plot options.
      */
-    void plotOneDrillMark( PAD_DRILL_SHAPE aDrillShape, const VECTOR2I& aDrillPos,
-                           const VECTOR2I& aDrillSize, const VECTOR2I& aPadSize,
-                           const EDA_ANGLE& aOrientation, int aSmallDrill );
+    void plotOneDrillMark( PAD_DRILL_SHAPE aDrillShape, const VECTOR2I& aDrillPos, const VECTOR2I& aDrillSize,
+                           const VECTOR2I& aPadSize, const EDA_ANGLE& aOrientation, int aSmallDrill ) const;
 
-    PLOTTER*  m_plotter;
-    BOARD*    m_board;
-    LSET      m_layerMask;
+    PLOTTER*     m_plotter;
+    const BOARD* m_board;
+    LSET         m_layerMask;
 };
 
 
@@ -164,7 +173,7 @@ void setupPlotterNewPDFPage( PLOTTER* aPlotter, BOARD* aBoard, PCB_PLOT_PARAMS* 
                              const wxString& aLayerName, const wxString& aSheetName,
                              const wxString& aSheetPath, const wxString& aPageNumber,
                              int aPageCount );
-        /**
+/**
  * Plot a sequence of board layer IDs.
  *
  * @param aBoard is the board to plot.
@@ -176,7 +185,7 @@ void PlotBoardLayers( BOARD* aBoard, PLOTTER* aPlotter, const LSEQ& aLayerSequen
                       const PCB_PLOT_PARAMS& aPlotOptions );
 
 /**
- * Plot interactive items (hypertext links, properties, etc.).
+ * Plot interactive items (hypertext links, properties, etc.) for the footprints the page drew.
  */
 void PlotInteractiveLayer( BOARD* aBoard, PLOTTER* aPlotter, const PCB_PLOT_PARAMS& aPlotOpt );
 
@@ -189,6 +198,7 @@ void PlotInteractiveLayer( BOARD* aBoard, PLOTTER* aPlotter, const PCB_PLOT_PARA
  * @param aPlotter is the plotter to use.
  * @param aLayer is the layer id to plot.
  * @param aPlotOpt is the plot options (files, sketch). Has meaning for some formats only.
+ * @param isPrimaryLayer
  */
 void PlotOneBoardLayer( BOARD* aBoard, PLOTTER* aPlotter, PCB_LAYER_ID aLayer,
                         const PCB_PLOT_PARAMS& aPlotOpt, bool isPrimaryLayer );

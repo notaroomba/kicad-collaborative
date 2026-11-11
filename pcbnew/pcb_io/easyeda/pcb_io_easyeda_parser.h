@@ -56,10 +56,10 @@ public:
                      std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
                      wxArrayString                                   aShapes );
 
-    FOOTPRINT* ParseFootprint( const VECTOR2D& aOrigin, const EDA_ANGLE& aOrientation, int aLayer,
-                               BOARD* aParent, std::map<wxString, wxString> aParams,
-                               std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
-                               wxArrayString                                   aShapes );
+    std::unique_ptr<FOOTPRINT> ParseFootprint( const VECTOR2D& aOrigin, const EDA_ANGLE& aOrientation, int aLayer,
+                                               BOARD* aParent, std::map<wxString, wxString> aParams,
+                                               std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
+                                               wxArrayString                                   aShapes );
 
     void ParseToBoardItemContainer( BOARD_ITEM_CONTAINER* aContainer, BOARD* aParent,
                                     std::map<wxString, wxString>                    paramMap,

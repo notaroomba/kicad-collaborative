@@ -58,13 +58,11 @@ public:
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath, bool aBestEfforts,
                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
-    FOOTPRINT* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName, bool aKeepUUID = false,
-                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+    std::unique_ptr<FOOTPRINT> FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                              bool                               aKeepUUID = false,
+                                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     bool CanReadBoard( const wxString& aFileName ) const override;
-
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
 
     std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints() override;
 
@@ -74,6 +72,10 @@ public:
 
     PCB_IO_SPRINT_LAYOUT();
     ~PCB_IO_SPRINT_LAYOUT() override;
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
 
 private:
     std::map<wxString, std::unique_ptr<FOOTPRINT>> m_loadedFootprints;

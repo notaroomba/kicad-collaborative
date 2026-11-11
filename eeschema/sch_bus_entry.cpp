@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <connectivity/conn_presentation.h>
 #include <sch_draw_panel.h>
 #include <bitmaps.h>
 #include <core/mirror.h>
@@ -132,7 +133,9 @@ void SCH_BUS_ENTRY_BASE::Serialize( google::protobuf::Any& aContainer ) const
         PackColor( *stroke->mutable_color(), m_stroke.GetColor() );
 
     kiapi::common::PackCustomProperties( entry.mutable_custom_properties(), *this );
-    aContainer.PackFrom( entry );
+
+    if( !aContainer.PackFrom( entry ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_BUS_ENTRY" ) );
 }
 
 
@@ -570,19 +573,8 @@ void SCH_BUS_ENTRY_BASE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame,
 
     aList.emplace_back( _( "Bus Entry Type" ), msg );
 
-    SCH_CONNECTION* conn = nullptr;
-
     if( !IsConnectivityDirty() && dynamic_cast<SCH_EDIT_FRAME*>( aFrame ) )
-        conn = Connection();
-
-    if( conn )
-    {
-        conn->AppendInfoToMsgPanel( aList );
-
-        if( !conn->IsBus() )
-            aList.emplace_back( _( "Resolved Netclass" ),
-                                GetEffectiveNetClass()->GetHumanReadableName() );
-    }
+        SCH_CONNECTIVITY::AppendConnectionInfo( *this, aList );
 }
 
 

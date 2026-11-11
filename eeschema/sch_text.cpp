@@ -46,6 +46,7 @@
 #include <core/mirror.h>
 #include <core/kicad_algo.h>
 #include <tools/sch_navigate_tool.h>
+#include <tool/tool_manager.h>
 #include <trigo.h>
 #include <markup_parser.h>
 #include <properties/property.h>
@@ -88,7 +89,9 @@ void SCH_TEXT::Serialize( google::protobuf::Any& aContainer ) const
     PackVector2( *text.mutable_text()->mutable_position(), GetPosition(), schIUScale );
 
     PackCustomProperties( text.mutable_custom_properties(), *this );
-    aContainer.PackFrom( text );
+
+    if( !aContainer.PackFrom( text ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_TEXT" ) );
 }
 
 
@@ -245,7 +248,7 @@ void SCH_TEXT::Rotate( const VECTOR2I& aCenter, bool aRotateCCW )
     RotatePoint( pt, aCenter, aRotateCCW ? ANGLE_90 : ANGLE_270 );
     VECTOR2I offset = pt - GetTextPos();
 
-    Rotate90( false );
+    Rotate90( !aRotateCCW );
 
     SetTextPos( GetTextPos() + offset );
 }
@@ -275,6 +278,8 @@ void SCH_TEXT::swapData( SCH_ITEM* aItem )
 {
     SCH_TEXT* item = static_cast<SCH_TEXT*>( aItem );
 
+    std::swap( m_excludedFromSim, item->m_excludedFromSim );
+
     SwapText( *item );
     SwapAttributes( *item );
 }
@@ -297,7 +302,7 @@ bool SCH_TEXT::operator<( const SCH_ITEM& aItem ) const
         return GetPosition().y < other->GetPosition().y;
 
     if( GetExcludedFromSim() != other->GetExcludedFromSim() )
-        return GetExcludedFromSim() - other->GetExcludedFromSim();
+        return GetExcludedFromSim();
 
     return GetText() < other->GetText();
 }
@@ -356,7 +361,7 @@ const BOX2I SCH_TEXT::GetBoundingBox() const
 }
 
 
-wxString SCH_TEXT::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraText, int aDepth ) const
+wxString SCH_TEXT::GetShownText( const SCH_SHEET_PATH* aPath, RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
     // Use local depth counter so each text element starts fresh
     int depth = 0;
@@ -391,12 +396,12 @@ wxString SCH_TEXT::GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraTe
                 return false;
             };
 
-    wxString text = EDA_TEXT::GetShownText( aAllowExtraText, depth );
+    wxString text = EDA_TEXT::GetShownText( aContext, depth );
 
-    if( HasTextVars() )
+    if( HasTextVars() && aContext != RAW_VALUE )
     {
         text = ResolveTextVars( text, &textResolver, depth );
-        FinalizeTextVarExpansion( text, aAllowExtraText );
+        FinalizeTextVarExpansion( text, aContext );
     }
 
     return text;
@@ -428,8 +433,8 @@ void SCH_TEXT::DoHypertextAction( EDA_DRAW_FRAME* aFrame, const VECTOR2I& aMouse
 
 wxString SCH_TEXT::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
-    return wxString::Format( _( "Graphic Text '%s'" ),
-                             aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() ) );
+    return wxString::Format( _( "Graphic Text '%s'" ), aFull ? GetShownText( FOR_GUI )
+                                                             : KIUI::EllipsizeMenuText( GetText() ) );
 }
 
 
@@ -565,7 +570,7 @@ void SCH_TEXT::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
             attrs.m_Angle = ANGLE_VERTICAL;
 
         bool origHoriz = ( GetTextAngle() == ANGLE_HORIZONTAL );
-        bool screenHoriz = ( attrs.m_Angle == ANGLE_HORIZONTAL );
+        bool screenHoriz = ( attrs.m_Angle.GetAngle() == ANGLE_HORIZONTAL );
 
         // Check if the text reading direction is reversed by the transform
         // Flip H alignment when reversed
@@ -598,7 +603,7 @@ void SCH_TEXT::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
 
         // Compute line positions
         wxArrayString strings_list;
-        wxStringSplit( GetShownText( nullptr, true ), strings_list, '\n' );
+        wxStringSplit( GetShownText( nullptr, FOR_CANVAS ), strings_list, '\n' );
 
         int lineCount = (int) strings_list.Count();
 
@@ -642,7 +647,7 @@ void SCH_TEXT::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
 
         std::vector<VECTOR2I> positions;
         wxArrayString         strings_list;
-        wxStringSplit( GetShownText( sheet, true ), strings_list, '\n' );
+        wxStringSplit( GetShownText( sheet, FOR_CANVAS ), strings_list, '\n' );
         positions.reserve( strings_list.Count() );
 
         GetLinePositions( renderSettings, positions, (int) strings_list.Count() );

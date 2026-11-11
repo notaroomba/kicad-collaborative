@@ -20,6 +20,12 @@
  */
 
 #include <bitmaps.h>
+#include <api/api_handler_common.h>
+#include <api/api_handler_libraries.h>
+#include <api/api_handler_symbol.h>
+#include <api/api_server.h>
+#include <api/api_plugin_manager.h>
+#include <api/api_utils.h>
 #include <wx/hyperlink.h>
 #include <base_screen.h>
 #include <confirm.h>
@@ -32,8 +38,10 @@
 #include <kidialog.h>
 #include <kiface_base.h>
 #include <kiplatform/app.h>
+#include <kiplatform/io.h>
 #include <kiway_mail.h>
 #include <symbol_edit_frame.h>
+#include <sch_edit_frame.h>
 #include <lib_symbol_library_manager.h>
 #include <symbol_editor/symbol_editor_settings.h>
 #include <symbol_editor/symbol_editor_tab_context.h>
@@ -86,13 +94,46 @@
 #include <panel_sym_lib_table.h>
 #include <string_utils.h>
 #include <libraries/symbol_library_adapter.h>
+#include <wx/dir.h>
 #include <wx/msgdlg.h>
 #include <wx/combobox.h>
 #include <wx/log.h>
+#include <wx/wfstream.h>
+#include <wx/zipstrm.h>
 #include <trace_helpers.h>
 
 
 bool SYMBOL_EDIT_FRAME::m_showDeMorgan = false;
+
+
+/**
+ * A wxDirTraverser to filter out symbol (.kicad_sym) files in an unpacked symbol library.
+ */
+class UNPACKED_SYMBOL_LIBRARY_DIR_TRAVERSER : public wxDirTraverser
+{
+public:
+    UNPACKED_SYMBOL_LIBRARY_DIR_TRAVERSER( std::vector<wxString>& aFiles ) :
+        m_files( aFiles) { }
+
+    virtual wxDirTraverseResult OnFile( const wxString& aFilename ) override
+    {
+        wxFileName fn( aFilename );
+        wxString   ext( FILEEXT::KiCadSymbolLibFileExtension );
+
+        if( ext.CmpNoCase( fn.GetExt() ) == 0 )
+            m_files.push_back( aFilename );
+
+        return wxDIR_CONTINUE;
+    }
+
+    virtual wxDirTraverseResult OnDir( const wxString& WXUNUSED( aDirname ) ) override
+    {
+        return wxDIR_CONTINUE;
+    }
+
+private:
+    std::vector<wxString>& m_files;
+};
 
 
 BEGIN_EVENT_TABLE( SYMBOL_EDIT_FRAME, SCH_BASE_FRAME )
@@ -122,6 +163,8 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                         LIB_EDIT_FRAME_NAME ),
         m_unitSelectBox( nullptr ),
         m_bodyStyleSelectBox( nullptr ),
+        m_drawSpecificUnit( false ),
+        m_drawSpecificBodyStyle( true ),
         m_isSymbolFromSchematic( false ),
         m_libTreeAutoHiddenForSchematicEdit( false )
 {
@@ -177,6 +220,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     setupUIConditions();
 
     ReCreateMenuBar();
+
+    wxTheApp->Bind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED,
+                    &SYMBOL_EDIT_FRAME::onPluginAvailabilityChanged, this );
 
     m_toolbarSettings = GetToolbarSettings<SYMBOL_EDIT_TOOLBAR_SETTINGS>( "symbol_editor-toolbars" );
     configureToolbars();
@@ -271,6 +317,9 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     // The selection filter doesn't need to grow in the vertical direction when docked
     selectionFilterPane.dock_proportion = 0;
 
+    // wx 3.3.3 turns a -1 min height into 1, and a legacy perspective restores one
+    selectionFilterPane.min_size.y = m_selectionFilterPanel->GetBestSize().y;
+
     propertiesPaneInfo.Show( m_settings->m_AuiPanels.show_properties );
     updateSelectionFilterVisbility();
 
@@ -326,6 +375,18 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     // in debug mode because the loading time of ecah library can be really noticeable
     SyncLibraries( true );
 
+    m_apiHandler = std::make_unique<API_HANDLER_SYMBOL>( this );
+    Pgm().GetApiServer().RegisterHandler( m_apiHandler.get() );
+
+    if( Kiface().IsSingle() )
+    {
+        m_apiHandlerCommon = std::make_unique<API_HANDLER_COMMON>();
+        Pgm().GetApiServer().RegisterHandler( m_apiHandlerCommon.get() );
+        m_apiLibrariesHandler = std::make_unique<API_HANDLER_LIBRARIES>(
+                LIBRARY_TABLE_TYPE::DESIGN_BLOCK );
+        Pgm().GetApiServer().RegisterHandler( m_apiLibrariesHandler.get() );
+    }
+
     // Must follow SyncLibraries so persisted tabs can resolve against the loaded libraries.
     restoreSymbolTabsFromSettings();
 }
@@ -333,10 +394,18 @@ SYMBOL_EDIT_FRAME::SYMBOL_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
 SYMBOL_EDIT_FRAME::~SYMBOL_EDIT_FRAME()
 {
+    // Ensure that teardowns without doCloseWindow() are fully unregistered
+    Pgm().GetApiServer().DeregisterHandler( m_apiHandler.get() );
+
+    if( Kiface().IsSingle() )
+    {
+        Pgm().GetApiServer().DeregisterHandler( m_apiHandlerCommon.get() );
+        Pgm().GetApiServer().DeregisterHandler( m_apiLibrariesHandler.get() );
+    }
+
     // Hand the borrowed canvas back before the base destructor frees it, else the panel reparents
     // freed memory on its own teardown.
-    if( m_tabsPanel )
-        m_tabsPanel->ReleaseSharedCanvas();
+    m_tabsPanel->ReleaseSharedCanvas();
 
     // Shutdown all running tools
     if( m_toolManager )
@@ -516,18 +585,16 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
                 return m_symbol;
             };
 
-    auto isEditableCond =
+    auto isGraphicallyEditableCond =
             [this]( const SELECTION& )
             {
-                // Only root symbols from the new s-expression libraries or the schematic
-                // are editable.
-                return IsSymbolEditable() && !IsSymbolAlias();
+                return IsSymbolGraphicallyEditable();
             };
 
     auto isEditableInAliasCond =
             [this]( const SELECTION& )
             {
-                // Less restrictive than isEditableCond
+                // Less restrictive than isGraphicallyEditableCond
                 // Symbols fields (root symbols and aliases) from the new s-expression libraries
                 // or in the schematic are editable.
                 return IsSymbolEditable();
@@ -594,12 +661,12 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::toggleGrid,          CHECK( cond.GridVisible() ) );
     mgr->SetConditions( ACTIONS::toggleGridOverrides, CHECK( cond.GridOverrides() ) );
 
-    mgr->SetConditions( ACTIONS::cut,                 ENABLE( isEditableCond ) );
+    mgr->SetConditions( ACTIONS::cut,                 ENABLE( isGraphicallyEditableCond ) );
     mgr->SetConditions( ACTIONS::copy,                ENABLE( haveSymbolCond ) );
     mgr->SetConditions( ACTIONS::copyAsText,          ENABLE( haveSymbolCond ) );
-    mgr->SetConditions( ACTIONS::paste,               ENABLE( isEditableCond && SELECTION_CONDITIONS::Idle && cond.NoActiveTool() ) );
-    mgr->SetConditions( ACTIONS::doDelete,            ENABLE( isEditableCond ) );
-    mgr->SetConditions( ACTIONS::duplicate,           ENABLE( isEditableCond ) );
+    mgr->SetConditions( ACTIONS::paste,               ENABLE( isGraphicallyEditableCond && SELECTION_CONDITIONS::Idle && cond.NoActiveTool() ) );
+    mgr->SetConditions( ACTIONS::doDelete,            ENABLE( isGraphicallyEditableCond ) );
+    mgr->SetConditions( ACTIONS::duplicate,           ENABLE( isGraphicallyEditableCond ) );
     mgr->SetConditions( ACTIONS::selectAll,           ENABLE( haveSymbolCond ) );
     mgr->SetConditions( ACTIONS::unselectAll,         ENABLE( haveSymbolCond ) );
 
@@ -609,10 +676,10 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::rotateCCW,       ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableInAliasCond )
                                                           .HotkeyEnable( isEditableInAliasCond ) );
 
-    mgr->SetConditions( SCH_ACTIONS::mirrorH,         ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableCond )
-                                                          .HotkeyEnable( isEditableCond ) );
-    mgr->SetConditions( SCH_ACTIONS::mirrorV,         ENABLE( SELECTION_CONDITIONS::NotEmpty && isEditableCond )
-                                                          .HotkeyEnable( isEditableCond ) );
+    mgr->SetConditions( SCH_ACTIONS::mirrorH,         ENABLE( SELECTION_CONDITIONS::NotEmpty && isGraphicallyEditableCond )
+                                                          .HotkeyEnable( isGraphicallyEditableCond ) );
+    mgr->SetConditions( SCH_ACTIONS::mirrorV,         ENABLE( SELECTION_CONDITIONS::NotEmpty && isGraphicallyEditableCond )
+                                                          .HotkeyEnable( isGraphicallyEditableCond ) );
 
     mgr->SetConditions( ACTIONS::zoomTool,            CHECK( cond.CurrentTool( ACTIONS::zoomTool ) ) );
     mgr->SetConditions( ACTIONS::selectionTool,       CHECK( cond.CurrentTool( ACTIONS::selectionTool ) ) );
@@ -689,15 +756,15 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::showDatasheet,            ENABLE( haveDatasheetCond ) );
     mgr->SetConditions( SCH_ACTIONS::symbolProperties,     ENABLE( symbolSelectedInTreeCondition || ( canEditProperties && haveSymbolCond ) ) );
     mgr->SetConditions( SCH_ACTIONS::runERC,               ENABLE( haveSymbolCond ) );
-    mgr->SetConditions( SCH_ACTIONS::pinTable,             ENABLE( isEditableCond && haveSymbolCond ) );
-    mgr->SetConditions( SCH_ACTIONS::editSymbolPinMaps,    ENABLE( isEditableCond && haveSymbolCond ) );
+    mgr->SetConditions( SCH_ACTIONS::pinTable,             ENABLE( isGraphicallyEditableCond && haveSymbolCond ) );
+    mgr->SetConditions( SCH_ACTIONS::editSymbolPinMaps,    ENABLE( isGraphicallyEditableCond && haveSymbolCond ) );
     mgr->SetConditions( SCH_ACTIONS::updateSymbolFields,   ENABLE( canUpdateFieldsCond ) );
     mgr->SetConditions( SCH_ACTIONS::cycleBodyStyle,       ENABLE( multiBodyStyleModeCond ) );
 
     mgr->SetConditions( SCH_ACTIONS::toggleSyncedPinsMode, ACTION_CONDITIONS().Enable( multiUnitModeCond ).Check( syncedPinsModeCond ) );
 
 // Only enable a tool if the symbol is edtable
-#define EDIT_TOOL( tool ) ACTION_CONDITIONS().Enable( isEditableCond ).Check( cond.CurrentTool( tool ) )
+#define EDIT_TOOL( tool ) ACTION_CONDITIONS().Enable( isGraphicallyEditableCond ).Check( cond.CurrentTool( tool ) )
 
     mgr->SetConditions( ACTIONS::deleteTool,             EDIT_TOOL( ACTIONS::deleteTool ) );
     mgr->SetConditions( SCH_ACTIONS::placeSymbolPin,     EDIT_TOOL( SCH_ACTIONS::placeSymbolPin ) );
@@ -708,6 +775,7 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
     mgr->SetConditions( SCH_ACTIONS::drawEllipse,        EDIT_TOOL( SCH_ACTIONS::drawEllipse ) );
     mgr->SetConditions( SCH_ACTIONS::drawEllipseArc,     EDIT_TOOL( SCH_ACTIONS::drawEllipseArc ) );
     mgr->SetConditions( SCH_ACTIONS::drawArc,            EDIT_TOOL( SCH_ACTIONS::drawArc ) );
+    setArcModeConditions( SCH_ACTIONS::drawArc, isGraphicallyEditableCond );
     mgr->SetConditions( SCH_ACTIONS::drawBezier,         EDIT_TOOL( SCH_ACTIONS::drawBezier ) );
     mgr->SetConditions( SCH_ACTIONS::drawSymbolLines,    EDIT_TOOL( SCH_ACTIONS::drawSymbolLines ) );
     mgr->SetConditions( SCH_ACTIONS::drawSymbolPolygon,  EDIT_TOOL( SCH_ACTIONS::drawSymbolPolygon ) );
@@ -717,6 +785,15 @@ void SYMBOL_EDIT_FRAME::setupUIConditions()
 #undef CHECK
 #undef ENABLE
 #undef EDIT_TOOL
+}
+
+
+void SYMBOL_EDIT_FRAME::onPluginAvailabilityChanged( wxCommandEvent& aEvt )
+{
+    wxLogTrace( traceApi, "Symbol editor frame: EDA_EVT_PLUGIN_AVAILABILITY_CHANGED" );
+    RecreateToolbars();
+    ReCreateMenuBar();
+    aEvt.Skip();
 }
 
 
@@ -772,6 +849,35 @@ bool SYMBOL_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
     if( !promptToSaveInactiveInstanceTabs() )
         return false;
 
+    // A dirty unsaved tab has no library buffer for saveAllLibraries to prompt about, so ask here
+    if( m_activeTab && m_activeTab->IsUnsaved() && GetScreen()->IsContentModified() )
+    {
+        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ),
+                                         m_activeTab->GetDisplayName( true ) );
+
+        KIDIALOG dlg( this, msg, _( "Confirmation" ), wxYES_NO | wxCANCEL | wxICON_WARNING );
+        dlg.SetYesNoCancelLabels( _( "Save" ), _( "Discard Changes" ), _( "Cancel" ) );
+
+        switch( dlg.ShowModal() )
+        {
+        case wxID_YES:
+            if( !saveCurrentSymbol() )
+            {
+                aEvent.Veto();
+                return false;
+            }
+
+            break;
+
+        case wxID_NO:
+            break;
+
+        default:
+            aEvent.Veto();
+            return false;
+        }
+    }
+
     if( !saveAllLibraries( true ) )
         return false;
 
@@ -785,6 +891,20 @@ bool SYMBOL_EDIT_FRAME::canCloseWindow( wxCloseEvent& aEvent )
 void SYMBOL_EDIT_FRAME::doCloseWindow()
 {
     SCH_BASE_FRAME::doCloseWindow();
+
+    if( Pgm().ApiServerOrNull() )
+    {
+        Pgm().GetApiServer().DeregisterHandler( m_apiHandler.get() );
+
+        if( Kiface().IsSingle() )
+        {
+            Pgm().GetApiServer().DeregisterHandler( m_apiHandlerCommon.get() );
+            Pgm().GetApiServer().DeregisterHandler( m_apiLibrariesHandler.get() );
+        }
+    }
+
+    wxTheApp->Unbind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED,
+                      &SYMBOL_EDIT_FRAME::onPluginAvailabilityChanged, this );
 
     if( GetLibTree() )
         GetLibTree()->ShutdownPreviews();
@@ -982,7 +1102,7 @@ void SYMBOL_EDIT_FRAME::updateInfoBar()
                 if( m_symbol )
                 {
                     symbolName = m_symbol->GetName();
-                    libName = UnescapeString( m_symbol->GetLibId().GetLibNickname() );
+                    libName = m_symbol->GetLibId().GetLibNickname().wx_str();
                 }
 
                 if( IsSymbolFromSchematic() )
@@ -1136,7 +1256,7 @@ void SYMBOL_EDIT_FRAME::OnModify()
 
     GetScreen()->SetContentModified();
 
-    if( !IsSymbolFromSchematic() )
+    if( !IsSymbolFromSchematic() && !( m_activeTab && m_activeTab->IsUnsaved() ) )
     {
         if( m_symbol && GetScreen()->IsContentModified() )
             m_libMgr->UpdateSymbol( m_symbol, m_symbol->GetLibNickname() ); // UpdateSymbol() makes a copy
@@ -1146,7 +1266,7 @@ void SYMBOL_EDIT_FRAME::OnModify()
         return;
 
     // Clear preview so a later library-open gets its own tab instead of replacing this edited one.
-    if( m_tabsPanel && m_activeTab )
+    if( m_activeTab )
     {
         m_activeTab->SetPreview( false );
 
@@ -1541,20 +1661,121 @@ void SYMBOL_EDIT_FRAME::UpdateLibraryTree( const wxDataViewItem& aTreeItem, LIB_
 }
 
 
-bool SYMBOL_EDIT_FRAME::backupFile( const wxFileName& aOriginalFile, const wxString& aBackupExt )
+bool SYMBOL_EDIT_FRAME::backupLibrary( const wxFileName& aOriginalFile, wxString& aErrorMsg )
 {
-    if( aOriginalFile.FileExists() )
+    wxFileName backupFileName;
+
+    if( !aOriginalFile.IsDir() && aOriginalFile.FileExists() )
     {
-        wxFileName backupFileName( aOriginalFile );
-        backupFileName.SetExt( aBackupExt );
+        backupFileName = aOriginalFile;
+        backupFileName.SetExt( wxT( "bak" ) );
 
         if( backupFileName.FileExists() )
-            wxRemoveFile( backupFileName.GetFullPath() );
+        {
+            if( !wxRemoveFile( backupFileName.GetFullPath() ) )
+            {
+                aErrorMsg.Printf( _( "Failed to remove existing library backup file '%s'." ),
+                                  backupFileName.GetFullPath() );
+                return false;
+            }
+        }
 
         if( !wxCopyFile( aOriginalFile.GetFullPath(), backupFileName.GetFullPath() ) )
         {
-            DisplayError( this, wxString::Format( _( "Failed to save backup to '%s'." ),
-                                                  backupFileName.GetFullPath() ) );
+            aErrorMsg.Printf( _( "Failed to save backup to '%s'." ), backupFileName.GetFullPath() );
+            return false;
+        }
+    }
+    else if( aOriginalFile.IsDir() && aOriginalFile.DirExists() )
+    {
+        backupFileName.SetPath( aOriginalFile.GetPath() );
+        backupFileName.SetName( backupFileName.GetDirs().Last() + wxString( "_backup" ) );
+        backupFileName.SetExt( "zip" );
+
+        std::vector<wxString> libFiles;
+        wxDir libDir( aOriginalFile.GetPath() );
+        UNPACKED_SYMBOL_LIBRARY_DIR_TRAVERSER libTraverser( libFiles );
+
+        if( backupFileName.FileExists() )
+        {
+            if( !wxRemoveFile( backupFileName.GetFullPath() ) )
+            {
+                aErrorMsg.Printf( _( "Failed to remove existing library backup file '%s'." ),
+                                  backupFileName.GetFullPath() );
+                return false;
+            }
+        }
+
+        if( !libDir.IsOpened() )
+        {
+            aErrorMsg.Printf( _( "Error opening unpacked library directory: '%s'." ), aOriginalFile.GetPath() );
+            return false;
+        }
+
+        libDir.Traverse( libTraverser, wxEmptyString, wxDIR_FILES );
+
+        wxFFileOutputStream ostream( backupFileName.GetFullPath() );
+
+        if( !ostream.IsOk() )
+        {
+            aErrorMsg.Printf( _( "Failed to create library backup file '%s'." ), backupFileName.GetFullPath() );
+            return false;
+        }
+
+        // Use a large I/O buffer to improve compatibility with cloud-synced folders.
+        if( FILE* fp = ostream.GetFile()->fp() )
+            setvbuf( fp, nullptr, _IOFBF, KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE );
+
+        wxZipOutputStream zipstream( ostream, -1, wxConvUTF8 );
+
+        for( const wxString& fileName : libFiles )
+        {
+            wxFileName fn( fileName );
+            wxFileSystem fsFile;
+
+            fn.MakeRelativeTo( aOriginalFile.GetPath() );
+
+            wxString relativeFn = fn.GetFullPath();
+
+            // Read input file and add it to the zip file:
+            wxFSFile* infile = nullptr;
+            wxString  sysError;
+
+            {
+                // Failures are reported through an error dialog, prevent wx from popping its own dialog.
+                wxLogNull suppressSysErrorPopups;
+                infile = fsFile.OpenFile( fileName );
+
+                if( !infile )
+                {
+                    if( unsigned long code = wxSysErrorCode() )
+                        sysError = wxSysErrorMsgStr( code );
+                }
+            }
+
+            if( infile )
+            {
+                zipstream.PutNextEntry( relativeFn, infile->GetModificationTime() );
+                infile->GetStream()->Read( zipstream );
+                zipstream.CloseEntry();
+
+                delete infile;
+            }
+            else
+            {
+                if( sysError.IsEmpty() )
+                    aErrorMsg.Printf( _( "Failed to archive file '%s'." ), relativeFn );
+                else
+                    aErrorMsg.Printf( _( "Failed to archive file '%s': %s" ), relativeFn, sysError );
+
+                zipstream.Close();
+                return false;
+            }
+        }
+
+        if( !zipstream.Close() )
+        {
+            aErrorMsg.Printf( _( "Failed to create file '%s'." ), backupFileName.GetFullPath() );
             return false;
         }
     }
@@ -1599,6 +1820,8 @@ void SYMBOL_EDIT_FRAME::CommonSettingsChanged( int aFlags )
         GetRenderSettings()->m_ShowHiddenFields = cfg->m_ShowHiddenFields;
         GetRenderSettings()->m_ShowPinAltIcons = cfg->m_ShowPinAltIcons;
 
+        // This editor always shows the axes, whatever a settings file not yet saved by it says
+        cfg->m_Window.grid.axes_enabled = true;
         GetGalDisplayOptions().ReadWindowSettings( cfg->m_Window );
     }
 
@@ -1835,17 +2058,98 @@ void SYMBOL_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 
         break;
 
+    case MAIL_SCH_EDIT_LIBID:
+    {
+        LIB_ID libId;
+        const int badPos = libId.Parse( wxString::FromUTF8( payload ) );
+
+        if( badPos == -1 && libId.IsValid() )
+        {
+            LoadSymbol( libId, 1, BODY_STYLE::BASE );
+            Raise();
+        }
+
+        break;
+    }
+
+    case MAIL_LIB_SAVE_ALL:
+        mail.SetPayload( saveAllLibraries( false ) ? "success" : "failed" );
+        break;
+
+    case MAIL_LIB_HAS_UNSAVED:
+    {
+        // A symbol from the schematic is saved with it, so Save All Libraries could never clear it
+        bool unsaved = HasLibModifications() || ( IsContentModified() && !IsSymbolFromSchematic() );
+        mail.SetPayload( unsaved ? "yes" : "no" );
+        break;
+    }
+
     case MAIL_RELOAD_LIB:
     {
         wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "SYMBOL_EDIT_FRAME::KiwayMailIn MAIL_RELOAD_LIB -> SyncLibraries" ) );
 
-        FreezeLibraryTree();
+        LIB_SYMBOL* current = GetCurSymbol();
+        wxString    lib = current ? current->GetLibId().GetLibNickname().wx_str() : wxString();
+
+        // The open symbol is a copy, so an unedited one is refreshed when nothing holds on to it
+        bool refresh = current && !IsContentModified() && !IsSymbolFromSchematic() && IsEnabled()
+                       && !Kiway().HasBlockingDialog() && ToolStackIsEmpty();
+
+        // A derived symbol's copy links to its parent in the buffer, so keep every buffer a copy
+        // still shows
+        std::set<wxString> keep;
+
+        for( const std::unique_ptr<SYMBOL_EDITOR_TAB_CONTEXT>& ctx : m_tabContexts )
+        {
+            if( ctx.get() != m_activeTab || !refresh )
+                keep.insert( ctx->GetLibrary() );
+        }
+
+        if( current && !refresh )
+            keep.insert( lib );
+
+        // Holds a refreshed copy's parent alive until the copy is replaced
+        std::shared_ptr<LIB_SYMBOL> heldParent = refresh ? current->GetParent().lock() : nullptr;
+
+        // Untouched buffers hold the files as they were, and a pull may have changed them since
+        std::vector<wxString> dropped = m_libMgr->DropUnmodifiedBuffers( keep );
+
+        // Only the pane is frozen. A frozen adapter hides every parent, and the view rebuilt from it
+        // at the end of the sync is left with rows that no longer exist.
+        m_treePane->Freeze();
 
         // Suppress the progress dialog for this background reload. It would steal focus from the
         // editor that broadcast the reload, and the tree is already frozen around the sync.
         SyncLibraries( false );
-        ThawLibraryTree();
+        m_treePane->Thaw();
         RefreshLibraryTree();
+
+        if( refresh && alg::contains( dropped, lib ) )
+        {
+            const wxString name = current->GetName();
+            LIB_SYMBOL*    refreshed = nullptr;
+
+            if( m_libMgr->SymbolExists( name, lib ) )
+                refreshed = m_libMgr->GetBufferedSymbol( name, lib );
+
+            LIB_SYMBOL* replacement = nullptr;
+
+            if( refreshed )
+                replacement = new LIB_SYMBOL( *refreshed );
+            else if( heldParent )
+                replacement = current->Flatten().release(); // The pull removed it and its parent dies with heldParent
+
+            if( replacement )
+            {
+                // The undo list holds the replaced copy's items
+                ClearUndoRedoList();
+                SetCurSymbol( replacement, false );
+                RebuildSymbolUnitAndBodyStyleLists();
+
+                if( m_toolManager )
+                    m_toolManager->ResetTools( TOOL_BASE::MODEL_RELOAD );
+            }
+        }
 
         break;
     }
@@ -2263,6 +2567,14 @@ bool SYMBOL_EDIT_FRAME::IsSymbolAlias() const
 bool SYMBOL_EDIT_FRAME::IsSymbolEditable() const
 {
     return m_symbol && ( !IsSymbolFromLegacyLibrary() || IsSymbolFromSchematic() );
+}
+
+
+bool SYMBOL_EDIT_FRAME::IsSymbolGraphicallyEditable() const
+{
+    // Cannot edit graphics of symbols from legacy libraries, or of symbol aliases
+    // unless the symbol is from a schematic (in which case it is a working copy of the symbol).
+    return m_symbol && ( ( !IsSymbolFromLegacyLibrary() && !IsSymbolAlias() ) || IsSymbolFromSchematic() );
 }
 
 

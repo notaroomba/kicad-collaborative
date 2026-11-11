@@ -179,8 +179,9 @@ LIB_SYMBOL* LEGACY_SYMBOL_LIB::FindSymbol( const LIB_ID& aLibId ) const
 void LEGACY_SYMBOL_LIB::AddSymbol( LIB_SYMBOL* aSymbol )
 {
     // add a clone, not the caller's copy, the plugin take ownership of the new symbol.
+    std::unique_ptr<LIB_SYMBOL> clonedSymbol = std::make_unique<LIB_SYMBOL>( *aSymbol->SharedPtr().get(), this );
     m_plugin->SaveSymbol( fileName.GetFullPath(),
-                          new LIB_SYMBOL( *aSymbol->SharedPtr().get(), this ),
+                          std::move( clonedSymbol ),
                           m_properties.get() );
 
     // If we are not buffering, the library file is updated immediately when the plugin
@@ -205,27 +206,6 @@ LIB_SYMBOL* LEGACY_SYMBOL_LIB::RemoveSymbol( LIB_SYMBOL* aEntry )
 
     ++m_mod_hash;
     return nullptr;
-}
-
-
-LIB_SYMBOL* LEGACY_SYMBOL_LIB::ReplaceSymbol( LIB_SYMBOL* aOldSymbol, LIB_SYMBOL* aNewSymbol )
-{
-    wxASSERT( aOldSymbol != nullptr );
-    wxASSERT( aNewSymbol != nullptr );
-
-    m_plugin->DeleteSymbol( fileName.GetFullPath(), aOldSymbol->GetName(), m_properties.get() );
-
-    LIB_SYMBOL* my_part = new LIB_SYMBOL( *aNewSymbol, this );
-
-    m_plugin->SaveSymbol( fileName.GetFullPath(), my_part, m_properties.get() );
-
-    // If we are not buffering, the library file is updated immediately when the plugin
-    // SaveSymbol() function is called.
-    if( IsBuffering() )
-        isModified = true;
-
-    ++m_mod_hash;
-    return my_part;
 }
 
 

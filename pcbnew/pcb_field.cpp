@@ -47,9 +47,12 @@ PCB_FIELD::PCB_FIELD( FOOTPRINT* aParent, FIELD_T aFieldId, const wxString& aNam
 PCB_FIELD::PCB_FIELD( const PCB_TEXT& aText, FIELD_T aFieldId, const wxString& aName ) :
         PCB_TEXT( aText.GetParent(), PCB_FIELD_T ),
         m_id( aFieldId ),
-        m_ordinal( static_cast<int>( aFieldId ) ),
+        m_ordinal( 0 ),
         m_name( aName )
 {
+    if( m_id == FIELD_T::USER && GetParentFootprint() )
+        m_ordinal = GetParentFootprint()->GetNextFieldOrdinal();
+
     PCB_TEXT::operator=( aText );
 }
 
@@ -58,6 +61,9 @@ PCB_FIELD::PCB_FIELD( const PCB_FIELD& aField ):
         PCB_TEXT( aField.GetParent(), PCB_FIELD_T )
 {
     *this = aField;
+
+    // Assignment keeps the new KIID, and a copy must not churn the uuid written to the file
+    SetUuidDirect( aField.m_Uuid );
 }
 
 
@@ -76,7 +82,9 @@ void PCB_FIELD::Serialize( google::protobuf::Any &aContainer ) const
 {
     kiapi::board::types::Field field;
     Serialize( field );
-    aContainer.PackFrom( field );
+
+    if( !aContainer.PackFrom( field ) )
+        wxFAIL_MSG( wxT( "Failed to pack PCB_FIELD" ) );
 }
 
 
@@ -133,26 +141,36 @@ wxString PCB_FIELD::GetUntranslatedName() const
 }
 
 
-wxString PCB_FIELD::GetShownText( bool aAllowExtraText, int aDepth ) const
+wxString PCB_FIELD::GetShownText( RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
-    wxUnusedVar( aAllowExtraText );
+    const BOARD* board = GetBoard();
+    return GetShownText( board ? board->GetCurrentVariant() : wxString(), aContext, aDepth );
+}
 
+
+wxString PCB_FIELD::GetShownText( const wxString& aVariantName, RESOLUTION_CONTEXT aContext,
+                                   int aDepth ) const
+{
     const FOOTPRINT* parentFootprint = GetParentFootprint();
     const BOARD*     board = GetBoard();
     wxString         text;
     bool             hasVariantOverride = false;
+    bool             hasTextVars = HasTextVars();
 
     if( parentFootprint && board )
     {
-        const wxString& variantName = board->GetCurrentVariant();
-
-        if( !variantName.IsEmpty() && variantName.CmpNoCase( GetDefaultVariantName() ) != 0 )
+        if( !aVariantName.IsEmpty() && aVariantName.CmpNoCase( GetDefaultVariantName() ) != 0 )
         {
-            if( const FOOTPRINT_VARIANT* variant = parentFootprint->GetVariant( variantName ) )
+            if( const FOOTPRINT_VARIANT* variant = parentFootprint->GetVariant( aVariantName ) )
             {
                 if( variant->HasFieldValue( GetName() ) )
                 {
-                    text = parentFootprint->GetFieldValueForVariant( variantName, GetName() );
+                    text = parentFootprint->GetFieldValueForVariant( aVariantName, GetName() );
+
+                    // Variable references in variant values are considered to be in schematic scope,
+                    // and are thus resolved before the footprint gets them.
+                    hasTextVars = false;
+
                     hasVariantOverride = true;
                 }
             }
@@ -173,19 +191,19 @@ wxString PCB_FIELD::GetShownText( bool aAllowExtraText, int aDepth ) const
                     return true;
                 }
 
-                if( parentFootprint && parentFootprint->ResolveTextVar( token, aDepth + 1 ) )
+                if( parentFootprint && parentFootprint->ResolveTextVar( token, aVariantName, aDepth + 1 ) )
                     return true;
 
-                if( board && board->ResolveTextVar( token, aDepth + 1 ) )
+                if( board && board->ResolveTextVar( token, aVariantName, aDepth + 1 ) )
                     return true;
 
                 return false;
             };
 
-    if( text.Contains( wxT( "${" ) ) || text.Contains( wxT( "@{" ) ) )
+    if( hasTextVars && aContext != RAW_VALUE )
     {
         text = ResolveTextVars( text, &resolver, aDepth );
-        FinalizeTextVarExpansion( text, aAllowExtraText );
+        FinalizeTextVarExpansion( text, aContext );
     }
 
     return text;
@@ -203,7 +221,7 @@ bool PCB_FIELD::IsMandatory() const
 
 bool PCB_FIELD::HasHypertext() const
 {
-    return IsURL( GetShownText( false ) );
+    return IsURL( GetShownText( FOR_GUI ) );
 }
 
 
@@ -227,7 +245,7 @@ bool PCB_FIELD::Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) co
 
 wxString PCB_FIELD::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
-    wxString content = aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() );
+    wxString content = aFull ? GetShownText( FOR_GUI ) : KIUI::EllipsizeMenuText( GetText() );
     wxString ref = GetParentFootprint()->GetReference();
 
     switch( m_id )

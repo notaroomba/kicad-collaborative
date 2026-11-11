@@ -44,9 +44,6 @@ public:
 
     bool CanReadLibrary( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
-
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override;
 
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
@@ -55,14 +52,18 @@ public:
 
     std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints() override;
 
-    FOOTPRINT* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                              bool                   aKeepUUID = false,
-                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+    std::unique_ptr<FOOTPRINT> FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                              bool                               aKeepUUID = false,
+                                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     bool IsLibraryWritable( const wxString& aLibraryPath ) override { return false; }
 
     PCB_IO_EASYEDA();
     ~PCB_IO_EASYEDA();
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
 
 private:
 

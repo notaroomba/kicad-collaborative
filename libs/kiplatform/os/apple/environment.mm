@@ -20,6 +20,8 @@
 
 #include <kiplatform/environment.h>
 
+#include "proxy.h"
+
 #import <Cocoa/Cocoa.h>
 #import <CFNetwork/CFNetwork.h>
 #include <wx/osx/core/cfstring.h>
@@ -72,6 +74,27 @@ bool KIPLATFORM::ENV::IsNetworkPath( const wxString& aPath )
 {
     // placeholder, we "nerf" behavior if its a network path so return false by default
     return false;
+}
+
+
+bool KIPLATFORM::ENV::IsRemovablePath( const wxString& aPath )
+{
+    NSURL* url = [[NSURL fileURLWithPath:wxCFStringRef( aPath ).AsNSString()]
+                         URLByResolvingSymlinksInPath];
+    NSNumber* local = nil;
+    NSNumber* removable = nil;
+    NSNumber* ejectable = nil;
+
+    if( ![url getResourceValue:&local forKey:NSURLVolumeIsLocalKey error:nil]
+        || ![local boolValue] )
+    {
+        return false;
+    }
+
+    [url getResourceValue:&removable forKey:NSURLVolumeIsRemovableKey error:nil];
+    [url getResourceValue:&ejectable forKey:NSURLVolumeIsEjectableKey error:nil];
+
+    return [removable boolValue] || [ejectable boolValue];
 }
 
 
@@ -139,10 +162,10 @@ bool extractProxyFromDict( CFDictionaryRef aProxy, KIPLATFORM::ENV::PROXY_CONFIG
     // Determine scheme based on proxy type
     wxString scheme;
 
-    if( CFEqual( proxyType, kCFProxyTypeHTTP ) )
+    // The HTTPS type selects the proxy for https destinations, which is still spoken to in
+    // plain HTTP and tunnelled with CONNECT.  An https scheme would have curl open TLS to it.
+    if( CFEqual( proxyType, kCFProxyTypeHTTP ) || CFEqual( proxyType, kCFProxyTypeHTTPS ) )
         scheme = wxT( "http" );
-    else if( CFEqual( proxyType, kCFProxyTypeHTTPS ) )
-        scheme = wxT( "https" );
     else if( CFEqual( proxyType, kCFProxyTypeSOCKS ) )
         scheme = wxT( "socks5" );
 
@@ -267,7 +290,8 @@ bool evaluatePACScript( CFURLRef aPacUrl, CFURLRef aTargetUrl, KIPLATFORM::ENV::
 } // anonymous namespace
 
 
-bool KIPLATFORM::ENV::GetSystemProxyConfig( const wxString& aURL, PROXY_CONFIG& aCfg )
+bool KIPLATFORM::ENV::GetProxyConfigForSettings( const wxString& aURL, CFDictionaryRef aSettings,
+                                                 PROXY_CONFIG& aCfg )
 {
     // Background update threads (PCM, UPDATE_MANAGER) reach this function
     // from a bare std::thread that has no Cocoa autorelease pool installed.
@@ -282,16 +306,7 @@ bool KIPLATFORM::ENV::GetSystemProxyConfig( const wxString& aURL, PROXY_CONFIG& 
         if( !url )
             return false;
 
-        CFDictionaryRef proxySettings = CFNetworkCopySystemProxySettings();
-
-        if( !proxySettings )
-        {
-            CFRelease( url );
-            return false;
-        }
-
-        CFArrayRef proxies = CFNetworkCopyProxiesForURL( url, proxySettings );
-        CFRelease( proxySettings );
+        CFArrayRef proxies = CFNetworkCopyProxiesForURL( url, aSettings );
 
         if( !proxies )
         {
@@ -327,6 +342,24 @@ bool KIPLATFORM::ENV::GetSystemProxyConfig( const wxString& aURL, PROXY_CONFIG& 
 
         CFRelease( proxies );
         CFRelease( url );
+
+        return success;
+    }
+}
+
+
+bool KIPLATFORM::ENV::GetSystemProxyConfig( const wxString& aURL, PROXY_CONFIG& aCfg )
+{
+    // CFNetworkCopySystemProxySettings autoreleases internally and callers may have no pool
+    @autoreleasepool
+    {
+        CFDictionaryRef proxySettings = CFNetworkCopySystemProxySettings();
+
+        if( !proxySettings )
+            return false;
+
+        bool success = GetProxyConfigForSettings( aURL, proxySettings, aCfg );
+        CFRelease( proxySettings );
 
         return success;
     }

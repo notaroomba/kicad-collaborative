@@ -26,7 +26,7 @@
 #include <pad.h>
 #include <pcb_track.h>
 #include <pcb_marker.h>
-#include <pcb_griditem.h>
+#include <pcb_grid_item.h>
 #include <pcb_dimension.h>
 #include <zone.h>
 #include <pcb_shape.h>
@@ -41,6 +41,9 @@ const std::vector<KICAD_T> GENERAL_COLLECTOR::AllBoardItems = {
     PCB_REFERENCE_IMAGE_T,  // in m_drawings
     PCB_TEXTBOX_T,          // in m_drawings
     PCB_TABLE_T,            // in m_drawings
+    PCB_DRILL_CHART_T,      // in m_drawings
+    PCB_STACKUP_TABLE_T,    // in m_drawings
+    PCB_DRILL_MAP_T,        // in m_drawings
     PCB_TABLECELL_T,        // in tables
     PCB_SHAPE_T,            // in m_drawings
     PCB_DIM_ALIGNED_T,      // in m_drawings
@@ -60,7 +63,7 @@ const std::vector<KICAD_T> GENERAL_COLLECTOR::AllBoardItems = {
     PCB_POINT_T,            // in m_points
     PCB_GENERATOR_T,        // in m_generators
     PCB_BARCODE_T,          // in m_drawings
-    PCB_GRIDITEM_T,         // in m_drawings
+    PCB_GRID_ITEM_T,        // in m_drawings
 };
 
 
@@ -70,6 +73,9 @@ const std::vector<KICAD_T> GENERAL_COLLECTOR::BoardLevelItems = {
     PCB_TEXT_T,
     PCB_TEXTBOX_T,
     PCB_TABLE_T,
+    PCB_DRILL_CHART_T,
+    PCB_STACKUP_TABLE_T,
+    PCB_DRILL_MAP_T,
     PCB_SHAPE_T,
     PCB_DIM_ALIGNED_T,
     PCB_DIM_ORTHOGONAL_T,
@@ -86,7 +92,7 @@ const std::vector<KICAD_T> GENERAL_COLLECTOR::BoardLevelItems = {
     PCB_ZONE_T,
     PCB_GENERATOR_T,
     PCB_BARCODE_T,
-    PCB_GRIDITEM_T
+    PCB_GRID_ITEM_T
 };
 
 
@@ -158,7 +164,7 @@ INSPECT_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* aTestItem, void* aTestData 
     bool                pad_through = false;
     PCB_VIA*            via         = nullptr;
     PCB_MARKER*         marker      = nullptr;
-    PCB_GRIDITEM*       gridItem    = nullptr;
+    PCB_GRID_ITEM*      gridItem    = nullptr;
     ZONE*               zone        = nullptr;
     PCB_FIELD*          field       = nullptr;
     PCB_TEXT*           text        = nullptr;
@@ -178,7 +184,8 @@ INSPECT_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* aTestItem, void* aTestData 
         boardItem = pad;
 
         if( ( pad->GetAttribute() != PAD_ATTRIB::SMD ) &&
-            ( pad->GetAttribute() != PAD_ATTRIB::CONN ) )  // a hole is present, so multiple layers
+            ( pad->GetAttribute() != PAD_ATTRIB::CONN ) &&
+            ( pad->GetAttribute() != PAD_ATTRIB::NON_COMPONENT ) )  // a hole is present, so multiple layers
         {
             // proceed to the common tests below, but without the parent footprint test,
             // by leaving footprint==NULL, but having pad != null
@@ -220,6 +227,9 @@ INSPECT_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* aTestItem, void* aTestData 
 
     case PCB_TEXTBOX_T:
     case PCB_TABLE_T:
+    case PCB_DRILL_CHART_T:
+    case PCB_STACKUP_TABLE_T:
+    case PCB_DRILL_MAP_T:
     case PCB_TABLECELL_T:
         if( m_Guide->IgnoreNoNets() )
             return INSPECT_RESULT::CONTINUE;
@@ -250,8 +260,8 @@ INSPECT_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* aTestItem, void* aTestData 
         boardItem = static_cast<BOARD_ITEM*>( aTestItem );
         break;
 
-    case PCB_GRIDITEM_T:
-        gridItem  = static_cast<PCB_GRIDITEM*>( aTestItem );
+    case PCB_GRID_ITEM_T:
+        gridItem  = static_cast<PCB_GRID_ITEM*>( aTestItem );
         boardItem = gridItem;
         break;
 
@@ -372,7 +382,7 @@ INSPECT_RESULT GENERAL_COLLECTOR::Inspect( EDA_ITEM* aTestItem, void* aTestData 
 
     if( gridItem )
     {
-        // Grid items live on every layer; their visibility is controlled by the LAYER_GRIDITEMS
+        // Grid items live on every layer; their visibility is controlled by the LAYER_GRID_ITEMS
         // element, not by the per-copper-layer visibility set.
         if( gridItem->HitTest( m_refPos, m_Guide->Accuracy() ) )
             Append( aTestItem );

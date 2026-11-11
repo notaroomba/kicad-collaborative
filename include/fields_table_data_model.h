@@ -24,6 +24,7 @@
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <span>
 
 #include <widgets/wx_grid.h>
 #include <widgets/ui_common.h>
@@ -98,6 +99,22 @@ struct DATA_MODEL_COL
 };
 
 
+struct FIELD_VALUE_STATE
+{
+    wxString m_value;
+    wxString m_baseline;
+};
+
+
+struct FIELD_STORE_VALUE
+{
+    // Field existence is shared by every variant; an empty value is still a present field.
+    bool                                  m_present = false;
+    bool                                  m_baselinePresent = false;
+    std::map<wxString, FIELD_VALUE_STATE> m_variants;
+};
+
+
 template <typename ITEM_TYPE>
 struct DATA_MODEL_ROW
 {
@@ -108,8 +125,16 @@ struct DATA_MODEL_ROW
         m_state = aGroupingState;
     }
 
-    int                    m_itemNumber;
-    ROW_STATE              m_state;
+    /// Items displayed and edited by this row, excluding descendants of a real parent.
+    std::span<const ITEM_TYPE> GetCellItems() const
+    {
+        std::span<const ITEM_TYPE> items( m_items );
+        return IsParentRow( m_state ) ? items.first( 1 ) : items;
+    }
+
+    int                   m_itemNumber;
+    ROW_STATE             m_state;
+    // All group members; real-parent states require the parent to remain first.
     std::vector<ITEM_TYPE> m_items;
 };
 
@@ -173,7 +198,7 @@ public:
     virtual bool ColIsItemIdentifier( int aCol ) const { return ColIsReference( aCol ); }
 
     virtual bool ColIsReadOnly( int aCol ) const;
-    bool IsExpanderColumn( int aCol ) const override;
+    bool         HasRowLabelExpanders() const override { return true; }
     virtual bool IsCellReadOnly( int aRow, int aCol );
 
     void SetSorting( int aCol, bool aAscending );
@@ -223,6 +248,9 @@ public:
 
     virtual void ClearCell( int aRow, int aCol ) = 0;
     bool         CanClearCell( int aRow, int aCol );
+    bool         CanCopyCellFromVariant( int aRow, int aCol );
+    /// Copy each item's raw source value into the displayed variant, retaining staged edits.
+    virtual void CopyCellFromVariant( int aRow, int aCol, const wxString& aVariantName ) = 0;
     virtual bool IsCellClear( int aRow, int aCol ) = 0;
     virtual bool IsCellEdited( int aRow, int aCol ) = 0;
     /// Return true if any cell in the row has been edited.
@@ -233,15 +261,18 @@ public:
     virtual std::vector<KIID_PATH> GetRowItemKeys( int aRow ) const = 0;
 
     /**
-     * Set the current variant name for highlighting purposes.
+     * Select the displayed variant, retaining un-applied edits in every variant.
      *
-     * When a variant is set, cells that differ from the default (non-variant) value
-     * will be highlighted.
+     * Refresh live baselines without replacing staged edits to unchanged fields.
+     * Cells that differ from the default (non-variant) value will be highlighted.
      *
      * @param aVariantName The name of the current variant, or empty string for default.
      */
-    void            SetCurrentVariant( const wxString& aVariantName ) { m_currentVariant = aVariantName; }
+    virtual void    SetCurrentVariant( const wxString& aVariantName ) = 0;
     const wxString& GetCurrentVariant() const { return m_currentVariant; }
+
+    void RenameStoredVariant( const wxString& aOldName, const wxString& aNewName );
+    void DeleteStoredVariant( const wxString& aName );
 
     void SetVariantNames( const std::vector<wxString>& aVariantNames ) { m_variantNames = aVariantNames; }
     const std::vector<wxString>& GetVariantNames() const { return m_variantNames; }
@@ -264,6 +295,10 @@ protected:
     // that have properties that overlap with mandatory fields, like lib footprints having
     // a library description property as well as a mandatory description field
     virtual bool fieldIsItemProperty( const wxString& aFieldName ) const;
+
+    virtual bool fieldSupportsVariants( const wxString& aFieldName ) const { return false; }
+    wxString     fieldVariant( const wxString& aFieldName, const wxString& aVariantName ) const;
+    void         updateEditedState();
 
     // Helper function to translate named attribute values like ${DNP}.
     virtual wxString getAttributeResolvedValue( const wxString& aFieldName, bool aValue ) const;
@@ -294,7 +329,7 @@ protected:
     bool             m_includeExcluded;
     bool             m_rebuildsEnabled;
 
-    ///< Items included by the user selection scope
+    /// Items included by the user selection scope
     std::unordered_set<KIID_PATH> m_selectionItems;
 
     wxString              m_currentVariant;  ///< Current variant name for highlighting
@@ -318,14 +353,14 @@ protected:
     // and are rebuilt as the user changes grouping, sorting, filtering, etc.
     //
     // NOTE: be very careful about how you "read" this data store, you should
-    // use getDataStoreFieldValue() to read values from the data store.
+    // use getStoredFieldValue() to read values from the data store.
     //
-    // The map is used to distinguish between present-but-empty vs. not-present.
+    // Each field tracks shared presence and staged/baseline values for the visited variants.
     //
     // Use the get/set/clear/update/initialize functions to access the data store,
-    // rather than accessing it directly, as using [] can unintentionally create
-    // a present-but-empty field when you just want to check if it is present.
-    std::map<KIID_PATH, std::map<wxString, wxString>> m_dataStore;
+    // rather than accessing it directly, so that live baselines and field presence
+    // are initialized consistently.
+    std::map<KIID_PATH, std::map<wxString, FIELD_STORE_VALUE>> m_dataStore;
 };
 
 
@@ -357,6 +392,17 @@ template <typename ITEM_TYPE>
 class FIELDS_TABLE_DATA_MODEL : public FIELDS_TABLE_DATA_MODEL_BASE
 {
 public:
+    void SetCurrentVariant( const wxString& aVariantName ) override
+    {
+        commitPendingGridChanges();
+        m_currentVariant = aVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 ? wxString() : aVariantName;
+
+        for( const ITEM_TYPE& item : getAllItems() )
+            refreshDataStoreItem( item );
+
+        updateEditedState();
+    }
+
     void AddColumn( const wxString& aFieldName, const wxString& aLabel,
                     bool aAddedByUser ) override
     {
@@ -367,6 +413,7 @@ public:
         commitPendingGridChanges();
 
         m_cols.push_back( { aFieldName, aLabel, aAddedByUser, false, false } );
+        FinalizeTextVarExpansion( m_cols.back().m_label, FOR_GUI );
 
         for( const ITEM_TYPE& item : getAllItems() )
             initializeDataStoreItemField( item, m_cols.back() );
@@ -395,10 +442,36 @@ public:
 
         const wxString& fieldName = m_cols[aCol].m_fieldName;
 
-        for( const ITEM_TYPE& item : m_rows[aRow].m_items )
+        for( const ITEM_TYPE& item : m_rows[aRow].GetCellItems() )
             clearStoredField( item, fieldName );
 
         m_edited = true;
+    }
+
+
+    void CopyCellFromVariant( int aRow, int aCol, const wxString& aVariantName ) override
+    {
+        if( !CanCopyCellFromVariant( aRow, aCol ) )
+            return;
+
+        const wxString& fieldName = m_cols[aCol].m_fieldName;
+        wxString        variant = aVariantName.CmpNoCase( GetDefaultVariantName() ) == 0 ? wxString() : aVariantName;
+        std::vector<wxString> values;
+
+        // Read every source before writing: grouped items may have different source values.
+        for( const ITEM_TYPE& item : m_rows[aRow].GetCellItems() )
+        {
+            FIELD_STORE_VALUE& field = storedField( item, fieldName, variant );
+            wxString           value = field.m_present ? field.m_variants[variant].m_value : wxString();
+
+            if( ColIsAttribute( aCol ) && attributeForcedOnBySheet( item, fieldName, variant ) )
+                value = wxS( "1" );
+
+            values.push_back( value );
+        }
+
+        setCellValues( aRow, aCol, values );
+        updateEditedState();
     }
 
 
@@ -411,7 +484,7 @@ public:
         wxCHECK_MSG( aRow >= 0 && aRow < static_cast<int>( m_rows.size() ), false, "Invalid Row Number" );
         wxCHECK_MSG( aCol >= 0 && aCol < static_cast<int>( m_cols.size() ), false, "Invalid Column Number" );
 
-        for( const ITEM_TYPE& item : m_rows[aRow].m_items )
+        for( const ITEM_TYPE& item : m_rows[aRow].GetCellItems() )
         {
             wxString unused;
 
@@ -432,7 +505,7 @@ public:
         wxCHECK_MSG( aRow >= 0 && aRow < static_cast<int>( m_rows.size() ), false, "Invalid Row Number" );
         wxCHECK_MSG( aCol >= 0 && aCol < static_cast<int>( m_cols.size() ), false, "Invalid Column Number" );
 
-        for( const ITEM_TYPE& item : m_rows[aRow].m_items )
+        for( const ITEM_TYPE& item : m_rows[aRow].GetCellItems() )
         {
             if( fieldIsModified( item, m_cols[aCol].m_fieldName ) )
                 return true;
@@ -452,7 +525,7 @@ public:
 
         std::vector<KIID_PATH> keys;
 
-        for( const ITEM_TYPE& item : m_rows[aRow].m_items )
+        for( const ITEM_TYPE& item : m_rows[aRow].GetCellItems() )
             keys.push_back( getDataStoreKey( item ) );
 
         return keys;
@@ -462,7 +535,8 @@ public:
     std::vector<ITEM_TYPE> GetRowReferences( int aRow ) const
     {
         wxCHECK( aRow >= 0 && aRow < (int) m_rows.size(), std::vector<ITEM_TYPE>() );
-        return m_rows[aRow].m_items;
+        std::span<const ITEM_TYPE> items = m_rows[aRow].GetCellItems();
+        return { items.begin(), items.end() };
     }
 
 
@@ -475,33 +549,23 @@ public:
     {
         wxCHECK_RET( aRow >= 0 && aRow < static_cast<int>( m_rows.size() ), "Invalid Row Number" );
 
-        for( const ITEM_TYPE& item : m_rows[aRow].m_items )
+        for( const ITEM_TYPE& item : m_rows[aRow].GetCellItems() )
         {
             for( const DATA_MODEL_COL& col : m_cols )
                 updateDataStoreItemFieldFromLive( item, col.m_fieldName );
         }
 
-        m_edited = false;
-
-        for( const ITEM_TYPE& item : getAllItems() )
-        {
-            for( const DATA_MODEL_COL& col : m_cols )
-            {
-                if( fieldIsModified( item, col.m_fieldName ) )
-                {
-                    m_edited = true;
-                    return;
-                }
-            }
-        }
+        updateEditedState();
     }
 
 
     void ExpandRow( int aRow )
     {
         std::vector<DATA_MODEL_ROW<ITEM_TYPE>> children;
+        bool                                   isParent = IsParentRow( m_rows[aRow].m_state );
+        std::span<const ITEM_TYPE>             items( m_rows[aRow].m_items );
 
-        for( ITEM_TYPE& ref : m_rows[aRow].m_items )
+        for( const ITEM_TYPE& ref : items.subspan( isParent ? 1 : 0 ) )
         {
             bool matchFound = false;
 
@@ -522,7 +586,7 @@ public:
                 children.emplace_back( ref, ROW_STATE::EXPANDED_CHILD );
         }
 
-        if( children.size() < 2 )
+        if( children.empty() || ( !isParent && children.size() < 2 ) )
             return;
 
         std::sort( children.begin(), children.end(),
@@ -532,11 +596,14 @@ public:
                        return cmpRows( lhs, rhs, m_sortColumn, m_sortAscending );
                    } );
 
-        m_rows[aRow].m_state = ROW_STATE::EXPANDED_PARENT;
+        m_rows[aRow].m_state = isParent ? ROW_STATE::PARENT_EXPANDED : ROW_STATE::GROUP_EXPANDED;
         m_rows.insert( m_rows.begin() + aRow + 1, children.begin(), children.end() );
 
-        wxGridTableMessage msg( this, wxGRIDTABLE_NOTIFY_ROWS_INSERTED, aRow + 1, children.size() );
-        GetView()->ProcessTableMessage( msg );
+        if( GetView() )
+        {
+            wxGridTableMessage msg( this, wxGRIDTABLE_NOTIFY_ROWS_INSERTED, aRow + 1, children.size() );
+            GetView()->ProcessTableMessage( msg );
+        }
     }
 
 
@@ -552,19 +619,23 @@ public:
             afterLastChild++;
         }
 
-        m_rows[aRow].m_state = ROW_STATE::COLLAPSED;
+        m_rows[aRow].m_state =
+                IsParentRow( m_rows[aRow].m_state ) ? ROW_STATE::PARENT_COLLAPSED : ROW_STATE::GROUP_COLLAPSED;
         m_rows.erase( firstChild, afterLastChild );
 
-        wxGridTableMessage msg( this, wxGRIDTABLE_NOTIFY_ROWS_DELETED, aRow + 1, deleted );
-        GetView()->ProcessTableMessage( msg );
+        if( GetView() )
+        {
+            wxGridTableMessage msg( this, wxGRIDTABLE_NOTIFY_ROWS_DELETED, aRow + 1, deleted );
+            GetView()->ProcessTableMessage( msg );
+        }
     }
 
 
     void ExpandCollapseRow( int aRow ) override
     {
-        if( m_rows[aRow].m_state == ROW_STATE::COLLAPSED )
+        if( IsRowCollapsed( m_rows[aRow].m_state ) )
             ExpandRow( aRow );
-        else if( m_rows[aRow].m_state == ROW_STATE::EXPANDED_PARENT )
+        else if( IsRowExpanded( m_rows[aRow].m_state ) )
             CollapseRow( aRow );
     }
 
@@ -573,10 +644,11 @@ public:
     {
         for( size_t i = 0; i < m_rows.size(); ++i )
         {
-            if( m_rows[i].m_state == ROW_STATE::EXPANDED_PARENT )
+            if( IsRowExpanded( m_rows[i].m_state ) )
             {
                 CollapseRow( i );
-                m_rows[i].m_state = ROW_STATE::COLLAPSED_DURING_SORT;
+                m_rows[i].m_state = IsParentRow( m_rows[i].m_state ) ? ROW_STATE::PARENT_COLLAPSED_DURING_SORT
+                                                                     : ROW_STATE::GROUP_COLLAPSED_DURING_SORT;
             }
         }
     }
@@ -586,21 +658,26 @@ public:
     {
         for( size_t i = 0; i < m_rows.size(); ++i )
         {
-            if( m_rows[i].m_state == ROW_STATE::COLLAPSED_DURING_SORT )
+            if( m_rows[i].m_state == ROW_STATE::GROUP_COLLAPSED_DURING_SORT
+                || m_rows[i].m_state == ROW_STATE::PARENT_COLLAPSED_DURING_SORT )
                 ExpandRow( i );
         }
     }
 
     wxString GetGroupedValue( const DATA_MODEL_ROW<ITEM_TYPE>& aRow, int aCol,
                               const wxString& refDelimiter = wxT( ", " ),
-                              const wxString& refRangeDelimiter = wxT( "-" ),
-                              bool resolveVars = false, bool listMixedValues = false )
+                              const wxString& refRangeDelimiter = wxT( "-" ), bool resolveVars = false,
+                              bool forExport = false )
     {
         std::vector<ITEM_TYPE> items;
         std::set<wxString>     mixedValues;
         wxString               fieldValue;
 
-        for( const ITEM_TYPE& item : aRow.m_items )
+        // Export always aggregates the full group, even when the grid displays its real parent.
+        std::span<const ITEM_TYPE> rowItems =
+                forExport ? std::span<const ITEM_TYPE>( aRow.m_items ) : aRow.GetCellItems();
+
+        for( const ITEM_TYPE& item : rowItems )
         {
             if( ColIsItemIdentifier( aCol ) || ColIsQuantity( aCol ) || ColIsItemNumber( aCol ) )
             {
@@ -610,6 +687,9 @@ public:
             {
                 wxString itemFieldValue;
                 getStoredFieldValue( item, m_cols[aCol].m_fieldName, itemFieldValue );
+
+                if( resolveVars )
+                    getEffectiveFieldValue( item, m_cols[aCol].m_fieldName, itemFieldValue );
 
                 // Show the effective state when a sheet forces it on, but do not change
                 // the stored value so the symbol is never stamped on apply.
@@ -638,16 +718,16 @@ public:
                     }
                 }
 
-                if( listMixedValues )
+                if( forExport )
                     mixedValues.insert( itemFieldValue );
-                else if( &item == &aRow.m_items.front() )
+                else if( &item == &rowItems.front() )
                     fieldValue = itemFieldValue;
                 else if( fieldValue != itemFieldValue )
                     return INDETERMINATE_STATE;
             }
         }
 
-        if( listMixedValues )
+        if( forExport )
         {
             fieldValue = wxEmptyString;
 
@@ -693,7 +773,12 @@ public:
             // C1-15, C17 kind of formatting
             if( ColIsReference( aCol ) )
             {
-                fieldValue = UTIL::FormatRefDesRanges( itemIdentifiers, refDelimiter, refRangeDelimiter );
+                std::vector<std::pair<wxString, wxString>> bases;
+
+                for( const ITEM_TYPE& item : items )
+                    bases.emplace_back( getItemIdentifier( item ), getItemRefSuffix( item ) );
+
+                fieldValue = UTIL::FormatRefDesRanges( bases, refDelimiter, refRangeDelimiter );
             }
             else
             {
@@ -808,7 +893,13 @@ protected:
      *
      * Returns true if the attribute is forced on by a sheet
      */
-    virtual bool attributeForcedOnBySheet( const ITEM_TYPE& aItem, const wxString& aAttributeName ) const
+    bool attributeForcedOnBySheet( const ITEM_TYPE& aItem, const wxString& aAttributeName ) const
+    {
+        return attributeForcedOnBySheet( aItem, aAttributeName, m_currentVariant );
+    }
+
+    virtual bool attributeForcedOnBySheet( const ITEM_TYPE& aItem, const wxString& aAttributeName,
+                                           const wxString& aVariantName ) const
     {
         return false;
     }
@@ -821,7 +912,7 @@ protected:
 
         // Lock the cell only when every symbol in the row inherits it, so a mixed group
         // stays editable and shows the indeterminate state.
-        for( const ITEM_TYPE& item : aRow.m_items )
+        for( const ITEM_TYPE& item : aRow.GetCellItems() )
         {
             if( !attributeForcedOnBySheet( item, m_cols[aCol].m_fieldName ) )
                 return false;
@@ -877,7 +968,10 @@ protected:
     // Used for sorting items that are grouped within a single row by their item identifiers.
     virtual bool cmpRowItems( const ITEM_TYPE& lhItem, const ITEM_TYPE& rhItem )
     {
-        return StrNumCmp( getItemIdentifier( lhItem ), getItemIdentifier( rhItem ), true ) < 0;
+        int cmp = StrNumCmp( getItemIdentifier( lhItem ), getItemIdentifier( rhItem ), CMP_T::IGNORE_CASE );
+
+        // Duplicate removal only merges neighbours, so each channel's units must sort together
+        return cmp != 0 ? cmp < 0 : getItemRefSuffix( lhItem ) < getItemRefSuffix( rhItem );
     }
 
     virtual bool unitMatch( const ITEM_TYPE& lhItem, const ITEM_TYPE& rhItem ) = 0;
@@ -958,15 +1052,14 @@ protected:
     {
         CollapseForSort();
 
-        // We're going to sort the rows based on their first item, so the first item identifier had
-        // better be the lowest one.
+        // Aggregate rows use their lowest item identifier; real parents must remain first.
         for( DATA_MODEL_ROW<ITEM_TYPE>& row : m_rows )
         {
-            std::sort( row.m_items.begin(), row.m_items.end(),
-                    [this]( const ITEM_TYPE& lhs, const ITEM_TYPE& rhs ) -> bool
-                    {
-                        return cmpRowItems( lhs, rhs );
-                    } );
+            std::sort( row.m_items.begin() + ( IsParentRow( row.m_state ) ? 1 : 0 ), row.m_items.end(),
+                       [this]( const ITEM_TYPE& lhs, const ITEM_TYPE& rhs ) -> bool
+                       {
+                           return cmpRowItems( lhs, rhs );
+                       } );
         }
 
         std::sort( m_rows.begin(), m_rows.end(),
@@ -995,19 +1088,37 @@ protected:
      */
     virtual bool getLiveFieldValue( const ITEM_TYPE& aItem, const wxString& aFieldName, wxString& aValue ) = 0;
 
-    /**
-     * Returns all stored fields for an item without creating a data-store entry.
-     */
-    const std::map<wxString, wxString>& getStoredFields( const ITEM_TYPE& aItem ) const
+    virtual bool getLiveFieldValueForVariant( const ITEM_TYPE& aItem, const wxString& aFieldName,
+                                              const wxString& aVariant, wxString& aValue )
     {
-        static const std::map<wxString, wxString> emptyFields;
+        return getLiveFieldValue( aItem, aFieldName, aValue );
+    }
 
+    /**
+     * Returns the edited, present fields belonging to a variant without creating entries.
+     */
+    std::map<wxString, wxString> getStoredFields( const ITEM_TYPE& aItem, const wxString& aVariant ) const
+    {
+        std::map<wxString, wxString> fields;
         auto itemIt = m_dataStore.find( getDataStoreKey( aItem ) );
 
         if( itemIt == m_dataStore.end() )
-            return emptyFields;
+            return fields;
 
-        return itemIt->second;
+        for( const auto& [name, field] : itemIt->second )
+        {
+            auto valueIt = field.m_variants.find( aVariant );
+
+            if( !field.m_present || valueIt == field.m_variants.end() )
+                continue;
+
+            const FIELD_VALUE_STATE& value = valueIt->second;
+
+            if( !field.m_baselinePresent || value.m_value != value.m_baseline )
+                fields[name] = value.m_value;
+        }
+
+        return fields;
     }
 
     /**
@@ -1020,13 +1131,73 @@ protected:
     {
         aValue.clear();
 
-        const std::map<wxString, wxString>& fields = getStoredFields( aItem );
-        auto                                fieldIt = fields.find( aFieldName );
+        auto itemIt = m_dataStore.find( getDataStoreKey( aItem ) );
 
-        if( fieldIt == fields.end() )
+        if( itemIt == m_dataStore.end() )
             return false;
 
-        aValue = fieldIt->second;
+        auto fieldIt = itemIt->second.find( aFieldName );
+
+        if( fieldIt == itemIt->second.end() || !fieldIt->second.m_present )
+            return false;
+
+        auto valueIt = fieldIt->second.m_variants.find( fieldVariant( aFieldName, m_currentVariant ) );
+
+        if( valueIt != fieldIt->second.m_variants.end() )
+            aValue = valueIt->second.m_value;
+
+        return true;
+    }
+
+    /**
+     * Resolve an ordinary field token from the current variant's staged values. Return raw
+     * variable references so ResolveTextVars can expand nested fields with its depth limit.
+     * Tokens not tracked by the table must still be offered to the live item's resolver.
+     */
+    bool resolveStoredTextVar( const ITEM_TYPE& aItem, wxString* aToken, bool aCaseSensitive = false ) const
+    {
+        auto itemIt = m_dataStore.find( getDataStoreKey( aItem ) );
+
+        if( itemIt == m_dataStore.end() )
+            return false;
+
+        const auto& fields = itemIt->second;
+        auto        fieldIt = fields.find( *aToken );
+
+        if( fieldIt == fields.end() && !aCaseSensitive )
+        {
+            fieldIt = std::find_if( fields.begin(), fields.end(),
+                                    [&]( const auto& aEntry )
+                                    {
+                                        return aToken->IsSameAs( aEntry.first, false );
+                                    } );
+        }
+
+        if( fieldIt == fields.end() || IsGeneratedField( fieldIt->first ) )
+            return false;
+
+        const wxString& name = fieldIt->first;
+        int             col = GetFieldNameCol( name );
+
+        // Identifiers can have instance-specific formatting, such as multi-unit references.
+        if( col >= 0 && ColIsItemIdentifier( col ) )
+            return false;
+
+        const FIELD_STORE_VALUE& field = fieldIt->second;
+
+        if( !field.m_present )
+        {
+            if( !field.m_baselinePresent )
+                return false;
+
+            // A pending deletion must not fall back to the old live field value.
+            aToken->clear();
+            return true;
+        }
+
+        wxString value;
+        getStoredFieldValue( aItem, name, value );
+        *aToken = UnescapeString( value );
         return true;
     }
 
@@ -1036,7 +1207,18 @@ protected:
     void setStoredFieldValue( const ITEM_TYPE& aItem, const wxString& aFieldName,
                               const wxString& aValue )
     {
-        m_dataStore[getDataStoreKey( aItem )][aFieldName] = aValue;
+        FIELD_STORE_VALUE& field = storedField( aItem, aFieldName );
+        field.m_present = true;
+        field.m_variants[fieldVariant( aFieldName, m_currentVariant )].m_value = aValue;
+    }
+
+    /// Write one value per item represented by the cell. Models may propagate shared storage.
+    virtual void setCellValues( int aRow, int aCol, const std::vector<wxString>& aValues )
+    {
+        std::span<const ITEM_TYPE> items = m_rows[aRow].GetCellItems();
+
+        for( size_t i = 0; i < items.size(); ++i )
+            setStoredFieldValue( items[i], m_cols[aCol].m_fieldName, aValues[i] );
     }
 
     /**
@@ -1045,7 +1227,7 @@ protected:
      */
     void ensureStoredFieldPresent( const ITEM_TYPE& aItem, const wxString& aFieldName )
     {
-        m_dataStore[getDataStoreKey( aItem )].try_emplace( aFieldName, wxEmptyString );
+        storedField( aItem, aFieldName ).m_present = true;
     }
 
     /**
@@ -1053,10 +1235,11 @@ protected:
      */
     void clearStoredField( const ITEM_TYPE& aItem, const wxString& aFieldName )
     {
-        auto itemIt = m_dataStore.find( getDataStoreKey( aItem ) );
+        FIELD_STORE_VALUE& field = storedField( aItem, aFieldName );
+        field.m_present = false;
 
-        if( itemIt != m_dataStore.end() )
-            itemIt->second.erase( aFieldName );
+        for( auto& [variant, state] : field.m_variants )
+            state.m_value = state.m_baseline;
     }
 
     /**
@@ -1068,10 +1251,10 @@ protected:
     {
         wxString liveValue;
         wxString storedValue;
-        bool     liveFieldPresent = getLiveFieldValue( aItem, aFieldName, liveValue );
-        bool     storedFieldPresent = getStoredFieldValue( aItem, aFieldName, storedValue );
+        bool     livePresent = getLiveFieldValue( aItem, aFieldName, liveValue );
+        bool     storedPresent = getStoredFieldValue( aItem, aFieldName, storedValue );
 
-        return liveFieldPresent != storedFieldPresent || liveValue != storedValue;
+        return livePresent != storedPresent || liveValue != storedValue;
     }
 
 
@@ -1081,14 +1264,28 @@ protected:
      * If the field is not present on the item, it will be cleared from the data store rather than
      * set to empty.
      */
-    void updateDataStoreItemFieldFromLive( const ITEM_TYPE& aItem, const wxString& aFieldName )
+    void updateDataStoreItemFieldFromLive( const ITEM_TYPE& aItem, const wxString& aFieldName,
+                                           bool aAllVariants = false )
     {
-        wxString value;
+        FIELD_STORE_VALUE& field = storedField( aItem, aFieldName );
+        wxString           currentVariant = fieldVariant( aFieldName, m_currentVariant );
+        wxString           liveValue;
+        bool               livePresent = getLiveFieldValueForVariant( aItem, aFieldName, currentVariant, liveValue );
 
-        if( getLiveFieldValue( aItem, aFieldName, value ) )
-            setStoredFieldValue( aItem, aFieldName, value );
-        else
-            clearStoredField( aItem, aFieldName );
+        // Reverting a presence change affects every variant. Otherwise revert only the
+        // displayed variant; successful Apply explicitly accepts all cached variants.
+        bool allVariants = aAllVariants || field.m_present != livePresent;
+
+        for( auto& [variant, state] : field.m_variants )
+        {
+            if( allVariants || variant == currentVariant )
+            {
+                getLiveFieldValueForVariant( aItem, aFieldName, variant, state.m_value );
+                state.m_baseline = state.m_value;
+            }
+        }
+
+        field.m_present = field.m_baselinePresent = livePresent;
     }
 
     /**
@@ -1098,10 +1295,10 @@ protected:
      */
     void initializeDataStoreItemField( const ITEM_TYPE& aItem, const DATA_MODEL_COL& aCol )
     {
-        updateDataStoreItemFieldFromLive( aItem, aCol.m_fieldName );
+        FIELD_STORE_VALUE& field = storedField( aItem, aCol.m_fieldName );
 
         if( aCol.m_userAdded )
-            ensureStoredFieldPresent( aItem, aCol.m_fieldName );
+            field.m_present = true;
     }
 
     /**
@@ -1116,11 +1313,121 @@ protected:
             initializeDataStoreItemField( aItem, col );
     }
 
+    FIELD_STORE_VALUE& storedField( const ITEM_TYPE& aItem, const wxString& aFieldName )
+    {
+        return storedField( aItem, aFieldName, m_currentVariant );
+    }
+
+    FIELD_STORE_VALUE& storedField( const ITEM_TYPE& aItem, const wxString& aFieldName, const wxString& aVariantName )
+    {
+        auto& fields = m_dataStore[getDataStoreKey( aItem )];
+        auto [fieldIt, newField] = fields.try_emplace( aFieldName );
+        FIELD_STORE_VALUE& field = fieldIt->second;
+        wxString           variant = fieldVariant( aFieldName, aVariantName );
+        auto [valueIt, newVariant] = field.m_variants.try_emplace( variant );
+
+        if( newVariant )
+        {
+            FIELD_VALUE_STATE& state = valueIt->second;
+            bool               present = getLiveFieldValueForVariant( aItem, aFieldName, variant, state.m_baseline );
+            state.m_value = state.m_baseline;
+
+            if( newField )
+                field.m_present = field.m_baselinePresent = present;
+        }
+
+        return field;
+    }
+
+    void refreshDataStoreItem( const ITEM_TYPE& aItem )
+    {
+        commitPendingGridChanges();
+
+        for( const DATA_MODEL_COL& col : m_cols )
+        {
+            auto& fields = m_dataStore[getDataStoreKey( aItem )];
+
+            if( !fields.contains( col.m_fieldName ) )
+                initializeDataStoreItemField( aItem, col );
+            else
+                storedField( aItem, col.m_fieldName );
+        }
+
+        for( auto& [name, field] : m_dataStore[getDataStoreKey( aItem )] )
+        {
+            bool livePresent = field.m_baselinePresent;
+            bool liveChanged = false;
+
+            for( auto& [variant, state] : field.m_variants )
+            {
+                wxString live;
+                livePresent = getLiveFieldValueForVariant( aItem, name, variant, live );
+                bool changed = livePresent != field.m_baselinePresent || live != state.m_baseline;
+
+                // External changes to this field win; a move/rotation leaves staged edits alone.
+                if( changed || state.m_value == state.m_baseline )
+                    state.m_value = live;
+
+                state.m_baseline = live;
+                liveChanged |= changed;
+            }
+
+            if( liveChanged || field.m_present == field.m_baselinePresent )
+                field.m_present = livePresent;
+
+            field.m_baselinePresent = livePresent;
+        }
+    }
+
+    bool storedFieldIsRemoved( const ITEM_TYPE& aItem, const wxString& aName ) const
+    {
+        auto itemIt = m_dataStore.find( getDataStoreKey( aItem ) );
+
+        if( itemIt == m_dataStore.end() )
+            return false;
+
+        auto fieldIt = itemIt->second.find( aName );
+        return fieldIt != itemIt->second.end() && !fieldIt->second.m_present && fieldIt->second.m_baselinePresent;
+    }
+
+    std::set<wxString> storedVariants( const ITEM_TYPE& aItem ) const
+    {
+        std::set<wxString> variants;
+        auto               itemIt = m_dataStore.find( getDataStoreKey( aItem ) );
+
+        if( itemIt != m_dataStore.end() )
+        {
+            for( const auto& [name, field] : itemIt->second )
+            {
+                for( const auto& [variant, state] : field.m_variants )
+                    variants.insert( variant );
+            }
+        }
+
+        return variants;
+    }
+
+    void acceptDataStoreItem( const ITEM_TYPE& aItem )
+    {
+        for( auto& [name, field] : m_dataStore[getDataStoreKey( aItem )] )
+            updateDataStoreItemFieldFromLive( aItem, name, true );
+    }
+
+    // Display inherited values without turning them into locally stored overrides.
+    virtual void getEffectiveFieldValue( const ITEM_TYPE& aItem, const wxString& aFieldName,
+                                         wxString& aValue ) const
+    {
+        getStoredFieldValue( aItem, aFieldName, aValue );
+    }
+
     virtual std::vector<ITEM_TYPE> getAllItems() const = 0;
 
 public:
     virtual KIID_PATH getDataStoreKey( const ITEM_TYPE& aItem ) const = 0;
     virtual wxString  getItemIdentifier( const ITEM_TYPE& aItem ) const = 0;
+
+    /// Return the sheet suffix shown after the item's identifier, which is a base reference.
+    virtual wxString getItemRefSuffix( const ITEM_TYPE& aItem ) const { return wxEmptyString; }
 
     /**
      * Explicitly bypasses the data store's field values and retries them from

@@ -114,6 +114,14 @@ public:
     }
 
     /**
+     * Return the ratsnest edges in no particular order.
+     *
+     * Unlike GetEdges(), this does not sort, so it is cheap to call repeatedly.  Use it wherever
+     * the order of the edges cannot be observed, such as drawing them.
+     */
+    const std::vector<CN_EDGE>& GetUnsortedEdges() const { return m_rnEdges; }
+
+    /**
      * Return the total length of the ratsnest airlines (unrouted connections) for this net.
      *
      * Unlike GetEdges(), this does not sort the edges, so it is cheap to call repeatedly.
@@ -131,23 +139,23 @@ public:
     bool NearestBicoloredPair( RN_NET* aOtherNet, VECTOR2I& aPos1, VECTOR2I& aPos2 ) const;
 
 protected:
-    ///< Recompute ratsnest from scratch.
+    /// Recompute ratsnest from scratch.
     void compute();
 
-    ///< Compute the minimum spanning tree using Filter-Kruskal.  \a aEdges is reordered.
+    /// Compute the minimum spanning tree using Filter-Kruskal.  \a aEdges is reordered.
     void kruskalMST( std::vector<CN_EDGE>& aEdges );
 
 protected:
-    ///< Vector of nodes
+    /// Vector of nodes
     std::multiset<std::shared_ptr<CN_ANCHOR>, CN_PTR_CMP> m_nodes;
 
-    ///< Vector of edges that make pre-defined connections
+    /// Vector of edges that make pre-defined connections
     std::vector<CN_EDGE> m_boardEdges;
 
-    ///< Vector of edges that makes ratsnest for a given net.
+    /// Vector of edges that makes ratsnest for a given net.
     std::vector<CN_EDGE> m_rnEdges;
 
-    ///< Flag indicating necessity of recalculation of ratsnest for a net.
+    /// Flag indicating necessity of recalculation of ratsnest for a net.
     bool m_dirty;
 
     class TRIANGULATOR_STATE;

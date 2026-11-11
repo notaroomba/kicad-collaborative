@@ -111,7 +111,9 @@ void SCH_TABLE::Serialize( google::protobuf::Any& aContainer ) const
     PackStroke( *table.mutable_separators_stroke(), m_separatorsStroke, schIUScale );
 
     kiapi::common::PackCustomProperties( table.mutable_custom_properties(), *this );
-    aContainer.PackFrom( table );
+
+    if( !aContainer.PackFrom( table ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_TABLE" ) );
 }
 
 
@@ -147,8 +149,10 @@ bool SCH_TABLE::Deserialize( const google::protobuf::Any& aContainer )
 
         if( !cell->Deserialize( protoCell ) )
         {
+            // Since cells are positional, we must add something to the table.  Probably better
+            // to add a new, empy cell than a partially deserialized who-knows-what.
             delete cell;
-            continue;
+            cell = new SCH_TABLECELL();
         }
 
         AddCell( cell );
@@ -171,6 +175,7 @@ bool SCH_TABLE::Deserialize( const google::protobuf::Any& aContainer )
     if( table.has_separators_stroke() )
         kiapi::common::UnpackStroke( m_separatorsStroke, table.separators_stroke(), schIUScale );
 
+    Normalize();
     return true;
 }
 
@@ -344,7 +349,49 @@ bool SCH_TABLE::operator<( const SCH_ITEM& aItem ) const
     if( GetPosition().y != other.GetPosition().y )
         return GetPosition().y < other.GetPosition().y;
 
-    return m_cells[0] < other.m_cells[0];
+    if( m_strokeExternal != other.m_strokeExternal )
+        return m_strokeExternal;
+
+    if( m_StrokeHeaderSeparator != other.m_StrokeHeaderSeparator )
+        return m_StrokeHeaderSeparator;
+
+    if( m_borderStroke != other.m_borderStroke )
+        return m_borderStroke < other.m_borderStroke;
+
+    if( m_strokeRows != other.m_strokeRows )
+        return m_strokeRows;
+
+    if( m_strokeColumns != other.m_strokeColumns )
+        return m_strokeColumns;
+
+    if( m_separatorsStroke != other.m_separatorsStroke )
+        return m_separatorsStroke < other.m_separatorsStroke;
+
+    if( GetColCount() != other.GetColCount() )
+        return GetColCount() < other.GetColCount();
+
+    for( int col = 0; col < GetColCount(); ++col )
+    {
+        if( GetColWidth( col ) != other.GetColWidth( col ) )
+            return GetColWidth( col ) < other.GetColWidth( col );
+    }
+
+    if( GetRowCount() != other.GetRowCount() )
+        return GetRowCount() < other.GetRowCount();
+
+    for( int row = 0; row < GetRowCount(); ++row )
+    {
+        if( GetRowHeight( row ) != other.GetRowHeight( row ) )
+            return GetRowHeight( row ) < other.GetRowHeight( row );
+    }
+
+    for( int ii = 0; ii < (int) m_cells.size(); ++ii )
+    {
+        if( m_cells[ii] != other.m_cells[ii] )
+            return m_cells[ii] < other.m_cells[ii];
+    }
+
+    return false;
 }
 
 
@@ -363,6 +410,9 @@ const BOX2I SCH_TABLE::GetBoundingBox() const
     BOX2I bbox = m_cells[0]->GetBoundingBox();
 
     bbox.Merge( m_cells[m_cells.size() - 1]->GetBoundingBox() );
+
+    if( m_strokeExternal )
+        bbox.Inflate( m_borderStroke.GetWidth() / 2 );
 
     return bbox;
 }
@@ -442,13 +492,15 @@ bool SCH_TABLE::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
 void SCH_TABLE::DrawBorders( const std::function<void( const VECTOR2I& aPt1, const VECTOR2I& aPt2,
                                                        const STROKE_PARAMS& aStroke )>& aCallback ) const
 {
+    if( m_cells.empty() )   // Shouldn't be possible....
+        return;
+
     EDA_ANGLE drawAngle = GetCell( 0, 0 )->GetTextAngle();
 
     std::vector<VECTOR2I> topLeft = GetCell( 0, 0 )->GetCornersInSequence( drawAngle );
     std::vector<VECTOR2I> bottomLeft = GetCell( GetRowCount() - 1, 0 )->GetCornersInSequence( drawAngle );
     std::vector<VECTOR2I> topRight = GetCell( 0, GetColCount() - 1 )->GetCornersInSequence( drawAngle );
-    std::vector<VECTOR2I> bottomRight =
-            GetCell( GetRowCount() - 1, GetColCount() - 1 )->GetCornersInSequence( drawAngle );
+    std::vector<VECTOR2I> botRight = GetCell( GetRowCount() - 1, GetColCount() - 1 )->GetCornersInSequence( drawAngle );
     STROKE_PARAMS stroke;
 
     for( int col = 0; col < GetColCount() - 1; ++col )
@@ -506,8 +558,8 @@ void SCH_TABLE::DrawBorders( const std::function<void( const VECTOR2I& aPt1, con
     if( StrokeExternal() && GetBorderStroke().GetWidth() >= 0 )
     {
         aCallback( topLeft[0], topRight[1], GetBorderStroke() );
-        aCallback( topRight[1], bottomRight[2], GetBorderStroke() );
-        aCallback( bottomRight[2], bottomLeft[3], GetBorderStroke() );
+        aCallback( topRight[1], botRight[2], GetBorderStroke() );
+        aCallback( botRight[2], bottomLeft[3], GetBorderStroke() );
         aCallback( bottomLeft[3], topLeft[0], GetBorderStroke() );
     }
 }
@@ -577,6 +629,24 @@ bool SCH_TABLE::operator==( const SCH_ITEM& aOther ) const
     const SCH_TABLE& other = static_cast<const SCH_TABLE&>( aOther );
 
     if( m_cells.size() != other.m_cells.size() )
+        return false;
+
+    if( m_strokeExternal != other.m_strokeExternal )
+        return false;
+
+    if( m_StrokeHeaderSeparator != other.m_StrokeHeaderSeparator )
+        return false;
+
+    if( m_borderStroke != other.m_borderStroke )
+        return false;
+
+    if( m_strokeRows != other.m_strokeRows )
+        return false;
+
+    if( m_strokeColumns != other.m_strokeColumns )
+        return false;
+
+    if( m_separatorsStroke != other.m_separatorsStroke )
         return false;
 
     if( m_colWidths != other.m_colWidths )

@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include <advanced_config.h>
+#include <api/api_plugin_manager.h>
 #include <api/api_server.h>
 #include <bitmaps.h>
 #include <bitmap_store.h>
@@ -835,6 +836,8 @@ void EDA_BASE_FRAME::RecreateToolbars()
 
         m_tbTopAux->ApplyConfiguration( tbConfig.value() );
     }
+
+    syncToolbarSelections();
 }
 
 
@@ -884,8 +887,23 @@ void EDA_BASE_FRAME::ReCreateMenuBar()
 
     CallAfter( [this]()
                {
-                   if( !m_isClosing )
-                       doReCreateMenuBar();
+                   if( m_isClosing )
+                       return;
+
+                   doReCreateMenuBar();
+
+                   // A submenu entry gets a new automatic id in each menubar, and its handler
+                   // is registered under that id, so the ones of the old menubar are dead
+                   wxMenuBar* menuBar = GetMenuBar();
+
+                   std::erase_if( m_uiUpdateMap,
+                                  [menuBar]( const auto& aEntry )
+                                  {
+                                      int id = aEntry.first;
+
+                                      return id >= wxID_AUTO_LOWEST && id <= wxID_AUTO_HIGHEST
+                                             && !( menuBar && menuBar->FindItem( id ) );
+                                  } );
                } );
 }
 
@@ -958,9 +976,14 @@ void EDA_BASE_FRAME::CommonSettingsChanged( int aFlags )
     bool running = Pgm().GetApiServer().Running();
 
     if( running && !settings->m_Api.enable_server )
+    {
         Pgm().GetApiServer().Stop();
+    }
     else if( !running && settings->m_Api.enable_server )
+    {
         Pgm().GetApiServer().Start();
+        Pgm().GetPluginManager().ReloadPlugins();
+    }
 
     if( m_fileHistory )
     {
@@ -1385,6 +1408,8 @@ void EDA_BASE_FRAME::RestoreAuiLayout()
 void EDA_BASE_FRAME::ShowInfoBarError( const wxString& aErrorMsg, bool aShowCloseButton,
                                        INFOBAR_MESSAGE_TYPE aType )
 {
+    wxCHECK( m_infoBar, /* void */ );
+
     m_infoBar->RemoveAllButtons();
 
     if( aShowCloseButton )
@@ -1397,6 +1422,8 @@ void EDA_BASE_FRAME::ShowInfoBarError( const wxString& aErrorMsg, bool aShowClos
 void EDA_BASE_FRAME::ShowInfoBarError( const wxString& aErrorMsg, bool aShowCloseButton,
                                        std::function<void(void)> aCallback )
 {
+    wxCHECK( m_infoBar, /* void */ );
+
     m_infoBar->RemoveAllButtons();
 
     if( aShowCloseButton )
@@ -1411,6 +1438,8 @@ void EDA_BASE_FRAME::ShowInfoBarError( const wxString& aErrorMsg, bool aShowClos
 
 void EDA_BASE_FRAME::ShowInfoBarWarning( const wxString& aWarningMsg, bool aShowCloseButton )
 {
+    wxCHECK( m_infoBar, /* void */ );
+
     m_infoBar->RemoveAllButtons();
 
     if( aShowCloseButton )
@@ -1422,6 +1451,8 @@ void EDA_BASE_FRAME::ShowInfoBarWarning( const wxString& aWarningMsg, bool aShow
 
 void EDA_BASE_FRAME::ShowInfoBarMsg( const wxString& aMsg, bool aShowCloseButton )
 {
+    wxCHECK( m_infoBar, /* void */ );
+
     m_infoBar->RemoveAllButtons();
 
     if( aShowCloseButton )

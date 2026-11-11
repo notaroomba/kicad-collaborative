@@ -20,6 +20,8 @@
 #include <transline_calculations/twistedpair.h>
 #include <transline_calculations/units.h>
 
+#include <algorithm>
+
 
 namespace TC = TRANSLINE_CALCULATIONS;
 using TCP = TRANSLINE_PARAMETERS;
@@ -75,7 +77,8 @@ void TWISTEDPAIR::Analyse()
     const double theta_rad = std::atan( twist * M_PI * Dout );
     const double theta_deg = theta_rad * ( 180.0 / M_PI );
 
-    const double epsEff = epsrEnv + ( 0.25 + 0.0007 * theta_deg * theta_deg ) * ( epsr - epsrEnv );
+    const double beta = 0.25 + 0.0007 * theta_deg * theta_deg;
+    const double epsEff = epsrEnv + beta * ( epsr - epsrEnv );
     SetParameter( TCP::EPSILON_EFF, epsEff );
 
     const double z0 = ( TC::ZF0 / M_PI / std::sqrt( epsEff ) ) * std::acosh( Dout / Din );
@@ -84,14 +87,26 @@ void TWISTEDPAIR::Analyse()
     const double skinDepth = GetParameter( TCP::SKIN_DEPTH );
     const double sigma = GetParameter( TCP::SIGMA );
 
-    // Thin-wire conductor and dielectric attenuation.  Lefferson 1971 does not cover loss;
-    // these are the standard parallel-wire forms summarised in Wadell, "Transmission Line
-    // Design Handbook", Artech House 1991, §3.2.3 (Twisted Pair).
-    SetParameter( TCP::LOSS_CONDUCTOR, ( TC::LOG2DB / 2.0 ) * len / skinDepth / sigma / M_PI / z0
-                                               / ( Din - skinDepth ) );
+    // Capping the depth at the wire radius makes the annulus the full cross-section at DC
+    const double currentDepth = std::min( skinDepth, Din / 2.0 );
+
+    // Proximity factor for parallel wires (Wadell, "Transmission Line Design Handbook",
+    // section 3.3.1, eq. 3.3.1.4).  It is a skin-effect result, so fade it out towards DC
+    const double spacing = Dout / Din;
+    const double proximity = spacing / std::sqrt( spacing * spacing - 1.0 );
+    const double crowding = 1.0 + ( proximity - 1.0 ) * ( 1.0 - 2.0 * currentDepth / Din );
+
+    // Lefferson 1971 does not cover loss.  Conductor loss is R/(2*Z0) with R the skin
+    // resistance of both wires (Pozar, "Microwave Engineering" 4th ed., Table 2.1)
+    SetParameter( TCP::LOSS_CONDUCTOR, TC::LOG2DB * len * crowding / currentDepth / sigma / M_PI / z0
+                                               / ( Din - currentDepth ) );
+
+    // Only the insulation is lossy, so tan delta carries its filling factor (Garg and Bahl,
+    // "Microstrip Lines and Slotlines" eq. 2.80).  The fit can exceed 1 at tight twist
+    const double lossFraction = std::min( 1.0, beta * epsr / epsEff );
 
     SetParameter( TCP::LOSS_DIELECTRIC,
-                  TC::LOG2DB * len * M_PI / TC::C0 * freq * std::sqrt( epsEff ) * tand );
+                  TC::LOG2DB * len * M_PI / TC::C0 * freq * std::sqrt( epsEff ) * tand * lossFraction );
 
     SetParameter( TCP::ANG_L, 2.0 * M_PI * len * std::sqrt( epsEff ) * freq / TC::C0 );
 
@@ -125,12 +140,12 @@ void TWISTEDPAIR::SetAnalysisResults()
     const double Din = GetParameter( TCP::PHYS_DIAM_IN );
     const double Dout = GetParameter( TCP::PHYS_DIAM_OUT );
 
-    const bool Z0_invalid = !std::isfinite( Z0 ) || Z0 < 0;
+    const bool Z0_invalid = !std::isfinite( Z0 ) || Z0 <= 0;
     const bool angL_invalid = !std::isfinite( angL ) || angL < 0;
     const bool len_invalid = !std::isfinite( len ) || len < 0;
     const bool Din_invalid = !std::isfinite( Din ) || Din <= 0.0;
     const bool Dout_invalid = !std::isfinite( Dout ) || Dout <= 0.0;
-    const bool geometry_invalid = Din > Dout;
+    const bool geometry_invalid = Din >= Dout;
 
     SetAnalysisResult( TCP::Z0, Z0, Z0_invalid ? TRANSLINE_STATUS::TS_ERROR : TRANSLINE_STATUS::OK );
     SetAnalysisResult( TCP::ANG_L, angL, angL_invalid ? TRANSLINE_STATUS::TS_ERROR : TRANSLINE_STATUS::OK );
@@ -155,12 +170,12 @@ void TWISTEDPAIR::SetSynthesisResults()
     const double Din = GetParameter( TCP::PHYS_DIAM_IN );
     const double Dout = GetParameter( TCP::PHYS_DIAM_OUT );
 
-    const bool Z0_invalid = !std::isfinite( Z0 ) || Z0 < 0;
+    const bool Z0_invalid = !std::isfinite( Z0 ) || Z0 <= 0;
     const bool angL_invalid = !std::isfinite( angL ) || angL < 0;
     const bool len_invalid = !std::isfinite( len ) || len < 0;
     const bool Din_invalid = !std::isfinite( Din ) || Din <= 0.0;
     const bool Dout_invalid = !std::isfinite( Dout ) || Dout <= 0.0;
-    const bool geometry_invalid = Din > Dout;
+    const bool geometry_invalid = Din >= Dout;
 
     const TRANSLINE_STATUS Din_status = ( m_synthesizeTarget == TCP::PHYS_DIAM_IN )
                                                 ? ( Din_invalid ? TRANSLINE_STATUS::TS_ERROR : TRANSLINE_STATUS::OK )

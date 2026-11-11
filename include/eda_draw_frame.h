@@ -32,6 +32,9 @@
 #include <kiid.h>
 #include <hotkeys_basic.h>
 #include <lib_id.h>
+#include <tool/arc_draw_mode.h>
+
+#include <set>
 
 struct EDA_SEARCH_DATA;
 struct PLUGIN_ACTION;
@@ -48,6 +51,7 @@ class SEARCH_PANE;
 class HOTKEY_CYCLE_POPUP;
 class PROPERTIES_PANEL;
 class NET_INSPECTOR_PANEL;
+class GIT_COMMIT_PANE;
 enum class BITMAP_TYPE;
 class FILEDLG_HOOK_NEW_LIBRARY;
 
@@ -104,6 +108,7 @@ public:
 
     EDA_SEARCH_DATA& GetFindReplaceData();
     wxArrayString& GetFindHistoryList() { return m_findStringHistoryList; }
+    wxArrayString& GetReplaceHistoryList() { return m_replaceStringHistoryList; }
 
     virtual void SetPageSettings( const PAGE_INFO& aPageSettings ) = 0;
     virtual const PAGE_INFO& GetPageSettings() const = 0;
@@ -248,6 +253,11 @@ public:
     void OnUpdateSelectZoom( wxUpdateUIEvent& aEvent );
 
     /**
+     * Show the current zoom in the zoom wxchoice, as a preset or as its own entry.
+     */
+    void SyncZoomSelectBox();
+
+    /**
      * Rebuild the grid combobox to respond to any changes in the GUI (units, user
      * grid changes, etc.)
      */
@@ -292,6 +302,7 @@ public:
      * drawing if the requested point is out of view or if center on location is requested.
      *
      * @param aPos is the point to go to.
+     * @param aAllowScroll is the flag to enable location scrolling.
      */
     void FocusOnLocation( const VECTOR2I& aPos, bool aAllowScroll = true );
 
@@ -299,6 +310,7 @@ public:
      * Focus on a particular canvas item.
      *
      * @param aItem is the item to focus on. nullptr clears the focus.
+     * @param aAllowScroll is the flag to enable item scrolling.
      */
     virtual void FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll = true ) {}
 
@@ -313,6 +325,7 @@ public:
     /**
      * Print the drawing-sheet (frame and title block).
      *
+     * @param aSettings are the rendering settings used for printing.
      * @param aScreen screen to draw.
      * @param aProperties Optional properties for text variable resolution.
      * @param aMils2Iu The mils to Iu conversion factor.
@@ -423,6 +436,16 @@ public:
 
     static const wxString NetInspectorPanelName() { return wxS( "NetInspector" ); }
 
+
+    void ToggleGitCommitPane();
+
+    /// Attach the git session if needed and refresh the version-control pane, when it is shown.
+    /// Editors call this after a save so the pane reflects the change without waiting for a git
+    /// operation to broadcast a refresh.
+    void RefreshGitCommitPane();
+
+    bool IsGitCommitPaneShown();
+
     static const wxString DesignBlocksPaneName() { return wxS( "DesignBlocks" ); }
 
     static const wxString RemoteSymbolPaneName() { return wxS( "RemoteSymbol" ); }
@@ -446,6 +469,13 @@ public:
      * Change the current rendering backend.
      */
     virtual void SwitchCanvas( EDA_DRAW_PANEL_GAL::GAL_TYPE aCanvasType );
+
+    /**
+     * Keep every frame off a canvas for this session without changing the saved preference.
+     */
+    static void SetCanvasFailed( EDA_DRAW_PANEL_GAL::GAL_TYPE aCanvas ) { m_failedCanvases.insert( aCanvas ); }
+
+    static bool CanvasFailed( EDA_DRAW_PANEL_GAL::GAL_TYPE aCanvas ) { return m_failedCanvases.contains( aCanvas ); }
 
     /**
      * Return a pointer to GAL-based canvas of given EDA draw frame.
@@ -496,7 +526,6 @@ public:
     /**
      * Save the current view as an image file.
      *
-     * @param aFrame The current draw frame view to save.
      * @param aFileName The file name to save the image.  This will overwrite an existing file.
      * @param aBitmapType The type of bitmap create as defined by wxImage.
      * @return True if the file was successfully saved or false if the file failed to be saved.
@@ -519,10 +548,19 @@ public:
      * Must be static at the moment because this needs to be called from the preferences dialog,
      * which can exist without the frame in question actually being created.
      *
+     * @param aScope is the scope of the plugins to get.
      * @param aCfg is the settings to read the plugin ordering from.
      */
     static std::vector<const PLUGIN_ACTION*> GetOrderedPluginActions( PLUGIN_ACTION_SCOPE aScope,
                                                                       APP_SETTINGS_BASE* aCfg );
+
+    /**
+     * Append actions from API plugins to the given menu.
+     *
+     * @param aMenu is the menu to add the plugin actions to
+     * @return the number of actions added to the menu
+     */
+    size_t AddApiPluginMenuItems( ACTION_MENU* aMenu );
 
     /**
      * Append actions from API plugins to the given toolbar.
@@ -542,6 +580,19 @@ protected:
 
     void setupUIConditions() override;
 
+    /// The action that starts the arc tool in @a aMode, or nullptr in a frame without an arc tool.
+    virtual const TOOL_ACTION* drawArcAction( ARC_DRAW_MODE aMode ) const { return nullptr; }
+
+    /**
+     * Check each arc mode's tool action while the arc tool runs in that mode.
+     *
+     * @param aDrawArc is the arc tool action without a mode; its name must begin every arc tool action's name.
+     * @param aEnable enables the arc tool actions.
+     */
+    void setArcModeConditions( const TOOL_ACTION& aDrawArc, const std::function<bool( const SELECTION& )>& aEnable );
+
+    void syncToolbarSelections() override;
+
     void setupUnits( APP_SETTINGS_BASE* aCfg );
 
     void updateStatusBarWidths();
@@ -555,9 +606,6 @@ protected:
 
     /**
      * Return the canvas type stored in the application settings.
-     *
-     * @param aCfg is the APP_SETTINGS_BASE config storing the canvas type.
-     * If nullptr (default) the KifaceSettings() will be used
      */
     EDA_DRAW_PANEL_GAL::GAL_TYPE loadCanvasTypeSetting();
 
@@ -574,7 +622,7 @@ protected:
 
     wxSocketServer*             m_socketServer;
 
-    ///< Prevents opening same file multiple times.
+    /// Prevents opening same file multiple times.
     std::unique_ptr<LOCKFILE> m_file_checker;
 
     COLOR4D              m_gridColor;         // Grid color
@@ -603,14 +651,15 @@ protected:
     SEARCH_PANE*         m_searchPane;
     PROPERTIES_PANEL*    m_propertiesPanel;
     NET_INSPECTOR_PANEL* m_netInspectorPanel;
+    GIT_COMMIT_PANE*     m_gitCommitPane;
 
     HOTKEY_CYCLE_POPUP* m_hotkeyPopup;
 
     /// The current canvas type.
     EDA_DRAW_PANEL_GAL::GAL_TYPE    m_canvasType;
 
-    static bool m_openGLFailureOccured; ///< Has any failure occurred when switching to OpenGL in
-                                        ///< any EDA_DRAW_FRAME?
+    /** The canvases that have failed in any EDA_DRAW_FRAME this session */
+    static std::set<EDA_DRAW_PANEL_GAL::GAL_TYPE> m_failedCanvases;
 
 private:
     BASE_SCREEN*                m_currentScreen;      ///< current used SCREEN

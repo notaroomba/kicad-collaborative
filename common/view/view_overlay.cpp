@@ -27,6 +27,8 @@
 #include <gal/painter.h>
 
 #include <geometry/seg.h>
+#include <geometry/shape_poly_set.h>
+
 
 namespace KIGFX {
 
@@ -303,7 +305,7 @@ void VIEW_OVERLAY::ViewDraw( int aLayer, VIEW* aView ) const
 {
     GAL& gal = *aView->GetGAL();
 
-    GAL_SCOPED_ATTRS scopedAttrs( gal, GAL_SCOPED_ATTRS::LAYER_DEPTH );
+    GAL_SCOPED_ATTRS scopedAttrs( gal, GAL_SCOPED_ATTRS::ALL_ATTRS );
     gal.SetLayerDepth( gal.GetMinDepth() );
 
     for( const VIEW_OVERLAY::COMMAND* cmd : m_commands )

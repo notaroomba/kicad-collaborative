@@ -21,7 +21,6 @@
 #include <dialogs/dialog_move_exact.h>
 #include <math/box2.h>
 #include <math/util.h>      // for KiROUND
-#include <widgets/tab_traversal.h>
 #include <pcb_edit_frame.h>
 #include <trigo.h>
 
@@ -229,11 +228,6 @@ void DIALOG_MOVE_EXACT::OnClear( wxCommandEvent& event )
 bool DIALOG_MOVE_EXACT::TransferDataToWindow()
 {
     updateDialogControls( m_polarCoords->GetValue() );
-
-    // Force the evaluation when setting previous values
-    m_moveX.RequireEval();
-    m_moveY.RequireEval();
-    m_rotate.RequireEval();
 
     return true;
 }

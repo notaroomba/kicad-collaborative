@@ -806,6 +806,7 @@ GAL_SET GAL_SET::DefaultVisible()
         LAYER_DRC_ERROR,
         LAYER_DRC_WARNING,
         // LAYER_DRC_EXCLUSION,      // DRC exclusions hidden by default
+        LAYER_DRC_HIGHLIGHTED,
         LAYER_DRAWINGSHEET,
         LAYER_GP_OVERLAY,
         LAYER_SELECT_OVERLAY,
@@ -821,7 +822,7 @@ GAL_SET GAL_SET::DefaultVisible()
         LAYER_CONFLICTS_SHADOW,
         LAYER_CONSTRAINT_SHADOW,
         LAYER_POINTS,
-        LAYER_GRIDITEMS,
+        LAYER_SUBGRIDS,
         LAYER_VIA_STITCHING
     };
 

@@ -1179,6 +1179,32 @@ BOOST_AUTO_TEST_CASE( Slice )
         BOOST_CHECK_EQUAL( sliceResult.GetPoint( 3 ),
                            expectedSliceArc0.GetP1() ); // equal to arc end
     }
+
+    BOOST_TEST_CONTEXT( "Case 11: Start and finish in the middle of the same arc" )
+    {
+        SHAPE_LINE_CHAIN sliceResult = chain.Slice( 14, 16, ARC_HIGH_DEF );
+        BOOST_CHECK( GEOM_TEST::IsOutlineValid( sliceResult ) );
+
+        BOOST_CHECK_EQUAL( sliceResult.ArcCount(), 1 );
+        BOOST_CHECK_EQUAL( sliceResult.PointCount(), 3 );
+
+        BOOST_CHECK_EQUAL( sliceResult.Arc( 0 ).GetP0(), chain.GetPoint( 14 ) );
+        BOOST_CHECK_EQUAL( sliceResult.Arc( 0 ).GetP1(), chain.GetPoint( 16 ) );
+        BOOST_CHECK( sliceResult.Arc( 0 ).Collide( chain.GetPoint( 15 ), tol ) );
+
+        BOOST_CHECK_EQUAL( sliceResult.IsArcStart( 0 ), true );
+        BOOST_CHECK_EQUAL( sliceResult.IsArcEnd( 2 ), true );
+    }
+
+    BOOST_TEST_CONTEXT( "Case 12: Single point in the middle of an arc" )
+    {
+        SHAPE_LINE_CHAIN sliceResult = chain.Slice( 15, 15, ARC_HIGH_DEF );
+        BOOST_CHECK( GEOM_TEST::IsOutlineValid( sliceResult ) );
+
+        BOOST_CHECK_EQUAL( sliceResult.ArcCount(), 0 );
+        BOOST_CHECK_EQUAL( sliceResult.PointCount(), 1 );
+        BOOST_CHECK_EQUAL( sliceResult.GetPoint( 0 ), chain.GetPoint( 15 ) );
+    }
 }
 
 
@@ -1926,6 +1952,26 @@ BOOST_AUTO_TEST_CASE( SelfIntersecting_LargeWithCrossing )
     chain.Append( VECTOR2I( 5000, -10000 ) );
 
     BOOST_CHECK( chain.SelfIntersecting().has_value() );
+}
+
+
+// The router collides a one-point head line while placing, which leaves no segment to measure.
+// qa_kimath installs no assert thrower, so arm one here or the overflow assert goes unnoticed
+BOOST_AUTO_TEST_CASE( CollideSegSinglePointChain )
+{
+    SHAPE_LINE_CHAIN chain;
+    chain.Append( VECTOR2I( 23025000, 9475000 ) );
+
+    SEG  seg( { 24800000, 4650000 }, { 28520000, 8370000 } );
+    bool hit = true;
+
+    wxAssertHandler_t prevHandler = wxSetAssertHandler( &KI_TEST::wxAssertThrower );
+
+    BOOST_CHECK_NO_THROW( hit = chain.Collide( seg, 1179499 ) );
+
+    wxSetAssertHandler( prevHandler );
+
+    BOOST_CHECK( !hit );
 }
 
 

@@ -25,8 +25,8 @@
 #include "pcb_io_allegro.h"
 
 #include <board.h>
+#include <ki_exception.h>
 #include <reporter.h>
-#include <fstream>
 #include <io/io_utils.h>
 #include <kiplatform/io.h>
 
@@ -70,7 +70,30 @@ static bool checkFileHeader( const wxString& aFileName )
     if( IO_UTILS::fileHasBinaryHeader( aFileName, v18Magic, magicMajorOffset ) )
         return true;
 
-    return IO_UTILS::fileHasBinaryHeader( aFileName, v19Magic, magicMajorOffset );
+    if( IO_UTILS::fileHasBinaryHeader( aFileName, v19Magic, magicMajorOffset ) )
+        return true;
+
+    // Allegro 14 and 15 keep the family in the top byte of the magic, recognized so the refusal can say why
+    for( uint8_t family = 0x0F; family <= 0x12; ++family )
+    {
+        if( IO_UTILS::fileHasBinaryHeader( aFileName, { 0x00, family }, magicMajorOffset ) )
+            return true;
+    }
+
+    // dbdoctor also rewrites the version string of pre-16 files, so match their family together with the fixed
+    // words after the magic, which tell them from other .brd binaries
+    static const std::vector<uint8_t> headerWords = { 3, 0, 0, 0, 1, 0, 0, 0, 3, 0, 0, 0, 9, 0, 0, 0 };
+
+    if( !IO_UTILS::fileHasBinaryHeader( aFileName, headerWords, 4 ) )
+        return false;
+
+    for( uint8_t family = 0x0F; family <= 0x12; ++family )
+    {
+        if( IO_UTILS::fileHasBinaryHeader( aFileName, { family, 0x00 }, magicMajorOffset ) )
+            return true;
+    }
+
+    return false;
 }
 
 
@@ -83,6 +106,27 @@ allegroDefaultLayerMappingCallback( const std::vector<INPUT_LAYER_DESC>& aInputL
         retval.insert( { layerDesc.Name, layerDesc.AutoMapLayer } );
 
     return retval;
+}
+
+
+/**
+ * Parse a whole Allegro file into the intermediate database of blocks and strings.
+ *
+ * The parsed database owns copies of everything it needs, so the source data can go away
+ * once this returns.
+ */
+static std::unique_ptr<ALLEGRO::BRD_DB> parseAllegroData( const uint8_t* aData, size_t aSize,
+                                                          PROGRESS_REPORTER* aProgressReporter )
+{
+    ALLEGRO::FILE_STREAM allegroStream( aData, aSize );
+
+    ALLEGRO::PARSER parser( allegroStream, aProgressReporter );
+
+    // When parsing a file "for real", encountering an unknown block is fatal, as we then
+    // cannot know how long that block is, and thus can't proceed to find any later blocks.
+    parser.EndAtUnknownBlock( false );
+
+    return parser.Parse();
 }
 
 
@@ -110,16 +154,11 @@ bool PCB_IO_ALLEGRO::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_ALLEGRO::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                  const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_ALLEGRO::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_props = aProperties;
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
-
-    std::unique_ptr<BOARD> deleter( aAppendToMe ? nullptr : m_board );
+    m_board = &aBoard;
 
     std::unique_ptr<KIPLATFORM::IO::MAPPED_FILE> mappedFile;
 
@@ -136,30 +175,19 @@ BOARD* PCB_IO_ALLEGRO::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         THROW_IO_ERRORF( _( "File is empty: %s" ), aFileName );
 
     if( !LoadBoardFromData( mappedFile->Data(), mappedFile->Size(), *m_board ) )
-        return nullptr;
-
-    (void) deleter.release();
-    return m_board;
+        THROW_IO_ERRORF( _( "Failed to load Allegro board from file: %s" ), aFileName );
 }
 
 
 bool PCB_IO_ALLEGRO::LoadBoardFromData( const uint8_t* aData, size_t aSize, BOARD& aBoard )
 {
-    ALLEGRO::FILE_STREAM allegroStream( aData, aSize );
-
-    ALLEGRO::PARSER parser( allegroStream, m_progressReporter );
-
-    // When parsing a file "for real", encountering an unknown block is fatal, as we then
-    // cannot know how long that block is, and thus can't proceed to find any later blocks.
-    parser.EndAtUnknownBlock( false );
-
     PROF_TIMER totalTimer;
 
     wxLogTrace( traceAllegroPerf, wxT( "=== Allegro Import Performance ===" ) );
 
     // Import phase 1: turn the file into the C++ structs
     PROF_TIMER phaseTimer;
-    std::unique_ptr<ALLEGRO::BRD_DB> brdDb = parser.Parse();
+    std::unique_ptr<ALLEGRO::BRD_DB> brdDb = parseAllegroData( aData, aSize, m_progressReporter );
     phaseTimer.Stop();
 
     wxLogTrace( traceAllegroPerf, wxT( "Phase 1 (binary parse): %.3f ms" ), phaseTimer.msecs() ); //format:allow

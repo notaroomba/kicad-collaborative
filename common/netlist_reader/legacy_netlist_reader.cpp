@@ -49,8 +49,9 @@ void LEGACY_NETLIST_READER::LoadNetlist()
         {
             is_comment = true;
 
-            if( m_loadFootprintFilters && state == 0
-              && (strncasecmp( line, "{ Allowed footprints", 20 ) == 0) )
+            if( m_loadFootprintFilters
+                    && state == 0
+                    && strncasecmp( line, "{ Allowed footprints", 20 ) == 0 )
             {
                 loadFootprintFilters();
                 continue;
@@ -58,6 +59,8 @@ void LEGACY_NETLIST_READER::LoadNetlist()
 
             if( ( line = strchr( line, '}' ) ) == nullptr )
                 continue;
+            else
+                is_comment = false;
         }
 
         if( *line == '(' )
@@ -96,7 +99,7 @@ COMPONENT* LEGACY_NETLIST_READER::loadComponent( char* aText )
     wxString value;             // the component value read from netlist
     wxString reference;         // the component schematic reference designator read from netlist
     wxString name;              // the name of component that was placed in the schematic
-    char     line[1024];
+    char     line[4096];
 
     strncpy( line, aText, sizeof(line)-1 );
     line[sizeof(line)-1] = '\0';

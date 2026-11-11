@@ -20,18 +20,17 @@
 #include <build_version.h>
 #include <confirm.h>
 
-#include <connection_graph.h>
 #include <string_utils.h>
 #include <sch_edit_frame.h>
 #include <sch_reference_list.h>
 #include <fmt.h>
 #include <system_error>
+#include <map>
 
 #include "netlist_exporter_pads.h"
 
-bool NETLIST_EXPORTER_PADS::WriteNetlist( const wxString& aOutFileName,
-                                             unsigned /* aNetlistOptions */,
-                                             REPORTER& aReporter )
+bool NETLIST_EXPORTER_PADS::writeNetlist( const wxString& aOutFileName, unsigned /* aNetlistOptions */,
+                                          REPORTER& aReporter )
 {
     int ret = 0;
     FILE* f = nullptr;
@@ -55,7 +54,9 @@ bool NETLIST_EXPORTER_PADS::WriteNetlist( const wxString& aOutFileName,
         // Create netlist footprints section
         m_referencesAlreadyFound.Clear();
 
-        for( const SCH_SHEET_PATH& sheet : m_schematic->Hierarchy() )
+        const EXPORT_EXCLUSION excluded = boardExclusion();
+
+        for( const SCH_SHEET_PATH& sheet : m_exportSheets )
         {
             // The rtree returns items in a non-deterministic order (platform-dependent)
             // Therefore we need to sort them before outputting to ensure file stability for version
@@ -65,24 +66,22 @@ bool NETLIST_EXPORTER_PADS::WriteNetlist( const wxString& aOutFileName,
             for( EDA_ITEM* item : sheet.LastScreen()->Items().OfType( SCH_SYMBOL_T ) )
                 sheetItems.push_back( item );
 
-            auto pred = []( const EDA_ITEM* item1, const EDA_ITEM* item2 )
-            {
-                return item1->m_Uuid < item2->m_Uuid;
-            };
+            auto pred =
+                    []( const EDA_ITEM* item1, const EDA_ITEM* item2 )
+                    {
+                        return item1->m_Uuid < item2->m_Uuid;
+                    };
 
             std::sort( sheetItems.begin(), sheetItems.end(), pred );
 
             for( EDA_ITEM* item : sheetItems )
             {
-                symbol = findNextSymbol( item, sheet );
+                symbol = findNextSymbol( item, sheet, excluded );
 
                 if( !symbol )
                     continue;
 
-                if( symbol->GetExcludedFromBoard() )
-                    continue;
-
-                footprint = symbol->GetFootprintFieldText( true, &sheet, false );
+                footprint = symbol->GetFootprintFieldText( &sheet, RESOLVED, m_exportVariant );
 
                 footprint = footprint.Trim( true );
                 footprint = footprint.Trim( false );
@@ -91,7 +90,7 @@ bool NETLIST_EXPORTER_PADS::WriteNetlist( const wxString& aOutFileName,
                 if( footprint.IsEmpty() )
                 {
                     // fall back to value field
-                    footprint = symbol->GetValue( true, &sheet, false );
+                    footprint = symbol->GetValue( &sheet, RESOLVED, m_exportVariant );
                     footprint.Replace( wxT( " " ), wxT( "_" ) );
                     footprint = footprint.Trim( true );
                     footprint = footprint.Trim( false );
@@ -117,7 +116,8 @@ bool NETLIST_EXPORTER_PADS::WriteNetlist( const wxString& aOutFileName,
     }
     catch( const fmt::format_error& e )
     {
-        aReporter.Report( wxString::Format( _( "Formatting error writing netlist: %s" ), e.what() ), RPT_SEVERITY_ERROR );
+        aReporter.Report( wxString::Format( _( "Formatting error writing netlist: %s" ), e.what() ),
+                          RPT_SEVERITY_ERROR );
         ret = -1;
     }
 
@@ -131,30 +131,16 @@ bool NETLIST_EXPORTER_PADS::writeListOfNets( FILE* f )
 {
     try
     {
-        wxString netName;
-
         fmt::print( f, "*NET*\n" );
 
         // Collect all nets and sort them by name to ensure stable ordering
         std::vector<std::pair<wxString, std::vector<std::pair<SCH_PIN*, SCH_SHEET_PATH>>>> allNets;
 
-        for( const auto& [ key, subgraphs ] : m_schematic->ConnectionGraph()->GetNetMap() )
+        for( const EXPORT_NET& net : m_exportNets )
+            allNets.emplace_back( net.name, net.pins );
+
+        for( auto& [netName, sortedItems] : allNets )
         {
-            netName = key.Name;
-
-            std::vector<std::pair<SCH_PIN*, SCH_SHEET_PATH>> sortedItems;
-
-            for( CONNECTION_SUBGRAPH* subgraph : subgraphs )
-            {
-                SCH_SHEET_PATH sheet = subgraph->GetSheet();
-
-                for( SCH_ITEM* item : subgraph->GetItems() )
-                {
-                    if( item->Type() == SCH_PIN_T )
-                        sortedItems.emplace_back( static_cast<SCH_PIN*>( item ), sheet );
-                }
-            }
-
             // Netlist ordering: Net name, then ref des, then pin name (intra-net)
             std::sort( sortedItems.begin(), sortedItems.end(),
                     []( const std::pair<SCH_PIN*, SCH_SHEET_PATH>& a, const std::pair<SCH_PIN*, SCH_SHEET_PATH>& b )
@@ -179,7 +165,6 @@ bool NETLIST_EXPORTER_PADS::writeListOfNets( FILE* f )
                     } ),
                     sortedItems.end() );
 
-            allNets.emplace_back( netName, std::move( sortedItems ) );
         }
 
         // Sort nets by name (inter-net ordering) for deterministic output

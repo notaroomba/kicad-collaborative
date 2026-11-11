@@ -26,16 +26,16 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
+#include <cerrno>
 #include <stdexcept>
 #include <string>
 
 #if defined( _WIN32 )
 #include <process.h>
 #else
-#include <cerrno>
 #include <climits>
 #include <cstdlib>
-#include <cstring>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -67,12 +67,16 @@ wxString KIPLATFORM::IO::MakeSiblingTempPath( const wxString& aTargetPath )
 FILE* KIPLATFORM::IO::OpenUniqueSiblingTempFile( const wxString& aTargetPath, const wxString& aMode,
                                                  wxString* aTempPathOut, wxString* aError )
 {
+    // A new target keeps the umask default fopen would give it; an existing one gets its mode
+    // copied at commit, so the temp stays private until then
+    const mode_t createMode = wxFileName::FileExists( aTargetPath ) ? 0600 : 0666;
+
     // Exclusive-create closes the TOCTOU window: if another process pre-created a file
     // at the candidate path, O_EXCL fails and we retry with a new counter value.
     for( unsigned attempt = 0; attempt < 32; ++attempt )
     {
         wxString candidate = MakeSiblingTempPath( aTargetPath );
-        int      fd = open( candidate.fn_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600 );
+        int      fd = open( candidate.fn_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, createMode );
 
         if( fd >= 0 )
         {
@@ -187,18 +191,12 @@ bool KIPLATFORM::IO::CommitTempFile( const wxString& aTempPath, const wxString& 
         // snapshot and precedes MakeWriteable.
         snapshot = CaptureTargetAttributes( aTargetPath );
 
+        // Best effort, volumes without ACL or mode support (cloud drives, FAT) reject the copy
+        // and the temp then keeps the permissions it was created with
         if( !DuplicatePermissions( aTargetPath, aTempPath ) )
         {
-            // Failing here means the new file would land with creation-default
-            // permissions instead of the target's. Bail out while the rename hasn't
-            // happened yet so the user's original file is still untouched.
-            if( aError )
-            {
-                *aError = wxString::Format( wxT( "Cannot copy permissions from '%s' to '%s'" ),
-                                            aTargetPath, aTempPath );
-            }
-
-            return false;
+            wxLogTrace( wxT( "KICAD_ATOMIC_SAVE" ), wxT( "Cannot copy permissions from '%s' to '%s'" ),
+                        aTargetPath, aTempPath );
         }
 
 #if defined( _WIN32 )
@@ -292,7 +290,21 @@ bool KIPLATFORM::IO::AtomicWriteFile( const wxString& aTargetPath, const void* a
         return false;
     }
 
-    std::fclose( fp );
+    // Buffered writes on NFS and quota'd volumes can surface their errors at close, not
+    // at write time, so an unchecked close could rename a short file into place.
+    if( std::fclose( fp ) != 0 )
+    {
+        int err = errno;
+
+        if( aError )
+        {
+            *aError = wxString::Format( wxT( "Cannot close temp file '%s': %s" ), tempPath,
+                                        wxString::FromUTF8( strerror( err ) ) );
+        }
+
+        wxRemoveFile( tempPath );
+        return false;
+    }
 
     if( !CommitTempFile( tempPath, target, aError ) )
     {

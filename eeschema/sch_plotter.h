@@ -29,6 +29,7 @@
 #include <page_info.h>
 #include <sch_render_settings.h>
 #include <sch_sheet_path.h>
+#include <optional>
 #include <plotters/plotter.h>
 #include <plotters/plotter_png.h>
 
@@ -39,6 +40,7 @@ class SCH_SCREEN;
 using KIGFX::RENDER_SETTINGS;
 class PDF_PLOTTER;
 class REPORTER;
+class LIB_SYMBOL;
 
 enum PageFormatReq
 {
@@ -53,6 +55,9 @@ struct SCH_PLOT_OPTS
     bool                  m_plotAll;
     bool                  m_plotDrawingSheet;
     std::vector<wxString> m_plotPages;
+
+    // Sheet to plot in single-sheet mode; unset plots the schematic's current sheet
+    std::optional<SCH_SHEET_PATH> m_sheetPath;
 
     bool           m_plotHopOver;
     bool           m_blackAndWhite;
@@ -114,10 +119,10 @@ public:
     /**
      * Perform the plotting of the schematic using the given \a aPlotFormat and a\ aPlotSettings.
      *
-     * @param aPlotFormat The resulting output plot format (PDF, SVG, DXF, etc)
-     * @param aPlotSettings The configuration for the plotting operation
-     * @param aRenderSettings Mandatory object containing render settings for lower level classes
-     * @param aReporter Optional reporter to print messages to
+     * @param aPlotFormat The resulting output plot format (PDF, SVG, DXF, etc).
+     * @param aPlotOpts The configuration for the plotting operation.
+     * @param aRenderSettings Mandatory object containing render settings for lower level classes.
+     * @param aReporter Optional reporter to print messages to.
      */
     void Plot( PLOT_FORMAT aPlotFormat, const SCH_PLOT_OPTS& aPlotOpts,
                SCH_RENDER_SETTINGS* aRenderSettings, REPORTER* aReporter = nullptr );
@@ -175,17 +180,9 @@ protected:
                           RENDER_SETTINGS* aRenderSettings, const SCH_PLOT_OPTS& aPlotOpts );
 
     /**
-     * Everything done, close the plot and restore the environment.
-     *
-     * @param aPlotter the plotter to close and destroy (can be null if no current active plotter)
-     * @param aOldsheetpath the stored old sheet path for the current sheet before the plot started
-     */
-    void restoreEnvironment( PDF_PLOTTER* aPlotter, SCH_SHEET_PATH& aOldsheetpath );
-
-
-    /**
      * Create a file name with an absolute path name.
      *
+     * @param aPlotOpts The configuration for the plotting operation
      * @param aPlotFileName the name for the file to plot without a path.
      * @param aExtension the extension for the file to plot.
      * @param aReporter a point to a REPORTER object use to show messages (can be NULL).
@@ -201,5 +198,44 @@ private:
     wxString        m_lastOutputFilePath;
     std::vector<wxString> m_outputFilePaths;
 };
+
+
+/**
+ * Compute the bounding box used to size a symbol SVG plot.
+ *
+ * The symbol's unit bounding box, is inflated by a small margin so the
+ * drawing does not touch the page edges.
+ *
+ * @param aSymbol is the symbol to measure (may be a derived symbol).
+ * @param aUnit is the unit to measure (1-based).
+ * @param aBodyStyle is the body style to measure (1-based).
+ * @param aIncludeHiddenFields when true, hidden fields are included in the bounding box.
+ */
+BOX2I GetSymbolPlotBBox( const LIB_SYMBOL& aSymbol, int aUnit, int aBodyStyle, bool aIncludeHiddenFields );
+
+
+/**
+ * Plot a single symbol variant (unit and body style) to an SVG file.
+ *
+ * The page is sized to \a aBBox and the symbol is plotted with its origin at the SVG origin;
+ * the SVG viewBox covers the whole bounding box, which may extend to negative coordinates.
+ *
+ * @param aDrawSymbol is the symbol whose draw items are plotted.  For derived (alias)
+ *                   symbols this is the root symbol, which holds the draw items.
+ * @param aFieldsSymbol is the symbol whose fields are plotted.  For aliases this is the
+ *                     derived symbol.
+ * @param aUnit is the unit to plot (1-based).
+ * @param aBodyStyle is the body style to plot (1-based).
+ * @param aBBox is the bounding box used to size the page and the SVG viewBox this may be computed
+ *              using \ref GetSymbolPlotBBox, or by some other means.
+ * @param aRenderSettings the render settings used for the plot.
+ * @param aBlackAndWhite when true, plot without color.
+ * @param aFileName the full path of the SVG file to create.
+ * @param aReporter optional reporter for error messages.
+ * @return true when the file was written, false on error.
+ */
+bool PlotSymbolToSVG( LIB_SYMBOL& aDrawSymbol, LIB_SYMBOL& aFieldsSymbol, int aUnit, int aBodyStyle, const BOX2I& aBBox,
+                      SCH_RENDER_SETTINGS& aRenderSettings, bool aBlackAndWhite, const wxString& aFileName,
+                      REPORTER* aReporter = nullptr );
 
 #endif

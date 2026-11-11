@@ -1,0 +1,12 @@
+(kicad_sch
+	(version 20231120)
+	(generator "eeschema")
+	(generator_version "8.0")
+	(uuid "6e07365e-2ea6-4962-a2ce-82d11aafe04b")
+	(paper "A3")
+	(title_block
+		(title "Pumpenmodul")
+		(date "2021-08-13")
+	)
+	(lib_symbols)
+)

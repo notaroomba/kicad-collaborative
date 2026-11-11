@@ -125,7 +125,12 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
                                                         : m_selectionTool->RequestSelection();
     bool           unselect = selection.IsHover();
 
-    if( !m_frame->IsSymbolEditable() || selection.Empty() )
+    if( selection.Empty() )
+        return false;
+
+    // We can get here with (only) fields selected in an alias symbol, so we
+    // don't check graphical editability.
+    if( !m_frame->IsSymbolEditable() )
         return false;
 
     if( m_moveInProgress )
@@ -195,7 +200,7 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
 
                             got_unit[cur_pin->GetUnit()] = true;
 
-                            for( SCH_PIN* pin : symbol->GetPins() )
+                            for( SCH_PIN* pin : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
                             {
                                 if( !got_unit[pin->GetUnit()]
                                         && pin->GetPosition() == cur_pin->GetPosition()
@@ -390,7 +395,9 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
         //
         else if( evt->IsMouseUp( BUT_LEFT )
                 || evt->IsClick( BUT_LEFT )
-                || evt->IsDblClick( BUT_LEFT ) )
+                || evt->IsAction( &ACTIONS::cursorClick )
+                || evt->IsDblClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             if( selection.GetSize() == 1 && selection.Front()->Type() == SCH_PIN_T )
             {
@@ -427,6 +434,10 @@ bool SYMBOL_EDITOR_MOVE_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, SCH_COM
         }
 
     } while( ( evt = Wait() ) );  // Assignment intentional; not equality test
+
+    // A shutdown abandons the move rather than committing it
+    if( !evt )
+        restore_state = true;
 
     controls->ForceCursorPosition( false );
     controls->ShowCursor( false );

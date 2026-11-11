@@ -20,9 +20,12 @@
 #pragma once
 
 #include <pcb_plot_params.h>
+#include <map>
 #include <vector>
 
 class BOARD;
+class FOOTPRINT;
+class PROJECT;
 class REPORTER;
 class wxFileName;
 class JOB_EXPORT_PCB_PLOT;
@@ -49,6 +52,16 @@ public:
      * This skips a copper layer if it is actually disabled on the board.
      */
     bool copperLayerShouldBeSkipped( PCB_LAYER_ID aLayerToPlot );
+
+    /**
+     * Return the layers a plot dialog stores when \a aChecked are ticked.
+     *
+     * The dialog shows only the board's \a aEnabledLayers.  Board plot settings also keep every
+     * unused copper layer so it starts ticked once the board enables it.  A job keeps only what
+     * the dialog showed, since it plots on other boards and a layer nobody can see cannot be
+     * removed.
+     */
+    static LSET DialogLayerSelection( const LSET& aChecked, const LSET& aEnabledLayers, bool aForJob );
 
     /**
      * Complete a plot filename.
@@ -83,3 +96,16 @@ private:
     LSEQ getPlotSequence( PCB_LAYER_ID aLayerToPlot, LSEQ aPlotWithAllLayersSeq );
 
 };
+
+
+/**
+ * Plot a footprint to an SVG file, with the footprint origin at the SVG origin and the
+ * page/viewBox sized to the footprint's bounding box.
+ *
+ * The footprint is plotted through a temporary board with the footprint placed at its
+ * origin. Fit-to-board is assumed.
+ */
+bool PlotFootprintToSVG( const FOOTPRINT& aFootprint, PROJECT& aProject,
+                         const std::map<wxString, wxString>* aVarOverrides, PCB_PLOT_PARAMS& aPlotOpts,
+                         const LSEQ& aLayersToPlot, const LSEQ& aLayersOnAll, const wxString& aFileName,
+                         REPORTER* aReporter = nullptr );

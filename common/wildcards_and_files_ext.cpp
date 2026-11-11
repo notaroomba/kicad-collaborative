@@ -207,6 +207,8 @@ const std::string FILEEXT::XaoFileExtension( "xao" );
 const std::string FILEEXT::PlyFileExtension( "ply" );
 const std::string FILEEXT::StlFileExtension( "stl" );
 const std::string FILEEXT::U3DFileExtension( "u3d" );
+const std::string FILEEXT::IdfV3BoardFileExtension( "emn" );
+const std::string FILEEXT::IdfV3LibraryFileExtension( "emp" );
 
 const std::string FILEEXT::GencadFileExtension( "cad" );
 
@@ -358,6 +360,18 @@ wxString FILEEXT::EasyEdaProFileWildcard()
 wxString FILEEXT::DipTraceFilesWildcard()
 {
     return _( "DipTrace files" ) + AddFileExtListToFilter( { "dch", "dip" } );
+}
+
+
+wxString FILEEXT::EasyPcFilesWildcard()
+{
+    return _( "Easy-PC / DesignSpark PCB files" ) + AddFileExtListToFilter( { "prj", "sch", "pcb" } );
+}
+
+
+wxString FILEEXT::Target3001FilesWildcard()
+{
+    return _( "TARGET 3001! project files" ) + AddFileExtListToFilter( { "T3001" } );
 }
 
 
@@ -523,6 +537,12 @@ wxString FILEEXT::SpiceLibraryFileWildcard()
 wxString FILEEXT::SpiceNetlistFileWildcard()
 {
     return _( "SPICE netlist file" ) + AddFileExtListToFilter( { "cir" } );
+}
+
+
+wxString FILEEXT::SpiceSubcircuitFileWildcard()
+{
+    return _( "SPICE subcircuit model file" ) + AddFileExtListToFilter( { "sub", "mod" } );
 }
 
 

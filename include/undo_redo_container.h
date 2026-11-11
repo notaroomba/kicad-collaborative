@@ -26,6 +26,7 @@
 #include <eda_item_flags.h>
 #include <functional>
 #include <kiid.h>
+#include <unordered_set>
 #include <vector>
 #include <wx/string.h>
 
@@ -64,7 +65,8 @@ enum class UNDO_REDO {
     DRILLORIGIN,        // origin changed (like CHANGED, contains the origin and a copy)
     GRIDORIGIN,         // origin changed (like CHANGED, contains the origin and a copy)
     PAGESETTINGS,       // page settings or title block changes
-    REPEAT_ITEM         // storage entry for the editor's global repeatItems list
+    REPEAT_ITEM,        // storage entry for the editor's global repeatItems list
+    VARIANTS            // one or more variants were added, deleted, or changed
 };
 
 
@@ -156,7 +158,7 @@ public:
     void ClearItemsList();
 
     /**
-     * Delete the list of pickers AND the data pointed by #m_PickedItem or #m_PickedItemLink
+     * Delete the list of pickers AND the data pointed by #ITEM_PICKER::m_pickedItem or #ITEM_PICKER::m_link.
      * according to the type of undo/redo command recorded.
      */
     void ClearListAndDeleteItems( std::function<void(EDA_ITEM*)> aItemDeleter );
@@ -298,6 +300,12 @@ public:
     PICKED_ITEMS_LIST* PopCommand();
 
     void ClearCommandList();
+
+    /**
+     * Drop every picker that refers to one of \a aItems, before they are freed outside the undo
+     * system.  Commands left with no pickers are removed.
+     */
+    void ForgetItems( const std::unordered_set<const EDA_ITEM*>& aItems );
 
     std::vector <PICKED_ITEMS_LIST*> m_CommandsList;   // the list of possible undo/redo commands
 };

@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <tool/tool_manager.h>
 #include "tools/sch_inspection_tool.h"
 #include "dialog_change_symbols.h"
 
@@ -352,7 +353,7 @@ void SCH_INSPECTION_TOOL::DiffSymbol( SCH_SYMBOL* symbol )
     dialog->DeleteAllPages();
     dialog->SetUserItemID( symbol->m_Uuid );
 
-    wxString symbolDesc = wxString::Format( _( "Symbol %s" ), symbol->GetField( FIELD_T::REFERENCE )->GetText() );
+    wxString symbolDesc = wxString::Format( _( "Symbol %s" ), symbol->GetCurrentSheetRef() );
     LIB_ID   libId = symbol->GetLibId();
     wxString libName = libId.GetLibNickname();
     wxString symbolName = libId.GetLibItemName();
@@ -517,6 +518,7 @@ DIALOG_KICAD_DIFF::SHEET_SWITCHER makeSchSwitcher( SCHEMATIC* aRef, SCHEMATIC* a
                 refScreen = sp->LastScreen();
         }
 
+        aCanvas.SetContextItems( {} );
         holder->clear();
 
         if( refScreen )
@@ -787,8 +789,8 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
                     }
                     else
                     {
-                        wxFileName newCompFn( wxFileName( drillCurrent.compFile ).GetPath(), sheetFile );
-                        newCompFn.MakeAbsolute();
+                        wxFileName newCompFn( sheetFile );
+                        newCompFn.MakeAbsolute( wxFileName( drillCurrent.compFile ).GetPath() );
 
                         SCHEMATIC* loaded = EESCHEMA_HELPERS::LoadSchematic( newCompFn.GetFullPath(),
                                                                              /*aSetActive*/ false,
@@ -834,6 +836,9 @@ int SCH_INSPECTION_TOOL::showSchematicComparison( const wxString& aOtherPath, co
     }
 
     dlgDiff.ShowModal();
+
+    if( WIDGET_DIFF_CANVAS* canvas = dlgDiff.DiffCanvas() )
+        canvas->SetContextItems( {} );
 
     // Detach schematics from the project before unloading so the project's
     // ERC and schematic settings release cleanly.
@@ -1173,8 +1178,8 @@ int SCH_INSPECTION_TOOL::CompareSchematicWithHistory( const TOOL_EVENT& aEvent )
                     }
                     else
                     {
-                        wxFileName subFn( wxFileName( drillCurrent.compFile ).GetPath(), sheet->GetFileName() );
-                        subFn.MakeAbsolute();
+                        wxFileName subFn( sheet->GetFileName() );
+                        subFn.MakeAbsolute( wxFileName( drillCurrent.compFile ).GetPath() );
 
                         SCHEMATIC* loaded = nullptr;
 
@@ -1323,6 +1328,8 @@ int SCH_INSPECTION_TOOL::ShowDatasheet( const TOOL_EVENT& aEvent )
             return 0;
 
         datasheet = symbol->GetDatasheetField().GetText();
+
+        symbol->AppendParentEmbeddedFiles( filesStack );
         filesStack.push_back( symbol );
     }
     else if( m_frame->IsType( FRAME_SCH_VIEWER ) )
@@ -1333,6 +1340,8 @@ int SCH_INSPECTION_TOOL::ShowDatasheet( const TOOL_EVENT& aEvent )
             return 0;
 
         datasheet = entry->GetDatasheetField().GetText();
+
+        entry->AppendParentEmbeddedFiles( filesStack );
         filesStack.push_back( entry );
     }
     else if( m_frame->IsType( FRAME_SCH ) )
@@ -1345,13 +1354,16 @@ int SCH_INSPECTION_TOOL::ShowDatasheet( const TOOL_EVENT& aEvent )
         SCH_SYMBOL* symbol = (SCH_SYMBOL*) selection.Front();
         SCH_FIELD*  field = symbol->GetField( FIELD_T::DATASHEET );
 
-        // Use GetShownText() to resolve any text variables, but don't allow adding extra text
-        // (ie: the field name)
-        datasheet = field->GetShownText( &symbol->Schematic()->CurrentSheet(), false );
+        // Use GetShownText() to resolve any text variables
+        datasheet = field->GetShownText( &symbol->Schematic()->CurrentSheet(), FOR_GUI );
+
         filesStack.push_back( symbol->Schematic() );
 
         if( symbol->GetLibSymbolRef() )
-            filesStack.push_back( symbol->GetLibSymbolRef().get() );
+            symbol->GetLibSymbolRef()->AppendParentEmbeddedFiles( filesStack );
+
+        if( symbol->GetEmbeddedFiles() )
+            filesStack.push_back( symbol->GetEmbeddedFiles() );
     }
 
     if( datasheet.IsEmpty() || datasheet == wxS( "~" ) )

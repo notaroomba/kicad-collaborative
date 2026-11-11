@@ -19,15 +19,17 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
+#include <tool/arc_tangent_seed.h>
+#include <tool/shape_draw_behavior.h>
 #include <tools/sch_tool_base.h>
 #include <sch_base_frame.h>
 #include <sch_shape.h>
 
 class SCH_EDIT_FRAME;
 class SYMBOL_EDIT_FRAME;
-class SHAPE_DRAW_BEHAVIOR;
 
 
 /**
@@ -58,13 +60,13 @@ public:
 private:
     void setTransitions() override;
 
-    ///< The layer to use for new shapes in the current editor.
+    /// The layer to use for new shapes in the current editor.
     SCH_LAYER_ID getShapeLayer() const;
 
-    ///< Commit a completed item.
+    /// Commit a completed item.
     void commitItem( SCH_COMMIT& aCommit, std::unique_ptr<SCH_ITEM> aItem, const wxString& aDescription );
 
-    ///< Return the default text size (in IU) for the active editor.
+    /// Return the default text size (in IU) for the active editor.
     int getDefaultTextSize() const;
 
     /**
@@ -74,13 +76,26 @@ private:
     void applySymbolEditorFlags( SCH_ITEM& aItem ) const;
 
     /**
+     * Snap a tool event's position the way a click is snapped.
+     *
+     * A hotkey start carries the raw mouse position, which becomes the first point of a managed shape.
+     */
+    VECTOR2I snapEventPosition( const TOOL_EVENT& aEvent );
+
+    /**
      * Run the interactive drawing event loop for any shape driven by a
      * @ref SHAPE_DRAW_BEHAVIOR (arcs, ellipse arcs, etc.).
      *
-     * @return true if the shape was completed, false if cancelled.
+     * @param aTangentSeed  start point and direction that begin a tangent arc, applied to the behavior before
+     *                      any initial point.  A seeded draw counts as started.
+     * @param aLastClick  if not null, receives the position of the last click taken by the loop.
+     * @return the outcome of the drawing loop, handle appropriately (commit,
+     *         start another, or stop).
      */
-    bool drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr<SCH_SHAPE>& aShape, SHAPE_DRAW_BEHAVIOR& aBehavior,
-                           const std::vector<VECTOR2D>& aInitialPts );
+    SHAPE_DRAW_RESULT drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr<SCH_SHAPE>& aShape,
+                                        SHAPE_DRAW_BEHAVIOR& aBehavior, const std::vector<VECTOR2D>& aInitialPts,
+                                        const std::optional<ARC_TANGENT_SEED>& aTangentSeed = std::nullopt,
+                                        VECTOR2I* aLastClick = nullptr );
 
     FILL_T        m_lastFillStyle;
     COLOR4D       m_lastFillColor;

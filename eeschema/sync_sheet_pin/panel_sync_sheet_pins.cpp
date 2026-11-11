@@ -61,8 +61,7 @@ PANEL_SYNC_SHEET_PINS::PANEL_SYNC_SHEET_PINS( wxWindow* aParent, SCH_SHEET* aShe
     m_btnUndo->SetBitmap( KiBitmapBundle( BITMAPS::left ) );
 
     m_labelSheetName->SetLabel( aSheet->GetFileName() );
-    m_labelSymName->SetLabel( aSheet->GetShownName( true ) );
-
+    m_labelSymName->SetLabel( aSheet->GetShownName( FOR_GUI ) );
 
     for( auto& [idx, view] : m_views )
     {
@@ -117,7 +116,7 @@ void PANEL_SYNC_SHEET_PINS::UpdateForms()
     std::sort( dedup_labels_ori.begin(), dedup_labels_ori.end(),
                []( const SCH_HIERLABEL* label1, const SCH_HIERLABEL* label2 )
                {
-                   return StrNumCmp( label1->GetText(), label2->GetText(), true ) < 0;
+                   return StrNumCmp( label1->GetText(), label2->GetText(), CMP_T::IGNORE_CASE ) < 0;
                } );
 
     auto check_matched = [&]( SCH_HIERLABEL* label )

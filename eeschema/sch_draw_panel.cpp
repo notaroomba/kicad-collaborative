@@ -135,6 +135,17 @@ bool SCH_DRAW_PANEL::SwitchBackend( GAL_TYPE aGalType )
     setDefaultLayerDeps();
     m_gal->SetWorldUnitLength( SCH_WORLD_UNIT );
 
+    // Items carried over from the previous GAL have stale caches. The rebuild waits for startup
+    // events to settle, since a partial redraw would clobber the GPU buffers.
+    if( rv && aGalType == GAL_TYPE_MODERN )
+    {
+        CallAfter( [this]()
+        {
+            if( EDA_DRAW_FRAME* frame = GetParentEDAFrame() )
+                frame->HardRedraw();
+        } );
+    }
+
     Refresh();
 
     return rv;
@@ -144,7 +155,7 @@ bool SCH_DRAW_PANEL::SwitchBackend( GAL_TYPE aGalType )
 void SCH_DRAW_PANEL::setDefaultLayerDeps()
 {
     // caching makes no sense for Cairo and other software renderers
-    auto target = m_backend == GAL_TYPE_OPENGL ? KIGFX::TARGET_CACHED : KIGFX::TARGET_NONCACHED;
+    auto target = IsAccelerated( m_backend ) ? KIGFX::TARGET_CACHED : KIGFX::TARGET_NONCACHED;
 
     for( int i = 0; i < KIGFX::VIEW::VIEW_MAX_LAYERS; i++ )
         m_view->SetLayerTarget( i, target );
@@ -152,8 +163,9 @@ void SCH_DRAW_PANEL::setDefaultLayerDeps()
     m_view->SetLayerTarget( LAYER_SCHEMATIC_ANCHOR, KIGFX::TARGET_NONCACHED );
     m_view->SetLayerDisplayOnly( LAYER_SCHEMATIC_ANCHOR );
 
-    // Bitmaps are draw on a non cached GAL layer:
-    m_view->SetLayerTarget( LAYER_DRAW_BITMAPS, KIGFX::TARGET_NONCACHED );
+    // A retained scene draws cached bitmaps in their layer's place rather than above everything
+    m_view->SetLayerTarget( LAYER_DRAW_BITMAPS, ( m_gal && m_gal->HasRetainedScene() ) ? KIGFX::TARGET_CACHED
+                                                                                      : KIGFX::TARGET_NONCACHED );
 
     // Some draw layers need specific settings
     m_view->SetLayerTarget( LAYER_GP_OVERLAY, KIGFX::TARGET_OVERLAY );
@@ -181,31 +193,6 @@ void SCH_DRAW_PANEL::setDefaultLayerDeps()
 KIGFX::SCH_VIEW* SCH_DRAW_PANEL::GetView() const
 {
     return static_cast<KIGFX::SCH_VIEW*>( m_view );
-}
-
-
-void SCH_DRAW_PANEL::OnShow()
-{
-    SCH_BASE_FRAME* frame = dynamic_cast<SCH_BASE_FRAME*>( GetParentEDAFrame() );
-
-    try
-    {
-        // Check if the current rendering backend can be properly initialized
-        m_view->UpdateItems();
-    }
-    catch( const std::runtime_error& e )
-    {
-        DisplayInfoMessage( frame, e.what() );
-
-        // Use fallback if one is available
-        if( GAL_FALLBACK != m_backend )
-        {
-            SwitchBackend( GAL_FALLBACK );
-
-            if( frame )
-                frame->ActivateGalCanvas();
-        }
-    }
 }
 
 

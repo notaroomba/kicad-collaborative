@@ -20,6 +20,7 @@
 
 #include <api/api_plugin.h>
 #include <bitmaps.h>
+#include <bitmap_store.h>
 #include <dialog_footprint_wizard_list.h>
 #include <grid_tricks.h>
 #include <kiface_base.h>
@@ -102,7 +103,11 @@ void PLUGINS_GRID_TRICKS::doPopupSelection( wxCommandEvent& event )
         if( std::optional<const PLUGIN_ACTION*> action = mgr.GetAction( id );
             action && ( *action )->plugin.Runtime().type == PLUGIN_RUNTIME_TYPE::PYTHON )
         {
-            mgr.RecreatePluginEnvironment( ( *action )->plugin.Identifier() );
+            if( mgr.RecreatePluginEnvironment( ( *action )->plugin.Identifier() ) )
+            {
+                wxCommandEvent* evt = new wxCommandEvent( EDA_EVT_PLUGIN_MANAGER_JOB_FINISHED, wxID_ANY );
+                mgr.QueueEvent( evt );
+            }
         }
     }
     else
@@ -138,6 +143,9 @@ PANEL_PCBNEW_ACTION_PLUGINS::PANEL_PCBNEW_ACTION_PLUGINS( wxWindow* aParent ) :
 
 PANEL_PCBNEW_ACTION_PLUGINS::~PANEL_PCBNEW_ACTION_PLUGINS()
 {
+    if( m_reloadReporter )
+        m_reloadReporter->SetNullReporter();
+
     delete m_errorDialog;
     wxTheApp->Unbind( EDA_EVT_PLUGIN_AVAILABILITY_CHANGED,
             &PANEL_PCBNEW_ACTION_PLUGINS::onPluginAvailabilityChanged, this );
@@ -213,9 +221,9 @@ void PANEL_PCBNEW_ACTION_PLUGINS::OnReloadButtonClick( wxCommandEvent& event )
 {
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
     m_errorDialog->m_Reporter->Clear();
-    auto reporter = std::make_shared<REDIRECT_REPORTER>( m_errorDialog->m_Reporter );
+    m_reloadReporter = std::make_shared<SYNC_REPORTER>( *m_errorDialog->m_Reporter );
     m_allowErrorDialog = true;
-    mgr.ReloadPlugins( std::nullopt, reporter );
+    mgr.ReloadPlugins( std::nullopt, m_reloadReporter );
     m_grid->Disable();
 }
 
@@ -263,10 +271,22 @@ bool PANEL_PCBNEW_ACTION_PLUGINS::TransferDataToWindow()
     {
             const PLUGIN_ACTION* action = orderedPlugins[row];
 
-            const wxBitmapBundle& icon = KIPLATFORM::UI::IsDarkTheme() && action->icon_dark.IsOk() ? action->icon_dark
-                                                                                                   : action->icon_light;
+            const std::vector<wxImage>& images = KIPLATFORM::UI::IsDarkTheme() && !action->icon_dark.empty()
+                                                         ? action->icon_dark
+                                                         : action->icon_light;
 
-            // Icon
+            wxBitmapBundle icon;
+
+            if( !images.empty() )
+            {
+                wxVector<wxBitmap> bitmaps;
+
+                for( const wxImage& img : images )
+                    bitmaps.push_back( wxBitmap( img ) );
+
+                icon = BITMAP_STORE::MakeBitmapBundleDef( bitmaps, size );
+            }
+
             m_grid->SetCellRenderer( row, COLUMN_ACTION_NAME, new GRID_CELL_ICON_TEXT_RENDERER(
                                      icon.IsOk() ? icon : m_genericIcon, iconSize ) );
             m_grid->SetCellValue( row, COLUMN_ACTION_NAME, action->name );

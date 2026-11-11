@@ -19,7 +19,7 @@
  */
 
 /**
- * @file pcad_plugin.h
+ * @file pcb_io_pcad.h
  * @brief Pcbnew PLUGIN for P-Cad 200x ASCII *.pcb format.
  */
 
@@ -48,14 +48,15 @@ public:
 
     bool CanReadBoard( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
-
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override
     {
         // No support for libraries....
         return 0;
     }
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
 };
 
 #endif    // PCB_IO_PCAD_H_

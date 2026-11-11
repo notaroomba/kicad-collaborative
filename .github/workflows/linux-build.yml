@@ -26,7 +26,8 @@ jobs:
             libocct-foundation-dev libocct-ocaf-dev \
             protobuf-compiler libprotobuf-dev libzstd-dev unixodbc-dev \
             libgtk-3-dev libsecret-1-dev libnng-dev libspnav-dev libpoppler-glib-dev python3 \
-            libssl-dev zlib1g-dev gettext
+            libssl-dev zlib1g-dev gettext \
+            glslang-tools spirv-tools libvulkan-dev libsqlite3-dev
 
       - name: Build WebSocket-capable curl
         # Ubuntu's curl predates enabled-by-default WebSockets, and the

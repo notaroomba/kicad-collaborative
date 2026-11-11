@@ -80,6 +80,7 @@ public:
     /**
      * @brief Loads a CADSTAR PCB Archive file into the KiCad BOARD object given
      * @param aBoard
+     * @param aProject
      */
     void Load( BOARD* aBoard, PROJECT* aProject );
 
@@ -87,8 +88,9 @@ public:
     /**
      * @brief Parse a CADSTAR PCB Archive and load the footprints contained within
      * @return Container with all the footprint definitions that were loaded (caller owns them)
+     * Note: do not use name LoadLibrary, on MINGW it collides with a Windows define
      */
-    std::vector<std::unique_ptr<FOOTPRINT>> LoadLibrary();
+    std::vector<std::unique_ptr<FOOTPRINT>> LoadFpLibrary();
 
     /**
      * @brief Return a copy of the loaded library footprints (caller owns the objects)
@@ -246,8 +248,9 @@ private:
     /**
      * @brief
      * @param aCadstarShape
-     * @param aCadstarLayerID KiCad layer to draw on
+     * @param aKiCadLayer KiCad layer to draw on
      * @param aLineThickness Thickness of line to draw with
+     * @param aLineStyle Line style of the line (solid, dash, etc.)
      * @param aShapeName for reporting warnings/errors to the user
      * @param aContainer to draw on (e.g. m_board)
      * @param aCadstarGroupID to add the shape to
@@ -258,7 +261,7 @@ private:
      * @param aMirrorInvert if true, mirrors the shapes
      */
     void drawCadstarShape( const SHAPE& aCadstarShape, const PCB_LAYER_ID& aKiCadLayer,
-                           int aLineThickness, const wxString& aShapeName,
+                           int aLineThickness, LINE_STYLE aLineStyle, const wxString& aShapeName,
                            BOARD_ITEM_CONTAINER* aContainer,
                            const GROUP_ID& aCadstarGroupID = wxEmptyString,
                            const VECTOR2I& aMoveVector = { 0, 0 },
@@ -268,7 +271,8 @@ private:
 
     /**
      * @brief Uses PCB_SHAPEs to draw the cutouts on m_board object
-     * @param aVertices
+     *
+     * @param aCutouts
      * @param aKiCadLayer KiCad layer to draw on
      * @param aLineThickness Thickness of line to draw with
      * @param aContainer to draw on (e.g. m_board)
@@ -279,9 +283,8 @@ private:
      * @param aTransformCentre around which all transforms are applied (KiCad coordinates)
      * @param aMirrorInvert if true, mirrors the shapes
      */
-    void drawCadstarCutoutsAsShapes( const std::vector<CUTOUT>& aCutouts,
-                                     const PCB_LAYER_ID& aKiCadLayer, int aLineThickness,
-                                     BOARD_ITEM_CONTAINER* aContainer,
+    void drawCadstarCutoutsAsShapes( const std::vector<CUTOUT>& aCutouts, const PCB_LAYER_ID& aKiCadLayer,
+                                     int aLineThickness, BOARD_ITEM_CONTAINER* aContainer,
                                      const GROUP_ID& aCadstarGroupID = wxEmptyString,
                                      const VECTOR2I& aMoveVector = { 0, 0 },
                                      double aRotationAngle = 0.0,
@@ -291,9 +294,11 @@ private:
 
     /**
      * @brief Uses PCB_SHAPE to draw the vertices on m_board object
+     *
      * @param aCadstarVertices
      * @param aKiCadLayer KiCad layer to draw on
      * @param aLineThickness Thickness of line to draw with
+     * @param aLineStyle
      * @param aContainer to draw on (e.g. m_board)
      * @param aCadstarGroupID to add the shape to
      * @param aMoveVector move shape by this amount (in KiCad coordinates)
@@ -301,10 +306,10 @@ private:
      * @param aScalingFactor scale shape by this amount
      * @param aTransformCentre around which all transforms are applied (KiCad coordinates)
      * @param aMirrorInvert if true, mirrors the shape
-     * @param aCadstarGroupID to add the shape to
      */
     void drawCadstarVerticesAsShapes( const std::vector<VERTEX>& aCadstarVertices,
-                                      const PCB_LAYER_ID& aKiCadLayer, int aLineThickness,
+                                      const PCB_LAYER_ID& aKiCadLayer,
+                                      int aLineThickness, LINE_STYLE aLineStyle,
                                       BOARD_ITEM_CONTAINER* aContainer,
                                       const GROUP_ID& aCadstarGroupID = wxEmptyString,
                                       const VECTOR2I& aMoveVector = { 0, 0 },
@@ -335,6 +340,7 @@ private:
 
     /**
      * @brief Returns a pointer to a PCB_SHAPE object. Caller owns the object.
+     *
      * @param aCadstarStartPoint
      * @param aCadstarVertex
      * @param aContainer to draw on (e.g. m_board). Can be nullptr.
@@ -403,7 +409,7 @@ private:
      * @param aWidthOverride Sets all tracks to this width, or, if it is UNDEFINED_LAYER, uses the
      *                       width in the shapes
      * @return
-    */
+     */
     std::vector<PCB_TRACK*> makeTracksFromShapes( const std::vector<PCB_SHAPE*>& aShapes,
                                                   BOARD_ITEM_CONTAINER* aParentContainer,
                                                   NETINFO_ITEM* aNet = nullptr,
@@ -428,7 +434,7 @@ private:
      * @param aPointToOffset Point that we want to offset by aOffsetAmount
      * @param aRefPoint Reference point to use for determine the angle of the offset
      * @param aOffsetAmount
-    */
+     */
     void applyRouteOffset( VECTOR2I* aPointToOffset, const VECTOR2I& aRefPoint,
                            const long& aOffsetAmount );
 
@@ -437,8 +443,9 @@ private:
      */
     void applyTextCode( EDA_TEXT* aKiCadText, const TEXTCODE_ID& aCadstarTextCodeID );
 
-    //Helper Functions for obtaining CADSTAR elements in the parsed structures
+    // Helper Functions for obtaining CADSTAR elements in the parsed structures
     int        getLineThickness( const LINECODE_ID& aCadstarLineCodeID );
+    LINE_STYLE getLineStyle( const LINECODE_ID& aCadstarLineCodeID );
     COPPERCODE getCopperCode( const COPPERCODE_ID& aCadstaCopperCodeID );
     HATCHCODE  getHatchCode( const HATCHCODE_ID& aCadstarHatchcodeID );
     LAYERPAIR  getLayerPair( const LAYERPAIR_ID& aCadstarLayerPairID );
@@ -449,7 +456,7 @@ private:
     VIACODE    getViaCode( const VIACODE_ID& aCadstarViaCodeID );
     wxString   getAttributeName( const ATTRIBUTE_ID& aCadstarAttributeID );
     wxString   getAttributeValue( const ATTRIBUTE_ID&        aCadstarAttributeID,
-              const std::map<ATTRIBUTE_ID, ATTRIBUTE_VALUE>& aCadstarAttributeMap );
+                                  const std::map<ATTRIBUTE_ID, ATTRIBUTE_VALUE>& aCadstarAttributeMap );
     LAYER_TYPE getLayerType( const LAYER_ID aCadstarLayerID );
 
     // Helper Functions for obtaining individual elements as KiCad elements:
@@ -481,8 +488,21 @@ private:
      * @brief
      * @param aCadstarLength
      * @return
-    */
-    int getKiCadLength( long long aCadstarLength )
+     */
+    int getKiCadLength( long long aCadstarLength, double aDefaultInMM )
+    {
+        if( aCadstarLength == UNDEFINED_VALUE )
+            return pcbIUScale.mmToIU( aDefaultInMM );
+
+        return aCadstarLength * KiCadUnitMultiplier;
+    }
+
+    /**
+     * @brief
+     * @param aCadstarLength
+     * @return
+     */
+    int getKiCadOffset( long long aCadstarLength )
     {
         return aCadstarLength * KiCadUnitMultiplier;
     }
@@ -491,7 +511,7 @@ private:
      * @brief
      * @param aCadstarAngle
      * @return
-    */
+     */
     double getAngleTenthDegree( const long long& aCadstarAngle )
     {
         // CADSTAR v6 (which outputted Format Version 8) and earlier versions used 1/10 degree
@@ -511,7 +531,7 @@ private:
      * @brief
      * @param aCadstarAngle
      * @return
-    */
+     */
     EDA_ANGLE getAngle( const long long& aCadstarAngle )
     {
         // CADSTAR v6 (which outputted Format Version 8) and earlier versions used 1/10 degree

@@ -40,19 +40,24 @@ public:
     explicit PCB_IO_EASYEDAPRO_V3_PARSER( BOARD*             aBoard,
                                           PROGRESS_REPORTER* aProgressReporter );
 
-    FOOTPRINT* ParseFootprint( const std::map<wxString, EASYEDAPRO::BLOB>& aBlobMap,
-                               const EASYEDAPRO::V3_DOC_RAW&               aDoc );
+    std::unique_ptr<FOOTPRINT> ParseFootprint( const std::map<wxString, EASYEDAPRO::BLOB>& aBlobMap,
+                                               const EASYEDAPRO::V3_DOC_RAW&               aDoc );
 
     void ParseBoard( BOARD* aBoard, const nlohmann::json& aProject,
                      std::map<wxString, std::unique_ptr<FOOTPRINT>>&    aFootprintMap,
                      const std::map<wxString, EASYEDAPRO::BLOB>&        aBlobMap,
                      const std::multimap<wxString, EASYEDAPRO::POURED>& aPouredMap, const EASYEDAPRO::V3_DOC_RAW& aDoc,
                      const wxString& aFpLibName );
+    wxString        GenerateSafeSpacingRules() const;
+    static wxString GenerateSafeSpacingRules( const nlohmann::json& aSafeSpacing );
+
 
 private:
     BOARD* m_board;
 
     PCB_IO_EASYEDAPRO_PARSER m_v2Parser;
+    nlohmann::json           m_safeSpacing;
+
 
     std::unique_ptr<PAD> createV3PAD( FOOTPRINT* aFootprint, const EASYEDAPRO::V3_ROW& aRow );
 

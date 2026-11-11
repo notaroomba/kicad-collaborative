@@ -15,6 +15,7 @@ set( GAL_SRCS
     painter.cpp
     cursors.cpp
     gal_display_options.cpp
+    bitmap_texture.cpp
     graphics_abstraction_layer.cpp
     hidpi_gl_canvas.cpp
     hidpi_gl_3D_canvas.cpp
@@ -47,10 +48,13 @@ set( GAL_SRCS
     opengl/opengl_compositor.cpp
     opengl/utils.cpp
 
-    # Cairo GAL
+    # Cairo GAL (screen rendering plus print/plot/export)
     cairo/cairo_gal.cpp
     cairo/cairo_compositor.cpp
     cairo/cairo_print.cpp
+
+    # Modern RHI GAL
+    gal_modern.cpp
     )
 
 add_library( gal SHARED ${GAL_SRCS} )
@@ -75,6 +79,7 @@ target_link_libraries( gal
     kicommon
     kimath
     kiplatform
+    rhi
     nlohmann_json
     ${CAIRO_LIBRARIES}
     ${PIXMAN_LIBRARIES}

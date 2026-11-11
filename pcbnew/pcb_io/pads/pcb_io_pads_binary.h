@@ -61,11 +61,12 @@ public:
     bool CanReadBoard( const wxString& aFileName ) const override;
     bool CanReadLibrary( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe, const std::map<std::string, UTF8>* aProperties,
-                      PROJECT* aProject ) override;
-
     std::map<wxString, PCB_LAYER_ID>
     DefaultLayerMappingCallback( const std::vector<INPUT_LAYER_DESC>& aInputLayerDescriptionVector );
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject ) override;
 
 private:
     /// Shorthands for the converter's transform, which the loaders below use everywhere.

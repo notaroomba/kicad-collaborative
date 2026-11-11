@@ -64,7 +64,7 @@ FP_LIB_DIFFER::LoadLibrary( const wxString& aPrettyPath )
     // bilaterally-corrupt footprint vanish from the diff entirely.
     for( const wxString& name : names )
     {
-        std::unique_ptr<FOOTPRINT> owner( io.FootprintLoad( aPrettyPath, name, false, nullptr ) );
+        std::unique_ptr<FOOTPRINT> owner = io.FootprintLoad( aPrettyPath, name, false, nullptr );
 
         if( !owner )
         {
@@ -84,8 +84,14 @@ DOCUMENT_DIFF FP_LIB_DIFFER::Diff()
 {
     return DiffLibraryByName(
             m_before, m_after, m_path, wxS( "pretty" ), wxS( "FOOTPRINT" ), m_options,
-            []( const FOOTPRINT* aFp ) { return aFp->GetBoundingBox( false ); },
-            []( const FOOTPRINT* aA, const FOOTPRINT* aB ) { return !( *aA == *aB ); } );
+            []( const FOOTPRINT* aFp )
+            {
+                return aFp->GetBoundingBox( false );
+            },
+            []( const FOOTPRINT* aA, const FOOTPRINT* aB )
+            {
+                return !( *aA == *aB );
+            } );
 }
 
 } // namespace KICAD_DIFF

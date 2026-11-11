@@ -26,6 +26,7 @@
 #include <drc/drc_rule.h>
 #include <drc/drc_test_provider.h>
 #include <font/font.h>
+#include <font/glyph_types.h>
 #include <pcb_dimension.h>
 
 
@@ -132,7 +133,7 @@ bool DRC_TEST_PROVIDER_TEXT_DIMS::Run()
                     if( !constraint.Value().HasMin() || constraint.Value().Min() <= 0 )
                         return true;
 
-                    auto* glyphs = text->GetRenderCache( font, text->GetShownText( true ) );
+                    auto* glyphs = text->GetRenderCache( font, text->GetShownText( FOR_CANVAS ) );
                     bool  collapsedStroke = false;
                     bool  collapsedArea = false;
 

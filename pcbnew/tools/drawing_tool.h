@@ -27,6 +27,8 @@
 #include <stack>
 #include <optional>
 #include <eda_shape.h>
+#include <tool/arc_tangent_seed.h>
+#include <tool/shape_draw_behavior.h>
 #include <tool/tool_menu.h>
 #include <tools/pcb_selection.h>
 #include <tools/pcb_tool_base.h>
@@ -49,7 +51,6 @@ class BOARD_CONNECTED_ITEM;
 class PCB_VIA;
 class POLYGON_GEOM_MANAGER;
 class PCB_TUNING_PATTERN;
-class SHAPE_DRAW_BEHAVIOR;
 class STATUS_MIN_MAX_POPUP;
 
 
@@ -90,7 +91,7 @@ public:
     /// @copydoc TOOL_INTERACTIVE::Reset()
     void Reset( RESET_REASON aReason ) override;
 
-    ///< The possible drawing modes of DRAWING_TOOL
+    /// The possible drawing modes of DRAWING_TOOL
     enum class MODE
     {
         NONE,
@@ -118,19 +119,10 @@ public:
     };
 
     /**
-     * Return the current drawing mode of the DRAWING_TOOL or #MODE::NONE if not currently in
+     * Return the current drawing mode of the DRAWING_TOOL or #NONE if not currently in
      * any drawing mode.
      */
     MODE GetDrawingMode() const;
-
-    /**
-     */
-    std::vector<BOARD_ITEM*> DrawSpecificationStackup( const VECTOR2I& origin, PCB_LAYER_ID aLayer,
-                                                       bool aDrawNow, VECTOR2I* tablesize );
-
-    /**
-     */
-    int PlaceStackup( const TOOL_EVENT& aEvent );
 
     /**
      */
@@ -209,6 +201,11 @@ public:
     int PlaceReferenceImage( const TOOL_EVENT& aEvent );
 
     /**
+     * Trace a placed reference image into filled graphics and replace it with them.
+     */
+    int ConvertImageToOutlines( const TOOL_EVENT& aEvent );
+
+    /**
      * Place a reference 0D point
      */
     int PlacePoint( const TOOL_EVENT& aEvent );
@@ -270,9 +267,9 @@ public:
     /**
      * Place a grid item on the board.
      */
-    int PlaceGridItem( const TOOL_EVENT& aEvent );
+    int PlaceSubGrid( const TOOL_EVENT& aEvent );
 
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
     void SetStroke( const STROKE_PARAMS& aStroke, PCB_LAYER_ID aLayer )
@@ -287,12 +284,15 @@ private:
     /**
      * Start drawing a selected shape (i.e. PCB_SHAPE).
      *
-     * @param aGraphic is an object that is going to be used by the tool for drawing. Must be already created.
-     *                 The tool deletes the object if it is not added to a BOARD.
-     * @param aStartingPoint is a starting point for this new PCB_SHAPE. If it exists the new item has its
-     *                       start point set to aStartingPoint, and its settings (width, layer) set to the
-     *                       current default values.
-     * @return False if the tool was canceled before the origin was set or origin and end are the same point.
+     * @param aTool  the tool event to draw the shape.
+     * @param aGraphic is an object that is going to be used by the tool for drawing. Must be
+     *                 already created. The tool deletes the object if it is not added to a BOARD.
+     * @param aStartingPoint is a starting point for this new PCB_SHAPE. If it exists the new
+     *                       item has its start point set to aStartingPoint, and its settings
+     *                       (width, layer) set to the current default values.
+     * @param aCommittedGraphics
+     * @return False if the tool was canceled before the origin was set or origin and end are
+     *         the same point.
      */
     bool drawShape( const TOOL_EVENT& aTool, PCB_SHAPE** aGraphic, std::optional<VECTOR2D> aStartingPoint,
                     std::stack<PCB_SHAPE*>* aCommittedGraphics );
@@ -301,16 +301,30 @@ private:
                             std::function<bool( const TOOL_EVENT&, PCB_SHAPE**, std::optional<VECTOR2D> )> aDrawer );
 
     /**
+     * Snap a tool event's position the way a click is snapped.
+     *
+     * A hotkey start carries the raw mouse position, which becomes the first point of a managed shape.
+     */
+    VECTOR2I snapEventPosition( const TOOL_EVENT& aEvent );
+
+    /**
      * Run the interactive drawing event loop for a shape, driven by a SHAPE_DRAW_BEHAVIOR.
      *
+     * @param aTool  the tool event to draw the managed shape.
      * @param aGraphic  the shape being drawn; must already be created.  On cancel the unique_ptr is reset;
      *                  on completion the caller can take ownership (e.g. to release into a COMMIT).
+     * @param aBehavior  defines the drawing behavior of the managed shape.
      * @param aInitialPts  points to pre-load into the behaviour before the first user click, e.g. start
      *                     point and mirrored control point for tangent-continuous bezier chaining.
-     * @return true if the shape was completed, false if cancelled.
+     * @param aTangentSeed  start point and direction that begin a tangent arc, applied to the behavior before
+     *                      any initial point.  A seeded draw counts as started.
+     * @param aLastClick  if not null, receives the position of the last click taken by the loop.
+     * @return the outcome of the drawing loop: see @ref SHAPE_DRAW_RESULT.
      */
-    bool drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr<PCB_SHAPE>& aGraphic,
-                           SHAPE_DRAW_BEHAVIOR& aBehavior, const std::vector<VECTOR2D>& aInitialPts );
+    SHAPE_DRAW_RESULT drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr<PCB_SHAPE>& aGraphic,
+                                        SHAPE_DRAW_BEHAVIOR& aBehavior, const std::vector<VECTOR2D>& aInitialPts,
+                                        const std::optional<ARC_TANGENT_SEED>& aTangentSeed = std::nullopt,
+                                        VECTOR2I* aLastClick = nullptr );
 
     /**
      * Get a source zone item for an action that takes an existing zone into account (for
@@ -364,7 +378,7 @@ private:
     }
 
     /**
-     * Clamps the end vector to respect numeric limits of radius representation
+     * Clamp the end vector to respect numeric limits of radius representation.
      *
      * @param aOrigin - the origin vector.
      * @param aEnd - the end vector.

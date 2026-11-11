@@ -5191,7 +5191,7 @@
                         <property name="flag">wxEXPAND|wxBOTTOM</property>
                         <property name="proportion">0</property>
                         <object class="wxFlexGridSizer" expanded="false">
-                          <property name="cols">4</property>
+                          <property name="cols">3</property>
                           <property name="flexible_direction">wxBOTH</property>
                           <property name="growablecols">2</property>
                           <property name="growablerows"></property>

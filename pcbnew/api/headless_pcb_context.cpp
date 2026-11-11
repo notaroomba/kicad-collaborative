@@ -21,12 +21,17 @@
 #include <api/headless_pcb_context.h>
 #include <board.h>
 #include <board_loader.h>
+#include <board_tables/generated_table_refresh.h>
+#include <common.h>
 #include <component_classes/component_class_manager.h>
 #include <drc/drc_engine.h>
 #include <footprint.h>
+#include <gestfich.h>
 #include <netlist_reader/board_netlist_updater.h>
 #include <netlist_reader/netlist_reader.h>
 #include <netlist_reader/pcb_netlist_utils.h>
+#include <pcbnew_settings.h>
+#include <pgm_base.h>
 #include <project.h>
 #include <reporter.h>
 #include <settings/settings_manager.h>
@@ -91,6 +96,16 @@ wxString HEADLESS_PCB_CONTEXT::GetCurrentFileName() const
 }
 
 
+void HEADLESS_PCB_CONTEXT::SetContentModified( bool aModified )
+{
+    m_contentModified = aModified;
+
+    // The editor does this from OnModify
+    if( aModified && m_board )
+        RefreshGeneratedTables( *m_board );
+}
+
+
 bool HEADLESS_PCB_CONTEXT::SaveBoard()
 {
     if( !m_board )
@@ -101,10 +116,12 @@ bool HEADLESS_PCB_CONTEXT::SaveBoard()
     if( fileName.IsEmpty() )
         return false;
 
-    bool success = BOARD_LOADER::SaveBoard( fileName, m_board.get() );
+    bool success = BOARD_LOADER::SaveBoard( fileName, *m_board );
 
     if( success )
     {
+        m_contentModified = false;
+
         wxFileName pro = fileName;
         pro.SetExt( FILEEXT::ProjectFileExtension );
         pro.MakeAbsolute();
@@ -116,22 +133,68 @@ bool HEADLESS_PCB_CONTEXT::SaveBoard()
 }
 
 
+bool HEADLESS_PCB_CONTEXT::SaveBoardAs( const wxString& aFileName )
+{
+    if( !m_board || aFileName.IsEmpty() )
+        return false;
+
+    wxFileName boardPath( EnsureFileExtension( aFileName, FILEEXT::KiCadPcbFileExtension ) );
+    boardPath.MakeAbsolute();
+
+    if( boardPath.GetName().IsEmpty() )
+        return false;
+
+    if( ( !boardPath.DirExists() && !boardPath.Mkdir() ) || !boardPath.IsDirWritable() )
+        return false;
+
+    wxString outPath = boardPath.GetFullPath();
+
+    if( !BOARD_LOADER::SaveBoard( outPath, *m_board ) )
+        return false;
+
+    m_board->SetFileName( outPath );
+    m_contentModified = false;
+
+    wxFileName pro( boardPath );
+    pro.SetExt( FILEEXT::ProjectFileExtension );
+
+    Pgm().GetSettingsManager().SaveProjectAs( pro.GetFullPath(), m_board->GetProject() );
+
+    return true;
+}
+
+
 bool HEADLESS_PCB_CONTEXT::SavePcbCopy( const wxString& aFileName, bool aCreateProject, bool aHeadless )
 {
     if( !m_board || aFileName.IsEmpty() )
         return false;
 
+    wxFileName pro = aFileName;
+    pro.SetExt( FILEEXT::ProjectFileExtension );
+    pro.MakeAbsolute();
+
+    if( aCreateProject && pro.FileExists() )
+        return false;
+
+    wxFileName currentRules( m_board->GetDesignRulesPath() );
+    wxFileName rulesFile = aFileName;
+    rulesFile.SetExt( FILEEXT::DesignRulesFileExtension );
+    rulesFile.MakeAbsolute();
+
+    if( currentRules.FileExists() && rulesFile.FileExists() )
+        return false;
+
     wxString outPath = aFileName;
 
-    bool success = BOARD_LOADER::SaveBoard( outPath, m_board.get() );
+    bool success = BOARD_LOADER::SaveBoard( outPath, *m_board );
 
     if( success && aCreateProject )
-    {
-        wxFileName pro = aFileName;
-        pro.SetExt( FILEEXT::ProjectFileExtension );
-        pro.MakeAbsolute();
+        Pgm().GetSettingsManager().SaveProjectCopy( pro.GetFullPath(), m_board->GetProject() );
 
-        Pgm().GetSettingsManager().SaveProjectAs( pro.GetFullPath(), m_board->GetProject() );
+    if( currentRules.FileExists() )
+    {
+        wxString msg;
+        KiCopyFile( currentRules.GetFullPath(), rulesFile.GetFullPath(), msg );
     }
 
     return success;
@@ -204,4 +267,44 @@ void HEADLESS_PCB_CONTEXT::OnNetlistChanged( BOARD_NETLIST_UPDATER& aUpdater )
     SpreadFootprints( &newFootprints, { 0, 0 }, true );
 
     board->CompileRatsnest();
+
+    SetContentModified();
+}
+
+
+bool HEADLESS_PCB_CONTEXT::RevertToSaved()
+{
+    wxCHECK( m_board && m_project, false );
+
+    wxString fileName = m_board->GetFileName();
+
+    if( fileName.IsEmpty() || !wxFileExists( fileName ) )
+        return false;
+
+    PCB_IO_MGR::PCB_FILE_T pluginType = PCB_IO_MGR::FindPluginTypeFromBoardPath( fileName, KICTL_KICAD_ONLY );
+
+    if( pluginType == PCB_IO_MGR::FILE_TYPE_NONE )
+        return false;
+
+    std::unique_ptr<BOARD> reloaded;
+
+    try
+    {
+        reloaded = BOARD_LOADER::Load( fileName, pluginType, m_project );
+    }
+    catch( ... )
+    {
+        return false;
+    }
+
+    if( !reloaded )
+        return false;
+
+    m_board = std::move( reloaded );
+    m_board->SetProject( m_project );
+    m_toolManager->SetEnvironment( m_board.get(), nullptr, nullptr, GetAppSettings<PCBNEW_SETTINGS>( "pcbnew" ),
+                                   nullptr );
+    m_contentModified = false;
+
+    return true;
 }

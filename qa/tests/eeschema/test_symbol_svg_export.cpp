@@ -1,0 +1,309 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/**
+ * @file test_symbol_svg_export.cpp
+ * Tests for symbol export to the SVG format
+ */
+
+#include "tl/expected.hpp"
+#include <boost/test/unit_test.hpp>
+
+#include <wx/ffile.h>
+#include <wx/mstream.h>
+
+#include <eda_units.h>
+#include <lib_symbol.h>
+#include <sch_pin.h>
+#include <sch_shape.h>
+#include <sch_text.h>
+#include <sch_textbox.h>
+#include <sch_painter.h>
+#include <sch_plotter.h>
+#include <settings/color_settings.h>
+
+#include <qa_utils/svg_test_utils.h>
+#include <wx/xml/xml.h>
+
+
+class SYMBOL_SVG_EXPORT_FIXTURE
+{
+public:
+    SYMBOL_SVG_EXPORT_FIXTURE()
+    {
+        m_symbol = std::make_unique<LIB_SYMBOL>( wxT( "TestSymbol" ), nullptr );
+    }
+
+    ~SYMBOL_SVG_EXPORT_FIXTURE() = default;
+
+    void AddPin( int x, int y, const wxString& name, const wxString& number )
+    {
+        std::unique_ptr<SCH_PIN> pin = std::make_unique<SCH_PIN>( m_symbol.get() );
+        pin->SetPosition( VECTOR2I( schIUScale.MilsToIU( x ), schIUScale.MilsToIU( y ) ) );
+        pin->SetName( name );
+        pin->SetNumber( number );
+        pin->SetLength( schIUScale.MilsToIU( 100 ) );
+        m_symbol->AddDrawItem( pin.release() );
+    }
+
+    void AddRectangle( int x1, int y1, int x2, int y2 )
+    {
+        std::unique_ptr<SCH_SHAPE> rect = std::make_unique<SCH_SHAPE>( SHAPE_T::RECTANGLE, LAYER_DEVICE );
+        rect->SetPosition( VECTOR2I( schIUScale.MilsToIU( x1 ), schIUScale.MilsToIU( y1 ) ) );
+        rect->SetEnd( VECTOR2I( schIUScale.MilsToIU( x2 ), schIUScale.MilsToIU( y2 ) ) );
+        rect->SetStroke( STROKE_PARAMS( schIUScale.MilsToIU( 10 ), LINE_STYLE::SOLID ) );
+        m_symbol->AddDrawItem( rect.release() );
+    }
+
+    void AddCircle( int cx, int cy, int radius )
+    {
+        std::unique_ptr<SCH_SHAPE> circle = std::make_unique<SCH_SHAPE>( SHAPE_T::CIRCLE, LAYER_DEVICE );
+        circle->SetPosition( VECTOR2I( schIUScale.MilsToIU( cx ), schIUScale.MilsToIU( cy ) ) );
+        circle->SetEnd( VECTOR2I( schIUScale.MilsToIU( cx + radius ), schIUScale.MilsToIU( cy ) ) );
+        circle->SetStroke( STROKE_PARAMS( schIUScale.MilsToIU( 10 ), LINE_STYLE::SOLID ) );
+        m_symbol->AddDrawItem( circle.release() );
+    }
+
+    void AddPolyline( const std::vector<std::pair<int, int>>& points )
+    {
+        std::unique_ptr<SCH_SHAPE> poly = std::make_unique<SCH_SHAPE>( SHAPE_T::POLY, LAYER_DEVICE );
+        poly->SetStroke( STROKE_PARAMS( schIUScale.MilsToIU( 10 ), LINE_STYLE::SOLID ) );
+
+        for( const auto& pt : points )
+            poly->AddPoint( VECTOR2I( schIUScale.MilsToIU( pt.first ), schIUScale.MilsToIU( pt.second ) ) );
+
+        m_symbol->AddDrawItem( poly.release() );
+    }
+
+    void AddArc( int cx, int cy, int radius, EDA_ANGLE startAngle, EDA_ANGLE endAngle )
+    {
+        std::unique_ptr<SCH_SHAPE> arc = std::make_unique<SCH_SHAPE>( SHAPE_T::ARC, LAYER_DEVICE );
+        arc->SetCenter( VECTOR2I( schIUScale.MilsToIU( cx ), schIUScale.MilsToIU( cy ) ) );
+        arc->SetRadius( schIUScale.MilsToIU( radius ) );
+        arc->SetArcAngleAndEnd( endAngle - startAngle );
+        arc->SetStroke( STROKE_PARAMS( schIUScale.MilsToIU( 10 ), LINE_STYLE::SOLID ) );
+        m_symbol->AddDrawItem( arc.release() );
+    }
+
+    void AddText( int x, int y, const wxString& text )
+    {
+        std::unique_ptr<SCH_TEXT> txt = std::make_unique<SCH_TEXT>( VECTOR2I( schIUScale.MilsToIU( x ),
+                                                                               schIUScale.MilsToIU( y ) ),
+                                                                    text, LAYER_DEVICE );
+        txt->SetTextSize( VECTOR2I( schIUScale.MilsToIU( 50 ), schIUScale.MilsToIU( 50 ) ) );
+        m_symbol->AddDrawItem( txt.release() );
+    }
+
+    wxString PlotToSvgString( int aUnit = 0, int aBodyStyle = 0 )
+    {
+        // Route through the production export so the tests cover the real viewport/viewBox
+        // handling rather than a reimplementation of the plot setup.
+        SCH_RENDER_SETTINGS renderSettings;
+        COLOR_SETTINGS      colorSettings;
+        renderSettings.LoadColors( &colorSettings );
+        renderSettings.SetDefaultPenWidth( schIUScale.MilsToIU( 6 ) );
+
+        const BOX2I bbox = GetSymbolPlotBBox( *m_symbol, aUnit, aBodyStyle, false );
+
+        wxFileName tempFile( wxFileName::CreateTempFileName( wxT( "kicad_test_svg" ) ) );
+
+        if( !PlotSymbolToSVG( *m_symbol, *m_symbol, aUnit, aBodyStyle, bbox, renderSettings, false,
+                              tempFile.GetFullPath() ) )
+        {
+            wxRemoveFile( tempFile.GetFullPath() );
+            return wxEmptyString;
+        }
+
+        wxFFile file( tempFile.GetFullPath(), wxT( "rb" ) );
+        wxString content;
+
+        if( file.IsOpened() )
+            file.ReadAll( &content );
+
+        wxRemoveFile( tempFile.GetFullPath() );
+        return content;
+    }
+
+    std::unique_ptr<LIB_SYMBOL> m_symbol;
+};
+
+
+BOOST_FIXTURE_TEST_SUITE( SymbolSvgExport, SYMBOL_SVG_EXPORT_FIXTURE )
+
+
+/**
+ * Test that a symbol with pins produces SVG output
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ContainsPins )
+{
+    AddPin( 0, 0, wxT( "VCC" ), wxT( "1" ) );
+    AddPin( 0, 100, wxT( "GND" ), wxT( "2" ) );
+    AddPin( 0, 200, wxT( "OUT" ), wxT( "3" ) );
+
+    wxString svg = PlotToSvgString();
+
+    BOOST_CHECK( !svg.IsEmpty() );
+    BOOST_CHECK( svg.Contains( wxT( "<svg" ) ) );
+    BOOST_CHECK( svg.Contains( wxT( "</svg>" ) ) );
+    // SVG should contain paths or lines for pin elements
+    BOOST_CHECK( svg.Contains( wxT( "<path" ) ) || svg.Contains( wxT( "<line" ) ) );
+}
+
+
+/**
+ * Test that a symbol with a rectangle produces SVG output
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ContainsRectangle )
+{
+    AddRectangle( -100, -100, 100, 100 );
+
+    wxString svg = PlotToSvgString();
+
+    BOOST_CHECK( !svg.IsEmpty() );
+    BOOST_CHECK( svg.Contains( wxT( "<svg" ) ) );
+    // Rectangle should produce a path or rect element
+    BOOST_CHECK( svg.Contains( wxT( "<path" ) ) || svg.Contains( wxT( "<rect" ) ) );
+}
+
+
+/**
+ * Test that a symbol with a circle produces SVG output
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ContainsCircle )
+{
+    AddCircle( 0, 0, 50 );
+
+    wxString svg = PlotToSvgString();
+
+    BOOST_CHECK( !svg.IsEmpty() );
+    BOOST_CHECK( svg.Contains( wxT( "<svg" ) ) );
+    // Circle should produce a circle or ellipse element
+    BOOST_CHECK( svg.Contains( wxT( "<circle" ) ) || svg.Contains( wxT( "<ellipse" ) )
+                 || svg.Contains( wxT( "<path" ) ) );
+}
+
+
+/**
+ * Test that a symbol with a polyline produces SVG output
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ContainsPolyline )
+{
+    AddPolyline( { { 0, 0 }, { 50, 50 }, { 100, 0 }, { 100, 100 } } );
+
+    wxString svg = PlotToSvgString();
+
+    BOOST_CHECK( !svg.IsEmpty() );
+    BOOST_CHECK( svg.Contains( wxT( "<svg" ) ) );
+    // Polyline should produce a path or polyline element
+    BOOST_CHECK( svg.Contains( wxT( "<path" ) ) || svg.Contains( wxT( "<polyline" ) ) );
+}
+
+
+/**
+ * Test that a symbol with text produces SVG output
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ContainsText )
+{
+    AddText( 0, 0, wxT( "Test Label" ) );
+
+    wxString svg = PlotToSvgString();
+
+    BOOST_CHECK( !svg.IsEmpty() );
+    BOOST_CHECK( svg.Contains( wxT( "<svg" ) ) );
+    // Text should produce a text element or paths for glyphs
+    BOOST_CHECK( svg.Contains( wxT( "<text" ) ) || svg.Contains( wxT( "<path" ) ) );
+}
+
+
+/**
+ * Test that a complex symbol with multiple elements produces valid SVG
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ComplexSymbol )
+{
+    // Create a simple IC-like symbol
+    AddRectangle( -100, -150, 100, 150 );
+    AddPin( -200, -100, wxT( "A" ), wxT( "1" ) );
+    AddPin( -200, 0, wxT( "B" ), wxT( "2" ) );
+    AddPin( -200, 100, wxT( "C" ), wxT( "3" ) );
+    AddPin( 200, -100, wxT( "Y" ), wxT( "4" ) );
+    AddPin( 200, 0, wxT( "Z" ), wxT( "5" ) );
+    AddPin( 200, 100, wxT( "W" ), wxT( "6" ) );
+    AddText( 0, 0, wxT( "IC" ) );
+
+    wxString svg = PlotToSvgString();
+
+    BOOST_CHECK( !svg.IsEmpty() );
+    BOOST_CHECK( svg.Contains( wxT( "<svg" ) ) );
+    BOOST_CHECK( svg.Contains( wxT( "</svg>" ) ) );
+
+    // Should have multiple path elements for all the components
+    int pathCount = 0;
+    size_t pos = 0;
+
+    while( ( pos = svg.find( wxT( "<path" ), pos ) ) != wxString::npos )
+    {
+        pathCount++;
+        pos++;
+    }
+
+    // A complex symbol should have multiple paths
+    BOOST_CHECK( pathCount >= 1 );
+}
+
+
+/**
+ * A symbol body centred on the symbol origin extends to negative coordinates, so the
+ * exported SVG viewBox must start at a negative left/top edge, not at (0, 0).
+ *
+ * This is an important contract of the SVG export because it allows plotted symbols
+ * to be placed into a parent document (e.g. for diffs) at a consistent position.
+ *
+ * Detailed tests of viewboxes relative to SVG content (as opposed to symbols) are in
+ * SvgExport, this test only checks that the PlotSymbolToSVG() function drives
+ * the plotter to produce a correct viewBox.
+ */
+BOOST_AUTO_TEST_CASE( SvgExport_ViewBoxOrigin )
+{
+    // A 100 x 100 mil rectangle centred on the origin (spanning -50..+50 mil).
+    AddRectangle( -50, -50, 50, 50 );
+
+    const wxString svg = PlotToSvgString();
+
+    tl::expected<wxXmlDocument, wxString> svgDoc = KI_TEST::LoadSvg( svg );
+    BOOST_REQUIRE( svgDoc.has_value() );
+
+    tl::expected<KI_TEST::SVG_VIEWBOX, wxString> viewBox = KI_TEST::ParseViewBox( *svgDoc->GetRoot() );
+
+    BOOST_REQUIRE( viewBox.has_value() );
+
+    // The viewbox should be about 100 x 100 mils in size, plus some padding for stroke width.
+    // The SVG export function doesn't promise a specific padding, so just make sure the viewBox
+    // is larger than the rectangle and is offset appropriately.
+
+    // The left and top edges of the viewport must be negative, not (0, 0).
+    BOOST_TEST( viewBox->m_X < EDA_UNIT_UTILS::Mils2mm( -50 ) );
+    BOOST_TEST( viewBox->m_Y < EDA_UNIT_UTILS::Mils2mm( -50 ) );
+
+    // The viewport must still have a positive size
+    BOOST_TEST( viewBox->m_Width > EDA_UNIT_UTILS::Mils2mm( 100 ) );
+    BOOST_TEST( viewBox->m_Height > EDA_UNIT_UTILS::Mils2mm( 100 ) );
+}
+
+
+BOOST_AUTO_TEST_SUITE_END()

@@ -28,7 +28,7 @@
 #include <wx/log.h>
 #include <wx/tokenzr.h>
 
-/*
+/**
  * Flag to enable advanced config debugging
  *
  * Use "KICAD_ADVANCED_CONFIG" to enable.
@@ -57,6 +57,7 @@ static constexpr int max_stack = 4096 * 4096;
 namespace AC_KEYS
 {
 
+static const wxChar ConnectivityEngine[] = wxT( "ConnectivityEngine" );
 static const wxChar IncrementalConnectivity[] = wxT( "IncrementalConnectivity" );
 static const wxChar Use3DConnexionDriver[] = wxT( "3DConnexionDriver" );
 static const wxChar ExtraFillMargin[] = wxT( "ExtraFillMargin" );
@@ -113,6 +114,7 @@ static const wxChar OcePluginAngularDeflection[] = wxT( "OcePluginAngularDeflect
 static const wxChar TriangulateSimplificationLevel[] = wxT( "TriangulateSimplificationLevel" );
 static const wxChar TriangulateMinimumArea[] = wxT( "TriangulateMinimumArea" );
 static const wxChar EnableCacheFriendlyFracture[] = wxT( "EnableCacheFriendlyFracture" );
+static const wxChar EnableFractureEdgeIndex[] = wxT( "EnableFractureEdgeIndex" );
 static const wxChar TriangulateDelaunayRefine[] = wxT( "TriangulateDelaunayRefine" );
 static const wxChar EnableAPILogging[] = wxT( "EnableAPILogging" );
 static const wxChar MaxFileSystemWatchers[] = wxT( "MaxFileSystemWatchers" );
@@ -154,7 +156,11 @@ static const wxChar DiffSkewCosThetaParallelTestValue[] = wxT( "DiffSkewCosTheta
 static const wxChar DiffSkewColourInterpolationLogStrength[] = wxT( "DiffSkewColourInterpolationLogStrength" );
 static const wxChar DiffSkewTargetDiffSegmentSize[] = wxT( "DiffSkewTargetDiffSegmentSize" );
 static const wxChar EagleImportFieldsCanAutoplace[] = wxT( "EagleImportFieldsCanAutoplace" );
+static const wxChar EnableGLResetRecovery[] = wxT( "EnableGLResetRecovery" );
 
+
+static const wxChar EnableVulkanValidation[] = wxT( "EnableVulkanValidation" );
+static const wxChar RenderThreadPriority[] = wxT( "RenderThreadPriority" );
 
 } // namespace AC_KEYS
 
@@ -267,7 +273,7 @@ ADVANCED_CFG::ADVANCED_CFG()
     m_PDFStrokeFontYOffset = 0.35;
     m_PDFStrokeFontBoldMultiplier = 1.8;
     m_PDFStrokeFontKerningFactor = 1.0;
-    m_UsePdfPrint = false;
+    m_UsePdfPrint = true;
     m_SmallDrillMarkSize = 0.35;
     m_HotkeysDumper = false;
     m_DrawBoundingBoxes = false;
@@ -293,6 +299,7 @@ ADVANCED_CFG::ADVANCED_CFG()
     m_Use3DConnexionDriver = true;
 
     m_IncrementalConnectivity = true;
+    m_ConnectivityEngine = true;
 
     m_DisambiguationMenuDelay = 500;
 
@@ -307,7 +314,10 @@ ADVANCED_CFG::ADVANCED_CFG()
     m_TriangulateMinimumArea = 1000;
 
     m_EnableCacheFriendlyFracture = true;
+    m_EnableFractureEdgeIndex = true;
     m_TriangulateDelaunayRefine = true;
+
+    m_EnableGLResetRecovery = true;
 
     m_MaxFilesystemWatchers = 16384;
 
@@ -360,6 +370,8 @@ ADVANCED_CFG::ADVANCED_CFG()
     m_DiffSkewCosThetaParallelTestValue = 0.9999;
     m_DiffSkewColourInterpolationLogStrength = 9.0;
     m_DiffSkewTargetDiffSegmentSize = 5e4;
+    m_EnableVulkanValidation = false;
+    m_RenderThreadPriority = wxS( "normal" );
 
     m_EagleImportFieldsCanAutoplace = true;
 
@@ -543,6 +555,9 @@ void ADVANCED_CFG::loadSettings( wxConfigBase& aCfg )
     m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::Use3DConnexionDriver,
                 &m_Use3DConnexionDriver, m_Use3DConnexionDriver ) );
 
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::ConnectivityEngine,
+                &m_ConnectivityEngine, m_ConnectivityEngine ) );
+
     m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::IncrementalConnectivity,
                 &m_IncrementalConnectivity, m_IncrementalConnectivity ) );
 
@@ -585,8 +600,14 @@ void ADVANCED_CFG::loadSettings( wxConfigBase& aCfg )
     m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EnableCacheFriendlyFracture,
                 &m_EnableCacheFriendlyFracture, m_EnableCacheFriendlyFracture ) );
 
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EnableFractureEdgeIndex,
+                &m_EnableFractureEdgeIndex, m_EnableFractureEdgeIndex ) );
+
     m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::TriangulateDelaunayRefine,
                 &m_TriangulateDelaunayRefine, m_TriangulateDelaunayRefine ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EnableGLResetRecovery,
+                &m_EnableGLResetRecovery, m_EnableGLResetRecovery ) );
 
     m_entries.push_back( std::make_unique<PARAM_CFG_INT>( true, AC_KEYS::MaxFileSystemWatchers,
                 &m_MaxFilesystemWatchers, m_MaxFilesystemWatchers, 0, 2147483647 ) );
@@ -706,6 +727,13 @@ void ADVANCED_CFG::loadSettings( wxConfigBase& aCfg )
     m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EagleImportFieldsCanAutoplace,
                 &m_EagleImportFieldsCanAutoplace, m_EagleImportFieldsCanAutoplace ) );
 
+    m_entries.push_back( std::make_unique<PARAM_CFG_BOOL>( true, AC_KEYS::EnableVulkanValidation,
+                                                           &m_EnableVulkanValidation,
+                                                           m_EnableVulkanValidation ) );
+
+    m_entries.push_back( std::make_unique<PARAM_CFG_WXSTRING>( true, AC_KEYS::RenderThreadPriority,
+                                                               &m_RenderThreadPriority,
+                                                               wxS( "normal" ) ) );
 
     // Special case for trace mask setting...we just grab them and set them immediately
     // Because we even use wxLogTrace inside of advanced config

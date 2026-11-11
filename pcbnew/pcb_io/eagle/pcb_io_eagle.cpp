@@ -46,7 +46,6 @@ Load() TODO's
 
 */
 
-#include <cerrno>
 #include <set>
 
 #include <wx/string.h>
@@ -57,6 +56,7 @@ Load() TODO's
 #include <wx/txtstrm.h>
 #include <wx/window.h>
 
+#include <board_design_settings_defaults.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <font/fontconfig.h>
 #include <geometry/geometry_utils.h>
@@ -68,6 +68,7 @@ Load() TODO's
 #include <board_design_settings.h>
 #include <project/net_settings.h>
 #include <footprint.h>
+#include <pcb_field.h>
 #include <pad.h>
 #include <pcb_track.h>
 #include <pcb_shape.h>
@@ -315,7 +316,7 @@ void PCB_IO_EAGLE::checkpoint()
             m_progressReporter->SetCurrentProgress( ( (double) m_doneCount ) / std::max( 1U, m_totalCount ) );
 
             if( !m_progressReporter->KeepRefreshing() )
-                THROW_IO_ERROR( _( "File import canceled by user." ) );
+                THROW_IO_CANCELLED();
 
             m_lastProgressCount = m_doneCount;
         }
@@ -331,8 +332,8 @@ VECTOR2I inline PCB_IO_EAGLE::kicad_fontsize( const ECOORD& d, int aTextThicknes
 }
 
 
-BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_EAGLE::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                              const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     wxXmlNode*      doc;
 
@@ -341,14 +342,8 @@ BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
 
     init( aProperties );
 
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
-
-    // delete on exception, if I own m_board, according to aAppendToMe
-    unique_ptr<BOARD> deleter( aAppendToMe ? nullptr : m_board );
+    m_importedDesignRules.clear();
+    m_board = &aBoard;
 
     try
     {
@@ -357,7 +352,7 @@ BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
             m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
             if( !m_progressReporter->KeepRefreshing() )
-                THROW_IO_ERROR( _( "File import canceled by user." ) );
+                THROW_IO_CANCELLED();
         }
 
         wxFileName fn = aFileName;
@@ -456,12 +451,7 @@ BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         // Only emit a design rules sidecar when the Eagle board carried an actual
         // clearance matrix. A version-only file has no rules and is just clutter.
         if( m_customRules.Contains( wxT( "(rule " ) ) )
-        {
-            fn.SetExt( wxT( "kicad_dru" ) );
-
-            wxFile rulesFile( fn.GetFullPath(), wxFile::write );
-            rulesFile.Write( m_customRules );
-        }
+            m_importedDesignRules = m_customRules;
 
         // should be empty, else missing m_xpath->pop()
         wxASSERT( m_xpath->Contents().size() == 0 );
@@ -486,9 +476,6 @@ BOARD* PCB_IO_EAGLE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
     m_board->GetDesignSettings().SetEnabledLayers( enabledLayers );
 
     centerBoard();
-
-    deleter.release();
-    return m_board;
 }
 
 
@@ -561,6 +548,18 @@ void PCB_IO_EAGLE::loadAllSections( wxXmlNode* aDoc )
     wxXmlNode* signals = boardChildren["signals"];
     wxXmlNode* libs = boardChildren["libraries"];
     wxXmlNode* elems = boardChildren["elements"];
+
+    // Board attributes give the value of a package text such as >REV
+    m_boardAttributes.clear();
+
+    if( wxXmlNode* attributes = boardChildren["attributes"] )
+    {
+        for( wxXmlNode* attribute = attributes->GetChildren(); attribute; attribute = attribute->GetNext() )
+        {
+            if( attribute->GetName() == wxT( "attribute" ) )
+                m_boardAttributes[attribute->GetAttribute( wxT( "name" ) )] = attribute->GetAttribute( wxT( "value" ) );
+        }
+    }
 
     if( m_progressReporter )
     {
@@ -1321,6 +1320,43 @@ void PCB_IO_EAGLE::loadElements( wxXmlNode* aElements )
             }
         }
 
+        // A placeholder such as >PROJECT became ${PROJECT}, which needs a field of that name to resolve
+        for( BOARD_ITEM* item : footprint->GraphicalItems() )
+        {
+            PCB_TEXT* text = dynamic_cast<PCB_TEXT*>( item );
+
+            if( !text || !text->GetText().StartsWith( wxS( "${" ) ) || !text->GetText().EndsWith( wxS( "}" ) ) )
+                continue;
+
+            wxString varName = text->GetText().Mid( 2, text->GetText().length() - 3 );
+            wxString token = varName;
+
+            if( varName.IsEmpty() || footprint->HasField( varName ) || footprint->ResolveTextVar( &token ) )
+                continue;
+
+            // An attribute of the element with a value overrides the one of the board
+            wxString fieldValue;
+
+            if( auto boardValue = m_boardAttributes.find( varName ); boardValue != m_boardAttributes.end() )
+                fieldValue = boardValue->second;
+
+            for( wxXmlNode* attribute = element->GetChildren(); attribute; attribute = attribute->GetNext() )
+            {
+                if( attribute->GetName() == wxT( "attribute" ) && attribute->GetAttribute( wxT( "name" ) ) == varName
+                    && attribute->HasAttribute( wxT( "value" ) ) )
+                {
+                    fieldValue = attribute->GetAttribute( wxT( "value" ) );
+                }
+            }
+
+            PCB_FIELD* field = new PCB_FIELD( footprint, FIELD_T::USER, varName );
+
+            field->SetText( fieldValue );
+            field->SetVisible( false );
+            field->SetLayer( text->GetLayer() );
+            footprint->Add( field );
+        }
+
         refanceNamePresetInPackageLayout = true;
         valueNamePresetInPackageLayout = true;
         footprint->SetPosition( VECTOR2I( kicad_x( e.x ), kicad_y( e.y ) ) );
@@ -2074,20 +2110,37 @@ void PCB_IO_EAGLE::packagePad( FOOTPRINT* aFootprint, wxXmlNode* aTree )
     // Eagle spokes are always '+'
     pad->SetThermalSpokeAngle( ANGLE_0 );
 
-    if( pad->GetSizeX() > 0 && pad->GetSizeY() > 0 && pad->HasHole() )
-    {
-        aFootprint->Add( pad.release() );
-    }
-    else
+    bool badPad = false;
+
+    pad->Padstack().ForEachUniqueLayer(
+            [&]( PCB_LAYER_ID layer )
+            {
+                VECTOR2I padSize = pad->GetSize( layer );
+
+                if( padSize.x <= 0 || padSize.y <= 0 )
+                    badPad = true;
+            } );
+
+    if( badPad )
     {
         wxFileName fileName( m_lib_path );
 
         if( m_board)
+        {
             Report( wxString::Format( _( "Invalid zero-sized pad ignored in\nfile: %s" ),
-                                      m_board->GetFileName() ), RPT_SEVERITY_ERROR );
+                                      m_board->GetFileName() ),
+                    RPT_SEVERITY_ERROR );
+        }
         else
+        {
             Report( wxString::Format( _( "Invalid zero-sized pad ignored in\nfile: %s" ),
-                                      fileName.GetFullName() ), RPT_SEVERITY_ERROR );
+                                      fileName.GetFullName() ),
+                    RPT_SEVERITY_ERROR );
+        }
+    }
+    else
+    {
+        aFootprint->Add( pad.release() );
     }
 }
 
@@ -2720,7 +2773,7 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
             usedNetNames.insert( netName );
         }
 
-        NETINFO_ITEM*             netInfo = new NETINFO_ITEM( m_board, netName, netCode );
+        NETINFO_ITEM*             netInfo = m_board->FindOrAddNet( netName, netCode );
         std::shared_ptr<NETCLASS> netclass;
 
         if( net->HasAttribute( "class" ) )
@@ -2735,9 +2788,7 @@ void PCB_IO_EAGLE::loadSignals( wxXmlNode* aSignals )
             }
         }
 
-        m_board->Add( netInfo );
-
-        // AppendNet deduplicates by name and renumbers to keep net codes
+        // FindOrAddNet deduplicates by name and renumbers to keep net codes
         // consecutive, so the authoritative code for this signal's items is
         // whatever the board accepted, not the local request counter.
         netCode = netInfo->GetNetCode();
@@ -3349,8 +3400,8 @@ void PCB_IO_EAGLE::FootprintEnumerate( wxArrayString& aFootprintNames, const wxS
 }
 
 
-FOOTPRINT* PCB_IO_EAGLE::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                                        bool aKeepUUID, const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_EAGLE::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                                        bool aKeepUUID, const std::map<std::string, UTF8>* aProperties )
 {
     init( aProperties );
     cacheLib( aLibraryPath );
@@ -3360,7 +3411,7 @@ FOOTPRINT* PCB_IO_EAGLE::FootprintLoad( const wxString& aLibraryPath, const wxSt
         return nullptr;
 
     // Return a copy of the template
-    FOOTPRINT* copy = (FOOTPRINT*) it->second->Duplicate( IGNORE_PARENT_GROUP );
+    std::unique_ptr<FOOTPRINT> copy( static_cast<FOOTPRINT*>( it->second->Duplicate( IGNORE_PARENT_GROUP ) ) );
     copy->SetParent( nullptr );
     return copy;
 }

@@ -19,6 +19,11 @@
 
 #include "io/kicad/kicad_io_utils.h"
 
+#include <algorithm>
+
+#include <wx/buffer.h>
+#include <wx/ffile.h>
+
 // For some reason wxWidgets is built with wxUSE_BASE64 unset so expose the wxWidgets
 // base64 code.
 #define wxUSE_BASE64 1
@@ -210,6 +215,21 @@ void Prettify( std::string& aSource, FORMAT_MODE aMode )
 
     while( cursor != aSource.end() )
     {
+        // A comment line is not s-expression syntax and must keep its spacing, quotes and parens
+        if( listDepth == 0 && *cursor == '#' && ( formatted.empty() || formatted.back() == '\n' ) )
+        {
+            auto lineEnd = std::find( cursor, aSource.end(), '\n' );
+
+            formatted.append( cursor, lineEnd );
+            formatted.push_back( '\n' );
+
+            if( lineEnd == aSource.end() )
+                break;
+
+            cursor = std::next( lineEnd );
+            continue;
+        }
+
         char next = nextNonWhitespace( cursor );
 
         if( isWhitespace( *cursor ) && !inQuote )
@@ -252,7 +272,7 @@ void Prettify( std::string& aSource, FORMAT_MODE aMode )
                 bool currentIsShortForm = textSpecialCase && isShortForm( cursor );
                 bool currentIsLib = libSpecialCase && isLib( cursor );
 
-                if( formatted.empty() )
+                if( formatted.empty() || formatted.back() == '\n' )
                 {
                     formatted.push_back( '(' );
                     column++;
@@ -506,8 +526,14 @@ static const TOKEN_VERSION SCHEMATIC_TOKEN_VERSIONS[] = {
     { "end_shape", 20260818 },
     { "square", 20260818 },
     { "start_shape", 20260818 },
-    // 20260830  Custom user properties
-    { "custom_property", 20260830 },
+    // Custom properties reached more item types in later versions (shapes in 20261015, pins
+    // and sheet pins in 20261106) without a new token, and the scan does not know which item a
+    // token sits in.  The token therefore carries the newest of those versions: a file that
+    // uses custom properties at all is written at a version every one of them fits in.
+    { "custom_property", 20261106 },
+    // 20261025  Reference image rotation and opacity
+    { "opacity", 20261025 },
+    { "rotate", 20261025 },
 };
 
 static const TOKEN_VERSION SYMBOL_LIB_TOKEN_VERSIONS[] = {
@@ -576,8 +602,11 @@ static const TOKEN_VERSION SYMBOL_LIB_TOKEN_VERSIONS[] = {
     { "end_shape", 20260710 },
     { "square", 20260710 },
     { "start_shape", 20260710 },
-    // 20260830  Custom user properties
-    { "custom_property", 20260830 },
+    // Custom properties reached more item types in later versions (shapes in 20261015, pins
+    // and sheet pins in 20261106) without a new token, and the scan does not know which item a
+    // token sits in.  The token therefore carries the newest of those versions: a file that
+    // uses custom properties at all is written at a version every one of them fits in.
+    { "custom_property", 20261106 },
 };
 
 static const TOKEN_VERSION BOARD_TOKEN_VERSIONS[] = {
@@ -719,6 +748,14 @@ static const TOKEN_VERSION BOARD_TOKEN_VERSIONS[] = {
     // BOARD_VALUE_ATOM_VERSIONS)
     // 20260831  Custom user properties
     { "custom_property", 20260831 },
+    // 20260901  Drill charts and maps (their other tokens only appear inside these)
+    { "drill_chart", 20260901 },
+    { "drill_map", 20260901 },
+    { "drill_symbol_profile", 20260901 },
+    // 20261018  Linked placement rule areas
+    { "link", 20261018 },
+    // 20261030  Live stackup tables
+    { "stackup_table", 20261030 },
 };
 
 /*
@@ -735,6 +772,11 @@ static const TOKEN_VERSION BOARD_VALUE_ATOM_VERSIONS[] = {
     { "pad_prop_pressfit", 20250801 },
     // 20260828  Exclude-from-simulation footprint attribute: (attr ... exclude_from_sim)
     { "exclude_from_sim", 20260828 },
+    // 20260930  UUID for extruded 3D body: (model (type extruded) (uuid ...) ...), which the
+    // writer emits for every extruded body
+    { "extruded", 20260930 },
+    // 20261031  Non-component pads: (pad "" non_component ...)
+    { "non_component", 20261031 },
 };
 
 static const TOKEN_VERSION SCHEMATIC_VALUE_ATOM_VERSIONS[] = {
@@ -786,6 +828,9 @@ static const VERSION_FEATURE SCHEMATIC_VERSION_FEATURES[] = {
     { 20260722, "Dedicated variant symbol_override token" },
     { 20260818, "Line ending shapes" },
     { 20260830, "Custom user properties" },
+    { 20261015, "Custom user properties for shapes" },
+    { 20261025, "Reference image rotation and opacity" },
+    { 20261106, "Custom user properties for pins and sheet pins" },
 };
 
 static const VERSION_FEATURE SYMBOL_LIB_VERSION_FEATURES[] = {
@@ -803,6 +848,8 @@ static const VERSION_FEATURE SYMBOL_LIB_VERSION_FEATURES[] = {
     { 20260629, "Pin-to-pad maps (issue #2282)" },
     { 20260710, "Line ending shapes" },
     { 20260830, "Custom user properties" },
+    { 20261015, "Custom user properties for shapes" },
+    { 20261106, "Custom user properties for pins and sheet pins" },
 };
 
 static const VERSION_FEATURE BOARD_VERSION_FEATURES[] = {
@@ -841,6 +888,13 @@ static const VERSION_FEATURE BOARD_VERSION_FEATURES[] = {
     { 20260818, "Line ending shapes" },
     { 20260828, "Exclude-from-simulation footprint attribute" },
     { 20260831, "Custom user properties" },
+    { 20260901, "Drill charts and maps" },
+    { 20260930, "UUID for extruded 3D body" },
+    { 20261017, "Footprint overall height" },
+    { 20261018, "Linked placement rule areas" },
+    { 20261025, "Reference image rotation and opacity" },
+    { 20261030, "Live stackup tables" },
+    { 20261031, "Non-component pads" },
 };
 
 
@@ -1070,3 +1124,28 @@ FORMAT_VERSION_REQUIREMENT MinimumFileFormatVersion( const std::string& aBody,
 
 
 } // namespace KICAD_FORMAT
+
+
+bool LoadFileToMemory( const wxString& aFileName, wxMemoryBuffer& aBuffer )
+{
+    wxFFile file( aFileName, wxS( "rb" ) );
+
+    if( !file.IsOpened() )
+        return false;
+
+    wxFileOffset size = file.Length();
+
+    if( size <= 0 )
+        return false;
+
+    void* data = aBuffer.GetWriteBuf( size );
+
+    if( file.Read( data, size ) != static_cast<size_t>( size ) )
+    {
+        aBuffer.UngetWriteBuf( 0 );
+        return false;
+    }
+
+    aBuffer.UngetWriteBuf( size );
+    return true;
+}

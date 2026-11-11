@@ -24,7 +24,9 @@
 #include <core/typeinfo.h>
 #include <layer_ids.h>
 #include <sch_bitmap.h>
+#include <sch_shape.h>
 #include <sch_line_wire_bus_tool.h>
+#include <tool/arc_draw_mode.h>
 #include <tool/tool_action.h>
 
 class DESIGN_BLOCK;
@@ -192,6 +194,20 @@ TOOL_ACTION SCH_ACTIONS::saveLibraryAs( TOOL_ACTION_ARGS()
         .LegacyHotkeyName( "Save As" )
         .FriendlyName( _( "Save Library As..." ) )
         .Tooltip( _( "Save the current library to a new file" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::saveLibraryAsPacked( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.saveLibraryAsPacked" )
+        .Scope( AS_GLOBAL )
+        .LegacyHotkeyName( "Save As Packed" )
+        .FriendlyName( _( "Save Library As Packed..." ) )
+        .Tooltip( _( "Save the current unpacked library to a new packed library file" ) ) );
+
+TOOL_ACTION SCH_ACTIONS::saveLibraryAsUnpacked( TOOL_ACTION_ARGS()
+        .Name( "eeschema.SymbolLibraryControl.saveLibraryAsUnpacked" )
+        .Scope( AS_GLOBAL )
+        .LegacyHotkeyName( "Save As Unpacked" )
+        .FriendlyName( _( "Save Library As Unpacked..." ) )
+        .Tooltip( _( "Save the current packed library to a new unpacked library folder" ) ) );
 
 TOOL_ACTION SCH_ACTIONS::compareLibraryWithFile( TOOL_ACTION_ARGS()
         .Name( "eeschema.SymbolLibraryControl.CompareLibraryWithFile" )
@@ -760,6 +776,71 @@ TOOL_ACTION SCH_ACTIONS::drawArc( TOOL_ACTION_ARGS()
         .Flags( AF_ACTIVATE )
         .Parameter( SHAPE_T::ARC ) );
 
+TOOL_ACTION SCH_ACTIONS::drawArcCenter( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcCenter" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Center, Start, End" ) )
+        .Tooltip( _( "Draw arcs by clicking the center, the start point, then the end point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_center )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::CENTER_START_END ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcStartEndMid( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcStartEndMid" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, End, Midpoint" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, the end point, then a point on the arc" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_end_mid )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_END_MID ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcStartEndCenter( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcStartEndCenter" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, End, Center" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, the end point, then the center" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_end_center )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_END_CENTER ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcTangent( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcTangent" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Tangent" ) )
+        .Tooltip( _( "Draw arcs tangent to the previous arc or to the line or arc ending at the start point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_tangent )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::TANGENT ) );
+
+TOOL_ACTION SCH_ACTIONS::drawArcStartDirEnd( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.drawArcStartDirEnd" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Draw Arc: Start, Direction, End" ) )
+        .Tooltip( _( "Draw arcs by clicking the start point, a point giving the start direction, then the end point" ) )
+        .ToolbarState( TOOLBAR_STATE::TOGGLE )
+        .Icon( BITMAPS::add_arc_start_dir_end )
+        .Flags( AF_ACTIVATE )
+        .Parameter( ARC_DRAW_MODE::START_DIR_END ) );
+
+const TOOL_ACTION& SCH_ACTIONS::DrawArcForMode( ARC_DRAW_MODE aMode )
+{
+    switch( aMode )
+    {
+    case ARC_DRAW_MODE::CENTER_START_END: return drawArcCenter;
+    case ARC_DRAW_MODE::START_END_MID:    return drawArcStartEndMid;
+    case ARC_DRAW_MODE::START_END_CENTER: return drawArcStartEndCenter;
+    case ARC_DRAW_MODE::TANGENT:          return drawArcTangent;
+    case ARC_DRAW_MODE::START_DIR_END:    return drawArcStartDirEnd;
+    }
+
+    return drawArcCenter;
+}
+
+
 TOOL_ACTION SCH_ACTIONS::drawBezier( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveDrawing.drawBezier" )
         .Scope( AS_GLOBAL )
@@ -786,6 +867,13 @@ TOOL_ACTION SCH_ACTIONS::placeImage( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::image )
         .Flags( AF_ACTIVATE )
         .Parameter<SCH_BITMAP*>( nullptr ) );
+
+TOOL_ACTION SCH_ACTIONS::convertImageToOutlines( TOOL_ACTION_ARGS()
+        .Name( "eeschema.InteractiveDrawing.convertImageToOutlines" )
+        .Scope( AS_GLOBAL )
+        .FriendlyName( _( "Convert to Outlines..." ) )
+        .Tooltip( _( "Trace the image into schematic graphics" ) )
+        .Icon( BITMAPS::image ) );
 
 TOOL_ACTION SCH_ACTIONS::drawRuleArea( TOOL_ACTION_ARGS()
         .Name( "eeschema.InteractiveDrawing.drawRuleArea" )
@@ -1257,7 +1345,7 @@ TOOL_ACTION SCH_ACTIONS::editSymbolLibraryLinks( TOOL_ACTION_ARGS()
         .Scope( AS_GLOBAL )
         .FriendlyName( _( "Bulk Edit Symbol Library Links..." ) )
         .Tooltip( _( "Edit a table of links between schematic and library symbols" ) )
-        .Icon( BITMAPS::edit_cmp_symb_links ) );
+        .Icon( BITMAPS::link ) );
 
 TOOL_ACTION SCH_ACTIONS::assignFootprints( TOOL_ACTION_ARGS()
         .Name( "eeschema.EditorControl.assignFootprints" )

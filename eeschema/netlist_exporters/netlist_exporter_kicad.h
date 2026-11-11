@@ -33,8 +33,8 @@ class OUTPUTFORMATTER;
 class NETLIST_EXPORTER_KICAD : public NETLIST_EXPORTER_XML
 {
 public:
-    NETLIST_EXPORTER_KICAD( SCHEMATIC* aSchematic ) :
-            NETLIST_EXPORTER_XML( aSchematic )
+    NETLIST_EXPORTER_KICAD( SCHEMATIC* aSchematic, KIWAY* aKiway ) :
+            NETLIST_EXPORTER_XML( aSchematic, aKiway )
     {}
 
     /**
@@ -43,7 +43,7 @@ public:
      * Generate the KiCad netlist format supported by Pcbnew. It is basically the XML netlist
      * just formatted slightly different.
      */
-    bool WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
+    bool writeNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
                        REPORTER& aReporter ) override;
 
     /**

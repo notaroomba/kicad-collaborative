@@ -112,7 +112,6 @@ public:
         case SCH_BITMAP_T:          return new SCH_BITMAP();
         case SCH_TEXT_T:            return new SCH_TEXT( VECTOR2I( 0, 0 ), "test text" );
         case SCH_TEXTBOX_T:         return new SCH_TEXTBOX( LAYER_NOTES, 0, FILL_T::NO_FILL, "test textbox" );
-        case SCH_TABLECELL_T:       return new SCH_TABLECELL();
 
         case SCH_TABLE_T:
         {
@@ -279,6 +278,31 @@ BOOST_AUTO_TEST_CASE( Rotate )
                             CompareItems( item.get(), aOriginalItem );
                         } );
             }
+        }
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( RotateTextRoundTrip )
+{
+    const VECTOR2I textPos( 1000, 2000 );
+    const VECTOR2I ref( 5000, 7000 );
+
+    for( GR_TEXT_H_ALIGN_T hJustify : { GR_TEXT_H_ALIGN_LEFT, GR_TEXT_H_ALIGN_RIGHT } )
+    {
+        BOOST_TEST_CONTEXT( "H justify: " << static_cast<int>( hJustify ) )
+        {
+            SCH_TEXT text( textPos, "test text" );
+            text.SetTextAngle( ANGLE_HORIZONTAL );
+            text.SetHorizJustify( hJustify );
+
+            // A clockwise rotation followed by a counter-clockwise one is an identity
+            text.Rotate( ref, false );
+            text.Rotate( ref, true );
+
+            BOOST_CHECK( text.GetTextAngle() == ANGLE_HORIZONTAL );
+            BOOST_CHECK_EQUAL( static_cast<int>( text.GetHorizJustify() ), static_cast<int>( hJustify ) );
+            BOOST_CHECK_EQUAL( text.GetTextPos(), textPos );
         }
     }
 }

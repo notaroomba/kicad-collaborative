@@ -26,6 +26,7 @@
 #include <kiway.h>
 #include <kiway_player.h>
 #include <kiway_mail.h>
+#include <paths.h>
 #include <pgm_base.h>
 #include <config.h>
 #include <id.h>
@@ -118,8 +119,7 @@ const wxString KIWAY::dso_search_path( FACE_T aFaceId )
     case FACE_CVPCB:            name = KIFACE_PREFIX "cvpcb";               break;
     case FACE_GERBVIEW:         name = KIFACE_PREFIX "gerbview";            break;
     case FACE_PL_EDITOR:        name = KIFACE_PREFIX "pl_editor";           break;
-    case FACE_PCB_CALCULATOR:   name = KIFACE_PREFIX "pcb_calculator";      break;
-    case FACE_BMP2CMP:          name = KIFACE_PREFIX "bitmap2component";    break;
+    case FACE_PCB_CALCULATOR: name = KIFACE_PREFIX "pcb_calculator"; break;
 
     default:
         wxASSERT_MSG( 0, wxT( "caller has a bug, passed a bad aFaceId" ) );
@@ -157,7 +157,7 @@ const wxString KIWAY::dso_search_path( FACE_T aFaceId )
     // To speed up development, it's sometimes nice to run kicad from inside
     // the build path.  In that case, each program will be in a subdirectory.
     // To find the DSOs, we need to go up one directory and then enter a subdirectory.
-    if( wxGetEnv( wxT( "KICAD_RUN_FROM_BUILD_DIR" ), nullptr ) )
+    if( PATHS::RunningFromBuildDir() )
     {
 #ifdef __WXMAC__
         // On Mac, all of the kifaces are placed in the kicad.app bundle, even though the individual
@@ -185,8 +185,15 @@ const wxString KIWAY::dso_search_path( FACE_T aFaceId )
             default:             dirName = name + 1;              break;
         }
 
-        fn.RemoveLastDir();
+        const wxString& buildRoot = PATHS::GetBuildRoot();
+
+        if( !buildRoot.IsEmpty() )
+            fn.AssignDir( buildRoot );
+        else
+            fn.RemoveLastDir();
+
         fn.AppendDir( dirName );
+        fn.SetName( name );
 #endif
     }
 
@@ -224,13 +231,22 @@ KIFACE* KIWAY::KiFACE( FACE_T aFaceId, bool doLoad )
         wxString dname = dso_search_path( aFaceId );
 
         // Insert DLL search path for kicad_3dsg from build dir
-        if( wxGetEnv( wxT( "KICAD_RUN_FROM_BUILD_DIR" ), nullptr ) )
+        const wxString& buildRoot = PATHS::GetBuildRoot();
+
+        if( PATHS::RunningFromBuildDir() )
         {
-            wxFileName myPath = wxStandardPaths::Get().GetExecutablePath();
+            wxFileName myPath;
+
+            if( !buildRoot.IsEmpty() )
+                myPath.AssignDir( buildRoot );
+            else
+                myPath.Assign( wxStandardPaths::Get().GetExecutablePath() );
 
             if( !myPath.GetPath().EndsWith( wxT( "pcbnew" ) ) )
             {
-                myPath.RemoveLastDir();
+                if( buildRoot.IsEmpty() )
+                    myPath.RemoveLastDir();
+
                 myPath.AppendDir( wxT( "pcbnew" ) );
                 KIPLATFORM::APP::AddDynamicLibrarySearchPath( myPath.GetPath() );
             }
@@ -357,9 +373,6 @@ KIWAY::FACE_T KIWAY::KifaceType( FRAME_T aFrameType )
 
     case FRAME_CALC:
         return FACE_PCB_CALCULATOR;
-
-    case FRAME_BM2CMP:
-        return FACE_BMP2CMP;
 
     default:
         return FACE_T( -1 );
@@ -770,8 +783,8 @@ bool KIWAY::ProcessApiOpenDocument( KIWAY::FACE_T aFace, const KIFACE::DOCUMENT_
 }
 
 
-bool KIWAY::ProcessApiCloseDocument( KIWAY::FACE_T aFace, const wxString& aPath, KICAD_API_SERVER* aServer,
-                                     wxString* aError )
+bool KIWAY::ProcessApiCloseDocument( KIWAY::FACE_T aFace, const KIFACE::DOCUMENT_SPEC& aSpec,
+                                     KICAD_API_SERVER* aServer, wxString* aError )
 {
     KIFACE* kiface = KiFACE( aFace );
 
@@ -783,7 +796,7 @@ bool KIWAY::ProcessApiCloseDocument( KIWAY::FACE_T aFace, const wxString& aPath,
         return false;
     }
 
-    return kiface->HandleApiCloseDocument( aPath, aServer, aError );
+    return kiface->HandleApiCloseDocument( aSpec, aServer, aError );
 }
 
 

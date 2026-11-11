@@ -37,11 +37,13 @@
  * doesn't allow that method.
  *
  * @param aItem generic T object.
+ * @param aLayer is the layer ID of \a aObject.
  * @return a SHAPE* object equivalent to object.
  */
 template <class T>
 static const SHAPE* shapeFunctor( T aItem, int aLayer )
 {
+    wxCHECK( aItem, nullptr );
     return aItem->Shape( aLayer );
 }
 
@@ -52,21 +54,26 @@ static const SHAPE* shapeFunctor( T aItem, int aLayer )
  * doesn't allow that method.
  *
  * @param aObject is a generic T object.
+ * @param aLayer is the layer ID of \a aObject.
  * @return a BOX2I object containing the bounding box of the T object.
  */
 template <class T>
 BOX2I boundingBox( T aObject, int aLayer )
 {
-    BOX2I bbox = shapeFunctor( aObject, aLayer )->BBox();
+    const SHAPE* shape = shapeFunctor( aObject, aLayer );
 
-    return bbox;
+    BOX2I bBox;
+    wxCHECK( shape, bBox );
+
+    bBox = shape->BBox();
+    return bBox;
 }
 
 /**
  * Used by #SHAPE_INDEX to implement Accept().
  *
  * By default relies on V::operation() redefinition, should be specialized if V class
- * doesn't have its () operation defined to accept T objects.
+ * doesn't have its () operation defined to accept T objects.;
  *
  * @param aObject is a generic T object.
  * @param aVisitor is a visitor object.
@@ -92,7 +99,11 @@ void acceptVisitor( T aObject, V aVisitor )
 template <class T, class U>
 bool collide( T aObject, U aAnotherObject, int aLayer, int aMinDistance )
 {
-    return shapeFunctor( aObject, aLayer )->Collide( aAnotherObject, aMinDistance );
+    const SHAPE* shape = shapeFunctor( aObject, aLayer );
+
+    wxCHECK( shape, false );
+
+    return shape->Collide( aAnotherObject, aMinDistance );
 }
 
 template <class T, class V>

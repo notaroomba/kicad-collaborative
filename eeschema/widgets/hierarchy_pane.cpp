@@ -19,10 +19,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <sch_render_settings.h>
 #include <bitmaps.h>
 #include <sch_edit_frame.h>
 #include <sch_commit.h>
-#include <connection_graph.h>
+#include <connectivity/conn_navigation.h>
 #include <schematic.h>
 #include <gal/color4d.h>
 #include <layer_ids.h>
@@ -129,7 +130,7 @@ void HIERARCHY_PANE::buildHierarchyTree( SCH_SHEET_PATH* aList, const wxTreeItem
         SCH_SHEET* sheet = static_cast<SCH_SHEET*>( aItem );
         aList->push_back( sheet );
 
-        wxString     sheetNameBase = sheet->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
+        wxString sheetNameBase = sheet->GetField( FIELD_T::SHEET_NAME )->GetShownText( FOR_GUI );
 
         // If the sheet name is empty, use the filename (without extension) as fallback
         if( sheetNameBase.IsEmpty() )
@@ -311,7 +312,7 @@ void HIERARCHY_PANE::UpdateHierarchyTree( bool aClear )
             m_list.clear();
             m_list.push_back( sheet );
 
-            wxString sheetNameBase = sheet->GetShownName( false );
+            wxString sheetNameBase = sheet->GetShownName( FOR_GUI );
 
             // If the sheet name is empty, use the filename (without extension) as fallback
             if( sheetNameBase.IsEmpty() && sheet->GetScreen() )
@@ -411,9 +412,8 @@ void HIERARCHY_PANE::UpdateLabelsHierarchyTree()
                     return;
 
                 SCH_SHEET* sheet = itemData->m_SheetPath.Last();
-                wxString   sheetNameBase = sheet->GetField( FIELD_T::SHEET_NAME )->GetShownText( false );
-                wxString   sheetName = formatPageString( sheetNameBase,
-                                                         itemData->m_SheetPath.GetPageNumber() );
+                wxString   sheetNameBase = sheet->GetField( FIELD_T::SHEET_NAME )->GetShownText( FOR_GUI );
+                wxString   sheetName = formatPageString( sheetNameBase, itemData->m_SheetPath.GetPageNumber() );
 
                 if( m_tree->GetItemText( id ) != sheetName )
                     m_tree->SetItemText( id, sheetName );
@@ -691,7 +691,7 @@ void HIERARCHY_PANE::onRightClick( wxTreeItemId aItem )
                 }
             }
 
-            commit.Push( wxS( "Change sheet page number." ) );
+            commit.Push( _( "Change Page Number" ) );
 
             UpdateLabelsHierarchyTree();
         }
@@ -727,55 +727,70 @@ void HIERARCHY_PANE::onTreeEditFinished( wxTreeEvent& event )
 
     if( data && data->m_SheetPath.Last() )
     {
-        if( !newName.IsEmpty() )
+        // The event needs to be rejected otherwise the SetItemText call below
+        // will be ineffective (the treeview item will hold the editor's content)
+        event.Veto();
+
+        // The editor holds only the page name as a text, while normally
+        // the tree items displaying it suffixed with the page number
+        if( !newName.IsEmpty() && data->m_SheetPath.Last()->GetName() != newName )
         {
-            // The editor holds only the page name as a text, while normally
-            // the tree items displaying it suffixed with the page number
-            if( data->m_SheetPath.Last()->GetName() != newName )
-            {
-                SCH_COMMIT commit( m_frame );
-                SCH_SCREEN* modifyScreen = nullptr;
+            // The commit rebuilds the tree, which cannot happen inside this edit event; resolve the
+            // path again later since the schematic may be replaced first
+            CallAfter( [this, path = data->m_SheetPath.Path(), newName]()
+                       {
+                           if( m_frame->IsClosing() )
+                               return;
 
-                // For top-level sheets (size == 1), modify on the virtual root's screen
-                // For sub-sheets, modify on the parent sheet's screen
-                if( data->m_SheetPath.size() == 1 )
-                {
-                    modifyScreen = m_frame->Schematic().Root().GetScreen();
-                }
-                else
-                {
-                    const SCH_SHEET* parentSheet = data->m_SheetPath.GetSheet( data->m_SheetPath.size() - 2 );
-                    if( parentSheet )
-                        modifyScreen = parentSheet->GetScreen();
-                }
+                           std::optional<SCH_SHEET_PATH> current =
+                                   m_frame->Schematic().Hierarchy().GetSheetPathByKIIDPath( path );
 
-                if( modifyScreen )
-                {
-                    commit.Modify( data->m_SheetPath.Last()->GetField( FIELD_T::SHEET_NAME ),
-                                   modifyScreen );
-
-                    data->m_SheetPath.Last()->SetName( newName );
-
-                    renameIdenticalSheets( data->m_SheetPath, newName, &commit );
-
-                    if( !commit.Empty() )
-                        commit.Push( _( "Renaming sheet" ) );
-
-                    if( data->m_SheetPath == m_frame->GetCurrentSheet() )
-                    {
-                        m_frame->OnPageSettingsChange();
-                    }
-                }
-            }
+                           if( current )
+                               renameSheet( *current, newName );
+                       } );
+            return;
         }
 
         m_tree->SetItemText( event.GetItem(), formatPageString( data->m_SheetPath.Last()->GetName(),
                                                                 data->m_SheetPath.GetPageNumber() ) );
         setIdenticalSheetsHighlighted( data->m_SheetPath, false );
-        // The event needs to be rejected otherwise the SetItemText call above
-        // will be ineffective (the treeview item will hold the editor's content)
-        event.Veto();
     }
+}
+
+
+void HIERARCHY_PANE::renameSheet( const SCH_SHEET_PATH& aPath, const wxString& aNewName )
+{
+    SCH_COMMIT  commit( m_frame );
+    SCH_SCREEN* modifyScreen = nullptr;
+
+    // For top-level sheets (size == 1), modify on the virtual root's screen
+    // For sub-sheets, modify on the parent sheet's screen
+    if( aPath.size() == 1 )
+    {
+        modifyScreen = m_frame->Schematic().Root().GetScreen();
+    }
+    else
+    {
+        const SCH_SHEET* parentSheet = aPath.GetSheet( aPath.size() - 2 );
+
+        if( parentSheet )
+            modifyScreen = parentSheet->GetScreen();
+    }
+
+    if( !modifyScreen )
+        return;
+
+    commit.Modify( aPath.Last()->GetField( FIELD_T::SHEET_NAME ), modifyScreen );
+
+    aPath.Last()->SetName( aNewName );
+
+    renameIdenticalSheets( aPath, aNewName, &commit );
+
+    if( !commit.Empty() )
+        commit.Push( _( "Rename Sheet" ) );
+
+    if( aPath == m_frame->GetCurrentSheet() )
+        m_frame->OnPageSettingsChange();
 }
 
 
@@ -865,16 +880,8 @@ void HIERARCHY_PANE::UpdateNetHighlight( const wxString& aNetName )
 
     if( !aNetName.IsEmpty() && m_frame->Schematic().IsValid() )
     {
-        CONNECTION_GRAPH* graph = m_frame->Schematic().ConnectionGraph();
-
-        if( graph )
-        {
-            for( const CONNECTION_SUBGRAPH* sg : graph->GetAllSubgraphs( aNetName ) )
-            {
-                if( sg && sg->GetSheet().Last() )
-                    sheetsWithNet.insert( sg->GetSheet().Path().AsString() );
-            }
-        }
+        for( const KIID_PATH& path : SCH_CONNECTIVITY::NAVIGATION_QUERY( m_frame->Schematic() ).NetSheets( aNetName ) )
+            sheetsWithNet.insert( path.AsString() );
     }
 
     std::function<void( const wxTreeItemId& )> recurse =

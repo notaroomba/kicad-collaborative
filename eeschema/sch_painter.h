@@ -25,6 +25,7 @@
 
 #include <sch_render_settings.h>
 #include <sch_symbol.h>
+#include <set>
 
 #include <gal/painter.h>
 
@@ -123,6 +124,11 @@ private:
     bool isUnitAndConversionShown( const SCH_ITEM* aItem ) const;
 
     float getShadowWidth( bool aForHighlight ) const;
+
+    /**
+     * Whether a text item is drawn as bitmap text at this zoom, see SCH_ITEM::RenderAsBitmap().
+     */
+    bool renderAsBitmap( const SCH_ITEM* aItem ) const;
     COLOR4D getRenderColor( const SCH_ITEM* aItem, int aLayer, bool aDrawingShadows,
                             bool aDimmed = false, bool aIgnoreNets = false ) const;
     KIFONT::FONT* getFont( const EDA_TEXT* aText ) const;
@@ -145,6 +151,9 @@ public:
 private:
     SCH_RENDER_SETTINGS m_schSettings;
     SCHEMATIC*          m_schematic;
+
+    /// Temporary pins standing in for the highlighted chain's terminals during a symbol draw.
+    std::set<const SCH_PIN*> m_netChainTerminalPins;
 };
 
 }; // namespace KIGFX

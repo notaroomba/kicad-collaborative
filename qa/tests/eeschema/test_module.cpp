@@ -23,6 +23,17 @@
  * Main file for the Eeschema tests to be compiled
  */
 #include <boost/test/unit_test.hpp>
+
+#include <wx/app.h>
+#include <wx/init.h>
+
+#include <mock_pgm_base.h>
+#include <qa_utils/error_handlers.h>
+#include <qa_utils/file_utils.h>
+#include <qa_utils/mock_utils.h>
+#include <qa_utils/wx_utils/wx_assert.h>
+#include <qa_utils/wx_utils/wx_log.h>
+
 #include <kiplatform/app.h>
 
 #include <pgm_base.h>
@@ -30,11 +41,6 @@
 #include <settings/kicad_settings.h>
 #include <eeschema_settings.h>
 #include <symbol_editor/symbol_editor_settings.h>
-#include <wx/app.h>
-#include <wx/init.h>
-#include <mock_pgm_base.h>
-
-#include <qa_utils/wx_utils/wx_assert.h>
 
 
 bool init_unit_test()
@@ -50,6 +56,7 @@ bool init_unit_test()
                             boost::unit_test::framework::master_test_suite().argv );
 
     wxSetAssertHandler( &KI_TEST::wxAssertThrower );
+    delete wxLog::SetActiveTarget( new KI_TEST::QUIET_LOG );
 
     Pgm().InitPgm( true, true );
     Pgm().GetSettingsManager().RegisterSettings( new KICAD_SETTINGS, false );
@@ -63,6 +70,8 @@ bool init_unit_test()
 
 int main( int argc, char* argv[] )
 {
+    KI_TEST::SCOPED_PROCESS_TEMP_DIR scopedTempDir( "kicad_qa_eeschema" );
+
     int ret = boost::unit_test::unit_test_main( &init_unit_test, argc, argv );
 
     Pgm().Destroy();

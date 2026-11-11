@@ -17,12 +17,13 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
- 
+
 
 #ifndef SYMBOL_LIBRARY_MANAGER_ADAPTER_H
 #define SYMBOL_LIBRARY_MANAGER_ADAPTER_H
 
 #include <future>
+#include <memory>
 #include <optional>
 #include <lib_id.h>
 #include <core/leak_at_exit.h>
@@ -78,9 +79,10 @@ public:
 
     std::vector<SUB_LIBRARY> GetSubLibraries( const wxString& aNickname ) const;
 
-    bool SupportsConfigurationDialog( const wxString& aNickname ) const override;
+    bool SupportsConfigurationDialog( const LIBRARY_TABLE_ROW& aRow ) const override;
 
-    int ShowConfigurationDialog( const wxString& aNickname, wxWindow* aParent ) const override;
+    int ShowConfigurationDialog( const LIBRARY_TABLE_ROW& aRow, LIBRARY_TABLE_SCOPE aScope,
+                                 wxWindow* aParent ) override;
 
     enum class SYMBOL_TYPE
     {
@@ -93,12 +95,16 @@ public:
 
     std::vector<wxString> GetSymbolNames( const wxString& aNickname,
                                           SYMBOL_TYPE aType = SYMBOL_TYPE::ALL_SYMBOLS );
+
     /**
      * Load a #LIB_SYMBOL having @a aName from the library given by @a aNickname.
      *
-     * @param aNickname is a locator for the "library", it is a "name" in #LIB_TABLE_ROW
+     * @param aNickname is a locator for the "library", it is a "name" in #LIBRARY_TABLE_ROW
      * @param aName is the name of the #LIB_SYMBOL to load.
-     * @return the symbol alias if found or NULL if not found.
+     *
+     * @return the symbol alias if found or NULL if not found. If not null, the pointer
+     *         is borrowed from the library and should not be deleted by the caller.
+     *
      * @throw IO_ERROR if the library cannot be found or read.  No exception
      *                 is thrown in the case where \a aNickname cannot be found.
      */
@@ -134,7 +140,7 @@ public:
      * @return SAVE_T - SAVE_OK or SAVE_SKIPPED.  If error saving, then IO_ERROR is thrown.
      * @throw IO_ERROR if there is a problem saving the symbol.
      */
-    SAVE_T SaveSymbol( const wxString& aNickname, const LIB_SYMBOL* aSymbol,
+    SAVE_T SaveSymbol( const wxString& aNickname, std::unique_ptr<LIB_SYMBOL> aSymbol,
                        bool aOverwrite = true );
 
     /**
@@ -172,10 +178,25 @@ public:
     std::optional<int> GetLibraryModifyHash( const wxString& aNickname ) const;
 
 protected:
-    std::map<wxString, LIB_DATA>& globalLibs() override { return GlobalLibraries.Get(); }
-    std::map<wxString, LIB_DATA>& globalLibs() const override { return GlobalLibraries.Get(); }
-    std::shared_mutex& globalLibsMutex() override { return GlobalLibraryMutex.Get(); }
-    std::shared_mutex& globalLibsMutex() const override { return GlobalLibraryMutex.Get(); }
+    std::map<wxString, LIB_DATA>& globalLibs() override
+    {
+        return m_manager.IsProjectScoped() ? m_scopedGlobalLibraries : GlobalLibraries.Get();
+    }
+
+    std::map<wxString, LIB_DATA>& globalLibs() const override
+    {
+        return m_manager.IsProjectScoped() ? m_scopedGlobalLibraries : GlobalLibraries.Get();
+    }
+
+    std::shared_mutex& globalLibsMutex() override
+    {
+        return m_manager.IsProjectScoped() ? m_scopedGlobalLibraryMutex : GlobalLibraryMutex.Get();
+    }
+
+    std::shared_mutex& globalLibsMutex() const override
+    {
+        return m_manager.IsProjectScoped() ? m_scopedGlobalLibraryMutex : GlobalLibraryMutex.Get();
+    }
 
     void enumerateLibrary( LIB_DATA* aLib, const wxString& aUri ) override;
 
@@ -185,6 +206,10 @@ protected:
 
 private:
     static SCH_IO* schplugin( const LIB_DATA* aRow );
+
+    // Global rows can contain project variables, so passive loads cannot share their plugins.
+    mutable std::map<wxString, LIB_DATA> m_scopedGlobalLibraries;
+    mutable std::shared_mutex m_scopedGlobalLibraryMutex;
 
     static LEAK_AT_EXIT<std::map<wxString, LIB_DATA>> GlobalLibraries;
 

@@ -49,13 +49,13 @@ enum class PCBEXPR_NAV_STEP
 enum class PCBEXPR_PROPERTY_KIND
 {
     UNSUPPORTED,
-    INT,
+    INT_KIND,
     OPTIONAL_INT,
     UNSIGNED,
     LONG_LONG,
     DOUBLE,
     OPTIONAL_DOUBLE,
-    BOOL,
+    BOOL_KIND,
     STRING,
     ENUM,
     ANGLE,
@@ -74,10 +74,12 @@ public:
 
     bool HasGeometryDependentFunctions() const { return m_hasGeometryDependentFunctions; }
     bool RequiresPairItems() const { return m_requiresPairItems; }
+    bool ReferencesItemB() const { return m_referencesItemB; }
 
 private:
     bool m_hasGeometryDependentFunctions = false;
     bool m_requiresPairItems = false;
+    bool m_referencesItemB = false;
 };
 
 
@@ -282,12 +284,22 @@ private:
 class PCBEXPR_UNIT_RESOLVER : public LIBEVAL::UNIT_RESOLVER
 {
 public:
+    PCBEXPR_UNIT_RESOLVER( bool aImpliedDegrees = false ) :
+            m_impliedDegrees( aImpliedDegrees )
+    { }
+
     const std::vector<wxString>& GetSupportedUnits() const override;
     const std::vector<EDA_UNITS>& GetSupportedUnitsTypes() const override;
 
     wxString GetSupportedUnitsMessage() const override;
 
     double Convert( const wxString& aString, int unitId ) const override;
+
+private:
+    // This little hack is required because the first several versions which supported
+    // track angle constraints required their values to be specified with no units --
+    // though they were interpreted as degrees.
+    bool m_impliedDegrees;
 };
 
 
@@ -330,9 +342,9 @@ public:
     const LIBEVAL::ERROR_STATUS& GetError() const { return m_errorStatus; }
 
 private:
-    int  m_result;
-    double    m_resultAsDouble;
-    EDA_UNITS m_units;
+    int                   m_result;
+    double                m_resultAsDouble;
+    EDA_UNITS             m_units;
 
     PCBEXPR_COMPILER      m_compiler;
     PCBEXPR_UCODE         m_ucode;

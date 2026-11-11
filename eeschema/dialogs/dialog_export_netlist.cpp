@@ -142,9 +142,10 @@ public:
      *
      * Used in Netlist format dialog box creation.
      *
-     * @param parent is the wxNotebook parent.
-     * @param title is the title of the notebook page.
-     * @param id_NetType is the netlist ID type.
+     * @param aParent is the wxNotebook parent.
+     * @param aTitle is the title of the notebook page.
+     * @param aIdNetType is the netlist ID type.
+     * @param aCustom
      */
     EXPORT_NETLIST_PAGE( wxNotebook* aParent, const wxString& aTitle, NETLIST_TYPE_ID aIdNetType, bool aCustom );
     ~EXPORT_NETLIST_PAGE() = default;
@@ -333,8 +334,13 @@ DIALOG_EXPORT_NETLIST::DIALOG_EXPORT_NETLIST( SCH_EDIT_FRAME* aEditFrame, wxWind
 
     // Now all widgets have the size fixed, call FinishDialogSettings
     finishDialogSettings();
+}
 
-    updateGeneratorButtons();
+
+DIALOG_EXPORT_NETLIST::~DIALOG_EXPORT_NETLIST()
+{
+    if( !m_job )
+        WriteCurrentNetlistSetup();
 }
 
 
@@ -451,6 +457,13 @@ EXPORT_NETLIST_PAGE* DIALOG_EXPORT_NETLIST::AddOneCustomPage( const wxString& aT
 void DIALOG_EXPORT_NETLIST::OnNetlistTypeSelection( wxNotebookEvent& event )
 {
     updateGeneratorButtons();
+}
+
+
+bool DIALOG_EXPORT_NETLIST::TransferDataToWindow()
+{
+    updateGeneratorButtons();
+    return true;
 }
 
 
@@ -714,7 +727,7 @@ bool DIALOG_EXPORT_NETLIST::TransferDataFromWindow()
 }
 
 
-bool DIALOG_EXPORT_NETLIST::FilenamePrms( NETLIST_TYPE_ID aType, wxString * aExt, wxString * aWildCard )
+bool DIALOG_EXPORT_NETLIST::FilenamePrms( NETLIST_TYPE_ID aType, wxString* aExt, wxString* aWildCard )
 {
     wxString fileExt;
     wxString fileWildcard;
@@ -725,6 +738,11 @@ bool DIALOG_EXPORT_NETLIST::FilenamePrms( NETLIST_TYPE_ID aType, wxString * aExt
     case NET_TYPE_SPICE:
         fileExt = FILEEXT::SpiceFileExtension;
         fileWildcard = FILEEXT::SpiceNetlistFileWildcard();
+        break;
+
+    case NET_TYPE_SPICE_MODEL:
+        fileExt = FILEEXT::SpiceSubcircuitFileExtension;
+        fileWildcard = FILEEXT::SpiceSubcircuitFileWildcard();
         break;
 
     case NET_TYPE_CADSTAR:
@@ -751,7 +769,6 @@ bool DIALOG_EXPORT_NETLIST::FilenamePrms( NETLIST_TYPE_ID aType, wxString * aExt
         fileExt = FILEEXT::PADSNetlistFileExtension;
         fileWildcard = FILEEXT::PADSNetlistFileWildcard();
         break;
-
 
     default:    // custom, NET_TYPE_CUSTOM1 and greater
         fileWildcard = FILEEXT::AllFilesWildcard();
@@ -783,7 +800,7 @@ void DIALOG_EXPORT_NETLIST::WriteCurrentNetlistSetup()
             wxString title = currPage->m_TitleStringCtrl->GetValue();
             wxString command = currPage->m_CommandStringCtrl->GetValue();
 
-            if( title.IsEmpty() || command.IsEmpty() )
+            if( title.IsEmpty() )
                 continue;
 
             cfg->m_NetlistPanel.plugins.emplace_back( title, wxEmptyString );
@@ -819,9 +836,12 @@ void DIALOG_EXPORT_NETLIST::OnAddGenerator( wxCommandEvent& event )
     wxString title = dlg.GetGeneratorTitle();
     wxString cmd = dlg.GetGeneratorTCommandLine();
 
-    // Verify it does not exists
+    // Verify it does not exist
     for( int ii = PANELCUSTOMBASE; ii < PANELCUSTOMBASE + CUSTOMPANEL_COUNTMAX; ++ii )
     {
+        // Note that we do not check for collisions with m_TitleStringCtrl as that's just
+        // used in the Export File dialog, and is not technically the name of the generator.
+
         if( m_PanelNetType[ii] && m_PanelNetType[ii]->GetPageNetFmtName() == title )
         {
             wxMessageBox( _( "This plugin already exists." ) );

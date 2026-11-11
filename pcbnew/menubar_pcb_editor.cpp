@@ -251,6 +251,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     editMenu->Add( PCB_ACTIONS::trimGraphic );
     editMenu->Add( PCB_ACTIONS::editTracksAndVias );
     editMenu->Add( PCB_ACTIONS::editTextAndGraphics );
+    editMenu->Add( PCB_ACTIONS::mirrorInteractive );
     editMenu->Add( PCB_ACTIONS::editTeardrops );
     editMenu->Add( PCB_ACTIONS::changeFootprints );
     editMenu->Add( PCB_ACTIONS::swapLayers );
@@ -277,6 +278,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     showHidePanels->Add( PCB_ACTIONS::showLayersManager,          ACTION_MENU::CHECK );
     showHidePanels->Add( PCB_ACTIONS::showNetInspector,           ACTION_MENU::CHECK );
     showHidePanels->Add( PCB_ACTIONS::showConstraintsPanel,       ACTION_MENU::CHECK );
+    showHidePanels->Add( ACTIONS::showGitCommitPane, ACTION_MENU::CHECK );
 
     if( ADVANCED_CFG::GetCfg().m_EnablePcbDesignBlocks )
         showHidePanels->Add( PCB_ACTIONS::showDesignBlockPanel, ACTION_MENU::CHECK, _( "Design Blocks" ) );
@@ -405,6 +407,8 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     placeMenu->AppendSeparator();
     placeMenu->Add( PCB_ACTIONS::placeCharacteristics );
     placeMenu->Add( PCB_ACTIONS::placeStackup );
+    placeMenu->Add( PCB_ACTIONS::placeDrillChart );
+    placeMenu->Add( PCB_ACTIONS::placeDrillMap );
 
     placeMenu->AppendSeparator();
     placeMenu->Add( PCB_ACTIONS::drillOrigin );
@@ -412,7 +416,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     placeMenu->Add( ACTIONS::gridSetOrigin );
     placeMenu->Add( ACTIONS::gridResetOrigin );
     placeMenu->AppendSeparator();
-    placeMenu->Add( PCB_ACTIONS::placeGridItem );
+    placeMenu->Add( PCB_ACTIONS::placeSubGrid );
     placeMenu->AppendSeparator();
     ACTION_MENU* autoplaceSubmenu = new ACTION_MENU( false, selTool );
     autoplaceSubmenu->SetTitle( _( "Auto-Place Footprints" ) );
@@ -432,6 +436,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     routeMenu->AppendSeparator();
     routeMenu->Add( PCB_ACTIONS::routeSingleTrack );
     routeMenu->Add( PCB_ACTIONS::routeDiffPair );
+    routeMenu->Add( PCB_ACTIONS::routerSpreadTracks );
 
     routeMenu->AppendSeparator();
     routeMenu->Add( PCB_ACTIONS::tuneSingleTrack );
@@ -476,6 +481,7 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( PCB_ACTIONS::drcRuleEditor );
+    toolsMenu->Add( PCB_ACTIONS::showDrillGroups );
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( ACTIONS::showFootprintEditor );
@@ -512,7 +518,11 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     multichannelSubmenu->SetTitle( _( "Multi-Channel" ) );
     multichannelSubmenu->SetIcon( BITMAPS::mode_module );
     multichannelSubmenu->Add( PCB_ACTIONS::generatePlacementRuleAreas );
+    multichannelSubmenu->Add( PCB_ACTIONS::expandToMatchingTopology );
+    multichannelSubmenu->Add( PCB_ACTIONS::expandToLargestTopology );
     multichannelSubmenu->Add( PCB_ACTIONS::repeatLayout );
+    multichannelSubmenu->Add( PCB_ACTIONS::updateLinkedLayouts );
+    multichannelSubmenu->Add( PCB_ACTIONS::unlinkLayout );
 
     toolsMenu->Add( multichannelSubmenu );
 
@@ -520,8 +530,11 @@ void PCB_EDIT_FRAME::doReCreateMenuBar()
     submenuActionPlugins->SetTitle( _( "External Plugins" ) );
     submenuActionPlugins->SetIcon( BITMAPS::puzzle_piece );
 
+    if( Pgm().GetCommonSettings()->m_Api.enable_server && AddApiPluginMenuItems( submenuActionPlugins ) > 0 )
+        submenuActionPlugins->AppendSeparator();
+
     submenuActionPlugins->Add( ACTIONS::pluginsReload );
-    submenuActionPlugins->Add( PCB_ACTIONS::pluginsShowFolder );
+    submenuActionPlugins->Add( ACTIONS::pluginsShowFolder );
 
     toolsMenu->AppendSeparator();
     toolsMenu->Add( submenuActionPlugins );

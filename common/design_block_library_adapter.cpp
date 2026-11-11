@@ -44,6 +44,7 @@ DESIGN_BLOCK_LIBRARY_ADAPTER::DESIGN_BLOCK_LIBRARY_ADAPTER( LIBRARY_MANAGER& aMa
 
 DESIGN_BLOCK_LIBRARY_ADAPTER::~DESIGN_BLOCK_LIBRARY_ADAPTER()
 {
+    resetProjectCache( true );
     evictOwnedGlobalEntries();
 }
 
@@ -119,6 +120,7 @@ std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( LIB_DATA* aLib 
         dbplugin( aLib )->DesignBlockEnumerate( dummyList, getUri( aLib->row ), false, &options );
         wxLogTrace( traceLibraries, "DB: %s: library enumerated %zu items", aLib->row->Nickname(), dummyList.size() );
         aLib->status.load_status = LOAD_STATUS::LOADED;
+        aLib->status.error.reset();
     }
     catch( IO_ERROR& e )
     {
@@ -138,10 +140,8 @@ std::optional<LIB_STATUS> DESIGN_BLOCK_LIBRARY_ADAPTER::LoadOne( const wxString&
     if( result.has_value() )
         return LoadOne( *result );
 
-    return LIB_STATUS{
-        .load_status = LOAD_STATUS::LOAD_ERROR,
-        .error = LIBRARY_ERROR( { result.error() } )
-    };
+    return LIB_STATUS{ .load_status = LOAD_STATUS::LOAD_ERROR,
+                       .error = LIBRARY_ERROR( { result.error() } ) };
 }
 
 
@@ -280,6 +280,9 @@ DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::LoadDesignBlock( const wxString& aNi
     if( std::optional<const LIB_DATA*> maybeLib = fetchIfLoaded( aNickname ) )
     {
         const LIB_DATA* lib = *maybeLib;
+
+        std::lock_guard pluginGuard( pluginMutex( aNickname ) );
+
         std::map<std::string, UTF8> options = lib->row->GetOptionsMap();
 
         try
@@ -317,6 +320,9 @@ bool DESIGN_BLOCK_LIBRARY_ADAPTER::DesignBlockExists( const wxString& aNickname,
     if( std::optional<const LIB_DATA*> maybeLib = fetchIfLoaded( aNickname ) )
     {
         const LIB_DATA* lib = *maybeLib;
+
+        std::lock_guard pluginGuard( pluginMutex( aNickname ) );
+
         std::map<std::string, UTF8> options = lib->row->GetOptionsMap();
 
         return dbplugin( lib )->DesignBlockExists( getUri( lib->row ), aDesignBlockName, &options );
@@ -356,7 +362,7 @@ DESIGN_BLOCK_LIBRARY_ADAPTER::SAVE_T DESIGN_BLOCK_LIBRARY_ADAPTER::SaveDesignBlo
         dbplugin( lib )->DesignBlockSave( getUri( lib->row ), aDesignBlock, &options );
     }
 
-    return SAVE_OK;
+    return SAVE_SKIPPED;
 }
 
 
@@ -396,10 +402,8 @@ DESIGN_BLOCK* DESIGN_BLOCK_LIBRARY_ADAPTER::DesignBlockLoadWithOptionalNickname(
     // nickname is empty, sequentially search (alphabetically) all libs/nicks for first match:
     for( const wxString& library : GetLibraryNames() )
     {
-        // DesignBlockLoad() returns NULL on not found, does not throw exception
-        // unless there's an IO_ERROR.
-        if( DESIGN_BLOCK* ret = LoadDesignBlock( library, DesignBlockname, aKeepUUID ) )
-            return ret;
+        if( DesignBlockExists( library, DesignBlockname ) )
+            return LoadDesignBlock( library, DesignBlockname, aKeepUUID, aErrorMsg );
     }
 
     if( aErrorMsg )

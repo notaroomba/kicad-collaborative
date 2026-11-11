@@ -74,7 +74,7 @@ int DESIGN_BLOCK_CONTROL::PinLibrary( const TOOL_EVENT& aEvent )
 {
     LIB_TREE_NODE* current = getCurrentTreeNode();
 
-    if( current && !current->m_Pinned )
+    if( current && !current->m_Pinned && current->m_Type == LIB_TREE_NODE::TYPE::LIBRARY )
     {
         m_frame->Prj().PinLibrary( current->m_LibId.GetLibNickname(), PROJECT::LIB_TYPE_T::DESIGN_BLOCK_LIB );
         current->m_Pinned = true;
@@ -181,14 +181,6 @@ void DESIGN_BLOCK_CONTROL::setTransitions()
     Go( &DESIGN_BLOCK_CONTROL::UnpinLibrary,    ACTIONS::unpinLibrary.MakeEvent() );
     Go( &DESIGN_BLOCK_CONTROL::NewLibrary,      ACTIONS::newLibrary.MakeEvent() );
     Go( &DESIGN_BLOCK_CONTROL::HideLibraryTree, ACTIONS::hideLibraryTree.MakeEvent() );
-}
-
-
-LIB_ID DESIGN_BLOCK_CONTROL::getSelectedLibId()
-{
-    getDesignBlockPane()->GetSelectedLibId();
-
-    return LIB_ID();
 }
 
 

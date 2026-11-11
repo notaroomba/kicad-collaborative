@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <connectivity/conn_presentation.h>
 #include <base_units.h>
 #include <bitmaps.h>
 #include <string_utils.h>
@@ -32,7 +33,7 @@
 #include <eda_shape.h>
 #include <sch_edit_frame.h>
 #include <settings/color_settings.h>
-#include <connection_graph.h>
+#include <connectivity/conn_netchain_manager.h>
 #include <sch_netchain.h>
 #include <schematic.h>
 #include <project/project_file.h>
@@ -173,7 +174,9 @@ void SCH_LINE::Serialize( google::protobuf::Any &aContainer ) const
         PackLineEnding( *line.mutable_end_ending(), GetEndEnding(), schIUScale );
 
     kiapi::common::PackCustomProperties( line.mutable_custom_properties(), *this );
-    aContainer.PackFrom( line );
+
+    if( !aContainer.PackFrom( line ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_LINE" ) );
 }
 
 
@@ -293,7 +296,8 @@ double SCH_LINE::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
 {
     if( aLayer == LAYER_OP_VOLTAGES )
     {
-        if( m_start == m_end )
+        // Nothing is drawn without a value, and a threshold per wire would redraw a kept canvas on every zoom
+        if( m_start == m_end || m_operatingPoint.IsEmpty() )
             return LOD_HIDE;
 
         const int height = std::abs( m_end.y - m_start.y );
@@ -557,7 +561,7 @@ SCH_LINE* SCH_LINE::MergeOverlap( SCH_SCREEN* aScreen, SCH_LINE* aLine, bool aCh
     wxCHECK_MSG( aLine != nullptr && aLine->Type() == SCH_LINE_T, nullptr,
                  wxT( "Cannot test line segment for overlap." ) );
 
-    if( this == aLine || GetLayer() != aLine->GetLayer() )
+    if( this == aLine || GetLayer() != aLine->GetLayer() || GetStroke() != aLine->GetStroke() )
         return nullptr;
 
     VECTOR2I leftmost_start = aLine->m_start;
@@ -603,7 +607,8 @@ SCH_LINE* SCH_LINE::MergeOverlap( SCH_SCREEN* aScreen, SCH_LINE* aLine, bool aCh
         SCH_LINE* ret = new SCH_LINE( *aLine );
         ret->SetStartPoint( leftmost_start );
         ret->SetEndPoint( leftmost_end );
-        ret->SetConnectivityDirty( true );
+        // Only insertion should invalidate the screen; junction queries also merge temporary copies
+        ret->m_connectivity_dirty = true;
 
         if( IsSelected() || aLine->IsSelected() )
             ret->SetSelected();
@@ -655,7 +660,8 @@ SCH_LINE* SCH_LINE::MergeOverlap( SCH_SCREEN* aScreen, SCH_LINE* aLine, bool aCh
     SCH_LINE* ret = new SCH_LINE( *aLine );
     ret->SetStartPoint( leftmost_start );
     ret->SetEndPoint( leftmost_end );
-    ret->SetConnectivityDirty( true );
+    // This result is not on the screen yet, even though its copy retains the parent
+    ret->m_connectivity_dirty = true;
 
     if( IsSelected() || aLine->IsSelected() )
         ret->SetSelected();
@@ -863,8 +869,7 @@ wxString SCH_LINE::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFul
         }
     }
 
-    return wxString::Format( txtfmt,
-                             aUnitsProvider->MessageTextFromValue( m_start.Distance( m_end ) ) );
+    return wxString::Format( txtfmt, aUnitsProvider->MessageTextFromValue( m_start.Distance( m_end ) ) );
 }
 
 
@@ -1049,11 +1054,11 @@ void SCH_LINE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
     {
         if( GetLayer() == LAYER_WIRE )
         {
-            if( SCH_CONNECTION* connection = Connection() )
+            if( const auto name = GetConnectionName() )
             {
                 properties.emplace_back( wxString::Format( wxT( "!%s = %s" ),
                                                            _( "Net" ),
-                                                           connection->Name() ) );
+                                                           *name ) );
 
                 properties.emplace_back( wxString::Format( wxT( "!%s = %s" ),
                                                            _( "Resolved netclass" ),
@@ -1062,11 +1067,8 @@ void SCH_LINE::Plot( PLOTTER* aPlotter, bool aBackground, const SCH_PLOT_OPTS& a
         }
         else if( GetLayer() == LAYER_BUS )
         {
-            if( SCH_CONNECTION* connection = Connection() )
-            {
-                for( const std::shared_ptr<SCH_CONNECTION>& member : connection->Members() )
-                    properties.emplace_back( wxT( "!" ) + member->Name() );
-            }
+            for( const wxString& member : GetBusMemberNames() )
+                properties.emplace_back( wxT( "!" ) + member );
         }
 
         if( !properties.empty() )
@@ -1097,28 +1099,18 @@ void SCH_LINE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_IT
 
     LINE_STYLE lineStyle = GetStroke().GetLineStyle();
 
-    if( GetEffectiveLineStyle() != lineStyle )
+    if( ( IsWire() || IsBus() ) && GetEffectiveLineStyle() != lineStyle )
         aList.emplace_back( _( "Line Style" ), _( "from netclass" ) );
     else
         m_stroke.GetMsgPanelInfo( aFrame, aList, true, false );
 
-    SCH_CONNECTION* conn = nullptr;
-
     if( !IsConnectivityDirty() && dynamic_cast<SCH_EDIT_FRAME*>( aFrame ) )
-        conn = Connection();
-
-    if( conn )
     {
-        conn->AppendInfoToMsgPanel( aList );
-
-        if( !conn->IsBus() )
+        if( const auto name = SCH_CONNECTIVITY::AppendConnectionInfo( *this, aList ) )
         {
-            aList.emplace_back( _( "Resolved Netclass" ),
-                                UnescapeString( GetEffectiveNetClass()->GetHumanReadableName() ) );
-
             if( SCHEMATIC* schematic = Schematic() )
             {
-                if( SCH_NETCHAIN* chain = schematic->ConnectionGraph()->GetNetChainForNet( conn->Name() ) )
+                if( SCH_NETCHAIN* chain = schematic->NetChains().GetNetChainForNet( *name ) )
                     aList.emplace_back( _( "Net Chain" ), UnescapeString( chain->GetName() ) );
             }
         }

@@ -51,10 +51,12 @@ public:
     int ExportTableToCSV( const TOOL_EVENT& aEvent );
 
 private:
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
 private:
+    bool canEditTableStructure( const PCB_TABLE* aTable ) const override { return !aTable->IsGenerated(); }
+
     TOOL_MANAGER* getToolMgr() override { return m_toolMgr; }
     BASE_SCREEN* getScreen() override { return nullptr; }
 

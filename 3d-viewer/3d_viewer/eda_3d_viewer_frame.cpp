@@ -141,7 +141,7 @@ EDA_3D_VIEWER_FRAME::EDA_3D_VIEWER_FRAME( KIWAY* aKiway, PCB_BASE_FRAME* aParent
     LoadSettings( GetAppSettings<EDA_3D_VIEWER_SETTINGS>( "3d_viewer" ) );
     loadCommonSettings();
 
-    m_appearancePanel->SetUserViewports( Prj().GetProjectFile().m_Viewports3D );
+    ApplyProjectFileSettings();
 
     // Create the manager
     m_toolManager = new TOOL_MANAGER;
@@ -231,7 +231,7 @@ EDA_3D_VIEWER_FRAME::~EDA_3D_VIEWER_FRAME()
     Prj().GetProjectFile().m_Viewports3D = m_appearancePanel->GetUserViewports();
 
     m_canvas->SetEventDispatcher( nullptr );
-    
+
     m_auimgr.UnInit();
 
     delete m_canvas;
@@ -263,7 +263,7 @@ void EDA_3D_VIEWER_FRAME::setupUIConditions()
     auto showMissingModels =
             [this]( const SELECTION& aSel )
             {
-                return m_boardAdapter.m_Cfg->m_Render.show_missing_models;
+                return m_boardAdapter.ShowMissingModels();
             };
     auto showTH =
             [this]( const SELECTION& aSel )
@@ -424,6 +424,12 @@ void EDA_3D_VIEWER_FRAME::handleIconizeEvent( wxIconizeEvent& aEvent )
 
     if( m_spaceMouse && aEvent.IsIconized() )
         m_spaceMouse->SetFocus( false );
+}
+
+
+void EDA_3D_VIEWER_FRAME::ApplyProjectFileSettings()
+{
+    m_appearancePanel->SetUserViewports( Prj().GetProjectFile().m_Viewports3D );
 }
 
 
@@ -617,7 +623,7 @@ void EDA_3D_VIEWER_FRAME::SaveSettings( APP_SETTINGS_BASE *aCfg )
 
         cfg->m_Camera.animation_enabled       = m_canvas->GetAnimationEnabled();
         cfg->m_Camera.moving_speed_multiplier = m_canvas->GetMovingSpeedMultiplier();
-        cfg->m_Camera.projection_mode = m_canvas->GetProjectionMode();
+        cfg->m_Viewer.projection_mode = m_canvas->GetProjectionMode();
     }
 }
 
@@ -982,7 +988,7 @@ void EDA_3D_VIEWER_FRAME::configureCanvas( std::unique_ptr<EDA_3D_CANVAS>& aCanv
     {
         aCanvas->SetAnimationEnabled( aCfg->m_Camera.animation_enabled );
         aCanvas->SetMovingSpeedMultiplier( aCfg->m_Camera.moving_speed_multiplier );
-        aCanvas->SetProjectionMode( aCfg->m_Camera.projection_mode );
+        aCanvas->SetProjectionMode( aCfg->m_Viewer.projection_mode );
     }
 
     aCanvas->SetVcSettings( EDA_DRAW_PANEL_GAL::GetVcSettings() );
@@ -1057,7 +1063,7 @@ void EDA_3D_VIEWER_FRAME::applySettings( EDA_3D_VIEWER_SETTINGS* cfg )
 
     m_canvas->SetAnimationEnabled( cfg->m_Camera.animation_enabled );
     m_canvas->SetMovingSpeedMultiplier( cfg->m_Camera.moving_speed_multiplier );
-    m_canvas->SetProjectionMode( cfg->m_Camera.projection_mode );
+    m_canvas->SetProjectionMode( cfg->m_Viewer.projection_mode );
 
     m_canvas->SetVcSettings( EDA_DRAW_PANEL_GAL::GetVcSettings() );
 }

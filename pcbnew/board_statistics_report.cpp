@@ -105,24 +105,33 @@ void InitializeBoardStatisticsData( BOARD_STATISTICS_DATA& aData )
     aData.viaEntries.clear();
     aData.drillEntries.clear();
 
-    aData.footprintEntries.push_back( BOARD_STATISTICS_FP_ENTRY( FP_THROUGH_HOLE, FP_THROUGH_HOLE, _( "THT:" ) ) );
-    aData.footprintEntries.push_back( BOARD_STATISTICS_FP_ENTRY( FP_SMD, FP_SMD, _( "SMD:" ) ) );
-    aData.footprintEntries.push_back( BOARD_STATISTICS_FP_ENTRY( FP_THROUGH_HOLE | FP_SMD, 0, _( "Unspecified:" ) ) );
+    aData.footprintEntries.push_back(
+            BOARD_STATISTICS_FP_ENTRY( FP_THROUGH_HOLE, FP_THROUGH_HOLE, _( "THT:" ), "tht" ) );
+    aData.footprintEntries.push_back( BOARD_STATISTICS_FP_ENTRY( FP_SMD, FP_SMD, _( "SMD:" ), "smd" ) );
+    aData.footprintEntries.push_back(
+            BOARD_STATISTICS_FP_ENTRY( FP_THROUGH_HOLE | FP_SMD, 0, _( "Unspecified:" ), "unspecified" ) );
 
-    aData.padEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::PTH, _( "Through hole:" ) ) );
-    aData.padEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::SMD, _( "SMD:" ) ) );
-    aData.padEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::CONN, _( "Connector:" ) ) );
-    aData.padEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::NPTH, _( "NPTH:" ) ) );
+    aData.padEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::PTH, _( "Through hole:" ), "through_hole" ) );
+    aData.padEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::SMD, _( "SMD:" ), "smd" ) );
+    aData.padEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::CONN, _( "Connector:" ), "connector" ) );
+    aData.padEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::NPTH, _( "NPTH:" ), "npth" ) );
+    aData.padEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>( PAD_ATTRIB::NON_COMPONENT, _( "Non-component:" ), "non_component" ) );
 
-    aData.padPropertyEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_PROP>( PAD_PROP::CASTELLATED,
-                                                                               _( "Castellated:" ) ) );
-    aData.padPropertyEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<PAD_PROP>( PAD_PROP::PRESSFIT,
-                                                                               _( "Press-fit:" ) ) );
+    aData.padPropertyEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<PAD_PROP>( PAD_PROP::CASTELLATED, _( "Castellated:" ), "castellated" ) );
+    aData.padPropertyEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<PAD_PROP>( PAD_PROP::PRESSFIT, _( "Press-fit:" ), "press_fit" ) );
 
-    aData.viaEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::THROUGH, _( "Through vias:" ) ) );
-    aData.viaEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::BLIND, _( "Blind vias:" ) ) );
-    aData.viaEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::BURIED, _( "Buried vias:" ) ) );
-    aData.viaEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::MICROVIA, _( "Micro vias:" ) ) );
+    aData.viaEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::THROUGH, _( "Through vias:" ), "through" ) );
+    aData.viaEntries.push_back( BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::BLIND, _( "Blind vias:" ), "blind" ) );
+    aData.viaEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::BURIED, _( "Buried vias:" ), "buried" ) );
+    aData.viaEntries.push_back(
+            BOARD_STATISTICS_INFO_ENTRY<VIATYPE>( VIATYPE::MICROVIA, _( "Micro vias:" ), "micro" ) );
 
     aData.ResetCounts();
 }
@@ -187,32 +196,32 @@ void ComputeBoardStatistics( BOARD* aBoard, const BOARD_STATISTICS_OPTIONS& aOpt
 
     for( PCB_TRACK* track : aBoard->Tracks() )
     {
-        if( track->Type() == PCB_TRACE_T )
+        if( track->Type() == PCB_TRACE_T || track->Type() == PCB_ARC_T )
             aData.minTrackWidth = std::min( aData.minTrackWidth, track->GetWidth() );
 
         if( !track->IsType( trackTypes ) )
             continue;
 
-        PCB_LAYER_ID layer = track->GetLayer();
-        auto         trackShapeA = track->GetEffectiveShape( layer );
-
         for( PCB_TRACK* otherTrack : aBoard->Tracks() )
         {
-            if( layer != otherTrack->GetLayer() )
-                continue;
-
             if( track->GetNetCode() == otherTrack->GetNetCode() )
                 continue;
 
             if( !otherTrack->IsType( trackTypes ) )
                 continue;
 
-            int  actual = 0;
-            auto trackShapeB = otherTrack->GetEffectiveShape( layer );
-            bool collide = trackShapeA->Collide( trackShapeB.get(), aData.minClearanceTrackToTrack, &actual );
+            LSET commonLayers = track->GetLayerSet() & otherTrack->GetLayerSet() & LSET::AllCuMask();
 
-            if( collide )
-                aData.minClearanceTrackToTrack = std::min( aData.minClearanceTrackToTrack, actual );
+            for( PCB_LAYER_ID layer : commonLayers.CuStack() )
+            {
+                int  actual = 0;
+                auto trackShapeA = track->GetEffectiveShape( layer );
+                auto trackShapeB = otherTrack->GetEffectiveShape( layer );
+                bool collide = trackShapeA->Collide( trackShapeB.get(), aData.minClearanceTrackToTrack, &actual );
+
+                if( collide )
+                    aData.minClearanceTrackToTrack = std::min( aData.minClearanceTrackToTrack, actual );
+            }
         }
 
         if( track->Type() == PCB_VIA_T )
@@ -264,36 +273,39 @@ void ComputeBoardStatistics( BOARD* aBoard, const BOARD_STATISTICS_OPTIONS& aOpt
             {
                 for( int j = 0; j < polySet.HoleCount( i ); ++j )
                     aData.boardArea -= polySet.Hole( i, j ).Area();
+            }
+        }
 
-                for( FOOTPRINT* footprint : aBoard->Footprints() )
+        if( aOptions.subtractHolesFromBoardArea )
+        {
+            for( FOOTPRINT* footprint : aBoard->Footprints() )
+            {
+                for( PAD* pad : footprint->Pads() )
                 {
-                    for( PAD* pad : footprint->Pads() )
-                    {
-                        if( !pad->HasHole() )
-                            continue;
+                    if( !pad->HasHole() )
+                        continue;
 
-                        std::shared_ptr<SHAPE_SEGMENT> hole = pad->GetEffectiveHoleShape();
+                    std::shared_ptr<SHAPE_SEGMENT> hole = pad->GetEffectiveHoleShape();
 
-                        if( !hole )
-                            continue;
+                    if( !hole )
+                        continue;
 
-                        const SEG& seg = hole->GetSeg();
-                        double     width = hole->GetWidth();
-                        double     area = seg.Length() * width;
+                    const SEG& seg = hole->GetSeg();
+                    double     width = hole->GetWidth();
+                    double     area = seg.Length() * width;
 
-                        area += M_PI * 0.25 * width * width;
-                        aData.boardArea -= area;
-                    }
+                    area += M_PI * 0.25 * width * width;
+                    aData.boardArea -= area;
                 }
+            }
 
-                for( PCB_TRACK* track : aBoard->Tracks() )
+            for( PCB_TRACK* track : aBoard->Tracks() )
+            {
+                if( track->Type() == PCB_VIA_T )
                 {
-                    if( track->Type() == PCB_VIA_T )
-                    {
-                        PCB_VIA* via = static_cast<PCB_VIA*>( track );
-                        double   drill = via->GetDrillValue();
-                        aData.boardArea -= M_PI * 0.25 * drill * drill;
-                    }
+                    PCB_VIA* via = static_cast<PCB_VIA*>( track );
+                    double   drill = via->GetDrillValue();
+                    aData.boardArea -= M_PI * 0.25 * drill * drill;
                 }
             }
         }
@@ -373,7 +385,8 @@ void ComputeBoardStatistics( BOARD* aBoard, const BOARD_STATISTICS_OPTIONS& aOpt
             {
                 if( child->Type() == PCB_FOOTPRINT_T
                     || child->Type() == PCB_GROUP_T
-                    || child->Type() == PCB_GENERATOR_T )
+                    || child->Type() == PCB_GENERATOR_T
+                    || child->Type() == PCB_REFERENCE_IMAGE_T )
                 {
                     return;
                 }
@@ -408,6 +421,9 @@ void ComputeBoardStatistics( BOARD* aBoard, const BOARD_STATISTICS_OPTIONS& aOpt
                 }
             },
             RECURSE_MODE::RECURSE );
+
+    frontCopper.Simplify();
+    backCopper.Simplify();
 
     if( aOptions.subtractHolesFromCopperAreas )
     {
@@ -529,6 +545,15 @@ static void appendTable( const std::vector<std::vector<wxString>>& aRows, bool a
 }
 
 
+wxString FormatBoardStatisticsMinimum( int aValue, const UNITS_PROVIDER& aUnitsProvider )
+{
+    if( aValue == std::numeric_limits<int>::max() )
+        return _( "unknown" );
+
+    return aUnitsProvider.MessageTextFromValue( aValue, true, EDA_DATA_TYPE::DISTANCE );
+}
+
+
 wxString FormatBoardStatisticsReport( const BOARD_STATISTICS_DATA& aData, BOARD* aBoard,
                                       const UNITS_PROVIDER& aUnitsProvider, const wxString& aProjectName,
                                       const wxString& aBoardName )
@@ -563,16 +588,13 @@ wxString FormatBoardStatisticsReport( const BOARD_STATISTICS_DATA& aData, BOARD*
            << aUnitsProvider.MessageTextFromValue( aData.backCopperArea, true, EDA_DATA_TYPE::AREA ) << wxS( "\n" );
 
     report << wxS( "- " ) << _( "Min track clearance" ) << wxS( ": " )
-           << aUnitsProvider.MessageTextFromValue( aData.minClearanceTrackToTrack, true, EDA_DATA_TYPE::DISTANCE )
-           << wxS( "\n" );
+           << FormatBoardStatisticsMinimum( aData.minClearanceTrackToTrack, aUnitsProvider ) << wxS( "\n" );
 
     report << wxS( "- " ) << _( "Min track width" ) << wxS( ": " )
-           << aUnitsProvider.MessageTextFromValue( aData.minTrackWidth, true, EDA_DATA_TYPE::DISTANCE ) << wxS( "\n" );
-
-    int minDrill = aData.minDrillSize;
+           << FormatBoardStatisticsMinimum( aData.minTrackWidth, aUnitsProvider ) << wxS( "\n" );
 
     report << wxS( "- " ) << _( "Min drill diameter" ) << wxS( ": " )
-           << aUnitsProvider.MessageTextFromValue( minDrill, true, EDA_DATA_TYPE::DISTANCE ) << wxS( "\n" );
+           << FormatBoardStatisticsMinimum( aData.minDrillSize, aUnitsProvider ) << wxS( "\n" );
 
     report << wxS( "- " ) << _( "Board stackup thickness" ) << wxS( ": " )
            << aUnitsProvider.MessageTextFromValue( aData.boardThickness, true, EDA_DATA_TYPE::DISTANCE )
@@ -719,6 +741,14 @@ wxString FormatBoardStatisticsJson( const BOARD_STATISTICS_DATA& aData, BOARD* a
                                     const UNITS_PROVIDER& aUnitsProvider, const wxString& aProjectName,
                                     const wxString& aBoardName )
 {
+    const auto formatMinimum = [&aUnitsProvider]( int aValue ) -> nlohmann::json
+    {
+        if( aValue == std::numeric_limits<int>::max() )
+            return nlohmann::json();
+
+        return aUnitsProvider.MessageTextFromValue( aValue );
+    };
+
     nlohmann::ordered_json root;
 
     nlohmann::ordered_json metadata;
@@ -752,9 +782,9 @@ wxString FormatBoardStatisticsJson( const BOARD_STATISTICS_DATA& aData, BOARD* a
                                                                       EDA_DATA_TYPE::AREA );
     board["back_copper_area"] = aUnitsProvider.MessageTextFromValue( aData.backCopperArea, true,
                                                                      EDA_DATA_TYPE::AREA );
-    board["min_track_clearance"] = aUnitsProvider.MessageTextFromValue( aData.minClearanceTrackToTrack );
-    board["min_track_width"] = aUnitsProvider.MessageTextFromValue( aData.minTrackWidth );
-    board["min_drill_diameter"] = aUnitsProvider.MessageTextFromValue( aData.minDrillSize );
+    board["min_track_clearance"] = formatMinimum( aData.minClearanceTrackToTrack );
+    board["min_track_width"] = formatMinimum( aData.minTrackWidth );
+    board["min_drill_diameter"] = formatMinimum( aData.minDrillSize );
     board["board_thickness"] = aUnitsProvider.MessageTextFromValue( aData.boardThickness );
     board["front_footprint_area"] = aUnitsProvider.MessageTextFromValue( aData.frontFootprintCourtyardArea, true,
                                                                          EDA_DATA_TYPE::AREA );
@@ -774,39 +804,20 @@ wxString FormatBoardStatisticsJson( const BOARD_STATISTICS_DATA& aData, BOARD* a
 
     root["board"] = board;
 
-    // The UI strings end in colons, often have a suffix like "via", and need
-    // to be snake_cased
-    auto jsonize =
-            []( const wxString& title, bool removeSuffix ) -> wxString
-            {
-                wxString json = title;
-
-                if( removeSuffix )
-                    json = json.BeforeLast( ' ' );
-
-                if( json.EndsWith( wxS( ":" ) ) )
-                    json.RemoveLast();
-
-                json.Replace( wxS( " " ), wxS( "_" ) );
-                json.Replace( wxS( "-" ), wxS( "_" ) );
-
-                return json.MakeLower();
-            };
-
     nlohmann::ordered_json pads = nlohmann::ordered_json::object();
 
     for( const BOARD_STATISTICS_INFO_ENTRY<PAD_ATTRIB>& padEntry : aData.padEntries )
-        pads[jsonize( padEntry.title, false )] = padEntry.quantity;
+        pads[padEntry.jsonKey] = padEntry.quantity;
 
     for( const BOARD_STATISTICS_INFO_ENTRY<PAD_PROP>& propEntry : aData.padPropertyEntries )
-        pads[jsonize( propEntry.title, false )] = propEntry.quantity;
+        pads[propEntry.jsonKey] = propEntry.quantity;
 
     root["pads"] = pads;
 
     nlohmann::ordered_json vias = nlohmann::ordered_json::object();
 
     for( const BOARD_STATISTICS_INFO_ENTRY<VIATYPE>& viaEntry : aData.viaEntries )
-        vias[jsonize( viaEntry.title, true )] = viaEntry.quantity;
+        vias[viaEntry.jsonKey] = viaEntry.quantity;
 
     root["vias"] = vias;
 
@@ -820,7 +831,7 @@ wxString FormatBoardStatisticsJson( const BOARD_STATISTICS_DATA& aData, BOARD* a
         component["front"] = fpEntry.frontCount;
         component["back"] = fpEntry.backCount;
         component["total"] = fpEntry.frontCount + fpEntry.backCount;
-        components[jsonize( fpEntry.title, false )] = component;
+        components[fpEntry.jsonKey] = component;
 
         frontTotal += fpEntry.frontCount;
         backTotal += fpEntry.backCount;

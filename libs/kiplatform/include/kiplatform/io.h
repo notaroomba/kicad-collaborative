@@ -179,7 +179,7 @@ namespace IO
 
     /**
      * Duplicates the file security data from one file to another ensuring that they are
-     * the same between both.  This assumes that the user has permission to set #aDest
+     * the same between both.  This assumes that the user has permission to set @p aDest
      * @return true if the process was successful
      */
     bool DuplicatePermissions( const wxString& aSrc, const wxString& aDest );
@@ -283,10 +283,11 @@ namespace IO
                                      wxString* aTempPathOut, wxString* aError = nullptr );
 
     /**
-     * If @p aPath is a symlink on POSIX, returns the canonical path of its referent so
+     * If @p aPath is a symlink, returns the canonical path of its referent so
      * atomic-save operations replace the underlying file rather than the link itself.
-     * On Windows and when @p aPath is not a symlink (or does not yet exist) the input
-     * is returned unchanged.
+     * When @p aPath is not a symlink (or does not yet exist) the input is returned
+     * unchanged. On Windows other reparse points such as junctions and cloud
+     * placeholders are left alone.
      */
     wxString ResolveSymlinkTarget( const wxString& aPath );
 
@@ -327,7 +328,8 @@ namespace IO
      * and closed. Clears any read-only/hidden attributes on an existing @p aTargetPath,
      * duplicates its permissions onto the temp file, atomically renames @p aTempPath
      * onto @p aTargetPath, and fsyncs the containing directory so the rename itself is
-     * durable across power loss.
+     * durable across power loss. The permission copy is best effort since some volumes
+     * cannot store them; the save proceeds with the temp file's own permissions.
      *
      * On failure @p aTempPath is left in place for the caller to clean up.
      *
@@ -346,8 +348,8 @@ namespace IO
      * byte-identical to @p aData -- never truncated or partially written.
      *
      * If @p aTargetPath already exists its permissions are duplicated onto the
-     * replacement, and any read-only/hidden attributes are cleared first so cloud
-     * sync services don't block the rename.
+     * replacement where the volume supports that, and any read-only/hidden attributes
+     * are cleared first so cloud sync services don't block the rename.
      *
      * @param aTargetPath final destination path.
      * @param aData       pointer to bytes to write.

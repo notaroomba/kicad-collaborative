@@ -84,9 +84,9 @@ void PCB_SEARCH_HANDLER::Sort( int aCol, bool aAscending, std::vector<long>* aSe
                 // N.B. To meet the iterator sort conditions, we cannot simply invert the truth
                 // to get the opposite sort.  i.e. ~(a<b) != (a>b)
                 if( aAscending )
-                    return StrNumCmp( getResultCell( a, col ), getResultCell( b, col ), true ) < 0;
+                    return StrNumCmp( getResultCell( a, col ), getResultCell( b, col ), CMP_T::IGNORE_CASE ) < 0;
                 else
-                    return StrNumCmp( getResultCell( b, col ), getResultCell( a, col ), true ) < 0;
+                    return StrNumCmp( getResultCell( b, col ), getResultCell( a, col ), CMP_T::IGNORE_CASE ) < 0;
             } );
 
 
@@ -202,9 +202,9 @@ wxString FOOTPRINT_SEARCH_HANDLER::getResultCell( BOARD_ITEM* aItem, int aCol )
     FOOTPRINT* fp = static_cast<FOOTPRINT*>( aItem );
 
     if( aCol == 0 )
-        return fp->GetReference();
+        return fp->Reference().GetShownText( FOR_GUI );
     else if( aCol == 1 )
-        return UnescapeString( fp->GetValue() );
+        return UnescapeString( fp->Value().GetShownText( FOR_GUI ) );
     else if( aCol == 2 )
         return fp->GetLayerName();
     else if( aCol == 3 )
@@ -367,11 +367,11 @@ wxString TEXT_SEARCH_HANDLER::getResultCell( BOARD_ITEM* aItem, int aCol )
     else if( aCol == 1 )
     {
         if( PCB_TEXT::ClassOf( aItem ) )
-            return UnescapeString( static_cast<PCB_TEXT*>( aItem )->GetText() );
+            return UnescapeString( static_cast<PCB_TEXT*>( aItem )->GetShownText( FOR_GUI ) );
         else if( PCB_TEXTBOX::ClassOf( aItem ) )
-            return UnescapeString( static_cast<PCB_TEXTBOX*>( aItem )->GetText() );
+            return UnescapeString( static_cast<PCB_TEXTBOX*>( aItem )->GetShownText( FOR_GUI ) );
         else if( PCB_DIMENSION_BASE* dimension = dynamic_cast<PCB_DIMENSION_BASE*>( aItem ) )
-            return UnescapeString( dimension->GetText() );
+            return UnescapeString( dimension->GetShownText( FOR_GUI ) );
     }
     else if( aCol == 2 )
         return aItem->GetLayerName();

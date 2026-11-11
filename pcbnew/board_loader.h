@@ -71,9 +71,9 @@ public:
 
     static std::unique_ptr<BOARD> CreateEmptyBoard( PROJECT* aProject );
 
-    static bool SaveBoard( wxString& aFileName, BOARD* aBoard, PCB_IO_MGR::PCB_FILE_T aFormat );
+    static bool SaveBoard( wxString& aFileName, BOARD& aBoard, PCB_IO_MGR::PCB_FILE_T aFormat );
 
-    static bool SaveBoard( wxString& aFileName, BOARD* aBoard );
+    static bool SaveBoard( wxString& aFileName, BOARD& aBoard );
 
 private:
     static void initializeLoadedBoard( BOARD* aBoard, const wxString& aFileName,

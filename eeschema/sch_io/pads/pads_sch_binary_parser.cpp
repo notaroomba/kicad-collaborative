@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <iterator>
 #include <map>
@@ -241,6 +242,11 @@ namespace
     }
 
 
+    int64_t decodeHalfMils( uint16_t aRaw )
+    {
+        return (int64_t) aRaw * 2;
+    }
+
     int64_t decodeCoordinate( uint16_t aRaw )
     {
         return static_cast<int64_t>( aRaw ) * 4 - 198144;
@@ -425,68 +431,73 @@ namespace
     }
 
 
-    SOURCE_POINT pageExtent( uint8_t aPage, const SOURCE_PROVENANCE& aSource )
+    SOURCE_POINT pageExtent( const std::string& aPage, const SOURCE_PROVENANCE& aSource )
     {
-        switch( aPage )
-        {
-        case 'A': return { 22000, 17000, aSource };
-        case 'B': return { 34000, 22000, aSource };
-        case 'C': return { 44000, 34000, aSource };
-        case 'D': return { 68000, 44000, aSource };
-        case 'E': return { 88000, 68000, aSource };
-        default: throwDecodeError( aSource, wxS( "invalid design page-size token" ) );
-        }
+        if(      aPage == "A5" ) return { 16535, 11654, aSource };
+        else if( aPage == "A4" ) return { 23386, 16535, aSource };
+        else if( aPage == "A3" ) return { 33071, 23386, aSource };
+        else if( aPage == "A2" ) return { 46772, 33071, aSource };
+        else if( aPage == "A1" ) return { 66220, 46772, aSource };
+        else if( aPage == "A0" ) return { 93622, 66220, aSource };
+        else if( aPage == "A" )  return { 22000, 17000, aSource };
+        else if( aPage == "B" )  return { 34000, 22000, aSource };
+        else if( aPage == "C" )  return { 44000, 34000, aSource };
+        else if( aPage == "D" )  return { 68000, 44000, aSource };
+        else if( aPage == "E" )  return { 88000, 68000, aSource };
+
+        throwDecodeError( aSource, wxS( "invalid design page-size token" ) );
     }
 
 
+    // PADS justification is a bitfield where center wins: bit 2 centers and bit 0 right-aligns horizontally
     MODEL_JUSTIFICATION horizontalJustification( uint16_t aValue )
     {
-        const uint16_t justification = aValue & 0x00FF;
-        const uint16_t horizontal = justification >= 8   ? justification - 8
-                                    : justification >= 2 ? justification - 2
-                                                         : justification;
+        if( aValue & 0x0004 )
+            return MODEL_JUSTIFICATION::CENTER;
 
-        switch( horizontal )
-        {
-        default:
-        case 0: return MODEL_JUSTIFICATION::LEFT;
-        case 1: return MODEL_JUSTIFICATION::RIGHT;
-        case 4: return MODEL_JUSTIFICATION::CENTER;
-        }
+        if( aValue & 0x0001 )
+            return MODEL_JUSTIFICATION::RIGHT;
+
+        return MODEL_JUSTIFICATION::LEFT;
     }
 
 
+    // Bit 3 centers and bit 1 top-aligns vertically; LEFT and RIGHT stand for top and bottom
     MODEL_JUSTIFICATION verticalJustification( uint16_t aValue )
     {
-        const uint16_t justification = aValue & 0x00FF;
-
-        if( justification >= 8 )
+        if( aValue & 0x0008 )
             return MODEL_JUSTIFICATION::CENTER;
 
-        if( justification >= 2 )
+        if( aValue & 0x0002 )
             return MODEL_JUSTIFICATION::LEFT;
 
         return MODEL_JUSTIFICATION::RIGHT;
     }
 
 
-    MODEL_JUSTIFICATION freeTextHorizontalJustification( uint16_t aValue )
+    uint16_t rotatedFieldJustification( uint16_t aValue, int aAngle )
     {
-        switch( aValue & 0x000F )
-        {
-        case 0:
-        case 2:
-        case 8: return MODEL_JUSTIFICATION::LEFT;
+        // PADS swaps the side-selector bits for field text rotated by
+        // 90/270 degrees.  This mirrors the ASCII importer behavior.
+        const int quarterTurns = NormalizeAngle( aAngle ) / 900;
 
-        case 4:
-        case 6:
-        case 10:
-        case 12:
-        case 14: return MODEL_JUSTIFICATION::CENTER;
+        if( ( quarterTurns & 1 ) == 0 )
+            return aValue;
 
-        default: return MODEL_JUSTIFICATION::RIGHT;
-        }
+        const uint16_t bit0 = aValue & 0x0001;
+        const uint16_t bit1 = aValue & 0x0002;
+
+        aValue &= static_cast<uint16_t>( ~0x0003 );
+
+        if( bit0 )
+            aValue |= 0x0002;
+
+        if( bit1 )
+            aValue |= 0x0001;
+
+        return aValue;
     }
+
 
     constexpr uint32_t CP1252_HIGH[] = { 0x20AC, 0xFFFD, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
                                          0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0xFFFD, 0x017D, 0xFFFD,
@@ -748,18 +759,21 @@ namespace
 
     struct PLACEMENT_GLOBALS
     {
-        size_t   attributeHeapBase = 0;
-        uint32_t attributeHeapBytes = 0;
-        size_t   groupBase = 0;
-        uint32_t groupCount = 0;
-        size_t   attributeOffsetBase = 0;
-        uint32_t attributeOffsetCount = 0;
-        size_t   fontBase = 0;
-        uint32_t fontCount = 0;
+        size_t          attributeHeapBase = 0;
+        uint32_t        attributeHeapBytes = 0;
+        size_t          groupBase = 0;
+        uint32_t        groupCount = 0;
+        size_t          attributeOffsetBase = 0;
+        uint32_t        attributeOffsetCount = 0;
+        size_t          fontBase = 0;
+        uint32_t        fontCount = 0;
+        MODEL_FONT_MODE fontMode = MODEL_FONT_MODE::STROKE;
+        SOURCE_STRING   defaultSystemFont;
     };
 
 
-    PLACEMENT_GLOBALS placementGlobals( const PADS_SCH_SDB& aSdb, const wxString& aSourceName )
+    PLACEMENT_GLOBALS placementGlobals( const PADS_SCH_SDB& aSdb, const wxString& aSourceName,
+                                        const DESIGN_SETTINGS& aSettings )
     {
         PLACEMENT_GLOBALS result;
 
@@ -790,6 +804,8 @@ namespace
         result.attributeOffsetCount = aSdb.Pools()[7].count;
         result.fontBase = outerControllerOffset( aSdb, 19 );
         result.fontCount = aSdb.Pools()[19].count;
+        result.fontMode = aSettings.fontMode;
+        result.defaultSystemFont = aSettings.defaultSystemFont;
         return result;
     }
 
@@ -802,7 +818,11 @@ namespace
     {
         if( aHandle == -1 || aHandle == -4 )
         {
-            aPresentation.font = decodedDefinitionFont( aHandle, aHandleSource );
+            if( aGlobals.fontMode == MODEL_FONT_MODE::SYSTEM && !aGlobals.defaultSystemFont.text.IsEmpty() )
+                aPresentation.font = aGlobals.defaultSystemFont;
+            else
+                aPresentation.font = decodedDefinitionFont( aHandle, aHandleSource );
+
             return;
         }
 
@@ -1036,8 +1056,8 @@ namespace
     {
         MODEL_TEXT_PRESENTATION presentation;
         presentation.source = aSource;
-        presentation.height = aCursor.U16At( aOffset + 22 );
-        presentation.width = aCursor.U8At( aOffset + 30 );
+        presentation.height = decodeHalfMils( aCursor.U16At( aOffset + 22 ) );
+        presentation.width = decodeHalfMils( aCursor.U8At( aOffset + 30 ) );
         presentation.properties.push_back( sourceProperty(
                 wxS( "display_flags" ), wxString::Format( wxS( "%u" ), aCursor.U8At( aOffset + 31 ) ), aSource ) );
         presentation.horizontalJustification = horizontalJustification( aCursor.U16At( aOffset + 18 ) );
@@ -1667,46 +1687,76 @@ namespace
                 definitionPin.source = pinSource;
                 definitionPin.position = { decodeTerminalCoordinate( aCursor.U16At( terminalOffset + 2 ) ),
                                            decodeTerminalCoordinate( aCursor.U16At( terminalOffset + 4 ) ), pinSource };
+
                 definitionPin.presentation.source = pinSource;
-                definitionPin.presentation.height =
-                        static_cast<int64_t>( static_cast<int16_t>( aCursor.U16At( terminalOffset + 6 ) ) ) * 2;
-                definitionPin.presentation.width =
-                        static_cast<int64_t>( static_cast<int16_t>( aCursor.U16At( terminalOffset + 8 ) ) ) * 2;
-                definitionPin.presentation.visible = ( aCursor.U16At( terminalOffset + 24 ) & 0x8000 ) == 0;
-                definitionPin.namePresentation = definitionPin.presentation;
-                definitionPin.numberPresentation.source = pinSource;
-                definitionPin.numberPresentation.height =
-                        static_cast<int64_t>( static_cast<int16_t>( aCursor.U16At( terminalOffset + 10 ) ) ) * 2;
-                definitionPin.numberPresentation.width =
-                        static_cast<int64_t>( static_cast<int16_t>( aCursor.U16At( terminalOffset + 12 ) ) ) * 2;
+                definitionPin.presentation.visible = true;
+                SOURCE_PROVENANCE numberPresentationSource = source;
+                numberPresentationSource.absoluteOffset = offset + 92;
+                numberPresentationSource.length = 2;
+                SOURCE_PROVENANCE namePresentationSource = source;
+                namePresentationSource.absoluteOffset = offset + 94;
+                namePresentationSource.length = 2;
+
+                definitionPin.numberPresentation.source = numberPresentationSource;
+                definitionPin.numberPresentation.height = static_cast<int64_t>( aCursor.U16At( offset + 92 ) ) * 2;
+                definitionPin.numberPresentation.width = static_cast<int64_t>( aCursor.U8At( offset + 98 ) ) * 2;
+                definitionPin.namePresentation.source = namePresentationSource;
+                definitionPin.namePresentation.height = static_cast<int64_t>( aCursor.U16At( offset + 94 ) ) * 2;
+                definitionPin.namePresentation.width = static_cast<int64_t>( aCursor.U8At( offset + 99 ) ) * 2;
+
+                SOURCE_PROVENANCE numberFontSource = source;
+                numberFontSource.absoluteOffset = offset + 104;
+                numberFontSource.length = 2;
+                SOURCE_PROVENANCE nameFontSource = source;
+                nameFontSource.absoluteOffset = offset + 106;
+                nameFontSource.length = 2;
+                int16_t numberFontHandle = static_cast<int16_t>( aCursor.U16At( numberFontSource.absoluteOffset ) );
+                int16_t nameFontHandle = static_cast<int16_t>( aCursor.U16At( nameFontSource.absoluteOffset ) );
+                definitionPin.numberPresentation.font = decodedDefinitionFont( numberFontHandle, numberFontSource );
+                definitionPin.namePresentation.font = decodedDefinitionFont( nameFontHandle, nameFontSource );
+
+                if( aModel.settings.fontMode == MODEL_FONT_MODE::SYSTEM
+                    && !aModel.settings.defaultSystemFont.text.IsEmpty() )
+                {
+                    if( numberFontHandle == -1 || numberFontHandle == -4 )
+                        definitionPin.numberPresentation.font = aModel.settings.defaultSystemFont;
+
+                    if( nameFontHandle == -1 || nameFontHandle == -4 )
+                        definitionPin.namePresentation.font = aModel.settings.defaultSystemFont;
+                }
+
+                definitionPin.numberPresentation.visible = definitionPin.numberPresentation.height != 0;
                 definitionPin.namePresentation.visible = definitionPin.namePresentation.height != 0
                                                          && ( aCursor.U16At( terminalOffset + 24 ) & 0x8000 ) == 0;
-                definitionPin.numberPresentation.visible = definitionPin.numberPresentation.height != 0;
-                definitionPin.nameOffset = { decodeLocalCoordinate( aCursor.U16At( terminalOffset + 14 ) ),
-                                             decodeLocalCoordinate( aCursor.U16At( terminalOffset + 16 ) ), pinSource };
-                definitionPin.numberOffset = { decodeLocalCoordinate( aCursor.U16At( terminalOffset + 18 ) ),
-                                               decodeLocalCoordinate( aCursor.U16At( terminalOffset + 20 ) ),
+
+                // The first T-line pair locates the pin number; the second locates the pin name.
+                definitionPin.numberOffset = { decodeLocalCoordinate( aCursor.U16At( terminalOffset + 6 ) ),
+                                               decodeLocalCoordinate( aCursor.U16At( terminalOffset + 8 ) ),
                                                pinSource };
+                definitionPin.nameOffset = { decodeLocalCoordinate( aCursor.U16At( terminalOffset + 10 ) ),
+                                             decodeLocalCoordinate( aCursor.U16At( terminalOffset + 12 ) ), pinSource };
                 const uint16_t presentationFlags = aCursor.U16At( terminalOffset + 22 );
                 const uint16_t visibilityFlags = aCursor.U16At( terminalOffset + 24 );
-                const uint16_t side = presentationFlags & 0x0006;
                 definitionPin.presentationFlags = presentationFlags;
                 definitionPin.visibilityAndNumberPresentationFlags = visibilityFlags;
-                definitionPin.side = side / 2;
+
+                // PADS binary stores the same terminal-local X/Y mirror state as the ASCII T-line side field,
+                // shifted left by one because bit 0 carries the terminal quarter-turn flag.
+                definitionPin.side = ( presentationFlags & 0x0006 ) >> 1;
 
                 definitionPin.angle = ( presentationFlags & 0x0001 ) != 0 ? 900 : 0;
-                definitionPin.nameAngle = ( presentationFlags & 0x0100 ) != 0 ? 900 : 0;
-                definitionPin.numberAngle = ( visibilityFlags & 0x0001 ) != 0 ? 900 : 0;
+                definitionPin.numberAngle = ( presentationFlags & 0x0100 ) != 0 ? 900 : 0;
+                definitionPin.nameAngle = ( visibilityFlags & 0x0001 ) != 0 ? 900 : 0;
 
-                definitionPin.nameJustification =
-                        terminalJustification( ( presentationFlags >> 12 ) & 0x0F, definitionPin.nameAngle != 0 );
+                definitionPin.numberJustification =
+                        terminalJustification( ( presentationFlags >> 12 ) & 0x0F, definitionPin.numberAngle != 0 );
 
                 if( ( presentationFlags & 0x00F8 ) != 0 )
                     PADS_SCH_BINARY_PARSER::RecordUnknownEnum( wxS( "terminal side" ), presentationFlags, pinSource,
                                                                aModel.diagnostics );
 
-                definitionPin.numberJustification =
-                        terminalJustification( ( visibilityFlags >> 4 ) & 0x0F, definitionPin.numberAngle != 0 );
+                definitionPin.nameJustification =
+                        terminalJustification( ( visibilityFlags >> 4 ) & 0x0F, definitionPin.nameAngle != 0 );
                 const uint16_t nameOffsetFlags = visibilityFlags & 0x0F00;
                 definitionPin.nameOffsetAngle = ( nameOffsetFlags & 0x0100 ) != 0 ? 900 : 0;
                 definitionPin.numberOffsetAngle = ( nameOffsetFlags & 0x0200 ) != 0 ? 900 : 0;
@@ -1804,7 +1854,7 @@ namespace
 
                 definitionPin.properties.push_back( sourceProperty(
                         wxS( "pin_name_height_half_mils" ),
-                        wxString::Format( wxS( "%lld" ), definitionPin.presentation.height ), pinSource ) );
+                        wxString::Format( wxS( "%lld" ), definitionPin.namePresentation.height ), pinSource ) );
                 definitionPin.properties.push_back( sourceProperty(
                         wxS( "pin_number_height_half_mils" ),
                         wxString::Format( wxS( "%lld" ), definitionPin.numberPresentation.height ), pinSource ) );
@@ -1815,7 +1865,20 @@ namespace
                         wxS( "pin_number_width_half_mils" ),
                         wxString::Format( wxS( "%lld" ), definitionPin.numberPresentation.width ), pinSource ) );
                 definitionPin.properties.push_back(
-                        sourceProperty( wxS( "terminal_side" ), wxString::Format( wxS( "%u" ), side ), pinSource ) );
+                        sourceProperty( wxS( "terminal_side" ),
+                                        wxString::Format( wxS( "%u" ), definitionPin.side ), pinSource ) );
+
+                // Keep the ASCII P-line positions; PADS draws nothing at them so their meaning is unknown
+                for( int pair = 0; pair < 2; ++pair )
+                {
+                    const size_t pairOffset = terminalOffset + 14 + pair * 4;
+                    definitionPin.properties.push_back( sourceProperty(
+                            wxString::Format( wxS( "terminal_p_line_position_%d" ), pair + 1 ),
+                            wxString::Format( wxS( "%lld,%lld" ), decodeLocalCoordinate( aCursor.U16At( pairOffset ) ),
+                                              decodeLocalCoordinate( aCursor.U16At( pairOffset + 2 ) ) ),
+                            pinSource ) );
+                }
+
                 decal.definition->pins.push_back( std::move( definitionPin ) );
             }
         }
@@ -2148,8 +2211,8 @@ namespace
                                        fieldSource };
                     field.angle = NormalizeAngle( aCursor.U16At( usedOffset + 64 + standard * 8 ) );
                     field.presentation.source = fieldSource;
-                    field.presentation.height = aCursor.U16At( usedOffset + 88 + standard * 2 );
-                    field.presentation.width = aCursor.U8At( usedOffset + 96 + standard );
+                    field.presentation.height = decodeHalfMils( aCursor.U16At( usedOffset + 88 + standard * 2 ) );
+                    field.presentation.width = decodeHalfMils( aCursor.U8At( usedOffset + 96 + standard ) );
                     SOURCE_PROVENANCE fontSource = fieldSource;
                     fontSource.absoluteOffset = usedOffset + 100 + standard * 2;
                     fontSource.length = 2;
@@ -2755,11 +2818,12 @@ namespace
         field.presentation.source = fieldSource;
         field.visible = aVisible;
         field.presentation.visible = aVisible;
-        field.presentation.height = aDecode.cursor.U16At( aOffset + aFieldLayout.height );
-        field.presentation.width = aDecode.cursor.U8At( aOffset + aFieldLayout.width );
+        field.presentation.height = decodeHalfMils( aDecode.cursor.U16At( aOffset + aFieldLayout.height ) );
+        field.presentation.width = decodeHalfMils( aDecode.cursor.U8At( aOffset + aFieldLayout.width ) );
         const uint16_t justification = aDecode.cursor.U16At( aOffset + aFieldLayout.angle + 2 );
-        field.presentation.horizontalJustification = horizontalJustification( justification );
-        field.presentation.verticalJustification = verticalJustification( justification );
+        const uint16_t rotatedJustification = rotatedFieldJustification( justification, field.angle );
+        field.presentation.horizontalJustification = horizontalJustification( rotatedJustification );
+        field.presentation.verticalJustification = verticalJustification( rotatedJustification );
         SOURCE_PROVENANCE fontSource = fieldSource;
         fontSource.absoluteOffset = aOffset + aFieldLayout.font;
         fontSource.length = 2;
@@ -2824,11 +2888,12 @@ namespace
                 throwDecodeError( fieldSource, wxS( "unsupported placement-field rotation" ) );
 
             const uint8_t justification = aDecode.cursor.U8At( fieldOffset + aDecode.layout.customJustification );
+            const uint16_t rotatedJustification = rotatedFieldJustification( justification, field.angle );
             field.presentation.source = fieldSource;
-            field.presentation.horizontalJustification = horizontalJustification( justification );
-            field.presentation.verticalJustification = verticalJustification( justification );
-            field.presentation.height = aDecode.cursor.U16At( fieldOffset + aDecode.layout.customHeight );
-            field.presentation.width = aDecode.cursor.U8At( fieldOffset + aDecode.layout.customWidth );
+            field.presentation.horizontalJustification = horizontalJustification( rotatedJustification );
+            field.presentation.verticalJustification = verticalJustification( rotatedJustification );
+            field.presentation.height = decodeHalfMils( aDecode.cursor.U16At( fieldOffset + aDecode.layout.customHeight ) );
+            field.presentation.width = decodeHalfMils( aDecode.cursor.U8At( fieldOffset + aDecode.layout.customWidth ) );
             field.presentation.visible = ( displayFlags & 8 ) == 0;
             field.visible = field.presentation.visible;
 
@@ -3794,8 +3859,37 @@ namespace
             label.sheet = { aModel.sheets[aDecode.sheetIndex].id, source };
             label.text = ownerNet->name;
             label.position = offpagePosition( aDecode, record, aModel.version );
-            label.angle = NormalizeAngle( aDecode.cursor.U16At( offset + 26 ) );
+
+            // Apply the PADS off-page mirror flags to the label direction.  The ASCII
+            // rotation/mirror pair maps to binary words +26/+28; ignoring +28 reverses
+            // horizontal $OSR_SYMS attached to left-facing pins.
+            int32_t        offpageAngle = NormalizeAngle( aDecode.cursor.U16At( offset + 26 ) );
+            const uint16_t offpageMirrorFlags = aDecode.cursor.U16At( offset + 28 );
+
+            if( offpageMirrorFlags & 1 )
+                offpageAngle = NormalizeAngle( 1800 - offpageAngle );
+
+            if( offpageMirrorFlags & 2 )
+                offpageAngle = NormalizeAngle( -offpageAngle );
+
+            label.angle = offpageAngle;
             label.symbolVariant = rawKind;
+            SOURCE_PROVENANCE mirrorSource = source;
+            mirrorSource.absoluteOffset += 28;
+            mirrorSource.length = 2;
+            label.properties.push_back( sourceProperty( wxS( "offpage_mirror_flags" ),
+                                                        wxString::Format( wxS( "%u" ), offpageMirrorFlags ),
+                                                        mirrorSource ) );
+
+            // Real designs carry unrelated data in the high byte, so only unknown low bits warrant a warning
+            if( offpageMirrorFlags & 0x00FC )
+            {
+                SOURCE_PROPERTY& property = label.properties.back();
+                property.disposition = PROPERTY_DISPOSITION::UNSUPPORTED;
+                aModel.diagnostics.push_back( MakePropertyDiagnostic( RPT_SEVERITY_WARNING, property,
+                                                                      wxS( "unsupported PADS off-page mirror flag "
+                                                                           "bits preserved" ) ) );
+            }
 
             if( rawKind == 0xFE )
             {
@@ -3894,6 +3988,9 @@ namespace
                 }
             }
 
+            if( label.kind == MODEL_LABEL_KIND::GROUND || label.kind == MODEL_LABEL_KIND::POWER )
+                label.presentation.visible = false;
+
             label.properties.push_back(
                     sourceProperty( wxS( "offpage_variant" ), wxString::Format( wxS( "%u" ), rawKind ), source ) );
             aModel.labels.push_back( std::move( label ) );
@@ -3906,8 +4003,8 @@ namespace
     {
         MODEL_TEXT_PRESENTATION presentation;
         presentation.source = aSource;
-        presentation.height = aDecode.cursor.U16At( aOffset + 2 );
-        presentation.width = aDecode.cursor.U16At( aOffset + 4 );
+        presentation.height = decodeHalfMils( aDecode.cursor.U16At( aOffset + 2 ) );
+        presentation.width = decodeHalfMils( aDecode.cursor.U16At( aOffset + 4 ) );
         presentation.horizontalJustification = horizontalJustification( aDecode.cursor.U16At( aOffset + 26 ) );
         presentation.verticalJustification = verticalJustification( aDecode.cursor.U16At( aOffset + 26 ) );
         const int16_t     fontHandle = static_cast<int16_t>( aDecode.cursor.U16At( aOffset ) );
@@ -4089,6 +4186,7 @@ namespace
 
                 label->presentation = std::move( presentation );
                 label->textOffset = textOffset;
+                label->angle = NormalizeAngle( aDecode.cursor.U16At( offset + 24 ) );
                 label->properties.push_back(
                         sourceProperty( wxS( "net_name_text_offset" ),
                                         wxString::Format( wxS( "%lld,%lld" ), textOffset.x, textOffset.y ), source ) );
@@ -4196,6 +4294,72 @@ namespace
 
         decodeOffpageLabels( decode, connectivity, claimedBusEntries, aModel );
         decodeNetNames( decode, connectivity, aModel );
+    }
+
+
+    void inheritDefaultSystemFont( MODEL_TEXT_PRESENTATION& aPresentation, const DESIGN_SETTINGS& aSettings )
+    {
+        if( aSettings.fontMode != MODEL_FONT_MODE::SYSTEM || aSettings.defaultSystemFont.text.IsEmpty() )
+            return;
+
+        if( aPresentation.font.text.IsEmpty() || aPresentation.font.text == wxS( "Default Font" ) )
+            aPresentation.font = aSettings.defaultSystemFont;
+    }
+
+
+    void inheritDefaultSystemFonts( PADS_SCH_MODEL& aModel )
+    {
+        const DESIGN_SETTINGS& settings = aModel.settings;
+
+        const auto applyField =
+                [&]( MODEL_FIELD& aField )
+                {
+                    inheritDefaultSystemFont( aField.presentation, settings );
+                };
+
+        const auto applyGraphic =
+                [&]( MODEL_GRAPHIC& aGraphic )
+                {
+                    if( aGraphic.kind == MODEL_GRAPHIC_KIND::TEXT )
+                        inheritDefaultSystemFont( aGraphic.presentation, settings );
+                };
+
+        for( MODEL_SHEET& sheet : aModel.sheets )
+        {
+            std::ranges::for_each( sheet.border, applyGraphic );
+            std::ranges::for_each( sheet.titleBlockFields, applyField );
+        }
+
+        for( MODEL_SYMBOL_DEFINITION& definition : aModel.definitions )
+        {
+            std::ranges::for_each( definition.graphics, applyGraphic );
+            std::ranges::for_each( definition.fields, applyField );
+
+            for( MODEL_PIN_DEFINITION& pin : definition.pins )
+            {
+                inheritDefaultSystemFont( pin.presentation, settings );
+                inheritDefaultSystemFont( pin.namePresentation, settings );
+                inheritDefaultSystemFont( pin.numberPresentation, settings );
+            }
+        }
+
+        for( MODEL_PART_TYPE& partType : aModel.partTypes )
+            std::ranges::for_each( partType.fields, applyField );
+
+        for( MODEL_PLACEMENT& placement : aModel.placements )
+            std::ranges::for_each( placement.fields, applyField );
+
+        for( MODEL_LABEL& label : aModel.labels )
+            inheritDefaultSystemFont( label.presentation, settings );
+
+        for( MODEL_TEXT& text : aModel.texts )
+            inheritDefaultSystemFont( text.presentation, settings );
+
+        for( MODEL_PAGE_GRAPHIC& graphic : aModel.graphics )
+            applyGraphic( graphic.graphic );
+
+        for( MODEL_WORKSHEET& worksheet : aModel.worksheets )
+            std::ranges::for_each( worksheet.graphics, applyGraphic );
     }
 
 
@@ -4677,32 +4841,87 @@ namespace
                                                      settingsOffset, settingsPool.usedBytes, -1 );
         aModel.settings.source = settingsSource;
 
-        uint8_t pageDesignator = 0;
+        constexpr size_t PAGE_FIELD_OFFSET = 264;
+        constexpr size_t PAGE_FIELD_BYTES = 11;
+        const size_t     pageFieldOffset = settingsOffset + PAGE_FIELD_OFFSET;
+        size_t           pageFieldEnd = pageFieldOffset;
 
-        if( std::equal( aBytes.begin() + settingsOffset + 264, aBytes.begin() + settingsOffset + 268, "SIZE" )
-            && aBytes[settingsOffset + 269] == 0 )
-        {
-            pageDesignator = aBytes[settingsOffset + 268];
-        }
-        else if( std::equal( aBytes.begin() + settingsOffset + 264, aBytes.begin() + settingsOffset + 273, "WDITBSIZE" )
-                 && aBytes[settingsOffset + 274] == 0 )
-        {
-            pageDesignator = aBytes[settingsOffset + 273];
-        }
-        else
-        {
-            SOURCE_PROVENANCE source = settingsSource;
-            source.absoluteOffset += 264;
-            source.length = 11;
-            throwDecodeError( source, wxS( "invalid design page-size field" ) );
-        }
+        while( pageFieldEnd < pageFieldOffset + PAGE_FIELD_BYTES && aBytes[pageFieldEnd] != 0 )
+            ++pageFieldEnd;
 
         SOURCE_PROVENANCE pageSource = settingsSource;
-        pageSource.absoluteOffset += 264;
-        pageSource.length = 11;
+        pageSource.absoluteOffset += PAGE_FIELD_OFFSET;
+        pageSource.length = PAGE_FIELD_BYTES;
+
+        if( pageFieldEnd == pageFieldOffset + PAGE_FIELD_BYTES )
+            throwDecodeError( pageSource, wxS( "invalid design page-size field" ) );
+
+        std::string pageField( aBytes.begin() + pageFieldOffset, aBytes.begin() + pageFieldEnd );
+        std::string pageDesignator;
+
+        if( pageField.starts_with( "SIZE" ) && pageField.size() > 4 )
+            pageDesignator = pageField.substr( 4 );
+        else if( pageField.starts_with( "WDITBSIZE" ) && pageField.size() > 9 )
+            pageDesignator = pageField.substr( 9 );
+        else
+            throwDecodeError( pageSource, wxS( "invalid design page-size field" ) );
+
         aModel.settings.pageSize = pageExtent( pageDesignator, pageSource );
         aModel.settings.defaultLineWidth = static_cast<int64_t>( aCursor.U32At( settingsOffset + 12 ) ) * 2;
         aModel.settings.defaultBusWidth = static_cast<int64_t>( aCursor.U32At( settingsOffset + 16 ) ) * 2;
+
+        SOURCE_PROVENANCE fontModeSource = settingsSource;
+        fontModeSource.absoluteOffset += 252;
+        fontModeSource.length = 4;
+        const uint32_t fontModeRaw = aCursor.U32At( settingsOffset + 252 );
+        aModel.settings.properties.push_back( sourceProperty( wxS( "font_mode_raw" ),
+                                                              wxString::Format( wxS( "%u" ), fontModeRaw ),
+                                                              fontModeSource ) );
+
+        if( fontModeRaw == 0 )
+        {
+            aModel.settings.fontMode = MODEL_FONT_MODE::STROKE;
+        }
+        else if( fontModeRaw == 1 )
+        {
+            aModel.settings.fontMode = MODEL_FONT_MODE::SYSTEM;
+        }
+        else
+        {
+            aModel.settings.fontMode = MODEL_FONT_MODE::UNKNOWN;
+            SOURCE_PROPERTY& property = aModel.settings.properties.back();
+            property.disposition = PROPERTY_DISPOSITION::UNSUPPORTED;
+            aModel.diagnostics.push_back( MakePropertyDiagnostic( RPT_SEVERITY_WARNING, property,
+                                                                  wxS( "unknown PADS schematic font mode preserved; "
+                                                                       "using KiCad stroke font" ) ) );
+        }
+
+        const SCH_SDB_POOL& fontPool = aSdb.Pools()[19];
+
+        if( fontPool.usedBytes != fontPool.count * FONT_RECORD_BYTES )
+        {
+            SOURCE_PROVENANCE source = sourceAt( aSourceName, aModel.version, wxS( "font directory" ), 19, 0,
+                                                 outerControllerOffset( aSdb, 19 ), fontPool.usedBytes, -1 );
+            throwDecodeError( source, wxS( "controller byte count does not match 36-byte records" ) );
+        }
+
+        if( fontPool.count > 0 )
+        {
+            const size_t defaultFontOffset = outerControllerOffset( aSdb, 19 );
+            SOURCE_PROVENANCE defaultFontSource = sourceAt( aSourceName, aModel.version, wxS( "default system font" ),
+                                                            19, 0, defaultFontOffset + 4, 32, -1 );
+            aModel.settings.defaultSystemFont = decodeFixedString( aBytes, defaultFontOffset + 4, 32,
+                                                                   defaultFontSource, aModel.diagnostics );
+        }
+        else if( aModel.settings.fontMode == MODEL_FONT_MODE::SYSTEM )
+        {
+            SOURCE_PROPERTY property = sourceProperty( wxS( "default_system_font" ), wxS( "" ), fontModeSource );
+            property.disposition = PROPERTY_DISPOSITION::UNSUPPORTED;
+            aModel.diagnostics.push_back( MakePropertyDiagnostic( RPT_SEVERITY_WARNING, property,
+                                                                  wxS( "PADS system-font mode has no default font "
+                                                                       "record; using KiCad stroke font" ) ) );
+            aModel.settings.properties.push_back( std::move( property ) );
+        }
 
         std::vector<MODEL_FIELD> titleFields;
         const SCH_SDB_POOL&      titleFieldPool = aSdb.Pools()[1];
@@ -4897,7 +5116,7 @@ namespace
             text.presentation.width = aCursor.U8At( recordOffset + 30 );
             const uint8_t displayFlags = aCursor.U8At( recordOffset + 31 );
             text.presentation.visible = ( displayFlags & 1 ) == 0;
-            text.presentation.horizontalJustification = freeTextHorizontalJustification( justification );
+            text.presentation.horizontalJustification = horizontalJustification( justification );
             text.presentation.verticalJustification = verticalJustification( justification );
 
             SOURCE_PROVENANCE fontHandleSource = textSource;
@@ -4945,7 +5164,7 @@ namespace
 
         if( placementSchema.decoded )
         {
-            placementData = placementGlobals( aSdb, aSourceName );
+            placementData = placementGlobals( aSdb, aSourceName, aModel.settings );
             connectivityData = connectivityGlobals( aBytes, aCursor, aSdb, aSourceName, aModel );
         }
 
@@ -5141,6 +5360,7 @@ PADS_SCH_MODEL PADS_SCH_BINARY_PARSER::Parse( const std::vector<uint8_t>& aBytes
     decodeSheets( aBytes, cursor, sdb, aSourceName, titleFields, model );
     decodeSheetBlocks( aBytes, cursor, sdb, aSourceName, model );
     decodeOleImages( aBytes, sdb, aSourceName, model );
+    inheritDefaultSystemFonts( model );
     assignFieldIds( model );
     model.ValidateOrThrow();
     return model;

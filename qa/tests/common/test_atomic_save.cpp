@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "qa_utils/wx_utils/unit_test_utils.h"
 #include <boost/test/unit_test.hpp>
 #include <qa_utils/file_utils.h>
 
@@ -30,11 +31,11 @@
 #include <wx/filefn.h>
 #include <wx/filename.h>
 
-#include <memory>
 #include <string>
 
 #if defined( _WIN32 )
 #include <windows.h>
+#include <sddl.h>
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -56,21 +57,6 @@ void writeFileContents( const wxString& aPath, const std::string& aContent )
 }
 
 
-std::string readFileContents( const wxString& aPath )
-{
-    wxFFile fp( aPath, wxT( "rb" ) );
-
-    if( !fp.IsOpened() )
-        return std::string();
-
-    wxString buf;
-    fp.ReadAll( &buf );
-    std::string out = std::string( buf.mb_str( wxConvUTF8 ) );
-    fp.Close();
-    return out;
-}
-
-
 // Counts remaining sibling temp files matching the atomic-save pattern next to a target.
 // Used to assert no orphan temps leak out of a successful commit.
 unsigned countSiblingTemps( const wxString& aTargetPath )
@@ -82,22 +68,6 @@ unsigned countSiblingTemps( const wxString& aTargetPath )
     wxDir::GetAllFiles( dir, &matches, pattern, wxDIR_FILES );
     return matches.GetCount();
 }
-
-
-// Counts error-level records so a failed save can be checked for reports beyond the one it
-// throws. Warnings are ignored; only errors reach the user as a dialog.
-class ERROR_COUNTING_LOG : public wxLog
-{
-public:
-    unsigned m_errors = 0;
-
-protected:
-    void DoLogRecord( wxLogLevel aLevel, const wxString&, const wxLogRecordInfo& ) override
-    {
-        if( aLevel <= wxLOG_Error )
-            m_errors++;
-    }
-};
 
 } // anonymous namespace
 
@@ -116,7 +86,7 @@ BOOST_AUTO_TEST_CASE( PrettifiedFormatter_HappyPath )
     }
 
     BOOST_REQUIRE( wxFileName::FileExists( target ) );
-    std::string actual = readFileContents( target );
+    std::string actual = KI_TEST::LoadStringData( target );
     BOOST_REQUIRE( !actual.empty() );
     BOOST_REQUIRE( actual.find( "hello" ) != std::string::npos );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
@@ -145,7 +115,7 @@ BOOST_AUTO_TEST_CASE( PrettifiedFormatter_UnwindingPreservesOriginal )
         std::runtime_error );
 
     BOOST_REQUIRE( wxFileName::FileExists( target ) );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), original );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
 
@@ -154,17 +124,17 @@ BOOST_AUTO_TEST_CASE( PrettifiedFormatter_DestructorDiscardsWithoutExplicitFinis
 {
     // Finish() is the only thing that commits. A formatter that goes out of scope without it
     // has abandoned the save, so the target keeps the bytes it already had.
-    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-implicit" ) );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-discard-unfinished" ) );
     const wxString target = tempDir.PathStr() + wxFileName::GetPathSeparator() + wxT( "target" );
     const std::string original = "(original \"keep me\")\n";
     writeFileContents( target, original );
 
     {
         PRETTIFIED_FILE_OUTPUTFORMATTER f( target );
-        f.Print( 0, "(implicit_commit ok)\n" );
+        f.Print( 0, "(uncommitted content)\n" );
     }
 
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), original );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
 
@@ -187,39 +157,25 @@ BOOST_AUTO_TEST_CASE( FileFormatter_UnwindingPreservesOriginal )
         std::runtime_error );
 
     BOOST_REQUIRE( wxFileName::FileExists( target ) );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), original );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
 
 
-BOOST_AUTO_TEST_CASE( FileFormatter_HandledExceptionDiscardsWithoutFinish )
+BOOST_AUTO_TEST_CASE( FileFormatter_DestructorDiscardsWithoutExplicitFinish )
 {
-    // A formatter that outlives the catch -- HYPERLYNX_EXPORTER keeps one in a member -- is
-    // destroyed with no exception in flight, so an unwinding check cannot see that the save
-    // failed. Committing there promotes a partial write the caller has already reported.
-    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-outlives" ) );
+    // Same invariant for the streaming (non-prettified) formatter.
+    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-stream-scope-exit" ) );
     const wxString target = tempDir.PathStr() + wxFileName::GetPathSeparator() + wxT( "target" );
     const std::string original = "original export content\n";
     writeFileContents( target, original );
 
     {
-        std::shared_ptr<FILE_OUTPUTFORMATTER> out;
-
-        try
-        {
-            out = std::make_shared<FILE_OUTPUTFORMATTER>( target );
-            out->Print( 0, "partial export before the failure " );
-            THROW_IO_ERROR( wxT( "simulated mid-export failure" ) );
-        }
-        catch( const IO_ERROR& )
-        {
-            // Swallowed on purpose; the exporter this models reports by returning false
-        }
-
-        BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+        FILE_OUTPUTFORMATTER f( target );
+        f.Print( 0, "uncommitted streaming content\n" );
     }
 
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), original );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
 
@@ -235,7 +191,7 @@ BOOST_AUTO_TEST_CASE( AtomicWriteFile_HappyPath )
                                                     &err ) );
     BOOST_REQUIRE( err.IsEmpty() );
     BOOST_REQUIRE( wxFileName::FileExists( target ) );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), payload );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), payload );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
 
@@ -259,7 +215,7 @@ BOOST_AUTO_TEST_CASE( AtomicWriteFile_OverwritePreservesOriginalOnFailure )
     BOOST_REQUIRE( !err.IsEmpty() );
 
     BOOST_REQUIRE( wxFileName::FileExists( target ) );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), original );
 }
 
 
@@ -316,6 +272,59 @@ BOOST_AUTO_TEST_CASE( FileFormatter_ExplicitFinishThrowsOnCommitFailure )
 }
 
 
+BOOST_AUTO_TEST_CASE( Formatter_SecondFinishIsACallerError )
+{
+    // Committing is single-use: a second Finish() after a successful commit or after a
+    // failed one is a programming error and must trip the QA assertion thrower.
+    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-double-finish" ) );
+    const wxString sep = wxFileName::GetPathSeparator();
+
+    // Streaming formatter: second Finish() after a successful commit.
+    {
+        const wxString target = tempDir.PathStr() + sep + wxT( "stream-ok" );
+        FILE_OUTPUTFORMATTER f( target );
+        f.Print( 0, "saved once\n" );
+
+        BOOST_REQUIRE( f.Finish() );
+        CHECK_WX_ASSERT( f.Finish() );
+    }
+
+    // Streaming formatter: second Finish() after a failed commit.
+    {
+        const wxString target = tempDir.PathStr() + sep + wxT( "stream-fail" );
+        BOOST_REQUIRE( wxFileName::Mkdir( target, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) );
+
+        FILE_OUTPUTFORMATTER f( target );
+        f.Print( 0, "doomed streaming save\n" );
+
+        BOOST_REQUIRE_THROW( f.Finish(), IO_ERROR );
+        CHECK_WX_ASSERT( f.Finish() );
+    }
+
+    // Prettified formatter: second Finish() after a successful commit.
+    {
+        const wxString target = tempDir.PathStr() + sep + wxT( "prettified-ok" );
+        PRETTIFIED_FILE_OUTPUTFORMATTER f( target );
+        f.Print( 0, "(saved once)\n" );
+
+        BOOST_REQUIRE( f.Finish() );
+        CHECK_WX_ASSERT( f.Finish() );
+    }
+
+    // Prettified formatter: second Finish() after a failed commit.
+    {
+        const wxString target = tempDir.PathStr() + sep + wxT( "prettified-fail" );
+        BOOST_REQUIRE( wxFileName::Mkdir( target, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) );
+
+        PRETTIFIED_FILE_OUTPUTFORMATTER f( target );
+        f.Print( 0, "(doomed pretty save)\n" );
+
+        BOOST_REQUIRE_THROW( f.Finish(), IO_ERROR );
+        CHECK_WX_ASSERT( f.Finish() );
+    }
+}
+
+
 BOOST_AUTO_TEST_CASE( DrawingSheetSave_PropagatesCommitFailure )
 {
     // Regression for the DS_DATA_MODEL_FILEIO refactor: the drawing-sheet writer must
@@ -343,20 +352,15 @@ BOOST_AUTO_TEST_CASE( PrettifiedFormatter_DestructorDiscardsWhenTargetIsDirector
 
     BOOST_REQUIRE( wxFileName::Mkdir( target, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) );
 
-    ERROR_COUNTING_LOG* counter = new ERROR_COUNTING_LOG;
-    wxLog*              previous = wxLog::SetActiveTarget( counter );
+    KI_TEST::SCOPED_COUNTING_WXLOG logCounter( nullptr );
 
     {
         PRETTIFIED_FILE_OUTPUTFORMATTER f( target );
         f.Print( 0, "(implicit doomed)\n" );
     }
 
-    wxLog::SetActiveTarget( previous );
-    unsigned errors = counter->m_errors;
-    delete counter;
-
     // Nothing was attempted, so nothing had anything to report
-    BOOST_REQUIRE_EQUAL( errors, 0u );
+    BOOST_REQUIRE_EQUAL( logCounter.GetCount(), 0u );
     BOOST_REQUIRE( wxFileName::DirExists( target ) );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
@@ -376,7 +380,7 @@ BOOST_AUTO_TEST_CASE( PrettifiedFormatter_CreatesNewTarget )
     }
 
     BOOST_REQUIRE( wxFileName::FileExists( target ) );
-    std::string actual = readFileContents( target );
+    std::string actual = KI_TEST::LoadStringData( target );
     BOOST_REQUIRE( actual.find( "new_file" ) != std::string::npos );
     BOOST_REQUIRE_EQUAL( countSiblingTemps( target ), 0u );
 }
@@ -405,7 +409,27 @@ BOOST_AUTO_TEST_CASE( AtomicWriteFile_PreservesPosixMode )
     struct stat st;
     BOOST_REQUIRE_EQUAL( stat( target.fn_str(), &st ), 0 );
     BOOST_REQUIRE_EQUAL( st.st_mode & 0777, 0400 );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), payload );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), payload );
+}
+
+
+BOOST_AUTO_TEST_CASE( AtomicWriteFile_NewTargetHonoursUmask )
+{
+    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-umask" ) );
+    const wxString target = tempDir.PathStr() + wxFileName::GetPathSeparator() + wxT( "target" );
+    const std::string payload = "fresh\n";
+    const mode_t      previousMask = umask( 022 );
+    wxString          err;
+
+    const bool written = KIPLATFORM::IO::AtomicWriteFile( target, payload.data(), payload.size(), &err );
+
+    umask( previousMask );
+
+    BOOST_REQUIRE_MESSAGE( written, err );
+
+    struct stat st;
+    BOOST_REQUIRE_EQUAL( stat( target.fn_str(), &st ), 0 );
+    BOOST_CHECK_EQUAL( st.st_mode & 0777, 0644 );
 }
 
 
@@ -433,7 +457,7 @@ BOOST_AUTO_TEST_CASE( AtomicWriteFile_FollowsSymlinkTarget )
     BOOST_REQUIRE( S_ISLNK( st.st_mode ) );
 
     // Referent must have the new content.
-    BOOST_REQUIRE_EQUAL( readFileContents( referent ), payload );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( referent ), payload );
 }
 
 
@@ -459,7 +483,7 @@ BOOST_AUTO_TEST_CASE( AtomicWriteFile_FailedRenameRestoresTargetMode )
     struct stat st;
     BOOST_REQUIRE_EQUAL( stat( target.fn_str(), &st ), 0 );
     BOOST_REQUIRE_EQUAL( st.st_mode & 0777, 0400 );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), original );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), original );
 }
 
 #else // _WIN32
@@ -486,11 +510,38 @@ BOOST_AUTO_TEST_CASE( AtomicWriteFile_PreservesWindowsAttributes )
     BOOST_REQUIRE( attrs != INVALID_FILE_ATTRIBUTES );
     BOOST_REQUIRE( ( attrs & FILE_ATTRIBUTE_READONLY ) != 0 );
     BOOST_REQUIRE( ( attrs & FILE_ATTRIBUTE_HIDDEN ) != 0 );
-    BOOST_REQUIRE_EQUAL( readFileContents( target ), payload );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), payload );
 
     // Clear READONLY so the SCOPED_TEMP_DIR teardown (std::filesystem::remove_all) can
     // delete the file on Windows, where remove() does not clear the attribute itself.
     SetFileAttributesW( target.wc_str(), FILE_ATTRIBUTE_NORMAL );
+}
+
+
+BOOST_AUTO_TEST_CASE( AtomicWriteFile_SavesWhenPermissionsCannotBeCopied )
+{
+    KI_TEST::SCOPED_TEMP_DIR tempDir( wxT( "kicad-atomicsave-noacl" ) );
+    const wxString target = tempDir.PathStr() + wxFileName::GetPathSeparator() + wxT( "target" );
+    const wxString probe = tempDir.PathStr() + wxFileName::GetPathSeparator() + wxT( "probe" );
+    writeFileContents( target, "original\n" );
+    writeFileContents( probe, "" );
+
+    // An OWNER RIGHTS entry without READ_CONTROL hides the DACL even from the file's owner,
+    // standing in for a cloud-drive volume that has no security descriptor to hand out
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    BOOST_REQUIRE( ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;;0x11019f;;;OW)(A;;0x11019f;;;WD)", SDDL_REVISION_1, &sd, nullptr ) );
+
+    const BOOL applied = SetFileSecurityW( target.wc_str(), DACL_SECURITY_INFORMATION, sd );
+    LocalFree( sd );
+    BOOST_REQUIRE( applied );
+    BOOST_REQUIRE( !KIPLATFORM::IO::DuplicatePermissions( target, probe ) );
+
+    const std::string payload = "replacement\n";
+    wxString          err;
+    BOOST_REQUIRE_MESSAGE( KIPLATFORM::IO::AtomicWriteFile( target, payload.data(), payload.size(), &err ),
+                           err );
+    BOOST_REQUIRE_EQUAL( KI_TEST::LoadStringData( target ), payload );
 }
 
 #endif // _WIN32

@@ -38,7 +38,7 @@ class PARAM_CFG;
  * * The parameter they are setting is of general interest and should be in the
  *   main application config, with UI provided.
  *
- * Options in this class are, in general, preferable to #defines, as they
+ * Options in this class are, in general, preferable to \#defines, as they
  * allow more flexible configuration by developers, and don't hide code from
  * the compiler on other configurations, which can result in broken builds.
  *
@@ -280,7 +280,7 @@ public:
     /**
      * Enable drawing the triangulation outlines with a visible color.
      *
-     * @note This only affects the OpenGL GAL.
+     * @note This only affects screen rendering, not Cairo printing or plotting.
      *
      * Setting name: "StrokeTriangulation"
      * Valid values: 0 or 1
@@ -377,11 +377,12 @@ public:
     double m_PDFStrokeFontKerningFactor;
 
     /**
-     * Use legacy wxWidgets-based printing.
+     * Print by plotting to PDF and handing the PDF to the platform print system.
+     * Set to 0 to use the legacy wxWidgets printing.
      *
      * Setting name: "UsePdfPrint"
      * Valid values: 0 or 1
-     * Default value: 0
+     * Default value: 1
      */
     bool m_UsePdfPrint;
 
@@ -532,6 +533,17 @@ public:
     bool m_IncrementalConnectivity;
 
     /**
+     * Use the schematic connectivity engine instead of CONNECTION_GRAPH.
+     *
+     * See @ref schematic_connectivity.
+     *
+     * Setting name: "ConnectivityEngine"
+     * Valid values: 0 or 1
+     * Default value: 1
+     */
+    bool m_ConnectivityEngine;
+
+    /**
      * The number of milliseconds to wait in a click before showing a disambiguation menu.
      *
      * Setting name: "DisambiguationTime"
@@ -667,6 +679,16 @@ public:
      * Default value: 1
      */
     bool m_EnableCacheFriendlyFracture;
+
+    /**
+     * Index fracture edges by y stripe instead of rescanning every earlier edge for each hole.
+     * Disable to fall back on the linear scan when bisecting a suspected fracture fault.
+     *
+     * Setting name: "EnableFractureEdgeIndex"
+     * Valid values: 0 or 1
+     * Default value: 1
+     */
+    bool m_EnableFractureEdgeIndex;
 
     /**
      * Refine each triangulation toward the constrained Delaunay triangulation with a
@@ -1075,6 +1097,34 @@ public:
      * Default value: true
      */
     bool m_EagleImportFieldsCanAutoplace;
+
+    /**
+     * Create OpenGL contexts that report GPU resets so the canvases can rebuild themselves
+     * instead of freezing.
+     *
+     * Setting name: "EnableGLResetRecovery"
+     * Valid values: true or false
+     * Default value: true
+     */
+    bool m_EnableGLResetRecovery;
+
+    /**
+     * Enable Vulkan validation layers for debugging.
+     *
+     * Setting name: "EnableVulkanValidation"
+     * Valid values: true or false
+     * Default value: false
+     */
+    bool m_EnableVulkanValidation;
+
+    /**
+     * Thread priority for the RHI render thread.
+     *
+     * Setting name: "RenderThreadPriority"
+     * Valid values: "low", "normal", "high"
+     * Default value: "normal"
+     */
+    wxString m_RenderThreadPriority;
 
     wxString m_traceMasks; ///< Trace masks for wxLogTrace, loaded from the config file.
     ///@}

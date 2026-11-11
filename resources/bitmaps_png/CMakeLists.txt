@@ -69,13 +69,22 @@ set( BMAPS_SMALL
     e_96
     e_192
     git_add
+    git_branches
     git_changed_ahead
+    git_changes
     git_conflict
     git_delete
+    git_fetch
     git_good_check
+    git_history
     git_modified
     git_out_of_date
-    icon_bitmap2component_16
+    git_pull
+    git_push
+    git_remotes
+    git_repository
+    git_stashes
+    git_tags
     icon_eeschema_16
     icon_gerbview_16
     icon_kicad_16
@@ -89,9 +98,7 @@ set( BMAPS_SMALL
     label_align_right
     label_align_top
     label_align_bottom
-    list_nets_16
     notifications
-    options_generic_16
     pinorient_right
     pinorient_left
     pinorient_up
@@ -130,6 +137,7 @@ set( BMAPS_SMALL
     small_trash
     small_up
     small_warning
+    spread_tracks
     text_horizontal
     text_vertical
     text_align_left
@@ -159,6 +167,11 @@ set( BMAPS_MID
     about
     add_aligned_dimension
     add_arc
+    add_arc_center
+    add_arc_start_end_mid
+    add_arc_start_end_center
+    add_arc_tangent
+    add_arc_start_dir_end
     add_barcode
     add_bezier
     add_board
@@ -232,6 +245,7 @@ set( BMAPS_MID
     bug
     bus_definition_tool
     cancel
+    calculator
     chamfer
     change_entry_orient
     checked_ok
@@ -273,7 +287,6 @@ set( BMAPS_MID
     edit_comp_ref
     edit_comp_value
     editor
-    edit_cmp_symb_links
     edit
     edge_to_copper_clearance
     enter_sheet
@@ -340,7 +353,6 @@ set( BMAPS_MID
     hole_to_hole_clearance
     hole_to_copper_clearance
     hv45mode
-    icon_bitmap2component_24
     icon_cvpcb_24
     icon_eeschema_24
     icon_footprint_browser
@@ -383,6 +395,7 @@ set( BMAPS_MID
     library_table
     lines_any
     lines90
+    link
     list_nets
     load_drill
     load_gerber
@@ -439,8 +452,12 @@ set( BMAPS_MID
     pad_sketch
     pad
     pad_enumerate
+    pad_npth
     pad_number
+    pad_paste_aperture
+    pad_smd
     pad_table
+    pad_tht
     pads_mask_layers
     pads_remove
     path
@@ -613,7 +630,6 @@ set( BMAPS_24
 
 # 32 x 32 for icon sets
 set( BMAPS_32
-    icon_bitmap2component_32
     icon_eeschema_32
     icon_gerbview_32
     icon_kicad_32
@@ -637,7 +653,6 @@ set( BMAPS_BIG
     icon_libedit
     icon_modedit
     icon_pcbnew
-    icon_bitmap2component
     icon_pagelayout_editor
     icon_pcbcalculator
     icon_pcm
@@ -664,7 +679,6 @@ set( BMAPS_64
     icon_modedit
     icon_pcbnew
     icon_pagelayout_editor
-    icon_bitmap2component
     icon_pcbcalculator
     icon_pcm
     )
@@ -680,7 +694,6 @@ set( BMAPS_128
     icon_modedit
     icon_pcbnew
     icon_pagelayout_editor
-    icon_bitmap2component
     icon_pcbcalculator
     icon_pcm
     )
@@ -696,7 +709,6 @@ set( BMAPS_256
     icon_modedit
     icon_pcbnew
     icon_pagelayout_editor
-    icon_bitmap2component
     icon_pcbcalculator
     icon_pcm
     )
@@ -760,7 +772,7 @@ set( BMAPS_CONSTRAINTS
     via-style
     vias-under-smd
     microvia-stack-depth
-    microvia-aspect-ratio
+    hole-aspect-ratio
     )
 
 set( BMAPS_CONSTRAINTS_GEOM
@@ -803,7 +815,6 @@ set( BMAPS_OTHER
     creepage_clearance
     cpw
     cpw_back
-    light
     microstrip
     microstrip_zodd_zeven
     pads_npth
@@ -943,14 +954,19 @@ function( bitmap_dir pngWidth pngHeight bmapList )
         endif()
 
         foreach( bmn ${bmapList} )
+            # If the specific SVG file with the height tag exists, use it
+            # Else use the generic SVG file without the height tag and scale it
+            set( svgFile "${CMAKE_CURRENT_SOURCE_DIR}/sources/${theme}/${bmn}${heightTag}.svg" )
+            if ( NOT EXISTS ${svgFile} )
+                set( svgFile "${CMAKE_CURRENT_SOURCE_DIR}/sources/${theme}/${bmn}.svg" )
+            endif()
 
-            set( svgFile "${CMAKE_CURRENT_SOURCE_DIR}/sources/${theme}/${bmn}.svg" )
             set( pngFile "${bmn}${themeTag}${heightTag}.png" )
             set( pngPath "${pngDir}/${pngFile}" )
             set( tmpFile "${TMP_DIR}/${pngFile}" )
 
             if( NOT EXISTS ${svgFile} )
-                message( "Warning: Source SVG ${svgFile} does not exist!" )
+                message( "Warning: Source SVG ${svgFile} does not exist (for ${bmn} at ${pngHeight}px)!" )
                 continue()
             endif()
 
@@ -1035,6 +1051,13 @@ endfunction()
 
 include( FindUnixCommands )
 
+# Git's GNU tar on Windows treats "C:/..." as a remote host and needs a gzip that is not on PATH.
+# Prefer the System32 bsdtar unless a reproducible build needs the GNU archive flags below.
+
+if( MSVC AND NOT DEFINED ENV{SOURCE_DATE_EPOCH} AND EXISTS "C:\\Windows\\System32\\tar.exe" )
+    set( TAR "C:\\Windows\\System32\\tar.exe" )
+endif()
+
 if( TAR STREQUAL "TAR-NOTFOUND" )
     # CMake on Windows CI seems to struggle to find tar even though it's in PATH
     # Let's help it out as modern windows (Server 2019 and 10 provide tar)
@@ -1112,6 +1135,10 @@ if( APPLE )
 endif()
 
 if( MAINTAIN_PNGS )
+
+    # Re-run CMake whenever the set of source SVGs changes.
+    file( GLOB_RECURSE _maintain_png_svgs CONFIGURE_DEPENDS
+          "${CMAKE_CURRENT_SOURCE_DIR}/sources/*.svg" )
 
     # Inkscape is required to convert SVG files to PNG files.
     set( Inkscape_FOUND FALSE )

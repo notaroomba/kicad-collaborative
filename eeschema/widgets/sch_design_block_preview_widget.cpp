@@ -57,8 +57,9 @@ SCH_DESIGN_BLOCK_PREVIEW_WIDGET::SCH_DESIGN_BLOCK_PREVIEW_WIDGET( wxWindow* aPar
 
     EDA_DRAW_PANEL_GAL::GAL_TYPE canvasType = aCanvasType;
 
-    // Allows only a CAIRO or OPENGL canvas:
-    if( canvasType != EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL && canvasType != EDA_DRAW_PANEL_GAL::GAL_FALLBACK )
+    // Only a canvas that can draw is allowed
+    if( canvasType != EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL && canvasType != EDA_DRAW_PANEL_GAL::GAL_TYPE_MODERN
+        && canvasType != EDA_DRAW_PANEL_GAL::GAL_FALLBACK )
     {
         canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL;
     }
@@ -68,11 +69,6 @@ SCH_DESIGN_BLOCK_PREVIEW_WIDGET::SCH_DESIGN_BLOCK_PREVIEW_WIDGET( wxWindow* aPar
     m_preview->SetStealsFocus( false );
     m_preview->ShowScrollbars( wxSHOW_SB_NEVER, wxSHOW_SB_NEVER );
     m_preview->GetGAL()->SetAxesEnabled( false );
-
-    // Do not display the grid: the look is not good for a small canvas area.
-    // But mainly, due to some strange bug I (JPC) was unable to fix, the grid creates
-    // strange artifacts on Windows when Eeschema is run from KiCad manager (but not in
-    // stand alone...).
     m_preview->GetGAL()->SetGridVisibility( true );
 
     // Early initialization of the canvas background color,
@@ -176,6 +172,11 @@ void SCH_DESIGN_BLOCK_PREVIEW_WIDGET::fitOnDrawArea()
 
     // Calculate the drawing area size, in internal units, for a scaling factor = 1.0
     view->SetScale( 1.0 );
+    view->SetCenter( m_itemBBox.Centre() );
+
+    if( m_itemBBox.GetWidth() == 0 || m_itemBBox.GetHeight() == 0 )
+        return;
+
     VECTOR2D clientSize = view->ToWorld( ToVECTOR2D( m_preview->GetClientSize() ), false );
     // Calculate the draw scale to fit the drawing area
     double scale =
@@ -186,7 +187,6 @@ void SCH_DESIGN_BLOCK_PREVIEW_WIDGET::fitOnDrawArea()
 
     // Now fix the best scale
     view->SetScale( scale );
-    view->SetCenter( m_itemBBox.Centre() );
 }
 
 

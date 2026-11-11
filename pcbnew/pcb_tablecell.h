@@ -25,6 +25,8 @@
 #include <board_item_container.h>
 
 
+class wxPGChoices;
+
 namespace kiapi::board::types
 {
     class TableCell;
@@ -42,6 +44,8 @@ public:
     virtual wxString GetFriendlyName() const override { return _( "Table Cell" ); }
 
     EDA_ITEM* Clone() const override { return new PCB_TABLECELL( *this ); }
+
+    void CopyFrom( const BOARD_ITEM* aOther ) override;
 
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
@@ -61,7 +65,13 @@ public:
     // @return the spreadsheet nomenclature for the cell (ie: B3 for 2nd column, 3rd row)
     wxString GetAddr() const;
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
+
+    /**
+     * GetShownText() before it is line-broken to the cell's width, i.e. the width the text
+     * needs rather than the width it has been given.
+     */
+    wxString GetUnwrappedShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const;
 
     int  GetColSpan() const { return m_colSpan; }
     void SetColSpan( int aSpan ) { m_colSpan = aSpan; }
@@ -74,6 +84,22 @@ public:
 
     int  GetColumnWidth() const;
     void SetColumnWidth( int aWidth );
+
+    double GetCoverageArea( int aTextMargin ) const override;
+
+    /**
+     * The text height, which speaks for the width too only when HasSquareFontSize.
+     * Setting it sets both.
+     */
+    int  GetFontSize() const { return GetTextHeight(); }
+    void SetFontSize( int aSize ) { SetTextSize( VECTOR2I( aSize, aSize ) ); }
+    bool HasSquareFontSize() const { return GetTextWidth() == GetTextHeight(); }
+
+    /**
+     * The font names EDA_TEXT's Font property offers, for the Font Name a generated table and
+     * its cells offer instead.
+     */
+    static wxPGChoices FontChoices( INSPECTABLE* aItem );
 
     bool IsFilledForHitTesting() const override { return true; }
 

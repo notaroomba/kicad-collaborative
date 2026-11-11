@@ -66,12 +66,17 @@ DIALOG_SHEET_PROPERTIES::DIALOG_SHEET_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH_S
         m_dummySheetNameField( &m_dummySheet, FIELD_T::SHEET_NAME )
 {
     m_sheet = aSheet;
-    m_fields = new FIELDS_GRID_TABLE( this, aParent, m_grid, m_sheet );
+
+    std::vector<EMBEDDED_FILES*> embeddedFilesStack;
+    embeddedFilesStack.push_back( m_sheet->Schematic() );
+
+    m_fields = new FIELDS_GRID_TABLE( this, aParent, m_grid, m_sheet, embeddedFilesStack );
     m_delayedFocusRow = 0;
     m_delayedFocusColumn = FDC_VALUE;
 
     m_grid->SetTable( m_fields );
-    m_grid->PushEventHandler( new FIELDS_GRID_TRICKS( m_grid, this, { &aParent->Schematic() },
+    SetInitialFocus( m_grid );
+    m_grid->PushEventHandler( new FIELDS_GRID_TRICKS( m_grid, this, embeddedFilesStack,
                                                       [&]( wxCommandEvent& aEvent )
                                                       {
                                                           OnAddField( aEvent );
@@ -88,6 +93,9 @@ DIALOG_SHEET_PROPERTIES::DIALOG_SHEET_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH_S
 
     m_pageNumberTextCtrl->SetMinSize( wxSize( minWidth, minSize.GetHeight() ) );
 
+    int suffixWidth = m_fullSuffixCtrl->GetTextExtent( wxS( "XXXX_XXXX" ) ).GetWidth() + FromDIP( 20 );
+    m_fullSuffixCtrl->SetMinSize( wxSize( suffixWidth, -1 ) );
+
     wxToolTip::Enable( true );
     SetupStandardButtons();
 
@@ -101,6 +109,8 @@ DIALOG_SHEET_PROPERTIES::DIALOG_SHEET_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH_S
     m_hierarchicalPathLabel->SetFont( KIUI::GetSmallInfoFont( this ) );
     m_hierarchicalPath->SetFont( KIUI::GetSmallInfoFont( this ) );
 
+    m_grid->GetGridWindow()->Bind( wxEVT_MOTION, &DIALOG_SHEET_PROPERTIES::OnGridMotion, this );
+
     // wxFormBuilder doesn't include this event...
     m_grid->Connect( wxEVT_GRID_CELL_CHANGING, wxGridEventHandler( DIALOG_SHEET_PROPERTIES::OnGridCellChanging ),
                      nullptr, this );
@@ -111,6 +121,8 @@ DIALOG_SHEET_PROPERTIES::DIALOG_SHEET_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH_S
 
 DIALOG_SHEET_PROPERTIES::~DIALOG_SHEET_PROPERTIES()
 {
+    m_grid->GetGridWindow()->Unbind( wxEVT_MOTION, &DIALOG_SHEET_PROPERTIES::OnGridMotion, this );
+
     // Prevents crash bug in wxGrid's d'tor
     m_grid->DestroyTable( m_fields );
 
@@ -127,25 +139,12 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataToWindow()
     if( !wxDialog::TransferDataToWindow() )
         return false;
 
+    SCHEMATIC&     schematic = m_frame->Schematic();
     SCH_SHEET_PATH instance = m_frame->GetCurrentSheet();
-    wxString variantName = m_frame->Schematic().GetCurrentVariant();
+    wxString       variantName = m_frame->Schematic().GetCurrentVariant();
 
-    std::vector<SCH_FIELD*> orderedFields;
-
-    for( SCH_FIELD& field : m_sheet->GetFields() )
-        orderedFields.push_back( &field );
-
-    std::stable_sort( orderedFields.begin(), orderedFields.end(),
-                      []( const SCH_FIELD* lhs, const SCH_FIELD* rhs )
-                      {
-                          return lhs->GetOrdinal() < rhs->GetOrdinal();
-                      } );
-
-    // Push a copy of each field into m_updateFields
-    for( SCH_FIELD* field : orderedFields )
+    for( SCH_FIELD field_copy : GetSheetFieldsForEditing( *m_sheet ) )
     {
-        SCH_FIELD field_copy( *field );
-
 #ifdef __WINDOWS__
         // Filenames are stored using unix notation, so convert to Windows notation
         if( field_copy.GetId() == FIELD_T::SHEET_FILENAME )
@@ -156,12 +155,16 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataToWindow()
         }
 #endif
 
-        if( !field_copy.IsMandatory() )
-            field_copy.SetText( m_sheet->GetFieldText( field->GetName(), &instance, variantName ) );
+        if( !field_copy.IsMandatory() && m_sheet->GetField( field_copy.GetName() ) )
+        {
+            wxString text = m_sheet->GetFieldText( field_copy.GetName(), &instance, variantName );
+            field_copy.SetText( schematic.ConvertKIIDsToRefs( text ) );
+        }
 
         // change offset to be symbol-relative
         field_copy.Offset( -m_sheet->GetPosition() );
 
+        field_copy.SetParent( m_sheet );
         m_fields->push_back( field_copy );
     }
 
@@ -288,6 +291,17 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataFromWindow()
     {
         DisplayError( this, _( "A sheet must have a valid file name." ) );
         return false;
+    }
+
+    if( const SCH_FIELD* suffix = FindField( *m_fields, FIELD_T::SHEET_REF_SUFFIX ) )
+    {
+        wxString msg = GetFieldValidationErrorMessage( FIELD_T::SHEET_REF_SUFFIX, suffix->GetText() );
+
+        if( !msg.IsEmpty() )
+        {
+            DisplayError( this, msg );
+            return false;
+        }
     }
 
     // Ensure the filename extension is OK.  (In normal use will be caught by grid validators,
@@ -421,10 +435,13 @@ bool DIALOG_SHEET_PROPERTIES::TransferDataFromWindow()
             field.SetName( _( "untitled" ) );
 
         if( !field.IsMandatory() )
-            field.SetOrdinal( ordinal++ );
+            field.SetOrdinal( ordinal++, FIELD_T::SHEET_USER );
 
         SCH_FIELD* existingField = m_sheet->GetField( fieldName );
         SCH_FIELD* tmp;
+
+        if( !existingField && field.GetId() == FIELD_T::SHEET_REF_SUFFIX && field.GetText().IsEmpty() )
+            continue;
 
         if( !existingField )
         {
@@ -528,6 +545,24 @@ bool DIALOG_SHEET_PROPERTIES::onSheetFilenameChanged( const wxString& aNewFilena
 }
 
 
+void DIALOG_SHEET_PROPERTIES::OnGridMotion( wxMouseEvent& aEvent )
+{
+    aEvent.Skip();
+
+    wxPoint  pos = m_grid->CalcUnscrolledPosition( aEvent.GetPosition() );
+    int      row = m_grid->YToRow( pos.y );
+    wxString tooltip;
+
+    if( row >= 0 && row < m_fields->GetNumberRows() && m_fields->at( row ).GetId() == FIELD_T::SHEET_REF_SUFFIX )
+    {
+        tooltip = _( "Appended to component references in this sheet. Example: _M1 produces R1_M1." );
+    }
+
+    if( m_grid->GetGridWindow()->GetToolTipText() != tooltip )
+        m_grid->GetGridWindow()->SetToolTip( tooltip );
+}
+
+
 void DIALOG_SHEET_PROPERTIES::OnGridCellChanging( wxGridEvent& event )
 {
     bool              success = true;
@@ -552,8 +587,8 @@ void DIALOG_SHEET_PROPERTIES::OnGridCellChanging( wxGridEvent& event )
             if( i == event.GetRow() )
                 continue;
 
-            if( FieldNamesAreDuplicates( newName, m_grid->GetCellValue( i, FDC_NAME ),
-                                         SHEET_MANDATORY_FIELDS ) )
+            if( FieldNamesAreDuplicates( newName, m_grid->GetCellValue( i, FDC_NAME ), SHEET_MANDATORY_FIELDS )
+                || newName == m_fields->at( i ).GetUntranslatedName() )
             {
                 DisplayError( this, wxString::Format( _( "Field name '%s' already in use." ), newName ) );
                 event.Veto();
@@ -582,7 +617,7 @@ void DIALOG_SHEET_PROPERTIES::OnAddField( wxCommandEvent& event )
                 // notify the grid
                 wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_APPENDED, 1 );
                 m_grid->ProcessTableMessage( msg );
-                return { m_fields->size() - 1, FDC_NAME };
+                return { m_fields->GetNumberRows() - 1, FDC_NAME };
             } );
 }
 
@@ -599,11 +634,18 @@ void DIALOG_SHEET_PROPERTIES::OnDeleteField( wxCommandEvent& event )
                     return false;
                 }
 
+                if( m_fields->at( row ).GetId() == FIELD_T::SHEET_REF_SUFFIX )
+                {
+                    DisplayError( this, _( "The reference suffix field cannot be deleted. Clear its value instead." ) );
+                    return false;
+                }
+
                 return true;
             },
             [&]( int row )
             {
-                m_fields->erase( m_fields->begin() + row );
+                if( !m_fields->EraseRow( row ) )
+                    return;
 
                 // notify the grid
                 wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_DELETED, row, 1 );
@@ -617,11 +659,11 @@ void DIALOG_SHEET_PROPERTIES::OnMoveUp( wxCommandEvent& event )
     m_grid->OnMoveRowUp(
             [&]( int row )
             {
-                return row > m_fields->GetMandatoryRowCount();
+                return row > m_fields->GetMandatoryRowCount() + 1;
             },
             [&]( int row )
             {
-                std::swap( *( m_fields->begin() + row ), *( m_fields->begin() + row - 1 ) );
+                m_fields->SwapRows( row, row - 1 );
                 m_grid->ForceRefresh();
             } );
 }
@@ -629,14 +671,14 @@ void DIALOG_SHEET_PROPERTIES::OnMoveUp( wxCommandEvent& event )
 
 void DIALOG_SHEET_PROPERTIES::OnMoveDown( wxCommandEvent& event )
 {
-    m_grid->OnMoveRowUp(
+    m_grid->OnMoveRowDown(
             [&]( int row )
             {
-                return row >= m_fields->GetMandatoryRowCount();
+                return row >= m_fields->GetMandatoryRowCount() + 1;
             },
             [&]( int row )
             {
-                std::swap( *( m_fields->begin() + row ), *( m_fields->begin() + row + 1 ) );
+                m_fields->SwapRows( row, row + 1 );
                 m_grid->ForceRefresh();
             } );
 }
@@ -673,7 +715,7 @@ void DIALOG_SHEET_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
 
     m_dummySheet.SetFields( *m_fields );
     m_dummySheetNameField.SetText( sheetName );
-    path += m_dummySheetNameField.GetShownText( false );
+    path += m_dummySheetNameField.GetShownText( FOR_GUI );
 
     editor->DecRef();
 
@@ -687,8 +729,30 @@ void DIALOG_SHEET_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
     if( m_hierarchicalPath->GetLabel() != path )
         m_hierarchicalPath->SetLabel( path );
 
+    // Preview the configured suffix even when separate numbering leaves it inactive
+    const SCH_SHEET_PATH& parentPath = m_frame->GetCurrentSheet();
+
+    // Edits under a variant become overrides, and suffixes only read base text
+    if( !m_frame->Schematic().GetCurrentVariant().IsEmpty() )
+    {
+        for( SCH_FIELD& field : m_dummySheet.GetFields() )
+        {
+            const SCH_FIELD* baseField = std::as_const( *m_sheet ).GetField( field.GetName() );
+
+            if( baseField && field.GetId() != FIELD_T::SHEET_REF_SUFFIX )
+                field.SetText( baseField->GetText() );
+        }
+    }
+
+    wxString fullSuffix = parentPath.ComposeRefSuffix() + m_dummySheet.GetRefSuffix( parentPath );
+
+    wxString preview = fullSuffix.IsEmpty() ? _( "None" ) : fullSuffix;
+
+    if( m_fullSuffixCtrl->GetValue() != preview )
+        m_fullSuffixCtrl->ChangeValue( preview );
+
     // Handle a delayed focus
-    if( m_delayedFocusRow >= 0 )
+    if( m_delayedFocusRow >= 0 && IsShownOnScreen() )
     {
         m_grid->SetFocus();
         m_grid->MakeCellVisible( m_delayedFocusRow, m_delayedFocusColumn );

@@ -22,8 +22,11 @@
 
 #include "dialog_import_graphics.h"
 #include <dialog_map_layers.h>
+#include <import_gfx/bitmap_import_plugin.h>
 #include <import_gfx/dxf_import_plugin.h>
 #include <base_units.h>
+#include <bitmap_tracing.h>
+#include <cmath>
 #include <board.h>
 #include <kiface_base.h>
 #include <locale_io.h>
@@ -31,7 +34,6 @@
 #include <wildcards_and_files_ext.h>
 #include <bitmaps.h>
 #include <widgets/std_bitmap_button.h>
-#include <map>
 #include <footprint.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
@@ -40,15 +42,6 @@
 #include <memory>
 
 #include "settings/settings_manager.h"
-
-
-const std::map<DXF_IMPORT_UNITS, wxString> dxfUnitsMap = {
-    { DXF_IMPORT_UNITS::INCH, _( "Inches" ) },
-    { DXF_IMPORT_UNITS::MM,   _( "Millimeters" ) },
-    { DXF_IMPORT_UNITS::MILS, _( "Mils" ) },
-    { DXF_IMPORT_UNITS::CM,   _( "Centimeter" ) },
-    { DXF_IMPORT_UNITS::FEET, _( "Feet" ) },
-};
 
 
 static PCB_LAYER_ID getAutoMappedLayer( const wxString& aSourceLayer, const LSET& aPermittedLayers )
@@ -98,7 +91,12 @@ DIALOG_IMPORT_GRAPHICS::DIALOG_IMPORT_GRAPHICS( PCB_BASE_FRAME* aParent ) :
         m_xOrigin( aParent, nullptr, m_xCtrl, nullptr ),
         m_yOrigin( aParent, m_yLabel, m_yCtrl, m_yUnits ),
         m_defaultLineWidth( aParent, m_lineWidthLabel, m_lineWidthCtrl, m_lineWidthUnits ),
-        m_tolerance( aParent, m_toleranceLabel, m_toleranceCtrl, m_toleranceUnits )
+        m_tolerance( aParent, m_toleranceLabel, m_toleranceCtrl, m_toleranceUnits ),
+        m_importWidth( aParent, m_importWidthLabel, m_importWidthCtrl, m_importWidthUnits ),
+        m_importHeight( aParent, m_importHeightLabel, m_importHeightCtrl, m_importHeightUnits ),
+        m_sourceSizeMM( 0, 0 ),
+        m_xScale( 1.0 ),
+        m_yScale( 1.0 )
 {
     // The SVG import has currently a flaw: all SVG shapes are imported as curves and
     // converted to a lot of segments.  A better approach is to convert to polylines
@@ -108,18 +106,31 @@ DIALOG_IMPORT_GRAPHICS::DIALOG_IMPORT_GRAPHICS( PCB_BASE_FRAME* aParent ) :
     m_importer = std::make_unique<GRAPHICS_IMPORTER_PCBNEW>( aParent->GetModel() );
     m_gfxImportMgr = std::make_unique<GRAPHICS_IMPORT_MGR>();
 
+    // Keyed apart from the schematic dialog, which has the same title and another layout.
+    m_hash_key = "DIALOG_IMPORT_GRAPHICS";
+
     // Configure the layers list selector
     m_SelLayerBox->SetLayersHotkeys( false );    // Do not display hotkeys
     m_SelLayerBox->SetBoardFrame( m_parent );
     m_SelLayerBox->Resync();
 
-    for( const std::pair<const DXF_IMPORT_UNITS, wxString>& unitEntry : dxfUnitsMap )
-        m_dxfUnitsChoice->Append( unitEntry.second );
+    m_dxfUnitsChoice->Append( GetDxfImportUnitChoices() );
+
+    // The chosen unit decides what a DXF file's numbers mean, so its size has to be read again.
+    m_dxfUnitsChoice->Bind( wxEVT_CHOICE,
+                            [this]( wxCommandEvent& aEvent )
+                            {
+                                m_sourcePath.Clear();
+
+                                wxCommandEvent dummy;
+                                onFilenameChanged( dummy );
+                                aEvent.Skip();
+                            } );
 
     m_browseButton->SetBitmap( KiBitmapBundle( BITMAPS::small_folder ) );
 
     wxCommandEvent dummy;
-    onFilename( dummy );
+    onFilenameChanged( dummy );
 
     SetInitialFocus( m_textCtrlFileName );
     SetupStandardButtons();
@@ -127,18 +138,6 @@ DIALOG_IMPORT_GRAPHICS::DIALOG_IMPORT_GRAPHICS( PCB_BASE_FRAME* aParent ) :
     GetSizer()->Fit( this );
     GetSizer()->SetSizeHints( this );
     Centre();
-
-    m_textCtrlFileName->Connect( wxEVT_COMMAND_TEXT_UPDATED,
-                                 wxCommandEventHandler( DIALOG_IMPORT_GRAPHICS::onFilename ),
-                                 nullptr, this );
-}
-
-
-DIALOG_IMPORT_GRAPHICS::~DIALOG_IMPORT_GRAPHICS()
-{
-    m_textCtrlFileName->Disconnect( wxEVT_COMMAND_TEXT_UPDATED,
-                                    wxCommandEventHandler( DIALOG_IMPORT_GRAPHICS::onFilename ),
-                                    nullptr, this );
 }
 
 
@@ -156,12 +155,28 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataToWindow()
     if( !m_filenameOverride.IsEmpty() )
         m_textCtrlFileName->SetValue( m_filenameOverride );
 
+    // The scale comes back from the last run without an event too, so the size fields have
+    // to be told what it is before they are filled in.
+    const double scale = EDA_UNIT_UTILS::UI::DoubleValueFromString( m_importScaleCtrl->GetValue() );
+
+    if( scale > 0.0 )
+    {
+        m_xScale = scale;
+        m_yScale = scale;
+    }
+
+    // A filename restored from the last run arrives without an event, so sync to it here.
+    wxCommandEvent dummy;
+    onFilenameChanged( dummy );
+
     return true;
 }
 
 
-void DIALOG_IMPORT_GRAPHICS::onFilename( wxCommandEvent& event )
+void DIALOG_IMPORT_GRAPHICS::onFilenameChanged( wxCommandEvent& event )
 {
+    loadSourceFile();
+
     bool     enableDXFControls = true;
     wxString ext = wxFileName( m_textCtrlFileName->GetValue() ).GetExt();
 
@@ -177,6 +192,202 @@ void DIALOG_IMPORT_GRAPHICS::onFilename( wxCommandEvent& event )
 
     if( !enableDXFControls && m_radioBtnMapLayers->GetValue() )
         m_radioBtnSingleLayer->SetValue( true );
+
+    updateImageControls();
+    updateSizeControls();
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::loadSourceFile()
+{
+    const wxString path = m_textCtrlFileName->GetValue();
+
+    if( path == m_sourcePath )
+        return;
+
+    m_sourcePath = path;
+    m_previewSource.Destroy();
+    m_sourceSizeMM = VECTOR2D( 0, 0 );
+
+    std::unique_ptr<GRAPHICS_IMPORT_PLUGIN> plugin = m_gfxImportMgr->GetPluginByExt( wxFileName( path ).GetExt() );
+
+    if( !plugin )
+        return;
+
+    if( DXF_IMPORT_PLUGIN* dxfPlugin = dynamic_cast<DXF_IMPORT_PLUGIN*>( plugin.get() ) )
+        dxfPlugin->SetUnit( DxfImportUnitFromChoice( m_dxfUnitsChoice->GetSelection() ) );
+
+    wxLogNull doNotLog;
+    LOCALE_IO dummy; // Ensure floats can be read.
+
+    if( !plugin->Load( path ) )
+        return;
+
+    const VECTOR2D size( plugin->GetImageWidth(), plugin->GetImageHeight() );
+
+    // A file holding no geometry leaves its bounding box unset.
+    if( std::isfinite( size.x ) && std::isfinite( size.y ) && size.x > 0 && size.y > 0 )
+        m_sourceSizeMM = size;
+
+    // The image data is shared, so this keeps the pixels without reading the file again.
+    if( BITMAP_IMPORT_PLUGIN* bitmapPlugin = dynamic_cast<BITMAP_IMPORT_PLUGIN*>( plugin.get() ) )
+        m_previewSource = bitmapPlugin->GetImage();
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::updateSizeControls()
+{
+    const bool known = m_sourceSizeMM.x > 0 && m_sourceSizeMM.y > 0;
+
+    // Without a source size there is nothing to turn a size into a scale.
+    m_importWidth.Enable( known );
+    m_importHeight.Enable( known );
+
+    // Scaling the axes apart would turn an imported circle into an ellipse, which the
+    // importer has no way to report, so only a traced image may be stretched.
+    const bool stretchable = known && m_previewSource.IsOk();
+
+    m_aspectRatioCheckbox->Enable( stretchable );
+
+    if( !stretchable )
+        m_aspectRatioCheckbox->SetValue( true );
+
+    if( m_aspectRatioCheckbox->IsChecked() )
+        m_yScale = m_xScale;
+
+    sizeFromScale();
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::sizeFromScale()
+{
+    if( m_sourceSizeMM.x <= 0 || m_sourceSizeMM.y <= 0 )
+    {
+        m_importWidth.ChangeValue( wxEmptyString );
+        m_importHeight.ChangeValue( wxEmptyString );
+        return;
+    }
+
+    // ChangeValue(), so that writing one field does not look like the user typing in it.
+    m_importWidth.ChangeValue( pcbIUScale.mmToIU( m_sourceSizeMM.x * m_xScale ) );
+    m_importHeight.ChangeValue( pcbIUScale.mmToIU( m_sourceSizeMM.y * m_yScale ) );
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::scaleFromSize( bool aFromWidth )
+{
+    if( m_sourceSizeMM.x <= 0 || m_sourceSizeMM.y <= 0 )
+        return;
+
+    const double width = pcbIUScale.IUTomm( m_importWidth.GetIntValue() );
+    const double height = pcbIUScale.IUTomm( m_importHeight.GetIntValue() );
+    const bool   locked = m_aspectRatioCheckbox->IsChecked();
+
+    // A half typed number is not a size to work from.
+    if( aFromWidth && width > 0 )
+        m_xScale = width / m_sourceSizeMM.x;
+    else if( !aFromWidth && height > 0 )
+        m_yScale = height / m_sourceSizeMM.y;
+    else
+        return;
+
+    if( locked )
+    {
+        if( aFromWidth )
+            m_yScale = m_xScale;
+        else
+            m_xScale = m_yScale;
+    }
+
+    m_importScaleCtrl->ChangeValue( wxString::Format( wxT( "%g" ), m_xScale ) );
+
+    // The field the user is typing in is left alone; only the one that follows is written.
+    if( locked && aFromWidth )
+        m_importHeight.ChangeValue( pcbIUScale.mmToIU( m_sourceSizeMM.y * m_yScale ) );
+    else if( locked )
+        m_importWidth.ChangeValue( pcbIUScale.mmToIU( m_sourceSizeMM.x * m_xScale ) );
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::onScaleChanged( wxCommandEvent& event )
+{
+    const double scale = EDA_UNIT_UTILS::UI::DoubleValueFromString( m_importScaleCtrl->GetValue() );
+
+    if( scale <= 0.0 )
+        return;
+
+    m_xScale = scale;
+    m_yScale = scale;
+
+    sizeFromScale();
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::onWidthChanged( wxCommandEvent& event )
+{
+    scaleFromSize( true );
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::onHeightChanged( wxCommandEvent& event )
+{
+    scaleFromSize( false );
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::onLockAspectChanged( wxCommandEvent& event )
+{
+    // Locking the ratio again keeps the width and brings the height back into step.
+    if( m_aspectRatioCheckbox->IsChecked() )
+    {
+        m_yScale = m_xScale;
+        sizeFromScale();
+    }
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::updateImageControls()
+{
+    wxString ext = wxFileName( m_textCtrlFileName->GetValue() ).GetExt();
+    bool     isImage = false;
+
+    if( std::unique_ptr<GRAPHICS_IMPORT_PLUGIN> plugin = m_gfxImportMgr->GetPluginByExt( ext ) )
+        isImage = dynamic_cast<BITMAP_IMPORT_PLUGIN*>( plugin.get() ) != nullptr;
+
+    // The whole panel, since a hidden wxSlider still shows its tick labels on macOS.
+    m_imagePanel->Show( isImage );
+
+    updatePreview();
+
+    Layout();
+    GetSizer()->Fit( this );
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::updatePreview()
+{
+    if( !m_previewSource.IsOk() )
+    {
+        m_previewBitmap->SetBitmap( wxNullBitmap );
+        return;
+    }
+
+    double threshold = (double) m_thresholdSlider->GetValue() / m_thresholdSlider->GetMax();
+
+    m_previewBitmap->SetBitmap( wxBitmap( MakeBilevelPreview( m_previewSource, threshold, m_cbInvertColors->IsChecked(),
+                                                              m_previewBitmap->GetMinSize() ) ) );
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::onThresholdChanged( wxScrollEvent& event )
+{
+    updatePreview();
+}
+
+
+void DIALOG_IMPORT_GRAPHICS::onInvertChanged( wxCommandEvent& event )
+{
+    updatePreview();
 }
 
 
@@ -247,8 +458,8 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
         return false;
     }
 
-    double           xscale = scale;
-    double           yscale = scale;
+    double xscale = m_xScale;
+    double yscale = m_yScale;
 
     if( cfg->m_Display.m_DisplayInvertXAxis )
         xscale *= -1.0;
@@ -272,19 +483,18 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
 
         if( dxfPlugin )
         {
-            auto it = dxfUnitsMap.begin();
-            std::advance( it, m_dxfUnitsChoice->GetSelection() );
-
-            if( it == dxfUnitsMap.end() )
-                dxfPlugin->SetUnit( DXF_IMPORT_UNITS::DEFAULT );
-            else
-                dxfPlugin->SetUnit( it->first );
-
+            dxfPlugin->SetUnit( DxfImportUnitFromChoice( m_dxfUnitsChoice->GetSelection() ) );
             m_importer->SetLineWidthMM( pcbIUScale.IUTomm( m_defaultLineWidth.GetIntValue() ) );
         }
         else
         {
             m_importer->SetLineWidthMM( 0.0 );
+        }
+
+        if( BITMAP_IMPORT_PLUGIN* bitmapPlugin = dynamic_cast<BITMAP_IMPORT_PLUGIN*>( plugin.get() ) )
+        {
+            bitmapPlugin->SetThreshold( (double) m_thresholdSlider->GetValue() / m_thresholdSlider->GetMax() );
+            bitmapPlugin->SetInvert( m_cbInvertColors->IsChecked() );
         }
 
         m_importer->SetPlugin( std::move( plugin ) );
@@ -308,12 +518,17 @@ bool DIALOG_IMPORT_GRAPHICS::TransferDataFromWindow()
                 if( !sourceLayers.empty() )
                 {
                     LSET permittedLayers = getPermittedImportLayers( m_parent );
-                    m_importer->SetLayerMap( DIALOG_MAP_LAYERS::RunModal(
-                            this, buildDxfLayerDescriptions( sourceLayers, permittedLayers ) ) );
+                    std::map<wxString, PCB_LAYER_ID> layerMap = DIALOG_MAP_LAYERS::RunModal(
+                            this, buildDxfLayerDescriptions( sourceLayers, permittedLayers ) );
+
+                    if( layerMap.empty() )
+                        return false;
+
+                    m_importer->SetLayerMap( layerMap );
                 }
             }
 
-            m_importer->Import( VECTOR2D( scale, scale ) );
+            m_importer->Import( VECTOR2D( m_xScale, m_yScale ) );
         }
 
         // Get warning messages:

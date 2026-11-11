@@ -74,8 +74,11 @@ std::optional<TOOLBAR_CONFIGURATION> GERBVIEW_TOOLBAR_SETTINGS::DefaultToolbarCo
         config.AppendSeparator()
               .AppendAction( GERBVIEW_ACTIONS::toggleForceOpacityMode )
               .AppendAction( GERBVIEW_ACTIONS::toggleXORMode )
-              .AppendAction( ACTIONS::highContrastMode )
-              .AppendAction( GERBVIEW_ACTIONS::flipGerberView );
+              .AppendAction( GERBVIEW_ACTIONS::flipGerberView )
+              .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Inactive Layer View Mode" ) )
+                            .AddAction( GERBVIEW_ACTIONS::showInactiveLayers )
+                            .AddAction( GERBVIEW_ACTIONS::dimInactiveLayers )
+                            .AddAction( GERBVIEW_ACTIONS::hideInactiveLayers ) );
 
         config.AppendSeparator()
               .AppendAction( GERBVIEW_ACTIONS::toggleLayerManager );
@@ -324,6 +327,9 @@ ACTION_TOOLBAR_CONTROL GERBVIEW_ACTION_TOOLBAR_CONTROLS::dcodeSelector( "control
 
 void GERBVIEW_FRAME::updateDCodeSelectBox()
 {
+    if( !m_DCodeSelector )
+        return;
+
     m_DCodeSelector->Clear();
 
     // Add an empty string to deselect net highlight

@@ -36,6 +36,7 @@
 #include "pns_topology.h"
 #include "pns_walkaround.h"
 #include "pns_mouse_trail_tracer.h"
+#include "pns_utils.h"
 
 
 namespace PNS {
@@ -55,6 +56,7 @@ LINE_PLACER::LINE_PLACER( ROUTER* aRouter ) :
     m_currentNet = nullptr;
     m_currentLayer = 0;
     m_startItem = nullptr;
+    m_routeStartItem = nullptr;
     m_endItem = nullptr;
     m_chainedPlacement = false;
     m_orthoMode = false;
@@ -103,7 +105,7 @@ void LINE_PLACER::setInitialDirection( const DIRECTION_45& aDirection )
 
 bool LINE_PLACER::handleSelfIntersections()
 {
-    SHAPE_LINE_CHAIN::INTERSECTIONS ips;
+    std::vector<SHAPE_LINE_CHAIN::INTERSECTION> ips;
     SHAPE_LINE_CHAIN& head = m_head.Line();
     SHAPE_LINE_CHAIN& tail = m_tail.Line();
 
@@ -1223,10 +1225,13 @@ bool LINE_PLACER::route( const VECTOR2I& aP )
 {
     routeStep( aP );
 
-    if( !m_head.PointCount() )
+    // Shove and walkaround can merge the whole head into the tail
+    const LINE& last = m_head.PointCount() ? m_head : m_tail;
+
+    if( !last.PointCount() )
         return false;
 
-    return m_head.CLastPoint() == aP;
+    return last.CLastPoint() == aP;
 }
 
 
@@ -1284,66 +1289,6 @@ NODE* LINE_PLACER::CurrentNode( bool aLoopsRemoved ) const
 }
 
 
-bool LINE_PLACER::SplitAdjacentSegments( NODE* aNode, ITEM* aSeg, const VECTOR2I& aP )
-{
-    if( !aSeg )
-        return false;
-
-    if( !aSeg->OfKind( ITEM::SEGMENT_T ) )
-        return false;
-
-    const JOINT* jt = aNode->FindJoint( aP, aSeg );
-
-    if( jt && jt->LinkCount() >= 1 )
-        return false;
-
-    SEGMENT* s_old = static_cast<SEGMENT*>( aSeg );
-
-    std::unique_ptr<SEGMENT> s_new[2] = { Clone( *s_old ), Clone( *s_old ) };
-
-    s_new[0]->SetEnds( s_old->Seg().A, aP );
-    s_new[1]->SetEnds( aP, s_old->Seg().B );
-
-    aNode->Remove( s_old );
-    aNode->Add( std::move( s_new[0] ), true );
-    aNode->Add( std::move( s_new[1] ), true );
-
-    return true;
-}
-
-
-bool LINE_PLACER::SplitAdjacentArcs( NODE* aNode, ITEM* aArc, const VECTOR2I& aP )
-{
-    if( !aArc )
-        return false;
-
-    if( !aArc->OfKind( ITEM::ARC_T ) )
-        return false;
-
-    const JOINT* jt = aNode->FindJoint( aP, aArc );
-
-    if( jt && jt->LinkCount() >= 1 )
-        return false;
-
-    ARC*             a_old = static_cast<ARC*>( aArc );
-    const SHAPE_ARC& o_arc = a_old->Arc();
-
-    std::unique_ptr<ARC> a_new[2] = { Clone( *a_old ), Clone( *a_old ) };
-
-    a_new[0]->Arc().ConstructFromStartEndCenter( o_arc.GetP0(), aP, o_arc.GetCenter(),
-                                                 o_arc.IsClockwise(), o_arc.GetWidth() );
-
-    a_new[1]->Arc().ConstructFromStartEndCenter( aP, o_arc.GetP1(), o_arc.GetCenter(),
-                                                 o_arc.IsClockwise(), o_arc.GetWidth() );
-
-    aNode->Remove( a_old );
-    aNode->Add( std::move( a_new[0] ), true );
-    aNode->Add( std::move( a_new[1] ), true );
-
-    return true;
-}
-
-
 bool LINE_PLACER::SetLayer( int aLayer )
 {
     if( m_idle )
@@ -1385,6 +1330,8 @@ bool LINE_PLACER::Start( const VECTOR2I& aP, ITEM* aStartItem )
     m_currentEnd = VECTOR2I( aP );
     m_currentNet = aStartItem ? aStartItem->Net() : Router()->GetInterface()->GetOrphanedNetHandle();
     m_startItem = aStartItem;
+    m_routeStartItem = aStartItem;
+    m_routeStart = aP;
     m_placingVia = false;
     m_chainedPlacement = false;
     m_fixedTail.Clear();
@@ -1454,6 +1401,16 @@ void LINE_PLACER::initPlacement()
     m_head.RemoveVia();
     m_tail.RemoveVia();
 
+    // Solder mask overrides live on the board item, so a rework carries its start track to the
+    // write back; the tail too, since splitHeadTail() rebuilds both halves from it
+    BOARD_ITEM* source = nullptr;
+
+    if( m_startItem && m_startItem->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) )
+        source = m_startItem->GetSourceItem();
+
+    m_head.SetSourceItem( source );
+    m_tail.SetSourceItem( source );
+
     m_last_p_end.reset();
     m_p_start = m_currentStart;
     m_direction = m_initial_direction;
@@ -1522,7 +1479,8 @@ bool LINE_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
         {
             splitPoint = targetSeg.NearestPoint( lastSeg.A );
             current.Line().SetPoint( current.PointCount() - 1, splitPoint );
-            m_head.Line().SetPoint( m_head.PointCount() - 1, splitPoint );
+            LINE& last = m_head.PointCount() ? m_head : m_tail;
+            last.Line().SetPoint( last.PointCount() - 1, splitPoint );
         }
     }
 
@@ -1616,8 +1574,8 @@ bool LINE_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinis
         if( !pl.EndsWithVia() )
             return false;
 
-        ///< @todo Determine what to do if m_lastNode is a null pointer.  I'm guessing return
-        ///<       false but someone with more knowledge of the code will need to determine that..
+        /// @todo Determine what to do if m_lastNode is a null pointer.  I'm guessing return
+        ///       false but someone with more knowledge of the code will need to determine that..
         if( m_lastNode )
         {
             auto newVia = Clone( pl.Via() );
@@ -1666,6 +1624,8 @@ bool LINE_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinis
     LINKED_ITEM* lastItem = nullptr;
     int          lastArc  = -1;
 
+    // Copied by hand, as the SEGMENT( LINE, SEG ) and ARC( LINE, SHAPE_ARC ) constructors would
+    // also carry the head's marker into the fixed items
     for( int i = 0; i < lastV; i++ )
     {
         ssize_t arcIndex = l.ArcIndex( i );
@@ -1675,6 +1635,7 @@ bool LINE_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinis
             seg = SEGMENT( pl.CSegment( i ), m_currentNet );
             seg.SetWidth( pl.Width() );
             seg.SetLayer( m_currentLayer );
+            seg.SetSourceItem( pl.GetSourceItem() );
 
             std::unique_ptr<SEGMENT> sp = std::make_unique<SEGMENT>( seg );
             lastItem = sp.get();
@@ -1690,6 +1651,7 @@ bool LINE_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinis
             arc = ARC( l.Arc( arcIndex ), m_currentNet );
             arc.SetWidth( pl.Width() );
             arc.SetLayer( m_currentLayer );
+            arc.SetSourceItem( pl.GetSourceItem() );
 
             std::unique_ptr<ARC> ap = std::make_unique<ARC>( arc );
             lastItem = ap.get();
@@ -1711,6 +1673,12 @@ bool LINE_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinis
 
     if( lastItem )
         simplifyNewLine( m_lastNode, lastItem );
+
+    if( realEnd && Settings().RemoveLoops() )
+    {
+        removeAntennas( m_lastNode, aEndItem, p_last );
+        removeAntennas( m_lastNode, m_routeStartItem, m_routeStart );
+    }
 
     if( !realEnd )
     {
@@ -1809,6 +1777,10 @@ bool LINE_PLACER::HasPlacedAnything() const
 
 bool LINE_PLACER::CommitPlacement()
 {
+    // AbortPlacement() already tore down every node, including the shove springback stack.
+    if( !m_lastNode && !m_currentNode )
+        return true;
+
     if( Settings().Mode() == PNS::RM_Shove )
     {
         m_shove->RewindToLastLockedNode();
@@ -1825,73 +1797,7 @@ bool LINE_PLACER::CommitPlacement()
 }
 
 
-void LINE_PLACER::removeLoops( NODE* aNode, LINE& aLatest )
-{
-    if( !aLatest.SegmentCount() )
-        return;
-
-    if( aLatest.CLine().CPoint( 0 ) == aLatest.CLine().CLastPoint() )
-        return;
-
-    std::set<LINKED_ITEM *> toErase;
-    aLatest.ClearLinks();
-    aNode->Add( aLatest, true );
-
-    for( int s = 0; s < aLatest.LinkCount(); s++ )
-    {
-        LINKED_ITEM* seg = aLatest.GetLink(s);
-        LINE ourLine = aNode->AssembleLine( seg );
-        JOINT a, b;
-        std::vector<LINE> lines;
-
-        aNode->FindLineEnds( ourLine, a, b );
-
-        if( a == b )
-            aNode->FindLineEnds( aLatest, a, b );
-
-        aNode->FindLinesBetweenJoints( a, b, lines );
-
-        int removedCount = 0;
-        int total = 0;
-
-        for( LINE& line : lines )
-        {
-            total++;
-
-            if( !( line.ContainsLink( seg ) ) && line.SegmentCount() )
-            {
-                // Don't remove locked tracks
-                bool hasLockedSegment = false;
-                for( LINKED_ITEM* ss : line.Links() )
-                {
-                    if( ss->IsLocked() )
-                    {
-                        hasLockedSegment = true;
-                        break;
-                    }
-                }
-
-                if( !hasLockedSegment )
-                {
-                    for( LINKED_ITEM* ss : line.Links() )
-                        toErase.insert( ss );
-
-                    removedCount++;
-                }
-            }
-        }
-
-        PNS_DBG( Dbg(), Message, wxString::Format( "total segs removed: %d/%d", removedCount, total ) );
-    }
-
-    for( LINKED_ITEM* s : toErase )
-        aNode->Remove( s );
-
-    aNode->Remove( aLatest );
-}
-
-
-void LINE_PLACER::simplifyNewLine( NODE* aNode, LINKED_ITEM* aLatest )
+bool PLACEMENT_ALGO::simplifyNewLine( NODE* aNode, LINKED_ITEM* aLatest )
 {
     wxASSERT( aLatest->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) );
 
@@ -1989,6 +1895,8 @@ void LINE_PLACER::simplifyNewLine( NODE* aNode, LINKED_ITEM* aLatest )
         aNode->Add( l );
         PNS_DBG( Dbg(), AddItem, &l, RED, 100000, wxT("simplified"));
     }
+
+    return true;
 }
 
 
@@ -2022,7 +1930,7 @@ void LINE_PLACER::updateLeadingRatLine()
 {
     LINE current = Trace();
     SHAPE_LINE_CHAIN ratLine;
-    TOPOLOGY topo( m_lastNode );
+    TOPOLOGY topo( m_lastNode, m_router->GetInterface() );
 
     if( topo.LeadingRatLine( &current, ratLine ) )
         m_router->GetInterface()->DisplayRatline( ratLine, m_currentNet );
@@ -2151,6 +2059,7 @@ bool LINE_PLACER::AbortPlacement()
 {
     m_world->KillChildren();
     m_lastNode = nullptr;
+    m_currentNode = nullptr;
     return true;
 }
 
@@ -2209,5 +2118,236 @@ int FIXED_TAIL::StageCount() const
 {
     return m_stages.size();
 }
+
+
+void LINE_PLACER::removeAntennas( NODE* aNode, const ITEM* aEndItem, const VECTOR2I& aJoin )
+{
+    if( !aNode || !aEndItem || aEndItem->Kind() != ITEM::SEGMENT_T || !aEndItem->Parent() || aEndItem->IsLocked()
+        || aJoin == aEndItem->Anchor( 0 ) || aJoin == aEndItem->Anchor( 1 ) )
+    {
+        return;
+    }
+
+    const JOINT* junction = aNode->FindJoint( aJoin, aEndItem );
+
+    if( !junction )
+        return;
+
+    std::vector<const ITEM*> newLinks;
+
+    for( const ITEM* item : junction->LinkList() )
+    {
+        if( item->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) && !item->Parent() && !item->IsVirtual() )
+            newLinks.push_back( item );
+    }
+
+    if( newLinks.empty() )
+        return;
+
+    auto reachesAnchor = [&]( const JOINT* aStart, bool aIncludeNew, bool aSkipTarget )
+    {
+        std::vector<const JOINT*> pending = { aStart };
+        std::set<const JOINT*>    visited;
+
+        while( !pending.empty() )
+        {
+            const JOINT* joint = pending.back();
+            pending.pop_back();
+
+            if( !joint || joint->Pos() == aJoin || !visited.insert( joint ).second )
+                continue;
+
+            for( const ITEM* item : joint->LinkList() )
+            {
+                if( item->IsVirtual() || ( !aIncludeNew && !item->Parent() )
+                    || ( aSkipTarget && item->Parent() == aEndItem->Parent() ) )
+                    continue;
+
+                if( item->OfKind( ITEM::SOLID_T | ITEM::VIA_T ) )
+                    return true;
+
+                if( item->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) )
+                {
+                    for( int end = 0; end < 2; ++end )
+                    {
+                        if( item->Anchor( end ) != joint->Pos() )
+                            pending.push_back( aNode->FindJoint( item->Anchor( end ), item ) );
+                    }
+                }
+            }
+        }
+
+        return false;
+    };
+
+    bool newRouteAnchored = false;
+
+    for( const ITEM* item : newLinks )
+    {
+        for( int end = 0; end < 2; ++end )
+        {
+            if( item->Anchor( end ) != aJoin
+                && reachesAnchor( aNode->FindJoint( item->Anchor( end ), item ), true, true ) )
+            {
+                newRouteAnchored = true;
+                break;
+            }
+        }
+
+        if( newRouteAnchored )
+            break;
+    }
+
+    if( !newRouteAnchored )
+        return;
+
+    std::vector<std::vector<LINKED_ITEM*>> candidates;
+    bool                                   hasAnchoredSide = false;
+    int                                    targetSides = 0;
+
+    for( ITEM* item : junction->LinkList() )
+    {
+        if( !item->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) || item->Parent() != aEndItem->Parent() )
+            continue;
+
+        LINKED_ITEM* link = static_cast<LINKED_ITEM*>( item );
+        targetSides++;
+
+        if( link->Anchor( 0 ) != aJoin && link->Anchor( 1 ) != aJoin )
+            continue;
+
+        VECTOR2I farEnd = link->Anchor( 0 ) == aJoin ? link->Anchor( 1 ) : link->Anchor( 0 );
+
+        if( reachesAnchor( aNode->FindJoint( farEnd, link ), false, false ) )
+        {
+            hasAnchoredSide = true;
+            continue;
+        }
+
+        VECTOR2I                  from = aJoin;
+        std::vector<LINKED_ITEM*> branch;
+        std::set<LINKED_ITEM*>    seen;
+
+        while( link && link->Parent() && !link->IsLocked() && !link->IsVirtual() && seen.insert( link ).second )
+        {
+            if( link->Anchor( 0 ) != from && link->Anchor( 1 ) != from )
+                break;
+
+            if( Router()->GetInterface()->TouchesCopperZone( link ) )
+            {
+                hasAnchoredSide = true;
+                break;
+            }
+
+            branch.push_back( link );
+            farEnd = link->Anchor( 0 ) == from ? link->Anchor( 1 ) : link->Anchor( 0 );
+
+            const JOINT* end = aNode->FindJoint( farEnd, link );
+
+            if( !end )
+                break;
+
+            if( end->LinkCount() == 1 )
+            {
+                candidates.push_back( std::move( branch ) );
+                break;
+            }
+
+            if( end->LinkCount() != 2 )
+                break;
+
+            LINKED_ITEM* next = nullptr;
+
+            for( ITEM* adjacent : end->LinkList() )
+            {
+                if( adjacent != link && adjacent->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T ) )
+                    next = static_cast<LINKED_ITEM*>( adjacent );
+            }
+
+            from = farEnd;
+            link = next;
+        }
+    }
+
+    // Loop removal may have consumed the anchored half before this route is fixed.
+    if( ( targetSides == 2 && hasAnchoredSide ) || targetSides == 1 )
+    {
+        for( const std::vector<LINKED_ITEM*>& branch : candidates )
+        {
+            for( LINKED_ITEM* segment : branch )
+                aNode->Remove( segment );
+        }
+    }
+}
+
+
+bool PLACEMENT_ALGO::removeLoops( NODE* aNode, LINE& aLatest )
+{
+      if( !aLatest.SegmentCount() )
+        return false;
+
+    if( aLatest.CLine().CPoint( 0 ) == aLatest.CLine().CLastPoint() )
+        return false;
+
+    std::set<LINKED_ITEM *> toErase;
+    aLatest.ClearLinks();
+    aNode->Add( aLatest, true );
+
+    for( int s = 0; s < aLatest.LinkCount(); s++ )
+    {
+        LINKED_ITEM* seg = aLatest.GetLink(s);
+        LINE ourLine = aNode->AssembleLine( seg );
+        JOINT a, b;
+        std::vector<LINE> lines;
+
+        aNode->FindLineEnds( ourLine, a, b );
+
+        if( a == b )
+            aNode->FindLineEnds( aLatest, a, b );
+
+        aNode->FindLinesBetweenJoints( a, b, lines );
+
+        int removedCount = 0;
+        int total = 0;
+
+        for( LINE& line : lines )
+        {
+            total++;
+
+            if( !( line.ContainsLink( seg ) ) && line.SegmentCount() )
+            {
+                // Don't remove locked tracks
+                bool hasLockedSegment = false;
+                for( LINKED_ITEM* ss : line.Links() )
+                {
+                    if( ss->IsLocked() )
+                    {
+                        hasLockedSegment = true;
+                        break;
+}
+                }
+
+                if( !hasLockedSegment )
+                {
+                    for( LINKED_ITEM* ss : line.Links() )
+                        toErase.insert( ss );
+
+                    removedCount++;
+                }
+            }
+        }
+
+        PNS_DBG( Dbg(), Message, wxString::Format( "total segs removed: %d/%d", removedCount, total ) );
+    }
+
+    for( LINKED_ITEM* s : toErase )
+        aNode->Remove( s );
+
+    aNode->Remove( aLatest );
+
+
+    return true;
+}
+
 
 }

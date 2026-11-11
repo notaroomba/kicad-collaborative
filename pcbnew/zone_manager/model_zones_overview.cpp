@@ -37,6 +37,13 @@ void MODEL_ZONES_OVERVIEW::SortFilteredZones()
     std::sort( m_filteredZones.begin(), m_filteredZones.end(),
                [&]( ZONE* const& l, ZONE* const& r )
                {
+                   // Reordering only updates the bag, the clones keep their priority until apply
+                   unsigned lPriority = m_zoneSettingsBag.GetZonePriority( l );
+                   unsigned rPriority = m_zoneSettingsBag.GetZonePriority( r );
+
+                   if( lPriority != rPriority )
+                       return lPriority > rPriority;
+
                    return l->HigherPriority( r );
                } );
 }
@@ -138,13 +145,13 @@ void MODEL_ZONES_OVERVIEW::GetValueByRow( wxVariant& aVariant, unsigned aRow, un
 }
 
 
-void MODEL_ZONES_OVERVIEW::EnableFitterByName( bool aEnable )
+void MODEL_ZONES_OVERVIEW::EnableFilterByName( bool aEnable )
 {
     m_sortByName = aEnable;
 }
 
 
-void MODEL_ZONES_OVERVIEW::EnableFitterByNet( bool aEnable )
+void MODEL_ZONES_OVERVIEW::EnableFilterByNet( bool aEnable )
 {
     m_sortByNet = aEnable;
 }

@@ -60,6 +60,9 @@ public:
     bool                  m_plotDrawingSheet;
     std::vector<wxString> m_plotPages;
 
+    // KIID path of the sheet to plot in single-sheet mode; empty means the current sheet
+    wxString              m_sheetPath;
+
     bool                  m_show_hop_over;
     bool                  m_blackAndWhite;
     JOB_PAGE_SIZE         m_pageSizeSelect;
@@ -87,7 +90,7 @@ public:
 class KICOMMON_API JOB_EXPORT_SCH_PLOT_DXF : public JOB_EXPORT_SCH_PLOT
 {
 public:
-    JOB_EXPORT_SCH_PLOT_DXF();
+    JOB_EXPORT_SCH_PLOT_DXF( bool aOutputIsDirectory = true );
     wxString GetDefaultDescription() const override;
     wxString GetSettingsDialogTitle() const override;
 };
@@ -96,7 +99,7 @@ public:
 class KICOMMON_API JOB_EXPORT_SCH_PLOT_SVG : public JOB_EXPORT_SCH_PLOT
 {
 public:
-    JOB_EXPORT_SCH_PLOT_SVG();
+    JOB_EXPORT_SCH_PLOT_SVG( bool aOutputIsDirectory = true );
     wxString GetDefaultDescription() const override;
     wxString GetSettingsDialogTitle() const override;
 };
@@ -105,7 +108,7 @@ public:
 class KICOMMON_API JOB_EXPORT_SCH_PLOT_PS : public JOB_EXPORT_SCH_PLOT
 {
 public:
-    JOB_EXPORT_SCH_PLOT_PS();
+    JOB_EXPORT_SCH_PLOT_PS( bool aOutputIsDirectory = true );
     wxString GetDefaultDescription() const override;
     wxString GetSettingsDialogTitle() const override;
 };
@@ -122,7 +125,7 @@ public:
 class KICOMMON_API JOB_EXPORT_SCH_PLOT_PNG : public JOB_EXPORT_SCH_PLOT
 {
 public:
-    JOB_EXPORT_SCH_PLOT_PNG();
+    JOB_EXPORT_SCH_PLOT_PNG( bool aOutputIsDirectory = true );
     wxString GetDefaultDescription() const override;
     wxString GetSettingsDialogTitle() const override;
 

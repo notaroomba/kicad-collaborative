@@ -38,7 +38,7 @@ class wxFileName;
 class LOCKFILE;
 
 
-/// Project settings path will be <projectname> + this
+/// Project settings path will be \<projectname\> + this
 #define PROJECT_BACKUPS_DIR_SUFFIX wxT( "-backups" )
 
 #define DEFAULT_THEME wxString( wxT( "user" ) )
@@ -74,6 +74,7 @@ public:
      * Take ownership of the pointer passed in.
      *
      * @param aSettings is a settings object to register.
+     * @param aLoadNow loads the settings on registration when true.
      * @return a handle to the owned pointer.
      */
     template<typename T>
@@ -93,7 +94,8 @@ public:
     /**
      * If the given settings object is registered, save it to disk and unregister it.
      *
-     * @param aSettings is the object to release
+     * @param aSettings is the object to release.
+     * @param aSave performs a save to file when true.
      */
     void FlushAndRelease( JSON_SETTINGS* aSettings, bool aSave = true );
 
@@ -293,9 +295,11 @@ public:
      *
      * @param aFullPath is the full path to the project.
      * @param aSetActive if true will set the loaded project as the active project.
+     * @param aOverrideLock if true, an active load takes the project lock even when another
+     *                      session holds it.  Callers use this once the user has agreed to it.
      * @return true if the #PROJECT_FILE was successfully loaded from disk.
      */
-    bool LoadProject( const wxString& aFullPath, bool aSetActive = true );
+    bool LoadProject( const wxString& aFullPath, bool aSetActive = true, bool aOverrideLock = false );
 
     /**
      * Save, unload and unregister the given #PROJECT.
@@ -305,6 +309,14 @@ public:
      * @return true if the #PROJECT file was successfully saved.
      */
     bool UnloadProject( PROJECT* aProject, bool aSave = true );
+
+    /**
+     * Give up the lock of every loaded project without unloading it.
+     *
+     * Releasing a lock deletes its lock file through wxWidgets, so a project that is still loaded
+     * when the application exits must let go of it before static destruction begins.
+     */
+    void ReleaseProjectLocks();
 
     /**
      * Helper for checking if we have a project open.
@@ -549,7 +561,10 @@ private:
      */
     bool unloadProjectFile( PROJECT* aProject, bool aSave );
 
-    ///< Helper to create built-in colors and register them.
+    /// Cancels and joins every library preload and async load, so none can touch Prj() during a project change
+    void stopLibraryLoads();
+
+    /// Helper to create built-in colors and register them.
     void registerBuiltinColorSettings();
 
 private:

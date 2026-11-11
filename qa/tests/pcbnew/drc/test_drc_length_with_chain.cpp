@@ -18,6 +18,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <qa_utils/file_utils.h>
 
 #include <pcbnew_utils/board_file_utils.h>
 
@@ -59,10 +60,9 @@ BOOST_AUTO_TEST_CASE( PerNetLengthFiresAlongsideChainLength )
 {
     namespace fs = std::filesystem;
 
-    fs::path tmpDir = fs::temp_directory_path() / "kicad_drc_length_chain";
-    fs::create_directories( tmpDir );
+    KI_TEST::SCOPED_TEMP_DIR tmpDir( wxS( "kicad_drc_length_chain" ) );
 
-    fs::path druPath = tmpDir / "len_chain.kicad_dru";
+    fs::path druPath = tmpDir.Path() / "len_chain.kicad_dru";
 
     {
         std::ofstream druOut( druPath );
@@ -70,8 +70,7 @@ BOOST_AUTO_TEST_CASE( PerNetLengthFiresAlongsideChainLength )
     }
 
     PCB_IO_KICAD_SEXPR     plugin;
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-    plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir() + BOARD_FILE, board.get() );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir() + BOARD_FILE );
     board->BuildConnectivity();
 
     // Tag CHAIN_NET into a signal chain so the chain branch fires; leave PLAIN_NET unchained

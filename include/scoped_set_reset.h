@@ -17,32 +17,31 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef __SCOPED_SET_RESET_H
-#define __SCOPED_SET_RESET_H
+#pragma once
 
-#include <functional>
 #include <utility>
 
 /**
  * RAII class that sets an value at construction and resets it to the original value
  * at destruction.
  *
- * @note There is no type deduction for template classes until C++17, \
- * so you can't do this:
+ * @note There is type deduction for template classes from C++17,
+ * so you can do this without `<int>`:
  *
  *     int target = 0;
- *     SCOPED_SET_RESET( target, 42 );
- *
- * Instead, you can use a type alias, for example:
- *
- *     using SCOPED_INT_SET_RESET = SCOPED_SET_RESET<int>;
- *     int target = 0;
- *     SCOPED_INT_SET_RESET( target , 42 );
+ *     SCOPED_SET_RESET targetResetter( target, 42 );
  */
 template <typename VAL_TYPE>
 class SCOPED_SET_RESET
 {
 public:
+    /**
+     * Construct the class, set the target to the specified value, and
+     * remember the original value.
+     *
+     * Whatever the caller does with the target, it will be restored
+     * to its original value upon destruction.
+     */
     SCOPED_SET_RESET( VAL_TYPE& target, VAL_TYPE value ) :
             m_original( target ),
             m_target( target )
@@ -51,9 +50,27 @@ public:
     }
 
     /**
+     * Construct the class and remember the original value of the target,
+     * but without changing it immediately.
+     *
+     * In any case, the original value will be restored upon destruction.
+     */
+    SCOPED_SET_RESET( VAL_TYPE& target ) :
+            m_original( target ),
+            m_target( target )
+    {
+    }
+
+    /**
      * Destruct the class, and return the target to its original value.
      */
     ~SCOPED_SET_RESET() { m_target = m_original; }
+
+    // No copy operations allowed or the destructor might reset
+    // the target to its original value multiple times.
+
+    SCOPED_SET_RESET( SCOPED_SET_RESET const& ) = delete;
+    SCOPED_SET_RESET& operator=( SCOPED_SET_RESET const& ) = delete;
 
 private:
     VAL_TYPE  m_original;
@@ -76,11 +93,15 @@ public:
         m_initFunc();
     }
 
+    // No copy operations allowed or the destructor might execute
+    // the destroy function multiple times.
+
+    SCOPED_EXECUTION( SCOPED_EXECUTION const& ) = delete;
+    SCOPED_EXECUTION& operator=( SCOPED_EXECUTION const& ) = delete;
+
     ~SCOPED_EXECUTION() { m_destroyFunc(); }
 
 private:
     Func m_initFunc;
     Func m_destroyFunc;
 };
-
-#endif // __SCOPED_SET_RESET_H

@@ -21,6 +21,7 @@
 #include <config.h>
 #include <gestfich.h>
 #include <wx/process.h>
+#include <wx/textfile.h>
 
 #include <future>
 #include <utility>
@@ -88,6 +89,25 @@ PYTHON_MANAGER::PYTHON_MANAGER( const wxString& aInterpreterPath )
     path.Normalize( FN_NORMALIZE_FLAGS );
     m_interpreterPath = path.GetFullPath();
 }
+
+
+static wxString readAllFromStream( wxInputStream* aStream )
+{
+    wxString result;
+
+    if( aStream )
+    {
+        char buffer[4096];
+
+        while( aStream->CanRead() )
+        {
+            aStream->Read( buffer, sizeof( buffer ) );
+            result.Append( buffer, aStream->LastRead() );
+        }
+    }
+
+    return result;
+};
 
 
 long PYTHON_MANAGER::Execute( const std::vector<wxString>& aArgs,
@@ -160,20 +180,29 @@ long PYTHON_MANAGER::Execute( const std::vector<wxString>& aArgs,
     }
     else
     {
+        wxWCharBuffer interpreterBuf = m_interpreterPath.wc_str();
+        std::vector<wxWCharBuffer> argBufs;
+        argBufs.reserve( aArgs.size() );
+
+        for( const wxString& arg : aArgs )
+            argBufs.emplace_back( arg.wc_str() );
+
+        std::vector<const wchar_t*> syncArgs = { interpreterBuf.data() };
+
+        for( const wxWCharBuffer& buf : argBufs )
+            syncArgs.emplace_back( buf.data() );
+
+        syncArgs.emplace_back( nullptr );
+
         wxLogTrace( traceApi, wxString::Format( "Execute sync: %s %s", m_interpreterPath, argsStr ) );
-        wxArrayString out, err;
-        wxString cmd = wxString::Format( "%s %s", m_interpreterPath, argsStr );
-        long ret = wxExecute( cmd, out, err, wxEXEC_BLOCK, aEnv );
 
-        wxString strOut, strErr;
+        wxProcess syncProcess;
+        syncProcess.Redirect();
 
-        for( const wxString& line : out )
-            strOut << line << "\n";
+        long ret = wxExecute( syncArgs.data(), wxEXEC_BLOCK, &syncProcess, aEnv );
 
-        for( const wxString& line : err )
-            strErr << line << "\n";
-
-        aCallback( ret, strOut, strErr );
+        aCallback( static_cast<int>( ret ), readAllFromStream( syncProcess.GetInputStream() ),
+                   readAllFromStream( syncProcess.GetErrorStream() ) );
 
         return ret;
     }
@@ -184,29 +213,37 @@ long PYTHON_MANAGER::ExecuteSync( const std::vector<wxString>& aArgs,
                                   wxString* aStdout, wxString* aStderr,
                                   const wxExecuteEnv* aEnv )
 {
+    wxWCharBuffer interpreterBuf = m_interpreterPath.wc_str();
+    std::vector<wxWCharBuffer> argBufs;
+    argBufs.reserve( aArgs.size() );
+
+    for( const wxString& arg : aArgs )
+        argBufs.emplace_back( arg.wc_str() );
+
+    std::vector<const wchar_t*> args = { interpreterBuf.data() };
+
+    for( const wxWCharBuffer& buf : argBufs )
+        args.emplace_back( buf.data() );
+
+    args.emplace_back( nullptr );
+
     wxString argsStr;
 
     for( const wxString& arg : aArgs )
         argsStr << arg << " ";
 
     wxLogTrace( traceApi, wxString::Format( "Execute sync: %s %s", m_interpreterPath, argsStr ) );
-    wxArrayString out, err;
-    wxString cmd = wxString::Format( "%s %s", m_interpreterPath, argsStr );
-    long ret = wxExecute( cmd, out, err, wxEXEC_BLOCK, aEnv );
 
-    wxString strOut, strErr;
+    wxProcess process;
+    process.Redirect();
+
+    long ret = wxExecute( args.data(), wxEXEC_BLOCK, &process, aEnv );
 
     if( aStdout )
-    {
-        for( const wxString& line : out )
-            *aStdout << line << "\n";
-    }
+        *aStdout = readAllFromStream( process.GetInputStream() );
 
     if( aStderr )
-    {
-        for( const wxString& line : err )
-            *aStderr << line << "\n";
-    }
+        *aStderr = readAllFromStream( process.GetErrorStream() );
 
     return ret;
 }
@@ -294,4 +331,118 @@ std::optional<wxString> PYTHON_MANAGER::GetVirtualPython( const wxString& aNames
         return std::nullopt;
 
     return python.GetFullPath();
+}
+
+
+static wxString venvPythonPath( const wxString& aEnvPath )
+{
+    wxFileName python( aEnvPath, wxEmptyString );
+
+#ifdef _WIN32
+    python.AppendDir( "Scripts" );
+    python.SetFullName( "pythonw.exe" );
+#else
+    python.AppendDir( "bin" );
+    python.SetFullName( "python" );
+#endif
+
+    return python.GetFullPath();
+}
+
+
+std::optional<wxString> PYTHON_MANAGER::GetVenvInterpreter( const wxString& aEnvPath )
+{
+    wxFileName cfg( aEnvPath, wxS( "pyvenv.cfg" ) );
+
+    if( !cfg.IsFileReadable() )
+        return std::nullopt;
+
+    wxTextFile textFile( cfg.GetFullPath() );
+
+    if( !textFile.Open() )
+        return std::nullopt;
+
+    wxString executable;
+
+    for( wxString line = textFile.GetFirstLine(); !textFile.Eof(); line = textFile.GetNextLine() )
+    {
+        if( line.Trim( true ).Trim( false ).StartsWith( wxS( "executable" ) ) )
+        {
+            executable = line.AfterFirst( '=' ).Trim( true ).Trim( false );
+            break;
+        }
+    }
+
+    textFile.Close();
+
+    if( executable.IsEmpty() )
+        return std::nullopt;
+
+    return executable;
+}
+
+
+bool PYTHON_MANAGER::IsVenvUsable( const wxString& aEnvPath )
+{
+    if( wxString pythonPath = venvPythonPath( aEnvPath ); !wxFileName( pythonPath ).IsFileExecutable() )
+        return false;
+
+    if( std::optional<wxString> interpreter = GetVenvInterpreter( aEnvPath ) )
+    {
+        if( wxFileName base( *interpreter ); !base.IsFileExecutable() )
+            return false;
+    }
+
+    return true;
+}
+
+
+static wxString canonicalizePath( const wxString& aPath )
+{
+#ifndef _WIN32
+    char buffer[PATH_MAX];
+
+    if( char* resolved = realpath( aPath.ToUTF8().data(), buffer ) )
+        return wxString::FromUTF8( resolved );
+#endif
+
+    wxFileName fn( aPath );
+    fn.Normalize( FN_NORMALIZE_FLAGS );
+    return fn.GetFullPath();
+}
+
+
+bool PYTHON_MANAGER::IsVenvStale( const wxString& aEnvPath, const wxString& aConfiguredInterpreter )
+{
+    if( std::optional<wxString> executable = GetVenvInterpreter( aEnvPath ) )
+        return canonicalizePath( *executable ) != canonicalizePath( aConfiguredInterpreter );
+
+    wxFileName cfg( aEnvPath, wxS( "pyvenv.cfg" ) );
+
+    if( !cfg.IsFileReadable() )
+        return false;
+
+    wxTextFile textFile( cfg.GetFullPath() );
+
+    if( !textFile.Open() )
+        return false;
+
+    wxString home;
+
+    for( wxString line = textFile.GetFirstLine(); !textFile.Eof(); line = textFile.GetNextLine() )
+    {
+        if( line.Trim( true ).Trim( false ).StartsWith( wxS( "home" ) ) )
+        {
+            home = line.AfterFirst( '=' ).Trim( true ).Trim( false );
+            break;
+        }
+    }
+
+    textFile.Close();
+
+    if( home.IsEmpty() )
+        return false;
+
+    wxFileName configuredFn( canonicalizePath( aConfiguredInterpreter ) );
+    return canonicalizePath( home ) != configuredFn.GetPath();
 }

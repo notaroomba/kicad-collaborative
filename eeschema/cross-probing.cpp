@@ -27,7 +27,13 @@
 #include <kiface_base.h>
 #include <kiway.h>
 #include <kiway_mail.h>
-#include <connection_graph.h>
+#include <import_net_map.h>
+#include <import_local_symbol_libs.h>
+#include <import_proj_properties.h>
+#include <link_imported_footprints.h>
+#include <reporter.h>
+#include <connectivity/conn_navigation.h>
+#include <connectivity/conn_netchain_manager.h>
 #include <sch_netchain.h>
 #include <sch_sheet.h>
 #include <sch_symbol.h>
@@ -39,7 +45,9 @@
 #include <project_sch.h>
 #include <richio.h>
 #include <tools/sch_actions.h>
+#include <tool/tool_manager.h>
 #include <tools/sch_editor_control.h>
+#include <tools/sch_selection_tool.h>
 #include <advanced_config.h>
 #include <api/api_handler_sch.h>
 
@@ -49,6 +57,7 @@
 #include <widgets/kistatusbar.h>
 #include <wx/filefn.h>
 #include <wx/log.h>
+#include <wx/msgdlg.h>
 #include <trace_helpers.h>
 
 SCH_ITEM* SCH_EDITOR_CONTROL::FindSymbolAndItem( const wxString* aPath, const wxString* aReference,
@@ -107,7 +116,7 @@ SCH_ITEM* SCH_EDITOR_CONTROL::FindSymbolAndItem( const wxString* aPath, const wx
                     {
                         int unit = pin->GetLibPin()->GetUnit();
 
-                        if( unit != 0 && unit != symbol->GetUnit() )
+                        if( unit != ALL_UNITS && unit != symbol->GetUnit() )
                         {
                             pin = nullptr;
                             continue;
@@ -245,26 +254,7 @@ void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
         if( !crossProbingSettings.auto_highlight )
             return;
 
-        wxString netName = From_UTF8( text );
-
-        if( auto sg = Schematic().ConnectionGraph()->FindFirstSubgraphByName( netName ) )
-            SetHighlightedConnection( sg->GetDriverConnection()->Name(), nullptr, true );
-        else
-            SetHighlightedConnection( wxEmptyString, nullptr, true );
-
-        // If the incoming net belongs to a net chain, also turn on chain
-        // highlight so the schematic mirrors what the PCB editor is doing.
-        if( CONNECTION_GRAPH* graph = Schematic().ConnectionGraph() )
-        {
-            if( SCH_NETCHAIN* chain = graph->GetNetChainForNet( m_highlightedConn ) )
-                SetHighlightedNetChain( chain->GetName() );
-            else
-                SetHighlightedNetChain( wxEmptyString );
-        }
-
-        GetToolManager()->RunAction( SCH_ACTIONS::updateNetHighlighting );
-
-        SetStatusText( _( "Highlighted net:" ) + wxS( " " ) + UnescapeString( netName ) );
+        HandleRemoteNetHighlight( From_UTF8( text ) );
         return;
     }
     else if( strcmp( idcmd, "$CLEAR:" ) == 0 )
@@ -326,24 +316,16 @@ void SCH_EDIT_FRAME::ExecuteRemoteCommand( const char* cmdline )
 
 void SCH_EDIT_FRAME::HandleRemoteNetHighlight( const wxString& aNetName )
 {
-    if( auto sg = Schematic().ConnectionGraph()->FindFirstSubgraphByName( aNetName ) )
-        SetHighlightedConnection( sg->GetDriverConnection()->Name(), nullptr, true );
-    else
-        SetHighlightedConnection( wxEmptyString, nullptr, true );
+    const bool exists = SCH_CONNECTIVITY::NAVIGATION_QUERY( Schematic() ).HasNet( aNetName );
+    SetHighlightedConnection( exists ? aNetName : wxString(), nullptr, true );
 
-    // If the incoming net belongs to a net chain, also turn on chain
-    // highlight so the schematic mirrors what the PCB editor is doing.
-    if( CONNECTION_GRAPH* graph = Schematic().ConnectionGraph() )
-    {
-        if( SCH_NETCHAIN* chain = graph->GetNetChainForNet( m_highlightedConn ) )
-            SetHighlightedNetChain( chain->GetName() );
-        else
-            SetHighlightedNetChain( wxEmptyString );
-    }
+    if( SCH_NETCHAIN* chain = Schematic().NetChains().GetNetChainForNet( m_highlightedConn ) )
+        SetHighlightedNetChain( chain->GetName() );
+    else
+        SetHighlightedNetChain( wxEmptyString );
 
     GetToolManager()->RunAction( SCH_ACTIONS::updateNetHighlighting );
-
-    SetStatusText( _( "Highlighted net:" ) + wxS( " " ) + UnescapeString( aNetName ) );
+    UpdateNetHighlightStatus();
 }
 
 
@@ -359,7 +341,7 @@ void SCH_EDIT_FRAME::SendSelectItemsToPcb( const std::vector<EDA_ITEM*>& aItems,
         {
             SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
             kiapi::common::commands::SelectionSpec* spec = sync.add_items();
-            spec->mutable_footprint()->set_reference( symbol->GetField( FIELD_T::REFERENCE )->GetText().ToUTF8() );
+            spec->mutable_footprint()->set_reference( symbol->GetCurrentSheetRef().ToUTF8() );
             break;
         }
 
@@ -413,8 +395,25 @@ void SCH_EDIT_FRAME::SendSelectItemsToPcb( const std::vector<EDA_ITEM*>& aItems,
     else
     {
         std::string payload;
-        kiapi::common::PackKiwayApiMessage( sync, payload );
-        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, payload, this );
+
+        if( kiapi::common::PackKiwayApiMessage( sync, payload ) )
+            Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_SELECTION, payload, this );
+    }
+}
+
+
+static void sendHighlightNets( SCH_EDIT_FRAME* aFrame, const kiapi::common::commands::HighlightNets& aMessage )
+{
+    if( Kiface().IsSingle() )
+    {
+        CROSS_PROBE_CLIENT::SendToFrame( FRAME_PCB_EDITOR, aMessage );
+    }
+    else
+    {
+        std::string payload;
+
+        if( kiapi::common::PackKiwayApiMessage( aMessage, payload ) )
+            aFrame->Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, payload, aFrame );
     }
 }
 
@@ -424,65 +423,26 @@ void SCH_EDIT_FRAME::SendCrossProbeNetName( const wxString& aNetName )
     kiapi::common::commands::HighlightNets message;
 
     message.add_net_name( aNetName.ToUTF8() );
-
-    if( Kiface().IsSingle() )
-    {
-        CROSS_PROBE_CLIENT::SendToFrame( FRAME_PCB_EDITOR, message );
-    }
-    else
-    {
-        std::string payload;
-        kiapi::common::PackKiwayApiMessage( message, payload );
-        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, payload, this );
-    }
+    sendHighlightNets( this, message );
 }
 
 
-void SCH_EDIT_FRAME::SetCrossProbeConnection( const SCH_CONNECTION* aConnection )
+void SCH_EDIT_FRAME::SetCrossProbeConnection( const wxString& aName )
 {
-    if( !aConnection )
+    const auto names = SCH_CONNECTIVITY::NAVIGATION_QUERY( Schematic() ).SignalNames( aName );
+
+    if( names.empty() )
     {
         SendCrossProbeClearHighlight();
         return;
     }
 
-    if( aConnection->IsNet() )
-    {
-        SendCrossProbeNetName( aConnection->Name() );
-        return;
-    }
-
-    if( aConnection->Members().empty() )
-        return;
-
     kiapi::common::commands::HighlightNets message;
 
-    auto all_members = aConnection->AllMembers();
+    for( const wxString& name : names )
+        message.add_net_name( name.ToUTF8() );
 
-    if( all_members.size() == 1 )
-    {
-        SendCrossProbeNetName( all_members[0]->Name() );
-        return;
-    }
-
-    message.add_net_name( all_members[0]->Name().ToUTF8() );
-
-    // TODO: This could be replaced by just sending the bus name once we have bus contents
-    // included as part of the netlist sent from Eeschema to Pcbnew (and thus Pcbnew can
-    // natively keep track of bus membership)
-
-    for( size_t i = 1; i < all_members.size(); i++ )
-        message.add_net_name( all_members[i]->Name().ToUTF8() );
-
-    if( Kiface().IsSingle() )
-    {
-        CROSS_PROBE_CLIENT::SendToFrame( FRAME_PCB_EDITOR, message );
-    }
-    else
-    {
-        std::string data = message.SerializeAsString();
-        Kiway().ExpressMail( FRAME_PCB_EDITOR, MAIL_CROSS_PROBE, data, this );
-    }
+    sendHighlightNets( this, message );
 }
 
 
@@ -503,95 +463,17 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
         std::stringstream ss( payload );
         std::string       file;
 
-        LIBRARY_MANAGER&              manager = Pgm().GetLibraryManager();
-        SYMBOL_LIBRARY_ADAPTER*       adapter = PROJECT_SCH::SymbolLibAdapter( &Prj() );
-        std::optional<LIBRARY_TABLE*> optTable = manager.Table( LIBRARY_TABLE_TYPE::SYMBOL,
-                                                                LIBRARY_TABLE_SCOPE::PROJECT );
-
-        wxCHECK_RET( optTable.has_value(), "Could not load symbol lib table." );
-        LIBRARY_TABLE* table = optTable.value();
-
-        wxString projectPath = Prj().GetProjectPath();
-
         // First line of payload is the source project directory.
         std::string srcProjDir;
         std::getline( ss, srcProjDir, '\n' );
 
-        std::vector<wxString> toLoad;
+        std::vector<wxString> libraries;
 
         while( std::getline( ss, file, '\n' ) )
-        {
-            if( file.empty() )
-                continue;
+            libraries.push_back( wxString::FromUTF8( file ) );
 
-            wxFileName             fn( file );
-            IO_RELEASER<SCH_IO>    pi;
-            SCH_IO_MGR::SCH_FILE_T type = SCH_IO_MGR::GuessPluginTypeFromLibPath( fn.GetFullPath() );
-
-            if( type == SCH_IO_MGR::SCH_FILE_UNKNOWN )
-            {
-                wxLogTrace( "KIWAY", "Unknown file type: %s", fn.GetFullPath() );
-                continue;
-            }
-
-            pi.reset( SCH_IO_MGR::FindPlugin( type ) );
-
-            wxString libTableUri;
-            bool     isProjectLocal = fn.GetFullPath().StartsWith( wxString( srcProjDir ) );
-
-            if( isProjectLocal )
-            {
-                // Project-local library: copy into the KiCad project directory and use a
-                // project-relative path so the sym-lib-table stays portable.
-                if( !fn.FileExists() )
-                    continue;
-
-                wxFileName projectFn( projectPath, fn.GetFullName() );
-
-                if( fn.GetFullPath() != projectFn.GetFullPath() && !projectFn.FileExists() )
-                    wxCopyFile( fn.GetFullPath(), projectFn.GetFullPath() );
-
-                libTableUri = wxS( "${KIPRJMOD}/" ) + fn.GetFullName();
-            }
-            else
-            {
-                // External library referenced by absolute path. Preserve the original path.
-                libTableUri = fn.GetFullPath();
-            }
-
-            if( !table->HasRow( fn.GetName() ) )
-            {
-                LIBRARY_TABLE_ROW& row = table->InsertRow();
-                row.SetNickname( fn.GetName() );
-                row.SetURI( libTableUri );
-                row.SetType( SCH_IO_MGR::ShowType( type ) );
-                toLoad.emplace_back( fn.GetName() );
-            }
-        }
-
-        if( !toLoad.empty() )
-        {
-            bool success = true;
-
-            table->Save().map_error(
-                        [&]( const LIBRARY_ERROR& aError )
-                        {
-                            wxLogError( wxT( "Error saving project library table:\n\n" ) + aError.message );
-                            success = false;
-                        } );
-
-            if( success )
-            {
-                manager.AbortAsyncLoads();
-                manager.LoadProjectTables( { LIBRARY_TABLE_TYPE::SYMBOL } );
-
-                std::ranges::for_each( toLoad,
-                                       [adapter]( const wxString& aNick )
-                                       {
-                                           adapter->LoadOne( aNick );
-                                       } );
-            }
-        }
+        RegisterLocalSymbolLibraries( Prj(), wxString::FromUTF8( srcProjDir ), libraries,
+                                      WXLOG_REPORTER::GetInstance() );
 
         Kiway().ExpressMail( FRAME_CVPCB, MAIL_RELOAD_LIB, payload );
         Kiway().ExpressMail( FRAME_SCH_SYMBOL_EDITOR, MAIL_RELOAD_LIB, payload );
@@ -628,16 +510,21 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
             }
         }
 
-        if( ADVANCED_CFG::GetCfg().m_IncrementalConnectivity )
-            RecalculateConnections( nullptr, GLOBAL_CLEANUP );
+        PrepareForNetlist();
 
-        NETLIST_EXPORTER_KICAD exporter( &Schematic() );
+        NETLIST_EXPORTER_KICAD exporter( &Schematic(), &Kiway() );
         STRING_FORMATTER formatter;
 
-        exporter.SetKiway( &Kiway() );
         exporter.Format( &formatter, GNL_ALL | GNL_OPT_KICAD );
 
+        RefreshConnectivity( true );
         payload = formatter.GetString();
+        break;
+    }
+
+    case MAIL_SCH_GET_REF_SUFFIXES:
+    {
+        payload = Schematic().FormatRefSuffixes();
         break;
     }
 
@@ -649,7 +536,7 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
         if( SCH_ITEM* item = m_schematic->ResolveItem( uuid, &path, true ) )
         {
             if( item->Type() == SCH_SHEET_T )
-                payload = static_cast<SCH_SHEET*>( item )->GetShownName( false );
+                payload = static_cast<SCH_SHEET*>( item )->GetShownName( INTERNAL );
             else if( item->Type() == SCH_SYMBOL_T )
                 payload = static_cast<SCH_SYMBOL*>( item )->GetRef( &path, true );
             else
@@ -676,6 +563,18 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 
         GetCanvas()->GetView()->UpdateAllItems( KIGFX::ALL );
         GetCanvas()->Refresh();
+        break;
+    }
+
+    case MAIL_SCH_LINK_FOOTPRINTS:
+    {
+        std::optional<std::map<wxString, wxString>> footprints =
+                IMPORT_PROJ_PROPS::SplitTaggedMap( IMPORT_PROJ_PROPS::FOOTPRINT_ID_MAP_TAG,
+                                                   wxString::FromUTF8( payload ) );
+
+        if( footprints && LinkImportedFootprints( Schematic(), *footprints, WXLOG_REPORTER::GetInstance() ) > 0 )
+            OnModify();
+
         break;
     }
 
@@ -719,8 +618,25 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 
         } while( true );
 
-        if( importFormat >= 0 )
-            importFile( fnameStr, importFormat, props.empty() ? nullptr : &props );
+        payload.clear();
+
+        if( importFormat < 0 || !importFile( fnameStr, importFormat, props.empty() ? nullptr : &props ) )
+            break;
+
+        if( importFormat == SCH_IO_MGR::SCH_ORCAD )
+        {
+            const IMPORT_NET_MAP*        map = Schematic().GetImportNetMap();
+            std::map<wxString, wxString> names;
+
+            if( map )
+                names = GetBoardNetNameMap( *map, LOAD_INFO_REPORTER::GetInstance() );
+
+            payload = TO_UTF8( IMPORT_PROJ_PROPS::JoinNetNameMap( names ) );
+        }
+        else
+        {
+            payload = "success";
+        }
 
         break;
     }
@@ -731,17 +647,73 @@ void SCH_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
 
         break;
 
+    case MAIL_SCH_RELOAD:
+    {
+        // A git operation rewrote files on disk. Reload the schematic so the editor matches.
+        if( Schematic().GetFileName().IsEmpty() )
+            break;
+
+        SCH_SCREENS screens( Schematic().Root() );
+
+        // A payload lists the changed files. When none is a sheet of this schematic, the change
+        // belongs to another project and reloading would only cost this one its undo history.
+        if( !payload.empty() )
+        {
+            wxArrayString changed = wxSplit( wxString::FromUTF8( payload.c_str() ), '\n' );
+            bool          mine = false;
+
+            for( SCH_SCREEN* screen = screens.GetFirst(); screen && !mine; screen = screens.GetNext() )
+            {
+                wxString screenFile = wxFileName( screen->GetFileName() ).GetFullPath();
+
+                for( const wxString& changedFile : changed )
+                {
+                    if( !changedFile.IsEmpty() && screenFile == wxFileName( changedFile ).GetFullPath() )
+                    {
+                        mine = true;
+                        break;
+                    }
+                }
+            }
+
+            if( !mine )
+                break;
+        }
+
+        // Neither choice is safe without asking: reloading discards the unsaved edits, keeping
+        // them means the next save overwrites what arrived.
+        if( IsContentModified() )
+        {
+            wxMessageDialog dlg( this,
+                                 _( "The schematic changed on disk while you were editing it.\n\n"
+                                    "Reloading loses your unsaved edits. Keeping them means your "
+                                    "next save overwrites the changes that just arrived. To get those "
+                                    "back later, use Discard Changes on the file in the Version Control "
+                                    "panel, which drops your edits to it." ),
+                                 _( "Schematic Changed on Disk" ),
+                                 wxYES_NO | wxNO_DEFAULT | wxICON_WARNING | wxCENTER );
+            dlg.SetYesNoLabels( _( "&Reload" ), _( "&Keep My Edits" ) );
+
+            if( dlg.ShowModal() != wxID_YES )
+                break;
+        }
+
+        ReloadFromDisk();
+        break;
+    }
+
     case MAIL_SCH_UPDATE:
         m_toolManager->RunAction( ACTIONS::updateSchematicFromPcb );
+        break;
+
+    case MAIL_SCH_PROJECT_SETTINGS_CHANGED:
+        ReloadProjectFileSettings();
         break;
 
     case MAIL_RELOAD_LIB:
     {
         if( m_designBlocksPane && m_designBlocksPane->IsShown() )
-        {
             m_designBlocksPane->RefreshLibs();
-            SyncView();
-        }
 
         // Show any symbol library load errors in the status bar
         if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )

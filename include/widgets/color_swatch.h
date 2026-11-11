@@ -28,6 +28,7 @@
 #include <functional>
 
 #include <gal/color4d.h>
+#include <widgets/ui_common.h>
 #include <dialogs/dialog_color_picker.h>
 
 enum SWATCH_SIZE
@@ -58,6 +59,11 @@ public:
      * @param aParent parent window.
      * @param aColor initial swatch color.
      * @param aID id to use when sending swatch events.
+     * @param aBackground is the background color of the swatch.
+     * @param aDefault is the default color for the swatch.
+     * @param aSwatchType
+     * @param aTriggerWithSingleClick is used to indicate if the color picker is launched with a single or
+     *                                double left mouse button click.
      */
     COLOR_SWATCH( wxWindow* aParent, const KIGFX::COLOR4D& aColor, int aID,
                   const KIGFX::COLOR4D& aBackground, const KIGFX::COLOR4D& aDefault,
@@ -74,6 +80,11 @@ public:
      */
     void SetSwatchColor( const KIGFX::COLOR4D& aColor, bool aSendEvent );
 
+    void SetIndeterminate()
+    {
+        SetSwatchColor( KIGFX::COLOR4D( INDETERMINATE_STATE ), false );
+    }
+
     /**
      * Sets the color that will be chosen with the "Reset to Default" button in the chooser
      */
@@ -88,6 +99,11 @@ public:
      * @return the current swatch color.
      */
     KIGFX::COLOR4D GetSwatchColor() const;
+
+    bool IsIndeterminate() const
+    {
+        return m_color.m_text && *m_color.m_text == INDETERMINATE_STATE;
+    }
 
     /**
      * Update the window ID of this control and its children.

@@ -190,7 +190,7 @@ public:
             {
                 m_current = ( *m_nextFunc )( *m_currBlock );
 
-                if( m_current == m_tail || m_board->IsSentinel( m_current ) )
+                if( m_current == m_tail )
                 {
                     m_current = 0;
                 }
@@ -434,5 +434,13 @@ std::optional<FIELD_VALUE> GetFirstFieldOfType( const BRD_DB& aDb, uint32_t aFie
  */
 std::optional<int> GetFirstFieldOfTypeInt( const BRD_DB& aDb, uint32_t aFieldsPtr, uint32_t aEndKey,
                                            uint16_t aFieldCode );
+
+/**
+ * Remove the backslash wrapper Cadence puts around an identifier that holds special characters.
+ *
+ * A path component of the form \\name\\ becomes name, so @LIB.TOP(SCH_1):\\NET\\ becomes @LIB.TOP(SCH_1):NET.
+ * Anything else, including a component with a backslash inside its wrapper, is kept as written.
+ */
+wxString DecodeEscapedIdentifiers( const wxString& aName );
 
 } // namespace ALLEGRO

@@ -115,22 +115,11 @@ std::vector<uint8_t> KI_TEST::LoadBinaryData( const std::string& aFilePath, std:
 }
 
 
-void KI_TEST::SetMockConfigDir()
+std::string KI_TEST::LoadStringData( const wxString& aPath )
 {
-    if( !wxGetEnv( wxT( "KICAD_CONFIG_HOME" ), nullptr ) )
-    {
-        wxString path( GetTestDataRootDir() );
-        path += wxT( "/config/" );
-        wxSetEnv( wxT( "KICAD_CONFIG_HOME" ), path );
-        wxSetEnv( wxT( "KICAD_CONFIG_HOME_IS_QA" ), wxT( "1" ) );
+    const std::vector<uint8_t> data = KI_TEST::LoadBinaryData( aPath.ToStdString() );
 
-        if( wxFileName fn( path ); fn.DirExists() )
-        {
-            // Under normal circumstances, don't let QA test runs write back to the config dir
-            // to avoid churn.  Disable this if you want to update the QA schema.
-            wxSetEnv( wxT( "KICAD_INHIBIT_SETTINGS_WRITES" ), wxT( "1" ) );
-        }
-    }
+    return std::string( data.begin(), data.end() );
 }
 
 

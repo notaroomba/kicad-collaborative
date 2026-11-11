@@ -52,8 +52,9 @@ class PCB_GROUP : public BOARD_ITEM, public EDA_GROUP
 public:
     PCB_GROUP( BOARD_ITEM* aParent );
 
-    void Serialize( google::protobuf::Any &aContainer ) const override;
-    bool Deserialize( const google::protobuf::Any &aContainer ) override;
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
+    bool DeserializeGroup( const google::protobuf::Any& aContainer, COMMIT* aCommit ) override;
 
     EDA_ITEM* AsEdaItem() override { return this; }
 
@@ -69,16 +70,16 @@ public:
 
     std::unordered_set<BOARD_ITEM*> GetBoardItems() const;
 
-    /*
+    /**
      * Search for highest level group inside of aScope, containing item.
      *
      * @param aScope restricts the search to groups within the group scope.
      * @param isFootprintEditor true if we should stop promoting at the footprint level
      * @return group inside of aScope, containing item, if exists, otherwise, nullptr
      */
-    static EDA_GROUP* TopLevelGroup( BOARD_ITEM* aItem, EDA_GROUP* aScope, bool isFootprintEditor );
+    static EDA_GROUP* TopLevelGroup( const BOARD_ITEM& aItem, const EDA_GROUP* aScope, bool isFootprintEditor );
 
-    static bool WithinScope( BOARD_ITEM* aItem, PCB_GROUP* aScope, bool isFootprintEditor );
+    static bool WithinScope( const BOARD_ITEM& aItem, const PCB_GROUP* aScope, bool isFootprintEditor );
 
     double Similarity( const BOARD_ITEM& aOther ) const override;
 
@@ -97,6 +98,12 @@ public:
 
     /// @copydoc EDA_ITEM::SetPosition
     void SetPosition( const VECTOR2I& aNewpos ) override;
+
+    PCB_LAYER_ID GetLayer() const override
+    {
+        wxFAIL_MSG( wxT( "PCB_GROUP::GetLayer() isn't well-defined.  Don't call it." ) );
+        return UNDEFINED_LAYER;
+    }
 
     /// @copydoc BOARD_ITEM::GetLayerSet
     LSET GetLayerSet() const override;
@@ -141,13 +148,13 @@ public:
     /// @copydoc BOARD_ITEM::IsOnLayer
     bool IsOnLayer( PCB_LAYER_ID aLayer ) const override;
 
+    double GetCoverageArea( int aTextMargin ) const override;
+
     /// @copydoc EDA_ITEM::HitTest
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
 
-    /// @copydoc EDA_ITEM::HitTest
     bool HitTest( const BOX2I& aRect, bool aContained, int aAccuracy = 0 ) const override;
 
-    /// @copydoc EDA_ITEM::HitTest
     bool HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const override;
 
     /// @copydoc EDA_ITEM::GetBoundingBox
@@ -162,10 +169,8 @@ public:
     INSPECT_RESULT Visit( INSPECTOR aInspector, void* aTestData,
                           const std::vector<KICAD_T>& aScanTypes ) override;
 
-    /// @copydoc VIEW_ITEM::ViewGetLayers
     std::vector<int> ViewGetLayers() const override;
 
-    /// @copydoc VIEW_ITEM::ViewGetLOD
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
 
     /// @copydoc BOARD_ITEM::Move
@@ -179,6 +184,8 @@ public:
 
     /// @copydoc BOARD_ITEM::Mirror
     void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+
+    void Mirror( const SEG& aAxis ) override;
 
     /// @copydoc EDA_ITEM::GetItemDescription
     wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const override;

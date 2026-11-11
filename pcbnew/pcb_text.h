@@ -22,8 +22,9 @@
 
 #include <memory>
 
-#include <eda_text.h>
 #include <board_item.h>
+#include <eda_text.h>
+#include <geometry/shape_poly_set.h>
 
 
 class LINE_READER;
@@ -86,14 +87,14 @@ public:
     void Serialize( kiapi::board::types::BoardText& aOutput ) const;
     bool Deserialize( const kiapi::board::types::BoardText& aInput );
 
-    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide ) override;
+    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& aSettings, bool aCheckSide ) override;
 
     /**
      * Called when rotating the parent footprint.
      */
     void KeepUpright();
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
 
     bool Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) const override;
 
@@ -124,17 +125,15 @@ public:
      * Text angle in the parent footprint's lib frame, or absolute when not
      * in a footprint.
      */
-    const EDA_ANGLE& GetLibTextAngle() const { return m_libTextAngle; }
+    EDA_ANGLE GetLibTextAngle() const { return m_libTextAngle.GetAngle(); }
 
-    void SetLibTextAngle( const EDA_ANGLE& aAngle )
-    {
-        m_libTextAngle = aAngle;
-        m_libTextAngle.Normalize();
-    }
+    void SetLibTextAngle( const EDA_ANGLE& aAngle ) { m_libTextAngle = aAngle; }
 
     void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle ) override;
 
     void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+
+    void Mirror( const SEG& aAxis ) override;
 
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
@@ -167,14 +166,17 @@ public:
     wxString GetClass() const override { return wxT( "PCB_TEXT" ); }
 
     /**
-     * Function TransformTextToPolySet
      * Convert the text to a polygonSet describing the actual character strokes (one per segment).
      * Circles and arcs are approximated by segments.
+     *
      * @param aBuffer SHAPE_POLY_SET to store the polygon corners
      * @param aClearance the clearance around the text
      * @param aMaxError the maximum error to allow when approximating curves
+     * @param aErrorLoc
      */
     void TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, int aMaxError, ERROR_LOC aErrorLoc ) const;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance, int aMaxError,
                                   ERROR_LOC aErrorLoc, bool aIgnoreLineWidth = false ) const override;
@@ -209,7 +211,6 @@ public:
 
     std::vector<int> ViewGetLayers() const override;
 
-    ///< @copydoc VIEW_ITEM::ViewGetLOD
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
 
     const BOX2I GetBoundingBox() const override;
@@ -241,5 +242,5 @@ protected:
 private:
     mutable std::unique_ptr<PCB_TEXT_KNOCKOUT_CACHE_DATA> m_knockout_cache;
 
-    EDA_ANGLE m_libTextAngle; // Text angle in parent footprint's lib frame
+    EDA_ORIENTATION m_libTextAngle; // Text angle in parent footprint's lib frame
 };

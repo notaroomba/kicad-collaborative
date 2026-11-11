@@ -210,6 +210,9 @@ void DIALOG_DRC_RULE_EDITOR::LoadExistingRules()
     DRC_RULE_LOADER loader;
     std::vector<DRC_RE_LOADED_PANEL_ENTRY> entries = loader.LoadFile( rulesFile.GetFullPath() );
 
+    // Kept even without rules so comments in the file survive the save
+    m_rulesFileTrivia = loader.GetFileTrivia();
+
     if( entries.empty() )
         return;
 
@@ -296,7 +299,21 @@ void DIALOG_DRC_RULE_EDITOR::LoadExistingRules()
             ruleData->SetParentId( parentId );
             ruleData->SetOriginalRuleText( entry.originalRuleText );
             ruleData->SetWasEdited( entry.wasEdited );
-            ruleData->SetLayerSource( entry.layerSource );
+            ruleData->SetOriginalEntryCount( entry.originalEntryCount );
+            ruleData->SetSourceRule( entry.sourceRule );
+
+            wxString layerSource = entry.layerSource;
+
+            // Edited panels write the canonical name, and siblings of a split rule must keep matching it
+            if( entry.layerCondition.count() == 1 )
+            {
+                PCB_LAYER_ID layer = entry.layerCondition.Seq().front();
+
+                if( layerSource == m_currentBoard->GetLayerName( layer ) )
+                    layerSource = LSET::Name( layer );
+            }
+
+            ruleData->SetLayerSource( layerSource );
 
             if( !entry.layerSource.IsEmpty() )
                 ruleData->SetLayers( entry.layerCondition.Seq() );
@@ -656,13 +673,13 @@ std::vector<RULE_TREE_NODE> DIALOG_DRC_RULE_EDITOR::buildManufacturabilityRuleTr
                                              lastParentId, HOLE_TO_HOLE_DISTANCE ) );
     result.push_back(
             buildRuleTreeNodeData( "Via style", DRC_RULE_EDITOR_ITEM_TYPE::CONSTRAINT, lastParentId, VIA_STYLE ) );
+    result.push_back( buildRuleTreeNodeData( "Maximum aspect ratio", DRC_RULE_EDITOR_ITEM_TYPE::CONSTRAINT,
+                                             lastParentId, HOLE_ASPECT_RATIO ) );
 
     result.push_back( buildRuleTreeNodeData( "Microvia", DRC_RULE_EDITOR_ITEM_TYPE::CATEGORY, aParentId ) );
     lastParentId = m_nodeId;
     result.push_back( buildRuleTreeNodeData( "Maximum stack depth", DRC_RULE_EDITOR_ITEM_TYPE::CONSTRAINT, lastParentId,
                                              MICROVIA_STACK_DEPTH ) );
-    result.push_back( buildRuleTreeNodeData( "Maximum aspect ratio", DRC_RULE_EDITOR_ITEM_TYPE::CONSTRAINT,
-                                             lastParentId, MICROVIA_ASPECT_RATIO ) );
 
     result.push_back( buildRuleTreeNodeData( "Minimum text height and thickness", DRC_RULE_EDITOR_ITEM_TYPE::CONSTRAINT,
                                              aParentId, MINIMUM_TEXT_HEIGHT_AND_THICKNESS ) );
@@ -1351,6 +1368,8 @@ void DIALOG_DRC_RULE_EDITOR::SaveRulesToFile()
         entry.condition = data->GetRuleCondition();
         entry.originalRuleText = data->GetOriginalRuleText();
         entry.wasEdited = data->WasEdited();
+        entry.originalEntryCount = data->GetOriginalEntryCount();
+        entry.sourceRule = data->GetSourceRule();
         entry.severity = data->GetSeverity();
         entry.layerCondition = LSET( data->GetLayers() );
         entry.layerSource = data->GetLayerSource();
@@ -1359,7 +1378,7 @@ void DIALOG_DRC_RULE_EDITOR::SaveRulesToFile()
     }
 
     DRC_RULE_SAVER saver;
-    saver.SaveFile( m_frame->GetBoard()->GetDesignRulesPath(), entries, m_currentBoard );
+    saver.SaveFile( m_frame->GetBoard()->GetDesignRulesPath(), entries, m_currentBoard, m_rulesFileTrivia );
 
     try
     {

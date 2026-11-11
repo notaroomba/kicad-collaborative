@@ -111,12 +111,10 @@ bool PCB_IO_PADS::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                               const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_PADS::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                             const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     LOCALE_IO setlocale;
-
-    std::unique_ptr<BOARD> board( aAppendToMe ? aAppendToMe : new BOARD() );
 
     if( m_reporter )
         m_reporter->Report( _( "Starting PADS PCB import" ), RPT_SEVERITY_INFO );
@@ -135,7 +133,7 @@ BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
         THROW_IO_ERRORF( wxT( "Error parsing PADS file: %s" ), e.what() );
     }
 
-    m_loadBoard = board.get();
+    m_loadBoard = &aBoard;
     m_parser = &parser;
     m_converter = std::make_unique<PADS_PCB_CONVERTER>( m_loadBoard, m_reporter );
     m_testPointIndex = 1;
@@ -178,7 +176,6 @@ BOARD* PCB_IO_PADS::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
     }
 
     clearLoadingState();
-    return board.release();
 }
 
 
@@ -2234,33 +2231,65 @@ void PCB_IO_PADS::loadBoardSetup()
     const PADS_IO::DESIGN_RULES& designRules = m_parser->GetDesignRules();
     BOARD_DESIGN_SETTINGS& bds = m_loadBoard->GetDesignSettings();
 
-    bds.m_MinClearance = scaleSize( designRules.min_clearance );
-    bds.m_TrackMinWidth = scaleSize( designRules.min_track_width );
-    bds.m_ViasMinSize = scaleSize( designRules.min_via_size );
-    bds.m_MinThroughDrill = scaleSize( designRules.min_via_drill );
-    bds.m_HoleToHoleMin = scaleSize( designRules.hole_to_hole );
-    bds.m_SilkClearance = scaleSize( designRules.silk_clearance );
-    bds.m_SolderMaskExpansion = scaleSize( designRules.mask_clearance );
-    bds.m_CopperEdgeClearance = scaleSize( designRules.copper_edge_clearance );
+    // Without these flags BOARD::SetProject replaces the imported rules with project defaults
+    m_loadBoard->m_LegacyDesignSettingsLoaded = true;
+    m_loadBoard->m_LegacyNetclassesLoaded = true;
+
+    using FIELD = PADS_IO::DESIGN_RULE_FIELD;
+
+    auto apply = [&]( FIELD aField, double aValue, auto&& aSetter )
+    {
+        if( designRules.IsSpecified( aField ) )
+            aSetter( scaleSize( aValue ) );
+    };
+
+    apply( FIELD::MIN_CLEARANCE, designRules.min_clearance, [&]( int v ) { bds.m_MinClearance = v; } );
+    apply( FIELD::MIN_TRACK_WIDTH, designRules.min_track_width, [&]( int v ) { bds.m_TrackMinWidth = v; } );
+    apply( FIELD::MIN_VIA_SIZE, designRules.min_via_size, [&]( int v ) { bds.m_ViasMinSize = v; } );
+    apply( FIELD::MIN_VIA_DRILL, designRules.min_via_drill, [&]( int v ) { bds.m_MinThroughDrill = v; } );
+    apply( FIELD::HOLE_TO_HOLE, designRules.hole_to_hole, [&]( int v ) { bds.m_HoleToHoleMin = v; } );
+    apply( FIELD::SILK_CLEARANCE, designRules.silk_clearance, [&]( int v ) { bds.m_SilkClearance = v; } );
+    apply( FIELD::MASK_CLEARANCE, designRules.mask_clearance, [&]( int v ) { bds.m_SolderMaskExpansion = v; } );
+    apply( FIELD::COPPER_EDGE_CLEARANCE, designRules.copper_edge_clearance,
+           [&]( int v ) { bds.m_CopperEdgeClearance = v; } );
 
     // Do not set the default zone clearance from the PADS design rules.  In PADS,
     // zone (copper pour) clearance is resolved through the net/netclass clearance
     // rules rather than a board-level zone clearance setting.  The default netclass
     // clearance set below is the correct mapping for PADS' DEFAULTCLEAR value.
 
-    bds.SetCustomTrackWidth( scaleSize( designRules.default_track_width ) );
-    bds.SetCustomViaSize( scaleSize( designRules.default_via_size ) );
-    bds.SetCustomViaDrill( scaleSize( designRules.default_via_drill ) );
-
     std::shared_ptr<NETCLASS> defaultNetclass = bds.m_NetSettings->GetDefaultNetclass();
 
-    if( defaultNetclass )
-    {
-        defaultNetclass->SetClearance( scaleSize( designRules.default_clearance ) );
-        defaultNetclass->SetTrackWidth( scaleSize( designRules.default_track_width ) );
-        defaultNetclass->SetViaDiameter( scaleSize( designRules.default_via_size ) );
-        defaultNetclass->SetViaDrill( scaleSize( designRules.default_via_drill ) );
-    }
+    apply( FIELD::DEFAULT_TRACK_WIDTH, designRules.default_track_width,
+           [&]( int v )
+           {
+               bds.SetCustomTrackWidth( v );
+
+               if( defaultNetclass )
+                   defaultNetclass->SetTrackWidth( v );
+           } );
+    apply( FIELD::DEFAULT_VIA_SIZE, designRules.default_via_size,
+           [&]( int v )
+           {
+               bds.SetCustomViaSize( v );
+
+               if( defaultNetclass )
+                   defaultNetclass->SetViaDiameter( v );
+           } );
+    apply( FIELD::DEFAULT_VIA_DRILL, designRules.default_via_drill,
+           [&]( int v )
+           {
+               bds.SetCustomViaDrill( v );
+
+               if( defaultNetclass )
+                   defaultNetclass->SetViaDrill( v );
+           } );
+    apply( FIELD::DEFAULT_CLEARANCE, designRules.default_clearance,
+           [&]( int v )
+           {
+               if( defaultNetclass )
+                   defaultNetclass->SetClearance( v );
+           } );
 
     const std::map<std::string, PADS_IO::VIA_DEF>& viaDefs = m_parser->GetViaDefs();
 

@@ -87,10 +87,10 @@ bool REFDES_TRACKER::Contains( const std::string& aRefDes ) const
 }
 
 
-int REFDES_TRACKER::GetNextRefDesForUnits( const SCH_REFERENCE& aRef,
+int REFDES_TRACKER::GetNextRefDesForUnits( const SCH_REFERENCE&                             aRef,
                                            const std::map<int, std::vector<SCH_REFERENCE>>& aRefNumberMap,
-                                           const std::vector<int>& aRequiredUnits,
-                                           int aMinValue )
+                                           const std::vector<int>& aRequiredUnits, int aMinValue,
+                                           const std::function<bool( int )>& aAcceptNumber )
 {
     std::unique_lock<std::mutex> lock;
 
@@ -107,6 +107,12 @@ int REFDES_TRACKER::GetNextRefDesForUnits( const SCH_REFERENCE& aRef,
 
     while( true )
     {
+        if( aAcceptNumber && !aAcceptNumber( candidate ) )
+        {
+            candidate++;
+            continue;
+        }
+
         // Check if this candidate number is currently in use
         auto mapIt = aRefNumberMap.find( candidate );
 
@@ -167,7 +173,7 @@ bool REFDES_TRACKER::areUnitsAvailable( const SCH_REFERENCE& aRef,
             // If we have a different library or different value,
             // we cannot share a reference designator.  Also, if the unit matches,
             // the reference designator + unit is already in use.
-            if( ref.CompareLibName( aRef ) != 0
+            if( ref.CompareLibId( aRef ) != 0
                 || ref.CompareValue( aRef ) != 0
                 || ref.GetUnit() == unit )
             {
@@ -307,8 +313,25 @@ std::string REFDES_TRACKER::Serialize() const
     std::ostringstream result;
     bool first = true;
 
-    for( const auto& [prefix, data] : m_prefixData )
+    using PREFIX_ENTRY = std::pair<const std::string, PREFIX_DATA>;
+
+    std::vector<const PREFIX_ENTRY*> entries;
+    entries.reserve( m_prefixData.size() );
+
+    for( const auto& entry : m_prefixData )
+        entries.push_back( &entry );
+
+    std::sort( entries.begin(), entries.end(),
+               []( const auto* aLeft, const auto* aRight )
+               {
+                   return aLeft->first < aRight->first;
+               } );
+
+    for( const auto* entry : entries )
     {
+        const std::string& prefix = entry->first;
+        const PREFIX_DATA& data = entry->second;
+
         if( !first )
             result << ",";
         first = false;

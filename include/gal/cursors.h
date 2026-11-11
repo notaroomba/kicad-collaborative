@@ -20,6 +20,7 @@
 #ifndef CURSOR_STORE__H
 #define CURSOR_STORE__H
 
+#include <gal/gal.h>
 #include <wx/cursor.h>
 
 #include <map>
@@ -101,7 +102,7 @@ enum class KICURSOR
  * This can be used to lazily construct cursors as needed for specific
  * applications.
  */
-class CURSOR_STORE
+class GAL_API CURSOR_STORE
 {
 public:
     /**
@@ -111,7 +112,7 @@ public:
     {
         const char** m_xpm;
 
-        ///< The "hotspot" where the cursor "is" in the image
+        /// The "hotspot" where the cursor "is" in the image
         wxPoint m_hotspot;
     };
 
@@ -155,7 +156,7 @@ private:
 #endif
 
 #if wxCHECK_VERSION( 3, 3, 0 )
-    ///< Internal store of cursor bundles for wx 3.3+
+    /// Internal store of cursor bundles for wx 3.3+
     std::map<KICURSOR, wxCursorBundle> m_bundleMap;
 #else
     std::map<KICURSOR, wxCursor> m_standardCursorMap;

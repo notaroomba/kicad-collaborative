@@ -19,6 +19,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <core/typeinfo.h>
+
 #include "pns_walkaround.h"
 #include "pns_shove.h"
 #include "pns_router.h"
@@ -30,6 +32,10 @@
 #include "pns_utils.h"
 
 namespace PNS {
+
+
+static void drawGateways( PNS::DEBUG_DECORATOR *dbg, const wxString& groupName, PNS::DP_PRIMITIVE_PAIR& prims, PNS::DP_GATEWAYS& gws, VECTOR2D offset, VECTOR2D step );
+
 
 DIFF_PAIR_PLACER::DIFF_PAIR_PLACER( ROUTER* aRouter ) :
     PLACEMENT_ALGO( aRouter )
@@ -62,7 +68,12 @@ DIFF_PAIR_PLACER::DIFF_PAIR_PLACER( ROUTER* aRouter ) :
 }
 
 DIFF_PAIR_PLACER::~DIFF_PAIR_PLACER()
-{}
+{
+    if( m_target )
+        m_target->Unlink();
+    if( m_prevPair )
+        m_prevPair->Unlink();
+}
 
 
 void DIFF_PAIR_PLACER::setWorld( NODE* aWorld )
@@ -106,10 +117,21 @@ bool DIFF_PAIR_PLACER::rhMarkObstacles( const VECTOR2I& aP )
     if( !routeHead( aP ) )
         return false;
 
-    bool collP = static_cast<bool>( m_currentNode->CheckColliding( &m_currentTrace.PLine() ) );
-    bool collN = static_cast<bool>( m_currentNode->CheckColliding( &m_currentTrace.NLine() ) );
 
-    m_fitOk = !( collP || collN ) ;
+    COLLISION_SEARCH_OPTIONS ctxOpts;
+    ctxOpts.m_filter = [&]( const PNS::ITEM* aTestItem, const PNS::ITEM* aRefItem ) -> bool
+    {
+        if( aTestItem->Net() == m_currentTrace.NetP() || aTestItem->Net() == m_currentTrace.NetN() )
+        {
+            return false;
+        }
+        return true;
+    };
+
+    bool collP = ( m_currentNode->CheckColliding( &m_currentTrace.PLine(), ctxOpts ) ).has_value();
+    bool collN = ( m_currentNode->CheckColliding( &m_currentTrace.NLine(), ctxOpts ) ).has_value();
+
+    m_fitOk = !( collP || collN );
 
     return m_fitOk;
 }
@@ -153,22 +175,30 @@ bool DIFF_PAIR_PLACER::propagateDpHeadForces ( const VECTOR2I& aP, VECTOR2I& aNe
     VECTOR2I              force, totalForce;
     std::set<const ITEM*> handled;
 
+    COLLISION_SEARCH_OPTIONS ctxOpts;
+    ctxOpts.m_filter = [&]( const PNS::ITEM* aTestItem, const PNS::ITEM* aRefItem ) -> bool
+    {
+        if( aTestItem->Net() == m_currentTrace.NetP() || aTestItem->Net() == m_currentTrace.NetN() )
+        {
+            return false;
+        }
+        return true;
+    };
+
+    ctxOpts.m_kindMask = solidsOnly ? ITEM::SOLID_T : ITEM::ANY_T;
     while( iter < maxIter )
     {
-        NODE::OPT_OBSTACLE obs = m_currentNode->CheckColliding( &virtHead, solidsOnly ?
-                                                                           ITEM::SOLID_T :
-                                                                           ITEM::ANY_T  );
+        NODE::OPT_OBSTACLE obs = m_currentNode->CheckColliding( &virtHead, ctxOpts );
         if( !obs || handled.count( obs->m_item ) )
             break;
 
-        int clearance = m_currentNode->GetClearance( obs->m_item, &m_currentTrace.PLine(), false );
+        int      clearance = m_currentNode->GetClearance( obs->m_item, &m_currentTrace.PLine(), false );
         VECTOR2I layerForce;
         collided = false;
 
         for( int viaLayer : virtHead.RelevantShapeLayers( obs->m_item ) )
         {
-            collided |= obs->m_item->Shape( viaLayer )->Collide( virtHead.Shape( viaLayer ),
-                                                                 clearance, &layerForce );
+            collided |= obs->m_item->Shape( viaLayer )->Collide( virtHead.Shape( viaLayer ), clearance, &layerForce );
 
             if( layerForce.SquaredEuclideanNorm() > force.SquaredEuclideanNorm() )
                 force = layerForce;
@@ -201,10 +231,23 @@ bool DIFF_PAIR_PLACER::attemptWalk( NODE* aNode, DIFF_PAIR* aCurrent, DIFF_PAIR&
                                     bool aPFirst, bool aWindCw, bool aSolidsOnly )
 {
     WALKAROUND walkaround( aNode, Router() );
+    COLLISION_SEARCH_OPTIONS opts;
+
+    auto excludeHeadDp = [aCurrent]( const ITEM* aTestItem, const ITEM* aRefItem ) -> bool
+    {
+        if( aTestItem->Net() == aCurrent->NetN() || aTestItem->Net() == aCurrent->NetP() )
+        {
+            return false;
+        }
+        return true;
+    };
 
     walkaround.SetSolidsOnly( aSolidsOnly );
     walkaround.SetIterationLimit( Settings().WalkaroundIterationLimit() );
     walkaround.SetAllowedPolicies( { WALKAROUND::WP_SHORTEST } );
+    walkaround.SetCollisionFilter( excludeHeadDp );
+    walkaround.SetDebugDecorator( Dbg() );
+
 
     SHOVE shove( aNode, Router() );
     LINE walkP, walkN;
@@ -219,32 +262,39 @@ bool DIFF_PAIR_PLACER::attemptWalk( NODE* aNode, DIFF_PAIR* aCurrent, DIFF_PAIR&
 
     int mask = aSolidsOnly ? ITEM::SOLID_T : ITEM::ANY_T;
 
+    opts.m_kindMask = mask;
+    opts.m_filter = excludeHeadDp;
+
     do
     {
         LINE preWalk = ( currentIsP ? cur.PLine() : cur.NLine() );
         LINE preShove = ( currentIsP ? cur.NLine() : cur.PLine() );
         LINE postWalk;
 
-        if( !aNode->CheckColliding ( &preWalk, mask ) )
+        if( !aNode->CheckColliding ( &preWalk, opts ) )
         {
             currentIsP = !currentIsP;
 
-            if( !aNode->CheckColliding( &preShove, mask ) )
+            if( !aNode->CheckColliding( &preShove, opts ) )
                 break;
             else
                 continue;
         }
 
-        auto wf1 = walkaround.Route( preWalk );
+        PNS_DBG( Dbg(), AddItem, &preWalk, GREEN, 100000, wxString::Format("preWalk") );
+
+        WALKAROUND::RESULT wf1 = walkaround.Route( preWalk );
 
         if( wf1.status[ WALKAROUND::WP_SHORTEST ] != WALKAROUND::ST_DONE )
             return false;
 
         postWalk = wf1.lines[ WALKAROUND::WP_SHORTEST ];
 
+        PNS_DBG( Dbg(), AddItem, &postWalk, BLUE, 100000, wxString::Format("postWalk") );
+
         LINE postShove( preShove );
 
-        shove.ForceClearance( true, cur.Gap() - 2 * PNS_HULL_MARGIN );
+        shove.SetClearanceOverride( FixedClearanceOverrideLambda( cur.Dimensions().Gap() - 2 * PNS_HULL_MARGIN ) );
 
         bool sh1;
 
@@ -260,14 +310,14 @@ bool DIFF_PAIR_PLACER::attemptWalk( NODE* aNode, DIFF_PAIR* aCurrent, DIFF_PAIR&
 
         currentIsP = !currentIsP;
 
-        if( !aNode->CheckColliding( &postShove, mask ) )
+        if( !aNode->CheckColliding( &postShove, opts ) )
             break;
 
         iter++;
     }
-    while( iter < 3 );
+    while( iter < 2 );
 
-    if( iter == 3 )
+    if( iter == 2 )
         return false;
 
     aWalk.SetShape( cur.CP(), cur.CN() );
@@ -371,6 +421,17 @@ bool DIFF_PAIR_PLACER::rhShoveOnly( const VECTOR2I& aP )
     m_shove->AddHeads( pLine );
     m_shove->AddHeads( nLine );
 
+    auto collisionFilter = [&]( const PNS::ITEM* aTestItem, const PNS::ITEM* aRefItem ) -> bool
+    {
+        if( aTestItem->Net() == m_currentTrace.NetP() || aTestItem->Net() == m_currentTrace.NetN() )
+        {
+            return false;
+        }
+        return true;
+    };
+
+    m_shove->SetCollisionFilter( collisionFilter );
+    
     SHOVE::SHOVE_STATUS status = m_shove->Run();
 
     m_currentNode = m_shove->CurrentNode();
@@ -427,7 +488,7 @@ void DIFF_PAIR_PLACER::FlipPosture()
 
 NODE* DIFF_PAIR_PLACER::CurrentNode( bool aLoopsRemoved ) const
 {
-    if( m_lastNode )
+    if( aLoopsRemoved && m_lastNode )
         return m_lastNode;
 
     return m_currentNode;
@@ -473,8 +534,7 @@ OPT_VECTOR2I getDanglingAnchor( NODE* aNode, ITEM* aItem )
             return l->CPoint( 0 );
     }
     case ITEM::VIA_T:
-    case ITEM::SOLID_T:
-        return aItem->Anchor( 0 );
+    case ITEM::SOLID_T: return aItem->Anchor( 0 );
 
     case ITEM::ARC_T:
     {
@@ -505,15 +565,131 @@ OPT_VECTOR2I getDanglingAnchor( NODE* aNode, ITEM* aItem )
             return OPT_VECTOR2I();
     }
 
-    default:
-        return OPT_VECTOR2I();
+    default: return OPT_VECTOR2I();
     }
 }
 
 
+bool DIFF_PAIR_PLACER::findDpEndingPrimitives( NODE* aWorld, const VECTOR2I& aP, ITEM* aStartItem,
+                                               DP_PRIMITIVE_PAIR& aPair, wxString* aErrorMsg )
+{
+    NET_HANDLE netP, netN;
 
-bool DIFF_PAIR_PLACER::FindDpPrimitivePair( NODE* aWorld, const VECTOR2I& aP, ITEM* aItem,
-                                            DP_PRIMITIVE_PAIR& aPair, wxString* aErrorMsg )
+    (void) aWorld->GetRuleResolver()->DpNetPair( aStartItem, netP, netN );
+
+    NET_HANDLE refNet = aStartItem->Net();
+    NET_HANDLE coupledNet = ( refNet == netP ) ? netN : netP;
+
+    OPT_VECTOR2I refAnchor = getDanglingAnchor( aWorld, aStartItem );
+    ITEM*        primRef = aStartItem;
+
+    double distThreshold = 10000000;
+
+    if( auto seg = dyn_cast<SEGMENT*>( aStartItem ) )
+    {
+        distThreshold = seg->Width() / 2;
+    }
+    else if( auto arc = dyn_cast<ARC*>( aStartItem ) )
+    {
+        distThreshold = arc->Width() / 2;
+    }
+
+    if( !refAnchor || ( refAnchor->Distance( aP ) > distThreshold ) )
+    {
+        if( aErrorMsg )
+        {
+            *aErrorMsg = _( "Can't find a suitable starting point.  If starting "
+                            "from an existing differential pair make sure you are "
+                            "at the end." );
+        }
+
+        return false;
+    }
+
+    std::set<ITEM*> coupledItems;
+
+    aWorld->AllItemsInNet( coupledNet, coupledItems );
+    double bestDist = std::numeric_limits<double>::max();
+    bool   found = false;
+
+    for( ITEM* item : coupledItems )
+    {
+        if( item->Kind() == aStartItem->Kind() )
+        {
+            OPT_VECTOR2I anchor = getDanglingAnchor( aWorld, item );
+
+            if( !anchor )
+                continue;
+
+            double dist = ( *anchor - *refAnchor ).EuclideanNorm();
+
+            bool shapeMatches = true;
+
+            if( item->OfKind( ITEM::SOLID_T | ITEM::VIA_T ) && item->Layers() != aStartItem->Layers() )
+            {
+                shapeMatches = false;
+            }
+
+            if( dist < bestDist && shapeMatches )
+            {
+                found = true;
+                bestDist = dist;
+
+                if( refNet != netP )
+                {
+                    aPair = DP_PRIMITIVE_PAIR( item, primRef );
+                    aPair.SetIsMidtrace( false );
+                    aPair.SetAnchors( *anchor, *refAnchor );
+                }
+                else
+                {
+                    aPair = DP_PRIMITIVE_PAIR( primRef, item );
+                    aPair.SetIsMidtrace( false );
+                    aPair.SetAnchors( *refAnchor, *anchor );
+                }
+            }
+        }
+    }
+
+    return found;
+}
+
+
+bool DIFF_PAIR_PLACER::findDpMidtraceIntersection( NODE* aWorld, const VECTOR2I& aP, ITEM* aStartItem,
+                                                   DP_PRIMITIVE_PAIR& aPair, wxString* aErrorMsg )
+{
+    PNS::TOPOLOGY  topo( aWorld );
+    PNS::DIFF_PAIR originPair;
+    auto           startSeg = dyn_cast<PNS::SEGMENT*>( aStartItem );
+
+    if( !startSeg )
+    {
+        return false;
+    }
+
+    if( aStartItem && aStartItem->OfKind( PNS::ITEM::SEGMENT_T | PNS::ITEM::ARC_T ) )
+    {
+        if( !topo.AssembleDiffPair( aStartItem, originPair ) )
+            return false;
+
+        auto ppair = originPair.BuildMidpairIntersection( startSeg, aP );
+
+
+        if( ppair )
+        {
+            ppair->SetIsMidtrace( true );
+
+            aPair = *ppair;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+bool DIFF_PAIR_PLACER::FindDpPrimitivePair( NODE* aWorld, const VECTOR2I& aP, ITEM* aItem, DP_PRIMITIVE_PAIR& aPair,
+                                            wxString* aErrorMsg )
 {
     NET_HANDLE netP, netN;
 
@@ -530,74 +706,27 @@ bool DIFF_PAIR_PLACER::FindDpPrimitivePair( NODE* aWorld, const VECTOR2I& aP, IT
         return false;
     }
 
-    NET_HANDLE refNet = aItem->Net();
-    NET_HANDLE coupledNet = ( refNet == netP ) ? netN : netP;
+    bool found = findDpEndingPrimitives( aWorld, aP, aItem, aPair, aErrorMsg );
 
-    OPT_VECTOR2I refAnchor = getDanglingAnchor( aWorld, aItem );
-    ITEM* primRef = aItem;
+    PNS_DBG( Dbg(), Message,
+             wxString::Format( "EP=%d target-p [%d,%d] target-n [%d,%d]", found ? 1 : 0, aPair.AnchorP().x,
+                               aPair.AnchorP().y, aPair.AnchorN().x, aPair.AnchorN().y ) );
 
-    if( !refAnchor )
+    if( !found )
     {
-        if( aErrorMsg )
-        {
-            *aErrorMsg = _( "Can't find a suitable starting point.  If starting "
-                            "from an existing differential pair make sure you are "
-                            "at the end." );
-        }
+        found = findDpMidtraceIntersection( aWorld, aP, aItem, aPair, aErrorMsg );
 
-        return false;
+        PNS_DBG( Dbg(), Message,
+                 wxString::Format( "MT=%d target-p [%d,%d] target-n [%d,%d]", found ? 1 : 0, aPair.AnchorP().x,
+                                   aPair.AnchorP().y, aPair.AnchorN().x, aPair.AnchorN().y ) );
     }
 
-    std::set<ITEM*> coupledItems;
-
-    aWorld->AllItemsInNet( coupledNet, coupledItems );
-    double bestDist = std::numeric_limits<double>::max();
-    bool found = false;
-
-    for( ITEM* item : coupledItems )
-    {
-        if( item->Kind() == aItem->Kind() )
-        {
-            OPT_VECTOR2I anchor = getDanglingAnchor( aWorld, item );
-
-            if( !anchor )
-                continue;
-
-            double dist = ( *anchor - *refAnchor ).EuclideanNorm();
-
-            bool shapeMatches = true;
-
-            if( item->OfKind( ITEM::SOLID_T | ITEM::VIA_T ) && item->Layers() != aItem->Layers() )
-            {
-                shapeMatches = false;
-            }
-
-            if( dist < bestDist && shapeMatches )
-            {
-                found = true;
-                bestDist = dist;
-
-                if( refNet != netP )
-                {
-                    aPair = DP_PRIMITIVE_PAIR ( item, primRef );
-                    aPair.SetAnchors( *anchor, *refAnchor );
-                }
-                else
-                {
-                    aPair = DP_PRIMITIVE_PAIR( primRef, item );
-                    aPair.SetAnchors( *refAnchor, *anchor );
-                }
-            }
-        }
-    }
 
     if( !found )
     {
         if( aErrorMsg )
         {
-            *aErrorMsg = wxString::Format( _( "Can't find a suitable starting point "
-                                              "for coupled net \"%s\"." ),
-                                           aWorld->GetRuleResolver()->NetName( coupledNet ) );
+            *aErrorMsg = wxString::Format( _( "Can't find a suitable starting point for the diff pair" ) );
         }
 
         return false;
@@ -665,6 +794,14 @@ void DIFF_PAIR_PLACER::initPlacement()
     world->KillChildren();
     NODE* rootNode = world->Branch();
 
+    PNS_DBG( Dbg(), Message, wxString::Format("Start-is-mid %d wd %d rd %d", m_start.IsMidtrace()?1:0, (int) world->Depth(), (int) rootNode->Depth() ) );
+
+    if( m_start.IsMidtrace() )
+    {
+        SplitAdjacentSegments( rootNode, m_start.PrimP(), m_start.AnchorP() );
+        SplitAdjacentSegments( rootNode, m_start.PrimN(), m_start.AnchorN() );
+    }
+
     setWorld( rootNode );
 
     m_lastNode = nullptr;
@@ -674,30 +811,118 @@ void DIFF_PAIR_PLACER::initPlacement()
 }
 
 
+static void drawSingleGateway( DEBUG_DECORATOR* dbg, DP_GATEWAY gw, wxString grpName )
+{
+    PNS_DBG( dbg, BeginGroup, grpName, 0 );
+
+    SHAPE_CIRCLE gwp( gw.AnchorP(), 30000 );
+    PNS_DBG( dbg, AddShape, &gwp, LIGHTRED, 20000, "gw-entry-p" );
+
+    if( gw.EntryP().SegmentCount() )
+    {
+        PNS_DBG( dbg, AddShape, &gw.EntryP(), LIGHTRED, 20000, "gwp" );
+    }
+
+    SHAPE_CIRCLE gwn( gw.AnchorN(), 30000 );
+    PNS_DBG( dbg, AddShape, &gwn, LIGHTBLUE, 30000, "gw-entry-n" );
+
+    if( gw.EntryN().SegmentCount() )
+    {
+        PNS_DBG( dbg, AddShape, &gw.EntryN(), LIGHTBLUE, 10000, "gwn" );
+    }
+
+    SHAPE_LINE_CHAIN link( { gw.AnchorN(), gw.AnchorP() } );
+    PNS_DBG( dbg, AddShape, &link, LIGHTGRAY, 10000, "link" );
+
+    PNS_DBGN( dbg, EndGroup );
+}
+
+
 bool DIFF_PAIR_PLACER::routeHead( const VECTOR2I& aP )
 {
+    std::optional<int> minClearance = 0;
+
+    RULE_RESOLVER* ruleResolver = Router()->GetInterface()->GetRuleResolver();
+    DP_DIMENSIONS  dims( m_sizes.DiffPairWidth(), m_sizes.DiffPairGap(), viaGap(), m_sizes.ViaDiameter(), 0 );
+    DP_GATEWAYS    gwsEntry;
+    DP_GATEWAYS    gwsTarget;
+
     m_fitOk = false;
 
-    DP_GATEWAYS gwsEntry( gap() );
-    DP_GATEWAYS gwsTarget( gap() );
+    auto updateMinClearance = [&minClearance, ruleResolver]( const DP_PRIMITIVE_PAIR& aTarget )
+    {
+        if( aTarget.PrimN() && aTarget.PrimP() )
+        {
+            int clearance = ruleResolver->Clearance( aTarget.PrimP(), aTarget.PrimN() );
+            if( minClearance )
+                minClearance = std::max( clearance, minClearance.value() );
+            else
+                minClearance = clearance;
+        }
+    };
+
+    m_target.reset();
 
     if( !m_prevPair )
         m_prevPair = m_start;
 
+
+    if( m_prevPair )
+        updateMinClearance( *m_prevPair );
+
+    DP_DIMENSIONS dims2( m_sizes.DiffPairWidth(), m_sizes.DiffPairGap(), viaGap(), m_sizes.ViaDiameter(),
+                         minClearance.value() );
+    gwsEntry.SetDimensions( dims2 );
     gwsEntry.BuildFromPrimitivePair( *m_prevPair, m_startDiagonal );
 
+    if( m_prevPair )
+        drawGateways( Dbg(), wxT( "entry-gateways" ), *m_prevPair, gwsEntry, VECTOR2D( 0, 0 ), VECTOR2D( 0, 2000000 ) );
+
     DP_PRIMITIVE_PAIR target;
+    VECTOR2I          midpoint;
+    bool              snapVias = false;
+    bool              foundTarget = false;
 
     if( FindDpPrimitivePair( m_currentNode, aP, m_currentEndItem, target ) )
     {
-        gwsTarget.BuildFromPrimitivePair( target, m_startDiagonal );
-        m_snapOnTarget = true;
+        if( m_placingVia && ( target.DirP() == target.DirN() ) )
+        {
+            midpoint = ( target.AnchorN() + target.AnchorP() ) / 2;
+            PNS_DBG( Dbg(), AddPoint, midpoint, YELLOW, 100000, wxT( "midpoint" ) );
+            snapVias = true;
+        }
+        else
+        {
+            updateMinClearance( target );
+            DP_DIMENSIONS dimsTarget( m_sizes.DiffPairWidth(), m_sizes.DiffPairGap(), viaGap(), m_sizes.ViaDiameter(),
+                                      minClearance.value() );
+
+            gwsTarget.SetDimensions( dimsTarget );
+            gwsTarget.BuildFromPrimitivePair( target, m_startDiagonal );
+            m_snapOnTarget = true;
+            m_target = target;
+
+            PNS_DBG( Dbg(), Message,
+                     wxString::Format( "target-p [%d,%d] target-n [%d,%d], cursor [%d,%d]", m_target->AnchorP().x,
+                                       m_target->AnchorP().y, m_target->AnchorN().x, m_target->AnchorN().y, aP.x,
+                                       aP.y ) );
+
+            PNS_DBG( Dbg(), AddPoint, aP, YELLOW, 100000, wxT( "targer-cursor" ) );
+            PNS_DBG( Dbg(), AddPoint, m_target->AnchorP(), RED, 100000, wxT( "anchor+" ) );
+            PNS_DBG( Dbg(), AddPoint, m_target->AnchorN(), BLUE, 100000, wxT( "anchor-" ) );
+            foundTarget = true;
+
+            drawGateways( Dbg(), wxT( "target-gateways" ), target, gwsTarget, VECTOR2D( 0, 0 ),
+                          VECTOR2D( 0, 2000000 ) );
+        }
     }
-    else
+
+
+    if( !foundTarget )
     {
         VECTOR2I fp;
 
-        if( !propagateDpHeadForces( aP, fp ) )
+        if( !propagateDpHeadForces( snapVias ? midpoint : aP, fp ) )
             return false;
 
         VECTOR2I midp, dirV;
@@ -709,10 +934,19 @@ bool DIFF_PAIR_PLACER::routeHead( const VECTOR2I& aP )
         // on the extension of the starting segment pair of the DP)
         int lead_dist = ( fpProj - fp ).EuclideanNorm();
 
-        gwsTarget.SetFitVias( m_placingVia, m_sizes.ViaDiameter(), viaGap() );
+        gwsTarget.SetFitVias( m_placingVia );
+        DP_DIMENSIONS dimsTarget( m_sizes.DiffPairWidth(), m_sizes.DiffPairGap(), viaGap(), m_sizes.ViaDiameter(),
+                                  minClearance.value() );
+        gwsTarget.SetDimensions( dimsTarget );
+
+        int snapThreshold = ( m_sizes.DiffPairGap() + m_sizes.DiffPairWidth() ) / 2;
+
+        PNS_DBG( Dbg(), Message,
+                 wxString::Format( "leadDist %d snapVias %d thr %d dirv %s", lead_dist, snapVias ? 1 : 0, snapThreshold,
+                                   DIRECTION_45( dirV ).Format() ) );
 
         // far from the initial segment extension line -> allow a 45-degree obtuse turn
-        if( lead_dist > ( m_sizes.DiffPairGap() + m_sizes.DiffPairWidth() ) / 2 )
+        if( !snapVias && lead_dist > snapThreshold )
         {
             gwsTarget.BuildForCursor( fp );
         }
@@ -720,30 +954,164 @@ bool DIFF_PAIR_PLACER::routeHead( const VECTOR2I& aP )
         {
             // close to the initial segment extension line -> keep straight part only, project
             // as close as possible to the cursor.
-            gwsTarget.BuildForCursor( fpProj );
-            gwsTarget.FilterByOrientation( DIRECTION_45::ANG_STRAIGHT | DIRECTION_45::ANG_HALF_FULL,
-                                           DIRECTION_45( dirV ) );
+            int mask = DIRECTION_45( dirV.Perpendicular() ).Mask() | DIRECTION_45( dirV ).Opposite().Mask();
+            gwsTarget.BuildForCursor( snapVias ? fp : fpProj, mask );
+            drawGateways( Dbg(), wxT( "target-aligned-gateways" ), target, gwsTarget, VECTOR2D( 0, 0 ),
+                          VECTOR2D( 0, 200000 ) );
         }
 
         m_snapOnTarget = false;
     }
 
-    m_currentTrace.SetGap( gap() );
+    m_currentTrace.SetDimensions( dims );
     m_currentTrace.SetLayer( m_currentLayer );
 
-    bool result = gwsEntry.FitGateways( gwsEntry, gwsTarget, m_startDiagonal, m_currentTrace );
+    DP_GAP_CONSTRAINT tmpGapC;
+    tmpGapC.SetOpt( dims.Gap() );
+    tmpGapC.SetMin( dims.Gap() - DP_DEFAULT_GAP_EPSILON );
+    tmpGapC.SetMax( dims.Gap() + DP_DEFAULT_GAP_EPSILON );
 
-    if( result )
+    dims.SetGapConstraint( tmpGapC );
+    dims.SetMinClearance( minClearance.value() );
+
+    gwsEntry.SetDimensions( dims );
+    gwsTarget.SetDimensions( dims );
+
+    auto fits = gwsEntry.FitGateways( gwsEntry, gwsTarget, m_placingVia );
+
+    const DP_GATEWAYS::FIT_RESULT* bestFits[2] = { nullptr, nullptr };
+    const DP_GATEWAYS::FIT_RESULT* bestestFit = nullptr;
+
+    for( bool rejectNonObtuseAngles : { true, false } )
+    {
+        bestestFit = nullptr;
+        bestFits[0] = bestFits[1] = nullptr;
+
+        int   bestScore[2] = { -100, -100 }; // cater for negative score adjustments
+        float bestCpr[2] = { 0.0f, 0.0f };
+        int bestId[2] = {-1, -1 };
+        
+        int current_id = 0;
+
+        for( const auto& f : fits )
+        {
+            constexpr int angleMask = DIRECTION_45::ANG_OBTUSE | DIRECTION_45::ANG_STRAIGHT;
+
+            PNS_DBG( Dbg(), BeginGroup,
+                     wxString::Format( wxT( "fit[%d]: bestId0=%d bestId1=%d bestS0=%d bestS1=%d bestCpr0=%.3f bestCpr1=%.3f diag=%d cpr=%.2f ar=%.2f score=%d scoreEnt=%d scoreTgt=%d" ),
+                                       current_id, bestId[0], bestId[1], bestScore[0], bestScore[1], bestCpr[0], bestCpr[1], f.diagonal ? 1 : 0, f.coupledRatio, f.aspectRatio,
+                                       f.score, f.entry.Priority(), f.target.Priority() ),
+                     0 );
+            drawSingleGateway( Dbg(), f.entry, wxString::Format( "entry=%s", f.entry.GetName() ) );
+            drawSingleGateway( Dbg(), f.target, wxString::Format( "target=%s", f.target.GetName() ) );
+
+            DIFF_PAIR dp( m_sizes.DiffPairGap() );
+            dp.SetDimensions( dims );
+            dp.SetShape( f.p, f.n );
+
+            if( rejectNonObtuseAngles )
+            {
+                DIRECTION_45 startDirP = m_start.DirP();
+                DIRECTION_45 startDirN = m_start.DirN();
+                auto         angP = startDirP.Angle( dp.DirP( false ) );
+                auto         angN = startDirN.Angle( dp.DirN( false ) );
+
+                bool startHasDirection = m_start.DirP().IsDefined() && m_start.DirN().IsDefined();
+
+                if( startHasDirection && ( !( angP & angleMask ) || !( angN & angleMask ) ) )
+                {
+                    PNS_DBG( Dbg(), Message,
+                             wxString::Format( " reject dp %s dn %s sd %s %s", dp.DirP( false ).Format(),
+                                               dp.DirN( false ).Format(), startDirP.Format(), startDirN.Format() ) );
+                    PNS_DBGN( Dbg(), EndGroup );
+                    current_id++;
+                    continue;
+                }
+            }
+            PNS_DBGN( Dbg(), EndGroup );
+
+            int index = f.diagonal ? 1 : 0;
+            int score = f.score;
+
+            if( score >= bestScore[index] || (f.coupledRatio > bestCpr[index] * 5.0 && bestCpr[index] < 0.2 ) )
+            {
+                bestFits[index] = &f;
+                bestScore[index] = score;
+                bestCpr[index] = f.coupledRatio;
+                bestId[index] = current_id;
+            }
+            else if( score == bestScore[index] )
+            {
+                if( f.coupledRatio >= bestCpr[index] )
+                {
+                    bestCpr[index] = f.coupledRatio;
+                    bestFits[index] = &f;
+                    bestId[index] = current_id;
+                }
+            }
+        
+            current_id++;
+        }
+
+        if( bestFits[0] || bestFits[1] )
+            break;
+    }
+
+    for( int index = 0; index < 2; index++ )
+    {
+        const DP_GATEWAYS::FIT_RESULT* f = bestFits[index];
+
+        if( !f )
+            continue;
+
+
+        PNS_DBG( Dbg(), BeginGroup,
+                 wxString::Format( wxT( "best: diag=%d cpr=%.2f ar=%.2f score=%d cl=%d" ), f->diagonal ? 1 : 0,
+                                   f->coupledRatio, f->aspectRatio, f->score, minClearance.value() ),
+                 0 );
+
+        drawSingleGateway( Dbg(), f->entry, wxString::Format( "entry=%s", f->entry.GetName() ) );
+        drawSingleGateway( Dbg(), f->target, wxString::Format( "target=%s", f->target.GetName() ) );
+
+        PNS_DBG( Dbg(), AddShape, &f->p, RED, 20000, wxT( "l+" ) );
+        PNS_DBG( Dbg(), AddShape, &f->n, BLUE, 20000, wxT( "l-" ) );
+
+        PNS_DBGN( Dbg(), EndGroup );
+    }
+
+    // Corner case for making a 45-degree turn with poorly aligned exits (eg #21343), can result with a diff pair with a gap
+    // completely out of range (very low CPR). Force other posture if its CPR exceeds the chosen posture by a big enough factor
+    if( bestFits[0] && bestFits[1] )
+    {
+        if( bestFits[0]->coupledRatio > DP_CPR_SWITCH_POSTURE_RATIO * bestFits[1]->coupledRatio )
+            bestestFit = bestFits[0];
+        else if ( bestFits[1]->coupledRatio > DP_CPR_SWITCH_POSTURE_RATIO * bestFits[0]->coupledRatio )
+            bestestFit = bestFits[1];
+    }
+
+    if( !bestestFit )
+    {
+        if( m_startDiagonal && bestFits[1] )
+            bestestFit = bestFits[1];
+        else if( !m_startDiagonal && bestFits[0] )
+            bestestFit = bestFits[0];
+        else if( bestFits[1] )
+            bestestFit = bestFits[1];
+        else if( bestFits[0] )
+            bestestFit = bestFits[0];
+    }
+
+    if( bestestFit )
     {
         m_currentTraceOk = true;
+        m_currentTrace.SetShape( bestestFit->p, bestestFit->n );
         m_currentTrace.SetNets( m_netP, m_netN );
-        m_currentTrace.SetWidth( m_sizes.DiffPairWidth() );
-        m_currentTrace.SetGap( m_sizes.DiffPairGap() );
+        m_currentTrace.SetDimensions( dims );
 
         if( m_placingVia )
         {
-            m_currentTrace.AppendVias ( makeVia( m_currentTrace.CP().CLastPoint(), m_netP ),
-                                        makeVia( m_currentTrace.CN().CLastPoint(), m_netN ) );
+            m_currentTrace.AppendVias( makeVia( m_currentTrace.CP().CLastPoint(), m_netP ),
+                                       makeVia( m_currentTrace.CN().CLastPoint(), m_netN ) );
         }
         else
         {
@@ -757,7 +1125,7 @@ bool DIFF_PAIR_PLACER::routeHead( const VECTOR2I& aP )
 }
 
 
-bool DIFF_PAIR_PLACER::Move( const VECTOR2I& aP , ITEM* aEndItem )
+bool DIFF_PAIR_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
 {
     m_currentEndItem = aEndItem;
     m_fitOk = false;
@@ -773,9 +1141,84 @@ bool DIFF_PAIR_PLACER::Move( const VECTOR2I& aP , ITEM* aEndItem )
     assert( m_lastNode != nullptr );
     m_currentEnd = aP;
 
+    PNS_DBG( Dbg(), Message,
+             wxString::Format( "target %d, p-sc %d n-sc %d", m_target ? 1 : 0,
+                               m_currentTrace.PLine().SegmentCount(), m_currentTrace.NLine().SegmentCount() ) );
+
+
+    if( m_target && m_target->PrimP() && m_target->PrimN() )
+    {
+        if( m_currentTrace.PLine().SegmentCount() && m_currentTrace.NLine().SegmentCount() )
+        {
+            if( m_target->PrimN()->Net() == m_currentTrace.NLine().Net() )
+                SplitAdjacentSegments( m_lastNode, m_target->PrimN(), m_currentTrace.NLine().CLastPoint() );
+            if( m_target->PrimP()->Net() == m_currentTrace.PLine().Net() )
+                SplitAdjacentSegments( m_lastNode, m_target->PrimP(), m_currentTrace.PLine().CLastPoint() );
+
+            if( Settings().RemoveLoops() )
+            {
+                removeLoops( m_lastNode, m_currentTrace.PLine() );
+                removeLoops( m_lastNode, m_currentTrace.NLine() );
+            }
+        }
+    }
+
+
+    PNS_DBG( Dbg(), AddPoint, m_start.AnchorP(), RED, 100000, wxT( "start-p" ) );
+    PNS_DBG( Dbg(), AddPoint, m_start.AnchorN(), BLUE, 100000, wxT( "start-n" ) );
+
     updateLeadingRatLine();
 
     return retval;
+}
+
+
+static void drawGateways( PNS::DEBUG_DECORATOR* dbg, const wxString& groupName, PNS::DP_PRIMITIVE_PAIR& prims,
+                          PNS::DP_GATEWAYS& gws, VECTOR2D offset, VECTOR2D step )
+{
+    PNS_DBG( dbg, BeginGroup, groupName, 0 );
+    for( auto gw : gws.Gateways() )
+    {
+        PNS_DBG( dbg, BeginGroup, wxString::Format( wxT( "gw-%s" ), gw.GetName() ), 0 );
+
+        SHAPE_CIRCLE gwp( gw.AnchorP(), 30000 );
+        PNS_DBG( dbg, AddShape, &gwp, LIGHTRED, 20000, "gwp" );
+
+        if( gw.EntryP().SegmentCount() )
+        {
+            PNS_DBG( dbg, AddShape, &gw.EntryP(), LIGHTRED, 20000, "gwp" );
+        }
+
+        SHAPE_CIRCLE gwn( gw.AnchorN(), 30000 );
+        PNS_DBG( dbg, AddShape, &gwn, LIGHTBLUE, 30000, "gwn" );
+
+        if( gw.EntryN().SegmentCount() )
+        {
+            PNS_DBG( dbg, AddShape, &gw.EntryN(), LIGHTBLUE, 10000, "gwn" );
+        }
+
+        SHAPE_LINE_CHAIN link( { gw.AnchorN(), gw.AnchorP() } );
+        PNS_DBG( dbg, AddShape, &link, LIGHTGRAY, 10000, "link" );
+
+        auto midpoint = ( gw.AnchorN() + gw.AnchorP() ) / 2;
+
+        if( gw.HasPrimaryDirection() )
+        {
+            for( int dir = 0; dir < 8; dir++ )
+            {
+                DIRECTION_45 dirV( (DIRECTION_45::Directions) dir );
+                if( dirV.Mask() & gw.PrimaryDirectionMask() )
+                {
+                    auto             dv = dirV.ToVector().Resize( 1000000 );
+                    SHAPE_LINE_CHAIN ds( { midpoint, midpoint + dv } );
+                    PNS_DBG( dbg, AddShape, &ds, LIGHTYELLOW, 10000, wxString::Format( "pdir-%s", dirV.Format() ) );
+                }
+            }
+        }
+
+        PNS_DBGN( dbg, EndGroup );
+    }
+    PNS_DBGN( dbg, EndGroup );
 }
 
 
@@ -793,8 +1236,8 @@ void DIFF_PAIR_PLACER::UpdateSizes( const SIZES_SETTINGS& aSizes )
         if( !m_sizes.TrackWidthIsExplicit() && m_hasFixedAnything )
             m_sizes.SetDiffPairWidth( prevDiffPairWidth );
 
-        m_currentTrace.SetWidth( m_sizes.DiffPairWidth() );
-        m_currentTrace.SetGap( m_sizes.DiffPairGap() );
+        DP_DIMENSIONS dims( m_sizes.DiffPairWidth(), m_sizes.DiffPairGap(), viaGap(), m_sizes.ViaDiameter(), 0 );
+        m_currentTrace.SetDimensions( dims );
 
         if( m_currentTrace.EndsWithVias() )
         {
@@ -844,16 +1287,21 @@ bool DIFF_PAIR_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForce
         m_chainedPlacement = !m_snapOnTarget && !aForceFinish;
     }
 
-    LINE lineP( m_currentTrace.PLine() );
-    LINE lineN( m_currentTrace.NLine() );
+    LINE &lineP = m_currentTrace.PLine();
+    LINE &lineN = m_currentTrace.NLine();
 
     m_lastNode->Add( lineP );
     m_lastNode->Add( lineN );
 
-    topo.SimplifyLine( &lineP );
-    topo.SimplifyLine( &lineN );
+    //topo.SimplifyLine( &lineP );
+    //topo.SimplifyLine( &lineN );
+
+    m_currentTrace.SetLines( lineP, lineN );
 
     m_prevPair = m_currentTrace.EndingPrimitives();
+
+    PNS_DBG( Dbg(), Message, wxString::Format("Fix-RT pp-p %p pp-n %p snapon=%d ff=%d", m_prevPair?m_prevPair->PrimP():0, m_prevPair?m_prevPair->PrimN():0, m_snapOnTarget?1:0, aForceFinish?1:0 ) );
+
     m_lastFixNode = m_lastNode;
 
     // avoid an use-after-free error (CommitPlacement calls NODE::Commit which will invalidate the shove heads state. Need to rethink the memory management).
@@ -861,17 +1309,31 @@ bool DIFF_PAIR_PLACER::FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForce
         m_shove = std::make_unique<SHOVE>( m_world, Router() );
 
     CommitPlacement();
+
+    m_currentTrace.Clear();
+    m_currentTrace.ClearLinks();
+
     m_placingVia = false;
     m_lastFixNode = nullptr;
 
     if( m_snapOnTarget || aForceFinish )
     {
         m_idle = true;
+        if( m_prevPair )
+            m_prevPair->Unlink();
+        
+        if( m_target )
+            m_target->Unlink();
+
         return true;
     }
     else
     {
         m_hasFixedAnything = true;
+        m_start = *m_prevPair;
+
+        PNS_DBG( Dbg(), Message, wxString::Format("Fix-RT2 pp-p %p pp-n %p snapon=%d ff=%d", m_prevPair?m_prevPair->PrimP():0, m_prevPair?m_prevPair->PrimN():0, m_snapOnTarget?1:0, aForceFinish?1:0 ) );
+
         initPlacement();
         return false;
     }
@@ -894,8 +1356,15 @@ bool DIFF_PAIR_PLACER::HasPlacedAnything() const
 
 bool DIFF_PAIR_PLACER::CommitPlacement()
 {
+    if( m_target )
+        m_target->Unlink();
+
+    m_start = DP_PRIMITIVE_PAIR();
+
     if( m_lastFixNode )
         Router()->CommitRouting( m_lastFixNode );
+    else if( m_prevPair )
+        m_prevPair->Unlink();
 
     m_lastFixNode = nullptr;
     m_lastNode = nullptr;
@@ -914,7 +1383,7 @@ void DIFF_PAIR_PLACER::GetModifiedNets( std::vector<NET_HANDLE> &aNets ) const
 void DIFF_PAIR_PLACER::updateLeadingRatLine()
 {
     SHAPE_LINE_CHAIN ratLineN, ratLineP;
-    TOPOLOGY topo( m_lastNode );
+    TOPOLOGY topo( m_lastNode, m_router->GetInterface() );
 
     if( topo.LeadingRatLine( &m_currentTrace.PLine(), ratLineP ) )
         m_router->GetInterface()->DisplayRatline( ratLineP, m_netP );

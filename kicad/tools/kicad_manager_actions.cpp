@@ -183,16 +183,6 @@ TOOL_ACTION KICAD_MANAGER_ACTIONS::viewGerbers( TOOL_ACTION_ARGS()
         .Icon( BITMAPS::icon_gerbview_24 )
         .Parameter<wxString*>( nullptr ) );      // Default to no filename
 
-TOOL_ACTION KICAD_MANAGER_ACTIONS::convertImage( TOOL_ACTION_ARGS()
-        .Name( "kicad.Control.convertImage" )
-        .Scope( AS_GLOBAL )
-        .DefaultHotkey( MD_CTRL + 'B' )
-        .LegacyHotkeyName( "Run Bitmap2Component" )
-        .FriendlyName( _( "Image Converter" ) )
-        .Tooltip( _( "Convert bitmap images to schematic or PCB components" ) )
-        .Icon( BITMAPS::icon_bitmap2component_24 )
-        .Parameter<wxString*>( nullptr ) );      // Default to no filename
-
 TOOL_ACTION KICAD_MANAGER_ACTIONS::showCalculator( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.showCalculator" )
         .Scope( AS_GLOBAL )
@@ -237,6 +227,13 @@ TOOL_ACTION KICAD_MANAGER_ACTIONS::editOtherPCB( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.editOtherPCB" )
         .Scope( AS_GLOBAL )
         .Parameter<wxString*>( nullptr ) );      // Default to no filename
+
+TOOL_ACTION KICAD_MANAGER_ACTIONS::exportForOlderVersion(
+        TOOL_ACTION_ARGS()
+                .Name( "kicad.Control.exportForOlderVersion" )
+                .Scope( AS_GLOBAL )
+                .FriendlyName( _( "Export for Older KiCad Version..." ) )
+                .Tooltip( _( "Export a copy of the project that an older KiCad can open" ) ) );
 
 TOOL_ACTION KICAD_MANAGER_ACTIONS::archiveProject( TOOL_ACTION_ARGS()
         .Name( "kicad.Control.archiveProject" )

@@ -37,6 +37,8 @@ struct PENDING_STACK_EXPANSION
     PCB_LAYER_ID     m_End;
     int              m_Net;
     VIA_STACK_PRESET m_Preset;
+
+    std::optional<VECTOR2I> m_Pos;
 };
 
 
@@ -68,6 +70,7 @@ public:
     int MainLoop( const TOOL_EVENT& aEvent );
     int RouteSelected( const TOOL_EVENT& aEvent );
     int OptimizeSelected( const TOOL_EVENT& aEvent );
+    int SpreadTracks( const TOOL_EVENT& aEvent );
 
     int InlineBreakTrack( const TOOL_EVENT& aEvent );
     bool CanInlineDrag( int aDragMode );
@@ -124,9 +127,15 @@ private:
     int onLayerCommand( const TOOL_EVENT& aEvent );
     int onViaCommand( const TOOL_EVENT& aEvent );
     int onViaStackCommand( const TOOL_EVENT& aEvent );
+    int onSpreadTracksSetDistance( const TOOL_EVENT& aEvent );
+    int onSpreadTracksIncDecDistance( const TOOL_EVENT& aEvent, bool aInc );
 
     /// Build and commit a staggered via stack queued during routing (after the PNS world is gone).
     void commitPendingViaStack();
+
+    /// Remember where the placer is about to leave the newest drop's via.
+    void recordPendingStackViaPos();
+
     int onTrackViaSizeChanged( const TOOL_EVENT& aEvent );
 
     bool prepareInteractive( VECTOR2D aStartPosition );
@@ -156,6 +165,8 @@ private:
 
     // Stacked drops armed during this route, expanded into stacks when the route finishes.
     std::vector<PENDING_STACK_EXPANSION> m_pendingStackedExpansions;
+
+    bool m_stackDropAwaitingVia = false;
 
     // Vias already expandable when the first drop was armed; the route did not create these.
     std::set<KIID> m_preRouteExpandableVias;

@@ -33,7 +33,7 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_grid = new WX_GRID( sbSizer4->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, 0 );
 
 	// Grid
-	m_grid->CreateGrid( 4, 14 );
+	m_grid->CreateGrid( 4, 13 );
 	m_grid->EnableEditing( true );
 	m_grid->EnableGridLines( true );
 	m_grid->EnableDragGridSize( false );
@@ -41,19 +41,18 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 
 	// Columns
 	m_grid->SetColSize( 0, 72 );
-	m_grid->SetColSize( 1, 8 );
+	m_grid->SetColSize( 1, 15 );
 	m_grid->SetColSize( 2, 48 );
 	m_grid->SetColSize( 3, 84 );
-	m_grid->SetColSize( 4, 66 );
-	m_grid->SetColSize( 5, 66 );
+	m_grid->SetColSize( 4, 60 );
+	m_grid->SetColSize( 5, 60 );
 	m_grid->SetColSize( 6, 48 );
 	m_grid->SetColSize( 7, 48 );
 	m_grid->SetColSize( 8, 80 );
 	m_grid->SetColSize( 9, 84 );
 	m_grid->SetColSize( 10, 84 );
 	m_grid->SetColSize( 11, 84 );
-	m_grid->SetColSize( 12, 10 );
-	m_grid->SetColSize( 13, 48 );
+	m_grid->SetColSize( 12, 100 );
 	m_grid->EnableDragColMove( false );
 	m_grid->EnableDragColSize( true );
 	m_grid->SetColLabelValue( 0, _("Name") );
@@ -69,7 +68,6 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_grid->SetColLabelValue( 10, _("X Position") );
 	m_grid->SetColLabelValue( 11, _("Y Position") );
 	m_grid->SetColLabelValue( 12, _("Font") );
-	m_grid->SetColLabelValue( 13, _("Color") );
 	m_grid->SetColLabelSize( 22 );
 	m_grid->SetColLabelAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
 
@@ -189,8 +187,8 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 
 	bSizerLowerBasicPanel->Add( bSizerLeftCol, 1, wxEXPAND, 5 );
 
-	wxBoxSizer* bSizerPinTextCol;
-	bSizerPinTextCol = new wxBoxSizer( wxVERTICAL );
+	wxBoxSizer* bSizerMiddleCol;
+	bSizerMiddleCol = new wxBoxSizer( wxVERTICAL );
 
 	wxStaticBoxSizer* sbSizerPinTextOpts;
 	sbSizerPinTextOpts = new wxStaticBoxSizer( new wxStaticBox( m_PanelBasic, wxID_ANY, _("Pin Text Options") ), wxVERTICAL );
@@ -223,26 +221,23 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_nameOffsetLabel->Wrap( -1 );
 	m_nameOffsetLabel->SetToolTip( _("Margin between the pin name position and the symbol body.") );
 
-	bSizerNameOffset->Add( m_nameOffsetLabel, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
+	bSizerNameOffset->Add( m_nameOffsetLabel, 0, wxALIGN_CENTER_VERTICAL|wxLEFT, 20 );
 
 	m_nameOffsetCtrl = new wxTextCtrl( sbSizerPinTextOpts->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
-	bSizerNameOffset->Add( m_nameOffsetCtrl, 1, wxLEFT|wxRIGHT, 5 );
+	bSizerNameOffset->Add( m_nameOffsetCtrl, 0, wxLEFT|wxRIGHT, 5 );
 
 	m_nameOffsetUnits = new wxStaticText( sbSizerPinTextOpts->GetStaticBox(), wxID_ANY, _("units"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_nameOffsetUnits->Wrap( -1 );
 	bSizerNameOffset->Add( m_nameOffsetUnits, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
 
 
-	sbSizerPinTextOpts->Add( bSizerNameOffset, 0, wxBOTTOM|wxEXPAND|wxTOP, 5 );
+	sbSizerPinTextOpts->Add( bSizerNameOffset, 0, wxBOTTOM|wxEXPAND|wxTOP, 3 );
 
 
-	sbSizerPinTextOpts->Add( 0, 0, 0, wxEXPAND, 5 );
+	bSizerMiddleCol->Add( sbSizerPinTextOpts, 1, wxALL|wxEXPAND, 5 );
 
 
-	bSizerPinTextCol->Add( sbSizerPinTextOpts, 1, wxALL|wxEXPAND, 5 );
-
-
-	bSizerLowerBasicPanel->Add( bSizerPinTextCol, 1, wxEXPAND, 5 );
+	bSizerLowerBasicPanel->Add( bSizerMiddleCol, 1, wxEXPAND, 5 );
 
 	wxBoxSizer* bSizerRightCol;
 	bSizerRightCol = new wxBoxSizer( wxVERTICAL );
@@ -278,7 +273,7 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_PanelBasic->SetSizer( bSizerBasicPanel );
 	m_PanelBasic->Layout();
 	bSizerBasicPanel->Fit( m_PanelBasic );
-	m_NoteBook->AddPage( m_PanelBasic, _("General"), false );
+	m_NoteBook->AddPage( m_PanelBasic, _("General"), true );
 	m_PanelUnitsAndBodyStyles = new wxPanel( m_NoteBook, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
 	wxBoxSizer* bSizerUnitsAndBodyStyles;
 	bSizerUnitsAndBodyStyles = new wxBoxSizer( wxHORIZONTAL );
@@ -327,7 +322,7 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 
 	// Columns
 	m_unitNamesGrid->SetColSize( 0, 36 );
-	m_unitNamesGrid->SetColSize( 1, 400 );
+	m_unitNamesGrid->SetColSize( 1, 300 );
 	m_unitNamesGrid->EnableDragColMove( false );
 	m_unitNamesGrid->EnableDragColSize( false );
 	m_unitNamesGrid->SetColLabelSize( 0 );
@@ -378,7 +373,7 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_bodyStyleNamesGrid->SetMargins( 0, 0 );
 
 	// Columns
-	m_bodyStyleNamesGrid->SetColSize( 0, 400 );
+	m_bodyStyleNamesGrid->SetColSize( 0, 320 );
 	m_bodyStyleNamesGrid->EnableDragColMove( false );
 	m_bodyStyleNamesGrid->EnableDragColSize( false );
 	m_bodyStyleNamesGrid->SetColLabelSize( 0 );
@@ -434,54 +429,6 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_PanelUnitsAndBodyStyles->Layout();
 	bSizerUnitsAndBodyStyles->Fit( m_PanelUnitsAndBodyStyles );
 	m_NoteBook->AddPage( m_PanelUnitsAndBodyStyles, _("Units && Body Styles"), false );
-	m_PanelFootprintFilters = new wxPanel( m_NoteBook, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
-	wxBoxSizer* bSizerFPFilters;
-	bSizerFPFilters = new wxBoxSizer( wxHORIZONTAL );
-
-	wxBoxSizer* bFPFiltersMargins;
-	bFPFiltersMargins = new wxBoxSizer( wxVERTICAL );
-
-	m_staticTextFootprints = new wxStaticText( m_PanelFootprintFilters, wxID_ANY, _("Footprint filters:"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_staticTextFootprints->Wrap( -1 );
-	m_staticTextFootprints->SetToolTip( _("A list of footprints names that can be used for this symbol.\nFootprints names can used wildcards like sm* to allow all footprints names starting by sm.") );
-
-	bFPFiltersMargins->Add( m_staticTextFootprints, 0, wxRIGHT|wxLEFT, 5 );
-
-	m_FootprintFilterListBox = new wxListBox( m_PanelFootprintFilters, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0, NULL, wxLB_MULTIPLE );
-	bFPFiltersMargins->Add( m_FootprintFilterListBox, 1, wxEXPAND, 5 );
-
-	wxBoxSizer* bFpFilterRightBoxSizer;
-	bFpFilterRightBoxSizer = new wxBoxSizer( wxHORIZONTAL );
-
-	m_addFilterButton = new STD_BITMAP_BUTTON( m_PanelFootprintFilters, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize( -1,-1 ), wxBU_AUTODRAW|0 );
-	m_addFilterButton->SetToolTip( _("Add footprint filter") );
-
-	bFpFilterRightBoxSizer->Add( m_addFilterButton, 0, wxTOP|wxBOTTOM, 5 );
-
-	m_editFilterButton = new STD_BITMAP_BUTTON( m_PanelFootprintFilters, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize( -1,-1 ), wxBU_AUTODRAW|0 );
-	m_editFilterButton->SetToolTip( _("Edit footprint filter") );
-
-	bFpFilterRightBoxSizer->Add( m_editFilterButton, 0, wxALL, 5 );
-
-
-	bFpFilterRightBoxSizer->Add( 20, 0, 0, wxEXPAND, 5 );
-
-	m_deleteFilterButton = new STD_BITMAP_BUTTON( m_PanelFootprintFilters, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize( -1,-1 ), wxBU_AUTODRAW|0 );
-	m_deleteFilterButton->SetToolTip( _("Delete footprint filter") );
-
-	bFpFilterRightBoxSizer->Add( m_deleteFilterButton, 0, wxALL, 5 );
-
-
-	bFPFiltersMargins->Add( bFpFilterRightBoxSizer, 0, 0, 5 );
-
-
-	bSizerFPFilters->Add( bFPFiltersMargins, 1, wxEXPAND|wxTOP|wxRIGHT|wxLEFT, 5 );
-
-
-	m_PanelFootprintFilters->SetSizer( bSizerFPFilters );
-	m_PanelFootprintFilters->Layout();
-	bSizerFPFilters->Fit( m_PanelFootprintFilters );
-	m_NoteBook->AddPage( m_PanelFootprintFilters, _("Footprint Filters"), false );
 	m_PanelPinConnections = new wxPanel( m_NoteBook, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
 	wxBoxSizer* bSizerPinConnections;
 	bSizerPinConnections = new wxBoxSizer( wxVERTICAL );
@@ -552,7 +499,7 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_PanelPinConnections->SetSizer( bSizerPinConnections );
 	m_PanelPinConnections->Layout();
 	bSizerPinConnections->Fit( m_PanelPinConnections );
-	m_NoteBook->AddPage( m_PanelPinConnections, _("Pin Connections"), true );
+	m_NoteBook->AddPage( m_PanelPinConnections, _("Pin Connections"), false );
 	m_pinMapPage = new wxPanel( m_NoteBook, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
 	bPinMapPageSizer = new wxBoxSizer( wxVERTICAL );
 
@@ -630,10 +577,6 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::DIALOG_LIB_SYMBOL_PROPERTIES_BASE( wxWindow* 
 	m_bpMoveUpBodyStyle->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnBodyStyleMoveUp ), NULL, this );
 	m_bpMoveDownBodyStyle->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnBodyStyleMoveDown ), NULL, this );
 	m_bpDeleteBodyStyle->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnDeleteBodyStyle ), NULL, this );
-	m_FootprintFilterListBox->Connect( wxEVT_LEFT_DCLICK, wxMouseEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnFpFilterDClick ), NULL, this );
-	m_FootprintFilterListBox->Connect( wxEVT_COMMAND_LISTBOX_DOUBLECLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnEditFootprintFilter ), NULL, this );
-	m_addFilterButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnAddFootprintFilter ), NULL, this );
-	m_editFilterButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnEditFootprintFilter ), NULL, this );
 	m_bpAddJumperGroup->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnAddJumperGroup ), NULL, this );
 	m_bpRemoveJumperGroup->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnRemoveJumperGroup ), NULL, this );
 	m_spiceFieldsButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnEditSpiceModel ), NULL, this );
@@ -676,13 +619,89 @@ DIALOG_LIB_SYMBOL_PROPERTIES_BASE::~DIALOG_LIB_SYMBOL_PROPERTIES_BASE()
 	m_bpMoveUpBodyStyle->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnBodyStyleMoveUp ), NULL, this );
 	m_bpMoveDownBodyStyle->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnBodyStyleMoveDown ), NULL, this );
 	m_bpDeleteBodyStyle->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnDeleteBodyStyle ), NULL, this );
-	m_FootprintFilterListBox->Disconnect( wxEVT_LEFT_DCLICK, wxMouseEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnFpFilterDClick ), NULL, this );
-	m_FootprintFilterListBox->Disconnect( wxEVT_COMMAND_LISTBOX_DOUBLECLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnEditFootprintFilter ), NULL, this );
-	m_addFilterButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnAddFootprintFilter ), NULL, this );
-	m_editFilterButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnEditFootprintFilter ), NULL, this );
 	m_bpAddJumperGroup->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnAddJumperGroup ), NULL, this );
 	m_bpRemoveJumperGroup->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnRemoveJumperGroup ), NULL, this );
 	m_spiceFieldsButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnEditSpiceModel ), NULL, this );
 	m_stdSizerButtonCancel->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_LIB_SYMBOL_PROPERTIES_BASE::OnCancelButtonClick ), NULL, this );
+
+}
+
+PANEL_FOOTPRINT_FILTERS_BASE::PANEL_FOOTPRINT_FILTERS_BASE( wxWindow* parent, wxWindowID id, const wxPoint& pos, const wxSize& size, long style, const wxString& name ) : wxPanel( parent, id, pos, size, style, name )
+{
+	wxBoxSizer* bSizerFPFilters;
+	bSizerFPFilters = new wxBoxSizer( wxHORIZONTAL );
+
+	wxBoxSizer* bFPFiltersMargins;
+	bFPFiltersMargins = new wxBoxSizer( wxVERTICAL );
+
+	m_staticTextFootprints = new wxStaticText( this, wxID_ANY, _("Footprint filters:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextFootprints->Wrap( -1 );
+	m_staticTextFootprints->SetToolTip( _("A list of footprints names that can be used for this symbol.\nFootprints names can used wildcards like sm* to allow all footprints names starting by sm.") );
+
+	bFPFiltersMargins->Add( m_staticTextFootprints, 0, wxBOTTOM|wxLEFT|wxRIGHT, 5 );
+
+	m_FootprintFilterListBox = new wxListBox( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, 0, NULL, wxLB_MULTIPLE );
+	bFPFiltersMargins->Add( m_FootprintFilterListBox, 1, wxEXPAND, 5 );
+
+	wxBoxSizer* bFpFilterRightBoxSizer;
+	bFpFilterRightBoxSizer = new wxBoxSizer( wxHORIZONTAL );
+
+	m_addFilterButton = new STD_BITMAP_BUTTON( this, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize( -1,-1 ), wxBU_AUTODRAW|0 );
+	m_addFilterButton->SetToolTip( _("Add footprint filter") );
+
+	bFpFilterRightBoxSizer->Add( m_addFilterButton, 0, wxTOP|wxBOTTOM, 5 );
+
+	m_editFilterButton = new STD_BITMAP_BUTTON( this, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize( -1,-1 ), wxBU_AUTODRAW|0 );
+	m_editFilterButton->SetToolTip( _("Edit footprint filter") );
+
+	bFpFilterRightBoxSizer->Add( m_editFilterButton, 0, wxALL, 5 );
+
+
+	bFpFilterRightBoxSizer->Add( 20, 0, 0, wxEXPAND, 5 );
+
+	m_deleteFilterButton = new STD_BITMAP_BUTTON( this, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxSize( -1,-1 ), wxBU_AUTODRAW|0 );
+	m_deleteFilterButton->SetToolTip( _("Delete footprint filter") );
+
+	bFpFilterRightBoxSizer->Add( m_deleteFilterButton, 0, wxALL, 5 );
+
+
+	bFPFiltersMargins->Add( bFpFilterRightBoxSizer, 0, 0, 5 );
+
+
+	bSizerFPFilters->Add( bFPFiltersMargins, 1, wxEXPAND|wxTOP|wxRIGHT|wxLEFT, 5 );
+
+	wxBoxSizer* bSizer24;
+	bSizer24 = new wxBoxSizer( wxVERTICAL );
+
+	m_staticTextFootprints1 = new wxStaticText( this, wxID_ANY, _("Matching footprints:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_staticTextFootprints1->Wrap( -1 );
+	m_staticTextFootprints1->SetToolTip( _("Footprints from the available footprint libraries that match the selected filter.\nWhen no filter is selected, matches for all filters are shown.") );
+
+	bSizer24->Add( m_staticTextFootprints1, 0, wxALL|wxLEFT, 5 );
+
+	m_matchingFootprints = new wxListCtrl( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_NO_HEADER|wxLC_REPORT|wxLC_SINGLE_SEL );
+	bSizer24->Add( m_matchingFootprints, 1, wxBOTTOM|wxEXPAND|wxLEFT|wxRIGHT, 5 );
+
+
+	bSizerFPFilters->Add( bSizer24, 1, wxEXPAND, 5 );
+
+
+	this->SetSizer( bSizerFPFilters );
+	this->Layout();
+
+	// Connect Events
+	m_FootprintFilterListBox->Connect( wxEVT_LEFT_DCLICK, wxMouseEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnFpFilterDClick ), NULL, this );
+	m_FootprintFilterListBox->Connect( wxEVT_COMMAND_LISTBOX_DOUBLECLICKED, wxCommandEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnEditFootprintFilter ), NULL, this );
+	m_addFilterButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnAddFootprintFilter ), NULL, this );
+	m_editFilterButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnEditFootprintFilter ), NULL, this );
+}
+
+PANEL_FOOTPRINT_FILTERS_BASE::~PANEL_FOOTPRINT_FILTERS_BASE()
+{
+	// Disconnect Events
+	m_FootprintFilterListBox->Disconnect( wxEVT_LEFT_DCLICK, wxMouseEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnFpFilterDClick ), NULL, this );
+	m_FootprintFilterListBox->Disconnect( wxEVT_COMMAND_LISTBOX_DOUBLECLICKED, wxCommandEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnEditFootprintFilter ), NULL, this );
+	m_addFilterButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnAddFootprintFilter ), NULL, this );
+	m_editFilterButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( PANEL_FOOTPRINT_FILTERS_BASE::OnEditFootprintFilter ), NULL, this );
 
 }

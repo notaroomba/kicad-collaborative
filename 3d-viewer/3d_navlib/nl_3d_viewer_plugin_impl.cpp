@@ -25,10 +25,13 @@
 #include <3d-viewer/3d_canvas/eda_3d_canvas.h>
 
 // KiCad includes
+#include <bitmaps.h>
 #include <navlib_safe_init.h>
 #include <tool/action_manager.h>
 #include <tool/tool_manager.h>
 #include <tool/tools_holder.h>
+#include <bitmaps/bitmaps_list.h>
+#include <bitmaps/bitmap_types.h>
 
 // stdlib
 #include <map>

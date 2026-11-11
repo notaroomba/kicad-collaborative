@@ -572,16 +572,26 @@ FOOTPRINT* GPCB_FPL_CACHE::parseFOOTPRINT( LINE_READER* aLineReader )
                     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL );
             }
 
-            if( pad->GetSizeX() > 0 && pad->GetSizeY() > 0 )
+            bool badPad = false;
+
+            pad->Padstack().ForEachUniqueLayer(
+                    [&]( PCB_LAYER_ID layer )
+                    {
+                        VECTOR2I padSize = pad->GetSize( layer );
+
+                        if( padSize.x <= 0 || padSize.y <= 0 )
+                            badPad = true;
+                    } );
+
+            if( badPad )
             {
-                footprint->Add( pad.release() );
+                m_owner->Report( wxString::Format( _( "Invalid zero-sized pad ignored in\nfile: %s" ),
+                                                   aLineReader->GetSource() ),
+                                 RPT_SEVERITY_ERROR );
             }
             else
             {
-                m_owner->Report( wxString::Format( _( "Invalid zero-sized pad ignored in\n"
-                                                      "file: %s" ),
-                                                   aLineReader->GetSource() ),
-                                 RPT_SEVERITY_ERROR );
+                footprint->Add( pad.release() );
             }
 
             continue;
@@ -851,9 +861,8 @@ void PCB_IO_GEDA::validateCache( const wxString& aLibraryPath, bool checkModifie
 }
 
 
-FOOTPRINT* PCB_IO_GEDA::ImportFootprint( const wxString&        aFootprintPath,
-                                         wxString&              aFootprintNameOut,
-                                         const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_GEDA::ImportFootprint( const wxString& aFootprintPath, wxString& aFootprintNameOut,
+                                                         const std::map<std::string, UTF8>* aProperties )
 {
     wxFileName fn( aFootprintPath );
 
@@ -929,10 +938,8 @@ const FOOTPRINT* PCB_IO_GEDA::getFootprint( const wxString& aLibraryPath,
 }
 
 
-FOOTPRINT* PCB_IO_GEDA::FootprintLoad( const wxString& aLibraryPath,
-                                       const wxString& aFootprintName,
-                                       bool  aKeepUUID,
-                                       const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_GEDA::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                                       bool aKeepUUID, const std::map<std::string, UTF8>* aProperties )
 {
     // Suppress font substitution warnings (RAII - automatically restored on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( nullptr );
@@ -941,7 +948,7 @@ FOOTPRINT* PCB_IO_GEDA::FootprintLoad( const wxString& aLibraryPath,
 
     if( footprint )
     {
-        FOOTPRINT* copy = (FOOTPRINT*) footprint->Duplicate( IGNORE_PARENT_GROUP );
+        std::unique_ptr<FOOTPRINT> copy( static_cast<FOOTPRINT*>( footprint->Duplicate( IGNORE_PARENT_GROUP ) ) );
         copy->SetParent( nullptr );
         return copy;
     }
@@ -1492,8 +1499,27 @@ FOOTPRINT* PCB_IO_GEDA::parseElement( wxArrayString& aParameters, LINE_READER* a
                     pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL );
             }
 
-            if( pad->GetSizeX() > 0 && pad->GetSizeY() > 0 )
+            bool badPad = false;
+
+            pad->Padstack().ForEachUniqueLayer(
+                    [&]( PCB_LAYER_ID layer )
+                    {
+                        VECTOR2I padSize = pad->GetSize( layer );
+
+                        if( padSize.x <= 0 || padSize.y <= 0 )
+                            badPad = true;
+                    } );
+
+            if( badPad )
+            {
+                Report( wxString::Format( _( "Invalid zero-sized pad ignored in\nfile: %s" ),
+                                          m_board->GetFileName() ),
+                        RPT_SEVERITY_ERROR );
+            }
+            else
+            {
                 footprint->Add( pad.release() );
+            }
 
             continue;
         }
@@ -1921,20 +1947,14 @@ void PCB_IO_GEDA::parseNetList( LINE_READER* aLineReader )
 }
 
 
-BOARD* PCB_IO_GEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                               const std::map<std::string, UTF8>* aProperties,
-                               PROJECT* aProject )
+void PCB_IO_GEDA::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                             const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
 
     init( aProperties );
 
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
-
-    std::unique_ptr<BOARD> deleter( aAppendToMe ? nullptr : m_board );
+    m_board = &aBoard;
 
     for( FOOTPRINT* fp : m_cachedFootprints )
         delete fp;
@@ -2061,9 +2081,6 @@ BOARD* PCB_IO_GEDA::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
 
     m_board->m_LegacyDesignSettingsLoaded = true;
     m_board->m_LegacyNetclassesLoaded = true;
-
-    deleter.release();
-    return m_board;
 }
 
 

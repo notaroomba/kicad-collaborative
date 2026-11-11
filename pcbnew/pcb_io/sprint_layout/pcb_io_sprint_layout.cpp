@@ -22,6 +22,7 @@
 
 #include <board.h>
 #include <footprint.h>
+#include <pcb_group.h>
 #include <zone.h>
 #include <font/fontconfig.h>
 #include <gestfich.h>
@@ -69,8 +70,9 @@ void PCB_IO_SPRINT_LAYOUT::FootprintEnumerate( wxArrayString& aFootprintNames, c
 }
 
 
-FOOTPRINT* PCB_IO_SPRINT_LAYOUT::FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                                                bool aKeepUUID, const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_SPRINT_LAYOUT::FootprintLoad( const wxString& aLibraryPath,
+                                                                const wxString& aFootprintName, bool aKeepUUID,
+                                                                const std::map<std::string, UTF8>* aProperties )
 {
     wxFileName libFn( aLibraryPath );
     wxFileName lmkPath;
@@ -142,9 +144,8 @@ bool PCB_IO_SPRINT_LAYOUT::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_SPRINT_LAYOUT::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                        const std::map<std::string, UTF8>* aProperties,
-                                        PROJECT* aProject )
+void PCB_IO_SPRINT_LAYOUT::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
 
@@ -184,33 +185,85 @@ BOARD* PCB_IO_SPRINT_LAYOUT::LoadBoard( const wxString& aFileName, BOARD* aAppen
         std::vector<IMPORT_PROJECT_DESC> chosen = m_choose_project_handler( options );
 
         if( chosen.empty() )
-            return nullptr;
+            THROW_IO_CANCELLED();
 
         unsigned long idx = std::stoul( chosen[0].PCBId.ToStdString() );
         boardIndex = static_cast<size_t>( idx );
     }
 
-    std::unique_ptr<BOARD> newBoard( parser.CreateBoard( m_loadedFootprints, boardIndex ) );
-
-    if( !newBoard )
-        THROW_IO_ERRORF( _( "Failed to create board from Sprint Layout file '%s'" ), aFileName );
-
-    if( aAppendToMe )
+    if( aIsNewLoad )
     {
-        for( FOOTPRINT* fp : newBoard->Footprints() )
-            aAppendToMe->Add( static_cast<FOOTPRINT*>( fp->Clone() ) );
-
-        for( BOARD_ITEM* item : newBoard->Drawings() )
-            aAppendToMe->Add( static_cast<BOARD_ITEM*>( item->Clone() ) );
-
-        for( ZONE* zone : newBoard->Zones() )
-            aAppendToMe->Add( static_cast<ZONE*>( zone->Clone() ) );
-
-        return aAppendToMe;
+        if( !parser.CreateBoard( aBoard, m_loadedFootprints, boardIndex ) )
+            THROW_IO_ERRORF( _( "Failed to create board from Sprint Layout file '%s'" ), aFileName );
     }
+    else
+    {
+        // Parse into a scratch board, then copy the design's items into the caller's
+        // board.  The destination keeps its own setup when merging.
+        std::unique_ptr<BOARD>         scratchBoard = std::make_unique<BOARD>();
+        std::map<EDA_ITEM*, EDA_ITEM*> ptrMap;
 
-    newBoard->SetFileName( aFileName );
-    return newBoard.release();
+        if( !parser.CreateBoard( *scratchBoard, m_loadedFootprints, boardIndex ) )
+            THROW_IO_ERRORF( _( "Failed to create board from Sprint Layout file '%s'" ), aFileName );
+
+        for( NETINFO_ITEM* netInfo : scratchBoard->GetNetInfo() )
+        {
+            NETINFO_ITEM* newNetInfo = static_cast<NETINFO_ITEM*>( netInfo->Clone() );
+            ptrMap[netInfo] = newNetInfo;
+            aBoard.Add( newNetInfo );
+        }
+
+        for( FOOTPRINT* fp : scratchBoard->Footprints() )
+        {
+            FOOTPRINT* newFP = static_cast<FOOTPRINT*>( fp->Clone() );
+            ptrMap[ fp ] = newFP;
+            aBoard.Add( newFP );
+        }
+
+        for( BOARD_ITEM* drawing : scratchBoard->Drawings() )
+        {
+            BOARD_ITEM* newDrawing = static_cast<BOARD_ITEM*>( drawing->Clone() );
+            ptrMap[drawing] = newDrawing;
+            aBoard.Add( newDrawing );
+        }
+
+        for( ZONE* zone : scratchBoard->Zones() )
+        {
+            ZONE* newZone = static_cast<ZONE*>( zone->Clone() );
+            ptrMap[zone] = newZone;
+            aBoard.Add( newZone );
+        }
+
+        for( PCB_GROUP* group : scratchBoard->Groups() )
+        {
+            PCB_GROUP* newGroup = static_cast<PCB_GROUP*>( group->Clone() );
+            ptrMap[group] = newGroup;
+            aBoard.Add( newGroup );
+        }
+
+        // Rebuild groups
+        for( PCB_GROUP* group : scratchBoard->Groups() )
+        {
+            PCB_GROUP* newGroup = static_cast<PCB_GROUP*>( ptrMap[ group ] );
+
+            newGroup->GetItems().clear();
+
+            for( EDA_ITEM* member : group->GetItems() )
+            {
+                if( ptrMap.count( member ) )
+                    newGroup->AddItem( ptrMap[ member ] );
+            }
+        }
+
+        // Rebuild zone nets
+        for( ZONE* zone : scratchBoard->Zones() )
+        {
+            ZONE* newZone = static_cast<ZONE*>( ptrMap[zone] );
+
+            if( newZone && newZone->GetNet() )
+                newZone->SetNet( static_cast<NETINFO_ITEM*>( ptrMap[ newZone->GetNet() ] ) );
+        }
+    }
 }
 
 

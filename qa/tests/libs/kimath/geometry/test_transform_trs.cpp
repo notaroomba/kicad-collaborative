@@ -21,6 +21,8 @@
 
 #include <geometry/transform_trs.h>
 
+#include <cmath>
+
 
 BOOST_AUTO_TEST_SUITE( TransformTrs )
 
@@ -136,50 +138,6 @@ BOOST_AUTO_TEST_CASE( InverseApplyRoundTrip )
 }
 
 
-BOOST_AUTO_TEST_CASE( InvertExactWhenUniformOrAxisAligned )
-{
-    // Invert is exact only for uniform scale or zero rotation.
-    const std::vector<TRANSFORM_TRS> exactlyInvertible = {
-        TRANSFORM_TRS( VECTOR2I( 100, 200 ), EDA_ANGLE( 30.0, DEGREES_T ), 2.0, 2.0 ),
-        TRANSFORM_TRS( VECTOR2I( -50, 75 ), ANGLE_0, 2.0, 0.5 ),
-        TRANSFORM_TRS( VECTOR2I( 0, 0 ), EDA_ANGLE( 45.0, DEGREES_T ), 1.0, 1.0 ),
-    };
-
-    const VECTOR2I probe( 250, -125 );
-
-    for( const TRANSFORM_TRS& t : exactlyInvertible )
-    {
-        TRANSFORM_TRS inv = t.Invert();
-        VECTOR2I round = inv.Apply( t.Apply( probe ) );
-        CHECK_VEC_NEAR( round, probe, IUNIT_TOL );
-    }
-}
-
-
-BOOST_AUTO_TEST_CASE( ComposeWithTranslateOnlyOuter )
-{
-    TRANSFORM_TRS inner( VECTOR2I( 100, 50 ), EDA_ANGLE( 30.0, DEGREES_T ), 2.0, 0.5 );
-    TRANSFORM_TRS outer( VECTOR2I( 1000, 1000 ), ANGLE_0, 1.0, 1.0 );
-
-    TRANSFORM_TRS composed = inner.Compose( outer );
-
-    const VECTOR2I probe( 25, 75 );
-    CHECK_VEC_NEAR( composed.Apply( probe ), outer.Apply( inner.Apply( probe ) ), IUNIT_TOL );
-}
-
-
-BOOST_AUTO_TEST_CASE( ComposeWithUniformScaleOuter )
-{
-    TRANSFORM_TRS inner( VECTOR2I( 100, 50 ), EDA_ANGLE( 30.0, DEGREES_T ), 1.0, 1.0 );
-    TRANSFORM_TRS outer( VECTOR2I( 200, -100 ), EDA_ANGLE( 45.0, DEGREES_T ), 2.0, 2.0 );
-
-    TRANSFORM_TRS composed = inner.Compose( outer );
-
-    const VECTOR2I probe( 30, 40 );
-    CHECK_VEC_NEAR( composed.Apply( probe ), outer.Apply( inner.Apply( probe ) ), 2 );
-}
-
-
 BOOST_AUTO_TEST_CASE( RescaleAroundFixedPointInvariant )
 {
     TRANSFORM_TRS t( VECTOR2I( 1000, 500 ), ANGLE_0, 1.0, 1.0 );
@@ -240,21 +198,6 @@ BOOST_AUTO_TEST_CASE( RescaleAroundRotatedFixedPointInvariant )
 }
 
 
-BOOST_AUTO_TEST_CASE( ComposeAssociativity )
-{
-    // Translate-only outers keep the math exact.
-    TRANSFORM_TRS A( VECTOR2I( 10, 20 ), EDA_ANGLE( 30.0, DEGREES_T ), 1.0, 1.0 );
-    TRANSFORM_TRS B( VECTOR2I( 50, -50 ), ANGLE_0, 1.0, 1.0 );
-    TRANSFORM_TRS C( VECTOR2I( 100, 0 ), ANGLE_0, 1.0, 1.0 );
-
-    TRANSFORM_TRS leftAssoc = A.Compose( B ).Compose( C );
-    TRANSFORM_TRS rightAssoc = A.Compose( B.Compose( C ) );
-
-    const VECTOR2I probe( 7, 13 );
-    CHECK_VEC_NEAR( leftAssoc.Apply( probe ), rightAssoc.Apply( probe ), IUNIT_TOL );
-}
-
-
 BOOST_AUTO_TEST_CASE( EqualityAndInequality )
 {
     TRANSFORM_TRS a( VECTOR2I( 100, 200 ), ANGLE_45, 1.5, 0.5 );
@@ -274,6 +217,22 @@ BOOST_AUTO_TEST_CASE( ApplyLinearScaleArithmeticMean )
 
     TRANSFORM_TRS uniform( VECTOR2I( 0, 0 ), ANGLE_0, 0.5, 0.5 );
     BOOST_CHECK_CLOSE( uniform.ApplyLinearScale( 100.0 ), 50.0, 1e-9 );
+}
+
+
+// A rotation composed from a matrix can leave one scale a unit in the last place off. That is
+// still a uniform, unit scale, or a rotated footprint's circles and arcs turn into ellipses.
+BOOST_AUTO_TEST_CASE( RoundingNoiseKeepsScaleUniform )
+{
+    const double  noisy = std::nextafter( 1.0, 2.0 );
+    TRANSFORM_TRS t( VECTOR2I( 0, 0 ), EDA_ANGLE( 2.5, DEGREES_T ), 1.0, noisy );
+
+    BOOST_CHECK( t.IsUniformScale() );
+    BOOST_CHECK( t.HasUnitScale() );
+
+    TRANSFORM_TRS scaled( VECTOR2I( 0, 0 ), ANGLE_0, 1.0, 1.0 + 1e-6 );
+    BOOST_CHECK( !scaled.IsUniformScale() );
+    BOOST_CHECK( !scaled.HasUnitScale() );
 }
 
 

@@ -115,7 +115,7 @@ void SCH_IO_KICAD_LEGACY::checkpoint()
                                                             / std::max( 1U, m_lineCount ) );
 
             if( !m_progressReporter->KeepRefreshing() )
-                THROW_IO_ERROR( _( "Open canceled by user." ) );
+                THROW_IO_CANCELLED();
 
             m_lastProgressLine = curLine;
         }
@@ -285,7 +285,7 @@ void SCH_IO_KICAD_LEGACY::loadFile( const wxString& aFileName, SCH_SCREEN* aScre
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "Open canceled by user." ) );
+            THROW_IO_CANCELLED();
 
         m_lineReader = &reader;
         m_lineCount = 0;
@@ -353,7 +353,13 @@ void SCH_IO_KICAD_LEGACY::LoadContent( LINE_READER& aReader, SCH_SCREEN* aScreen
         else if( strCompare( "Text", line ) )
             aScreen->Append( loadText( aReader ) );
         else if( strCompare( "BusAlias", line ) )
-            aScreen->AddBusAlias( loadBusAlias( aReader, aScreen ) );
+        {
+            auto alias = loadBusAlias( aReader, aScreen );
+            const SCHEMATIC* schematic = aScreen->Schematic();
+
+            if( m_appending || !schematic || !schematic->HasProjectBusAliases() )
+                aScreen->AddBusAlias( std::move( alias ) );
+        }
         else if( strCompare( "Kmarq", line ) )
             continue; // Ignore legacy (until 2009) ERC marker entry
         else if( strCompare( "$EndSCHEMATC", line ) )
@@ -1862,9 +1868,6 @@ void SCH_IO_KICAD_LEGACY::saveSheet( SCH_SHEET* aSheet )
     {
         int type, side;
 
-        if( pin->GetText().IsEmpty() )
-            break;
-
         switch( pin->GetSide() )
         {
         default:
@@ -2166,12 +2169,12 @@ LIB_SYMBOL* SCH_IO_KICAD_LEGACY::LoadSymbol( const wxString& aLibraryPath,
 }
 
 
-void SCH_IO_KICAD_LEGACY::SaveSymbol( const wxString& aLibraryPath, const LIB_SYMBOL* aSymbol,
+void SCH_IO_KICAD_LEGACY::SaveSymbol( const wxString& aLibraryPath, std::unique_ptr<LIB_SYMBOL> aSymbol,
                                       const std::map<std::string, UTF8>* aProperties )
 {
     cacheLib( aLibraryPath, aProperties );
 
-    m_cache->AddSymbol( aSymbol );
+    m_cache->AddSymbol( std::move( aSymbol ) );
 
     if( !isBuffering( aProperties ) )
         m_cache->Save( writeDocFile( aProperties ) );

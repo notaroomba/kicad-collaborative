@@ -196,15 +196,31 @@ void VIEW_GROUP::ViewDraw( int aLayer, VIEW* aView ) const
         {
             gal->AdvanceDepth();
 
+            // Net names dominate a large selection, so they follow the zoom level as when not selected.
+            // A GAL with stroke LOD tests each name's threshold at draw time so zooming need not rebuild.
+            const bool netNames = IsNetnameLayer( layer );
+            const bool lodPerStroke = netNames && gal->SupportsStrokeLevelOfDetail();
+
             for( VIEW_ITEM* item : layer_item_map[ layer ] )
             {
+                const double lod = item->ViewGetLOD( layer, aView );
+
                 // Ignore LOD scale for selected items, but don't ignore things explicitly
                 // hidden.
-                if( item->ViewGetLOD( layer, aView ) == LOD_HIDE )
+                if( lod == LOD_HIDE )
                     continue;
+
+                if( netNames && !lodPerStroke && !aView->IsShownAtScale( lod ) )
+                    continue;
+
+                if( lodPerStroke )
+                    gal->SetStrokeLevelOfDetail( lod );
 
                 if( !painter->Draw( item, layer ) )
                     item->ViewDraw( layer, aView ); // Alternative drawing method
+
+                if( lodPerStroke )
+                    gal->SetStrokeLevelOfDetail( 0.0 );
             }
         }
     }

@@ -21,8 +21,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <sch_render_settings.h>
 #include "sch_pin.h"
 
+#include <connectivity/conn_pin_name.h>
 #include <lib_id.h>
 #include <lib_symbol.h>
 #include <pin_map.h>
@@ -193,6 +195,7 @@ SCH_PIN::SCH_PIN( SCH_SYMBOL* aParentSymbol, SCH_PIN* aLibPin ) :
 
     SetName( m_libPin->GetName() );
     SetNumber( m_libPin->GetNumber() );
+    SetCustomProperties( m_libPin->GetCustomProperties() );
     m_position = m_libPin->GetPosition();
 
     m_layer = LAYER_PIN;
@@ -268,6 +271,29 @@ SCH_PIN& SCH_PIN::operator=( const SCH_PIN& aPin )
 }
 
 
+void SCH_PIN::swapData( SCH_ITEM* aItem )
+{
+    wxCHECK( aItem && aItem->Type() == SCH_PIN_T, /* void */ );
+
+    SCH_PIN* pin = static_cast<SCH_PIN*>( aItem );
+
+    std::swap( m_libPin, pin->m_libPin );
+    std::swap( m_alternates, pin->m_alternates );
+    std::swap( m_alt, pin->m_alt );
+    std::swap( m_name, pin->m_name );
+    std::swap( m_number, pin->m_number );
+    std::swap( m_position, pin->m_position );
+    std::swap( m_length, pin->m_length );
+    std::swap( m_orientation, pin->m_orientation );
+    std::swap( m_shape, pin->m_shape );
+    std::swap( m_type, pin->m_type );
+    std::swap( m_hidden, pin->m_hidden );
+    std::swap( m_numTextSize, pin->m_numTextSize );
+    std::swap( m_nameTextSize, pin->m_nameTextSize );
+    std::swap( m_isDangling, pin->m_isDangling );
+}
+
+
 void SCH_PIN::Serialize( google::protobuf::Any& aContainer ) const
 {
     using namespace kiapi::common;
@@ -278,7 +304,7 @@ void SCH_PIN::Serialize( google::protobuf::Any& aContainer ) const
     pin.set_name( GetBaseName().ToUTF8() );
     pin.set_number( GetNumber().ToUTF8() );
 
-    PackVector2( *pin.mutable_position(), GetPosition(), schIUScale );
+    PackVector2( *pin.mutable_position(), GetLocalPosition(), schIUScale );
     PackDistance( *pin.mutable_length(), GetLength(), schIUScale );
     pin.set_orientation( ToProtoEnum<PIN_ORIENTATION, SchematicPinOrientation>( GetOrientation() ) );
 
@@ -301,7 +327,9 @@ void SCH_PIN::Serialize( google::protobuf::Any& aContainer ) const
         pin.set_active_alternate( m_alt.ToUTF8() );
 
     kiapi::common::PackCustomProperties( pin.mutable_custom_properties(), *this );
-    aContainer.PackFrom( pin );
+
+    if( !aContainer.PackFrom( pin ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_PIN" ) );
 }
 
 
@@ -569,9 +597,11 @@ bool SCH_PIN::IsDangling() const
 }
 
 
-void SCH_PIN::SetIsDangling( bool aIsDangling )
+bool SCH_PIN::SetIsDangling( bool aIsDangling )
 {
+    const bool changed = m_isDangling != aIsDangling;
     m_isDangling = aIsDangling;
+    return changed;
 }
 
 
@@ -610,18 +640,9 @@ bool SCH_PIN::Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) cons
         return true;
     }
 
-    SCH_CONNECTION* connection = nullptr;
     SCH_SHEET_PATH* sheetPath = reinterpret_cast<SCH_SHEET_PATH*>( aAuxData );
 
-    if( schSearchData.searchNetNames && sheetPath && ( connection = Connection( sheetPath ) ) )
-    {
-        wxString netName = connection->GetNetName();
-
-        if( EDA_ITEM::Matches( netName, aSearchData ) )
-            return true;
-    }
-
-    return false;
+    return schSearchData.searchNetNames && sheetPath && MatchesNetName( aSearchData, sheetPath );
 }
 
 
@@ -782,34 +803,12 @@ wxString SCH_PIN::GetEffectivePadNumber( const SCH_SHEET_PATH& aSheet, const wxS
         return map->GetPadNumber( pinNumber );
     }
 
-    // 2. IDENTITY - no entry, but the footprint carries a pad with this number.
-    if( aFootprintPadNumbers && aFootprintPadNumbers->count( pinNumber ) )
+    if( aFootprintPadNumbers && HasIdentityPad( pinNumber, *aFootprintPadNumbers ) )
     {
         if( aState )
             *aState = PAD_RESOLUTION::IDENTITY;
 
         return pinNumber;
-    }
-
-    // A stacked pin like [A1,A12] names several pads. Match on those.
-    if( aFootprintPadNumbers )
-    {
-        bool                  valid = false;
-        std::vector<wxString> logicalNumbers = ExpandStackedPinNotation( pinNumber, &valid );
-
-        if( valid )
-        {
-            for( const wxString& logicalNumber : logicalNumbers )
-            {
-                if( aFootprintPadNumbers->count( logicalNumber ) )
-                {
-                    if( aState )
-                        *aState = PAD_RESOLUTION::IDENTITY;
-
-                    return pinNumber;
-                }
-            }
-        }
     }
 
     // 3. UNMAPPED, or assumed identity when no footprint is available (the painter path).
@@ -820,12 +819,24 @@ wxString SCH_PIN::GetEffectivePadNumber( const SCH_SHEET_PATH& aSheet, const wxS
 }
 
 
+bool SCH_PIN::HasIdentityPad( const wxString& aPinNumber, const std::set<wxString>& aPads )
+{
+    if( aPads.contains( aPinNumber ) )
+        return true;
+
+    bool valid = false;
+    const auto numbers = ExpandStackedPinNotation( aPinNumber, &valid );
+    return valid && std::any_of( numbers.begin(), numbers.end(),
+                                [&]( const wxString& number ) { return aPads.contains( number ); } );
+}
+
+
 wxString SCH_PIN::GetEffectivePadNumber( const SCH_SHEET_PATH& aSheet, const wxString& aVariantName ) const
 {
     LIB_ID footprintLibId;
 
     if( const SCH_SYMBOL* symbol = dynamic_cast<const SCH_SYMBOL*>( GetParentSymbol() ) )
-        footprintLibId.Parse( symbol->GetFootprintFieldText( true, &aSheet, false, aVariantName ) );
+        footprintLibId.Parse( symbol->GetFootprintFieldText( &aSheet, RESOLVED, aVariantName ) );
 
     return GetEffectivePadNumber( aSheet, aVariantName, footprintLibId, nullptr );
 }
@@ -1684,7 +1695,7 @@ wxString SCH_PIN::GetDefaultNetName( const SCH_SHEET_PATH& aPath, bool aForceNoC
 
         if( parent && ( parent->IsGlobalPower() || parent->IsLocalPower() ) )
         {
-            return EscapeString( symbol->GetValue( true, &aPath, false ), CTX_NETNAME );
+            return EscapeString( symbol->GetValue( &aPath, FOR_NETNAME ), CTX_NETNAME );
         }
         else
         {
@@ -1704,78 +1715,40 @@ wxString SCH_PIN::GetDefaultNetName( const SCH_SHEET_PATH& aPath, bool aForceNoC
             return it->second.first;
     }
 
-    wxString name = "Net-(";
-    bool unconnected = false;
+    SCH_CONNECTIVITY::PIN_NAME_FACT fact;
+    fact.name = m_libPin ? m_libPin->GetShownName() : wxString( "??" );
+    fact.shownNumber = m_libPin ? m_libPin->GetShownNumber() : wxString( "??" );
+    fact.number = m_libPin ? m_libPin->GetNumber() : wxString( "??" );
+    fact.padNumber = m_libPin ? m_libPin->GetSmallestStackedPadNumber() : fact.shownNumber;
+    fact.noConnect = GetType() == ELECTRICAL_PINTYPE::PT_NC;
 
-    if( aForceNoConnect || GetType() == ELECTRICAL_PINTYPE::PT_NC )
+    if( !aForceNoConnect && !fact.noConnect )
     {
-        unconnected = true;
-        name = ( "unconnected-(" );
-    }
-
-    bool annotated = true;
-
-    std::vector<const SCH_PIN*> pins = symbol->GetPins( &aPath );
-    bool has_multiple = false;
-
-    for( const SCH_PIN* pin : pins )
-    {
-        if( pin->GetShownName() == GetShownName()
-                && pin->GetShownNumber() != GetShownNumber()
-                && unconnected == ( pin->GetType() == ELECTRICAL_PINTYPE::PT_NC ) )
+        for( const SCH_PIN* pin : symbol->GetPins( &aPath ) )
         {
-            has_multiple = true;
-            break;
+            if( pin->GetShownName() == GetShownName()
+                    && pin->GetShownNumber() != GetShownNumber()
+                    && pin->GetType() != ELECTRICAL_PINTYPE::PT_NC )
+            {
+                fact.hasDuplicateName = true;
+                break;
+            }
         }
     }
 
-    wxString libPinShownName   = m_libPin ? m_libPin->GetShownName()   : wxString( "??" );
-    wxString libPinShownNumber = m_libPin ? m_libPin->GetShownNumber() : wxString( "??" );
-    wxString effectivePadNumber = m_libPin ? m_libPin->GetSmallestStackedPadNumber() : libPinShownNumber;
-
-    if( effectivePadNumber != libPinShownNumber )
+    if( fact.padNumber != fact.shownNumber )
     {
         wxLogTrace( traceStackedPins,
                     wxString::Format( "GetDefaultNetName: stacked pin shown='%s' -> using smallest logical='%s'",
-                                      libPinShownNumber, effectivePadNumber ) );
+                                      fact.shownNumber, fact.padNumber ) );
     }
 
-    // Use timestamp for unannotated symbols
-    if( symbol->GetRef( &aPath, false ).Last() == '?' )
-    {
-        name << GetParentSymbol()->m_Uuid.AsString();
+    const SCH_CONNECTIVITY::PIN_NAME_REFERENCE reference{
+        symbol->GetRef( &aPath, false ), symbol->GetRef( &aPath, true ), symbol->m_Uuid.AsString()
+    };
+    const wxString name = SCH_CONNECTIVITY::RenderPinNetName( fact, reference, aForceNoConnect );
 
-        wxString libPinNumber = m_libPin ? m_libPin->GetNumber() : wxString( "??" );
-        // Apply same smallest-logical substitution for unannotated symbols
-        if( effectivePadNumber != libPinShownNumber && !effectivePadNumber.IsEmpty() )
-            libPinNumber = effectivePadNumber;
-
-        name << "-Pad" << libPinNumber << ")";
-        annotated = false;
-    }
-    else if( !libPinShownName.IsEmpty() && ( libPinShownName != libPinShownNumber ) )
-    {
-        // Pin names might not be unique between different units so we must have the
-        // unit token in the reference designator
-        name << symbol->GetRef( &aPath, true );
-        name << "-" << EscapeString( libPinShownName, CTX_NETNAME );
-
-        if( unconnected || has_multiple )
-        {
-            // Use effective (possibly de-stacked) pad number in net name
-            name << "-Pad" << EscapeString( effectivePadNumber, CTX_NETNAME );
-        }
-
-        name << ")";
-    }
-    else
-    {
-        // Pin numbers are unique, so we skip the unit token
-        name << symbol->GetRef( &aPath, false );
-        name << "-Pad" << EscapeString( effectivePadNumber, CTX_NETNAME ) << ")";
-    }
-
-    if( annotated )
+    if( !reference.reference.IsEmpty() && reference.reference.Last() != '?' )
         m_net_name_map[ aPath ] = std::make_pair( name, aForceNoConnect );
 
     return name;
@@ -1865,6 +1838,14 @@ bool SCH_PIN::HasConnectivityChanges( const SCH_ITEM* aItem,
             return true;
     }
 
+    // Similarly, changing to/from PT_NC affects whether or not the pin participates
+    // in the connectivity graph.
+    if( GetType() == ELECTRICAL_PINTYPE::PT_NC || pin->GetType() == ELECTRICAL_PINTYPE::PT_NC )
+    {
+        if( GetType() != pin->GetType() )
+            return true;
+    }
+
     return false;
 }
 
@@ -1921,7 +1902,7 @@ wxString SCH_PIN::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull
         const SCH_SYMBOL* symbol = static_cast<const SCH_SYMBOL*>( GetParentSymbol() );
 
         return wxString::Format( "Symbol %s %s",
-                                 UnescapeString( symbol->GetField( FIELD_T::REFERENCE )->GetText() ),
+                                 UnescapeString( symbol->GetCurrentSheetRef() ),
                                  itemDesc );
     }
 
@@ -1974,82 +1955,83 @@ wxString SCH_PIN::getItemDescription( ALT* aAlt ) const
 }
 
 
-int SCH_PIN::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
+namespace
 {
-    // Ignore the UUID here
-    // And the position, which we'll do after the number.
-    int retv = SCH_ITEM::compare( aOther, aCompareFlags & ~( COMPARE_FLAGS::UUID | COMPARE_FLAGS::POSITION ) );
+struct PIN_COMPARISON_VIEW
+{
+    int unit;
+    int bodyStyle;
+    bool isPrivate;
+    VECTOR2I position;
+    const wxString& number;
+    std::optional<int> length;
+    PIN_ORIENTATION orientation;
+    GRAPHIC_PINSHAPE shape;
+    ELECTRICAL_PINTYPE type;
+    std::optional<bool> hidden;
+    std::optional<int> numberTextSize;
+    std::optional<int> nameTextSize;
+    const std::map<wxString, PIN_ALTERNATE>& alternates;
 
-    if( retv )
-        return retv;
-
-    const SCH_PIN* tmp = static_cast<const SCH_PIN*>( &aOther );
-
-    wxCHECK( tmp, -1 );
-
-    if( m_number != tmp->m_number )
+    int Compare( const PIN_COMPARISON_VIEW& aOther, int aCompareFlags ) const
     {
-        // StrNumCmp: sort the same as the pads in the footprint file
-        return StrNumCmp( m_number, tmp->m_number );
-    }
-
-    if( m_position.x != tmp->m_position.x )
-        return m_position.x - tmp->m_position.x;
-
-    if( m_position.y != tmp->m_position.y )
-        return m_position.y - tmp->m_position.y;
-
-    if( dynamic_cast<const SCH_SYMBOL*>( GetParentSymbol() ) )
-    {
-        if( ( m_libPin == nullptr ) || ( tmp->m_libPin == nullptr ) )
-            return -1;
-
-        retv = m_libPin->compare( *tmp->m_libPin );
-
-        if( retv )
-            return retv;
-
-        retv = m_alt.Cmp( tmp->m_alt );
-
-        if( retv )
-            return retv;
-    }
-
-    if( dynamic_cast<const LIB_SYMBOL*>( GetParentSymbol() ) )
-    {
-        if( m_length != tmp->m_length )
-            return m_length.value_or( 0 ) - tmp->m_length.value_or( 0 );
-
-        if( m_orientation != tmp->m_orientation )
-            return static_cast<int>( m_orientation ) - static_cast<int>( tmp->m_orientation );
-
-        if( m_shape != tmp->m_shape )
-            return static_cast<int>( m_shape ) - static_cast<int>( tmp->m_shape );
-
-        if( m_type != tmp->m_type )
-            return static_cast<int>( m_type ) - static_cast<int>( tmp->m_type );
-
-        if( m_hidden != tmp->m_hidden )
-            return m_hidden.value_or( false ) - tmp->m_hidden.value_or( false );
-
-        if( m_numTextSize != tmp->m_numTextSize )
-            return m_numTextSize.value_or( 0 ) - tmp->m_numTextSize.value_or( 0 );
-
-        if( m_nameTextSize != tmp->m_nameTextSize )
-            return m_nameTextSize.value_or( 0 ) - tmp->m_nameTextSize.value_or( 0 );
-
-        if( m_alternates.size() != tmp->m_alternates.size() )
-            return static_cast<int>( m_alternates.size() - tmp->m_alternates.size() );
-
-        auto lhsItem = m_alternates.begin();
-        auto rhsItem = tmp->m_alternates.begin();
-
-        while( lhsItem != m_alternates.end() )
+        if( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::UNIT )
         {
-            const ALT& lhsAlt = lhsItem->second;
-            const ALT& rhsAlt = rhsItem->second;
+            if( unit != aOther.unit )
+                return unit - aOther.unit;
 
-            retv = lhsAlt.m_Name.Cmp( rhsAlt.m_Name );
+            if( bodyStyle != aOther.bodyStyle )
+                return bodyStyle - aOther.bodyStyle;
+        }
+
+        if( isPrivate != aOther.isPrivate )
+            return isPrivate ? 1 : -1;
+
+        if( number != aOther.number )
+            return StrNumCmp( number, aOther.number );
+
+        if( position.x != aOther.position.x )
+            return position.x - aOther.position.x;
+
+        if( position.y != aOther.position.y )
+            return position.y - aOther.position.y;
+
+        if( length != aOther.length )
+            return length.value_or( 0 ) - aOther.length.value_or( 0 );
+
+        if( orientation != aOther.orientation )
+            return static_cast<int>( orientation ) - static_cast<int>( aOther.orientation );
+
+        if( shape != aOther.shape )
+            return static_cast<int>( shape ) - static_cast<int>( aOther.shape );
+
+        if( type != aOther.type )
+            return static_cast<int>( type ) - static_cast<int>( aOther.type );
+
+        if( ( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::PIN_VISIBILITIES ) && hidden != aOther.hidden )
+            return hidden.value_or( false ) - aOther.hidden.value_or( false );
+
+        if( numberTextSize != aOther.numberTextSize )
+            return numberTextSize.value_or( 0 ) - aOther.numberTextSize.value_or( 0 );
+
+        if( nameTextSize != aOther.nameTextSize )
+            return nameTextSize.value_or( 0 ) - aOther.nameTextSize.value_or( 0 );
+
+        if( !( aCompareFlags & SCH_ITEM::COMPARE_FLAGS::PIN_ALT_DEFS ) )
+            return 0;
+
+        if( alternates.size() != aOther.alternates.size() )
+            return static_cast<int>( alternates.size() - aOther.alternates.size() );
+
+        auto lhsItem = alternates.begin();
+        auto rhsItem = aOther.alternates.begin();
+
+        while( lhsItem != alternates.end() )
+        {
+            const PIN_ALTERNATE& lhsAlt = lhsItem->second;
+            const PIN_ALTERNATE& rhsAlt = rhsItem->second;
+
+            int retv = lhsAlt.m_Name.Cmp( rhsAlt.m_Name );
 
             if( retv )
                 return retv;
@@ -2063,9 +2045,189 @@ int SCH_PIN::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
             ++lhsItem;
             ++rhsItem;
         }
+
+        return 0;
+    }
+};
+
+PIN_COMPARISON_VIEW pinComparisonView( const PIN_COMPARISON_DATA& aData )
+{
+    return { aData.unit, aData.bodyStyle, aData.isPrivate, aData.position, aData.number,
+             aData.length, aData.orientation, aData.shape, aData.type, aData.hidden,
+             aData.numberTextSize, aData.nameTextSize, aData.alternates };
+}
+}
+
+int PIN_COMPARISON_DATA::Compare( const PIN_COMPARISON_DATA& aOther, int aCompareFlags ) const
+{
+    return pinComparisonView( *this ).Compare( pinComparisonView( aOther ), aCompareFlags );
+}
+
+PIN_COMPARISON_DATA SCH_PIN::ComparisonData() const
+{
+    wxASSERT( dynamic_cast<const LIB_SYMBOL*>( GetParentSymbol() ) );
+    return { GetUnit(), GetBodyStyle(), IsPrivate(), m_position, m_number, m_name, m_length,
+             m_orientation, m_shape, m_type, m_hidden, m_numTextSize, m_nameTextSize, m_alternates };
+}
+
+
+int SCH_PIN::compare( const SCH_ITEM& aOther, int aCompareFlags ) const
+{
+    // Ignore the UUID here
+    // And the position, which we'll do after the number.
+    int retv = SCH_ITEM::compare( aOther, aCompareFlags & ~( COMPARE_FLAGS::UUID | COMPARE_FLAGS::POSITION ) );
+
+    if( retv )
+        return retv;
+
+    const SCH_PIN* tmp = static_cast<const SCH_PIN*>( &aOther );
+
+    wxCHECK( tmp, -1 );
+
+    if( dynamic_cast<const LIB_SYMBOL*>( GetParentSymbol() ) )
+    {
+        const PIN_COMPARISON_VIEW lhs{ GetUnit(), GetBodyStyle(), IsPrivate(), m_position, m_number,
+                                       m_length, m_orientation, m_shape, m_type, m_hidden, m_numTextSize,
+                                       m_nameTextSize, m_alternates };
+        const PIN_COMPARISON_VIEW rhs{ tmp->GetUnit(), tmp->GetBodyStyle(), tmp->IsPrivate(), tmp->m_position,
+                                       tmp->m_number, tmp->m_length, tmp->m_orientation, tmp->m_shape, tmp->m_type,
+                                       tmp->m_hidden, tmp->m_numTextSize, tmp->m_nameTextSize, tmp->m_alternates };
+        return lhs.Compare( rhs, aCompareFlags );
+    }
+
+    if( m_number != tmp->m_number )
+    {
+        // Sort based on natural sort (same as pads in the footprint file), but don't consider
+        // naturally-equivalent values to be equal.  Run them through a second, non-natural compare.
+
+        // StrNumCmp: sort the same as the pads in the footprint file
+        retv = StrNumCmp( m_number, tmp->m_number, CMP_T::CASE_SENSITIVE );
+
+        if( retv != 0 )
+            return retv;
+
+        // Don't make the mistake of conflating naturally-equivalent with equal.  Run them through
+        // a second, non-natural compare.
+        retv = m_number.Cmp( tmp->m_number );
+
+        if( retv != 0 )
+            return retv;
+    }
+
+    if( m_name != tmp->m_name )
+    {
+        // Sort based on natural sort (same as pads in the footprint file), but don't consider
+        // naturally-equivalent values to be equal.  Run them through a second, non-natural compare.
+
+        retv = StrNumCmp( m_name, tmp->m_name, CMP_T::CASE_SENSITIVE );
+
+        if( retv != 0 )
+            return retv;
+
+        // Don't make the mistake of conflating naturally-equivalent with equal.  Run them through
+        // a second, non-natural compare.
+        retv = m_name.Cmp( tmp->m_name );
+
+        if( retv != 0 )
+            return retv;
+    }
+
+    if( m_position.x != tmp->m_position.x )
+        return m_position.x - tmp->m_position.x;
+
+    if( m_position.y != tmp->m_position.y )
+        return m_position.y - tmp->m_position.y;
+
+    if( dynamic_cast<const SCH_SYMBOL*>( GetParentSymbol() ) )
+    {
+        if( m_libPin && !tmp->m_libPin )
+            return 1;
+        else if( !m_libPin && tmp->m_libPin )
+            return -1;
+        else if( m_libPin )
+            retv = m_libPin->compare( *tmp->m_libPin, aCompareFlags );
+
+        if( retv )
+            return retv;
+
+        retv = m_alt.Cmp( tmp->m_alt );
+
+        if( retv )
+            return retv;
     }
 
     return 0;
+}
+
+
+bool SCH_PIN::operator==( const SCH_ITEM& aOther ) const
+{
+    if( Type() != aOther.Type() )
+        return false;
+
+    return *this == static_cast<const SCH_PIN&>( aOther );
+}
+
+
+bool SCH_PIN::operator==( const SCH_PIN& aPin ) const
+{
+    // Compare local positions below.  SCH_ITEM's position compare uses global coordinates
+    if( SCH_ITEM::compare( aPin, -1 & ~( COMPARE_FLAGS::UUID | COMPARE_FLAGS::POSITION ) ) != 0 )
+        return false;
+
+    if( m_libPin && aPin.m_libPin )
+    {
+        // Both have a libPin; pins are children of a SCH_SYMBOL.
+        if( !m_libPin->operator==( *aPin.m_libPin ) )
+            return false;
+
+        if( m_alt != aPin.m_alt )
+            return false;
+    }
+    else if( m_libPin != aPin.m_libPin )
+    {
+        // One has a libPin but the other doesn't.
+        return false;
+    }
+    else
+    {
+        // Both libPins are nullptr; pins are children of a LIB_SYMBOL.  Alternates are valid here.
+        if( m_alternates != aPin.m_alternates )
+            return false;
+    }
+
+    if( GetName() != aPin.GetName() )
+        return false;
+
+    if( GetNumber() != aPin.GetNumber() )
+        return false;
+
+    // Don't use GetPosition(); it will return the global coordinates rather than the local ones
+    if( m_position != aPin.m_position )
+        return false;
+
+    if( GetLength() != aPin.GetLength() )
+        return false;
+
+    if( GetOrientation() != aPin.GetOrientation() )
+        return false;
+
+    if( GetShape() != aPin.GetShape() )
+        return false;
+
+    if( GetType() != aPin.GetType() )       // Electrical type
+        return false;
+
+    if( IsVisible() != aPin.IsVisible() )
+        return false;
+
+    if( GetNumberTextSize() != aPin.GetNumberTextSize() )
+        return false;
+
+    if( GetNameTextSize() != aPin.GetNameTextSize() )
+        return false;
+
+    return true;
 }
 
 
@@ -2079,16 +2241,12 @@ double SCH_PIN::Similarity( const SCH_ITEM& aOther ) const
 
     const SCH_PIN* other = static_cast<const SCH_PIN*>( &aOther );
 
-    if( m_libPin )
-    {
-        if( m_number != other->m_number )
-            return 0.0;
-
-        if( m_position != other->m_position )
-            return 0.0;
-
+    if( m_libPin && !other->m_libPin )
+        return 0.0;
+    else if( !m_libPin && other->m_libPin )
+        return 0.0;
+    else if( m_libPin )
         return m_libPin->Similarity( *other->m_libPin );
-    }
 
     double similarity = SimilarityBase( aOther );
 

@@ -25,6 +25,7 @@
 #include "eeschema_test_utils.h"
 
 #include <sch_symbol.h>
+#include <sch_sheet.h>
 #include <sch_sheet_path.h>
 #include <lib_id.h>
 #include <wildcards_and_files_ext.h>
@@ -297,6 +298,52 @@ BOOST_FIXTURE_TEST_CASE( VariantOverrideResolvesTextVars, TEST_VARIANT_FIELD_RES
     BOOST_REQUIRE( !mpn.IsEmpty() );
     BOOST_REQUIRE( description );
 
-    BOOST_CHECK_EQUAL( r1->GetValue( true, &sheet, false, wxS( "TextVars" ) ), mpn + wxS( "-ALT" ) );
-    BOOST_CHECK_EQUAL( description->GetShownText( &sheet, false, 0, wxS( "TextVars" ) ), mpn + wxS( "-DESC" ) );
+    BOOST_CHECK_EQUAL( r1->GetValue( &sheet, INTERNAL, wxS( "TextVars" ) ), mpn + wxS( "-ALT" ) );
+    BOOST_CHECK_EQUAL( description->GetShownText( &sheet, INTERNAL, wxS( "TextVars" ) ), mpn + wxS( "-DESC" ) );
+
+    m_schematic->AddVariant( wxS( "TextVars" ) );
+    SetVariantField( r1, wxS( "TextVars" ), wxS( "MPN" ), wxS( "REQUESTED-MPN" ) );
+    r1->GetField( FIELD_T::VALUE )->SetText( wxS( "${MPN}-BASE" ) );
+    description->SetText( wxS( "${MPN}-BASE-DESC" ) );
+
+    for( const wxString& active : { wxString(), wxString( "TextVars" ) } )
+    {
+        m_schematic->SetCurrentVariant( active );
+
+        for( const wxString& requested : { wxString(), wxString( "TextVars" ) } )
+        {
+            BOOST_TEST_CONTEXT( "active=" << active << ", requested=" << requested )
+            {
+                const wxString expectedMpn = requested.empty() ? mpn : wxString( "REQUESTED-MPN" );
+                const wxString expectedValue = expectedMpn + ( requested.empty() ? "-BASE" : "-ALT" );
+                const wxString expectedDescription = expectedMpn + ( requested.empty() ? "-BASE-DESC" : "-DESC" );
+                BOOST_CHECK_EQUAL( r1->GetField( FIELD_T::VALUE )->GetShownText( &sheet, INTERNAL, requested ),
+                                   expectedValue );
+                BOOST_CHECK_EQUAL( description->GetShownText( &sheet, INTERNAL, requested ), expectedDescription );
+                BOOST_CHECK_EQUAL( r1->GetValue( &sheet, INTERNAL, requested ), expectedValue );
+            }
+        }
+    }
+}
+
+
+BOOST_FIXTURE_TEST_CASE( SheetFieldVariantResolvesInsideSubsheet, KI_TEST::SCHEMATIC_TEST_FIXTURE )
+{
+    LoadSchematic( wxFileName( KI_TEST::GetEeschemaTestDataDir(), wxS( "issue13212" ),
+                               FILEEXT::KiCadSchematicFileExtension ) );
+
+    SCH_SHEET_PATH childPath = m_schematic->Hierarchy()[1];
+    SCH_SHEET_PATH parentPath = childPath;
+    SCH_SHEET*     sheet = childPath.Last();
+
+    parentPath.pop_back();
+    sheet->AddField( SCH_FIELD( sheet, FIELD_T::SHEET_USER, wxS( "Owner" ) ) )->SetText( wxS( "BASE" ) );
+
+    m_schematic->AddVariant( wxS( "Alt" ) );
+    sheet->SetFieldText( wxS( "Owner" ), wxS( "ALT" ), &parentPath, wxS( "Alt" ) );
+    m_schematic->SetCurrentVariant( wxS( "Alt" ) );
+
+    wxString token = wxS( "Owner" );
+    BOOST_REQUIRE( sheet->ResolveTextVar( &childPath, &token, 0 ) );
+    BOOST_CHECK_EQUAL( token, wxS( "ALT" ) );
 }

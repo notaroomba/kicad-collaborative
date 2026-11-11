@@ -94,6 +94,11 @@ VECTOR2I SELECTION::GetCenter() const
     static const std::vector<KICAD_T> textTypes = { SCH_TEXT_T, SCH_LABEL_LOCATE_ANY_T };
     bool                              hasOnlyText = true;
 
+    // GetCenter() has no meaning for an empty selection, but that's no reason to go on and
+    // divide by zero
+    if( m_items.empty() )
+        return VECTOR2I();
+
     // If the selection contains only texts calculate the center as the mean of all positions
     // instead of using the center of the total bounding box. Otherwise rotating the selection will
     // also translate it.
@@ -191,7 +196,8 @@ const std::vector<KIGFX::VIEW_ITEM*> SELECTION::updateDrawList() const
 {
     std::vector<VIEW_ITEM*> items;
 
-    for( EDA_ITEM* item : m_items )
+    // m_items is ordered by address, which would make the draw order vary from run to run
+    for( EDA_ITEM* item : GetItemsSortedBySelectionOrder() )
         items.push_back( item );
 
     return items;
@@ -200,6 +206,9 @@ const std::vector<KIGFX::VIEW_ITEM*> SELECTION::updateDrawList() const
 
 bool SELECTION::AreAllItemsIdentical() const
 {
+    if( m_items.empty() )
+        return true;
+
     return std::all_of( m_items.begin() + 1, m_items.end(),
             [&]( const EDA_ITEM* r )
             {

@@ -301,8 +301,12 @@ bool DRC_TEST_PROVIDER_PHYSICAL_CLEARANCE::Run()
                             switch( shape->GetShape() )
                             {
                             case SHAPE_T::POLY:
-                                testShapeLineChain( shape->GetPolyShape().Outline( 0 ), shape->GetWidth(), layer,
-                                                    item, c );
+                                if( !shape->GetPolyShape().IsEmpty() )
+                                {
+                                    testShapeLineChain( shape->GetPolyShape().Outline( 0 ), shape->GetWidth(),
+                                                        layer, item, c );
+                                }
+
                                 break;
 
                             case SHAPE_T::BEZIER:
@@ -748,7 +752,7 @@ void DRC_TEST_PROVIDER_PHYSICAL_CLEARANCE::testItemAgainstZones( BOARD_ITEM* aIt
         if( !testClearance && !testHoles )
             return;
 
-        DRC_RTREE*     zoneRTree = m_board->m_CopperZoneRTreeCache[ zone ].get();
+        DRC_RTREE*     zoneRTree = m_board->GetCopperZoneRTree( zone );
         DRC_CONSTRAINT constraint;
         bool           colliding;
         int            clearance = -1;
@@ -782,15 +786,14 @@ void DRC_TEST_PROVIDER_PHYSICAL_CLEARANCE::testItemAgainstZones( BOARD_ITEM* aIt
                 }
             }
 
+            // If we have an RTree it's the fastest way to do a collision.  After that, avoid GetBoardOutline()
+            // if we can, which makes a copy of the poly.
             if( IsCopperLayer( aLayer ) && zoneRTree )
-            {
                 colliding = zoneRTree->QueryColliding( itemBBox, itemShape.get(), aLayer, clearance, &actual, &pos );
-            }
+            else if( zone->GetParentFootprint() )
+                colliding = zone->GetBoardOutline().Collide( itemShape.get(), clearance, &actual, &pos );
             else
-            {
-                SHAPE_POLY_SET boardOutline = zone->GetBoardOutline();
-                colliding = boardOutline.Collide( itemShape.get(), clearance, &actual, &pos );
-            }
+                colliding = zone->Outline()->Collide( itemShape.get(), clearance, &actual, &pos );
 
             if( colliding )
             {
@@ -826,15 +829,20 @@ void DRC_TEST_PROVIDER_PHYSICAL_CLEARANCE::testItemAgainstZones( BOARD_ITEM* aIt
 
                 if( constraint.GetSeverity() != RPT_SEVERITY_IGNORE && clearance > 0 )
                 {
+                    // If we have an RTree it's the fastest way to do a collision.  After that, avoid GetBoardOutline()
+                    // if we can, which makes a copy of the poly.
                     if( IsCopperLayer( aLayer ) && zoneRTree )
                     {
                         colliding = zoneRTree->QueryColliding( itemBBox, holeShape.get(), aLayer, clearance,
                                                                &actual, &pos );
                     }
+                    else if( zone->GetParentFootprint() )
+                    {
+                        colliding = zone->GetBoardOutline().Collide( holeShape.get(), clearance, &actual, &pos );
+                    }
                     else
                     {
-                        SHAPE_POLY_SET boardOutline = zone->GetBoardOutline();
-                        colliding = boardOutline.Collide( holeShape.get(), clearance, &actual, &pos );
+                        colliding = zone->Outline()->Collide( holeShape.get(), clearance, &actual, &pos );
                     }
 
                     if( colliding )

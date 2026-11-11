@@ -86,8 +86,7 @@ void FILTER_COMBOPOPUP_LISTBOX::OnDrawItem( wxDC& aDC, const wxRect& aRect, size
     }
     else
     {
-        wxListBox dummy( GetParent(), wxID_ANY );
-        aDC.SetTextForeground( dummy.GetForegroundColour() );
+        aDC.SetTextForeground( wxListBox::GetClassDefaultAttributes( GetWindowVariant() ).colFg );
     }
 
     // Draw the text inside the item bounds
@@ -110,8 +109,7 @@ void FILTER_COMBOPOPUP_LISTBOX::OnDrawBackground( wxDC& aDC, const wxRect& aRect
     }
     else
     {
-        wxListBox dummy( GetParent(), wxID_ANY );
-        background = dummy.GetBackgroundColour();
+        background = wxListBox::GetClassDefaultAttributes( GetWindowVariant() ).colBg;
     }
 
     aDC.SetBrush( wxBrush( background ) );
@@ -430,6 +428,12 @@ void FILTER_COMBOPOPUP::onMouseClick( wxMouseEvent& aEvent )
 
 void FILTER_COMBOPOPUP::onKeyDown( wxKeyEvent& aEvent )
 {
+    if( aEvent.ControlDown() || aEvent.CmdDown() )
+    {
+        aEvent.Skip();
+        return;
+    }
+
     switch( aEvent.GetKeyCode() )
     {
     // Control keys go to the parent combobox
@@ -631,7 +635,10 @@ void FILTER_COMBOBOX::onKeyDown( wxKeyEvent& aEvt )
         Popup();
     }
     // Non-control characters go to filterbox in popup for read-only controls
-    else if( key > WXK_SPACE && key < WXK_START && ( GetWindowStyleFlag() & wxCB_READONLY ) )
+    else if( key > WXK_SPACE
+                && key < WXK_START && ( GetWindowStyleFlag() & wxCB_READONLY )
+                && !aEvt.ControlDown()
+                && !aEvt.CmdDown() )
     {
         Popup();
         m_filterPopup->OnStartingKey( aEvt );

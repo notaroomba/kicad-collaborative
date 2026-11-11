@@ -29,6 +29,7 @@
 #include <dialog_shim.h>
 
 #include "widgets/unit_binder.h"
+#include <widgets/text_ctrl_eval.h>
 #include "wx/dcclient.h"
 
 using namespace EDA_UNIT_UTILS::UI;
@@ -43,9 +44,9 @@ UNIT_BINDER::UNIT_BINDER( EDA_DRAW_FRAME* aParent, wxStaticText* aLabel, wxWindo
 {
 }
 
-UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource,
-                          wxStaticText* aLabel, wxWindow* aValueCtrl, wxStaticText* aUnitLabel,
-                          bool aAllowEval, bool aBindFocusEvent ) :
+UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource, wxStaticText* aLabel,
+                          wxWindow* aValueCtrl, wxStaticText* aUnitLabel, bool aAllowEval,
+                          bool aBindFocusEvent ) :
         m_bindFocusEvent( aBindFocusEvent ),
         m_label( aLabel ),
         m_valueCtrl( aValueCtrl ),
@@ -66,6 +67,10 @@ UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource
         m_coordType( ORIGIN_TRANSFORMS::NOT_A_COORD ),
         m_dialogShim( nullptr )
 {
+    // Two evaluators on one control would fight over its text, and only this one knows the units
+    if( TEXT_CTRL_EVAL* evalCtrl = m_allowEval ? dynamic_cast<TEXT_CTRL_EVAL*>( m_valueCtrl ) : nullptr )
+        evalCtrl->DeferToBinder();
+
     if( m_valueCtrl )
     {
         // Register the UNIT_BINDER for control state save/restore
@@ -87,10 +92,20 @@ UNIT_BINDER::UNIT_BINDER( UNITS_PROVIDER* aUnitsProvider, wxWindow* aEventSource
     {
         wxClientDC dc( m_valueCtrl );
 
-        // Gives enough room to display a value in inches in textEntry
-        // 3 digits + '.' + 10 digits
-        wxSize     minSize = m_valueCtrl->GetMinSize();
-        int        minWidth = dc.GetTextExtent( wxT( "XXX.XXXXXXXXXX" ) ).GetWidth();
+        wxSize minSize = m_valueCtrl->GetMinSize();
+        int    minWidth;
+
+        if( m_iuScale->IU_PER_MM <= schIUScale.IU_PER_MM )
+        {
+            // PLEditor and SCH editors don't need as much room
+            minWidth = dc.GetTextExtent( wxT( "XXX.XXXXX" ) ).GetWidth();
+        }
+        else
+        {
+            // Gives enough room to display a value in inches in PCBNew
+            // 3 digits + '.' + 8 digits
+            minWidth = dc.GetTextExtent( wxT( "XXX.XXXXXXXX" ) ).GetWidth();
+        }
 
         if( minSize.GetWidth() < minWidth )
             m_valueCtrl->SetMinSize( wxSize( minWidth, minSize.GetHeight() ) );
@@ -181,37 +196,36 @@ void UNIT_BINDER::SetDataType( EDA_DATA_TYPE aDataType )
 
 void UNIT_BINDER::onUnitsChanged( wxCommandEvent& aEvent )
 {
-    EDA_BASE_FRAME* provider = static_cast<EDA_BASE_FRAME*>( aEvent.GetClientData() );
-
     if( !UnitsInvariant() )
     {
-        int temp = GetIntValue();
-
-        wxComboBox* const          combo = dynamic_cast<wxComboBox*>( m_valueCtrl );
-        std::vector<long long int> comboValues;
-
-        // Read out the current values
-        if( combo )
+        if( EDA_BASE_FRAME* provider = static_cast<EDA_BASE_FRAME*>( aEvent.GetClientData() ) )
         {
-            for( unsigned int i = 0; i < combo->GetCount(); i++ )
+            int temp = GetIntValue();
+
+            wxComboBox* const          combo = dynamic_cast<wxComboBox*>( m_valueCtrl );
+            std::vector<long long int> comboValues;
+
+            // Read out the current values
+            if( combo )
             {
-                const wxString value = combo->GetString( i );
-                long long int  conv = ValueFromString( *m_iuScale, m_units, value, m_dataType );
-                comboValues.push_back( conv );
+                for( unsigned int i = 0; i < combo->GetCount(); i++ )
+                {
+                    const wxString value = combo->GetString( i );
+                    long long int  conv = ValueFromString( *m_iuScale, m_units, value, m_dataType );
+                    comboValues.push_back( conv );
+                }
             }
+
+            SetUnits( provider->GetUserUnits() );
+            m_iuScale = &provider->GetIuScale();
+
+            // Re-populate the combo box with updated values
+            if( combo )
+                SetOptionsList( comboValues );
+
+            if( !IsIndeterminate() )
+                SetValue( temp );
         }
-
-        SetUnits( provider->GetUserUnits() );
-        m_iuScale = &provider->GetIuScale();
-
-        // Re-populate the combo box with updated values
-        if( combo )
-        {
-            SetOptionsList( comboValues );
-        }
-
-        if( !IsIndeterminate() )
-            SetValue( temp );
     }
 
     aEvent.Skip();
@@ -349,7 +363,7 @@ void UNIT_BINDER::onKillFocus( wxFocusEvent& aEvent )
 }
 
 
-wxString valueDescriptionFromLabel( wxStaticText* aLabel )
+static wxString valueDescriptionFromLabel( wxStaticText* aLabel )
 {
     wxString desc = aLabel->GetLabel();
 
@@ -368,10 +382,9 @@ void UNIT_BINDER::delayedFocusHandler( wxCommandEvent& )
 }
 
 
-UNIT_BINDER::RANGE_BOUND UNIT_BINDER::ConvertRangeBound( const EDA_IU_SCALE& aIuScale,
-                                                        EDA_UNITS aBoundUnits, double aBound,
-                                                        EDA_UNITS aDisplayUnits,
-                                                        EDA_DATA_TYPE aDataType )
+UNIT_BINDER::RANGE_BOUND UNIT_BINDER::ConvertRangeBound( const EDA_IU_SCALE& aIuScale, EDA_UNITS aBoundUnits,
+                                                         double aBound, EDA_UNITS aDisplayUnits,
+                                                         EDA_DATA_TYPE aDataType )
 {
     // StringFromValue scales the user value once per dimension (twice for area, thrice for
     // volume), so invert that same chain to bring the bound into internal units.
@@ -382,6 +395,7 @@ UNIT_BINDER::RANGE_BOUND UNIT_BINDER::ConvertRangeBound( const EDA_IU_SCALE& aIu
     case EDA_DATA_TYPE::AREA:     conversions = 2; break;
     case EDA_DATA_TYPE::VOLUME:   conversions = 3; break;
     case EDA_DATA_TYPE::UNITLESS: conversions = 0; break;
+    case EDA_DATA_TYPE::ANGLE:    conversions = 0; break;
     default:                      conversions = 1; break;
     }
 
@@ -393,8 +407,7 @@ UNIT_BINDER::RANGE_BOUND UNIT_BINDER::ConvertRangeBound( const EDA_IU_SCALE& aIu
     // GetText has no UNITLESS label, so asking for units text would assert
     bool addUnitsText = aDataType != EDA_DATA_TYPE::UNITLESS;
 
-    return { boundIU,
-             StringFromValue( aIuScale, aDisplayUnits, boundIU, addUnitsText, aDataType ) };
+    return { boundIU, StringFromValue( aIuScale, aDisplayUnits, boundIU, addUnitsText, aDataType ) };
 }
 
 
@@ -449,11 +462,15 @@ void UNIT_BINDER::SetValue( long long int aValue )
 {
     double   displayValue = m_originTransforms.ToDisplay( aValue, m_coordType );
     wxString textValue = StringFromValue( *m_iuScale, m_units, displayValue, false, m_dataType );
+    wxString formula = formulaYielding( aValue );
 
     if( displayValue == 0 && m_negativeZero )
         SetValue( wxT( "-" ) + textValue );
     else
         SetValue( textValue );
+
+    if( !formula.IsEmpty() )
+        m_eval.Process( formula );
 }
 
 
@@ -531,9 +548,31 @@ wxString UNIT_BINDER::getTextForDoubleValue( double aValue ) const
 }
 
 
+wxString UNIT_BINDER::formulaYielding( long long int aValue ) const
+{
+    wxString formula = m_eval.OriginalText();
+
+    // Evaluate afresh as the units may have changed since the expression was entered
+    if( !m_allowEval || m_needsEval || formula.IsEmpty() || !m_eval.Process( formula ) )
+        return wxEmptyString;
+
+    long long int displayValue = ValueFromString( *m_iuScale, m_units, m_eval.Result(), m_dataType );
+
+    if( std::abs( m_originTransforms.FromDisplay( displayValue, m_coordType ) - aValue ) > 1 )
+        return wxEmptyString;
+
+    return formula;
+}
+
+
 void UNIT_BINDER::ChangeValue( int aValue )
 {
+    wxString formula = formulaYielding( aValue );
+
     ChangeValue( getTextForValue( aValue ) );
+
+    if( !formula.IsEmpty() )
+        m_eval.Process( formula );
 }
 
 
@@ -574,6 +613,54 @@ void UNIT_BINDER::ChangeValue( const wxString& aValue )
 
     if( m_unitLabel )
         m_unitLabel->SetLabel( EDA_UNIT_UTILS::GetLabel( m_units, m_dataType ) );
+}
+
+
+wxString UNIT_BINDER::GetFormula() const
+{
+    wxTextEntry* textEntry = dynamic_cast<wxTextEntry*>( m_valueCtrl );
+
+    if( !m_allowEval || !textEntry )
+        return wxEmptyString;
+
+    // The control holds the expression while it is being edited and its result afterwards
+    wxString formula = m_needsEval ? textEntry->GetValue() : m_eval.OriginalText();
+    double   plainNumber;
+
+    formula.Trim( true ).Trim( false );
+
+    if( formula.IsEmpty() || formula.ToDouble( &plainNumber ) || formula.ToCDouble( &plainNumber ) )
+        return wxEmptyString;
+
+    return m_eval.Process( formula ) ? formula : wxString();
+}
+
+
+bool UNIT_BINDER::RestoreFormula( const wxString& aFormula )
+{
+    if( !m_allowEval || !dynamic_cast<wxTextEntry*>( m_valueCtrl ) || aFormula.IsEmpty() )
+        return false;
+
+    if( !m_eval.Process( aFormula ) )
+    {
+        // A failed expression must not be handed back to the control on the next focus
+        m_eval.Clear();
+        return false;
+    }
+
+    // ChangeValue() resets the evaluator, so the expression has to be processed again afterwards
+    ChangeValue( m_eval.Result() );
+    m_eval.Process( aFormula );
+    m_needsEval = false;
+
+    return true;
+}
+
+
+void UNIT_BINDER::RestoreValue( int aValue, const wxString& aFormula )
+{
+    RestoreFormula( aFormula );
+    ChangeValue( aValue );
 }
 
 

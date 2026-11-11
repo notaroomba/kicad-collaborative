@@ -42,9 +42,6 @@ public:
 
     bool CanReadBoard( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject = nullptr ) override;
-
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override
     {
         // TODO?
@@ -53,6 +50,10 @@ public:
 
     PCB_IO_ALTIUM_CIRCUIT_MAKER();
     ~PCB_IO_ALTIUM_CIRCUIT_MAKER();
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject = nullptr ) override;
 };
 
 #endif // PCB_IO_ALTIUM_CIRCUIT_MAKER_H_

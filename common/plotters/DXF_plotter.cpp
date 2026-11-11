@@ -313,7 +313,8 @@ static const struct
     { "GRAYFOUR",          254 }
 };
 
-// Array of predefined DXF color values, each entry containing blue, green, red components and a corresponding color number.
+// Array of predefined DXF color values, each entry containing blue, green, red components and a corresponding
+// color number.
 static const struct
 {
     int         blue;
@@ -573,7 +574,8 @@ static const struct
     { 204,  204,  204,  DXF_COLOR_T::GRAYFOUR,          }
 };
 
-static const char* getDXFLineType( LINE_STYLE aType )
+
+static const std::string getDXFLineType( LINE_STYLE aType )
 {
     switch( aType )
     {
@@ -593,6 +595,7 @@ static const char* getDXFLineType( LINE_STYLE aType )
         return "CONTINUOUS";
     }
 }
+
 
 int DXF_PLOTTER::FindNearestLegacyColor( int aR, int aG, int aB )
 {
@@ -617,33 +620,9 @@ int DXF_PLOTTER::FindNearestLegacyColor( int aR, int aG, int aB )
 }
 
 
-/**
- * @brief Retrieves the current layer name or layer color name for DXF plotting.
- *
- * This function returns the appropriate layer name or layer color name depending on the specified
- * DXF_LAYER_OUTPUT_MODE. DXF files do not use RGB definitions for colors, so this function converts
- * the color to the nearest legacy color name acceptable in DXF files.
- *
- * @param mode The mode determining whether to return the layer name or layer color name.
- * @param layerId Optional parameter specifying the layer ID to use. If not provided, the current layer ID is used.
- * @return The layer name or color name as a wxString.
- *
- * The function operates in two main modes:
- * 1. Layer_Name or Current_Layer_Name: Returns the name of the specified layer or the current layer.
- *    - Searches through the `m_layersToExport` list to find the matching layer ID.
- *    - If the layer ID is found, returns the corresponding layer name.
- *    - If not found, defaults to "BLACK".
- *
- * 2. Layer_Color_Name or Current_Layer_Color_Name: Returns the color name of the specified layer or the current layer.
- *    - Retrieves the color of the layer from the render settings.
- *    - Finds the nearest legacy color that matches the layer's color.
- *    - Returns the name of the nearest legacy color.
- *
- * If the mode is unknown, returns "Unknown Mode".
- */
-wxString DXF_PLOTTER::GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE aMode, std::optional<PCB_LAYER_ID> alayerId )
+wxString DXF_PLOTTER::GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE aMode, std::optional<PCB_LAYER_ID> aLayerId )
 {
-    PCB_LAYER_ID actualLayerId = ( alayerId.has_value() ) ? alayerId.value() : m_layer;
+    PCB_LAYER_ID actualLayerId = ( aLayerId.has_value() ) ? aLayerId.value() : m_layer;
 
     switch( aMode )
     {
@@ -771,8 +750,13 @@ std::string DXF_PLOTTER::emitEntityHandle( const char* aEntityType, const char* 
                 "  5\n{}\n"
                 "330\n{}\n"
                 "100\nAcDbEntity\n"
-                "  8\n{}\n",
-                aEntityType, handle, owner, aLayerName );
+                "  8\n{}\n"
+                "  6\n{}\n",
+                aEntityType,
+                handle,
+                owner,
+                aLayerName,
+                getDXFLineType( m_currentLineType ) );
 
     if( aSubclass )
         fmt::print( m_outputFile, "100\n{}\n", aSubclass );
@@ -793,7 +777,9 @@ std::string DXF_PLOTTER::emitSymbolTableHeader( const char* aTableName, int aCou
                 "330\n0\n"
                 "100\nAcDbSymbolTable\n"
                 " 70\n{}\n",
-                aTableName, handle, aCount );
+                aTableName,
+                handle,
+                aCount );
 
     return handle;
 }
@@ -882,17 +868,19 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
     // Both are zero-element solid patterns; the actual appearance is inherited from
     // the owning block or layer at render time.
     static const LtypePattern ltypes[] = {
-        { "ByBlock",    "",                       0, 0.0,  ""                                  },
-        { "ByLayer",    "",                       0, 0.0,  ""                                  },
-        { "CONTINUOUS", "Solid line",             0, 0.0,  ""                                  },
+        { "ByBlock",    "",                       0, 0.0,  ""                                        },
+        { "ByLayer",    "",                       0, 0.0,  ""                                        },
+        { "CONTINUOUS", "Solid line",             0, 0.0,  ""                                        },
         { "DASHDOT",    "Dash Dot ____ _ ____ _", 4, 2.0,  " 49\n1.25\n 74\n0\n 49\n-0.25\n 74\n0\n"
-                                                          " 49\n0.25\n 74\n0\n 49\n-0.25\n 74\n0\n" },
-        { "DASHED",     "Dashed __ __ __ __ __",  2, 0.75, " 49\n0.5\n 74\n0\n 49\n-0.25\n 74\n0\n" },
-        { "DOTTED",     "Dotted .  .  .  .",      2, 0.2,  " 49\n0.0\n 74\n0\n 49\n-0.2\n 74\n0\n"  },
+                                                           " 49\n0.25\n 74\n0\n 49\n-0.25\n 74\n0\n" },
+        { "DASHED",     "Dashed __ __ __ __ __",  2, 0.75, " 49\n0.50\n 74\n0\n 49\n-0.25\n 74\n0\n" },
+        { "DOTTED",     "Dotted .  .  .  .",      2, 0.2,  " 49\n0.00\n 74\n0\n 49\n-0.20\n 74\n0\n" },
+        { "DIVIDE",     "Divide ____ _ _ ____",   6, 2.5,  " 49\n1.25\n 74\n0\n 49\n-0.25\n 74\n0\n"
+                                                           " 49\n0.25\n 74\n0\n 49\n-0.25\n 74\n0\n"
+                                                           " 49\n0.25\n 74\n0\n 49\n-0.25\n 74\n0\n" },
     };
 
-    std::string ltypeTableHandle = emitSymbolTableHeader( "LTYPE",
-                                                          static_cast<int>( std::size( ltypes ) ) );
+    std::string ltypeTableHandle = emitSymbolTableHeader( "LTYPE", static_cast<int>( std::size( ltypes ) ) );
 
     for( const LtypePattern& lt : ltypes )
     {
@@ -910,7 +898,8 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                     " 73\n{}\n"
                     " 40\n{}\n"
                     "{}",
-                    nextHandle(), ltypeTableHandle,
+                    nextHandle(),
+                    ltypeTableHandle,
                     lt.name, lt.description, lt.elementCount, lt.patternLength, lt.dashes );
     }
 
@@ -942,7 +931,8 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                     // The standard ISO font (when kicad is built with it the dxf text in
                     // acad matches *perfectly*)
                     "  3\nisocp.shx\n",
-                    nextHandle(), styleTableHandle,
+                    nextHandle(),
+                    styleTableHandle,
                     style_name[i],
                     i < 2 ? 0 : DXF_OBLIQUE_ANGLE );
     }
@@ -1002,7 +992,8 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
         if( !m_layersToExport.empty() )
         {
             layerName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Layer_Name, m_layersToExport.at( i ).first );
-            wxString colorName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Layer_Color_Name, m_layersToExport.at( i ).first );
+            wxString colorName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Layer_Color_Name,
+                                                      m_layersToExport.at( i ).first );
 
             auto it = std::find_if( std::begin( acad_dxf_color_names ), std::end( acad_dxf_color_names ),
                                       [colorName](const auto& layer)
@@ -1034,8 +1025,10 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                     "  2\n{}\n"
                     " 70\n0\n"
                     " 62\n{}\n",
-                    nextHandle(), layerTableHandle,
-                    TO_UTF8( layerName ), colorNumber );
+                    nextHandle(),
+                    layerTableHandle,
+                    TO_UTF8( layerName ),
+                    colorNumber );
 
         if( hasActualColor )
         {
@@ -1088,7 +1081,8 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                 " 70\n0\n"
                 "  0\n"
                 "ENDTAB\n",
-                nextHandle(), dimstyleTableHandle );
+                nextHandle(),
+                dimstyleTableHandle );
 
     // R2004 mandates three empty layout blocks (*Model_Space, *Paper_Space,
     // *Paper_Space0); each BLOCK_RECORD entry carries a 340 hard-pointer to its
@@ -1111,7 +1105,7 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
     m_namedObjectDictHandle = nextHandle();
     m_layoutDictHandle = nextHandle();
 
-    for( const DxfLayout& l : m_dxfLayouts )
+    for( const DXF_LAYOUT& l : m_dxfLayouts )
     {
         fmt::print( m_outputFile,
                     "  0\n"
@@ -1125,7 +1119,10 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                     " 70\n0\n"
                     "280\n1\n"
                     "281\n0\n",
-                    l.blockRecordHandle, blockRecordTableHandle, l.blockName, l.layoutHandle );
+                    l.blockRecordHandle,
+                    blockRecordTableHandle,
+                    l.blockName,
+                    l.layoutHandle );
     }
 
     fmt::print( m_outputFile,
@@ -1142,7 +1139,7 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                 "  2\n"
                 "BLOCKS\n" );
 
-    for( const DxfLayout& l : m_dxfLayouts )
+    for( const DXF_LAYOUT& l : m_dxfLayouts )
     {
         fmt::print( m_outputFile,
                     "  0\n"
@@ -1166,10 +1163,13 @@ bool DXF_PLOTTER::StartPlot( const wxString& aPageNumber )
                     "{}"
                     "  8\n0\n"
                     "100\nAcDbBlockEnd\n",
-                    nextHandle(), l.blockRecordHandle,
+                    nextHandle(),
+                    l.blockRecordHandle,
                     l.isPaperSpace ? " 67\n1\n" : "",
-                    l.blockName, l.blockName,
-                    nextHandle(), l.blockRecordHandle,
+                    l.blockName,
+                    l.blockName,
+                    nextHandle(),
+                    l.blockRecordHandle,
                     l.isPaperSpace ? " 67\n1\n" : "" );
     }
 
@@ -1213,7 +1213,9 @@ void DXF_PLOTTER::writeObjectsSection()
                 "350\n{}\n"
                 "  3\nACAD_PLOTSTYLENAME\n"
                 "350\n{}\n",
-                m_namedObjectDictHandle, acadGroupDictHandle, m_layoutDictHandle,
+                m_namedObjectDictHandle,
+                acadGroupDictHandle,
+                m_layoutDictHandle,
                 m_plotStyleNameDictHandle );
 
     // ACAD_GROUP - empty, but the named-object root requires it.
@@ -1224,7 +1226,8 @@ void DXF_PLOTTER::writeObjectsSection()
                 "330\n{}\n"
                 "100\nAcDbDictionary\n"
                 "281\n1\n",
-                acadGroupDictHandle, m_namedObjectDictHandle );
+                acadGroupDictHandle,
+                m_namedObjectDictHandle );
 
     // ACDBDICTIONARYWDFLT is a dictionary with a default entry; the 340 points to the
     // same Normal placeholder as the dict's "Normal" entry, and every LAYER's 390
@@ -1240,8 +1243,10 @@ void DXF_PLOTTER::writeObjectsSection()
                 "350\n{}\n"
                 "100\nAcDbDictionaryWithDefault\n"
                 "340\n{}\n",
-                m_plotStyleNameDictHandle, m_namedObjectDictHandle,
-                m_plotStyleNormalHandle, m_plotStyleNormalHandle );
+                m_plotStyleNameDictHandle,
+                m_namedObjectDictHandle,
+                m_plotStyleNormalHandle,
+                m_plotStyleNormalHandle );
 
     // ACDBPLACEHOLDER carries no payload; it just gives the "Normal" plot style a
     // handle that LAYER's 390 can resolve.
@@ -1250,7 +1255,8 @@ void DXF_PLOTTER::writeObjectsSection()
                 "ACDBPLACEHOLDER\n"
                 "  5\n{}\n"
                 "330\n{}\n",
-                m_plotStyleNormalHandle, m_plotStyleNameDictHandle );
+                m_plotStyleNormalHandle,
+                m_plotStyleNameDictHandle );
 
     // ACAD_LAYOUT names every LAYOUT object emitted below.
     fmt::print( m_outputFile,
@@ -1260,14 +1266,16 @@ void DXF_PLOTTER::writeObjectsSection()
                 "330\n{}\n"
                 "100\nAcDbDictionary\n"
                 "281\n1\n",
-                m_layoutDictHandle, m_namedObjectDictHandle );
+                m_layoutDictHandle,
+                m_namedObjectDictHandle );
 
-    for( const DxfLayout& l : m_dxfLayouts )
+    for( const DXF_LAYOUT& l : m_dxfLayouts )
     {
         fmt::print( m_outputFile,
                     "  3\n{}\n"
                     "350\n{}\n",
-                    l.name, l.layoutHandle );
+                    l.name,
+                    l.layoutHandle );
     }
 
     // The 4/<name> and 44/45 (width/height) fields are correlated and must change
@@ -1283,7 +1291,7 @@ void DXF_PLOTTER::writeObjectsSection()
     // ModelType set on a paperspace layout, or 147 appearing before 76/77/78.
     for( std::size_t i = 0; i < m_dxfLayouts.size(); ++i )
     {
-        const DxfLayout& l = m_dxfLayouts[i];
+        const DXF_LAYOUT& l = m_dxfLayouts[i];
         int plotLayoutFlag = l.isPaperSpace ? 0 : PLOT_FLAG_MODELTYPE;
 
         fmt::print( m_outputFile,
@@ -1322,10 +1330,12 @@ void DXF_PLOTTER::writeObjectsSection()
                     " 17\n0.0\n 27\n1.0\n 37\n0.0\n"
                     " 76\n0\n"
                     "330\n{}\n",
-                    l.layoutHandle, m_layoutDictHandle,
+                    l.layoutHandle,
+                    m_layoutDictHandle,
                     PAPER_NAME, PAPER_WIDTH_MM, PAPER_HEIGHT_MM,
                     plotLayoutFlag,
-                    l.name, static_cast<int>( i ),
+                    l.name,
+                    static_cast<int>( i ),
                     PAPER_WIDTH_MM, PAPER_HEIGHT_MM,
                     l.blockRecordHandle );
     }
@@ -1371,8 +1381,7 @@ void DXF_PLOTTER::SetColor( const COLOR4D& color )
 }
 
 
-void DXF_PLOTTER::Rect( const VECTOR2I& p1, const VECTOR2I& p2, FILL_T fill, int width,
-                        int aCornerRadius )
+void DXF_PLOTTER::Rect( const VECTOR2I& p1, const VECTOR2I& p2, FILL_T fill, int width, int aCornerRadius )
 {
     wxASSERT( m_outputFile );
 
@@ -1412,11 +1421,10 @@ void DXF_PLOTTER::Rect( const VECTOR2I& p1, const VECTOR2I& p2, FILL_T fill, int
 void DXF_PLOTTER::Circle( const VECTOR2I& centre, int diameter, FILL_T fill, int width )
 {
     wxASSERT( m_outputFile );
-    double   radius = userToDeviceSize( diameter / 2 );
+    double   radius = userToDeviceSize( diameter / 2.0 );
     VECTOR2D centre_dev = userToDeviceCoordinates( centre );
 
     wxString cLayerName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Current_Layer_Name );
-
     std::string layer = TO_UTF8( cLayerName );
 
     if( radius > 0 )
@@ -1469,8 +1477,7 @@ void DXF_PLOTTER::Circle( const VECTOR2I& centre, int diameter, FILL_T fill, int
 }
 
 
-void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFill, int aWidth,
-                            void* aData )
+void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFill, int aWidth, void* aData )
 {
     if( aCornerList.size() <= 1 )
         return;
@@ -1478,7 +1485,7 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
     unsigned last = aCornerList.size() - 1;
 
     // Plot outlines with lines (thickness = 0) to define the polygon
-    if( aWidth <= 0 || aFill == FILL_T::NO_FILL  )
+    if( aWidth <= 0  )
     {
         MoveTo( aCornerList[0] );
 
@@ -1493,12 +1500,23 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
         }
 
         PenFinish();
+
+        return;
+    }
+    // If the polygon outline has thickness, and is not filled (i.e. is a polyline) plot outlines
+    // with thick segments
+    else if( aFill == FILL_T::NO_FILL )
+    {
+        MoveTo( aCornerList[0] );
+
+        for( unsigned ii = 1; ii < aCornerList.size(); ii++ )
+            ThickSegment( aCornerList[ii-1], aCornerList[ii], aWidth, aData );
+
         return;
     }
 
     // The polygon outline has thickness, and is filled
-    // Build and plot the polygon which contains the initial
-    // polygon and its thick outline
+    // Build and plot the polygon which contains the initial polygon and its thick outline
     SHAPE_POLY_SET  bufferOutline;
     SHAPE_POLY_SET  bufferPolybase;
 
@@ -1508,15 +1526,14 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
     for( unsigned ii = 1; ii < aCornerList.size(); ii++ )
     {
         TransformOvalToPolygon( bufferOutline, aCornerList[ ii - 1 ], aCornerList[ ii ],
-            aWidth, GetPlotterArcHighDef(), ERROR_INSIDE );
+                                aWidth, GetPlotterArcHighDef(), ERROR_INSIDE );
     }
 
     // enter the initial polygon:
     for( const VECTOR2I& corner : aCornerList )
         bufferPolybase.Append( corner );
 
-    // Merge polygons to build the polygon which contains the initial
-    // polygon and its thick outline
+    // Merge polygons to build the polygon which contains the initial polygon and its thick outline
 
     // create the outline which contains thick outline:
     bufferPolybase.BooleanAdd( bufferOutline );
@@ -1554,8 +1571,7 @@ void DXF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
 }
 
 
-void DXF_PLOTTER::PlotPoly( const SHAPE_LINE_CHAIN& aLineChain, FILL_T aFill, int aWidth,
-                            void* aData )
+void DXF_PLOTTER::PlotPoly( const SHAPE_LINE_CHAIN& aLineChain, FILL_T aFill, int aWidth, void* aData )
 {
     if( aLineChain.PointCount() == 0 )
         return;
@@ -1578,22 +1594,19 @@ void DXF_PLOTTER::PenTo( const VECTOR2I& pos, char plume )
     wxASSERT( m_outputFile );
 
     if( plume == 'Z' )
-    {
         return;
-    }
 
     VECTOR2D pos_dev = userToDeviceCoordinates( pos );
     VECTOR2D pen_lastpos_dev = userToDeviceCoordinates( m_penLastpos );
 
     if( m_penLastpos != pos && plume == 'D' )
     {
-        wxASSERT( m_currentLineType >= LINE_STYLE::FIRST_TYPE
-                  && m_currentLineType <= LINE_STYLE::LAST_TYPE );
+        wxASSERT( m_currentLineType >= LINE_STYLE::FIRST_TYPE && m_currentLineType <= LINE_STYLE::LAST_TYPE );
 
         // DXF LINE
         wxString    cLayerName = GetCurrentLayerName( DXF_LAYER_OUTPUT_MODE::Current_Layer_Name );
         std::string layer = TO_UTF8( cLayerName );
-        const char* lname = getDXFLineType( static_cast<LINE_STYLE>( m_currentLineType ) );
+        std::string lineStyleName = getDXFLineType( m_currentLineType );
 
         // The linetype name (6) sits on the AcDbEntity side, before the AcDbLine
         // marker.  Emitted inline so group 6 can interleave between the two markers.
@@ -1606,7 +1619,10 @@ void DXF_PLOTTER::PenTo( const VECTOR2I& pos, char plume )
                     "  6\n{}\n"
                     "100\nAcDbLine\n"
                     " 10\n{}\n 20\n{}\n 30\n0\n 11\n{}\n 21\n{}\n 31\n0\n",
-                    nextHandle(), m_modelSpaceHandle, layer, lname,
+                    nextHandle(),
+                    m_modelSpaceHandle,
+                    layer,
+                    lineStyleName,
                     formatCoord( pen_lastpos_dev.x ),
                     formatCoord( pen_lastpos_dev.y ),
                     formatCoord( pos_dev.x ),
@@ -1619,8 +1635,7 @@ void DXF_PLOTTER::PenTo( const VECTOR2I& pos, char plume )
 
 void DXF_PLOTTER::SetDash( int aLineWidth, LINE_STYLE aLineStyle )
 {
-    wxASSERT( aLineStyle >= LINE_STYLE::FIRST_TYPE
-                && aLineStyle <= LINE_STYLE::LAST_TYPE );
+    wxASSERT( aLineStyle >= LINE_STYLE::FIRST_TYPE && aLineStyle <= LINE_STYLE::LAST_TYPE );
 
     m_currentLineType = aLineStyle;
 }
@@ -1671,8 +1686,7 @@ void DXF_PLOTTER::ThickSegment( const VECTOR2I& aStart, const VECTOR2I& aEnd, in
     {
         std::vector<VECTOR2I> cornerList;
         SHAPE_POLY_SET outlineBuffer;
-        TransformOvalToPolygon( outlineBuffer, aStart, aEnd, aWidth, GetPlotterArcHighDef(),
-                                ERROR_INSIDE );
+        TransformOvalToPolygon( outlineBuffer, aStart, aEnd, aWidth, GetPlotterArcHighDef(), ERROR_INSIDE );
         const SHAPE_LINE_CHAIN& path = outlineBuffer.COutline( 0 );
 
         cornerList.reserve( path.PointCount() );
@@ -1694,8 +1708,8 @@ void DXF_PLOTTER::ThickSegment( const VECTOR2I& aStart, const VECTOR2I& aEnd, in
 }
 
 
-void DXF_PLOTTER::ThickArc( const VECTOR2D& centre, const EDA_ANGLE& aStartAngle,
-                            const EDA_ANGLE& aAngle, double aRadius, int aWidth, void* aData )
+void DXF_PLOTTER::ThickArc( const VECTOR2D& centre, const EDA_ANGLE& aStartAngle, const EDA_ANGLE& aAngle,
+                            double aRadius, int aWidth, void* aData )
 {
     const PLOT_PARAMS* cfg = static_cast<const PLOT_PARAMS*>( aData );
 
@@ -1782,8 +1796,7 @@ void DXF_PLOTTER::ThickPoly( const SHAPE_POLY_SET& aPoly, int aWidth, void* aDat
 }
 
 
-void DXF_PLOTTER::FlashPadOval( const VECTOR2I& aPos, const VECTOR2I& aSize,
-                                const EDA_ANGLE& aOrient, void* aData )
+void DXF_PLOTTER::FlashPadOval( const VECTOR2I& aPos, const VECTOR2I& aSize, const EDA_ANGLE& aOrient, void* aData )
 {
     wxASSERT( m_outputFile );
 
@@ -1809,8 +1822,8 @@ void DXF_PLOTTER::FlashPadCircle( const VECTOR2I& pos, int diametre, void* aData
 }
 
 
-void DXF_PLOTTER::FlashPadRect( const VECTOR2I& aPos, const VECTOR2I& aPadSize,
-                                const EDA_ANGLE& aOrient, void* aData )
+void DXF_PLOTTER::FlashPadRect( const VECTOR2I& aPos, const VECTOR2I& aPadSize, const EDA_ANGLE& aOrient,
+                                void* aData )
 {
     wxASSERT( m_outputFile );
 
@@ -1868,12 +1881,12 @@ void DXF_PLOTTER::FlashPadRect( const VECTOR2I& aPos, const VECTOR2I& aPadSize,
 }
 
 
-void DXF_PLOTTER::FlashPadRoundRect( const VECTOR2I& aPadPos, const VECTOR2I& aSize,
-                                     int aCornerRadius, const EDA_ANGLE& aOrient, void* aData )
+void DXF_PLOTTER::FlashPadRoundRect( const VECTOR2I& aPadPos, const VECTOR2I& aSize, int aCornerRadius,
+                                     const EDA_ANGLE& aOrient, void* aData )
 {
     SHAPE_POLY_SET outline;
-    TransformRoundChamferedRectToPolygon( outline, aPadPos, aSize, aOrient, aCornerRadius, 0.0, 0,
-                                          0, GetPlotterArcHighDef(), ERROR_INSIDE );
+    TransformRoundChamferedRectToPolygon( outline, aPadPos, aSize, aOrient, aCornerRadius, 0.0, 0, 0,
+                                          GetPlotterArcHighDef(), ERROR_INSIDE );
 
     // TransformRoundRectToPolygon creates only one convex polygon
     SHAPE_LINE_CHAIN& poly = outline.Outline( 0 );
@@ -1887,9 +1900,8 @@ void DXF_PLOTTER::FlashPadRoundRect( const VECTOR2I& aPadPos, const VECTOR2I& aS
 }
 
 
-void DXF_PLOTTER::FlashPadCustom( const VECTOR2I& aPadPos, const VECTOR2I& aSize,
-                                  const EDA_ANGLE& aOrient, SHAPE_POLY_SET* aPolygons,
-                                  void* aData )
+void DXF_PLOTTER::FlashPadCustom( const VECTOR2I& aPadPos, const VECTOR2I& aSize, const EDA_ANGLE& aOrient,
+                                  SHAPE_POLY_SET* aPolygons, void* aData )
 {
     for( int cnt = 0; cnt < aPolygons->OutlineCount(); ++cnt )
     {
@@ -1905,8 +1917,8 @@ void DXF_PLOTTER::FlashPadCustom( const VECTOR2I& aPadPos, const VECTOR2I& aSize
 }
 
 
-void DXF_PLOTTER::FlashPadTrapez( const VECTOR2I& aPadPos, const VECTOR2I* aCorners,
-                                  const EDA_ANGLE& aPadOrient, void* aData )
+void DXF_PLOTTER::FlashPadTrapez( const VECTOR2I& aPadPos, const VECTOR2I* aCorners, const EDA_ANGLE& aPadOrient,
+                                  void* aData )
 {
     wxASSERT( m_outputFile );
     VECTOR2I coord[4]; /* coord actual corners of a trapezoidal trace */
@@ -1988,7 +2000,8 @@ void DXF_PLOTTER::Text( const VECTOR2I&        aPos,
     {
         TEXT_ATTRIBUTES attrs;
         attrs.m_Halign = aH_justify;
-        attrs.m_Valign =aV_justify;
+        attrs.m_Valign = aV_justify;
+        attrs.m_Size = aSize;
         attrs.m_StrokeWidth = aWidth;
         attrs.m_Angle = aOrient;
         attrs.m_Italic = aItalic;
@@ -2168,7 +2181,7 @@ void DXF_PLOTTER::plotOneLineOfText( const VECTOR2I& aPos, const COLOR4D& aColor
                 " 11\n{}\n 21\n{}\n 31\n0\n"
                 "100\nAcDbText\n"
                 " 73\n{}\n",
-                aAttributes.m_Angle.AsDegrees(),
+                aAttributes.m_Angle.GetAngle().AsDegrees(),
                 formatCoord( fabs( size_dev.x / size_dev.y ) ),
                 aAttributes.m_Italic ? DXF_OBLIQUE_ANGLE : 0,
                 textStyle,

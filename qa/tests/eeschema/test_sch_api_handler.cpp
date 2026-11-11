@@ -22,15 +22,27 @@
 #include <boost/test/unit_test.hpp>
 
 #include <api/api_handler_sch.h>
+#include <api/api_sch_utils.h>
+#include <api/api_task_scheduler.h>
 #include <api/api_utils.h>
 #include <api/common/commands/editor_commands.pb.h>
 #include <api/common/envelope.pb.h>
+#include <api/common/tasks.pb.h>
 #include <api/headless_sch_context.h>
+#include <api/schematic/schematic_tasks.pb.h>
 #include <api/schematic/schematic_types.pb.h>
 #include <schematic_utils/schematic_file_util.h>
 #include <settings/settings_manager.h>
 
 #include <schematic.h>
+#include <advanced_config.h>
+#include <connection_graph.h>
+#include <sch_label.h>
+#include <sch_line.h>
+#include <sch_screen.h>
+#include <sch_sheet.h>
+#include <set>
+#include <scoped_set_reset.h>
 
 
 namespace
@@ -40,12 +52,14 @@ struct API_HANDLER_SCH_FIXTURE
 {
     SETTINGS_MANAGER                      m_settingsManager;
     std::unique_ptr<SCHEMATIC>            m_schematic;
+    SCHEMATIC*                            m_schematicSlot = nullptr;
     std::shared_ptr<HEADLESS_SCH_CONTEXT> m_context;
 
     SCHEMATIC* loadSchematic( const wxString& aRelPath )
     {
         KI_TEST::LoadSchematic( m_settingsManager, aRelPath, m_schematic );
-        m_context = std::make_shared<HEADLESS_SCH_CONTEXT>( m_schematic.get(),
+        m_schematicSlot = m_schematic.get();
+        m_context = std::make_shared<HEADLESS_SCH_CONTEXT>( &m_schematicSlot,
                                                             &m_settingsManager.Prj() );
         return m_schematic.get();
     }
@@ -88,6 +102,32 @@ kiapi::common::ApiRequest makeRevertRequest( const SCHEMATIC& aSchematic )
 }
 
 
+kiapi::common::ApiRequest makeStartErcTaskRequest( const SCHEMATIC& aSchematic )
+{
+    kiapi::schematic::tasks::StartErcTask command;
+    *command.mutable_document() = makeDocument( aSchematic );
+
+    kiapi::common::ApiRequest request;
+    request.mutable_header()->set_client_name( "kicad.qa" );
+    BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+
+    return request;
+}
+
+
+kiapi::common::ApiRequest makeGetErcTaskResultRequest( const std::string& aToken )
+{
+    kiapi::schematic::tasks::GetErcTaskResult command;
+    command.mutable_token()->set_value( aToken );
+
+    kiapi::common::ApiRequest request;
+    request.mutable_header()->set_client_name( "kicad.qa" );
+    BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+
+    return request;
+}
+
+
 }
 
 
@@ -112,6 +152,152 @@ BOOST_AUTO_TEST_CASE( RevertDocumentRejectedWithOpenCommit )
 }
 
 
+BOOST_AUTO_TEST_CASE( RejectedSheetCreateLeavesNoChanges )
+{
+    SCHEMATIC*      model = loadSchematic( wxS( "api_kitchen_sink" ) );
+    API_HANDLER_SCH handler( m_context );
+
+    schematic::types::SheetSymbol sheet;
+    const KIID                    id;
+    sheet.mutable_id()->set_value( id.AsStdString() );
+    sheet.mutable_name_field()->mutable_text()->set_text( "RejectedSheet" );
+    sheet.mutable_filename_field()->mutable_text()->set_text( "rejected.kicad_sch" );
+    sheet.set_page_number( "999" );
+    auto* field = sheet.add_user_fields();
+    field->set_name( "Reference Suffix" );
+    field->mutable_text()->set_text( "_M1" );
+    auto* variant = sheet.mutable_variants()->add_variants();
+    variant->set_name( "rejected-variant" );
+    ( *variant->mutable_fields() )["Reference Suffix"] = "_M2";
+    variant->set_dnp( true );
+
+    commands::CreateItems command;
+    *command.mutable_header()->mutable_document() = makeDocument( *model );
+    BOOST_REQUIRE( command.add_items()->PackFrom( sheet ) );
+    ApiRequest request;
+    request.mutable_header()->set_client_name( "kicad.qa" );
+    BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+    API_RESULT result = handler.Handle( request );
+    BOOST_REQUIRE( result.has_value() );
+
+    commands::CreateItemsResponse response;
+    BOOST_REQUIRE( result->message().UnpackTo( &response ) );
+    BOOST_REQUIRE_EQUAL( response.created_items_size(), 1 );
+    BOOST_CHECK_EQUAL( response.created_items( 0 ).status().code(), commands::ISC_INVALID_DATA );
+    BOOST_CHECK( !model->Hierarchy().ResolveItem( id, nullptr, true ) );
+    BOOST_CHECK( !model->HasVariant( wxS( "rejected-variant" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RejectedSheetUpdateLeavesNoChanges )
+{
+    SCHEMATIC*      model = loadSchematic( wxS( "issue13212" ) );
+    API_HANDLER_SCH handler( m_context );
+    BOOST_REQUIRE_GE( model->Hierarchy().size(), 2 );
+    SCH_SHEET_PATH child = model->Hierarchy()[1];
+    SCH_SHEET*     original = child.Last();
+    SCH_SHEET_PATH parent = child;
+    parent.pop_back();
+    const wxString originalName = original->GetName();
+    const wxString originalPage = child.GetPageNumber();
+
+    schematic::types::SheetSymbol sheet;
+    BOOST_REQUIRE( PackSheet( &sheet, original, parent ) );
+    sheet.mutable_name_field()->mutable_text()->set_text( "RejectedName" );
+    sheet.set_page_number( "999" );
+    auto* field = sheet.add_user_fields();
+    field->set_name( "Reference Suffix" );
+    field->mutable_text()->set_text( "_M1" );
+    auto* variant = sheet.mutable_variants()->add_variants();
+    variant->set_name( "rejected-variant" );
+    ( *variant->mutable_fields() )["Reference Suffix"] = "_M2";
+
+    commands::UpdateItems command;
+    *command.mutable_header()->mutable_document() = makeDocument( *model );
+    BOOST_REQUIRE( command.add_items()->PackFrom( sheet ) );
+    ApiRequest request;
+    request.mutable_header()->set_client_name( "kicad.qa" );
+    BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+    API_RESULT result = handler.Handle( request );
+    BOOST_REQUIRE( result.has_value() );
+
+    commands::UpdateItemsResponse response;
+    BOOST_REQUIRE( result->message().UnpackTo( &response ) );
+    BOOST_REQUIRE_EQUAL( response.updated_items_size(), 1 );
+    BOOST_CHECK_EQUAL( response.updated_items( 0 ).status().code(), commands::ISC_INVALID_DATA );
+    BOOST_CHECK_EQUAL( original->GetName(), originalName );
+    BOOST_CHECK_EQUAL( child.GetPageNumber(), originalPage );
+    BOOST_CHECK( !model->HasVariant( wxS( "rejected-variant" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SheetBatchKeepsValidItems )
+{
+    SCHEMATIC*            model = loadSchematic( wxS( "api_kitchen_sink" ) );
+    API_HANDLER_SCH       handler( m_context );
+    commands::CreateItems command;
+    *command.mutable_header()->mutable_document() = makeDocument( *model );
+    std::vector<KIID> ids( 3 );
+
+    for( int i = 0; i < 3; ++i )
+    {
+        schematic::types::SheetSymbol sheet;
+        sheet.mutable_id()->set_value( ids[i].AsStdString() );
+        sheet.mutable_name_field()->mutable_text()->set_text( "Sheet" + std::to_string( i ) );
+        sheet.mutable_filename_field()->mutable_text()->set_text( "batch" + std::to_string( i ) + ".kicad_sch" );
+        sheet.set_page_number( std::to_string( 20 + i ) );
+        auto* suffix = sheet.add_user_fields();
+        suffix->set_name( "Reference Suffix" );
+        suffix->mutable_text()->set_text( "_M1" );
+        auto* field = sheet.add_user_fields();
+        field->set_name( "Channel" );
+        field->mutable_text()->set_text( "base" );
+        auto* variant = sheet.mutable_variants()->add_variants();
+        variant->set_name( "batch-variant-" + std::to_string( i ) );
+        variant->set_dnp( true );
+        ( *variant->mutable_fields() )["Channel"] = "override";
+
+        if( i == 1 )
+            ( *variant->mutable_fields() )["Reference Suffix"] = "_M2";
+
+        BOOST_REQUIRE( command.add_items()->PackFrom( sheet ) );
+    }
+
+    ApiRequest request;
+    request.mutable_header()->set_client_name( "kicad.qa" );
+    BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+    API_RESULT result = handler.Handle( request );
+    BOOST_REQUIRE( result.has_value() );
+    commands::CreateItemsResponse response;
+    BOOST_REQUIRE( result->message().UnpackTo( &response ) );
+    BOOST_REQUIRE_EQUAL( response.created_items_size(), 3 );
+    BOOST_CHECK_EQUAL( response.status(), types::IRS_OK );
+
+    SCH_SHEET_PATH parent = model->Hierarchy()[0];
+
+    for( int i = 0; i < 3; ++i )
+    {
+        const wxString variantName = wxString::Format( wxS( "batch-variant-%d" ), i );
+        auto*          sheet = dynamic_cast<SCH_SHEET*>( model->Hierarchy().ResolveItem( ids[i], nullptr, true ) );
+        BOOST_CHECK_EQUAL( response.created_items( i ).status().code(),
+                           i == 1 ? commands::ISC_INVALID_DATA : commands::ISC_OK );
+        BOOST_CHECK_EQUAL( model->HasVariant( variantName ), i != 1 );
+
+        if( i == 1 )
+        {
+            BOOST_CHECK( !sheet );
+            continue;
+        }
+
+        BOOST_REQUIRE( sheet );
+        BOOST_CHECK( sheet->GetDNP( &parent, variantName ) );
+        BOOST_CHECK( sheet->GetFieldText( wxS( "Channel" ), &parent, variantName ) == wxS( "override" ) );
+        schematic::types::SheetSymbol stored;
+        BOOST_REQUIRE( PackSheet( &stored, sheet, parent ) );
+        BOOST_CHECK_EQUAL( stored.page_number(), std::to_string( 20 + i ) );
+    }
+}
+
 
 BOOST_AUTO_TEST_CASE( CustomPropertyCannotDuplicateSystemProperty )
 {
@@ -130,7 +316,7 @@ BOOST_AUTO_TEST_CASE( CustomPropertyCannotDuplicateSystemProperty )
     line.add_custom_properties()->set_key( "linE Width" );
     line.add_custom_properties()->set_key( "start X" );
 
-    command.add_items()->PackFrom( line );
+    BOOST_REQUIRE( command.add_items()->PackFrom( line ) );
 
     ApiRequest request;
     request.mutable_header()->set_client_name( "kicad.qa" );
@@ -166,6 +352,8 @@ BOOST_AUTO_TEST_CASE( SymbolFieldTakesPrecedenceOverCustomProperty )
     symbol.mutable_id()->set_value( "f8688bac-2fcb-4184-ab0e-0cf46a139c43" );
     symbol.mutable_transform()->set_orientation( schematic::types::SchematicSymbolOrientation::SSO_0 );
 
+    symbol.mutable_definition()->mutable_id()->set_entry_name( "R" );
+
     schematic::types::SchematicField* field = symbol.add_user_fields();
     field->set_name( "MPN" );
     field->mutable_text()->set_text( "123" );
@@ -174,7 +362,7 @@ BOOST_AUTO_TEST_CASE( SymbolFieldTakesPrecedenceOverCustomProperty )
     prop->set_key( "MPN" );
     prop->set_value( "456" );
 
-    command.add_items()->PackFrom( symbol );
+    BOOST_REQUIRE( command.add_items()->PackFrom( symbol ) );
 
     ApiRequest request;
     request.mutable_header()->set_client_name( "kicad.qa" );
@@ -192,6 +380,336 @@ BOOST_AUTO_TEST_CASE( SymbolFieldTakesPrecedenceOverCustomProperty )
     // The field takes precedence: a custom property duplicating a field name is rejected.
     BOOST_CHECK_EQUAL( status.code(), kiapi::common::commands::ItemStatusCode::ISC_INVALID_DATA );
     BOOST_CHECK_NE( status.error_message().find( "MPN" ), std::string::npos );
+}
+
+BOOST_AUTO_TEST_CASE( NetlistRebuildsSelectedConnectivityAndFiltersNativeItems )
+{
+    auto& enabled = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() ).m_ConnectivityEngine;
+    SCOPED_SET_RESET restore( enabled, false );
+    SCHEMATIC* model = loadSchematic( wxS( "net_chains_four_nets_labeled" ) );
+    const auto path = model->Hierarchy().front();
+    SCH_LABEL* label = nullptr;
+
+    for( SCH_ITEM* item : path.LastScreen()->Items().OfType( SCH_LABEL_T ) )
+    {
+        if( static_cast<SCH_LABEL*>( item )->GetText() == wxS( "SIG" ) )
+            label = static_cast<SCH_LABEL*>( item );
+    }
+
+    BOOST_REQUIRE( label );
+    API_HANDLER_SCH handler( m_context );
+
+    for( bool published : { false, true } )
+    {
+        BOOST_TEST_CONTEXT( "published=" << published )
+        {
+            enabled = published;
+            const wxString name = published ? wxS( "PUBLISHED_API" ) : wxS( "LEGACY_API" );
+            label->SetText( name );
+
+            // Only the engine handler rebuilds; legacy answers from the graph the editor keeps current
+            if( published )
+                model->ConnectionGraph()->Reset();
+            else
+                model->RebuildConnectivity();
+
+            for( bool filtered : { false, true } )
+            {
+                kiapi::schematic::commands::GetSchematicNetlist command;
+                *command.mutable_document() = makeDocument( *model );
+
+                if( filtered )
+                    command.add_types( kiapi::common::types::KOT_SCH_LABEL );
+
+                ApiRequest request;
+                request.mutable_header()->set_client_name( "kicad.qa" );
+                BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+                API_RESULT result = handler.Handle( request );
+                BOOST_REQUIRE( result.has_value() );
+                kiapi::schematic::commands::SchematicNetlistResponse response;
+                BOOST_REQUIRE( result->message().UnpackTo( &response ) );
+                std::set<std::string> items;
+
+                for( const auto& net : response.nets() )
+                {
+                    if( net.name() != ( wxS( "/" ) + name ).ToStdString() )
+                        continue;
+
+                    for( const auto& sheet : net.sheets() )
+                    {
+                        for( const auto& item : sheet.items() )
+                            items.insert( item.value() );
+                    }
+                }
+
+                BOOST_CHECK( items.contains( label->m_Uuid.AsStdString() ) );
+
+                if( filtered )
+                    BOOST_CHECK_EQUAL( items.size(), 1 );
+                else
+                    BOOST_CHECK_GT( items.size(), 1 );
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE( NetlistPreservesNativeHierarchyMembershipAndExcludesBuses )
+{
+    auto& enabled = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() ).m_ConnectivityEngine;
+    SCOPED_SET_RESET restore( enabled, false );
+    SCHEMATIC* model = loadSchematic( wxS( "netlists/hierarchy_aliases/hierarchy_aliases" ) );
+    auto* root = model->Hierarchy().front().LastScreen();
+    auto labels = root->Items().OfType( SCH_LABEL_T );
+    BOOST_REQUIRE( labels.begin() != labels.end() );
+    auto* unusedBus = static_cast<SCH_LABEL*>( ( *labels.begin() )->Clone() );
+    const_cast<KIID&>( unusedBus->m_Uuid ) = KIID();
+    unusedBus->SetText( wxS( "API_UNUSED[0..1]" ) );
+    unusedBus->SetPosition( VECTOR2I( 0, 0 ) );
+    root->Append( unusedBus );
+    SCH_LINE* undriven = nullptr;
+
+    for( SCH_ITEM* item : root->Items().OfType( SCH_LINE_T ) )
+    {
+        auto* line = static_cast<SCH_LINE*>( item );
+
+        if( line->IsWire() )
+        {
+            undriven = static_cast<SCH_LINE*>( line->Clone() );
+            break;
+        }
+    }
+
+    BOOST_REQUIRE( undriven );
+    const_cast<KIID&>( undriven->m_Uuid ) = KIID();
+    undriven->Move( VECTOR2I( -1000000, -1000000 ) - undriven->GetStartPoint() );
+    root->Append( undriven );
+    API_HANDLER_SCH handler( m_context );
+    using CONTENTS = std::map<std::string, std::map<std::vector<std::string>, std::set<std::string>>>;
+
+    for( bool filtered : { false, true } )
+    {
+        CONTENTS expected;
+
+        for( bool published : { false, true } )
+        {
+            BOOST_TEST_CONTEXT( "published=" << published << " filtered=" << filtered )
+            {
+                enabled = published;
+
+                // Only the engine handler rebuilds; legacy answers from the graph the editor keeps current
+                if( published )
+                    model->ConnectionGraph()->Reset();
+                else
+                    model->RebuildConnectivity();
+
+                kiapi::schematic::commands::GetSchematicNetlist command;
+                *command.mutable_document() = makeDocument( *model );
+
+                if( filtered )
+                    command.add_types( kiapi::common::types::KOT_SCH_PIN );
+
+                ApiRequest request;
+                request.mutable_header()->set_client_name( "kicad.qa" );
+                BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+                API_RESULT result = handler.Handle( request );
+                BOOST_REQUIRE( result.has_value() );
+                kiapi::schematic::commands::SchematicNetlistResponse response;
+                BOOST_REQUIRE( result->message().UnpackTo( &response ) );
+                CONTENTS actual;
+                size_t nestedItems = 0;
+
+                for( const auto& net : response.nets() )
+                {
+                    BOOST_CHECK_GT( net.sheets_size(), 0 );
+                    BOOST_CHECK( net.name().find( '{' ) == std::string::npos );
+                    BOOST_CHECK( net.name().find( "API_UNUSED" ) == std::string::npos );
+
+                    for( const auto& sheet : net.sheets() )
+                    {
+                        std::vector<std::string> path;
+
+                        for( const auto& id : sheet.path().path() )
+                            path.push_back( id.value() );
+
+                        auto& items = actual[net.name()][path];
+
+                        for( const auto& item : sheet.items() )
+                        {
+                            BOOST_CHECK_NE( item.value(), undriven->m_Uuid.AsStdString() );
+                            items.insert( item.value() );
+                        }
+
+                        if( path.size() > 2 )
+                            nestedItems += items.size();
+                    }
+                }
+
+                BOOST_CHECK( actual.contains( "/S0.BOOT.SDA" ) );
+                BOOST_CHECK( actual.contains( "/S1.BOOT.SDA" ) );
+                BOOST_CHECK_GT( nestedItems, 0 );
+
+                if( published )
+                {
+                    BOOST_CHECK( actual == expected );
+                }
+                else
+                {
+                    expected = std::move( actual );
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE( NetlistReportsRebuildFailureAndAllowsRetry )
+{
+    struct FAILING_LABEL : SCH_LABEL
+    {
+        explicit FAILING_LABEL( const SCH_LABEL& source ) : SCH_LABEL( source ) {}
+
+        wxString GetShownText( const SCH_SHEET_PATH* path, RESOLUTION_CONTEXT context, int depth = 0 ) const override
+        {
+            if( fail )
+                throw std::runtime_error( "Native label extraction failed" );
+
+            return SCH_LABEL::GetShownText( path, context, depth );
+        }
+
+        bool fail = false;
+    };
+
+    auto& enabled = const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() ).m_ConnectivityEngine;
+    SCOPED_SET_RESET restore( enabled, false );
+    SCHEMATIC* model = loadSchematic( wxS( "net_chains_four_nets_labeled" ) );
+    auto* screen = model->Hierarchy().front().LastScreen();
+    auto labels = screen->Items().OfType( SCH_LABEL_T );
+    BOOST_REQUIRE( labels.begin() != labels.end() );
+    auto* original = static_cast<SCH_LABEL*>( *labels.begin() );
+    auto* replacement = new FAILING_LABEL( *original );
+    screen->Remove( original );
+    delete original;
+    screen->Append( replacement );
+    model->ConnectionGraph()->Reset();
+    replacement->fail = true;
+    enabled = true;
+    API_HANDLER_SCH handler( m_context );
+    kiapi::schematic::commands::GetSchematicNetlist command;
+    *command.mutable_document() = makeDocument( *model );
+    ApiRequest request;
+    request.mutable_header()->set_client_name( "kicad.qa" );
+    BOOST_REQUIRE( request.mutable_message()->PackFrom( command ) );
+    API_RESULT result = handler.Handle( request );
+    BOOST_REQUIRE( !result.has_value() );
+    BOOST_CHECK_EQUAL( result.error().status(), ApiStatusCode::AS_UNKNOWN );
+    BOOST_CHECK_EQUAL( result.error().error_message(), "Native label extraction failed" );
+    replacement->fail = false;
+    result = handler.Handle( request );
+    BOOST_REQUIRE( result.has_value() );
+    kiapi::schematic::commands::SchematicNetlistResponse response;
+    BOOST_REQUIRE( result->message().UnpackTo( &response ) );
+    BOOST_CHECK_GT( response.nets_size(), 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( StartErcTaskCompletesWithResults )
+{
+    SCHEMATIC* schematic = loadSchematic( wxS( "NoConnectOnPin" ) );
+
+    API_HANDLER_SCH handler( m_context );
+
+    kiapi::common::ApiRequest startRequest = makeStartErcTaskRequest( *schematic );
+    API_RESULT start = handler.Handle( startRequest );
+    BOOST_REQUIRE( start.has_value() );
+
+    kiapi::common::tasks::StartTaskResponse startResponse;
+    BOOST_REQUIRE( start->message().UnpackTo( &startResponse ) );
+    BOOST_REQUIRE( !startResponse.token().value().empty() );
+
+    API_TASK_SCHEDULER::Instance().Pump();
+
+    auto status = API_TASK_SCHEDULER::Instance().GetStatus( startResponse.token().value() );
+    BOOST_REQUIRE( status.has_value() );
+    BOOST_CHECK_EQUAL( status->state(), kiapi::common::tasks::TS_COMPLETED );
+
+    kiapi::common::ApiRequest resultRequest = makeGetErcTaskResultRequest( startResponse.token().value() );
+    API_RESULT result = handler.Handle( resultRequest );
+    BOOST_REQUIRE( result.has_value() );
+
+    kiapi::schematic::tasks::ErcTaskResult ercResult;
+    BOOST_REQUIRE( result->message().UnpackTo( &ercResult ) );
+
+    BOOST_CHECK_GT( ercResult.violations_size(), 0 );
+    BOOST_CHECK_EQUAL( ercResult.excluded_count(), 0 );
+
+    BOOST_CHECK_GT( ercResult.ignored_count(), 0 );
+
+    int markerCount = 0;
+    SCH_SCREENS screens( schematic->Root() );
+
+    for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
+    {
+        for( SCH_ITEM* item : screen->Items() )
+        {
+            if( item->Type() == SCH_MARKER_T )
+                ++markerCount;
+        }
+    }
+
+    BOOST_CHECK_EQUAL( markerCount, ercResult.violations_size() );
+
+    for( const kiapi::schematic::ErcMarker& violation : ercResult.violations() )
+    {
+        BOOST_CHECK( !violation.description().empty() );
+        BOOST_CHECK( violation.error_type() != kiapi::schematic::ErcErrorType::ERCET_UNKNOWN );
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( StartErcTaskWhileRunningIsRejected )
+{
+    SCHEMATIC* schematic = loadSchematic( wxS( "NoConnectOnPin" ) );
+
+    API_HANDLER_SCH handler( m_context );
+
+    kiapi::common::ApiRequest startRequest = makeStartErcTaskRequest( *schematic );
+    API_RESULT start = handler.Handle( startRequest );
+    BOOST_REQUIRE( start.has_value() );
+
+    kiapi::common::tasks::StartTaskResponse startResponse;
+    BOOST_REQUIRE( start->message().UnpackTo( &startResponse ) );
+    BOOST_REQUIRE( !startResponse.token().value().empty() );
+
+    // The ERC run event has not been pumped, so the task is still running
+    kiapi::common::ApiRequest secondRequest = makeStartErcTaskRequest( *schematic );
+    API_RESULT second = handler.Handle( secondRequest );
+    BOOST_REQUIRE( !second.has_value() );
+    BOOST_CHECK_EQUAL( second.error().status(), kiapi::common::ApiStatusCode::AS_BUSY );
+
+    kiapi::common::ApiRequest runningRequest = makeGetErcTaskResultRequest( startResponse.token().value() );
+    API_RESULT runningResult = handler.Handle( runningRequest );
+    BOOST_REQUIRE( !runningResult.has_value() );
+    BOOST_CHECK_EQUAL( runningResult.error().status(), kiapi::common::ApiStatusCode::AS_BUSY );
+
+    API_TASK_SCHEDULER::Instance().Pump();
+
+    kiapi::common::ApiRequest finishedRequest =
+            makeGetErcTaskResultRequest( startResponse.token().value() );
+    API_RESULT finishedResult = handler.Handle( finishedRequest );
+    BOOST_REQUIRE( finishedResult.has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( GetErcTaskResultRejectsUnknownToken )
+{
+    loadSchematic( wxS( "NoConnectOnPin" ) );
+
+    API_HANDLER_SCH handler( m_context );
+
+    kiapi::common::ApiRequest request = makeGetErcTaskResultRequest( "deadbeef-0000-0000-0000-000000000000" );
+    API_RESULT result = handler.Handle( request );
+
+    BOOST_REQUIRE( !result.has_value() );
+    BOOST_CHECK_EQUAL( result.error().status(), kiapi::common::ApiStatusCode::AS_BAD_REQUEST );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

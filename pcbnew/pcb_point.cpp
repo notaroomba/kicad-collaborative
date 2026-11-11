@@ -178,6 +178,18 @@ void PCB_POINT::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 }
 
 
+void PCB_POINT::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
+{
+    Mirror( MIRROR_AXIS( aCentre, aFlipDirection ) );
+}
+
+
+void PCB_POINT::Mirror( const SEG& aAxis )
+{
+    SetPosition( aAxis.ReflectPoint( GetPosition() ) );
+}
+
+
 void PCB_POINT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
     if( const FOOTPRINT* fp = GetParentFootprint() )
@@ -192,9 +204,8 @@ void PCB_POINT::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
         VECTOR2I newPos = GetPosition();
         MIRROR( newPos, aCentre, aFlipDirection );
         SetPosition( newPos );
+        SetLayer( GetFlippedLayer( GetLayer() ) );
     }
-
-    SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
 }
 
 
@@ -260,7 +271,9 @@ void PCB_POINT::Serialize( google::protobuf::Any& aContainer ) const
         point.mutable_parent()->set_value( board->m_Uuid.AsStdString() );
 
     kiapi::common::PackCustomProperties( point.mutable_custom_properties(), *this );
-    aContainer.PackFrom( point );
+
+    if( !aContainer.PackFrom( point ) )
+        wxFAIL_MSG( wxT( "Failed to pack PCB_POINT" ) );
 }
 
 
@@ -326,7 +339,7 @@ double PCB_POINT::Similarity( const BOARD_ITEM& aOther ) const
 
     double similarity = 1.0;
 
-    if( GetPosition() == other.GetPosition() )
+    if( GetPosition() != other.GetPosition() )
         similarity *= 0.9;
 
     if( m_size != other.m_size )

@@ -215,8 +215,7 @@ void DIALOG_GEN_FOOTPRINT_POSITION::onUpdateUIincludeBoardEdge( wxUpdateUIEvent&
 void DIALOG_GEN_FOOTPRINT_POSITION::onOutputDirectoryBrowseClicked( wxCommandEvent& event )
 {
     // Build the absolute path of current output directory to preselect it in the file browser.
-    wxString path = ExpandEnvVarSubstitutions( m_outputDirectoryName->GetValue(), &Prj() );
-    path = Prj().AbsolutePath( path );
+    wxString path = ResolveProjectPath( m_outputDirectoryName->GetValue(), &Prj() );
 
     wxDirDialog dirDialog( this, _( "Select Output Directory" ), path );
 
@@ -294,7 +293,7 @@ bool DIALOG_GEN_FOOTPRINT_POSITION::CreateGerberFiles()
             };
 
     wxString path = m_outputDirectory;
-    path = ExpandTextVars( path, &textResolver );
+    path = ExpandTextVars( path, &textResolver, INTERNAL );
     path = ExpandEnvVarSubstitutions( path, &Prj() );
 
     wxFileName outputDir = wxFileName::DirName( path );
@@ -411,7 +410,7 @@ bool DIALOG_GEN_FOOTPRINT_POSITION::CreateAsciiFiles()
             };
 
     wxString path = m_outputDirectory;
-    path = ExpandTextVars( path, &textResolver );
+    path = ExpandTextVars( path, &textResolver, INTERNAL );
     path = ExpandEnvVarSubstitutions( path, &Prj() );
 
     wxFileName outputDir = wxFileName::DirName( path );

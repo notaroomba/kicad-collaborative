@@ -102,8 +102,7 @@ public:
 
         if( aError.HasDebugText() )
         {
-            WX_COLLAPSIBLE_PANE* pane = new WX_COLLAPSIBLE_PANE( this, wxID_ANY,
-                                                                 _( "Additional information" ) );
+            WX_COLLAPSIBLE_PANE* pane = new WX_COLLAPSIBLE_PANE( this, wxID_ANY, _( "Additional information" ) );
             pane->Collapse();
             pane->SetBackgroundColour( bg );
             textSizer->Add( pane, 0, wxEXPAND | wxALL, 1 );
@@ -840,6 +839,7 @@ void KISTATUSBAR::openWarningList()
     m_warningList = new STATUSBAR_WARNING_LIST( this, GetParent() );
     PositionWarningPanel();
     m_warningList->Show();
+    KIPLATFORM::UI::ReparentModal( m_warningList );
     KIPLATFORM::UI::ForceFocus( m_warningList );
 }
 

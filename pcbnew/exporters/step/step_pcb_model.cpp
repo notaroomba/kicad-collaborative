@@ -47,6 +47,7 @@
 #include <board_design_settings.h>
 #include <footprint.h>
 #include <3d_rendering/3d_placeholder_utils.h>
+#include <pcb_3d_body.h>
 #include <pad.h>
 #include <pcb_track.h>
 #include <kiplatform/io.h>
@@ -1782,23 +1783,23 @@ bool STEP_PCB_MODEL::AddExtrudedBody( const SHAPE_POLY_SET& aOutline, bool aBott
 }
 
 
-bool STEP_PCB_MODEL::AddExtrudedPins( const FOOTPRINT* aFootprint, bool aBottom, double aStandoff,
-                                      const VECTOR2D& aOrigin )
+bool STEP_PCB_MODEL::AddExtrudedPins( const FOOTPRINT* aFootprint, const EXTRUDED_3D_BODY* aBody, bool aBottom,
+                                      double aStandoff, const VECTOR2D& aOrigin )
 {
     if( aStandoff <= 0.0 )
         return false;
 
     SHAPE_POLY_SET pinPoly;
+    SHAPE_POLY_SET pegPoly;
 
-    if( !GetExtrusionPinOutline( aFootprint, pinPoly ) )
+    if( !GetExtrusionPinOutlines( aFootprint, pinPoly, pegPoly ) )
         return false;
 
-    const EXTRUDED_3D_BODY* body = aFootprint->GetExtrudedBody();
-
-    if( body )
+    if( aBody )
     {
         VECTOR2I fpPos = aFootprint->GetPosition();
-        ApplyExtrusionTransform( pinPoly, body, fpPos );
+        ApplyExtrusionTransform( pinPoly, aBody, fpPos );
+        ApplyExtrusionTransform( pegPoly, aBody, fpPos );
     }
 
     double f_pos, f_thickness;
@@ -1811,16 +1812,18 @@ bool STEP_PCB_MODEL::AddExtrudedPins( const FOOTPRINT* aFootprint, bool aBottom,
 
     static const double c_protrusion = 1.0; // 1mm below opposite side
 
+    double zOffset = aBody ? aBody->m_offset.z : 0.0;
+
     double pinZBot, pinHeight;
 
     if( !aBottom )
     {
-        pinZBot = boardBotZ - c_protrusion;
+        pinZBot = boardBotZ - c_protrusion + zOffset;
         pinHeight = ( boardTopZ + aStandoff ) - pinZBot;
     }
     else
     {
-        double pinZTop = boardTopZ + c_protrusion;
+        double pinZTop = boardTopZ + c_protrusion - zOffset;
         pinZBot = boardBotZ - aStandoff;
         pinHeight = pinZTop - pinZBot;
     }
@@ -1828,7 +1831,17 @@ bool STEP_PCB_MODEL::AddExtrudedPins( const FOOTPRINT* aFootprint, bool aBottom,
     if( m_extruded_bodies.empty() )
         return false;
 
-    return MakeShapes( m_extruded_bodies.back().pinShapes, pinPoly, m_simplifyShapes, pinHeight, pinZBot, aOrigin );
+    bool success = true;
+
+    if( pinPoly.OutlineCount() > 0 )
+        success &= MakeShapes( m_extruded_bodies.back().pinShapes, pinPoly, m_simplifyShapes, pinHeight, pinZBot,
+                               aOrigin );
+
+    if( pegPoly.OutlineCount() > 0 )
+        success &= MakeShapes( m_extruded_bodies.back().bodyShapes, pegPoly, m_simplifyShapes, pinHeight, pinZBot,
+                               aOrigin );
+
+    return success;
 }
 
 
@@ -2424,6 +2437,7 @@ bool STEP_PCB_MODEL::MakeShapes( std::vector<TopoDS_Shape>& aShapes, const SHAPE
                                              "z: %g; bounding box: %s" ),
                                           static_cast<int>( aContour.PointCount() ),
                                           static_cast<int>( mkWire.Error() ),
+                                          aZposition,
                                           formatBBox( aContour.BBox() ) ),
                         RPT_SEVERITY_WARNING );
             }
@@ -3043,7 +3057,8 @@ bool STEP_PCB_MODEL::CreatePCB( SHAPE_POLY_SET& aOutline, const VECTOR2D& aOrigi
     Quantity_ColorRGBA copper_color( m_copperColor[0], m_copperColor[1], m_copperColor[2], 1.0 );
     Quantity_ColorRGBA pad_color( m_padColor[0], m_padColor[1], m_padColor[2], 1.0 );
 
-    Quantity_ColorRGBA board_color( 0.42f, 0.45f, 0.29f, 0.98f );
+    // Viewers show the back faces of a translucent solid, which reads as inverted normals
+    Quantity_ColorRGBA board_color( 0.42f, 0.45f, 0.29f, 1.0f );
     Quantity_ColorRGBA front_silk_color( 1.0f, 1.0f, 1.0f, 0.9f );
     Quantity_ColorRGBA back_silk_color = front_silk_color;
     Quantity_ColorRGBA front_mask_color( 0.08f, 0.2f, 0.14f, 0.83f );
@@ -4369,7 +4384,7 @@ bool STEP_PCB_MODEL::WritePDF( const wxString& aFileName )
 
     plotter->SetColorMode( true );
     plotter->Set3DExport( true );
-    plotter->SetCreator( wxT( "Mark's awesome 3d exporter" ) );
+    plotter->SetCreator( wxString::Format( "KiCad %s", GetMajorMinorPatchVersion() ) );
     KIGFX::PCB_RENDER_SETTINGS renderSettings;
     plotter->SetRenderSettings( &renderSettings );
 

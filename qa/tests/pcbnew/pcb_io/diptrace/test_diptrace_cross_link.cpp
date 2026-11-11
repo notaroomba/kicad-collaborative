@@ -90,9 +90,7 @@ BOOST_FIXTURE_TEST_SUITE( DipTraceCrossLink, DIPTRACE_CROSS_LINK_FIXTURE )
  */
 BOOST_AUTO_TEST_CASE( BoardRefDesPresent )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -133,9 +131,7 @@ BOOST_AUTO_TEST_CASE( BoardRefDesPresent )
  */
 BOOST_AUTO_TEST_CASE( BoardNetsPresent )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
 
@@ -163,9 +159,7 @@ BOOST_AUTO_TEST_CASE( BoardNetsPresent )
  */
 BOOST_AUTO_TEST_CASE( PadsParsed )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
-    m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip", board.get() );
+    std::unique_ptr<BOARD> board = m_pcbPlugin.LoadBoard( GetPcbTestDataDir() + "z80_board.dip" );
 
     BOOST_REQUIRE( board );
     BOOST_CHECK_GT( board->Footprints().size(), 10 );

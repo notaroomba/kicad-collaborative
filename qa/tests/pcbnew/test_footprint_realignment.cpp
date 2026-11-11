@@ -28,6 +28,7 @@
 
 #include <footprint_utils.h>
 
+#include <board.h>
 #include <footprint.h>
 #include <pad.h>
 
@@ -70,9 +71,9 @@ struct FP_REALIGNMENT_TEST_FIXTURE
     VECTOR2I m_PosShift;
     EDA_ANGLE m_AngleShift;
 
-    std::unique_ptr<FOOTPRINT> CreateFootprint( const ALIGN_FP_DEF& padPositions )
+    std::unique_ptr<FOOTPRINT> CreateFootprint( BOARD& aBoard, const ALIGN_FP_DEF& padPositions )
     {
-        std::unique_ptr<FOOTPRINT> fp = std::make_unique<FOOTPRINT>( nullptr );
+        std::unique_ptr<FOOTPRINT> fp = std::make_unique<FOOTPRINT>( &aBoard );
 
         for( const auto& [number, pos] : padPositions.m_pads )
         {
@@ -86,10 +87,15 @@ struct FP_REALIGNMENT_TEST_FIXTURE
     }
 
 
-    void ExecuteTestCase( const FP_ALIGNMENT_TEST_CASE& testCase )
+    void ExecuteTestCase( const FP_ALIGNMENT_TEST_CASE& testCase, bool originalFootprintIsFlipped )
     {
-        const std::unique_ptr<FOOTPRINT> fpOrig = CreateFootprint( testCase.m_OrigPadPositions );
-        const std::unique_ptr<FOOTPRINT> fpNew = CreateFootprint( testCase.m_NewPadPositions );
+        std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+        const std::unique_ptr<FOOTPRINT> fpOrig = CreateFootprint( *board, testCase.m_OrigPadPositions );
+        const std::unique_ptr<FOOTPRINT> fpNew = CreateFootprint( *board, testCase.m_NewPadPositions );
+
+        if( originalFootprintIsFlipped )
+            fpOrig->Flip( fpOrig->GetPosition(), FLIP_DIRECTION::LEFT_RIGHT );
 
         bool ok = ComputeFootprintShift( *fpOrig, *fpNew, m_PosShift, m_AngleShift );
 
@@ -164,8 +170,8 @@ static const ALIGN_FP_DEF FpDef_DIP4_Rotated90DegCCW{
     {
         { "1", { 0, 0 } },
         { "2", { 1000, 0 } },
-        { "3", { 1000, -2000 } },
-        { "4", { 0, -2000 } },
+        { "3", { 0, -2000 } },
+        { "4", { 1000, -2000 } },
     },
 };
 
@@ -175,8 +181,8 @@ static const ALIGN_FP_DEF FpDef_DIP4_OrigBodyCenter_Rotated90DegCCW{
     {
         { "1", { -500, 1000 } },
         { "2", { 500, 1000 } },
-        { "3", { 500, -1000 } },
-        { "4", { -500, -1000 } },
+        { "3", { -500, -1000 } },
+        { "4", { 500, -1000 } },
     },
 };
 
@@ -344,15 +350,25 @@ BOOST_DATA_TEST_CASE( TestSelfToSelfCases,
         expectedAngleShift,
     };
 
-    ExecuteTestCase( selfAlignTestCase );
-}
+    // Check the front placements
+    BOOST_TEST_CONTEXT( "Front placement" )
+    {
+        ExecuteTestCase( selfAlignTestCase, false );
+    }
 
+    // And the back. Because we know the footprints are the same,
+    // we don't need to compensate for a flip in the transform (-0 == 0)
+    BOOST_TEST_CONTEXT( "Back placement" )
+    {
+        ExecuteTestCase( selfAlignTestCase, true );
+    }
+}
 
 BOOST_DATA_TEST_CASE( TestAllCases,
                       boost::unit_test::data::make( FpAlignmentTestCases ),
                       testCase )
 {
-    ExecuteTestCase( testCase );
+    ExecuteTestCase( testCase, false );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

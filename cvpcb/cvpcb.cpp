@@ -30,7 +30,7 @@
 #include <cvpcb_mainframe.h>
 #include <settings/cvpcb_settings.h>
 #include <display_footprints_frame.h>
-#include <kiface_ids.h>
+#include <kiface_services.h>
 
 #include <memory>
 #include <optional>
@@ -84,14 +84,25 @@ void getFootprintPadNumbers( const wxString& aFootprint, PROJECT* aProject, std:
     if( !adapter )
         return;
 
-    adapter->LoadOne( fpID.GetLibNickname() );
+    if( fpID.GetLibNickname().empty() )
+    {
+        for( const LIBRARY_TABLE_ROW* row : adapter->Rows() )
+        {
+            if( !adapter->IsLibraryLoaded( row->Nickname() ) )
+                adapter->LoadOne( row->Nickname() );
+        }
+    }
+    else
+    {
+        adapter->LoadOne( fpID.GetLibNickname() );
+    }
 
     std::unique_ptr<FOOTPRINT> footprint;
 
     // This runs across the kiface boundary, so let nothing escape into the caller's ERC loop.
     try
     {
-        footprint.reset( adapter->LoadFootprint( fpID, false ) );
+        footprint.reset( adapter->LoadFootprintWithOptionalNickname( fpID, false ) );
     }
     catch( ... )
     {
@@ -146,9 +157,11 @@ static struct IFACE : public KIFACE_BASE
         switch( aDataId )
         {
         case KIFACE_TEST_FOOTPRINT_LINK:
-            return (void*) testFootprintLink;
+            return KifaceServiceAddress<KIFACE_TEST_FOOTPRINT_LINK_SERVICE>( &testFootprintLink );
 
-        case KIFACE_FOOTPRINT_PAD_NUMBERS: return (void*) getFootprintPadNumbers;
+        case KIFACE_FOOTPRINT_PAD_NUMBERS:
+            return KifaceServiceAddress<KIFACE_FOOTPRINT_PAD_NUMBERS_SERVICE>(
+                    &getFootprintPadNumbers );
 
         default:
             return nullptr;

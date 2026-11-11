@@ -25,6 +25,7 @@
 #include <lset.h>
 #include <math/box2.h>
 #include <glm/glm.hpp>
+#include <io/idf/idf_settings.h>
 
 /**
  * This file contains data structures that are saved in the project file or project local settings
@@ -115,7 +116,7 @@ enum class HIGH_CONTRAST_MODE
     HIDDEN          ///< Inactive layers are hidden
 };
 
-///< Determine how zones should be displayed.
+/// Determine how zones should be displayed.
 enum class ZONE_DISPLAY_MODE
 {
     SHOW_FILLED,
@@ -127,7 +128,7 @@ enum class ZONE_DISPLAY_MODE
     SHOW_TRIANGULATION
 };
 
-///< Determine how net color overrides should be applied.
+/// Determine how net color overrides should be applied.
 enum class NET_COLOR_MODE
 {
     OFF,        ///< Net (and netclass) colors are not shown
@@ -135,14 +136,27 @@ enum class NET_COLOR_MODE
     ALL         ///< Net/netclass colors are shown on all net copper
 };
 
-///< Determine how ratsnest lines are drawn.
+/// Determine how ratsnest lines are drawn.
 enum class RATSNEST_MODE
 {
     ALL,        ///< Ratsnest lines are drawn to items on all layers (default)
     VISIBLE     ///< Ratsnest lines are drawn to items on visible layers only
 };
 
-///< BOM Data choices for IPC2581 export
+/// Persisted settings for the IDF export dialog
+struct KICOMMON_API IDF_EXPORT_SETTINGS
+{
+    IDF_SETTINGS::UNITS        units = IDF_SETTINGS::UNITS::MM;
+    IDF_SETTINGS::COORD_ORIGIN originMode = IDF_SETTINGS::COORD_ORIGIN::CENTER;
+    double                     userOriginX = 0.0; ///< In mm
+    double                     userOriginY = 0.0; ///< In mm
+    bool                       includeUnspecified = true;
+    bool                       includeDNP = true;
+    bool                       calculateHeightFromModels = true;
+    wxString                   partNumberField;
+};
+
+/// BOM Data choices for IPC2581 export
 struct KICOMMON_API IP2581_BOM
 {
     wxString mfg;       ///< Manufacturer name column
@@ -154,7 +168,7 @@ struct KICOMMON_API IP2581_BOM
     wxString schRevision;  ///< Auto-propagated schematic title block revision
 
     wxString mode;         ///< Table 4 function mode token
-    wxString sections;     ///< Table 4 section key for the optional sections
+    std::optional<wxString> sections; ///< Table 4 section key, unset when the mode picks the sections
     wxString netNames;     ///< Set to include or to anonymize
     wxString refDes;       ///< Set to include or to omit
 };

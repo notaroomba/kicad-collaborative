@@ -25,11 +25,16 @@
 #include <boost/test/unit_test.hpp>
 #include <boost/bimap.hpp>
 #include <google/protobuf/any.pb.h>
+#include <google/protobuf/util/message_differencer.h>
 #include <memory>
 #include <set>
 #include <magic_enum.hpp>
+#include <type_traits>
+#include <unordered_set>
 
 #include <api/api_enums.h>
+#include <eda_group.h>
+#include <eda_item.h>
 #include <qa_utils/wx_utils/wx_assert.h>
 
 /**
@@ -37,9 +42,10 @@
  * @tparam KiCadEnum is an enum type
  * @tparam ProtoEnum is a Protobuf enum type
  * @param aPartiallyMapped is true if only some of the KiCad enum values are exposed to the API
+ * @param aNullMapping can be used to specify that the null proto enum should map to a real KiCad value
  */
 template <typename KiCadEnum, typename ProtoEnum>
-void testEnums( bool aPartiallyMapped = false )
+void testEnums( bool aPartiallyMapped = false, std::optional<KiCadEnum> aNullMapping = std::nullopt )
 {
     boost::bimap<ProtoEnum, KiCadEnum> protoToKiCadSeen;
     std::set<ProtoEnum>                seenProtos;
@@ -101,7 +107,8 @@ void testEnums( bool aPartiallyMapped = false )
             }
 
             // Protobuf "unknown" should always be zero value by convention
-            BOOST_REQUIRE( result != static_cast<ProtoEnum>( 0 ) );
+            BOOST_REQUIRE( ( result != static_cast<ProtoEnum>( 0 ) )
+                           || ( aNullMapping && *aNullMapping == value ) );
 
             // There should be a 1:1 mapping
             BOOST_REQUIRE( !seenProtos.count( result ) );
@@ -120,6 +127,13 @@ void testProtoFromKiCadObject( KiCadClass* aInput, Factory&& aCreateOutput )
 {
     BOOST_TEST_CONTEXT( aInput->GetFriendlyName() << ": " << aInput->m_Uuid.AsStdString() )
     {
+        constexpr bool isGroup = std::is_base_of_v<EDA_GROUP, std::decay_t<KiCadClass>>;
+
+        std::unordered_set<EDA_ITEM*> cachedItems;
+
+        if constexpr( isGroup )
+            cachedItems = aInput->GetItems();
+
         google::protobuf::Any any;
         BOOST_REQUIRE_NO_THROW( aInput->Serialize( any ) );
 
@@ -133,18 +147,36 @@ void testProtoFromKiCadObject( KiCadClass* aInput, Factory&& aCreateOutput )
         BOOST_REQUIRE_NO_THROW( deserializeResult = output->Deserialize( any ) );
         BOOST_REQUIRE_MESSAGE( deserializeResult, "Deserialize failed" );
 
+        if constexpr( isGroup )
+            output->FinalizeGroupDeserialization();
+
         google::protobuf::Any outputAny;
         BOOST_REQUIRE_NO_THROW( output->Serialize( outputAny ) );
 
-        if( !( outputAny.SerializeAsString() == any.SerializeAsString() ) )
+        ProtoClass outputProto;
+        BOOST_REQUIRE_MESSAGE( outputAny.UnpackTo( &outputProto ),
+                               "Round-tripped Any message did not unpack into the requested type" );
+
+        if( !google::protobuf::util::MessageDifferencer::Equals( proto, outputProto ) )
         {
-            BOOST_TEST_MESSAGE( "Input: " << any.Utf8DebugString() );
-            BOOST_TEST_MESSAGE( "Output: " << outputAny.Utf8DebugString() );
+            BOOST_TEST_MESSAGE( "Input: " << proto.Utf8DebugString() );
+            BOOST_TEST_MESSAGE( "Output: " << outputProto.Utf8DebugString() );
             BOOST_TEST_FAIL( "Round-tripped protobuf does not match" );
         }
 
-        if( !output->operator==( *aInput ) )
+        if constexpr( isGroup )
+        {
+            if( output->GetItems() != cachedItems )
+                BOOST_TEST_FAIL( "Round-tripped group does not match" );
+
+            // Restore cached items into original group
+            for( EDA_ITEM* item : cachedItems )
+                aInput->AddItem( item );
+        }
+        else if( !output->operator==( *aInput ) )
+        {
             BOOST_TEST_FAIL( "Round-tripped object does not match" );
+        }
     }
 }
 

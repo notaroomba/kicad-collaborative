@@ -22,14 +22,16 @@
 #define KI_EXCEPTION_H_
 
 #include <kicommon.h>
+
+#include <string>
+
 #include <wx/string.h>
 
 
 /**
- * @ingroup exception_types
+ * @defgroup exception_types Custom KiCad Exception Objects
  * @{
  */
-
 
 /// macro which captures the "call site" values of __FILE_, __FUNCTION__ & __LINE__
 #define THROW_IO_ERROR( msg )   throw IO_ERROR( msg, __FILE__, __FUNCTION__, __LINE__ )
@@ -102,9 +104,35 @@ public:
     virtual const wxString What() const;            ///< A composite of Problem() and Where()
 
 protected:
+    void updateWhat();
+
     wxString    problem;
     wxString    where;
+    std::string whatMessage;
 };
+
+
+/**
+ * An exception saying that the user cancelled an interactive part of a load,
+ * import, or export, such as declining a query dialog or dismissing a progress
+ * dialog, rather than an error in the input.
+ */
+class KICOMMON_API IO_CANCELLED : public IO_ERROR
+{
+public:
+    /**
+     * Normally thrown via the macro #THROW_IO_CANCELLED(), which supplies the call-site
+     * file, function, and line.  An optional problem message can be given as the last
+     * argument. When omitted or empty, a default is used.
+     */
+    IO_CANCELLED( const char* aThrowersFile, const char* aThrowersFunction, int aThrowersLineNumber,
+                  const wxString& aProblem = wxEmptyString );
+};
+
+
+#define THROW_IO_CANCELLED() throw IO_CANCELLED( __FILE__, __FUNCTION__, __LINE__ )
+
+#define THROW_IO_CANCELLED_MSG( msg ) throw IO_CANCELLED( __FILE__, __FUNCTION__, __LINE__, msg )
 
 
 /**
@@ -185,6 +213,6 @@ struct KICOMMON_API FUTURE_FORMAT_ERROR : public PARSE_ERROR
                const wxString& aRequiredGenerator = wxEmptyString );
 };
 
-/** @} exception_types */
+/** @} */
 
 #endif // KI_EXCEPTION_H_

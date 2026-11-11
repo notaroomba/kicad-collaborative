@@ -261,7 +261,11 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
         config.AppendSeparator()
               .AppendAction( PCB_ACTIONS::drawLine )
               .AppendGroup( TOOLBAR_GROUP_CONFIG( _( "Arc" ) )
-                            .AddAction( PCB_ACTIONS::drawArc )
+                            .AddAction( PCB_ACTIONS::drawArcCenter )
+                            .AddAction( PCB_ACTIONS::drawArcStartEndMid )
+                            .AddAction( PCB_ACTIONS::drawArcStartEndCenter )
+                            .AddAction( PCB_ACTIONS::drawArcTangent )
+                            .AddAction( PCB_ACTIONS::drawArcStartDirEnd )
                             .AddAction( PCB_ACTIONS::drawEllipseArc )
                             .AddContextMenu(
                                 []( TOOL_MANAGER* aMgr ) -> std::unique_ptr<ACTION_MENU>
@@ -320,7 +324,7 @@ std::optional<TOOLBAR_CONFIGURATION> PCB_EDIT_TOOLBAR_SETTINGS::DefaultToolbarCo
                             .AddAction( ACTIONS::gridSetOrigin )
                             .AddAction( PCB_ACTIONS::drillOrigin ) )
                             .AppendAction( PCB_ACTIONS::placePoint )
-              .AppendAction( PCB_ACTIONS::placeGridItem )
+              .AppendAction( PCB_ACTIONS::placeSubGrid )
               .AppendAction( ACTIONS::measureTool );
 
         break;
@@ -580,26 +584,6 @@ void PCB_EDIT_FRAME::SetCurrentVariant( const wxString& aVariantName )
             ds->SetVariantDesc( variantDesc.ToStdString() );
         }
     }
-}
-
-
-void PCB_EDIT_FRAME::onVariantSelected( wxCommandEvent& aEvent )
-{
-    if( !m_CurrentVariantCtrl )
-        return;
-
-    int selection = m_CurrentVariantCtrl->GetSelection();
-
-    if( selection == wxNOT_FOUND || selection == 0 )
-    {
-        // "<Default>" selected - clear the current variant
-        SetCurrentVariant( wxEmptyString );
-    }
-    else
-    {
-        wxString selectedVariant = m_CurrentVariantCtrl->GetString( selection );
-        SetCurrentVariant( selectedVariant );
-    }
 
     // Refresh the view and properties panel to show the new variant state
     UpdateProperties();
@@ -637,6 +621,26 @@ void PCB_EDIT_FRAME::onVariantSelected( wxCommandEvent& aEvent )
 
     Update3DView( true, GetPcbNewSettings()->m_Display.m_Live3DRefresh );
     m_toolManager->ProcessEvent( EVENTS::SelectedItemsModified );
+}
+
+
+void PCB_EDIT_FRAME::onVariantSelected( wxCommandEvent& aEvent )
+{
+    if( !m_CurrentVariantCtrl )
+        return;
+
+    int selection = m_CurrentVariantCtrl->GetSelection();
+
+    if( selection == wxNOT_FOUND || selection == 0 )
+    {
+        // "<Default>" selected - clear the current variant
+        SetCurrentVariant( wxEmptyString );
+    }
+    else
+    {
+        wxString selectedVariant = m_CurrentVariantCtrl->GetString( selection );
+        SetCurrentVariant( selectedVariant );
+    }
 }
 
 

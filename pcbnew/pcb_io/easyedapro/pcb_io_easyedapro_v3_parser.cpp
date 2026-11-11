@@ -26,6 +26,7 @@
 
 #include <memory>
 
+
 #include <json_common.h>
 #include <core/json_serializers.h>
 #include <core/map_helpers.h>
@@ -48,6 +49,10 @@
 #include <pad.h>
 #include <fix_board_shape.h>
 #include <board_design_settings.h>
+#include <board_design_settings_defaults.h>
+#include <netclass.h>
+#include <project/net_settings.h>
+
 #include <font/font.h>
 #include <core/mirror.h>
 #include <convert_basic_shapes_to_polygon.h>
@@ -55,11 +60,126 @@
 
 using namespace EASYEDAPRO;
 
+static const wxString safeSpacingNames[] = { wxS( "Track" ),
+                                             wxS( "SMD Pad" ),
+                                             wxS( "TH Pad" ),
+                                             wxS( "SMD Test Point" ),
+                                             wxS( "TH Test Point" ),
+                                             wxS( "Via" ),
+                                             wxS( "Fill Region / Teardrop" ),
+                                             wxS( "Copper / Plane Zone" ),
+                                             wxS( "Slot Region" ),
+                                             wxS( "Line" ),
+                                             wxS( "Text / Image" ),
+                                             wxS( "Board Outline" ),
+                                             wxS( "Hole" ) };
+
+// Empty entries are source categories that the current item conversion flattens into another
+// KiCad type.  Their values are retained as comments in the generated .kicad_dru file.
+static const wxString safeSpacingConditions[] = { wxS( "A.Type == 'Track'" ),
+                                                  wxS( "A.Type == 'Pad' && A.Pad_Type == 'SMD'" ),
+                                                  wxS( "A.Type == 'Pad' && A.Pad_Type == 'Through-hole'" ),
+                                                  wxEmptyString,
+                                                  wxEmptyString,
+                                                  wxS( "A.Type == 'Via'" ),
+                                                  wxEmptyString,
+                                                  wxEmptyString,
+                                                  wxEmptyString,
+                                                  wxEmptyString,
+                                                  wxEmptyString,
+                                                  wxEmptyString,
+                                                  wxEmptyString };
+
+
+static wxString safeSpacingToMm( double aMil )
+{
+    return wxString::FromUTF8( FormatDouble2Str( pcbIUScale.IUTomm( PCB_IO_EASYEDAPRO_PARSER::ScaleSize( aMil ) ) ) );
+}
+
+
+wxString PCB_IO_EASYEDAPRO_V3_PARSER::GenerateSafeSpacingRules() const
+{
+    return GenerateSafeSpacingRules( m_safeSpacing );
+}
+
+
+wxString PCB_IO_EASYEDAPRO_V3_PARSER::GenerateSafeSpacingRules( const nlohmann::json& aSafeSpacing )
+{
+    if( !aSafeSpacing.is_array() || aSafeSpacing.empty() )
+        return wxEmptyString;
+
+    wxString rules = wxS( "(version 1)\n\n"
+                          "# EasyEDA Pro safeSpacing values.  Values are mils even when the\n"
+                          "# source rule context reports unit \"mm\".  Entries without a\n"
+                          "# generated rule are source categories that KiCad's imported item\n"
+                          "# model cannot distinguish; they remain here for lossless reference.\n" );
+
+    for( size_t row = 0; row < sizeof( safeSpacingNames ) / sizeof( safeSpacingNames[0] ) && row < aSafeSpacing.size();
+         ++row )
+    {
+        const nlohmann::json& values = aSafeSpacing.at( row );
+
+        if( !values.is_array() )
+            continue;
+
+        for( size_t col = 0; col <= row && col < values.size(); ++col )
+        {
+            if( !values.at( col ).is_number() )
+                continue;
+
+            double   value = values.at( col );
+            wxString mil = wxString::FromUTF8( FormatDouble2Str( value ) );
+            wxString mm = safeSpacingToMm( value );
+
+            rules += wxString::Format( wxS( "# %s ↔ %s: %s mil (%s mm)\n" ), safeSpacingNames[row],
+                                       safeSpacingNames[col], mil, mm );
+
+            if( value <= 0 || safeSpacingConditions[row].empty() || safeSpacingConditions[col].empty()
+                || ( row == 0 && col == 0 ) )
+            {
+                continue;
+            }
+            wxString conditionA = safeSpacingConditions[row];
+            wxString conditionB = safeSpacingConditions[col];
+            conditionB.Replace( wxS( "A." ), wxS( "B." ) );
+
+            rules += wxString::Format( wxS( "\n(rule \"EasyEDA safe spacing: %s ↔ %s\"\n"
+                                            "  (condition \"(%s) && (%s)\")\n"
+                                            "  (constraint clearance (min %smm)))\n" ),
+                                       safeSpacingNames[row], safeSpacingNames[col], conditionA, conditionB, mm );
+        }
+    }
+
+    constexpr size_t boardOutline = 11;
+
+    if( boardOutline < aSafeSpacing.size() && aSafeSpacing.at( boardOutline ).is_array() )
+    {
+        const nlohmann::json& values = aSafeSpacing.at( boardOutline );
+
+        for( size_t index : { 0u, 1u, 2u, 5u } )
+        {
+            if( index >= values.size() || !values.at( index ).is_number() || values.at( index ).get<double>() <= 0 )
+            {
+                continue;
+            }
+
+            wxString mm = safeSpacingToMm( values.at( index ) );
+
+            rules += wxString::Format( wxS( "\n(rule \"EasyEDA safe spacing: %s ↔ Board Outline\"\n"
+                                            "  (condition \"(%s)\")\n"
+                                            "  (constraint edge_clearance (min %smm)))\n" ),
+                                       safeSpacingNames[index], safeSpacingConditions[index], mm );
+        }
+    }
+
+    return rules;
+}
+
+
 static const int SHAPE_JOIN_DISTANCE = pcbIUScale.mmToIU( 1.5 );
 
 
-PCB_IO_EASYEDAPRO_V3_PARSER::PCB_IO_EASYEDAPRO_V3_PARSER( BOARD*             aBoard,
-                                                            PROGRESS_REPORTER* aProgressReporter ) :
+PCB_IO_EASYEDAPRO_V3_PARSER::PCB_IO_EASYEDAPRO_V3_PARSER( BOARD* aBoard, PROGRESS_REPORTER* aProgressReporter ) :
         m_board( aBoard ),
         m_v2Parser( aBoard, aProgressReporter )
 {
@@ -70,8 +190,7 @@ static void V3AlignText( EDA_TEXT* text, int align );
 static int  V3AlignToOriginCode( const wxString& aAlign );
 
 
-std::unique_ptr<PAD> PCB_IO_EASYEDAPRO_V3_PARSER::createV3PAD( FOOTPRINT*       aFootprint,
-                                                                 const V3_ROW&   aRow )
+std::unique_ptr<PAD> PCB_IO_EASYEDAPRO_V3_PARSER::createV3PAD( FOOTPRINT* aFootprint, const V3_ROW& aRow )
 {
     int          layer = V3GetInt( aRow.inner, "layerId", 1 );
     PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( layer );
@@ -85,7 +204,7 @@ std::unique_ptr<PAD> PCB_IO_EASYEDAPRO_V3_PARSER::createV3PAD( FOOTPRINT*       
     double orientation = V3GetDouble( aRow.inner, "padAngle" );
 
     nlohmann::json holeObj = aRow.inner.value( "hole", nlohmann::json() );
-    nlohmann::json padDef  = aRow.inner.value( "defaultPad", nlohmann::json() );
+    nlohmann::json padDef = aRow.inner.value( "defaultPad", nlohmann::json() );
 
     std::unique_ptr<PAD> pad = std::make_unique<PAD>( aFootprint );
 
@@ -171,8 +290,7 @@ std::unique_ptr<PAD> PCB_IO_EASYEDAPRO_V3_PARSER::createV3PAD( FOOTPRINT*       
             size.y = V3GetDouble( padDef, "height", 1.0 );
 
             pad->SetSize( PADSTACK::ALL_LAYERS, PCB_IO_EASYEDAPRO_PARSER::ScaleSize( size ) );
-            pad->SetShape( PADSTACK::ALL_LAYERS, size.x == size.y ? PAD_SHAPE::CIRCLE
-                                                                  : PAD_SHAPE::OVAL );
+            pad->SetShape( PADSTACK::ALL_LAYERS, size.x == size.y ? PAD_SHAPE::CIRCLE : PAD_SHAPE::OVAL );
         }
         else if( padType == wxS( "OVAL" ) )
         {
@@ -191,8 +309,7 @@ std::unique_ptr<PAD> PCB_IO_EASYEDAPRO_V3_PARSER::createV3PAD( FOOTPRINT*       
 
             nlohmann::json polyData = padDef.value( "path", nlohmann::json() );
 
-            std::vector<std::unique_ptr<PCB_SHAPE>> results =
-                    m_v2Parser.ParsePoly( aFootprint, polyData, true, false );
+            std::vector<std::unique_ptr<PCB_SHAPE>> results = m_v2Parser.ParsePoly( aFootprint, polyData, true, false );
 
             for( auto& shape : results )
             {
@@ -209,14 +326,16 @@ std::unique_ptr<PAD> PCB_IO_EASYEDAPRO_V3_PARSER::createV3PAD( FOOTPRINT*       
         pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
     }
 
+    if( hasHole )
+        PCB_IO_EASYEDAPRO_PARSER::SizeHoleOnlyPad( *pad, aRow.inner.value( "plated", true ) );
+
     pad->SetThermalSpokeAngle( ANGLE_90 );
 
     return pad;
 }
 
 
-PCB_TEXT* PCB_IO_EASYEDAPRO_V3_PARSER::createV3Text( BOARD_ITEM_CONTAINER*     aContainer,
-                                                     const EASYEDAPRO::V3_ROW& aRow )
+PCB_TEXT* PCB_IO_EASYEDAPRO_V3_PARSER::createV3Text( BOARD_ITEM_CONTAINER* aContainer, const EASYEDAPRO::V3_ROW& aRow )
 {
     int          layer = V3GetInt( aRow.inner, "layerId", 3 );
     PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( layer );
@@ -266,14 +385,16 @@ PCB_TEXT* PCB_IO_EASYEDAPRO_V3_PARSER::createV3Text( BOARD_ITEM_CONTAINER*     a
 }
 
 
-FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString, EASYEDAPRO::BLOB>& aBlobMap,
-                                                        const V3_DOC_RAW&                           aDoc )
+std::unique_ptr<FOOTPRINT>
+PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString, EASYEDAPRO::BLOB>& aBlobMap,
+                                             const V3_DOC_RAW&                           aDoc )
 {
     std::unique_ptr<FOOTPRINT> footprintPtr = std::make_unique<FOOTPRINT>( m_board );
     FOOTPRINT*                 footprint = footprintPtr.get();
 
     const VECTOR2I defaultTextSize( pcbIUScale.mmToIU( 1.0 ), pcbIUScale.mmToIU( 1.0 ) );
     const int      defaultTextThickness( pcbIUScale.mmToIU( 0.15 ) );
+    VECTOR2I       canvasOrigin( 0, 0 );
 
     for( PCB_FIELD* field : footprint->GetFields() )
     {
@@ -283,7 +404,12 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
 
     for( const V3_ROW& row : aDoc.rows )
     {
-        if( row.type == wxS( "POLY" ) )
+        if( row.type == wxS( "CANVAS" ) )
+        {
+            canvasOrigin = PCB_IO_EASYEDAPRO_PARSER::ScalePos(
+                    VECTOR2D( V3GetDouble( row.inner, "originX" ), V3GetDouble( row.inner, "originY" ) ) );
+        }
+        else if( row.type == wxS( "POLY" ) )
         {
             int          layer = V3GetInt( row.inner, "layerId", 1 );
             PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( layer );
@@ -291,8 +417,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
 
             nlohmann::json polyData = row.inner.value( "path", nlohmann::json::array() );
 
-            std::vector<std::unique_ptr<PCB_SHAPE>> results =
-                    m_v2Parser.ParsePoly( footprint, polyData, false, false );
+            std::vector<std::unique_ptr<PCB_SHAPE>> results = m_v2Parser.ParsePoly( footprint, polyData, false, false );
 
             for( auto& shape : results )
             {
@@ -341,8 +466,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
 
                 for( const SHAPE_POLY_SET::POLYGON& poly : polySet.CPolygons() )
                 {
-                    std::unique_ptr<PCB_SHAPE> shape =
-                            std::make_unique<PCB_SHAPE>( footprint, SHAPE_T::POLY );
+                    std::unique_ptr<PCB_SHAPE> shape = std::make_unique<PCB_SHAPE>( footprint, SHAPE_T::POLY );
 
                     shape->SetFilled( true );
                     shape->SetPolyShape( poly );
@@ -409,8 +533,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
                 for( auto& shape : results )
                 {
                     shape->SetFilled( true );
-                    shape->TransformShapeToPolygon( polySet, klayer, 0, ARC_HIGH_DEF,
-                                                    ERROR_INSIDE, true );
+                    shape->TransformShapeToPolygon( polySet, klayer, 0, ARC_HIGH_DEF, ERROR_INSIDE, true );
                 }
 
                 polySet.Simplify();
@@ -419,8 +542,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
 
                 zone->SetIsRuleArea( true );
                 zone->SetDoNotAllowFootprints( !!flags.count( 2 ) );
-                zone->SetDoNotAllowZoneFills( !!flags.count( 7 ) || !!flags.count( 6 )
-                                              || !!flags.count( 8 ) );
+                zone->SetDoNotAllowZoneFills( !!flags.count( 7 ) || !!flags.count( 6 ) || !!flags.count( 8 ) );
                 zone->SetDoNotAllowPads( !!flags.count( 7 ) );
                 zone->SetDoNotAllowTracks( !!flags.count( 7 ) || !!flags.count( 5 ) );
                 zone->SetDoNotAllowVias( !!flags.count( 7 ) );
@@ -547,8 +669,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
 
                     if( blobUrl.BeforeFirst( ':' ) == wxS( "data" ) )
                     {
-                        wxArrayString paramsArr =
-                                wxSplit( blobUrl.AfterFirst( ':' ).BeforeFirst( ',' ), ';', '\0' );
+                        wxArrayString paramsArr = wxSplit( blobUrl.AfterFirst( ':' ).BeforeFirst( ',' ), ';', '\0' );
 
                         base64Data = blobUrl.AfterFirst( ',' );
 
@@ -578,8 +699,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
                         std::make_unique<PCB_REFERENCE_IMAGE>( footprint, kcenter, klayer );
                 REFERENCE_IMAGE& refImage = bitmap->GetReferenceImage();
 
-                wxImage::SetDefaultLoadFlags( wxImage::GetDefaultLoadFlags()
-                                              & ~wxImage::Load_Verbose );
+                wxImage::SetDefaultLoadFlags( wxImage::GetDefaultLoadFlags() & ~wxImage::Load_Verbose );
 
                 if( refImage.ReadImageFile( buf ) )
                 {
@@ -629,8 +749,7 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
         BOX2I bbox = footprint->GetLayerBoundingBox( { F_Cu, F_Fab, F_Paste, F_Mask, Edge_Cuts } );
         bbox.Inflate( pcbIUScale.mmToIU( 0.25 ) );
 
-        std::unique_ptr<PCB_SHAPE> shape =
-                std::make_unique<PCB_SHAPE>( footprint, SHAPE_T::RECTANGLE );
+        std::unique_ptr<PCB_SHAPE> shape = std::make_unique<PCB_SHAPE>( footprint, SHAPE_T::RECTANGLE );
 
         shape->SetWidth( pcbIUScale.mmToIU( DEFAULT_COURTYARD_WIDTH ) );
         shape->SetLayer( F_CrtYd );
@@ -657,8 +776,8 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
 
     if( !hasFabRef )
     {
-        int c_refTextSize = pcbIUScale.mmToIU( 0.5 );
-        int c_refTextThickness = pcbIUScale.mmToIU( 0.1 );
+        int                       c_refTextSize = pcbIUScale.mmToIU( 0.5 );
+        int                       c_refTextThickness = pcbIUScale.mmToIU( 0.1 );
         std::unique_ptr<PCB_TEXT> refText = std::make_unique<PCB_TEXT>( footprint );
 
         refText->SetLayer( F_Fab );
@@ -669,7 +788,9 @@ FOOTPRINT* PCB_IO_EASYEDAPRO_V3_PARSER::ParseFootprint( const std::map<wxString,
         footprint->Add( refText.release(), ADD_MODE::APPEND );
     }
 
-    return footprintPtr.release();
+    footprint->MoveAnchorPosition( -canvasOrigin );
+
+    return footprintPtr;
 }
 
 
@@ -742,19 +863,18 @@ static int V3AlignToOriginCode( const wxString& aAlign )
 }
 
 
-void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
-        BOARD* aBoard, const nlohmann::json& aProject,
-        std::map<wxString, std::unique_ptr<FOOTPRINT>>&    aFootprintMap,
-        const std::map<wxString, EASYEDAPRO::BLOB>&        aBlobMap,
-        const std::multimap<wxString, EASYEDAPRO::POURED>& aPouredMap,
-        const V3_DOC_RAW& aDoc, const wxString& aFpLibName )
+void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard( BOARD* aBoard, const nlohmann::json& aProject,
+                                              std::map<wxString, std::unique_ptr<FOOTPRINT>>&    aFootprintMap,
+                                              const std::map<wxString, EASYEDAPRO::BLOB>&        aBlobMap,
+                                              const std::multimap<wxString, EASYEDAPRO::POURED>& aPouredMap,
+                                              const V3_DOC_RAW& aDoc, const wxString& aFpLibName )
 {
     // Structures to collect component-related rows for second-pass placement
     struct COMP_DATA
     {
-        int      layer = 1;
-        VECTOR2D pos;
-        double   angle = 0;
+        int                          layer = 1;
+        VECTOR2D                     pos;
+        double                       angle = 0;
         std::map<wxString, wxString> attrs;
     };
 
@@ -785,23 +905,81 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         wxString padNet;
     };
 
-    std::map<wxString, COMP_DATA>              componentMap;
-    std::multimap<wxString, ATTR_DATA>         attrMap;
-    std::multimap<wxString, PAD_NET_DATA>      padNetMap;
+    std::map<wxString, COMP_DATA>         componentMap;
+    std::multimap<wxString, ATTR_DATA>    attrMap;
+    std::multimap<wxString, PAD_NET_DATA> padNetMap;
 
     std::multimap<wxString, EASYEDAPRO::POURED> boardPouredMap = aPouredMap;
     std::map<wxString, ZONE*>                   poursToFill;
+    BOARD_DESIGN_SETTINGS&                      bds = aBoard->GetDesignSettings();
 
-    BOARD_DESIGN_SETTINGS& bds = aBoard->GetDesignSettings();
+    m_safeSpacing = nlohmann::json();
+
+    for( const V3_ROW& row : aDoc.rows )
+    {
+        if( row.type != wxS( "RULE" ) || V3GetString( row.inner, "ruleState" ) != wxS( "DEFAULT" ) )
+            continue;
+
+        nlohmann::json idArr = V3ParseIdArray( row.id );
+
+        if( !idArr.is_array() || idArr.size() < 3 || V3JsonToString( idArr[1] ) != wxS( "SAFE" ) )
+            continue;
+
+        nlohmann::json safeSpacing =
+                row.inner.value( "ruleContext", nlohmann::json() ).value( "safeSpacing", nlohmann::json::array() );
+
+        if( safeSpacing.is_array() && !safeSpacing.empty() )
+        {
+            m_safeSpacing = PCB_IO_EASYEDAPRO_PARSER::NormalizeSafeSpacing(
+                    safeSpacing[0].value( "content", nlohmann::json::array() ) );
+            break;
+        }
+    }
+
+    auto zoneClearance =
+            [&]() -> int
+            {
+                if( m_safeSpacing.is_array() && m_safeSpacing.size() > 7 && m_safeSpacing.at( 7 ).is_array()
+                    && !m_safeSpacing.at( 7 ).empty() && m_safeSpacing.at( 7 ).at( 0 ).is_number() )
+                {
+                    const int clearance = PCB_IO_EASYEDAPRO_PARSER::ScaleSize( m_safeSpacing.at( 7 ).at( 0 ).get<double>() );
+
+                    if( clearance > 0 )
+                        return clearance;
+                }
+
+                return bds.m_MinClearance;
+            };
+
+    const int zoneMinThickness = bds.GetDefaultZoneSettings().m_ZoneMinThickness;
+
 
     for( const V3_ROW& row : aDoc.rows )
     {
         if( row.type == wxS( "LAYER" ) )
         {
-            int          layer = V3GetInt( row.inner, "layerId", 1 );
+            int layer = V3GetInt( row.inner, "layerId", -1 );
+
+            if( layer < 0 )
+            {
+                nlohmann::json id = V3ParseIdArray( row.id );
+
+                if( id.is_array() && id.size() > 1 )
+                {
+                    wxString layerId = V3JsonToString( id.at( 1 ) );
+                    long     parsedLayer;
+
+                    if( layerId.ToLong( &parsedLayer ) )
+                        layer = parsedLayer;
+                }
+            }
+
+            if( layer < 0 )
+                continue;
+
             PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( layer );
 
-            bool use = V3GetBool( row.inner, "use", true );
+            bool     use = V3GetBool( row.inner, "use", true );
             wxString layerName = V3GetString( row.inner, "layerName" );
 
             if( use )
@@ -817,16 +995,14 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         else if( row.type == wxS( "NET" ) )
         {
             nlohmann::json idArr = V3ParseIdArray( row.id );
-            wxString netname;
+            wxString       netname;
 
             if( idArr.is_array() && idArr.size() > 1 )
                 netname = V3JsonToString( idArr[1] );
 
             if( !netname.IsEmpty() )
             {
-                aBoard->Add( new NETINFO_ITEM( aBoard, netname,
-                                               aBoard->GetNetCount() + 1 ),
-                             ADD_MODE::APPEND );
+                aBoard->FindOrAddNet( netname, aBoard->GetNetCount() + 1, ADD_MODE::APPEND );
             }
         }
         else if( row.type == wxS( "RULE" ) )
@@ -837,7 +1013,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
                 continue;
 
             wxString ruleType = V3JsonToString( idArr[1] );
-            bool isDefault = V3GetString( row.inner, "ruleState" ) == wxS( "DEFAULT" );
+            bool     isDefault = V3GetString( row.inner, "ruleState" ) == wxS( "DEFAULT" );
 
             nlohmann::json context = row.inner.value( "ruleContext", nlohmann::json() );
 
@@ -850,35 +1026,58 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
                 {
                     double minVal = V3GetDouble( content[0], "stroMin" );
                     bds.m_TrackMinWidth = PCB_IO_EASYEDAPRO_PARSER::ScaleSize( minVal );
+                    aBoard->m_LegacyDesignSettingsLoaded = true;
                 }
             }
             else if( ruleType == wxS( "SAFE" ) && isDefault )
             {
-                nlohmann::json safeSpacing = context.value( "safeSpacing",
-                                                            nlohmann::json::array() );
+                nlohmann::json safeSpacing = context.value( "safeSpacing", nlohmann::json::array() );
 
                 if( safeSpacing.is_array() && !safeSpacing.empty() )
                 {
-                    nlohmann::json content = safeSpacing[0].value( "content",
-                                                                    nlohmann::json::array() );
+                    nlohmann::json content = PCB_IO_EASYEDAPRO_PARSER::NormalizeSafeSpacing(
+                            safeSpacing[0].value( "content", nlohmann::json::array() ) );
 
-                    int minVal = INT_MAX;
+                    if( m_safeSpacing.is_null() )
+                        m_safeSpacing = content;
 
-                    for( const auto& arr : content )
+                    // EasyEDA Pro labels this array "mm", but its values are always mils.  The
+                    // lower-triangular matrix starts with the track-to-track clearance, which maps
+                    // to KiCad's global minimum clearance; the remaining object-specific values
+                    // cannot be represented by that single board setting.
+                    if( content.is_array() && !content.empty() && content.at( 0 ).is_array() && !content.at( 0 ).empty()
+                        && content.at( 0 ).at( 0 ).is_number() )
                     {
-                        if( arr.is_array() )
+                        double trackClearance = content.at( 0 ).at( 0 );
+
+                        if( trackClearance > 0 )
                         {
-                            for( const auto& val : arr )
+                            int clearance = PCB_IO_EASYEDAPRO_PARSER::ScaleSize( trackClearance );
+                            bds.m_MinClearance = clearance;
+                            bds.m_NetSettings->GetDefaultNetclass()->SetClearance( clearance );
+                            aBoard->m_LegacyDesignSettingsLoaded = true;
+                            aBoard->m_LegacyNetclassesLoaded = true;
+                        }
+                    }
+                    double minEdgeClearance = 0;
+
+                    if( content.size() > 11 && content.at( 11 ).is_array() )
+                    {
+                        for( const nlohmann::json& value : content.at( 11 ) )
+                        {
+                            if( value.is_number() && value.get<double>() > 0
+                                && ( minEdgeClearance == 0 || value.get<double>() < minEdgeClearance ) )
                             {
-                                int v = val.is_number() ? val.get<int>() : 0;
-                                if( v < minVal )
-                                    minVal = v;
+                                minEdgeClearance = value;
                             }
                         }
                     }
 
-                    if( minVal != INT_MAX )
-                        bds.m_MinClearance = PCB_IO_EASYEDAPRO_PARSER::ScaleSize( minVal );
+                    if( minEdgeClearance > 0 )
+                    {
+                        bds.m_CopperEdgeClearance = PCB_IO_EASYEDAPRO_PARSER::ScaleSize( minEdgeClearance );
+                        aBoard->m_LegacyDesignSettingsLoaded = true;
+                    }
                 }
             }
         }
@@ -888,8 +1087,8 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             center.x = V3GetDouble( row.inner, "centerX" );
             center.y = V3GetDouble( row.inner, "centerY" );
 
-            double drill = V3GetDouble( row.inner, "holeDiameter" );
-            double dia = V3GetDouble( row.inner, "viaDiameter" );
+            double   drill = V3GetDouble( row.inner, "holeDiameter" );
+            double   dia = V3GetDouble( row.inner, "viaDiameter" );
             wxString netname = V3GetString( row.inner, "netName" );
 
             std::unique_ptr<PCB_VIA> via = std::make_unique<PCB_VIA>( aBoard );
@@ -954,10 +1153,9 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             VECTOR2D center = mid + delta.Perpendicular().Resize( cdist );
 
             SHAPE_ARC sarc;
-            sarc.ConstructFromStartEndCenter(
-                    PCB_IO_EASYEDAPRO_PARSER::ScalePos( start ),
-                    PCB_IO_EASYEDAPRO_PARSER::ScalePos( end ),
-                    PCB_IO_EASYEDAPRO_PARSER::ScalePos( center ), angle >= 0, width );
+            sarc.ConstructFromStartEndCenter( PCB_IO_EASYEDAPRO_PARSER::ScalePos( start ),
+                                              PCB_IO_EASYEDAPRO_PARSER::ScalePos( end ),
+                                              PCB_IO_EASYEDAPRO_PARSER::ScalePos( center ), angle >= 0, width );
 
             std::unique_ptr<PCB_ARC> arc = std::make_unique<PCB_ARC>( aBoard, &sarc );
             arc->SetWidth( PCB_IO_EASYEDAPRO_PARSER::ScaleSize( width ) );
@@ -974,8 +1172,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             double         thickness = V3GetDouble( row.inner, "width" );
             nlohmann::json polyData = row.inner.value( "path", nlohmann::json::array() );
 
-            std::vector<std::unique_ptr<PCB_SHAPE>> results =
-                    m_v2Parser.ParsePoly( aBoard, polyData, false, false );
+            std::vector<std::unique_ptr<PCB_SHAPE>> results = m_v2Parser.ParsePoly( aBoard, polyData, false, false );
 
             for( auto& shape : results )
             {
@@ -1015,6 +1212,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
                 zoneFillPoly.AddOutline( contour );
 
             zoneFillPoly.RebuildHolesFromContours();
+            zoneFillPoly.ClearArcs();
             zoneFillPoly.Fracture();
 
             std::unique_ptr<ZONE> zone = std::make_unique<ZONE>( aBoard );
@@ -1027,8 +1225,8 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             zone->SetIsFilled( true );
             zone->SetNeedRefill( false );
 
-            zone->SetLocalClearance( bds.m_MinClearance );
-            zone->SetMinThickness( bds.m_TrackMinWidth );
+            zone->SetLocalClearance( zoneClearance() );
+            zone->SetMinThickness( zoneMinThickness );
 
             aBoard->Add( zone.release(), ADD_MODE::APPEND );
         }
@@ -1047,8 +1245,8 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             zone->SetNet( aBoard->FindNet( netname ) );
             zone->SetLayer( klayer );
             zone->SetAssignedPriority( 500 - fillOrder );
-            zone->SetLocalClearance( bds.m_MinClearance );
-            zone->SetMinThickness( bds.m_TrackMinWidth );
+            zone->SetLocalClearance( zoneClearance() );
+            zone->SetMinThickness( zoneMinThickness );
 
             for( nlohmann::json& polyData : polyDataList )
             {
@@ -1063,10 +1261,38 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
 
             aBoard->Add( zone.release(), ADD_MODE::APPEND );
         }
+        else if( row.type == wxS( "TEARDROP" ) )
+        {
+            int          layer = V3GetInt( row.inner, "layerId", 1 );
+            PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( layer );
+            wxString     netname = V3GetString( row.inner, "netName" );
+
+            nlohmann::json polyData = row.inner.value( "path", nlohmann::json::array() );
+
+            SHAPE_LINE_CHAIN contour = m_v2Parser.ParseContour( polyData, false );
+            contour.SetClosed( true );
+
+            std::unique_ptr<ZONE> zone = std::make_unique<ZONE>( aBoard );
+
+            zone->SetNet( aBoard->FindNet( netname ) );
+            zone->SetLayer( klayer );
+            zone->Outline()->Append( contour );
+            SHAPE_POLY_SET teardropFill( contour );
+            teardropFill.ClearArcs();
+            zone->SetFilledPolysList( klayer, teardropFill );
+            zone->SetNeedRefill( false );
+            zone->SetIsFilled( true );
+            zone->SetAssignedPriority( 600 );
+            zone->SetLocalClearance( 0 );
+            zone->SetMinThickness( 0 );
+            zone->SetTeardropAreaType( TEARDROP_TYPE::TD_VIAPAD );
+
+            aBoard->Add( zone.release(), ADD_MODE::APPEND );
+        }
         else if( row.type == wxS( "POURED" ) )
         {
             nlohmann::json idArr = V3ParseIdArray( row.id );
-            wxString parentId;
+            wxString       parentId;
 
             if( idArr.is_array() && idArr.size() > 1 )
                 parentId = V3JsonToString( idArr[1] );
@@ -1079,8 +1305,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             for( const nlohmann::json& fill : fills )
             {
                 EASYEDAPRO::POURED poured;
-                poured.pouredId = V3JsonToString( fill.value( "id",
-                                                              nlohmann::json( row.id ) ) );
+                poured.pouredId = V3JsonToString( fill.value( "id", nlohmann::json( row.id ) ) );
                 poured.parentId = parentId;
                 poured.unki = V3GetInt( fill, "strokeWidth" );
                 poured.isPoly = V3GetBool( fill, "fill" );
@@ -1095,8 +1320,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( layer );
 
             nlohmann::json polyDataList = row.inner.value( "path", nlohmann::json::array() );
-            nlohmann::json prohibitTypes = row.inner.value( "prohibitType",
-                                                            nlohmann::json::array() );
+            nlohmann::json prohibitTypes = row.inner.value( "prohibitType", nlohmann::json::array() );
 
             std::set<int> flags;
 
@@ -1131,8 +1355,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
 
                 zone->SetIsRuleArea( true );
                 zone->SetDoNotAllowFootprints( !!flags.count( 2 ) );
-                zone->SetDoNotAllowZoneFills( !!flags.count( 7 ) || !!flags.count( 6 )
-                                              || !!flags.count( 8 ) );
+                zone->SetDoNotAllowZoneFills( !!flags.count( 7 ) || !!flags.count( 6 ) || !!flags.count( 8 ) );
                 zone->SetDoNotAllowPads( !!flags.count( 7 ) );
                 zone->SetDoNotAllowTracks( !!flags.count( 7 ) || !!flags.count( 5 ) );
                 zone->SetDoNotAllowVias( !!flags.count( 7 ) );
@@ -1197,12 +1420,8 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
             nlohmann::json idArr = V3ParseIdArray( row.id );
 
             PAD_NET_DATA pn;
-            pn.compId = idArr.is_array() && idArr.size() > 1
-                                ? V3JsonToString( idArr[1] )
-                                : wxString();
-            pn.padNumber = idArr.is_array() && idArr.size() > 2
-                                   ? V3JsonToString( idArr[2] )
-                                   : wxString();
+            pn.compId = idArr.is_array() && idArr.size() > 1 ? V3JsonToString( idArr[1] ) : wxString();
+            pn.padNumber = idArr.is_array() && idArr.size() > 2 ? V3JsonToString( idArr[2] ) : wxString();
             pn.padNet = V3GetString( row.inner, "padNet" );
 
             if( !pn.compId.IsEmpty() )
@@ -1212,9 +1431,8 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         {
             wxString netname = V3GetString( row.inner, "netName" );
 
-            std::unique_ptr<FOOTPRINT> footprint =
-                    std::make_unique<FOOTPRINT>( aBoard );
-            std::unique_ptr<PAD> pad = createV3PAD( footprint.get(), row );
+            std::unique_ptr<FOOTPRINT> footprint = std::make_unique<FOOTPRINT>( aBoard );
+            std::unique_ptr<PAD>       pad = createV3PAD( footprint.get(), row );
 
             pad->SetNet( aBoard->FindNet( netname ) );
 
@@ -1354,8 +1572,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
 
                     if( blobUrl.BeforeFirst( ':' ) == wxS( "data" ) )
                     {
-                        wxArrayString paramsArr =
-                                wxSplit( blobUrl.AfterFirst( ':' ).BeforeFirst( ',' ), ';', '\0' );
+                        wxArrayString paramsArr = wxSplit( blobUrl.AfterFirst( ':' ).BeforeFirst( ',' ), ';', '\0' );
 
                         base64Data = blobUrl.AfterFirst( ',' );
 
@@ -1385,8 +1602,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
                         std::make_unique<PCB_REFERENCE_IMAGE>( aBoard, kcenter, klayer );
                 REFERENCE_IMAGE& refImage = bitmap->GetReferenceImage();
 
-                wxImage::SetDefaultLoadFlags( wxImage::GetDefaultLoadFlags()
-                                              & ~wxImage::Load_Verbose );
+                wxImage::SetDefaultLoadFlags( wxImage::GetDefaultLoadFlags() & ~wxImage::Load_Verbose );
 
                 if( refImage.ReadImageFile( buf ) )
                 {
@@ -1434,7 +1650,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         }
 
         // BOM / identity / 3D fields come from the component's Device ATTR.
-        EASYEDAPRO::V3_DEVICE_DATA deviceData = GetV3DeviceData( aProject, deviceId );
+        EASYEDAPRO::V3_DEVICE_DATA          deviceData = GetV3DeviceData( aProject, deviceId );
         const std::map<wxString, wxString>& deviceAttrs = deviceData.attributes;
 
         wxString fpId = fpIdOverride;
@@ -1445,7 +1661,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         if( fpId.empty() )
         {
             wxLogTrace( traceEasyEdaIo, wxT( "EasyEDA Pro v3 component '%s' (%s): no footprint mapping, skipping." ),
-                    compId, fpDesignator );
+                        compId, fpDesignator );
             continue;
         }
 
@@ -1458,8 +1674,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         }
 
         std::unique_ptr<FOOTPRINT>& footprintOrig = it->second;
-        std::unique_ptr<FOOTPRINT>  footprint(
-                static_cast<FOOTPRINT*>( footprintOrig->Clone() ) );
+        std::unique_ptr<FOOTPRINT>  footprint( static_cast<FOOTPRINT*>( footprintOrig->Duplicate( false ) ) );
 
         footprint->SetParent( aBoard );
 
@@ -1494,26 +1709,25 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
                     ->SetText( NormalizeEasyEDAText( ResolveDeviceFieldVariables( description, deviceAttrs ) ) );
         }
 
-        ForEachImportedDeviceField(
-                deviceAttrs, false,
-                [&]( const wxString& attrKey, const wxString& value )
-                {
-                    PCB_FIELD* field = nullptr;
+        ForEachImportedDeviceField( deviceAttrs, false,
+                                    [&]( const wxString& attrKey, const wxString& value )
+                                    {
+                                        PCB_FIELD* field = nullptr;
 
-                    if( attrKey == wxS( "Datasheet" ) )
-                        field = footprint->GetField( FIELD_T::DATASHEET );
-                    else
-                        field = footprint->GetField( attrKey );
+                                        if( attrKey == wxS( "Datasheet" ) )
+                                            field = footprint->GetField( FIELD_T::DATASHEET );
+                                        else
+                                            field = footprint->GetField( attrKey );
 
-                    if( !field )
-                    {
-                        field = new PCB_FIELD( footprint.get(), FIELD_T::USER, attrKey );
-                        footprint->Add( field, ADD_MODE::APPEND );
-                    }
+                                        if( !field )
+                                        {
+                                            field = new PCB_FIELD( footprint.get(), FIELD_T::USER, attrKey );
+                                            footprint->Add( field, ADD_MODE::APPEND );
+                                        }
 
-                    field->SetText( value );
-                    field->SetVisible( false );
-                } );
+                                        field->SetText( value );
+                                        field->SetVisible( false );
+                                    } );
 
         // Apply position, rotation, flip
         PCB_LAYER_ID klayer = m_v2Parser.LayerToKi( comp.layer );
@@ -1550,19 +1764,15 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
 
                 if( attr.hasPos )
                 {
-                    field->SetPosition( PCB_IO_EASYEDAPRO_PARSER::ScalePos(
-                            VECTOR2D( attr.x, attr.y ) ) );
+                    field->SetPosition( PCB_IO_EASYEDAPRO_PARSER::ScalePos( VECTOR2D( attr.x, attr.y ) ) );
                 }
 
                 field->SetKeepUpright( false );
-                field->SetTextAngleDegrees( footprint->IsFlipped() ? -attr.angle
-                                                                    : attr.angle );
+                field->SetTextAngleDegrees( footprint->IsFlipped() ? -attr.angle : attr.angle );
                 field->SetIsKnockout( attr.inverted );
-                field->SetTextThickness(
-                        PCB_IO_EASYEDAPRO_PARSER::ScaleSize( attr.strokeWidth ) );
-                field->SetTextSize( VECTOR2D(
-                        PCB_IO_EASYEDAPRO_PARSER::ScaleSize( attr.fontSize * 0.55 ),
-                        PCB_IO_EASYEDAPRO_PARSER::ScaleSize( attr.fontSize * 0.6 ) ) );
+                field->SetTextThickness( PCB_IO_EASYEDAPRO_PARSER::ScaleSize( attr.strokeWidth ) );
+                field->SetTextSize( VECTOR2D( PCB_IO_EASYEDAPRO_PARSER::ScaleSize( attr.fontSize * 0.55 ),
+                                              PCB_IO_EASYEDAPRO_PARSER::ScaleSize( attr.fontSize * 0.6 ) ) );
 
                 int alignCode = V3AlignToOriginCode( attr.origin );
                 V3AlignText( field, alignCode );
@@ -1576,10 +1786,11 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
         {
             const PAD_NET_DATA& pn = pnIt->second;
 
-            PAD* pad = footprint->FindPadByNumber( pn.padNumber );
-
-            if( pad )
-                pad->SetNet( aBoard->FindNet( pn.padNet ) );
+            for( PAD* pad : footprint->Pads() )
+            {
+                if( pad->GetNumber() == pn.padNumber )
+                    pad->SetNet( aBoard->FindNet( pn.padNet ) );
+            }
         }
 
         aBoard->Add( footprint.release(), ADD_MODE::APPEND );
@@ -1601,14 +1812,12 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
 
                 SHAPE_POLY_SET thisPoly;
 
-                for( int dataId = 0;
-                     dataId < static_cast<int>( poured.polyData.size() ); dataId++ )
+                for( int dataId = 0; dataId < static_cast<int>( poured.polyData.size() ); dataId++ )
                 {
                     const nlohmann::json& fillData = poured.polyData[dataId];
                     const double          ptScale = 10;
 
-                    SHAPE_LINE_CHAIN contour = m_v2Parser.ParseContour(
-                            fillData, false, ARC_HIGH_DEF / ptScale );
+                    SHAPE_LINE_CHAIN contour = m_v2Parser.ParseContour( fillData, false, ARC_HIGH_DEF / ptScale );
 
                     // Scale the fill
                     for( int i = 0; i < contour.PointCount(); i++ )
@@ -1639,8 +1848,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
                         {
                             const SEG& seg = contour.CSegment( segId );
 
-                            TransformOvalToPolygon( thermalSpokes, seg.A, seg.B,
-                                                    thermalWidth, ARC_HIGH_DEF,
+                            TransformOvalToPolygon( thermalSpokes, seg.A, seg.B, thermalWidth, ARC_HIGH_DEF,
                                                     ERROR_INSIDE );
                         }
                     }
@@ -1655,9 +1863,7 @@ void PCB_IO_EASYEDAPRO_V3_PARSER::ParseBoard(
 
                 const int strokeWidth = pcbIUScale.MilsToIU( 8 );
 
-                fillPolySet.Inflate( strokeWidth / 2,
-                                     CORNER_STRATEGY::ROUND_ALL_CORNERS,
-                                     ARC_HIGH_DEF, false );
+                fillPolySet.Inflate( strokeWidth / 2, CORNER_STRATEGY::ROUND_ALL_CORNERS, ARC_HIGH_DEF, false );
 
                 fillPolySet.BooleanAdd( thermalSpokes );
                 fillPolySet.Fracture();

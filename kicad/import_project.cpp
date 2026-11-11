@@ -166,6 +166,7 @@ void KICAD_MANAGER_FRAME::ImportNonKiCadProject( const wxString& aWindowTitle,
     else
         importProj.ImportFiles( aSchFileType, aPcbFileType );
 
+    importProj.SaveImportedFiles();
     ReCreateTreePrj();
     m_active_project = true;
 }
@@ -239,6 +240,22 @@ void KICAD_MANAGER_FRAME::OnImportDipTraceFiles( wxCommandEvent& event )
     ImportNonKiCadProject( _( "Import DipTrace Project Files" ),
                            FILEEXT::DipTraceFilesWildcard(), { "dch" }, { "dip" },
                            SCH_IO_MGR::SCH_DIPTRACE, PCB_IO_MGR::DIPTRACE );
+}
+
+
+void KICAD_MANAGER_FRAME::OnImportEasyPcFiles( wxCommandEvent& event )
+{
+    ImportNonKiCadProject( _( "Import Easy-PC / DesignSpark PCB Project Files" ),
+                           FILEEXT::EasyPcFilesWildcard(), { "prj", "sch" }, { "pcb" },
+                           SCH_IO_MGR::SCH_EASYPC, PCB_IO_MGR::EASYPC );
+}
+
+
+void KICAD_MANAGER_FRAME::OnImportTarget3001Files( wxCommandEvent& event )
+{
+    // One project file carries both the schematic and the board
+    ImportNonKiCadProject( _( "Import TARGET 3001! Project" ), FILEEXT::Target3001FilesWildcard(), { "INPUT" },
+                           { "INPUT" }, SCH_IO_MGR::SCH_TARGET3001, PCB_IO_MGR::TARGET3001 );
 }
 
 

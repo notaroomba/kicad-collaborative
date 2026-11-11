@@ -47,11 +47,35 @@ enum class KICOMMON_API ROW_STATE
     // independently editable for units of one symbol, so the row DATA_MODEL_ROW
     // will contain multiple references but not be expandable to multiple child items
     NON_EXPANDABLE,
-    COLLAPSED,
-    COLLAPSED_DURING_SORT,
-    EXPANDED_PARENT,
+    // Synthetic headers display and edit every member of the group.
+    GROUP_COLLAPSED,
+    GROUP_COLLAPSED_DURING_SORT,
+    GROUP_EXPANDED,
+    // Real parent headers display and edit only the first member, above its descendants.
+    PARENT_COLLAPSED,
+    PARENT_COLLAPSED_DURING_SORT,
+    PARENT_EXPANDED,
     EXPANDED_CHILD
 };
+
+
+inline bool IsParentRow( ROW_STATE aState )
+{
+    return aState == ROW_STATE::PARENT_COLLAPSED || aState == ROW_STATE::PARENT_COLLAPSED_DURING_SORT
+           || aState == ROW_STATE::PARENT_EXPANDED;
+}
+
+
+inline bool IsRowCollapsed( ROW_STATE aState )
+{
+    return aState == ROW_STATE::GROUP_COLLAPSED || aState == ROW_STATE::PARENT_COLLAPSED;
+}
+
+
+inline bool IsRowExpanded( ROW_STATE aState )
+{
+    return aState == ROW_STATE::GROUP_EXPANDED || aState == ROW_STATE::PARENT_EXPANDED;
+}
 
 
 class KICOMMON_API WX_GRID_TABLE_BASE : public wxGridTableBase
@@ -80,7 +104,8 @@ public:
         return enhanceAttr( nullptr, aRow, aCol, aKind );
     }
 
-    virtual bool IsExpanderColumn( int aCol ) const { return false; }
+    /// Show grouping controls in the row headers instead of row numbers.
+    virtual bool      HasRowLabelExpanders() const { return false; }
     virtual ROW_STATE GetRowState( int aRow ) const { return ROW_STATE::NON_EXPANDABLE; }
 
     /**
@@ -123,7 +148,7 @@ public:
      * Hide wxGrid's SetColLabelSize() method with one which makes sure the size is tall
      * enough for the system GUI font.
      *
-     * @param height
+     * @param aHeight
      */
     void SetColLabelSize( int aHeight );        // Yes, we're hiding a non-virtual method
 
@@ -207,7 +232,8 @@ public:
     /**
      * Set a EUNITS_PROVIDER to enable use of unit- and eval-based Getters.
      *
-     * @param aProvider
+     * @param aProvider the units provider to set.
+     * @param aCol is the column to set the units provider to.
      */
     void SetUnitsProvider( UNITS_PROVIDER* aProvider, int aCol = 0 );
 
@@ -228,7 +254,6 @@ public:
      *
      * @param aRow the cell row index to fetch.
      * @param aCol the cell column index to fetch.
-     * @param aIsOptional if true, indicates to the unit provider the value is optional.
      * @return the value held by the cell in internal units.
      */
     int GetUnitValue( int aRow, int aCol );

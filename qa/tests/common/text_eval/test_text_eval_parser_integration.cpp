@@ -22,10 +22,22 @@
  * Integration tests for text_eval_parser functionality including real-world scenarios
  */
 
+#include <qa_utils/env_var_utils.h>
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
+#include <qa_utils/git_test_fixture.h>
+#include <qa_utils/scoped_git_backend.h>
 
 // Code under test
+#include <common.h>
+#include <git/kicad_git_memory.h>
+#include <git/project_git_utils.h>
+#include <text_eval/text_eval_environment.h>
+#include <text_eval/text_eval_vcs.h>
 #include <text_eval/text_eval_wrapper.h>
+#include <title_block.h>
+#include <wx/filefn.h>
+#include <wx/filename.h>
 
 #include <fmt/ranges.h>
 #include <chrono>
@@ -35,6 +47,156 @@
  * Declare the test suite
  */
 BOOST_AUTO_TEST_SUITE( TextEvalParserIntegration )
+
+BOOST_AUTO_TEST_CASE( VcsNativeProjectContextPaths )
+{
+    SCOPED_GIT_BACKEND       backend;
+    KI_TEST::SCOPED_TEMP_DIR owner( "text-vcs-owner" );
+    const wxString projectFile = owner.PathStr() + "/multinetclasses.kicad_pro";
+    const wxString source = wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() )
+                            + "/netlists/multinetclasses/multinetclasses.kicad_pro";
+    BOOST_REQUIRE( wxCopyFile( source, projectFile ) );
+    BOOST_REQUIRE( wxMkdir( owner.PathStr() + "/sub" ) );
+    BOOST_REQUIRE( wxCopyFile( source, owner.PathStr() + "/sub/multinetclasses.kicad_pro" ) );
+    KIGIT::GitRepositoryPtr repo =
+            KI_TEST::InitGitRepository( owner.PathStr(), "owner", "Connectivity QA", "qa@example.invalid" );
+
+    // Stage the project files even if the user's ignore rules match them.
+    git_index* rawIndex = nullptr;
+    BOOST_REQUIRE_EQUAL( git_repository_index( &rawIndex, repo.get() ), GIT_OK );
+    KIGIT::GitIndexPtr index( rawIndex );
+    BOOST_REQUIRE_EQUAL( git_index_add_bypath( index.get(), "multinetclasses.kicad_pro" ), GIT_OK );
+    BOOST_REQUIRE_EQUAL( git_index_add_bypath( index.get(), "sub/multinetclasses.kicad_pro" ), GIT_OK );
+    BOOST_REQUIRE_EQUAL( git_index_write( index.get() ), GIT_OK );
+    KI_TEST::CommitGitIndex( repo.get(), "Native project" );
+    const wxString previous = TEXT_EVAL_VCS::GetContextPath();
+    const auto evaluateVcs = []( const wxString& expression )
+    {
+        EXPRESSION_EVALUATOR evaluator;
+        const wxString result = evaluator.Evaluate( expression );
+        BOOST_REQUIRE_MESSAGE( !evaluator.HasErrors(), evaluator.GetErrorSummary() );
+        return result.ToStdString( wxConvUTF8 );
+    };
+    const auto commitHash = [&]( const std::string& path = "." )
+    {
+        wxString quoted = wxString::FromUTF8( path );
+        quoted.Replace( "\\", "\\\\" );
+        quoted.Replace( "\"", "\\\"" );
+        return evaluateVcs( wxString::Format( "@{vcsfileidentifier(\"%s\")}", quoted ) );
+    };
+
+    {
+        TEXT_EVAL_VCS::CONTEXT_PATH_SCOPE context( owner.PathStr() );
+        const auto hash = commitHash();
+        BOOST_REQUIRE_EQUAL( hash.size(), 40u );
+        BOOST_CHECK_EQUAL( evaluateVcs( "@{vcsbranch()}" ), "owner" );
+        BOOST_CHECK_EQUAL( commitHash( "multinetclasses.kicad_pro" ), hash );
+        BOOST_CHECK_EQUAL( commitHash( projectFile.ToStdString( wxConvUTF8 ) ), hash );
+        BOOST_CHECK_EQUAL( commitHash( "untracked.kicad_pro" ), "<unknown>" );
+
+        {
+            TEXT_EVAL_VCS::CONTEXT_PATH_SCOPE fileContext( owner.PathStr() + "/sub/multinetclasses.kicad_pro" );
+            BOOST_CHECK( TEXT_EVAL_VCS::GetContextIsFile() );
+            BOOST_CHECK_EQUAL( commitHash( "multinetclasses.kicad_pro" ), hash );
+            BOOST_CHECK_EQUAL( commitHash( "../multinetclasses.kicad_pro" ), hash );
+            BOOST_REQUIRE( wxRemoveFile( owner.PathStr() + "/sub/multinetclasses.kicad_pro" ) );
+            BOOST_CHECK_EQUAL( commitHash( "multinetclasses.kicad_pro" ), hash );
+        }
+
+        BOOST_CHECK_EQUAL( TEXT_EVAL_VCS::GetContextPath(), owner.PathStr() );
+        BOOST_CHECK( !TEXT_EVAL_VCS::GetContextIsFile() );
+    }
+
+    BOOST_CHECK_EQUAL( TEXT_EVAL_VCS::GetContextPath(), previous );
+
+    {
+        TEXT_EVAL_VCS::CONTEXT_PATH_SCOPE context( owner.PathStr() );
+        TEXT_EVAL::ENVIRONMENT environment;
+        TEXT_EVAL::ENVIRONMENT_SCOPE frame( environment );
+        TEXT_EVAL::ENVIRONMENT::SOURCE_VALUES sources;
+        wxString projectHash;
+
+        {
+            TEXT_EVAL::SOURCE_SCOPE collect( environment, sources );
+            projectHash = KIGIT::PROJECT_GIT_UTILS::GetCurrentHash( projectFile, false );
+            BOOST_CHECK_EQUAL( evaluateVcs( "@{vcsbranch()}" ), "owner" );
+        }
+
+        git_oid        changedId = KI_TEST::CommitGitIndex( repo.get(), "Next native project" );
+        git_reference* rawBranch = nullptr;
+        BOOST_REQUIRE_EQUAL( git_reference_create( &rawBranch, repo.get(), "refs/heads/changed",
+                                                   &changedId, 0, nullptr ), 0 );
+        git_reference_free( rawBranch );
+        BOOST_REQUIRE_EQUAL( git_repository_set_head( repo.get(), "refs/heads/changed" ), 0 );
+        BOOST_CHECK_EQUAL( KIGIT::PROJECT_GIT_UTILS::GetCurrentHash( projectFile, false ), projectHash );
+        BOOST_CHECK_EQUAL( commitHash(), projectHash.ToStdString( wxConvUTF8 ) );
+        BOOST_CHECK_EQUAL( evaluateVcs( "@{vcsbranch()}" ), "owner" );
+
+        for( const auto& [key, value] : sources.vcsValues )
+            BOOST_CHECK( TEXT_EVAL_VCS::ReadSource( key ) == value );
+
+        {
+            TEXT_EVAL::ENVIRONMENT refreshed;
+            TEXT_EVAL::ENVIRONMENT_SCOPE refreshedFrame( refreshed );
+            BOOST_CHECK_EQUAL( evaluateVcs( "@{vcsbranch()}" ), "changed" );
+            BOOST_CHECK( KIGIT::PROJECT_GIT_UTILS::GetCurrentHash( projectFile, false ) != projectHash );
+        }
+
+        BOOST_CHECK_EQUAL( evaluateVcs( "@{vcsbranch()}" ), "owner" );
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( EnvironmentFrameCapturesDynamicSources )
+{
+    const wxDateTime                      time( 3, wxDateTime::Jan, 2001, 4, 5, 6 );
+    TEXT_EVAL::ENVIRONMENT                environment( time );
+    TEXT_EVAL::ENVIRONMENT::SOURCE_VALUES sources;
+    BOOST_CHECK( TEXT_EVAL::ENVIRONMENT::Current() == nullptr );
+
+    {
+        TEXT_EVAL::ENVIRONMENT_SCOPE frame( environment );
+        TEXT_EVAL::SOURCE_SCOPE      collect( environment, sources );
+        BOOST_CHECK_EQUAL( TITLE_BLOCK::GetCurrentDate(), time.FormatISODate() );
+        BOOST_CHECK_EQUAL( TITLE_BLOCK::GetCurrentTimeHHMMSS(), time.Format( "%Hh%Mm%Ss" ) );
+        BOOST_CHECK_EQUAL( TITLE_BLOCK::GetCurrentTimeLocale(), time.FormatTime() );
+        EXPRESSION_EVALUATOR evaluator;
+        BOOST_CHECK_EQUAL( evaluator.Evaluate( "@{format(now(), 0)}" ),
+                           wxString::Format( "%lld", static_cast<long long>( time.GetTicks() ) ) );
+        BOOST_CHECK_EQUAL( evaluator.Evaluate( "@{format(today(), 0)}" ),
+                           wxString::Format( "%lld", static_cast<long long>( time.GetTicks() ) / ( 24 * 3600 ) ) );
+        TEXT_EVAL::ENVIRONMENT other( wxDateTime( 4, wxDateTime::Feb, 2002 ) );
+
+        {
+            TEXT_EVAL::ENVIRONMENT_SCOPE nested( other );
+            BOOST_CHECK_EQUAL( TITLE_BLOCK::GetCurrentDate(), wxString( "2002-02-04" ) );
+        }
+
+        BOOST_CHECK_EQUAL( TITLE_BLOCK::GetCurrentDate(), time.FormatISODate() );
+        evaluator.Evaluate( "@{random()}" );
+        BOOST_CHECK( sources.randomUsed );
+        BOOST_REQUIRE( sources.time );
+        BOOST_CHECK( *sources.time == time );
+
+        const wxString envName = wxS( "KICAD_QA_TEXT_EVAL_SOURCE" );
+
+        {
+            KI_TEST::SCOPED_PROCESS_ENV_VAR scoped( envName, wxS( "captured" ) );
+            const wxString expanded = ExpandEnvVarSubstitutions( wxS( "${KICAD_QA_TEXT_EVAL_SOURCE}" ), nullptr );
+
+            BOOST_CHECK_EQUAL( expanded, wxS( "captured" ) );
+
+            scoped.ClearValue();
+            BOOST_CHECK( sources.environmentVariables[envName] == wxString( wxS( "captured" ) ) );
+        }
+    }
+
+    BOOST_CHECK( TEXT_EVAL::ENVIRONMENT::Current() == nullptr );
+    const wxString liveBefore = wxDateTime::Now().FormatISODate();
+    const wxString outside = TITLE_BLOCK::GetCurrentDate();
+    BOOST_CHECK( outside == liveBefore || outside == wxDateTime::Now().FormatISODate() );
+}
+
 
 /**
  * Test real-world expression scenarios
@@ -172,16 +334,18 @@ BOOST_AUTO_TEST_CASE( RealWorldScenarios )
 BOOST_AUTO_TEST_CASE( CallbackVariableResolution )
 {
     // Create evaluator with custom callback
-    auto variableCallback = []( const std::string& varName ) -> calc_parser::Result<calc_parser::Value> {
-        if( varName == "dynamic_value" )
-            return calc_parser::MakeValue<calc_parser::Value>( 42.0 );
-        else if( varName == "dynamic_string" )
-            return calc_parser::MakeValue<calc_parser::Value>( std::string("Hello from callback") );
-        else if( varName == "computed_value" )
-            return calc_parser::MakeValue<calc_parser::Value>( std::sin( 3.14159 / 4 ) * 100.0 );  // Should be about 70.7
-        else
-            return calc_parser::MakeError<calc_parser::Value>( "Variable '" + varName + "' not found in callback" );
-    };
+    auto variableCallback =
+            []( const std::string& varName ) -> calc_parser::RESULT<calc_parser::VALUE>
+            {
+                if( varName == "dynamic_value" )
+                    return calc_parser::MakeValue<calc_parser::VALUE>( 42.0 );
+                else if( varName == "dynamic_string" )
+                    return calc_parser::MakeValue<calc_parser::VALUE>( std::string( "Hello from callback" ) );
+                else if( varName == "computed_value" )
+                    return calc_parser::MakeValue<calc_parser::VALUE>( std::sin( 3.14159 / 4 ) * 100.0 );  // Should be about 70.7
+                else
+                    return calc_parser::MakeError<calc_parser::VALUE>( "Variable '" + varName + "' not found in callback" );
+            };
 
     EXPRESSION_EVALUATOR evaluator( variableCallback, false );
 
@@ -428,8 +592,12 @@ BOOST_AUTO_TEST_CASE( RealWorldPerformance )
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>( end - start );
 
-    // Should process 1000 expressions in reasonable time (less than 100 ms)
+    // Sanitizer instrumentation changes execution cost, not the evaluation contract.
+#if defined( KICAD_SANITIZE_THREADS ) || defined( KICAD_SANITIZE_ADDRESS )
+    BOOST_TEST_MESSAGE( "Instrumented expression evaluation: " << duration.count() << " ms" );
+#else
     BOOST_CHECK_LT( duration.count(), 100 );
+#endif
 
     // Test that results are consistent
     for( auto& expr : expressions )

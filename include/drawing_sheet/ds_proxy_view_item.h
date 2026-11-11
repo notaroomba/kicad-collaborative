@@ -25,6 +25,7 @@
 #include <eda_item.h>
 #include <eda_units.h>
 #include <functional>
+#include <memory>
 #include <vector>
 
 class BOARD;
@@ -43,6 +44,7 @@ namespace KIGFX
 {
 class VIEW;
 class GAL;
+class DS_PAINTER;
 }
 
 class DS_PROXY_VIEW_ITEM : public EDA_ITEM
@@ -107,17 +109,13 @@ public:
     const PAGE_INFO& GetPageInfo() { return *m_pageInfo; }
     const TITLE_BLOCK& GetTitleBlock() { return *m_titleBlock; }
 
-    /// @copydoc VIEW_ITEM::ViewBBox()
     const BOX2I ViewBBox() const override;
 
-    /// @copydoc VIEW_ITEM::ViewDraw()
     void ViewDraw( int aLayer, KIGFX::VIEW* aView ) const override;
 
-    /// @copydoc VIEW_ITEM::ViewGetLayers()
     std::vector<int> ViewGetLayers() const override;
 
 #if defined(DEBUG)
-    /// @copydoc EDA_ITEM::Show()
     void Show( int x, std::ostream& st ) const override { }
 #endif
 
@@ -189,6 +187,10 @@ protected:
 
     /// Layer that is used for page border color
     int                 m_pageBorderColorLayer;
+
+    /// Painter kept between draws because building its settings is costly, rebuilt if the GAL changes
+    mutable std::unique_ptr<KIGFX::DS_PAINTER> m_painter;
+    mutable KIGFX::GAL*                        m_painterGal = nullptr;
 
     /// Tracker this proxy is currently registered with (null if detached).
     /// Used by the destructor to unregister cleanly.

@@ -17,21 +17,24 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef DRC_RULE_H
-#define DRC_RULE_H
+#pragma once
 
 #include <bitset>
+#include <optional>
+
+#include <wx/intl.h>
+
 #include <kiid.h>
 #include <core/typeinfo.h>
-#include <optional>
 #include <core/minoptmax.h>
+#include <drc/drc_constraint_types.h>
 #include <layer_ids.h>
 #include <lset.h>
 #include <eda_units.h>
 #include <zones.h>
 #include <libeval_compiler/libeval_compiler.h>
-#include <wx/intl.h>
 #include <widgets/report_severity.h>
+
 
 class BOARD_ITEM;
 class PCBEXPR_UCODE;
@@ -43,84 +46,6 @@ namespace kiapi::board
     class CustomRule;
     class CustomRuleConstraint;
 }
-
-
-enum DRC_CONSTRAINT_T
-{
-    NULL_CONSTRAINT = 0,
-    CLEARANCE_CONSTRAINT,
-    CREEPAGE_CONSTRAINT,
-    HOLE_CLEARANCE_CONSTRAINT,
-    HOLE_TO_HOLE_CONSTRAINT,
-    EDGE_CLEARANCE_CONSTRAINT,
-    HOLE_SIZE_CONSTRAINT,
-    COURTYARD_CLEARANCE_CONSTRAINT,
-    SILK_CLEARANCE_CONSTRAINT,
-    TEXT_HEIGHT_CONSTRAINT,
-    TEXT_THICKNESS_CONSTRAINT,
-    TRACK_WIDTH_CONSTRAINT,
-    TRACK_SEGMENT_LENGTH_CONSTRAINT,
-    ANNULAR_WIDTH_CONSTRAINT,
-    ZONE_CONNECTION_CONSTRAINT,
-    THERMAL_RELIEF_GAP_CONSTRAINT,
-    THERMAL_SPOKE_WIDTH_CONSTRAINT,
-    MIN_RESOLVED_SPOKES_CONSTRAINT,
-    SOLDER_MASK_EXPANSION_CONSTRAINT,
-    SOLDER_PASTE_ABS_MARGIN_CONSTRAINT,
-    SOLDER_PASTE_REL_MARGIN_CONSTRAINT,
-    DISALLOW_CONSTRAINT,
-    VIA_DIAMETER_CONSTRAINT,
-    LENGTH_CONSTRAINT,
-    NET_CHAIN_LENGTH_CONSTRAINT,
-    NET_CHAIN_STUB_LENGTH_CONSTRAINT,
-    NET_CHAIN_RETURN_PATH_CONSTRAINT,
-    SKEW_CONSTRAINT,
-    DIFF_PAIR_GAP_CONSTRAINT,
-    MAX_UNCOUPLED_CONSTRAINT,
-    DIFF_PAIR_INTRA_SKEW_CONSTRAINT,
-    VIA_COUNT_CONSTRAINT,
-    PHYSICAL_CLEARANCE_CONSTRAINT,
-    PHYSICAL_HOLE_CLEARANCE_CONSTRAINT,
-    ASSERTION_CONSTRAINT,
-    CONNECTION_WIDTH_CONSTRAINT,
-    TRACK_ANGLE_CONSTRAINT,
-    VIA_DANGLING_CONSTRAINT,
-    BRIDGED_MASK_CONSTRAINT,
-    SOLDER_MASK_SLIVER_CONSTRAINT,
-    MICROVIA_STACK_DEPTH_CONSTRAINT,
-    MICROVIA_ASPECT_RATIO_CONSTRAINT
-};
-
-
-enum DRC_DISALLOW_T
-{
-    DRC_DISALLOW_THROUGH_VIAS = (1 << 0),
-    DRC_DISALLOW_MICRO_VIAS   = (1 << 1),
-    DRC_DISALLOW_BLIND_VIAS   = (1 << 2),
-    DRC_DISALLOW_BURIED_VIAS  = (1 << 3),
-    DRC_DISALLOW_TRACKS       = (1 << 4),
-    DRC_DISALLOW_PADS         = (1 << 5),
-    DRC_DISALLOW_ZONES        = (1 << 6),
-    DRC_DISALLOW_TEXTS        = (1 << 7),
-    DRC_DISALLOW_GRAPHICS     = (1 << 8),
-    DRC_DISALLOW_HOLES        = (1 << 9),
-    DRC_DISALLOW_FOOTPRINTS   = (1 << 10)
-};
-
-
-enum class DRC_IMPLICIT_SOURCE
-{
-    NONE,
-    BOARD_SETUP_CONSTRAINT,
-    BARCODE_DEFAULTS,
-    KEEPOUT,
-    NET_CLASS,
-    TUNING_PROFILE
-};
-
-
-constexpr int DRC_DISALLOW_VIAS = DRC_DISALLOW_THROUGH_VIAS;
-constexpr int DRC_DISALLOW_BB_VIAS = DRC_DISALLOW_BLIND_VIAS | DRC_DISALLOW_BURIED_VIAS;
 
 
 class DRC_RULE
@@ -153,6 +78,7 @@ public:
     KIID                        m_ImplicitItemId;
     BOARD_ITEM*                 m_ImplicitItem;
     wxString                    m_Name;
+    wxString                    m_ImplicitNetclass;   ///< Netclass named by an implicit netclass rule's condition
     wxString                    m_LayerSource;
     LSET                        m_LayerCondition;
     DRC_RULE_CONDITION*         m_Condition;
@@ -176,7 +102,10 @@ public:
             m_Test( nullptr ),
             m_ImplicitMin( false ),
             m_name( aName ),
-            m_parentRule( nullptr )
+            m_parentRule( nullptr ),
+            m_minRule( nullptr ),
+            m_optRule( nullptr ),
+            m_maxRule( nullptr )
     {
     }
 
@@ -195,22 +124,55 @@ public:
         return m_Type == NULL_CONSTRAINT;
     }
 
+    bool IsUnary() const;
+
     const MINOPTMAX<int>& GetValue() const { return m_Value; }
     MINOPTMAX<int>& Value() { return m_Value; }
 
-    void SetParentRule( DRC_RULE *aParentRule ) { m_parentRule = aParentRule; }
+    /**
+     * Attribute the constraint, including each min, opt and max value it has, to \a aParentRule.
+     */
+    void SetParentRule( DRC_RULE *aParentRule )
+    {
+        m_parentRule = aParentRule;
+        m_minRule = m_Value.HasMin() ? aParentRule : nullptr;
+        m_optRule = m_Value.HasOpt() ? aParentRule : nullptr;
+        m_maxRule = m_Value.HasMax() ? aParentRule : nullptr;
+    }
+
+    /**
+     * @return the last rule applied.  When several rules apply, each overrides only the values it
+     *         sets, so use GetMinRule(), GetOptRule() or GetMaxRule() to find where a value came from.
+     */
     DRC_RULE* GetParentRule() const { return m_parentRule; }
+
+    void SetValueRules( DRC_RULE* aMinRule, DRC_RULE* aOptRule, DRC_RULE* aMaxRule )
+    {
+        m_minRule = aMinRule;
+        m_optRule = aOptRule;
+        m_maxRule = aMaxRule;
+    }
+
+    DRC_RULE* GetMinRule() const { return m_minRule; }
+    DRC_RULE* GetOptRule() const { return m_optRule; }
+    DRC_RULE* GetMaxRule() const { return m_maxRule; }
 
     void SetName( const wxString& aName ) { m_name = aName; }
 
-    wxString GetName() const
+    wxString GetName() const { return GetRuleName( m_parentRule ); }
+
+    /**
+     * @return a user-facing name for \a aRule, or this constraint's own name when \a aRule is null
+     *         (for constraints from board setup or local overrides rather than rules).
+     */
+    wxString GetRuleName( const DRC_RULE* aRule ) const
     {
-        if( m_parentRule )
+        if( aRule )
         {
-            if( m_parentRule->IsImplicit() )
-                return m_parentRule->m_Name;
+            if( aRule->IsImplicit() )
+                return aRule->m_Name;
             else
-                return wxString::Format( _( "rule '%s'" ), m_parentRule->m_Name );
+                return wxString::Format( _( "rule '%s'" ), aRule->m_Name );
         }
 
         return m_name;
@@ -235,6 +197,8 @@ public:
 
     void SetOptionsFromOther( const DRC_CONSTRAINT& aOther ) { m_options = aOther.m_options; }
 
+    void Merge( const DRC_CONSTRAINT& aOther );
+
     void ToProto( kiapi::board::CustomRuleConstraint& aProto ) const;
 
 public:
@@ -258,6 +222,9 @@ public:
 private:
     wxString            m_name;          // For just-in-time constraints
     DRC_RULE*           m_parentRule;    // For constraints found in rules
+    DRC_RULE*           m_minRule;       // Rules that supplied each value, which can differ
+    DRC_RULE*           m_optRule;       // from m_parentRule when several rules apply
+    DRC_RULE*           m_maxRule;
     std::bitset<static_cast<int>( OPTIONS::NUM_OPTIONS )> m_options;       // Constraint-specific option bits
                                                                            // (indexed from DRC_CONSTRAINT::OPTIONS)
 };
@@ -274,6 +241,3 @@ const DRC_CONSTRAINT* GetConstraint( const BOARD_ITEM* aItem, const BOARD_ITEM* 
  * aToken is the contents between ${ and }.
  */
 bool IsComponentClassSelector( const wxString& aToken );
-
-
-#endif // DRC_RULE_H

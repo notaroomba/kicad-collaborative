@@ -482,11 +482,57 @@ message RunBoardJobExportGencad
     bool use_unique_pins = 6;
 }
 
+// Exports a board to Specctra DSN format.  Returns RunJobResponse.
+// Since: 11.0
+message RunBoardJobExportSpecctraDsn
+{
+    kiapi.common.types.RunJobSettings job_settings = 1;
+}
+
 enum Ipc2581Version
 {
     IPC2581V_UNKNOWN = 0;
     IPC2581V_B = 1;
     IPC2581V_C = 2;
+}
+
+// Data set of a fabrication export, per the IPC-2581 function mode table.
+enum FabDataSet
+{
+    FDS_UNKNOWN = 0;
+    FDS_USERDEF = 1;
+    FDS_BOM = 2;
+    FDS_STACKUP = 3;
+    FDS_FABRICATION = 4;
+    FDS_ASSEMBLY = 5;
+    FDS_TEST = 6;
+    FDS_STENCIL = 7;
+    FDS_DFX = 8;
+}
+
+enum FabNetNamePolicy
+{
+    FNNP_UNKNOWN = 0;
+    FNNP_INCLUDE = 1;
+    // Opaque names that keep the connections
+    FNNP_ANONYMIZE = 2;
+}
+
+enum Ipc2581RefDes
+{
+    IPC2581RD_UNKNOWN = 0;
+    IPC2581RD_INCLUDE = 1;
+    IPC2581RD_OMIT = 2;
+}
+
+// Content selection shared by the ODB++ and IPC-2581 exports.
+message FabExportContent
+{
+    FabDataSet data_set = 1;
+
+    // Section key letters that replace the optional sections of the data set
+    string sections = 2;
+    FabNetNamePolicy net_names = 3;
 }
 
 // Exports a board to IPC-2581 format.  Returns RunJobResponse.
@@ -509,6 +555,9 @@ message RunBoardJobExportIpc2581
     string distributor_part_number_column = 11;
     string distributor_column = 12;
     string bom_revision = 13;
+    optional bool check_zones = 14;
+    FabExportContent content = 15;
+    Ipc2581RefDes ref_des = 16;
 }
 
 // Exports a board netlist in IPC-D-356 format.  Returns RunJobResponse.
@@ -529,6 +578,23 @@ enum OdbCompression
     ODBC_TGZ = 3;
 }
 
+enum OdbVariantPackaging
+{
+    ODBVP_UNKNOWN = 0;
+    ODBVP_SEPARATE = 1;
+    ODBVP_COMBINED = 2;
+}
+
+enum OdbOrigin
+{
+    ODBO_UNKNOWN = 0;
+    ODBO_ABSOLUTE = 1;
+    // Drill and place file origin
+    ODBO_AUX = 2;
+    ODBO_GRID = 3;
+}
+
+
 // Exports a board to ODB++ format.  Returns RunJobResponse.
 message RunBoardJobExportODB
 {
@@ -541,6 +607,13 @@ message RunBoardJobExportODB
     kiapi.common.types.Units units = 4;
     optional int32 precision = 5;
     OdbCompression compression = 6;
+    optional bool check_zones = 7;
+    repeated string variant_names = 8;
+    OdbVariantPackaging variant_packaging = 9;
+    string manufacturer_part_number_column = 10;
+    OdbOrigin origin = 11;
+    string product_name = 12;
+    FabExportContent content = 13;
 }
 
 // Board statistics output format.
@@ -565,4 +638,68 @@ message RunBoardJobExportStats
     bool exclude_footprints_without_pads = 4;
     bool subtract_holes_from_board_area = 5;
     bool subtract_holes_from_copper_areas = 6;
+}
+
+// Plots board layers to a PNG file. Returns RunJobResponse.
+message RunBoardJobExportPng
+{
+    kiapi.common.types.RunJobSettings job_settings = 1;
+
+    BoardPlotSettings plot_settings = 2;
+
+    // Range 72-2400.  If unspecified, will use the GUI default resolution (300 DPI).
+    optional int32 dpi = 3;
+
+    // If unspecified, anti-aliasing will follow the GUI default (enabled)
+    kiapi.common.types.AntialiasingMode antialiasing = 4;
+
+    // Supports BJPM_ALL_LAYERS_ONE_PAGE and BJPM_EACH_LAYER_OWN_FILE.
+    BoardJobPaginationMode page_mode = 5;
+
+    // If true, will plot using the background color from the theme specified in
+    // plot_settings.  If false or absent, will plot with a transparent background.
+    optional bool plot_background_color = 6;
+}
+
+// Which reference point of the board maps to the IDF file origin.
+enum IdfOriginMode
+{
+    IOM_UNKNOWN = 0;
+    // Center of the board outline bounding box.
+    IOM_BOARD_CENTER = 1;
+    // The board's grid origin.
+    IOM_GRID_ORIGIN = 2;
+    // The board's auxiliary (drill/place file) origin.
+    IOM_DRILL_ORIGIN = 3;
+    // A user-specified point; see user_origin.
+    IOM_USER = 4;
+}
+
+// Exports a board to IDFv3 files.  Returns RunJobResponse.
+message RunBoardJobExportIdf
+{
+    kiapi.common.types.RunJobSettings job_settings = 1;
+
+    // Millimeters or mils are accepted
+    kiapi.common.types.Units units = 2;
+
+    IdfOriginMode origin_mode = 3;
+
+    // Origin point used when origin_mode is IOM_USER.
+    kiapi.common.types.Vector2 user_origin = 4;
+
+    // If true, footprints without the through-hole or SMD attribute are included.
+    bool include_unspecified = 5;
+
+    // If true, footprints marked DNP in the current variant are included.
+    bool include_dnp = 6;
+
+    // If true, footprints without an explicit height property or explicit IDF model will be
+    // excluded from the export.  If false / absent, footprints without an explicit height set will
+    // be exported if they have a visible STEP model, using the height of the tallest model.
+    bool only_use_explicit_heights = 7;
+
+    // The footprint field to export as the component part number in the IDF library file.
+    // Defaults to the Value field if unspecified.
+    optional string part_number_field = 8;
 }

@@ -43,6 +43,8 @@ public:
 
     ~PCB_SHAPE() override;
 
+    EDA_ITEM* AsEdaItem() override { return this; }
+
     void CopyFrom( const BOARD_ITEM* aOther ) override;
 
     static bool ClassOf( const EDA_ITEM* aItem )
@@ -129,7 +131,7 @@ public:
 
     int GetWidth() const override;
 
-    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide ) override;
+    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& aSettings, bool aCheckSide ) override;
 
     /**
      * Return 4 corners for a rectangle or rotated rectangle (stored as a poly).  Unimplemented
@@ -194,8 +196,13 @@ public:
 
     virtual void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
+    virtual void Mirror( const SEG& aAxis ) override;
+
     void SetStart( const VECTOR2I& aStart ) override;
     void SetEnd( const VECTOR2I& aEnd ) override;
+    void SetCenter( const VECTOR2I& aCenter ) override;
+
+    void SetCornerRadius( int aCornerRadius ) override;
 
     // Stroke width is stored in lib units. Scale-aware accessors apply the
     // parent footprint scale on read / strip it on write so callers see the
@@ -210,7 +217,7 @@ public:
         m_libShape = aShape;
     }
 
-    void SetArcGeometry( const VECTOR2I& aStart, const VECTOR2I& aMid, const VECTOR2I& aEnd );
+    void SetArcGeometry( const VECTOR2I& aStart, const VECTOR2I& aMid, const VECTOR2I& aEnd ) override;
 
     void SetBezierC1( const VECTOR2I& aPt ) override;
     void SetBezierC2( const VECTOR2I& aPt ) override;
@@ -227,6 +234,7 @@ public:
     VECTOR2I GetLibraryStart() const { return m_libStart; }
     VECTOR2I GetLibraryEnd() const { return m_libEnd; }
     SHAPE_T  GetLibraryShape() const { return m_libShape; }
+    int      GetLibraryCornerRadius() const { return m_libCornerRadius; }
 
     VECTOR2I  GetLibraryEllipseCenter() const      { return m_libEllipseCenter; }
     int       GetLibraryEllipseMajorRadius() const { return m_libEllipseMajorRadius; }
@@ -271,6 +279,8 @@ public:
             m_libArcMid = aArcMid;
     }
 
+    void OverrideLibCornerRadius( int aCornerRadius ) { m_libCornerRadius = aCornerRadius; }
+
     void OverrideLibBezier( const VECTOR2I& aC1, const VECTOR2I& aC2 )
     {
         m_libBezierC1 = aC1;
@@ -285,10 +295,13 @@ public:
 
     void UpdateHatching() const override;
 
+    double GetCoverageArea( int aTextMargin ) const override;
+
     /**
      * Convert the shape to a closed polygon.  Circles and arcs are approximated by segments.
      *
      * @param aBuffer is a buffer to store the polygon.
+     * @param aLayer is the layer the polygon exists on.
      * @param aClearance is the clearance around the pad.
      * @param aError is the maximum deviation from a true arc.
      * @param aErrorLoc whether any approximation error should be placed inside or outside
@@ -304,6 +317,7 @@ public:
      * fills and details (if any) will be included.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer the polygon exists on.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -324,7 +338,6 @@ public:
 
     std::vector<int> ViewGetLayers() const override;
 
-    ///< @copydoc VIEW_ITEM::ViewGetLOD
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
 
     double Similarity( const BOARD_ITEM& aBoardItem ) const override;
@@ -371,22 +384,24 @@ protected:
     bool               m_hasSolderMask;
     std::optional<int> m_solderMaskMargin;
 
-    VECTOR2I m_libStart;
-    VECTOR2I m_libEnd;
+    VECTOR2I           m_libStart;
+    VECTOR2I           m_libEnd;
 
-    VECTOR2I m_libArcMid;
+    int                m_libCornerRadius;
 
-    VECTOR2I m_libBezierC1;
-    VECTOR2I m_libBezierC2;
+    VECTOR2I           m_libArcMid;
 
-    SHAPE_POLY_SET m_libPoly;
+    VECTOR2I           m_libBezierC1;
+    VECTOR2I           m_libBezierC2;
 
-    VECTOR2I  m_libEllipseCenter;
-    int       m_libEllipseMajorRadius;
-    int       m_libEllipseMinorRadius;
-    EDA_ANGLE m_libEllipseRotation;
-    EDA_ANGLE m_libEllipseStartAngle;
-    EDA_ANGLE m_libEllipseEndAngle;
+    SHAPE_POLY_SET     m_libPoly;
 
-    SHAPE_T m_libShape;
+    VECTOR2I           m_libEllipseCenter;
+    int                m_libEllipseMajorRadius;
+    int                m_libEllipseMinorRadius;
+    EDA_ANGLE          m_libEllipseRotation;
+    EDA_ANGLE          m_libEllipseStartAngle;
+    EDA_ANGLE          m_libEllipseEndAngle;
+
+    SHAPE_T            m_libShape;
 };

@@ -106,7 +106,15 @@ public:
 
     bool LoadFromFile( const wxString& aDirectory = "" ) override;
 
+    bool Store() override;
+
     bool SaveToFile( const wxString& aDirectory = "", bool aForce = false ) override;
+
+    /**
+     * Serialize to the bytes SaveToFile would write, without touching the file.
+     * @return the document, or an empty string on error
+     */
+    std::string SerializeToString();
 
     bool SaveAs( const wxString& aDirectory, const wxString& aFile );
 
@@ -202,6 +210,9 @@ public:
     /// Bus alias definitions for the schematic project
     std::map<wxString, std::vector<wxString>> m_BusAliases;
 
+    /// An explicit alias table was loaded or set, including a deliberately empty table.
+    bool m_BusAliasesDefined = false;
+
     /**
      * CvPcb params
      */
@@ -225,9 +236,9 @@ public:
     /**
      * Board design settings for this project's board.  This will be initialized by PcbNew after
      * loading a board so that BOARD_DESIGN_SETTINGS doesn't need to live in common for now.
-     * Owned by the BOARD; may be null if a board isn't loaded: be careful
+     * May be null if a board isn't loaded: be careful.
      */
-    BOARD_DESIGN_SETTINGS* m_BoardSettings;
+    std::shared_ptr<BOARD_DESIGN_SETTINGS> m_BoardSettings;
 
     /**
      * Net settings for this project (owned here)
@@ -257,6 +268,8 @@ public:
 
     struct IP2581_BOM             m_IP2581Bom;      /// IPC-2581 BOM settings
 
+    IDF_EXPORT_SETTINGS           m_IdfExportSettings;
+
 private:
     /**
      * Schema version 2: Bump for KiCad 9 layer numbering changes.
@@ -269,6 +282,9 @@ private:
      * Schema version 3: move layer presets to use named render layers.
      */
     bool migrateSchema2To3();
+
+    /// Schema version 4 distinguishes explicit empty alias tables from older default writes.
+    bool migrateSchema3To4();
 
     /// An list of schematic sheets in this project
     std::vector<FILE_INFO_PAIR> m_sheets;

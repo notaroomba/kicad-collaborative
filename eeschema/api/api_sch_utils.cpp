@@ -47,6 +47,10 @@
 
 #include "api_sch_utils.h"
 
+#include <fmt/format.h>
+#include <fmt/ranges.h>
+#include <schematic.h>
+
 #include <api/api_utils.h>
 #include <api/api_enums.h>
 
@@ -140,7 +144,7 @@ PIN_MAP_INSTANCE_OVERRIDE UnpackPinMapOverride( const kiapi::schematic::types::P
 
 
 bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, const SCH_SYMBOL* aInput,
-                 const SCH_SHEET_PATH& aPath )
+                 const SCH_SHEET_PATH& aPath, const SCHEMATIC* aSchematic )
 {
     KIID_PATH path = aPath.Path();
     SCH_SYMBOL_INSTANCE instance;
@@ -158,8 +162,21 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
     if( !any.UnpackTo( aOutput ) )
         return false;
 
-    PackSheetPath( *aOutput->mutable_path(), path );
-    aOutput->mutable_reference_field()->mutable_text()->set_text( instance.m_Reference.ToUTF8() );
+    PackSheetPath( *aOutput->mutable_path(), aPath );
+
+    const SCHEMATIC* owner = aInput->Schematic() ? aInput->Schematic() : aSchematic;
+    wxString         reference = aInput->GetRef( &aPath );
+    wxString         suffix;
+
+    // The reference names the package, whose suffix may be another sheet's
+    if( owner )
+        suffix = owner->GetPackageRefSuffix( aInput, aPath );
+
+    // A staged symbol has no parent yet, so GetRef cannot compose it
+    if( !aInput->Schematic() && !reference.EndsWith( wxS( "?" ) ) )
+        reference += suffix;
+
+    aOutput->mutable_reference_field()->mutable_text()->set_text( reference.ToUTF8() );
     aOutput->mutable_unit()->set_unit( instance.m_Unit );
 
     kiapi::schematic::types::SchematicSymbol* def = aOutput->mutable_definition();
@@ -181,28 +198,31 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
         pin->Serialize( *item->mutable_item() );
     }
 
+    // Also include the pins from non-placed units
     if( const LIB_SYMBOL* lib = aInput->GetLibSymbolRef().get() )
     {
-        kiapi::schematic::types::SymbolPinMaps* pinMaps = def->mutable_pin_maps();
+        std::set<wxString> placedNumbers;
 
-        for( const ASSOCIATED_FOOTPRINT& assoc : lib->GetEffectiveAssociatedFootprints() )
+        for( const SCH_PIN* pin : pins )
+            placedNumbers.insert( pin->GetNumber() );
+
+        for( const SCH_PIN* libPin : lib->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
         {
-            kiapi::schematic::types::AssociatedFootprint* a = pinMaps->add_associated_footprints();
-            PackLibId( a->mutable_footprint(), assoc.m_FootprintLibId );
-            a->set_map_name( assoc.m_MapName.ToUTF8() );
-        }
-
-        for( const PIN_MAP& map : lib->GetEffectivePinMaps().GetAll() )
-        {
-            kiapi::schematic::types::PinMap* m = pinMaps->add_pin_maps();
-            m->set_name( map.GetName().ToUTF8() );
-
-            for( const PIN_MAP_ENTRY& entry : map.GetEntries() )
+            if( libPin->GetBodyStyle() != ALL_BODY_STYLES
+                    && aInput->GetBodyStyle() != ALL_BODY_STYLES
+                    && aInput->GetBodyStyle() != libPin->GetBodyStyle() )
             {
-                kiapi::schematic::types::PinMapEntry* e = m->add_entries();
-                e->set_pin_number( entry.m_PinNumber.ToUTF8() );
-                e->set_pad_number( entry.m_PadNumber.ToUTF8() );
+                continue;
             }
+
+            if( placedNumbers.count( libPin->GetNumber() ) )
+                continue;
+
+            kiapi::schematic::types::SchematicSymbolChild* item = def->add_items();
+            item->mutable_unit()->set_unit( libPin->GetUnit() );
+            item->mutable_body_style()->set_style( libPin->GetBodyStyle() );
+            item->set_is_private( libPin->IsPrivate() );
+            libPin->Serialize( *item->mutable_item() );
         }
     }
 
@@ -242,6 +262,12 @@ bool PackSymbol( kiapi::schematic::types::SchematicSymbolInstance* aOutput, cons
 
         for( const auto& [key, value] : variantInfo.m_Fields )
             ( *variant->mutable_fields() )[std::string( key.ToUTF8() )] = value.ToUTF8();
+
+        if( variantInfo.m_SymbolOverride )
+            PackLibId( variant->mutable_symbol_override(), *variantInfo.m_SymbolOverride );
+
+        if( !variantInfo.m_PinMapOverride.IsDefault() )
+            PackPinMapOverride( variant->mutable_pin_map_override(), variantInfo.m_PinMapOverride );
     }
 
     return true;
@@ -253,10 +279,7 @@ bool UnpackSymbol( SCH_SYMBOL* aOutput, const kiapi::schematic::types::Schematic
     using namespace kiapi::common::types;
     using namespace kiapi::schematic::types;
 
-    google::protobuf::Any any;
-    any.PackFrom( aInput );
-
-    if( !aOutput->Deserialize( any ) )
+    if( !aOutput->Deserialize( aInput ) )
         return false;
 
     if( aInput.has_attributes() )
@@ -270,22 +293,39 @@ bool UnpackSymbol( SCH_SYMBOL* aOutput, const kiapi::schematic::types::Schematic
         aOutput->SetDNP( attrs.do_not_populate() );
     }
 
-    if( aInput.has_pin_map_override() )
-        aOutput->SetPinMapOverride( UnpackPinMapOverride( aInput.pin_map_override() ) );
+    aOutput->SetPinMapOverride( aInput.has_pin_map_override() ? UnpackPinMapOverride( aInput.pin_map_override() )
+                                                              : PIN_MAP_INSTANCE_OVERRIDE() );
 
     return true;
 }
 
 
+// Variant names are stored and compared exactly, but SCHEMATIC::HasVariant matches case-insensitively
+std::optional<wxString> FindVariantNoCase( const SCHEMATIC* aSchematic, const wxString& aName )
+{
+    for( const wxString& variantName : aSchematic->GetVariantNames() )
+    {
+        if( variantName.CmpNoCase( aName ) == 0 )
+            return variantName;
+    }
+
+    return std::nullopt;
+}
+
+
 /// Make the schematic aware of a variant a request named.  Accepts either variant message.
 template <typename VariantProto>
-static void registerVariant( SCHEMATIC* aSchematic, const wxString& aName,
-                             const VariantProto& aInput )
+static void registerVariant( SCHEMATIC* aSchematic, const wxString& aName, const VariantProto& aInput )
 {
     if( !aSchematic )
         return;
 
-    aSchematic->AddVariant( aName );
+    wxString name( aName );
+
+    if( std::optional<wxString> canonical = FindVariantNoCase( aSchematic, name ) )
+        name = *canonical;
+
+    aSchematic->AddVariant( name );
 
     // An empty description clears the one the variant has, so honour presence rather than text.
     if( aInput.has_description() )
@@ -294,10 +334,7 @@ static void registerVariant( SCHEMATIC* aSchematic, const wxString& aName,
 
 
 /// Make the set of variant records on one placement of a symbol match @a aInput, by name.
-///
-/// Each surviving record keeps what the message does not carry: the attributes it leaves unset,
-/// and the alternate symbol and pin-map overrides the message has no field for.
-static void applySymbolVariants( SCH_SYMBOL* aSymbol,
+static bool applySymbolVariants( kiapi::common::commands::ItemStatus* aStatus, SCH_SYMBOL* aSymbol,
                                  const kiapi::schematic::types::SchematicSymbolVariants& aInput,
                                  const SCH_SHEET_PATH& aPath, SCHEMATIC* aSchematic )
 {
@@ -334,18 +371,28 @@ static void applySymbolVariants( SCH_SYMBOL* aSymbol,
         {
             for( const auto& [fieldName, unused] : stored.m_Variants[name].m_Fields )
             {
-                if( variantProto.fields().find( std::string( fieldName.ToUTF8() ) )
-                    == variantProto.fields().end() )
-                {
+                if( variantProto.fields().find( std::string( fieldName.ToUTF8() ) ) == variantProto.fields().end() )
                     aSymbol->ClearVariantField( aPath.Path(), name, fieldName );
-                }
             }
         }
 
+        if( variantProto.has_symbol_override() )
+            aSymbol->SetVariantSymbolOverride( aPath, name, UnpackLibId( variantProto.symbol_override() ) );
+        else
+            aSymbol->ClearVariantSymbolOverride( aPath, name );
+
+        if( variantProto.has_pin_map_override() )
+            aSymbol->SetPinMapOverride( UnpackPinMapOverride( variantProto.pin_map_override() ), &aPath, name );
+        else
+            aSymbol->SetPinMapOverride( PIN_MAP_INSTANCE_OVERRIDE(), &aPath, name );
+
         for( const auto& [key, value] : variantProto.fields() )
         {
-            aSymbol->SetFieldText( wxString::FromUTF8( key ), wxString::FromUTF8( value ), &aPath,
-                                   name );
+            wxString fieldName = wxString::FromUTF8( key );
+            wxString fieldValue = wxString::FromUTF8( value );
+
+            if( SCH_FIELD* field = aSymbol->GetField( fieldName ); field && field->GetId() != FIELD_T::REFERENCE )
+                aSymbol->SetFieldText( field, fieldName, fieldValue, &aPath, name );
         }
     }
 
@@ -361,21 +408,66 @@ static void applySymbolVariants( SCH_SYMBOL* aSymbol,
                 aSymbol->DeleteVariant( aPath.Path(), name );
         }
     }
+
+    return true;
 }
 
 
-void ApplySymbolInstance( SCH_SYMBOL* aSymbol,
+bool ValidateSymbolInstance( kiapi::common::commands::ItemStatus* aStatus, const SCH_SYMBOL* aSymbol,
+                             const kiapi::schematic::types::SchematicSymbolInstance& aInput,
+                             const SCH_SHEET_PATH& aPath, const SCHEMATIC* aSchematic )
+{
+    wxString reference = wxString::FromUTF8( aInput.reference_field().text().text() );
+    wxString base;
+    wxString error;
+
+    if( !reference.IsEmpty() )
+        error = aSymbol->BaseRefFromUser( aPath, reference, base, aSchematic );
+
+    for( const kiapi::schematic::types::SchematicSymbolVariant& variantProto : aInput.variants().variants() )
+    {
+        for( const auto& [key, unused] : variantProto.fields() )
+        {
+            const SCH_FIELD* field = aSymbol->GetField( wxString::FromUTF8( key ) );
+
+            if( !variantProto.name().empty() && field && field->GetId() == FIELD_T::REFERENCE )
+                error = wxS( "symbol reference can not be changed in a variant" );
+        }
+    }
+
+    if( error.IsEmpty() )
+        return true;
+
+    aStatus->set_code( commands::ItemStatusCode::ISC_INVALID_DATA );
+    aStatus->set_error_message( error.ToUTF8() );
+    return false;
+}
+
+
+bool ApplySymbolInstance( kiapi::common::commands::ItemStatus* aStatus, SCH_SYMBOL* aSymbol,
                           const kiapi::schematic::types::SchematicSymbolInstance& aInput,
                           const SCH_SHEET_PATH& aPath, SCHEMATIC* aSchematic )
 {
+    if( !ValidateSymbolInstance( aStatus, aSymbol, aInput, aPath, aSchematic ) )
+        return false;
+
     wxString            reference = wxString::FromUTF8( aInput.reference_field().text().text() );
     int                 unit = aInput.has_unit() ? aInput.unit().unit() : 1;
     SCH_SYMBOL_INSTANCE existing;
+    wxString            base;
+
+    // Clients send back the composed reference they read, so the path suffix comes off here
+    if( !reference.IsEmpty() )
+        aSymbol->BaseRefFromUser( aPath, reference, base, aSchematic );
 
     if( aSymbol->GetInstance( existing, aPath.Path() ) )
     {
-        if( !reference.IsEmpty() )
-            aSymbol->SetRef( &aPath, reference );
+        // An unchanged base must not touch the other instances, which may disagree on purpose,
+        // but SetRef still runs so a request's default prefix follows the base
+        if( !base.IsEmpty() && base != existing.m_Reference )
+            aSymbol->SetUserRef( aPath, base );
+        else if( !base.IsEmpty() )
+            aSymbol->SetRef( &aPath, base );
 
         aSymbol->SetUnitSelection( &aPath, unit );
     }
@@ -383,7 +475,7 @@ void ApplySymbolInstance( SCH_SYMBOL* aSymbol,
     {
         SCH_SYMBOL_INSTANCE instance;
         instance.m_Path = aPath.Path();
-        instance.m_Reference = reference;
+        instance.m_Reference = base;
         instance.m_Unit = unit;
 
         aSymbol->AddHierarchicalReference( instance );
@@ -393,8 +485,10 @@ void ApplySymbolInstance( SCH_SYMBOL* aSymbol,
     aSymbol->SetUnit( unit );
 
     // A request that carries no variant set leaves the placement's variants as they are.
-    if( aInput.has_variants() )
-        applySymbolVariants( aSymbol, aInput.variants(), aPath, aSchematic );
+    if( aInput.has_variants() && !applySymbolVariants( aStatus, aSymbol, aInput.variants(), aPath, aSchematic ) )
+        return false;
+
+    return true;
 }
 
 
@@ -407,7 +501,7 @@ bool PackSheet( kiapi::schematic::types::SheetSymbol* aOutput, const SCH_SHEET* 
     if( !any.UnpackTo( aOutput ) )
         return false;
 
-    PackSheetPath( *aOutput->mutable_path(), aPath.Path() );
+    PackSheetPath( *aOutput->mutable_path(), aPath );
 
     SCHEMATIC* schematic = aInput->Schematic();
 
@@ -438,11 +532,48 @@ bool PackSheet( kiapi::schematic::types::SheetSymbol* aOutput, const SCH_SHEET* 
 }
 
 
+bool ValidateSheetInstance( commands::ItemStatus* aStatus, const SCH_SHEET* aSheet,
+                            const kiapi::schematic::types::SheetSymbol& aInput )
+{
+    for( const kiapi::schematic::types::SheetVariant& variant : aInput.variants().variants() )
+    {
+        if( variant.name().empty() )
+            continue;
+
+        for( const auto& [key, unused] : variant.fields() )
+        {
+            if( const SCH_FIELD* field = aSheet->GetField( wxString::FromUTF8( key ) ) )
+            {
+                if( field->GetId() == FIELD_T::SHEET_NAME )
+                {
+                    aStatus->set_code( commands::ItemStatusCode::ISC_INVALID_DATA );
+                    aStatus->set_error_message( "sheet name can not be changed in a variant" );
+                    return false;
+                }
+                else if( field->GetId() == FIELD_T::SHEET_FILENAME )
+                {
+                    aStatus->set_code( commands::ItemStatusCode::ISC_INVALID_DATA );
+                    aStatus->set_error_message( "sheet filename can not be changed in a variant" );
+                    return false;
+                }
+                else if( field->GetId() == FIELD_T::SHEET_REF_SUFFIX )
+                {
+                    aStatus->set_code( commands::ItemStatusCode::ISC_INVALID_DATA );
+                    aStatus->set_error_message( "reference suffix can not be changed in a variant" );
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+
 /// Make the set of variant records on one placement of a sheet match @a aInput, by name.
 ///
 /// Each surviving record keeps the attributes the message leaves unset.
-static void applySheetVariants( SCH_SHEET* aSheet,
-                                const kiapi::schematic::types::SheetVariants& aInput,
+static void applySheetVariants( SCH_SHEET* aSheet, const kiapi::schematic::types::SheetVariants& aInput,
                                 const SCH_SHEET_PATH& aParentPath, SCHEMATIC* aSchematic )
 {
     using namespace kiapi::schematic::types;
@@ -478,18 +609,18 @@ static void applySheetVariants( SCH_SHEET* aSheet,
 
             for( const auto& [fieldName, unused] : storedFields )
             {
-                if( variantProto.fields().find( std::string( fieldName.ToUTF8() ) )
-                    == variantProto.fields().end() )
-                {
+                if( variantProto.fields().find( std::string( fieldName.ToUTF8() ) ) == variantProto.fields().end() )
                     aSheet->ClearVariantField( aParentPath.Path(), name, fieldName );
-                }
             }
         }
 
         for( const auto& [key, value] : variantProto.fields() )
         {
-            aSheet->SetFieldText( wxString::FromUTF8( key ), wxString::FromUTF8( value ),
-                                  &aParentPath, name );
+            wxString fieldName = wxString::FromUTF8( key );
+            wxString fieldValue = wxString::FromUTF8( value );
+
+            if( SCH_FIELD* field = aSheet->GetField( fieldName ) )
+                aSheet->SetFieldText( field, fieldName, fieldValue, &aParentPath, name );
         }
     }
 
@@ -510,9 +641,13 @@ static void applySheetVariants( SCH_SHEET* aSheet,
 }
 
 
-void ApplySheetInstance( SCH_SHEET* aSheet, const kiapi::schematic::types::SheetSymbol& aInput,
+bool ApplySheetInstance( commands::ItemStatus* aStatus, SCH_SHEET* aSheet,
+                         const kiapi::schematic::types::SheetSymbol& aInput,
                          const SCH_SHEET_PATH& aParentPath, SCHEMATIC* aSchematic )
 {
+    if( !ValidateSheetInstance( aStatus, aSheet, aInput ) )
+        return false;
+
     wxString       pageNumber = wxString::FromUTF8( aInput.page_number() );
     SCH_SHEET_PATH path( aParentPath );
 
@@ -525,15 +660,17 @@ void ApplySheetInstance( SCH_SHEET* aSheet, const kiapi::schematic::types::Sheet
     // A request that carries no variant set leaves the placement's variants as they are.
     if( aInput.has_variants() )
         applySheetVariants( aSheet, aInput.variants(), aParentPath, aSchematic );
+
+    return true;
 }
 
 
-tl::expected<bool, ApiResponseStatus> UnpackSheet( SCH_SHEET* aOutput, const kiapi::schematic::types::SheetSymbol& aInput )
+tl::expected<bool, ApiResponseStatus> UnpackSheet( SCH_SHEET* aOutput,
+                                                   const kiapi::schematic::types::SheetSymbol& aInput )
 {
     google::protobuf::Any any;
-    any.PackFrom( aInput );
 
-    if( !aOutput->Deserialize( any ) )
+    if( !any.PackFrom( aInput ) || !aOutput->Deserialize( any ) )
     {
         ApiResponseStatus e;
         e.set_status( ApiStatusCode::AS_BAD_REQUEST );
@@ -542,4 +679,75 @@ tl::expected<bool, ApiResponseStatus> UnpackSheet( SCH_SHEET* aOutput, const kia
     }
 
     return true;
+}
+
+
+void PackSheetPath( types::SheetPath& aOutput, const SCH_SHEET_PATH& aInput )
+{
+    PackSheetPath( aOutput, aInput.Path() );
+    aOutput.set_path_human_readable( aInput.PathHumanReadable().ToUTF8() );
+}
+
+
+tl::expected<SCH_FOCUS_TARGET, ApiResponseStatus>
+ResolveFocusItems( SCHEMATIC& aSchematic, const std::vector<KIID>& aIds, const std::optional<KIID_PATH>& aSheetPath )
+{
+    if( aIds.empty() )
+        return tl::unexpected( MakeResponseStatus( AS_BAD_REQUEST, "no items were given to focus on" ) );
+
+    if( !aSchematic.HasHierarchy() )
+        aSchematic.RefreshHierarchy();
+
+    std::optional<SCH_SHEET_PATH> sheet;
+
+    if( aSheetPath )
+    {
+        sheet = aSchematic.Hierarchy().GetSheetPathByKIIDPath( *aSheetPath );
+
+        if( !sheet )
+        {
+            return tl::unexpected( MakeResponseStatus( AS_BAD_REQUEST, "the requested sheet path is not valid for "
+                                                                       "this schematic" ) );
+        }
+    }
+
+    std::optional<BOX2I>     bbox;
+    std::vector<std::string> missing;
+
+    for( const KIID& id : aIds )
+    {
+        SCH_SHEET_PATH itemSheet;
+        SCH_ITEM*      item = aSheetPath ? sheet->ResolveItem( id ) : aSchematic.ResolveItem( id, &itemSheet, true );
+
+        if( !item )
+        {
+            missing.push_back( id.AsStdString() );
+            continue;
+        }
+
+        if( !sheet )
+        {
+            sheet = itemSheet;
+        }
+        else if( !aSheetPath && itemSheet != *sheet )
+        {
+            return tl::unexpected( MakeResponseStatus( AS_BAD_REQUEST, "the items are not all on one sheet; set "
+                                                                       "the document's sheet path to choose the "
+                                                                       "sheet to focus" ) );
+        }
+
+        if( bbox )
+            bbox->Merge( item->GetBoundingBox() );
+        else
+            bbox = item->GetBoundingBox();
+    }
+
+    if( !missing.empty() )
+    {
+        return tl::unexpected( MakeResponseStatus( AS_BAD_REQUEST, fmt::format( "the items {} are not in the "
+                                                                                "requested document",
+                                                                                fmt::join( missing, ", " ) ) ) );
+    }
+
+    return SCH_FOCUS_TARGET{ *sheet, *bbox };
 }

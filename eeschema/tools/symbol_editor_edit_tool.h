@@ -23,6 +23,9 @@
 #include <tools/sch_tool_base.h>
 
 
+class LIB_ID;
+class SCH_FIELD;
+class SCH_ITEM;
 class SCH_PIN;
 class SCH_SHAPE;
 class SYMBOL_EDIT_FRAME;
@@ -46,6 +49,17 @@ public:
     int Duplicate( const TOOL_EVENT& aEvent );
 
     int Properties( const TOOL_EVENT& aEvent );
+
+    /**
+     * The pointer only says what the user is aiming at while the pointer is the device being
+     * steered.  Arrow-key cursor motion warps it, so it must be ignored in that case.
+     *
+     * @param aPin
+     * @param aMousePos is the pointer position in symbol coordinates.
+     * @param aCursorMovedByKeyboard
+     */
+    static bool ShouldFocusPinNumber( SCH_PIN& aPin, const VECTOR2I& aMousePos,
+                                      bool aCursorMovedByKeyboard );
 
     /// Open the symbol properties dialog directly on its Pin Map page (issue #2282).
     int EditSymbolPinMaps( const TOOL_EVENT& aEvent );

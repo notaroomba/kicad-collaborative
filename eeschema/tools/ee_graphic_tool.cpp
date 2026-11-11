@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <tool/tool_manager.h>
 #include "tools/ee_graphic_tool.h"
 
 #include <wx/msgdlg.h>
@@ -26,17 +27,23 @@
 
 #include <dialogs/dialog_text_properties.h>
 #include <eeschema_settings.h>
-#include <import_gfx/dialog_import_gfx_sch.h>
+#include <dialogs/dialog_import_gfx.h>
+#include <import_gfx/graphics_importer_lib_symbol.h>
+#include <import_gfx/graphics_importer_sch.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <sch_actions.h>
 #include <sch_commit.h>
 #include <sch_edit_frame.h>
+#include <sch_group.h>
+#include <sch_line.h>
 #include <sch_shape.h>
 #include <sch_textbox.h>
 #include <schematic.h>
 #include <symbol_edit_frame.h>
 #include <symbol_editor/symbol_editor_settings.h>
 #include <tool/arc_draw_behavior.h>
+#include <tool/arc_mode_session.h>
+#include <tool/arc_tangent_seed.h>
 #include <tool/bezier_draw_behavior.h>
 #include <tool/ellipse_draw_behavior.h>
 #include <tools/ee_grid_helper.h>
@@ -77,7 +84,7 @@ bool EE_GRAPHIC_TOOL::Init()
                 return m_mode == MODE::ARC;
             };
 
-    const auto canUndoPoint = [this]( const SELECTION& aSel )
+    const auto inManagedShape = [this]( const SELECTION& aSel )
             {
                 return m_mode == MODE::ARC || m_mode == MODE::BEZIER || m_mode == MODE::ELLIPSE_ARC;
             };
@@ -85,8 +92,15 @@ bool EE_GRAPHIC_TOOL::Init()
     CONDITIONAL_MENU& ctxMenu = m_menu->GetMenu();
 
     // clang-format off
-    ctxMenu.AddItem( ACTIONS::arcPosture,          inDrawingArc,    200 );
-    ctxMenu.AddItem( ACTIONS::deleteLastPoint,     canUndoPoint,    200 );
+    ctxMenu.AddItem( ACTIONS::arcPosture,          inDrawingArc,      200 );
+    ctxMenu.AddCheckItem( SCH_ACTIONS::drawArcCenter,         inDrawingArc, 200 );
+    ctxMenu.AddCheckItem( SCH_ACTIONS::drawArcStartEndMid,    inDrawingArc, 200 );
+    ctxMenu.AddCheckItem( SCH_ACTIONS::drawArcStartEndCenter, inDrawingArc, 200 );
+    ctxMenu.AddCheckItem( SCH_ACTIONS::drawArcTangent,        inDrawingArc, 200 );
+    ctxMenu.AddCheckItem( SCH_ACTIONS::drawArcStartDirEnd,    inDrawingArc, 200 );
+    ctxMenu.AddItem( ACTIONS::cycleArcDrawMode,    inDrawingArc,      200 );
+    ctxMenu.AddItem( ACTIONS::deleteLastPoint,     inManagedShape,    200 );
+    ctxMenu.AddItem( ACTIONS::finishInteractive,   inManagedShape,    200 );
     // clang-format on
 
     return true;
@@ -159,6 +173,7 @@ int EE_GRAPHIC_TOOL::DrawShape( const TOOL_EVENT& aEvent )
     int        defaultTextSize = getDefaultTextSize();
     bool       isTextBox = aEvent.IsAction( &SCH_ACTIONS::drawTextBox )
                         || aEvent.IsAction( &SCH_ACTIONS::drawSymbolTextBox );
+    bool       isLineTool = aEvent.IsAction( &SCH_ACTIONS::drawSymbolLines );
     SHAPE_T    type = isTextBox ? SHAPE_T::RECTANGLE : aEvent.Parameter<SHAPE_T>();
 
     if( m_inDrawingTool )
@@ -302,12 +317,14 @@ int EE_GRAPHIC_TOOL::DrawShape( const TOOL_EVENT& aEvent )
                           || evt->IsAction( &ACTIONS::finishInteractive ) ) )
         {
             bool finished = false;
+            bool closedShape = false;
 
             if( evt->IsDblClick( BUT_LEFT )
                     || evt->IsAction( &ACTIONS::cursorDblClick )
                     || evt->IsAction( &ACTIONS::finishInteractive ) )
             {
                 finished = true;
+                closedShape = !isLineTool;
             }
             else
             {
@@ -316,7 +333,7 @@ int EE_GRAPHIC_TOOL::DrawShape( const TOOL_EVENT& aEvent )
 
             if( finished )
             {
-                item->EndEdit();
+                item->EndEdit( closedShape );
                 item->SetFlags( IS_NEW );
 
                 if( isTextBox )
@@ -376,7 +393,8 @@ int EE_GRAPHIC_TOOL::DrawShape( const TOOL_EVENT& aEvent )
             evt->SetPassEvent();
             break;
         }
-        else if( item && ( evt->IsAction( &ACTIONS::refreshPreview ) || evt->IsMotion() ) )
+        else if( item && (   evt->IsAction( &ACTIONS::refreshPreview )
+                          || evt->IsMotion() ) )
         {
             item->CalcEdit( cursorPos );
             m_view->ClearPreview();
@@ -384,7 +402,8 @@ int EE_GRAPHIC_TOOL::DrawShape( const TOOL_EVENT& aEvent )
 
             frame()->SetMsgPanel( item.get() );
         }
-        else if( evt->IsDblClick( BUT_LEFT ) && !item )
+        else if( !item && (   evt->IsDblClick( BUT_LEFT )
+                           || evt->IsAction( &ACTIONS::cursorDblClick ) ) )
         {
             m_toolMgr->RunAction( SCH_ACTIONS::properties );
         }
@@ -436,7 +455,8 @@ int EE_GRAPHIC_TOOL::DrawArc( const TOOL_EVENT& aEvent )
     const auto makeNewArc =
             [&]()
             {
-                std::unique_ptr<SCH_SHAPE> arc = std::make_unique<SCH_SHAPE>( SHAPE_T::ARC, shapeLayer, 0, m_lastFillStyle );
+                std::unique_ptr<SCH_SHAPE> arc = std::make_unique<SCH_SHAPE>( SHAPE_T::ARC, shapeLayer, 0,
+                                                                              m_lastFillStyle );
                 arc->SetStroke( m_lastStroke );
                 arc->SetFillColor( m_lastFillColor );
                 arc->SetParent( parent );
@@ -456,14 +476,31 @@ int EE_GRAPHIC_TOOL::DrawArc( const TOOL_EVENT& aEvent )
     Activate();
 
     if( aEvent.HasPosition() )
-        initialPts.push_back( aEvent.Position() );
+        initialPts.push_back( snapEventPosition( aEvent ) );
 
     ARC_DRAW_BEHAVIOR arcBehavior( schIUScale, frame()->GetUserUnits() );
 
-    while( drawManagedShape( originalEvent, arc, arcBehavior, initialPts ) )
+    APP_SETTINGS_BASE* cfg = frame()->config();
+
+    frame()->SelectToolbarAction( SCH_ACTIONS::DrawArcForMode( StartArcDrawMode( aEvent, cfg, arcBehavior ) ) );
+
+    std::optional<ARC_TANGENT_SEED> tangentSeed;
+    VECTOR2I                        lastClick;
+
+    SHAPE_DRAW_RESULT result = SHAPE_DRAW_RESULT::NEXT_SHAPE;
+
+    while( result == SHAPE_DRAW_RESULT::NEXT_SHAPE )
     {
+        result = drawManagedShape( originalEvent, arc, arcBehavior, initialPts, tangentSeed, &lastClick );
+
+        tangentSeed.reset();
+
         if( arc )
         {
+            // The mode can change mid-draw so chain from whatever the settings hold now
+            if( result == SHAPE_DRAW_RESULT::NEXT_SHAPE && cfg && cfg->m_ArcDrawMode == ARC_DRAW_MODE::TANGENT )
+                tangentSeed = ArcTangentSeedNear( *arc, lastClick );
+
             m_lastStroke = arc->GetStroke();
             m_lastFillStyle = arc->GetFillMode();
             m_lastFillColor = arc->GetFillColor();
@@ -522,12 +559,16 @@ int EE_GRAPHIC_TOOL::DrawEllipseArc( const TOOL_EVENT& aEvent )
     Activate();
 
     if( aEvent.HasPosition() )
-        initialPts.push_back( aEvent.Position() );
+        initialPts.push_back( snapEventPosition( aEvent ) );
 
     ELLIPSE_ARC_DRAW_BEHAVIOR ellipseBehavior( schIUScale, frame()->GetUserUnits() );
 
-    while( drawManagedShape( originalEvent, arc, ellipseBehavior, initialPts ) )
+    SHAPE_DRAW_RESULT result = SHAPE_DRAW_RESULT::NEXT_SHAPE;
+
+    while( result == SHAPE_DRAW_RESULT::NEXT_SHAPE )
     {
+        result = drawManagedShape( originalEvent, arc, ellipseBehavior, initialPts );
+
         if( arc )
         {
             m_lastStroke = arc->GetStroke();
@@ -569,8 +610,8 @@ int EE_GRAPHIC_TOOL::DrawBezier( const TOOL_EVENT& aEvent )
     const auto makeNewBezier =
             [&]()
             {
-                std::unique_ptr<SCH_SHAPE> bezier = std::make_unique<SCH_SHAPE>(
-                    SHAPE_T::BEZIER, shapeLayer, 0, m_lastFillStyle );
+                std::unique_ptr<SCH_SHAPE> bezier = std::make_unique<SCH_SHAPE>( SHAPE_T::BEZIER, shapeLayer, 0,
+                                                                                 m_lastFillStyle );
                 bezier->SetStroke( m_lastStroke );
                 bezier->SetFillColor( m_lastFillColor );
                 bezier->SetParent( parent );
@@ -588,12 +629,16 @@ int EE_GRAPHIC_TOOL::DrawBezier( const TOOL_EVENT& aEvent )
     Activate();
 
     if( aEvent.HasPosition() )
-        initialPts.push_back( aEvent.Position() );
+        initialPts.push_back( snapEventPosition( aEvent ) );
 
     BEZIER_DRAW_BEHAVIOR bezierBehavior( schIUScale, frame()->GetUserUnits() );
 
-    while( drawManagedShape( originalEvent, bezier, bezierBehavior, initialPts ) )
+    SHAPE_DRAW_RESULT result = SHAPE_DRAW_RESULT::NEXT_SHAPE;
+
+    while( result == SHAPE_DRAW_RESULT::NEXT_SHAPE )
     {
+        result = drawManagedShape( originalEvent, bezier, bezierBehavior, initialPts );
+
         if( bezier )
         {
             m_lastStroke = bezier->GetStroke();
@@ -630,11 +675,23 @@ int EE_GRAPHIC_TOOL::DrawBezier( const TOOL_EVENT& aEvent )
 }
 
 
-bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr<SCH_SHAPE>& aShape,
-                                        SHAPE_DRAW_BEHAVIOR& aBehavior, const std::vector<VECTOR2D>& aInitialPts )
+VECTOR2I EE_GRAPHIC_TOOL::snapEventPosition( const TOOL_EVENT& aEvent )
+{
+    EE_GRID_HELPER grid( m_toolMgr );
+    grid.SetUseGrid( getView()->GetGAL()->GetGridSnapping() );
+
+    return grid.Align( aEvent.Position(), GRID_HELPER_GRIDS::GRID_GRAPHICS );
+}
+
+
+SHAPE_DRAW_RESULT EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr<SCH_SHAPE>& aShape,
+                                                     SHAPE_DRAW_BEHAVIOR& aBehavior,
+                                                     const std::vector<VECTOR2D>& aInitialPts,
+                                                     const std::optional<ARC_TANGENT_SEED>& aTangentSeed,
+                                                     VECTOR2I* aLastClick )
 {
     if( !aShape )
-        return false;
+        return SHAPE_DRAW_RESULT::CANCELLED;
 
     aBehavior.Reset();
 
@@ -661,11 +718,90 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
                 aShape.reset();
             };
 
+    // Clicking a graphic on the drawing layer starts a tangent arc from it instead of placing a start point
+    auto findTangentSeed =
+            [&]( const VECTOR2I& aMouse, const VECTOR2I& aPos ) -> std::optional<ARC_TANGENT_SEED>
+            {
+                const int          tolerance = KiROUND( getView()->ToWorld( ARC_SEED_PICK_PIXELS ) );
+                const SCH_LAYER_ID layer = getShapeLayer();
+
+                auto seedFrom =
+                        [&]( SCH_ITEM* aItem, const VECTOR2I& aSeedPos ) -> std::optional<ARC_TANGENT_SEED>
+                        {
+                            if( !aItem || aItem->GetLayer() != layer )
+                                return std::nullopt;
+
+                            BOX2I reach = aItem->GetBoundingBox();
+
+                            if( !reach.Inflate( tolerance ).Contains( aSeedPos ) )
+                                return std::nullopt;
+
+                            if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( aItem ) )
+                                return ArcTangentSeedAt( *shape, aSeedPos, tolerance );
+
+                            if( SCH_LINE* line = dynamic_cast<SCH_LINE*>( aItem ); line && line->IsGraphicLine() )
+                            {
+                                return ArcTangentSeedAt( SEG( line->GetStartPoint(), line->GetEndPoint() ), aSeedPos,
+                                                         tolerance );
+                            }
+
+                            return std::nullopt;
+                        };
+
+                SNAP_RESULT snap = grid.ResolveSnap( aMouse, GRID_HELPER_GRIDS::GRID_GRAPHICS, aShape.get() );
+
+                if( std::optional<ARC_TANGENT_SEED> seed = seedFrom( grid.GetSnapped(), snap.position ) )
+                    return seed;
+
+                if( IsSymbolEditor() )
+                {
+                    SYMBOL_EDIT_FRAME* symFrame = frame<SYMBOL_EDIT_FRAME>();
+
+                    if( LIB_SYMBOL* symbol = symFrame->GetCurSymbol() )
+                    {
+                        for( SCH_ITEM& item : symbol->GetDrawItems() )
+                        {
+                            bool inUnit = item.GetUnit() == ALL_UNITS
+                                            || item.GetUnit() == symFrame->GetUnit();
+                            bool inBodyStyle = item.GetBodyStyle() == ALL_BODY_STYLES
+                                                || item.GetBodyStyle() == symFrame->GetBodyStyle();
+
+                            if( !inUnit || !inBodyStyle )
+                                continue;
+
+                            if( std::optional<ARC_TANGENT_SEED> seed = seedFrom( &item, aPos ) )
+                                return seed;
+                        }
+                    }
+
+                    return std::nullopt;
+                }
+
+                for( KICAD_T type : { SCH_SHAPE_T, SCH_LINE_T } )
+                {
+                    for( SCH_ITEM* item : frame()->GetScreen()->Items().Overlapping( type, aPos, tolerance ) )
+                    {
+                        if( std::optional<ARC_TANGENT_SEED> seed = seedFrom( item, aPos ) )
+                            return seed;
+                    }
+                }
+
+                return std::nullopt;
+            };
+
+    ARC_MODE_SESSION arcSession( aBehavior, frame()->config(), m_mode == MODE::ARC, aTangentSeed, findTangentSeed,
+                                 [&]( ARC_DRAW_MODE aMode )
+                                 {
+                                     frame()->SelectToolbarAction( SCH_ACTIONS::DrawArcForMode( aMode ) );
+                                     m_toolMgr->PostAction( ACTIONS::refreshPreview );
+                                 } );
+
     controls->ShowCursor( true );
     setCursor();
 
     bool started = false;
     bool cancelled = false;
+    bool finished = false;
 
     m_toolMgr->PostAction( ACTIONS::refreshPreview );
 
@@ -673,9 +809,9 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
     // state machine so that the next user click adds the subsequent point.
     // The user can still undo these points if they want to change them.
     for( const VECTOR2D& pt : aInitialPts )
-        aBehavior.AddPoint( pt );
+        arcSession.PlacePoint( pt, pt );
 
-    if( !aInitialPts.empty() )
+    if( !aInitialPts.empty() || aTangentSeed )
     {
         m_toolMgr->RunAction( ACTIONS::selectionClear );
 
@@ -685,12 +821,12 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
         preview.Add( aShape.get() );
         frame()->SetMsgPanel( aShape.get() );
 
-        m_toolMgr->PrimeTool( aInitialPts.back() );
-
         started = true;
     }
 
-    while( TOOL_EVENT* evt = Wait() )
+    TOOL_EVENT* evt = nullptr;
+
+    while( ( evt = Wait() ) )
     {
         setCursor();
         grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
@@ -716,6 +852,10 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
             cleanup();
             break;
         }
+        else if( arcSession.HandleModeEvent( *evt ) )
+        {
+            // A mode switch keeps the tool running rather than restarting it
+        }
         else if( evt->IsActivate() )
         {
             if( evt->IsPointEditor() )
@@ -734,7 +874,7 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
             cancelled = true;
             break;
         }
-        else if( evt->IsClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
         {
             if( !started )
             {
@@ -748,18 +888,34 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
                 started = true;
             }
 
-            aBehavior.AddPoint( cursorPos );
+            arcSession.PlacePoint( controls->GetMousePosition(), cursorPos );
+
+            if( aLastClick )
+                *aLastClick = cursorPos;
+        }
+        else if( evt->IsDblClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorDblClick )
+                || evt->IsAction( &ACTIONS::finishInteractive ) )
+        {
+            // Keep whatever we have so far, and report that we're finished.
+            if( !started )
+                cleanup();
+
+            finished = true;
+            break;
         }
         else if( evt->IsAction( &ACTIONS::arcPosture ) )
         {
             aBehavior.ToggleClockwise();
         }
-        else if( evt->IsAction( &ACTIONS::deleteLastPoint ) )
+        else if( evt->IsAction( &ACTIONS::deleteLastPoint ) || ( started && evt->IsAction( &ACTIONS::doDelete ) ) )
         {
-            aBehavior.RemoveLastPoint();
+            // Backspace is also doDelete's alternate hotkey, so a backup can arrive as either action
             grid.FullReset();
+
+            arcSession.RemoveLastPoint();
         }
-        else if( evt->IsMotion() )
+        else if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             aBehavior.SetCursorPosition( cursorPos );
         }
@@ -803,6 +959,10 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
         }
     }
 
+    // A shutdown must end the caller's loop rather than start another shape
+    if( !evt )
+        cancelled = true;
+
     preview.Remove( aShape.get() );
     m_view->Remove( &aBehavior.GetAssistant() );
     m_view->Remove( &preview );
@@ -816,9 +976,12 @@ bool EE_GRAPHIC_TOOL::drawManagedShape( const TOOL_EVENT& aTool, std::unique_ptr
     frame()->GetCanvas()->SetCurrentCursor( KICURSOR::ARROW );
 
     if( cancelled )
+    {
         aShape.reset();
+        return SHAPE_DRAW_RESULT::CANCELLED;
+    }
 
-    return !cancelled;
+    return finished ? SHAPE_DRAW_RESULT::FINISHED : SHAPE_DRAW_RESULT::NEXT_SHAPE;
 }
 
 
@@ -832,9 +995,30 @@ int EE_GRAPHIC_TOOL::ImportGraphics( const TOOL_EVENT& aEvent )
     if( !parent )
         return 0;
 
+    if( IsSymbolEditor() )
+    {
+        SYMBOL_EDIT_FRAME* symFrame = frame<SYMBOL_EDIT_FRAME>();
+
+        if( !symFrame->IsSymbolGraphicallyEditable() )
+            return 0;
+    }
+
     REENTRANCY_GUARD guard( &m_inDrawingTool );
 
-    DIALOG_IMPORT_GFX_SCH dlg( frame() );
+    std::unique_ptr<GRAPHICS_IMPORTER> importer;
+
+    if( IsSymbolEditor() )
+    {
+        SYMBOL_EDIT_FRAME* symFrame = frame<SYMBOL_EDIT_FRAME>();
+        importer = std::make_unique<GRAPHICS_IMPORTER_LIB_SYMBOL>( symFrame->GetCurSymbol(), symFrame->GetUnit() );
+    }
+    else
+    {
+        importer = std::make_unique<GRAPHICS_IMPORTER_SCH>();
+    }
+
+    // A symbol holds its own draw items, so a group on the screen would not be saved with it.
+    DIALOG_IMPORT_GFX dlg( frame(), std::move( importer ), !IsSymbolEditor() );
 
     // Set filename on drag-and-drop
     if( aEvent.HasParameter() )
@@ -861,6 +1045,16 @@ int EE_GRAPHIC_TOOL::ImportGraphics( const TOOL_EVENT& aEvent )
     std::vector<SCH_ITEM*> selectedItems;
     SCH_SELECTION          preview;
     SCH_COMMIT             commit( m_toolMgr );
+    SCH_GROUP*             group = nullptr;
+
+    if( !IsSymbolEditor() && dlg.ShouldGroupItems() && list.size() >= 2 )
+    {
+        group = new SCH_GROUP( frame()->GetScreen() );
+
+        newItems.push_back( group );
+        selectedItems.push_back( group );
+        preview.Add( group );
+    }
 
     auto commitImport =
             [&]( const std::vector<SCH_ITEM*>& aItems )
@@ -896,8 +1090,12 @@ int EE_GRAPHIC_TOOL::ImportGraphics( const TOOL_EVENT& aEvent )
         wxCHECK2_MSG( item, continue, wxString::Format( "Bad item type: ", eda_item->Type() ) );
 
         newItems.push_back( item );
-        selectedItems.push_back( item );
         preview.Add( item );
+
+        if( group )
+            group->AddItem( item );
+        else
+            selectedItems.push_back( item );
     }
 
     if( !dlg.IsPlacementInteractive() )
@@ -958,7 +1156,7 @@ int EE_GRAPHIC_TOOL::ImportGraphics( const TOOL_EVENT& aEvent )
 
             break;
         }
-        else if( evt->IsMotion() )
+        else if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             delta = cursorPos - currentOffset;
 
@@ -1002,6 +1200,11 @@ void EE_GRAPHIC_TOOL::setTransitions()
     Go( &EE_GRAPHIC_TOOL::DrawShape,        SCH_ACTIONS::drawEllipse.MakeEvent() );
     Go( &EE_GRAPHIC_TOOL::DrawEllipseArc,   SCH_ACTIONS::drawEllipseArc.MakeEvent() );
     Go( &EE_GRAPHIC_TOOL::DrawArc,          SCH_ACTIONS::drawArc.MakeEvent() );
+    Go( &EE_GRAPHIC_TOOL::DrawArc,          SCH_ACTIONS::drawArcCenter.MakeEvent() );
+    Go( &EE_GRAPHIC_TOOL::DrawArc,          SCH_ACTIONS::drawArcStartEndMid.MakeEvent() );
+    Go( &EE_GRAPHIC_TOOL::DrawArc,          SCH_ACTIONS::drawArcStartEndCenter.MakeEvent() );
+    Go( &EE_GRAPHIC_TOOL::DrawArc,          SCH_ACTIONS::drawArcTangent.MakeEvent() );
+    Go( &EE_GRAPHIC_TOOL::DrawArc,          SCH_ACTIONS::drawArcStartDirEnd.MakeEvent() );
     Go( &EE_GRAPHIC_TOOL::DrawBezier,       SCH_ACTIONS::drawBezier.MakeEvent() );
     Go( &EE_GRAPHIC_TOOL::DrawShape,        SCH_ACTIONS::drawPolygon.MakeEvent() );
     Go( &EE_GRAPHIC_TOOL::DrawShape,        SCH_ACTIONS::drawTextBox.MakeEvent() );

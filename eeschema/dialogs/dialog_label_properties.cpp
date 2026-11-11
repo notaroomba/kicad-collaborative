@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <bitmaps.h>
 #include <template_fieldnames.h>
 #include <widgets/bitmap_button.h>
 #include <widgets/font_choice.h>
@@ -46,14 +47,17 @@ DIALOG_LABEL_PROPERTIES::DIALOG_LABEL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH_L
         m_activeTextEntry( nullptr ),
         m_netNameValidator( true ),
         m_fields( nullptr ),
-        m_textSize( aParent, m_textSizeLabel, m_textSizeCtrl, m_textSizeUnits, false ),
+        m_textSize( aParent, m_textSizeLabel, m_textSizeCtrl, m_textSizeUnits ),
         m_helpWindow( nullptr ),
         m_labelList( nullptr )
 {
     COLOR_SETTINGS* colorSettings = m_Parent->GetColorSettings();
     COLOR4D         schematicBackground = colorSettings->GetColor( LAYER_SCHEMATIC_BACKGROUND );
 
-    m_fields = new FIELDS_GRID_TABLE( this, aParent, m_grid, m_currentLabel );
+    std::vector<EMBEDDED_FILES*> embeddedFilesStack;
+    embeddedFilesStack.push_back( m_currentLabel->Schematic() );
+
+    m_fields = new FIELDS_GRID_TABLE( this, aParent, m_grid, m_currentLabel, embeddedFilesStack );
     m_delayedFocusRow = -1;
     m_delayedFocusColumn = FDC_VALUE;
 
@@ -108,7 +112,7 @@ DIALOG_LABEL_PROPERTIES::DIALOG_LABEL_PROPERTIES( SCH_EDIT_FRAME* aParent, SCH_L
     }
 
     m_grid->SetTable( m_fields );
-    m_grid->PushEventHandler( new FIELDS_GRID_TRICKS( m_grid, this, {},
+    m_grid->PushEventHandler( new FIELDS_GRID_TRICKS( m_grid, this, embeddedFilesStack,
                                                       [&]( wxCommandEvent& aEvent )
                                                       {
                                                           OnAddField( aEvent );
@@ -478,14 +482,7 @@ bool DIALOG_LABEL_PROPERTIES::TransferDataFromWindow()
     if( !m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM ) )
         return false;
 
-    SCH_COMMIT commit( m_Parent );
-    wxString   text;
-
-    /* save old text in undo list if not already in edit */
-    if( m_currentLabel->GetEditFlags() == 0 )
-        commit.Modify( m_currentLabel, m_Parent->GetScreen() );
-
-    m_Parent->GetCanvas()->Refresh();
+    wxString text;
 
     if( m_activeTextEntry )
     {
@@ -508,9 +505,20 @@ bool DIALOG_LABEL_PROPERTIES::TransferDataFromWindow()
             DisplayError( this, _( "Label can not be empty." ) );
             return false;
         }
-
-        m_currentLabel->SetText( text );
     }
+
+    // Stage only after validation, because a staged commit that is never pushed leaves the
+    // connectivity revision ahead of the published rows
+    SCH_COMMIT commit( m_Parent );
+
+    /* save old text in undo list if not already in edit */
+    if( m_currentLabel->GetEditFlags() == 0 )
+        commit.Modify( m_currentLabel, m_Parent->GetScreen() );
+
+    m_Parent->GetCanvas()->Refresh();
+
+    if( m_activeTextEntry )
+        m_currentLabel->SetText( text );
 
     // change all field positions from relative to absolute
     for( SCH_FIELD& field : *m_fields )
@@ -577,7 +585,7 @@ bool DIALOG_LABEL_PROPERTIES::TransferDataFromWindow()
     for( SCH_FIELD& field : *m_fields )
     {
         if( !field.IsMandatory() )
-            field.SetOrdinal( ordinal++ );
+            field.SetOrdinal( ordinal++, FIELD_T::USER );
     }
 
     m_currentLabel->SetFields( *m_fields );
@@ -796,7 +804,7 @@ void DIALOG_LABEL_PROPERTIES::OnAddField( wxCommandEvent& event )
                 // notify the grid
                 wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_APPENDED, 1 );
                 m_grid->ProcessTableMessage( msg );
-                return { m_fields->size() - 1, FDC_NAME };
+                return { m_fields->GetNumberRows() - 1, FDC_NAME };
             } );
 }
 
@@ -806,7 +814,7 @@ void DIALOG_LABEL_PROPERTIES::OnDeleteField( wxCommandEvent& event )
     m_grid->OnDeleteRows(
             [&]( int row )
             {
-                if( row < m_currentLabel->GetMandatoryFieldCount() )
+                if( row < m_fields->GetMandatoryRowCount() )
                 {
                     DisplayError( this, _( "The first field is mandatory." ) );
                     return false;
@@ -816,7 +824,8 @@ void DIALOG_LABEL_PROPERTIES::OnDeleteField( wxCommandEvent& event )
             },
             [&]( int row )
             {
-                m_fields->erase( m_fields->begin() + row );
+                if( !m_fields->EraseRow( row ) )
+                    return;
 
                 // notify the grid
                 wxGridTableMessage msg( m_fields, wxGRIDTABLE_NOTIFY_ROWS_DELETED, row, 1 );
@@ -830,11 +839,11 @@ void DIALOG_LABEL_PROPERTIES::OnMoveUp( wxCommandEvent& event )
     m_grid->OnMoveRowUp(
             [&]( int row )
             {
-                return row > m_currentLabel->GetMandatoryFieldCount();
+                return row > m_fields->GetMandatoryRowCount();
             },
             [&]( int row )
             {
-                std::swap( *( m_fields->begin() + row ), *( m_fields->begin() + row - 1 ) );
+                m_fields->SwapRows( row, row - 1 );
                 m_grid->ForceRefresh();
             } );
 }
@@ -842,14 +851,14 @@ void DIALOG_LABEL_PROPERTIES::OnMoveUp( wxCommandEvent& event )
 
 void DIALOG_LABEL_PROPERTIES::OnMoveDown( wxCommandEvent& event )
 {
-    m_grid->OnMoveRowUp(
+    m_grid->OnMoveRowDown(
             [&]( int row )
             {
-                return row >= m_currentLabel->GetMandatoryFieldCount();
+                return row >= m_fields->GetMandatoryRowCount();
             },
             [&]( int row )
             {
-                std::swap( *( m_fields->begin() + row ), *( m_fields->begin() + row + 1 ) );
+                m_fields->SwapRows( row, row + 1 );
                 m_grid->ForceRefresh();
             } );
 }

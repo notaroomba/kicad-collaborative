@@ -19,8 +19,7 @@
  */
 
 
-#ifndef MARKER_BASE_H
-#define MARKER_BASE_H
+#pragma once
 
 #include <memory>
 
@@ -52,11 +51,10 @@ public:
         MARKER_DRAWING_SHEET,
         MARKER_RATSNEST,
         MARKER_PARITY,
-        MARKER_SIMUL
+        MARKER_SIMULATION
     };
 
-    MARKER_BASE( int aScalingFactor, std::shared_ptr<RC_ITEM> aItem,
-                 MARKER_T aType = MARKER_UNSPEC );
+    MARKER_BASE( int aScalingFactor, std::shared_ptr<RC_ITEM> aItem, MARKER_T aType = MARKER_UNSPEC );
     virtual ~MARKER_BASE() {};
 
     /**
@@ -70,6 +68,7 @@ public:
      * are relatives to the marker position (are not absolute).
      *
      * @param aPolygon is the #SHAPE_LINE_CHAIN to fill with the shape.
+     * @param aScale
      */
     void ShapeToPolygon( SHAPE_LINE_CHAIN& aPolygon, int aScale = -1 ) const;
 
@@ -115,6 +114,7 @@ public:
      * Test if the given #VECTOR2I is within the bounds of this object.
      *
      * @param aHitPosition is the #VECTOR2I to test (in internal units).
+     * @param aAccuracy is the allowable hit test error.
      * @return true if a hit, else false.
      */
     bool HitTestMarker( const VECTOR2I& aHitPosition, int aAccuracy ) const;
@@ -142,19 +142,17 @@ protected:
     virtual KIGFX::COLOR4D getColor() const = 0;
 
 public:
-    VECTOR2I            m_Pos;                 ///< Position of the marker.
+    VECTOR2I                 m_Pos;               ///< Position of the marker.
 
 protected:
-    MARKER_T            m_markerType;          ///< The type of marker.
-    bool                m_excluded;            ///< User has excluded this specific error.
-    wxString            m_comment;             ///< User supplied comment.
+    MARKER_T                 m_markerType;        ///< The type of marker.
+    bool                     m_excluded;          ///< User has excluded this specific error.
+    wxString                 m_comment;           ///< User supplied comment.
     std::shared_ptr<RC_ITEM> m_rcItem;
 
-    mutable int         m_scalingFactor;       ///< Scaling factor to convert corners coordinates to internal
-                                               ///< units.  Dependant on current zoom.
-    BOX2I               m_shapeBoundingBox;    ///< Bounding box of the graphic symbol relative to the position
-                                               ///< of the shape in marker shape units.
+    mutable int              m_scalingFactor;     ///< Scaling factor to convert corners coordinates to internal
+                                                  ///< units.  Dependant on current zoom.
+    BOX2I                    m_shapeBoundingBox;  ///< Bounding box of the graphic symbol relative to the position
+                                                  ///< of the shape in marker shape units.
 };
 
-
-#endif      //  MARKER_BASE_H

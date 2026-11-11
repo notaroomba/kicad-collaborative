@@ -44,8 +44,9 @@ public:
     /**
      *  Create a new 3D Canvas with a attribute list.
      *
-     *  @param aParent the parent creator of this canvas.
-     *  @param aGLAttribs openGL attributes created by #OGL_ATT_LIST::GetAttributesList.
+     * @param aParent the parent creator of this canvas.
+     * @param aGLAttribs openGL attributes created by #OGL_ATT_LIST::GetAttributesList.
+     * @param aCacheManager is the 3D object cache manager.
      */
     EDA_3D_MODEL_VIEWER( wxWindow* aParent, const wxGLAttributes& aGLAttribs,
                          S3D_CACHE* aCacheManager = nullptr );
@@ -74,7 +75,7 @@ public:
     void Clear3DModel();
 
 private:
-    void ogl_initialize();
+    bool ogl_initialize();
     void ogl_set_arrow_material();
 
     void OnPaint( wxPaintEvent& event );
@@ -118,6 +119,7 @@ private:
 
     /// Flag if open gl was initialized
     bool m_ogl_initialized;
+    bool m_ogl_init_failed = false;
 
     /// factor to convert the model or any other items to keep it in relation to
     /// the +/-RANGE_SCALE_3D

@@ -79,6 +79,8 @@ void DIFF_PHASE_SKEW_TOOL::Reset( const RESET_REASON aReason )
     delete m_router;
     delete m_iface; // Delete after m_router because PNS::NODE dtor needs m_ruleResolver
 
+    m_viewOverlay.reset();
+
     if( aReason == RESET_REASON::SHUTDOWN )
     {
         m_router = nullptr;
@@ -156,7 +158,7 @@ int DIFF_PHASE_SKEW_TOOL::ShowDiffPhaseSkew( const TOOL_EVENT& aEvent )
         if( evt->IsCancelInteractive() || evt->IsActivate() )
         {
             // Roll back our mode, or exit if we are in the initial hover mode
-            if( GetMode() == MODE::FIXED || GetMode() == MODE::SELECTED_FIRST )
+            if( GetMode() == MODE::FIXED_MODE || GetMode() == MODE::SELECTED_FIRST )
             {
                 m_pickerItemFirst = nullptr;
                 m_pickerItemFirstIsDiffPair = false;
@@ -173,7 +175,7 @@ int DIFF_PHASE_SKEW_TOOL::ShowDiffPhaseSkew( const TOOL_EVENT& aEvent )
             }
         }
 
-        if( evt->IsMotion() )
+        if( evt->IsMotion() || evt->IsAction( &ACTIONS::refreshPreview ) )
         {
             if( GetMode() == MODE::HOVER )
             {
@@ -189,19 +191,21 @@ int DIFF_PHASE_SKEW_TOOL::ShowDiffPhaseSkew( const TOOL_EVENT& aEvent )
                 doInitialHover( selectionTool, guide );
                 updateMessagePanel();
             }
-            else if( GetMode() == MODE::FIXED )
+            else if( GetMode() == MODE::FIXED_MODE )
             {
                 doShowStatsAtCursor();
                 updateMessagePanel();
             }
         }
-        else if( evt->IsClick( BUT_LEFT ) && GetMode() == MODE::HOVER && m_pickerItemFirst )
+        else if( ( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
+                && GetMode() == MODE::HOVER
+                && m_pickerItemFirst )
         {
             m_originFirst = m_cursorPos;
 
             if( m_pickerItemFirstIsDiffPair )
             {
-                SetMode( MODE::FIXED );
+                SetMode( MODE::FIXED_MODE );
                 doDisplayOverlay();
             }
             else
@@ -211,10 +215,12 @@ int DIFF_PHASE_SKEW_TOOL::ShowDiffPhaseSkew( const TOOL_EVENT& aEvent )
 
             updateMessagePanel();
         }
-        else if( evt->IsClick( BUT_LEFT ) && GetMode() == MODE::SELECTED_FIRST && m_pickerItemSecond )
+        else if( ( evt->IsClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorClick ) )
+                && GetMode() == MODE::SELECTED_FIRST
+                && m_pickerItemSecond )
         {
             // First click to select the diff pair for inspection
-            SetMode( MODE::FIXED );
+            SetMode( MODE::FIXED_MODE );
             m_originSecond = m_cursorPos;
             doDisplayOverlay();
             updateMessagePanel();
@@ -231,7 +237,7 @@ int DIFF_PHASE_SKEW_TOOL::ShowDiffPhaseSkew( const TOOL_EVENT& aEvent )
             {
                 cfg->m_DiffPhaseSkewSettings = settings;
 
-                if( GetMode() == MODE::FIXED )
+                if( GetMode() == MODE::FIXED_MODE )
                     doDisplayOverlay();
             }
         }
@@ -819,9 +825,6 @@ void DIFF_PHASE_SKEW_TOOL::drawDiffOverlay() const
 
         m_viewOverlay->Segment( segment.Start, segment.End, segment.Width );
     }
-
-    std::vector<MSG_PANEL_ITEM> items;
-    wxString                    description, value;
 
     updateOverlay();
 }

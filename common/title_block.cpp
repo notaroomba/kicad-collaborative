@@ -21,6 +21,7 @@
 #include <richio.h>
 #include <common.h>
 #include <title_block.h>
+#include <text_eval/text_eval_environment.h>
 #include <core/kicad_algo.h>
 
 
@@ -100,7 +101,7 @@ wxString TITLE_BLOCK::GetCurrentDate()
     //  return wxDateTime::Now().Format( wxLocale::GetInfo( wxLOCALE_SHORT_DATE_FMT ) );
     //  return wxDateTime::Now().Format( wxLocale::GetInfo( wxLOCALE_LONG_DATE_FMT ) );
     //  return wxDateTime::Now().Format( wxT("%Y-%b-%d") );
-    return wxDateTime::Now().FormatISODate();
+    return TEXT_EVAL::ENVIRONMENT::CurrentTime().FormatISODate();
 };
 
 
@@ -108,18 +109,18 @@ wxString TITLE_BLOCK::GetCurrentTimeHHMMSS()
 {
     // Returns time in HHhMMmSSs format (e.g., "19h23m42s").
     // Uses letters as separators to be safe for filenames (':' can't be used as a separator).
-    return wxDateTime::Now().Format( wxT( "%Hh%Mm%Ss" ) );
+    return TEXT_EVAL::ENVIRONMENT::CurrentTime().Format( wxT( "%Hh%Mm%Ss" ) );
 }
 
 
 wxString TITLE_BLOCK::GetCurrentTimeLocale()
 {
     // Returns time formatted according to the current locale (e.g., "7:23:42 PM" or "19:23:42").
-    return wxDateTime::Now().FormatTime();
+    return TEXT_EVAL::ENVIRONMENT::CurrentTime().FormatTime();
 }
 
 
-bool TITLE_BLOCK::TextVarResolver( wxString* aToken, const PROJECT* aProject, int aFlags ) const
+bool TITLE_BLOCK::TextVarResolver( wxString* aToken, const PROJECT* aProject, RESOLUTION_CONTEXT aContext ) const
 {
     bool tokenUpdated = false;
     wxString originalToken = *aToken;
@@ -184,7 +185,7 @@ bool TITLE_BLOCK::TextVarResolver( wxString* aToken, const PROJECT* aProject, in
         if( aToken->IsSameAs( wxT( "CURRENT_DATE" ) ) )
             *aToken = GetCurrentDate();
         else if( aProject )
-            *aToken = ExpandTextVars( *aToken, aProject, aFlags );
+            *aToken = ExpandTextVars( *aToken, aProject, aContext );
 
         // This is the default fallback, so don't claim we resolved it
         if( *aToken == wxT( "${" ) + originalToken + wxT( "}" ) )

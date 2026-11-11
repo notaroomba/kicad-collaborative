@@ -272,7 +272,7 @@ void CONSTRAINT_EDIT_TOOL::refreshDiagnostics()
     // Called when the model changed, so the cached diagnosis is stale.  A bare re-render (hover) uses
     // renderConstraintViews() directly and keeps the cache.
     m_diagDirty = true;
-    m_hoverCandidates.reset();   // the constrained-shape set may have changed too
+    m_hoverCandidateIds.reset(); // the constrained-shape set may have changed too
     renderConstraintViews();
 }
 
@@ -327,43 +327,12 @@ const BOARD_CONSTRAINT_DIAGNOSTICS& CONSTRAINT_EDIT_TOOL::ensureDiagnosis()
 }
 
 
-const std::vector<PCB_SHAPE*>& CONSTRAINT_EDIT_TOOL::hoverCandidates()
+const std::vector<KIID>& CONSTRAINT_EDIT_TOOL::hoverCandidates()
 {
-    if( m_hoverCandidates )
-        return *m_hoverCandidates;
+    if( !m_hoverCandidateIds )
+        m_hoverCandidateIds = ConstrainedShapeIds( board() );
 
-    std::set<KIID>          ids;
-    std::vector<PCB_SHAPE*> shapes;
-
-    auto collect =
-            [&]( const CONSTRAINTS& aConstraints )
-            {
-                for( PCB_CONSTRAINT* c : aConstraints )
-                {
-                    for( const CONSTRAINT_MEMBER& m : c->GetMembers() )
-                    {
-                        if( ids.insert( m.m_item ).second )
-                        {
-                            if( PCB_SHAPE* shape =
-                                        dynamic_cast<PCB_SHAPE*>( board()->ResolveItem( m.m_item, true ) ) )
-                            {
-                                shapes.push_back( shape );
-                            }
-                        }
-                    }
-                }
-            };
-
-    if( board() )
-    {
-        collect( board()->Constraints() );
-
-        for( FOOTPRINT* footprint : board()->Footprints() )
-            collect( footprint->Constraints() );
-    }
-
-    m_hoverCandidates = std::move( shapes );
-    return *m_hoverCandidates;
+    return *m_hoverCandidateIds;
 }
 
 
@@ -401,7 +370,7 @@ int CONSTRAINT_EDIT_TOOL::onHoverMotion( const TOOL_EVENT& aEvent )
         }
     }
 
-    std::optional<KIID> hit = NearestConstrainedShape( hoverCandidates(), cursor, KiROUND( tol ) );
+    std::optional<KIID> hit = NearestConstrainedShape( board(), hoverCandidates(), cursor, KiROUND( tol ) );
 
     // Only the hover filter changed, not the model, so redraw just the overlay from the cached
     // diagnosis -- the panel (its row selection) and the info bar are left untouched.
@@ -643,19 +612,12 @@ bool CONSTRAINT_EDIT_TOOL::isDuplicateConstraint( const PCB_CONSTRAINT* aConstra
     if( !aConstraint || !board() )
         return false;
 
-    auto scan = [&]( const CONSTRAINTS& aList )
-    {
-        return std::ranges::any_of( aList,
-                            [&]( const PCB_CONSTRAINT* aExisting )
-                            {
-                                return aExisting != aConstraint && ConstraintsAreDuplicate( *aExisting, *aConstraint );
-                            } );
-    };
-
-    if( scan( board()->Constraints() ) )
-        return true;
-
-    return board()->GetFirstFootprint() && scan( board()->GetFirstFootprint()->Constraints() );
+    return std::ranges::any_of( CollectResolvedConstraints( board() ),
+                                [&]( const PCB_CONSTRAINT* aExisting )
+                                {
+                                    return aExisting != aConstraint
+                                           && ConstraintsAreDuplicate( *aExisting, *aConstraint );
+                                } );
 }
 
 

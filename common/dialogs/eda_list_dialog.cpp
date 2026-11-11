@@ -43,6 +43,7 @@ EDA_LIST_DIALOG::EDA_LIST_DIALOG( wxWindow* aParent, const wxString& aTitle, con
     // correct for wxfb not supporting FromDIP
     m_listBox->SetMinSize( FromDIP( m_listBox->GetMinSize() ) );
     m_filterBox->SetHint( _( "Filter" ) );
+    OptOut( m_filterBox );
 
     initDialog( aItemHeaders, aItemList, aPreselectText );
 
@@ -68,6 +69,7 @@ EDA_LIST_DIALOG::EDA_LIST_DIALOG( wxWindow* aParent, const wxString& aTitle, boo
         m_sortList( aSortList )
 {
     m_filterBox->SetHint( _( "Filter" ) );
+    OptOut( m_filterBox );
 }
 
 
@@ -303,7 +305,7 @@ static int wxCALLBACK myCompareFunction( wxIntPtr aItem1, wxIntPtr aItem2, wxInt
     wxString* component1Name = (wxString*) aItem1;
     wxString* component2Name = (wxString*) aItem2;
 
-    return StrNumCmp( *component1Name, *component2Name, true );
+    return StrNumCmp( *component1Name, *component2Name, CMP_T::IGNORE_CASE );
 }
 
 

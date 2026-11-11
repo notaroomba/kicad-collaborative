@@ -20,12 +20,15 @@
 
 #pragma once
 
+#include <io/common/plugin_common_choose_project.h>
 #include <io/io_base.h>
 #include <pcb_io/pcb_io_mgr.h>
 
-#include <cstdint>
-#include <config.h>
+#include <memory>
+#include <utility>
 #include <vector>
+
+#include <config.h>
 #include <wx/arrstr.h>
 #include <i18n_utility.h>
 
@@ -54,7 +57,7 @@ inline constexpr char APPEND_PRESERVE_DESTINATION_STACKUP[] = "append_preserve_d
  *The compiler writes the "zero argument" constructor for a PCB_IO automatically if you do
  * not provide one.  If you decide you need to provide a zero argument constructor of your
  * own design, that is allowed.  It must be public, and it is what the #PCB_IO_MGR uses.  Parameters
- * may be passed into a PCB_IO via the #PROPERTIES variable for any of the public API functions
+ * may be passed into a PCB_IO via the properties map variable for any of the public API functions
  * which take one.
  *
  *
@@ -75,7 +78,7 @@ class PCB_IO : public IO_BASE
 {
 public:
     /**
-     * Returns board file description for the PCB_IO.
+     * Return board file description for the PCB_IO.
      */
     virtual const IO_BASE::IO_FILE_DESC GetBoardFileDesc() const
     {
@@ -88,19 +91,40 @@ public:
     bool IsPCB_IO() const override { return true; }
 
     /**
-     * Checks if this PCB_IO can read the specified board file.
+     * Check if this PCB_IO can read the specified board file.
      * If not overriden, extension check is used.
      */
+
+    /**
+     * Return the PCB document identifiers and source names in a project container.
+     *
+     * Plugins that do not support project containers return an empty list.
+     */
+    virtual std::vector<std::pair<wxString, wxString>>
+    EnumerateProjectBoards( const wxString& aFileName ) const
+    {
+        return {};
+    }
+
+    /**
+     * Return the KiCad projects a project container splits into, one per board entry and one per PCB or schematic
+     * no entry names.  Plugins that do not support project containers return an empty list.
+     */
+    virtual std::vector<IMPORT_PROJECT_DESC> EnumerateProjectEntries( const wxString& aFileName ) const
+    {
+        return {};
+    }
+
     virtual bool CanReadBoard( const wxString& aFileName ) const;
 
     /**
-     * Checks if this PCB_IO can read a footprint from specified file or directory.
+     * Check if this PCB_IO can read a footprint from specified file or directory.
      * If not overriden, extension check is used.
      */
     virtual bool CanReadFootprint( const wxString& aFileName ) const;
 
     /**
-     * Registers a KIDIALOG callback for collecting info from the user.
+     * Register a KIDIALOG callback for collecting info from the user.
      */
     virtual void SetQueryUserCallback( std::function<bool( wxString aTitle, int aIcon,
                                                            wxString aMessage,
@@ -109,15 +133,10 @@ public:
 
     /**
      * Load information from some input file format that this PCB_IO implementation
-     * knows about into either a new #BOARD or an existing one.
-     *
-     * This may be used to load an entire new #BOARD, or to augment an existing one if
-     * @a aAppendToMe is not NULL.
+     * knows about into new #BOARD.
      *
      * @param aFileName is the name of the file to use as input and may be foreign in
      *                  nature or native in nature.
-     * @param aAppendToMe is an existing BOARD to append to, but if NULL then this means
-     *                    "do not append, rather load anew".
      * @param aProperties is an associative array that can be used to tell the loader how to
      *                    load the file, because it can take any number of additional named
      *                    arguments that the plugin is known to support. These are tuning
@@ -126,16 +145,29 @@ public:
      *                    it to be optionally NULL.
      * @param aProject is the optional #PROJECT object primarily used by third party
      *                 importers.
-     * @return the successfully loaded board, or the same one as \a aAppendToMe if aAppendToMe
-     *         was not NULL, and caller owns it.
+     * @return the successfully loaded board. Caller owns it.
      *
      * @throw IO_ERROR if there is a problem loading, and its contents should say what went
      *                 wrong, using line number and character offsets of the input file if
      *                 possible.
+     * @throw IO_CANCELLED if the user cancelled the load.
      */
-    virtual BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                              const std::map<std::string, UTF8>* aProperties = nullptr,
-                              PROJECT* aProject = nullptr );
+    std::unique_ptr<BOARD> LoadBoard( const wxString&                    aFileName,
+                                      const std::map<std::string, UTF8>* aProperties = nullptr,
+                                      PROJECT*                           aProject = nullptr );
+
+
+    /**
+     * Same as \ref LoadBoard(), but appends the loaded board to an existing board, which must
+     * already exist.
+     *
+     * @param aFileName is the file name of the board to load and append to \a aAppendToMe.
+     * @param aAppendToMe is the existing board to append to. The caller always owns it.
+     * @param[in] aProperties are any custom properties for the plugin.
+     * @param[in] aProject is an optional #PROJECT object.
+     */
+    void LoadAndAppendBoard( const wxString& aFileName, BOARD& aAppendToMe,
+                             const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr );
 
     /**
      * Return a container with the cached library footprints generated in the last call to
@@ -146,6 +178,13 @@ public:
      * @return Footprints (caller owns the objects)
      */
     virtual std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints();
+    /**
+     * Return custom DRC rules generated while importing the most recent board.
+     *
+     * The caller owns persistence of these rules beside the imported KiCad board.
+     */
+    virtual wxString GetImportedDesignRules() const { return wxEmptyString; }
+
 
     /**
      * Write @a aBoard to a storage file in a format that this PCB_IO implementation knows
@@ -165,7 +204,7 @@ public:
      *
      * @throw IO_ERROR if there is a problem saving or exporting.
      */
-    virtual void SaveBoard( const wxString& aFileName, BOARD* aBoard,
+    virtual void SaveBoard( const wxString& aFileName, BOARD& aBoard,
                             const std::map<std::string, UTF8>* aProperties = nullptr );
 
     /**
@@ -199,7 +238,7 @@ public:
      * If this is a footprint library, the first footprint should be loaded.
      * The default implementation uses FootprintEnumerate and FootprintLoad to load first footprint.
      *
-     * @param aLibraryPath is a path of the footprint file.
+     * @param aFootprintPath is a path of the footprint file.
      * @param aFootprintNameOut is the name output of the loaded footprint.
      * @param aProperties is an associative array that can be used to tell the loader
      *                    implementation to do something special, because it can take
@@ -211,8 +250,8 @@ public:
      *
      * @throw   IO_ERROR if the footprint cannot be found or read.
      */
-    virtual FOOTPRINT* ImportFootprint( const wxString& aFootprintPath, wxString& aFootprintNameOut,
-                                        const std::map<std::string, UTF8>* aProperties = nullptr );
+    virtual std::unique_ptr<FOOTPRINT> ImportFootprint( const wxString& aFootprintPath, wxString& aFootprintNameOut,
+                                                        const std::map<std::string, UTF8>* aProperties = nullptr );
 
     /**
      * Load a footprint having @a aFootprintName from the @a aLibraryPath containing a library
@@ -235,22 +274,25 @@ public:
      * @throw   IO_ERROR if the library cannot be found or read.  No exception is thrown in
      *                   the case where \a aFootprintName cannot be found.
      */
-    virtual FOOTPRINT* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                                      bool  aKeepUUID = false,
-                                      const std::map<std::string, UTF8>* aProperties = nullptr );
+    virtual std::unique_ptr<FOOTPRINT> FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                                      bool                               aKeepUUID = false,
+                                                      const std::map<std::string, UTF8>* aProperties = nullptr );
 
     /**
-     * A version of FootprintLoad() for use after FootprintEnumerate() for more efficient
-     * cache management.
+     * A version of \ref FootprintLoad() for use after \ref FootprintEnumerate() for more efficient
+     * cache management in plugins that support it.
+     *
+     * Whether the returned pointer is borrowed or owned by the caller depends on the plugin.
+     * Use \ref CachesEnumeratedFootprints() to determine.
      */
     virtual const FOOTPRINT* GetEnumeratedFootprint( const wxString& aLibraryPath, const wxString& aFootprintName,
                                                      const std::map<std::string, UTF8>* aProperties = nullptr );
 
     /**
-     * Return true if GetEnumeratedFootprint() returns a borrowed pointer from an internal cache.
+     * Return true if \ref GetEnumeratedFootprint() returns a borrowed pointer from an internal cache.
      *
      * When true, the caller must NOT delete the returned pointer. When false (the default),
-     * GetEnumeratedFootprint() allocates a new FOOTPRINT and the caller owns the memory.
+     * \ref GetEnumeratedFootprint() allocates a new \ref FOOTPRINT and the caller owns the memory.
      */
     virtual bool CachesEnumeratedFootprints() const { return false; }
 
@@ -310,12 +352,11 @@ public:
      * Append supported PLUGIN options to @a aListToAppenTo along with internationalized
      * descriptions.
      *
-     * Options are typically appended so that a derived #PLUGIN can call its base class
+     * Options are typically appended so that a derived #PCB_IO can call its base class
      * function by the same name first, thus inheriting options declared there.  Some base
      * class options could pertain to all Footprint*() functions in all derived PLUGINs.
      *
-     * @note Since aListToAppendTo is a #PROPERTIES object, all options will be unique and
-     *       last guy wins.
+     * @note Since aListToAppendTo is a map all options will be unique and the last guy wins.
      *
      * @param aListToAppendTo holds a tuple of
      * <dl>
@@ -344,6 +385,20 @@ protected:
             m_board( nullptr ),
             m_props( nullptr )
     {}
+
+    /**
+     * Parse @a aFileName into @a aBoard.  The caller owns @a aBoard in both cases.
+     *
+     * @param aFileName is the file name of the board to load.
+     * @param[in] aBoard is the #BOARD object to load \a aFileName into.
+     * @param aIsNewLoad is true for a fresh load (adopt the file's setup, keep the
+     *                   file's UUIDs) and false when merging into an existing board
+     *                   (preserve its setup, regenerate UUIDs that would clash).
+     * @param aProperties are any optional properties used by the plugin.
+     * @param aProject
+     */
+    virtual void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                            const std::map<std::string, UTF8>* aProperties, PROJECT* aProject );
 
     /// The board BOARD being worked on, no ownership here
     BOARD* m_board;

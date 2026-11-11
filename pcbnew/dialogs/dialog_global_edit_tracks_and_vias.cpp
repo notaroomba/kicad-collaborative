@@ -370,7 +370,9 @@ void DIALOG_GLOBAL_EDIT_TRACKS_AND_VIAS::visitItem( PICKED_ITEMS_LIST* aUndoList
 
     if( aItem->Type() == PCB_VIA_T )
     {
-        if( m_filterByViaSize->GetValue() && aItem->GetWidth() != m_viaSizeFilter.GetValue() )
+        PCB_VIA* via = static_cast<PCB_VIA*>( aItem );
+
+        if( m_filterByViaSize->GetValue() && via->GetWidth( PADSTACK::ALL_LAYERS ) != m_viaSizeFilter.GetValue() )
             return;
     }
     else
@@ -429,9 +431,9 @@ bool DIALOG_GLOBAL_EDIT_TRACKS_AND_VIAS::TransferDataFromWindow()
         m_brd->OnItemsChanged( m_items_changed );
         m_parent->OnModify();
 
-        auto connectivity = m_brd->GetConnectivity();
-        connectivity->RecalculateRatsnest();
-        connectivity->ClearLocalRatsnest();
+        m_brd->GetConnectivity()->ClearLocalRatsnest();
+        m_brd->CompileRatsnest();
+
         m_parent->GetCanvas()->RedrawRatsnest();
         m_brd->OnRatsnestChanged();
     }

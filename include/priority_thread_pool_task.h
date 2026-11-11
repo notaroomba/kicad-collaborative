@@ -19,6 +19,10 @@
 
 #pragma once
 
+#include <atomic>
+#include <exception>
+
+#include <progress_reporter.h>
 #include <thread_pool.h>
 
 
@@ -38,17 +42,34 @@ public:
     {
     }
 
+    // No copying (m_abort is atomic)
+    PRIORITY_THREAD_POOL_TASK( const PRIORITY_THREAD_POOL_TASK& ) = delete;
+    PRIORITY_THREAD_POOL_TASK& operator=( const PRIORITY_THREAD_POOL_TASK& ) = delete;
+
     void SetReporter( PROGRESS_REPORTER* aReporter ) { m_reporter = aReporter; }
 
     /**
      * Call this to execute the task on all items in aItems, using the thread pool
      * and dispatching the tasks in order of descending priority as determined by
-     * comparePriority() implemented by the derived class.
+     * computePriorityKey() implemented by the derived class.
+     *
+     * This method blocks until all tasks are complete, and then re-throws the first
+     * exception thrown by a task (if any). If a task throws, later tasks that have
+     * not started yet are skipped; tasks already running are not interrupted.
+     *
+     * It never returns while any task is still queued or running.
+     *
+     * @param aItems The container of items to process.
+     * @return The total number of subitems processed (sum of the return values
+     *         of task() for each item)
      */
-    void Execute( ContainerT& aItems )
+    size_t Execute( ContainerT& aItems )
     {
         thread_pool&                     tp = GetKiCadThreadPool();
         std::vector<std::future<size_t>> returns;
+
+        // Clear the abort flag in case this object is reused after a failure.
+        m_abort.store( false );
 
         // Compute priority keys paired to item indices
         using IndexedPriority = std::pair<size_t, int>;
@@ -78,12 +99,30 @@ public:
             returns.emplace_back( tp.submit_task(
                     [this, &item]
                     {
-                        return task( item );
+                        // Abandon this item if an earlier task has failed.
+                        if( m_abort.load() )
+                            return size_t( 0 );
+
+                        try
+                        {
+                            return task( item );
+                        }
+                        catch( ... )
+                        {
+                            // Let tasks that have not started yet skip their item.
+                            m_abort.store( true );
+                            throw;
+                        }
                     },
                     priority ) );
         }
 
-        for( const std::future<size_t>& ret : returns )
+        size_t totalProcessed = 0;
+
+        // Hold onto the first exception (if any) thrown by the tasks and rethrow at the end.
+        std::exception_ptr firstException;
+
+        for( std::future<size_t>& ret : returns )
         {
             std::future_status status = ret.wait_for( m_reporterInterval );
 
@@ -94,7 +133,24 @@ public:
 
                 status = ret.wait_for( m_reporterInterval );
             }
+
+            try
+            {
+                totalProcessed += ret.get();
+            }
+            catch( ... )
+            {
+                if( !firstException )
+                    firstException = std::current_exception();
+            }
         }
+
+        // Assert
+
+        if( firstException )
+            std::rethrow_exception( firstException );
+
+        return totalProcessed;
     }
 
 protected:
@@ -124,4 +180,9 @@ private:
 
     BS::priority_t            m_highestPriority;
     std::chrono::milliseconds m_reporterInterval;
+
+    /**
+     * Set when a task throws, so tasks that have not started yet skip their item.
+     */
+    std::atomic<bool> m_abort{ false };
 };

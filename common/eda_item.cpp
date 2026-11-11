@@ -112,6 +112,7 @@ EDA_ITEM::EDA_ITEM( const EDA_ITEM& base ) :
         m_group( base.m_group ),
         m_isRollover( false ),
         m_forceVisible( base.m_forceVisible ),
+        m_netHighlighted( base.m_netHighlighted ),
         m_customProperties( base.m_customProperties )
 {
     SetForcedTransparency( base.GetForcedTransparency() );
@@ -119,6 +120,18 @@ EDA_ITEM::EDA_ITEM( const EDA_ITEM& base ) :
 
 
 EDA_ITEM::~EDA_ITEM() = default;
+
+
+bool EDA_ITEM::IsNetHighlighted() const
+{
+    return m_netHighlighted;
+}
+
+
+void EDA_ITEM::SetNetHighlighted( bool aHighlighted )
+{
+    m_netHighlighted = aHighlighted;
+}
 
 
 EDA_ITEM* EDA_ITEM::findParent( KICAD_T aType ) const
@@ -148,7 +161,7 @@ void EDA_ITEM::SetParent( EDA_ITEM* aParent )
 void EDA_ITEM::RemoveCustomProperty( const wxString& aKey )
 {
     m_customProperties.erase( aKey );
-    m_dynamicCustomPropsCache.erase( aKey );
+    m_customPropsStorageCache.erase( aKey );
 }
 
 
@@ -195,12 +208,12 @@ std::vector<PROPERTY_BASE*> EDA_ITEM::GetCustomPropertiesAsInspectables() const
     {
         (void) value;
 
-        auto it = m_dynamicCustomPropsCache.find( key );
+        auto it = m_customPropsStorageCache.find( key );
 
-        if( it == m_dynamicCustomPropsCache.end() )
+        if( it == m_customPropsStorageCache.end() )
         {
-            it = m_dynamicCustomPropsCache.emplace(
-                    key, std::make_unique<EDA_CUSTOM_PROPERTY>( key, ownerHash ) ).first;
+            auto prop = std::make_unique<EDA_CUSTOM_PROPERTY>( key, ownerHash );
+            it = m_customPropsStorageCache.emplace( key, std::move( prop ) ).first;
         }
 
         props.push_back( it->second.get() );
@@ -484,6 +497,7 @@ EDA_ITEM& EDA_ITEM::operator=( const EDA_ITEM& aItem )
     m_group        = aItem.m_group;
     m_forceVisible = aItem.m_forceVisible;
     m_isRollover   = aItem.m_isRollover;
+    m_netHighlighted = aItem.m_netHighlighted;
     m_customProperties = aItem.m_customProperties;
 
     SetForcedTransparency( aItem.GetForcedTransparency() );
@@ -573,6 +587,9 @@ static struct EDA_ITEM_DESC
             .Map( PCB_TEXT_T,              _HKI( "Text" ) )
             .Map( PCB_TEXTBOX_T,           _HKI( "Text Box" ) )
             .Map( PCB_TABLE_T,             _HKI( "Table" ) )
+            .Map( PCB_DRILL_CHART_T,       _HKI( "Drill Chart" ) )
+            .Map( PCB_DRILL_MAP_T,         _HKI( "Drill Map" ) )
+            .Map( PCB_STACKUP_TABLE_T,     _HKI( "Stackup Table" ) )
             .Map( PCB_TABLECELL_T,         _HKI( "Table Cell" ) )
             .Map( PCB_TRACE_T,             _HKI( "Track" ) )
             .Map( PCB_ARC_T,               _HKI( "Track" ) )
@@ -590,7 +607,8 @@ static struct EDA_ITEM_DESC
             .Map( PCB_NETINFO_T,           _HKI( "NetInfo" ) )
             .Map( PCB_GROUP_T,             _HKI( "Group" ) )
             .Map( PCB_BARCODE_T,           _HKI( "Barcode" ) )
-            .Map( PCB_GRIDITEM_T,          _HKI( "GridItem" ) )
+            .Map( PCB_GRID_ITEM_T,         _HKI( "Grid" ) )
+            .Map( PCB_3D_BODY_T,           _HKI( "3D Body" ) )
 
             .Map( SCH_MARKER_T,            _HKI( "Marker" ) )
             .Map( SCH_JUNCTION_T,          _HKI( "Junction" ) )

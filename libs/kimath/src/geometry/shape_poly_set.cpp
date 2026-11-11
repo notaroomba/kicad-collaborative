@@ -34,6 +34,7 @@
 #include <memory>
 #include <set>
 #include <string> // for char_traits, operator!=
+#include <unordered_map>
 #include <unordered_set>
 #include <thread>
 #include <utility> // for swap, move
@@ -49,6 +50,8 @@
 #include <geometry/shape_line_chain.h>
 #include <geometry/shape_poly_set.h>
 #include <geometry/rtree/dynamic_rtree.h>
+#include <geometry/shape_poly_tri_index.h>
+#include <geometry/segment_index.h>
 #include <math/box2.h>                       // for BOX2I
 #include <math/util.h>                       // for KiROUND, rescale
 #include <math/vector2d.h>                   // for VECTOR2I, VECTOR2D, VECTOR2
@@ -56,6 +59,7 @@
 #include <mmh3_hash.h>
 #include <geometry/shape_segment.h>
 #include <geometry/shape_circle.h>
+#include <geometry/fracture_edge_index_utils.h>
 
 #include <wx/log.h>
 
@@ -64,10 +68,16 @@
 #if defined( __MINGW32__ )
     #define TRIANGULATESIMPLIFICATIONLEVEL 50
     #define ENABLECACHEFRIENDLYFRACTURE true
+    #define ENABLEFRACTUREEDGEINDEX true
 #else
     #define TRIANGULATESIMPLIFICATIONLEVEL ADVANCED_CFG::GetCfg().m_TriangulateSimplificationLevel
     #define ENABLECACHEFRIENDLYFRACTURE ADVANCED_CFG::GetCfg().m_EnableCacheFriendlyFracture
+    #define ENABLEFRACTUREEDGEINDEX ADVANCED_CFG::GetCfg().m_EnableFractureEdgeIndex
 #endif
+
+// Below this many elements a direct scan beats building and querying a spatial index.
+static constexpr int RTREE_THRESHOLD = 32;
+
 
 SHAPE_POLY_SET::SHAPE_POLY_SET() :
     SHAPE( SH_POLY_SET )
@@ -486,23 +496,34 @@ bool SHAPE_POLY_SET::GetNeighbourIndexes( int aGlobalIndex, int* aPrevious, int*
 
 bool SHAPE_POLY_SET::IsPolygonSelfIntersecting( int aPolygonIndex ) const
 {
-    std::vector<SEG> segments;
+    // SEG::Index() counts within one contour, so adjacency needs the contour too
+    struct CONTOUR_SEG
+    {
+        SEG seg;
+        int contour;
+    };
+
+    std::vector<CONTOUR_SEG> segments;
     segments.reserve( FullPointCount() );
 
     for( CONST_SEGMENT_ITERATOR it = CIterateSegmentsWithHoles( aPolygonIndex ); it; it++ )
-        segments.emplace_back( *it );
+        segments.push_back( { *it, it.GetIndex().m_contour } );
 
-    std::sort( segments.begin(), segments.end(), []( const SEG& a, const SEG& b )
+    std::sort( segments.begin(), segments.end(), []( const CONTOUR_SEG& aA, const CONTOUR_SEG& aB )
             {
+                const SEG& a = aA.seg;
+                const SEG& b = aB.seg;
                 int min_a_x = std::min( a.A.x, a.B.x );
                 int min_b_x = std::min( b.A.x, b.B.x );
 
                 return min_a_x < min_b_x || ( min_a_x == min_b_x && std::min( a.A.y, a.B.y ) < std::min( b.A.y, b.B.y ) );
             } );
 
+    const POLYGON& polygon = m_polys[aPolygonIndex];
+
     for( auto it = segments.begin(); it != segments.end(); ++it )
     {
-        SEG& firstSegment = *it;
+        SEG& firstSegment = it->seg;
 
         // Iterate through all remaining segments.
         auto innerIterator = it;
@@ -512,7 +533,7 @@ bool SHAPE_POLY_SET::IsPolygonSelfIntersecting( int aPolygonIndex ) const
         // Start in the next segment, we don't want to check collision between a segment and itself
         for( innerIterator++; innerIterator != segments.end(); innerIterator++ )
         {
-            SEG& secondSegment = *innerIterator;
+            SEG& secondSegment = innerIterator->seg;
             int min_x = std::min( secondSegment.A.x, secondSegment.B.x );
             int min_y = std::min( secondSegment.A.y, secondSegment.B.y );
 
@@ -521,8 +542,13 @@ bool SHAPE_POLY_SET::IsPolygonSelfIntersecting( int aPolygonIndex ) const
             if( max_x < min_x || ( max_x == min_x && max_y < min_y ) )
                 break;
 
-            int index_diff = std::abs( firstSegment.Index() - secondSegment.Index() );
-            bool adjacent = ( index_diff == 1) || (index_diff == ((int)segments.size() - 1) );
+            bool adjacent = false;
+
+            if( it->contour == innerIterator->contour )
+            {
+                int index_diff = std::abs( firstSegment.Index() - secondSegment.Index() );
+                adjacent = ( index_diff == 1 ) || ( index_diff == polygon[it->contour].SegmentCount() - 1 );
+            }
 
             // Check whether the two segments built collide, only when they are not adjacent.
             if( !adjacent && firstSegment.Collide( secondSegment, 0 ) )
@@ -756,6 +782,154 @@ void SHAPE_POLY_SET::booleanOp( Clipper2Lib::ClipType aType, const SHAPE_POLY_SE
 }
 
 
+/**
+ * Split a closed ring into the rings left once pairs of coincident opposite edges are removed.
+ * Fracture() joins holes to their outline through such pairs.
+ *
+ * @return false, leaving \a aRings empty, when the ring holds no pair.
+ */
+static bool splitAtBridges( const SHAPE_LINE_CHAIN& aChain, std::vector<SHAPE_LINE_CHAIN>& aRings )
+{
+    struct DIRECTED_EDGE
+    {
+        VECTOR2I from;
+        VECTOR2I to;
+
+        bool operator==( const DIRECTED_EDGE& aOther ) const
+        {
+            return from == aOther.from && to == aOther.to;
+        }
+    };
+
+    struct DIRECTED_EDGE_HASH
+    {
+        std::size_t operator()( const DIRECTED_EDGE& aEdge ) const
+        {
+            std::size_t seed = 0x51ed27a3;
+            hash_combine( seed, aEdge.from.x, aEdge.from.y, aEdge.to.x, aEdge.to.y );
+            return seed;
+        }
+    };
+
+    const std::vector<VECTOR2I>& pts = aChain.CPoints();
+    const int                    count = static_cast<int>( pts.size() );
+
+    // A bucket per directed edge so repeated bridges along one line all find a partner
+    std::unordered_map<DIRECTED_EDGE, std::vector<int>, DIRECTED_EDGE_HASH> unpaired;
+    std::vector<int> partner( count, -1 );
+    bool             hasBridge = false;
+
+    unpaired.reserve( count );
+
+    for( int ii = 0; ii < count; ++ii )
+    {
+        const VECTOR2I& a = pts[ii];
+        const VECTOR2I& b = pts[( ii + 1 ) % count];
+
+        if( a == b )
+            continue;
+
+        auto twin = unpaired.find( { b, a } );
+
+        if( twin != unpaired.end() )
+        {
+            const int jj = twin->second.back();
+
+            twin->second.pop_back();
+
+            if( twin->second.empty() )
+                unpaired.erase( twin );
+
+            partner[ii] = jj;
+            partner[jj] = ii;
+            hasBridge = true;
+        }
+        else
+        {
+            unpaired[{ a, b }].push_back( ii );
+        }
+    }
+
+    if( !hasBridge )
+        return false;
+
+    // The edge that continues from the end of aEdge once bridge pairs are skipped
+    auto nextEdge =
+            [&]( int aEdge ) -> int
+            {
+                int next = ( aEdge + 1 ) % count;
+
+                for( int guard = 0; partner[next] >= 0; ++guard )
+                {
+                    if( guard > count )
+                        return -1;
+
+                    next = ( partner[next] + 1 ) % count;
+                }
+
+                return next;
+            };
+
+    std::vector<bool> visited( count, false );
+
+    for( int start = 0; start < count; ++start )
+    {
+        if( visited[start] || partner[start] >= 0 )
+            continue;
+
+        SHAPE_LINE_CHAIN ring;
+        int              edge = start;
+
+        do
+        {
+            if( edge < 0 || visited[edge] )
+            {
+                aRings.clear();
+                return false;
+            }
+
+            visited[edge] = true;
+            ring.Append( pts[edge], true );
+            edge = nextEdge( edge );
+        } while( edge != start );
+
+        if( ring.PointCount() >= 3 )
+        {
+            ring.SetClosed( true );
+            aRings.push_back( std::move( ring ) );
+        }
+    }
+
+    return true;
+}
+
+
+bool SHAPE_POLY_SET::appendBridgeFreePaths( const SHAPE_LINE_CHAIN& aChain, Clipper2Lib::Paths64& aPaths,
+                                            std::vector<CLIPPER_Z_VALUE>& aZValues,
+                                            std::vector<SHAPE_ARC>& aArcBuffer )
+{
+    // Small rings are cheap for Clipper and dominate the boolean call count
+    constexpr int kMinPoints = 1024;
+
+    if( aChain.PointCount() < kMinPoints || aChain.ArcCount() > 0 )
+        return false;
+
+    std::vector<SHAPE_LINE_CHAIN> rings;
+
+    if( !splitAtBridges( aChain, rings ) )
+        return false;
+
+    // convertToClipper2() orients an outline by reversing the whole ring, so every piece of the
+    // ring follows the same flip to keep its winding relative to the others
+    const bool flip = aChain.Area( false ) < 0;
+
+    for( const SHAPE_LINE_CHAIN& ring : rings )
+        aPaths.push_back( ring.convertToClipper2( ( ring.Area( false ) >= 0 ) != flip, aZValues, aArcBuffer ) );
+
+    return true;
+}
+
+
 void SHAPE_POLY_SET::booleanOp( Clipper2Lib::ClipType aType, const SHAPE_POLY_SET& aShape,
                                 const SHAPE_POLY_SET& aOtherShape )
 {
@@ -777,6 +951,9 @@ void SHAPE_POLY_SET::booleanOp( Clipper2Lib::ClipType aType, const SHAPE_POLY_SE
 
     for( const POLYGON& poly : aShape.m_polys )
     {
+        if( poly.size() == 1 && appendBridgeFreePaths( poly[0], paths, zValues, arcBuffer ) )
+            continue;
+
         for( size_t i = 0; i < poly.size(); i++ )
         {
             paths.push_back( poly[i].convertToClipper2( i == 0, zValues, arcBuffer ) );
@@ -785,6 +962,9 @@ void SHAPE_POLY_SET::booleanOp( Clipper2Lib::ClipType aType, const SHAPE_POLY_SE
 
     for( const POLYGON& poly : aOtherShape.m_polys )
     {
+        if( poly.size() == 1 && appendBridgeFreePaths( poly[0], clips, zValues, arcBuffer ) )
+            continue;
+
         for( size_t i = 0; i < poly.size(); i++ )
         {
             clips.push_back( poly[i].convertToClipper2( i == 0, zValues, arcBuffer ) );
@@ -1230,8 +1410,225 @@ struct FractureEdge
 typedef std::vector<FractureEdge> FractureEdgeSet;
 
 
+class FRACTURE_EDGE_INDEX
+{
+public:
+    using Index = FractureEdge::Index;
+
+    struct NODE
+    {
+        uint32_t edge;
+        uint32_t next;
+    };
+
+    template <typename Originals>
+    FRACTURE_EDGE_INDEX( FractureEdgeSet& aEdges, Originals&& aOriginals, int aMinY, int aMaxY,
+                         uint32_t aStripeCount, size_t aHoleCount ) :
+            m_edges( aEdges ),
+            m_minY( aMinY ),
+            m_maxY( aMaxY ),
+            m_stripeCount( aStripeCount ),
+            m_maxNodes( ( KIGEOM::FRACTURE_INDEX::MAX_BUCKET_SPAN + 2 ) * aHoleCount ),
+            m_budget( KIGEOM::FRACTURE_INDEX::CapacityBudget( aEdges.size(), sizeof( FractureEdge ) ) )
+    {
+        std::vector<uint32_t> counts( m_stripeCount );
+        size_t                bucketIds = 0;
+        size_t                longIds = 0;
+
+        aOriginals(
+                [&]( uint32_t, uint32_t aFirst, uint32_t aLast )
+                {
+                    if( aLast - aFirst + 1 > KIGEOM::FRACTURE_INDEX::MAX_BUCKET_SPAN )
+                    {
+                        ++longIds;
+                    }
+                    else
+                    {
+                        bucketIds += aLast - aFirst + 1;
+
+                        for( uint32_t stripe = aFirst; stripe <= aLast; ++stripe )
+                            ++counts[stripe];
+                    }
+                } );
+
+        if( !KIGEOM::FRACTURE_INDEX::CapacityFits( bucketIds, longIds, m_stripeCount, aHoleCount, sizeof( NODE ),
+                                                   m_budget ) )
+        {
+            return;
+        }
+
+        m_offsets.resize( m_stripeCount + 1 );
+
+        for( uint32_t stripe = 0; stripe < m_stripeCount; ++stripe )
+            m_offsets[stripe + 1] = m_offsets[stripe] + counts[stripe];
+
+        m_bucketIds.resize( bucketIds );
+        m_longIds.reserve( longIds );
+
+        std::copy( m_offsets.begin(), m_offsets.end() - 1, counts.begin() );
+
+        aOriginals(
+                [&]( uint32_t aEdge, uint32_t aFirst, uint32_t aLast )
+                {
+                    if( aLast - aFirst + 1 > KIGEOM::FRACTURE_INDEX::MAX_BUCKET_SPAN )
+                    {
+                        m_longIds.push_back( aEdge );
+                    }
+                    else
+                    {
+                        for( uint32_t stripe = aFirst; stripe <= aLast; ++stripe )
+                            m_bucketIds[counts[stripe]++] = aEdge;
+                    }
+                } );
+
+        m_heads.assign( m_stripeCount + 1, INVALID );
+        m_nodes.reserve( m_maxNodes );
+
+        // The ascending order the Query breaks rely on, asserted once rather than per visit
+#ifndef NDEBUG
+        for( uint32_t stripe = 0; stripe < m_stripeCount; ++stripe )
+        {
+            for( uint32_t pos = m_offsets[stripe] + 1; pos < m_offsets[stripe + 1]; ++pos )
+                assert( m_bucketIds[pos] >= m_bucketIds[pos - 1] );
+        }
+
+        for( size_t pos = 1; pos < m_longIds.size(); ++pos )
+            assert( m_longIds[pos] >= m_longIds[pos - 1] );
+#endif
+
+        // The estimate prevents an over-budget allocation; this check catches allocator over-capacity.
+        size_t allocated_bytes = 0;
+
+        if( !KIGEOM::FRACTURE_INDEX::ActualCapacityFits( m_bucketIds.capacity(), m_longIds.capacity(),
+                                                         m_offsets.capacity(), counts.capacity(), m_heads.capacity(),
+                                                         m_nodes.capacity(), sizeof( NODE ), m_budget,
+                                                         &allocated_bytes ) )
+        {
+            return;
+        }
+
+        m_valid = true;
+        logAccepted( aEdges.size(), aHoleCount, m_stripeCount, allocated_bytes );
+    }
+
+    bool IsValid() const { return m_valid; }
+
+    template <typename Visitor>
+    void Query( int aY, Index aProvokingIndex, Visitor&& aVisitor ) const
+    {
+        const uint32_t stripe = map( aY );
+
+        // Buckets and the long list are ascending, so the first out-of-range id ends the scan
+        for( uint32_t pos = m_offsets[stripe]; pos < m_offsets[stripe + 1]; ++pos )
+        {
+            const uint32_t edge = m_bucketIds[pos];
+
+            if( edge >= static_cast<uint32_t>( aProvokingIndex ) )
+                break;
+
+            aVisitor( static_cast<Index>( edge ) );
+        }
+
+        for( uint32_t edge : m_longIds )
+        {
+            if( edge >= static_cast<uint32_t>( aProvokingIndex ) )
+                break;
+
+            aVisitor( static_cast<Index>( edge ) );
+        }
+
+        visitOverflow( m_heads[stripe], aProvokingIndex, aVisitor );
+        visitOverflow( m_heads[m_stripeCount], aProvokingIndex, aVisitor );
+    }
+
+    void InsertBridges( Index aFirst )
+    {
+        for( Index edge = aFirst; edge < aFirst + 3; ++edge )
+        {
+            const auto [first, last] = span( m_edges[edge] );
+
+            if( last - first + 1 > KIGEOM::FRACTURE_INDEX::MAX_BUCKET_SPAN )
+            {
+                insert( static_cast<uint32_t>( edge ), m_stripeCount );
+            }
+            else
+            {
+                for( uint32_t stripe = first; stripe <= last; ++stripe )
+                    insert( static_cast<uint32_t>( edge ), stripe );
+            }
+        }
+    }
+
+private:
+    static constexpr uint32_t INVALID = std::numeric_limits<uint32_t>::max();
+
+    uint32_t map( int aY ) const { return KIGEOM::FRACTURE_INDEX::MapYToStripe( aY, m_minY, m_maxY, m_stripeCount ); }
+
+    std::pair<uint32_t, uint32_t> span( const FractureEdge& aEdge ) const
+    {
+        return KIGEOM::FRACTURE_INDEX::StripeSpan( aEdge.m_p1.y, aEdge.m_p2.y, m_minY, m_maxY, m_stripeCount );
+    }
+
+    template <typename Visitor>
+    void visitOverflow( uint32_t aNode, Index aProvokingIndex, Visitor&& aVisitor ) const
+    {
+        // Bridges are only ever inserted for already processed holes, so the assert should hold,
+        // but the filter keeps the release build honest if that ordering ever changes
+        while( aNode != INVALID )
+        {
+            const NODE& node = m_nodes[aNode];
+            assert( node.edge < static_cast<uint32_t>( aProvokingIndex ) );
+
+            if( node.edge < static_cast<uint32_t>( aProvokingIndex ) )
+                aVisitor( static_cast<Index>( node.edge ) );
+
+            aNode = node.next;
+        }
+    }
+
+    void insert( uint32_t aEdge, uint32_t aHead )
+    {
+        assert( m_nodes.size() < m_maxNodes );
+        m_nodes.push_back( { aEdge, m_heads[aHead] } );
+        m_heads[aHead] = static_cast<uint32_t>( m_nodes.size() - 1 );
+    }
+
+    static void logAccepted( size_t aEdges, size_t aHoles, uint32_t aStripes, size_t aBytes )
+    {
+        wxLogTrace( wxS( "KICAD_FRACTURE_INDEX" ),
+                    wxS( "Using fracture edge index: edges=%zu, holes=%zu, stripes=%u, allocated=%zu bytes" ),
+                    aEdges, aHoles, aStripes, aBytes );
+    }
+
+    FractureEdgeSet&      m_edges;
+    int                   m_minY;
+    int                   m_maxY;
+    uint32_t              m_stripeCount;
+    size_t                m_maxNodes;
+    size_t                m_budget;
+    bool                  m_valid = false;
+    std::vector<uint32_t> m_offsets;
+    std::vector<uint32_t> m_bucketIds;
+    std::vector<uint32_t> m_longIds;
+    std::vector<uint32_t> m_heads;
+    std::vector<NODE>     m_nodes;
+};
+
+
+// Where a horizontal ray at aY crosses aEdge, valid only when aEdge.matches( aY )
+static inline int fractureIntersectX( const FractureEdge& aEdge, int aY )
+{
+    if( aEdge.m_p1.y == aEdge.m_p2.y )
+        return std::max( aEdge.m_p1.x, aEdge.m_p2.x );
+
+    return aEdge.m_p1.x
+           + rescale( aEdge.m_p2.x - aEdge.m_p1.x, aY - aEdge.m_p1.y, aEdge.m_p2.y - aEdge.m_p1.y );
+}
+
+
 static FractureEdge* processHole( FractureEdgeSet& edges, FractureEdge::Index provokingIndex,
-                                  FractureEdge::Index edgeIndex, FractureEdge::Index bridgeIndex )
+                                  FractureEdge::Index edgeIndex, FractureEdge::Index bridgeIndex,
+                                  FRACTURE_EDGE_INDEX* aIndex )
 {
     FractureEdge& edge = edges[edgeIndex];
     int           x = edge.m_p1.x;
@@ -1244,32 +1641,53 @@ static FractureEdge* processHole( FractureEdgeSet& edges, FractureEdge::Index pr
     // Since this function is run for all holes left to right, no need to
     // check for any edge beyond the provoking one because they will always be
     // further to the right, and unconnected to the outline anyway.
-    for( FractureEdge::Index i = 0; i < provokingIndex; i++ )
+    if( aIndex )
     {
-        FractureEdge& e = edges[i];
-        // Don't consider this edge if it can't be bridged to, or faces left.
-        if( !e.matches( y ) )
-            continue;
+        FractureEdge::Index nearest_index = -1;
 
-        int x_intersect;
-
-        if( e.m_p1.y == e.m_p2.y ) // horizontal edge
+        auto consider = [&]( FractureEdge::Index aCandidateIndex )
         {
-            x_intersect = std::max( e.m_p1.x, e.m_p2.x );
-        }
-        else
-        {
-            x_intersect =
-                    e.m_p1.x + rescale( e.m_p2.x - e.m_p1.x, y - e.m_p1.y, e.m_p2.y - e.m_p1.y );
-        }
+            FractureEdge& candidate = edges[aCandidateIndex];
 
-        int dist = ( x - x_intersect );
+            if( !candidate.matches( y ) )
+                return;
 
-        if( dist >= 0 && dist < min_dist )
+            int x_intersect = fractureIntersectX( candidate, y );
+            int dist = x - x_intersect;
+
+            if( dist >= 0
+                && ( dist < min_dist
+                     || ( nearest_index >= 0 && dist == min_dist && aCandidateIndex < nearest_index ) ) )
+            {
+                min_dist = dist;
+                x_nearest = x_intersect;
+                nearest_index = aCandidateIndex;
+            }
+        };
+
+        aIndex->Query( y, provokingIndex, consider );
+
+        if( nearest_index >= 0 )
+            e_nearest = &edges[nearest_index];
+    }
+    else
+    {
+        for( FractureEdge::Index i = 0; i < provokingIndex; ++i )
         {
-            min_dist = dist;
-            x_nearest = x_intersect;
-            e_nearest = &e;
+            FractureEdge& candidate = edges[i];
+
+            if( !candidate.matches( y ) )
+                continue;
+
+            int x_intersect = fractureIntersectX( candidate, y );
+            int dist = x - x_intersect;
+
+            if( dist >= 0 && dist < min_dist )
+            {
+                min_dist = dist;
+                x_nearest = x_intersect;
+                e_nearest = &candidate;
+            }
         }
     }
 
@@ -1288,6 +1706,8 @@ static FractureEdge* processHole( FractureEdgeSet& edges, FractureEdge::Index pr
                 FractureEdge( VECTOR2I( x_nearest, y ), e_nearest->m_p2, e_nearest->m_next );
 
         // Perform the actual outline edge split
+        // Existing stripe membership remains conservative because the selected y is inside the
+        // edge's current interval, while newly initialized bridge edges are inserted below.
         e_nearest->m_p2 = VECTOR2I( x_nearest, y );
         e_nearest->m_next = outline2hole_index;
 
@@ -1295,6 +1715,9 @@ static FractureEdge* processHole( FractureEdgeSet& edges, FractureEdge::Index pr
         for( ; last->m_next != edgeIndex; last = &edges[last->m_next] )
             ;
         last->m_next = hole2outline_index;
+
+        if( aIndex )
+            aIndex->InsertBridges( bridgeIndex );
     }
 
     return e_nearest;
@@ -1408,10 +1831,71 @@ static void fractureSingleCacheFriendly( SHAPE_POLY_SET::POLYGON& paths )
         outline = false; // first path is always the outline
     }
 
+    assert( edges.size() == total_point_count + 3 * ( paths.size() - 1 ) );
+#ifndef NDEBUG
+    FractureEdge::Index expected_edge = paths[0].PointCount();
+
+    for( auto it = sorted_paths.begin() + 1; it != sorted_paths.end(); ++it )
+    {
+        assert( it->path_or_provoking_index == expected_edge );
+        expected_edge = it->y_or_bridge + 3;
+    }
+
+    assert( expected_edge == static_cast<FractureEdge::Index>( edges.size() ) );
+#endif
+
+    uint64_t estimated_visits = 0;
+
+    for( auto it = sorted_paths.begin() + 1; it != sorted_paths.end(); ++it )
+        estimated_visits += static_cast<uint64_t>( it->path_or_provoking_index );
+
+    std::unique_ptr<FRACTURE_EDGE_INDEX> index;
+
+    if( ENABLEFRACTUREEDGEINDEX && KIGEOM::FRACTURE_INDEX::ShouldIndex( estimated_visits, paths.size() - 1 ) )
+    {
+        int            min_y = std::numeric_limits<int>::max();
+        int            max_y = std::numeric_limits<int>::min();
+        const uint32_t stripe_count = KIGEOM::FRACTURE_INDEX::StripeCountFor( edges.size() );
+
+        for( const SHAPE_LINE_CHAIN& path : paths )
+        {
+            for( const VECTOR2I& point : path.CPoints() )
+            {
+                min_y = std::min( min_y, point.y );
+                max_y = std::max( max_y, point.y );
+            }
+        }
+
+        auto visitOriginals = [&]( auto&& aVisitor )
+        {
+            auto visitRange = [&]( FractureEdge::Index aBegin, FractureEdge::Index aEnd )
+            {
+                for( FractureEdge::Index edge = aBegin; edge < aEnd; ++edge )
+                {
+                    const FractureEdge& original = edges[edge];
+                    const auto [first, last] = KIGEOM::FRACTURE_INDEX::StripeSpan( original.m_p1.y, original.m_p2.y,
+                                                                                   min_y, max_y, stripe_count );
+                    aVisitor( static_cast<uint32_t>( edge ), first, last );
+                }
+            };
+
+            visitRange( 0, paths[0].PointCount() );
+
+            for( auto it = sorted_paths.begin() + 1; it != sorted_paths.end(); ++it )
+                visitRange( it->path_or_provoking_index, it->y_or_bridge );
+        };
+
+        index = std::make_unique<FRACTURE_EDGE_INDEX>( edges, visitOriginals, min_y, max_y, stripe_count,
+                                                       paths.size() - 1 );
+
+        if( !index->IsValid() )
+            index.reset();
+    }
+
     for( auto it = sorted_paths.begin() + 1; it != sorted_paths.end(); it++ )
     {
-        auto edge = processHole( edges, it->path_or_provoking_index,
-                                 it->path_or_provoking_index + it->leftmost, it->y_or_bridge );
+        auto edge = processHole( edges, it->path_or_provoking_index, it->path_or_provoking_index + it->leftmost,
+                                 it->y_or_bridge, index.get() );
 
         // If we can't handle the hole, the zone is broken (maybe)
         if( !edge )
@@ -1677,166 +2161,28 @@ void SHAPE_POLY_SET::unfractureSingle( SHAPE_POLY_SET::POLYGON& aPoly )
 {
     assert( aPoly.size() == 1 );
 
-    struct EDGE
-    {
-        int m_index = 0;
-        SHAPE_LINE_CHAIN* m_poly = nullptr;
-        bool m_duplicate = false;
-
-        EDGE( SHAPE_LINE_CHAIN* aPolygon, int aIndex ) :
-            m_index( aIndex ),
-            m_poly( aPolygon )
-        {}
-
-        bool compareSegs( const SEG& s1, const SEG& s2 ) const
-        {
-            return (s1.A == s2.B && s1.B == s2.A);
-        }
-
-        bool operator==( const EDGE& aOther ) const
-        {
-            return compareSegs( m_poly->CSegment( m_index ),
-                                aOther.m_poly->CSegment( aOther.m_index ) );
-        }
-
-        bool operator!=( const EDGE& aOther ) const
-        {
-            return !compareSegs( m_poly->CSegment( m_index ),
-                                 aOther.m_poly->CSegment( aOther.m_index ) );
-        }
-
-        struct HASH
-        {
-            std::size_t operator()(  const EDGE& aEdge ) const
-            {
-                const SEG& a = aEdge.m_poly->CSegment( aEdge.m_index );
-                std::size_t seed = 0xa82de1c0;
-                hash_combine( seed, a.A.x, a.B.x, a.A.y, a.B.y );
-                return seed;
-            }
-        };
-    };
-
-    struct EDGE_LIST_ENTRY
-    {
-        int              index;
-        EDGE_LIST_ENTRY* next;
-    };
-
-    std::unordered_set<EDGE, EDGE::HASH> uniqueEdges;
-
     SHAPE_LINE_CHAIN lc = aPoly[0];
     lc.Simplify();
 
-    auto edgeList = std::make_unique<EDGE_LIST_ENTRY[]>( lc.SegmentCount() );
+    // Rings are rebuilt from bare vertices, so arcs never survive unfracturing
+    lc = SHAPE_LINE_CHAIN( lc.CPoints(), true );
 
-    for( int i = 0; i < lc.SegmentCount(); i++ )
+    std::vector<SHAPE_LINE_CHAIN> rings;
+
+    if( !splitAtBridges( lc, rings ) || rings.empty() )
     {
-        edgeList[i].index   = i;
-        edgeList[i].next    = &edgeList[ (i != lc.SegmentCount() - 1) ? i + 1 : 0 ];
+        aPoly[0] = std::move( lc );
+        return;
     }
 
-    std::unordered_set<EDGE_LIST_ENTRY*> queue;
+    auto outline = std::max_element( rings.begin(), rings.end(),
+                                     []( const SHAPE_LINE_CHAIN& aA, const SHAPE_LINE_CHAIN& aB )
+                                     {
+                                         return std::fabs( aA.Area() ) < std::fabs( aB.Area() );
+                                     } );
 
-    for( int i = 0; i < lc.SegmentCount(); i++ )
-    {
-        EDGE e( &lc, i );
-        uniqueEdges.insert( e );
-    }
-
-    for( int i = 0; i < lc.SegmentCount(); i++ )
-    {
-        EDGE    e( &lc, i );
-        auto    it = uniqueEdges.find( e );
-
-        if( it != uniqueEdges.end() && it->m_index != i )
-        {
-            int e1  = it->m_index;
-            int e2  = i;
-
-            if( e1 > e2 )
-                std::swap( e1, e2 );
-
-            int e1_prev = e1 - 1;
-
-            if( e1_prev < 0 )
-                e1_prev = lc.SegmentCount() - 1;
-
-            int e2_prev = e2 - 1;
-
-            if( e2_prev < 0 )
-                e2_prev = lc.SegmentCount() - 1;
-
-            int e1_next = e1 + 1;
-
-            if( e1_next == lc.SegmentCount() )
-                e1_next = 0;
-
-            int e2_next = e2 + 1;
-
-            if( e2_next == lc.SegmentCount() )
-                e2_next = 0;
-
-            edgeList[e1_prev].next  = &edgeList[ e2_next ];
-            edgeList[e2_prev].next  = &edgeList[ e1_next ];
-            edgeList[i].next = nullptr;
-            edgeList[it->m_index].next = nullptr;
-        }
-    }
-
-    for( int i = 0; i < lc.SegmentCount(); i++ )
-    {
-        if( edgeList[i].next )
-            queue.insert( &edgeList[i] );
-    }
-
-    auto edgeBuf = std::make_unique<EDGE_LIST_ENTRY* []>( lc.SegmentCount() );
-
-    int n = 0;
-    int outline = -1;
-
-    POLYGON result;
-    double max_poly = 0.0;
-
-    while( queue.size() )
-    {
-        EDGE_LIST_ENTRY* e_first = *queue.begin();
-        EDGE_LIST_ENTRY* e = e_first;
-        int              cnt = 0;
-
-        do
-        {
-            edgeBuf[cnt++] = e;
-            e = e->next;
-        } while( e && e != e_first );
-
-        SHAPE_LINE_CHAIN outl;
-
-        for( int i = 0; i < cnt; i++ )
-        {
-            VECTOR2I p = lc.CPoint( edgeBuf[i]->index );
-            outl.Append( p );
-            queue.erase( edgeBuf[i] );
-        }
-
-        outl.SetClosed( true );
-
-        double area = std::fabs( outl.Area() );
-
-        if( area > max_poly )
-        {
-            outline = n;
-            max_poly = area;
-        }
-
-        result.push_back( outl );
-        n++;
-    }
-
-    if( outline > 0 )
-        std::swap( result[0], result[outline] );
-
-    aPoly = std::move( result );
+    std::iter_swap( rings.begin(), outline );
+    aPoly = std::move( rings );
 }
 
 
@@ -1922,16 +2268,13 @@ void SHAPE_POLY_SET::splitCollinearOutlines()
             SHAPE_LINE_CHAIN& outline = m_polys[polyIdx][0];
             intptr_t count = outline.PointCount();
 
-            KIRTREE::DYNAMIC_RTREE<intptr_t, intptr_t, 2> rtree;
+            std::vector<SEG> segs;
+            segs.reserve( count );
 
             for( intptr_t i = 0; i < count; ++i )
-            {
-                const VECTOR2I& a = outline.CPoint( i );
-                const VECTOR2I& b = outline.CPoint( ( i + 1 ) % count );
-                intptr_t min[2] = { std::min( a.x, b.x ), std::min( a.y, b.y ) };
-                intptr_t max[2] = { std::max( a.x, b.x ), std::max( a.y, b.y ) };
-                rtree.Insert( min, max, i );
-            }
+                segs.emplace_back( outline.CPoint( i ), outline.CPoint( ( i + 1 ) % count ) );
+
+            SEGMENT_INDEX index( std::move( segs ) );
 
             bool found = false;
             int segA = -1;
@@ -1942,11 +2285,9 @@ void SHAPE_POLY_SET::splitCollinearOutlines()
                 const VECTOR2I& a = outline.CPoint( i );
                 const VECTOR2I& b = outline.CPoint( ( i + 1 ) % count );
                 SEG seg( a, b );
-                intptr_t min[2] = { std::min( a.x, b.x ), std::min( a.y, b.y ) };
-                intptr_t max[2] = { std::max( a.x, b.x ), std::max( a.y, b.y ) };
 
                 auto visitor =
-                        [&]( const intptr_t& j ) -> bool
+                        [&]( int j ) -> bool
                         {
                             if( j == i || j == ( ( i + 1 ) % count ) || j == ( ( i + count - 1 ) % count ) )
                                 return true;
@@ -1974,7 +2315,7 @@ void SHAPE_POLY_SET::splitCollinearOutlines()
                             return true;
                         };
 
-                rtree.Search( min, max, visitor );
+                index.VisitCandidates( seg, 0, visitor );
             }
 
             if( !found )
@@ -2094,9 +2435,6 @@ void SHAPE_POLY_SET::splitSelfTouchingOutlines()
             int insertSegIdx = -1;
             int insertVertIdx = -1;
 
-            // For small polygons, direct O(n²) search is faster than R-tree overhead
-            constexpr int RTREE_THRESHOLD = 32;
-
             if( count < RTREE_THRESHOLD )
             {
                 for( int vertIdx = 0; vertIdx < count && insertSegIdx < 0; ++vertIdx )
@@ -2129,26 +2467,21 @@ void SHAPE_POLY_SET::splitSelfTouchingOutlines()
             }
             else
             {
-                KIRTREE::DYNAMIC_RTREE<intptr_t, int, 2> rtree;
+                std::vector<SEG> segs;
+                segs.reserve( count );
 
                 for( int i = 0; i < count; ++i )
-                {
-                    const VECTOR2I& a = outline.CPoint( i );
-                    const VECTOR2I& b = outline.CPoint( ( i + 1 ) % count );
-                    int bmin[2] = { std::min( a.x, b.x ), std::min( a.y, b.y ) };
-                    int bmax[2] = { std::max( a.x, b.x ), std::max( a.y, b.y ) };
-                    rtree.Insert( bmin, bmax, i );
-                }
+                    segs.emplace_back( outline.CPoint( i ), outline.CPoint( ( i + 1 ) % count ) );
+
+                SEGMENT_INDEX index( std::move( segs ) );
 
                 for( int vertIdx = 0; vertIdx < count && insertSegIdx < 0; ++vertIdx )
                 {
                     const VECTOR2I& pt = outline.CPoint( vertIdx );
                     const int prevSeg = ( vertIdx + count - 1 ) % count;
-                    int bmin[2] = { pt.x, pt.y };
-                    int bmax[2] = { pt.x, pt.y };
 
                     auto pinchVisitor =
-                            [&]( const intptr_t& segIdx ) -> bool
+                            [&]( int segIdx ) -> bool
                             {
                                 if( segIdx == prevSeg || segIdx == vertIdx )
                                     return true;
@@ -2161,7 +2494,7 @@ void SHAPE_POLY_SET::splitSelfTouchingOutlines()
                                 // coordinates; they can land within 1nm of an endpoint but
                                 // are not true pinch points.
                                 if( pt != a && pt != b && SEG( a, b ).SquaredDistance( pt ) == 0
-                                    && splittable( vertIdx, static_cast<int>( segIdx ) ) )
+                                    && splittable( vertIdx, segIdx ) )
                                 {
                                     insertSegIdx = segIdx;
                                     insertVertIdx = vertIdx;
@@ -2171,7 +2504,7 @@ void SHAPE_POLY_SET::splitSelfTouchingOutlines()
                                 return true;
                             };
 
-                    rtree.Search( bmin, bmax, pinchVisitor );
+                    index.VisitCandidates( SEG( pt, pt ), 0, pinchVisitor );
                 }
             }
 
@@ -2502,54 +2835,31 @@ bool SHAPE_POLY_SET::Collide( const SHAPE* aShape, int aClearance, int* aActual,
         return false;
     }
 
-    const_cast<SHAPE_POLY_SET*>( this )->CacheTriangulation();
+    const_cast<SHAPE_POLY_SET*>( this )->CacheTriangulation( false, {}, true );
 
-    int      actual = INT_MAX;
+    if( !aActual && !aLocation )
+        return AnyTriangleHit( m_triIndex.get(), m_triangulatedPolys, aShape, aClearance );
+
+    int      actual;
     VECTOR2I location;
 
-    for( const std::unique_ptr<TRIANGULATED_POLYGON>& tpoly : m_triangulatedPolys )
-    {
-        for( const TRIANGULATED_POLYGON::TRI& tri : tpoly->Triangles() )
-        {
-            if( aActual || aLocation )
-            {
-                int      triActual;
-                VECTOR2I triLocation;
+    if( !AnyTriangleHit( m_triIndex.get(), m_triangulatedPolys, aShape, aClearance, &actual, &location ) )
+        return false;
 
-                if( aShape->Collide( &tri, aClearance, &triActual, &triLocation ) )
-                {
-                    if( triActual < actual )
-                    {
-                        actual = triActual;
-                        location = triLocation;
-                    }
-                }
-            }
-            else    // A much faster version of above
-            {
-                if( aShape->Collide( &tri, aClearance ) )
-                    return true;
-            }
-        }
-    }
+    if( aActual )
+        *aActual = std::max( 0, actual );
 
-    if( actual < INT_MAX )
-    {
-        if( aActual )
-            *aActual = std::max( 0, actual );
+    if( aLocation )
+        *aLocation = location;
 
-        if( aLocation )
-            *aLocation = location;
-
-        return true;
-    }
-
-    return false;
+    return true;
 }
 
 
 void SHAPE_POLY_SET::RemoveAllContours()
 {
+    m_triIndex.reset();
+
     m_polys.clear();
     m_triangulatedPolys.clear();
     m_triangulationValid = false;
@@ -2639,6 +2949,8 @@ void SHAPE_POLY_SET::DeletePolygon( int aIdx )
 
 void SHAPE_POLY_SET::DeletePolygonAndTriangulationData( int aIdx, bool aUpdateHash )
 {
+    m_triIndex.reset();
+
     m_polys.erase( m_polys.begin() + aIdx );
 
     if( m_triangulationValid )
@@ -2848,6 +3160,8 @@ bool SHAPE_POLY_SET::containsSingle( const VECTOR2I& aP, int aSubpolyIndex, int 
 
 void SHAPE_POLY_SET::Move( const VECTOR2I& aVector )
 {
+    m_triIndex.reset();
+
     for( POLYGON& poly : m_polys )
     {
         for( SHAPE_LINE_CHAIN& path : poly )
@@ -2868,6 +3182,19 @@ void SHAPE_POLY_SET::Mirror( const VECTOR2I& aRef, FLIP_DIRECTION aFlipDirection
     {
         for( SHAPE_LINE_CHAIN& path : poly )
             path.Mirror( aRef, aFlipDirection );
+    }
+
+    if( m_triangulationValid )
+        CacheTriangulation();
+}
+
+
+void SHAPE_POLY_SET::Mirror( const SEG& aAxis )
+{
+    for( POLYGON& poly : m_polys )
+    {
+        for( SHAPE_LINE_CHAIN& path : poly )
+            path.Mirror( aAxis );
     }
 
     if( m_triangulationValid )
@@ -3081,8 +3408,30 @@ SHAPE_POLY_SET SHAPE_POLY_SET::Fillet( int aRadius, int aErrorMax )
 }
 
 
+SHAPE_POLY_SET& SHAPE_POLY_SET::operator=( SHAPE_POLY_SET&& aOther ) noexcept
+{
+    if( this != &aOther )
+    {
+        SHAPE::operator=( aOther );
+
+        m_polys = std::move( aOther.m_polys );
+        m_triangulatedPolys = std::move( aOther.m_triangulatedPolys );
+
+        m_triIndex = std::move( aOther.m_triIndex );
+
+        m_hash = aOther.m_hash;
+        m_hashValid.store( aOther.m_hashValid.load() );
+        m_triangulationValid.store( aOther.m_triangulationValid );
+    }
+
+    return *this;
+}
+
+
 SHAPE_POLY_SET &SHAPE_POLY_SET::operator=( const SHAPE_POLY_SET& aOther )
 {
+    m_triIndex.reset();
+
     SHAPE::operator=( aOther );
     m_polys = aOther.m_polys;
 
@@ -3139,10 +3488,25 @@ bool SHAPE_POLY_SET::IsTriangulationUpToDate() const
 }
 
 
-void SHAPE_POLY_SET::cacheTriangulation( bool aSimplify,
-                                         std::vector<std::unique_ptr<TRIANGULATED_POLYGON>>* aHintData,
-                                         const TASK_SUBMITTER& aSubmitter )
+void SHAPE_POLY_SET::cacheTriangulation( bool aSimplify, std::vector<std::unique_ptr<TRIANGULATED_POLYGON>>* aHintData,
+                                         const TASK_SUBMITTER& aSubmitter, bool aBuildIndexes )
 {
+    auto buildIndexes = [this]()
+    {
+        if( m_triIndex )
+            return;
+
+        int triCount = 0;
+
+        for( const std::unique_ptr<TRIANGULATED_POLYGON>& tpoly : m_triangulatedPolys )
+            triCount += static_cast<int>( tpoly->GetTriangleCount() );
+
+        if( triCount < RTREE_THRESHOLD )
+            return;
+
+        m_triIndex = std::make_unique<TRIANGULATION_INDEX>( m_triangulatedPolys );
+    };
+
     // if( m_triangulationValid && m_hashValid && m_hash == checksum() )
     //     return;
     // if( m_failedHashValid && m_failedHash == checksum() )
@@ -3151,11 +3515,17 @@ void SHAPE_POLY_SET::cacheTriangulation( bool aSimplify,
     std::unique_lock<std::mutex> lock( m_triangulationMutex );
 
     if( m_triangulationValid && m_hashValid && m_hash == checksum() )
+    {
+        if( aBuildIndexes )
+            buildIndexes();
+
         return;
+    }
     if( m_failedHashValid && m_failedHash == checksum() )
         return;
 
     // Invalidate, in case anything goes wrong below
+    m_triIndex.reset();
     m_triangulationValid = false;
     m_hashValid = false;
     m_failedHashValid = false;
@@ -3502,6 +3872,9 @@ void SHAPE_POLY_SET::cacheTriangulation( bool aSimplify,
             m_failedHashValid = true;
         }
     }
+
+    if( aBuildIndexes && m_triangulationValid )
+        buildIndexes();
 }
 
 

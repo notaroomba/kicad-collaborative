@@ -20,6 +20,7 @@
 
 #include "pcb_merge_applier.h"
 #include "applier_helpers.h"
+#include "pcb_differ.h"
 
 #include <board.h>
 #include <board_design_settings.h>
@@ -30,6 +31,7 @@
 #include <project/net_settings.h>
 #include <wildcards_and_files_ext.h>
 #include <diff_merge/merge_validation_pipeline.h>
+#include <diff_merge/doc_property_helpers.h>
 #include <diff_merge/property_diff.h>
 
 #include <wx/file.h>
@@ -58,15 +60,7 @@ PCB_MERGE_APPLIER::PCB_MERGE_APPLIER( const BOARD* aAncestor, const BOARD* aOurs
 
 const BOARD_ITEM* PCB_MERGE_APPLIER::findItem( const BOARD* aBoard, const KIID& aId ) const
 {
-    if( !aBoard )
-        return nullptr;
-
-    // The board maintains its own KIID->item cache (m_itemByIdCache) and
-    // resolves top-level items plus footprint children (pads, fields,
-    // graphics, zones), a superset of what this applier needs.  Request
-    // nullptr-on-missing rather than the DELETED_BOARD_ITEM sentinel so the
-    // lookup keeps its original "not found = nullptr" contract.
-    return aBoard->ResolveItem( aId, /* aAllowNullptrReturn */ true );
+    return FindPcbDiffItem( aBoard, aId );
 }
 
 
@@ -85,14 +79,13 @@ BOARD_ITEM* PCB_MERGE_APPLIER::cloneInto( BOARD* aTarget, const BOARD_ITEM* aSou
     if( !boardClone )
         return nullptr;
 
+    cloned.release();
+
     // aTarget is the transient offline BOARD that Apply() builds and serializes to
     // disk; it is never the live editor document.  Adding directly rather than
     // through BOARD_COMMIT is deliberate: there is no editor frame, undo stack, or
     // VIEW to keep in sync, and routing through a commit would be wrong here.
     aTarget->Add( boardClone, ADD_MODE::APPEND );
-
-    // Ownership transfers to aTarget only once Add() has adopted the clone.
-    cloned.release();
     return boardClone;
 }
 
@@ -156,54 +149,57 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
     // for files whose name (no extension) lives next to the .kicad_pcb;
     // false to derive a sibling by extension.  Shared between the whole-side
     // divergence-staging path and the per-property MERGE_PROPS branch.
-    auto readProjectSiblingFile = []( const BOARD* aBoard, const wxString& aName,
-                                       bool aIsFullName ) -> wxString
-    {
-        if( !aBoard )
-            return wxEmptyString;
+    auto readProjectSiblingFile =
+            []( const BOARD* aBoard, const wxString& aName, bool aIsFullName ) -> wxString
+            {
+                if( !aBoard )
+                    return wxEmptyString;
 
-        wxString boardPath = aBoard->GetFileName();
+                wxString boardPath = aBoard->GetFileName();
 
-        if( boardPath.IsEmpty() )
-            return wxEmptyString;
+                if( boardPath.IsEmpty() )
+                    return wxEmptyString;
 
-        wxFileName fn( boardPath );
+                wxFileName fn( boardPath );
 
-        if( aIsFullName )
-            fn.SetFullName( aName );
-        else
-            fn.SetExt( aName );
+                if( aIsFullName )
+                    fn.SetFullName( aName );
+                else
+                    fn.SetExt( aName );
 
-        if( !fn.FileExists() )
-            return wxEmptyString;
+                if( !fn.FileExists() )
+                    return wxEmptyString;
 
-        wxFile file( fn.GetFullPath() );
+                wxFile file( fn.GetFullPath() );
 
-        if( !file.IsOpened() )
-            return wxEmptyString;
+                if( !file.IsOpened() )
+                    return wxEmptyString;
 
-        wxString contents;
-        file.ReadAll( &contents );
-        return contents;
-    };
+                wxString contents;
+                file.ReadAll( &contents );
+                return contents;
+            };
 
-    auto readSiblingRules = [&]( const BOARD* aBoard ) -> wxString
-    {
-        return readProjectSiblingFile( aBoard,
-                wxString::FromUTF8( FILEEXT::DesignRulesFileExtension ), false );
-    };
+    auto readSiblingRules =
+            [&]( const BOARD* aBoard ) -> wxString
+            {
+                return readProjectSiblingFile( aBoard, wxString::FromUTF8( FILEEXT::DesignRulesFileExtension ),
+                                               false );
+            };
 
-    auto readFpLibTable = [&]( const BOARD* aBoard ) -> wxString
-    {
-        return readProjectSiblingFile( aBoard,
-                wxString::FromUTF8( FILEEXT::FootprintLibraryTableFileName ), true );
-    };
+    auto readFpLibTable =
+            [&]( const BOARD* aBoard ) -> wxString
+            {
+                return readProjectSiblingFile( aBoard, wxString::FromUTF8( FILEEXT::FootprintLibraryTableFileName ),
+                                               true );
+            };
 
-    auto readSymLibTable = [&]( const BOARD* aBoard ) -> wxString
-    {
-        return readProjectSiblingFile( aBoard,
-                wxString::FromUTF8( FILEEXT::SymbolLibraryTableFileName ), true );
-    };
+    auto readSymLibTable =
+            [&]( const BOARD* aBoard ) -> wxString
+            {
+                return readProjectSiblingFile( aBoard, wxString::FromUTF8( FILEEXT::SymbolLibraryTableFileName ),
+                                               true );
+            };
 
     // Document-level settings — paper format, board thickness, design
     // settings. PCB_DIFFER emits a synthetic ITEM_CHANGE with an empty
@@ -236,37 +232,65 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
         // runs (m_NetSettings = aOther.m_NetSettings copies the pointer).
         // Subsequent CopyFrom calls into result's NET_SETTINGS would
         // otherwise mutate the chosen side's settings too.
-        auto detachNetSettingsFor = []( BOARD* aBoard )
-        {
-            if( !aBoard )
-                return;
+        auto detachNetSettingsFor =
+                []( BOARD* aBoard )
+                {
+                    if( !aBoard )
+                        return;
 
-            aBoard->GetDesignSettings().m_NetSettings =
-                    std::make_shared<NET_SETTINGS>( nullptr, "" );
-        };
+                    aBoard->GetDesignSettings().m_NetSettings = std::make_shared<NET_SETTINGS>( nullptr, "" );
+                };
 
         // Copy a chosen side's net settings into result without aliasing the
         // shared_ptr (which would couple the merged board's NET_SETTINGS to
         // the source's lifetime and -- because NESTED_SETTINGS has a parent
         // linkage -- to the source project file's m_nested_settings map).
-        auto adoptNetSettings = [&]( const BOARD* aSource )
-        {
-            if( !aSource || !aSource->GetDesignSettings().m_NetSettings
-                || !result->GetDesignSettings().m_NetSettings )
-            {
-                return;
-            }
+        auto adoptNetSettings =
+                [&]( const BOARD* aSource )
+                {
+                    if( !aSource || !aSource->GetDesignSettings().m_NetSettings
+                        || !result->GetDesignSettings().m_NetSettings )
+                    {
+                        return;
+                    }
 
-            result->GetDesignSettings().m_NetSettings->CopyFrom(
-                    *aSource->GetDesignSettings().m_NetSettings );
-        };
+                    result->GetDesignSettings().m_NetSettings->CopyFrom( *aSource->GetDesignSettings().m_NetSettings );
+                };
+
+        // Layer names and types live on BOARD, not in the design settings
+        auto adoptLayers =
+                [&]( const BOARD* aSource )
+                {
+                    result->SetEnabledLayers( aSource->GetEnabledLayers() );
+
+                    for( PCB_LAYER_ID layer : aSource->GetEnabledLayers().Seq() )
+                    {
+                        const wxString name = aSource->GetLayerName( layer );
+
+                        result->SetLayerType( layer, aSource->GetLayerType( layer ) );
+                        result->SetLayerName( layer, name == BOARD::GetStandardLayerName( layer ) ? wxString()
+                                                                                               : name );
+                    }
+                };
 
         if( settingsSrc )
         {
             result->SetPageSettings( settingsSrc->GetPageSettings() );
+            result->SetTitleBlock( settingsSrc->GetTitleBlock() );
             result->SetDesignSettings( settingsSrc->GetDesignSettings() );
+            result->SetPlotOptions( settingsSrc->GetPlotOptions() );
+            result->SetLegacyTeardrops( settingsSrc->LegacyTeardrops() );
+            result->SetProperties( settingsSrc->GetProperties() );
+            result->SetVariantNames( settingsSrc->GetVariantNames() );
+
+            for( const wxString& variant : settingsSrc->GetVariantNames() )
+                result->SetVariantDescription( variant, settingsSrc->GetVariantDescription( variant ) );
+
+            adoptLayers( settingsSrc );
             detachNetSettingsFor( result.get() );
             adoptNetSettings( settingsSrc );
+
+            *result->GetEmbeddedFiles() = *settingsSrc->GetEmbeddedFiles();
 
             // Flag the project-file-scoped fields (DRC severities) the
             // handler needs to mirror onto ancestor + persist via Save
@@ -280,33 +304,32 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
             // instead of materializing a full copy of the severity map (a
             // mixed value-category ternary would force one).
             static const std::map<int, SEVERITY> s_emptySeverities;
-            const std::map<int, SEVERITY>&       ancDrc =
-                    m_ancestor ? m_ancestor->GetDesignSettings().m_DRCSeverities : s_emptySeverities;
+            const std::map<int, SEVERITY>&       ancDrc = m_ancestor ? m_ancestor->GetDesignSettings().m_DRCSeverities
+                                                                     : s_emptySeverities;
 
-            const bool oursDrcChanged =
-                    m_ours && m_ours->GetDesignSettings().m_DRCSeverities != ancDrc;
-            const bool theirsDrcChanged =
-                    m_theirs && m_theirs->GetDesignSettings().m_DRCSeverities != ancDrc;
+            const bool oursDrcChanged =  m_ours && m_ours->GetDesignSettings().m_DRCSeverities != ancDrc;
+            const bool theirsDrcChanged =  m_theirs && m_theirs->GetDesignSettings().m_DRCSeverities != ancDrc;
 
             // Net settings divergence detection. Like DRC severities, this only
             // fires when sibling .kicad_pro files were loaded; plain temp blobs
             // (git mergetool) see defaults on every side.
-            auto netSettingsEqual = []( const BOARD* aLhs, const BOARD* aRhs )
-            {
-                if( !aLhs || !aRhs )
-                    return true;
+            auto netSettingsEqual =
+                    []( const BOARD* aLhs, const BOARD* aRhs )
+                    {
+                        if( !aLhs || !aRhs )
+                            return true;
 
-                const auto& lhs = aLhs->GetDesignSettings().m_NetSettings;
-                const auto& rhs = aRhs->GetDesignSettings().m_NetSettings;
+                        const auto& lhs = aLhs->GetDesignSettings().m_NetSettings;
+                        const auto& rhs = aRhs->GetDesignSettings().m_NetSettings;
 
-                if( !lhs && !rhs )
-                    return true;
+                        if( !lhs && !rhs )
+                            return true;
 
-                if( !lhs || !rhs )
-                    return false;
+                        if( !lhs || !rhs )
+                            return false;
 
-                return *lhs == *rhs;
-            };
+                        return *lhs == *rhs;
+                    };
 
             const bool oursNetChanged   = !netSettingsEqual( m_ours,   m_ancestor );
             const bool theirsNetChanged = !netSettingsEqual( m_theirs, m_ancestor );
@@ -462,10 +485,44 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
                     merged.SetPortrait( src->GetPageSettings().IsPortrait() );
                     pageTouched = true;
                 }
+                else if( prop.name == DOC_PROP_PLOT_OPTIONS )
+                {
+                    result->SetPlotOptions( src->GetPlotOptions() );
+                }
+                else if( prop.name == DOC_PROP_LEGACY_TEARDROPS )
+                {
+                    result->SetLegacyTeardrops( src->LegacyTeardrops() );
+                }
+                else if( prop.name.StartsWith( DOC_PROP_BOARD_PROPERTY ) )
+                {
+                    const wxString               key = prop.name.Mid( DOC_PROP_BOARD_PROPERTY.length() );
+                    std::map<wxString, wxString> props = result->GetProperties();
+                    auto                         it = src->GetProperties().find( key );
+
+                    if( it != src->GetProperties().end() )
+                        props[key] = it->second;
+                    else
+                        props.erase( key );
+
+                    result->SetProperties( props );
+                }
+                else if( prop.name.StartsWith( DOC_PROP_VARIANT ) )
+                {
+                    const wxString variant = prop.name.Mid( DOC_PROP_VARIANT.length() );
+
+                    if( src->HasVariant( variant ) )
+                    {
+                        result->AddVariant( variant );
+                        result->SetVariantDescription( variant, src->GetVariantDescription( variant ) );
+                    }
+                    else
+                    {
+                        result->DeleteVariant( variant );
+                    }
+                }
                 else if( prop.name == DOC_PROP_BOARD_THICKNESS )
                 {
-                    result->GetDesignSettings().SetBoardThickness(
-                            src->GetDesignSettings().GetBoardThickness() );
+                    result->GetDesignSettings().SetBoardThickness( src->GetDesignSettings().GetBoardThickness() );
                 }
                 else if( prop.name == DOC_PROP_LAYER_STACKUP )
                 {
@@ -473,6 +530,7 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
                     // copy the whole stackup descriptor.
                     result->GetDesignSettings().GetStackupDescriptor() =
                             src->GetDesignSettings().GetStackupDescriptor();
+                    adoptLayers( src );
                 }
                 else if( prop.name == DOC_PROP_DRC_SEVERITIES )
                 {
@@ -482,8 +540,7 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
                     // diverged from ancestor; a PROP_RES::ANCESTOR
                     // resolution writes ancestor's map back to the output
                     // .kicad_pro (which may not pre-exist).
-                    result->GetDesignSettings().m_DRCSeverities =
-                            src->GetDesignSettings().m_DRCSeverities;
+                    result->GetDesignSettings().m_DRCSeverities = src->GetDesignSettings().m_DRCSeverities;
                     m_report.drcSeveritiesTouched = true;
                     m_report.projectFileTouched = true;
                 }
@@ -525,8 +582,7 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
                     if( src && src->GetDesignSettings().m_NetSettings
                         && result->GetDesignSettings().m_NetSettings )
                     {
-                        result->GetDesignSettings().m_NetSettings->CopyFrom(
-                                *src->GetDesignSettings().m_NetSettings );
+                        result->GetDesignSettings().m_NetSettings->CopyFrom( *src->GetDesignSettings().m_NetSettings );
                     }
 
                     m_report.netClassesTouched = true;
@@ -543,11 +599,29 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
                     // non-empty marker.
                     if( src && src->GetProject() )
                     {
-                        m_report.drawingSheetFile =
-                                src->GetProject()->GetProjectFile().m_BoardDrawingSheetFile;
+                        m_report.drawingSheetFile = src->GetProject()->GetProjectFile().m_BoardDrawingSheetFile;
                         m_report.drawingSheetFileSet = true;
                         m_report.projectFileTouched = true;
                     }
+                }
+                else if( prop.name.StartsWith( DOC_PROP_EMBEDDED_FILE ) )
+                {
+                    const wxString  fileName = prop.name.Mid( DOC_PROP_EMBEDDED_FILE.length() );
+                    EMBEDDED_FILES* files = result->GetEmbeddedFiles();
+
+                    files->RemoveFile( fileName );
+
+                    if( auto* file = src->GetEmbeddedFiles()->GetEmbeddedFile( fileName ) )
+                        files->AddFile( std::make_shared<EMBEDDED_FILES::EMBEDDED_FILE>( *file ) );
+                }
+                else if( prop.name == DOC_PROP_EMBED_FONTS )
+                {
+                    result->GetEmbeddedFiles()->SetAreFontsEmbedded( src->GetEmbeddedFiles()->GetAreFontsEmbedded() );
+                }
+                else
+                {
+                    // Any name this does not own, such as an ERC or library table property, is ignored.
+                    ApplyTitleBlockProperty( result->GetTitleBlock(), prop.name, src->GetTitleBlock() );
                 }
             }
 
@@ -564,18 +638,19 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
     CollectTopLevelIds( m_ours,     allIds );
     CollectTopLevelIds( m_theirs,   allIds );
 
-    auto resolutionFor = [&]( const KIID& aUuid ) -> const ITEM_RESOLUTION*
-    {
-        KIID_PATH path;
-        path.push_back( aUuid );
+    auto resolutionFor =
+            [&]( const KIID& aUuid ) -> const ITEM_RESOLUTION*
+            {
+                KIID_PATH path;
+                path.push_back( aUuid );
 
-        auto it = actionsById.find( path );
+                auto it = actionsById.find( path );
 
-        if( it == actionsById.end() )
-            return nullptr;
+                if( it == actionsById.end() )
+                    return nullptr;
 
-        return it->second;
-    };
+                return it->second;
+            };
 
     // Track which actions were consumed at the top level so the child-
     // resolution post-pass only sees nested actions.
@@ -697,7 +772,7 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
 
     // Child-level resolution post-pass. The merge engine emits actions for
     // footprint children (pads, fields, graphics, zones) with KIID_PATHs of
-    // the form [parent_uuid, child_uuid]. The top-level loop above brings
+    // the form [parent_uuid, child_diff_id]. The top-level loop above brings
     // children along when the parent footprint is cloned, but does NOT apply
     // per-child resolutions. This pass finds the cloned child on the result
     // board and adds/removes/merges it per its resolution.
@@ -770,7 +845,7 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
         {
             for( PCB_FIELD* f : parentFp->GetFields() )
             {
-                if( f && f->m_Uuid == childUuid )
+                if( f && ( f->m_Uuid == childUuid || PcbDiffItemId( *f ) == childUuid ) )
                 {
                     targetChild = f;
                     break;
@@ -778,33 +853,47 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
             }
         }
 
-        // Replace the parent's current child (if any) with a clone of the
-        // chosen side's child, or add it when the ours-based parent clone does
-        // not carry it.  Used by the take-a-side child resolutions below.
-        auto adoptChildFrom = [&]( const BOARD* aSide )
-        {
-            if( targetChild )
-            {
-                parentFp->Remove( targetChild );
-                delete targetChild;
-                targetChild = nullptr;
-            }
+        // Adopt the chosen side's child, updating existing fields in place and
+        // cloning other children. Used by the take-a-side child resolutions below.
+        auto adoptChildFrom =
+                [&]( const BOARD* aSide )
+                {
+                    const BOARD_ITEM* src = findItem( aSide, childUuid );
 
-            const BOARD_ITEM* src = findItem( aSide, childUuid );
+                    if( targetChild && src && targetChild->Type() == PCB_FIELD_T )
+                    {
+                        // Remove() deletes the field's variant overrides. Keep the existing field
+                        // and its ownership when replacing its contents with the chosen side's.
+                        EDA_GROUP* parentGroup = targetChild->GetParentGroup();
 
-            if( !src )
-                return;
+                        targetChild->CopyFrom( src );
+                        targetChild->SetParent( parentFp );
+                        targetChild->SetParentGroup( parentGroup );
+                        targetChild->ClearEditFlags();
+                        parentFp->InvalidateGeometryCaches();
+                        return;
+                    }
 
-            std::unique_ptr<EDA_ITEM> cloned( src->Clone() );
+                    if( targetChild )
+                    {
+                        parentFp->Remove( targetChild );
+                        delete targetChild;
+                        targetChild = nullptr;
+                    }
 
-            if( auto* childClone = dynamic_cast<BOARD_ITEM*>( cloned.get() ) )
-            {
-                parentFp->Add( childClone, ADD_MODE::APPEND );
+                    if( !src )
+                        return;
 
-                // Ownership transfers to parentFp only once Add() has adopted the clone.
-                cloned.release();
-            }
-        };
+                    std::unique_ptr<EDA_ITEM> cloned( src->Clone() );
+
+                    if( auto* childClone = dynamic_cast<BOARD_ITEM*>( cloned.get() ) )
+                    {
+                        parentFp->Add( childClone, ADD_MODE::APPEND );
+
+                        // Ownership transfers to parentFp only once Add() has adopted the clone.
+                        cloned.release();
+                    }
+                };
 
         switch( action->kind )
         {
@@ -813,14 +902,12 @@ std::unique_ptr<BOARD> PCB_MERGE_APPLIER::Apply()
             if( !targetChild )
                 break;
 
-            // Footprint children carry globally-unique UUIDs, so the per-board
-            // index keys them directly — no parent-scoped scan needed.
+            // Resolve the same diff identity on each side, including name-based field IDs.
             const BOARD_ITEM* oursChild     = findItem( m_ours, childUuid );
             const BOARD_ITEM* theirsChild   = findItem( m_theirs, childUuid );
             const BOARD_ITEM* ancestorChild = findItem( m_ancestor, childUuid );
 
-            applyPropertyResolutions( targetChild, action->props,
-                                      oursChild, theirsChild, ancestorChild );
+            applyPropertyResolutions( targetChild, action->props, oursChild, theirsChild, ancestorChild );
             break;
         }
 

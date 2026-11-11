@@ -33,6 +33,7 @@ class PLUGIN_CONTENT_MANAGER;
 class PROJECT_TREE;
 class PROJECT_TREE_PANE;
 class LOCAL_HISTORY_PANE;
+class GIT_COMMIT_PANE;
 class UPDATE_MANAGER;
 
 /**
@@ -82,6 +83,12 @@ public:
     void RestoreCommitFromHistory( const wxString& aHash );
     void ToggleLocalHistory();
     bool HistoryPanelShown();
+
+    void ToggleGitCommitPane();
+    bool GitCommitPaneShown();
+
+    /// Open the advanced Git window on its History page, run through the docked panel.
+    void ShowGitHistory();
 
     void OnOpenFileInTextEditor( wxCommandEvent& event );
     void OnEditAdvancedCfg( wxCommandEvent& event );
@@ -163,6 +170,12 @@ public:
      *  Open dialog to import DipTrace schematic and board files.
      */
     void OnImportDipTraceFiles( wxCommandEvent& event );
+
+    /**
+     *  Open dialog to import an Easy-PC / DesignSpark PCB project, schematic or board.
+     */
+    void OnImportEasyPcFiles( wxCommandEvent& event );
+    void OnImportTarget3001Files( wxCommandEvent& event );
 
     /**
      *  Open dialog to import an OrCAD schematic file.
@@ -291,9 +304,11 @@ private:
     int                   m_leftWinWidth;
     bool                  m_active_project;
     bool                  m_showHistoryPanel;
+    bool                  m_showGitCommitPanel;
 
     PROJECT_TREE_PANE*    m_projectTreePane;
     LOCAL_HISTORY_PANE*   m_historyPane;
+    GIT_COMMIT_PANE*      m_gitCommitPane;
     wxAuiNotebook*        m_notebook;
     PANEL_KICAD_LAUNCHER* m_launcher;
     int                   m_lastToolbarIconSize;

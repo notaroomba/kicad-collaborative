@@ -17,10 +17,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef MINOPTMAX_PROTO_H
-#define MINOPTMAX_PROTO_H
+#pragma once
 
 #include <limits>
+#include <algorithm>
 
 template<class T=int>
 class MINOPTMAX
@@ -30,6 +30,9 @@ public:
     T Max() const { return m_hasMax ? m_max : std::numeric_limits<T>::max(); };
     T Opt() const { return m_hasOpt ? m_opt : Min(); };
     T PinnedOpt() const { return std::max<T>( Min(), std::min<T>( Max(), Opt() ) ) ; }
+
+    /// Like PinnedOpt(), but preferring \a aDefault when there is no opt value.
+    T PinnedOpt( T aDefault ) const { return std::max<T>( Min(), std::min<T>( Max(), m_hasOpt ? m_opt : aDefault ) ); }
 
     bool HasMin() const { return m_hasMin; }
     bool HasMax() const { return m_hasMax; }
@@ -41,6 +44,16 @@ public:
 
     bool IsNull() const { return m_isNull; }
 
+    bool Matches( const T v ) const
+    {
+        if( m_hasMin && v < m_min )
+            return false;
+        if( m_hasMax && v > m_max )
+            return false;
+
+        return true;
+    }
+
 private:
     bool m_isNull = true;
     T    m_min{};
@@ -50,5 +63,3 @@ private:
     bool m_hasOpt = false;
     bool m_hasMax = false;
 };
-
-#endif

@@ -56,6 +56,11 @@ public:
         return wxT( "PCB_TABLE" );
     }
 
+    /**
+     * True when the cells' text comes from the board, so only their formatting is the user's
+     */
+    bool IsGenerated() const { return IsGeneratedTableType( Type() ); }
+
     void SetStrokeExternal( bool aDoStroke ) { m_strokeExternal = aDoStroke; }
     bool StrokeExternal() const              { return m_strokeExternal; }
 
@@ -122,7 +127,9 @@ public:
 
     int GetRowCount() const
     {
-        return m_cells.size() / m_colCount;
+        // Guarded because a hand-edited or third-party file can present a table with no
+        // columns, and dividing by it crashes the writer rather than failing the load
+        return m_colCount > 0 ? (int) m_cells.size() / m_colCount : 0;
     }
 
     void SetColWidth( int aCol, int aWidth ) { m_colWidths[aCol] = aWidth; }
@@ -173,6 +180,14 @@ public:
         aCell->SetLayer( GetLayer() );
         aCell->SetParent( this );
     }
+
+    /**
+     * Grow or shrink to aRows x aCols, keeping the cells that already exist.
+     *
+     * A regenerating table must not clear and repopulate. That would mint new UUIDs on every
+     * rebuild and break selection restore and file diffs.
+     */
+    void ResizeCells( int aRows, int aCols );
 
     void ClearCells()
     {
@@ -244,6 +259,7 @@ public:
      * Convert the TABLE shape to a polyset. details will be included.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the ID of the layer the table exists on.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -305,9 +321,20 @@ public:
 #endif
 
 protected:
+    /**
+     * Derived tables pass their own KICAD_T
+     */
+    PCB_TABLE( BOARD_ITEM* aParent, KICAD_T aType, int aLineWidth );
+
     virtual void swapData( BOARD_ITEM* aImage ) override;
 
-protected:
+    /**
+     * Give each row the height Autosize measured its text to need, margins included. Called
+     * once the column widths are set and before the cells are placed, so an override still
+     * sees the heights the rows had through GetRowHeight.
+     */
+    virtual void setAutosizedRowHeights( const std::vector<int>& aNeeded );
+
     bool                        m_strokeExternal;
     bool                        m_StrokeHeaderSeparator;
     STROKE_PARAMS               m_borderStroke;
@@ -320,6 +347,20 @@ protected:
     std::map<int, int>          m_rowHeights;
     std::vector<PCB_TABLECELL*> m_cells;
 };
+
+
+/**
+ * True for a cell whose text is generated from the board, so only its formatting is the user's.
+ */
+inline bool IsGeneratedTableCell( const EDA_ITEM* aItem )
+{
+    if( !aItem || aItem->Type() != PCB_TABLECELL_T )
+        return false;
+
+    const PCB_TABLE* table = dynamic_cast<const PCB_TABLE*>( aItem->GetParent() );
+
+    return table && table->IsGenerated();
+}
 
 
 #endif /* PCB_TABLE_H */

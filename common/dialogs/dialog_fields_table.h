@@ -51,12 +51,15 @@ public:
 
 protected:
     void showPopupMenu( wxMenu& aMenu, wxGridEvent& aEvent ) override;
+    void appendPopupMenuItems( wxMenu& aMenu ) override;
     void doPopupSelection( wxCommandEvent& aEvent ) override;
 
     virtual void showFieldsTablePopupMenu( wxMenu& aMenu, wxGridEvent& aEvent );
     virtual void doFieldsTablePopupSelection( wxCommandEvent& aEvent );
 
 private:
+    void copyFromVariant( const wxString& aVariant, const std::vector<wxGridCellCoords>& aCells );
+
     DIALOG_FIELDS_TABLE*          m_dialog;
     FIELDS_TABLE_DATA_MODEL_BASE* m_dataModel;
 };
@@ -64,6 +67,8 @@ private:
 
 class DIALOG_FIELDS_TABLE : public DIALOG_FIELDS_TABLE_BASE
 {
+    friend class FIELDS_TABLE_GRID_TRICKS;
+
 public:
     DIALOG_FIELDS_TABLE( wxWindow* aParent, FIELDS_TABLE_SETTINGS& aPanelSettings,
                          FIELDS_TABLE_BOM_SETTINGS& aBomSettings, JOB_EXPORT_BOM* aJob );
@@ -128,6 +133,7 @@ protected:
 
     void SetupColumnProperties( int aCol );
     void SetupAllColumnProperties();
+    void updateExpanderColumn();
 
     virtual wxGridCellEditor* createReferenceEditor();
     virtual wxGridCellEditor* createFootprintEditor();
@@ -137,9 +143,9 @@ protected:
     // Set bitmap and tooltip according to left panel visibility
     void setSideBarButtonLook( bool aIsLeftPanelCollapsed );
 
-    void OnTableCellClick( wxGridEvent& event ) override;
     void OnTableValueChanged( wxGridEvent& event ) override;
     void OnTableColSize( wxGridSizeEvent& event ) override;
+    void OnTableLabelClick( wxGridEvent& event ) override;
     virtual void OnTableSelectionChanged( const std::set<int>& aRows ) = 0;
     void OnSizeViewControlsGrid( wxSizeEvent& event ) override;
     void OnViewControlsCellChanged( wxGridEvent& aEvent ) override;
@@ -198,6 +204,7 @@ protected:
 
     VIEW_CONTROLS_GRID_DATA_MODEL* m_viewControlsDataModel = nullptr;
     int                            m_gridWheelRotation = 0;
+    int                            m_expanderWidth = 0; // wxFormBuilder width, in DIP
 
     // Index in the fields list control for each MANDATORY_FIELD type
     std::map<FIELD_T, int> m_mandatoryFieldListIndexes;

@@ -41,6 +41,7 @@
 #include <geometry/eda_angle.h>
 #include <pad.h> // For PAD_DRILL_POST_MACHINING_MODE
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <stop_token>
@@ -78,6 +79,11 @@ public:
      * Load footprint models if they are not already loaded, i.e. if m_3dModelMap is empty
      */
     void Load3dModelsIfNeeded();
+
+    /**
+     * Rebuild the raytracing hit-test scene in the background after a visibility change.
+     */
+    void RebuildHitTestAsync();
 
     void                                handleGizmoMouseInput( int mouseX, int mouseY );
     void                                updateGizmoSelection( glm::mat4 aCameraRotationMatrix );
@@ -128,13 +134,12 @@ private:
                        std::vector< SFVEC2F >& aInnerContourResult,
                        std::vector< SFVEC2F >& aOuterContourResult, bool aInvertOrder );
 
-    void generateCylinder( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius,
-                           float aZtop, float aZbot, unsigned int aNr_sides_per_circle,
-                           std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer );
+    void generateCylinder( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius, float aZtop, float aZbot,
+                           unsigned int aNr_sides_per_circle, std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer );
 
-    void generateInvCone( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius,
-                          float aZtop, float aZbot, unsigned int aNr_sides_per_circle,
-                          std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer, EDA_ANGLE aAngle );
+    void generateInvCone( const SFVEC2F& aCenter, float aInnerRadius, float aOuterRadius, float aZtop, float aZbot,
+                          unsigned int aNr_sides_per_circle, std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer,
+                          EDA_ANGLE aAngle, bool aIsFront );
 
     void generateDisk( const SFVEC2F& aCenter, float aRadius, float aZ,
                        unsigned int aNr_sides_per_circle, std::shared_ptr<TRIANGLE_DISPLAY_LIST> aDstLayer,
@@ -151,6 +156,7 @@ private:
                                       PAD_DRILL_POST_MACHINING_MODE aMode,
                                       int aSizeIU,
                                       int aDepthIU,
+                                      const EDA_ANGLE& aAngle,
                                       float aHoleInnerRadius,
                                       float aZSurface,
                                       bool aIsFront,
@@ -158,9 +164,9 @@ private:
                                       float aUnitScale,
                                       float* aZEnd );
 
-    void generateViaBarrels( float aPlatingThickness3d, float aUnitScale );
+    void generateComplexHoles( float aPlatingThickness3d, float aUnitScale );
 
-    void generatePlatedHoleShells( int aPlatingThickness, float aUnitScale );
+    void generateSimplePlatedHoleShells( int aPlatingThickness, float aUnitScale );
 
     void generateViaCovers( float aPlatingThickness3d, float aUnitScale );
 
@@ -204,6 +210,9 @@ private:
     void renderExtrudedBodies();
 
     void renderOpaqueModels( const glm::mat4 &aCameraViewMatrix );
+
+    void renderExtrudedBodies( bool aTransparentPass );
+
     void renderTransparentModels( const glm::mat4 &aCameraViewMatrix );
 
     void renderModel( const glm::mat4 &aCameraViewMatrix, const MODELTORENDER &aModelToRender,
@@ -260,11 +269,13 @@ private:
 
     void startBgWorker();
     void bgWorker( std::stop_token aStop );
+    void runHitTestRebuild( std::stop_token aStop );
     void sendRefreshView();
 
     struct
     {
         SMATERIAL m_Paste;
+        SMATERIAL m_Adhesive;
         SMATERIAL m_SilkSBot;
         SMATERIAL m_SilkSTop;
         SMATERIAL m_SolderMask;
@@ -277,6 +288,8 @@ private:
 
     EDA_3D_CANVAS*       m_canvas;
     std::jthread         m_bgWorkerThread;
+    std::atomic<bool>    m_bgWorkerBusy{ false };
+    std::atomic<bool>    m_hitTestDirty{ false };
     std::recursive_mutex m_renderMutex;
 
 private:
@@ -324,8 +337,8 @@ private:
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_boardWithHoles;
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_postMachinePlugs;     ///< Board material plugs for backdrill/counterbore/countersink
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_antiBoard;
-    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_outerThroughHoles;
-    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_outerViaThroughHoles;
+    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_frontOuterThroughHoles;
+    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_backOuterThroughHoles;
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_outerThroughHoleRings;
     std::vector<std::shared_ptr<void>>           m_retiredRenderPtrs;
 
@@ -335,7 +348,7 @@ private:
     GLuint              m_grid;             ///< oGL list that stores current grid
     GRID3D_TYPE         m_lastGridType;     ///< Stores the last grid type.
 
-    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_microviaHoles;
+    std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_complexPlatedHoles;
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_padHoles;
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_viaFrontCover;
     std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED> m_viaBackCover;
@@ -353,6 +366,7 @@ private:
 
     std::map<const FOOTPRINT*, std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED>> m_extrudedBodyLists;
     std::map<const FOOTPRINT*, std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED>> m_extrudedPadLists;
+    std::map<const FOOTPRINT*, std::shared_ptr<OPENGL_RENDER_LIST_DEFERRED>> m_extrudedPegLists;
 };
 
 #endif // RENDER_3D_OPENGL_H

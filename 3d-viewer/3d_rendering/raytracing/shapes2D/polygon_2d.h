@@ -107,7 +107,7 @@ private:
      */
     SEGMENTS_WIDTH_NORMALS m_open_segments;
 
-    ///< A polygon block can have multiple polygon and holes
+    /// A polygon block can have multiple polygon and holes
     OUTERS_AND_HOLES m_outers_and_holes;
 };
 
@@ -143,6 +143,8 @@ public:
  * @param aBiuTo3dUnitsScale the rendering target 3d scale
  * @param aDivFactor a division factor (in 3Dunits) to divide the polygon plane,
  *                   0.0f will use the internal polygon segm statistics
+ * @param aBoardItem is the board item to convert.
+ * @param aPolyIndex
  */
 void ConvertPolygonToBlocks( const SHAPE_POLY_SET& aMainPath, CONTAINER_2D_BASE& aDstContainer,
                             float aBiuTo3dUnitsScale, float aDivFactor,

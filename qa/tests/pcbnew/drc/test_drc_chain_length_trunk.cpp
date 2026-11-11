@@ -45,8 +45,7 @@ namespace
 std::unique_ptr<BOARD> loadBoard( const char* aBoardFile )
 {
     PCB_IO_KICAD_SEXPR     plugin;
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-    plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir() + aBoardFile, board.get() );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir() + aBoardFile );
     board->BuildConnectivity();
     return board;
 }

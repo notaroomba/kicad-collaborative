@@ -42,6 +42,7 @@ class PROJECT_FILE_TEST_FIXTURE
 public:
     PROJECT_FILE_TEST_FIXTURE()
     {
+        m_originalDir = fs::current_path();
         m_tempDir = fs::temp_directory_path() / "kicad_project_file_test";
         fs::remove_all( m_tempDir );
         fs::create_directories( m_tempDir );
@@ -49,14 +50,40 @@ public:
 
     ~PROJECT_FILE_TEST_FIXTURE()
     {
+        fs::current_path( m_originalDir );
         fs::remove_all( m_tempDir );
     }
 
+    fs::path m_originalDir;
     fs::path m_tempDir;
 };
 
 
 BOOST_FIXTURE_TEST_SUITE( ProjectFile, PROJECT_FILE_TEST_FIXTURE )
+
+
+BOOST_AUTO_TEST_CASE( Ipc2581ExplicitEmptySectionsRoundTrips )
+{
+    fs::path projectPath = m_tempDir / "api_kitchen_sink.kicad_pro";
+    fs::copy_file( fs::path( KI_TEST::GetTestDataRootDir() ) / "pcbnew" / "api_kitchen_sink.kicad_pro",
+                   projectPath );
+
+    {
+        SETTINGS_MANAGER mgr;
+        BOOST_REQUIRE( mgr.LoadProject( wxString( projectPath.string() ), true ) );
+        PROJECT_FILE& project = mgr.Prj().GetProjectFile();
+        BOOST_REQUIRE( !project.m_IP2581Bom.sections );
+        project.m_IP2581Bom.sections = wxString();
+        BOOST_REQUIRE( project.SaveToFile( wxString( m_tempDir.string() ), true ) );
+        mgr.UnloadProject( &mgr.Prj(), false );
+    }
+
+    SETTINGS_MANAGER mgr;
+    BOOST_REQUIRE( mgr.LoadProject( wxString( projectPath.string() ), true ) );
+    PROJECT_FILE& loaded = mgr.Prj().GetProjectFile();
+    BOOST_REQUIRE( loaded.m_IP2581Bom.sections );
+    BOOST_CHECK( loaded.m_IP2581Bom.sections->IsEmpty() );
+}
 
 
 /**
@@ -375,6 +402,32 @@ BOOST_AUTO_TEST_CASE( UnloadProjectSavesToOwnDirectory )
 }
 
 
+// Switching projects must replace the active project even when a passive one sorts first
+BOOST_AUTO_TEST_CASE( LoadActiveProjectReplacesActiveNotPassive )
+{
+    auto projectPath = [&]( const std::string& aName )
+    {
+        fs::path dir = m_tempDir / aName;
+        fs::create_directories( dir );
+        return wxString( ( dir / ( aName + ".kicad_pro" ) ).string() );
+    };
+
+    const wxString active = projectPath( "z_active" );
+    const wxString passive = projectPath( "a_passive" );
+    const wxString next = projectPath( "m_next" );
+
+    SETTINGS_MANAGER mgr;
+
+    mgr.LoadProject( active, true );
+    mgr.LoadProject( passive, false );
+    mgr.LoadProject( next, true );
+
+    BOOST_CHECK_EQUAL( mgr.Prj().GetProjectFullName(), next );
+    BOOST_CHECK( mgr.GetProject( active ) == nullptr );
+    BOOST_CHECK( mgr.GetProject( passive ) != nullptr );
+}
+
+
 /**
  * Opening a project and saving it without any user change must not rewrite the .kicad_pro.
  *
@@ -413,10 +466,8 @@ BOOST_AUTO_TEST_CASE( NoRewriteWhenUnchanged )
         return buffer.str();
     };
 
-    // Drop keys the file would omit if saved before those parameters existed. The scalar
-    // board.ipc2581 block covers the plain PARAM path; schematic.bus_aliases (default null in
-    // memory but serialized as {}) covers the PARAM_LAMBDA path. Both hold their defaults, so a
-    // no-op load must not resurrect them.
+    // Files saved before ipc2581 (PARAM) and bus_aliases (PARAM_LAMBDA) existed omit both keys, and a
+    // no-op load must not resurrect their defaults
     {
         nlohmann::json js = nlohmann::json::parse( readFile( proPath ) );
         js["board"].erase( "ipc2581" );
@@ -441,6 +492,99 @@ BOOST_AUTO_TEST_CASE( NoRewriteWhenUnchanged )
 
     // And the on-disk file must be byte-for-byte unchanged.
     BOOST_CHECK_EQUAL( before, readFile( proPath ) );
+
+    // An explicitly cleared alias table must survive reopening even when the old file omitted it
+    mgr.UnloadProject( &mgr.Prj(), false );
+    BOOST_REQUIRE( mgr.LoadProject( wxString( proPath.string() ), true ) );
+    PROJECT_FILE& edited = mgr.Prj().GetProjectFile();
+    BOOST_REQUIRE( !edited.GetJson( "schematic.bus_aliases" ) );
+    edited.m_BusAliasesDefined = true;
+    BOOST_REQUIRE( edited.SaveToFile( wxString( projectDir.string() ) ) );
+    nlohmann::json saved = nlohmann::json::parse( readFile( proPath ) );
+    BOOST_CHECK( saved["schematic"]["bus_aliases"].is_object() );
+    BOOST_CHECK( saved["schematic"]["bus_aliases"].empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AliasMigrationPreservesNonemptyDefinitions )
+{
+    const fs::path projectPath = m_tempDir / "aliases.kicad_pro";
+    const nlohmann::json aliases = { { "USB", { "D+", "D-" } } };
+
+    {
+        std::ofstream output( projectPath );
+        output << nlohmann::json( { { "meta", { { "version", 3 } } },
+                                   { "schematic", { { "bus_aliases", aliases } } } } ).dump( 2 );
+        output.close();
+        BOOST_REQUIRE( output.good() );
+    }
+
+    SETTINGS_MANAGER manager;
+    BOOST_REQUIRE( manager.LoadProject( wxString( projectPath.string() ), true ) );
+    PROJECT_FILE& project = manager.Prj().GetProjectFile();
+    BOOST_REQUIRE( project.m_BusAliasesDefined );
+    BOOST_REQUIRE_EQUAL( project.m_BusAliases.size(), 1 );
+    BOOST_CHECK( project.m_BusAliases.at( "USB" ) == std::vector<wxString>( { "D+", "D-" } ) );
+    BOOST_REQUIRE( project.SaveToFile( wxString( m_tempDir.string() ) ) );
+    std::ifstream input( projectPath );
+    const nlohmann::json saved = nlohmann::json::parse( input );
+    BOOST_CHECK_EQUAL( saved["meta"]["version"].get<int>(), 4 );
+    BOOST_CHECK( saved["schematic"]["bus_aliases"] == aliases );
+}
+
+
+BOOST_AUTO_TEST_CASE( LegacyFieldNameTemplatesSurviveMigration )
+{
+    const fs::path legacyPath = m_tempDir / "field_names.pro";
+    const fs::path projectPath = m_tempDir / "field_names.kicad_pro";
+
+    {
+        std::ofstream output( legacyPath );
+        output << "[schematic_editor]\n"
+                  "FieldNameTemplates=(templatefields (field (name \"Manufacturer\") visible url))\n";
+    }
+
+    PROJECT_FILE project( wxString( projectPath.string() ) );
+    BOOST_REQUIRE( project.LoadFromFile() );
+
+    const auto& fields = project.m_TemplateFieldNames.GetTemplateFieldNames( TEMPLATES::SCOPE::PROJECT );
+    BOOST_REQUIRE_EQUAL( fields.size(), 1 );
+    BOOST_CHECK_EQUAL( fields[0].m_Name, wxS( "Manufacturer" ) );
+    BOOST_CHECK( fields[0].m_Visible );
+    BOOST_CHECK( fields[0].m_URL );
+
+    const nlohmann::json saved = nlohmann::json::parse( project.FormatAsString() );
+    const auto&          fieldNames = saved["schematic"]["drawing"]["field_names"];
+    BOOST_REQUIRE( fieldNames.is_array() );
+    BOOST_REQUIRE_EQUAL( fieldNames.size(), 1 );
+    BOOST_CHECK_EQUAL( fieldNames[0]["name"].get<std::string>(), "Manufacturer" );
+}
+
+
+BOOST_AUTO_TEST_CASE( EmptyFieldNameArrayClearsTemplatesOnReload )
+{
+    const fs::path projectPath = m_tempDir / "field_names.kicad_pro";
+    nlohmann::json projectJson = { { "meta", { { "version", 4 } } } };
+    projectJson["schematic"]["drawing"]["field_names"] =
+            nlohmann::json::array( { { { "name", "Manufacturer" }, { "visible", true }, { "url", false } } } );
+
+    auto writeProject = [&]()
+    {
+        std::ofstream output( projectPath );
+        output << projectJson.dump( 2 );
+    };
+
+    writeProject();
+
+    PROJECT_FILE project( wxString( projectPath.string() ) );
+    BOOST_REQUIRE( project.LoadFromFile() );
+    BOOST_REQUIRE_EQUAL( project.m_TemplateFieldNames.GetTemplateFieldNames( TEMPLATES::SCOPE::PROJECT ).size(), 1 );
+
+    projectJson["schematic"]["drawing"]["field_names"] = nlohmann::json::array();
+    writeProject();
+
+    BOOST_REQUIRE( project.LoadFromFile() );
+    BOOST_CHECK( project.m_TemplateFieldNames.GetTemplateFieldNames( TEMPLATES::SCOPE::PROJECT ).empty() );
 }
 
 

@@ -25,7 +25,7 @@
 
 #include <trace_helpers.h>
 #include <connection_graph.h>
-#include <kiface_ids.h>
+#include <kiface_services.h>
 #include <kiway.h>
 #include <lib_id.h>
 #include <sch_pin.h>
@@ -33,21 +33,169 @@
 #include <sch_screen.h>
 #include <sch_symbol.h>
 #include <schematic.h>
+#include <advanced_config.h>
+#include <connectivity/conn_facade.h>
+#include <reporter.h>
+#include <richio.h>
+
+
+NETLIST_EXPORTER_BASE::CONNECTIVITY_SCOPE::CONNECTIVITY_SCOPE( NETLIST_EXPORTER_BASE& aExporter ) :
+        m_exporter( aExporter )
+{
+    if( m_exporter.m_connectivityDepth == 0 )
+        m_exporter.rebuildConnectivity();
+
+    ++m_exporter.m_connectivityDepth;
+}
+
+NETLIST_EXPORTER_BASE::CONNECTIVITY_SCOPE::~CONNECTIVITY_SCOPE()
+{
+    --m_exporter.m_connectivityDepth;
+}
+
+bool NETLIST_EXPORTER_BASE::WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
+                                          REPORTER& aReporter )
+{
+    try
+    {
+        CONNECTIVITY_SCOPE connectivity( *this );
+        return writeNetlist( aOutFileName, aNetlistOptions, aReporter );
+    }
+    catch( const IO_ERROR& error )
+    {
+        aReporter.Report( error.What(), RPT_SEVERITY_ERROR );
+        return false;
+    }
+    catch( const std::exception& error )
+    {
+        aReporter.Report( wxString::Format( _( "Failed to export schematic: %s" ), error.what() ),
+                          RPT_SEVERITY_ERROR );
+        return false;
+    }
+}
+
+void NETLIST_EXPORTER_BASE::rebuildConnectivity()
+{
+    m_exportNets.clear();
+    m_exportItemNets.clear();
+    m_schematic->RebuildConnectivity();
+    m_exportSheets = m_schematic->Hierarchy();
+
+    if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine )
+    {
+        auto& facade = m_schematic->Connectivity();
+        std::map<KIID_PATH, const SCH_SHEET_PATH*> paths;
+
+        for( const SCH_SHEET_PATH& path : m_exportSheets )
+            paths.emplace( path.Path(), &path );
+
+        for( const auto& [key, row] : facade.Published().Rows() )
+        {
+            const auto& path = facade.Keys().Instance( key.inst );
+            const auto view = facade.Connection( key.item, path );
+
+            if( !view )
+                THROW_IO_ERROR( _( "Connectivity changed while preparing the netlist." ) );
+
+            const auto sheet = paths.find( path );
+
+            if( sheet == paths.end() )
+                THROW_IO_ERROR( _( "Connectivity contains an unknown sheet instance." ) );
+
+            m_exportItemNets[*sheet->second].emplace( key.item, view->Name() );
+        }
+
+        for( const SCH_CONNECTIVITY::NET_GROUP& group : facade.GetNetMap() )
+        {
+            EXPORT_NET result{ group.name, false, {} };
+
+            for( const SCH_CONNECTIVITY::NET_VIEW& net : group.instances )
+            {
+                if( !net.IsNet() )
+                    continue;
+
+                const auto path = paths.find( net.Instance() );
+
+                if( path == paths.end() )
+                    THROW_IO_ERROR( _( "Connectivity contains an unknown sheet instance." ) );
+
+                for( SCH_ITEM* item : net.Items() )
+                {
+                    result.hasNoConnect |= item->Type() == SCH_NO_CONNECT_T;
+
+                    if( item->Type() == SCH_PIN_T )
+                        result.pins.emplace_back( static_cast<SCH_PIN*>( item ), *path->second );
+                }
+            }
+
+            m_exportNets.push_back( std::move( result ) );
+        }
+
+        return;
+    }
+
+    for( const SCH_SHEET_PATH& path : m_exportSheets )
+    {
+        std::unordered_map<KIID, wxString>& itemNets = m_exportItemNets[path];
+
+        auto collect =
+                [&]( SCH_ITEM* item )
+                {
+                    if( SCH_CONNECTION* connection = item->Connection( &path ) )
+                        itemNets.emplace( item->m_Uuid, connection->Name() );
+                };
+
+        for( SCH_ITEM* item : path.LastScreen()->Items() )
+        {
+            collect( item );
+            item->RunOnChildren( collect, RECURSE_MODE::NO_RECURSE );
+        }
+    }
+
+    for( const auto& [key, subgraphs] : m_schematic->ConnectionGraph()->GetNetMap() )
+    {
+        EXPORT_NET result{ key.Name, false, {} };
+
+        for( CONNECTION_SUBGRAPH* subgraph : subgraphs )
+        {
+            result.hasNoConnect |= subgraph->GetNoConnect()
+                                   && subgraph->GetNoConnect()->Type() == SCH_NO_CONNECT_T;
+            const SCH_SHEET_PATH& path = subgraph->GetSheet();
+
+            for( SCH_ITEM* item : subgraph->GetItems() )
+            {
+                if( item->Type() == SCH_PIN_T )
+                    result.pins.emplace_back( static_cast<SCH_PIN*>( item ), path );
+            }
+        }
+
+        m_exportNets.push_back( std::move( result ) );
+    }
+}
+
+std::optional<wxString> NETLIST_EXPORTER_BASE::itemNetName( const SCH_ITEM& aItem,
+                                                            const SCH_SHEET_PATH& aPath ) const
+{
+    const auto sheet = m_exportItemNets.find( aPath );
+
+    if( sheet == m_exportItemNets.end() )
+        return std::nullopt;
+
+    const auto found = sheet->second.find( aItem.m_Uuid );
+    return found == sheet->second.end() ? std::nullopt : std::optional( found->second );
+}
 
 
 // a "less than" test on two LIB_SYMBOLs (.m_name wxStrings)
-bool LIB_SYMBOL_LESS_THAN::operator()( LIB_SYMBOL* const& libsymbol1,
-                                       LIB_SYMBOL* const& libsymbol2 ) const
+bool LIB_SYMBOL_LESS_THAN::operator()( LIB_SYMBOL* const& libsymbol1, LIB_SYMBOL* const& libsymbol2 ) const
 {
     // Use case specific GetName() wxString compare
     return libsymbol1->GetLibId() < libsymbol2->GetLibId();
 }
 
 
-wxString NETLIST_EXPORTER_BASE::MakeCommandLine( const wxString& aFormatString,
-                                                 const wxString& aNetlistFile,
-                                                 const wxString& aFinalFile,
-                                                 const wxString& aProjectPath )
+wxString NETLIST_EXPORTER_BASE::MakeCommandLine( const wxString& aFormatString, const wxString& aNetlistFile,
+                                                 const wxString& aFinalFile, const wxString& aProjectPath )
 {
     // Expand format symbols in the command line:
     // %B => base filename of selected output file, minus path and extension.
@@ -55,10 +203,10 @@ wxString NETLIST_EXPORTER_BASE::MakeCommandLine( const wxString& aFormatString,
     // %I => full filename of the input file (the intermediate net file).
     // %O => complete filename and path (but without extension) of the user chosen output file.
 
-    wxString   ret  = aFormatString;
-    wxFileName in   = aNetlistFile;
-    wxFileName out  = aFinalFile;
-    wxString str_out  = out.GetFullPath();
+    wxString   ret     = aFormatString;
+    wxFileName in      = aNetlistFile;
+    wxFileName out     = aFinalFile;
+    wxString   str_out = out.GetFullPath();
 
     ret.Replace( "%P", aProjectPath, true );
     ret.Replace( "%B", out.GetName(), true );
@@ -80,8 +228,8 @@ wxString NETLIST_EXPORTER_BASE::MakeCommandLine( const wxString& aFormatString,
 }
 
 
-SCH_SYMBOL* NETLIST_EXPORTER_BASE::findNextSymbol( EDA_ITEM* aItem,
-                                                   const SCH_SHEET_PATH& aSheetPath )
+SCH_SYMBOL* NETLIST_EXPORTER_BASE::findNextSymbol( EDA_ITEM* aItem, const SCH_SHEET_PATH& aSheetPath,
+                                                   const EXPORT_EXCLUSION& aExcluded )
 {
     wxCHECK( aItem, nullptr );
 
@@ -100,6 +248,10 @@ SCH_SYMBOL* NETLIST_EXPORTER_BASE::findNextSymbol( EDA_ITEM* aItem,
     if( ref[0] == wxChar( '#' ) )
         return nullptr;
 
+    // An excluded unit must not claim the reference, or the package's exported units would be dropped with it
+    if( aExcluded && aExcluded( symbol, aSheetPath ) )
+        return nullptr;
+
     SCH_SCREEN* screen = aSheetPath.LastScreen();
 
     wxCHECK( screen, nullptr );
@@ -114,6 +266,10 @@ SCH_SYMBOL* NETLIST_EXPORTER_BASE::findNextSymbol( EDA_ITEM* aItem,
     // If symbol is a "multi parts per package" type
     if( libSymbol->GetUnitCount() > 1 )
     {
+        // A package spanning sheets belongs to the unit on its suffix's sheet, so the footprint path matches the ref
+        if( packageOwnedElsewhere( symbol, aSheetPath, aExcluded ) )
+            return nullptr;
+
         // test if this reference has already been processed, and if so skip
         if( m_referencesAlreadyFound.Lookup( ref ) )
             return nullptr;
@@ -126,9 +282,53 @@ SCH_SYMBOL* NETLIST_EXPORTER_BASE::findNextSymbol( EDA_ITEM* aItem,
 }
 
 
-std::vector<PIN_INFO> NETLIST_EXPORTER_BASE::CreatePinList( SCH_SYMBOL* aSymbol,
-                                                            const SCH_SHEET_PATH& aSheetPath,
-                                                            bool aKeepUnconnectedPins )
+EXPORT_EXCLUSION NETLIST_EXPORTER_BASE::boardExclusion() const
+{
+    return [this]( const SCH_SYMBOL* aSymbol, const SCH_SHEET_PATH& aSheet )
+           {
+               return aSymbol->GetExcludedFromBoard( &aSheet, m_exportVariant );
+           };
+}
+
+
+bool NETLIST_EXPORTER_BASE::packageOwnedElsewhere( const SCH_SYMBOL* aSymbol, const SCH_SHEET_PATH& aSheetPath,
+                                                   const EXPORT_EXCLUSION& aExcluded ) const
+{
+    const SCHEMATIC* schematic = aSymbol->Schematic();
+
+    if( !schematic )
+        return false;
+
+    const wxString suffix = schematic->GetPackageRefSuffix( aSymbol, aSheetPath );
+
+    if( suffix == schematic->GetRefSuffix( aSheetPath ) )
+        return false;
+
+    const wxString base = aSymbol->GetBaseRef( &aSheetPath );
+
+    for( const SCH_SHEET_PATH& path : m_exportSheets )
+    {
+        if( schematic->GetRefSuffix( path ) != suffix )
+            continue;
+
+        for( SCH_ITEM* item : path.LastScreen()->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            const SCH_SYMBOL* other = static_cast<const SCH_SYMBOL*>( item );
+
+            if( other->GetLibId() == aSymbol->GetLibId() && other->GetBaseRef( &path ) == base
+                    && schematic->GetPackageRefSuffix( other, path ) == suffix
+                    && !( aExcluded && aExcluded( other, path ) ) )
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+
+std::vector<PIN_INFO> NETLIST_EXPORTER_BASE::CreatePinList( SCH_SYMBOL* aSymbol, const SCH_SHEET_PATH& aSheetPath )
 {
     std::vector<PIN_INFO> pins;
 
@@ -155,29 +355,15 @@ std::vector<PIN_INFO> NETLIST_EXPORTER_BASE::CreatePinList( SCH_SYMBOL* aSymbol,
     {
         // Collect all pins for this reference designator by searching the entire design for
         // other parts with the same reference designator.
-        findAllUnitsOfSymbol( aSymbol, aSheetPath, pins, aKeepUnconnectedPins );
+        findAllUnitsOfSymbol( aSymbol, aSheetPath, pins );
     }
 
     else // GetUnitCount() <= 1 means one part per package
     {
-        CONNECTION_GRAPH* graph = m_schematic->ConnectionGraph();
-
         for( const SCH_PIN* pin : aSymbol->GetPins( &aSheetPath ) )
         {
-            if( SCH_CONNECTION* conn = pin->Connection( &aSheetPath ) )
-            {
-                const wxString& netName = conn->Name();
-
-                if( !aKeepUnconnectedPins )     // Skip unconnected pins if requested
-                {
-                    CONNECTION_SUBGRAPH* sg = graph->FindSubgraphByName( netName, aSheetPath );
-
-                    if( !sg || sg->GetNoConnect() || sg->GetItems().size() < 2 )
-                        continue;
-                }
-
-                appendResolvedPins( pins, pin, aSheetPath, netName );
-            }
+            if( const std::optional<wxString> netName = itemNetName( *pin, aSheetPath ) )
+                appendResolvedPins( pins, pin, aSheetPath, *netName );
         }
     }
 
@@ -185,7 +371,7 @@ std::vector<PIN_INFO> NETLIST_EXPORTER_BASE::CreatePinList( SCH_SYMBOL* aSymbol,
     std::sort( pins.begin(), pins.end(),
                []( const PIN_INFO& lhs, const PIN_INFO& rhs )
                {
-                   return StrNumCmp( lhs.num, rhs.num, true ) < 0;
+                   return StrNumCmp( lhs.num, rhs.num, CMP_T::IGNORE_CASE ) < 0;
                } );
 
     // Remove duplicate Pins in m_SortedSymbolPinList
@@ -202,13 +388,11 @@ std::vector<wxString> NETLIST_EXPORTER_BASE::resolvePadNumbers( const SCH_PIN*  
                                                                 const SCH_SHEET_PATH& aSheetPath ) const
 {
     // Shared resolution kernel for all netlist paths (issue #2282) so they cannot drift.
-    const wxString variantName = m_schematic ? m_schematic->GetCurrentVariant() : wxString();
-
     if( m_kiway )
     {
         if( const SCH_SYMBOL* symbol = dynamic_cast<const SCH_SYMBOL*>( aPin->GetParentSymbol() ) )
         {
-            wxString fpText = symbol->GetFootprintFieldText( true, &aSheetPath, false, variantName );
+            wxString fpText = symbol->GetFootprintFieldText( &aSheetPath, RESOLVED, m_exportVariant );
             LIB_ID   fpId;
 
             if( !fpText.IsEmpty() && fpId.Parse( fpText, true ) < 0 )
@@ -218,7 +402,7 @@ std::vector<wxString> NETLIST_EXPORTER_BASE::resolvePadNumbers( const SCH_PIN*  
                 if( !pads.empty() )
                 {
                     SCH_PIN::PAD_RESOLUTION state = SCH_PIN::PAD_RESOLUTION::MAPPED;
-                    wxString pad = aPin->GetEffectivePadNumber( aSheetPath, variantName, fpId, &pads, &state );
+                    wxString pad = aPin->GetEffectivePadNumber( aSheetPath, m_exportVariant, fpId, &pads, &state );
 
                     if( state == SCH_PIN::PAD_RESOLUTION::UNMAPPED )
                         return {};
@@ -229,7 +413,7 @@ std::vector<wxString> NETLIST_EXPORTER_BASE::resolvePadNumbers( const SCH_PIN*  
         }
     }
 
-    return ExpandStackedPinNotation( aPin->GetEffectivePadNumber( aSheetPath, variantName ) );
+    return ExpandStackedPinNotation( aPin->GetEffectivePadNumber( aSheetPath, m_exportVariant ) );
 }
 
 
@@ -246,9 +430,10 @@ const std::set<wxString>& NETLIST_EXPORTER_BASE::footprintPads( const wxString& 
     {
         if( KIFACE* cvpcb = m_kiway->KiFACE( KIWAY::FACE_CVPCB ) )
         {
-            typedef void ( *PAD_NUMBERS_FN_PTR )( const wxString&, PROJECT*, std::set<wxString>& );
+            KIFACE_FOOTPRINT_PAD_NUMBERS_SERVICE::Type fetch =
+                    GetKifaceService<KIFACE_FOOTPRINT_PAD_NUMBERS_SERVICE>( cvpcb );
 
-            if( auto fetch = (PAD_NUMBERS_FN_PTR) cvpcb->IfaceOrAddress( KIFACE_FOOTPRINT_PAD_NUMBERS ) )
+            if( fetch )
                 fetch( aFootprintId, &m_schematic->Project(), pads );
         }
     }
@@ -260,7 +445,7 @@ const std::set<wxString>& NETLIST_EXPORTER_BASE::footprintPads( const wxString& 
 void NETLIST_EXPORTER_BASE::appendResolvedPins( std::vector<PIN_INFO>& aPins, const SCH_PIN* aPin,
                                                 const SCH_SHEET_PATH& aSheetPath, const wxString& aNetName )
 {
-    const wxString baseName = aPin->GetShownName();
+    const wxString& baseName = aPin->GetShownName();
 
     for( const wxString& padNum : resolvePadNumbers( aPin, aSheetPath ) )
     {
@@ -272,14 +457,6 @@ void NETLIST_EXPORTER_BASE::appendResolvedPins( std::vector<PIN_INFO>& aPins, co
 
 void NETLIST_EXPORTER_BASE::eraseDuplicatePins( std::vector<PIN_INFO>& aPins )
 {
-    // Helper to check if a net name is auto-generated rather than user-assigned.
-    // Auto-generated nets start with "unconnected-(" for NC pins or "Net-(" for unnamed nets.
-    auto isAutoGeneratedNet = []( const wxString& aNetName ) -> bool
-    {
-        return aNetName.StartsWith( wxT( "unconnected-(" ) )
-            || aNetName.StartsWith( wxT( "Net-(" ) );
-    };
-
     for( unsigned ii = 0; ii < aPins.size(); ii++ )
     {
         if( aPins[ii].num.empty() )
@@ -305,16 +482,18 @@ void NETLIST_EXPORTER_BASE::eraseDuplicatePins( std::vector<PIN_INFO>& aPins )
             // the same pad on *different* nets - must survive so it stays visible and is flagged
             // by ERC (issue #2282).  Shared multi-unit pins and jumpers carry the same source pin
             // number, so they still collapse below as before.
-            if( aPins[idxBest].netName != aPins[jj].netName && !aPins[idxBest].srcPin.IsEmpty()
-                && !aPins[jj].srcPin.IsEmpty() && aPins[idxBest].srcPin != aPins[jj].srcPin )
+            if( aPins[idxBest].netName != aPins[jj].netName
+                    && !aPins[idxBest].srcPin.IsEmpty()
+                    && !aPins[jj].srcPin.IsEmpty()
+                    && aPins[idxBest].srcPin != aPins[jj].srcPin )
             {
                 continue;
             }
 
             // Check if jj has a better (user-assigned) net than the current best.
             // Prefer user-assigned nets over auto-generated "unconnected-(" or "Net-(" nets.
-            bool bestIsAuto = isAutoGeneratedNet( aPins[idxBest].netName );
-            bool jjIsAuto = isAutoGeneratedNet( aPins[jj].netName );
+            bool bestIsAuto = IsAutoGeneratedNetName( aPins[idxBest].netName );
+            bool jjIsAuto = IsAutoGeneratedNetName( aPins[jj].netName );
 
             if( bestIsAuto && !jjIsAuto )
             {
@@ -331,43 +510,24 @@ void NETLIST_EXPORTER_BASE::eraseDuplicatePins( std::vector<PIN_INFO>& aPins )
 }
 
 
-void NETLIST_EXPORTER_BASE::findAllUnitsOfSymbol( SCH_SYMBOL* aSchSymbol,
-                                                  const SCH_SHEET_PATH& aSheetPath,
-                                                  std::vector<PIN_INFO>& aPins,
-                                                  bool aKeepUnconnectedPins )
+void NETLIST_EXPORTER_BASE::findAllUnitsOfSymbol( SCH_SYMBOL* aSchSymbol, const SCH_SHEET_PATH& aSheetPath,
+                                                  std::vector<PIN_INFO>& aPins )
 {
-    wxString ref = aSchSymbol->GetRef( &aSheetPath );
-    wxString ref2;
+    const wxString ref = aSchSymbol->GetRef( &aSheetPath );
 
-    CONNECTION_GRAPH* graph = m_schematic->ConnectionGraph();
-
-    for( const SCH_SHEET_PATH& sheet : m_schematic->Hierarchy() )
+    for( const SCH_SHEET_PATH& sheet : m_exportSheets )
     {
         for( SCH_ITEM* item : sheet.LastScreen()->Items().OfType( SCH_SYMBOL_T ) )
         {
-            SCH_SYMBOL* comp2 = static_cast<SCH_SYMBOL*>( item );
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
 
-            ref2 = comp2->GetRef( &sheet );
-
-            if( ref2.CmpNoCase( ref ) != 0 )
+            if( symbol->GetRef( &sheet ).CmpNoCase( ref ) != 0 )
                 continue;
 
-            for( const SCH_PIN* pin : comp2->GetPins( &sheet ) )
+            for( const SCH_PIN* pin : symbol->GetPins( &sheet ) )
             {
-                if( SCH_CONNECTION* conn = pin->Connection( &sheet ) )
-                {
-                    const wxString& netName = conn->Name();
-
-                    if( !aKeepUnconnectedPins )     // Skip unconnected pins if requested
-                    {
-                        CONNECTION_SUBGRAPH* sg = graph->FindSubgraphByName( netName, sheet );
-
-                        if( !sg || sg->GetNoConnect() || sg->GetItems().size() < 2 )
-                            continue;
-                    }
-
-                    appendResolvedPins( aPins, pin, sheet, netName );
-                }
+                if( const std::optional<wxString> netName = itemNetName( *pin, sheet ) )
+                    appendResolvedPins( aPins, pin, sheet, *netName );
             }
         }
     }

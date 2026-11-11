@@ -28,8 +28,8 @@
 #define CLASS_DRAWSHEET_PATH_H
 
 #include <map>
-#include <memory>
 #include <optional>
+#include <unordered_map>
 
 #include <kiid.h>
 #include <lib_id.h>
@@ -38,6 +38,7 @@
 
 class SCH_SYMBOL;
 class SCH_SHEET;
+class SCH_SHEET_LIST;
 
 enum SYMBOL_FILTER
 {
@@ -81,7 +82,7 @@ public:
  * Schematic symbol variants are a set of field and/or properties differentials against the default symbol
  * values.  Each symbol instance may contain 0 or more variants.
  *
- * @note The #REFERENCE field is immutable across variants. Changing it would effectively be a new board.
+ * @note The #FIELD_T::REFERENCE field is immutable across variants. Changing it would effectively be a new board.
  */
 class SCH_SYMBOL_VARIANT : public VARIANT
 {
@@ -125,11 +126,14 @@ struct SCH_SYMBOL_INSTANCE
     // The project name associated with this instance.
     wxString  m_ProjectName;
 
-    bool m_DNP = false;
-    bool m_ExcludedFromBOM = false;
-    bool m_ExcludedFromSim = false;
-    bool m_ExcludedFromBoard = false;
-    bool m_ExcludedFromPosFiles = false;
+    bool      m_DNP = false;
+    bool      m_ExcludedFromBOM = false;
+    bool      m_ExcludedFromSim = false;
+    bool      m_ExcludedFromBoard = false;
+    bool      m_ExcludedFromPosFiles = false;
+
+    /// Set at load when the saved reference lacked its sheet suffix, cleared when the reference changes.
+    bool      m_RefLacksSuffix = false;
 
     /// A list of symbol variants.
     std::map<wxString, SCH_SYMBOL_VARIANT> m_Variants;
@@ -142,9 +146,9 @@ struct SCH_SYMBOL_INSTANCE
  * Schematic sheet variants are a set of field and/or properties differentials against the default sheet
  * values.  Each sheet instance may contain 0 or more variants.
  *
- * @note The exceptions to this are the #SHEET_NAME and #SHEET_FILENAME fields and the #SCH_SHEET::m_excludeFromBoard
- *       property.  Changing any of these would effectively be a new board.  They are immutable and will always be
- *       the sheet default value.
+ * @note The exceptions to this are the #FIELD_T::SHEET_NAME and #FIELD_T::SHEET_FILENAME fields and the
+ *       #SCH_SHEET::m_excludedFromBoard property.  Changing any of these would effectively be a new board.
+ *       They are immutable and will always be the sheet default value.
  */
 class SCH_SHEET_VARIANT : public VARIANT
 {
@@ -186,36 +190,41 @@ struct SCH_SHEET_INSTANCE
 
 
 /**
- * @defgroup hierarchical_schematics Hierarchical Schematics
+ * @page understand_hierarchical_schematics Understanding Hierarchical Schematics
  *
  * KiCad supports nesting schematics hierarchically to simplify the creation of complex
- * schematics designs.  A hierarchical schematic uses hierarchical sheets (#SCH_SHEET objects)
- * to reference a given schematic file (#SCH_SCREEN objects).  Each #SCH_SHEET corresponds to
- * a schematic file handled by a #SCH_SCREEN object.  A #SCH_SCREEN object contains schematic
- * drawings and has a filename to read/write its data.
+ * designs.  A hierarchical schematic uses hierarchical sheets (#SCH_SHEET objects)
+ * to reference a given schematic file (#SCH_SCREEN objects).  Each #SCH_SHEET corresponds
+ * to a schematic file handled by a #SCH_SCREEN object.  A #SCH_SCREEN object contains
+ * schematic drawings and has a filename to read/write its data.  It is imperative for
+ * developers to understand how hierarchies work in order to effectively understand the
+ * schematic editor code.
  *
- * In simple hierarchies one #SCH_SHEET object is linked to one #SCH_SCREEN object.
+ * There are two fundamental type of hierarchies in KiCad, simple and complex.
  *
- * In complex hierarchies the a #SCH_SCREEN object shared by more than one #SCH_SHEET object.
- * Therefore all sub-sheets can also be shared. So the same #SCH_SCREEN must handle different
- * symbol references and unit selections depending on which sheet is currently selected, and
- * how a given subsheet is selected. #SCH_SHEET objects share the same #SCH_SCREEN object if
- * they have the same schematic file.
+ * A simple hierarchy is where one #SCH_SHEET object is linked to exactly one #SCH_SCREEN object.
  *
- * In KiCad each #SCH_SYMBOL and #SCH_SHEET receives a UUID when created.  These UUIDs are
- * chained together to form #SCH_SHEET_PATH objects that allow access of instance data in the
- * hierarchy.  The sheet paths have the form /ROOT_SHEET_UUID/SHEET_UUID/SUB_SHEET_UUID/...
+ * A complex hierarchy is where a #SCH_SCREEN object shared by more than one #SCH_SHEET object.
+ * Therefore all sub-sheets of a shared sheet are by definition also be shared. This means that
+ * that items contained in the #SCH_SCREEN object must handle data for more than a single sheet.
+ *
+ * This is where #SCH_SHEET_PATH objects are involved.  Each #SCH_SHEET object is assigned a
+ * UUID (#KIID object) when created.  These UUIDs are chained together to form a #SCH_SHEET_PATH
+ * object that allows access of #SCH_ITEM object instance data stored. Sheet paths have the form
+ * /ROOT_SHEET_UUID/SHEET_UUID/SUB_SHEET_UUID/... Sheet paths are store in the #SCH_ITEM where
+ * they are require to access the items instance data.  For example, symbol reference field
+ * and unit selection instance data are stored in the #SCH_SYMBOL object.  The sheet page
+ * number instance data is stored in the #SCH_SHEET object.
  *
  * For a given #SCH_SCREEN #SCH_SHEET_PATH objects must:
- *   1) Handle all #SCH_SYMBOL references and unit instance data.
- *   2) Handle all #SCH_SHEET page number instance data.
- *   2) Update the currently displayed sheet #SCH_SYMBOL references and #SCH_SHEET page numbers.
+ *   1) Handle all #SCH_SYMBOL references, unit, and variant instance data.
+ *   2) Handle all #SCH_SHEET page number and variant instance data.
+ *   3) Update the currently displayed #SCH_SYMBOL references, #SCH_SHEET page numbers, and
+ *      variant data shown in the current #SCH_SCREEN.
  *
- * The class #SCH_SHEET_PATH handles paths used to access a sheet.  The class #SCH_SHEET_LIST
- * allows one to handle the full (or partial) list of sheets and their paths in a complex
- * hierarchy.  The class #SCH_SCREENS allows one to handle a list of #SCH_SCREEN objects. It is
- * useful to clear or save data, but is not suitable to handle the full complex hierarchy
- * possibilities (usable in flat and simple hierarchies).
+ * The #SCH_SHEET_LIST object allows handling of the full or partial list of sheets and their
+ * paths in a hierarchy.  The #SCH_SCREENS object allows one to handle a list of #SCH_SCREEN
+ * objects.
  */
 
 
@@ -344,8 +353,8 @@ public:
      */
     int Cmp( const SCH_SHEET_PATH& aSheetPathToTest ) const;
 
-    void CachePageNumber() const { m_cached_page_number = GetPageNumber(); }
-    wxString GetCachedPageNumber() const { return m_cached_page_number; }
+    void            CachePageNumber() const { m_cached_page_number = GetPageNumber(); }
+    const wxString& GetCachedPageNumber() const { return m_cached_page_number; }
 
     /**
      * Compare sheets by their page number. If the actual page number is equal, use virtual page
@@ -377,8 +386,7 @@ public:
      */
     SCH_SCREEN* LastScreen();
 
-
-    ///< @copydoc SCH_SHEET_PATH::LastScreen()
+    /// @copydoc SCH_SHEET_PATH::LastScreen()
     SCH_SCREEN* LastScreen() const;
 
     bool GetExcludedFromSim() const;
@@ -413,6 +421,9 @@ public:
      */
     KIID_PATH Path() const;
 
+    /** Borrow the cached path until this sheet path is modified or destroyed. */
+    const KIID_PATH& PathRef() const { return m_path; }
+
     /**
      * Return the sheet path in a human readable form made from the sheet names.
      *
@@ -431,6 +442,14 @@ public:
     wxString PathHumanReadable( bool aUseShortRootName = true,
                                 bool aStripTrailingSeparator = false,
                                 bool aEscapeSheetNames = false ) const;
+
+    /**
+     * Compose the reference suffixes of every sheet in this path, from the root down.
+     *
+     * Resolves text variables, so call it on the main thread.  Readers on other threads use
+     * SCHEMATIC::GetRefSuffix(), which returns the value cached by SCHEMATIC::RefreshHierarchy().
+     */
+    wxString ComposeRefSuffix() const;
 
     /**
      * Update all the symbol references for this sheet path.
@@ -535,9 +554,11 @@ public:
      * @param aPrefixSheetPath is the sheet path to prefix to this sheet path for the new symbol
      *        instance.
      * @param aProjectName is the name of the project for the new symbol instance data.
+     * @param aSourceSheets are the loaded sheets whose suffixes the copied references carry, or
+     *        nullptr when the copies are bases already.
      */
-    void AddNewSymbolInstances( const SCH_SHEET_PATH& aPrefixSheetPath,
-                                const wxString& aProjectName );
+    void AddNewSymbolInstances( const SCH_SHEET_PATH& aPrefixSheetPath, const wxString& aProjectName,
+                                const SCH_SHEET_LIST* aSourceSheets = nullptr );
 
     void RemoveSymbolInstances( const SCH_SHEET_PATH& aPrefixSheetPath );
 
@@ -645,17 +666,7 @@ public:
     /**
      * Fill an item cache for temporary use when many items need to be fetched.
      */
-    void FillItemMap( std::map<KIID, EDA_ITEM*>& aMap );
-
-    /**
-     * Silently annotate the not yet annotated power symbols of the entire hierarchy of the
-     * sheet path list.
-     *
-     * It is called before creating a netlist, to annotate power symbols, without prompting
-     * the user about not annotated or duplicate for these symbols, if only these symbols
-     * need annotation ( a very frequent case ).
-     */
-    void AnnotatePowerSymbols();
+    void FillItemMap( std::unordered_map<KIID, EDA_ITEM*>& aMap ) const;
 
     /**
      * Add a #SCH_REFERENCE object to \a aReferences for each symbol in the list of sheets.
@@ -688,7 +699,7 @@ public:
      * Add a #SCH_SHEET_PATH object to \a aSheets for each sheet in the list that are
      * contained within \a aSheetPath as well as recursively downwards inside aSheetPath.
      *
-     * @param aReferences List of sheets to populate.
+     * @param aSheets List of sheets to populate.
      * @param aSheetPath Path to return sheets from
      */
     void GetSheetsWithinPath( std::vector<SCH_SHEET_PATH>& aSheets,
@@ -698,7 +709,8 @@ public:
     /**
      * Finds a SCH_SHEET_PATH that matches the provided KIID_PATH.
      *
-     * @param aPath The KIID_PATH to search for.
+     * @param aPath The #KIID_PATH to search for.
+     * @param aIncludeLastSheet includes the last sheet in path for comparison.
      */
     std::optional<SCH_SHEET_PATH> GetSheetPathByKIIDPath( const KIID_PATH& aPath,
                                                           bool aIncludeLastSheet = true ) const;
@@ -748,13 +760,15 @@ public:
      *
      * If \a aSheet is the root sheet, the full sheet path and sheet list are built.
      *
-     * The list will be ordered as per #SCH_SCREEN::BuildSheetList which results in sheets
+     * The list will be ordered as per #SCH_SHEET_LIST::BuildSheetList which results in sheets
      * being ordered in the legacy way of using the X and Y positions of the sheets.
      *
      * @see #SortByPageNumbers to sort by page numbers
      *
      * @param aSheet is the starting sheet from which the list is built, or NULL
      *               indicating that g_RootSheet should be used.
+     * @param aCheckIntegrity
+     *
      * @throw std::bad_alloc if the memory for the sheet path list could not be allocated.
      */
     void BuildSheetList( SCH_SHEET* aSheet, bool aCheckIntegrity );
@@ -807,7 +821,7 @@ public:
      *
      * @warning Do not call this on anything other than the full hierarchy.
      *
-     * @param aSymbolInstances is the symbol path information loaded from the root schematic.
+     * @param aSheetInstances is the sheet path information loaded from the root schematic.
      */
     void UpdateSheetInstanceData( const std::vector<SCH_SHEET_INSTANCE>& aSheetInstances );
 
@@ -856,9 +870,18 @@ public:
      *
      * @param aPrefixSheetPath is the sheet path to append the new symbol instances to.
      * @param aProjectName is the name of the project for the new symbol instance data.
+     * @param aStripRefSuffixes strips the suffix another project composed into a copied reference.
      */
-    void AddNewSymbolInstances( const SCH_SHEET_PATH& aPrefixSheetPath,
-                                const wxString& aProjectName );
+    void AddNewSymbolInstances( const SCH_SHEET_PATH& aPrefixSheetPath, const wxString& aProjectName,
+                                bool aStripRefSuffixes = false );
+
+    /**
+     * Return the suffix the source project composed into the instance of \a aSymbol at
+     * \a aInstancePath, which this list holds as loaded from that project's file.
+     *
+     * Ancestors above the loaded root are not in the file, so their part of the suffix is unknown.
+     */
+    wxString SourceRefSuffix( const SCH_SYMBOL& aSymbol, const KIID_PATH& aInstancePath ) const;
 
     void AddNewSheetInstances( const SCH_SHEET_PATH& aPrefixSheetPath,
                                int aLastVirtualPageNumber );
@@ -868,6 +891,30 @@ public:
     void RemoveSymbolInstances( const SCH_SHEET_PATH& aPrefixSheetPath );
 
     void CheckForMissingSymbolInstances( const wxString& aProjectName );
+
+    /**
+     * Recover the base references from the composed references a file stores.
+     *
+     * Run once after loading a project, before CheckForMissingSymbolInstances() copies references
+     * to new paths. A unit whose package an older version stored with another sheet's suffix loses
+     * that suffix; any other reference that lacks its path's suffix is kept whole.
+     */
+    void StripRefSuffixes();
+
+    /**
+     * Give a unit loaded by StripRefSuffixes() the base of a package in another top level sheet.
+     *
+     * Each top level sheet strips its references as it loads, before the others exist, so a unit
+     * of a package owned elsewhere keeps its whole reference or loses only its own suffix.
+     */
+    void RecoverPackageRefs();
+
+    /**
+     * Give every other instance of \a aSymbol's sheet the base reference and unit it has on \a aSource.
+     *
+     * @return the number of instances updated.
+     */
+    int ShareReusedSheetRef( SCH_SYMBOL* aSymbol, const SCH_SHEET_PATH& aSource ) const;
 
     bool HasPath( const KIID_PATH& aPath ) const;
 

@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <tool/arc_draw_mode.h>
 #include <tool/tool_action.h>
 #include <tool/actions.h>
 
@@ -27,6 +28,15 @@ class DESIGN_BLOCK;
 class SCH_SYMBOL;
 class TOOL_EVENT;
 class TOOL_MANAGER;
+
+
+// These are macros so that it will re-resolve if the language is changed
+#define NO_PIN_FUNCTIONS_WITH_MULTIPLE_BODY_STYLES \
+    _( "Alternate pin functions are not available on symbols with multiple body styles." )
+
+#define NO_BODY_STYLES_WITH_ALTERNATE_PIN_FUNCTIONS \
+    _( "Multiple body styles are not supported on symbols with alternate pin functions." )
+
 
 /**
  * Gather all the actions that are shared by tools. The instance of SCH_ACTIONS is created
@@ -93,10 +103,19 @@ public:
     static TOOL_ACTION drawEllipse;
     static TOOL_ACTION drawEllipseArc;
     static TOOL_ACTION drawArc;
+    static TOOL_ACTION drawArcCenter;
+    static TOOL_ACTION drawArcStartEndMid;
+    static TOOL_ACTION drawArcStartEndCenter;
+    static TOOL_ACTION drawArcTangent;
+    static TOOL_ACTION drawArcStartDirEnd;
+
+    /// Tool action that starts the arc tool in the given mode.
+    static const TOOL_ACTION& DrawArcForMode( ARC_DRAW_MODE aMode );
     static TOOL_ACTION drawBezier;
     static TOOL_ACTION drawPolygon;
     static TOOL_ACTION drawLines;
     static TOOL_ACTION placeImage;
+    static TOOL_ACTION        convertImageToOutlines;
     static TOOL_ACTION undoLastSegment;
     static TOOL_ACTION switchSegmentPosture;
     static TOOL_ACTION drawRuleArea;
@@ -221,6 +240,8 @@ public:
 
     // Library management
     static TOOL_ACTION saveLibraryAs;
+    static TOOL_ACTION saveLibraryAsPacked;
+    static TOOL_ACTION saveLibraryAsUnpacked;
     static TOOL_ACTION compareLibraryWithFile;
     static TOOL_ACTION saveSymbolAs;
     static TOOL_ACTION saveSymbolCopyAs;
@@ -356,19 +377,22 @@ public:
 
     struct PLACE_SYMBOL_PARAMS
     {
-        ///< Provide a symbol to place
+        /// Provide a symbol to place
         SCH_SYMBOL* m_Symbol = nullptr;
-        ///< If a symbol is provide, reannotate it?
+
+        /// If a symbol is provide, reannotate it?
         bool m_Reannotate = true;
-        ///< For a preselected multi-unit symbol, keep placing remaining units instead of exiting
+
+        /// For a preselected multi-unit symbol, keep placing remaining units instead of exiting
         bool m_PlaceAllUnits = false;
     };
 
     struct PLACE_SYMBOL_UNIT_PARAMS
     {
-        ///< Symbol used as reference for unit placement
+        /// Symbol used as reference for unit placement
         SCH_SYMBOL* m_Symbol = nullptr;
-        ///< Unit number to place; 0 means next available unit
+
+        /// Unit number to place; 0 means next available unit
         int m_Unit = 0;
     };
 };

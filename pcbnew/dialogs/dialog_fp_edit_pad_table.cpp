@@ -23,6 +23,7 @@
 #include <wx/dcclient.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
+#include <wx/settings.h>
 
 #include <column_formatter.h>
 #include <pcb_shape.h>
@@ -41,6 +42,7 @@
 #include <kiplatform/ui.h>
 #include <pin_numbers.h>
 #include <board_commit.h>
+#include <pad_utils.h>
 #include <reporter.h>
 #include <table_io.h>
 #include <wildcards_and_files_ext.h>
@@ -86,23 +88,20 @@ static wxString GetPadTypeString( const PAD& aPad )
         return _( "Aperture" );
 
     const PAD_ATTRIB attrib = aPad.GetAttribute();
-
-    switch( attrib )
-    {
-    case PAD_ATTRIB::PTH:  return _( "Through-hole" );
-    case PAD_ATTRIB::SMD:  return _( "SMD" );
-    case PAD_ATTRIB::CONN: return _( "Connector" );
-    case PAD_ATTRIB::NPTH: return _( "NPTH" );
-    // No default - handle all cases
-    }
-
-    return wxEmptyString;
+    return PAD_UTILS::GetPadAttributeString( attrib );
 }
 
 
 static void SetPadTypeFromString( PAD& aPad, const wxString& aType )
 {
-    const PAD_ATTRIB oldAttrib = aPad.GetAttribute();
+    // Heuristic for detecting pads that look like they mean to be
+    // back-only pads.
+    const auto isBackOnlyPad =
+            []( const PAD& pad ) -> bool
+            {
+                const LSET layers = pad.GetLayerSet();
+                return ( layers & LSET::BackMask() ).any() && ( layers & LSET::FrontMask() ).none();
+            };
 
     if( MatchTranslationOrNative( aType, _HKI( "Through-hole" ), false ) )
     {
@@ -110,15 +109,39 @@ static void SetPadTypeFromString( PAD& aPad, const wxString& aType )
     }
     else if( MatchTranslationOrNative( aType, _HKI( "SMD" ), false ) )
     {
-        if( oldAttrib != PAD_ATTRIB::SMD )
+        // If the pad was already SMD, don't mess with the layers, but if it
+        // is _becoming_ SMD (including if it was an aperture pad), set
+        // default layerset
+        if( aPad.GetAttribute() != PAD_ATTRIB::SMD || aPad.IsAperturePad() )
         {
-            aPad.SetAttribute( PAD_ATTRIB::SMD );
-            aPad.SetLayerSet( LSET{ F_Cu } );
+            LSET newLayers = PAD::SMDMask();
+
+            if( isBackOnlyPad( aPad ) )
+                newLayers = newLayers.FlipStandardLayers();
+
+            aPad.SetLayerSet( newLayers );
         }
+
+        aPad.SetAttribute( PAD_ATTRIB::SMD );
     }
     else if( MatchTranslationOrNative( aType, _HKI( "Connector" ), false ) )
     {
         aPad.SetAttribute( PAD_ATTRIB::CONN );
+    }
+    else if( MatchTranslationOrNative( aType, _HKI( "Non-component" ), false ) )
+    {
+        if( aPad.GetAttribute() != PAD_ATTRIB::NON_COMPONENT )
+        {
+            // Take the first set copper layer as the default for non-component pads.
+            const LSET currCu = aPad.GetLayerSet() & LSET::AllCuMask();
+
+            if( !currCu.any() )
+                aPad.SetLayerSet( LSET{ F_Cu } );
+            else
+                aPad.SetLayerSet( LSET{ currCu.CuStack().front() } );
+
+            aPad.SetAttribute( PAD_ATTRIB::NON_COMPONENT );
+        }
     }
     else if( MatchTranslationOrNative( aType, _HKI( "NPTH" ), false ) )
     {
@@ -133,12 +156,55 @@ static void SetPadTypeFromString( PAD& aPad, const wxString& aType )
 
             // Unset layers except F.Paste
             LSET apertureLayers{ F_Paste };
+
+            if( isBackOnlyPad( aPad ) )
+                apertureLayers = apertureLayers.FlipStandardLayers();
+
             aPad.SetLayerSet( apertureLayers );
         }
     }
 
     // Note, bad strings can sneak in here, e.g. via pasting into a dropdown cell.
     // So don't assert or crash, it's not necessarily a programming error.
+}
+
+
+static bool DrillsAreEditable( const PAD& aPad )
+{
+    return aPad.GetAttribute() == PAD_ATTRIB::PTH || aPad.GetAttribute() == PAD_ATTRIB::NPTH;
+}
+
+
+/**
+ * Update the drill size cells in the pad table for a given pad.
+ *
+ * @param aGrid
+ * @param aUnitsProvider
+ * @param aRowId
+ * @param aPad
+ * @param aPreserveValues if true, do not overwrite the cell values, just update
+ *        their read-only state and text color.
+ */
+static void UpdateDrillCells( WX_GRID& aGrid, UNITS_PROVIDER& aUnitsProvider, int aRowId, const PAD& aPad,
+                              bool aPreserveValues )
+{
+    const bool     drillIsEditable = DrillsAreEditable( aPad );
+    const wxColour drillTextColour = drillIsEditable ? aGrid.GetDefaultCellTextColour()
+                                                     : wxSystemSettings::GetColour( wxSYS_COLOUR_GRAYTEXT );
+
+    aGrid.SetReadOnly( aRowId, COLS::COL_DRILL_X, !drillIsEditable );
+    aGrid.SetReadOnly( aRowId, COLS::COL_DRILL_Y, !drillIsEditable );
+    aGrid.SetCellTextColour( aRowId, COLS::COL_DRILL_X, drillTextColour );
+    aGrid.SetCellTextColour( aRowId, COLS::COL_DRILL_Y, drillTextColour );
+
+    if( aPreserveValues )
+        return;
+
+    const VECTOR2I drill = aPad.GetDrillSize();
+    aGrid.SetCellValue( aRowId, COLS::COL_DRILL_X, drill.x > 0 ? aUnitsProvider.StringFromValue( drill.x, true )
+                                                               : wxString{} );
+    aGrid.SetCellValue( aRowId, COLS::COL_DRILL_Y, drill.y > 0 ? aUnitsProvider.StringFromValue( drill.y, true )
+                                                               : wxString{} );
 }
 
 
@@ -272,6 +338,8 @@ public:
             break;
 
         case DIALOG_FP_EDIT_PAD_TABLE::COL_SHAPE:
+            // Note that this will blow away any layer-specific shapes, but this process
+            // doesn't support layer-specific editing.
             aPad.Padstack().ForEachUniqueLayer(
                     [&]( PCB_LAYER_ID aLayer )
                     {
@@ -296,6 +364,7 @@ public:
         }
 
         case DIALOG_FP_EDIT_PAD_TABLE::COL_SIZE_X:
+            // Same as shape: overwrite all layers
             aPad.Padstack().ForEachUniqueLayer(
                     [&]( PCB_LAYER_ID aLayer )
                     {
@@ -306,6 +375,7 @@ public:
             break;
 
         case DIALOG_FP_EDIT_PAD_TABLE::COL_SIZE_Y:
+            // Same as shape: overwrite all layers
             aPad.Padstack().ForEachUniqueLayer(
                     [&]( PCB_LAYER_ID aLayer )
                     {
@@ -386,11 +456,12 @@ DIALOG_FP_EDIT_PAD_TABLE::DIALOG_FP_EDIT_PAD_TABLE( PCB_BASE_FRAME* aParent, FOO
     // Type column editor (attribute)
     attr = new wxGridCellAttr;
     wxArrayString typeNames;
-    typeNames.push_back( _( "Through-hole" ) ); // PTH
-    typeNames.push_back( _( "SMD" ) );          // SMD
-    typeNames.push_back( _( "Connector" ) );    // CONN SMD? (use CONN?)
-    typeNames.push_back( _( "NPTH" ) );         // NPTH
-    typeNames.push_back( _( "Aperture" ) );     // inferred copper-less
+    typeNames.push_back( _( "Through-hole" ) );  // PTH
+    typeNames.push_back( _( "SMD" ) );           // SMD
+    typeNames.push_back( _( "Connector" ) );     // CONN SMD? (use CONN?)
+    typeNames.push_back( _( "NPTH" ) );          // NPTH
+    typeNames.push_back( _( "Non-component" ) ); // NON_COMPONENT
+    typeNames.push_back( _( "Aperture" ) );      // inferred copper-less
     attr->SetEditor( new GRID_CELL_COMBOBOX( typeNames ) );
     m_grid->SetColAttr( COL_TYPE, attr );
 
@@ -532,30 +603,18 @@ void DIALOG_FP_EDIT_PAD_TABLE::fillGridRow( int aRowId, PAD* aPad )
     m_grid->SetCellValue( aRowId, COL_SIZE_Y, size_y >= 0 ? m_unitsProvider->StringFromValue( size_y, true )
                                                           : INDETERMINATE_STATE );
 
-    // Drill values (only meaningful for PTH or NPTH). Leave empty otherwise.
-    if( aPad->GetAttribute() == PAD_ATTRIB::PTH || aPad->GetAttribute() == PAD_ATTRIB::NPTH )
-    {
-        VECTOR2I drill = aPad->GetDrillSize();
-
-        if( drill.x > 0 )
-            m_grid->SetCellValue( aRowId, COL_DRILL_X, m_unitsProvider->StringFromValue( drill.x, true ) );
-
-        if( drill.y > 0 )
-            m_grid->SetCellValue( aRowId, COL_DRILL_Y, m_unitsProvider->StringFromValue( drill.y, true ) );
-    }
-    else
-    {
-        // For non-PTH pads, drill columns are not applicable.
-        m_grid->SetReadOnly( aRowId, COL_DRILL_X, true );
-        m_grid->SetReadOnly( aRowId, COL_DRILL_Y, true );
-    }
+    UpdateDrillCells( *m_grid, *m_unitsProvider, aRowId, *aPad, false );
 
     // Pad to die metrics
     if( aPad->GetPadToDieLength() )
         m_grid->SetUnitValue( aRowId, COL_P2D_LENGTH, aPad->GetPadToDieLength() );
+    else
+        m_grid->SetCellValue( aRowId, COL_P2D_LENGTH, wxEmptyString );
 
     if( aPad->GetPadToDieDelay() )
         m_grid->SetUnitValue( aRowId, COL_P2D_DELAY, aPad->GetPadToDieDelay() );
+    else
+        m_grid->SetCellValue( aRowId, COL_P2D_DELAY, wxEmptyString );
 
     setRowNullableEditors( aRowId );
 }
@@ -852,7 +911,7 @@ void DIALOG_FP_EDIT_PAD_TABLE::setPadFromGridCell( PAD& aPad, int aRowId, COLS a
     case COL_DRILL_Y:
     {
         // Drill sizes (only if attribute allows)
-        if( aPad.GetAttribute() == PAD_ATTRIB::PTH || aPad.GetAttribute() == PAD_ATTRIB::NPTH )
+        if( DrillsAreEditable( aPad ) )
         {
             int drillX = m_grid->GetUnitValue( aRowId, COL_DRILL_X );
             int drillY = m_grid->GetUnitValue( aRowId, COL_DRILL_Y );
@@ -1083,17 +1142,37 @@ void DIALOG_FP_EDIT_PAD_TABLE::OnCellChanged( wxGridEvent& aEvent )
     if( !target )
         return;
 
-    bool needCanvasRefresh = true;
+    const bool drillsWereEditable = DrillsAreEditable( *target );
+    bool       needCanvasRefresh = true;
 
     setPadFromGridCell( *target, row, static_cast<COLS>( col ) );
 
     if( col == COL_TYPE )
     {
-        // Toggle drill columns read-only state dynamically.
-        const bool drillsEditable = ( target->GetAttribute() == PAD_ATTRIB::PTH
-                                    || target->GetAttribute() == PAD_ATTRIB::NPTH );
-        m_grid->SetReadOnly( row, COL_DRILL_X, !drillsEditable );
-        m_grid->SetReadOnly( row, COL_DRILL_Y, !drillsEditable );
+        const bool drillsAreEditable = DrillsAreEditable( *target );
+
+        if( drillsAreEditable )
+        {
+            // PAD::SetAttribute() removes drills for SMD pads. So if we roundtrip
+            // from PTH -> SMD -> PTH, the drill size is lost. In that case, restore
+            // from the "ghost" value in the grid if there is one.
+            const int drillX = m_grid->GetUnitValue( row, COL_DRILL_X );
+            const int drillY = m_grid->GetUnitValue( row, COL_DRILL_Y );
+
+            if( drillX > 0 || drillY > 0 )
+            {
+                setPadFromGridCell( *target, row, COL_DRILL_X );
+            }
+            else if( !drillsWereEditable )
+            {
+                // Use a default drill size the pad is becoming editable
+                // And there was no "ghost" value in the grid to restore from.
+                const int defaultDrill = pcbIUScale.mmToIU( 1.0 );
+                target->SetDrillSize( { defaultDrill, defaultDrill } );
+            }
+        }
+
+        UpdateDrillCells( *m_grid, *m_unitsProvider, row, *target, !drillsAreEditable );
     }
     else if( col == COL_P2D_LENGTH || col == COL_P2D_DELAY )
     {
@@ -1112,7 +1191,10 @@ void DIALOG_FP_EDIT_PAD_TABLE::OnCellChanged( wxGridEvent& aEvent )
         if( PCB_BASE_FRAME* base = dynamic_cast<PCB_BASE_FRAME*>( GetParent() ) )
         {
             if( KIGFX::PCB_VIEW* view = base->GetCanvas()->GetView() )
-                view->Update( target, KIGFX::REPAINT );
+            {
+                // Some changes, e.g. type change, can change the layers
+                view->Update( target, KIGFX::REPAINT | KIGFX::LAYERS );
+            }
 
             base->GetCanvas()->ForceRefresh();
         }
@@ -1429,8 +1511,9 @@ void DIALOG_FP_EDIT_PAD_TABLE::OnImportButtonClick( wxCommandEvent& aEvent )
             // so the canvas refresh below shows the imported values.
             padToUpdate->SetDirty();
 
+            // Type changes can change the pad's layers
             if( view )
-                view->Update( padToUpdate, KIGFX::REPAINT );
+                view->Update( padToUpdate, KIGFX::REPAINT | KIGFX::LAYERS );
 
             if( newPad )
                 createdPads.push_back( std::move( newPad ) );
@@ -1514,31 +1597,29 @@ void DIALOG_FP_EDIT_PAD_TABLE::OnAddRow( wxCommandEvent& aEvent )
     m_grid->OnAddRow(
             [&]() -> std::pair<int, int>
             {
-                std::unique_ptr<PAD> newPad;
+                PAD* newPad = nullptr;
 
-                // Copy the settings of the last pad onto the new pad and offset
-                // its position by the current grid so the copy is easy to find.
+                // Copy the settings of the last pad onto the new pad and offset its position
+                // by the current grid so the copy is easy to find.
                 if( !m_rowPads.empty() )
                 {
-                    PAD* last = m_rowPads.back();
-                    newPad = std::make_unique<PAD>( *last );
+                    newPad = static_cast<PAD*>( m_rowPads.back()->Duplicate( false, nullptr ) );
+                    newPad->Move( VECTOR2I( 0, KiROUND( canvas->GetGAL()->GetGridSize().y ) ) );
                 }
                 else
                 {
-                    newPad = std::make_unique<PAD>( m_footprint );
+                    newPad = new PAD( m_footprint );
                 }
 
-                PAD* pad = newPad.get();
-
                 if( view )
-                    view->Add( pad );
+                    view->Add( newPad );
 
-                m_rowPads.push_back( pad );
-                m_footprint->Add( newPad.release() );
+                m_rowPads.push_back( newPad );
+                m_footprint->Add( newPad );
 
                 int row = m_grid->GetNumberRows();
                 m_grid->AppendRows( 1 );
-                fillGridRow( row, pad );
+                fillGridRow( row, newPad );
                 updateSummary();
 
                 if( canvas )

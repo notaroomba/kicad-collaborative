@@ -184,12 +184,12 @@ public:
     WIRE_STYLE GetWireStyle() const { return (WIRE_STYLE) GetLineStyle(); }
 
 
-    void SetLineColor( const COLOR4D& aColor );
+    void SetLineColor( const KIGFX::COLOR4D& aColor );
 
     void SetLineColor( const double r, const double g, const double b, const double a );
 
     /// Return #COLOR4D::UNSPECIFIED if a custom color hasn't been set for this line.
-    COLOR4D GetLineColor() const;
+    KIGFX::COLOR4D GetLineColor() const;
 
     void SetLineWidth( const int aSize );
     int GetLineWidth() const { return m_stroke.GetWidth(); }
@@ -287,6 +287,7 @@ public:
      * @note It is the responsibility of the caller to add the newly created segment
      * to the screen.
      *
+     * @param aCommit is the #SCH_COMMIT object to handle undo/redo actions.
      * @param aPoint Point at which to break the segment
      * @return The newly created segment.
      */
@@ -323,6 +324,12 @@ public:
     bool UpdateDanglingState( std::vector<DANGLING_END_ITEM>& aItemListByType,
                               std::vector<DANGLING_END_ITEM>& aItemListByPos,
                               const SCH_SHEET_PATH*           aPath = nullptr ) override;
+
+    void SetDanglingState( bool aStart, bool aEnd )
+    {
+        m_startIsDangling = aStart;
+        m_endIsDangling = aEnd;
+    }
 
     bool IsStartDangling() const { return m_startIsDangling; }
     bool IsEndDangling() const { return m_endIsDangling; }
@@ -421,7 +428,7 @@ private:
     // linestyles, linewidths and colors.
     mutable LINE_STYLE m_lastResolvedLineStyle;
     mutable int        m_lastResolvedWidth;
-    mutable COLOR4D    m_lastResolvedColor;
+    mutable KIGFX::COLOR4D    m_lastResolvedColor;
 
     wxString           m_operatingPoint;
 };

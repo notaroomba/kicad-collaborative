@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/25112
+// Fields-table regressions, including https://gitlab.com/kicad/code/kicad/-/issues/25112.
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
@@ -25,11 +25,16 @@
 #include <set>
 
 #include <eeschema_helpers.h>
+#include <lib_fields_data_model.h>
+#include <lib_symbol.h>
 #include <symbol_fields_data_model.h>
 #include <locale_io.h>
+#include <richio.h>
 #include <sch_commit.h>
 #include <sch_field.h>
+#include <sch_io/kicad_sexpr/sch_io_kicad_sexpr.h>
 #include <sch_reference_list.h>
+#include <sch_sheet.h>
 #include <sch_sheet_path.h>
 #include <sch_symbol.h>
 #include <schematic.h>
@@ -127,13 +132,13 @@ struct ISSUE25112_FIXTURE
         return model;
     }
 
-    void Apply( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL& aModel, const wxString& aVariantName )
+    void Apply( SYMBOL_FIELDS_EDITOR_GRID_DATA_MODEL& aModel )
     {
         TOOL_MANAGER toolMgr;
         SCH_COMMIT   commit( &toolMgr );
         TEMPLATES    templates;
 
-        aModel.ApplyData( commit, templates, aVariantName );
+        aModel.ApplyData( commit, templates );
     }
 
     LOCALE_IO                  m_locale;
@@ -155,7 +160,7 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedFieldEditSurvivesApply, ISSUE25112_FIXTURE )
     const wxString newFootprint = wxS( "Resistor_SMD:R_0603_1608Metric" );
 
     model->SetValue( m_row, m_col, newFootprint );
-    Apply( *model, wxEmptyString );
+    Apply( *model );
 
     BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText(), newFootprint );
 }
@@ -182,7 +187,7 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedFieldClearCanBeReverted, ISSUE25112_FIXTURE 
     BOOST_CHECK( !model->IsCellClear( m_row, m_col ) );
     BOOST_CHECK( !model->IsEdited() );
 
-    Apply( *model, wxEmptyString );
+    Apply( *model );
 
     const SCH_FIELD* appliedField = m_symbol->GetField( fieldName );
     BOOST_REQUIRE( appliedField );
@@ -268,11 +273,54 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedVariantEditStaysOnItsPath, ISSUE25112_FIXTUR
     BOOST_REQUIRE( baseFootprint != newFootprint );
 
     model->SetValue( m_row, m_col, newFootprint );
-    Apply( *model, variant );
+    Apply( *model );
 
     BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText( &m_scopePath, variant ), newFootprint );
     BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText( &m_siblingPath, variant ), baseFootprint );
     BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText(), baseFootprint );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( CopyVariantToDefaultReachesHiddenSharedSheetPaths, ISSUE25112_FIXTURE )
+{
+    const wxString fieldName = GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED );
+    const wxString copied = wxS( "Resistor_SMD:R_0603_1608Metric" );
+    auto           model = MakeScopedModel( wxS( "A" ), fieldName );
+    model->SetValue( m_row, m_col, copied );
+    model->SetCurrentVariant( wxEmptyString );
+    model->CopyCellFromVariant( m_row, m_col, wxS( "A" ) );
+
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), copied );
+    BOOST_CHECK( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText() != copied );
+    Apply( *model );
+    BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText(), copied );
+    BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::FOOTPRINT )->GetText( &m_siblingPath ), copied );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( CopyUsesSourceVariantsInheritedAttributes, ISSUE25112_FIXTURE )
+{
+    auto           model = MakeScopedModel( wxEmptyString, wxS( "${DNP}" ) );
+    SCH_SHEET_PATH parent = m_scopePath;
+    SCH_SHEET*     sheet = parent.Last();
+    parent.pop_back();
+    SCH_SHEET_VARIANT variant( wxS( "Source" ) );
+    variant.m_DNP = true;
+    sheet->AddVariant( parent, variant );
+
+    BOOST_REQUIRE( !m_scopePath.GetDNP() );
+    BOOST_REQUIRE( m_scopePath.GetDNP( wxS( "Source" ) ) );
+    BOOST_REQUIRE( model->CanCopyCellFromVariant( m_row, m_col ) );
+    model->CopyCellFromVariant( m_row, m_col, wxS( "Source" ) );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "1" ) );
+    BOOST_CHECK( !m_symbol->GetDNP() );
+
+    model->SetCurrentVariant( wxS( "Source" ) );
+    BOOST_CHECK( !model->CanCopyCellFromVariant( m_row, m_col ) );
+    model->CopyCellFromVariant( m_row, m_col, wxEmptyString );
+    model->SetCurrentVariant( wxEmptyString );
+    Apply( *model );
+    BOOST_CHECK( m_symbol->GetDNP() );
 }
 
 
@@ -288,7 +336,7 @@ BOOST_FIXTURE_TEST_CASE( SheetScopedBoardExclusionSurvivesApply, ISSUE25112_FIXT
     BOOST_REQUIRE( !m_symbol->GetExcludedFromBoard() );
 
     model->SetValue( m_row, m_col, wxS( "1" ) );
-    Apply( *model, variant );
+    Apply( *model );
 
     BOOST_CHECK( m_symbol->GetExcludedFromBoard() );
 }
@@ -303,7 +351,7 @@ BOOST_FIXTURE_TEST_CASE( UntouchedMissingPresetFieldRemainsAbsent, ISSUE25112_FI
 
     BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
 
-    Apply( *model, wxEmptyString );
+    Apply( *model );
 
     BOOST_CHECK( m_symbol->GetField( fieldName ) == nullptr );
 }
@@ -323,7 +371,7 @@ BOOST_FIXTURE_TEST_CASE( ExplicitEmptyValueCreatesField, ISSUE25112_FIXTURE )
     BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
     BOOST_REQUIRE( model->IsCellEdited( m_row, m_col ) );
 
-    Apply( *model, wxEmptyString );
+    Apply( *model );
 
     const SCH_FIELD* field = m_symbol->GetField( fieldName );
     BOOST_REQUIRE( field );
@@ -349,7 +397,7 @@ BOOST_FIXTURE_TEST_CASE( ExistingEmptyFieldCanBeCleared, ISSUE25112_FIXTURE )
     BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
     BOOST_REQUIRE( model->IsCellEdited( m_row, m_col ) );
 
-    Apply( *model, wxEmptyString );
+    Apply( *model );
 
     BOOST_CHECK( m_symbol->GetField( fieldName ) == nullptr );
 }
@@ -365,7 +413,7 @@ BOOST_FIXTURE_TEST_CASE( UserAddedColumnCreatesEmptyField, ISSUE25112_FIXTURE )
     BOOST_REQUIRE( !model->IsCellClear( m_row, m_col ) );
     BOOST_REQUIRE( model->IsCellEdited( m_row, m_col ) );
 
-    Apply( *model, wxEmptyString );
+    Apply( *model );
 
     const SCH_FIELD* field = m_symbol->GetField( fieldName );
     BOOST_REQUIRE( field );
@@ -388,7 +436,385 @@ BOOST_FIXTURE_TEST_CASE( RevertingVariantFieldCreationRestoresAbsence, ISSUE2511
     BOOST_REQUIRE( model->IsCellClear( m_row, m_col ) );
     BOOST_REQUIRE( !model->IsEdited() );
 
-    Apply( *model, wxS( "Assembly" ) );
+    Apply( *model );
 
     BOOST_CHECK( m_symbol->GetField( fieldName ) == nullptr );
 }
+
+
+// Repose #2771: refresh every instance of a moved symbol without replacing pending fields.
+BOOST_FIXTURE_TEST_CASE( RefreshPreservesStagedFieldsAcrossSharedSheetPaths, ISSUE25112_FIXTURE )
+{
+    const wxString name = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    auto           model = MakeScopedModel( wxEmptyString, name );
+    m_symbol->GetField( FIELD_T::VALUE )->SetText( wxS( "base" ) );
+    model->UpdateReferences( m_refs );
+    model->SetValue( m_row, m_col, wxS( "staged" ) );
+
+    m_symbol->SetPosition( VECTOR2I( 100, 200 ) );
+    model->UpdateReferences( m_refs );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "staged" ) );
+    BOOST_CHECK( model->IsEdited() );
+    Apply( *model );
+    BOOST_CHECK_EQUAL( m_symbol->GetField( FIELD_T::VALUE )->GetText(), wxS( "staged" ) );
+    BOOST_CHECK( !model->IsEdited() );
+
+    model->SetValue( m_row, m_col, wxS( "another edit" ) );
+    m_symbol->GetField( FIELD_T::VALUE )->SetText( wxS( "external" ) );
+    model->UpdateReferences( m_refs );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "external" ) );
+    BOOST_CHECK( !model->IsEdited() );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( RefreshPreservesFieldPresenceEditsAcrossVariantsAndPaths, ISSUE25112_FIXTURE )
+{
+    const wxString name = wxS( "PresenceAcrossVariants" );
+    auto           model = MakeScopedModel( wxS( "A" ), name );
+    m_symbol->AddField( SCH_FIELD( m_symbol, FIELD_T::USER, name ) );
+    model->UpdateReferences( m_refs );
+    model->ClearCell( m_row, m_col );
+    model->SetCurrentVariant( wxS( "B" ) );
+    model->UpdateReferences( m_refs );
+    BOOST_CHECK( model->IsCellClear( m_row, m_col ) );
+    Apply( *model );
+    BOOST_CHECK( !m_symbol->GetField( name ) );
+
+    model->SetValue( m_row, m_col, wxEmptyString );
+    model->UpdateReferences( m_refs );
+    BOOST_CHECK( !model->IsCellClear( m_row, m_col ) );
+    Apply( *model );
+    BOOST_REQUIRE( m_symbol->GetField( name ) );
+    BOOST_CHECK( m_symbol->GetField( name )->GetText().IsEmpty() );
+}
+
+
+// Repose #1699 and #4001: Add Variant must activate fresh values while retaining old edits.
+BOOST_FIXTURE_TEST_CASE( NewlyAddedVariantDoesNotReceivePreviousVariantsValues, ISSUE25112_FIXTURE )
+{
+    const wxString name = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    m_schematic->AddVariant( wxS( "A" ) );
+    auto       model = MakeScopedModel( wxS( "A" ), name );
+    SCH_FIELD* field = m_symbol->GetField( FIELD_T::VALUE );
+    field->SetText( wxS( "base" ) );
+    field->SetText( wxS( "A live" ), &m_scopePath, wxS( "A" ) );
+    model->UpdateReferences( m_refs );
+    model->SetValue( m_row, m_col, wxS( "A staged" ) );
+
+    m_schematic->AddVariant( wxS( "New" ) );
+    m_schematic->SetCurrentVariant( wxS( "New" ) );
+    model->SetCurrentVariant( wxS( "New" ) );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "base" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "A" ) ), wxS( "A live" ) );
+    BOOST_CHECK( model->IsEdited() );
+
+    Apply( *model );
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "New" ) ), wxS( "base" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "A" ) ), wxS( "A staged" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_siblingPath, wxS( "A" ) ), wxS( "base" ) );
+    BOOST_CHECK( !model->IsEdited() );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( VariantRoundTripRetainsEditsAndCancelLeavesSchematicAlone, ISSUE25112_FIXTURE )
+{
+    const wxString name = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    auto           model = MakeScopedModel( wxEmptyString, name );
+    SCH_FIELD*     field = m_symbol->GetField( FIELD_T::VALUE );
+    field->SetText( wxS( "base" ) );
+    model->UpdateReferences( m_refs );
+    model->SetCurrentVariant( wxS( "A" ) );
+    model->SetValue( m_row, m_col, wxS( "A staged" ) );
+    model->SetCurrentVariant( wxS( "B" ) );
+    model->SetValue( m_row, m_col, wxS( "B staged" ) );
+    model->SetCurrentVariant( wxS( "A" ) );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "A staged" ) );
+    model->SetCurrentVariant( wxS( "B" ) );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "B staged" ) );
+    model.reset();
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "A" ) ), wxS( "base" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "B" ) ), wxS( "base" ) );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( RenamingAndDeletingVariantsRetargetsPendingEdits, ISSUE25112_FIXTURE )
+{
+    const wxString name = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    auto           model = MakeScopedModel( wxEmptyString, name );
+    SCH_FIELD*     field = m_symbol->GetField( FIELD_T::VALUE );
+    field->SetText( wxS( "base" ) );
+    model->UpdateReferences( m_refs );
+    m_schematic->AddVariant( wxS( "A" ) );
+    model->SetCurrentVariant( wxS( "A" ) );
+    model->SetValue( m_row, m_col, wxS( "A staged" ) );
+    model->RenameStoredVariant( wxS( "A" ), wxS( "Renamed" ) );
+    m_schematic->RenameVariant( wxS( "A" ), wxS( "Renamed" ), nullptr );
+    BOOST_CHECK_EQUAL( model->GetCurrentVariant(), wxS( "Renamed" ) );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "A staged" ) );
+
+    m_schematic->AddVariant( wxS( "Deleted" ) );
+    model->SetCurrentVariant( wxS( "Deleted" ) );
+    model->SetValue( m_row, m_col, wxS( "discarded" ) );
+    model->DeleteStoredVariant( wxS( "Deleted" ) );
+    m_schematic->DeleteVariant( wxS( "Deleted" ), nullptr );
+    model->SetCurrentVariant( wxS( "Renamed" ) );
+    Apply( *model );
+
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "Renamed" ) ), wxS( "A staged" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "Deleted" ) ), wxS( "base" ) );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( RevertingVariantKeepsBaseEditsConsistentAcrossPaths, ISSUE25112_FIXTURE )
+{
+    const wxString name = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    auto           model = MakeScopedModel( wxEmptyString, name );
+    SCH_FIELD*     field = m_symbol->GetField( FIELD_T::VALUE );
+    field->SetText( wxS( "base" ) );
+    model->UpdateReferences( m_refs );
+    model->SetValue( m_row, m_col, wxS( "staged base" ) );
+    model->SetCurrentVariant( wxS( "A" ) );
+    model->SetValue( m_row, m_col, wxS( "discarded variant edit" ) );
+    model->RevertRow( m_row );
+    BOOST_CHECK( model->IsEdited() );
+    model->SetCurrentVariant( wxEmptyString );
+    BOOST_CHECK_EQUAL( model->GetValue( m_row, m_col ), wxS( "staged base" ) );
+
+    Apply( *model );
+    BOOST_CHECK_EQUAL( field->GetText(), wxS( "staged base" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_scopePath, wxS( "A" ) ), wxS( "staged base" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_siblingPath, wxS( "A" ) ), wxS( "staged base" ) );
+    BOOST_CHECK( !model->IsEdited() );
+}
+
+
+// Repose #2772: nested field references must use the staged values for this instance/variant.
+BOOST_FIXTURE_TEST_CASE( MixedVariablesResolveStagedVariantFieldsBeforeApply, ISSUE25112_FIXTURE )
+{
+    const wxString valueName = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    auto           model = MakeScopedModel( wxEmptyString, valueName );
+    int            valueCol = m_col;
+    SCH_FIELD*     field = m_symbol->GetField( FIELD_T::VALUE );
+    field->SetText( wxS( "live" ) );
+    model->UpdateReferences( m_refs );
+    model->AddColumn( wxS( "Nested" ), wxS( "Nested" ), true );
+    int nestedCol = model->GetFieldNameCol( wxS( "Nested" ) );
+    model->SetValue( m_row, nestedCol, wxS( "Value: ${vAlUe}" ) );
+    model->AddColumn( wxS( "Report" ), wxS( "Report" ), true );
+    int reportCol = model->GetFieldNameCol( wxS( "Report" ) );
+    model->SetShowColumn( reportCol, true );
+    model->SetValue( m_row, reportCol, wxS( "${REFERENCE}: ${NESTED}" ) );
+    model->SetValue( m_row, valueCol, wxS( "base staged" ) );
+    wxString prefix = m_symbol->GetRef( &m_scopePath, true ) + wxS( ": Value: " );
+    BOOST_CHECK_EQUAL( model->GetResolvedValue( m_row, reportCol ), prefix + wxS( "base staged" ) );
+    BOOST_CHECK( model->Export( BOM_FMT_PRESET() ).Contains( prefix + wxS( "base staged" ) ) );
+
+    model->SetCurrentVariant( wxS( "A" ) );
+    model->SetValue( m_row, nestedCol, wxS( "Value: ${VALUE}" ) );
+    model->SetValue( m_row, reportCol, wxS( "${REFERENCE}: ${Nested}" ) );
+    model->SetValue( m_row, valueCol, wxS( "A staged" ) );
+    BOOST_CHECK_EQUAL( model->GetResolvedValue( m_row, reportCol ), prefix + wxS( "A staged" ) );
+    model->SetCurrentVariant( wxEmptyString );
+    BOOST_CHECK_EQUAL( model->GetResolvedValue( m_row, reportCol ), prefix + wxS( "base staged" ) );
+    BOOST_CHECK_EQUAL( field->GetText(), wxS( "live" ) );
+    BOOST_CHECK_EQUAL( field->GetText( &m_siblingPath, wxS( "A" ) ), wxS( "live" ) );
+}
+
+
+struct LIB_FIELDS_TABLE_TEXT_VARS_FIXTURE
+{
+    LIB_FIELDS_TABLE_TEXT_VARS_FIXTURE() :
+            m_symbol( wxS( "Test" ) ),
+            m_model( { &m_symbol } )
+    {
+        m_symbol.GetValueField().SetText( wxS( "live" ) );
+        m_symbol.GetFootprintField().SetText( wxS( "Library:Package" ) );
+        SCH_FIELD* part = new SCH_FIELD( &m_symbol, FIELD_T::USER, wxS( "PartNumber" ) );
+        part->SetText( wxS( "old part" ) );
+        m_symbol.AddField( part );
+
+        for( const wxString& name :
+             { LIB_FIELDS_EDITOR_GRID_DATA_MODEL::SYMBOL_NAME, GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ),
+               wxString( wxS( "PartNumber" ) ), wxString( wxS( "Report" ) ) } )
+        {
+            m_model.AddColumn( name, name, false );
+            m_model.SetShowColumn( m_model.GetFieldNameCol( name ), true );
+        }
+
+        m_model.RebuildRows();
+        BOOST_REQUIRE_EQUAL( m_model.GetNumberRows(), 1 );
+    }
+
+    LIB_SYMBOL                        m_symbol;
+    LIB_FIELDS_EDITOR_GRID_DATA_MODEL m_model;
+};
+
+
+BOOST_FIXTURE_TEST_SUITE( LibFieldsTableTextVars, LIB_FIELDS_TABLE_TEXT_VARS_FIXTURE )
+
+
+BOOST_AUTO_TEST_CASE( DerivedFieldsDisplayPendingInheritanceWithoutCreatingOverrides )
+{
+    m_symbol.SetKeyWords( wxS( "original keywords" ) );
+    m_symbol.GetDescriptionField().SetText( wxS( "Monostable" ) );
+    LIB_SYMBOL child( wxS( "Child" ) );
+    LIB_SYMBOL grandchild( wxS( "Grandchild" ) );
+    child.GetDescriptionField().SetText( wxS( "Monostable" ) );
+    child.GetValueField().SetText( wxS( "Child" ) );
+    child.SetParent( &m_symbol );
+    grandchild.SetParent( &child );
+    LIB_FIELDS_EDITOR_GRID_DATA_MODEL model( { &m_symbol, &child, &grandchild } );
+
+    const wxString footprint = GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED );
+    const wxString keywords = LIB_FIELDS_EDITOR_GRID_DATA_MODEL::SYMBOL_KEYWORDS;
+    model.AddColumn( footprint, footprint, false );
+    model.SetShowColumn( 0, true );
+    model.AddColumn( keywords, keywords, false );
+    model.SetShowColumn( 1, true );
+    model.AddColumn( wxS( "PartNumber" ), wxS( "PartNumber" ), false );
+    const wxString description = GetDefaultFieldName( FIELD_T::DESCRIPTION, UNTRANSLATED );
+    const wxString value = GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED );
+    const wxString name = LIB_FIELDS_EDITOR_GRID_DATA_MODEL::SYMBOL_NAME;
+    model.AddColumn( description, description, false );
+    model.AddColumn( value, value, false );
+    model.AddColumn( name, name, false );
+    model.RebuildRows();
+
+    auto rowFor = [&]( const LIB_SYMBOL* aSymbol )
+    {
+        for( int row = 0; row < model.GetNumberRows(); ++row )
+        {
+            if( model.GetSymbolForRow( row ) == aSymbol )
+                return row;
+        }
+
+        return -1;
+    };
+
+    const int parentRow = rowFor( &m_symbol );
+    const int childRow = rowFor( &child );
+    const int grandchildRow = rowFor( &grandchild );
+    BOOST_REQUIRE( parentRow >= 0 && childRow >= 0 && grandchildRow >= 0 );
+
+    BOOST_CHECK( !model.CanUseParentValue( parentRow, 0 ) );
+    BOOST_CHECK( !model.CanUseParentValue( parentRow, 1 ) );
+    BOOST_CHECK( !model.CanUseParentValue( childRow, 0 ) );
+    BOOST_CHECK( !model.CanUseParentValue( childRow, 1 ) );
+    BOOST_CHECK( !model.CanUseParentValue( childRow, 2 ) ); // User field
+    BOOST_CHECK( model.CanUseParentValue( childRow, 3 ) );  // Explicit description matching parent
+    BOOST_CHECK( !model.CanUseParentValue( childRow, 4 ) ); // Value must remain non-empty
+    BOOST_CHECK( !model.CanUseParentValue( childRow, 5 ) ); // Symbol name is read-only
+    model.UseParentValue( parentRow, 0 );
+    model.UseParentValue( childRow, 4 );
+    BOOST_CHECK_EQUAL( model.GetValue( parentRow, 0 ), wxS( "Library:Package" ) );
+    BOOST_CHECK_EQUAL( model.GetValue( childRow, 4 ), wxS( "Child" ) );
+
+    BOOST_CHECK( model.GetValue( childRow, 1 ).IsEmpty() );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 1 ), wxS( "original keywords" ) );
+
+    int modified = 0;
+    model.ApplyData( [&]( LIB_SYMBOL* ) { ++modified; } );
+    BOOST_CHECK_EQUAL( modified, 0 );
+    BOOST_CHECK( child.GetRawKeyWords().IsEmpty() );
+    BOOST_CHECK( grandchild.GetRawKeyWords().IsEmpty() );
+
+    model.SetValue( parentRow, 0, wxS( "Package_DIP:DIP-16_W7.62mm" ) );
+    model.SetValue( parentRow, 1, wxS( "staged keywords" ) );
+    model.SetValue( parentRow, 3, wxS( "New description" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( childRow, 3 ), wxS( "Monostable" ) );
+    BOOST_CHECK( model.GetValue( childRow, 0 ).IsEmpty() );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( childRow, 0 ), wxS( "Package_DIP:DIP-16_W7.62mm" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 0 ), model.GetResolvedValue( childRow, 0 ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 1 ), wxS( "staged keywords" ) );
+
+    model.SetValue( childRow, 0, wxS( "Package_SO:SOIC-16" ) );
+    model.SetValue( childRow, 1, wxS( "child keywords" ) );
+    model.SetValue( parentRow, 0, wxS( "Package_DIP:DIP-16" ) );
+    model.SetValue( parentRow, 1, wxS( "new parent keywords" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 0 ), wxS( "Package_SO:SOIC-16" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 1 ), wxS( "child keywords" ) );
+
+    BOOST_CHECK( model.CanUseParentValue( childRow, 0 ) );
+    BOOST_CHECK( model.CanUseParentValue( childRow, 1 ) );
+    model.UseParentValue( childRow, 0 );
+    model.UseParentValue( childRow, 1 );
+    model.UseParentValue( childRow, 3 );
+    BOOST_CHECK( !model.CanUseParentValue( childRow, 3 ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 3 ), wxS( "New description" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 0 ), wxS( "Package_DIP:DIP-16" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 1 ), wxS( "new parent keywords" ) );
+    BOOST_CHECK( model.Export( BOM_FMT_PRESET() ).Contains( wxS( "Package_DIP:DIP-16" ) ) );
+    BOOST_CHECK( model.Export( BOM_FMT_PRESET() ).Contains( wxS( "new parent keywords" ) ) );
+
+    model.ApplyData( [&]( LIB_SYMBOL* ) { ++modified; } );
+    BOOST_CHECK_EQUAL( modified, 2 ); // Parent edits and the child's description override
+    BOOST_CHECK( child.GetFootprintField().GetText().IsEmpty() );
+    BOOST_CHECK( grandchild.GetFootprintField().GetText().IsEmpty() );
+    BOOST_CHECK( child.GetDescriptionField().GetText().IsEmpty() );
+    BOOST_CHECK_EQUAL( child.GetDescription(), wxS( "New description" ) );
+    BOOST_CHECK( child.GetRawKeyWords().IsEmpty() );
+    BOOST_CHECK( grandchild.GetRawKeyWords().IsEmpty() );
+    BOOST_CHECK_EQUAL( grandchild.GetKeyWords(), wxS( "new parent keywords" ) );
+    BOOST_CHECK_EQUAL( grandchild.Flatten()->GetFootprintField().GetText(), wxS( "Package_DIP:DIP-16" ) );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( grandchildRow, 0 ), wxS( "Package_DIP:DIP-16" ) );
+
+    // Saving the child must not turn its inherited keywords into a local override either.
+    STRING_FORMATTER formatter;
+    SCH_IO_KICAD_SEXPR::FormatLibSymbol( &grandchild, formatter );
+    BOOST_CHECK( formatter.GetString().find( "ki_keywords" ) == std::string::npos );
+
+    LIB_FIELDS_EDITOR_GRID_DATA_MODEL childOnlyModel( { &grandchild } );
+    childOnlyModel.AddColumn( keywords, keywords, false );
+    childOnlyModel.RebuildRows();
+    BOOST_CHECK_EQUAL( childOnlyModel.GetResolvedValue( 0, 0 ), wxS( "new parent keywords" ) );
+
+    // A grouped cell containing a root must not offer to clear its value.
+    model.SetValue( childRow, 1, wxS( "new parent keywords" ) );
+    model.SetValue( grandchildRow, 1, wxS( "new parent keywords" ) );
+    model.SetGroupingEnabled( true );
+    model.SetGroupColumn( 1, true );
+    model.RebuildRows();
+    BOOST_REQUIRE_EQUAL( model.GetNumberRows(), 1 );
+    BOOST_CHECK( !model.CanUseParentValue( 0, 1 ) );
+    model.UseParentValue( 0, 1 );
+    BOOST_CHECK_EQUAL( model.GetValue( 0, 1 ), wxS( "new parent keywords" ) );
+
+    // A group containing only derived symbols can discard all its local overrides.
+    model.SetFilter( wxS( "*child*" ) );
+    model.RebuildRows();
+    BOOST_REQUIRE_EQUAL( model.GetNumberRows(), 1 );
+    BOOST_REQUIRE_EQUAL( model.GetRowReferences( 0 ).size(), 2 );
+    BOOST_CHECK( model.CanUseParentValue( 0, 1 ) );
+    model.UseParentValue( 0, 1 );
+    BOOST_CHECK( model.GetValue( 0, 1 ).IsEmpty() );
+    BOOST_CHECK_EQUAL( model.GetResolvedValue( 0, 1 ), wxS( "new parent keywords" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( MixedVariablesResolveStagedFieldsAndLiveFallbacks )
+{
+    m_model.SetValue( 0, 1, wxS( "staged" ) );
+    m_model.SetValue( 0, 2, wxS( "Part ${vAlUe}" ) );
+    m_model.SetValue( 0, 3, wxS( "${PARTNUMBER}: ${FOOTPRINT_LIBRARY} ${Unknown}" ) );
+    const wxString expected = wxS( "Part staged: Library ${Unknown}" );
+
+    BOOST_CHECK_EQUAL( m_model.GetResolvedValue( 0, 3 ), expected );
+    BOOST_CHECK( m_model.Export( BOM_FMT_PRESET() ).Contains( expected ) );
+    BOOST_CHECK_EQUAL( m_symbol.GetValueField().GetText(), wxS( "live" ) );
+    BOOST_CHECK_EQUAL( m_symbol.GetField( wxS( "PartNumber" ) )->GetText(), wxS( "old part" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( StagedVariableCyclesRemainBounded )
+{
+    m_model.SetValue( 0, 1, wxS( "${PartNumber}" ) );
+    m_model.SetValue( 0, 2, wxS( "${VALUE}" ) );
+    m_model.SetValue( 0, 3, wxS( "Value: ${VALUE}" ) );
+    wxString resolved = m_model.GetResolvedValue( 0, 3 );
+    BOOST_CHECK( resolved == wxS( "Value: ${VALUE}" ) || resolved == wxS( "Value: ${PartNumber}" ) );
+    m_model.SetValue( 0, 1, wxS( "${VALUE}" ) );
+    BOOST_CHECK_EQUAL( m_model.GetResolvedValue( 0, 3 ), wxS( "Value: ${VALUE}" ) );
+}
+
+
+BOOST_AUTO_TEST_SUITE_END()

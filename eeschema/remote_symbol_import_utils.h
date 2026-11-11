@@ -31,6 +31,7 @@
 
 class LIB_SYMBOL;
 class SCH_EDIT_FRAME;
+class SYMBOL_LIBRARY_ADAPTER;
 enum class LIBRARY_TABLE_TYPE;
 
 
@@ -68,6 +69,16 @@ bool EnsureRemoteLibraryEntry( LIBRARY_TABLE_TYPE aTableType, const wxFileName& 
                                 wxString& aError );
 
 /**
+ * Save a downloaded symbol into the remote symbol library \a aNickname backed by \a aLibraryFile.
+ *
+ * Registers the library table row and creates the library file when it does not exist yet, then
+ * reloads the library so the symbol can be placed. On success the library cache owns \a aSymbol.
+ */
+bool SaveRemoteSymbolToLibrary( SYMBOL_LIBRARY_ADAPTER& aAdapter, const wxFileName& aLibraryFile,
+                                const wxString& aNickname, bool aGlobalTable,
+                                std::unique_ptr<LIB_SYMBOL> aSymbol, wxString& aError );
+
+/**
  * Place a symbol from a remote download into the schematic editor.
  */
 bool PlaceRemoteDownloadedSymbol( SCH_EDIT_FRAME* aFrame, const wxString& aNickname,
@@ -96,7 +107,7 @@ LIB_ID BuildRemoteLibId( const wxString& aResolvedLibrary, const wxString& aReso
  * Apply a list of footprint LIB_IDs to a symbol about to be saved.
  *
  * The first LIB_ID is written to the symbol's Footprint field as a fully-qualified
- * <nickname>:<itemName> string (overwriting any previous value). Remaining LIB_IDs are
+ * \<nickname\>:\<itemName\> string (overwriting any previous value). Remaining LIB_IDs are
  * appended to the symbol's footprint filter list as bare item names (filters are globs
  * over footprint name only and would not match colon-qualified strings).
  *

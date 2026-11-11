@@ -34,6 +34,14 @@ class DS_PROXY_VIEW_ITEM;
 class REPORTER;
 class wxWindow;
 
+class WIDGET_DIFF_CANVAS;
+
+namespace KICAD_DIFF
+{
+class DIFF_CANVAS_CONTEXT;
+struct DOCUMENT_DIFF;
+} // namespace KICAD_DIFF
+
 /**
  * Handle Eeschema job dispatches.
  */
@@ -49,6 +57,7 @@ public:
     int JobSymUpgrade( JOB* aJob );
     int JobSymExportSvg( JOB* aJob );
     int JobUpgrade( JOB* aJob );
+    int JobDowngrade( JOB* aJob );
     int JobImport( JOB* aJob );
     int JobSchDiff( JOB* aJob );
     int JobSymDiff( JOB* aJob );
@@ -61,6 +70,13 @@ public:
     int OpenDiffDialog( KICAD_DIFF::DOC_KIND aKind, const wxString& aFileA, const wxString& aFileB,
                         const wxString& aLabelA, const wxString& aLabelB, wxWindow* aParent,
                         REPORTER* aReporter );
+
+    /// Diff two schematics for a window outside the kiface, drawing the first on aBefore and
+    /// the second on aAfter. The result keeps both loaded while the canvases show them.
+    KICAD_DIFF::DIFF_CANVAS_CONTEXT* AttachDiffCanvases( KICAD_DIFF::DOC_KIND aKind, const wxString& aFileA,
+                                                         const wxString& aFileB, WIDGET_DIFF_CANVAS* aBefore,
+                                                         WIDGET_DIFF_CANVAS* aAfter, KICAD_DIFF::DOCUMENT_DIFF& aDiff,
+                                                         REPORTER* aReporter );
 
 private:
     int runSchMerge( const wxString& aAncestor, const wxString& aOurs, const wxString& aTheirs,
@@ -86,13 +102,14 @@ public:
      * @param aTheme The theme to take color data from to stick into render settings, can be
      *        left blank for default.
      * @param aSch The schematic to further copy settings from to be put into aRenderSettings.
+     * @param aDrawingSheetOverride
      */
     void InitRenderSettings( SCH_RENDER_SETTINGS* aRenderSettings, const wxString& aTheme,
                              SCHEMATIC* aSch,
                              const wxString& aDrawingSheetOverride = wxEmptyString );
 
 private:
-    SCHEMATIC* getSchematic( const wxString& aPath );
+    SCHEMATIC* getSchematic( const wxString& aPath, bool aRequireRoot = true );
 
     int doSymExportSvg( JOB_SYM_EXPORT_SVG* aSvgJob, SCH_RENDER_SETTINGS* aRenderSettings,
                         LIB_SYMBOL* symbol );
@@ -100,6 +117,7 @@ private:
     DS_PROXY_VIEW_ITEM* getDrawingSheetProxyView( SCHEMATIC* aSch );
 
     SCHEMATIC* m_cliSchematic;
+    bool       m_cliSchematicRootValidated = false;
 };
 
 #endif

@@ -930,8 +930,6 @@ public:
     // use the public functions above.
 
 protected:
-    unsigned int GetColumnCount() const override { return columnCount(); }
-
     void GetValue( wxVariant& aOutValue, const wxDataViewItem& aItem,
                    unsigned int aCol ) const override
     {
@@ -967,8 +965,7 @@ protected:
                 //   "DDR_DQ0  [DDR_DATA]"
                 if( !chainName.IsEmpty() && m_parent.m_board )
                 {
-                    if( const std::shared_ptr<NET_SETTINGS>& ns =
-                            m_parent.m_board->GetDesignSettings().m_NetSettings )
+                    if( const std::shared_ptr<NET_SETTINGS>& ns = m_parent.m_board->GetDesignSettings().m_NetSettings )
                     {
                         wxString className = ns->GetNetChainClass( chainName );
 
@@ -1025,7 +1022,9 @@ protected:
             }
             else if( aCol == COLUMN_NET_CHAIN_LENGTH )
             {
-                if( m_show_time_domain_details )
+                if( i->GetNetChainName().IsEmpty() )
+                    aOutValue = "";
+                else if( m_show_time_domain_details )
                     aOutValue = m_parent.formatDelay( i->GetNetChainDelay() );
                 else
                     aOutValue = m_parent.formatLength( i->GetNetChainLength() );
@@ -1269,8 +1268,6 @@ protected:
 
         return 0;
     }
-
-    wxString GetColumnType( unsigned int /* aCol */ ) const override { return wxS( "string" ); }
 
 private:
     PCB_NET_INSPECTOR_PANEL& m_parent;

@@ -78,6 +78,14 @@ public:
 
     std::vector<VECTOR2I> GetCorners() const override;
 
+    /*
+     * @return a PCB_SHAPE type POLYGON of the box of the TEXTBOX, according to the box shape
+     * and the textbox rotation
+     * The base PCB_SHAPE of a textbox is a RECTANGLE, so creating some issues when orientation
+     * is not 0 is some draw functions
+     */
+    PCB_SHAPE GetPolygonalBoxShape() const;
+
     std::vector<VECTOR2I> GetCornersInSequence( EDA_ANGLE angle ) const override;
 
     // Keep the lib shape as RECTANGLE even if a runtime polygon conversion happens.
@@ -95,7 +103,7 @@ public:
     void SetRight( int aVal ) override;
     void SetBottom( int aVal ) override;
 
-    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide ) override;
+    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& aSettings, bool aCheckSide ) override;
 
     int GetLegacyTextMargin() const;
 
@@ -119,14 +127,10 @@ public:
      * Text angle in the parent footprint's lib frame, or absolute when not
      * in a footprint.
      */
-    const EDA_ANGLE& GetLibTextAngle() const { return m_libTextAngle; }
-    void             SetLibTextAngle( const EDA_ANGLE& aAngle )
-    {
-        m_libTextAngle = aAngle;
-        m_libTextAngle.Normalize();
-    }
+    EDA_ANGLE GetLibTextAngle() const { return m_libTextAngle.GetAngle(); }
+    void      SetLibTextAngle( const EDA_ANGLE& aAngle ) { m_libTextAngle = aAngle; }
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
 
     bool Matches( const EDA_SEARCH_DATA& aSearchData, void* aAuxData ) const override;
 
@@ -135,6 +139,8 @@ public:
     void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle ) override;
 
     void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+
+    void Mirror( const SEG& aAxis ) override;
 
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
@@ -165,22 +171,24 @@ public:
     }
 
     /**
-     * Function TransformTextToPolySet
      * Convert the text to a polygonSet describing the actual character strokes (one per segment).
      * Used in 3D viewer
      * Circles and arcs are approximated by segments
      * @param aBuffer = SHAPE_POLY_SET to store the polygon corners
      * @param aClearance = the clearance around the text
      * @param aMaxError = the maximum error to allow when approximating curves
+     * @param aErrorLoc
      */
     void TransformTextToPolySet( SHAPE_POLY_SET& aBuffer, int aClearance, int aMaxError,
                                  ERROR_LOC aErrorLoc ) const;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aMaxError, ERROR_LOC aErrorLoc,
                                   bool aIgnoreLineWidth = false ) const override;
 
-    // @copydoc BOARD_ITEM::GetEffectiveShape
+    /// @copydoc BOARD_ITEM::GetEffectiveShape()
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
                                               FLASHING aFlash = FLASHING::DEFAULT,
                                               DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
@@ -195,10 +203,10 @@ public:
 
     EDA_ITEM* Clone() const override;
 
-    ///< Tests whether the border is disabled, as configured by the stroke
+    /// Tests whether the border is disabled, as configured by the stroke
     bool IsBorderEnabled() const;
 
-    ///< Disables the border, this is done by changing the stroke internally
+    /// Disables the border, this is done by changing the stroke internally
     void SetBorderEnabled( bool enabled );
 
     void SetBorderWidth( const int aSize );
@@ -224,11 +232,11 @@ protected:
     bool m_borderEnabled; ///< Controls drawing the border (as defined by the stroke members)
 
 private:
-    int       m_marginLeft;
-    int       m_marginTop;
-    int       m_marginRight;
-    int       m_marginBottom;
-    EDA_ANGLE m_libTextAngle; // Text angle in parent footprint's lib frame
+    int             m_marginLeft;
+    int             m_marginTop;
+    int             m_marginRight;
+    int             m_marginBottom;
+    EDA_ORIENTATION m_libTextAngle; // Text angle in parent footprint's lib frame
 };
 
 #endif  // #define PCB_TEXTBOX_H

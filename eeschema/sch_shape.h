@@ -37,6 +37,8 @@ public:
 
     virtual ~SCH_SHAPE() override {}
 
+    EDA_ITEM* AsEdaItem() override { return this; }
+
     void Serialize( google::protobuf::Any& aContainer ) const override;
     bool Deserialize( const google::protobuf::Any& aContainer ) override;
 
@@ -96,7 +98,7 @@ public:
     void BeginEdit( const VECTOR2I& aStartPoint ) override  { beginEdit( aStartPoint ); }
     bool ContinueEdit( const VECTOR2I& aPosition ) override { return continueEdit( aPosition ); }
     void CalcEdit( const VECTOR2I& aPosition ) override     { calcEdit( aPosition ); }
-    void EndEdit( bool aClosed = false ) override           { endEdit(); }
+    void EndEdit( bool aClosed = false ) override           { endEdit( aClosed ); }
     void SetEditState( int aState )                         { setEditState( aState ); }
 
     void Move( const VECTOR2I& aOffset ) override;
@@ -108,6 +110,12 @@ public:
     void Rotate( const VECTOR2I& aCenter, bool aRotateCCW ) override;
 
     void AddPoint( const VECTOR2I& aPosition );
+
+    /**
+     * Set the arc from three points, or a two-point polyline when they are collinear.  The schematic
+     * painter and writer handle polylines but not SEGMENT shapes.
+     */
+    void SetArcOrLine( const VECTOR2I& aStart, const VECTOR2I& aMid, const VECTOR2I& aEnd );
 
     /**
     * Make a set of SHAPE objects representing the SCH_SHAPE.  Caller owns the objects.

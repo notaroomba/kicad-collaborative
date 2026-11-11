@@ -20,6 +20,16 @@
 #include <geometry/transform_trs.h>
 #include <trigo.h>
 
+#include <algorithm>
+#include <cmath>
+
+
+// Composing and decomposing a rotation can leave a scale one unit in the last place off
+static bool sameScale( double aA, double aB )
+{
+    return std::abs( aA - aB ) <= 1e-9 * std::max( std::abs( aA ), std::abs( aB ) );
+}
+
 
 VECTOR2D TRANSFORM_TRS::Apply( const VECTOR2D& aPoint ) const
 {
@@ -51,32 +61,6 @@ VECTOR2I TRANSFORM_TRS::InverseApply( const VECTOR2I& aPoint ) const
 }
 
 
-TRANSFORM_TRS TRANSFORM_TRS::Invert() const
-{
-    TRANSFORM_TRS inv;
-    inv.m_scaleX = 1.0 / m_scaleX;
-    inv.m_scaleY = 1.0 / m_scaleY;
-    inv.m_rotate = -m_rotate;
-
-    VECTOR2D t( m_translate );
-    RotatePoint( t, -m_rotate );
-    inv.m_translate = VECTOR2I( KiROUND( -t.x / m_scaleX ), KiROUND( -t.y / m_scaleY ) );
-
-    return inv;
-}
-
-
-TRANSFORM_TRS TRANSFORM_TRS::Compose( const TRANSFORM_TRS& aOuter ) const
-{
-    TRANSFORM_TRS result;
-    result.m_scaleX = m_scaleX * aOuter.m_scaleX;
-    result.m_scaleY = m_scaleY * aOuter.m_scaleY;
-    result.m_rotate = m_rotate + aOuter.m_rotate;
-    result.m_translate = aOuter.Apply( m_translate );
-    return result;
-}
-
-
 TRANSFORM_TRS TRANSFORM_TRS::RescaleAround( const VECTOR2I& aFixedPoint,
                                             double aSx, double aSy ) const
 {
@@ -103,22 +87,35 @@ TRANSFORM_TRS TRANSFORM_TRS::RescaleAround( const VECTOR2I& aFixedPoint,
 
 bool TRANSFORM_TRS::IsIdentity() const
 {
-    return m_translate == VECTOR2I( 0, 0 )
-           && m_rotate.IsZero()
-           && m_scaleX == 1.0
-           && m_scaleY == 1.0;
+    return m_translate == VECTOR2I( 0, 0 ) && m_rotate.IsZero() && HasUnitScale();
 }
 
 
 bool TRANSFORM_TRS::IsUniformScale() const
 {
-    return m_scaleX == m_scaleY;
+    return sameScale( m_scaleX, m_scaleY );
+}
+
+
+bool TRANSFORM_TRS::HasUnitScale() const
+{
+    return sameScale( m_scaleX, 1.0 ) && sameScale( m_scaleY, 1.0 );
 }
 
 
 double TRANSFORM_TRS::ApplyLinearScale( double aLength ) const
 {
-    return aLength * 0.5 * ( m_scaleX + m_scaleY );
+    double scale = IsUniformScale() ? m_scaleX : ( m_scaleX + m_scaleY ) / 2;
+
+    return aLength * scale;
+}
+
+
+double TRANSFORM_TRS::InverseApplyLinearScale( double aLength ) const
+{
+    double scale = IsUniformScale() ? m_scaleX : ( m_scaleX + m_scaleY ) / 2;
+
+    return aLength / scale;
 }
 
 

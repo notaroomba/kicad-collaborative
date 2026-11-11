@@ -36,7 +36,7 @@
 #include <pcb_generator.h>
 #include <pcb_marker.h>
 #include <pcb_point.h>
-#include <pcb_griditem.h>
+#include <pcb_grid_item.h>
 #include <pcb_base_frame.h>
 #include <pcbnew_settings.h>
 #include <ratsnest/ratsnest_data.h>
@@ -64,7 +64,7 @@ const int GAL_LAYER_ORDER[] = {
     LAYER_UI_START + 9, LAYER_UI_START + 8, LAYER_UI_START + 7, LAYER_UI_START + 6, LAYER_UI_START + 5,
     LAYER_UI_START + 4, LAYER_UI_START + 3, LAYER_UI_START + 2, LAYER_UI_START + 1, LAYER_UI_START,
 
-    LAYER_GP_OVERLAY, LAYER_SELECT_OVERLAY, LAYER_CONFLICTS_SHADOW,
+    LAYER_GP_OVERLAY, LAYER_ROUTER_PREVIEW_COLLISION, LAYER_SELECT_OVERLAY, LAYER_CONFLICTS_SHADOW,
 
     LAYER_DRC_HIGHLIGHTED, LAYER_DRC_ERROR, LAYER_DRC_WARNING, LAYER_DRC_EXCLUSION, LAYER_MARKER_SHADOWS,
 
@@ -111,7 +111,7 @@ const int GAL_LAYER_ORDER[] = {
 
     LAYER_FP_TEXT, LAYER_FP_REFERENCES, LAYER_FP_VALUES,
 
-    LAYER_GRIDITEMS,
+    LAYER_SUBGRIDS,
 
     LAYER_RATSNEST, LAYER_ANCHOR, LAYER_POINTS, LAYER_VIA_STITCHING, LAYER_LOCKED_ITEM_SHADOW, LAYER_CONSTRAINT_SHADOW,
     LAYER_VIA_HOLES, LAYER_VIA_HOLEWALLS,
@@ -190,6 +190,8 @@ const int GAL_LAYER_ORDER[] = {
     CLEARANCE_LAYER_FOR( B_Cu ), POINT_LAYER_FOR( B_Cu ), B_Cu, ZONE_LAYER_FOR( B_Cu ), B_Mask,
     ZONE_LAYER_FOR( B_Mask ), B_SilkS, ZONE_LAYER_FOR( B_SilkS ), B_Paste, ZONE_LAYER_FOR( B_Paste ), B_Adhes,
     ZONE_LAYER_FOR( B_Adhes ), B_CrtYd, ZONE_LAYER_FOR( B_CrtYd ), B_Fab, ZONE_LAYER_FOR( B_Fab ),
+
+    LAYER_ROUTER_PREVIEW_SHADOW,
 
     BITMAP_LAYER_FOR( Dwgs_User ), BITMAP_LAYER_FOR( Cmts_User ), BITMAP_LAYER_FOR( Eco1_User ),
     BITMAP_LAYER_FOR( Eco2_User ), BITMAP_LAYER_FOR( Edge_Cuts ), BITMAP_LAYER_FOR( Margin ),
@@ -315,10 +317,36 @@ void PCB_DRAW_PANEL_GAL::DisplayBoard( BOARD* aBoard, PROGRESS_REPORTER* aReport
 
     // Ratsnest
     if( !aBoard->IsFootprintHolder() )
+        addRatsnest( aBoard->GetConnectivity() );
+}
+
+
+void PCB_DRAW_PANEL_GAL::addRatsnest( std::shared_ptr<CONNECTIVITY_DATA> aConnectivity )
+{
+    // A retained scene caches the board's lines, so the lines of moving items, which change every
+    // frame, get their own overlay item
+    if( m_gal->HasRetainedScene() )
     {
-        m_ratsnest = std::make_unique<RATSNEST_VIEW_ITEM>( aBoard->GetConnectivity() );
-        m_view->Add( m_ratsnest.get() );
+        m_ratsnest = std::make_unique<RATSNEST_VIEW_ITEM>( aConnectivity, RATSNEST_VIEW_ITEM::PART::BOARD );
+        m_localRatsnest = std::make_unique<RATSNEST_VIEW_ITEM>( aConnectivity, RATSNEST_VIEW_ITEM::PART::LOCAL );
+        m_view->Add( m_localRatsnest.get() );
     }
+    else
+    {
+        m_ratsnest = std::make_unique<RATSNEST_VIEW_ITEM>( aConnectivity );
+        m_localRatsnest.reset();
+    }
+
+    m_view->Add( m_ratsnest.get() );
+}
+
+
+void PCB_DRAW_PANEL_GAL::beforeRedraw()
+{
+    // Nothing else updates the cached board lines when a move starts or ends, a highlight changes
+    // or a display option changes
+    if( m_localRatsnest && m_ratsnest->BoardInputsChanged( m_view ) )
+        m_view->Update( m_ratsnest.get() );
 }
 
 
@@ -362,7 +390,7 @@ void PCB_DRAW_PANEL_GAL::prepareGridSources()
     // The "Grid Items" object visibility toggle hides the rendered grid
     // content; the items themselves (selection decorations, snap) follow
     // the same flag at their own sites.
-    if( !board || !board->IsElementVisible( LAYER_GRIDITEMS ) )
+    if( !board || !board->IsElementVisible( LAYER_SUBGRIDS ) )
     {
         m_gal->SetGridSources( std::move( sources ) );
         return;
@@ -375,15 +403,15 @@ void PCB_DRAW_PANEL_GAL::prepareGridSources()
     if( PCB_BASE_FRAME* frame = dynamic_cast<PCB_BASE_FRAME*>( GetParentEDAFrame() ) )
     {
         if( COLOR_SETTINGS* cs = frame->GetColorSettings() )
-            gridItemColor = cs->GetColor( LAYER_GRIDITEMS );
+            gridItemColor = cs->GetColor( LAYER_SUBGRIDS );
     }
 
     for( BOARD_ITEM* item : board->Drawings() )
     {
-        if( item->Type() != PCB_GRIDITEM_T )
+        if( item->Type() != PCB_GRID_ITEM_T )
             continue;
 
-        PCB_GRIDITEM* grid = static_cast<PCB_GRIDITEM*>( item );
+        PCB_GRID_ITEM* grid = static_cast<PCB_GRID_ITEM*>( item );
 
         // Priority 0 is the background grid's; a grid item must never sink behind it.
         wxASSERT( grid->GetAssignedPriority() > 0 );
@@ -408,6 +436,18 @@ void PCB_DRAW_PANEL_GAL::prepareGridSources()
 
 
 void PCB_DRAW_PANEL_GAL::SetHighContrastLayer( PCB_LAYER_ID aLayer )
+{
+    applyHighContrastLayer( aLayer, false );
+}
+
+
+void PCB_DRAW_PANEL_GAL::ChangeHighContrastLayer( PCB_LAYER_ID aLayer )
+{
+    applyHighContrastLayer( aLayer, true );
+}
+
+
+void PCB_DRAW_PANEL_GAL::applyHighContrastLayer( PCB_LAYER_ID aLayer, bool aOnlyLayerChanged )
 {
     // Set display settings for high contrast mode
     KIGFX::RENDER_SETTINGS* rSettings = m_view->GetPainter()->GetSettings();
@@ -438,6 +478,7 @@ void PCB_DRAW_PANEL_GAL::SetHighContrastLayer( PCB_LAYER_ID aLayer )
                 LAYER_VIA_HOLEWALLS,
                 LAYER_DRC_ERROR, LAYER_DRC_WARNING, LAYER_DRC_EXCLUSION, LAYER_MARKER_SHADOWS,
                 LAYER_SELECT_OVERLAY, LAYER_GP_OVERLAY,
+                LAYER_ROUTER_PREVIEW_SHADOW, LAYER_ROUTER_PREVIEW_COLLISION,
                 LAYER_RATSNEST, LAYER_CURSOR,
                 LAYER_ANCHOR,
                 LAYER_LOCKED_ITEM_SHADOW,
@@ -461,7 +502,32 @@ void PCB_DRAW_PANEL_GAL::SetHighContrastLayer( PCB_LAYER_ID aLayer )
         }
     }
 
-    m_view->UpdateAllLayersColor();
+    // High contrast hides and shows items as well as recolouring them
+    const bool contrast = rSettings->GetHighContrast();
+    auto*      pcbSettings = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( rSettings );
+    const bool hidden = contrast && pcbSettings->m_ContrastModeDisplay == HIGH_CONTRAST_MODE::HIDDEN;
+
+    // Layers the canvas fades keep their item colours, unless high contrast hides inactive layers
+    // now or did at the last switch
+    if( aOnlyLayerChanged && pcbSettings->HasCanvasFadedLayers() && !hidden && !m_highContrastHidden )
+    {
+        m_view->UpdateLayersColor( contrast || m_highContrastShown,
+                                   [pcbSettings]( int aViewLayer )
+                                   {
+                                       return !pcbSettings->IsCanvasFadedLayer( aViewLayer );
+                                   } );
+    }
+    else if( contrast || m_highContrastShown )
+    {
+        m_view->UpdateAllLayersColorAndVisibility();
+    }
+    else
+    {
+        m_view->UpdateAllLayersColor();
+    }
+
+    m_highContrastShown = contrast;
+    m_highContrastHidden = hidden;
 }
 
 
@@ -473,11 +539,14 @@ void PCB_DRAW_PANEL_GAL::SetTopLayer( PCB_LAYER_ID aLayer )
 
     // Layers that should always have on-top attribute enabled
     const std::vector<int> layers = {
-        LAYER_VIA_THROUGH,     LAYER_VIA_BLIND,        LAYER_VIA_BURIED,    LAYER_VIA_MICROVIA,    LAYER_VIA_HOLES,
-        LAYER_VIA_HOLEWALLS,   LAYER_PAD_PLATEDHOLES,  LAYER_PAD_HOLEWALLS, LAYER_NON_PLATEDHOLES, LAYER_PAD_NETNAMES,
-        LAYER_VIA_NETNAMES,    LAYER_SELECT_OVERLAY,   LAYER_GP_OVERLAY,    LAYER_RATSNEST,        LAYER_ANCHOR,
-        LAYER_DRC_HIGHLIGHTED, LAYER_DRC_ERROR,        LAYER_DRC_WARNING,   LAYER_DRC_EXCLUSION,   LAYER_MARKER_SHADOWS,
-        LAYER_CONFLICTS_SHADOW, LAYER_CONSTRAINT_SHADOW
+        LAYER_VIA_THROUGH,           LAYER_VIA_BLIND,                LAYER_VIA_BURIED,
+        LAYER_VIA_MICROVIA,          LAYER_VIA_HOLES,                LAYER_VIA_HOLEWALLS,
+        LAYER_PAD_PLATEDHOLES,       LAYER_PAD_HOLEWALLS,            LAYER_NON_PLATEDHOLES,
+        LAYER_PAD_NETNAMES,          LAYER_VIA_NETNAMES,             LAYER_SELECT_OVERLAY,
+        LAYER_GP_OVERLAY,            LAYER_ROUTER_PREVIEW_SHADOW,    LAYER_ROUTER_PREVIEW_COLLISION,
+        LAYER_RATSNEST,              LAYER_ANCHOR,                   LAYER_DRC_HIGHLIGHTED,
+        LAYER_DRC_ERROR,             LAYER_DRC_WARNING,              LAYER_DRC_EXCLUSION,
+        LAYER_MARKER_SHADOWS,        LAYER_CONFLICTS_SHADOW,         LAYER_CONSTRAINT_SHADOW
     };
 
     for( auto layer : layers )
@@ -559,55 +628,79 @@ void PCB_DRAW_PANEL_GAL::SetTopLayer( PCB_LAYER_ID aLayer )
 
 void PCB_DRAW_PANEL_GAL::SyncLayersVisibility( const BOARD* aBoard )
 {
+    PCB_LAYER_ID    activeLayer = UNDEFINED_LAYER;
+    PCB_BASE_FRAME* frame = dynamic_cast<PCB_BASE_FRAME*>( GetParentEDAFrame() );
+
+    // A preview canvas edits no layer, so it shows no clearance outlines
+    if( frame && frame->GetCanvas() == this )
+        activeLayer = frame->GetActiveLayer();
+
+    SyncLayersVisibility( *m_view, aBoard, activeLayer );
+}
+
+
+void PCB_DRAW_PANEL_GAL::SyncLayersVisibility( KIGFX::VIEW& aView, const BOARD* aBoard, PCB_LAYER_ID aActiveLayer )
+{
     // Load layer & elements visibility settings
     for( int i = 0; i < PCB_LAYER_ID_COUNT; ++i )
-        m_view->SetLayerVisible( i, aBoard->IsLayerVisible( PCB_LAYER_ID( i ) ) );
+        aView.SetLayerVisible( i, aBoard->IsLayerVisible( PCB_LAYER_ID( i ) ) );
 
     for( GAL_LAYER_ID i = GAL_LAYER_ID_START; i < GAL_LAYER_ID_END; ++i )
-        m_view->SetLayerVisible( i, aBoard->IsElementVisible( i ) );
+        aView.SetLayerVisible( i, aBoard->IsElementVisible( i ) );
 
     // Via layers controlled by dependencies
-    m_view->SetLayerVisible( LAYER_VIA_MICROVIA, true );
-    m_view->SetLayerVisible( LAYER_VIA_BLIND, true );
-    m_view->SetLayerVisible( LAYER_VIA_BURIED, true );
-    m_view->SetLayerVisible( LAYER_VIA_THROUGH, true );
+    aView.SetLayerVisible( LAYER_VIA_MICROVIA, true );
+    aView.SetLayerVisible( LAYER_VIA_BLIND, true );
+    aView.SetLayerVisible( LAYER_VIA_BURIED, true );
+    aView.SetLayerVisible( LAYER_VIA_THROUGH, true );
 
     // Always enable netname layers, as their visibility is controlled by layer dependencies
     for( int i = NETNAMES_LAYER_ID_START; i < NETNAMES_LAYER_ID_END; ++i )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
     for( int i = LAYER_ZONE_START; i < LAYER_ZONE_END; i++ )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
     for( int i = LAYER_PAD_COPPER_START; i < LAYER_PAD_COPPER_END; i++ )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
     for( int i = LAYER_VIA_COPPER_START; i < LAYER_VIA_COPPER_END; i++ )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
+    // Holes draw their drill map symbols here. Whether anything appears is governed by the
+    // documentation layer these depend on, not by this flag
+    for( int i = LAYER_DRILL_SYMBOL_START; i < LAYER_DRILL_SYMBOL_END; i++ )
+        aView.SetLayerVisible( i, true );
+
+    // Clearance outlines show for the copper layer being edited alone. Every caller that applies a
+    // board's visibility has to leave that one on, or a canvas switch or a layer preset drops the
+    // outlines until the active layer next changes.
     for( int i = LAYER_CLEARANCE_START; i < LAYER_CLEARANCE_END; i++ )
-        m_view->SetLayerVisible( i, false );
+        aView.SetLayerVisible( i, false );
+
+    if( IsCopperLayer( aActiveLayer ) )
+        aView.SetLayerVisible( CLEARANCE_LAYER_FOR( aActiveLayer ), true );
 
     for( int i = LAYER_POINT_START; i < LAYER_POINT_END; i++ )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
     for( int i = LAYER_BITMAP_START; i < LAYER_BITMAP_END; i++ )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
     for( int i = LAYER_UI_START; i < LAYER_UI_END; i++ )
-        m_view->SetLayerVisible( i, true );
+        aView.SetLayerVisible( i, true );
 
     // Enable some layers that are GAL specific
-    m_view->SetLayerVisible( LAYER_PAD_PLATEDHOLES, true );
-    m_view->SetLayerVisible( LAYER_NON_PLATEDHOLES, true );
-    m_view->SetLayerVisible( LAYER_PAD_HOLEWALLS, true );
-    m_view->SetLayerVisible( LAYER_VIA_HOLES, true );
-    m_view->SetLayerVisible( LAYER_VIA_HOLEWALLS, true );
-    m_view->SetLayerVisible( LAYER_GP_OVERLAY, true );
-    m_view->SetLayerVisible( LAYER_SELECT_OVERLAY, true );
-    m_view->SetLayerVisible( LAYER_RATSNEST, true );
-    m_view->SetLayerVisible( LAYER_MARKER_SHADOWS, true );
-    m_view->SetLayerVisible( LAYER_DRC_HIGHLIGHTED, true );
+    aView.SetLayerVisible( LAYER_PAD_PLATEDHOLES, true );
+    aView.SetLayerVisible( LAYER_NON_PLATEDHOLES, true );
+    aView.SetLayerVisible( LAYER_PAD_HOLEWALLS, true );
+    aView.SetLayerVisible( LAYER_VIA_HOLES, true );
+    aView.SetLayerVisible( LAYER_VIA_HOLEWALLS, true );
+    aView.SetLayerVisible( LAYER_GP_OVERLAY, true );
+    aView.SetLayerVisible( LAYER_SELECT_OVERLAY, true );
+    aView.SetLayerVisible( LAYER_RATSNEST, true );
+    aView.SetLayerVisible( LAYER_MARKER_SHADOWS, true );
+    aView.SetLayerVisible( LAYER_DRC_HIGHLIGHTED, true );
 }
 
 
@@ -658,24 +751,7 @@ void PCB_DRAW_PANEL_GAL::OnShow()
     if( !IsDialogPreview() )
         frame = dynamic_cast<PCB_BASE_FRAME*>( GetParentEDAFrame() );
 
-    try
-    {
-        // Check if the current rendering back end can be properly initialized
-        m_view->UpdateItems();
-    }
-    catch( const std::runtime_error& e )
-    {
-        DisplayError( GetParent(), e.what() );
-
-        // Use the fallback if we have one
-        if( GAL_FALLBACK != m_backend )
-        {
-            SwitchBackend( GAL_FALLBACK );
-
-            if( frame )
-                frame->ActivateGalCanvas();
-        }
-    }
+    EDA_DRAW_PANEL_GAL::OnShow();
 
     if( frame )
     {
@@ -705,6 +781,16 @@ void ApplyPcbGalLayerOrder( KIGFX::VIEW* aView )
             aView->SetLayerOrder( layer, i, false );
     }
 
+    // Drill symbol layers are not listed in the table above. Each one draws with the
+    // documentation layer whose map owns it
+    for( int i = 0; i < PCB_LAYER_ID_COUNT; ++i )
+    {
+        const PCB_LAYER_ID boardLayer = static_cast<PCB_LAYER_ID>( i );
+
+        aView->SetLayerOrder( DRILL_SYMBOL_LAYER_FOR( boardLayer ),
+                              aView->GetLayerOrder( boardLayer ), false );
+    }
+
     aView->SortOrderedLayers();
 }
 
@@ -720,6 +806,20 @@ bool PCB_DRAW_PANEL_GAL::SwitchBackend( GAL_TYPE aGalType )
     bool rv = EDA_DRAW_PANEL_GAL::SwitchBackend( aGalType );
     setDefaultLayerDeps();
     m_gal->SetWorldUnitLength( 1e-9 /* 1 nm */ / 0.0254 /* 1 inch in meters */ );
+
+    // Whether the ratsnest is split depends on the canvas
+    if( m_ratsnest && ( m_localRatsnest != nullptr ) != m_gal->HasRetainedScene() )
+    {
+        std::shared_ptr<CONNECTIVITY_DATA> connectivity = m_ratsnest->GetConnectivity();
+
+        m_view->Remove( m_ratsnest.get() );
+
+        if( m_localRatsnest )
+            m_view->Remove( m_localRatsnest.get() );
+
+        addRatsnest( connectivity );
+    }
+
     return rv;
 }
 
@@ -728,6 +828,9 @@ void PCB_DRAW_PANEL_GAL::RedrawRatsnest()
 {
     if( m_ratsnest )
         m_view->Update( m_ratsnest.get() );
+
+    if( m_localRatsnest )
+        m_view->Update( m_localRatsnest.get() );
 }
 
 
@@ -742,11 +845,21 @@ BOX2I PCB_DRAW_PANEL_GAL::GetDefaultViewBBox() const
 
 void PCB_DRAW_PANEL_GAL::setDefaultLayerDeps()
 {
-    // caching makes no sense for Cairo and other software renderers
-    auto target = m_backend == GAL_TYPE_OPENGL ? KIGFX::TARGET_CACHED : KIGFX::TARGET_NONCACHED;
+    // Cairo keeps cached groups in screen coordinates, so caching makes no sense for it
+    auto target = IsAccelerated( m_backend ) ? KIGFX::TARGET_CACHED : KIGFX::TARGET_NONCACHED;
+
+    // Anything not cached is composited above the whole retained scene, which would put reference
+    // images over the zones
+    const KIGFX::RENDER_TARGET bitmapTarget = ( m_gal && m_gal->HasRetainedScene() ) ? KIGFX::TARGET_CACHED
+                                                                                      : KIGFX::TARGET_NONCACHED;
 
     for( int i = 0; i < KIGFX::VIEW::VIEW_MAX_LAYERS; i++ )
         m_view->SetLayerTarget( i, target );
+
+    // A map's offset changes while its hole owners do not. Rebuilding every drilled pad and
+    // via on each mouse event makes dragging scale with the board's hole count.
+    for( int i = LAYER_DRILL_SYMBOL_START; i < LAYER_DRILL_SYMBOL_END; ++i )
+        m_view->SetLayerTarget( i, KIGFX::TARGET_NONCACHED );
 
     for( int i = 0; (unsigned) i < sizeof( GAL_LAYER_ORDER ) / sizeof( int ); ++i )
     {
@@ -763,15 +876,17 @@ void PCB_DRAW_PANEL_GAL::setDefaultLayerDeps()
             m_view->SetRequired( POINT_LAYER_FOR( layer ), layer );
 
             m_view->SetRequired( BITMAP_LAYER_FOR( layer ), layer );
-            m_view->SetLayerTarget( BITMAP_LAYER_FOR( layer ), KIGFX::TARGET_NONCACHED );
+            m_view->SetLayerTarget( BITMAP_LAYER_FOR( layer ), bitmapTarget );
             m_view->SetRequired( GetNetnameLayer( layer ), layer );
+            m_view->SetRequired( DRILL_SYMBOL_LAYER_FOR( layer ), layer );
         }
         else if( IsNonCopperLayer( layer ) )
         {
             m_view->SetRequired( POINT_LAYER_FOR( layer ), layer );
             m_view->SetRequired( ZONE_LAYER_FOR( layer ), layer );
-            m_view->SetLayerTarget( BITMAP_LAYER_FOR( layer ), KIGFX::TARGET_NONCACHED );
+            m_view->SetLayerTarget( BITMAP_LAYER_FOR( layer ), bitmapTarget );
             m_view->SetRequired( BITMAP_LAYER_FOR( layer ), layer );
+            m_view->SetRequired( DRILL_SYMBOL_LAYER_FOR( layer ), layer );
         }
         else if( IsNetnameLayer( layer ) )
         {
@@ -814,16 +929,36 @@ void PCB_DRAW_PANEL_GAL::setDefaultLayerDeps()
     m_view->SetLayerDisplayOnly( LAYER_SELECT_OVERLAY ) ;
     m_view->SetLayerTarget( LAYER_GP_OVERLAY, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerDisplayOnly( LAYER_GP_OVERLAY ) ;
-    m_view->SetLayerTarget( LAYER_RATSNEST, KIGFX::TARGET_OVERLAY );
+    // Non-cached so the clearance halo lands behind copper on every backend
+    m_view->SetLayerTarget( LAYER_ROUTER_PREVIEW_SHADOW, KIGFX::TARGET_NONCACHED );
+    m_view->SetLayerDisplayOnly( LAYER_ROUTER_PREVIEW_SHADOW );
+    m_view->SetLayerTarget( LAYER_ROUTER_PREVIEW_COLLISION, KIGFX::TARGET_OVERLAY );
+    m_view->SetLayerDisplayOnly( LAYER_ROUTER_PREVIEW_COLLISION );
+
+    // A retained scene caches the board's ratsnest, see addRatsnest()
+    const bool cachedRatsnest = m_gal && m_gal->HasRetainedScene();
+
+    m_view->SetLayerTarget( LAYER_RATSNEST, cachedRatsnest ? KIGFX::TARGET_CACHED : KIGFX::TARGET_OVERLAY );
     m_view->SetLayerDisplayOnly( LAYER_RATSNEST );
+
+    if( cachedRatsnest )
+    {
+        m_view->SetRequired( RATSNEST_VIEW_ITEM::LOCAL_LAYER, LAYER_RATSNEST );
+
+        // Blended as on the legacy overlay
+        m_gal->SetSceneLayerOverlayAlpha( LAYER_RATSNEST );
+    }
 
     m_view->SetLayerTarget( LAYER_DRC_ERROR, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerTarget( LAYER_DRC_WARNING, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerTarget( LAYER_DRC_EXCLUSION, KIGFX::TARGET_OVERLAY );
+    m_view->SetLayerTarget( LAYER_DRC_HIGHLIGHTED, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerTarget( LAYER_MARKER_SHADOWS, KIGFX::TARGET_OVERLAY );
     m_view->SetLayerDisplayOnly( LAYER_MARKER_SHADOWS );
 
-    m_view->SetLayerTarget( LAYER_DRAWINGSHEET, KIGFX::TARGET_NONCACHED );
+    // A retained scene keeps the sheet with the board rather than redrawing it on every pan
+    m_view->SetLayerTarget( LAYER_DRAWINGSHEET, ( m_gal && m_gal->HasRetainedScene() ) ? KIGFX::TARGET_CACHED
+                                                                                        : KIGFX::TARGET_NONCACHED );
     m_view->SetLayerDisplayOnly( LAYER_DRAWINGSHEET ) ; // drawing sheet can't be selected
     m_view->SetLayerDisplayOnly( LAYER_GRID );          // grid can't be selected
 
@@ -832,6 +967,32 @@ void PCB_DRAW_PANEL_GAL::setDefaultLayerDeps()
         m_view->SetLayerTarget( i, KIGFX::TARGET_OVERLAY );
         m_view->SetLayerDisplayOnly( i );
     }
+
+    updateCanvasFadedLayers();
+}
+
+
+void PCB_DRAW_PANEL_GAL::updateCanvasFadedLayers()
+{
+    auto* settings = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( m_view->GetPainter()->GetSettings() );
+    std::bitset<MAX_LAYERS_FOR_VIEW> layers;
+
+    if( m_gal && m_gal->HasRetainedScene() )
+    {
+        for( int layer = 0; layer < PCB_LAYER_ID_COUNT; ++layer )
+        {
+            for( int viewLayer : { layer, static_cast<int>( ZONE_LAYER_FOR( layer ) ),
+                                   static_cast<int>( PAD_COPPER_LAYER_FOR( layer ) ),
+                                   static_cast<int>( VIA_COPPER_LAYER_FOR( layer ) ),
+                                   static_cast<int>( CLEARANCE_LAYER_FOR( layer ) ) } )
+            {
+                if( m_view->IsCached( viewLayer ) )
+                    layers.set( viewLayer );
+            }
+        }
+    }
+
+    settings->SetCanvasFadedLayers( layers );
 }
 
 

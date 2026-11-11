@@ -33,10 +33,12 @@
 #include <gal/opengl/vertex_manager.h>
 #include <gal/opengl/vertex_item.h>
 #include <gal/opengl/cached_container.h>
+#include <gal/opengl/gl_reset_budget.h>
 #include <gal/opengl/noncached_container.h>
 #include <gal/opengl/opengl_compositor.h>
 #include <gal/hidpi_gl_canvas.h>
 
+#include <set>
 #include <unordered_map>
 #include <memory>
 #include <wx/event.h>
@@ -44,9 +46,6 @@
 #ifndef CALLBACK
 #define CALLBACK
 #endif
-
-///< The default number of points for circle approximation
-#define SEG_PER_CIRCLE_COUNT  64
 
 class GLUtesselator;
 class wxImage;
@@ -70,27 +69,25 @@ class GAL_API OPENGL_GAL : public GAL, public HIDPI_GL_CANVAS
 {
 public:
     /**
+     * @param aVcSettings
+     * @param aDisplayOptions are the settings for configuring the canvas.
      * @param aParent is the wxWidgets immediate wxWindow parent of this object.
-     *
      * @param aMouseListener is the wxEvtHandler that should receive the mouse events,
-     *  this can be can be any wxWindow, but is often a wxFrame container.
-     *
-     * @param aPaintListener is the wxEvtHandler that should receive the paint
-     *  event.  This can be any wxWindow, but is often a derived instance
-     *  of this class or a containing wxFrame.  The "paint event" here is
-     *  a wxCommandEvent holding EVT_GAL_REDRAW, as sent by PostPaint().
-     *
+     *                       this can be can be any wxWindow, but is often a wxFrame container.
+     * @param aPaintListener is the wxEvtHandler that should receive the paintevent.  This can
+     *                       be any wxWindow, but is often a derived instance of this class or a
+     *                       containing wxFrame.  The "paint event" here is a wxCommandEvent
+     *                       holding EVT_GAL_REDRAW, as sent by PostPaint().
      * @param aName is the name of this window for use by wxWindow::FindWindowByName()
      */
-    OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIONS& aDisplayOptions,
-                wxWindow* aParent,
+    OPENGL_GAL( const KIGFX::VC_SETTINGS& aVcSettings, GAL_DISPLAY_OPTIONS& aDisplayOptions, wxWindow* aParent,
                 wxEvtHandler* aMouseListener = nullptr, wxEvtHandler* aPaintListener = nullptr,
                 const wxString& aName = wxT( "GLCanvas" ) );
 
     ~OPENGL_GAL();
 
     /**
-     * Checks OpenGL features.
+     * Check OpenGL features.
      *
      * @param aOptions
      * @return wxEmptyString if OpenGL 2.1 or greater is available, otherwise returns error message
@@ -99,6 +96,8 @@ public:
 
     bool IsOpenGlEngine() override { return true; }
 
+    bool UsesPolygonTriangulationCache() const override { return true; }
+
     /// @copydoc GAL::IsInitialized()
     bool IsInitialized() const override
     {
@@ -106,10 +105,10 @@ public:
         return IsShownOnScreen() && !GetClientRect().IsEmpty();
     }
 
-    ///< @copydoc GAL::IsVisible()
     bool IsVisible() const override
     {
-        return IsShownOnScreen() && !GetClientRect().IsEmpty();
+        // VIEW skips cached item updates for invisible canvases, which a lost context cannot take
+        return GetContextLoss() == GAL_CONTEXT_LOSS::NONE && IsShownOnScreen() && !GetClientRect().IsEmpty();
     }
 
     void SetMinLineWidth( float aLineWidth ) override;
@@ -208,8 +207,7 @@ public:
     /// @copydoc GAL::Flush()
     void Flush() override;
 
-    /// @copydoc GAL::ClearScreen()
-    void ClearScreen( ) override;
+    void ClearScreen() override;
 
     // --------------
     // Transformation
@@ -289,14 +287,13 @@ public:
     // Cursor
     // -------
 
-    /// @copydoc GAL::SetNativeCursorStyle()
     bool SetNativeCursorStyle( KICURSOR aCursor, bool aHiDPI ) override;
 
     /// @copydoc GAL::DrawCursor()
     void DrawCursor( const VECTOR2D& aCursorPosition ) override;
 
     /**
-     * Post an event to #m_paint_listener.
+     * Post an event to #m_paintListener.
      *
      * A post is used so that the actual drawing function can use a device context type that
      * is not specific to the wxEVT_PAINT event, just by changing the PostPaint code.
@@ -320,6 +317,15 @@ public:
         return m_isContextLocked;
     }
 
+    bool IsContextValid() const override
+    {
+        return m_isContextValid;
+    }
+
+    GAL_CONTEXT_LOSS GetContextLoss() const override;
+
+    bool IsResetSettled() override;
+
     void LockContext( int aClientCookie ) override;
 
     void UnlockContext( int aClientCookie ) override;
@@ -332,7 +338,7 @@ public:
 
     bool GetScreenshot( wxImage& aDstImage );
 
-    ///< Parameters passed to the GLU tesselator
+    /// Parameters passed to the GLU tesselator
     struct TessParams
     {
         /// Manager used for storing new vertices
@@ -350,6 +356,17 @@ private:
     wxGLContext*            m_glPrivContext;    ///< Canvas-specific OpenGL context
     int                     m_swapInterval;     ///< Used to store swap interval information
     static int              m_instanceCounter;  ///< GL GAL instance counter
+    static int              m_contextGroupId;   ///< Changes each time a reset kills the shared group
+    static bool             m_resetBudgetExhausted; ///< Resets came too often to keep using OpenGL
+    static GL_RESET_BUDGET  m_resetBudget;      ///< Rate of resets tolerated before falling back
+    static bool             m_glLoaded;         ///< GL entry points are loaded, so resets can be queried
+    static std::set<OPENGL_GAL*> m_instances;   ///< Canvases to repaint after a reset
+    static bool             m_resetSettled;     ///< Driver finished the last reset
+
+    /// When the last reset was detected, to stop waiting on a driver that never reports completion
+    static GL_RESET_BUDGET::CLOCK::time_point m_resetDetectedAt;
+
+    int                     m_ownContextGroupId; ///< Group this canvas' contexts were created in
     wxEvtHandler*           m_mouseListener;
     wxEvtHandler*           m_paintListener;
 
@@ -388,6 +405,7 @@ private:
                                                         ///< done when the window is visible
     bool                    m_isGrouping;               ///< Was a group started?
     bool                    m_isContextLocked;          ///< Used for assertion checking
+    bool                    m_isContextValid;           ///< Did the last lock make us current?
     int                     m_lockClientCookie;
     GLint                   ufm_worldPixelSize;
     GLint                   ufm_screenPixelSize;
@@ -406,13 +424,11 @@ private:
     GLUtesselator*                        m_tesselator;
     std::deque<std::shared_ptr<GLdouble>> m_tessIntersects;
 
-    /// @copydoc GAL::BeginUpdate()
     void beginUpdate() override;
 
-    /// @copydoc GAL::EndUpdate()
     void endUpdate() override;
 
-    ///< Update handler for OpenGL settings
+    /// Update handler for OpenGL settings
     bool updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions ) override;
 
     /**
@@ -471,6 +487,8 @@ private:
     /**
      * Internal method for circle drawing.
      *
+     * @param aCenterPoint is the circle center point.
+     * @param aRadius is the circle radius.
      * @param aReserve if set to false, reserve 3 vertices for each circle.
      */
     void drawCircle( const VECTOR2D& aCenterPoint, double aRadius, bool aReserve = true );
@@ -490,6 +508,7 @@ private:
      *
      * @param aPointGetter is a function to obtain coordinates of n-th vertex.
      * @param aPointCount is the number of points to be drawn.
+     * @param aWidth is the width of the segments.
      * @param aReserve if set to false, do not reserve vertices internally.
      */
     void drawSegmentChain( const std::function<VECTOR2D( int )>& aPointGetter, int aPointCount,
@@ -513,6 +532,7 @@ private:
     /**
      * Draw a set of polygons with a cached triangulation. Way faster than drawPolygon.
      *
+     * @param aPoly is the polygon to draw.
      * @param aStrokeTriangulation indicates the triangulation should be stroked rather than
      *                             filled.  Used for debugging.
      */
@@ -549,11 +569,6 @@ private:
      * this routine.
      */
     void drawGridSources();
-
-    /**
-     * Fill a source's coverage region into the current color/stencil state.
-     */
-    void drawGridCoverageShape( const GRID_SOURCE& aSrc );
 
     /**
      * Compute a size of text drawn using bitmap font with current text setting applied.
@@ -605,15 +620,6 @@ private:
      */
     unsigned int getNewGroupNumber();
 
-    /**
-     * Compute the angle step when drawing arcs/circles approximated with lines.
-     */
-    double calcAngleStep( double aRadius ) const
-    {
-        // Bigger arcs need smaller alpha increment to make them look smooth
-        return std::min( 1e6 / aRadius, 2.0 * M_PI / SEG_PER_CIRCLE_COUNT );
-    }
-
     double getWorldPixelSize() const;
 
     VECTOR2D getScreenPixelSize() const;
@@ -631,6 +637,12 @@ private:
      * @throw std::runtime_error if any of the OpenGL feature checks failed
      */
     void init();
+
+    /// @return true if the current context reports a GPU reset.
+    bool detectContextReset();
+
+    /// Abandon the shared context group so the next canvas created starts a fresh one.
+    void orphanContextGroup();
 };
 } // namespace KIGFX
 

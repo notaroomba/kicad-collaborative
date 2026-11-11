@@ -39,7 +39,7 @@
 
 void PCB_EDIT_FRAME::LoadDrawingSheet()
 {
-    PROJECT_FILE&           project       = Prj().GetProjectFile();
+    PROJECT_FILE& project = Prj().GetProjectFile();
 
     // Load the drawing sheet from the filename stored in the project
     // If empty, or not existing, the default drawing sheet is loaded.
@@ -47,29 +47,50 @@ void PCB_EDIT_FRAME::LoadDrawingSheet()
     resolver.SetProject( &Prj() );
     resolver.SetProgramBase( &Pgm() );
 
-    wxString filename = resolver.ResolvePath( project.m_BoardDrawingSheetFile,
-                                              Prj().GetProjectPath(),
+    wxString filename = resolver.ResolvePath( project.m_BoardDrawingSheetFile, Prj().GetProjectPath(),
                                               { GetBoard()->GetEmbeddedFiles() } );
 
     wxString msg;
 
     if( !DS_DATA_MODEL::GetTheInstance().LoadDrawingSheet( filename, &msg ) )
         ShowInfoBarError( msg, true );
-
 }
 
-bool PCB_EDIT_FRAME::LoadProjectSettings()
+
+void PCB_EDIT_FRAME::ApplyProjectFileSettings()
 {
-    PROJECT_FILE&           project       = Prj().GetProjectFile();
-    PROJECT_LOCAL_SETTINGS& localSettings = Prj().GetLocalSettings();
+    PROJECT_FILE& project = Prj().GetProjectFile();
 
     BASE_SCREEN::m_DrawingSheetFileName = project.m_BoardDrawingSheetFile;
 
+    KIGFX::RENDER_SETTINGS*        rs = GetCanvas()->GetView()->GetPainter()->GetSettings();
+    std::map<int, KIGFX::COLOR4D>& netColors = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( rs )->GetNetColorMap();
+    netColors.clear();
+
+    for( const auto& [netname, color] : project.NetSettings()->GetNetColorAssignments() )
+    {
+        if( color != COLOR4D::UNSPECIFIED )
+        {
+            if( NETINFO_ITEM* net = GetBoard()->GetNetInfo().GetNetItem( netname ) )
+                netColors[net->GetNetCode()] = color;
+        }
+    }
+
+    m_appearancePanel->SetUserLayerPresets( project.m_LayerPresets );
+    m_appearancePanel->SetUserViewports( project.m_Viewports );
+}
+
+
+bool PCB_EDIT_FRAME::LoadProjectSettings()
+{
+    PROJECT_LOCAL_SETTINGS& localSettings = Prj().GetLocalSettings();
+
+    ApplyProjectFileSettings();
+
     // Load render settings that aren't stored in PCB_DISPLAY_OPTIONS
 
-    std::shared_ptr<NET_SETTINGS>& netSettings = project.NetSettings();
-    KIGFX::RENDER_SETTINGS*        rs = GetCanvas()->GetView()->GetPainter()->GetSettings();
-    KIGFX::PCB_RENDER_SETTINGS*    renderSettings = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( rs );
+    KIGFX::RENDER_SETTINGS*     rs = GetCanvas()->GetView()->GetPainter()->GetSettings();
+    KIGFX::PCB_RENDER_SETTINGS* renderSettings = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( rs );
 
     const NETINFO_LIST& nets = GetBoard()->GetNetInfo();
 
@@ -88,21 +109,6 @@ bool PCB_EDIT_FRAME::LoadProjectSettings()
             hiddenNets.insert( net->GetNetCode() );
     }
 
-    std::map<int, KIGFX::COLOR4D>& netColors = renderSettings->GetNetColorMap();
-    netColors.clear();
-
-    for( const auto& [netname, color] : netSettings->GetNetColorAssignments() )
-    {
-        if( color != COLOR4D::UNSPECIFIED )
-        {
-            if( NETINFO_ITEM* net = GetBoard()->GetNetInfo().GetNetItem( netname ) )
-                netColors[ net->GetNetCode() ] = color;
-        }
-    }
-
-    m_appearancePanel->SetUserLayerPresets( project.m_LayerPresets );
-    m_appearancePanel->SetUserViewports( project.m_Viewports );
-
     PCB_SELECTION_TOOL*       selTool = GetToolManager()->GetTool<PCB_SELECTION_TOOL>();
     PCB_SELECTION_FILTER_OPTIONS& filterOpts = selTool->GetFilter();
 
@@ -119,12 +125,12 @@ bool PCB_EDIT_FRAME::LoadProjectSettings()
     opts.m_ZoneDisplayMode     = localSettings.m_ZoneDisplayMode;
     opts.m_ImageOpacity        = localSettings.m_ImageOpacity;
     opts.m_FilledShapeOpacity        = localSettings.m_ShapeOpacity;
+    opts.m_OutsideGroupOpacity = localSettings.m_OutsideGroupOpacity;
 
     // No refresh here: callers of LoadProjectSettings refresh later
     SetDisplayOptions( opts, false );
 
-    BOARD_DESIGN_SETTINGS& bds   = GetDesignSettings();
-    bds.m_UseConnectedTrackWidth = localSettings.m_AutoTrackWidth;
+    GetDesignSettings().m_UseConnectedTrackWidth = localSettings.m_AutoTrackWidth;
 
     wxFileName fn( GetCurrentFileName() );
     fn.MakeRelativeTo( Prj().GetProjectPath() );
@@ -219,10 +225,10 @@ void PCB_EDIT_FRAME::saveProjectSettings()
     localSettings.m_ZoneDisplayMode     = displayOpts.m_ZoneDisplayMode;
     localSettings.m_ImageOpacity        = displayOpts.m_ImageOpacity;
     localSettings.m_ShapeOpacity        = displayOpts.m_FilledShapeOpacity;
+    localSettings.m_OutsideGroupOpacity = displayOpts.m_OutsideGroupOpacity;
 
     // Save Design settings
-    const BOARD_DESIGN_SETTINGS& bds = GetDesignSettings();
-    localSettings.m_AutoTrackWidth   = bds.m_UseConnectedTrackWidth;
+    localSettings.m_AutoTrackWidth = GetDesignSettings().m_UseConnectedTrackWidth;
 
     // Net display settings
     const NETINFO_LIST&         nets = GetBoard()->GetNetInfo();

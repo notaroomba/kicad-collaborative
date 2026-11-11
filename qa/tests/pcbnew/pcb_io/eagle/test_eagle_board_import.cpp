@@ -69,11 +69,11 @@ BOOST_AUTO_TEST_CASE( ViaNetAssignment )
                            "Test board file not found: " + dataPath );
 
     PCB_IO_EAGLE eaglePlugin;
-    BOARD*       rawBoard = nullptr;
+    std::unique_ptr<BOARD> board;
 
     try
     {
-        rawBoard = eaglePlugin.LoadBoard( dataPath, nullptr, nullptr );
+        board = eaglePlugin.LoadBoard( dataPath );
     }
     catch( const IO_ERROR& e )
     {
@@ -83,8 +83,6 @@ BOOST_AUTO_TEST_CASE( ViaNetAssignment )
     {
         BOOST_FAIL( std::string( "Exception loading Eagle board: " ) + e.what() );
     }
-
-    std::unique_ptr<BOARD> board( rawBoard );
 
     BOOST_REQUIRE( board );
 
@@ -144,11 +142,11 @@ BOOST_AUTO_TEST_CASE( TextJustification )
                            "Test board file not found: " + dataPath );
 
     PCB_IO_EAGLE eaglePlugin;
-    BOARD*       rawBoard = nullptr;
+    std::unique_ptr<BOARD> board;
 
     try
     {
-        rawBoard = eaglePlugin.LoadBoard( dataPath, nullptr, nullptr );
+        board = eaglePlugin.LoadBoard( dataPath );
     }
     catch( const IO_ERROR& e )
     {
@@ -158,8 +156,6 @@ BOOST_AUTO_TEST_CASE( TextJustification )
     {
         BOOST_FAIL( std::string( "Exception loading Eagle board: " ) + e.what() );
     }
-
-    std::unique_ptr<BOARD> board( rawBoard );
 
     BOOST_REQUIRE( board );
 
@@ -250,7 +246,7 @@ BOOST_AUTO_TEST_CASE( UserLayerMapping )
 
     PCB_IO_EAGLE eaglePlugin;
 
-    FOOTPRINT* fp = nullptr;
+    std::unique_ptr<FOOTPRINT> fp;
 
     try
     {
@@ -264,8 +260,6 @@ BOOST_AUTO_TEST_CASE( UserLayerMapping )
     {
         BOOST_FAIL( std::string( "Exception loading Eagle footprint: " ) + e.what() );
     }
-
-    std::unique_ptr<FOOTPRINT> guard( fp );
 
     BOOST_REQUIRE( fp );
 

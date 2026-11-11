@@ -94,10 +94,10 @@ set(3D-VIEWER_SRCS
     common_ogl/ogl_utils.cpp
     3d_fastmath.cpp
     3d_math.cpp
+    3d_model_align.cpp
     dialogs/appearance_controls_3D.cpp
     dialogs/appearance_controls_3D_base.cpp
-    dialogs/dialog_select_3d_model_base.cpp
-    dialogs/dialog_select_3d_model.cpp
+    dialogs/native_model_file_picker.cpp
     dialogs/panel_preview_3d_model_base.cpp
     dialogs/panel_preview_3d_model.cpp
     dialogs/dialog_export_3d_image.cpp
@@ -108,6 +108,20 @@ set(3D-VIEWER_SRCS
     dialogs/panel_3D_raytracing_options.cpp
     dialogs/panel_3D_raytracing_options_base.cpp
     )
+
+if( KICAD_BUILD_NATIVE_MODEL_PREVIEW )
+    # Neither the request service nor the preview panel is platform specific; only the picker
+    # front end is.
+    list( APPEND 3D-VIEWER_SRCS
+        dialogs/model_file_preview_request_service.cpp
+        dialogs/panel_model_file_preview.cpp )
+
+    if( WIN32 )
+        list( APPEND 3D-VIEWER_SRCS dialogs/native_model_file_picker_windows.cpp )
+    elseif( UNIX AND NOT APPLE )
+        list( APPEND 3D-VIEWER_SRCS dialogs/native_model_file_picker_gtk.cpp )
+    endif()
+endif()
 
 add_library(3d-viewer STATIC ${3D-VIEWER_SRCS})
 add_dependencies( 3d-viewer pcbcommon )
@@ -131,10 +145,15 @@ target_link_libraries( 3d-viewer
         core
         common
         nlohmann_json
+        eigen
         Boost::headers
         ${wxWidgets_LIBRARIES}
         ${OPENGL_LIBRARIES}
         kicad_3dsg )
+
+if( KICAD_BUILD_NATIVE_MODEL_PREVIEW AND NOT APPLE )
+    target_link_libraries( 3d-viewer PUBLIC kicad_3d_import )
+endif()
 
 add_subdirectory( 3d_cache )
 

@@ -19,7 +19,6 @@
 
 #include <bitmaps.h>
 #include <common.h>
-#include <confirm.h>
 #include <kiplatform/io.h>
 #include <widgets/std_bitmap_button.h>
 #include <widgets/paged_dialog.h>
@@ -108,21 +107,23 @@ PANEL_SETUP_RULES::~PANEL_SETUP_RULES( )
 
 void PANEL_SETUP_RULES::onCharHook( wxKeyEvent& aEvent )
 {
+    // Route Escape through the dialog's cancel handler so unsaved rules get a discard prompt
     if( aEvent.GetKeyCode() == WXK_ESCAPE && !m_textEditor->AutoCompActive() )
     {
-        if( m_originalText != m_textEditor->GetText() )
-        {
-            if( IsOK( wxGetTopLevelParent( this ), _( "Cancel Changes?" ) ) )
-            {
-                m_textEditor->SetText( m_originalText );
-                m_textEditor->SelectAll();
-            }
-
-            return;
-        }
+        wxPostEvent( PAGED_DIALOG::GetDialog( this ), wxCommandEvent( wxEVT_COMMAND_BUTTON_CLICKED, wxID_CANCEL ) );
+        return;
     }
 
     aEvent.Skip();
+}
+
+
+bool PANEL_SETUP_RULES::IsModified() const
+{
+    if( m_frame->Prj().IsNullProject() || !m_frame->GetBoard() )
+        return false;
+
+    return m_originalText != m_textEditor->GetText();
 }
 
 
@@ -228,7 +229,7 @@ void PANEL_SETUP_RULES::OnShowMatching()
                 };
 
         wxString rulesText = m_frame->GetBoard()->ConvertCrossReferencesToKIIDs( text );
-        rulesText = ExpandTextVars( rulesText, &resolver );
+        rulesText = ExpandTextVars( rulesText, &resolver, RESOLVED );
 
         DRC_RULES_PARSER parser( rulesText, _( "DRC rules" ) );
         parser.Parse( rules, m_errorsReport );
@@ -802,8 +803,7 @@ void PANEL_SETUP_RULES::onScintillaCharAdded( wxStyledTextEvent &aEvent )
         {
             if( m_netClassRegex.Matches( last ) )
             {
-                BOARD_DESIGN_SETTINGS&         bds = m_frame->GetBoard()->GetDesignSettings();
-                std::shared_ptr<NET_SETTINGS>& netSettings = bds.m_NetSettings;
+                std::shared_ptr<NET_SETTINGS>& netSettings = m_frame->GetBoard()->GetDesignSettings().m_NetSettings;
 
                 for( const auto& [name, netclass] : netSettings->GetNetclasses() )
                     tokens += wxT( "|" ) + name;
@@ -952,7 +952,7 @@ void PANEL_SETUP_RULES::OnCompile( wxCommandEvent& event )
 
         wxString rulesText = m_textEditor->GetText();
         rulesText = m_frame->GetBoard()->ConvertCrossReferencesToKIIDs( rulesText );
-        rulesText = ExpandTextVars( rulesText, &resolver );
+        rulesText = ExpandTextVars( rulesText, &resolver, RESOLVED );
 
         DRC_RULES_PARSER parser( rulesText, _( "DRC rules" ) );
 
@@ -976,9 +976,8 @@ void PANEL_SETUP_RULES::OnCompile( wxCommandEvent& event )
 
 void PANEL_SETUP_RULES::checkPlausibility( const std::vector<std::shared_ptr<DRC_RULE>>& aRules )
 {
-    BOARD*                 board = m_frame->GetBoard();
-    BOARD_DESIGN_SETTINGS& bds = board->GetDesignSettings();
-    LSET                   enabledLayers = board->GetEnabledLayers();
+    BOARD* board = m_frame->GetBoard();
+    LSET   enabledLayers = board->GetEnabledLayers();
 
     // Key by (condition, layerSource) so rules with different layer scopes are considered distinct
     std::map<std::pair<wxString, wxString>, wxString> seenConditions;
@@ -1015,7 +1014,7 @@ void PANEL_SETUP_RULES::checkPlausibility( const std::vector<std::shared_ptr<DRC
         {
             wxString ncName = wxString::FromUTF8( ( *it )[1].str() );
 
-            if( !bds.m_NetSettings->HasNetclass( ncName ) )
+            if( !board->GetDesignSettings().m_NetSettings->HasNetclass( ncName ) )
             {
                 m_errorsReport->Report( wxString::Format( _( "Rule '%s' references undefined netclass '%s'." ),
                                                           rule->m_Name,
@@ -1120,13 +1119,7 @@ bool PANEL_SETUP_RULES::TransferDataToWindow()
 
 bool PANEL_SETUP_RULES::TransferDataFromWindow()
 {
-    if( m_originalText == m_textEditor->GetText() )
-        return true;
-
-    if( m_frame->Prj().IsNullProject() )
-        return true;
-
-    if( !m_frame->GetBoard() )
+    if( !IsModified() )
         return true;
 
     wxString rulesFilepath = m_frame->GetBoard()->GetDesignRulesPath();

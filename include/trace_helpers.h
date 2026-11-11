@@ -101,6 +101,13 @@ extern KICOMMON_API const wxChar* const kicadTraceCoroutineStack;
 extern KICOMMON_API const wxChar* const traceAutoSave;
 
 /**
+ * Flag to enable native operating-system model preview debug output.
+ *
+ * Use "KICAD_MODEL_PREVIEW" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceModelPreview;
+
+/**
  * Flag to enable schematic library memory deletion debug output.
  *
  * Use "KICAD_SCH_LIB_MEM" to enable.
@@ -256,6 +263,27 @@ extern KICOMMON_API const wxChar* const traceEnvVars;
 extern KICOMMON_API const wxChar* const traceGalProfile;
 
 /**
+ * Flag to enable debug output of GAL context binding.
+ *
+ * Use "KICAD_GAL_CONTEXT" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceGalContext;
+
+/**
+ * Flag to enable debug output of GAL cached group creation and drawing.
+ *
+ * Use "KICAD_GAL_GROUPS" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceGalGroups;
+
+/**
+ * Flag to enable debug output of the RHI rendering backend.
+ *
+ * Use "KICAD_RHI" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceRhi;
+
+/**
  * Flag to enable KiCad2Step debug tracing.
  *
  * Use "KICAD2STEP" to enable.
@@ -296,6 +324,13 @@ extern KICOMMON_API const wxChar* const traceEagleIo;
  * Use "KICAD_DIPTRACE_IO" to enable.
  */
 extern KICOMMON_API const wxChar* const traceDiptraceIo;
+
+/*
+ * Flag to enable Easy-PC / DesignSpark PCB I/O debug tracing.
+ *
+ * Use "KICAD_EASYPC_IO" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceEasyPc;
 
 /*
  * Flag to enable CADSTAR I/O debug tracing.
@@ -395,6 +430,13 @@ extern KICOMMON_API const wxChar* const traceLibWatch;
 extern KICOMMON_API const wxChar* const traceLibraries;
 
 /**
+ * Flag to enable database library tracing.
+ *
+ * Use "KICAD_DATABASE" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceDatabase;
+
+/**
  * Flag to watch how schematic move tool actions are handled.
  *
  * Use "KICAD_SCH_MOVE" to enable.
@@ -414,6 +456,13 @@ extern KICOMMON_API const wxChar* const traceSymbolInheritance;
  * Use "KICAD_SCH_NETCHAIN" to enable.
  */
 extern KICOMMON_API const wxChar* const traceSchNetChain;
+
+/**
+ * Flag to enable tracing of imported net-name reconciliation between a schematic and its board.
+ *
+ * Use "KICAD_IMPORT_NET_NAMES" to enable.
+ */
+extern KICOMMON_API const wxChar* const traceImportNetNames;
 
 ///@}
 

@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <font/font.h>
 #include <embedded_files.h>
 #include <kiway.h>
 #include <dialog_shim.h>
@@ -126,11 +127,48 @@ wxString BuildFootprintChooserSymbolNetlist( const std::vector<LIB_SYMBOL*>& aSy
 }
 
 
-FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_BASE_FRAME* aFrame, WX_GRID* aGrid, LIB_SYMBOL* aSymbol,
-                                      std::vector<EMBEDDED_FILES*> aFilesStack ) :
+std::vector<SCH_FIELD> GetSheetFieldsForEditing( const SCH_SHEET& aSheet )
+{
+    std::vector<SCH_FIELD> fields = aSheet.GetFields();
+
+    if( !FindField( fields, FIELD_T::SHEET_REF_SUFFIX ) )
+    {
+        SCH_FIELD suffix( nullptr, FIELD_T::SHEET_REF_SUFFIX,
+                          GetDefaultFieldName( FIELD_T::SHEET_REF_SUFFIX, UNTRANSLATED ) );
+        suffix.SetVisible( false );
+        suffix.SetPosition( aSheet.GetPosition() );
+        suffix.SetTextSize( aSheet.GetField( FIELD_T::SHEET_NAME )->GetTextSize() );
+        suffix.SetTextAngle( aSheet.GetField( FIELD_T::SHEET_NAME )->GetTextAngle() );
+        fields.push_back( suffix );
+    }
+
+    std::stable_sort( fields.begin(), fields.end(),
+                      []( const SCH_FIELD& a, const SCH_FIELD& b )
+                      {
+                          if( a.IsMandatory() != b.IsMandatory() )
+                              return a.IsMandatory();
+
+                          if( !a.IsMandatory() )
+                          {
+                              bool aSuffix = a.GetId() == FIELD_T::SHEET_REF_SUFFIX;
+                              bool bSuffix = b.GetId() == FIELD_T::SHEET_REF_SUFFIX;
+
+                              if( aSuffix != bSuffix )
+                                  return aSuffix;
+                          }
+
+                          return a.GetOrdinal() < b.GetOrdinal();
+                      } );
+
+    return fields;
+}
+
+
+FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_BASE_FRAME* aFrame, WX_GRID* aGrid,
+                                      LIB_SYMBOL* aSymbol, std::vector<EMBEDDED_FILES*>& aFilesStack ) :
         m_frame( aFrame ),
         m_dialog( aDialog ),
-        m_parentType( SCH_SYMBOL_T ),
+        m_parentType( LIB_SYMBOL_T ),
         m_part( aSymbol ),
         m_filesStack( aFilesStack ),
         m_symbolNetlist( BuildFootprintChooserSymbolNetlist( aSymbol ) ),
@@ -146,11 +184,13 @@ FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_BASE_FRAME* aFra
 
 
 FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFrame, WX_GRID* aGrid,
-                                      SCH_SYMBOL* aSymbol ) :
+                                      SCH_SYMBOL* aSymbol, LIB_SYMBOL* aPart,
+                                      std::vector<EMBEDDED_FILES*>& aFilesStack ) :
         m_frame( aFrame ),
         m_dialog( aDialog ),
         m_parentType( SCH_SYMBOL_T ),
-        m_part( nullptr ),
+        m_part( aPart ),
+        m_filesStack( aFilesStack ),
         m_symbolNetlist( BuildFootprintChooserSymbolNetlist( aSymbol->GetLibSymbolRef().get() ) ),
         m_fieldNameValidator( FIELD_T::USER ),
         m_referenceValidator( FIELD_T::REFERENCE ),
@@ -159,31 +199,17 @@ FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFra
         m_nonUrlValidator( FIELD_T::USER ),
         m_filepathValidator( FIELD_T::SHEET_FILENAME )
 {
-    // GetLibSymbolRef() hands back a raw pointer into a unique_ptr owned by the schematic symbol.
-    // This dialog is quasi-modal, so the still-live schematic can free that part through
-    // SetLibSymbol() (library update, ERC, undo) while the grid is open, after which GetAttr() would
-    // dereference freed memory.  Keep a private copy alive for the grid's lifetime instead.
-    if( LIB_SYMBOL* libSymbol = aSymbol->GetLibSymbolRef().get() )
-    {
-        m_ownedPart = std::make_unique<LIB_SYMBOL>( *libSymbol );
-        m_part = m_ownedPart.get();
-    }
-
-    m_filesStack.push_back( aSymbol->Schematic() );
-
-    if( m_part )
-        m_filesStack.push_back( m_part );
-
     initGrid( aGrid );
 }
 
 
 FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFrame, WX_GRID* aGrid,
-                                      SCH_SHEET* aSheet ) :
+                                      SCH_SHEET* aSheet, std::vector<EMBEDDED_FILES*>& aFilesStack ) :
         m_frame( aFrame ),
         m_dialog( aDialog ),
         m_parentType( SCH_SHEET_T ),
         m_part( nullptr ),
+        m_filesStack( aFilesStack ),
         m_fieldNameValidator( FIELD_T::USER ),
         m_referenceValidator( FIELD_T::SHEET_NAME ),
         m_valueValidator( FIELD_T::VALUE ),
@@ -191,18 +217,17 @@ FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFra
         m_nonUrlValidator( FIELD_T::USER ),
         m_filepathValidator( FIELD_T::SHEET_FILENAME )
 {
-    m_filesStack.push_back( aSheet->Schematic() );
-
     initGrid( aGrid );
 }
 
 
 FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFrame, WX_GRID* aGrid,
-                                      SCH_LABEL_BASE* aLabel ) :
+                                      SCH_LABEL_BASE* aLabel, std::vector<EMBEDDED_FILES*>& aFilesStack ) :
         m_frame( aFrame ),
         m_dialog( aDialog ),
         m_parentType( SCH_LABEL_LOCATE_ANY_T ),
         m_part( nullptr ),
+        m_filesStack( aFilesStack ),
         m_fieldNameValidator( FIELD_T::USER ),
         m_referenceValidator( FIELD_T::USER ),
         m_valueValidator( FIELD_T::USER ),
@@ -210,8 +235,6 @@ FIELDS_GRID_TABLE::FIELDS_GRID_TABLE( DIALOG_SHIM* aDialog, SCH_EDIT_FRAME* aFra
         m_nonUrlValidator( FIELD_T::USER ),
         m_filepathValidator( FIELD_T::USER )
 {
-    m_filesStack.push_back( aLabel->Schematic() );
-
     initGrid( aGrid );
 }
 
@@ -222,7 +245,7 @@ int FIELDS_GRID_TABLE::GetMandatoryRowCount() const
 
     for( const SCH_FIELD& field : *this )
     {
-        if( field.IsMandatory() )
+        if( field.IsMandatory() && ( !privateFieldsAreHidden() || !field.IsPrivate() ) )
             mandatoryRows++;
     }
 
@@ -234,8 +257,7 @@ void FIELDS_GRID_TABLE::push_back( const SCH_FIELD& aField )
 {
     std::vector<SCH_FIELD>::push_back( aField );
 
-    m_isInherited.resize( size() );
-    m_parentFields.resize( size() );
+    m_inheritance.resize( size() );
 }
 
 
@@ -420,8 +442,8 @@ FIELDS_GRID_TABLE::~FIELDS_GRID_TABLE()
     m_fontAttr->DecRef();
     m_colorAttr->DecRef();
 
-    for( SCH_FIELD& field : m_parentFields )
-        field.SetParent( nullptr );
+    for( INHERITANCE& inheritance : m_inheritance )
+        inheritance.m_parentField.SetParent( nullptr );
 
     m_frame->Unbind( EDA_EVT_UNITS_CHANGED, &FIELDS_GRID_TABLE::onUnitsChanged, this );
 }
@@ -450,10 +472,40 @@ int FIELDS_GRID_TABLE::getColumnCount() const
 }
 
 
+bool FIELDS_GRID_TABLE::privateFieldsAreHidden() const
+{
+    return m_frame->GetFrameType() == FRAME_SCH || m_frame->GetFrameType() == FRAME_SCH_VIEWER;
+}
+
+
+int FIELDS_GRID_TABLE::getFieldIndex( int aRow ) const
+{
+    wxCHECK_MSG( aRow >= 0 && aRow < getVisibleRowCount(), -1, wxT( "Invalid field row" ) );
+
+    if( !privateFieldsAreHidden() )
+        return aRow;
+
+    int visibleRow = 0;
+
+    for( int fieldIndex = 0; fieldIndex < static_cast<int>( size() ); ++fieldIndex )
+    {
+        if( at( fieldIndex ).IsPrivate() )
+            continue;
+
+        if( visibleRow == aRow )
+            return fieldIndex;
+
+        ++visibleRow;
+    }
+
+    wxFAIL_MSG( wxT( "Row index off end of visible row count" ) );
+    return -1;
+}
+
+
 int FIELDS_GRID_TABLE::getVisibleRowCount() const
 {
-    if( m_frame->GetFrameType() == FRAME_SCH
-        || m_frame->GetFrameType() == FRAME_SCH_VIEWER )
+    if( privateFieldsAreHidden() )
     {
         int visibleRows = 0;
 
@@ -472,26 +524,7 @@ int FIELDS_GRID_TABLE::getVisibleRowCount() const
 
 SCH_FIELD& FIELDS_GRID_TABLE::getField( int aRow )
 {
-    if( m_frame->GetFrameType() == FRAME_SCH
-        || m_frame->GetFrameType() == FRAME_SCH_VIEWER )
-    {
-        int visibleRow = 0;
-
-        for( SCH_FIELD& field : *this )
-        {
-            if( field.IsPrivate() )
-                continue;
-
-            if( visibleRow == aRow )
-                return field;
-
-            ++visibleRow;
-        }
-
-        wxFAIL_MSG( wxT( "Row index off end of visible row count" ) );
-    }
-
-    return this->at( aRow );
+    return at( getFieldIndex( aRow ) );
 }
 
 
@@ -567,7 +600,7 @@ wxGridCellAttr* FIELDS_GRID_TABLE::GetAttr( int aRow, int aCol, wxGridCellAttr::
     switch( aCol )
     {
     case FDC_NAME:
-        if( field.IsMandatory() )
+        if( field.IsMandatory() || field.GetId() == FIELD_T::SHEET_REF_SUFFIX )
         {
             attr = m_fieldNameAttr->Clone();
             attr->SetReadOnly( true );
@@ -750,7 +783,7 @@ wxString FIELDS_GRID_TABLE::GetValue( int aRow, int aCol )
         }
         else
         {
-            if( field.IsMandatory() )
+            if( field.IsMandatory() || field.GetId() == FIELD_T::SHEET_REF_SUFFIX )
                 return GetDefaultFieldName( field.GetId(), TRANSLATED );
             else
                 return field.GetName( false );
@@ -877,6 +910,16 @@ void FIELDS_GRID_TABLE::SetValue( int aRow, int aCol, const wxString &aValue )
     switch( aCol )
     {
     case FDC_NAME:
+        if( field.GetId() == FIELD_T::SHEET_REF_SUFFIX )
+            break;
+
+        if( m_parentType == SCH_SHEET_T
+            && ( value == GetDefaultFieldName( FIELD_T::SHEET_REF_SUFFIX, UNTRANSLATED )
+                 || value == GetDefaultFieldName( FIELD_T::SHEET_REF_SUFFIX, TRANSLATED ) ) )
+        {
+            break;
+        }
+
         field.SetName( value );
         break;
 
@@ -1098,58 +1141,115 @@ SCH_FIELD* FIELDS_GRID_TABLE::GetField( FIELD_T aFieldId )
 
 int FIELDS_GRID_TABLE::GetFieldRow( FIELD_T aFieldId )
 {
-    for( int ii = 0; ii < (int) this->size(); ++ii )
+    int visibleRow = 0;
+
+    for( const SCH_FIELD& field : *this )
     {
-        if( this->at( ii ).GetId() == aFieldId )
-            return ii;
+        if( field.GetId() == aFieldId )
+            return privateFieldsAreHidden() && field.IsPrivate() ? -1 : visibleRow;
+
+        if( !privateFieldsAreHidden() || !field.IsPrivate() )
+            ++visibleRow;
     }
 
     return -1;
 }
 
-void FIELDS_GRID_TABLE::AddInheritedField( const SCH_FIELD& aParent )
+
+bool FIELDS_GRID_TABLE::IsInherited( size_t aRow ) const
+{
+    int fieldIndex = getFieldIndex( static_cast<int>( aRow ) );
+
+    if( fieldIndex < 0 || fieldIndex >= static_cast<int>( m_inheritance.size() ) )
+        return false;
+
+    const INHERITANCE& inheritance = m_inheritance[fieldIndex];
+
+    // Any edit, including position or visibility, turns the row into an override
+    return inheritance.m_derived && at( fieldIndex ).HasSameContent( inheritance.m_parentField );
+}
+
+
+const SCH_FIELD& FIELDS_GRID_TABLE::ParentField( size_t aRow ) const
+{
+    return m_inheritance.at( getFieldIndex( static_cast<int>( aRow ) ) ).m_parentField;
+}
+
+
+const wxString& FIELDS_GRID_TABLE::InheritedFrom( size_t aRow ) const
+{
+    return m_inheritance.at( getFieldIndex( static_cast<int>( aRow ) ) ).m_source;
+}
+
+
+void FIELDS_GRID_TABLE::AddInheritedField( const SCH_FIELD& aParent, const wxString& aSource )
 {
     push_back( aParent );
     back().SetParent( m_part );
-    m_isInherited.back() = true;
-    m_parentFields.back() = aParent;
+    m_inheritance.back().m_derived = true;
+    SetFieldInherited( size() - 1, aParent, aSource );
 }
+
+
+void FIELDS_GRID_TABLE::SetFieldInherited( size_t aFieldIndex, const SCH_FIELD& aParent, const wxString& aSource )
+{
+    wxCHECK( aFieldIndex < size() && aFieldIndex < m_inheritance.size(), /*void*/ );
+
+    INHERITANCE& inheritance = m_inheritance[aFieldIndex];
+    SCH_FIELD&   field = at( aFieldIndex );
+
+    // Flatten() gives an empty mandatory field the ancestor's value, but any user field the symbol owns wins
+    if( inheritance.m_derived || ( field.IsMandatory() && field.GetText().IsEmpty() ) )
+    {
+        field = aParent;
+        inheritance.m_derived = true;
+    }
+
+    inheritance.m_parentField = aParent;
+    inheritance.m_parentField.SetParent( nullptr );
+    inheritance.m_source = aSource;
+    inheritance.m_hasParent = true;
+}
+
 
 bool FIELDS_GRID_TABLE::EraseRow( size_t aRow )
 {
-    if( m_isInherited.size() > aRow )
+    int fieldIndex = getFieldIndex( static_cast<int>( aRow ) );
+
+    if( fieldIndex < 0 || at( fieldIndex ).GetId() == FIELD_T::SHEET_REF_SUFFIX )
+        return false;
+
+    if( m_inheritance.size() > static_cast<size_t>( fieldIndex ) )
     {
+        INHERITANCE& inheritance = m_inheritance[fieldIndex];
+
         // You can't erase inherited fields, but you can reset them to the parent value.
-        if( m_isInherited[aRow] )
+        if( inheritance.m_hasParent )
         {
-            at( aRow ) = m_parentFields[aRow];
+            at( fieldIndex ) = inheritance.m_parentField;
+            inheritance.m_derived = true;
             return false;
         }
 
-        m_isInherited.erase( m_isInherited.begin() + aRow );
+        m_inheritance.erase( m_inheritance.begin() + fieldIndex );
     }
 
-    if( m_parentFields.size() > aRow )
-        m_parentFields.erase( m_parentFields.begin() + aRow );
-
-    std::vector<SCH_FIELD>::erase( begin() + aRow );
+    std::vector<SCH_FIELD>::erase( begin() + fieldIndex );
     return true;
 }
 
 void FIELDS_GRID_TABLE::SwapRows( size_t a, size_t b )
 {
-    wxCHECK( a < this->size() && b < this->size(), /*void*/ );
-    wxCHECK( a < m_isInherited.size() && b < m_isInherited.size() && a < m_parentFields.size()
-                     && b < m_parentFields.size(),
+    int fieldIndexA = getFieldIndex( static_cast<int>( a ) );
+    int fieldIndexB = getFieldIndex( static_cast<int>( b ) );
+
+    wxCHECK( fieldIndexA >= 0 && fieldIndexB >= 0, /*void*/ );
+    wxCHECK( fieldIndexA < static_cast<int>( m_inheritance.size() )
+                     && fieldIndexB < static_cast<int>( m_inheritance.size() ),
              /*void*/ );
 
-    std::swap( at( a ), at( b ) );
-
-    bool tmpInherited = m_isInherited[a];
-    m_isInherited[a] = m_isInherited[b];
-    m_isInherited[b] = tmpInherited;
-
-    std::swap( m_parentFields[a], m_parentFields[b] );
+    std::swap( at( fieldIndexA ), at( fieldIndexB ) );
+    std::swap( m_inheritance[fieldIndexA], m_inheritance[fieldIndexB] );
 }
 
 
@@ -1158,8 +1258,8 @@ void FIELDS_GRID_TABLE::DetachFields()
     for( SCH_FIELD& field : *this )
         field.SetParent( nullptr );
 
-    for( SCH_FIELD& field : m_parentFields )
-        field.SetParent( nullptr );
+    for( INHERITANCE& inheritance : m_inheritance )
+        inheritance.m_parentField.SetParent( nullptr );
 }
 
 

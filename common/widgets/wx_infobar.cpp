@@ -50,11 +50,37 @@ BEGIN_EVENT_TABLE( WX_INFOBAR, wxInfoBarGeneric )
 END_EVENT_TABLE()
 
 
+static const wxString OVERLAY_HOST_NAME = wxS( "InfobarOverlayHost" );
+
+
+// Overlay infobars on the same window share one host where the platform needs one
+static wxWindow* overlayParent( wxWindow* aParent, bool aOverlay )
+{
+    if( !aOverlay )
+        return aParent;
+
+    for( wxWindow* child : aParent->GetChildren() )
+    {
+        if( child->GetName() == OVERLAY_HOST_NAME )
+            return child;
+    }
+
+    if( wxWindow* host = KIPLATFORM::UI::CreateCanvasOverlay( aParent ) )
+    {
+        host->SetName( OVERLAY_HOST_NAME );
+        return host;
+    }
+
+    return aParent;
+}
+
+
 WX_INFOBAR::WX_INFOBAR( wxWindow* aParent, wxWindowID aWinid, bool aOverlay )
-        : wxInfoBarGeneric( aParent, aWinid ),
+        : wxInfoBarGeneric( overlayParent( aParent, aOverlay ), aWinid ),
           m_showTime( 0 ),
           m_updateLock( false ),
           m_overlay( aOverlay ),
+          m_anchor( aParent ),
           m_showTimer( nullptr ),
           m_type( MESSAGE_TYPE::GENERIC )
 {
@@ -104,20 +130,27 @@ WX_INFOBAR::WX_INFOBAR( wxWindow* aParent, wxWindowID aWinid, bool aOverlay )
 
     sizer->SetItemMinSize( (size_t) 0, iconSize.x, sy );
 
-    // Forcefully remove all existing buttons added by the wx constructors.
-    // The default close button doesn't work with the AUI manager update scheme, so this
-    // ensures any close button displayed is ours.
-    RemoveAllButtons();
+    // The default close button doesn't work with the AUI manager update scheme, so take it out
+    // of the layout to ensure any close button displayed is ours.  It must not be destroyed
+    // because wxInfoBarGeneric keeps a private pointer to it and recolors it on every system
+    // color change.
+    wxSizerItem* lastItem = sizer->GetItem( sizer->GetItemCount() - 1 );
+
+    if( wxWindow* defaultCloseButton = lastItem ? lastItem->GetWindow() : nullptr )
+    {
+        sizer->Detach( defaultCloseButton );
+        defaultCloseButton->Hide();
+    }
 
     Layout();
 
-    m_parent->Bind( wxEVT_SIZE, &WX_INFOBAR::onSize, this );
+    m_anchor->Bind( wxEVT_SIZE, &WX_INFOBAR::onSize, this );
 }
 
 
 WX_INFOBAR::~WX_INFOBAR()
 {
-    m_parent->Unbind( wxEVT_SIZE, &WX_INFOBAR::onSize, this );
+    m_anchor->Unbind( wxEVT_SIZE, &WX_INFOBAR::onSize, this );
 
     delete m_showTimer;
 }
@@ -175,6 +208,8 @@ void WX_INFOBAR::ShowMessage( const wxString& aMessage, int aFlags )
 
     wxInfoBarGeneric::ShowMessage( m_message, aFlags );
 
+    KIPLATFORM::UI::KeepAboveExternalRendering( this );
+
     // Force infoBar to full-width.  Yes, this should happen automatically, and it does -- sometimes.
     FixSize();
     stackOverlays();
@@ -229,11 +264,17 @@ void WX_INFOBAR::onThemeChange( wxSysColourChangedEvent& aEvent )
     SetBackgroundColour( bg );
     SetForegroundColour( fg );
 
+    // The close button bitmaps are filled with the old background, so put a new button in its place
     if( wxBitmapButton* btn = GetCloseButton() )
     {
-        wxString tooltip = btn->GetToolTipText();
-        RemoveAllButtons();
-        AddCloseButton( tooltip );
+        wxBitmapButton* fresh = wxBitmapButton::NewCloseButton( this, ID_CLOSE_INFOBAR );
+#ifdef __WXMAC__
+        fresh->SetWindowVariant( wxWINDOW_VARIANT_SMALL );
+#endif
+        fresh->SetToolTip( btn->GetToolTipText() );
+        GetSizer()->Replace( btn, fresh, true );
+        btn->Destroy();
+        Layout();
     }
 }
 
@@ -313,7 +354,7 @@ void WX_INFOBAR::doSize()
             textCtrl->SetLabelText( m_message );
     }
 
-    int parentWidth = m_parent->GetClientSize().GetWidth();
+    int parentWidth = m_anchor->GetClientSize().GetWidth();
 
     if( barWidth != parentWidth )
         SetSize( parentWidth, GetSize().GetHeight() );
@@ -350,7 +391,7 @@ void WX_INFOBAR::stackOverlays()
     if( !m_overlay )
         return;
 
-    int width = m_parent->GetClientSize().GetWidth();
+    int width = m_anchor->GetClientSize().GetWidth();
     int y = 0;
 
     for( wxWindow* child : m_parent->GetChildren() )
@@ -370,7 +411,15 @@ void WX_INFOBAR::stackOverlays()
         y += height;
     }
 
-    if( EDA_DRAW_PANEL_GAL* canvas = dynamic_cast<EDA_DRAW_PANEL_GAL*>( m_parent ) )
+    if( m_parent != m_anchor )
+    {
+        if( y > 0 )
+            m_parent->SetSize( wxDefaultCoord, wxDefaultCoord, width, y );
+
+        m_parent->Show( y > 0 );
+    }
+
+    if( EDA_DRAW_PANEL_GAL* canvas = dynamic_cast<EDA_DRAW_PANEL_GAL*>( m_anchor ) )
         canvas->UpdateOverlayExclusions();
 }
 
@@ -381,7 +430,7 @@ void WX_INFOBAR::refreshParent()
         return;
 
     // A GAL canvas skips repaints when no target is dirty, leaving the uncovered strip stale
-    if( EDA_DRAW_PANEL_GAL* canvas = dynamic_cast<EDA_DRAW_PANEL_GAL*>( m_parent ) )
+    if( EDA_DRAW_PANEL_GAL* canvas = dynamic_cast<EDA_DRAW_PANEL_GAL*>( m_anchor ) )
     {
         canvas->ForceRefresh();
 
@@ -390,7 +439,7 @@ void WX_INFOBAR::refreshParent()
     }
     else
     {
-        m_parent->Refresh();
+        m_anchor->Refresh();
     }
 }
 

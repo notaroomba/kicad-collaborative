@@ -330,9 +330,9 @@
                     "netCount": 2
                 },
                 {
-                    "comment": "Verify that constraint set netclasses and per-net trace width netclasses coexist. ProiectBoard has both a constraint set (CS_0) and per-net trace widths (W20mil, W24mil).",
+                    "comment": "Verify that constraint set netclasses and per-net trace width netclasses coexist. ProiectBoard has both a constraint set (Allegro_Default) and per-net trace widths (W20mil, W24mil).",
                     "type": "netclass",
-                    "name": "CS_0",
+                    "name": "Allegro_Default",
                     "trackWidth": "5 mil",
                     "clearance": "5 mil"
                 },
@@ -344,9 +344,110 @@
                 }
              ]
         },
+        "qwicc_fpc_interposer_v181": {
+            "url": "https://github.com/xarxsm/qwicc_fpc_interposer",
+            "license": "MIT",
+            "description": "QWICC FPC interposer board, format magic 0x00150200",
+            "formatVersion": "18.1",
+            "boardFile": "fpc_interposer.brd",
+            "boardExpectations": [
+                {
+                    "type": "item",
+                    "itemType": "footprint",
+                    "count": {
+                        "min": 2,
+                        "max": 2
+                    }
+                },
+                {
+                    "type": "item",
+                    "itemType": "pad",
+                    "count": {
+                        "min": 12,
+                        "max": 12
+                    }
+                },
+                {
+                    "type": "item",
+                    "itemType": "track",
+                    "count": {
+                        "min": 10,
+                        "max": 10
+                    }
+                },
+                {
+                    "type": "item",
+                    "itemType": "via",
+                    "count": {
+                        "min": 11,
+                        "max": 11
+                    }
+                },
+                {
+                    "type": "layers",
+                    "cuNames": ["TOP", "BOTTOM"]
+                }
+            ]
+        },
+        "fulladd_routed_v190": {
+            "url": "https://github.com/Hongcheng-Gao/EngiWorld",
+            "license": "MIT",
+            "description": "Placed and routed full adder, saved by DB Doctor",
+            "formatVersion": "19.0",
+            "boardFile": "fulladd_placed_routed.brd",
+            "header": {
+                "skip": false
+            },
+            "boardExpectations": [
+                {
+                    "type": "item",
+                    "itemType": "footprint",
+                    "count": {
+                        "min": 4,
+                        "max": 4
+                    }
+                },
+                {
+                    "type": "item",
+                    "itemType": "pad",
+                    "count": {
+                        "min": 56,
+                        "max": 56
+                    }
+                },
+                {
+                    "type": "item",
+                    "itemType": "track",
+                    "count": {
+                        "min": 92,
+                        "max": 92
+                    }
+                },
+                {
+                    "type": "item",
+                    "itemType": "via",
+                    "count": {
+                        "min": 0,
+                        "max": 0
+                    }
+                },
+                {
+                    "type": "layers",
+                    "cuNames": ["TOP", "BOTTOM"]
+                }
+            ]
+        },
         "rects": {
             "formatVersion": "17.4",
-            "boardFile": "rects.brd"
+            "boardFile": "rects.brd",
+            "blocks": [
+                {
+                    "type": "0x35",
+                    "offset": "0x00032410",
+                    "comment": "File reference record with 'terminator.log'",
+                    "extraBlockTest": true
+                }
+            ]
         },
         "TRS80_POWER": {
             "formatVersion": "16.6",
@@ -372,7 +473,7 @@
                 {
                     "comment": "Verify constraint set import on a pre-V172 board (TRS80_POWER).\nPre-V172 boards    have no dedicated clearance field, so spacing is used as the clearance fallback.\nPre-V172 f[0]=line_width=15 mil (381000 nm), f[1]=spacing=7 mil (177800 nm) used as clearance",
                     "type": "netclass",
-                    "name": "CS_0",
+                    "name": "Allegro_Default",
                     "trackWidth": "15 mil",
                     "clearance": "7 mil"
                 }

@@ -36,6 +36,7 @@
 #include <limits>
 #include <typeinfo>
 #include <type_traits>
+#include <utility>
 #include <algorithm>
 
 /**
@@ -99,28 +100,53 @@ constexpr ret_type KiROUND( fp_type v, bool aQuiet = false )
 {
     using limits = std::numeric_limits<ret_type>;
 
-#if __cplusplus >= 202302L // isnan is not constexpr until C++23
-    if constexpr( std::is_floating_point_v<fp_type> )
+    static_assert( limits::digits <= std::numeric_limits<long long>::digits );
+
+    auto overflow = [&]( ret_type aResult )
     {
-        if( std::isnan( v ) )
-        {
-            if( !aQuiet )
-                kimathLogOverflow( double( v ), typeid( ret_type ).name() );
+        if( !aQuiet )
+            kimathLogOverflow( double( v ), typeid( ret_type ).name() );
 
-            return 0;
-        }
+        return aResult;
+    };
+
+    // llround would convert through double and lose precision past 2^53
+    if constexpr( std::is_integral_v<fp_type> )
+    {
+        if( std::cmp_greater( v, limits::max() ) )
+            return overflow( limits::max() );
+
+        if( std::cmp_less( v, limits::lowest() ) )
+            return overflow( limits::lowest() );
+
+        return static_cast<ret_type>( v );
     }
-#endif
+    else
+    {
+        // llround is unspecified for NaN and for results beyond long long, so saturate before calling it.
+        // v != v stands in for std::isnan, which is not constexpr until C++23.
+        if constexpr( std::is_floating_point_v<fp_type> )
+        {
+            if( v != v )
+                return overflow( 0 );
 
-    long long rounded = std::llround( v );
-    long long clamped = std::clamp<long long>( rounded,
-                                              static_cast<long long>( limits::lowest() ),
-                                              static_cast<long long>( limits::max() ) );
+            if( v >= fp_type( limits::max() ) + 0.5 )
+                return overflow( limits::max() );
 
-    if( !aQuiet && clamped != rounded )
-        kimathLogOverflow( double( v ), typeid( ret_type ).name() );
+            // lowest - 0.5 can round to lowest itself, which llround still handles exactly
+            if( v - fp_type( limits::lowest() ) <= -0.5 )
+                return overflow( limits::lowest() );
+        }
 
-    return static_cast<ret_type>( clamped );
+        long long rounded = std::llround( v );
+        long long clamped = std::clamp<long long>( rounded, static_cast<long long>( limits::lowest() ),
+                                                   static_cast<long long>( limits::max() ) );
+
+        if( clamped != rounded )
+            return overflow( static_cast<ret_type>( clamped ) );
+
+        return static_cast<ret_type>( clamped );
+    }
 }
 
 #ifdef HAVE_WIMPLICIT_FLOAT_CONVERSION
@@ -149,6 +175,93 @@ int rescale( int aNumerator, int aValue, int aDenominator );
 
 template <>
 int64_t rescale( int64_t aNumerator, int64_t aValue, int64_t aDenominator );
+
+
+template <typename T>
+constexpr T ct_sqrt_helper( T aX, T aLo, T aHi )
+{
+    if( aLo == aHi )
+        return aLo;
+
+    const T mid = ( aLo + aHi + 1 ) / 2;
+
+    if( aX / mid < mid )
+        return ct_sqrt_helper<T>( aX, aLo, mid - 1 );
+
+    return ct_sqrt_helper<T>( aX, mid, aHi );
+}
+
+/**
+ * Floor of the square root of an integer, evaluated at compile time.
+ */
+template <typename T>
+constexpr T ct_sqrt( T aX )
+{
+    return ct_sqrt_helper<T>( aX, 0, aX / 2 + 1 );
+}
+
+/**
+ * Exact floor of the square root of an integer.  Negative input returns the largest root representable in T.
+ */
+template <typename T>
+T isqrt( T aX )
+{
+    static_assert( std::is_integral<T>::value, "isqrt requires an integer type" );
+
+    constexpr T sqrt_max = ct_sqrt( std::numeric_limits<T>::max() );
+
+    if constexpr( std::is_signed<T>::value )
+    {
+        if( aX < 0 )
+            return sqrt_max;
+    }
+
+    T r = (T) std::sqrt( (double) aX );
+
+    // The double conversion loses precision above 2^53
+    while( r < sqrt_max && r * r < aX )
+        r++;
+
+    while( r > sqrt_max || r * r > aX )
+        r--;
+
+    return r;
+}
+
+
+/**
+ * Magnitude of a signed integer, well defined for INT64_MIN.
+ */
+constexpr uint64_t UnsignedAbs( int64_t aX )
+{
+    return aX < 0 ? 0 - uint64_t( aX ) : uint64_t( aX );
+}
+
+/**
+ * Nearest integer to sqrt( aX^2 + aY^2 ) for magnitudes of at most 2^63, using 128-bit arithmetic.
+ */
+uint64_t RoundedHypotWide( uint64_t aX, uint64_t aY );
+
+/**
+ * Nearest integer to sqrt( aX^2 + aY^2 ), computed exactly.  Ties cannot occur for integer input.
+ */
+inline uint64_t RoundedHypot( int64_t aX, int64_t aY )
+{
+    // Below this both squares are under 2^63, so their sum fits in uint64_t
+    constexpr uint64_t narrowMax = ct_sqrt<uint64_t>( std::numeric_limits<int64_t>::max() );
+
+    const uint64_t ax = UnsignedAbs( aX );
+    const uint64_t ay = UnsignedAbs( aY );
+
+    if( ax > narrowMax || ay > narrowMax )
+        return RoundedHypotWide( ax, ay );
+
+    const uint64_t n = ax * ax + ay * ay;
+    const uint64_t f = isqrt( n );
+
+    // n > f^2 + f is the same as n >= (f + 1/2)^2 for integer n
+    return f + ( n - f * f > f );
+}
 
 
 /**

@@ -72,6 +72,9 @@ if( APPLE )
     # Apple, in their infinite wisdom, has decided to mark OpenGL as deprecated.
     # Luckily we can silence warnings about its deprecation.
     add_compile_definitions( GL_SILENCE_DEPRECATION=1 )
+
+    # Per-source LANGUAGE OBJCXX on the Metal backend only takes effect once the language is enabled here.
+    enable_language( OBJCXX )
 endif()
 
 # Create a flag to identify the non-Apple unix systems
@@ -121,6 +124,18 @@ option( KICAD_BUILD_QA_TESTS
 option( KICAD_UPDATE_CHECK
     "Build in update check"
     ON )
+
+cmake_dependent_option( KICAD_BUILD_NATIVE_MODEL_PREVIEW
+    "Build native operating-system 3D model preview components"
+    OFF "MINGW"
+    ON )
+
+if( KICAD_BUILD_NATIVE_MODEL_PREVIEW )
+    add_compile_definitions( KICAD_NATIVE_MODEL_PREVIEW )
+endif()
+
+set( KICAD_BUNDLE_ID "org.kicad.kicad"
+    CACHE STRING "Bundle identifier for the containing KiCad application" )
 
 cmake_dependent_option( KICAD_WAYLAND
     "Support Wayland features"
@@ -236,6 +251,11 @@ option( KICAD_USE_PCH
     "Enable precompiled header support"
     ON )
 
+option( KICAD_UNITY_BUILD_WXFB
+    "Compile wxFormBuilder generated sources in batches, without the precompiled header"
+    ON )
+mark_as_advanced( KICAD_UNITY_BUILD_WXFB )
+
 # Advanced option to make link maps (only available on linux)
 cmake_dependent_option( KICAD_MAKE_LINK_MAPS
     "Create link maps for artifacts"
@@ -268,10 +288,6 @@ option( KICAD_BUILD_PNS_DEBUG_TOOL
 option( KICAD_GAL_PROFILE
     "Enable profiling info for GAL"
     OFF )
-
-option( KICAD_IDF_TOOLS
-    "Build additional idf tools"
-    ON )
 
 # Global setting: exports are explicit
 set( CMAKE_CXX_VISIBILITY_PRESET "hidden" )
@@ -427,7 +443,7 @@ if( CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" )
         set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g1 -ggdb1" )
     else()
         set( CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS_DEBUG} -g3 -ggdb3" )
-        set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUGS} -g3 -ggdb3" )
+        set( CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g3 -ggdb3" )
     endif()
 
     check_cxx_compiler_flag( "-ftrivial-auto-var-init=pattern" COMPILER_SUPPORTS_TRIVIAL_PATTERN_INIT )
@@ -602,6 +618,9 @@ if( MSVC )
     foreach( type EXE SHARED MODULE)
         # /DEBUG: create PDB
         string( APPEND CMAKE_${type}_LINKER_FLAGS " /DEBUG /MANIFEST:NO" )
+        # /PDBPAGESIZE: the default 4 KiB pages cap a PDB at 4 GiB, which an incrementally linked
+        # debug eeschema reaches
+        string( APPEND CMAKE_${type}_LINKER_FLAGS_DEBUG " /PDBPAGESIZE:8192" )
         # /OPT:REF: omit unreferenced code
         string( APPEND CMAKE_${type}_LINKER_FLAGS_RELEASE " /OPT:REF" )
         string( APPEND CMAKE_${type}_LINKER_FLAGS_RELWITHDEBINFO " /OPT:REF" )
@@ -773,6 +792,7 @@ mark_as_advanced( KICAD_BIN
     KICAD_TEMPLATE )
 
 include( Functions )
+include( RHIShaderCompilation )
 
 include( ExternalProject )
 
@@ -827,6 +847,27 @@ find_package( libgit2 1.5 REQUIRED )
 # Set include directories for libgit
 include_directories(${LIBGIT2_INCLUDE_DIRS})
 
+# Find SQLite3, required by the database library backend
+find_package( SQLite3 REQUIRED )
+
+# The SDK library of macOS fails to read a write-ahead log database that no program has open, and the only
+# workaround writes to the user's database, so a build must link Homebrew or vcpkg SQLite instead
+if( APPLE )
+    if( SQLite3_LIBRARY MATCHES "^/usr/lib/" OR SQLite3_LIBRARY MATCHES "\\.sdk/" OR SQLite3_LIBRARY MATCHES "/SDKs/" )
+        message( FATAL_ERROR "SQLite3 was found in the macOS SDK (${SQLite3_LIBRARY}), which cannot read WAL "
+                             "databases KiCad promises to read.  Set SQLite3_ROOT to a Homebrew or vcpkg SQLite, for "
+                             "example -DSQLite3_ROOT=/opt/homebrew/opt/sqlite, and remove SQLite3_LIBRARY and "
+                             "SQLite3_INCLUDE_DIR from the CMake cache if it already found the SDK copy." )
+    endif()
+endif()
+
+# Newer CMake renames the imported target and deprecates the old name
+if( TARGET SQLite3::SQLite3 )
+    set( KICAD_SQLITE3_TARGET SQLite3::SQLite3 )
+else()
+    set( KICAD_SQLITE3_TARGET SQLite::SQLite3 )
+endif()
+
 #
 # Find Boost headers and libraries, required.
 set( BOOST_REQUESTED_COMPONENTS locale )    # locale is required by nanoodbc/database libraries
@@ -866,7 +907,7 @@ if( NOT OCC_FOUND )
                          " OpenCASCADE was not found!\n"
                          "================================================================\n")
 endif()
-if( OCC_VERSION_STRING VERSION_LESS 7.6.0 )
+if( OCC_VERSION_STRING VERSION_LESS 7.5.0 )
     MESSAGE( FATAL_ERROR "================================================================\n"
                          "OpenCASCADE version ${OCC_VERSION_STRING} was found.\n"
                          "  KiCad requires a minimum version of 7.6.0\n"
@@ -983,6 +1024,12 @@ else()
     message( FATAL_ERROR "Unable to detect wxWidgets port")
 endif()
 
+if( UNIX_NOT_APPLE AND KICAD_BUILD_NATIVE_MODEL_PREVIEW
+    AND NOT _wx_selected_config MATCHES "^gtk3" )
+    message( FATAL_ERROR
+        "Native 3D model picker previews require a wxWidgets GTK 3 build; detected '${_wx_selected_config}'" )
+endif()
+
 if( NOT MSVC )
     if( ${wxWidgets_VERSION_STRING} VERSION_LESS 3.2 )
         message( FATAL_ERROR "wxWidgets 3.2.0 or greater is required" )
@@ -1063,12 +1110,6 @@ add_subdirectory( doxygen )
 configure_file( ${PROJECT_SOURCE_DIR}/cmake/config.h.cmake
     ${CMAKE_BINARY_DIR}/config.h )
 
-# Generate the shared S-expression file-format version header for standalone tools
-# (bitmap2component) that cannot link pcbnew/eeschema. The values are extracted from the
-# authoritative ledgers so they can never drift.
-include( ${KICAD_CMAKE_MODULE_PATH}/WriteSexprVersionHeader.cmake )
-
-
 #================================================
 # "make uninstall" rules
 #================================================
@@ -1111,7 +1152,6 @@ add_subdirectory( eeschema )
 add_subdirectory( gerbview )
 add_subdirectory( pcbnew )
 add_subdirectory( pagelayout_editor )
-add_subdirectory( bitmap2component )
 add_subdirectory( pcb_calculator )
 add_subdirectory( plugins )             # 3D plugins must be built before kicad
 add_subdirectory( cvpcb )               # must be after pcbnew
@@ -1121,6 +1161,12 @@ add_subdirectory( utils )
 
 if( KICAD_BUILD_QA_TESTS )
     add_subdirectory( qa )
+endif()
+
+# Must follow every directory that defines targets
+if( KICAD_UNITY_BUILD_WXFB )
+    include( WxFormBuilderUnity )
+    kicad_unity_wxformbuilder_sources()
 endif()
 
 # Demos
@@ -1150,6 +1196,16 @@ if( APPLE )
 
     # As of CMP0082 (CMake 3.14), the install rules are run in order, so we can just
     # declare it last.
+
+    install( CODE "
+        cmake_policy( SET CMP0012 NEW )
+
+        if( ${KICAD_APPLE_MAKE_RELOCATEABLE_BUNDLE} )
+            message( STATUS \"Making the finished bundle relocateable...\" )
+            include( ${KICAD_CMAKE_MODULE_PATH}/InstallSteps/RefixupMacOS.cmake )
+            refix_kicad_bundle( ${OSX_BUNDLE_INSTALL_DIR} )
+        endif()
+    " COMPONENT Runtime )
 
     add_subdirectory( signing )
 endif()

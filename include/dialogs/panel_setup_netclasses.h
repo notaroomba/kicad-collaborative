@@ -21,6 +21,9 @@
 #ifndef PANEL_SETUP_NETCLASSES_H
 #define PANEL_SETUP_NETCLASSES_H
 
+#include <bitset>
+#include <memory>
+
 #include <widgets/unit_binder.h>
 #include <widgets/paged_dialog.h>
 #include <panel_setup_netclasses_base.h>
@@ -46,6 +49,8 @@ public:
 
     void UpdateDelayProfileNames( const std::vector<wxString>& aNames ) const;
 
+    void RemapDelayProfileNames( const std::map<wxString, wxString>& aRenames ) const;
+
 private:
     void OnAddNetclassClick( wxCommandEvent& event ) override;
     void OnRemoveNetclassClick( wxCommandEvent& event ) override;
@@ -63,7 +68,8 @@ private:
 
     void onUnitsChanged( wxCommandEvent& aEvent );
 
-    bool validateNetclassName( int aRow, const wxString& aName, bool focusFirst = true );
+    bool validateNetclassName( int aRow, const wxString& aName, bool focusFirst = true,
+                               bool aDeferError = false );
     bool validateNetclassClearance( int aRow );
 
     void rebuildNetclassDropdowns();

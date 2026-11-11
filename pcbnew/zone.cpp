@@ -48,6 +48,8 @@
 #include <api/api_pcb_utils.h>
 #include <api/board/board_types.pb.h>
 
+#include "board_commit.h"
+
 
 ZONE::ZONE( BOARD_ITEM_CONTAINER* aParent ) :
         BOARD_CONNECTED_ITEM( aParent, PCB_ZONE_T ),
@@ -57,6 +59,7 @@ ZONE::ZONE( BOARD_ITEM_CONTAINER* aParent ) :
         m_isRuleArea( false ),
         m_placementAreaEnabled( false ),
         m_placementAreaSourceType( PLACEMENT_SOURCE_T::SHEETNAME ),
+        m_linkSet( niluuid ),
         m_teardropType( TEARDROP_TYPE::TD_NONE ),
         m_PadConnection( ZONE_CONNECTION::NONE ),
         m_ZoneClearance( 0 ),
@@ -142,6 +145,8 @@ void ZONE::InitDataFromSrcInCopyCtor( const ZONE& aZone, PCB_LAYER_ID aLayer )
     m_placementAreaEnabled    = aZone.m_placementAreaEnabled;
     m_placementAreaSourceType = aZone.m_placementAreaSourceType;
     m_placementAreaSource     = aZone.m_placementAreaSource;
+    m_linkSet                 = aZone.m_linkSet;
+    m_repeatOptions           = aZone.m_repeatOptions;
 
     m_fillMode = aZone.m_fillMode; // solid vs. hatched
 
@@ -237,7 +242,37 @@ BOARD_ITEM* ZONE::Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit ) cons
 
         // Give the copy its own name so it does not collide with the original (issue 23131)
         if( !newZone->GetZoneName().IsEmpty() )
-            newZone->SetZoneName( board->GetUniqueZoneName( newZone->GetZoneName(), newZone ) );
+        {
+            auto inUse =
+                    [&]( const wxString& aName )
+                    {
+                        for( const ZONE* zone : board->Zones() )
+                        {
+                            if( zone != newZone && zone->GetZoneName() == aName )
+                                return true;
+                        }
+
+                        // Check the commit as well.  The array tool adds many zones at once, which
+                        // only end up in the board's Zones() list after the commit has been pushed.
+                        if( aCommit )
+                        {
+                            for( const auto& [item, change_type] : aCommit->StagedItems() )
+                            {
+                                if( item->Type() == PCB_ZONE_T && ( change_type & CHT_ADD ) > 0 )
+                                {
+                                    ZONE* zone = static_cast<ZONE*>( item );
+
+                                    if( zone != newZone && zone->GetZoneName() == aName )
+                                        return true;
+                                }
+                            }
+                        }
+
+                        return false;
+                    };
+
+            newZone->SetZoneName( BOARD::MakeUniqueZoneName( newZone->GetZoneName(), inUse ) );
+        }
     }
 
     return dupe;
@@ -314,7 +349,7 @@ void ZONE::Serialize( google::protobuf::Any& aContainer ) const
         types::HatchFillSettings* hatch = cu->mutable_hatch_settings();
         hatch->mutable_thickness()->set_value_nm( m_hatchThickness );
         hatch->mutable_gap()->set_value_nm( m_hatchGap );
-        hatch->mutable_orientation()->set_value_degrees( m_hatchOrientation.AsDegrees() );
+        hatch->mutable_orientation()->set_value_degrees( m_hatchOrientation.GetAngle().AsDegrees() );
         hatch->set_hatch_smoothing_ratio( m_hatchSmoothingValue );
         hatch->set_hatch_hole_min_area_ratio( m_hatchHoleMinArea );
 
@@ -336,8 +371,7 @@ void ZONE::Serialize( google::protobuf::Any& aContainer ) const
         thieving->mutable_gap()->set_value_nm( m_thievingSettings.gap );
         thieving->mutable_line_width()->set_value_nm( m_thievingSettings.line_width );
         thieving->set_stagger( m_thievingSettings.stagger );
-        thieving->mutable_orientation()->set_value_degrees(
-                m_thievingSettings.orientation.AsDegrees() );
+        thieving->mutable_orientation()->set_value_degrees( m_thievingSettings.orientation.GetAngle().AsDegrees() );
     }
 
     for( const auto& [layer, shape] : m_FilledPolysList )
@@ -364,7 +398,9 @@ void ZONE::Serialize( google::protobuf::Any& aContainer ) const
     zone.mutable_border()->mutable_pitch()->set_value_nm( m_borderHatchPitch );
 
     kiapi::common::PackCustomProperties( zone.mutable_custom_properties(), *this );
-    aContainer.PackFrom( zone );
+
+    if( !aContainer.PackFrom( zone ) )
+        wxFAIL_MSG( wxT( "Failed to pack ZONE" ) );
 }
 
 
@@ -484,7 +520,6 @@ bool ZONE::Deserialize( const google::protobuf::Any& aContainer )
 
     if( zone.filled() )
     {
-        // TODO(JE) check what else has to happen here
         SetIsFilled( true );
         SetNeedRefill( false );
 
@@ -495,6 +530,11 @@ bool ZONE::Deserialize( const google::protobuf::Any& aContainer )
             m_FilledPolysList[layer] = std::make_shared<SHAPE_POLY_SET>( shape );
         }
     }
+    else
+    {
+        UnFill();
+    }
+
 
     HatchBorder();
 
@@ -815,6 +855,27 @@ const BOX2I ZONE::GetBoundingBox() const
 }
 
 
+void ZONE::invalidateBoundingBoxCache() const
+{
+    if( const BOARD* board = GetBoard() )
+    {
+        std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
+        board->m_ZoneBBoxCache.erase( this );
+    }
+
+    m_bboxCacheTimeStamp.store( -1, std::memory_order_release );
+}
+
+
+void ZONE::OnFootprintTransformed()
+{
+    // Footprint zone bounding boxes are derived through the parent transform
+    invalidateBoundingBoxCache();
+    SetNeedRefill( true );
+    UnFill();
+}
+
+
 void ZONE::CacheBoundingBox()
 {
     const BOARD* board = GetBoard();
@@ -891,14 +952,22 @@ SHAPE_POLY_SET ZONE::GetLibraryOutline() const
 
 SHAPE_POLY_SET ZONE::GetBoardOutline() const
 {
-    SHAPE_POLY_SET poly = m_Poly ? *m_Poly : SHAPE_POLY_SET();
+    SHAPE_POLY_SET poly;
 
     if( const FOOTPRINT* fp = GetParentFootprint() )
     {
+        if( m_Poly )
+            poly = m_Poly->CloneDropTriangulation();
+
         const TRANSFORM_TRS& xform = fp->GetTransform();
 
         for( auto it = poly.IterateWithHoles(); it; it++ )
             poly.SetVertex( it.GetIndex(), xform.Apply( *it ) );
+    }
+    else
+    {
+        if( m_Poly )
+            poly = m_Poly->CloneDropTriangulation();
     }
 
     return poly;
@@ -981,14 +1050,14 @@ bool ZONE::HitTest( const BOX2I& aRect, bool aContained, int aAccuracy ) const
 
 bool ZONE::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
 {
-    SHAPE_POLY_SET boardOutline = GetBoardOutline();
+    SHAPE_POLY_SET outline = GetBoardOutline();
 
     if( aContained )
     {
         auto outlineIntersectingSelection =
                 [&]()
                 {
-                    for( auto segment = boardOutline.IterateSegments(); segment; segment++ )
+                    for( auto segment = outline.IterateSegments(); segment; segment++ )
                     {
                         if( aPoly.Intersects( *segment ) )
                             return true;
@@ -1002,7 +1071,7 @@ bool ZONE::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
         auto vertexInsideSelection =
                 [&]()
                 {
-                    return aPoly.PointInside( boardOutline.CVertex( 0 ) );
+                    return aPoly.PointInside( outline.CVertex( 0 ) );
                 };
 
         return vertexInsideSelection() && !outlineIntersectingSelection();
@@ -1011,7 +1080,7 @@ bool ZONE::HitTest( const SHAPE_LINE_CHAIN& aPoly, bool aContained ) const
     {
         // Touching selection - check if any segment of the zone contours collides with the
         // selection shape.
-        for( auto segment = boardOutline.IterateSegmentsWithHoles(); segment; segment++ )
+        for( auto segment = outline.IterateSegmentsWithHoles(); segment; segment++ )
         {
             if( aPoly.PointInside( ( *segment ).A ) )
                 return true;
@@ -1122,6 +1191,9 @@ void ZONE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>&
 
         if( GetPlacementAreaEnabled() )
             aList.emplace_back( _( "Placement source" ), UnescapeString( GetPlacementAreaSource() ) );
+
+        if( m_linkSet != niluuid )
+            aList.emplace_back( _( "Layout link" ), _( "Linked" ) );
     }
     else if( IsOnCopperLayer() )
     {
@@ -1148,26 +1220,20 @@ void ZONE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>&
 
     if( layers.size() == 1 )
     {
-        layerDesc.Printf( _( "%s" ), GetBoard()->GetLayerName( layers[0] ) );
+        layerDesc.Printf( _( "%s" ), GetLayerName( layers[0] ) );
     }
-    else if (layers.size() == 2 )
+    else if( layers.size() == 2 )
     {
-        layerDesc.Printf( _( "%s and %s" ),
-                          GetBoard()->GetLayerName( layers[0] ),
-                          GetBoard()->GetLayerName( layers[1] ) );
+        layerDesc.Printf( _( "%s and %s" ), GetLayerName( layers[0] ), GetLayerName( layers[1] ) );
     }
-    else if (layers.size() == 3 )
+    else if( layers.size() == 3 )
     {
-        layerDesc.Printf( _( "%s, %s and %s" ),
-                          GetBoard()->GetLayerName( layers[0] ),
-                          GetBoard()->GetLayerName( layers[1] ),
-                          GetBoard()->GetLayerName( layers[2] ) );
+        layerDesc.Printf( _( "%s, %s and %s" ), GetLayerName( layers[0] ), GetLayerName( layers[1] ),
+                          GetLayerName( layers[2] ) );
     }
     else if( layers.size() > 3 )
     {
-        layerDesc.Printf( _( "%s, %s and %d more" ),
-                          GetBoard()->GetLayerName( layers[0] ),
-                          GetBoard()->GetLayerName( layers[1] ),
+        layerDesc.Printf( _( "%s, %s and %d more" ), GetLayerName( layers[0] ), GetLayerName( layers[1] ),
                           static_cast<int>( layers.size() - 2 ) );
     }
 
@@ -1208,6 +1274,7 @@ void ZONE::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>&
         aList.emplace_back( _( "Outline Area" ),
                             aFrame->MessageTextFromValue( outline_area, true, EDA_DATA_TYPE::AREA ) );
 
+        // No need to determine board vs. library outline.  They'll have the same number of points.
         const SHAPE_POLY_SET* area_outline = Outline();
         count = area_outline->FullPointCount();
     }
@@ -1310,6 +1377,7 @@ void ZONE::Rotate( const VECTOR2I& aCentre, const EDA_ANGLE& aAngle )
         outlineCentre = fp->GetTransform().InverseApply( aCentre );
 
     m_Poly->Rotate( aAngle, outlineCentre );
+    invalidateBoundingBoxCache();
     HatchBorder();
 
     /* rotate filled areas: */
@@ -1326,6 +1394,7 @@ void ZONE::OnFootprintRescaled( double aRatioX, double aRatioY, double /* aLinea
 
     // Zone outline auto-derives from lib storage through the parent transform.
     // Just invalidate the fill since geometry-on-screen has changed.
+    invalidateBoundingBoxCache();
     SetNeedRefill( true );
     UnFill();
 }
@@ -1345,19 +1414,19 @@ void ZONE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     LSET flipped;
 
     for( PCB_LAYER_ID layer : GetLayerSet() )
-        flipped.set( GetBoard()->FlipLayer( layer ) );
+        flipped.set( GetFlippedLayer( layer ) );
 
     SetLayerSet( flipped );
 
     for( auto& [oldLayer, properties] : layerPropertiesCopy )
     {
-        PCB_LAYER_ID newLayer = GetBoard()->FlipLayer( oldLayer );
+        PCB_LAYER_ID newLayer = GetFlippedLayer( oldLayer );
         m_layerProperties[newLayer] = properties;
     }
 
     for( auto& [oldLayer, shape] : fillsCopy )
     {
-        PCB_LAYER_ID newLayer = GetBoard()->FlipLayer( oldLayer );
+        PCB_LAYER_ID newLayer = GetFlippedLayer( oldLayer );
         SetFilledPolysList( newLayer, shape );
     }
 }
@@ -1365,17 +1434,39 @@ void ZONE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 
 void ZONE::Mirror( const VECTOR2I& aMirrorRef, FLIP_DIRECTION aFlipDirection )
 {
-    VECTOR2I outlineRef = aMirrorRef;
+    Mirror( MIRROR_AXIS( aMirrorRef, aFlipDirection ) );
+}
+
+
+void ZONE::Mirror( const SEG& aAxis )
+{
+    const EDA_ANGLE axisAngle = -EDA_ANGLE( aAxis.B - aAxis.A );
+
+    SetHatchOrientation( GetHatchOrientation().Reflect( axisAngle ).Normalized() );
+    SetThievingOrientation( GetThievingOrientation().Reflect( axisAngle ).Normalized() );
 
     if( const FOOTPRINT* fp = GetParentFootprint() )
-        outlineRef = fp->GetTransform().InverseApply( aMirrorRef );
+    {
+        // Footprints are only ever flipped, never mirrored, so this is reached only from Flip(),
+        // which always passes a cardinal axis.
+        // (Handy, because otherwise we have to handle the footprint transform!)
+        const FLIP_DIRECTION flipDirection =
+                ( aAxis.A.x == aAxis.B.x ) ? FLIP_DIRECTION::LEFT_RIGHT : FLIP_DIRECTION::TOP_BOTTOM;
 
-    m_Poly->Mirror( outlineRef, aFlipDirection );
+        const VECTOR2I flipAxisStart = fp->GetTransform().InverseApply( aAxis.A );
+        m_Poly->Mirror( flipAxisStart, flipDirection );
+    }
+    else
+    {
+        m_Poly->Mirror( aAxis );
+    }
+
+    invalidateBoundingBoxCache();
 
     HatchBorder();
 
     for( std::pair<const PCB_LAYER_ID, std::shared_ptr<SHAPE_POLY_SET>>& pair : m_FilledPolysList )
-        pair.second->Mirror( aMirrorRef, aFlipDirection );
+        pair.second->Mirror( aAxis );
 }
 
 
@@ -1621,6 +1712,27 @@ void ZONE::swapData( BOARD_ITEM* aImage )
 }
 
 
+std::vector<PCB_LAYER_ID> ZONE::GetFilledLayers() const
+{
+    std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
+
+    std::vector<PCB_LAYER_ID> layers;
+
+    layers.reserve( m_FilledPolysList.size() );
+
+    for( const auto& [ layer, poly ] : m_FilledPolysList )
+        layers.push_back( layer );
+
+    return layers;
+}
+
+
+void ZONE::CacheOutlineTriangulation()
+{
+    m_Poly->CacheTriangulation();
+}
+
+
 void ZONE::CacheTriangulation( PCB_LAYER_ID aLayer, const SHAPE_POLY_SET::TASK_SUBMITTER& aSubmitter )
 {
     if( aLayer == UNDEFINED_LAYER )
@@ -1669,6 +1781,9 @@ bool ZONE::IsIsland( PCB_LAYER_ID aLayer, int aPolyIdx ) const
 void ZONE::GetInteractingZones( PCB_LAYER_ID aLayer, std::vector<ZONE*>* aSameNetCollidingZones,
                                 std::vector<ZONE*>* aOtherNetIntersectingZones ) const
 {
+    if( !GetBoard() )
+        return;
+
     int   epsilon = pcbIUScale.mmToIU( 0.001 );
     BOX2I bbox = GetBoundingBox();
 
@@ -1690,10 +1805,23 @@ void ZONE::GetInteractingZones( PCB_LAYER_ID aLayer, std::vector<ZONE*>* aSameNe
 
         if( candidate->GetNetCode() == GetNetCode() )
         {
-            SHAPE_POLY_SET selfBoard = GetBoardOutline();
-            SHAPE_POLY_SET candidateBoard = candidate->GetBoardOutline();
+            SHAPE_POLY_SET        selfOutlineStorage;
+            const SHAPE_POLY_SET* selfOutline = &selfOutlineStorage;
+            SHAPE_POLY_SET        candidateOutlineStorage;
+            const SHAPE_POLY_SET* candidateOutline = &candidateOutlineStorage;
 
-            if( selfBoard.Collide( &candidateBoard ) )
+            // GetBoardOutline() is expensive.  Don't use it in Zone Filler unless we have to.
+            if( GetParentFootprint() )
+                selfOutlineStorage = GetBoardOutline();
+            else
+                selfOutline = Outline();
+
+            if( candidate->GetParentFootprint() )
+                candidateOutlineStorage = candidate->GetBoardOutline();
+            else
+                candidateOutline = candidate->Outline();
+
+            if( selfOutline->Collide( candidateOutline ) )
                 aSameNetCollidingZones->push_back( candidate );
         }
         else
@@ -1818,7 +1946,7 @@ bool ZONE::BuildSmoothedPoly( SHAPE_POLY_SET& aSmoothedPoly, PCB_LAYER_ID aLayer
 
         if( diffNetPoly.OutlineCount() )
         {
-            SHAPE_POLY_SET thisPoly = Outline()->CloneDropTriangulation();
+            SHAPE_POLY_SET thisPoly = GetBoardOutline();
             thisPoly.ClearArcs();
 
             thisPoly.BooleanSubtract( diffNetPoly );
@@ -1907,10 +2035,16 @@ void ZONE::TransformSmoothedOutlineToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER
 
 std::shared_ptr<SHAPE> ZONE::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, DRC_CONSTRAINT_T ) const
 {
-    // Rule areas are never filled, so fall back to the outline.  DRC relies on this
-    // to collide tracks, vias and pads against keepout areas.
+    // Rule areas are never filled, so fall back to the outline.  DRC relies on this to collide tracks,
+    // vias and pads against keepout areas.
     if( GetIsRuleArea() )
-        return std::make_shared<SHAPE_POLY_SET>( GetBoardOutline() );
+    {
+        // GetBoardOutline() is expensive.  Don't use it in DRC if we don't have to.
+        if( GetParentFootprint() )
+            return std::make_shared<SHAPE_POLY_SET>( GetBoardOutline() );
+        else
+            return std::make_shared<SHAPE_POLY_SET>( *Outline() );
+    }
 
     std::lock_guard<std::mutex> lock( m_filledPolysListMutex );
 
@@ -1918,6 +2052,44 @@ std::shared_ptr<SHAPE> ZONE::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASHING, D
         return std::make_shared<SHAPE_NULL>();
     else
         return m_FilledPolysList.at( aLayer );
+}
+
+
+double ZONE::GetCoverageArea( int aTextMargin ) const
+{
+    if( !GetIsRuleArea() )
+    {
+        // Unioning the layer fills stalls selection on a hatched plane.  The largest layer is
+        // exact for a single layer and bounds the union for the rest, which is enough to rank
+        bool   filled = false;
+        double largest = 0.0;
+
+        for( PCB_LAYER_ID layer : GetLayerSet() )
+        {
+            if( !HasFilledPolysForLayer( layer ) )
+                continue;
+
+            std::shared_ptr<SHAPE_POLY_SET> fill = GetFilledPolysList( layer );
+
+            if( fill->OutlineCount() == 0 )
+                continue;
+
+            filled = true;
+            largest = std::max( largest, fill->Area() );
+        }
+
+        if( filled )
+            return largest;
+    }
+
+    // Rule areas are never filled, so TransformShapeToPolygon would report a zero coverage
+    // area and make them appear as the smallest item under the cursor.  That incorrectly
+    // gives them selection precedence over the pads, tracks and footprints they enclose.
+    // Use the outline area so an enclosed item is selected first while the rule area stays
+    // available via its border and the disambiguation menu.  An unfilled zone falls back the
+    // same way so it does not collapse to a zero coverage area.
+    SHAPE_POLY_SET outline = *m_Poly;
+    return polygonArea( outline );
 }
 
 
@@ -2208,7 +2380,8 @@ static struct ZONE_DESC
             rapstMap.Undefined( PLACEMENT_SOURCE_T::SHEETNAME );
             rapstMap.Map( PLACEMENT_SOURCE_T::SHEETNAME,       _HKI( "Sheet Name" ) )
                     .Map( PLACEMENT_SOURCE_T::COMPONENT_CLASS, _HKI( "Component Class" ) )
-                    .Map( PLACEMENT_SOURCE_T::GROUP_PLACEMENT, _HKI( "Group" ) );
+                    .Map( PLACEMENT_SOURCE_T::GROUP_PLACEMENT, _HKI( "Group" ) )
+                    .Map( PLACEMENT_SOURCE_T::DESIGN_BLOCK,    _HKI( "Design Block" ) );
         }
 
         PROPERTY_MANAGER& propMgr = PROPERTY_MANAGER::Instance();

@@ -232,7 +232,9 @@ std::vector<std::pair<const SCH_PIN*, VECTOR2I>> EE_GRID_HELPER::layoutPins( SCH
     }
     else if( aItem.Type() == SCH_SYMBOL_T )
     {
-        for( SCH_PIN* pin : static_cast<SCH_SYMBOL&>( aItem ).GetPins() )
+        // TODO: we don't know what sheet we're on, so we can't pick the correct unit for
+        // that instance of the symbol.  For now we check all units and all bodystyles.
+        for( SCH_PIN* pin : static_cast<SCH_SYMBOL&>( aItem ).GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
             pins.emplace_back( pin, pin->GetPosition() );
     }
 
@@ -711,6 +713,9 @@ SNAP_RESULT EE_GRID_HELPER::ResolveSnap( const VECTOR2I& aOrigin, GRID_HELPER_GR
 
 VECTOR2D EE_GRID_HELPER::GetGridSize( GRID_HELPER_GRIDS aGrid ) const
 {
+    if( !m_toolMgr )
+        return GRID_HELPER::GetGridSize( aGrid );
+
     const GRID_SETTINGS& grid = m_toolMgr->GetSettings()->m_Window.grid;
     int                  idx = -1;
 
@@ -870,7 +875,7 @@ GRID_HELPER_GRIDS EE_GRID_HELPER::GetItemGrid( const EDA_ITEM* aItem ) const
         {
             GRID_HELPER_GRIDS itemGrid = GetItemGrid( item );
 
-            if( GetGridSize( itemGrid ) > GetGridSize( grid ) )
+            if( GetGridSize( itemGrid ).SquaredEuclideanNorm() > GetGridSize( grid ).SquaredEuclideanNorm() )
                 grid = itemGrid;
         }
 

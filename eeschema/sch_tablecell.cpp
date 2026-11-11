@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <font/font.h>
 #include <advanced_config.h>
 #include <common.h>
 #include <sch_edit_frame.h>
@@ -52,7 +53,9 @@ void SCH_TABLECELL::Serialize( google::protobuf::Any& aContainer ) const
 {
     kiapi::schematic::types::SchematicTableCell cell;
     Serialize( cell );
-    aContainer.PackFrom( cell );
+
+    if( !aContainer.PackFrom( cell ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_TABLECELL" ) );
 }
 
 
@@ -198,7 +201,7 @@ static bool parseCellAddress( const wxString& aAddr, int& aRow, int& aCol )
 
 
 wxString SCH_TABLECELL::GetShownText( const RENDER_SETTINGS* aSettings, const SCH_SHEET_PATH* aPath,
-                                      bool aAllowExtraText, int aDepth ) const
+                                      RESOLUTION_CONTEXT aContext, int aDepth ) const
 {
     // Local depth counter for ResolveTextVars iteration tracking (separate from cross-cell aDepth)
     int depth = 0;
@@ -310,7 +313,7 @@ wxString SCH_TABLECELL::GetShownText( const RENDER_SETTINGS* aSettings, const SC
                             return true;
                         }
 
-                        *token = targetCell->GetShownText( aSettings, aPath, aAllowExtraText, aDepth + 1 );
+                        *token = targetCell->GetShownText( aSettings, aPath, aContext, aDepth + 1 );
                         return true;
                     }
                     else
@@ -330,15 +333,15 @@ wxString SCH_TABLECELL::GetShownText( const RENDER_SETTINGS* aSettings, const SC
                 return false;
             };
 
-    wxString text = EDA_TEXT::GetShownText( aAllowExtraText, depth );
+    wxString text = EDA_TEXT::GetShownText( aContext, depth );
 
-    if( HasTextVars() )
+    if( HasTextVars() && aContext != RAW_VALUE )
     {
         text = ResolveTextVars( text, &tableCellResolver, depth );
 
         // Only do this at the top level (aDepth == 0) to avoid premature unescaping in nested CELL() calls
         if( aDepth == 0 )
-            FinalizeTextVarExpansion( text, aAllowExtraText );
+            FinalizeTextVarExpansion( text, aContext );
     }
 
     // Only linebreak when at top level

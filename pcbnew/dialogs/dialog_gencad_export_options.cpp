@@ -22,6 +22,7 @@
 
 #include "dialog_gencad_export_options.h"
 
+#include <bitmaps.h>
 #include <common.h>
 #include <wx/anybutton.h>
 #include <wx/filedlg.h>
@@ -113,8 +114,7 @@ void DIALOG_GENCAD_EXPORT_OPTIONS::onBrowseClicked( wxCommandEvent& aEvent )
     wxFileName brdFile( m_frame->GetBoard()->GetFileName() );
     wxString   fileDialogName( wxString::Format( wxS( "%s-gencad" ), brdFile.GetName() ) );
 
-    wxString   path = ExpandEnvVarSubstitutions( m_outputFileName->GetValue(), &Prj() );
-    wxFileName fn( Prj().AbsolutePath( path ) );
+    wxFileName fn( ResolveProjectPath( m_outputFileName->GetValue(), &Prj() ) );
 
     wxFileDialog dlg( this, _( "Export GenCAD File" ), fn.GetPath(), fileDialogName,
                       FILEEXT::GencadFileWildcard(), wxFD_SAVE | wxFD_OVERWRITE_PROMPT );

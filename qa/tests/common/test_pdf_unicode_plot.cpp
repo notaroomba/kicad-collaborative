@@ -33,6 +33,7 @@
 #include <math/util.h>
 #include <font/font.h>
 #include <font/stroke_font.h>
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <qa_utils/pdf_test_utils.h>
 
@@ -44,15 +45,14 @@
 
 BOOST_AUTO_TEST_SUITE( PDFUnicodePlot )
 
-static wxString getTempPdfPath( const wxString& name ) { return MakeTempPdfPath( name ); }
-
 // Comprehensive mapping test: emit all four style variants in a single PDF and verify that
 // every style's ToUnicode CMap contains expected codepoints (Cyrillic 041F, Japanese 65E5, Chinese 672C).
 BOOST_AUTO_TEST_CASE( PlotMultilingualAllStylesMappings )
 {
     const std::string sampleUtf8 = "ABCDEF Привет 日本語 漢字";
     wxString sample = wxString::FromUTF8( sampleUtf8.c_str() );
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_unicode_allstyles" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_unicode_allstyles" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -98,8 +98,6 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualAllStylesMappings )
     requireAll( "041F", "Cyrillic PE" );
     requireAll( "65E5", "Kanji 日" );
     requireAll( "672C", "Kanji 本" );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 BOOST_AUTO_TEST_CASE( PlotMultilingualText )
@@ -108,7 +106,8 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualText )
     const std::string sampleUtf8 = "ABCDEF Привет 日本語 漢字";
     wxString sample = wxString::FromUTF8( sampleUtf8.c_str() );
 
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_unicode" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_unicode" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
 
@@ -165,8 +164,6 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualText )
             BOOST_TEST_MESSAGE( "pdftoppm not available or failed; skipping raster validation" );
         }
     }
-
-    MaybeRemoveFile( pdfPath );
 }
 
 BOOST_AUTO_TEST_CASE( PlotMultilingualTextBold )
@@ -174,7 +171,8 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualTextBold )
     const std::string sampleUtf8 = "ABCDEF Привет 日本語 漢字";
     wxString sample = wxString::FromUTF8( sampleUtf8.c_str() );
 
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_unicode_bold" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_unicode_bold" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -193,15 +191,14 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualTextBold )
     auto contains = [&]( const char* needle ) { return PdfContains( buffer3, needle ); };
     BOOST_CHECK_MESSAGE( contains( "041F" ), "Missing Cyrillic glyph mapping (bold 041F)" );
     BOOST_CHECK_MESSAGE( contains( "65E5" ), "Missing Japanese glyph mapping (bold 65E5)" );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 BOOST_AUTO_TEST_CASE( PlotMultilingualTextItalic )
 {
     const std::string sampleUtf8 = "ABCDEF Привет 日本語 漢字";
     wxString sample = wxString::FromUTF8( sampleUtf8.c_str() );
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_unicode_italic" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_unicode_italic" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
 
@@ -219,14 +216,14 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualTextItalic )
     auto contains = [&]( const char* n ) { return PdfContains( buffer4, n ); };
     BOOST_CHECK_MESSAGE( contains( "041F" ), "Missing Cyrillic glyph mapping (italic 041F)" );
     BOOST_CHECK_MESSAGE( contains( "65E5" ), "Missing Japanese glyph mapping (italic 65E5)" );
-    MaybeRemoveFile( pdfPath );
 }
 
 BOOST_AUTO_TEST_CASE( PlotMultilingualTextBoldItalic )
 {
     const std::string sampleUtf8 = "ABCDEF Привет 日本語 漢字";
     wxString          sample = wxString::FromUTF8( sampleUtf8.c_str() );
-    wxString          pdfPath = getTempPdfPath( "kicad_pdf_unicode_bolditalic" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_unicode_bolditalic" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
     PDF_PLOTTER       plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
 
@@ -247,7 +244,6 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualTextBoldItalic )
     auto contains = [&]( const char* n ) { return PdfContains( buffer5, n ); };
     BOOST_CHECK_MESSAGE( contains( "041F" ), "Missing Cyrillic glyph mapping (bold-italic 041F)" );
     BOOST_CHECK_MESSAGE( contains( "65E5" ), "Missing Japanese glyph mapping (bold-italic 65E5)" );
-    MaybeRemoveFile( pdfPath );
 }
 
 // Verify that d1 bounding boxes account for X offset and stroke width so PDF viewers don't
@@ -256,7 +252,8 @@ BOOST_AUTO_TEST_CASE( GlyphBBoxIncludesOffsetAndStrokeWidth )
 {
     const std::string sampleUtf8 = "MW";
     wxString sample = wxString::FromUTF8( sampleUtf8.c_str() );
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_bbox_check" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_bbox_check" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -335,8 +332,6 @@ BOOST_AUTO_TEST_CASE( GlyphBBoxIncludesOffsetAndStrokeWidth )
 
     BOOST_CHECK_MESSAGE( checkedGlyphs >= 2,
                          "Expected at least 2 non-notdef glyphs, found " << checkedGlyphs );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 // Test Y offset bounding box fix: ensure characters are not clipped when Y offset is applied
@@ -349,7 +344,8 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualTextWithYOffset )
 
     const std::string sampleUtf8 = "Yg Test ñ";  // characters with ascenders and descenders
     wxString sample = wxString::FromUTF8( sampleUtf8.c_str() );
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_unicode_yoffset" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_unicode_yoffset" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -377,13 +373,12 @@ BOOST_AUTO_TEST_CASE( PlotMultilingualTextWithYOffset )
     // Look for d1 operators which specify character bounding boxes
     BOOST_CHECK_MESSAGE( buffer6.find( "d1" ) != std::string::npos,
                          "PDF should contain d1 operators for glyph bounding boxes" );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 BOOST_AUTO_TEST_CASE( PlotOutlineFontEmbedding )
 {
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_outline_font" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_outline_font" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     // Locate test font file (Noto Sans) in test resources
     wxFileName fontFile( KI_TEST::GetTestDataRootDir() );
@@ -441,7 +436,8 @@ BOOST_AUTO_TEST_CASE( PlotOutlineFontEmbedding )
     // Optional: rasterize PDF to image (requires poppler 'pdftoppm').
     // We treat absence of the tool as a skipped sub-check rather than a failure.
     {
-        wxString rasterBase = wxFileName::CreateTempFileName( wxT("kicad_pdf_raster") );
+        KI_TEST::SCOPED_TEMP_DIR rasterDir( "kicad_pdf_raster" );
+        wxString rasterBase = rasterDir.ChildPathStr( "raster" );
         wxString cmd = wxString::Format( wxT("pdftoppm -r 72 -singlefile -png \"%s\" \"%s\""),
                                          pdfPath, rasterBase );
 
@@ -483,9 +479,6 @@ BOOST_AUTO_TEST_CASE( PlotOutlineFontEmbedding )
                 BOOST_CHECK_MESSAGE( darkPixels > 100,
                                      "Rasterized PDF appears blank or too sparse (" << darkPixels
                                      << " dark pixels). Outline font may not be rendering correctly." );
-
-                // Housekeeping
-                wxRemoveFile( pngPath );
             }
             else
             {
@@ -497,8 +490,6 @@ BOOST_AUTO_TEST_CASE( PlotOutlineFontEmbedding )
             BOOST_TEST_MESSAGE( "pdftoppm not available or failed; skipping raster validation" );
         }
     }
-
-    MaybeRemoveFile( pdfPath );
 }
 
 // Extract the device-space X translation of every stroke-font text block ("... cm BT") in a
@@ -555,7 +546,8 @@ static std::vector<double> ExtractStrokeTextOriginsX( const std::string& aBuffer
 // text after the tab is placed exactly where the stroke font's own glyph model puts it.
 BOOST_AUTO_TEST_CASE( PlotStrokeTextTabStopMatchesFont )
 {
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_tabs" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_tabs" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -619,8 +611,6 @@ BOOST_AUTO_TEST_CASE( PlotStrokeTextTabStopMatchesFont )
                          "Post-tab text at " << measuredOffsetIu << " IU, font model expects "
                                              << expectedOffsetIu << " IU (old buggy rule: "
                                              << oldOffsetIu << " IU)" );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 // Regression test for GitLab issue 23740: stroke-font Type3 glyphs in the PDF output were
@@ -634,7 +624,8 @@ BOOST_AUTO_TEST_CASE( PlotStrokeTextTabStopMatchesFont )
 // ctm_f deltas match FONT::getLinePositions (the constant YOffset cancel drops out of deltas).
 BOOST_AUTO_TEST_CASE( StrokeFontVerticalAlignmentMatchesScreen )
 {
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_valign" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_valign" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -739,8 +730,6 @@ BOOST_AUTO_TEST_CASE( StrokeFontVerticalAlignmentMatchesScreen )
     // V-alignment deltas on f remain the same under italic shear (Y cancel is constant).
     const double italic_delta_top_center = matrices[4].f - matrices[3].f;
     BOOST_CHECK_CLOSE( italic_delta_top_center, expected_delta_top_center, 1.0 );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 
@@ -759,7 +748,8 @@ BOOST_AUTO_TEST_CASE( StrokeFontVerticalAlignmentMatchesScreen )
 // glyph-width sum rather than the inflated bbox.
 BOOST_AUTO_TEST_CASE( StrokeFontWordSpacingMatchesGlyphAdvance )
 {
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_wordspacing" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_wordspacing" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -842,9 +832,233 @@ BOOST_AUTO_TEST_CASE( StrokeFontWordSpacingMatchesGlyphAdvance )
                          "Word spacing matches the buggy inflated-bbox formula ("
                                  << observedTextAdvanceDev << " ~= " << inflatedTextAdvanceDev
                                  << "); the renderWord cursor fix appears inactive." );
-
-    MaybeRemoveFile( pdfPath );
 }
+
+struct STROKE_TEXT_BLOCK
+{
+    double m_OriginX;
+    double m_OriginY;
+    double m_Size;
+};
+
+
+// The stroke plotter emits one block per rendered word, in stream order.
+static std::vector<STROKE_TEXT_BLOCK> ExtractStrokeTextBlocks( const std::string& aBuffer )
+{
+    std::vector<STROKE_TEXT_BLOCK> blocks;
+    std::string::size_type         pos = 0;
+
+    while( ( pos = aBuffer.find( "cm BT", pos ) ) != std::string::npos )
+    {
+        std::string::size_type lineStart = aBuffer.rfind( '\n', pos );
+        lineStart = ( lineStart == std::string::npos ) ? 0 : lineStart + 1;
+
+        double a, b, c, d, e, f;
+
+        if( sscanf( aBuffer.c_str() + lineStart, "q %lf %lf %lf %lf %lf %lf cm BT", &a, &b, &c, &d, &e, &f ) == 6 )
+        {
+            std::string::size_type blockEnd = aBuffer.find( " ET", pos );
+            std::string::size_type tf = aBuffer.find( " Tf", pos );
+
+            if( tf != std::string::npos && ( blockEnd == std::string::npos || tf < blockEnd ) )
+            {
+                std::string::size_type numStart = aBuffer.find_last_of( " \n", tf - 1 );
+
+                blocks.push_back( { e, f, std::stod( aBuffer.substr( numStart + 1, tf - numStart - 1 ) ) } );
+            }
+        }
+
+        pos += 5;
+    }
+
+    return blocks;
+}
+
+
+// Regression test for https://gitlab.com/kicad/code/kicad/-/issues/25281
+// The PDF plotter sized and shifted super and subscript runs with its own constants rather than
+// the font's, so the plot did not match the canvas.
+BOOST_AUTO_TEST_CASE( StrokeFontSuperSubMatchesFontMetrics )
+{
+    enum BLOCK
+    {
+        REF_X0,
+        REF_X1,
+        REF_Y1,
+        V1,
+        SUB,
+        V2,
+        SUPER,
+        TAIL,
+        BLOCK_COUNT
+    };
+
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_supersub" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
+
+    PDF_PLOTTER            plotter;
+    SIMPLE_RENDER_SETTINGS renderSettings;
+
+    plotter.SetRenderSettings( &renderSettings );
+    BOOST_REQUIRE( plotter.OpenFile( pdfPath ) );
+    plotter.SetViewport( VECTOR2I( 0, 0 ), 1.0, 1.0, false );
+    BOOST_REQUIRE( plotter.StartPlot( wxT( "1" ), wxT( "SuperSubTest" ) ) );
+
+    const int sizeIU = 1270000; // 1.27 mm, the reporter's text size
+    const int refX0 = 20000000;
+    const int refX1 = 60000000;
+    const int refY0 = 80000000;
+    const int refY1 = 40000000;
+
+    TEXT_ATTRIBUTES attrs = BuildTextAttributes( sizeIU, sizeIU / 10, false, false );
+    attrs.m_Halign = GR_TEXT_H_ALIGN_LEFT;
+    attrs.m_Valign = GR_TEXT_V_ALIGN_BOTTOM;
+
+    auto                  strokeFont = LoadStrokeFontUnique();
+    const KIFONT::METRICS metrics;
+
+    auto plot = [&]( int aX, int aY, const wxString& aText )
+    {
+        plotter.PlotText( VECTOR2I( aX, aY ), COLOR4D( 0, 0, 0, 1 ), aText, attrs, strokeFont.get(), metrics );
+    };
+
+    plot( refX0, refY0, wxT( "M" ) );
+    plot( refX1, refY0, wxT( "M" ) );
+    plot( refX0, refY1, wxT( "M" ) );
+    plot( refX0, 60000000, wxT( "V_{ab}V^{ab}X" ) );
+    plotter.EndPlot();
+
+    std::string buffer;
+    BOOST_REQUIRE( ReadPdfWithDecompressedStreams( pdfPath, buffer ) );
+
+    std::vector<STROKE_TEXT_BLOCK> blocks = ExtractStrokeTextBlocks( buffer );
+    BOOST_REQUIRE_EQUAL( blocks.size(), (size_t) BLOCK_COUNT );
+
+    const double xScale = ( blocks[REF_X1].m_OriginX - blocks[REF_X0].m_OriginX ) / (double) ( refX1 - refX0 );
+    const double yScale = ( blocks[REF_Y1].m_OriginY - blocks[REF_X0].m_OriginY ) / (double) ( refY1 - refY0 );
+
+    BOOST_REQUIRE( std::abs( xScale ) > 0.0 );
+    BOOST_REQUIRE( std::abs( yScale ) > 0.0 );
+
+    const VECTOR2I size( sizeIU, sizeIU );
+
+    auto advanceIU = [&]( const wxString& aText, TEXT_STYLE_FLAGS aStyle )
+    {
+        return (double) strokeFont
+                ->GetTextAsGlyphs( nullptr, nullptr, aText, size, VECTOR2I(), ANGLE_0, false, VECTOR2I(), aStyle )
+                .x;
+    };
+
+    const double multiplier = strokeFont->GetSuperSubSizeMultiplier();
+
+    BOOST_CHECK_CLOSE( blocks[SUB].m_Size / blocks[V1].m_Size, multiplier, 0.5 );
+    BOOST_CHECK_CLOSE( blocks[SUPER].m_Size / blocks[V2].m_Size, multiplier, 0.5 );
+
+    // The Type3 glyph X offset is cancelled in proportion to a block's own size, so a run is
+    // measured between the full size blocks bracketing it.
+    auto checkAdvance = [&]( BLOCK aFrom, BLOCK aTo, TEXT_STYLE_FLAGS aStyle, const char* aLabel )
+    {
+        const double measured =
+                ( blocks[aTo].m_OriginX - blocks[aFrom].m_OriginX ) / xScale - advanceIU( wxT( "V" ), 0 );
+        const double expected = advanceIU( wxT( "ab" ), aStyle );
+
+        BOOST_CHECK_MESSAGE( std::abs( measured - expected ) < sizeIU * 0.001,
+                             aLabel << " run advances " << measured << " IU, font says " << expected << " IU" );
+    };
+
+    checkAdvance( V1, V2, TEXT_STYLE::SUBSCRIPT, "Subscript" );
+    checkAdvance( V2, TAIL, TEXT_STYLE::SUPERSCRIPT, "Superscript" );
+
+    // Both runs share a size, so their baseline difference is free of every size dependent term.
+    const double measuredSpan = ( blocks[SUPER].m_OriginY - blocks[SUB].m_OriginY ) / yScale;
+    const double expectedSpan = ( strokeFont->GetSuperSubBaselineOffset( TEXT_STYLE::SUPERSCRIPT )
+                                  - strokeFont->GetSuperSubBaselineOffset( TEXT_STYLE::SUBSCRIPT ) )
+                                * multiplier * sizeIU;
+
+    BOOST_CHECK_MESSAGE( std::abs( measuredSpan - expectedSpan ) < sizeIU * 0.001,
+                         "Superscript sits " << measuredSpan << " IU from the subscript, font says " << expectedSpan
+                                             << " IU" );
+}
+
+
+// Companion to the above, checking the reported symptom. Both lines are right aligned on one
+// anchor and close with the same full size character, so their ink must end on the same margin.
+BOOST_AUTO_TEST_CASE( StrokeFontSubscriptRightAlignEndsOnMargin )
+{
+    enum BLOCK
+    {
+        REF_X0,
+        REF_X1,
+        PLAIN,
+        V,
+        SUB,
+        TAIL,
+        BLOCK_COUNT
+    };
+
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_supersub_ralign" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
+
+    PDF_PLOTTER            plotter;
+    SIMPLE_RENDER_SETTINGS renderSettings;
+
+    plotter.SetRenderSettings( &renderSettings );
+    BOOST_REQUIRE( plotter.OpenFile( pdfPath ) );
+    plotter.SetViewport( VECTOR2I( 0, 0 ), 1.0, 1.0, false );
+    BOOST_REQUIRE( plotter.StartPlot( wxT( "1" ), wxT( "RightAlignTest" ) ) );
+
+    const int sizeIU = 1270000;
+    const int anchorX = 80000000;
+    const int refX0 = 20000000;
+    const int refX1 = 60000000;
+
+    TEXT_ATTRIBUTES attrs = BuildTextAttributes( sizeIU, sizeIU / 10, false, false );
+    attrs.m_Valign = GR_TEXT_V_ALIGN_BOTTOM;
+
+    auto                  strokeFont = LoadStrokeFontUnique();
+    const KIFONT::METRICS metrics;
+
+    auto plot = [&]( int aX, int aY, const wxString& aText )
+    {
+        plotter.PlotText( VECTOR2I( aX, aY ), COLOR4D( 0, 0, 0, 1 ), aText, attrs, strokeFont.get(), metrics );
+    };
+
+    attrs.m_Halign = GR_TEXT_H_ALIGN_LEFT;
+    plot( refX0, 80000000, wxT( "M" ) );
+    plot( refX1, 80000000, wxT( "M" ) );
+
+    attrs.m_Halign = GR_TEXT_H_ALIGN_RIGHT;
+    plot( anchorX, 60000000, wxT( "sawtoothX" ) );
+    plot( anchorX, 40000000, wxT( "V_{synchronization}X" ) );
+    plotter.EndPlot();
+
+    std::string buffer;
+    BOOST_REQUIRE( ReadPdfWithDecompressedStreams( pdfPath, buffer ) );
+
+    std::vector<STROKE_TEXT_BLOCK> blocks = ExtractStrokeTextBlocks( buffer );
+    BOOST_REQUIRE_EQUAL( blocks.size(), (size_t) BLOCK_COUNT );
+
+    const double xScale = ( blocks[REF_X1].m_OriginX - blocks[REF_X0].m_OriginX ) / (double) ( refX1 - refX0 );
+    BOOST_REQUIRE( std::abs( xScale ) > 0.0 );
+
+    const VECTOR2I size( sizeIU, sizeIU );
+
+    auto advanceIU = [&]( const wxString& aText )
+    {
+        return (double) strokeFont
+                ->GetTextAsGlyphs( nullptr, nullptr, aText, size, VECTOR2I(), ANGLE_0, false, VECTOR2I(), 0 )
+                .x;
+    };
+
+    const double plainEnd = blocks[PLAIN].m_OriginX + xScale * advanceIU( wxT( "sawtoothX" ) );
+    const double markupEnd = blocks[TAIL].m_OriginX + xScale * advanceIU( wxT( "X" ) );
+    const double shortfallIU = ( plainEnd - markupEnd ) / xScale;
+
+    BOOST_CHECK_MESSAGE( std::abs( shortfallIU ) < sizeIU * 0.001,
+                         "Right aligned line containing a subscript ends "
+                                 << shortfallIU << " IU short of the margin the plain line reaches" );
+}
+
 
 // Regression test for https://gitlab.com/kicad/code/kicad/-/issues/23843
 // A border-less filled shape with a dashed/dotted stroke is plotted with a zero pen width.
@@ -855,7 +1069,8 @@ BOOST_AUTO_TEST_CASE( StrokeFontWordSpacingMatchesGlyphAdvance )
 // line "[] 0 d" when the requested pattern degenerates to all zeros.
 BOOST_AUTO_TEST_CASE( SetDashZeroWidthNoIllegalDashArray )
 {
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_zero_dash" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_zero_dash" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;
@@ -902,8 +1117,6 @@ BOOST_AUTO_TEST_CASE( SetDashZeroWidthNoIllegalDashArray )
     BOOST_CHECK_MESSAGE( buffer.find( " re f" ) != std::string::npos
                                  || buffer.find( "re\nf" ) != std::string::npos,
                          "Filled rectangle should still be plotted" );
-
-    MaybeRemoveFile( pdfPath );
 }
 
 
@@ -912,7 +1125,8 @@ BOOST_AUTO_TEST_CASE( SetDashZeroWidthNoIllegalDashArray )
 // fix that collapsed every dashed style to solid would regress here.
 BOOST_AUTO_TEST_CASE( SetDashNonZeroWidthKeepsDashArray )
 {
-    wxString pdfPath = getTempPdfPath( "kicad_pdf_nonzero_dash" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_pdf_nonzero_dash" );
+    const wxString           pdfPath = tempDir.CreateChildFileStr( "output.pdf" );
 
     PDF_PLOTTER plotter;
     SIMPLE_RENDER_SETTINGS renderSettings;

@@ -114,7 +114,9 @@ public:
      */
     wxString GetUntranslatedName() const;
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override;
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
+    wxString GetShownText( const wxString& aVariantName, RESOLUTION_CONTEXT aContext,
+                           int aDepth = 0 ) const;
 
     void SetName( const wxString& aName ) { m_name = aName; }
 
@@ -124,9 +126,9 @@ public:
     {
         return IsMandatory() ? (int) m_id : m_ordinal;
     }
-    void SetOrdinal( int aOrdinal )
+    void SetOrdinal( int aOrdinal, FIELD_T aType )
     {
-        m_id = FIELD_T::USER;
+        m_id = aType;
         m_ordinal = aOrdinal;
     }
 

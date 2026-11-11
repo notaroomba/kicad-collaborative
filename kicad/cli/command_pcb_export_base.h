@@ -23,6 +23,8 @@
 
 #include "command.h"
 
+class JOB_EXPORT_PCB_FAB;
+
 namespace CLI
 {
 #define ARG_BLACKANDWHITE "--black-and-white"
@@ -72,6 +74,12 @@ namespace CLI
 
 #define ARG_CHECK_ZONES "--check-zones"
 #define ARG_CHECK_ZONES_DESC "Check and refill zones if required"
+#define ARG_FAB_UNITS "--units"
+#define ARG_PRECISION "--precision"
+#define ARG_BOM_COL_MFG_PN "--bom-col-mfg-pn"
+#define ARG_DATA_SET "--data-set"
+#define ARG_SECTIONS "--sections"
+#define ARG_NET_NAMES "--net-names"
 
 struct PCB_EXPORT_BASE_COMMAND : public COMMAND
 {
@@ -81,6 +89,9 @@ struct PCB_EXPORT_BASE_COMMAND : public COMMAND
 protected:
     void addLayerArg();
     void addCommonLayersArg();
+    /// aJob says which data sets the format supports  aDataSetAlias is a second name for the flag
+    void addFabExportArgs( const JOB_EXPORT_PCB_FAB& aJob, const std::string& aDataSetAlias = {} );
+    void applyFabExportArgs( JOB_EXPORT_PCB_FAB& aJob );
 };
 } // namespace CLI
 

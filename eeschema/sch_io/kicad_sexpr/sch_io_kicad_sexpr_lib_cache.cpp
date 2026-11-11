@@ -305,16 +305,17 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::Save( const std::optional<bool>& aOpt )
         }
 
         // Sort each file's symbols by inheritance depth
-        auto sortByInheritance = []( LIB_SYMBOL* aLhs, LIB_SYMBOL* aRhs )
-        {
-            unsigned int lhDepth = aLhs->GetInheritanceDepth();
-            unsigned int rhDepth = aRhs->GetInheritanceDepth();
+        auto sortByInheritance =
+                []( LIB_SYMBOL* aLhs, LIB_SYMBOL* aRhs )
+                {
+                    unsigned int lhDepth = aLhs->GetInheritanceDepth();
+                    unsigned int rhDepth = aRhs->GetInheritanceDepth();
 
-            if( lhDepth == rhDepth )
-                return aLhs->GetName() < aRhs->GetName();
+                    if( lhDepth == rhDepth )
+                        return aLhs->GetName() < aRhs->GetName();
 
-            return lhDepth < rhDepth;
-        };
+                    return lhDepth < rhDepth;
+                };
 
         // Write each file
         for( auto& [ filePath, symbols ] : symbolsByFile )
@@ -442,17 +443,17 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( LIB_SYMBOL* aSymbol, OUTPUTFORMAT
         KICAD_FORMAT::FormatBool( &aFormatter, "duplicate_pin_numbers_are_jumpers",
                                   aSymbol->GetDuplicatePinNumbersAreJumpers() );
 
-        const std::vector<std::set<wxString>>& jumperGroups = aSymbol->JumperPinGroups();
+        const JUMPER_GROUP_SET& jumperGroups = aSymbol->JumperPinGroups();
 
-        if( !jumperGroups.empty() )
+        if( !jumperGroups.IsEmpty() )
         {
             aFormatter.Print( "(jumper_pin_groups" );
 
-            for( const std::set<wxString>& group : jumperGroups )
+            for( const JUMPER_GROUP& group : jumperGroups.GetAll() )
             {
                 aFormatter.Print( "(" );
 
-                for( const wxString& padName : group )
+                for( const wxString& padName : group.GetNames() )
                     aFormatter.Print( "%s ", aFormatter.Quotew( padName ).c_str() );
 
                 aFormatter.Print( ")" );
@@ -570,15 +571,15 @@ void SCH_IO_KICAD_SEXPR_LIB_CACHE::saveDcmInfoAsFields( LIB_SYMBOL* aSymbol,
 {
     wxCHECK_RET( aSymbol, "Invalid LIB_SYMBOL pointer." );
 
-    if( !aSymbol->GetKeyWords().IsEmpty() )
+    if( !aSymbol->GetRawKeyWords().IsEmpty() )
     {
         SCH_FIELD keywords( nullptr, FIELD_T::USER, wxString( "ki_keywords" ) );
         keywords.SetVisible( false );
-        keywords.SetText( aSymbol->GetKeyWords() );
+        keywords.SetText( aSymbol->GetRawKeyWords() );
         saveField( &keywords, aFormatter );
     }
 
-    wxArrayString fpFilters = aSymbol->GetFPFilters();
+    const wxArrayString& fpFilters = aSymbol->GetRawFPFilters();
 
     if( !fpFilters.IsEmpty() )
     {

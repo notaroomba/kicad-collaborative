@@ -18,14 +18,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <vector>
+
 #include <wx/string.h>
 
 class BOARD;
+struct FAB_TEST_POINT;
 class wxWindow;
 
 
 /* Structure for holding the D-356 record fields.
- * Useful because 356A (when implemented) must be sorted before outputting it */
+ * Useful because 356A must be sorted by net before outputting it */
 struct D356_RECORD
 {
     bool       smd = false;
@@ -38,6 +41,9 @@ struct D356_RECORD
     bool       mechanical = false;
     int        access = 0;      // Access 0 is 'both sides'
     int        soldermask = 0;
+    // Physical copper layers (1-based) spanned by a blind/buried via, 0 otherwise
+    int        start_layer = 0;
+    int        end_layer = 0;
     // All these in PCB units, will be output in decimils
     int        x_location = 0;
     int        y_location = 0;
@@ -56,7 +62,6 @@ public:
     /**
      * Constructs an IPC-356D file writer
      * @param aPcb is the board to extract a netlist from
-     * @param aParent will be used as the parent for any warning dialogs
      */
     IPC356D_WRITER( BOARD* aPcb ) :
             m_pcb( aPcb ),
@@ -87,7 +92,8 @@ private:
     /// Writes a list of records to the given output stream
     void write_D356_records( std::vector<D356_RECORD> &aRecords, FILE* aFile );
 
-    void build_pad_testpoints( BOARD *aPcb, std::vector <D356_RECORD>& aRecords );
+    void appendPadRecords( BOARD* aPcb, const std::vector<FAB_TEST_POINT>& aPoints,
+                           std::vector<D356_RECORD>& aRecords );
 
     bool m_doNotExportUnconnectedPads;
 };

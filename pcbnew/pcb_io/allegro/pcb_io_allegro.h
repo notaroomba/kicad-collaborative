@@ -32,16 +32,13 @@ public:
     // -----<PUBLIC PCB_IO API>--------------------------------------------------
     const IO_BASE::IO_FILE_DESC GetBoardFileDesc() const override
     {
-        return IO_BASE::IO_FILE_DESC( _HKI( "Allegro PCB files" ), { "brd" } );
+        return IO_BASE::IO_FILE_DESC( _HKI( "Allegro PCB files" ), { "brd", "mdd" } );
     }
 
     const IO_BASE::IO_FILE_DESC GetLibraryDesc() const override { return IO_BASE::IO_FILE_DESC( wxEmptyString, {} ); }
 
     bool CanReadBoard( const wxString& aFileName ) const override;
     bool CanReadLibrary( const wxString& aFileName ) const override;
-
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe, const std::map<std::string, UTF8>* aProperties,
-                      PROJECT* aProject ) override;
 
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override { return 0; }
 
@@ -62,4 +59,8 @@ public:
     bool LoadBoardFromData( const uint8_t* aData, size_t aSize, BOARD& aBoard );
 
     PCB_IO_ALLEGRO();
+
+private:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject ) override;
 };

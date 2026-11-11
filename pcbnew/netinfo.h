@@ -36,6 +36,7 @@ class BOARD_ITEM;
 class BOARD_COMMIT;
 class MSG_PANEL_ITEM;
 class PCB_BASE_FRAME;
+class REPORTER;
 
 
 #define NO_NET _( "<no net>" )
@@ -60,6 +61,12 @@ public:
     wxString GetClass() const override
     {
         return wxT( "NETINFO_ITEM" );
+    }
+
+    PCB_LAYER_ID GetLayer() const override
+    {
+        wxFAIL_MSG( wxT( "NETINFO_ITEM::GetLayer() desn't have meaning.  Don't call it." ) );
+        return UNDEFINED_LAYER;
     }
 
 #if defined(DEBUG)
@@ -156,7 +163,8 @@ public:
      * Return the information about the #NETINFO_ITEM in \a aList to display in the
      * message panel.
      *
-     * @param aList is the list in which to place the  status information.
+     * @param aFrame is the parent frame that receives the message panel information.
+     * @param aList is the list in which to place the status information.
      */
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
@@ -254,6 +262,20 @@ public:
 
     void RebuildDisplayNetnames() const;
 
+    /**
+     * Rename nets in place, keeping the name lookup in sync.
+     *
+     * Net codes, item connectivity and net ownership are untouched, so renaming never moves
+     * copper between nets.  Source names that no net carries are ignored.  The whole batch is
+     * rejected, leaving every net unchanged, if a target name is empty, names the unconnected
+     * net, or collides with another net.
+     *
+     * @param aNewNames maps each existing net name to the name it should carry.
+     * @param aReporter receives the reason a rejected batch was rejected.
+     * @return true if the batch was applied.
+     */
+    bool RenameNets( const std::map<wxString, wxString>& aNewNames, REPORTER& aReporter );
+
     /// Constant that holds the "unconnected net" number (typically 0)
     /// all items "connected" to this net are actually not connected items
     static const int UNCONNECTED;
@@ -345,8 +367,13 @@ protected:  // Access is through the BOARD, which is a friend class
     /**
      * Add \a aNewElement to the end of the net list. Negative net code means it is going to be
      * auto-assigned.
+     *
+     * The list takes ownership of \a aNewElement.  If another net already has its name it is
+     * deleted and must not be used again.
+     *
+     * @return true if \a aNewElement is in the list, false if it was deleted.
      */
-    void AppendNet( NETINFO_ITEM* aNewElement );
+    bool AppendNet( NETINFO_ITEM* aNewElement );
 
     /**
      * Remove a net from the net list.

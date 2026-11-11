@@ -23,6 +23,8 @@
 #include <eda_item.h>
 
 // Minimal EDA_ITEM for testing
+namespace
+{
 class TEST_EDA_ITEM : public EDA_ITEM
 {
 public:
@@ -32,6 +34,8 @@ public:
 
     EDA_ITEM* Clone() const override { return new TEST_EDA_ITEM( Type() ); }
 };
+} // namespace
+
 
 // Simple COMMIT implementation for testing
 class TEST_COMMIT : public COMMIT
@@ -39,13 +43,17 @@ class TEST_COMMIT : public COMMIT
 public:
     void Push( const wxString&, int ) override {}
     void Revert() override {}
+    void RevertToCheckpoint(int aCheckpoint) override {}
+    EDA_ITEM* ResolveItem( KIID& aID ) override { return nullptr; }
 
-private:
+protected:
     EDA_ITEM* undoLevelItem( EDA_ITEM* aItem ) const override { return aItem; }
     EDA_ITEM* makeImage( EDA_ITEM* aItem ) const override { return aItem->Clone(); }
 };
 
+
 BOOST_AUTO_TEST_SUITE( Commit )
+
 
 BOOST_AUTO_TEST_CASE( StageAndStatus )
 {
@@ -66,6 +74,7 @@ BOOST_AUTO_TEST_CASE( StageAndStatus )
     BOOST_CHECK_EQUAL( commit.GetStatus( &itemModify ), CHT_MODIFY );
 }
 
+
 BOOST_AUTO_TEST_CASE( StageContainers )
 {
     TEST_COMMIT commit;
@@ -78,6 +87,7 @@ BOOST_AUTO_TEST_CASE( StageContainers )
     BOOST_CHECK_EQUAL( commit.GetStatus( &a ), CHT_ADD );
     BOOST_CHECK_EQUAL( commit.GetStatus( &b ), CHT_ADD );
 }
+
 
 BOOST_AUTO_TEST_CASE( StagePickedItemsList )
 {
@@ -100,6 +110,7 @@ BOOST_AUTO_TEST_CASE( StagePickedItemsList )
     BOOST_CHECK_EQUAL( commit.GetStatus( &modItem ), CHT_MODIFY );
 }
 
+
 BOOST_AUTO_TEST_CASE( UnstageRemovesNewItem )
 {
     TEST_COMMIT commit;
@@ -112,5 +123,5 @@ BOOST_AUTO_TEST_CASE( UnstageRemovesNewItem )
     BOOST_CHECK( commit.Empty() );
 }
 
-BOOST_AUTO_TEST_SUITE_END()
 
+BOOST_AUTO_TEST_SUITE_END()

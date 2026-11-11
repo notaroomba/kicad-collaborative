@@ -40,7 +40,7 @@ class NUMERIC_EVALUATOR_COMPAT;
 /**
  * @brief High-level wrapper for evaluating mathematical and string expressions in wxString format
  *
- * This class provides a simple interface for evaluating expressions containing @{} syntax
+ * This class provides a simple interface for evaluating expressions containing '\@{}' syntax
  * within wxString objects. It supports both map-based variable lookup and flexible
  * callback-based variable resolution for dynamic data access.
  *
@@ -52,38 +52,33 @@ class NUMERIC_EVALUATOR_COMPAT;
  * @code
  * // Static variable mode
  * EXPRESSION_EVALUATOR evaluator;
- * evaluator.SetVariable("price", 99.99);
- * evaluator.SetVariable("product", "Widget");
- * evaluator.SetVariable("qty", 3);
+ * evaluator.SetVariable( "price", 99.99 );
+ * evaluator.SetVariable( "product", "Widget" );
+ * evaluator.SetVariable( qty", 3 );
  *
- * wxString input = "Product: @{upper(${product})} - Total: @{currency(${price} * ${qty})}";
+ * wxString input = "Product: '\@{upper(${product})}' - Total: '\@{currency(${price}' * '${qty})}'";
  * wxString result = evaluator.Evaluate(input);
  * // Result: "Product: WIDGET - Total: $299.97"
  *
  * // Callback mode
- * auto callback = [](const std::string& varName) -> calc_parser::Result<calc_parser::Value> {
- *     if (varName == "current_time") {
- *         return calc_parser::MakeValue<calc_parser::Value>(getCurrentTimestamp());
- *     }
- *     return calc_parser::MakeError<calc_parser::Value>("Variable not found: " + varName);
- * };
- * EXPRESSION_EVALUATOR callbackEvaluator(callback);
- * wxString result2 = callbackEvaluator.Evaluate("Current time: @{${current_time}}");
+ * auto callback =
+ *         [](const std::string& varName) -> calc_parser::Result<calc_parser::Value>
+ *         {
+ *             if (varName == "current_time")
+ *                return calc_parser::MakeValue<calc_parser::Value>( getCurrentTimestamp() );
+ *
+ *            return calc_parser::MakeError<calc_parser::Value>( "Variable not found: " + varName );
+ *         };
+ *
+ * EXPRESSION_EVALUATOR callbackEvaluator( callback );
+ * wxString result2 = callbackEvaluator.Evaluate( "Current time: '\@{${current_time}}'" );
  * @endcode
  */
 class KICOMMON_API EXPRESSION_EVALUATOR
 {
 public:
     // Callback function type for dynamic variable resolution
-    using VariableCallback = std::function<calc_parser::Result<calc_parser::Value>(const std::string& aVariableName)>;
-
-private:
-    std::unordered_map<std::string, calc_parser::Value> m_variables;
-    mutable std::unique_ptr<calc_parser::ERROR_COLLECTOR> m_lastErrors;
-    bool m_clearVariablesOnEvaluate;
-    VariableCallback m_customCallback;
-    bool m_useCustomCallback;
-    EDA_UNITS m_defaultUnits;  // Default units for calculations
+    using VAR_CALLBACK = std::function<calc_parser::RESULT<calc_parser::VALUE>(const std::string& aVariableName)>;
 
 public:
     /**
@@ -104,8 +99,7 @@ public:
      * @param aVariableCallback Custom function for variable resolution
      * @param aClearVariablesOnEvaluate If true, local variables are cleared after evaluation
      */
-    explicit EXPRESSION_EVALUATOR( VariableCallback aVariableCallback,
-                                 bool aClearVariablesOnEvaluate = false );
+    explicit EXPRESSION_EVALUATOR( VAR_CALLBACK aVariableCallback, bool aClearVariablesOnEvaluate = false );
 
     /**
      * @brief Construct with units and custom variable resolver callback
@@ -113,8 +107,8 @@ public:
      * @param aVariableCallback Custom function for variable resolution
      * @param aClearVariablesOnEvaluate If true, local variables are cleared after evaluation
      */
-    explicit EXPRESSION_EVALUATOR( EDA_UNITS aUnits, VariableCallback aVariableCallback,
-                                 bool aClearVariablesOnEvaluate = false );
+    explicit EXPRESSION_EVALUATOR( EDA_UNITS aUnits, VAR_CALLBACK aVariableCallback,
+                                   bool aClearVariablesOnEvaluate = false );
 
     /**
      * @brief Destructor
@@ -135,7 +129,7 @@ public:
      * The callback receives variable names and should return Result<Value>.
      * Set to nullptr or call ClearVariableCallback() to disable callback mode.
      */
-    void SetVariableCallback( VariableCallback aCallback );
+    void SetVariableCallback( VAR_CALLBACK aCallback );
 
     /**
      * @brief Clear the custom variable resolver callback
@@ -245,8 +239,8 @@ public:
     void SetVariables( const std::unordered_map<wxString, wxString>& aVariables );
 
     /**
-     * @brief Main evaluation function - processes input string and evaluates all @{} expressions
-     * @param aInput Input string potentially containing @{} expressions
+     * @brief Main evaluation function - processes input string and evaluates all '\@{}' expressions
+     * @param aInput Input string potentially containing '\@{}' expressions
      * @return Fully evaluated string with all expressions replaced by their values
      *
      * Variables are resolved using the callback (if set) or stored variables.
@@ -262,8 +256,7 @@ public:
      * Temporary variables have lower priority than callback resolution but higher
      * priority than stored variables.
      */
-    wxString Evaluate( const wxString& aInput,
-                      const std::unordered_map<wxString, double>& aTempVariables );
+    wxString Evaluate( const wxString& aInput, const std::unordered_map<wxString, double>& aTempVariables );
 
     /**
      * @brief Evaluate with mixed temporary variables
@@ -274,9 +267,8 @@ public:
      *
      * Priority order: callback > temp string vars > temp numeric vars > stored variables
      */
-    wxString Evaluate( const wxString& aInput,
-                      const std::unordered_map<wxString, double>& aTempNumericVars,
-                      const std::unordered_map<wxString, wxString>& aTempStringVars );
+    wxString Evaluate( const wxString& aInput, const std::unordered_map<wxString, double>& aTempNumericVars,
+                       const std::unordered_map<wxString, wxString>& aTempStringVars );
 
     /**
      * @brief Check if the last evaluation had errors
@@ -323,7 +315,7 @@ public:
 
     /**
      * @brief Test if an expression can be parsed without evaluating it
-     * @param aExpression Single expression to test (without @{} wrapper)
+     * @param aExpression Single expression to test (without '\@{}' wrapper)
      * @return true if expression is syntactically valid
      *
      * This creates a temporary evaluator to test syntax only.
@@ -331,16 +323,16 @@ public:
     bool TestExpression( const wxString& aExpression );
 
     /**
-     * @brief Count the number of @{} expressions in input string
+     * @brief Count the number of '\@{}' expressions in input string
      * @param aInput Input string to analyze
-     * @return Number of @{} expression blocks found
+     * @return Number of '\@{}' expression blocks found
      */
     size_t CountExpressions( const wxString& aInput ) const;
 
     /**
-     * @brief Extract all @{} expressions from input without evaluating
+     * @brief Extract all '\@{}' expressions from input without evaluating
      * @param aInput Input string to analyze
-     * @return Vector of expression strings (content between @{} markers)
+     * @return Vector of expression strings (content between '\@{}' markers)
      */
     std::vector<wxString> ExtractExpressions( const wxString& aInput ) const;
 
@@ -365,9 +357,8 @@ private:
      * @param aTempStringVars Temporary string variables (optional)
      * @return Combined callback for parser
      */
-    VariableCallback createCombinedCallback(
-        const std::unordered_map<wxString, double>* aTempNumericVars = nullptr,
-        const std::unordered_map<wxString, wxString>* aTempStringVars = nullptr ) const;
+    VAR_CALLBACK createCombinedCallback( const std::unordered_map<wxString, double>* aTempNumericVars = nullptr,
+                                         const std::unordered_map<wxString, wxString>* aTempStringVars = nullptr ) const;
 
     /**
      * @brief Parse and evaluate the input string using the expression parser
@@ -375,9 +366,7 @@ private:
      * @param aVariableCallback Callback function to use for variable resolution
      * @return Pair of (result_string, had_errors)
      */
-    std::pair<std::string, bool> evaluateWithParser(
-        const std::string& aInput,
-        VariableCallback aVariableCallback );
+    std::pair<std::string, bool> evaluateWithParser( const std::string& aInput, VAR_CALLBACK aVariableCallback );
 
     /**
      * @brief Parse and evaluate with partial error recovery - malformed expressions left unchanged
@@ -385,9 +374,8 @@ private:
      * @param aVariableCallback Callback function to use for variable resolution
      * @return Pair of (result_string, had_errors)
      */
-    std::pair<std::string, bool> evaluateWithPartialErrorRecovery(
-        const std::string& aInput,
-        VariableCallback aVariableCallback );
+    std::pair<std::string, bool> evaluateWithPartialErrorRecovery( const std::string& aInput,
+                                                                   VAR_CALLBACK aVariableCallback );
 
     /**
      * @brief Full parser evaluation (original behavior) - fails completely on any error
@@ -395,21 +383,26 @@ private:
      * @param aVariableCallback Callback function to use for variable resolution
      * @return Pair of (result_string, had_errors)
      */
-    std::pair<std::string, bool> evaluateWithFullParser(
-        const std::string& aInput,
-        VariableCallback aVariableCallback );
+    std::pair<std::string, bool> evaluateWithFullParser( const std::string& aInput, VAR_CALLBACK aVariableCallback );
 
     /**
-     * @brief Expand ${variable} patterns that are outside @{} expressions
+     * @brief Expand ${variable} patterns that are outside '\@{}' expressions
      * @param aInput Input string to process
      * @param aTempNumericVars Temporary numeric variables
      * @param aTempStringVars Temporary string variables
      * @return String with ${variable} patterns outside expressions expanded
      */
-    wxString expandVariablesOutsideExpressions(
-        const wxString& aInput,
-        const std::unordered_map<wxString, double>& aTempNumericVars,
-        const std::unordered_map<wxString, wxString>& aTempStringVars ) const;
+    wxString expandVariablesOutsideExpressions( const wxString& aInput,
+                                                const std::unordered_map<wxString, double>& aTempNumericVars,
+                                                const std::unordered_map<wxString, wxString>& aTempStringVars ) const;
+
+private:
+    std::unordered_map<std::string, calc_parser::VALUE>   m_variables;
+    mutable std::unique_ptr<calc_parser::ERROR_COLLECTOR> m_lastErrors;
+    bool                                                  m_clearVariablesOnEvaluate;
+    VAR_CALLBACK                                          m_customCallback;
+    bool                                                  m_useCustomCallback;
+    EDA_UNITS                                             m_defaultUnits;  // Default units for calculations
 };
 
 /**
@@ -419,30 +412,24 @@ private:
  * the new EXPRESSION_EVALUATOR backend. It maintains the same API to allow
  * seamless migration of existing code.
  *
- * The key difference is that expressions are automatically wrapped in @{...}
+ * The key difference is that expressions are automatically wrapped in '\@{...}'
  * syntax before evaluation.
  *
  * Example usage:
  * @code
  * // Old NUMERIC_EVALUATOR code:
- * NUMERIC_EVALUATOR eval(EDA_UNITS::MM);
- * eval.Process("1 + 2");
+ * NUMERIC_EVALUATOR eval( EDA_UNITS::MM );
+ * eval.Process( "1 + 2" );
  * wxString result = eval.Result(); // "3"
  *
  * // New compatible code:
- * NUMERIC_EVALUATOR_COMPAT eval(EDA_UNITS::MM);
- * eval.Process("1 + 2");
+ * NUMERIC_EVALUATOR_COMPAT eval( EDA_UNITS::MM );
+ * eval.Process( "1 + 2" );
  * wxString result = eval.Result(); // "3"
  * @endcode
  */
 class KICOMMON_API NUMERIC_EVALUATOR_COMPAT
 {
-private:
-    EXPRESSION_EVALUATOR m_evaluator;
-    wxString m_lastInput;
-    wxString m_lastResult;
-    bool m_lastValid;
-
 public:
     /**
      * @brief Constructor with default units
@@ -526,4 +513,10 @@ public:
      * @brief Remove all variables
      */
     void ClearVar();
+
+private:
+    EXPRESSION_EVALUATOR m_evaluator;
+    wxString             m_lastInput;
+    wxString             m_lastResult;
+    bool                 m_lastValid;
 };

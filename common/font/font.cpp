@@ -27,6 +27,7 @@
 #include <macros.h>
 #include <string_utils.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <font/glyph_types.h>
 #include <font/stroke_font.h>
 #include <font/outline_font.h>
 #include <trigo.h>
@@ -143,7 +144,9 @@ FONT* FONT::getDefaultFont()
 FONT* FONT::GetFont( const wxString& aFontName, bool aBold, bool aItalic,
                      const std::vector<wxString>* aEmbeddedFiles, bool aForDrawingSheet )
 {
-    if( aFontName.empty() || aFontName.StartsWith( KICAD_FONT_NAME ) )
+    static const wxString s_kicadFontName( KICAD_FONT_NAME );
+
+    if( aFontName.empty() || aFontName.StartsWith( s_kicadFontName ) )
         return getDefaultFont();
 
     std::tuple<wxString, bool, bool, bool> key = { aFontName, aBold, aItalic, aForDrawingSheet };
@@ -257,7 +260,7 @@ void FONT::Draw( KIGFX::GAL* aGal, const wxString& aText, const VECTOR2I& aPosit
 
     for( size_t i = 0; i < strings_list.GetCount(); i++ )
     {
-        drawSingleLineText( aGal, nullptr, strings_list[i], positions[i], aAttrs.m_Size, aAttrs.m_Angle,
+        drawSingleLineText( aGal, nullptr, strings_list[i], positions[i], aAttrs.m_Size, aAttrs.m_Angle.GetAngle(),
                             aAttrs.m_Mirrored, aPosition, aAttrs.m_Italic, aAttrs.m_Underlined, aAttrs.m_Hover,
                             aFontMetrics, aMousePos, aActiveUrl );
     }
@@ -699,5 +702,3 @@ void FONT::LinebreakText( wxString& aText, int aColumnWidth, const VECTOR2I& aSi
             aText += '\n';
     }
 }
-
-

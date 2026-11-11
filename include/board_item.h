@@ -20,24 +20,26 @@
 
 #pragma once
 
-
 #include <map>
 
 #include <core/mirror.h>
 #include <eda_item.h>
 #include <geometry/approximation.h>
+#include <geometry/seg.h>
 #include <layer_ids.h>
 #include <properties/property.h>
 #include <lseq.h>
 #include <lset.h>
 #include <stroke_params.h>
 #include <geometry/eda_angle.h>
-#include "macros.h"
-#include "drc/drc_rule.h"
+#include <macros.h>
+#include <drc/drc_constraint_types.h>
+
 
 class BOARD;
 class BOARD_DESIGN_SETTINGS;
 class BOARD_ITEM_CONTAINER;
+class BOARD_ITEM_INDEX;
 class BOARD_COMMIT;
 class SHAPE_POLY_SET;
 class SHAPE_SEGMENT;
@@ -74,6 +76,18 @@ enum ZONE_LAYER_OVERRIDE
     ZLO_FORCE_FLASHED,
     ZLO_FORCE_NO_ZONE_CONNECTION
 };
+
+/**
+ * @return the axis an axis-aligned mirror about aCentre in aFlipDirection uses, as the infinite
+ *         line through the two points of the returned segment.
+ */
+inline SEG MIRROR_AXIS( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
+{
+    if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
+        return SEG( aCentre, aCentre + VECTOR2I( 0, 1 ) );
+
+    return SEG( aCentre, aCentre + VECTOR2I( 1, 0 ) );
+}
 
 /**
  * A base class for any item which can be embedded within the #BOARD container class, and
@@ -188,7 +202,20 @@ public:
      */
     virtual bool IsOnCopperLayer() const
     {
-        return IsCopperLayer( GetLayer() );
+        if( IsSingleLayerType( Type() ) )
+        {
+            return IsCopperLayer( GetLayer() );
+        }
+        else
+        {
+            for( PCB_LAYER_ID layer : GetLayerSet() )
+            {
+                if( IsCopperLayer( layer ) )
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     virtual bool HasHole() const
@@ -310,7 +337,15 @@ public:
     /**
      * Return the primary layer this item is on.
      */
-    virtual PCB_LAYER_ID GetLayer() const { return m_layer; }
+    virtual PCB_LAYER_ID GetLayer() const;
+
+    /**
+     * Return the layer paired with \a aLayer on the opposite side of the board.
+     *
+     * Uses the parent board's layer mapping when available.  Library items and other detached
+     * items use the standard front/back layer pairs.
+     */
+    PCB_LAYER_ID GetFlippedLayer( PCB_LAYER_ID aLayer ) const;
 
     /**
      * Return the total number of layers for the board that this item resides on.
@@ -368,6 +403,7 @@ public:
      *
      * @param addToParentGroup Indicates whether or not the new item is added to the group
      *                         containing the old item.  If true, aCommit must be provided.
+     * @param aCommit is the commit object for undo/redo.
      */
     virtual BOARD_ITEM* Duplicate( bool addToParentGroup, BOARD_COMMIT* aCommit = nullptr ) const;
 
@@ -403,7 +439,7 @@ public:
     bool IsLocked() const override;
     void SetLocked( bool aLocked ) override { m_isLocked = aLocked; }
 
-    bool IsIndexedInBoard() const { return m_boardCacheOwner != nullptr; }
+    bool IsIndexedInBoard() const { return m_owningIndex != nullptr; }
 
     int GetMaxError() const;
 
@@ -428,6 +464,7 @@ public:
      * Rotate this object.
      *
      * @param aRotCentre the rotation center point.
+     * @param aAngle the amount to rotation around the center point.
      */
     virtual void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle );
 
@@ -464,9 +501,17 @@ public:
      * Mirror this object relative to a given horizontal axis the layer is not changed.
      *
      * @param aCentre the mirror point.
-     * @param aMirrorAroundXAxis mirror across X axis instead of Y (the default).
+     * @param aFlipDirection mirror across X axis instead of Y (the default).
      */
     virtual void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection );
+
+    /**
+     * Mirror this object about an arbitrary axis, without changing its layer or side.
+     *
+     * @param aAxis defines the axis. The item is reflected over the (infinite) line
+     *              through the two axis points.
+     */
+    virtual void Mirror( const SEG& aAxis );
 
     /**
      * Perform any normalization required after a user rotate and/or flip.
@@ -499,12 +544,18 @@ public:
      */
     wxString GetLayerName() const;
 
+    /**
+     * Return the name of a PCB layer using the owning board's layer names when available.
+     */
+    wxString GetLayerName( PCB_LAYER_ID aLayer ) const;
+
     virtual std::vector<int> ViewGetLayers() const override;
 
     /**
      * Convert the item shape to a closed polygon. Circles and arcs are approximated by segments.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer of the shape to transform.
      * @param aClearance the clearance around the polygonal shape (inflated polygon).
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -520,6 +571,7 @@ public:
      * fills and details (if any) will be included.
      *
      * @param aBuffer a buffer to store the polygon.
+     * @param aLayer is the layer of the shape to transform.
      * @param aClearance the clearance around the pad.
      * @param aError the maximum deviation from true circle.
      * @param aErrorLoc should the approximation error be placed outside or inside the polygon?
@@ -532,6 +584,14 @@ public:
     {
         TransformShapeToPolygon( aBuffer, aLayer, aClearance, aError, aErrorLoc );
     }
+
+    /**
+     * Return the board area this item covers, used to rank candidates under the cursor so a
+     * click on a small item inside a large one selects the small one.
+     *
+     * @param aTextMargin the margin added around text, normally the hit-test accuracy.
+     */
+    virtual double GetCoverageArea( int aTextMargin ) const;
 
     const std::vector<wxString>* GetEmbeddedFonts() override;
 
@@ -554,15 +614,21 @@ public:
 protected:
     virtual void swapData( BOARD_ITEM* aImage );
 
+    /// Area of \a aPolySet with every contour closed first, holes subtracted.
+    static double polygonArea( SHAPE_POLY_SET& aPolySet );
+
 protected:
     PCB_LAYER_ID    m_layer;
     bool            m_isKnockout;
     bool            m_isLocked;
 
-    // Board that indexed this item, or nullptr. Set only by BOARD. Clones start detached.
-    mutable BOARD*  m_boardCacheOwner = nullptr;
+    /**
+     * Board index that indexes this item, or nullptr. Set only by the board's BOARD_ITEM_INDEX.
+     * Clones start detached.
+     */
+    mutable BOARD_ITEM_INDEX* m_owningIndex = nullptr;
 
-    friend class BOARD;
+    friend class BOARD_ITEM_INDEX;
 };
 
 DECLARE_ENUM_TO_WXANY( PCB_LAYER_ID );

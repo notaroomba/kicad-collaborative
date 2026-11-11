@@ -49,9 +49,9 @@
 
 
 
-PCB_MARKER::PCB_MARKER( std::shared_ptr<RC_ITEM> aItem, const VECTOR2I& aPosition, int aLayer ) :
+PCB_MARKER::PCB_MARKER( std::shared_ptr<DRC_ITEM> aItem, const VECTOR2I& aPosition, int aLayer ) :
         BOARD_ITEM( nullptr, PCB_MARKER_T, F_Cu ),  // parent set during BOARD::Add()
-        MARKER_BASE( SCALING_FACTOR, aItem ),
+        MARKER_BASE( SCALING_FACTOR, std::move( aItem ) ),
         m_pathLength( 0 )
 {
     if( m_rcItem )
@@ -100,7 +100,7 @@ PCB_MARKER::~PCB_MARKER()
 }
 
 
-static void ToProto( kiapi::board::DrcMarker& aMsg, const PCB_MARKER& aMarker )
+void PCB_MARKER::ToProto( kiapi::board::DrcMarker& aMsg, const PCB_MARKER& aMarker )
 {
     std::shared_ptr<DRC_ITEM> drc = std::static_pointer_cast<DRC_ITEM>( aMarker.GetRCItem() );
 
@@ -115,6 +115,9 @@ static void ToProto( kiapi::board::DrcMarker& aMsg, const PCB_MARKER& aMarker )
             aMsg.add_items()->set_value( id.AsStdString() );
     }
 
+    aMsg.set_marker_type(
+            ToProtoEnum<MARKER_BASE::MARKER_T, kiapi::common::types::MarkerType>( aMarker.GetMarkerType() ) );
+
     // Only store the layer for error types where it affects identity.
     bool storeLayer = false;
 
@@ -126,12 +129,6 @@ static void ToProto( kiapi::board::DrcMarker& aMsg, const PCB_MARKER& aMarker )
     case DRCE_UNCONNECTED_ITEMS:
     case DRCE_STARVED_THERMAL:
         storeLayer = true;
-        break;
-
-    case DRCE_UNRESOLVED_VARIABLE:
-        if( aMarker.GetMarkerType() == MARKER_BASE::MARKER_DRAWING_SHEET )
-            storeLayer = true;
-
         break;
 
     default:
@@ -147,6 +144,22 @@ static void ToProto( kiapi::board::DrcMarker& aMsg, const PCB_MARKER& aMarker )
 
         aMsg.set_layer( ToProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( layer ) );
     }
+
+    if( const DRC_RULE* rule = drc->GetViolatingRule() )
+        aMsg.set_violating_rule( rule->m_Name.ToUTF8() );
+
+    aMsg.set_description( HYPERLINK_DV_RENDERER::StripMarkup( drc->GetErrorMessage( false ) ).ToUTF8() );
+
+    if( aMarker.GetBoard() )
+    {
+        aMsg.set_severity( ToProtoEnum<SEVERITY, kiapi::common::types::RuleSeverity>( aMarker.GetSeverity() ) );
+        aMsg.set_excluded( aMarker.IsTreatedAsExcluded() );
+    }
+    else if( aMarker.IsExcluded() )
+    {
+        aMsg.set_severity( ToProtoEnum<SEVERITY, kiapi::common::types::RuleSeverity>( RPT_SEVERITY_EXCLUSION ) );
+        aMsg.set_excluded( true );
+    }
 }
 
 
@@ -160,7 +173,13 @@ PCB_MARKER* PCB_MARKER::FromProto( const kiapi::board::DrcMarker& aMsg )
         return nullptr;
 
     VECTOR2I pos = kiapi::common::UnpackVector2( aMsg.position() );
-    PCB_LAYER_ID layer = FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( aMsg.layer() );
+    int      layer = FromProtoEnum<PCB_LAYER_ID, kiapi::board::types::BoardLayer>( aMsg.layer() );
+
+    // MarkerType will be set by the c'tor, based on the PCB_DRC_CODE and the layer.  Since the
+    // LAYER_DRAWINGSHEET can't be represented in a PCB_LAYER_ID (it's a GAL_LAYER_ID), we have
+    // to give that one a little bit of help.
+    if( aMsg.marker_type() == kiapi::common::types::MT_DRAWING_SHEET )
+        layer = LAYER_DRAWINGSHEET;
 
     PCB_MARKER* marker = new PCB_MARKER( drcItem, pos, layer );
 
@@ -179,7 +198,9 @@ void PCB_MARKER::Serialize( google::protobuf::Any& aContainer ) const
 {
     kiapi::board::DrcMarker msg;
     ToProto( msg, *this );
-    aContainer.PackFrom( msg );
+
+    if( !aContainer.PackFrom( msg ) )
+        wxFAIL_MSG( wxT( "Failed to pack PCB_MARKER" ) );
 }
 
 
@@ -215,6 +236,12 @@ PCB_MARKER* PCB_MARKER::FromLegacyString( const wxString& aData )
             };
 
     wxArrayString props = wxSplit( aData, '|' );
+
+    // Every legacy marker has a settings key, position and at least two item fields.
+    // Reject truncated settings rather than indexing past wxArrayString below.
+    if( props.size() < 5 )
+        return nullptr;
+
     int           markerLayer = F_Cu;
     VECTOR2I      markerPos( (int) strtol( props[1].c_str(), nullptr, 10 ),
                              (int) strtol( props[2].c_str(), nullptr, 10 ) );
@@ -234,10 +261,12 @@ PCB_MARKER* PCB_MARKER::FromLegacyString( const wxString& aData )
     else if( drcItem->GetErrorCode() == DRCE_UNCONNECTED_ITEMS )
     {
         // Pre-9.0.4 versions didn't have KIIDs as last two properties to allow sorting stability
-        if( props.size() < 6 )
+        if( props.size() == 5 )
             drcItem->SetItems( KIID( props[3] ), KIID( props[4] ) );
-        else
+        else if( props.size() >= 7 )
             drcItem->SetItems( KIID( props[5] ), KIID( props[6] ) );
+        else
+            return nullptr;
     }
     else if( drcItem->GetErrorCode() == DRCE_STARVED_THERMAL )
     {
@@ -260,6 +289,22 @@ PCB_MARKER* PCB_MARKER::FromLegacyString( const wxString& aData )
     }
 
     return new PCB_MARKER( drcItem, markerPos, markerLayer );
+}
+
+
+EDA_ITEM* PCB_MARKER::Clone() const
+{
+    PCB_MARKER* res = new PCB_MARKER( *this );
+
+    // An RC_ITEM is shared between its marker and various tree views.  It cannot be shared between
+    // two markers.
+    if( m_rcItem )
+    {
+        res->m_rcItem = std::make_shared<DRC_ITEM>( *std::static_pointer_cast<DRC_ITEM>( m_rcItem ) );
+        res->m_rcItem->SetParent( res );
+    }
+
+    return res;
 }
 
 
@@ -332,6 +377,14 @@ std::shared_ptr<SHAPE> PCB_MARKER::GetEffectiveShape( PCB_LAYER_ID aLayer, FLASH
 {
     // Markers do not participate in the board geometry space, and therefore have no effective shape.
     return std::make_shared<SHAPE_NULL>();
+}
+
+
+double PCB_MARKER::GetCoverageArea( int aTextMargin ) const
+{
+    SHAPE_LINE_CHAIN markerShape;
+    ShapeToPolygon( markerShape );
+    return markerShape.Area();
 }
 
 

@@ -82,18 +82,18 @@ BOOST_AUTO_TEST_CASE( EagleLbrLibImport )
             BOOST_TEST_CONTEXT( wxString::Format( wxT( "Import '%s' from '%s'" ), footprintName,
                                                   libName.first ) )
             {
-                FOOTPRINT* eagleFp = eaglePlugin.FootprintLoad( eagleLibraryPath, footprintName,
-                                                                false, nullptr );
+                std::unique_ptr<FOOTPRINT> eagleFp =
+                        eaglePlugin.FootprintLoad( eagleLibraryPath, footprintName, false, nullptr );
                 BOOST_CHECK( eagleFp );
 
                 BOOST_CHECK_EQUAL( "REF**", eagleFp->GetReference() );
                 BOOST_CHECK_EQUAL( footprintName, eagleFp->GetValue() );
 
-                FOOTPRINT* kicadFp = kicadPlugin.FootprintLoad( kicadLibraryPath, footprintName,
-                                                                true, nullptr );
+                std::unique_ptr<FOOTPRINT> kicadFp =
+                        kicadPlugin.FootprintLoad( kicadLibraryPath, footprintName, true, nullptr );
                 BOOST_CHECK( kicadFp );
 
-                KI_TEST::CheckFootprint( kicadFp, eagleFp );
+                KI_TEST::CheckFootprint( kicadFp.get(), eagleFp.get() );
             }
         }
     }

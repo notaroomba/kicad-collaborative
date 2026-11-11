@@ -29,7 +29,7 @@
 class SCH_RULE_AREA;
 
 
-/*
+/**
  * Spin style for labels of all kinds on schematics.
  *
  * Basically a higher level abstraction of rotation and justification of text.
@@ -90,7 +90,7 @@ private:
 };
 
 
-/*
+/**
  * Label and flag shapes used with text objects.
  */
 enum LABEL_FLAG_SHAPE : unsigned int
@@ -108,7 +108,7 @@ enum LABEL_FLAG_SHAPE : unsigned int
     F_RECTANGLE
 };
 
-/*
+/**
  * Specific enums for property manager (not used elsewhere)
  */
 enum LABEL_SHAPE : unsigned int
@@ -205,7 +205,7 @@ public:
      */
     int GetNextFieldOrdinal() const;
 
-    virtual int GetMandatoryFieldCount()              { return 0; }
+    virtual int GetMandatoryFieldCount() const        { return 0; }
 
     std::vector<SCH_FIELD>& GetFields()               { return m_fields; }
     const std::vector<SCH_FIELD>& GetFields() const   { return m_fields; }
@@ -215,20 +215,9 @@ public:
      *
      * @param aFields are the fields to set in this symbol.
      */
-    void SetFields( const std::vector<SCH_FIELD>& aFields )
-    {
-        m_fields = aFields;     // vector copying, length is changed possibly
-    }
-
-    void AddFields( const std::vector<SCH_FIELD>& aFields )
-    {
-        m_fields.insert( m_fields.end(), aFields.begin(), aFields.end() );
-    }
-
-    void AddField( const SCH_FIELD& aField )
-    {
-        m_fields.push_back( aField );
-    }
+    void SetFields( const std::vector<SCH_FIELD>& aFields );
+    void AddFields( const std::vector<SCH_FIELD>& aFields );
+    void AddField( const SCH_FIELD& aField );
 
     /**
      * Increment the label text if it ends with a number.
@@ -253,6 +242,7 @@ public:
     /**
      * Build an array of { pageNumber, pageName } pairs.
      *
+     * @param aPath is the sheet path to get the references from.
      * @param pages [out] Array of { pageNumber, pageName } pairs.
      */
     void GetIntersheetRefs( const SCH_SHEET_PATH* aPath,
@@ -266,19 +256,18 @@ public:
     /**
      * Resolve any references to system tokens supported by the label.
      *
+     * @param aPath is the sheet path for the variable to resolve.
+     * @param token is the variable to resolve.
      * @param aDepth a counter to limit recursion and circular references.
      */
     virtual bool ResolveTextVar( const SCH_SHEET_PATH* aPath, wxString* token, int aDepth ) const;
 
-    wxString GetShownText( const SCH_SHEET_PATH* aPath, bool aAllowExtraText,
-                           int aDepth = 0 ) const override;
+    wxString GetShownText( const SCH_SHEET_PATH* aPath, RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override;
 
-    wxString GetShownText( bool aAllowExtraText, int aDepth = 0 ) const override
+    wxString GetShownText( RESOLUTION_CONTEXT aContext, int aDepth = 0 ) const override
     {
-        SCHEMATIC* schematic = Schematic();
-
-        if( schematic )
-            return GetShownText( &schematic->CurrentSheet(), aAllowExtraText, aDepth );
+        if( SCHEMATIC* schematic = Schematic() )
+            return GetShownText( &schematic->CurrentSheet(), aContext, aDepth );
         else
             return GetText();
     }
@@ -299,8 +288,9 @@ public:
     /**
      * Calculate the graphic shape (a polygon) associated to the text.
      *
-     * @param aPoints A buffer to fill with polygon corners coordinates
-     * @param Pos Position of the shape, for texts and labels: do nothing
+     * @param aSettings are the render settings for creating the graphic shape.
+     * @param aPoints A buffer to fill with polygon corners coordinates.
+     * @param Pos Position of the shape, for texts and labels: do nothing.
      */
     virtual void CreateGraphicShape( const RENDER_SETTINGS* aSettings,
                                      std::vector<VECTOR2I>& aPoints, const VECTOR2I& Pos ) const
@@ -561,7 +551,7 @@ public:
         return new SCH_GLOBALLABEL( *this );
     }
 
-    int GetMandatoryFieldCount() override { return 1; }
+    int GetMandatoryFieldCount() const override { return 1; }
 
     /**
      * Return a mandatory field in this label.  The const version will return nullptr if the

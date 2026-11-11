@@ -26,9 +26,13 @@
 #include <api/common/commands/cross_probe_commands.pb.h>
 #include <api/common/commands/editor_commands.pb.h>
 #include <api/common/commands/project_commands.pb.h>
+#include <api/common/commands/library_commands.pb.h>
 #include <google/protobuf/empty.pb.h>
+#include <api/common/commands/variant_commands.pb.h>
+#include <api/common/tasks.pb.h>
 #include <api/schematic/schematic_commands.pb.h>
 #include <api/schematic/schematic_jobs.pb.h>
+#include <api/schematic/schematic_tasks.pb.h>
 #include <kiid.h>
 
 using namespace kiapi;
@@ -79,17 +83,19 @@ protected:
     std::optional<EDA_ITEM*> getItemFromDocument( const DocumentSpecifier& aDocument,
                                                   const KIID& aId ) override;
 
-    std::optional<TITLE_BLOCK*> getTitleBlock() override;
+    std::optional<TITLE_BLOCK*> getTitleBlock( const DocumentSpecifier& aDocument ) override;
 
-    std::optional<PAGE_INFO> getPageSettings() override;
+    std::optional<PAGE_INFO> getPageSettings( const DocumentSpecifier& aDocument ) override;
 
-    bool setPageSettings( const PAGE_INFO& aPageInfo ) override;
+    bool setPageSettings( const DocumentSpecifier& aDocument, const PAGE_INFO& aPageInfo ) override;
 
     wxString getDrawingSheetFileName() override;
 
     void setDrawingSheetFileName( const wxString& aFileName ) override;
 
     void onModified() override;
+
+    void onNetSettingsChanged() override;
 
     SCH_CONTEXT* context() const { return m_context.get(); }
 
@@ -100,12 +106,24 @@ protected:
 private:
     HANDLER_RESULT<google::protobuf::Empty> handleSaveDocument(
             const HANDLER_CONTEXT<commands::SaveDocument>& aCtx );
+    HANDLER_RESULT<google::protobuf::Empty> handleSaveDocumentAs(
+            const HANDLER_CONTEXT<commands::SaveDocumentAs>& aCtx );
 
     HANDLER_RESULT<google::protobuf::Empty> handleSaveCopyOfDocument(
             const HANDLER_CONTEXT<commands::SaveCopyOfDocument>& aCtx );
 
     HANDLER_RESULT<google::protobuf::Empty>
     handleRevertDocument( const HANDLER_CONTEXT<commands::RevertDocument>& aCtx );
+
+    HANDLER_RESULT<commands::SavedDocumentResponse>
+    handleSaveDocumentToString( const HANDLER_CONTEXT<commands::SaveDocumentToString>& aCtx );
+
+    HANDLER_RESULT<commands::SavedSelectionResponse>
+    handleSaveSelectionToString( const HANDLER_CONTEXT<commands::SaveSelectionToString>& aCtx );
+
+    HANDLER_RESULT<commands::CreateItemsResponse>
+    handleParseAndCreateItemsFromString(
+            const HANDLER_CONTEXT<commands::ParseAndCreateItemsFromString>& aCtx );
 
     HANDLER_RESULT<commands::GetOpenDocumentsResponse>
     handleGetOpenDocuments( const HANDLER_CONTEXT<commands::GetOpenDocuments>& aCtx );
@@ -126,6 +144,8 @@ private:
     HANDLER_RESULT<commands::SelectionResponse>
     handleRemoveFromSelection( const HANDLER_CONTEXT<commands::RemoveFromSelection>& aCtx );
 
+    HANDLER_RESULT<Empty> handleFocusOnItems( const HANDLER_CONTEXT<commands::FocusOnItems>& aCtx );
+
     HANDLER_RESULT<types::RunJobResponse>
     handleRunSchematicJobExportSvg( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportSvg>& aCtx );
 
@@ -137,6 +157,9 @@ private:
 
     HANDLER_RESULT<types::RunJobResponse>
     handleRunSchematicJobExportPs( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportPs>& aCtx );
+
+    HANDLER_RESULT<types::RunJobResponse>
+    handleRunSchematicJobExportPng( const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportPng>& aCtx );
 
     HANDLER_RESULT<types::RunJobResponse> handleRunSchematicJobExportNetlist(
             const HANDLER_CONTEXT<kiapi::schematic::jobs::RunSchematicJobExportNetlist>& aCtx );
@@ -166,17 +189,45 @@ private:
     HANDLER_RESULT<commands::HighlightNetsResponse> handleHighlightNets(
             const HANDLER_CONTEXT<commands::HighlightNets>& aCtx );
 
-    HANDLER_RESULT<kiapi::schematic::commands::SchematicVariantsResponse>
-    handleGetSchematicVariants( const HANDLER_CONTEXT<kiapi::schematic::commands::GetSchematicVariants>& aCtx );
-
+    HANDLER_RESULT<commands::VariantsResponse> handleGetVariants( const HANDLER_CONTEXT<commands::GetVariants>& aCtx );
+    HANDLER_RESULT<Empty> handleAddVariant( const HANDLER_CONTEXT<commands::AddVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleDeleteVariant( const HANDLER_CONTEXT<commands::DeleteVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleRenameVariant( const HANDLER_CONTEXT<commands::RenameVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleCopyVariant( const HANDLER_CONTEXT<commands::CopyVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleSetVariantDescription( const HANDLER_CONTEXT<commands::SetVariantDescription>& aCtx );
+    HANDLER_RESULT<Empty> handleSetCurrentVariant( const HANDLER_CONTEXT<commands::SetCurrentVariant>& aCtx );
+    HANDLER_RESULT<commands::CurrentVariantResponse>
+    handleGetCurrentVariant( const HANDLER_CONTEXT<commands::GetCurrentVariant>& aCtx );
     HANDLER_RESULT<commands::ExpandTextVariablesResponse>
     handleExpandTextVariables( const HANDLER_CONTEXT<commands::ExpandTextVariables>& aCtx );
 
+    HANDLER_RESULT<kiapi::common::commands::PlaceFromLibraryResponse> handlePlaceSymbolFromLibrary(
+            const HANDLER_CONTEXT<kiapi::schematic::commands::PlaceSymbolFromLibrary>& aCtx );
+    HANDLER_RESULT<kiapi::common::tasks::StartTaskResponse> handleStartErcTask(
+            const HANDLER_CONTEXT<kiapi::schematic::tasks::StartErcTask>& aCtx );
+
+    HANDLER_RESULT<kiapi::schematic::tasks::ErcTaskResult> handleGetErcTaskResult(
+            const HANDLER_CONTEXT<kiapi::schematic::tasks::GetErcTaskResult>& aCtx );
+
+    class ERC_TASK;
+
     SCHEMATIC* schematic() const;
+
+    SCH_EDIT_FRAME* frame() const;
 
     void filterValidSchTypes( std::set<KICAD_T>& aTypeList );
 
-    SCH_EDIT_FRAME*              m_frame;
+    /// Returns the sheet path's screen when one is given and it is found, or null.
+    /// Otherwise, returns the editor's current sheet (or root sheet in headless mode).
+    SCH_SCREEN* resolveScreenFromDocument( const DocumentSpecifier& aDocument ) const;
+
+protected:
+
+    HANDLER_RESULT<commands::GetDocumentModifiedStateResponse>
+    handleGetDocumentModifiedState( const HANDLER_CONTEXT<commands::GetDocumentModifiedState>& aCtx ) override;
+
+private:
+
     std::shared_ptr<SCH_CONTEXT> m_context;
     static std::set<KICAD_T>     s_allowedTypes;
 };

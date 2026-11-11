@@ -20,7 +20,9 @@ set( QA_UTIL_COMMON_SRC
     utility_program.cpp
     error_handlers.cpp
 
+    env_var_utils.cpp
     file_utils.cpp
+    mock_utils.cpp
     uuid_test_utils.cpp
 
     geometry/geometry.cpp
@@ -31,8 +33,9 @@ set( QA_UTIL_COMMON_SRC
     wx_utils/unit_test_utils.cpp
     wx_utils/wx_assert.cpp
 
-    # PDF testing helpers
+    # Format testing helpers
     pdf_test_utils.cpp
+    svg_test_utils.cpp
 )
 
 # A generic library of useful functions for various testing purposes

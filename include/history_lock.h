@@ -20,6 +20,8 @@
 #ifndef HISTORY_LOCK_H
 #define HISTORY_LOCK_H
 
+#include <kicommon.h>
+
 #include <memory>
 #include <wx/string.h>
 
@@ -53,7 +55,7 @@ class LOCKFILE;
  *   // Lock automatically released when object goes out of scope
  * @endcode
  */
-class HISTORY_LOCK_MANAGER
+class KICOMMON_API HISTORY_LOCK_MANAGER
 {
 public:
     /**
@@ -65,6 +67,12 @@ public:
      *                         ADVANCED_CFG::m_HistoryLockStaleTimeout (default: 0 = use config)
      */
     HISTORY_LOCK_MANAGER( const wxString& aProjectPath, int aStaleTimeoutSec = 0 );
+
+    /**
+     * As above, with the history directory already resolved.  Background work must use this, since
+     * resolving reads the settings manager's project list, which the UI thread changes on load
+     */
+    HISTORY_LOCK_MANAGER( const wxString& aProjectPath, const wxString& aHistoryPath, int aStaleTimeoutSec = 0 );
 
     /**
      * Destructor releases all locks and closes git repository.
@@ -122,8 +130,8 @@ public:
     static bool IsLockStale( const wxString& aProjectPath, int aStaleTimeoutSec = 0 );
 
     /**
-     * Forcibly remove a stale lock file.
-     * Should only be called after confirming with user or if IsLockStale() returns true.
+     * Claim and remove an abandoned lock belonging to this user.
+     * A lock held by another process or user is never removed.
      *
      * @param aProjectPath Path to project directory
      * @return true if lock was removed successfully
@@ -134,6 +142,15 @@ public:
      * Release git repository and index handles early, but keep the file lock.
      */
     void ReleaseRepository();
+
+    /**
+     * Re-open the git repository and index after ReleaseRepository().  Exists so a caller can
+     * close the handle to work on the repository's files directly and then carry on; the file
+     * lock is held across the release, so no other process can have touched it in between.
+     *
+     * @return the repository, or nullptr if the handles could not be re-acquired
+     */
+    git_repository* ReopenRepository();
 
 private:
     wxString                      m_projectPath;

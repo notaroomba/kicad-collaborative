@@ -120,7 +120,8 @@ public:
      * @param aPosition is the text position in world coordinates.
      * @param aCursor is the current text position (for multiple text blocks within a single text
      *                object, such as a run of superscript characters)
-     * @param aAttrs are the styling attributes of the text, including its rotation
+     * @param aAttributes are the styling attributes of the text, including its rotation
+     * @param aFontMetrics are the metrics of the font being drawn.
      * @param aMousePos optional parameter for highlighting urls in text
      * @param aActiveUrl optional [out] parameter for returning highlighted url
      */
@@ -174,6 +175,17 @@ public:
     virtual double GetInterline( double aGlyphHeight, const METRICS& aFontMetrics ) const = 0;
 
     /**
+     * Return the factor the text size is multiplied by for a superscript or subscript run.
+     */
+    virtual double GetSuperSubSizeMultiplier() const = 0;
+
+    /**
+     * Return the baseline shift of a superscript or subscript run, as a downwards fraction of
+     * the reduced glyph height. Zero for any other run.
+     */
+    virtual double GetSuperSubBaselineOffset( TEXT_STYLE_FLAGS aTextStyle ) const = 0;
+
+    /**
      * Convert text string to an array of GLYPHs.
      *
      * @param aBBox pointer to a BOX2I that will set to the bounding box, or nullptr
@@ -214,7 +226,7 @@ protected:
      * function.
      *
      * @param aGal is a pointer to the graphics abstraction layer, or nullptr (nothing is drawn)
-     * @param aBBox is an optional pointer to be filled with the bounding box.
+     * @param aBoundingBox is an optional pointer to be filled with the bounding box.
      * @param aText is the text to be drawn.
      * @param aPosition is text position.
      * @param aSize is the cap-height and em-width of the text
@@ -224,7 +236,9 @@ protected:
      * @param aItalic draw the text in italic
      * @param aUnderline draw the text in underline
      * @param aHover draw the text in hyperlink hover mode (nominally blue + underline)
-     * @return new cursor position in non-rotated, non-mirrored coordinates
+     * @param aFontMetrics are the metrics of the font being drawn
+     * @param aMousePos is the optional cursor position for new text
+     * @param aActiveUrl
      */
     void drawSingleLineText( KIGFX::GAL* aGal, BOX2I* aBoundingBox, const wxString& aText,
                              const VECTOR2I& aPosition, const VECTOR2I& aSize,
@@ -241,6 +255,8 @@ protected:
      * @param aText is the text to be drawn.
      * @param aPosition is text position.
      * @param aSize is the cap-height and em-width of the text.
+     * @param aItalic uses italicized font for the bounding box if true.
+     * @param aFontMetrics are the font metrics to calculate the bounding box.
      * @return new cursor position
      */
     VECTOR2I boundingBoxSingleLine( BOX2I* aBBox, const wxString& aText, const VECTOR2I& aPosition,

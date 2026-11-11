@@ -27,13 +27,18 @@
 #include <wx/mimetype.h>
 #include <wx/dir.h>
 #include <wx/stdpaths.h>
+#include <wx/utils.h>
+
+#include <filesystem>
 
 #include <pgm_base.h>
+#include <kiplatform/io.h>
 #include <confirm.h>
 #include <core/arraydim.h>
 #include <gestfich.h>
 #include <string_utils.h>
 #include <launch_ext.h>
+#include <paths.h>
 #include "wx/tokenzr.h"
 #include <richio.h>
 #include <sexpr/sexpr.h>
@@ -42,12 +47,17 @@
 #include <wx/wfstream.h>
 #include <wx/fs_zip.h>
 #include <wx/zipstrm.h>
+#include <wx/tarstrm.h>
+#include <wx/zstream.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <system_error>
 #include <unordered_set>
+#include <vector>
 #include <core/kicad_algo.h>
+#include <paths.h>
 
 void QuoteString( wxString& string )
 {
@@ -71,7 +81,7 @@ wxString FindKicadFile( const wxString& shortname )
     if( wxFileExists( fullFileName ) )
         return fullFileName;
 
-    if( wxGetEnv( wxT( "KICAD_RUN_FROM_BUILD_DIR" ), nullptr ) )
+    if( PATHS::RunningFromBuildDir() )
     {
         wxFileName buildDir( Pgm().GetExecutablePath(), shortname );
 
@@ -128,7 +138,6 @@ wxString FindKicadFile( const wxString& shortname )
         wxT( "Contents/Applications/pcbnew.app/Contents/MacOS/" ),
         wxT( "Contents/Applications/eeschema.app/Contents/MacOS/" ),
         wxT( "Contents/Applications/gerbview.app/Contents/MacOS/" ),
-        wxT( "Contents/Applications/bitmap2component.app/Contents/MacOS/" ),
         wxT( "Contents/Applications/pcb_calculator.app/Contents/MacOS/" ),
         wxT( "Contents/Applications/pl_editor.app/Contents/MacOS/" ),
 #else
@@ -269,16 +278,80 @@ int ExecuteFile( const wxString& aEditorName, const wxString& aFileName, wxProce
 }
 
 
-int ExecuteCommandThroughShell( const wxString& aCommand, wxProcess* aProcess )
+#ifdef __WXMSW__
+static const wxChar PATH_LIST_SEPARATOR = wxT( ';' );
+#else
+static const wxChar PATH_LIST_SEPARATOR = wxT( ':' );
+#endif
+
+
+// Windows spells it "Path", so reuse that spelling rather than hand the child two keys
+static wxString& envPathEntry( wxEnvVariableHashMap& aEnv )
 {
 #ifdef __WXMSW__
+    for( auto& [name, value] : aEnv )
+    {
+        if( name.CmpNoCase( wxS( "PATH" ) ) == 0 )
+            return value;
+    }
+#endif
+
+    return aEnv[wxS( "PATH" )];
+}
+
+
+#if !defined( __WXMSW__ ) && !defined( __WXMAC__ )
+// Symlinks are resolved so /bin and /usr/bin match on merged-usr systems
+static wxString normalizedDir( const wxString& aPath )
+{
+    std::error_code       ec;
+    std::filesystem::path resolved =
+            std::filesystem::weakly_canonical( std::filesystem::path( aPath.utf8_str().data() ), ec );
+
+    if( ec )
+        return aPath;
+
+    return wxString::FromUTF8( resolved.string().c_str() );
+}
+
+
+static bool pathListContains( const wxString& aPathList, const wxString& aDir )
+{
+    wxString          dir = normalizedDir( aDir );
+    wxStringTokenizer tokenizer( aPathList, PATH_LIST_SEPARATOR, wxTOKEN_STRTOK );
+
+    while( tokenizer.HasMoreTokens() )
+    {
+        if( normalizedDir( tokenizer.GetNextToken() ) == dir )
+            return true;
+    }
+
+    return false;
+}
+#endif
+
+
+int ExecuteCommandThroughShell( const wxString& aCommand, wxProcess* aProcess )
+{
     wxExecuteEnv env;
     wxGetEnvMap( &env.env );
 
-    // Prepend the app bin path so that KiCad's python is used by default
-    wxString binPath = wxFileName( wxStandardPaths::Get().GetExecutablePath() ).GetPath();
-    env.env["PATH"] = binPath + wxS( ';' ) + env.env["PATH"];
+    // On Unix only add directories missing from PATH so a KiCad in /usr/bin cannot reorder the user's PATH
+    wxString&             pathList = envPathEntry( env.env );
+    std::vector<wxString> dirs = PATHS::GetToolDirectories( PATHS::GetExecutableDir() );
 
+    for( auto it = dirs.rbegin(); it != dirs.rend(); ++it )
+    {
+#if defined( __WXMSW__ ) || defined( __WXMAC__ )
+        // Bundled tools must win over anything earlier on PATH
+        pathList = pathList.IsEmpty() ? *it : *it + PATH_LIST_SEPARATOR + pathList;
+#else
+        if( !pathListContains( pathList, *it ) )
+            pathList = pathList.IsEmpty() ? *it : *it + PATH_LIST_SEPARATOR + pathList;
+#endif
+    }
+
+#ifdef __WXMSW__
     // The array form of wxExecute is unusable with cmd.exe. wx joins the argv elements back into a
     // single command line, wrapping any element containing spaces in double quotes and escaping
     // embedded quotes with backslashes. cmd.exe does not understand backslash-escaped quotes and
@@ -299,7 +372,7 @@ int ExecuteCommandThroughShell( const wxString& aCommand, wxProcess* aProcess )
 
     const wchar_t* argv[] = { shell.data(), flag.data(), command.data(), nullptr };
 
-    return static_cast<int>( wxExecute( argv, wxEXEC_SYNC, aProcess ) );
+    return static_cast<int>( wxExecute( argv, wxEXEC_SYNC, aProcess, &env ) );
 #endif
 }
 
@@ -714,8 +787,194 @@ bool AddDirectoryToZip( wxZipOutputStream& aZip, const wxString& aSourceDir, wxS
 
 namespace
 {
+struct ARCHIVE_SOURCE
+{
+    wxString m_path;
+    wxString m_name;
+    wxString m_key;
+    bool     m_isDirectory;
+};
 
-std::filesystem::path toFsPath( const wxString& aPath )
+
+bool collectArchiveSources( const wxString& aSourceDir, const wxString& aParent,
+                            DIR_LOOP_GUARD& aGuard, std::vector<ARCHIVE_SOURCE>& aSources )
+{
+    wxDir dir( aSourceDir );
+
+    if( !dir.IsOpened() )
+        return false;
+
+    wxString name;
+    bool     cont = dir.GetFirst( &name, wxEmptyString, wxDIR_DEFAULT );
+
+    while( cont )
+    {
+        wxString path = wxFileName( aSourceDir, name ).GetFullPath();
+        wxString relative = aParent.IsEmpty() ? name : aParent + wxS( "/" ) + name;
+        bool     isDirectory = wxDirExists( path );
+        wxString key = relative + ( isDirectory ? wxS( "/" ) : wxS( "" ) );
+        aSources.push_back( { path, relative, key, isDirectory } );
+
+        if( isDirectory )
+        {
+            if( !aGuard.ShouldDescend( path ) || !collectArchiveSources( path, relative, aGuard, aSources ) )
+                return false;
+        }
+
+        cont = dir.GetNext( &name );
+    }
+
+    return true;
+}
+
+
+bool writeArchiveContents( wxArchiveOutputStream& aArchive, const std::vector<ARCHIVE_SOURCE>& aSources )
+{
+    for( const ARCHIVE_SOURCE& source : aSources )
+    {
+        if( source.m_isDirectory )
+        {
+            if( !aArchive.PutNextDirEntry( source.m_name ) )
+                return false;
+
+            continue;
+        }
+
+        wxFFileInputStream input( source.m_path );
+        wxFileOffset       expectedLength = input.IsOk() ? input.GetLength() : wxInvalidOffset;
+
+        if( !input.IsOk() || !aArchive.PutNextEntry( source.m_name, wxDateTime::Now(), expectedLength ) )
+            return false;
+
+        input.Read( aArchive );
+
+        if( input.TellI() != expectedLength || !aArchive.IsOk() || aArchive.GetLastError() != wxSTREAM_NO_ERROR
+            || !aArchive.CloseEntry() )
+            return false;
+    }
+
+    return true;
+}
+} // namespace
+
+
+bool WriteDirectoryArchive( const wxString& aSourceDir, wxOutputStream& aOut,
+                            ARCHIVE_FORMAT aFormat, const wxString& aTopDir )
+{
+    if( !aOut.IsOk() || !wxDirExists( aSourceDir ) )
+        return false;
+
+    DIR_LOOP_GUARD               guard( aSourceDir );
+    std::vector<ARCHIVE_SOURCE> sources;
+
+    if( !guard.IsRooted() || !collectArchiveSources( aSourceDir, aTopDir, guard, sources ) )
+        return false;
+
+    std::sort( sources.begin(), sources.end(), []( const ARCHIVE_SOURCE& a, const ARCHIVE_SOURCE& b )
+    {
+        return a.m_key < b.m_key;
+    } );
+
+    if( aFormat == ARCHIVE_FORMAT::TGZ )
+    {
+        wxZlibOutputStream gzip( aOut, -1, wxZLIB_GZIP );
+        wxTarOutputStream  archive( gzip, wxTAR_PAX, wxConvUTF8 );
+        bool ok = ( aTopDir.IsEmpty() || archive.PutNextDirEntry( aTopDir ) )
+                  && writeArchiveContents( archive, sources );
+        bool archiveOk = archive.IsOk() && archive.GetLastError() == wxSTREAM_NO_ERROR;
+        bool archiveClosed = archive.Close();
+        bool gzipClosed = gzip.Close();
+        return ok && archiveOk && archiveClosed && gzipClosed && aOut.IsOk();
+    }
+
+    wxZipOutputStream archive( aOut );
+    bool ok = ( aTopDir.IsEmpty() || archive.PutNextDirEntry( aTopDir ) )
+              && writeArchiveContents( archive, sources );
+    bool archiveOk = archive.IsOk() && archive.GetLastError() == wxSTREAM_NO_ERROR;
+    bool archiveClosed = archive.Close();
+    return ok && archiveOk && archiveClosed && aOut.IsOk();
+}
+
+
+bool WriteDirectoryArchive( const wxString& aSourceDir, const wxString& aArchive,
+                            ARCHIVE_FORMAT aFormat, const wxString& aTopDir, wxString* aError,
+                            const ARCHIVE_STREAM_FACTORY& aOpen )
+{
+    wxString tempPath;
+    wxString error;
+    FILE*    fp = KIPLATFORM::IO::OpenUniqueSiblingTempFile( aArchive, wxS( "wb" ), &tempPath, &error );
+
+    if( !fp )
+    {
+        if( aError )
+            *aError = error.IsEmpty() ? _( "Cannot create temporary archive file" ) : error;
+
+        return false;
+    }
+
+    // Use a large I/O buffer for cloud-synced folders
+    // See KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE
+    setvbuf( fp, nullptr, _IOFBF, KIPLATFORM::IO::CLOUD_SYNC_BUFFER_SIZE );
+
+    bool ok = false;
+
+    {
+        wxFFile file( fp );
+
+        try
+        {
+            std::unique_ptr<wxOutputStream> output = aOpen ? aOpen( file )
+                                                           : std::make_unique<wxFFileOutputStream>( file );
+
+            if( output )
+                ok = WriteDirectoryArchive( aSourceDir, *output, aFormat, aTopDir );
+        }
+        catch( const std::exception& exception )
+        {
+            ok = false;
+            error = wxString::FromUTF8( exception.what() );
+        }
+
+        bool  writeOk = ok;
+        bool  streamError = file.Error();
+        FILE* raw = file.Detach();
+        bool  flushed = KIPLATFORM::IO::FlushToDisk( raw );
+        bool  closed = fclose( raw ) == 0;
+        ok = writeOk && !streamError && flushed && closed;
+
+        if( !writeOk || streamError )
+        {
+            if( error.IsEmpty() )
+                error = _( "Write error" );
+        }
+        else if( !flushed || !closed )
+        {
+            error = _( "Cannot flush or close temporary file" );
+        }
+    }
+
+    if( ok )
+    {
+        ok = KIPLATFORM::IO::CommitTempFile( tempPath, aArchive, &error );
+
+        if( !ok && error.IsEmpty() )
+            error = _( "Cannot replace archive" );
+    }
+
+    if( !ok && wxFileExists( tempPath ) )
+    {
+        if( !wxRemoveFile( tempPath ) )
+            error += _( "\nCannot remove temporary archive file" );
+    }
+
+    if( aError )
+        *aError = error;
+
+    return ok;
+}
+
+
+std::filesystem::path ToFsPath( const wxString& aPath )
 {
 #ifdef __WXMSW__
     return std::filesystem::path( std::wstring( aPath.wc_str() ) );
@@ -723,6 +982,58 @@ std::filesystem::path toFsPath( const wxString& aPath )
     return std::filesystem::path( aPath.utf8_string() );
 #endif
 }
+
+
+wxString FromFsPath( const std::filesystem::path& aPath )
+{
+#ifdef __WXMSW__
+    return wxString( aPath.wstring() );
+#else
+    std::u8string utf8 = aPath.u8string();
+    return wxString::FromUTF8( reinterpret_cast<const char*>( utf8.data() ), utf8.size() );
+#endif
+}
+
+
+SCOPED_TEMP_PATH::~SCOPED_TEMP_PATH()
+{
+    if( wxDirExists( m_path ) )
+        wxFileName::Rmdir( m_path, wxPATH_RMDIR_RECURSIVE );
+    else if( wxFileExists( m_path ) )
+        wxRemoveFile( m_path );
+}
+
+
+bool SCOPED_TEMP_PATH::MakeFile( const wxString& aPrefix )
+{
+    m_path = wxFileName::CreateTempFileName( aPrefix );
+    return !m_path.IsEmpty();
+}
+
+
+bool SCOPED_TEMP_PATH::MakeDirectory( const wxString& aPrefix, int aPermissions )
+{
+    SCOPED_TEMP_PATH tempFile;
+
+    if( !tempFile.MakeFile( aPrefix ) || !wxRemoveFile( tempFile.Path() ) )
+        return false;
+
+    wxString path = tempFile.Path();
+
+    // Stop owning the name before mkdir so a collision is never removed.
+    tempFile.m_path.clear();
+
+    // Non-recursive creation rejects an existing file, directory or symlink.
+    if( !wxFileName::Mkdir( path, aPermissions, 0 ) )
+        return false;
+
+    m_path = path;
+    return true;
+}
+
+
+namespace
+{
 
 
 // Best-effort canonicalisation.  Empty path means "couldn't resolve"
@@ -812,7 +1123,7 @@ void traverseLoopSafe( const wxString& aRoot, wxArrayString& aOutput, bool aColl
 
 
 DIR_LOOP_GUARD::DIR_LOOP_GUARD( const wxString& aRoot, DIR_LOOP_POLICY aPolicy ) :
-        m_root( canonicalPath( toFsPath( aRoot ) ) ),
+        m_root( canonicalPath( ToFsPath( aRoot ) ) ),
         m_policy( aPolicy )
 {
     m_visited.reserve( 256 );
@@ -824,7 +1135,7 @@ DIR_LOOP_GUARD::DIR_LOOP_GUARD( const wxString& aRoot, DIR_LOOP_POLICY aPolicy )
 
 bool DIR_LOOP_GUARD::ShouldDescend( const wxString& aDir )
 {
-    const std::filesystem::path raw = toFsPath( aDir );
+    const std::filesystem::path raw = ToFsPath( aDir );
     std::filesystem::path       key;
 
     if( m_policy == DIR_LOOP_POLICY::CONFINE_TO_ROOT )

@@ -29,6 +29,7 @@
 #include <wx/dir.h>
 #include <wx/filename.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -41,6 +42,7 @@ class PROJECT_TEMPLATE_TEST_FIXTURE
 public:
     PROJECT_TEMPLATE_TEST_FIXTURE()
     {
+        m_originalDir = fs::current_path();
         m_tempDir = fs::temp_directory_path() / "kicad_template_test";
         fs::remove_all( m_tempDir );
         fs::create_directories( m_tempDir );
@@ -48,6 +50,7 @@ public:
 
     ~PROJECT_TEMPLATE_TEST_FIXTURE()
     {
+        fs::current_path( m_originalDir );
         fs::remove_all( m_tempDir );
     }
 
@@ -80,6 +83,7 @@ public:
         }
     }
 
+    fs::path m_originalDir;
     fs::path m_tempDir;
 };
 
@@ -402,6 +406,38 @@ BOOST_AUTO_TEST_CASE( ReadOnlyTemplateProducesWritableProject )
         BOOST_REQUIRE_MESSAGE( fn.FileExists(), file.string() + " was not created" );
         BOOST_CHECK_MESSAGE( fn.IsFileWritable(), file.string() + " is read only" );
     }
+}
+
+
+BOOST_AUTO_TEST_CASE( PinnedTemplatesSortFirst )
+{
+    struct ENTRY
+    {
+        wxString title;
+        bool     pinned;
+    };
+
+    std::vector<ENTRY> entries = { { wxS( "STM32F407" ), false },
+                                   { wxS( "Default" ), false },
+                                   { wxS( "Motor_Driver" ), true },
+                                   { wxS( "Arduino_Mega" ), false },
+                                   { wxS( "amplifier" ), true } };
+
+    std::sort( entries.begin(), entries.end(),
+               []( const ENTRY& a, const ENTRY& b )
+               {
+                   return TemplateListLess( a.title, a.pinned, b.title, b.pinned );
+               } );
+
+    std::vector<wxString> titles;
+
+    for( const ENTRY& entry : entries )
+        titles.push_back( entry.title );
+
+    const std::vector<wxString> expected = { wxS( "amplifier" ), wxS( "Motor_Driver" ), wxS( "Default" ),
+                                             wxS( "Arduino_Mega" ), wxS( "STM32F407" ) };
+
+    BOOST_CHECK( titles == expected );
 }
 
 

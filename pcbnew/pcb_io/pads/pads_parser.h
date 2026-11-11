@@ -127,6 +127,26 @@ struct PARAMETERS
     std::string default_signal_via;        ///< VIAPSHVIA
 };
 
+enum class DESIGN_RULE_FIELD : unsigned
+{
+    MIN_CLEARANCE = 1u << 0,
+    DEFAULT_CLEARANCE = 1u << 1,
+    MIN_TRACK_WIDTH = 1u << 2,
+    DEFAULT_TRACK_WIDTH = 1u << 3,
+    MIN_VIA_SIZE = 1u << 4,
+    DEFAULT_VIA_SIZE = 1u << 5,
+    MIN_VIA_DRILL = 1u << 6,
+    DEFAULT_VIA_DRILL = 1u << 7,
+    HOLE_TO_HOLE = 1u << 8,
+    SILK_CLEARANCE = 1u << 9,
+    MASK_CLEARANCE = 1u << 10,
+    COPPER_EDGE_CLEARANCE = 1u << 11
+};
+
+/**
+ * Board design rules. The initial values are in mils and only meaningful for MILS files, so
+ * consumers must apply a value only when IsSpecified() reports that the file declared it.
+ */
 struct DESIGN_RULES
 {
     double min_clearance = 8.0;           ///< MINCLEAR
@@ -141,6 +161,12 @@ struct DESIGN_RULES
     double silk_clearance = 5.0;          ///< SILKCLEAR
     double mask_clearance = 3.0;          ///< MASKCLEAR
     double copper_edge_clearance = 10.0;  ///< OUTLINE_TO_*
+
+    unsigned specified = 0;
+
+    void MarkSpecified( DESIGN_RULE_FIELD aField ) { specified |= static_cast<unsigned>( aField ); }
+
+    bool IsSpecified( DESIGN_RULE_FIELD aField ) const { return ( specified & static_cast<unsigned>( aField ) ) != 0; }
 };
 
 struct ATTRIBUTE
@@ -169,9 +195,9 @@ struct PART
 {
     std::string name;
     std::string decal;                         ///< Primary decal (first in colon-separated list)
-    std::string part_type;                     ///< Used with PARTTYPE@DECAL syntax
-    std::vector<std::string> alternate_decals; ///< Remaining decals after ':' splits
-    int alt_decal_index = -1;                  ///< ALT placement field, -1 = use primary decal
+    std::string part_type;                     ///< Part type name when using PARTTYPE\@DECAL syntax
+    std::vector<std::string> alternate_decals; ///< Alternate decals (remaining after ':' splits)
+    int alt_decal_index = -1;                  ///< ALT field from placement (-1 = use primary decal)
     std::string value;
     std::string units;
     POINT location;
@@ -751,7 +777,7 @@ private:
     std::map<std::string, PART_DECAL> m_decals;
     std::map<std::string, PART_TYPE> m_part_types;
 
-    ///< Per-instance attribute overrides from PART <name> {...} blocks
+    /// Per-instance attribute overrides from PART \<name\> {...} blocks in *PARTTYPE* section
     std::map<std::string, std::map<std::string, std::string>> m_part_instance_attrs;
     std::map<std::string, REUSE_BLOCK> m_reuse_blocks;
     std::vector<CLUSTER> m_clusters;
@@ -761,13 +787,13 @@ private:
     std::vector<NET_CLASS_DEF> m_net_classes;
     std::vector<DIFF_PAIR_DEF> m_diff_pairs;
     std::vector<KEEPOUT> m_keepouts;
-    std::vector<JUMPER_DEF> m_jumper_defs;
-    std::vector<COPPER_SHAPE> m_copper_shapes;
-    std::vector<GRAPHIC_LINE> m_graphic_lines;
-    std::map<int, LAYER_INFO> m_layer_defs;      ///< Keyed by layer number
-    FILE_HEADER m_file_header;
+    std::vector<JUMPER_DEF> m_jumper_defs;       ///< Jumper definitions from *JUMPER* section
+    std::vector<COPPER_SHAPE> m_copper_shapes;   ///< Copper shapes from *LINES* section
+    std::vector<GRAPHIC_LINE> m_graphic_lines;   ///< 2D graphic lines from *LINES* section
+    std::map<int, LAYER_INFO> m_layer_defs;      ///< Parsed layer definitions by layer number
+    FILE_HEADER m_file_header;                   ///< Parsed file header info
     bool m_is_basic_units = false;
-    bool m_has_font_lines = true;            ///< True if text/label entries include a font line
+    bool m_has_font_lines = true;                ///< True if text/label entries include a font line
 
     std::string m_current_section;
     std::optional<std::string> m_pushed_line;

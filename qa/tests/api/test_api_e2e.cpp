@@ -17,13 +17,17 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "api_e2e_utils.h"
+
 #include <utility>
 
 #include <boost/test/unit_test.hpp>
+#include <qa_utils/file_utils.h>
+
+#include <magic_enum.hpp>
+
 #include <wx/filefn.h>
 #include <wx/filename.h>
-
-#include "api_e2e_utils.h"
 
 #include <api/board/board.pb.h>
 #include <api/board/board_commands.pb.h>
@@ -34,44 +38,21 @@
 class TEMP_KITCHEN_SINK_COPY
 {
 public:
-    ~TEMP_KITCHEN_SINK_COPY()
+    TEMP_KITCHEN_SINK_COPY() :
+            m_tempRoot( "kicad_api_e2e" )
     {
-        if( !m_tempDir.IsEmpty() && wxFileName::DirExists( m_tempDir ) )
-            wxFileName::Rmdir( m_tempDir, wxPATH_RMDIR_RECURSIVE );
     }
 
-    bool Create( wxString* aError )
+    bool Create( wxString* aError, const wxString& aRulesName = wxS( "api_kitchen_sink.kicad_dru" ) )
     {
         wxString   testDataDir = wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() );
         wxFileName srcPcb( testDataDir, wxS( "api_kitchen_sink.kicad_pcb" ) );
         wxFileName srcPro( testDataDir, wxS( "api_kitchen_sink.kicad_pro" ) );
-        wxFileName srcDru( testDataDir, wxS( "api_kitchen_sink.kicad_dru" ) );
+        wxFileName srcDru( testDataDir + wxFileName::GetPathSeparator() + aRulesName );
 
-        wxString tempToken = wxFileName::CreateTempFileName( wxS( "kicad-api-e2e-" ) );
-
-        if( tempToken.IsEmpty() )
-        {
-            if( aError )
-                *aError = wxS( "Failed to create temporary file name" );
-
-            return false;
-        }
-
-        wxRemoveFile( tempToken );
-
-        if( !wxFileName::Mkdir( tempToken, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL ) )
-        {
-            if( aError )
-                *aError = wxS( "Failed to create temporary directory" );
-
-            return false;
-        }
-
-        m_tempDir = tempToken;
-
-        wxFileName dstPcb( m_tempDir, srcPcb.GetFullName() );
-        wxFileName dstPro( m_tempDir, srcPro.GetFullName() );
-        wxFileName dstDru( m_tempDir, srcDru.GetFullName() );
+        wxFileName dstPcb( m_tempRoot.PathStr(), srcPcb.GetFullName() );
+        wxFileName dstPro( m_tempRoot.PathStr(), srcPro.GetFullName() );
+        wxFileName dstDru( m_tempRoot.PathStr(), wxS( "api_kitchen_sink.kicad_dru" ) );
 
         if( !wxCopyFile( srcPcb.GetFullPath(), dstPcb.GetFullPath(), true )
             || !wxCopyFile( srcPro.GetFullPath(), dstPro.GetFullPath(), true )
@@ -90,8 +71,8 @@ public:
     const wxString& BoardPath() const { return m_boardPath; }
 
 private:
-    wxString m_tempDir;
-    wxString m_boardPath;
+    KI_TEST::SCOPED_TEMP_DIR m_tempRoot;
+    wxString                 m_boardPath;
 };
 
 
@@ -198,6 +179,29 @@ BOOST_FIXTURE_TEST_CASE( OpenSingleBoard, API_SERVER_E2E_FIXTURE )
                            "GetItems failed: " + Client().LastError() );
 
     BOOST_CHECK_GT( footprintCount, 0 );
+}
+
+
+// An unset page_size must be refused because mapping it asserts, and a debug server blocks on the assert
+BOOST_FIXTURE_TEST_CASE( SetPageSettingsRequiresPageSize, API_SERVER_E2E_FIXTURE )
+{
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    kiapi::common::types::DocumentSpecifier document;
+    wxFileName boardPath( wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() ), wxS( "api_kitchen_sink.kicad_pcb" ) );
+
+    BOOST_REQUIRE_MESSAGE( Client().OpenDocument( boardPath.GetFullPath(), &document ),
+                           "OpenDocument failed: " + Client().LastError() );
+
+    kiapi::common::commands::SetPageSettings request;
+    request.mutable_document()->CopyFrom( document );
+    request.mutable_page_settings()->set_orientation( kiapi::common::types::PO_PORTRAIT );
+
+    kiapi::common::ApiResponse response;
+    BOOST_REQUIRE_MESSAGE( Client().SendCommand( request, &response ),
+                           "SetPageSettings failed to send: " + Client().LastError() );
+    BOOST_CHECK( response.status().status() == kiapi::common::AS_BAD_REQUEST );
+    BOOST_CHECK_EQUAL( response.status().error_message(), "SetPageSettings requires page_size" );
 }
 
 
@@ -554,6 +558,70 @@ BOOST_FIXTURE_TEST_CASE( SetCustomDesignRules_RoundTripSingleRule, API_SERVER_E2
 }
 
 
+BOOST_FIXTURE_TEST_CASE( SetCustomDesignRules_RoundTripIsLossless, API_SERVER_E2E_FIXTURE )
+{
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    TEMP_KITCHEN_SINK_COPY fixtureCopy;
+    wxString               copyError;
+
+    BOOST_REQUIRE_MESSAGE( fixtureCopy.Create( &copyError, wxS( "issue25846/custom_rules.kicad_dru" ) ),
+                           copyError );
+
+    kiapi::common::types::DocumentSpecifier document;
+
+    BOOST_REQUIRE_MESSAGE( Client().OpenDocument( fixtureCopy.BoardPath(), &document ),
+                           "OpenDocument failed: " + Client().LastError() );
+
+    kiapi::board::commands::CustomRulesResponse getResponse;
+    wxString                                    error;
+
+    BOOST_REQUIRE_MESSAGE( SendGetCustomDesignRules( Client(), document, &getResponse, &error ),
+                           "GetCustomDesignRules failed: " + error );
+    BOOST_REQUIRE( getResponse.status() == kiapi::board::commands::CRS_VALID );
+    BOOST_REQUIRE_GT( getResponse.rules_size(), 0 );
+
+    bool sawReturnPath = false;
+
+    for( const kiapi::board::CustomRule& rule : getResponse.rules() )
+    {
+        for( const kiapi::board::CustomRuleConstraint& constraint : rule.constraints() )
+        {
+            if( constraint.type() != kiapi::board::CRCT_NET_CHAIN_RETURN_PATH )
+                continue;
+
+            sawReturnPath = true;
+            BOOST_CHECK_EQUAL( constraint.return_path().reference_layer(), "B.Cu" );
+            BOOST_CHECK_EQUAL( constraint.return_path().reference_net(), "GND" );
+        }
+    }
+
+    BOOST_CHECK( sawReturnPath );
+
+    kiapi::board::commands::SetCustomDesignRules setRequest;
+    *setRequest.mutable_board() = document;
+    setRequest.mutable_rules()->CopyFrom( getResponse.rules() );
+
+    kiapi::common::ApiResponse setApiResponse;
+
+    BOOST_REQUIRE_MESSAGE( Client().SendCommand( setRequest, &setApiResponse ),
+                           "SetCustomDesignRules failed to send: " + Client().LastError() );
+    BOOST_REQUIRE_MESSAGE( setApiResponse.status().status() == kiapi::common::AS_OK,
+                           setApiResponse.status().error_message() );
+
+    kiapi::board::commands::CustomRulesResponse setResponse;
+    BOOST_REQUIRE( setApiResponse.message().UnpackTo( &setResponse ) );
+    BOOST_REQUIRE( setResponse.status() == kiapi::board::commands::CRS_VALID );
+    BOOST_REQUIRE_EQUAL( setResponse.rules_size(), getResponse.rules_size() );
+
+    for( int ii = 0; ii < getResponse.rules_size(); ++ii )
+    {
+        BOOST_CHECK_MESSAGE( setResponse.rules( ii ).SerializeAsString() == getResponse.rules( ii ).SerializeAsString(),
+                             getResponse.rules( ii ).name() << " changed in the round trip" );
+    }
+}
+
+
 BOOST_FIXTURE_TEST_CASE( OpenProjectWithBoardAndSchematic, API_SERVER_E2E_FIXTURE )
 {
     BOOST_REQUIRE_MESSAGE( Start(), LastError() );
@@ -608,4 +676,306 @@ BOOST_FIXTURE_TEST_CASE( OpenProjectWithBoardAndSchematic, API_SERVER_E2E_FIXTUR
 
     BOOST_CHECK( Client().LastError().Contains( wxS( "already open" ) ) );
 }
+
+
+BOOST_FIXTURE_TEST_CASE( CreateDocument, API_SERVER_E2E_FIXTURE )
+{
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    auto test =
+        [&]( kiapi::common::types::DocumentType aType, const wxString& aExpectedExt )
+        {
+            KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_api_e2e_createdoc" );
+
+            wxString   tempFn = tempDir.ChildPathStr( "new_doc" );
+            wxFileName fileWithExt( tempDir.ChildPathStr( "new_doc" + aExpectedExt ) );
+            wxFileName projectWithExt( tempDir.ChildPathStr( "new_doc.kicad_pro" ) );
+
+            kiapi::common::types::DocumentSpecifier document;
+
+            BOOST_REQUIRE_MESSAGE( Client().CreateDocument( tempFn, aType, &document ),
+                                   "CreateDocument failed: " + Client().LastError() );
+
+            BOOST_CHECK( document.type() == aType );
+            BOOST_CHECK( document.project().name() == projectWithExt.GetName() );
+            BOOST_CHECK( document.project().path() == projectWithExt.GetPath( wxPATH_GET_SEPARATOR | wxPATH_GET_VOLUME ) );
+
+            kiapi::common::ApiResponse response;
+            kiapi::common::commands::GetDocumentModifiedState state;
+            state.mutable_document()->CopyFrom( document );
+            BOOST_CHECK( Client().SendCommand( state, &response ) );
+
+            // Just creating the document doesn't save it
+            BOOST_CHECK( !wxFileName( fileWithExt ).FileExists() );
+            BOOST_CHECK( !wxFileName( projectWithExt ).FileExists() );
+
+            kiapi::common::commands::SaveDocument save;
+            save.mutable_document()->CopyFrom( document );
+            BOOST_CHECK( Client().SendCommand( save, &response ) );
+
+            BOOST_CHECK( wxFileName( fileWithExt ).FileExists() );
+            BOOST_CHECK( wxFileName( projectWithExt ).FileExists() );
+        };
+
+    std::map<kiapi::common::types::DocumentType, wxString> cases = {
+        { kiapi::common::types::DOCTYPE_PCB, wxS( ".kicad_pcb" )},
+        { kiapi::common::types::DOCTYPE_SCHEMATIC, wxS( ".kicad_sch" ) }
+    };
+
+    for( const auto& [docType, ext] : cases )
+    {
+        BOOST_TEST_CONTEXT( magic_enum::enum_name( docType ) )
+        {
+            test( docType, ext );
+        }
+    }
+}
+
+
+BOOST_FIXTURE_TEST_CASE( CreateDocumentRejectsUnsavedModifications, API_SERVER_E2E_FIXTURE )
+{
+    using namespace kiapi::common::commands;
+
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    auto test =
+        [&]( kiapi::common::types::DocumentType aType, const wxString& aExistingPath )
+        {
+            KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_api_e2e_createdoc" );
+            wxString                 docFileName = tempDir.ChildPathStr( "new_doc" );
+
+            kiapi::common::types::DocumentSpecifier existingDoc;
+
+            BOOST_REQUIRE_MESSAGE( Client().OpenDocument( aExistingPath, aType, &existingDoc ),
+                                   "OpenDocument failed: " + Client().LastError() );
+
+            SetPageSettings modify;
+            modify.mutable_document()->CopyFrom( existingDoc );
+            modify.mutable_page_settings()->set_page_size( kiapi::common::types::PS_A4 );
+            modify.mutable_page_settings()->set_orientation( kiapi::common::types::PO_PORTRAIT );
+            kiapi::common::ApiResponse response;
+            BOOST_CHECK( Client().SendCommand( modify, &response ) );
+
+            GetDocumentModifiedState stateQuery;
+            stateQuery.mutable_document()->CopyFrom( existingDoc );
+            BOOST_CHECK( Client().SendCommand( stateQuery, &response ) );
+            GetDocumentModifiedStateResponse state;
+            BOOST_CHECK( response.message().UnpackTo( &state ) );
+            BOOST_CHECK( state.state() == DocumentModifiedState::DMS_MODIFIED );
+
+            kiapi::common::types::DocumentSpecifier newDoc;
+
+            BOOST_REQUIRE( !Client().CreateDocument( docFileName, aType, &newDoc ) );
+
+            BOOST_CHECK( Client().LastError().Contains( wxS( "save or revert" ) ) );
+
+            kiapi::common::commands::RevertDocument revert;
+            revert.mutable_document()->CopyFrom( existingDoc );
+            BOOST_CHECK( Client().SendCommand( revert, &response ) );
+
+            BOOST_REQUIRE( Client().CreateDocument( docFileName, aType, &newDoc ) );
+
+            BOOST_CHECK( Client().CloseAllDocuments() );
+        };
+
+    std::map<kiapi::common::types::DocumentType, wxString> cases = {
+        { kiapi::common::types::DOCTYPE_PCB,
+          wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() ) + wxS( "api_kitchen_sink.kicad_pcb" ) },
+        { kiapi::common::types::DOCTYPE_SCHEMATIC,
+          wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() ) + wxS( "api_kitchen_sink.kicad_sch" ) }
+    };
+
+    for( const auto& [docType, path] : cases )
+    {
+        BOOST_TEST_CONTEXT( magic_enum::enum_name( docType ) )
+        {
+            test( docType, path );
+        }
+    }
+}
+
+
+BOOST_FIXTURE_TEST_CASE( SaveDocumentAs, API_SERVER_E2E_FIXTURE )
+{
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    auto test =
+        [&]( kiapi::common::types::DocumentType aType, const wxString& aSourcePath,
+             const wxString& aSourceName, const wxString& aDocumentExt )
+        {
+            KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_api_e2e_saveas" );
+
+            wxString sourceCopy = tempDir.ChildPathStr( aSourceName );
+            BOOST_REQUIRE( wxCopyFile( aSourcePath, sourceCopy, true ) );
+
+            kiapi::common::types::DocumentSpecifier document;
+
+            BOOST_REQUIRE_MESSAGE( Client().OpenDocument( sourceCopy, aType, &document ),
+                                   "OpenDocument failed: " + Client().LastError() );
+
+            wxFileName newDocFile( tempDir.ChildPathStr( "renamed" + aDocumentExt ) );
+            wxFileName newProjectFile( tempDir.ChildPathStr( "renamed.kicad_pro" ) );
+
+            kiapi::common::commands::SaveDocumentAs saveAs;
+            saveAs.mutable_document()->CopyFrom( document );
+            saveAs.set_path( tempDir.ChildPathStr( "renamed" ).ToStdString() );
+
+            kiapi::common::ApiResponse response;
+            BOOST_REQUIRE_MESSAGE( Client().SendCommand( saveAs, &response ),
+                                   "SaveDocumentAs failed to send: " + Client().LastError() );
+            BOOST_REQUIRE( response.status().status() == kiapi::common::AS_OK );
+
+            BOOST_CHECK( newDocFile.FileExists() );
+            BOOST_CHECK( newProjectFile.FileExists() );
+
+            kiapi::common::commands::GetOpenDocuments openDocs;
+            openDocs.set_type( aType );
+            BOOST_REQUIRE( Client().SendCommand( openDocs, &response ) );
+
+            kiapi::common::commands::GetOpenDocumentsResponse docsResponse;
+            BOOST_REQUIRE( response.message().UnpackTo( &docsResponse ) );
+            BOOST_REQUIRE_EQUAL( docsResponse.documents_size(), 1 );
+
+            kiapi::common::types::DocumentSpecifier renamedDoc = docsResponse.documents( 0 );
+
+            // TODO(JE) clean up
+            // pcb reports the project directory without a trailing separator, schematic via
+            // PackProject which uses GetProjectPath() including the separator
+            wxString expectedProjectPath = ( aType == kiapi::common::types::DOCTYPE_PCB )
+                                                   ? newProjectFile.GetPath()
+                                                   : newProjectFile.GetPath( wxPATH_GET_SEPARATOR | wxPATH_GET_VOLUME );
+
+            BOOST_CHECK_EQUAL( renamedDoc.project().path(), expectedProjectPath.ToStdString() );
+            BOOST_CHECK_EQUAL( renamedDoc.project().name(), newProjectFile.GetName().ToStdString() );
+
+            if( aType == kiapi::common::types::DOCTYPE_PCB )
+                BOOST_CHECK_EQUAL( renamedDoc.board_filename(), newDocFile.GetFullName().ToStdString() );
+
+            // The old specifier must now be rejected: the document identity has changed
+            kiapi::common::commands::GetDocumentModifiedState stateQuery;
+            stateQuery.mutable_document()->CopyFrom( document );
+            BOOST_CHECK( Client().SendCommand( stateQuery, &response ) );
+            BOOST_CHECK( response.status().status() != kiapi::common::AS_OK );
+
+            // The new specifier works, and saving to the new location succeeds
+            stateQuery.mutable_document()->CopyFrom( renamedDoc );
+            BOOST_CHECK( Client().SendCommand( stateQuery, &response ) );
+            BOOST_REQUIRE( response.status().status() == kiapi::common::AS_OK );
+
+            kiapi::common::commands::GetDocumentModifiedStateResponse state;
+            BOOST_REQUIRE( response.message().UnpackTo( &state ) );
+            BOOST_CHECK( state.state() == kiapi::common::commands::DocumentModifiedState::DMS_UNMODIFIED );
+
+            kiapi::common::commands::SaveDocument save;
+            save.mutable_document()->CopyFrom( renamedDoc );
+            BOOST_CHECK( Client().SendCommand( save, &response ) );
+            BOOST_CHECK( response.status().status() == kiapi::common::AS_OK );
+
+            // Closing with the new specifier must succeed; the server's bookkeeping follows the rename
+            kiapi::common::ApiStatusCode closeStatus = kiapi::common::AS_UNKNOWN;
+            BOOST_REQUIRE_MESSAGE( Client().CloseDocument( &renamedDoc, &closeStatus ),
+                                   "CloseDocument after SaveAs failed: " + Client().LastError() );
+            BOOST_CHECK_EQUAL( closeStatus, kiapi::common::AS_OK );
+        };
+
+    struct SaveAsCase
+    {
+        wxString sourcePath;
+        wxString sourceName;
+        wxString documentExt;
+    };
+
+    std::map<kiapi::common::types::DocumentType, SaveAsCase> cases = {
+        { kiapi::common::types::DOCTYPE_PCB,
+          { wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() ) + wxS( "api_kitchen_sink.kicad_pcb" ),
+            wxS( "api_kitchen_sink.kicad_pcb" ), wxS( ".kicad_pcb" ) } },
+        { kiapi::common::types::DOCTYPE_SCHEMATIC,
+          { wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() ) + wxS( "api_kitchen_sink.kicad_sch" ),
+            wxS( "api_kitchen_sink.kicad_sch" ), wxS( ".kicad_sch" ) } }
+    };
+
+    for( const auto& [docType, source] : cases )
+    {
+        BOOST_TEST_CONTEXT( magic_enum::enum_name( docType ) )
+        {
+            test( docType, source.sourcePath, source.sourceName, source.documentExt );
+        }
+    }
+}
+
+
+BOOST_FIXTURE_TEST_CASE( SaveDocumentAsRejectsBadRequests, API_SERVER_E2E_FIXTURE )
+{
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    wxString sourcePath = wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() ) + wxS( "api_kitchen_sink.kicad_pcb" );
+
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_api_e2e_saveas_reject" );
+
+    kiapi::common::types::DocumentSpecifier document;
+
+    BOOST_REQUIRE_MESSAGE( Client().OpenDocument( sourcePath, &document ),
+                           "OpenDocument failed: " + Client().LastError() );
+
+    kiapi::common::ApiResponse response;
+
+    // An empty path is invalid
+    kiapi::common::commands::SaveDocumentAs emptyPath;
+    emptyPath.mutable_document()->CopyFrom( document );
+    BOOST_CHECK( Client().SendCommand( emptyPath, &response ) );
+    BOOST_CHECK( response.status().status() == kiapi::common::AS_BAD_REQUEST );
+    BOOST_CHECK( wxString( response.status().error_message() ).Contains( wxS( "path is required" ) ) );
+
+    // A stale document specifier is rejected by validation before any file is written
+    kiapi::common::commands::SaveDocumentAs staleDoc;
+    staleDoc.mutable_document()->CopyFrom( document );
+    staleDoc.mutable_document()->set_board_filename( "no_such_board.kicad_pcb" );
+    staleDoc.set_path( tempDir.ChildPathStr( "never_written" ).ToStdString() );
+    BOOST_CHECK( Client().SendCommand( staleDoc, &response ) );
+    BOOST_CHECK( response.status().status() == kiapi::common::AS_BAD_REQUEST );
+
+    BOOST_CHECK( !wxFileName( tempDir.ChildPathStr( "never_written.kicad_pcb" ) ).FileExists() );
+
+    Client().CloseAllDocuments();
+}
+
+
+BOOST_FIXTURE_TEST_CASE( SaveDocumentAsSwitchesProject, API_SERVER_E2E_FIXTURE )
+{
+    BOOST_REQUIRE_MESSAGE( Start(), LastError() );
+
+    wxString sourcePath = wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() ) + wxS( "api_kitchen_sink.kicad_pcb" );
+
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "kicad_api_e2e_saveas_project" );
+
+    kiapi::common::types::DocumentSpecifier document;
+
+    BOOST_REQUIRE_MESSAGE( Client().OpenDocument( sourcePath, &document ),
+                           "OpenDocument failed: " + Client().LastError() );
+
+    // Save into a new subdirectory: the document and its project move there
+    wxString subdir = tempDir.CreateChildDirStr( "subdir" );
+
+    kiapi::common::commands::SaveDocumentAs saveAs;
+    saveAs.mutable_document()->CopyFrom( document );
+    saveAs.set_path( ( subdir + wxS( "/moved" ) ).ToStdString() );
+
+    kiapi::common::ApiResponse response;
+    BOOST_REQUIRE_MESSAGE( Client().SendCommand( saveAs, &response ),
+                           "SaveDocumentAs failed to send: " + Client().LastError() );
+    BOOST_REQUIRE( response.status().status() == kiapi::common::AS_OK );
+
+    BOOST_CHECK( wxFileName( subdir + wxS( "/moved.kicad_pcb" ) ).FileExists() );
+    BOOST_CHECK( wxFileName( subdir + wxS( "/moved.kicad_pro" ) ).FileExists() );
+
+    // The project must have switched
+    kiapi::common::types::DocumentSpecifier otherBoard;
+    BOOST_REQUIRE_MESSAGE( !Client().OpenDocument( sourcePath, &otherBoard ),
+                           "Opening a board from the old project directory should have failed" );
+    BOOST_CHECK( Client().LastError().Contains( wxS( "already open" ) ) );
+
+    Client().CloseAllDocuments();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
+

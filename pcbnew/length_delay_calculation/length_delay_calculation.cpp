@@ -535,38 +535,41 @@ void LENGTH_DELAY_CALCULATION::mergeLines(
     // Vector of pads, and an associated flag to indicate whether they have been visited by the clustering algorithm
     std::vector<LENGTH_DELAY_CALCULATION_ITEM*> pads;
 
-    auto removeFromPositionMap = [&aLinesPositionMap]( LENGTH_DELAY_CALCULATION_ITEM* line )
-    {
-        aLinesPositionMap[line->GetLine().CPoint( 0 )].erase( line );
-        aLinesPositionMap[line->GetLine().CLastPoint()].erase( line );
-    };
-
     // Attempts to merge unmerged lines in to aPrimaryLine
-    auto tryMerge = [&removeFromPositionMap, &aLinesPositionMap]( const MERGE_POINT                    aMergePoint,
-                                                                  const VECTOR2I&                      aMergePos,
-                                                                  const LENGTH_DELAY_CALCULATION_ITEM* aPrimaryItem,
-                                                                  SHAPE_LINE_CHAIN& aPrimaryLine, bool* aDidMerge )
+    auto tryMerge = [&aLinesPositionMap]( const MERGE_POINT aMergePoint, const VECTOR2I& aMergePos,
+                                          const LENGTH_DELAY_CALCULATION_ITEM* aPrimaryItem,
+                                          SHAPE_LINE_CHAIN& aPrimaryLine, bool* aDidMerge )
     {
         const auto startItr = aLinesPositionMap.find( aMergePos );
 
         if( startItr == aLinesPositionMap.end() )
             return;
 
-        std::unordered_set<LENGTH_DELAY_CALCULATION_ITEM*>& startItems = startItr->second;
+        // The map is keyed on position alone, so other layers share the bucket.
+        LENGTH_DELAY_CALCULATION_ITEM* lineToMerge = nullptr;
+        int                            sameLayer = 0;
 
-        if( startItems.size() != 1 )
-            return;
+        for( LENGTH_DELAY_CALCULATION_ITEM* item : startItr->second )
+        {
+            if( item->GetStartLayer() != aPrimaryItem->GetStartLayer() )
+                continue;
 
-        LENGTH_DELAY_CALCULATION_ITEM* lineToMerge = *startItems.begin();
+            sameLayer++;
 
-        // Don't merge if lines are on different layers
-        if( aPrimaryItem->GetStartLayer() != lineToMerge->GetStartLayer() )
+            if( item != aPrimaryItem
+                && item->GetMergeStatus() == LENGTH_DELAY_CALCULATION_ITEM::MERGE_STATUS::UNMERGED )
+            {
+                lineToMerge = item;
+            }
+        }
+
+        // Two ends on this layer is a simple joint. More is a branch.
+        if( sameLayer != 2 || !lineToMerge )
             return;
 
         // Merge the lines
         lineToMerge->SetMergeStatus( LENGTH_DELAY_CALCULATION_ITEM::MERGE_STATUS::MERGED_RETIRED );
         mergeShapeLineChains( aPrimaryLine, lineToMerge->GetLine(), aMergePoint );
-        removeFromPositionMap( lineToMerge );
         *aDidMerge = true;
     };
 
@@ -576,9 +579,6 @@ void LENGTH_DELAY_CALCULATION::mergeLines(
         // Don't start with an already merged line
         if( primaryItem->GetMergeStatus() != LENGTH_DELAY_CALCULATION_ITEM::MERGE_STATUS::UNMERGED )
             continue;
-
-        // Remove starting line from the position map
-        removeFromPositionMap( primaryItem );
 
         SHAPE_LINE_CHAIN& primaryLine = primaryItem->GetLine();
 
@@ -719,7 +719,9 @@ void LENGTH_DELAY_CALCULATION::optimiseVias(
         {
             PCB_LAYER_ID padSideLayer;
 
-            if( coincidentPad->GetAttribute() == PAD_ATTRIB::SMD || coincidentPad->GetAttribute() == PAD_ATTRIB::CONN )
+            if( coincidentPad->GetAttribute() == PAD_ATTRIB::SMD
+                || coincidentPad->GetAttribute() == PAD_ATTRIB::CONN
+                || coincidentPad->GetAttribute() == PAD_ATTRIB::NON_COMPONENT )
             {
                 padSideLayer = *coincidentPad->Padstack().LayerSet().CuStack().begin();
             }
@@ -975,6 +977,12 @@ int64_t LENGTH_DELAY_CALCULATION::CalculateLengthForDelay( const int64_t        
                                                            const TUNING_PROFILE_GEOMETRY_CONTEXT& aCtx ) const
 {
     return m_tuningProfileParameters->GetTrackLengthForPropagationDelay( aDesiredDelay, aCtx );
+}
+
+
+bool LENGTH_DELAY_CALCULATION::CanCalculateLengthForDelay( const TUNING_PROFILE_GEOMETRY_CONTEXT& aCtx ) const
+{
+    return m_tuningProfileParameters->CanCalculateLengthForDelay( aCtx );
 }
 
 

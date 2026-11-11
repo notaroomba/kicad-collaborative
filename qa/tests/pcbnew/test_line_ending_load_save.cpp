@@ -22,6 +22,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <footprint.h>
@@ -91,12 +92,15 @@ BOOST_AUTO_TEST_CASE( FootprintLineEndingsRoundTrip )
 
     footprint.Add( line, ADD_MODE::APPEND, true );
 
-    KI_TEST::TEMPORARY_DIRECTORY tempLib( "kicad_qa_fp_line_ending_io", ".pretty" );
-    const std::filesystem::path  savePath = tempLib.GetPath() / "line_ending_roundtrip.kicad_mod";
+    KI_TEST::SCOPED_TEMP_DIR    tempLib( "kicad_qa_fp_line_ending_io" );
+    const std::filesystem::path libPath = tempLib.CreateChildDir( "line_ending_roundtrip.pretty" );
+    const std::filesystem::path savePath = libPath / "line_ending_roundtrip.kicad_mod";
 
-    KI_TEST::DumpFootprintToFile( footprint, savePath.string() );
-    std::unique_ptr<FOOTPRINT> loadedFootprint =
-            KI_TEST::ReadFootprintFromFileOrStream( savePath.string() );
+    footprint.SetFPID( LIB_ID( "", savePath.stem().string() ) );
+
+    KI_TEST::DumpFootprintToFile( footprint, savePath );
+    std::unique_ptr<FOOTPRINT> loadedFootprint = KI_TEST::ReadFootprintFromFile( savePath,
+                                                                                 wxT( "line_ending_roundtrip" ) );
 
     BOOST_REQUIRE( loadedFootprint );
 
@@ -126,12 +130,16 @@ BOOST_AUTO_TEST_CASE( FootprintLineEndingEqualLengthWidthRoundTrip )
 
     footprint.Add( line, ADD_MODE::APPEND, true );
 
-    KI_TEST::TEMPORARY_DIRECTORY tempLib( "kicad_qa_fp_line_ending_equal_size_io", ".pretty" );
-    const std::filesystem::path  savePath = tempLib.GetPath() / "line_ending_equal_size.kicad_mod";
+    KI_TEST::SCOPED_TEMP_DIR    tempLib( "kicad_qa_fp_line_ending_equal_size_io" );
+    const std::filesystem::path libPath =
+            tempLib.CreateChildDir( "line_ending_equal_size.pretty" );
+    const std::filesystem::path savePath = libPath / "line_ending_equal_size.kicad_mod";
 
-    KI_TEST::DumpFootprintToFile( footprint, savePath.string() );
-    std::unique_ptr<FOOTPRINT> loadedFootprint =
-            KI_TEST::ReadFootprintFromFileOrStream( savePath.string() );
+    footprint.SetFPID( LIB_ID( "", savePath.stem().string() ) );
+
+    KI_TEST::DumpFootprintToFile( footprint, savePath );
+    std::unique_ptr<FOOTPRINT> loadedFootprint = KI_TEST::ReadFootprintFromFile( savePath,
+                                                                                 wxT( "line_ending_equal_size" ) );
 
     BOOST_REQUIRE( loadedFootprint );
 

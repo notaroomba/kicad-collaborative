@@ -66,7 +66,7 @@ public:
 
     void RebuildRows() override;
 
-    void ApplyData( SCH_COMMIT& aCommit, TEMPLATES& aTemplateFieldnames, const wxString& aVariantName );
+    void ApplyData( SCH_COMMIT& aCommit, TEMPLATES& aTemplateFieldnames );
 
     void  SetScope( SCOPE aScope ) { m_scope = aScope; }
     SCOPE GetScope() { return m_scope; }
@@ -84,6 +84,10 @@ public:
     const SCH_REFERENCE_LIST& GetReferenceList() const { return m_symbolsList; }
 
 private:
+    void setCellValues( int aRow, int aCol, const std::vector<wxString>& aValues ) override;
+
+    bool fieldSupportsVariants( const wxString& aFieldName ) const override;
+
     bool unitMatch( const SCH_REFERENCE& lhItem, const SCH_REFERENCE& rhItem ) override;
 
     /**
@@ -100,12 +104,13 @@ private:
     bool storageIsSharedAcrossPaths( const wxString& aFieldName ) const;
 
     // True when an ancestor sheet forces this attribute on, not the symbol itself.
-    bool attributeForcedOnBySheet( const SCH_REFERENCE& aRef, const wxString& aAttributeName ) const override;
+    bool attributeForcedOnBySheet( const SCH_REFERENCE& aRef, const wxString& aAttributeName,
+                                   const wxString& aVariantName ) const override;
 
     wxString getAttributeValue( const SCH_REFERENCE& aRef, const wxString& aAttributeName,
                                 const wxString& aVariantNames );
     bool     getLiveFieldValueForVariant( const SCH_REFERENCE& aRef, const wxString& aFieldName,
-                                          const wxString& aVariantName, wxString& aValue );
+                                          const wxString& aVariantName, wxString& aValue ) override;
 
     /**
      * Get the default (non-variant) value for a field.
@@ -121,7 +126,7 @@ private:
     /**
      * Set the attribute value.
      *
-     * @param aReference is a reference to the symbol to set the attribute.
+     * @param aRef is a reference to the symbol to set the attribute.
      * @param aAttributeName is the name of the symbol attribute.
      * @param aValue is the value to set the attribute.
      * @param aVariantName is an optional variant name to set the variant attribute.
@@ -140,6 +145,7 @@ private:
 
     KIID_PATH getDataStoreKey( const SCH_REFERENCE& aItem ) const override;
     wxString  getItemIdentifier( const SCH_REFERENCE& aItem ) const override;
+    wxString  getItemRefSuffix( const SCH_REFERENCE& aItem ) const override;
 
 protected:
     /**

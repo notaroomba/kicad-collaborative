@@ -166,11 +166,15 @@ SHOVE::ROOT_LINE_ENTRY* SHOVE::replaceLine( LINE& aOld, LINE& aNew, bool aInclud
 }
 
 
-int SHOVE::getClearance( const ITEM* aA, const ITEM* aB ) const
+int SHOVE::getClearance( const ITEM* aA, const ITEM* aB, CLEARANCE_ASPECT aAspect ) const
 {
-    if( m_forceClearance >= 0 )
-        return m_forceClearance;
-
+    if( m_overrideClearance )
+    {
+        int overriddenClearance = m_overrideClearance( aA, aB, aAspect );
+        if( overriddenClearance >= 0 )
+            return overriddenClearance;
+    }
+    
     int clearance = m_currentNode->GetClearance( aA, aB, false );
 
     if( aA->HasHole() )
@@ -194,7 +198,7 @@ SHOVE::SHOVE( NODE* aWorld, ROUTER* aRouter ) :
     ALGO_BASE( aRouter )
 {
     m_optFlagDisableMask = 0;
-    m_forceClearance = -1;
+    m_overrideClearance = nullptr;
     m_root = aWorld;
     m_currentNode = aWorld;
     SetDebugDecorator( aRouter->GetInterface()->GetDebugDecorator() );
@@ -1651,9 +1655,13 @@ SHOVE::SHOVE_STATUS SHOVE::shoveIteration( int aIter )
     {
         COLLISION_SEARCH_OPTIONS opts;
         opts.m_kindMask = search_order;
-        opts.m_filter = [ this ] ( const ITEM* item ) -> bool
+        opts.m_overrideClearance = m_overrideClearance;
+        opts.m_filter = [ this ] ( const ITEM* item, const ITEM* aRefItem ) -> bool
         {
             bool rv = true;
+
+            if( m_collisionFilter && ! m_collisionFilter( item, aRefItem ) )
+                return false;
 
             if( item->OfKind( ITEM::SEGMENT_T | ITEM::ARC_T | ITEM::VIA_T | ITEM::SOLID_T | ITEM::HOLE_T ) )
             {
@@ -2406,7 +2414,9 @@ SHOVE::SHOVE_STATUS SHOVE::Run()
     m_lineStack.clear();
     m_optimizerQueue.clear();
 
-    ITEM_SET headSet;
+    // An ITEM_SET does not free what it holds, so the copies of the heads are kept here
+    std::vector<std::unique_ptr<ITEM>> heads;
+    ITEM_SET                           headSet;
 
     PNS_DBG( Dbg(), Message, wxString::Format("shove run (heads: %d, currentNode=%p, depth=%d)", (int) m_headLines.size(), m_currentNode, m_currentNode->Depth() ) );
 
@@ -2417,11 +2427,13 @@ SHOVE::SHOVE_STATUS SHOVE::Run()
             PNS_DBG( Dbg(), Message, wxString::Format("process head-via [%d %d] node=%p", l.theVia->pos.x, l.theVia->pos.y, m_currentNode ) );
             auto realVia = m_currentNode->FindViaByHandle( *l.theVia );
             assert( realVia != nullptr );
-            headSet.Add( realVia->Clone() );
+            heads.emplace_back( realVia->Clone() );
+            headSet.Add( heads.back().get() );
         }
         else
         {
-            headSet.Add( *l.origHead->Clone() );
+            heads.emplace_back( l.origHead->Clone() );
+            headSet.Add( heads.back().get() );
         }
     }
 
@@ -2651,6 +2663,16 @@ const PNS::LINE SHOVE::GetModifiedHead( int aIndex ) const
 const VIA_HANDLE SHOVE::GetModifiedHeadVia( int aIndex ) const
 {
     return *m_headLines[ aIndex ].theVia;
+}
+
+void SHOVE::SetCollisionFilter( COLLISION_FILTER_FUNC aFunc )
+{
+    m_collisionFilter = aFunc;
+}
+
+void SHOVE::SetClearanceOverride( CLEARANCE_OVERRIDE_FUNC aFunc )
+{
+    m_overrideClearance = aFunc;
 }
 
 

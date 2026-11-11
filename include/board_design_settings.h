@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <board_stackup_manager/board_stackup.h>
+#include <drill/drill_symbol_profile.h>
 #include <drc/drc_exclusion.h>
 #include <eda_units.h>
 #include <lset.h>
@@ -38,86 +39,9 @@
 #include <router/pns_meander.h>
 
 
-#define DEFAULT_SILK_LINE_WIDTH       0.1
-#define DEFAULT_COPPER_LINE_WIDTH     0.2
-#define DEFAULT_EDGE_WIDTH            0.05
-#define DEFAULT_COURTYARD_WIDTH       0.05
-#define DEFAULT_LINE_WIDTH            0.10
-
-#define DEFAULT_SILK_TEXT_SIZE        1.0
-#define DEFAULT_COPPER_TEXT_SIZE      1.5
-#define DEFAULT_TEXT_SIZE             1.0
-
-#define DEFAULT_SILK_TEXT_WIDTH       0.1
-#define DEFAULT_COPPER_TEXT_WIDTH     0.30
-#define DEFAULT_TEXT_WIDTH            0.15
-
-#define DEFAULT_DIMENSION_ARROW_LENGTH         50 // mils, for legacy purposes
-#define DEFAULT_DIMENSION_EXTENSION_OFFSET     0.5
-
-// Largest microvia stack pitch, in mm. Bounds the hop position arithmetic.
-#define MAX_MICROVIA_STACK_PITCH_MM 25.0
-
-// Board thickness, mainly for 3D view:
-#define DEFAULT_BOARD_THICKNESS_MM             1.6
-
-#define DEFAULT_PCB_EDGE_THICKNESS             0.15
-
-// soldermask to pad clearance. The default is 0 because usually board houses
-// create a clearance depending on their fab process: mask material, color, price, etc.
-#define DEFAULT_SOLDERMASK_EXPANSION           0.0
-
-#define DEFAULT_SOLDERMASK_TO_COPPER_CLEARANCE 0.0
-
-#define DEFAULT_SOLDERMASK_MIN_WIDTH           0.0
-
-#define DEFAULT_SOLDERPASTE_CLEARANCE          0.0
-#define DEFAULT_SOLDERPASTE_RATIO              0.0
-
-#define DEFAULT_CUSTOMTRACKWIDTH      0.2
-#define DEFAULT_CUSTOMDPAIRWIDTH      0.125
-#define DEFAULT_CUSTOMDPAIRGAP        0.18
-#define DEFAULT_CUSTOMDPAIRVIAGAP     0.18
-
-#define DEFAULT_MEANDER_SPACING       0.6
-#define DEFAULT_DP_MEANDER_SPACING    1.0
-
-#define DEFAULT_MINCLEARANCE          0.0     // overall min clearance
-#define DEFAULT_MINCONNECTION         0.0     // overall min connection width
-#define DEFAULT_TRACKMINWIDTH         0.2     // track width min value (mm)
-#define DEFAULT_VIASMINSIZE           0.5     // vias (not micro vias) min diameter
-#define DEFAULT_MINTHROUGHDRILL       0.3     // through holes (not micro vias) min drill diameter
-#define DEFAULT_MICROVIASMINSIZE      0.2     // micro vias (not vias) min diameter
-#define DEFAULT_MICROVIASMINDRILL     0.1     // micro vias (not vias) min drill diameter
-#define DEFAULT_HOLETOHOLEMIN         0.25    // minimum web thickness between two drilled holes
-#define DEFAULT_HOLECLEARANCE         0.25    // copper-to-hole clearance (from IPC level A)
-
-#define DEFAULT_COPPEREDGECLEARANCE   0.5     // clearance between copper items and edge cuts
-#define LEGACY_COPPEREDGECLEARANCE   -0.01    // A flag to indicate the legacy method (based
-                                              // on edge cut line thicknesses) should be used.
-#define DEFAULT_SILKCLEARANCE         0.0
-#define DEFAULT_MINGROOVEWIDTH        0.0
-
-#define DEFAULT_MINRESOLVEDSPOKES     2       // Fewer resolved spokes indicates a starved thermal
-
-#define MINIMUM_ERROR_SIZE_MM         0.001   // For arc approximation
-#define MAXIMUM_ERROR_SIZE_MM         0.1     // For arc approximation
-
 class DRC_ENGINE;
 class NET_SETTINGS;
 class NETCLASS;
-
-#define MAXIMUM_CLEARANCE             pcbIUScale.mmToIU( 500 )  // to prevent int-overflows
-
-// Min/max values used in dialogs to validate settings
-#define MINIMUM_LINE_WIDTH_MM         0.005   // minimal line width entered in a dialog
-#define MAXIMUM_LINE_WIDTH_MM         100.0   // max line width entered in a dialog
-
-// Default pad properties
-#define DEFAULT_PAD_WIDTH_MM          2.54
-#define DEFAULT_PAD_HEIGTH_MM         1.27
-#define DEFAULT_PAD_DRILL_DIAMETER_MM 0.8
-#define DEFAULT_PAD_RR_RADIUS_RATIO   0.15
 
 /**
  * Container to handle a stock of specific vias each with unique diameter and drill sizes
@@ -301,17 +225,25 @@ public:
     BOARD_STACKUP& GetStackupDescriptor() { return m_stackup; }
     const BOARD_STACKUP& GetStackupDescriptor() const { return m_stackup; }
 
+    DRILL_SYMBOL_PROFILE& GetDrillSymbolProfile() { return m_drillSymbolProfile; }
+    const DRILL_SYMBOL_PROFILE& GetDrillSymbolProfile() const { return m_drillSymbolProfile; }
+
     TEARDROP_PARAMETERS_LIST* GetTeadropParamsList()
     {
         return &m_TeardropParamsList;
     }
 
-    SEVERITY GetSeverity( int aDRCErrorCode );
+    /**
+     * Return the severity of a given DRC error code.
+     *
+     * If the error code is not recognized, RPT_SEVERITY_ERROR is returned.
+     */
+    SEVERITY GetSeverity( int aDRCErrorCode ) const;
 
     /**
-     * Return true if the DRC error code's severity is SEVERITY_IGNORE.
+     * Return true if the DRC error code's severity is RPT_SEVERITY_ERROR.
      */
-    bool Ignore( int aDRCErrorCode );
+    bool Ignore( int aDRCErrorCode ) const;
 
     /**
      * Validate design settings values and return per-field errors.
@@ -319,6 +251,15 @@ public:
      * @return empty vector if valid, otherwise one or more validation errors.
      */
     std::vector<VALIDATION_ERROR> ValidateDesignRules( std::optional<EDA_UNITS> aUnits = std::nullopt ) const;
+
+    /**
+     * Find design rule values that are legal but have no effect because other rules imply a stricter limit.
+     *
+     * These are advisory and must not block saving; existing projects can contain them.
+     *
+     * @return empty vector if consistent, otherwise one entry per redundant setting.
+     */
+    std::vector<VALIDATION_ERROR> GetDesignRuleWarnings( std::optional<EDA_UNITS> aUnits = std::nullopt ) const;
 
     ZONE_SETTINGS& GetDefaultZoneSettings()
     {
@@ -382,6 +323,7 @@ public:
      * Compute the next track width list index when cycling predefined sizes, skipping the
      * index-0 netclass placeholder on roll-over so the sequence stays monotonic.
      *
+     * @param aIndex is the start index track width buffer.
      * @param aForward steps larger when true, smaller when false.
      */
     int GetNextTrackWidthIndex( int aIndex, bool aForward ) const;
@@ -430,6 +372,7 @@ public:
      * Compute the next via size list index when cycling predefined sizes, skipping the
      * index-0 netclass placeholder on roll-over so the sequence stays monotonic.
      *
+     * @param aIndex is the via size list index.
      * @param aForward steps larger when true, smaller when false.
      */
     int GetNextViaSizeIndex( int aIndex, bool aForward ) const;
@@ -507,6 +450,7 @@ public:
      * Compute the next diff pair dimensions list index when cycling predefined sizes, skipping
      * the index-0 netclass placeholder on roll-over so the sequence stays monotonic.
      *
+     * @param aIndex is the index of the next differential pair.
      * @param aForward steps larger when true, smaller when false.
      */
     int GetNextDiffPairIndex( int aIndex, bool aForward ) const;
@@ -683,8 +627,6 @@ public:
     void            SetGridOrigin( const VECTOR2I& aOrigin ) { m_gridOrigin = aOrigin; }
     const VECTOR2I& GetGridOrigin() const { return m_gridOrigin; }
 
-    void SetDefaultMasterPad();
-
 private:
     void initFromOther( const BOARD_DESIGN_SETTINGS& aOther );
 
@@ -805,10 +747,6 @@ public:
     bool              m_StyleFPDimensions;
     bool              m_StyleFPBarcodes;
 
-    // Miscellaneous
-    std::unique_ptr<PAD> m_Pad_Master; // A dummy pad to store all default parameters
-                                       // when importing values or creating a new pad
-
     // Set to true if the board has a stackup management.
     // If not set a default basic stackup will be used to generate the gbrjob file.
     // Could be removed later, or at least always set to true
@@ -854,6 +792,12 @@ private:
      * It includes not only layers enabled for the board edition, but also dielectric layers.
      */
     BOARD_STACKUP m_stackup;
+
+    /**
+     * Grouping rules and symbol assignments shared by every drill chart and map on the board.
+     */
+    DRILL_SYMBOL_PROFILE m_drillSymbolProfile;
+
 
     /// The default settings that will be used for new zones.
     ZONE_SETTINGS m_defaultZoneSettings;

@@ -34,7 +34,8 @@ CLI::COMMAND::COMMAND( const std::string& aName ) :
         m_hasOutputArg( false ),
         m_hasDrawingSheetArg( false ),
         m_hasDefineArg( false ),
-        m_hasVariantArg( false )
+        m_hasVariantArg( false ),
+        m_variantsRequireOutputToken( true )
 
 {
     m_argParser.add_argument( ARG_HELP_SHORT, ARG_HELP )
@@ -78,7 +79,7 @@ int CLI::COMMAND::Perform( KIWAY& aKiway )
 
     if( m_hasDefineArg )
     {
-        auto defines = m_argParser.get<std::vector<std::string>>( ARG_DEFINE_VAR_LONG );
+        std::vector<std::string> defines = m_argParser.get<std::vector<std::string>>( ARG_DEFINE_VAR_LONG );
 
         for( const std::string& def : defines )
         {
@@ -99,18 +100,20 @@ int CLI::COMMAND::Perform( KIWAY& aKiway )
 
     if( m_hasVariantArg && m_argParser.is_used( ARG_VARIANT ) )
     {
-        auto variantNames = m_argParser.get<std::vector<std::string>>( ARG_VARIANT );
+        std::vector<std::string> variantNames = m_argParser.get<std::vector<std::string>>( ARG_VARIANT );
 
-        for( const auto& name : variantNames )
+        for( const std::string& name : variantNames )
             m_argVariantNames.push_back( From_UTF8( name ) );
 
-        if( m_argVariantNames.size() > 1 && m_hasOutputArg && !m_argOutput.IsEmpty() )
+        if( m_variantsRequireOutputToken
+            && m_argVariantNames.size() > 1
+            && m_hasOutputArg
+            && !m_argOutput.IsEmpty() )
         {
             if( !m_argOutput.Contains( wxS( "${VARIANT}" ) ) )
             {
-                wxFprintf( stderr,
-                           _( "When specifying multiple variants, the output path must contain "
-                              "${VARIANT} to generate separate output files for each variant.\n" ) );
+                wxFprintf( stderr, _( "When specifying multiple variants, the output path must contain "
+                                      "${VARIANT} to generate separate output files for each variant.\n" ) );
                 return EXIT_CODES::ERR_ARGS;
             }
         }
@@ -216,25 +219,24 @@ void CLI::COMMAND::addDefineArg()
     m_argParser.add_argument( ARG_DEFINE_VAR_LONG, ARG_DEFINE_VAR_SHORT )
             .default_value( std::vector<std::string>() )
             .append()
-            .help( UTF8STDSTR(
-                    _( "Overrides or adds project variables, can be used multiple times to "
-                       "declare multiple variables."
-                       "\nUse in the format of '--define-var key=value' or '-D key=value'" ) ) )
+            .help( UTF8STDSTR( _( "Overrides or adds project variables, can be used multiple times to "
+                                  "declare multiple variables.\n"
+                                  "Use in the format of '--define-var key=value' or '-D key=value'" ) ) )
             .metavar( "KEY=VALUE" );
 }
 
 
-void CLI::COMMAND::addVariantsArg()
+void CLI::COMMAND::addVariantsArg( bool aRequireOutputToken )
 {
     m_hasVariantArg = true;
+    m_variantsRequireOutputToken = aRequireOutputToken;
 
     m_argParser.add_argument( ARG_VARIANT )
             .default_value( std::vector<std::string>() )
             .append()
-            .help( UTF8STDSTR(
-                    _( "The variant name(s) to output, can be used multiple times to specify "
-                       "multiple variants.\n"
-                       "When specifying multiple variants, use ${VARIANT} in the output path to "
-                       "generate separate files for each variant.\n"
-                       "When no --variant argument is provided, the default variant is output." ) ) );
+            .help( UTF8STDSTR( _( "The variant name(s) to output, can be used multiple times to specify "
+                                  "multiple variants.\n"
+                                  "When specifying multiple variants, use ${VARIANT} in the output path to "
+                                  "generate separate files for each variant.\n"
+                                  "When no --variant argument is provided, the default variant is output." ) ) );
 }

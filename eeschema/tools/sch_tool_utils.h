@@ -29,6 +29,8 @@ class SCHEMATIC;
 class SCH_REFERENCE;
 class SCH_REFERENCE_LIST;
 class SCH_SCREEN;
+class SCH_SHEET;
+class SCH_HIERLABEL;
 class SCH_SYMBOL;
 class SCH_PIN;
 class SCHEMATIC;
@@ -102,8 +104,11 @@ bool SwapPinGeometry( SCH_PIN* aFirst, SCH_PIN* aSecond );
  * Returns true when the given symbol has instances, e.g. is used by more than one sheet instance in this project
  * or by more than one project.
  *
- * @param aSheetNames if not nullptr, will be filled with the sheet paths that have instances of aSymbol.
- * @param aProjectNames if not nullptr, will be filled with the names of other projects that have instances of aSymbol.
+ * @param[in] aSymbol is the #SCH_SYMBOL object to test for shared instances.
+ * @param[in] aCurrentProject
+ * @param[out] aSheetPaths if not nullptr, will be filled with the sheet paths that have instances of \a aSymbol.
+ * @param[out] aProjectNames if not nullptr, will be filled with the names of other projects that have instances
+ *                           of \a aSymbol.
  *
  * @return true if the symbol has shared instances.
  */
@@ -116,7 +121,8 @@ bool SymbolHasSheetInstances( const SCH_SYMBOL& aSymbol, const wxString& aCurren
  * @param aSheetPaths set of sheet paths to convert
  * @param aSchematic the schematic to search for sheet names
  *
- * @return a set of human-readable sheet names, or the original sheet path if no name can be resolved in this schmatic (this happens when sheets are shared across projects)
+ * @return a set of human-readable sheet names, or the original sheet path if no name can be resolved in this
+ *         schmatic (this happens when sheets are shared across projects)
  */
 std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths, const SCHEMATIC& aSchematic );
 
@@ -125,6 +131,20 @@ std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths
  * exists on aScreen. Case insensitive, like the ERC duplicate sheet name check.
  */
 wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName );
+
+/**
+ * Return one sheet hierarchical label per name that does not already have a sheet pin.
+ */
+std::vector<SCH_HIERLABEL*> GetUnplacedSheetPinLabels( const SCH_SHEET& aSheet );
+
+/**
+ * Import and auto-place sheet pins for the given labels, growing the sheet as needed.
+ * Outputs go on the right edge, and all other pins go on the left.
+ *
+ * The labels should come from GetUnplacedSheetPinLabels(). Caller must save the sheet
+ * for undo before calling this on an existing sheet.
+ */
+void AutoPlaceSheetPins( SCH_SHEET* aSheet, const std::vector<SCH_HIERLABEL*>& aLabels );
 
 /**
  * Return aBaseName, or aBaseName + smallest free integer if a group with that name already

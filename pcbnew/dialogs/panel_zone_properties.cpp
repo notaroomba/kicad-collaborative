@@ -19,6 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <bitmaps.h>
 #include <magic_enum.hpp>
 #include "panel_zone_properties.h"
 
@@ -75,6 +76,8 @@ PANEL_ZONE_PROPERTIES::PANEL_ZONE_PROPERTIES( wxWindow* aParent, PCB_BASE_FRAME*
             } );
 
     m_layerSpecificOverrides->SetTable( m_layerPropsTable, true );
+    m_layerSpecificOverrides->SetUnitsProvider( m_frame );
+    m_layerSpecificOverrides->SetAutoEvalCols( { 1, 2 } );
     m_layerSpecificOverrides->PushEventHandler( new GRID_TRICKS( m_layerSpecificOverrides ) );
     m_layerSpecificOverrides->SetSelectionMode( wxGrid::wxGridSelectRows );
 
@@ -159,7 +162,7 @@ bool PANEL_ZONE_PROPERTIES::TransferZoneSettingsToWindow()
     case ZONE_BORDER_DISPLAY_STYLE::NO_HATCH:         m_OutlineDisplayCtrl->SetSelection( 0 ); break;
     case ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE:    m_OutlineDisplayCtrl->SetSelection( 1 ); break;
     case ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_FULL:    m_OutlineDisplayCtrl->SetSelection( 2 ); break;
-    case ZONE_BORDER_DISPLAY_STYLE::INVISIBLE_BORDER: break;
+    case ZONE_BORDER_DISPLAY_STYLE::INVISIBLE_BORDER:                                          break;
     }
 
     m_outlineHatchPitch.SetValue( m_settings->m_BorderHatchPitch );
@@ -369,15 +372,15 @@ bool PANEL_ZONE_PROPERTIES::AcceptOptions( bool aUseExportableSetupOnly )
 
     switch( m_PadInZoneOpt->GetSelection() )
     {
-    case 3: m_settings->SetPadConnection( ZONE_CONNECTION::NONE ); break;
+    case 3: m_settings->SetPadConnection( ZONE_CONNECTION::NONE );        break;
     case 2: m_settings->SetPadConnection( ZONE_CONNECTION::THT_THERMAL ); break;
-    case 1: m_settings->SetPadConnection( ZONE_CONNECTION::THERMAL ); break;
-    case 0: m_settings->SetPadConnection( ZONE_CONNECTION::FULL ); break;
+    case 1: m_settings->SetPadConnection( ZONE_CONNECTION::THERMAL );     break;
+    case 0: m_settings->SetPadConnection( ZONE_CONNECTION::FULL );        break;
     }
 
     switch( m_OutlineDisplayCtrl->GetSelection() )
     {
-    case 0: m_settings->m_ZoneBorderDisplayStyle = ZONE_BORDER_DISPLAY_STYLE::NO_HATCH; break;
+    case 0: m_settings->m_ZoneBorderDisplayStyle = ZONE_BORDER_DISPLAY_STYLE::NO_HATCH;      break;
     case 1: m_settings->m_ZoneBorderDisplayStyle = ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_EDGE; break;
     case 2: m_settings->m_ZoneBorderDisplayStyle = ZONE_BORDER_DISPLAY_STYLE::DIAGONAL_FULL; break;
     }
@@ -428,13 +431,13 @@ bool PANEL_ZONE_PROPERTIES::AcceptOptions( bool aUseExportableSetupOnly )
     m_settings->m_Name = m_tcZoneName->GetValue();
 
     if( BOARD* board = m_frame->GetBoard() )
-        m_settings->m_Name = board->GetUniqueZoneName( m_settings->m_Name, m_zone );
+        m_settings->m_Name = m_zonesSettingsBag.GetUniqueZoneName( *board, m_settings->m_Name, m_zone );
 
     // Avoid clobbering theiving zone properties
     if( m_settings->m_FillMode != ZONE_FILL_MODE::COPPER_THIEVING )
     {
         m_settings->m_FillMode = m_cbHatched->GetValue() ? ZONE_FILL_MODE::HATCH_PATTERN
-                                                          : ZONE_FILL_MODE::POLYGONS;
+                                                         : ZONE_FILL_MODE::POLYGONS;
     }
     m_settings->m_HatchOrientation = m_gridStyleRotation.GetAngleValue();
     m_settings->m_HatchThickness = m_gridStyleThickness.GetIntValue();

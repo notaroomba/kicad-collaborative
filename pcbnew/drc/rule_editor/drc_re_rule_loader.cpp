@@ -19,11 +19,15 @@
 
 #include "drc_re_rule_loader.h"
 
+#include <base_units.h>
 #include <reporter.h>
 #include <component_classes/component_class_assignment_rule.h>
 #include <drc/drc_rule_parser.h>
 #include <drc/drc_rule_condition.h>
 #include <wx/ffile.h>
+
+#include <tuple>
+#include <utility>
 
 #include "drc_re_via_style_constraint_data.h"
 #include "drc_re_rtg_diff_pair_constraint_data.h"
@@ -49,6 +53,12 @@ DRC_RULE_LOADER::DRC_RULE_LOADER()
 double DRC_RULE_LOADER::toMM( int aValue )
 {
     return aValue / 1000000.0;
+}
+
+
+double DRC_RULE_LOADER::toPS( int aValue )
+{
+    return aValue / pcbIUScale.IU_PER_PS;
 }
 
 
@@ -78,6 +88,132 @@ static bool isSymmetricMinOptMax( const DRC_CONSTRAINT* aConstraint )
 }
 
 
+// The DRC lexer treats a line whose first non-blank character is # as a comment
+static bool isOnCommentLine( const wxString& aContent, size_t aPos )
+{
+    size_t lineStart = aPos == 0 ? wxString::npos : aContent.rfind( '\n', aPos - 1 );
+
+    for( size_t i = ( lineStart == wxString::npos ) ? 0 : lineStart + 1; i <= aPos; ++i )
+    {
+        if( !wxIsspace( aContent[i] ) )
+            return aContent[i] == '#';
+    }
+
+    return false;
+}
+
+
+// Offset of the paren closing the expression opened at aOpen, or npos when unbalanced
+static size_t findClosingParen( const wxString& aContent, size_t aOpen )
+{
+    int  parenCount = 0;
+    bool inString = false;
+    bool escaped = false;
+
+    for( size_t i = aOpen; i < aContent.length(); ++i )
+    {
+        wxUniChar c = aContent[i];
+
+        if( escaped )
+        {
+            escaped = false;
+            continue;
+        }
+
+        if( c == '\\' )
+        {
+            escaped = true;
+            continue;
+        }
+
+        if( c == '"' )
+        {
+            inString = !inString;
+            continue;
+        }
+
+        if( inString )
+            continue;
+
+        if( c == '#' && isOnCommentLine( aContent, i ) )
+        {
+            i = aContent.find( '\n', i );
+
+            if( i == wxString::npos )
+                break;
+        }
+        else if( c == '(' )
+        {
+            parenCount++;
+        }
+        else if( c == ')' )
+        {
+            if( --parenCount == 0 )
+                return i;
+        }
+    }
+
+    return wxString::npos;
+}
+
+
+// Span of the next top-level expression at or after aFrom, skipping comments
+static std::pair<size_t, size_t> findNextExpression( const wxString& aContent, size_t aFrom )
+{
+    for( size_t i = aFrom; i < aContent.length(); ++i )
+    {
+        if( aContent[i] == '#' && isOnCommentLine( aContent, i ) )
+        {
+            i = aContent.find( '\n', i );
+
+            if( i == wxString::npos )
+                break;
+        }
+        else if( aContent[i] == '(' )
+        {
+            size_t close = findClosingParen( aContent, i );
+
+            if( close == wxString::npos )
+                break;
+
+            return { i, close + 1 };
+        }
+    }
+
+    return { wxString::npos, wxString::npos };
+}
+
+
+static bool isVersionExpression( const wxString& aContent, size_t aOpen )
+{
+    size_t keyword = aOpen + 1;
+
+    while( keyword < aContent.length() )
+    {
+        if( aContent[keyword] == '#' && isOnCommentLine( aContent, keyword ) )
+            keyword = aContent.find( '\n', keyword );
+        else if( wxIsspace( aContent[keyword] ) )
+            keyword++;
+        else
+            break;
+    }
+
+    return keyword != wxString::npos && aContent.compare( keyword, 7, wxS( "version" ) ) == 0;
+}
+
+
+// Version clauses may repeat anywhere, so the next rule is the next expression that is not one
+static std::pair<size_t, size_t> findNextRule( const wxString& aContent, size_t aFrom )
+{
+    std::pair<size_t, size_t> span = findNextExpression( aContent, aFrom );
+
+    while( span.first != wxString::npos && isVersionExpression( aContent, span.first ) )
+        span = findNextExpression( aContent, span.second );
+
+    return span;
+}
+
+
 static std::shared_ptr<DRC_RE_BASE_CONSTRAINT_DATA> makeCustomRuleData( const DRC_RULE& aRule )
 {
     auto customData = std::make_shared<DRC_RE_CUSTOM_RULE_CONSTRAINT_DATA>();
@@ -88,15 +224,29 @@ static std::shared_ptr<DRC_RE_BASE_CONSTRAINT_DATA> makeCustomRuleData( const DR
 
 wxString DRC_RULE_LOADER::ExtractRuleBody( const wxString& aOriginalText )
 {
-    int ruleKeyword = aOriginalText.Find( wxS( "rule " ) );
+    // Comment lines live in the comment field, not in the body.
+    wxArrayString kept;
+
+    for( const wxString& line : wxSplit( aOriginalText, '\n', '\0' ) )
+    {
+        wxString trimmed = line;
+        trimmed.Trim( false );
+
+        if( !trimmed.StartsWith( wxS( "#" ) ) )
+            kept.Add( line );
+    }
+
+    wxString text = wxJoin( kept, '\n', '\0' );
+
+    int ruleKeyword = text.Find( wxS( "rule " ) );
     if( ruleKeyword == wxNOT_FOUND )
         return aOriginalText;
 
-    int bodyStart = aOriginalText.find( '(', ruleKeyword + 5 );
+    int bodyStart = text.find( '(', ruleKeyword + 5 );
     if( bodyStart == (int) wxString::npos )
         return aOriginalText;
 
-    wxString body = aOriginalText.Mid( bodyStart );
+    wxString body = text.Mid( bodyStart );
     body.Trim( true );
 
     if( body.EndsWith( wxS( ")" ) ) )
@@ -181,12 +331,18 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
         {
             data->SetMinViaDiameter( toMM( viaDia->GetValue().Min() ) );
             data->SetMaxViaDiameter( toMM( viaDia->GetValue().Max() ) );
+
+            if( viaDia->GetValue().HasOpt() )
+                data->SetOptViaDiameter( toMM( viaDia->GetValue().Opt() ) );
         }
 
         if( holeSize )
         {
             data->SetMinViaHoleSize( toMM( holeSize->GetValue().Min() ) );
             data->SetMaxViaHoleSize( toMM( holeSize->GetValue().Max() ) );
+
+            if( holeSize->GetValue().HasOpt() )
+                data->SetOptViaHoleSize( toMM( holeSize->GetValue().Opt() ) );
         }
 
         if( aRule.m_Condition )
@@ -310,12 +466,22 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
 
         if( length )
         {
-            double minMM = toMM( length->GetValue().Min() );
-            double optMM = toMM( length->GetValue().PinnedOpt() );
-            double maxMM = toMM( length->GetValue().Max() );
+            bool timeDomain = length->GetOption( DRC_CONSTRAINT::OPTIONS::TIME_DOMAIN );
 
-            data->SetOptimumLength( optMM );
-            data->SetTolerance( ( maxMM - minMM ) / 2.0 );
+            auto convert = [&]( int aValue )
+            {
+                return timeDomain ? toPS( aValue ) : toMM( aValue );
+            };
+
+            double min = convert( length->GetValue().Min() );
+            double max = convert( length->GetValue().Max() );
+
+            // A rule without an optimum gets the window center, so saving keeps its min and max.
+            double opt = length->GetValue().HasOpt() ? convert( length->GetValue().PinnedOpt() ) : ( min + max ) / 2.0;
+
+            data->SetTimeDomain( timeDomain );
+            data->SetOptimumLength( opt );
+            data->SetTolerance( ( max - min ) / 2.0 );
         }
 
         return data;
@@ -474,7 +640,7 @@ DRC_RULE_LOADER::createConstraintData( DRC_RULE_EDITOR_CONSTRAINT_NAME   aPanel,
                 {
                     if( type == VIA_COUNT_CONSTRAINT || type == MICROVIA_STACK_DEPTH_CONSTRAINT )
                         data->SetNumericInputValue( constraint->GetValue().Max() );
-                    else if( type == MICROVIA_ASPECT_RATIO_CONSTRAINT )
+                    else if( type == HOLE_ASPECT_RATIO_CONSTRAINT )
                         data->SetNumericInputValue( constraint->GetValue().Max() / 1000.0 );
                     else if( type == MIN_RESOLVED_SPOKES_CONSTRAINT )
                         data->SetNumericInputValue( constraint->GetValue().Min() );
@@ -508,8 +674,24 @@ std::vector<DRC_RE_LOADED_PANEL_ENTRY> DRC_RULE_LOADER::LoadRule( const DRC_RULE
     if( aRule.m_Condition )
         condition = aRule.m_Condition->GetExpression();
 
+    // Only the absolute length panel can hold time domain values.
+    bool fitsStructuredPanels = true;
+
+    for( const DRC_CONSTRAINT& constraint : aRule.m_Constraints )
+    {
+        if( constraint.GetOption( DRC_CONSTRAINT::OPTIONS::TIME_DOMAIN )
+            && !( constraint.m_Type == LENGTH_CONSTRAINT && aRule.m_Constraints.size() == 1 ) )
+        {
+            fitsStructuredPanels = false;
+            break;
+        }
+    }
+
     // Match the rule to panels
-    std::vector<DRC_PANEL_MATCH> matches = m_matcher.MatchRule( aRule );
+    std::vector<DRC_PANEL_MATCH> matches;
+
+    if( fitsStructuredPanels )
+        matches = m_matcher.MatchRule( aRule );
 
     for( DRC_PANEL_MATCH& match : matches )
     {
@@ -671,6 +853,9 @@ std::vector<DRC_RE_LOADED_PANEL_ENTRY> DRC_RULE_LOADER::LoadRule( const DRC_RULE
         entries.push_back( std::move( entry ) );
     }
 
+    for( DRC_RE_LOADED_PANEL_ENTRY& entry : entries )
+        entry.originalEntryCount = static_cast<int>( entries.size() );
+
     return entries;
 }
 
@@ -680,10 +865,16 @@ std::vector<DRC_RE_LOADED_PANEL_ENTRY> DRC_RULE_LOADER::LoadFromString( const wx
     std::vector<DRC_RE_LOADED_PANEL_ENTRY> allEntries;
     std::vector<std::shared_ptr<DRC_RULE>> parsedRules;
 
-    wxString rulesText = aRulesText;
+    m_fileTrivia = DRC_RE_FILE_TRIVIA();
 
-    if( !rulesText.Contains( "(version" ) )
+    wxString rulesText = aRulesText;
+    auto [start, end] = findNextExpression( rulesText, 0 );
+
+    if( start == wxString::npos || !isVersionExpression( rulesText, start ) )
+    {
         rulesText.Prepend( "(version 2)\n" );
+        std::tie( start, end ) = findNextExpression( rulesText, 0 );
+    }
 
     try
     {
@@ -695,16 +886,41 @@ std::vector<DRC_RE_LOADED_PANEL_ENTRY> DRC_RULE_LOADER::LoadFromString( const wx
         return allEntries;
     }
 
+    // The parser accepted the text, so its non-version expressions are the rules in parse order
+    // and everything between them is kept verbatim for the saver
+    size_t pos = end;
+    m_fileTrivia.header = rulesText.Left( pos );
+
+    int ruleIndex = 0;
+
     for( const auto& rule : parsedRules )
     {
-        // Extract the actual original text from the file content
-        wxString originalText = ExtractRuleText( aRulesText, rule->m_Name );
+        wxString originalText;
+        wxString leadingTrivia;
+
+        std::tie( start, end ) = findNextRule( rulesText, pos );
+
+        if( start != wxString::npos )
+        {
+            originalText = rulesText.Mid( start, end - start );
+            leadingTrivia = rulesText.Mid( pos, start - pos );
+            pos = end;
+        }
+
+        m_fileTrivia.leadingTrivia.push_back( leadingTrivia );
 
         std::vector<DRC_RE_LOADED_PANEL_ENTRY> ruleEntries = LoadRule( *rule, originalText );
 
         for( auto& entry : ruleEntries )
+        {
+            entry.sourceRule = ruleIndex;
             allEntries.push_back( std::move( entry ) );
+        }
+
+        ruleIndex++;
     }
+
+    m_fileTrivia.trailer = rulesText.Mid( pos );
 
     return allEntries;
 }
@@ -747,54 +963,9 @@ wxString DRC_RULE_LOADER::ExtractRuleText( const wxString& aContent, const wxStr
     if( startPos == wxString::npos )
         return wxEmptyString;
 
-    // Find the matching closing parenthesis by counting balanced parens
-    int parenCount = 0;
-    size_t endPos = startPos;
-    bool inString = false;
-    bool escaped = false;
+    size_t endPos = findClosingParen( aContent, startPos );
 
-    for( size_t i = startPos; i < aContent.length(); ++i )
-    {
-        wxUniChar c = aContent[i];
-
-        if( escaped )
-        {
-            escaped = false;
-            continue;
-        }
-
-        if( c == '\\' )
-        {
-            escaped = true;
-            continue;
-        }
-
-        if( c == '"' )
-        {
-            inString = !inString;
-            continue;
-        }
-
-        if( inString )
-            continue;
-
-        if( c == '(' )
-        {
-            parenCount++;
-        }
-        else if( c == ')' )
-        {
-            parenCount--;
-
-            if( parenCount == 0 )
-            {
-                endPos = i;
-                break;
-            }
-        }
-    }
-
-    if( parenCount != 0 )
+    if( endPos == wxString::npos )
         return wxEmptyString;
 
     return aContent.Mid( startPos, endPos - startPos + 1 );
@@ -804,6 +975,8 @@ wxString DRC_RULE_LOADER::ExtractRuleText( const wxString& aContent, const wxStr
 std::vector<DRC_RE_LOADED_PANEL_ENTRY> DRC_RULE_LOADER::LoadFile( const wxString& aPath )
 {
     std::vector<DRC_RE_LOADED_PANEL_ENTRY> allEntries;
+
+    m_fileTrivia = DRC_RE_FILE_TRIVIA();
 
     wxFFile file( aPath, "r" );
 

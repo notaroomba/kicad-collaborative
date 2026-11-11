@@ -20,6 +20,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <memory>
+
 #include <wx/filename.h>
 #include <wx/uri.h>
 
@@ -41,6 +43,8 @@
 #include <sch_io/diptrace/sch_io_diptrace.h>
 #include <sch_io/pcad/sch_io_pcad.h>
 #include <sch_io/orcad/sch_io_orcad.h>
+#include <sch_io/easypc/sch_io_easypc.h>
+#include <sch_io/target3001/sch_io_target3001.h>
 #include <common.h>     // for ExpandEnvVarSubstitutions
 #include <ki_exception.h>
 
@@ -81,7 +85,7 @@ SCH_IO* SCH_IO_MGR::FindPlugin( SCH_FILE_T aFileType )
     case SCH_EAGLE:           return new SCH_IO_EAGLE();
     case SCH_EASYEDA:         return new SCH_IO_EASYEDA();
     case SCH_EASYEDAPRO:      return new SCH_IO_EASYEDAPRO();
-    case SCH_EASYEDAPRO_V3: return new SCH_IO_EASYEDAPRO_V3();
+    case SCH_EASYEDAPRO_V3:   return new SCH_IO_EASYEDAPRO_V3();
     case SCH_GEDA:            return new SCH_IO_GEDA();
     case SCH_LTSPICE:         return new SCH_IO_LTSPICE();
     case SCH_HTTP:            return new SCH_IO_HTTP_LIB();
@@ -89,18 +93,20 @@ SCH_IO* SCH_IO_MGR::FindPlugin( SCH_FILE_T aFileType )
     case SCH_DIPTRACE:        return new SCH_IO_DIPTRACE();
     case SCH_PCAD:            return new SCH_IO_PCAD();
     case SCH_ORCAD:           return new SCH_IO_ORCAD();
+    case SCH_EASYPC:          return new SCH_IO_EASYPC();
+    case SCH_TARGET3001:      return new SCH_IO_TARGET3001();
     default:                  return nullptr;
     }
 }
 
 
-const wxString SCH_IO_MGR::ShowType( SCH_FILE_T aType )
+const wxString SCH_IO_MGR::ShowType( SCH_FILE_T aFileType )
 {
     // keep this function in sync with EnumFromStr() relative to the
     // text spellings.  If you change the spellings, you will obsolete
     // library tables, so don't do change, only additions are ok.
 
-    switch( aType )
+    switch( aFileType )
     {
     case SCH_KICAD:           return wxString( wxT( "KiCad" ) );
     case SCH_LEGACY:          return wxString( wxT( "Legacy" ) );
@@ -118,8 +124,10 @@ const wxString SCH_IO_MGR::ShowType( SCH_FILE_T aType )
     case SCH_DIPTRACE:        return wxString( wxT( "DipTrace" ) );
     case SCH_PCAD:            return wxString( wxT( "P-CAD" ) );
     case SCH_ORCAD:           return wxString( wxT( "OrCAD" ) );
+    case SCH_EASYPC:          return wxString( wxT( "Easy-PC" ) );
+    case SCH_TARGET3001:      return wxString( wxT( "TARGET 3001!" ) );
     case SCH_NESTED_TABLE:    return LIBRARY_TABLE_ROW::TABLE_TYPE_NAME;
-    default:                  return wxString::Format( _( "Unknown SCH_FILE_T value: %d" ), aType );
+    default:                  return wxString::Format( _( "Unknown SCH_FILE_T value: %d" ), aFileType );
     }
 }
 
@@ -162,6 +170,10 @@ SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::EnumFromStr( const wxString& aType )
         return SCH_PCAD;
     else if( aType == wxT( "OrCAD" ) )
         return SCH_ORCAD;
+    else if( aType == wxT( "Easy-PC" ) )
+        return SCH_EASYPC;
+    else if( aType == wxT( "TARGET 3001!" ) )
+        return SCH_TARGET3001;
     else if( aType == LIBRARY_TABLE_ROW::TABLE_TYPE_NAME )
         return SCH_NESTED_TABLE;
 
@@ -213,8 +225,7 @@ SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::GuessPluginTypeFromLibPath( const wxString& a
 }
 
 
-SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::GuessPluginTypeFromSchPath( const wxString& aSchematicPath,
-                                                               int             aCtl )
+SCH_IO_MGR::SCH_FILE_T SCH_IO_MGR::GuessPluginTypeFromSchPath( const wxString& aSchematicPath, int aCtl )
 {
     for( const SCH_IO_MGR::SCH_FILE_T& fileType : SCH_IO_MGR::SCH_FILE_T_vector )
     {
@@ -267,8 +278,8 @@ bool SCH_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileProps, con
     if( oldFileType == SCH_IO_MGR::SCH_HTTP || oldFileType == SCH_IO_MGR::SCH_DATABASE )
         return false;
 
-    IO_RELEASER<SCH_IO>                oldFilePI( SCH_IO_MGR::FindPlugin( oldFileType ) );
-    IO_RELEASER<SCH_IO>                kicadPI( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
+    IO_RELEASER<SCH_IO> oldFilePI( SCH_IO_MGR::FindPlugin( oldFileType ) );
+    IO_RELEASER<SCH_IO> kicadPI( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
 
     if( !oldFilePI || !kicadPI )
         return false;
@@ -276,9 +287,9 @@ bool SCH_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileProps, con
     if( aReporter )
         oldFilePI->SetReporter( aReporter );
 
-    std::vector<LIB_SYMBOL*>           symbols;
-    std::vector<LIB_SYMBOL*>           newSymbols;
-    std::map<LIB_SYMBOL*, LIB_SYMBOL*> symbolMap;
+    std::vector<LIB_SYMBOL*>                 symbols;
+    std::vector<std::unique_ptr<LIB_SYMBOL>> newSymbols;
+    std::map<LIB_SYMBOL*, LIB_SYMBOL*>       symbolMap;
 
     report( wxString::Format( _( "Loading symbol library '%s'" ), aOldFilePath ), RPT_SEVERITY_ACTION );
 
@@ -294,8 +305,8 @@ bool SCH_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileProps, con
 
             symbol->SetName( EscapeString( symbol->GetName(), CTX_LIBID ) );
 
-            newSymbols.push_back( new LIB_SYMBOL( *symbol ) );
-            symbolMap[symbol] = newSymbols.back();
+            newSymbols.push_back( std::make_unique<LIB_SYMBOL>( *symbol ) );
+            symbolMap[symbol] = newSymbols.back().get();
         }
 
         // Now do the derived symbols using the map to hook them up to their newSymbol parents
@@ -306,7 +317,7 @@ bool SCH_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileProps, con
 
             symbol->SetName( EscapeString( symbol->GetName(), CTX_LIBID ) );
 
-            newSymbols.push_back( new LIB_SYMBOL( *symbol ) );
+            newSymbols.push_back( std::make_unique<LIB_SYMBOL>( *symbol ) );
             newSymbols.back()->SetParent( symbolMap[ symbol->GetParent().lock().get() ] );
         }
 
@@ -333,27 +344,29 @@ bool SCH_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileProps, con
 
     bool ok = true;
 
-    for( LIB_SYMBOL* symbol : newSymbols )
+    for( std::unique_ptr<LIB_SYMBOL>& symbol : newSymbols )
     {
+        const wxString symbolName = symbol->GetName();
+
         try
         {
-            kicadPI->SaveSymbol( aNewFilepath, symbol );
+            kicadPI->SaveSymbol( aNewFilepath, std::move( symbol ) );
         }
         catch( const IO_ERROR& io_err )
         {
-            report( wxString::Format( _( "Error saving symbol '%s': %s" ), symbol->GetName(), io_err.What() ),
+            report( wxString::Format( _( "Error saving symbol '%s': %s" ), symbolName, io_err.What() ),
                     RPT_SEVERITY_ERROR );
             ok = false;
         }
         catch( const std::exception& e )
         {
-            report( wxString::Format( _( "Error saving symbol '%s': %s" ), symbol->GetName(), e.what() ),
+            report( wxString::Format( _( "Error saving symbol '%s': %s" ), symbolName, e.what() ),
                     RPT_SEVERITY_ERROR );
             ok = false;
         }
         catch( ... )
         {
-            report( wxString::Format( _( "Error saving symbol '%s': unknown error" ), symbol->GetName() ),
+            report( wxString::Format( _( "Error saving symbol '%s': unknown error" ), symbolName ),
                     RPT_SEVERITY_ERROR );
             ok = false;
         }

@@ -901,6 +901,22 @@ size_t SCH_COLLAB_SYNC::CaptureCommitBegin( COMMIT& aCommit, int aCommitFlags )
 
 void SCH_COLLAB_SYNC::CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int aCommitFlags )
 {
+    CaptureCommitPhase( aCommit, aPreCount );
+    FlushCommitCapture();
+}
+
+
+void SCH_COLLAB_SYNC::FlushCommitCapture()
+{
+    if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
+        return;
+
+    flushBatch();
+}
+
+
+void SCH_COLLAB_SYNC::CaptureCommitPhase( COMMIT& aCommit, size_t aPreCount )
+{
     if( m_applyingRemote || !COLLAB_SESSION::Get().IsLive() )
         return;
 
@@ -913,8 +929,6 @@ void SCH_COLLAB_SYNC::CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int a
     // before-images are already consumed).
     if( count > aPreCount )
         captureEntries( aCommit, aPreCount, count, true, true );
-
-    flushBatch();
 }
 
 

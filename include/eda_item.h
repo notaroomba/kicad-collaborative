@@ -80,10 +80,10 @@ namespace google::protobuf { class Any; }
  *
  * @param aItem An #EDA_ITEM to examine.
  * @param aTestData is arbitrary data needed by the inspector to determine
- *  if the EDA_ITEM under test meets its match criteria, and is often NULL
+ *  if the #EDA_ITEM under test meets its match criteria, and is often NULL
  *  with the advent of capturing lambdas.
- * @return A #SEARCH_RESULT type #SEARCH_QUIT if the iterator function is to
- *          stop the scan, else #SEARCH_CONTINUE;
+ * @return A #INSPECT_RESULT type #INSPECT_RESULT::QUIT if the iterator function is to
+ *          stop the scan, else #INSPECT_RESULT::CONTINUE.
  */
 typedef std::function< INSPECT_RESULT ( EDA_ITEM* aItem, void* aTestData ) > INSPECTOR_FUNC;
 
@@ -133,7 +133,11 @@ public:
 
     inline bool IsSelected() const { return m_flags & SELECTED; }
     inline bool IsEntered() const { return m_flags & ENTERED; }
-    inline bool IsBrightened() const { return m_flags & BRIGHTENED; }
+    inline bool IsBrightened() const { return ( m_flags & BRIGHTENED ) || m_netHighlighted; }
+
+    /** Net highlighting must not clear brightening owned by find or picker tools. */
+    bool IsNetHighlighted() const;
+    void SetNetHighlighted( bool aHighlighted );
 
     inline bool IsRollover() const { return m_isRollover; }
     inline VECTOR2I GetRolloverPos() const { return m_rolloverPos; }
@@ -153,7 +157,13 @@ public:
 
     void           SetFlags( EDA_ITEM_FLAGS aMask ) { m_flags |= aMask; }
     void           XorFlags( EDA_ITEM_FLAGS aMask ) { m_flags ^= aMask; }
-    void           ClearFlags( EDA_ITEM_FLAGS aMask = EDA_ITEM_ALL_FLAGS ) { m_flags &= ~aMask; }
+    void ClearFlags( EDA_ITEM_FLAGS aMask = EDA_ITEM_ALL_FLAGS )
+    {
+        m_flags &= ~aMask;
+
+        if( aMask == EDA_ITEM_ALL_FLAGS )
+            m_netHighlighted = false;
+    }
     EDA_ITEM_FLAGS GetFlags() const { return m_flags; }
     bool           HasFlag( EDA_ITEM_FLAGS aFlag ) const { return ( m_flags & aFlag ) == aFlag; }
 
@@ -374,14 +384,14 @@ public:
      * Implementations should call inspector->Inspect() on types in aScanTypes, and may use
      * #IterateForward() to do so on lists of such data.
      *
-     * @param inspector An #INSPECTOR instance to use in the inspection.
-     * @param testData Arbitrary data used by the inspector.
+     * @param aInspector An #INSPECTOR instance to use in the inspection.
+     * @param aTestData Arbitrary data used by the inspector.
      * @param aScanTypes Which #KICAD_T types are of interest and the order in which they should
      *                   be processed.
-     * @return #SEARCH_RESULT SEARCH_QUIT if the Iterator is to stop the scan,
-     *         else #SCAN_CONTINUE, and determined by the inspector.
+     * @return #INSPECT_RESULT #INSPECT_RESULT::QUIT if the Iterator is to stop the scan,
+     *         else #INSPECT_RESULT::CONTINUE, and determined by the inspector.
      */
-    virtual INSPECT_RESULT Visit( INSPECTOR inspector, void* testData,
+    virtual INSPECT_RESULT Visit( INSPECTOR aInspector, void* aTestData,
                                   const std::vector<KICAD_T>& aScanTypes );
 
     /**
@@ -438,7 +448,9 @@ public:
      * returns a string to indicate that it was not overridden to provide the object
      * specific text.
      *
-     * @param aLong indicates a long string is acceptable
+     * @param aUnitsProvider is the #UNITS_PROVIDER object to handle item units.
+     * @param aFull is a flag to get the extend (full) description.
+     *
      * @return The menu text string.
      */
     virtual wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const;
@@ -584,7 +596,7 @@ protected:
     EDA_ITEM* findParent( KICAD_T aType ) const;
 
 public:
-    const KIID  m_Uuid;
+    const KIID     m_Uuid;
 
 private:
     /**
@@ -597,17 +609,17 @@ protected:
     EDA_ITEM*      m_parent;        ///< Owner.
     EDA_GROUP*     m_group;         ///< The group this item belongs to, if any.  No ownership implied.
 
-    VECTOR2I m_rolloverPos;
-    bool     m_isRollover;
-    bool     m_forceVisible;
+    VECTOR2I       m_rolloverPos;
+    bool           m_isRollover;
+    bool           m_forceVisible;
+    bool           m_netHighlighted = false;
 
     std::map<wxString, wxString> m_customProperties;
 
-    /// Per-key cache of dynamic property descriptors for m_customProperties,
-    /// owned by this object. Mirrors the per-object field-property caches used
-    /// by FOOTPRINT / SCH_SYMBOL / SCH_SHEET; entries linger after a key is
-    /// removed but are simply not enumerated.
-    mutable std::map<wxString, std::unique_ptr<PROPERTY_BASE>> m_dynamicCustomPropsCache;
+    /// Per-key cache of dynamic property descriptors for m_customProperties, owned by this
+    /// object.  Mirrors the per-object caches used by FOOTPRINT, SCH_SYMBOL and SCH_SHEET.
+    /// Entries linger after a key is removed but are simply not enumerated.
+    mutable std::map<wxString, std::unique_ptr<PROPERTY_BASE>> m_customPropsStorageCache;
 };
 
 

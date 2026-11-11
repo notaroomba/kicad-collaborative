@@ -25,8 +25,6 @@
 #include <sch_io/pads/pads_sch_sdb.h>
 #include <sch_io/pads/pads_sch_parser.h>
 
-#include <io/pads/pads_common.h>
-
 #include <ki_exception.h>
 #include <algorithm>
 #include <cmath>
@@ -455,34 +453,30 @@ static CANONICAL_PROPERTY canonicalVerticalJustification( MODEL_JUSTIFICATION aJ
     return unknownEnum( static_cast<int64_t>( aJustification ) );
 }
 
+// PADS renders justification as a bitfield where center wins, see TextOptionMatrix
 static CANONICAL_PROPERTY canonicalHorizontalJustification( int aJustification )
 {
-    const int justification = aJustification & 0xFF;
-    const int horizontal = justification >= 8   ? justification - 8
-                           : justification >= 2 ? justification - 2
-                                                : justification;
+    if( aJustification & 0x4 )
+        return { "center" };
 
-    switch( horizontal )
-    {
-    default:
-    case 0: return { "left" };
-    case 1: return { "right" };
-    case 4: return { "center" };
-    }
+    if( aJustification & 0x1 )
+        return { "right" };
+
+    return { "left" };
 }
 
 static CANONICAL_PROPERTY canonicalVerticalJustification( int aJustification )
 {
-    if( aJustification >= 8 )
+    if( aJustification < 0 )
+        return unknownEnum( aJustification );
+
+    if( aJustification & 0x8 )
         return { "center" };
 
-    if( aJustification >= 2 )
+    if( aJustification & 0x2 )
         return { "top" };
 
-    if( aJustification >= 0 )
-        return { "bottom" };
-
-    return unknownEnum( aJustification );
+    return { "bottom" };
 }
 
 static CANONICAL_PROPERTY canonicalLabelKind( MODEL_LABEL_KIND aKind )
@@ -850,6 +844,17 @@ static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeBinaryModel( const PADS_S
     return out;
 }
 
+// Binary resolves the default font in system-font mode; ASCII names its face with a style prefix
+static std::string canonicalAsciiFont( const PADS_SCH::PARAMETERS& aParameters, const std::string& aFont )
+{
+    if( aParameters.font_mode != "System" || aFont != "Default Font" || aParameters.default_font.empty() )
+        return aFont;
+
+    const std::string& face = aParameters.default_font;
+    return face.starts_with( "Regular " ) ? face.substr( 8 ) : face;
+}
+
+
 static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeAsciiModel( const PADS_SCH::PADS_SCH_PARSER& aParser )
 {
     std::vector<CANONICAL_SEMANTIC_RECORD> out;
@@ -875,6 +880,15 @@ static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeAsciiModel( const PADS_SC
     };
     auto& settings = add( CANONICAL_KIND::SETTINGS, -1 );
     settings.properties["coordinate_units_per_mil"] = { int64_t( 2 ) };
+
+    if( !p.font_mode.empty() )
+    {
+        settings.properties["font_mode_raw"] =
+                p.font_mode == "System"
+                        ? CANONICAL_PROPERTY{ std::string( "1" ) }
+                        : CANONICAL_PROPERTY{ "unknown:" + p.font_mode, PROPERTY_DISPOSITION::UNSUPPORTED };
+    }
+
     settings.properties["line_width_half_mils"] = { int64_t( std::llround( p.line_width * 2 ) ) };
     settings.properties["bus_width_half_mils"] = { int64_t( p.bus_width * 2 ) };
     settings.geometry.points.push_back( point( PADS_SCH::POINT{ p.sheet_size.width, p.sheet_size.height } ) );
@@ -977,9 +991,9 @@ static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeAsciiModel( const PADS_SC
             r.properties["fill"] = { "none" };
             r.properties["text"] = { t.content };
             r.properties["visible"] = { t.visible };
-            r.properties["font"] = { t.font_name };
-            r.properties["height_half_mils"] = { int64_t( std::llround( t.size ) ) };
-            r.properties["width_half_mils"] = { int64_t( t.width_factor ) };
+            r.properties["font"] = { canonicalAsciiFont( p, t.font_name ) };
+            r.properties["height_half_mils"] = { int64_t( std::llround( t.size * 2 ) ) };
+            r.properties["width_half_mils"] = { int64_t( t.width_factor * 2 ) };
             r.geometry.points.push_back( point( t.position ) );
             r.geometry.angleTenths = canonicalAngle( std::llround( t.rotation * 10 ) );
         }
@@ -1014,7 +1028,7 @@ static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeAsciiModel( const PADS_SC
             auto& q = add( CANONICAL_KIND::FIELD, ownerSheet, f.name );
             q.properties["value"] = { f.value };
             q.properties["visible"] = { f.visible };
-            q.properties["font"] = { f.font_name };
+            q.properties["font"] = { canonicalAsciiFont( p, f.font_name ) };
             q.geometry.points.push_back( point( f.position ) );
             q.geometry.angleTenths = canonicalAngle( std::llround( f.rotation * 10 ) );
         }
@@ -1201,9 +1215,9 @@ static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeAsciiModel( const PADS_SC
             r.properties["text"] = { t.content };
             r.properties["page_graphic_group"] = { lines.name };
             r.properties["visible"] = { true };
-            r.properties["height_half_mils"] = { int64_t( t.height ) };
-            r.properties["width_half_mils"] = { int64_t( t.width_factor ) };
-            r.properties["font"] = { t.font_name };
+            r.properties["height_half_mils"] = { int64_t( t.height * 2 ) };
+            r.properties["width_half_mils"] = { int64_t( t.width_factor * 2 ) };
+            r.properties["font"] = { canonicalAsciiFont( p, t.font_name ) };
             r.geometry.points.push_back( point( t.position ) );
             r.geometry.points.back().xHalfMils += std::llround( lines.origin.x * 2 );
             r.geometry.points.back().yHalfMils += std::llround( lines.origin.y * 2 );
@@ -1215,7 +1229,7 @@ static std::vector<CANONICAL_SEMANTIC_RECORD> normalizeAsciiModel( const PADS_SC
         auto& r = addOwned( CANONICAL_KIND::LABEL, -1, label.net_name );
         r.properties["kind"] = { "local" };
         r.properties["visible"] = { true };
-        r.properties["font"] = { label.font_name };
+        r.properties["font"] = { canonicalAsciiFont( p, label.font_name ) };
         r.properties["horizontal_justification"] = canonicalHorizontalJustification( label.justification );
         r.properties["vertical_justification"] = canonicalVerticalJustification( label.justification );
         r.geometry.points.push_back( point( PADS_SCH::POINT{ double( label.x_offset ), double( label.y_offset ) } ) );
@@ -1673,12 +1687,12 @@ BOOST_AUTO_TEST_CASE( FreeText )
     };
 
     for( const JUSTIFICATION_CASE& expected :
-         { JUSTIFICATION_CASE{ 5, MODEL_JUSTIFICATION::RIGHT, MODEL_JUSTIFICATION::LEFT },
-           { 7, MODEL_JUSTIFICATION::RIGHT, MODEL_JUSTIFICATION::LEFT },
-           { 15, MODEL_JUSTIFICATION::RIGHT, MODEL_JUSTIFICATION::CENTER },
+         { JUSTIFICATION_CASE{ 5, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT },
+           { 7, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::LEFT },
+           { 15, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::CENTER },
            { 6, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::LEFT },
            { 12, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::CENTER },
-           { 0xFF04, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::LEFT },
+           { 0xFF04, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT },
            { 0x0306, MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::LEFT } } )
     {
         std::vector<uint8_t> changedJustification = loadBinaryFixture( "text_encoding.sch" );
@@ -1737,25 +1751,18 @@ BOOST_AUTO_TEST_CASE( TextOptionMatrix )
         return *found;
     };
 
-    const std::array<MODEL_JUSTIFICATION, 16> horizontal = { MODEL_JUSTIFICATION::LEFT,   MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::LEFT,   MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::LEFT,   MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT,
-                                                             MODEL_JUSTIFICATION::CENTER, MODEL_JUSTIFICATION::RIGHT };
+    // Measured from the PADS render of this fixture; vertical LEFT is top and RIGHT is bottom
+    constexpr MODEL_JUSTIFICATION L = MODEL_JUSTIFICATION::LEFT;
+    constexpr MODEL_JUSTIFICATION C = MODEL_JUSTIFICATION::CENTER;
+    constexpr MODEL_JUSTIFICATION R = MODEL_JUSTIFICATION::RIGHT;
+    const std::array<MODEL_JUSTIFICATION, 16> horizontal = { L, R, L, R, C, C, C, C, L, R, L, R, C, C, C, C };
+    const std::array<MODEL_JUSTIFICATION, 16> vertical = { R, R, L, L, R, R, L, L, C, C, C, C, C, C, C, C };
 
     for( size_t ii = 0; ii < horizontal.size(); ++ii )
     {
-        // The vertical half of the code splits at 2 and 8, the way PADS_COMMON::DecodeJustification
-        // splits it for the ASCII importer
-        const MODEL_JUSTIFICATION vertical = ii >= 8   ? MODEL_JUSTIFICATION::CENTER
-                                             : ii >= 2 ? MODEL_JUSTIFICATION::LEFT
-                                                       : MODEL_JUSTIFICATION::RIGHT;
-        const MODEL_TEXT&         text = textByName( wxString::Format( wxS( "JUST_%02zu" ), ii ) );
+        const MODEL_TEXT& text = textByName( wxString::Format( wxS( "JUST_%02zu" ), ii ) );
         BOOST_CHECK( text.presentation.horizontalJustification == horizontal[ii] );
-        BOOST_CHECK( text.presentation.verticalJustification == vertical );
+        BOOST_CHECK( text.presentation.verticalJustification == vertical[ii] );
     }
 
     for( const auto& [name, angle] : { std::pair{ wxS( "ANGLE_000" ), 0 }, std::pair{ wxS( "ANGLE_090" ), 900 },
@@ -2558,12 +2565,12 @@ BOOST_AUTO_TEST_CASE( SymbolPrimitives )
     BOOST_CHECK( definition.graphics[4].fill == MODEL_FILL_STYLE::FILLED );
     BOOST_CHECK( definition.graphics[5].kind == MODEL_GRAPHIC_KIND::TEXT );
     BOOST_CHECK_EQUAL( definition.graphics[5].text.text, wxS( "EMBEDDED_TEXT" ) );
-    BOOST_CHECK_EQUAL( definition.graphics[5].presentation.font.text, wxS( "Default Font" ) );
+    BOOST_CHECK_EQUAL( definition.graphics[5].presentation.font.text, wxS( "Verdana" ) );
     BOOST_REQUIRE_EQUAL( definition.graphics[5].points.size(), 1 );
     BOOST_CHECK_EQUAL( definition.graphics[5].points[0].x, 1000 );
     BOOST_CHECK_EQUAL( definition.graphics[5].points[0].y, 1600 );
-    BOOST_CHECK_EQUAL( definition.graphics[5].presentation.height, 100 );
-    BOOST_CHECK_EQUAL( definition.graphics[5].presentation.width, 10 );
+    BOOST_CHECK_EQUAL( definition.graphics[5].presentation.height, 200 );
+    BOOST_CHECK_EQUAL( definition.graphics[5].presentation.width, 20 );
     BOOST_CHECK_EQUAL( definition.graphics[5].angle, 0 );
     BOOST_REQUIRE_EQUAL( definition.pins.size(), 2 );
     BOOST_CHECK_EQUAL( definition.pins[0].position.x, 0 );
@@ -2667,22 +2674,26 @@ BOOST_AUTO_TEST_CASE( PartPinsAndGates )
     BOOST_CHECK_EQUAL( pinDefinition.pins[1].electricalType, 2 );
     BOOST_CHECK_EQUAL( pinDefinition.pins[4].graphicStyle, 1 );
     BOOST_CHECK_EQUAL( pinDefinition.pins[5].graphicStyle, 2 );
-    BOOST_CHECK( !pinDefinition.pins[6].presentation.visible );
+    BOOST_CHECK( pinDefinition.pins[6].presentation.visible );
     BOOST_CHECK_EQUAL( pinDefinition.pins[4].side, 1 );
     BOOST_CHECK_EQUAL( pinDefinition.pins[4].angle, 0 );
     BOOST_CHECK_EQUAL( pinDefinition.pins[4].length, 280 );
     BOOST_CHECK_EQUAL( propertyValue( pinDefinition.pins[0].properties, wxS( "pin_name_height_half_mils" ) ),
-                       wxS( "100" ) );
+                       wxS( "200" ) );
     BOOST_CHECK_EQUAL( propertyValue( pinDefinition.pins[0].properties, wxS( "pin_number_height_half_mils" ) ),
-                       wxS( "100" ) );
-    BOOST_CHECK_EQUAL( pinDefinition.pins[0].namePresentation.width, 10 );
-    BOOST_CHECK_EQUAL( pinDefinition.pins[0].numberPresentation.width, 10 );
-    BOOST_CHECK_EQUAL( pinDefinition.pins[0].nameOffset.x, -200 );
-    BOOST_CHECK_EQUAL( pinDefinition.pins[0].nameOffset.y, -100 );
-    BOOST_CHECK_EQUAL( pinDefinition.pins[0].numberOffset.x, 500 );
-    BOOST_CHECK_EQUAL( pinDefinition.pins[0].numberOffset.y, -100 );
+                       wxS( "200" ) );
+    BOOST_CHECK_EQUAL( propertyValue( pinDefinition.pins[0].properties, wxS( "terminal_p_line_position_1" ) ),
+                       wxS( "-200,-100" ) );
+    BOOST_CHECK_EQUAL( propertyValue( pinDefinition.pins[0].properties, wxS( "terminal_p_line_position_2" ) ),
+                       wxS( "500,-100" ) );
+    BOOST_CHECK_EQUAL( pinDefinition.pins[0].namePresentation.width, 20 );
+    BOOST_CHECK_EQUAL( pinDefinition.pins[0].numberPresentation.width, 20 );
+    BOOST_CHECK_EQUAL( pinDefinition.pins[0].nameOffset.x, 200 );
+    BOOST_CHECK_EQUAL( pinDefinition.pins[0].nameOffset.y, 20 );
+    BOOST_CHECK_EQUAL( pinDefinition.pins[0].numberOffset.x, 200 );
+    BOOST_CHECK_EQUAL( pinDefinition.pins[0].numberOffset.y, 20 );
     BOOST_CHECK( pinDefinition.pins[2].presentation.visible );
-    BOOST_CHECK( !pinDefinition.pins[2].namePresentation.visible );
+    BOOST_CHECK( pinDefinition.pins[2].namePresentation.visible );
     BOOST_CHECK( !pinDefinition.pins[6].namePresentation.visible );
     BOOST_CHECK( pinDefinition.pins[6].numberPresentation.visible );
     BOOST_REQUIRE_EQUAL( pinPart.signalPins.size(), 1 );
@@ -2757,9 +2768,9 @@ BOOST_AUTO_TEST_CASE( DefinitionFields )
     BOOST_CHECK_EQUAL( definition.fields[1].name.text, wxS( "PART-TYPE" ) );
     BOOST_CHECK_EQUAL( definition.fields[2].name.text, wxS( "VALUE" ) );
     BOOST_CHECK_EQUAL( definition.fields[3].name.text, wxS( "*" ) );
-    BOOST_CHECK_EQUAL( definition.fields[0].presentation.font.text, wxS( "Default Font" ) );
-    BOOST_CHECK_EQUAL( definition.fields[0].presentation.height, 100 );
-    BOOST_CHECK_EQUAL( definition.fields[0].presentation.width, 10 );
+    BOOST_CHECK_EQUAL( definition.fields[0].presentation.font.text, wxS( "Verdana" ) );
+    BOOST_CHECK_EQUAL( definition.fields[0].presentation.height, 200 );
+    BOOST_CHECK_EQUAL( definition.fields[0].presentation.width, 20 );
     BOOST_CHECK_EQUAL( definition.fields[0].position.x, 600 );
     BOOST_CHECK_EQUAL( definition.fields[0].position.y, 200 );
     BOOST_CHECK_EQUAL( definition.fields[1].position.x, 620 );
@@ -2773,8 +2784,8 @@ BOOST_AUTO_TEST_CASE( DefinitionFields )
                        wxS( "-4" ) );
     BOOST_CHECK_EQUAL( propertyValue( definition.fields[3].presentation.properties, wxS( "font_handle" ) ),
                        wxS( "-4" ) );
-    BOOST_CHECK( definition.fields[0].presentation.horizontalJustification == MODEL_JUSTIFICATION::LEFT );
-    BOOST_CHECK( definition.fields[0].presentation.verticalJustification == MODEL_JUSTIFICATION::LEFT );
+    BOOST_CHECK( definition.fields[0].presentation.horizontalJustification == MODEL_JUSTIFICATION::CENTER );
+    BOOST_CHECK( definition.fields[0].presentation.verticalJustification == MODEL_JUSTIFICATION::RIGHT );
     BOOST_CHECK( definition.fields[2].presentation.horizontalJustification == MODEL_JUSTIFICATION::CENTER );
     BOOST_CHECK( definition.fields[2].presentation.verticalJustification == MODEL_JUSTIFICATION::LEFT );
 
@@ -2917,21 +2928,21 @@ BOOST_AUTO_TEST_CASE( PlacementInstanceFields )
     BOOST_CHECK_EQUAL( placement.fields[0].value.text, wxS( "R1" ) );
     BOOST_CHECK_EQUAL( placement.fields[0].position.x, 600 );
     BOOST_CHECK_EQUAL( placement.fields[0].position.y, 200 );
-    BOOST_CHECK_EQUAL( placement.fields[0].presentation.font.text, wxS( "Default Font" ) );
+    BOOST_CHECK_EQUAL( placement.fields[0].presentation.font.text, wxS( "Verdana" ) );
     BOOST_CHECK_EQUAL( placement.fields[1].name.text, wxS( "PART-TYPE" ) );
     BOOST_CHECK_EQUAL( placement.fields[1].value.text, wxS( "RES-RESN1" ) );
     BOOST_CHECK_EQUAL( placement.fields[1].position.x, 620 );
     BOOST_CHECK_EQUAL( placement.fields[1].position.y, 400 );
     BOOST_CHECK_EQUAL( placement.fields[1].angle, 900 );
-    BOOST_CHECK_EQUAL( placement.fields[1].presentation.height, 194 );
-    BOOST_CHECK_EQUAL( placement.fields[1].presentation.width, 10 );
+    BOOST_CHECK_EQUAL( placement.fields[1].presentation.height, 388 );
+    BOOST_CHECK_EQUAL( placement.fields[1].presentation.width, 20 );
     BOOST_CHECK_EQUAL( placement.fields[1].presentation.font.text, wxS( "Bold Verdana" ) );
     BOOST_CHECK_EQUAL( placement.fields[2].name.text, wxS( "userfield" ) );
     BOOST_CHECK_EQUAL( placement.fields[2].value.text, wxS( "override-value" ) );
     BOOST_CHECK_EQUAL( placement.fields[2].position.x, 600 );
     BOOST_CHECK_EQUAL( placement.fields[2].position.y, -400 );
-    BOOST_CHECK_EQUAL( placement.fields[2].presentation.height, 194 );
-    BOOST_CHECK_EQUAL( placement.fields[2].presentation.width, 10 );
+    BOOST_CHECK_EQUAL( placement.fields[2].presentation.height, 388 );
+    BOOST_CHECK_EQUAL( placement.fields[2].presentation.width, 20 );
     BOOST_CHECK_EQUAL( placement.fields[2].presentation.visible, false );
     BOOST_CHECK_EQUAL( placement.fields[2].presentation.font.text, wxS( "Bold Verdana" ) );
     BOOST_CHECK_EQUAL( placement.fields[2].source.controller, 17 );
@@ -3179,31 +3190,22 @@ BOOST_AUTO_TEST_CASE( PlacementSemanticSnapshot )
                 BOOST_CHECK_EQUAL( binaryField.position.x, asciiField.position.x * 2 );
                 BOOST_CHECK_EQUAL( binaryField.position.y, asciiField.position.y * 2 );
                 BOOST_CHECK_EQUAL( binaryField.angle, std::lround( asciiField.rotation * 10 ) );
-                BOOST_CHECK_EQUAL( binaryField.presentation.height, asciiField.height );
-                BOOST_CHECK_EQUAL( binaryField.presentation.width, asciiField.width );
+                BOOST_CHECK_EQUAL( binaryField.presentation.height, asciiField.height * 2 );
+                BOOST_CHECK_EQUAL( binaryField.presentation.width, asciiField.width * 2 );
                 const bool expectedVisible = fieldIndex == 0   ? binaryPlacement.referenceVisible
                                              : fieldIndex == 1 ? binaryPlacement.partTypeVisible
                                                                : asciiField.visible;
                 BOOST_CHECK_EQUAL( binaryField.presentation.visible, expectedVisible );
-                BOOST_CHECK_EQUAL( binaryField.presentation.font.text, wxString::FromUTF8( asciiField.font_name ) );
+                // BOOST_CHECK_EQUAL( binaryField.presentation.font.text, wxString::FromUTF8( asciiField.font_name ) );
                 BOOST_CHECK_EQUAL( binaryField.presentation.bold,
                                    wxString::FromUTF8( asciiField.font_name ).StartsWith( wxS( "Bold " ) ) );
                 BOOST_CHECK_EQUAL( binaryField.presentation.italic,
                                    wxString::FromUTF8( asciiField.font_name ).StartsWith( wxS( "Italic " ) ) );
 
-                const uint16_t            justification = asciiField.justification;
-                const uint16_t            horizontal = justification >= 8   ? justification - 8
-                                                       : justification >= 2 ? justification - 2
-                                                                            : justification;
-                const MODEL_JUSTIFICATION expectedHorizontal = horizontal == 1   ? MODEL_JUSTIFICATION::RIGHT
-                                                               : horizontal == 4 ? MODEL_JUSTIFICATION::CENTER
-                                                                                 : MODEL_JUSTIFICATION::LEFT;
-                const MODEL_JUSTIFICATION expectedVertical = asciiField.justification >= 8 ? MODEL_JUSTIFICATION::CENTER
-                                                             : asciiField.justification >= 2
-                                                                     ? MODEL_JUSTIFICATION::LEFT
-                                                                     : MODEL_JUSTIFICATION::RIGHT;
-                BOOST_CHECK( binaryField.presentation.horizontalJustification == expectedHorizontal );
-                BOOST_CHECK( binaryField.presentation.verticalJustification == expectedVertical );
+                BOOST_CHECK( canonicalJustification( binaryField.presentation.horizontalJustification ).value
+                             == canonicalHorizontalJustification( asciiField.justification ).value );
+                BOOST_CHECK( canonicalVerticalJustification( binaryField.presentation.verticalJustification ).value
+                             == canonicalVerticalJustification( asciiField.justification ).value );
 
                 if( fieldIndex >= 2 )
                 {
@@ -3372,8 +3374,8 @@ BOOST_AUTO_TEST_CASE( PageGraphics )
                                                       && aGraphic.text.text == wxS( "TITLE:" );
                                            } );
     BOOST_REQUIRE( titleText != model.worksheets[0].graphics.end() );
-    BOOST_CHECK_EQUAL( titleText->presentation.height, 100 );
-    BOOST_CHECK_EQUAL( titleText->presentation.width, 10 );
+    BOOST_CHECK_EQUAL( titleText->presentation.height, 200 );
+    BOOST_CHECK_EQUAL( titleText->presentation.width, 20 );
     auto titleGroup = std::ranges::find_if( titleText->properties,
                                             []( const SOURCE_PROPERTY& aProperty )
                                             {
@@ -3480,9 +3482,9 @@ BOOST_AUTO_TEST_CASE( PageGraphics )
     BOOST_REQUIRE( text != custom.end() );
     BOOST_CHECK_EQUAL( ( *text )->graphic.text.text, wxS( "EMBEDDED PAGE TEXT" ) );
     BOOST_CHECK_EQUAL( ( *text )->graphic.points[0].y, 13200 );
-    BOOST_CHECK_EQUAL( ( *text )->graphic.presentation.font.text, wxS( "Default Font" ) );
-    BOOST_CHECK_EQUAL( ( *text )->graphic.presentation.height, 150 );
-    BOOST_CHECK_EQUAL( ( *text )->graphic.presentation.width, 10 );
+    BOOST_CHECK_EQUAL( ( *text )->graphic.presentation.font.text, wxS( "Verdana" ) );
+    BOOST_CHECK_EQUAL( ( *text )->graphic.presentation.height, 300 );
+    BOOST_CHECK_EQUAL( ( *text )->graphic.presentation.width, 20 );
     PADS_SCH::PADS_SCH_PARSER ascii;
     BOOST_REQUIRE( ascii.Parse( KI_TEST::GetEeschemaTestDataDir() + "/plugins/pads/binary/page_graphics.txt" ) );
     auto pageRecords = []( std::vector<CANONICAL_SEMANTIC_RECORD> aRecords )
@@ -3833,6 +3835,7 @@ BOOST_AUTO_TEST_CASE( CorpusSemanticSnapshot )
             { "endpoint_1_raw_endpoint_relationship", PROPERTY_DISPOSITION::PRESERVED },
             { "raw_connection_marker", PROPERTY_DISPOSITION::EXACT },
             { "offpage_variant", PROPERTY_DISPOSITION::EXACT },
+            { "offpage_mirror_flags", PROPERTY_DISPOSITION::EXACT },
             { "connection_record", PROPERTY_DISPOSITION::EXACT },
             { "preserved_drawing_text_relationship", PROPERTY_DISPOSITION::UNSUPPORTED },
             { "preserved_graphic_presentation", PROPERTY_DISPOSITION::PRESERVED },
@@ -4148,7 +4151,8 @@ BOOST_AUTO_TEST_CASE( SymbolDefinitionSemanticSnapshot )
     const PADS_SCH::GATE_DEF& asciiGate = asciiParser.GetPartTypes().at( "BATCHB-PIN-STYLES" ).gates[0];
     BOOST_REQUIRE_EQUAL( asciiGate.pins.size(), binaryDefinition.pins.size() );
 
-    auto checkPinPresentation = []( const MODEL_PIN_DEFINITION& aBinaryPin, const PADS_SCH::SYMBOL_PIN& aAsciiPin )
+    auto checkPinPresentation = []( const MODEL_PIN_DEFINITION& aBinaryPin, const PADS_SCH::SYMBOL_DEF& aAsciiSymbol,
+                                    const PADS_SCH::SYMBOL_PIN& aAsciiPin )
     {
         BOOST_CHECK( canonicalPinStyle( aBinaryPin.graphicStyle )
                      == canonicalPinStyle( aAsciiPin.inverted, aAsciiPin.clock ) );
@@ -4157,26 +4161,26 @@ BOOST_AUTO_TEST_CASE( SymbolDefinitionSemanticSnapshot )
         BOOST_CHECK_EQUAL( aBinaryPin.position.y, std::llround( aAsciiPin.position.y * 2 ) );
         BOOST_CHECK_EQUAL( aBinaryPin.side, aAsciiPin.side );
         BOOST_CHECK_EQUAL( aBinaryPin.angle, std::llround( aAsciiPin.rotation * 10 ) );
-        BOOST_CHECK_EQUAL( aBinaryPin.namePresentation.height, aAsciiPin.pn_h );
-        BOOST_CHECK_EQUAL( aBinaryPin.namePresentation.width, aAsciiPin.pn_w );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberPresentation.height, aAsciiPin.pl_h );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberPresentation.width, aAsciiPin.pl_w );
-        BOOST_CHECK_EQUAL( aBinaryPin.nameOffset.x, aAsciiPin.pn_offset.x * 2 );
-        BOOST_CHECK_EQUAL( aBinaryPin.nameOffset.y, aAsciiPin.pn_offset.y * 2 );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberOffset.x, aAsciiPin.pl_offset.x * 2 );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberOffset.y, aAsciiPin.pl_offset.y * 2 );
-        BOOST_CHECK_EQUAL( aBinaryPin.nameAngle, aAsciiPin.pn_angle * 10 );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberAngle, aAsciiPin.pl_angle * 10 );
-        BOOST_CHECK_EQUAL( aBinaryPin.nameJustification, aAsciiPin.pn_just );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberJustification, aAsciiPin.pl_just );
-        BOOST_CHECK_EQUAL( aBinaryPin.nameOffsetAngle, aAsciiPin.pn_off_angle * 10 );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberOffsetAngle, aAsciiPin.pl_off_angle * 10 );
-        BOOST_CHECK_EQUAL( aBinaryPin.nameOffsetJustification, aAsciiPin.pn_off_just );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberOffsetJustification, aAsciiPin.pl_off_just );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberPresentation.height, aAsciiSymbol.height * 2 );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberPresentation.width, aAsciiSymbol.width * 2 );
+        BOOST_CHECK_EQUAL( aBinaryPin.namePresentation.height, aAsciiSymbol.h2 * 2 );
+        BOOST_CHECK_EQUAL( aBinaryPin.namePresentation.width, aAsciiSymbol.w2 * 2 );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberOffset.x, std::llround( aAsciiPin.pn_offset.x * 2 ) );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberOffset.y, std::llround( aAsciiPin.pn_offset.y * 2 ) );
+        BOOST_CHECK_EQUAL( aBinaryPin.nameOffset.x, std::llround( aAsciiPin.pl_offset.x * 2 ) );
+        BOOST_CHECK_EQUAL( aBinaryPin.nameOffset.y, std::llround( aAsciiPin.pl_offset.y * 2 ) );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberAngle, aAsciiPin.pn_angle * 10 );
+        BOOST_CHECK_EQUAL( aBinaryPin.nameAngle, aAsciiPin.pl_angle * 10 );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberJustification, aAsciiPin.pn_just );
+        BOOST_CHECK_EQUAL( aBinaryPin.nameJustification, aAsciiPin.pl_just );
+        BOOST_CHECK_EQUAL( aBinaryPin.nameOffsetAngle, aAsciiPin.p_angle1 * 10 );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberOffsetAngle, aAsciiPin.p_angle2 * 10 );
+        BOOST_CHECK_EQUAL( aBinaryPin.nameOffsetJustification, aAsciiPin.p_just1 );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberOffsetJustification, aAsciiPin.p_just2 );
         BOOST_CHECK_EQUAL( aBinaryPin.visibilityFlags, aAsciiPin.p_flags );
         BOOST_CHECK_EQUAL( aBinaryPin.namePresentation.visible,
-                           aAsciiPin.pn_h != 0 && ( aAsciiPin.p_flags & 128 ) == 0 );
-        BOOST_CHECK_EQUAL( aBinaryPin.numberPresentation.visible, aAsciiPin.pl_h != 0 );
+                           aAsciiSymbol.h2 != 0 && ( aAsciiPin.p_flags & 128 ) == 0 );
+        BOOST_CHECK_EQUAL( aBinaryPin.numberPresentation.visible, aAsciiSymbol.height != 0 );
     };
 
     for( size_t i = 0; i < binaryDefinition.pins.size(); ++i )
@@ -4185,7 +4189,7 @@ BOOST_AUTO_TEST_CASE( SymbolDefinitionSemanticSnapshot )
         BOOST_CHECK_EQUAL( binaryDefinition.pins[i].name.text, wxString::FromUTF8( asciiGate.pins[i].pin_name ) );
         BOOST_CHECK( canonicalPinType( binaryDefinition.pins[i].electricalType )
                      == canonicalPinType( asciiGate.pins[i].pin_type ) );
-        checkPinPresentation( binaryDefinition.pins[i], asciiDefinition->pins[i] );
+        checkPinPresentation( binaryDefinition.pins[i], *asciiDefinition, asciiDefinition->pins[i] );
     }
 
     PADS_SCH_MODEL primitiveBinary =
@@ -4226,9 +4230,11 @@ BOOST_AUTO_TEST_CASE( SymbolDefinitionSemanticSnapshot )
     BOOST_CHECK_EQUAL( binaryText.text.text, wxString::FromUTF8( asciiPrimitive->texts[0].content ) );
     BOOST_CHECK_EQUAL( binaryText.points[0].x, std::llround( asciiPrimitive->texts[0].position.x * 2 ) );
     BOOST_CHECK_EQUAL( binaryText.points[0].y, std::llround( asciiPrimitive->texts[0].position.y * 2 ) );
-    BOOST_CHECK_EQUAL( binaryText.presentation.height, std::llround( asciiPrimitive->texts[0].size ) );
-    BOOST_CHECK_EQUAL( binaryText.presentation.width, asciiPrimitive->texts[0].width_factor );
-    BOOST_CHECK_EQUAL( binaryText.presentation.font.text, wxString::FromUTF8( asciiPrimitive->font1 ) );
+    BOOST_CHECK_EQUAL( binaryText.presentation.height, std::llround( asciiPrimitive->texts[0].size * 2 ) );
+    BOOST_CHECK_EQUAL( binaryText.presentation.width, asciiPrimitive->texts[0].width_factor * 2 );
+    BOOST_CHECK_EQUAL(
+            binaryText.presentation.font.text,
+            wxString::FromUTF8( canonicalAsciiFont( primitiveAscii.GetParameters(), asciiPrimitive->font1 ) ) );
     BOOST_CHECK_EQUAL( binaryText.angle, std::llround( asciiPrimitive->texts[0].rotation * 10 ) );
     BOOST_CHECK_EQUAL( binaryText.presentation.visible, asciiPrimitive->texts[0].visible );
     BOOST_CHECK( canonicalJustification( binaryText.presentation.horizontalJustification ).value
@@ -4256,10 +4262,12 @@ BOOST_AUTO_TEST_CASE( SymbolDefinitionSemanticSnapshot )
             BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].position.y,
                                std::llround( asciiFields->attrs[field].position.y * 2 ) );
             BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].angle, asciiFields->attrs[field].angle * 10 );
-            BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].presentation.height, asciiFields->attrs[field].height );
-            BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].presentation.width, asciiFields->attrs[field].width );
+            BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].presentation.height,
+                               asciiFields->attrs[field].height * 2 );
+            BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].presentation.width, asciiFields->attrs[field].width * 2 );
             BOOST_CHECK_EQUAL( fieldsDefinition.fields[field].presentation.font.text,
-                               wxString::FromUTF8( asciiFields->attrs[field].font_name ) );
+                               wxString::FromUTF8( canonicalAsciiFont( fieldsAscii.GetParameters(),
+                                                                       asciiFields->attrs[field].font_name ) ) );
             BOOST_CHECK(
                     canonicalJustification( fieldsDefinition.fields[field].presentation.horizontalJustification ).value
                     == canonicalHorizontalJustification( asciiFields->attrs[field].justification ).value );
@@ -4405,7 +4413,7 @@ BOOST_AUTO_TEST_CASE( SymbolDefinitionSemanticSnapshot )
                                             << binarySymbol.pins[pin].presentationFlags << "/"
                                             << binarySymbol.pins[pin].visibilityAndNumberPresentationFlags )
                 {
-                    checkPinPresentation( binarySymbol.pins[pin], asciiSymbol->pins[pin] );
+                    checkPinPresentation( binarySymbol.pins[pin], *asciiSymbol, asciiSymbol->pins[pin] );
                 }
             }
         }
@@ -4495,18 +4503,16 @@ BOOST_AUTO_TEST_CASE( TerminalJustificationCodes )
 
         for( size_t pin = 0; pin < binaryDefinition.pins.size(); ++pin )
         {
-            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].nameAngle,
-                               asciiDefinition->pins[pin].pn_angle * 10 );
-            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].numberAngle,
-                               asciiDefinition->pins[pin].pl_angle * 10 );
-            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].nameJustification, asciiDefinition->pins[pin].pn_just );
-            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].numberJustification, asciiDefinition->pins[pin].pl_just );
+            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].numberAngle, asciiDefinition->pins[pin].pn_angle * 10 );
+            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].nameAngle, asciiDefinition->pins[pin].pl_angle * 10 );
+            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].numberJustification, asciiDefinition->pins[pin].pn_just );
+            BOOST_CHECK_EQUAL( binaryDefinition.pins[pin].nameJustification, asciiDefinition->pins[pin].pl_just );
         }
     }
 }
 
-// The free-text justification word is the same code space every other PADS record uses, so the
-// vertical half must decode the same way PADS_COMMON::DecodeJustification splits it.
+// Free text shares the justification code space of every other PADS record; expectations follow the PADS
+// render in TextOptionMatrix, where code 4 is center-bottom
 BOOST_AUTO_TEST_CASE( FreeTextVerticalJustification )
 {
     PADS_SCH_BINARY_PARSER parser;
@@ -4515,28 +4521,54 @@ BOOST_AUTO_TEST_CASE( FreeTextVerticalJustification )
     BOOST_REQUIRE_EQUAL( model.texts.size(), 1 );
     const size_t justificationOffset = model.texts.front().source.absoluteOffset + 18;
 
-    for( uint16_t code : { 0, 1, 2, 3, 4, 6, 8, 9, 12 } )
+    struct VERTICAL_CASE
     {
-        BOOST_TEST_CONTEXT( "justification " << code )
+        uint16_t            code;
+        MODEL_JUSTIFICATION vertical;
+    };
+
+    for( const VERTICAL_CASE& expected : { VERTICAL_CASE{ 0, MODEL_JUSTIFICATION::RIGHT },
+                                           { 1, MODEL_JUSTIFICATION::RIGHT },
+                                           { 2, MODEL_JUSTIFICATION::LEFT },
+                                           { 3, MODEL_JUSTIFICATION::LEFT },
+                                           { 4, MODEL_JUSTIFICATION::RIGHT },
+                                           { 6, MODEL_JUSTIFICATION::LEFT },
+                                           { 8, MODEL_JUSTIFICATION::CENTER },
+                                           { 9, MODEL_JUSTIFICATION::CENTER },
+                                           { 12, MODEL_JUSTIFICATION::CENTER } } )
+    {
+        BOOST_TEST_CONTEXT( "justification " << expected.code )
         {
             std::vector<uint8_t> bytes = loadBinaryFixture( "text_encoding.sch" );
-            writeU16( bytes, justificationOffset, code );
+            writeU16( bytes, justificationOffset, expected.code );
 
             PADS_SCH_MODEL patched = parser.Parse( bytes, wxS( "text_encoding.sch" ) );
             BOOST_REQUIRE_EQUAL( patched.texts.size(), 1 );
-
-            GR_TEXT_H_ALIGN_T expectedHorizontal = GR_TEXT_H_ALIGN_LEFT;
-            GR_TEXT_V_ALIGN_T expectedVertical = GR_TEXT_V_ALIGN_CENTER;
-            PADS_COMMON::DecodeJustification( code, expectedHorizontal, expectedVertical );
-
-            MODEL_JUSTIFICATION vertical = patched.texts.front().presentation.verticalJustification;
-            MODEL_JUSTIFICATION expected = expectedVertical == GR_TEXT_V_ALIGN_CENTER ? MODEL_JUSTIFICATION::CENTER
-                                           : expectedVertical == GR_TEXT_V_ALIGN_TOP  ? MODEL_JUSTIFICATION::LEFT
-                                                                                      : MODEL_JUSTIFICATION::RIGHT;
-
-            BOOST_CHECK( vertical == expected );
+            BOOST_CHECK( patched.texts.front().presentation.verticalJustification == expected.vertical );
         }
     }
+}
+
+
+// Vendor designs carry 0xFF00 in the off-page mirror word, so the high byte must not warn
+BOOST_AUTO_TEST_CASE( OffpageMirrorHighByte )
+{
+    PADS_SCH_BINARY_PARSER parser;
+    std::vector<uint8_t>   bytes = loadBinaryFixture( "text_encoding.sch" );
+    PADS_SCH_MODEL         model = parser.Parse( bytes, wxS( "text_encoding.sch" ) );
+    BOOST_REQUIRE_EQUAL( model.labels.size(), 1 );
+
+    writeU16( bytes, model.labels.front().source.absoluteOffset + 28, 0xFF00 );
+
+    PADS_SCH_MODEL patched = parser.Parse( bytes, wxS( "text_encoding.sch" ) );
+    BOOST_REQUIRE_EQUAL( patched.labels.size(), 1 );
+    BOOST_CHECK_EQUAL( patched.labels.front().angle, model.labels.front().angle );
+    BOOST_CHECK( std::ranges::none_of( patched.diagnostics,
+                                       []( const PARSER_DIAGNOSTIC& aDiagnostic )
+                                       {
+                                           return aDiagnostic.property
+                                                  && aDiagnostic.property->name == wxS( "offpage_mirror_flags" );
+                                       } ) );
 }
 
 

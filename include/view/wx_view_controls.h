@@ -101,7 +101,6 @@ public:
     /// @copydoc VIEW_CONTROLS::SetCrossHairCursorPosition()
     void SetCrossHairCursorPosition( const VECTOR2D& aPosition, bool aWarpView ) override;
 
-    /// @copydoc VIEW_CONTROLS::CursorWarp()
     void WarpMouseCursor( const VECTOR2D& aPosition, bool aWorldCoordinates = false, bool aWarpView = false ) override;
 
     /// @copydoc VIEW_CONTROLS::CenterOnCursor()
@@ -155,6 +154,12 @@ private:
      * @param y Mouse position
      */
     void handleCursorCapture( int x, int y );
+
+    /**
+     * Repaint only when the canvas keeps a retained scene. Other canvases repaint from the refresh
+     * the mouse event posts.
+     */
+    void repaintRetained();
 
     /**
      * Send an event to refresh mouse position.

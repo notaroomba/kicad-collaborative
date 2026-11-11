@@ -74,12 +74,12 @@ public:
                                | OPTION_SAVE_ALL_EVENTS
     };
 
-    NETLIST_EXPORTER_SPICE( SCHEMATIC* aSchematic );
+    NETLIST_EXPORTER_SPICE( SCHEMATIC* aSchematic, KIWAY* aKiway );
 
     /**
      * Write to specified output file.
      */
-    bool WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
+    bool writeNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
                        REPORTER& aReporter ) override;
 
     /**
@@ -107,7 +107,8 @@ public:
     virtual bool ReadSchematicAndLibraries( unsigned aNetlistOptions, REPORTER& aReporter );
 
     /**
-     * Remove formatting wrappers and replace illegal spice net name characters with underscores.
+     * Convert an escaped schematic net name to SPICE, preserving literal slashes when mapping ground names.
+     * Remove formatting wrappers and replace illegal SPICE characters with underscores.
      */
     static void ConvertToSpiceMarkup( wxString* aNetName );
 
@@ -164,6 +165,7 @@ private:
      *
      * @param aSymbol The symbol to collect pins for
      * @param aSheet The sheet path for the symbol
+     * @param aVariantName is the variant name or empty if the default variant.
      * @return The merged Sim.Pins string, or empty string if symbol is not multi-unit
      */
     wxString collectMergedSimPins( SCH_SYMBOL& aSymbol, const SCH_SHEET_PATH& aSheet,
@@ -217,10 +219,10 @@ private:
     std::set<wxString>      m_rawIncludes;        ///< include directives found in symbols
     std::set<wxString>      m_nets;
 
-    ///< Items representing schematic symbols in Spice world.
+    /// Items representing schematic symbols in Spice world.
     std::list<SPICE_ITEM>   m_items;
 
-    ///< Owns the synthesized repeat-per-unit wrappers referenced by m_items.
+    /// Owns the synthesized repeat-per-unit wrappers referenced by m_items.
     std::vector<std::unique_ptr<SIM_MODEL_MULTIUNIT>> m_multiunitModels;
 };
 

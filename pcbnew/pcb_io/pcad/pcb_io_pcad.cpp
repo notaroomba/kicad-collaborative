@@ -56,18 +56,13 @@ bool PCB_IO_PCAD::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_PCAD::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                               const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_PCAD::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                             const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     wxXmlDocument   xmlDoc;
 
     m_props = aProperties;
-
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
+    m_board = &aBoard;
 
     PCAD_PCB pcb( m_board );
 
@@ -76,6 +71,4 @@ BOARD* PCB_IO_PCAD::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
     LoadInputFile( aFileName, &xmlDoc );
     pcb.ParseBoard( nullptr, &xmlDoc, wxT( "PCB" ) );
     pcb.AddToBoard();
-
-    return m_board;
 }

@@ -5,6 +5,7 @@
 // PLEASE DO *NOT* EDIT THIS FILE!
 ///////////////////////////////////////////////////////////////////////////
 
+#include "pcb_layer_box_selector.h"
 #include "widgets/text_ctrl_eval.h"
 
 #include "dialog_pad_properties_base.h"
@@ -36,7 +37,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_padTypeLabel->Wrap( -1 );
 	gbSizerCommon->Add( m_padTypeLabel, wxGBPosition( 0, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxTOP|wxRIGHT|wxLEFT, 5 );
 
-	wxString m_padTypeChoices[] = { _("Through-hole"), _("SMD"), _("Edge Connector"), _("NPTH, Mechanical"), _("SMD Aperture") };
+	wxString m_padTypeChoices[] = { _("Through-hole"), _("SMD"), _("Edge Connector"), _("NPTH, Mechanical"), _("SMD Aperture"), _("Copper Only") };
 	int m_padTypeNChoices = sizeof( m_padTypeChoices ) / sizeof( wxString );
 	m_padType = new wxChoice( m_panelGeneral, wxID_ANY, wxDefaultPosition, wxDefaultSize, m_padTypeNChoices, m_padTypeChoices, 0 );
 	m_padType->SetSelection( 0 );
@@ -442,7 +443,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	int m_holeShapeCtrlNChoices = sizeof( m_holeShapeCtrlChoices ) / sizeof( wxString );
 	m_holeShapeCtrl = new wxChoice( m_panelGeneral, wxID_ANY, wxDefaultPosition, wxDefaultSize, m_holeShapeCtrlNChoices, m_holeShapeCtrlChoices, 0 );
 	m_holeShapeCtrl->SetSelection( 1 );
-	m_gbSizerHole->Add( m_holeShapeCtrl, wxGBPosition( 0, 1 ), wxGBSpan( 1, 5 ), wxEXPAND|wxRIGHT, 5 );
+	m_gbSizerHole->Add( m_holeShapeCtrl, wxGBPosition( 0, 1 ), wxGBSpan( 1, 6 ), wxEXPAND|wxRIGHT, 5 );
 
 	m_holeXLabel = new wxStaticText( m_panelGeneral, wxID_ANY, _("Hole size X:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_holeXLabel->Wrap( -1 );
@@ -466,11 +467,16 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_holeYUnits->Wrap( -1 );
 	m_gbSizerHole->Add( m_holeYUnits, wxGBPosition( 1, 5 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
 
+	m_launchCalculatorBtn = new wxBitmapButton( m_panelGeneral, wxID_ANY, wxNullBitmap, wxDefaultPosition, wxDefaultSize, wxBU_AUTODRAW|0 );
+	m_launchCalculatorBtn->SetToolTip( _("Show hole size calculator") );
+
+	m_gbSizerHole->Add( m_launchCalculatorBtn, wxGBPosition( 1, 6 ), wxGBSpan( 1, 1 ), wxALL, 5 );
+
 
 	m_gbSizerHole->AddGrowableCol( 1 );
 	m_gbSizerHole->AddGrowableCol( 4 );
 
-	m_LeftBoxSizer->Add( m_gbSizerHole, 0, wxEXPAND, 5 );
+	m_LeftBoxSizer->Add( m_gbSizerHole, 1, wxEXPAND, 5 );
 
 	m_staticline71 = new wxStaticLine( m_panelGeneral, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLI_HORIZONTAL );
 	m_LeftBoxSizer->Add( m_staticline71, 0, wxEXPAND|wxTOP|wxBOTTOM, 12 );
@@ -1222,7 +1228,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 
 	gbBackdrillLeftCol->Add( m_backDrillTopLayerLabel, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillTopLayer = new wxBitmapComboBox( sbBackdrill->GetStaticBox(), wxID_ANY, _("dummy"), wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
+	m_backDrillTopLayer = new PCB_LAYER_BOX_SELECTOR( sbBackdrill->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
 	m_backDrillTopLayer->SetToolTip( _("The backdrill must pass through this layer") );
 
 	gbBackdrillLeftCol->Add( m_backDrillTopLayer, wxGBPosition( 1, 1 ), wxGBSpan( 1, 2 ), wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
@@ -1257,7 +1263,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 
 	gbBackdrillRightCol->Add( m_backDrillBottomLayerLabel, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL, 5 );
 
-	m_backDrillBottomLayer = new wxBitmapComboBox( sbBackdrill->GetStaticBox(), wxID_ANY, _("dummy"), wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
+	m_backDrillBottomLayer = new PCB_LAYER_BOX_SELECTOR( sbBackdrill->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, NULL, 0 );
 	m_backDrillBottomLayer->SetToolTip( _("The backdrill must pass through this layer") );
 
 	gbBackdrillRightCol->Add( m_backDrillBottomLayer, wxGBPosition( 1, 1 ), wxGBSpan( 1, 2 ), wxALIGN_CENTER_VERTICAL|wxEXPAND, 5 );
@@ -1480,6 +1486,7 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_holeShapeCtrl->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnDrillShapeSelected ), NULL, this );
 	m_holeXCtrl->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_holeYCtrl->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_launchCalculatorBtn->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnHoleSizeCalculator ), NULL, this );
 	m_padToDieOpt->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnPadToDieCheckbox ), NULL, this );
 	m_padToDieDelayOpt->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnPadToDieDelayCheckbox ), NULL, this );
 	m_rbCopperLayersSel->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnSetCopperLayers ), NULL, this );
@@ -1532,6 +1539,12 @@ DIALOG_PAD_PROPERTIES_BASE::DIALOG_PAD_PROPERTIES_BASE( wxWindow* parent, wxWind
 	m_topPostMachining->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onTopPostMachining ), NULL, this );
 	m_bottomPostMachining->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBottomPostMachining ), NULL, this );
 	m_backDrillChoice->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBackDrillChoice ), NULL, this );
+	m_backDrillTopLayer->Connect( wxEVT_COMMAND_COMBOBOX_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillTopLayer->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillTopSize->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillBottomLayer->Connect( wxEVT_COMMAND_COMBOBOX_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillBottomLayer->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillBottomSize->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_cbShowPadOutline->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onChangePadDrawMode ), NULL, this );
 	m_sdbSizerCancel->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnCancel ), NULL, this );
 }
@@ -1571,6 +1584,7 @@ DIALOG_PAD_PROPERTIES_BASE::~DIALOG_PAD_PROPERTIES_BASE()
 	m_holeShapeCtrl->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnDrillShapeSelected ), NULL, this );
 	m_holeXCtrl->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_holeYCtrl->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_launchCalculatorBtn->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnHoleSizeCalculator ), NULL, this );
 	m_padToDieOpt->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnPadToDieCheckbox ), NULL, this );
 	m_padToDieDelayOpt->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnPadToDieDelayCheckbox ), NULL, this );
 	m_rbCopperLayersSel->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnSetCopperLayers ), NULL, this );
@@ -1623,6 +1637,12 @@ DIALOG_PAD_PROPERTIES_BASE::~DIALOG_PAD_PROPERTIES_BASE()
 	m_topPostMachining->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onTopPostMachining ), NULL, this );
 	m_bottomPostMachining->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBottomPostMachining ), NULL, this );
 	m_backDrillChoice->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onBackDrillChoice ), NULL, this );
+	m_backDrillTopLayer->Disconnect( wxEVT_COMMAND_COMBOBOX_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillTopLayer->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillTopSize->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillBottomLayer->Disconnect( wxEVT_COMMAND_COMBOBOX_SELECTED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillBottomLayer->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
+	m_backDrillBottomSize->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnValuesChanged ), NULL, this );
 	m_cbShowPadOutline->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::onChangePadDrawMode ), NULL, this );
 	m_sdbSizerCancel->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( DIALOG_PAD_PROPERTIES_BASE::OnCancel ), NULL, this );
 

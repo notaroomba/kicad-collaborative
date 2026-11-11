@@ -50,6 +50,9 @@
 #include <trace_helpers.h>
 #include <wildcards_and_files_ext.h>
 #include <confirm.h>
+#if defined( KICAD_NATIVE_MODEL_PREVIEW ) && defined( __WINDOWS__ )
+#include <model_preview_manager.h>
+#endif
 
 #include <git/git_backend.h>
 #include <git/libgit_backend.h>
@@ -152,14 +155,15 @@ bool PGM_KICAD::OnPgmInit()
     {
         wxString name;
         FRAME_T  type;
+        // clang-format off
     } frameTypes[] = { { wxT( "pcb" ), FRAME_PCB_EDITOR },
                        { wxT( "fpedit" ), FRAME_FOOTPRINT_EDITOR },
                        { wxT( "sch" ), FRAME_SCH },
                        { wxT( "calc" ), FRAME_CALC },
-                       { wxT( "bm2cmp" ), FRAME_BM2CMP },
                        { wxT( "ds" ), FRAME_PL_EDITOR },
                        { wxT( "gerb" ), FRAME_GERBER },
                        { wxT( "" ), FRAME_T_COUNT } };
+    // clang-format on
 
     wxString frameName;
 
@@ -279,6 +283,9 @@ bool PGM_KICAD::OnPgmInit()
         m_api_server = std::make_unique<KICAD_API_SERVER>();
         m_api_common_handler = std::make_unique<API_HANDLER_COMMON>();
         m_api_server->RegisterHandler( m_api_common_handler.get() );
+        m_api_libraries_handler = std::make_unique<API_HANDLER_LIBRARIES>(
+                LIBRARY_TABLE_TYPE::DESIGN_BLOCK );
+        m_api_server->RegisterHandler( m_api_libraries_handler.get() );
     }
 
     if( appType == FRAME_MERGETOOL )
@@ -435,6 +442,9 @@ bool PGM_KICAD::OnPgmInit()
 
     if( mergetoolFrame )
     {
+        // Closing the host frame must not replace the merge result with an exit code of zero.
+        App().SetExitOnFrameDelete( false );
+
         // Stay hidden; the merge dialog is its own modal. The frame just needs
         // to be the wxApp top window so the modal has a parent and the wxApp
         // loop has something to drive. Defer the run via CallAfter so the
@@ -464,6 +474,10 @@ bool PGM_KICAD::OnPgmInit()
     {
         frame->Show( true );
         frame->Raise();
+
+#if defined( KICAD_NATIVE_MODEL_PREVIEW ) && defined( __WINDOWS__ )
+        frame->CallAfter( [frame] { MaybeShowModelPreviewSetupPrompt( frame ); } );
+#endif
     }
 
     if( m_api_server )
@@ -669,22 +683,28 @@ struct APP_KICAD : public wxApp
         wxLog::EnableLogging( false );
 
         program.OnPgmExit();
+        program.ExitIfTeardownUnsafe();
+
         return ret;
     }
 
 
     int OnRun() override
     {
+        int ret = -1;
+
         try
         {
-            return wxApp::OnRun();
+            ret = wxApp::OnRun();
         }
         catch(...)
         {
             Pgm().HandleException( std::current_exception() );
         }
 
-        return -1;
+        program.SetRunResult( ret );
+
+        return ret;
     }
 
 
@@ -741,8 +761,7 @@ struct APP_KICAD : public wxApp
             }
         }
 
-        aEvent.Skip();
-        return false;
+        return wxApp::ProcessEvent( aEvent );
     }
 
     /**

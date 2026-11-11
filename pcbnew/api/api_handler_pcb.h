@@ -24,8 +24,12 @@
 #include <api/api_handler_board.h>
 #include <api/pcb_context.h>
 #include <api/board/board_jobs.pb.h>
+#include <api/board/board_tasks.pb.h>
+#include <api/common/tasks.pb.h>
 #include <api/common/commands/cross_probe_commands.pb.h>
 #include <api/common/commands/project_commands.pb.h>
+#include <api/common/commands/variant_commands.pb.h>
+#include <api/common/commands/library_commands.pb.h>
 #include <properties/property_mgr.h>
 
 using namespace kiapi::board::jobs;
@@ -34,6 +38,15 @@ using namespace kiapi::board::jobs;
 class PCB_EDIT_FRAME;
 class PCB_TRACK;
 class PROPERTY_BASE;
+class ZONE;
+class JOB_EXPORT_PCB_FAB;
+class JOB_EXPORT_PCB_ODB;
+
+
+void ApplyFabExportContent( const kiapi::board::jobs::FabExportContent& aContent, JOB_EXPORT_PCB_FAB& aJob );
+
+void ApplyOdbJobRequest( const kiapi::board::jobs::RunBoardJobExportODB& aRequest,
+                         JOB_EXPORT_PCB_ODB& aJob );
 
 
 class API_HANDLER_PCB : public API_HANDLER_BOARD
@@ -49,6 +62,7 @@ private:
             const HANDLER_CONTEXT<commands::GetOpenDocuments>& aCtx );
 
     HANDLER_RESULT<Empty> handleSaveDocument( const HANDLER_CONTEXT<commands::SaveDocument>& aCtx );
+    HANDLER_RESULT<Empty> handleSaveDocumentAs( const HANDLER_CONTEXT<commands::SaveDocumentAs>& aCtx );
 
     HANDLER_RESULT<Empty> handleSaveCopyOfDocument(
             const HANDLER_CONTEXT<commands::SaveCopyOfDocument>& aCtx );
@@ -113,6 +127,20 @@ private:
     HANDLER_RESULT<ImportNetlistResponse> handleImportNetlist(
             const HANDLER_CONTEXT<ImportNetlist>& aCtx );
 
+    HANDLER_RESULT<ImportSpecctraSessionResponse> handleImportSpecctraSession(
+            const HANDLER_CONTEXT<ImportSpecctraSession>& aCtx );
+    HANDLER_RESULT<kiapi::common::tasks::StartTaskResponse> handleStartRefillZonesTask(
+            const HANDLER_CONTEXT<kiapi::board::tasks::StartRefillZonesTask>& aCtx );
+
+    HANDLER_RESULT<kiapi::common::tasks::StartTaskResponse> handleStartDrcTask(
+            const HANDLER_CONTEXT<kiapi::board::tasks::StartDrcTask>& aCtx );
+
+    HANDLER_RESULT<kiapi::board::tasks::DrcTaskResult> handleGetDrcTaskResult(
+            const HANDLER_CONTEXT<kiapi::board::tasks::GetDrcTaskResult>& aCtx );
+
+    class REFILL_ZONES_TASK;
+    class DRC_TASK;
+
     HANDLER_RESULT<BoardEditorAppearanceSettings> handleGetBoardEditorAppearanceSettings(
             const HANDLER_CONTEXT<GetBoardEditorAppearanceSettings>& aCtx );
 
@@ -130,6 +158,19 @@ private:
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExport3D(
             const HANDLER_CONTEXT<RunBoardJobExport3D>& aCtx );
 
+    HANDLER_RESULT<commands::VariantsResponse> handleGetVariants( const HANDLER_CONTEXT<commands::GetVariants>& aCtx );
+    HANDLER_RESULT<Empty> handleAddVariant( const HANDLER_CONTEXT<commands::AddVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleDeleteVariant( const HANDLER_CONTEXT<commands::DeleteVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleRenameVariant( const HANDLER_CONTEXT<commands::RenameVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleCopyVariant( const HANDLER_CONTEXT<commands::CopyVariant>& aCtx );
+    HANDLER_RESULT<Empty> handleSetVariantDescription( const HANDLER_CONTEXT<commands::SetVariantDescription>& aCtx );
+    HANDLER_RESULT<Empty> handleSetCurrentVariant( const HANDLER_CONTEXT<commands::SetCurrentVariant>& aCtx );
+    HANDLER_RESULT<commands::CurrentVariantResponse>
+    handleGetCurrentVariant( const HANDLER_CONTEXT<commands::GetCurrentVariant>& aCtx );
+
+    HANDLER_RESULT<kiapi::common::commands::PlaceFromLibraryResponse> handlePlaceFootprintFromLibrary(
+            const HANDLER_CONTEXT<kiapi::board::commands::PlaceFootprintFromLibrary>& aCtx );
+
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportRender(
             const HANDLER_CONTEXT<RunBoardJobExportRender>& aCtx );
 
@@ -145,6 +186,9 @@ private:
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportPs(
             const HANDLER_CONTEXT<RunBoardJobExportPs>& aCtx );
 
+    HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportPng(
+            const HANDLER_CONTEXT<RunBoardJobExportPng>& aCtx );
+
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportGerbers(
             const HANDLER_CONTEXT<RunBoardJobExportGerbers>& aCtx );
 
@@ -157,6 +201,9 @@ private:
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportGencad(
             const HANDLER_CONTEXT<RunBoardJobExportGencad>& aCtx );
 
+    HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportSpecctraDsn(
+            const HANDLER_CONTEXT<RunBoardJobExportSpecctraDsn>& aCtx );
+
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportIpc2581(
             const HANDLER_CONTEXT<RunBoardJobExportIpc2581>& aCtx );
 
@@ -165,6 +212,9 @@ private:
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportODB(
             const HANDLER_CONTEXT<RunBoardJobExportODB>& aCtx );
+
+    HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportIdf(
+            const HANDLER_CONTEXT<RunBoardJobExportIdf>& aCtx );
 
     HANDLER_RESULT<types::RunJobResponse> handleRunBoardJobExportStats(
             const HANDLER_CONTEXT<RunBoardJobExportStats>& aCtx );
@@ -186,11 +236,11 @@ protected:
 
     tl::expected<bool, ApiResponseStatus> validateDocumentInternal( const DocumentSpecifier& aDocument ) const override;
 
-    std::optional<TITLE_BLOCK*> getTitleBlock() override;
+    std::optional<TITLE_BLOCK*> getTitleBlock( const DocumentSpecifier& aDocument ) override;
 
-    std::optional<PAGE_INFO> getPageSettings() override;
+    std::optional<PAGE_INFO> getPageSettings( const DocumentSpecifier& aDocument ) override;
 
-    bool setPageSettings( const PAGE_INFO& aPageInfo ) override;
+    bool setPageSettings( const DocumentSpecifier& aDocument, const PAGE_INFO& aPageInfo ) override;
 
     wxString getDrawingSheetFileName() override;
 
@@ -198,10 +248,18 @@ protected:
 
     void onModified() override;
 
+    void onNetSettingsChanged() override;
+
+    HANDLER_RESULT<commands::GetDocumentModifiedStateResponse>
+    handleGetDocumentModifiedState( const HANDLER_CONTEXT<commands::GetDocumentModifiedState>& aCtx ) override;
+
 private:
     PCB_CONTEXT* pcbContext() const { return static_cast<PCB_CONTEXT*>( context() ); }
 
     PCB_EDIT_FRAME* frame() const;
+
+    HANDLER_RESULT<std::vector<ZONE*>>
+    resolveZonesToFill( const google::protobuf::RepeatedPtrField<kiapi::common::types::KIID>& aZoneIds ) const;
 };
 
 #endif //KICAD_API_HANDLER_PCB_H

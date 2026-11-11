@@ -489,21 +489,14 @@ bool TOOL_MANAGER::runTool( TOOL_BASE* aTool )
     if( aTool->GetType() == INTERACTIVE )
         static_cast<TOOL_INTERACTIVE*>( aTool )->resetTransitions();
 
+    auto it = std::find( m_activeTools.begin(), m_activeTools.end(), id );
+
     // If the tool is already active, bring it to the top of the active tools stack
-    if( isActive( aTool ) && m_activeTools.size() > 1 )
+    if( it != m_activeTools.end() )
     {
-        auto it = std::find( m_activeTools.begin(), m_activeTools.end(), id );
-
-        if( it != m_activeTools.end() )
-        {
-            if( it != m_activeTools.begin() )
-            {
-                m_activeTools.erase( it );
-                m_activeTools.push_front( id );
-            }
-
-            return false;
-        }
+        // Splice keeps the node, so dispatchInternal() can still iterate from it
+        m_activeTools.splice( m_activeTools.begin(), m_activeTools, it );
+        return false;
     }
 
     setActiveState( m_toolIdIndex[id] );
@@ -569,36 +562,38 @@ void TOOL_MANAGER::ShutdownTool( TOOL_BASE* aTool )
 {
     wxASSERT( aTool != nullptr );
 
-    TOOL_ID id = aTool->GetId();
-
-    if( isActive( aTool ) )
+    while( isActive( aTool ) )
     {
-        TOOL_MANAGER::ID_LIST::iterator it = std::find( m_activeTools.begin(),
-                                                        m_activeTools.end(), id );
+        TOOL_STATE* st = m_toolState[aTool];
 
-        TOOL_STATE* st = m_toolIdIndex[*it];
+        // Pop() restores saved contexts without the flag
+        st->shutdown = true;
 
-        // the tool state handler is waiting for events (i.e. called Wait() method)
-        if( st && st->pendingWait )
+        if( st->cofunc && st->cofunc->Running() )
         {
+            // An executing handler is up the native stack and unwinds at its next Wait()
+            if( !st->pendingWait )
+                break;
+
             // Wake up the tool and tell it to shutdown
-            st->shutdown = true;
             st->pendingWait = false;
             st->waitEvents.clear();
 
-            if( st->cofunc )
+            wxLogTrace( kicadTraceToolStack, wxS( "TOOL_MANAGER::ShutdownTool - Shutting down tool %s" ),
+                        st->theTool->GetName() );
+
+            setActiveState( st );
+
+            if( st->cofunc->Resume() )
             {
-                wxLogTrace( kicadTraceToolStack,
-                            wxS( "TOOL_MANAGER::ShutdownTool - Shutting down tool %s" ),
-                            st->theTool->GetName() );
-
-                setActiveState( st );
-                bool end = !st->cofunc->Resume();
-
-                if( end )
-                    finishTool( st );
+                wxFAIL_MSG( wxS( "Tool suspended again during shutdown" ) );
+                break;
             }
         }
+
+        // finishTool() restores the previous context when the same tool was re-entered
+        // Keep unwinding until every saved context has seen the shutdown request
+        finishTool( st );
     }
 }
 
@@ -656,18 +651,17 @@ void TOOL_MANAGER::ResetTools( TOOL_BASE::RESET_REASON aReason )
 
 void TOOL_MANAGER::InitTools()
 {
-    for( auto it = m_toolOrder.begin(); it != m_toolOrder.end(); /* iter inside */ )
+    for( auto it = m_toolOrder.begin(); it != m_toolOrder.end(); ++it )
     {
         TOOL_BASE* tool = *it;
+
         wxASSERT( m_toolState.count( tool ) );
         TOOL_STATE* state = m_toolState[tool];
         setActiveState( state );
-        ++it;   // keep the iterator valid if the element is going to be erased
 
         if( !tool->Init() )
         {
-            wxLogTrace( kicadTraceToolStack,
-                        wxS( "TOOL_MANAGER initialization of tool '%s' failed" ),
+            wxLogTrace( kicadTraceToolStack, wxS( "TOOL_MANAGER initialization of tool '%s' failed" ),
                         tool->GetName() );
 
             // Unregister the tool
@@ -679,8 +673,16 @@ void TOOL_MANAGER::InitTools()
 
             delete state;
             delete tool;
+            *it = nullptr;
         }
     }
+
+    // Clear out any tools that failed to initialize
+    std::erase_if( m_toolOrder,
+                   []( const TOOL_BASE* aTool )
+                   {
+                       return aTool == nullptr;
+                   } );
 
     m_actionMgr->UpdateHotKeys( true );
 
@@ -732,6 +734,10 @@ TOOL_EVENT* TOOL_MANAGER::ScheduleWait( TOOL_BASE* aTool, const TOOL_EVENT_LIST&
 {
     TOOL_STATE* st = m_toolState[aTool];
 
+    // A handler unwinding from shutdown must not suspend again, or nested loops outlive the resume
+    if( st->shutdown )
+        return nullptr;
+
     wxCHECK( !st->pendingWait, nullptr ); // everything collapses on two KiYield() in a row
 
     // indicate to the manager that we are going to sleep and we shall be
@@ -755,6 +761,8 @@ TOOL_EVENT* TOOL_MANAGER::ScheduleWait( TOOL_BASE* aTool, const TOOL_EVENT_LIST&
 bool TOOL_MANAGER::dispatchInternal( TOOL_EVENT& aEvent )
 {
     bool handled = false;
+
+    std::vector<COROUTINE<int, const TOOL_EVENT&>*> reactivated;
 
     wxLogTrace( kicadTraceToolStack, wxS( "TOOL_MANAGER::dispatchInternal - received event: %s" ),
                 aEvent.Format() );
@@ -791,9 +799,12 @@ bool TOOL_MANAGER::dispatchInternal( TOOL_EVENT& aEvent )
             st->pendingWait = false;
             st->waitEvents.clear();
 
-            wxLogTrace( kicadTraceToolStack,
-                        wxS( "TOOL_MANAGER::dispatchInternal - Waking tool %s for event: %s" ),
+            wxLogTrace( kicadTraceToolStack, wxS( "TOOL_MANAGER::dispatchInternal - Waking tool %s for event: %s" ),
                         st->theTool->GetName(), aEvent.Format() );
+
+            bool ownActivation = aEvent.IsActivate() && st->initialEvent.IsActivate()
+                                 && st->initialEvent.Matches( aEvent );
+            auto resumed = st->cofunc;
 
             setActiveState( st );
             bool end = !st->cofunc->Resume();
@@ -803,13 +814,16 @@ bool TOOL_MANAGER::dispatchInternal( TOOL_EVENT& aEvent )
                 it = finishTool( st );
                 increment = false;
             }
+            else if( ownActivation )
+            {
+                reactivated.push_back( resumed );
+            }
 
             // If the tool did not request the event be passed to other tools, we're done
             if( !st->wakeupEvent.PassEvent() )
             {
                 wxLogTrace( kicadTraceToolStack,
-                            wxS( "TOOL_MANAGER::dispatchInternal - tool %s stopped passing "
-                                 "event: %s" ),
+                            wxS( "TOOL_MANAGER::dispatchInternal - tool %s stopped passing event: %s" ),
                             st->theTool->GetName(), aEvent.Format() );
 
                 return true;
@@ -833,6 +847,14 @@ bool TOOL_MANAGER::dispatchInternal( TOOL_EVENT& aEvent )
             {
                 if( tr.first.Matches( aEvent ) )
                 {
+                    // The live handler owns its reactivation, so a nested copy would only duplicate it
+                    if( st->cofunc && alg::contains( reactivated, st->cofunc ) )
+                    {
+                        handled = true;
+                        finished = true;
+                        break;
+                    }
+
                     auto func_copy = tr.second;
 
                     if( !aEvent.FirstResponder() )
@@ -850,8 +872,7 @@ bool TOOL_MANAGER::dispatchInternal( TOOL_EVENT& aEvent )
                     st->cofunc = new COROUTINE<int, const TOOL_EVENT&>( std::move( func_copy ) );
 
                     wxLogTrace( kicadTraceToolStack,
-                                wxS( "TOOL_MANAGER::dispatchInternal - Running tool %s for "
-                                     "event: %s" ),
+                                wxS( "TOOL_MANAGER::dispatchInternal - Running tool %s for event: %s" ),
                                 st->theTool->GetName(), aEvent.Format() );
 
                     // got match? Run the handler.

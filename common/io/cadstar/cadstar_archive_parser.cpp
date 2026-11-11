@@ -91,7 +91,9 @@ void CADSTAR_ARCHIVE_PARSER::TIMESTAMP::Parse( XNODE* aNode, PARSER_CONTEXT* aCo
             || !GetXmlAttributeIDString( aNode, 3 ).ToLong( &Hour )
             || !GetXmlAttributeIDString( aNode, 4 ).ToLong( &Minute )
             || !GetXmlAttributeIDString( aNode, 5 ).ToLong( &Second ) )
+    {
         THROW_PARSING_IO_ERROR( wxT( "TIMESTAMP" ), wxString::Format( "HEADER" ) );
+    }
 }
 
 
@@ -125,9 +127,10 @@ void CADSTAR_ARCHIVE_PARSER::HEADER::Parse( XNODE* aNode, PARSER_CONTEXT* aConte
         {
             XNODE* subNode = cNode->GetChildren();
 
-            if( ( subNode->GetName() == wxT( "METRIC" ) )
-                    && ( GetXmlAttributeIDString( subNode, 0 ) == wxT( "HUNDREDTH" ) )
-                    && ( GetXmlAttributeIDString( subNode, 1 ) == wxT( "MICRON" ) ) )
+            if( subNode
+                    && subNode->GetName() == wxT( "METRIC" )
+                    && GetXmlAttributeIDString( subNode, 0 ) == wxT( "HUNDREDTH" )
+                    && GetXmlAttributeIDString( subNode, 1 ) == wxT( "MICRON" ) )
             {
                 Resolution = RESOLUTION::HUNDREDTH_MICRON;
             }
@@ -1801,7 +1804,7 @@ void CADSTAR_ARCHIVE_PARSER::PART::DEFINITION::GATE::Parse( XNODE* aNode, PARSER
     ID        = GetXmlAttributeIDString( aNode, 0 );
     Name      = GetXmlAttributeIDString( aNode, 1 );
     Alternate = GetXmlAttributeIDString( aNode, 2 );
-    PinCount  = GetXmlAttributeIDLong( aNode, 3 );
+    PinCount  = GetXmlAttributeIDLong( aNode, 3, true /* is required */ );
 
     CheckNoChildNodes( aNode );
 }
@@ -2519,7 +2522,7 @@ XNODE* CADSTAR_ARCHIVE_PARSER::LoadArchiveFile( const wxString& aFileName,
             {
                 delete rootNode;
 
-                THROW_IO_ERROR( _( "File import canceled by user." ) );
+                THROW_IO_CANCELLED();
             }
 
             aProgressReporter->SetCurrentProgress( currentProgress() );
@@ -2636,8 +2639,7 @@ wxString CADSTAR_ARCHIVE_PARSER::GetXmlAttributeIDString( XNODE* aNode, unsigned
 }
 
 
-long CADSTAR_ARCHIVE_PARSER::GetXmlAttributeIDLong( XNODE* aNode, unsigned int aID,
-                                                    bool aIsRequired )
+long CADSTAR_ARCHIVE_PARSER::GetXmlAttributeIDLong( XNODE* aNode, unsigned int aID, bool aIsRequired )
 {
     long retVal;
     bool success = GetXmlAttributeIDString( aNode, aID, aIsRequired ).ToLong( &retVal );
@@ -2867,7 +2869,6 @@ void CADSTAR_ARCHIVE_PARSER::checkPoint()
         m_progressReporter->AdvanceProgress();
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "File import canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 }
-

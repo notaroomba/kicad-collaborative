@@ -21,6 +21,7 @@
 
 #include <footprint.h>
 #include <pad.h>
+#include <pcb_3d_body.h>
 #include <board_item.h>
 #include <layer_ids.h>
 #include <base_units.h>
@@ -262,7 +263,7 @@ bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline,
 {
     aOutline.RemoveAllContours();
 
-    const EXTRUDED_3D_BODY* body = aFootprint->GetExtrudedBody();
+    const EXTRUDED_3D_BODY* body = aFootprint->GetBody() ? aFootprint->GetBody()->GetExtruded() : nullptr;
     PCB_LAYER_ID            extLayer =
             ( aLayerOverride != UNDEFINED_LAYER ) ? aLayerOverride : ( body ? body->m_layer : UNDEFINED_LAYER );
 
@@ -346,23 +347,29 @@ bool GetExtrusionOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aOutline,
     return false;
 }
 
-bool GetExtrusionPinOutline( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aPinPoly )
+bool GetExtrusionPinOutlines( const FOOTPRINT* aFootprint, SHAPE_POLY_SET& aPinPoly, SHAPE_POLY_SET& aPegPoly )
 {
     aPinPoly.RemoveAllContours();
+    aPegPoly.RemoveAllContours();
 
     for( PAD* pad : aFootprint->Pads() )
     {
-        if( pad->HasHole() )
-        {
-            int shrink = -pad->GetDrillSize().x / 20; // ~90% of hole diameter
+        if( !pad->HasHole() )
+            continue;
+
+        int shrink = -pad->GetDrillSize().x / 20; // ~90% of hole diameter
+
+        if( pad->GetAttribute() == PAD_ATTRIB::NPTH )
+            pad->TransformHoleToPolygon( aPegPoly, shrink, ARC_HIGH_DEF, ERROR_INSIDE );
+        else
             pad->TransformHoleToPolygon( aPinPoly, shrink, ARC_HIGH_DEF, ERROR_INSIDE );
-        }
     }
 
-    if( aPinPoly.OutlineCount() == 0 )
+    if( aPinPoly.OutlineCount() == 0 && aPegPoly.OutlineCount() == 0 )
         return false;
 
     aPinPoly.Simplify();
+    aPegPoly.Simplify();
     return true;
 }
 
@@ -380,7 +387,6 @@ EXTRUSION_MATERIAL_PROPS GetMaterialProps( EXTRUSION_MATERIAL aMaterial, const S
         return { aDiffuse * 0.1f, aDiffuse * 0.75f + SFVEC3F( 0.25f, 0.25f, 0.25f ), 0.4f * 128.0f };
     }
 }
-
 
 void ApplyExtrusionTransform( SHAPE_POLY_SET& aOutline, const EXTRUDED_3D_BODY* aBody, const VECTOR2I& aFpPos )
 {

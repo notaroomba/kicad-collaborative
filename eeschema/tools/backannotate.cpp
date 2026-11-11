@@ -31,6 +31,8 @@
 #include <sch_label.h>
 #include <lib_symbol.h>
 #include <schematic.h>
+#include <advanced_config.h>
+#include <connectivity/conn_facade.h>
 #include <sch_commit.h>
 #include <string_utils.h>
 #include <kiface_base.h>
@@ -68,6 +70,59 @@ static std::vector<wxString> netsInUnitOrder( const std::vector<wxString>&      
     }
 
     return nets;
+}
+
+
+// The board reports pad numbers, the unit planner compares logical pin numbers.
+bool CollectBackannotatePcbNets( const SCH_SYMBOL& aSymbol, const SCH_SHEET_PATH& aSheetPath,
+                                 const wxString& aVariantName, const std::map<wxString, wxString>& aPcbNetsByPad,
+                                 std::map<wxString, wxString>& aPcbNetsByLogicalPin )
+{
+    for( const SCH_PIN* pin : aSymbol.GetPins( &aSheetPath ) )
+    {
+        // Pins on symbols can have more than one pin stacked
+        bool                        logicalPinsValid = false;
+        const std::vector<wxString> logicalPins = pin->GetStackedPinNumbers( &logicalPinsValid );
+
+        if( !logicalPinsValid || logicalPins.empty() )
+            return false;
+
+        // Map those multiple stacked pins to whatever we have them mapped to on the PCB side
+        bool                        padsValid = false;
+        const std::vector<wxString> pads =
+                ExpandStackedPinNotation( pin->GetEffectivePadNumber( aSheetPath, aVariantName ), &padsValid );
+
+        if( !padsValid || pads.empty() )
+            return false;
+
+        // Get all our nets now that we have all our pads
+        std::set<wxString> pcbNets;
+
+        for( const wxString& pad : pads )
+        {
+            auto it = aPcbNetsByPad.find( pad );
+            pcbNets.insert( it != aPcbNetsByPad.end() ? it->second : wxString() );
+        }
+
+        // A stacked pin represents one schematic net. More than one pad net corresponding
+        // to a single stacked pin cannot be resolved by a unit swap
+        if( pcbNets.size() != 1 )
+            return false;
+
+        const wxString& pcbNet = *pcbNets.begin();
+
+        for( const wxString& pinNum : logicalPins )
+        {
+            auto [it, inserted] = aPcbNetsByLogicalPin.emplace( pinNum, pcbNet );
+
+            // We might already have some mappings from previous calls to this function,
+            // same mappings are fine, but new different mappings are not
+            if( !inserted && it->second != pcbNet )
+                return false;
+        }
+    }
+
+    return true;
 }
 
 
@@ -217,7 +272,7 @@ bool BACK_ANNOTATE::BackAnnotateSymbols( const std::string& aNetlist )
 
     SCH_SHEET_LIST sheets = m_frame->Schematic().Hierarchy();
     sheets.GetSymbols( m_refs, SYMBOL_FILTER_NON_POWER );
-    sheets.GetMultiUnitSymbols( m_multiUnitsRefs, SYMBOL_FILTER_ALL );
+    sheets.GetMultiUnitSymbols( m_multiUnitsRefs, SYMBOL_FILTER_NON_POWER );
 
     getChangeList();
     checkForUnusedSymbols();
@@ -487,10 +542,94 @@ void BACK_ANNOTATE::checkForUnusedSymbols()
 }
 
 
+std::vector<BACKANNOTATE_REF>
+ResolveBackannotatedRefs( const std::vector<std::pair<const SCH_REFERENCE*, wxString>>& aRequests,
+                          bool aShareBases )
+{
+    std::vector<BACKANNOTATE_REF>         result( aRequests.size() );
+    std::map<const SCH_SYMBOL*, wxString> firstBase;
+    std::set<const SCH_SYMBOL*>           refusedSymbols;
+    std::set<wxString>                    refusedBoardRefs;
+
+    auto shares =
+            [&]( const SCH_SYMBOL* aSymbol )
+            {
+                return aShareBases
+                       && !( aSymbol->Schematic() && aSymbol->Schematic()->CopiesSelectDifferentUnits( aSymbol ) );
+            };
+
+    for( size_t ii = 0; ii < aRequests.size(); ++ii )
+    {
+        const SCH_REFERENCE& ref = *aRequests[ii].first;
+        const wxString&      boardRef = aRequests[ii].second;
+        const SCH_SYMBOL*    symbol = ref.GetSymbol();
+        const SCHEMATIC*     schematic = symbol->Schematic();
+
+        // A footprint whose units span sheets carries the package's suffix, not each unit's own
+        const wxString suffix = schematic ? schematic->GetPackageRefSuffix( symbol, ref.GetSheetPath() ) : wxString();
+
+        if( !boardRef.EndsWith( suffix ) || boardRef.length() <= suffix.length() )
+        {
+            result[ii].m_error = wxString::Format( _( "Cannot change %s to '%s', which lacks the sheet "
+                                                      "suffix '%s'." ),
+                                                   DescribeRef( ref.GetComposedRef() ), boardRef, suffix );
+            continue;
+        }
+
+        result[ii].m_base = boardRef.Left( boardRef.length() - suffix.length() );
+
+        if( shares( symbol ) )
+        {
+            auto [it, inserted] = firstBase.emplace( ref.GetSymbol(), result[ii].m_base );
+
+            if( !inserted && it->second != result[ii].m_base )
+                refusedSymbols.insert( ref.GetSymbol() );
+        }
+    }
+
+    // A rename is all or nothing for a footprint's units and, with shared bases, for a symbol's sheets
+    for( bool changed = true; changed; )
+    {
+        changed = false;
+
+        for( size_t ii = 0; ii < aRequests.size(); ++ii )
+        {
+            const SCH_SYMBOL* symbol = aRequests[ii].first->GetSymbol();
+            const wxString&   boardRef = aRequests[ii].second;
+
+            if( result[ii].m_error.IsEmpty() && !refusedSymbols.contains( symbol )
+                    && !refusedBoardRefs.contains( boardRef ) )
+            {
+                continue;
+            }
+
+            changed |= refusedBoardRefs.insert( boardRef ).second;
+
+            if( shares( symbol ) )
+                changed |= refusedSymbols.insert( symbol ).second;
+
+            if( result[ii].m_error.IsEmpty() )
+            {
+                result[ii].m_error = wxString::Format( _( "Cannot change %s to '%s', because the change "
+                                                          "cannot reach all of its units and sheets." ),
+                                                       DescribeRef( aRequests[ii].first->GetComposedRef() ),
+                                                       boardRef );
+                result[ii].m_base.clear();
+            }
+        }
+    }
+
+    return result;
+}
+
+
 void BACK_ANNOTATE::applyChangelist()
 {
     SCH_COMMIT commit( m_frame );
     wxString   msg;
+
+    // Staged edits hide published nets on their screens; read every net from the pre-edit publication
+    std::optional<SCH_CONNECTIVITY::PUBLICATION_HOLD> hold( std::in_place, m_frame->Schematic().Connectivity() );
 
     std::set<CHANGELIST_ITEM*> unitSwapItems;
 
@@ -499,6 +638,7 @@ void BACK_ANNOTATE::applyChangelist()
     // because the swaps will modify the changelist
     if( m_processNetNames && m_preferUnitSwaps )
     {
+        const wxString variantName = m_frame->Schematic().GetCurrentVariant();
         REPORTER& debugReporter = NULL_REPORTER::GetInstance(); // Change to m_reporter for debugging
 
         // Group changelist items by shared PCB footprint data pointer
@@ -545,7 +685,9 @@ void BACK_ANNOTATE::applyChangelist()
             };
 
             // All symbol units for this footprint
-            std::vector<SYM_UNIT> symbolUnits;
+            std::vector<SYM_UNIT>        symbolUnits;
+            std::map<wxString, wxString> pcbNetsByLogicalPin;
+            bool                         mappingValid = true;
 
             std::map<LIB_SYMBOL*, std::vector<LIB_SYMBOL::UNIT_PIN_INFO>> unitPinsByLibSymbol;
 
@@ -607,24 +749,21 @@ void BACK_ANNOTATE::applyChangelist()
 
                 const SCH_SHEET_PATH& sheetPath = ref.GetSheetPath();
 
-                for( SCH_PIN* pin : symbol->GetPins( &ref.GetSheetPath() ) )
+                if( !CollectBackannotatePcbNets( *symbol, sheetPath, variantName, fp->m_pinMap, pcbNetsByLogicalPin ) )
                 {
-                    const wxString& pinNum = pin->GetNumber();
+                    mappingValid = false;
+                    break;
+                }
 
-                    // PCB nets from footprint pin map
-                    auto it = fp->m_pinMap.find( pinNum );
-                    symbolUnit.pcbNetsByPin[pinNum] = ( it != fp->m_pinMap.end() ) ? it->second : wxString();
+                for( SCH_PIN* pin : symbol->GetPins( &sheetPath ) )
+                {
+                    const wxString schNet = pin->GetConnectionName( &sheetPath, false, true ).value_or( wxString() );
 
-                    // Schematic nets from connections
-                    if( SCH_PIN* p = symbol->GetPin( pinNum ) )
+                    for( const wxString& pinNum : pin->GetStackedPinNumbers() )
                     {
-                        if( SCH_CONNECTION* connection = p->Connection( &sheetPath ) )
-                            symbolUnit.schNetsByPin[pinNum] = connection->Name( true );
-                        else
-                            symbolUnit.schNetsByPin[pinNum] = wxString();
+                        symbolUnit.pcbNetsByPin[pinNum] = pcbNetsByLogicalPin.at( pinNum );
+                        symbolUnit.schNetsByPin[pinNum] = schNet;
                     }
-                    else
-                        symbolUnit.schNetsByPin[pinNum] = wxString();
                 }
 
                 symbolUnit.pcbNetsInUnitOrder = netsInUnitOrder( symbolUnit.unitPinNumbers, symbolUnit.pcbNetsByPin );
@@ -675,7 +814,7 @@ void BACK_ANNOTATE::applyChangelist()
                 debugReporter.ReportHead( msg, RPT_SEVERITY_INFO );
             }
 
-            if( symbolUnits.size() < 2 )
+            if( !mappingValid || symbolUnits.size() < 2 )
                 continue;
 
             std::vector<BACKANNOTATE_UNIT_SWAP_CANDIDATE> candidates;
@@ -690,7 +829,7 @@ void BACK_ANNOTATE::applyChangelist()
                 candidates.push_back( candidate );
             }
 
-            BACKANNOTATE_UNIT_SWAP_PLAN plan = PlanBackannotateUnitSwaps( candidates, fp->m_pinMap );
+            BACKANNOTATE_UNIT_SWAP_PLAN plan = PlanBackannotateUnitSwaps( candidates, pcbNetsByLogicalPin );
 
             if( !plan.m_mappingOk )
             {
@@ -791,9 +930,18 @@ void BACK_ANNOTATE::applyChangelist()
         }
     }
 
+    std::vector<std::pair<const SCH_REFERENCE*, wxString>> refRequests;
+    const bool shareBases = m_frame->Schematic().Settings().m_AnnotateReusedSheetSuffixes;
+
+    for( const CHANGELIST_ITEM& item : m_changelist )
+        refRequests.emplace_back( &item.first, item.second->m_ref );
+
+    std::vector<BACKANNOTATE_REF> newRefs = ResolveBackannotatedRefs( refRequests, shareBases );
+
     // Apply changes from change list
-    for( CHANGELIST_ITEM& item : m_changelist )
+    for( size_t itemIdx = 0; itemIdx < m_changelist.size(); ++itemIdx )
     {
+        CHANGELIST_ITEM& item = m_changelist[itemIdx];
         SCH_REFERENCE& ref = item.first;
         PCB_FP_DATA&   fpData = *item.second;
         SCH_SYMBOL*    symbol = ref.GetSymbol();
@@ -816,18 +964,29 @@ void BACK_ANNOTATE::applyChangelist()
         if( !m_dryRun )
             commit.Modify( symbol, screen, RECURSE_MODE::NO_RECURSE );
 
-        if( m_processReferences && ref.GetRef() != fpData.m_ref && !skip
+        if( m_processReferences && ref.GetComposedRef() != fpData.m_ref && !skip
                 && !symbol->GetField( FIELD_T::REFERENCE )->HasTextVars() )
         {
-            ++m_changesCount;
-            msg.Printf( _( "Change %s reference designator to '%s'." ),
-                        DescribeRef( ref.GetRef() ),
-                        fpData.m_ref );
+            const BACKANNOTATE_REF& newRef = newRefs[itemIdx];
 
-            if( !m_dryRun )
-                symbol->SetRef( &ref.GetSheetPath(), fpData.m_ref );
+            if( !newRef.m_error.IsEmpty() )
+            {
+                m_reporter.ReportHead( newRef.m_error, RPT_SEVERITY_ERROR );
+            }
+            else
+            {
+                ++m_changesCount;
+                msg.Printf( _( "Change %s reference designator to '%s'." ),
+                            DescribeRef( ref.GetComposedRef() ),
+                            fpData.m_ref );
 
-            m_reporter.ReportHead( msg, RPT_SEVERITY_ACTION );
+                if( !m_dryRun && shareBases )
+                    symbol->SetUserRef( ref.GetSheetPath(), newRef.m_base );
+                else if( !m_dryRun )
+                    symbol->SetRef( &ref.GetSheetPath(), newRef.m_base );
+
+                m_reporter.ReportHead( msg, RPT_SEVERITY_ACTION );
+            }
         }
 
         if( m_processFootprints && oldFootprint != fpData.m_footprint && !skip
@@ -942,13 +1101,10 @@ void BACK_ANNOTATE::applyChangelist()
                     continue;
                 }
 
-                SCH_CONNECTION* connection = pin->Connection( &ref.GetSheetPath() );
+                const std::optional<wxString> netName = pin->GetConnectionName( &ref.GetSheetPath(), false, true );
 
-                if( connection && connection->Name( true ) != shortNetName )
-                {
-                    processNetNameChange( &commit, ref.GetRef(), pin, connection,
-                                          connection->Name( true ), shortNetName );
-                }
+                if( netName && *netName != shortNetName )
+                    processNetNameChange( &commit, ref.GetRef(), pin, ref.GetSheetPath(), *netName, shortNetName );
             }
         }
 
@@ -974,7 +1130,7 @@ void BACK_ANNOTATE::applyChangelist()
                 // resolved value when the PCB is updated from the schematic.
                 if( symField
                     && !symField->HasTextVars()
-                    && symField->GetShownText( &ref.GetSheetPath(), false ) != fpFieldValue )
+                    && symField->GetShownText( &ref.GetSheetPath(), INTERNAL ) != fpFieldValue )
                 {
                     m_changesCount++;
                     msg.Printf( _( "Change %s field '%s' value to '%s'." ),
@@ -1046,6 +1202,8 @@ void BACK_ANNOTATE::applyChangelist()
 
         // TODO: back-annotate netclass changes?
     }
+
+    hold.reset();
 
     if( !m_dryRun )
     {
@@ -1128,11 +1286,24 @@ static SPIN_STYLE orientLabel( SCH_PIN* aPin )
 
 void addConnections( SCH_ITEM* aItem, const SCH_SHEET_PATH& aSheetPath, std::set<SCH_ITEM*>& connectedItems )
 {
-    if( connectedItems.insert( aItem ).second )
+    if( !connectedItems.insert( aItem ).second )
+        return;
+
+    std::vector<SCH_ITEM*> neighbors;
+    SCHEMATIC*             schematic = aItem->Schematic();
+
+    if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine && schematic )
     {
-        for( SCH_ITEM* connectedItem : aItem->ConnectedItems( aSheetPath ) )
-            addConnections( connectedItem, aSheetPath, connectedItems );
+        if( const auto connection = schematic->Connectivity().Connection( aItem->m_Uuid, aSheetPath.PathRef() ) )
+            neighbors = connection->ConnectedItems();
     }
+    else
+    {
+        neighbors = aItem->ConnectedItems( aSheetPath );
+    }
+
+    for( SCH_ITEM* connectedItem : neighbors )
+        addConnections( connectedItem, aSheetPath, connectedItems );
 }
 
 
@@ -1183,8 +1354,8 @@ std::set<wxString> BACK_ANNOTATE::applyPinSwaps( SCH_SYMBOL* aSymbol, const SCH_
         if( !pin || pin->IsPower() || !pin->IsConnectable() )
             continue;
 
-        SCH_CONNECTION* connection = pin->Connection( &aReference.GetSheetPath() );
-        wxString        currentNet = connection ? connection->Name( true ) : wxString();
+        wxString currentNet =
+                pin->GetConnectionName( &aReference.GetSheetPath(), false, true ).value_or( wxString() );
 
         if( desiredNet.IsEmpty() || currentNet.IsEmpty() )
             continue;
@@ -1399,7 +1570,7 @@ std::set<wxString> BACK_ANNOTATE::applyPinSwaps( SCH_SYMBOL* aSymbol, const SCH_
 
 
 void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& aRef, SCH_PIN* aPin,
-                                          const SCH_CONNECTION* aConnection,
+                                          const SCH_SHEET_PATH& aSheet,
                                           const wxString& aOldName, const wxString& aNewName )
 {
     wxString msg;
@@ -1412,7 +1583,7 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
     SCH_ITEM*                     driver = nullptr;
     CONNECTION_SUBGRAPH::PRIORITY driverPriority = CONNECTION_SUBGRAPH::PRIORITY::NONE;
 
-    addConnections( aPin, aConnection->Sheet(), connectedItems );
+    addConnections( aPin, aSheet, connectedItems );
 
     for( SCH_ITEM* item : connectedItems )
     {
@@ -1441,7 +1612,7 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
 
         if( !m_dryRun )
         {
-            aCommit->Modify( driver, aConnection->Sheet().LastScreen() );
+            aCommit->Modify( driver, aSheet.LastScreen() );
             static_cast<SCH_LABEL_BASE*>( driver )->SetText( aNewName );
         }
 
@@ -1463,13 +1634,38 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
         // a label sits in the middle of an unsplit wire.  Fall back to the connection graph's
         // resolved driver which handles this case through subgraph merging.
         {
-            CONNECTION_GRAPH*    connGraph = m_frame->Schematic().ConnectionGraph();
-            CONNECTION_SUBGRAPH* sg = connGraph ? connGraph->GetSubgraphForItem( aPin ) : nullptr;
+            SCH_ITEM*                     resolvedDriver = nullptr;
+            SCH_SHEET_PATH                driverSheet;
+            CONNECTION_SUBGRAPH::PRIORITY resolvedPriority = CONNECTION_SUBGRAPH::PRIORITY::NONE;
+            SCHEMATIC&                    schematic = m_frame->Schematic();
 
-            if( sg && sg->GetDriver() && sg->GetDriverPriority() >= CONNECTION_SUBGRAPH::PRIORITY::LOCAL_LABEL )
+            if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine )
             {
-                SCH_ITEM* resolvedDriver = const_cast<SCH_ITEM*>( sg->GetDriver() );
+                const auto net = schematic.Connectivity().GetSubgraphForItem( aPin->m_Uuid, aSheet.PathRef() );
+                const auto path = net ? schematic.Hierarchy().GetSheetPathByKIIDPath( net->Sheet() )
+                                      : std::optional<SCH_SHEET_PATH>();
 
+                if( path && net->Driver() )
+                {
+                    resolvedDriver = net->Driver();
+                    driverSheet = *path;
+                    resolvedPriority = CONNECTION_SUBGRAPH::GetDriverPriority( resolvedDriver );
+                }
+            }
+            else if( CONNECTION_GRAPH* connGraph = schematic.ConnectionGraph() )
+            {
+                CONNECTION_SUBGRAPH* sg = connGraph->GetSubgraphForItem( aPin );
+
+                if( sg && sg->GetDriver() )
+                {
+                    resolvedDriver = const_cast<SCH_ITEM*>( sg->GetDriver() );
+                    driverSheet = sg->GetSheet();
+                    resolvedPriority = sg->GetDriverPriority();
+                }
+            }
+
+            if( resolvedDriver && resolvedPriority >= CONNECTION_SUBGRAPH::PRIORITY::LOCAL_LABEL )
+            {
                 ++m_changesCount;
                 msg.Printf( _( "Change %s pin %s net label from '%s' to '%s'." ), DescribeRef( aRef ),
                             EscapeHTML( aPin->GetShownNumber() ), EscapeHTML( aOldName ), EscapeHTML( aNewName ) );
@@ -1481,12 +1677,12 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
                         SCH_PIN*    powerPin = static_cast<SCH_PIN*>( resolvedDriver );
                         SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( powerPin->GetParentSymbol() );
 
-                        aCommit->Modify( symbol, sg->GetSheet().LastScreen() );
+                        aCommit->Modify( symbol, driverSheet.LastScreen() );
                         symbol->GetField( FIELD_T::VALUE )->SetText( aNewName );
                     }
                     else
                     {
-                        aCommit->Modify( resolvedDriver, sg->GetSheet().LastScreen() );
+                        aCommit->Modify( resolvedDriver, driverSheet.LastScreen() );
                         static_cast<SCH_LABEL_BASE*>( resolvedDriver )->SetText( aNewName );
                     }
                 }
@@ -1511,7 +1707,7 @@ void BACK_ANNOTATE::processNetNameChange( SCH_COMMIT* aCommit, const wxString& a
             label->SetSpinStyle( orientLabel( static_cast<SCH_PIN*>( driver ) ) );
             label->SetFlags( IS_NEW );
 
-            SCH_SCREEN* screen = aConnection->Sheet().LastScreen();
+            SCH_SCREEN* screen = aSheet.LastScreen();
             aCommit->Add( label, screen );
         }
 

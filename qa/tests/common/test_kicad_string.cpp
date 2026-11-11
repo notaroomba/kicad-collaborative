@@ -103,11 +103,10 @@ BOOST_AUTO_TEST_CASE( NaturalNumberCompare )
     for( const auto& c : cases )
     {
         BOOST_CHECK_MESSAGE( StrNumCmp( c.first.first, c.first.second ) == c.second.first,
-                c.first.first + " AND " + c.first.second + " failed for case sensitive" );
+                                        c.first.first + " AND " + c.first.second + " failed for case sensitive" );
 
-        BOOST_CHECK_MESSAGE(
-                StrNumCmp( c.first.first, c.first.second, true ) == c.second.second,
-                c.first.first + " AND " + c.first.second + " failed for case insensitive" );
+        BOOST_CHECK_MESSAGE( StrNumCmp( c.first.first, c.first.second, CMP_T::IGNORE_CASE ) == c.second.second,
+                                        c.first.first + " AND " + c.first.second + " failed for case insensitive" );
     }
 }
 
@@ -117,23 +116,23 @@ BOOST_AUTO_TEST_CASE( ValueCompare )
     using CASE = std::pair<std::pair<wxString, wxString>, int>;
 
     const std::vector<CASE> cases = {
-            { { wxT( "100" ),  wxT( "10" ) },     1 },
-            { { wxT( "10K" ),  wxT( "1K" ) },     1 },
-            { { wxT( "10K" ),  wxT( "1K5" ) },    1 },
-            { { wxT( "10K" ),  wxT( "10,000" ) }, 0 },
-            { { wxT( "1K5" ),  wxT( "1.5K" ) },   0 },
-            { { wxT( "1K5" ),  wxT( "1,5K" ) },   0 },
-            { { wxT( "K5" ),   wxT( "1K" ) },    -1 },
-            { { wxT( "1K5" ),  wxT( "K55" ) },    1 },
-            { { wxT( "1R5" ),  wxT( "1.5" ) },    0 },
+            { { wxT( "100" ),   wxT( "10" ) },     1 },
+            { { wxT( "10K" ),   wxT( "1K" ) },     1 },
+            { { wxT( "10K" ),   wxT( "1K5" ) },    1 },
+            { { wxT( "10K" ),   wxT( "10,000" ) }, 0 },
+            { { wxT( "1K5" ),   wxT( "1.5K" ) },   0 },
+            { { wxT( "1K5" ),   wxT( "1,5K" ) },   0 },
+            { { wxT( "K5" ),    wxT( "1K" ) },    -1 },
+            { { wxT( "1K5" ),   wxT( "K55" ) },    1 },
+            { { wxT( "1R5" ),   wxT( "1.5" ) },    0 },
             // Capacitor values using an SI prefix as the decimal separator.
-            { { wxT( "1u5" ),  wxT( "1.5u" ) },   0 },
-            { { wxT( "1u5F" ), wxT( "1.5uF" ) },  0 },
-            { { wxT( "2u2F" ), wxT( "2.2uF" ) },  0 },
-            { { wxT( "1n5F" ), wxT( "1.5nF" ) },  0 },
+            { { wxT( "1u5" ),   wxT( "1.5u" ) },   0 },
+            { { wxT( "1u5F" ),  wxT( "1.5uF" ) },  0 },
+            { { wxT( "2u2F" ),  wxT( "2.2uF" ) },  0 },
+            { { wxT( "1n5F" ),  wxT( "1.5nF" ) },  0 },
             { { wxT( "12n1F" ), wxT( "12.1nF" ) }, 0 },
-            { { wxT( "5p6F" ), wxT( "5.6pF" ) },  0 },
-            { { wxT( "1µ5" ),  wxT( "1u5" ) },    0 },
+            { { wxT( "5p6F" ),  wxT( "5.6pF" ) },  0 },
+            { { wxT( "1µ5" ),   wxT( "1u5" ) },    0 },
     };
 
     for( const auto& c : cases )
@@ -189,8 +188,8 @@ BOOST_AUTO_TEST_CASE( HTMLEscape )
 
     const std::vector<CASE> cases = {
         { wxS( "I will display € €" ), wxS( "I will display &#8364; &#x20AC;" ) },
-        { wxS( "&lt;" ), wxS( "&amp;lt;" ) },
-        { wxS( "Don't Ω" ), wxS( "Don&apos;t Ω" ) },
+        { wxS( "&lt;" ),               wxS( "&amp;lt;" ) },
+        { wxS( "Don't Ω" ),            wxS( "Don&apos;t Ω" ) },
     };
 
     for( const auto& c : cases )
@@ -221,6 +220,55 @@ BOOST_AUTO_TEST_CASE( VariantNameSort )
 
     BOOST_CHECK_EQUAL( variantNames[0], GetDefaultVariantName() );
     BOOST_CHECK_EQUAL( variantNames[1], wxS( "Variant1" ) );
+}
+
+
+/**
+ * Test #FormatTrimmedDecimal().
+ */
+BOOST_AUTO_TEST_CASE( FormatTrimmedDecimalKeepsIntegerDigits )
+{
+    // Precision 0 has no decimal point and must not lose integer zeros
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 100.0, 0 ), wxString( "100" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 1000.0, 0 ), wxString( "1000" ) );
+
+    // Byte-identical with the old exporters for precision >= 1
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 1.5, 6 ), wxString( "1.50" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 1.0, 6 ), wxString( "1.0" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 100.0, 4 ), wxString( "100.0" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 0.123456, 6 ), wxString( "0.123456" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( -0.0001, 3 ), wxString( "0.0" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( -0.3, 0 ), wxString( "0" ) );
+}
+
+
+// Verbatim old ODB and IPC-2581 trim loop, compared only at precision >= 1 away from negative zero
+static wxString oldTrimLoop( double aVal, int aPrecision )
+{
+    wxString str = wxString::FromCDouble( aVal, aPrecision );
+
+    while( str.EndsWith( wxT( "00" ) ) )
+        str.RemoveLast();
+
+    return str;
+}
+
+
+BOOST_AUTO_TEST_CASE( FormatTrimmedDecimalMatchesOldTrimLoop )
+{
+    for( int ii = -300; ii <= 300; ++ii )
+    {
+        double value = ii * 0.137;
+
+        for( int precision = 1; precision <= 8; ++precision )
+            BOOST_CHECK_EQUAL( FormatTrimmedDecimal( value, precision ), oldTrimLoop( value, precision ) );
+    }
+
+    // oldTrimLoop() reproduces the precision-0 bug this formatter fixes, so precision 0 is
+    // checked against literal values here rather than against oldTrimLoop()
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 100.0, 0 ), wxString( "100" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 1000.0, 0 ), wxString( "1000" ) );
+    BOOST_CHECK_EQUAL( FormatTrimmedDecimal( 2500.0, 0 ), wxString( "2500" ) );
 }
 
 

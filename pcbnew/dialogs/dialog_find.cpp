@@ -29,6 +29,7 @@
 #include <string_utils.h>
 #include <hotkeys_basic.h>
 #include <string>
+#include <tool/tool_dispatcher.h>
 #include <tool/tool_manager.h>
 #include <tools/pcb_actions.h>
 #include <wx/fdrepdlg.h>
@@ -122,10 +123,22 @@ void DIALOG_FIND::onFindPreviousClick( wxCommandEvent& aEvent )
 
 void DIALOG_FIND::OnCharHook( wxKeyEvent& aEvent )
 {
-    if( aEvent.GetKeyCode() == WXK_F3 )
+    bool                      special = false;
+    std::optional<TOOL_EVENT> evt = m_frame->GetToolDispatcher()->GetToolEvent( &aEvent, &special );
+
+    if( evt && evt->IsKeyPressed() && evt->KeyCode() )
     {
-        FindNext( aEvent.ShiftDown() );
-        return;
+        // Match the user's hotkeys for the find actions, so they work while the dialog has focus
+        int hotkey = evt->Modifier() | evt->KeyCode();
+
+        for( TOOL_ACTION* action : { &ACTIONS::findNext, &ACTIONS::findPrevious } )
+        {
+            if( hotkey == action->GetHotKey() || hotkey == action->GetHotKeyAlt() )
+            {
+                FindNext( action == &ACTIONS::findPrevious );
+                return;
+            }
+        }
     }
 
     DIALOG_SHIM::OnCharHook( aEvent );
@@ -202,8 +215,7 @@ void DIALOG_FIND::search( bool aDirection )
 
     EDA_SEARCH_DATA& frd = m_frame->GetFindReplaceData();
 
-    if( m_matchCase->GetValue() )
-        frd.matchCase = true;
+    frd.matchCase = m_matchCase->GetValue();
 
     if( m_matchWords->GetValue() )
         frd.matchMode = EDA_SEARCH_MATCH_MODE::WHOLEWORD;

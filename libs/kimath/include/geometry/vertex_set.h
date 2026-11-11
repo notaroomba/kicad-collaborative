@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <vector>
 
 #include <math/box2.h>
 #include <geometry/shape_line_chain.h>
@@ -170,6 +171,9 @@ class VERTEX
 
         for( VERTEX* elem : queue )
         {
+            // A cached ear blocker is only valid while it shares this z-order list
+            elem->m_earBlocker = nullptr;
+
             if( prev_elem )
                 prev_elem->nextZ = elem;
 
@@ -244,6 +248,12 @@ class VERTEX
     VERTEX* nextZ = nullptr;
 
     void* m_userData = nullptr;
+
+    // Last vertex found inside this vertex's ear, rechecked before rescanning the z-order list
+    mutable VERTEX* m_earBlocker = nullptr;
+
+    // Whether the last VERTEX_SET::buildReflexIndex() call recorded this vertex
+    bool m_inReflexIndex = false;
 };
 
 class VERTEX_SET
@@ -335,9 +345,28 @@ protected:
     */
     double  area( const VERTEX* p, const VERTEX* q, const VERTEX* r ) const;
 
-    BOX2I                   m_bbox;
-    std::deque<VERTEX>      m_vertices;
-    VECTOR2I::extended_type m_simplificationLevel;
+    /**
+     * Index the reflex vertices of the ring containing \a aStart in z-order.
+     *
+     * Only a reflex vertex can block an ear, so while the index is valid isEar() scans it
+     * instead of walking every vertex of the z-order list.  The index stays valid only while
+     * the ring changes by removing ears, which never turns a convex vertex reflex.
+     */
+    void buildReflexIndex( VERTEX* aStart );
+
+    struct REFLEX_ENTRY
+    {
+        uint32_t z;
+        double   x;
+        double   y;
+        VERTEX*  v;
+    };
+
+    BOX2I                     m_bbox;
+    std::deque<VERTEX>        m_vertices;
+    VECTOR2I::extended_type   m_simplificationLevel;
+    std::vector<REFLEX_ENTRY> m_reflexIndex;
+    bool                      m_reflexIndexValid = false;
 };
 
 

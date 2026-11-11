@@ -44,13 +44,13 @@ class ORIGIN_TRANSFORMS;
 class INSPECTABLE;
 class COMMIT;
 
-///< Unique type identifier
+/// Unique type identifier
 using TYPE_ID = size_t;
 
 using PROPERTY_LISTENER = std::function<void( INSPECTABLE*, PROPERTY_BASE*, COMMIT* )>;
 
-///< Opaque handle returned by RegisterListener so a specific registration can
-///< be removed without disturbing others on the same TYPE_ID.
+/// Opaque handle returned by RegisterListener so a specific registration can
+/// be removed without disturbing others on the same TYPE_ID.
 using PROPERTY_LISTENER_HANDLE = std::size_t;
 
 class PROPERTY_COMMIT_HANDLER
@@ -59,6 +59,9 @@ public:
     PROPERTY_COMMIT_HANDLER( COMMIT* aCommit );
 
     ~PROPERTY_COMMIT_HANDLER();
+
+private:
+    bool m_ownsCommit = false;
 };
 
 /**
@@ -127,6 +130,12 @@ public:
      * including both static (class-level) and dynamic (per-object) properties.
      */
     std::vector<PROPERTY_BASE*> GetProperties( const INSPECTABLE* aObject ) const;
+
+    /**
+     * Return the dynamic properties of the first object whose names every other object also has,
+     * in the first object's order.  Each object's dynamic properties are queried once.
+     */
+    std::vector<PROPERTY_BASE*> GetCommonDynamicProperties( const std::vector<const INSPECTABLE*>& aObjects ) const;
 
     const std::map<PROPERTY_BASE*, int>& GetDisplayOrder( TYPE_ID aType ) const;
 
@@ -257,9 +266,7 @@ public:
         std::vector<PROPERTY_BASE*> properties;
     };
 
-    typedef std::vector<CLASS_INFO> CLASSES_INFO;
-
-    CLASSES_INFO GetAllClasses();
+    std::vector<CLASS_INFO> GetAllClasses();
 
     /**
      * Callback to alert the notification system that a property has changed
@@ -308,7 +315,7 @@ private:
 
     friend class PROPERTY_COMMIT_HANDLER;
 
-    ///< Structure holding type meta-data
+    /// Structure holding type meta-data
     struct CLASS_DESC
     {
         // Constructor body lives in property_mgr.cpp so it doesn't force
@@ -322,62 +329,62 @@ private:
         ~CLASS_DESC() noexcept;
         CLASS_DESC( CLASS_DESC&& ) noexcept;
 
-        ///< Unique type identifier (obtained using TYPE_HASH)
+        /// Unique type identifier (obtained using TYPE_HASH)
         const TYPE_ID m_id;
 
-        ///< Types after which this type inherits
+        /// Types after which this type inherits
         std::vector<std::reference_wrapper<CLASS_DESC>> m_bases;
 
-        ///< Properties unique to this type (i.e. not inherited)
+        /// Properties unique to this type (i.e. not inherited)
         std::map<wxString, std::unique_ptr<PROPERTY_BASE>> m_ownProperties;
 
-        ///< Type converters available for this type
+        /// Type converters available for this type
         std::map<TYPE_ID, std::unique_ptr<TYPE_CAST_BASE>> m_typeCasts;
 
-        ///< Properties from bases that should be masked (hidden) on this subclass
+        /// Properties from bases that should be masked (hidden) on this subclass
         std::set<std::pair<size_t, wxString>> m_maskedBaseProperties;
 
-        ///< Overrides for base class property availabilities
+        /// Overrides for base class property availabilities
         std::map<std::pair<size_t, wxString>, std::function<bool( INSPECTABLE* )>> m_availabilityOverrides;
 
-        ///< Overrides for base class property writeable status
+        /// Overrides for base class property writeable status
         std::map<std::pair<size_t, wxString>, std::function<bool( INSPECTABLE* )>> m_writeabilityOverrides;
 
-        ///< All properties (both unique to the type and inherited)
+        /// All properties (both unique to the type and inherited)
         std::vector<PROPERTY_BASE*> m_allProperties;
 
-        ///< Compiled display order for all properties
+        /// Compiled display order for all properties
         std::map<PROPERTY_BASE*, int> m_displayOrder;
 
-        ///< List of property groups provided by this class in display order
+        /// List of property groups provided by this class in display order
         std::vector<wxString> m_groupDisplayOrder;
 
-        ///< Non-owning list of classes's direct properties in display order
+        /// Non-owning list of classes's direct properties in display order
         std::vector<PROPERTY_BASE*> m_ownDisplayOrder;
 
-        ///< The property groups provided by this class
+        /// The property groups provided by this class
         std::set<wxString> m_groups;
 
-        ///< Replaced properties (TYPE_ID / name)
+        /// Replaced properties (TYPE_ID / name)
         std::set<std::pair<size_t, wxString>> m_replaced;
 
-        ///< Recreates the list of properties
+        /// Recreates the list of properties
         void rebuild();
 
-        ///< Traverses the class inheritance hierarchy bottom-to-top, gathering
-        ///< all properties available to a type
+        /// Traverses the class inheritance hierarchy bottom-to-top, gathering
+        /// all properties available to a type
         void collectPropsRecur( std::vector<PROPERTY_BASE*>& aResult,
                                 std::set<std::pair<size_t, wxString>>& aReplaced,
                                 std::map<PROPERTY_BASE*, int>& aDisplayOrder,
                                 std::set<std::pair<size_t, wxString>>& aMasked ) const;
     };
 
-    ///< Returns metadata for a specific type
+    /// Returns metadata for a specific type
     CLASS_DESC& getClass( TYPE_ID aTypeId );
 
     std::unordered_map<TYPE_ID, wxString> m_classNames;
 
-    ///< Map of all available types
+    /// Map of all available types
     std::unordered_map<TYPE_ID, CLASS_DESC> m_classes;
 
     /// Flag indicating that the list of properties needs to be rebuild (RebuildProperties())
@@ -392,7 +399,7 @@ private:
 };
 
 
-///< Helper macro to map type hashes to names
+/// Helper macro to map type hashes to names
 #define REGISTER_TYPE(x) PROPERTY_MANAGER::Instance().RegisterType(TYPE_HASH(x), TYPE_NAME(x))
 
 

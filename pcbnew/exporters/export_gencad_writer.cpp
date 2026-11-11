@@ -31,6 +31,7 @@
 #include <macros.h>
 #include <hash_eda.h>
 #include <set>
+#include <unordered_map>
 #include <fmt.h>
 
 
@@ -712,7 +713,7 @@ void GENCAD_EXPORTER::createPadsShapesSection()
 static size_t hashFootprint( const FOOTPRINT* aFootprint )
 {
     size_t    ret = 0x11223344;
-    constexpr int flags = HASH_FLAGS::HASH_POS | HASH_FLAGS::REL_COORD
+    constexpr int flags = HASH_FLAGS::HASH_POS | HASH_FLAGS::RELATIVE_TO_PARENT_COORDS
                             | HASH_FLAGS::HASH_ROT | HASH_FLAGS::HASH_LAYER;
 
     for( BOARD_ITEM* i : aFootprint->GraphicalItems() )
@@ -745,11 +746,11 @@ void GENCAD_EXPORTER::createShapesSection()
             wxString shapeName = footprint->GetFPID().Format();
 
             auto shapeIt = shapes.find( shapeName );
-            size_t modHash = hashFootprint( footprint );
+            size_t fpHash = hashFootprint( footprint );
 
             if( shapeIt != shapes.end() )
             {
-                if( modHash != shapeIt->second )
+                if( fpHash != shapeIt->second )
                 {
                     // there is an entry for this footprint, but it has a modified shape,
                     // so we need to create a new entry
@@ -763,23 +764,23 @@ void GENCAD_EXPORTER::createShapesSection()
                         shapeIt = shapes.find( newShapeName );
                         ++suffix;
                     }
-                    while( shapeIt != shapes.end() && shapeIt->second != modHash );
+                    while( shapeIt != shapes.end() && shapeIt->second != fpHash );
 
                     shapeName = newShapeName;
                 }
 
-                if( shapeIt != shapes.end() && modHash == shapeIt->second )
+                if( shapeIt != shapes.end() && fpHash == shapeIt->second )
                 {
                     // shape found, so reuse it
-                    componentShapes[footprint] = modHash;
+                    componentShapes[footprint] = fpHash;
                     continue;
                 }
             }
 
             // new shape
-            componentShapes[footprint] = modHash;
-            shapeNames[modHash] = shapeName;
-            shapes[shapeName] = modHash;
+            componentShapes[footprint] = fpHash;
+            shapeNames[fpHash] = shapeName;
+            shapes[shapeName] = fpHash;
             footprintWriteShape( footprint, shapeName );
         }
         else // individual shape for each component
@@ -918,9 +919,19 @@ void GENCAD_EXPORTER::createSignalsSection()
     // Emit the netlist (which is actually the thing for which GenCAD is used these
     // days!); tracks are handled later
 
+    std::unordered_map<int, std::vector<std::pair<FOOTPRINT*, PAD*>>> padsByNet;
+
+    for( FOOTPRINT* footprint : m_board->Footprints() )
+    {
+        for( PAD* pad : footprint->Pads() )
+        {
+            if( pad->GetNetCode() > 0 )
+                padsByNet[pad->GetNetCode()].emplace_back( footprint, pad );
+        }
+    }
+
     wxString      msg;
     NETINFO_ITEM* net;
-    int           NbNoConn = 1;
 
     fmt::print( m_file, "$SIGNALS\n" );
 
@@ -930,11 +941,6 @@ void GENCAD_EXPORTER::createSignalsSection()
 
         if( net )
         {
-            if( net->GetNetname() == wxEmptyString ) // dummy netlist (no connection)
-            {
-                msg.Printf( wxT( "NoConnection%d" ), NbNoConn++ );
-            }
-
             if( net->GetNetCode() <= 0 )  // dummy netlist (no connection)
                 continue;
 
@@ -943,20 +949,19 @@ void GENCAD_EXPORTER::createSignalsSection()
             fmt::print( m_file, "{}", TO_UTF8( msg ) );
             fmt::print( m_file, "\n" );
 
-            for( FOOTPRINT* footprint : m_board->Footprints() )
+            auto pads = padsByNet.find( net->GetNetCode() );
+
+            if( pads == padsByNet.end() )
+                continue;
+
+            for( const auto& [footprint, pad] : pads->second )
             {
-                for( PAD* pad : footprint->Pads() )
-                {
-                    if( pad->GetNetCode() != net->GetNetCode() )
-                        continue;
+                msg.Printf( wxT( "NODE \"%s\" \"%s\"" ),
+                            escapeString( footprint->GetReference() ),
+                            escapeString( pad->GetNumber() ) );
 
-                    msg.Printf( wxT( "NODE \"%s\" \"%s\"" ),
-                                escapeString( footprint->GetReference() ),
-                                escapeString( pad->GetNumber() ) );
-
-                    fmt::print( m_file, "{}", TO_UTF8( msg ) );
-                    fmt::print( m_file, "\n" );
-                }
+                fmt::print( m_file, "{}", TO_UTF8( msg ) );
+                fmt::print( m_file, "\n" );
             }
         }
     }
@@ -975,8 +980,8 @@ bool GENCAD_EXPORTER::createHeaderInfoData()
 
     fmt::print( m_file, "DRAWING \"{}\"\n", m_board->GetFileName() );
 
-    wxString rev = ExpandTextVars( m_board->GetTitleBlock().GetRevision(), m_board->GetProject() );
-    wxString date = ExpandTextVars( m_board->GetTitleBlock().GetDate(), m_board->GetProject() );
+    wxString rev = ExpandTextVars( m_board->GetTitleBlock().GetRevision(), m_board->GetProject(), FOR_GUI );
+    wxString date = ExpandTextVars( m_board->GetTitleBlock().GetDate(), m_board->GetProject(), FOR_GUI );
 
     fmt::print( m_file, "REVISION \"{} {}\"\n", rev, date );
     fmt::print( m_file, "UNITS INCH\n" );

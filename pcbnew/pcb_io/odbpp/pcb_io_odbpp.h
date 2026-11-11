@@ -23,76 +23,17 @@
 #define _PCB_IO_ODBPP_H_
 
 #include <pcb_io/pcb_io.h>
-#include <pcb_io/pcb_io_mgr.h>
 #include <pcb_io/common/plugin_common_layer_mapping.h>
 
 #include <layer_ids.h> // PCB_LAYER_ID
+#include <exporters/fab_model/fab_drill_model.h>
+#include <exporters/fab_model/fab_stackup.h>
 #include <font/font.h>
 #include <geometry/shape_segment.h>
 #include <stroke_params.h>
 #include <memory>
 #include "odb_entity.h"
 
-
-struct ODB_DRILL_SPAN
-{
-    ODB_DRILL_SPAN()
-    {
-        m_StartLayer = F_Cu;
-        m_EndLayer = B_Cu;
-        m_IsBackdrill = false;
-        m_IsNonPlated = false;
-    }
-
-    ODB_DRILL_SPAN( PCB_LAYER_ID aStartLayer, PCB_LAYER_ID aEndLayer, bool aIsBackdrill,
-                    bool aIsNonPlated )
-    {
-        m_StartLayer = aStartLayer;
-        m_EndLayer = aEndLayer;
-        m_IsBackdrill = aIsBackdrill;
-        m_IsNonPlated = aIsNonPlated;
-    }
-
-    PCB_LAYER_ID TopLayer() const
-    {
-        return m_StartLayer < m_EndLayer ? m_StartLayer : m_EndLayer;
-    }
-
-    PCB_LAYER_ID BottomLayer() const
-    {
-        return m_StartLayer < m_EndLayer ? m_EndLayer : m_StartLayer;
-    }
-
-    std::pair<PCB_LAYER_ID, PCB_LAYER_ID> Pair() const
-    {
-        return std::make_pair( TopLayer(), BottomLayer() );
-    }
-
-    bool operator<( const ODB_DRILL_SPAN& aOther ) const
-    {
-        if( TopLayer() != aOther.TopLayer() )
-            return TopLayer() < aOther.TopLayer();
-
-        if( BottomLayer() != aOther.BottomLayer() )
-            return BottomLayer() < aOther.BottomLayer();
-
-        if( m_IsBackdrill != aOther.m_IsBackdrill )
-            return m_IsBackdrill && !aOther.m_IsBackdrill;
-
-        if( m_IsNonPlated != aOther.m_IsNonPlated )
-            return m_IsNonPlated && !aOther.m_IsNonPlated;
-
-        if( m_StartLayer != aOther.m_StartLayer )
-            return m_StartLayer < aOther.m_StartLayer;
-
-        return m_EndLayer < aOther.m_EndLayer;
-    }
-
-    PCB_LAYER_ID m_StartLayer;
-    PCB_LAYER_ID m_EndLayer;
-    bool         m_IsBackdrill;
-    bool         m_IsNonPlated;
-};
 
 class BOARD;
 class BOARD_ITEM;
@@ -118,8 +59,13 @@ public:
 
     ~PCB_IO_ODBPP() override;
 
-    void SaveBoard( const wxString& aFileName, BOARD* aBoard,
+    void SaveBoard( const wxString& aFileName, BOARD& aBoard,
                     const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+
+    /// Write the product model tree at @a aFileName  Throw IO_ERROR when the write fails
+    void Export( const wxString& aFileName, BOARD& aBoard, const ODB_EXPORT_OPTIONS& aOptions );
+
+    void ConfigureExport( BOARD& aBoard, const ODB_EXPORT_OPTIONS& aOptions );
 
     const IO_BASE::IO_FILE_DESC GetBoardFileDesc() const override
     {
@@ -135,6 +81,19 @@ public:
 
     std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints() override;
 
+    /// Lowest sigfig that still resolves a 0.1 mil grid: 3 decimal places in mm, 4 in inches.
+    static int MinPrecision( bool aInches ) { return aInches ? 4 : 3; }
+
+    /// Highest sigfig accepted by the exporter, matching the export dialog's spin control.
+    static int MaxPrecision() { return 16; }
+
+    const ODB_FORMAT& GetFormat() const { return m_format; }
+    const FAB_STACKUP& GetFabStackup() const { return *m_fabStackup; }
+    const FAB_DRILL_MODEL& GetFabDrillModel();
+
+    uint32_t NewUid() { return ++m_maxUid; }
+    uint32_t MaxUid() const { return m_maxUid; }
+
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override { return 0; }
 
     // Reading currently disabled
@@ -147,34 +106,16 @@ public:
     bool CanReadLibrary( const wxString& aFileName ) const override { return false; }
 
 public:
-    inline std::vector<std::pair<PCB_LAYER_ID, wxString>>& GetLayerNameList()
-    {
-        return m_layer_name_list;
-    }
-
-    inline std::map<PCB_LAYER_ID, std::map<int, std::vector<BOARD_ITEM*>>>& GetLayerElementsMap()
-    {
-        return m_layer_elements;
-    }
+    inline std::vector<ODB_LAYER_NAME>& GetLayerNameList() { return m_layer_name_list; }
 
     inline std::vector<std::shared_ptr<FOOTPRINT>>& GetLoadedFootprintList()
     {
         return m_loaded_footprints;
     }
 
-    inline std::map<ODB_DRILL_SPAN, std::vector<BOARD_ITEM*>>& GetDrillLayerItemsMap()
-    {
-        return m_drill_layers;
-    }
+    inline std::map<DRILL_SPAN, std::vector<BOARD_ITEM*>>& GetDrillLayerItemsMap() { return m_drill_layers; }
 
-    inline std::map<ODB_DRILL_SPAN, wxString>& GetDrillSpanNameMap()
-    {
-        return m_drill_span_names;
-    }
-
-    inline std::map<std::tuple<ODB_AUX_LAYER_TYPE, PCB_LAYER_ID, PCB_LAYER_ID>,
-                    std::vector<BOARD_ITEM*>>&
-    GetAuxilliaryLayerItemsMap()
+    inline std::map<ODB_AUX_LAYER_KEY, std::vector<BOARD_ITEM*>>& GetAuxilliaryLayerItemsMap()
     {
         return m_auxilliary_layers;
     }
@@ -200,6 +141,23 @@ public:
         return m_via_trace_subnets;
     }
 
+    void RecordNetTieFeature( const BOARD_ITEM* aItem, PCB_LAYER_ID aLayer, const wxString& aLayerName,
+                              size_t aIndex )
+    {
+        m_netTieFeatures.try_emplace( std::make_pair( aItem, aLayer ), aLayerName, aIndex );
+    }
+
+    const std::map<std::pair<const BOARD_ITEM*, PCB_LAYER_ID>, std::pair<wxString, size_t>>&
+    GetNetTieFeatures() const
+    {
+        return m_netTieFeatures;
+    }
+
+    const wxString& GetLegalNetName( int aNetCode ) const
+    {
+        return m_netNames.at( aNetCode );
+    }
+
 
     std::shared_ptr<ODB_TREE_WRITER> m_writer;
 
@@ -211,11 +169,6 @@ public:
 
     // Frees the memory allocated for the loaded footprints in #m_loaded_footprints.
     void ClearLoadedFootprints();
-
-    static double      m_scale;
-    static double      m_symbolScale;
-    static int         m_sigfig;
-    static std::string m_unitsStr;
 
 private:
     template <typename T, typename... Args>
@@ -229,31 +182,33 @@ private:
     }
 
     BOARD* m_board;
+    ODB_FORMAT m_format;
+    uint32_t   m_maxUid = 0;
 
     std::vector<std::shared_ptr<FOOTPRINT>> m_loaded_footprints;
 
-    std::vector<std::pair<PCB_LAYER_ID, wxString>>
-            m_layer_name_list; //<! layer name in matrix entity to the internal layer id
+    std::vector<ODB_LAYER_NAME> m_layer_name_list; //<! matrix row metadata in row order
 
-    std::map<ODB_DRILL_SPAN, std::vector<BOARD_ITEM*>>
-            m_drill_layers; //<! Drill sets are output as layers (to/from pairs)
-    std::map<ODB_DRILL_SPAN, wxString> m_drill_span_names;
-
-    std::map<std::tuple<ODB_AUX_LAYER_TYPE, PCB_LAYER_ID, PCB_LAYER_ID>, std::vector<BOARD_ITEM*>>
+    std::map<DRILL_SPAN, std::vector<BOARD_ITEM*>> m_drill_layers; //<! Drill sets are output as layers, one per span
+    std::map<ODB_AUX_LAYER_KEY, std::vector<BOARD_ITEM*>>
             m_auxilliary_layers; //<! Auxilliary layers, from/to pairs or simple (depending on type)
 
     std::map<std::pair<PCB_LAYER_ID, PCB_LAYER_ID>, std::vector<BOARD_ITEM*>>
             m_slot_holes; //<! Storage vector of slotted holes that need to be output as cutouts
 
-    std::map<PCB_LAYER_ID, std::map<int, std::vector<BOARD_ITEM*>>>
-            m_layer_elements; //<! Storage map of layer to element list
-
     std::map<const PAD*, EDA_DATA::SUB_NET_TOEPRINT*> m_topeprint_subnets;
+
+    std::map<int, wxString> m_netNames;
 
     std::map<std::pair<PCB_LAYER_ID, ZONE*>, EDA_DATA::SUB_NET_PLANE*> m_plane_subnets;
 
     std::map<PCB_TRACK*, EDA_DATA::SUB_NET*> m_via_trace_subnets;
 
+    std::map<std::pair<const BOARD_ITEM*, PCB_LAYER_ID>, std::pair<wxString, size_t>> m_netTieFeatures;
+
+    // The entities hold pointers into the snapshot and must be destroyed first
+    std::unique_ptr<FAB_STACKUP>                  m_fabStackup;
+    std::unique_ptr<FAB_DRILL_MODEL>              m_fabDrillModel;
     std::vector<std::shared_ptr<ODB_ENTITY_BASE>> m_entities;
 };
 

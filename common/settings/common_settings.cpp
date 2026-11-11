@@ -405,8 +405,17 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "embed_file_defaults.sim_model", &m_EmbedFileDefaults.sim_model, false ) );
 
+    m_params.emplace_back( new PARAM<bool>( "relative_path_defaults.drawing_sheet",
+                                            &m_RelativePathDefaults.drawing_sheet, false ) );
+
+    m_params.emplace_back( new PARAM<bool>( "relative_path_defaults.jobset_destination",
+                                            &m_RelativePathDefaults.jobset_destination, false ) );
+
     m_params.emplace_back( new PARAM_LIST<wxString>( "system.extra_3d_search_dirs",
             &m_Extra3DSearchDirs, {} ) );
+
+    m_params.emplace_back( new PARAM_LIST<wxString>( "system.declined_model_preview_requirements",
+            &m_DeclinedModelPreviewRequirements, {} ) );
 
     m_params.emplace_back( new PARAM<bool>( "session.remember_open_files",
             &m_Session.remember_open_files, false ) );
@@ -503,6 +512,8 @@ COMMON_SETTINGS::COMMON_SETTINGS() :
 
     m_params.emplace_back( new PARAM<int>( "git.updatInterval",
             &m_Git.updatInterval, 5 ) );
+
+    m_params.emplace_back( new PARAM<bool>( "git.showContributorAvatars", &m_Git.showContributorAvatars, false ) );
 
     m_params.emplace_back( new PARAM<wxString>( "api.interpreter_path",
             &m_Api.python_interpreter, wxS( "" ) ) );
@@ -608,13 +619,11 @@ bool COMMON_SETTINGS::migrateSchema1to2()
     try
     {
         prefer_selection = m_internals->at( v1_pointer );
-        m_internals->at( nlohmann::json::json_pointer( "/input"_json_pointer ) )
-                .erase( "prefer_select_to_drag" );
+        m_internals->at( nlohmann::json::json_pointer( "/input"_json_pointer ) ).erase( "prefer_select_to_drag" );
     }
     catch( ... )
     {
-        wxLogTrace( traceSettings,
-                    wxT( "COMMON_SETTINGS::Migrate 1->2: prefer_select_to_drag not found" ) );
+        wxLogTrace( traceSettings, wxT( "COMMON_SETTINGS::Migrate 1->2: prefer_select_to_drag not found" ) );
     }
 
     if( prefer_selection )
@@ -765,8 +774,7 @@ bool COMMON_SETTINGS::migrateSchema4to5()
     }
     catch( ... )
     {
-        wxLogTrace( traceSettings,
-                    wxT( "COMMON_SETTINGS::Migrate 4->5: dialog.controls not found" ) );
+        wxLogTrace( traceSettings, wxT( "COMMON_SETTINGS::Migrate 4->5: dialog.controls not found" ) );
     }
 
     return true;
@@ -789,8 +797,7 @@ bool COMMON_SETTINGS::migrateSchema5to6()
     }
     catch( ... )
     {
-        wxLogTrace( traceSettings,
-                    wxT( "COMMON_SETTINGS::Migrate 5->6: failed to set auto_backup.format" ) );
+        wxLogTrace( traceSettings, wxT( "COMMON_SETTINGS::Migrate 5->6: failed to set auto_backup.format" ) );
     }
 
     return true;
@@ -812,13 +819,10 @@ bool COMMON_SETTINGS::migrateSchema6to7()
     try
     {
         std::ifstream eeschemaFile( eeschemaPath.GetFullPath().fn_str() );
-        nlohmann::json eeschemaSettings =
-                nlohmann::json::parse( eeschemaFile, nullptr,
-                                       /* allow_exceptions = */ true,
-                                       /* ignore_comments  = */ true );
+        nlohmann::json eeschemaSettings = nlohmann::json::parse( eeschemaFile, nullptr, ALLOW_EXCEPTIONS,
+                                                                 IGNORE_COMMENTS );
 
-        const nlohmann::json::json_pointer fieldNamesPointer(
-                "/drawing/field_names"_json_pointer );
+        const nlohmann::json::json_pointer fieldNamesPointer( "/drawing/field_names"_json_pointer );
 
         if( eeschemaSettings.contains( fieldNamesPointer )
                 && eeschemaSettings.at( fieldNamesPointer ).is_string() )
@@ -829,8 +833,7 @@ bool COMMON_SETTINGS::migrateSchema6to7()
     }
     catch( ... )
     {
-        wxLogTrace( traceSettings,
-                    wxT( "COMMON_SETTINGS::Migrate 6->7: failed to import field name templates" ) );
+        wxLogTrace( traceSettings, wxT( "COMMON_SETTINGS::Migrate 6->7: failed to import field name templates" ) );
     }
 
     return true;
@@ -904,11 +907,13 @@ bool COMMON_SETTINGS::MigrateFromLegacy( wxConfigBase* aCfg )
     if( std::optional<bool> value = Get<bool>( "input.center_on_zoom" ) )
         Set( "input.center_on_zoom", !( *value ) );
 
-    ret &= fromLegacy<int>( aCfg, "OpenGLAntialiasingMode", "graphics.opengl_antialiasing_mode" );
-    ret &= fromLegacy<int>( aCfg, "CairoAntialiasingMode",  "graphics.cairo_antialiasing_mode" );
+    ret &= fromLegacy<int>( aCfg, "OpenGLAntialiasingMode",   "graphics.antialiasing_mode" );
+
+    // Cairo anti-aliasing modes no longer supported
+    //ret &= fromLegacy<int>( aCfg, "CairoAntialiasingMode",  "graphics.cairo_antialiasing_mode" );
 
     ret &= fromLegacy<int>(  aCfg, "AutoSaveInterval",        "system.local_history_debounce" );
-    ret &= fromLegacyString( aCfg, "Editor",                  "system.editor_name" );
+    ret &= fromLegacyString( aCfg, "Editor",                  "system.text_editor" );
     ret &= fromLegacy<int>(  aCfg, "FileHistorySize",         "system.file_history_size" );
     ret &= fromLegacyString( aCfg, "LanguageID",              "system.language" );
     ret &= fromLegacyString( aCfg, "PdfBrowserName",          "system.pdf_viewer_name" );
@@ -922,27 +927,25 @@ bool COMMON_SETTINGS::MigrateFromLegacy( wxConfigBase* aCfg )
 void COMMON_SETTINGS::InitializeEnvironment()
 {
     auto addVar =
-        [&]( const wxString& aKey, const wxString& aDefault )
-        {
-            m_Env.vars[aKey] = ENV_VAR_ITEM( aKey, aDefault, aDefault );
-
-            wxString envValue;
-
-            if( wxGetEnv( aKey, &envValue ) == true && !envValue.IsEmpty() )
+            [&]( const wxString& aKey, const wxString& aDefault )
             {
-                m_Env.vars[aKey].SetValue( envValue );
-                m_Env.vars[aKey].SetDefinedExternally();
-                wxLogTrace( traceEnvVars,
-                            wxS( "InitializeEnvironment: Entry %s defined externally as %s" ), aKey,
-                            envValue );
-            }
-            else
-            {
-                wxLogTrace( traceEnvVars, wxS( "InitializeEnvironment: Setting entry %s to "
-                                               "default %s" ),
-                            aKey, aDefault );
-            }
-        };
+                m_Env.vars[aKey] = ENV_VAR_ITEM( aKey, aDefault, aDefault );
+
+                wxString envValue;
+
+                if( wxGetEnv( aKey, &envValue ) == true && !envValue.IsEmpty() )
+                {
+                    m_Env.vars[aKey].SetValue( envValue );
+                    m_Env.vars[aKey].SetDefinedExternally();
+                    wxLogTrace( traceEnvVars, wxS( "InitializeEnvironment: Entry %s defined externally as %s" ),
+                                aKey, envValue );
+                }
+                else
+                {
+                    wxLogTrace( traceEnvVars, wxS( "InitializeEnvironment: Setting entry %s to default %s" ),
+                                aKey, aDefault );
+                }
+            };
 
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "FOOTPRINT_DIR" ) ), PATHS::GetStockFootprintsPath() );
     addVar( ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ), PATHS::GetStock3dmodelsPath() );
@@ -1066,10 +1069,12 @@ bool COMMON_SETTINGS::readLegacy3DResolverCfg( const wxString&                  
         // Don't add KICADn_3DMODEL_DIR, one of its legacy equivalents, or KIPRJMOD from a
         // config file.  They're system variables which are defined at runtime.
         wxString versionedPath = wxString::Format( wxS( "${%s}" ),
-                                       ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
+                                                   ENV_VAR::GetVersionedEnvVarName( wxS( "3DMODEL_DIR" ) ) );
 
-        if( al.m_Alias == versionedPath || al.m_Alias == wxS( "${KIPRJMOD}" )
-            || al.m_Alias == wxS( "$(KIPRJMOD)" ) || al.m_Alias == wxS( "${KISYS3DMOD}" )
+        if( al.m_Alias == versionedPath
+            || al.m_Alias == wxS( "${KIPRJMOD}" )
+            || al.m_Alias == wxS( "$(KIPRJMOD)" )
+            || al.m_Alias == wxS( "${KISYS3DMOD}" )
             || al.m_Alias == wxS( "$(KISYS3DMOD)" ) )
         {
             continue;
@@ -1090,8 +1095,7 @@ bool COMMON_SETTINGS::readLegacy3DResolverCfg( const wxString&                  
 }
 
 
-bool COMMON_SETTINGS::getLegacy3DHollerith( const std::string& aString, size_t& aIndex,
-                                            wxString& aResult )
+bool COMMON_SETTINGS::getLegacy3DHollerith( const std::string& aString, size_t& aIndex, wxString& aResult )
 {
     aResult.clear();
 

@@ -35,6 +35,8 @@
 #include <set>
 #include <vector>
 
+class EDA_ITEM;
+
 
 namespace KIGFX
 {
@@ -98,6 +100,10 @@ public:
     /// show them in lockstep with the diff-category checkboxes.
     void SetItemCategories( std::map<KIGFX::VIEW_ITEM*, KICAD_DIFF::CATEGORY> aMap );
 
+    /// Override context item identity when a differ uses IDs other than the item UUID.
+    using ITEM_ID_GETTER = std::function<KIID( const EDA_ITEM& )>;
+    void SetItemIdGetter( const ITEM_ID_GETTER& aGetter ) { m_itemIdGetter = aGetter; }
+
     /// Kiface-supplied callback that dims/undims a context item.
     using DIMMER = std::function<void( KIGFX::VIEW_ITEM*, bool aDim )>;
     void SetItemDimmer( DIMMER aDimmer ) { m_itemDimmer = std::move( aDimmer ); }
@@ -154,6 +160,13 @@ public:
     using ITEM_HANDLER = std::function<void( KIGFX::VIEW_ITEM* )>;
     void SetDoubleClickHandler( ITEM_HANDLER aHandler ) { m_dclickHandler = std::move( aHandler ); }
 
+    /// Let a left drag pan the view, for a canvas with nothing to select by dragging.
+    void SetLeftDragPans( bool aPan ) { m_leftDragPans = aPan; }
+
+    /// Make ZoomToFit frame this box instead of the whole document, or everything again when
+    /// cleared. Set it before SetScene, which fits as soon as the canvas has a size.
+    void SetFocusBox( std::optional<BOX2I> aBox ) { m_focusBox = std::move( aBox ); }
+
 private:
     /// Rebuild the overlay from the render scene + current highlight state.
     /// aOverlayOnly marks only the overlay target dirty (for hover/highlight
@@ -168,6 +181,8 @@ private:
     /// Dim context items that are hidden, or unfocused while a highlight is active.
     void refreshItemDimming();
 
+    KIID getItemId( const EDA_ITEM& aItem ) const;
+
     /// Hit test in screen coordinates → topmost SCENE_SHAPE under the cursor.
     const KICAD_DIFF::SCENE_SHAPE* shapeAt( const wxPoint& aScreenPoint ) const;
 
@@ -176,6 +191,7 @@ private:
     std::optional<BOX2I> highlightedBBox() const;
 
     void onLeftDown( wxMouseEvent& aEvent );
+    void onLeftUp( wxMouseEvent& aEvent );
     void onDoubleClick( wxMouseEvent& aEvent );
     void onMotion( wxMouseEvent& aEvent );
     void onLeave( wxMouseEvent& aEvent );
@@ -191,6 +207,7 @@ private:
     PICK_HANDLER             m_pickHandler;
     ITEM_HANDLER                        m_dclickHandler;
     DIMMER                              m_itemDimmer;
+    ITEM_ID_GETTER                      m_itemIdGetter;
     std::unique_ptr<HIGHLIGHT_BOX_ITEM> m_highlightBox;
     std::unique_ptr<HIGHLIGHT_BOX_ITEM> m_hoverBox;
 
@@ -216,6 +233,12 @@ private:
     /// True when a ZoomToFit was requested before the canvas had a real
     /// size — the next onSize will retry the fit and clear this.
     bool m_zoomToFitPending = false;
+
+    bool     m_leftDragPans = false;
+    bool     m_leftPanning = false;
+    VECTOR2D m_leftPanLast;
+
+    std::optional<BOX2I> m_focusBox;
 };
 
 #endif // KICAD_WIDGET_DIFF_CANVAS_H

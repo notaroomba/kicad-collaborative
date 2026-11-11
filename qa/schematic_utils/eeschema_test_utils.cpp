@@ -55,8 +55,11 @@ void KI_TEST::SCHEMATIC_TEST_FIXTURE::LoadSchematic( const wxFileName& aFn )
     wxFileName pro( fn );
     pro.SetExt( FILEEXT::ProjectFileExtension );
 
+    // The plugin retains loaded root sheets for one schematic lifetime.
+    m_pi.reset( SCH_IO_MGR::FindPlugin( SCH_IO_MGR::SCH_KICAD ) );
+
     // Schematic must be reset before a project is reloaded
-    m_schematic.release();
+    m_schematic.reset();
 
     m_manager.LoadProject( pro.GetFullPath() );
 
@@ -97,8 +100,6 @@ void KI_TEST::SCHEMATIC_TEST_FIXTURE::LoadSchematic( const wxFileName& aFn )
 
     if( m_schematic->RootScreen()->GetFileFormatVersionAtLoad() < 20230221 )
         screens.FixLegacyPowerSymbolMismatches();
-
-    sheets.AnnotatePowerSymbols();
 
     // NOTE: This is required for multi-unit symbols to be correct
     for( SCH_SHEET_PATH& sheet : sheets )
@@ -155,7 +156,7 @@ void TEST_NETLIST_EXPORTER_FIXTURE<Exporter>::WriteNetlist()
         wxRemoveFile( netlistPath );
 
     WX_STRING_REPORTER        reporter;
-    std::unique_ptr<Exporter> exporter = std::make_unique<Exporter>( m_schematic.get() );
+    std::unique_ptr<Exporter> exporter = std::make_unique<Exporter>( m_schematic.get(), nullptr );
 
     bool success = exporter->WriteNetlist( netlistPath, GetNetlistOptions(), reporter );
 

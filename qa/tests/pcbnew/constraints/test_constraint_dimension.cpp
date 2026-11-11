@@ -44,6 +44,8 @@
 #include <constraints/board_constraint_adapter.h>
 #include <constraints/constraint_builder.h>
 
+#include <tools/item_modification_routine.h>
+
 #include "constraint_test_utils.h"
 
 using namespace KI_TEST;
@@ -1187,7 +1189,9 @@ BOOST_AUTO_TEST_CASE( RoundedRectNonCardinalRotationDegradesToUnmapped )
 // Driving gate scans footprint-parented constraints too stale footprint binding revokes it
 BOOST_AUTO_TEST_CASE( FootprintParentedBindingGatesDriving )
 {
-    BOARD      board;
+    BOARD board;
+    board.SetBoardUse( BOARD_USE::FPHOLDER );
+
     FOOTPRINT* fp = new FOOTPRINT( &board );
     board.Add( fp );
 
@@ -1503,6 +1507,228 @@ BOOST_AUTO_TEST_CASE( ValueModePropertySurface )
 
     // A Driven dimension accepts anything the setter will ignore so no veto there
     BOOST_CHECK( !valueProp->Validate( wxAny( wxString( wxS( "0" ) ) ), unbound ) );
+}
+
+
+// Filleting a constrained corner puts an arc between the lines so each line binds to the arc
+BOOST_AUTO_TEST_CASE( FilletRebindsCornerCoincidentToArc )
+{
+    BOARD board;
+
+    PCB_SHAPE* lineA = addSegment( board, VECTOR2I( 0, 0 ), VECTOR2I( 10 * MM, 0 ) );
+    PCB_SHAPE* lineB = addSegment( board, VECTOR2I( 10 * MM, 0 ), VECTOR2I( 10 * MM, 10 * MM ) );
+
+    const CONSTRAINT_MEMBER cornerA( lineA->m_Uuid, CONSTRAINT_ANCHOR::END );
+    const CONSTRAINT_MEMBER cornerB( lineB->m_Uuid, CONSTRAINT_ANCHOR::START );
+
+    addConstraint( board, PCB_CONSTRAINT_TYPE::COINCIDENT, { cornerB, cornerA } );
+
+    PCB_SHAPE* arc = nullptr;
+
+    ITEM_MODIFICATION_ROUTINE::CALLABLE_BASED_HANDLER handler(
+            [&]( std::unique_ptr<BOARD_ITEM> aItem )
+            {
+                if( aItem->Type() == PCB_SHAPE_T )
+                    arc = static_cast<PCB_SHAPE*>( aItem.get() );
+
+                board.Add( aItem.release() );
+            },
+            []( BOARD_ITEM& )
+            {
+            },
+            [&]( BOARD_ITEM& aItem )
+            {
+                board.Remove( &aItem );
+            } );
+
+    LINE_FILLET_ROUTINE fillet( &board, handler, 1 * MM );
+    fillet.ProcessLinePair( *lineA, *lineB );
+
+    BOOST_REQUIRE( arc );
+
+    auto heldTogether = [&]( const CONSTRAINT_MEMBER& aFirst, const CONSTRAINT_MEMBER& aSecond )
+    {
+        for( const PCB_CONSTRAINT* constraint : board.Constraints() )
+        {
+            if( constraint->GetConstraintType() != PCB_CONSTRAINT_TYPE::COINCIDENT )
+                continue;
+
+            const std::vector<CONSTRAINT_MEMBER>& members = constraint->GetMembers();
+
+            if( members.size() != 2 )
+                continue;
+
+            if( ( members[0] == aFirst && members[1] == aSecond ) || ( members[0] == aSecond && members[1] == aFirst ) )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    const CONSTRAINT_MEMBER arcStart( arc->m_Uuid, CONSTRAINT_ANCHOR::START );
+    const CONSTRAINT_MEMBER arcEnd( arc->m_Uuid, CONSTRAINT_ANCHOR::END );
+
+    // Which end of the arc meets which line is the routine's business
+    BOOST_CHECK( ( heldTogether( arcStart, cornerA ) && heldTogether( arcEnd, cornerB ) )
+                 || ( heldTogether( arcStart, cornerB ) && heldTogether( arcEnd, cornerA ) ) );
+
+    // The two lines no longer touch so a constraint still joining them is false
+    BOOST_CHECK( !heldTogether( cornerA, cornerB ) );
+}
+
+
+// Chamfering a constrained corner puts a segment between the lines so each line binds to it
+BOOST_AUTO_TEST_CASE( ChamferRebindsCornerCoincidentToChamfer )
+{
+    BOARD board;
+
+    PCB_SHAPE* lineA = addSegment( board, VECTOR2I( 0, 0 ), VECTOR2I( 10 * MM, 0 ) );
+    PCB_SHAPE* lineB = addSegment( board, VECTOR2I( 10 * MM, 0 ), VECTOR2I( 10 * MM, 10 * MM ) );
+
+    const CONSTRAINT_MEMBER cornerA( lineA->m_Uuid, CONSTRAINT_ANCHOR::END );
+    const CONSTRAINT_MEMBER cornerB( lineB->m_Uuid, CONSTRAINT_ANCHOR::START );
+
+    addConstraint( board, PCB_CONSTRAINT_TYPE::COINCIDENT, { cornerB, cornerA } );
+
+    PCB_SHAPE* chamfer = nullptr;
+
+    ITEM_MODIFICATION_ROUTINE::CALLABLE_BASED_HANDLER handler(
+            [&]( std::unique_ptr<BOARD_ITEM> aItem )
+            {
+                if( aItem->Type() == PCB_SHAPE_T )
+                    chamfer = static_cast<PCB_SHAPE*>( aItem.get() );
+
+                board.Add( aItem.release() );
+            },
+            []( BOARD_ITEM& )
+            {
+            },
+            [&]( BOARD_ITEM& aItem )
+            {
+                board.Remove( &aItem );
+            } );
+
+    LINE_CHAMFER_ROUTINE chamferRoutine( &board, handler, CHAMFER_PARAMS{ 1 * MM, 1 * MM } );
+    chamferRoutine.ProcessLinePair( *lineA, *lineB );
+
+    BOOST_REQUIRE( chamfer );
+
+    auto heldTogether = [&]( const CONSTRAINT_MEMBER& aFirst, const CONSTRAINT_MEMBER& aSecond )
+    {
+        for( const PCB_CONSTRAINT* constraint : board.Constraints() )
+        {
+            if( constraint->GetConstraintType() != PCB_CONSTRAINT_TYPE::COINCIDENT )
+                continue;
+
+            const std::vector<CONSTRAINT_MEMBER>& members = constraint->GetMembers();
+
+            if( members.size() != 2 )
+                continue;
+
+            if( ( members[0] == aFirst && members[1] == aSecond ) || ( members[0] == aSecond && members[1] == aFirst ) )
+            {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    // The chamfer leaves each line running from its far end to the chamfer
+    const CONSTRAINT_MEMBER newCornerA( lineA->m_Uuid, CONSTRAINT_ANCHOR::END );
+    const CONSTRAINT_MEMBER newCornerB( lineB->m_Uuid, CONSTRAINT_ANCHOR::END );
+
+    BOOST_CHECK( heldTogether( { chamfer->m_Uuid, CONSTRAINT_ANCHOR::START }, newCornerA ) );
+    BOOST_CHECK( heldTogether( { chamfer->m_Uuid, CONSTRAINT_ANCHOR::END }, newCornerB ) );
+
+    BOOST_CHECK( !heldTogether( cornerA, cornerB ) );
+}
+
+
+// A dogbone corner reaches each line with an arc, or with a slot segment on a narrow mouth
+BOOST_AUTO_TEST_CASE( DogboneRebindsCornerCoincidentToInsertedShape )
+{
+    const auto runDogbone = []( const VECTOR2I& aFarB, bool aAddSlots, std::vector<PCB_SHAPE*>& aInserted,
+                                BOARD& aBoard ) -> std::pair<PCB_SHAPE*, PCB_SHAPE*>
+    {
+        PCB_SHAPE* lineA = addSegment( aBoard, VECTOR2I( 0, 0 ), VECTOR2I( 20 * MM, 0 ) );
+        PCB_SHAPE* lineB = addSegment( aBoard, VECTOR2I( 20 * MM, 0 ), aFarB );
+
+        addConstraint( aBoard, PCB_CONSTRAINT_TYPE::COINCIDENT,
+                       { { lineB->m_Uuid, CONSTRAINT_ANCHOR::START }, { lineA->m_Uuid, CONSTRAINT_ANCHOR::END } } );
+
+        ITEM_MODIFICATION_ROUTINE::CALLABLE_BASED_HANDLER handler(
+                [&]( std::unique_ptr<BOARD_ITEM> aItem )
+                {
+                    if( aItem->Type() == PCB_SHAPE_T )
+                        aInserted.push_back( static_cast<PCB_SHAPE*>( aItem.get() ) );
+
+                    aBoard.Add( aItem.release() );
+                },
+                []( BOARD_ITEM& )
+                {
+                },
+                [&]( BOARD_ITEM& aItem )
+                {
+                    aBoard.Remove( &aItem );
+                } );
+
+        DOGBONE_CORNER_ROUTINE dogbone( &aBoard, handler, { 1 * MM, aAddSlots } );
+        dogbone.ProcessLinePair( *lineA, *lineB );
+
+        return { lineA, lineB };
+    };
+
+    auto boundPosition = []( BOARD& aBoard, const CONSTRAINT_MEMBER& aMember ) -> std::optional<VECTOR2I>
+    {
+        for( const PCB_CONSTRAINT* constraint : aBoard.Constraints() )
+        {
+            if( constraint->GetConstraintType() != PCB_CONSTRAINT_TYPE::COINCIDENT )
+                continue;
+
+            const std::vector<CONSTRAINT_MEMBER>& members = constraint->GetMembers();
+
+            if( members.size() != 2 )
+                continue;
+
+            if( members[0] == aMember )
+                return ConstraintAnchorPosition( &aBoard, members[1] );
+
+            if( members[1] == aMember )
+                return ConstraintAnchorPosition( &aBoard, members[0] );
+        }
+
+        return std::nullopt;
+    };
+
+    // A right angle needs no slot and gets a bare arc, a 45 degree corner gets two slots as well
+    struct CORNER
+    {
+        VECTOR2I farB;
+        bool     addSlots;
+        size_t   inserted;
+    };
+
+    const std::vector<CORNER> corners = { { { 20 * MM, 20 * MM }, false, 1 }, { { 10 * MM, 10 * MM }, true, 3 } };
+
+    for( const CORNER& corner : corners )
+    {
+        BOARD                   board;
+        std::vector<PCB_SHAPE*> inserted;
+
+        auto [lineA, lineB] = runDogbone( corner.farB, corner.addSlots, inserted, board );
+
+        BOOST_REQUIRE_EQUAL( inserted.size(), corner.inserted );
+
+        // Whatever shape the corner inserted, it must be held to the line it reaches
+        std::optional<VECTOR2I> atA = boundPosition( board, { lineA->m_Uuid, CONSTRAINT_ANCHOR::END } );
+        std::optional<VECTOR2I> atB = boundPosition( board, { lineB->m_Uuid, CONSTRAINT_ANCHOR::END } );
+
+        BOOST_CHECK( atA && *atA == lineA->GetEnd() );
+        BOOST_CHECK( atB && *atB == lineB->GetEnd() );
+    }
 }
 
 

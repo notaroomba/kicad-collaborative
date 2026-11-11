@@ -82,11 +82,14 @@ public:
      * it, so a drawing canvas parent keeps its size and does not have to repaint.  Otherwise
      * the infobar is laid out by the parent's sizer.
      *
+     * Where the platform cannot draw a child over a canvas, an overlay infobar is hosted in a
+     * window of its own and aParent is not its direct parent.
+     *
      * @param aParent is the parent
      * @param aWinId is the ID for this infobar object
      * @param aOverlay is true to overlay the parent instead of being laid out by its sizer
      */
-    WX_INFOBAR( wxWindow* aParent, wxWindowID aWinid = wxID_ANY, bool aOverlay = false );
+    WX_INFOBAR( wxWindow* aParent, wxWindowID aWinId = wxID_ANY, bool aOverlay = false );
 
     ~WX_INFOBAR();
 
@@ -161,9 +164,10 @@ public:
      * Show the infobar with the provided message and icon for a specific period
      * of time.
      *
-     * @param aMessage is the message to display
-     * @param aTime is the amount of time in milliseconds to show the infobar
-     * @param aFlags is the flag containing the icon to display on the left side of the infobar
+     * @param aMessage is the message to display.
+     * @param aTime is the amount of time in milliseconds to show the infobar.
+     * @param aFlags is the flag containing the icon to display on the left side of the infobar.
+     * @param aType is the info bar message type.
      */
     void ShowMessageFor( const wxString& aMessage, int aTime, int aFlags = wxICON_INFORMATION,
                          MESSAGE_TYPE aType = WX_INFOBAR::MESSAGE_TYPE::GENERIC );
@@ -257,6 +261,7 @@ protected:
     int           m_showTime;       ///< The time to show the infobar. 0 = don't auto hide
     bool          m_updateLock;     ///< True if this infobar requested the UI update
     bool          m_overlay;        ///< True if this infobar is drawn on top of its parent
+    wxWindow*     m_anchor;         ///< The window this infobar spans, its parent unless hosted
     wxTimer*      m_showTimer;      ///< The timer counting the autoclose period
     MESSAGE_TYPE  m_type;           ///< The type of message being displayed
     wxString      m_message;        ///< The original message without wrapping

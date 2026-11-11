@@ -66,7 +66,7 @@ public:
     PCB_VIA_STITCH& operator=( PCB_VIA_STITCH&& aOther ) noexcept;
     ~PCB_VIA_STITCH() override;
 
-    wxString GetGeneratorType() const override { return wxS( "via_stitch" ); }
+    wxString GetGeneratorType() const override { return GENERATOR_TYPE; }
 
     wxString GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const override
     {
@@ -190,6 +190,9 @@ public:
     const STRING_ANY_MAP GetProperties() const override;
     void SetProperties( const STRING_ANY_MAP& aProps ) override;
 
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
     EDA_ITEM* Clone() const override { return new PCB_VIA_STITCH( *this ); }
 
     bool ChildrenAreIndividuallySelectable() const override { return true; }
@@ -211,9 +214,9 @@ protected:
     }
 
 private:
-    int defaultPitch( BOARD* aBoard ) const;      // grid pitch
-    int defaultViaSize( BOARD* aBoard ) const;    // via diameter
-    int defaultViaDrill( BOARD* aBoard ) const;   // drill diameter
+    int defaultPitch( const BOARD* aBoard ) const;    // grid pitch
+    int defaultViaSize( const BOARD* aBoard ) const;  // via diameter
+    int defaultViaDrill( const BOARD* aBoard ) const; // drill diameter
 
     /**
      * @return true when the current layout/mode places vias on a regular grid, and so keys

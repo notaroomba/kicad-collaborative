@@ -35,6 +35,7 @@
 #include <pcb_painter.h>
 #include <pcbnew_settings.h>
 #include <footprint_editor_settings.h>
+#include <gal/graphics_abstraction_layer.h>
 #include <project.h>
 #include <project/project_local_settings.h>
 #include <settings/color_settings.h>
@@ -172,8 +173,16 @@ void NET_GRID_TABLE::SetValueAsBool( int aRow, int aCol, bool aValue )
     wxASSERT( static_cast<size_t>( aRow ) < m_nets.size() );
     wxASSERT( aCol == COL_VISIBILITY );
 
-    m_nets[aRow].visible = aValue;
+    SetVisibilityState( aRow, aValue );
     updateNetVisibility( m_nets[aRow] );
+}
+
+
+void NET_GRID_TABLE::SetVisibilityState( int aRow, bool aVisible )
+{
+    wxASSERT( static_cast<size_t>( aRow ) < m_nets.size() );
+
+    m_nets[aRow].visible = aVisible;
 }
 
 
@@ -198,7 +207,7 @@ void NET_GRID_TABLE::SetValueAsCustom( int aRow, int aCol, const wxString& aType
 }
 
 
-NET_GRID_ENTRY& NET_GRID_TABLE::GetEntry( int aRow )
+const NET_GRID_ENTRY& NET_GRID_TABLE::GetEntry( int aRow ) const
 {
     wxASSERT( static_cast<size_t>( aRow ) < m_nets.size() );
     return m_nets[aRow];
@@ -207,16 +216,8 @@ NET_GRID_ENTRY& NET_GRID_TABLE::GetEntry( int aRow )
 
 int NET_GRID_TABLE::GetRowByNetcode( int aCode ) const
 {
-    auto it = std::find_if( m_nets.cbegin(), m_nets.cend(),
-            [aCode]( const NET_GRID_ENTRY& aEntry )
-            {
-                return aEntry.code == aCode;
-            } );
-
-    if( it == m_nets.cend() )
-        return -1;
-
-    return std::distance( m_nets.cbegin(), it );
+    auto it = m_netcodeToRow.find( aCode );
+    return it != m_netcodeToRow.end() ? it->second : -1;
 }
 
 
@@ -236,6 +237,7 @@ void NET_GRID_TABLE::Rebuild()
 
     int deleted = (int) m_nets.size();
     m_nets.clear();
+    m_netcodeToRow.clear();
 
     if( GetView() )
     {
@@ -264,6 +266,13 @@ void NET_GRID_TABLE::Rebuild()
                {
                  return a.name < b.name;
                } );
+
+    m_netcodeToRow.reserve( m_nets.size() );
+
+    for( size_t row = 0; row < m_nets.size(); ++row )
+    {
+        m_netcodeToRow.emplace( m_nets[row].code, static_cast<int>( row ) );
+    }
 
     if( GetView() )
     {
@@ -340,6 +349,7 @@ const APPEARANCE_CONTROLS::APPEARANCE_SETTING APPEARANCE_CONTROLS::s_objectSetti
     RR( _HKI( "Zones" ),                LAYER_ZONES,              _HKI( "Show copper zones" ),        true ),
     RR( _HKI( "Filled Shapes" ),        LAYER_FILLED_SHAPES,      _HKI( "Opacity of filled shapes" ), true,             false ),
     RR( _HKI( "Images" ),               LAYER_DRAW_BITMAPS,       _HKI( "Show user images" ),         true ),
+    RR( _HKI( "Outside Group" ),        LAYER_OUTSIDE_GROUP_OPACITY, _HKI( "Opacity of items outside the entered group" ), true, false ),
     RR(),
     RR( _HKI( "Footprints Front" ),     LAYER_FOOTPRINTS_FR,      _HKI( "Show footprints that are on board's front" ) ),
     RR( _HKI( "Footprints Back" ),      LAYER_FOOTPRINTS_BK,      _HKI( "Show footprints that are on board's back" ) ),
@@ -354,7 +364,7 @@ const APPEARANCE_CONTROLS::APPEARANCE_SETTING APPEARANCE_CONTROLS::s_objectSetti
     RR( _HKI( "DRC Exclusions" ),       LAYER_DRC_EXCLUSION,      _HKI( "DRC violations which have been individually excluded" ) ),
     RR( _HKI( "Anchors" ),              LAYER_ANCHOR,             _HKI( "Show footprint and text origins as a cross" ) ),
     RR( _HKI( "Points" ),               LAYER_POINTS,             _HKI( "Show explicit snap points as crosses" ) ),
-    RR( _HKI( "Grid Items" ),           LAYER_GRIDITEMS,          _HKI( "Show custom routing/placement grids" ) ),
+    RR( _HKI( "Grids" ),                LAYER_SUBGRIDS,           _HKI( "Show custom routing/placement grids" ) ),
     RR( _HKI( "Via Stitching" ),        LAYER_VIA_STITCHING,      _HKI( "Show via stitching generator outlines" ) ),
     RR( _HKI( "Locked Item Shadow" ),   LAYER_LOCKED_ITEM_SHADOW, _HKI( "Show a shadow on locked items" ) ),
     RR( _HKI( "Colliding Courtyards" ), LAYER_CONFLICTS_SHADOW,   _HKI( "Show colliding footprint courtyards" ) ),
@@ -377,6 +387,7 @@ static std::set<int> s_allowedInFpEditor =
             LAYER_FP_REFERENCES,
             LAYER_FP_TEXT,
             LAYER_DRAW_BITMAPS,
+            LAYER_OUTSIDE_GROUP_OPACITY,
             LAYER_GRID,
             LAYER_POINTS,
             LAYER_VIA_STITCHING,
@@ -472,10 +483,10 @@ APPEARANCE_CONTROLS::APPEARANCE_CONTROLS( PCB_BASE_FRAME* aParent, wxWindow* aFo
 
     createControls();
 
-    m_btnNetInspector->SetBitmap( KiBitmapBundle( BITMAPS::list_nets_16 ) );
+    m_btnNetInspector->SetBitmap( KiBitmapBundle( BITMAPS::list_nets, 16 ) );
     m_btnNetInspector->SetPadding( 2 );
 
-    m_btnConfigureNetClasses->SetBitmap( KiBitmapBundle( BITMAPS::options_generic_16 ) );
+    m_btnConfigureNetClasses->SetBitmap( KiBitmapBundle( BITMAPS::options_generic, 16 ) );
     m_btnConfigureNetClasses->SetPadding( 2 );
 
     m_txtNetFilter->SetHint( _( "Filter nets" ) );
@@ -627,8 +638,7 @@ void APPEARANCE_CONTROLS::createControls()
     wxFont   infoFont = KIUI::GetInfoFont( this );
 
     // Create layer display options
-    m_paneLayerDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelLayers, wxID_ANY,
-                                                         _( "Layer Display Options" ) );
+    m_paneLayerDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelLayers, wxID_ANY, _( "Layer Display Options" ) );
     m_paneLayerDisplayOptions->Collapse();
     m_paneLayerDisplayOptions->SetBackgroundColour( m_notebook->GetThemeBackgroundColour() );
 
@@ -689,7 +699,7 @@ void APPEARANCE_CONTROLS::createControls()
     layerDisplayPane->Layout();
     layerDisplayOptionsSizer->Fit( layerDisplayPane );
 
-    m_panelLayersSizer->Add( m_paneLayerDisplayOptions, 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, 5 );
+    m_panelLayersSizer->Add( m_paneLayerDisplayOptions, 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, 3 );
 
     m_paneLayerDisplayOptions->Bind( WX_COLLAPSIBLE_PANE_CHANGED,
                                      [&]( wxCommandEvent& aEvent )
@@ -702,8 +712,7 @@ void APPEARANCE_CONTROLS::createControls()
 
     // Create net display options
 
-    m_paneNetDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelNetsAndClasses, wxID_ANY,
-                                                       _( "Net Display Options" ) );
+    m_paneNetDisplayOptions = new WX_COLLAPSIBLE_PANE( m_panelNetsAndClasses, wxID_ANY, _( "Net Display Options" ) );
     m_paneNetDisplayOptions->Collapse();
     m_paneNetDisplayOptions->SetBackgroundColour( m_notebook->GetThemeBackgroundColour() );
 
@@ -998,7 +1007,7 @@ void APPEARANCE_CONTROLS::OnNetGridMouseEvent( wxMouseEvent& aEvent )
 
         m_hoveredCell = cell;
 
-        NET_GRID_ENTRY& net = m_netsTable->GetEntry( cell.GetRow() );
+        const NET_GRID_ENTRY& net = m_netsTable->GetEntry( cell.GetRow() );
 
         wxString name = net.name;
         wxString showOrHide = net.visible ? _( "Click to hide ratsnest for %s" )
@@ -1130,7 +1139,7 @@ void APPEARANCE_CONTROLS::OnNetVisibilityChanged( int aNetCode, bool aVisibility
 
     if( row >= 0 )
     {
-        m_netsTable->SetValueAsBool( row, NET_GRID_TABLE::COL_VISIBILITY, aVisibility );
+        m_netsTable->SetVisibilityState( row, aVisibility );
         m_netsGrid->ForceRefresh();
     }
 }
@@ -1360,17 +1369,35 @@ void APPEARANCE_CONTROLS::setVisibleLayers( const LSET& aLayers )
     }
     else if( BOARD* board = m_frame->GetBoard() )
     {
+        const LSET before = board->GetVisibleLayers();
+        const LSET changed = before ^ aLayers;
+
         board->SetVisibleLayers( aLayers );
+
+        // A retained scene tracks layer visibility itself, so only items on changed layers need
+        // repainting. Holes also depend on whether any physical layer is left.
+        const bool anyPhysicalBefore = ( before & LSET::PhysicalLayersMask() ).any();
+        const bool anyPhysicalAfter = ( aLayers & LSET::PhysicalLayersMask() ).any();
+        const bool narrow = view->GetGAL() && view->GetGAL()->HasRetainedScene()
+                            && anyPhysicalBefore == anyPhysicalAfter;
 
         // Note: KIGFX::REPAINT isn't enough for things that go from invisible to visible as
         // they won't be found in the view layer's itemset for repainting.
         view->UpdateAllItemsConditionally( KIGFX::ALL,
-                []( KIGFX::VIEW_ITEM* aItem ) -> bool
+                [&]( KIGFX::VIEW_ITEM* aItem ) -> bool
                 {
                     // Items rendered to composite layers (such as LAYER_PAD_TH) must be redrawn
                     // whether they're optionally flashed or not (as the layer being hidden/shown
                     // might be the last layer the item is visible on).
-                    return dynamic_cast<PCB_VIA*>( aItem ) || dynamic_cast<PAD*>( aItem );
+                    if( !aItem->IsBOARD_ITEM() )
+                        return false;
+
+                    const BOARD_ITEM* item = static_cast<const BOARD_ITEM*>( aItem );
+
+                    if( item->Type() != PCB_VIA_T && item->Type() != PCB_PAD_T )
+                        return false;
+
+                    return !narrow || ( item->GetLayerSet() & changed ).any();
                 } );
 
         m_frame->Update3DView( true, m_frame->GetPcbNewSettings()->m_Display.m_Live3DRefresh );
@@ -1535,6 +1562,9 @@ std::vector<LAYER_PRESET> APPEARANCE_CONTROLS::GetUserLayerPresets() const
 
 void APPEARANCE_CONTROLS::SetUserLayerPresets( std::vector<LAYER_PRESET>& aPresetList )
 {
+    // Points into the map about to be rebuilt
+    m_lastSelectedUserPreset = nullptr;
+
     // Reset to defaults
     loadDefaultLayerPresets();
 
@@ -1549,6 +1579,9 @@ void APPEARANCE_CONTROLS::SetUserLayerPresets( std::vector<LAYER_PRESET>& aPrese
     }
 
     rebuildLayerPresetsWidget( true );
+
+    // The reset selects All Layers, which a later save would persist over what is actually shown
+    syncLayerPresetSelection();
 }
 
 
@@ -1610,6 +1643,7 @@ std::vector<VIEWPORT> APPEARANCE_CONTROLS::GetUserViewports() const
 void APPEARANCE_CONTROLS::SetUserViewports( std::vector<VIEWPORT>& aViewportList )
 {
     m_viewports.clear();
+    m_viewportMRU.clear();
 
     for( const VIEWPORT& viewport : aViewportList )
     {
@@ -2500,7 +2534,8 @@ void APPEARANCE_CONTROLS::syncObjectSettings()
               && m_objectSettingsMap.count( LAYER_PADS )
               && m_objectSettingsMap.count( LAYER_ZONES )
               && m_objectSettingsMap.count( LAYER_DRAW_BITMAPS )
-              && m_objectSettingsMap.count( LAYER_FILLED_SHAPES ) );
+              && m_objectSettingsMap.count( LAYER_FILLED_SHAPES )
+              && m_objectSettingsMap.count( LAYER_OUTSIDE_GROUP_OPACITY ) );
 
     m_objectSettingsMap[LAYER_TRACKS]->ctl_opacity->SetValue( opts.m_TrackOpacity * 100 );
     m_objectSettingsMap[LAYER_VIAS]->ctl_opacity->SetValue( opts.m_ViaOpacity * 100 );
@@ -2508,6 +2543,7 @@ void APPEARANCE_CONTROLS::syncObjectSettings()
     m_objectSettingsMap[LAYER_ZONES]->ctl_opacity->SetValue( opts.m_ZoneOpacity * 100 );
     m_objectSettingsMap[LAYER_DRAW_BITMAPS]->ctl_opacity->SetValue( opts.m_ImageOpacity * 100 );
     m_objectSettingsMap[LAYER_FILLED_SHAPES]->ctl_opacity->SetValue( opts.m_FilledShapeOpacity * 100 );
+    m_objectSettingsMap[LAYER_OUTSIDE_GROUP_OPACITY]->ctl_opacity->SetValue( opts.m_OutsideGroupOpacity * 100 );
 }
 
 
@@ -2582,6 +2618,8 @@ void APPEARANCE_CONTROLS::rebuildNets()
 
     const std::set<wxString>& hiddenClasses = m_frame->Prj().GetLocalSettings().m_HiddenNetclasses;
 
+    m_netclassSettings.clear();
+    m_netclassSettingsMap.clear();
     m_netclassOuterSizer->Clear( true );
 
     auto appendNetclass =
@@ -2795,8 +2833,13 @@ void APPEARANCE_CONTROLS::syncLayerPresetSelection()
     auto it = std::find_if( m_layerPresets.begin(), m_layerPresets.end(),
                             [&]( const std::pair<const wxString, LAYER_PRESET>& aPair )
                             {
+                                // see onLayerPresetChanged logic for built-in presets
+                                const GAL_SET& presetObjects = aPair.second.readOnly
+                                        ? m_lastBuiltinPreset.renderLayers
+                                        : aPair.second.renderLayers;
+
                                 return ( aPair.second.layers == visibleLayers
-                                         && aPair.second.renderLayers == visibleObjects
+                                         && presetObjects == visibleObjects
                                          && aPair.second.flipBoard == flipBoard );
                             } );
 
@@ -2960,8 +3003,13 @@ void APPEARANCE_CONTROLS::onLayerPresetChanged( wxCommandEvent& aEvent )
             {
                 m_layerPresets.erase( presetName );
 
+                if( m_lastSelectedUserPreset && m_lastSelectedUserPreset->name == presetName )
+                    m_lastSelectedUserPreset = nullptr;
+
+                if( m_currentPreset && m_currentPreset->name == presetName )
+                    m_currentPreset = nullptr;
+
                 m_cbLayerPresets->Delete( idx );
-                m_currentPreset = nullptr;
             }
 
             if( m_presetMRU.Index( presetName ) != wxNOT_FOUND )
@@ -3178,6 +3226,9 @@ void APPEARANCE_CONTROLS::onViewportChanged( wxCommandEvent& aEvent )
 
             if( idx != wxNOT_FOUND )
             {
+                if( m_lastSelectedViewport && m_lastSelectedViewport->name == viewportName )
+                    m_lastSelectedViewport = nullptr;
+
                 m_viewports.erase( viewportName );
                 m_cbViewports->Delete( idx );
             }
@@ -3255,6 +3306,7 @@ void APPEARANCE_CONTROLS::onObjectOpacitySlider( int aLayer, float aOpacity )
     case static_cast<int>( LAYER_ZONES ):         options.m_ZoneOpacity        = aOpacity; break;
     case static_cast<int>( LAYER_DRAW_BITMAPS ):  options.m_ImageOpacity       = aOpacity; break;
     case static_cast<int>( LAYER_FILLED_SHAPES ): options.m_FilledShapeOpacity = aOpacity; break;
+    case static_cast<int>( LAYER_OUTSIDE_GROUP_OPACITY ): options.m_OutsideGroupOpacity = aOpacity; break;
     default: return;
     }
 
@@ -3268,7 +3320,7 @@ void APPEARANCE_CONTROLS::onNetContextMenu( wxCommandEvent& aEvent )
     wxASSERT( m_netsGrid->GetSelectedRows().size() == 1 );
 
     int row = m_netsGrid->GetSelectedRows()[0];
-    NET_GRID_ENTRY& net = m_netsTable->GetEntry( row );
+    const NET_GRID_ENTRY& net = m_netsTable->GetEntry( row );
 
     m_netsGrid->ClearSelection();
 
@@ -3351,7 +3403,7 @@ void APPEARANCE_CONTROLS::showNetclass( const wxString& aClassName, bool aShow )
             int row = m_netsTable->GetRowByNetcode( net->GetNetCode() );
 
             if( row >= 0 )
-                m_netsTable->SetValueAsBool( row, NET_GRID_TABLE::COL_VISIBILITY, aShow );
+                m_netsTable->SetVisibilityState( row, aShow );
         }
     }
 
@@ -3540,23 +3592,16 @@ void APPEARANCE_CONTROLS::onNetclassContextMenu( wxCommandEvent& aEvent )
         {
             if( !m_contextMenuNetclass.IsEmpty() )
             {
+                board->ResetNetHighLight();
+                rs->SetHighlight( false );
+
                 runOnNetsOfClass( m_contextMenuNetclass,
-                        [&]( NETINFO_ITEM* aItem )
+                        [&]( const NETINFO_ITEM* aItem )
                         {
-                            static bool first = true;
                             int code = aItem->GetNetCode();
 
-                            if( first )
-                            {
-                                board->SetHighLightNet( code );
-                                rs->SetHighlight( true, code );
-                                first = false;
-                            }
-                            else
-                            {
-                                board->SetHighLightNet( code, true );
-                                rs->SetHighlight( true, code, true );
-                            }
+                            board->SetHighLightNet( code, true );
+                            rs->SetHighlight( true, code, true );
                         } );
 
                 view->UpdateAllLayersColor();

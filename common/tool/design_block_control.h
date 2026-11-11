@@ -56,8 +56,7 @@ protected:
     bool selIsInLibrary( const SELECTION& aSel );
     bool selIsDesignBlock( const SELECTION& aSel );
 
-    LIB_ID getSelectedLibId();
-    ///< Set up handlers for various events.
+    /// Set up handlers for various events.
     void setTransitions() override;
 
     virtual DESIGN_BLOCK_PANE* getDesignBlockPane() = 0;

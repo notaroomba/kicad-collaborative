@@ -100,7 +100,7 @@ BOOST_AUTO_TEST_CASE( Issue18013_FlippedFootprintRotation )
     props["version"] = "C";
     props["sigfig"] = "3";
 
-    BOOST_REQUIRE_NO_THROW( ipc2581Plugin.SaveBoard( tempPath, &board, &props ) );
+    BOOST_REQUIRE_NO_THROW( ipc2581Plugin.SaveBoard( tempPath, board, &props ) );
     BOOST_REQUIRE( wxFileExists( tempPath ) );
 
     std::ifstream xmlFile( tempPath.ToStdString() );

@@ -133,7 +133,7 @@ public:
      *
      * @return true if route has been committed. May return false if the routing result is
      *         violating design rules.  In such cases, the track is only committed if
-     *         CanViolateDRC() is on.
+     *         ROUTING_SETTINGS::AllowDRCViolations() is on.
      */
     bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish ) override;
 
@@ -234,17 +234,9 @@ public:
 
     void GetModifiedNets( std::vector<NET_HANDLE>& aNets ) const override;
 
-    /**
-     * Snaps the point \a aP to segment \a aSeg. Splits the segment in two, forming a
-     * joint at \a aP and stores updated topology in node \a aNode.
-     */
-    bool SplitAdjacentSegments( NODE* aNode, ITEM* aSeg, const VECTOR2I& aP );
 
-    /**
-     * Snaps the point \a aP to arc \a aArc. Splits the arc in two, forming a
-     * joint at \a aP and stores updated topology in node \a aNode.
-     */
-    bool SplitAdjacentArcs( NODE* aNode, ITEM* aArc, const VECTOR2I& aP );
+protected:
+    void removeAntennas( NODE* aNode, const ITEM* aEndItem, const VECTOR2I& aJoin );
 
 private:
     /**
@@ -278,19 +270,6 @@ private:
      * Used by posture switching mechanism.
      */
     void setInitialDirection( const DIRECTION_45& aDirection );
-
-    /**
-     * Searches aNode for traces concurrent to aLatest and removes them. Updated
-     * topology is stored in aNode.
-     */
-    void removeLoops( NODE* aNode, LINE& aLatest );
-
-    /**
-     * Assemble a line starting from segment or arc aLatest, removes collinear segments
-     * and redundant vertices.  If a simplification has been found, replaces the old line
-     * with the simplified one in \a aNode.
-     */
-    void simplifyNewLine( NODE* aNode, LINKED_ITEM* aLatest );
 
     /**
      * Check if the head of the track intersects its tail. If so, cuts the tail up to the
@@ -346,25 +325,26 @@ private:
      * Perform a single routing algorithm step, for the end point \a aP.
      *
      * @param aP is the  ending point of current route.
-     * @return true if the line has been changed.
      */
     void routeStep( const VECTOR2I& aP );
 
-    ///< Route step walk around mode.
+    /// Route step walk around mode.
     bool rhWalkOnly( const VECTOR2I& aP, LINE& aNewHead, LINE& aNewTail );
     bool rhWalkBase( const VECTOR2I& aP, LINE& aWalkLine, int aCollisionMask, PNS::PNS_MODE aMode, bool& aViaOk );
     bool splitHeadTail( const LINE& aNewLine, const LINE& aOldTail, LINE& aNewHead, LINE& aNewTail );
-    bool cursorDistMinimum( const SHAPE_LINE_CHAIN& aL, const VECTOR2I& aCursor,  double lengthThreshold, SHAPE_LINE_CHAIN& aOut );
-    bool clipAndCheckCollisions( const VECTOR2I& aP, const SHAPE_LINE_CHAIN& aL, SHAPE_LINE_CHAIN& aOut, int &thresholdDist );
+    bool cursorDistMinimum( const SHAPE_LINE_CHAIN& aL, const VECTOR2I& aCursor, double lengthThreshold,
+                            SHAPE_LINE_CHAIN& aOut );
+    bool clipAndCheckCollisions( const VECTOR2I& aP, const SHAPE_LINE_CHAIN& aL, SHAPE_LINE_CHAIN& aOut,
+                                 int &thresholdDist );
 
     void updatePStart( const LINE& tail );
 
     //bool rhPostSplitHeadTail( )
 
-    ///< Route step shove mode.
+    /// Route step shove mode.
     bool rhShoveOnly( const VECTOR2I& aP, LINE& aNewHead, LINE& aNewTail );
 
-    ///< Route step mark obstacles mode.
+    /// Route step mark obstacles mode.
     bool rhMarkObstacles( const VECTOR2I& aP, LINE& aNewHead, LINE& aNewTail );
 
     const VIA makeVia( const VECTOR2I& aP );
@@ -405,6 +385,8 @@ private:
     LINE           m_currentTrace;
 
     ITEM*          m_startItem;
+    ITEM*          m_routeStartItem;
+    VECTOR2I       m_routeStart;
     ITEM*          m_endItem;
 
     bool           m_idle;

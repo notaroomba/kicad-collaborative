@@ -46,9 +46,12 @@ public:
      *
      * @param aRotation rotation of the mouse wheel (this comes from
      *                  wxMouseEvent::GetWheelRotation()).
+     * @param aWheelDelta rotation of one wheel notch (wxMouseEvent::GetWheelDelta()), which
+     *                    zooms once per notch of a merged event, or 0 when the rotation is a
+     *                    scroll distance and is only capped.
      * @return the scale factor to scroll by.
      */
-    virtual double GetScaleForRotation( int aRotation ) = 0;
+    virtual double GetScaleForRotation( int aRotation, int aWheelDelta = 0 ) = 0;
 };
 
 
@@ -73,8 +76,8 @@ public:
     /// The default minimum step factor for accelerating controller.
     static constexpr double DEFAULT_ACCELERATION_SCALE = 5.0;
 
-    /*
-     * A class interface that provides timestamps for events.
+    /**
+     * A interface that provides timestamps for events.
      */
     class TIMESTAMP_PROVIDER
     {
@@ -88,6 +91,7 @@ public:
     };
 
     /**
+     * @param aScale is the acceleration scalar.
      * @param aAccTimeout the timeout - if a scroll happens within this timeframe,
      *                    the zoom will be faster.
      * @param aTimestampProv a provider for timestamps. If null, a default will be provided,
@@ -98,7 +102,7 @@ public:
                                   const TIMEOUT& aAccTimeout = DEFAULT_TIMEOUT,
                                   TIMESTAMP_PROVIDER* aTimestampProv = nullptr );
 
-    double GetScaleForRotation( int aRotation ) override;
+    double GetScaleForRotation( int aRotation, int aWheelDelta = 0 ) override;
 
     TIMEOUT GetTimeout() const
     {
@@ -144,7 +148,7 @@ public:
      */
     CONSTANT_ZOOM_CONTROLLER( double aScale );
 
-    double GetScaleForRotation( int aRotation ) override;
+    double GetScaleForRotation( int aRotation, int aWheelDelta = 0 ) override;
 
     /// A suitable (magic) scale factor for GTK3 systems.
     static constexpr double GTK3_SCALE = 0.002;

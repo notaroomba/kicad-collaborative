@@ -40,6 +40,8 @@ API_HANDLER_EDITOR::API_HANDLER_EDITOR( EDA_BASE_FRAME* aFrame ) :
     registerHandler<UpdateItems, UpdateItemsResponse>( &API_HANDLER_EDITOR::handleUpdateItems );
     registerHandler<DeleteItems, DeleteItemsResponse>( &API_HANDLER_EDITOR::handleDeleteItems );
     registerHandler<HitTest, HitTestResponse>( &API_HANDLER_EDITOR::handleHitTest );
+    registerHandler<GetDocumentModifiedState, GetDocumentModifiedStateResponse>(
+            &API_HANDLER_EDITOR::handleGetDocumentModifiedState );
     registerHandler<GetTitleBlockInfo, types::TitleBlockInfo>( &API_HANDLER_EDITOR::handleGetTitleBlockInfo );
     registerHandler<SetTitleBlockInfo, google::protobuf::Empty>( &API_HANDLER_EDITOR::handleSetTitleBlockInfo );
 }
@@ -48,17 +50,17 @@ API_HANDLER_EDITOR::API_HANDLER_EDITOR( EDA_BASE_FRAME* aFrame ) :
 HANDLER_RESULT<BeginCommitResponse> API_HANDLER_EDITOR::handleBeginCommit(
         const HANDLER_CONTEXT<BeginCommit>& aCtx )
 {
+    // Before 11.0, commit requests had no header so we assume they are for the PCB editor
+    if( aCtx.Request.has_header() )
+    {
+        HANDLER_RESULT<std::optional<KIID>> valid = validateItemHeaderDocument( aCtx.Request.header() );
+
+        if( !valid )
+            return tl::unexpected( valid.error() );
+    }
+
     if( std::optional<ApiResponseStatus> busy = checkForBusy() )
         return tl::unexpected( *busy );
-
-    // Before 11.0, commit requests had no header so we assume they are for the PCB editor
-    if( aCtx.Request.has_header() && !validateItemHeaderDocument( aCtx.Request.header() ) )
-    {
-        ApiResponseStatus e;
-        // No message needed for AS_UNHANDLED; this is an internal flag for the API server
-        e.set_status( ApiStatusCode::AS_UNHANDLED );
-        return tl::unexpected( e );
-    }
 
     if( m_commits.count( aCtx.ClientName ) )
     {
@@ -86,17 +88,17 @@ HANDLER_RESULT<BeginCommitResponse> API_HANDLER_EDITOR::handleBeginCommit(
 HANDLER_RESULT<EndCommitResponse> API_HANDLER_EDITOR::handleEndCommit(
         const HANDLER_CONTEXT<EndCommit>& aCtx )
 {
+    // Before 11.0, commit requests had no header so we assume they are for the PCB editor
+    if( aCtx.Request.has_header() )
+    {
+        HANDLER_RESULT<std::optional<KIID>> valid = validateItemHeaderDocument( aCtx.Request.header() );
+
+        if( !valid )
+            return tl::unexpected( valid.error() );
+    }
+
     if( std::optional<ApiResponseStatus> busy = checkForBusy() )
         return tl::unexpected( *busy );
-
-    // Before 11.0, commit requests had no header so we assume they are for the PCB editor
-    if( aCtx.Request.has_header() && !validateItemHeaderDocument( aCtx.Request.header() ) )
-    {
-        ApiResponseStatus e;
-        // No message needed for AS_UNHANDLED; this is an internal flag for the API server
-        e.set_status( ApiStatusCode::AS_UNHANDLED );
-        return tl::unexpected( e );
-    }
 
     if( !m_commits.count( aCtx.ClientName ) )
     {
@@ -177,14 +179,8 @@ void API_HANDLER_EDITOR::pushCurrentCommit( const std::string& aClientName,
 
 HANDLER_RESULT<bool> API_HANDLER_EDITOR::validateDocument( const DocumentSpecifier& aDocument )
 {
-    if( !validateDocumentInternal( aDocument ) )
-    {
-        ApiResponseStatus e;
-        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
-        e.set_error_message( fmt::format( "the requested document {} is not open",
-                                          aDocument.board_filename() ) );
-        return tl::unexpected( e );
-    }
+    if( tl::expected<bool, ApiResponseStatus> validation = validateDocumentInternal( aDocument ); !validation )
+        return tl::unexpected( validation.error() );
 
     return true;
 }
@@ -209,7 +205,7 @@ HANDLER_RESULT<std::optional<KIID>> API_HANDLER_EDITOR::validateItemHeaderDocume
     if( tl::expected<bool, ApiResponseStatus> result = validateDocumentInternal( aHeader.document() ); !result )
         return tl::unexpected( result.error() );
 
-    if( aHeader.has_container() )
+    if( aHeader.has_container() && !aHeader.container().value().empty() )
     {
         return KIID( aHeader.container().value() );
     }
@@ -244,9 +240,16 @@ HANDLER_RESULT<CreateItemsResponse> API_HANDLER_EDITOR::handleCreateItems(
 
     CreateItemsResponse response;
 
+    // The dedicated CreateItems.container field (when set) overrides any container in the header
+    types::ItemHeader header;
+    header.CopyFrom( aCtx.Request.header() );
+
+    if( aCtx.Request.container().value().length() )
+        *header.mutable_container() = aCtx.Request.container();
+
     HANDLER_RESULT<ItemRequestStatus> result = handleCreateUpdateItemsInternal( true,
             aCtx.ClientName,
-            aCtx.Request.header(), aCtx.Request.items(),
+            header, aCtx.Request.items(),
             [&]( const ItemStatus& aStatus, const google::protobuf::Any& aItem )
             {
                 ItemCreationResult itemResult;
@@ -293,9 +296,6 @@ HANDLER_RESULT<UpdateItemsResponse> API_HANDLER_EDITOR::handleUpdateItems(
 HANDLER_RESULT<DeleteItemsResponse> API_HANDLER_EDITOR::handleDeleteItems(
         const HANDLER_CONTEXT<DeleteItems>& aCtx )
 {
-    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
-        return tl::unexpected( *busy );
-
     if( !validateItemHeaderDocument( aCtx.Request.header() ) )
     {
         ApiResponseStatus e;
@@ -303,6 +303,9 @@ HANDLER_RESULT<DeleteItemsResponse> API_HANDLER_EDITOR::handleDeleteItems(
         e.set_status( ApiStatusCode::AS_UNHANDLED );
         return tl::unexpected( e );
     }
+
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
 
     std::map<KIID, ItemDeletionStatus> itemsToDelete;
 
@@ -342,9 +345,6 @@ HANDLER_RESULT<DeleteItemsResponse> API_HANDLER_EDITOR::handleDeleteItems(
 HANDLER_RESULT<HitTestResponse> API_HANDLER_EDITOR::handleHitTest(
         const HANDLER_CONTEXT<HitTest>& aCtx )
 {
-    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
-        return tl::unexpected( *busy );
-
     if( !validateItemHeaderDocument( aCtx.Request.header() ) )
     {
         ApiResponseStatus e;
@@ -352,6 +352,9 @@ HANDLER_RESULT<HitTestResponse> API_HANDLER_EDITOR::handleHitTest(
         e.set_status( ApiStatusCode::AS_UNHANDLED );
         return tl::unexpected( e );
     }
+
+    if( std::optional<ApiResponseStatus> busy = checkForBusy() )
+        return tl::unexpected( *busy );
 
     HitTestResponse response;
 
@@ -375,6 +378,21 @@ HANDLER_RESULT<HitTestResponse> API_HANDLER_EDITOR::handleHitTest(
     else
         response.set_result( HitTestResult::HTR_NO_HIT );
 
+    return response;
+}
+
+
+HANDLER_RESULT<GetDocumentModifiedStateResponse>
+API_HANDLER_EDITOR::handleGetDocumentModifiedState( const HANDLER_CONTEXT<GetDocumentModifiedState>& aCtx )
+{
+    if( HANDLER_RESULT<bool> documentValidation = validateDocument( aCtx.Request.document() ); !documentValidation )
+        return tl::unexpected( documentValidation.error() );
+
+    GetDocumentModifiedStateResponse response;
+
+    wxCHECK( m_frame, response );
+    response.set_state( m_frame->IsContentModified() ? DocumentModifiedState::DMS_MODIFIED
+                                                     : DocumentModifiedState::DMS_UNMODIFIED );
     return response;
 }
 
@@ -403,7 +421,7 @@ API_HANDLER_EDITOR::handleGetTitleBlockInfo( const HANDLER_CONTEXT<GetTitleBlock
     if( !documentValidation )
         return tl::unexpected( documentValidation.error() );
 
-    std::optional<TITLE_BLOCK*> optBlock = getTitleBlock();
+    std::optional<TITLE_BLOCK*> optBlock = getTitleBlock( aCtx.Request.document() );
 
     if( !optBlock )
     {
@@ -451,7 +469,7 @@ API_HANDLER_EDITOR::handleSetTitleBlockInfo( const HANDLER_CONTEXT<SetTitleBlock
         return tl::unexpected( e );
     }
 
-    std::optional<TITLE_BLOCK*> optBlock = getTitleBlock();
+    std::optional<TITLE_BLOCK*> optBlock = getTitleBlock( aCtx.Request.document() );
 
     if( !optBlock )
     {
@@ -493,7 +511,7 @@ HANDLER_RESULT<types::PageSettings> API_HANDLER_EDITOR::handleGetPageSettings(
     if( !documentValidation )
         return tl::unexpected( documentValidation.error() );
 
-    std::optional<PAGE_INFO> optPageInfo = getPageSettings();
+    std::optional<PAGE_INFO> optPageInfo = getPageSettings( aCtx.Request.document() );
 
     if( !optPageInfo )
     {
@@ -535,7 +553,7 @@ HANDLER_RESULT<types::PageSettings> API_HANDLER_EDITOR::handleSetPageSettings(
         return tl::unexpected( e );
     }
 
-    std::optional<PAGE_INFO> optPageInfo = getPageSettings();
+    std::optional<PAGE_INFO> optPageInfo = getPageSettings( aCtx.Request.document() );
 
     if( !optPageInfo )
     {
@@ -546,6 +564,14 @@ HANDLER_RESULT<types::PageSettings> API_HANDLER_EDITOR::handleSetPageSettings(
     }
 
     const types::PageSettings& request = aCtx.Request.page_settings();
+
+    if( request.page_size() == types::PageSize::PS_UNKNOWN )
+    {
+        ApiResponseStatus e;
+        e.set_status( ApiStatusCode::AS_BAD_REQUEST );
+        e.set_error_message( "SetPageSettings requires page_size" );
+        return tl::unexpected( e );
+    }
 
     PAGE_INFO pageInfo = *optPageInfo;
     PAGE_SIZE_TYPE pageSizeType = FromProtoEnum<PAGE_SIZE_TYPE>( request.page_size() );
@@ -572,7 +598,7 @@ HANDLER_RESULT<types::PageSettings> API_HANDLER_EDITOR::handleSetPageSettings(
         pageInfo.SetType( pageSizeType, portrait );
     }
 
-    if( !setPageSettings( pageInfo ) )
+    if( !setPageSettings( aCtx.Request.document(), pageInfo ) )
     {
         ApiResponseStatus e;
         e.set_status( AS_BAD_REQUEST );

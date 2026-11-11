@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <font/text_attributes.h>
 #include <optional>
 
 #include <geometry/circle.h>
@@ -153,7 +154,7 @@ private:
     /**
      * Transform text info to suit a pin's
      *
-     * @param the 'nominal' text info for a PIN_RIGHT pin, which will be adjusted
+     * @param aTextInfo the 'nominal' text info for a PIN_RIGHT pin, which will be adjusted
      */
     void transformTextForPin( TEXT_INFO& aTextInfo ) const;
 
@@ -161,6 +162,11 @@ private:
      * Get the current pin text offset
      */
     int getPinTextOffset() const;
+
+    /**
+     * Whether the pin's name is drawn.  A zero name size hides one name while the symbol shows the rest.
+     */
+    bool isNameShown() const;
 
     /**
      * Get the distance from the pin to the centre of the drawn number, measured perpendicular to

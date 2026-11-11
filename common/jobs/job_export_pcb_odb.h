@@ -21,9 +21,28 @@
 #define JOB_EXPORT_PCB_ODB_H
 
 #include <kicommon.h>
-#include "job.h"
+#include <layer_ids.h>
+#include "job_export_pcb_fab.h"
 
-class KICOMMON_API JOB_EXPORT_PCB_ODB : public JOB
+struct ODB_LAYER_OVERRIDE
+{
+    PCB_LAYER_ID m_layer = UNDEFINED_LAYER;
+    bool         m_include = true;
+    wxString     m_odbName;
+    wxString     m_odbType;
+};
+
+namespace nlohmann
+{
+template <>
+struct adl_serializer<ODB_LAYER_OVERRIDE>
+{
+    static KICOMMON_API void from_json( const json& aJson, ODB_LAYER_OVERRIDE& aOverride );
+    static KICOMMON_API void to_json( json& aJson, const ODB_LAYER_OVERRIDE& aOverride );
+};
+} // namespace nlohmann
+
+class KICOMMON_API JOB_EXPORT_PCB_ODB : public JOB_EXPORT_PCB_FAB
 {
 public:
     JOB_EXPORT_PCB_ODB();
@@ -32,11 +51,7 @@ public:
 
     void SetDefaultOutputPath( const wxString& aReferenceName );
 
-    enum class ODB_UNITS
-    {
-        MM,
-        INCH,       // Do not use IN: it conflicts with a Windows header
-    };
+    bool SupportsDataSet( DATA_SET aDataSet ) const override;
 
     enum class ODB_COMPRESSION
     {
@@ -45,17 +60,26 @@ public:
         TGZ,
     };
 
+    enum class VARIANT_PACKAGING
+    {
+        SEPARATE,
+        COMBINED
+    };
+
+    enum class ORIGIN
+    {
+        ABSOLUTE_COORDS,
+        AUX,
+        GRID
+    };
+
 public:
-    wxString       m_filename;
-    wxString       m_drawingSheet;
-    wxString       m_variant;
-
-    ODB_UNITS      m_units;
-    int            m_precision;
-
-    ODB_COMPRESSION m_compressionMode;
-
-    bool m_checkZonesBeforeExport;
+    ODB_COMPRESSION                 m_compressionMode;
+    VARIANT_PACKAGING               m_variantPackaging = VARIANT_PACKAGING::SEPARATE;
+    ORIGIN                          m_origin = ORIGIN::ABSOLUTE_COORDS;
+    wxString                        m_productName;
+    bool                            m_boardMetadata = true;
+    std::vector<ODB_LAYER_OVERRIDE> m_layerOverrides;
 };
 
 #endif

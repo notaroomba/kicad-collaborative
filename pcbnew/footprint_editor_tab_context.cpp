@@ -25,13 +25,13 @@
 #include <footprint.h>
 
 
-FOOTPRINT_EDITOR_TAB_CONTEXT::FOOTPRINT_EDITOR_TAB_CONTEXT( const wxString& aLib,
-                                                            const wxString& aName,
+FOOTPRINT_EDITOR_TAB_CONTEXT::FOOTPRINT_EDITOR_TAB_CONTEXT( const wxString& aLibNickname,
+                                                            const wxString& aFootprintName,
                                                             std::unique_ptr<BOARD> aBoard ) :
-        m_lib( aLib ),
-        m_name( aName ),
+        m_libNickname( aLibNickname ),
+        m_footprintName( aFootprintName ),
         m_board( std::move( aBoard ) ),
-        m_footprintNameWhenLoaded( aName )
+        m_footprintNameWhenLoaded( aFootprintName )
 {
 }
 
@@ -65,28 +65,37 @@ FOOTPRINT_EDITOR_TAB_CONTEXT::MakeUnsaved( std::unique_ptr<BOARD> aBoard )
 }
 
 
-wxString FOOTPRINT_EDITOR_TAB_CONTEXT::GetDisplayName() const
+wxString FOOTPRINT_EDITOR_TAB_CONTEXT::GetDisplayName( bool aShortForm ) const
 {
     switch( m_kind )
     {
-    case KIND::BOARD_INSTANCE: return m_reference;
+    case KIND::BOARD_INSTANCE:
+        if( aShortForm )
+            return m_reference;
+        else
+            return m_reference + wxS( " " ) + _( "[from board]" );
 
     // The imported name is not an identity the editor can save to, so the tab reads as unnamed
-    case KIND::UNSAVED:        return _( "<unnamed>" );
+    case KIND::UNSAVED:
+        return _( "<unnamed>" );
 
-    default:                   return m_name;
+    default:
+        return m_footprintName;
     }
 }
 
 
-void FOOTPRINT_EDITOR_TAB_CONTEXT::PromoteToLibrary( const wxString& aLib, const wxString& aName )
+void FOOTPRINT_EDITOR_TAB_CONTEXT::PromoteToLibrary( const wxString& aLibNickname, const wxString& aFootprintName )
 {
     wxCHECK( m_kind == KIND::UNSAVED, /* void */ );
 
     m_kind = KIND::LIBRARY;
-    m_lib = aLib;
-    m_name = aName;
-    m_footprintNameWhenLoaded = aName;
+    m_libNickname = aLibNickname;
+    m_footprintName = aFootprintName;
+    m_footprintNameWhenLoaded = aFootprintName;
+
+    if( m_originalFootprintCopy )
+        m_originalFootprintCopy->SetFPID( LIB_ID( aLibNickname, aFootprintName ) );
 }
 
 

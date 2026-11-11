@@ -29,15 +29,15 @@
 class NETLIST_EXPORTER_PADS : public NETLIST_EXPORTER_BASE
 {
 public:
-    NETLIST_EXPORTER_PADS( SCHEMATIC* aSchematic ) :
-            NETLIST_EXPORTER_BASE( aSchematic )
+    NETLIST_EXPORTER_PADS( SCHEMATIC* aSchematic, KIWAY* aKiway ) :
+            NETLIST_EXPORTER_BASE( aSchematic, aKiway )
     {
     }
 
     /**
      * Write to specified output file.
      */
-    bool WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
+    bool writeNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
                        REPORTER& aReporter ) override;
 
 private:

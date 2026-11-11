@@ -263,7 +263,7 @@ public:
     enum class TYPE
     {
         UNDEFINED = 0,
-        POINT,
+        POINT_TYPE,
         CIRCLE,
         ARC
     };
@@ -628,7 +628,7 @@ public:
             BE_SHAPE()
     {
         m_pos = aPos;
-        m_type = CREEP_SHAPE::TYPE::POINT;
+        m_type = CREEP_SHAPE::TYPE::POINT_TYPE;
     }
 
     std::vector<PATH_CONNECTION> Paths( const BE_SHAPE_POINT& aS2, double aMaxWeight,
@@ -811,14 +811,7 @@ public:
 
     ~CREEPAGE_GRAPH()
     {
-        for( CREEP_SHAPE* cs : m_shapeCollection )
-        {
-            if( cs )
-            {
-                delete cs;
-                cs = nullptr;
-            }
-        }
+        m_shapeCollection.clear();
 
         // Clear out the circular shared pointer references
         for( std::shared_ptr<GRAPH_NODE>& n : m_nodes )
@@ -838,7 +831,7 @@ public:
     };
 
     void TransformEdgeToCreepShapes();
-    void TransformCreepShapesToNodes(std::vector<CREEP_SHAPE*>& aShapes);
+    void TransformCreepShapesToNodes( const std::vector<std::unique_ptr<CREEP_SHAPE>>& aShapes );
     void RemoveDuplicatedShapes();
 
     // Add a node to the graph. If an equivalent node exists, returns the pointer of the existing node instead
@@ -856,10 +849,6 @@ public:
 
     std::shared_ptr<GRAPH_NODE> FindNode( GRAPH_NODE::TYPE aType, CREEP_SHAPE* aParent,
                                           const VECTOR2I& aPos );
-
-    void RemoveConnection( const std::shared_ptr<GRAPH_CONNECTION>&, bool aDelete = false );
-
-    void Trim( double aWeightLimit );
 
     void Addshape( const SHAPE& aShape, std::shared_ptr<GRAPH_NODE>& aConnectTo,
                    BOARD_ITEM* aParent = nullptr );
@@ -915,7 +904,7 @@ public:
     bool                                           m_hasOverlappingCutouts = false;
     std::vector<std::shared_ptr<GRAPH_NODE>>       m_nodes;
     std::vector<std::shared_ptr<GRAPH_CONNECTION>> m_connections;
-    std::vector<CREEP_SHAPE*>                      m_shapeCollection;
+    std::vector<std::unique_ptr<CREEP_SHAPE>>      m_shapeCollection;
 
     // This is a duplicate of m_nodes, but it is used to quickly find a node rather than iterating through m_nodes
     std::unordered_set<std::shared_ptr<GRAPH_NODE>, GraphNodeHash, GraphNodeEqual> m_nodeset;
@@ -923,6 +912,8 @@ public:
     int m_minGrooveWidth;
 
 private:
+    void detachConnection( const std::shared_ptr<GRAPH_CONNECTION>& aGc );
+
     double m_creepageTarget;
     double m_creepageTargetSquared;
 };

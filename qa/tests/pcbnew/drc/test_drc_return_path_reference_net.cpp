@@ -18,6 +18,7 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <qa_utils/file_utils.h>
 
 #include <pcbnew_utils/board_file_utils.h>
 
@@ -46,9 +47,8 @@ namespace
 size_t runDrc( const std::string& aDru, const std::string& aSubdir )
 {
     namespace fs = std::filesystem;
-    fs::path tmpDir = fs::temp_directory_path() / aSubdir;
-    fs::create_directories( tmpDir );
-    fs::path druPath = tmpDir / "rn.kicad_dru";
+    KI_TEST::SCOPED_TEMP_DIR tmpDir( wxString::FromUTF8( aSubdir ) );
+    fs::path                 druPath = tmpDir.Path() / "rn.kicad_dru";
 
     {
         std::ofstream out( druPath );
@@ -56,8 +56,7 @@ size_t runDrc( const std::string& aDru, const std::string& aSubdir )
     }
 
     PCB_IO_KICAD_SEXPR     plugin;
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-    plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir() + DUAL_ZONE_PCB, board.get() );
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir() + DUAL_ZONE_PCB );
     board->BuildConnectivity();
 
     NETINFO_ITEM* sig = board->FindNet( wxS( "/CHAIN_RN" ) );

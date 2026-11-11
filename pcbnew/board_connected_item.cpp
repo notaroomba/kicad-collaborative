@@ -33,7 +33,6 @@
 #include <i18n_utility.h>
 #include <netinfo.h>
 #include <api/board/board_types.pb.h>
-#include <shared_mutex>
 
 using namespace std::placeholders;
 
@@ -101,14 +100,8 @@ bool BOARD_CONNECTED_ITEM::SetNetCode( int aNetCode, bool aNoAssert )
     if( !aNoAssert )
         wxASSERT( m_netinfo );
 
-    if( board )
-    {
-        if( !( GetFlags() & ROUTER_TRANSIENT ) )
-            board->InvalidateClearanceCache( m_Uuid );
-
-        std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
-        board->m_ItemNetclassCache.erase( this );
-    }
+    if( board && !( GetFlags() & ROUTER_TRANSIENT ) )
+        board->InvalidateClearanceCache( m_Uuid );
 
     return ( m_netinfo != nullptr );
 }
@@ -118,7 +111,7 @@ int BOARD_CONNECTED_ITEM::GetOwnClearance( PCB_LAYER_ID aLayer, wxString* aSourc
 {
     if( GetBoard() && GetBoard()->GetDesignSettings().m_DRCEngine )
     {
-        BOARD_DESIGN_SETTINGS& bds = GetBoard()->GetDesignSettings();
+        const BOARD_DESIGN_SETTINGS& bds = GetBoard()->GetDesignSettings();
         return bds.m_DRCEngine->GetCachedOwnClearance( this, aLayer, aSource );
     }
 

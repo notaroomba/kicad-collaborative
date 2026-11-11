@@ -22,6 +22,7 @@
 
 #include <sch_io/orcad/orcad_stream.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include <ki_exception.h>
@@ -73,6 +74,23 @@ ORCAD_STREAM::NEST_GUARD::~NEST_GUARD()
 }
 
 
+ORCAD_STREAM::LIMIT_GUARD::LIMIT_GUARD( ORCAD_STREAM& aStream, size_t aEnd ) :
+        m_stream( aStream ),
+        m_savedSize( aStream.m_size )
+{
+    if( aEnd > m_savedSize || aEnd < aStream.m_offset )
+        THROW_IO_ERRORF( wxS( "OrCAD stream: invalid record bound 0x%zx at 0x%zx" ), aEnd, aStream.m_offset );
+
+    aStream.m_size = aEnd;
+}
+
+
+ORCAD_STREAM::LIMIT_GUARD::~LIMIT_GUARD()
+{
+    m_stream.m_size = m_savedSize;
+}
+
+
 void ORCAD_STREAM::requireBytes( size_t aCount ) const
 {
     if( m_offset > m_size || aCount > m_size - m_offset )
@@ -89,12 +107,6 @@ uint8_t ORCAD_STREAM::ReadU8()
 {
     requireBytes( 1 );
     return m_data[m_offset++];
-}
-
-
-int8_t ORCAD_STREAM::ReadI8()
-{
-    return static_cast<int8_t>( ReadU8() );
 }
 
 
@@ -191,6 +203,15 @@ void ORCAD_STREAM::Skip( size_t aCount )
 }
 
 
+void ORCAD_STREAM::Seek( size_t aOffset )
+{
+    if( aOffset > m_size )
+        THROW_IO_ERRORF( wxS( "OrCAD stream: seek past end to 0x%zx (stream size 0x%zx)" ), aOffset, m_size );
+
+    m_offset = aOffset;
+}
+
+
 int ORCAD_STREAM::PeekU8( size_t aAhead ) const
 {
     size_t pos = m_offset + aAhead;
@@ -216,30 +237,6 @@ bool ORCAD_STREAM::PeekMatches( const uint8_t* aBytes, size_t aCount, size_t aAh
 bool ORCAD_STREAM::AtPreamble( size_t aAhead ) const
 {
     return PeekMatches( PREAMBLE, 4, aAhead );
-}
-
-
-bool ORCAD_STREAM::HasPreambleAt( size_t aAbsoluteOffset ) const
-{
-    if( aAbsoluteOffset > m_size || 4 > m_size - aAbsoluteOffset )
-        return false;
-
-    return memcmp( m_data + aAbsoluteOffset, PREAMBLE, 4 ) == 0;
-}
-
-
-size_t ORCAD_STREAM::FindPreamble( size_t aFrom ) const
-{
-    if( m_size < 4 )
-        return npos;
-
-    for( size_t pos = aFrom; pos + 4 <= m_size; pos++ )
-    {
-        if( m_data[pos] == PREAMBLE[0] && memcmp( m_data + pos, PREAMBLE, 4 ) == 0 )
-            return pos;
-    }
-
-    return npos;
 }
 
 
@@ -297,4 +294,29 @@ wxString FromOrcadString( const std::string& aText )
     converted.Replace( wxS( "\r" ), wxS( "\n" ) );
 
     return converted;
+}
+
+
+static char orcadFold( char aChar )
+{
+    return aChar >= 'A' && aChar <= 'Z' ? static_cast<char>( aChar - 'A' + 'a' ) : aChar;
+}
+
+
+std::string OrcadLower( std::string_view aText )
+{
+    std::string out( aText );
+    std::transform( out.begin(), out.end(), out.begin(), orcadFold );
+    return out;
+}
+
+
+bool OrcadIEquals( std::string_view aLeft, std::string_view aRight )
+{
+    return aLeft.size() == aRight.size()
+           && std::equal( aLeft.begin(), aLeft.end(), aRight.begin(),
+                          []( char a, char b )
+                          {
+                              return orcadFold( a ) == orcadFold( b );
+                          } );
 }

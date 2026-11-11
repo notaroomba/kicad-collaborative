@@ -25,6 +25,7 @@
 #include <project/tuning_profiles.h>
 #include <settings/json_settings_internals.h>
 #include <project/project_file.h>
+#include <jobs/job_export_pcb_idf.h>
 #include <project/board_project_settings_params.h>
 #include <settings/common_settings.h>
 #include <settings/parameters.h>
@@ -36,7 +37,7 @@
 
 
 ///! Update the schema version whenever a migration is required
-const int projectFileSchemaVersion = 3;
+const int projectFileSchemaVersion = 4;
 
 
 PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
@@ -63,7 +64,8 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
     m_params.emplace_back( new PARAM_WXSTRING_MAP( "text_variables",
             &m_TextVars, {}, false, true /* array behavior, even though stored as a map */ ) );
 
-    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "schematic.drawing.field_names",
+    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>(
+            "schematic.drawing.field_names",
             [&]() -> nlohmann::json
             {
                 nlohmann::json ret = nlohmann::json::array();
@@ -82,7 +84,13 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
             },
             [&]( const nlohmann::json& aJson )
             {
-                if( !aJson.empty() && aJson.is_array() )
+                if( aJson.is_string() )
+                {
+                    m_TemplateFieldNames.DeleteFieldNameTemplates( TEMPLATES::SCOPE::PROJECT );
+                    m_TemplateFieldNames.AddTemplateFieldNames( wxString::FromUTF8( aJson.get<std::string>() ),
+                                                                TEMPLATES::SCOPE::PROJECT );
+                }
+                else if( aJson.is_array() )
                 {
                     m_TemplateFieldNames.DeleteFieldNameTemplates( TEMPLATES::SCOPE::PROJECT );
 
@@ -98,7 +106,8 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
                         }
                     }
                 }
-            }, {} ) );
+            },
+            {} ) );
 
     m_params.emplace_back( new PARAM_LIST<wxString>( "libraries.pinned_symbol_libs",
             &m_PinnedSymbolLibs, {} ) );
@@ -162,6 +171,10 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
     m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "schematic.bus_aliases",
             [&]() -> nlohmann::json
             {
+                // A project may be saved before its legacy schematic aliases are imported
+                if( !m_BusAliasesDefined && m_BusAliases.empty() )
+                    return nlohmann::json();
+
                 nlohmann::json ret = nlohmann::json::object();
 
                 for( const auto& alias : m_BusAliases )
@@ -178,10 +191,11 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
             },
             [&]( const nlohmann::json& aJson )
             {
+                m_BusAliasesDefined = aJson.is_object();
+                m_BusAliases.clear();
+
                 if( !aJson.is_object() )
                     return;
-
-                m_BusAliases.clear();
 
                 for( auto it = aJson.begin(); it != aJson.end(); ++it )
                 {
@@ -252,8 +266,24 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
     m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.mode",
             &m_IP2581Bom.mode, wxEmptyString ) );
 
-    m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.sections",
-            &m_IP2581Bom.sections, wxEmptyString ) );
+    // An empty key alone means the mode picks the sections, so the flag marks an empty choice
+    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "board.ipc2581.sections",
+            [this]() { return nlohmann::json( m_IP2581Bom.sections.value_or( wxString() ) ); },
+            [this]( const nlohmann::json& aVal )
+            {
+                wxString sections = aVal.is_string() ? aVal.get<wxString>() : wxString();
+                m_IP2581Bom.sections = sections.IsEmpty() ? std::nullopt : std::optional<wxString>( sections );
+            },
+            nlohmann::json( "" ) ) );
+
+    m_params.emplace_back( new PARAM_LAMBDA<nlohmann::json>( "board.ipc2581.custom_sections",
+            [this]() { return nlohmann::json( m_IP2581Bom.sections && m_IP2581Bom.sections->IsEmpty() ); },
+            [this]( const nlohmann::json& aVal )
+            {
+                if( aVal.is_boolean() && aVal.get<bool>() && !m_IP2581Bom.sections )
+                    m_IP2581Bom.sections = wxString();
+            },
+            nlohmann::json( false ) ) );
 
     m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.net_names",
             &m_IP2581Bom.netNames, wxEmptyString ) );
@@ -261,9 +291,37 @@ PROJECT_FILE::PROJECT_FILE( const wxString& aFullPath ) :
     m_params.emplace_back( new PARAM<wxString>( "board.ipc2581.ref_des",
             &m_IP2581Bom.refDes, wxEmptyString ) );
 
+    m_params.emplace_back( new PARAM_ENUM<IDF_SETTINGS::UNITS>( "board.idf_export.units",
+            &m_IdfExportSettings.units, IDF_SETTINGS::UNITS::MM,
+            IDF_SETTINGS::UNITS::MM, IDF_SETTINGS::UNITS::MILS ) );
+
+    m_params.emplace_back( new PARAM_ENUM<IDF_SETTINGS::COORD_ORIGIN>(
+            "board.idf_export.origin_mode", &m_IdfExportSettings.originMode,
+            IDF_SETTINGS::COORD_ORIGIN::CENTER, IDF_SETTINGS::COORD_ORIGIN::DRILL,
+            IDF_SETTINGS::COORD_ORIGIN::USER ) );
+
+    m_params.emplace_back( new PARAM<double>( "board.idf_export.user_origin_x",
+            &m_IdfExportSettings.userOriginX, 0.0 ) );
+
+    m_params.emplace_back( new PARAM<double>( "board.idf_export.user_origin_y",
+            &m_IdfExportSettings.userOriginY, 0.0 ) );
+
+    m_params.emplace_back( new PARAM<bool>( "board.idf_export.include_unspecified",
+            &m_IdfExportSettings.includeUnspecified, true ) );
+
+    m_params.emplace_back( new PARAM<bool>( "board.idf_export.include_dnp",
+            &m_IdfExportSettings.includeDNP, true ) );
+
+    m_params.emplace_back( new PARAM<bool>( "board.idf_export.calculate_height_from_models",
+            &m_IdfExportSettings.calculateHeightFromModels, true ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "board.idf_export.part_number_field",
+            &m_IdfExportSettings.partNumberField, wxS( "Value" ) ) );
+
 
     registerMigration( 1, 2, std::bind( &PROJECT_FILE::migrateSchema1To2, this ) );
     registerMigration( 2, 3, std::bind( &PROJECT_FILE::migrateSchema2To3, this ) );
+    registerMigration( 3, 4, std::bind( &PROJECT_FILE::migrateSchema3To4, this ) );
 }
 
 
@@ -298,6 +356,21 @@ bool PROJECT_FILE::migrateSchema2To3()
         PARAM_LAYER_PRESET::MigrateToNamedRenderLayers( entry );
 
     m_wasMigrated = true;
+
+    return true;
+}
+
+
+bool PROJECT_FILE::migrateSchema3To4()
+{
+    const auto aliases = GetJson( "schematic.bus_aliases" );
+
+    if( aliases && aliases->is_object() && aliases->empty() )
+    {
+        // Older project-only saves wrote empty tables before importing legacy sheet aliases
+        Set( "schematic.bus_aliases", nlohmann::json() );
+        m_wasMigrated = true;
+    }
 
     return true;
 }
@@ -457,7 +530,7 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
     fromLegacyString( aCfg, "LastNetListRead",           "pcbnew.last_paths.netlist" );
     fromLegacyString( aCfg, "LastSTEPExportPath",        "pcbnew.last_paths.step" );
     fromLegacyString( aCfg, "LastIDFExportPath",         "pcbnew.last_paths.idf" );
-    fromLegacyString( aCfg, "LastVRMLExportPath",        "pcbnew.last_paths.vmrl" );
+    fromLegacyString( aCfg, "LastVRMLExportPath",        "pcbnew.last_paths.vrml" );
     fromLegacyString( aCfg, "LastSpecctraDSNExportPath", "pcbnew.last_paths.specctra_dsn" );
     fromLegacyString( aCfg, "LastGenCADExportPath",      "pcbnew.last_paths.gencad" );
 
@@ -586,7 +659,7 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
         wxString keyBase = "ViaDiameter";
         wxString key     = keyBase;
         double   diameter;
-        double   drill   = 1.0;
+        double   drill;
 
         nlohmann::json vias = nlohmann::json::array();
 
@@ -595,6 +668,7 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
         while( aCfg->Read( key, &diameter ) )
         {
             key = "ViaDrill";
+            drill = 1.0;
             aCfg->Read( key << idx, &drill );
 
             nlohmann::json via = { { "diameter", diameter }, { "drill", drill } };
@@ -612,8 +686,8 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
         wxString keyBase = "dPairWidth";
         wxString key     = keyBase;
         double   width;
-        double   gap     = 1.0;
-        double   via_gap = 1.0;
+        double   gap;
+        double   via_gap;
 
         nlohmann::json pairs = nlohmann::json::array();
 
@@ -622,9 +696,11 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
         while( aCfg->Read( key, &width ) )
         {
             key = "dPairGap";
+            gap = 1.0;
             aCfg->Read( key << idx, &gap );
 
             key = "dPairViaGap";
+            via_gap = 1.0;
             aCfg->Read( key << idx, &via_gap );
 
             nlohmann::json pair = { { "width", width }, { "gap", gap }, { "via_gap", via_gap } };
@@ -662,8 +738,7 @@ bool PROJECT_FILE::MigrateFromLegacy( wxConfigBase* aCfg )
 
                     if( tokens.size() == 2 )
                     {
-                        wxLogTrace( traceSettings, wxT( "%d: %s = %s" ), sheet, tokens[0],
-                                    tokens[1] );
+                        wxLogTrace( traceSettings, wxT( "%d: %s = %s" ), sheet, tokens[0], tokens[1] );
                         arr.push_back( nlohmann::json::array( { tokens[0], tokens[1] } ) );
                     }
                 }
@@ -780,22 +855,21 @@ bool PROJECT_FILE::LoadFromFile( const wxString& aDirectory )
 
             for( TOP_LEVEL_SHEET_INFO& sheetInfo : m_topLevelSheets )
             {
-                wxFileName referencedFile( projectPath, sheetInfo.filename );
+                wxFileName referencedFile( sheetInfo.filename );
+                referencedFile.MakeAbsolute( projectPath );
 
                 if( referencedFile.FileExists() )
                     continue;
 
                 // Try the project-name-based filename
-                wxString expectedFile =
-                        projectName + wxS( "." ) + FILEEXT::KiCadSchematicFileExtension;
+                wxString expectedFile = projectName + wxS( "." ) + FILEEXT::KiCadSchematicFileExtension;
 
                 wxFileName candidateFile( projectPath, expectedFile );
 
                 if( candidateFile.FileExists() )
                 {
                     wxLogTrace( traceSettings,
-                                wxT( "PROJECT_FILE: Fixing stale top_level_sheets reference "
-                                     "'%s' -> '%s'" ),
+                                wxT( "PROJECT_FILE: Fixing stale top_level_sheets reference '%s' -> '%s'" ),
                                 sheetInfo.filename, expectedFile );
 
                     sheetInfo.filename = expectedFile;
@@ -807,6 +881,16 @@ bool PROJECT_FILE::LoadFromFile( const wxString& aDirectory )
     }
 
     return success;
+}
+
+
+bool PROJECT_FILE::Store()
+{
+    // An absent alias table permits legacy imports; an explicitly empty table suppresses them
+    if( m_BusAliasesDefined && !GetJson( "schematic.bus_aliases" ) )
+        m_modified = true;
+
+    return JSON_SETTINGS::Store();
 }
 
 
@@ -824,6 +908,26 @@ bool PROJECT_FILE::SaveToFile( const wxString& aDirectory, bool aForce )
     m_wasMigrated = false;
 
     return JSON_SETTINGS::SaveToFile( aDirectory, force );
+}
+
+
+std::string PROJECT_FILE::SerializeToString()
+{
+    wxASSERT( m_project );
+
+    Set( "meta.filename", m_project->GetProjectName() + "." + FILEEXT::ProjectFileExtension );
+
+    m_modified |= flushToStore();
+
+    try
+    {
+        return formatFileContents();
+    }
+    catch( ... )
+    {
+        wxLogTrace( traceSettings, wxT( "Error: could not serialize %s" ), GetFullFilename() );
+        return std::string();
+    }
 }
 
 

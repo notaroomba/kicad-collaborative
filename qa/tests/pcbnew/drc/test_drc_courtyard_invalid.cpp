@@ -139,8 +139,9 @@ static bool InvalidMatchesExpected( BOARD& aBoard, const PCB_MARKER& aMarker,
  * Check that the produced markers match the expected. This does NOT
  * check ordering, as that is not part of the contract of the DRC function.
  *
- * @param aMarkers    list of markers produced by the DRC
- * @param aCollisions list of expected collisions
+ * @param aBoard       is the board to check.
+ * @param aMarkers     list of markers produced by the DRC.
+ * @param aExpInvalids list of invalid matches.
  */
 static void CheckInvalidsMatchExpected( BOARD& aBoard,
                                         const std::vector<std::unique_ptr<PCB_MARKER>>& aMarkers,
@@ -157,12 +158,8 @@ static void CheckInvalidsMatchExpected( BOARD& aBoard,
 
 void DoCourtyardInvalidTest( const COURTYARD_INVALID_CASE& aCase )
 {
-    const std::string path = KI_TEST::GetPcbnewTestDataDir() + "drc_courtyard/invalid/"
-                             + aCase.m_board_name + ".kicad_pcb";
-
-    std::unique_ptr<BOARD> board = KI_TEST::ReadBoardFromFileOrStream( path );
-
-    BOOST_REQUIRE( board );
+    std::unique_ptr<BOARD> board =
+            KI_TEST::RequireBoardFromPcbnewQAData( "drc_courtyard/invalid/" + aCase.m_board_name + ".kicad_pcb" );
 
     BOARD_DESIGN_SETTINGS& bds = board->GetDesignSettings();
 

@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <symbol_edit_frame.h>
 #include "sch_point_editor.h"
 
 #include <algorithm>
@@ -139,12 +140,6 @@ enum RECTANGLE_LINES
 };
 
 
-enum REFIMAGE_POINTS
-{
-    REFIMG_ORIGIN = RECT_BOTRIGHT + 1
-};
-
-
 enum TABLECELL_POINTS
 {
     COL_WIDTH, ROW_HEIGHT
@@ -245,125 +240,6 @@ public:
 private:
     SCH_LINE&   m_line;
     SCH_SCREEN& m_screen;
-};
-
-class BITMAP_POINT_EDIT_BEHAVIOR : public POINT_EDIT_BEHAVIOR
-{
-public:
-    BITMAP_POINT_EDIT_BEHAVIOR( SCH_BITMAP& aBitmap ) :
-            m_bitmap( aBitmap )
-    {
-    }
-
-    void MakePoints( EDIT_POINTS& aPoints ) override
-    {
-        const REFERENCE_IMAGE& refImage = m_bitmap.GetReferenceImage();
-        const VECTOR2I         topLeft = refImage.GetPosition() - refImage.GetSize() / 2;
-        const VECTOR2I         botRight = refImage.GetPosition() + refImage.GetSize() / 2;
-
-        aPoints.AddPoint( topLeft );
-        aPoints.AddPoint( VECTOR2I( botRight.x, topLeft.y ) );
-        aPoints.AddPoint( VECTOR2I( topLeft.x, botRight.y ) );
-        aPoints.AddPoint( botRight );
-
-        aPoints.AddPoint( refImage.GetPosition() + refImage.GetTransformOriginOffset() );
-    }
-
-    bool UpdatePoints( EDIT_POINTS& aPoints ) override
-    {
-        const REFERENCE_IMAGE& refImage = m_bitmap.GetReferenceImage();
-        const VECTOR2I         topLeft = refImage.GetPosition() - refImage.GetSize() / 2;
-        const VECTOR2I         botRight = refImage.GetPosition() + refImage.GetSize() / 2;
-
-        aPoints.Point( RECT_TOPLEFT ).SetPosition( topLeft );
-        aPoints.Point( RECT_TOPRIGHT ).SetPosition( botRight.x, topLeft.y );
-        aPoints.Point( RECT_BOTLEFT ).SetPosition( topLeft.x, botRight.y );
-        aPoints.Point( RECT_BOTRIGHT ).SetPosition( botRight );
-
-        aPoints.Point( REFIMG_ORIGIN ).SetPosition( refImage.GetPosition() + refImage.GetTransformOriginOffset() );
-        return true;
-    }
-
-    void UpdateItem( const EDIT_POINT& aEditedPoint, EDIT_POINTS& aPoints, COMMIT& aCommit,
-                     std::vector<EDA_ITEM*>& aUpdatedItems ) override
-    {
-        REFERENCE_IMAGE& refImg = m_bitmap.GetReferenceImage();
-        const VECTOR2I   topLeft = aPoints.Point( RECT_TOPLEFT ).GetPosition();
-        const VECTOR2I   topRight = aPoints.Point( RECT_TOPRIGHT ).GetPosition();
-        const VECTOR2I   botLeft = aPoints.Point( RECT_BOTLEFT ).GetPosition();
-        const VECTOR2I   botRight = aPoints.Point( RECT_BOTRIGHT ).GetPosition();
-        const VECTOR2I   xfrmOrigin = aPoints.Point( REFIMG_ORIGIN ).GetPosition();
-
-        if( isModified( aEditedPoint, aPoints.Point( REFIMG_ORIGIN ) ) )
-        {
-            // Moving the transform origin
-            // As the other points didn't move, we can get the image extent from them
-            const VECTOR2I newOffset = xfrmOrigin - ( topLeft + botRight ) / 2;
-            refImg.SetTransformOriginOffset( newOffset );
-        }
-        else
-        {
-            const VECTOR2I oldOrigin = refImg.GetPosition() + refImg.GetTransformOriginOffset();
-            const VECTOR2I oldSize = refImg.GetSize();
-            const VECTOR2I pos = refImg.GetPosition();
-
-            OPT_VECTOR2I newCorner;
-            VECTOR2I     oldCorner = pos;
-
-            if( isModified( aEditedPoint, aPoints.Point( RECT_TOPLEFT ) ) )
-            {
-                newCorner = topLeft;
-                oldCorner -= oldSize / 2;
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( RECT_TOPRIGHT ) ) )
-            {
-                newCorner = topRight;
-                oldCorner -= VECTOR2I( -oldSize.x, oldSize.y ) / 2;
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( RECT_BOTLEFT ) ) )
-            {
-                newCorner = botLeft;
-                oldCorner -= VECTOR2I( oldSize.x, -oldSize.y ) / 2;
-            }
-            else if( isModified( aEditedPoint, aPoints.Point( RECT_BOTRIGHT ) ) )
-            {
-                newCorner = botRight;
-                oldCorner += oldSize / 2;
-            }
-
-            if( newCorner )
-            {
-                // Turn in the respective vectors from the origin
-                *newCorner -= xfrmOrigin;
-                oldCorner -= oldOrigin;
-
-                // If we tried to cross the origin, clamp it to stop it
-                if( sign( newCorner->x ) != sign( oldCorner.x )
-                    || sign( newCorner->y ) != sign( oldCorner.y ) )
-                {
-                    *newCorner = VECTOR2I( 0, 0 );
-                }
-
-                const double newLength = newCorner->EuclideanNorm();
-                const double oldLength = oldCorner.EuclideanNorm();
-
-                double ratio = oldLength > 0 ? ( newLength / oldLength ) : 1.0;
-
-                // Clamp the scaling to a minimum of 50 mils
-                VECTOR2I newSize = oldSize * ratio;
-                double newWidth = std::max( newSize.x, EDA_UNIT_UTILS::Mils2IU( schIUScale, 50 ) );
-                double newHeight = std::max( newSize.y, EDA_UNIT_UTILS::Mils2IU( schIUScale, 50 ) );
-                ratio = std::min( newWidth / oldSize.x, newHeight / oldSize.y );
-
-                // Also handles the origin offset
-                refImg.SetImageScale( refImg.GetImageScale() * ratio );
-            }
-        }
-        aUpdatedItems.push_back( &m_bitmap );
-    }
-
-private:
-    SCH_BITMAP& m_bitmap;
 };
 
 
@@ -494,6 +370,9 @@ public:
     /**
      * Update the coordinates of 4 corners of a rectangle, according to constraints
      * and the moved corner
+     *
+     * @param aEditedPoint
+     * @param aPoints
      * @param minWidth is the minimal width constraint
      * @param minHeight is the minimal height constraint
      * @param topLeft is the RECT_TOPLEFT to constraint
@@ -1067,7 +946,8 @@ void SCH_POINT_EDITOR::makePointsAndBehavior( EDA_ITEM* aItem )
     case SCH_BITMAP_T:
     {
         SCH_BITMAP& bitmap = static_cast<SCH_BITMAP&>( *aItem );
-        m_editBehavior = std::make_unique<BITMAP_POINT_EDIT_BEHAVIOR>( bitmap );
+        m_editBehavior = std::make_unique<REFERENCE_IMAGE_POINT_EDIT_BEHAVIOR>( bitmap.GetReferenceImage(),
+                                                                                schIUScale.MilsToIU( 50 ) );
         break;
     }
     case SCH_LINE_T:
@@ -1105,6 +985,20 @@ SCH_POINT_EDITOR::SCH_POINT_EDITOR() :
 void SCH_POINT_EDITOR::Reset( RESET_REASON aReason )
 {
     SCH_TOOL_BASE::Reset( aReason );
+
+    // ResetTools() skips DeactivateTool() for a REDRAW, so Main() exits without unwinding its
+    // drag; a REDRAW is also the only reason that leaves the item alive to clear the flag through
+    if( aReason == REDRAW && m_editPoints )
+    {
+        SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( m_editPoints->GetParent() );
+
+        if( shape && shape->HasFlag( IS_MOVING ) )
+        {
+            shape->ClearFlags( IS_MOVING );
+            shape->SetHatchingDirty();
+            shape->UpdateHatching();
+        }
+    }
 
     if( KIGFX::VIEW* view = getView() )
     {
@@ -1207,7 +1101,7 @@ int SCH_POINT_EDITOR::Main( const TOOL_EVENT& aEvent )
     {
         SYMBOL_EDIT_FRAME* editor = getEditFrame<SYMBOL_EDIT_FRAME>();
 
-        if( !editor->IsSymbolEditable() || editor->IsSymbolAlias() )
+        if( !editor->IsSymbolGraphicallyEditable() )
             return 0;
     }
 
@@ -1461,7 +1355,22 @@ int SCH_POINT_EDITOR::Main( const TOOL_EVENT& aEvent )
                     grid = nullptr;
                 }
 
+                // Revert() keeps edit flags and, in the library editor, replaces the symbol and
+                // frees item, so drop the flag first and rehatch the reverted geometry after
+                if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( item ) )
+                    shape->ClearFlags( IS_MOVING );
+
                 commit.Revert();
+
+                if( m_editPoints )
+                {
+                    if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( m_editPoints->GetParent() ) )
+                    {
+                        shape->SetHatchingDirty();
+                        shape->UpdateHatching();
+                    }
+                }
+
                 inDrag = false;
                 break;
             }
@@ -1488,11 +1397,16 @@ int SCH_POINT_EDITOR::Main( const TOOL_EVENT& aEvent )
 
     m_inDrag = false;
 
-    if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( item ) )
+    // IS_MOVING is only still set if the loop broke mid-drag, and a null m_editPoints means
+    // Reset() ran while we were suspended and has already dealt with a parent we cannot reach
+    if( inDrag && m_editPoints )
     {
-        shape->ClearFlags( IS_MOVING );
-        shape->SetHatchingDirty();
-        shape->UpdateHatching();
+        if( SCH_SHAPE* shape = dynamic_cast<SCH_SHAPE*>( m_editPoints->GetParent() ) )
+        {
+            shape->ClearFlags( IS_MOVING );
+            shape->SetHatchingDirty();
+            shape->UpdateHatching();
+        }
     }
 
     controls->SetAutoPan( false );
@@ -1525,7 +1439,9 @@ void SCH_POINT_EDITOR::updateParentItem( bool aSnapToGrid, SCH_COMMIT& aCommit )
     if( !m_editBehavior )
         return;
 
-    std::vector<EDA_ITEM*> updatedItems;
+    // The edited item is always updated, so behaviors only report the other items they touch.
+    std::vector<EDA_ITEM*> updatedItems = { item };
+
     m_editBehavior->UpdateItem( *m_editedPoint, *m_editPoints, aCommit, updatedItems );
 
     for( EDA_ITEM* updatedItem : updatedItems )
@@ -1547,8 +1463,8 @@ void SCH_POINT_EDITOR::updatePoints()
         SYMBOL_EDIT_FRAME* editor = static_cast<SYMBOL_EDIT_FRAME*>( m_frame );
         SCH_ITEM*          item = dynamic_cast<SCH_ITEM*>( m_editPoints->GetParent() );
 
-        if( ( item && item->GetUnit() != 0 && item->GetUnit() != editor->GetUnit() )
-                || ( item && item->GetBodyStyle() != 0 && item->GetBodyStyle() != editor->GetBodyStyle() ) )
+        if( ( item && item->GetUnit() != ALL_UNITS && item->GetUnit() != editor->GetUnit() )
+            || ( item && item->GetBodyStyle() != ALL_BODY_STYLES && item->GetBodyStyle() != editor->GetBodyStyle() ) )
         {
             getView()->Remove( m_editPoints.get() );
             getView()->Remove( m_angleItem.get() );
@@ -1635,7 +1551,11 @@ int SCH_POINT_EDITOR::addCorner( const TOOL_EVENT& aEvent )
     if( !m_editPoints || !m_editPoints->GetParent()->IsType( { SCH_SHAPE_T, SCH_RULE_AREA_T } ) )
         return 0;
 
-    SCH_SHAPE*        shape = static_cast<SCH_SHAPE*>( m_editPoints->GetParent() );
+    SCH_SHAPE* shape = static_cast<SCH_SHAPE*>( m_editPoints->GetParent() );
+
+    if( shape->GetPolyShape().IsEmpty() )
+        return 0;
+
     SHAPE_LINE_CHAIN& poly = shape->GetPolyShape().Outline( 0 );
     SCH_COMMIT        commit( m_toolMgr );
 
@@ -1676,7 +1596,11 @@ int SCH_POINT_EDITOR::removeCorner( const TOOL_EVENT& aEvent )
     if( !m_editPoints || !m_editedPoint || !m_editPoints->GetParent()->IsType( { SCH_SHAPE_T, SCH_RULE_AREA_T } ) )
         return 0;
 
-    SCH_SHAPE*        shape = static_cast<SCH_SHAPE*>( m_editPoints->GetParent() );
+    SCH_SHAPE* shape = static_cast<SCH_SHAPE*>( m_editPoints->GetParent() );
+
+    if( shape->GetPolyShape().IsEmpty() )
+        return 0;
+
     SHAPE_LINE_CHAIN& poly = shape->GetPolyShape().Outline( 0 );
     SCH_COMMIT        commit( m_toolMgr );
 

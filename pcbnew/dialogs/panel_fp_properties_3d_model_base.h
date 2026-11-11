@@ -25,11 +25,11 @@ class WX_GRID;
 #include <wx/image.h>
 #include <wx/icon.h>
 #include <wx/button.h>
+#include <wx/choice.h>
 #include <wx/sizer.h>
 #include <wx/checkbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
-#include <wx/choice.h>
 #include <wx/statbox.h>
 #include <wx/panel.h>
 #include <wx/splitter.h>
@@ -51,6 +51,7 @@ class PANEL_FP_PROPERTIES_3D_MODEL_BASE : public wxPanel
 		STD_BITMAP_BUTTON* m_button3DShapeAdd;
 		STD_BITMAP_BUTTON* m_button3DShapeBrowse;
 		STD_BITMAP_BUTTON* m_button3DShapeRemove;
+		wxChoice* m_configuredPathChoice;
 		wxButton* m_buttonConfig3DPaths;
 		wxCheckBox* m_enableExtrusionCheckbox;
 		wxCheckBox* m_showExtrusionCheckbox;
@@ -62,10 +63,9 @@ class PANEL_FP_PROPERTIES_3D_MODEL_BASE : public wxPanel
 		wxStaticText* m_standoffHeightUnits;
 		wxStaticText* m_extrusionLayerLabel;
 		wxChoice* m_extrusionLayerChoice;
-		wxStaticText* m_extrusionColorLabel;
-		COLOR_SWATCH* m_extrusionColorSwatch;
 		wxStaticText* m_extrusionMaterialLabel;
 		wxChoice* m_extrusionMaterialChoice;
+		COLOR_SWATCH* m_extrusionColorSwatch;
 		wxButton* m_buttonExportExtruded;
 		wxPanel* m_lowerPanel;
 		wxBoxSizer* m_LowerSizer3D;
@@ -87,12 +87,6 @@ class PANEL_FP_PROPERTIES_3D_MODEL_BASE : public wxPanel
 		PANEL_FP_PROPERTIES_3D_MODEL_BASE( wxWindow* parent, wxWindowID id = wxID_ANY, const wxPoint& pos = wxDefaultPosition, const wxSize& size = wxSize( 778,420 ), long style = wxTAB_TRAVERSAL, const wxString& name = wxEmptyString );
 
 		~PANEL_FP_PROPERTIES_3D_MODEL_BASE();
-
-		void m_splitter1OnIdle( wxIdleEvent& )
-		{
-			m_splitter1->SetSashPosition( 300 );
-			m_splitter1->Disconnect( wxEVT_IDLE, wxIdleEventHandler( PANEL_FP_PROPERTIES_3D_MODEL_BASE::m_splitter1OnIdle ), NULL, this );
-		}
 
 };
 

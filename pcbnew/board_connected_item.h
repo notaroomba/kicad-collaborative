@@ -36,7 +36,7 @@ class Net;
 
 /**
  * A base class derived from #BOARD_ITEM for items that can be connected and have a net, a
- * netname, a clearance ...
+ * netname, a clearance, etc.
  */
 class BOARD_CONNECTED_ITEM : public BOARD_ITEM
 {
@@ -69,14 +69,14 @@ public:
         }
     }
 
-    ///< @copydoc BOARD_ITEM::IsConnected()
+    /// @copydoc BOARD_ITEM::IsConnected()
     bool IsConnected() const override
     {
         return true;
     }
 
     /**
-     * Return #NET_INFO object for a given item.
+     * Return #NETINFO_ITEM object for a given item.
      */
     NETINFO_ITEM* GetNet() const
     {

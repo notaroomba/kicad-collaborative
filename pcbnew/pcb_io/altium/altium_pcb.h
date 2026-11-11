@@ -22,10 +22,12 @@
 #define ALTIUM_PCB_H
 
 #include <core/utf8.h>
+#include <geometry/shape_line_chain.h>
 #include <embedded_files.h>
 #include <functional>
 #include <layer_ids.h>
 #include <map>
+#include <set>
 #include <memory>
 #include <vector>
 #include <pcb_io/common/plugin_common_layer_mapping.h>
@@ -88,6 +90,7 @@ class BOARD;
 class BOARD_ITEM;
 class EDA_TEXT;
 class FP_SHAPE;
+class PAD;
 class PCB_SHAPE;
 class PCB_TEXTBOX;
 class FOOTPRINT;
@@ -130,7 +133,7 @@ wxString AltiumUnnamedNetName( const BOARD& aBoard, int& aCounter );
 /**
  * Copy the values of Altium rules scoped to a single netclass onto that netclass.
  *
- * Only rules of the form InNetClass('<name>') against All are considered, and only for the
+ * Only rules of the form InNetClass('\<name\>') against All are considered, and only for the
  * clearance, width and routing-via kinds.  Each vector in @p aRulesByKind must be sorted by
  * ARULE6::priority ascending; the first enabled match for a netclass wins, because Altium
  * priority 1 is the most specific.  Disabled rules are skipped.
@@ -164,8 +167,11 @@ public:
                 const std::map<ALTIUM_PCB_DIR, std::string>& aFileMapping,
                 const std::map<std::string, UTF8>*           aProperties = nullptr );
 
-    FOOTPRINT* ParseFootprint( ALTIUM_PCB_COMPOUND_FILE& altiumLibFile,
-                               const wxString&       aFootprintName );
+    std::unique_ptr<FOOTPRINT> ParseFootprint( ALTIUM_PCB_COMPOUND_FILE& altiumLibFile,
+                                               const wxString&           aFootprintName );
+
+    /// Special strings in the parsed text that KiCad has no variable for.
+    const std::set<wxString>& GetSpecialStrings() const { return m_specialStrings; }
 
 private:
     void checkpoint();
@@ -223,7 +229,8 @@ private:
     void ConvertPads6ToFootprintItemOnNonCopper( FOOTPRINT* aFootprint, const APAD6& aElem );
     void ParseVias6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbFile,
                          const CFB::COMPOUND_FILE_ENTRY* aEntry );
-    void ConvertVias6ToFootprintItem( FOOTPRINT* aFootprint, const AVIA6& aElem );
+    void ConvertVias6ToBoardItem( const AVIA6& aElem );
+    PAD* ConvertVias6ToFootprintItem( FOOTPRINT* aFootprint, const AVIA6& aElem );
     void ParseTracks6Data( const ALTIUM_PCB_COMPOUND_FILE&     aAltiumPcbFile,
                            const CFB::COMPOUND_FILE_ENTRY* aEntry );
     void ConvertTracks6ToBoardItem( const ATRACK6& aElem, const int aPrimitiveIndex );
@@ -237,6 +244,29 @@ private:
     void ParseUnionNamesData( const ALTIUM_PCB_COMPOUND_FILE& aAltiumPcbFile, const CFB::COMPOUND_FILE_ENTRY* aEntry );
     void HelperCreateTuningPatterns();
     void HelperSetFootprintMountingStyles();
+    void HelperSetFootprintStackups();
+
+    /**
+     * Hold copper a footprint draws until its pads exist.
+     *
+     * @param aFallback places the copper where it would otherwise go when no pad of its net touches it.
+     */
+    void HelperDeferComponentCopper( FOOTPRINT* aFootprint, PCB_LAYER_ID aLayer, uint16_t aNet,
+                                     std::unique_ptr<PCB_SHAPE> aShape, std::function<void()> aFallback );
+
+    /**
+     * Join each deferred copper shape on \a aCopper to the same-net numbered pad it touches.
+     *
+     * @param aExtensionPads copper-only pads made by earlier passes, which grow in place.
+     * @return true when any shape was joined.
+     */
+    bool HelperFoldPendingCopper( const LSET& aCopper, int aMaxError, std::set<PAD*>& aExtensionPads );
+
+    /// Run the fallback of every deferred copper shape no pad took.
+    void HelperPlaceUnfoldedCopper();
+
+    /// Join deferred component copper and vias to the same-net pads they touch.
+    void HelperFoldComponentCopperIntoPads();
 
     /// Rebuild the composite netclasses and point every net at its effective netclass.
     void HelperAssignNetclassesToNets();
@@ -260,6 +290,7 @@ private:
     void ConvertFills6ToBoardItem( const AFILL6& aElem );
     void ConvertFills6ToFootprintItem( FOOTPRINT* aFootprint, const AFILL6& aElem,
                                        const bool aIsBoardImport );
+    void ConvertFills6ToPcbShape( const AFILL6& aElem, PCB_SHAPE* aShape );
     void ConvertFills6ToBoardItemOnLayer( const AFILL6& aElem, PCB_LAYER_ID aLayer );
     void ConvertFills6ToFootprintItemOnLayer( FOOTPRINT* aFootprint, const AFILL6& aElem,
                                               PCB_LAYER_ID aLayer );
@@ -270,6 +301,10 @@ private:
     void ConvertShapeBasedRegions6ToBoardItem( const AREGION6& aElem, const int aPrimitiveIndex );
     void ConvertShapeBasedRegions6ToFootprintItem( FOOTPRINT* aFootprint, const AREGION6& aElem,
                                                    const int aPrimitiveIndex );
+
+    /// Plain copper region of a footprint; inner layers wait to join the pad they touch.
+    void ConvertShapeBasedRegions6ToFootprintCopper( FOOTPRINT* aFootprint, const AREGION6& aElem,
+                                                     const int aPrimitiveIndex, uint16_t aNet );
     void ConvertShapeBasedRegions6ToBoardItemOnLayer( const AREGION6& aElem, PCB_LAYER_ID aLayer,
                                                       const int aPrimitiveIndex );
     void ConvertShapeBasedRegions6ToFootprintItemOnLayer( FOOTPRINT*      aFootprint,
@@ -295,6 +330,8 @@ private:
     void HelperFillMechanicalLayerAssignments( const std::vector<ABOARD6_LAYER_STACKUP>& aStackup );
 
     void HelperCreateBoardOutline( const std::vector<ALTIUM_VERTICE>& aVertices );
+    void HelperCreateBoardOutline( const SHAPE_LINE_CHAIN& aOutline );
+    void HelperFinishBoardOutline();
 
     void HelperSetZoneLayers( ZONE& aZone, const ALTIUM_LAYER aAltiumLayer );
     void HelperSetZoneKeepoutRestrictions( ZONE& aZone, const uint8_t aKeepoutRestrictions );
@@ -340,6 +377,9 @@ private:
      * Return the 3D model @p aModelName embedded in @p aFootprint, inflating and embedding
      * @p aCompressedData first if it is not there yet.
      *
+     * @param aFootprint
+     * @param aModelName
+     * @param aCompressedData
      * @param aIsNew is set when the model was embedded by this call and so still owes a
      *               CompressAndEncode(), which the caller may run inline or on the pool.
      */
@@ -353,6 +393,12 @@ private:
     std::vector<FOOTPRINT*>              m_components;
     std::vector<ZONE*>                   m_polygons;
     std::vector<PCB_DIM_RADIAL*>         m_radialDimensions;
+
+    // The outline waits for every board cutout, since a cutout can run over the board edge
+    SHAPE_LINE_CHAIN              m_boardOutline;
+    std::vector<SHAPE_LINE_CHAIN> m_boardCutouts;
+    int                           m_outlineJogCount = 0;
+    int                           m_outlineJogLargest = 0;
     std::map<uint32_t, wxString>         m_unicodeStrings;
     std::vector<int>                     m_altiumToKicadNetcodes;
     std::map<wxString, wxString>         m_schematicNetNames; // upper cased name to schematic casing
@@ -369,12 +415,25 @@ private:
     std::map<uint32_t, wxString>               m_unionNames;
     std::map<int, std::vector<BOARD_ITEM*>>    m_unionToBoardItems;
 
+    struct PENDING_COMPONENT_COPPER
+    {
+        FOOTPRINT*                 footprint;
+        PCB_LAYER_ID               layer;
+        int                        netcode;
+        std::unique_ptr<PCB_SHAPE> shape;        ///< Board coordinates, released once folded
+        std::function<void()>      fallback;
+    };
+
+    std::vector<PENDING_COMPONENT_COPPER>          m_pendingComponentCopper;
+    std::vector<std::pair<FOOTPRINT*, AVIA6>>      m_pendingComponentVias;
+
     std::map<ALTIUM_LAYER, ZONE*>        m_outer_plane;
 
     LAYER_MAPPING_HANDLER   m_layerMappingHandler;
 
     PROGRESS_REPORTER* m_progressReporter;   ///< optional; may be nullptr
     REPORTER*          m_reporter;           ///< optional; may be nullptr
+    std::set<wxString> m_specialStrings;     ///< special strings in text that KiCad has no variable for
     unsigned           m_doneCount;
     unsigned           m_lastProgressCount;
     unsigned           m_totalCount;         ///< for progress reporting

@@ -56,7 +56,12 @@ extern const KICOMMON_API wxChar* const traceApi;
 namespace kiapi::common
 {
 
+KICOMMON_API ApiResponseStatus MakeResponseStatus( ApiStatusCode aCode, const std::string& aMessage = "" );
+
 KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any& aMessage );
+
+// Maps a generator message (TuningPattern, ViaStitchArea, ViaStack) to its registry type string
+KICOMMON_API std::optional<wxString> GeneratorTypeFromAny( const google::protobuf::Any& aMessage );
 
 KICOMMON_API LIB_ID UnpackLibId( const types::LibraryIdentifier& aId );
 

@@ -30,10 +30,12 @@
 #include <schematic.h>
 #include <sch_sheet_path.h>
 #include <sch_sheet.h>
+#include <sch_sheet_pin.h>
 #include <sch_screen.h>
 #include <sch_group.h>
 #include <kiid.h>
 
+#include <algorithm>
 #include <limits>
 
 #include <wx/arrstr.h>
@@ -50,14 +52,14 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem )
     case SCH_SHEET_PIN_T:
     {
         const SCH_TEXT& text = static_cast<const SCH_TEXT&>( aItem );
-        return text.GetShownText( true );
+        return text.GetShownText( FOR_CANVAS );
     }
 
     case SCH_FIELD_T:
     {
         // Goes via EDA_TEXT
         const SCH_FIELD& field = static_cast<const SCH_FIELD&>( aItem );
-        return field.GetShownText( true );
+        return field.GetShownText( FOR_CANVAS );
     }
 
     case SCH_TEXTBOX_T:
@@ -68,7 +70,7 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem )
 
         // Call the correct GetShownText overload with nullptr for settings/path and aDepth=0
         // This ensures proper variable expansion and escape marker conversion
-        return textbox.GetShownText( nullptr, nullptr, true, 0 );
+        return textbox.GetShownText( nullptr, nullptr, FOR_CANVAS );
     }
 
     case SCH_PIN_T:
@@ -90,7 +92,7 @@ wxString GetSchItemAsText( const SCH_ITEM& aItem )
             for( int col = 0; col < table.GetColCount(); ++col )
             {
                 const SCH_TABLECELL* cell = table.GetCell( row, col );
-                s << cell->GetShownText( true );
+                s << cell->GetShownText( FOR_CANVAS );
 
                 if( col < table.GetColCount() - 1 )
                 {
@@ -128,9 +130,7 @@ wxString GetSelectedItemsAsText( const SELECTION& aSel )
             itemText.Trim( false ).Trim( true );
 
             if( !itemText.IsEmpty() )
-            {
-                itemTexts.Add( std::move( itemText ) );
-            }
+                itemTexts.Add( itemText );
         }
     }
 
@@ -186,7 +186,7 @@ bool IsUnannotatedUnitOccupied( const SCH_REFERENCE_LIST& aRefs, const wxString&
         if( ref.GetUnit() != aUnit )
             continue;
 
-        if( ref.GetRef() != aRef )
+        if( ref.GetComposedRef() != aRef )
             continue;
 
         SCH_SYMBOL* refSym = ref.GetSymbol();
@@ -227,7 +227,7 @@ std::set<int> GetUnplacedUnitsForSymbol( const SCH_SYMBOL& aSym )
 
     for( const SCH_REFERENCE& ref : existingRefs )
     {
-        if( symRefDes != ref.GetRef() )
+        if( symRefDes != ref.GetComposedRef() )
             continue;
 
         if( refIsUnannotated && ref.GetSymbol() && ref.GetSymbol()->GetLibId() != symLibId )
@@ -248,7 +248,7 @@ std::optional<SCH_REFERENCE> FindSymbolByRefAndUnit( const SCHEMATIC& aSchematic
 
     for( const SCH_REFERENCE& ref : refs )
     {
-        if( ref.GetRef() == aRef && ref.GetUnit() == aUnit )
+        if( ref.GetComposedRef() == aRef && ref.GetUnit() == aUnit )
         {
             return ref;
         }
@@ -442,7 +442,7 @@ std::set<wxString> GetSheetNamesFromPaths( const std::set<wxString>& aSheetPaths
                         if( !nameField )
                             continue;
 
-                        wxString name = nameField->GetShownText( false );
+                        wxString name = nameField->GetShownText( FOR_NETNAME );
 
                         if( name.IsEmpty() )
                             continue;
@@ -482,7 +482,7 @@ wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName )
     std::set<wxString> existing;
 
     for( SCH_ITEM* item : aScreen->Items().OfType( SCH_SHEET_T ) )
-        existing.insert( static_cast<SCH_SHEET*>( item )->GetShownName( false ).Lower() );
+        existing.insert( static_cast<SCH_SHEET*>( item )->GetShownName( INTERNAL ).Lower() );
 
     if( !existing.count( aBaseName.Lower() ) )
         return aBaseName;
@@ -496,6 +496,112 @@ wxString UniqueSheetName( SCH_SCREEN* aScreen, const wxString& aBaseName )
     }
 
     return aBaseName;
+}
+
+
+std::vector<SCH_HIERLABEL*> GetUnplacedSheetPinLabels( const SCH_SHEET& aSheet )
+{
+    if( !aSheet.GetScreen() )
+        return {};
+
+    std::vector<SCH_HIERLABEL*> labels;
+    std::set<wxString>          names;
+
+    for( SCH_SHEET_PIN* pin : aSheet.GetPins() )
+        names.insert( pin->GetText() );
+
+    for( EDA_ITEM* item : aSheet.GetScreen()->Items().OfType( SCH_HIER_LABEL_T ) )
+    {
+        SCH_HIERLABEL* label = static_cast<SCH_HIERLABEL*>( item );
+
+        if( names.insert( label->GetText() ).second )
+            labels.push_back( label );
+    }
+
+    return labels;
+}
+
+
+void AutoPlaceSheetPins( SCH_SHEET* aSheet, const std::vector<SCH_HIERLABEL*>& aLabels )
+{
+    if( aLabels.empty() )
+        return;
+
+    // Vertical pitch big enough to keep pin text from touching, snapped to grid.
+    const int grid = schIUScale.MilsToIU( 50 );
+    int       textSize = aSheet->Schematic()->Settings().m_DefaultTextSize;
+    int       pitch = std::max( KiROUND( textSize * 2.0 ), schIUScale.MilsToIU( 100 ) );
+    pitch = KiROUND( (double) pitch / grid ) * grid;
+
+    const int margin = pitch;
+    int       leftX = aSheet->GetPosition().x;
+    int       rightX = aSheet->GetPosition().x + aSheet->GetSize().x;
+    int       topY = aSheet->GetPosition().y;
+
+    // Stack new pins below whatever is already on each edge, without moving it.
+    int leftY = topY + margin - pitch;
+    int rightY = topY + margin - pitch;
+
+    for( SCH_SHEET_PIN* pin : aSheet->GetPins() )
+    {
+        if( pin->GetSide() == SHEET_SIDE::RIGHT )
+            rightY = std::max( rightY, pin->GetPosition().y );
+        else if( pin->GetSide() == SHEET_SIDE::LEFT )
+            leftY = std::max( leftY, pin->GetPosition().y );
+    }
+
+    // New pins: outputs on the right edge, everything else on the left.
+    std::vector<SCH_HIERLABEL*> leftLabels;
+    std::vector<SCH_HIERLABEL*> rightLabels;
+
+    for( SCH_HIERLABEL* label : aLabels )
+    {
+        if( label->GetShape() == LABEL_FLAG_SHAPE::L_OUTPUT )
+            rightLabels.push_back( label );
+        else
+            leftLabels.push_back( label );
+    }
+
+    auto byText =
+            []( const SCH_HIERLABEL* a, const SCH_HIERLABEL* b )
+            {
+                return a->GetText() < b->GetText();
+            };
+
+    std::sort( leftLabels.begin(), leftLabels.end(), byText );
+    std::sort( rightLabels.begin(), rightLabels.end(), byText );
+
+    // Grow the sheet if the new pins would run past the bottom edge.
+    int botLeft = leftY + (int) leftLabels.size() * pitch;
+    int botRight = rightY + (int) rightLabels.size() * pitch;
+    int needBot = std::max( botLeft, botRight ) + margin;
+
+    if( needBot > topY + aSheet->GetSize().y )
+        aSheet->Resize( VECTOR2I( aSheet->GetSize().x, needBot - topY ) );
+
+    auto placeColumn =
+            [&]( const std::vector<SCH_HIERLABEL*>& aColumn, int aX, int aStartY, SHEET_SIDE aSide )
+            {
+                int y = KiROUND( (double) aStartY / grid ) * grid;
+
+                for( SCH_HIERLABEL* label : aColumn )
+                {
+                    y += pitch;
+
+                    SCH_SHEET_PIN* pin = new SCH_SHEET_PIN( aSheet );
+                    pin->SetTextSize( VECTOR2I( textSize, textSize ) );
+                    pin->SetPosition( VECTOR2I( aX, y ) );
+                    pin->ClearSelected();
+                    pin->SetText( label->GetText() );
+                    pin->SetShape( label->GetShape() );
+                    pin->SetSide( aSide );
+                    aSheet->AddPin( pin );
+                    pin->AutoplaceFields( aSheet->GetParentScreen(), AUTOPLACE_AUTO );
+                }
+            };
+
+    placeColumn( leftLabels, leftX, leftY, SHEET_SIDE::LEFT );
+    placeColumn( rightLabels, rightX, rightY, SHEET_SIDE::RIGHT );
 }
 
 

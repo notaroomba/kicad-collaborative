@@ -389,6 +389,10 @@ void BINARY_PARSER::parsePartPlacements()
         {
             m_partTypeIndex[m_parts.size()] = nextRecord.U32( 4 );
             m_partDecalAlternate[m_parts.size()] = nextRecord.U8( 17 );
+
+            // Flag 0x10 marks a NAME@DECAL placement outside the parttype alternates
+            if( nextRecord.U8( 16 ) & 0x10 )
+                m_partDecalIndex[m_parts.size()] = nextRecord.U32( 8 );
         }
 
         if( section->stride == 112 )
@@ -2058,6 +2062,7 @@ void BINARY_PARSER::parseFreeText( const SDB_SECTION& aText, size_t aRecordBase,
         text.width = static_cast<double>( linewidth );
         text.layer = static_cast<int>( layerWord & 0xFF );
         text.rotation = toBasicAngle( angleRaw );
+        text.mirrored = geom.I32( aRingRotation + 20 ) != 0;
 
         m_texts.push_back( text );
     }
@@ -3625,6 +3630,7 @@ void BINARY_PARSER::parseCopperPours()
     //   +0   u32 first piece index
     //   +4   u32 first vertex index
     //   +8   u32 first arc index (arcs are not yet imported)
+    //   +12  i32 section-23 net record index, -1 when the pour has no net
     //   +24  i32 raw XLOC -- each pour owns its own anchor, not a shared board anchor
     //   +28  i32 raw YLOC
     //   +70  char name[16]
@@ -3653,6 +3659,7 @@ void BINARY_PARSER::parseCopperPours()
         int32_t     rawX = 0;
         int32_t     rawY = 0;
         std::string name;
+        std::string netName;
     };
 
     std::vector<POUR_OWNER> owners;
@@ -3684,6 +3691,10 @@ void BINARY_PARSER::parseCopperPours()
         owner.rawY = m_cursor.I32At( offset + 28 );
         owner.pieceCount = m_cursor.U32At( offset + 64 );
         owner.name = std::move( name );
+
+        if( auto netIt = m_sec23IndexToNet.find( m_cursor.U32At( offset + 12 ) ); netIt != m_sec23IndexToNet.end() )
+            owner.netName = netIt->second;
+
         owners.push_back( std::move( owner ) );
     }
 
@@ -3712,6 +3723,7 @@ void BINARY_PARSER::parseCopperPours()
 
             POUR pour;
             pour.owner_pour = owner.name;
+            pour.net_name = owner.netName;
             pour.width = static_cast<double>( width );
             pour.layer = static_cast<int>( layer );
 
@@ -3931,6 +3943,15 @@ void BINARY_PARSER::linkPartsToDecals()
 
         if( alternate < decalIndices.size() )
             decalIndex = decalIndices[alternate];
+
+        // An explicit placement overrides the parttype alternates
+        auto placedIt = m_partDecalIndex.find( partIdx );
+
+        if( placedIt != m_partDecalIndex.end() && placedIt->second < m_decalNameTable.size()
+            && m_decals.count( m_decalNameTable[placedIt->second] ) )
+        {
+            decalIndex = static_cast<int32_t>( placedIt->second );
+        }
 
         if( decalIndex < 0 || static_cast<size_t>( decalIndex ) >= m_decalNameTable.size() )
             continue;

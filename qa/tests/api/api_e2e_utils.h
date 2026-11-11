@@ -186,6 +186,38 @@ public:
         return true;
     }
 
+    bool CreateDocument( const wxString& aPath, kiapi::common::types::DocumentType aType,
+                         kiapi::common::types::DocumentSpecifier* aDocument = nullptr )
+    {
+        kiapi::common::commands::CreateDocument request;
+        request.set_type( aType );
+        request.set_path( aPath.ToStdString() );
+
+        kiapi::common::ApiResponse response;
+
+        if( !send( request, response ) )
+            return false;
+
+        if( response.status().status() != kiapi::common::AS_OK )
+        {
+            m_lastError = response.status().error_message();
+            return false;
+        }
+
+        kiapi::common::commands::OpenDocumentResponse openResponse;
+
+        if( !response.message().UnpackTo( &openResponse ) )
+        {
+            m_lastError = wxS( "Failed to unpack OpenDocumentResponse" );
+            return false;
+        }
+
+        if( aDocument )
+            *aDocument = openResponse.document();
+
+        return true;
+    }
+
     // Convenience overload for PCB documents (backward compatible)
     bool OpenDocument( const wxString& aPath, kiapi::common::types::DocumentSpecifier* aDocument = nullptr )
     {
@@ -281,6 +313,68 @@ public:
         return true;
     }
 
+    /**
+     * Fetch all footprints and deserialize the one whose reference designator matches aReference.
+     * Returns false (with @a m_lastError set) if not found or on a transport failure.
+     */
+    bool GetFootprintByReference( const kiapi::common::types::DocumentSpecifier& aDocument, const wxString& aReference,
+                                  FOOTPRINT* aFootprint )
+    {
+        wxCHECK( aFootprint, false );
+
+        kiapi::common::commands::GetItems request;
+        *request.mutable_header()->mutable_document() = aDocument;
+        request.add_types( kiapi::common::types::KOT_PCB_FOOTPRINT );
+
+        kiapi::common::ApiResponse response;
+
+        if( !send( request, response ) )
+        {
+            m_lastError = wxS( "Failed to send command" );
+            return false;
+        }
+
+        if( response.status().status() != kiapi::common::AS_OK )
+        {
+            m_lastError = response.status().error_message();
+            return false;
+        }
+
+        kiapi::common::commands::GetItemsResponse itemsResponse;
+
+        if( !response.message().UnpackTo( &itemsResponse ) )
+        {
+            m_lastError = wxS( "Failed to unpack GetItemsResponse" );
+            return false;
+        }
+
+        if( itemsResponse.status() != kiapi::common::types::IRS_OK )
+        {
+            m_lastError = wxString::Format( wxS( "GetItems returned non-OK status: %s" ),
+                                            magic_enum::enum_name( itemsResponse.status() ) );
+            return false;
+        }
+
+        for( const google::protobuf::Any& item : itemsResponse.items() )
+        {
+            FOOTPRINT candidate( nullptr );
+
+            if( !candidate.Deserialize( item ) )
+                continue;
+
+            const PCB_FIELD* reference = std::as_const( candidate ).GetField( FIELD_T::REFERENCE );
+
+            if( reference && reference->GetText() == aReference )
+            {
+                *aFootprint = std::move( candidate );
+                return true;
+            }
+        }
+
+        m_lastError = wxS( "No footprint with reference " ) + aReference;
+        return false;
+    }
+
     bool CloseDocument( const kiapi::common::types::DocumentSpecifier* aDocument,
                         kiapi::common::ApiStatusCode*                  aStatus = nullptr )
     {
@@ -311,7 +405,16 @@ public:
         kiapi::common::commands::CloseAllDocuments request;
         kiapi::common::ApiResponse                 response;
 
-        return send( request, response );
+        if( !send( request, response ) )
+            return false;
+
+        if( response.status().status() != kiapi::common::AS_OK )
+        {
+            m_lastError = response.status().error_message();
+            return false;
+        }
+
+        return true;
     }
 
     /**
@@ -391,10 +494,16 @@ public:
         if( m_ready )
         {
             if( isProcessAlive() )
+            {
+                // A new testcase is starting up, make sure old things are closed
+                Client().CloseAllDocuments();
                 return true;
+            }
 
             m_ready = false;
         }
+
+        BOOST_TEST_MESSAGE( "Starting API server with CLI path: " << aCliPath );
 
         if( !startServerProcess( aCliPath, aError ) )
             return false;
@@ -658,6 +767,7 @@ public:
         API_SERVER_MANAGER::Instance().Client().CloseAllDocuments();
     }
 
+    /// Starts the API server if not already running.  If running, closes any open documents.
     bool Start( const wxString& aCliPathOverride = wxString() )
     {
         wxString cliPath = aCliPathOverride.IsEmpty() ? m_cliPath : aCliPathOverride;

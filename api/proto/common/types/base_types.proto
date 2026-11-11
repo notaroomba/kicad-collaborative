@@ -293,7 +293,10 @@ message TextAttributes
   HorizontalAlignment         horizontal_alignment = 2;
   VerticalAlignment           vertical_alignment   = 3;
   kiapi.common.types.Angle    angle                = 4;
-  double                      line_spacing         = 5;
+
+  // Explicit optional since 10.0.7; leaving absent will use the default spacing of 1.0
+  optional double             line_spacing         = 5;
+
   kiapi.common.types.Distance stroke_width         = 6;
   bool                        italic               = 7;
   bool                        bold                 = 8;
@@ -626,4 +629,15 @@ message CustomProperty
 {
   string key = 1;
   string value = 2;
+}
+
+enum MarkerType
+{
+    MT_UNKNOWN       = 0;
+    MT_ERC           = 1;
+    MT_DRC           = 2;
+    MT_DRAWING_SHEET = 3;
+    MT_RATSNEST      = 4;
+    MT_PARITY        = 5;
+    MT_SIMULATION    = 6;
 }

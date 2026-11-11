@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 
+#include <wx/buffer.h>
 #include <wx/stream.h>
 #include <wx/string.h>
 
@@ -30,6 +31,8 @@
 class OUTPUTFORMATTER;
 class EDA_ITEM;
 class KIID;
+
+class wxMemoryBuffer;
 
 namespace KICAD_FORMAT {
 
@@ -129,7 +132,7 @@ KICOMMON_API void FormatBool( OUTPUTFORMATTER* aOut, const wxString& aKey, bool 
  * Writes an optional boolean to the formatter.
  * If a value is present, calls FormatBool.
  * If no value is present, Writes (aKey none).
- * 
+ *
  * @param aOut is the output formatter to write to
  * @param aKey is the name of the boolean flag
  * @param aValue is the value to write
@@ -153,7 +156,7 @@ KICOMMON_API void FormatCustomProperties( OUTPUTFORMATTER* aOut, const EDA_ITEM&
 KICOMMON_API void FormatStreamData( OUTPUTFORMATTER& aOut, const wxStreamBuffer& aStream );
 
 /**
- * Controls the pretty-printing mode used by Prettify
+ * Control the pretty-printing mode used by Prettify().
  */
 enum class KICOMMON_API FORMAT_MODE
 {
@@ -173,6 +176,7 @@ enum class KICOMMON_API FORMAT_MODE
  * - End of multi-line lists (close paren) goes on a single line at same indentation as its start
  *
  * For example:
+ * \code
  * (first
  *  (second
  *   (third list)
@@ -183,7 +187,18 @@ enum class KICOMMON_API FORMAT_MODE
  *   (and a sub list)
  *  )
  * )
+ * \endcode
  */
 KICOMMON_API void Prettify( std::string& aSource, FORMAT_MODE aMode = FORMAT_MODE::NORMAL );
 
 } // namespace KICAD_FORMAT
+
+
+/**
+ * Load the contents of a file into a memory buffer.
+ *
+ * @param aFileName is the file to read.
+ * @param aBuffer receives the file contents.
+ * @return true when the file was read, false when the file cannot be read or is empty.
+ */
+KICOMMON_API bool LoadFileToMemory( const wxString& aFileName, wxMemoryBuffer& aBuffer );

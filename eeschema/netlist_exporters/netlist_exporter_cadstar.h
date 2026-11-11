@@ -31,15 +31,15 @@
 class NETLIST_EXPORTER_CADSTAR : public NETLIST_EXPORTER_BASE
 {
 public:
-    NETLIST_EXPORTER_CADSTAR( SCHEMATIC* aSchematic ) :
-            NETLIST_EXPORTER_BASE( aSchematic )
+    NETLIST_EXPORTER_CADSTAR( SCHEMATIC* aSchematic, KIWAY* aKiway ) :
+            NETLIST_EXPORTER_BASE( aSchematic, aKiway )
     {
     }
 
     /**
      * Write to specified output file.
      */
-    bool WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
+    bool writeNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
                        REPORTER& aReporter ) override;
 
 private:

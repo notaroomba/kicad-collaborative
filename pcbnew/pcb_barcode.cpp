@@ -64,7 +64,7 @@ PCB_BARCODE::PCB_BARCODE( BOARD_ITEM* aParent ) :
         m_libPos( 0, 0 ),
         m_text( this ),
         m_kind( BARCODE_T::QR_CODE ),
-        m_libAngle( 0 ),
+        m_libAngle( ANGLE_0 ),
         m_errorCorrection( BARCODE_ECC_T::L )
 {
     m_layer = Dwgs_User;
@@ -134,9 +134,9 @@ VECTOR2I PCB_BARCODE::GetPosition() const
 EDA_ANGLE PCB_BARCODE::GetAngle() const
 {
     if( const FOOTPRINT* fp = GetParentFootprint() )
-        return ( m_libAngle + fp->GetOrientation() ).Normalize();
+        return ( m_libAngle + fp->GetOrientation() ).GetAngle();
 
-    return m_libAngle;
+    return m_libAngle.GetAngle();
 }
 
 
@@ -152,9 +152,9 @@ wxString PCB_BARCODE::GetText() const
 }
 
 
-wxString PCB_BARCODE::GetShownText() const
+wxString PCB_BARCODE::GetShownText( RESOLUTION_CONTEXT aContext ) const
 {
-    return m_text.GetShownText( true );
+    return m_text.GetShownText( aContext );
 }
 
 
@@ -207,7 +207,9 @@ void PCB_BARCODE::Serialize( google::protobuf::Any& aContainer ) const
                                    : kiapi::common::types::LockedState::LS_UNLOCKED );
 
     kiapi::common::PackCustomProperties( barcode.mutable_custom_properties(), *this );
-    aContainer.PackFrom( barcode );
+
+    if( !aContainer.PackFrom( barcode ) )
+        wxFAIL_MSG( wxT( "Failed to pack PCB_BARCODE" ) );
 }
 
 
@@ -250,8 +252,6 @@ bool PCB_BARCODE::Deserialize( const google::protobuf::Any& aContainer )
         m_libAngle = newAngle - fp->GetOrientation();
     else
         m_libAngle = newAngle;
-
-    m_libAngle.Normalize();
 
     m_layer = FromProtoEnum<PCB_LAYER_ID, BoardLayer>( barcode.layer() );
 
@@ -331,7 +331,6 @@ void PCB_BARCODE::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
         m_libPos = boardPos;
 
     m_libAngle += aAngle;
-    m_libAngle.Normalize();
 
     AssembleBarcode();
 }
@@ -339,40 +338,17 @@ void PCB_BARCODE::Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle )
 
 void PCB_BARCODE::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
-    if( const FOOTPRINT* fp = GetParentFootprint() )
-    {
-        const VECTOR2I libAxis = fp->GetTransform().InverseApply( aCentre );
+    // The position mirrors in the library or board frame depending on if this in a FP.
+    const FOOTPRINT* fp = GetParentFootprint();
+    const VECTOR2I   libCentre = fp ? fp->GetTransform().InverseApply( aCentre ) : aCentre;
+    const EDA_ANGLE  axis = MIRROR_AXIS( aFlipDirection );
 
-        if( aFlipDirection == FLIP_DIRECTION::LEFT_RIGHT )
-            m_libPos.x = 2 * libAxis.x - m_libPos.x;
-        else
-            m_libPos.y = 2 * libAxis.y - m_libPos.y;
+    MIRROR( m_libPos, libCentre, aFlipDirection );
 
-        // Reflect the library-frame angle (rotation-independent).
-        if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
-            m_libAngle = ANGLE_180 - m_libAngle;
-        else
-            m_libAngle = -m_libAngle;
+    // A flip changes the side, so that's a half turn on top of the reflection.
+    m_libAngle = m_libAngle.Reflect( axis ) + ANGLE_180;
 
-        m_libAngle.Normalize();
-
-        SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
-        AssembleBarcode();
-        return;
-    }
-
-    VECTOR2I boardPos = GetPosition();
-    MIRROR( boardPos, aCentre, aFlipDirection );
-    m_libPos = boardPos;
-
-    if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
-        m_libAngle = ANGLE_180 - m_libAngle;
-    else
-        m_libAngle = -m_libAngle;
-
-    m_libAngle.Normalize();
-
-    SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+    SetLayer( GetFlippedLayer( GetLayer() ) );
     AssembleBarcode();
 }
 
@@ -395,7 +371,7 @@ size_t PCB_BARCODE::computeCacheKey() const
     const VECTOR2I  pos = GetPosition();
     const EDA_ANGLE angle = GetAngle();
 
-    return hash_val( GetShownText(), m_width, m_height, pos.x, pos.y, m_margin.x, m_margin.y,
+    return hash_val( GetShownText( FOR_CANVAS ), m_width, m_height, pos.x, pos.y, m_margin.x, m_margin.y,
                      static_cast<int>( m_kind ), angle.AsDegrees(), static_cast<int>( m_errorCorrection ),
                      m_text.IsVisible(), m_text.GetTextHeight(), IsKnockout(), static_cast<int>( m_layer ) );
 }
@@ -562,7 +538,7 @@ void PCB_BARCODE::ComputeBarcode() const
         return;
     }
 
-    wxString text = GetShownText();
+    wxString text = GetShownText( FOR_CANVAS );
     wxScopedCharBuffer utf8Text = text.ToUTF8();
     size_t length = utf8Text.length();
     unsigned char* dataPtr = reinterpret_cast<unsigned char*>( utf8Text.data() );
@@ -765,6 +741,20 @@ double PCB_BARCODE::ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const
     // Hide the locked shadow when the barcode's own layer is not shown
     if( aLayer == LAYER_LOCKED_ITEM_SHADOW && !aView->IsLayerVisibleCached( m_layer ) )
         return LOD_HIDE;
+
+    if( FOOTPRINT* parent = GetParentFootprint() )
+    {
+        PCB_LAYER_ID checkLayer = m_layer;
+
+        if( !IsFrontLayer( checkLayer ) && !IsBackLayer( checkLayer ) )
+            checkLayer = parent->GetLayer();
+
+        if( IsFrontLayer( checkLayer ) && !aView->IsLayerVisibleCached( LAYER_FOOTPRINTS_FR ) )
+            return LOD_HIDE;
+
+        if( IsBackLayer( checkLayer ) && !aView->IsLayerVisibleCached( LAYER_FOOTPRINTS_BK ) )
+            return LOD_HIDE;
+    }
 
     return LOD_SHOW;
 }

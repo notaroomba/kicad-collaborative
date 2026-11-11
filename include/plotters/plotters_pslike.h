@@ -27,6 +27,7 @@
 
 #include "plotter.h"
 #include <memory>
+#include <optional>
 #include <plotters/pdf_stroke_font.h>
 #include <plotters/pdf_outline_font.h>
 #include <math/vector3.h>
@@ -200,10 +201,9 @@ public:
                            int aWidth, void* aData = nullptr ) override;
 
     /**
-     * PostScript-likes at the moment are the only plot engines supporting bitmaps.
+     * Plot a bitmap, applying an overall opacity on top of the image's own alpha.
      */
-    virtual void PlotImage( const wxImage& aImage, const VECTOR2I& aPos,
-                            double aScaleFactor ) override;
+    virtual void PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor, double aAlpha ) override;
 
     virtual void PenTo( const VECTOR2I& pos, char plume ) override;
     virtual void Text( const VECTOR2I&        aPos,
@@ -255,6 +255,7 @@ public:
             m_pageTreeHandle( 0 ),
             m_fontResDictHandle( 0 ),
             m_imgResDictHandle( 0 ),
+            m_extGStateResDictHandle( 0 ),
             m_jsNamesHandle( 0 ),
             m_pageStreamHandle( -1 ),
             m_streamLengthHandle( 0 ),
@@ -262,6 +263,8 @@ public:
             m_totalOutlineNodes( 0 ),
             m_3dModelHandle( -1 ),
             m_3dExportMode( false ),
+            m_usedBase14Fonts( false ),
+            m_currentAlpha( 1.0 ),
             m_strokeFontManager( nullptr ),
             m_outlineFontManager( nullptr )
     {
@@ -436,10 +439,10 @@ public:
 
     void Set3DExport( bool aYes ) { m_3dExportMode = aYes; }
 
-    /**
+    /*
      * PDF images are handles as inline, not XObject streams...
      */
-    void PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor ) override;
+    void PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor, double aAlpha ) override;
 
     /**
      * Generates the camera to world matrix for use with a 3D View.
@@ -515,6 +518,9 @@ protected:
      * PDF supports colors fully. It actually has distinct fill and pen colors,
      * but we set both at the same time.
      *
+     * Alpha is emitted as an ExtGState that contains that alpha value.
+     * A new ExtGState object is allocated if the alpha value has not been used before.
+     *
      * XXX Keeping them divided could result in a minor optimization in
      * Eeschema filled shapes, but would propagate to all the other plot
      * engines. Also arcs are filled as pies but only the arc is stroked so
@@ -531,6 +537,14 @@ protected:
     int allocPdfObject();
 
     /**
+     * Return the ExtGState resource handle for the given alpha, allocating a new object the
+     * first time that alpha is used.
+     *
+     * @param aAlpha The alpha value [0.0 - 1.0]
+     */
+    int getExtGStateHandleForAlpha( double aAlpha );
+
+    /**
      * Open a new PDF object and returns the handle if the parameter is -1.
      * Otherwise fill in the xref entry for the passed object
      */
@@ -544,9 +558,9 @@ protected:
     /**
      * Start a PDF stream (for the page).
      *
-     * @param handle -1 (default) for a new object. Especially from PDF 1.5 streams can contain
+     * @param aHandle -1 (default) for a new object. Especially from PDF 1.5 streams can contain
      *               a lot of things, but for the moment we only handle page content.
-     * @eturn The object handle opened
+     * @return The object handle opened
      */
     int startPdfStream( int aHandle = -1 );
 
@@ -581,42 +595,116 @@ protected:
 
     std::string encodeByteString( const std::string& aBytes );
 
-    int m_pageTreeHandle;           ///< Handle to the root of the page tree object.
-    int m_fontResDictHandle;        ///< Font resource dictionary.
-    int m_imgResDictHandle;         ///< Image resource dictionary.
-    int m_jsNamesHandle;            ///< Handle for Names dictionary with JS.
-    std::vector<int> m_pageHandles; ///< Handles to the page objects.
-    int m_pageStreamHandle;         ///< Handle of the page content object.
-    int m_streamLengthHandle;       ///< Handle to the deferred stream length.
+protected:
+    /**
+     * The PDF cross-reference table.
+     *
+     * This is a table of file offsets for each PDF object "handle" (int)
+     */
+    class XREF_TABLE
+    {
+    public:
+        void Reset()
+        {
+            m_offsets.assign( 1, 0 );
+        }
 
-    wxString m_workFilename;
-    wxString m_pageName;
-    wxString m_parentPageName;
+        /**
+         * Allocate a new PDF object handle. Object 0 is reserved by the PDF
+         * format and is never handed out.
+         *
+         * You must fill in the file offset for this handle using SetOffset()
+         * before the object is useable.
+         *
+         * @return The newly allocated handle.
+         */
+        int Allocate()
+        {
+            m_offsets.push_back( 0 );
+            return static_cast<int>( m_offsets.size() ) - 1;
+        }
 
-    FILE* m_workFile;               ///< Temporary file to construct the stream before zipping.
-    std::vector<long> m_xrefTable;  ///< The PDF xref offset table.
+        /**
+         * Is the given PDF object handle in the table?
+         */
+        bool IsValid( int aHandle ) const
+        {
+            return aHandle > 0 && aHandle < static_cast<int>( m_offsets.size() );
+        }
+
+        /**
+         * Set the file offset for a given PDF object handle.
+         *
+         * @param aHandle The PDF object handle.
+         * @param aOffset The file offset where the object starts.
+         */
+        void SetOffset( int aHandle, long aOffset )
+        {
+            wxASSERT_MSG( IsValid( aHandle ), "PDF object handle is not valid" );
+            wxASSERT_MSG( aOffset >= 0, "PDF object offset must be non-negative" );
+
+            if( IsValid( aHandle ) )
+                m_offsets[aHandle] = aOffset;
+        }
+
+        const std::vector<long>& Entries() const
+        {
+            return m_offsets;
+        }
+
+    private:
+        std::vector<long> m_offsets = { 0 };
+    };
+
+    int               m_pageTreeHandle;           ///< Handle to the root of the page tree object.
+    int               m_fontResDictHandle;        ///< Font resource dictionary.
+    int               m_imgResDictHandle;         ///< Image resource dictionary.
+    int               m_extGStateResDictHandle;   ///< Graphics state resource dictionary.
+    int               m_jsNamesHandle;            ///< Handle for Names dictionary with JS.
+    std::vector<int>  m_pageHandles;              ///< Handles to the page objects.
+    int               m_pageStreamHandle;         ///< Handle of the page content object.
+    int               m_streamLengthHandle;       ///< Handle to the deferred stream length.
+
+    wxString          m_workFilename;
+    wxString          m_pageName;
+    wxString          m_parentPageName;
+
+    FILE*             m_workFile;                 ///< Temporary file to construct the stream before zipping.
+
+    /// The PDF xref offset table.
+    XREF_TABLE m_xrefTable;
 
     /// List of user-space page numbers for resolving internal hyperlinks.
-    std::vector<wxString>                                  m_pageNumbers;
+    std::vector<wxString>                                       m_pageNumbers;
 
     /// List of loaded hyperlinks in current page.
-    std::vector<std::pair<BOX2I, wxString>>                m_hyperlinksInPage;
-    std::vector<std::pair<BOX2I, std::vector<wxString>>>   m_hyperlinkMenusInPage;
+    std::vector<std::pair<BOX2I, wxString>>                     m_hyperlinksInPage;
+    std::vector<std::pair<BOX2I, std::vector<wxString>>>        m_hyperlinkMenusInPage;
 
     /// Handles for all the hyperlink objects that will be deferred.
-    std::map<int, std::pair<BOX2D, wxString>>              m_hyperlinkHandles;
-    std::map<int, std::pair<BOX2D, std::vector<wxString>>> m_hyperlinkMenuHandles;
+    std::map<int, std::pair<BOX2D, wxString>>                   m_hyperlinkHandles;
+    std::map<int, std::pair<BOX2D, std::vector<wxString>>>      m_hyperlinkMenuHandles;
 
-    std::map<wxString, std::vector<std::pair<BOX2I, wxString>>>      m_bookmarksInPage;
+    std::map<wxString, std::vector<std::pair<BOX2I, wxString>>> m_bookmarksInPage;
 
-    std::map<int, wxImage> m_imageHandles;
+    std::map<int, wxImage>                                      m_imageHandles;
 
     std::unique_ptr<OUTLINE_NODE> m_outlineRoot;        ///< Root outline node.
     int                           m_totalOutlineNodes;  ///< Total number of outline nodes.
 
-    int  m_3dModelHandle;
-    bool m_3dExportMode;
-    std::unique_ptr<PDF_STROKE_FONT_MANAGER> m_strokeFontManager;
+    int                           m_3dModelHandle;
+    bool                          m_3dExportMode;
+
+    /// Set when the non-embeddable font fallback references the base-14 /KicadFont* resources.
+    bool                          m_usedBase14Fonts;
+
+    /// Alpha currently set in the page graphics state (PDF starts each page with 1.0).
+    double m_currentAlpha = 1.0;
+
+    /// Graphics state objects keyed by alpha
+    std::map<double, int> m_alphaToExtGStateHandles;
+
+    std::unique_ptr<PDF_STROKE_FONT_MANAGER>  m_strokeFontManager;
     std::unique_ptr<PDF_OUTLINE_FONT_MANAGER> m_outlineFontManager;
 };
 
@@ -671,8 +759,7 @@ public:
     /**
      * PostScript-likes at the moment are the only plot engines supporting bitmaps.
      */
-    virtual void PlotImage( const wxImage& aImage, const VECTOR2I& aPos,
-                            double aScaleFactor ) override;
+    virtual void PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor, double aAlpha ) override;
 
     virtual void PenTo( const VECTOR2I& pos, char plume ) override;
 
@@ -687,6 +774,17 @@ public:
      *                      do not use value > 4 to avoid overflow for other parts
      */
     virtual void SetSvgCoordinatesFormat( unsigned aPrecision ) override;
+
+    /**
+     * Set an explicit bounding box for the plotted content (in IUs).
+     *
+     * When set, the SVG width/height and viewBox are derived from this box transformed to
+     * device units, so the plotted content keeps its origin at the SVG origin even when it
+     * extends to negative coordinates.  When not set, the page size is used.
+     *
+     * @param aBBoxIU the bounding box of the content to plot, in plotter coordinates.
+     */
+    virtual void SetPlotBBox( const BOX2I& aBBoxIU ) override;
 
     /**
      * Calling this function allows one to define the beginning of a group
@@ -727,6 +825,8 @@ public:
                            void*                  aData = nullptr ) override;
 
 protected:
+    virtual VECTOR2D userToDeviceCoordinates( const VECTOR2I& aCoordinate ) override;
+
     /**
      * Initialize m_pen_rgb_color from reduced values r, g ,b
      * ( reduced values are 0.0 to 1.0 )
@@ -736,8 +836,9 @@ protected:
     /**
      * Output the string which define pen and brush color, shape, transparency
      *
+     * @param aLineWidth is the width of the line to plot.
      * @param aIsGroup If false, do not form a new group for the style.
-     * @param aExtraStyle If given, the string will be added into the style string before closing
+     * @param aExtraStyle If given, the string will be added into the style string before closing.
      */
     void setSVGPlotStyle( int aLineWidth, bool aIsGroup = true,
                           const std::string& aExtraStyle = {} );
@@ -761,4 +862,6 @@ protected:
                                     // Use 3-6 (3 means um precision, 6 nm precision) in PcbNew
                                     // 3-4 in other modules (avoid values >4 to avoid overflow)
                                     // see also comment for m_useInch.
+
+    std::optional<BOX2I> m_plotBBoxIU; // Explicit plot content bounding box (IUs), when set.
 };

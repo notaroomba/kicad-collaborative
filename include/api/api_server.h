@@ -22,6 +22,7 @@
 #define KICAD_API_SERVER_H
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <set>
 #include <string>
@@ -30,14 +31,26 @@
 #include <wx/filename.h>
 
 #include <kicommon.h>
+#include <api/common/types/base_types.pb.h>
 
 class API_HANDLER;
 class KINNG_REQUEST_SERVER;
 class wxEvtHandler;
 
+/// Event carrying an incoming API request from the listener thread to the main thread.
+class KICOMMON_API KICAD_API_REQUEST_EVENT : public wxCommandEvent
+{
+public:
+    KICAD_API_REQUEST_EVENT( wxEventType aEventType = wxEVT_NULL ) :
+            wxCommandEvent( aEventType )
+    {}
 
-wxDECLARE_EVENT( API_REQUEST_EVENT, wxCommandEvent );
+    wxEvent* Clone() const override { return new KICAD_API_REQUEST_EVENT( *this ); }
 
+    wxEventCategory GetEventCategory() const override { return wxEVT_CATEGORY_THREAD; }
+};
+
+wxDECLARE_EVENT( API_REQUEST_EVENT, KICAD_API_REQUEST_EVENT );
 
 class KICOMMON_API KICAD_API_SERVER : public wxEvtHandler
 {
@@ -90,6 +103,29 @@ public:
      */
     static std::string StandardSocketUrl();
 
+    /**
+     * Calls onNetSettingsChanged() on every registered handler, so that editors can update
+     * state derived from project net settings after they are changed via the API.
+     * Must be called from the main thread.
+     */
+    void NotifyNetSettingsChanged();
+
+    /**
+     * Notifies the host application that a document was saved to a new path.
+     * Must be called from the main thread.
+     */
+    void NotifyDocumentRenamed( kiapi::common::types::DocumentType aType, const wxString& aOldPath,
+                                const wxString& aNewPath );
+
+    /**
+     * Installs a callback to be invoked by NotifyDocumentRenamed.
+     */
+    void SetRenameListener( std::function<void( kiapi::common::types::DocumentType,
+                                                const wxString&, const wxString& )> aListener )
+    {
+        m_renameListener = std::move( aListener );
+    }
+
 private:
 
     /**
@@ -118,6 +154,8 @@ private:
     std::string m_token;
 
     std::atomic<bool> m_readyToReply;
+
+    std::function<void( kiapi::common::types::DocumentType, const wxString&, const wxString& )> m_renameListener;
 
     wxString m_socketPathOverride;
 

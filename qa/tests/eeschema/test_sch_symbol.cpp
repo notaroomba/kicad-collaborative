@@ -17,20 +17,24 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/**
- * @file
- * Test suite for SCH_SYMBOL object.
- */
-
+#include <settings/settings_manager.h>
+#include <sch_screen.h>
+#include <schematic.h>
+#include <locale_io.h>
+#include <schematic_utils/schematic_file_util.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include "eeschema_test_utils.h"
-
-// Code under test
 #include <sch_symbol.h>
 #include <sch_edit_frame.h>
+#include <sch_commit.h>
 #include <wildcards_and_files_ext.h>
 #include <lib_symbol.h>
 #include <eda_search_data.h>
+#include <sim/sim_lib_mgr.h>
+#include <sim/sim_model.h>
+#include <reporter.h>
+
+#include "tool/tool_manager.h"
 
 
 class TEST_SCH_SYMBOL_FIXTURE : public KI_TEST::SCHEMATIC_TEST_FIXTURE
@@ -57,7 +61,7 @@ public:
         return nullptr;
     }
 
-    ///< #SCH_SYMBOL object with no extra data set.
+    /// #SCH_SYMBOL object with no extra data set.
     SCH_SYMBOL m_symbol;
 };
 
@@ -91,6 +95,84 @@ BOOST_AUTO_TEST_CASE( Orientation )
     m_symbol.SetTransform( TRANSFORM() );
     m_symbol.SetOrientation( SYM_ORIENT_270 );
     t = m_symbol.GetTransform();
+}
+
+
+BOOST_AUTO_TEST_CASE( DuplicatePinMatchingPreservesStoredOrder )
+{
+    LoadSchematic( SchematicQAPath( wxS( "component_classes" ) ) );
+    SCH_SYMBOL* source = nullptr;
+
+    for( SCH_ITEM* item : m_schematic->RootScreen()->Items().OfType( SCH_SYMBOL_T ) )
+    {
+        auto* candidate = static_cast<SCH_SYMBOL*>( item );
+        std::set<wxString> numbers;
+
+        for( const auto& pin : candidate->GetRawPins() )
+            numbers.insert( pin->GetNumber() );
+
+        if( numbers.size() >= 3 && numbers.size() == candidate->GetRawPins().size() )
+        {
+            source = candidate;
+            break;
+        }
+    }
+
+    BOOST_REQUIRE( source );
+    std::unique_ptr<SCH_SYMBOL>            symbol( static_cast<SCH_SYMBOL*>( source->Clone() ) );
+    std::vector<std::unique_ptr<SCH_PIN>>& pins = symbol->GetRawPins();
+    const wxString                         number = pins.front()->GetNumber();
+    const size_t                           originalCount = pins.size();
+    pins.emplace_back( static_cast<SCH_PIN*>( pins.front()->Duplicate( false ) ) );
+
+    // Oppose allocation order so the saved order cannot pass by allocator coincidence.
+    const auto opposeAllocationOrder =
+            [&]
+            {
+                std::sort( pins.begin(), pins.end(), []( const auto& a, const auto& b )
+                           { return std::less<SCH_PIN*>{}( b.get(), a.get() ); } );
+            };
+
+    const auto numbered =
+            [&]( const auto& pin )
+            {
+                return pin->GetNumber() == number;
+            };
+
+    opposeAllocationOrder();
+    const KIID expected = ( *std::find_if( pins.begin(), pins.end(), numbered ) )->m_Uuid;
+    symbol->UpdatePins();
+    BOOST_CHECK_EQUAL( pins.size(), originalCount );
+
+    for( int pass = 0; pass < 2; ++pass )
+    {
+        const auto retained = std::find_if( pins.begin(), pins.end(), numbered );
+        BOOST_REQUIRE( retained != pins.end() );
+        BOOST_CHECK( ( *retained )->m_Uuid == expected );
+        symbol->UpdatePins();
+    }
+
+    opposeAllocationOrder();
+    const std::vector<SCH_PIN*> libraryPins = symbol->GetLibSymbolRef()->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES );
+    BOOST_REQUIRE_EQUAL( libraryPins.size(), pins.size() );
+    const wxString commonNumber = libraryPins.front()->GetNumber();
+    std::map<const SCH_PIN*, KIID> expectedMapping;
+
+    for( size_t i = 0; i < pins.size(); ++i )
+    {
+        expectedMapping.emplace( libraryPins[i], pins[i]->m_Uuid );
+        pins[i]->SetNumber( commonNumber );
+    }
+
+    // Only the first library pin matches; the others must reuse saved pins in order.
+    symbol->UpdatePins();
+    BOOST_REQUIRE_EQUAL( pins.size(), originalCount );
+
+    for( const std::unique_ptr<SCH_PIN>& pin : pins )
+    {
+        BOOST_REQUIRE( expectedMapping.contains( pin->GetLibPin() ) );
+        BOOST_CHECK( pin->m_Uuid == expectedMapping.at( pin->GetLibPin() ) );
+    }
 }
 
 
@@ -141,11 +223,11 @@ BOOST_AUTO_TEST_CASE( SchSymbolVariantTest )
     BOOST_CHECK( symbol->GetExcludedFromPosFiles( &m_schematic->Hierarchy()[0], variantName ) );
 
     // Test a value field variant change.
-    BOOST_CHECK( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                   false, 0 ) == wxS( "1K" ) );
+    BOOST_CHECK( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL )
+                    == wxS( "1K" ) );
     symbol->GetField( FIELD_T::VALUE )->SetText( wxS( "10K" ), &m_schematic->Hierarchy()[0], variantName );
-    BOOST_CHECK( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                   false, 0, variantName ) == wxS( "10K" ) );
+    BOOST_CHECK( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL, variantName )
+                    == wxS( "10K" ) );
     // BOOST_CHECK( symbol->GetFieldText( FIELD_T::VALUE, &m_schematic->Hierarchy()[0], variantName ) == wxS( "10K" ) );
 }
 
@@ -470,10 +552,10 @@ BOOST_AUTO_TEST_CASE( RenameVariantPreservesData )
     // Verify the data is set
     BOOST_CHECK( symbol->GetDNP( &m_schematic->Hierarchy()[0], oldName ) );
     BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                          false, 0, oldName ), wxS( "100K" ) );
+                                                                         INTERNAL, oldName ), wxS( "100K" ) );
 
     // Rename the variant
-    m_schematic->RenameVariant( oldName, newName );
+    m_schematic->RenameVariant( oldName, newName, nullptr );
 
     // Verify old name is gone
     BOOST_CHECK( !m_schematic->GetVariantNames().contains( oldName ) );
@@ -490,7 +572,7 @@ BOOST_AUTO_TEST_CASE( RenameVariantPreservesData )
     // Verify symbol variant data was preserved
     BOOST_CHECK( symbol->GetDNP( &m_schematic->Hierarchy()[0], newName ) );
     BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                          false, 0, newName ), wxS( "100K" ) );
+                                                                         INTERNAL, newName ), wxS( "100K" ) );
 }
 
 
@@ -527,7 +609,7 @@ BOOST_AUTO_TEST_CASE( CopyVariantCreatesIndependentCopy )
     symbol->GetField( FIELD_T::VALUE )->SetText( wxS( "47K" ), &m_schematic->Hierarchy()[0], sourceVariant );
 
     // Copy the variant
-    m_schematic->CopyVariant( sourceVariant, copyVariant );
+    m_schematic->CopyVariant( sourceVariant, copyVariant, nullptr );
 
     // Verify both variants exist
     BOOST_CHECK( m_schematic->GetVariantNames().contains( sourceVariant ) );
@@ -542,7 +624,7 @@ BOOST_AUTO_TEST_CASE( CopyVariantCreatesIndependentCopy )
     BOOST_CHECK( symbol->GetExcludedFromBoard( &m_schematic->Hierarchy()[0], copyVariant ) );
     BOOST_CHECK( symbol->GetExcludedFromPosFiles( &m_schematic->Hierarchy()[0], copyVariant ) );
     BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                          false, 0, copyVariant ), wxS( "47K" ) );
+                                                                         INTERNAL, copyVariant ), wxS( "47K" ) );
 
     // Modify the copy and verify source is unchanged
     symbol->SetDNP( false, &m_schematic->Hierarchy()[0], copyVariant );
@@ -551,12 +633,12 @@ BOOST_AUTO_TEST_CASE( CopyVariantCreatesIndependentCopy )
     // Source should still have original values
     BOOST_CHECK( symbol->GetDNP( &m_schematic->Hierarchy()[0], sourceVariant ) );
     BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                          false, 0, sourceVariant ), wxS( "47K" ) );
+                                                                         INTERNAL, sourceVariant ), wxS( "47K" ) );
 
     // Copy should have modified values
     BOOST_CHECK( !symbol->GetDNP( &m_schematic->Hierarchy()[0], copyVariant ) );
     BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                          false, 0, copyVariant ), wxS( "100K" ) );
+                                                                         INTERNAL, copyVariant ), wxS( "100K" ) );
 }
 
 
@@ -582,7 +664,7 @@ BOOST_AUTO_TEST_CASE( VariantFieldDifferenceDetection )
 
     // Get the default value
     wxString defaultValue = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                               false, 0 );
+                                                                              INTERNAL );
     BOOST_CHECK_EQUAL( defaultValue, wxS( "1K" ) );
 
     // Add a variant and set a different value
@@ -591,7 +673,7 @@ BOOST_AUTO_TEST_CASE( VariantFieldDifferenceDetection )
 
     // Get variant value
     wxString variantValue = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                               false, 0, variantName1 );
+                                                                              INTERNAL, variantName1 );
     BOOST_CHECK_EQUAL( variantValue, wxS( "2.2K" ) );
 
     // Verify values differ
@@ -601,7 +683,7 @@ BOOST_AUTO_TEST_CASE( VariantFieldDifferenceDetection )
     m_schematic->AddVariant( variantName2 );
     symbol->GetField( FIELD_T::VALUE )->SetText( wxS( "1K" ), &m_schematic->Hierarchy()[0], variantName2 );
     wxString variantValue2 = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                                false, 0, variantName2 );
+                                                                               INTERNAL, variantName2 );
 
     // Second variant should have the same value as default
     BOOST_CHECK_EQUAL( defaultValue, variantValue2 );
@@ -750,11 +832,11 @@ BOOST_AUTO_TEST_CASE( SetValueFieldTextPersistsVariantValue )
     BOOST_CHECK_EQUAL( variant->m_Fields.at( fieldName ), newValue );
 
     // Verify through GetValue method as well
-    wxString retrievedValue = symbol->GetValue( false, &m_schematic->Hierarchy()[0], false, variantName );
+    wxString retrievedValue = symbol->GetValue( &m_schematic->Hierarchy()[0], RAW_VALUE, variantName );
     BOOST_CHECK_EQUAL( retrievedValue, newValue );
 
     // Verify default value is unchanged
-    wxString retrievedDefault = symbol->GetValue( false, &m_schematic->Hierarchy()[0], false, wxEmptyString );
+    wxString retrievedDefault = symbol->GetValue( &m_schematic->Hierarchy()[0], RAW_VALUE, wxEmptyString );
     BOOST_CHECK_EQUAL( retrievedDefault, defaultValue );
 }
 
@@ -805,8 +887,8 @@ BOOST_AUTO_TEST_CASE( SetFieldTextAndSetValueFieldTextConsistency )
     BOOST_CHECK_EQUAL( variant2->m_Fields.at( fieldName ), value2 );
 
     // Verify through GetValue
-    BOOST_CHECK_EQUAL( symbol->GetValue( false, &m_schematic->Hierarchy()[0], false, variantName1 ), value1 );
-    BOOST_CHECK_EQUAL( symbol->GetValue( false, &m_schematic->Hierarchy()[0], false, variantName2 ), value2 );
+    BOOST_CHECK_EQUAL( symbol->GetValue( &m_schematic->Hierarchy()[0], RAW_VALUE, variantName1 ), value1 );
+    BOOST_CHECK_EQUAL( symbol->GetValue( &m_schematic->Hierarchy()[0], RAW_VALUE, variantName2 ), value2 );
 
     // Verify through GetFieldText
     BOOST_CHECK_EQUAL( symbol->GetFieldText( fieldName, &m_schematic->Hierarchy()[0], variantName1 ), value1 );
@@ -885,7 +967,10 @@ BOOST_AUTO_TEST_CASE( VariantDeletionCascade )
     BOOST_CHECK( variant.has_value() );
 
     // Delete the variant
-    m_schematic->DeleteVariant( variantName );
+    TOOL_MANAGER manager;
+    manager.SetEnvironment( m_schematic.get(), nullptr, nullptr, nullptr, nullptr );
+    SCH_COMMIT commit( &manager );
+    m_schematic->DeleteVariant( variantName, &commit );
 
     // Variant should no longer exist at schematic level
     BOOST_CHECK( !m_schematic->GetVariantNames().contains( variantName ) );
@@ -919,22 +1004,20 @@ BOOST_AUTO_TEST_CASE( VariantFieldUnicodeAndSpecialChars )
     wxString unicodeValue = wxS( "1kΩ ±5% 日本語" );
     symbol->GetField( FIELD_T::VALUE )->SetText( unicodeValue, &m_schematic->Hierarchy()[0], variantName );
 
-    wxString retrieved = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                            false, 0, variantName );
+    wxString retrieved;
+    retrieved = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL, variantName );
     BOOST_CHECK_EQUAL( retrieved, unicodeValue );
 
     // Test special characters
     wxString specialChars = wxS( "R<1K>\"test\"'value'" );
     symbol->GetField( FIELD_T::VALUE )->SetText( specialChars, &m_schematic->Hierarchy()[0], variantName );
 
-    retrieved = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                   false, 0, variantName );
+    retrieved = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL, variantName );
     BOOST_CHECK_EQUAL( retrieved, specialChars );
 
     // Test empty string
     symbol->GetField( FIELD_T::VALUE )->SetText( wxEmptyString, &m_schematic->Hierarchy()[0], variantName );
-    retrieved = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0],
-                                                                   false, 0, variantName );
+    retrieved = symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL, variantName );
     BOOST_CHECK( retrieved.IsEmpty() );
 
     // Test description with unicode
@@ -971,7 +1054,7 @@ BOOST_AUTO_TEST_CASE( VariantSpecificFieldDereferencing )
     symbol->SetDNP( true, &m_schematic->Hierarchy()[0], variantName );
 
     // Verify default value
-    BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], false, 0 ),
+    BOOST_CHECK_EQUAL( symbol->GetField( FIELD_T::VALUE )->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL ),
                        defaultValue );
 
     // Get the symbol's reference (R1) for cross-reference testing
@@ -1048,7 +1131,7 @@ BOOST_AUTO_TEST_CASE( FootprintFieldVariantSupport )
 
     // Set a base footprint first
     symbol->SetFootprintFieldText( baseFootprint );
-    BOOST_CHECK_EQUAL( symbol->GetFootprintFieldText( false, nullptr, false ), baseFootprint );
+    BOOST_CHECK_EQUAL( symbol->GetFootprintFieldText( nullptr, RAW_VALUE ), baseFootprint );
 
     // Add the variant
     m_schematic->AddVariant( variantName );
@@ -1057,7 +1140,7 @@ BOOST_AUTO_TEST_CASE( FootprintFieldVariantSupport )
     symbol->SetFieldText( fieldName, variantFootprint, &m_schematic->Hierarchy()[0], variantName );
 
     // Verify base footprint is unchanged
-    wxString retrievedBase = symbol->GetFootprintFieldText( false, nullptr, false );
+    wxString retrievedBase = symbol->GetFootprintFieldText( nullptr, RAW_VALUE );
     BOOST_CHECK_EQUAL( retrievedBase, baseFootprint );
 
     // Verify GetFieldText with no variant returns base footprint
@@ -1154,17 +1237,17 @@ BOOST_AUTO_TEST_CASE( VariantSwitchInvalidatesBoundingBoxCache )
     symbol->SetFieldText( fpField->GetName(), longFp, &m_schematic->Hierarchy()[0], variantName );
 
     // Confirm variant text resolution works
-    wxString resolvedDefault = fpField->GetShownText( &m_schematic->Hierarchy()[0], false, 0, wxEmptyString );
-    wxString resolvedVariant = fpField->GetShownText( &m_schematic->Hierarchy()[0], false, 0, variantName );
+    wxString resolvedDefault = fpField->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL, wxEmptyString );
+    wxString resolvedVariant = fpField->GetShownText( &m_schematic->Hierarchy()[0], INTERNAL, variantName );
     BOOST_CHECK_EQUAL( resolvedDefault, shortFp );
     BOOST_CHECK_EQUAL( resolvedVariant, longFp );
 
     // Verify the implicit text resolution via GetShownText(bool) works for each variant
     m_schematic->SetCurrentVariant( wxEmptyString );
-    wxString implicitDefault = fpField->GetShownText( false );
+    wxString implicitDefault = fpField->GetShownText( INTERNAL );
 
     m_schematic->SetCurrentVariant( variantName );
-    wxString implicitVariant = fpField->GetShownText( false );
+    wxString implicitVariant = fpField->GetShownText( INTERNAL );
 
     BOOST_CHECK_EQUAL( implicitDefault, shortFp );
     BOOST_CHECK_EQUAL( implicitVariant, longFp );
@@ -1302,6 +1385,135 @@ BOOST_AUTO_TEST_CASE( MatchesExcludesFieldText )
     BOOST_CHECK( !symbol.Matches( data, &sheetPath ) );
 
     delete libSym;
+}
+
+
+BOOST_AUTO_TEST_CASE( OperatingPointSkipsMissingSymbolPinMappings )
+{
+    wxFileName fn;
+    fn.SetPath( KI_TEST::GetEeschemaTestDataDir() );
+    fn.AppendDir( wxS( "variant_test" ) );
+    fn.SetName( wxS( "variant_test" ) );
+    fn.SetExt( FILEEXT::KiCadSchematicFileExtension );
+    LoadSchematic( fn.GetFullPath() );
+    SCH_SYMBOL* symbol = GetFirstSymbol();
+    BOOST_REQUIRE( symbol );
+    BOOST_REQUIRE( symbol->GetPin( wxS( "1" ) ) );
+    BOOST_REQUIRE( symbol->GetPin( wxS( "2" ) ) );
+    BOOST_REQUIRE( !symbol->GetPin( wxS( "999" ) ) );
+    const SCH_SHEET_PATH path = m_schematic->Hierarchy()[0];
+
+    SetFieldValue( symbol->GetFields(), SIM_DEVICE_FIELD, "R" );
+    SetFieldValue( symbol->GetFields(), SIM_PARAMS_FIELD, "r=1k" );
+    SetFieldValue( symbol->GetFields(), SIM_PINS_FIELD, "999=+ 2=-" );
+
+    SIM_LIB_MGR manager( &m_schematic->Project() );
+    WX_STRING_REPORTER reporter;
+    const auto input = SIM_LIB_MGR::CaptureModelInput( &path, *symbol, 0, wxString() );
+    const auto owned = manager.CreateModel( input, true, reporter );
+    const auto live = manager.CreateModel( &path, *symbol, true, 0, wxString(), reporter );
+    BOOST_CHECK_MESSAGE( !reporter.HasMessage(), reporter.GetMessages() );
+    BOOST_REQUIRE_EQUAL( owned.model.GetPinCount(), 2 );
+    BOOST_REQUIRE_EQUAL( live.model.GetPinCount(), 2 );
+    BOOST_CHECK_EQUAL( owned.model.GetPin( 0 ).symbolPinNumber, wxString( "999" ) );
+    BOOST_CHECK_EQUAL( live.model.GetPin( 0 ).symbolPinNumber, wxString( "999" ) );
+
+    // A stale mapping must not prevent a later valid pin from resolving.
+    wxString token = wxS( "OP:2" );
+    BOOST_CHECK( symbol->ResolveTextVar( &path, &token, wxString(), 0 ) );
+    BOOST_CHECK_EQUAL( token, wxString( "--" ) );
+
+    token = wxS( "OP:999" );
+    BOOST_CHECK( symbol->ResolveTextVar( &path, &token, wxString(), 0 ) );
+    BOOST_CHECK_EQUAL( token, wxString( "?" ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ExactMembershipAvoidsTextGeometryAndTracksTreeLifetime )
+{
+    LoadSchematic( wxString::FromUTF8( KI_TEST::GetEeschemaTestDataDir() ) + wxS( "/issue7203.kicad_sch" ) );
+    auto symbols = m_schematic->Hierarchy().front().LastScreen()->Items().OfType( SCH_SYMBOL_T );
+    BOOST_REQUIRE( symbols.begin() != symbols.end() );
+
+    struct COUNTED_SYMBOL : SCH_SYMBOL
+    {
+        explicit COUNTED_SYMBOL( const SCH_SYMBOL& aSource ) : SCH_SYMBOL( aSource ) {}
+
+        const BOX2I GetBoundingBox() const override
+        {
+            ++boundsReads;
+            return SCH_SYMBOL::GetBoundingBox();
+        }
+
+        mutable unsigned boundsReads = 0;
+    };
+
+    COUNTED_SYMBOL item( *static_cast<SCH_SYMBOL*>( *symbols.begin() ) );
+    COUNTED_SYMBOL copy( item );
+    EE_RTREE tree;
+    tree.insert( &item );
+    item.boundsReads = 0;
+    copy.boundsReads = 0;
+    BOOST_CHECK( tree.contains( &item, true ) );
+    BOOST_CHECK( !tree.contains( &copy, true ) );
+    BOOST_CHECK_EQUAL( item.boundsReads, 0u );
+    BOOST_CHECK_EQUAL( copy.boundsReads, 0u );
+    item.Move( VECTOR2I( 100000000, 100000000 ) );
+    BOOST_CHECK( tree.contains( &item, true ) );
+    tree.insert( &copy );
+    BOOST_CHECK( tree.contains( &copy, true ) );
+    tree.insert( &item );
+    BOOST_REQUIRE( tree.remove( &item ) );
+    BOOST_CHECK( tree.contains( &item, true ) );
+    BOOST_REQUIRE( tree.remove( &item ) );
+    BOOST_CHECK( !tree.contains( &item, true ) );
+    BOOST_CHECK( !tree.remove( &item ) );
+
+    EE_RTREE moved( std::move( tree ) );
+    BOOST_CHECK( moved.contains( &copy, true ) );
+    BOOST_CHECK( !tree.contains( &copy, true ) );
+    tree.insert( &item );
+    tree = std::move( moved );
+    BOOST_CHECK( tree.contains( &copy, true ) );
+    BOOST_CHECK( !tree.contains( &item, true ) );
+    BOOST_CHECK( !moved.contains( &copy, true ) );
+    tree.clear();
+    BOOST_CHECK( !tree.contains( &copy, true ) );
+    tree.insert( &item );
+    BOOST_CHECK( tree.contains( &item, true ) );
+}
+
+BOOST_AUTO_TEST_CASE( SymbolPropertyReferencesUseTheExplicitPath )
+{
+    LOCALE_IO                  locale;
+    SETTINGS_MANAGER           settings;
+    std::unique_ptr<SCHEMATIC> schematic;
+    KI_TEST::LoadSchematic( settings, wxS( "issue23840/BusAndVectors" ), schematic );
+    BOOST_REQUIRE_GT( schematic->Hierarchy().size(), 1 );
+    size_t differentReferences = 0;
+
+    for( const SCH_SHEET_PATH& path : schematic->Hierarchy() )
+    {
+        for( SCH_ITEM* item : path.LastScreen()->Items().OfType( SCH_SYMBOL_T ) )
+        {
+            auto*          symbol = static_cast<SCH_SYMBOL*>( item );
+            const wxString expected = symbol->GetRef( &path );
+
+            for( const SCH_SHEET_PATH& current : schematic->Hierarchy() )
+            {
+                if( current.LastScreen() != path.LastScreen() )
+                    continue;
+
+                schematic->SetCurrentSheet( current );
+                differentReferences += symbol->GetRef( &current ) != expected;
+                wxString token( "PROPERTY.Reference" );
+                BOOST_REQUIRE( symbol->ResolveTextVar( &path, &token, 0 ) );
+                BOOST_CHECK_EQUAL( token, expected );
+            }
+        }
+    }
+
+    BOOST_CHECK_GT( differentReferences, 0 );
 }
 
 

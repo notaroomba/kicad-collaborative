@@ -86,6 +86,31 @@ BOOST_AUTO_TEST_CASE( test_dot_product, *boost::unit_test::tolerance( 0.000001 )
     BOOST_TEST( v2.Dot( v1 ) == 0 );
 }
 
+BOOST_AUTO_TEST_CASE( test_euclidean_norm_exact )
+{
+    const int imin = std::numeric_limits<int>::min();
+    const int imax = std::numeric_limits<int>::max();
+
+    // std::hypot rounds this one to 95556683
+    BOOST_CHECK_EQUAL( VECTOR2I( 175139, 95556522 ).EuclideanNorm(), 95556682 );
+
+    BOOST_CHECK_EQUAL( VECTOR2I( imin, 0 ).EuclideanNorm(), imax );
+    BOOST_CHECK_EQUAL( VECTOR2I( imin, imin ).EuclideanNorm(), imax );
+    BOOST_CHECK_EQUAL( VECTOR2I( imin, imin ).SquaredEuclideanNorm(), std::numeric_limits<int64_t>::max() );
+}
+
+BOOST_AUTO_TEST_CASE( test_euclidean_norm_int64_exact )
+{
+    const int64_t lmin = std::numeric_limits<int64_t>::min();
+    const int64_t lmax = std::numeric_limits<int64_t>::max();
+
+    // std::hypot rounds this to a multiple of the double spacing, 1414213562373095168
+    BOOST_CHECK_EQUAL( VECTOR2L( 1000000000000000003, 1000000000000000007 ).EuclideanNorm(), 1414213562373095056 );
+
+    BOOST_CHECK_EQUAL( VECTOR2L( lmin, 0 ).EuclideanNorm(), lmax );
+    BOOST_CHECK_EQUAL( VECTOR2L( lmin, 0 ).SquaredEuclideanNorm(), lmax );
+}
+
 BOOST_AUTO_TEST_CASE( test_resize, *boost::unit_test::tolerance( 0.000001 ) )
 {
     // just some arbitrary vectors

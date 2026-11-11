@@ -39,11 +39,14 @@ class DIALOG_EXECUTECOMMAND_JOB_SETTINGS_BASE : public DIALOG_SHIM
 	protected:
 		wxStaticText* m_textCommand;
 		wxStyledTextCtrl* m_textCtrlCommand;
+		wxStaticText* m_textExpanded;
+		wxTextCtrl* m_textCtrlExpanded;
 		wxStaticText* m_textOutputPath;
 		wxTextCtrl* m_textCtrlOutputPath;
 		wxCheckBox* m_cbRecordOutput;
 		wxCheckBox* m_cbIgnoreExitCode;
 		WX_GRID* m_path_subs_grid;
+		wxStaticText* m_stBuiltinHelp;
 		wxStdDialogButtonSizer* m_sdbSizer1;
 		wxButton* m_sdbSizer1OK;
 		wxButton* m_sdbSizer1Cancel;

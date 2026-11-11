@@ -19,8 +19,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef __KICAD_TYPEINFO_H
-#define __KICAD_TYPEINFO_H
+#pragma once
 
 
 #include <type_traits>
@@ -46,7 +45,7 @@ bool IsA( const I& aObject )
 /**
  * A lightweight dynamic downcast.
  *
- * Cast \a aObject to type Casted*.  Uses #EDA_ITEM::Type() and #EDA_ITEM::ClassOf() to
+ * Cast \a aObject to type Casted*.  Uses #EDA_ITEM::Type() and object specific ClassOf method to
  * check if type matches.
  *
  * @param aObject object to be casted.
@@ -235,8 +234,12 @@ enum KICAD_T
     // (IPC clients with stale protobuf-generated headers depend on stable values).
     PCB_SHAPE_LOCATE_ELLIPSE_T,
     PCB_SHAPE_LOCATE_ELLIPSE_ARC_T,
-    PCB_CONSTRAINT_T,      ///< class PCB_CONSTRAINT, a geometric constraint between board items
-    PCB_GRIDITEM_T,
+    PCB_CONSTRAINT_T,                   ///< a geometric constraint between board items
+    PCB_GRID_ITEM_T,                    ///< a subgrid placed on a board
+    PCB_DRILL_CHART_T,     ///< class PCB_DRILL_CHART, a live drill chart derived from PCB_TABLE
+    PCB_DRILL_MAP_T,       ///< class PCB_DRILL_MAP, drill symbols drawn at the holes
+    PCB_3D_BODY_T,         ///< class PCB_3D_BODY, a 3D body (extruded or model) on a footprint
+    PCB_STACKUP_TABLE_T,   ///< class PCB_STACKUP_TABLE, a live stackup table derived from PCB_TABLE
 
     // End value
     MAX_STRUCT_TYPE_ID
@@ -305,6 +308,10 @@ constexpr KICAD_T BaseType( const KICAD_T aType )
     case PCB_DIM_LEADER_T:
         return PCB_DIMENSION_T;
 
+    case PCB_DRILL_CHART_T:
+    case PCB_STACKUP_TABLE_T:
+        return PCB_TABLE_T;
+
     default:
         return aType;
     }
@@ -313,6 +320,14 @@ constexpr KICAD_T BaseType( const KICAD_T aType )
 constexpr bool IsNullType( const KICAD_T aType )
 {
     return aType <= 0;
+}
+
+/**
+ * A PCB_TABLE subclass whose cells are generated from the board rather than typed by the user
+ */
+constexpr bool IsGeneratedTableType( const KICAD_T aType )
+{
+    return aType == PCB_DRILL_CHART_T || aType == PCB_STACKUP_TABLE_T;
 }
 
 constexpr bool IsInstantiableType( const KICAD_T aType )
@@ -362,8 +377,16 @@ constexpr bool IsInstantiableType( const KICAD_T aType )
     case PCB_SHAPE_LOCATE_BEZIER_T:
     case PCB_SHAPE_LOCATE_ELLIPSE_T:
     case PCB_SHAPE_LOCATE_ELLIPSE_ARC_T:
+        return false;
 
     case PCB_DIMENSION_T:
+        // base class is not instantiable
+        return false;
+
+    case SCH_TABLECELL_T:
+    case PCB_TABLECELL_T:
+        // must be instantiated as part of a SCH_TABLE or PCB_TABLE
+        return false;
 
     case SCH_SCREEN_T:
     case PCB_ITEM_LIST_T:
@@ -459,13 +482,17 @@ constexpr bool IsPcbnewType( const KICAD_T aType )
     case PCB_DIM_RADIAL_T:
     case PCB_DIM_ORTHOGONAL_T:
     case PCB_TARGET_T:
+    case PCB_DRILL_CHART_T:
+    case PCB_DRILL_MAP_T:
+    case PCB_3D_BODY_T:
+    case PCB_STACKUP_TABLE_T:
     case PCB_POINT_T:
     case PCB_ZONE_T:
     case PCB_ITEM_LIST_T:
     case PCB_NETINFO_T:
     case PCB_GROUP_T:
     case PCB_GENERATOR_T:
-    case PCB_GRIDITEM_T:
+    case PCB_GRID_ITEM_T:
 
     case PCB_FIELD_LOCATE_REFERENCE_T:
     case PCB_FIELD_LOCATE_VALUE_T:
@@ -490,6 +517,40 @@ constexpr bool IsPcbnewType( const KICAD_T aType )
     case PCB_SHAPE_LOCATE_ELLIPSE_ARC_T:
     case PCB_BOARD_OUTLINE_T:
     case PCB_CONSTRAINT_T:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+constexpr bool IsSingleLayerType( const KICAD_T aType )
+{
+    switch( aType )
+    {
+    case PCB_SHAPE_T:
+    case PCB_REFERENCE_IMAGE_T:
+    case PCB_FIELD_T:
+    case PCB_TEXT_T:
+    case PCB_TEXTBOX_T:
+    case PCB_BARCODE_T:
+    case PCB_TABLE_T:
+    case PCB_DRILL_CHART_T:
+    case PCB_DRILL_MAP_T:
+    case PCB_STACKUP_TABLE_T:
+    case PCB_TABLECELL_T:
+    case PCB_TRACE_T:
+    case PCB_ARC_T:
+    case PCB_MARKER_T:
+    case PCB_DIMENSION_T:
+    case PCB_DIM_ALIGNED_T:
+    case PCB_DIM_LEADER_T:
+    case PCB_DIM_CENTER_T:
+    case PCB_DIM_RADIAL_T:
+    case PCB_DIM_ORTHOGONAL_T:
+    case PCB_TARGET_T:
+    case PCB_POINT_T:
+    case PCB_GENERATOR_T:
         return true;
 
     default:
@@ -559,5 +620,3 @@ constexpr bool IsTypeCorrect( KICAD_T aType )
         || IsPageLayoutEditorType( aType )
         || IsMiscType( aType );
 }
-
-#endif // __KICAD_TYPEINFO_H

@@ -74,24 +74,18 @@ bool PCB_IO_DIPTRACE::CanReadBoard( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_DIPTRACE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                    const std::map<std::string, UTF8>* aProperties,
-                                    PROJECT* aProject )
+void PCB_IO_DIPTRACE::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                 const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     m_props = aProperties;
-
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
+    m_board = &aBoard;
 
     if( m_progressReporter )
     {
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "File import canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 
     DIPTRACE::PCB_PARSER parser( aFileName, m_board );
@@ -99,7 +93,7 @@ BOARD* PCB_IO_DIPTRACE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe
 
     // Emit a sidecar .kicad_dru for per-zone DipTrace properties KiCad cannot
     // store natively. Skip when appending so an existing project's rules survive.
-    if( !aAppendToMe )
+    if( aIsNewLoad )
     {
         wxString rules = parser.GenerateDesignRules();
 
@@ -118,6 +112,4 @@ BOARD* PCB_IO_DIPTRACE::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe
                                           drcPath.GetFullPath() ), RPT_SEVERITY_WARNING );
         }
     }
-
-    return m_board;
 }

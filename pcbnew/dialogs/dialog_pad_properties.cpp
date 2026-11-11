@@ -20,12 +20,14 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#include <drc/drc_item.h>
+#include "kiway_holder.h"
+#include "mail_type.h"
+#include "padstack.h"
 #include <base_units.h>
 #include <bitmaps.h>
 #include <board_commit.h>
 #include <board.h>
-#include <board_design_settings.h>
+#include <board_design_settings_defaults.h>
 #include <footprint.h>
 #include <confirm.h>
 #include <core/arraydim.h>
@@ -34,6 +36,7 @@
 #include <geometry/shape_segment.h>
 #include <dialog_pad_properties.h>
 #include <dialogs/html_message_box.h>
+#include <drc/drc_item.h>
 #include <macros.h>
 #include <pad.h>
 #include <pad_utils.h>
@@ -48,6 +51,12 @@
 #include <tool/tool_manager.h>
 #include <tools/pad_tool.h>
 #include <advanced_config.h>    // for pad property feature management
+#include <algorithm>
+#include <frame_type.h>
+#include <lseq.h>
+#include <kiway.h>
+#include <kiway_player.h>
+#include <pth_hole_size.h>
 #include <wx/choicdlg.h>
 #include <wx/msgdlg.h>
 
@@ -92,8 +101,9 @@ static PAD_ATTRIB code_type[] =
     PAD_ATTRIB::SMD,
     PAD_ATTRIB::CONN,
     PAD_ATTRIB::NPTH,
-    PAD_ATTRIB::SMD                  // Aperture pad :type SMD with no copper layers,
+    PAD_ATTRIB::SMD,                // Aperture pad :type SMD with no copper layers,
                                     // only on tech layers (usually only on paste layer
+    PAD_ATTRIB::NON_COMPONENT,
 };
 
 
@@ -103,9 +113,10 @@ static PAD_ATTRIB code_type[] =
 #define CONN_DLG_TYPE 2
 #define NPTH_DLG_TYPE 3
 #define APERTURE_DLG_TYPE 4
+#define NON_COMPONENT_DLG_TYPE 5
 
 
-void PCB_BASE_FRAME::ShowPadPropertiesDialog( PAD* aPad )
+void PCB_BASE_FRAME::ShowPadPropertiesDialog( PAD& aPad )
 {
     DIALOG_PAD_PROPERTIES dlg( this, aPad );
 
@@ -114,9 +125,11 @@ void PCB_BASE_FRAME::ShowPadPropertiesDialog( PAD* aPad )
 }
 
 
-DIALOG_PAD_PROPERTIES::DIALOG_PAD_PROPERTIES( PCB_BASE_FRAME* aParent, PAD* aPad ) :
+DIALOG_PAD_PROPERTIES::DIALOG_PAD_PROPERTIES( PCB_BASE_FRAME* aParent, PAD& aPad ) :
         DIALOG_PAD_PROPERTIES_BASE( aParent ),
         m_parent( aParent ),
+        m_currentPad( &aPad ),
+        m_previewPad( new PAD( (FOOTPRINT*) nullptr ) ),
         m_initialized( false ),
         m_editLayer( F_Cu ),
         m_posX( aParent, m_posXLabel, m_posXCtrl, m_posXUnits ),
@@ -154,10 +167,7 @@ DIALOG_PAD_PROPERTIES::DIALOG_PAD_PROPERTIES( PCB_BASE_FRAME* aParent, PAD* aPad
     SetName( PAD_PROPERTIES_DLG_NAME );
     m_isFpEditor = aParent->GetFrameType() == FRAME_FOOTPRINT_EDITOR;
 
-    m_currentPad = aPad;        // aPad can be NULL, if the dialog is called
-                                // from the footprint editor to set default pad setup
-
-    m_board      = m_parent->GetBoard();
+    m_board = m_parent->GetBoard();
 
     // Configure display origin transforms
     m_posX.SetCoordType( ORIGIN_TRANSFORMS::ABS_X_COORD );
@@ -170,25 +180,14 @@ DIALOG_PAD_PROPERTIES::DIALOG_PAD_PROPERTIES( PCB_BASE_FRAME* aParent, PAD* aPad
     m_FlippedWarningIcon->SetBitmap( KiBitmapBundle( BITMAPS::dialog_warning ) );
     m_nonCopperWarningIcon->SetBitmap( KiBitmapBundle( BITMAPS::dialog_warning ) );
     m_legacyTeardropsIcon->SetBitmap( KiBitmapBundle( BITMAPS::dialog_warning ) );
+    m_launchCalculatorBtn->SetBitmap( KiBitmapBundle( BITMAPS::calculator ) );
+    m_launchCalculatorBtn->SetToolTip( _( "Open the through-hole size calculator" ) );
 
-    m_masterPad = m_parent->GetDesignSettings().m_Pad_Master.get();
-    m_previewPad = new PAD( (FOOTPRINT*) nullptr );
+    SetTitle( _( "Pad Properties" ) );
 
-    if( aPad )
-    {
-        SetTitle( _( "Pad Properties" ) );
-
-        *m_previewPad = *aPad;
-        m_previewPad->GetTeardropParams() = aPad->GetTeardropParams();
-        m_previewPad->ClearFlags( SELECTED|BRIGHTENED );
-    }
-    else
-    {
-        SetTitle( _( "Default Pad Properties for Add Pad Tool" ) );
-
-        *m_previewPad = *m_masterPad;
-        m_previewPad->GetTeardropParams() = m_masterPad->GetTeardropParams();
-    }
+    *m_previewPad = aPad;
+    m_previewPad->GetTeardropParams() = aPad.GetTeardropParams();
+    m_previewPad->ClearFlags( SELECTED|BRIGHTENED );
 
     // Pads have a hardcoded internal rounding ratio which is 0.25 by default, even if
     // they're not a rounded shape. This makes it hard to detect an intentional 0.25
@@ -233,6 +232,18 @@ DIALOG_PAD_PROPERTIES::DIALOG_PAD_PROPERTIES( PCB_BASE_FRAME* aParent, PAD* aPad
 
     m_padToDieDelay.SetUnits( EDA_UNITS::PS );
     m_padToDieDelay.SetDataType( EDA_DATA_TYPE::TIME );
+
+    m_backDrillTopLayer->SetLayersHotkeys( false );
+    m_backDrillTopLayer->SetNotAllowedLayerSet( LSET::AllNonCuMask() );
+    m_backDrillTopLayer->SetBoardFrame( m_parent );
+    m_backDrillTopLayer->SetUndefinedLayerName( _( "None" ) );
+    m_backDrillTopLayer->Resync();
+
+    m_backDrillBottomLayer->SetLayersHotkeys( false );
+    m_backDrillBottomLayer->SetNotAllowedLayerSet( LSET::AllNonCuMask() );
+    m_backDrillBottomLayer->SetBoardFrame( m_parent );
+    m_backDrillBottomLayer->SetUndefinedLayerName( _( "None" ) );
+    m_backDrillBottomLayer->Resync();
 
     initValues();
 
@@ -328,11 +339,43 @@ void DIALOG_PAD_PROPERTIES::OnCancel( wxCommandEvent& event )
 }
 
 
+static void showCalculatorPage( KIWAY_PLAYER& aHolder, std::string& aPayload )
+{
+    KIWAY&        kiway = aHolder.Kiway();
+    KIWAY_PLAYER* calcFrame = kiway.Player( FRAME_CALC, true );
+
+    if( !calcFrame )
+        return;
+
+    kiway.ExpressMail( FRAME_CALC, MAIL_CALC_SHOW, aPayload, &aHolder );
+
+    if( !calcFrame->IsVisible() )
+        calcFrame->Show( true );
+
+    if( calcFrame->IsIconized() )
+        calcFrame->Iconize( false );
+
+    calcFrame->Raise();
+}
+
+
+void DIALOG_PAD_PROPERTIES::OnHoleSizeCalculator( wxCommandEvent& aEvent )
+{
+    nlohmann::json payload;
+    payload["page"] = "pth_size";
+
+    std::string payloadStr = payload.dump();
+
+    showCalculatorPage( *m_parent, payloadStr );
+}
+
+
 void DIALOG_PAD_PROPERTIES::prepareCanvas()
 {
-    GAL_DISPLAY_OPTIONS_IMPL opts = m_parent->GetGalDisplayOptions();
-    COLOR_SETTINGS*            colorSettings = m_parent->GetColorSettings();
+    COLOR_SETTINGS*          colorSettings = m_parent->GetColorSettings();
 
+    // Warning: the opts data life time must be at least the dialog life time
+    static GAL_DISPLAY_OPTIONS_IMPL opts = m_parent->GetGalDisplayOptions();
     opts.m_forceDisplayCursor = false;
 
     // Initialize the canvas to display the pad
@@ -343,9 +386,8 @@ void DIALOG_PAD_PROPERTIES::prepareCanvas()
 
     // Show the X and Y axis. It is useful because pad shape can have an offset
     // or be a complex shape.
-    m_axisOrigin = new KIGFX::ORIGIN_VIEWITEM( colorSettings->GetColor( LAYER_GRID ),
-                                               KIGFX::ORIGIN_VIEWITEM::CROSS, 100000,
-                                               VECTOR2D( m_previewPad->GetPosition() ) );
+    m_axisOrigin = new KIGFX::ORIGIN_VIEWITEM( colorSettings->GetColor( LAYER_GRID ), KIGFX::ORIGIN_VIEWITEM::CROSS,
+                                               100000, VECTOR2D( m_previewPad->GetPosition() ) );
     m_axisOrigin->SetDrawAtZero( true );
 
     m_padPreviewGAL->UpdateColors();
@@ -539,14 +581,10 @@ void DIALOG_PAD_PROPERTIES::updateAllowedPadChamferCorners()
     };
 
     if( m_mixedChamferRatio.GetDoubleValue() > 50.0 )
-    {
         updateCheckBoxes( { m_cbTopLeft1, m_cbTopRight1, m_cbBottomRight1, m_cbBottomLeft1 } );
-    }
 
     if( m_chamferRatio.GetDoubleValue() > 50.0 )
-    {
         updateCheckBoxes( { m_cbTopLeft, m_cbTopRight, m_cbBottomRight, m_cbBottomLeft } );
-    }
 }
 
 
@@ -672,8 +710,8 @@ void DIALOG_PAD_PROPERTIES::initValues()
 
             // Display parent footprint info
             msg.Printf( _("Footprint %s (%s), %s, rotated %g deg"),
-                         footprint->Reference().GetShownText( false ),
-                         footprint->Value().GetShownText( false ),
+                         footprint->Reference().GetShownText( FOR_GUI ),
+                         footprint->Value().GetShownText( FOR_GUI ),
                          footprint->IsFlipped() ? _( "back side (mirrored)" ) : _( "front side" ),
                          footprint->GetOrientation().AsDegrees() );
 
@@ -759,8 +797,7 @@ void DIALOG_PAD_PROPERTIES::initValues()
         m_ZoneCustomPadShape->SetSelection( 0 );
 
     // Type of pad selection
-    bool aperture =
-            m_previewPad->GetAttribute() == PAD_ATTRIB::SMD && m_previewPad->IsAperturePad();
+    bool aperture = m_previewPad->GetAttribute() == PAD_ATTRIB::SMD && m_previewPad->IsAperturePad();
 
     if( aperture )
     {
@@ -770,10 +807,11 @@ void DIALOG_PAD_PROPERTIES::initValues()
     {
         switch( m_previewPad->GetAttribute() )
         {
-        case PAD_ATTRIB::PTH:    m_padType->SetSelection( PTH_DLG_TYPE ); break;
-        case PAD_ATTRIB::SMD:    m_padType->SetSelection( SMD_DLG_TYPE ); break;
-        case PAD_ATTRIB::CONN:   m_padType->SetSelection( CONN_DLG_TYPE ); break;
-        case PAD_ATTRIB::NPTH:   m_padType->SetSelection( NPTH_DLG_TYPE ); break;
+        case PAD_ATTRIB::PTH:             m_padType->SetSelection( PTH_DLG_TYPE );           break;
+        case PAD_ATTRIB::SMD:             m_padType->SetSelection( SMD_DLG_TYPE );           break;
+        case PAD_ATTRIB::CONN:            m_padType->SetSelection( CONN_DLG_TYPE );          break;
+        case PAD_ATTRIB::NPTH:            m_padType->SetSelection( NPTH_DLG_TYPE );          break;
+        case PAD_ATTRIB::NON_COMPONENT:   m_padType->SetSelection( NON_COMPONENT_DLG_TYPE ); break;
         }
     }
 
@@ -805,26 +843,19 @@ void DIALOG_PAD_PROPERTIES::initValues()
     m_backDrillChoice->SetSelection( topBackdrillSize ? ( bottomBackdrillSize ? 3 : 1 )
                                                       : ( bottomBackdrillSize ? 2 : 0 ) );
 
-    auto loadBackdrill = [&]( const std::optional<int>& aSize, PCB_LAYER_ID aEndLayer, UNIT_BINDER& aSizeBinder,
-                              wxBitmapComboBox* aLayerCtrl )
-    {
-        if( !aSize )
-        {
-            aSizeBinder.SetValue( 0 );
-            return;
-        }
-
-        aSizeBinder.SetValue( *aSize );
-
-        for( unsigned int i = 0; i < aLayerCtrl->GetCount(); ++i )
-        {
-            if( ToLAYER_ID( (intptr_t) aLayerCtrl->GetClientData( i ) ) == aEndLayer )
+    auto loadBackdrill =
+            [&]( const std::optional<int>& aSize, PCB_LAYER_ID aEndLayer, UNIT_BINDER& aSizeBinder,
+                 PCB_LAYER_BOX_SELECTOR* aLayerCtrl )
             {
-                aLayerCtrl->SetSelection( i );
-                break;
-            }
-        }
-    };
+                if( !aSize )
+                {
+                    aSizeBinder.SetValue( 0 );
+                    return;
+                }
+
+                aSizeBinder.SetValue( *aSize );
+                aLayerCtrl->SetLayerSelection( aEndLayer );
+            };
 
     loadBackdrill( topBackdrillSize, padstack.GetBackdrillEndLayer( true ), m_backDrillTopSizeBinder,
                    m_backDrillTopLayer );
@@ -1249,19 +1280,16 @@ void DIALOG_PAD_PROPERTIES::UpdateLayersDropdown()
     case APERTURE_DLG_TYPE:
         m_rbCopperLayersSel->Append( _( "None" ) );
         break;
-    }
+    case NON_COMPONENT_DLG_TYPE:
+        m_nonComponentLayers.clear();
 
-    m_backDrillTopLayer->Clear();
-    m_backDrillBottomLayer->Clear();
-
-    for( PCB_LAYER_ID layerId : m_board->GetEnabledLayers().UIOrder() )
-    {
-        if( IsCopperLayer( layerId ) )
+        for( PCB_LAYER_ID layer : m_board->GetEnabledLayers().CuStack() )
         {
-            wxString layerName = m_board->GetLayerName( layerId );
-            m_backDrillTopLayer->Append( layerName, wxBitmapBundle(), (void*)(intptr_t)layerId );
-            m_backDrillBottomLayer->Append( layerName, wxBitmapBundle(), (void*)(intptr_t)layerId );
+            m_nonComponentLayers.push_back( layer );
+            m_rbCopperLayersSel->Append( m_board->GetLayerName( layer ) );
         }
+
+        break;
     }
 }
 
@@ -1273,17 +1301,17 @@ void DIALOG_PAD_PROPERTIES::PadTypeSelected( wxCommandEvent& event )
 
     switch( m_padType->GetSelection() )
     {
-    case PTH_DLG_TYPE:      hasHole = true;  hasConnection = true;  break;
-    case SMD_DLG_TYPE:      hasHole = false; hasConnection = true;  break;
-    case CONN_DLG_TYPE:     hasHole = false; hasConnection = true;  break;
-    case NPTH_DLG_TYPE:     hasHole = true;  hasConnection = false; break;
-    case APERTURE_DLG_TYPE: hasHole = false; hasConnection = false; break;
+    case PTH_DLG_TYPE:            hasHole = true;  hasConnection = true;  break;
+    case SMD_DLG_TYPE:            hasHole = false; hasConnection = true;  break;
+    case CONN_DLG_TYPE:           hasHole = false; hasConnection = true;  break;
+    case NON_COMPONENT_DLG_TYPE:  hasHole = false; hasConnection = true;  break;
+    case NPTH_DLG_TYPE:           hasHole = true;  hasConnection = false; break;
+    case APERTURE_DLG_TYPE:       hasHole = false; hasConnection = false; break;
     }
 
     // Pad type just changed, so the old pad's layer set is no longer meaningful.  Pass nullopt
     // to populate the defaults for the new type.
-    updatePadLayersList( std::nullopt, m_previewPad->GetRemoveUnconnected(),
-                         m_previewPad->GetKeepTopBottom() );
+    updatePadLayersList( std::nullopt, m_previewPad->GetRemoveUnconnected(), m_previewPad->GetKeepTopBottom() );
 
     m_gbSizerHole->Show( hasHole );
     m_staticline71->Show( hasHole );
@@ -1347,11 +1375,12 @@ void DIALOG_PAD_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
 
     switch( m_padType->GetSelection() )
     {
-    case PTH_DLG_TYPE:      /* PTH */      hasHole = true;  hasConnection = true;  break;
-    case SMD_DLG_TYPE:      /* SMD */      hasHole = false; hasConnection = true;  break;
-    case CONN_DLG_TYPE:     /* CONN */     hasHole = false; hasConnection = true;  break;
-    case NPTH_DLG_TYPE:     /* NPTH */     hasHole = true;  hasConnection = false; break;
-    case APERTURE_DLG_TYPE: /* Aperture */ hasHole = false; hasConnection = false; break;
+    case PTH_DLG_TYPE:           /* PTH */           hasHole = true;  hasConnection = true;  break;
+    case SMD_DLG_TYPE:           /* SMD */           hasHole = false; hasConnection = true;  break;
+    case CONN_DLG_TYPE:          /* CONN */          hasHole = false; hasConnection = true;  break;
+    case NON_COMPONENT_DLG_TYPE: /* Non-component */ hasHole = false; hasConnection = true;  break;
+    case NPTH_DLG_TYPE:          /* NPTH */          hasHole = true;  hasConnection = false; break;
+    case APERTURE_DLG_TYPE:      /* Aperture */      hasHole = false; hasConnection = false; break;
     }
 
     // Enable/disable hole controls
@@ -1419,6 +1448,7 @@ void DIALOG_PAD_PROPERTIES::OnUpdateUI( wxUpdateUIEvent& event )
 
     case SMD_DLG_TYPE:
     case CONN_DLG_TYPE:
+    case NON_COMPONENT_DLG_TYPE:
     case APERTURE_DLG_TYPE:
         m_stackupImagesBook->ChangeSelection( 3 );
         break;
@@ -1494,6 +1524,30 @@ void DIALOG_PAD_PROPERTIES::updatePadLayersList( std::optional<LSET> layer_mask,
 
         break;
 
+    case NON_COMPONENT_DLG_TYPE:
+    {
+        // Choose the first copper layer only
+        effective_mask = layer_mask.value_or( LSET( { F_Cu } ) );
+
+        LSEQ cuLayers = effective_mask.CuStack();
+
+        if( cuLayers.empty() )
+            cuLayers.push_back( F_Cu );
+
+        auto it = std::find( m_nonComponentLayers.begin(), m_nonComponentLayers.end(), cuLayers.front() );
+
+        if( it != m_nonComponentLayers.end() )
+        {
+            m_rbCopperLayersSel->SetSelection(
+                    static_cast<int>( std::distance( m_nonComponentLayers.begin(), it ) ) );
+        }
+        else
+        {
+            m_rbCopperLayersSel->SetSelection( 0 );
+        }
+
+        break;
+    }
     case NPTH_DLG_TYPE:
         effective_mask = layer_mask.value_or( PAD::UnplatedHoleMask() );
 
@@ -1585,15 +1639,23 @@ bool DIALOG_PAD_PROPERTIES::padValuesOK()
     wxArrayString error_msgs;
     wxArrayString warning_msgs;
 
-    m_previewPad->CheckPad( m_parentFrame, true,
-            [&]( int errorCode, const wxString& msg )
+    PAD_UTILS::CheckPad( *m_previewPad, *m_parentFrame, true,
+            [&]( const PAD_UTILS::PAD_CHECK_RESULT& aResult )
             {
-                if( errorCode == DRCE_PADSTACK_INVALID )
-                    error_msgs.Add( _( "Error: " ) + msg );
-                else if( errorCode == DRCE_PADSTACK )
-                    warning_msgs.Add( _( "Warning: " ) + msg );
-                else if( errorCode == DRCE_PAD_TH_WITH_NO_HOLE )
+                int drcCode = ConvertPadCheckToDrcCode( aResult.code );
+
+                if( drcCode == DRCE_PADSTACK_INVALID )
+                {
+                    error_msgs.Add( wxString::Format( wxT( "Error: %s" ), aResult.message ) );
+                }
+                else if( drcCode == DRCE_PADSTACK )
+                {
+                    warning_msgs.Add( wxString::Format( wxT( "Warning: %s" ), aResult.message ) );
+                }
+                else if( drcCode == DRCE_PAD_TH_WITH_NO_HOLE )
+                {
                     error_msgs.Add( _( "Error: Through hole pad has no hole." ) );
+                }
             } );
 
     if( error_msgs.GetCount() || warning_msgs.GetCount() )
@@ -1718,54 +1780,60 @@ bool DIALOG_PAD_PROPERTIES::TransferDataFromWindow()
     if( !m_localSettingsPanel->TransferDataFromWindow() )
         return false;
 
-    if( !padValuesOK() )
+    if( wxString error = m_pasteMargin.Validate(); !error.IsEmpty() )
+    {
+        m_notebook->SetSelection( FindNotebookPage( m_notebook, m_pasteMarginCtrl ) );
+        wxSafeYield( this );
+        DisplayError( nullptr, error );
         return false;
+    }
 
-    if( !transferDataToPad( m_masterPad ) )
+    if( !padValuesOK() )
         return false;
 
     m_padPreviewGAL->StopDrawing();
 
-    PAD_TOOL* padTool = m_parent->GetToolManager()->GetTool<PAD_TOOL>();
-    padTool->SetLastPadNumber( m_masterPad->GetNumber() );
-
-    // m_masterPad is a pattern: ensure there is no net for this pad:
-    m_masterPad->SetNetCode( NETINFO_LIST::UNCONNECTED );
-
-    if( !m_currentPad )   // Set current Pad parameters
-        return true;
-
     commit.Modify( m_currentPad );
+
+    // Build the final settings on the preview pad, then copy them onto the real pad below.
+    // Note that the preview inherits the real pad's parent footprint, so transferDataToPad()
+    // stores its position in the footprint's frame rather than in board coordinates.
+    if( !transferDataToPad( m_previewPad ) )
+        return false;
+
+    PAD_TOOL* padTool = m_parent->GetToolManager()->GetTool<PAD_TOOL>();
+    padTool->SetLastPadNumber( m_previewPad->GetNumber() );
 
     // Update values
 
-    // transferDataToPad only handles the current edit layer, so m_masterPad isn't accurate
+    // transferDataToPad() only handles the current edit layer, so use the preview padstack,
+    // which includes the edits made on all layers
     // TODO(JE) this could be cleaner
     m_currentPad->SetPadstack( m_previewPad->Padstack() );
 
-    m_currentPad->SetAttribute( m_masterPad->GetAttribute() );
-    m_currentPad->SetSimElectricalType( m_masterPad->GetSimElectricalType() );
-    m_currentPad->SetFPRelativeOrientation( m_masterPad->GetOrientation() );
-    m_currentPad->SetPadToDieLength( m_masterPad->GetPadToDieLength() );
-    m_currentPad->SetPadToDieDelay( m_masterPad->GetPadToDieDelay() );
-    m_currentPad->SetLayerSet( m_masterPad->GetLayerSet() );
-    m_currentPad->SetNumber( m_masterPad->GetNumber() );
+    m_currentPad->SetAttribute( m_previewPad->GetAttribute() );
+    m_currentPad->SetSimElectricalType( m_previewPad->GetSimElectricalType() );
+    m_currentPad->SetFPRelativeOrientation( m_previewPad->GetOrientation() );
+    m_currentPad->SetPadToDieLength( m_previewPad->GetPadToDieLength() );
+    m_currentPad->SetPadToDieDelay( m_previewPad->GetPadToDieDelay() );
+    m_currentPad->SetLayerSet( m_previewPad->GetLayerSet() );
+    m_currentPad->SetNumber( m_previewPad->GetNumber() );
 
     int padNetcode = NETINFO_LIST::UNCONNECTED;
 
     // For PAD_ATTRIB::NPTH, ensure there is no net name selected
-    if( m_masterPad->GetAttribute() != PAD_ATTRIB::NPTH  )
+    if( m_previewPad->GetAttribute() != PAD_ATTRIB::NPTH )
         padNetcode = m_padNetSelector->GetSelectedNetcode();
 
     m_currentPad->SetNetCode( padNetcode );
 
-    m_currentPad->GetTeardropParams() = m_masterPad->GetTeardropParams();
+    m_currentPad->GetTeardropParams() = m_previewPad->GetTeardropParams();
 
     // Set the fabrication property:
     m_currentPad->SetProperty( getSelectedProperty() );
 
     // define the way the clearance area is defined in zones
-    m_currentPad->SetCustomShapeInZoneOpt( m_masterPad->GetCustomShapeInZoneOpt() );
+    m_currentPad->SetCustomShapeInZoneOpt( m_previewPad->GetCustomShapeInZoneOpt() );
 
     if( m_currentPad->GetParentFootprint() && m_currentPad->GetParentFootprint()->IsFlipped() )
     {
@@ -1773,7 +1841,10 @@ bool DIALOG_PAD_PROPERTIES::TransferDataFromWindow()
         m_currentPad->Flip( m_currentPad->GetPosition(), FLIP_DIRECTION::TOP_BOTTOM );
     }
 
-    m_currentPad->SetPosition( m_masterPad->GetPosition() );
+    // Use the position from the dialog fields, which is the absolute position (which is
+    // only equal to the position in the FP in the FP editor). The preview pad's position is in
+    // frame-absolute coordinates, and we may be in the PCB frame.
+    m_currentPad->SetPosition( VECTOR2I( m_posX.GetIntValue(), m_posY.GetIntValue() ) );
 
     m_parent->SetMsgPanel( m_currentPad );
 
@@ -1853,8 +1924,9 @@ void DIALOG_PAD_PROPERTIES::updateHoleControls()
         m_bottomPostMachining->Enable( true );
 
         // Update sub-controls based on selection
+        syncBackdrillControls( false );
+
         wxCommandEvent dummy;
-        onBackDrillChoice( dummy );
         onTopPostMachining( dummy );
         onBottomPostMachining( dummy );
     }
@@ -2059,10 +2131,10 @@ bool DIALOG_PAD_PROPERTIES::transferDataToPad( PAD* aPad )
 
     switch( m_simElectricalTypeCtrl->GetSelection() )
     {
-    case 0: aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::NONE ); break;
-    case 1: aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::SOURCE ); break;
-    case 2: aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::SINK ); break;
-    default: aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::NONE ); break;
+    case 0:  aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::NONE );   break;
+    case 1:  aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::SOURCE ); break;
+    case 2:  aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::SINK );   break;
+    default: aPad->SetSimElectricalType( PAD_SIM_ELECTRICAL_TYPE::NONE );   break;
     }
 
     aPad->SetDelta( m_editLayer, delta );
@@ -2138,17 +2210,9 @@ bool DIALOG_PAD_PROPERTIES::transferDataToPad( PAD* aPad )
     switch( aPad->GetAttribute() )
     {
     case PAD_ATTRIB::PTH:
-        break;
-
     case PAD_ATTRIB::CONN:
     case PAD_ATTRIB::SMD:
-        // SMD and PAD_ATTRIB::CONN has no hole.
-        // basically, SMD and PAD_ATTRIB::CONN are same type of pads
-        // PAD_ATTRIB::CONN has just a default non technical layers that differs from SMD
-        // and are intended to be used in virtual edge board connectors
-        // However we can accept a non null offset,
-        // mainly to allow complex pads build from a set of basic pad shapes
-        aPad->SetDrillSize( VECTOR2I( 0, 0 ) );
+    case PAD_ATTRIB::NON_COMPONENT:
         break;
 
     case PAD_ATTRIB::NPTH:
@@ -2238,6 +2302,18 @@ bool DIALOG_PAD_PROPERTIES::transferDataToPad( PAD* aPad )
 
         break;
 
+    case NON_COMPONENT_DLG_TYPE:
+        if( copperLayersChoice >= 0 && copperLayersChoice < static_cast<int>( m_nonComponentLayers.size() ) )
+        {
+            padLayerMask.set( m_nonComponentLayers[copperLayersChoice] );
+        }
+        else
+        {
+            padLayerMask.set( F_Cu );
+        }
+
+        break;
+
     case APERTURE_DLG_TYPE:
         // no copper layers
         break;
@@ -2278,77 +2354,86 @@ bool DIALOG_PAD_PROPERTIES::transferDataToPad( PAD* aPad )
 
     aPad->SetLayerSet( padLayerMask );
 
-    // Backdrills are written through the PADSTACK accessors, which stamp each side's start layer
-    // (top = F_Cu, bottom = B_Cu) so the result is read back correctly by older KiCad.
-    int  backDrillSel = m_backDrillChoice->GetSelection();
-    bool wantTop = ( backDrillSel == 1 || backDrillSel == 3 );    // 1: Top, 3: Top & bottom
-    bool wantBottom = ( backDrillSel == 2 || backDrillSel == 3 ); // 2: Bottom
+    PADSTACK&  padstack = aPad->Padstack();
+    const bool canHaveDrills = aPad->GetAttribute() == PAD_ATTRIB::PTH || aPad->GetAttribute() == PAD_ATTRIB::NPTH;
 
-    PADSTACK& padstack = aPad->Padstack();
-
-    if( wantTop )
+    if( !canHaveDrills )
     {
-        padstack.SetBackdrillSize( true, m_backDrillTopSizeBinder.GetIntValue() );
-
-        if( m_backDrillTopLayer->GetSelection() != wxNOT_FOUND )
-            padstack.SetBackdrillEndLayer( true, ToLAYER_ID( (intptr_t) m_backDrillTopLayer->GetClientData(
-                                                         m_backDrillTopLayer->GetSelection() ) ) );
+        // The drill, backdrill and post-machining controls are disabled for this pad type, but
+        // may still hold content from an earlier type.  Clear the whole padstack drilling
+        // rather than trusting them.
+        PAD_UTILS::RemoveAllDrillsFromPadstack( padstack );
     }
     else
     {
-        padstack.SetBackdrillSize( true, std::nullopt );
+        // Backdrills are written through the PADSTACK accessors, which stamp each side's start
+        // layer (top = F_Cu, bottom = B_Cu) so the result is read back correctly by older KiCad.
+        int  backDrillSel = m_backDrillChoice->GetSelection();
+        bool wantTop = ( backDrillSel == 1 || backDrillSel == 3 );    // 1: Top, 3: Top & bottom
+        bool wantBottom = ( backDrillSel == 2 || backDrillSel == 3 ); // 2: Bottom
+
+        if( wantTop )
+        {
+            padstack.SetBackdrillSize( true, m_backDrillTopSizeBinder.GetIntValue() );
+
+            if( m_backDrillTopLayer->GetLayerSelection() != UNDEFINED_LAYER )
+                padstack.SetBackdrillEndLayer( true, ToLAYER_ID( m_backDrillTopLayer->GetLayerSelection() ) );
+        }
+        else
+        {
+            padstack.SetBackdrillSize( true, std::nullopt );
+        }
+
+        if( wantBottom )
+        {
+            padstack.SetBackdrillSize( false, m_backDrillBottomSizeBinder.GetIntValue() );
+
+            if( m_backDrillBottomLayer->GetLayerSelection() != UNDEFINED_LAYER )
+                padstack.SetBackdrillEndLayer( false, ToLAYER_ID( m_backDrillBottomLayer->GetLayerSelection() ) );
+        }
+        else
+        {
+            padstack.SetBackdrillSize( false, std::nullopt );
+        }
+
+        // Front Post Machining
+        PADSTACK::POST_MACHINING_PROPS frontPostMachining;
+
+        switch( m_topPostMachining->GetSelection() )
+        {
+        case 1:  frontPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;       break;
+        case 2:  frontPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;       break;
+        default: frontPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED; break;
+        }
+
+        frontPostMachining.size = m_topPostMachineSize1Binder.GetIntValue();
+
+        if( frontPostMachining.mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK )
+            frontPostMachining.angle = KiROUND( m_topPostMachineSize2Binder.GetDoubleValue() * 10.0 );
+        else
+            frontPostMachining.depth = m_topPostMachineSize2Binder.GetIntValue();
+
+        aPad->Padstack().FrontPostMachining() = frontPostMachining;
+
+        // Back Post Machining
+        PADSTACK::POST_MACHINING_PROPS backPostMachining;
+
+        switch( m_bottomPostMachining->GetSelection() )
+        {
+        case 1:  backPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;       break;
+        case 2:  backPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;       break;
+        default: backPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED; break;
+        }
+
+        backPostMachining.size = m_bottomPostMachineSize1Binder.GetIntValue();
+
+        if( backPostMachining.mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK )
+            backPostMachining.angle = KiROUND( m_bottomPostMachineSize2Binder.GetDoubleValue() * 10.0 );
+        else
+            backPostMachining.depth = m_bottomPostMachineSize2Binder.GetIntValue();
+
+        aPad->Padstack().BackPostMachining() = backPostMachining;
     }
-
-    if( wantBottom )
-    {
-        padstack.SetBackdrillSize( false, m_backDrillBottomSizeBinder.GetIntValue() );
-
-        if( m_backDrillBottomLayer->GetSelection() != wxNOT_FOUND )
-            padstack.SetBackdrillEndLayer( false, ToLAYER_ID( (intptr_t) m_backDrillBottomLayer->GetClientData(
-                                                          m_backDrillBottomLayer->GetSelection() ) ) );
-    }
-    else
-    {
-        padstack.SetBackdrillSize( false, std::nullopt );
-    }
-
-    // Front Post Machining
-    PADSTACK::POST_MACHINING_PROPS frontPostMachining;
-
-    switch( m_topPostMachining->GetSelection() )
-    {
-    case 1:  frontPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;       break;
-    case 2:  frontPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;       break;
-    default: frontPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED; break;
-    }
-
-    frontPostMachining.size = m_topPostMachineSize1Binder.GetIntValue();
-
-    if( frontPostMachining.mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK )
-        frontPostMachining.angle = KiROUND( m_topPostMachineSize2Binder.GetDoubleValue() * 10.0 );
-    else
-        frontPostMachining.depth = m_topPostMachineSize2Binder.GetIntValue();
-
-    aPad->Padstack().FrontPostMachining() = frontPostMachining;
-
-    // Back Post Machining
-    PADSTACK::POST_MACHINING_PROPS backPostMachining;
-
-    switch( m_bottomPostMachining->GetSelection() )
-    {
-    case 1:  backPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK;       break;
-    case 2:  backPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::COUNTERBORE;       break;
-    default: backPostMachining.mode = PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED; break;
-    }
-
-    backPostMachining.size = m_bottomPostMachineSize1Binder.GetIntValue();
-
-    if( backPostMachining.mode == PAD_DRILL_POST_MACHINING_MODE::COUNTERSINK )
-        backPostMachining.angle = KiROUND( m_bottomPostMachineSize2Binder.GetDoubleValue() * 10.0 );
-    else
-        backPostMachining.depth = m_bottomPostMachineSize2Binder.GetIntValue();
-
-    aPad->Padstack().BackPostMachining() = backPostMachining;
 
     // If we created new layers, initialize them
     for( const auto& [newLayer, initFromLayer] : newLayerMap )
@@ -2361,9 +2446,14 @@ bool DIALOG_PAD_PROPERTIES::transferDataToPad( PAD* aPad )
 }
 
 
+void DIALOG_PAD_PROPERTIES::onBackDrillChoice( wxCommandEvent& aEvent )
+{
+    syncBackdrillControls( true );
+    OnValuesChanged( aEvent );
+}
 
 
-void DIALOG_PAD_PROPERTIES::onBackDrillChoice( wxCommandEvent& event )
+void DIALOG_PAD_PROPERTIES::syncBackdrillControls( bool aFromUserEvent )
 {
     int selection = m_backDrillChoice->GetSelection();
     // 0: None, 1: Top, 2: Bottom, 3: Both
@@ -2379,6 +2469,35 @@ void DIALOG_PAD_PROPERTIES::onBackDrillChoice( wxCommandEvent& event )
     m_backDrillBottomLayer->Enable( enableBottom );
     m_backDrillBottomLayerLabel->Enable( enableBottom );
 
+    // Initialize values if this was a user event that turned on backdrills
+    if( aFromUserEvent )
+    {
+        if( enableTop )
+        {
+            if( m_backDrillTopLayer->GetLayerSelection() == UNDEFINED_LAYER )
+                m_backDrillTopLayer->SetLayerSelection( F_Cu );
+
+            if( m_backDrillTopSizeBinder.GetIntValue() == 0 )
+            {
+                // Initialize backdrill slightly larger than main drill (see PADSTACK::SetBackdrillMode())
+                int drill = std::max( m_holeX.GetIntValue(), m_holeY.GetIntValue() );
+                m_backDrillTopSizeBinder.SetValue( KiROUND( drill * 1.1 ) );
+            }
+        }
+
+        if( enableBottom )
+        {
+            if( m_backDrillBottomLayer->GetLayerSelection() == UNDEFINED_LAYER )
+                m_backDrillBottomLayer->SetLayerSelection( B_Cu );
+
+            if( m_backDrillBottomSizeBinder.GetIntValue() == 0 )
+            {
+                // Initialize backdrill slightly larger than main drill (see PADSTACK::SetBackdrillMode())
+                int drill = std::max( m_holeX.GetIntValue(), m_holeY.GetIntValue() );
+                m_backDrillBottomSizeBinder.SetValue( KiROUND( drill * 1.1 ) );
+            }
+        }
+    }
 }
 
 

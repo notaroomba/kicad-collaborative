@@ -23,6 +23,7 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <utility>
 
 #include <geometry/shape_line_chain.h>
 #include <pcb_generator.h>
@@ -73,9 +74,10 @@ public:
     const BOX2I GetBoundingBox() const override { return PCB_GROUP::GetBoundingBox(); }
     const BOX2I ViewBBox() const override { return GetBoundingBox(); }
 
-    // The group base registers only on LAYER_ANCHOR, which VIEW::Query skips, so box
-    // select and select-all would never see the stack. Register on the copper layer too.
-    std::vector<int> ViewGetLayers() const override { return { LAYER_ANCHOR, GetLayer() }; }
+    // The group base registers only on LAYER_ANCHOR, which VIEW::Query skips, so box select
+    // and select-all would never see the stack. Register on every layer it spans, or hiding
+    // one of them takes the stack out of the view index.
+    std::vector<int> ViewGetLayers() const override;
 
     // Generator members are not selectable on their own, the selection tool expects the
     // generator itself to hit test. Delegate to the members.
@@ -147,10 +149,21 @@ public:
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
     void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
+    void Mirror( const SEG& aAxis ) override;
+
     const STRING_ANY_MAP GetProperties() const override;
     void                 SetProperties( const STRING_ANY_MAP& aProps ) override;
 
+    void Serialize( google::protobuf::Any& aContainer ) const override;
+    bool Deserialize( const google::protobuf::Any& aContainer ) override;
+
     void ShowPropertiesDialog( PCB_BASE_EDIT_FRAME* aEditFrame ) override;
+
+    /**
+     * Indicates that the via stack can be selected as a connected entity:
+     * when the selection crosses one, it is included as part of the connected selection.
+     */
+    bool IsSelectableAsConnected() const override { return true; }
 
     void             ApplyPreset( const VIA_STACK_PRESET& aPreset );
     VIA_STACK_PRESET ToPreset() const;
@@ -162,10 +175,11 @@ public:
      * the items as members. When aMembers is given it receives the items that belong in
      * the stack: the vias plus only those traces that connect hop positions on a shared
      * landing layer. Other selected traces must stay loose or the next regenerate would
-     * delete them.
+     * delete them. When aError is given it receives the reason for a refusal the caller
+     * can show, and is left alone when there is nothing specific to say.
      */
     static PCB_VIA_STACK* CreateFromItems( const std::vector<BOARD_ITEM*>& aItems, BOARD* aBoard,
-                                           std::vector<BOARD_ITEM*>* aMembers = nullptr );
+                                           std::vector<BOARD_ITEM*>* aMembers = nullptr, wxString* aError = nullptr );
 
     /**
      * True when both span ends are copper layers within the board's copper layer count.
@@ -215,6 +229,12 @@ public:
      * previews).
      */
     std::vector<BOARD_ITEM*> BuildMembers( BOARD* aBoard, int aNetCode ) const;
+
+    /**
+     * The microvia diameter and drill that "use netclass values" gives hops on @a aNetCode,
+     * falling back to the current via size when the net class leaves them unset.
+     */
+    static std::pair<int, int> GetNetclassViaSize( BOARD* aBoard, int aNetCode );
 
     // The net shared by every hop. Read from a member when present, else the stored value.
     // Setting it applies the net to every existing member as well.

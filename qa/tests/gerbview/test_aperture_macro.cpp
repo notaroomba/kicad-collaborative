@@ -30,6 +30,7 @@
 #include <gerber_draw_item.h>
 #include <gerber_file_image.h>
 #include <geometry/shape_poly_set.h>
+#include <qa_utils/wx_utils/unit_test_utils.h>
 
 
 BOOST_AUTO_TEST_SUITE( GerbviewApertureMacro )
@@ -128,6 +129,53 @@ BOOST_AUTO_TEST_CASE( EmptyMacroProducesNoOutlines )
     // ConvertShapeToPolygon must also leave m_Polygon with 0 outlines for an empty macro.
     dcode->ConvertShapeToPolygon( &item );
     BOOST_CHECK_EQUAL( dcode->m_Polygon.OutlineCount(), 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( TruncatedPrimitivesAreNotStored )
+{
+    wxString          path = KI_TEST::GetTestDataRootDir() + "gerbview/aperture_macro_truncated.gbr";
+    GERBER_FILE_IMAGE image( 0 );
+
+    BOOST_REQUIRE( image.LoadGerberFile( path ) );
+    BOOST_CHECK_EQUAL( image.GetMessages().GetCount(), 2u );
+
+    for( const char* name : { "BrokenCircle", "BrokenOutline" } )
+    {
+        BOOST_TEST_CONTEXT( name )
+        {
+            APERTURE_MACRO lookup;
+            lookup.m_AmName = name;
+            BOOST_CHECK( image.FindApertureMacro( lookup ) == nullptr );
+        }
+    }
+
+    // Parsing recovers after the malformed definitions and retains valid geometry.
+    BOOST_REQUIRE_EQUAL( image.GetItems().size(), 2u );
+
+    for( GERBER_DRAW_ITEM* item : image.GetItems() )
+    {
+        D_CODE* dcode = image.GetDCODE( item->m_DCode );
+        BOOST_REQUIRE( dcode != nullptr );
+        BOOST_REQUIRE_EQUAL( dcode->m_ApertType, APT_MACRO );
+        dcode->ConvertShapeToPolygon( item );
+        BOOST_CHECK_GT( dcode->m_Polygon.OutlineCount(), 0 );
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( MacroTruncatedAtEOFIsRejected )
+{
+    // A macro definition cut off at end of file leaves the reader with no
+    // input: loading must survive it and simply not store the macro.
+    wxString          path = KI_TEST::GetTestDataRootDir() + "gerbview/aperture_macro_eof_truncated.gbr";
+    GERBER_FILE_IMAGE image( 0 );
+
+    BOOST_REQUIRE( image.LoadGerberFile( path ) );
+
+    APERTURE_MACRO lookup;
+    lookup.m_AmName = wxT( "Broken" );
+    BOOST_CHECK( image.FindApertureMacro( lookup ) == nullptr );
 }
 
 

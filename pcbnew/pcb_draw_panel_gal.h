@@ -29,6 +29,7 @@
 
 class DS_PROXY_VIEW_ITEM;
 class RATSNEST_VIEW_ITEM;
+class CONNECTIVITY_DATA;
 class PROGRESS_REPORTER;
 
 /// Apply pcbnew's canonical GAL layer order (copper and zones below silk, fab
@@ -40,7 +41,7 @@ class PCB_DRAW_PANEL_GAL : public EDA_DRAW_PANEL_GAL
 public:
     PCB_DRAW_PANEL_GAL( wxWindow* aParentWindow, wxWindowID aWindowId, const wxPoint& aPosition,
                         const wxSize& aSize, KIGFX::GAL_DISPLAY_OPTIONS& aOptions,
-                        GAL_TYPE aGalType = GAL_TYPE_OPENGL );
+                        GAL_TYPE aGalType = GAL_TYPE_MODERN );
 
     virtual ~PCB_DRAW_PANEL_GAL();
 
@@ -48,11 +49,12 @@ public:
      * Add all items from the current board to the VIEW, so they can be displayed by GAL.
      *
      * @param aBoard is the PCB to be loaded.
+     * @param aReporter is the optional #REPORTER object to write status messages to.
      */
     void DisplayBoard( BOARD* aBoard, PROGRESS_REPORTER* aReporter = nullptr );
 
     /**
-     * Sets (or updates) drawing-sheet used by the draw panel.
+     * Set or update drawing-sheet used by the draw panel.
      *
      * @param aDrawingSheet is the drawing-sheet to be used.  The object is then owned by
      *                      #PCB_DRAW_PANEL_GAL.
@@ -72,22 +74,28 @@ public:
      */
     void prepareGridSources() override;
 
-    ///< @copydoc EDA_DRAW_PANEL_GAL::SetHighContrastLayer()
+    /// @copydoc EDA_DRAW_PANEL_GAL::SetHighContrastLayer()
     virtual void SetHighContrastLayer( int aLayer ) override
     {
         SetHighContrastLayer( static_cast< PCB_LAYER_ID >( aLayer ) );
     }
 
-    ///< SetHighContrastLayer(), with some extra smarts for PCB.
+    /// SetHighContrastLayer(), with some extra smarts for PCB.
     void SetHighContrastLayer( PCB_LAYER_ID aLayer );
 
-    ///< @copydoc EDA_DRAW_PANEL_GAL::SetTopLayer()
+    /**
+     * Follow an active layer change when nothing else that colours items has changed. Layers the
+     * canvas fades are left alone, see PCB_RENDER_SETTINGS::GetLayerDim().
+     */
+    void ChangeHighContrastLayer( PCB_LAYER_ID aLayer );
+
+    /// @copydoc EDA_DRAW_PANEL_GAL::SetTopLayer()
     virtual void SetTopLayer( int aLayer ) override
     {
         SetTopLayer( static_cast< PCB_LAYER_ID >( aLayer ) );
     }
 
-    ///< SetTopLayer(), with some extra smarts for PCB.
+    /// SetTopLayer(), with some extra smarts for PCB.
     void SetTopLayer( PCB_LAYER_ID aLayer );
 
     /**
@@ -97,32 +105,67 @@ public:
      */
     void SyncLayersVisibility( const BOARD* aBoard );
 
-    ///< @copydoc EDA_DRAW_PANEL_GAL::GetMsgPanelInfo()
+    /**
+     * Apply the layer and element visibility of a #BOARD to a view.
+     *
+     * @param aView is the view to update.
+     * @param aBoard contains layers visibility settings to be applied.
+     * @param aActiveLayer is the layer being edited. Its clearance outlines are the only ones shown,
+     *                     and none are if it is not a copper layer.
+     */
+    static void SyncLayersVisibility( KIGFX::VIEW& aView, const BOARD* aBoard, PCB_LAYER_ID aActiveLayer );
+
+    /// @copydoc EDA_DRAW_PANEL_GAL::GetMsgPanelInfo()
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
 
-    ///< @copydoc EDA_DRAW_PANEL_GAL::OnShow()
+    /// @copydoc EDA_DRAW_PANEL_GAL::OnShow()
     void OnShow() override;
 
     bool SwitchBackend( GAL_TYPE aGalType ) override;
 
-    ///< Force refresh of the ratsnest visual representation.
+    /// Force refresh of the ratsnest visual representation.
     void RedrawRatsnest();
 
-    ///< @copydoc EDA_DRAW_PANEL_GAL::GetDefaultViewBBox()
+    /// @copydoc EDA_DRAW_PANEL_GAL::GetDefaultViewBBox()
     BOX2I GetDefaultViewBBox() const override;
 
     virtual KIGFX::PCB_VIEW* GetView() const override;
 
 protected:
-    ///< Reassign layer order to the initial settings.
+    /// Reassign layer order to the initial settings.
     void setDefaultLayerOrder();
 
-    ///< Set rendering targets & dependencies for layers.
+    /// Set rendering targets & dependencies for layers.
     void setDefaultLayerDeps();
+
+    /**
+     * Let a retained scene apply the high contrast dim of cached layers whose dim does not depend
+     * on the item.
+     */
+    void updateCanvasFadedLayers();
+
+    /**
+     * Make @p aLayer the high contrast layer. @p aOnlyLayerChanged lets faded layers keep their colours.
+     */
+    void applyHighContrastLayer( PCB_LAYER_ID aLayer, bool aOnlyLayerChanged );
+
+    /**
+     * Add the ratsnest items the current canvas needs.
+     */
+    void addRatsnest( std::shared_ptr<CONNECTIVITY_DATA> aConnectivity );
+
+    void beforeRedraw() override;
 
 protected:
     std::unique_ptr<DS_PROXY_VIEW_ITEM> m_drawingSheet;  ///< Currently used drawing-sheet.
+
+    /** High contrast was on at the last recolour, so the next one may bring items back */
+    bool m_highContrastShown = false;
+
+    /** High contrast hid inactive layers at the last recolour, which the canvas cannot fade away */
+    bool m_highContrastHidden = false;
     std::unique_ptr<RATSNEST_VIEW_ITEM> m_ratsnest;      ///< Ratsnest view item
+    std::unique_ptr<RATSNEST_VIEW_ITEM> m_localRatsnest; /**< Moving items' part, when split off */
 };
 
 #endif /* PCB_DRAW_PANEL_GAL_H_ */

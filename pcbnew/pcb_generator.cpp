@@ -110,7 +110,7 @@ void PCB_GENERATOR::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection
 {
     baseMirror( aCentre, aFlipDirection );
 
-    SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+    SetLayer( GetFlippedLayer( GetLayer() ) );
 
     PCB_GROUP::Flip( aCentre, aFlipDirection );
 }
@@ -122,25 +122,28 @@ void PCB_GENERATOR::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirecti
     PCB_GROUP::Mirror( aCentre, aFlipDirection );
 }
 
+void PCB_GENERATOR::Mirror( const SEG& aAxis )
+{
+    baseMirror( aAxis );
+
+    PCB_GROUP::Mirror( aAxis );
+}
+
 void PCB_GENERATOR::baseMirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
-    if( aFlipDirection == FLIP_DIRECTION::TOP_BOTTOM )
-        MIRROR( m_origin.y, aCentre.y );
-    else
-        MIRROR( m_origin.x, aCentre.x );
+    const SEG mirrorAxis( MIRROR_AXIS( aCentre, aFlipDirection ) );
+    baseMirror( mirrorAxis );
+}
+
+void PCB_GENERATOR::baseMirror( const SEG& aAxis )
+{
+    m_origin = aAxis.ReflectPoint( m_origin );
 }
 
 LSET PCB_GENERATOR::GetLayerSet() const
 {
     return PCB_GROUP::GetLayerSet() | LSET( { GetLayer() } );
 }
-
-
-void PCB_GENERATOR::SetLayer( PCB_LAYER_ID aLayer )
-{
-    m_layer = aLayer;
-}
-
 
 wxString PCB_GENERATOR::GetGeneratorType() const
 {

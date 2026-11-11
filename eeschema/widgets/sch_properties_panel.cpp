@@ -42,6 +42,7 @@
 #include <sch_line.h>
 #include <sch_junction.h>
 #include <sch_field.h>
+#include <validators.h>
 #include <pin_map.h>
 #include <template_fieldnames.h>
 #include <settings/color_settings.h>
@@ -51,7 +52,6 @@
 #include <tools/sch_selection_tool.h>
 #include <wildcards_and_files_ext.h>
 #include <wx_filename.h>
-#include <wx/button.h>
 
 
 bool SCH_PROPERTIES_PANEL::m_selContainsJunctions;
@@ -65,25 +65,31 @@ SCH_PROPERTIES_PANEL::SCH_PROPERTIES_PANEL( wxWindow* aParent, SCH_BASE_FRAME* a
         m_checkboxEditorInstance( nullptr ),
         m_colorEditorInstance( nullptr ),
         m_fpEditorInstance( nullptr ),
-        m_urlEditorInstance( nullptr ),
-        m_editPinMapButton( nullptr ),
-        m_addCustomPropertyButton( nullptr )
+        m_urlEditorInstance( nullptr )
 {
-    // Pin Map editor launcher (issue #2282).  The button lives below the property grid and is only
-    // shown when a single symbol with an effective associated footprint is selected.
-    m_editPinMapButton = new wxButton( this, wxID_ANY, _( "Edit Pin Map..." ) );
-    m_editPinMapButton->Hide();
-    GetSizer()->Add( m_editPinMapButton, 0, wxALL | wxEXPAND, 5 );
-    m_editPinMapButton->Bind( wxEVT_BUTTON, &SCH_PROPERTIES_PANEL::onEditPinMap, this );
+    addCategoryButton( _HKI( "Fields" ), _( "Add Field" ), BITMAPS::small_plus,
+                       [this]()
+                       {
+                           addBlankField();
+                       } );
 
-    m_addCustomPropertyButton = new wxButton( this, wxID_ANY, _( "Add Custom Property" ) );
-    GetSizer()->Add( m_addCustomPropertyButton, 0, wxALL | wxEXPAND, 5 );
+    addCategoryButton( _HKI( "Custom Properties" ), _( "Add Custom Property" ), BITMAPS::small_plus,
+                       [this]()
+                       {
+                           addBlankCustomProperty();
+                       } );
 
-    m_addCustomPropertyButton->Bind( wxEVT_BUTTON,
-            [this]( wxCommandEvent& )
+    addCategoryButton(
+            _HKI( "Pin Map" ), _( "Edit Pin Map..." ), BITMAPS::small_edit,
+            [this]()
             {
-                addBlankCustomProperty();
-            } );
+                onEditPinMap();
+            },
+            [this]()
+            {
+                return m_frame->IsType( FRAME_SCH ) && getSinglePinMappedSymbol() != nullptr;
+            },
+            /* aForceCategory */ true );
 
     m_propMgr.Rebuild();
     bool found = false;
@@ -306,17 +312,6 @@ void SCH_PROPERTIES_PANEL::rebuildProperties( const SELECTION& aSelection )
     }
 
     PROPERTIES_PANEL::rebuildProperties( aSelection );
-
-    // The Edit Pin Map button targets the schematic-editor symbol properties dialog, so it is only
-    // shown there for a single pin-mapped symbol.
-    bool showEditButton = m_frame->IsType( FRAME_SCH ) && getSinglePinMappedSymbol() != nullptr;
-
-    if( m_editPinMapButton && m_editPinMapButton->IsShown() != showEditButton )
-    {
-        m_editPinMapButton->Show( showEditButton );
-        Layout();
-    }
-
 }
 
 
@@ -334,7 +329,7 @@ SCH_SYMBOL* SCH_PROPERTIES_PANEL::getSinglePinMappedSymbol()
 }
 
 
-void SCH_PROPERTIES_PANEL::onEditPinMap( wxCommandEvent& aEvent )
+void SCH_PROPERTIES_PANEL::onEditPinMap()
 {
     SCH_SYMBOL* symbol = getSinglePinMappedSymbol();
 
@@ -408,26 +403,52 @@ void SCH_PROPERTIES_PANEL::valueChanging( wxPropertyGridEvent& aEvent )
     if( m_SuppressGridChangeEvents )
         return;
 
-    EDA_ITEM* frontItem = getFrontItem();
-
-    if( !frontItem )
+    if( !getFrontItem() || !getPropertyFromEvent( aEvent ) )
         return;
 
-    if( PROPERTY_BASE* property = getPropertyFromEvent( aEvent ) )
-    {
-        wxVariant newValue = aEvent.GetPropertyValue();
+    SELECTION        fallbackSelection;
+    const SELECTION& selection = getSelection( fallbackSelection );
+    wxVariant        newValue = aEvent.GetPropertyValue();
 
-        if( VALIDATOR_RESULT validationFailure = property->Validate( newValue.GetAny(), frontItem ) )
+    // valueChanged() writes every selected item, so a mixed selection must be valid for each of them
+    for( EDA_ITEM* item : selection )
+    {
+        PROPERTY_BASE* property = m_propMgr.GetProperty( item, aEvent.GetPropertyName() );
+
+        if( !property )
+            continue;
+
+        wxString errorMsg;
+
+        if( VALIDATOR_RESULT validationFailure = property->Validate( newValue.GetAny(), item ) )
         {
-            wxString errorMsg = wxString::Format( wxS( "%s: %s" ), wxGetTranslation( property->Name() ),
-                                                  validationFailure->get()->Format( m_frame ) );
-            m_frame->ShowInfoBarError( errorMsg );
-            aEvent.Veto();
-            return;
+            errorMsg = wxString::Format( wxS( "%s: %s" ), wxGetTranslation( property->Name() ),
+                                         validationFailure->get()->Format( m_frame ) );
+        }
+        else if( SCH_FIELD* field = dynamic_cast<SCH_FIELD*>( item );
+                 field && field->GetId() == FIELD_T::SHEET_REF_SUFFIX && property->Name() == wxS( "Text" ) )
+        {
+            // The suffix field's own Text property is generic and carries no field rules
+            errorMsg = GetFieldValidationErrorMessage( FIELD_T::SHEET_REF_SUFFIX, newValue.GetString() );
+        }
+        else if( SCH_SYMBOL* symbol = field ? dynamic_cast<SCH_SYMBOL*>( field->GetParentSymbol() ) : nullptr;
+                 symbol && symbol->Schematic() && field->GetId() == FIELD_T::REFERENCE
+                 && property->Name() == wxS( "Text" ) )
+        {
+            wxString base;
+            errorMsg = symbol->BaseRefFromUser( symbol->Schematic()->CurrentSheet(), newValue.GetString(), base );
         }
 
-        aEvent.Skip();
+        if( !errorMsg.IsEmpty() )
+        {
+            m_frame->ShowInfoBarError( errorMsg );
+            aEvent.Veto();
+            m_ValueChangeVetoed = true;
+            return;
+        }
     }
+
+    aEvent.Skip();
 }
 
 
@@ -622,6 +643,30 @@ void SCH_PROPERTIES_PANEL::onKeyRenamed( const wxString& aOldName, const wxStrin
     SELECTION fallbackSelection;
     const SELECTION& selection = getSelection( fallbackSelection );
 
+    // Renaming to the suffix name retypes the field, so its existing text must already be a valid suffix
+    if( aNewName == GetDefaultFieldName( FIELD_T::SHEET_REF_SUFFIX, UNTRANSLATED ) )
+    {
+        for( EDA_ITEM* edaItem : selection )
+        {
+            if( edaItem->Type() != SCH_SHEET_T )
+                continue;
+
+            const SCH_FIELD* field = std::as_const( *static_cast<SCH_SHEET*>( edaItem ) ).GetField( aOldName );
+
+            if( !field )
+                continue;
+
+            wxString msg = GetFieldValidationErrorMessage( FIELD_T::SHEET_REF_SUFFIX, field->GetText() );
+
+            if( !msg.IsEmpty() )
+            {
+                m_frame->ShowInfoBarError( msg );
+                UpdateData();
+                return;
+            }
+        }
+    }
+
     SCH_COMMIT  changes( m_frame );
     SCH_SCREEN* screen = m_frame->GetScreen();
     PROPERTY_COMMIT_HANDLER handler( &changes );
@@ -728,6 +773,8 @@ void SCH_PROPERTIES_PANEL::addBlankField()
     SELECTION fallbackSelection;
     const SELECTION& selection = getSelection( fallbackSelection );
 
+    settlePendingLabelEdit();
+
     if( selection.Empty() )
         return;
 
@@ -763,21 +810,17 @@ void SCH_PROPERTIES_PANEL::addBlankField()
 
         if( item->Type() == SCH_SYMBOL_T )
         {
-            SCH_SYMBOL* symbol   = static_cast<SCH_SYMBOL*>( item );
-            SCH_FIELD   newField( symbol, FIELD_T::USER, name );
+            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
 
-            newField.SetVisible( false );
             changes.Modify( symbol, screen, RECURSE_MODE::NO_RECURSE );
-            symbol->AddField( newField );
+            symbol->AddField( SCH_FIELD( symbol, FIELD_T::USER, name ) )->SetVisible( false );
         }
         else if( item->Type() == SCH_SHEET_T )
         {
-            SCH_SHEET* sheet    = static_cast<SCH_SHEET*>( item );
-            SCH_FIELD  newField( sheet, FIELD_T::USER, name );
+            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( item );
 
-            newField.SetVisible( false );
             changes.Modify( sheet, screen, RECURSE_MODE::NO_RECURSE );
-            sheet->AddField( newField );
+            sheet->AddField( SCH_FIELD( sheet, FIELD_T::SHEET_USER, name ) )->SetVisible( false );
         }
     }
 
@@ -794,6 +837,8 @@ void SCH_PROPERTIES_PANEL::addBlankCustomProperty()
 {
     SELECTION fallbackSelection;
     const SELECTION& selection = getSelection( fallbackSelection );
+
+    settlePendingLabelEdit();
 
     if( selection.Empty() )
         return;

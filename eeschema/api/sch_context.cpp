@@ -72,9 +72,25 @@ public:
         return SCH_API_SAVE::SaveSchematic( m_frame->Schematic(), m_frame->Prj() );
     }
 
+    bool SaveSchematicAs( const wxString& aFileName ) override
+    {
+        return false;
+    }
+
     bool SaveSchematicCopy( const wxString& aFileName, bool aCreateProject ) override
     {
-        return SCH_API_SAVE::SaveSchematicCopy( m_frame->Schematic(), m_frame->Prj(), aFileName, aCreateProject );
+        return SCH_API_SAVE::SaveSchematicCopy( m_frame->Schematic(), m_frame->Prj(), aFileName,
+                                                aCreateProject );
+    }
+
+    bool RevertToSaved() override
+    {
+        wxFileName fn = m_frame->Prj().AbsolutePath( m_frame->Schematic().GetFileName() );
+
+        if( fn.GetFullPath().IsEmpty() || !wxFileExists( fn.GetFullPath() ) )
+            return false;
+
+        return m_frame->ReloadFromDisk();
     }
 
 private:

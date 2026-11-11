@@ -172,7 +172,8 @@ SIMULATOR_FRAME::SIMULATOR_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_simulator->SetReporter( m_consoleReporter );
     m_simulator->SetSimStateListener( m_stateListener );
 
-    m_circuitModel = std::make_shared<SPICE_CIRCUIT_MODEL>( &m_schematicFrame->Schematic() );
+    m_circuitModel = std::make_shared<SPICE_CIRCUIT_MODEL>( &m_schematicFrame->Schematic(),
+                                                            &m_schematicFrame->Kiway() );
 
     setupTools();
     setupUIConditions();
@@ -391,13 +392,12 @@ bool SIMULATOR_FRAME::LoadSimulator( const wxString& aSimCommand, unsigned aSimO
     if( !m_schematicFrame->ReadyToNetlist( _( "Simulator requires a fully annotated schematic." ) ) )
         return false;
 
-    // If we are using the new connectivity, make sure that we do a full-rebuild
-    if( ADVANCED_CFG::GetCfg().m_IncrementalConnectivity )
-        m_schematicFrame->RecalculateConnections( nullptr, GLOBAL_CLEANUP );
+    m_schematicFrame->PrepareForNetlist();
 
     bool success = m_simulator->Attach( m_circuitModel, aSimCommand, aSimOptions,
                                         Prj().GetProjectPath(), s_reporter );
 
+    m_schematicFrame->RefreshConnectivity( true );
     showNetlistErrors( s_reporter );
 
     return success;
@@ -411,6 +411,7 @@ void SIMULATOR_FRAME::ReloadSimulator( const wxString& aSimCommand, unsigned aSi
     m_simulator->Attach( m_circuitModel, aSimCommand, aSimOptions, Prj().GetProjectPath(),
                          s_reporter );
 
+    m_schematicFrame->RefreshConnectivity( true );
     showNetlistErrors( s_reporter );
 }
 

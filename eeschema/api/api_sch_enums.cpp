@@ -172,6 +172,7 @@ LIBRENTRYOPTIONS FromProtoEnum( types::SchematicSymbolType aValue )
 {
     switch( aValue )
     {
+    case types::SchematicSymbolType::SST_UNKNOWN:
     case types::SchematicSymbolType::SST_NORMAL:       return LIBRENTRYOPTIONS::ENTRY_NORMAL;
     case types::SchematicSymbolType::SST_GLOBAL_POWER: return LIBRENTRYOPTIONS::ENTRY_GLOBAL_POWER;
     case types::SchematicSymbolType::SST_LOCAL_POWER:  return LIBRENTRYOPTIONS::ENTRY_LOCAL_POWER;
@@ -205,6 +206,7 @@ SYMBOL_ORIENTATION_PROP FromProtoEnum( types::SchematicSymbolOrientation aValue 
 {
     switch( aValue )
     {
+    case types::SchematicSymbolOrientation::SSO_UNKNOWN:
     case types::SchematicSymbolOrientation::SSO_0:   return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_0;
     case types::SchematicSymbolOrientation::SSO_90:  return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_90;
     case types::SchematicSymbolOrientation::SSO_180: return SYMBOL_ORIENTATION_PROP::SYMBOL_ANGLE_180;
@@ -239,8 +241,9 @@ PIN_ORIENTATION FromProtoEnum( types::SchematicPinOrientation aValue )
 {
     switch( aValue )
     {
-    case types::SchematicPinOrientation::SPO_RIGHT:     return PIN_ORIENTATION::PIN_RIGHT;
+    case types::SchematicPinOrientation::SPO_UNKNOWN:
     case types::SchematicPinOrientation::SPO_LEFT:      return PIN_ORIENTATION::PIN_LEFT;
+    case types::SchematicPinOrientation::SPO_RIGHT:     return PIN_ORIENTATION::PIN_RIGHT;
     case types::SchematicPinOrientation::SPO_UP:        return PIN_ORIENTATION::PIN_UP;
     case types::SchematicPinOrientation::SPO_DOWN:      return PIN_ORIENTATION::PIN_DOWN;
 
@@ -278,6 +281,7 @@ GRAPHIC_PINSHAPE FromProtoEnum( types::SchematicPinShape aValue )
 {
     switch( aValue )
     {
+    case types::SchematicPinShape::SPS_UNKNOWN:
     case types::SchematicPinShape::SPS_LINE:                return GRAPHIC_PINSHAPE::LINE;
     case types::SchematicPinShape::SPS_INVERTED:            return GRAPHIC_PINSHAPE::INVERTED;
     case types::SchematicPinShape::SPS_CLOCK:               return GRAPHIC_PINSHAPE::CLOCK;
@@ -420,6 +424,10 @@ ErcErrorType ToProtoEnum( ERCE_T aValue )
     case ERCE_EMPTY_LABEL_NAME:             return ErcErrorType::ERCET_EMPTY_LABEL_NAME;
     case ERCE_VARIANT_SYMBOL_INVALID:       return ErcErrorType::ERCET_VARIANT_SYMBOL_INVALID;
     case ERCE_VARIANT_SYMBOL_INCOMPATIBLE:  return ErcErrorType::ERCET_VARIANT_SYMBOL_INCOMPATIBLE;
+    case ERCE_WIRED_IMPLICIT_POWER:        return ErcErrorType::ERCET_WIRED_IMPLICIT_POWER;
+    case ERCE_EMPTY_POWER_VALUE: return ErcErrorType::ERCET_EMPTY_POWER_VALUE;
+    case ERCE_DUPLICATE_SHEET_SUFFIX:       return ErcErrorType::ERCET_DUPLICATE_SHEET_SUFFIX;
+    case ERCE_REF_SUFFIX_MISMATCH:          return ErcErrorType::ERCET_REF_SUFFIX_MISMATCH;
     case ERCE_DUPLICATE_PIN_ERROR:          return ErcErrorType::ERCET_DUPLICATE_PIN_ERROR;
     case ERCE_PIN_TO_PIN_WARNING:           return ErcErrorType::ERCET_PIN_TO_PIN_WARNING;
     case ERCE_PIN_TO_PIN_ERROR:             return ErcErrorType::ERCET_PIN_TO_PIN_ERROR;
@@ -491,8 +499,12 @@ ERCE_T FromProtoEnum( ErcErrorType aValue )
     case ErcErrorType::ERCET_PIN_MAP_DUPLICATE_PAD:         return ERCE_PIN_MAP_DUPLICATE_PAD;
     case ErcErrorType::ERCET_PIN_MAP_STALE_PIN:             return ERCE_PIN_MAP_STALE_PIN;
     case ErcErrorType::ERCET_EMPTY_LABEL_NAME:              return ERCE_EMPTY_LABEL_NAME;
+    case ErcErrorType::ERCET_EMPTY_POWER_VALUE: return ERCE_EMPTY_POWER_VALUE;
+    case ErcErrorType::ERCET_DUPLICATE_SHEET_SUFFIX:        return ERCE_DUPLICATE_SHEET_SUFFIX;
+    case ErcErrorType::ERCET_REF_SUFFIX_MISMATCH:           return ERCE_REF_SUFFIX_MISMATCH;
     case ErcErrorType::ERCET_VARIANT_SYMBOL_INVALID:        return ERCE_VARIANT_SYMBOL_INVALID;
     case ErcErrorType::ERCET_VARIANT_SYMBOL_INCOMPATIBLE:   return ERCE_VARIANT_SYMBOL_INCOMPATIBLE;
+    case ErcErrorType::ERCET_WIRED_IMPLICIT_POWER:         return ERCE_WIRED_IMPLICIT_POWER;
     case ErcErrorType::ERCET_DUPLICATE_PIN_ERROR:           return ERCE_DUPLICATE_PIN_ERROR;
     case ErcErrorType::ERCET_PIN_TO_PIN_WARNING:            return ERCE_PIN_TO_PIN_WARNING;
     case ErcErrorType::ERCET_PIN_TO_PIN_ERROR:              return ERCE_PIN_TO_PIN_ERROR;

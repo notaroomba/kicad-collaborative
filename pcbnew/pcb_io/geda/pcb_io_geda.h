@@ -51,7 +51,7 @@ class LINE_READER;
 class NETINFO_ITEM;
 
 /**
- * A #PLUGIN derivation for saving and loading Geda PCB files.
+ * A #PCB_IO derivation for saving and loading Geda PCB files.
  *
  * @note This class is not thread safe, but it is re-entrant multiple times in sequence.
  */
@@ -65,10 +65,6 @@ public:
     }
 
     bool CanReadBoard( const wxString& aFileName ) const override;
-
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties = nullptr,
-                      PROJECT* aProject = nullptr ) override;
 
     std::vector<FOOTPRINT*> GetImportedCachedLibraryFootprints() override;
 
@@ -84,16 +80,16 @@ public:
                                       false );
     }
 
-    FOOTPRINT* ImportFootprint( const wxString& aFootprintPath, wxString& aFootprintNameOut,
-                                const std::map<std::string, UTF8>* aProperties ) override;
+    std::unique_ptr<FOOTPRINT> ImportFootprint( const wxString& aFootprintPath, wxString& aFootprintNameOut,
+                                                const std::map<std::string, UTF8>* aProperties ) override;
 
     void FootprintEnumerate( wxArrayString& aFootprintNames, const wxString& aLibraryPath,
                              bool aBestEfforts,
                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
-    FOOTPRINT* FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
-                              bool  aKeepUUID = false,
-                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
+    std::unique_ptr<FOOTPRINT> FootprintLoad( const wxString& aLibraryPath, const wxString& aFootprintName,
+                                              bool                               aKeepUUID = false,
+                                              const std::map<std::string, UTF8>* aProperties = nullptr ) override;
 
     void FootprintDelete( const wxString& aLibraryPath, const wxString& aFootprintName,
                           const std::map<std::string, UTF8>* aProperties = nullptr ) override;
@@ -135,8 +131,11 @@ private:
     bool testFlags( const wxString& aFlag, long aMask, const wxChar* aName );
 
 protected:
-    wxString               m_error;    ///< for throwing exceptions
-    GPCB_FPL_CACHE*        m_cache;    ///< Footprint library cache.
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
+
+    wxString               m_error; ///< for throwing exceptions
+    GPCB_FPL_CACHE*        m_cache; ///< Footprint library cache.
     int                    m_ctl;
     LINE_READER*           m_reader;   ///< no ownership here.
     wxString               m_filename; ///< for saves only, name is in m_reader for loads

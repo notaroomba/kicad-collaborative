@@ -23,56 +23,57 @@
 #include <i18n_utility.h>
 #include <wildcards_and_files_ext.h>
 
-NLOHMANN_JSON_SERIALIZE_ENUM( JOB_EXPORT_PCB_IPC2581::IPC2581_UNITS,
-                              {
-                                      { JOB_EXPORT_PCB_IPC2581::IPC2581_UNITS::INCH, "in" },
-                                      { JOB_EXPORT_PCB_IPC2581::IPC2581_UNITS::MM, "mm" },
-                              } )
-
 NLOHMANN_JSON_SERIALIZE_ENUM( JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION,
                               {
                                       { JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION::B, "B" },
                                       { JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION::C, "C" },
                               } )
 
+NLOHMANN_JSON_SERIALIZE_ENUM( JOB_EXPORT_PCB_IPC2581::REF_DES,
+                              {
+                                      { JOB_EXPORT_PCB_IPC2581::REF_DES::INCLUDE, "include" },
+                                      { JOB_EXPORT_PCB_IPC2581::REF_DES::OMIT, "omit" },
+                              } )
+
 JOB_EXPORT_PCB_IPC2581::JOB_EXPORT_PCB_IPC2581() :
-        JOB( "ipc2581", false ),
-        m_filename(),
-        m_drawingSheet(),
-        m_units( IPC2581_UNITS::MM ),
+        JOB_EXPORT_PCB_FAB( "ipc2581" ),
         m_version( IPC2581_VERSION::C ),
-        m_precision( 6 ),
         m_compress( false ),
         m_colInternalId(),
-        m_colMfgPn(),
         m_colMfg(),
         m_colDistPn(),
         m_colDist(),
         m_bomRev()
 {
-    m_params.emplace_back( new JOB_PARAM<wxString>( "drawing_sheet", &m_drawingSheet, m_drawingSheet ) );
-    m_params.emplace_back( new JOB_PARAM<IPC2581_UNITS>( "units", &m_units, m_units ) );
     m_params.emplace_back( new JOB_PARAM<IPC2581_VERSION>( "version", &m_version, m_version ) );
-    m_params.emplace_back( new JOB_PARAM<int>( "precision", &m_precision, m_precision ) );
     m_params.emplace_back( new JOB_PARAM<bool>( "compress", &m_compress, m_compress ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "field_bom_map.internal_id",
                                                     &m_colInternalId,
                                                     m_colInternalId ) );
-    m_params.emplace_back( new JOB_PARAM<wxString>( "field_bom_map.mfg_pn",
-                                                    &m_colMfgPn, m_colMfgPn ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "field_bom_map.mfg", &m_colMfg, m_colMfg ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "field_bom_map.dist_pn",
                                                     &m_colDistPn,
                                                     m_colDistPn ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "field_bom_map.dist", &m_colDist, m_colDist ) );
     m_params.emplace_back( new JOB_PARAM<wxString>( "bom_rev", &m_bomRev, m_bomRev ) );
-    m_params.emplace_back( new JOB_PARAM<wxString>( "variant", &m_variant, m_variant ) );
-    m_params.emplace_back( new JOB_PARAM<wxString>( "mode", &m_mode, m_mode ) );
-    m_params.emplace_back( new JOB_PARAM<wxString>( "sections", &m_sections, m_sections ) );
-    m_params.emplace_back( new JOB_PARAM<wxString>( "net_names", &m_netNamePolicy,
-                                                    m_netNamePolicy ) );
-    m_params.emplace_back( new JOB_PARAM<wxString>( "ref_des", &m_refDesPolicy,
-                                                    m_refDesPolicy ) );
+    m_params.emplace_back( new JOB_PARAM<REF_DES>( "ref_des", &m_refDes, m_refDes ) );
+}
+
+
+void JOB_EXPORT_PCB_IPC2581::FromJson( const nlohmann::json& aJson )
+{
+    JOB_EXPORT_PCB_FAB::FromJson( aJson );
+
+    // Nightly builds stored the data set token under this key
+    if( !aJson.contains( "data_set" ) && aJson.contains( "mode" ) && aJson["mode"].is_string() )
+        m_dataSet = DataSetFromToken( wxString::FromUTF8( aJson["mode"].get<std::string>() ) );
+}
+
+
+bool JOB_EXPORT_PCB_IPC2581::SupportsDataSet( DATA_SET aDataSet ) const
+{
+    // KiCad has no DFX data to give
+    return aDataSet != DATA_SET::DFX && aDataSet != DATA_SET::COUNT;
 }
 
 

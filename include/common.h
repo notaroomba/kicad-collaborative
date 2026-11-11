@@ -20,13 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-/**
- * The common library
- * @file common.h
- */
-
-#ifndef INCLUDE__COMMON_H_
-#define INCLUDE__COMMON_H_
+#pragma once
 
 #include <kicommon.h>
 #include <functional>
@@ -90,22 +84,34 @@ KICOMMON_API wxString JoinExtensions( const std::vector<std::string>& aExts );
 /**
  * Replace any environment variable & text variable references with their values.
  *
- * @param aString a string containing (perhaps) references to env var
+ * @param aString a string containing (perhaps) references to env var.
+ * @param aProject the project to get variable substitutions from.
+ * @param aAllowEscapes false in a URI, where a backslash can only be a separator.
+ *
  * @return the expanded environment variable.
  */
-KICOMMON_API const wxString ExpandEnvVarSubstitutions( const wxString& aString, const PROJECT* aProject );
+KICOMMON_API const wxString ExpandEnvVarSubstitutions( const wxString& aString, const PROJECT* aProject,
+                                                       bool aAllowEscapes = true );
 
-/**
- * Expand '${var-name}' templates in text.
- */
-#define FOR_ERC_DRC 1
+enum RESOLUTION_CONTEXT
+{
+    FOR_CANVAS,
+    FOR_GUI,
+    FOR_NETNAME,
+    FOR_ERC_DRC,
+    INTERNAL,       // Importantly, keeps the escape on literal variable references (such as "\${foo}")
+    RESOLVED,
+    RAW_VALUE,
+    FOR_URI // A backslash is a path separator here, so no escapes are recognized
+};
 
-KICOMMON_API void FinalizeTextVarExpansion( wxString& aText, bool aForCanvasDisplay );
+KICOMMON_API void FinalizeTextVarExpansion( wxString& aText, RESOLUTION_CONTEXT aContext );
 
 KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const std::function<bool( wxString* )>* aResolver,
-                                      int aFlags = 0, int aDepth = 0 );
+                                      RESOLUTION_CONTEXT aContext, int aDepth = 0 );
 
-KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject, int aFlags = 0 );
+KICOMMON_API wxString ExpandTextVars( const wxString& aSource, const PROJECT* aProject,
+                                      RESOLUTION_CONTEXT aContext );
 
 /**
  * Normalize a file path so its text variables survive ExpandTextVars.
@@ -123,7 +129,7 @@ KICOMMON_API wxString NormalizeFilePathForTextVars( const wxString& aPath );
  * resolving. Nested references are captured at every nesting level.
  *
  * Used by the reactive dependency tracker to register edges on SetText without
- * needing a resolver context. Escape sequences (`\${...}`) are skipped. `@{...}`
+ * needing a resolver context. Escape sequences (`\${...}`) are skipped. `\@{...}`
  * math expressions are walked so that nested `${...}` inside them is captured.
  */
 KICOMMON_API std::vector<TEXT_VAR_REF_KEY> ExtractTextVarReferences( const wxString& aSource );
@@ -131,19 +137,19 @@ KICOMMON_API std::vector<TEXT_VAR_REF_KEY> ExtractTextVarReferences( const wxStr
 /**
  * Multi-pass text variable expansion and math expression evaluation.
  *
- * Performs recursive resolution of both ${...} variable references and @{...} math expressions,
- * then cleans up escape sequences (\${...} and \@{...}) to display literals.
+ * Performs recursive resolution of both ${...} variable references and \@{...} math expressions.
  *
  * This helper encapsulates the common pattern used across schematic text components:
- * - While text contains ${...} or @{...} and depth < max:
+ * - While text contains ${...} or \@{...} and depth < max:
  *   - Expand variables via ExpandTextVars()
  *   - Evaluate math expressions via EXPRESSION_EVALUATOR
- * - Convert escape markers back to literals
+ *
+ * Escaped references are left as markers.
  *
  * @param aSource The source text containing variables and/or expressions
  * @param aResolver Function to resolve variable references
  * @param aDepth Current recursion depth (passed by reference, will be incremented)
- * @return Fully expanded and evaluated text with escape sequences cleaned up
+ * @return Expanded and evaluated text, escaped references still as markers
  */
 KICOMMON_API wxString ResolveTextVars( const wxString& aSource, const std::function<bool( wxString* )>* aResolver,
                                        int& aDepth );
@@ -173,6 +179,27 @@ KICOMMON_API wxString DescribeRef( const wxString& aRef );
  */
 KICOMMON_API const wxString ResolveUriByEnvVars( const wxString& aUri, const PROJECT* aProject );
 
+/**
+ * Expand text variables, environment variables and a leading '~' in a user-entered file path.
+ *
+ * The result may still be relative. Only "~" and "~/" are recognized, "~user" is left alone.
+ *
+ * @param aPath is the path as typed by the user or stored in a settings file.
+ * @param aProject is used to resolve project variables, may be null.
+ * @param aTextResolver resolves text variables in place of the project, may be null.
+ */
+KICOMMON_API wxString ExpandPathVariables( const wxString& aPath, const PROJECT* aProject,
+                                           const std::function<bool( wxString* )>* aTextResolver = nullptr );
+
+/**
+ * Expand a user-entered file path as ExpandPathVariables() does, then anchor a relative result at
+ * the project directory so it does not depend on the working directory.
+ *
+ * A path that still begins with an unresolved variable is returned as is.
+ */
+KICOMMON_API wxString ResolveProjectPath( const wxString& aPath, const PROJECT* aProject,
+                                          const std::function<bool( wxString* )>* aTextResolver = nullptr );
+
 
 /**
  * Checks if the operating system is explicitly unsupported and displays a disclaimer message box
@@ -180,6 +207,3 @@ KICOMMON_API const wxString ResolveUriByEnvVars( const wxString& aUri, const PRO
  * @return true if the operating system is unsupported
  */
 KICOMMON_API bool WarnUserIfOperatingSystemUnsupported();
-
-
-#endif // INCLUDE__COMMON_H_

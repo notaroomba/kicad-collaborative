@@ -42,9 +42,6 @@ public:
 
     bool CanReadBoard( const wxString& aFileName ) const override;
 
-    BOARD* LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                      const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
-
     long long GetLibraryTimestamp( const wxString& aLibraryPath ) const override
     {
         // No support for libraries....
@@ -53,6 +50,10 @@ public:
 
     PCB_IO_FABMASTER();
     ~PCB_IO_FABMASTER();
+
+protected:
+    void loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                    const std::map<std::string, UTF8>* aProperties = nullptr, PROJECT* aProject = nullptr ) override;
 
 private:
     FABMASTER              m_fabmaster;

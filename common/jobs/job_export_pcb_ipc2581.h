@@ -22,9 +22,9 @@
 #define JOB_EXPORT_PCB_IPC2581_H
 
 #include <kicommon.h>
-#include "job.h"
+#include "job_export_pcb_fab.h"
 
-class KICOMMON_API JOB_EXPORT_PCB_IPC2581 : public JOB
+class KICOMMON_API JOB_EXPORT_PCB_IPC2581 : public JOB_EXPORT_PCB_FAB
 {
 public:
     JOB_EXPORT_PCB_IPC2581();
@@ -33,11 +33,8 @@ public:
 
     void SetDefaultOutputPath( const wxString& aReferenceName );
 
-    enum class IPC2581_UNITS
-    {
-        INCH,
-        MM
-    };
+    void FromJson( const nlohmann::json& aJson ) override;
+    bool SupportsDataSet( DATA_SET aDataSet ) const override;
 
     enum class IPC2581_VERSION
     {
@@ -45,37 +42,24 @@ public:
         C
     };
 
-public:
-    wxString        m_filename;
-    wxString        m_drawingSheet;
-    wxString        m_variant;
+    enum class REF_DES
+    {
+        INCLUDE,
+        OMIT
+    };
 
-    IPC2581_UNITS   m_units;
+public:
     IPC2581_VERSION m_version;
-    int             m_precision;
 
     bool            m_compress;
 
     wxString        m_colInternalId;
-    wxString        m_colMfgPn;
     wxString        m_colMfg;
     wxString        m_colDistPn;
     wxString        m_colDist;
     wxString        m_bomRev;
 
-    /// Table 4 function mode token such as FABRICATION  An empty value keeps the
-    /// content that KiCad wrote before
-    wxString        m_mode;
-
-    /// Table 4 section key that replaces the optional sections of the function mode
-    /// An empty value lets the function mode select them
-    wxString        m_sections;
-
-    /// Set to include or to anonymize  An anonymous name keeps the connections
-    wxString        m_netNamePolicy;
-
-    /// Set to include or to omit
-    wxString        m_refDesPolicy;
+    REF_DES         m_refDes = REF_DES::INCLUDE;
 };
 
 #endif

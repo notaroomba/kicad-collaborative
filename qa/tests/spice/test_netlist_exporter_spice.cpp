@@ -580,7 +580,7 @@ BOOST_AUTO_TEST_CASE( CollectUnitPinMaps )
     SCH_SYMBOL*    primary = findPrimaryUnit( m_schematic.get(), wxS( "U1" ), primarySheet );
     BOOST_REQUIRE( primary );
 
-    NETLIST_EXPORTER_SPICE    exporter( m_schematic.get() );
+    NETLIST_EXPORTER_SPICE    exporter( m_schematic.get(), nullptr );
     std::vector<UNIT_PIN_MAP> maps = NETLIST_EXPORTER_SPICE_PROBE::CollectUnitPinMaps(
             exporter, *primary, primarySheet, wxEmptyString );
 
@@ -616,7 +616,7 @@ BOOST_AUTO_TEST_CASE( DecompositionReadsRepeat )
     SCH_SYMBOL*    primary = findPrimaryUnit( m_schematic.get(), wxS( "U1" ), primarySheet );
     BOOST_REQUIRE( primary );
 
-    NETLIST_EXPORTER_SPICE exporter( m_schematic.get() );
+    NETLIST_EXPORTER_SPICE exporter( m_schematic.get(), nullptr );
     SIM_DECOMPOSITION      dec = NETLIST_EXPORTER_SPICE_PROBE::GetDecomposition(
             exporter, *primary, primarySheet, wxEmptyString );
 
@@ -672,8 +672,7 @@ BOOST_AUTO_TEST_CASE( WholeDeviceGoldenNetlist )
             {
                 wxFFile goldenFile( goldenPath, "rt" );
                 BOOST_REQUIRE_MESSAGE( goldenFile.IsOpened(),
-                                       "Missing golden netlist; regenerate with "
-                                       "KICAD_RECORD_GOLDEN=1" );
+                                       "Missing golden netlist; regenerate with KICAD_RECORD_GOLDEN=1" );
 
                 wxString golden;
                 goldenFile.ReadAll( &golden );
@@ -708,7 +707,7 @@ BOOST_AUTO_TEST_CASE( RepeatedExportIsDeterministic )
         {
             LoadSchematic( SchematicQAPath( fixture ) );
 
-            NETLIST_EXPORTER_SPICE exporter( m_schematic.get() );
+            NETLIST_EXPORTER_SPICE exporter( m_schematic.get(), nullptr );
 
             auto exportOnce =
                     [&]() -> wxString
@@ -734,9 +733,39 @@ BOOST_AUTO_TEST_CASE( RepeatedExportIsDeterministic )
             BOOST_TEST_INFO( "First export:\n" << first );
             BOOST_TEST_INFO( "Second export:\n" << second );
             BOOST_CHECK_EQUAL( first, second );
-
-            Cleanup();
         }
+
+        Cleanup();
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( ExportedFieldsSurviveSchematicReset )
+{
+    LOCALE_IO dummy;
+    LoadSchematic( SchematicQAPath( wxS( "opamp" ) ) );
+
+    NETLIST_EXPORTER_SPICE exporter( m_schematic.get(), nullptr );
+    WX_STRING_REPORTER reporter;
+    BOOST_REQUIRE( exporter.ReadSchematicAndLibraries( GetNetlistOptions(), reporter ) );
+    BOOST_REQUIRE( !exporter.GetItems().empty() );
+
+    std::vector<wxString> shownFields;
+
+    for( const SPICE_ITEM& item : exporter.GetItems() )
+    {
+        for( const SCH_FIELD& field : item.fields )
+            shownFields.push_back( field.GetShownText( INTERNAL ) );
+    }
+
+    BOOST_REQUIRE( !shownFields.empty() );
+    m_schematic->Reset();
+    size_t index = 0;
+
+    for( const SPICE_ITEM& item : exporter.GetItems() )
+    {
+        for( const SCH_FIELD& field : item.fields )
+            BOOST_CHECK_EQUAL( field.GetShownText( INTERNAL ), shownFields[index++] );
     }
 }
 

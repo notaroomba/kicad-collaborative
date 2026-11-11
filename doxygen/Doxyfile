@@ -996,7 +996,6 @@ WARN_LOGFILE           =
 # Note: If this tag is empty the current directory is searched.
 
 INPUT                  = ../3d-viewer \
-                         ../bitmap2component \
                          ../common \
                          ../cvpcb \
                          ../eeschema \
@@ -1087,6 +1086,7 @@ EXCLUDE_PATTERNS       = */resources/bitmaps_png/*.md \
                          */pcb_calculator/attenuators/*.md \
                          */eeschema/*.md \
                          */eeschema/dialogs/*.md \
+                         */pcbnew/*.md \
                          */pcbnew/dialogs/*.md \
                          */qa/data/* \
                          */libs/kiplatform/gtk/wayland-pointer-constraints-unstable-v1.h \

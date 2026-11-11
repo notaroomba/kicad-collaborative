@@ -26,6 +26,7 @@
 
 #include <advanced_config.h>
 #include <api/api_handler.h>
+#include <api/api_task_scheduler.h>
 #include <api/api_utils.h> // traceApi
 #include <api/api_server.h>
 #include <kiid.h>
@@ -47,7 +48,7 @@ using kiapi::common::ApiRequest, kiapi::common::ApiResponse, kiapi::common::ApiS
 wxString KICAD_API_SERVER::s_logFileName = "api.log";
 
 
-wxDEFINE_EVENT( API_REQUEST_EVENT, wxCommandEvent );
+wxDEFINE_EVENT( API_REQUEST_EVENT, KICAD_API_REQUEST_EVENT );
 
 
 KICAD_API_SERVER::KICAD_API_SERVER( bool aAutoStart ) :
@@ -212,13 +213,33 @@ bool KICAD_API_SERVER::Running() const
 void KICAD_API_SERVER::RegisterHandler( API_HANDLER* aHandler )
 {
     wxCHECK( aHandler, /* void */ );
+
+    aHandler->setApiServer( this );
     m_handlers.insert( aHandler );
 }
 
 
 void KICAD_API_SERVER::DeregisterHandler( API_HANDLER* aHandler )
 {
+    if( aHandler )
+        aHandler->setApiServer( nullptr );
+
     m_handlers.erase( aHandler );
+}
+
+
+void KICAD_API_SERVER::NotifyNetSettingsChanged()
+{
+    for( API_HANDLER* handler : m_handlers )
+        handler->onNetSettingsChanged();
+}
+
+
+void KICAD_API_SERVER::NotifyDocumentRenamed( kiapi::common::types::DocumentType aType,
+                                              const wxString& aOldPath, const wxString& aNewPath )
+{
+    if( m_renameListener )
+        m_renameListener( aType, aOldPath, aNewPath );
 }
 
 
@@ -240,7 +261,7 @@ void KICAD_API_SERVER::onApiRequest( std::string* aRequest )
         return;
     }
 
-    wxCommandEvent* evt = new wxCommandEvent( API_REQUEST_EVENT );
+    KICAD_API_REQUEST_EVENT* evt = new KICAD_API_REQUEST_EVENT( API_REQUEST_EVENT );
 
     // We don't actually need write access to this string, but client data is non-const
     evt->SetClientData( static_cast<void*>( aRequest ) );
@@ -294,17 +315,60 @@ void KICAD_API_SERVER::handleApiRequestString( std::string& aRequestString )
         return;
     }
 
+    // Only allow-listed API requests can be handled while a task is running; anything else
+    // is assumed to possible mess with state that the task might be depending on not changing.
+    if( request.has_message() && API_TASK_SCHEDULER::Instance().AnyTaskRunning() )
+    {
+        std::string requestType;
+
+        if( google::protobuf::Any::ParseAnyTypeUrl( request.message().type_url(), &requestType ) )
+        {
+            bool typeHandled = false;
+            bool allowedDuringTask = false;
+
+            for( API_HANDLER* handler : m_handlers )
+            {
+                if( handler->CanHandle( requestType ) )
+                {
+                    typeHandled = true;
+                    allowedDuringTask = handler->AllowsDuringTask( requestType );
+                    break;
+                }
+            }
+
+            if( typeHandled && !allowedDuringTask )
+            {
+                ApiResponse error;
+                error.mutable_header()->set_kicad_token( m_token );
+                error.mutable_status()->set_status( ApiStatusCode::AS_BUSY );
+                error.mutable_status()->set_error_message(
+                        "a task is running; only task status and result queries are available until it completes" );
+                m_server->Reply( error.SerializeAsString() );
+
+                if( ADVANCED_CFG::GetCfg().m_EnableAPILogging )
+                    log( "Response (ERROR): " + error.Utf8DebugString() );
+
+                return;
+            }
+        }
+    }
+
     API_RESULT result;
+    bool notifyNetSettings = false;
 
     for( API_HANDLER* handler : m_handlers )
     {
         result = handler->Handle( request );
+        notifyNetSettings |= handler->clearNetSettingsNotification();
 
         if( result.has_value() )
             break;
         else if( result.error().status() != ApiStatusCode::AS_UNHANDLED )
             break;
     }
+
+    if( notifyNetSettings )
+        NotifyNetSettingsChanged();
 
     // Note: at the point we call Reply(), we no longer own requestString.
 
@@ -324,8 +388,11 @@ void KICAD_API_SERVER::handleApiRequestString( std::string& aRequestString )
 
         if( result.error().status() == ApiStatusCode::AS_UNHANDLED )
         {
-            std::string type = "<unparseable Any>";
-            google::protobuf::Any::ParseAnyTypeUrl( request.message().type_url(), &type );
+            std::string type;
+
+            if( !google::protobuf::Any::ParseAnyTypeUrl( request.message().type_url(), &type ) )
+                type = "<unparseable Any>";
+
             std::string msg = fmt::format( "no handler available for request of type {}", type );
             error.mutable_status()->set_error_message( msg );
         }

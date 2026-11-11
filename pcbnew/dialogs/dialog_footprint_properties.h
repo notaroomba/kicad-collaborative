@@ -56,7 +56,7 @@ public:
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
 
-    ///< @return the value depending on the way the dialog was closed.
+    /// @return the value depending on the way the dialog was closed.
     enum FP_PROPS_RETVALUE GetReturnValue() { return m_returnValue; }
 
 private:
@@ -67,6 +67,7 @@ private:
     void ChangeFootprint( wxCommandEvent&  ) override;
     void OnAddField( wxCommandEvent&  ) override;
     void OnDeleteField( wxCommandEvent&  ) override;
+    void OnGridCellChanging( wxGridEvent& aEvent );
     void OnUpdateUI( wxUpdateUIEvent&  ) override;
     void OnPageChanging( wxNotebookEvent& event ) override;
     void OnCombobox( wxCommandEvent& event ) override;
@@ -84,6 +85,7 @@ private:
     UNIT_BINDER                      m_posX;
     UNIT_BINDER                      m_posY;
     UNIT_BINDER                      m_orientation;
+    UNIT_BINDER                      m_height;
 
     UNIT_BINDER                      m_netClearance;
     UNIT_BINDER                      m_solderMask;

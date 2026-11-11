@@ -142,10 +142,10 @@ wxString LayerName( int aLayer )
     case LAYER_DRC_ERROR:               return _( "DRC errors" );
     case LAYER_DRC_EXCLUSION:           return _( "DRC exclusions" );
     case LAYER_MARKER_SHADOWS:          return _( "DRC marker shadows" );
-    case LAYER_DRC_HIGHLIGHTED:          return _( "DRC highlighted" );
+    case LAYER_DRC_HIGHLIGHTED:         return _( "DRC highlighted" );
     case LAYER_ANCHOR:                  return _( "Anchors" );
     case LAYER_POINTS:                  return _( "Points" );
-    case LAYER_GRIDITEMS:               return _( "Grid items" );
+    case LAYER_SUBGRIDS:                return _( "Grids" );
     case LAYER_VIA_STITCHING:           return _( "Via stitching" );
     case LAYER_DRAWINGSHEET:            return _( "Drawing sheet" );
     case LAYER_PAGE_LIMITS:             return _( "Page limits" );
@@ -161,6 +161,9 @@ wxString LayerName( int aLayer )
     case LAYER_CONSTRAINT_UNDER:        return _( "Under-constrained tint" );
     case LAYER_CONSTRAINT_WELL:         return _( "Fully constrained tint" );
     case LAYER_CONSTRAINT_OVER:         return _( "Over-constrained tint" );
+    case LAYER_ROUTER_PREVIEW_SHADOW:   return _( "Router clearance shadow" );
+    case LAYER_ROUTER_PREVIEW_COLLISION: return _( "Router collision marker" );
+    case LAYER_OUTSIDE_GROUP_OPACITY: return _( "Items outside group opacity" );
     case LAYER_BOARD_OUTLINE_AREA:      return _( "Board outline area" );
     case NETNAMES_LAYER_ID_START:       return _( "Track net names" );
     case LAYER_PAD_NETNAMES:            return _( "Pad net names" );
@@ -339,8 +342,13 @@ PCB_LAYER_ID Map3DLayerToPCBLayer( int aLayer )
     case LAYER_3D_USER_43:           return User_43;
     case LAYER_3D_USER_44:           return User_44;
     case LAYER_3D_USER_45:           return User_45;
-    default:               return UNDEFINED_LAYER;
+    default:                         break;
     }
+
+    if( aLayer >= LAYER_3D_COPPER_INNER_1 && aLayer <= LAYER_3D_COPPER_INNER_30 )
+        return static_cast<PCB_LAYER_ID>( In1_Cu + ( aLayer - LAYER_3D_COPPER_INNER_1 ) * 2 );
+
+    return UNDEFINED_LAYER;
 }
 
 
@@ -409,6 +417,11 @@ int MapPCBLayerTo3DLayer( PCB_LAYER_ID aLayer )
     case User_43:   return LAYER_3D_USER_43;
     case User_44:   return LAYER_3D_USER_44;
     case User_45:   return LAYER_3D_USER_45;
-    default:        return UNDEFINED_LAYER;
+    default:        break;
     }
+
+    if( IsInnerCopperLayer( aLayer ) )
+        return LAYER_3D_COPPER_INNER_1 + ( aLayer - In1_Cu ) / 2;
+
+    return UNDEFINED_LAYER;
 }

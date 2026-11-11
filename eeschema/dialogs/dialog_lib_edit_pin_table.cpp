@@ -155,7 +155,7 @@ public:
                     return wxGetTranslation( UNITS_ALL );
             }
 
-            if( aPin.GetUnit() == 0 )
+            if( aPin.GetUnit() == ALL_UNITS )
                 return wxGetTranslation( UNITS_ALL );
             else
                 return aPin.GetUnitDisplayName( aPin.GetUnit(), true );
@@ -167,7 +167,7 @@ public:
                     return wxGetTranslation( UNITS_ALL );
             }
 
-            if( aPin.GetBodyStyle() == 0 )
+            if( aPin.GetBodyStyle() == ALL_BODY_STYLES )
                 return wxGetTranslation( DEMORGAN_ALL );
             else
                 return aPin.GetBodyStyleDescription( aPin.GetBodyStyle(), true );
@@ -198,19 +198,19 @@ public:
 
         case COL_TYPE:
             if( PinTypeNames().Index( aValue, false ) != wxNOT_FOUND )
-                aPin.SetType( (ELECTRICAL_PINTYPE) PinTypeNames().Index( aValue ) );
+                aPin.SetType( (ELECTRICAL_PINTYPE) PinTypeNames().Index( aValue, false ) );
 
             break;
 
         case COL_SHAPE:
             if( PinShapeNames().Index( aValue, false ) != wxNOT_FOUND )
-                aPin.SetShape( (GRAPHIC_PINSHAPE) PinShapeNames().Index( aValue ) );
+                aPin.SetShape( (GRAPHIC_PINSHAPE) PinShapeNames().Index( aValue, false ) );
 
             break;
 
         case COL_ORIENTATION:
             if( PinOrientationNames().Index( aValue, false ) != wxNOT_FOUND )
-                aPin.SetOrientation( (PIN_ORIENTATION) PinOrientationNames().Index( aValue ) );
+                aPin.SetOrientation( (PIN_ORIENTATION) PinOrientationNames().Index( aValue, false ) );
 
             break;
 
@@ -330,13 +330,11 @@ void getSelectedArea( WX_GRID* aGrid, int* aRowStart, int* aRowCount )
 class PIN_TABLE_DATA_MODEL : public WX_GRID_TABLE_BASE
 {
 public:
-    PIN_TABLE_DATA_MODEL( SYMBOL_EDIT_FRAME* aFrame,
-                          DIALOG_LIB_EDIT_PIN_TABLE* aPinTable,
-                          LIB_SYMBOL* aSymbol,
+    PIN_TABLE_DATA_MODEL( SYMBOL_EDIT_FRAME* aFrame, DIALOG_LIB_EDIT_PIN_TABLE* aPinTable, LIB_SYMBOL* aSymbol,
                           const std::vector<SCH_PIN*>& aOrigSelectedPins ) :
             m_frame( aFrame ),
-            m_unitFilter( -1 ),
-            m_bodyStyleFilter( -1 ),
+            m_unitFilter( ALL_UNITS ),
+            m_bodyStyleFilter( ALL_BODY_STYLES ),
             m_filterBySelection( false ),
             m_edited( false ),
             m_pinTable( aPinTable ),
@@ -683,10 +681,14 @@ public:
 
         for( SCH_PIN* pin : aPins )
         {
-            const bool includedByUnit = m_unitFilter <= 0 || pin->GetUnit() == 0 || pin->GetUnit() == m_unitFilter;
-            const bool includedByBodyStyle =
-                    m_bodyStyleFilter <= 0 || pin->GetBodyStyle() == 0 || pin->GetBodyStyle() == m_bodyStyleFilter;
-            const bool includedBySelection = !m_filterBySelection || pinIsInEditorSelection( pin );
+            const bool includedByUnit = m_unitFilter == ALL_UNITS
+                                            || pin->GetUnit() == ALL_UNITS
+                                            || pin->GetUnit() == m_unitFilter;
+            const bool includedByBodyStyle = m_bodyStyleFilter == ALL_BODY_STYLES
+                                                || pin->GetBodyStyle() == ALL_BODY_STYLES
+                                                || pin->GetBodyStyle() == m_bodyStyleFilter;
+            const bool includedBySelection = !m_filterBySelection
+                                                || pinIsInEditorSelection( pin );
 
             if( includedByUnit && includedByBodyStyle && includedBySelection )
             {
@@ -765,6 +767,8 @@ public:
             wxGridTableMessage msg( this, wxGRIDTABLE_NOTIFY_ROWS_APPENDED, 1 );
             GetView()->ProcessTableMessage( msg );
         }
+
+        m_edited = true;
     }
 
     std::vector<SCH_PIN*> RemoveRow( int aRow )
@@ -779,6 +783,7 @@ public:
             GetView()->ProcessTableMessage( msg );
         }
 
+        m_edited = true;
         return removedRow;
     }
 
@@ -799,8 +804,8 @@ private:
     // data model is a 2D vector.  If we're in the single pin case, each row's SCH_PINs
     // contains only a single pin.
     std::vector<std::vector<SCH_PIN*>> m_rows;
-    int                                m_unitFilter;      // 0 or -1 to show pins for all units
-    int                                m_bodyStyleFilter; // 0 or -1 to show all body styles
+    int                                m_unitFilter;         // 0 to show pins for all units
+    int                                m_bodyStyleFilter;    // 0 to show all body styles
     bool                               m_filterBySelection;
 
     bool                               m_edited;
@@ -969,8 +974,12 @@ DIALOG_LIB_EDIT_PIN_TABLE::DIALOG_LIB_EDIT_PIN_TABLE( SYMBOL_EDIT_FRAME* parent,
 
     SetupStandardButtons();
 
-    if( !parent->IsSymbolEditable() || parent->IsSymbolAlias() )
+    if( !parent->IsSymbolGraphicallyEditable() )
     {
+        // Export is OK, but Import is just going to produce frustration
+        m_btnImportFromClipboard->Enable( false );
+        m_btnImportFromFile->Enable( false );
+
         m_ButtonsCancel->SetDefault();
         m_ButtonsOK->SetLabel( _( "Read Only" ) );
         m_ButtonsOK->Enable( false );
@@ -1190,6 +1199,10 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnCellSelected( wxGridEvent& event )
         m_editFrame->FocusOnItem( pin );
         m_editFrame->GetCanvas()->Refresh();
     }
+
+    // Let WX_GRID run its editor-positioning handler
+    if( event.GetEventType() == wxEVT_GRID_EDITOR_SHOWN )
+        event.Skip();
 }
 
 
@@ -1277,7 +1290,7 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnFilterCheckBox( wxCommandEvent& event )
         }
         else
         {
-            m_dataModel->SetBodyStyleFilter( -1 );
+            m_dataModel->SetBodyStyleFilter( ALL_BODY_STYLES );
             m_bodyStyleFilter->SetSelection( -1 );
         }
     }
@@ -1295,12 +1308,12 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnFilterChoice( wxCommandEvent& event )
     if( event.GetEventObject() == m_unitFilter )
     {
         m_cbFilterByUnit->SetValue( true );
-        m_dataModel->SetUnitFilter( m_unitFilter->GetSelection() );
+        m_dataModel->SetUnitFilter( std::max( m_unitFilter->GetSelection(), ALL_UNITS ) );
     }
     else if( event.GetEventObject() == m_bodyStyleFilter )
     {
         m_cbFilterByBodyStyle->SetValue( true );
-        m_dataModel->SetBodyStyleFilter( m_bodyStyleFilter->GetSelection() );
+        m_dataModel->SetBodyStyleFilter( std::max( m_bodyStyleFilter->GetSelection(), ALL_BODY_STYLES ) );
     }
 
     OnRebuildRows( event );
@@ -1309,6 +1322,9 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnFilterChoice( wxCommandEvent& event )
 
 void DIALOG_LIB_EDIT_PIN_TABLE::OnImportButtonClick( wxCommandEvent& event )
 {
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
     bool fromFile = event.GetEventObject() == m_btnImportFromFile;
     bool replaceAll = m_rbReplaceAll->GetValue();
 
@@ -1316,20 +1332,23 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnImportButtonClick( wxCommandEvent& event )
 
     PIN_INFO_FORMATTER fmt( *m_editFrame, false, PIN_INFO_FORMATTER::BOOL_FORMAT::TRUE_FALSE, reporter );
 
-    auto updateFn = [&]( SCH_PIN& aPin, const wxString& aVal, COL_ORDER aCol )
-    {
-        fmt.UpdatePin( aPin, aVal, aCol, *m_symbol );
-    };
+    auto updateFn =
+            [&]( SCH_PIN& aPin, const wxString& aVal, COL_ORDER aCol )
+            {
+                fmt.UpdatePin( aPin, aVal, aCol, *m_symbol );
+            };
 
-    auto createFn = []( LIB_SYMBOL& aSym )
-    {
-        return std::make_unique<SCH_PIN>( &aSym );
-    };
+    auto createFn =
+            []( LIB_SYMBOL& aSym )
+            {
+                return std::make_unique<SCH_PIN>( &aSym );
+            };
 
-    auto colLabelToEnumFn = []( const wxString& aStr ) -> COL_ORDER
-    {
-        return GetColTypeForString( aStr );
-    };
+    auto colLabelToEnumFn =
+            []( const wxString& aStr ) -> COL_ORDER
+            {
+                return GetColTypeForString( aStr );
+            };
 
     std::optional<std::vector<std::vector<wxString>>> csvData = ReadTableFromFileOrClipboard( *m_editFrame, fromFile );
 
@@ -1402,6 +1421,7 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnImportButtonClick( wxCommandEvent& event )
 
     m_cbGroup->SetValue( false );
     m_dataModel->RebuildRows( m_pins, false, false );
+    m_modified = true;
 
     updateSummary();
 }
@@ -1409,6 +1429,9 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnImportButtonClick( wxCommandEvent& event )
 
 void DIALOG_LIB_EDIT_PIN_TABLE::OnExportButtonClick( wxCommandEvent& event )
 {
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
     bool toFile = event.GetEventObject() == m_btnExportToFile;
     bool onlyShown = m_rbExportOnlyShownPins->GetValue();
 
@@ -1575,7 +1598,7 @@ void DIALOG_LIB_EDIT_PIN_TABLE::OnClose( wxCloseEvent& event )
 
     int retval = wxID_CANCEL;
 
-    if( m_dataModel->IsEdited() )
+    if( ( m_modified || m_dataModel->IsEdited() ) && m_ButtonsOK->IsEnabled() )
     {
         if( HandleUnsavedChanges( this, _( "Save changes?" ),
                                   [&]() -> bool

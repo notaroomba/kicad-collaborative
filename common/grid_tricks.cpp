@@ -273,13 +273,13 @@ void GRID_TRICKS::onGridMotion( wxMouseEvent& aEvent )
     aEvent.Skip();
 
     wxPoint pt  = aEvent.GetPosition();
-    wxPoint pos = m_grid->CalcScrolledPosition( wxPoint( pt.x, pt.y ) );
+    wxPoint pos = m_grid->CalcUnscrolledPosition( wxPoint( pt.x, pt.y ) );
 
     int col = m_grid->XToCol( pos.x );
     int row = m_grid->YToRow( pos.y );
 
     // Empty tooltip if the cell doesn't exist or the column doesn't have tooltips
-    if( ( col == wxNOT_FOUND ) || ( row == wxNOT_FOUND ) || !m_tooltipEnabled[col] )
+    if( col < 0 || row < 0 || static_cast<size_t>( col ) >= m_tooltipEnabled.size() || !m_tooltipEnabled[col] )
     {
         m_grid->GetGridWindow()->SetToolTip( wxS( "" ) );
         return;
@@ -450,6 +450,7 @@ void GRID_TRICKS::showPopupMenu( wxMenu& menu, wxGridEvent& aEvent )
         wxTheClipboard->Close();
     }
 
+    appendPopupMenuItems( menu );
     m_grid->PopupMenu( &menu );
 }
 
@@ -952,7 +953,17 @@ void GRID_TRICKS::cutcopy( bool doCopy, bool doDelete )
                 // Do NOT allow clear of things that can take strings but aren't textEntries
                 // (ie: color swatches, textboxes, etc.).
                 if( isTextEntry( row, col ) && !isReadOnly( row, col ) )
+                {
+                    bool hadContent = !tbl->GetValue( row, col ).IsEmpty();
+
                     tbl->SetValue( row, col, wxEmptyString );
+
+                    if( hadContent )
+                    {
+                        wxGridEvent evt( m_grid->GetId(), wxEVT_GRID_CELL_CHANGED, m_grid, row, col );
+                        m_grid->GetEventHandler()->ProcessEvent( evt );
+                    }
+                }
             }
         }
     }

@@ -21,6 +21,7 @@
 #include "stroke_params_parser.h"
 
 #include <base_units.h>
+#include <bitmaps.h>
 #include <charconv>
 #include <string_utils.h>
 #include <render_settings.h>
@@ -457,6 +458,18 @@ void STROKE_PARAMS::GetMsgPanelInfo( UNITS_PROVIDER* aUnitsProvider,
 }
 
 
+bool STROKE_PARAMS::operator<(const STROKE_PARAMS& aOther) const
+{
+    if( m_width != aOther.m_width )
+        return m_width < aOther.m_width;
+
+    if( m_lineStyle != aOther.m_lineStyle )
+        return m_lineStyle < aOther.m_lineStyle;
+
+    return m_color < aOther.m_color;
+}
+
+
 void STROKE_PARAMS::Format( OUTPUTFORMATTER* aFormatter, const EDA_IU_SCALE& aIuScale ) const
 {
     wxASSERT( aFormatter != nullptr );
@@ -557,5 +570,3 @@ double STROKE_PARAMS_PARSER::parseDouble( const char* aText )
 
     return DSNLEXER::parseDouble();
 }
-
-

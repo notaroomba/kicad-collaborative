@@ -74,8 +74,7 @@ public:
 
     std::unique_ptr<BOARD_ITEM> Parse() override
     {
-        BOARD* board = PCB_IO_MGR::Load( m_fileType, m_fileName, nullptr, {}, nullptr, nullptr );
-        return std::unique_ptr<BOARD_ITEM>( board );
+        return PCB_IO_MGR::Load( m_fileType, m_fileName, {}, nullptr, nullptr );
     }
 
 private:

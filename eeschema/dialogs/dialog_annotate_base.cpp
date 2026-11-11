@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6a-dirty)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -41,10 +41,10 @@ DIALOG_ANNOTATE_BASE::DIALOG_ANNOTATE_BASE( wxWindow* parent, wxWindowID id, con
 
 	m_rbScope_Schematic = new wxRadioButton( sbSizer3->GetStaticBox(), wxID_ANY, _("Entire schematic"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP );
 	m_rbScope_Schematic->SetValue( true );
-	sbSizer3->Add( m_rbScope_Schematic, 0, wxLEFT|wxRIGHT, 5 );
+	sbSizer3->Add( m_rbScope_Schematic, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
 
 	m_rbScope_Sheet = new wxRadioButton( sbSizer3->GetStaticBox(), wxID_ANY, _("Current sheet only"), wxDefaultPosition, wxDefaultSize, 0 );
-	sbSizer3->Add( m_rbScope_Sheet, 0, wxLEFT|wxRIGHT, 5 );
+	sbSizer3->Add( m_rbScope_Sheet, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
 
 	m_rbScope_Selection = new wxRadioButton( sbSizer3->GetStaticBox(), wxID_ANY, _("Selection"), wxDefaultPosition, wxDefaultSize, 0 );
 	sbSizer3->Add( m_rbScope_Selection, 0, wxLEFT|wxRIGHT|wxBOTTOM, 5 );
@@ -91,10 +91,10 @@ DIALOG_ANNOTATE_BASE::DIALOG_ANNOTATE_BASE( wxWindow* parent, wxWindowID id, con
 	sbSizer4 = new wxStaticBoxSizer( new wxStaticBox( this, wxID_ANY, _("Options") ), wxVERTICAL );
 
 	m_rbKeep_Annotations = new wxRadioButton( sbSizer4->GetStaticBox(), wxID_ANY, _("Keep existing annotations"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP );
-	sbSizer4->Add( m_rbKeep_Annotations, 0, wxLEFT|wxRIGHT, 5 );
+	sbSizer4->Add( m_rbKeep_Annotations, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
 
 	m_rbReset_Annotations = new wxRadioButton( sbSizer4->GetStaticBox(), wxID_ANY, _("Reset existing annotations"), wxDefaultPosition, wxDefaultSize, 0 );
-	sbSizer4->Add( m_rbReset_Annotations, 0, wxLEFT|wxRIGHT, 5 );
+	sbSizer4->Add( m_rbReset_Annotations, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
 
 	m_checkRegroupUnits = new wxCheckBox( sbSizer4->GetStaticBox(), wxID_ANY, _("Regroup symbol units"), wxDefaultPosition, wxDefaultSize, 0 );
 	sbSizer4->Add( m_checkRegroupUnits, 0, wxALL|wxEXPAND, 5 );
@@ -131,6 +131,20 @@ DIALOG_ANNOTATE_BASE::DIALOG_ANNOTATE_BASE( wxWindow* parent, wxWindowID id, con
 
 
 	bupperSizer->Add( fgSizer1, 0, wxBOTTOM|wxEXPAND, 5 );
+
+	wxStaticBoxSizer* sbSizerReusedSheets;
+	sbSizerReusedSheets = new wxStaticBoxSizer( new wxStaticBox( this, wxID_ANY, _("Reused Sheets") ), wxVERTICAL );
+
+	m_rbSeparateInstances = new wxRadioButton( sbSizerReusedSheets->GetStaticBox(), wxID_ANY, _("Number each sheet instance separately (R1, R2 ...)"), wxDefaultPosition, wxDefaultSize, wxRB_GROUP );
+	sbSizerReusedSheets->Add( m_rbSeparateInstances, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
+
+	m_rbSuffixInstances = new wxRadioButton( sbSizerReusedSheets->GetStaticBox(), wxID_ANY, _("Number each file once and add the sheet's reference suffix (R1_M1, R1_M2 ...)"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_rbSuffixInstances->SetToolTip( _("Repeated instances of one sheet file need distinct full reference suffixes. Set Reference Suffix in Sheet Properties.") );
+
+	sbSizerReusedSheets->Add( m_rbSuffixInstances, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
+
+
+	bupperSizer->Add( sbSizerReusedSheets, 0, wxALL|wxEXPAND, 5 );
 
 	m_MessageWindow = new WX_HTML_REPORT_PANEL( this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL );
 	m_MessageWindow->SetMinSize( wxSize( -1,120 ) );

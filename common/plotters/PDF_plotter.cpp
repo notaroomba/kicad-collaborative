@@ -50,6 +50,7 @@
 
 #include <plotters/pdf_stroke_font.h>
 #include <plotters/pdf_outline_font.h>
+#include <plotters/pdf_unicode.h>
 #include <plotters/plotters_pslike.h>
 #include <geometry/shape_rect.h>
 #include <text_eval/text_eval_wrapper.h>
@@ -68,8 +69,8 @@ std::string PDF_PLOTTER::encodeStringForPlotter( const wxString& aText )
 {
     // returns a string compatible with PDF string convention from a unicode string.
     // if the initial text is only ASCII7, return the text between ( and ) for a good readability
-    // if the initial text is no ASCII7, return the text between < and >
-    // and encoded using 16 bits hexa (4 digits) by wide char (unicode 16)
+    // if the initial text contains non ASCII7, return the text between < and > encoded using
+    // UTF-16 BE (big-endian).
     std::string result;
 
     // Is aText only ASCII7 ?
@@ -88,22 +89,25 @@ std::string PDF_PLOTTER::encodeStringForPlotter( const wxString& aText )
     {
         result = '(';
 
-        for( unsigned ii = 0; ii < aText.Len(); ii++ )
+        for( size_t ii = 0; ii < aText.Len(); ii++ )
         {
             unsigned int code = aText[ii];
 
-            // These characters must be escaped
-            switch( code )
+            if( code == '(' || code == ')' || code == '\\' )
             {
-            case '(':
-            case ')':
-            case '\\':
+                // These characters must be escaped.
                 result += '\\';
-                KI_FALLTHROUGH;
-
-            default:
-                result += code;
-                break;
+                result += static_cast<char>( code );
+            }
+            else if( code < 0x20 )
+            {
+                // Control characters (inc. null) are not illegal in principle,
+                // but we use octal escapes for them to avoid confusing parsers.
+                result += fmt::format( "\\{:03o}", code );
+            }
+            else
+            {
+                result += static_cast<char>( code );
             }
         }
 
@@ -111,12 +115,13 @@ std::string PDF_PLOTTER::encodeStringForPlotter( const wxString& aText )
     }
     else
     {
+        // UTF-16BE text string with BOM.
         result = "<FEFF";
 
         for( size_t ii = 0; ii < aText.Len(); ii++ )
         {
             unsigned int code = aText[ii];
-            result += fmt::format("{:04X}", code);
+            result += FormatPdfUtf16Hex( static_cast<uint32_t>( code ) );
         }
 
         result += '>';
@@ -234,22 +239,37 @@ void PDF_PLOTTER::SetCurrentLineWidth( int aWidth, void* aData )
 }
 
 
+int PDF_PLOTTER::getExtGStateHandleForAlpha( double aAlpha )
+{
+    auto [it, inserted] = m_alphaToExtGStateHandles.try_emplace( aAlpha );
+
+    if( inserted )
+        it->second = allocPdfObject();
+
+    return it->second;
+}
+
+
 void PDF_PLOTTER::emitSetRGBColor( double r, double g, double b, double a )
 {
     wxASSERT( m_workFile );
 
-    // PDF treats all colors as opaque, so the best we can do with alpha is generate an
-    // appropriate blended color assuming white paper.
-    if( a < 1.0 )
-    {
-        r = ( r * a ) + ( 1 - a );
-        g = ( g * a ) + ( 1 - a );
-        b = ( b * a ) + ( 1 - a );
-    }
-
     fmt::println( m_workFile, "{} {} {} rg {} {} {} RG",
                   encodeDoubleForPlotter( r ), encodeDoubleForPlotter( g ), encodeDoubleForPlotter( b ),
                   encodeDoubleForPlotter( r ), encodeDoubleForPlotter( g ), encodeDoubleForPlotter( b ) );
+
+    // PDF sets opacity through the graphics state
+    // It is 'sticky' and remains in effect until changed by another graphics state operator
+    // So change it if it differs from the current alpha value
+    if( a != m_currentAlpha )
+    {
+        const int extGStateHandle = getExtGStateHandleForAlpha( a );
+
+        // Apply that ExtGState to this context.
+        fmt::println( m_workFile, "/GS{} gs", extGStateHandle );
+
+        m_currentAlpha = a;
+    }
 }
 
 
@@ -374,14 +394,17 @@ void PDF_PLOTTER::Circle( const VECTOR2I& pos, int diametre, FILL_T aFill, int w
 
     SetCurrentLineWidth( width );
 
-    VECTOR2D pos_dev = userToDeviceCoordinates( pos );
-    double   radius = userToDeviceSize( diametre / 2.0 );
+    VECTOR2D  pos_dev = userToDeviceCoordinates( pos );
+    const int effectiveWidth = GetCurrentLineWidth();
+    double    radius = userToDeviceSize( diametre / 2.0 );
+
+    char paintOp = aFill == FILL_T::NO_FILL ? 's' : ( width == 0 ? 'f' : 'b' );
 
     // If diameter is less than width, switch to filled mode
-    if( aFill == FILL_T::NO_FILL && diametre < GetCurrentLineWidth() )
+    if( aFill == FILL_T::NO_FILL && diametre < effectiveWidth )
     {
-        aFill = FILL_T::FILLED_SHAPE;
-        radius = userToDeviceSize( ( diametre / 2.0 ) + ( width / 2.0 ) );
+        radius = userToDeviceSize( ( diametre / 2.0 ) + ( effectiveWidth / 2.0 ) );
+        paintOp = 'f';
     }
 
     /* OK. Here's a trick. PDF doesn't support circles or circular angles, that's
@@ -417,7 +440,7 @@ void PDF_PLOTTER::Circle( const VECTOR2I& pos, int diametre, FILL_T aFill, int w
                   encodeDoubleForPlotter( pos_dev.x - radius ), encodeDoubleForPlotter( pos_dev.y - magic ),
                   encodeDoubleForPlotter( pos_dev.x - radius ), encodeDoubleForPlotter( pos_dev.y ),
 
-                  aFill == FILL_T::NO_FILL ? 's' : 'b' );
+                  paintOp );
 }
 
 
@@ -535,6 +558,9 @@ void PDF_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
 
 void PDF_PLOTTER::PlotPoly( const SHAPE_LINE_CHAIN& aLineChain, FILL_T aFill, int aWidth, void* aData )
 {
+    if( aFill == FILL_T::NO_FILL && aWidth == 0 )
+        return;
+
     SetCurrentLineWidth( aWidth );
 
     std::set<size_t>      handledArcs;
@@ -618,7 +644,7 @@ void PDF_PLOTTER::PenTo( const VECTOR2I& pos, char plume )
 }
 
 
-void PDF_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor )
+void PDF_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor, double aAlpha )
 {
     wxASSERT( m_workFile );
     VECTOR2I pix_size( aImage.GetWidth(), aImage.GetHeight() );
@@ -697,6 +723,10 @@ void PDF_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double
                   encodeDoubleForPlotter( dev_start.x ),
                   encodeDoubleForPlotter( dev_start.y ) );
 
+    // Apply any global alpha setting for this image (on top of the image's own alpha)
+    if( m_currentAlpha != aAlpha )
+        fmt::println( m_workFile, "/GS{} gs", getExtGStateHandleForAlpha( aAlpha ) );
+
     fmt::println( m_workFile, "/Im{} Do", imgHandle );
     fmt::println( m_workFile, "Q" );
 }
@@ -704,8 +734,7 @@ void PDF_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double
 
 int PDF_PLOTTER::allocPdfObject()
 {
-    m_xrefTable.push_back( 0 );
-    return m_xrefTable.size() - 1;
+    return m_xrefTable.Allocate();
 }
 
 
@@ -714,10 +743,13 @@ int PDF_PLOTTER::startPdfObject( int aHandle )
     wxASSERT( m_outputFile );
     wxASSERT( !m_workFile );
 
-    if( aHandle < 0 )
+    if( !m_xrefTable.IsValid( aHandle ) )
+    {
+        wxASSERT_MSG( aHandle < 0, "PDF object handle given was not previously allocated" );
         aHandle = allocPdfObject();
+    }
 
-    m_xrefTable[aHandle] = ftell( m_outputFile );
+    m_xrefTable.SetOffset( aHandle, ftell( m_outputFile ) );
     fmt::println( m_outputFile, "{} 0 obj", aHandle );
     return aHandle;
 }
@@ -854,6 +886,9 @@ void PDF_PLOTTER::StartPage( const wxString& aPageNumber, const wxString& aPageN
     // will be initialized to a the right value in pdf file by the first item to plot
     m_currentPenWidth = 0;
 
+    // Each page content stream starts with a default graphics state
+    m_currentAlpha = 1.0;
+
     if( !m_3dExportMode )
     {
         // Open the content stream; the page object will go later
@@ -964,7 +999,8 @@ void PDF_PLOTTER::ClosePage()
     auto iuToPdfUserSpace =
             [&]( const VECTOR2I& aCoord ) -> VECTOR2D
             {
-                VECTOR2D pos = VECTOR2D( aCoord ) * PTsPERMIL / ( m_IUsPerDecimil * 10 );
+                VECTOR2D pos = ( aCoord - m_plotOffset ) * m_plotScale;
+                pos *= PTsPERMIL / ( m_IUsPerDecimil * 10 );
 
                 // PDF y=0 is at bottom of page, invert coordinate
                 VECTOR2D retval( pos.x, psPaperSize.y - pos.y );
@@ -1065,11 +1101,13 @@ void PDF_PLOTTER::ClosePage()
                 "/Resources <<\n"
                 "    /ProcSet [/PDF /Text /ImageC /ImageB]\n"
                 "    /Font {} 0 R\n"
-                "    /XObject {} 0 R >>\n"
+                "    /XObject {} 0 R\n"
+                "    /ExtGState {} 0 R >>\n"
                 "/MediaBox [0 0 {} {}]\n",
                 m_pageTreeHandle,
                 m_fontResDictHandle,
                 m_imgResDictHandle,
+                m_extGStateResDictHandle,
                 encodeDoubleForPlotter( psPaperSize.x ),
                 encodeDoubleForPlotter( psPaperSize.y ) );
 
@@ -1182,14 +1220,18 @@ bool PDF_PLOTTER::StartPlot( const wxString& aPageNumber, const wxString& aPageN
     wxASSERT( m_outputFile );
 
     // First things first: the customary null object
-    m_xrefTable.clear();
-    m_xrefTable.push_back( 0 );
+    m_pageHandles.clear();
+    m_xrefTable.Reset();
+    m_pageNumbers.clear();
     m_hyperlinksInPage.clear();
     m_hyperlinkMenusInPage.clear();
     m_hyperlinkHandles.clear();
     m_hyperlinkMenuHandles.clear();
     m_bookmarksInPage.clear();
+    m_imageHandles.clear();
+    m_alphaToExtGStateHandles.clear();
     m_totalOutlineNodes = 0;
+    m_usedBase14Fonts = false;
 
     m_outlineRoot = std::make_unique<OUTLINE_NODE>();
 
@@ -1216,6 +1258,8 @@ bool PDF_PLOTTER::StartPlot( const wxString& aPageNumber, const wxString& aPageN
     m_fontResDictHandle = allocPdfObject();
 
     m_imgResDictHandle = allocPdfObject();
+
+    m_extGStateResDictHandle = allocPdfObject();
 
     m_jsNamesHandle = allocPdfObject();
 
@@ -1535,8 +1579,44 @@ void PDF_PLOTTER::endPlotEmitResources()
     emitOutlineFonts();
     emitStrokeFonts();
 
+    // The non-embeddable font fallback writes Tf against these names, so they must be declared
+    // or the invisible searchable layer is an undefined resource
+    struct
+    {
+        const char* psname;
+        const char* rsname;
+        int         handle;
+    } base14[4] = {
+        { "/Helvetica",             "/KicadFont",   0 },
+        { "/Helvetica-Oblique",     "/KicadFontI",  0 },
+        { "/Helvetica-Bold",        "/KicadFontB",  0 },
+        { "/Helvetica-BoldOblique", "/KicadFontBI", 0 }
+    };
+
+    if( m_usedBase14Fonts )
+    {
+        for( auto& font : base14 )
+        {
+            font.handle = startPdfObject();
+            fmt::println( m_outputFile,
+                          "<< /BaseFont {}\n"
+                          "   /Type /Font\n"
+                          "   /Subtype /Type1\n"
+                          "   /Encoding /WinAnsiEncoding\n"
+                          ">>",
+                          font.psname );
+            closePdfObject();
+        }
+    }
+
     startPdfObject( m_fontResDictHandle );
     fmt::println( m_outputFile, "<<" );
+
+    if( m_usedBase14Fonts )
+    {
+        for( const auto& font : base14 )
+            fmt::println( m_outputFile, "    {} {} 0 R", font.rsname, font.handle );
+    }
 
     if( m_outlineFontManager )
     {
@@ -1570,6 +1650,31 @@ void PDF_PLOTTER::endPlotEmitResources()
 
     fmt::println( m_outputFile, ">>" );
     closePdfObject();
+
+    // Graphics state objects.
+    // For now, we have only alpha-setting graphics state objects.
+    // If we we had other types of graphics state objects, we would handle them here as well.
+    // We re-use the handle as the resource name: handle 42 -> '/GS42'
+    {
+        // First, write out all the external graphics state objects one at a time
+        for( const auto& [alpha, handle] : m_alphaToExtGStateHandles )
+        {
+            startPdfObject( handle );
+            fmt::println( m_outputFile, "<< /Type /ExtGState /ca {} /CA {} >>", encodeDoubleForPlotter( alpha ),
+                          encodeDoubleForPlotter( alpha ) );
+            closePdfObject();
+        }
+
+        // Now write out the external graphics state resource dictionary
+        startPdfObject( m_extGStateResDictHandle );
+        fmt::println( m_outputFile, "<<" );
+
+        for( const auto& [alpha, handle] : m_alphaToExtGStateHandles )
+            fmt::println( m_outputFile, "    /GS{} {} 0 R", handle, handle );
+
+        fmt::println( m_outputFile, ">>" );
+        closePdfObject();
+    }
 
     // Emit images with optional SMask for transparency
     for( const auto& [imgHandle, image] : m_imageHandles )
@@ -2064,14 +2169,16 @@ bool PDF_PLOTTER::EndPlot()
        be 20 bytes long, and object zero must be done in that way). Also
        the offset must be kept along for the trailer */
     long xref_start = ftell( m_outputFile );
+    const std::vector<long>& xrefEntries = m_xrefTable.Entries();
+
     fmt::print( m_outputFile,
                 "xref\n"
                 "0 {}\n"
                 "0000000000 65535 f \n",
-                m_xrefTable.size() );
+                xrefEntries.size() );
 
-    for( unsigned i = 1; i < m_xrefTable.size(); i++ )
-        fmt::print( m_outputFile, "{:010d} 00000 n \n", m_xrefTable[i] );
+    for( unsigned i = 1; i < xrefEntries.size(); i++ )
+        fmt::print( m_outputFile, "{:010d} 00000 n \n", xrefEntries[i] );
 
     // Done the xref, go for the trailer
     fmt::print( m_outputFile,
@@ -2080,7 +2187,7 @@ bool PDF_PLOTTER::EndPlot()
                 "startxref\n"
                 "{}\n" // The offset we saved before
                 "%%EOF\n",
-                m_xrefTable.size(),
+                xrefEntries.size(),
                 catalogHandle,
                 infoDictHandle,
                 xref_start );
@@ -2130,6 +2237,8 @@ void PDF_PLOTTER::Text( const VECTOR2I& aPos, const COLOR4D& aColor, const wxStr
             const char *fontname = aItalic ? ( aBold ? "/KicadFontBI" : "/KicadFontI" )
                                            : ( aBold ? "/KicadFontB"  : "/KicadFont"  );
 
+            m_usedBase14Fonts = true;
+
             // Compute the copious transformation parameters of the Current Transform Matrix
             double ctm_a, ctm_b, ctm_c, ctm_d, ctm_e, ctm_f;
             double wideningFactor, heightFactor;
@@ -2137,16 +2246,16 @@ void PDF_PLOTTER::Text( const VECTOR2I& aPos, const COLOR4D& aColor, const wxStr
             VECTOR2I t_size( std::abs( aSize.x ), std::abs( aSize.y ) );
             bool     textMirrored = aSize.x < 0;
 
-            computeTextParameters( aPos, aText, aOrient, t_size, textMirrored, aH_justify, aV_justify, aWidth,
+            computeTextParameters( aPos, text, aOrient, t_size, textMirrored, aH_justify, aV_justify, aWidth,
                                    aItalic, aBold, &wideningFactor, &ctm_a, &ctm_b, &ctm_c, &ctm_d, &ctm_e, &ctm_f,
                                    &heightFactor );
 
             SetColor( aColor );
             SetCurrentLineWidth( aWidth, aData );
 
-            wxStringTokenizer str_tok( aText, " ", wxTOKEN_RET_DELIMS );
+            wxStringTokenizer str_tok( text, " ", wxTOKEN_RET_DELIMS );
 
-            VECTOR2I full_box( aFont->StringBoundaryLimits( aText, t_size, aWidth, aBold, aItalic, aFontMetrics ) );
+            VECTOR2I full_box( aFont->StringBoundaryLimits( text, t_size, aWidth, aBold, aItalic, aFontMetrics ) );
 
             if( textMirrored )
                 full_box.x *= -1;
@@ -2207,7 +2316,7 @@ void PDF_PLOTTER::Text( const VECTOR2I& aPos, const COLOR4D& aColor, const wxStr
             }
 
             // Plot the text
-            PLOTTER::Text( aPos, aColor, aText, aOrient, aSize, aH_justify, aV_justify, aWidth, aItalic,
+            PLOTTER::Text( aPos, aColor, text, aOrient, aSize, aH_justify, aV_justify, aWidth, aItalic,
                            aBold, aMultilineAllowed, aFont, aFontMetrics, aData );
 
             return;
@@ -2428,13 +2537,23 @@ VECTOR2I PDF_PLOTTER::renderWord( const wxString& aWord, const VECTOR2I& aPositi
         return aPosition + positionedAdvance( aWord );
     }
 
+    VECTOR2I inkPos( aPosition );
+
+    if( aTextStyle & ( TEXT_STYLE::SUPERSCRIPT | TEXT_STYLE::SUBSCRIPT ) )
+    {
+        VECTOR2I offset( 0, KiROUND( aSize.y * aFont->GetSuperSubBaselineOffset( aTextStyle ) ) );
+
+        RotatePoint( offset, aOrient );
+        inkPos += offset;
+    }
+
     // Compute transformation parameters for this word
     double ctm_a, ctm_b, ctm_c, ctm_d, ctm_e, ctm_f;
     double wideningFactor, heightFactor;
 
-    computeTextParameters( aPosition, aWord, aOrient, aSize, aTextMirrored, GR_TEXT_H_ALIGN_LEFT,
-                           GR_TEXT_V_ALIGN_BOTTOM, aWidth, aItalic, aBold, &wideningFactor,
-                           &ctm_a, &ctm_b, &ctm_c, &ctm_d, &ctm_e, &ctm_f, &heightFactor );
+    computeTextParameters( inkPos, aWord, aOrient, aSize, aTextMirrored, GR_TEXT_H_ALIGN_LEFT, GR_TEXT_V_ALIGN_BOTTOM,
+                           aWidth, aItalic, aBold, &wideningFactor, &ctm_a, &ctm_b, &ctm_c, &ctm_d, &ctm_e, &ctm_f,
+                           &heightFactor );
 
     VECTOR2I bbox( cursorAdvanceX( aWord ), 0 );
 
@@ -2443,30 +2562,6 @@ VECTOR2I PDF_PLOTTER::renderWord( const wxString& aWord, const VECTOR2I& aPositi
 
     RotatePoint( bbox, aOrient );
     VECTOR2I nextPos = aPosition + bbox;
-
-    // Apply vertical offset for subscript/superscript
-    // Stroke font positioning (baseline) already correct per user feedback.
-    // Outline fonts need: superscript +1 full font height higher; subscript +1 full font height higher
-    if( aTextStyle & TEXT_STYLE::SUPERSCRIPT )
-    {
-        double factor = aFont->IsOutline() ? 0.050 : 0.030; // stroke original ~0.40, outline needs +1.0
-        VECTOR2I offset( 0, static_cast<int>( std::lround( aSize.y * factor ) ) );
-        RotatePoint( offset, aOrient );
-        ctm_e -= offset.x;
-        ctm_f += offset.y; // Note: PDF Y increases upward
-    }
-    else if( aTextStyle & TEXT_STYLE::SUBSCRIPT )
-    {
-        // For outline fonts raise by one font height versus stroke (which shifts downward slightly)
-        VECTOR2I offset( 0, 0 );
-
-        if( aFont->IsStroke() )
-            offset.y = static_cast<int>( std::lround( aSize.y * 0.01 ) );
-
-        RotatePoint( offset, aOrient );
-        ctm_e += offset.x;
-        ctm_f -= offset.y; // Note: PDF Y increases upward
-    }
 
     // Render the word using existing outline font logic
     if( aFont->IsOutline() )
@@ -2493,7 +2588,12 @@ VECTOR2I PDF_PLOTTER::renderWord( const wxString& aWord, const VECTOR2I& aPositi
                 alignment_multiplier = 4.0;
 
             VECTOR2D font_size_dev = userToDeviceSize( aSize );
-            double baseline_adjustment = font_size_dev.y * baseline_factor * alignment_multiplier;
+            double   lineHeight = font_size_dev.y;
+
+            if( aTextStyle & ( TEXT_STYLE::SUPERSCRIPT | TEXT_STYLE::SUBSCRIPT ) )
+                lineHeight /= aFont->GetSuperSubSizeMultiplier();
+
+            double baseline_adjustment = lineHeight * baseline_factor * alignment_multiplier;
 
             double adjusted_ctm_e = ctm_e;
             double adjusted_ctm_f = ctm_f;
@@ -2727,17 +2827,13 @@ VECTOR2I PDF_PLOTTER::renderMarkupNode( const MARKUP::NODE* aNode, const VECTOR2
     // Handle markup node types
     if( !aNode->is_root() )
     {
-        if( aNode->isSubscript() )
+        if( aNode->isSubscript() || aNode->isSuperscript() )
         {
-            currentStyle |= TEXT_STYLE::SUBSCRIPT;
-            // Subscript: smaller size and lower position
-            currentSize = VECTOR2I( aBaseSize.x * 0.5, aBaseSize.y * 0.6 );
-        }
-        else if( aNode->isSuperscript() )
-        {
-            currentStyle |= TEXT_STYLE::SUPERSCRIPT;
-            // Superscript: smaller size and higher position
-            currentSize = VECTOR2I( aBaseSize.x * 0.5, aBaseSize.y * 0.6 );
+            currentStyle |= aNode->isSubscript() ? TEXT_STYLE::SUBSCRIPT : TEXT_STYLE::SUPERSCRIPT;
+
+            double scale = aFont->GetSuperSubSizeMultiplier();
+
+            currentSize = VECTOR2I( KiROUND( aBaseSize.x * scale ), KiROUND( aBaseSize.y * scale ) );
         }
 
         if( aNode->isOverbar() )
@@ -2880,7 +2976,7 @@ void PDF_PLOTTER::PlotText( const VECTOR2I&        aPos,
     if( aAttributes.m_Mirrored )
         size.x = -size.x;
 
-    PDF_PLOTTER::Text( aPos, aColor, aText, aAttributes.m_Angle, size, aAttributes.m_Halign, aAttributes.m_Valign,
+    PDF_PLOTTER::Text( aPos, aColor, aText, aAttributes.m_Angle.GetAngle(), size, aAttributes.m_Halign, aAttributes.m_Valign,
                        aAttributes.m_StrokeWidth, aAttributes.m_Italic, aAttributes.m_Bold, aAttributes.m_Multiline,
                        aFont, aFontMetrics, aData );
 }
@@ -2939,11 +3035,13 @@ void PDF_PLOTTER::Plot3DModel( const wxString& aSourcePath, const std::vector<PD
         int viewHandle = allocPdfObject();
         startPdfObject( viewHandle );
 
+        const std::string encodedName = encodeStringForPlotter( wxString::FromUTF8( view.m_name ) );
+
         fmt::print( m_outputFile,
                     "<<\n"
                     "/Type /3DView\n"
-                    "/XN ({})\n"
-                    "/IN ({})\n"
+                    "/XN {}\n"
+                    "/IN {}\n"
                     "/MS /M\n"
                     "/C2W [{:f} {:f} {:f} {:f} {:f} {:f} {:f} {:f} {:f} {:f} {:f} {:f}]\n"
                     "/CO {:f}\n"
@@ -2958,7 +3056,8 @@ void PDF_PLOTTER::Plot3DModel( const wxString& aSourcePath, const std::vector<PD
                     "/Type /3DLightingScheme\n"
                     "/Subtype /CAD>>\n"
                     ">>\n",
-                    view.m_name, view.m_name, view.m_cameraMatrix[0],
+                    encodedName, encodedName,
+                    view.m_cameraMatrix[0],
                     view.m_cameraMatrix[1],
                     view.m_cameraMatrix[2], view.m_cameraMatrix[3], view.m_cameraMatrix[4],
                     view.m_cameraMatrix[5], view.m_cameraMatrix[6], view.m_cameraMatrix[7],

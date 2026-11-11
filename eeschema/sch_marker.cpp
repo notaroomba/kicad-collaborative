@@ -21,6 +21,7 @@
 #include <sch_draw_panel.h>
 #include <google/protobuf/any.pb.h>
 #include <api/api_enums.h>
+#include <api/api_sch_utils.h>
 #include <api/api_utils.h>
 #include <api/schematic/schematic_rules.pb.h>
 #include <trigo.h>
@@ -45,14 +46,12 @@
 
 SCH_MARKER::SCH_MARKER( std::shared_ptr<ERC_ITEM> aItem, const VECTOR2I& aPos ) :
         SCH_ITEM( nullptr, SCH_MARKER_T ),
-        MARKER_BASE( SCALING_FACTOR, aItem, MARKER_BASE::MARKER_ERC )
+        MARKER_BASE( SCALING_FACTOR, std::move( aItem ), MARKER_BASE::MARKER_ERC )
 {
     if( m_rcItem )
         m_rcItem->SetParent( this );
 
     m_Pos = aPos;
-
-    m_isLegacyMarker = false;
 }
 
 
@@ -65,7 +64,17 @@ SCH_MARKER::~SCH_MARKER()
 
 EDA_ITEM* SCH_MARKER::Clone() const
 {
-    return new SCH_MARKER( *this );
+    SCH_MARKER* res = new SCH_MARKER( *this );
+
+    // An RC_ITEM is shared between its marker and various tree views.  It cannot be shared between
+    // two markers.
+    if( m_rcItem )
+    {
+        res->m_rcItem = std::make_shared<ERC_ITEM>( *std::static_pointer_cast<ERC_ITEM>( m_rcItem ) );
+        res->m_rcItem->SetParent( res );
+    }
+
+    return res;
 }
 
 
@@ -73,7 +82,6 @@ void SCH_MARKER::swapData( SCH_ITEM* aItem )
 {
     SCH_MARKER* item = static_cast<SCH_MARKER*>( aItem );
 
-    std::swap( m_isLegacyMarker, item->m_isLegacyMarker );
     std::swap( m_Pos, item->m_Pos );
 
     std::swap( m_markerType, item->m_markerType );
@@ -94,7 +102,7 @@ void SCH_MARKER::swapData( SCH_ITEM* aItem )
 }
 
 
-static void ToProto( kiapi::schematic::ErcMarker& aMsg, const SCH_MARKER& aMarker )
+void SCH_MARKER::ToProto( kiapi::schematic::ErcMarker& aMsg, const SCH_MARKER& aMarker )
 {
     std::shared_ptr<ERC_ITEM> erc = std::static_pointer_cast<ERC_ITEM>( aMarker.GetRCItem() );
 
@@ -104,19 +112,22 @@ static void ToProto( kiapi::schematic::ErcMarker& aMsg, const SCH_MARKER& aMarke
     kiapi::common::PackVector2( *aMsg.mutable_position(), aMarker.GetPos(), schIUScale );
 
     if( erc->IsSheetSpecific() )
-        kiapi::common::PackSheetPath( *aMsg.mutable_sheet_specific_path(), erc->GetSpecificSheetPath().Path() );
+        PackSheetPath( *aMsg.mutable_sheet_specific_path(), erc->GetSpecificSheetPath() );
 
     if( erc->MainItemHasSheetPath() )
-        kiapi::common::PackSheetPath( *aMsg.mutable_main_item_sheet_path(), erc->GetMainItemSheetPath().Path() );
+        PackSheetPath( *aMsg.mutable_main_item_sheet_path(), erc->GetMainItemSheetPath() );
 
     if( erc->AuxItemHasSheetPath() )
-        kiapi::common::PackSheetPath( *aMsg.mutable_aux_item_sheet_path(), erc->GetAuxItemSheetPath().Path() );
+        PackSheetPath( *aMsg.mutable_aux_item_sheet_path(), erc->GetAuxItemSheetPath() );
 
-    if( erc->GetErrorCode() == ERCE_GENERIC_WARNING
-            || erc->GetErrorCode() == ERCE_GENERIC_ERROR
-            || erc->GetErrorCode() == ERCE_UNRESOLVED_VARIABLE )
+    SCHEMATIC* schematic = aMarker.Schematic();
+
+    if( schematic
+        && ( erc->GetErrorCode() == ERCE_GENERIC_WARNING
+             || erc->GetErrorCode() == ERCE_GENERIC_ERROR
+             || erc->GetErrorCode() == ERCE_UNRESOLVED_VARIABLE ) )
     {
-        SCH_ITEM* sch_item = aMarker.Schematic()->ResolveItem( erc->GetMainItemID() );
+        SCH_ITEM* sch_item = schematic->ResolveItem( erc->GetMainItemID() );
         SCH_ITEM* parent = sch_item ? static_cast<SCH_ITEM*>( sch_item->GetParent() ) : nullptr;
         EDA_TEXT* text_item = dynamic_cast<EDA_TEXT*>( sch_item );
 
@@ -135,6 +146,19 @@ static void ToProto( kiapi::schematic::ErcMarker& aMsg, const SCH_MARKER& aMarke
         if( id != niluuid )
             aMsg.add_items()->set_value( id.AsStdString() );
     }
+
+    aMsg.set_description( HYPERLINK_DV_RENDERER::StripMarkup( erc->GetErrorMessage( false ) ).ToUTF8() );
+
+    if( schematic )
+    {
+        aMsg.set_severity( ToProtoEnum<SEVERITY, kiapi::common::types::RuleSeverity>( aMarker.GetSeverity() ) );
+        aMsg.set_excluded( aMarker.IsTreatedAsExcluded() );
+    }
+    else if( aMarker.IsExcluded() )
+    {
+        aMsg.set_severity( ToProtoEnum<SEVERITY, kiapi::common::types::RuleSeverity>( RPT_SEVERITY_EXCLUSION ) );
+        aMsg.set_excluded( true );
+    }
 }
 
 
@@ -149,6 +173,9 @@ SCH_MARKER* SCH_MARKER::FromProto( const kiapi::schematic::ErcMarker& aMsg, cons
 
     VECTOR2I pos = kiapi::common::UnpackVector2( aMsg.position(), schIUScale );
 
+    if( aMsg.has_aux_item_sheet_path() && !aMsg.has_main_item_sheet_path() )
+        return nullptr;
+
     if( aMsg.has_sheet_specific_path() )
     {
         KIID_PATH                     path = kiapi::common::UnpackSheetPath( aMsg.sheet_specific_path() );
@@ -156,6 +183,8 @@ SCH_MARKER* SCH_MARKER::FromProto( const kiapi::schematic::ErcMarker& aMsg, cons
 
         if( sheetPath.has_value() )
             ercItem->SetSheetSpecificPath( sheetPath.value() );
+        else
+            return nullptr;
     }
 
     if( aMsg.has_main_item_sheet_path() )
@@ -167,18 +196,22 @@ SCH_MARKER* SCH_MARKER::FromProto( const kiapi::schematic::ErcMarker& aMsg, cons
         {
             if( aMsg.has_aux_item_sheet_path() )
             {
-                KIID_PATH                     auxPath =
-                        kiapi::common::UnpackSheetPath( aMsg.aux_item_sheet_path() );
-                std::optional<SCH_SHEET_PATH> auxPathResolved =
-                        aSheetList.GetSheetPathByKIIDPath( auxPath, true );
+                KIID_PATH                     auxPath = kiapi::common::UnpackSheetPath( aMsg.aux_item_sheet_path() );
+                std::optional<SCH_SHEET_PATH> auxPathResolved = aSheetList.GetSheetPathByKIIDPath( auxPath, true );
 
                 if( auxPathResolved.has_value() )
                     ercItem->SetItemsSheetPaths( mainPath.value(), auxPathResolved.value() );
+                else
+                    return nullptr;
             }
             else
             {
                 ercItem->SetItemsSheetPaths( mainPath.value() );
             }
+        }
+        else
+        {
+            return nullptr;
         }
     }
 
@@ -228,14 +261,16 @@ SCH_MARKER* SCH_MARKER::FromProto( const kiapi::schematic::ErcMarker& aMsg, cons
     }
     else
     {
-        KIID mainId = aMsg.items_size() > 0 ? KIID( aMsg.items( 0 ).value() ) : niluuid;
-        KIID auxId  = aMsg.items_size() > 1 ? KIID( aMsg.items( 1 ).value() ) : niluuid;
+        std::vector<KIID> ids;
+        ids.reserve( aMsg.items_size() );
 
-        ercItem->SetItems( mainId, auxId );
+        for( const auto& item : aMsg.items() )
+            ids.emplace_back( item.value() );
+
+        ercItem->SetItems( ids );
     }
 
     SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), pos );
-    marker->SetIsLegacyMarker( false );
 
     return marker;
 }
@@ -245,7 +280,9 @@ void SCH_MARKER::Serialize( google::protobuf::Any& aContainer ) const
 {
     kiapi::schematic::ErcMarker msg;
     ToProto( msg, *this );
-    aContainer.PackFrom( msg );
+
+    if( !aContainer.PackFrom( msg ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_MARKER" ) );
 }
 
 
@@ -266,128 +303,6 @@ bool SCH_MARKER::Deserialize( const google::protobuf::Any& aContainer )
 
     swapData( tmp.get() );
     return true;
-}
-
-
-SCH_MARKER* SCH_MARKER::FromLegacyString( const SCH_SHEET_LIST& aSheetList, const wxString& aData )
-{
-    wxArrayString props = wxSplit( aData, '|' );
-    VECTOR2I      markerPos( (int) strtol( props[1].c_str(), nullptr, 10 ),
-                             (int) strtol( props[2].c_str(), nullptr, 10 ) );
-
-    std::shared_ptr<ERC_ITEM> ercItem = ERC_ITEM::Create( props[0] );
-
-    if( !ercItem )
-        return nullptr;
-
-    if( ercItem->GetErrorCode() == ERCE_GENERIC_WARNING
-            || ercItem->GetErrorCode() == ERCE_GENERIC_ERROR
-            || ercItem->GetErrorCode() == ERCE_UNRESOLVED_VARIABLE )
-    {
-        // SCH_FIELDs and SCH_ITEMs inside LIB_SYMBOLs don't have persistent KIIDs.  So the
-        // exclusion will contain the parent's KIID in prop[3], and the text of the original
-        // text item in prop[4].
-
-        if( !props[4].IsEmpty() )
-        {
-            KIID      uuid = niluuid;
-            SCH_ITEM* parent = aSheetList.ResolveItem( KIID( props[3] ) );
-
-            // Check fields and pins for a match
-            parent->RunOnChildren(
-                    [&]( SCH_ITEM* child )
-                    {
-                        if( EDA_TEXT* text_item = dynamic_cast<EDA_TEXT*>( child ) )
-                        {
-                            if( text_item->GetText() == props[4] )
-                                uuid = child->m_Uuid;
-                        }
-                    },
-                    RECURSE_MODE::NO_RECURSE );
-
-            // If it's a symbol, we must also check non-overridden LIB_SYMBOL text children
-            if( uuid == niluuid && parent->Type() == SCH_SYMBOL_T )
-            {
-                static_cast<SCH_SYMBOL*>( parent )->GetLibSymbolRef()->RunOnChildren(
-                        [&]( SCH_ITEM* child )
-                        {
-                            if( child->Type() == SCH_FIELD_T )
-                            {
-                                // Match only on SCH_SYMBOL fields, not LIB_SYMBOL fields.
-                            }
-                            else if( EDA_TEXT* text_item = dynamic_cast<EDA_TEXT*>( child ) )
-                            {
-                                if( text_item->GetText() == props[4] )
-                                    uuid = child->m_Uuid;
-                            }
-                        },
-                        RECURSE_MODE::NO_RECURSE );
-            }
-
-            if( uuid != niluuid )
-                ercItem->SetItems( uuid );
-            else
-                return nullptr;
-        }
-        else
-        {
-            ercItem->SetItems( KIID( props[3] ) );
-        }
-    }
-    else
-    {
-        ercItem->SetItems( KIID( props[3] ), KIID( props[4] ) );
-    }
-
-    bool isLegacyMarker = true;
-
-    // Deserialize sheet / item specific paths - we are not able to use the file version to
-    // determine if markers are legacy as there could be a file opened with a prior version
-    // but which has new markers - this code is called not just during schematic load, but
-    // also to match new ERC exceptions to exclusions.
-    if( props.size() == 8 )
-    {
-        isLegacyMarker = false;
-
-        if( !props[5].IsEmpty() )
-        {
-            KIID_PATH                     sheetSpecificKiidPath( props[5] );
-            std::optional<SCH_SHEET_PATH> sheetSpecificPath =
-                    aSheetList.GetSheetPathByKIIDPath( sheetSpecificKiidPath, true );
-
-            if( sheetSpecificPath.has_value() )
-                ercItem->SetSheetSpecificPath( sheetSpecificPath.value() );
-        }
-
-        if( !props[6].IsEmpty() )
-        {
-            KIID_PATH                     mainItemKiidPath( props[6] );
-            std::optional<SCH_SHEET_PATH> mainItemPath =
-                    aSheetList.GetSheetPathByKIIDPath( mainItemKiidPath, true );
-
-            if( mainItemPath.has_value() )
-            {
-                if( props[7].IsEmpty() )
-                {
-                    ercItem->SetItemsSheetPaths( mainItemPath.value() );
-                }
-                else
-                {
-                    KIID_PATH                     auxItemKiidPath( props[7] );
-                    std::optional<SCH_SHEET_PATH> auxItemPath =
-                            aSheetList.GetSheetPathByKIIDPath( auxItemKiidPath, true );
-
-                    if( auxItemPath.has_value() )
-                        ercItem->SetItemsSheetPaths( mainItemPath.value(), auxItemPath.value() );
-                }
-            }
-        }
-    }
-
-    SCH_MARKER* marker = new SCH_MARKER( std::move( ercItem ), markerPos );
-    marker->SetIsLegacyMarker( isLegacyMarker );
-
-    return marker;
 }
 
 
@@ -489,17 +404,10 @@ void SCH_MARKER::GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_
 
     switch( GetSeverity() )
     {
-    case RPT_SEVERITY_IGNORE:
-        aList.emplace_back( _( "Severity" ), _( "Ignore" ) );
-        break;
-    case RPT_SEVERITY_WARNING:
-        aList.emplace_back( _( "Severity" ), _( "Warning" ) );
-        break;
-    case RPT_SEVERITY_ERROR:
-        aList.emplace_back( _( "Severity" ), _( "Error" ) );
-        break;
-    default:
-        break;
+    case RPT_SEVERITY_IGNORE:  aList.emplace_back( _( "Severity" ), _( "Ignore" ) );  break;
+    case RPT_SEVERITY_WARNING: aList.emplace_back( _( "Severity" ), _( "Warning" ) ); break;
+    case RPT_SEVERITY_ERROR:   aList.emplace_back( _( "Severity" ), _( "Error" ) );   break;
+    default:                                                                          break;
     }
 
     if( GetMarkerType() == MARKER_DRAWING_SHEET )

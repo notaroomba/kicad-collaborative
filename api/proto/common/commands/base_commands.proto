@@ -22,6 +22,7 @@ syntax = "proto3";
 package kiapi.common.commands;
 
 import "common/types/base_types.proto";
+import "common/types/enums.proto";
 
 message GetVersion
 {
@@ -100,4 +101,25 @@ message GetPluginSettingsPath
 message StringResponse
 {
   string response = 1;
+}
+
+// Returns the set of well-known filesystem paths used by KiCad.
+// These paths are not guaranteed to actually exist or be accessible to an API client.
+// The meaning of these paths and their actual location are not API guarantees.
+// Returns GetPathsResponse
+message GetPaths
+{
+}
+
+message PathEntry
+{
+  kiapi.common.types.PathType type = 1;
+
+  // Absolute path in platform-native form; may not exist on disk
+  string path = 2;
+}
+
+message GetPathsResponse
+{
+  repeated PathEntry paths = 1;
 }

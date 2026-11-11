@@ -31,6 +31,7 @@
 #include <pcb_dimension.h>
 #include <pcb_marker.h>
 #include <pcb_point.h>
+#include <pcb_3d_body.h>
 #include <pcb_shape.h>
 #include <pcb_table.h>
 #include <pcb_tablecell.h>
@@ -43,6 +44,7 @@
 #include <zone.h>
 
 #include <filesystem>
+#include <functional>
 
 
 BOOST_AUTO_TEST_SUITE( FootprintTransformSync )
@@ -63,6 +65,70 @@ BOOST_AUTO_TEST_CASE( DefaultIsIdentity )
     FOOTPRINT fp( nullptr );
     BOOST_CHECK( fp.GetTransform().IsIdentity() );
     CHECK_TRANSFORM_MATCHES_LEGACY( fp );
+}
+
+
+BOOST_AUTO_TEST_CASE( BoardlessFootprintFlip )
+{
+    FOOTPRINT fp( nullptr );
+
+    PAD* pad = new PAD( &fp );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 1000000, 1000000 ) );
+    pad->SetLayerSet( PAD::SMDMask() );
+    fp.Add( pad, ADD_MODE::APPEND );
+
+    ZONE* zone = new ZONE( &fp );
+    zone->SetLayer( F_Cu );
+    fp.Add( zone, ADD_MODE::APPEND );
+
+    PCB_SHAPE* shape = new PCB_SHAPE( &fp, SHAPE_T::SEGMENT );
+    shape->SetLayer( F_SilkS );
+    fp.Add( shape, ADD_MODE::APPEND );
+
+    PCB_BARCODE* barcode = new PCB_BARCODE( &fp );
+    barcode->SetLayer( F_SilkS );
+    fp.Add( barcode, ADD_MODE::APPEND );
+
+    PCB_TEXTBOX* textbox = new PCB_TEXTBOX( &fp );
+    textbox->SetLayer( F_SilkS );
+    fp.Add( textbox, ADD_MODE::APPEND );
+
+    PCB_TABLE* table = new PCB_TABLE( &fp, pcbIUScale.mmToIU( 0.1 ) );
+    table->SetColCount( 1 );
+    PCB_TABLECELL* cell = new PCB_TABLECELL( table );
+    cell->SetLayer( F_SilkS );
+    table->AddCell( cell );
+    table->SetLayer( F_SilkS );
+    fp.Add( table, ADD_MODE::APPEND );
+
+    PCB_DIM_ALIGNED* dimension = new PCB_DIM_ALIGNED( &fp, PCB_DIM_ALIGNED_T );
+    dimension->SetLayer( F_SilkS );
+    fp.Add( dimension, ADD_MODE::APPEND );
+
+    PCB_POINT* point = new PCB_POINT( &fp );
+    point->SetLayer( F_CrtYd );
+    fp.Add( point, ADD_MODE::APPEND );
+
+    fp.EnsureBody().MutableExtruded()->m_layer = F_Fab;
+
+    fp.Flip( VECTOR2I( 0, 0 ), FLIP_DIRECTION::TOP_BOTTOM );
+
+    BOOST_CHECK_EQUAL( fp.GetLayer(), B_Cu );
+    BOOST_CHECK_EQUAL( fp.Reference().GetLayer(), B_SilkS );
+    BOOST_CHECK( pad->GetLayerSet().test( B_Cu ) );
+    BOOST_CHECK( pad->GetLayerSet().test( B_Paste ) );
+    BOOST_CHECK( pad->GetLayerSet().test( B_Mask ) );
+    BOOST_CHECK_EQUAL( zone->GetLayer(), B_Cu );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), B_SilkS );
+    BOOST_CHECK_EQUAL( barcode->GetLayer(), B_SilkS );
+    BOOST_CHECK_EQUAL( textbox->GetLayer(), B_SilkS );
+    BOOST_CHECK_EQUAL( table->GetLayer(), B_SilkS );
+    BOOST_CHECK_EQUAL( cell->GetLayer(), B_SilkS );
+    BOOST_CHECK_EQUAL( dimension->GetLayer(), B_SilkS );
+    BOOST_CHECK_EQUAL( point->GetLayer(), F_CrtYd );
+    BOOST_CHECK_EQUAL( fp.GetBody()->GetExtruded()->m_layer, B_Fab );
 }
 
 
@@ -2923,7 +2989,7 @@ BOOST_AUTO_TEST_CASE( TableInRotatedFootprintCellsAreVisuallyRotated )
 
     for( int i = 0; i < 4; ++i )
     {
-        PCB_TABLECELL* cell = new PCB_TABLECELL( &board );
+        PCB_TABLECELL* cell = new PCB_TABLECELL( table );
         cell->SetStart( VECTOR2I( ( i % 2 ) * colW, ( i / 2 ) * rowH ) );
         cell->SetEnd( VECTOR2I( ( i % 2 + 1 ) * colW, ( i / 2 + 1 ) * rowH ) );
         table->AddCell( cell );
@@ -3190,7 +3256,7 @@ BOOST_AUTO_TEST_CASE( TableRotates90Cleanly )
 
     for( int i = 0; i < 4; ++i )
     {
-        PCB_TABLECELL* cell = new PCB_TABLECELL( &board );
+        PCB_TABLECELL* cell = new PCB_TABLECELL( table );
         cell->SetStart( VECTOR2I( ( i % 2 ) * colW, ( i / 2 ) * rowH ) );
         cell->SetEnd( VECTOR2I( ( i % 2 + 1 ) * colW, ( i / 2 + 1 ) * rowH ) );
         table->AddCell( cell );
@@ -5154,6 +5220,36 @@ BOOST_AUTO_TEST_CASE( CustomPadShapeScalesWithFootprint )
 
     BOOST_CHECK_MESSAGE( wRatio > 1.9 && wRatio < 2.1, "custom pad width ratio " << wRatio << " expected ~2.0" );
     BOOST_CHECK_MESSAGE( hRatio > 1.4 && hRatio < 1.6, "custom pad height ratio " << hRatio << " expected ~1.5" );
+}
+
+
+// Footprint keepouts derive their bbox through the parent transform, so it must not go stale
+BOOST_FIXTURE_TEST_CASE( KeepoutBBoxTracksFootprintTransform, BOARD_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "issue25580", m_board );
+
+    for( FOOTPRINT* fp : m_board->Footprints() )
+    {
+        BOOST_REQUIRE( !fp->Zones().empty() );
+
+        auto primeAndTransform =
+                [&]( const std::function<void()>& aTransform )
+                {
+                    for( ZONE* zone : fp->Zones() )
+                        zone->CacheBoundingBox();
+
+                    aTransform();
+
+                    for( ZONE* zone : fp->Zones() )
+                    {
+                        BOOST_CHECK_MESSAGE( zone->GetBoundingBox() == zone->GetBoardOutline().BBox(),
+                                             fp->GetReference() << " keepout bbox is stale after transform" );
+                    }
+                };
+
+        primeAndTransform( [&]() { fp->SetOrientation( fp->GetOrientation() + ANGLE_90 ); } );
+        primeAndTransform( [&]() { fp->SetPosition( fp->GetPosition() + VECTOR2I( 1234567, 7654321 ) ); } );
+    }
 }
 
 

@@ -20,6 +20,7 @@
 
 #include <boost/test/unit_test.hpp>
 #include <memory>
+#include <limits>
 #include <import_export.h>
 #include <qa_utils/api_test_utils.h>
 #include <qa_utils/wx_utils/wx_assert.h>
@@ -33,8 +34,12 @@
 #include <embedded_files.h>
 #include <footprint.h>
 #include <pcb_barcode.h>
+#include <pcb_3d_body.h>
 #include <pcb_dimension.h>
-#include <pcb_griditem.h>
+#include <pcb_drill_chart.h>
+#include <pcb_drill_map.h>
+#include <pcb_grid_item.h>
+#include <pad.h>
 #include <pcb_reference_image.h>
 #include <pcb_shape.h>
 #include <pcb_table.h>
@@ -61,6 +66,8 @@ BOOST_FIXTURE_TEST_CASE( BoardTypes, PROTO_TEST_FIXTURE )
     KI_TEST::LoadBoard( m_settingsManager, "api_kitchen_sink", m_board );
 
     int barcodeCount = 0;
+    int drillChartCount = 0;
+    int drillMapCount = 0;
     int referenceImageCount = 0;
     int tableCount = 0;
     int textCount = 0;
@@ -137,6 +144,18 @@ BOOST_FIXTURE_TEST_CASE( BoardTypes, PROTO_TEST_FIXTURE )
             ++referenceImageCount;
             break;
 
+        case PCB_DRILL_CHART_T:
+            testProtoFromKiCadObject<kiapi::board::types::DrillChart>(
+                    static_cast<PCB_DRILL_CHART*>( item ), m_board.get() );
+            ++drillChartCount;
+            break;
+
+        case PCB_DRILL_MAP_T:
+            testProtoFromKiCadObject<kiapi::board::types::DrillMap>(
+                    static_cast<PCB_DRILL_MAP*>( item ), m_board.get() );
+            ++drillMapCount;
+            break;
+
         case PCB_TABLE_T:
             testProtoFromKiCadObject<kiapi::board::types::Table>( static_cast<PCB_TABLE*>( item ), m_board.get() );
             ++tableCount;
@@ -165,6 +184,8 @@ BOOST_FIXTURE_TEST_CASE( BoardTypes, PROTO_TEST_FIXTURE )
     }
 
     BOOST_CHECK_GT( barcodeCount, 0 );
+    BOOST_CHECK_GT( drillChartCount, 0 );
+    BOOST_CHECK_GT( drillMapCount, 0 );
     BOOST_CHECK_GT( referenceImageCount, 0 );
     BOOST_CHECK_GT( tableCount, 0 );
     BOOST_CHECK_GT( textCount, 0 );
@@ -181,6 +202,78 @@ BOOST_AUTO_TEST_CASE( FootprintExcludeFromSimulationRoundTrip )
     footprint.SetExcludedFromSim( true );
 
     testProtoFromKiCadObject<kiapi::board::types::FootprintInstance>( &footprint, &board );
+}
+
+
+BOOST_AUTO_TEST_CASE( FootprintNetTieEscapedPadRoundTrip )
+{
+    BOARD     board;
+    FOOTPRINT footprint( &board );
+
+    // The file format escapes a comma inside a pad number with a backslash
+    footprint.AddNetTiePadGroup( wxS( "A\\,B, C" ) );
+
+    kiapi::board::types::Footprint proto;
+    footprint.SerializeDefinition( &proto );
+
+    BOOST_REQUIRE_EQUAL( proto.net_ties_size(), 1 );
+    BOOST_REQUIRE_EQUAL( proto.net_ties( 0 ).pad_number_size(), 2 );
+    BOOST_CHECK_EQUAL( proto.net_ties( 0 ).pad_number( 0 ), "A,B" );
+    BOOST_CHECK_EQUAL( proto.net_ties( 0 ).pad_number( 1 ), "C" );
+
+    FOOTPRINT restored( &board );
+    BOOST_REQUIRE( restored.DeserializeDefinition( proto ) );
+
+    std::map<wxString, int> groups = restored.MapPadNumbersToNetTieGroups();
+
+    BOOST_CHECK( groups.contains( wxS( "A,B" ) ) && groups[wxS( "A,B" )] == 0 );
+    BOOST_CHECK( groups.contains( wxS( "C" ) ) && groups[wxS( "C" )] == 0 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( DrillChartColumnWidths, PROTO_TEST_FIXTURE )
+{
+    KI_TEST::LoadBoard( m_settingsManager, "api_kitchen_sink", m_board );
+
+    PCB_DRILL_CHART* chart = nullptr;
+
+    for( BOARD_ITEM* item : m_board->Drawings() )
+    {
+        if( item->Type() == PCB_DRILL_CHART_T )
+        {
+            chart = static_cast<PCB_DRILL_CHART*>( item );
+            break;
+        }
+    }
+
+    BOOST_REQUIRE( chart );
+
+    google::protobuf::Any any;
+    chart->Serialize( any );
+    kiapi::board::types::DrillChart proto;
+    BOOST_REQUIRE( any.UnpackTo( &proto ) );
+    BOOST_REQUIRE_GT( proto.columns_size(), 0 );
+    BOOST_CHECK_EQUAL( proto.columns( 0 ).width().value_nm(), 16000000 );
+
+    for( int64_t width : { int64_t( 0 ), int64_t( GENERATED_TABLE_MAX_COLUMN_WIDTH ) } )
+    {
+        proto.mutable_columns( 0 )->mutable_width()->set_value_nm( width );
+        (void) any.PackFrom( proto );
+        PCB_DRILL_CHART restored( m_board.get() );
+        BOOST_REQUIRE( restored.Deserialize( any ) );
+        BOOST_CHECK_EQUAL( restored.Columns().front().m_Width, width );
+    }
+
+    for( int64_t width : { int64_t( -1 ), int64_t( GENERATED_TABLE_MAX_COLUMN_WIDTH ) + 1,
+                          std::numeric_limits<int64_t>::max() } )
+    {
+        proto.mutable_columns( 0 )->mutable_width()->set_value_nm( width );
+        (void) any.PackFrom( proto );
+        PCB_DRILL_CHART restored( m_board.get() );
+        BOOST_REQUIRE( restored.Deserialize( any ) );
+        BOOST_CHECK_EQUAL( restored.Columns().front().m_Width,
+                           width < 0 ? 0 : GENERATED_TABLE_MAX_COLUMN_WIDTH );
+    }
 }
 
 
@@ -295,19 +388,20 @@ BOOST_FIXTURE_TEST_CASE( CopperThievingZoneRoundTrip, PROTO_TEST_FIXTURE )
     BOOST_CHECK_EQUAL( loaded.gap, thieving.gap );
     BOOST_CHECK_EQUAL( loaded.line_width, thieving.line_width );
     BOOST_CHECK_EQUAL( loaded.stagger, true );
-    BOOST_CHECK( loaded.orientation == EDA_ANGLE( 15.0, DEGREES_T ) );
+    BOOST_CHECK( loaded.orientation.GetAngle() == EDA_ANGLE( 15.0, DEGREES_T ) );
 }
 
 
 BOOST_AUTO_TEST_CASE( GridItems )
 {
-    const auto makeGridItem = []()
-    {
-        return std::make_unique<PCB_GRIDITEM>( nullptr );
-    };
+    const auto makeGridItem =
+            []()
+            {
+                return std::make_unique<PCB_GRID_ITEM>( nullptr );
+            };
 
-    PCB_GRIDITEM cartesian( nullptr );
-    cartesian.SetGridItemType( PCB_GRIDITEM_TYPE::CARTESIAN );
+    PCB_GRID_ITEM cartesian( nullptr );
+    cartesian.SetGridItemType( PCB_GRID_TYPE::CARTESIAN );
     cartesian.SetPosition( VECTOR2I( 1000000, -2000000 ) );
     cartesian.SetOrientationDegrees( 30.0 );
     cartesian.SetExtent( VECTOR2I( 5000000, 4000000 ) );
@@ -319,8 +413,8 @@ BOOST_AUTO_TEST_CASE( GridItems )
 
     testProtoFromKiCadObject<kiapi::board::types::GridItem>( &cartesian, makeGridItem );
 
-    PCB_GRIDITEM polar( nullptr );
-    polar.SetGridItemType( PCB_GRIDITEM_TYPE::POLAR );
+    PCB_GRID_ITEM polar( nullptr );
+    polar.SetGridItemType( PCB_GRID_TYPE::POLAR );
     polar.SetPosition( VECTOR2I( -750000, 125000 ) );
     polar.SetRadiusExtent( 8000000 );
     polar.SetRadiusSpacing( 1000000 );
@@ -336,10 +430,10 @@ BOOST_AUTO_TEST_CASE( GridItems )
     google::protobuf::Any any;
     polar.Serialize( any );
 
-    std::unique_ptr<PCB_GRIDITEM> roundTripped = makeGridItem();
+    std::unique_ptr<PCB_GRID_ITEM> roundTripped = makeGridItem();
     BOOST_REQUIRE( roundTripped->Deserialize( any ) );
 
-    BOOST_CHECK( roundTripped->GetGridItemType() == PCB_GRIDITEM_TYPE::POLAR );
+    BOOST_CHECK( roundTripped->GetGridItemType() == PCB_GRID_TYPE::POLAR );
     BOOST_CHECK_EQUAL( roundTripped->GetRadiusExtent(), 8000000 );
     BOOST_CHECK_EQUAL( roundTripped->GetRadiusSpacing(), 1000000 );
     BOOST_CHECK( roundTripped->GetPhiExtent() == EDA_ANGLE( 270.0, DEGREES_T ) );
@@ -348,6 +442,130 @@ BOOST_AUTO_TEST_CASE( GridItems )
     BOOST_CHECK_EQUAL( roundTripped->GetAffectsRouting(), true );
     BOOST_CHECK_EQUAL( roundTripped->GetAffectsPlacement(), false );
     BOOST_CHECK_EQUAL( roundTripped->IsLocked(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( Body3D )
+{
+    const auto makeBody =
+            []()
+            {
+                return std::make_unique<PCB_3D_BODY>();
+            };
+
+    // Populated body, including both layer sentinels
+    PCB_3D_BODY populated;
+    EXTRUDED_3D_BODY& extruded = *populated.MutableExtruded();
+    extruded.m_height = pcbIUScale.mmToIU( 2.5 );
+    extruded.m_standoff = pcbIUScale.mmToIU( 0.1 );
+    extruded.m_layer = F_CrtYd;
+    extruded.m_material = EXTRUSION_MATERIAL::METAL;
+    extruded.m_color = KIGFX::COLOR4D( 0.8, 0.4, 0.0, 0.9 );
+    extruded.m_offset = VECTOR3D( 1.0, -0.5, 0.2 );
+    extruded.m_scale = VECTOR3D( 1.5, 0.8, 2.0 );
+    extruded.m_rotation = VECTOR3D( 10.0, 20.0, 45.0 );
+    extruded.m_show = false;
+
+    testProtoFromKiCadObject<kiapi::board::types::Body3D>( &populated, makeBody );
+
+    PCB_3D_BODY autoLayer;
+    autoLayer.MutableExtruded()->m_layer = UNDEFINED_LAYER;
+
+    testProtoFromKiCadObject<kiapi::board::types::Body3D>( &autoLayer, makeBody );
+
+    PCB_3D_BODY padBBox;
+    padBBox.MutableExtruded()->m_layer = UNSELECTED_LAYER;
+
+    testProtoFromKiCadObject<kiapi::board::types::Body3D>( &padBBox, makeBody );
+
+    // No color set: the optional must stay absent across the round trip
+    google::protobuf::Any any;
+    autoLayer.Serialize( any );
+
+    kiapi::board::types::Body3D msg;
+    BOOST_REQUIRE( any.UnpackTo( &msg ) );
+    BOOST_CHECK( !msg.extruded().has_color() );
+
+    // A model-kind body is reserved and must be rejected on deserialize
+    msg.set_kind( kiapi::board::types::BDK_MODEL );
+    BOOST_REQUIRE( any.PackFrom( msg ) );
+
+    std::unique_ptr<PCB_3D_BODY> modelBody = makeBody();
+    BOOST_CHECK( !modelBody->Deserialize( any ) );
+
+    // A body whose parent names a different footprint is still imported as a child
+    BOARD    board;
+    FOOTPRINT target( &board );
+
+    kiapi::board::types::Footprint definition;
+
+    msg.Clear();
+    msg.set_kind( kiapi::board::types::BDK_EXTRUDED );
+    msg.mutable_id()->set_value( KIID().AsStdString() );
+    msg.mutable_parent()->set_value( "00000000-0000-0000-0000-000000000001" );
+    msg.mutable_extruded()->mutable_height()->set_value_nm( pcbIUScale.mmToIU( 2 ) );
+    BOOST_REQUIRE( any.PackFrom( msg ) );
+    *definition.add_items() = any;
+
+    BOOST_CHECK( target.DeserializeDefinition( definition ) );
+    BOOST_CHECK( target.HasBody() );
+    BOOST_CHECK_EQUAL( target.GetBody()->GetParentFootprint(), &target );
+
+}
+
+BOOST_AUTO_TEST_CASE( PadCustomShapeProxyItems )
+{
+    BOARD     board;
+    FOOTPRINT footprint( &board );
+    PAD       pad( &footprint );
+
+    auto numberBox = std::make_shared<PCB_SHAPE>( &pad, SHAPE_T::RECTANGLE );
+    numberBox->SetIsProxyItem();
+
+    auto spokeTemplate = std::make_shared<PCB_SHAPE>( &pad, SHAPE_T::SEGMENT );
+    spokeTemplate->SetIsProxyItem();
+
+    auto plainShape = std::make_shared<PCB_SHAPE>( &pad, SHAPE_T::SEGMENT );
+
+    google::protobuf::Any numberBoxAny;
+    numberBox->Serialize( numberBoxAny );
+
+    kiapi::board::types::BoardGraphicShape numberBoxProto;
+    BOOST_REQUIRE( numberBoxAny.UnpackTo( &numberBoxProto ) );
+    BOOST_REQUIRE( numberBoxProto.has_pad_custom_shape_options() );
+    BOOST_CHECK( numberBoxProto.pad_custom_shape_options().is_number_box() );
+
+    google::protobuf::Any spokeAny;
+    spokeTemplate->Serialize( spokeAny );
+
+    kiapi::board::types::BoardGraphicShape spokeProto;
+    BOOST_REQUIRE( spokeAny.UnpackTo( &spokeProto ) );
+    BOOST_REQUIRE( spokeProto.has_pad_custom_shape_options() );
+    BOOST_CHECK( spokeProto.pad_custom_shape_options().is_thermal_spoke_template() );
+
+    google::protobuf::Any plainAny;
+    plainShape->Serialize( plainAny );
+
+    kiapi::board::types::BoardGraphicShape plainProto;
+    BOOST_REQUIRE( plainAny.UnpackTo( &plainProto ) );
+    BOOST_CHECK( !plainProto.has_pad_custom_shape_options() );
+
+    // A role arriving on a mismatched shape type is ignored
+    google::protobuf::Any mismatchedAny;
+    spokeTemplate->Serialize( mismatchedAny );
+
+    kiapi::board::types::BoardGraphicShape mismatchedProto;
+    BOOST_REQUIRE( mismatchedAny.UnpackTo( &mismatchedProto ) );
+    mismatchedProto.clear_shape();
+    mismatchedProto.mutable_shape()->mutable_rectangle()->mutable_top_left()->set_x_nm( 0 );
+    mismatchedProto.mutable_shape()->mutable_rectangle()->mutable_top_left()->set_y_nm( 0 );
+    mismatchedProto.mutable_shape()->mutable_rectangle()->mutable_bottom_right()->set_x_nm( 1 );
+    mismatchedProto.mutable_shape()->mutable_rectangle()->mutable_bottom_right()->set_y_nm( 1 );
+    BOOST_REQUIRE( mismatchedAny.PackFrom( mismatchedProto ) );
+
+    PCB_SHAPE mismatched( &pad, SHAPE_T::RECTANGLE );
+    BOOST_REQUIRE( mismatched.Deserialize( mismatchedAny ) );
+    BOOST_CHECK( !mismatched.IsProxyItem() );
 }
 
 

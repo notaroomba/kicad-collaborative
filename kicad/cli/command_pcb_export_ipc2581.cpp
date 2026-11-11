@@ -26,22 +26,17 @@
 #include <wx/crt.h>
 
 #include <macros.h>
-#include <wx/tokenzr.h>
 
 #include <locale_io.h>
 
 #define ARG_COMPRESS "--compress"
 
 #define ARG_BOM_COL_INT_ID "--bom-col-int-id"
-#define ARG_BOM_COL_MFG_PN "--bom-col-mfg-pn"
 #define ARG_BOM_COL_MFG "--bom-col-mfg"
 #define ARG_BOM_COL_DIST_PN "--bom-col-dist-pn"
 #define ARG_BOM_COL_DIST "--bom-col-dist"
 #define ARG_BOM_REV "--bom-rev"
-#define ARG_UNITS "--units"
 #define ARG_MODE "--mode"
-#define ARG_SECTIONS "--sections"
-#define ARG_NET_NAMES "--net-names"
 #define ARG_REF_DES "--ref-des"
 
 CLI::PCB_EXPORT_IPC2581_COMMAND::PCB_EXPORT_IPC2581_COMMAND() :
@@ -49,14 +44,10 @@ CLI::PCB_EXPORT_IPC2581_COMMAND::PCB_EXPORT_IPC2581_COMMAND() :
 {
     addDrawingSheetArg();
     addDefineArg();
+    // Existing scripts pass --mode
+    addFabExportArgs( JOB_EXPORT_PCB_IPC2581(), ARG_MODE );
 
     m_argParser.add_description( std::string( "Export the PCB in IPC-2581 format" ) );
-
-    m_argParser.add_argument( ARG_PRECISION )
-            .help( std::string( "Precision" ) )
-            .scan<'i', int>()
-            .default_value( 6 )
-            .metavar( "PRECISION" );
 
     m_argParser.add_argument( ARG_COMPRESS )
             .help( std::string( "Compress the output" ) )
@@ -67,21 +58,10 @@ CLI::PCB_EXPORT_IPC2581_COMMAND::PCB_EXPORT_IPC2581_COMMAND() :
             .help( std::string( "IPC-2581 standard version" ) )
             .choices( "B", "C" );
 
-    m_argParser.add_argument( ARG_UNITS )
-            .default_value( std::string( "mm" ) )
-            .help( std::string( "Units" ) )
-            .choices( "mm", "in" );
-
     m_argParser.add_argument( ARG_BOM_COL_INT_ID )
             .default_value( std::string() )
             .help( std::string(
                     "Name of the part field to use for the Bill of Material Internal Id Column" ) )
-            .metavar( "FIELD_NAME" );
-
-    m_argParser.add_argument( ARG_BOM_COL_MFG_PN )
-            .default_value( std::string() )
-            .help( std::string( "Name of the part field to use for the Bill of "
-                                "Material Manufacturer Part Number Column" ) )
             .metavar( "FIELD_NAME" );
 
     m_argParser.add_argument( ARG_BOM_COL_MFG )
@@ -108,27 +88,6 @@ CLI::PCB_EXPORT_IPC2581_COMMAND::PCB_EXPORT_IPC2581_COMMAND() :
                                 "Defaults to schematic revision from the project file" ) )
             .metavar( "REVISION" );
 
-    // An absent mode keeps the content that KiCad wrote before the function modes
-    // An explicit userdef does not keep it
-    m_argParser.add_argument( ARG_MODE )
-            .default_value( std::string() )
-            .help( std::string( "Data set to export, per the IPC-2581 function mode table: "
-                                "userdef, bom, stackup, fabrication, assembly, test or "
-                                "stencil" ) )
-            .metavar( "DATA_SET" );
-
-    m_argParser.add_argument( ARG_SECTIONS )
-            .default_value( std::string() )
-            .help( std::string( "Override the optional sections of the chosen data set, as "
-                                "IPC-2581 section key letters" ) )
-            .metavar( "SECTION_KEY" );
-
-    m_argParser.add_argument( ARG_NET_NAMES )
-            .default_value( std::string( "include" ) )
-            .help( std::string( "Whether net names are exported as authored or replaced "
-                                "with opaque names that preserve connectivity" ) )
-            .choices( "include", "anonymize" );
-
     m_argParser.add_argument( ARG_REF_DES )
             .default_value( std::string( "include" ) )
             .help( std::string( "Whether reference designators are exported" ) )
@@ -142,13 +101,9 @@ int CLI::PCB_EXPORT_IPC2581_COMMAND::doPerform( KIWAY& aKiway )
 {
     std::unique_ptr<JOB_EXPORT_PCB_IPC2581> ipc2581Job( new JOB_EXPORT_PCB_IPC2581() );
 
-    ipc2581Job->m_filename = m_argInput;
+    applyFabExportArgs( *ipc2581Job );
     ipc2581Job->SetConfiguredOutputPath( m_argOutput );
-    ipc2581Job->m_drawingSheet = m_argDrawingSheet;
     ipc2581Job->SetVarOverrides( m_argDefineVars );
-
-    if( !m_argVariantNames.empty() )
-        ipc2581Job->m_variant = m_argVariantNames.front();
 
     if( !wxFile::Exists( ipc2581Job->m_filename ) )
     {
@@ -157,7 +112,6 @@ int CLI::PCB_EXPORT_IPC2581_COMMAND::doPerform( KIWAY& aKiway )
     }
 
     ipc2581Job->m_compress = m_argParser.get<bool>( ARG_COMPRESS );
-    ipc2581Job->m_precision = m_argParser.get<int>( ARG_PRECISION );
 
     wxString version = From_UTF8( m_argParser.get<std::string>( ARG_VERSION ).c_str() );
     if( version == 'B' )
@@ -165,16 +119,8 @@ int CLI::PCB_EXPORT_IPC2581_COMMAND::doPerform( KIWAY& aKiway )
     else if( version == 'C' )
         ipc2581Job->m_version = JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION::C;
 
-    wxString units = From_UTF8( m_argParser.get<std::string>( ARG_UNITS ).c_str() );
-    if( units == "mm" )
-        ipc2581Job->m_units = JOB_EXPORT_PCB_IPC2581::IPC2581_UNITS::MM;
-    else if( units == "in" )
-        ipc2581Job->m_units = JOB_EXPORT_PCB_IPC2581::IPC2581_UNITS::INCH;
-
     ipc2581Job->m_colInternalId =
             From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_INT_ID ).c_str() );
-    ipc2581Job->m_colMfgPn =
-            From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_MFG_PN ).c_str() );
     ipc2581Job->m_colMfg = From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_MFG ).c_str() );
     ipc2581Job->m_colDistPn =
             From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_DIST_PN ).c_str() );
@@ -182,12 +128,9 @@ int CLI::PCB_EXPORT_IPC2581_COMMAND::doPerform( KIWAY& aKiway )
             From_UTF8( m_argParser.get<std::string>( ARG_BOM_COL_DIST ).c_str() );
     ipc2581Job->m_bomRev =
             From_UTF8( m_argParser.get<std::string>( ARG_BOM_REV ).c_str() );
-    ipc2581Job->m_mode = From_UTF8( m_argParser.get<std::string>( ARG_MODE ).c_str() );
-
-    ipc2581Job->m_sections = From_UTF8( m_argParser.get<std::string>( ARG_SECTIONS ).c_str() );
-
-    ipc2581Job->m_netNamePolicy = From_UTF8( m_argParser.get<std::string>( ARG_NET_NAMES ).c_str() );
-    ipc2581Job->m_refDesPolicy = From_UTF8( m_argParser.get<std::string>( ARG_REF_DES ).c_str() );
+    ipc2581Job->m_refDes = m_argParser.get<std::string>( ARG_REF_DES ) == "omit"
+                                   ? JOB_EXPORT_PCB_IPC2581::REF_DES::OMIT
+                                   : JOB_EXPORT_PCB_IPC2581::REF_DES::INCLUDE;
 
     LOCALE_IO dummy;
     return aKiway.ProcessJob( KIWAY::FACE_PCB, ipc2581Job.get() );

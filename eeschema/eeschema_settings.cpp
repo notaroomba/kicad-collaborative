@@ -318,6 +318,8 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<bool>( "aui.show_properties",
             &m_AuiPanels.show_properties, true ) );
 
+    m_params.emplace_back( new PARAM<bool>( "aui.show_git_commit_pane", &m_AuiPanels.show_git_commit_pane, false ) );
+
     m_params.emplace_back( new PARAM<int>( "aui.properties_panel_width",
             &m_AuiPanels.properties_panel_width, -1 ) );
 
@@ -389,6 +391,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM<bool>( "drawing.auto_start_wires",
             &m_Drawing.auto_start_wires, true ) );
 
+    m_params.emplace_back( new PARAM<bool>( "drawing.auto_place_sheet_pins",
+            &m_Drawing.auto_place_sheet_pins, true ) );
+
     m_params.emplace_back( new PARAM<int>( "drawing.repeat_label_increment",
             &m_Drawing.repeat_label_increment, 1 ) );
 
@@ -401,11 +406,26 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM_ENUM<POWER_SYMBOLS>( "drawing.new_power_symbols",
             &m_Drawing.new_power_symbols, POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::DEFAULT, POWER_SYMBOLS::LOCAL ) );
 
+    m_params.emplace_back( new PARAM<bool>( "find_replace.intersheets_ref_show",
+            &m_Drawing.intersheets_ref_show, false ) );
+
+    m_params.emplace_back( new PARAM<bool>( "find_replace.intersheets_ref_own_page",
+            &m_Drawing.intersheets_ref_own_page, true ) );
+
+    m_params.emplace_back( new PARAM<bool>( "find_replace.intersheets_ref_short",
+            &m_Drawing.intersheets_ref_short, false ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "remote_symbols.intersheets_ref_prefix",
+            &m_Drawing.intersheets_ref_prefix, wxS( DEFAULT_IREF_PREFIX ) ) );
+
+    m_params.emplace_back( new PARAM<wxString>( "remote_symbols.intersheets_ref_suffix",
+            &m_Drawing.intersheets_ref_suffix, wxS( DEFAULT_IREF_SUFFIX ) ) );
+
     m_params.emplace_back( new PARAM<int>( "drawing.junction_size_choice",
-            &m_Drawing.junction_size_choice, 3 ) );
+            &m_Drawing.junction_size_choice, 3, 0, 5 ) );
 
     m_params.emplace_back( new PARAM<int>( "drawing.hop_over_size_choice",
-            &m_Drawing.hop_over_size_choice, 0 ) );
+            &m_Drawing.hop_over_size_choice, 0, 0, 5 ) );
 
     m_params.emplace_back( new PARAM<bool>( "find_replace.search_all_fields",
             &m_FindReplaceExtra.search_all_fields, false ) );
@@ -415,6 +435,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "find_replace.search_current_sheet_only",
             &m_FindReplaceExtra.search_current_sheet_only, false ) );
+
+    m_params.emplace_back( new PARAM<bool>( "find_replace.search_selected_only",
+            &m_FindReplaceExtra.search_selected_only, false ) );
 
     m_params.emplace_back( new PARAM<bool>( "find_replace.replace_references",
             &m_FindReplaceExtra.replace_references, false ) );
@@ -551,6 +574,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
     m_params.emplace_back( new PARAM_MAP<int>( "field_editor.field_widths",
             &m_FieldEditorPanel.field_widths, {} ) );
 
+    m_params.emplace_back( new PARAM_MAP<std::vector<std::string>>( "database_library.column_choices",
+            &m_DatabaseColumnChoices, {} ) );
+
     m_params.emplace_back( new PARAM<int>( "field_editor.selection_mode",
             &m_FieldEditorPanel.selection_mode, 0 ) );
 
@@ -653,6 +679,9 @@ EESCHEMA_SETTINGS::EESCHEMA_SETTINGS() :
 
     m_params.emplace_back( new PARAM<bool>( "lib_view.show_pin_electrical_type",
             &m_LibViewPanel.show_pin_electrical_type, true ) );
+
+    m_params.emplace_back( new PARAM<bool>( "lib_view.show_pin_numbers",
+            &m_LibViewPanel.show_pin_numbers, true ) );
 
     m_params.emplace_back( new PARAM<wxString>( "system.last_symbol_lib_dir",
             &m_lastSymbolLibDir, "" ) );

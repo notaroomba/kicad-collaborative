@@ -149,7 +149,7 @@ bool TOPOLOGY::NearestUnconnectedAnchorPoint( const LINE* aTrack, VECTOR2I& aPoi
     {
         int anchor;
 
-        TOPOLOGY topo( tmpNode.get() );
+        TOPOLOGY topo( tmpNode.get(), m_iface );
         ITEM* it = topo.NearestUnconnectedItem( jt, &anchor );
 
         if( !it )
@@ -184,7 +184,8 @@ bool TOPOLOGY::LeadingRatLine( const LINE* aTrack, SHAPE_LINE_CHAIN& aRatLine )
 
 ITEM* TOPOLOGY::NearestUnconnectedItem( const JOINT* aStart, int* aAnchor, int aKindMask )
 {
-    std::set<ITEM*> disconnected;
+    std::set<ITEM*>          disconnected;
+    std::vector<const ITEM*> joined;
 
     m_world->AllItemsInNet( aStart->Net(), disconnected );
 
@@ -194,8 +195,14 @@ ITEM* TOPOLOGY::NearestUnconnectedItem( const JOINT* aStart, int* aAnchor, int a
         {
             if( disconnected.find( link ) != disconnected.end() )
                 disconnected.erase( link );
+
+            joined.push_back( link );
         }
     }
+
+    // The router does not model zones, so the board decides what they already join us to
+    if( m_iface )
+        m_iface->RemoveBoardConnected( joined, disconnected );
 
     int best_dist = INT_MAX;
     ITEM* best = nullptr;
@@ -540,7 +547,7 @@ std::vector<LINE> TOPOLOGY::findLinesFromVia( ROUTER_IFACE* aRouterIface, VIA* a
     COLLISION_SEARCH_OPTIONS opts;
 
     opts.m_differentNetsOnly = false;
-    opts.m_overrideClearance = 0;
+    opts.SetFixedClearanceOverride( 0 );
     opts.m_kindMask = ITEM::SEGMENT_T | ITEM::ARC_T;
 
     m_world->QueryColliding( aVia, obstacles, opts );
@@ -1085,7 +1092,7 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
                 if( n_seg->Width() != p_seg->Width() )
                     continue;
 
-                if( !p_seg->Seg().ApproxParallel( n_seg->Seg(), DP_PARALLELITY_THRESHOLD ) )
+                if( !p_seg->Seg().ApproxParallel( n_seg->Seg(), DIFF_PAIR::DP_PARALLELITY_THRESHOLD ) )
                     continue;
 
                 SEG p_clip, n_clip;
@@ -1106,7 +1113,7 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
                 VECTOR2I    centerDiff = n_arc->CArc().GetCenter() - p_arc->CArc().GetCenter();
                 SEG::ecoord centerDist_sq = centerDiff.SquaredEuclideanNorm();
 
-                if( centerDist_sq > SEG::Square( DP_PARALLELITY_THRESHOLD ) )
+                if( centerDist_sq > SEG::Square( DIFF_PAIR::DP_PARALLELITY_THRESHOLD ) )
                     continue;
 
                 dist_sq = SEG::Square( p_arc->CArc().GetRadius() - n_arc->CArc().GetRadius() );
@@ -1176,15 +1183,13 @@ bool TOPOLOGY::AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair )
         gap = (int) std::abs( refArc->CArc().GetRadius() - coupledArc->CArc().GetRadius() ) - lp.Width();
     }
 
-    aPair = DIFF_PAIR( lp, ln );
-    aPair.SetWidth( lp.Width() );
+    aPair = DIFF_PAIR( lp, ln, DP_DIMENSIONS( lp.Width(), gap ) );
     aPair.SetLayers( lp.Layers() );
-    aPair.SetGap( gap );
 
     return true;
 }
 
-const TOPOLOGY::CLUSTER TOPOLOGY::AssembleCluster( ITEM* aStart, int aLayer, double aAreaExpansionLimit, NET_HANDLE aExcludedNet )
+const TOPOLOGY::CLUSTER TOPOLOGY::AssembleCluster( ITEM* aStart, int aLayer, double aAreaExpansionLimit, NET_HANDLE aExcludedNet, int aOverrideClearance )
 {
     CLUSTER cluster;
     std::deque<ITEM*> pending;
@@ -1192,7 +1197,7 @@ const TOPOLOGY::CLUSTER TOPOLOGY::AssembleCluster( ITEM* aStart, int aLayer, dou
     COLLISION_SEARCH_OPTIONS opts;
 
     opts.m_differentNetsOnly = false;
-    opts.m_overrideClearance = 0;
+    opts.SetFixedClearanceOverride( aOverrideClearance );
 
     pending.push_back( aStart );
 

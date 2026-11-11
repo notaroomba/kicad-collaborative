@@ -36,6 +36,17 @@ const wxChar* const traceApi = wxT( "KICAD_API" );
 namespace kiapi::common
 {
 
+KICOMMON_API ApiResponseStatus MakeResponseStatus( ApiStatusCode aCode, const std::string& aMessage )
+{
+    ApiResponseStatus s;
+    s.set_status( aCode );
+
+    if( !aMessage.empty() )
+        s.set_error_message( aMessage );
+
+    return s;
+}
+
 KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any& aMessage )
 {
     if( aMessage.type_url() == "type.googleapis.com/kiapi.schematic.types.BusEntry" )
@@ -65,6 +76,9 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.board.types.BoardText", PCB_TEXT_T },
         { "type.googleapis.com/kiapi.board.types.BoardTextBox", PCB_TEXTBOX_T },
         { "type.googleapis.com/kiapi.board.types.Table", PCB_TABLE_T },
+        { "type.googleapis.com/kiapi.board.types.DrillChart", PCB_DRILL_CHART_T },
+        { "type.googleapis.com/kiapi.board.types.DrillMap", PCB_DRILL_MAP_T },
+        { "type.googleapis.com/kiapi.board.types.StackupTable", PCB_STACKUP_TABLE_T },
         { "type.googleapis.com/kiapi.board.types.TableCell", PCB_TABLECELL_T },
         { "type.googleapis.com/kiapi.board.types.BoardGraphicShape", PCB_SHAPE_T },
         { "type.googleapis.com/kiapi.board.types.Barcode", PCB_BARCODE_T },
@@ -73,9 +87,13 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.board.types.Dimension", PCB_DIMENSION_T },
         { "type.googleapis.com/kiapi.board.types.ReferenceImage", PCB_REFERENCE_IMAGE_T },
         { "type.googleapis.com/kiapi.board.types.ReferencePoint", PCB_POINT_T },
-        { "type.googleapis.com/kiapi.board.types.GridItem", PCB_GRIDITEM_T },
+        { "type.googleapis.com/kiapi.board.types.GridItem", PCB_GRID_ITEM_T },
         { "type.googleapis.com/kiapi.board.types.Group", PCB_GROUP_T },
+        { "type.googleapis.com/kiapi.board.types.TuningPattern", PCB_GENERATOR_T },
+        { "type.googleapis.com/kiapi.board.types.ViaStitchArea", PCB_GENERATOR_T },
+        { "type.googleapis.com/kiapi.board.types.ViaStack", PCB_GENERATOR_T },
         { "type.googleapis.com/kiapi.board.types.Constraint", PCB_CONSTRAINT_T },
+        { "type.googleapis.com/kiapi.board.types.Body3D", PCB_3D_BODY_T },
         { "type.googleapis.com/kiapi.board.types.Field", PCB_FIELD_T },
         { "type.googleapis.com/kiapi.board.types.FootprintInstance", PCB_FOOTPRINT_T },
         { "type.googleapis.com/kiapi.schematic.types.Junction", SCH_JUNCTION_T },
@@ -97,6 +115,7 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
         { "type.googleapis.com/kiapi.schematic.types.SheetSymbol", SCH_SHEET_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicSymbolInstance", SCH_SYMBOL_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicPin", SCH_PIN_T },
+        { "type.googleapis.com/kiapi.schematic.types.SchematicSymbol", LIB_SYMBOL_T },
         { "type.googleapis.com/kiapi.schematic.types.SchematicRuleArea", SCH_RULE_AREA_T },
     };
 
@@ -107,6 +126,23 @@ KICOMMON_API std::optional<KICAD_T> TypeNameFromAny( const google::protobuf::Any
 
     wxLogTrace( traceApi, wxString::Format( wxS( "Any message type %s is not known" ),
                                             aMessage.type_url() ) );
+
+    return std::nullopt;
+}
+
+
+KICOMMON_API std::optional<wxString> GeneratorTypeFromAny( const google::protobuf::Any& aMessage )
+{
+    static const std::map<std::string, wxString> s_generatorTypes = {
+        { "type.googleapis.com/kiapi.board.types.TuningPattern",    wxS( "tuning_pattern" ) },
+        { "type.googleapis.com/kiapi.board.types.ViaStitchArea",    wxS( "via_stitch" ) },
+        { "type.googleapis.com/kiapi.board.types.ViaStack",         wxS( "via_stack" ) },
+    };
+
+    auto it = s_generatorTypes.find( aMessage.type_url() );
+
+    if( it != s_generatorTypes.end() )
+        return it->second;
 
     return std::nullopt;
 }
@@ -134,7 +170,8 @@ KICOMMON_API void PackVector2( types::Vector2& aOutput, const VECTOR2I& aInput, 
 
 KICOMMON_API VECTOR2I UnpackVector2( const types::Vector2& aInput, const EDA_IU_SCALE& aScale )
 {
-    return VECTOR2I( aScale.NmToIU( aInput.x_nm() ), aScale.NmToIU( aInput.y_nm() ) );
+    return VECTOR2I( KiROUND( aScale.NmToIUD( aInput.x_nm() ) ),
+                     KiROUND( aScale.NmToIUD( aInput.y_nm() ) ) );
 }
 
 
@@ -173,7 +210,7 @@ KICOMMON_API void PackDistance( types::Distance& aOutput, int aInput, const EDA_
 
 KICOMMON_API int UnpackDistance( const types::Distance& aInput, const EDA_IU_SCALE& aScale )
 {
-    return aScale.NmToIU( aInput.value_nm() );
+    return KiROUND( aScale.NmToIUD( aInput.value_nm() ) );
 }
 
 
@@ -375,9 +412,13 @@ KICOMMON_API void PackProject( types::ProjectSpecifier& aOutput, const PROJECT& 
     aOutput.set_path( aInput.GetProjectPath().ToUTF8() );
 }
 
-
-extern const KICOMMON_API std::string KiwayClientName = "org.kicad.internal.kiway";
-extern const KICOMMON_API std::string StandaloneCrossProbeClientName = "org.kicad.internal.crossprobe";
+#if defined( __MINGW32__ )
+const std::string KiwayClientName = "org.kicad.internal.kiway";
+const std::string StandaloneCrossProbeClientName = "org.kicad.internal.crossprobe";
+#else
+const KICOMMON_API std::string KiwayClientName = "org.kicad.internal.kiway";
+const KICOMMON_API std::string StandaloneCrossProbeClientName = "org.kicad.internal.crossprobe";
+#endif
 
 
 KICOMMON_API bool PackKiwayApiMessage( const google::protobuf::Message& aMessage, std::string& aBytes )
@@ -386,7 +427,10 @@ KICOMMON_API bool PackKiwayApiMessage( const google::protobuf::Message& aMessage
     request.mutable_header()->set_client_name( KiwayClientName );
 
     if( !request.mutable_message()->PackFrom( aMessage ) )
+    {
+        wxFAIL_MSG( "Failed to pack Kiway message" );
         return false;
+    }
 
     aBytes = request.SerializeAsString();
     return true;

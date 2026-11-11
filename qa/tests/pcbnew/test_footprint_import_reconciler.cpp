@@ -21,6 +21,7 @@
 #include <set>
 #include <vector>
 
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <pcbnew_utils/board_test_utils.h>
 
@@ -32,6 +33,7 @@
 #include <board.h>
 #include <footprint.h>
 #include <lib_id.h>
+#include <pad.h>
 #include <pgm_base.h>
 #include <project.h>
 #include <project_pcb.h>
@@ -39,13 +41,18 @@
 #include <settings/settings_manager.h>
 #include <footprint_library_adapter.h>
 #include <io/easyedapro/easyedapro_import_utils.h>
+#include <kiface_base.h>
 #include <libraries/library_manager.h>
 #include <libraries/library_table.h>
 #include <netlist_reader/board_netlist_updater.h>
 #include <netlist_reader/pcb_netlist.h>
+#include <pcbnew_settings.h>
+#include <pcb_io/allegro/pcb_io_allegro.h>
 #include <pcb_io/altium/pcb_io_altium_designer.h>
+#include <pcb_io/pcb_io_mgr.h>
 #include <pcb_io/eagle/pcb_io_eagle.h>
 #include <pcb_io/easyedapro/pcb_io_easyedapro_v3.h>
+#include <pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.h>
 #include <tool/tool_manager.h>
 
 #include <footprint_import_reconciler.h>
@@ -54,17 +61,10 @@
 namespace
 {
 /// Stage a fresh, private project directory and wire up the global library manager for it.
-wxString stageProject( const wxString& aStem )
+wxString stageProject( const std::filesystem::path& aProjectRoot, const wxString& aStem )
 {
     wxString sep = wxFileName::GetPathSeparator();
-    wxString dir = wxStandardPaths::Get().GetTempDir() + sep + aStem + wxT( "-fpreconcile-qa" );
-
-    if( wxDirExists( dir ) )
-        wxFileName::Rmdir( dir, wxPATH_RMDIR_RECURSIVE );
-
-    wxFileName::Mkdir( dir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL );
-
-    wxString projectPath = dir + sep + aStem + wxT( ".kicad_pro" );
+    wxString projectPath = wxString::FromUTF8( aProjectRoot.string() ) + sep + aStem + wxT( ".kicad_pro" );
 
     Pgm().GetSettingsManager().LoadProject( projectPath );
     Pgm().GetLibraryManager().LoadProjectTables(
@@ -77,10 +77,10 @@ wxString stageProject( const wxString& aStem )
 /// The EasyEDA Pro v3 sample board, loaded from a private copy of the archive.
 struct IMPORTED_BOARD
 {
-    std::unique_ptr<PCB_IO_EASYEDAPRO_V3>   m_plugin;
-    std::unique_ptr<BOARD>                  m_board;
-    std::vector<std::unique_ptr<FOOTPRINT>> m_definitions;
-    std::unique_ptr<KI_TEST::TEMPORARY_DIRECTORY> m_sourceDir;
+    std::unique_ptr<PCB_IO_EASYEDAPRO_V3>         m_plugin;
+    std::unique_ptr<BOARD>                        m_board;
+    std::vector<std::unique_ptr<FOOTPRINT>>       m_definitions;
+    std::unique_ptr<KI_TEST::SCOPED_TEMP_DIR>     m_sourceDir;
 };
 
 
@@ -96,10 +96,9 @@ IMPORTED_BOARD importSampleBoard( PROJECT& aProject, const std::string& aTag )
     srcFn.SetFullName( archiveName );
     BOOST_REQUIRE_MESSAGE( srcFn.FileExists(), "Missing EasyEDA Pro v3 board fixture" );
 
-    sample.m_sourceDir = std::make_unique<KI_TEST::TEMPORARY_DIRECTORY>( aTag, "" );
+    sample.m_sourceDir = std::make_unique<KI_TEST::SCOPED_TEMP_DIR>( wxString::FromUTF8( aTag ) );
 
-    wxFileName importFn( wxString::FromUTF8( sample.m_sourceDir->GetPath().string() ),
-                         archiveName );
+    wxFileName importFn( sample.m_sourceDir->PathStr(), archiveName );
     BOOST_REQUIRE( wxCopyFile( srcFn.GetFullPath(), importFn.GetFullPath() ) );
 
     std::map<std::string, UTF8> properties;
@@ -108,8 +107,7 @@ IMPORTED_BOARD importSampleBoard( PROJECT& aProject, const std::string& aTag )
     sample.m_plugin = std::make_unique<PCB_IO_EASYEDAPRO_V3>();
     sample.m_board = std::make_unique<BOARD>();
     sample.m_board->SetProject( &aProject );
-    sample.m_plugin->LoadBoard( importFn.GetFullPath(), sample.m_board.get(), &properties,
-                                &aProject );
+    sample.m_plugin->LoadAndAppendBoard( importFn.GetFullPath(), *sample.m_board, &properties, &aProject );
 
     BOOST_REQUIRE_GT( sample.m_board->Footprints().size(), 0 );
 
@@ -201,7 +199,8 @@ BOOST_AUTO_TEST_SUITE( FootprintImportReconciler )
 // fails on revert, since Eagle FPIDs keep empty nicknames
 BOOST_AUTO_TEST_CASE( EagleBoardResolvesToGeneratedCache )
 {
-    wxString projectPath = stageProject( wxS( "eagle_fpreconcile" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "eagle_fpreconcile" ) );
+    wxString                 projectPath = stageProject( projectDir.Path(), wxS( "eagle_fpreconcile" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     wxFileName brdFn( KI_TEST::GetEeschemaTestDataDir() );
@@ -213,7 +212,7 @@ BOOST_AUTO_TEST_CASE( EagleBoardResolvesToGeneratedCache )
     PCB_IO_EAGLE           plugin;
     std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
     board->SetProject( &project );
-    plugin.LoadBoard( brdFn.GetFullPath(), board.get(), nullptr, &project );
+    plugin.LoadAndAppendBoard( brdFn.GetFullPath(), *board, nullptr, &project );
 
     BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
 
@@ -276,7 +275,8 @@ BOOST_AUTO_TEST_CASE( EagleBoardResolvesToGeneratedCache )
 // and resolve through the adapter
 BOOST_AUTO_TEST_CASE( AltiumBoardResolvesToGeneratedCache )
 {
-    stageProject( wxS( "altium_fpreconcile" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "altium_fpreconcile" ) );
+    stageProject( projectDir.Path(), wxS( "altium_fpreconcile" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     std::string dataPath =
@@ -285,7 +285,7 @@ BOOST_AUTO_TEST_CASE( AltiumBoardResolvesToGeneratedCache )
     PCB_IO_ALTIUM_DESIGNER plugin;
     std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
     board->SetProject( &project );
-    plugin.LoadBoard( dataPath, board.get(), nullptr, &project );
+    plugin.LoadAndAppendBoard( dataPath, *board, nullptr, &project );
 
     BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
 
@@ -328,19 +328,327 @@ BOOST_AUTO_TEST_CASE( AltiumBoardResolvesToGeneratedCache )
 }
 
 
+// A cached footprint must equal every placed instance, or updating from the library edits the board
+// fails on revert, since distinct placed versions then share one cache item
+BOOST_AUTO_TEST_CASE( CachedFootprintsMatchPlacedFootprints )
+{
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "altium_fpparity" ) );
+    stageProject( projectDir.Path(), wxS( "altium_fpparity" ) );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+
+    PCB_IO_ALTIUM_DESIGNER plugin;
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    board->SetProject( &project );
+    plugin.LoadAndAppendBoard( KI_TEST::GetPcbnewTestDataDir()
+                                       + "plugins/altium/eDP_adapter_dvt1_source/eDP_adapter_dvt1.PcbDoc",
+                               *board, nullptr, &project );
+
+    std::vector<std::unique_ptr<FOOTPRINT>> defs;
+
+    for( FOOTPRINT* fp : plugin.GetImportedCachedLibraryFootprints() )
+        defs.emplace_back( fp );
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    FOOTPRINT_IMPORT_RECONCILER reconciler( *adapter, project.GetProjectPath() );
+    reconciler.Reconcile( board.get(), std::move( defs ), wxS( "parity-fps" ), {} );
+
+    int checked = 0;
+    int differing = 0;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        std::unique_ptr<FOOTPRINT> cached( adapter->LoadFootprint( fp->GetFPID().GetUniStringLibNickname(),
+                                                                   fp->GetFPID().GetUniStringLibItemName(), true ) );
+
+        if( !cached )
+            continue;
+
+        checked++;
+
+        if( fp->FootprintNeedsUpdate( cached.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ) )
+            differing++;
+    }
+
+    // an import with no cache entries would pass unchecked
+    BOOST_CHECK_GT( checked, 0 );
+
+    BOOST_CHECK_EQUAL( differing, 0 );
+}
+
+
+// The same holds when the importer hands over no definitions and the placed footprints are all there is
+// fails on revert, since the first placement is then cached for every same-named one
+BOOST_AUTO_TEST_CASE( CachedFootprintsMatchPlacedFootprintsWithoutDefinitions )
+{
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "allegro_fpparity" ) );
+    stageProject( projectDir.Path(), wxS( "allegro_fpparity" ) );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+
+    PCB_IO_ALLEGRO         plugin;
+    std::unique_ptr<BOARD> board = plugin.LoadBoard( KI_TEST::GetPcbnewTestDataDir()
+                                                             + "plugins/allegro/boards/ProiectBoard/ProiectBoard.brd",
+                                                     nullptr, &project );
+    BOOST_REQUIRE( board );
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    FOOTPRINT_IMPORT_RECONCILER reconciler( *adapter, project.GetProjectPath() );
+    reconciler.Reconcile( board.get(), {}, wxS( "parity-fps" ), {} );
+
+    BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
+
+    int differing = 0;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        std::unique_ptr<FOOTPRINT> cached( adapter->LoadFootprint( fp->GetFPID().GetUniStringLibNickname(),
+                                                                   fp->GetFPID().GetUniStringLibItemName(), true ) );
+
+        // a footprint with no cache entry would pass unchecked
+        BOOST_REQUIRE( cached );
+
+        if( fp->FootprintNeedsUpdate( cached.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ) )
+            differing++;
+    }
+
+    BOOST_CHECK_EQUAL( differing, 0 );
+}
+
+
+// A source library the project names may lack a footprint the board uses, which must not stop the
+// reconciliation; fails on revert, since the missing footprint is then an error that aborts it
+BOOST_AUTO_TEST_CASE( SourceLibraryMissingAFootprintStillReconciles )
+{
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "altium_fpreconcile_missing" ) );
+    stageProject( projectDir.Path(), wxS( "altium_fpreconcile_missing" ) );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+
+    std::string dataPath =
+            KI_TEST::GetPcbnewTestDataDir() + "plugins/altium/HiFive/HiFive1.B01.PcbDoc";
+
+    PCB_IO_ALTIUM_DESIGNER plugin;
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    board->SetProject( &project );
+    plugin.LoadAndAppendBoard( dataPath, *board, nullptr, &project );
+
+    BOOST_REQUIRE_GT( board->Footprints().size(), 0 );
+
+    std::vector<std::unique_ptr<FOOTPRINT>> defs;
+
+    for( FOOTPRINT* fp : plugin.GetImportedCachedLibraryFootprints() )
+        defs.emplace_back( fp );
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    // a real Altium library that holds none of the board's footprints
+    std::optional<LIBRARY_TABLE*> table =
+            Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::FOOTPRINT, LIBRARY_TABLE_SCOPE::PROJECT );
+    BOOST_REQUIRE( table );
+
+    LIBRARY_TABLE_ROW& row = ( *table )->InsertRow();
+    row.SetNickname( wxS( "other_source" ) );
+    row.SetURI( wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() + "plugins/altium/pcblib/Tracks.v6.PcbLib" ) );
+    row.SetType( PCB_IO_MGR::ShowType( PCB_IO_MGR::ALTIUM_DESIGNER ) );
+    BOOST_REQUIRE( ( *table )->Save() );
+    Pgm().GetLibraryManager().LoadProjectTables( { LIBRARY_TABLE_TYPE::FOOTPRINT } );
+
+    const wxString              cacheNick = wxS( "hifive-missing-import-fps" );
+    FOOTPRINT_IMPORT_RECONCILER reconciler( *adapter, project.GetProjectPath() );
+
+    FOOTPRINT_IMPORT_RECONCILE_RESULT result;
+
+    BOOST_CHECK_NO_THROW( result = reconciler.Reconcile( board.get(), std::move( defs ), cacheNick,
+                                                          { wxS( "other_source" ) } ) );
+
+    BOOST_CHECK_EQUAL( result.m_cacheNickname, cacheNick );
+    BOOST_CHECK_EQUAL( result.m_unresolved, 0 );
+}
+
+
+// A back side footprint is cached un-flipped and must still read as the same footprint
+// fails on revert, since a half turned rectangular pad then reads as a changed pad
+BOOST_AUTO_TEST_CASE( BackSideFootprintsMatchTheirCachedCopy )
+{
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "backside_fpparity" ) );
+    stageProject( projectDir.Path(), wxS( "backside_fpparity" ) );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+
+    PCBNEW_SETTINGS settings;
+    settings.m_FlipDirection = FLIP_DIRECTION::LEFT_RIGHT;
+    Kiface().InitSettings( &settings );
+
+    struct RESTORE
+    {
+        ~RESTORE() { Kiface().InitSettings( nullptr ); }
+    } restore;
+
+    PCB_IO_ALTIUM_DESIGNER plugin;
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    board->SetProject( &project );
+    plugin.LoadAndAppendBoard( KI_TEST::GetPcbnewTestDataDir()
+                                       + "plugins/altium/eDP_adapter_dvt1_source/eDP_adapter_dvt1.PcbDoc",
+                               *board, nullptr, &project );
+
+    std::vector<std::unique_ptr<FOOTPRINT>> defs;
+
+    for( FOOTPRINT* fp : plugin.GetImportedCachedLibraryFootprints() )
+        defs.emplace_back( fp );
+
+    int flipped = 0;
+
+    for( FOOTPRINT* fp : board->Footprints() )
+    {
+        if( fp->GetLayer() == F_Cu && fp->Pads().size() > 2 )
+        {
+            fp->Flip( fp->GetPosition(), FLIP_DIRECTION::LEFT_RIGHT );
+            flipped++;
+        }
+    }
+
+    BOOST_REQUIRE_GT( flipped, 0 );
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    FOOTPRINT_IMPORT_RECONCILER reconciler( *adapter, project.GetProjectPath() );
+    reconciler.Reconcile( board.get(), std::move( defs ), wxS( "parity-fps" ), {} );
+
+    // the DRC reads the board back from disk, so compare what was saved, not what was imported
+    PCB_IO_KICAD_SEXPR     kicad;
+    wxString               boardPath = project.GetProjectPath() + wxS( "backside.kicad_pcb" );
+    kicad.SaveBoard( boardPath, *board );
+    std::unique_ptr<BOARD> reloaded( kicad.LoadBoard( boardPath, nullptr, &project ) );
+    BOOST_REQUIRE( reloaded );
+
+    int checked = 0;
+    int differing = 0;
+
+    for( FOOTPRINT* fp : reloaded->Footprints() )
+    {
+        std::unique_ptr<FOOTPRINT> cached( adapter->LoadFootprint( fp->GetFPID().GetUniStringLibNickname(),
+                                                                   fp->GetFPID().GetUniStringLibItemName(), true ) );
+
+        if( !cached )
+            continue;
+
+        checked++;
+
+        if( fp->FootprintNeedsUpdate( cached.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ) )
+            differing++;
+    }
+
+    // an import with no cache entries would pass unchecked
+    BOOST_CHECK_GT( checked, 0 );
+
+    BOOST_CHECK_EQUAL( differing, 0 );
+}
+
+
+// A back side footprint with an asymmetric custom pad is cached un-flipped and must read as unchanged
+// fails on revert, since a left-right flip leaves the cached copy half turned and its pad angle off by 180
+BOOST_AUTO_TEST_CASE( BackSideCustomPadMatchesCachedCopy )
+{
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "backside_custompad" ) );
+    stageProject( projectDir.Path(), wxS( "backside_custompad" ) );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+
+    PCBNEW_SETTINGS settings;
+    settings.m_FlipDirection = FLIP_DIRECTION::LEFT_RIGHT;
+    Kiface().InitSettings( &settings );
+
+    struct RESTORE
+    {
+        ~RESTORE() { Kiface().InitSettings( nullptr ); }
+    } restore;
+
+    BOARD board;
+    board.SetProject( &project );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetFPID( LIB_ID( wxS( "" ), wxS( "AsymmetricPad" ) ) );
+    board.Add( footprint );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetNumber( wxS( "1" ) );
+    pad->SetAttribute( PAD_ATTRIB::SMD );
+    pad->SetLayerSet( PAD::SMDMask() );
+    pad->SetShape( F_Cu, PAD_SHAPE::CUSTOM );
+    pad->SetSize( F_Cu, VECTOR2I( 300000, 300000 ) );
+    pad->SetAnchorPadShape( F_Cu, PAD_SHAPE::CIRCLE );
+    pad->AddPrimitivePoly( F_Cu, std::vector<VECTOR2I>{ { 0, 0 }, { 900000, 0 }, { 900000, 300000 }, { 0, 300000 } },
+                           0, true );
+    footprint->Add( pad );
+
+    footprint->Flip( footprint->GetPosition(), FLIP_DIRECTION::LEFT_RIGHT );
+    footprint->Rotate( footprint->GetPosition(), ANGLE_90 );
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    publishLibrary( project, *adapter, wxS( "backside-custom" ), wxS( "backside-custom" ), *footprint );
+    footprint->SetFPID( LIB_ID( wxS( "backside-custom" ), wxS( "AsymmetricPad" ) ) );
+
+    std::unique_ptr<FOOTPRINT> cached( adapter->LoadFootprint( wxS( "backside-custom" ), wxS( "AsymmetricPad" ), true ) );
+    BOOST_REQUIRE( cached );
+
+    BOOST_CHECK( !footprint->FootprintNeedsUpdate( cached.get(), BOARD_ITEM::COMPARE_FLAGS::DRC ) );
+}
+
+
+// A cached custom padstack lists only the layers it defines, as the cache knows no layer count
+// fails on revert, since the cached pad then carries an entry for every possible copper layer
+BOOST_AUTO_TEST_CASE( CachedCustomPadstackKeepsDefinedLayers )
+{
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "cached_custompadstack" ) );
+    stageProject( projectDir.Path(), wxS( "cached_custompadstack" ) );
+    PROJECT& project = Pgm().GetSettingsManager().Prj();
+
+    BOARD board;
+    board.SetProject( &project );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetFPID( LIB_ID( wxS( "" ), wxS( "CustomStack" ) ) );
+    board.Add( footprint );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetNumber( wxS( "1" ) );
+    pad->SetAttribute( PAD_ATTRIB::NPTH );
+    pad->SetLayerSet( PAD::UnplatedHoleMask() );
+    pad->SetSize( F_Cu, VECTOR2I( 1000000, 1000000 ) );
+    pad->SetDrillSize( VECTOR2I( 1000000, 1000000 ) );
+    pad->Padstack().SetMode( PADSTACK::MODE::CUSTOM );
+    footprint->Add( pad );
+
+    FOOTPRINT_LIBRARY_ADAPTER* adapter = PROJECT_PCB::FootprintLibAdapter( &project );
+    BOOST_REQUIRE( adapter );
+
+    publishLibrary( project, *adapter, wxS( "custom-stack" ), wxS( "custom-stack" ), *footprint );
+
+    std::unique_ptr<FOOTPRINT> cached( adapter->LoadFootprint( wxS( "custom-stack" ), wxS( "CustomStack" ), true ) );
+    BOOST_REQUIRE( cached );
+    BOOST_REQUIRE_EQUAL( cached->Pads().size(), 1 );
+
+    BOOST_CHECK_LE( cached->Pads().front()->Padstack().UniqueLayers().size(), 2 );
+}
+
+
 // EasyEDA Pro v3 hands definitions over the standard hook, leaving the source directory untouched
 // fails on revert, since LoadBoard then publishes its own .pretty beside the archive
 BOOST_AUTO_TEST_CASE( EasyEdaProV3BoardResolvesToGeneratedCache )
 {
-    stageProject( wxS( "easyedapro_v3_fpreconcile" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "easyedapro_v3_fpreconcile" ) );
+    stageProject( projectDir.Path(), wxS( "easyedapro_v3_fpreconcile" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     IMPORTED_BOARD sample = importSampleBoard( project, "easyedapro_v3_fpreconcile_src" );
     BOARD*         board = sample.m_board.get();
 
     // the importer must not have published anything of its own beside the archive
-    wxFileName srcDir( wxString::FromUTF8( sample.m_sourceDir->GetPath().string() ),
-                       wxEmptyString );
+    wxFileName srcDir( sample.m_sourceDir->PathStr(), wxEmptyString );
     wxFileName strayLib( srcDir.GetPath(),
                          EASYEDAPRO::ShortenLibName( wxS( "ProProject_LS2K0300Core_2025-11-14" ) ),
                          wxString( FILEEXT::KiCadFootprintLibPathExtension ) );
@@ -395,7 +703,8 @@ BOOST_AUTO_TEST_CASE( EasyEdaProV3BoardResolvesToGeneratedCache )
 // the imported definition; without the provenance check the footprint relinks to the wrong part
 BOOST_AUTO_TEST_CASE( CollidingNicknameDoesNotStealTheLink )
 {
-    stageProject( wxS( "fpreconcile_collide" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "fpreconcile_collide" ) );
+    stageProject( projectDir.Path(), wxS( "fpreconcile_collide" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     IMPORTED_BOARD      sample = importSampleBoard( project, "fpreconcile_collide_src" );
@@ -433,7 +742,8 @@ BOOST_AUTO_TEST_CASE( CollidingNicknameDoesNotStealTheLink )
 // cache; keying the cache by the bare name alone dropped the second and relinked its instance
 BOOST_AUTO_TEST_CASE( SameNameFromDifferentLibrariesKeepsBothDefinitions )
 {
-    stageProject( wxS( "fpreconcile_namecollide" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "fpreconcile_namecollide" ) );
+    stageProject( projectDir.Path(), wxS( "fpreconcile_namecollide" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     std::string dataPath =
@@ -442,7 +752,7 @@ BOOST_AUTO_TEST_CASE( SameNameFromDifferentLibrariesKeepsBothDefinitions )
     PCB_IO_ALTIUM_DESIGNER plugin;
     std::unique_ptr<BOARD> source = std::make_unique<BOARD>();
     source->SetProject( &project );
-    plugin.LoadBoard( dataPath, source.get(), nullptr, &project );
+    plugin.LoadAndAppendBoard( dataPath, *source, nullptr, &project );
 
     // two real imported footprints that a pad count tells apart
     FOOTPRINT* firstSource = nullptr;
@@ -538,7 +848,8 @@ BOOST_AUTO_TEST_CASE( SameNameFromDifferentLibrariesKeepsBothDefinitions )
 // the generated path, so publishing must not rewrite its URI
 BOOST_AUTO_TEST_CASE( ExistingUserRowIsNotRepurposed )
 {
-    stageProject( wxS( "fpreconcile_row" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "fpreconcile_row" ) );
+    stageProject( projectDir.Path(), wxS( "fpreconcile_row" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     IMPORTED_BOARD sample = importSampleBoard( project, "fpreconcile_row_src" );
@@ -580,7 +891,8 @@ BOOST_AUTO_TEST_CASE( ExistingUserRowIsNotRepurposed )
 // and no not-found, over the same adapter path Update PCB from Schematic uses
 BOOST_AUTO_TEST_CASE( ReconciledFootprintsResolveViaNetlistUpdater )
 {
-    stageProject( wxS( "eagle_netlist_roundtrip" ) );
+    KI_TEST::SCOPED_TEMP_DIR projectDir( wxS( "eagle_netlist_roundtrip" ) );
+    stageProject( projectDir.Path(), wxS( "eagle_netlist_roundtrip" ) );
     PROJECT& project = Pgm().GetSettingsManager().Prj();
 
     wxFileName brdFn( KI_TEST::GetEeschemaTestDataDir() );
@@ -592,7 +904,7 @@ BOOST_AUTO_TEST_CASE( ReconciledFootprintsResolveViaNetlistUpdater )
     PCB_IO_EAGLE           plugin;
     std::unique_ptr<BOARD> imported = std::make_unique<BOARD>();
     imported->SetProject( &project );
-    plugin.LoadBoard( brdFn.GetFullPath(), imported.get(), nullptr, &project );
+    plugin.LoadAndAppendBoard( brdFn.GetFullPath(), *imported, nullptr, &project );
 
     std::vector<FOOTPRINT*>                 raw = plugin.GetImportedCachedLibraryFootprints();
     std::vector<std::unique_ptr<FOOTPRINT>> defs;
@@ -637,6 +949,8 @@ BOOST_AUTO_TEST_CASE( ReconciledFootprintsResolveViaNetlistUpdater )
     WX_STRING_REPORTER    reporter;
     BOARD_NETLIST_UPDATER updater( &toolMgr, target.get() );
     updater.SetReporter( &reporter );
+    updater.SetIsDryRun( false );
+    updater.SetWillDrag( false );
     updater.SetReplaceFootprints( false );
     updater.SetDeleteUnusedFootprints( false );
 

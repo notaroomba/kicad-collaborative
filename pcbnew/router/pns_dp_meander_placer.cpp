@@ -111,7 +111,7 @@ bool DP_MEANDER_PLACER::Start( const VECTOR2I& aP, ITEM* aStartItem )
         return false;
     }
 
-    if( m_originPair.Gap() < 0 )
+    if( m_originPair.Dimensions().Gap() < 0 )
         m_originPair.SetGap( Router()->Sizes().DiffPairGap() );
 
     if( !m_originPair.PLine().SegmentCount() || !m_originPair.NLine().SegmentCount() )
@@ -156,13 +156,15 @@ bool DP_MEANDER_PLACER::Start( const VECTOR2I& aP, ITEM* aStartItem )
     m_world->Remove( m_originPair.PLine() );
     m_world->Remove( m_originPair.NLine() );
 
-    m_currentWidth = m_originPair.Width();
+    m_currentWidth = m_originPair.Dimensions().Width();
 
     const BOARD_CONNECTED_ITEM* conItem = static_cast<BOARD_CONNECTED_ITEM*>( aStartItem->GetSourceItem() );
     m_netClass = conItem->GetEffectiveNetClass();
 
-    m_baselineLength = origPathLength();
+    m_startPathLength = origPathLength();
+    m_baselineLength = m_startPathLength;
     m_baselineDelay = m_settings.m_isTimeDomain ? origPathDelay() : 0;
+    m_hasBaseline = true;
 
     initChainExtras();
 
@@ -214,6 +216,8 @@ bool DP_MEANDER_PLACER::pairOrientation( const DIFF_PAIR::COUPLED_SEGMENTS& aPai
 
 bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
 {
+    m_hasMeanders = false;
+
     // Reuse the chain-extras aggregate captured at Start(). Other nets in the chain are
     // not edited during a tuning session, so we don't need to walk the BOARD again.
     const long long extraDelay = m_chainExtrasValid ? m_chainExtrasDelay : 0;
@@ -308,9 +312,9 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
     }
 
     m_result = MEANDERED_LINE( this, true );
-    m_result.SetWidth( tuned.Width() );
+    m_result.SetWidth( tuned.Dimensions().Width() );
 
-    int offset = ( tuned.Gap() + tuned.Width() ) / 2;
+    int offset = ( tuned.Dimensions().Gap() + tuned.Dimensions().Width() ) / 2;
 
     if( pairOrientation( coupledSegments[0] ) )
         offset *= -1;
@@ -487,10 +491,10 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
         if( m_settings.m_isTimeDomain )
         {
             int64_t tunedPDelay = m_router->GetInterface()->CalculateDelayForShapeLineChain(
-                    tunedP, GetOriginPair().Width(), true, GetOriginPair().Gap(), m_router->GetCurrentLayer(),
+                    tunedP, GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(), m_router->GetCurrentLayer(),
                     m_netClass );
             int64_t tunedNDelay = m_router->GetInterface()->CalculateDelayForShapeLineChain(
-                    tunedN, GetOriginPair().Width(), true, GetOriginPair().Gap(), m_router->GetCurrentLayer(),
+                    tunedN, GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(), m_router->GetCurrentLayer(),
                     m_netClass );
 
             m_lastDelay = dpDelay - std::max( tunedPDelay, tunedNDelay );
@@ -510,6 +514,7 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
             {
                 tunedP.Append( m->CLine( 0 ) );
                 tunedN.Append( m->CLine( 1 ) );
+                m_hasMeanders |= m->IsMeander();
             }
         }
 
@@ -518,10 +523,10 @@ bool DP_MEANDER_PLACER::Move( const VECTOR2I& aP, ITEM* aEndItem )
         if( m_settings.m_isTimeDomain )
         {
             int64_t tunedPDelay = m_router->GetInterface()->CalculateDelayForShapeLineChain(
-                    tunedP, GetOriginPair().Width(), true, GetOriginPair().Gap(), m_router->GetCurrentLayer(),
+                    tunedP, GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(), m_router->GetCurrentLayer(),
                     m_netClass );
             int64_t tunedNDelay = m_router->GetInterface()->CalculateDelayForShapeLineChain(
-                    tunedN, GetOriginPair().Width(), true, GetOriginPair().Gap(), m_router->GetCurrentLayer(),
+                    tunedN, GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(), m_router->GetCurrentLayer(),
                     m_netClass );
 
             m_lastDelay += std::max( tunedPDelay, tunedNDelay );
@@ -731,13 +736,13 @@ void DP_MEANDER_PLACER::calculateTimeDomainTargets()
 
         const int64_t curLength = origPathLength();
         const int64_t lengthDiffMin = m_router->GetInterface()->CalculateLengthForDelay(
-                desiredDelayOpt - desiredDelayMin, GetOriginPair().Width(), true, GetOriginPair().Gap(),
+                desiredDelayOpt - desiredDelayMin, GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(),
                 m_router->GetCurrentLayer(), m_netClass );
         int64_t lengthDiffOpt = m_router->GetInterface()->CalculateLengthForDelay(
-                std::abs( delayDifferenceOpt ), GetOriginPair().Width(), true, GetOriginPair().Gap(),
+                std::abs( delayDifferenceOpt ), GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(),
                 m_router->GetCurrentLayer(), m_netClass );
         const int64_t lengthDiffMax = m_router->GetInterface()->CalculateLengthForDelay(
-                desiredDelayMax - desiredDelayOpt, GetOriginPair().Width(), true, GetOriginPair().Gap(),
+                desiredDelayMax - desiredDelayOpt, GetOriginPair().Dimensions().Width(), true, GetOriginPair().Dimensions().Gap(),
                 m_router->GetCurrentLayer(), m_netClass );
 
         lengthDiffOpt = delayDifferenceOpt > 0 ? lengthDiffOpt : -lengthDiffOpt;

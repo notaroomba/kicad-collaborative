@@ -19,6 +19,8 @@
 
 #include <pcbnew_utils/board_test_utils.h>
 
+#include <qa_utils/file_utils.h>
+
 #include <iostream>
 #include <filesystem>
 
@@ -228,9 +230,9 @@ void LoadAndTestBoardFile( const wxString aRelativePath, bool aRoundtrip,
 
     if( aRoundtrip )
     {
-        TEMPORARY_DIRECTORY tempLib( "kicad_qa_brd_roundtrip", "" );
+        SCOPED_TEMP_DIR tempDir( "kicad_qa_brd_roundtrip" );
 
-        const auto savePath = tempLib.GetPath() / ( aRelativePath.ToStdString() + ".kicad_pcb" );
+        const auto savePath = tempDir.Path() / ( aRelativePath.ToStdString() + ".kicad_pcb" );
         KI_TEST::DumpBoardToFile( *board1, savePath.string() );
 
         std::unique_ptr<BOARD> board2 = KI_TEST::ReadBoardFromFileOrStream( savePath.string() );
@@ -254,7 +256,7 @@ void LoadAndTestFootprintFile( const wxString& aLibRelativePath, const wxString&
                                          + aFpName.ToStdString() + ".kicad_mod";
 
     BOOST_TEST_MESSAGE( "Loading footprint to test: " << absFootprintPath );
-    std::unique_ptr<FOOTPRINT> fp1 = KI_TEST::ReadFootprintFromFileOrStream( absFootprintPath );
+    std::unique_ptr<FOOTPRINT> fp1 = KI_TEST::ReadFootprintFromFile( absFootprintPath, aFpName );
 
     // Should load - if it doesn't we're done for
     BOOST_REQUIRE( fp1 );
@@ -276,18 +278,18 @@ void LoadAndTestFootprintFile( const wxString& aLibRelativePath, const wxString&
          * written properly, we don't leave a library behind that will cause exceptions
          * when the cache is set up on future runs.
          */
-        TEMPORARY_DIRECTORY tempLib( "kicad_qa_fp_roundtrip", ".pretty" );
-        const wxString      fpFilename = fp1->GetFPID().GetLibItemName() + wxString( ".kicad_mod" );
+        wxString                    fileName = fp1->GetFPID().GetUniStringLibItemName() + ".kicad_mod";
+        SCOPED_TEMP_DIR             tempDir( "kicad_qa_fp_roundtrip" );
+        const std::filesystem::path libPath = tempDir.CreateChildDir( "fp_roundtrip.pretty" );
+        const std::filesystem::path savePath = libPath / fileName.ToStdString();
 
-        BOOST_TEST_MESSAGE( "Resaving footprint: " << fpFilename << " in " << tempLib.GetPath() );
+        BOOST_TEST_MESSAGE( "Resaving footprint: " << savePath.stem() << " in " << libPath );
 
-        KI_TEST::DumpFootprintToFile( *fp1, tempLib.GetPath().string() );
+        KI_TEST::DumpFootprintToFile( *fp1, savePath );
 
-        const auto fp2Path = tempLib.GetPath() / fpFilename.ToStdString();
+        BOOST_TEST_MESSAGE( "Re-reading footprint: " << savePath.stem() << " in " << libPath );
 
-        BOOST_TEST_MESSAGE( "Re-reading footprint: " << fpFilename << " in " << tempLib.GetPath() );
-
-        std::unique_ptr<FOOTPRINT> fp2 = KI_TEST::ReadFootprintFromFileOrStream( fp2Path.string() );
+        std::unique_ptr<FOOTPRINT> fp2 = KI_TEST::ReadFootprintFromFile( savePath, aFpName );
 
         // Should load again
         BOOST_REQUIRE( fp2 );
@@ -818,14 +820,11 @@ void CAPTURING_REPORTER::PrintAllMessages( const std::string& aContext ) const
 
 std::unique_ptr<BOARD> LoadBoardWithCapture( PCB_IO& aIoPlugin, const std::string& aFilePath, REPORTER* aReporter )
 {
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-
     aIoPlugin.SetReporter( aReporter );
 
     try
     {
-        aIoPlugin.LoadBoard( aFilePath, board.get(), nullptr, nullptr );
-        return board;
+        return aIoPlugin.LoadBoard( aFilePath );
     }
     catch( const IO_ERROR& e )
     {

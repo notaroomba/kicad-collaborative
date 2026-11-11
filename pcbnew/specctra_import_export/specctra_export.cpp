@@ -59,6 +59,8 @@
 #include <mmh3_hash.h>
 #include <pcbnew_settings.h>
 
+#include "fmt/xchar.h"
+
 
 using namespace DSN;
 
@@ -107,7 +109,7 @@ namespace DSN
 {
 
 
-void ExportBoardToSpecctraFile( BOARD* aBoard, const wxString& aFullFilename )
+void ExportBoardToSpecctraFile( BOARD* aBoard, const wxString& aFullFilename, REPORTER* aReporter )
 {
     SPECCTRA_DB db;
 
@@ -117,7 +119,7 @@ void ExportBoardToSpecctraFile( BOARD* aBoard, const wxString& aFullFilename )
 
     // Build the board outlines *before* flipping footprints
     if( !db.BuiltBoardOutlines( aBoard ) )
-        wxLogWarning( _( "Board outline is malformed. Run DRC for a full analysis." ) );
+        ReportWarning( aReporter, _( "Board outline is malformed. Run DRC for a full analysis." ) );
 
     // DSN Images (=KiCad FOOTPRINTs and PADs) must be presented from the top view.  So we
     // temporarily flip any footprints which are on the back side of the board to the front,
@@ -155,7 +157,7 @@ static inline double scale( int kicadDist )
 }
 
 
-///< Convert integer internal units to float um
+/// Convert integer internal units to float um
 static inline double IU2um( int kicadDist )
 {
     return kicadDist * ( 1000.0 / pcbIUScale.IU_PER_MM );
@@ -439,30 +441,14 @@ static SPECCTRA_SHAPE_ID appendPadstackShape( PADSTACK* aPadstack, PAD* aPad, PC
     case PAD_SHAPE::ROUNDRECT:
     {
         // Export the shape as as polygon, round rect does not exist as primitive
-        const int      circleToSegmentsCount = 36;
         int            rradius = aPad->GetRoundRectCornerRadius( aPadLayer );
         SHAPE_POLY_SET cornerBuffer;
+        bool           doChamfer = aPad->GetShape( aPadLayer ) == PAD_SHAPE::CHAMFERED_RECT;
 
-        // Use a slightly bigger shape because the round corners are approximated by
-        // segments, giving to the polygon a slightly smaller shape than the actual shape
-
-        /* calculates the coeff to compensate radius reduction of holes clearance
-         * due to the segment approx.
-         * For a circle the min radius is radius * cos( 2PI / s_CircleToSegmentsCount / 2)
-         * correctionFactor is cos( PI/s_CircleToSegmentsCount  )
-         */
-        double correctionFactor = cos( M_PI / (double) circleToSegmentsCount );
-        int    extra_clearance = KiROUND( rradius * ( 1.0 - correctionFactor ) );
-        VECTOR2I psize = padSize;
-        psize.x += extra_clearance * 2;
-        psize.y += extra_clearance * 2;
-        rradius += extra_clearance;
-        bool doChamfer = aPad->GetShape( aPadLayer ) == PAD_SHAPE::CHAMFERED_RECT;
-
-        TransformRoundChamferedRectToPolygon( cornerBuffer, VECTOR2I( 0, 0 ), psize, ANGLE_0,
-                rradius, aPad->GetChamferRectRatio( aPadLayer ),
-                doChamfer ? aPad->GetChamferPositions( aPadLayer ) : 0,
-                0, aPad->GetMaxError(), ERROR_INSIDE );
+        TransformRoundChamferedRectToPolygon( cornerBuffer, VECTOR2I( 0, 0 ), padSize, ANGLE_0, rradius,
+                                              aPad->GetChamferRectRatio( aPadLayer ),
+                                              doChamfer ? aPad->GetChamferPositions( aPadLayer ) : 0,
+                                              0, aPad->GetMaxError(), ERROR_OUTSIDE );
 
         SHAPE_LINE_CHAIN& polygonal_shape = cornerBuffer.Outline( 0 );
 
@@ -484,8 +470,7 @@ static SPECCTRA_SHAPE_ID appendPadstackShape( PADSTACK* aPadstack, PAD* aPad, PC
 
             for( int idx = 0; idx < polygonal_shape.PointCount(); idx++ )
             {
-                POINT corner( scale( polygonal_shape.CPoint( idx ).x ),
-                              scale( -polygonal_shape.CPoint( idx ).y ) );
+                POINT corner( scale( polygonal_shape.CPoint( idx ).x ), scale( -polygonal_shape.CPoint( idx ).y ) );
                 corner += dsnOffset;
                 polygon->AppendPoint( corner );
 
@@ -612,7 +597,7 @@ PADSTACK* SPECCTRA_DB::makePADSTACK( BOARD* aBoard, PAD* aPad )
                 else if( layer == copperCount - 1 )
                     uniqifier += 'B';
                 else
-                    uniqifier += char('0' + layer); // layer index char
+                    uniqifier += fmt::format( "0{}", layer );
             }
         }
     }
@@ -925,11 +910,7 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
             continue;
 
         // IMAGE object coordinates are relative to the IMAGE not absolute board coordinates.
-        ZONE untransformedZone( *zone );
-
-        EDA_ANGLE angle = -aFootprint->GetOrientation();
-        angle.Normalize();
-        untransformedZone.Rotate( aFootprint->GetPosition(), angle );
+        SHAPE_POLY_SET boardOutline = zone->GetBoardOutline();
 
         // keepout areas have a type. types are
         // T_place_keepout, T_via_keepout, T_wire_keepout,
@@ -965,11 +946,9 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
             bool is_first_point = true;
             VECTOR2I startpoint;
 
-            for( iterator = untransformedZone.IterateWithHoles(); iterator; iterator++ )
+            for( iterator = boardOutline.IterateWithHoles(); iterator; iterator++ )
             {
-                VECTOR2I point( iterator->x, iterator->y );
-
-                point -= aFootprint->GetPosition();
+                VECTOR2I point = aFootprint->GetTransform().InverseApply( VECTOR2I( iterator->x, iterator->y ) );
 
                 if( is_first_point )
                 {
@@ -1004,7 +983,7 @@ IMAGE* SPECCTRA_DB::makeIMAGE( BOARD* aBoard, FOOTPRINT* aFootprint )
 
                     window->SetShape( cutout );
 
-                    cutout->layer_id = m_layerIds[ m_kicadLayer2pcb[ zone->GetLayer() ] ];
+                    cutout->layer_id = m_layerIds[ m_kicadLayer2pcb[ layer ] ];
                 }
 
                 isStartContour = iterator.IsEndContour();
@@ -1805,14 +1784,20 @@ void SPECCTRA_DB::exportNETCLASS( const NETCLASS* aNetClass, const BOARD* aBoard
     clazz->m_rules = new RULE( clazz, T_rule );
 
     // output the track width.
-    int trackWidth = aNetClass->GetTrackWidth();
-    std::snprintf( text, sizeof( text ), "(width %.6g)", scale( trackWidth ) );
-    clazz->m_rules->m_rules.push_back( text );
+    if( aNetClass->HasTrackWidth() )
+    {
+        int trackWidth = aNetClass->GetTrackWidth();
+        std::snprintf( text, sizeof( text ), "(width %.6g)", scale( trackWidth ) );
+        clazz->m_rules->m_rules.push_back( text );
+    }
 
     // output the clearance.
-    int clearance = aNetClass->GetClearance();
-    std::snprintf( text, sizeof( text ), "(clearance %.6g)", scale( clearance ) );
-    clazz->m_rules->m_rules.push_back( text );
+    if( aNetClass->HasClearance() )
+    {
+        int clearance = aNetClass->GetClearance();
+        std::snprintf( text, sizeof( text ), "(clearance %.6g)", scale( clearance ) );
+        clazz->m_rules->m_rules.push_back( text );
+    }
 
     // Freerouter creates a class named 'default' anyway, and if we try to use that we end up
     // with two 'default' via rules so use something else as the name of our default class.

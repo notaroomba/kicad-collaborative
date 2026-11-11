@@ -38,6 +38,7 @@ class wxTextEntry;
 class wxWindow;
 class wxMenuItem;
 class wxMenu;
+class wxNotebook;
 
 /**
  * Used for holding indeterminate values, such as with multiple selections
@@ -108,6 +109,15 @@ KICOMMON_API wxString EllipsizeStatusText( wxWindow* aWindow, const wxString& aS
 KICOMMON_API wxString EllipsizeMenuText( const wxString& aString );
 
 /**
+ * Break text into lines no wider than aWidth pixels in aWindow's font.
+ *
+ * Lines break at spaces, and between characters in a word too wide to fit, so text written without spaces
+ * keeps every character.  wxStaticText::Wrap() leaves such a word whole.  A path or URL too wide to fit is
+ * ellipsized in the middle instead, since breaking it would hide where it ends.
+ */
+KICOMMON_API wxString WrapText( wxWindow* aWindow, const wxString& aText, int aWidth );
+
+/**
  * Check if a input control has focus.
  *
  * @param aFocus Control that has focus, if null, wxWidgets will be queried
@@ -117,7 +127,7 @@ KICOMMON_API bool IsInputControlFocused( wxWindow* aFocus = nullptr );
 /**
  * Check if a input control has focus.
  *
- * @param aFocus Control that test if editable
+ * @param aControl is the control to test if editable.
  * @return True if control is input and editable OR control is not a input. False if control is
  *         input and not editable.
  */
@@ -228,5 +238,7 @@ KICOMMON_API wxMenuItem* AddMenuItem( wxMenu* aMenu, wxMenu* aSubMenu, int aId,
 KICOMMON_API SEVERITY SeverityFromString( const wxString& aSeverity );
 
 KICOMMON_API wxString SeverityToString( const SEVERITY& aSeverity );
+
+KICOMMON_API int FindNotebookPage( wxNotebook* aNotebook, wxWindow* aChildWindow );
 
 #endif // UI_COMMON_H

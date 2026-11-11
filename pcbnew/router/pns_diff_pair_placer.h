@@ -55,7 +55,7 @@ public:
     DIFF_PAIR_PLACER( ROUTER* aRouter );
     ~DIFF_PAIR_PLACER();
 
-    static bool FindDpPrimitivePair( NODE* aWorld, const VECTOR2I& aP, ITEM* aItem,
+    bool FindDpPrimitivePair( NODE* aWorld, const VECTOR2I& aP, ITEM* aItem,
                                      DP_PRIMITIVE_PAIR& aPair, wxString* aErrorMsg = nullptr );
 
     /**
@@ -75,7 +75,7 @@ public:
      *
      * @return true if route has been committed. May return false if the routing result is
      *         violating design rules.  In such cases, the track is only committed if
-     *         #Settings.CanViolateDRC() is on.
+     *         ROUTING_SETTINGS::AllowDRCViolations() is on.
      */
     bool FixRoute( const VECTOR2I& aP, ITEM* aEndItem, bool aForceFinish ) override;
 
@@ -156,7 +156,13 @@ public:
 
     void GetModifiedNets( std::vector<NET_HANDLE>& aNets ) const override;
 
+    const DIFF_PAIR CurrentTrace() const { return m_currentTrace; }
+  
+
 private:
+    static constexpr int DP_DEFAULT_GAP_EPSILON = 1000;
+    static constexpr double DP_CPR_SWITCH_POSTURE_RATIO = 10.0;
+
     int viaGap() const;
     int gap() const;
 
@@ -199,13 +205,13 @@ private:
     bool routeHead( const VECTOR2I& aP );
     bool tryWalkDp( NODE* aNode, DIFF_PAIR& aPair, bool aSolidsOnly );
 
-    ///< route step, walk around mode
+    /// route step, walk around mode
     bool rhWalkOnly( const VECTOR2I& aP );
 
-    ///< route step, shove mode
+    /// route step, shove mode
     bool rhShoveOnly ( const VECTOR2I& aP );
 
-    ///< route step, mark obstacles mode
+    /// route step, mark obstacles mode
     bool rhMarkObstacles( const VECTOR2I& aP );
 
     const VIA makeVia ( const VECTOR2I& aP, NET_HANDLE aNet );
@@ -214,6 +220,12 @@ private:
                       bool aWindCw, bool aSolidsOnly );
     bool propagateDpHeadForces ( const VECTOR2I& aP, VECTOR2I& aNewP );
 
+    bool findDpEndingPrimitives( NODE* aWorld, const VECTOR2I& aP, ITEM* aStartItem,
+                                            DP_PRIMITIVE_PAIR& aPair, wxString* aErrorMsg );
+
+    bool findDpMidtraceIntersection( NODE* aWorld, const VECTOR2I& aP,
+                                                   ITEM* aStartItem, DP_PRIMITIVE_PAIR& aPair,
+                                                   wxString* aErrorMsg );
     enum State {
         RT_START = 0,
         RT_ROUTE = 1,
@@ -232,37 +244,37 @@ private:
     DP_PRIMITIVE_PAIR m_start;
     std::optional<DP_PRIMITIVE_PAIR> m_prevPair;
 
-    ///< current algorithm iteration
+    /// current algorithm iteration
     int m_iteration;
 
-    ///< pointer to world to search colliding items
+    /// pointer to world to search colliding items
     NODE* m_world;
 
-    ///< current routing start point (end of tail, beginning of head)
+    /// current routing start point (end of tail, beginning of head)
     VECTOR2I m_p_start;
 
-    ///< The shove engine
+    /// The shove engine
     std::unique_ptr<SHOVE> m_shove;
 
-    ///< Current world state
+    /// Current world state
     NODE* m_currentNode;
 
-    ///< Postprocessed world state (including marked collisions & removed loops)
+    /// Postprocessed world state (including marked collisions & removed loops)
     NODE* m_lastNode;
     NODE* m_lastFixNode;
 
     SIZES_SETTINGS m_sizes;
 
-    ///< Are we placing a via?
+    /// Are we placing a via?
     bool m_placingVia;
 
-    ///< current via diameter
+    /// current via diameter
     int m_viaDiameter;
 
-    ///< current via drill
+    /// current via drill
     int m_viaDrill;
 
-    ///< current track width
+    /// current track width
     int m_currentWidth;
 
     int m_currentLayer;
@@ -273,6 +285,7 @@ private:
 
     VECTOR2I m_currentEnd, m_currentStart;
     DIFF_PAIR m_currentTrace;
+    std::optional<DP_PRIMITIVE_PAIR> m_target;
     bool m_currentTraceOk;
 
     ITEM* m_currentEndItem;

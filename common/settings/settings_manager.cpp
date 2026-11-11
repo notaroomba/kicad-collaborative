@@ -90,6 +90,9 @@ SETTINGS_MANAGER::SETTINGS_MANAGER() :
 
 SETTINGS_MANAGER::~SETTINGS_MANAGER()
 {
+    // The projects go away without passing through UnloadProject, which is what would drop this.
+    TEXT_EVAL_VCS::SetContextPath( wxString() );
+
     for( std::unique_ptr<PROJECT>& project : m_projects_list )
         project.reset();
 
@@ -1000,7 +1003,8 @@ bool SETTINGS_MANAGER::extractVersion( const std::string& aVersionString, int* a
 }
 
 
-bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
+// Every m_projects read and write goes through this so separator or extension variants share one slot
+static wxString projectKey( const wxString& aFullPath )
 {
     // Normalize path to current project extension. Users may open legacy .pro files,
     // or the OS may hand us a .kicad_sch/.kicad_pcb via file association or drag-and-drop.
@@ -1009,7 +1013,14 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     if( path.HasName() && path.GetExt() != FILEEXT::ProjectFileExtension )
         path.SetExt( FILEEXT::ProjectFileExtension );
 
-    wxString fullPath = path.GetFullPath();
+    return path.GetFullPath();
+}
+
+
+bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive, bool aOverrideLock )
+{
+    wxString   fullPath = projectKey( aFullPath );
+    wxFileName path( fullPath );
 
     // If already loaded, we are all set.  This might be called more than once over a project's
     // lifetime in case the project is first loaded by the KiCad manager and then Eeschema or
@@ -1020,38 +1031,30 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     // A passive load only inspects the lock rather than taking it
     LOCKFILE lockFile = aSetActive ? LOCKFILE( fullPath ) : LOCKFILE::Inspect( fullPath );
 
+    if( !lockFile.Valid() && aSetActive && aOverrideLock )
+        lockFile.OverrideLock();
+
     if( !lockFile.Valid() )
         wxLogTrace( traceSettings, wxT( "Project %s is locked; opening read-only" ), fullPath );
 
+    const bool switching = aSetActive && !m_projects_list.empty();
+
     // No MDI yet
-    if( aSetActive && !m_projects.empty() )
+    if( switching )
     {
-        // Cancel any in-progress library preloads and wait for them to finish before
-        // modifying m_projects_list. Background preload threads access Prj() which becomes
-        // invalid when the project list is modified.
-        if( m_kiway )
-        {
-            if( KIFACE* pcbFace = m_kiway->KiFACE( KIWAY::FACE_PCB, false ) )
-                pcbFace->CancelPreload( true );
-        }
+        stopLibraryLoads();
 
-        // Abort any async library loads before modifying m_projects_list to prevent race
-        // conditions where background threads try to access Prj() while the list is empty.
-        if( PgmOrNull() )
-            Pgm().GetLibraryManager().AbortAsyncLoads();
-
-        PROJECT* oldProject = m_projects.begin()->second;
+        // The map is ordered by path, so its first entry may be a passive project
+        PROJECT* oldProject = m_projects_list.front().get();
         unloadProjectFile( oldProject, false );
-        m_projects.erase( m_projects.begin() );
 
-        auto it = std::find_if( m_projects_list.begin(), m_projects_list.end(),
-                                [&]( const std::unique_ptr<PROJECT>& ptr )
-                                {
-                                    return ptr.get() == oldProject;
-                                } );
+        std::erase_if( m_projects,
+                       [&]( const std::pair<const wxString, PROJECT*>& aEntry )
+                       {
+                           return aEntry.second == oldProject;
+                       } );
 
-        wxASSERT( it != m_projects_list.end() );
-        m_projects_list.erase( it );
+        m_projects_list.erase( m_projects_list.begin() );
     }
 
     wxLogTrace( traceSettings, wxT( "Load project %s" ), fullPath );
@@ -1096,8 +1099,13 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     if( lockFile.Valid() && aSetActive )
         project->SetProjectLock( new LOCKFILE( std::move( lockFile ) ) );
 
-    m_projects_list.push_back( std::move( project ) );
-    m_projects[fullPath] = m_projects_list.back().get();
+    m_projects[fullPath] = project.get();
+
+    // Prj() is the list front, so passive projects must not take that slot
+    if( aSetActive )
+        m_projects_list.insert( m_projects_list.begin(), std::move( project ) );
+    else
+        m_projects_list.push_back( std::move( project ) );
 
     wxString fn( path.GetName() );
 
@@ -1118,6 +1126,10 @@ bool SETTINGS_MANAGER::LoadProject( const wxString& aFullPath, bool aSetActive )
     if( aSetActive && m_kiway )
         m_kiway->ProjectChanged();
 
+    // The global libraries survive the switch, and a new project open does not always preload them
+    if( switching && PgmOrNull() )
+        Pgm().GetLibraryManager().RestartAsyncLoads();
+
     return success;
 }
 
@@ -1135,6 +1147,34 @@ bool SETTINGS_MANAGER::IsProjectLoaded( PROJECT* aProject ) const
 }
 
 
+void SETTINGS_MANAGER::stopLibraryLoads()
+{
+    // Cancel any in-progress library preloads and wait for them to finish before
+    // modifying m_projects_list. Background preload threads access Prj() which becomes
+    // invalid when the project list is modified.
+    if( m_kiway )
+    {
+        // Joined too, so a stale symbol preload cannot cancel the restart that follows
+        if( KIFACE* schFace = m_kiway->KiFACE( KIWAY::FACE_SCH, false ) )
+            schFace->CancelPreload( true );
+
+        if( KIFACE* pcbFace = m_kiway->KiFACE( KIWAY::FACE_PCB, false ) )
+            pcbFace->CancelPreload( true );
+    }
+
+    if( !PgmOrNull() )
+        return;
+
+    // Wait after the abort frees the pool threads needed by a queued design block preload
+    Pgm().CancelDesignBlockPreload();
+
+    // Abort any async library loads before modifying m_projects_list to prevent race
+    // conditions where background threads try to access Prj() while the list is empty.
+    Pgm().GetLibraryManager().AbortAsyncLoads( true );
+    Pgm().WaitForDesignBlockPreload();
+}
+
+
 bool SETTINGS_MANAGER::UnloadProject( PROJECT* aProject, bool aSave )
 {
     if( !aProject || !m_projects.count( aProject->GetProjectFullName() ) )
@@ -1144,24 +1184,19 @@ bool SETTINGS_MANAGER::UnloadProject( PROJECT* aProject, bool aSave )
     wxLogTrace( traceSettings, wxT( "Unload project %s" ), projectPath );
 
     PROJECT* toRemove = m_projects.at( projectPath );
-    bool wasActiveProject = m_projects_list.begin()->get() == toRemove;
+    bool     wasActiveProject = m_projects_list.begin()->get() == toRemove;
 
-    // Cancel any in-progress library preloads and wait for them to finish before
-    // modifying m_projects_list. Background preload threads access Prj() which becomes
-    // invalid when the project list is modified.
-    if( wasActiveProject && m_kiway )
-    {
-        if( KIFACE* pcbFace = m_kiway->KiFACE( KIWAY::FACE_PCB, false ) )
-            pcbFace->CancelPreload( true );
-    }
+    if( wasActiveProject )
+        stopLibraryLoads();
 
-    // Abort any async library loads before modifying m_projects_list to prevent race
-    // conditions where background threads try to access Prj() while the list is empty.
-    if( wasActiveProject && PgmOrNull() )
-        Pgm().GetLibraryManager().AbortAsyncLoads();
-
+    // The project stays loaded, so the loads this abort or the preloads cancelled are queued again
     if( !unloadProjectFile( aProject, aSave ) )
+    {
+        if( wasActiveProject && PgmOrNull() )
+            Pgm().GetLibraryManager().RestartAsyncLoads();
+
         return false;
+    }
 
     auto it = std::find_if( m_projects_list.begin(), m_projects_list.end(),
                             [&]( const std::unique_ptr<PROJECT>& ptr )
@@ -1218,6 +1253,13 @@ PROJECT& SETTINGS_MANAGER::Prj() const
 }
 
 
+void SETTINGS_MANAGER::ReleaseProjectLocks()
+{
+    for( const std::unique_ptr<PROJECT>& project : m_projects_list )
+        project->SetProjectLock( nullptr );
+}
+
+
 bool SETTINGS_MANAGER::IsProjectOpen() const
 {
     return !m_projects.empty();
@@ -1253,10 +1295,9 @@ void SETTINGS_MANAGER::SyncGlobalFieldNameTemplatesToProjects()
 
 PROJECT* SETTINGS_MANAGER::GetProject( const wxString& aFullPath ) const
 {
-    if( m_projects.count( aFullPath ) )
-        return m_projects.at( aFullPath );
+    auto it = m_projects.find( projectKey( aFullPath ) );
 
-    return nullptr;
+    return it != m_projects.end() ? it->second : nullptr;
 }
 
 
@@ -1295,10 +1336,13 @@ bool SETTINGS_MANAGER::SaveProject( const wxString& aFullPath, PROJECT* aProject
     PROJECT_FILE* project     = m_project_files.at( path );
     wxString      projectPath = aProject->GetProjectPath();
 
-    project->SaveToFile( projectPath );
+    // Local settings are best efforts; don't report errors
     aProject->GetLocalSettings().SaveToFile( projectPath );
 
-    return true;
+    // Project file is "real" data; report all save errors
+    project->SaveToFile( projectPath );
+
+    return !project->LastSaveFailed();
 }
 
 
@@ -1308,17 +1352,18 @@ void SETTINGS_MANAGER::SaveProjectAs( const wxString& aFullPath, PROJECT* aProje
         aProject = &Prj();
 
     wxString oldName = aProject->GetProjectFullName();
+    wxString newName = projectKey( aFullPath );
 
-    if( aFullPath.IsSameAs( oldName ) )
+    if( newName.IsSameAs( oldName ) )
     {
-        SaveProject( aFullPath, aProject );
+        SaveProject( oldName, aProject );
         return;
     }
 
     // Changing this will cause UnloadProject to not save over the "old" project when loading below
-    aProject->setProjectFullName( aFullPath );
+    aProject->setProjectFullName( newName );
 
-    wxFileName fn( aFullPath );
+    wxFileName fn( newName );
 
     PROJECT_FILE* project = m_project_files.at( oldName );
 
@@ -1420,12 +1465,21 @@ bool SETTINGS_MANAGER::unloadProjectFile( PROJECT* aProject, bool aSave )
         // Resolve from aProject directly; during a switch Prj() is no longer aProject.
         wxString projectPath = aProject->GetProjectPath();
 
+        // The project stays loaded when its file cannot be saved, so this has to be settled before
+        // the local settings it still points at are released
+        if( aSave )
+        {
+            ( *it )->SaveToFile( projectPath );
+
+            // An unmodified project file is skipped rather than saved and must still unload
+            if( ( *it )->LastSaveFailed() )
+                return false;
+        }
+
         bool saveLocalSettings = aSave && aProject->GetLocalSettings().ShouldAutoSave();
 
+        // Local settings are best-efforts.  No error is returned here.
         FlushAndRelease( &aProject->GetLocalSettings(), saveLocalSettings );
-
-        if( aSave )
-            ( *it )->SaveToFile( projectPath );
 
         m_settings.erase( it );
     }

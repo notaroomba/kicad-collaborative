@@ -22,15 +22,21 @@
 
 #include <eda_item.h>
 #include <embedded_files.h>
+#include <erc/erc_exclusion.h>
 #include <properties/property_mgr.h>
 #include <schematic_holder.h>
 #include <sch_rtree.h>
 #include <sch_sheet_path.h>
 #include <schematic_settings.h>
 #include <project.h>
+#include <import_net_map.h>
 
 #include <memory>
+#include <map>
+#include <set>
+#include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 
@@ -51,6 +57,12 @@ class SCH_REFERENCE;
 class PROGRESS_REPORTER;
 class TOOL_MANAGER;
 class PICKED_ITEMS_LIST;
+
+namespace SCH_CONNECTIVITY
+{
+class FACADE;
+class NETCHAIN_MANAGER;
+}
 
 namespace KIFONT
 {
@@ -122,6 +134,10 @@ struct SCHEMATIC_CONTENT
     SCH_SHEET_LIST                    hierarchy;
     std::optional<SCH_SHEET_PATH>     currentSheet;
     std::unique_ptr<CONNECTION_GRAPH> connectionGraph;
+
+    /// Keep the schematic's net chains instead of the staged graph's, for append.
+    bool preserveNetChains = false;
+
     std::optional<EMBEDDED_FILES>     embeddedFiles;
     wxString                          drawingSheetFileName;
 };
@@ -148,6 +164,13 @@ public:
     /// Initialize this schematic to a blank one, unloading anything existing.
     void Reset();
 
+    const IMPORT_NET_MAP* GetImportNetMap() const
+    {
+        return m_importNetMap ? &*m_importNetMap : nullptr;
+    }
+
+    void SetImportNetMap( IMPORT_NET_MAP aMap ) { m_importNetMap = std::move( aMap ); }
+
     /// Return a reference to the project this schematic is part of
     PROJECT& Project() const { return *m_project; }
     void SetProject( PROJECT* aPrj );
@@ -164,6 +187,14 @@ public:
     SCH_SHEET_LIST Hierarchy() const;
 
     /**
+     * True when any sheet in the hierarchy has unsaved changes.
+     *
+     * Answers the question without copying the sheet list, which matters on the paths that ask
+     * repeatedly, such as an idle-time check.
+     */
+    bool IsHierarchyModified() const;
+
+    /**
      * Check if the hierarchy has been built.
      *
      * @return true if RefreshHierarchy() has been called and the hierarchy is populated.
@@ -171,6 +202,74 @@ public:
     bool HasHierarchy() const { return !m_hierarchy.empty(); }
 
     void RefreshHierarchy();
+
+    /**
+     * Return the composed reference suffix of \a aPath as of the last RefreshHierarchy().
+     *
+     * Safe to call from the connectivity workers.
+     */
+    wxString GetRefSuffix( const SCH_SHEET_PATH& aPath ) const;
+
+    wxString GetRefSuffix( const KIID_PATH& aPath ) const;
+
+    /// Append the composed reference suffix of \a aPath to \a aRef without copying it.
+    void AppendRefSuffix( wxString& aRef, const SCH_SHEET_PATH& aPath ) const;
+
+    /**
+     * Return the suffix the package of a multi-unit symbol's instance composes with.
+     *
+     * Units sharing a base and library symbol form one package when no unit repeats among them.  Such
+     * a package takes the alphabetically lowest suffix of its units, so U20A on _M4 and U20B on _M5
+     * are both footprint U20_M4.  Otherwise this is the suffix of \a aPath.
+     */
+    wxString GetPackageRefSuffix( const SCH_SYMBOL* aSymbol, const SCH_SHEET_PATH& aPath ) const;
+
+    wxString GetPackageRefSuffix( const SCH_SYMBOL* aSymbol, const KIID_PATH& aPath ) const;
+
+    /**
+     * @return the suffix for \a aUnit of the package that \a aSymbol on \a aPath belongs to, which is the
+     *         suffix of the sheet holding that unit when the package spans sheets.
+     */
+    wxString GetUnitRefSuffix( const SCH_SYMBOL* aSymbol, const SCH_SHEET_PATH& aPath, int aUnit ) const;
+
+    /**
+     * @return true if the copies of \a aSymbol on a reused sheet select different units.  Suffix
+     *         mode does not share one base across such copies; the annotator pairs them into packages.
+     */
+    bool CopiesSelectDifferentUnits( const SCH_SYMBOL* aSymbol ) const;
+
+    /// Symbols whose copies select different units, for loops that change references as they go.
+    std::set<KIID> SplitUnitSymbols() const;
+
+    /**
+     * @return the reply to MAIL_SCH_GET_REF_SUFFIXES, each sheet path's suffix in page order, each
+     *         followed by the instances on it whose package takes another sheet's suffix.
+     */
+    std::string FormatRefSuffixes() const;
+
+    /// Symbol and sheet path of each instance whose package suffix is another sheet's, with that suffix.
+    std::map<std::pair<KIID, KIID_PATH>, wxString> PackageRefSuffixes() const;
+
+    /**
+     * Find instances of one sheet file whose composed reference suffixes collide.
+     *
+     * @param aIncludeEmpty also treats two instances without a suffix as a collision.
+     * @return each later colliding path paired with the first path that composed the same suffix.
+     */
+    std::vector<std::pair<SCH_SHEET_PATH, SCH_SHEET_PATH>> RefSuffixCollisions( bool aIncludeEmpty ) const;
+
+    /// True when a sheet in the hierarchy has suffix text, even text that resolves to nothing.
+    bool HasRefSuffixFields() const { return m_hasRefSuffixFields; }
+
+    /// True when suffix numbering is enabled and a hierarchy path has a composed suffix.
+    bool HasRefSuffixes() const { return Settings().m_AnnotateReusedSheetSuffixes && !m_refSuffixes.empty(); }
+
+    /**
+     * Recompose the reference suffix of every sheet path in the hierarchy.
+     *
+     * RefreshHierarchy() calls this.
+     */
+    void RefreshRefSuffixes();
 
     SCH_ITEM* ResolveItem( const KIID& aID, SCH_SHEET_PATH* aPathOut = nullptr,
                            bool aAllowNullptrReturn = false ) const
@@ -294,6 +393,9 @@ public:
 
     SCH_SCREEN* GetCurrentScreen() const { return CurrentSheet().LastScreen(); }
 
+    SCH_CONNECTIVITY::FACADE& Connectivity() const { return *m_connectivity; }
+    SCH_CONNECTIVITY::NETCHAIN_MANAGER& NetChains() const { return *m_netChains; }
+
     CONNECTION_GRAPH* ConnectionGraph() const
     {
         return m_connectionGraph;
@@ -320,6 +422,22 @@ public:
     void AddBusAlias( std::shared_ptr<BUS_ALIAS> aAlias );
 
     void SetBusAliases( const std::vector<std::shared_ptr<BUS_ALIAS>>& aAliases );
+
+    // An explicit project table, including an empty one, supersedes legacy sheet definitions.
+    bool HasProjectBusAliases() const;
+
+    enum class BUS_ALIAS_RELOAD
+    {
+        UNCHANGED,
+        CHANGED,       ///< The project table changed the aliases in use, so connectivity needs a rebuild
+        TABLE_REMOVED  ///< The reread file has no table; the one in use is kept, even empty, and saved back
+    };
+
+    /**
+     * Take the bus aliases from the project file again after it was reread.  A file without a table
+     * keeps the aliases in use, since the sheets' own definitions only take effect when they are read.
+     */
+    BUS_ALIAS_RELOAD ReloadProjectBusAliases();
 
     const std::vector<std::shared_ptr<BUS_ALIAS>>& GetAllBusAliases() const
     {
@@ -412,18 +530,31 @@ public:
      *
      * This function is needed for some plugins (e.g. Legacy and Cadstar) in order to retain
      * connectivity after loading.
+     * @param aOnSplit receives the retained wire and its new segment to preserve import provenance.
      */
-    int FixupJunctionsAfterImport();
+    int FixupJunctionsAfterImport( const std::function<void( SCH_LINE*, SCH_LINE* )>& aOnSplit = {} );
 
     /**
      * Scan existing markers and record data from any that are Excluded.
      */
     void RecordERCExclusions();
 
+    size_t GetUnresolvedERCExclusionCount() const { return m_unresolvedErcExclusions.size(); }
+
+    void ClearUnresolvedERCExclusions( int aErrorCode = -1 );
+
     /**
      * Update markers to match recorded exclusions.
      */
     void ResolveERCExclusionsPostUpdate();
+
+    /**
+     * Resolve exclusions again after the project file was reread.
+     *
+     * @return the markers whose exclusion the file no longer holds.  A fresh load would not have
+     *         them, so they come off their screens and the caller owns them.
+     */
+    std::vector<SCH_MARKER*> ReloadERCExclusions();
 
     /**
      * Must be used if Add() is used using a BULK_x ADD_MODE to generate a change event for
@@ -517,15 +648,34 @@ public:
      */
     void CleanUp( SCH_COMMIT* aCommit, SCH_SCREEN* aScreen = nullptr );
 
+    // Prepare source geometry and intersheet references before rebuilding connectivity.
+    void CleanUpConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS aCleanupFlags,
+                             const std::set<SCH_SCREEN*>& aLocalScreens = {} );
+
+    // Fully rebuild the selected connectivity backend without changing source geometry.
+    void RebuildConnectivity( std::function<void( SCH_ITEM* )>* aChangedItemHandler = nullptr,
+                              PROGRESS_REPORTER* aProgressReporter = nullptr,
+                              KIGFX::SCH_VIEW* aSchView = nullptr );
+
     /**
      * Generate the connection data for the entire schematic hierarchy.
+     *
+     * @param aCommit
+     * @param aCleanupFlags
+     * @param aToolManager
+     * @param aProgressReporter
+     * @param aSchView
+     * @param aChangedItemHandler
+     * @param aLastChangeList
+     * @param aCleanupDone the commit already applied cleanup; flags still select the rebuild scope.
      */
     void RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS aCleanupFlags,
                                  TOOL_MANAGER* aToolManager,
                                  PROGRESS_REPORTER* aProgressReporter = nullptr,
                                  KIGFX::SCH_VIEW* aSchView = nullptr,
                                  std::function<void( SCH_ITEM* )>* aChangedItemHandler = nullptr,
-                                 PICKED_ITEMS_LIST*                aLastChangeList = nullptr );
+                                 PICKED_ITEMS_LIST*                aLastChangeList = nullptr,
+                                 bool aCleanupDone = false );
 
     /**
      * Store all existing annotations in the REFDES_TRACKER.
@@ -570,8 +720,9 @@ public:
      * Delete all information for @a aVariantName.
      *
      * @param aVariantName is the name of the variant to remove.
+     * @param aCommit is an optional SCH_COMMIT for undo/redo support.
      */
-    void DeleteVariant( const wxString& aVariantName, SCH_COMMIT* aCommit = nullptr );
+    void DeleteVariant( const wxString& aVariantName, SCH_COMMIT* aCommit );
 
     void AddVariant( const wxString& aVariantName );
 
@@ -584,8 +735,7 @@ public:
      * @param aNewName is the new name for the variant.
      * @param aCommit is an optional SCH_COMMIT for undo/redo support.
      */
-    void RenameVariant( const wxString& aOldName, const wxString& aNewName,
-                        SCH_COMMIT* aCommit = nullptr );
+    void RenameVariant( const wxString& aOldName, const wxString& aNewName, SCH_COMMIT* aCommit );
 
     /**
      * Copy a variant from @a aSourceVariant to @a aNewVariant.
@@ -597,13 +747,17 @@ public:
      * @param aNewVariant is the name of the new variant to create.
      * @param aCommit is an optional SCH_COMMIT for undo/redo support.
      */
-    void CopyVariant( const wxString& aSourceVariant, const wxString& aNewVariant,
-                      SCH_COMMIT* aCommit = nullptr );
+    void CopyVariant( const wxString& aSourceVariant, const wxString& aNewVariant, SCH_COMMIT* aCommit );
 
     /**
      * Return the set of variant names (without the default placeholder).
      */
     const std::set<wxString>& GetVariantNames() const { return m_variantNames; }
+
+    /**
+     * Return true if a variant with this name exists in the schematic (case-insensitively).
+     */
+    bool HasVariant( const wxString& aVariantName ) const;
 
     /**
      * Return the description for a variant.
@@ -630,9 +784,11 @@ public:
     void LoadVariants();
 
     /**
-     * True if a SCHEMATIC exists, false if not
+     * Delete the definition of a variant.  (Use DeleteVariant() if you also want any variant-overrides
+     * deleted with it.  This is primarily used internally and by the undo code.)
+     * @param aVariantName
      */
-    static bool m_IsSchematicExists;
+    void DeleteVariantDefinition( const wxString& aVariantName );
 
 #if defined(DEBUG)
     void Show( int nestLevel, std::ostream& os ) const override {}
@@ -658,6 +814,8 @@ public:
     std::weak_ptr<void> GetHistoryLifetimeToken() const { return m_historyLifetime; }
 
 private:
+    bool resolveCrossReference( wxString* aToken, int aDepth ) const;
+
     friend class SCH_EDIT_FRAME;
 
     template <typename Func, typename... Args>
@@ -673,6 +831,7 @@ private:
     void rebuildHierarchyState( bool aResetConnectionGraph );
 
     PROJECT* m_project;
+    std::optional<IMPORT_NET_MAP> m_importNetMap;
 
     /// Sentinel whose expiry signals to LOCAL_HISTORY that this schematic has been destroyed.
     std::shared_ptr<void> m_historyLifetime = std::make_shared<char>();
@@ -694,6 +853,8 @@ private:
 
     /// Hold and calculate connectivity information of this schematic.
     CONNECTION_GRAPH* m_connectionGraph;
+    std::unique_ptr<SCH_CONNECTIVITY::FACADE> m_connectivity;
+    std::unique_ptr<SCH_CONNECTIVITY::NETCHAIN_MANAGER> m_netChains;
 
     wxString m_highlightedNetChain;
 
@@ -719,6 +880,36 @@ private:
      */
     SCH_SHEET_LIST m_hierarchy;
 
+    /// Composed reference suffix of each hierarchy path that has one.
+    std::unordered_map<KIID_PATH, wxString> m_refSuffixes;
+
+    /// Every hierarchy path's suffix by its cached sheet path hash, which SCH_SHEET_PATH equality also relies on.
+    std::unordered_map<size_t, wxString>    m_refSuffixesBySheetHash;
+    bool                                    m_hasRefSuffixFields = false;
+
+    /// Rebuild m_packageSuffixes when a reference changed; the caller holds m_packageSuffixesMutex.
+    void updatePackageSuffixes() const;
+
+    /// The cached suffix of @a aPath, or nullptr when it has none.
+    const wxString* findRefSuffix( const SCH_SHEET_PATH& aPath ) const;
+
+    /// The suffix of a package spanning sheets that @a aSymbol on @a aPath belongs to, if any.
+    std::optional<wxString> spanningPackageSuffix( const SCH_SYMBOL* aSymbol, const KIID_PATH& aPath ) const;
+
+    /// Package suffix of each instance whose package spans suffixes and is not its own sheet's.
+    mutable std::map<std::pair<KIID, KIID_PATH>, wxString> m_packageSuffixes;
+
+    /// Sheet suffix of each placed unit of a package spanning suffixes, keyed by base and LIB_ID.
+    mutable std::map<std::pair<wxString, wxString>, std::map<int, wxString>> m_packageUnitSuffixes;
+
+    /// Symbols whose copies select different units.
+    mutable std::set<KIID> m_unitSplitSymbols;
+    mutable std::optional<uint64_t>                       m_packageSuffixesGeneration;
+    mutable std::mutex                                    m_packageSuffixesMutex;
+
+    /// Exclusions whose saved identity cannot currently be reconstructed as a marker.
+    std::vector<ERC_EXCLUSION> m_unresolvedErcExclusions;
+
     /**
      * Currently installed listeners.
      */
@@ -734,6 +925,9 @@ private:
     void updateProjectBusAliases();
 
     std::vector<std::shared_ptr<BUS_ALIAS>> m_busAliases;
+
+    /// The aliases in use came from a project table rather than from the sheets
+    bool m_busAliasesFromTable = false;
 
     wxString m_currentVariant;
 

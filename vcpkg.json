@@ -35,6 +35,8 @@
       "host": true
     },
     "harfbuzz",
+    "libiconv",
+    "libpng",
     "glm",
     {
       "name": "opencascade",
@@ -55,7 +57,21 @@
     },
     "nng",
     "protobuf",
-    "zstd"
+    "zstd",
+    {
+      "name": "vulkan-headers",
+      "platform": "windows"
+    },
+    {
+      "name": "glslang",
+      "features": [ "tools" ],
+      "host": true
+    },
+    {
+      "name": "spirv-tools",
+      "features": [ "tools" ],
+      "host": true
+    }
   ],
   "overrides": [
     {
@@ -65,11 +81,16 @@
     },
     {
       "name": "wxwidgets-33",
-      "version": "3.3.1#4"
+      "version": "3.3.4#0"
     },
     {
       "name": "ngspice",
-      "version": "46#0"
+      "version": "47#0"
+    },
+    {
+      "name": "protobuf",
+      "version": "6.33.4#2",
+      "$comment": "Pinned due to the MSVC C++20 linker mismatch with protobuf 7.36.2"
     }
   ]
 }

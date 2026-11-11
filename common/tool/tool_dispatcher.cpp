@@ -37,6 +37,7 @@
 #include <tool/action_menu.h>
 #include <view/view.h>
 #include <view/wx_view_controls.h>
+#include <geometry/geometry_utils.h>
 #include <eda_draw_frame.h>
 #include <core/kicad_algo.h>
 
@@ -533,13 +534,16 @@ bool TOOL_DISPATCHER::ShouldDropAutoRepeat( int aKeyCode, wxLongLong aNowMs, boo
 }
 
 
+const int MAX_MOUSE_BUTTON = 0x04;
+
 bool TOOL_DISPATCHER::isStaleAutoRepeat( const wxKeyEvent& aKeyEvent )
 {
-    const int MAX_MOUSE_BUTTON = 0x04;
-    int key = aKeyEvent.GetKeyCode();
+    // On Wayland, wxGetKeyState() only supports modifiers and lock keys.  Keep all hotkey
+    // events when the backend cannot determine whether an ordinary key is still held.
+    if( !KIPLATFORM::UI::SupportsKeyState() )
+        return false;
 
-    // wxGetKeyState answers reliably for letters, digits and the named WXK_ codes used as
-    // hotkeys; modifier-only keys never reach here.
+    int  key = aKeyEvent.GetKeyCode();
     bool keyIsDown = key > MAX_MOUSE_BUTTON && wxGetKeyState( static_cast<wxKeyCode>( key ) );
 
     return ShouldDropAutoRepeat( key, wxGetLocalTimeMillis(), keyIsDown, m_lastKeyCode, m_lastKeyTime );
@@ -564,7 +568,8 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 
     wxEventType type = aEvent.GetEventType();
 
-    if( m_lastKeyCode > 0 && !wxGetKeyState( static_cast<wxKeyCode>( m_lastKeyCode ) ) )
+    if( m_lastKeyCode > MAX_MOUSE_BUTTON && KIPLATFORM::UI::SupportsKeyState()
+        && !wxGetKeyState( static_cast<wxKeyCode>( m_lastKeyCode ) ) )
         m_lastKeyCode = 0;
 
     // Sometimes there is no window that has the focus (it happens when another PCB_BASE_FRAME
@@ -612,8 +617,17 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 
         if( m_toolMgr->GetViewControls() )
         {
-            pos = m_toolMgr->GetViewControls()->GetMousePosition();
-            m_lastMousePosScreen = m_toolMgr->GetViewControls()->GetMousePosition( false );
+            if( type == wxEVT_MOTION || isMouseClick( type ) )
+            {
+                const wxPoint eventPos = me->GetPosition();
+                m_lastMousePosScreen = VECTOR2D( eventPos.x, eventPos.y );
+                pos = GetClampedCoords( m_toolMgr->GetView()->ToWorld( m_lastMousePosScreen ) );
+            }
+            else
+            {
+                pos = m_toolMgr->GetViewControls()->GetMousePosition();
+                m_lastMousePosScreen = m_toolMgr->GetViewControls()->GetMousePosition( false );
+            }
 
             if( pos != m_lastMousePos )
             {
@@ -780,6 +794,12 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
 
         wxLogTrace( kicadTraceToolStack, wxS( "TOOL_DISPATCHER::DispatchWxEvent - Handled: %s  %s" ),
                     ( handled ? wxS( "true" ) : wxS( "false" ) ), evt->Format() );
+    }
+    else if( type == KIGFX::WX_VIEW_CONTROLS::EVT_REFRESH_MOUSE )
+    {
+        // A zoom anchored at the cursor leaves the cursor's world position where it was, so no
+        // motion follows, yet the zoom the status bar shows has changed
+        m_toolMgr->UpdateUI( TOOL_EVENT( TC_MOUSE, TA_MOUSE_MOTION ) );
     }
 
     // pass the event to the GUI, it might still be interested in it

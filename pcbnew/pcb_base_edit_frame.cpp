@@ -239,6 +239,12 @@ void PCB_BASE_EDIT_FRAME::SetBoard( BOARD* aBoard, PROGRESS_REPORTER* aReporter 
 }
 
 
+const TOOL_ACTION* PCB_BASE_EDIT_FRAME::drawArcAction( ARC_DRAW_MODE aMode ) const
+{
+    return &PCB_ACTIONS::DrawArcForMode( aMode );
+}
+
+
 void PCB_BASE_EDIT_FRAME::unitsChangeRefresh()
 {
     PCB_BASE_FRAME::unitsChangeRefresh();
@@ -293,10 +299,10 @@ void PCB_BASE_EDIT_FRAME::onDarkModeToggle( wxSysColourChangedEvent& aEvent )
     if( m_appearancePanel )
         m_appearancePanel->OnDarkModeToggle();
 
-    EDA_3D_VIEWER_FRAME* viewer = Get3DViewerFrame();
+    if( EDA_3D_VIEWER_FRAME* our3DViewer = GetOur3DViewerFrame() )
+        our3DViewer->OnDarkModeToggle();
 
-    if( viewer )
-        viewer->OnDarkModeToggle();
+    aEvent.Skip();
 }
 
 

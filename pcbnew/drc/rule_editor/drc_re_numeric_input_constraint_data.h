@@ -59,7 +59,7 @@ public:
         else
             valueStr = formatDouble( m_numericInputValue );
 
-        if( code == "via_count" || code == "microvia_stack_depth" || code == "microvia_aspect_ratio" )
+        if( code == "via_count" || code == "microvia_stack_depth" || code == "hole_aspect_ratio" )
         {
             return { wxString::Format( "(constraint %s (max %s))", code, valueStr ) };
         }
@@ -87,6 +87,8 @@ public:
     void SetNumericInputValue( double aNumericInput ) { m_numericInputValue = aNumericInput; }
 
     virtual bool IsIntegerOnly() const { return false; }
+
+    virtual bool IsUnitless() const { return false; }
 
     VALIDATION_RESULT Validate() const override
     {

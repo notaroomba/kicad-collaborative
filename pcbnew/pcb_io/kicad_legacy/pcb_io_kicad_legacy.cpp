@@ -215,7 +215,7 @@ void PCB_IO_KICAD_LEGACY::checkpoint()
                                                             / std::max( 1U, m_lineCount ) );
 
             if( !m_progressReporter->KeepRefreshing() )
-                THROW_IO_ERROR( _( "Open canceled by user." ) );
+                THROW_IO_CANCELLED();
 
             m_lastProgressLine = curLine;
         }
@@ -463,28 +463,14 @@ bool PCB_IO_KICAD_LEGACY::CanReadFootprint( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_KICAD_LEGACY::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                 const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_KICAD_LEGACY::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                     const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     init( aProperties );
 
-    std::unique_ptr<BOARD> boardDeleter;
+    m_board = &aBoard;
 
-    if( aAppendToMe )
-    {
-        m_board = aAppendToMe;
-    }
-    else
-    {
-        boardDeleter = std::make_unique<BOARD>();
-        m_board = boardDeleter.get();
-    }
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
-
-    FILE_LINE_READER    reader( aFileName );
+    FILE_LINE_READER reader( aFileName );
 
     m_reader = &reader;
 
@@ -498,7 +484,7 @@ BOARD* PCB_IO_KICAD_LEGACY::LoadBoard( const wxString& aFileName, BOARD* aAppend
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "Open canceled by user." ) );
+            THROW_IO_CANCELLED();
 
         while( reader.ReadLine() )
             m_lineCount++;
@@ -506,11 +492,9 @@ BOARD* PCB_IO_KICAD_LEGACY::LoadBoard( const wxString& aFileName, BOARD* aAppend
         reader.Rewind();
     }
 
-    loadAllSections( bool( aAppendToMe ) );
+    loadAllSections( !aIsNewLoad );
 
-    ignore_unused( boardDeleter.release() ); // give it up so we dont delete it on exit
     m_progressReporter = nullptr;
-    return m_board;
 }
 
 
@@ -1088,16 +1072,12 @@ void PCB_IO_KICAD_LEGACY::loadSETUP()
         }
         else if( TESTLINE( "PadSize" ) )
         {
-            BIU x = biuParse( line + SZ( "PadSize" ), &data );
-            BIU y = biuParse( data );
-
-            bds.m_Pad_Master->SetPadstackMode( PADSTACK::MODE::NORMAL );
-            bds.m_Pad_Master->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( x, y ) );
+            biuParse( line + SZ( "PadSize" ), &data ); // x
+            biuParse( data );                          // y
         }
         else if( TESTLINE( "PadDrill" ) )
         {
-            BIU tmp = biuParse( line + SZ( "PadDrill" ) );
-            bds.m_Pad_Master->SetDrillSize( VECTOR2I( tmp, tmp ) );
+            biuParse( line + SZ( "PadDrill" ) ); // drill size
         }
         else if( TESTLINE( "Pad2MaskClearance" ) )
         {
@@ -1166,24 +1146,23 @@ void PCB_IO_KICAD_LEGACY::loadSETUP()
      * Sort lists by by increasing value and remove duplicates
      * (the first value is not tested, because it is the netclass value)
      */
-    BOARD_DESIGN_SETTINGS& designSettings = m_board->GetDesignSettings();
-    sort( designSettings.m_ViasDimensionsList.begin() + 1, designSettings.m_ViasDimensionsList.end() );
-    sort( designSettings.m_TrackWidthList.begin() + 1, designSettings.m_TrackWidthList.end() );
+    sort( bds.m_ViasDimensionsList.begin() + 1, bds.m_ViasDimensionsList.end() );
+    sort( bds.m_TrackWidthList.begin() + 1, bds.m_TrackWidthList.end() );
 
-    for( int ii = 1; ii < (int) designSettings.m_ViasDimensionsList.size() - 1; ii++ )
+    for( int ii = 1; ii < (int) bds.m_ViasDimensionsList.size() - 1; ii++ )
     {
-        if( designSettings.m_ViasDimensionsList[ii] == designSettings.m_ViasDimensionsList[ii + 1] )
+        if( bds.m_ViasDimensionsList[ii] == bds.m_ViasDimensionsList[ii + 1] )
         {
-            designSettings.m_ViasDimensionsList.erase( designSettings.m_ViasDimensionsList.begin() + ii );
+            bds.m_ViasDimensionsList.erase( bds.m_ViasDimensionsList.begin() + ii );
             ii--;
         }
     }
 
-    for( int ii = 1; ii < (int) designSettings.m_TrackWidthList.size() - 1; ii++ )
+    for( int ii = 1; ii < (int) bds.m_TrackWidthList.size() - 1; ii++ )
     {
-        if( designSettings.m_TrackWidthList[ii] == designSettings.m_TrackWidthList[ii + 1] )
+        if( bds.m_TrackWidthList[ii] == bds.m_TrackWidthList[ii + 1] )
         {
-            designSettings.m_TrackWidthList.erase( designSettings.m_TrackWidthList.begin() + ii );
+            bds.m_TrackWidthList.erase( bds.m_TrackWidthList.begin() + ii );
             ii--;
         }
     }
@@ -1578,7 +1557,7 @@ void PCB_IO_KICAD_LEGACY::loadPAD( FOOTPRINT* aFootprint )
         }
         else if( TESTLINE( "$EndPAD" ) )
         {
-            if( pad->GetSizeX() > 0 && pad->GetSizeY() > 0 )
+            if( pad->GetSize( PADSTACK::ALL_LAYERS ).x > 0 && pad->GetSize( PADSTACK::ALL_LAYERS ).y > 0 )
             {
                 aFootprint->Add( pad.release() );
             }
@@ -2047,20 +2026,17 @@ void PCB_IO_KICAD_LEGACY::loadNETINFO_ITEM()
             // if it is not the net 0, or if the net 0 does not exists.
             if( net && ( net->GetNetCode() > 0 || m_board->FindNet( 0 ) == nullptr ) )
             {
-                m_board->Add( net );
+                NETINFO_ITEM* boardNet = m_board->FindOrAddNet( net->GetNetname(), net->GetNetCode() );
 
                 // Be sure we have room to store the net in m_netCodes
                 if( (int)m_netCodes.size() <= netCode )
                     m_netCodes.resize( netCode+1 );
 
-                m_netCodes[netCode] = net->GetNetCode();
-                net = nullptr;
+                m_netCodes[netCode] = boardNet->GetNetCode();
             }
-            else
-            {
-                delete net;
-                net = nullptr;     // Avoid double deletion.
-            }
+
+            delete net;
+            net = nullptr;     // Avoid double deletion.
 
             return;     // preferred exit
         }
@@ -2375,8 +2351,7 @@ void PCB_IO_KICAD_LEGACY::loadNETCLASS()
             ReadDelimitedText( buf, line + SZ( "AddNet" ), sizeof(buf) );
             netname = ConvertToNewOverbarNotation( From_UTF8( buf ) );
 
-            m_board->GetDesignSettings().m_NetSettings->SetNetclassPatternAssignment(
-                    netname, nc->GetName() );
+            m_board->GetDesignSettings().m_NetSettings->SetNetclassPatternAssignment( netname, nc->GetName() );
         }
         else if( TESTLINE( "Clearance" ) )
         {
@@ -3291,9 +3266,9 @@ void PCB_IO_KICAD_LEGACY::FootprintEnumerate( wxArrayString& aFootprintNames, co
 }
 
 
-FOOTPRINT* PCB_IO_KICAD_LEGACY::FootprintLoad( const wxString& aLibraryPath,
-                                               const wxString& aFootprintName, bool aKeepUUID,
-                                               const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_KICAD_LEGACY::FootprintLoad( const wxString& aLibraryPath,
+                                                               const wxString& aFootprintName, bool aKeepUUID,
+                                                               const std::map<std::string, UTF8>* aProperties )
 {
     init( aProperties );
 
@@ -3306,7 +3281,7 @@ FOOTPRINT* PCB_IO_KICAD_LEGACY::FootprintLoad( const wxString& aLibraryPath,
         return nullptr;
 
     // Return copy of already loaded FOOTPRINT
-    FOOTPRINT* copy = (FOOTPRINT*) it->second->Duplicate( IGNORE_PARENT_GROUP );
+    std::unique_ptr<FOOTPRINT> copy( static_cast<FOOTPRINT*>( it->second->Duplicate( IGNORE_PARENT_GROUP ) ) );
     copy->SetParent( nullptr );
     return copy;
 }

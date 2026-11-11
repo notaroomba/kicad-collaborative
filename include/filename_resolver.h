@@ -66,7 +66,7 @@ public:
     /**
      * Set the current KiCad project directory as the first entry in the model path list.
      *
-     * @param[in]   aProjDir    current project directory.
+     * @param[in]   aProject    is the current project.
      * @param[out]  flgChanged  optional, set to true if directory was changed.
      * @retval      true        success.
      * @retval      false       failure.
@@ -90,14 +90,15 @@ public:
     /**
      * Determine the full path of the given file name.
      *
-     * In the future remote files may be supported, in which case it is best to require a full
-     * URI in which case ResolvePath should check that the URI conforms to RFC-2396 and related
-     * documents and copies \a aFileName into aResolvedName if the URI is valid.
+     * In the future remote files may be supported, in which case it is best to require a full URI in
+     * which case ResolvePath should check that the URI conforms to RFC-2396 and related documents and
+     * copies \a aFileName into aResolvedName if the URI is valid.
      *
      * @param aFileName The configured file path to resolve.
      * @param aWorkingPath The current working path for relative path resolutions.
-     * @param aEmbeddedFilesStack is a list of pointers to the embedded files list.  They will
-     *                            be searched from the front of the list.
+     * @param aEmbeddedFilesStack is a list of pointers to the embedded files list in most-global to
+     *                            most-local order.  They will be searched from the top of the "stack"
+     *                            (back of the std::vector).
      */
     wxString ResolvePath( const wxString& aFileName, const wxString& aWorkingPath,
                           std::vector<const EMBEDDED_FILES*> aEmbeddedFilesStack );
@@ -160,7 +161,7 @@ private:
     bool addPath( const SEARCH_PATH& aPath );
 
     /**
-     * Check the ${ENV_VAR} component of a path and adds it to the resolver's path list if
+     * Check the \${ENV_VAR} component of a path and adds it to the resolver's path list if
      * it is not yet in the list.
      */
     void checkEnvVarPath( const wxString& aPath );

@@ -47,7 +47,8 @@ public:
 
     DIALOG_TABLECELL_PROPERTIES( PCB_BASE_EDIT_FRAME* aParentFrame, std::vector<PCB_TABLECELL*> aCells );
     ~DIALOG_TABLECELL_PROPERTIES();
-    ///< @return the value depending on the way the dialog was closed.
+
+    /// @return the value depending on the way the dialog was closed.
     enum TABLECELL_PROPS_RETVALUE GetReturnValue() { return m_returnValue; }
 
     bool TransferDataToWindow() override;
@@ -87,6 +88,11 @@ private:
 
     wxStyledTextCtrl*           m_cellText;
     SCINTILLA_TRICKS*           m_scintillaTricks;
+
+    /**
+     * Generated cell text, shown so the user can read it but not theirs to change.
+     */
+    bool                        m_cellTextIsGenerated;
 
     HTML_MESSAGE_BOX*           m_helpWindow;
 

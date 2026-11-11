@@ -41,6 +41,8 @@ class NETINFO_ITEM;
 class BOARD;
 class PROGRESS_REPORTER;
 
+class PAD;
+
 class PCB_IO_EASYEDAPRO_PARSER
 {
 public:
@@ -69,14 +71,22 @@ public:
 
     static double Convert( wxString aValue );
 
-    FOOTPRINT* ParseFootprint( const nlohmann::json& aProject, const wxString& aFpUuid,
-                               const std::vector<nlohmann::json>& aLines );
+    /// A hole with no copper around it takes the drill size, and stays unplated if the source says it is
+    static void SizeHoleOnlyPad( PAD& aPad, bool aPlated );
+
+    /// Map legacy eight- and ten-row safe-spacing matrices to the v3 category layout.
+    static nlohmann::json NormalizeSafeSpacing( const nlohmann::json& aTable );
+
+    std::unique_ptr<FOOTPRINT> ParseFootprint( const nlohmann::json& aProject, const wxString& aFpUuid,
+                                               const std::vector<nlohmann::json>& aLines );
 
     void ParseBoard( BOARD* aBoard, const nlohmann::json& aProject,
                      std::map<wxString, std::unique_ptr<FOOTPRINT>>&    aFootprintMap,
                      const std::map<wxString, EASYEDAPRO::BLOB>&        aBlobMap,
                      const std::multimap<wxString, EASYEDAPRO::POURED>& aPouredMap,
                      const std::vector<nlohmann::json>& aLines, const wxString& aFpLibName );
+    wxString GetSafeSpacingRules() const;
+
 
     std::vector<std::unique_ptr<PCB_SHAPE>> ParsePoly( BOARD_ITEM_CONTAINER* aContainer,
                                                        nlohmann::json polyData, bool aClosed,
@@ -91,6 +101,8 @@ public:
 private:
     BOARD*   m_board;
     VECTOR2D m_relOrigin;
+    nlohmann::json m_safeSpacing;
+
 
     NETINFO_ITEM* getNet( BOARD* aBoard, const wxString& aNetName );
 

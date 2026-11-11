@@ -109,9 +109,6 @@ DIALOG_EXCHANGE_FOOTPRINTS::DIALOG_EXCHANGE_FOOTPRINTS( PCB_EDIT_FRAME* aParent,
     m_resetTransform->SetValue(          m_updateMode ? false : true );
     m_matchPadPositions->SetValue(       true );
 
-    if( m_updateMode )
-        m_resetTransform->Show( false );
-
     // initialize match-mode
     if( m_updateMode )
         m_matchMode = selectedMode ? &g_matchModeForUpdateSelected : &g_matchModeForUpdate;
@@ -384,6 +381,7 @@ void DIALOG_EXCHANGE_FOOTPRINTS::processFootprint( FOOTPRINT* aFootprint, const 
     bool shifted = false;
 
     m_parent->GetBoard()->ExchangeFootprint( aFootprint, newFootprint, m_commit,
+                                             m_parent->GetPcbNewSettings()->m_FlipDirection,
                                              m_matchPadPositions->GetValue(),
                                              m_removeExtraBox->GetValue(),
                                              m_resetTextItemLayers->GetValue(),

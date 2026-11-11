@@ -102,11 +102,11 @@ public:
 
     void SetTimeLimit( uint64_t microseconds ) { m_timeLimitUs = microseconds; }
 
-    bool CompareResults( PNS_LOG_FILE* aLog );
+    bool CompareResults( PNS_LOG_FILE* aLog, bool aSkipHeads = false );
     const PNS_LOG_FILE::COMMIT_STATE GetRouterUpdatedItems();
+    void CreateRouter();
 
 private:
-    void createRouter();
 
     std::shared_ptr<PNS_LOG_VIEW_TRACKER>       m_viewTracker;
     std::unique_ptr<PNS_LOG_PLAYER_KICAD_IFACE> m_iface; // needs to be deleted after m_router

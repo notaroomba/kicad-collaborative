@@ -21,6 +21,7 @@
 
 #include "pns_dragger.h"
 
+#include <core/kicad_algo.h>
 #include <core/typeinfo.h>
 #include <advanced_config.h>
 #include <base_units.h>
@@ -210,7 +211,7 @@ bool DRAGGER::startDragArc( const VECTOR2D& aP, ARC* aArc )
             VECTOR2I perp( -radial.y, radial.x );
             VECTOR2I toMid = mid - aEndpoint;
 
-            if( perp.x * toMid.x + perp.y * toMid.y > 0 )
+            if( perp.Dot( toMid ) > 0 )
                 perp = VECTOR2I( radial.y, -radial.x );
 
             double mag = std::hypot( (double) perp.x, (double) perp.y );
@@ -218,7 +219,8 @@ bool DRAGGER::startDragArc( const VECTOR2D& aP, ARC* aArc )
             if( mag <= 0 )
                 return VECTOR2I( stubLen, 0 );
 
-            return VECTOR2I( KiROUND( perp.x * stubLen / mag ), KiROUND( perp.y * stubLen / mag ) );
+            // A unit vector first, since a coordinate times the stub length does not fit an int
+            return VECTOR2I( KiROUND( perp.x / mag * stubLen ), KiROUND( perp.y / mag * stubLen ) );
         };
 
         if( isolatedStart )
@@ -366,6 +368,26 @@ void DRAGGER::SetMode( PNS::DRAG_MODE aMode )
 PNS::DRAG_MODE DRAGGER::Mode() const
 {
     return static_cast<PNS::DRAG_MODE>( m_mode );
+}
+
+
+bool DRAGGER::IsDragOrigin( const ITEM* aItem ) const
+{
+    if( !aItem )
+        return false;
+
+    if( m_mode != DM_VIA )
+    {
+        const LINKED_ITEM* li = dynamic_cast<const LINKED_ITEM*>( aItem );
+        return li && m_draggedLine.ContainsLink( li );
+    }
+
+    if( !m_initialVia.valid || !m_world || !aItem->OfKind( ITEM::VIA_T | ITEM::SEGMENT_T | ITEM::ARC_T ) )
+        return false;
+
+    const JOINT* jt = m_world->FindJoint( m_initialVia.pos, m_initialVia.layers.Start(), m_initialVia.net );
+
+    return jt && alg::contains( jt->LinkList(), aItem );
 }
 
 

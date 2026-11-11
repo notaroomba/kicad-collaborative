@@ -24,6 +24,7 @@
 #include "graphics_import_plugin.h"
 #include "graphics_importer_buffer.h"
 #include "wx/translation.h"
+#include <wx/arrstr.h>
 
 #include <dl_creationadapter.h>
 #include <dl_dxf.h>
@@ -203,6 +204,19 @@ enum class DXF_IMPORT_UNITS
 
 
 /**
+ * @return the translated names of the units offered for a DXF file without $INSUNITS, in the
+ *         order used by #DxfImportUnitFromChoice().
+ */
+wxArrayString GetDxfImportUnitChoices();
+
+/**
+ * @return the unit at \a aSelection in #GetDxfImportUnitChoices(), or DXF_IMPORT_UNITS::DEFAULT
+ *         when \a aSelection is wxNOT_FOUND or otherwise out of range.
+ */
+DXF_IMPORT_UNITS DxfImportUnitFromChoice( int aSelection );
+
+
+/**
  * This class import DXF ASCII files and convert basic entities to board entities.
  * It depends on the dxflib library.
  */
@@ -256,7 +270,7 @@ public:
      *
      * DXFs can lack units by design which requires the importing software to make the decision.
      *
-     * @param aUnits is the default unit of the DXF to assume.
+     * @param aUnit is the default unit of the DXF to assume.
      */
     void SetUnit( DXF_IMPORT_UNITS aUnit )
     {
@@ -268,7 +282,7 @@ public:
      *
      * DXF files have no line width explicit parameter, it will be most of time the line width
      * of imported lines.
-     *f
+     *
      * @param aWidth is the line width in mm.
      */
     void SetDefaultLineWidthMM( double aWidth )
@@ -321,6 +335,7 @@ public:
     {
         return m_messages;
     }
+
     // report message to keep trace of not supported dxf entities:
     void ReportMsg( const wxString& aMessage ) override;
 

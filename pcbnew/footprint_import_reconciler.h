@@ -104,9 +104,14 @@ private:
  * project footprint library and re-point FPIDs.  A reconciliation failure is reported rather than
  * thrown so an import is never aborted by it.
  *
+ * @param aDefinitions
+ * @param aBoard is the #BOARD to reconcile the footprints.
+ * @param aProject is the #PROJECT \a aBoard belongs to.
+ * @param aBoardPath
  * @param aProperties carries the manager-chosen cache nickname and provenance source libraries;
  *                    a standalone import passes nullptr and the nickname is derived from
  *                    @p aBoardPath.
+ * @param[in] aReporter is the #REPORTER object to write messages to.
  */
 FOOTPRINT_IMPORT_RECONCILE_RESULT
 ReconcileImportedFootprints( std::vector<std::unique_ptr<FOOTPRINT>> aDefinitions, BOARD& aBoard,
@@ -120,5 +125,12 @@ FOOTPRINT_IMPORT_RECONCILE_RESULT
 ReconcileImportedFootprints( PCB_IO& aPlugin, BOARD& aBoard, PROJECT& aProject,
                              const wxString& aBoardPath,
                              const std::map<std::string, UTF8>* aProperties, REPORTER& aReporter );
+
+/**
+ * Map each board reference to the full LIB_ID of its footprint.
+ *
+ * A footprint with no name, and a reference used more than once, are left out.
+ */
+std::map<wxString, wxString> ImportedFootprintIds( const BOARD& aBoard );
 
 #endif // FOOTPRINT_IMPORT_RECONCILER_H

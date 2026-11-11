@@ -102,6 +102,7 @@ public:
         int  properties_panel_width;
         float properties_splitter;
         bool show_properties;
+        bool    show_git_commit_pane;
         bool design_blocks_show;
         int  design_blocks_panel_docked_width;
         int  design_blocks_panel_float_width;
@@ -170,6 +171,7 @@ public:
         wxString            intersheets_ref_prefix;
         wxString            intersheets_ref_suffix;
         bool                auto_start_wires;
+        bool                auto_place_sheet_pins;
 
         // Pulldown index for user default junction dot size (e.g. none = 0, smallest = 1, small = 2, etc)
         int                 junction_size_choice;
@@ -346,6 +348,9 @@ public:
     SIMULATOR                 m_Simulator;
 
     bool                      m_RescueNeverShow;
+
+    /// Database columns the user mapped to each library role, most recent first, used to autofill
+    std::map<std::string, std::vector<std::string>> m_DatabaseColumnChoices;
 
     wxString                  m_lastSymbolLibDir;
 };

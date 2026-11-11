@@ -71,11 +71,13 @@ public:
 
     /**
      * Return the keys @p aItem could source as a cross-reference target. For
-     * a FOOTPRINT, these are `${REFDES:FIELD}` keys — one per named field.
+     * a FOOTPRINT, this is the single `${REFDES:*}` key.
      */
     std::vector<TEXT_VAR_REF_KEY> ExtractSourceKeys( EDA_ITEM* aItem ) const;
 
 private:
+    std::vector<TEXT_VAR_REF_KEY> collectKeys( BOARD_ITEM* aItem );
+
     void registerItem( BOARD_ITEM* aItem );
     void unregisterItem( BOARD_ITEM* aItem );
 

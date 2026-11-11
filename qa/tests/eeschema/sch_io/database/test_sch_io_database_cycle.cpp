@@ -23,6 +23,7 @@
 #include <lib_symbol.h>
 #include <libraries/library_manager.h>
 #include <libraries/symbol_library_adapter.h>
+#include <reporter.h>
 
 // We need access to private members of SCH_IO_DATABASE to drive the cycle-detection
 // state directly. The plugin declares SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE as a friend.
@@ -39,7 +40,19 @@
 class SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE
 {
 public:
-    SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE() = default;
+    SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE()
+    {
+        // s_inProgressLoads is static per thread, make sure any prior tests tidied up
+        // after themselves.
+        BOOST_REQUIRE_MESSAGE( SCH_IO_DATABASE::s_inProgressLoads.empty(),
+                               "s_inProgressLoads is not empty at test start" );
+    }
+
+    ~SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE()
+    {
+        // Do not leak our in-progress loads into subsequent tests.
+        SCH_IO_DATABASE::s_inProgressLoads.clear();
+    }
 
     /// Drive loadSymbolFromRow with aInProgressKey already marked in-progress, simulating the
     /// second entry of a recursive load.
@@ -49,7 +62,7 @@ public:
                                                  const DATABASE_CONNECTION::ROW& aRow,
                                                  const wxString& aInProgressKey )
     {
-        aPlugin.m_inProgressLoads.insert( aInProgressKey );
+        aPlugin.s_inProgressLoads.insert( aInProgressKey );
         return aPlugin.loadSymbolFromRow( aSymbolName, aTable, aRow );
     }
 
@@ -65,12 +78,12 @@ public:
 
     bool IsInProgressEmpty( const SCH_IO_DATABASE& aPlugin ) const
     {
-        return aPlugin.m_inProgressLoads.empty();
+        return aPlugin.s_inProgressLoads.empty();
     }
 
     std::size_t InProgressSize( const SCH_IO_DATABASE& aPlugin ) const
     {
-        return aPlugin.m_inProgressLoads.size();
+        return aPlugin.s_inProgressLoads.size();
     }
 };
 
@@ -130,7 +143,6 @@ BOOST_AUTO_TEST_CASE( RaiiGuardBalancesInProgressSet )
     row[table.symbols_col] = std::string( "SomeLib:R-001" );
 
     SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE fixture;
-    BOOST_REQUIRE( fixture.IsInProgressEmpty( plugin ) );
 
     std::unique_ptr<LIB_SYMBOL> symbol = fixture.Invoke( plugin, wxS( "R-001" ), table, row );
 
@@ -141,6 +153,40 @@ BOOST_AUTO_TEST_CASE( RaiiGuardBalancesInProgressSet )
     symbol = fixture.Invoke( plugin, wxS( "R-001" ), table, row );
     BOOST_REQUIRE( symbol );
     BOOST_CHECK( fixture.IsInProgressEmpty( plugin ) );
+}
+
+
+// Tokens of the Symbols column that are not Library:Symbol must be reported, not silently dropped.
+BOOST_AUTO_TEST_CASE( ReportsMalformedSymbolReference )
+{
+    LIBRARY_MANAGER        libManager;
+    SYMBOL_LIBRARY_ADAPTER adapter( libManager );
+
+    SCH_IO_DATABASE plugin;
+    plugin.SetLibraryManagerAdapter( &adapter );
+
+    WX_STRING_REPORTER reporter;
+    plugin.SetReporter( &reporter );
+
+    DATABASE_LIB_TABLE table;
+    table.name        = "Parts";
+    table.table       = "Parts";
+    table.key_col     = "Part ID";
+    table.symbols_col = "Symbols";
+
+    SCH_IO_DATABASE_CYCLE_DETECTION_FIXTURE fixture;
+
+    DATABASE_CONNECTION::ROW row;
+    row[table.symbols_col] = std::string( "SomeLib:R-001" );
+
+    fixture.Invoke( plugin, wxS( "R-001" ), table, row );
+    BOOST_CHECK( reporter.GetMessages().IsEmpty() );
+
+    row[table.symbols_col] = std::string( "NotASymbol;SomeLib:R-001" );
+
+    fixture.Invoke( plugin, wxS( "R-001" ), table, row );
+    BOOST_CHECK_EQUAL( reporter.GetMessages(),
+                       wxString( "'NotASymbol' is not a symbol; expected Library:Symbol.\n" ) );
 }
 
 

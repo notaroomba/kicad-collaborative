@@ -24,6 +24,7 @@
 #include <gal/color4d.h>
 #include <json_common.h>
 #include <settings/json_settings.h>
+#include <tool/arc_draw_mode.h>
 #include <settings/grid_settings.h>
 
 /**
@@ -53,8 +54,8 @@ struct KICOMMON_API CURSOR_SETTINGS
 };
 
 /**
-* Settings for arc editing. Used by pcbnew and footprint editor
-*/
+ * Settings for arc editing. Used by pcbnew and footprint editor
+ */
 enum class ARC_EDIT_MODE
 {
     /**
@@ -63,12 +64,14 @@ enum class ARC_EDIT_MODE
      * When editing the center, the arcs is moved
      */
     KEEP_CENTER_ADJUST_ANGLE_RADIUS,
+
     /**
      * Whe editing endpoints, the other end remains in place.
      * When editing the midpoint, both endpoints remain in place.
      * When editing the center, the endpoints remain in place.
      */
     KEEP_ENDPOINTS_OR_START_DIRECTION,
+
     /**
      * When editing endpoints, only the angle is adjusted.
      * The midpoint adjusts only radius.
@@ -78,16 +81,18 @@ enum class ARC_EDIT_MODE
 };
 
 /**
-* Store the window positioning/state.
-*/
+ * Store the window positioning/state.
+ *
+ * Initialized to invalid values so that failed restoration doesn't try to parse uninitialized memory
+ */
 struct KICOMMON_API WINDOW_STATE
 {
-    bool maximized;
-    int size_x;
-    int size_y;
-    int pos_x;
-    int pos_y;
-    unsigned int display;
+    bool maximized = true;
+    int size_x = 0;
+    int size_y = 0;
+    int pos_x = 0;
+    int pos_y = 0;
+    unsigned int display = UINT_MAX;
 };
 
 /**
@@ -265,15 +270,18 @@ public:
     /// Use custom toolbars
     bool m_CustomToolbars;
 
+    /// Construction sequence last used by the arc drawing tool in this application.
+    ARC_DRAW_MODE m_ArcDrawMode;
 
-    ///! Local schema version for common app settings.
+
+    /// Local schema version for common app settings.
     int m_appSettingsSchemaVersion;
 
 protected:
 
     virtual std::string getLegacyFrameName() const { return std::string(); }
 
-    ///! Migrates the find/replace history string list.s
+    /// Migrates the find/replace history string list.s
     void migrateFindReplace( wxConfigBase* aCfg );
 
     /**
@@ -292,6 +300,8 @@ protected:
      *
      * @param aWindow is the target window settings object.
      * @param aJsonPath is the path to read parameters from.
+     * @param aDefaultWidth is the default window width.
+     * @param aDefaultHeight is the default window height.
      */
     void addParamsForWindow( WINDOW_SETTINGS* aWindow, const std::string& aJsonPath,
                              int aDefaultWidth = 0, int aDefaultHeight = 0 );

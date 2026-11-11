@@ -31,8 +31,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <optional>
-#include <mutex>
 
 #include <board_connected_item.h>
 #include <base_units.h>
@@ -47,6 +47,11 @@ class PAD;
 class MSG_PANEL_ITEM;
 class SHAPE_POLY_SET;
 class SHAPE_ARC;
+
+namespace kiapi::board::types
+{
+class Via;
+}
 
 
 // Used for tracks and vias for algorithmic safety, not to enforce constraints
@@ -75,7 +80,9 @@ public:
 
     void Rotate( const VECTOR2I& aRotCentre, const EDA_ANGLE& aAngle ) override;
 
-    virtual void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+    void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
+
+    void Mirror( const SEG& aAxis ) override;
 
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
@@ -143,20 +150,22 @@ public:
      */
     virtual double GetDelay() const;
 
+    double GetCoverageArea( int aTextMargin ) const override;
+
     /**
      * Convert the track shape to a closed polygon.
      *
      * Circles (vias) and arcs (ends of tracks) are approximated by segments.
      *
      * @param aBuffer is a buffer to store the polygon
-     * @param aClearance is the clearance around the pad
-     * @param aError is the maximum deviation from true circle
-     * @param ignoreLineWidth is used for edge cut items where the line width is only for
-     *                        visualization
+     * @param aLayer is the ID of the layer to transform.
+     * @param aClearance is the clearance around the pad.
+     * @param aError is the maximum deviation from true circle.
+     * @param aErrorLoc
+     * @param ignoreLineWidth is used for edge cut items where the line width is only for visualization.
      */
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
-                                  int aError, ERROR_LOC aErrorLoc,
-                                  bool ignoreLineWidth = false ) const override;
+                                  int aError, ERROR_LOC aErrorLoc, bool ignoreLineWidth = false ) const override;
 
     // @copydoc BOARD_ITEM::GetEffectiveShape
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
@@ -203,9 +212,9 @@ public:
 
     BITMAPS GetMenuImage() const override;
 
-    virtual EDA_ITEM* Clone() const override;
+    EDA_ITEM* Clone() const override;
 
-    virtual std::vector<int> ViewGetLayers() const override;
+    std::vector<int> ViewGetLayers() const override;
 
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
 
@@ -219,9 +228,9 @@ public:
         return true;
     }
 
-    virtual double Similarity( const BOARD_ITEM& aOther ) const override;
+    double Similarity( const BOARD_ITEM& aOther ) const override;
 
-    virtual bool operator==( const BOARD_ITEM& aOther ) const override;
+    bool operator==( const BOARD_ITEM& aOther ) const override;
     virtual bool operator==( const PCB_TRACK& aOther ) const;
 
     struct cmp_tracks
@@ -233,14 +242,13 @@ public:
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
 
 #if defined (DEBUG)
-    virtual void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
+    void Show( int nestLevel, std::ostream& os ) const override { ShowDummy( os ); }
 #endif
 
 protected:
-    virtual void swapData( BOARD_ITEM* aImage ) override;
+    void swapData( BOARD_ITEM* aImage ) override;
 
-    void GetMsgPanelInfoBase_Common( EDA_DRAW_FRAME* aFrame,
-                                     std::vector<MSG_PANEL_ITEM>& aList ) const;
+    void GetMsgPanelInfoBase_Common( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) const;
 
 protected:
     VECTOR2I m_Start;        ///< Line start point
@@ -263,6 +271,13 @@ public:
 
     PCB_ARC( BOARD_ITEM* aParent, const SHAPE_ARC* aArc );
 
+    /**
+     * Create a PCB_ARC through the three points, or a PCB_TRACK segment when they are straight.
+     * Layer, width and net are left for the caller.
+     */
+    static std::unique_ptr<PCB_TRACK> CreateFromThreePoints( BOARD_ITEM* aParent, const VECTOR2I& aStart,
+                                                             const VECTOR2I& aMid, const VECTOR2I& aEnd );
+
     void CopyFrom( const BOARD_ITEM* aOther ) override;
 
     static inline bool ClassOf( const EDA_ITEM *aItem )
@@ -270,7 +285,7 @@ public:
         return aItem && PCB_ARC_T == aItem->Type();
     }
 
-    virtual void Move( const VECTOR2I& aMoveVector ) override
+    void Move( const VECTOR2I& aMoveVector ) override
     {
         m_Start += aMoveVector;
         m_Mid   += aMoveVector;
@@ -281,6 +296,8 @@ public:
 
     void Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
+    void Mirror( const SEG& aAxis ) override;
+
     void Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection ) override;
 
     void SetMid( const VECTOR2I& aMid ) { m_Mid = aMid; }
@@ -288,19 +305,18 @@ public:
 
     void SetPosition( const VECTOR2I& aPos ) override { m_Start = aPos; }
 
-    virtual VECTOR2I GetPosition() const override;
+    VECTOR2I GetPosition() const override;
     const VECTOR2I GetFocusPosition() const override  { return m_Mid; }
 
-    virtual VECTOR2I GetCenter() const override { return GetPosition(); }
+    VECTOR2I GetCenter() const override { return GetPosition(); }
 
     double GetRadius() const;
     EDA_ANGLE GetAngle() const;
     EDA_ANGLE GetArcAngleStart() const;
     EDA_ANGLE GetArcAngleEnd() const;  // Called by Python; ignore CLion's claim that it's unused
-    virtual bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
+    bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
 
-    virtual bool HitTest( const BOX2I& aRect, bool aContained = true,
-                          int aAccuracy = 0 ) const override;
+    bool HitTest( const BOX2I& aRect, bool aContained = true, int aAccuracy = 0 ) const override;
 
     bool IsCCW() const;
 
@@ -411,6 +427,7 @@ public:
     void    SetViaType( VIATYPE aViaType )
     {
         m_viaType = aViaType;
+
         // If someone updates a VIA to TH, we want to kick out any non-outer layers
         SanitizeLayers();
     }
@@ -418,6 +435,10 @@ public:
     const PADSTACK& Padstack() const              { return m_padStack; }
     PADSTACK& Padstack()                          { return m_padStack; }
     void SetPadstack( const PADSTACK& aPadstack ) { m_padStack = aPadstack; }
+
+    // A micro, blind, or buried via with a Front/Inner/Back padstack definition is an odd beast as it might
+    // not exist on F_Cu or B_Cu.
+    bool IsGhostLayer( PCB_LAYER_ID aLayer ) const;
 
     BACKDRILL_MODE GetBackdrillMode() const { return m_padStack.GetBackdrillMode(); }
     void SetBackdrillMode( BACKDRILL_MODE aMode ) { m_padStack.SetBackdrillMode( aMode ); }
@@ -461,16 +482,16 @@ public:
 
     static std::optional<VIA_PARAMETER_ERROR>
             ValidateViaParameters( std::optional<int> aDiameter,
-                                    std::optional<int> aPrimaryDrill,
-                                    std::optional<PCB_LAYER_ID> aPrimaryStartLayer = std::nullopt,
-                                    std::optional<PCB_LAYER_ID> aPrimaryEndLayer = std::nullopt,
-                                    std::optional<int> aSecondaryDrill = std::nullopt,
-                                    std::optional<PCB_LAYER_ID> aSecondaryStartLayer = std::nullopt,
-                                    std::optional<PCB_LAYER_ID> aSecondaryEndLayer = std::nullopt,
-                                    std::optional<int> aTertiaryDrill = std::nullopt,
-                                    std::optional<PCB_LAYER_ID> aTertiaryStartLayer = std::nullopt,
-                                    std::optional<PCB_LAYER_ID> aTertiaryEndLayer = std::nullopt,
-                                    int aCopperLayerCount = 0 );
+                                   std::optional<int> aPrimaryDrill,
+                                   std::optional<PCB_LAYER_ID> aPrimaryStartLayer = std::nullopt,
+                                   std::optional<PCB_LAYER_ID> aPrimaryEndLayer = std::nullopt,
+                                   std::optional<int> aSecondaryDrill = std::nullopt,
+                                   std::optional<PCB_LAYER_ID> aSecondaryStartLayer = std::nullopt,
+                                   std::optional<PCB_LAYER_ID> aSecondaryEndLayer = std::nullopt,
+                                   std::optional<int> aTertiaryDrill = std::nullopt,
+                                   std::optional<PCB_LAYER_ID> aTertiaryStartLayer = std::nullopt,
+                                   std::optional<PCB_LAYER_ID> aTertiaryEndLayer = std::nullopt,
+                                   int aCopperLayerCount = 0 );
 
     const BOX2I GetBoundingBox() const override;
     const BOX2I GetBoundingBox( PCB_LAYER_ID aLayer ) const;
@@ -503,34 +524,56 @@ public:
     MINOPTMAX<int> GetWidthConstraint( wxString* aSource = nullptr ) const override;
     MINOPTMAX<int> GetDrillConstraint( wxString* aSource = nullptr ) const;
 
+    /**
+     * Give the via a uniform padstack sized from its diameter and hole rules.
+     *
+     * A rule's preferred value wins over the one given here, and the result is pinned to the rule's limits.
+     *
+     * @param aDiameter is the preferred diameter when no rule gives one.
+     * @param aDrill is the preferred drill when no rule gives one.
+     */
+    void SetSizeFromRules( int aDiameter, int aDrill );
+
     void         SetFrontTentingMode( TENTING_MODE aMode );
     TENTING_MODE GetFrontTentingMode() const;
+    TENTING_MODE ResolveFrontTentingMode() const;
     void         SetBackTentingMode( TENTING_MODE aMode );
     TENTING_MODE GetBackTentingMode() const;
+    TENTING_MODE ResolveBackTentingMode() const;
 
     void          SetFrontCoveringMode( COVERING_MODE aMode );
     COVERING_MODE GetFrontCoveringMode() const;
+    COVERING_MODE ResolveFrontCoveringMode() const;
     void          SetBackCoveringMode( COVERING_MODE aMode );
     COVERING_MODE GetBackCoveringMode() const;
+    COVERING_MODE ResolveBackCoveringMode() const;
 
     void          SetFrontPluggingMode( PLUGGING_MODE aMode );
     PLUGGING_MODE GetFrontPluggingMode() const;
+    PLUGGING_MODE ResolveFrontPluggingMode() const;
     void          SetBackPluggingMode( PLUGGING_MODE aMode );
     PLUGGING_MODE GetBackPluggingMode() const;
+    PLUGGING_MODE ResolveBackPluggingMode() const;
 
     void         SetCappingMode( CAPPING_MODE aMode );
     CAPPING_MODE GetCappingMode() const;
+    CAPPING_MODE ResolveCappingMode() const;
 
     void         SetFillingMode( FILLING_MODE aMode );
     FILLING_MODE GetFillingMode() const;
+    FILLING_MODE ResolveFillingMode() const;
 
     bool IsTented( PCB_LAYER_ID aLayer ) const override;
     int GetSolderMaskExpansion() const;
+
+    PCB_LAYER_ID GetPrincipalLayer() const;
 
     PCB_LAYER_ID GetLayer() const override;
     void SetLayer( PCB_LAYER_ID aLayer ) override;
 
     bool IsOnLayer( PCB_LAYER_ID aLayer ) const override;
+
+    bool IsOnCopperLayer() const override;
 
     virtual LSET GetLayerSet() const override;
 
@@ -573,6 +616,8 @@ public:
     void SetPosition( const VECTOR2I& aPoint ) override { m_Start = aPoint;  m_End = aPoint; }
 
     void GetMsgPanelInfo( EDA_DRAW_FRAME* aFrame, std::vector<MSG_PANEL_ITEM>& aList ) override;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     bool HitTest( const VECTOR2I& aPosition, int aAccuracy = 0 ) const override;
     bool HitTest( const BOX2I& aRect, bool aContained, int aAccuracy = 0 ) const override;
@@ -671,13 +716,12 @@ public:
      * @param aTopmost
      * @param aBottommost
      */
-    void GetOutermostConnectedLayers( PCB_LAYER_ID* aTopmost,
-                             PCB_LAYER_ID* aBottommost ) const;
+    void GetOutermostConnectedLayers( PCB_LAYER_ID* aTopmost, PCB_LAYER_ID* aBottommost ) const;
 
     /**
      * Set the drill value for vias.
      *
-     * @param aDrill is the new drill diameter
+     * @param aSize is the new drill diameter.
      */
     void SetPrimaryDrillSize( const VECTOR2I& aSize );
     const VECTOR2I& GetPrimaryDrillSize() const { return m_padStack.Drill().size; }
@@ -692,7 +736,10 @@ public:
     PCB_LAYER_ID GetPrimaryDrillEndLayer() const { return m_padStack.Drill().end; }
 
     void SetFrontPostMachining( const std::optional<PAD_DRILL_POST_MACHINING_MODE>& aMode );
-    std::optional<PAD_DRILL_POST_MACHINING_MODE> GetFrontPostMachining() const { return m_padStack.FrontPostMachining().mode; }
+    std::optional<PAD_DRILL_POST_MACHINING_MODE> GetFrontPostMachining() const
+    {
+        return m_padStack.FrontPostMachining().mode;
+    }
 
     void SetFrontPostMachiningMode( PAD_DRILL_POST_MACHINING_MODE aMode )
     {
@@ -712,7 +759,10 @@ public:
     int GetFrontPostMachiningAngle() const { return m_padStack.FrontPostMachining().angle; }
 
     void SetBackPostMachining( const std::optional<PAD_DRILL_POST_MACHINING_MODE>& aMode );
-    std::optional<PAD_DRILL_POST_MACHINING_MODE> GetBackPostMachining() const { return m_padStack.BackPostMachining().mode; }
+    std::optional<PAD_DRILL_POST_MACHINING_MODE> GetBackPostMachining() const
+    {
+        return m_padStack.BackPostMachining().mode;
+    }
 
     void SetBackPostMachiningMode( PAD_DRILL_POST_MACHINING_MODE aMode )
     {
@@ -750,6 +800,24 @@ public:
      */
     int GetPostMachiningKnockout( PCB_LAYER_ID aLayer ) const;
 
+    /**
+     * @see PADSTACK::MachiningKnockout
+     *
+     * A result of zero is equivalent to IsBackdrilledOrPostMachined() returning false.
+     */
+    int GetBackdrillOrPostMachiningKnockout( PCB_LAYER_ID aLayer ) const;
+
+    /**
+     * Check whether backdrilling or post-machining left no copper at all on a layer.
+     *
+     * A narrower operation only hollows the barrel and leaves an annular ring, which still
+     * conducts and whose outer edge is unmoved, so this is stricter than
+     * IsBackdrilledOrPostMachined().
+     *
+     * @param aLayer the copper layer to check
+     */
+    bool HasCopperRemoved( PCB_LAYER_ID aLayer ) const;
+
     void SetPrimaryDrillFilled( const std::optional<bool>& aFilled );
     void SetPrimaryDrillFilledFlag( bool aFilled );
     std::optional<bool> GetPrimaryDrillFilled() const { return m_padStack.Drill().is_filled; }
@@ -760,10 +828,7 @@ public:
     std::optional<bool> GetPrimaryDrillCapped() const { return m_padStack.Drill().is_capped; }
     bool GetPrimaryDrillCappedFlag() const { return m_padStack.Drill().is_capped.value_or( false ); }
 
-    void SetDrill( int aDrill )
-    {
-        SetPrimaryDrillSize( { aDrill, aDrill } );
-    }
+    void SetDrill( int aDrill ) { SetPrimaryDrillSize( { aDrill, aDrill } ); }
 
     /**
      * Return the local drill setting for this PCB_VIA.
@@ -829,14 +894,17 @@ public:
     bool GetIsNotFree() const           { return !m_isFree; }
     void SetIsNotFree( bool aNotFree )  { m_isFree = !aNotFree; }
 
-    // @copydoc BOARD_ITEM::GetEffectiveShape
+    /// @copydoc BOARD_ITEM::GetEffectiveShape
     std::shared_ptr<SHAPE> GetEffectiveShape( PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
                                               FLASHING aFlash = FLASHING::DEFAULT,
                                               DRC_CONSTRAINT_T aUsage = NULL_CONSTRAINT ) const override;
 
     void ClearZoneLayerOverrides();
 
-    const ZONE_LAYER_OVERRIDE& GetZoneLayerOverride( PCB_LAYER_ID aLayer ) const;
+    /**
+     * @return the override for \a aLayer, or ZLO_NONE if \a aLayer is not a copper layer.
+     */
+    ZONE_LAYER_OVERRIDE GetZoneLayerOverride( PCB_LAYER_ID aLayer ) const;
 
     void SetZoneLayerOverride( PCB_LAYER_ID aLayer, ZONE_LAYER_OVERRIDE aOverride );
 
@@ -848,6 +916,9 @@ public:
     void Serialize( google::protobuf::Any &aContainer ) const override;
     bool Deserialize( const google::protobuf::Any &aContainer ) override;
 
+    void Serialize( kiapi::board::types::Via& aVia ) const;
+    bool Deserialize( const kiapi::board::types::Via& aVia );
+
     wxString LayerMaskDescribe() const override;
 
 protected:
@@ -857,6 +928,8 @@ private:
     // Silence GCC warning about hiding the PCB_TRACK base method
     bool operator==( const PCB_TRACK& aOther ) const override;
 
+    bool sameZoneLayerOverrides( const PCB_VIA& aOther ) const;
+
 private:
     VIATYPE      m_viaType;                  ///< through, blind/buried or micro
 
@@ -864,6 +937,6 @@ private:
 
     bool         m_isFree;                   ///< "Free" vias don't get their nets auto-updated
 
-    mutable std::mutex                          m_zoneLayerOverridesMutex;
-    std::map<PCB_LAYER_ID, ZONE_LAYER_OVERRIDE> m_zoneLayerOverrides;
+    // These are used in zone filling, so use a fixed size to avoid undefined behavior
+    std::array<std::atomic<ZONE_LAYER_OVERRIDE>, MAX_CU_LAYERS> m_zoneLayerOverrides;
 };

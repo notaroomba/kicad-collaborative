@@ -112,7 +112,7 @@ private:
      * @warning This routine is reentrant!
      *
      * @param[in] aList is the #SCH_SHEET_PATH list to explore.
-     * @param aPreviousmenu is the wxTreeItemId used as parent to add sub items.
+     * @param[in] aParent is the wxTreeItemId used as parent to add sub items.
      */
     void buildHierarchyTree( SCH_SHEET_PATH* aList, const wxTreeItemId& aParent );
 
@@ -136,6 +136,8 @@ private:
     void onCharHook( wxKeyEvent& aKeyStroke );
     void onTreeRightClick( wxTreeEvent& event );
     void onTreeEditFinished( wxTreeEvent& event );
+
+    void renameSheet( const SCH_SHEET_PATH& aPath, const wxString& aNewName );
 
     /**
      * @return String with page number in parenthesis

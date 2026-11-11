@@ -63,7 +63,7 @@ static int fill_bench_main_func( int argc, char** argv )
 
     {
         PROF_TIMER loadTimer;
-        board.reset( PCB_IO_MGR::Load( PCB_IO_MGR::KICAD_SEXP, boardPath, nullptr, {}, nullptr, nullptr ) );
+        board = PCB_IO_MGR::Load( PCB_IO_MGR::KICAD_SEXP, boardPath, {}, nullptr, nullptr );
         std::cout << "Load: " << loadTimer.SinceStart<std::chrono::milliseconds>().count() << " ms"
                   << std::endl;
     }

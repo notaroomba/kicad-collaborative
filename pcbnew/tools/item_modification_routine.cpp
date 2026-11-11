@@ -27,6 +27,8 @@
 #include <geometry/shape_utils.h>
 #include <geometry/vector_utils.h>
 
+#include <board.h>
+#include <footprint.h>
 #include <pad.h>
 #include <pcb_track.h>
 #include <tools/pcb_tool_utils.h>
@@ -91,6 +93,52 @@ bool ITEM_MODIFICATION_ROUTINE::ModifyLineOrDeleteIfZeroLength( PCB_SHAPE& aLine
     }
 
     return removed;
+}
+
+
+void ITEM_MODIFICATION_ROUTINE::SplitCornerConstraint( const CONSTRAINT_MEMBER& aCornerA,
+                                                       const CONSTRAINT_MEMBER& aCornerB,
+                                                       const CONSTRAINT_MEMBER& aInsertedForA,
+                                                       const CONSTRAINT_MEMBER& aInsertedForB )
+{
+    BOARD_ITEM* container = GetBoard();
+    BOARD*      board = container ? container->GetBoard() : nullptr;
+
+    if( !board )
+        return;
+
+    std::vector<PCB_CONSTRAINT*> constraints( board->Constraints().begin(), board->Constraints().end() );
+
+    for( FOOTPRINT* footprint : board->Footprints() )
+        constraints.insert( constraints.end(), footprint->Constraints().begin(), footprint->Constraints().end() );
+
+    for( PCB_CONSTRAINT* constraint : constraints )
+    {
+        if( constraint->GetConstraintType() != PCB_CONSTRAINT_TYPE::COINCIDENT )
+            continue;
+
+        std::vector<CONSTRAINT_MEMBER>& members = constraint->Members();
+
+        if( members.size() != 2 )
+            continue;
+
+        // Match on the lines alone, because the operation can move the corner to another anchor
+        if( !( ( members[0].m_item == aCornerA.m_item && members[1].m_item == aCornerB.m_item )
+               || ( members[0].m_item == aCornerB.m_item && members[1].m_item == aCornerA.m_item ) ) )
+        {
+            continue;
+        }
+
+        GetHandler().MarkItemModified( *constraint );
+        members = { aCornerA, aInsertedForA };
+
+        auto split = std::make_unique<PCB_CONSTRAINT>( constraint->GetParent(), PCB_CONSTRAINT_TYPE::COINCIDENT );
+        split->AddMember( aCornerB.m_item, aCornerB.m_anchor, aCornerB.m_index );
+        split->AddMember( aInsertedForB.m_item, aInsertedForB.m_anchor, aInsertedForB.m_index );
+
+        GetHandler().AddNewItem( std::move( split ) );
+        return;
+    }
 }
 
 
@@ -175,13 +223,29 @@ void LINE_FILLET_ROUTINE::ProcessLinePair( PCB_SHAPE& aLineA, PCB_SHAPE& aLineB 
 
     CHANGE_HANDLER& handler = GetHandler();
 
+    const KIID     arcId = tArc->m_Uuid;
+    const VECTOR2I arcStart = tArc->GetStart();
+
     handler.AddNewItem( std::move( tArc ) );
+
+    // GetSharedEndpoints hands back a pointer into the segment, so A means the line's start
+    const CONSTRAINT_ANCHOR cornerA = a_pt == &seg_a.A ? CONSTRAINT_ANCHOR::START : CONSTRAINT_ANCHOR::END;
+    const CONSTRAINT_ANCHOR cornerB = b_pt == &seg_b.A ? CONSTRAINT_ANCHOR::START : CONSTRAINT_ANCHOR::END;
 
     *a_pt = t1newPoint;
     *b_pt = t2newPoint;
 
-    ModifyLineOrDeleteIfZeroLength( aLineA, seg_a );
-    ModifyLineOrDeleteIfZeroLength( aLineB, seg_b );
+    const bool removedA = ModifyLineOrDeleteIfZeroLength( aLineA, seg_a );
+    const bool removedB = ModifyLineOrDeleteIfZeroLength( aLineB, seg_b );
+
+    if( !removedA && !removedB )
+    {
+        const CONSTRAINT_ANCHOR arcForA = t1newPoint == arcStart ? CONSTRAINT_ANCHOR::START : CONSTRAINT_ANCHOR::END;
+        const CONSTRAINT_ANCHOR arcForB = t2newPoint == arcStart ? CONSTRAINT_ANCHOR::START : CONSTRAINT_ANCHOR::END;
+
+        SplitCornerConstraint( { aLineA.m_Uuid, cornerA }, { aLineB.m_Uuid, cornerB }, { arcId, arcForA },
+                               { arcId, arcForB } );
+    }
 
     AddSuccess();
 }
@@ -241,10 +305,19 @@ void LINE_CHAMFER_ROUTINE::ProcessLinePair( PCB_SHAPE& aLineA, PCB_SHAPE& aLineB
 
     CHANGE_HANDLER& handler = GetHandler();
 
+    const KIID chamferId = tSegment->m_Uuid;
+
     handler.AddNewItem( std::move( tSegment ) );
 
-    ModifyLineOrDeleteIfZeroLength( aLineA, chamfer_result->m_updated_seg_a );
-    ModifyLineOrDeleteIfZeroLength( aLineB, chamfer_result->m_updated_seg_b );
+    const bool removedA = ModifyLineOrDeleteIfZeroLength( aLineA, chamfer_result->m_updated_seg_a );
+    const bool removedB = ModifyLineOrDeleteIfZeroLength( aLineB, chamfer_result->m_updated_seg_b );
+
+    if( !removedA && !removedB )
+    {
+        // ComputeChamferPoints leaves each line running from its far end to the chamfer
+        SplitCornerConstraint( { aLineA.m_Uuid, CONSTRAINT_ANCHOR::END }, { aLineB.m_Uuid, CONSTRAINT_ANCHOR::END },
+                               { chamferId, CONSTRAINT_ANCHOR::START }, { chamferId, CONSTRAINT_ANCHOR::END } );
+    }
 
     AddSuccess();
 }
@@ -331,19 +404,22 @@ void DOGBONE_CORNER_ROUTINE::ProcessLinePair( PCB_SHAPE& aLineA, PCB_SHAPE& aLin
         aShape.SetLocked( aLineA.IsLocked() );
     };
 
-    const auto addSegment =
-            [&]( const SEG& aSeg )
-            {
-                if( aSeg.Length() == 0 )
-                    return;
+    const auto addSegment = [&]( const SEG& aSeg ) -> std::optional<KIID>
+    {
+        if( aSeg.Length() == 0 )
+            return std::nullopt;
 
-                auto tSegment = std::make_unique<PCB_SHAPE>( GetBoard(), SHAPE_T::SEGMENT );
-                tSegment->SetStart( aSeg.A );
-                tSegment->SetEnd( aSeg.B );
+        auto tSegment = std::make_unique<PCB_SHAPE>( GetBoard(), SHAPE_T::SEGMENT );
+        tSegment->SetStart( aSeg.A );
+        tSegment->SetEnd( aSeg.B );
 
-                copyProps( *tSegment );
-                handler.AddNewItem( std::move( tSegment ) );
-            };
+        copyProps( *tSegment );
+
+        const KIID id = tSegment->m_Uuid;
+        handler.AddNewItem( std::move( tSegment ) );
+
+        return id;
+    };
 
     tArc->SetArcGeometry( dogbone_result->m_arc.GetP0(), dogbone_result->m_arc.GetArcMid(),
                           dogbone_result->m_arc.GetP1() );
@@ -351,13 +427,29 @@ void DOGBONE_CORNER_ROUTINE::ProcessLinePair( PCB_SHAPE& aLineA, PCB_SHAPE& aLin
     // Copy properties from one of the source lines
     copyProps( *tArc );
 
-    addSegment( SEG{ dogbone_result->m_arc.GetP0(), dogbone_result->m_updated_seg_a->B } );
-    addSegment( SEG{ dogbone_result->m_arc.GetP1(), dogbone_result->m_updated_seg_b->B } );
+    const std::optional<KIID> slotA =
+            addSegment( SEG{ dogbone_result->m_arc.GetP0(), dogbone_result->m_updated_seg_a->B } );
+    const std::optional<KIID> slotB =
+            addSegment( SEG{ dogbone_result->m_arc.GetP1(), dogbone_result->m_updated_seg_b->B } );
+
+    const KIID arcId = tArc->m_Uuid;
 
     handler.AddNewItem( std::move( tArc ) );
 
-    ModifyLineOrDeleteIfZeroLength( aLineA, dogbone_result->m_updated_seg_a );
-    ModifyLineOrDeleteIfZeroLength( aLineB, dogbone_result->m_updated_seg_b );
+    const bool removedA = ModifyLineOrDeleteIfZeroLength( aLineA, dogbone_result->m_updated_seg_a );
+    const bool removedB = ModifyLineOrDeleteIfZeroLength( aLineB, dogbone_result->m_updated_seg_b );
+
+    if( !removedA && !removedB )
+    {
+        // On a narrow mouth a slot reaches the line, otherwise the arc does
+        const CONSTRAINT_MEMBER heldA = slotA ? CONSTRAINT_MEMBER( *slotA, CONSTRAINT_ANCHOR::END )
+                                              : CONSTRAINT_MEMBER( arcId, CONSTRAINT_ANCHOR::START );
+        const CONSTRAINT_MEMBER heldB = slotB ? CONSTRAINT_MEMBER( *slotB, CONSTRAINT_ANCHOR::END )
+                                              : CONSTRAINT_MEMBER( arcId, CONSTRAINT_ANCHOR::END );
+
+        SplitCornerConstraint( { aLineA.m_Uuid, CONSTRAINT_ANCHOR::END }, { aLineB.m_Uuid, CONSTRAINT_ANCHOR::END },
+                               heldA, heldB );
+    }
 
     AddSuccess();
 }
@@ -674,7 +766,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
      * the ones you want to outset anyway, most usually when making a courtyard for a footprint.
      */
 
-    PCB_LAYER_ID layer = m_params.useSourceLayers ? aItem.GetLayer() : m_params.layer;
+    PCB_LAYER_ID targetLayer = m_params.useSourceLayers ? aItem.GetLayer() : m_params.layer;
 
     // Not all items have a width, even if the parameters want to copy it
     // So fall back to the given width if we can't get one.
@@ -698,7 +790,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
                 std::unique_ptr<PCB_SHAPE> new_shape = std::make_unique<PCB_SHAPE>( GetBoard(), SHAPE_T::POLY );
 
                 new_shape->SetPolyShape( new_poly );
-                new_shape->SetLayer( layer );
+                new_shape->SetLayer( targetLayer );
                 new_shape->SetWidth( width );
 
                 handler.AddNewItem( std::move( new_shape ) );
@@ -730,7 +822,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
                     std::unique_ptr<PCB_SHAPE> new_shape = std::make_unique<PCB_SHAPE>( GetBoard(), SHAPE_T::SEGMENT );
                     new_shape->SetStart( seg.A );
                     new_shape->SetEnd( seg.B );
-                    new_shape->SetLayer( layer );
+                    new_shape->SetLayer( targetLayer );
                     new_shape->SetWidth( width );
 
                     handler.AddNewItem( std::move( new_shape ) );
@@ -745,7 +837,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
 
                     std::unique_ptr<PCB_SHAPE> new_shape = std::make_unique<PCB_SHAPE>( GetBoard(), SHAPE_T::ARC );
                     new_shape->SetArcGeometry( arc.GetP0(), arc.GetArcMid(), arc.GetP1() );
-                    new_shape->SetLayer( layer );
+                    new_shape->SetLayer( targetLayer );
                     new_shape->SetWidth( width );
 
                     handler.AddNewItem( std::move( new_shape ) );
@@ -780,7 +872,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
                     new_shape->SetRectangleHeight( grid_rect.GetHeight() );
                 }
 
-                new_shape->SetLayer( layer );
+                new_shape->SetLayer( targetLayer );
                 new_shape->SetWidth( width );
 
                 handler.AddNewItem( std::move( new_shape ) );
@@ -792,7 +884,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
                 std::unique_ptr<PCB_SHAPE> new_shape = std::make_unique<PCB_SHAPE>( GetBoard(), SHAPE_T::CIRCLE );
                 new_shape->SetCenter( aCircle.Center );
                 new_shape->SetRadius( aCircle.Radius );
-                new_shape->SetLayer( layer );
+                new_shape->SetLayer( targetLayer );
                 new_shape->SetWidth( width );
 
                 handler.AddNewItem( std::move( new_shape ) );
@@ -822,6 +914,9 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
         pad.Padstack().ForEachUniqueLayer(
                 [&]( PCB_LAYER_ID aLayer )
                 {
+                    if( m_params.useSourceLayers )
+                        targetLayer = aLayer;
+
                     const PAD_SHAPE pad_shape = pad.GetShape( aLayer );
 
                     switch( pad_shape )
@@ -833,6 +928,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
                         const VECTOR2I pad_size = pad.GetSize( aLayer );
 
                         BOX2I box{ pad.GetPosition() - pad_size / 2, pad_size };
+                        box.Offset( pad.GetOffset( aLayer ) );
                         box.Inflate( m_params.outsetDistance );
 
                         if( box.GetWidth() <= 0 || box.GetHeight() <= 0 )
@@ -871,7 +967,7 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
                             break;
                         }
 
-                        const CIRCLE circle( pad.GetPosition(), radius );
+                        const CIRCLE circle( pad.GetPosition() + pad.GetOffset( aLayer ), radius );
                         addCircleOrRect( circle );
                         AddSuccess();
                         break;
@@ -896,8 +992,8 @@ void OUTSET_ROUTINE::ProcessItem( BOARD_ITEM& aItem )
         {
         case SHAPE_T::RECTANGLE:
         {
-            BOX2I box{ pcb_shape.GetPosition(),
-                       VECTOR2I{ pcb_shape.GetRectangleWidth(), pcb_shape.GetRectangleHeight() } };
+            BOX2I box{ pcb_shape.GetPosition(), VECTOR2I{ pcb_shape.GetRectangleWidth(),
+                                                          pcb_shape.GetRectangleHeight() } };
             box.Inflate( m_params.outsetDistance );
 
             if( box.GetWidth() <= 0 || box.GetHeight() <= 0 )

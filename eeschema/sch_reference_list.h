@@ -19,10 +19,13 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef _SCH_REFERENCE_LIST_H_
-#define _SCH_REFERENCE_LIST_H_
+#pragma once
 
+#include <functional>
 #include <map>
+#include <optional>
+#include <set>
+#include <utility>
 
 #include <lib_symbol.h>
 #include <macros.h>
@@ -32,6 +35,8 @@
 #include <erc/erc_settings.h>
 
 class REFDES_TRACKER;
+class SCHEMATIC;
+class SCHEMATIC_SETTINGS;
 
 /** Schematic annotation scope options. */
 enum ANNOTATE_SCOPE_T
@@ -153,26 +158,51 @@ public:
      *
      * @return true if this reference hasn't been split yet.
      */
-    bool IsSplitNeeded();
+    bool IsSplitNeeded() const;
+    bool IsSplit() const { return !IsSplitNeeded(); }
 
     void SetRef( const wxString& aReference ) { m_ref = aReference; }
     wxString GetRef() const { return m_ref; }
 
+    /// Return the reference as shown on this sheet path, with its sheet suffix.
+    wxString GetComposedRef() const { return m_rootSymbol->GetRef( &m_sheetPath ); }
+
+    /**
+     * Return the sheet suffix this reference composes with, or empty while it is unannotated.
+     *
+     * Channels of a reused sheet share a base, so the suffix tells their packages apart.
+     */
+    const wxString& GetRefSuffix() const
+    {
+        static const wxString empty;
+
+        return hasRef() ? m_refSuffix : empty;
+    }
+
     void SetRefStr( const std::string& aReference ) { m_ref = aReference; }
     const char* GetRefStr() const { return m_ref.c_str(); }
 
-    /// Return reference name with unit altogether.
-    wxString GetFullRef( bool aIncludeUnit = true ) const
-    {
-        wxString refNum = m_numRefStr;
+    /// Return reference name with unit and sheet suffix altogether, as in U12A_M4.
+    wxString GetFullRef() const;
 
-        if( refNum.IsEmpty() )
-            refNum << m_numRef;
+    /// Return reference name in canonical format, optionally with unit.
+    /// (Canonical form will return "R1" even when the user entered "R001".)
+    wxString GetCanonicalRef( bool aIncludeUnit ) const
+    {
+        wxString ref = GetRef();
+
+        if( IsSplit() )
+        {
+            if( m_numRef >= 0 )
+                ref << m_numRef;
+            else
+                ref += m_numRefStr;
+        }
 
         if( aIncludeUnit && GetSymbol()->GetUnitCount() > 1 )
-            return GetRef() + refNum + GetSymbol()->SubReference( GetUnit() );
-        else
-            return GetRef() + refNum;
+            ref += GetSymbol()->SubReference( GetUnit() );
+
+        return ref;
     }
 
     wxString GetRefNumber() const
@@ -185,18 +215,35 @@ public:
 
     int CompareValue( const SCH_REFERENCE& item ) const
     {
+        // Sort based on natural sort, but don't consider naturally-equivalent values
+        // to be equal.  Run them through a second, non-natural compare.
+
+        // Values are compared with case sensitivity
+        int natural = StrNumCmp( m_value, item.m_value, CMP_T::CASE_SENSITIVE );
+
+        if( natural != 0 )
+            return natural;
+
         return m_value.Cmp( item.m_value );
     }
 
     int CompareRef( const SCH_REFERENCE& item ) const
     {
-        return m_ref.CmpNoCase( item.m_ref );
+        // Sort based on natural sort, but don't consider naturally-equivalent values
+        // to be equal.  Run them through a second, non-natural compare.
+
+        // References are compared ignoring case
+        int natural = StrNumCmp( m_ref, item.m_ref, CMP_T::IGNORE_CASE );
+
+        if( natural != 0 )
+            return natural;
+
+        return m_ref.Cmp( item.m_ref );
     }
 
-    int CompareLibName( const SCH_REFERENCE& item ) const
+    int CompareLibId( const SCH_REFERENCE& item ) const
     {
-        return m_rootSymbol->GetLibId().GetLibItemName().compare(
-            item.m_rootSymbol->GetLibId().GetLibItemName() );
+        return GetSymbol()->GetLibId().compare( item.GetSymbol()->GetLibId() );
     }
 
     /**
@@ -241,11 +288,18 @@ public:
 private:
     wxString formatRefStr( int aNumber ) const;
 
+    bool hasRef() const
+    {
+        // Split() drops the '?' of R1? and keeps R1, so the new flag is the only trace of it
+        return !m_isNew && ( IsSplit() ? m_numRef >= 0 : m_ref.IsEmpty() || m_ref.Last() != '?' );
+    }
+
 private:
     friend class SCH_REFERENCE_LIST;
 
     /// Symbol reference prefix, without number (for IC1, this is IC) )
     wxString        m_ref;               // it's private, use the accessors please
+    wxString        m_refSuffix;         ///< The suffix the board reference composes with.
     SCH_SYMBOL*     m_rootSymbol;        ///< The symbol associated the reference object.
     VECTOR2I        m_symbolPos;         ///< The physical position of the symbol in schematic
                                          ///< used to annotate by X or Y position
@@ -346,6 +400,33 @@ public:
     }
 
     /**
+     * Replace the references of each reused sheet symbol with one reference on the first instance
+     * of its sheet in \a aSheets, which carries the base every instance shares in suffix mode.
+     */
+    void UseReusedSheetRepresentatives( const SCH_SHEET_LIST& aSheets );
+
+    /**
+     * Move locked multi-unit groups onto the representatives in this list.
+     *
+     * Groups that share a symbol merge, because a representative's base reaches every instance and
+     * so every package its units belong to.
+     */
+    SCH_MULTI_UNIT_REFERENCE_MAP LockedForRepresentatives( const SCH_MULTI_UNIT_REFERENCE_MAP& aLocked ) const;
+
+    /**
+     * Mark unsplit references for renumbering where their kept base would collide once suffix
+     * mode copies it to every instance of its sheet in \a aSheets.
+     *
+     * A base collides when \a aOthers, the references this annotation does not touch, use it or
+     * one of its composed references for anything but a free unit of the same part, or when an
+     * earlier package in this list holds it. A colliding package renumbers whole.
+     *
+     * @param aLocked the groups from LockedForRepresentatives(), which define the packages.
+     */
+    void RenumberBasesUsedBy( const SCH_REFERENCE_LIST& aOthers, const SCH_MULTI_UNIT_REFERENCE_MAP& aLocked,
+                              const SCH_SHEET_LIST& aSheets );
+
+    /**
      * Treat all symbols in this list as non-annotated. Does not update annotation state of the
      * symbols.
      *
@@ -379,12 +460,10 @@ public:
      * @param aSortOption Define the annotation order.  See #ANNOTATE_ORDER_T.
      * @param aAlgoOption Define the annotation style.  See #ANNOTATE_ALGO_T.
      * @param aStartNumber The start number for non-sheet-based annotation styles.
-     * @param aAdditionalReferences Additional references to check for duplicates
-     * @param aStartAtCurrent Use m_numRef for each reference as the start number (overrides
-     *        aStartNumber)
-     * @param aHierarchy Optional sheet path hierarchy for resetting the references'
-     *        sheet numbers based on their sheet's place in the hierarchy. Set
-     *        nullptr if not desired.
+     * @param aAdditionalRefs Additional references to check for duplicates,
+     * @param aStartAtCurrent Use m_numRef for each reference as the start number (overrides aStartNumber).
+     * @param aHierarchy Optional sheet path hierarchy for resetting the references' sheet numbers
+     *                   based on their sheet's place in the hierarchy. Set nullptr if not desired.
      */
     void ReannotateByOptions( ANNOTATE_ORDER_T             aSortOption,
                               ANNOTATE_ALGO_T              aAlgoOption,
@@ -411,21 +490,18 @@ public:
      * @param aSortOption Define the annotation order.  See #ANNOTATE_ORDER_T.
      * @param aAlgoOption Define the annotation style.  See #ANNOTATE_ALGO_T.
      * @param aStartNumber The start number for non-sheet-based annotation styles.
-     * @param appendUndo True if the annotation operation should be added to an existing undo,
-     *                   false if it should be separately undo-able.
      * @param aLockedUnitMap A SCH_MULTI_UNIT_REFERENCE_MAP of reference designator wxStrings
      *      to SCH_REFERENCE_LISTs. May be an empty map. If not empty, any multi-unit parts
      *      found in this map will be annotated as a group rather than individually.
-     * @param aAdditionalReferences Additional references to check for duplicates
+     * @param aAdditionalRefs Additional references to check for duplicates
      * @param aStartAtCurrent Use m_numRef for each reference as the start number (overrides
      *        aStartNumber)
+     * @param aSharedSheets Hierarchy to check when one base is shared by reused sheet instances
      */
-    void AnnotateByOptions( enum ANNOTATE_ORDER_T                   aSortOption,
-                            enum ANNOTATE_ALGO_T                    aAlgoOption,
-                            int                                     aStartNumber,
-                            const SCH_MULTI_UNIT_REFERENCE_MAP&     aLockedUnitMap,
-                            const SCH_REFERENCE_LIST&               aAdditionalRefs,
-                            bool                                    aStartAtCurrent );
+    void AnnotateByOptions( enum ANNOTATE_ORDER_T aSortOption, enum ANNOTATE_ALGO_T aAlgoOption, int aStartNumber,
+                            const SCH_MULTI_UNIT_REFERENCE_MAP& aLockedUnitMap,
+                            const SCH_REFERENCE_LIST& aAdditionalRefs, bool aStartAtCurrent,
+                            const SCH_SHEET_LIST* aSharedSheets = nullptr );
 
     /**
      * Set the reference designators in the list that have not been annotated.
@@ -447,11 +523,11 @@ public:
      *      in aAdditionalRefs exist in this list.
      * @param aStartAtCurrent Use m_numRef for each reference as the start number (overrides
             aStartNumber)
+     * @param aSharedSheets Hierarchy to check when one base is shared by reused sheet instances
      */
     void Annotate( bool aUseSheetNum, int aSheetIntervalId, int aStartNumber,
-                   const SCH_MULTI_UNIT_REFERENCE_MAP& aLockedUnitMap,
-                   const SCH_REFERENCE_LIST& aAdditionalRefs,
-                   bool aStartAtCurrent = false );
+                   const SCH_MULTI_UNIT_REFERENCE_MAP& aLockedUnitMap, const SCH_REFERENCE_LIST& aAdditionalRefs,
+                   bool aStartAtCurrent = false, const SCH_SHEET_LIST* aSharedSheets = nullptr );
 
     /**
      * Check for annotations errors.
@@ -547,9 +623,9 @@ public:
     }
 
     /**
-     * Search the list for a symbol with a given reference.
+     * Search the list for a symbol with a given reference, as shown with its sheet suffix.
      */
-    int FindRef( const wxString& aPath ) const;
+    int FindRef( const wxString& aRef ) const;
 
     /**
      * Search the list for a symbol with the given KIID path (as string).
@@ -570,23 +646,26 @@ public:
     void GetRefsInUse( int aIndex, std::vector<int>& aIdList, int aMinRefId ) const;
 
     /**
-     * Return all the unit numbers for a given reference, comparing library reference, value,
-     * reference number and reference prefix.
+     * Return the units a locked package needs free when \a aRef is numbered, which are the units of
+     * every member with the same library symbol and value.
      *
-     * @param aRef is the index of a symbol to use for reference prefix and number filtering.
+     * Members may still carry different references when suffix mode merged packages of reused sheets.
      */
-    std::vector<int> GetUnitsMatchingRef( const SCH_REFERENCE& aRef ) const;
+    std::vector<int> GetPackageUnits( const SCH_REFERENCE& aRef ) const;
 
     /**
      * Return the first unused reference number from the properties given in aRef, ensuring
      * all of the units in aRequiredUnits are also unused.
      *
-     * @param aIndex The index of the reference item used for the search pattern.
+     * @param aRef is the reference item used for the search pattern.
      * @param aMinValue The minimum value for the current search.
      * @param aRequiredUnits List of units to ensure are free
+     * @param aDestinations Instances affected by each reference in this list
+     * @param aLocked Package whose members will receive the same number
      */
-    int FindFirstUnusedReference( const SCH_REFERENCE& aRef, int aMinValue,
-                                  const std::vector<int>& aRequiredUnits ) const;
+    int FindFirstUnusedReference( const SCH_REFERENCE& aRef, int aMinValue, const std::vector<int>& aRequiredUnits,
+                                  const std::map<const SCH_REFERENCE*, std::vector<SCH_REFERENCE>>& aDestinations = {},
+                                  const SCH_REFERENCE_LIST* aLocked = nullptr ) const;
 
     std::vector<SCH_SYMBOL_INSTANCE> GetSymbolInstances() const;
 
@@ -594,15 +673,8 @@ public:
     void Show( const char* aPrefix = "" );
 #endif
 
-    std::shared_ptr<REFDES_TRACKER> GetRefDesTracker() const
-    {
-        return m_refDesTracker;
-    }
-
-    void SetRefDesTracker( std::shared_ptr<REFDES_TRACKER> aTracker )
-    {
-        m_refDesTracker = aTracker;
-    }
+    std::shared_ptr<REFDES_TRACKER> GetRefDesTracker() const { return m_refDesTracker; }
+    void SetRefDesTracker( std::shared_ptr<REFDES_TRACKER> aTracker ) { m_refDesTracker = aTracker; }
 
     friend class BACK_ANNOTATION;
 
@@ -637,9 +709,45 @@ private:
     // Used for sorting static sortByTimeStamp function
     friend class BACK_ANNOTATE;
 
-    std::vector<SCH_REFERENCE> m_flatList;
-
-    std::shared_ptr<REFDES_TRACKER> m_refDesTracker; ///< A list of previously used reference designators.
+private:
+    std::vector<SCH_REFERENCE>      m_flatList;
+    std::shared_ptr<REFDES_TRACKER> m_refDesTracker;   ///< A list of previously used reference designators.
 };
 
-#endif    // _SCH_REFERENCE_LIST_H_
+
+/**
+ * Annotate a newly placed symbol on each of \a aPaths in turn, avoiding \a aExistingRefs and adding the
+ * results to it.  In suffix annotation mode the first path picks the base and the others share it.
+ */
+void AnnotateNewSymbol( SCH_SYMBOL* aSymbol, const std::vector<SCH_SHEET_PATH>& aPaths,
+                        SCH_REFERENCE_LIST& aExistingRefs, const SCHEMATIC_SETTINGS& aSettings,
+                        SCH_SHEET_LIST* aHierarchy );
+
+
+/**
+ * Find two instances of a reused sheet that \a aRefs reaches and that compose the same reference suffix.
+ *
+ * Suffix annotation mode gives every instance one base, so only their suffixes keep their references apart.
+ *
+ * @return the colliding instance and the first instance with its suffix, or nothing outside suffix mode.
+ */
+std::optional<std::pair<SCH_SHEET_PATH, SCH_SHEET_PATH>> FindRefSuffixCollision( const SCH_REFERENCE_LIST& aRefs,
+                                                                                 const SCHEMATIC&          aSchematic );
+
+/**
+ * Annotate \a aRefs, the references in \a aScope, around every other symbol of \a aSchematic.
+ *
+ * In suffix annotation mode each symbol of a reused sheet annotates on its first instance and every other
+ * instance takes that base.  Check FindRefSuffixCollision() first, since instances that compose alike cannot
+ * share a base.
+ *
+ * @param aLocked the multi-unit groups in scope that stay together, or none to regroup units.
+ * @param aResetAnnotation renumber every reference instead of only the unannotated ones.
+ * @param aBeforeAnnotate called with each reference before its symbol changes.
+ * @return the screens whose references now apply to every sheet that uses them.
+ */
+std::set<const SCH_SCREEN*> AnnotateReferences( SCH_REFERENCE_LIST& aRefs, SCH_MULTI_UNIT_REFERENCE_MAP aLocked,
+                                                const SCHEMATIC& aSchematic, ANNOTATE_SCOPE_T aScope,
+                                                ANNOTATE_ORDER_T aSortOption, ANNOTATE_ALGO_T aAlgoOption,
+                                                int aStartNumber, bool aResetAnnotation,
+                                                const std::function<void( SCH_REFERENCE& )>& aBeforeAnnotate = {} );

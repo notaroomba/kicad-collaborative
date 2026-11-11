@@ -21,11 +21,13 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
 
+#include <qa_utils/file_utils.h>
 #include <pcbnew_utils/board_test_utils.h>
 #include <pcbnew_utils/board_file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -42,6 +44,7 @@
 #include <footprint.h>
 #include <netinfo.h>
 #include <pad.h>
+#include <pcb_group.h>
 #include <pcb_shape.h>
 #include <pcb_track.h>
 #include <zone.h>
@@ -74,9 +77,7 @@ BOOST_AUTO_TEST_CASE( Issue19775_ZoneLayerWildcards )
 
     BOOST_TEST_CONTEXT( "Zone layers with wildcards" )
     {
-        std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-
-        kicadPlugin.LoadBoard( dataPath + "LayerWildcard.kicad_pcb", testBoard.get() );
+        std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( dataPath + "LayerWildcard.kicad_pcb" );
 
         // One zone in the file
         BOOST_CHECK( testBoard->Zones().size() == 1 );
@@ -95,14 +96,12 @@ BOOST_AUTO_TEST_CASE( Issue19775_ZoneLayerWildcards )
 
         // Load and save the board from above to test how we write the zones into it
         {
-            std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-            kicadPlugin.LoadBoard( dataPath + "LayerEnumerate.kicad_pcb", testBoard.get() );
-            kicadPlugin.SaveBoard( tmpBoard.string(), testBoard.get() );
+            std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( dataPath + "LayerEnumerate.kicad_pcb" );
+            kicadPlugin.SaveBoard( tmpBoard.string(), *testBoard );
         }
 
         // Read the new board
-        std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-        kicadPlugin.LoadBoard( tmpBoard.string(), testBoard.get() );
+        std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( tmpBoard.string() );
 
         // One zone in the file
         BOOST_CHECK( testBoard->Zones().size() == 1 );
@@ -130,9 +129,7 @@ BOOST_AUTO_TEST_CASE( Issue23125_EmptyZoneDiscarded )
     std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
                            + "plugins/kicad_sexpr/Issue23125_EmptyZone/";
 
-    std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-
-    kicadPlugin.LoadBoard( dataPath + "EmptyZone.kicad_pcb", testBoard.get() );
+    std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( dataPath + "EmptyZone.kicad_pcb" );
 
     // The file contains 3 zones: 1 valid (with polygon) and 2 empty (no polygon).
     // The 2 empty zones should have been discarded during loading.
@@ -173,12 +170,12 @@ BOOST_AUTO_TEST_CASE( CoincidentDrawingsSurviveSave )
     const wxString path =
             ( std::filesystem::temp_directory_path() / "qa_coincident_drawings.kicad_pcb" ).string();
 
-    kicadPlugin.SaveBoard( path, &board );
+    kicadPlugin.SaveBoard( path, board );
 
-    BOARD reloaded;
-    kicadPlugin.LoadBoard( path, &reloaded );
+    std::unique_ptr<BOARD> reloaded = kicadPlugin.LoadBoard( path );
 
-    BOOST_CHECK_EQUAL( reloaded.Drawings().size(), 2u );
+    BOOST_REQUIRE( reloaded != nullptr );
+    BOOST_CHECK_EQUAL( reloaded->Drawings().size(), 2u );
 
     std::filesystem::remove( path.ToStdString() );
 }
@@ -189,9 +186,7 @@ BOOST_AUTO_TEST_CASE( ScientificNotationLoading )
     std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
                            + "plugins/kicad_sexpr/";
 
-    std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-
-    kicadPlugin.LoadBoard( dataPath + "ScientificNotation.kicad_pcb", testBoard.get() );
+    std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( dataPath + "ScientificNotation.kicad_pcb" );
 
     // The file contains 1 arc with scientific notation in its coordinates
     BOOST_CHECK_EQUAL( testBoard->Drawings().size(), 1 );
@@ -216,10 +211,9 @@ BOOST_AUTO_TEST_CASE( Issue23625_CorruptedStackupCapped )
     std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
                            + "plugins/kicad_sexpr/Issue23625_CorruptedStackup/";
 
-    std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
+    std::unique_ptr<BOARD> testBoard;
 
-    BOOST_CHECK_NO_THROW( kicadPlugin.LoadBoard( dataPath + "corrupted_stackup.kicad_pcb",
-                                                 testBoard.get() ) );
+    BOOST_CHECK_NO_THROW( testBoard = kicadPlugin.LoadBoard( dataPath + "corrupted_stackup.kicad_pcb" ) );
 
     const BOARD_STACKUP& stackup =
             testBoard->GetDesignSettings().GetStackupDescriptor();
@@ -244,10 +238,9 @@ BOOST_AUTO_TEST_CASE( Issue24133_DuplicatedStackupNotInflated )
     std::string dataPath = KI_TEST::GetPcbnewTestDataDir()
                            + "plugins/kicad_sexpr/Issue24133_DuplicatedStackup/";
 
-    std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
+    std::unique_ptr<BOARD> testBoard;
 
-    BOOST_CHECK_NO_THROW( kicadPlugin.LoadBoard( dataPath + "duplicated_stackup.kicad_pcb",
-                                                 testBoard.get() ) );
+    BOOST_CHECK_NO_THROW( testBoard = kicadPlugin.LoadBoard( dataPath + "duplicated_stackup.kicad_pcb" ) );
 
     const BOARD_STACKUP& stackup = testBoard->GetDesignSettings().GetStackupDescriptor();
 
@@ -310,9 +303,7 @@ BOOST_AUTO_TEST_CASE( Issue23752_AppendBoardPreservesStackupAndGrowsToSixCopperL
         return nullptr;
     };
 
-    std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-
-    kicadPlugin.LoadBoard( destinationPath, testBoard.get() );
+    std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( destinationPath );
 
     const BOARD_STACKUP&      initialStackup = testBoard->GetDesignSettings().GetStackupDescriptor();
     const BOARD_STACKUP_ITEM* initialFirstDielectric = findFirstDielectric( initialStackup );
@@ -327,7 +318,7 @@ BOOST_AUTO_TEST_CASE( Issue23752_AppendBoardPreservesStackupAndGrowsToSixCopperL
     const wxString initialFirstDielectricMaterial = initialFirstDielectric->GetMaterial();
     const int      initialFirstDielectricThickness = initialFirstDielectric->GetThickness();
 
-    kicadPlugin.LoadBoard( sourcePath, testBoard.get(), &props );
+    kicadPlugin.LoadAndAppendBoard( sourcePath, *testBoard, &props );
 
     const int appendedCopperLayerCount = testBoard->GetCopperLayerCount();
 
@@ -370,16 +361,14 @@ BOOST_AUTO_TEST_CASE( Issue24642_AppendBoardPreservesDestinationLayerNames )
     std::map<std::string, UTF8> props;
     props[PCB_IO_LOAD_PROPERTIES::APPEND_PRESERVE_DESTINATION_STACKUP] = "";
 
-    std::unique_ptr<BOARD> testBoard = std::make_unique<BOARD>();
-
-    kicadPlugin.LoadBoard( destinationPath, testBoard.get() );
+    std::unique_ptr<BOARD> testBoard = kicadPlugin.LoadBoard( destinationPath );
 
     BOOST_REQUIRE_EQUAL( testBoard->GetLayerName( F_Cu ), wxS( "Top_layer" ) );
     BOOST_REQUIRE_EQUAL( testBoard->GetLayerName( In1_Cu ), wxS( "GND_layer" ) );
     BOOST_REQUIRE_EQUAL( testBoard->GetLayerName( In2_Cu ), wxS( "VDD_layer" ) );
     BOOST_REQUIRE_EQUAL( testBoard->GetLayerName( B_Cu ), wxS( "Bottom_layer" ) );
 
-    kicadPlugin.LoadBoard( sourcePath, testBoard.get(), &props );
+    kicadPlugin.LoadAndAppendBoard( sourcePath, *testBoard, &props );
 
     // The destination layer names must survive the append
     BOOST_CHECK_EQUAL( testBoard->GetLayerName( F_Cu ), wxS( "Top_layer" ) );
@@ -441,7 +430,8 @@ BOOST_AUTO_TEST_CASE( Issue24642_AppendBoardRemapsLayersViaHandler )
             } );
 
     std::unique_ptr<BOARD> identityBoard = std::make_unique<BOARD>();
-    kicadPlugin.LoadBoard( sourcePath, identityBoard.get(), &props );
+
+    kicadPlugin.LoadAndAppendBoard( sourcePath, *identityBoard, &props );
 
     // The dialog must see the source board's own layer names, not the canonical defaults
     BOOST_CHECK( std::find( seenNames.begin(), seenNames.end(), in1Name ) != seenNames.end() );
@@ -460,7 +450,8 @@ BOOST_AUTO_TEST_CASE( Issue24642_AppendBoardRemapsLayersViaHandler )
             } );
 
     std::unique_ptr<BOARD> swapBoard = std::make_unique<BOARD>();
-    kicadPlugin.LoadBoard( sourcePath, swapBoard.get(), &props );
+
+    kicadPlugin.LoadAndAppendBoard( sourcePath, *swapBoard, &props );
 
     const int swIn1 = countTracksOn( swapBoard.get(), In1_Cu );
     const int swIn2 = countTracksOn( swapBoard.get(), In2_Cu );
@@ -495,18 +486,20 @@ BOOST_AUTO_TEST_CASE( Issue24642_AppendBoardPromptsOnlyOnNameMismatch )
             } );
 
     // Appending onto a board with identical layer names must not prompt
-    std::unique_ptr<BOARD> matchBoard = std::make_unique<BOARD>();
-    kicadPlugin.LoadBoard( standardNames, matchBoard.get() );
-    handlerCalled = false;
-    kicadPlugin.LoadBoard( standardNames, matchBoard.get(), &props );
-    BOOST_CHECK( !handlerCalled );
+    {
+        std::unique_ptr<BOARD> matchBoard = kicadPlugin.LoadBoard( standardNames );
+        handlerCalled = false;
+        kicadPlugin.LoadAndAppendBoard( standardNames, *matchBoard, &props );
+        BOOST_CHECK( !handlerCalled );
+    }
 
     // Appending a board with differently-named layers must prompt
-    std::unique_ptr<BOARD> mismatchBoard = std::make_unique<BOARD>();
-    kicadPlugin.LoadBoard( standardNames, mismatchBoard.get() );
-    handlerCalled = false;
-    kicadPlugin.LoadBoard( customNames, mismatchBoard.get(), &props );
-    BOOST_CHECK( handlerCalled );
+    {
+        std::unique_ptr<BOARD> mismatchBoard = kicadPlugin.LoadBoard( standardNames );
+        handlerCalled = false;
+        kicadPlugin.LoadAndAppendBoard( customNames, *mismatchBoard, &props );
+        BOOST_CHECK( handlerCalled );
+    }
 }
 
 
@@ -529,9 +522,7 @@ BOOST_AUTO_TEST_CASE( Issue24642_AppendBoardPromptsOnlyOnNameMismatch )
  */
 BOOST_AUTO_TEST_CASE( FootprintSave_OmitsNetsOnAllBoardConnectedItems )
 {
-    auto tmpLib = std::filesystem::temp_directory_path() / "qa_fp_save_netinfo.pretty";
-    std::filesystem::remove_all( tmpLib );
-    std::filesystem::create_directories( tmpLib );
+    KI_TEST::SCOPED_TEMP_DIR tmpLib( wxS( "qa_fp_save_netinfo" ) );
 
     std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
 
@@ -567,9 +558,9 @@ BOOST_AUTO_TEST_CASE( FootprintSave_OmitsNetsOnAllBoardConnectedItems )
     BOOST_REQUIRE_EQUAL( zone->GetNet(), net );
 
     // Save into the scratch library via the public library-save API.  Must not throw.
-    BOOST_REQUIRE_NO_THROW( kicadPlugin.FootprintSave( tmpLib.string(), fp ) );
+    BOOST_REQUIRE_NO_THROW( kicadPlugin.FootprintSave( tmpLib.Path().string(), fp ) );
 
-    auto savedFile = tmpLib / "test_fp_save_netinfo.kicad_mod";
+    auto savedFile = tmpLib.Path() / "test_fp_save_netinfo.kicad_mod";
     BOOST_REQUIRE( std::filesystem::exists( savedFile ) );
 
     std::ifstream in( savedFile );
@@ -581,7 +572,7 @@ BOOST_AUTO_TEST_CASE( FootprintSave_OmitsNetsOnAllBoardConnectedItems )
     BOOST_REQUIRE( !in.bad() );
 
     // Windows refuses to unlink a file that still has an open handle, so release it before the
-    // remove_all() below.
+    // scoped directory teardown.
     in.close();
 
     const std::string contents = ss.str();
@@ -624,8 +615,6 @@ BOOST_AUTO_TEST_CASE( FootprintSave_OmitsNetsOnAllBoardConnectedItems )
     BOOST_CHECK_EQUAL( detachedPad->GetNet(), NETINFO_LIST::OrphanedItem() );
     BOOST_CHECK_EQUAL( detachedShape->GetNet(), NETINFO_LIST::OrphanedItem() );
     BOOST_CHECK_EQUAL( detachedZone->GetNet(), NETINFO_LIST::OrphanedItem() );
-
-    std::filesystem::remove_all( tmpLib );
 }
 
 
@@ -655,7 +644,7 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RoundTrip )
     thieving.gap        = pcbIUScale.mmToIU( 1.27 );
     thieving.line_width   = pcbIUScale.mmToIU( 0.35 );
     thieving.stagger      = true;
-    thieving.orientation     = EDA_ANGLE( 30.0, DEGREES_T );
+    thieving.orientation.SetAngle( EDA_ANGLE( 30.0, DEGREES_T ) );
     zone->SetThievingSettings( thieving );
 
     writeBoard->Add( zone );
@@ -664,11 +653,10 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RoundTrip )
                                     / "copper_thieving_roundtrip.kicad_pcb";
 
     PCB_IO_KICAD_SEXPR writer;
-    writer.SaveBoard( tmpPath.string(), writeBoard.get() );
+    writer.SaveBoard( tmpPath.string(), *writeBoard );
 
-    std::unique_ptr<BOARD> readBoard = std::make_unique<BOARD>();
-    PCB_IO_KICAD_SEXPR    reader;
-    reader.LoadBoard( tmpPath.string(), readBoard.get() );
+    PCB_IO_KICAD_SEXPR     reader;
+    std::unique_ptr<BOARD> readBoard = reader.LoadBoard( tmpPath.string() );
 
     BOOST_REQUIRE_EQUAL( readBoard->Zones().size(), 1u );
 
@@ -684,7 +672,7 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RoundTrip )
     BOOST_CHECK_EQUAL( loadedSettings.gap, thieving.gap );
     BOOST_CHECK_EQUAL( loadedSettings.line_width, thieving.line_width );
     BOOST_CHECK_EQUAL( loadedSettings.stagger, true );
-    BOOST_CHECK( loadedSettings.orientation == EDA_ANGLE( 30.0, DEGREES_T ) );
+    BOOST_CHECK( loadedSettings.orientation.GetAngle() == EDA_ANGLE( 30.0, DEGREES_T ) );
 
     std::filesystem::remove( tmpPath );
 }
@@ -725,11 +713,10 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_AllPatternsRoundTrip )
             std::filesystem::path tmpPath = std::filesystem::temp_directory_path()
                                             / "copper_thieving_pattern.kicad_pcb";
             PCB_IO_KICAD_SEXPR writer;
-            writer.SaveBoard( tmpPath.string(), writeBoard.get() );
+            writer.SaveBoard( tmpPath.string(), *writeBoard );
 
-            std::unique_ptr<BOARD> readBoard = std::make_unique<BOARD>();
-            PCB_IO_KICAD_SEXPR    reader;
-            reader.LoadBoard( tmpPath.string(), readBoard.get() );
+            PCB_IO_KICAD_SEXPR     reader;
+            std::unique_ptr<BOARD> readBoard = reader.LoadBoard( tmpPath.string() );
 
             BOOST_REQUIRE_EQUAL( readBoard->Zones().size(), 1u );
             BOOST_CHECK( readBoard->Zones()[0]->GetThievingSettings().pattern == pattern );
@@ -766,9 +753,8 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RejectedInOldFileVersion )
         << ")";
     out.close();
 
-    std::unique_ptr<BOARD> readBoard = std::make_unique<BOARD>();
-    PCB_IO_KICAD_SEXPR    reader;
-    BOOST_CHECK_THROW( reader.LoadBoard( tmpPath.string(), readBoard.get() ), IO_ERROR );
+    PCB_IO_KICAD_SEXPR reader;
+    BOOST_REQUIRE_THROW( reader.LoadBoard( tmpPath.string() ), IO_ERROR );
 
     std::filesystem::remove( tmpPath );
 }
@@ -776,8 +762,8 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RejectedInOldFileVersion )
 
 BOOST_AUTO_TEST_CASE( MalformedDimensionTextThrowsCleanly )
 {
-    KI_TEST::TEMPORARY_DIRECTORY tempDir( "kicad_qa_malformed_dimension_text_", "" );
-    std::filesystem::path        tmpPath = tempDir.GetPath() / "malformed_dimension_text.kicad_pcb";
+    KI_TEST::SCOPED_TEMP_DIR     tempDir( "kicad_qa_malformed_dimension_text" );
+    std::filesystem::path        tmpPath = tempDir.Path() / "malformed_dimension_text.kicad_pcb";
     std::ofstream         out( tmpPath );
     out << "(kicad_pcb (version 20240108) (generator \"test\")"
         << " (general (thickness 1.6)) (paper \"A4\")"
@@ -786,9 +772,9 @@ BOOST_AUTO_TEST_CASE( MalformedDimensionTextThrowsCleanly )
         << "   (gr_text \"1 mm\" (at broken))))";
     out.close();
 
-    std::unique_ptr<BOARD> readBoard = std::make_unique<BOARD>();
-    PCB_IO_KICAD_SEXPR     reader;
-    BOOST_CHECK_THROW( reader.LoadBoard( tmpPath.string(), readBoard.get() ), IO_ERROR );
+    PCB_IO_KICAD_SEXPR reader;
+
+    BOOST_CHECK_THROW( reader.LoadBoard( tmpPath.string() ), IO_ERROR );
 }
 
 
@@ -819,9 +805,8 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RejectsMalformedGeometry )
         << ")";
     out.close();
 
-    std::unique_ptr<BOARD> readBoard = std::make_unique<BOARD>();
-    PCB_IO_KICAD_SEXPR    reader;
-    reader.LoadBoard( tmpPath.string(), readBoard.get() );
+    PCB_IO_KICAD_SEXPR     reader;
+    std::unique_ptr<BOARD> readBoard = reader.LoadBoard( tmpPath.string() );
 
     BOOST_REQUIRE_EQUAL( readBoard->Zones().size(), 1u );
 
@@ -843,8 +828,8 @@ BOOST_AUTO_TEST_CASE( CopperThievingZone_RejectsMalformedGeometry )
  */
 BOOST_AUTO_TEST_CASE( Issue24955_AppendDoesNotInheritSessionZoneDefaults )
 {
-    KI_TEST::TEMPORARY_DIRECTORY tempDir( "kicad_qa_zone_defaults_append_", "" );
-    std::filesystem::path        tmpPath = tempDir.GetPath() / "thermal_zone_block.kicad_pcb";
+    KI_TEST::SCOPED_TEMP_DIR     tempDir( "kicad_qa_zone_defaults_append" );
+    std::filesystem::path        tmpPath = tempDir.Path() / "thermal_zone_block.kicad_pcb";
     std::ofstream                out( tmpPath );
 
     // Two zones, first with every omitted-when-default token left out (thermal, polygon
@@ -881,7 +866,7 @@ BOOST_AUTO_TEST_CASE( Issue24955_AppendDoesNotInheritSessionZoneDefaults )
     settings.m_Locked = true;
     board->GetDesignSettings().SetDefaultZoneSettings( settings );
 
-    kicadPlugin.LoadBoard( tmpPath.string(), board.get() );
+    kicadPlugin.LoadAndAppendBoard( tmpPath.string(), *board );
 
     BOOST_REQUIRE_EQUAL( board->Zones().size(), 2u );
 
@@ -1006,7 +991,7 @@ BOOST_AUTO_TEST_CASE( Issue24911_CancelledAppendLeavesBoardUntouched )
     CANCEL_AT_LINE_READER reader( text, lineCount / 2, &cancelRequested );
     CANCELLING_REPORTER   reporter( &cancelRequested );
 
-    BOOST_CHECK_THROW( kicadPlugin.DoLoad( reader, dest.get(), nullptr, &reporter, lineCount ), IO_ERROR );
+    BOOST_CHECK_THROW( kicadPlugin.DoLoad( reader, *dest, false, nullptr, &reporter, lineCount ), IO_ERROR );
     BOOST_CHECK( cancelRequested );
 
     BOOST_CHECK_EQUAL( dest->Tracks().size(), tracksBefore );
@@ -1029,6 +1014,91 @@ BOOST_AUTO_TEST_CASE( MissingLibraryThrowsOnEveryEnumerate )
     BOOST_CHECK_THROW( kicadPlugin.FootprintEnumerate( names, libPath.string(), false ), IO_ERROR );
 
     BOOST_CHECK_THROW( kicadPlugin.FootprintEnumerate( names, libPath.string(), false ), IO_ERROR );
+}
+
+
+// A library load must finish a footprint the way Parse() does, or the next save drops its groups
+BOOST_AUTO_TEST_CASE( LibraryFootprintKeepsGroupsAndLoadsUnlocked )
+{
+    KI_TEST::SCOPED_TEMP_DIR temp( wxS( "fp_finish" ) );
+
+    std::filesystem::path libPath = temp.Path() / "finish.pretty";
+    std::filesystem::create_directories( libPath );
+
+    std::filesystem::path source = std::filesystem::path( KI_TEST::GetTestDataRootDir() ) / "libraries"
+                                   / "Resistor_SMD.pretty" / "R_0402_1005Metric.kicad_mod";
+
+    wxString                   name;
+    std::unique_ptr<FOOTPRINT> footprint = kicadPlugin.ImportFootprint( wxString( source.string() ), name );
+
+    footprint->SetFPID( LIB_ID( wxEmptyString, wxS( "grouped" ) ) );
+    footprint->SetLocked( true );
+
+    PCB_GROUP* group = new PCB_GROUP( footprint.get() );
+    group->AddItem( footprint->Pads().front() );
+    footprint->Add( group );
+
+    kicadPlugin.FootprintSave( libPath.string(), footprint.get() );
+
+    std::unique_ptr<FOOTPRINT> loaded =
+            kicadPlugin.ImportFootprint( wxString( ( libPath / "grouped.kicad_mod" ).string() ), name );
+
+    BOOST_CHECK( !loaded->IsLocked() );
+    BOOST_REQUIRE_EQUAL( loaded->Groups().size(), 1u );
+    BOOST_CHECK_EQUAL( loaded->Groups().front()->GetBoardItems().size(), 1u );
+}
+
+
+// A parse warning leaves the footprint usable, so it must not stop the rest of the library loading
+// fails on revert, since the warning then makes the whole library fail
+BOOST_AUTO_TEST_CASE( ParseWarningDoesNotFailTheLibrary )
+{
+    KI_TEST::SCOPED_TEMP_DIR temp( wxS( "fp_warning" ) );
+
+    std::filesystem::path libPath = temp.Path() / "warning.pretty";
+    std::filesystem::create_directories( libPath );
+
+    std::filesystem::path source =
+            std::filesystem::path( KI_TEST::GetTestDataRootDir() ) / "libraries" / "Resistor_SMD.pretty";
+
+    for( const char* name : { "R_0402_1005Metric", "R_0603_1608Metric" } )
+        std::filesystem::copy_file( source / ( std::string( name ) + ".kicad_mod" ),
+                                    libPath / ( std::string( name ) + ".kicad_mod" ) );
+
+    // A zero size pad parses with a warning
+    std::filesystem::path zeroPad = libPath / "R_0402_1005Metric.kicad_mod";
+    std::ifstream         in( zeroPad );
+    std::string           text( ( std::istreambuf_iterator<char>( in ) ), std::istreambuf_iterator<char>() );
+    in.close();
+
+    size_t at = text.find( "(size 0.54 0.64)" );
+    BOOST_REQUIRE( at != std::string::npos );
+    text.replace( at, std::string( "(size 0.54 0.64)" ).size(), "(size 0 0)" );
+    std::ofstream( zeroPad ) << text;
+
+    wxArrayString names;
+
+    BOOST_CHECK_NO_THROW( kicadPlugin.FootprintEnumerate( names, libPath.string(), false ) );
+    BOOST_CHECK_EQUAL( names.size(), 2u );
+    BOOST_CHECK( names.Index( wxS( "R_0402_1005Metric" ) ) != wxNOT_FOUND );
+
+    // A file that does not parse still fails the library, as it always has
+    std::ofstream( libPath / "broken.kicad_mod" ) << "(footprint";
+
+    kicadPlugin.ClearCachedFootprints( libPath.string() );
+    names.clear();
+
+    BOOST_CHECK_THROW( kicadPlugin.FootprintEnumerate( names, libPath.string(), false ), IO_ERROR );
+}
+
+
+BOOST_AUTO_TEST_CASE( LegacyModuleFileImports )
+{
+    const std::string  fpPath = KI_TEST::GetPcbnewTestDataDir() + "legacy_module/Crystal_SMD_HC49-US.kicad_mod";
+    PCB_IO_KICAD_SEXPR kicadPlugin;
+    wxString           name;
+
+    BOOST_CHECK( kicadPlugin.ImportFootprint( fpPath, name ) != nullptr );
 }
 
 

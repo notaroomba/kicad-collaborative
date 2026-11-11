@@ -22,6 +22,7 @@
 #ifndef CLASS_NETCLASS_H
 #define CLASS_NETCLASS_H
 
+#include <memory>
 #include <optional>
 
 #include <gal/color4d.h>
@@ -97,6 +98,13 @@ public:
     /// @brief Sets the netclasses which make up this netclass
     void SetConstituentNetclasses( std::vector<NETCLASS*>&& constituents );
 
+    /// @brief Sets an aggregate's constituents and shares their ownership, since items keep the
+    /// aggregate alive after NET_SETTINGS replaces the netclasses it was built from
+    void SetConstituentOwners( std::vector<std::shared_ptr<NETCLASS>>&& aConstituents );
+
+    /// @brief Empty for a root netclass
+    const std::vector<std::shared_ptr<NETCLASS>>& GetConstituentOwners() const { return m_constituentOwners; }
+
     /// @brief Determines if the given netclass name is a constituent of this (maybe aggregate)
     /// netclass
     bool ContainsNetclassWithName( const wxString& netclass ) const;
@@ -118,6 +126,9 @@ public:
     /// for export to external tools / netlists. WARNING: Do not use this to display a netclass
     /// name to a user. Use GetHumanReadableName instead.
     const wxString GetName() const;
+
+    /// @brief Compares a name with GetName() without constructing the aggregate name
+    bool NameEquals( const wxString& aName ) const;
 
     /// @brief Gets the consolidated name of this netclass (which may be an aggregate). This is
     /// intended for display to users (e.g. in infobars or messages). WARNING: Do not use this
@@ -265,6 +276,8 @@ protected:
     bool m_isDefault; ///< Mark if this instance is the default netclass
 
     std::vector<NETCLASS*> m_constituents; ///< NETCLASSes contributing to an aggregate
+
+    std::vector<std::shared_ptr<NETCLASS>> m_constituentOwners; ///< Keeps an aggregate's constituents alive
 
     wxString m_Name;                        ///< Name of the net class
     int      m_Priority;                    ///< The priority for multiple netclass resolution

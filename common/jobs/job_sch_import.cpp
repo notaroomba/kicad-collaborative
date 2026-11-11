@@ -34,7 +34,9 @@ NLOHMANN_JSON_SERIALIZE_ENUM( JOB_SCH_IMPORT::FORMAT,
                                   { JOB_SCH_IMPORT::FORMAT::PADS, "pads" },
                                   { JOB_SCH_IMPORT::FORMAT::DIPTRACE, "diptrace" },
                                   { JOB_SCH_IMPORT::FORMAT::PCAD, "pcad" },
-                                  { JOB_SCH_IMPORT::FORMAT::ORCAD, "orcad" }
+                                  { JOB_SCH_IMPORT::FORMAT::ORCAD, "orcad" },
+                                  { JOB_SCH_IMPORT::FORMAT::EASYPC, "easypc" },
+                                  { JOB_SCH_IMPORT::FORMAT::TARGET3001, "target3001" }
                               } )
 
 

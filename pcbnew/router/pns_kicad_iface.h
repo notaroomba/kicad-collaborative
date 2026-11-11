@@ -22,6 +22,7 @@
 #ifndef __PNS_KICAD_IFACE_H
 #define __PNS_KICAD_IFACE_H
 
+#include <set>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
@@ -30,6 +31,7 @@
 
 class PNS_PCBNEW_RULE_RESOLVER;
 class PNS_PCBNEW_DEBUG_DECORATOR;
+class ROUTER_PREVIEW_ITEM;
 
 class BOARD;
 class BOARD_COMMIT;
@@ -105,6 +107,9 @@ public:
     bool GetSignalAggregate( PNS::NET_HANDLE aNetP, PNS::NET_HANDLE aNetN,
                              long long& aExtraLength, long long& aExtraDelay ) const override;
     long long GetNetBoardLength( PNS::NET_HANDLE aNet ) const override;
+    void RemoveBoardConnected( const std::vector<const PNS::ITEM*>& aJoined,
+                               std::set<PNS::ITEM*>& aItems ) const override;
+    bool TouchesCopperZone( const PNS::ITEM* aItem ) const override;
 
     void SetStartLayerFromPCBNew( PCB_LAYER_ID aLayer );
     void SetStartLayerFromPNS( int aLayer ) { m_startLayer = aLayer; }
@@ -136,7 +141,9 @@ protected:
     bool syncGraphicalItem( PNS::NODE* aWorld, PCB_SHAPE* aItem );
     bool syncZone( PNS::NODE* aWorld, ZONE* aZone, SHAPE_POLY_SET* aBoardOutline );
     bool syncBarcode( PNS::NODE* aWorld, PCB_BARCODE* aBarcode );
-    bool inheritTrackWidth( PNS::ITEM* aItem, int* aInheritedWidth, const VECTOR2I& aStartPosition );
+    bool inheritTrackWidthAndDpGap( PNS::ITEM* aItem, const VECTOR2I& aStartPosition, int* aInheritedWidth, int *aInheritedGap );
+    std::vector<LENGTH_DELAY_CALCULATION_ITEM> getLengthDelayCalculationItems( const PNS::ITEM_SET& aLine,
+                                                                               const NETCLASS*      aNetClass ) const;
 
 protected:
     PNS::NODE* m_world;
@@ -176,9 +183,19 @@ public:
 
     void SetCommitFlags( int aCommitFlags ) { m_commitFlags = aCommitFlags; }
 
+    /// Pads that move on their own. A moved pad otherwise carries its footprint.
+    void SetIndependentPads( const std::set<PAD*>& aPads ) { m_independentPads = aPads; }
+
 protected:
     BOARD_CONNECTED_ITEM* createBoardItem( PNS::ITEM* aItem );
-    void                  modifyBoardItem( PNS::ITEM* aItem );
+    void                  modifyBoardItem( PNS::ITEM* aItem, BOARD_COMMIT& aCommit );
+
+    void clearPreviewItems();
+
+    /**
+     * Add a preview item to the view and take ownership of it.
+     */
+    void addPreviewItem( ROUTER_PREVIEW_ITEM* aItem );
 
     struct OFFSET
     {
@@ -186,11 +203,16 @@ protected:
     };
 
     std::map<PAD*, OFFSET>          m_fpOffsets;
+    std::set<PAD*>                  m_independentPads;
     KIGFX::VIEW*                    m_view;
-    KIGFX::VIEW_GROUP*              m_previewItems;
+
+    /** Each preview item is in the view directly so it draws at its own layer's place */
+    std::vector<ROUTER_PREVIEW_ITEM*> m_previewItems;
+
     std::unordered_set<BOARD_ITEM*> m_hiddenItems;
 
     std::unordered_map<BOARD_ITEM*, EDA_GROUP*>               m_itemGroups;
+    std::unordered_set<BOARD_ITEM*>                           m_removedItems;
     std::unordered_map<BOARD_ITEM*, std::vector<BOARD_ITEM*>> m_replacementMap;
 
     PCB_TOOL_BASE*                  m_tool;

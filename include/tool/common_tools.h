@@ -23,6 +23,9 @@
 #ifndef _COMMON_TOOLS_H
 #define _COMMON_TOOLS_H
 
+#include <optional>
+
+#include <math/box2.h>
 #include <tool/tool_interactive.h>
 
 class EDA_DRAW_FRAME;
@@ -54,6 +57,16 @@ public:
 
     int CenterContents( const TOOL_EVENT& aEvent );
     int CenterSelection( const TOOL_EVENT& aEvent );
+
+    /**
+     * Zoom and center the view so that aBox fills it, keeping the same margin the
+     * "Zoom to Selection" action leaves clear of the infobar.  A box with no extent
+     * on either axis falls back to the canvas's default view.
+     *
+     * @param aBox is the bounding boox to fit the zoom.
+     * @param aMarginScale replaces the default margin factor when given.
+     */
+    int ZoomFitBox( const BOX2I& aBox, std::optional<double> aMarginScale = std::nullopt );
 
     int PanControl( const TOOL_EVENT& aEvent );
 
@@ -109,22 +122,22 @@ private:
         CENTER_SELECTION,
     };
 
-    ///< Sets up handlers for various events.
+    /// Sets up handlers for various events.
     void setTransitions() override;
 
-    ///< Pointer to the currently used edit frame.
+    /// Pointer to the currently used edit frame.
     EDA_DRAW_FRAME* m_frame;
 
     int doZoomInOut( bool aDirection, bool aCenterOnCursor );
 
-    ///< Note: idx == 0 is Auto; idx == 1 is first entry in zoomList
+    /// Note: idx == 0 is Auto; idx == 1 is first entry in zoomList
     int doZoomToPreset( int idx, bool aCenterOnCursor );
 
     int doZoomFit( ZOOM_FIT_TYPE_T aFitType );
 
     int doCenter( CENTER_TYPE aCenterType );
 
-    std::vector<VECTOR2I> m_grids;  ///< Grids from #APP_SETTINGS converted to internal units
+    std::vector<VECTOR2I> m_grids;  ///< Grids from #APP_SETTINGS_BASE converted to internal units
                                     ///< and with the user grid appended.
 
     // The last used units in each system (used for toggling between metric and imperial)

@@ -142,6 +142,8 @@ public:
      *                                It is a black and white squared texture
      *                                with a center circle diameter of the size
      *                                of the texture.
+     * @param aZBot
+     * @param aZTop
      */
     OPENGL_RENDER_LIST( const TRIANGLE_DISPLAY_LIST& aLayerTriangles,
                         GLuint aTextureIndexForSegEnds, float aZBot, float aZTop );
@@ -186,8 +188,6 @@ public:
      *
      * This only works because the board is centered and the planes are always perpendicular to
      * the Z axis.
-     *
-     * @param zCameraPos is the camera z axis position.
      */
     void DrawCulled( bool aDrawMiddle, const std::shared_ptr<OPENGL_RENDER_LIST> aSubtractList = nullptr,
                      const std::shared_ptr<OPENGL_RENDER_LIST> bSubtractList = nullptr,
@@ -264,8 +264,8 @@ public:
 
         if( !m_openglRenderList )
         {
-            m_openglRenderList =
-                    std::make_shared<OPENGL_RENDER_LIST>( *m_layerTriangles, m_textureIndexForSegEnds, m_zBot, m_zTop );
+            m_openglRenderList = std::make_shared<OPENGL_RENDER_LIST>( *m_layerTriangles, m_textureIndexForSegEnds,
+                                                                       m_zBot, m_zTop );
 
             m_openglRenderList->SetItIsTransparent( m_defaultTransparent );
         }

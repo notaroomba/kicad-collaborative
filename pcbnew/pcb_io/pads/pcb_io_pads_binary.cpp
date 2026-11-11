@@ -107,20 +107,10 @@ bool PCB_IO_PADS_BINARY::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_PADS_BINARY::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_PADS_BINARY::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                    const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
     LOCALE_IO setlocale;
-
-    // Never own the caller's board; a throw below would delete it while the caller still uses it
-    std::unique_ptr<BOARD> ownedBoard;
-    BOARD*                 board = aAppendToMe;
-
-    if( !board )
-    {
-        ownedBoard = std::make_unique<BOARD>();
-        board = ownedBoard.get();
-    }
 
     if( m_reporter )
         m_reporter->Report( _( "Starting PADS binary PCB import" ), RPT_SEVERITY_INFO );
@@ -139,7 +129,7 @@ BOARD* PCB_IO_PADS_BINARY::LoadBoard( const wxString& aFileName, BOARD* aAppendT
         THROW_IO_ERROR( wxString::Format( "Error parsing PADS binary file: %s", e.what() ) );
     }
 
-    m_loadBoard = board;
+    m_loadBoard = &aBoard;
     m_parser = &parser;
     m_converter = std::make_unique<PADS_PCB_CONVERTER>( m_loadBoard, m_reporter );
 
@@ -172,7 +162,7 @@ BOARD* PCB_IO_PADS_BINARY::LoadBoard( const wxString& aFileName, BOARD* aAppendT
 
         // Appending merges into a board that already has its own rule file, so nothing would
         // ever load rules written beside the PADS source
-        if( !aAppendToMe )
+        if( aIsNewLoad )
             m_converter->WriteDiffPairRules( aFileName, m_parser->GetDiffPairs() );
 
         m_converter->ReportStatistics();
@@ -184,7 +174,6 @@ BOARD* PCB_IO_PADS_BINARY::LoadBoard( const wxString& aFileName, BOARD* aAppendT
     }
 
     clearLoadingState();
-    return aAppendToMe ? aAppendToMe : ownedBoard.release();
 }
 
 
@@ -243,6 +232,9 @@ void PCB_IO_PADS_BINARY::loadNets()
 
     std::shared_ptr<NET_SETTINGS> netSettings = m_loadBoard->GetDesignSettings().m_NetSettings;
 
+    // Without this flag BOARD::SetProject drops the imported net classes
+    m_loadBoard->m_LegacyNetclassesLoaded = true;
+
     for( const PADS_IO::BIN_NET_CLASS_DEF& nc : netClasses )
     {
         if( nc.name.empty() || nc.nets.empty() )
@@ -270,8 +262,12 @@ void PCB_IO_PADS_BINARY::loadNets()
 
         // Label assignments are rebuilt from schematic labels on every connectivity pass, so a
         // board-side membership has to be a pattern assignment to survive
-        for( const std::string& net : nc.nets )
-            netSettings->SetNetclassPatternAssignment( PADS_COMMON::ConvertInvertedNetName( net ), className );
+        for( const std::string& netname : nc.nets )
+        {
+            wxString kicadNetname = PADS_COMMON::ConvertInvertedNetName( netname );
+            wxString literalNetnamePattern = EscapeString( kicadNetname, CTX_REGEX );
+            netSettings->SetNetclassPatternAssignment( literalNetnamePattern, className );
+        }
     }
 
     // Each differential pair becomes one DiffPair_<name> net class.

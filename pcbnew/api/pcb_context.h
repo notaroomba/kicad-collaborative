@@ -41,6 +41,11 @@ public:
 
     virtual bool SaveBoard() = 0;
 
+    /**
+     * Save the board to a new path and change the active board/project.  Headless-only.
+     */
+    virtual bool SaveBoardAs( const wxString& aFileName ) = 0;
+
     virtual bool SavePcbCopy( const wxString& aFileName, bool aCreateProject, bool aHeadless ) = 0;
 
     /**
@@ -53,10 +58,18 @@ public:
      */
     virtual std::unique_ptr<BOARD_NETLIST_UPDATER> MakeNetlistUpdater() = 0;
 
+    virtual bool IsContentModified() const = 0;
+
+    virtual void SetContentModified( bool aModified = true ) = 0;
+
     /**
      * Post-import board sync (nets, classes, DRC, ratsnest, new footprint placement).
      */
     virtual void OnNetlistChanged( BOARD_NETLIST_UPDATER& aUpdater ) = 0;
+
+    // Reload the board from disk, discarding unsaved changes; returns false if there is no
+    // saved file to revert to or the reload failed
+    virtual bool RevertToSaved() = 0;
 };
 
 

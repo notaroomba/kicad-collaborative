@@ -58,6 +58,11 @@ PCB_FIELDS_GRID_TABLE::PCB_FIELDS_GRID_TABLE( PCB_BASE_FRAME* aFrame, DIALOG_SHI
     m_readOnlyAttr = new wxGridCellAttr;
     m_readOnlyAttr->SetReadOnly( true );
 
+    m_fieldNameAttr = new wxGridCellAttr;
+    GRID_CELL_TEXT_EDITOR* nameEditor = new GRID_CELL_TEXT_EDITOR();
+    nameEditor->SetValidator( m_fieldNameValidator );
+    m_fieldNameAttr->SetEditor( nameEditor );
+
     m_boolColAttr = new wxGridCellAttr;
     m_boolColAttr->SetRenderer( new wxGridCellBoolRenderer() );
     m_boolColAttr->SetEditor( new wxGridCellBoolEditor() );
@@ -102,6 +107,7 @@ PCB_FIELDS_GRID_TABLE::PCB_FIELDS_GRID_TABLE( PCB_BASE_FRAME* aFrame, DIALOG_SHI
 PCB_FIELDS_GRID_TABLE::~PCB_FIELDS_GRID_TABLE()
 {
     m_readOnlyAttr->DecRef();
+    m_fieldNameAttr->DecRef();
     m_boolColAttr->DecRef();
     m_orientationColAttr->DecRef();
     m_layerColAttr->DecRef();
@@ -210,7 +216,8 @@ wxGridCellAttr* PCB_FIELDS_GRID_TABLE::GetAttr( int aRow, int aCol,
             return enhanceAttr( m_readOnlyAttr, aRow, aCol, aKind );
         }
 
-        return enhanceAttr( nullptr, aRow, aCol, aKind );
+        m_fieldNameAttr->IncRef();
+        return enhanceAttr( m_fieldNameAttr, aRow, aCol, aKind );
 
     case PFC_VALUE:
         if( field.GetId() == FIELD_T::REFERENCE )
@@ -439,3 +446,40 @@ void PCB_FIELDS_GRID_TABLE::SetValueAsLong( int aRow, int aCol, long aValue )
     m_dialog->OnModify();
 }
 
+
+// Keep the row deletion, and the cached expression evaluation in sync
+bool PCB_FIELDS_GRID_TABLE::DeleteRows( size_t aPos, size_t aNumRows )
+{
+    if( aPos >= size() || aNumRows > size() - aPos )
+        return false;
+
+    std::map<std::pair<int, int>, wxString> rebasedEvalOriginal;
+
+    for( const auto& [cell, expression] : m_evalOriginal )
+    {
+        // Just keep anything from before our deletion
+        if( cell.first < static_cast<int>( aPos ) )
+        {
+            rebasedEvalOriginal[cell] = expression;
+        }
+        // Move expressions after the deletion up by the number of deleted rows
+        else if( cell.first >= static_cast<int>( aPos + aNumRows ) )
+        {
+            rebasedEvalOriginal[{ cell.first - static_cast<int>( aNumRows ), cell.second }] = expression;
+        }
+        // No else because that is the deleted range, and those go away
+    }
+
+    // Replace cache with new cache with correct number of rows
+    m_evalOriginal.swap( rebasedEvalOriginal );
+    // Delete actual rows from grid
+    erase( begin() + aPos, begin() + aPos + aNumRows );
+
+    if( GetView() )
+    {
+        wxGridTableMessage msg( this, wxGRIDTABLE_NOTIFY_ROWS_DELETED, aPos, aNumRows );
+        GetView()->ProcessTableMessage( msg );
+    }
+
+    return true;
+}

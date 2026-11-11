@@ -1,0 +1,6 @@
+(kicad_wks (version 20210606) (generator pl_editor)
+  (setup (textsize 1.5 1.5)(linewidth 0.15)(textlinewidth 0.15)
+  (left_margin 10)(right_margin 10)(top_margin 10)(bottom_margin 10))
+  (line (name "") (start 419.989 287.0022) (end 399.989 287.0022))
+  (line (name "") (start 409.989 297.0022) (end 409.989 277.0022))
+)

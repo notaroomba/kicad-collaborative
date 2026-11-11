@@ -1,0 +1,72 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ * @author Jon Evans <jon@craftyjon.com>
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
+#include <api/api_handler_sch_libraries.h>
+#include <api/api_utils.h>
+
+#include <libraries/symbol_library_adapter.h>
+#include <pgm_base.h>
+#include <project_sch.h>
+#include <settings/settings_manager.h>
+#include <lib_symbol.h>
+
+
+LIBRARY_MANAGER_ADAPTER* API_HANDLER_SCH_LIBRARIES::adapterForProject( PROJECT& aProject ) const
+{
+    return PROJECT_SCH::SymbolLibAdapter( &aProject );
+}
+
+
+std::vector<wxString> API_HANDLER_SCH_LIBRARIES::getItemNames( LIBRARY_MANAGER_ADAPTER& aAdapter,
+                                                               const wxString& aNickname ) const
+{
+    return static_cast<SYMBOL_LIBRARY_ADAPTER&>( aAdapter ).GetSymbolNames( aNickname );
+}
+
+
+bool API_HANDLER_SCH_LIBRARIES::packLibraryItem( const LIB_ID& aId, google::protobuf::Any& aOutput ) const
+{
+    SYMBOL_LIBRARY_ADAPTER* adapter =
+            static_cast<SYMBOL_LIBRARY_ADAPTER*>( adapterForProject( Pgm().GetSettingsManager().Prj() ) );
+
+    LIB_SYMBOL* libSymbol = adapter->LoadSymbol( aId );
+
+    if( !libSymbol )
+        return false;
+
+    // Clients get the inherited drawings resolved, so derived symbols are reported flattened.
+    std::unique_ptr<LIB_SYMBOL> flattened;
+
+    if( libSymbol->IsDerived() )
+    {
+        flattened = libSymbol->Flatten();
+
+        if( flattened )
+            flattened->SetParentName( libSymbol->GetParentName() );
+    }
+    else if( !libSymbol->GetParentName().IsEmpty() )
+    {
+        wxLogTrace( traceApi, "Cannot resolve the parent of derived symbol '%s'", aId.Format().wx_str() );
+    }
+
+    ( flattened ? flattened.get() : libSymbol )->Serialize( aOutput );
+
+    return true;
+}

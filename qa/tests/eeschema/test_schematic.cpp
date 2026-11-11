@@ -24,7 +24,13 @@
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include "eeschema_test_utils.h"
 
+#include <lib_symbol.h>
+#include <sch_screen.h>
+#include <sch_symbol.h>
 #include <schematic.h>
+#include <bus_alias.h>
+#include <project.h>
+#include <project/project_file.h>
 #include <wildcards_and_files_ext.h>
 
 
@@ -76,6 +82,74 @@ BOOST_AUTO_TEST_CASE( TestSchematicIsComplexHierarchy )
     LoadSchematic( SchematicQAPath( "netlists/complex_hierarchy/complex_hierarchy" ) );
 
     BOOST_CHECK( m_schematic->IsComplexHierarchy() );
+}
+
+
+BOOST_AUTO_TEST_CASE( BusAliasesKeepLastDefinitionAcrossReset )
+{
+    LoadSchematic( SchematicQAPath( "netlists/hierarchy_aliases/hierarchy_aliases" ) );
+    auto original = m_schematic->GetBusAlias( wxS( "ALIAS1" ) );
+    BOOST_REQUIRE( original );
+    auto changed = original->Clone();
+    changed->SetMembers( { wxS( "CHANGED" ) } );
+
+    m_schematic->AddBusAlias( changed );
+    BOOST_REQUIRE( m_schematic->GetBusAlias( original->GetName() ) );
+    BOOST_CHECK( m_schematic->GetBusAlias( original->GetName() )->Members() == changed->Members() );
+    BOOST_CHECK( m_schematic->Project().GetProjectFile().m_BusAliases.at( original->GetName() )
+                 == changed->Members() );
+    changed->SetMembers( original->Members() );
+    BOOST_CHECK( m_schematic->GetBusAlias( original->GetName() )->Members() != changed->Members() );
+    changed->SetMembers( { wxS( "CHANGED" ) } );
+
+    m_schematic->AddBusAlias( original );
+    BOOST_CHECK( m_schematic->GetAllBusAliases().back()->Members() == original->Members() );
+    m_schematic->SetBusAliases( { original, changed, original } );
+    BOOST_CHECK( m_schematic->GetAllBusAliases().back()->Members() == original->Members() );
+    m_schematic->SetBusAliases( m_schematic->GetAllBusAliases() );
+    BOOST_REQUIRE( m_schematic->GetBusAlias( original->GetName() ) );
+
+    m_schematic->Reset();
+    BOOST_REQUIRE( m_schematic->GetBusAlias( original->GetName() ) );
+    BOOST_CHECK( m_schematic->GetBusAlias( original->GetName() )->Members() == original->Members() );
+    m_schematic->SetBusAliases( {} );
+    m_schematic->Reset();
+    BOOST_CHECK( m_schematic->GetAllBusAliases().empty() );
+    BOOST_CHECK( m_schematic->Project().GetProjectFile().m_BusAliases.empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( DestructionReleasesSharedHierarchySymbols )
+{
+    LoadSchematic( SchematicQAPath( "issue23840/BusAndVectors" ) );
+    const SCH_SHEET_LIST sheets = m_schematic->BuildSheetListSortedByPageNumbers();
+    BOOST_REQUIRE_EQUAL( sheets.size(), 3 );
+    std::set<SCH_SCREEN*> screens;
+
+    for( const SCH_SHEET_PATH& path : sheets )
+        screens.insert( path.LastScreen() );
+
+    BOOST_REQUIRE_EQUAL( screens.size(), 2 );
+    std::vector<std::weak_ptr<LIB_SYMBOL>> symbols;
+
+    for( SCH_SCREEN* screen : screens )
+    {
+        BOOST_REQUIRE( !screen->GetLibSymbols().empty() );
+        symbols.emplace_back( screen->GetLibSymbols().begin()->second->SharedPtr() );
+        auto items = screen->Items().OfType( SCH_SYMBOL_T );
+        BOOST_REQUIRE( items.begin() != items.end() );
+        const auto* symbol = static_cast<const SCH_SYMBOL*>( *items.begin() );
+        BOOST_REQUIRE( symbol->GetLibSymbolRef() );
+        symbols.emplace_back( symbol->GetLibSymbolRef()->SharedPtr() );
+    }
+
+    for( const std::weak_ptr<LIB_SYMBOL>& symbol : symbols )
+        BOOST_REQUIRE( !symbol.expired() );
+
+    m_schematic.reset();
+
+    for( const std::weak_ptr<LIB_SYMBOL>& symbol : symbols )
+        BOOST_CHECK( symbol.expired() );
 }
 
 

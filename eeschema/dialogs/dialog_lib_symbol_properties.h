@@ -29,7 +29,7 @@
 
 class SYMBOL_EDIT_FRAME;
 class LIB_SYMBOL;
-class LISTBOX_TRICKS;
+class PANEL_FOOTPRINT_FILTERS;
 class PANEL_EMBEDDED_FILES;
 class PANEL_SYMBOL_PIN_MAP;
 class WX_GRID;
@@ -71,8 +71,6 @@ private:
     void OnDeleteBodyStyle( wxCommandEvent& event ) override;
     void OnSymbolNameKillFocus( wxFocusEvent& event ) override;
     void OnSymbolNameText( wxCommandEvent& event ) override;
-    void OnAddFootprintFilter( wxCommandEvent& event ) override;
-    void OnEditFootprintFilter( wxCommandEvent& event ) override;
     void OnGridCellChanging( wxGridEvent& event );
     void OnGridCellChanged( wxGridEvent& event );
     void OnGridMotion( wxMouseEvent& event );
@@ -80,7 +78,6 @@ private:
     void OnUpdateUI( wxUpdateUIEvent& event ) override;
     void OnCancelButtonClick( wxCommandEvent& event ) override;
     void OnPageChanging( wxNotebookEvent& event ) override;
-    void OnFpFilterDClick( wxMouseEvent& event ) override;
     void OnAddJumperGroup( wxCommandEvent& event ) override;
     void OnRemoveJumperGroup( wxCommandEvent& event ) override;
 
@@ -88,6 +85,12 @@ private:
     void syncControlStates( bool aIsAlias );
     void syncBodyStyleControls();
     void addInheritedFields( const std::shared_ptr<LIB_SYMBOL>& aParent );
+    void syncKeywordsToolTip();
+
+    /// @return true when a footprint can be assigned to the symbol's Footprint field: the
+    /// field must exist and not be read-only (a power symbol has no footprint).
+    bool canAssignFootprintToField();
+    void assignFootprintToField( const wxString& aFootprintName );
 
 public:
     SYMBOL_EDIT_FRAME* m_Parent;
@@ -107,8 +110,9 @@ public:
 
     std::bitset<64>    m_shownColumns;
 
-    PANEL_EMBEDDED_FILES* m_embeddedFiles;
-    PANEL_SYMBOL_PIN_MAP* m_pinMapPanel;
+    PANEL_EMBEDDED_FILES*    m_embeddedFiles;
+    PANEL_SYMBOL_PIN_MAP*    m_pinMapPanel;
+    PANEL_FOOTPRINT_FILTERS* m_fpFiltersPanel;
 
 private:
     static int m_lastOpenedPage;    // To remember the last notebook selection
@@ -117,6 +121,11 @@ private:
     /// remembered last page (issue #2282).
     bool m_forcePinMapPage = false;
 
+    /// Ancestor supplying the keywords while the symbol leaves them empty.
+    wxString m_keywordsSource;
+
+    wxArrayString m_inheritedFpFilters;
+
     enum class LAST_LAYOUT {
         NONE,
         ALIAS,
@@ -124,6 +133,4 @@ private:
     };
 
     static LAST_LAYOUT m_lastLayout;
-
-    std::unique_ptr<LISTBOX_TRICKS> m_fpFilterTricks;
 };

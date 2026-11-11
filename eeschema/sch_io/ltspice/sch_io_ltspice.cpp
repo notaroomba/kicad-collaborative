@@ -24,6 +24,7 @@
 #include <sch_io/ltspice/sch_io_ltspice_parser.h>
 
 #include <project_sch.h>
+#include <richio.h>
 #include <schematic.h>
 #include <sch_sheet.h>
 #include <sch_screen.h>
@@ -39,8 +40,24 @@ int SCH_IO_LTSPICE::GetModifyHash() const
 }
 
 
-SCH_SHEET* SCH_IO_LTSPICE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC* aSchematic,
-                                              SCH_SHEET*             aAppendToMe,
+bool SCH_IO_LTSPICE::CanReadSchematicFile( const wxString& aFileName ) const
+{
+    if( !SCH_IO::CanReadSchematicFile( aFileName ) )
+        return false;
+
+    // PADS uses .asc too, and LTspice files can be UTF-16 so the header needs decoding
+    try
+    {
+        return SafeReadFile( aFileName, wxS( "r" ) ).Left( 7 ).Upper() == wxS( "VERSION" );
+    }
+    catch( const IO_ERROR& )
+    {
+        return false;
+    }
+}
+
+
+SCH_SHEET* SCH_IO_LTSPICE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC* aSchematic, SCH_SHEET* aAppendToMe,
                                               const std::map<std::string, UTF8>* aProperties )
 {
     wxASSERT( !aFileName || aSchematic );
@@ -70,10 +87,20 @@ SCH_SHEET* SCH_IO_LTSPICE::LoadSchematicFile( const wxString& aFileName, SCHEMAT
         rootSheet->SyncUuidToScreen();
     }
 
+    // An explicit library location wins over the places LTspice installs itself
+    wxString   libOverride;
+    wxFileName ltspiceDataDir;
+
+    if( wxGetEnv( wxS( "KICAD_LTSPICE_LIB" ), &libOverride ) && wxDirExists( libOverride ) )
+        ltspiceDataDir = wxFileName( libOverride, wxEmptyString );
+
     // Windows path: C:\Users\USERNAME\AppData\Local\LTspice\lib
-    wxFileName ltspiceDataDir( KIPLATFORM::ENV::GetUserLocalDataPath(), wxEmptyString );
-    ltspiceDataDir.AppendDir( wxS( "LTspice" ) );
-    ltspiceDataDir.AppendDir( wxS( "lib" ) );
+    if( !ltspiceDataDir.IsOk() )
+    {
+        ltspiceDataDir = wxFileName( KIPLATFORM::ENV::GetUserLocalDataPath(), wxEmptyString );
+        ltspiceDataDir.AppendDir( wxS( "LTspice" ) );
+        ltspiceDataDir.AppendDir( wxS( "lib" ) );
+    }
 
     if( !ltspiceDataDir.DirExists() )
     {
@@ -94,7 +121,7 @@ SCH_SHEET* SCH_IO_LTSPICE::LoadSchematicFile( const wxString& aFileName, SCHEMAT
     }
 #endif
 
-    if( !ltspiceDataDir.DirExists() )
+    if( !ltspiceDataDir.DirExists() && wxDirExists( KIPLATFORM::ENV::GetDocumentsPath() ) )
     {
         // See if user has older version of LTspice installed
         // (e.g. C:\Users\USERNAME\Documents\LTspiceXVII\lib
@@ -143,11 +170,6 @@ SCH_SHEET* SCH_IO_LTSPICE::LoadSchematicFile( const wxString& aFileName, SCHEMAT
     {
         m_reporter->Report( e.What(), RPT_SEVERITY_ERROR );
     }
-
-    aSchematic->CurrentSheet().UpdateAllScreenReferences();
-
-    // fixing all junctions at the end
-    aSchematic->FixupJunctionsAfterImport();
 
     return rootSheet;
 }

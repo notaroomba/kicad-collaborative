@@ -20,6 +20,7 @@
 
 #include <regex>
 
+#include <class_draw_panel_gal.h>
 #include <eeschema_settings.h>
 #include <gal/gal_display_options.h>
 #include <gal/graphics_abstraction_layer.h>
@@ -95,7 +96,7 @@ PANEL_EESCHEMA_COLOR_SETTINGS::PANEL_EESCHEMA_COLOR_SETTINGS( wxWindow* aParent 
     m_galDisplayOptions.ReadConfig( *common_settings, app_settings->m_Window, this );
     m_galDisplayOptions.m_forceDisplayCursor = false;
 
-    m_galType = static_cast<EDA_DRAW_PANEL_GAL::GAL_TYPE>( common_settings->m_Graphics.canvas_type );
+    m_galType = EDA_DRAW_PANEL_GAL::ResolveStoredCanvasType( common_settings->m_Graphics.canvas_type );
 }
 
 
@@ -238,6 +239,7 @@ void PANEL_EESCHEMA_COLOR_SETTINGS::createSwatches()
 
 void PANEL_EESCHEMA_COLOR_SETTINGS::onNewThemeSelected()
 {
+    updateAllowedSwatches();
     updatePreview();
 }
 
@@ -536,11 +538,18 @@ void PANEL_EESCHEMA_COLOR_SETTINGS::updateAllowedSwatches()
 {
     // If the theme is not overriding individual item colors then don't show them so that
     // the user doesn't get seduced into thinking they'll have some effect.
-    m_labels[ LAYER_SHEET ]->Show( m_currentSettings->GetOverrideSchItemColors() );
-    m_swatches[ LAYER_SHEET ]->Show( m_currentSettings->GetOverrideSchItemColors() );
 
-    m_labels[ LAYER_SHEET_BACKGROUND ]->Show( m_currentSettings->GetOverrideSchItemColors() );
-    m_swatches[ LAYER_SHEET_BACKGROUND ]->Show( m_currentSettings->GetOverrideSchItemColors() );
+    if( m_labels.count( LAYER_SHEET ) )
+        m_labels[ LAYER_SHEET ]->Show( m_currentSettings->GetOverrideSchItemColors() );
+
+    if( m_swatches.count( LAYER_SHEET ) )
+        m_swatches[ LAYER_SHEET ]->Show( m_currentSettings->GetOverrideSchItemColors() );
+
+    if( m_labels.count( LAYER_SHEET_BACKGROUND ) )
+        m_labels[ LAYER_SHEET_BACKGROUND ]->Show( m_currentSettings->GetOverrideSchItemColors() );
+
+    if( m_swatches.count( LAYER_SHEET_BACKGROUND ) )
+        m_swatches[ LAYER_SHEET_BACKGROUND ]->Show( m_currentSettings->GetOverrideSchItemColors() );
 
     m_colorsGridSizer->Layout();
     m_colorsListWindow->Layout();

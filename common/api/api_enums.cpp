@@ -25,6 +25,7 @@
 #include <api/common/types/base_types.pb.h>
 #include <api/common/types/embedded_files.pb.h>
 #include <api/common/types/enums.pb.h>
+#include <api/common/types/library_types.pb.h>
 #include <api/board/board_commands.pb.h>
 #include <api/board/board.pb.h>
 #include <api/board/board_rules.pb.h>
@@ -33,6 +34,8 @@
 #include <api/schematic/schematic_types.pb.h>
 
 #include <core/typeinfo.h>
+#include <libraries/library_manager.h>
+#include <libraries/library_table.h>
 #include <line_ending.h>
 #include <eda_shape.h>
 #include <font/text_attributes.h>
@@ -44,6 +47,7 @@
 #include <stroke_params.h>
 #include <widgets/report_severity.h>
 #include <embedded_files.h>
+#include <marker_base.h>
 
 using namespace kiapi;
 using namespace kiapi::common;
@@ -58,12 +62,16 @@ KICAD_T FromProtoEnum( types::KiCadObjectType aValue )
     case types::KiCadObjectType::KOT_PCB_SHAPE:             return PCB_SHAPE_T;
     case types::KiCadObjectType::KOT_PCB_BARCODE:           return PCB_BARCODE_T;
     case types::KiCadObjectType::KOT_PCB_REFERENCE_IMAGE:   return PCB_REFERENCE_IMAGE_T;
-    case types::KiCadObjectType::KOT_PCB_GRIDITEM:          return PCB_GRIDITEM_T;
+    case types::KiCadObjectType::KOT_PCB_GRIDITEM:          return PCB_GRID_ITEM_T;
     case types::KiCadObjectType::KOT_PCB_FIELD:             return PCB_FIELD_T;
     case types::KiCadObjectType::KOT_PCB_GENERATOR:         return PCB_GENERATOR_T;
     case types::KiCadObjectType::KOT_PCB_TEXT:              return PCB_TEXT_T;
     case types::KiCadObjectType::KOT_PCB_TEXTBOX:           return PCB_TEXTBOX_T;
     case types::KiCadObjectType::KOT_PCB_TABLE:             return PCB_TABLE_T;
+    case types::KiCadObjectType::KOT_PCB_DRILL_CHART:       return PCB_DRILL_CHART_T;
+    case types::KiCadObjectType::KOT_PCB_DRILL_MAP:         return PCB_DRILL_MAP_T;
+    case types::KiCadObjectType::KOT_PCB_3D_BODY:           return PCB_3D_BODY_T;
+    case types::KiCadObjectType::KOT_PCB_STACKUP_TABLE:     return PCB_STACKUP_TABLE_T;
     case types::KiCadObjectType::KOT_PCB_TABLECELL:         return PCB_TABLECELL_T;
     case types::KiCadObjectType::KOT_PCB_TRACE:             return PCB_TRACE_T;
     case types::KiCadObjectType::KOT_PCB_VIA:               return PCB_VIA_T;
@@ -123,12 +131,16 @@ types::KiCadObjectType ToProtoEnum( KICAD_T aValue )
     case PCB_SHAPE_T:            return types::KiCadObjectType::KOT_PCB_SHAPE;
     case PCB_BARCODE_T:          return types::KiCadObjectType::KOT_PCB_BARCODE;
     case PCB_REFERENCE_IMAGE_T:  return types::KiCadObjectType::KOT_PCB_REFERENCE_IMAGE;
-    case PCB_GRIDITEM_T:         return types::KiCadObjectType::KOT_PCB_GRIDITEM;
+    case PCB_GRID_ITEM_T:        return types::KiCadObjectType::KOT_PCB_GRIDITEM;
     case PCB_FIELD_T:            return types::KiCadObjectType::KOT_PCB_FIELD;
     case PCB_GENERATOR_T:        return types::KiCadObjectType::KOT_PCB_GENERATOR;
     case PCB_TEXT_T:             return types::KiCadObjectType::KOT_PCB_TEXT;
     case PCB_TEXTBOX_T:          return types::KiCadObjectType::KOT_PCB_TEXTBOX;
     case PCB_TABLE_T:            return types::KiCadObjectType::KOT_PCB_TABLE;
+    case PCB_DRILL_CHART_T:      return types::KiCadObjectType::KOT_PCB_DRILL_CHART;
+    case PCB_DRILL_MAP_T:        return types::KiCadObjectType::KOT_PCB_DRILL_MAP;
+    case PCB_3D_BODY_T:          return types::KiCadObjectType::KOT_PCB_3D_BODY;
+    case PCB_STACKUP_TABLE_T:    return types::KiCadObjectType::KOT_PCB_STACKUP_TABLE;
     case PCB_TABLECELL_T:        return types::KiCadObjectType::KOT_PCB_TABLECELL;
     case PCB_TRACE_T:            return types::KiCadObjectType::KOT_PCB_TRACE;
     case PCB_VIA_T:              return types::KiCadObjectType::KOT_PCB_VIA;
@@ -722,9 +734,9 @@ PAD_SIM_ELECTRICAL_TYPE FromProtoEnum( board::types::PadSimElectricalType aValue
 {
     switch( aValue )
     {
-    case board::types::PadSimElectricalType::PSET_NONE: return PAD_SIM_ELECTRICAL_TYPE::NONE;
+    case board::types::PadSimElectricalType::PSET_NONE:   return PAD_SIM_ELECTRICAL_TYPE::NONE;
     case board::types::PadSimElectricalType::PSET_SOURCE: return PAD_SIM_ELECTRICAL_TYPE::SOURCE;
-    case board::types::PadSimElectricalType::PSET_SINK: return PAD_SIM_ELECTRICAL_TYPE::SINK;
+    case board::types::PadSimElectricalType::PSET_SINK:   return PAD_SIM_ELECTRICAL_TYPE::SINK;
 
     default:
         wxCHECK_MSG( false, PAD_SIM_ELECTRICAL_TYPE::NONE,
@@ -738,9 +750,9 @@ board::types::PadSimElectricalType ToProtoEnum( PAD_SIM_ELECTRICAL_TYPE aValue )
 {
     switch( aValue )
     {
-    case PAD_SIM_ELECTRICAL_TYPE::NONE: return board::types::PadSimElectricalType::PSET_NONE;
+    case PAD_SIM_ELECTRICAL_TYPE::NONE:   return board::types::PadSimElectricalType::PSET_NONE;
     case PAD_SIM_ELECTRICAL_TYPE::SOURCE: return board::types::PadSimElectricalType::PSET_SOURCE;
-    case PAD_SIM_ELECTRICAL_TYPE::SINK: return board::types::PadSimElectricalType::PSET_SINK;
+    case PAD_SIM_ELECTRICAL_TYPE::SINK:   return board::types::PadSimElectricalType::PSET_SINK;
 
     default:
         wxCHECK_MSG( false, board::types::PadSimElectricalType::PSET_NONE,
@@ -835,7 +847,7 @@ types::PageSize ToProtoEnum( PAGE_SIZE_TYPE aValue )
     case PAGE_SIZE_TYPE::D:         return types::PageSize::PS_ANSI_D;
     case PAGE_SIZE_TYPE::E:         return types::PageSize::PS_ANSI_E;
     case PAGE_SIZE_TYPE::GERBER:    return types::PageSize::PS_GERBER;
-    case PAGE_SIZE_TYPE::USLetter: return types::PageSize::PS_US_LETTER;
+    case PAGE_SIZE_TYPE::USLetter:  return types::PageSize::PS_US_LETTER;
     case PAGE_SIZE_TYPE::USLegal:   return types::PageSize::PS_US_LEGAL;
     case PAGE_SIZE_TYPE::USLedger:  return types::PageSize::PS_US_LEDGER;
     case PAGE_SIZE_TYPE::User:      return types::PageSize::PS_USER;
@@ -905,3 +917,130 @@ common::types::EmbeddedFileType ToProtoEnum( EMBEDDED_FILES::EMBEDDED_FILE::FILE
     wxCHECK_MSG( false, common::types::EFT_UNKNOWN,
                  "Unhandled case in ToProtoEnum<EMBEDDED_FILES::EMBEDDED_FILE::FILE_TYPE>" );
 }
+
+
+template<> KICOMMON_API
+LIBRARY_TABLE_TYPE FromProtoEnum( types::LibraryType aType )
+{
+    switch( aType )
+    {
+    case types::LibraryType::LT_SYMBOL:       return LIBRARY_TABLE_TYPE::SYMBOL;
+    case types::LibraryType::LT_FOOTPRINT:    return LIBRARY_TABLE_TYPE::FOOTPRINT;
+    case types::LibraryType::LT_DESIGN_BLOCK: return LIBRARY_TABLE_TYPE::DESIGN_BLOCK;
+    default:                                  return LIBRARY_TABLE_TYPE::UNINITIALIZED;
+    }
+}
+
+
+template<> KICOMMON_API
+types::LibraryType ToProtoEnum( LIBRARY_TABLE_TYPE aType )
+{
+    switch( aType )
+    {
+    case LIBRARY_TABLE_TYPE::SYMBOL:       return types::LibraryType::LT_SYMBOL;
+    case LIBRARY_TABLE_TYPE::FOOTPRINT:    return types::LibraryType::LT_FOOTPRINT;
+    case LIBRARY_TABLE_TYPE::DESIGN_BLOCK: return types::LibraryType::LT_DESIGN_BLOCK;
+    default:                               return types::LibraryType::LT_UNKNOWN;
+    }
+}
+
+
+template<> KICOMMON_API
+LIBRARY_TABLE_SCOPE FromProtoEnum( types::LibraryTableScope aScope )
+{
+    switch( aScope )
+    {
+    case types::LibraryTableScope::LTS_GLOBAL:  return LIBRARY_TABLE_SCOPE::GLOBAL;
+    case types::LibraryTableScope::LTS_PROJECT: return LIBRARY_TABLE_SCOPE::PROJECT;
+    case types::LibraryTableScope::LTS_BOTH:    return LIBRARY_TABLE_SCOPE::BOTH;
+    default:                                    return LIBRARY_TABLE_SCOPE::UNINITIALIZED;
+    }
+}
+
+
+template<> KICOMMON_API
+types::LibraryTableScope ToProtoEnum( LIBRARY_TABLE_SCOPE aScope )
+{
+    switch( aScope )
+    {
+    case LIBRARY_TABLE_SCOPE::GLOBAL:        return types::LibraryTableScope::LTS_GLOBAL;
+    case LIBRARY_TABLE_SCOPE::PROJECT:       return types::LibraryTableScope::LTS_PROJECT;
+    case LIBRARY_TABLE_SCOPE::BOTH:          return types::LibraryTableScope::LTS_BOTH;
+    case LIBRARY_TABLE_SCOPE::UNINITIALIZED: return types::LibraryTableScope::LTS_UNKNOWN;
+
+    default:
+        wxCHECK_MSG( false, common::types::LibraryTableScope::LTS_UNKNOWN,
+                     "Unhandled case in ToProtoEnum<LIBRARY_TABLE_SCOPE>" );
+    }
+}
+
+
+template<> KICOMMON_API
+LOAD_STATUS FromProtoEnum( types::LibraryLoadStatus aStatus )
+{
+    switch( aStatus )
+    {
+    case types::LibraryLoadStatus::LLS_UNKNOWN:
+    case types::LibraryLoadStatus::LLS_INVALID: return LOAD_STATUS::INVALID;
+    case types::LibraryLoadStatus::LLS_LOADING: return LOAD_STATUS::LOADING;
+    case types::LibraryLoadStatus::LLS_LOADED:  return LOAD_STATUS::LOADED;
+    case types::LibraryLoadStatus::LLS_ERROR:   return LOAD_STATUS::LOAD_ERROR;
+
+    default:
+        wxCHECK_MSG( false, LOAD_STATUS::INVALID, "Unhandled case in FromProtoEnum<LibraryLoadStatus>" );
+    }
+}
+
+
+template<> KICOMMON_API
+types::LibraryLoadStatus ToProtoEnum( LOAD_STATUS aStatus )
+{
+    switch( aStatus )
+    {
+    case LOAD_STATUS::INVALID:      return types::LibraryLoadStatus::LLS_INVALID;
+    case LOAD_STATUS::LOADING:      return types::LibraryLoadStatus::LLS_LOADING;
+    case LOAD_STATUS::LOADED:       return types::LibraryLoadStatus::LLS_LOADED;
+    case LOAD_STATUS::LOAD_ERROR:   return types::LibraryLoadStatus::LLS_ERROR;
+
+    default:
+        wxCHECK_MSG( false, types::LibraryLoadStatus::LLS_UNKNOWN, "Unhandled case in ToProtoEnum<LOAD_STATUS>" );
+    }
+}
+
+
+template<> KICOMMON_API
+MARKER_BASE::MARKER_T FromProtoEnum( types::MarkerType aMarkerType )
+{
+    switch( aMarkerType )
+    {
+    default:
+    case types::MarkerType::MT_UNKNOWN:       return MARKER_BASE::MARKER_UNSPEC;
+    case types::MarkerType::MT_ERC:           return MARKER_BASE::MARKER_ERC;
+    case types::MarkerType::MT_DRC:           return MARKER_BASE::MARKER_DRC;
+    case types::MarkerType::MT_DRAWING_SHEET: return MARKER_BASE::MARKER_DRAWING_SHEET;
+    case types::MarkerType::MT_RATSNEST:      return MARKER_BASE::MARKER_RATSNEST;
+    case types::MarkerType::MT_PARITY:        return MARKER_BASE::MARKER_PARITY;
+    case types::MarkerType::MT_SIMULATION:    return MARKER_BASE::MARKER_SIMULATION;
+    }
+}
+
+
+template<> KICOMMON_API
+types::MarkerType ToProtoEnum( MARKER_BASE::MARKER_T aMarkerType )
+{
+    switch( aMarkerType )
+    {
+    case MARKER_BASE::MARKER_UNSPEC:        return types::MarkerType::MT_UNKNOWN;
+    case MARKER_BASE::MARKER_ERC:           return types::MarkerType::MT_ERC;
+    case MARKER_BASE::MARKER_DRC:           return types::MarkerType::MT_DRC;
+    case MARKER_BASE::MARKER_DRAWING_SHEET: return types::MarkerType::MT_DRAWING_SHEET;
+    case MARKER_BASE::MARKER_RATSNEST:      return types::MarkerType::MT_RATSNEST;
+    case MARKER_BASE::MARKER_PARITY:        return types::MarkerType::MT_PARITY;
+    case MARKER_BASE::MARKER_SIMULATION:    return types::MarkerType::MT_SIMULATION;
+
+    default:
+        wxCHECK_MSG( false, types::MarkerType::MT_UNKNOWN, "Unhandled case in ToProtoEnum<MARKER_T>" );
+    }
+
+}
+

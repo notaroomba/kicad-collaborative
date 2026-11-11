@@ -101,8 +101,12 @@ enum ERCE_T
     ERCE_EMPTY_LABEL_NAME,                  ///< Label has an empty or whitespace-only name.
     ERCE_VARIANT_SYMBOL_INVALID,            ///< Variant symbol override LIB_ID cannot be resolved.
     ERCE_VARIANT_SYMBOL_INCOMPATIBLE,       ///< Variant symbol override fails pin compatibility.
+    ERCE_WIRED_IMPLICIT_POWER,              ///< Wired hidden power input also joins its global net by name.
+    ERCE_EMPTY_POWER_VALUE,                 ///< Power symbol has no value, so it names no net.
+    ERCE_DUPLICATE_SHEET_SUFFIX,            ///< Two uses of one sheet file share a reference suffix.
+    ERCE_REF_SUFFIX_MISMATCH,               ///< Saved reference lacks the suffix of its reused sheet.
 
-    ERCE_LAST = ERCE_VARIANT_SYMBOL_INCOMPATIBLE,
+    ERCE_LAST = ERCE_REF_SUFFIX_MISMATCH,
 
     ERCE_DUPLICATE_PIN_ERROR,
     ERCE_PIN_TO_PIN_WARNING, // pin connected to an other pin: warning level
@@ -298,6 +302,7 @@ public:
     /**
      * Set the exclusion state of a marker while keeping the cached severity counts in sync.
      *
+     * @param aMarker is the marker to include or exclude.
      * @param aExcluded true to exclude the marker, false to restore it.
      * @param aComment optional exclusion comment.
      */

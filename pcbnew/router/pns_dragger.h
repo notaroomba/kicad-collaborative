@@ -111,6 +111,13 @@ public:
     }
 
     /**
+     * Return true if \a aItem is a world item that moves with the drag: a link of the original
+     * line, or the dragged via and the tracks attached to it.  Snapping to such an item pins the
+     * cursor to its pre-drag position.
+     */
+    bool IsDragOrigin( const ITEM* aItem ) const;
+
+    /**
      * Function Traces()
      *
      * Returns the set of dragged items.
@@ -143,11 +150,11 @@ private:
     bool tryWalkaround( NODE* aNode, LINE& aOrig, LINE& aWalk );
     VVIA* checkVirtualVia( const VECTOR2D& aP, SEGMENT* aSeg );
 
-    ///< When the cursor is unreachable (e.g. inside a colliding hull), find the best
-    ///< anchor vertex to preserve through optimizer.
+    /// When the cursor is unreachable (e.g. inside a colliding hull), find the best
+    /// anchor vertex to preserve through optimizer.
     VECTOR2I bestAnchorForPoint( const SHAPE_LINE_CHAIN& aLine, const VECTOR2I& aP ) const;
 
-    ///< Returns true if the vertex at aVertexIndex has a non-obtuse corner
+    /// Returns true if the vertex at aVertexIndex has a non-obtuse corner
     bool pointHasBadCorner( const SHAPE_LINE_CHAIN& aLine, int aVertexIndex ) const;
 
 
@@ -166,10 +173,10 @@ private:
     ITEM_SET               m_origViaConnections;
     VECTOR2D               m_lastValidPoint;
 
-    ///< Contains the list of items that are currently modified by the dragger
+    /// Contains the list of items that are currently modified by the dragger
     ITEM_SET               m_draggedItems;
 
-    ///< If true, moves the connection lines without maintaining 45 degrees corners
+    /// If true, moves the connection lines without maintaining 45 degrees corners
     bool                   m_freeAngleMode;
     bool                   m_forceMarkObstaclesMode;
     MOUSE_TRAIL_TRACER     m_mouseTrailTracer;

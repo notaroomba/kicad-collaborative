@@ -32,6 +32,7 @@ enum class PushResult
 {
     Success,
     NonFastForward,
+    Busy, ///< Another git operation held the action lock, so nothing was pushed.
     Error
 };
 
@@ -43,13 +44,32 @@ public:
 
     PushResult PerformPush( bool aForce = false );
 
-    // Virtual method for progress reporting
-    virtual void ReportProgress( int aCurrent, int aTotal, const wxString& aMessage ) {}
+    /// Pin the branch and full HEAD commit ID confirmed by the caller, so a queued push
+    /// cannot publish a different target after another operation changes the repository.
+    void SetExpectedTarget( const wxString& aBranch, const wxString& aHeadOid );
+
+    bool HasExpectedTarget() const { return m_hasExpectedTarget; }
+
+    /// True without an expectation, or when both values match the captured target.
+    bool MatchesExpectedTarget( const wxString& aBranch, const wxString& aHeadOid ) const;
+
+    /// Pin the remote and the address the caller confirmed, so a push queued behind a change to
+    /// either is refused rather than sent somewhere else
+    void SetExpectedDestination( const wxString& aRemoteName, const wxString& aPushUrl );
+
+    bool HasExpectedDestination() const { return m_hasExpectedDestination; }
+
+    /// True without an expectation, or when both values match the confirmed destination
+    bool MatchesExpectedDestination( const wxString& aRemoteName, const wxString& aPushUrl ) const;
 
 private:
+    bool     m_hasExpectedTarget = false;
+    wxString m_expectedBranch;
+    wxString m_expectedHeadOid;
 
-    // Implementation of GIT_PROGRESS's virtual method
-    void UpdateProgress( int aCurrent, int aTotal, const wxString& aMessage ) override;
+    bool     m_hasExpectedDestination = false;
+    wxString m_expectedRemoteName;
+    wxString m_expectedPushUrl;
 };
 
 #endif // _GIT_PUSH_HANDLER_H_

@@ -22,6 +22,7 @@
 #include <api/api_plugin_manager.h>
 #include <base_screen.h>
 #include <bitmaps.h>
+#include <bitmap_store.h>
 #include <confirm.h>
 #include <core/arraydim.h>
 #include <core/kicad_algo.h>
@@ -65,7 +66,9 @@
 #include <widgets/msgpanel.h>
 #include <widgets/properties_panel.h>
 #include <widgets/net_inspector_panel.h>
+#include <widgets/git_commit_pane.h>
 #include <widgets/filedlg_hook_new_library.h>
+#include <project.h>
 #include <wx/event.h>
 #include <widgets/ui_common.h>
 #include <widgets/search_pane.h>
@@ -88,7 +91,7 @@ BEGIN_EVENT_TABLE( EDA_DRAW_FRAME, KIWAY_PLAYER )
 END_EVENT_TABLE()
 
 
-bool EDA_DRAW_FRAME::m_openGLFailureOccured = false;
+std::set<EDA_DRAW_PANEL_GAL::GAL_TYPE> EDA_DRAW_FRAME::m_failedCanvases;
 
 
 EDA_DRAW_FRAME::EDA_DRAW_FRAME( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrameType,
@@ -120,6 +123,7 @@ EDA_DRAW_FRAME::EDA_DRAW_FRAME( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrame
     m_hotkeyPopup         = nullptr;
     m_propertiesPanel     = nullptr;
     m_netInspectorPanel   = nullptr;
+    m_gitCommitPane = nullptr;
 
     SetUserUnits( EDA_UNITS::MM );
 
@@ -172,7 +176,7 @@ EDA_DRAW_FRAME::EDA_DRAW_FRAME( KIWAY* aKiway, wxWindow* aParent, FRAME_T aFrame
 
 EDA_DRAW_FRAME::~EDA_DRAW_FRAME()
 {
-    if( !m_openGLFailureOccured )
+    if( m_failedCanvases.empty() )
         saveCanvasTypeSetting( m_canvasType );
 
     delete m_actions;
@@ -315,11 +319,7 @@ void EDA_DRAW_FRAME::ToggleUserUnits()
     }
     else
     {
-        SetUserUnits( GetUserUnits() == EDA_UNITS::INCH ? EDA_UNITS::MM : EDA_UNITS::INCH );
-        unitsChangeRefresh();
-
-        wxCommandEvent e( EDA_EVT_UNITS_CHANGED );
-        ProcessEventLocally( e );
+        ChangeUserUnits( GetUserUnits() == EDA_UNITS::INCH ? EDA_UNITS::MM : EDA_UNITS::INCH );
     }
 }
 
@@ -359,9 +359,14 @@ void EDA_DRAW_FRAME::CommonSettingsChanged( int aFlags )
         m_lastToolbarIconSize = settings->m_Appearance.toolbar_icon_size;
     }
 
-#ifndef __WXMAC__
+    // A rendering engine change in Preferences applies in place
     resolveCanvasType();
-#endif
+
+    // Version control can have just been turned on or off.
+    RefreshGitCommitPane();
+
+    if( m_gitCommitPane )
+        m_gitCommitPane->ReloadAdvancedWindow();
 
     // Notify all tools the preferences have changed
     if( m_toolManager )
@@ -421,6 +426,12 @@ void EDA_DRAW_FRAME::OnUpdateSelectGrid( wxUpdateUIEvent& aEvent )
 
 
 void EDA_DRAW_FRAME::OnUpdateSelectZoom( wxUpdateUIEvent& aEvent )
+{
+    SyncZoomSelectBox();
+}
+
+
+void EDA_DRAW_FRAME::SyncZoomSelectBox()
 {
     if( m_zoomSelectBox == nullptr )
         return;
@@ -520,9 +531,12 @@ bool EDA_DRAW_FRAME::GetOverrideLocks() const
 
 bool EDA_DRAW_FRAME::IsGridVisible()
 {
-    wxCHECK( config(), true );
+    APP_SETTINGS_BASE* cfg = config();
 
-    return GetWindowSettings( config() )->grid.show;
+    if( !cfg )
+        return true;
+
+    return GetWindowSettings( cfg )->grid.show;
 }
 
 
@@ -550,9 +564,12 @@ void EDA_DRAW_FRAME::SetGridVisibility( bool aVisible )
 
 bool EDA_DRAW_FRAME::IsGridOverridden()
 {
-    wxCHECK( config(), false );
+    APP_SETTINGS_BASE* cfg = config();
 
-    return GetWindowSettings( config() )->grid.overrides_enabled;
+    if( !cfg )
+        return false;
+
+    return GetWindowSettings( cfg )->grid.overrides_enabled;
 }
 
 
@@ -785,6 +802,10 @@ void EDA_DRAW_FRAME::UpdateStatusBar()
 
     SetStatusText( GetZoomLevelIndicator(), 1 );
 
+    // Update-UI events come at most every m_UpdateUIEventInterval, so the last step of a zoom
+    // could leave the box one step behind the status bar until the mouse moves
+    SyncZoomSelectBox();
+
     // Absolute and relative cursor positions are handled by overloading this function and
     // handling the internal to user units conversion at the appropriate level.
 
@@ -938,28 +959,10 @@ void EDA_DRAW_FRAME::SwitchCanvas( EDA_DRAW_PANEL_GAL::GAL_TYPE aCanvasType )
 
 EDA_DRAW_PANEL_GAL::GAL_TYPE EDA_DRAW_FRAME::loadCanvasTypeSetting()
 {
-#ifdef __WXMAC__
-    // Cairo renderer doesn't handle Retina displays so there's really only one game
-    // in town for Mac
-    return EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL;
-#endif
+    EDA_DRAW_PANEL_GAL::GAL_TYPE canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL;
 
-    EDA_DRAW_PANEL_GAL::GAL_TYPE canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_NONE;
-    COMMON_SETTINGS* cfg = Pgm().GetCommonSettings();
-
-    if( cfg )
-        canvasType = static_cast<EDA_DRAW_PANEL_GAL::GAL_TYPE>( cfg->m_Graphics.canvas_type );
-
-    if( canvasType < EDA_DRAW_PANEL_GAL::GAL_TYPE_NONE
-            || canvasType >= EDA_DRAW_PANEL_GAL::GAL_TYPE_LAST )
-    {
-        wxASSERT( false );
-        canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_NONE;
-    }
-
-    // Legacy canvas no longer supported.  Switch to OpenGL, falls back to Cairo on failure
-    if( canvasType == EDA_DRAW_PANEL_GAL::GAL_TYPE_NONE )
-        canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL;
+    if( COMMON_SETTINGS* cfg = Pgm().GetCommonSettings() )
+        canvasType = EDA_DRAW_PANEL_GAL::ResolveStoredCanvasType( cfg->m_Graphics.canvas_type );
 
     wxString envCanvasType;
 
@@ -973,6 +976,12 @@ EDA_DRAW_PANEL_GAL::GAL_TYPE EDA_DRAW_FRAME::loadCanvasTypeSetting()
             canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_CAIRO;
         }
     }
+
+#ifdef __WXMAC__
+    // Cairo doesn't handle Retina displays, so it is not a valid screen backend on Mac
+    if( canvasType == EDA_DRAW_PANEL_GAL::GAL_TYPE_CAIRO )
+        canvasType = EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL;
+#endif
 
     return canvasType;
 }
@@ -1006,7 +1015,10 @@ bool EDA_DRAW_FRAME::saveCanvasTypeSetting( EDA_DRAW_PANEL_GAL::GAL_TYPE aCanvas
     }
 
     if( COMMON_SETTINGS* cfg = Pgm().GetCommonSettings() )
+    {
         cfg->m_Graphics.canvas_type = static_cast<int>( aCanvasType );
+        return true;
+    }
 
     return false;
 }
@@ -1126,7 +1138,7 @@ void PrintDrawingSheet( const RENDER_SETTINGS* aSettings, const PAGE_INFO& aPage
                         const wxString& aPageNumber, double aMils2Iu, const PROJECT* aProject,
                         const wxString& aSheetLayer, bool aIsFirstPage )
 {
-    DS_DRAW_ITEM_LIST drawList( unityScale );
+    DS_DRAW_ITEM_LIST drawList( unityScale, FOR_CANVAS );
 
     drawList.SetDefaultPenSize( aSettings->GetDefaultPenWidth() );
     drawList.SetPlotterMilsToIUfactor( aMils2Iu );
@@ -1273,6 +1285,43 @@ void EDA_DRAW_FRAME::UpdateProperties()
 }
 
 
+bool EDA_DRAW_FRAME::IsGitCommitPaneShown()
+{
+    return m_gitCommitPane && m_auimgr.GetPane( GitCommitPaneName() ).IsShown();
+}
+
+
+void EDA_DRAW_FRAME::ToggleGitCommitPane()
+{
+    if( !m_gitCommitPane )
+        return;
+
+    wxAuiPaneInfo& pane = m_auimgr.GetPane( GitCommitPaneName() );
+    bool           show = !pane.IsShown();
+
+    pane.Show( show );
+
+    if( show )
+        RefreshGitCommitPane();
+
+    m_auimgr.Update();
+}
+
+
+void EDA_DRAW_FRAME::RefreshGitCommitPane()
+{
+    if( !IsGitCommitPaneShown() )
+        return;
+
+    // Gated on the preference so no editor binds a repository behind it.
+    if( Pgm().GetCommonSettings()->m_Git.enableGit )
+        Prj().AttachGitRepository();
+
+    // Refreshed either way, or turning the preference off never reaches the panel.
+    m_gitCommitPane->RefreshFileList();
+}
+
+
 void EDA_DRAW_FRAME::CreateHotkeyPopup()
 {
     m_hotkeyPopup = new HOTKEY_CYCLE_POPUP( this );
@@ -1303,6 +1352,49 @@ void EDA_DRAW_FRAME::setupUIConditions()
     mgr->SetConditions( ACTIONS::millimetersUnits, ACTION_CONDITIONS().Check( cond.Units( EDA_UNITS::MM ) ) );
     mgr->SetConditions( ACTIONS::inchesUnits,      ACTION_CONDITIONS().Check( cond.Units( EDA_UNITS::INCH ) ) );
     mgr->SetConditions( ACTIONS::milsUnits,        ACTION_CONDITIONS().Check( cond.Units( EDA_UNITS::MILS ) ) );
+}
+
+
+void EDA_DRAW_FRAME::setArcModeConditions( const TOOL_ACTION&                                 aDrawArc,
+                                           const std::function<bool( const SELECTION& )>& aEnable )
+{
+    ACTION_MANAGER*   mgr = m_toolManager->GetActionManager();
+    const std::string arcToolPrefix = aDrawArc.GetName();
+
+    // Every arc tool action extends the plain action's name, so one compare covers them all
+    const SELECTION_CONDITION arcToolActive =
+            [this, arcToolPrefix]( const SELECTION& )
+            {
+                return CurrentToolName().starts_with( arcToolPrefix );
+            };
+
+    ARC_DRAW_MODE mode = ARC_DRAW_MODE::CENTER_START_END;
+
+    do
+    {
+        const SELECTION_CONDITION inMode =
+                [this, mode]( const SELECTION& )
+                {
+                    APP_SETTINGS_BASE* cfg = config();
+
+                    return cfg && cfg->m_ArcDrawMode == mode;
+                };
+
+        if( const TOOL_ACTION* action = drawArcAction( mode ) )
+            mgr->SetConditions( *action, ACTION_CONDITIONS().Enable( aEnable ).Check( inMode && arcToolActive ) );
+
+        mode = IncrementArcDrawMode( mode );
+    } while( mode != ARC_DRAW_MODE::CENTER_START_END );
+}
+
+
+void EDA_DRAW_FRAME::syncToolbarSelections()
+{
+    APP_SETTINGS_BASE* cfg = config();
+
+    // The arc group would otherwise start on its first entry and overwrite the saved mode
+    if( const TOOL_ACTION* action = cfg ? drawArcAction( cfg->m_ArcDrawMode ) : nullptr )
+        SelectToolbarAction( *action );
 }
 
 
@@ -1356,21 +1448,22 @@ void EDA_DRAW_FRAME::resolveCanvasType()
 {
     m_canvasType = loadCanvasTypeSetting();
 
-    // If we had an OpenGL failure this session, use the fallback GAL but don't update the
-    // user preference silently:
-
-    if( m_openGLFailureOccured && m_canvasType == EDA_DRAW_PANEL_GAL::GAL_TYPE_OPENGL )
+    // A canvas that failed this session falls back without changing the saved preference
+    if( CanvasFailed( m_canvasType ) )
         m_canvasType = EDA_DRAW_PANEL_GAL::GAL_FALLBACK;
 
     if( m_canvasType != GetCanvas()->GetBackend() )
     {
-        // Try to switch (will automatically fallback if necessary)
-        SwitchCanvas( m_canvasType );
+        // SwitchCanvas overwrites m_canvasType with whatever backend it ended up on
+        EDA_DRAW_PANEL_GAL::GAL_TYPE requested = m_canvasType;
 
-        if( GetCanvas()->GetBackend() != m_canvasType )
+        // Try to switch (will automatically fallback if necessary)
+        SwitchCanvas( requested );
+
+        if( GetCanvas()->GetBackend() != requested )
         {
             m_canvasType = GetCanvas()->GetBackend();
-            m_openGLFailureOccured = true; // Store failure for other EDA_DRAW_FRAMEs
+            m_failedCanvases.insert( requested ); // Store failure for other EDA_DRAW_FRAMEs
         }
     }
 }
@@ -1475,28 +1568,95 @@ std::vector<const PLUGIN_ACTION*> EDA_DRAW_FRAME::GetOrderedPluginActions( PLUGI
 }
 
 
+size_t EDA_DRAW_FRAME::AddApiPluginMenuItems( ACTION_MENU* aMenu )
+{
+    wxCHECK( aMenu, 0 );
+
+    API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
+
+    mgr.MenuBindings( m_ident ).clear();
+
+    std::vector<const PLUGIN_ACTION*> actions = GetOrderedPluginActions( PluginActionScope(), config() );
+
+    size_t count = 0;
+
+    for( const PLUGIN_ACTION* action : actions )
+    {
+        const std::vector<wxImage>& images =
+                KIPLATFORM::UI::IsDarkTheme() && !action->icon_dark.empty() ? action->icon_dark : action->icon_light;
+
+        int            iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
+        wxBitmapBundle icon;
+
+        if( images.empty() )
+        {
+            icon = KiBitmapBundleDef( BITMAPS::puzzle_piece, iconSize );
+        }
+        else
+        {
+            wxVector<wxBitmap> bitmaps;
+
+            for( const wxImage& img : images )
+                bitmaps.push_back( wxBitmap( img ) );
+
+            icon = BITMAP_STORE::MakeBitmapBundleDef( bitmaps, iconSize );
+        }
+
+        if( !icon.IsOk() )
+            continue;
+
+        wxMenuItem* item = KIUI::AddMenuItem( aMenu, wxID_ANY, action->name, action->description, icon );
+
+        Connect( item->GetId(), wxEVT_COMMAND_MENU_SELECTED,
+                 wxCommandEventHandler( EDA_DRAW_FRAME::OnApiPluginInvoke ) );
+
+        mgr.MenuBindings( m_ident ).insert( { item->GetId(), action->identifier } );
+
+        ++count;
+    }
+
+    return count;
+}
+
+
 void EDA_DRAW_FRAME::AddApiPluginTools( ACTION_TOOLBAR* aToolbar )
 {
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
 
-    mgr.ButtonBindings().clear();
+    mgr.ButtonBindings( m_ident ).clear();
 
     std::vector<const PLUGIN_ACTION*> actions = GetOrderedPluginActions( PluginActionScope(), config() );
+
+    int iconSize = Pgm().GetCommonSettings()->m_Appearance.toolbar_icon_size;
 
     for( const PLUGIN_ACTION* action : actions )
     {
         if( !IsPluginActionButtonVisible( *action, config() ) )
             continue;
 
-        const wxBitmapBundle& icon = KIPLATFORM::UI::IsDarkTheme() && action->icon_dark.IsOk() ? action->icon_dark
-                                                                                               : action->icon_light;
+        const std::vector<wxImage>& images = KIPLATFORM::UI::IsDarkTheme() && !action->icon_dark.empty()
+                                                ? action->icon_dark
+                                                : action->icon_light;
+
+        if( images.empty() )
+            continue;
+
+        wxVector<wxBitmap> bitmaps;
+
+        for( const wxImage& img : images )
+            bitmaps.push_back( wxBitmap( img ) );
+
+        wxBitmapBundle icon = BITMAP_STORE::MakeBitmapBundleDef( bitmaps, iconSize );
+
+        if( !icon.IsOk() )
+            continue;
 
         wxAuiToolBarItem* button = aToolbar->AddTool( wxID_ANY, wxEmptyString, icon, action->name );
 
         Connect( button->GetId(), wxEVT_COMMAND_MENU_SELECTED,
                  wxCommandEventHandler( EDA_DRAW_FRAME::OnApiPluginInvoke ) );
 
-        mgr.ButtonBindings().insert( { button->GetId(), action->identifier } );
+        mgr.ButtonBindings( m_ident ).insert( { button->GetId(), action->identifier } );
     }
 }
 
@@ -1505,13 +1665,20 @@ void EDA_DRAW_FRAME::OnApiPluginInvoke( wxCommandEvent& aEvent )
 {
     API_PLUGIN_MANAGER& mgr = Pgm().GetPluginManager();
 
-    if( mgr.ButtonBindings().count( aEvent.GetId() ) )
-    {
-        std::shared_ptr<REPORTER> reporter;
+    std::optional<wxString> identifier;
 
-        if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
-            reporter = std::make_shared<STATUSBAR_WARNING_REPORTER>( statusBar, wxS( "plugin" ) );
+    if( mgr.ButtonBindings( m_ident ).contains( aEvent.GetId() ) )
+        identifier = mgr.ButtonBindings( m_ident ).at( aEvent.GetId() );
+    else if( mgr.MenuBindings( m_ident ).contains( aEvent.GetId() ) )
+        identifier = mgr.MenuBindings( m_ident ).at( aEvent.GetId() );
 
-        mgr.InvokeAction( mgr.ButtonBindings().at( aEvent.GetId() ), reporter );
-    }
+    if( !identifier )
+        return;
+
+    std::shared_ptr<REPORTER> reporter;
+
+    if( KISTATUSBAR* statusBar = dynamic_cast<KISTATUSBAR*>( GetStatusBar() ) )
+        reporter = std::make_shared<STATUSBAR_WARNING_REPORTER>( statusBar, wxS( "plugin" ) );
+
+    mgr.InvokeAction( *identifier, reporter );
 }

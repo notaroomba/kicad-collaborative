@@ -30,6 +30,8 @@
 
 #include <vector>
 
+#include "dsnlexer.h"
+
 
 class DRC_RE_BASE_CONSTRAINT_DATA : public RULE_EDITOR_DATA_BASE
 {
@@ -107,6 +109,14 @@ public:
 
     void SetWasEdited( bool aEdited ) { m_wasEdited = aEdited; }
 
+    int GetOriginalEntryCount() const { return m_originalEntryCount; }
+
+    void SetOriginalEntryCount( int aCount ) { m_originalEntryCount = aCount; }
+
+    int GetSourceRule() const { return m_sourceRule; }
+
+    void SetSourceRule( int aIndex ) { m_sourceRule = aIndex; }
+
     SEVERITY GetSeverity() const { return m_severity; }
 
     void SetSeverity( SEVERITY aSeverity ) { m_severity = aSeverity; }
@@ -123,25 +133,30 @@ public:
         m_generatedRule = source.m_generatedRule;
         m_originalRuleText = source.m_originalRuleText;
         m_wasEdited = source.m_wasEdited;
+        m_originalEntryCount = source.m_originalEntryCount;
         m_severity = source.m_severity;
         m_ruleCondition = source.m_ruleCondition;
     }
 
     /**
-     * Format a rule name for use in S-expression output while preserving the exact
-     * name the user chose.  If the name is a bare symbol (non-empty, alphanumeric
-     * plus `_`, `-` or `.`, and not starting with a digit) it is emitted unquoted;
-     * otherwise it is emitted as a double-quoted string with embedded quotes
-     * escaped via the standard CTX_QUOTED_STR encoding.
+     * Format a rule name for use in S-expression output while preserving the exact name
+     * the user chose.  If the name is a bare symbol (non-empty, alphanumeric plus `_`,
+     * `-` or `.`, and failing the DSNLEXER::isNumber() test) it is emitted  unquoted;
+     * otherwise it is emitted as a double-quoted string with embedded quotes escaped via
+     * the standard CTX_QUOTED_STR encoding.
      */
     static wxString formatRuleName( const wxString& aRuleName )
     {
         if( aRuleName.IsEmpty() )
             return wxString( wxS( "\"\"" ) );
 
-        bool needsQuoting = false;
+        bool              needsQuoting = false;
+        std::vector<char> buffer( aRuleName.size() );
 
-        if( wxIsdigit( *aRuleName.begin() ) )
+        for( size_t ii = 0; ii < aRuleName.size(); ++ii )
+            buffer[ii] = aRuleName[ii];
+
+        if( DSNLEXER::isNumber( buffer.data(), buffer.data() + aRuleName.size() ) )
         {
             needsQuoting = true;
         }
@@ -254,6 +269,8 @@ private:
     wxString m_generatedRule;
     wxString m_originalRuleText;
     bool     m_wasEdited = false;
+    int                       m_originalEntryCount = 1;
+    int      m_sourceRule = -1; ///< Not copied, since a duplicate is a new rule
     SEVERITY m_severity = RPT_SEVERITY_UNDEFINED;
 };
 

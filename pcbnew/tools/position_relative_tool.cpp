@@ -53,10 +53,13 @@
  * moves. A dedup set ensures each footprint is only moved once even when multiple of its pads
  * are in the selection.
  *
+ * @param[in] aSelection is the selected objects to move.
+ * @param[in] aMoveVec is the distance to move \a aSelection.
+ * @param[in] aCommit is the commit object to handle undo/redo actions.
  * @param aAllowFreePads when true, pads are moved individually without promotion.
  */
 static void moveSelectionBy( const PCB_SELECTION& aSelection, const VECTOR2I& aMoveVec,
-                             BOARD_COMMIT& commit, bool aAllowFreePads )
+                             BOARD_COMMIT& aCommit, bool aAllowFreePads )
 {
     std::set<BOARD_ITEM*> moved;
 
@@ -73,7 +76,7 @@ static void moveSelectionBy( const PCB_SELECTION& aSelection, const VECTOR2I& aM
         if( !moved.insert( boardItem ).second )
             continue;
 
-        commit.Modify( boardItem, nullptr, RECURSE_MODE::RECURSE );
+        aCommit.Modify( boardItem, nullptr, RECURSE_MODE::RECURSE );
         boardItem->Move( aMoveVec );
     }
 }
@@ -90,8 +93,19 @@ POSITION_RELATIVE_TOOL::POSITION_RELATIVE_TOOL() :
 
 void POSITION_RELATIVE_TOOL::Reset( RESET_REASON aReason )
 {
-    if( aReason != RUN )
-        m_commit = std::make_unique<BOARD_COMMIT>( this );
+    if( aReason == MODEL_RELOAD || aReason == SUPERMODEL_RELOAD || aReason == SHUTDOWN )
+    {
+        if( m_dialog )
+        {
+            m_dialog->Destroy();
+            m_dialog = nullptr;
+        }
+
+        m_selection.Clear();
+        m_selectionAnchor = VECTOR2I();
+    }
+
+    m_commit = std::make_unique<BOARD_COMMIT>( frame() );
 }
 
 
@@ -316,7 +330,9 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
             break;
         }
         // click or drag starts
-        else if( !originSet && ( evt->IsDrag( BUT_LEFT ) || evt->IsClick( BUT_LEFT ) ) )
+        else if( !originSet && (   evt->IsDrag( BUT_LEFT )
+                                || evt->IsClick( BUT_LEFT )
+                                || evt->IsAction( &ACTIONS::cursorClick ) ) )
         {
             twoPtMgr.SetOrigin( cursorPos );
             twoPtMgr.SetEnd( cursorPos );
@@ -329,7 +345,9 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
             originSet = true;
         }
         // second click or mouse up after drag ends
-        else if( originSet && ( evt->IsClick( BUT_LEFT ) || evt->IsMouseUp( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsClick( BUT_LEFT )
+                               || evt->IsAction( &ACTIONS::cursorClick )
+                               || evt->IsMouseUp( BUT_LEFT ) ) )
         {
             // Hide the popup text so it doesn't get in the way
             statusPopup.Hide();
@@ -363,7 +381,9 @@ int POSITION_RELATIVE_TOOL::InteractiveOffset( const TOOL_EVENT& aEvent )
             statusPopup.Popup();
         }
         // move or drag when origin set updates rules
-        else if( originSet && ( evt->IsMotion() || evt->IsDrag( BUT_LEFT ) ) )
+        else if( originSet && (   evt->IsMotion()
+                               || evt->IsAction( &ACTIONS::refreshPreview )
+                               || evt->IsDrag( BUT_LEFT ) ) )
         {
             auto snap = LEADER_MODE::DIRECT;
 

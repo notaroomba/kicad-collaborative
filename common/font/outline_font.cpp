@@ -24,6 +24,7 @@
 #include <bezier_curves.h>
 #include <geometry/shape_poly_set.h>
 #include <font/fontconfig.h>
+#include <font/glyph_types.h>
 #include <font/outline_font.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -245,7 +246,7 @@ void OUTLINE_FONT::GetLinesAsGlyphs( std::vector<std::unique_ptr<GLYPH>>* aGlyph
     for( size_t i = 0; i < strings.GetCount(); i++ )
     {
         (void) drawMarkup( nullptr, aGlyphs, strings.Item( i ), positions[i], aAttrs.m_Size,
-                           aAttrs.m_Angle, aAttrs.m_Mirrored, aPosition, textStyle, aFontMetrics );
+                           aAttrs.m_Angle.GetAngle(), aAttrs.m_Mirrored, aPosition, textStyle, aFontMetrics );
     }
 }
 
@@ -487,6 +488,11 @@ VECTOR2I OUTLINE_FONT::getTextAsGlyphsUnlocked( BOX2I* aBBox, std::vector<std::u
     VECTOR2D scaleFactor( glyphSize.x / faceSize(), -glyphSize.y / faceSize() );
     scaleFactor = scaleFactor * m_outlineFontSizeCompensation;
 
+    VECTOR2D origin( aPosition );
+
+    if( supersub )
+        origin.y += glyphSize.y * GetSuperSubSizeMultiplier() * GetSuperSubBaselineOffset( aTextStyle );
+
     VECTOR2I cursor( 0, 0 );
 
     if( aGlyphs )
@@ -549,13 +555,8 @@ VECTOR2I OUTLINE_FONT::getTextAsGlyphsUnlocked( BOX2I* aBBox, std::vector<std::u
                 {
                     VECTOR2D pt( v + cursor );
 
-                    if( IsSubscript( aTextStyle ) )
-                        pt.y += m_subscriptVerticalOffset * scaler;
-                    else if( IsSuperscript( aTextStyle ) )
-                        pt.y += m_superscriptVerticalOffset * scaler;
-
                     pt *= scaleFactor;
-                    pt += aPosition;
+                    pt += origin;
 
                     if( aMirror )
                         pt.x = aOrigin.x - ( pt.x - aOrigin.x );

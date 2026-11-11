@@ -23,6 +23,7 @@
 #ifndef __PNS_DIFF_PAIR_H
 #define __PNS_DIFF_PAIR_H
 
+#include <core/minoptmax.h>
 #include <vector>
 
 #include "pns_line.h"
@@ -34,6 +35,47 @@
 namespace PNS {
 
 class DIFF_PAIR;
+class DP_PRIMITIVE_PAIR;
+
+typedef MINOPTMAX<int> DP_GAP_CONSTRAINT;
+
+/* Diff pair dimensions on a single layer */
+class DP_DIMENSIONS
+{
+public:
+    DP_DIMENSIONS( int aWidth = 0, int aGap = 0, int aViaGap = 0, int aViaDiameter = 0, int aMinClearance = 0 ) :
+            m_width( aWidth ),
+            m_gap( aGap ),
+            m_viaGap( aViaGap ),
+            m_viaDiameter( aViaDiameter ),
+            m_minClearance( aMinClearance )
+    {
+    }
+
+    int Width() const { return m_width; }
+    int Gap() const { return m_gap; }
+    int ViaGap() const { return m_viaGap; }
+    int ViaDiameter() const { return m_viaDiameter; }
+    int MinClearance() const { return m_minClearance; }
+
+    void SetGap( int aGap ) { m_gap = aGap; }
+
+    void SetGapConstraint( const DP_GAP_CONSTRAINT& aGapConstraint ) { m_gapConstraint = aGapConstraint; }
+
+    void SetMinClearance( int aClearance ) { m_minClearance = aClearance; }
+
+    const DP_GAP_CONSTRAINT& GapConstraint() const { return m_gapConstraint; }
+
+    const wxString Format() const;
+
+private:
+    int               m_width;
+    int               m_gap;
+    int               m_viaGap;
+    int               m_viaDiameter;
+    int               m_minClearance;
+    DP_GAP_CONSTRAINT m_gapConstraint;
+};
 
 /**
  * Define a "gateway" for routing a differential pair - e.g. a pair of points (anchors) with
@@ -44,17 +86,49 @@ class DP_GATEWAY
 {
 public:
     DP_GATEWAY( const VECTOR2I& aAnchorP, const VECTOR2I& aAnchorN, bool aIsDiagonal,
-                int aAllowedEntryAngles = DIRECTION_45::ANG_OBTUSE, int aPriority = 0 ) :
+                int aAllowedEntryAngles = DIRECTION_45::ANG_OBTUSE, int aPriority = 0, int aDirectionMask = 0,
+                const wxString aName = wxT( "" ) ) :
             m_anchorP( aAnchorP ),
-            m_anchorN( aAnchorN ), m_isDiagonal( aIsDiagonal ),
-            m_allowedEntryAngles( aAllowedEntryAngles ), m_priority( aPriority )
+            m_anchorN( aAnchorN ),
+            m_isDiagonal( aIsDiagonal ),
+            m_allowedEntryAngles( aAllowedEntryAngles ),
+            m_priority( aPriority ),
+            m_directionMask( aDirectionMask ),
+            m_name( aName )
     {
         m_hasEntryLines = false;
+    }
+
+    DP_GATEWAY()
+    {
+        
     }
 
     ~DP_GATEWAY()
     {
     }
+
+    void SetDimensions( const DP_DIMENSIONS& aDims ) {  m_dims = aDims; }
+
+    void SetPrimaryDirection( DIRECTION_45 aPrimDir )
+    {
+        m_directionMask = aPrimDir.Mask();
+    }    
+
+    void AddPrimaryDirection( DIRECTION_45 aPrimDir )
+    {
+        m_directionMask |= aPrimDir.Mask();
+    }
+
+    bool HasPrimaryDirection() const { return m_directionMask != 0; }
+
+    int PrimaryDirectionMask() const
+    {
+        return m_directionMask;
+    }
+
+    const DP_DIMENSIONS& Dimensions() const { return m_dims; }
+    void SetDirections( DIRECTION_45 dP, DIRECTION_45 dN ) { m_dirP = dP; m_dirN = dN; }
 
     /**
      * @return true if the gateway anchors lie on a diagonal line.
@@ -63,6 +137,9 @@ public:
     {
         return m_isDiagonal;
     }
+
+    void SetName( const wxString& aName) { m_name = aName; }
+    const wxString GetName() const;
 
     const VECTOR2I& AnchorP() const { return m_anchorP; }
 
@@ -93,6 +170,12 @@ public:
         m_hasEntryLines = true;
     }
 
+    void SetAnchors( const VECTOR2I& aP, const VECTOR2I& aN )
+    {
+        m_anchorP = aP;
+        m_anchorN = aN;
+    }
+
     const SHAPE_LINE_CHAIN& EntryP() const { return m_entryP; }
     const SHAPE_LINE_CHAIN& EntryN() const { return m_entryN; }
     const DIFF_PAIR Entry() const ;
@@ -104,21 +187,33 @@ public:
         return m_hasEntryLines;
     }
 
+    std::optional<DP_GATEWAY> Extend( int aLength );
+    std::optional<DP_GATEWAY> AddTurns( bool aSide, bool a90Deg, bool aLeft, bool aWiggle );
+
+    DIRECTION_45 DirP() const { return m_dirP; };
+    DIRECTION_45 DirN() const { return m_dirN; };
+
 private:
+    DP_DIMENSIONS    m_dims;
+    DIRECTION_45     m_dirP, m_dirN;
     SHAPE_LINE_CHAIN m_entryP, m_entryN;
-    bool m_hasEntryLines;
-    VECTOR2I m_anchorP, m_anchorN;
-    bool m_isDiagonal;
-    int m_allowedEntryAngles;
-    int m_priority;
+    bool             m_hasEntryLines;
+    VECTOR2I         m_anchorP, m_anchorN;
+    bool             m_isDiagonal;
+    int              m_allowedEntryAngles;
+    int              m_priority;
+    int              m_directionMask;
+    wxString         m_name;
 };
 
 /**
  * Store starting/ending primitives (pads, vias or segments) for a differential pair.
  */
-class DP_PRIMITIVE_PAIR
+class DP_PRIMITIVE_PAIR : public ITEM_OWNER
 {
 public:
+    static constexpr double DP_ASSUME_PRIMS_COLINEAR_FACTOR = 0.1;
+
     DP_PRIMITIVE_PAIR():
         m_primP( nullptr ), m_primN( nullptr ) {};
 
@@ -129,7 +224,7 @@ public:
     ~DP_PRIMITIVE_PAIR();
 
     void SetAnchors( const VECTOR2I& aAnchorP, const VECTOR2I& aAnchorN );
-
+    void SetPrimitives(ITEM* aPrimP, ITEM* aPrimN );
     const VECTOR2I& AnchorP() const { return m_anchorP; }
     const VECTOR2I& AnchorN() const { return m_anchorN; }
 
@@ -147,18 +242,55 @@ public:
     void CursorOrientation( const VECTOR2I& aCursorPos, VECTOR2I& aMidpoint,
                             VECTOR2I& aDirection ) const;
 
-    void dump()
+    void SetIsMidtrace( bool aMidtrace )
     {
-        printf( "-- Prim-P %p anchor [%d, %d]\n", m_primP, m_anchorP.x, m_anchorP.y );
-        printf( "-- Prim-N %p anchor [%d, %d]\n", m_primN, m_anchorN.x, m_anchorN.y );
+        m_isMidtrace = aMidtrace;
     }
+
+    bool IsMidtrace() const
+    {
+        return m_isMidtrace;
+    }
+
+    void Unlink()
+    {
+        m_primP = m_primN = nullptr;
+    }
+
+    void            SetName( const wxString& aName ) { m_name = aName; }
+    const wxString& GetName() const { return m_name; }
+
+    bool HasDefinedGap() const { return m_gap.has_value(); }
+    int  GetGap() const { return *m_gap; }
+    void SetGap( int aGap ) { m_gap = aGap; }
+
+    void SetFixedDirection( DIRECTION_45 aDir )
+    {
+        m_fixedDirection = aDir;
+    }
+
+    bool HasFixedDirection() const {
+        return m_fixedDirection.has_value();
+    }
+
+    DIRECTION_45 FixedDirection() const 
+    {
+        return m_fixedDirection.value();
+    }
+
+    // returns the minimum dimension of the parent objects (be that width/height, thickness, radius)
+    int GetMinDimension() const;
 
 private:
     DIRECTION_45 anchorDirection( const ITEM* aItem, const VECTOR2I& aP ) const;
 
-    ITEM* m_primP;
-    ITEM* m_primN;
-    VECTOR2I m_anchorP, m_anchorN;
+    ITEM*                       m_primP;
+    ITEM*                       m_primN;
+    VECTOR2I                    m_anchorP, m_anchorN;
+    bool                        m_isMidtrace = false;
+    std::optional<DIRECTION_45> m_fixedDirection;
+    wxString                    m_name;
+    std::optional<int>          m_gap;
 };
 
 /**
@@ -167,46 +299,62 @@ private:
 class DP_GATEWAYS
 {
 public:
-    DP_GATEWAYS( int aGap ):
-        m_gap( aGap ),
-        m_viaGap( aGap )
+    DP_GATEWAYS( const DP_DIMENSIONS& aDims = DP_DIMENSIONS() ):
+        m_dims( aDims )
     {
         // Do not leave uninitialized members, and keep static analyzer quiet:
-        m_viaDiameter = 0;
-        m_fitVias = true;
+        m_fitVias = false;
     }
 
     void Clear() { m_gateways.clear(); }
 
-    void SetFitVias( bool aEnable, int aDiameter = 0, int aViaGap = -1 )
+    void SetFitVias( bool aEnable )
     {
         m_fitVias = aEnable;
-        m_viaDiameter = aDiameter;
-
-        if( aViaGap < 0 )
-            m_viaGap = m_gap;
-        else
-            m_viaGap = aViaGap;
     }
 
+    bool FittingVias() const {
+        return m_fitVias;
+    }
 
-    void BuildForCursor( const VECTOR2I& aCursorPos );
-    void BuildOrthoProjections( DP_GATEWAYS& aEntries, const VECTOR2I& aCursorPos,
-                                int aOrthoScore );
-    void BuildGeneric( const VECTOR2I& p0_p, const VECTOR2I& p0_n, bool aBuildEntries = false,
-                       bool aViaMode = false );
+    void BuildForCursor( const VECTOR2I& aCursorPos, int aDirectionMask = -1 );
+    void BuildOrthoProjections( DP_GATEWAYS& aEntries, const VECTOR2I& aCursorPos, int aOrthoScore );
+    void BuildGeneric( const VECTOR2I& p0_p, const VECTOR2I& p0_n, int aColinearityThreshold = 0,
+                       bool aBuildEntries = false, bool aViaMode = false );
     void BuildFromPrimitivePair( const DP_PRIMITIVE_PAIR& aPair, bool aPreferDiagonal );
 
-    bool FitGateways( DP_GATEWAYS& aEntry, DP_GATEWAYS& aTarget, bool aPrefDiagonal,
-                      DIFF_PAIR& aDp );
+    struct FIT_RESULT
+    {
+        SHAPE_LINE_CHAIN p, n;
+        DP_GATEWAY       entry, target;
+        float            aspectRatio = 0.0f;
+        float            coupledRatio = 0.0f;
+        bool             isDiagonal = false;
+        int              score = 0;
+        bool             diagonal = false;
+        bool             entryAngleOK = false;
+        bool             targetAngleOK = false;
+    };
+
+    std::vector<FIT_RESULT> FitGateways( DP_GATEWAYS& aEntry, DP_GATEWAYS& aTarget, bool aFitVias );
 
     std::vector<DP_GATEWAY>& Gateways() { return m_gateways; }
 
     const std::vector<DP_GATEWAY>& CGateways() const { return m_gateways; }
 
-    void FilterByOrientation( int aAngleMask, DIRECTION_45 aRefOrientation );
+    void FilterByOrientation( int aDirectionMask );
+
+    void SetDimensions( const DP_DIMENSIONS& aDims )
+    {
+        m_dims = aDims;
+        for( auto& gw : m_gateways )
+            gw.SetDimensions( aDims );
+    }
 
 private:
+
+    void addGateway( DP_GATEWAY& aGw, const wxString&name = wxT(""), bool aAddTurns = false );
+
     struct DP_CANDIDATE
     {
         SHAPE_LINE_CHAIN p, n;
@@ -216,13 +364,12 @@ private:
 
     bool checkDiagonalAlignment( const VECTOR2I& a, const VECTOR2I& b ) const;
     void buildDpContinuation( const DP_PRIMITIVE_PAIR& aPair, bool aIsDiagonal );
-    void buildEntries( const VECTOR2I& p0_p, const VECTOR2I& p0_n );
+    
+    void buildEntries( DP_GATEWAY& aGw, const VECTOR2I& p0_p, const VECTOR2I& p0_n );
+    void buildFromPads( const DP_PRIMITIVE_PAIR& aPair );
 
-    int  m_gap;
-    int  m_viaGap;
-    int  m_viaDiameter;
+    DP_DIMENSIONS m_dims;
     bool m_fitVias;
-
     std::vector<DP_GATEWAY> m_gateways;
 };
 
@@ -234,6 +381,9 @@ private:
 class DIFF_PAIR : public LINK_HOLDER
 {
 public:
+
+    static constexpr int DP_PARALLELITY_THRESHOLD = 10;
+
     struct COUPLED_SEGMENTS
     {
         COUPLED_SEGMENTS ( const SEG& aCoupledP, const SEG& aParentP, int aIndexP,
@@ -243,7 +393,9 @@ public:
             parentP( aParentP ),
             parentN( aParentN ),
             indexP( aIndexP ),
-            indexN( aIndexN )
+            indexN( aIndexN ),
+            linkP( nullptr ),
+            linkN( nullptr )
         {}
 
         SEG coupledP;
@@ -252,74 +404,51 @@ public:
         SEG parentN;
         int indexP;
         int indexN;
+        ITEM *linkP;
+        ITEM *linkN;
     };
 
     typedef std::vector<COUPLED_SEGMENTS> COUPLED_SEGMENTS_VEC;
 
-    DIFF_PAIR() :
+    DIFF_PAIR( const DP_DIMENSIONS& aDims = DP_DIMENSIONS()  ) :
         LINK_HOLDER( ITEM::DIFF_PAIR_T ),
         m_hasVias( false )
     {
-        // Initialize some members, to avoid uninitialized variables.
-        m_net_p = nullptr;
-        m_net_n = nullptr;
-        m_width = 0;
-        m_gap = 0;
-        m_viaGap = 0;
-        m_maxUncoupledLength = 0;
-        m_chamferLimit = 0;
-    }
-
-    DIFF_PAIR( int aGap ) :
-        LINK_HOLDER( ITEM::DIFF_PAIR_T ),
-        m_hasVias( false )
-    {
-        m_gapConstraint = aGap;
-
         // Initialize other members, to avoid uninitialized variables.
         m_net_p = nullptr;
         m_net_n = nullptr;
-        m_width = 0;
-        m_gap = 0;
-        m_viaGap = 0;
         m_maxUncoupledLength = 0;
         m_chamferLimit = 0;
+        m_dims = aDims;
     }
 
-    DIFF_PAIR( const SHAPE_LINE_CHAIN &aP, const SHAPE_LINE_CHAIN& aN, int aGap = 0 ) :
+    DIFF_PAIR( const SHAPE_LINE_CHAIN &aP, const SHAPE_LINE_CHAIN& aN, const DP_DIMENSIONS& aDims = DP_DIMENSIONS() ) :
         LINK_HOLDER( ITEM::DIFF_PAIR_T ),
         m_n( aN ),
         m_p( aP ),
+        m_dims( aDims ),
         m_hasVias( false )
     {
-        m_gapConstraint = aGap;
-
         // Initialize other members, to avoid uninitialized variables.
         m_net_p = nullptr;
         m_net_n = nullptr;
-        m_width = 0;
-        m_gap = 0;
-        m_viaGap = 0;
         m_maxUncoupledLength = 0;
         m_chamferLimit = 0;
     }
 
-    DIFF_PAIR( const LINE &aLineP, const LINE &aLineN, int aGap = 0 ) :
+    DIFF_PAIR( const LINE &aLineP, const LINE &aLineN, const DP_DIMENSIONS& aDims = DP_DIMENSIONS() ) :
         LINK_HOLDER( ITEM::DIFF_PAIR_T ),
         m_line_p( aLineP ),
         m_line_n( aLineN ),
+        m_dims( aDims ),
         m_hasVias( false )
     {
-        m_gapConstraint = aGap;
         m_net_p = aLineP.Net();
         m_net_n = aLineN.Net();
         m_p = aLineP.CLine();
         m_n = aLineN.CLine();
 
         // Do not leave uninitialized members, and keep static analyzer quiet:
-        m_width  = 0;
-        m_gap  = 0;
-        m_viaGap  = 0;
         m_maxUncoupledLength  = 0;
         m_chamferLimit  = 0;
     }
@@ -354,12 +483,9 @@ public:
         m_hasVias = aOther.m_hasVias;
         m_net_n = aOther.m_net_n;
         m_net_p = aOther.m_net_p;
-        m_width = aOther.m_width;
-        m_gap = aOther.m_gap;
-        m_viaGap = aOther.m_viaGap;
+        m_dims = aOther.m_dims;
         m_maxUncoupledLength = aOther.m_maxUncoupledLength;
         m_chamferLimit = aOther.m_chamferLimit;
-        m_gapConstraint = aOther.m_gapConstraint;
         return *this;
     }
 
@@ -378,15 +504,19 @@ public:
             m_hasVias = aOther.m_hasVias;
             m_net_n = aOther.m_net_n;
             m_net_p = aOther.m_net_p;
-            m_width = aOther.m_width;
-            m_gap = aOther.m_gap;
-            m_viaGap = aOther.m_viaGap;
+            m_dims = aOther.m_dims;
             m_maxUncoupledLength = aOther.m_maxUncoupledLength;
             m_chamferLimit = aOther.m_chamferLimit;
-            m_gapConstraint = aOther.m_gapConstraint;
         }
 
         return *this;
+    }
+    
+    void SetDimensions( const DP_DIMENSIONS& aDims ) {  m_dims = aDims; }
+    
+    void SetGap( int aGap )
+    {
+        m_dims.SetGap( aGap );
     }
 
     virtual void ClearLinks() override
@@ -420,26 +550,6 @@ public:
     {
         m_net_p = aP;
         m_net_n = aN;
-    }
-
-    void SetWidth( int aWidth )
-    {
-        m_width = aWidth;
-        m_n.SetWidth( aWidth );
-        m_p.SetWidth( aWidth );
-    }
-
-    int Width() const { return m_width; }
-
-    void SetGap( int aGap )
-    {
-        m_gap = aGap;
-        m_gapConstraint = RANGED_NUM<int>( m_gap, 10000, 10000 );
-    }
-
-    int Gap() const
-    {
-        return m_gap;
     }
 
     void AppendVias( const VIA &aViaP, const VIA& aViaN )
@@ -505,10 +615,12 @@ public:
 
     double CoupledLength() const;
     double TotalLength() const;
-    double CoupledLengthFactor() const;
     double Skew() const;
 
-    void CoupledSegmentPairs( COUPLED_SEGMENTS_VEC& aPairs ) const;
+    
+    void CoupledSegmentPairs( COUPLED_SEGMENTS_VEC& aPairs, 
+        bool aUseGapConstraint = true,
+        const std::optional<DP_GAP_CONSTRAINT>& aOverrideGapConstraint = std::optional<DP_GAP_CONSTRAINT>() ) const;
 
     void Clear()
     {
@@ -530,22 +642,39 @@ public:
     const SHAPE_LINE_CHAIN& CP() const { return m_p; }
     const SHAPE_LINE_CHAIN& CN() const { return m_n; }
 
-    bool BuildInitial( const DP_GATEWAY& aEntry, const DP_GATEWAY& aTarget, bool aPrefDiagonal );
+    bool BuildInitial( const DP_GATEWAY& aEntry, const DP_GATEWAY& aTarget, bool aPrefDiagonal, bool aFitVias, float& aBestCouplingRatio, float& aAspectRatio );
     bool CheckConnectionAngle( const DIFF_PAIR &aOther, int allowedAngles ) const;
     int CoupledLength( const SEG& aP, const SEG& aN ) const;
 
-    int64_t CoupledLength( const SHAPE_LINE_CHAIN& aP, const SHAPE_LINE_CHAIN& aN ) const;
+    std::pair<int64_t, bool> CoupledLength( const SHAPE_LINE_CHAIN& aP, const SHAPE_LINE_CHAIN& aN ) const;
 
-    const RANGED_NUM<int> GapConstraint() const
+    const DP_GAP_CONSTRAINT GapConstraint() const
     {
-        return m_gapConstraint;
+        return m_dims.GapConstraint();
     }
 
+    void SetLines( const LINE& aP, const LINE& aN )
+    {
+        m_line_p = aP;
+        m_line_n = aN;
+    }
+
+    std::optional<DP_PRIMITIVE_PAIR> BuildMidpairIntersection( PNS::SEGMENT* aStartSeg, const VECTOR2I& aP );
+
+    int GuessMostLikelyGap() const;
+    const DP_DIMENSIONS& Dimensions() const { return m_dims; }
+
+    DIRECTION_45 DirP( bool aEnd ) const { return getDirection( true, aEnd ); }
+    DIRECTION_45 DirN( bool aEnd ) const { return getDirection( false, aEnd ); }
+
 private:
+
+    DIRECTION_45 getDirection( bool aIsP, bool aEnd ) const;
+
     void updateLine( LINE &aLine, const SHAPE_LINE_CHAIN& aShape, NET_HANDLE aNet, const VIA& aVia )
     {
         aLine.SetShape( aShape );
-        aLine.SetWidth( m_width );
+        aLine.SetWidth( m_dims.Width() );
         aLine.SetNet( aNet );
         aLine.SetLayer( Layers().Start() );
         aLine.SetParent( m_parent );
@@ -559,14 +688,11 @@ private:
     LINE m_line_p, m_line_n;
     VIA m_via_p, m_via_n;
 
+    DP_DIMENSIONS m_dims;
     bool m_hasVias;
     NET_HANDLE m_net_p, m_net_n;
-    int m_width;
-    int m_gap;
-    int m_viaGap;
     int m_maxUncoupledLength;
     int m_chamferLimit;
-    RANGED_NUM<int> m_gapConstraint;
 };
 
 }

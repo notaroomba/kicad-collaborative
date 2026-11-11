@@ -127,11 +127,19 @@ INSPECT_RESULT SCH_COLLECTOR::Inspect( EDA_ITEM* aItem, void* aTestData )
 
         if( schItem && schItem->Type() != SCH_PIN_T )
         {
-            if( m_Unit && schItem->GetUnit() && schItem->GetUnit() != m_Unit )
+            if( m_Unit != ALL_UNITS
+                    && schItem->GetUnit() != ALL_UNITS
+                    && schItem->GetUnit() != m_Unit )
+            {
                 return INSPECT_RESULT::CONTINUE;
+            }
 
-            if( m_BodyStyle && schItem->GetBodyStyle() && schItem->GetBodyStyle() != m_BodyStyle )
+            if( m_BodyStyle != ALL_BODY_STYLES
+                    && schItem->GetBodyStyle() != ALL_BODY_STYLES
+                    && schItem->GetBodyStyle() != m_BodyStyle )
+            {
                 return INSPECT_RESULT::CONTINUE;
+            }
         }
     }
 
@@ -208,17 +216,17 @@ bool SCH_COLLECTOR::IsCorner() const
 }
 
 
-void CollectOtherUnits( const wxString& aRef, int aUnit, const LIB_ID& aLibId,
-                        SCH_SHEET_PATH& aSheet, std::vector<SCH_SYMBOL*>* otherUnits )
+void CollectOtherUnits( const wxString& aRef, int aUnit, const LIB_ID& aLibId, SCH_SHEET_PATH& aSheet,
+                        std::vector<SCH_SYMBOL*>* otherUnits )
 {
     SCH_REFERENCE_LIST symbols;
-    aSheet.GetSymbols( symbols, SYMBOL_FILTER_ALL );
+    aSheet.GetSymbols( symbols, SYMBOL_FILTER_NON_POWER );
 
-    for( unsigned i = 0; i < symbols.GetCount(); i++ )
+    for( int i = 0; i < (int) symbols.GetCount(); i++ )
     {
-        SCH_REFERENCE symbol = symbols[i];
+        const SCH_REFERENCE& symbol = symbols[i];
 
-        if( symbol.GetRef() == aRef
+        if( symbol.GetComposedRef() == aRef
                 && symbol.GetSymbol()->GetLibId() == aLibId
                 && symbol.GetUnit() != aUnit )
         {

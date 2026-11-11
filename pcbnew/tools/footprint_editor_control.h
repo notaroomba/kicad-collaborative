@@ -44,7 +44,7 @@ public:
     bool Init() override;
 
     int NewFootprint( const TOOL_EVENT& aEvent );
-    int CreateFootprint( const TOOL_EVENT& aEvent );
+    int CreateFootprintFromWizard( const TOOL_EVENT& aEvent );
 
     int Save( const TOOL_EVENT& aEvent );
     int SaveAs( const TOOL_EVENT& aEvent );
@@ -59,6 +59,7 @@ public:
     int DeleteFootprint( const TOOL_EVENT& aEvent );
     int ImportFootprint( const TOOL_EVENT& aEvent );
     int ExportFootprint( const TOOL_EVENT& aEvent );
+    int ExportFootprintAsSVG( const TOOL_EVENT& aEvent );
 
     /// Diff the currently-selected footprint library against another .pretty directory.
     int CompareLibraryWithFile( const TOOL_EVENT& aEvent );
@@ -78,17 +79,14 @@ public:
     void CrossProbe( const PCB_MARKER* aMarker );
     void DestroyCheckerDialog();
 
+    int ShowFootprintUsers( const TOOL_EVENT& aEvent );
+
     int CleanupGraphics( const TOOL_EVENT& aEvent );
     int RepairFootprint( const TOOL_EVENT& aEvent );
 
     int NextTab( const TOOL_EVENT& aEvent );
     int PrevTab( const TOOL_EVENT& aEvent );
     int CloseTab( const TOOL_EVENT& aEvent );
-
-    /**
-     * Edit the properties used for new pad creation.
-     */
-    int DefaultPadProperties( const TOOL_EVENT& aEvent );
 
 private:
     ///< Set up handlers for various events.

@@ -26,7 +26,9 @@
 #include <board.h>
 #include <board_item_container.h>
 #include <board_design_settings.h>
+#include <board_design_settings_defaults.h>
 #include <footprint.h>
+#include <memory>
 #include <netinfo.h>
 #include <pad.h>
 #include <pcb_group.h>
@@ -36,6 +38,7 @@
 #include <convert_basic_shapes_to_polygon.h>
 #include <math/util.h>
 #include <math/box2.h>
+#include <geometry/seg.h>
 #include <font/fontconfig.h>
 
 #include <wx/filename.h>
@@ -45,6 +48,7 @@
 #include <wx/fontenc.h>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -267,7 +271,7 @@ bool SPRINT_LAYOUT_PARSER::ParseBoard( const wxString& aFileName )
         {
             uint32_t numConnections = 0;
 
-            for( auto& obj : boardData.objects )
+            for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
             {
                 if( obj.type == SPRINT_LAYOUT::OBJ_THT_PAD || obj.type == SPRINT_LAYOUT::OBJ_SMD_PAD )
                     numConnections++;
@@ -579,34 +583,26 @@ void SPRINT_LAYOUT_PARSER::parseObject( SPRINT_LAYOUT::OBJECT& aObj, bool aIsTex
     case SPRINT_LAYOUT::OBJ_OUTLINE_TEXT:
     case SPRINT_LAYOUT::OBJ_SEGMENT:
     case SPRINT_LAYOUT::OBJ_CIRCLE:
-    {
         return;
-    }
 
     case SPRINT_LAYOUT::OBJ_POLY:
     case SPRINT_LAYOUT::OBJ_LINE:
-    {
         parsePoints( aObj );
         return;
-    }
 
     case SPRINT_LAYOUT::OBJ_THT_PAD:
-    {
         if( m_fileData.version >= 5 )
             parsePoints( aObj );
         else if( m_fileData.version >= 3 )
             skip( 4 ); // Usually 0xFFFFFFFF
 
         return;
-    }
 
     case SPRINT_LAYOUT::OBJ_SMD_PAD:
-    {
         if( m_fileData.version >= 5 )
             parsePoints( aObj );
 
         return; // No points in older versions
-    }
 
     case SPRINT_LAYOUT::OBJ_STROKE_TEXT:
     {
@@ -672,8 +668,8 @@ PCB_LAYER_ID SPRINT_LAYOUT_PARSER::mapLayer( uint8_t aSprintLayer ) const
         case SPRINT_LAYOUT::LAYER_S2: return B_SilkS;
         case SPRINT_LAYOUT::LAYER_I1: return In1_Cu;
         case SPRINT_LAYOUT::LAYER_I2: return In2_Cu;
-        case SPRINT_LAYOUT::LAYER_O: return Edge_Cuts;
-        default: return F_Cu;
+        case SPRINT_LAYOUT::LAYER_O:  return Edge_Cuts;
+        default:                      return F_Cu;
         }
     }
     else
@@ -685,11 +681,10 @@ PCB_LAYER_ID SPRINT_LAYOUT_PARSER::mapLayer( uint8_t aSprintLayer ) const
         case SPRINT_LAYOUT::LAYER_S1: return F_SilkS;
         case SPRINT_LAYOUT::LAYER_C2: return m_fileData.version >= 3 ? B_Cu : F_Cu;
         case SPRINT_LAYOUT::LAYER_S2: return B_SilkS;
-        case SPRINT_LAYOUT::LAYER_O: return Edge_Cuts;
-
+        case SPRINT_LAYOUT::LAYER_O:  return Edge_Cuts;
         case SPRINT_LAYOUT::LAYER_I1: return B_Cu;    // used for PTH pads and tracks inside macros
         case SPRINT_LAYOUT::LAYER_I2: return F_SilkS; // used for graphics inside macros
-        default: return F_Cu;
+        default:                      return F_Cu;
         }
     }
 }
@@ -753,6 +748,7 @@ wxString SPRINT_LAYOUT_PARSER::convertString( const std::string& aStr ) const
             default:
                 if( c >= 0x80 )
                     extNonGermanCount++;
+
                 break;
             }
         }
@@ -774,11 +770,11 @@ bool SPRINT_LAYOUT_PARSER::layerHasGroundPlane( PCB_LAYER_ID aLayer, const uint8
     {
         switch( aLayer )
         {
-        case F_Cu: return aGroundPlane[0] != 0;
-        case B_Cu: return aGroundPlane[2] != 0;
+        case F_Cu:   return aGroundPlane[0] != 0;
+        case B_Cu:   return aGroundPlane[2] != 0;
         case In1_Cu: return aGroundPlane[4] != 0;
         case In2_Cu: return aGroundPlane[5] != 0;
-        default: return false;
+        default:     return false;
         }
     }
     else
@@ -787,7 +783,7 @@ bool SPRINT_LAYOUT_PARSER::layerHasGroundPlane( PCB_LAYER_ID aLayer, const uint8
         {
         case F_Cu: return aGroundPlane[0] != 0;
         case B_Cu: return aGroundPlane[1] != 0;
-        default: return false;
+        default:   return false;
         }
     }
 }
@@ -835,17 +831,17 @@ NETINFO_ITEM* SPRINT_LAYOUT_PARSER::resolveItemNet( BOARD* aBoard, const SPRINT_
 }
 
 
-BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
-                                          size_t                                          aBoardIndex )
+bool SPRINT_LAYOUT_PARSER::CreateBoard( BOARD& aBoard, std::map<wxString, std::unique_ptr<FOOTPRINT>>& aFootprintMap,
+                                        size_t aBoardIndex )
 {
     if( aBoardIndex >= m_fileData.boards.size() )
-        return nullptr;
+        return false;
 
-    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+    BOARD* board = &aBoard;
 
     // Set up copper layers based on whether inner layers are used
     const SPRINT_LAYOUT::BOARD_DATA& boardData = m_fileData.boards[aBoardIndex];
-    bool hasInnerLayers = false;
+    bool                             hasInnerLayers = false;
 
     for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
     {
@@ -891,15 +887,14 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
             groundPlaneLayerSet.set( layer );
     }
 
-    if( !groundPlaneLayerSet.empty() )
+    if( groundPlaneLayerSet.any() )
     {
         int w = sprintToKicadCoord( static_cast<float>( boardData.size_x ) );
         int h = sprintToKicadCoord( static_cast<float>( boardData.size_y ) );
 
-        gndPlaneNet = new NETINFO_ITEM( board.get(), gndPlaneNetName );
-        board->Add( gndPlaneNet );
+        gndPlaneNet = board->FindOrAddNet( gndPlaneNetName );
 
-        ZONE* zone = new ZONE( board.get() );
+        ZONE* zone = new ZONE( board );
         zone->SetLayerSet( groundPlaneLayerSet );
         zone->SetIsRuleArea( false );
         zone->SetZoneName( wxS( "GND_PLANE" ) );
@@ -921,56 +916,57 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
     std::map<uint16_t, FOOTPRINT*>     componentMap;
     std::vector<std::vector<VECTOR2I>> outlineSegments;
 
-    auto getOrCreateComponentFootprint = [&]( const SPRINT_LAYOUT::OBJECT& aObj ) -> FOOTPRINT*
-    {
-        if( aObj.component_id == 0 )
-            return nullptr;
-
-        auto it = componentMap.find( aObj.component_id );
-
-        if( it != componentMap.end() )
-            return it->second;
-
-        FOOTPRINT* fp = new FOOTPRINT( board.get() );
-
-        if( aObj.type == SPRINT_LAYOUT::OBJ_STROKE_TEXT && !aObj.text.empty() )
-        {
-            fp->SetReference( convertString( aObj.text ) );
-        }
-        else
-        {
-            fp->SetReference( wxString::Format( wxS( "U%d" ), aObj.component_id ) );
-
-            for( PCB_FIELD* fd : fp->GetFields() )
-                fd->SetVisible( false );
-        }
-
-        if( aObj.type == SPRINT_LAYOUT::OBJ_STROKE_TEXT && aObj.component.valid )
-        {
-            if( !aObj.component.comment.empty() )
+    auto getOrCreateComponentFootprint =
+            [&]( const SPRINT_LAYOUT::OBJECT& aObj ) -> FOOTPRINT*
             {
-                wxString comment = convertString( aObj.component.comment );
-                fp->GetField( FIELD_T::DESCRIPTION )->SetText( comment );
-                fp->SetValue( comment );
-            }
-            else if( !aObj.identifier.empty() )
-            {
-                fp->SetValue( convertString( aObj.identifier ) );
-            }
+                if( aObj.component_id == 0 )
+                    return nullptr;
 
-            if( !aObj.component.package.empty() )
-                fp->SetLibDescription( convertString( aObj.component.package ) );
+                auto it = componentMap.find( aObj.component_id );
 
-            fp->SetOrientationDegrees( aObj.component.rotation );
-        }
+                if( it != componentMap.end() )
+                    return it->second;
 
-        PCB_LAYER_ID layer = mapLayer( aObj.layer );
-        fp->SetLayer( ( layer == B_Cu || layer == B_SilkS ) ? B_Cu : F_Cu );
+                FOOTPRINT* fp = new FOOTPRINT( board );
 
-        componentMap[aObj.component_id] = fp;
-        board->Add( fp );
-        return fp;
-    };
+                if( aObj.type == SPRINT_LAYOUT::OBJ_STROKE_TEXT && !aObj.text.empty() )
+                {
+                    fp->SetReference( convertString( aObj.text ) );
+                }
+                else
+                {
+                    fp->SetReference( wxString::Format( wxS( "U%d" ), aObj.component_id ) );
+
+                    for( PCB_FIELD* fd : fp->GetFields() )
+                        fd->SetVisible( false );
+                }
+
+                if( aObj.type == SPRINT_LAYOUT::OBJ_STROKE_TEXT && aObj.component.valid )
+                {
+                    if( !aObj.component.comment.empty() )
+                    {
+                        wxString comment = convertString( aObj.component.comment );
+                        fp->GetField( FIELD_T::DESCRIPTION )->SetText( comment );
+                        fp->SetValue( comment );
+                    }
+                    else if( !aObj.identifier.empty() )
+                    {
+                        fp->SetValue( convertString( aObj.identifier ) );
+                    }
+
+                    if( !aObj.component.package.empty() )
+                        fp->SetLibDescription( convertString( aObj.component.package ) );
+
+                    fp->SetOrientationDegrees( aObj.component.rotation );
+                }
+
+                PCB_LAYER_ID layer = mapLayer( aObj.layer );
+                fp->SetLayer( ( layer == B_Cu || layer == B_SilkS ) ? B_Cu : F_Cu );
+
+                componentMap[aObj.component_id] = fp;
+                board->Add( fp );
+                return fp;
+            };
 
     // First pass: create footprints from component text records where available
     for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
@@ -984,7 +980,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
     // Second pass: process all objects in board/footprint context
     for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
     {
-        BOARD_ITEM_CONTAINER* container = board.get();
+        BOARD_ITEM_CONTAINER* container = board;
 
         if( FOOTPRINT* fp = getOrCreateComponentFootprint( obj ) )
             container = fp;
@@ -1024,7 +1020,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
         // clang-format on
     }
 
-    resolveGroups( board.get(), gidToItems );
+    resolveGroups( board, gidToItems );
 
     // Re-anchor footprints after all elements are added.
     for( FOOTPRINT* fp : board->Footprints() )
@@ -1048,7 +1044,7 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
         aFootprintMap[fpKey] = std::unique_ptr<FOOTPRINT>( fpCopy );
     }
 
-    buildOutline( board.get(), outlineSegments, boardData );
+    buildOutline( board, outlineSegments, boardData );
 
     // Center the board content on the page
     BOX2I bbox = board->ComputeBoundingBox( true );
@@ -1068,11 +1064,11 @@ BOARD* SPRINT_LAYOUT_PARSER::CreateBoard( std::map<wxString, std::unique_ptr<FOO
             item->Move( centerOffset );
     }
 
-    return board.release();
+    return true;
 }
 
 
-FOOTPRINT* SPRINT_LAYOUT_PARSER::CreateFootprint()
+std::unique_ptr<FOOTPRINT> SPRINT_LAYOUT_PARSER::CreateFootprint()
 {
     if( m_fileData.boards.empty() )
         return nullptr;
@@ -1096,7 +1092,7 @@ FOOTPRINT* SPRINT_LAYOUT_PARSER::CreateFootprint()
     for( const SPRINT_LAYOUT::OBJECT& obj : boardData.objects )
     {
         BOARD_ITEM_CONTAINER* container = fp.get();
-        
+
         // clang-format off
         switch( obj.type )
         {
@@ -1148,7 +1144,7 @@ FOOTPRINT* SPRINT_LAYOUT_PARSER::CreateFootprint()
 
     fp->Add( shape.release(), ADD_MODE::APPEND );
 
-    return fp.release();
+    return fp;
 }
 
 
@@ -1186,7 +1182,7 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
     {
         double cx = 0, cy = 0;
 
-        for( const auto& pt : aObj.points )
+        for( const SPRINT_LAYOUT::POINT& pt : aObj.points )
         {
             cx += pt.x;
             cy += pt.y;
@@ -1262,17 +1258,18 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
         {
         case SPRINT_LAYOUT::THT_SHAPE_H_ROUND:
         case SPRINT_LAYOUT::THT_SHAPE_H_CHAMFER:
-        case SPRINT_LAYOUT::THT_SHAPE_H_RECT: 
+        case SPRINT_LAYOUT::THT_SHAPE_H_RECT:
             padSize.x *= 2;
             break;
 
         case SPRINT_LAYOUT::THT_SHAPE_V_ROUND:
         case SPRINT_LAYOUT::THT_SHAPE_V_CHAMFER:
-        case SPRINT_LAYOUT::THT_SHAPE_V_RECT: 
+        case SPRINT_LAYOUT::THT_SHAPE_V_RECT:
             padSize.y *= 2;
             break;
 
-        default: break;
+        default:
+            break;
         }
 
         pad->SetSize( PADSTACK::TEMP_ALL_LAYERS, padSize );
@@ -1294,8 +1291,7 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
         case SPRINT_LAYOUT::THT_SHAPE_V_CHAMFER:
             pad->SetShape( PADSTACK::TEMP_ALL_LAYERS, PAD_SHAPE::CHAMFERED_RECT );
             pad->SetChamferRectRatio( PADSTACK::TEMP_ALL_LAYERS, 0.25 );
-            pad->SetChamferPositions( PADSTACK::TEMP_ALL_LAYERS,
-                                      RECT_CHAMFER_ALL );
+            pad->SetChamferPositions( PADSTACK::TEMP_ALL_LAYERS, RECT_CHAMFER_ALL );
             break;
 
         case SPRINT_LAYOUT::THT_SHAPE_SQUARE:
@@ -1362,7 +1358,7 @@ void SPRINT_LAYOUT_PARSER::processPad( BOARD_ITEM_CONTAINER* aContainer, const S
     {
         int spokeWidth = aObj.rotation * 10000 / 2;
         pad->SetLocalThermalSpokeWidthOverride( spokeWidth );
-        
+
         // Each byte is the spoke directions for one copper layer (C1, C2, I1, I2).
         // 0x55 matches H/V directions, 0xAA matches diagonal directions
         uint32_t spokeMask = static_cast<uint32_t>( aObj.start_angle );
@@ -1441,7 +1437,7 @@ void SPRINT_LAYOUT_PARSER::processLine( BOARD_ITEM_CONTAINER* aContainer, const 
     {
         std::vector<VECTOR2I> segment;
 
-        for( const auto& pt : aObj.points )
+        for( const SPRINT_LAYOUT::POINT& pt : aObj.points )
             segment.push_back( sprintToKicadPos( pt.x, pt.y ) );
 
         aOutlineSegments.push_back( std::move( segment ) );
@@ -1525,7 +1521,7 @@ void SPRINT_LAYOUT_PARSER::processPoly( BOARD_ITEM_CONTAINER* aContainer, const 
     {
         std::vector<VECTOR2I> points;
 
-        for( const auto& pt : aObj.points )
+        for( const SPRINT_LAYOUT::POINT& pt : aObj.points )
             points.push_back( sprintToKicadPos( pt.x, pt.y ) );
 
         points.push_back( points[0] );
@@ -1544,7 +1540,7 @@ void SPRINT_LAYOUT_PARSER::processPoly( BOARD_ITEM_CONTAINER* aContainer, const 
 
     SHAPE_LINE_CHAIN outline;
 
-    for( const auto& pt : aObj.points )
+    for( const SPRINT_LAYOUT::POINT& pt : aObj.points )
     {
         VECTOR2I pos = sprintToKicadPos( pt.x, pt.y );
         outline.Append( pos.x, pos.y );
@@ -1750,7 +1746,7 @@ void SPRINT_LAYOUT_PARSER::processText( BOARD_ITEM_CONTAINER* aContainer, const 
         return;
 
     // When inside a group, the rotation center seems to be at the group center.
-    // Just so we don't have to do a complex fixup later, use points to detect 
+    // Just so we don't have to do a complex fixup later, use points to detect
     // text center instead, they are always in absolute coordinates.
     VECTOR2I ptsCenter;
 
@@ -1859,10 +1855,9 @@ void SPRINT_LAYOUT_PARSER::processText( BOARD_ITEM_CONTAINER* aContainer, const 
     text->Rotate( newCenter, EDA_ANGLE( -rotation, DEGREES_T ) );
 
     if( add )
-    {
         aContainer->Add( text );
-        processItemGroups( text, aObj, aGidToItems );
-    }
+
+    processItemGroups( text, aObj, aGidToItems );
 }
 
 
@@ -1934,10 +1929,11 @@ void SPRINT_LAYOUT_PARSER::buildOutline( BOARD* aBoard, std::vector<std::vector<
     // Similar to OpenBoardView's outline_order_segments algorithm
     static const int PROXIMITY_DELTA = 100; // 100 nm tolerance
 
-    auto closeEnough = []( const VECTOR2I& a, const VECTOR2I& b, int delta ) -> bool
-    {
-        return std::abs( a.x - b.x ) < delta && std::abs( a.y - b.y ) < delta;
-    };
+    auto closeEnough =
+            []( const VECTOR2I& a, const VECTOR2I& b, int delta ) -> bool
+            {
+                return std::abs( a.x - b.x ) < delta && std::abs( a.y - b.y ) < delta;
+            };
 
     // Try to join segments end-to-end. After each successful join, restart
     // the inner scan because seg.back() has changed.
@@ -1945,19 +1941,18 @@ void SPRINT_LAYOUT_PARSER::buildOutline( BOARD* aBoard, std::vector<std::vector<
     {
         bool joined = false;
 
-        for( auto& seg : aOutlineSegments )
+        for( std::vector<VECTOR2I>& lineChain : aOutlineSegments )
         {
-            if( seg.size() < 2 )
+            if( lineChain.size() < 2 )
                 continue;
 
-            for( auto& other : aOutlineSegments )
+            for( std::vector<VECTOR2I>& other : aOutlineSegments )
             {
-                if( &seg == &other || other.empty() )
+                if( &lineChain == &other || other.empty() )
                     continue;
 
-                bool frontMatch = closeEnough( seg.back(), other.front(), PROXIMITY_DELTA );
-                bool backMatch = !frontMatch
-                                 && closeEnough( seg.back(), other.back(), PROXIMITY_DELTA );
+                bool frontMatch = closeEnough( lineChain.back(), other.front(), PROXIMITY_DELTA );
+                bool backMatch = !frontMatch && closeEnough( lineChain.back(), other.back(), PROXIMITY_DELTA );
 
                 if( backMatch )
                 {
@@ -1968,10 +1963,10 @@ void SPRINT_LAYOUT_PARSER::buildOutline( BOARD* aBoard, std::vector<std::vector<
                 if( !frontMatch )
                     continue;
 
-                if( seg.back() == other.front() )
-                    seg.insert( seg.end(), other.begin() + 1, other.end() );
+                if( lineChain.back() == other.front() )
+                    lineChain.insert( lineChain.end(), other.begin() + 1, other.end() );
                 else
-                    seg.insert( seg.end(), other.begin(), other.end() );
+                    lineChain.insert( lineChain.end(), other.begin(), other.end() );
 
                 other.clear();
                 joined = true;
@@ -1985,7 +1980,10 @@ void SPRINT_LAYOUT_PARSER::buildOutline( BOARD* aBoard, std::vector<std::vector<
 
     bool hasOutline = false;
 
-    for( const auto& seg : aOutlineSegments )
+    // an edge drawn twice would read as a self-intersecting outline
+    std::set<SEG> edges;
+
+    for( const std::vector<VECTOR2I>& seg : aOutlineSegments )
     {
         if( seg.size() < 2 )
             continue;
@@ -1994,6 +1992,11 @@ void SPRINT_LAYOUT_PARSER::buildOutline( BOARD* aBoard, std::vector<std::vector<
 
         for( size_t i = 0; i + 1 < seg.size(); i++ )
         {
+            SEG edge( seg[i], seg[i + 1] );
+
+            if( !edges.insert( std::min( edge, edge.Reversed() ) ).second )
+                continue;
+
             PCB_SHAPE* shape = new PCB_SHAPE( aBoard );
             shape->SetShape( SHAPE_T::SEGMENT );
             shape->SetLayer( Edge_Cuts );

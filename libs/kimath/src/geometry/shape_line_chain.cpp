@@ -252,17 +252,17 @@ void SHAPE_LINE_CHAIN::convertArc( ssize_t aArcIndex )
         return;
 
     // Clear the shapes references
-    for( auto& sh : m_shapes )
+    for( std::pair<ssize_t, ssize_t>& sh : m_shapes )
     {
         alg::run_on_pair( sh,
-            [&]( ssize_t& aShapeIndex )
-            {
-                if( aShapeIndex == aArcIndex )
-                    aShapeIndex = SHAPE_IS_PT;
+                          [&]( ssize_t& aShapeIndex )
+                          {
+                              if( aShapeIndex == aArcIndex )
+                                  aShapeIndex = SHAPE_IS_PT;
 
-                if( aShapeIndex > aArcIndex )
-                    --aShapeIndex;
-            } );
+                              if( aShapeIndex > aArcIndex )
+                                  --aShapeIndex;
+                          } );
 
         if( sh.second != SHAPE_IS_PT && sh.first == SHAPE_IS_PT )
             std::swap( sh.first, sh.second );
@@ -361,17 +361,18 @@ void SHAPE_LINE_CHAIN::splitArc( ssize_t aPtIndex, bool aCoincident )
         // Only change the arc indices for the second half of the point range
         for( int i = aPtIndex; i < PointCount(); i++ )
         {
-            alg::run_on_pair( m_shapes[i], [&]( ssize_t& aIndex ) {
-                if( aIndex != SHAPE_IS_PT )
-                    aIndex++;
-            } );
+            alg::run_on_pair( m_shapes[i],
+                              [&]( ssize_t& aIndex )
+                              {
+                                  if( aIndex != SHAPE_IS_PT )
+                                      aIndex++;
+                              } );
         }
     }
 }
 
 
-bool SHAPE_LINE_CHAIN_BASE::Collide( const VECTOR2I& aP, int aClearance, int* aActual,
-                                     VECTOR2I* aLocation ) const
+bool SHAPE_LINE_CHAIN_BASE::Collide( const VECTOR2I& aP, int aClearance, int* aActual, VECTOR2I* aLocation ) const
 {
     if( IsClosed() && PointInside( aP, aClearance ) )
     {
@@ -812,8 +813,7 @@ bool SHAPE_LINE_CHAIN_BASE::Collide( const SEG& aSeg, int aClearance, int* aActu
 }
 
 
-bool SHAPE_LINE_CHAIN::Collide( const SEG& aSeg, int aClearance, int* aActual,
-                                VECTOR2I* aLocation ) const
+bool SHAPE_LINE_CHAIN::Collide( const SEG& aSeg, int aClearance, int* aActual, VECTOR2I* aLocation ) const
 {
     if( IsClosed() && PointInside( aSeg.A ) )
     {
@@ -831,7 +831,7 @@ bool SHAPE_LINE_CHAIN::Collide( const SEG& aSeg, int aClearance, int* aActual,
     VECTOR2I    nearest;
 
     // Collide line segments
-    for( size_t i = 0; i < GetSegmentCount(); i++ )
+    for( int i = 0; i < (int) GetSegmentCount(); i++ )
     {
         if( IsArcSegment( i ) )
             continue;
@@ -861,13 +861,17 @@ bool SHAPE_LINE_CHAIN::Collide( const SEG& aSeg, int aClearance, int* aActual,
             *aLocation = nearest;
 
         if( aActual )
-            *aActual = sqrt( closest_dist_sq );
+            *aActual = (int) sqrt( closest_dist_sq );
 
         return true;
     }
 
     int         dist = std::numeric_limits<int>::max();
-    SEG::ecoord closest_dist = sqrt( closest_dist_sq );
+    SEG::ecoord closest_dist = std::numeric_limits<int>::max();
+
+    // A chain with no straight segments never measured anything, so the sentinel has no root
+    if( closest_dist_sq != VECTOR2I::ECOORD_MAX )
+        closest_dist = KiROUND( sqrt( closest_dist_sq ) );
 
     // Collide arc segments
     for( size_t i = 0; i < ArcCount(); i++ )
@@ -898,7 +902,7 @@ bool SHAPE_LINE_CHAIN::Collide( const SEG& aSeg, int aClearance, int* aActual,
             *aLocation = nearest;
 
         if( aActual )
-            *aActual = closest_dist;
+            *aActual = (int) closest_dist;
 
         return true;
     }
@@ -915,16 +919,16 @@ const SHAPE_LINE_CHAIN SHAPE_LINE_CHAIN::Reverse() const
     reverse( a.m_shapes.begin(), a.m_shapes.end() );
     reverse( a.m_arcs.begin(), a.m_arcs.end() );
 
-    for( auto& sh : a.m_shapes )
+    for( std::pair<ssize_t, ssize_t>& sh : a.m_shapes )
     {
         if( sh != SHAPES_ARE_PT )
         {
             alg::run_on_pair( sh,
-                [&]( ssize_t& aShapeIndex )
-                {
-                    if( aShapeIndex != SHAPE_IS_PT )
-                        aShapeIndex = a.m_arcs.size() - aShapeIndex - 1;
-                } );
+                              [&]( ssize_t& aShapeIndex )
+                              {
+                                  if( aShapeIndex != SHAPE_IS_PT )
+                                      aShapeIndex = a.m_arcs.size() - aShapeIndex - 1;
+                              } );
 
             if( sh.second != SHAPE_IS_PT )
             {
@@ -1058,16 +1062,15 @@ void SHAPE_LINE_CHAIN::Replace( int aStartIndex, int aEndIndex, const SHAPE_LINE
     for( std::pair<ssize_t, ssize_t>& shape_pair : new_shapes )
     {
         alg::run_on_pair( shape_pair,
-            [&]( ssize_t& aShape )
-            {
-                if( aShape != SHAPE_IS_PT )
-                    aShape += prev_arc_count;
-            } );
+                          [&]( ssize_t& aShape )
+                          {
+                              if( aShape != SHAPE_IS_PT )
+                                  aShape += prev_arc_count;
+                          } );
     }
 
     m_shapes.insert( m_shapes.begin() + aStartIndex, new_shapes.begin(), new_shapes.end() );
-    m_points.insert( m_points.begin() + aStartIndex, newLine.m_points.begin(),
-                     newLine.m_points.end() );
+    m_points.insert( m_points.begin() + aStartIndex, newLine.m_points.begin(), newLine.m_points.end() );
     m_arcs.insert( m_arcs.end(), newLine.m_arcs.begin(), newLine.m_arcs.end() );
 
     assert( m_shapes.size() == m_points.size() );
@@ -1153,7 +1156,7 @@ void SHAPE_LINE_CHAIN::Remove( int aStartIndex, int aEndIndex )
         }
     }
 
-    for( auto arc : extra_arcs )
+    for( size_t arc : extra_arcs )
         convertArc( arc );
 
     m_shapes.erase( m_shapes.begin() + aStartIndex, m_shapes.begin() + aEndIndex + 1 );
@@ -1289,8 +1292,8 @@ SEG SHAPE_LINE_CHAIN::Segment( int aIndex ) const
     if( aIndex < 0 )
         aIndex += segCount;
 
-    wxCHECK( aIndex < segCount && aIndex >= 0,
-             m_points.size() > 0 ? SEG( m_points.back(), m_points.back() ) : SEG( 0, 0, 0, 0 ) );
+    wxCHECK( aIndex < segCount && aIndex >= 0, m_points.size() > 0 ? SEG( m_points.back(), m_points.back() )
+                                                                   : SEG( 0, 0, 0, 0 ) );
 
     if( aIndex == (int) ( m_points.size() - 1 ) && m_closed )
         return SEG( m_points[aIndex], m_points[0], aIndex );
@@ -1369,11 +1372,11 @@ void SHAPE_LINE_CHAIN::SetPoint( int aIndex, const VECTOR2I& aPos )
     m_points[aIndex] = aPos;
 
     alg::run_on_pair( m_shapes[aIndex],
-        [&]( ssize_t& aIdx )
-        {
-            if( aIdx != SHAPE_IS_PT )
-                convertArc( aIdx );
-        } );
+                      [&]( ssize_t& aIdx )
+                      {
+                          if( aIdx != SHAPE_IS_PT )
+                              convertArc( aIdx );
+                      } );
 }
 
 
@@ -1432,16 +1435,22 @@ const SHAPE_LINE_CHAIN SHAPE_LINE_CHAIN::Slice( int aStartIndex, int aEndIndex, 
     wxCHECK( aEndIndex < PointCount(), SHAPE_LINE_CHAIN() );
     wxCHECK( aEndIndex >= aStartIndex, SHAPE_LINE_CHAIN() );
 
-    int numPoints = static_cast<int>( m_points.size() );
+    int numPoints = static_cast<int>( PointCount() );
 
     if( IsArcSegment( aStartIndex ) && !IsArcStart( aStartIndex ) )
     {
+        if( aStartIndex == aEndIndex )
+        {
+            rv.Append( m_points[aStartIndex] );
+            return rv;
+        }
+
         // Cutting in middle of an arc, lets split it
         ssize_t          arcToSplitIndex = ArcIndex( aStartIndex );
         const SHAPE_ARC& arcToSplit = Arc( arcToSplitIndex );
 
         // Copy the points as arc points
-        for( size_t i = aStartIndex; i < m_points.size() && arcToSplitIndex == ArcIndex( i ); i++ )
+        for( int i = aStartIndex; i <= aEndIndex && arcToSplitIndex == ArcIndex( i ); i++ )
         {
             rv.m_points.push_back( m_points[i] );
             rv.m_shapes.push_back( { rv.m_arcs.size(), SHAPE_IS_PT } );
@@ -1450,13 +1459,13 @@ const SHAPE_LINE_CHAIN SHAPE_LINE_CHAIN::Slice( int aStartIndex, int aEndIndex, 
 
         // Create a new arc from the existing one, with different start point.
         SHAPE_ARC newArc;
+        VECTOR2I  newArcStart = m_points[aStartIndex];
 
-        VECTOR2I newArcStart = m_points[aStartIndex];
+        // The slice may also finish inside this arc
+        VECTOR2I  newArcEnd = rv.m_points.back();
 
-        newArc.ConstructFromStartEndCenter( newArcStart, arcToSplit.GetP1(),
-                                            arcToSplit.GetCenter(),
+        newArc.ConstructFromStartEndCenter( newArcStart, newArcEnd, arcToSplit.GetCenter(),
                                             arcToSplit.IsClockwise() );
-
 
         rv.m_arcs.push_back( newArc );
 
@@ -1474,7 +1483,7 @@ const SHAPE_LINE_CHAIN SHAPE_LINE_CHAIN::Slice( int aStartIndex, int aEndIndex, 
         if( IsArcStart( i ) )
         {
             if(  ( isLastShape && aEndIndex != ( numPoints - 1 ) )
-                     || ( nextShape > aEndIndex ) )
+              || ( nextShape > aEndIndex ) )
             {
                 if( i == aEndIndex )
                 {
@@ -1500,13 +1509,10 @@ const SHAPE_LINE_CHAIN SHAPE_LINE_CHAIN::Slice( int aStartIndex, int aEndIndex, 
 
                 // Create a new arc from the existing one, with different end point.
                 SHAPE_ARC newArc;
+                VECTOR2I  newArcEnd = m_points[aEndIndex];
 
-                VECTOR2I newArcEnd = m_points[aEndIndex];
-
-                newArc.ConstructFromStartEndCenter( currentArc.GetP0(), newArcEnd,
-                                                    currentArc.GetCenter(),
+                newArc.ConstructFromStartEndCenter( currentArc.GetP0(), newArcEnd, currentArc.GetCenter(),
                                                     currentArc.IsClockwise() );
-
 
                 rv.m_arcs.push_back( newArc );
 
@@ -1534,7 +1540,6 @@ const SHAPE_LINE_CHAIN SHAPE_LINE_CHAIN::Slice( int aStartIndex, int aEndIndex, 
             if( !nextPointIsArc && i < SegmentCount() && i < aEndIndex )
                 rv.Append( GetSegment( i ).B );
         }
-
     }
 
     wxASSERT( rv.m_points.size() == rv.m_shapes.size() );
@@ -1571,7 +1576,7 @@ void SHAPE_LINE_CHAIN::Append( const SHAPE_LINE_CHAIN& aOtherLine )
 
     if( PointCount() == 0 || aOtherLine.CPoint( 0 ) != CLastPoint() )
     {
-        const VECTOR2I p = aOtherLine.CPoint( 0 );
+        const VECTOR2I& p = aOtherLine.CPoint( 0 );
         m_points.push_back( p );
         m_shapes.push_back( fixShapeIndices( aOtherLine.CShapes()[0] ) );
         m_bbox.Merge( p );
@@ -1588,15 +1593,13 @@ void SHAPE_LINE_CHAIN::Append( const SHAPE_LINE_CHAIN& aOtherLine )
 
     for( int i = 1; i < aOtherLine.PointCount(); i++ )
     {
-        const VECTOR2I p = aOtherLine.CPoint( i );
+        const VECTOR2I& p = aOtherLine.CPoint( i );
         m_points.push_back( p );
 
         ssize_t arcIndex = aOtherLine.ArcIndex( i );
 
         if( arcIndex != ssize_t( SHAPE_IS_PT ) )
-        {
             m_shapes.push_back( fixShapeIndices( aOtherLine.m_shapes[i] ) );
-        }
         else
             m_shapes.push_back( SHAPES_ARE_PT );
 
@@ -1683,14 +1686,14 @@ void SHAPE_LINE_CHAIN::Insert( size_t aVertex, const SHAPE_ARC& aArc, int aMaxEr
     }
 
     //Increment all arc indices before inserting the new arc
-    for( auto& sh : m_shapes )
+    for( std::pair<ssize_t, ssize_t>& sh : m_shapes )
     {
         alg::run_on_pair( sh,
-            [&]( ssize_t& aIndex )
-            {
-                if( aIndex >= arc_pos )
-                    aIndex++;
-            } );
+                          [&]( ssize_t& aIndex )
+                          {
+                              if( aIndex >= arc_pos )
+                                  aIndex++;
+                          } );
     }
 
     SHAPE_ARC arcCopy( aArc );
@@ -1704,8 +1707,7 @@ void SHAPE_LINE_CHAIN::Insert( size_t aVertex, const SHAPE_ARC& aArc, int aMaxEr
 
     /// Step 3: Add the vector of indices to the shape vector
     //@todo need to check we aren't creating duplicate points at start or end
-    std::vector<std::pair<ssize_t, ssize_t>> new_points( chain.PointCount(),
-                                                         { arc_pos, SHAPE_IS_PT } );
+    std::vector<std::pair<ssize_t, ssize_t>> new_points( chain.PointCount(), { arc_pos, SHAPE_IS_PT } );
 
     m_shapes.insert( m_shapes.begin() + aVertex, new_points.begin(), new_points.end() );
     assert( m_shapes.size() == m_points.size() );
@@ -1728,7 +1730,7 @@ struct compareOriginDistance
 };
 
 
-int SHAPE_LINE_CHAIN::Intersect( const SEG& aSeg, INTERSECTIONS& aIp ) const
+int SHAPE_LINE_CHAIN::Intersect( const SEG& aSeg, std::vector<INTERSECTION>& aIp ) const
 {
     const int segCount = SegmentCount();
     const int ptCount = static_cast<int>( m_points.size() );
@@ -1799,7 +1801,7 @@ bool SHAPE_LINE_CHAIN::Intersects( const SEG& aSeg ) const
 }
 
 
-int SHAPE_LINE_CHAIN::Intersect( const SHAPE_LINE_CHAIN& aChain, INTERSECTIONS& aIp,
+int SHAPE_LINE_CHAIN::Intersect( const SHAPE_LINE_CHAIN& aChain, std::vector<INTERSECTION>& aIp,
                                  bool aExcludeColinearAndTouching, BOX2I* aChainBBox ) const
 {
     const int ourSegCount = SegmentCount();
@@ -1836,7 +1838,10 @@ int SHAPE_LINE_CHAIN::Intersect( const SHAPE_LINE_CHAIN& aChain, INTERSECTIONS& 
     }
 
     std::sort( sorted.begin(), sorted.end(),
-               []( const SEG_EXTENT& a, const SEG_EXTENT& b ) { return a.minX < b.minX; } );
+               []( const SEG_EXTENT& a, const SEG_EXTENT& b )
+               {
+                   return a.minX < b.minX;
+               } );
 
     for( int s1 = 0; s1 < ourSegCount; s1++ )
     {
@@ -1956,35 +1961,37 @@ int SHAPE_LINE_CHAIN::PathLength( const VECTOR2I& aP, int aIndex ) const
     for( int i = 0; i < SegmentCount(); i++ )
     {
         const SEG seg = CSegment( i );
-        bool indexMatch = true;
+        bool indexMatch = false;
 
         if( aIndex >= 0 )
         {
             if( aIndex == SegmentCount() )
-            {
                 indexMatch = ( i == SegmentCount() - 1 );
-            }
             else
-            {
                 indexMatch = ( i == aIndex );
-            }
         }
-
+        else
+        {
+            if( seg.Contains( aP ) )
+                indexMatch = true;
+        }
+        
         if( indexMatch )
         {
             sum += ( aP - seg.A ).EuclideanNorm();
             return sum;
         }
         else
+        {
             sum += seg.Length();
+        }
     }
 
     return -1;
 }
 
 
-bool SHAPE_LINE_CHAIN::PointInside( const VECTOR2I& aPt, int aAccuracy,
-                                    bool aUseBBoxCache ) const
+bool SHAPE_LINE_CHAIN::PointInside( const VECTOR2I& aPt, int aAccuracy, bool aUseBBoxCache ) const
 {
     if( aUseBBoxCache && GetCachedBBox() && !GetCachedBBox()->Contains( aPt ) )
         return false;
@@ -2020,8 +2027,7 @@ bool SHAPE_LINE_CHAIN::PointInside( const VECTOR2I& aPt, int aAccuracy,
 }
 
 
-bool SHAPE_LINE_CHAIN_BASE::PointInside( const VECTOR2I& aPt, int aAccuracy,
-                                         bool aUseBBoxCache ) const
+bool SHAPE_LINE_CHAIN_BASE::PointInside( const VECTOR2I& aPt, int aAccuracy, bool aUseBBoxCache ) const
 {
     /*
      * Don't check the bounding box unless it's cached.  Building it is about the same speed as
@@ -2115,7 +2121,7 @@ bool SHAPE_LINE_CHAIN::CheckClearance( const VECTOR2I& aP, const int aDist ) con
     if( !PointCount() )
         return false;
     else if( PointCount() == 1 )
-        return m_points[0] == aP;
+        return m_points[0].Distance( aP ) <= aDist;
 
     for( int i = 0; i < SegmentCount(); i++ )
     {
@@ -2142,11 +2148,12 @@ const std::optional<SHAPE_LINE_CHAIN::INTERSECTION> SHAPE_LINE_CHAIN::SelfInters
         return std::optional<INTERSECTION>();
 
     // Index of the second endpoint of segment i, handling the closed-chain wrap
-    auto endIdx = [ptCount]( int i )
-    {
-        int next = i + 1;
-        return next < ptCount ? next : 0;
-    };
+    auto endIdx =
+            [ptCount]( int i )
+            {
+                int next = i + 1;
+                return next < ptCount ? next : 0;
+            };
 
     for( int s1 = 0; s1 < segCount; s1++ )
     {
@@ -2186,11 +2193,11 @@ const std::optional<SHAPE_LINE_CHAIN::INTERSECTION> SHAPE_LINE_CHAIN::SelfInters
                 is.p = a2;
                 return is;
             }
-            else if( seg1.Contains( b2 ) &&
+            else if( seg1.Contains( b2 )
                      // for closed polylines, the ending point of the
                      // last segment == starting point of the first segment
                      // this is a normal case, not self intersecting case
-                     !( closed && s1 == 0 && s2 == segCount - 1 ) )
+                     && !( closed && s1 == 0 && s2 == segCount - 1 ) )
             {
                 INTERSECTION is;
                 is.index_our = s1;
@@ -2221,7 +2228,9 @@ const std::optional<SHAPE_LINE_CHAIN::INTERSECTION> SHAPE_LINE_CHAIN::SelfInters
 struct SHAPE_KEY
 {
     SHAPE_KEY( int aFirstIdx, int aArcIdx, const BOX2I_MINMAX& aBBox ) :
-            m_FirstIdx( aFirstIdx ), m_ArcIdx( aArcIdx ), m_BBox( aBBox )
+            m_FirstIdx( aFirstIdx ),
+            m_ArcIdx( aArcIdx ),
+            m_BBox( aBBox )
     {
     }
 
@@ -2234,113 +2243,115 @@ struct SHAPE_KEY
 const std::optional<SHAPE_LINE_CHAIN::INTERSECTION>
 SHAPE_LINE_CHAIN::SelfIntersectingWithArcs() const
 {
-    auto pointsClose = []( const VECTOR2I& aPt1, const VECTOR2I& aPt2 ) -> bool
-    {
-        return ( VECTOR2D( aPt1 ) - aPt2 ).SquaredEuclideanNorm() <= 2.0;
-    };
-
-    auto collideArcSeg = [&pointsClose]( const SHAPE_ARC& aArc, const SEG& aSeg, int aClearance = 0,
-                                         VECTOR2I* aLocation = nullptr )
-    {
-        VECTOR2I center = aArc.GetCenter();
-        CIRCLE   circle( center, aArc.GetRadius() );
-
-        std::vector<VECTOR2I> candidatePts = circle.Intersect( aSeg );
-
-        for( const VECTOR2I& candidate : candidatePts )
-        {
-            // Skip shared points
-            if( aArc.GetP1() == aSeg.A && pointsClose( candidate, aSeg.A ) )
-                continue;
-
-            if( aSeg.B == aArc.GetP0() && pointsClose( candidate, aSeg.B ) )
-                continue;
-
-            bool collides = aArc.Collide( candidate, aClearance, nullptr, aLocation );
-
-            if( collides )
-                return true;
-        }
-
-        return false;
-    };
-
-    auto collideArcArc = [&pointsClose]( const SHAPE_ARC& aArc1, const SHAPE_ARC& aArc2,
-                                         VECTOR2I* aLocation = nullptr )
-    {
-        std::vector<VECTOR2I> candidatePts;
-
-        aArc1.Intersect( aArc2, &candidatePts );
-
-        for( const VECTOR2I& candidate : candidatePts )
-        {
-            // Skip shared points
-            if( aArc1.GetP1() == aArc2.GetP0() && pointsClose( candidate, aArc1.GetP1() ) )
-                continue;
-
-            if( aArc2.GetP1() == aArc1.GetP0() && pointsClose( candidate, aArc2.GetP1() ) )
-                continue;
-
-            if( aLocation )
-                *aLocation = candidate;
-
-            return true;
-        }
-
-        return false;
-    };
-
-    auto collideSegSeg = [this]( int s1, int s2, INTERSECTION& is )
-    {
-        SEG seg1 = CSegment( s1 );
-        SEG seg2 = CSegment( s2 );
-
-        const VECTOR2I s2a = seg2.A, s2b = seg2.B;
-
-        if( s1 + 1 != s2 && seg1.Contains( s2a ) )
-        {
-            is.index_our = s1;
-            is.index_their = s2;
-            is.p = s2a;
-            return true;
-        }
-        else if( seg1.Contains( s2b ) &&
-                 // for closed polylines, the ending point of the
-                 // last segment == starting point of the first segment
-                 // this is a normal case, not self intersecting case
-                 !( IsClosed() && s1 == 0 && s2 == SegmentCount() - 1 ) )
-        {
-            is.index_our = s1;
-            is.index_their = s2;
-            is.p = s2b;
-            return true;
-        }
-        else
-        {
-            OPT_VECTOR2I p = seg1.Intersect( seg2, true );
-
-            if( p )
+    auto pointsClose =
+            []( const VECTOR2I& aPt1, const VECTOR2I& aPt2 ) -> bool
             {
-                is.index_our = s1;
-                is.index_their = s2;
-                is.p = *p;
-                return true;
-            }
-        }
+                return ( VECTOR2D( aPt1 ) - aPt2 ).SquaredEuclideanNorm() <= 2.0;
+            };
 
-        return false;
-    };
+    auto collideArcSeg =
+            [&pointsClose]( const SHAPE_ARC& aArc, const SEG& aSeg, int aClearance = 0, VECTOR2I* aLocation = nullptr )
+            {
+                VECTOR2I center = aArc.GetCenter();
+                CIRCLE   circle( center, aArc.GetRadius() );
+
+                std::vector<VECTOR2I> candidatePts = circle.Intersect( aSeg );
+
+                for( const VECTOR2I& candidate : candidatePts )
+                {
+                    // Skip shared points
+                    if( aArc.GetP1() == aSeg.A && pointsClose( candidate, aSeg.A ) )
+                        continue;
+
+                    if( aSeg.B == aArc.GetP0() && pointsClose( candidate, aSeg.B ) )
+                        continue;
+
+                    bool collides = aArc.Collide( candidate, aClearance, nullptr, aLocation );
+
+                    if( collides )
+                        return true;
+                }
+
+                return false;
+            };
+
+    auto collideArcArc =
+            [&pointsClose]( const SHAPE_ARC& aArc1, const SHAPE_ARC& aArc2, VECTOR2I* aLocation = nullptr )
+            {
+                std::vector<VECTOR2I> candidatePts;
+
+                aArc1.Intersect( aArc2, &candidatePts );
+
+                for( const VECTOR2I& candidate : candidatePts )
+                {
+                    // Skip shared points
+                    if( aArc1.GetP1() == aArc2.GetP0() && pointsClose( candidate, aArc1.GetP1() ) )
+                        continue;
+
+                    if( aArc2.GetP1() == aArc1.GetP0() && pointsClose( candidate, aArc2.GetP1() ) )
+                        continue;
+
+                    if( aLocation )
+                        *aLocation = candidate;
+
+                    return true;
+                }
+
+                return false;
+            };
+
+    auto collideSegSeg =
+            [this]( int s1, int s2, INTERSECTION& is )
+            {
+                SEG seg1 = CSegment( s1 );
+                SEG seg2 = CSegment( s2 );
+
+                const VECTOR2I s2a = seg2.A, s2b = seg2.B;
+
+                if( s1 + 1 != s2 && seg1.Contains( s2a ) )
+                {
+                    is.index_our = s1;
+                    is.index_their = s2;
+                    is.p = s2a;
+                    return true;
+                }
+                else if( seg1.Contains( s2b )
+                         // for closed polylines, the ending point of the
+                         // last segment == starting point of the first segment
+                         // this is a normal case, not self intersecting case
+                         && !( IsClosed() && s1 == 0 && s2 == SegmentCount() - 1 ) )
+                {
+                    is.index_our = s1;
+                    is.index_their = s2;
+                    is.p = s2b;
+                    return true;
+                }
+                else
+                {
+                    OPT_VECTOR2I p = seg1.Intersect( seg2, true );
+
+                    if( p )
+                    {
+                        is.index_our = s1;
+                        is.index_their = s2;
+                        is.p = *p;
+                        return true;
+                    }
+                }
+
+                return false;
+            };
 
     INTERSECTION is;
 
     std::vector<SHAPE_KEY> shapeCache;
+
     for( int si = 0; si != -1; si = NextShape( si ) )
     {
         int arci = ArcIndex( si );
 
-        shapeCache.emplace_back( si, arci,
-                                 arci == -1 ? BOX2I_MINMAX( CSegment( si ) )
-                                            : BOX2I_MINMAX( Arc( arci ) ) );
+        shapeCache.emplace_back( si, arci, arci == -1 ? BOX2I_MINMAX( CSegment( si ) )
+                                                      : BOX2I_MINMAX( Arc( arci ) ) );
     }
 
     for( size_t sk1 = 0; sk1 < shapeCache.size(); sk1++ )
@@ -2357,9 +2368,7 @@ SHAPE_LINE_CHAIN::SelfIntersectingWithArcs() const
             if( k1.m_ArcIdx == -1 && k2.m_ArcIdx == -1 )
             {
                 if( collideSegSeg( k1.m_FirstIdx, k2.m_FirstIdx, is ) )
-                {
                     return is;
-                }
             }
             else if( k1.m_ArcIdx != -1 && k2.m_ArcIdx == -1 )
             {
@@ -2398,8 +2407,7 @@ SHAPE_LINE_CHAIN::SelfIntersectingWithArcs() const
 }
 
 
-const VECTOR2I SHAPE_LINE_CHAIN::NearestPoint( const VECTOR2I& aP,
-                                               bool aAllowInternalShapePoints ) const
+const VECTOR2I SHAPE_LINE_CHAIN::NearestPoint( const VECTOR2I& aP, bool aAllowInternalShapePoints ) const
 {
     if( PointCount() == 0 )
     {
@@ -2532,8 +2540,7 @@ const std::string SHAPE_LINE_CHAIN::Format( bool aCplusPlus ) const
 }
 
 
-bool SHAPE_LINE_CHAIN::CompareGeometry( const SHAPE_LINE_CHAIN& aOther,
-                                        bool                    aCyclicalCompare,
+bool SHAPE_LINE_CHAIN::CompareGeometry( const SHAPE_LINE_CHAIN& aOther, bool aCyclicalCompare,
                                         int aEpsilon ) const
 {
     SHAPE_LINE_CHAIN a( *this ), b( aOther );
@@ -2548,27 +2555,28 @@ bool SHAPE_LINE_CHAIN::CompareGeometry( const SHAPE_LINE_CHAIN& aOther,
         std::vector<VECTOR2I> aVerts = a.m_points;
         std::vector<VECTOR2I> bVerts = b.m_points;
 
-        auto centroid = []( const std::vector<VECTOR2I>& pts )
-        {
-            double sx = 0.0, sy = 0.0;
-            for( const auto& p : pts )
-            {
-                sx += p.x;
-                sy += p.y;
-            }
-            return std::pair<double, double>( sx / pts.size(), sy / pts.size() );
-        };
+        auto centroid =
+                []( const std::vector<VECTOR2I>& pts )
+                {
+                    double sx = 0.0, sy = 0.0;
+                    for( const auto& p : pts )
+                    {
+                        sx += p.x;
+                        sy += p.y;
+                    }
+                    return std::pair<double, double>( sx / pts.size(), sy / pts.size() );
+                };
 
-        auto aC = centroid( aVerts );
-        auto bC = centroid( bVerts );
+        std::pair<double, double> aC = centroid( aVerts );
+        std::pair<double, double> bC = centroid( bVerts );
 
         auto angleCmp =
                 []( const std::pair<double, double>& c, const VECTOR2I& p1, const VECTOR2I& p2 )
-        {
-            double a1 = atan2( p1.y - c.second, p1.x - c.first );
-            double a2 = atan2( p2.y - c.second, p2.x - c.first );
-            return a1 < a2;
-        };
+                {
+                    double a1 = atan2( p1.y - c.second, p1.x - c.first );
+                    double a2 = atan2( p2.y - c.second, p2.x - c.first );
+                    return a1 < a2;
+                };
 
         // sort by angle around centroid so that cyclic vertex order doesn't matter
         std::sort( aVerts.begin(), aVerts.end(),
@@ -2587,7 +2595,9 @@ bool SHAPE_LINE_CHAIN::CompareGeometry( const SHAPE_LINE_CHAIN& aOther,
         {
             if( abs( aVerts[i].x - bVerts[i].x ) > aEpsilon
                 || abs( aVerts[i].y - bVerts[i].y ) > aEpsilon )
+            {
                 return false;
+            }
         }
 
     }
@@ -2597,7 +2607,9 @@ bool SHAPE_LINE_CHAIN::CompareGeometry( const SHAPE_LINE_CHAIN& aOther,
         {
             if( abs( a.CPoint( i ).x - b.CPoint( i ).x ) > aEpsilon
                 || abs( a.CPoint( i ).y - b.CPoint( i ).y ) > aEpsilon )
+            {
                 return false;
+            }
         }
     }
 
@@ -2609,7 +2621,7 @@ bool SHAPE_LINE_CHAIN::CompareGeometry( const SHAPE_LINE_CHAIN& aOther,
 
 bool SHAPE_LINE_CHAIN::Intersects( const SHAPE_LINE_CHAIN& aChain ) const
 {
-    INTERSECTIONS dummy;
+    std::vector<INTERSECTION> dummy;
     return Intersect( aChain, dummy ) != 0;
 }
 
@@ -2729,7 +2741,7 @@ void SHAPE_LINE_CHAIN::RemoveDuplicatePoints()
     }
     else if( PointCount() == 3 )
     {
-        if( m_points[0] == m_points[1] )
+        if( m_points[0] == m_points[1] || m_points[1] == m_points[2] )
             Remove( 1 );
 
         return;
@@ -2743,10 +2755,9 @@ void SHAPE_LINE_CHAIN::RemoveDuplicatePoints()
 
         // We can eliminate duplicate vertices as long as they are part of the same shape, OR if
         // one of them is part of a shape and one is not.
-        while( j < PointCount() && m_points[i] == m_points[j] &&
-               ( m_shapes[i] == m_shapes[j] ||
-                 m_shapes[i] == SHAPES_ARE_PT ||
-                 m_shapes[j] == SHAPES_ARE_PT ) )
+        while( j < PointCount() && m_points[i] == m_points[j] && (   m_shapes[i] == m_shapes[j]
+                                                                  || m_shapes[i] == SHAPES_ARE_PT
+                                                                  || m_shapes[j] == SHAPES_ARE_PT ) )
         {
             j++;
         }
@@ -2915,7 +2926,7 @@ SHAPE_LINE_CHAIN& SHAPE_LINE_CHAIN::Simplify2( bool aRemoveColinear )
     }
     else if( PointCount() == 3 )
     {
-        if( m_points[0] == m_points[1] )
+        if( m_points[0] == m_points[1] || m_points[1] == m_points[2] )
             Remove( 1 );
 
         return *this;
@@ -2931,10 +2942,9 @@ SHAPE_LINE_CHAIN& SHAPE_LINE_CHAIN::Simplify2( bool aRemoveColinear )
 
         // We can eliminate duplicate vertices as long as they are part of the same shape, OR if
         // one of them is part of a shape and one is not.
-        while( j < np && m_points[i] == m_points[j] &&
-               ( m_shapes[i] == m_shapes[j] ||
-                 m_shapes[i] == SHAPES_ARE_PT ||
-                 m_shapes[j] == SHAPES_ARE_PT ) )
+        while( j < np && m_points[i] == m_points[j] && (   m_shapes[i] == m_shapes[j]
+                                                        || m_shapes[i] == SHAPES_ARE_PT
+                                                        || m_shapes[j] == SHAPES_ARE_PT ) )
         {
             j++;
         }
@@ -2971,7 +2981,9 @@ SHAPE_LINE_CHAIN& SHAPE_LINE_CHAIN::Simplify2( bool aRemoveColinear )
             while( n < np - 2
                     && ( SEG( p0, pts_unique[n + 2] ).LineDistance( pts_unique[n + 1] ) <= 1
                       || SEG( p0, pts_unique[n + 2] ).Collinear( SEG( p0, pts_unique[n + 1] ) ) ) )
+            {
                 n++;
+            }
         }
 
         m_points.push_back( p0 );
@@ -3005,8 +3017,7 @@ SHAPE_LINE_CHAIN& SHAPE_LINE_CHAIN::Simplify2( bool aRemoveColinear )
 }
 
 bool SHAPE_LINE_CHAIN::OffsetLine( int aAmount, CORNER_STRATEGY aCornerStrategy, int aMaxError,
-                                   SHAPE_LINE_CHAIN& aLeft, SHAPE_LINE_CHAIN& aRight,
-                                   bool aSimplify ) const
+                                   SHAPE_LINE_CHAIN& aLeft, SHAPE_LINE_CHAIN& aRight, bool aSimplify ) const
 {
     if( PointCount() < 2 )
         return false;
@@ -3121,24 +3132,22 @@ bool SHAPE_LINE_CHAIN::OffsetLine( int aAmount, CORNER_STRATEGY aCornerStrategy,
 }
 
 
-void SHAPE_LINE_CHAIN::TransformToPolygon( SHAPE_POLY_SET& aBuffer, int aError,
-                                           ERROR_LOC aErrorLoc ) const
+void SHAPE_LINE_CHAIN::TransformToPolygon( SHAPE_POLY_SET& aBuffer, int aError, ERROR_LOC aErrorLoc ) const
 {
     aBuffer.AddOutline( *this );
 }
 
 
 SHAPE_LINE_CHAIN::POINT_INSIDE_TRACKER::POINT_INSIDE_TRACKER( const VECTOR2I& aPoint ) :
-    m_point( aPoint ),
-    m_finished( false ),
-    m_state( 0 ),
-    m_count( 0 )
+        m_point( aPoint ),
+        m_finished( false ),
+        m_state( 0 ),
+        m_count( 0 )
 {
 }
 
 
-bool SHAPE_LINE_CHAIN::POINT_INSIDE_TRACKER::processVertex(
-        const VECTOR2I& ip, const VECTOR2I& ipNext )
+bool SHAPE_LINE_CHAIN::POINT_INSIDE_TRACKER::processVertex( const VECTOR2I& ip, const VECTOR2I& ipNext )
 {
     if( ipNext.y == m_point.y )
     {
@@ -3211,7 +3220,7 @@ void SHAPE_LINE_CHAIN::POINT_INSIDE_TRACKER::AddPolyline( const SHAPE_LINE_CHAIN
 
     for( int i = 1; i < aPolyline.PointCount(); i++ )
     {
-        auto p = aPolyline.CPoint( i );
+        const VECTOR2I& p = aPolyline.CPoint( i );
 
         if( !processVertex( m_lastPoint, p ) )
             return;
@@ -3260,8 +3269,7 @@ bool SHAPE_LINE_CHAIN::IsArcSegment( size_t aSegment ) const
             return false;
     }
 
-    return ( IsPtOnArc( aSegment )
-                 && ( ArcIndex( aSegment ) == m_shapes[nextIdx].first ) );
+    return ( IsPtOnArc( aSegment ) && ( ArcIndex( aSegment ) == m_shapes[nextIdx].first ) );
 }
 
 

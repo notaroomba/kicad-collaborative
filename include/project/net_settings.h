@@ -178,7 +178,10 @@ public:
         return it != m_netClassChainPatternAssignments.end() && !it->second.empty();
     }
 
-    /// @brief Clears effective netclass cache for the given net
+    /// @brief Current chain-derived patterns, grouped by the editor that produced them.
+    const auto& GetChainPatternAssignments() const { return m_netClassChainPatternAssignments; }
+
+    /// @brief Clears the net cache and cached bus classes derived from that net
     void ClearCacheForNet( const wxString& netName );
 
     /// @brief Clears the effective netclass cache for all nets
@@ -199,6 +202,11 @@ public:
     /// Rewrites any entry whose net path starts with aOldPrefix to use aNewPrefix. Returns true and
     /// clears the caches if anything changed.
     bool RenameNetPathPrefix( const wxString& aOldPrefix, const wxString& aNewPrefix );
+
+    /// @brief Retarget exact-net netclass patterns and net colors after nets are renamed.
+    /// Rewrites any entry naming a key of aNewNames to the mapped name. Returns true and clears
+    /// the caches if anything changed.
+    bool RenameNets( const std::map<wxString, wxString>& aNewNames );
 
     /// @brief Assign a net chain to a named class (used by inNetChainClass() DRC scope).
     void SetNetChainClass( const wxString& aChain, const wxString& aClass )
@@ -271,11 +279,11 @@ public:
     void RecomputeEffectiveNetclasses();
 
     /**
-     * Get a NETCLASS object from a given Netclass name string
+     * Get a NETCLASS object from a given Netclass name string.
      *
-     * @param aNetClassName the Netclass name to resolve
-     * @return shared pointer to the requested NETCLASS object, or the default NETCLASS
-    */
+     * @param aNetName the Netclass name to resolve.
+     * @return shared pointer to the requested NETCLASS object, or the default NETCLASS.
+     */
     std::shared_ptr<NETCLASS> GetNetClassByName( const wxString& aNetName ) const;
 
     /**
@@ -297,10 +305,11 @@ public:
      * @param aGroup is the input label, e.g. "USB{DP DM}"
      * @param name is the output group name, e.g. "USB"
      * @param aMemberList is a list of member strings, e.g. "DP", "DM"
+     * @param aPrefixEnd receives the opening member-list brace position in aGroup on success.
      * @return true if aGroup was successfully parsed
      */
     static bool ParseBusGroup( const wxString& aGroup, wxString* name,
-                               std::vector<wxString>* aMemberList );
+                               std::vector<wxString>* aMemberList, size_t* aPrefixEnd = nullptr );
 
     /**
      * Call a function for each member of an expanded bus pattern.
@@ -333,8 +342,8 @@ private:
      * to provide missing defaults. The netclasses vector will be sorted by priority 1st and then
      * name alphabetically
      */
-    void makeEffectiveNetclass( std::shared_ptr<NETCLASS>& effectiveNetclass,
-                                std::vector<NETCLASS*>&    netclasses ) const;
+    void makeEffectiveNetclass( std::shared_ptr<NETCLASS>&               effectiveNetclass,
+                                std::vector<std::shared_ptr<NETCLASS>>& netclasses ) const;
 
     /// @brief Adds any missing fields to the given netclass from the default netclass
     /// @returns true if any fields were added from the default netclass
@@ -384,6 +393,9 @@ private:
 
     /// @brief Cache of nets to pattern-matched netclasses
     std::map<wxString, std::shared_ptr<NETCLASS>> m_effectiveNetclassCache;
+
+    /// @brief Members consulted when a cached bus inherits its effective class.
+    std::map<wxString, std::set<wxString>> m_netclassBusMembers;
 
     /**
      * A map of fully-qualified net names to colors used in the board context.

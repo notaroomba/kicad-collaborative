@@ -22,6 +22,8 @@
 #include <tool/actions.h>
 #include <sch_edit_frame.h>
 #include <tools/sch_find_replace_tool.h>
+#include <tool/tool_dispatcher.h>
+#include <tool/tool_manager.h>
 
 
 DIALOG_SCH_FIND::DIALOG_SCH_FIND( SCH_BASE_FRAME* aParent, SCH_SEARCH_DATA* aData,
@@ -154,17 +156,24 @@ void DIALOG_SCH_FIND::OnCancel( wxCommandEvent& aEvent )
 
 void DIALOG_SCH_FIND::OnCharHook( wxKeyEvent& aEvent )
 {
-    if( aEvent.GetKeyCode() == WXK_F3 )
+    bool                      special = false;
+    std::optional<TOOL_EVENT> evt = m_frame->GetToolDispatcher()->GetToolEvent( &aEvent, &special );
+
+    if( evt && evt->IsKeyPressed() && evt->KeyCode() )
     {
-        updateFlags();
-        m_findReplaceData->findString = m_comboFind->GetValue();
+        // Match the user's hotkeys for the find actions, so they work while the dialog has focus
+        int hotkey = evt->Modifier() | evt->KeyCode();
 
-        if( aEvent.ShiftDown() )
-            m_findReplaceTool->FindNext( ACTIONS::findPrevious.MakeEvent() );
-        else
-            m_findReplaceTool->FindNext( ACTIONS::findNext.MakeEvent() );
-
-        return;
+        for( TOOL_ACTION* action : { &ACTIONS::findNext, &ACTIONS::findPrevious, &ACTIONS::findNextMarker } )
+        {
+            if( hotkey == action->GetHotKey() || hotkey == action->GetHotKeyAlt() )
+            {
+                updateFlags();
+                m_findReplaceData->findString = m_comboFind->GetValue();
+                m_findReplaceTool->FindNext( action->MakeEvent() );
+                return;
+            }
+        }
     }
 
     DIALOG_SCH_FIND_BASE::OnCharHook( aEvent );
@@ -260,6 +269,16 @@ void DIALOG_SCH_FIND::OnReplaceWithEnter( wxCommandEvent& aEvent )
 
 void DIALOG_SCH_FIND::OnOptions( wxCommandEvent& aEvent )
 {
+    if( aEvent.GetEventObject() == m_checkRegexMatch )
+    {
+        m_checkWholeWord->SetValue( false );
+        m_checkMatchCase->SetValue( false );
+    }
+    else if( aEvent.GetEventObject() == m_checkMatchCase || aEvent.GetEventObject() == m_checkWholeWord )
+    {
+        m_checkRegexMatch->SetValue( false );
+    }
+
     updateFlags();
     m_findDirty = true;
 }
@@ -267,11 +286,11 @@ void DIALOG_SCH_FIND::OnOptions( wxCommandEvent& aEvent )
 void DIALOG_SCH_FIND::updateFlags()
 {
     // Rebuild the search flags in m_findReplaceData from dialog settings
-    m_findReplaceData->matchCase                = m_checkMatchCase->GetValue();
-    m_findReplaceData->searchAllFields          = m_cbSearchHiddenFields->GetValue();
-    m_findReplaceData->searchAllPins = m_cbSearchPins->GetValue();
-    m_findReplaceData->replaceReferences        = m_cbReplaceReferences->GetValue();
-    m_findReplaceData->searchNetNames           = m_cbSearchNetNames->GetValue();
+    m_findReplaceData->matchCase         = m_checkMatchCase->GetValue();
+    m_findReplaceData->searchAllFields   = m_cbSearchHiddenFields->GetValue();
+    m_findReplaceData->searchAllPins     = m_cbSearchPins->GetValue();
+    m_findReplaceData->replaceReferences = m_cbReplaceReferences->GetValue();
+    m_findReplaceData->searchNetNames    = m_cbSearchNetNames->GetValue();
 
     // Only read the current-sheet-only widget when the user can actually toggle it.
     // While selection-only forces it on, its value doesn't reflect user intent.
@@ -375,7 +394,7 @@ void DIALOG_SCH_FIND::SetFindEntries( const wxArrayString& aEntries, const wxStr
     while( m_comboFind->GetCount() > 10 )
     {
         m_frame->GetFindHistoryList().pop_back();
-        m_comboFind->Delete( 9 );
+        m_comboFind->Delete( m_comboFind->GetCount() - 1 );
     }
 
     if( !aFindString.IsEmpty() )
@@ -397,13 +416,13 @@ void DIALOG_SCH_FIND::SetReplaceEntries( const wxArrayString& aEntries )
 
     while( m_comboReplace->GetCount() > 10 )
     {
-        m_frame->GetFindHistoryList().pop_back();
-        m_comboReplace->Delete( 9 );
+        m_frame->GetReplaceHistoryList().pop_back();
+        m_comboReplace->Delete( m_comboReplace->GetCount() - 1 );
     }
 
     if( m_comboReplace->GetCount() )
     {
         m_comboReplace->SetSelection( 0 );
-        m_comboFind->SelectAll();
+        m_comboReplace->SelectAll();
     }
 }

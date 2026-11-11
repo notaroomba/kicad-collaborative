@@ -32,6 +32,7 @@
 #include <zones.h>
 #include <geometry/eda_angle.h>
 #include <teardrop/teardrop_types.h>
+#include <kiid.h>
 
 class PCB_BASE_FRAME;
 class wxDataViewListCtrl;
@@ -75,7 +76,7 @@ struct THIEVING_SETTINGS
                                        // (or between crosshatch lines)
     int              line_width = 0;   // line width for crosshatch only
     bool             stagger = false;  // offset alternating rows by half the stride
-    EDA_ANGLE        orientation = ANGLE_0;
+    EDA_ORIENTATION  orientation{ ANGLE_0 };
 
     bool operator==( const THIEVING_SETTINGS& aOther ) const
     {
@@ -115,8 +116,25 @@ enum class PLACEMENT_SOURCE_T
 };
 
 /**
- * ZONE_SETTINGS
- * handles zones parameters.
+ * Options for copying a placement rule area onto the others linked to it.  Every linked area stores the same
+ * options, so any of them can be the source of an update.
+ */
+struct REPEAT_LAYOUT_OPTIONS
+{
+    bool m_copyRouting = true;
+    bool m_connectedRoutingOnly = false;
+    bool m_copyPlacement = true;
+    bool m_copyOtherItems = true;
+    bool m_groupItems = false;
+    bool m_includeLockedItems = true;
+    KIID m_anchor = niluuid;       ///< This area's own anchor footprint, or niluuid for the area center
+
+    bool operator==( const REPEAT_LAYOUT_OPTIONS& aOther ) const = default;
+};
+
+/**
+ * Handle zones parameters.
+ *
  * Because a zone can be on copper or non copper layers, and can be also
  * a keepout area, some parameters are irrelevant depending on the type of zone
  */
@@ -162,7 +180,8 @@ public:
 
     bool            m_Locked;
 
-    /* A zone outline can be a teardrop zone with different rules
+    /**
+     * A zone outline can be a teardrop zone with different rules
      * priority, smoothed corners, thermal relief...
      */
     TEARDROP_TYPE   m_TeardropType;
@@ -174,7 +193,7 @@ private:
     unsigned int    m_cornerRadius;          // Corner chamfer distance / fillet radius
     ZONE_CONNECTION m_padConnection;
 
-    /*
+    /**
      * Keepout zones and keepout flags.
      * Note that DRC rules can set keepouts on zones whether they're a keepout or not.
      */
@@ -218,14 +237,16 @@ public:
 
     /**
      * A helper routine for the various zone dialogs (copper, non-copper, keepout).
+     *
      * @param aList the wxDataViewListCtrl to populate
      * @param aFrame the parent editor frame
+     * @param aLayers is the list of layers to set up
      */
     void SetupLayersList( wxDataViewListCtrl* aList, PCB_BASE_FRAME* aFrame, LSET aLayers );
 
     /**
-     * Function ExportSetting
-     * copy settings to a given zone
+     * Copy settings to a given zone.
+     *
      * @param aTarget: the given zone
      * @param aFullExport: if false: some parameters are NOT exported
      *   because they must not be  exported when export settings from a zone to others zones

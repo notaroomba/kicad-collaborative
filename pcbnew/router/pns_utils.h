@@ -19,11 +19,11 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef __PNS_UTILS_H
-#define __PNS_UTILS_H
+#pragma once
 
 #include <math/vector2d.h>
 #include <math/box2.h>
+#include <core/minoptmax.h>
 #include <geometry/shape_line_chain.h>
 #include <geometry/shape_segment.h>
 #include <geometry/shape_rect.h>
@@ -37,6 +37,7 @@ class ITEM;
 class LINE;
 class DEBUG_DECORATOR;
 class NODE;
+
 /** Various utility functions */
 
 const SHAPE_LINE_CHAIN ArcHull( const SHAPE_ARC& aSeg, int aClearance, int aWalkaroundThickness );
@@ -63,14 +64,28 @@ OPT_BOX2I ChangedArea( const ITEM* aItemA, const ITEM* aItemB );
 OPT_BOX2I ChangedArea( const LINE& aLineA, const LINE& aLineB );
 
 void HullIntersection( const SHAPE_LINE_CHAIN& hull, const SHAPE_LINE_CHAIN& line,
-                       SHAPE_LINE_CHAIN::INTERSECTIONS& ips );
+                       std::vector<SHAPE_LINE_CHAIN::INTERSECTION>& ips );
 
-const SHAPE_LINE_CHAIN BuildHullForPrimitiveShape( const SHAPE* aShape, int aClearance,
-                                                          int aWalkaroundThickness );
+const SHAPE_LINE_CHAIN BuildHullForPrimitiveShape( const SHAPE* aShape, int aClearance, int aWalkaroundThickness );
 
 void NodeStats( DEBUG_DECORATOR* aDbg, wxString aLabel, NODE *aNode );
 
+/**
+     * Snaps the point \a aP to segment \a aSeg. Splits the segment in two, forming a
+     * joint at \a aP and stores updated topology in node \a aNode.
+     */
+bool SplitAdjacentSegments( NODE* aNode, ITEM* aSeg, const VECTOR2I& aP );
+
+/**
+     * Snaps the point \a aP to arc \a aArc. Splits the arc in two, forming a
+     * joint at \a aP and stores updated topology in node \a aNode.
+     */
+bool SplitAdjacentArcs( NODE* aNode, ITEM* aArc, const VECTOR2I& aP );
+
+const wxString Format( const MINOPTMAX<int> x );
+
+const SEG LongestCoveringSegment( const SEG& a, const SEG& b );
+
+bool commonParallelProjection( SEG p, SEG n, SEG &pClip, SEG& nClip );
+
 }
-
-
-#endif    // __PNS_UTILS_H

@@ -60,44 +60,42 @@ SCH_SHEET_PIN::SCH_SHEET_PIN( SCH_SHEET* parent, const VECTOR2I& pos, const wxSt
 }
 
 
-void SCH_SHEET_PIN::Serialize( kiapi::schematic::types::SheetPin& pin,
-                               const EDA_IU_SCALE& aScale ) const
+void SCH_SHEET_PIN::Serialize( kiapi::schematic::types::SheetPin& pin ) const
 {
     using namespace kiapi::schematic::types;
 
 
     pin.mutable_id()->set_value( m_Uuid.AsStdString() );
     kiapi::common::PackVector2( *pin.mutable_position(), GetPosition(), schIUScale );
-    pin.set_spin_style(
-            ToProtoEnum<SPIN_STYLE::SPIN, SchematicLabelSpinStyle>(
-                    static_cast<SPIN_STYLE::SPIN>( static_cast<int>( GetSpinStyle() ) ) ) );
+    pin.set_spin_style( ToProtoEnum<SPIN_STYLE::SPIN,
+                        SchematicLabelSpinStyle>( static_cast<SPIN_STYLE::SPIN>( (int) GetSpinStyle() ) ) );
     pin.set_shape( ToProtoEnum<LABEL_FLAG_SHAPE, SchematicLabelShape>( GetShape() ) );
     pin.set_side( ToProtoEnum<SHEET_SIDE, SheetSide>( GetSide() ) );
     pin.set_locked( SCH_ITEM::IsLocked() ? kiapi::common::types::LockedState::LS_LOCKED
                                          : kiapi::common::types::LockedState::LS_UNLOCKED );
 
-    EDA_TEXT::Serialize( *pin.mutable_text(), aScale );
+    EDA_TEXT::Serialize( *pin.mutable_text(), schIUScale );
 
+    kiapi::common::PackCustomProperties( pin.mutable_custom_properties(), *this );
 }
 
 void SCH_SHEET_PIN::Serialize( google::protobuf::Any& aContainer ) const
 {
     kiapi::schematic::types::SheetPin pin;
-    Serialize( pin, schIUScale );
-    aContainer.PackFrom( pin );
+    Serialize( pin );
+
+    if( !aContainer.PackFrom( pin ) )
+        wxFAIL_MSG( wxT( "Failed to pack SCH_SHEET_PIN" ) );
 }
 
 
-bool SCH_SHEET_PIN::Deserialize( const kiapi::schematic::types::SheetPin& pin,
-                                 const EDA_IU_SCALE& aScale )
+bool SCH_SHEET_PIN::Deserialize( const kiapi::schematic::types::SheetPin& pin )
 {
     using namespace kiapi::schematic::types;
 
-
-
     const_cast<KIID&>( m_Uuid ) = KIID( pin.id().value() );
 
-    if( !EDA_TEXT::Deserialize( pin.text(), aScale ) )
+    if( !EDA_TEXT::Deserialize( pin.text(), schIUScale ) )
         return false;
 
     SetPosition( kiapi::common::UnpackVector2( pin.position(), schIUScale ) );
@@ -105,6 +103,7 @@ bool SCH_SHEET_PIN::Deserialize( const kiapi::schematic::types::SheetPin& pin,
     SetSpinStyle( FromProtoEnum<SPIN_STYLE::SPIN, SchematicLabelSpinStyle>( pin.spin_style() ) );
     SetShape( FromProtoEnum<LABEL_FLAG_SHAPE, SchematicLabelShape>( pin.shape() ) );
     SetLocked( pin.locked() == kiapi::common::types::LockedState::LS_LOCKED );
+    kiapi::common::UnpackCustomProperties( pin.custom_properties(), *this );
     return true;
 }
 
@@ -115,7 +114,7 @@ bool SCH_SHEET_PIN::Deserialize( const google::protobuf::Any& aContainer )
     if( !aContainer.UnpackTo( &pin ) )
         return false;
 
-    return Deserialize( pin, schIUScale );
+    return Deserialize( pin );
 }
 
 
@@ -130,19 +129,12 @@ void SCH_SHEET_PIN::swapData( SCH_ITEM* aItem )
     SCH_HIERLABEL::swapData( aItem );
 
     wxCHECK_RET( aItem->Type() == SCH_SHEET_PIN_T,
-                 wxString::Format( "SCH_SHEET_PIN object cannot swap data with %s object.",
-                                   aItem->GetClass() ) );
+                 wxString::Format( "SCH_SHEET_PIN object cannot swap data with %s object.", aItem->GetClass() ) );
 
     SCH_SHEET_PIN* pin = static_cast<SCH_SHEET_PIN*>( aItem );
 
     std::swap( m_number, pin->m_number );
     std::swap( m_edge, pin->m_edge );
-}
-
-
-bool SCH_SHEET_PIN::operator==( const SCH_SHEET_PIN* aPin ) const
-{
-    return aPin == this;
 }
 
 
@@ -357,8 +349,8 @@ void SCH_SHEET_PIN::Rotate( const VECTOR2I& aCenter, bool aRotateCCW )
 }
 
 
-void SCH_SHEET_PIN::CreateGraphicShape( const RENDER_SETTINGS* aSettings,
-                                        std::vector<VECTOR2I>& aPoints, const VECTOR2I& aPos ) const
+void SCH_SHEET_PIN::CreateGraphicShape( const RENDER_SETTINGS* aSettings, std::vector<VECTOR2I>& aPoints,
+                                        const VECTOR2I& aPos ) const
 {
     /*
      * These are the same icon shapes as SCH_HIERLABEL but the graphic icon is slightly
@@ -388,8 +380,8 @@ void SCH_SHEET_PIN::GetEndPoints( std::vector<DANGLING_END_ITEM>& aItemList )
 
 wxString SCH_SHEET_PIN::GetItemDescription( UNITS_PROVIDER* aUnitsProvider, bool aFull ) const
 {
-    return wxString::Format( _( "Hierarchical Sheet Pin '%s'" ),
-                             aFull ? GetShownText( false ) : KIUI::EllipsizeMenuText( GetText() ) );
+    return wxString::Format( _( "Hierarchical Sheet Pin '%s'" ), aFull ? GetShownText( FOR_GUI )
+                                                                       : KIUI::EllipsizeMenuText( GetText() ) );
 }
 
 
@@ -416,8 +408,13 @@ bool SCH_SHEET_PIN::operator==( const SCH_ITEM& aOther ) const
 
     const SCH_SHEET_PIN* other = static_cast<const SCH_SHEET_PIN*>( &aOther );
 
-    return m_edge == other->m_edge && m_number == other->m_number
-           && SCH_HIERLABEL::operator==( aOther );
+    if( GetNumber() != other->GetNumber() )
+        return false;
+
+    if( GetSide() != other->GetSide() )
+        return false;
+
+    return SCH_HIERLABEL::operator==( *other );
 }
 
 
@@ -442,8 +439,7 @@ double SCH_SHEET_PIN::Similarity( const SCH_ITEM& aOther ) const
 }
 
 
-bool SCH_SHEET_PIN::HasConnectivityChanges( const SCH_ITEM* aItem,
-                                            const SCH_SHEET_PATH* aInstance ) const
+bool SCH_SHEET_PIN::HasConnectivityChanges( const SCH_ITEM* aItem, const SCH_SHEET_PATH* aInstance ) const
 {
     // Do not compare to ourself.
     if( aItem == this )

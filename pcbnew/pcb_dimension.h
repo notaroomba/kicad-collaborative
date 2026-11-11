@@ -288,16 +288,40 @@ public:
     void SetTextPositionMode( DIM_TEXT_POSITION aMode ) { m_textPosition = aMode; }
     DIM_TEXT_POSITION GetTextPositionMode() const { return m_textPosition; }
 
+    void ChangeTextPositionMode( DIM_TEXT_POSITION aMode )
+    {
+        SetTextPositionMode( aMode );
+        Update();
+    }
+
     int GetArrowLength() const { return m_arrowLength; }
     void SetArrowLength( int aLength ) { m_arrowLength = aLength; }
+
+    void ChangeArrowLength( int aLength )
+    {
+        SetArrowLength( aLength );
+        Update();
+    }
 
     void SetExtensionOffset( int aOffset ) { m_extensionOffset = aOffset; }
     int GetExtensionOffset() const { return m_extensionOffset; }
 
+    void ChangeExtensionOffset( int aOffset )
+    {
+        SetExtensionOffset( aOffset );
+        Update();
+    }
+
     int GetLineThickness() const        { return m_lineThickness; }
     void SetLineThickness( int aWidth ) { m_lineThickness = aWidth; }
 
-    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& settings, bool aCheckSide ) override;
+    void ChangeLineThickness( int aWidth )
+    {
+        SetLineThickness( aWidth );
+        Update();
+    }
+
+    void StyleFromSettings( const BOARD_DESIGN_SETTINGS& aSettings, bool aCheckSide ) override;
 
     /**
      * @return a list of line segments that make up this dimension (for drawing, plotting, etc).
@@ -317,6 +341,7 @@ public:
      * changed.
      *
      * @param axis_pos is the vertical axis position to mirror around.
+     * @param aFlipDirection is the axis (X or Y) to mirror around.
      */
     virtual void Mirror( const VECTOR2I& axis_pos, FLIP_DIRECTION aFlipDirection ) override;
 
@@ -341,6 +366,8 @@ public:
     double ViewGetLOD( int aLayer, const KIGFX::VIEW* aView ) const override;
 
     void ClearRenderCache() override;
+
+    double GetCoverageArea( int aTextMargin ) const override;
 
     void TransformShapeToPolygon( SHAPE_POLY_SET& aBuffer, PCB_LAYER_ID aLayer, int aClearance,
                                   int aError, ERROR_LOC aErrorLoc,
@@ -377,7 +404,7 @@ protected:
      * Draws an arrow and updates the shape container.
      * example arrow 0Deg tail:4  (---->)
      *
-     * @param startPoint arrow point.
+     * @param aStartPoint arrow point.
      * @param anAngle arrow angle.
      * @param aLength arrow tail length.
      */
@@ -408,7 +435,7 @@ protected:
     VECTOR2I m_start; ///< Start, FP-relative when in a footprint, board absolute otherwise.
     VECTOR2I m_end;   ///< End, FP-relative when in a footprint, board absolute otherwise.
 
-    ///< Internal cache of drawn shapes
+    /// Internal cache of drawn shapes
     std::vector<std::shared_ptr<SHAPE>> m_shapes;
 
     bool       m_inClearRenderCache;      ///< re-entrancy guard
@@ -492,6 +519,7 @@ public:
      * Update the stored height basing on points coordinates.
      *
      * @param aCrossbarStart is the start point of the crossbar.
+     * @param aCrossbarEnd is the end point of the crossbar.
      */
     void UpdateHeight( const VECTOR2I& aCrossbarStart, const VECTOR2I& aCrossbarEnd );
 

@@ -19,10 +19,12 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <board.h>
 #include <exporters/export_d356.h>
@@ -45,6 +47,27 @@ std::string trim( const std::string& aStr )
 
     return aStr.substr( begin, end - begin + 1 );
 }
+
+
+std::vector<std::string> exportD356( const std::string& aBoardFile )
+{
+    std::unique_ptr<BOARD> board = KI_TEST::RequireBoardFromPcbnewQAData( aBoardFile );
+
+    const std::filesystem::path outputPath = std::filesystem::temp_directory_path() / ( aBoardFile + ".d356" );
+
+    IPC356D_WRITER writer( board.get() );
+    BOOST_REQUIRE( writer.Write( wxString::FromUTF8( outputPath.string().c_str() ) ) );
+
+    std::ifstream            in( outputPath );
+    std::vector<std::string> lines;
+
+    for( std::string line; std::getline( in, line ); )
+        lines.push_back( line );
+
+    in.close();
+    std::filesystem::remove( outputPath );
+    return lines;
+}
 } // namespace
 
 
@@ -60,8 +83,7 @@ BOOST_AUTO_TEST_CASE( ExportD356MidpointFlag )
 
     BOOST_REQUIRE( std::filesystem::exists( boardPath ) );
 
-    std::unique_ptr<BOARD> board = KI_TEST::ReadBoardFromFileOrStream( boardPath.string() );
-    BOOST_REQUIRE( board );
+    std::unique_ptr<BOARD> board = KI_TEST::RequireBoardFromPcbnewQAData( "issue3812.kicad_pcb" );
 
     const std::filesystem::path outputPath =
             std::filesystem::temp_directory_path() / "kicad_d356_midpoint_test.d356";
@@ -133,5 +155,66 @@ BOOST_AUTO_TEST_CASE( ExportD356MidpointFlag )
     BOOST_CHECK_GT( unnamedPads, 0 );
     BOOST_CHECK_GT( vias, 0 );
 
+    in.close();
     std::filesystem::remove( outputPath );
+}
+
+
+// A blind via is a 307 record with its layer span in columns 75-80 plus a 027 surface pad record
+// The fixture's blind vias run from F.Cu to In2.Cu
+BOOST_AUTO_TEST_CASE( ExportD356BlindVias )
+{
+    const std::vector<std::string> lines = exportD356( "issue10697.kicad_pcb" );
+
+    BOOST_CHECK( std::any_of( lines.begin(), lines.end(),
+                              []( const std::string& aLine )
+                              {
+                                  return aLine.rfind( "P  VER   IPC-D-356A ", 0 ) == 0;
+                              } ) );
+
+    int blindVias = 0;
+
+    for( size_t ii = 0; ii < lines.size(); ++ii )
+    {
+        if( lines[ii].rfind( "307", 0 ) != 0 )
+            continue;
+
+        ++blindVias;
+        BOOST_REQUIRE_EQUAL( lines[ii].size(), 80u );
+        BOOST_CHECK_EQUAL( lines[ii].substr( 38, 3 ), "A01" );
+        BOOST_CHECK_EQUAL( lines[ii].substr( 71, 2 ), " S" );
+        BOOST_CHECK_EQUAL( lines[ii].substr( 74 ), "L01L03" );
+
+        // 0.3175 mm surface pad is 125 decimils
+        BOOST_REQUIRE_LT( ii + 1, lines.size() );
+        BOOST_REQUIRE_EQUAL( lines[ii + 1].size(), 80u );
+        BOOST_CHECK_EQUAL( lines[ii + 1].substr( 0, 17 ), "027" + lines[ii].substr( 3, 14 ) );
+        BOOST_CHECK_EQUAL( lines[ii + 1].substr( 38, 3 ), "A01" );
+        BOOST_CHECK_EQUAL( lines[ii + 1].substr( 57, 5 ), "X0125" );
+    }
+
+    BOOST_CHECK_EQUAL( blindVias, 7 );
+
+    // Records are sorted by net, and names past 14 characters go through an NNAME alias
+    const std::vector<std::string> longNames = exportD356( "issue3812.kicad_pcb" );
+    std::vector<std::string>       nets;
+    std::string                    alias;
+
+    for( const std::string& line : longNames )
+    {
+        if( line[0] == '3' )
+            nets.push_back( line.substr( 3, 14 ) );
+
+        if( line.rfind( "P  NNAME", 0 ) == 0 && trim( line.substr( 14 ) ) == "/inout_user/CAN_H" )
+            alias = line.substr( 8, 5 );
+    }
+
+    BOOST_CHECK( std::is_sorted( nets.begin(), nets.end() ) );
+
+    BOOST_REQUIRE_EQUAL( alias.size(), 5u );
+    BOOST_CHECK( std::any_of( longNames.begin(), longNames.end(),
+                              [&]( const std::string& aLine )
+                              {
+                                  return aLine[0] == '3' && trim( aLine.substr( 3, 14 ) ) == alias;
+                              } ) );
 }

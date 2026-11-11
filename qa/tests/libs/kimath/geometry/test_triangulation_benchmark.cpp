@@ -808,8 +808,16 @@ BOOST_AUTO_TEST_CASE( BenchmarkAllExtractedPolygons )
 
     std::vector<ZONE_COMPARISON> comparisons;
 
-    for( const auto& polyFile : polyFiles )
+    // Unoptimized builds spend minutes here without learning more than a sample shows
+#ifdef DEBUG
+    const size_t fileStride = 8;
+#else
+    const size_t fileStride = 1;
+#endif
+
+    for( size_t fileIdx = 0; fileIdx < polyFiles.size(); fileIdx += fileStride )
     {
+        const auto& polyFile = polyFiles[fileIdx];
         BOARD_ENTRY board;
 
         if( !ParsePolyFile( polyFile, board ) )
@@ -891,7 +899,7 @@ BOOST_AUTO_TEST_CASE( BenchmarkAllExtractedPolygons )
         OutputComparisonReport( baseline, comparisons, totalTriangles, totalSpikeyTri, totalZones );
 }
 
-
+#if !defined( __MINGW32__ )   // on mingw use of * boost::unit_test::disabled() creates serious link issues
 BOOST_AUTO_TEST_CASE( UpdateTriangulationStatus, * boost::unit_test::disabled() )
 {
     // Naming the enclosing suite with --run_test overrides disabled(), which would otherwise
@@ -1000,6 +1008,6 @@ BOOST_AUTO_TEST_CASE( UpdateTriangulationStatus, * boost::unit_test::disabled() 
     BOOST_TEST_MESSAGE( "Boards: " << polyFiles.size() << "  Zones: " << totalZones
                         << "  Triangles: " << totalTriangles );
 }
-
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

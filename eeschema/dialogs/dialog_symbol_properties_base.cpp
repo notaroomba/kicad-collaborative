@@ -1,5 +1,5 @@
 ///////////////////////////////////////////////////////////////////////////
-// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6)
+// C++ code generated with wxFormBuilder (version 4.2.1-0-g80c4cb6a)
 // http://www.wxformbuilder.org/
 //
 // PLEASE DO *NOT* EDIT THIS FILE!
@@ -30,7 +30,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	m_fieldsGrid = new WX_GRID( sbFields->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, 0 );
 
 	// Grid
-	m_fieldsGrid->CreateGrid( 4, 14 );
+	m_fieldsGrid->CreateGrid( 4, 13 );
 	m_fieldsGrid->EnableEditing( true );
 	m_fieldsGrid->EnableGridLines( true );
 	m_fieldsGrid->EnableDragGridSize( false );
@@ -38,7 +38,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 
 	// Columns
 	m_fieldsGrid->SetColSize( 0, 72 );
-	m_fieldsGrid->SetColSize( 1, 10 );
+	m_fieldsGrid->SetColSize( 1, 15 );
 	m_fieldsGrid->SetColSize( 2, 48 );
 	m_fieldsGrid->SetColSize( 3, 84 );
 	m_fieldsGrid->SetColSize( 4, 66 );
@@ -49,8 +49,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	m_fieldsGrid->SetColSize( 9, 84 );
 	m_fieldsGrid->SetColSize( 10, 84 );
 	m_fieldsGrid->SetColSize( 11, 84 );
-	m_fieldsGrid->SetColSize( 12, 10 );
-	m_fieldsGrid->SetColSize( 13, 48 );
+	m_fieldsGrid->SetColSize( 12, 100 );
 	m_fieldsGrid->EnableDragColMove( false );
 	m_fieldsGrid->EnableDragColSize( true );
 	m_fieldsGrid->SetColLabelValue( 0, _("Name") );
@@ -66,7 +65,6 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	m_fieldsGrid->SetColLabelValue( 10, _("X Position") );
 	m_fieldsGrid->SetColLabelValue( 11, _("Y Position") );
 	m_fieldsGrid->SetColLabelValue( 12, _("Font") );
-	m_fieldsGrid->SetColLabelValue( 13, _("Color") );
 	m_fieldsGrid->SetColLabelSize( 22 );
 	m_fieldsGrid->SetColLabelAlignment( wxALIGN_CENTER, wxALIGN_CENTER );
 
@@ -143,6 +141,14 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	m_bodyStyle->Wrap( -1 );
 	gbSizer1->Add( m_bodyStyle, wxGBPosition( 1, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
 
+	m_composedRefLabel = new wxStaticText( sbGeneralProps->GetStaticBox(), wxID_ANY, _("Composed reference:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_composedRefLabel->Wrap( -1 );
+	gbSizer1->Add( m_composedRefLabel, wxGBPosition( 2, 0 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxLEFT, 5 );
+
+	m_composedRef = new wxStaticText( sbGeneralProps->GetStaticBox(), wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	m_composedRef->Wrap( -1 );
+	gbSizer1->Add( m_composedRef, wxGBPosition( 2, 1 ), wxGBSpan( 1, 1 ), wxALIGN_CENTER_VERTICAL|wxRIGHT, 5 );
+
 	wxArrayString m_bodyStyleChoiceChoices;
 	m_bodyStyleChoice = new wxChoice( sbGeneralProps->GetStaticBox(), wxID_ANY, wxDefaultPosition, wxDefaultSize, m_bodyStyleChoiceChoices, 0 );
 	m_bodyStyleChoice->SetSelection( 0 );
@@ -180,19 +186,33 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	m_ShowPinNumButt->SetValue(true);
 	m_ShowPinNumButt->SetToolTip( _("Show or hide pin numbers") );
 
-	bSizer11->Add( m_ShowPinNumButt, 1, wxALL, 3 );
+	bSizer11->Add( m_ShowPinNumButt, 0, wxALL, 3 );
+
+
+	bSizer11->Add( 15, 0, 0, wxEXPAND, 5 );
 
 	m_ShowPinNameButt = new wxCheckBox( sbGeneralProps->GetStaticBox(), wxID_ANY, _("Show pin names"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_ShowPinNameButt->SetValue(true);
 	m_ShowPinNameButt->SetToolTip( _("Show or hide pin names") );
 
-	bSizer11->Add( m_ShowPinNameButt, 1, wxALL, 3 );
+	bSizer11->Add( m_ShowPinNameButt, 0, wxALL, 3 );
 
 
 	sbGeneralProps->Add( bSizer11, 0, wxEXPAND|wxTOP, 13 );
 
+	wxBoxSizer* bSizer12;
+	bSizer12 = new wxBoxSizer( wxHORIZONTAL );
 
-	bLowerSizer->Add( sbGeneralProps, 4, wxEXPAND|wxRIGHT|wxLEFT, 5 );
+	m_LocalPower = new wxCheckBox( sbGeneralProps->GetStaticBox(), wxID_ANY, _("Local power"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_LocalPower->SetToolTip( _("Local power symbols create labels that are limited to the sheet in which they are used") );
+
+	bSizer12->Add( m_LocalPower, 0, wxALL, 3 );
+
+
+	sbGeneralProps->Add( bSizer12, 0, wxEXPAND, 13 );
+
+
+	bLowerSizer->Add( sbGeneralProps, 7, wxEXPAND|wxRIGHT|wxLEFT, 5 );
 
 	wxBoxSizer* bMiddleCol;
 	bMiddleCol = new wxBoxSizer( wxVERTICAL );
@@ -224,6 +244,9 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 
 	sbAttributes->Add( m_cbExcludeFromPosFiles, 0, wxBOTTOM|wxRIGHT|wxLEFT, 5 );
 
+
+	sbAttributes->Add( 0, 0, 1, wxEXPAND, 5 );
+
 	wxBoxSizer* ptSizer;
 	ptSizer = new wxBoxSizer( wxHORIZONTAL );
 
@@ -245,7 +268,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	bMiddleCol->Add( sbAttributes, 1, wxEXPAND|wxRIGHT|wxLEFT, 5 );
 
 
-	bLowerSizer->Add( bMiddleCol, 3, wxEXPAND|wxRIGHT|wxLEFT, 5 );
+	bLowerSizer->Add( bMiddleCol, 6, wxEXPAND|wxRIGHT|wxLEFT, 5 );
 
 	wxBoxSizer* buttonsSizer;
 	buttonsSizer = new wxBoxSizer( wxVERTICAL );
@@ -269,7 +292,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	buttonsSizer->Add( m_editLibrarySymbolBtn, 0, wxEXPAND|wxTOP|wxRIGHT|wxLEFT, 5 );
 
 
-	bLowerSizer->Add( buttonsSizer, 3, wxEXPAND|wxALL, 5 );
+	bLowerSizer->Add( buttonsSizer, 6, wxEXPAND|wxALL, 5 );
 
 
 	generalPageSizer->Add( bLowerSizer, 0, wxEXPAND|wxTOP|wxBOTTOM, 5 );
@@ -388,6 +411,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::DIALOG_SYMBOL_PROPERTIES_BASE( wxWindow* parent, 
 	m_mirrorCtrl->Connect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnChoice ), NULL, this );
 	m_ShowPinNumButt->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_ShowPinNameButt->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
+	m_LocalPower->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_cbExcludeFromSim->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_cbExcludeFromBoard->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_cbExcludeFromBom->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
@@ -421,6 +445,7 @@ DIALOG_SYMBOL_PROPERTIES_BASE::~DIALOG_SYMBOL_PROPERTIES_BASE()
 	m_mirrorCtrl->Disconnect( wxEVT_COMMAND_CHOICE_SELECTED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnChoice ), NULL, this );
 	m_ShowPinNumButt->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_ShowPinNameButt->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
+	m_LocalPower->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_cbExcludeFromSim->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_cbExcludeFromBoard->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );
 	m_cbExcludeFromBom->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( DIALOG_SYMBOL_PROPERTIES_BASE::OnCheckBox ), NULL, this );

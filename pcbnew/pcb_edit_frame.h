@@ -23,6 +23,7 @@
 
 #include "pcb_base_edit_frame.h"
 #include "zones.h"
+#include <board.h>
 #include <mail_type.h>
 #include <settings/app_settings.h>
 #include <variant>
@@ -68,6 +69,7 @@ class WX_INFOBAR;
 class KICAD_API_SERVER;
 class API_HANDLER_PCB;
 class API_HANDLER_COMMON;
+class API_HANDLER_LIBRARIES;
 
 enum LAST_PATH_TYPE : unsigned int;
 
@@ -80,7 +82,7 @@ wxDECLARE_EVENT( EDA_EVT_PCB_LAST_SCH_SHEET_CHANGED, wxCommandEvent );
  *
  * See also class PCB_BASE_FRAME(): Basic class for Pcbnew and GerbView.
  */
-class PCB_EDIT_FRAME : public PCB_BASE_EDIT_FRAME
+class PCB_EDIT_FRAME : public PCB_BASE_EDIT_FRAME, public BOARD_LISTENER
 {
 public:
     virtual ~PCB_EDIT_FRAME();
@@ -223,6 +225,20 @@ public:
      */
     bool LoadProjectSettings();
 
+    /// Apply what the project file sets and this frame caches, leaving the local settings alone.
+    void ApplyProjectFileSettings();
+
+    /**
+     * Bring the frame in line with a project file that was reread from disk.
+     *
+     * Every value this frame copies out of the project file and writes back on save or close must be
+     * refreshed here; a copy left stale silently undoes the new file on the next save.
+     */
+    void ReloadProjectFileSettings();
+
+    /// Update what depends on the board's project settings after they changed in memory.
+    void RefreshProjectSettings();
+
     void LoadSettings( APP_SETTINGS_BASE* aCfg ) override;
 
     void SaveSettings( APP_SETTINGS_BASE* aCfg ) override;
@@ -248,7 +264,8 @@ public:
      *       the project file.  The advantage of relative paths is that is more likely to
      *       work when opening the same project from both Windows and Linux.
      *
-     * @param aLastPath - The last file with full path successfully read.
+     * @param aType
+     * @param aLastPath is the last file with full path successfully read.
      */
     void SetLastPath( LAST_PATH_TYPE aType, const wxString& aLastPath );
 
@@ -287,6 +304,11 @@ public:
     void OnModify() override;
 
     /**
+     * Keep the selection and view in step with generated tables rebuilt outside a commit.
+     */
+    void OnBoardItemsChanged( BOARD& aBoard, std::vector<BOARD_ITEM*>& aItems ) override;
+
+    /**
      * Change the currently active layer to \a aLayer and also update the #APPEARANCE_CONTROLS.
      */
     void SetActiveLayer( PCB_LAYER_ID aLayer ) override
@@ -321,8 +343,16 @@ public:
      */
     void SetElementVisibility( GAL_LAYER_ID aElement, bool aNewState );
 
-    ///< @copydoc EDA_DRAW_FRAME::UseGalCanvas()
+    /// @copydoc EDA_DRAW_FRAME::ActivateGalCanvas()
     void ActivateGalCanvas() override;
+
+    /**
+     * Tell every hole to redraw its drill symbol.
+     *
+     * A cached GAL group replays until its own item is updated, so changing a map or a
+     * symbol assignment is invisible until the holes themselves are refreshed.
+     */
+    void RefreshDrillSymbols( int aUpdateFlags ) override;
 
     void ShowBoardSetupDialog( const wxString& aInitialPage = wxEmptyString, wxWindow* aParent = nullptr );
 
@@ -382,6 +412,14 @@ public:
     bool OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl = 0 ) override;
 
     /**
+     * Reload the board from disk.
+     * The caller handles confirmation before unsaved edits are discarded.
+     *
+     * @return false when there is no filename or the reload fails.
+     */
+    bool ReloadFromDisk();
+
+    /**
      * Write the board data structures to \a a aFileName.
      *
      * Create a backup when requested and update flags (modified and saved flags).
@@ -419,7 +457,7 @@ public:
      */
     bool Clear_Pcb( bool doAskAboutUnsavedChanges, bool aFinal = false );
 
-    ///< @copydoc PCB_BASE_FRAME::SetBoard()
+    /// @copydoc PCB_BASE_FRAME::SetBoard()
     void SetBoard( BOARD* aBoard, PROGRESS_REPORTER* aReporter = nullptr ) override
     {
         SetBoard( aBoard, true, aReporter );
@@ -427,12 +465,12 @@ public:
 
     void SetBoard( BOARD* aBoard, bool aBuildConnectivity, PROGRESS_REPORTER* aReporter = nullptr );
 
-    ///< @copydoc PCB_BASE_FRAME::GetModel()
+    /// @copydoc PCB_BASE_FRAME::GetModel()
     BOARD_ITEM_CONTAINER* GetModel() const override;
 
     std::unique_ptr<GRID_HELPER> MakeGridHelper() override;
 
-    ///< @copydoc PCB_BASE_FRAME::SetPageSettings()
+    /// @copydoc PCB_BASE_FRAME::SetPageSettings()
     void SetPageSettings( const PAGE_INFO& aPageSettings ) override;
 
     bool SaveBoardAsDesignBlock( const wxString& aLibraryName );
@@ -452,9 +490,9 @@ public:
      *                       will be kept or updated.  This library should be in fp lib table,
      *                       and is type is .pretty. False to save footprints in a new library.
      *                       If it is an existing lib, previous footprints will be removed.
-     *
      * @param aLibName optional library name to create, stops dialog call. Must be called with
      *                 \a aStoreInNewLib as true.
+     * @param aLibPath is the path to export the library to.
      */
     void ExportFootprintsToLibrary( bool aStoreInNewLib, const wxString& aLibName = wxEmptyString,
                                     wxString* aLibPath = nullptr );
@@ -474,6 +512,8 @@ public:
      *
      * @param aFullFileName the full filename of the file to create
      * @param aMMtoWRMLunit the VRML scaling factor: 1.0 to export in mm. 0.001 for meters
+     * @param aIncludeUnspecified
+     * @param aIncludeDNP include DNP footprint models on export.
      * @param aExport3DFiles true to copy 3D shapes in the subir a3D_Subdir
      * @param aUseRelativePaths set to true to use relative paths instead of absolute paths
      *                          in the board VRML file URLs.
@@ -487,22 +527,6 @@ public:
                           bool aIncludeUnspecified, bool aIncludeDNP,
                           bool aExport3DFiles, bool aUseRelativePaths,
                           const wxString& a3D_Subdir, double aXRef, double aYRef );
-
-    /**
-     * Create an IDF3 compliant BOARD (*.emn) and LIBRARY (*.emp) file.
-     *
-     * @param aPcb a pointer to the board to be exported to IDF.
-     * @param aFullFileName the full filename of the export file.
-     * @param aUseThou set to true if the desired IDF unit is thou (mil).
-     * @param aXRef the board Reference Point in mm, X value.
-     * @param aYRef the board Reference Point in mm, Y value.
-     * @param aIncludeUnspecified true to include unspecified-type footprint models
-     * @param aIncludeDNP true to include DNP footprint models
-     * @return true if OK.
-     */
-    bool Export_IDF3( BOARD* aPcb, const wxString& aFullFileName,
-                      bool aUseThou, double aXRef, double aYRef,
-                      bool aIncludeUnspecified, bool aIncludeDNP );
 
     /**
      * Export the current BOARD to a specctra dsn file.
@@ -532,7 +556,6 @@ public:
     /**
      * Install the corresponding dialog editor for the given item.
      *
-     * @param aDC the current device context.
      * @param aItem a pointer to the BOARD_ITEM to edit.
      */
     void OnEditItemRequest( BOARD_ITEM* aItem ) override;
@@ -600,7 +623,7 @@ public:
      * Called after netlist is updated.
      *
      * @param aUpdater is the updater object that was run.
-     * @param aRunDragCommand is set to true if the drag command was invoked by this call.
+     * @param aRunDragCommand [out] is set to true if a drag command should be run following this call.
      */
     void OnNetlistChanged( BOARD_NETLIST_UPDATER& aUpdater, bool* aRunDragCommand );
 
@@ -753,8 +776,9 @@ protected:
     /**
      * Load the given filename but sets the path to the current project path.
      *
-     * @param full file path of file to be imported.
-     * @param aFileType PCB_FILE_T value for file type
+     * @param aFileName full file path of file to be imported.
+     * @param aFileType PCB_FILE_T value for file type.
+     * @param aProperties is a list of import properties.
      */
     bool importFile( const wxString& aFileName, int aFileType,
                      const std::map<std::string, UTF8>* aProperties = nullptr );
@@ -767,6 +791,7 @@ protected:
      *
      * @param aDefinitions are the importer's caller-owned cached library footprints, captured
      *                     during load before the plugin was destroyed.
+     * @param aBoardPath
      */
     void reconcileImportedFootprintLibraries(
             std::vector<std::unique_ptr<FOOTPRINT>> aDefinitions, const wxString& aBoardPath );
@@ -780,7 +805,7 @@ protected:
      *
      * @return
      */
-    bool saveBoardAsFile( BOARD* aBoard, const wxString& aFileName, bool aHeadless = false );
+    bool saveBoardAsFile( BOARD& aBoard, const wxString& aFileName, bool aHeadless = false );
 
     bool saveSelectionToDesignBlock( const wxString& aNickname, PCB_SELECTION& aSelection, DESIGN_BLOCK& aBlock );
 
@@ -790,8 +815,6 @@ protected:
 
     // protected so that PCB::IFACE::CreateWindow() is the only factory.
     PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent );
-
-    void onSize( wxSizeEvent& aEvent );
 
     int inferLegacyEdgeClearance( BOARD* aBoard, bool aShowUserMsg = true );
 
@@ -838,6 +861,12 @@ public:
     void UpdateProperties() override;
 
 private:
+    /// Recompile the design rules, reporting a parse error in the infobar.
+    void recompileDesignRules();
+
+    /// Add the markers a resolve created for exclusions and redraw every excluded marker.
+    void addExclusionMarkers( const std::vector<PCB_MARKER*>& aMarkers );
+
     friend struct PCB::IFACE;
     friend class APPEARANCE_CONTROLS;
 
@@ -876,6 +905,7 @@ private:
      * Keep track of viewport so that track net labels can be adjusted when it changes.
      */
     BOX2D             m_lastNetnamesViewport;
+    double            m_lastNetnamesScale = 0.0;
 
     wxTimer*          m_eventCounterTimer;
 
@@ -891,6 +921,7 @@ private:
 
     std::unique_ptr<API_HANDLER_PCB>    m_apiHandler;
     std::unique_ptr<API_HANDLER_COMMON> m_apiHandlerCommon;
+    std::unique_ptr<API_HANDLER_LIBRARIES> m_apiLibrariesHandler;
 };
 
 #endif  // __PCB_EDIT_FRAME_H__

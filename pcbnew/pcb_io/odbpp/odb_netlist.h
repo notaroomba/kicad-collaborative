@@ -18,22 +18,39 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef _ODB_NETLIST_H_
-#define _ODB_NETLIST_H_
+#pragma once
 
-#include <wx/string.h>
+#include <map>
+#include <ostream>
+#include <string>
+#include <vector>
+
 
 // Structure for holding the ODB net point record.
 struct ODB_NET_RECORD
 {
+    /**
+    * Possible values for the "side" of an ODB net point.
+    *
+    * This is not the same as the subnet side (T/B)
+    * or matrix layer TOP/BOTTOM/INNER.
+    */
+    enum class SIDE
+    {
+        TOP,    ///< T
+        DOWN,   ///< D (i.e. bottom)
+        BOTH,   ///< B
+        INNER,  ///< I
+    };
+
     bool        smd;
     bool        hole;
     bool        is_via;
-    wxString    netname;
+    bool        testpoint;
     std::string refdes;
     int         drill_radius;
     bool        mechanical;
-    std::string side; // B: Both, T: Top, D: Down
+    SIDE        side;
 
     // All these in PCB units, will be output in decimils
     int x_location;
@@ -53,25 +70,24 @@ struct ODB_NET_RECORD
 
 
 class BOARD;
+class PCB_IO_ODBPP;
+struct ODB_FORMAT;
 class ODB_NET_LIST
 {
 public:
-    ODB_NET_LIST( BOARD* aBoard ) : m_board( aBoard ) {}
+    ODB_NET_LIST( BOARD* aBoard, PCB_IO_ODBPP* aPlugin ) : m_board( aBoard ), m_plugin( aPlugin ) {}
 
     virtual ~ODB_NET_LIST() {}
 
-    void Write( std::ostream& aStream );
+    void Write( std::ostream& aStream, const ODB_FORMAT& aFormat );
 
 private:
-    BOARD*      m_board;
-    std::string ComputePadAccessSide( BOARD* aBoard, LSET aLayerMask );
-    std::string ComputeViaAccessSide( BOARD* aBoard, int top_layer, int bottom_layer );
+    BOARD*        m_board;
+    PCB_IO_ODBPP* m_plugin;
 
-    void InitPadNetPoints( BOARD* aBoard, std::map<size_t, std::vector<ODB_NET_RECORD>>& aRecords );
-    void InitViaNetPoints( BOARD* aBoard, std::map<size_t, std::vector<ODB_NET_RECORD>>& aRecords );
+    void InitNetPoints( std::map<size_t, std::vector<ODB_NET_RECORD>>& aRecords );
     /// Writes a list of records to the given output stream
     void WriteNetPointRecords( std::map<size_t, std::vector<ODB_NET_RECORD>>& aRecords,
-                               std::ostream&                                  aStream );
+                               std::ostream&                                  aStream,
+                               const ODB_FORMAT&                              aFormat );
 };
-
-#endif // _ODB_NETLIST_H_

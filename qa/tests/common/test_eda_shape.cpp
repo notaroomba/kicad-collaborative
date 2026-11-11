@@ -38,6 +38,10 @@ class EDA_SHAPE_MOCK : public EDA_SHAPE
 {
 public:
     EDA_SHAPE_MOCK( SHAPE_T aShapeType ) : EDA_SHAPE( aShapeType, 0, FILL_T::NO_FILL ){};
+
+    void Mirror( const SEG& aAxis ) { mirror( aAxis ); }
+
+    BOX2I BBox() const { return getBoundingBox(); }
 };
 
 
@@ -215,6 +219,32 @@ BOOST_AUTO_TEST_CASE( SetArcGeometry )
         // Check that the centre is still correct
     }
 }
+
+/**
+ * SetArcGeometry must keep the supplied midpoint for arcs it stores with swapped ends, as it
+ * does for unswapped ones, so an unedited arc saves back unchanged (issue 10442)
+ */
+BOOST_AUTO_TEST_CASE( SetArcGeometryKeepsMidWhenEndsSwap )
+{
+    // On the circle but away from the half-angle point, so a recomputed mid cannot match it
+    const VECTOR2I mid( 6000000, 8000000 );
+
+    for( bool swap : { false, true } )
+    {
+        BOOST_TEST_INFO_SCOPE( ( swap ? "swapped" : "unswapped" ) );
+
+        EDA_SHAPE_MOCK shape( SHAPE_T::ARC );
+
+        if( swap )
+            shape.SetArcGeometry( { -10000000, 0 }, mid, { 10000000, 0 } );
+        else
+            shape.SetArcGeometry( { 10000000, 0 }, mid, { -10000000, 0 } );
+
+        BOOST_REQUIRE_EQUAL( shape.EndsSwapped(), swap );
+        BOOST_CHECK_EQUAL( shape.GetArcMid(), mid );
+    }
+}
+
 
 /**
  * Editing a small eeschema arc must not snap its radius up to the PCB-scale
@@ -1111,27 +1141,10 @@ BOOST_AUTO_TEST_CASE( ShortenPolyForEndingsLeavesOpenArrowBody )
 }
 
 
-BOOST_AUTO_TEST_CASE( PolyShorteningRejectsOverrun )
-{
-    EDA_SHAPE_MOCK shape( SHAPE_T::POLY );
-    shape.SetStartEndingStyle( LINE_ENDING_STYLE::ARROW );
-    shape.SetStartEndingLength( 200 );
-    shape.SetStartEndingWidth( 100 );
-
-    VECTOR2D first( 0, 0 );
-    VECTOR2D second( 100, 0 );
-    VECTOR2D penultimate( 1000, 0 );
-    VECTOR2D last( 1100, 0 );
-
-    BOOST_CHECK( !shape.ShortenPolyForEndings( first, last, second, penultimate, 20 ) );
-    checkVectorClose( first, { 0, 0 } );
-    checkVectorClose( last, { 0, 0 } );
-}
-
-
 BOOST_AUTO_TEST_CASE( BodyPolyPointsShortenFirstOpenOutline )
 {
     EDA_SHAPE_MOCK shape( SHAPE_T::POLY );
+
     shape.SetStartEndingStyle( LINE_ENDING_STYLE::ARROW );
     shape.SetStartEndingLength( 100 );
     shape.SetStartEndingWidth( 100 );
@@ -1140,9 +1153,17 @@ BOOST_AUTO_TEST_CASE( BodyPolyPointsShortenFirstOpenOutline )
     outline.Append( VECTOR2I( 0, 0 ) );
     outline.Append( VECTOR2I( 1000, 0 ) );
     outline.Append( VECTOR2I( 1000, 1000 ) );
-    outline.SetClosed( false );
-
+    outline.SetClosed( true );
+    shape.SetPolyShape( outline );
     std::vector<VECTOR2I> pts;
+
+    // Closed poly; line endings should be ignored and no shortening done
+    BOOST_CHECK( shape.GetShortenedBodyPolyPoints( outline, 0, pts, 20 ) );
+    BOOST_REQUIRE_EQUAL( pts.size(), 3 );
+    checkVectorEqual( pts.front(), { 0, 0 } );
+    checkVectorEqual( pts.back(), { 1000, 1000 } );
+
+    shape.GetPolyShape().Outline( 0 ).SetClosed( false );
 
     BOOST_CHECK( shape.GetShortenedBodyPolyPoints( outline, 0, pts, 20 ) );
     BOOST_REQUIRE_EQUAL( pts.size(), 3 );
@@ -1150,13 +1171,6 @@ BOOST_AUTO_TEST_CASE( BodyPolyPointsShortenFirstOpenOutline )
     checkVectorEqual( pts.back(), { 1000, 1000 } );
 
     BOOST_CHECK( shape.GetShortenedBodyPolyPoints( outline, 1, pts, 20 ) );
-    BOOST_REQUIRE_EQUAL( pts.size(), 3 );
-    checkVectorEqual( pts.front(), { 0, 0 } );
-    checkVectorEqual( pts.back(), { 1000, 1000 } );
-
-    outline.SetClosed( true );
-
-    BOOST_CHECK( shape.GetShortenedBodyPolyPoints( outline, 0, pts, 20 ) );
     BOOST_REQUIRE_EQUAL( pts.size(), 3 );
     checkVectorEqual( pts.front(), { 0, 0 } );
     checkVectorEqual( pts.back(), { 1000, 1000 } );

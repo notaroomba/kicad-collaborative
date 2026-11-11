@@ -29,7 +29,10 @@
 
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
+#include <advanced_config.h>
 #include <connection_graph.h>
+#include <connectivity/conn_facade.h>
+#include <sch_commit.h>
 #include <schematic.h>
 #include <sch_label.h>
 #include <sch_line.h>
@@ -37,6 +40,7 @@
 #include <sch_sheet.h>
 #include <sch_sheet_pin.h>
 #include <settings/settings_manager.h>
+#include <tool/tool_manager.h>
 
 
 BOOST_AUTO_TEST_SUITE( LabelBusConnectivity )
@@ -99,14 +103,22 @@ BOOST_FIXTURE_TEST_CASE( LabelNetToBusConnectivity, LABEL_BUS_CONNECTIVITY_FIXTU
     BOOST_CHECK( busConn->IsBus() );
     BOOST_CHECK( busConn->Members().empty() );
 
-    // Now change the label text to a bus name
+    TOOL_MANAGER manager;
+    manager.SetEnvironment( m_schematic.get(), nullptr, nullptr, nullptr, nullptr );
+    SCH_COMMIT commit( &manager );
+    commit.Modify( label, m_screen );
     label->SetText( wxT( "test[0..7]" ) );
+    commit.Push( "Change label to a bus", SKIP_UNDO );
 
-    // Mark items dirty and recalculate connectivity (simulating incremental update)
-    label->SetConnectivityDirty( true );
-    busWire->SetConnectivityDirty( true );
-
-    m_schematic->ConnectionGraph()->Recalculate( sheets, false );
+    // The push updates only the active engine, and the new engine publishes through the facade
+    if( ADVANCED_CFG::GetCfg().m_ConnectivityEngine )
+    {
+        const auto view = m_schematic->Connectivity().Connection( busWire->m_Uuid, path.Path() );
+        BOOST_REQUIRE( view );
+        BOOST_CHECK( view->IsBus() );
+        BOOST_CHECK_EQUAL( view->Members().leaves.size(), 8 );
+        return;
+    }
 
     // Verify: bus wire should now have members from the bus label
     busConn = busWire->Connection( &path );

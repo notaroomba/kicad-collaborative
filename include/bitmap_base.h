@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include <optional>
+
 #include <wx/bitmap.h>
 #include <wx/image.h>
 
@@ -182,21 +184,36 @@ public:
     bool SetImage( const wxImage& aImage );
 
     /**
-    * Write the bitmap data to \a aOutStream.
-    *
-    * This writes binary data, not hexadecimal strings
-    *
-    * @param aOutStream The output stream to write to.
-    * @return true if success writing else false.
-    */
+     * Show finished pixels in place of the image, without disturbing the scale or the
+     * resolution.
+     *
+     * Used for a temporary view, such as a conversion preview. Any rotation or mirroring
+     * already in the image is taken as final. Calling this again replaces the view;
+     * EndPreviewImage() puts the real image back.
+     */
+    void BeginPreviewImage( const wxImage& aImage );
+
+    /**
+     * Put back the image a preview stood in for, and do nothing if none is showing.
+     */
+    void EndPreviewImage();
+
+    /**
+     * Write the bitmap data to \a aOutStream.
+     *
+     * This writes binary data, not hexadecimal strings
+     *
+     * @param aOutStream The output stream to write to.
+     * @return true if success writing else false.
+     */
     bool SaveImageData( wxOutputStream& aOutStream ) const;
 
     /**
-     * Load an image data saved by #SaveData.
+     * Load an image data saved by #SaveImageData.
      *
      * The file format must be png format in hexadecimal.
      *
-     * @param aLine the LINE_READER used to read the data file.
+     * @param aLine the #LINE_READER used to read the data file.
      * @param aErrorMsg Description of the error if an error occurs while loading the
      *                  png bitmap data.
      * @return true if the bitmap loaded successfully.
@@ -298,18 +315,23 @@ private:
      */
     static void invertImageInPlace( wxImage& aImage );
 
-    /**
-     * Apply the "Color to Alpha" algorithm in place, converting \a aColour to transparent.
-     *
-     * @param aImage the image to modify.
-     * @param aColour the colour to make transparent.
-     */
-    static void convertColourToAlphaInPlace( wxImage& aImage, const wxColour& aColour );
-
     double    m_scale;              ///< The scaling factor of the bitmap
                                     ///< with #m_pixelSizeIu, controls the actual draw size.
     mutable wxMemoryBuffer m_imageData; ///< Cached encoded image data (PNG/JPEG).
     wxBitmapType   m_imageType;     ///< The image type (png, jpeg, etc.).
+
+    /// Everything a preview image stands in for, kept so it can be put back exactly.
+    struct PREVIEW_SAVE
+    {
+        wxImage   m_image;
+        wxImage   m_originalImage;
+        KIID      m_imageId;
+        EDA_ANGLE m_rotation;
+        bool      m_isMirroredX;
+        bool      m_isMirroredY;
+    };
+
+    std::optional<PREVIEW_SAVE> m_previewSave; ///< Set only while a preview is showing.
 
     wxImage*  m_image;              ///< The raw, uncompressed image data.
     wxImage*  m_originalImage;      ///< Raw image data, not transformed by rotate/mirror.

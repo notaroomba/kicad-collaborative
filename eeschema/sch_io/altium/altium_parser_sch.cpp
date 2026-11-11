@@ -455,7 +455,8 @@ ASCH_ARC::ASCH_ARC( const std::map<wxString, wxString>& aProps ) :
         ASCH_FILL_INTERFACE( aProps )
 {
     m_IsElliptical = ReadRecord( aProps ) == ALTIUM_SCH_RECORD::ELLIPTICAL_ARC;
-    wxASSERT( ReadRecord( aProps ) == ALTIUM_SCH_RECORD::ARC || m_IsElliptical );
+    wxASSERT( ReadRecord( aProps ) == ALTIUM_SCH_RECORD::ARC || ReadRecord( aProps ) == ALTIUM_SCH_RECORD::PIECHART
+              || m_IsElliptical );
 
     m_Center = VECTOR2I( ReadKiCadUnitFrac( aProps, "LOCATION.X" ),
                          -ReadKiCadUnitFrac( aProps, "LOCATION.Y" ) );
@@ -700,7 +701,7 @@ ASCH_NO_ERC::ASCH_NO_ERC( const std::map<wxString, wxString>& aProps )
                          -ReadKiCadUnitFrac( aProps, "LOCATION.Y" ) );
 
     isActive   = ALTIUM_PROPS_UTILS::ReadBool( aProps, "ISACTIVE", true );
-    suppressAll = ALTIUM_PROPS_UTILS::ReadInt( aProps, "SUPPRESSALL", true );
+    suppressAll = ALTIUM_PROPS_UTILS::ReadBool( aProps, "SUPPRESSALL", true );
 }
 
 

@@ -20,6 +20,7 @@
 #include "schematic_text_var_adapter.h"
 
 #include <algorithm>
+#include <set>
 #include <eda_text.h>
 #include <sch_field.h>
 #include <sch_item.h>
@@ -34,142 +35,170 @@ SCHEMATIC_TEXT_VAR_ADAPTER::SCHEMATIC_TEXT_VAR_ADAPTER( SCHEMATIC& aSchematic ) 
 {
     m_tracker.SetSourceKeyExtractor(
             [this]( EDA_ITEM* aItem ) -> std::vector<TEXT_VAR_REF_KEY>
-            { return ExtractSourceKeys( aItem ); } );
+            {
+                return ExtractSourceKeys( aItem );
+            } );
+}
+
+
+SCH_ITEM* SCHEMATIC_TEXT_VAR_ADAPTER::trackedItem( SCH_ITEM* aItem )
+{
+    // Fields, sheet pins and table cells live in their owner's storage and can move without
+    // a notification, so only the screen item that owns them is ever indexed
+    if( aItem && aItem->IsType( { SCH_FIELD_T, SCH_SHEET_PIN_T, SCH_TABLECELL_T } ) )
+        return dynamic_cast<SCH_ITEM*>( aItem->GetParent() );
+
+    return aItem;
+}
+
+
+std::vector<TEXT_VAR_REF_KEY> SCHEMATIC_TEXT_VAR_ADAPTER::collectKeys( SCH_ITEM* aItem )
+{
+    std::vector<TEXT_VAR_REF_KEY> keys;
+
+    auto collect =
+            [&]( SCH_ITEM* item )
+            {
+                if( EDA_TEXT* text = dynamic_cast<EDA_TEXT*>( item ) )
+                {
+                    for( const TEXT_VAR_REF_KEY& key : FilterTrackable( text->GetTextVarReferences() ) )
+                    {
+                        if( std::find( keys.begin(), keys.end(), key ) == keys.end() )
+                            keys.push_back( key );
+                    }
+                }
+            };
+
+    collect( aItem );
+
+    // Group members participate in the COMMIT architecture as first-class items.  FOOTPRINT and
+    // PCB_TABLE children do not, and must therefore be collected into their parent's registration
+    // list
+    if( aItem->Type() != SCH_GROUP_T )
+        aItem->RunOnChildren( collect, RECURSE_MODE::RECURSE );
+
+    return keys;
+}
+
+
+std::vector<TEXT_VAR_REF_KEY> SCHEMATIC_TEXT_VAR_ADAPTER::trackKeys( SCH_ITEM* aItem )
+{
+    std::vector<TEXT_VAR_REF_KEY> keys = collectKeys( aItem );
+
+    if( keys.empty() )
+        m_registered.erase( aItem );
+    else
+        m_registered.insert( aItem );
+
+    return keys;
 }
 
 
 void SCHEMATIC_TEXT_VAR_ADAPTER::registerItem( SCH_ITEM* aItem )
 {
-    if( !aItem )
-        return;
-
-    // SCH_SYMBOL: register its constituent SCH_FIELDs (not the symbol itself).
-    // The symbol is a cross-ref source, not a dependent.
-    if( SCH_SYMBOL* sym = dynamic_cast<SCH_SYMBOL*>( aItem ) )
-    {
-        for( SCH_FIELD& field : sym->GetFields() )
-            registerItem( &field );
-
-        return;
-    }
-
-    // SCH_SHEET: its fields (sheet name, file name) can carry text vars.
-    // Sheet pins are separate sch items and flow through the listener on
-    // their own when added/removed.
-    if( SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( aItem ) )
-    {
-        for( SCH_FIELD& field : sheet->GetFields() )
-            registerItem( &field );
-
-        return;
-    }
-
-    EDA_TEXT* text = dynamic_cast<EDA_TEXT*>( aItem );
-
-    if( !text )
-        return;
-
-    m_tracker.RegisterItem( aItem, FilterTrackable( text->GetTextVarReferences() ) );
-}
-
-
-void SCHEMATIC_TEXT_VAR_ADAPTER::unregisterItem( SCH_ITEM* aItem )
-{
-    if( !aItem )
-        return;
-
-    m_tracker.UnregisterItem( aItem );
-
-    if( SCH_SYMBOL* sym = dynamic_cast<SCH_SYMBOL*>( aItem ) )
-    {
-        for( SCH_FIELD& field : sym->GetFields() )
-            m_tracker.UnregisterItem( &field );
-    }
-    else if( SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( aItem ) )
-    {
-        for( SCH_FIELD& field : sheet->GetFields() )
-            m_tracker.UnregisterItem( &field );
-    }
+    m_tracker.RegisterItem( aItem, trackKeys( aItem ) );
 }
 
 
 void SCHEMATIC_TEXT_VAR_ADAPTER::handleItemChanged( SCH_ITEM* aItem )
 {
-    if( !aItem )
-        return;
+    // Also fans out ${REFDES:FIELD} for symbols, which source cross-references
+    m_tracker.HandleItemChanged( aItem, trackKeys( aItem ) );
+}
 
-    // A SCH_SYMBOL change covers both "its fields were edited" (re-register
-    // each field) and "this symbol's values source cross-refs" (fan out
-    // ${REFDES:FIELD} keys).
-    if( SCH_SYMBOL* sym = dynamic_cast<SCH_SYMBOL*>( aItem ) )
+
+void SCHEMATIC_TEXT_VAR_ADAPTER::noteSheets( const std::vector<SCH_ITEM*>& aItems )
+{
+    // A sheet add or remove forces a rebuild because a new screen can reuse a freed one's address.
+    // Changed sheets keep their old screen alive in the undo image, so the screen set catches them
+    for( SCH_ITEM* item : aItems )
     {
-        for( SCH_FIELD& field : sym->GetFields() )
+        if( item && item->Type() == SCH_SHEET_T )
+            m_hierarchyChanged = true;
+    }
+}
+
+
+void SCHEMATIC_TEXT_VAR_ADAPTER::OnSchItemsAdded( SCHEMATIC&, std::vector<SCH_ITEM*>& aItems )
+{
+    noteSheets( aItems );
+
+    for( SCH_ITEM* item : aItems )
+    {
+        if( SCH_ITEM* tracked = trackedItem( item ) )
+            registerItem( tracked );
+    }
+}
+
+
+void SCHEMATIC_TEXT_VAR_ADAPTER::OnSchItemsRemoved( SCHEMATIC&, std::vector<SCH_ITEM*>& aItems )
+{
+    noteSheets( aItems );
+
+    for( SCH_ITEM* item : aItems )
+    {
+        SCH_ITEM* tracked = trackedItem( item );
+
+        if( tracked == item )
         {
-            std::vector<TEXT_VAR_REF_KEY> refs = FilterTrackable( field.GetTextVarReferences() );
-            m_tracker.RegisterItem( &field, refs );
+            m_tracker.UnregisterItem( item );
+            m_registered.erase( item );
         }
-
-        m_tracker.HandleItemChanged( aItem, {} );
-        return;
-    }
-
-    if( SCH_SHEET* sheet = dynamic_cast<SCH_SHEET*>( aItem ) )
-    {
-        for( SCH_FIELD& field : sheet->GetFields() )
+        else if( tracked )
         {
-            std::vector<TEXT_VAR_REF_KEY> refs = FilterTrackable( field.GetTextVarReferences() );
-            m_tracker.RegisterItem( &field, refs );
+            // A child left its owner, which stays on the screen
+            handleItemChanged( tracked );
         }
-
-        return;
     }
+}
 
-    if( EDA_TEXT* text = dynamic_cast<EDA_TEXT*>( aItem ) )
+
+void SCHEMATIC_TEXT_VAR_ADAPTER::OnSchItemsChanged( SCHEMATIC&, std::vector<SCH_ITEM*>& aItems )
+{
+    for( SCH_ITEM* item : aItems )
     {
-        std::vector<TEXT_VAR_REF_KEY> updated = FilterTrackable( text->GetTextVarReferences() );
-        m_tracker.HandleItemChanged( aItem, updated );
+        if( SCH_ITEM* tracked = trackedItem( item ) )
+            handleItemChanged( tracked );
     }
 }
 
 
-void SCHEMATIC_TEXT_VAR_ADAPTER::OnSchItemsAdded( SCHEMATIC&,
-                                                 std::vector<SCH_ITEM*>& aItems )
+std::set<SCH_SCREEN*> SCHEMATIC_TEXT_VAR_ADAPTER::hierarchyScreens() const
 {
-    for( SCH_ITEM* item : aItems )
-        registerItem( item );
+    std::set<SCH_SCREEN*> screens;
+
+    for( const SCH_SHEET_PATH& path : m_schematic.Hierarchy() )
+    {
+        if( SCH_SCREEN* screen = path.LastScreen() )
+            screens.insert( screen );
+    }
+
+    return screens;
 }
 
 
-void SCHEMATIC_TEXT_VAR_ADAPTER::OnSchItemsRemoved( SCHEMATIC&,
-                                                   std::vector<SCH_ITEM*>& aItems )
+void SCHEMATIC_TEXT_VAR_ADAPTER::SyncToHierarchy()
 {
-    for( SCH_ITEM* item : aItems )
-        unregisterItem( item );
-}
+    if( !m_hierarchyChanged && hierarchyScreens() == m_indexedScreens )
+        return;
 
-
-void SCHEMATIC_TEXT_VAR_ADAPTER::OnSchItemsChanged( SCHEMATIC&,
-                                                   std::vector<SCH_ITEM*>& aItems )
-{
-    for( SCH_ITEM* item : aItems )
-        handleItemChanged( item );
+    RebuildIndex();
 }
 
 
 void SCHEMATIC_TEXT_VAR_ADAPTER::RebuildIndex()
 {
-    m_tracker.Clear();
+    // The drawing sheet shares this tracker, so drop only what this adapter owns.
+    // Stale pointers are never dereferenced, only used as keys
+    for( SCH_ITEM* item : m_registered )
+        m_tracker.UnregisterItem( item );
 
-    // Walk the hierarchy. Each screen can be referenced by multiple sheet
-    // paths, but the SCH_ITEM pointers are shared — we only register each
-    // item once via the screen traversal.
-    for( const SCH_SHEET_PATH& path : m_schematic.Hierarchy() )
+    m_registered.clear();
+    m_indexedScreens = hierarchyScreens();
+    m_hierarchyChanged = false;
+
+    for( SCH_SCREEN* screen : m_indexedScreens )
     {
-        SCH_SCREEN* screen = path.LastScreen();
-
-        if( !screen )
-            continue;
-
         for( SCH_ITEM* item : screen->Items() )
             registerItem( item );
     }
@@ -185,65 +214,48 @@ std::vector<TEXT_VAR_REF_KEY> SCHEMATIC_TEXT_VAR_ADAPTER::ExtractSourceKeys( EDA
     if( !sym )
         return out;
 
-    // Repeated-sheet instances: a single SCH_SYMBOL can carry different
-    // reference designators on each SCH_SHEET_PATH it participates in.
-    // Collect every distinct refdes the symbol currently has across the
-    // hierarchy so each ${REFDES:FIELD} dependent fan-out reaches the right
-    // dependents. Over-approximation (firing U1:Value when U2 — same symbol
-    // on a different sheet — is the actual edit target) is the acceptable
-    // tradeoff for not yet carrying sheet-path identity in the key itself.
-    std::vector<wxString> refdesList;
+    auto addKey =
+            [&]( const wxString& aPrimary )
+            {
+                if( aPrimary.IsEmpty() )
+                    return;
+
+                TEXT_VAR_REF_KEY key;
+                key.kind    = TEXT_VAR_REF_KEY::KIND::CROSS_REF;
+                key.primary = aPrimary;
+
+                if( std::find( out.begin(), out.end(), key ) == out.end() )
+                    out.push_back( key );
+            };
+
+    // Must match the KIID path SCHEMATIC::ConvertRefsToKIIDs writes into stored text
+    auto addInstance =
+            [&]( const SCH_SHEET_PATH& aPath )
+            {
+                KIID_PATH path = aPath.Path();
+                path.push_back( sym->m_Uuid );
+
+                addKey( sym->GetRef( &aPath, false ) );
+                addKey( sym->GetRef( &aPath, true ) );
+                addKey( path.AsString() );
+            };
+
     const SCH_SHEET_LIST& hierarchy = m_schematic.Hierarchy();
 
     if( hierarchy.empty() )
     {
-        // No hierarchy yet (e.g., bare SCHEMATIC before sheets added) —
-        // fall back to the current sheet context.
-        const wxString refdes = sym->GetRef( &m_schematic.CurrentSheet(), false );
-
-        if( !refdes.IsEmpty() )
-            refdesList.push_back( refdes );
-    }
-    else
-    {
-        // SCH_SYMBOL::GetRef falls back to its REFERENCE field when the query
-        // path is not one of its instances, so iterating every path and
-        // calling GetRef would pollute the list with the same refdes from
-        // unrelated sheets. Filter to paths whose last screen matches the
-        // symbol's parent screen — those are the ones where this symbol
-        // actually lives.
-        const SCH_SCREEN* parentScreen = dynamic_cast<const SCH_SCREEN*>( sym->GetParent() );
-
-        for( const SCH_SHEET_PATH& path : hierarchy )
-        {
-            if( path.LastScreen() != parentScreen )
-                continue;
-
-            const wxString refdes = sym->GetRef( &path, false );
-
-            if( refdes.IsEmpty() )
-                continue;
-
-            if( std::find( refdesList.begin(), refdesList.end(), refdes ) == refdesList.end() )
-                refdesList.push_back( refdes );
-        }
-    }
-
-    if( refdesList.empty() )
+        addInstance( m_schematic.CurrentSheet() );
         return out;
+    }
 
-    out.reserve( refdesList.size() * sym->GetFields().size() );
+    // GetRef falls back to the REFERENCE field on paths that are not instances of this
+    // symbol, so only visit paths that actually show the symbol's screen
+    const SCH_SCREEN* parentScreen = dynamic_cast<const SCH_SCREEN*>( sym->GetParent() );
 
-    for( const wxString& refdes : refdesList )
+    for( const SCH_SHEET_PATH& path : hierarchy )
     {
-        for( const SCH_FIELD& field : sym->GetFields() )
-        {
-            TEXT_VAR_REF_KEY key;
-            key.kind      = TEXT_VAR_REF_KEY::KIND::CROSS_REF;
-            key.primary   = refdes;
-            key.secondary = field.GetUntranslatedName();
-            out.push_back( key );
-        }
+        if( path.LastScreen() == parentScreen )
+            addInstance( path );
     }
 
     return out;

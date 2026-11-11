@@ -24,7 +24,7 @@
 #include <wx/string.h>
 #include <wx/textfile.h>
 #include <newstroke_font.h>
-#include <font/glyph.h>
+#include <font/glyph_types.h>
 #include <font/stroke_font.h>
 #include <geometry/shape_line_chain.h>
 #include <trigo.h>
@@ -203,9 +203,6 @@ VECTOR2I STROKE_FONT::GetTextAsGlyphs( BOX2I* aBBox, std::vector<std::unique_ptr
 {
     constexpr int    TAB_WIDTH = 4;
     constexpr double INTER_CHAR = 0.2;
-    constexpr double SUPER_SUB_SIZE_MULTIPLIER = 0.8;
-    constexpr double SUPER_HEIGHT_OFFSET = 0.35;
-    constexpr double SUB_HEIGHT_OFFSET = 0.15;
 
     VECTOR2I cursor( aPosition );
     VECTOR2D glyphSize( aSize );
@@ -215,12 +212,8 @@ VECTOR2I STROKE_FONT::GetTextAsGlyphs( BOX2I* aBBox, std::vector<std::unique_ptr
 
     if( aTextStyle & TEXT_STYLE::SUBSCRIPT || aTextStyle & TEXT_STYLE::SUPERSCRIPT )
     {
-        glyphSize = glyphSize * SUPER_SUB_SIZE_MULTIPLIER;
-
-        if( aTextStyle & TEXT_STYLE::SUBSCRIPT )
-            cursor.y += glyphSize.y * SUB_HEIGHT_OFFSET;
-        else
-            cursor.y -= glyphSize.y * SUPER_HEIGHT_OFFSET;
+        glyphSize = glyphSize * GetSuperSubSizeMultiplier();
+        cursor.y += glyphSize.y * GetSuperSubBaselineOffset( aTextStyle );
     }
 
     for( wxUniChar c : aText )
@@ -233,7 +226,8 @@ VECTOR2I STROKE_FONT::GetTextAsGlyphs( BOX2I* aBBox, std::vector<std::unique_ptr
             int new_cursor = aPosition.x + aSize.x * char_count
                     + aSize.x * space_width;
 
-            while( new_cursor <= cursor.x )
+            // A zero-width tab never advances, so it cannot pass the cursor
+            while( aSize.x > 0 && new_cursor <= cursor.x )
             {
                 char_count += TAB_WIDTH;
                 new_cursor += aSize.x * TAB_WIDTH;

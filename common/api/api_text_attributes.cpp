@@ -36,7 +36,7 @@ void PackTextAttributes( types::TextAttributes& aOutput, const TEXT_ATTRIBUTES& 
 
     aOutput.set_horizontal_alignment( ToProtoEnum<GR_TEXT_H_ALIGN_T, types::HorizontalAlignment>( aInput.m_Halign ) );
     aOutput.set_vertical_alignment( ToProtoEnum<GR_TEXT_V_ALIGN_T, types::VerticalAlignment>( aInput.m_Valign ) );
-    aOutput.mutable_angle()->set_value_degrees( aInput.m_Angle.AsDegrees() );
+    aOutput.mutable_angle()->set_value_degrees( aInput.m_Angle.GetAngle().AsDegrees() );
     aOutput.set_line_spacing( aInput.m_LineSpacing );
     PackDistance( *aOutput.mutable_stroke_width(), aInput.m_StrokeWidth, aScale );
     aOutput.set_italic( aInput.m_Italic );
@@ -71,7 +71,12 @@ void UnpackTextAttributes( TEXT_ATTRIBUTES& aOutput, const types::TextAttributes
     }
 
     aOutput.m_Angle = EDA_ANGLE( aInput.angle().value_degrees(), DEGREES_T );
-    aOutput.m_LineSpacing = aInput.line_spacing();
+
+    if( aInput.has_line_spacing() )
+        aOutput.m_LineSpacing = aInput.line_spacing();
+    else
+        aOutput.m_LineSpacing = 1.0;
+
     aOutput.m_StrokeWidth = UnpackDistance( aInput.stroke_width(), aScale );
     aOutput.m_Halign = FromProtoEnum<GR_TEXT_H_ALIGN_T, types::HorizontalAlignment>( aInput.horizontal_alignment() );
     aOutput.m_Valign = FromProtoEnum<GR_TEXT_V_ALIGN_T, types::VerticalAlignment>( aInput.vertical_alignment() );

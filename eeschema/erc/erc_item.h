@@ -21,8 +21,11 @@
 #define ERC_ITEM_H
 
 #include <optional>
+#include <unordered_map>
+
 #include <rc_item.h>
-#include "sch_sheet_path.h"
+#include <sch_sheet_path.h>
+
 
 /**
  * A specialisation of the RC_TREE_MODEL class to enable ERC errors / warnings to be resolved in
@@ -60,10 +63,10 @@ public:
 
     static std::shared_ptr<ERC_ITEM> Create( const wxString& aErrorKey )
     {
-        for( const RC_ITEM& item : allItemTypes )
+        for( const std::reference_wrapper<RC_ITEM>& item : allItemTypes )
         {
-            if( aErrorKey == item.GetSettingsKey() )
-                return std::make_shared<ERC_ITEM>( static_cast<const ERC_ITEM&>( item ) );
+            if( aErrorKey == item.get().GetSettingsKey() )
+                return std::make_shared<ERC_ITEM>( static_cast<const ERC_ITEM&>( item.get() ) );
         }
 
         return nullptr;
@@ -75,9 +78,9 @@ public:
 
         if( itemsWithSeverities.empty() )
         {
-            for( RC_ITEM& item : allItemTypes )
+            for( std::reference_wrapper<RC_ITEM>& item : allItemTypes )
             {
-                if( &item == &heading_internal )
+                if( &item.get() == &heading_internal )
                     break;
 
                 itemsWithSeverities.push_back( item );
@@ -133,8 +136,7 @@ public:
      * @param mainItemSheet the SCH_SHEET_PATH of the first item causing the ERC violation
      * @param auxItemSheet  the SCH_SHEET_PATH of the second item causing the ERC violation
      */
-    void SetItemsSheetPaths( const SCH_SHEET_PATH& mainItemSheet,
-                             const SCH_SHEET_PATH& auxItemSheet )
+    void SetItemsSheetPaths( const SCH_SHEET_PATH& mainItemSheet, const SCH_SHEET_PATH& auxItemSheet )
     {
         m_mainItemSheet = mainItemSheet;
         m_auxItemSheet = auxItemSheet;
@@ -180,14 +182,13 @@ protected:
      * stored on this marker, so headless callers (e.g. kicad-cli) show the same per-sheet
      * symbol references the GUI ERC dialog shows on hierarchical schematics.
      */
-    wxString getItemDescription( EDA_ITEM* aItem, int aIndex,
-                                 UNITS_PROVIDER* aUnitsProvider ) const override;
+    wxString getItemDescription( EDA_ITEM* aItem, int aIndex, UNITS_PROVIDER* aUnitsProvider ) const override;
 
 private:
     ERC_ITEM( int aErrorCode = 0, const wxString& aTitle = "", const wxString& aSettingsKey = "" )
     {
-        m_errorCode     = aErrorCode;
-        m_errorTitle    = aTitle;
+        m_errorCode   = aErrorCode;
+        m_errorTitle  = aTitle;
         m_settingsKey = aSettingsKey;
     }
 
@@ -207,6 +208,7 @@ private:
     static ERC_ITEM pinNotConnected;
     static ERC_ITEM pinNotDriven;
     static ERC_ITEM powerpinNotDriven;
+    static ERC_ITEM wiredImplicitPower;
     static ERC_ITEM duplicatePinError;
     static ERC_ITEM pinTableWarning;
     static ERC_ITEM pinTableError;
@@ -236,6 +238,9 @@ private:
     static ERC_ITEM stackedPinName;
     static ERC_ITEM fieldNameWhitespace;
     static ERC_ITEM emptyLabelName;
+    static ERC_ITEM emptyPowerValue;
+    static ERC_ITEM duplicateSheetSuffix;
+    static ERC_ITEM refSuffixMismatch;
     static ERC_ITEM pinMapBadPad;
     static ERC_ITEM pinMapUnmappedPin;
     static ERC_ITEM pinMapDuplicatePad;
@@ -265,5 +270,27 @@ private:
     std::optional<SCH_SHEET_PATH> m_sheetSpecificPath;
 };
 
+
+/**
+ * Implements the RC_ITEM_RESOLVER interface to resolve schematic items by their KIID.
+ */
+class SCH_RC_ITEM_RESOLVER : public RC_ITEM_RESOLVER
+{
+public:
+    explicit SCH_RC_ITEM_RESOLVER( const SCH_SHEET_LIST& aSheetList ) :
+            m_sheetList( aSheetList )
+    {
+    }
+
+    EDA_ITEM* doResolveItemById( const KIID& aKiid ) const override;
+
+private:
+    const SCH_SHEET_LIST& m_sheetList;
+
+    // Unlike PCBs, schematics (currently) do not have an item ID index.
+    // So we cache the resolved items in a map for lookup here.
+    mutable std::unordered_map<KIID, EDA_ITEM*> m_items;
+    mutable bool                                m_itemsBuilt = false;
+};
 
 #endif      // ERC_ITEM_H

@@ -12,6 +12,7 @@ sudo apt-get update && sudo apt-get install -y \
   asciidoc \
   source-highlight \
   libcairo2-dev \
+  libpng-dev \
   libglu1-mesa-dev \
   libgl1-mesa-dev \
   libx11-dev \
@@ -40,6 +41,7 @@ sudo apt-get update && sudo apt-get install -y \
   libcurl4-openssl-dev \
   libngspice0-dev \
   unixodbc-dev \
+  libsqlite3-dev \
   libspnav-dev \
   libnng-dev \
   libprotobuf-dev \

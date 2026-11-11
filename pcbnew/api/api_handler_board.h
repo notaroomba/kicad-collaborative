@@ -44,7 +44,8 @@ class BOARD_COMMIT;
 class BOARD_ITEM;
 class BOARD_ITEM_CONTAINER;
 class EDA_ITEM;
-
+class GENERATOR_TOOL;
+class PCB_GENERATOR;
 
 /**
  * Common base class for API handlers that operate on a BOARD via a BOARD_CONTEXT.
@@ -90,6 +91,14 @@ protected:
 
     std::optional<ApiResponseStatus> checkForHeadless( const std::string& aCommandName ) const;
 
+
+    /// Creates the generator tool if needed (e.g. in headless mode); returns it if available.
+    GENERATOR_TOOL* ensureGeneratorTool() const;
+
+    void regenerateGenerators( GENERATOR_TOOL* aTool, BOARD_COMMIT* aCommit,
+                               const std::vector<PCB_GENERATOR*>& aGenerators,
+                               std::function<void( const KIID&, commands::ItemStatus )> aResultHandler ) const;
+
     std::vector<KICAD_T> parseRequestedItemTypes(
             const google::protobuf::RepeatedField<int>& aTypes );
 
@@ -112,6 +121,8 @@ private:
     HANDLER_RESULT<commands::SelectionResponse> handleRemoveFromSelection(
             const HANDLER_CONTEXT<commands::RemoveFromSelection>& aCtx );
 
+    HANDLER_RESULT<Empty> handleFocusOnItems( const HANDLER_CONTEXT<commands::FocusOnItems>& aCtx );
+
     HANDLER_RESULT<BoardStackupResponse> handleGetStackup(
             const HANDLER_CONTEXT<GetBoardStackup>& aCtx );
 
@@ -123,6 +134,9 @@ private:
 
     HANDLER_RESULT<commands::GetBoundingBoxResponse> handleGetBoundingBox(
             const HANDLER_CONTEXT<commands::GetBoundingBox>& aCtx );
+
+    HANDLER_RESULT<BoardBoundingBoxResponse> handleGetBoardBoundingBox(
+            const HANDLER_CONTEXT<GetBoardBoundingBox>& aCtx );
 
     HANDLER_RESULT<PadShapeAsPolygonResponse> handleGetPadShapeAsPolygon(
             const HANDLER_CONTEXT<GetPadShapeAsPolygon>& aCtx );

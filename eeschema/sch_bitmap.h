@@ -68,7 +68,6 @@ public:
 
     const BOX2I GetBoundingBox() const override;
 
-    /// @copydoc VIEW_ITEM::ViewGetLayers()
     virtual std::vector<int> ViewGetLayers() const override;
 
     void Move( const VECTOR2I& aMoveVector ) override;
@@ -121,14 +120,18 @@ private:
     friend struct SCH_BITMAP_DESC;
 
     // Property manager interfaces
-    int  GetWidth() const;
-    void SetWidth( int aWidth );
-    int  GetHeight() const;
-    void SetHeight( int aHeight );
-    int  GetTransformOriginOffsetX() const;
-    void SetTransformOriginOffsetX( int aX );
-    int  GetTransformOriginOffsetY() const;
-    void SetTransformOriginOffsetY( int aY );
+    int       GetWidth() const;
+    void      SetWidth( int aWidth );
+    int       GetHeight() const;
+    void      SetHeight( int aHeight );
+    int       GetTransformOriginOffsetX() const;
+    void      SetTransformOriginOffsetX( int aX );
+    int       GetTransformOriginOffsetY() const;
+    void      SetTransformOriginOffsetY( int aY );
+    EDA_ANGLE GetOrientation() const;
+    void      SetOrientation( EDA_ANGLE aAngle );
+    double    GetOpacity() const;
+    void      SetOpacity( double aOpacity );
 
     double GetImageScale() const;
     void   SetImageScale( double aScale );

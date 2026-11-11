@@ -54,6 +54,7 @@
 #include <geometry/shape_poly_set.h>
 #include <geometry/convex_hull.h>
 #include <geometry/geometry_utils.h>
+#include <geometry/shape_utils.h>
 #include <geometry/vertex_set.h>
 #include <geometry/poly_ystripes_index.h>
 #include <kidialog.h>
@@ -532,7 +533,8 @@ bool ZONE_FILLER::mayHoldOutOfBoardCopper( const ZONE* aZone ) const
 
 BOX2I ZONE_FILLER::zoneKnockoutQueryBox( const ZONE* aZone ) const
 {
-    // The candidate corner radius is unknown here, so use the board maximum.
+    // Dependency discovery requires this box to cover every indexed zone that can pass
+    // zoneKnockoutMayInteract().  Bound the unknown candidate radius by the board maximum.
     int reach = m_worstClearance + m_zoneKnockoutSlack + aZone->GetMinThickness();
 
     if( m_board->GetDesignSettings().m_ZoneKeepExternalFillets )
@@ -1036,30 +1038,83 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                 for( size_t i = 0; i < count; ++i )
                     inDegree[i].store( 0, std::memory_order_relaxed );
 
-                // Skip the O(N²) dependency scan when the caller guarantees no deps.
+                // Skip dependency discovery when the caller guarantees no deps.
                 if( aAnyDependencies )
                 {
-                    // Two items can only depend on each other on a shared layer.
-                    std::map<PCB_LAYER_ID, std::vector<size_t>> byLayer;
+                    struct LAYER_FILL_ITEMS
+                    {
+                        std::unordered_map<ZONE*, std::vector<size_t>> indices;
+                        std::unordered_set<ZONE*> indexed;
+                        std::vector<size_t> unindexed;
+                    };
+
+                    std::unordered_map<PCB_LAYER_ID, LAYER_FILL_ITEMS> fillItemsByLayer;
+
+                    // Fill() also accepts zones outside the index, including omitted layers.
+                    for( const auto& [layer, index] : m_zoneIndex )
+                    {
+                        auto& indexed = fillItemsByLayer[layer].indexed;
+
+                        for( const INDEXED_ITEM& item : index )
+                            indexed.insert( static_cast<ZONE*>( item.m_item ) );
+                    }
 
                     for( size_t i = 0; i < count; ++i )
-                        byLayer[aFillItems[i].second].push_back( i );
-
-                    for( const auto& [layer, items] : byLayer )
                     {
-                        for( size_t i : items )
-                        {
-                            for( size_t j : items )
-                            {
-                                if( i == j )
-                                    continue;
+                        const auto& [zone, layer] = aFillItems[i];
+                        LAYER_FILL_ITEMS& items = fillItemsByLayer[layer];
+                        items.indices[zone].push_back( i );
 
-                                if( aHasDependency( aFillItems[j], aFillItems[i] ) )
+                        if( !items.indexed.contains( zone ) )
+                            items.unindexed.push_back( i );
+                    }
+
+                    std::vector<size_t> lastSeen( count, count );
+
+                    // Only waiter order determines successor order; spatial hit order is irrelevant.
+                    for( size_t j = 0; j < count; ++j )
+                    {
+                        const auto& [zone, layer] = aFillItems[j];
+                        const LAYER_FILL_ITEMS& layerItems = fillItemsByLayer.at( layer );
+                        auto addDependency =
+                                [&]( size_t i )
                                 {
-                                    successors[i].push_back( j );
-                                    inDegree[j].fetch_add( 1, std::memory_order_relaxed );
-                                }
-                            }
+                                    // Keep distinct fill entries even if a zone gains multiple index entries.
+                                    if( i == j || lastSeen[i] == j )
+                                        return;
+
+                                    lastSeen[i] = j;
+
+                                    if( aHasDependency( aFillItems[j], aFillItems[i] ) )
+                                    {
+                                        successors[i].push_back( j );
+                                        inDegree[j].fetch_add( 1, std::memory_order_relaxed );
+                                    }
+                                };
+
+                        for( size_t i : layerItems.unindexed )
+                            addDependency( i );
+
+                        if( auto index = m_zoneIndex.find( layer ); index != m_zoneIndex.end() )
+                        {
+                            const BOX2I box = zoneKnockoutQueryBox( zone );
+                            const int min[2] = { box.GetLeft(), box.GetTop() };
+                            const int max[2] = { box.GetRight(), box.GetBottom() };
+                            auto visitor =
+                                    [&]( const INDEXED_ITEM& hit )
+                                    {
+                                        auto items = layerItems.indices.find( static_cast<ZONE*>( hit.m_item ) );
+
+                                        if( items != layerItems.indices.end() )
+                                        {
+                                            for( size_t i : items->second )
+                                                addDependency( i );
+                                        }
+
+                                        return true;
+                                    };
+
+                            index->second.Search( min, max, visitor );
                         }
                     }
                 }
@@ -1655,6 +1710,27 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
                         if( island_area < minArea )
                             continue;
 
+                        // Clipping a fractured hatch plane against the outline takes minutes, so
+                        // settle the test from the bounding box whenever its area bounds suffice
+                        const BOX2I    bbox = test_poly.BBox();
+                        SHAPE_POLY_SET bboxInBoard;
+
+                        bboxInBoard.BooleanIntersection( m_boardOutline,
+                                                         SHAPE_POLY_SET( KIGEOM::BoxToLineChain( bbox ) ) );
+
+                        const double inBoardArea = bboxInBoard.Area();
+                        const double bboxArea = static_cast<double>( bbox.GetWidth() )
+                                                * static_cast<double>( bbox.GetHeight() );
+                        const double outOfBoardArea = bboxArea - inBoardArea;
+
+                        if( outOfBoardArea < island_area / 2.0 )
+                            continue;
+
+                        if( inBoardArea < island_area / 2.0 )
+                        {
+                            retval.emplace_back( poly, jj );
+                            continue;
+                        }
 
                         island.AddOutline( test_poly );
                         intersection.BooleanIntersection( m_boardOutline, island );
@@ -1818,7 +1894,7 @@ bool ZONE_FILLER::Fill( const std::vector<ZONE*>& aZones, bool aCheck, wxWindow*
             int holeRadius = 0;
 
             if( pad->HasHole() )
-                holeRadius = std::min( pad->GetDrillSizeX(), pad->GetDrillSizeY() ) / 2;
+                holeRadius = std::min( pad->GetDrillSize().x, pad->GetDrillSize().y ) / 2;
 
             for( PCB_LAYER_ID layer : layers )
             {
@@ -1993,6 +2069,8 @@ void ZONE_FILLER::addKnockout( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer, int aGap,
 
     case PCB_TEXTBOX_T:
     case PCB_TABLE_T:
+    case PCB_DRILL_CHART_T:
+    case PCB_STACKUP_TABLE_T:
     case PCB_TARGET_T:
         aItem->TransformShapeToPolygon( aHoles, aLayer, aGap, m_maxError, ERROR_OUTSIDE, aIgnoreLineWidth );
         break;
@@ -2270,31 +2348,8 @@ void ZONE_FILLER::knockoutThermalReliefs( const ZONE* aZone, PCB_LAYER_ID aLayer
             {
                 noConnection = true;
 
-                // Add knockout for backdrill/post-machining hole
-                int pmSize = 0;
-                int bdSize = 0;
-
-                const PADSTACK::POST_MACHINING_PROPS& frontPM = via->Padstack().FrontPostMachining();
-                const PADSTACK::POST_MACHINING_PROPS& backPM = via->Padstack().BackPostMachining();
-
-                if( frontPM.mode != PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED
-                    && frontPM.mode != PAD_DRILL_POST_MACHINING_MODE::UNKNOWN )
-                {
-                    pmSize = std::max( pmSize, frontPM.size );
-                }
-
-                if( backPM.mode != PAD_DRILL_POST_MACHINING_MODE::NOT_POST_MACHINED
-                    && backPM.mode != PAD_DRILL_POST_MACHINING_MODE::UNKNOWN )
-                {
-                    pmSize = std::max( pmSize, backPM.size );
-                }
-
-                const PADSTACK::DRILL_PROPS& secDrill = via->Padstack().SecondaryDrill();
-
-                if( secDrill.start != UNDEFINED_LAYER && secDrill.end != UNDEFINED_LAYER )
-                    bdSize = secDrill.size.x;
-
-                int knockoutSize = std::max( pmSize, bdSize );
+                // Either drill slot may hold a bottom backdrill, so read the whole padstack
+                int knockoutSize = via->Padstack().GetMaxHoleSize();
 
                 if( knockoutSize > 0 )
                 {
@@ -2433,7 +2488,8 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
 
                     if( knockoutSize > 0 )
                     {
-                        int clearance = std::max( holeGap, 0 ) + extra_margin;
+                        // The bore widens the drill, so it keeps the drill's copper clearance
+                        int clearance = std::max( gap, 0 ) + extra_margin;
 
                         TransformCircleToPolygon( aHoles, aPad->GetPosition(), knockoutSize / 2 + clearance,
                                                   m_maxError, ERROR_OUTSIDE );
@@ -2536,7 +2592,8 @@ void ZONE_FILLER::buildCopperItemClearances( const ZONE* aZone, PCB_LAYER_ID aLa
 
                             if( knockoutSize > 0 )
                             {
-                                int clearance = std::max( holeGap, 0 ) + extra_margin;
+                                // The bore widens the drill, so it keeps the drill's copper clearance
+                                int clearance = std::max( gap, 0 ) + extra_margin;
 
                                 TransformCircleToPolygon( aHoles, via->GetPosition(), knockoutSize / 2 + clearance,
                                                           m_maxError, ERROR_OUTSIDE );
@@ -2996,7 +3053,12 @@ void ZONE_FILLER::postKnockoutMinWidthPrune( const ZONE* aZone, SHAPE_POLY_SET& 
     SHAPE_POLY_SET preDeflate = aFillPolys.CloneDropTriangulation();
 
     if( aSameNetApron.OutlineCount() > 0 )
-        aFillPolys.BooleanAdd( aSameNetApron );
+    {
+        // Overlap rather than abut the fill, or a rounding slit along the shared edge opens into a notch
+        SHAPE_POLY_SET apron = aSameNetApron.CloneDropTriangulation();
+        apron.Inflate( epsilon, CORNER_STRATEGY::ROUND_ALL_CORNERS, m_maxError );
+        aFillPolys.BooleanAdd( apron );
+    }
 
     aFillPolys.Deflate( half_min_width - epsilon, CORNER_STRATEGY::CHAMFER_ALL_CORNERS,
                         m_maxError );
@@ -3831,30 +3893,31 @@ void ZONE_FILLER::buildThermalSpokes( const ZONE* aZone, PCB_LAYER_ID aLayer,
 
             SHAPE_LINE_CHAIN padOutline = pad->GetEffectivePolygon( aLayer, ERROR_OUTSIDE )->Outline( 0 );
 
-            auto trimToOutline = [&]( SEG& aSegment )
-            {
-                SHAPE_LINE_CHAIN::INTERSECTIONS intersections;
-
-                if( padOutline.Intersect( aSegment, intersections ) )
-                {
-                    intersections.clear();
-
-                    // Trim the segment to the thermal outline
-                    if( thermalOutline.Intersect( aSegment, intersections ) )
+            auto trimToOutline =
+                    [&]( SEG& aSegment )
                     {
-                        aSegment.B = intersections.front().p;
-                        return true;
-                    }
-                }
-                return false;
-            };
+                        std::vector<SHAPE_LINE_CHAIN::INTERSECTION> intersections;
+
+                        if( padOutline.Intersect( aSegment, intersections ) )
+                        {
+                            intersections.clear();
+
+                            // Trim the segment to the thermal outline
+                            if( thermalOutline.Intersect( aSegment, intersections ) )
+                            {
+                                aSegment.B = intersections.front().p;
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
 
             for( const std::shared_ptr<PCB_SHAPE>& primitive : pad->GetPrimitives( aLayer ) )
             {
                 if( primitive->IsProxyItem() && primitive->GetShape() == SHAPE_T::SEGMENT )
                 {
                     SEG seg( primitive->GetStart(), primitive->GetEnd() );
-                    SHAPE_LINE_CHAIN::INTERSECTIONS intersections;
+                    std::vector<SHAPE_LINE_CHAIN::INTERSECTION> intersections;
 
                     RotatePoint( seg.A, pad->GetOrientation() );
                     RotatePoint( seg.B, pad->GetOrientation() );
@@ -4060,8 +4123,8 @@ void ZONE_FILLER::buildHatchZoneThermalRings( const ZONE* aZone, PCB_LAYER_ID aL
             int ringInnerRadius = padRadius + thermalGap;
             int ringWidth = spokeWidth;
 
-            TransformRingToPolygon( thermalRing, position, ringInnerRadius + ringWidth / 2,
-                                    ringWidth, m_maxError, ERROR_OUTSIDE );
+            TransformRingToPolygon( thermalRing, position, ringInnerRadius + ringWidth / 2, ringWidth,
+                                    m_maxError, ERROR_OUTSIDE );
         }
         else
         {
@@ -4071,12 +4134,10 @@ void ZONE_FILLER::buildHatchZoneThermalRings( const ZONE* aZone, PCB_LAYER_ID aL
             SHAPE_POLY_SET innerShape;
 
             // Outer ring edge = pad + thermal gap + spoke width
-            pad->TransformShapeToPolygon( outerShape, aLayer, thermalGap + spokeWidth,
-                                          m_maxError, ERROR_OUTSIDE );
+            pad->TransformShapeToPolygon( outerShape, aLayer, thermalGap + spokeWidth, m_maxError, ERROR_OUTSIDE );
 
             // Inner ring edge = pad + thermal gap (this is already knocked out)
-            pad->TransformShapeToPolygon( innerShape, aLayer, thermalGap,
-                                          m_maxError, ERROR_OUTSIDE );
+            pad->TransformShapeToPolygon( innerShape, aLayer, thermalGap, m_maxError, ERROR_OUTSIDE );
 
             thermalRing = outerShape;
             thermalRing.BooleanSubtract( innerShape );
@@ -4126,8 +4187,8 @@ bool ZONE_FILLER::addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLay
 
     // Rotate the clip region into the pattern's local frame so the grid iterates
     // axis-aligned; the resulting stamps get rotated back into the zone's frame below.
-    if( !settings.orientation.IsZero() )
-        filledRegion.Rotate( -settings.orientation );
+    if( !settings.orientation.GetAngle().IsZero() )
+        filledRegion.Rotate( -settings.orientation.GetAngle() );
 
     // BBox() over all outlines — the post-clearance fill region may be split
     // into several pieces (e.g. by a track cutting across the zone) and the
@@ -4147,8 +4208,8 @@ bool ZONE_FILLER::addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLay
     if( localOffsets.contains( aLayer ) && localOffsets.at( aLayer ).hatching_offset.has_value() )
         offset = localOffsets.at( aLayer ).hatching_offset.value();
 
-    if( !settings.orientation.IsZero() )
-        RotatePoint( offset, -settings.orientation );
+    if( !settings.orientation.GetAngle().IsZero() )
+        RotatePoint( offset, -settings.orientation.GetAngle() );
 
     // Gap is edge-to-edge; grid stride is element_size + gap (dots/squares) or
     // line_width + gap (crosshatch).
@@ -4203,10 +4264,8 @@ bool ZONE_FILLER::addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLay
         // void on the negative side after the modulo step.  bbox already
         // contains the rotated filledRegion bounds, which slightly overcover
         // the interior; extra voids get clipped to interior below.
-        int xVoid = bbox.GetLeft() - ( bbox.GetLeft() % lineStride ) + offset.x
-                    + lineStride / 2;
-        int yVoid = bbox.GetTop()  - ( bbox.GetTop()  % lineStride ) + offset.y
-                    + lineStride / 2;
+        int xVoid = bbox.GetLeft() - ( bbox.GetLeft() % lineStride ) + offset.x + lineStride / 2;
+        int yVoid = bbox.GetTop()  - ( bbox.GetTop()  % lineStride ) + offset.y + lineStride / 2;
 
         while( xVoid - voidSize / 2 > bbox.GetLeft() )
             xVoid -= lineStride;
@@ -4230,8 +4289,8 @@ bool ZONE_FILLER::addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLay
             }
         }
 
-        if( !settings.orientation.IsZero() )
-            voids.Rotate( settings.orientation );
+        if( !settings.orientation.GetAngle().IsZero() )
+            voids.Rotate( settings.orientation.GetAngle() );
 
         // Clip voids to interior so the perimeter border survives the
         // subtraction.  Without this clamp, voids on the edge punch through
@@ -4251,8 +4310,7 @@ bool ZONE_FILLER::addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLay
     const int sideLen = std::max( settings.element_size - aZone->GetMinThickness(), 1 );
     const VECTOR2I squareSize( sideLen, sideLen );
 
-    const int containmentInset =
-            ( ( settings.pattern == THIEVING_PATTERN::SQUARES ) ? sideLen / 2 : dotRadius ) + 1;
+    const int containmentInset = ( ( settings.pattern == THIEVING_PATTERN::SQUARES ) ? sideLen / 2 : dotRadius ) + 1;
 
     filledRegion.Deflate( containmentInset, CORNER_STRATEGY::CHAMFER_ALL_CORNERS, maxError );
 
@@ -4278,30 +4336,24 @@ bool ZONE_FILLER::addCopperThievingPattern( const ZONE* aZone, PCB_LAYER_ID aLay
                 continue;
 
             if( settings.pattern == THIEVING_PATTERN::SQUARES )
-            {
-                TransformTrapezoidToPolygon( stamps, centre, squareSize, ANGLE_0, 0, 0, 0,
-                                             maxError, ERROR_OUTSIDE );
-            }
+                TransformTrapezoidToPolygon( stamps, centre, squareSize, ANGLE_0, 0, 0, 0, maxError, ERROR_OUTSIDE );
             else
-            {
                 TransformCircleToPolygon( stamps, centre, dotRadius, maxError, ERROR_OUTSIDE );
-            }
         }
 
         ++rowIndex;
     }
 
-    if( !settings.orientation.IsZero() )
-        stamps.Rotate( settings.orientation );
+    if( !settings.orientation.GetAngle().IsZero() )
+        stamps.Rotate( settings.orientation.GetAngle() );
 
     aFillPolys = stamps;
     return true;
 }
 
 
-bool ZONE_FILLER::addHatchFillTypeOnZone( const ZONE* aZone, PCB_LAYER_ID aLayer,
-                                          PCB_LAYER_ID aDebugLayer, SHAPE_POLY_SET& aFillPolys,
-                                          const SHAPE_POLY_SET& aThermalRings )
+bool ZONE_FILLER::addHatchFillTypeOnZone( const ZONE* aZone, PCB_LAYER_ID aLayer, PCB_LAYER_ID aDebugLayer,
+                                          SHAPE_POLY_SET& aFillPolys, const SHAPE_POLY_SET& aThermalRings )
 {
     // Build grid:
 
@@ -4510,7 +4562,7 @@ bool ZONE_FILLER::addHatchFillTypeOnZone( const ZONE* aZone, PCB_LAYER_ID aLayer
 
                 // Check 3: Does the ring outline NOT intersect the hole outline?
                 // If there's no intersection, the ring is fully enclosed (not touching edges)
-                SHAPE_LINE_CHAIN::INTERSECTIONS intersections;
+                std::vector<SHAPE_LINE_CHAIN::INTERSECTION> intersections;
                 ring.Intersect( hole, intersections );
 
                 if( intersections.empty() )

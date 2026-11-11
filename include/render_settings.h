@@ -151,6 +151,7 @@ public:
      * @param aEnabled tells if highlighting should be enabled.
      * @param aNetcode is optional and if specified, turns on highlighting only for the net with
      *                 number given as the parameter.
+     * @param aMulti
      */
     inline void SetHighlight( bool aEnabled, int aNetcode = -1, bool aMulti = false )
     {
@@ -200,6 +201,23 @@ public:
      * @return The color.
      */
     virtual COLOR4D GetColor( const VIEW_ITEM* aItem, int aLayer ) const = 0;
+
+    /**
+     * Get how the canvas fades a whole layer, see GAL::SetSceneLayerDim(). GetColor leaves that fade out
+     * of the layer's colours.
+     *
+     * @param aLayer is the VIEW layer id.
+     * @param aToward receives the colour the layer fades towards.
+     * @param aKeep receives the share of each colour kept, 1 when the layer is not dimmed.
+     * @return false for a layer whose items GetColor dims itself.
+     */
+    virtual bool GetLayerDim( int aLayer, COLOR4D& aToward, double& aKeep ) const { return false; }
+
+    /**
+     * Return true for an item that keeps its colour on a layer the canvas fades, such as a
+     * selected item in high contrast.
+     */
+    virtual bool IsDimExempt( const VIEW_ITEM* aItem ) const { return false; }
 
     float GetDrawingSheetLineWidth() const { return m_drawingSheetLineWidth; }
 
@@ -279,6 +297,20 @@ public:
         m_layerColors[aLayer] = aColor;
 
         update();       // recompute other shades of the color
+    }
+
+    /**
+     * Change the color used to draw every layer.
+     *
+     * @param aColor is the new color.
+     */
+    void SetAllLayerColors( const COLOR4D& aColor )
+    {
+        // update() walks every layer, so calling SetLayerColor() per layer is quadratic
+        for( int layer = 0; layer < LAYER_ID_COUNT; ++layer )
+            m_layerColors[layer] = aColor;
+
+        update();
     }
 
     virtual bool IsBackgroundDark() const

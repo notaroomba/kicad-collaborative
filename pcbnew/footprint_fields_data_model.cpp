@@ -167,6 +167,14 @@ bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ColIsReadOnly( int aCol ) const
 }
 
 
+bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::fieldSupportsVariants( const wxString& aFieldName ) const
+{
+    return aFieldName != GetDefaultFieldName( FIELD_T::REFERENCE, UNTRANSLATED )
+           && aFieldName != GetDefaultFieldName( FIELD_T::FOOTPRINT, UNTRANSLATED )
+           && aFieldName != wxS( "${EXCLUDE_FROM_BOARD}" );
+}
+
+
 bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::unitMatch( const FOOTPRINT_REF& lhItem, const FOOTPRINT_REF& rhItem )
 {
     // Footprints are just pointers and never have multiple units unlike symbols
@@ -179,7 +187,8 @@ bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::getLiveFieldValue( const FOOTPRINT
                                                                  const wxString& aFieldName,
                                                                  wxString& aValue )
 {
-    return getLiveFieldValueForVariant( aRef, aFieldName, m_currentVariant, aValue );
+    return FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::getLiveFieldValueForVariant( aRef, aFieldName, m_currentVariant,
+                                                                                 aValue );
 }
 
 
@@ -200,7 +209,7 @@ wxString FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::getFieldResolvedLiveValue( con
         if( field->IsPrivate() )
             return wxEmptyString;
         else
-            return field->GetShownText( false, 0 );
+            return field->GetShownText( INTERNAL, 0 );
     }
 
     // Handle generated fields with variables as names (e.g. ${QUANTITY}) that are not present in
@@ -224,19 +233,24 @@ wxString FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::getFieldResolvedLiveValue( con
 
 wxString FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::resolveTextVars( const FOOTPRINT_REF& aRef, const wxString& aText )
 {
-    // TODO: this isn't technically correct, this should resolve against the
-    // data store's copy of variables whenever whenever possible,
-    // but currently it is resolving against the footprint's current values.
-    // For instance, if you have "My value is ${VALUE}" in the description field,
-    // ${VALUE} will be resolved against the footprint's live value, not the Value field
-    // stored in the data store.
+    int depth = 0;
+
     std::function<bool( wxString* )> footprintResolver =
             [&]( wxString* token ) -> bool
             {
-                return aRef.GetFootprint().ResolveTextVar( token, m_currentVariant );
+                // Footprint user field names are case-sensitive; VALUE is a built-in alias.
+                wxString fieldToken = *token == wxS( "VALUE" )
+                                              ? GetDefaultFieldName( FIELD_T::VALUE, UNTRANSLATED ) : *token;
+
+                if( resolveStoredTextVar( aRef, &fieldToken, true ) )
+                {
+                    *token = fieldToken;
+                    return true;
+                }
+
+                return aRef.GetFootprint().ResolveTextVar( token, m_currentVariant, depth );
             };
 
-    int depth = 0;
     return ResolveTextVars( aText, &footprintResolver, depth );
 }
 
@@ -264,7 +278,8 @@ wxString FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::getAttributeValue( const FOOTP
 }
 
 
-bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::attributeForcedOnBySheet( const FOOTPRINT_REF&, const wxString& ) const
+bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::attributeForcedOnBySheet( const FOOTPRINT_REF&, const wxString&,
+                                                                        const wxString& ) const
 {
     // TODO: So if a symbol has DNP set to false, and the sheet is in has DNP set to true,
     // the symbol will be effectively DNP true. This will propogate to the footprint correctly.
@@ -526,7 +541,7 @@ void FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::RebuildRows()
             {
                 matchFound = true;
                 row.m_items.push_back( ref );
-                row.m_state = ROW_STATE::COLLAPSED;
+                row.m_state = ROW_STATE::GROUP_COLLAPSED;
                 break;
             }
         }
@@ -556,7 +571,7 @@ bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::applyDataToFootprint( const FOOTPR
 
     FOOTPRINT_REF destRef( aDestFootprint );
 
-    const std::map<wxString, wxString>& fieldStore = getStoredFields( aSourceRef );
+    const std::map<wxString, wxString> fieldStore = getStoredFields( aSourceRef, aVariantName );
 
     for( const auto& [srcName, srcValue] : fieldStore )
     {
@@ -660,7 +675,7 @@ bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::applyDataToFootprint( const FOOTPR
         if( field->IsMandatory() || field->IsPrivate() )
             continue;
 
-        if( !fieldStore.contains( field->GetUntranslatedName() ) )
+        if( storedFieldIsRemoved( aSourceRef, field->GetUntranslatedName() ) )
         {
             // TODO: unlike symbols/SCH_FIELD, footprint PCB_FIELD
             // can be grouped so we need to remove it from the group before deleting it
@@ -679,9 +694,11 @@ bool FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::applyDataToFootprint( const FOOTPR
 }
 
 
-void FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( BOARD_COMMIT& aCommit, TEMPLATES& aTemplateFieldnames,
-                                                         const wxString& aVariantName )
+void FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( BOARD_COMMIT& aCommit, TEMPLATES& aTemplateFieldnames )
 {
+    for( const FOOTPRINT_REF& ref : m_footprintsList )
+        refreshDataStoreItem( ref );
+
     for( const FOOTPRINT_REF& ref : m_footprintsList )
     {
         FOOTPRINT& footprint = ref.GetFootprint();
@@ -692,8 +709,15 @@ void FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( BOARD_COMMIT& aCommit, 
         footprintCopy->SetParentGroup( nullptr );
 
         // Only commit if the footprint was actually modified
-        if( applyDataToFootprint( ref, footprint, &aTemplateFieldnames, aVariantName ) )
+        bool modified = false;
+
+        for( const wxString& variant : storedVariants( ref ) )
+            modified |= applyDataToFootprint( ref, footprint, &aTemplateFieldnames, variant );
+
+        if( modified )
             aCommit.Modified( &footprint, footprintCopy.release() );
+
+        acceptDataStoreItem( ref );
     }
 
     m_edited = false;
@@ -741,11 +765,13 @@ void FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::UpdateReferences( const FOOTPRINT_
         // Update the fields of every reference. Do this by iterating through the data model
         // columns; we must have all fields in the footprint added to the data model at this point,
         // and some of the data model columns may be variables that are not present in the footprint
-        initializeDataStoreItem( ref );
+        refreshDataStoreItem( ref );
 
         if( !alg::contains( m_footprintsList, ref ) )
             m_footprintsList.push_back( ref );
     }
+
+    updateEditedState();
 }
 
 
@@ -903,8 +929,7 @@ bool LIB_FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( std::function<bool(
             // A non-empty public field that collides with a private field is taken to be
             // an explicit request to make it non-private, so that case isn't what we're
             // checking for here, only the empty public/existing private mismatch.
-            for( const DATA_MODEL_COL& col : m_cols )
-                updateDataStoreItemFieldFromLive( ref, col.m_fieldName );
+            acceptDataStoreItem( ref );
 
             continue;
         }
@@ -918,23 +943,10 @@ bool LIB_FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData( std::function<bool(
         ref.GetFootprint() = changedFootprint;
 
         // Update the data store with the new live values after applying changes
-        for( const DATA_MODEL_COL& col : m_cols )
-            updateDataStoreItemFieldFromLive( ref, col.m_fieldName );
+        acceptDataStoreItem( ref );
     }
 
-    m_edited = false;
-
-    for( const FOOTPRINT_REF& ref : m_footprintsList )
-    {
-        for( const DATA_MODEL_COL& col : m_cols )
-        {
-            if( fieldIsModified( ref, col.m_fieldName ) )
-            {
-                m_edited = true;
-                return allChangesApplied;
-            }
-        }
-    }
+    updateEditedState();
 
     return allChangesApplied;
 }

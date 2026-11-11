@@ -98,7 +98,7 @@ public:
     /**
      * @return a reference to the child 3D viewer frame, when exists, or NULL
      */
-    EDA_3D_VIEWER_FRAME* Get3DViewerFrame();
+    EDA_3D_VIEWER_FRAME* GetOur3DViewerFrame();
 
     /**
      * Update the 3D view, if the viewer is opened by this frame.
@@ -108,6 +108,9 @@ public:
      * @param aTitle is the new title of the 3D frame, or nullptr to do not change the frame title
      */
     virtual void Update3DView( bool aMarkDirty, bool aRefresh, const wxString* aTitle = nullptr );
+
+    /// Refresh cached drill symbols in frames that render drill maps.
+    virtual void RefreshDrillSymbols( int aUpdateFlags ) {}
 
     /**
      * Attempt to load \a aFootprintId from the footprint library table.
@@ -162,8 +165,7 @@ public:
      */
     virtual COLOR_SETTINGS* GetColorSettings( bool aForceRefresh = false ) const override
     {
-        wxFAIL_MSG( wxT( "Color settings requested for a PCB_BASE_FRAME that does not "
-                         "override!" ) );
+        wxFAIL_MSG( wxT( "Color settings requested for a PCB_BASE_FRAME that does not override!" ) );
         return nullptr;
     }
 
@@ -209,7 +211,7 @@ public:
     }
 
     /**
-     * Set the #m_Pcb member in such as way as to ensure deleting any previous #BOARD.
+     * Set the #m_pcb member in such as way as to ensure deleting any previous #BOARD.
      */
     virtual void SetBoard( BOARD* aBoard, PROGRESS_REPORTER* aReporter = nullptr );
 
@@ -227,7 +229,7 @@ public:
 
     void FocusOnItem( EDA_ITEM* aItem, bool aAllowScroll = true ) override;
     void FocusOnItem( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer = UNDEFINED_LAYER, bool aAllowScroll = true );
-    void FocusOnItems( std::vector<BOARD_ITEM*> aItems, PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
+    void FocusOnItems( const std::vector<BOARD_ITEM*>& aItems, PCB_LAYER_ID aLayer = UNDEFINED_LAYER,
                        bool aAllowScroll = true );
 
     void HideSolderMask();
@@ -276,23 +278,26 @@ public:
      * Place \a aFootprint at the current cursor position (or provided one) and updates footprint coordinates
      * with the new position.
      *
+     * @param aFootprint is the footprint to place.
      * @param aRecreateRatsnest A bool true redraws the footprint ratsnest.
+     * @param aPosition is the coordinates to place the footprint.
      */
-    void PlaceFootprint( FOOTPRINT* aFootprint, bool aRecreateRatsnest = true, std::optional<VECTOR2I> aPosition = std::nullopt );
+    void PlaceFootprint( FOOTPRINT* aFootprint, bool aRecreateRatsnest = true,
+                         std::optional<VECTOR2I> aPosition = std::nullopt );
 
-    void ShowPadPropertiesDialog( PAD* aPad );
+    void ShowPadPropertiesDialog( PAD& aPad );
 
     /**
      * Open a dialog to select a footprint.
      *
-     * @param aPreslect if valid, the #LIB_ID to select (otherwise the global history is used).
+     * @param aPreselect if valid, the #LIB_ID to select (otherwise the global history is used).
      */
     FOOTPRINT* SelectFootprintFromLibrary( LIB_ID aPreselect = LIB_ID() );
 
     /**
      * Add the given footprint to the board.
      *
-     * @param aDC is the current Device Context, to draw the new footprint (can be NULL ).
+     * @param aFootprint is the new footprint to add to board (can be NULL ).
      */
     virtual void AddFootprintToBoard( FOOTPRINT* aFootprint );
 
@@ -366,7 +371,7 @@ public:
     virtual void ActivateGalCanvas() override;
 
     /**
-     * Add \a aListener to post #EDA_EVT_BOARD_CHANGED command events to.
+     * Add \a aListener to post EDA_EVT_BOARD_CHANGED command events to.
      *
      * @warning The caller is responsible for removing any listeners that are no long valid.
      *

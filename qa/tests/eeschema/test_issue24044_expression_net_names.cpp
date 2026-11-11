@@ -21,6 +21,8 @@
 #include <schematic_utils/schematic_file_util.h>
 
 #include <schematic.h>
+#include <schematic_settings.h>
+#include <algorithm>
 #include <sch_sheet.h>
 #include <sch_sheet_path.h>
 #include <sch_sheet_pin.h>
@@ -94,7 +96,7 @@ BOOST_FIXTURE_TEST_CASE( Issue24044ExpressionNetNames, ISSUE_24044_FIXTURE )
             if( item->Type() == SCH_HIER_LABEL_T )
             {
                 SCH_HIERLABEL* label = static_cast<SCH_HIERLABEL*>( item );
-                labelTexts.insert( label->GetShownText( &childPath, false ) );
+                labelTexts.insert( label->GetShownText( &childPath, INTERNAL ) );
             }
         }
 
@@ -111,7 +113,7 @@ BOOST_FIXTURE_TEST_CASE( Issue24044ExpressionNetNames, ISSUE_24044_FIXTURE )
         // Every sheet pin's resolved name must appear in the child's hierarchical labels
         for( SCH_SHEET_PIN* pin : childSheet->GetPins() )
         {
-            wxString pinText = pin->GetShownText( &childPath, false );
+            wxString pinText = pin->GetShownText( &childPath, INTERNAL );
 
             BOOST_CHECK_MESSAGE( !pinText.Contains( wxT( "@{" ) )
                                          && !pinText.Contains( wxT( "${" ) ),
@@ -137,7 +139,7 @@ BOOST_FIXTURE_TEST_CASE( Issue24044ExpressionNetNames, ISSUE_24044_FIXTURE )
     for( const SCH_SHEET_PATH& childPath : childPaths )
     {
         for( SCH_SHEET_PIN* pin : childPath.Last()->GetPins() )
-            allPinTexts.insert( pin->GetShownText( &childPath, false ) );
+            allPinTexts.insert( pin->GetShownText( &childPath, INTERNAL ) );
     }
 
     BOOST_CHECK_EQUAL( allPinTexts.size(), 4U );
@@ -156,7 +158,7 @@ BOOST_FIXTURE_TEST_CASE( Issue24044ExpressionNetNames, ISSUE_24044_FIXTURE )
         std::set<wxString> actual;
 
         for( SCH_SHEET_PIN* pin : childPath.Last()->GetPins() )
-            actual.insert( pin->GetShownText( &childPath, false ) );
+            actual.insert( pin->GetShownText( &childPath, INTERNAL ) );
 
         wxString actualList;
 
@@ -221,14 +223,101 @@ BOOST_FIXTURE_TEST_CASE( Issue24044PathFormEquivalence, ISSUE_24044_FIXTURE )
 
         for( SCH_SHEET_PIN* pin : childSheet->GetPins() )
         {
-            wxString fromChildPath  = pin->GetShownText( &childPath, false );
-            wxString fromParentPath = pin->GetShownText( &parentPath, false );
+            wxString fromChildPath  = pin->GetShownText( &childPath, INTERNAL );
+            wxString fromParentPath = pin->GetShownText( &parentPath, INTERNAL );
 
             BOOST_CHECK_MESSAGE( fromChildPath == fromParentPath,
                                  wxString::Format( "Sheet pin resolution diverged between "
                                                    "path forms: child='%s' parent='%s'",
                                                    fromChildPath,
                                                    fromParentPath ) );
+        }
+    }
+}
+
+
+BOOST_FIXTURE_TEST_CASE( IntersheetReferencesUseTheRequestedInstance, ISSUE_24044_FIXTURE )
+{
+    LOCALE_IO locale;
+    KI_TEST::LoadSchematic( m_settingsManager, "issue23840/BusAndVectors", m_schematic );
+    std::vector<SCH_SHEET_PATH> paths;
+
+    for( const auto& path : m_schematic->Hierarchy() )
+    {
+        if( path.LastScreen()->GetFileName().EndsWith( "LEDs.kicad_sch" ) )
+            paths.push_back( path );
+    }
+
+    BOOST_REQUIRE_EQUAL( paths.size(), 2u );
+    BOOST_REQUIRE( paths[0].LastScreen() == paths[1].LastScreen() );
+    BOOST_REQUIRE( paths[0].GetPageNumber() != paths[1].GetPageNumber() );
+    std::ranges::sort( paths, []( const auto& first, const auto& second )
+    {
+        return first.GetVirtualPageNumber() < second.GetVirtualPageNumber();
+    } );
+    auto sources = m_schematic->RootScreen()->Items().OfType( SCH_GLOBAL_LABEL_T );
+    BOOST_REQUIRE( sources.begin() != sources.end() );
+    auto* label = static_cast<SCH_GLOBALLABEL*>( ( *sources.begin() )->Duplicate( false ) );
+    paths[0].LastScreen()->Append( label );
+    auto& settings = m_schematic->Settings();
+    settings.m_IntersheetRefsShow = false;
+    settings.m_IntersheetRefsFormatShort = false;
+    settings.m_IntersheetRefsPrefix.clear();
+    settings.m_IntersheetRefsSuffix.clear();
+
+    for( bool perPage : { false, true } )
+    {
+        label->SetText( perPage ? wxString( "R21_${#}" ) : wxString( "R21_SHARED" ) );
+        m_schematic->RecomputeIntersheetRefs();
+
+        for( bool ownPage : { false, true } )
+        {
+            settings.m_IntersheetRefsListOwnPage = ownPage;
+
+            for( const auto& displayed : paths )
+            {
+                m_schematic->SetCurrentSheet( displayed );
+
+                for( const auto& requested : paths )
+                {
+                    BOOST_TEST_CONTEXT( "per-page=" << perPage << " own-page=" << ownPage
+                                        << " requested=" << requested.GetPageNumber()
+                                        << " displayed=" << displayed.GetPageNumber() )
+                    {
+                        const wxString name = perPage ? "R21_" + requested.GetPageNumber()
+                                                      : wxString( "R21_SHARED" );
+                        BOOST_REQUIRE_EQUAL( label->GetShownText( &requested, FOR_GUI ), name );
+                        std::vector<wxString> expected;
+                        wxString expectedText;
+
+                        for( const auto& other : paths )
+                        {
+                            if( ( perPage && other.Path() != requested.Path() )
+                                || ( !ownPage && other.Path() == requested.Path() ) )
+                                continue;
+
+                            expected.push_back( other.GetPageNumber() );
+
+                            if( !expectedText.IsEmpty() )
+                                expectedText += ",";
+
+                            expectedText += other.GetPageNumber();
+                        }
+
+                        std::vector<std::pair<wxString, wxString>> references;
+                        label->GetIntersheetRefs( &requested, &references );
+                        std::vector<wxString> actual;
+
+                        for( const auto& [page, sheet] : references )
+                            actual.push_back( page );
+
+                        BOOST_TEST( actual == expected, boost::test_tools::per_element() );
+                        wxString token = "INTERSHEET_REFS";
+                        BOOST_REQUIRE( label->ResolveTextVar( &requested, &token, 0 ) );
+                        BOOST_CHECK_EQUAL( token, expectedText );
+                    }
+                }
+            }
         }
     }
 }

@@ -1,0 +1,289 @@
+(kicad_sch
+	(version 20231120)
+	(generator "eeschema")
+	(generator_version "8.0")
+	(uuid "9c65c6c4-f8a1-4869-9ee5-38624b40fdf6")
+	(paper "A3")
+	(title_block
+		(title "Pumpenmodul")
+		(date "2021-08-13")
+		(rev "v3_a")
+		(company "IBFEEW  -  www.ibfeew.de")
+	)
+	(lib_symbols)
+	(text "Net navigator panel: missing sheets after adding a local label\n- enable Net Navigator panel\n- switch to sheet 2 (\"Spannungsversgung\")\n- highlight net \"+12V\"\n- net navigator panel shows occurence on 5 subsheets\n- switch to sheet 7 (\"Schnittstellen\")\n- connect the existing local label to the +12V-net\n- observe net navigator panel: suddenly only 2 subsheets are shown\n- dehighlighting + again highlighting doesn't helps\n- only save + restart eeschema shows again the complete content on the net navigator panel"
+		(exclude_from_sim no)
+		(at 124.46 66.04 0)
+		(effects
+			(font
+				(size 3.81 3.81)
+			)
+			(justify left)
+		)
+		(uuid "a94445f1-c138-4e62-8979-ee4c392524d1")
+	)
+	(sheet
+		(at 182.88 119.38)
+		(size 128.27 44.45)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "00cf1e76-338c-4d4d-9726-e527acf22d79")
+		(property "Sheetname" "Schrittmotor"
+			(at 182.88 128.3093 0)
+			(effects
+				(font
+					(size 5 5)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "Schrittmotor.kicad_sch"
+			(at 182.88 164.3387 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "6")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 19.05 177.8)
+		(size 109.22 44.45)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "21ecf582-2fe5-40fc-9946-89f54de57e7c")
+		(property "Sheetname" "Controller"
+			(at 19.05 188.5943 0)
+			(effects
+				(font
+					(size 5 5)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "controller.kicad_sch"
+			(at 19.05 222.7587 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "4")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 182.88 177.8)
+		(size 128.27 44.45)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "2b590aa0-1d21-4d53-b44c-7c7281a374f3")
+		(property "Sheetname" "Schnittstellen"
+			(at 182.88 186.7293 0)
+			(effects
+				(font
+					(size 5 5)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "Schnittstellen.kicad_sch"
+			(at 182.88 222.7587 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "7")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 20.32 55.88)
+		(size 92.71 44.45)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "91851cc4-7b7c-43c1-a5a8-9a31f107ad77")
+		(property "Sheetname" "Spannungsversorgung"
+			(at 21.59 64.8093 0)
+			(effects
+				(font
+					(size 5 5)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "Spannungsversorgung.kicad_sch"
+			(at 20.32 100.8387 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "2")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 17.78 243.84)
+		(size 109.22 36.83)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "a7122a31-89f2-41b0-bebd-73b376a9bdf3")
+		(property "Sheetname" "IO_Schnittstellen_Eingänge"
+			(at 20.32 254.0393 0)
+			(effects
+				(font
+					(size 5 5)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "IO.kicad_sch"
+			(at 17.78 281.1787 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "5")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 20.32 118.11)
+		(size 107.95 40.64)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "a76509c5-4937-4a23-beb5-21605fe4de3d")
+		(property "Sheetname" "dcdc_brücke"
+			(at 20.32 128.9043 0)
+			(effects
+				(font
+					(size 5 5)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "dcdc.kicad_sch"
+			(at 20.32 159.2587 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "3")
+				)
+			)
+		)
+	)
+	(sheet
+		(at 184.15 241.3)
+		(size 83.82 39.37)
+		(stroke
+			(width 0.0005)
+			(type solid)
+		)
+		(fill
+			(color 0 0 0 0.0000)
+		)
+		(uuid "c9b5e774-ed78-42b5-be4b-c3889903b1f5")
+		(property "Sheetname" "Anschluss"
+			(at 186.69 251.4593 0)
+			(effects
+				(font
+					(size 5.08 5.08)
+				)
+				(justify left bottom)
+			)
+		)
+		(property "Sheetfile" "Anschluss.kicad_sch"
+			(at 184.15 281.1787 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+			)
+		)
+		(instances
+			(project "issue16836"
+				(path "/9c65c6c4-f8a1-4869-9ee5-38624b40fdf6"
+					(page "8")
+				)
+			)
+		)
+	)
+	(sheet_instances
+		(path "/"
+			(page "1")
+		)
+	)
+)

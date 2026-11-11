@@ -21,11 +21,16 @@
 #ifndef PANEL_SETUP_CONSTRAINTS_H
 #define PANEL_SETUP_CONSTRAINTS_H
 
+#include <vector>
+
+#include <wx/timer.h>
+
+#include <board_design_settings.h>
 #include <widgets/unit_binder.h>
 #include <panel_setup_constraints_base.h>
 
 class BOARD;
-class BOARD_DESIGN_SETTINGS;
+class FIELD_WARNING_ICON;
 class PAGED_DIALOG;
 class PCB_EDIT_FRAME;
 class wxCommandEvent;
@@ -42,6 +47,18 @@ public:
 private:
     bool TransferDataToWindow() override;
     bool TransferDataFromWindow() override;
+
+    void applyValues( BOARD_DESIGN_SETTINGS& aSettings ) const;
+
+    /// Show a warning icon, with the reason as its tooltip, over each field whose value has an issue.
+    void updateWarnings();
+
+    struct CONSTRAINT_FIELD
+    {
+        wxString            m_Setting;
+        wxWindow*           m_Ctrl;
+        FIELD_WARNING_ICON* m_Warning;
+    };
 
 public:
     UNIT_BINDER             m_minClearance;
@@ -62,8 +79,10 @@ public:
     UNIT_BINDER             m_maxError;
 
 private:
-    PCB_EDIT_FRAME*         m_Frame;
-    BOARD_DESIGN_SETTINGS*  m_BrdSettings;
+    PCB_EDIT_FRAME*               m_Frame;
+    BOARD_DESIGN_SETTINGS*        m_BrdSettings;
+    std::vector<CONSTRAINT_FIELD> m_fields;
+    wxTimer                       m_validationTimer;
 };
 
 #endif //PANEL_SETUP_CONSTRAINTS_H

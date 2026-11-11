@@ -22,11 +22,14 @@
 #include <pcbnew_utils/board_test_utils.h>
 #include <board.h>
 #include <board_commit.h>
+#include <connectivity/connectivity_data.h>
+#include <netinfo.h>
 #include <footprint.h>
 #include <pad.h>
 #include <pcb_shape.h>
 #include <pcb_text.h>
 #include <pcb_group.h>
+#include <pcb_board_outline.h>
 #include <lset.h>
 #include <generators/pcb_via_stack.h>
 #include <pcb_view.h>
@@ -54,6 +57,40 @@ BOOST_AUTO_TEST_CASE( RecursesThroughGroups )
     BOOST_CHECK_EQUAL( commit.GetStatus( &s1 ), CHT_MODIFY );
     BOOST_CHECK_EQUAL( commit.GetStatus( &s2 ), CHT_MODIFY );
 }
+
+// Deleting a footprint child must drop it from connectivity, like a board level item.
+BOOST_AUTO_TEST_CASE( RemovedFootprintChildLeavesConnectivity )
+{
+    BOARD        board;
+    TOOL_MANAGER mgr;
+    mgr.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+    KI_TEST::DUMMY_TOOL* dummyTool = new KI_TEST::DUMMY_TOOL();
+    mgr.RegisterTool( dummyTool );
+
+    board.Add( new NETINFO_ITEM( &board, wxT( "N1" ), 1 ) );
+
+    FOOTPRINT* fp = new FOOTPRINT( &board );
+    PAD*       pad = new PAD( fp );
+    fp->Add( pad );
+    board.Add( fp );
+    pad->SetNetCode( 1 );
+
+    board.BuildConnectivity();
+
+    auto netPads = [&]()
+    {
+        return board.GetConnectivity()->GetNetItems( 1, { PCB_PAD_T } ).size();
+    };
+
+    BOOST_REQUIRE_EQUAL( netPads(), 1u );
+
+    BOARD_COMMIT commit( dummyTool );
+    commit.Remove( pad );
+    commit.Push( wxT( "Delete Pad" ) );
+
+    BOOST_CHECK_EQUAL( netPads(), 0u );
+}
+
 
 BOOST_AUTO_TEST_CASE( MakeImageCreatesTransientCopy )
 {
@@ -164,6 +201,32 @@ BOOST_AUTO_TEST_CASE( RemoveFootprintPrunesSelectedChildren )
     delete fp;
 }
 
+// Moving a shape off Edge.Cuts must rebuild the board outline (issue 25551).
+BOOST_AUTO_TEST_CASE( LayerChangeOffEdgeCutsUpdatesBoardOutline )
+{
+    // view must outlive board so board items unregister from a live view at teardown.
+    KIGFX::PCB_VIEW view;
+    BOARD           board;
+    TOOL_MANAGER    mgr;
+    mgr.SetEnvironment( &board, &view, nullptr, nullptr, nullptr );
+
+    PCB_SHAPE* rect = new PCB_SHAPE( &board, SHAPE_T::RECTANGLE );
+    rect->SetLayer( Edge_Cuts );
+    rect->SetStart( VECTOR2I( 0, 0 ) );
+    rect->SetEnd( VECTOR2I( 10000000, 10000000 ) );
+    board.Add( rect );
+    board.UpdateBoardOutline();
+
+    BOOST_REQUIRE_GT( board.BoardOutline()->GetOutline().OutlineCount(), 0 );
+
+    BOARD_COMMIT commit( &mgr, true, false );
+    commit.Modify( rect );
+    rect->SetLayer( Cmts_User );
+    commit.Push( wxT( "Change layer" ), SKIP_UNDO );
+
+    BOOST_CHECK_EQUAL( board.BoardOutline()->GetOutline().OutlineCount(), 0 );
+}
+
 // Undo after a drag must put the hops back with the stack.
 BOOST_AUTO_TEST_CASE( RevertAfterDraggingAViaStackRestoresItsHops )
 {
@@ -243,7 +306,8 @@ BOOST_AUTO_TEST_CASE( RegeneratingAViaStackDoesNotDoubleStageItsHops )
     board.Add( stack );
     stack->Regenerate( &board, nullptr );
 
-    std::vector<BOARD_ITEM*> original( stack->GetBoardItems().begin(), stack->GetBoardItems().end() );
+    const auto originalItems = stack->GetBoardItems();
+    std::vector<BOARD_ITEM*> original( originalItems.begin(), originalItems.end() );
     BOOST_REQUIRE_EQUAL( original.size(), 2u );
 
     BOARD_COMMIT commit( &mgr, true, false );
@@ -288,7 +352,8 @@ BOOST_AUTO_TEST_CASE( UpdateOutsideAnEditIsInert )
     board.Add( stack );
     stack->Regenerate( &board, nullptr );
 
-    std::vector<BOARD_ITEM*> before( stack->GetBoardItems().begin(), stack->GetBoardItems().end() );
+    const auto beforeItems = stack->GetBoardItems();
+    std::vector<BOARD_ITEM*> before( beforeItems.begin(), beforeItems.end() );
     BOOST_REQUIRE_EQUAL( before.size(), 2u );
 
     BOARD_COMMIT commit( &mgr, true, false );
@@ -296,12 +361,80 @@ BOOST_AUTO_TEST_CASE( UpdateOutsideAnEditIsInert )
     // No EditStart, so IN_EDIT is not set.
     BOOST_CHECK( !stack->Update( nullptr, &board, &commit ) );
 
-    std::vector<BOARD_ITEM*> after( stack->GetBoardItems().begin(), stack->GetBoardItems().end() );
+    const auto afterItems = stack->GetBoardItems();
+    std::vector<BOARD_ITEM*> after( afterItems.begin(), afterItems.end() );
 
     BOOST_REQUIRE_EQUAL( after.size(), before.size() );
     BOOST_CHECK_MESSAGE( std::set<BOARD_ITEM*>( before.begin(), before.end() )
                                  == std::set<BOARD_ITEM*>( after.begin(), after.end() ),
                          "the hops were rebuilt outside an edit" );
+}
+
+
+// A reverted commit must forget what it staged, or the next edit of the same item is skipped
+// and the commit pushes empty, leaving the change on the board with no undo entry.
+BOOST_AUTO_TEST_CASE( RevertedCommitStagesTheSameItemAgain )
+{
+    BOARD        board;
+    TOOL_MANAGER mgr;
+    mgr.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+    KI_TEST::DUMMY_TOOL* dummyTool = new KI_TEST::DUMMY_TOOL();
+    mgr.RegisterTool( dummyTool );
+
+    PCB_SHAPE* shape = new PCB_SHAPE( &board, SHAPE_T::SEGMENT );
+    shape->SetStart( VECTOR2I( 0, 0 ) );
+    shape->SetEnd( VECTOR2I( 100000, 0 ) );
+    board.Add( shape );
+
+    BOARD_COMMIT commit( dummyTool );
+
+    commit.Modify( shape );
+    BOOST_REQUIRE( !commit.Empty() );
+
+    shape->SetEnd( VECTOR2I( 200000, 0 ) );
+    commit.Revert();
+    BOOST_REQUIRE( commit.Empty() );
+    BOOST_REQUIRE( shape->GetEnd() == VECTOR2I( 100000, 0 ) );
+
+    commit.Modify( shape );
+    BOOST_CHECK( !commit.Empty() );
+    BOOST_CHECK_EQUAL( commit.GetStatus( shape ), CHT_MODIFY );
+}
+
+
+// Rolling back to a checkpoint must leave the earlier changes staged and drop the later ones.
+// An item still staged after its change was dropped is skipped on the next edit, so that edit
+// gets no undo entry.
+BOOST_AUTO_TEST_CASE( RevertToCheckpointKeepsEarlierItemsStaged )
+{
+    BOARD board;
+    TOOL_MANAGER mgr;
+    mgr.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+    KI_TEST::DUMMY_TOOL* dummyTool = new KI_TEST::DUMMY_TOOL();
+    mgr.RegisterTool( dummyTool );
+
+    PCB_SHAPE* kept = new PCB_SHAPE( &board, SHAPE_T::SEGMENT );
+    board.Add( kept );
+
+    PCB_SHAPE* rolledBack = new PCB_SHAPE( &board, SHAPE_T::SEGMENT );
+    rolledBack->SetStart( VECTOR2I( 0, 100000 ) );
+    rolledBack->SetEnd( VECTOR2I( 100000, 100000 ) );
+    board.Add( rolledBack );
+
+    BOARD_COMMIT commit( dummyTool );
+
+    commit.Modify( kept );
+    int checkpoint = commit.Checkpoint();
+
+    commit.Modify( rolledBack );
+    rolledBack->SetEnd( VECTOR2I( 200000, 100000 ) );
+    commit.RevertToCheckpoint( checkpoint );
+
+    BOOST_REQUIRE( rolledBack->GetEnd() == VECTOR2I( 100000, 100000 ) );
+    BOOST_CHECK_EQUAL( commit.GetStatus( kept ), CHT_MODIFY );
+
+    commit.Modify( rolledBack );
+    BOOST_CHECK_EQUAL( commit.GetStatus( rolledBack ), CHT_MODIFY );
 }
 
 

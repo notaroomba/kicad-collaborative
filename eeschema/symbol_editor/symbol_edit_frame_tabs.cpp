@@ -24,6 +24,7 @@
  * takes them back on detach.
  */
 
+#include <sch_render_settings.h>
 #include <symbol_edit_frame.h>
 
 #include <kidialog.h>
@@ -242,14 +243,14 @@ void SYMBOL_EDIT_FRAME::OnTabCharHook( wxKeyEvent& aEvent )
     const bool isCtrlW = ctrlOnly && !aEvent.ShiftDown()
                          && ( keyCode == 'W' || keyCode == ( 'W' - '@' ) );
 
-    if( isCtrlW && m_tabsPanel && m_tabsPanel->Model().Entries().size() >= 1 )
+    if( isCtrlW && m_tabsPanel->Model().Entries().size() >= 1 )
     {
         // Route through CloseTab so the unsaved-changes prompt still runs.
         m_tabsPanel->CloseTab( m_tabsPanel->GetActiveTab() );
         return;
     }
 
-    if( !isTab || !ctrlOnly || !m_tabsPanel )
+    if( !isTab || !ctrlOnly )
     {
         aEvent.Skip();
         return;
@@ -317,16 +318,12 @@ void SYMBOL_EDIT_FRAME::clearSymbolTabsModifiedForLibrary( const wxString& aLibr
         if( ctx->GetLibrary() != aLibrary )
             continue;
 
-        if( m_tabsPanel )
-            clearTabModifiedState( *ctx, m_tabsPanel->MutableModel() );
-        else if( SCH_SCREEN* screen = ctx->GetScreen() )
-            screen->SetContentModified( false );
+        clearTabModifiedState( *ctx, m_tabsPanel->MutableModel() );
     }
 
     // The strip queries the dirty flag only on repaint, so without this the cleared asterisk lingers
     // until the next stray paint event reaches the tab the user was on.
-    if( m_tabsPanel )
-        m_tabsPanel->RefreshTabLabels();
+    m_tabsPanel->RefreshTabLabels();
 }
 
 
@@ -363,9 +360,6 @@ void SYMBOL_EDIT_FRAME::dropSymbolTabContext( const wxString& aKey )
 
 SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::symbolTabContextForIndex( int aIdx ) const
 {
-    if( !m_tabsPanel )
-        return nullptr;
-
     const std::vector<EDITOR_TABS_MODEL::ENTRY>& entries = m_tabsPanel->Model().Entries();
 
     if( aIdx < 0 || aIdx >= static_cast<int>( entries.size() ) )
@@ -405,32 +399,25 @@ SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::findOrCreateSymbolTab( const wxStr
     ctx->SetUnit( unit );
     ctx->SetBodyStyle( bodyStyle );
 
-    if( m_tabsPanel )
+    // A previewed open reuses the existing preview slot in the panel instead of adding a tab.
+    // The panel drops the evicted key from its model, but the matching context lingers in
+    // m_tabContexts and would be persisted as a phantom tab, so capture the evicted key and drop
+    // its context once the reuse completes.
+    wxString replacedKey;
+
+    if( aAsPreview )
     {
-        // A previewed open reuses the existing preview slot in the panel instead of adding a tab.
-        // The panel drops the evicted key from its model, but the matching context lingers in
-        // m_tabContexts and would be persisted as a phantom tab, so capture the evicted key and drop
-        // its context once the reuse completes.
-        wxString replacedKey;
+        const std::vector<EDITOR_TABS_MODEL::ENTRY>& entries = m_tabsPanel->Model().Entries();
+        const int previewIdx = m_tabsPanel->Model().PreviewIndex();
 
-        if( aAsPreview )
-        {
-            const std::vector<EDITOR_TABS_MODEL::ENTRY>& entries = m_tabsPanel->Model().Entries();
-            const int previewIdx = m_tabsPanel->Model().PreviewIndex();
-
-            if( previewIdx >= 0 && previewIdx < static_cast<int>( entries.size() ) && entries[previewIdx].key != key )
-                replacedKey = entries[previewIdx].key;
-        }
-
-        m_tabsPanel->AddTab( key, aName, aAsPreview );
-
-        if( !replacedKey.empty() )
-            dropSymbolTabContext( replacedKey );
+        if( previewIdx >= 0 && previewIdx < static_cast<int>( entries.size() ) && entries[previewIdx].key != key )
+            replacedKey = entries[previewIdx].key;
     }
-    else
-    {
-        activateSymbolTab( ctx );
-    }
+
+    m_tabsPanel->ActivateOrCreateTab( key, aName, aAsPreview );
+
+    if( !replacedKey.empty() )
+        dropSymbolTabContext( replacedKey );
 
     return ctx;
 }
@@ -454,10 +441,7 @@ SYMBOL_EDIT_FRAME::findOrCreateSymbolInstanceTab( LIB_SYMBOL* aSymbol, SCH_SCREE
         existing->SetUnit( unit );
         existing->SetBodyStyle( bodyStyle );
 
-        if( m_tabsPanel )
-            m_tabsPanel->AddTab( key, existing->GetReference() + wxS( " " ) + _( "[from schematic]" ), false );
-        else
-            activateSymbolTab( existing );
+        m_tabsPanel->ActivateOrCreateTab( key, existing->GetDisplayName(), false );
 
         return existing;
     }
@@ -469,12 +453,22 @@ SYMBOL_EDIT_FRAME::findOrCreateSymbolInstanceTab( LIB_SYMBOL* aSymbol, SCH_SCREE
     ctx->SetUnit( unit );
     ctx->SetBodyStyle( bodyStyle );
 
-    if( m_tabsPanel )
-        m_tabsPanel->AddTab( key, aReference + wxS( " " ) + _( "[from schematic]" ), false );
-    else
-        activateSymbolTab( ctx );
+    m_tabsPanel->ActivateOrCreateTab( key, ctx->GetDisplayName(), false );
 
     return ctx;
+}
+
+
+SYMBOL_EDITOR_TAB_CONTEXT* SYMBOL_EDIT_FRAME::CreateUnsavedSymbolTab( LIB_SYMBOL* aSymbol, SCH_SCREEN* aScreen )
+{
+    auto                       ctx = std::make_unique<SYMBOL_EDITOR_TAB_CONTEXT>( aSymbol, aScreen );
+    SYMBOL_EDITOR_TAB_CONTEXT* raw = ctx.get();
+
+    m_tabContexts.push_back( std::move( ctx ) );
+
+    m_tabsPanel->ActivateOrCreateTab( raw->GetTabKey(), raw->GetDisplayName(), false );
+
+    return raw;
 }
 
 
@@ -487,8 +481,7 @@ bool SYMBOL_EDIT_FRAME::promptAndCloseSymbolTab( int aIdx )
 
     if( ctx->IsModified() && !m_silentSymbolTabClose )
     {
-        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ),
-                                         ctx->GetDisplayName() );
+        wxString msg = wxString::Format( _( "Save changes to '%s' before closing?" ), ctx->GetDisplayName( true ) );
 
         KIDIALOG dlg( this, msg, _( "Confirmation" ), wxYES_NO | wxCANCEL | wxICON_WARNING );
         dlg.SetYesNoCancelLabels( _( "Save" ), _( "Discard Changes" ), _( "Cancel" ) );
@@ -619,11 +612,8 @@ void SYMBOL_EDIT_FRAME::closeAllSymbolTabsSilently()
 
     m_silentSymbolTabClose = true;
 
-    if( m_tabsPanel )
-    {
-        // Remove through the panel so its widget pages and the contexts stay in sync.
-        m_tabsPanel->CloseAll();
-    }
+    // Remove through the panel so its widget pages and the contexts stay in sync.
+    m_tabsPanel->CloseAll();
 
     // Repoint the frame before the active tab's objects return to its soon-deleted context.
     if( m_activeTab )
@@ -647,9 +637,6 @@ void SYMBOL_EDIT_FRAME::closeAllSymbolTabsSilently()
 
 void SYMBOL_EDIT_FRAME::closeSymbolTab( const LIB_ID& aLibId )
 {
-    if( !m_tabsPanel )
-        return;
-
     const wxString key = SYMBOL_EDITOR_TAB_CONTEXT::MakeTabKey( aLibId.GetLibNickname(), aLibId.GetLibItemName() );
 
     const int idx = m_tabsPanel->FindTab( key );
@@ -667,18 +654,25 @@ void SYMBOL_EDIT_FRAME::closeSymbolTab( const LIB_ID& aLibId )
 
 void SYMBOL_EDIT_FRAME::RenameSymbolTab( const LIB_ID& aOldId, const LIB_ID& aNewId )
 {
-    if( !m_tabsPanel )
+    const wxString newLib = aNewId.GetLibNickname();
+    const wxString newName = aNewId.GetLibItemName();
+
+    if( m_activeTab && m_activeTab->IsUnsaved() && aOldId.GetLibNickname().empty() && !newLib.IsEmpty() )
+    {
+        const wxString unsavedKey = m_activeTab->GetTabKey();
+
+        m_activeTab->PromoteToLibrary( newLib, newName );
+        m_tabsPanel->RenameTab( unsavedKey, m_activeTab->GetTabKey(), m_activeTab->GetDisplayName() );
+
         return;
+    }
 
     const wxString oldKey = SYMBOL_EDITOR_TAB_CONTEXT::MakeTabKey( aOldId.GetLibNickname(), aOldId.GetLibItemName() );
 
     if( SYMBOL_EDITOR_TAB_CONTEXT* ctx = symbolTabContextForKey( oldKey ) )
     {
-        const wxString newName = aNewId.GetLibItemName();
-        const wxString newKey = SYMBOL_EDITOR_TAB_CONTEXT::MakeTabKey( aNewId.GetLibNickname(), newName );
-
         ctx->SetName( newName );
-        m_tabsPanel->RenameTab( oldKey, newKey, newName );
+        m_tabsPanel->RenameTab( oldKey, SYMBOL_EDITOR_TAB_CONTEXT::MakeTabKey( newLib, newName ), newName );
     }
 }
 
@@ -687,7 +681,7 @@ void SYMBOL_EDIT_FRAME::restoreSymbolTabsFromSettings()
 {
     wxLogTrace( wxT( "KICAD_TABS_DBG" ), wxT( "restoreSymbolTabsFromSettings enter" ) );
 
-    if( !m_tabsPanel || !m_settings )
+    if( !m_settings )
         return;
 
     m_loadingSymbolTab = true;
@@ -747,14 +741,11 @@ void SYMBOL_EDIT_FRAME::storeSymbolTabsToSettings()
         tab.unit = ctx->GetUnit();
         tab.bodyStyle = ctx->GetBodyStyle();
 
-        if( m_tabsPanel )
-        {
-            const int                                    idx = m_tabsPanel->FindTab( ctx->GetTabKey() );
-            const std::vector<EDITOR_TABS_MODEL::ENTRY>& entries = m_tabsPanel->Model().Entries();
+        const int                                    idx = m_tabsPanel->FindTab( ctx->GetTabKey() );
+        const std::vector<EDITOR_TABS_MODEL::ENTRY>& entries = m_tabsPanel->Model().Entries();
 
-            if( idx >= 0 && idx < static_cast<int>( entries.size() ) )
-                tab.preview = entries[idx].preview;
-        }
+        if( idx >= 0 && idx < static_cast<int>( entries.size() ) )
+            tab.preview = entries[idx].preview;
 
         m_settings->m_OpenTabs.push_back( tab );
     }

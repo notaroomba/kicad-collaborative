@@ -33,6 +33,7 @@
 #include <project.h>
 #include <text_var_dependency.h>
 #include <view/view.h>
+#include <title_block.h>
 
 using namespace KIGFX;
 
@@ -105,7 +106,7 @@ void DS_PROXY_VIEW_ITEM::ViewDraw( int aLayer, VIEW* aView ) const
 {
     GAL*              gal = aView->GetGAL();
     RENDER_SETTINGS*  settings = aView->GetPainter()->GetSettings();
-    DS_DRAW_ITEM_LIST drawList( m_iuScale );
+    DS_DRAW_ITEM_LIST drawList( m_iuScale, FOR_CANVAS );
 
     buildDrawList( aView, m_properties, &drawList );
 
@@ -127,19 +128,29 @@ void DS_PROXY_VIEW_ITEM::ViewDraw( int aLayer, VIEW* aView ) const
         viewport.SetOrigin( left, viewport.GetTop() );
     }
 
-    DS_PAINTER ws_painter( gal );
-    auto       ws_settings = static_cast<DS_RENDER_SETTINGS*>( ws_painter.GetSettings() );
+    if( !m_painter || m_painterGal != gal )
+    {
+        m_painter = std::make_unique<DS_PAINTER>( gal );
+        m_painterGal = gal;
+    }
 
+    DS_PAINTER& ws_painter = *m_painter;
+    auto        ws_settings = static_cast<DS_RENDER_SETTINGS*>( ws_painter.GetSettings() );
+
+    // Colors and font follow the theme, so they are cheap to set on every draw
     ws_settings->SetNormalColor( settings->GetLayerColor( m_colorLayer ) );
     ws_settings->SetSelectedColor( settings->GetLayerColor( LAYER_SELECT_OVERLAY ) );
     ws_settings->SetBrightenedColor( settings->GetLayerColor( LAYER_BRIGHTENED ) );
     ws_settings->SetPageBorderColor( settings->GetLayerColor( m_pageBorderColorLayer ) );
     ws_settings->SetDefaultFont( settings->GetDefaultFont() );
 
+    // A retained scene keeps the sheet across pans, so it must hold all of it
+    const bool wholeSheet = gal->HasRetainedScene();
+
     // Draw all the components that make the drawing sheet
     for( DS_DRAW_ITEM_BASE* item = drawList.GetFirst(); item; item = drawList.GetNext() )
     {
-        if( viewport.Intersects( item->GetApproxBBox() ) )
+        if( wholeSheet || viewport.Intersects( item->GetApproxBBox() ) )
             ws_painter.Draw( item, LAYER_DRAWINGSHEET );
     }
 
@@ -179,6 +190,22 @@ std::vector<TEXT_VAR_REF_KEY> DS_PROXY_VIEW_ITEM::CollectTextVarKeys() const
         {
             if( ref.IsTrackable() )
                 keys.push_back( ref );
+        }
+    }
+
+    // Also scan the title block fields, as they can contain nested references
+    // to other text variables.
+    if( m_titleBlock )
+    {
+        const wxArrayString& titleBlockStrings = m_titleBlock->GetStrings();
+
+        for( int ii = 0; ii < (int) titleBlockStrings.GetCount(); ++ii )
+        {
+            for( const TEXT_VAR_REF_KEY& ref : ExtractTextVarReferences( titleBlockStrings[ii] ) )
+            {
+                if( ref.IsTrackable() )
+                    keys.push_back( ref );
+            }
         }
     }
 
@@ -233,7 +260,7 @@ DS_PROXY_VIEW_ITEM::~DS_PROXY_VIEW_ITEM()
 bool DS_PROXY_VIEW_ITEM::HitTestDrawingSheetItems( VIEW* aView, const VECTOR2I& aPosition )
 {
     int               accuracy = (int) aView->ToWorld( 5.0 );   // five pixels at current zoom
-    DS_DRAW_ITEM_LIST drawList( m_iuScale );
+    DS_DRAW_ITEM_LIST drawList( m_iuScale, FOR_CANVAS );
 
     buildDrawList( aView, m_properties, &drawList );
 

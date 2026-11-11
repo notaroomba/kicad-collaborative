@@ -18,6 +18,8 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <tool/tool_manager.h>
+#include <tools/sch_selection_tool.h>
 #include <sch_actions.h>
 #include <optional>
 #include <symbol_edit_frame.h>
@@ -36,7 +38,6 @@
 #include <settings/settings_manager.h>
 #include <string_utils.h>
 #include <wx/msgdlg.h>
-#include <import_gfx/dialog_import_gfx_sch.h>
 
 
 KIID SYMBOL_EDITOR_DRAWING_TOOLS::g_lastPin;
@@ -188,7 +189,9 @@ int SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace( const TOOL_EVENT& aEvent )
 
             break;
         }
-        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT ) || isSyntheticClick )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT )
+                || isSyntheticClick
+                || evt->IsAction( &ACTIONS::cursorClick ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             LIB_SYMBOL* symbol = m_frame->GetCurSymbol();
 
@@ -372,7 +375,8 @@ int SYMBOL_EDITOR_DRAWING_TOOLS::PlaceAnchor( const TOOL_EVENT& aEvent )
         {
             break;
         }
-        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT )
+                || evt->IsAction( &ACTIONS::cursorClick ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             LIB_SYMBOL* symbol = m_frame->GetCurSymbol();
 
@@ -412,7 +416,7 @@ int SYMBOL_EDITOR_DRAWING_TOOLS::RepeatDrawItem( const TOOL_EVENT& aEvent )
     if( !symbol )
         return 0;
 
-    for( SCH_PIN* test : symbol->GetPins() )
+    for( SCH_PIN* test : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
     {
         if( test->m_Uuid == g_lastPin )
         {

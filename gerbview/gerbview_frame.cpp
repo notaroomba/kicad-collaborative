@@ -161,6 +161,8 @@ GERBVIEW_FRAME::GERBVIEW_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
     m_auimgr.SetManagedWindow( this );
 
+    CreateInfoBar();
+
     m_auimgr.AddPane( m_tbTopMain, EDA_PANE().HToolbar().Name( "TopMainToolbar" ).Top().Layer( 6 ) );
     m_auimgr.AddPane( m_tbTopAux, EDA_PANE().HToolbar().Name( "TopAuxToolbar" ).Top().Layer(4) );
     m_auimgr.AddPane( m_messagePanel, EDA_PANE().Messages().Name( "MsgPanel" ).Bottom().Layer( 6 ) );
@@ -253,55 +255,52 @@ bool GERBVIEW_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
     if( !IsShownOnScreen() )
         Show();
 
-    // The current project path is also a valid command parameter.  Check if a single path
-    // rather than a file name was passed to GerbView and use it as the initial MRU path.
-    if( aFileSet.size() > 0 )
+    const unsigned limit = std::min( unsigned( aFileSet.size() ),
+                                     unsigned( GERBER_DRAWLAYERS_COUNT ) );
+
+    for( unsigned i = 0; i < limit; ++i )
     {
-        wxString path = aFileSet[0];
+        wxString path = aFileSet[i];
 
         // For some reason wxApp appears to leave the trailing double quote on quoted
         // parameters which are required for paths with spaces.  Maybe this should be
         // pushed back into PGM_SINGLE_TOP::OnPgmInit() but that may cause other issues.
         // We can't buy a break!
-        if( path.Last() ==  wxChar( '\"' ) )
+        if( path.EndsWith( "\"" ) )
             path.RemoveLast();
 
-        if( !wxFileExists( path ) && wxDirExists( path ) )
+        // The current project path is also a valid command parameter.  Check if a path
+        // rather than a file name was passed to GerbView and use it as the initial MRU path.
+        if( i == 0 && !wxFileExists( path ) && wxDirExists( path ) )
         {
             m_mruPath = path;
             return true;
         }
 
-        const unsigned limit = std::min( unsigned( aFileSet.size() ),
-                                         unsigned( GERBER_DRAWLAYERS_COUNT ) );
+        wxString ext = wxFileName( path ).GetExt().Lower();
 
-        for( unsigned i = 0; i < limit; ++i )
+        if( ext == FILEEXT::ArchiveFileExtension )
+            LoadZipArchiveFile( path );
+        else if( ext == FILEEXT::GerberJobFileExtension )
+            LoadGerberJobFile( path );
+        else
         {
-            wxString ext = wxFileName( aFileSet[i] ).GetExt().Lower();
+            GERBER_ORDER_ENUM fnameLayer;
+            wxString          fnameExtensionMatched;
 
-            if( ext == FILEEXT::ArchiveFileExtension )
-                LoadZipArchiveFile( aFileSet[i] );
-            else if( ext == FILEEXT::GerberJobFileExtension )
-                LoadGerberJobFile( aFileSet[i] );
-            else
+            GERBER_FILE_IMAGE_LIST::GetGerberLayerFromFilename( path, fnameLayer,
+                                                                fnameExtensionMatched );
+
+            switch( fnameLayer )
             {
-                GERBER_ORDER_ENUM fnameLayer;
-                wxString          fnameExtensionMatched;
-
-                GERBER_FILE_IMAGE_LIST::GetGerberLayerFromFilename( aFileSet[i], fnameLayer,
-                                                                    fnameExtensionMatched );
-
-                switch( fnameLayer )
-                {
-                case GERBER_ORDER_ENUM::GERBER_DRILL:
-                    LoadExcellonFiles( aFileSet[i] );
-                    break;
-                case GERBER_ORDER_ENUM::GERBER_LAYER_UNKNOWN:
-                    LoadAutodetectedFiles( aFileSet[i] );
-                    break;
-                default:
-                    LoadGerberFiles( aFileSet[i] );
-                }
+            case GERBER_ORDER_ENUM::GERBER_DRILL:
+                LoadExcellonFiles( path );
+                break;
+            case GERBER_ORDER_ENUM::GERBER_LAYER_UNKNOWN:
+                LoadAutodetectedFiles( path );
+                break;
+            default:
+                LoadGerberFiles( path );
             }
         }
     }
@@ -458,7 +457,7 @@ void GERBVIEW_FRAME::ApplyDisplaySettingsToGAL()
 {
     auto painter = static_cast<KIGFX::GERBVIEW_PAINTER*>( GetCanvas()->GetView()->GetPainter() );
     KIGFX::GERBVIEW_RENDER_SETTINGS* settings = painter->GetSettings();
-    settings->SetHighContrast( gvconfig()->m_Display.m_HighContrastMode );
+    settings->SetContrastMode( gvconfig()->m_Display.m_InactiveLayerMode );
     settings->LoadColors( GetColorSettings() );
 
     GetCanvas()->GetView()->MarkTargetDirty( KIGFX::TARGET_NONCACHED );
@@ -543,8 +542,13 @@ void GERBVIEW_FRAME::RemapLayers( const std::unordered_map<int, int>& remapping 
 
     for( const std::pair<const int, int>& entry : remapping )
     {
-        view_remapping[ GERBER_DRAW_LAYER( entry.first ) ] = GERBER_DRAW_LAYER( entry.second );
-        view_remapping[ GERBER_DCODE_LAYER( entry.first ) ] = GERBER_DCODE_LAYER( entry.second );
+        // GERBER_DCODE_LAYER() takes a draw layer id, not a graphic layer index, the same way
+        // GERBER_DRAW_ITEM::ViewGetLayers() builds it
+        int from = GERBER_DRAW_LAYER( entry.first );
+        int to = GERBER_DRAW_LAYER( entry.second );
+
+        view_remapping[from] = to;
+        view_remapping[GERBER_DCODE_LAYER( from )] = GERBER_DCODE_LAYER( to );
     }
 
     GetCanvas()->GetView()->ReorderLayerData( view_remapping );
@@ -606,9 +610,9 @@ void GERBVIEW_FRAME::SetLayerDrawPrms()
 
 void GERBVIEW_FRAME::UpdateXORLayers()
 {
-    auto target = GetCanvas()->GetBackend() == GERBVIEW_DRAW_PANEL_GAL::GAL_TYPE_OPENGL
-                          ? KIGFX::TARGET_CACHED
-                          : KIGFX::TARGET_NONCACHED;
+    // Cairo keeps cached groups in screen coordinates, so caching makes no sense for it
+    EDA_DRAW_PANEL_GAL::GAL_TYPE backend = GetCanvas()->GetBackend();
+    auto target = EDA_DRAW_PANEL_GAL::IsAccelerated( backend ) ? KIGFX::TARGET_CACHED : KIGFX::TARGET_NONCACHED;
     KIGFX::VIEW* view = GetCanvas()->GetView();
 
     int lastVisibleLayer = -1;
@@ -1167,7 +1171,25 @@ void GERBVIEW_FRAME::setupUIConditions()
     auto highContrastModeCond =
         [this] ( const SELECTION& )
         {
-            return gvconfig()->m_Display.m_HighContrastMode;
+            return gvconfig()->m_Display.m_InactiveLayerMode != GBR_INACTIVE_LAYER_MODE::NORMAL;
+        };
+
+    auto showInactiveLayersCond =
+        [this] ( const SELECTION& )
+        {
+            return gvconfig()->m_Display.m_InactiveLayerMode == GBR_INACTIVE_LAYER_MODE::NORMAL;
+        };
+
+    auto dimInactiveLayersCond =
+        [this] ( const SELECTION& )
+        {
+            return gvconfig()->m_Display.m_InactiveLayerMode == GBR_INACTIVE_LAYER_MODE::DIMMED;
+        };
+
+    auto hideInactiveLayersCond =
+        [this] ( const SELECTION& )
+        {
+            return gvconfig()->m_Display.m_InactiveLayerMode == GBR_INACTIVE_LAYER_MODE::HIDDEN;
         };
 
     auto flipGerberCond =
@@ -1191,6 +1213,9 @@ void GERBVIEW_FRAME::setupUIConditions()
     mgr->SetConditions( GERBVIEW_ACTIONS::toggleXORMode,           CHECK( xorModeCond ) );
     mgr->SetConditions( GERBVIEW_ACTIONS::flipGerberView,          CHECK( flipGerberCond ) );
     mgr->SetConditions( ACTIONS::highContrastMode,                 CHECK( highContrastModeCond ) );
+    mgr->SetConditions( GERBVIEW_ACTIONS::showInactiveLayers,      CHECK( showInactiveLayersCond ) );
+    mgr->SetConditions( GERBVIEW_ACTIONS::dimInactiveLayers,       CHECK( dimInactiveLayersCond ) );
+    mgr->SetConditions( GERBVIEW_ACTIONS::hideInactiveLayers,      CHECK( hideInactiveLayersCond ) );
     mgr->SetConditions( GERBVIEW_ACTIONS::toggleLayerManager,      CHECK( layersManagerShownCondition ) );
 
 #undef CHECK

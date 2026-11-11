@@ -23,6 +23,7 @@
 #include <base_screen.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <board_tables/generated_table_refresh.h>
 #include <drawing_sheet/ds_data_model.h>
 #include <drc/drc_engine.h>
 #include <filename_resolver.h>
@@ -39,10 +40,8 @@
 #include <wx/log.h>
 
 
-std::unique_ptr<BOARD> BOARD_LOADER::Load( const wxString& aFileName,
-                                           PCB_IO_MGR::PCB_FILE_T aFormat,
-                                           PROJECT* aProject,
-                                           const OPTIONS& aOptions )
+std::unique_ptr<BOARD> BOARD_LOADER::Load( const wxString& aFileName, PCB_IO_MGR::PCB_FILE_T aFormat,
+                                           PROJECT* aProject, const OPTIONS& aOptions )
 {
     if( !aProject || aFormat == PCB_IO_MGR::FILE_TYPE_NONE )
         return nullptr;
@@ -50,7 +49,7 @@ std::unique_ptr<BOARD> BOARD_LOADER::Load( const wxString& aFileName,
     // TODO(JE) need to factor out for MDI
     BASE_SCREEN::m_DrawingSheetFileName = aProject->GetProjectFile().m_BoardDrawingSheetFile;
 
-    BOARD* loaded = nullptr;
+    std::unique_ptr<BOARD> board;
 
     if( aOptions.plugin_configurator || aOptions.reporter || aOptions.post_load_hook )
     {
@@ -68,22 +67,16 @@ std::unique_ptr<BOARD> BOARD_LOADER::Load( const wxString& aFileName,
         pi->SetProgressReporter( aOptions.progress_reporter );
 
         // own the board first so a throwing hook can't leak it
-        std::unique_ptr<BOARD> boardOwner(
-                pi->LoadBoard( aFileName, nullptr, aOptions.properties, aProject ) );
+        board = pi->LoadBoard( aFileName, aOptions.properties, aProject );
 
         // grab cached lib footprints while the plugin is alive
-        if( boardOwner && aOptions.post_load_hook )
+        if( board && aOptions.post_load_hook )
             aOptions.post_load_hook( *pi );
-
-        loaded = boardOwner.release();
     }
     else
     {
-        loaded = PCB_IO_MGR::Load( aFormat, aFileName, nullptr, aOptions.properties,
-                                   aProject, aOptions.progress_reporter );
+        board = PCB_IO_MGR::Load( aFormat, aFileName, aOptions.properties, aProject, aOptions.progress_reporter );
     }
-
-    std::unique_ptr<BOARD> board( loaded );
 
     if( !board )
         return nullptr;
@@ -180,14 +173,20 @@ std::unique_ptr<BOARD> BOARD_LOADER::CreateEmptyBoard( PROJECT* aProject )
 {
     std::unique_ptr<BOARD> brd = std::make_unique<BOARD>();
     brd->SetProject( aProject );
+
+    BOARD_DESIGN_SETTINGS& bds = brd->GetDesignSettings();
+    bds.m_DRCEngine = std::make_shared<DRC_ENGINE>( brd.get(), &bds );
+
     return brd;
 }
 
 
-bool BOARD_LOADER::SaveBoard( wxString& aFileName, BOARD* aBoard, PCB_IO_MGR::PCB_FILE_T aFormat )
+bool BOARD_LOADER::SaveBoard( wxString& aFileName, BOARD& aBoard, PCB_IO_MGR::PCB_FILE_T aFormat )
 {
-    aBoard->BuildConnectivity();
-    aBoard->SynchronizeNetsAndNetClasses( false );
+    aBoard.BuildConnectivity();
+    aBoard.SynchronizeNetsAndNetClasses( false );
+    aBoard.SynchronizeProperties();
+    RefreshGeneratedTables( aBoard );
 
     try
     {
@@ -210,7 +209,7 @@ bool BOARD_LOADER::SaveBoard( wxString& aFileName, BOARD* aBoard, PCB_IO_MGR::PC
 }
 
 
-bool BOARD_LOADER::SaveBoard( wxString& aFileName, BOARD* aBoard )
+bool BOARD_LOADER::SaveBoard( wxString& aFileName, BOARD& aBoard )
 {
     return SaveBoard( aFileName, aBoard, PCB_IO_MGR::KICAD_SEXP );
 }

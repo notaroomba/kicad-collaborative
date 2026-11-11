@@ -64,6 +64,8 @@ void NETLIST_EXPORTER_SPICE_MODEL::WriteTail( OUTPUTFORMATTER& aFormatter,
 bool NETLIST_EXPORTER_SPICE_MODEL::ReadSchematicAndLibraries( unsigned aNetlistOptions,
                                                               REPORTER& aReporter )
 {
+    CONNECTIVITY_SCOPE connectivity( *this );
+
     readPorts( aNetlistOptions );
 
     return NETLIST_EXPORTER_SPICE::ReadSchematicAndLibraries( aNetlistOptions, aReporter );
@@ -90,10 +92,10 @@ void NETLIST_EXPORTER_SPICE_MODEL::readPorts( unsigned aNetlistOptions )
         {
             SCH_LABEL_BASE* label = static_cast<SCH_LABEL_BASE*>( item );
 
-            if( SCH_CONNECTION* conn = label->Connection( &sheet ) )
+            if( const auto netName = itemNetName( *label, sheet ) )
             {
-                wxString labelText = label->GetShownText( &sheet, false );
-                m_ports.insert( { conn->Name(), PORT_INFO{ labelText, label->GetShape() } } );
+                wxString labelText = label->GetShownText( &sheet, FOR_NETNAME );
+                m_ports.insert( { *netName, PORT_INFO{ labelText, label->GetShape() } } );
             }
         }
     }

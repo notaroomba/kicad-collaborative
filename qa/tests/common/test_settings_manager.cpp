@@ -65,6 +65,7 @@ public:
 struct SETTINGS_MANAGER_FIXTURE
 {
     SETTINGS_MANAGER_FIXTURE() :
+            m_originalDir( fs::current_path() ),
             m_tempDir( fs::temp_directory_path() / "kicad_settings_manager_test" )
     {
         std::error_code ec;
@@ -76,6 +77,7 @@ struct SETTINGS_MANAGER_FIXTURE
 
     ~SETTINGS_MANAGER_FIXTURE()
     {
+        fs::current_path( m_originalDir );
         std::error_code ec;
         fs::remove_all( m_tempDir, ec );
     }
@@ -85,6 +87,7 @@ struct SETTINGS_MANAGER_FIXTURE
         return wxString( ( m_tempDir / aName ).string() );
     }
 
+    fs::path m_originalDir;
     fs::path m_tempDir;
 };
 
@@ -188,6 +191,27 @@ BOOST_AUTO_TEST_CASE( ColorThemeNotRewrittenWhenUnchanged )
 }
 
 
+// History compare joins a native temp dir with "/" and then looked the project up by that spelling
+BOOST_AUTO_TEST_CASE( GetProjectMatchesAnySpellingOfTheLoadedPath )
+{
+    wxString projectPath = Path( "spelling.kicad_pro" );
+
+    {
+        std::ofstream out( projectPath.ToStdString() );
+        out << R"({"meta": {"filename": "spelling.kicad_pro", "version": 3}})";
+    }
+
+    SETTINGS_MANAGER mgr;
+    BOOST_REQUIRE( mgr.LoadProject( projectPath, false ) );
+
+    // A doubled separator is a second spelling on every platform, not only on Windows
+    PROJECT* project = mgr.GetProject( wxString( m_tempDir.string() ) + wxS( "//spelling.kicad_pro" ) );
+
+    BOOST_REQUIRE( project );
+    BOOST_CHECK_EQUAL( project->GetProjectFullName(), projectPath );
+}
+
+
 // Writes a loadable project plus a lock file owned by aOwner, and returns the project path.
 static wxString seedLockedProject( const fs::path& aDir, const std::string& aName,
                                    const nlohmann::json& aOwner )
@@ -257,6 +281,32 @@ BOOST_AUTO_TEST_CASE( ForeignProjectLockOpensReadOnlyAndIsNotStolen )
     LOCKFILE reread( projectPath );
     BOOST_CHECK_EQUAL( reread.GetUsername(), wxString( "someone-else" ) );
     BOOST_CHECK_EQUAL( reread.GetHostname(), wxString( "another-host" ) );
+}
+
+
+// An override the user granted is applied by the load itself, so the lock file is never released
+// and recreated in between
+BOOST_AUTO_TEST_CASE( GrantedOverrideTakesForeignProjectLockOnLoad )
+{
+    nlohmann::json owner;
+    owner["username"] = "someone-else";
+    owner["hostname"] = "another-host";
+
+    wxString projectPath = seedLockedProject( m_tempDir, "overridden", owner );
+
+    SETTINGS_MANAGER mgr;
+    BOOST_REQUIRE( mgr.LoadProject( projectPath, true, true ) );
+
+    PROJECT* project = mgr.GetProject( projectPath );
+    BOOST_REQUIRE( project );
+
+    BOOST_CHECK( !project->IsReadOnly() );
+    BOOST_REQUIRE( project->GetProjectLock() != nullptr );
+    BOOST_CHECK( project->GetProjectLock()->Valid() );
+
+    std::ifstream in( LOCKFILE::LockPathFor( projectPath ).ToStdString() );
+    BOOST_CHECK_EQUAL( nlohmann::json::parse( in ).value( "username", std::string() ),
+                       std::string( wxGetUserId().mb_str() ) );
 }
 
 

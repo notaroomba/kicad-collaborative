@@ -63,11 +63,11 @@ struct EAGLE_BINARY_IMPORT_FIXTURE
         // The binary format is identified by content, never by extension.
         BOOST_CHECK( eaglePlugin.CanReadBoard( dataPath ) );
 
-        BOARD* board = nullptr;
+        std::unique_ptr<BOARD> board;
 
         try
         {
-            board = eaglePlugin.LoadBoard( dataPath, nullptr, nullptr );
+            board = eaglePlugin.LoadBoard( dataPath );
         }
         catch( const IO_ERROR& e )
         {
@@ -77,8 +77,7 @@ struct EAGLE_BINARY_IMPORT_FIXTURE
         {
             BOOST_FAIL( std::string( "Exception loading binary Eagle board: " ) + e.what() );
         }
-
-        return board;
+        return board.release();
     }
 
     static std::vector<ZONE*> copperPours( BOARD* aBoard )
@@ -132,7 +131,7 @@ BOOST_AUTO_TEST_CASE( LoadBinaryV3 )
 
 /**
  * Regression test for custom element attributes. The binary attribute record has
- * no name field, so the decoder once emitted nameless <attribute> nodes that the
+ * no name field, so the decoder once emitted nameless \<attribute\> nodes that the
  * shared XML reader rejected ("required attribute name is missing"). The decoder
  * now drops those unrecoverable nodes, so the board loads.
  */
@@ -354,7 +353,7 @@ BOOST_AUTO_TEST_CASE( LoadRoutesSmashedValueText )
 
 /**
  * Regression test for copper pour polygons. Eagle stores a polygon outline as a chain
- * of connected wire segments, but the XML reader expects <vertex> nodes; the binary
+ * of connected wire segments, but the XML reader expects \<vertex\> nodes; the binary
  * decoder emitted the raw wires, so loadPolygon() saw zero vertices and dropped every
  * pour ("less than 3 vertices"). The decoder now rebuilds the vertices from the segment
  * start points. boomchak carries two signal pours on copper (Eagle layers 1 and 16).

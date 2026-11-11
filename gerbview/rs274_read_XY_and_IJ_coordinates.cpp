@@ -74,9 +74,7 @@ static bool IsNumber( char x )
 
 VECTOR2I GERBER_FILE_IMAGE::ReadXYCoord( char*& aText, bool aExcellonMode )
 {
-    VECTOR2I pos( 0, 0 );
-    bool    is_float   = false;
-
+    VECTOR2I    pos( 0, 0 );
     std::string line;
 
     // Reserve the anticipated length plus an optional sign and decimal
@@ -92,6 +90,7 @@ VECTOR2I GERBER_FILE_IMAGE::ReadXYCoord( char*& aText, bool aExcellonMode )
     while( *aText && ( ( *aText == 'X' ) || ( *aText == 'Y' ) || ( *aText == 'A' ) ) )
     {
         double decimal_scale = 1.0;
+        bool   is_float = false;
         int    nbdigits = 0;
         int    current_coord = 0;
         char   type_coord = *aText++;
@@ -110,9 +109,11 @@ VECTOR2I GERBER_FILE_IMAGE::ReadXYCoord( char*& aText, bool aExcellonMode )
             line.push_back( *( aText++ ) );
         }
 
-        double val;
+        double   val = 0.0;
         wxString text( line.data() );
-        text.ToCDouble( &val );
+
+        if( !text.ToCDouble( &val ) )
+            continue;
 
         if( is_float )
         {
@@ -168,9 +169,7 @@ VECTOR2I GERBER_FILE_IMAGE::ReadXYCoord( char*& aText, bool aExcellonMode )
 
 VECTOR2I GERBER_FILE_IMAGE::ReadIJCoord( char*& aText )
 {
-    VECTOR2I pos( 0, 0 );
-    bool    is_float   = false;
-
+    VECTOR2I    pos( 0, 0 );
     std::string line;
 
     // Reserve the anticipated length plus an optional sign and decimal
@@ -182,6 +181,7 @@ VECTOR2I GERBER_FILE_IMAGE::ReadIJCoord( char*& aText )
     while( *aText && ( ( *aText == 'I' ) || ( *aText == 'J' ) ) )
     {
         double decimal_scale = 1.0;
+        bool   is_float = false;
         int    nbdigits = 0;
         int    current_coord = 0;
         char   type_coord = *aText++;
@@ -203,7 +203,9 @@ VECTOR2I GERBER_FILE_IMAGE::ReadIJCoord( char*& aText )
         double   val = 0.0;
         wxString text( line.data() );
         text.Trim( true ).Trim( false );
-        text.ToCDouble( &val );
+
+        if( !text.ToCDouble( &val ) )
+            continue;
 
         if( is_float )
         {
@@ -304,7 +306,7 @@ int ReadInt( char*& text, bool aSkipSeparator = true )
 
 double ReadDouble( char*& text, bool aSkipSeparator = true )
 {
-    double ret;
+    double ret = 0.0;
 
     // Skip spaces at the beginning of string: they are here not an operand separator
     while( isspace( *text ) )
@@ -332,7 +334,7 @@ double ReadDouble( char*& text, bool aSkipSeparator = true )
         // "0123456789." but can start by a '+' or '-' char.
         // others chars (usually '+' '-' '$' ',' ) are separators between operands and are not members
         // of the current float number
-        if( ( line[0] == '+' || line[0] == '-' ) && line.Length() > 1 && line[1] != '$' )
+        if( line.Length() > 1 && ( line[0] == '+' || line[0] == '-' ) && line[1] != '$' )
         {
             // It is the sign of a number, not an operator. Remove it to find the last digit
             line[0] = '0';
@@ -360,4 +362,3 @@ double ReadDouble( char*& text, bool aSkipSeparator = true )
 
     return ret;
 }
-

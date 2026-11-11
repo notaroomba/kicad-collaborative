@@ -23,6 +23,9 @@
 #include <schematic.h>
 #include <text_var_dependency.h>
 
+#include <set>
+#include <unordered_set>
+
 class SCH_ITEM;
 class SCH_SYMBOL;
 
@@ -32,12 +35,8 @@ class SCH_SYMBOL;
  *
  * Mirrors BOARD_TEXT_VAR_ADAPTER but for schematic items. A SCH_SYMBOL can
  * carry multiple instance-specific references (different refdes on different
- * SCH_SHEET_PATH instances); the adapter keys cross-ref source emission on
- * the symbol's reference on the schematic's *current* sheet path. This is a
- * known simplification — repeat-sheet schematics where U1 has different
- * refdes in each sheet instance will over-invalidate but not miss updates.
- * The proper fix is to extend TEXT_VAR_REF_KEY with an optional KIID_PATH
- * scope so cross-refs can be per-instance (codex review finding 2).
+ * SCH_SHEET_PATH instances), so cross-ref sources are emitted for every
+ * instance the symbol lives on.
  */
 class SCHEMATIC_TEXT_VAR_ADAPTER : public SCHEMATIC_LISTENER
 {
@@ -54,25 +53,44 @@ public:
 
     /**
      * Walk every sheet in the hierarchy and register text-bearing items.
-     * Invoked after bulk operations (file load, sheet rename) that may have
-     * bypassed per-item notifications.
+     * Loaders and importers populate screens without per-item notifications,
+     * so this runs whenever the whole hierarchy or its connectivity is rebuilt.
      */
     void RebuildIndex();
 
     /**
+     * Rebuild only if a sheet was added or removed, or the set of screens in
+     * the hierarchy differs from the indexed one. Cheap enough to run on every
+     * hierarchy refresh.
+     */
+    void SyncToHierarchy();
+
+    /// Force the next SyncToHierarchy() to rebuild.
+    void MarkHierarchyChanged() { m_hierarchyChanged = true; }
+
+    /**
      * Return the keys @p aItem could source as a cross-reference target. For
-     * a SCH_SYMBOL, these are `${REFDES:FIELD}` keys — one per field, using
-     * the symbol's reference on the schematic's current sheet path.
+     * a SCH_SYMBOL, these are one `${REFDES:*}` key and one `${KIID_PATH:*}`
+     * key per sheet instance. Stored text holds the KIID path form (see
+     * SCHEMATIC::ConvertRefsToKIIDs); the refdes form is what users type.
      */
     std::vector<TEXT_VAR_REF_KEY> ExtractSourceKeys( EDA_ITEM* aItem ) const;
 
 private:
-    void registerItem( SCH_ITEM* aItem );
-    void unregisterItem( SCH_ITEM* aItem );
-    void handleItemChanged( SCH_ITEM* aItem );
+    static SCH_ITEM*                     trackedItem( SCH_ITEM* aItem );
+    static std::vector<TEXT_VAR_REF_KEY> collectKeys( SCH_ITEM* aItem );
 
-    SCHEMATIC&       m_schematic;
-    TEXT_VAR_TRACKER m_tracker;
+    std::set<SCH_SCREEN*>         hierarchyScreens() const;
+    void                          noteSheets( const std::vector<SCH_ITEM*>& aItems );
+    std::vector<TEXT_VAR_REF_KEY> trackKeys( SCH_ITEM* aItem );
+    void                          registerItem( SCH_ITEM* aItem );
+    void                          handleItemChanged( SCH_ITEM* aItem );
+
+    SCHEMATIC&                    m_schematic;
+    TEXT_VAR_TRACKER              m_tracker;
+    std::unordered_set<SCH_ITEM*> m_registered;
+    std::set<SCH_SCREEN*>         m_indexedScreens;
+    bool                          m_hierarchyChanged = false;
 };
 
 

@@ -30,7 +30,10 @@ public:
     /**
      * Factory function: create a model adapter in a reference-counting container.
      *
-     * @param aLibs library set from which parts will be loaded
+     * @param aParent is the parent window.
+     * @param aLibs library set from which parts will be loaded.
+     * @param aSettings
+     * @param aContextMenuTool
      */
     static wxObjectDataPtr<LIB_TREE_MODEL_ADAPTER> Create( EDA_BASE_FRAME* aParent, DESIGN_BLOCK_LIBRARY_ADAPTER* aLibs,
                                                            APP_SETTINGS_BASE::LIB_TREE& aSettings,
@@ -51,6 +54,7 @@ protected:
                                      APP_SETTINGS_BASE::LIB_TREE& aSettings,
                                      TOOL_INTERACTIVE* aContextMenuTool );
 
+    // Allocates the design blocks stored in the lib tree item, caller responsible for lifetime
     std::vector<LIB_TREE_ITEM*> getDesignBlocks( EDA_BASE_FRAME* aParent, const wxString& aLibName );
 
     PROJECT::LIB_TYPE_T getLibType() override { return PROJECT::LIB_TYPE_T::DESIGN_BLOCK_LIB; }

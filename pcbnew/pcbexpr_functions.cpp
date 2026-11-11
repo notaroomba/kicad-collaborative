@@ -230,17 +230,28 @@ bool collidesWithCourtyard( BOARD_ITEM* aItem, std::shared_ptr<SHAPE>& aItemShap
     if( !footprintCourtyard.BBox().Intersects( aItem->GetBoundingBox() ) )
         return false;
 
-    if( !aItemShape )
+    if( aItemShape )
     {
-        // Since rules are used for zone filling we can't rely on the filled shapes.
-        // Use the zone outline instead.
-        if( ZONE* zone = dynamic_cast<ZONE*>( aItem ) )
-            aItemShape.reset( zone->GetBoardOutline().Clone() );
-        else
-            aItemShape = aItem->GetEffectiveShape( aCtx->GetLayer() );
+        return footprintCourtyard.Collide( aItemShape.get() );
     }
+    else if( ZONE* zone = dynamic_cast<ZONE*>( aItem ) )
+    {
+        // Since rules are used for zone filling we can't rely on the filled shapes.  Use the
+        // zone  outline instead.
+        SHAPE_POLY_SET  zoneOutlineStorage;
+        SHAPE_POLY_SET* zoneOutline = &zoneOutlineStorage;
 
-    return footprintCourtyard.Collide( aItemShape.get() );
+        if( zone->GetParentFootprint() )
+            zoneOutlineStorage = zone->GetBoardOutline();
+        else
+            zoneOutline = zone->Outline();
+
+        return footprintCourtyard.Collide( zoneOutline );
+    }
+    else
+    {
+        return footprintCourtyard.Collide( aItem->GetEffectiveShape( aCtx->GetLayer() ).get() );
+    }
 };
 
 
@@ -551,7 +562,7 @@ static SHAPE_POLY_SET getDeflatedZoneOutline( BOARD* aBoard, ZONE* aArea )
     }
 
     // Cache miss - compute deflated outline
-    SHAPE_POLY_SET areaOutline = aArea->Outline()->CloneDropTriangulation();
+    SHAPE_POLY_SET areaOutline = aArea->GetBoardOutline();
     areaOutline.ClearArcs();
     areaOutline.Deflate( aBoard->GetDesignSettings().GetDRCEpsilon(), CORNER_STRATEGY::ALLOW_ACUTE_CORNERS,
                          ARC_LOW_DEF );
@@ -650,7 +661,7 @@ bool collidesWithArea( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer, PCBEXPR_CONTEXT* 
             if( !zone->IsFilled() )
                 return false;
 
-            if( DRC_RTREE* zoneRTree = board->m_CopperZoneRTreeCache[ zone ].get() )
+            if( DRC_RTREE* zoneRTree = board->GetCopperZoneRTree( zone ) )
             {
                 if( zoneRTree->QueryColliding( areaBBox, &areaOutline, aLayer ) )
                     return true;
@@ -669,7 +680,16 @@ bool collidesWithArea( BOARD_ITEM* aItem, PCB_LAYER_ID aLayer, PCBEXPR_CONTEXT* 
         }
         else
         {
-            return areaOutline.Collide( zone->Outline() );
+            SHAPE_POLY_SET  zonePolyStorage;
+            SHAPE_POLY_SET* zonePoly = &zonePolyStorage;
+
+            // GetBoardOutline() is expensive.  Only use it where we have to.
+            if( zone->GetParentFootprint() )
+                zonePolyStorage = zone->GetBoardOutline();
+            else
+                zonePoly = zone->Outline();
+
+            return areaOutline.Collide( zonePoly );
         }
     }
     else
@@ -697,13 +717,13 @@ bool searchAreas( BOARD* aBoard, const wxString& aArg, PCBEXPR_CONTEXT* aCtx,
     {
         KIID target( aArg );
 
-        // Use the board's item-by-ID cache for O(1) lookup instead of O(n) iteration.
-        // The cache includes both board zones and zones inside footprints.
-        const auto& cache = aBoard->GetItemByIdCache();
-        auto        it = cache.find( target );
+        // Resolve through the board's item index: it re-binds stale entries and includes
+        // both board zones and zones inside footprints. In the normal path, it gives
+        // an O(1) lookup for the item by its UUID.
+        BOARD_ITEM* item = aBoard->ResolveItem( target, true );
 
-        if( it != cache.end() && it->second->Type() == PCB_ZONE_T )
-            return aFunc( static_cast<ZONE*>( it->second ) );
+        if( item && item->Type() == PCB_ZONE_T )
+            return aFunc( static_cast<ZONE*>( item ) );
 
         return false;
     }
@@ -774,6 +794,10 @@ public:
         m_item->SetLayerSet( m_layers );
     }
 
+    // No copying or it can lead to double-restoring of the layer set.
+    SCOPED_LAYERSET( const SCOPED_LAYERSET& ) = delete;
+    SCOPED_LAYERSET& operator=( const SCOPED_LAYERSET& ) = delete;
+
     void Add( PCB_LAYER_ID aLayer )
     {
         m_item->SetLayerSet( m_item->GetLayerSet().set( aLayer ) );
@@ -824,13 +848,17 @@ static void doIntersectsAreaFunc( LIBEVAL::CONTEXT* aCtx, void* self, bool aForK
                 bool           transient = ( item->GetFlags() & ROUTER_TRANSIENT ) != 0;
                 const wxString selector = arg->AsString();
 
+                auto&          resultsCache = aForKeepout ? board->m_IntersectsKeepoutResultCache
+                                                          : board->m_IntersectsAreaResultCache;
+
+                auto&          intersectsCache = aForKeepout ? board->m_IntersectsKeepoutCache
+                                                             : board->m_IntersectsAreaCache;
+
                 // See intersectsCourtyard: "A"/"B" are pair-relative and not memoizable here.
                 bool memoize = !transient && selector != wxT( "A" ) && selector != wxT( "B" );
-
-                ITEM_SELECTOR_LAYER_CACHE_KEY rkey{ item, selector, aLayer, context->GetConstraint() };
                 bool whole = false;
 
-                if( memoize && board->m_IntersectsAreaResultCache.Get( rkey, whole ) )
+                if( memoize && resultsCache.Get( { item, selector, aLayer, context->GetConstraint() }, whole ) )
                     return whole ? 1.0 : 0.0;
 
                 BOX2I itemBBox = item->GetBoundingBox();
@@ -875,10 +903,9 @@ static void doIntersectsAreaFunc( LIBEVAL::CONTEXT* aCtx, void* self, bool aForK
                             {
                                 for( PCB_LAYER_ID layer : testLayers.UIOrder() )
                                 {
-                                    PTR_PTR_LAYER_CACHE_KEY key = { aArea, item, layer };
-                                    bool                    cached = false;
+                                    bool cached = false;
 
-                                    if( board->m_IntersectsAreaCache.Get( key, cached ) )
+                                    if( intersectsCache.Get( { aArea, item, layer }, cached ) )
                                     {
                                         if( cached )
                                             return true;
@@ -902,7 +929,7 @@ static void doIntersectsAreaFunc( LIBEVAL::CONTEXT* aCtx, void* self, bool aForK
                                 bool collides = collidesWithArea( item, layer, context, aArea, aForKeepout );
 
                                 if( !isTransient )
-                                    board->m_IntersectsAreaCache.Set( { aArea, item, layer }, collides );
+                                    intersectsCache.Set( { aArea, item, layer }, collides );
 
                                 if( collides )
                                     anyCollision = true;
@@ -912,7 +939,7 @@ static void doIntersectsAreaFunc( LIBEVAL::CONTEXT* aCtx, void* self, bool aForK
                         } );
 
                 if( memoize )
-                    board->m_IntersectsAreaResultCache.Set( rkey, res );
+                    resultsCache.Set( { item, selector, aLayer, context->GetConstraint() }, res );
 
                 return res ? 1.0 : 0.0;
             } );
@@ -1027,8 +1054,17 @@ static void enclosedByAreaFunc( LIBEVAL::CONTEXT* aCtx, void* self )
                             }
                             else
                             {
+                                SHAPE_POLY_SET  areaOutlineStorage;
+                                SHAPE_POLY_SET* areaOutline = &areaOutlineStorage;
+
+                                // GetBoardOutline() is expensive.  Only use it where we have to.
+                                if( aArea->GetParentFootprint() )
+                                    areaOutlineStorage = aArea->GetBoardOutline();
+                                else
+                                    areaOutline = aArea->Outline();
+
                                 itemShape.ClearArcs();
-                                itemShape.BooleanSubtract( *aArea->Outline() );
+                                itemShape.BooleanSubtract( *areaOutline );
 
                                 enclosedByArea = itemShape.IsEmpty();
                             }
@@ -1623,8 +1659,18 @@ static void getFieldFunc( LIBEVAL::CONTEXT* aCtx, void* self )
                     BOARD*          board = fp->GetBoard();
                     const wxString& fieldName = arg->AsString();
 
-                    // getField only depends on the item, so memoize the resolved text per
-                    // (item, field) to avoid the linear field-name search on every repeat.
+                    if( board )
+                    {
+                        const wxString variantName = board->GetCurrentVariant();
+
+                        if( const FOOTPRINT_VARIANT* variant = fp->GetVariant( variantName );
+                            variant && variant->HasFieldValue( fieldName ) )
+                        {
+                            return variant->GetFieldValue( fieldName );
+                        }
+                    }
+
+                    // Only base values go in the cache.
                     ITEM_FIELD_CACHE_KEY key{ item, std::hash<wxString>{}( fieldName ) };
                     wxString             cached;
 
@@ -1719,34 +1765,9 @@ static void hasExactNetclassFunc( LIBEVAL::CONTEXT* aCtx, void* self )
                     return 0.0;
 
                 BOARD_CONNECTED_ITEM* bcItem = static_cast<BOARD_CONNECTED_ITEM*>( item );
-                BOARD*                board = bcItem->GetBoard();
-                wxString              netclassName;
+                NETCLASS*             netclass = bcItem->GetEffectiveNetClass();
 
-                if( board && ( item->GetFlags() & ROUTER_TRANSIENT ) == 0 )
-                {
-                    std::shared_lock<std::shared_mutex> readLock( board->m_CachesMutex );
-
-                    auto it = board->m_ItemNetclassCache.find( item );
-
-                    if( it != board->m_ItemNetclassCache.end() )
-                        netclassName = it->second;
-                }
-
-                if( netclassName.empty() )
-                {
-                    NETCLASS* netclass = bcItem->GetEffectiveNetClass();
-
-                    if( netclass )
-                        netclassName = netclass->GetName();
-
-                    if( board && !netclassName.empty() && ( item->GetFlags() & ROUTER_TRANSIENT ) == 0 )
-                    {
-                        std::unique_lock<std::shared_mutex> writeLock( board->m_CachesMutex );
-                        board->m_ItemNetclassCache[item] = netclassName;
-                    }
-                }
-
-                return ( netclassName == arg->AsString() ) ? 1.0 : 0.0;
+                return netclass && netclass->NameEquals( arg->AsString() ) ? 1.0 : 0.0;
             } );
 }
 

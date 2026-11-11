@@ -28,11 +28,14 @@
 #include <api/board/board.pb.h>
 #include <api/board/board_rules.pb.h>
 #include <api/common/types/enums.pb.h>
+#include <api/common/types/library_types.pb.h>
 #include <eda_shape.h>
 #include <core/mirror.h>
 #include <core/typeinfo.h>
 #include <font/text_attributes.h>
 #include <layer_ids.h>
+#include <libraries/library_manager.h>
+#include <libraries/library_table.h>
 #include <pin_type.h>
 #include <stroke_params.h>
 #include <widgets/report_severity.h>
@@ -51,6 +54,7 @@
 #include <jobs/job_export_pcb_3d.h>
 #include <jobs/job_export_pcb_dxf.h>
 #include <jobs/job_export_pcb_drill.h>
+#include <jobs/job_export_pcb_idf.h>
 #include <jobs/job_export_pcb_ipc2581.h>
 #include <jobs/job_export_pcb_odb.h>
 #include <jobs/job_export_pcb_pdf.h>
@@ -302,8 +306,9 @@ BOOST_AUTO_TEST_CASE( DesignRuleType )
                                 DRCE_MALFORMED_MICROVIA_STACK_SPAN,
                                 DRCE_MICROVIA_STACK_NOT_FILLED,
                                 DRCE_MICROVIA_STACK_DEPTH,
-                                DRCE_MICROVIA_ASPECT_RATIO,
+                                DRCE_HOLE_ASPECT_RATIO,
                                 DRCE_MICROVIA_CROSSES_CORE,
+                                DRCE_COPPER_OUTSIDE_BOARD,
                                 DRCE_OVERLAPPING_FOOTPRINTS,
                                 DRCE_MISSING_COURTYARD,
                                 DRCE_MALFORMED_COURTYARD,
@@ -540,9 +545,9 @@ BOOST_AUTO_TEST_CASE( PositionFormat )
     testEnums<JOB_EXPORT_PCB_POS::FORMAT, kiapi::board::jobs::PositionFormat>();
 }
 
-BOOST_AUTO_TEST_CASE( Ipc2581Units )
+BOOST_AUTO_TEST_CASE( FabUnits )
 {
-    testEnums<JOB_EXPORT_PCB_IPC2581::IPC2581_UNITS, kiapi::common::types::Units>( true );
+    testEnums<JOB_EXPORT_PCB_FAB::UNITS, kiapi::common::types::Units>( true );
 }
 
 BOOST_AUTO_TEST_CASE( Ipc2581Version )
@@ -550,14 +555,45 @@ BOOST_AUTO_TEST_CASE( Ipc2581Version )
     testEnums<JOB_EXPORT_PCB_IPC2581::IPC2581_VERSION, kiapi::board::jobs::Ipc2581Version>();
 }
 
-BOOST_AUTO_TEST_CASE( OdbUnits )
-{
-    testEnums<JOB_EXPORT_PCB_ODB::ODB_UNITS, kiapi::common::types::Units>( true );
-}
-
 BOOST_AUTO_TEST_CASE( OdbCompression )
 {
     testEnums<JOB_EXPORT_PCB_ODB::ODB_COMPRESSION, kiapi::board::jobs::OdbCompression>();
+}
+
+BOOST_AUTO_TEST_CASE( OdbVariantPackaging )
+{
+    testEnums<JOB_EXPORT_PCB_ODB::VARIANT_PACKAGING, kiapi::board::jobs::OdbVariantPackaging>();
+}
+
+BOOST_AUTO_TEST_CASE( OdbOrigin )
+{
+    testEnums<JOB_EXPORT_PCB_ODB::ORIGIN, kiapi::board::jobs::OdbOrigin>();
+    BOOST_CHECK( FromProtoEnum<JOB_EXPORT_PCB_ODB::ORIGIN>( kiapi::board::jobs::ODBO_UNKNOWN )
+                 == JOB_EXPORT_PCB_ODB::ORIGIN::ABSOLUTE_COORDS );
+}
+
+BOOST_AUTO_TEST_CASE( FabDataSet )
+{
+    // COUNT marks an unrecognised token and has no API value
+    testEnums<JOB_EXPORT_PCB_FAB::DATA_SET, kiapi::board::jobs::FabDataSet>( true );
+    BOOST_CHECK( FromProtoEnum<JOB_EXPORT_PCB_FAB::DATA_SET>( kiapi::board::jobs::FDS_UNKNOWN )
+                 == JOB_EXPORT_PCB_FAB::DATA_SET::USERDEF );
+    BOOST_CHECK( FromProtoEnum<JOB_EXPORT_PCB_FAB::DATA_SET>( static_cast<kiapi::board::jobs::FabDataSet>( 99 ) )
+                 == JOB_EXPORT_PCB_FAB::DATA_SET::COUNT );
+}
+
+BOOST_AUTO_TEST_CASE( FabNetNamePolicy )
+{
+    testEnums<JOB_EXPORT_PCB_FAB::NET_NAMES, kiapi::board::jobs::FabNetNamePolicy>();
+    BOOST_CHECK( FromProtoEnum<JOB_EXPORT_PCB_FAB::NET_NAMES>( kiapi::board::jobs::FNNP_UNKNOWN )
+                 == JOB_EXPORT_PCB_FAB::NET_NAMES::INCLUDE );
+}
+
+BOOST_AUTO_TEST_CASE( Ipc2581RefDes )
+{
+    testEnums<JOB_EXPORT_PCB_IPC2581::REF_DES, kiapi::board::jobs::Ipc2581RefDes>();
+    BOOST_CHECK( FromProtoEnum<JOB_EXPORT_PCB_IPC2581::REF_DES>( kiapi::board::jobs::IPC2581RD_UNKNOWN )
+                 == JOB_EXPORT_PCB_IPC2581::REF_DES::INCLUDE );
 }
 
 BOOST_AUTO_TEST_CASE( StatsOutputFormat )
@@ -570,6 +606,16 @@ BOOST_AUTO_TEST_CASE( StatsUnits )
     testEnums<JOB_EXPORT_PCB_STATS::UNITS, kiapi::common::types::Units>( true );
 }
 
+BOOST_AUTO_TEST_CASE( IdfUnits )
+{
+    testEnums<IDF_SETTINGS::UNITS, kiapi::common::types::Units>( true );
+}
+
+BOOST_AUTO_TEST_CASE( IdfOriginMode )
+{
+    testEnums<IDF_SETTINGS::COORD_ORIGIN, kiapi::board::jobs::IdfOriginMode>();
+}
+
 BOOST_AUTO_TEST_CASE( SchematicJobPageSize )
 {
     testEnums<JOB_PAGE_SIZE, kiapi::schematic::jobs::SchematicJobPageSize>();
@@ -578,6 +624,26 @@ BOOST_AUTO_TEST_CASE( SchematicJobPageSize )
 BOOST_AUTO_TEST_CASE( SchematicNetlistFormat )
 {
     testEnums<JOB_EXPORT_SCH_NETLIST::FORMAT, kiapi::schematic::jobs::SchematicNetlistFormat>();
+}
+
+BOOST_AUTO_TEST_CASE( LibraryType )
+{
+    testEnums<LIBRARY_TABLE_TYPE, types::LibraryType>( false, LIBRARY_TABLE_TYPE::UNINITIALIZED );
+}
+
+BOOST_AUTO_TEST_CASE( LibraryTableScope )
+{
+    testEnums<LIBRARY_TABLE_SCOPE, types::LibraryTableScope>( false, LIBRARY_TABLE_SCOPE::UNINITIALIZED );
+}
+
+BOOST_AUTO_TEST_CASE( LibraryLoadStatus )
+{
+    testEnums<LOAD_STATUS, types::LibraryLoadStatus>();
+}
+
+BOOST_AUTO_TEST_CASE( MarkerType )
+{
+    testEnums<MARKER_BASE::MARKER_T, types::MarkerType>( false, MARKER_BASE::MARKER_T::MARKER_UNSPEC );
 }
 
 BOOST_AUTO_TEST_SUITE_END()

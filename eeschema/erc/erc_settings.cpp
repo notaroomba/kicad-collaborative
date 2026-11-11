@@ -20,6 +20,7 @@
  */
 
 #include <algorithm>
+#include <tuple>
 #include <erc/erc_item.h>
 #include <erc/erc_settings.h>
 #include <schematic.h>
@@ -105,6 +106,7 @@ ERC_SETTINGS::ERC_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath ) :
     m_ERCSeverities[ERCE_SAME_LOCAL_GLOBAL_LABEL] = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_SAME_LOCAL_GLOBAL_POWER] = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_GROUND_PIN_NOT_GROUND]   = RPT_SEVERITY_WARNING;
+    m_ERCSeverities[ERCE_WIRED_IMPLICIT_POWER]    = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_LABEL_SINGLE_PIN]        = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_DRIVER_CONFLICT]         = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_BUS_ENTRY_CONFLICT]      = RPT_SEVERITY_WARNING;
@@ -124,6 +126,9 @@ ERC_SETTINGS::ERC_SETTINGS( JSON_SETTINGS* aParent, const std::string& aPath ) :
     m_ERCSeverities[ERCE_STACKED_PIN_SYNTAX]      = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_FIELD_NAME_WHITESPACE]   = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_EMPTY_LABEL_NAME] = RPT_SEVERITY_ERROR;
+    m_ERCSeverities[ERCE_EMPTY_POWER_VALUE] = RPT_SEVERITY_ERROR;
+    m_ERCSeverities[ERCE_DUPLICATE_SHEET_SUFFIX] = RPT_SEVERITY_ERROR;
+    m_ERCSeverities[ERCE_REF_SUFFIX_MISMATCH] = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_PIN_MAP_UNMAPPED_PIN] = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_PIN_MAP_STALE_PIN] = RPT_SEVERITY_WARNING;
     m_ERCSeverities[ERCE_VARIANT_SYMBOL_INVALID]  = RPT_SEVERITY_ERROR;
@@ -363,31 +368,6 @@ void ERC_SETTINGS::ResetPinMap()
 }
 
 
-struct CompareMarkers
-{
-    bool operator()( const SCH_MARKER* item1, const SCH_MARKER* item2 ) const
-    {
-        wxCHECK( item1 && item2, false );
-
-        const VECTOR2I& p1 = item1->GetPosition();
-        const VECTOR2I& p2 = item2->GetPosition();
-
-        if( p1 == p2 )
-        {
-            ERC_EXCLUSION ex1 = ERC_EXCLUSION::FromMarker( *item1 );
-            ERC_EXCLUSION ex2 = ERC_EXCLUSION::FromMarker( *item2 );
-
-            return ex1.GetSortKey() < ex2.GetSortKey();
-        }
-
-        // VECTOR2::operator< orders by squared magnitude, which is not a strict
-        // weak ordering: mirrored points like (a, b) and (b, a) compare equal
-        // and collide in the std::set below, silently dropping one marker.
-        return p1.x < p2.x || ( p1.x == p2.x && p1.y < p2.y );
-    }
-};
-
-
 void SHEETLIST_ERC_ITEMS_PROVIDER::visitMarkers( std::function<void( SCH_MARKER* )> aVisitor ) const
 {
     std::set<SCH_SCREEN*> seenScreens;
@@ -399,18 +379,25 @@ void SHEETLIST_ERC_ITEMS_PROVIDER::visitMarkers( std::function<void( SCH_MARKER*
         if( firstTime )
             seenScreens.insert( sheet.LastScreen() );
 
-        std::set<SCH_MARKER*, CompareMarkers> orderedMarkers;
+        std::map<std::tuple<int, int, std::string, wxString>, SCH_MARKER*> orderedMarkers;
 
         for( SCH_ITEM* item : sheet.LastScreen()->Items().OfType( SCH_MARKER_T ) )
-            orderedMarkers.insert( static_cast<SCH_MARKER*>( item ) );
-
-        for( SCH_ITEM* item : orderedMarkers )
         {
             SCH_MARKER* marker = static_cast<SCH_MARKER*>( item );
 
             if( marker->GetMarkerType() != MARKER_BASE::MARKER_ERC )
                 continue;
 
+            const VECTOR2I& position = marker->GetPosition();
+            orderedMarkers.emplace( std::make_tuple( position.x,
+                                                     position.y,
+                                                     ERC_EXCLUSION::FromMarker( *marker ).GetSortKey(),
+                                                     marker->GetRCItem()->GetErrorMessage( false ) ),
+                                    marker );
+        }
+
+        for( const auto& [key, marker] : orderedMarkers )
+        {
             std::shared_ptr<const ERC_ITEM> ercItem =
                     std::static_pointer_cast<const ERC_ITEM>( marker->GetRCItem() );
 

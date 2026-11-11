@@ -55,10 +55,7 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
 {
     bool is_last_fp_from_brd = IsCurrentFPFromBoard();
 
-    // The legacy path wipes the shared board; the tab path leaves other tabs untouched.
-    const bool useTabs = ( m_tabsPanel != nullptr ) && aFPID.IsValid();
-
-    if( useTabs )
+    if( aFPID.IsValid() )
     {
         const wxString key = aFPID.GetLibNickname().wx_str() + wxT( ':' ) + aFPID.GetLibItemName().wx_str();
 
@@ -66,6 +63,8 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
         if( int existing = m_tabsPanel->FindTab( key ); existing >= 0 )
         {
             m_tabsPanel->SelectTab( existing );
+
+            setFPWatcher( GetBoard()->GetFirstFootprint() );
 
             m_treePane->GetLibTree()->ExpandLibId( aFPID );
 
@@ -83,42 +82,26 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
     if( !footprint )
         return;
 
-    if( useTabs )
+    // A board-sourced or new footprint occupies the frame-owned board with no backing tab.
+    // Switching to the library footprint's tab frees that board, so prompt to save those edits
+    // first, the same way the legacy single-board path did. A tab-owned board survives the
+    // switch untouched and needs no prompt.
+    if( !activeBoardOwnedByTab() && IsContentModified() )
     {
-        // A board-sourced or new footprint occupies the frame-owned board with no backing tab.
-        // Switching to the library footprint's tab frees that board, so prompt to save those edits
-        // first, the same way the legacy single-board path does. A tab-owned board survives the
-        // switch untouched and needs no prompt.
-        if( !activeBoardOwnedByTab() && IsContentModified() )
-        {
-            if( !HandleUnsavedChanges(
-                        this, _( "The current footprint has been modified.  Save changes?" ),
-                        [&]() -> bool
-                        {
-                            return SaveFootprint( GetBoard()->Footprints().front() );
-                        } ) )
-            {
-                // AddFootprintToBoard would have taken ownership; on cancel we still own the clone.
-                delete footprint;
-                return;
-            }
-        }
-
-        GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
-        AddFootprintToBoard( footprint );
-    }
-    else
-    {
-        if( !Clear_Pcb( true ) )
+        if( !::HandleUnsavedChanges( this, _( "The current footprint has been modified.  Save changes?" ),
+                                     [&]() -> bool
+                                     {
+                                         return SaveFootprint( GetBoard()->Footprints().front() );
+                                     } ) )
         {
             // AddFootprintToBoard would have taken ownership; on cancel we still own the clone.
             delete footprint;
             return;
         }
-
-        GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
-        AddFootprintToBoard( footprint );
     }
+
+    GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
+    AddFootprintToBoard( footprint );
 
     footprint->ClearFlags();
 
@@ -158,17 +141,23 @@ void FOOTPRINT_EDIT_FRAME::LoadFootprintFromLibrary( LIB_ID aFPID )
 bool FOOTPRINT_EDIT_FRAME::BeginNewFootprint( const wxString& aLibrary )
 {
     // No tab strip or target library to key a tab on, so use the legacy single-board clear.
-    if( !m_tabsPanel || aLibrary.IsEmpty() )
-        return Clear_Pcb( true );
+    if( aLibrary.IsEmpty() )
+    {
+        if( !HandleUnsavedChanges( false ) )
+            return false;
+
+        Clear_Pcb();
+        return true;
+    }
 
     // The new footprint opens in its own tab. Only a dirty tab-less frame board needs saving.
     if( !activeBoardOwnedByTab() && IsContentModified() )
     {
-        if( !HandleUnsavedChanges( this, _( "The current footprint has been modified.  Save changes?" ),
-                                   [&]() -> bool
-                                   {
-                                       return SaveFootprint( GetBoard()->Footprints().front() );
-                                   } ) )
+        if( !::HandleUnsavedChanges( this, _( "The current footprint has been modified.  Save changes?" ),
+                                     [&]() -> bool
+                                     {
+                                         return SaveFootprint( GetBoard()->Footprints().front() );
+                                     } ) )
         {
             return false;
         }
@@ -291,7 +280,7 @@ void FOOTPRINT_EDIT_FRAME::OnEditItemRequest( BOARD_ITEM* aItem )
         break;
 
     case PCB_PAD_T:
-        ShowPadPropertiesDialog( static_cast<PAD*>( aItem ) );
+        ShowPadPropertiesDialog( static_cast<PAD&>( *aItem ) );
         break;
 
     case PCB_FOOTPRINT_T:
@@ -416,18 +405,13 @@ void FOOTPRINT_EDIT_FRAME::SetActiveLayer( PCB_LAYER_ID aLayer )
 
     m_toolManager->RunAction( PCB_ACTIONS::layerChanged );  // notify other tools
     GetCanvas()->SetFocus();                             // allow capture of hotkeys
-    GetCanvas()->SetHighContrastLayer( aLayer );
+    GetCanvas()->ChangeHighContrastLayer( aLayer );
     GetCanvas()->Refresh();
 }
 
 
 bool FOOTPRINT_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl )
 {
-    // The import opens in its own tab, leaving the open documents alone; only the legacy single-board
-    // path has to clear first
-    if( !m_tabsPanel && !Clear_Pcb( true ) )
-        return false;                  // this command is aborted
-
     GetCanvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
 
     if( !ImportFootprint( aFileSet[ 0 ] ) )
@@ -435,11 +419,6 @@ bool FOOTPRINT_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileS
 
     if( GetBoard()->GetFirstFootprint() )
         GetBoard()->GetFirstFootprint()->ClearFlags();
-
-    // An unsaved import stays dirty so closing its tab offers to save it; only the legacy path, where
-    // the footprint keeps its file identity, starts out clean
-    if( !m_tabsPanel )
-        GetScreen()->SetContentModified( false );
 
     Zoom_Automatique( false );
     GetCanvas()->Refresh();
@@ -495,6 +474,27 @@ void FOOTPRINT_EDIT_FRAME::KiwayMailIn( KIWAY_MAIL_EVENT& mail )
             }
         }
 
+        break;
+
+    case MAIL_FP_EDIT_LIBID:
+    {
+        LIB_ID fpId;
+
+        if( fpId.Parse( wxString::FromUTF8( payload ) ) == -1 && fpId.IsValid() )
+        {
+            LoadFootprintFromLibrary( fpId );
+            Raise();
+        }
+
+        break;
+    }
+
+    case MAIL_LIB_SAVE_ALL:
+        mail.SetPayload( SaveModifiedLibraryTabs() ? "success" : "failed" );
+        break;
+
+    case MAIL_LIB_HAS_UNSAVED:
+        mail.SetPayload( HasModifiedFootprintTabs( true ) ? "yes" : "no" );
         break;
 
     case MAIL_RELOAD_LIB:

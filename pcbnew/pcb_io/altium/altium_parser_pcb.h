@@ -264,9 +264,11 @@ struct ALTIUM_VERTICE
 /**
  * Read the VX/VY/KIND/R/SA/EA/CX/CY vertex series out of a polygon or board outline record.
  *
- * @param aDiscarded, when given, counts the vertices dropped because a coordinate did not fit
- *                    the KiCad int range.  Those are clamps rather than places, and an outline
- *                    built from one spans the whole coordinate space.
+ * @param aProps
+ * @param aVertices
+ * @param aDiscarded when given, counts the vertices dropped because a coordinate did not fit
+ *                   the KiCad int range.  Those are clamps rather than places, and an outline
+ *                   built from one spans the whole coordinate space.
  */
 void altium_parse_polygons( std::map<wxString, wxString>& aProps,
                             std::vector<ALTIUM_VERTICE>& aVertices, int* aDiscarded = nullptr );
@@ -549,6 +551,7 @@ struct ACOMPONENT6
     bool         locked;
     bool         nameon;
     bool         commenton;
+    int          height;
     wxString     sourceUniqueID;
     wxString     sourceHierachicalPath;
     wxString     sourcedesignator;
@@ -855,6 +858,7 @@ struct AVIA6
     bool is_test_fab_bottom = false;
 
     uint16_t net = 0;
+    uint16_t component = ALTIUM_COMPONENT_NONE;
 
     VECTOR2I position;
     uint32_t pos_tolerance = 2147483640; // 2147483640 is N/A

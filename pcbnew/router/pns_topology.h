@@ -51,8 +51,15 @@ public:
 
     typedef std::set<const JOINT*> JOINT_SET;
 
-    TOPOLOGY( NODE* aNode ):
-        m_world( aNode ) {};
+    /**
+     * @param aNode
+     * @param aIface if given, lets board connections the router does not model, such as zones,
+     *               count when searching for unconnected items.
+     */
+    TOPOLOGY( NODE* aNode, ROUTER_IFACE* aIface = nullptr ) :
+            m_world( aNode ),
+            m_iface( aIface )
+    {}
 
     ~TOPOLOGY() {};
 
@@ -88,9 +95,11 @@ public:
      *
      * @note When changing this, sync with BOARD::GetTrackLength()
      *
+     * @param aRouterIface is the router interface.
      * @param aStart is the item to assemble a path from.
      * @param aStartPad will be filled with the starting pad of the path, if found.
      * @param aEndPad will be filled with the ending pad of the path, if found.
+     *
      * @return an item set containing all the items in the path.
      */
     const ITEM_SET AssembleTuningPath( ROUTER_IFACE* aRouterIface, ITEM* aStart, SOLID** aStartPad = nullptr,
@@ -100,11 +109,10 @@ public:
 
     bool AssembleDiffPair( ITEM* aStart, DIFF_PAIR& aPair );
 
-    const CLUSTER AssembleCluster( ITEM* aStart, int aLayer, double aAreaExpansionLimit = 0.0, NET_HANDLE aExcludedNet = nullptr );
+    const CLUSTER AssembleCluster( ITEM* aStart, int aLayer, double aAreaExpansionLimit = 0.0,
+                                   NET_HANDLE aExcludedNet = nullptr, int aOverrideClearance = 0 );
 
 private:
-    const int DP_PARALLELITY_THRESHOLD = 5;
-
     struct PATH_RESULT
     {
         ITEM_SET    m_items;
@@ -139,7 +147,8 @@ private:
                                 const JOINT** aTerminalJointB,
                                 bool aFollowLockedSegments = false );
 
-    NODE *m_world;
+    NODE*         m_world;
+    ROUTER_IFACE* m_iface;
 };
 
 }

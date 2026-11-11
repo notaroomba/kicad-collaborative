@@ -22,8 +22,11 @@
 
 #include <map>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <string>
 #include <unordered_set>
+#include <vector>
 #include <kicommon.h>
 #include <wx/arrstr.h>
 #include <wx/dir.h>
@@ -46,6 +49,54 @@
 
 /* Forward class declarations. */
 class EDA_LIST_DIALOG;
+class wxFFile;
+class wxOutputStream;
+
+
+enum class ARCHIVE_FORMAT
+{
+    ZIP,
+    TGZ
+};
+
+/// Give @a aPath to std::filesystem without a detour through the C locale
+KICOMMON_API std::filesystem::path ToFsPath( const wxString& aPath );
+
+KICOMMON_API wxString FromFsPath( const std::filesystem::path& aPath );
+
+/// A temporary file or directory that is removed when the object goes out of scope
+class KICOMMON_API SCOPED_TEMP_PATH
+{
+public:
+    SCOPED_TEMP_PATH() = default;
+    SCOPED_TEMP_PATH( const SCOPED_TEMP_PATH& ) = delete;
+    SCOPED_TEMP_PATH& operator=( const SCOPED_TEMP_PATH& ) = delete;
+    ~SCOPED_TEMP_PATH();
+
+    /// Create an empty file with a unique name after @a aPrefix
+    bool MakeFile( const wxString& aPrefix );
+
+    /// Create an empty directory with a unique name after @a aPrefix.
+    /// On POSIX, aPermissions sets the access mode, subject to the process umask.
+    bool MakeDirectory( const wxString& aPrefix, int aPermissions = wxS_DIR_DEFAULT );
+
+    const wxString& Path() const { return m_path; }
+
+private:
+    wxString m_path;
+};
+
+using ARCHIVE_STREAM_FACTORY = std::function<std::unique_ptr<wxOutputStream>( wxFFile& )>;
+
+/** Write directory entries in sorted archive path order, using the archive root when aTopDir is empty. */
+KICOMMON_API bool WriteDirectoryArchive( const wxString& aSourceDir, wxOutputStream& aOut,
+                                         ARCHIVE_FORMAT aFormat, const wxString& aTopDir );
+
+/** Replace the archive atomically after writing and closing a sibling temporary file. */
+KICOMMON_API bool WriteDirectoryArchive( const wxString& aSourceDir, const wxString& aArchive,
+                                         ARCHIVE_FORMAT aFormat, const wxString& aTopDir,
+                                         wxString* aError = nullptr,
+                                         const ARCHIVE_STREAM_FACTORY& aOpen = {} );
 
 
 /**
@@ -147,6 +198,7 @@ KICOMMON_API bool RmDirRecursive( const wxString& aDirName, wxString* aErrors = 
  *
  * @param aSourceDir is the directory to copy.
  * @param aDestDir is the directory to copy to.
+ * @param aOverwriteExclusions
  * @param aErrors is a string to append any errors to.
  */
 KICOMMON_API bool CopyDirectory( const wxString& aSourceDir, const wxString& aDestDir,

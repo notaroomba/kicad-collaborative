@@ -203,7 +203,9 @@ public:
             m_bitmapOutputType->SetBitmap( KiBitmapBundle( jobTypeInfo.bitmap ) );
         }
 
+#ifndef _WIN32
         m_pathInfo->SetFont( KIUI::GetSmallInfoFont( this ) );
+#endif
         UpdatePathInfo( aDestination->GetPathInfo() );
         UpdateStatus();
     }
@@ -302,11 +304,8 @@ public:
         }
         else
         {
-            resolvedPath = ExpandTextVars( destination->GetPathInfo(), &m_frame->Prj() );
-            resolvedPath = ExpandEnvVarSubstitutions( resolvedPath, &m_frame->Prj() );
-
-            if( resolvedPath.StartsWith( "~" ) )
-                resolvedPath.Replace( "~", wxGetHomeDir(), false );
+            resolvedPath = JOBS_OUTPUT_HANDLER::ResolveOutputPath( destination->GetPathInfo(),
+                                                                   &m_frame->Prj() );
         }
 
         if( resolvedPath.IsEmpty() )

@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <base_units.h>
 #include <confirm.h>
 #include <common.h>
 #include <dialogs/dialog_map_gerber_layers_to_pcb.h>
@@ -141,7 +142,7 @@ int GERBVIEW_CONTROL::ExportToPcbnew( const TOOL_EVENT& aEvent )
 
     m_frame->SetMruPath( fileName.GetPath() );
 
-    GBR_TO_PCB_EXPORTER gbr_exporter( m_frame, fileName.GetFullPath() );
+    GBR_TO_PCB_EXPORTER gbr_exporter( m_frame->GetGerberLayout()->GetImagesList(), m_frame, fileName.GetFullPath() );
 
     gbr_exporter.ExportPcb( layerdlg.GetLayersLookUpTable(), layerdlg.GetCopperLayersCount() );
 
@@ -236,7 +237,10 @@ int GERBVIEW_CONTROL::DisplayControl( const TOOL_EVENT& aEvent )
         view->UpdateAllItemsConditionally( KIGFX::REPAINT,
                 []( KIGFX::VIEW_ITEM* aItem )
                 {
-                    GERBER_DRAW_ITEM* item = static_cast<GERBER_DRAW_ITEM*>( aItem );
+                    GERBER_DRAW_ITEM* item = dynamic_cast<GERBER_DRAW_ITEM*>( aItem );
+
+                    if( !item )
+                        return false;
 
                     switch( item->m_ShapeType )
                     {
@@ -257,7 +261,10 @@ int GERBVIEW_CONTROL::DisplayControl( const TOOL_EVENT& aEvent )
         view->UpdateAllItemsConditionally( KIGFX::REPAINT,
                 []( KIGFX::VIEW_ITEM* aItem )
                 {
-                    GERBER_DRAW_ITEM* item = static_cast<GERBER_DRAW_ITEM*>( aItem );
+                    GERBER_DRAW_ITEM* item = dynamic_cast<GERBER_DRAW_ITEM*>( aItem );
+
+                    if( !item )
+                        return false;
 
                     switch( item->m_ShapeType )
                     {
@@ -280,9 +287,9 @@ int GERBVIEW_CONTROL::DisplayControl( const TOOL_EVENT& aEvent )
         view->UpdateAllItemsConditionally( KIGFX::REPAINT,
                 []( KIGFX::VIEW_ITEM* aItem )
                 {
-                    GERBER_DRAW_ITEM* item = static_cast<GERBER_DRAW_ITEM*>( aItem );
+                    GERBER_DRAW_ITEM* item = dynamic_cast<GERBER_DRAW_ITEM*>( aItem );
 
-                    return ( item->m_ShapeType == GBR_POLYGON );
+                    return ( item && item->m_ShapeType == GBR_POLYGON );
                 } );
     }
     else if( aEvent.IsAction( &GERBVIEW_ACTIONS::negativeObjectDisplay ) )
@@ -293,10 +300,34 @@ int GERBVIEW_CONTROL::DisplayControl( const TOOL_EVENT& aEvent )
     {
         m_frame->SetElementVisibility( LAYER_DCODES, !cfg->m_Appearance.show_dcodes );
     }
-    else if( aEvent.IsAction( &ACTIONS::highContrastMode )
-             || aEvent.IsAction( &ACTIONS::highContrastModeCycle ) )
+    else if( aEvent.IsAction( &ACTIONS::highContrastMode ) )
     {
-        cfg->m_Display.m_HighContrastMode = !cfg->m_Display.m_HighContrastMode;
+        GBR_INACTIVE_LAYER_MODE& mode = cfg->m_Display.m_InactiveLayerMode;
+        mode = mode == GBR_INACTIVE_LAYER_MODE::NORMAL ? GBR_INACTIVE_LAYER_MODE::DIMMED
+                                                       : GBR_INACTIVE_LAYER_MODE::NORMAL;
+    }
+    else if( aEvent.IsAction( &ACTIONS::highContrastModeCycle ) )
+    {
+        GBR_INACTIVE_LAYER_MODE& mode = cfg->m_Display.m_InactiveLayerMode;
+
+        switch( mode )
+        {
+        case GBR_INACTIVE_LAYER_MODE::NORMAL: mode = GBR_INACTIVE_LAYER_MODE::DIMMED; break;
+        case GBR_INACTIVE_LAYER_MODE::DIMMED: mode = GBR_INACTIVE_LAYER_MODE::HIDDEN; break;
+        case GBR_INACTIVE_LAYER_MODE::HIDDEN: mode = GBR_INACTIVE_LAYER_MODE::NORMAL; break;
+        }
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::showInactiveLayers ) )
+    {
+        cfg->m_Display.m_InactiveLayerMode = GBR_INACTIVE_LAYER_MODE::NORMAL;
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::dimInactiveLayers ) )
+    {
+        cfg->m_Display.m_InactiveLayerMode = GBR_INACTIVE_LAYER_MODE::DIMMED;
+    }
+    else if( aEvent.IsAction( &GERBVIEW_ACTIONS::hideInactiveLayers ) )
+    {
+        cfg->m_Display.m_InactiveLayerMode = GBR_INACTIVE_LAYER_MODE::HIDDEN;
     }
     else if( aEvent.IsAction( &GERBVIEW_ACTIONS::toggleForceOpacityMode ) )
     {
@@ -322,9 +353,40 @@ int GERBVIEW_CONTROL::DisplayControl( const TOOL_EVENT& aEvent )
         view->SetMirror( cfg->m_Display.m_FlipGerberView, false );
     }
 
+    bool contrastModeChanged = aEvent.IsAction( &ACTIONS::highContrastMode )
+                               || aEvent.IsAction( &ACTIONS::highContrastModeCycle )
+                               || aEvent.IsAction( &GERBVIEW_ACTIONS::showInactiveLayers )
+                               || aEvent.IsAction( &GERBVIEW_ACTIONS::dimInactiveLayers )
+                               || aEvent.IsAction( &GERBVIEW_ACTIONS::hideInactiveLayers );
+
+    if( contrastModeChanged )
+    {
+        switch( cfg->m_Display.m_InactiveLayerMode )
+        {
+        case GBR_INACTIVE_LAYER_MODE::NORMAL:
+            m_frame->SelectToolbarAction( GERBVIEW_ACTIONS::showInactiveLayers );
+            break;
+
+        case GBR_INACTIVE_LAYER_MODE::DIMMED:
+            m_frame->SelectToolbarAction( GERBVIEW_ACTIONS::dimInactiveLayers );
+            break;
+
+        case GBR_INACTIVE_LAYER_MODE::HIDDEN:
+            m_frame->SelectToolbarAction( GERBVIEW_ACTIONS::hideInactiveLayers );
+            break;
+        }
+    }
+
     m_frame->ApplyDisplaySettingsToGAL();
 
-    view->UpdateAllItems( KIGFX::COLOR );
+    if( contrastModeChanged )
+    {
+        view->UpdateAllItems( KIGFX::REPAINT );
+    }
+    else
+    {
+        view->UpdateAllItems( KIGFX::COLOR );
+    }
     m_frame->GetCanvas()->Refresh();
 
     return 0;
@@ -356,11 +418,11 @@ int GERBVIEW_CONTROL::LayerPrev( const TOOL_EVENT& aEvent )
 int GERBVIEW_CONTROL::MoveLayerUp( const TOOL_EVENT& aEvent )
 {
     int layer = m_frame->GetActiveLayer();
+    GERBER_FILE_IMAGE_LIST& list = GERBER_FILE_IMAGE_LIST::GetImagesList();
 
-    if( layer > 0 )
+    if( layer > 0 && list.GetGbrImage( layer ) && list.GetGbrImage( layer - 1 ) )
     {
-        m_frame->RemapLayers(
-                GERBER_FILE_IMAGE_LIST::GetImagesList().SwapImages( layer, layer - 1 ) );
+        m_frame->RemapLayers( list.SwapImages( layer, layer - 1 ) );
         m_frame->SetActiveLayer( layer - 1 );
     }
 
@@ -373,7 +435,8 @@ int GERBVIEW_CONTROL::MoveLayerDown( const TOOL_EVENT& aEvent )
     int                     layer = m_frame->GetActiveLayer();
     GERBER_FILE_IMAGE_LIST& list = GERBER_FILE_IMAGE_LIST::GetImagesList();
 
-    if( layer < ( (int) list.GetLoadedImageCount() - 1 ) )
+    if( layer < ( (int) list.GetLoadedImageCount() - 1 )
+        && list.GetGbrImage( layer ) && list.GetGbrImage( layer + 1 ) )
     {
         m_frame->RemapLayers( list.SwapImages( layer, layer + 1 ) );
         m_frame->SetActiveLayer( layer + 1 );
@@ -410,27 +473,58 @@ int GERBVIEW_CONTROL::ClearAllLayers( const TOOL_EVENT& aEvent )
 
 int GERBVIEW_CONTROL::ReloadAllLayers( const TOOL_EVENT& aEvent )
 {
-    // Store filenames
-    wxArrayString           listOfGerberFiles;
-    std::vector<int>        fileType;
-    GERBER_FILE_IMAGE_LIST* list = m_frame->GetImagesList();
+    struct SAVED_LAYER
+    {
+        wxString  fileName;
+        wxString  archiveFileName;
+        VECTOR2I  displayOffset;
+        EDA_ANGLE displayRotation;
+        bool      visible;
+        bool      restored = false;
+    };
+
+    // Store filenames and display settings before clearing the images.
+    wxArrayString                listOfGerberFiles;
+    std::vector<int>             fileType;
+    wxArrayString                archiveFiles;
+    std::vector<wxArrayString>   archiveMembers;
+    std::vector<SAVED_LAYER>     savedLayers;
+    GERBER_FILE_IMAGE_LIST*      list = m_frame->GetImagesList();
+    LSET                         oldVisibility = m_frame->GetVisibleLayers();
 
     for( unsigned i = 0; i < list->ImagesMaxCount(); i++ )
     {
-        if( list->GetGbrImage( i ) == nullptr )
+        GERBER_FILE_IMAGE* image = list->GetGbrImage( i );
+
+        if( !image || !image->m_InUse )
             continue;
 
-        if( !list->GetGbrImage( i )->m_InUse )
-            continue;
+        savedLayers.push_back( { image->m_FileName, image->m_ArchiveFileName, image->m_DisplayOffset,
+                                 image->m_DisplayRotation, oldVisibility[i] } );
 
-        EXCELLON_IMAGE* drill_file = dynamic_cast<EXCELLON_IMAGE*>( list->GetGbrImage( i ) );
+        if( !image->m_ArchiveFileName.IsEmpty() )
+        {
+            int archiveIndex = archiveFiles.Index( image->m_ArchiveFileName );
+
+            if( archiveIndex == wxNOT_FOUND )
+            {
+                archiveIndex = archiveFiles.GetCount();
+                archiveFiles.Add( image->m_ArchiveFileName );
+                archiveMembers.emplace_back();
+            }
+
+            archiveMembers[archiveIndex].Add( image->m_FileName );
+            continue;
+        }
+
+        EXCELLON_IMAGE* drill_file = dynamic_cast<EXCELLON_IMAGE*>( image );
 
         if( drill_file )
             fileType.push_back( 1 );
         else
             fileType.push_back( 0 );
 
-        listOfGerberFiles.Add( list->GetGbrImage( i )->m_FileName );
+        listOfGerberFiles.Add( image->m_FileName );
     }
 
     // Clear all layers
@@ -439,7 +533,47 @@ int GERBVIEW_CONTROL::ReloadAllLayers( const TOOL_EVENT& aEvent )
 
     // Load the layers from stored paths
     wxBusyCursor wait;
-    m_frame->LoadListOfGerberAndDrillFiles( wxEmptyString, listOfGerberFiles, &fileType );
+    if( !listOfGerberFiles.IsEmpty() )
+        m_frame->LoadListOfGerberAndDrillFiles( wxEmptyString, listOfGerberFiles, &fileType );
+
+    for( unsigned i = 0; i < archiveFiles.GetCount(); i++ )
+        m_frame->LoadZipArchiveFile( archiveFiles[i], &archiveMembers[i] );
+
+    // Loading and sorting may assign a file to a different layer number.
+    LSET restoredVisibility = m_frame->GetVisibleLayers();
+
+    for( unsigned i = 0; i < list->ImagesMaxCount(); i++ )
+    {
+        GERBER_FILE_IMAGE* image = list->GetGbrImage( i );
+
+        if( !image || !image->m_InUse )
+            continue;
+
+        for( SAVED_LAYER& saved : savedLayers )
+        {
+            if( saved.restored || saved.fileName != image->m_FileName
+                || saved.archiveFileName != image->m_ArchiveFileName )
+            {
+                continue;
+            }
+
+            image->SetDrawOffetAndRotation( VECTOR2D( saved.displayOffset.x / gerbIUScale.IU_PER_MM,
+                                                      saved.displayOffset.y / gerbIUScale.IU_PER_MM ),
+                                            saved.displayRotation );
+            restoredVisibility[i] = saved.visible;
+            saved.restored = true;
+            break;
+        }
+    }
+
+    m_frame->SetVisibleLayers( restoredVisibility );
+    m_frame->ReFillLayerWidget();
+
+    KIGFX::VIEW* view = getView();
+    view->RecacheAllItems();
+    view->MarkDirty();
+    view->UpdateAllItems( KIGFX::ALL );
+    canvas()->Refresh();
 
     return 0;
 }
@@ -539,6 +673,9 @@ void GERBVIEW_CONTROL::setTransitions()
     Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::dcodeDisplay.MakeEvent() );
     Go( &GERBVIEW_CONTROL::DisplayControl,     ACTIONS::highContrastMode.MakeEvent() );
     Go( &GERBVIEW_CONTROL::DisplayControl,     ACTIONS::highContrastModeCycle.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::showInactiveLayers.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::dimInactiveLayers.MakeEvent() );
+    Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::hideInactiveLayers.MakeEvent() );
     Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::toggleForceOpacityMode.MakeEvent() );
     Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::toggleXORMode.MakeEvent() );
     Go( &GERBVIEW_CONTROL::DisplayControl,     GERBVIEW_ACTIONS::flipGerberView.MakeEvent() );

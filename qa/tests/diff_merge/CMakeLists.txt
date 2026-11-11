@@ -65,6 +65,11 @@ kicad_add_boost_test( qa_diff_merge qa_diff_merge )
 
 setup_qa_env( qa_diff_merge )
 
+if( MSVC )
+    set_property( TEST qa_diff_merge APPEND PROPERTY ENVIRONMENT
+                  "FONTCONFIG_PATH=${CMAKE_SOURCE_DIR}/qa/resources/windows/fonts/" )
+endif()
+
 # End-to-end smoke for the `kicad-cli mergetool` Phase 9 entry point.
 # Runs the shell script against the just-built kicad-cli binary so the
 # argument-handling and exit-code-translation contract stays honored.
@@ -79,6 +84,8 @@ if( UNIX )
         DEPENDS kicad-cli
     )
 
+    setup_qa_env( qa_diff_merge_mergetool_e2e )
+
     # Workflow E2E: requires kicad GUI binary + display server.  Skips
     # cleanly when either is missing so CI without xvfb still passes.
     add_test(
@@ -90,5 +97,8 @@ if( UNIX )
 
     set_tests_properties( qa_diff_merge_mergetool_workflow_e2e PROPERTIES
         DEPENDS "kicad-cli;kicad"
+        TIMEOUT 600
     )
+
+    setup_qa_env( qa_diff_merge_mergetool_workflow_e2e )
 endif()

@@ -285,8 +285,13 @@ BOOST_AUTO_TEST_CASE( AppendRemapsConstraintMembers )
     auto board2 = std::make_unique<BOARD>();
 
     FILE_LINE_READER reader( path.string() );
-    PCB_IO_KICAD_SEXPR_PARSER parser( &reader, board2.get(),
-                                      []( wxString, int, wxString, wxString ) { return true; } );
+    PCB_IO_KICAD_SEXPR_PARSER parser(
+            &reader, board2.get(),
+            []( wxString, int, wxString, wxString )
+            {
+                return true;
+            },
+            nullptr, 0, false, true );
     parser.Parse();
 
     BOOST_REQUIRE_EQUAL( board2->Constraints().size(), 1 );

@@ -117,7 +117,7 @@ bool SCH_EDIT_FRAME::SaveSheetAsDesignBlock( const wxString& aLibraryName, SCH_S
     // Save a temporary copy of the schematic file, as the plugin is just going to move it
     wxString tempFile = wxFileName::CreateTempFileName( "design_block" );
 
-    if( !saveSchematicFile( aSheetPath.Last(), tempFile ) )
+    if( !saveSchematicFile( aSheetPath.Last(), tempFile, true ) )
     {
         DisplayErrorMessage( this, _( "Error saving temporary schematic file to create design block." ) );
         wxRemoveFile( tempFile );
@@ -200,7 +200,8 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSheet( const LIB_ID& aLibId, SCH_SHEET
 
     // Save a temporary copy of the schematic file, as the plugin is just going to move it
     wxString tempFile = wxFileName::CreateTempFileName( "design_block" );
-    if( !saveSchematicFile( aSheetPath.Last(), tempFile ) )
+
+    if( !saveSchematicFile( aSheetPath.Last(), tempFile, true ) )
     {
         DisplayErrorMessage( this, _( "Error saving temporary schematic file to create design block." ) );
         wxRemoveFile( tempFile );
@@ -258,14 +259,13 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
             SCH_SHEET_PATH curPath = GetCurrentSheet();
 
             curPath.push_back( sheet );
-            SaveSheetAsDesignBlock( aLibraryName, curPath );
+            return SaveSheetAsDesignBlock( aLibraryName, curPath );
         }
         else
         {
             DisplayErrorMessage( this, _( "Design blocks with nested sheets are not supported." ) );
+            return false;
         }
-
-        return false;
     }
 
     DESIGN_BLOCK blk;
@@ -347,12 +347,13 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
     }
 
     // Create a sheet for the temporary screen
-    SCH_SHEET* tempSheet = new SCH_SHEET( m_schematic );
+    std::unique_ptr<SCH_SHEET> tempSheet = std::make_unique<SCH_SHEET>( m_schematic );
     tempSheet->SetScreen( tempScreen );
 
     // Save a temporary copy of the schematic file, as the plugin is just going to move it
     wxString tempFile = wxFileName::CreateTempFileName( "design_block" );
-    if( !saveSchematicFile( tempSheet, tempFile ) )
+
+    if( !saveSchematicFile( tempSheet.get(), tempFile, true ) )
     {
         DisplayErrorMessage( this, _( "Error saving temporary schematic file to create design block." ) );
         wxRemoveFile( tempFile );
@@ -432,8 +433,6 @@ bool SCH_EDIT_FRAME::SaveSelectionAsDesignBlock( const wxString& aLibraryName )
 
     // Clean up the temporaries
     wxRemoveFile( tempFile );
-    // This will also delete the screen
-    delete tempSheet;
 
     m_designBlocksPane->RefreshLibs();
     m_designBlocksPane->SelectLibId( blk.GetLibId() );
@@ -469,14 +468,13 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
             SCH_SHEET_PATH curPath = GetCurrentSheet();
 
             curPath.push_back( sheet );
-            UpdateDesignBlockFromSheet( aLibId, curPath );
+            return UpdateDesignBlockFromSheet( aLibId, curPath );
         }
         else
         {
             DisplayErrorMessage( this, _( "Design blocks with nested sheets are not supported." ) );
+            return false;
         }
-
-        return false;
     }
 
     // If the selection is a single group, or contains this block's linked group plus extra items,
@@ -577,13 +575,13 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
     }
 
     // Create a sheet for the temporary screen
-    SCH_SHEET* tempSheet = new SCH_SHEET( m_schematic );
+    std::unique_ptr<SCH_SHEET> tempSheet = std::make_unique<SCH_SHEET>( m_schematic );
     tempSheet->SetScreen( tempScreen );
 
     // Save a temporary copy of the schematic file, as the plugin is just going to move it
     wxString tempFile = wxFileName::CreateTempFileName( "design_block" );
 
-    if( !saveSchematicFile( tempSheet, tempFile ) )
+    if( !saveSchematicFile( tempSheet.get(), tempFile, true ) )
     {
         DisplayErrorMessage( this, _( "Error saving temporary schematic file to create design block." ) );
         wxRemoveFile( tempFile );
@@ -695,8 +693,6 @@ bool SCH_EDIT_FRAME::UpdateDesignBlockFromSelection( const LIB_ID& aLibId )
 
     // Clean up the temporaries
     wxRemoveFile( tempFile );
-    // This will also delete the screen
-    delete tempSheet;
 
     m_designBlocksPane->RefreshLibs();
     m_designBlocksPane->SelectLibId( blk->GetLibId() );

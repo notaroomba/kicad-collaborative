@@ -342,6 +342,10 @@ public:
 
             if( actualPane )
             {
+                // Fixed docks size to content that follows DPI, a saved physical size clips them
+                if( actualPane->HasFlag( wxAuiPaneInfo::optionDockFixed ) )
+                    pane.dock_size = 0;
+
                 pane.name = actualPane->name;
                 used.insert( actualPane );
                 panes.push_back( pane );

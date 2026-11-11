@@ -78,8 +78,7 @@ KIID TEARDROP_MANAGER::maskUuidFor( const KIID& aCopperUuid )
 }
 
 
-void TEARDROP_MANAGER::buildCrossingStub( PCB_TRACK& aStub, const PCB_TRACK* aTrack,
-                                          const VECTOR2I& aEnd )
+void TEARDROP_MANAGER::buildCrossingStub( PCB_TRACK& aStub, const PCB_TRACK* aTrack, const VECTOR2I& aCrossedPos )
 {
     // Copying aTrack would slice a PCB_ARC while the copy kept PCB_ARC_T, so the arc branches
     // would read a mid-point that is not there.
@@ -88,7 +87,20 @@ void TEARDROP_MANAGER::buildCrossingStub( PCB_TRACK& aStub, const PCB_TRACK* aTr
     aStub.SetNet( aTrack->GetNet() );
     aStub.SetHasSolderMask( aTrack->HasSolderMask() );
     aStub.SetLocalSolderMaskMargin( aTrack->GetLocalSolderMaskMargin() );
-    aStub.SetEnd( aEnd );
+
+    // Aim the stub along the track centreline. The crossed centre can sit anywhere within the
+    // track width, and the teardrop follows the stub.
+    if( aTrack->Type() == PCB_ARC_T )
+    {
+        const PCB_ARC* arc = static_cast<const PCB_ARC*>( aTrack );
+        SHAPE_ARC      shape( arc->GetStart(), arc->GetMid(), arc->GetEnd(), 0 );
+
+        aStub.SetEnd( shape.NearestPoint( aCrossedPos ) );
+    }
+    else
+    {
+        aStub.SetEnd( SEG( aTrack->GetStart(), aTrack->GetEnd() ).NearestPoint( aCrossedPos ) );
+    }
 }
 
 
@@ -188,11 +200,14 @@ void TEARDROP_MANAGER::createAndAddTeardropWithMask( BOARD_COMMIT& aCommit,
 {
     ZONE* new_teardrop = createTeardrop( aTeardropVariant, aPoints, aSourceTrack, aUuid );
     m_board->Add( new_teardrop, ADD_MODE::BULK_INSERT );
+
     m_createdTdList.push_back( new_teardrop );
 
     // The next teardrop has to see this one, or two of them flare into the same gap.
-    ensureCopperIndex();
-    m_copperRTree.Insert( new_teardrop, new_teardrop->GetLayer(), CLEARANCE_CONSTRAINT );
+    BOX2I     bbox = new_teardrop->Outline()->BBox();
+    const int bmin[2] = { bbox.GetX(), bbox.GetY() };
+    const int bmax[2] = { bbox.GetRight(), bbox.GetBottom() };
+    m_createdTdRTree[aSourceTrack->GetLayer()].Insert( bmin, bmax, new_teardrop );
 
     aCommit.Added( new_teardrop );
 

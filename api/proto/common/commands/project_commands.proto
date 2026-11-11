@@ -27,6 +27,10 @@ import "common/types/project_settings.proto";
 
 message GetNetClasses
 {
+  // Requests should include a project even though KiCad cannot have more than one project open at
+  // once yet.  Requests without a project will be deprecated in a future version.
+  // Since: 11.0
+  kiapi.common.types.ProjectSpecifier project = 1;
 }
 
 message NetClassesResponse
@@ -48,8 +52,43 @@ message SetNetClasses
   // will be erased.  Note that there must always be a "Default" netclass, so it will not be erased
   // even if merge_mode is MMM_REPLACE and there is no "Default" class specified in this message.
   kiapi.common.types.MapMergeMode merge_mode = 3;
+
+  // Requests should include a project even though KiCad cannot have more than one project open at
+  // once yet.  Requests without a project will be deprecated in a future version.
+  // Since: 11.0
+  kiapi.common.types.ProjectSpecifier project = 4;
 }
 
+// Returns NetClassAssignmentsResponse
+// Since: 11.0
+message GetNetClassAssignments
+{
+  // The project to query
+  kiapi.common.types.ProjectSpecifier project = 1;
+}
+
+// Since: 11.0
+message NetClassAssignmentsResponse
+{
+  repeated kiapi.common.project.NetClassAssignment assignments = 1;
+  repeated kiapi.common.project.NetClassPatternAssignment pattern_assignments = 2;
+}
+
+// Since: 11.0
+message SetNetClassAssignments
+{
+  // The project to query
+  kiapi.common.types.ProjectSpecifier project = 1;
+
+  // In MMM_MERGE mode, per-net assignments are replaced for each net present in the
+  // request (an empty netclasses list removes all assignments for that net), and pattern
+  // assignments are updated if they already exist.
+  // In MMM_REPLACE mode, any existing assignments or patterns not present in the request are erased.
+  kiapi.common.types.MapMergeMode merge_mode = 2;
+
+  repeated kiapi.common.project.NetClassAssignment assignments = 3;
+  repeated kiapi.common.project.NetClassPatternAssignment pattern_assignments = 4;
+}
 
 message ExpandTextVariables
 {
@@ -119,7 +158,23 @@ message CloseAllDocuments
 }
 
 
+// Saves the given document to its existing file path.
+// Returns an error if the document is untitled (it has never been saved to disk); use
+// SaveDocumentAs to save an untitled document to an explicit path.
 message SaveDocument
 {
   kiapi.common.types.DocumentSpecifier document = 1;
+}
+
+// Creates a new document (in memory; does not save to disk)
+// Currently board and schematic files can be created.  A project will be created
+// for the document if it doesn't already exist.
+// Will return an error if the current document is unsaved: save or revert first
+// Returns OpenDocumentResponse
+// Since: 11.0
+message CreateDocument
+{
+  kiapi.common.types.DocumentType type = 1;
+
+  string path = 2;
 }

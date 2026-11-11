@@ -34,15 +34,69 @@
 #include <layer_ids.h>
 #include <pcb_base_frame.h>
 #include <view/view.h>
+#include <hash.h>
 
 #include <memory>
 #include <utility>
 
 
-RATSNEST_VIEW_ITEM::RATSNEST_VIEW_ITEM( std::shared_ptr<CONNECTIVITY_DATA> aData ) :
-        EDA_ITEM( NOT_USED ),
-        m_data( std::move( aData ) )
+// A zero length connection is drawn as a fixed size cross
+static constexpr int CROSS_SIZE = 200000;
+
+// How far a curved line's control point sits off the chord, as a fraction of the span
+static constexpr double CURVE_BOW = 0.1;
+
+
+// A cross on an anchor near the coordinate limit overflows an int, so keep it in doubles
+static void drawCross( KIGFX::GAL* aGal, const VECTOR2D& aPos )
 {
+    aGal->DrawLine( aPos + VECTOR2D( -CROSS_SIZE, -CROSS_SIZE ),
+                    aPos + VECTOR2D( CROSS_SIZE, CROSS_SIZE ) );
+    aGal->DrawLine( aPos + VECTOR2D( -CROSS_SIZE, CROSS_SIZE ),
+                    aPos + VECTOR2D( CROSS_SIZE, -CROSS_SIZE ) );
+}
+
+
+RATSNEST_VIEW_ITEM::RATSNEST_VIEW_ITEM( std::shared_ptr<CONNECTIVITY_DATA> aData, PART aPart ) :
+        EDA_ITEM( NOT_USED ),
+        m_data( std::move( aData ) ),
+        m_part( aPart )
+{
+}
+
+
+VECTOR2D RATSNEST_VIEW_ITEM::CurveControlPoint( const VECTOR2D& aSource, const VECTOR2D& aTarget )
+{
+    // Doubles throughout because the span between two board corners overflows an int
+    VECTOR2D span = aTarget - aSource;
+
+    return aSource + VECTOR2D( 0.5 * span.x - CURVE_BOW * span.y,
+                               0.5 * span.y + CURVE_BOW * span.x );
+}
+
+
+bool RATSNEST_VIEW_ITEM::LineInViewport( const VECTOR2I& aSource, const VECTOR2I& aTarget,
+                                         const BOX2D& aViewport, bool aCurved )
+{
+    VECTOR2D source( aSource );
+    VECTOR2D target( aTarget );
+    BOX2D    bounds( source );
+
+    if( aSource == aTarget )
+    {
+        bounds.Inflate( CROSS_SIZE );
+    }
+    else
+    {
+        bounds.Merge( target );
+
+        // A cubic stays inside the hull of its endpoints and its control points, which are both
+        // the same point here
+        if( aCurved )
+            bounds.Merge( CurveControlPoint( source, target ) );
+    }
+
+    return aViewport.Intersects( bounds );
 }
 
 
@@ -60,10 +114,11 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 {
     std::unique_lock<KISPINLOCK> lock( m_data->GetLock(), std::try_to_lock );
 
+    // A cached copy drawn now would stay empty until the next update, see BoardInputsChanged()
+    m_drawSkipped = !lock;
+
     if( !lock )
         return;
-
-    constexpr int CROSS_SIZE = 200000;
 
     PCBNEW_SETTINGS* cfg = dynamic_cast<PCBNEW_SETTINGS*>( Kiface().KifaceSettings() );
 
@@ -74,7 +129,16 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
     KIGFX::GAL* gal = aView->GetGAL();
     gal->SetIsStroke( true );
     gal->SetIsFill( false );
-    gal->SetLineWidth( cfg->m_Display.m_RatsnestThickness / gal->GetWorldScale() );
+    // A pixel width the canvas resolves itself keeps the ratsnest valid across zooms
+    if( gal->SupportsStrokePixelPad() )
+    {
+        gal->SetLineWidth( 0.0f );
+        gal->SetStrokePixelPad( cfg->m_Display.m_RatsnestThickness );
+    }
+    else
+    {
+        gal->SetLineWidth( cfg->m_Display.m_RatsnestThickness / gal->GetWorldScale() );
+    }
 
     std::set<int>        highlightedNets = rs->GetHighlightNetCodes();
     const std::set<int>& hiddenNets      = rs->GetHiddenNets();
@@ -122,12 +186,34 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
     // by the line's own thickness. We use line_width/4 for a 2x safety margin. The filter is
     // in world units and scales with zoom (line width is already world-scaled above), so it
     // produces far fewer segments without any visible faceting.
-    const double curveFilter = curved_ratsnest ? ( gal->GetLineWidth() / 4.0 ) : 0.0;
+    const double widthFilter = gal->GetLineWidth() / 4.0;
+
+    // A pixel-padded stroke has no world width and is kept at every zoom, so the filter follows
+    // the curve's own span
+    auto curveFilter = [&]( const VECTOR2I& aSource, const VECTOR2I& aTarget )
+    {
+        if( widthFilter > 0.0 )
+            return widthFilter;
+
+        return ( VECTOR2D( aTarget ) - VECTOR2D( aSource ) ).EuclideanNorm() / 512.0;
+    };
+
+    // Lines are stroked, so one just off screen still reaches back into the viewport
+    BOX2D viewport = aView->GetViewport();
+    viewport.Inflate( gal->GetLineWidth() );
+
+    // A cached board ratsnest is kept through pans and zooms, so it must hold every line
+    const bool cull = m_part != PART::BOARD;
+
+    static const std::vector<RN_DYNAMIC_LINE> noLines;
 
     // Draw the "dynamic" ratsnest (i.e. for objects that may be currently being moved)
-    for( const RN_DYNAMIC_LINE& l : m_data->GetLocalRatsnest() )
+    for( const RN_DYNAMIC_LINE& l : m_part == PART::BOARD ? noLines : m_data->GetLocalRatsnest() )
     {
         if( hiddenNets.count( l.netCode ) )
+            continue;
+
+        if( cull && !LineInViewport( l.a, l.b, viewport, curved_ratsnest ) )
             continue;
 
         const NETCLASS*     nc = nullptr;
@@ -155,20 +241,14 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 
         if( l.a == l.b )
         {
-            gal->DrawLine( VECTOR2I( l.a.x - CROSS_SIZE, l.a.y - CROSS_SIZE ),
-                           VECTOR2I( l.b.x + CROSS_SIZE, l.b.y + CROSS_SIZE ) );
-            gal->DrawLine( VECTOR2I( l.a.x - CROSS_SIZE, l.a.y + CROSS_SIZE ),
-                           VECTOR2I( l.b.x + CROSS_SIZE, l.b.y - CROSS_SIZE ) );
+            drawCross( gal, l.a );
         }
         else
         {
             if( curved_ratsnest )
             {
-                int dx = l.b.x - l.a.x;
-                int dy = l.b.y - l.a.y;
-                const VECTOR2I center = VECTOR2I( l.a.x + 0.5 * dx - 0.1 * dy,
-                                                  l.a.y + 0.5 * dy + 0.1 * dx );
-                gal->DrawCurve( l.a, center, center, l.b, curveFilter );
+                const VECTOR2D center = CurveControlPoint( l.a, l.b );
+                gal->DrawCurve( l.a, center, center, l.b, curveFilter( l.a, l.b ) );
             }
             else
             {
@@ -177,7 +257,9 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
         }
     }
 
-    for( int i = 1 /* skip "No Net" at [0] */; i < m_data->GetNetCount(); ++i )
+    const int netCount = m_part == PART::LOCAL ? 0 : m_data->GetNetCount();
+
+    for( int i = 1 /* skip "No Net" at [0] */; i < netCount; ++i )
     {
         if( hiddenNets.count( i ) )
             continue;
@@ -217,7 +299,9 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
         else
             gal->SetStrokeColor( color );  // using the default ratsnest color for not highlighted
 
-        for( const CN_EDGE& edge : net->GetEdges() )
+        // Every line of a net is stroked in one colour on one layer, so their order is not
+        // observable and the sort in GetEdges() would be paid on every frame
+        for( const CN_EDGE& edge : net->GetUnsortedEdges() )
         {
             if( !edge.IsVisible() )
                 continue;
@@ -230,6 +314,9 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
 
             const VECTOR2I source( sourceNode->Pos() );
             const VECTOR2I target( targetNode->Pos() );
+
+            if( cull && !LineInViewport( source, target, viewport, curved_ratsnest ) )
+                continue;
 
             bool enable =  !sourceNode->GetNoLine() && !targetNode->GetNoLine();
             bool show;
@@ -265,20 +352,14 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
             {
                 if ( source == target )
                 {
-                    gal->DrawLine( VECTOR2I( source.x - CROSS_SIZE, source.y - CROSS_SIZE ),
-                                   VECTOR2I( source.x + CROSS_SIZE, source.y + CROSS_SIZE ) );
-                    gal->DrawLine( VECTOR2I( source.x - CROSS_SIZE, source.y + CROSS_SIZE ),
-                                   VECTOR2I( source.x + CROSS_SIZE, source.y - CROSS_SIZE ) );
+                    drawCross( gal, source );
                 }
                 else
                 {
                     if( curved_ratsnest )
                     {
-                        int dx = target.x - source.x;
-                        int dy = target.y - source.y;
-                        const VECTOR2I center = VECTOR2I( source.x + 0.5 * dx - 0.1 * dy,
-                                                          source.y + 0.5 * dy + 0.1 * dx );
-                        gal->DrawCurve( source, center, center, target, curveFilter );
+                        const VECTOR2D center = CurveControlPoint( source, target );
+                        gal->DrawCurve( source, center, center, target, curveFilter( source, target ) );
                     }
                     else
                     {
@@ -288,11 +369,48 @@ void RATSNEST_VIEW_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
             }
         }
     }
+    gal->SetStrokePixelPad( 0.0 );
 }
 
 
 std::vector<int> RATSNEST_VIEW_ITEM::ViewGetLayers() const
 {
-    return { LAYER_RATSNEST };
+    return { m_part == PART::LOCAL ? LOCAL_LAYER : LAYER_RATSNEST };
+}
+
+
+bool RATSNEST_VIEW_ITEM::BoardInputsChanged( KIGFX::VIEW* aView )
+{
+    PCBNEW_SETTINGS* cfg = dynamic_cast<PCBNEW_SETTINGS*>( Kiface().KifaceSettings() );
+
+    if( !cfg )
+        return false;
+
+    auto   rs = static_cast<KIGFX::PCB_RENDER_SETTINGS*>( aView->GetPainter()->GetSettings() );
+    size_t seed = 0;
+
+    hash_combine( seed, !m_data->GetLocalRatsnest().empty(), static_cast<int>( rs->GetNetColorMode() ),
+                  static_cast<int>( rs->m_ContrastModeDisplay ), static_cast<int>( rs->GetPrimaryHighContrastLayer() ),
+                  cfg->m_Display.m_RatsnestThickness, cfg->m_Display.m_DisplayRatsnestLinesCurved,
+                  static_cast<int>( cfg->m_Display.m_RatsnestMode ), cfg->m_Display.m_ShowGlobalRatsnest );
+
+    for( int net : rs->GetHighlightNetCodes() )
+        hash_combine( seed, net );
+
+    // Keeps a highlighted net distinct from a hidden one with the same code
+    hash_combine( seed, -1 );
+
+    for( int net : rs->GetHiddenNets() )
+        hash_combine( seed, net );
+
+    LSET::AllCuMask().RunOnLayers(
+            [&]( PCB_LAYER_ID aLayer )
+            {
+                hash_combine( seed, aView->IsLayerVisible( aLayer ) );
+            } );
+
+    const bool skipped = std::exchange( m_drawSkipped, false );
+
+    return std::exchange( m_boardInputs, seed ) != seed || skipped;
 }
 

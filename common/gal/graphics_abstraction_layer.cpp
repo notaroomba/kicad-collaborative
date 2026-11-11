@@ -32,6 +32,7 @@
 #include <math/util.h>      // for KiROUND
 
 #include <algorithm>
+#include <deque>
 #include <cmath>
 #include <limits>
 
@@ -156,6 +157,16 @@ bool GAL::updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions )
         refresh = true;
     }
 
+    {
+        // For now we only allow 10 or none, but it could be made adjustable (e.g. 5?)
+        const int newInterval = m_options.m_gridShowMajor ? 10 : 0;
+        if( m_gridTick != newInterval )
+        {
+            m_gridTick = newInterval;
+            refresh = true;
+        }
+    }
+
     if( m_options.m_axesEnabled != m_axesEnabled )
     {
         m_axesEnabled = m_options.m_axesEnabled;
@@ -176,6 +187,17 @@ bool GAL::updatedGalDisplayOptions( const GAL_DISPLAY_OPTIONS& aOptions )
 
     // tell the derived class if the base class needs an update or not
     return refresh;
+}
+
+
+void GAL::DrawTrack( const VECTOR2D& aStart, const VECTOR2D& aEnd,
+                     double aWidth, const COLOR4D& aColor )
+{
+    SetFillColor( aColor );
+    SetStrokeColor( aColor );
+    SetIsFill( true );
+    SetIsStroke( false );
+    DrawSegment( aStart, aEnd, aWidth );
 }
 
 
@@ -202,7 +224,8 @@ void GAL::ComputeWorldScreenMatrix()
     MATRIX3x3D translation;
     translation.SetIdentity();
     // We're deliberately dividing integers to avoid fractional pixel offsets.
-    translation.SetTranslation( VECTOR2D( m_screenSize.x/2, m_screenSize.y/2 ) );
+    const VECTOR2I layoutSize = GetLayoutPixelSize();
+    translation.SetTranslation( VECTOR2D( layoutSize.x / 2, layoutSize.y / 2 ) );
 
     MATRIX3x3D rotate;
     rotate.SetIdentity();
@@ -279,6 +302,103 @@ BOX2D GAL::gridScreenBBox( const GRID_SOURCE& aSrc ) const
     }
 
     return bbox;
+}
+
+
+GAL::GRID_LATTICE GAL::gridLattice( const GRID_SOURCE& aSrc ) const
+{
+    GRID_LATTICE lattice;
+    lattice.tick = aSrc.tick > 0 ? aSrc.tick : static_cast<unsigned>( m_gridTick );
+    lattice.extent = aSrc.extent;
+
+    const double threshold =
+            computeMinGridSpacing() / m_worldScale * ( aSrc.style == GRID_STYLE::SMALL_CROSS ? 2.0 : 1.0 );
+
+    if( aSrc.kind == GRID_SOURCE::KIND::POLAR )
+    {
+        if( aSrc.unbounded )
+        {
+            const BOX2D  screen = gridScreenBBox( aSrc );
+            const double farX = std::max( std::abs( screen.GetLeft() ), std::abs( screen.GetRight() ) );
+            const double farY = std::max( std::abs( screen.GetTop() ), std::abs( screen.GetBottom() ) );
+
+            // Bleed past the farthest corner
+            lattice.extent = VECTOR2D( std::hypot( farX, farY ) * 1.01, 2 * M_PI );
+        }
+
+        lattice.pitch.x = AutoSparsePitch( aSrc.pitch.x, lattice.tick, threshold );
+        lattice.pitch.y = aSrc.pitch.y;
+
+        if( lattice.extent.x > 0.0 )
+            lattice.pitch.y = AutoSparsePitch( aSrc.pitch.y, lattice.tick, threshold / lattice.extent.x );
+    }
+    else
+    {
+        // Both axes thin out by the same factor, which keeps the cells' shape
+        const double minPitch = std::min( aSrc.pitch.x, aSrc.pitch.y );
+        const double sparse = AutoSparsePitch( minPitch, lattice.tick, threshold ) / minPitch;
+
+        lattice.pitch = VECTOR2D( aSrc.pitch.x * sparse, aSrc.pitch.y * sparse );
+    }
+
+    return lattice;
+}
+
+
+COLOR4D GAL::gridSourceColor( const GRID_SOURCE& aSrc ) const
+{
+    COLOR4D color = aSrc.color.a > 0 ? aSrc.color : m_gridColor;
+
+    if( aSrc.highlighted )
+        color.Brighten( GRID_SELECTED_BRIGHTEN );
+
+    return color;
+}
+
+
+void GAL::drawGridCoverageShape( const GRID_SOURCE& aSrc )
+{
+    Save();
+    Translate( aSrc.origin );
+
+    // GAL rotation is counterclockwise and grid orientation clockwise on the screen
+    Rotate( -aSrc.orientation );
+
+    const double rMax = aSrc.extent.x;
+    const double phiMax = aSrc.extent.y;
+
+    if( aSrc.unbounded )
+    {
+        const BOX2D screen = gridScreenBBox( aSrc );
+
+        DrawRectangle( screen.GetOrigin(), screen.GetEnd() );
+    }
+    else if( aSrc.kind == GRID_SOURCE::KIND::CARTESIAN )
+    {
+        DrawRectangle( -aSrc.extent, aSrc.extent );
+    }
+    else if( rMax > 0.0 && phiMax >= 2 * M_PI - 1e-6 )
+    {
+        DrawCircle( VECTOR2D( 0, 0 ), rMax );
+    }
+    else if( rMax > 0.0 && phiMax > 0.0 )
+    {
+        const int            segments = std::max( 16, static_cast<int>( phiMax / ( M_PI / 16 ) ) );
+        std::deque<VECTOR2D> sector;
+
+        sector.emplace_back( 0.0, 0.0 );
+
+        for( int ii = 0; ii <= segments; ++ii )
+        {
+            const double phi = phiMax * ii / segments;
+            sector.emplace_back( rMax * std::cos( phi ), rMax * std::sin( phi ) );
+        }
+
+        sector.emplace_back( 0.0, 0.0 );
+        DrawPolygon( sector );
+    }
+
+    Restore();
 }
 
 

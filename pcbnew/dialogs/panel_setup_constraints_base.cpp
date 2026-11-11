@@ -389,7 +389,7 @@ PANEL_SETUP_CONSTRAINTS_BASE::PANEL_SETUP_CONSTRAINTS_BASE( wxWindow* parent, wx
 	bSizerArcToPoly->Add( m_staticline19, 0, wxEXPAND|wxTOP|wxBOTTOM, 2 );
 
 	wxFlexGridSizer* fgSizer2;
-	fgSizer2 = new wxFlexGridSizer( 0, 4, 3, 0 );
+	fgSizer2 = new wxFlexGridSizer( 0, 3, 3, 0 );
 	fgSizer2->AddGrowableCol( 2 );
 	fgSizer2->SetFlexibleDirection( wxBOTH );
 	fgSizer2->SetNonFlexibleGrowMode( wxFLEX_GROWMODE_SPECIFIED );

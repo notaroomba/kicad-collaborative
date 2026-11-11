@@ -24,6 +24,8 @@
 
 #include "netlist_exporter_base.h"
 #include <list>
+#include <sch_pin.h>
+#include <symbol.h>
 
 /**
  * Generate a netlist compatible with Allegro.
@@ -31,9 +33,9 @@
 class NETLIST_EXPORTER_ALLEGRO : public NETLIST_EXPORTER_BASE
 {
 public:
-    NETLIST_EXPORTER_ALLEGRO( SCHEMATIC* aSchematic ) :
-        NETLIST_EXPORTER_BASE( aSchematic ),
-        m_f( nullptr )
+    NETLIST_EXPORTER_ALLEGRO( SCHEMATIC* aSchematic, KIWAY* aKiway ) :
+            NETLIST_EXPORTER_BASE( aSchematic, aKiway ),
+            m_f( nullptr )
     {
     }
 
@@ -41,8 +43,7 @@ public:
      * Write netlist to \a aOutFileName.
      * Generate the Allegro netlist format supported by Allegro.
      */
-    bool WriteNetlist( const wxString& aOutFileName, unsigned aNetlistOptions,
-                       REPORTER& aReporter ) override;
+    bool writeNetlist( const wxString& aOutFileName, unsigned aNetlistOptions, REPORTER& aReporter ) override;
 
     /**
      * Compare two std::pair<SCH_SYMBOL*, SCH_SHEET_PATH> variables.
@@ -92,7 +93,7 @@ private:
      * Write the $PACKAGES section
      *
      */
-    void toAllegroPackages();
+    bool toAllegroPackages();
 
     /**
      * Write the $NETS section
@@ -165,31 +166,23 @@ private:
      * @param aSanitize  if true (default), will format/escape the field for Telesis output
      * @return return the found field, or return wxString("") if no field exist.
      */
-    wxString getGroupField( int aGroupIndex, const wxArrayString& aFieldArray,
-                            bool aSanitize = true );
+    wxString getGroupField( int aGroupIndex, const wxArrayString& aFieldArray, bool aSanitize = true );
 
     /**
-     * Remove the str's tailing digits.
-     *
-     * @param aString
-     * @return wxString
+     * @return the text of a reference before its number, as R for R12 and R12_M1.
      */
-    static wxString removeTailDigits( wxString aString );
+    static wxString refPrefix( const wxString& aRef );
 
     /**
-     * Extract the str's tailing number.
-     *
-     * @param aString
-     * @return unsigned int
+     * Warn about references Allegro may reject, which are too long or hold characters it refuses.
      */
-    static unsigned int extractTailNumber( wxString aString );
+    void reportUnsafeRefs( REPORTER& aReporter ) const;
 
     struct NET_NODE
     {
-        NET_NODE( SCH_PIN* aPin, const SCH_SHEET_PATH& aSheet, bool aNoConnect ) :
+        NET_NODE( SCH_PIN* aPin, const SCH_SHEET_PATH& aSheet ) :
                 m_Pin( aPin ),
-                m_Sheet( aSheet ),
-                m_NoConnect( aNoConnect )
+                m_Sheet( aSheet )
         {}
 
         bool operator<( const NET_NODE& aNetNode ) const
@@ -220,7 +213,6 @@ private:
 
         SCH_PIN*       m_Pin;
         SCH_SHEET_PATH m_Sheet;
-        bool           m_NoConnect;
     };
 
     FILE* m_f            ;    ///< File pointer for netlist file writing operation.

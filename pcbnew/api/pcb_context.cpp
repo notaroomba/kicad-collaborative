@@ -24,6 +24,8 @@
 #include <netlist_reader/pcb_netlist.h>
 #include <pcb_edit_frame.h>
 #include <reporter.h>
+#include <board.h>
+#include <project.h>
 
 
 class PCB_EDIT_FRAME_CONTEXT : public PCB_CONTEXT
@@ -54,6 +56,16 @@ public:
         return &m_frame->Kiway();
     }
 
+    bool IsContentModified() const override
+    {
+        return m_frame->GetScreen()->IsContentModified();
+    }
+
+    void SetContentModified( bool aModified = true ) override
+    {
+        m_frame->GetScreen()->SetContentModified( aModified );
+    }
+
     wxString GetCurrentFileName() const override
     {
         return m_frame->GetCurrentFileName();
@@ -67,6 +79,11 @@ public:
     bool SaveBoard() override
     {
         return m_frame->SaveBoard();
+    }
+
+    bool SaveBoardAs( const wxString& aFileName ) override
+    {
+        return false;
     }
 
     bool SavePcbCopy( const wxString& aFileName, bool aCreateProject, bool aHeadless ) override
@@ -88,6 +105,16 @@ public:
     {
         bool runDragCommand = false;
         m_frame->OnNetlistChanged( aUpdater, &runDragCommand );
+    }
+
+    bool RevertToSaved() override
+    {
+        wxFileName fn = m_frame->Prj().AbsolutePath( m_frame->GetBoard()->GetFileName() );
+
+        if( fn.GetFullPath().IsEmpty() || !wxFileExists( fn.GetFullPath() ) )
+            return false;
+
+        return m_frame->ReloadFromDisk();
     }
 
 private:

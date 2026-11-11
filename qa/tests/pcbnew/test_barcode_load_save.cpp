@@ -19,6 +19,7 @@
 
 #include <filesystem>
 
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <boost/test/unit_test.hpp>
 
@@ -52,8 +53,8 @@ BOOST_AUTO_TEST_CASE( BarcodeWriteRead )
 
     board->Add( barcode, ADD_MODE::APPEND, true );
 
-    KI_TEST::TEMPORARY_DIRECTORY tempDir( "kicad_qa_barcode_roundtrip", "" );
-    const std::filesystem::path  savePath = tempDir.GetPath() / "barcode_roundtrip.kicad_pcb";
+    KI_TEST::SCOPED_TEMP_DIR    tempDir( "kicad_qa_barcode_roundtrip" );
+    const std::filesystem::path savePath = tempDir.Path() / "barcode_roundtrip.kicad_pcb";
 
     KI_TEST::DumpBoardToFile( *board, savePath.string() );
     std::unique_ptr<BOARD> board2 = KI_TEST::ReadBoardFromFileOrStream( savePath.string() );
@@ -93,12 +94,16 @@ BOOST_AUTO_TEST_CASE( BarcodeFootprintWriteRead )
 
     // Saving a footprint validates its whole containing directory as a library, so use a private
     // temp directory rather than littering (and reading stray files from) the system temp root.
-    KI_TEST::TEMPORARY_DIRECTORY tempLib( "kicad_qa_barcode_roundtrip", ".pretty" );
-    const std::filesystem::path  savePath = tempLib.GetPath() / "barcode_roundtrip.kicad_mod";
+    KI_TEST::SCOPED_TEMP_DIR    tempLib( "kicad_qa_barcode_roundtrip" );
+    const std::filesystem::path libPath = tempLib.CreateChildDir( "barcode_roundtrip.pretty" );
+    const std::filesystem::path savePath = libPath / "barcode_roundtrip.kicad_mod";
 
-    KI_TEST::DumpFootprintToFile( footprint, savePath.string() );
-    std::unique_ptr<FOOTPRINT> footprint2 = KI_TEST::ReadFootprintFromFileOrStream( savePath.string() );
+    footprint.SetFPID( LIB_ID( "", savePath.stem().string() ) );
 
+    KI_TEST::DumpFootprintToFile( footprint, savePath );
+    std::unique_ptr<FOOTPRINT> footprint2 = KI_TEST::ReadFootprintFromFile( savePath, savePath.stem().string() );
+
+    BOOST_REQUIRE( footprint2 );
     PCB_BARCODE* loaded = nullptr;
 
     for( BOARD_ITEM* item : footprint2->GraphicalItems() )
@@ -244,7 +249,7 @@ BOOST_AUTO_TEST_CASE( BarcodeTextVariableExpansion )
     BOOST_CHECK_EQUAL( barcode->GetText(), wxT( "${PART_NUMBER}_${VERSION}" ) );
 
     // Verify GetShownText returns the expanded text
-    BOOST_CHECK_EQUAL( barcode->GetShownText(), wxT( "PN12345_1.0" ) );
+    BOOST_CHECK_EQUAL( barcode->GetShownText( FOR_CANVAS ), wxT( "PN12345_1.0" ) );
 
     // Assemble the barcode and verify the QR code encodes the expanded text
     barcode->AssembleBarcode();
@@ -299,7 +304,7 @@ BOOST_AUTO_TEST_CASE( BarcodeUndefinedVariable )
     BOOST_CHECK_EQUAL( barcode->GetText(), wxT( "${UNDEFINED_VAR}" ) );
 
     // Verify GetShownText returns the unexpanded text (since variable is undefined)
-    BOOST_CHECK_EQUAL( barcode->GetShownText(), wxT( "${UNDEFINED_VAR}" ) );
+    BOOST_CHECK_EQUAL( barcode->GetShownText( FOR_CANVAS ), wxT( "${UNDEFINED_VAR}" ) );
 
     // Assemble the barcode - for QR codes this should still work since QR can encode any text
     barcode->AssembleBarcode();
@@ -336,5 +341,3 @@ BOOST_AUTO_TEST_CASE( BarcodeCode39UndefinedVariable )
     // This is expected behavior - invalid characters cause encoding to fail
     BOOST_CHECK_EQUAL( barcode->GetSymbolPoly().OutlineCount(), 0 );
 }
-
-

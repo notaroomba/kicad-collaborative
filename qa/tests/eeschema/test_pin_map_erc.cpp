@@ -22,6 +22,7 @@
 #include <memory>
 
 #include <pin_map.h>
+#include <jumper_group.h>
 #include <lib_symbol.h>
 #include <sch_pin.h>
 #include <sch_symbol.h>
@@ -69,8 +70,8 @@ struct PIN_MAP_ERC_FIXTURE
 
         m_libSym->PinMaps().AddOrReplace( std::move( aMap ) );
 
-        if( !aJumperGroup.empty() )
-            m_libSym->JumperPinGroups().push_back( aJumperGroup );
+        if( std::optional<JUMPER_GROUP> group = JUMPER_GROUP::Make( aJumperGroup ) )
+            m_libSym->JumperPinGroups().Add( std::move( *group ) );
 
         SCH_SYMBOL* sym = new SCH_SYMBOL( *m_libSym, m_libSym->GetLibId(), &path, 0, 0,
                                           VECTOR2I( 0, 0 ) );
@@ -78,7 +79,12 @@ struct PIN_MAP_ERC_FIXTURE
         m_schematic->RootScreen()->Append( sym );
     }
 
-    int runPinMapErc() { return ERC_TESTER( m_schematic.get() ).TestPinMap( nullptr, nullptr ); }
+    int runPinMapErc()
+    {
+        // ERC_TESTER::RunTests() always recalculates first, and the engine reads only published facts
+        m_schematic->RebuildConnectivity();
+        return ERC_TESTER( m_schematic.get() ).TestPinMap( nullptr, nullptr );
+    }
 
     SETTINGS_MANAGER            m_settingsManager;
     std::unique_ptr<SCHEMATIC>  m_schematic;

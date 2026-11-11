@@ -26,6 +26,7 @@
  * Test suite for import of EasyEDA Pro v3 PCB files
  */
 
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <pcbnew_utils/board_file_utils.h>
 #include <pcbnew_utils/board_test_utils.h>
@@ -103,8 +104,8 @@ BOOST_AUTO_TEST_CASE( FootprintLibraryEnumeratesAndLoadsElibz2 )
     BOOST_REQUIRE_EQUAL( footprintNames.GetCount(), 1 );
     BOOST_CHECK_EQUAL( footprintNames[0], wxString( wxS( "BGA-286_17x17_12.0x12.0mm" ) ) );
 
-    std::unique_ptr<FOOTPRINT> footprint(
-            plugin->FootprintLoad( getEasyEdaProV3FootprintLibPath(), wxS( "BGA-286_17x17_12.0x12.0mm" ) ) );
+    std::unique_ptr<FOOTPRINT> footprint =
+            plugin->FootprintLoad( getEasyEdaProV3FootprintLibPath(), wxS( "BGA-286_17x17_12.0x12.0mm" ) );
 
     BOOST_REQUIRE( footprint );
     BOOST_CHECK_EQUAL( footprint->GetFPID().GetLibItemName(), UTF8( "BGA-286_17x17_12.0x12.0mm" ) );
@@ -115,11 +116,11 @@ BOOST_AUTO_TEST_CASE( FootprintLibraryEnumeratesAndLoadsElibz2 )
 BOOST_AUTO_TEST_CASE( BoardLoadImportsInnerLayers )
 {
     // Import from a private copy so a stray write lands here rather than in the shared test data
-    KI_TEST::TEMPORARY_DIRECTORY tempDir( "easyedapro_v3_board_load", "" );
+    KI_TEST::SCOPED_TEMP_DIR tempDir( "easyedapro_v3_board_load" );
 
     const wxString archiveName = wxS( "ProProject_LS2K0300Core_2025-11-14.epro2" );
     wxString       sourceDir = wxString::FromUTF8( KI_TEST::GetPcbnewTestDataDir() + "plugins/easyedapro/" );
-    wxString       tempDirPath = wxString::FromUTF8( tempDir.GetPath().string() );
+    const wxString tempDirPath = tempDir.PathStr();
 
     wxFileName dataFile( tempDirPath, archiveName );
     BOOST_REQUIRE( wxCopyFile( sourceDir + archiveName, dataFile.GetFullPath() ) );
@@ -130,7 +131,7 @@ BOOST_AUTO_TEST_CASE( BoardLoadImportsInnerLayers )
     IO_RELEASER<PCB_IO> plugin( PCB_IO_MGR::FindPlugin( PCB_IO_MGR::EASYEDAPRO_V3 ) );
     BOOST_REQUIRE( plugin );
 
-    std::unique_ptr<BOARD> board( plugin->LoadBoard( dataFile.GetFullPath(), nullptr, &properties ) );
+    std::unique_ptr<BOARD> board = plugin->LoadBoard( dataFile.GetFullPath(), &properties );
     BOOST_REQUIRE( board );
 
     // Loading a board is a read, so nothing may appear beside the archive

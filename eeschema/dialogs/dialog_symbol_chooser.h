@@ -40,10 +40,15 @@ public:
      * Create dialog to choose symbol.
      *
      * @param aParent   a SCH_BASE_FRAME parent window.
+     * @param aPreselect is the library ID of the symbol to select.
+     * @param aFilter is the filter to apply to the dialog.
+     * @param aHistoryList is the list of previously chosen symbols.
+     * @param aAlreadyPlaced is a list of already placed symbols.
      * @param aAllowFieldEdits  if false, all functions that allow the user to edit fields
      *                          (currently just footprint selection) will not be available.
      * @param aShowFootprints   if false, all footprint preview and selection features are
      *                          disabled. This forces aAllowFieldEdits false too.
+     * @param[out] aCancelled is the cancel status of the dialog close.
      */
     DIALOG_SYMBOL_CHOOSER( SCH_BASE_FRAME* aParent, const LIB_ID* aPreselect,
                            const SYMBOL_LIBRARY_FILTER* aFilter,
@@ -62,6 +67,7 @@ public:
      * default is desired (usually 1).
      *
      * @param aUnit if not NULL, the selected unit is filled in here.
+     * @param aBodyStyle
      * @return the #LIB_ID of the symbol that has been selected.
      */
     LIB_ID GetSelectedLibId( int* aUnit = nullptr, int* aBodyStyle = nullptr ) const;
@@ -77,6 +83,8 @@ public:
     bool GetPlaceAllUnits() { return m_useUnits->GetValue(); }
 
     PANEL_SYMBOL_CHOOSER* GetChooserPanel() const { return m_chooserPanel; }
+
+    bool TransferDataToWindow() override;
 
 public:
     static std::mutex         g_Mutex;

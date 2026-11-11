@@ -19,6 +19,10 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include "footprint_editor_control.h"
+
+#include <memory>
+
 #include <advanced_config.h>
 #include <string_utils.h>
 #include <pgm_base.h>
@@ -34,6 +38,8 @@
 #include <pcbnew_id.h>
 #include <confirm.h>
 #include <kidialog.h>
+#include <wx/debug.h>
+#include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wildcards_and_files_ext.h>
 #include <launch_ext.h> // To default when file manager setting is empty
@@ -47,9 +53,11 @@
 #include <dialogs/dialog_cleanup_graphics.h>
 #include <dialogs/dialog_footprint_checker.h>
 #include <dialogs/dialog_footprint_properties_fp_editor.h>
+#include <dialogs/dialog_footprint_users.h>
 #include <dialogs/dialog_lib_footprint_fields_table.h>
 #include <footprint_wizard_frame.h>
 #include <kiway.h>
+#include <pcb_plotter.h>
 #include <project_pcb.h>
 #include <view/view_controls.h>
 #include <widgets/appearance_controls.h>
@@ -58,15 +66,11 @@
 #include <libraries/library_manager.h>
 #include <wx/dirdlg.h>
 
-#include <memory>
-
-#include "footprint_editor_control.h"
-
 
 FOOTPRINT_EDITOR_CONTROL::FOOTPRINT_EDITOR_CONTROL() :
-    PCB_TOOL_BASE( "pcbnew.ModuleEditor" ),
-    m_frame( nullptr ),
-    m_checkerDialog( nullptr )
+        PCB_TOOL_BASE( "pcbnew.ModuleEditor" ),
+        m_frame( nullptr ),
+        m_checkerDialog( nullptr )
 {
 }
 
@@ -231,9 +235,16 @@ int FOOTPRINT_EDITOR_CONTROL::NewFootprint( const TOOL_EVENT& aEvent )
         return 0;
 
     // Give the new footprint a resolvable identity so it opens in its own tab instead of
-    // overwriting the active one. The legacy single-board path leaves the nickname empty.
-    if( m_frame->GetTabsPanel() && !libraryName.IsEmpty() )
+    // overwriting the active one.
+    if( !libraryName.IsEmpty() )
+    {
         newFootprint->SetFPID( LIB_ID( libraryName, newFootprint->GetFPID().GetLibItemName() ) );
+    }
+    else
+    {
+        newFootprint->SetParent( nullptr );
+        m_frame->CreateUnsavedFootprintTab();
+    }
 
     canvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
     m_frame->AddFootprintToBoard( newFootprint );
@@ -246,6 +257,7 @@ int FOOTPRINT_EDITOR_CONTROL::NewFootprint( const TOOL_EVENT& aEvent )
 
     m_frame->Zoom_Automatique( false );
     m_frame->GetScreen()->SetContentModified();
+    m_frame->OnModify();
 
     tryToSaveFootprintInLibrary( *newFootprint, selected );
 
@@ -258,22 +270,9 @@ int FOOTPRINT_EDITOR_CONTROL::NewFootprint( const TOOL_EVENT& aEvent )
 }
 
 
-int FOOTPRINT_EDITOR_CONTROL::CreateFootprint( const TOOL_EVENT& aEvent )
+int FOOTPRINT_EDITOR_CONTROL::CreateFootprintFromWizard( const TOOL_EVENT& aEvent )
 {
-    LIB_ID selected = m_frame->GetLibTree()->GetSelectedLibId();
-
-    if( m_frame->IsContentModified() )
-    {
-        if( !HandleUnsavedChanges( m_frame, _( "The current footprint has been modified.  "
-                                               "Save changes?" ),
-                                   [&]() -> bool
-                                   {
-                                       return m_frame->SaveFootprint( footprint() );
-                                   } ) )
-        {
-            return 0;
-        }
-    }
+    const LIB_ID selected = m_frame->GetTargetFPID();
 
     if( KIWAY_PLAYER* frame = m_frame->Kiway().Player( FRAME_FOOTPRINT_WIZARD, true, m_frame ) )
     {
@@ -286,7 +285,15 @@ int FOOTPRINT_EDITOR_CONTROL::CreateFootprint( const TOOL_EVENT& aEvent )
 
             if( newFootprint )    // i.e. if create footprint command is OK
             {
-                m_frame->Clear_Pcb( false );
+                if( !m_frame->BeginNewFootprint( selected.GetLibNickname() ) )
+                {
+                    delete newFootprint;
+                    wizard->Destroy();
+                    return 0;
+                }
+
+                newFootprint->SetParent( nullptr );
+                m_frame->CreateUnsavedFootprintTab();
 
                 canvas()->GetViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
                 //  Add the new object to board
@@ -540,9 +547,10 @@ int FOOTPRINT_EDITOR_CONTROL::RenameFootprint( const TOOL_EVENT& aEvent )
                 if( footprint->GetValue() == oldName )
                     footprint->SetValue( newName );
 
-                m_frame->SaveFootprintInLibrary( footprint, libraryName );
-
+                // Both names are one file on a case-insensitive filesystem.
                 adapter->DeleteFootprint( libraryName, oldName );
+
+                m_frame->SaveFootprintInLibrary( footprint, libraryName );
             }
             catch( const IO_ERROR& ioe )
             {
@@ -577,12 +585,8 @@ int FOOTPRINT_EDITOR_CONTROL::DeleteFootprint( const TOOL_EVENT& aEvent )
 
     if( frame->DeleteFootprintFromLibrary( fpID, true ) )
     {
-        // Close only the deleted footprint's tab, leaving the others open. Without a tab strip, fall
-        // back to clearing the shared board when the deleted footprint is the one on screen.
-        if( frame->GetTabsPanel() )
-            frame->CloseFootprintTab( fpID );
-        else if( fpID == frame->GetLoadedFPID() )
-            frame->Clear_Pcb( false );
+        // Close only the deleted footprint's tab, leaving the others open.
+        frame->CloseFootprintTab( fpID );
 
         frame->SyncLibraryTree( true );
     }
@@ -594,11 +598,6 @@ int FOOTPRINT_EDITOR_CONTROL::DeleteFootprint( const TOOL_EVENT& aEvent )
 int FOOTPRINT_EDITOR_CONTROL::ImportFootprint( const TOOL_EVENT& aEvent )
 {
     bool is_last_fp_from_brd = m_frame->IsCurrentFPFromBoard();
-
-    // The import opens in its own tab, leaving the open documents alone; only the legacy single-board
-    // path has to clear first
-    if( !m_frame->GetTabsPanel() && !m_frame->Clear_Pcb( true ) )
-        return -1;                  // this command is aborted
 
     getViewControls()->SetCrossHairCursorPosition( VECTOR2D( 0, 0 ), false );
 
@@ -628,6 +627,41 @@ int FOOTPRINT_EDITOR_CONTROL::ExportFootprint( const TOOL_EVENT& aEvent )
 {
     if( FOOTPRINT* fp = m_frame->GetBoard()->GetFirstFootprint() )
         m_frame->ExportFootprint( fp );
+
+    return 0;
+}
+
+
+int FOOTPRINT_EDITOR_CONTROL::ExportFootprintAsSVG( const TOOL_EVENT& aEvent )
+{
+    FOOTPRINT* fp = m_frame->GetBoard()->GetFirstFootprint();
+
+    if( !fp )
+    {
+        wxMessageBox( _( "No footprint to export" ) );
+        return 0;
+    }
+
+    wxFileName fn( fp->GetFPID().GetLibItemName() );
+    fn.SetExt( FILEEXT::SVGFileExtension );
+
+    wxString pro_dir = wxPathOnly( m_frame->Prj().GetProjectFullName() );
+
+    wxString fullFileName = wxFileSelector( _( "SVG File Name" ), pro_dir, fn.GetFullName(), FILEEXT::SVGFileExtension,
+                                            FILEEXT::SVGFileWildcard(), wxFD_SAVE, m_frame );
+
+    if( !fullFileName.IsEmpty() )
+    {
+        PCB_PLOT_PARAMS plotOpts;
+        plotOpts.SetFormat( PLOT_FORMAT::SVG );
+        plotOpts.SetColorSettings( m_frame->GetColorSettings() );
+        plotOpts.SetScale( 1.0 );
+        plotOpts.SetAutoScale( false );
+
+        LSEQ layersToPlot = LSET::AllLayersMask().SeqStackupForPlotting();
+
+        PlotFootprintToSVG( *fp, m_frame->Prj(), nullptr, plotOpts, layersToPlot, LSEQ(), fullFileName );
+    }
 
     return 0;
 }
@@ -987,13 +1021,6 @@ void FOOTPRINT_EDITOR_CONTROL::editFootprintPropertiesFromLibrary( const LIB_ID&
 }
 
 
-int FOOTPRINT_EDITOR_CONTROL::DefaultPadProperties( const TOOL_EVENT& aEvent )
-{
-    getEditFrame<FOOTPRINT_EDIT_FRAME>()->ShowPadPropertiesDialog( nullptr );
-    return 0;
-}
-
-
 int FOOTPRINT_EDITOR_CONTROL::CleanupGraphics( const TOOL_EVENT& aEvent )
 {
     FOOTPRINT_EDIT_FRAME* editFrame = getEditFrame<FOOTPRINT_EDIT_FRAME>();
@@ -1016,6 +1043,20 @@ int FOOTPRINT_EDITOR_CONTROL::CheckFootprint( const TOOL_EVENT& aEvent )
         m_checkerDialog->Show( true );
     }
 
+    return 0;
+}
+
+
+int FOOTPRINT_EDITOR_CONTROL::ShowFootprintUsers( const TOOL_EVENT& aEvent )
+{
+    const FOOTPRINT* footprint = m_frame->GetBoard()->GetFirstFootprint();
+
+    if( !footprint )
+        return 0;
+
+    DIALOG_FOOTPRINT_USERS dlg( m_frame, m_frame->Kiway(), m_frame->GetLoadedFPID(), footprint->GetPinCount() );
+
+    dlg.ShowModal();
     return 0;
 }
 
@@ -1179,7 +1220,8 @@ void FOOTPRINT_EDITOR_CONTROL::setTransitions()
 {
     // clang-format off
     Go( &FOOTPRINT_EDITOR_CONTROL::NewFootprint,         PCB_ACTIONS::newFootprint.MakeEvent() );
-    Go( &FOOTPRINT_EDITOR_CONTROL::CreateFootprint,      PCB_ACTIONS::createFootprint.MakeEvent() );
+    Go( &FOOTPRINT_EDITOR_CONTROL::CreateFootprintFromWizard,
+        PCB_ACTIONS::createFootprint.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::Save,                 ACTIONS::save.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::SaveAs,               ACTIONS::saveAs.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::Revert,               ACTIONS::revert.MakeEvent() );
@@ -1195,6 +1237,7 @@ void FOOTPRINT_EDITOR_CONTROL::setTransitions()
 
     Go( &FOOTPRINT_EDITOR_CONTROL::ImportFootprint,      PCB_ACTIONS::importFootprint.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::ExportFootprint,      PCB_ACTIONS::exportFootprint.MakeEvent() );
+    Go( &FOOTPRINT_EDITOR_CONTROL::ExportFootprintAsSVG, PCB_ACTIONS::exportFootprintAsSVG.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::CompareLibraryWithFile,
         PCB_ACTIONS::compareFpLibraryWithFile.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::ShowLibraryFieldsTable,
@@ -1208,6 +1251,7 @@ void FOOTPRINT_EDITOR_CONTROL::setTransitions()
     Go( &FOOTPRINT_EDITOR_CONTROL::CleanupGraphics,      PCB_ACTIONS::cleanupGraphics.MakeEvent() );
 
     Go( &FOOTPRINT_EDITOR_CONTROL::CheckFootprint,       PCB_ACTIONS::checkFootprint.MakeEvent() );
+    Go( &FOOTPRINT_EDITOR_CONTROL::ShowFootprintUsers,   PCB_ACTIONS::showFootprintUsers.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::RepairFootprint,      PCB_ACTIONS::repairFootprint.MakeEvent() );
 
     Go( &FOOTPRINT_EDITOR_CONTROL::NextTab,              PCB_ACTIONS::nextFootprintTab.MakeEvent() );
@@ -1215,7 +1259,6 @@ void FOOTPRINT_EDITOR_CONTROL::setTransitions()
     Go( &FOOTPRINT_EDITOR_CONTROL::CloseTab,             PCB_ACTIONS::closeFootprintTab.MakeEvent() );
 
     Go( &FOOTPRINT_EDITOR_CONTROL::Properties,           PCB_ACTIONS::footprintProperties.MakeEvent() );
-    Go( &FOOTPRINT_EDITOR_CONTROL::DefaultPadProperties, PCB_ACTIONS::defaultPadProperties.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::ToggleLayersManager,  PCB_ACTIONS::showLayersManager.MakeEvent() );
     Go( &FOOTPRINT_EDITOR_CONTROL::ToggleProperties,     ACTIONS::showProperties.MakeEvent() );
     // clang-format on

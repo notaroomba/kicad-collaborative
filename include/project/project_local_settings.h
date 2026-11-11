@@ -34,7 +34,7 @@ class PROJECT;
 struct KICOMMON_API PROJECT_FILE_STATE
 {
     wxString fileName;
-    bool open;
+    bool open = false;
     struct WINDOW_STATE window;
 };
 
@@ -46,7 +46,7 @@ struct KICOMMON_API PROJECT_FILE_STATE
  *
  * Examples include layer visibility, recently-used design entry settings, and so on.
  *
- * The backing store is a JSON file named <project>.kicad_prl
+ * The backing store is a JSON file named \<project\>.kicad_prl
  *
  * This file doesn't need to exist for a project to be loaded.  It will be created on-demand if
  * any of the things stored here are modified by the user.
@@ -141,6 +141,7 @@ public:
     double m_ZoneOpacity;      ///< Opacity override for filled zones
     double m_ShapeOpacity;     ///< Opacity override for graphic shapes
     double m_ImageOpacity;     ///< Opacity override for user images
+    double m_OutsideGroupOpacity; ///< Opacity override for items outside the entered group
 
     /**
      * A list of netnames that have been manually hidden in the board editor.

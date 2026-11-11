@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <atomic>
 #include <stack>
 #include <vector>
 #include <wx/filefn.h>
@@ -76,8 +77,17 @@
 static const wxChar DanglingProfileMask[] = wxT( "DANGLING_PROFILE" );
 
 
+static uint64_t nextConnectivityId()
+{
+    static std::atomic<uint64_t> lastId{ 0 };
+    return ++lastId;
+}
+
+
 SCH_SCREEN::SCH_SCREEN( EDA_ITEM* aParent ) :
     BASE_SCREEN( aParent, SCH_SCREEN_T ),
+    m_connectivityId( nextConnectivityId() ),
+    m_connectivitySource( std::make_shared<CONNECTIVITY_SOURCE>( CONNECTIVITY_SOURCE{ this } ) ),
     m_fileFormatVersionAtLoad( 0 ),
     m_paper( PAGE_SIZE_TYPE::A4 ),
     m_isReadOnly( false ),
@@ -97,6 +107,7 @@ SCH_SCREEN::SCH_SCREEN( EDA_ITEM* aParent ) :
 
 SCH_SCREEN::~SCH_SCREEN()
 {
+    m_connectivitySource->screen = nullptr;
     clearLibSymbols();
     FreeDrawList();
 }
@@ -271,6 +282,12 @@ void SCH_SCREEN::Append( SCH_ITEM* aItem, bool aUpdateLibSymbol )
         }
 
         m_rtree.insert( aItem );
+
+        if( IsConnectivitySource( aItem ) )
+            BumpConnectivityRevision( aItem->Type() );
+        else
+            m_connectivityItems.reset();
+
         --m_modification_sync;
     }
 }
@@ -299,6 +316,7 @@ void SCH_SCREEN::Clear( bool aFree )
     else
     {
         m_rtree.clear();
+        BumpConnectivityRevision();
     }
 
     // Clear the project settings
@@ -310,6 +328,8 @@ void SCH_SCREEN::Clear( bool aFree )
 
 void SCH_SCREEN::FreeDrawList()
 {
+    BumpConnectivityRevision();
+
     // We don't know which order we will encounter dependent items (e.g. pins or fields), so
     // we store the items to be deleted until we've fully cleared the tree before deleting
     std::vector<SCH_ITEM*> delete_list;
@@ -334,41 +354,58 @@ void SCH_SCREEN::Update( SCH_ITEM* aItem, bool aUpdateLibSymbol )
 }
 
 
+void SCH_SCREEN::UpdateDisplayBounds( SCH_ITEM* aItem )
+{
+    if( m_rtree.remove( aItem ) )
+        m_rtree.insert( aItem );
+}
+
+
 bool SCH_SCREEN::Remove( SCH_ITEM* aItem, bool aUpdateLibSymbol )
 {
     bool retv = m_rtree.remove( aItem );
+
+    if( retv && IsConnectivitySource( aItem ) )
+        BumpConnectivityRevision( aItem->Type() );
+    else if( retv )
+        m_connectivityItems.reset();
 
     // Check if the library symbol for the removed schematic symbol is still required.
     if( retv && aItem->Type() == SCH_SYMBOL_T && aUpdateLibSymbol )
     {
         SCH_SYMBOL* removedSymbol = static_cast<SCH_SYMBOL*>( aItem );
 
-        bool removeUnusedLibSymbol = true;
-
-        for( SCH_ITEM* item : Items().OfType( SCH_SYMBOL_T ) )
-        {
-            SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
-
-            if( removedSymbol->GetSchSymbolLibraryName() == symbol->GetSchSymbolLibraryName() )
-            {
-                removeUnusedLibSymbol = false;
-                break;
-            }
-        }
-
-        if( removeUnusedLibSymbol )
-        {
-            auto it = m_libSymbols.find( removedSymbol->GetSchSymbolLibraryName() );
-
-            if( it != m_libSymbols.end() )
-            {
-                delete it->second;
-                m_libSymbols.erase( it );
-            }
-        }
+        PruneUnusedLibSymbol( removedSymbol->GetSchSymbolLibraryName() );
     }
 
     return retv;
+}
+
+
+bool SCH_SCREEN::PruneUnusedLibSymbol( const wxString& aName )
+{
+    for( SCH_ITEM* item : Items().OfType( SCH_SYMBOL_T ) )
+    {
+        SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( item );
+
+        if( symbol->GetSchSymbolLibraryName() == aName )
+            return false;
+
+        for( const LIB_ID& alternate : symbol->GetVariantSymbolOverrides() )
+        {
+            if( alternate.Format().wx_str() == aName )
+                return false;
+        }
+    }
+
+    if( auto it = m_libSymbols.find( aName ); it != m_libSymbols.end() )
+    {
+        delete it->second;
+        m_libSymbols.erase( it );
+        return true;
+    }
+
+    return false;
 }
 
 
@@ -710,16 +747,21 @@ bool SCH_SCREEN::IsTerminalPoint( const VECTOR2I& aPosition, int aLayer ) const
 }
 
 
-void SCH_SCREEN::UpdateSymbolLinks( REPORTER* aReporter )
+void SCH_SCREEN::UpdateSymbolLinks( REPORTER* aReporter, LEGACY_SYMBOL_LIBS* aLegacyLibs,
+                                   SYMBOL_LIBRARY_ADAPTER* aLibraries )
 {
     wxCHECK_RET( Schematic(), "Cannot call SCH_SCREEN::UpdateSymbolLinks with no SCHEMATIC" );
 
     wxString msg;
     std::vector<SCH_SYMBOL*> symbols;
-    SYMBOL_LIBRARY_ADAPTER* libs = PROJECT_SCH::SymbolLibAdapter( &Schematic()->Project() );
+    SYMBOL_LIBRARY_ADAPTER* libs = aLibraries ? aLibraries
+                                            : PROJECT_SCH::SymbolLibAdapter( &Schematic()->Project() );
 
-    // This will be a nullptr if an s-expression schematic is loaded.
-    LEGACY_SYMBOL_LIBS* legacyLibs = PROJECT_SCH::LegacySchLibs( &Schematic()->Project() );
+    // Headless GUI callers can share an adapter with the editor's preload worker.
+    if( aLegacyLibs )
+        libs->AbortAsyncLoad();
+
+    LEGACY_SYMBOL_LIBS* legacyLibs = aLegacyLibs ? aLegacyLibs : PROJECT_SCH::LegacySchLibs( &Schematic()->Project() );
 
     for( SCH_ITEM* item : Items().OfType( SCH_SYMBOL_T ) )
         symbols.push_back( static_cast<SCH_SYMBOL*>( item ) );
@@ -754,7 +796,7 @@ void SCH_SCREEN::UpdateSymbolLinks( REPORTER* aReporter )
             continue;
         }
 
-        if( !symbol->GetLibId().IsValid() )
+        if( !symbol->GetLibId().IsValid() && !( aLegacyLibs && symbol->GetLibId().IsLegacy() ) )
         {
             if( aReporter )
             {
@@ -874,6 +916,8 @@ void SCH_SCREEN::UpdateSymbolLinks( REPORTER* aReporter )
 
 void SCH_SCREEN::UpdateLocalLibSymbolLinks()
 {
+    BumpConnectivityRevision();
+
     std::vector<SCH_SYMBOL*> symbols;
 
     for( SCH_ITEM* item : Items().OfType( SCH_SYMBOL_T ) )
@@ -896,10 +940,74 @@ void SCH_SCREEN::UpdateLocalLibSymbolLinks()
 }
 
 
-void SCH_SCREEN::SetConnectivityDirty()
+void SCH_SCREEN::BumpConnectivityRevision( KICAD_T aChangedType )
 {
-    for( SCH_ITEM* item : Items() )
-        item->SetConnectivityDirty( true );
+    ++m_connectivityRevision;
+
+    if( aChangedType != SCH_LINE_T )
+        ++m_connectivitySymbolRevision;
+
+    // Packages spanning sheets are found from the symbols on every screen
+    if( aChangedType == SCH_SYMBOL_T || aChangedType == TYPE_NOT_INIT )
+        SCH_SYMBOL::BumpRefGeneration();
+
+    m_connectivityItems.reset();
+}
+
+
+bool SCH_SCREEN::IsConnectivitySource( const SCH_ITEM* aItem )
+{
+    switch( aItem->Type() )
+    {
+    case SCH_MARKER_T:
+    case SCH_BITMAP_T:
+    case SCH_SHAPE_T:
+    case SCH_GROUP_T:
+        return false;
+
+    case SCH_LINE_T:
+        return aItem->IsConnectable();
+
+    default:
+        return true;
+    }
+}
+
+
+SCH_ITEM* SCH_SCREEN::GetConnectivityItem( const KIID& aId ) const
+{
+    if( !m_connectivityItems )
+    {
+        auto& index = m_connectivityItems.emplace();
+
+        const auto add =
+                [&]( SCH_ITEM* aItem )
+                {
+                    auto [it, inserted] = index.emplace( aItem->m_Uuid, aItem );
+
+                    if( !inserted && it->second != aItem )
+                        it->second = nullptr;
+                };
+
+        for( SCH_ITEM* item : Items() )
+        {
+            add( item );
+
+            if( item->Type() == SCH_SYMBOL_T || item->Type() == SCH_SHEET_T )
+            {
+                item->RunOnChildren(
+                        [&]( SCH_ITEM* aChild )
+                        {
+                            if( aChild->IsConnectable() )
+                                add( aChild );
+                        },
+                        RECURSE_MODE::NO_RECURSE );
+            }
+        }
+    }
+
+    const auto it = m_connectivityItems->find( aId );
+    return it == m_connectivityItems->end() ? nullptr : it->second;
 }
 
 
@@ -1071,8 +1179,9 @@ void SCH_SCREEN::Plot( PLOTTER* aPlotter, const SCH_PLOT_OPTS& aPlotOpts, const 
             field.ClearRenderCache();
             field.Plot( aPlotter, false, aPlotOpts, sym->GetUnit(), sym->GetBodyStyle(), { 0, 0 }, dnp );
 
-            if( sym->IsSymbolLikePowerLocalLabel() && field.GetId() == FIELD_T::VALUE
-                && ( field.IsVisible() || field.IsForceVisible() ) )
+            if( sym->IsSymbolLikePowerLocalLabel()
+                    && field.GetId() == FIELD_T::VALUE
+                    && ( field.IsVisible() || field.IsForceVisible() ) )
             {
                 sym->PlotLocalPowerIconShape( aPlotter );
             }
@@ -1477,6 +1586,44 @@ void SCH_SCREEN::AddLibSymbol( const wxString& aKey, std::unique_ptr<LIB_SYMBOL>
 }
 
 
+void SCH_SCREEN::IncludeVariantSymbols( const SCH_SYMBOL& aSymbol, bool aRefresh )
+{
+    for( const LIB_ID& alternate : aSymbol.GetVariantSymbolOverrides() )
+    {
+        // Overriding to the symbol's own link changes nothing
+        if( alternate == aSymbol.GetLibId() )
+            continue;
+
+        wxString key = alternate.Format().wx_str();
+
+        if( m_libSymbols.contains( key ) )
+        {
+            if( !aRefresh )
+                continue;
+
+            // A base symbol sharing the key keeps its own copy
+            bool usedAsBase = false;
+
+            for( SCH_ITEM* item : Items().OfType( SCH_SYMBOL_T ) )
+                usedAsBase |= static_cast<SCH_SYMBOL*>( item )->GetSchSymbolLibraryName() == key;
+
+            if( usedAsBase )
+                continue;
+        }
+
+        if( std::unique_ptr<LIB_SYMBOL> libSymbol = aSymbol.LoadAlternateFromLibrary( alternate ) )
+        {
+            libSymbol->SetParent();
+            AddLibSymbol( key, std::move( libSymbol ) );
+
+            // Other instances may hold the replaced definition in their resolved cache
+            for( SCH_ITEM* item : Items().OfType( SCH_SYMBOL_T ) )
+                item->ClearCaches();
+        }
+    }
+}
+
+
 void SCH_SCREEN::FixupEmbeddedData()
 {
     SCHEMATIC* schematic = Schematic();
@@ -1748,6 +1895,19 @@ bool SCH_SCREEN::HasInstanceDataFromOtherProjects() const
         const std::vector<SCH_SYMBOL_INSTANCE> symbolInstances = symbol->GetInstances();
 
         for( const SCH_SYMBOL_INSTANCE& instance : symbolInstances )
+        {
+            if( !hierarchy.HasPath( instance.m_Path ) )
+                return true;
+        }
+    }
+
+    for( const SCH_ITEM* item : Items().OfType( SCH_SHEET_T ) )
+    {
+        const SCH_SHEET* sheet = static_cast<const SCH_SHEET*>( item );
+
+        const std::vector<SCH_SHEET_INSTANCE> sheetInstances = sheet->GetInstances();
+
+        for( const SCH_SHEET_INSTANCE& instance : sheetInstances )
         {
             if( !hierarchy.HasPath( instance.m_Path ) )
                 return true;
@@ -2203,7 +2363,7 @@ int SCH_SCREENS::ReplaceDuplicateTimeStamps()
     if( items.size() < 2 )
         return 0;
 
-    for( EDA_ITEM* item : items )
+    for( SCH_ITEM* item : items )
     {
         if( !unique_stamps.insert( item ).second )
         {
@@ -2211,6 +2371,10 @@ int SCH_SCREENS::ReplaceDuplicateTimeStamps()
             // deterministic about it rather than to have duplicate UUIDs with random
             // side-effects.
             const_cast<KIID&>( item->m_Uuid ) = KIID();
+
+            if( SCH_SCREEN* screen = item->GetParentScreen() )
+                screen->BumpConnectivityRevision();
+
             count++;
 
             // @todo If the item is a sheet, we need to descend the hierarchy from the sheet
@@ -2296,12 +2460,8 @@ void SCH_SCREENS::UpdateSymbolLinks( REPORTER* aReporter )
 
     wxCHECK_RET( sch, "Null schematic in SCH_SCREENS::UpdateSymbolLinks" );
 
-    SCH_SHEET_LIST sheets = sch->Hierarchy();
-
-    // All of the library symbols have been replaced with copies so the connection graph
-    // pointers are stale.
-    if( sch->ConnectionGraph() )
-        sch->ConnectionGraph()->Recalculate( sheets, true );
+    // Replacing library symbols invalidates pointers retained by connectivity.
+    sch->RebuildConnectivity();
 }
 
 

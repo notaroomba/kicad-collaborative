@@ -19,6 +19,7 @@
 
 #include <plotters/plotter_png.h>
 #include <geometry/shape_poly_set.h>
+#include <geometry/shape_rect.h>
 #include <convert_basic_shapes_to_polygon.h>
 #include <trigo.h>
 #include <wx/image.h>
@@ -162,6 +163,11 @@ bool PNG_PLOTTER::SaveFile( const wxString& aPath )
 
 void PNG_PLOTTER::SetCurrentLineWidth( int aWidth, void* aData )
 {
+    if( aWidth == DO_NOT_SET_LINE_WIDTH )
+        return;
+    else if( aWidth == USE_DEFAULT_LINE_WIDTH )
+        aWidth = m_renderSettings->GetDefaultPenWidth();
+
     if( aWidth == m_currentPenWidth )
         return;
 
@@ -290,6 +296,16 @@ void PNG_PLOTTER::Rect( const VECTOR2I& p1, const VECTOR2I& p2, FILL_T aFill, in
 {
     if( !m_context )
         return;
+
+    if( aCornerRadius > 0 )
+    {
+        BOX2I box( p1, VECTOR2I( p2.x - p1.x, p2.y - p1.y ) );
+        box.Normalize();
+        SHAPE_RECT rect( box );
+        rect.SetRadius( aCornerRadius );
+        PLOTTER::PlotPoly( rect.Outline(), aFill, aWidth, nullptr );
+        return;
+    }
 
     VECTOR2D start = userToDeviceCoordinates( p1 );
     VECTOR2D end = userToDeviceCoordinates( p2 );
@@ -425,7 +441,7 @@ void PNG_PLOTTER::PlotPoly( const std::vector<VECTOR2I>& aCornerList, FILL_T aFi
 }
 
 
-void PNG_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor )
+void PNG_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor, double aAlpha )
 {
     if( !m_context || !aImage.IsOk() )
         return;
@@ -501,7 +517,12 @@ void PNG_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double
     cairo_translate( m_context, pos.x, pos.y );
     cairo_scale( m_context, drawW / imgW, drawH / imgH );
     cairo_set_source_surface( m_context, imgSurface, 0, 0 );
-    cairo_paint( m_context );
+
+    if( aAlpha < 1.0 )
+        cairo_paint_with_alpha( m_context, aAlpha );
+    else
+        cairo_paint( m_context );
+
     cairo_restore( m_context );
 
     cairo_surface_destroy( imgSurface );

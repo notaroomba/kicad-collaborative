@@ -70,6 +70,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_footprint_properties_base.cpp
     dialogs/dialog_footprint_properties_fp_editor.cpp
     dialogs/dialog_footprint_properties_fp_editor_base.cpp
+    dialogs/dialog_footprint_users.cpp
+    dialogs/dialog_footprint_users_base.cpp
     dialogs/dialog_enum_pads.cpp
     dialogs/dialog_enum_pads_base.cpp
     dialogs/dialog_exchange_footprints.cpp
@@ -78,6 +80,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_export_2581_base.cpp
     dialogs/dialog_export_2581_bom.cpp
     dialogs/dialog_export_2581_bom_base.cpp
+    dialogs/panel_fab_export_content.cpp
+    dialogs/panel_fab_export_content_base.cpp
     dialogs/dialog_export_idf.cpp
     dialogs/dialog_export_idf_base.cpp
     dialogs/dialog_export_step.cpp
@@ -113,8 +117,8 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_global_edit_teardrops_base.cpp
     dialogs/dialog_global_edit_text_and_graphics.cpp
     dialogs/dialog_global_edit_text_and_graphics_base.cpp
-    dialogs/dialog_griditem_properties.cpp
-    dialogs/dialog_griditem_properties_base.cpp
+    dialogs/dialog_grid_item_properties.cpp
+    dialogs/dialog_grid_item_properties_base.cpp
     dialogs/geom_field_helpers.cpp
     dialogs/dialog_push_pad_properties.cpp
     dialogs/dialog_push_pad_properties_base.cpp
@@ -159,6 +163,14 @@ set( PCBNEW_DIALOGS
     dialogs/dialog_render_job.cpp
     dialogs/dialog_swap_layers.cpp
     dialogs/dialog_swap_layers_base.cpp
+    dialogs/dialog_generated_table_properties.cpp
+    dialogs/dialog_generated_table_properties_base.cpp
+    dialogs/dialog_drill_groups.cpp
+    dialogs/dialog_drill_groups_base.cpp
+    dialogs/panel_drill_chart_options.cpp
+    dialogs/panel_drill_chart_options_base.cpp
+    dialogs/panel_setup_drill_chart.cpp
+    dialogs/panel_setup_drill_chart_base.cpp
     dialogs/dialog_table_properties.cpp
     dialogs/dialog_table_properties_base.cpp
     dialogs/dialog_tablecell_properties.cpp
@@ -245,6 +257,8 @@ set( PCBNEW_DIALOGS
     dialogs/panel_setup_zones_base.cpp
     dialogs/panel_setup_zone_hatch_offsets.cpp
     dialogs/panel_setup_zone_hatch_offsets_base.cpp
+    dialogs/panel_zone_conversion.cpp
+    dialogs/panel_zone_conversion_base.cpp
     dialogs/panel_zone_properties.cpp
     dialogs/panel_zone_properties_base.cpp
     footprint_wizard.cpp
@@ -422,11 +436,13 @@ set( PCBNEW_CLASS_SRCS
     board_statistics.cpp
     board_statistics_report.cpp
     board_tables/board_characteristics_table.cpp
-    board_tables/board_stackup_table.cpp
     build_BOM_from_board.cpp
     cleanup_item.cpp
     convert_shape_list_to_polygon.cpp
     cross-probing.cpp
+    downgrade/board_downgrade.cpp
+    pcb_io/kicad_sexpr/writers/pcb_writer_v9.cpp
+    pcb_io/kicad_sexpr/writers/pcb_writer_v10.cpp
     edit_track_width.cpp
     files.cpp
     footprint_info_impl.cpp
@@ -446,6 +462,9 @@ set( PCBNEW_CLASS_SRCS
     graphics_cleaner.cpp
     grid_layer_box_helpers.cpp
     grid_layer_box_helpers.h
+    import_design_rules.cpp
+    import_local_footprint_libs.cpp
+    import_net_reconciler.cpp
     initpcb.cpp
     layer_pairs.cpp
     load_select_footprint.cpp
@@ -465,6 +484,7 @@ set( PCBNEW_CLASS_SRCS
     pcbplot.cpp
     plot_board_layers.cpp
     plot_brditems_plotter.cpp
+    ref_suffix_split.cpp
     specctra_import_export/specctra.cpp
     specctra_import_export/specctra_export.cpp
     specctra_import_export/specctra_import.cpp
@@ -480,8 +500,10 @@ set( PCBNEW_CLASS_SRCS
     edit_zone_helpers.cpp
 
     api/api_handler_board.cpp
+    api/api_handler_fp_libraries.cpp
     api/api_handler_footprint.cpp
     api/api_handler_pcb.cpp
+    api/api_handler_pcb_tasks.cpp
     api/footprint_context.cpp
     api/headless_pcb_context.cpp
     api/headless_footprint_context.cpp
@@ -491,6 +513,11 @@ set( PCBNEW_CLASS_SRCS
     collab/pcb_collab_tool.cpp
 
     tools/array_tool.cpp
+    tools/block_drag_capability.cpp
+    tools/block_drag_dependents.cpp
+    tools/block_drag_displacement.cpp
+    tools/block_drag_pick.cpp
+    tools/block_drag_validation.cpp
     tools/board_editor_control.cpp
     tools/board_inspection_tool.cpp
     tools/board_reannotate_tool.cpp
@@ -517,6 +544,7 @@ set( PCBNEW_CLASS_SRCS
     tools/pcb_control.cpp
     tools/pcb_design_block_control.cpp
     tools/pcb_group_tool.cpp
+    tools/pcb_handle_key.cpp
     tools/pcb_picker_tool.cpp
     tools/pcb_selection.cpp
     tools/pcb_selection_conditions.cpp
@@ -554,6 +582,8 @@ set( PCBNEW_CLASS_SRCS
     widgets/net_inspector_panel.cpp
     widgets/pcb_net_inspector_panel.cpp
     widgets/vertex_editor_pane.cpp
+    widgets/via_cross_section_geometry.cpp
+    widgets/via_cross_section_preview.cpp
 
     component_classes/component_class.cpp
     component_classes/component_class_cache_proxy.cpp
@@ -577,7 +607,6 @@ set( PCBNEW_DIFF_MERGE_SRCS
 set( PCBNEW_SRCS
     ${PCBNEW_MICROWAVE_SRCS}
     ${PCBNEW_CLASS_SRCS}
-    ${PCBNEW_DIALOGS}
     ${PCBNEW_GIT_SRCS}
     ${PCBNEW_DIFF_MERGE_SRCS}
     )
@@ -700,9 +729,11 @@ add_subdirectory( pcb_io/odbpp )
 add_subdirectory( pcb_io/pads )
 add_subdirectory( pcb_io/sprint_layout )
 add_subdirectory( pcb_io/diptrace )
+add_subdirectory( pcb_io/easypc )
 add_subdirectory( pcb_io/autotrax )
+add_subdirectory( pcb_io/target3001 )
 
-set( PCBNEW_IO_LIBRARIES pcad2kicadpcb allegro2pcbnew altium2pcbnew cadstar2pcbnew easyeda easyedapro fabmaster ipc2581 odbpp pads2pcbnew sprint_layout2pcbnew diptrace2pcbnew autotrax2pcbnew CACHE INTERNAL "")
+set( PCBNEW_IO_LIBRARIES pcad2kicadpcb allegro2pcbnew altium2pcbnew cadstar2pcbnew easyeda easyedapro fabmaster ipc2581 odbpp pads2pcbnew sprint_layout2pcbnew diptrace2pcbnew easypc2pcbnew autotrax2pcbnew target30012pcbnew CACHE INTERNAL "")
 
 #a very small program launcher for pcbnew_kiface
 add_executable( pcbnew WIN32 MACOSX_BUNDLE
@@ -802,7 +833,6 @@ set( PCBNEW_KIFACE_LIBRARIES
     common
     gal
     core
-    idf3
     markdown_lib
     ${PCBNEW_IO_LIBRARIES}
     ${wxWidgets_LIBRARIES}
@@ -831,6 +861,9 @@ if( WIN32 )
 #Copy dynamic lib dependency to build dir to allow running directly
     add_custom_command( TARGET pcbnew POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3dsg>" "$<TARGET_FILE_DIR:pcbnew>"
+        )
+    add_custom_command( TARGET pcbnew POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3d_import>" "$<TARGET_FILE_DIR:pcbnew>"
         )
     add_custom_command( TARGET pcbnew POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:pcbnew>"

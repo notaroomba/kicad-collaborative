@@ -22,6 +22,7 @@
 
 #include <confirm.h>
 #include <dialogs/dialog_schematic_setup.h>
+#include <dialogs/dialog_erc.h>
 #include <kiway.h>
 #include <symbol_edit_frame.h>
 #include <dialogs/panel_base_display_options.h>
@@ -31,6 +32,7 @@
 #include <project/project_local_settings.h>
 #include <project/net_settings.h>
 #include <sch_edit_frame.h>
+#include <sch_marker.h>
 #include <settings/color_settings.h>
 #include <sch_painter.h>
 #include <connection_graph.h>
@@ -48,6 +50,7 @@
 #include <wildcards_and_files_ext.h>
 #include <drawing_sheet/ds_data_model.h>
 #include <sim/spice_settings.h>
+#include <tool/actions.h>
 #include <tool/tool_manager.h>
 #include <tools/sch_selection_tool.h>
 
@@ -59,7 +62,7 @@ COLOR4D GetLayerColor( SCH_LAYER_ID aLayer )
 }
 
 
-bool SCH_EDIT_FRAME::LoadProjectSettings()
+void SCH_EDIT_FRAME::ApplyProjectFileSettings()
 {
     SCHEMATIC_SETTINGS& settings = Schematic().Settings();
 
@@ -71,8 +74,13 @@ bool SCH_EDIT_FRAME::LoadProjectSettings()
     GetRenderSettings()->m_ShowDNPMarkers = settings.m_ShowDNPMarkers;
     GetRenderSettings()->SetDashLengthRatio( settings.m_DashedLineDashRatio );
     GetRenderSettings()->SetGapLengthRatio( settings.m_DashedLineGapRatio );
+}
 
-    BASE_SCREEN::m_DrawingSheetFileName = settings.m_SchDrawingSheetFileName;
+
+bool SCH_EDIT_FRAME::LoadProjectSettings()
+{
+    ApplyProjectFileSettings();
+    BASE_SCREEN::m_DrawingSheetFileName = Schematic().Settings().m_SchDrawingSheetFileName;
 
     PROJECT_LOCAL_SETTINGS& localSettings = Prj().GetLocalSettings();
 
@@ -141,46 +149,88 @@ void SCH_EDIT_FRAME::ShowSchematicSetupDialog( const wxString& aInitialPage )
 
         Kiway().CommonSettingsChanged( TEXTVARS_CHANGED );
 
-        Prj().IncrementTextVarsTicker();
-        Prj().IncrementNetclassesTicker();
-
-        // CROSS_REF keys deliberately excluded — those are driven by per-item
-        // SCH_COMMIT changes.
-        if( SCHEMATIC_TEXT_VAR_ADAPTER* adapter = Schematic().GetTextVarAdapter() )
-            adapter->Tracker().InvalidateProjectScoped();
-
         Pgm().GetSettingsManager().SaveProject();
 
-        GetRenderSettings()->SetDefaultPenWidth( Schematic().Settings().m_DefaultLineWidth );
-        GetRenderSettings()->m_LabelSizeRatio  = Schematic().Settings().m_LabelSizeRatio;
-        GetRenderSettings()->m_TextOffsetRatio = Schematic().Settings().m_TextOffsetRatio;
-        GetRenderSettings()->m_PinSymbolSize   = Schematic().Settings().m_PinSymbolSize;
-        GetRenderSettings()->m_SymbolLineWidth = Schematic().Settings().m_DefaultLineWidth;
-        GetRenderSettings()->m_ShowDNPMarkers = Schematic().Settings().m_ShowDNPMarkers;
-
-        GetRenderSettings()->SetDashLengthRatio( Schematic().Settings().m_DashedLineDashRatio );
-        GetRenderSettings()->SetGapLengthRatio( Schematic().Settings().m_DashedLineGapRatio );
-
-        GetCanvas()->GetView()->MarkDirty();
-        GetCanvas()->GetView()->UpdateAllItems( KIGFX::REPAINT );
-
-        std::map<wxString, std::vector<wxString>> newAliases = Prj().GetProjectFile().m_BusAliases;
-
-        if( oldAliases != newAliases )
-        {
-            RecalculateConnections( nullptr, GLOBAL_CLEANUP );
-        }
-        else if( CONNECTION_GRAPH* graph = Schematic().ConnectionGraph() )
-        {
-            // No connectivity rebuild ran, so a net-chain netclass override or a deleted/renamed
-            // netclass would otherwise leave the chain-derived assignments stale.  Re-derive them
-            // directly; chain membership is unaffected by the setup dialog.
-            graph->ApplyNetChainNetclasses();
-        }
-
-        RefreshOperatingPointDisplay();
-        GetCanvas()->Refresh();
+        ApplyProjectFileSettings();
+        RefreshProjectSettings( oldAliases != Prj().GetProjectFile().m_BusAliases );
     }
+}
+
+
+void SCH_EDIT_FRAME::RefreshProjectSettings( bool aAliasesChanged )
+{
+    // Net colors and widths resolve through per-net caches
+    Prj().GetProjectFile().NetSettings()->ClearAllCaches();
+    Prj().IncrementTextVarsTicker();
+    Prj().IncrementNetclassesTicker();
+
+    // CROSS_REF keys deliberately excluded — those are driven by per-item
+    // SCH_COMMIT changes.
+    if( SCHEMATIC_TEXT_VAR_ADAPTER* adapter = Schematic().GetTextVarAdapter() )
+        adapter->Tracker().InvalidateProjectScoped();
+
+    ShowAllIntersheetRefs( Schematic().Settings().m_IntersheetRefsShow );
+
+    GetCanvas()->GetView()->MarkDirty();
+    GetCanvas()->GetView()->UpdateAllItems( KIGFX::LAYERS | KIGFX::GEOMETRY | KIGFX::REPAINT );
+
+    if( aAliasesChanged )
+    {
+        // Skip the cleanup pass, which can edit wires and dirty a schematic nobody changed
+        RecalculateConnections( nullptr, GLOBAL_CLEANUP, nullptr, true );
+    }
+    else if( CONNECTION_GRAPH* graph = Schematic().ConnectionGraph() )
+    {
+        // No connectivity rebuild ran, so a net-chain netclass override or a deleted/renamed
+        // netclass would otherwise leave the chain-derived assignments stale.  Re-derive them
+        // directly; chain membership is unaffected by project settings.
+        graph->ApplyNetChainNetclasses();
+    }
+
+    RefreshOperatingPointDisplay();
+    GetCanvas()->Refresh();
+
+    if( m_ercDialog )
+        m_ercDialog->UpdateData();
+}
+
+
+void SCH_EDIT_FRAME::ReloadProjectFileSettings()
+{
+    // Everything this frame copied from the project file and would write back on save
+    ApplyProjectFileSettings();
+    BASE_SCREEN::m_DrawingSheetFileName = Schematic().Settings().m_SchDrawingSheetFileName;
+    LoadDrawingSheet();
+
+    std::vector<SCH_MARKER*> stale = Schematic().ReloadERCExclusions();
+
+    if( !stale.empty() )
+    {
+        m_toolManager->RunAction( ACTIONS::selectionClear );
+
+        std::unordered_set<const EDA_ITEM*> freed( stale.begin(), stale.end() );
+        m_undoList.ForgetItems( freed );
+        m_redoList.ForgetItems( freed );
+    }
+
+    for( SCH_MARKER* marker : stale )
+    {
+        GetCanvas()->GetView()->Remove( marker );
+        delete marker;
+    }
+
+    // Markers the file added are on their screens but not yet in the view
+    GetCanvas()->DisplaySheet( GetCurrentSheet().LastScreen() );
+
+    SCHEMATIC::BUS_ALIAS_RELOAD aliases = Schematic().ReloadProjectBusAliases();
+
+    if( aliases == SCHEMATIC::BUS_ALIAS_RELOAD::TABLE_REMOVED )
+    {
+        ShowInfoBarWarning( _( "The reloaded project file defines no bus aliases. The ones in use are kept "
+                               "and will be saved with the project." ), true );
+    }
+
+    RefreshProjectSettings( aliases == SCHEMATIC::BUS_ALIAS_RELOAD::CHANGED );
 }
 
 
@@ -364,6 +414,8 @@ void SCH_EDIT_FRAME::SaveSettings( APP_SETTINGS_BASE* aCfg )
         cfg->m_AuiPanels.show_properties = propertiesPane.IsShown();
         cfg->m_AuiPanels.properties_splitter = m_propertiesPanel->SplitterProportion();
         cfg->m_AuiPanels.properties_panel_width = m_propertiesPanel->GetSize().x;
+
+        cfg->m_AuiPanels.show_git_commit_pane = m_auimgr.GetPane( GitCommitPaneName() ).IsShown();
 
         wxAuiPaneInfo& netNavigatorPane = m_auimgr.GetPane( NetNavigatorPaneName() );
         cfg->m_AuiPanels.show_net_nav_panel = netNavigatorPane.IsShown();

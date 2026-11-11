@@ -24,6 +24,7 @@
 #include <properties/pg_editors.h>
 #include <properties/pg_properties.h>
 #include <widgets/color_swatch.h>
+#include <widgets/ui_common.h>
 #include <widgets/unit_binder.h>
 #include <bitmaps.h>
 #include <frame_type.h>
@@ -118,6 +119,7 @@ wxPGWindowList PG_UNIT_EDITOR::CreateControls( wxPropertyGrid* aPropGrid, wxPGPr
     else if( dynamic_cast<PGPROPERTY_ANGLE*>( aProperty ) != nullptr )
     {
         m_unitBinder->SetCoordType( ORIGIN_TRANSFORMS::NOT_A_COORD );
+        m_unitBinder->SetDataType( EDA_DATA_TYPE::ANGLE );
         m_unitBinder->SetUnits( EDA_UNITS::DEGREES );
     }
     else if( dynamic_cast<PGPROPERTY_TIME*>( aProperty ) != nullptr )
@@ -134,6 +136,15 @@ wxPGWindowList PG_UNIT_EDITOR::CreateControls( wxPropertyGrid* aPropGrid, wxPGPr
 void PG_UNIT_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) const
 {
     wxVariant var = aProperty->GetValue();
+
+    // Shown as a mix, not blank. Set on the control since the binder would append units
+    if( aProperty->IsValueUnspecified() )
+    {
+        if( wxTextEntry* textEntry = dynamic_cast<wxTextEntry*>( aCtrl ) )
+            textEntry->ChangeValue( INDETERMINATE_STATE );
+
+        return;
+    }
 
     if( PGPROPERTY_ANGLE* angleProp = dynamic_cast<PGPROPERTY_ANGLE*>( aProperty ) )
     {
@@ -153,8 +164,8 @@ void PG_UNIT_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) c
     {
         auto* variantData = static_cast<STD_OPTIONAL_INT_VARIANT_DATA*>( var.GetData() );
 
-        if( variantData->Value().has_value() )
-            m_unitBinder->ChangeValue( variantData->Value().value() );
+        if( variantData->OptValue().has_value() )
+            m_unitBinder->ChangeValue( variantData->OptValue().value() );
         else
             m_unitBinder->ChangeValue( wxEmptyString );
     }
@@ -217,6 +228,10 @@ bool PG_UNIT_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aPr
         return true;
     }
 
+    // A mixed value left as it was is not an edit
+    if( textVal == INDETERMINATE_STATE )
+        return false;
+
     bool changed;
 
     if( dynamic_cast<PGPROPERTY_ANGLE*>( aProperty ) != nullptr )
@@ -237,14 +252,14 @@ bool PG_UNIT_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aPr
         else
         {
             PGPROPERTY_ANGLE* angleProp = static_cast<PGPROPERTY_ANGLE*>( aProperty );
-            double             scaledValue = angle.AsDegrees() * angleProp->GetScale();
+            double            scaledValue = angle.AsDegrees() * angleProp->GetScale();
 
             changed = ( aVariant.IsNull() || scaledValue != aVariant.GetDouble() );
 
             if( changed )
             {
                 aVariant = scaledValue;
-                m_unitBinder->SetValue( angle.AsDegrees() );
+                m_unitBinder->SetDoubleValue( angle.AsDegrees() );
             }
         }
     }
@@ -266,7 +281,7 @@ bool PG_UNIT_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aPr
 
         if( m_unitBinder->IsNull() )
         {
-            changed = ( aVariant.IsNull() || variantData->Value().has_value() );
+            changed = ( aVariant.IsNull() || variantData->OptValue().has_value() );
 
             if( changed )
             {
@@ -276,8 +291,8 @@ bool PG_UNIT_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aPr
         }
         else
         {
-            result = std::optional<int>( m_unitBinder->GetValue() );
-            changed = ( aVariant.IsNull() || result != variantData->Value() );
+            result = std::optional<int>( m_unitBinder->GetIntValue() );
+            changed = ( aVariant.IsNull() || result != variantData->OptValue() );
 
             if( changed )
             {
@@ -298,8 +313,7 @@ bool PG_UNIT_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aPr
         }
     }
 
-    // Changing unspecified always causes event (returning
-    // true here should be enough to trigger it).
+    // Changing unspecified always causes event (returning true here should be enough to trigger it).
     if( !changed && aVariant.IsNull() )
         changed = true;
 
@@ -438,17 +452,19 @@ bool PG_RATIO_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aP
 
         if( textVal.empty() )
         {
-            changed = ( aVariant.IsNull() || variantData->Value().has_value() );
+            changed = ( aVariant.IsNull() || variantData->OptValue().has_value() );
 
             if( changed )
                 aVariant = wxVariant( std::optional<double>() );
         }
         else
         {
-            double dblValue;
+            // One could argue that 1.0 would be a better default for a ratio, but we currently
+            // only use this for solder paste margins, where 0.0 makes more sense.
+            double dblValue = 0.0;
             textVal.ToDouble( &dblValue );
             std::optional<double> result( dblValue );
-            changed = ( aVariant.IsNull() || result != variantData->Value() );
+            changed = ( aVariant.IsNull() || result != variantData->OptValue() );
 
             if( changed )
             {
@@ -459,7 +475,9 @@ bool PG_RATIO_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aP
     }
     else
     {
-        double result;
+        // One could argue that 1.0 would be a better default for a ratio, but we currently
+        // only use this for solder paste margins, where 0.0 makes more sense.
+        double result = 0.0;
         textVal.ToDouble( &result );
         changed = ( aVariant.IsNull() || result != aVariant.GetDouble() );
 
@@ -470,8 +488,7 @@ bool PG_RATIO_EDITOR::GetValueFromControl( wxVariant& aVariant, wxPGProperty* aP
         }
     }
 
-    // Changing unspecified always causes event (returning
-    // true here should be enough to trigger it).
+    // Changing unspecified always causes event (returning true here should be enough to trigger it).
     if( !changed && aVariant.IsNull() )
         changed = true;
 
@@ -491,8 +508,8 @@ void PG_RATIO_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) 
         auto*    variantData = static_cast<STD_OPTIONAL_DOUBLE_VARIANT_DATA*>( var.GetData() );
         wxString strValue;
 
-        if( variantData->Value().has_value() )
-            strValue = wxString::Format( wxS( "%g" ), variantData->Value().value() );
+        if( variantData->OptValue().has_value() )
+            strValue = wxString::Format( wxS( "%g" ), variantData->OptValue().value() );
 
         textCtrl->ChangeValue( strValue );
     }
@@ -502,8 +519,7 @@ void PG_RATIO_EDITOR::UpdateControl( wxPGProperty* aProperty, wxWindow* aCtrl ) 
     }
     else if( !aProperty->IsValueUnspecified() )
     {
-        wxFAIL_MSG( wxT( "PG_RATIO_EDITOR should only be used with scale-free numeric "
-                         "properties!" ) );
+        wxFAIL_MSG( wxT( "PG_RATIO_EDITOR should only be used with scale-free numeric properties!" ) );
     }
 }
 
@@ -545,9 +561,8 @@ wxPGWindowList PG_FPID_EDITOR::CreateControls( wxPropertyGrid* aGrid, wxPGProper
     buttons->Add( KiBitmap( BITMAPS::small_library ) );
     buttons->Finalize( aGrid, aPos );
     wxSize textSize = buttons->GetPrimarySize();
-    wxWindow* textCtrl = aGrid->GenerateEditorTextCtrl( aPos, textSize,
-                                                       aProperty->GetValueAsString(), nullptr, 0,
-                                                       aProperty->GetMaxLength() );
+    wxWindow* textCtrl = aGrid->GenerateEditorTextCtrl( aPos, textSize, aProperty->GetValueAsString(),
+                                                        nullptr, 0, aProperty->GetMaxLength() );
     wxPGWindowList ret( textCtrl, buttons );
     return ret;
 }

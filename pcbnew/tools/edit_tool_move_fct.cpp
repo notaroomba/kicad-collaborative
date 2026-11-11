@@ -34,7 +34,7 @@
 #include <padstack.h>
 #include <pcb_group.h>
 #include <pcb_generator.h>
-#include <pcb_griditem.h>
+#include <pcb_grid_item.h>
 #include <pcb_edit_frame.h>
 #include <spread_footprints.h>
 #include <tool/tool_manager.h>
@@ -104,6 +104,53 @@ static bool PromptConnectedPadDecision( PCB_BASE_EDIT_FRAME* aFrame, const std::
 }
 
 
+// Makes sure we don't try to assign two different new nets to an item. Assigning
+// the same net to the item multiples times is fine.
+static bool ScheduleNetSwap( BOARD_CONNECTED_ITEM* aItem, int aNewNet,
+                             std::unordered_map<BOARD_CONNECTED_ITEM*, int>& aItemNewNets,
+                             wxString& aError )
+{
+    auto [it, inserted] = aItemNewNets.emplace( aItem, aNewNet );
+
+    if( !inserted && it->second != aNewNet )
+    {
+        aError = _( "Cannot swap nets: connected items would receive conflicting nets." );
+        return false;
+    }
+
+    return true;
+}
+
+
+// Make sure everything we're trying to swap is unlocked or we're overriding
+static bool ValidateNetSwapLocks( PCB_BASE_EDIT_FRAME* aFrame,
+                                  const std::unordered_map<BOARD_CONNECTED_ITEM*, int>& aItemNewNets,
+                                  const std::unordered_set<PAD*>& aSwapPads, bool aIncludeConnectedPads )
+{
+    if( aFrame->GetOverrideLocks() )
+        return true;
+
+    for( const auto& [item, newNet] : aItemNewNets )
+    {
+        if( item->GetNetCode() == newNet )
+            continue;
+
+        if( item->Type() == PCB_PAD_T && !aIncludeConnectedPads
+            && !aSwapPads.count( static_cast<PAD*>( item ) ) )
+            continue;
+
+        if( item->IsLocked() )
+        {
+            aFrame->ShowInfoBarError( _( "Cannot swap nets of locked pads or connected copper unless "
+                                         "Override Locks is enabled." ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
 int EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
 {
     if( isRouterActive() )
@@ -136,8 +183,9 @@ int EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
     if( selection.Size() < 2 )
         return 0;
 
-    BOARD_COMMIT  localCommit( this );
-    BOARD_COMMIT* commit = dynamic_cast<BOARD_COMMIT*>( aEvent.Commit() );
+    PCB_BASE_EDIT_FRAME* editFrame = getEditFrame<PCB_BASE_EDIT_FRAME>();
+    BOARD_COMMIT         localCommit( this );
+    BOARD_COMMIT*        commit = dynamic_cast<BOARD_COMMIT*>( aEvent.Commit() );
 
     if( !commit )
         commit = &localCommit;
@@ -163,7 +211,7 @@ int EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
         // centers rather than anchor positions.  See PAD::SwapShapePositions.
         if( a->Type() == PCB_PAD_T && b->Type() == PCB_PAD_T )
         {
-            PAD::SwapShapePositions( static_cast<PAD*>( a ), static_cast<PAD*>( b ) );
+            PAD::SwapShapePositions( static_cast<PAD*>( a ), static_cast<PAD*>( b ), editFrame->GetActiveLayer() );
 
             PCB_LAYER_ID aLayer = a->GetLayer(), bLayer = b->GetLayer();
             std::swap( aLayer, bLayer );
@@ -255,19 +303,11 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
         selectedPads.insert( pads[i] );
     }
 
-    // If all nets are the same, nothing to do
-    bool allSame = true;
-
-    for( size_t i = 1; i < padsCount; ++i )
-    {
-        if( originalNets[i] != originalNets[0] )
-        {
-            allSame = false;
-            break;
-        }
-    }
-
-    if( allSame )
+    if( std::ranges::all_of( originalNets,
+                             [&]( int net )
+                             {
+                                 return net == originalNets.front();
+                             } ) )
         return 0;
 
     // Desired new nets are a cyclic rotation of original nets (like Swap positions)
@@ -290,6 +330,17 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
     // Accumulate changes: for each item, assign the resulting new net
     std::unordered_map<BOARD_CONNECTED_ITEM*, int> itemNewNets;
     std::vector<PAD*>                              nonSelectedPadsToChange;
+    wxString                                       error;
+
+    // Include the direct pad changes so connectivity cannot assign them a conflicting net.
+    for( size_t i = 0; i < padsCount; ++i )
+    {
+        if( !ScheduleNetSwap( pads[i], newNetForIndex( i ), itemNewNets, error ) )
+        {
+            frame()->ShowInfoBarError( error );
+            return 0;
+        }
+    }
 
     for( size_t i = 0; i < padsCount; ++i )
     {
@@ -298,7 +349,8 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
         int  toNet = newNetForIndex( i );
 
         // For each connected item, if it matches fromNet, schedule it for toNet
-        for( BOARD_CONNECTED_ITEM* ci : connectivity->GetConnectedItems( pad, 0 ) )
+        // Exclude zones, user probably doesn't want to change zone nets
+        for( BOARD_CONNECTED_ITEM* ci : connectivity->GetConnectedItems( pad, EXCLUDE_ZONES ) )
         {
             switch( ci->Type() )
             {
@@ -306,8 +358,8 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
             case PCB_ARC_T:
             case PCB_VIA_T:
             case PCB_PAD_T:
+            case PCB_SHAPE_T:
                 break;
-            // Exclude zones, user probably doesn't want to change zone nets
             default:
                 continue;
             }
@@ -315,8 +367,11 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
             if( ci->GetNetCode() != fromNet )
                 continue;
 
-            // Track conflicts: if already assigned a different new net, just overwrite (last wins)
-            itemNewNets[ci] = toNet;
+            if( !ScheduleNetSwap( ci, toNet, itemNewNets, error ) )
+            {
+                frame()->ShowInfoBarError( error );
+                return 0;
+            }
 
             if( ci->Type() == PCB_PAD_T )
             {
@@ -333,10 +388,16 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
     if( !PromptConnectedPadDecision( frame(), nonSelectedPadsToChange, _( "Swap Pad Nets" ), includeConnectedPads ) )
         return 0;
 
+    if( !ValidateNetSwapLocks( frame(), itemNewNets, selectedPads, includeConnectedPads ) )
+        return 0;
+
     // Apply changes
     // 1) Selected pads get their new nets directly
     for( size_t i = 0; i < padsCount; ++i )
     {
+        if( pads[i]->GetNetCode() == newNetForIndex( i ) )
+            continue;
+
         commit->Modify( pads[i] );
         pads[i]->SetNetCode( newNetForIndex( i ) );
     }
@@ -357,6 +418,9 @@ int EDIT_TOOL::SwapPadNets( const TOOL_EVENT& aEvent )
             if( !includeConnectedPads )
                 continue; // skip non-selected pads if requested
         }
+
+        if( item->GetNetCode() == newNet )
+            continue;
 
         commit->Modify( item );
         item->SetNetCode( newNet );
@@ -537,24 +601,11 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
         }
     }
 
-    // If all unit nets match across positions, nothing to do
-    bool allSame = true;
-
-    for( size_t pi = 0; pi < pinCount && allSame; ++pi )
-    {
-        int refNet = unitNets[0][pi];
-
-        for( size_t ui = 1; ui < unitCount; ++ui )
-        {
-            if( unitNets[ui][pi] != refNet )
-            {
-                allSame = false;
-                break;
-            }
-        }
-    }
-
-    if( allSame )
+    if( std::ranges::all_of( unitNets,
+                             [&]( const auto& nets )
+                             {
+                                 return nets == unitNets.front();
+                             } ) )
     {
         frame()->ShowInfoBarError( _( "Gate swapping has no effect: all selected gates have identical nets." ) );
         return 0;
@@ -572,6 +623,7 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
     // Accumulate changes: item -> new net
     std::unordered_map<BOARD_CONNECTED_ITEM*, int> itemNewNets;
     std::vector<PAD*>                              nonSelectedPadsToChange;
+    wxString                                       error;
 
     // Selected pads in the swap (for suppressing re-adding in connected pad handling)
     std::unordered_set<PAD*> swapPads;
@@ -579,10 +631,24 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
     for( const auto& v : unitPads )
         swapPads.insert( v.begin(), v.end() );
 
-    // Schedule net swaps for connectivity-attached items
-    auto scheduleForPad = [&]( PAD* pad, int fromNet, int toNet )
+    for( size_t pi = 0; pi < pinCount; ++pi )
+    {
+        for( size_t ui = 0; ui < unitCount; ++ui )
         {
-            for( BOARD_CONNECTED_ITEM* ci : connectivity->GetConnectedItems( pad, 0 ) )
+            size_t toIdx = ( ui + 1 ) % unitCount;
+
+            if( !ScheduleNetSwap( unitPads[ui][pi], unitNets[toIdx][pi], itemNewNets, error ) )
+            {
+                frame()->ShowInfoBarError( error );
+                return 0;
+            }
+        }
+    }
+
+    // Schedule net swaps for connectivity-attached items
+    auto scheduleForPad = [&]( PAD* pad, int fromNet, int toNet ) -> bool
+        {
+            for( BOARD_CONNECTED_ITEM* ci : connectivity->GetConnectedItems( pad, EXCLUDE_ZONES ) )
             {
                 switch( ci->Type() )
                 {
@@ -590,6 +656,7 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
                 case PCB_ARC_T:
                 case PCB_VIA_T:
                 case PCB_PAD_T:
+                case PCB_SHAPE_T:
                     break;
 
                 default:
@@ -599,7 +666,8 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
                 if( ci->GetNetCode() != fromNet )
                     continue;
 
-                itemNewNets[ ci ] = toNet;
+                if( !ScheduleNetSwap( ci, toNet, itemNewNets, error ) )
+                    return false;
 
                 if( ci->Type() == PCB_PAD_T )
                 {
@@ -609,6 +677,8 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
                         nonSelectedPadsToChange.push_back( other );
                 }
             }
+
+            return true;
         };
 
     // For each position, rotate nets among units forward
@@ -623,7 +693,11 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
             int  fromNet = unitNets[fromIdx][pi];
             int  toNet = unitNets[toIdx][pi];
 
-            scheduleForPad( padFrom, fromNet, toNet );
+            if( !scheduleForPad( padFrom, fromNet, toNet ) )
+            {
+                frame()->ShowInfoBarError( error );
+                return 0;
+            }
         }
     }
 
@@ -634,6 +708,9 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
         return 0;
     }
 
+    if( !ValidateNetSwapLocks( frame(), itemNewNets, swapPads, includeConnectedPads ) )
+        return 0;
+
     // Apply pad net swaps: rotate per position
     for( size_t pi = 0; pi < pinCount; ++pi )
     {
@@ -643,6 +720,9 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
             size_t toIdx = ( ui + 1 ) % unitCount;
             PAD*   pad = unitPads[ui][pi];
             int    newNet = unitNets[toIdx][pi];
+
+            if( pad->GetNetCode() == newNet )
+                continue;
 
             commit->Modify( pad );
             pad->SetNetCode( newNet );
@@ -665,6 +745,9 @@ int EDIT_TOOL::SwapGateNets( const TOOL_EVENT& aEvent )
             if( !includeConnectedPads )
                 continue;
         }
+
+        if( item->GetNetCode() == newNet )
+            continue;
 
         commit->Modify( item );
         item->SetNetCode( newNet );
@@ -918,7 +1001,11 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
                 {
                     PAD*       pad = static_cast<PAD*>( item );
                     FOOTPRINT* fp = pad->GetParentFootprint();
-                    msg = wxString::Format( _( "%s pad %s" ), fp->GetReference(), pad->GetNumber() );
+
+                    if( fp )
+                        msg = wxString::Format( _( "%s pad %s" ), fp->GetReference(), pad->GetNumber() );
+                    else
+                        msg = pad->GetItemDescription( editFrame, false );
                 }
                 else
                 {
@@ -1078,7 +1165,7 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
     if( frameRotate )
     {
         prevFrameAngle = GridFrameAngleAt( *board, frameFp ? frameFp->GetPosition() : originalCursorPos,
-                                           PCB_GRIDITEM_ROLE::PLACEMENT );
+                                           PCB_GRID_ROLE::PLACEMENT );
     }
 
     auto applyMoveFrameOrientation =
@@ -1089,7 +1176,7 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
 
                 // m_cursor is the pick-up point dragged along with the selection.
                 VECTOR2I  pivot = frameFp ? frameFp->GetPosition() : m_cursor;
-                EDA_ANGLE newAngle = GridFrameAngleAt( *board, pivot, PCB_GRIDITEM_ROLE::PLACEMENT );
+                EDA_ANGLE newAngle = GridFrameAngleAt( *board, pivot, PCB_GRID_ROLE::PLACEMENT );
                 EDA_ANGLE delta = GridFrameRotationDelta( prevFrameAngle, newAngle, editFrame->GetRotationAngle() );
 
                 prevFrameAngle = newAngle;
@@ -1333,7 +1420,8 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
 
                         // Images and grid items are on non-cached layers and will not be updated automatically in
                         // the overlay, so explicitly tell the view they've moved.
-                        if( item->Type() == PCB_REFERENCE_IMAGE_T || item->Type() == PCB_GRIDITEM_T )
+                        if( item->Type() == PCB_REFERENCE_IMAGE_T || item->Type() == PCB_GRID_ITEM_T
+                            || item->Type() == PCB_DRILL_MAP_T )
                             view()->Update( item, KIGFX::GEOMETRY );
                     }
 
@@ -1632,6 +1720,7 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
                     originalPos = nextItem->GetPosition();
                     m_selectionTool->AddItemToSel( nextItem );
                     selection.SetReferencePoint( originalPos );
+
                     if( angleSnapMode != LEADER_MODE::DIRECT )
                         grid.SetSnapLineOrigin( selection.GetReferencePoint() );
 
@@ -1649,7 +1738,7 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
                     if( frameRotate )
                     {
                         prevFrameAngle = GridFrameAngleAt( *board, frameFp ? frameFp->GetPosition() : originalPos,
-                                                           PCB_GRIDITEM_ROLE::PLACEMENT );
+                                                           PCB_GRID_ROLE::PLACEMENT );
                     }
 
                     // Pick up new item
@@ -1667,7 +1756,7 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
 
             break; // finish
         }
-        else if( evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsDblClick( BUT_LEFT ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             // The first click will move the new item, so put it back
             if( moveIndividually )
@@ -1689,11 +1778,15 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
             else
                 m_toolMgr->RunSynchronousAction( ACTIONS::increment, aCommit, ACTIONS::INCREMENT { 1, 0 } );
         }
-        else if( ZONE_FILLER_TOOL::IsZoneFillAction( evt ) || evt->IsAction( &PCB_ACTIONS::moveExact )
-                 || evt->IsAction( &PCB_ACTIONS::moveWithReference ) || evt->IsAction( &PCB_ACTIONS::copyWithReference )
+        else if( ZONE_FILLER_TOOL::IsZoneFillAction( evt )
+                 || evt->IsAction( &PCB_ACTIONS::moveExact )
+                 || evt->IsAction( &PCB_ACTIONS::moveWithReference )
+                 || evt->IsAction( &PCB_ACTIONS::copyWithReference )
                  || evt->IsAction( &PCB_ACTIONS::positionRelative )
-                 || evt->IsAction( &PCB_ACTIONS::interactiveOffsetTool ) || evt->IsAction( &ACTIONS::find )
-                 || evt->IsAction( &ACTIONS::findNext ) || evt->IsAction( &ACTIONS::findPrevious )
+                 || evt->IsAction( &PCB_ACTIONS::interactiveOffsetTool )
+                 || evt->IsAction( &ACTIONS::find )
+                 || evt->IsAction( &ACTIONS::findNext )
+                 || evt->IsAction( &ACTIONS::findPrevious )
                  || evt->IsAction( &ACTIONS::redo ) )
         {
             wxBell();
@@ -1704,6 +1797,10 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
         }
 
     } while( ( evt = Wait() ) ); // Assignment (instead of equality test) is intentional
+
+    // A shutdown abandons the move rather than committing it
+    if( !evt )
+        restore_state = true;
 
     // Clear temporary COURTYARD_CONFLICT flag and ensure the conflict shadow is cleared
     if( showCourtyardConflicts )
@@ -1778,6 +1875,7 @@ bool EDIT_TOOL::doMoveSelection( const TOOL_EVENT& aEvent, BOARD_COMMIT* aCommit
     m_toolMgr->RunAction( PCB_ACTIONS::hideLocalRatsnest );
 
     editFrame->GetCanvas()->SetCurrentCursor( KICURSOR::ARROW );
+
     m_inMoveWithReference = false;
     return !restore_state;
 }

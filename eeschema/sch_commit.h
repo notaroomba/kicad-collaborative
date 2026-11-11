@@ -27,41 +27,64 @@ class PICKED_ITEMS_LIST;
 class TOOL_MANAGER;
 class SCH_EDIT_FRAME;
 class SCH_BASE_FRAME;
+class SCH_ITEM;
+class SCH_SCREEN;
 class EDA_DRAW_FRAME;
 class TOOL_BASE;
 
 template<class T>
 class SCH_TOOL_BASE;
+class SCH_COLLAB_SYNC;
 
 #define SKIP_UNDO          0x0001
 #define APPEND_UNDO        0x0002
 #define SKIP_SET_DIRTY     0x0004
-#define SKIP_CLEANUP       0x0008    ///< Rebuild connectivity but run no schematic cleanup
+#define SKIP_CONNECTIVITY  0x0008
+// With SKIP_UNDO (implicit headless), transfer ownership of removed items to the commit.
+#define DELETE_REMOVED_ITEMS 0x0010
+#define SKIP_CLEANUP       0x0020    ///< Rebuild connectivity but run no schematic cleanup
                                      ///< (used when applying remote collaboration edits, which
                                      ///< must not mint local junction/merge KIIDs).
 
+/**
+ * Commit for the schematic and symbol editors.
+ *
+ * Outside the symbol editor, Stage() bumps the connectivity revision of the staged item's screen,
+ * and the connectivity facade stops serving that screen until the next recalculation.  A commit
+ * that staged an item must therefore end in Push() or Revert().  A caller that drops such a commit
+ * on purpose must request the recalculation itself.
+ */
 class SCH_COMMIT : public COMMIT
 {
 public:
     SCH_COMMIT( TOOL_MANAGER* aToolMgr );
+    SCH_COMMIT( TOOL_MANAGER* aToolMgr, bool aIsLibEditor );
     SCH_COMMIT( EDA_DRAW_FRAME* aFrame );
     SCH_COMMIT( SCH_TOOL_BASE<SCH_BASE_FRAME>* aFrame );
 
     virtual ~SCH_COMMIT();
 
-    virtual void Push( const wxString& aMessage = wxT( "A commit" ), int aCommitFlags = 0 ) override;
+    void Push( const wxString& aMessage = wxEmptyString, int aCommitFlags = 0 ) override;
 
-    virtual void Revert() override;
+    void Revert() override;
+    void RevertToCheckpoint( int aCheckpoint ) override;
+
     COMMIT& Stage( EDA_ITEM *aItem, CHANGE_TYPE aChangeType, BASE_SCREEN *aScreen = nullptr,
                    RECURSE_MODE aRecurse = RECURSE_MODE::NO_RECURSE ) override;
     COMMIT& Stage( std::vector<EDA_ITEM*> &container, CHANGE_TYPE aChangeType,
                    BASE_SCREEN *aScreen = nullptr ) override;
 
-private:
+    EDA_ITEM* ResolveItem( KIID& aID ) override;
+
+    /** Retain the pre-edit state of an item already removed from its screen by cleanup. */
+    void RemovedForCleanup( SCH_ITEM* aItem, SCH_SCREEN* aScreen );
+
+protected:
     EDA_ITEM* undoLevelItem( EDA_ITEM* aItem ) const override;
 
     EDA_ITEM* makeImage( EDA_ITEM* aItem ) const override;
 
+private:
     void pushLibEdit(  const wxString& aMessage, int aCommitFlags );
     void pushSchEdit(  const wxString& aMessage, int aCommitFlags );
 
@@ -70,4 +93,8 @@ private:
 private:
     TOOL_MANAGER*  m_toolMgr;
     bool           m_isLibEditor;
+
+    /// Collaboration capture for the push in progress (set by Push() around pushSchEdit()).
+    SCH_COLLAB_SYNC* m_collabSync = nullptr;
+    size_t           m_collabPreCount = 0;
 };

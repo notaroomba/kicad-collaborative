@@ -24,7 +24,7 @@
 #include <config.h>     // Needed for MSW compilation
 #include <common.h>
 #include <locale_io.h>
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <paths.h>
 #include <richio.h>
 
@@ -511,7 +511,7 @@ void NGSPICE::init_dll()
     std::vector<std::string> dllPaths = { "/usr/local/lib" };
 #endif
 
-    if( wxGetEnv( wxT( "KICAD_RUN_FROM_BUILD_DIR" ), nullptr ) )
+    if( PATHS::RunningFromBuildDir() )
         dllPaths.emplace_back( NGSPICE_DLL_DIR );
 
 #if defined(__WINDOWS__) || (__WXMAC__)

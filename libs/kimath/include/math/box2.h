@@ -81,6 +81,12 @@ public:
             m_Pos.x = m_Pos.y = coord_limits::lowest() / 2.0;
             m_Size.x = m_Size.y = coord_limits::max();
         }
+        else if( std::is_same_v<size_type, coord_type> )
+        {
+            // BOX2L uses 64-bit ints for both coords and sizes
+            m_Pos.x = m_Pos.y = -( ( coord_limits::max() / 2 ) - coord_limits::epsilon() );
+            m_Size.x = m_Size.y = coord_limits::max() - coord_limits::epsilon();
+        }
         else
         {
             // We want to be able to invert the box, so don't use lowest()
@@ -164,8 +170,8 @@ public:
      */
     constexpr bool Contains( const Vec& aPoint ) const
     {
-        Vec rel_pos = aPoint - m_Pos;
-        Vec size    = m_Size;
+        SizeVec rel_pos = SizeVec( aPoint ) - m_Pos;
+        SizeVec size    = m_Size;
 
         if( size.x < 0 )
         {
@@ -412,18 +418,15 @@ public:
         // Prevent floating point comparison errors
         static const EDA_ANGLE ROT_EPSILON( 0.000000001, DEGREES_T );
 
-        static const EDA_ANGLE ROT_PARALLEL[]      = { ANGLE_0, ANGLE_180, ANGLE_360 };
-        static const EDA_ANGLE ROT_PERPENDICULAR[] = { ANGLE_0, ANGLE_90,  ANGLE_270 };
-
         // Test for non-rotated rectangle
-        for( EDA_ANGLE ii : ROT_PARALLEL )
+        for( EDA_ANGLE ii : { ANGLE_0, ANGLE_180, ANGLE_360 } )
         {
             if( std::abs( rotation - ii ) < ROT_EPSILON )
                 return Intersects( aRect );
         }
 
         // Test for rectangle rotated by multiple of 90 degrees
-        for( EDA_ANGLE jj : ROT_PERPENDICULAR )
+        for( EDA_ANGLE jj : { ANGLE_90,  ANGLE_270 } )
         {
             if( std::abs( rotation - jj ) < ROT_EPSILON )
             {
@@ -431,7 +434,7 @@ public:
 
                 // Rotate the supplied rect by 90 degrees
                 rotRect.SetOrigin( aRect.Centre() );
-                rotRect.Inflate( aRect.GetHeight(), aRect.GetWidth() );
+                rotRect.Inflate( ( aRect.GetHeight() / 2 ) + 1, ( aRect.GetWidth() / 2 ) + 1 );
                 return Intersects( rotRect );
             }
         }
@@ -524,7 +527,7 @@ public:
         me.Normalize(); // ensure size is >= 0
 
         // Test if the circle intersects at all
-        if( !IntersectsCircle( aCenter, aRadius + aWidth / 2 ) )
+        if( !IntersectsCircle( aCenter, aRadius + ( aWidth / 2 ) + 1 ) )
             return false;
 
         Vec farpt = FarthestPointTo( aCenter );
@@ -552,67 +555,8 @@ public:
      */
     constexpr BOX2<Vec>& Inflate( coord_type dx, coord_type dy )
     {
-        if( m_Size.x >= 0 )
-        {
-            if( m_Size.x < -2 * dx )
-            {
-                // Don't allow deflate to eat more width than we have,
-                m_Pos.x = KiCheckedCast<ecoord_type, coord_type>( ecoord_type( m_Pos.x ) + m_Size.x / 2 );
-                m_Size.x = 0;
-            }
-            else
-            {
-                // The inflate is valid.
-                m_Pos.x  -= dx;
-                m_Size.x +=  2 * dx;
-            }
-        }
-        else    // size.x < 0:
-        {
-            if( m_Size.x > 2 * dx )
-            {
-                // Don't allow deflate to eat more width than we have,
-                m_Pos.x = KiCheckedCast<ecoord_type, coord_type>( ecoord_type( m_Pos.x ) - m_Size.x / 2 );
-                m_Size.x = 0;
-            }
-            else
-            {
-                // The inflate is valid.
-                m_Pos.x  += dx;
-                m_Size.x -= 2 * dx; // m_Size.x <0: inflate when dx > 0
-            }
-        }
-
-        if( m_Size.y >= 0 )
-        {
-            if( m_Size.y < -2 * dy )
-            {
-                // Don't allow deflate to eat more height than we have,
-                m_Pos.y = KiCheckedCast<ecoord_type, coord_type>( ecoord_type( m_Pos.y ) + m_Size.y / 2 );
-                m_Size.y = 0;
-            }
-            else
-            {
-                // The inflate is valid.
-                m_Pos.y  -= dy;
-                m_Size.y += 2 * dy;
-            }
-        }
-        else    // size.y < 0:
-        {
-            if( m_Size.y > 2 * dy )
-            {
-                // Don't allow deflate to eat more height than we have,
-                m_Pos.y = KiCheckedCast<ecoord_type, coord_type>( ecoord_type( m_Pos.y ) - m_Size.y / 2 );
-                m_Size.y = 0;
-            }
-            else
-            {
-                // The inflate is valid.
-                m_Pos.y  += dy;
-                m_Size.y -= 2 * dy; // m_Size.y <0: inflate when dy > 0
-            }
-        }
+        inflateAxis( m_Pos.x, m_Size.x, dx );
+        inflateAxis( m_Pos.y, m_Size.y, dy );
 
         return *this;
     }
@@ -780,12 +724,14 @@ public:
 
     constexpr ecoord_type SquaredDistance( const Vec& aP ) const
     {
-        ecoord_type x2 = m_Pos.x + m_Size.x;
-        ecoord_type y2 = m_Pos.y + m_Size.y;
-        ecoord_type xdiff = std::max( aP.x < m_Pos.x ? m_Pos.x - aP.x : m_Pos.x - x2,
-                                      (ecoord_type) 0 );
-        ecoord_type ydiff = std::max( aP.y < m_Pos.y ? m_Pos.y - aP.y : m_Pos.y - y2,
-                                      (ecoord_type) 0 );
+        const ecoord_type x1 = std::min<ecoord_type>( m_Pos.x, ecoord_type( m_Pos.x ) + m_Size.x );
+        const ecoord_type x2 = std::max<ecoord_type>( m_Pos.x, ecoord_type( m_Pos.x ) + m_Size.x );
+        const ecoord_type y1 = std::min<ecoord_type>( m_Pos.y, ecoord_type( m_Pos.y ) + m_Size.y );
+        const ecoord_type y2 = std::max<ecoord_type>( m_Pos.y, ecoord_type( m_Pos.y ) + m_Size.y );
+
+        const ecoord_type xdiff = std::max<ecoord_type>( aP.x < x1 ? x1 - aP.x : ecoord_type( aP.x ) - x2, 0 );
+        const ecoord_type ydiff = std::max<ecoord_type>( aP.y < y1 ? y1 - aP.y : ecoord_type( aP.y ) - y2, 0 );
+
         return xdiff * xdiff + ydiff * ydiff;
     }
 
@@ -917,6 +863,50 @@ public:
     }
 
 private:
+    // Widened so that sentinel deltas cannot wrap, results saturate outward to keep the original region covered
+    static constexpr void inflateAxis( coord_type& aPos, size_type& aSize, coord_type aDelta )
+    {
+        const ecoord_type pos = aPos;
+        const ecoord_type delta = aDelta;
+        const ecoord_type lowLimit = coord_limits::lowest();
+        const ecoord_type highLimit = coord_limits::max();
+
+        if( aSize >= 0 )
+        {
+            if( aSize < -2 * delta )
+            {
+                // Don't allow deflate to eat more width than we have,
+                aPos = KiCheckedCast<ecoord_type, coord_type>( pos + aSize / 2 );
+                aSize = 0;
+            }
+            else
+            {
+                const ecoord_type lo = std::clamp<ecoord_type>( pos - delta, lowLimit, highLimit );
+                const ecoord_type hi = std::clamp<ecoord_type>( pos + aSize + delta, lowLimit, highLimit );
+
+                aPos = static_cast<coord_type>( lo );
+                aSize = hi - lo;
+            }
+        }
+        else
+        {
+            if( aSize > 2 * delta )
+            {
+                aPos = KiCheckedCast<ecoord_type, coord_type>( pos - aSize / 2 );
+                aSize = 0;
+            }
+            else
+            {
+                // Negative size, pos is the high edge so inflating moves it up and the low edge down
+                const ecoord_type hi = std::clamp<ecoord_type>( pos + delta, lowLimit, highLimit );
+                const ecoord_type lo = std::clamp<ecoord_type>( pos + aSize - delta, lowLimit, highLimit );
+
+                aPos = static_cast<coord_type>( hi );
+                aSize = lo - hi;
+            }
+        }
+    }
+
     Vec     m_Pos;  // Rectangle Origin
     SizeVec m_Size; // Rectangle Size
 

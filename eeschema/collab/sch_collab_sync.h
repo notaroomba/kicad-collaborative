@@ -216,6 +216,17 @@ public:
     void CaptureCommitEnd( COMMIT& aCommit, size_t aPreCount, int aCommitFlags );
 
     /**
+     * The capture half of CaptureCommitEnd(), without sending.  pushSchEdit() calls it before
+     * its cleanup pass replaces the staged entries (cleanup then stages its own, all of them
+     * "appended mid-push", so the next call takes aPreCount = 0) and again once every entry
+     * has been applied, while the items cleanup removed are still alive.
+     */
+    void CaptureCommitPhase( COMMIT& aCommit, size_t aPreCount );
+
+    /// Send what CaptureCommitBegin() and CaptureCommitPhase() gathered, one op per document.
+    void FlushCommitCapture();
+
+    /**
      * SCH_EDIT_FRAME::PutDataInPreviousState hook: broadcast the just-restored state.
      * Statuses are already inverted: DELETED = the item was just removed, NEWITEM = it
      * was just re-added, CHANGED = the live item now holds the restored data and the

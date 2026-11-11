@@ -24,7 +24,11 @@
 #include "pns_via.h"
 #include "pns_router.h"
 #include "pns_debug_decorator.h"
+#include "pns_arc.h"
 #include "pns_node.h"
+
+#include <core/kicad_algo.h>
+#include <core/minoptmax.h>
 
 #include <geometry/shape_arc.h>
 #include <geometry/shape_segment.h>
@@ -393,16 +397,16 @@ OPT_BOX2I ChangedArea( const LINE& aLineA, const LINE& aLineB )
 
 
 void HullIntersection( const SHAPE_LINE_CHAIN& hull, const SHAPE_LINE_CHAIN& line,
-                       SHAPE_LINE_CHAIN::INTERSECTIONS& ips )
+                       std::vector<SHAPE_LINE_CHAIN::INTERSECTION>& ips )
 {
-    SHAPE_LINE_CHAIN::INTERSECTIONS ips_raw;
+    std::vector<SHAPE_LINE_CHAIN::INTERSECTION> ips_raw;
 
     if( line.PointCount() < 2 )
         return;
 
     hull.Intersect( line, ips_raw );
 
-    for( auto& p : ips_raw )
+    for( SHAPE_LINE_CHAIN::INTERSECTION& p : ips_raw )
     {
         SHAPE_LINE_CHAIN::INTERSECTION ipp;
 
@@ -547,14 +551,160 @@ void NodeStats( DEBUG_DECORATOR* dbg, wxString label, PNS::NODE *node )
     node->GetUpdatedItems( removed, added );
 
     PNS_DBG( dbg, BeginGroup, wxString::Format( "node:%s this=%p depth=%d added=%d removed=%d",
-        label, node, node->Depth(), (int)added.size(), (int) removed.size() ), 0 );
+                                                label, node, node->Depth(), (int) added.size(), (int) removed.size() ),
+             0 );
 
-    for( auto& item : added )
-        PNS_DBG( dbg, AddItem, item, BLUE, 10000, wxT("added-item") );
-    for( auto& item : removed )
-        PNS_DBG( dbg, AddItem, item, RED, 10000, wxString::Format("removed-item") );
+    for( ITEM* item : added )
+        PNS_DBG( dbg, AddItem, item, BLUE, 10000, wxT( "added-item" ) );
+
+    for( ITEM* item : removed )
+        PNS_DBG( dbg, AddItem, item, RED, 10000, wxT( "removed-item" ) );
 
     PNS_DBGN( dbg, EndGroup );
+}
+
+
+bool SplitAdjacentSegments( NODE* aNode, ITEM* aSeg, const VECTOR2I& aP )
+{
+    if( !aSeg )
+        return false;
+
+    if( !aSeg->OfKind( ITEM::SEGMENT_T ) )
+        return false;
+
+    const JOINT* jt = aNode->FindJoint( aP, aSeg );
+    
+    if( jt && jt->LinkCount() >= 1 )
+    {
+        return false;
+    }
+
+    // Shove may have already replaced aSeg in this branch, so splitting it would resurrect it
+    const JOINT* owner = aNode->FindJoint( aSeg->Anchor( 0 ), aSeg );
+
+    if( !owner || !alg::contains( owner->LinkList(), aSeg ) )
+        return false;
+
+    SEGMENT* s_old = static_cast<SEGMENT*>( aSeg );
+
+    if( s_old->Seg().Distance( aP ) > 100 )
+        return false; 
+
+    aNode->Remove( s_old );
+
+    if( s_old->Seg().B != aP )
+    {
+        std::unique_ptr<SEGMENT> s_new ( Clone( *s_old ) );
+        s_new->SetEnds( s_old->Seg().A, aP );
+        s_new->Unmark();
+        aNode->Add( std::move( s_new ), true );
+    }
+
+    if( s_old->Seg().A != aP )
+    {
+        std::unique_ptr<SEGMENT> s_new ( Clone( *s_old ) );
+        s_new->SetEnds( aP, s_old->Seg().B );
+        s_new->Unmark();
+        aNode->Add( std::move( s_new ), true );
+    }
+
+    return true;
+}
+
+
+bool SplitAdjacentArcs( NODE* aNode, ITEM* aArc, const VECTOR2I& aP )
+{
+    if( !aArc )
+        return false;
+
+    if( !aArc->OfKind( ITEM::ARC_T ) )
+        return false;
+
+    const JOINT* jt = aNode->FindJoint( aP, aArc );
+
+    if( jt && jt->LinkCount() >= 1 )
+        return false;
+
+    const JOINT* owner = aNode->FindJoint( aArc->Anchor( 0 ), aArc );
+
+    if( !owner || !alg::contains( owner->LinkList(), aArc ) )
+        return false;
+
+    ARC*             a_old = static_cast<ARC*>( aArc );
+    const SHAPE_ARC& o_arc = a_old->Arc();
+
+    std::unique_ptr<ARC> a_new[2] = { Clone( *a_old ), Clone( *a_old ) };
+
+    a_new[0]->Arc().ConstructFromStartEndCenter( o_arc.GetP0(), aP, o_arc.GetCenter(),
+                                                 o_arc.IsClockwise(), o_arc.GetWidth() );
+
+    a_new[1]->Arc().ConstructFromStartEndCenter( aP, o_arc.GetP1(), o_arc.GetCenter(),
+                                                 o_arc.IsClockwise(), o_arc.GetWidth() );
+
+    aNode->Remove( a_old );
+    aNode->Add( std::move( a_new[0] ), true );
+    aNode->Add( std::move( a_new[1] ), true );
+
+    return true;
+}
+
+const wxString Format( const MINOPTMAX<int> x )
+{
+    wxString ret;
+
+    ret = wxT( "min:" );
+    if( x.HasMin() )
+        ret.Append( wxString::Format( wxT( "%d" ), x.Min() ) );
+    else
+        ret.Append( wxT( "none" ) );
+
+    ret.Append( wxT( " max:" ) );
+    if( x.HasMax() )
+        ret.Append( wxString::Format( wxT( "%d" ), x.Max() ) );
+    else
+        ret.Append( wxT( "none" ) );
+
+    ret.Append( wxT( " opt:" ) );
+    if( x.HasOpt() )
+        ret.Append( wxString::Format( wxT( "%d" ), x.Opt() ) );
+    else
+        ret.Append( wxT( "none" ) );
+
+    return ret;
+}
+
+
+const SEG LongestCoveringSegment( const SEG& a, const SEG& b )
+{
+    const SEG::ecoord dists[4] = 
+    {
+        (a.A - b.A).SquaredEuclideanNorm(),
+        (a.A - b.B).SquaredEuclideanNorm(),
+        (a.B - b.A).SquaredEuclideanNorm(),
+        (a.B - b.B).SquaredEuclideanNorm()
+    };
+    
+    SEG::ecoord maxDist = std::numeric_limits<SEG::ecoord>::min();
+    int         farthest = -1;
+
+    for( int i = 0; i < 4; i++ )
+    {
+        if ( dists[i] > maxDist )
+        {
+            maxDist = dists[i];
+            farthest = i;
+        }
+    }
+
+    switch(farthest)
+    {
+        case 0: return SEG( a.A, b.A );
+        case 1: return SEG( a.A, b.B );
+        case 2: return SEG( a.B, b.A );
+        case 3: return SEG( a.B, b.B );
+        default: wxASSERT_MSG( false, wxT("failed to find farthest points?")); break;
+    }
+    return SEG();
 }
 
 

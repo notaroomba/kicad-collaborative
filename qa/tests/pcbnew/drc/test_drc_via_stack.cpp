@@ -22,6 +22,7 @@
 
 #include <wx/filename.h>
 
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 #include <pcbnew_utils/board_file_utils.h>
 
@@ -30,7 +31,9 @@
 #include <board_stackup_manager/board_stackup.h>
 #include <board_stackup_manager/stackup_predefined_prms.h>
 #include <common.h>
+#include <footprint.h>
 #include <lset.h>
+#include <pad.h>
 #include <padstack.h>
 #include <pcb_track.h>
 #include <generators/pcb_via_stack.h>
@@ -59,14 +62,15 @@ struct VIA_STACK_DRC_FIXTURE
     wxFileName m_rulePath;
 
     // The temp dir has to outlive run(), so it is kept here rather than in each test.
-    std::unique_ptr<KI_TEST::TEMPORARY_DIRECTORY> m_ruleDir;
+    std::unique_ptr<KI_TEST::SCOPED_TEMP_DIR> m_ruleDir;
 
     // The limits these checks read come from rules, so a test states them the way a user would.
-    void setRule( const std::string& aConstraint, const std::string& aCondition = "" )
+    void setRule( const std::string& aConstraint, const std::string& aCondition = "",
+                  const std::string& aSeverity = "" )
     {
-        m_ruleDir = std::make_unique<KI_TEST::TEMPORARY_DIRECTORY>( "microvia_rule", "" );
+        m_ruleDir = std::make_unique<KI_TEST::SCOPED_TEMP_DIR>( "microvia_rule" );
 
-        wxFileName rulePath( m_ruleDir->GetPath().string(), "test.kicad_dru" );
+        wxFileName rulePath( m_ruleDir->PathStr(), "test.kicad_dru" );
 
         {
             std::ofstream dru( rulePath.GetFullPath().ToStdString() );
@@ -75,6 +79,9 @@ struct VIA_STACK_DRC_FIXTURE
 
             if( !aCondition.empty() )
                 dru << "    (condition \"" << aCondition << "\")\n";
+
+            if( !aSeverity.empty() )
+                dru << "    (severity " << aSeverity << ")\n";
 
             dru << "    (constraint " << aConstraint << ")\n"
                 << ")\n";
@@ -93,12 +100,9 @@ struct VIA_STACK_DRC_FIXTURE
     // the development build.
     void loadBoard()
     {
-        m_board = KI_TEST::ReadBoardFromFileOrStream(
-                KI_TEST::GetPcbnewTestDataDir() + "drc_via_stack/"
-                + boost::unit_test::framework::current_test_case().p_name.get()
-                + ".kicad_pcb" );
+        const std::string boardName = boost::unit_test::framework::current_test_case().p_name.get();
 
-        BOOST_REQUIRE( m_board );
+        m_board = KI_TEST::RequireBoardFromPcbnewQAData( "drc_via_stack/" + boardName + ".kicad_pcb" );
     }
 
 
@@ -117,7 +121,7 @@ struct VIA_STACK_DRC_FIXTURE
         bds.m_DRCSeverities[DRCE_MALFORMED_MICROVIA_STACK_SPAN] = SEVERITY::RPT_SEVERITY_ERROR;
         bds.m_DRCSeverities[DRCE_MICROVIA_STACK_NOT_FILLED] = SEVERITY::RPT_SEVERITY_ERROR;
         bds.m_DRCSeverities[DRCE_MICROVIA_STACK_DEPTH] = SEVERITY::RPT_SEVERITY_ERROR;
-        bds.m_DRCSeverities[DRCE_MICROVIA_ASPECT_RATIO] = SEVERITY::RPT_SEVERITY_ERROR;
+        bds.m_DRCSeverities[DRCE_HOLE_ASPECT_RATIO] = SEVERITY::RPT_SEVERITY_ERROR;
         bds.m_DRCSeverities[DRCE_MICROVIA_CROSSES_CORE] = SEVERITY::RPT_SEVERITY_WARNING;
 
         for( int code : m_ignored )
@@ -132,7 +136,7 @@ struct VIA_STACK_DRC_FIXTURE
                     case DRCE_MALFORMED_MICROVIA_STACK_SPAN: m_malformedSpans++; break;
                     case DRCE_MICROVIA_STACK_NOT_FILLED: m_notFilled++; break;
                     case DRCE_MICROVIA_STACK_DEPTH: m_depth++; break;
-                    case DRCE_MICROVIA_ASPECT_RATIO: m_aspect++; break;
+                    case DRCE_HOLE_ASPECT_RATIO: m_aspect++; break;
                     case DRCE_MICROVIA_CROSSES_CORE: m_crossesCore++; break;
                     default: break;
                     }
@@ -160,6 +164,41 @@ static PCB_VIA* makeMicrovia( BOARD* aBoard, const VECTOR2I& aPos, PCB_LAYER_ID 
 }
 
 
+static PCB_VIA* makeVia( BOARD* aBoard, const VECTOR2I& aPos, VIATYPE aType, PCB_LAYER_ID aTop, PCB_LAYER_ID aBottom,
+                         int aDrill )
+{
+    PCB_VIA* via = new PCB_VIA( aBoard );
+    via->SetViaType( aType );
+    via->SetLayerPair( aTop, aBottom );
+    via->SetWidth( PADSTACK::ALL_LAYERS, aDrill + pcbIUScale.mmToIU( 0.2 ) );
+    via->SetDrill( aDrill );
+    via->SetPosition( aPos );
+    aBoard->Add( via );
+
+    return via;
+}
+
+
+static PAD* makePthPad( BOARD* aBoard, const VECTOR2I& aPos, const VECTOR2I& aDrill )
+{
+    FOOTPRINT* footprint = new FOOTPRINT( aBoard );
+    footprint->SetPosition( aPos );
+    aBoard->Add( footprint );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetAttribute( PAD_ATTRIB::PTH );
+    pad->SetLayerSet( PAD::PTHMask() );
+    pad->SetPosition( aPos );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::OVAL );
+    pad->SetSize( PADSTACK::ALL_LAYERS, aDrill + VECTOR2I( pcbIUScale.mmToIU( 0.3 ), pcbIUScale.mmToIU( 0.3 ) ) );
+    pad->SetDrillShape( aDrill.x == aDrill.y ? PAD_DRILL_SHAPE::CIRCLE : PAD_DRILL_SHAPE::OBLONG );
+    pad->SetDrillSize( aDrill );
+    footprint->Add( pad );
+
+    return pad;
+}
+
+
 static PCB_VIA_STACK* makeStack( BOARD* aBoard, PCB_LAYER_ID aStart, PCB_LAYER_ID aEnd )
 {
     PCB_VIA_STACK* stack = new PCB_VIA_STACK( aBoard, F_Cu );
@@ -184,7 +223,8 @@ BOOST_FIXTURE_TEST_CASE( GoodStackNoViolations, VIA_STACK_DRC_FIXTURE )
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 4 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 4 );
-    setRule( "microvia_aspect_ratio (max 1.0)" );
+    bds.m_HasStackup = true;
+    setRule( "hole_aspect_ratio (max 1.0)" );
 
     for( BOARD_STACKUP_ITEM* item : bds.GetStackupDescriptor().GetList() )
     {
@@ -214,6 +254,28 @@ BOOST_FIXTURE_TEST_CASE( GoodStackNoViolations, VIA_STACK_DRC_FIXTURE )
 BOOST_FIXTURE_TEST_CASE( StackNotTilingItsSpanReported, VIA_STACK_DRC_FIXTURE )
 {
     loadBoard();
+
+    run();
+
+    BOOST_CHECK_EQUAL( m_malformedSpans, 1 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( DuplicateHopReported, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    VECTOR2I pos( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) );
+
+    PCB_VIA_STACK* stack = makeStack( m_board.get(), F_Cu, In2_Cu );
+    stack->SetViaSize( pcbIUScale.mmToIU( 0.3 ) );
+    stack->SetViaDrill( pcbIUScale.mmToIU( 0.15 ) );
+    stack->SetPosition( pos );
+    stack->Regenerate( m_board.get(), nullptr );
+
+    stack->AddItem( makeMicrovia( m_board.get(), pos, F_Cu, In1_Cu, true ) );
 
     run();
 
@@ -350,7 +412,8 @@ BOOST_FIXTURE_TEST_CASE( MicroviaTooDeepForItsDiameterIsReported, VIA_STACK_DRC_
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
-    setRule( "microvia_aspect_ratio (max 1.0)" );
+    bds.m_HasStackup = true;
+    setRule( "hole_aspect_ratio (max 1.0)" );
 
     makeMicrovia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), F_Cu, In1_Cu, true );
 
@@ -370,6 +433,7 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioIsSilentWithoutALimit, VIA_STACK_DRC_FIXTURE
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
+    bds.m_HasStackup = true;
 
 
     makeMicrovia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), F_Cu, In1_Cu, true );
@@ -380,7 +444,7 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioIsSilentWithoutALimit, VIA_STACK_DRC_FIXTURE
 
     // The same via violates once a limit exists, so the silence came from the missing limit.
     m_aspect = 0;
-    setRule( "microvia_aspect_ratio (max 1.0)" );
+    setRule( "hole_aspect_ratio (max 1.0)" );
 
     run();
 
@@ -399,7 +463,8 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioSurvivesTheOtherChecksBeingIgnored, VIA_STAC
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
-    setRule( "microvia_aspect_ratio (max 1.0)" );
+    bds.m_HasStackup = true;
+    setRule( "hole_aspect_ratio (max 1.0)" );
 
     m_ignored = { DRCE_MALFORMED_MICROVIA_STACK_SPAN, DRCE_MICROVIA_STACK_NOT_FILLED, DRCE_MICROVIA_STACK_DEPTH };
 
@@ -411,30 +476,22 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioSurvivesTheOtherChecksBeingIgnored, VIA_STAC
 }
 
 
-// Without a stackup there are no thicknesses to divide, so the check stands down.
-// With stackup thicknesses to divide, the limit applies; with none, the check stands down.
-BOOST_FIXTURE_TEST_CASE( AspectRatioNeedsStackupThicknesses, VIA_STACK_DRC_FIXTURE )
+BOOST_FIXTURE_TEST_CASE( AspectRatioFallsBackToTheDefaultStackup, VIA_STACK_DRC_FIXTURE )
 {
     m_board = std::make_unique<BOARD>();
     m_board->SetCopperLayerCount( 4 );
     m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
 
-    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
-    setRule( "microvia_aspect_ratio (max 0.5)" );
+    BOOST_REQUIRE( m_board->GetDesignSettings().GetStackupDescriptor().GetList().empty() );
+
+    setRule( "hole_aspect_ratio (max 0.5)" );
 
     VECTOR2I at( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) );
     makeMicrovia( m_board.get(), at, F_Cu, In1_Cu, true );
 
-    // No stackup list at all, so there is nothing to measure.
+    // The default 4 layer build puts roughly 0.5 mm of dielectric under a 0.15 mm drill.
     run();
-    BOOST_CHECK_EQUAL( m_aspect, 0 );
-
-    // The same via against a real stackup exceeds the same limit.
-    m_aspect = 0;
-    bds.SetCopperLayerCount( 4 );
-    bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 4 );
-    run();
-    BOOST_CHECK_MESSAGE( m_aspect == 1, "with thicknesses present the limit must apply" );
+    BOOST_CHECK_EQUAL( m_aspect, 1 );
 }
 
 
@@ -463,6 +520,49 @@ BOOST_FIXTURE_TEST_CASE( MicroviaStackDepthRuleIsHonoured, VIA_STACK_DRC_FIXTURE
 }
 
 
+BOOST_FIXTURE_TEST_CASE( IgnoredDepthRuleIsSilent, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    PCB_VIA_STACK* stack = makeStack( m_board.get(), F_Cu, In2_Cu );
+    stack->SetPosition( VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ) );
+    stack->Regenerate( m_board.get(), nullptr );
+
+    setRule( "microvia_stack_depth (max 1)", "", "ignore" );
+
+    run();
+
+    BOOST_CHECK_EQUAL( m_depth, 0 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( IgnoredAspectRuleIsSilent, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
+    bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 4 );
+
+    for( BOARD_STACKUP_ITEM* item : bds.GetStackupDescriptor().GetList() )
+    {
+        if( item->GetType() == BS_ITEM_TYPE_DIELECTRIC )
+            item->SetThickness( pcbIUScale.mmToIU( 0.1 ) );
+    }
+
+    makeMicrovia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), F_Cu, In1_Cu, true );
+
+    setRule( "hole_aspect_ratio (max 0.1)", "", "ignore" );
+
+    run();
+
+    BOOST_CHECK_EQUAL( m_aspect, 0 );
+}
+
+
 // A microvia whose two layers are the same spans no dielectric. Such vias point at each other
 // in the chain walk, so a handful of them must not multiply into a pile of violations.
 BOOST_FIXTURE_TEST_CASE( ZeroSpanMicroviasDoNotMultiplyViolations, VIA_STACK_DRC_FIXTURE )
@@ -486,6 +586,7 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioCountsEveryDielectricSublayer, VIA_STACK_DRC
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
+    bds.m_HasStackup = true;
 
     // Split the dielectric under F.Cu into two 0.1 mm sublayers.
     for( BOARD_STACKUP_ITEM* item : bds.GetStackupDescriptor().GetList() )
@@ -500,7 +601,7 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioCountsEveryDielectricSublayer, VIA_STACK_DRC
     }
 
     // 0.2 mm of dielectric over a 0.15 mm drill is a ratio above 1, one sublayer alone is not.
-    setRule( "microvia_aspect_ratio (max 1.2)" );
+    setRule( "hole_aspect_ratio (max 1.2)" );
 
     makeMicrovia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), F_Cu, In1_Cu, true );
 
@@ -520,6 +621,7 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioUsesTheFoilTheLaserEnters, VIA_STACK_DRC_FIX
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
+    bds.m_HasStackup = true;
 
     const std::vector<BOARD_STACKUP_ITEM*>& stack = bds.GetStackupDescriptor().GetList();
 
@@ -544,7 +646,7 @@ BOOST_FIXTURE_TEST_CASE( AspectRatioUsesTheFoilTheLaserEnters, VIA_STACK_DRC_FIX
 
     // Through the B.Cu foil the depth is 0.135 mm over a 0.1 mm drill, a ratio of 1.35.
     // Through the In4.Cu foil it would read 1.175 and slip under the limit.
-    setRule( "microvia_aspect_ratio (max 1.25)" );
+    setRule( "hole_aspect_ratio (max 1.25)" );
 
     PCB_VIA* via = makeMicrovia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), In4_Cu,
                                  B_Cu, true );
@@ -601,6 +703,7 @@ BOOST_FIXTURE_TEST_CASE( MicroviaThroughCoreIsReported, VIA_STACK_DRC_FIXTURE )
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
+    bds.m_HasStackup = true;
 
     const std::vector<BOARD_STACKUP_ITEM*>& stack = bds.GetStackupDescriptor().GetList();
 
@@ -681,10 +784,11 @@ BOOST_FIXTURE_TEST_CASE( AnIgnoredAspectRatioDoesNotStopTheCoreCheck, VIA_STACK_
     BOARD_DESIGN_SETTINGS& bds = m_board->GetDesignSettings();
     bds.SetCopperLayerCount( 6 );
     bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 6 );
+    bds.m_HasStackup = true;
 
     // A limit is set, but its severity is off. The first via would otherwise end the walk.
-    setRule( "microvia_aspect_ratio (max 0.1)" );
-    m_ignored = { DRCE_MICROVIA_ASPECT_RATIO };
+    setRule( "hole_aspect_ratio (max 0.1)" );
+    m_ignored = { DRCE_HOLE_ASPECT_RATIO };
 
     const std::vector<BOARD_STACKUP_ITEM*>& stack = bds.GetStackupDescriptor().GetList();
     PCB_LAYER_ID coreTop = UNDEFINED_LAYER, coreBot = UNDEFINED_LAYER, lastCopper = UNDEFINED_LAYER;
@@ -722,6 +826,146 @@ BOOST_FIXTURE_TEST_CASE( AnIgnoredAspectRatioDoesNotStopTheCoreCheck, VIA_STACK_
 
     BOOST_CHECK_EQUAL( m_aspect, 0 );
     BOOST_CHECK_MESSAGE( m_crossesCore == 2, "the walk stopped early, only " << m_crossesCore << " reported" );
+}
+
+
+// 0.035 mm copper and 0.1 mm dielectric on 4 layers, 0.44 mm in all.
+static void setUniformStackup( BOARD_DESIGN_SETTINGS& bds )
+{
+    bds.SetCopperLayerCount( 4 );
+    bds.GetStackupDescriptor().BuildDefaultStackupList( &bds, 4 );
+    bds.m_HasStackup = true;
+
+    for( BOARD_STACKUP_ITEM* item : bds.GetStackupDescriptor().GetList() )
+    {
+        if( item->GetType() == BS_ITEM_TYPE_DIELECTRIC )
+        {
+            item->SetThickness( pcbIUScale.mmToIU( 0.1 ) );
+            item->SetTypeName( KEY_PREPREG );
+        }
+        else if( item->GetType() == BS_ITEM_TYPE_COPPER )
+        {
+            item->SetThickness( pcbIUScale.mmToIU( 0.035 ) );
+        }
+    }
+}
+
+
+BOOST_FIXTURE_TEST_CASE( ThroughViaTooDeepForItsDrillIsReported, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    setUniformStackup( m_board->GetDesignSettings() );
+    setRule( "hole_aspect_ratio (max 6.0)" );
+
+    // 0.44 / 0.05 = 8.8 fails, 0.44 / 0.1 = 4.4 passes.
+    makeVia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), VIATYPE::THROUGH, F_Cu, B_Cu,
+             pcbIUScale.mmToIU( 0.05 ) );
+    makeVia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 10 ) ), VIATYPE::THROUGH, F_Cu, B_Cu,
+             pcbIUScale.mmToIU( 0.1 ) );
+
+    run();
+    BOOST_CHECK_EQUAL( m_aspect, 1 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( BlindViaMeasuresItsSpanNotTheBoard, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    setUniformStackup( m_board->GetDesignSettings() );
+    setRule( "hole_aspect_ratio (max 6.0)" );
+
+    // 0.135 / 0.05 = 2.7 passes where the whole board would give 8.8.
+    makeVia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), VIATYPE::BLIND, F_Cu, In1_Cu,
+             pcbIUScale.mmToIU( 0.05 ) );
+
+    run();
+    BOOST_CHECK_EQUAL( m_aspect, 0 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( PlatedPadHoleUsesItsNarrowDimension, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    setUniformStackup( m_board->GetDesignSettings() );
+    setRule( "hole_aspect_ratio (max 6.0)" );
+
+    // 0.44 / 0.05 = 8.8 fails on the narrow side.
+    makePthPad( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ),
+                VECTOR2I( pcbIUScale.mmToIU( 0.2 ), pcbIUScale.mmToIU( 0.05 ) ) );
+
+    // 0.44 / 0.1 = 4.4 passes.
+    makePthPad( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 10 ) ),
+                VECTOR2I( pcbIUScale.mmToIU( 0.1 ), pcbIUScale.mmToIU( 0.1 ) ) );
+
+    run();
+    BOOST_CHECK_EQUAL( m_aspect, 1 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( AViaTypeConditionScopesTheLimit, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    setUniformStackup( m_board->GetDesignSettings() );
+    setRule( "hole_aspect_ratio (max 1.0)", "A.Via_Type == 'Micro'" );
+
+    // 0.135 / 0.1 = 1.35 fails. The through via matches no rule, so it is not checked.
+    makeVia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), VIATYPE::MICROVIA, F_Cu,
+             In1_Cu, pcbIUScale.mmToIU( 0.1 ) );
+    makeVia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 10 ) ), VIATYPE::THROUGH, F_Cu, B_Cu,
+             pcbIUScale.mmToIU( 0.1 ) );
+
+    run();
+    BOOST_CHECK_EQUAL( m_aspect, 1 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( BuriedViaCountsTheFoilItDrillsOutOf, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    setUniformStackup( m_board->GetDesignSettings() );
+    setRule( "hole_aspect_ratio (max 3.0)" );
+
+    // The drill leaves through the far foil, so 0.17 over 0.05 is 3.4 and not the 2.7 one foil gives.
+    makeVia( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ), VIATYPE::BURIED, In1_Cu,
+             In2_Cu, pcbIUScale.mmToIU( 0.05 ) );
+
+    run();
+    BOOST_CHECK_EQUAL( m_aspect, 1 );
+}
+
+
+BOOST_FIXTURE_TEST_CASE( UnplatedHoleIsNotChecked, VIA_STACK_DRC_FIXTURE )
+{
+    m_board = std::make_unique<BOARD>();
+    m_board->SetCopperLayerCount( 4 );
+    m_board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    setUniformStackup( m_board->GetDesignSettings() );
+    setRule( "hole_aspect_ratio (max 6.0)" );
+
+    // The same 0.44 over 0.05 that a plated hole fails on, with nothing to plate.
+    PAD* pad = makePthPad( m_board.get(), VECTOR2I( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) ),
+                           VECTOR2I( pcbIUScale.mmToIU( 0.05 ), pcbIUScale.mmToIU( 0.05 ) ) );
+    pad->SetAttribute( PAD_ATTRIB::NPTH );
+    pad->SetLayerSet( PAD::UnplatedHoleMask() );
+
+    run();
+    BOOST_CHECK_EQUAL( m_aspect, 0 );
 }
 
 

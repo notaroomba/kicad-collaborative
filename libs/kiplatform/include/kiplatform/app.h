@@ -123,6 +123,24 @@ namespace KIPLATFORM
          * earlier one).  No-op on platforms that pass URLs on the command line.
          */
         void RegisterURLSchemeHandler( std::function<void( const wxString& aUrl )> aHandler );
+
+        /**
+         * Raise or lower the scheduling priority of the calling thread.
+         *
+         * Raising it may need privileges the process does not have.
+         *
+         * @param aRaise is true to schedule the thread above normal, false to schedule it below.
+         * @return true if the priority was changed.
+         */
+        bool SetCurrentThreadPriority( bool aRaise );
+
+        /**
+         * End the process at once with the given exit code, skipping static destruction, atexit handlers and
+         * library unload.  For use after the application has flushed what it needs to keep.
+         *
+         * @param aExitCode is the process exit code
+         */
+        [[noreturn]] void TerminateWithCode( int aExitCode );
     }
 }
 

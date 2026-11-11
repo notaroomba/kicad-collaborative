@@ -35,6 +35,7 @@ public:
     static TOOL_ACTION openJobsetFile;
     static TOOL_ACTION closeProject;
     static TOOL_ACTION loadProject;
+    static TOOL_ACTION exportForOlderVersion;
     static TOOL_ACTION viewDroppedGerbers;
 
     static TOOL_ACTION editSchematic;
@@ -42,7 +43,6 @@ public:
     static TOOL_ACTION editPCB;
     static TOOL_ACTION editFootprints;
     static TOOL_ACTION viewGerbers;
-    static TOOL_ACTION convertImage;
     static TOOL_ACTION showCalculator;
     static TOOL_ACTION editDrawingSheet;
     static TOOL_ACTION openTextEditor;

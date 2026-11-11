@@ -135,11 +135,24 @@ DIALOG_PLOT::DIALOG_PLOT( PCB_EDIT_FRAME* aEditFrame, wxWindow* aParent, JOB_EXP
         m_DRCExclusionsWarning->Hide();
         m_sdbSizer1Apply->Hide();
         m_zoneFillCheck->SetLabel( _( "Refill zones before plotting" ) );
+
+        // UpdateUI rather than wxEVT_CHECKBOX so dialog undo/redo also refreshes the label
+        m_staticTextDir->Bind( wxEVT_UPDATE_UI,
+                               [this]( wxUpdateUIEvent& aEvent )
+                               {
+                                   updateJobOutputLabel();
+                                   aEvent.Skip();
+                               } );
     }
     else
     {
         m_plotOpts = m_editFrame->GetPlotSettings();
         m_messagesPanel->SetFileName( Prj().GetProjectPath() + wxT( "report.txt" ) );
+        m_allCopperLayers->Hide();
+
+        // Only plot jobs carry these, the board plot settings do not store them
+        m_plotFootprintValues->Hide();
+        m_plotRefDes->Hide();
     }
 
     // DIALOG_SHIM needs a unique hash_key because classname will be the same for both job and
@@ -284,6 +297,9 @@ bool DIALOG_PLOT::TransferDataToWindow()
     // Select the current board variant in the variant choice
     if( m_job )
     {
+        m_plotFootprintValues->SetValue( m_plotOpts.GetPlotValue() );
+        m_plotRefDes->SetValue( m_plotOpts.GetPlotReference() );
+
         if( !m_job->m_variant.IsEmpty() )
         {
             int idx = m_variantChoiceCtrl->FindString( m_job->m_variant );
@@ -350,6 +366,18 @@ bool DIALOG_PLOT::TransferDataToWindow()
 
         if( m_plotOpts.GetLayerSelection()[layer] )
             m_layerCheckListBox->Check( checkIndex );
+    }
+
+    if( m_job )
+    {
+        // A new Gerber job starts with every copper layer, as a fabrication set needs them all
+        bool newGerberJob = m_job->m_plotFormat == JOB_EXPORT_PCB_PLOT::PLOT_FORMAT::GERBER
+                            && m_job->m_plotLayerSequence.empty();
+
+        m_allCopperLayers->SetValue( m_job->m_plotAllCopperLayers || newGerberJob );
+
+        if( m_allCopperLayers->GetValue() )
+            checkAllCopperLayers();
     }
 
     arrangeAllLayersList( s_lastAllLayersOrder );
@@ -422,6 +450,10 @@ bool DIALOG_PLOT::TransferDataToWindow()
     // DXF units selection
     m_DXF_plotUnits->SetSelection( m_plotOpts.GetDXFPlotUnits() == DXF_UNITS::INCH ? 0 : 1 );
 
+    // Job only, PCB_PLOTTER honours this flag for non-DXF formats too
+    if( m_job )
+        m_DXF_exportAsMultiLayeredFile->SetValue( m_plotOpts.GetDXFMultiLayeredExportOption() );
+
     // Plot mirror option
     m_plotMirrorOpt->SetValue( m_plotOpts.GetMirror() );
 
@@ -432,7 +464,7 @@ bool DIALOG_PLOT::TransferDataToWindow()
     m_backFPPropertyPopups->SetValue( m_plotOpts.m_PDFBackFPPropertyPopups );
     m_pdfMetadata->SetValue( m_plotOpts.m_PDFMetadata );
     m_pdfSingle->SetValue( m_plotOpts.m_PDFSingle );
-    m_pdfBackgroundColorSwatch->SetSwatchColor( m_plotOpts.m_PDFBackgroundColor, false );
+    m_pdfBackgroundColorSwatch->SetSwatchColor( m_plotOpts.m_backgroundColor, false );
     updatePdfColorOptions();
 
     // Initialize a few other parameters, which can also be modified
@@ -443,7 +475,38 @@ bool DIALOG_PLOT::TransferDataToWindow()
     wxCommandEvent cmd_event;
     SetPlotFormat( cmd_event );
 
+    if( m_job )
+        updateJobOutputLabel();
+
     return true;
+}
+
+
+void DIALOG_PLOT::updateJobOutputLabel()
+{
+    PLOT_FORMAT fmt = getPlotFormat();
+    bool        singleFile = ( fmt == PLOT_FORMAT::PDF && m_pdfSingle->GetValue() )
+                             || ( fmt == PLOT_FORMAT::DXF && m_DXF_exportAsMultiLayeredFile->GetValue() );
+
+    wxString label = singleFile ? _( "Output file:" ) : _( "Output directory:" );
+
+    if( m_staticTextDir->GetLabel() == label )
+        return;
+
+    m_staticTextDir->SetLabel( label );
+
+    if( singleFile )
+    {
+        m_outputDirectoryName->SetToolTip( _( "Target file for the plot. Can be absolute or relative to the board "
+                                              "file location." ) );
+    }
+    else
+    {
+        m_outputDirectoryName->SetToolTip( _( "Target directory for plot files. Can be absolute or relative to "
+                                              "the board file location." ) );
+    }
+
+    Layout();
 }
 
 
@@ -505,7 +568,7 @@ void DIALOG_PLOT::transferPlotParamsToJob()
         pdfJob->m_pdfBackFPPropertyPopups = m_plotOpts.m_PDFBackFPPropertyPopups;
         pdfJob->m_pdfMetadata = m_plotOpts.m_PDFMetadata;
         pdfJob->m_pdfSingle = m_plotOpts.m_PDFSingle;
-        pdfJob->m_pdfBackgroundColor = m_plotOpts.m_PDFBackgroundColor.ToCSSString();
+        pdfJob->m_pdfBackgroundColor = m_plotOpts.m_backgroundColor.ToCSSString();
 
         // we need to embed this for the cli deprecation fix
         if( pdfJob->m_pdfSingle )
@@ -534,11 +597,14 @@ void DIALOG_PLOT::transferPlotParamsToJob()
 
     m_job->m_plotDrawingSheet = m_plotOpts.GetPlotFrameRef();
     m_job->m_plotPadNumbers = m_plotOpts.GetPlotPadNumbers();
+    m_job->m_plotFootprintValues = m_plotOpts.GetPlotValue();
+    m_job->m_plotRefDes = m_plotOpts.GetPlotReference();
 
     m_job->m_blackAndWhite = m_plotOpts.GetBlackAndWhite();
     m_job->m_mirror = m_plotOpts.GetMirror();
     m_job->m_negative = m_plotOpts.GetNegative();
     m_job->m_plotLayerSequence = m_plotOpts.GetLayerSelection().SeqStackupForPlotting();
+    m_job->m_plotAllCopperLayers = m_allCopperLayers->GetValue() && allCopperLayersChecked();
     m_job->m_plotOnAllLayersSequence = m_plotOpts.GetPlotOnAllLayersSequence();
 
     if( m_job->m_plotFormat == JOB_EXPORT_PCB_PLOT::PLOT_FORMAT::SVG ||
@@ -734,6 +800,60 @@ void DIALOG_PLOT::OnRightClickLayers( wxMouseEvent& event )
             } );
 
     PopupMenu( &menu );
+
+    recordControlChange( m_layerCheckListBox );
+    syncAllCopperLayers();
+}
+
+
+void DIALOG_PLOT::checkAllCopperLayers()
+{
+    for( unsigned i = 0; i < m_layerList.size(); i++ )
+    {
+        if( IsCopperLayer( m_layerList[i] ) )
+            m_layerCheckListBox->Check( i, true );
+    }
+}
+
+
+bool DIALOG_PLOT::allCopperLayersChecked() const
+{
+    for( unsigned i = 0; i < m_layerList.size(); i++ )
+    {
+        if( IsCopperLayer( m_layerList[i] ) && !m_layerCheckListBox->IsChecked( i ) )
+            return false;
+    }
+
+    return true;
+}
+
+
+void DIALOG_PLOT::syncAllCopperLayers()
+{
+    if( m_allCopperLayers->GetValue() && !allCopperLayersChecked() )
+    {
+        m_allCopperLayers->SetValue( false );
+        recordControlChange( m_allCopperLayers );
+    }
+}
+
+
+void DIALOG_PLOT::onLayerToggled( wxCommandEvent& event )
+{
+    syncAllCopperLayers();
+    event.Skip();
+}
+
+
+void DIALOG_PLOT::onAllCopperLayers( wxCommandEvent& event )
+{
+    if( m_allCopperLayers->GetValue() )
+    {
+        checkAllCopperLayers();
+        recordControlChange( m_layerCheckListBox );
+    }
+
+    event.Skip();
 }
 
 
@@ -816,10 +936,7 @@ void DIALOG_PLOT::onOutputDirectoryBrowseClicked( wxCommandEvent& event )
                 return m_editFrame->GetBoard()->ResolveTextVar( token, 0 );
             };
 
-    wxString path = m_outputDirectoryName->GetValue();
-    path = ExpandTextVars( path, &textResolver );
-    path = ExpandEnvVarSubstitutions( path, &Prj() );
-    path = Prj().AbsolutePath( path );
+    wxString path = ResolveProjectPath( m_outputDirectoryName->GetValue(), &Prj(), &textResolver );
 
     wxDirDialog dirDialog( this, _( "Select Output Directory" ), path );
 
@@ -1034,6 +1151,8 @@ void DIALOG_PLOT::applyPlotSettings()
     tempOptions.SetPlotFrameRef( m_plotSheetRef->GetValue() );
     tempOptions.SetSketchPadsOnFabLayers( m_sketchPadsOnFabLayers->GetValue() );
     tempOptions.SetPlotPadNumbers( m_plotPadNumbers->GetValue() );
+    tempOptions.SetPlotValue( !m_job || m_plotFootprintValues->GetValue() );
+    tempOptions.SetPlotReference( !m_job || m_plotRefDes->GetValue() );
     tempOptions.SetHideDNPFPsOnFabLayers( m_plotDNP->GetValue()
                                             && m_hideDNP->GetValue() );
     tempOptions.SetSketchDNPFPsOnFabLayers( m_plotDNP->GetValue()
@@ -1071,7 +1190,7 @@ void DIALOG_PLOT::applyPlotSettings()
         tempOptions.m_PDFBackFPPropertyPopups = m_backFPPropertyPopups->GetValue();
         tempOptions.m_PDFMetadata = m_pdfMetadata->GetValue();
         tempOptions.m_PDFSingle = m_pdfSingle->GetValue();
-        tempOptions.m_PDFBackgroundColor = m_pdfBackgroundColorSwatch->GetSwatchColor();
+        tempOptions.m_backgroundColor = m_pdfBackgroundColorSwatch->GetSwatchColor();
     }
     else if( getPlotFormat() == PLOT_FORMAT::PNG )
     {
@@ -1153,9 +1272,6 @@ void DIALOG_PLOT::applyPlotSettings()
             selectedLayers.set( m_layerList[i] );
     }
 
-    // Get a list of copper layers that aren't being used by inverting enabled layers.
-    LSET disabledCopperLayers = LSET::AllCuMask() & ~m_editFrame->GetBoard()->GetEnabledLayers();
-
     // Add selected layers from plot on all layers list in order set by user.
     wxArrayInt plotOnAllLayers;
     LSEQ commonLayers;
@@ -1175,10 +1291,9 @@ void DIALOG_PLOT::applyPlotSettings()
 
     tempOptions.SetPlotOnAllLayersSequence( commonLayers );
 
-    // Enable all of the disabled copper layers.
-    // If someone enables more copper layers they will be selected by default.
-    selectedLayers = selectedLayers | disabledCopperLayers;
-    tempOptions.SetLayerSelection( selectedLayers );
+    tempOptions.SetLayerSelection( PCB_PLOTTER::DialogLayerSelection( selectedLayers,
+                                                                      m_editFrame->GetBoard()->GetEnabledLayers(),
+                                                                      m_job != nullptr ) );
 
     tempOptions.SetNegative( m_plotPSNegativeOpt->GetValue() );
     tempOptions.SetA4Output( m_forcePSA4OutputOpt->GetValue() );
@@ -1247,9 +1362,7 @@ void DIALOG_PLOT::Plot( wxCommandEvent& event )
                     return m_editFrame->GetBoard()->ResolveTextVar( token, 0 );
                 };
 
-        wxString path = m_plotOpts.GetOutputDirectory();
-        path = ExpandTextVars( path, &textResolver );
-        path = ExpandEnvVarSubstitutions( path, board->GetProject() );
+        wxString path = ExpandPathVariables( m_plotOpts.GetOutputDirectory(), board->GetProject(), &textResolver );
 
         wxFileName outputDir = wxFileName::DirName( path );
         wxString   boardFilename = m_editFrame->GetBoard()->GetFileName();
@@ -1365,10 +1478,7 @@ void DIALOG_PLOT::onOpenOutputDirectory( wxCommandEvent& event )
                 return m_editFrame->GetBoard()->ResolveTextVar( token, 0 );
             };
 
-    wxString path = m_outputDirectoryName->GetValue();
-    path = ExpandTextVars( path, &textResolver );
-    path = ExpandEnvVarSubstitutions( path, &Prj() );
-    path = Prj().AbsolutePath( path );
+    wxString path = ResolveProjectPath( m_outputDirectoryName->GetValue(), &Prj(), &textResolver );
 
     if( !wxDirExists( path ) )
     {

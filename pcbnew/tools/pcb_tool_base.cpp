@@ -22,6 +22,7 @@
 #include <tool/tool_manager.h>
 #include <board_commit.h>
 #include <gal/graphics_abstraction_layer.h>
+#include <widgets/appearance_controls.h>
 #include <footprint.h>
 #include <pcb_draw_panel_gal.h>
 #include <pgm_base.h>
@@ -35,9 +36,11 @@
 #include <tools/zone_filler_tool.h>
 #include <view/view_controls.h>
 
+#include "pcb_track.h"
+#include "pcb_io/pads/pads_parser.h"
 
-void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
-                                                INTERACTIVE_PLACER_BASE* aPlacer,
+
+void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT& aTool, INTERACTIVE_PLACER_BASE* aPlacer,
                                                 const wxString& aCommitMessage, int aOptions )
 {
     using namespace std::placeholders;
@@ -193,7 +196,8 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
 
             break;
         }
-        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT ) )
+        else if( evt->IsClick( BUT_LEFT ) || evt->IsDblClick( BUT_LEFT )
+                    || evt->IsAction( &ACTIONS::cursorClick ) || evt->IsAction( &ACTIONS::cursorDblClick ) )
         {
             if( !newItem )
             {
@@ -235,6 +239,55 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
                     makeNewItem( controls()->GetCursorPosition() );
 
                 setCursor();
+            }
+
+            if( APPEARANCE_CONTROLS* controls = frame()->GetAppearancePanel() )
+            {
+                auto ensureVisible =
+                        [&]( int aLayer )
+                        {
+                            if( aLayer < PCB_LAYER_ID::PCB_LAYER_ID_COUNT )
+                            {
+                                if( !view()->IsLayerVisible( aLayer  ) )
+                                {
+                                    controls->SetLayerVisible( aLayer, true );
+                                    frame()->GetCanvas()->Refresh();
+                                }
+                            }
+                            else
+                            {
+                                if( !board()->IsElementVisible( (GAL_LAYER_ID) aLayer ) )
+                                {
+                                    controls->SetObjectVisible( (GAL_LAYER_ID) aLayer, true );
+                                    frame()->GetCanvas()->Refresh();
+                                }
+                            }
+                        };
+
+                if( newItem->Type() == PCB_POINT_T )
+                {
+                    ensureVisible( LAYER_POINTS );
+                }
+                else if( newItem->Type() == PCB_VIA_T )
+                {
+                    ensureVisible( LAYER_VIAS );
+
+                    switch( static_cast<PCB_VIA*>( newItem.get() )->GetViaType() )
+                    {
+                    case VIATYPE::BURIED:   ensureVisible( LAYER_VIA_BURIED );   break;
+                    case VIATYPE::BLIND:    ensureVisible( LAYER_VIA_BLIND );    break;
+                    case VIATYPE::MICROVIA: ensureVisible( LAYER_VIA_MICROVIA ); break;
+                    default:                                                     break;
+                    }
+                }
+                else if( newItem->Type() == PCB_PAD_T )
+                {
+                    ensureVisible( LAYER_PADS );
+                }
+                else
+                {
+                    ensureVisible( newItem->GetLayer() );
+                }
             }
         }
         else if( evt->IsClick( BUT_RIGHT ) )
@@ -282,7 +335,8 @@ void PCB_TOOL_BASE::doInteractiveItemPlacement( const TOOL_EVENT&        aTool,
                 evt->SetPassEvent();
             }
         }
-        else if( newItem && evt->IsMotion() )
+        else if( newItem && (   evt->IsMotion()
+                             || evt->IsAction( &ACTIONS::refreshPreview ) ) )
         {
             // track the cursor
             newItem->SetPosition( cursorPos );

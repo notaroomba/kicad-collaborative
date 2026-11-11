@@ -62,7 +62,7 @@ void PlotDrawingSheet( PLOTTER* plotter, const PROJECT* aProject, const TITLE_BL
     if( plotColor == COLOR4D::UNSPECIFIED )
         plotColor = COLOR4D( RED );
 
-    DS_DRAW_ITEM_LIST drawList( unityScale );
+    DS_DRAW_ITEM_LIST drawList( unityScale, FOR_CANVAS );
 
     // Print only a short filename, if aFilename is the full filename
     wxFileName fn( aFilename );
@@ -138,7 +138,7 @@ void PlotDrawingSheet( PLOTTER* plotter, const PROJECT* aProject, const TITLE_BL
                 DS_DRAW_ITEM_TEXT* text = (DS_DRAW_ITEM_TEXT*) item;
                 KIFONT::FONT*      font = text->GetDrawFont( settings );
                 COLOR4D            color = plotColor;
-                wxString           shownText( text->GetShownText( true ) );
+                wxString           shownText( text->GetShownText( FOR_CANVAS ) );
 
                 if( plotter->GetColorMode() && text->GetTextColor() != COLOR4D::UNSPECIFIED )
                     color = text->GetTextColor();

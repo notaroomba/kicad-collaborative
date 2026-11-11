@@ -122,11 +122,11 @@ void PCB_TEST_FRAME_BASE::SetBoard( std::shared_ptr<BOARD> b )
 BOARD* PCB_TEST_FRAME_BASE::LoadAndDisplayBoard( const std::string& filename )
 {
     IO_RELEASER<PCB_IO> pi( new PCB_IO_KICAD_SEXPR );
-    BOARD* brd = nullptr;
+    std::unique_ptr<BOARD> brd;
 
     try
     {
-        brd = pi->LoadBoard( wxString( filename.c_str() ), nullptr, nullptr );
+        brd = pi->LoadBoard( wxString( filename.c_str() ) );
     }
     catch( const IO_ERROR& ioe )
     {
@@ -136,7 +136,7 @@ BOARD* PCB_TEST_FRAME_BASE::LoadAndDisplayBoard( const std::string& filename )
 
     //SetBoard( brd );
 
-    return brd;
+    return brd.release();
 }
 
 void PCB_TEST_FRAME_BASE::SetSelectableItemTypes( const std::vector<KICAD_T> aTypes )

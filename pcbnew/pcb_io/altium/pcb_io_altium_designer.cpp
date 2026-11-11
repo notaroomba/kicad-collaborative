@@ -121,47 +121,47 @@ void ApplyAltiumProjectVariantsToBoard( BOARD* aBoard,
     }
 }
 
-void ApplyAltiumProjectParametersToProject( PROJECT* aProject,
-                                            const std::map<wxString, wxString>& aParameters )
+void LoadAltiumBoard( const wxString& aFileName, BOARD* aBoard,
+                      const std::map<ALTIUM_PCB_DIR, std::string>& aMapping,
+                      const std::map<std::string, UTF8>* aProperties, PROJECT* aProject,
+                      PROGRESS_REPORTER* aProgressReporter, LAYER_MAPPING_HANDLER& aLayerMappingHandler,
+                      REPORTER* aReporter )
 {
-    if( !aProject )
-        return;
+    // The compound-file constructor already translates CFB errors to IO_ERROR.
+    ALTIUM_PCB_COMPOUND_FILE altiumPcbFile( aFileName );
 
-    // Names KiCad resolves contextually (board fields, title block, special strings). Importing
-    // them as project variables would shadow nothing useful and could surprise the user, so they
-    // are left to native resolution.
-    static const std::set<wxString> reserved = {
-        wxS( "LAYER" ),         wxS( "FILENAME" ),      wxS( "FILEPATH" ),
-        wxS( "PROJECTNAME" ),   wxS( "VARIANT" ),       wxS( "VARIANT_DESC" ),
-        wxS( "ISSUE_DATE" ),    wxS( "CURRENT_DATE" ),  wxS( "CURRENT_TIME_LOCALE" ),
-        wxS( "CURRENT_TIME_HH_MM_SS" ), wxS( "REVISION" ), wxS( "TITLE" ),
-        wxS( "COMPANY" ),       wxS( "COMMENT1" ),      wxS( "COMMENT2" ),
-        wxS( "COMMENT3" ),      wxS( "COMMENT4" ),      wxS( "COMMENT5" ),
-        wxS( "COMMENT6" ),      wxS( "COMMENT7" ),      wxS( "COMMENT8" ),
-        wxS( "COMMENT9" ),      wxS( "VCSHASH" ),       wxS( "VCSSHORTHASH" ),
-        wxS( "KICAD_VERSION" ), wxS( "PAPER" ),         wxS( "SHEETNAME" ),
-        wxS( "SHEETPATH" ),     wxS( "DRC_WARNING" ),   wxS( "DRC_ERROR" ),
-        wxS( "ERC_WARNING" ),   wxS( "ERC_ERROR" )
-    };
+    std::set<wxString> specialStrings;
 
-    std::map<wxString, wxString>& textVars = aProject->GetTextVars();
-    bool                          added = false;
-
-    for( const auto& [name, value] : aParameters )
+    try
     {
-        if( reserved.count( name ) )
-            continue;
-
-        // Don't clobber a variable the user (or a prior import step) already set.
-        if( textVars.count( name ) )
-            continue;
-
-        textVars[name] = value;
-        added = true;
+        ALTIUM_PCB pcb( aBoard, aProgressReporter, aLayerMappingHandler, aReporter );
+        pcb.Parse( altiumPcbFile, aMapping, aProperties );
+        specialStrings = pcb.GetSpecialStrings();
+    }
+    catch( CFB::CFBException& exception )
+    {
+        THROW_IO_ERROR( exception.what() );
     }
 
-    if( added )
-        aProject->IncrementTextVarsTicker();
+    if( aProperties && aProperties->count( "project_file" ) )
+    {
+        const wxString& projectFile = aProperties->at( "project_file" );
+
+        auto variants = ParseAltiumProjectVariants( projectFile );
+
+        if( !variants.empty() )
+            ApplyAltiumProjectVariantsToBoard( aBoard, variants );
+
+        ApplyAltiumProjectParametersToProject( aProject,
+                                               ParseAltiumProjectParameters( projectFile ) );
+    }
+
+    // what is still undefined has no value, which Altium shows as nothing
+    if( aProject )
+    {
+        for( const wxString& name : specialStrings )
+            aProject->GetTextVars().emplace( name, wxString() );
+    }
 }
 
 
@@ -217,20 +217,14 @@ bool PCB_IO_ALTIUM_DESIGNER::CanReadLibrary( const wxString& aFileName ) const
 }
 
 
-BOARD* PCB_IO_ALTIUM_DESIGNER::LoadBoard( const wxString& aFileName, BOARD* aAppendToMe,
-                                          const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
+void PCB_IO_ALTIUM_DESIGNER::loadBoard( const wxString& aFileName, BOARD& aBoard, bool aIsNewLoad,
+                                        const std::map<std::string, UTF8>* aProperties, PROJECT* aProject )
 {
-
     m_props = aProperties;
-
-    m_board = aAppendToMe ? aAppendToMe : new BOARD();
+    m_board = &aBoard;
 
     // Collect the font substitution warnings (RAII - automatically reset on scope exit)
     FONTCONFIG_REPORTER_SCOPE fontconfigScope( &LOAD_INFO_REPORTER::GetInstance() );
-
-    // Give the filename to the board if it's new
-    if( !aAppendToMe )
-        m_board->SetFileName( aFileName );
 
     // clang-format off
     const std::map<ALTIUM_PCB_DIR, std::string> mapping = {
@@ -260,33 +254,8 @@ BOARD* PCB_IO_ALTIUM_DESIGNER::LoadBoard( const wxString& aFileName, BOARD* aApp
     };
     // clang-format on
 
-    ALTIUM_PCB_COMPOUND_FILE altiumPcbFile( aFileName );
-
-    try
-    {
-        // Parse File
-        ALTIUM_PCB pcb( m_board, m_progressReporter, m_layer_mapping_handler, m_reporter );
-        pcb.Parse( altiumPcbFile, mapping, m_props );
-    }
-    catch( CFB::CFBException& exception )
-    {
-        THROW_IO_ERROR( exception.what() );
-    }
-
-    if( m_props && m_props->count( "project_file" ) )
-    {
-        const wxString& projectFile = m_props->at( "project_file" );
-
-        auto variants = ParseAltiumProjectVariants( projectFile );
-
-        if( !variants.empty() )
-            ApplyAltiumProjectVariantsToBoard( m_board, variants );
-
-        ApplyAltiumProjectParametersToProject( aProject,
-                                               ParseAltiumProjectParameters( projectFile ) );
-    }
-
-    return m_board;
+    LoadAltiumBoard( aFileName, m_board, mapping, m_props, aProject,
+                     m_progressReporter, m_layer_mapping_handler, m_reporter );
 }
 
 
@@ -421,9 +390,9 @@ void PCB_IO_ALTIUM_DESIGNER::FootprintEnumerate( wxArrayString&  aFootprintNames
 }
 
 
-FOOTPRINT* PCB_IO_ALTIUM_DESIGNER::FootprintLoad( const wxString& aLibraryPath,
-                                                  const wxString& aFootprintName, bool aKeepUUID,
-                                                  const std::map<std::string, UTF8>* aProperties )
+std::unique_ptr<FOOTPRINT> PCB_IO_ALTIUM_DESIGNER::FootprintLoad( const wxString& aLibraryPath,
+                                                                  const wxString& aFootprintName, bool aKeepUUID,
+                                                                  const std::map<std::string, UTF8>* aProperties )
 {
     loadAltiumLibrary( aLibraryPath );
 

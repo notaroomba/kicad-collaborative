@@ -23,6 +23,8 @@
 #include <wx/string.h>
 #include <wx/log.h>
 #include "wrlproc.h"
+#include "vrml_line_reader.h"
+#include "../model_import_internal.h"
 #include <wx_filename.h>
 
 #define GETLINE                                                                                \
@@ -45,6 +47,10 @@
                                                                                                \
             m_fileline = m_file->LineNumber();                                                 \
         }                                                                                      \
+        catch( const MODEL_IMPORT_CANCELED& )                                                                          \
+        {                                                                                                              \
+            throw;                                                                                                     \
+        }                                                                                                              \
         catch( ... )                                                                           \
         {                                                                                      \
             m_error = " * [INFO] input line too long";                                         \
@@ -54,7 +60,7 @@
     } while( 0 )
 
 
-WRLPROC::WRLPROC( LINE_READER* aLineReader )
+WRLPROC::WRLPROC( VRML_LINE_READER* aLineReader )
 {
     m_fileVersion = WRLVERSION::VRML_INVALID;
     m_eof = false;
@@ -69,7 +75,7 @@ WRLPROC::WRLPROC( LINE_READER* aLineReader )
     }
 
     m_error.clear();
-    wxString tname = m_file->GetSource();
+    wxString tname = m_file->Source();
     m_filename = tname.ToUTF8();
     wxFileName fn( tname );
 
@@ -673,17 +679,20 @@ bool WRLPROC::ReadString( std::string& aSFString )
 
         if( m_bufpos >= m_buf.size() )
         {
-            aSFString.append( 1, '\n' );
-
-            if( !getRawLine() )
+            do
             {
-                std::ostringstream ostr;
-                ostr << "invalid VRML1 file at lines " << ifline << "--" << m_fileline;
-                ostr << "; could not find end of string\n";
-                m_error = ostr.str();
+                aSFString.append( 1, '\n' );
 
-                return false;
-            }
+                if( !getRawLine() )
+                {
+                    std::ostringstream ostr;
+                    ostr << "invalid VRML1 file at lines " << ifline << "--" << m_fileline;
+                    ostr << "; could not find end of string\n";
+                    m_error = ostr.str();
+
+                    return false;
+                }
+            } while( m_buf.empty() );
         }
 
         if( '\\' == m_buf[m_bufpos] )
@@ -1996,7 +2005,7 @@ std::string WRLPROC::GetFileName( void )
         return "";
     }
 
-    return std::string( m_file->GetSource().ToUTF8() );
+    return std::string( m_file->Source().ToUTF8() );
 }
 
 

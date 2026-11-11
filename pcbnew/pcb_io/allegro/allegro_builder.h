@@ -70,8 +70,8 @@ private:
 
     /**
      * Get a block by its key, and check that it is of the expected type.
-      *
-      * @tparam T must be a BLOCK_DATA struct with a BLOCK_TYPE_CODE member
+     *
+     * @tparam T must be a BLOCK_DATA struct with a BLOCK_TYPE_CODE member
      */
     template <ALLEGRO_BLOCK_DATA T>
     const T* expectBlockByKey( uint32_t aKey ) const
@@ -140,6 +140,8 @@ private:
     /**
      * Give @a aItem and its children ids derived from the Allegro block they came from.
      *
+     * @param aItem
+     * @param aKey
      * @param aSeq is advanced once per item stamped, so several items sharing one source block
      *             still get distinct ids.
      */
@@ -170,8 +172,19 @@ private:
     /**
      * Build the shapes from an 0x14 shape list
      */
-    std::vector<std::unique_ptr<PCB_SHAPE>> buildShapes( const BLK_0x14_GRAPHIC& aGraphicList, BOARD_ITEM_CONTAINER& aParent );
+    std::vector<std::unique_ptr<PCB_SHAPE>> buildShapes( const BLK_0x14_GRAPHIC& aGraphicList,
+                                                         BOARD_ITEM_CONTAINER& aParent );
     std::unique_ptr<PCB_TEXT>  buildPcbText( const BLK_0x30_STR_WRAPPER& aStrWrapper, BOARD_ITEM_CONTAINER& aParent );
+
+    /**
+     * Add a 0x30 text object to a footprint, either as one of the built-in fields or as a
+     * graphic, depending on the Allegro class it is on.
+     *
+     * @param aValueFieldSet tracks whether the VALUE field has been filled already, so only
+     *                       the first candidate replaces it.
+     */
+    void addFootprintText( FOOTPRINT& aFp, GRAPHIC_DEDUP& aGraphics, const BLK_0x30_STR_WRAPPER& aStrWrapper,
+                           bool& aValueFieldSet );
 
     /**
      * Build a rectangular shape from a 0x24 RECT block.
@@ -209,9 +222,11 @@ private:
 
     /**
      * Construct "pad" items for a given 0x1C PADSTACK block.
+     *
+     * @param aBackSide is true when the footprint is flipped to the bottom after its pads are built.
      */
     std::vector<std::unique_ptr<BOARD_ITEM>> buildPadItems( const BLK_0x1C_PADSTACK& aPadstack, FOOTPRINT& aFp,
-                                                            const wxString& aPadName, int aNetcode );
+                                                            const wxString& aPadName, int aNetcode, bool aBackSide );
     std::unique_ptr<FOOTPRINT>               buildFootprint( const BLK_0x2D_FOOTPRINT_INST& aFpInstance );
     std::vector<std::unique_ptr<BOARD_ITEM>> buildTrack( const BLK_0x05_TRACK& aBlock, int aNetcode );
     std::unique_ptr<BOARD_ITEM>              buildVia( const BLK_0x33_VIA& aBlock, int aNetcode );
@@ -221,8 +236,10 @@ private:
     /**
      * Build a ZONE from an 0x0E, 0x24 or 0x28 block.
      *
+     * @param aBoundaryBlock
      * @param aRelatedBlocks are blocks to get net (0x1B) and fill (0x28) info from
      * @param aZoneFillHandler is a management object for efficiently dealing with filled zones
+     * @param aParent
      */
     std::unique_ptr<ZONE> buildZone( const BLOCK_BASE&                     aBoundaryBlock,
                                      const std::vector<const BLOCK_BASE*>& aRelatedBlocks,
@@ -265,6 +282,13 @@ private:
     wxString resolveMatchGroupName( const BLK_0x1B_NET& aNet ) const;
 
     /**
+     * Follow a net's match group pointer to its 0x2C TABLE.
+     *
+     * @return the table, or nullptr if the net is in no match group
+     */
+    const BLK_0x2C_TABLE* resolveMatchGroupTable( const BLK_0x1B_NET& aNet ) const;
+
+    /**
      * Extract constraint set name from a 0x03 FIELD block pointer.
      *
      * Some boards store the constraint set name in a FIELD block referenced by m_FieldPtr in
@@ -281,6 +305,7 @@ private:
     void createBoardText();
     void createZones();
     void createTables();
+    void createPlaneVoidAreas();
     void applyZoneFills();
     void enablePadTeardrops();
     void applyConstraintSets();
@@ -323,6 +348,9 @@ private:
 
     // Keys that have been used as zone fills already
     std::unordered_set<uint32_t> m_usedZoneFillShapes;
+
+    // Void geometry drawn on negative plane layers, which the plane fill must keep clear
+    std::map<PCB_LAYER_ID, SHAPE_POLY_SET> m_planeVoids;
 
     std::unique_ptr<LAYER_MAPPER> m_layerMapper;
 

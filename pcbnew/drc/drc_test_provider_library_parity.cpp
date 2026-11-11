@@ -17,6 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <cmath>
 #include <layer_range.h>
 #include <layer_utils.h>
 #include <kiway.h>
@@ -327,6 +328,60 @@ bool padHasOverrides( const PAD* a, const PAD* b, REPORTER& aReporter )
 }
 
 
+// A half turn leaves a pad as it was only when the pad is symmetric about its own centre, a circle ignores any turn,
+// so a flip that lands on the other of the two angles has not changed such a pad
+bool padOrientationDiffers( const PAD* a, const PAD* bLib )
+{
+    double delta = std::fmod( std::abs( a->GetFPRelativeOrientation().Normalize().AsDegrees()
+                                        - bLib->GetFPRelativeOrientation().Normalize().AsDegrees() ),
+                              360.0 );
+
+    if( delta > 180.0 )
+        delta = 360.0 - delta;
+
+    if( delta <= EPSILON_D )
+        return false;
+
+    if( a->Padstack().Mode() != bLib->Padstack().Mode()
+        || a->Padstack().Drill().shape != bLib->Padstack().Drill().shape )
+    {
+        return true;
+    }
+
+    // a slot turns with the pad even when the copper does not
+    auto roundDrill =
+            []( const PAD* aPad )
+            {
+                return aPad->GetDrillShape() == PAD_DRILL_SHAPE::CIRCLE
+                       || aPad->GetDrillSize().x == aPad->GetDrillSize().y;
+            };
+
+    bool circular = roundDrill( a ) && roundDrill( bLib );
+    bool halfTurnSymmetric = true;
+
+    for( PCB_LAYER_ID layer : a->Padstack().UniqueLayers() )
+    {
+        PAD_SHAPE shape = a->GetShape( layer );
+
+        if( shape != bLib->GetShape( layer ) )
+            return true;
+
+        circular &= shape == PAD_SHAPE::CIRCLE;
+        halfTurnSymmetric &= shape == PAD_SHAPE::CIRCLE || shape == PAD_SHAPE::RECTANGLE
+                             || shape == PAD_SHAPE::OVAL || shape == PAD_SHAPE::ROUNDRECT;
+
+        // an off-centre shape or a skewed one moves when the pad turns
+        if( a->GetOffset( layer ) != VECTOR2I( 0, 0 ) || bLib->GetOffset( layer ) != VECTOR2I( 0, 0 )
+            || a->GetDelta( layer ) != VECTOR2I( 0, 0 ) || bLib->GetDelta( layer ) != VECTOR2I( 0, 0 ) )
+        {
+            return true;
+        }
+    }
+
+    return !circular && !( halfTurnSymmetric && std::abs( delta - 180.0 ) <= EPSILON_D );
+}
+
+
 bool padNeedsUpdate( const PAD* a, const PAD* bLib, REPORTER* aReporter )
 {
     bool      diff = false;
@@ -372,9 +427,15 @@ bool padNeedsUpdate( const PAD* a, const PAD* bLib, REPORTER* aReporter )
           wxString::Format( _( "%s fabrication property differs." ), PAD_DESC( a ) ) );
 
     // The pad orientation, for historical reasons is the pad rotation + parent rotation.
-    TEST_D( a->GetFPRelativeOrientation().Normalize().AsDegrees(),
-            bLib->GetFPRelativeOrientation().Normalize().AsDegrees(),
-            wxString::Format( _( "%s orientation differs." ), PAD_DESC( a ) ) );
+    if( padOrientationDiffers( a, bLib ) )
+    {
+        diff = true;
+
+        if( aReporter )
+            aReporter->Report( wxString::Format( _( "%s orientation differs." ), PAD_DESC( a ) ) );
+        else
+            return true;
+    }
 
     std::vector<PCB_LAYER_ID> layers = a->Padstack().UniqueLayers();
     const BOARD* board = a->GetBoard();
@@ -708,24 +769,33 @@ bool zoneNeedsUpdate( const ZONE* a, const ZONE* b, REPORTER* aReporter )
     TEST( aLibOutline.TotalVertices(), bLibOutline.TotalVertices(),
           wxString::Format( _( "%s outline corner count differs." ), ITEM_DESC( a ) ) );
 
-    bool cornersDiffer = false;
+    bool cornersDiffer = aLibOutline.OutlineCount() != bLibOutline.OutlineCount();
 
-    for( int poly = 0; poly < static_cast<int>( aLibOutline.CPolygons().size() ); poly++ )
+    for( int poly = 0; !cornersDiffer && poly < aLibOutline.OutlineCount(); poly++ )
     {
-        const SHAPE_POLY_SET::POLYGON aPolygon = aLibOutline.CPolygon( poly );
-        const SHAPE_POLY_SET::POLYGON bPolygon = bLibOutline.CPolygon( poly );
+        const SHAPE_POLY_SET::POLYGON& aPolygon = aLibOutline.CPolygon( poly );
+        const SHAPE_POLY_SET::POLYGON& bPolygon = bLibOutline.CPolygon( poly );
 
-        if( aPolygon.size() == 0 || bPolygon.size() == 0
-            || !aPolygon[0].CompareGeometry( bPolygon[0], true, EPSILON ) )
+        if( aPolygon.size() != bPolygon.size() )
         {
-            diff = true;
             cornersDiffer = true;
             break;
         }
+
+        for( size_t contour = 0; contour < aPolygon.size() && !cornersDiffer; contour++ )
+        {
+            if( !aPolygon[contour].CompareGeometry( bPolygon[contour], true, EPSILON ) )
+                cornersDiffer = true;
+        }
     }
 
-    if( cornersDiffer && aReporter )
-        aReporter->Report( wxString::Format( _( "%s corners differ." ), ITEM_DESC( a ) ) );
+    if( cornersDiffer )
+    {
+        diff = true;
+
+        if( aReporter )
+            aReporter->Report( wxString::Format( _( "%s corners differ." ), ITEM_DESC( a ) ) );
+    }
 
     return diff;
 }
@@ -809,8 +879,19 @@ bool FOOTPRINT::FootprintNeedsUpdate( const FOOTPRINT* aLibFP, int aCompareFlags
 
     temp->SetParent( GetBoard() );
 
-    if( !( aCompareFlags & COMPARE_FLAGS::INSTANCE_TO_INSTANCE ) && IsFlipped() != temp->IsFlipped() )
-        temp->Flip( { 0, 0 }, FLIP_DIRECTION::TOP_BOTTOM );
+
+    if( !( aCompareFlags & COMPARE_FLAGS::INSTANCE_TO_INSTANCE ) )
+    {
+        if( IsFlipped() != temp->IsFlipped() )
+            temp->Flip( { 0, 0 }, FLIP_DIRECTION::TOP_BOTTOM );
+
+        // Set rotation before trying to compare footprints, especially when rotation
+        // is not multiple of 90 deg (some shapes like rectangles can be converted to polygons).
+        // Moreover, NormalizeForCompare needs correct orientation to normalize some shapes
+        // like rectangles
+        if( GetOrientation() != temp->GetOrientation() )
+            temp->SetOrientation( GetOrientation() );
+    }
 
     for( BOARD_ITEM* item : temp->GraphicalItems() )
         item->NormalizeForCompare();
@@ -946,7 +1027,7 @@ bool FOOTPRINT::FootprintNeedsUpdate( const FOOTPRINT* aLibFP, int aCompareFlags
     dummy.SetParent( nullptr );
 
     if( BOARD* board = GetBoard() )
-        board->UncacheItemSubtreeById( &dummy );
+        board->UncacheItemSubtreeById( dummy );
 
     for( BOARD_ITEM* item : dummy.GraphicalItems() )
         item->NormalizeForCompare();

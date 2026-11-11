@@ -106,7 +106,7 @@ FOOTPRINT_WIZARD_FRAME::FOOTPRINT_WIZARD_FRAME( KIWAY* aKiway, wxWindow* aParent
     // Must be created before calling LoadSettings() that needs a valid GAL canvas
     PCB_DRAW_PANEL_GAL* gal_drawPanel = new PCB_DRAW_PANEL_GAL( this, -1, wxPoint( 0, 0 ), m_frameSize,
                                                                 GetGalDisplayOptions(),
-                                                                EDA_DRAW_PANEL_GAL::GAL_FALLBACK );
+                                                                EDA_DRAW_PANEL_GAL::GAL_TYPE_MODERN );
     SetCanvas( gal_drawPanel );
 
     SetBoard( new BOARD() );
@@ -216,10 +216,8 @@ FOOTPRINT_WIZARD_FRAME::~FOOTPRINT_WIZARD_FRAME()
     if( m_toolManager )
         m_toolManager->DeactivateTool();
 
-    EDA_3D_VIEWER_FRAME* draw3DFrame = Get3DViewerFrame();
-
-    if( draw3DFrame )
-        draw3DFrame->Destroy();
+    if( EDA_3D_VIEWER_FRAME* our3DViewer = GetOur3DViewerFrame() )
+        our3DViewer->Destroy();
 
     // Now this frame can be deleted
 }

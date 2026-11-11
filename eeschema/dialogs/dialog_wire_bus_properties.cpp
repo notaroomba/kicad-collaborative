@@ -18,6 +18,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <bitmaps.h>
 #include <sch_line.h>
 #include <sch_bus_entry.h>
 #include <sch_junction.h>
@@ -109,7 +110,7 @@ bool DIALOG_WIRE_BUS_PROPERTIES::TransferDataToWindow()
     }
     else
     {
-        m_colorSwatch->SetSwatchColor( COLOR4D::UNSPECIFIED, false );
+        m_colorSwatch->SetIndeterminate();
     }
 
     if( std::all_of( m_items.begin(), m_items.end(),
@@ -209,21 +210,25 @@ bool DIALOG_WIRE_BUS_PROPERTIES::TransferDataFromWindow()
                     static_cast<SCH_BUS_ENTRY_BASE*>( item )->SetLineStyle( lineStyle );
             }
 
-            COLOR4D color = m_colorSwatch->GetSwatchColor();
+            if( !m_colorSwatch->IsIndeterminate() )
+            {
+                COLOR4D color = m_colorSwatch->GetSwatchColor();
 
-            if( item->Type() == SCH_LINE_T )
-                static_cast<SCH_LINE*>( item )->SetLineColor( color );
-            else if( dynamic_cast<SCH_BUS_ENTRY_BASE*>( item ) )
-                static_cast<SCH_BUS_ENTRY_BASE*>( item )->SetBusEntryColor( color );
+                if( item->Type() == SCH_LINE_T )
+                    static_cast<SCH_LINE*>( item )->SetLineColor( color );
+                else if( dynamic_cast<SCH_BUS_ENTRY_BASE*>( item ) )
+                    static_cast<SCH_BUS_ENTRY_BASE*>( item )->SetBusEntryColor( color );
+            }
         }
         else
         {
             SCH_JUNCTION* junction = static_cast<SCH_JUNCTION*>( item );
 
-            junction->SetColor( m_colorSwatch->GetSwatchColor() );
+            if( !m_colorSwatch->IsIndeterminate() )
+                junction->SetColor( m_colorSwatch->GetSwatchColor() );
 
             if( !m_junctionSize.IsIndeterminate() )
-                junction->SetDiameter( m_junctionSize.GetValue() );
+                junction->SetDiameter( m_junctionSize.GetIntValue() );
         }
     }
 

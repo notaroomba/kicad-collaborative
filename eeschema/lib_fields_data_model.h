@@ -49,6 +49,8 @@ public:
     }
 
     static const wxString SYMBOL_NAME;
+    static const wxString SYMBOL_PARENT;
+    static const wxString SYMBOL_ROOT;
     static const wxString SYMBOL_KEYWORDS;
     static const wxString SYMBOL_IS_POWER;
     static const wxString SYMBOL_IS_LOCAL_POWER;
@@ -57,6 +59,9 @@ public:
 
     wxString GetTypeName( int row, int col ) override;
     void     SetValue( int aRow, int aCol, const wxString& aValue ) override;
+
+    bool CanUseParentValue( int aRow, int aCol );
+    void UseParentValue( int aRow, int aCol );
 
     wxGridCellAttr* GetAttr( int row, int col, wxGridCellAttr::wxAttrKind kind ) override;
 
@@ -107,8 +112,7 @@ public:
     bool IsRowSingleSymbol( int aRow )
     {
         wxCHECK_MSG( aRow >= 0 && aRow < (int) m_rows.size(), false, "Invalid Row Number" );
-        return m_rows[aRow].m_state == ROW_STATE::NON_EXPANDABLE
-               || m_rows[aRow].m_state == ROW_STATE::EXPANDED_CHILD;
+        return m_rows[aRow].GetCellItems().size() == 1;
     }
 
     bool IsCellReadOnly( int aRow, int aCol ) override;
@@ -134,6 +138,8 @@ private:
                                     const KIID& aNewSymbolUuid );
 
     bool getLiveFieldValue( LIB_SYMBOL* const& aSymbol, const wxString& aFieldName, wxString& aValue ) override;
+    void getEffectiveFieldValue( LIB_SYMBOL* const& aSymbol, const wxString& aFieldName,
+                                 wxString& aValue ) const override;
     std::vector<LIB_SYMBOL*> getAllItems() const override;
 
     KIID_PATH getDataStoreKey( LIB_SYMBOL* const& aItem ) const override;

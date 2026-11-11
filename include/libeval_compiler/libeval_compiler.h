@@ -23,6 +23,7 @@
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <stack>
 
@@ -30,6 +31,7 @@
 
 #include <kicommon.h>
 #include <base_units.h>
+#include <eda_units.h>
 #include <wx/intl.h>
 
 #if defined(WIN32)
@@ -209,6 +211,7 @@ public:
             m_units( EDA_UNITS::UNSCALED ),
             m_valueDbl( 0 ),
             m_stringIsWildcard( false ),
+            m_stringIsLiteral( false ),
             m_isDeferredDbl( false ),
             m_isDeferredStr( false )
     {}
@@ -219,6 +222,7 @@ public:
             m_valueDbl( 0 ),
             m_valueStr( aStr ),
             m_stringIsWildcard( aIsWildcard ),
+            m_stringIsLiteral( true ),
             m_isDeferredDbl( false ),
             m_isDeferredStr( false )
     {}
@@ -228,6 +232,7 @@ public:
             m_units( EDA_UNITS::UNSCALED ),
             m_valueDbl( aVal ),
             m_stringIsWildcard( false ),
+            m_stringIsLiteral( false ),
             m_isDeferredDbl( false ),
             m_isDeferredStr( false )
     {}
@@ -313,6 +318,8 @@ public:
 
     bool StringIsWildcard() const { return m_stringIsWildcard; }
 
+    bool StringIsLiteral() const { return m_stringIsLiteral; }
+
 private:
     VAR_TYPE_T                m_type;
     EDA_UNITS                 m_units;
@@ -322,6 +329,7 @@ private:
     INPLACE_FUNCTION<double()>   m_lambdaDbl;
     INPLACE_FUNCTION<wxString()> m_lambdaStr;
     bool                         m_stringIsWildcard;
+    bool                         m_stringIsLiteral;
     mutable bool                 m_isDeferredDbl;
     mutable bool                 m_isDeferredStr;
 
@@ -689,6 +697,16 @@ protected:
     std::vector<TREE_NODE*>  m_gcItems;
     std::vector<wxString*>   m_gcStrings;
 };
+
+
+/**
+ * Escape text for use between the quotes of an expression string.
+ *
+ * The tokenizer's only escape is \', so text ending in a backslash has no encoding.
+ *
+ * @return the escaped text without its quotes, or nothing if the text cannot be written.
+ */
+KICOMMON_API std::optional<wxString> EscapeStringLiteral( const wxString& aText );
 
 
 } // namespace LIBEVAL

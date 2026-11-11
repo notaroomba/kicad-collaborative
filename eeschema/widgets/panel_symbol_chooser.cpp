@@ -20,6 +20,7 @@
 
 #include "panel_symbol_chooser.h"
 
+#include <class_draw_panel_gal.h>
 #include <pgm_base.h>
 #include <settings/common_settings.h>
 #include <kiface_base.h>
@@ -54,7 +55,6 @@
 
 wxString PANEL_SYMBOL_CHOOSER::g_symbolSearchString;
 wxString PANEL_SYMBOL_CHOOSER::g_powerSearchString;
-SCH_BASE_FRAME* PANEL_SYMBOL_CHOOSER::m_frame = nullptr;
 
 PANEL_SYMBOL_CHOOSER::PANEL_SYMBOL_CHOOSER( SCH_BASE_FRAME* aFrame, wxWindow* aParent,
                                             const SYMBOL_LIBRARY_FILTER* aFilter,
@@ -71,6 +71,7 @@ PANEL_SYMBOL_CHOOSER::PANEL_SYMBOL_CHOOSER( SCH_BASE_FRAME* aFrame, wxWindow* aP
         m_fp_preview( nullptr ),
         m_tree( nullptr ),
         m_details( nullptr ),
+        m_frame( aFrame ),
         m_acceptHandler( std::move( aAcceptHandler ) ),
         m_escapeHandler( std::move( aEscapeHandler ) ),
         m_showPower( false ),
@@ -80,8 +81,6 @@ PANEL_SYMBOL_CHOOSER::PANEL_SYMBOL_CHOOSER( SCH_BASE_FRAME* aFrame, wxWindow* aP
         m_bodyStyleChoice( nullptr ),
         m_selectedBodyStyle( 1 )
 {
-    m_frame = aFrame;
-
     SYMBOL_LIBRARY_ADAPTER*   libmgr = PROJECT_SCH::SymbolLibAdapter( &m_frame->Prj() );
     COMMON_SETTINGS::SESSION& session = Pgm().GetCommonSettings()->m_Session;
     PROJECT_FILE&             project = m_frame->Prj().GetProjectFile();
@@ -173,15 +172,15 @@ PANEL_SYMBOL_CHOOSER::PANEL_SYMBOL_CHOOSER( SCH_BASE_FRAME* aFrame, wxWindow* aP
     processList( aHistoryList, history_list_storage, history_list );
     processList( aAlreadyPlaced, already_placed_storage, already_placed );
 
-    adapter->DoAddLibrary( wxT( "-- " ) + _( "Recently Used" ) + wxT( " --" ), wxEmptyString,
-                           history_list, false, true )
+    adapter->DoAddLibrary( wxT( "-- " ) + _( "Recently Used" ) + wxT( " --" ), wxEmptyString, history_list,
+                           false, true )
             .m_IsRecentlyUsedGroup = true;
 
     if( !aHistoryList.empty() )
         adapter->SetPreselectNode( aHistoryList[0].LibId, aHistoryList[0].Unit );
 
-    adapter->DoAddLibrary( wxT( "-- " ) + _( "Already Placed" ) + wxT( " --" ), wxEmptyString,
-                           already_placed, false, true )
+    adapter->DoAddLibrary( wxT( "-- " ) + _( "Already Placed" ) + wxT( " --" ), wxEmptyString, already_placed,
+                           false, true )
             .m_IsAlreadyPlacedGroup = true;
 
     adapter->AddLibraries( m_frame );
@@ -359,10 +358,11 @@ void PANEL_SYMBOL_CHOOSER::OnChar( wxKeyEvent& aEvent )
         if( wxTextCtrl* textCtrl = dynamic_cast<wxTextCtrl*>( eventSource ) )
         {
             // First escape cancels search string value
-            if( textCtrl->GetValue() == m_tree->GetSearchString()
-                && !m_tree->GetSearchString().IsEmpty() )
+            if( textCtrl->GetValue() == m_tree->GetSearchString() && !m_tree->GetSearchString().IsEmpty() )
             {
                 m_tree->SetSearchString( wxEmptyString );
+                Regenerate();
+                GetFocusTarget()->SetFocus();
                 return;
             }
         }
@@ -378,12 +378,12 @@ void PANEL_SYMBOL_CHOOSER::OnChar( wxKeyEvent& aEvent )
 
 wxPanel* PANEL_SYMBOL_CHOOSER::constructRightPanel( wxWindow* aParent )
 {
-    EDA_DRAW_PANEL_GAL::GAL_TYPE backend = EDA_DRAW_PANEL_GAL::GAL_TYPE::GAL_TYPE_OPENGL;
+    EDA_DRAW_PANEL_GAL::GAL_TYPE backend = EDA_DRAW_PANEL_GAL::GAL_TYPE::GAL_TYPE_MODERN;
 
     if( m_frame->GetCanvas() )
         backend = m_frame->GetCanvas()->GetBackend();
     else if( COMMON_SETTINGS* cfg = Pgm().GetCommonSettings() )
-        backend = static_cast<EDA_DRAW_PANEL_GAL::GAL_TYPE>( cfg->m_Graphics.canvas_type );
+        backend = EDA_DRAW_PANEL_GAL::ResolveStoredCanvasType( cfg->m_Graphics.canvas_type );
 
     wxPanel*    panel = new wxPanel( aParent );
     wxBoxSizer* sizer = new wxBoxSizer( wxVERTICAL );
@@ -483,10 +483,14 @@ void PANEL_SYMBOL_CHOOSER::FinishSetup()
 }
 
 
-void PANEL_SYMBOL_CHOOSER::OnDetailsCharHook( wxKeyEvent& e )
+void PANEL_SYMBOL_CHOOSER::OnDetailsCharHook( wxKeyEvent& aEvent )
 {
-    if( m_details && e.GetKeyCode() == 'C' && e.ControlDown() &&
-        !e.AltDown() && !e.ShiftDown() && !e.MetaDown() )
+    if( m_details
+        && aEvent.GetKeyCode() == 'C'
+        && aEvent.ControlDown()
+        && !aEvent.AltDown()
+        && !aEvent.ShiftDown()
+        && !aEvent.MetaDown() )
     {
         wxString txt = m_details->SelectionToText();
         wxLogNull doNotLog; // disable logging of failed clipboard actions
@@ -500,7 +504,7 @@ void PANEL_SYMBOL_CHOOSER::OnDetailsCharHook( wxKeyEvent& e )
     }
     else
     {
-        e.Skip();
+        aEvent.Skip();
     }
 }
 
@@ -509,11 +513,8 @@ void PANEL_SYMBOL_CHOOSER::SetCompatibilityCallback( SYMBOL_COMPAT_FUNC aFunc )
 {
     m_compatCallback = std::move( aFunc );
 
-    if( SYMBOL_TREE_MODEL_ADAPTER* symAdapter =
-            dynamic_cast<SYMBOL_TREE_MODEL_ADAPTER*>( m_adapter.get() ) )
-    {
+    if( SYMBOL_TREE_MODEL_ADAPTER* symAdapter = dynamic_cast<SYMBOL_TREE_MODEL_ADAPTER*>( m_adapter.get() ) )
         symAdapter->SetCompatibilityCallback( m_compatCallback );
-    }
 }
 
 
@@ -639,11 +640,8 @@ void PANEL_SYMBOL_CHOOSER::showFootprintFor( LIB_ID const& aLibId )
     if( !symbol )
         return;
 
-    SCH_FIELD* fp_field = symbol->GetField( FIELD_T::FOOTPRINT );
-    wxString   fp_name = fp_field ? fp_field->GetFullText() : wxString( "" );
-
     m_fp_override.Empty();
-    showFootprint( fp_name );
+    showFootprint( symbol->GetFootprint() );
 }
 
 
@@ -699,9 +697,8 @@ void PANEL_SYMBOL_CHOOSER::populateFootprintSelector( LIB_ID const& aLibId )
 
     if( symbol != nullptr )
     {
-        int        pinCount = symbol->GetGraphicalPins( 0 /* all units */, 1 /* single bodyStyle */ ).size();
-        SCH_FIELD* fp_field = symbol->GetField( FIELD_T::FOOTPRINT );
-        wxString   fp_name = fp_field ? fp_field->GetFullText() : wxString( "" );
+        int      pinCount = symbol->GetGraphicalPins( 0 /* all units */, 1 /* single bodyStyle */ ).size();
+        wxString fp_name = symbol->GetFootprint();
 
         if( !m_fp_override.IsEmpty() )
             fp_name = m_fp_override;
@@ -745,14 +742,21 @@ void PANEL_SYMBOL_CHOOSER::onFootprintSelected( wxCommandEvent& aEvent )
 void PANEL_SYMBOL_CHOOSER::onSymbolSelected( wxCommandEvent& aEvent )
 {
     LIB_TREE_NODE* node = m_tree->GetCurrentTreeNode();
+    bool           sameSymbolDifferentUnit = false;
 
     if( node && node->m_LibId.IsValid() )
     {
-        LIB_SYMBOL* symbol = m_frame->GetLibSymbol( node->m_LibId );
+        if( node->m_LibId == m_curSymbolId )
+            sameSymbolDifferentUnit = true;
+        else
+            m_field_edits.clear();
+
+        m_curSymbolId = node->m_LibId;
+        LIB_SYMBOL* symbol = m_frame->GetLibSymbol( m_curSymbolId );
 
         updateBodyStyleChoice( symbol );
 
-        m_symbol_preview->DisplaySymbol( node->m_LibId, node->m_Unit, m_selectedBodyStyle );
+        m_symbol_preview->DisplaySymbol( m_curSymbolId, node->m_Unit, m_selectedBodyStyle );
 
         if( !node->m_Footprint.IsEmpty() )
         {
@@ -760,16 +764,20 @@ void PANEL_SYMBOL_CHOOSER::onSymbolSelected( wxCommandEvent& aEvent )
             evt.SetString( node->m_Footprint);
             onFootprintSelected( evt );
         }
+        else if( sameSymbolDifferentUnit && !m_fp_override.IsEmpty())
+        {
+            showFootprint( m_fp_override );
+        }
         else
         {
-            showFootprintFor( node->m_LibId );
+            showFootprintFor( m_curSymbolId );
         }
 
-        populateFootprintSelector( node->m_LibId );
+        populateFootprintSelector( m_curSymbolId );
 
         if( m_compatCallback && m_details )
         {
-            std::vector<VARIANT_COMPAT_RESULT> issues = m_compatCallback( node->m_LibId );
+            std::vector<VARIANT_COMPAT_RESULT> issues = m_compatCallback( m_curSymbolId );
 
             if( !issues.empty() )
             {
@@ -785,12 +793,15 @@ void PANEL_SYMBOL_CHOOSER::onSymbolSelected( wxCommandEvent& aEvent )
     }
     else
     {
+        m_curSymbolId = LIB_ID();
         m_symbol_preview->SetStatusText( _( "No symbol selected" ) );
 
         if( m_fp_preview && m_fp_preview->IsInitialized() )
             m_fp_preview->SetStatusText( wxEmptyString );
 
+        m_field_edits.clear();
         updateBodyStyleChoice( nullptr );
+        populateFootprintSelector( m_curSymbolId );
     }
 }
 

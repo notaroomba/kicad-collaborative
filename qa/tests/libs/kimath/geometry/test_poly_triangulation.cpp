@@ -13,18 +13,23 @@
 #include <geometry/shape_line_chain.h>
 #include <geometry/polygon_triangulation.h>
 #include <geometry/geometry_predicates.h>
+#include <advanced_config.h>
 #include <trigo.h>
 #include <thread>
 #include <chrono>
 #include <future>
 #include <filesystem>
 #include <fstream>
+#include <array>
+
+#include <wx/log.h>
 
 #include <qa_utils/geometry/geometry.h>
 #include <qa_utils/numeric.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include "geom_test_utils.h"
+#include <geometry/fracture_edge_index_utils.h>
 
 BOOST_AUTO_TEST_SUITE( PolygonTriangulation )
 
@@ -39,6 +44,49 @@ struct POLYGON_TRIANGULATION_TEST_ACCESS
 };
 
 namespace fs = std::filesystem;
+
+class TRACE_LOG : public wxLog
+{
+public:
+    bool Contains( const wxString& aText ) const { return m_text.Contains( aText ); }
+
+protected:
+    void DoLogTextAtLevel( wxLogLevel, const wxString& aText ) override { m_text += aText; }
+
+private:
+    wxString m_text;
+};
+
+class SCOPED_TRACE_CAPTURE
+{
+public:
+    explicit SCOPED_TRACE_CAPTURE( const wxString& aMask ) :
+            m_log( new TRACE_LOG ),
+            m_chain( m_log ),
+            m_mask( aMask ),
+            m_maskWasAllowed( wxLog::IsAllowedTraceMask( aMask ) )
+    {
+        m_chain.PassMessages( false );
+
+        if( !m_maskWasAllowed )
+            wxLog::AddTraceMask( m_mask );
+    }
+
+    ~SCOPED_TRACE_CAPTURE()
+    {
+        if( !m_maskWasAllowed )
+            wxLog::RemoveTraceMask( m_mask );
+    }
+
+    bool Contains( const wxString& aText ) const { return m_log->Contains( aText ); }
+
+private:
+    TRACE_LOG* m_log;
+    wxLogChain m_chain;
+    wxString   m_mask;
+    bool       m_maskWasAllowed;
+};
+
 
 // Helper class to properly manage TRIANGULATED_POLYGON lifecycle
 class TRIANGULATION_TEST_FIXTURE
@@ -236,6 +284,95 @@ bool parsePolyFileForTest( const fs::path& aPath, std::vector<SHAPE_POLY_SET>& a
     return !aZones.empty();
 }
 
+// Forces the fracture implementation under test regardless of the developer's kicad_advanced
+class SCOPED_FRACTURE_CFG
+{
+public:
+    explicit SCOPED_FRACTURE_CFG( bool aUseIndex ) :
+            m_cfg( const_cast<ADVANCED_CFG&>( ADVANCED_CFG::GetCfg() ) ),
+            m_cacheFriendly( m_cfg.m_EnableCacheFriendlyFracture ),
+            m_edgeIndex( m_cfg.m_EnableFractureEdgeIndex )
+    {
+        m_cfg.m_EnableCacheFriendlyFracture = true;
+        m_cfg.m_EnableFractureEdgeIndex = aUseIndex;
+    }
+
+    ~SCOPED_FRACTURE_CFG()
+    {
+        m_cfg.m_EnableCacheFriendlyFracture = m_cacheFriendly;
+        m_cfg.m_EnableFractureEdgeIndex = m_edgeIndex;
+    }
+
+private:
+    ADVANCED_CFG& m_cfg;
+    bool          m_cacheFriendly;
+    bool          m_edgeIndex;
+};
+
+
+BOOST_AUTO_TEST_CASE( FractureEdgeIndexMatchesLinearScan )
+{
+#if !defined( __MINGW32__ )
+    const fs::path              polyPath = KI_TEST::GetTestDataRootDir() + "triangulation/vme-wren.kicad_polys";
+    std::vector<SHAPE_POLY_SET> zones;
+
+    BOOST_REQUIRE( parsePolyFileForTest( polyPath, zones ) );
+
+    int deepest = 0;
+
+    for( SHAPE_POLY_SET& zone : zones )
+    {
+        zone.Unfracture();
+
+        for( int polygon = 0; polygon < zone.OutlineCount(); ++polygon )
+            deepest = std::max( deepest, zone.HoleCount( polygon ) );
+    }
+
+    // The index only engages past its hole and visit thresholds, so a fixture that shrank would
+    // leave this comparing two linear runs
+    BOOST_REQUIRE_GE( deepest, 100 );
+
+    std::vector<SHAPE_POLY_SET> linear = zones;
+    std::vector<SHAPE_POLY_SET> indexed = zones;
+
+    {
+        SCOPED_FRACTURE_CFG cfg( false );
+
+        for( SHAPE_POLY_SET& zone : linear )
+            zone.Fracture( false );
+    }
+
+    SCOPED_TRACE_CAPTURE trace( wxS( "KICAD_FRACTURE_INDEX" ) );
+
+    {
+        SCOPED_FRACTURE_CFG cfg( true );
+
+        for( SHAPE_POLY_SET& zone : indexed )
+            zone.Fracture( false );
+    }
+
+#if wxUSE_LOG_TRACE
+    BOOST_REQUIRE( trace.Contains( wxS( "Using fracture edge index" ) ) );
+#endif
+
+    for( size_t zone = 0; zone < linear.size(); ++zone )
+    {
+        BOOST_REQUIRE_EQUAL( indexed[zone].OutlineCount(), linear[zone].OutlineCount() );
+
+        for( int polygon = 0; polygon < linear[zone].OutlineCount(); ++polygon )
+        {
+            const SHAPE_LINE_CHAIN& a = linear[zone].COutline( polygon );
+            const SHAPE_LINE_CHAIN& b = indexed[zone].COutline( polygon );
+            BOOST_REQUIRE_EQUAL( a.PointCount(), b.PointCount() );
+
+            for( int point = 0; point < a.PointCount(); ++point )
+                BOOST_CHECK_EQUAL( a.CPoint( point ), b.CPoint( point ) );
+        }
+    }
+#endif
+}
+
+
 double computeBoardSpikeyRatio( const fs::path& aPath )
 {
     std::vector<SHAPE_POLY_SET> zones;
@@ -309,8 +446,7 @@ BOOST_AUTO_TEST_CASE( SplitFirstFracturePartitionProducesMultipleLeaves )
 
 BOOST_AUTO_TEST_CASE( EarLookaheadImprovesBadTriangulationCase )
 {
-    fs::path polyPath = fs::path( __FILE__ ).parent_path().parent_path().parent_path().parent_path()
-                        .parent_path() / "data/triangulation/bad_triangulation_case.kicad_polys";
+    fs::path polyPath = KI_TEST::GetTestDataRootDir() + "triangulation/bad_triangulation_case.kicad_polys";
 
     BOOST_TEST( fs::exists( polyPath ) );
     BOOST_TEST( computeBoardSpikeyRatio( polyPath ) < 0.47 );
@@ -578,8 +714,12 @@ BOOST_AUTO_TEST_CASE( LargePolygonStressTest )
         BOOST_TEST( fixture.GetResult().GetTriangleCount() > 0 );
     }
 
-    // Performance check - should complete in reasonable time
+    // Sanitizer instrumentation changes execution cost, not the triangulation contract
+#if defined( KICAD_SANITIZE_THREADS ) || defined( KICAD_SANITIZE_ADDRESS )
+    BOOST_TEST_MESSAGE( "Instrumented triangulation: " << duration.count() << " ms" );
+#else
     BOOST_TEST( duration.count() < 10000 ); // Less than 10 seconds
+#endif
 }
 
 // Thread safety tests (following SHAPE_POLY_SET patterns)
@@ -696,6 +836,49 @@ BOOST_AUTO_TEST_CASE( Issue18083_SelfIntersectingPolygonArea )
     // The triangulated area should match the expected area
     BOOST_TEST( std::abs( triangulatedArea - expectedAreaMmSq ) < expectedAreaMmSq * 0.01,
                 "Triangulated area should match expected area of 49 mm²" );
+}
+
+BOOST_AUTO_TEST_CASE( Issue18083_IndexedSelfTouchingOutlineArea )
+{
+    const int SCALE = 1000000;
+    const std::array<VECTOR2I, 5> corners = { VECTOR2I( 165 * SCALE, 87 * SCALE ),
+                                               VECTOR2I( 179 * SCALE, 87 * SCALE ),
+                                               VECTOR2I( 174 * SCALE, 94 * SCALE ),
+                                               VECTOR2I( 169 * SCALE, 87 * SCALE ),
+                                               VECTOR2I( 167 * SCALE, 94 * SCALE ) };
+    SHAPE_LINE_CHAIN outline;
+
+    // Subdivision preserves the pinch and its area while exercising the indexed split
+    for( size_t i = 0; i < corners.size(); ++i )
+    {
+        const VECTOR2I& a = corners[i];
+        const VECTOR2I& b = corners[( i + 1 ) % corners.size()];
+
+        for( int step = 0; step < 8; ++step )
+            outline.Append( a.x + ( b.x - a.x ) * step / 8, a.y + ( b.y - a.y ) * step / 8 );
+    }
+
+    outline.SetClosed( true );
+    BOOST_REQUIRE_EQUAL( outline.PointCount(), 40 );
+
+    SHAPE_POLY_SET polySet;
+    polySet.AddOutline( outline );
+    const double outlineArea = polySet.Area();
+
+    polySet.CacheTriangulation( false );
+    BOOST_TEST( polySet.IsTriangulationUpToDate() );
+
+    double triangulatedArea = 0.0;
+
+    for( int i = 0; i < polySet.TriangulatedPolyCount(); ++i )
+    {
+        const auto triPoly = polySet.TriangulatedPolygon( i );
+
+        for( const auto& tri : triPoly->Triangles() )
+            triangulatedArea += std::abs( tri.Area() );
+    }
+
+    BOOST_TEST( std::abs( triangulatedArea - outlineArea ) < outlineArea * 0.01 );
 }
 
 BOOST_AUTO_TEST_CASE( Issue25141_FractureCorridorIsNotAPinchPoint )

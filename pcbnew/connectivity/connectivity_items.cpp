@@ -132,13 +132,7 @@ bool CN_ZONE_LAYER::HasSingleConnection()
 
 void CN_ITEM::RemoveInvalidRefs()
 {
-    for( auto it = m_connected.begin(); it != m_connected.end(); /* increment in loop */ )
-    {
-        if( !(*it)->Valid() )
-            it = m_connected.erase( it );
-        else
-            ++it;
-    }
+    std::erase_if( m_connected, []( const CN_ITEM* item ) { return !item->Valid(); } );
 }
 
 
@@ -166,6 +160,7 @@ CN_ITEM* CN_LIST::Add( PAD* pad )
      case PAD_ATTRIB::SMD:
      case PAD_ATTRIB::NPTH:
      case PAD_ATTRIB::CONN:
+     case PAD_ATTRIB::NON_COMPONENT:
      {
         LSEQ lmsk = pad->GetLayerSet().CuStack();
 
@@ -248,7 +243,7 @@ const std::vector<CN_ITEM*> CN_LIST::Add( ZONE* zone, PCB_LAYER_ID aLayer )
     {
         CN_ZONE_LAYER* zitem = new CN_ZONE_LAYER( zone, aLayer, j );
 
-        zitem->BuildRTree();
+        zitem->BuildIndexes();
 
         for( const VECTOR2I& pt : zone->GetFilledPolysList( aLayer )->COutline( j ).CPoints() )
             zitem->AddAnchor( pt );

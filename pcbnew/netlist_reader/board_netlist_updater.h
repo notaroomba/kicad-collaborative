@@ -99,8 +99,10 @@ public:
 
     void SetReporter( REPORTER* aReporter ) { m_reporter = aReporter; }
 
-    ///< Enable dry run mode (just report, no changes to PCB).
+    /// Enable dry run mode (just report, no changes to PCB).
     void SetIsDryRun( bool aEnabled ) { m_isDryRun = aEnabled; }
+
+    void SetWillDrag( bool aWillDrag ) { m_willDrag = aWillDrag; }
 
     void SetReplaceFootprints( bool aEnabled ) { m_replaceFootprints = aEnabled; }
 
@@ -202,6 +204,7 @@ private:
 
     bool m_deleteUnusedFootprints = false;
     bool m_isDryRun = false;
+    bool m_willDrag = false;
     bool m_replaceFootprints = true;
     bool m_transferGroups = false; // copy component group associations from schematic to PCB
     bool m_applyDesignBlockLayouts = false;

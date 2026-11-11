@@ -50,6 +50,9 @@ public:
      *
      * @param aFrame  the parent frame (usually a SCH_EDIT_FRAME or SYMBOL_CHOOSER_FRAME)
      * @param aParent the parent window (usually a DIALOG_SHIM or SYMBOL_CHOOSER_FRAME)
+     * @param aFilter
+     * @param aHistoryList
+     * @param aAlreadyPlaced
      * @param aAllowFieldEdits  if false, all functions that allow the user to edit fields (currently just
      *                          footprint selection) will not be available.
      * @param aShowFootprints   if false, all footprint preview and selection features are disabled. This
@@ -57,7 +60,7 @@ public:
      * @param aCancelled [out] value indicating the user has cancelled the loading symbols progress dialog
      *                   before we even get to showing the symbol chooser dialog.
      * @param aAcceptHandler a handler to be called on double-click of a footprint
-     * @param aEscapeHandler a handler to be called on <ESC>
+     * @param aEscapeHandler a handler to be called on \<ESC\>
      */
     PANEL_SYMBOL_CHOOSER( SCH_BASE_FRAME* aFrame, wxWindow* aParent,
                           const SYMBOL_LIBRARY_FILTER* aFilter,
@@ -84,6 +87,7 @@ public:
      * default is desired (usually 1).
      *
      * @param aUnit if not NULL, the selected unit is filled in here.
+     * @param aBodyStyle if not NULL the body style is filled here.
      * @return the #LIB_ID of the symbol that has been selected.
      */
     LIB_ID GetSelectedLibId( int* aUnit = nullptr, int* aBodyStyle = nullptr ) const;
@@ -163,6 +167,8 @@ protected:
     static wxString           g_symbolSearchString;
     static wxString           g_powerSearchString;
 
+    LIB_ID                    m_curSymbolId;
+
     wxTimer*                  m_dbl_click_timer;
     wxTimer*                  m_open_libs_timer;
     SYMBOL_PREVIEW_WIDGET*    m_symbol_preview;
@@ -176,7 +182,7 @@ protected:
     LIB_TREE*                 m_tree;
     HTML_WINDOW*              m_details;
 
-    static SCH_BASE_FRAME*    m_frame;      // Must be static becuase used in a static function
+    SCH_BASE_FRAME*           m_frame;
     std::function<void()>     m_acceptHandler;
     std::function<void()>     m_escapeHandler;
 
@@ -184,13 +190,13 @@ protected:
     bool                      m_allow_field_edits;
     bool                      m_show_footprints;
     wxString                  m_fp_override;
-    wxStaticText*            m_bodyStyleLabel;
-    wxChoice*                m_bodyStyleChoice;
-    int                      m_selectedBodyStyle;
+    wxStaticText*             m_bodyStyleLabel;
+    wxChoice*                 m_bodyStyleChoice;
+    int                       m_selectedBodyStyle;
 
     std::vector<std::pair<FIELD_T, wxString>>  m_field_edits;
 
-    SYMBOL_COMPAT_FUNC  m_compatCallback;
+    SYMBOL_COMPAT_FUNC        m_compatCallback;
 };
 
 #endif /* PANEL_SYMBOL_CHOOSER_H */

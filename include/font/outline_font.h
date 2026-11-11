@@ -43,7 +43,7 @@
 namespace KIFONT
 {
 /**
- * Class OUTLINE_FONT implements outline font drawing.
+ * Implement outline font drawing.
  */
 class GAL_API OUTLINE_FONT : public FONT
 {
@@ -94,6 +94,10 @@ public:
      * Load an outline font. TrueType (.ttf) and OpenType (.otf) are supported.
      *
      * @param aFontFileName is the (platform-specific) fully qualified name of the font file
+     * @param aBold loads the bold font if true
+     * @param aItalic loads the italic font if true
+     * @param aEmbeddedFiles
+     * @param aForDrawingSheet
      */
     static OUTLINE_FONT* LoadFont( const wxString& aFontFileName, bool aBold, bool aItalic,
                                    const std::vector<wxString>* aEmbeddedFiles,
@@ -105,6 +109,24 @@ public:
      * This is the distance between baselines, not the space between line bounding boxes.
      */
     double GetInterline( double aGlyphHeight, const METRICS& aFontMetrics ) const override;
+
+    double GetSuperSubSizeMultiplier() const override { return m_subscriptSuperscriptSize; }
+
+    /// Edge of the em square for glyphs drawn at text size @a aSize
+    double GetEmSize( double aSize ) const { return aSize * m_outlineFontSizeCompensation; }
+
+    double GetSuperSubBaselineOffset( TEXT_STYLE_FLAGS aTextStyle ) const override
+    {
+        double offset = 0.0;
+
+        if( IsSubscript( aTextStyle ) )
+            offset = m_subscriptVerticalOffset;
+        else if( IsSuperscript( aTextStyle ) )
+            offset = m_superscriptVerticalOffset;
+
+        // The stored offsets are y-up face units carrying the size compensation.
+        return -offset * m_outlineFontSizeCompensation;
+    }
 
     VECTOR2I GetTextAsGlyphs( BOX2I* aBoundingBox, std::vector<std::unique_ptr<GLYPH>>* aGlyphs,
                               const wxString& aText, const VECTOR2I& aSize,

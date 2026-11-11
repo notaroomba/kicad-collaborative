@@ -31,6 +31,7 @@
 #include <netinfo.h>
 #include <json_common.h>
 #include <collectors.h>
+#include <drc/drc_engine.h>
 #include <common.h>
 #include <footprint.h>
 #include <pad.h>
@@ -46,6 +47,7 @@
 #include <generators/pcb_via_stack.h>
 #include <generators_mgr.h>
 #include <router/router_tool.h>
+#include <settings/settings_manager.h>
 #include <pcbnew_utils/board_file_utils.h>
 #include <pcbnew_utils/board_test_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
@@ -136,6 +138,29 @@ BOOST_AUTO_TEST_CASE( PropertiesAndMembersRoundTrip )
     BOOST_CHECK( loaded->GetHops()->CPoint( 2 ) == VECTOR2I( pcbIUScale.mmToIU( 0.70 ), 0 ) );
 
     BOOST_CHECK_EQUAL( loaded->GetItems().size(), 2u );
+}
+
+
+BOOST_AUTO_TEST_CASE( ViewLayersCoverTheWholeSpan )
+{
+    auto board = std::make_unique<BOARD>();
+    board->SetCopperLayerCount( 4 );
+    board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    PCB_VIA_STACK* stack = new PCB_VIA_STACK( board.get(), F_Cu );
+    stack->SetStartLayer( F_Cu );
+    stack->SetEndLayer( In2_Cu );
+    board->Add( stack );
+
+    std::vector<int> layers = stack->ViewGetLayers();
+
+    for( PCB_LAYER_ID layer : { F_Cu, In1_Cu, In2_Cu } )
+    {
+        BOOST_CHECK_MESSAGE( alg::contains( layers, layer ),
+                             "span layer " << LSET::Name( layer ).ToStdString() << " is not registered" );
+    }
+
+    BOOST_CHECK( !alg::contains( layers, (int) B_Cu ) );
 }
 
 
@@ -404,6 +429,20 @@ BOOST_AUTO_TEST_CASE( InvalidSpanBuildsNothing )
     BOOST_CHECK( !PCB_VIA_STACK::IsSpanValid( board.get(), UNDEFINED_LAYER, In2_Cu ) );
     BOOST_CHECK( PCB_VIA_STACK::IsSpanValid( board.get(), F_Cu, In2_Cu ) );
     BOOST_CHECK( PCB_VIA_STACK::IsSpanValid( board.get(), F_Cu, B_Cu ) );
+    BOOST_CHECK( !PCB_VIA_STACK::IsSpanValid( nullptr, F_Cu, B_Cu ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( DetachedStackCanBeFlipped )
+{
+    PCB_VIA_STACK stack;
+    stack.SetStartLayer( F_Cu );
+    stack.SetEndLayer( In1_Cu );
+
+    stack.Flip( VECTOR2I( 0, 0 ), FLIP_DIRECTION::LEFT_RIGHT );
+
+    BOOST_CHECK_EQUAL( stack.GetStartLayer(), B_Cu );
+    BOOST_CHECK_EQUAL( stack.GetEndLayer(), In1_Cu );
 }
 
 
@@ -521,38 +560,36 @@ BOOST_AUTO_TEST_CASE( PendingStackExpansionMatcher )
     board->Add( new NETINFO_ITEM( board.get(), wxT( "sig" ), 1 ) );
     board->Add( new NETINFO_ITEM( board.get(), wxT( "other" ), 2 ) );
 
-    auto makeVia = [&]( PCB_LAYER_ID aTop, PCB_LAYER_ID aBottom, int aNet )
-    {
-        PCB_VIA* via = new PCB_VIA( board.get() );
-        via->SetViaType( VIATYPE::MICROVIA );
-        via->SetLayerPair( aTop, aBottom );
-        via->SetWidth( PADSTACK::ALL_LAYERS, pcbIUScale.mmToIU( 0.3 ) );
-        via->SetDrill( pcbIUScale.mmToIU( 0.15 ) );
-        via->SetNetCode( aNet );
-        board->Add( via );
-        return via;
-    };
-
     VIA_STACK_PRESET preset;
     preset.m_Name = wxT( "fanout" );
 
-    std::vector<PENDING_STACK_EXPANSION> pending = { { F_Cu, In2_Cu, 1, preset } };
+    VECTOR2I dropped( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) );
+
+    std::vector<PENDING_STACK_EXPANSION> pending = { { F_Cu, In2_Cu, 1, preset, dropped } };
     std::set<KIID>                       preRoute;
 
-    PCB_VIA* match = makeVia( F_Cu, In2_Cu, 1 );
+    PCB_VIA* match = makeMicrovia( board.get(), dropped, F_Cu, In2_Cu, 1 );
 
     BOOST_REQUIRE( MatchPendingStackExpansion( match, preRoute, pending ) );
     BOOST_CHECK_EQUAL( MatchPendingStackExpansion( match, preRoute, pending )->m_Name, wxT( "fanout" ) );
 
     // Routing upward records the span end to start, while a via always holds it top down.
-    std::vector<PENDING_STACK_EXPANSION> upward = { { In2_Cu, F_Cu, 1, preset } };
+    std::vector<PENDING_STACK_EXPANSION> upward = { { In2_Cu, F_Cu, 1, preset, dropped } };
     BOOST_CHECK( MatchPendingStackExpansion( match, preRoute, upward ) );
 
-    PCB_VIA* wrongNet = makeVia( F_Cu, In2_Cu, 2 );
+    PCB_VIA* wrongNet = makeMicrovia( board.get(), dropped, F_Cu, In2_Cu, 2 );
     BOOST_CHECK( MatchPendingStackExpansion( wrongNet, preRoute, pending ) == nullptr );
 
-    PCB_VIA* wrongSpan = makeVia( F_Cu, In1_Cu, 1 );
+    PCB_VIA* wrongSpan = makeMicrovia( board.get(), dropped, F_Cu, In1_Cu, 1 );
     BOOST_CHECK( MatchPendingStackExpansion( wrongSpan, preRoute, pending ) == nullptr );
+
+    VECTOR2I elsewhere( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 10 ) );
+    PCB_VIA* bystander = makeMicrovia( board.get(), elsewhere, F_Cu, In2_Cu, 1 );
+    BOOST_CHECK( MatchPendingStackExpansion( bystander, preRoute, pending ) == nullptr );
+
+    // A drop whose via the route has not placed yet claims nothing.
+    std::vector<PENDING_STACK_EXPANSION> armed = { { F_Cu, In2_Cu, 1, preset, std::nullopt } };
+    BOOST_CHECK( MatchPendingStackExpansion( match, preRoute, armed ) == nullptr );
 
     // A via that already existed is not one the route created.
     preRoute.insert( match->m_Uuid );
@@ -576,6 +613,34 @@ BOOST_AUTO_TEST_CASE( DuplicatePresetNamesAreDropped )
     BOOST_REQUIRE_EQUAL( bds.m_ViaStackPresets.size(), 2u );
     BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[0].m_Name, wxS( "HDI" ) );
     BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[1].m_Name, wxS( "Other" ) );
+}
+
+
+// A dimension outside the internal unit range is not a size we can honour. Zero hands the
+// stack to the board defaults, which is what a missing dimension already does.
+BOOST_AUTO_TEST_CASE( OutOfRangePresetDimensionsFallBackToDefaults )
+{
+    BOARD_DESIGN_SETTINGS bds( nullptr, "board.design_settings" );
+
+    nlohmann::json entries = nlohmann::json::array();
+
+    // The realistic way to get here is writing 0.3 mm in internal units.
+    entries.push_back( { { "name", "wrong unit" }, { "via_size", 300000.0 }, { "via_drill", 150000.0 } } );
+    entries.push_back( { { "name", "negative" }, { "via_size", -5000.0 }, { "via_drill", -5000.0 } } );
+    entries.push_back( { { "name", "sane" }, { "via_size", 0.3 }, { "via_drill", 0.15 } } );
+
+    bds.Set( "via_stack_presets", entries );
+    bds.Load();
+
+    BOOST_REQUIRE_EQUAL( bds.m_ViaStackPresets.size(), 3u );
+
+    BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[0].m_ViaSize, 0 );
+    BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[0].m_ViaDrill, 0 );
+    BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[1].m_ViaSize, 0 );
+    BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[1].m_ViaDrill, 0 );
+
+    BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[2].m_ViaSize, pcbIUScale.mmToIU( 0.3 ) );
+    BOOST_CHECK_EQUAL( bds.m_ViaStackPresets[2].m_ViaDrill, pcbIUScale.mmToIU( 0.15 ) );
 }
 
 
@@ -673,6 +738,38 @@ BOOST_AUTO_TEST_CASE( CreateFromItemsRejectsMixedNets )
 
     BOOST_REQUIRE( stack );
     BOOST_CHECK_EQUAL( stack->GetNetCode(), 1 );
+}
+
+
+// A stack carries one size for every hop, so mixed vias must be rejected too.
+BOOST_AUTO_TEST_CASE( CreateFromItemsRejectsMixedDimensions )
+{
+    auto board = std::make_unique<BOARD>();
+    board->SetCopperLayerCount( 4 );
+    board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    VECTOR2I pos( pcbIUScale.mmToIU( 5 ), pcbIUScale.mmToIU( 5 ) );
+
+    PCB_VIA* upper = makeMicrovia( board.get(), pos, F_Cu, In1_Cu );
+    PCB_VIA* lower = makeMicrovia( board.get(), pos, In1_Cu, In2_Cu );
+
+    std::vector<BOARD_ITEM*> items = { upper, lower };
+    wxString                 error;
+
+    lower->SetDrill( pcbIUScale.mmToIU( 0.10 ) );
+    BOOST_CHECK( PCB_VIA_STACK::CreateFromItems( items, board.get(), nullptr, &error ) == nullptr );
+    BOOST_CHECK( !error.IsEmpty() );
+
+    lower->SetDrill( upper->GetDrillValue() );
+    lower->SetWidth( PADSTACK::ALL_LAYERS, pcbIUScale.mmToIU( 0.25 ) );
+    BOOST_CHECK( PCB_VIA_STACK::CreateFromItems( items, board.get() ) == nullptr );
+
+    // Matching again, so the factory still builds one.
+    lower->SetWidth( PADSTACK::ALL_LAYERS, upper->GetWidth( PADSTACK::ALL_LAYERS ) );
+
+    std::unique_ptr<PCB_VIA_STACK> stack( PCB_VIA_STACK::CreateFromItems( items, board.get() ) );
+
+    BOOST_CHECK( stack );
 }
 
 
@@ -1007,7 +1104,7 @@ BOOST_AUTO_TEST_CASE( PlacedStackCommitState )
         // Parented to the stack and promotable to it, which is how selection works.
         BOOST_CHECK_EQUAL( via->GetParentGroup(), static_cast<EDA_GROUP*>( stack ) );
 
-        EDA_GROUP* top = PCB_GROUP::TopLevelGroup( via, nullptr, false );
+        EDA_GROUP* top = PCB_GROUP::TopLevelGroup( *via, nullptr, false );
         BOOST_CHECK_EQUAL( top, static_cast<EDA_GROUP*>( stack ) );
 
         // No leftover edit flags that would make items invisible to hit testing.
@@ -1317,7 +1414,7 @@ BOOST_AUTO_TEST_CASE( PlacedStackClickCollection )
     {
         if( collector[i]->Type() == PCB_VIA_T )
         {
-            BOOST_CHECK_EQUAL( PCB_GROUP::TopLevelGroup( collector[i], nullptr, false ),
+            BOOST_CHECK_EQUAL( PCB_GROUP::TopLevelGroup( *collector[i], nullptr, false ),
                                static_cast<EDA_GROUP*>( stack ) );
         }
     }
@@ -1689,7 +1786,7 @@ BOOST_AUTO_TEST_CASE( ExpansionLeavesPreRouteViasAlone )
 
     VIA_STACK_PRESET preset;
 
-    std::vector<PENDING_STACK_EXPANSION> pending = { { F_Cu, In2_Cu, net->GetNetCode(), preset } };
+    std::vector<PENDING_STACK_EXPANSION> pending = { { F_Cu, In2_Cu, net->GetNetCode(), preset, ROUTED_POS } };
 
     auto guarded = [&]( PCB_VIA* aVia ) -> const VIA_STACK_PRESET*
     {
@@ -1707,6 +1804,46 @@ BOOST_AUTO_TEST_CASE( ExpansionLeavesPreRouteViasAlone )
     BOOST_REQUIRE_MESSAGE( loose.size() == 1,
                            "Expected the pre-existing via to be left loose, found " << loose.size() );
     BOOST_CHECK_MESSAGE( loose.front() == PRE_ROUTE_POS, "A via that predates the route was swallowed into a stack" );
+}
+
+
+// The same route can leave an ordinary microvia on the drop's net and span. The pre-route
+// snapshot does not cover it, so only the spot the drop landed on tells them apart.
+BOOST_AUTO_TEST_CASE( ExpansionLeavesOtherViasFromTheSameRouteAlone )
+{
+    std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
+
+    board->SetCopperLayerCount( 4 );
+    board->SetEnabledLayers( LSET::AllCuMask( 4 ) | LSET::AllTechMask() );
+
+    board->Add( new NETINFO_ITEM( board.get(), wxT( "SHARED" ), 1 ) );
+
+    VECTOR2I dropped( pcbIUScale.mmToIU( 10 ), pcbIUScale.mmToIU( 10 ) );
+    VECTOR2I bystander( pcbIUScale.mmToIU( 20 ), pcbIUScale.mmToIU( 10 ) );
+
+    makeMicrovia( board.get(), dropped, F_Cu, In2_Cu, 1 );
+    makeMicrovia( board.get(), bystander, F_Cu, In2_Cu, 1 );
+
+    VIA_STACK_PRESET preset;
+
+    std::vector<PENDING_STACK_EXPANSION> pending = { { F_Cu, In2_Cu, 1, preset, dropped } };
+    std::set<KIID>                       preRoute;
+
+    auto guarded = [&]( PCB_VIA* aVia ) -> const VIA_STACK_PRESET*
+    {
+        return MatchPendingStackExpansion( aVia, preRoute, pending );
+    };
+
+    BOOST_CHECK_EQUAL( PCB_VIA_STACK::ExpandMultiHopMicrovias( board.get(), nullptr, guarded ), 1 );
+
+    BOOST_REQUIRE_EQUAL( board->Generators().size(), 1u );
+    BOOST_CHECK_MESSAGE( board->Generators().front()->GetPosition() == dropped,
+                         "The stack was built at the wrong via" );
+
+    std::vector<VECTOR2I> loose = looseMicroviaPositions( board.get() );
+
+    BOOST_REQUIRE_EQUAL( loose.size(), 1u );
+    BOOST_CHECK_MESSAGE( loose.front() == bystander, "A via the drop did not arm was swallowed into a stack" );
 }
 
 
@@ -1778,10 +1915,7 @@ BOOST_AUTO_TEST_CASE( MovingAStackReusesItsMembers )
 // alongside a deliberate file format change.
 BOOST_AUTO_TEST_CASE( GoldenFileStillLoads )
 {
-    std::string path = KI_TEST::GetPcbnewTestDataDir() + "via_stacks.kicad_pcb";
-
-    std::unique_ptr<BOARD> board = ::KI_TEST::ReadBoardFromFileOrStream( path );
-    BOOST_REQUIRE( board );
+    std::unique_ptr<BOARD> board = KI_TEST::RequireBoardFromPcbnewQAData( "via_stacks.kicad_pcb" );
 
     BOOST_REQUIRE_EQUAL( board->Generators().size(), 2u );
 
@@ -2202,6 +2336,58 @@ BOOST_AUTO_TEST_CASE( ConnectingTraceWidthSurvivesAnEdit )
 }
 
 
+// vme-wren's Default net class asks for 0.08 mm, under the 0.1 mm board minimum and the zdiff_100R_inner rule
+BOOST_AUTO_TEST_CASE( ConnectingTraceTakesTheRuleWidth )
+{
+    SETTINGS_MANAGER       settingsManager;
+    std::unique_ptr<BOARD> board;
+
+    KI_TEST::LoadBoard( settingsManager, "via_stack_track_width", board );
+
+    PCB_VIA_STACK stack( board.get(), F_Cu );
+    stack.SetStartLayer( F_Cu );
+    stack.SetEndLayer( In2_Cu );
+    stack.SetStyle( VIA_STACK_STYLE::STAGGERED );
+    stack.SetPitch( pcbIUScale.mmToIU( 0.6 ) );
+    stack.SetPosition( VECTOR2I( pcbIUScale.mmToIU( 155 ), pcbIUScale.mmToIU( 209 ) ) );
+
+    auto checkWidth = [&]( const wxString& aNetName, double aWidthMm )
+    {
+        NETINFO_ITEM* net = board->FindNet( aNetName );
+        BOOST_REQUIRE( net );
+
+        std::vector<BOARD_ITEM*> members = stack.BuildMembers( board.get(), net->GetNetCode() );
+        int                      traces = 0;
+
+        for( BOARD_ITEM* item : members )
+        {
+            if( item->Type() == PCB_TRACE_T )
+            {
+                int width = static_cast<PCB_TRACK*>( item )->GetWidth();
+
+                traces++;
+                BOOST_CHECK_MESSAGE( width == pcbIUScale.mmToIU( aWidthMm ), aNetName << " trace is " << width );
+            }
+
+            delete item;
+        }
+
+        BOOST_CHECK_EQUAL( traces, 1 );
+    };
+
+    checkWidth( wxS( "/DDR4-PS.RSTN" ), 0.1 );
+    checkWidth( wxS( "/DDR4-PS.CK_P" ), 0.1 );
+
+    // With a lower board minimum only the inner diff pair rule still holds the pair at 0.1 mm
+    BOARD_DESIGN_SETTINGS& bds = board->GetDesignSettings();
+    bds.m_TrackMinWidth = pcbIUScale.mmToIU( 0.05 );
+    bds.m_DRCEngine->InitEngine( wxFileName( KI_TEST::GetPcbnewTestDataDir() + "via_stack_track_width.kicad_dru" ) );
+
+    checkWidth( wxS( "/DDR4-PS.RSTN" ), 0.08 );
+    checkWidth( wxS( "/DDR4-PS.CK_P" ), 0.1 );
+}
+
+
 // Ctrl+D on a stack goes through DeepDuplicate, which must give the copy its own hops.
 BOOST_AUTO_TEST_CASE( DeepDuplicateGivesTheCopyItsOwnMembers )
 {
@@ -2472,6 +2658,114 @@ BOOST_AUTO_TEST_CASE( ExpansionLeavesPlainViasAlone )
     BOOST_CHECK_MESSAGE( remaining.count( throughId ), "a through via was converted" );
     BOOST_CHECK_MESSAGE( remaining.count( buriedId ), "a buried via was converted" );
     BOOST_CHECK_MESSAGE( !remaining.count( microId ), "the microvia should have been expanded" );
+}
+
+
+// A member discarded before it reaches the board has no other owner, so only its destructor shows it was freed
+class COUNTED_TRACK : public PCB_TRACK
+{
+public:
+    COUNTED_TRACK( BOARD* aBoard, int& aDestroyed ) :
+            PCB_TRACK( aBoard ),
+            m_destroyed( aDestroyed )
+    {
+    }
+
+    ~COUNTED_TRACK() override { ++m_destroyed; }
+
+private:
+    int& m_destroyed;
+};
+
+
+// A drag regenerates inside one commit, so members added by an earlier motion event must be freed
+BOOST_AUTO_TEST_CASE( RegenerateFreesMembersAddedEarlierInTheCommit )
+{
+    std::unique_ptr<BOARD> board = KI_TEST::RequireBoardFromPcbnewQAData( "via_stacks.kicad_pcb" );
+
+    TOOL_MANAGER mgr;
+    mgr.SetEnvironment( board.get(), nullptr, nullptr, nullptr, nullptr );
+    mgr.RegisterTool( new KI_TEST::DUMMY_TOOL() );
+
+    PCB_VIA_STACK* stack = nullptr;
+
+    for( PCB_GENERATOR* gen : board->Generators() )
+    {
+        if( PCB_VIA_STACK* candidate = dynamic_cast<PCB_VIA_STACK*>( gen ) )
+        {
+            if( candidate->GetStyle() == VIA_STACK_STYLE::STACKED )
+                stack = candidate;
+        }
+    }
+
+    BOOST_REQUIRE( stack );
+
+    std::set<KIID> before;
+
+    for( BOARD_ITEM* item : stack->GetBoardItems() )
+        before.insert( item->m_Uuid );
+
+    const size_t tracks = board->Tracks().size();
+    int          destroyed = 0;
+
+    BOARD_COMMIT edit( &mgr, true, false );
+    stack->EditStart( nullptr, board.get(), &edit );
+
+    // Stands in for a member the previous motion event added, and forces the rebuild fallback
+    COUNTED_TRACK* pending = new COUNTED_TRACK( board.get(), destroyed );
+    edit.Add( pending );
+    stack->AddItem( pending );
+
+    BOOST_REQUIRE( stack->Update( nullptr, board.get(), &edit ) );
+    BOOST_CHECK_EQUAL( destroyed, 1 );
+    BOOST_CHECK_EQUAL( stack->GetItems().size(), 2u );
+
+    stack->EditFinish( nullptr, board.get(), &edit );
+    edit.Revert();
+
+    std::set<KIID> after;
+
+    for( BOARD_ITEM* item : stack->GetBoardItems() )
+        after.insert( item->m_Uuid );
+
+    BOOST_CHECK_EQUAL( board->Tracks().size(), tracks );
+    BOOST_CHECK( after == before );
+}
+
+
+// vme-wren's clearance_under_fpga rule asks for 0.4/0.2 mm vias under the FPGA, above the 0.3/0.1 mm net class
+BOOST_AUTO_TEST_CASE( NetclassMicroviaTakesTheRuleMinimum )
+{
+    SETTINGS_MANAGER       settingsManager;
+    std::unique_ptr<BOARD> board;
+
+    KI_TEST::LoadBoard( settingsManager, "via_stack_uvia_rule", board );
+
+    NETINFO_ITEM* net = board->FindNet( wxS( "P1V8" ) );
+    BOOST_REQUIRE( net );
+
+    PCB_VIA_STACK stack( board.get(), F_Cu );
+    stack.SetStartLayer( F_Cu );
+    stack.SetEndLayer( In1_Cu );
+    stack.SetUseNetclass( true );
+
+    auto checkSize = [&]( const VECTOR2I& aPos, double aDiameterMm, double aDrillMm )
+    {
+        stack.SetPosition( aPos );
+
+        std::vector<BOARD_ITEM*> members = stack.BuildMembers( board.get(), net->GetNetCode() );
+        BOOST_REQUIRE_EQUAL( members.size(), 1u );
+
+        PCB_VIA* via = static_cast<PCB_VIA*>( members[0] );
+        BOOST_CHECK_EQUAL( via->GetWidth( PADSTACK::ALL_LAYERS ), pcbIUScale.mmToIU( aDiameterMm ) );
+        BOOST_CHECK_EQUAL( via->GetDrillValue(), pcbIUScale.mmToIU( aDrillMm ) );
+
+        delete via;
+    };
+
+    // The end of a real P1V8 track under the FPGA, then clear of the underFPGA area
+    checkSize( VECTOR2I( pcbIUScale.mmToIU( 155.12157 ), pcbIUScale.mmToIU( 214.280635 ) ), 0.4, 0.2 );
+    checkSize( VECTOR2I( pcbIUScale.mmToIU( 175 ), pcbIUScale.mmToIU( 214.280635 ) ), 0.3, 0.1 );
 }
 
 

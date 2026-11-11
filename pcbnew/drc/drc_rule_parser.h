@@ -53,14 +53,28 @@ private:
     std::shared_ptr<COMPONENT_CLASS_ASSIGNMENT_RULE> parseComponentClassAssignment();
 
     void parseConstraint( DRC_RULE* aRule );
-    void     parseValueWithUnits( int aOffset, const wxString& aExpr, int& aResult, EDA_UNITS& aUnits,
-                                  bool aUnitless = false, bool aRatio = false );
+
+    /**
+     *
+     * @param aOffset the offset within the source expression to begin parsing
+     * @param aExpr the source expression to parse for a value
+     * @param aResult [out] the vaule parsed
+     * @param aUnits [out] the units found
+     * @param aUnitless indicates that the value is expected to be unscaled (and have no units)
+     * @param aRatio indicates that the value is expected to be a ratio (and have no units)
+     * @param aImpliedDegrees indicates that the parameter is expected to be in degrees (deg),
+     *                        but that earlier versions allowed the unit to be unspecified
+     */
+    void parseValueWithUnits( int aOffset, const wxString& aExpr, int& aResult, EDA_UNITS& aUnits,
+                              bool aUnitless = false, bool aRatio = false, bool aImpliedDegrees = false );
+
     LSET parseLayer( wxString* aSource );
     SEVERITY parseSeverity();
     void parseUnknown();
     wxString parseExpression();
 
     void reportError( const wxString& aMessage, int aOffset = 0 );
+    void reportErrorAt( const wxString& aMessage, int aLine, int aOffset, const char* aSourceLine );
     void reportDeprecation( const wxString& oldToken, const wxString& newToken );
     bool checkUnresolvedTextVariable();
     void expected( const wxString& expectedTokens );

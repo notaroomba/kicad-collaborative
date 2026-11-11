@@ -32,7 +32,6 @@
 #include <wx/treectrl.h>
 #include <wx/utils.h>
 #include <wx/filename.h>
-#include <wx/generic/treectlg.h>
 
 #include <core/typeinfo.h>
 #include <eda_base_frame.h>
@@ -40,6 +39,9 @@
 #include <math/box2.h>
 #include <sch_base_frame.h>
 #include <template_fieldnames.h>
+#include <widgets/net_navigator_tree.h>
+#include <map>
+#include <connectivity/conn_subscription.h>
 
 class SCH_ITEM;
 class EDA_ITEM;
@@ -62,6 +64,7 @@ class DIALOG_SYMBOL_FIELDS_TABLE;
 class RESCUER;
 class HIERARCHY_PANE;
 class API_HANDLER_COMMON;
+class API_HANDLER_LIBRARIES;
 class API_HANDLER_SCH;
 class DIALOG_SCHEMATIC_SETUP;
 class PROGRESS_REPORTER;
@@ -69,6 +72,11 @@ class wxSearchCtrl;
 class wxGenericTreeCtrl;
 class BITMAP_BUTTON;
 
+
+namespace SCH_CONNECTIVITY
+{
+class NAVIGATION_QUERY;
+}
 
 /// Schematic search type used by the socket link with Pcbnew
 enum SCH_SEARCH_T
@@ -158,6 +166,24 @@ public:
      */
     bool LoadProjectSettings();
 
+    /// Apply the project file's render settings.  The drawing sheet name is left alone because
+    /// Page Settings holds an unsaved choice in BASE_SCREEN until the schematic is saved.
+    void ApplyProjectFileSettings();
+
+    /**
+     * Bring the frame in line with a project file that was reread from disk.
+     *
+     * Every value this frame copies out of the project file and writes back on save must be
+     * refreshed here; a copy left stale silently undoes the new file on the next save.
+     */
+    void ReloadProjectFileSettings();
+
+    /**
+     * Update what depends on the schematic's project settings after they changed in memory.
+     * @param aAliasesChanged rebuilds connectivity for the new bus alias members.
+     */
+    void RefreshProjectSettings( bool aAliasesChanged );
+
     /**
      * Load the drawing sheet file.
      */
@@ -225,6 +251,11 @@ public:
     void RefreshOperatingPointDisplay();
 
     /**
+     * Redraw the displayed symbols after a sheet suffix change made on another screen.
+     */
+    void RefreshComposedReferences();
+
+    /**
      * Automatically set the rotation of an item (if the item supports it).
      */
     void AutoRotateItem( SCH_SCREEN* aScreen, SCH_ITEM* aItem );
@@ -285,8 +316,6 @@ public:
 
     /**
      * Test all of the connectable objects in the schematic for unused connection points.
-     *
-     * @return True if any connection state changes were made.
      */
     void TestDanglingEnds();
 
@@ -311,9 +340,9 @@ public:
     /**
      * Send a connection (net or bus) to Pcbnew for highlighting.
      *
-     * @param aConnection is the connection to highlight
+     * @param aName is the net or bus name to highlight, or empty to clear.
      */
-    void SetCrossProbeConnection( const SCH_CONNECTION* aConnection );
+    void SetCrossProbeConnection( const wxString& aName );
 
     /**
      * Tell Pcbnew to clear the existing highlighted net, if one exists
@@ -396,12 +425,12 @@ public:
      * @param aStartNumber The start number for non-sheet-based annotation styles.
      * @param aResetAnnotation Clear any previous annotation if true.  Otherwise, keep the
      *                         existing symbol annotation.
+     * @param aRegroupUnits regroups symbol units when true.
      * @param aRepairTimestamps Test for and repair any duplicate time stamps if true.
      *                          Otherwise, keep the existing time stamps.  This option
      *                          could change previous annotation because time stamps are
      *                          used to handle annotation in complex hierarchies.
      * @param aReporter A sink for error messages.  Use NULL_REPORTER if you don't need errors.
-     * @param aSymbolFilter Filter for symbol handling. Ignored for non-selection scopes.
      *
      * When the sheet number is used in annotation, each sheet annotation starts from sheet
      * number * 100.  In other words the first sheet uses 100 to 199, the second sheet uses
@@ -409,8 +438,7 @@ public:
      */
     void AnnotateSymbols( SCH_COMMIT* aCommit, ANNOTATE_SCOPE_T aAnnotateScope, ANNOTATE_ORDER_T aSortOption,
                           ANNOTATE_ALGO_T aAlgoOption, bool aRecursive, int aStartNumber, bool aResetAnnotation,
-                          bool aRegroupUnits, bool aRepairTimestamps, REPORTER& aReporter,
-                          SYMBOL_FILTER aSymbolFilter );
+                          bool aRegroupUnits, bool aRepairTimestamps, REPORTER& aReporter );
 
     /**
      * Check for annotation errors.
@@ -423,13 +451,14 @@ public:
      * - Multiple part per package symbols where the reference designator is different between
      *   parts.
      *
-     * @return Number of annotation errors found.
-     * @param aReporter A handler for error reporting.
+     * @param aErrorHandler
      * @param aAnnotateScope See #ANNOTATE_SCOPE_T Check the current sheet only if true.
      *                       Otherwise check the entire schematic.
+     * @param aRecursive
+     * @return Number of annotation errors found.
      */
     int CheckAnnotate( ANNOTATION_ERROR_HANDLER aErrorHandler, ANNOTATE_SCOPE_T aAnnotateScope,
-                       bool aRecursive, SYMBOL_FILTER aSymbolFilter );
+                       bool aRecursive );
 
     /**
      * Run a modal version of the annotate dialog for a specific purpose.
@@ -495,9 +524,19 @@ public:
 
     bool OpenProjectFiles( const std::vector<wxString>& aFileSet, int aCtl = 0 ) override;
 
+    /**
+     * Reload the schematic and all its sheets from disk.
+     * The caller handles confirmation before unsaved edits are discarded.
+     *
+     * @return false when there is no filename or the reload fails.
+     */
+    bool ReloadFromDisk();
+
     void SetSchematic( SCHEMATIC* aSchematic );
 
     wxString GetCurrentFileName() const override;
+
+    bool CanAcceptApiCommands() override;
 
     /**
      * Check if any of the screens has unsaved changes and asks the user whether to save or
@@ -543,6 +582,7 @@ public:
      * File names foo.sch and Foo.sch are unique files on Linux and MacOS but on Windows
      * this would result in a broken schematic.
      *
+     * @param aOldName
      * @param aSchematicFileName is the absolute path and file name of the file to test.
      * @return true if the user accepts the potential file name clash risk.
      */
@@ -667,15 +707,32 @@ public:
     /**
      * Remove a given junction and heals any wire segments under the junction.
      *
+     * @param aCommit is the commit to undo the junction delete.
      * @param aItem The junction to delete
      */
     void DeleteJunction( SCH_COMMIT* aCommit, SCH_ITEM* aItem );
 
     void UpdateHopOveredWires( SCH_ITEM* aItem );
 
-    void SelectUnit( SCH_SYMBOL* aSymbol, int aUnit );
+    /**
+     * Change the unit of \a aSymbol, swapping with another placed unit if the user asks.
+     *
+     * @param aSymbol
+     * @param aUnit
+     * @param aCommit is the commit of an edit in progress, such as a move.  The changes are staged
+     *                there and not pushed.  Without it, a local commit is pushed.
+     */
+    void SelectUnit( SCH_SYMBOL* aSymbol, int aUnit, SCH_COMMIT* aCommit = nullptr );
 
-    void SelectBodyStyle( SCH_SYMBOL* aSymbol, int aBodyStyle );
+    /**
+     * Change the body style of \a aSymbol.
+     *
+     * @param aSymbol
+     * @param aBodyStyle
+     * @param aCommit is the commit of an edit in progress, such as a move.  The change is staged
+     *                there and not pushed.  Without it, a local commit is pushed.
+     */
+    void SelectBodyStyle( SCH_SYMBOL* aSymbol, int aBodyStyle, SCH_COMMIT* aCommit = nullptr );
 
     void SetAltPinFunction( SCH_PIN* aPin, const wxString& aFunction );
 
@@ -692,6 +749,7 @@ public:
      * If it is a delete command, items are put on list with the .Flags member
      * set to DELETED.
      *
+     * @param aScreen is the undo/redo screen.
      * @param aItemToCopy is the schematic item modified by the command to undo.
      * @param aTypeCommand is the command type (see enum UNDO_REDO).
      * @param aAppend set to true to add the item to the previous undo list.
@@ -817,9 +875,21 @@ public:
 
     /**
      * Generate the connection data for the entire schematic hierarchy.
+     *
+     * @param aCommit
+     * @param aCleanupFlags
+     * @param aProgressReporter
+     * @param aCleanupDone the commit already applied cleanup; flags still select the rebuild scope.
+     * @return false if recalculation failed; the frame has already reported the failure.
      */
-    void RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS aCleanupFlags,
-                                 PROGRESS_REPORTER* aProgressReporter = nullptr );
+    bool RecalculateConnections( SCH_COMMIT* aCommit, SCH_CLEANUP_FLAGS aCleanupFlags,
+                                 PROGRESS_REPORTER* aProgressReporter = nullptr, bool aCleanupDone = false );
+
+    // Commit source cleanup before the exporter's full connectivity rebuild.
+    void PrepareForNetlist();
+
+    // Refresh connectivity-dependent display state after a model rebuild.
+    void RefreshConnectivity( bool aForce = false, const SCH_CONNECTIVITY::CHANGE_SET* aChanges = nullptr );
 
     /**
      * Called after the preferences dialog is run.
@@ -882,6 +952,8 @@ public:
     DIALOG_BOOK_REPORTER* GetSymbolDiffDialog();
 
     DIALOG_ERC* GetErcDialog();
+    void ClearErcMarkers();
+    void RefreshErcMarkers();
 
     DIALOG_SYMBOL_FIELDS_TABLE* GetSymbolFieldsTableDialog();
 
@@ -907,7 +979,7 @@ public:
     void FocusSearch();
 
     /**
-     * Add \a aListener to post #EDA_EVT_SCHEMATIC_CHANGED command events to.
+     * Add \a aListener to post EDA_EVT_SCHEMATIC_CHANGED command events to.
      *
      * @warning The caller is responsible for removing any listeners that are no long valid.
      *
@@ -927,11 +999,12 @@ public:
         return wxS( "NetNavigator" );
     }
 
-    void RefreshNetNavigator( const NET_NAVIGATOR_ITEM_DATA* aSelection = nullptr );
+    void RefreshNetNavigator( const NET_NAVIGATOR_ITEM_DATA* aSelection = nullptr,
+                              const std::vector<wxString>* aChangedNets = nullptr );
 
     void MakeNetNavigatorNode( const wxString& aNetName, wxTreeItemId aParentId,
                                const NET_NAVIGATOR_ITEM_DATA* aSelection,
-                               bool aSingleSheetSchematic );
+                               const SCH_CONNECTIVITY::NAVIGATION_QUERY& aQuery );
 
     void SelectNetNavigatorItem( const NET_NAVIGATOR_ITEM_DATA* aSelection = nullptr );
 
@@ -949,6 +1022,15 @@ public:
 
     void StartCrossProbeFlash( const std::vector<SCH_ITEM*>& aItems );
 
+    /**
+     * Validate a user-entered variant name for the rename/copy dialogs.
+     *
+     * Shows an info-bar error and returns false when the name is empty, matches the reserved
+     * default name, or collides (case-insensitively) with an existing variant.  @p aExcludeName
+     * lets a rename keep its own slot (e.g. a case-only rename of the same variant).
+     */
+    bool ValidateNewVariantName( const wxString& aName, const wxString& aExcludeName );
+
     DECLARE_EVENT_TABLE()
 
 protected:
@@ -961,6 +1043,12 @@ protected:
 
     bool canRunAutoSave() const override;
 
+    /**
+     * Return true when a tool other than passive selection or an idle point editor is active.
+     * Used to gate both API command acceptance and autosave so neither stomps on a live edit.
+     */
+    bool interactiveOperationInProgress() const;
+
     void configureToolbars() override;
 
     void doReCreateMenuBar() override;
@@ -969,8 +1057,6 @@ protected:
      * Send the KiCad netlist over to CVPCB.
      */
     void sendNetlistToCvpcb();
-
-    void onSize( wxSizeEvent& aEvent );
 
     void saveProjectSettings() override;
 
@@ -987,15 +1073,6 @@ protected:
     void onPluginAvailabilityChanged( wxCommandEvent& aEvt );
 
 private:
-    /**
-     * Validate a user-entered variant name for the rename/copy dialogs.
-     *
-     * Shows an info-bar error and returns false when the name is empty, matches the reserved
-     * default name, or collides (case-insensitively) with an existing variant.  @p aExcludeName
-     * lets a rename keep its own slot (e.g. a case-only rename of the same variant).
-     */
-    bool validateNewVariantName( const wxString& aName, const wxString& aExcludeName );
-
     // Called when resizing the Hierarchy Navigator panel
     void OnResizeHierarchyNavigator( wxSizeEvent& aEvent );
 
@@ -1042,8 +1119,9 @@ private:
     /**
      *  Load the given filename but sets the path to the current project path.
      *
-     *  @param full filepath of file to be imported.
-     *  @param aFileType SCH_FILE_T value for file type
+     * @param aFileName full filepath of file to be imported.
+     * @param aFileType SCH_FILE_T value for file type.
+     * @param aProperties
      */
     bool importFile( const wxString& aFileName, int aFileType,
                      const std::map<std::string, UTF8>* aProperties = nullptr );
@@ -1053,9 +1131,11 @@ private:
      *
      * @param aSheet is the #SCH_SHEET object to save.
      * @param aSavePath is the full path of the destination file
+     * @param isSaveAs indicates this is a save-as or save-copy-as operation, and that the dirty
+     *                 bit should NOT be cleared on the sheet
      * @return True if the file has been saved.
      */
-    bool saveSchematicFile( SCH_SHEET* aSheet, const wxString& aSavePath );
+    bool saveSchematicFile( SCH_SHEET* aSheet, const wxString& aSavePath, bool isSaveAs );
 
     /**
      * Fill a map of uuid -> reference from the currently loaded schematic.
@@ -1066,6 +1146,7 @@ private:
 
     wxWindow* createHighlightedNetNavigator();
 
+    void onNetNavigatorDPIChanged( wxDPIChangedEvent& aEvent );
     void onNetNavigatorFilterChanged( wxCommandEvent& aEvent );
     void onNetNavigatorKey( wxKeyEvent& aEvent );
     void onNetNavigatorItemMenu( wxTreeEvent& aEvent );
@@ -1095,6 +1176,8 @@ private:
         ID_NET_NAVIGATOR_SEARCH_REGEX
     };
 
+    void subscribeConnectivity();
+    SCH_CONNECTIVITY::SUBSCRIPTION m_connectivitySubscription;
     SCHEMATIC*                  m_schematic;          ///< The currently loaded schematic
     wxString                    m_highlightedConn;    ///< The highlighted net or bus or empty string.
     wxString                    m_highlightedNetChain;
@@ -1114,11 +1197,14 @@ private:
     DIALOG_SCHEMATIC_SETUP*     m_schematicSetupDialog;
 
 
-    wxGenericTreeCtrl*          m_netNavigator;
+    NET_NAVIGATOR_TREE*         m_netNavigator;
     wxSearchCtrl*               m_netNavigatorFilter;
     BITMAP_BUTTON*              m_netNavigatorMenuButton;
     wxString                    m_netNavigatorFilterValue;
     wxString                    m_netNavigatorMenuNetName;
+    std::map<wxString, wxTreeItemId> m_netNavigatorNodes;
+    wxString                    m_netNavigatorConnection;
+    bool                        m_netNavigatorStale = true;
 
 	bool                        m_syncingPcbToSchSelection; // Recursion guard when synchronizing selection from PCB
     // Cross-probe flashing support
@@ -1139,6 +1225,7 @@ private:
 
     std::unique_ptr<API_HANDLER_SCH> m_apiHandler;
     std::unique_ptr<API_HANDLER_COMMON> m_apiHandlerCommon;
+    std::unique_ptr<API_HANDLER_LIBRARIES> m_apiLibrariesHandler;
 };
 
 

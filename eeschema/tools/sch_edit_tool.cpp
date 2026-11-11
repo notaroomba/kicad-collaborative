@@ -18,6 +18,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <symbol_edit_frame.h>
+#include <tool/tool_manager.h>
+#include <tools/sch_selection_tool.h>
 #include <kiway.h>
 #include <tool/action_manager.h>
 #include <tool/picker_tool.h>
@@ -28,12 +31,17 @@
 #include <tools/sch_drawing_tools.h>
 #include <confirm.h>
 #include <connection_graph.h>
+#include <advanced_config.h>
+#include <connectivity/conn_facade.h>
 #include <sch_actions.h>
 #include <sch_tool_utils.h>
 #include <increment.h>
 #include <algorithm>
 #include <set>
 #include <string_utils.h>
+#include <bitmap_base.h>
+#include <bitmap_tracing.h>
+#include <dialogs/dialog_convert_image_to_outlines.h>
 #include <sch_bitmap.h>
 #include <sch_bus_entry.h>
 #include <sch_commit.h>
@@ -1053,6 +1061,7 @@ int SCH_EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
     SCH_SCREEN* screen = m_frame->GetScreen();
 
     std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> noConnects;
+    std::vector<SCH_SYMBOL*>                  autoplaceSymbols;
 
     if( !commit )
         commit = &localCommit;
@@ -1068,6 +1077,21 @@ int SCH_EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
 
         if( !head )
             head = item;
+
+        if( item->Type() == SCH_SYMBOL_T )
+        {
+            autoplaceSymbols.push_back( static_cast<SCH_SYMBOL*>( item ) );
+        }
+        else if( item->Type() == SCH_GROUP_T )
+        {
+            item->RunOnChildren(
+                    [&]( SCH_ITEM* aChild )
+                    {
+                        if( aChild->Type() == SCH_SYMBOL_T )
+                            autoplaceSymbols.push_back( static_cast<SCH_SYMBOL*>( aChild ) );
+                    },
+                    RECURSE_MODE::RECURSE );
+        }
     }
 
     if( head && head->IsMoving() )
@@ -1092,15 +1116,6 @@ int SCH_EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
             SCH_SYMBOL* symbol = static_cast<SCH_SYMBOL*>( head );
 
             symbol->Rotate( rotPoint, !clockwise );
-
-            if( m_frame->eeconfig()->m_AutoplaceFields.enable )
-            {
-                AUTOPLACE_ALGO fieldsAutoplaced = symbol->GetFieldsAutoplaced();
-
-                if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL )
-                    symbol->AutoplaceFields( screen, fieldsAutoplaced );
-            }
-
             break;
         }
 
@@ -1326,6 +1341,21 @@ int SCH_EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
         updateItem( item, true );
     }
 
+    // Autoplace only after everything has rotated so collision checks see final positions
+    if( m_frame->eeconfig()->m_AutoplaceFields.enable )
+    {
+        for( SCH_SYMBOL* symbol : autoplaceSymbols )
+        {
+            AUTOPLACE_ALGO fieldsAutoplaced = symbol->GetFieldsAutoplaced();
+
+            if( fieldsAutoplaced == AUTOPLACE_AUTO || fieldsAutoplaced == AUTOPLACE_MANUAL )
+            {
+                symbol->AutoplaceFields( screen, fieldsAutoplaced );
+                m_frame->UpdateItem( symbol, false, true );
+            }
+        }
+    }
+
     wxLogTrace( "KICAD_SCH_MOVE", "SCH_EDIT_TOOL::Rotate: complete, moving=%d", moving );
 
     if( moving )
@@ -1461,16 +1491,19 @@ int SCH_EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
 
         case SCH_SHEET_T:
         {
-            noConnects = static_cast<SCH_SHEET*>( item )->GetNoConnects();
+            SCH_SHEET* sheet = static_cast<SCH_SHEET*>( item );
+
+            noConnects = sheet->GetNoConnects();
 
             // Mirror the sheet on itself. Sheets do not have a anchor point.
-            VECTOR2I mirrorPoint = m_frame->GetNearestHalfGridPosition( item->GetBoundingBox().Centre() );
+            VECTOR2I mirrorPoint = m_frame->GetNearestHalfGridPosition( sheet->GetBoundingBox().Centre() );
 
             if( vertical )
-                item->MirrorVertically( mirrorPoint.y );
+                sheet->MirrorVertically( mirrorPoint.y );
             else
-                item->MirrorHorizontally( mirrorPoint.x );
+                sheet->MirrorHorizontally( mirrorPoint.x );
 
+            sheet->SetFieldsAutoplaced( AUTOPLACE_NONE );
             break;
         }
 
@@ -1480,6 +1513,7 @@ int SCH_EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
             else
                 item->MirrorHorizontally( item->GetPosition().x );
 
+            item->SetFieldsAutoplaced( AUTOPLACE_NONE );
             break;
         }
 
@@ -1505,14 +1539,19 @@ int SCH_EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
                 }
                 else
                 {
-                    // mirror within parent sheet
                     SCH_SHEET_PIN* pin = static_cast<SCH_SHEET_PIN*>( item );
                     SCH_SHEET*     sheet = pin->GetParent();
 
+                    for( SCH_ITEM* ncItem : screen->Items().Overlapping( SCH_NO_CONNECT_T, pin->GetTextPos() ) )
+                        noConnects[pin] = static_cast<SCH_NO_CONNECT*>( ncItem );
+
+                    // mirror within parent sheet
                     if( vertical )
                         pin->MirrorVertically( sheet->GetBoundingBox().GetCenter().y );
                     else
                         pin->MirrorHorizontally( sheet->GetBoundingBox().GetCenter().x );
+
+                    pin->SetFieldsAutoplaced( AUTOPLACE_NONE );
                 }
             }
             else if( item->Type() == SCH_FIELD_T )
@@ -1527,12 +1566,28 @@ int SCH_EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
                 // Now that we're re-justifying a field, they're no longer autoplaced.
                 static_cast<SCH_ITEM*>( field->GetParent() )->SetFieldsAutoplaced( AUTOPLACE_NONE );
             }
+            else if( item->Type() == SCH_SHEET_T )
+            {
+                SCH_SHEET* sheet = static_cast<SCH_SHEET*>( item );
+
+                for( const auto& [pin, noConnect] : sheet->GetNoConnects() )
+                    noConnects[pin] = noConnect;
+
+                if( vertical )
+                    sheet->MirrorVertically( mirrorPoint.y );
+                else
+                    sheet->MirrorHorizontally( mirrorPoint.x );
+
+                sheet->SetFieldsAutoplaced( AUTOPLACE_NONE );
+            }
             else
             {
                 if( vertical )
                     item->MirrorVertically( mirrorPoint.y );
                 else
                     item->MirrorHorizontally( mirrorPoint.x );
+
+                item->SetFieldsAutoplaced( AUTOPLACE_NONE );
             }
 
             connections |= item->IsConnectable();
@@ -1699,6 +1754,30 @@ int SCH_EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
     if( !commit )
         commit = &localCommit;
 
+    SCH_SCREEN*                               screen = m_frame->GetScreen();
+    std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> noConnects;
+
+    if( !moving )
+    {
+        for( EDA_ITEM* item : sorted )
+        {
+            if( item->Type() == SCH_SHEET_T )
+            {
+                std::map<SCH_SHEET_PIN*, SCH_NO_CONNECT*> sheetNoConnects =
+                        static_cast<SCH_SHEET*>( item )->GetNoConnects();
+
+                noConnects.insert( sheetNoConnects.begin(), sheetNoConnects.end() );
+            }
+            else if( item->Type() == SCH_SHEET_PIN_T )
+            {
+                SCH_SHEET_PIN* pin = static_cast<SCH_SHEET_PIN*>( item );
+
+                for( SCH_ITEM* ncItem : screen->Items().Overlapping( SCH_NO_CONNECT_T, pin->GetTextPos() ) )
+                    noConnects[pin] = static_cast<SCH_NO_CONNECT*>( ncItem );
+            }
+        }
+    }
+
     for( size_t i = 0; i < sorted.size() - 1; i++ )
     {
         SCH_ITEM* a = static_cast<SCH_ITEM*>( sorted[i] );
@@ -1815,6 +1894,16 @@ int SCH_EDIT_TOOL::Swap( const TOOL_EVENT& aEvent )
     }
     else
     {
+        for( auto& [sheetPin, noConnect] : noConnects )
+        {
+            if( noConnect->GetPosition() != sheetPin->GetTextPos() )
+            {
+                commit->Modify( noConnect, screen );
+                noConnect->SetPosition( sheetPin->GetTextPos() );
+                updateItem( noConnect, true );
+            }
+        }
+
         if( selection.IsHover() )
             m_toolMgr->RunAction( ACTIONS::selectionClear );
 
@@ -1847,6 +1936,7 @@ int SCH_EDIT_TOOL::SwapPins( const TOOL_EVENT& aEvent )
         return 0;
 
     SCH_SELECTION&         selection = m_selectionTool->RequestSelection( { SCH_PIN_T } );
+    m_selectionTool->FilterSelectionForLockedItems();
     std::vector<EDA_ITEM*> sorted = selection.GetItemsSortedBySelectionOrder();
 
     if( selection.Size() < 2 )
@@ -1980,18 +2070,54 @@ int SCH_EDIT_TOOL::SwapPins( const TOOL_EVENT& aEvent )
 
 
 // Used by SwapPinLabels() and SwapUnitLabels() to find the single net label connected to a pin
-static SCH_LABEL_BASE* findSingleNetLabelForPin( SCH_PIN* aPin, CONNECTION_GRAPH* aGraph,
+static SCH_LABEL_BASE* findSingleNetLabelForPin( SCH_PIN* aPin, SCHEMATIC& aSchematic,
                                                  const SCH_SHEET_PATH& aSheetPath )
 {
-    if( !aGraph || !aPin )
+    if( !aPin )
         return nullptr;
 
-    CONNECTION_SUBGRAPH* sg = aGraph->GetSubgraphForItem( aPin );
+    const bool             usePublished = ADVANCED_CFG::GetCfg().m_ConnectivityEngine;
+    std::vector<SCH_ITEM*> items;
 
-    if( !sg )
-        return nullptr;
+    if( usePublished )
+    {
+        // Walk physical neighbors so the result matches the legacy subgraph rather than the whole net
+        std::set<SCH_ITEM*>    seen{ aPin };
+        std::vector<SCH_ITEM*> pending{ aPin };
 
-    const std::set<SCH_ITEM*>& items = sg->GetItems();
+        while( !pending.empty() )
+        {
+            SCH_ITEM* item = pending.back();
+            pending.pop_back();
+            items.push_back( item );
+
+            if( const auto connection = aSchematic.Connectivity().Connection( item->m_Uuid, aSheetPath.PathRef() ) )
+            {
+                for( SCH_ITEM* neighbor : connection->ConnectedItems() )
+                {
+                    if( seen.insert( neighbor ).second )
+                        pending.push_back( neighbor );
+                }
+            }
+        }
+    }
+    else if( CONNECTION_GRAPH* graph = aSchematic.ConnectionGraph() )
+    {
+        if( CONNECTION_SUBGRAPH* sg = graph->GetSubgraphForItemOnSheet( aPin, aSheetPath ) )
+            items.assign( sg->GetItems().begin(), sg->GetItems().end() );
+    }
+
+    const auto isNet = [&]( SCH_ITEM* aItem )
+    {
+        if( usePublished )
+        {
+            const auto connection = aSchematic.Connectivity().Connection( aItem->m_Uuid, aSheetPath.PathRef() );
+            return connection && connection->IsNet();
+        }
+
+        const SCH_CONNECTION* connection = aItem->Connection( &aSheetPath );
+        return connection && connection->IsNet();
+    };
 
     size_t          pinCount = 0;
     SCH_LABEL_BASE* label = nullptr;
@@ -2001,26 +2127,13 @@ static SCH_LABEL_BASE* findSingleNetLabelForPin( SCH_PIN* aPin, CONNECTION_GRAPH
         if( item->Type() == SCH_PIN_T )
             pinCount++;
 
-        switch( item->Type() )
-        {
-        case SCH_LABEL_T:
-        case SCH_GLOBAL_LABEL_T:
-        case SCH_HIER_LABEL_T:
-        {
-            SCH_CONNECTION* conn = item->Connection( &aSheetPath );
+        if( !item->IsType( { SCH_LABEL_T, SCH_GLOBAL_LABEL_T, SCH_HIER_LABEL_T } ) || !isNet( item ) )
+            continue;
 
-            if( conn && conn->IsNet() )
-            {
-                if( label )
-                    return nullptr; // more than one label
+        if( label )
+            return nullptr; // more than one label
 
-                label = static_cast<SCH_LABEL_BASE*>( item );
-            }
-
-            break;
-        }
-        default: break;
-        }
+        label = static_cast<SCH_LABEL_BASE*>( item );
     }
 
     if( pinCount != 1 )
@@ -2038,8 +2151,6 @@ int SCH_EDIT_TOOL::SwapPinLabels( const TOOL_EVENT& aEvent )
     if( orderedPins.size() < 2 )
         return 0;
 
-    CONNECTION_GRAPH* connectionGraph = m_frame->Schematic().ConnectionGraph();
-
     const SCH_SHEET_PATH& sheetPath = m_frame->GetCurrentSheet();
 
     std::vector<SCH_LABEL_BASE*> labels;
@@ -2047,7 +2158,7 @@ int SCH_EDIT_TOOL::SwapPinLabels( const TOOL_EVENT& aEvent )
     for( EDA_ITEM* item : orderedPins )
     {
         SCH_PIN*        pin = static_cast<SCH_PIN*>( item );
-        SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, connectionGraph, sheetPath );
+        SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, m_frame->Schematic(), sheetPath );
 
         if( !label )
         {
@@ -2091,8 +2202,6 @@ int SCH_EDIT_TOOL::SwapUnitLabels( const TOOL_EVENT& aEvent )
     if( selectedUnits.size() < 2 )
         return 0;
 
-    CONNECTION_GRAPH* connectionGraph = m_frame->Schematic().ConnectionGraph();
-
     const SCH_SHEET_PATH& sheetPath = m_frame->GetCurrentSheet();
 
     // Build ordered label vectors (sorted by pin X/Y) for each selected unit
@@ -2104,7 +2213,7 @@ int SCH_EDIT_TOOL::SwapUnitLabels( const TOOL_EVENT& aEvent )
 
         for( SCH_PIN* pin : symbol->GetPins( &sheetPath ) )
         {
-            SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, connectionGraph, sheetPath );
+            SCH_LABEL_BASE* label = findSingleNetLabelForPin( pin, m_frame->Schematic(), sheetPath );
 
             if( !label )
             {
@@ -2166,7 +2275,12 @@ int SCH_EDIT_TOOL::SwapUnitLabels( const TOOL_EVENT& aEvent )
 
 int SCH_EDIT_TOOL::RepeatDrawItem( const TOOL_EVENT& aEvent )
 {
-    const std::vector<std::unique_ptr<SCH_ITEM>>& sourceItems = m_frame->GetRepeatItems();
+    // This MUST be a copy as finalizing the SCH_ACTIONS::move lower down will reset m_frame's
+    // m_items_to_repeat member variable.
+    std::vector<std::unique_ptr<SCH_ITEM>> sourceItems( m_frame->GetRepeatItems().size() );
+
+    for( int ii = 0; ii < (int) sourceItems.size(); ++ii )
+        sourceItems[ii].reset( m_frame->GetRepeatItems().at( ii )->Duplicate( IGNORE_PARENT_GROUP ) );
 
     if( sourceItems.empty() )
         return 0;
@@ -2180,6 +2294,7 @@ int SCH_EDIT_TOOL::RepeatDrawItem( const TOOL_EVENT& aEvent )
     for( const std::unique_ptr<SCH_ITEM>& item : sourceItems )
     {
         SCH_ITEM* newItem = item->Duplicate( IGNORE_PARENT_GROUP );
+        int       commitCheckpoint = commit.Checkpoint();
         bool      restore_state = false;
 
         // Ensure newItem has a suitable parent: the current screen, because an item from
@@ -2258,8 +2373,7 @@ int SCH_EDIT_TOOL::RepeatDrawItem( const TOOL_EVENT& aEvent )
                 static_cast<SCH_SYMBOL*>( newItem )->ClearAnnotation( nullptr, false );
                 NULL_REPORTER reporter;
                 m_frame->AnnotateSymbols( &commit, ANNOTATE_SELECTION, annotateOrder, annotateAlgo,
-                                          true /* recursive */, annotateStartNum, false, false, false,
-                                          reporter, SYMBOL_FILTER_NON_POWER );
+                                          true /* recursive */, annotateStartNum, false, false, false, reporter );
             }
 
             // Annotation clears the selection so re-add the item
@@ -2270,7 +2384,13 @@ int SCH_EDIT_TOOL::RepeatDrawItem( const TOOL_EVENT& aEvent )
 
         if( restore_state )
         {
-            commit.Revert();
+            // If the parent group is in this checkpoint window then we don't really need this.  But if
+            // the parent was added in a previous checkpoint window then we're not going to roll it back
+            // with RevertToCheckpoint().
+            if( SCH_GROUP* enteredGroup = selectionTool->GetEnteredGroup() )
+                enteredGroup->RemoveItem( newItem );
+
+            commit.RevertToCheckpoint( commitCheckpoint );
         }
         else
         {
@@ -2410,15 +2530,7 @@ void SCH_EDIT_TOOL::editFieldText( SCH_FIELD* aField )
 {
     KICAD_T    parentType = aField->GetParent() ? aField->GetParent()->Type() : SCHEMATIC_T;
     SCH_COMMIT commit( m_toolMgr );
-
-    // Save old symbol in undo list if not already in edit, or moving.
-    if( aField->GetEditFlags() == 0 ) // i.e. not edited, or moved
-        commit.Modify( aField, m_frame->GetScreen() );
-
-    if( parentType == SCH_SYMBOL_T && aField->GetId() == FIELD_T::REFERENCE )
-        static_cast<SCH_ITEM*>( aField->GetParent() )->SetConnectivityDirty();
-
-    wxString caption;
+    wxString   caption;
 
     // Use title caps for mandatory fields.  "Edit Sheet name Field" looks dorky.
     if( aField->IsMandatory() )
@@ -2437,7 +2549,14 @@ void SCH_EDIT_TOOL::editFieldText( SCH_FIELD* aField )
     if( dlg.ShowQuasiModal() != wxID_OK )
         return;
 
+    // The dialog changes nothing before OK, and staging bumps the connectivity revision
+    if( aField->GetEditFlags() == 0 ) // i.e. not edited, or moved
+        commit.Modify( aField, m_frame->GetScreen() );
+
     dlg.UpdateField( &commit, aField, &m_frame->GetCurrentSheet() );
+
+    if( parentType == SCH_SYMBOL_T && aField->GetId() == FIELD_T::REFERENCE )
+        static_cast<SCH_ITEM*>( aField->GetParent() )->SetConnectivityDirty();
 
     if( m_frame->eeconfig()->m_AutoplaceFields.enable || parentType == SCH_SHEET_T )
     {
@@ -2563,6 +2682,9 @@ int SCH_EDIT_TOOL::AutoplaceFields( const TOOL_EVENT& aEvent )
 
     for( SCH_ITEM* sch_item : autoplaceItems )
     {
+        if( sch_item->IsLocked() )
+            continue;
+
         if( !moving && !sch_item->IsNew() )
             commit.Modify( sch_item, m_frame->GetScreen() );
 
@@ -2797,12 +2919,7 @@ int SCH_EDIT_TOOL::CycleBodyStyle( const TOOL_EVENT& aEvent )
         return 0;
 
     SCH_SYMBOL* symbol = (SCH_SYMBOL*) selection.Front();
-    SCH_COMMIT  commit( m_toolMgr );
-
-    if( !symbol->IsNew() )
-        commit.Modify( symbol, m_frame->GetScreen() );
-
-    int nextBodyStyle = symbol->GetBodyStyle() + 1;
+    int         nextBodyStyle = symbol->GetBodyStyle() + 1;
 
     if( nextBodyStyle > symbol->GetBodyStyleCount() )
         nextBodyStyle = 1;
@@ -2811,9 +2928,6 @@ int SCH_EDIT_TOOL::CycleBodyStyle( const TOOL_EVENT& aEvent )
 
     if( symbol->IsNew() )
         m_toolMgr->PostAction( ACTIONS::refreshPreview );
-
-    if( !commit.Empty() )
-        commit.Push( _( "Change Body Style" ) );
 
     if( selection.IsHover() )
         m_toolMgr->RunAction( ACTIONS::selectionClear );
@@ -3112,6 +3226,11 @@ void SCH_EDIT_TOOL::EditProperties( EDA_ITEM* aItem )
             sheet->GetScreen()->ClearAnnotation( &m_frame->GetCurrentSheet(), false );
         }
 
+        // Only a push republishes the staged sheet; a cancel, a file change and the annotation
+        // reset each leave the screen revision ahead of the last recalculation
+        if( !okPressed || !isUndoable || doClearAnnotation )
+            m_frame->RecalculateConnections( nullptr, NO_CLEANUP );
+
         if( okPressed )
             m_frame->GetCanvas()->Refresh();
 
@@ -3218,7 +3337,12 @@ void SCH_EDIT_TOOL::EditProperties( EDA_ITEM* aItem )
         wxFAIL_MSG( wxString( "Cannot edit schematic item type " ) + aItem->GetClass() );
     }
 
-    updateItem( aItem, true );
+    // A pushed commit already updated the R-tree, and a full screen update would bump the
+    // connectivity revision after that recalculation
+    updateItem( aItem, false );
+
+    if( SCH_ITEM* schItem = dynamic_cast<SCH_ITEM*>( aItem ) )
+        m_frame->GetScreen()->UpdateDisplayBounds( schItem );
 }
 
 
@@ -3790,6 +3914,111 @@ int SCH_EDIT_TOOL::DdAppendFile( const TOOL_EVENT& aEvent )
 }
 
 
+int SCH_EDIT_TOOL::ConvertImageToOutlines( const TOOL_EVENT& aEvent )
+{
+    SCH_SELECTION& selection = m_selectionTool->GetSelection();
+
+    if( selection.Size() != 1 || selection[0]->Type() != SCH_BITMAP_T )
+        return 0;
+
+    SCH_BITMAP*      image = static_cast<SCH_BITMAP*>( selection[0] );
+    REFERENCE_IMAGE& refImage = image->GetReferenceImage();
+    BITMAP_BASE&     bitmap = refImage.MutableImage();
+
+    if( !bitmap.GetImageData() )
+        return 0;
+
+    const wxImage source = *bitmap.GetImageData();
+
+    auto showPreview = [&]( double aThreshold, bool aInvert )
+    {
+        bitmap.BeginPreviewImage( ConvertImageToBilevel( source, aThreshold, aInvert ) );
+        m_frame->GetCanvas()->GetView()->Update( image );
+        m_frame->GetCanvas()->ForceRefresh();
+    };
+
+    // The schematic has no layer for the user to choose.
+    DIALOG_CONVERT_IMAGE_TO_OUTLINES dialog( m_frame, wxArrayString(), 0, showPreview );
+
+    showPreview( dialog.GetThreshold(), dialog.GetInvert() );
+
+    int result = dialog.ShowModal();
+
+    bitmap.EndPreviewImage();
+    m_frame->GetCanvas()->GetView()->Update( image );
+
+    if( result != wxID_OK )
+    {
+        m_frame->GetCanvas()->ForceRefresh();
+        return 0;
+    }
+
+    wxImage bilevel = ConvertImageToBilevel( source, dialog.GetThreshold(), dialog.GetInvert() );
+
+    VECTOR2I size = refImage.GetSize();
+    double   scaleX = (double) size.x / bilevel.GetWidth();
+    double   scaleY = (double) size.y / bilevel.GetHeight();
+
+    WX_STRING_REPORTER reporter;
+    SHAPE_POLY_SET     traced = TraceBilevelImage( bilevel, scaleX, scaleY, reporter );
+    wxString           warnings = reporter.GetMessages();
+
+    warnings.Trim();
+
+    const int icon = warnings.IsEmpty() ? wxICON_INFORMATION : wxICON_WARNING;
+
+    if( traced.IsEmpty() )
+    {
+        wxString message = warnings.IsEmpty() ? _( "No shapes to trace at this threshold." ) : warnings;
+
+        m_frame->GetCanvas()->ForceRefresh();
+        m_frame->GetInfoBar()->ShowMessageFor( message, 4000, icon );
+        return 0;
+    }
+
+    // Images are drawn rotated, so the traced outlines need to be moved and rotated accordingly.
+    VECTOR2I origin = refImage.GetPosition() - size / 2;
+
+    traced.Move( origin );
+    traced.Rotate( refImage.GetOrientation(), refImage.GetPosition() );
+
+    SCH_COMMIT commit( m_toolMgr );
+    SCH_GROUP* group = new SCH_GROUP( m_frame->GetScreen() );
+
+    for( int ii = 0; ii < traced.OutlineCount(); ii++ )
+    {
+        SHAPE_LINE_CHAIN outline = traced.Outline( ii );
+
+        SCH_SHAPE* shape = new SCH_SHAPE( SHAPE_T::POLY );
+
+        shape->SetFillMode( FILL_T::FILLED_SHAPE );
+        shape->SetStroke( STROKE_PARAMS( -1 ) );
+
+        for( int jj = 0; jj < outline.PointCount(); jj++ )
+            shape->AddPoint( outline.CPoint( jj ) );
+
+        shape->AddPoint( outline.CPoint( 0 ) );
+
+        group->AddItem( shape );
+        commit.Add( shape, m_frame->GetScreen() );
+    }
+
+    commit.Remove( image, m_frame->GetScreen() );
+    commit.Add( group, m_frame->GetScreen() );
+    commit.Push( _( "Convert Image to Outlines" ) );
+
+    wxString message = wxString::Format( wxPLURAL( "Added %d shape.", "Added %d shapes.", traced.OutlineCount() ),
+                                         traced.OutlineCount() );
+
+    if( !warnings.IsEmpty() )
+        message << wxS( " " ) << warnings;
+
+    m_frame->GetInfoBar()->ShowMessageFor( message, 4000, icon );
+
+    return 0;
+}
+
+
 int SCH_EDIT_TOOL::DdAddImage( const TOOL_EVENT& aEvent )
 {
     wxString* filename = aEvent.Parameter<wxString*>();
@@ -4121,6 +4350,7 @@ void SCH_EDIT_TOOL::setTransitions()
     Go( &SCH_EDIT_TOOL::EditPageNumber,     SCH_ACTIONS::editPageNumber.MakeEvent() );
 
     Go( &SCH_EDIT_TOOL::DdAppendFile,       SCH_ACTIONS::ddAppendFile.MakeEvent() );
+    Go( &SCH_EDIT_TOOL::ConvertImageToOutlines, SCH_ACTIONS::convertImageToOutlines.MakeEvent() );
     Go( &SCH_EDIT_TOOL::DdAddImage,        SCH_ACTIONS::ddAddImage.MakeEvent() );
     // clang-format on
 }

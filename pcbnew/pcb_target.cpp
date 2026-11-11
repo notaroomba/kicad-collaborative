@@ -24,6 +24,7 @@
 #include <bitmaps.h>
 #include <board.h>
 #include <board_design_settings.h>
+#include <board_design_settings_defaults.h>
 #include <base_units.h>
 #include <settings/color_settings.h>
 #include <settings/settings_manager.h>
@@ -96,7 +97,7 @@ void PCB_TARGET::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
     else
         m_pos.y = aCentre.y - ( m_pos.y - aCentre.y );
 
-    SetLayer( GetBoard()->FlipLayer( GetLayer() ) );
+    SetLayer( GetFlippedLayer( GetLayer() ) );
 }
 
 

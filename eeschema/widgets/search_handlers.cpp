@@ -33,6 +33,9 @@
 
 void SCH_SEARCH_HANDLER::ActivateItem( long aItemRow )
 {
+    if( !m_resultsValid || aItemRow < 0 || aItemRow >= static_cast<long>( m_hitlist.size() ) )
+        return;
+
     std::vector<long> item = { aItemRow };
     SelectItems( item );
 
@@ -47,6 +50,7 @@ void SCH_SEARCH_HANDLER::FindAll( const std::function<bool( SCH_ITEM*, SCH_SHEET
 
     m_hitlist.clear();
 
+    m_resultsValid = false;
     screens.BuildClientSheetPathList();
 
     for( SCH_SCREEN* screen = screens.GetFirst(); screen; screen = screens.GetNext() )
@@ -63,6 +67,8 @@ void SCH_SEARCH_HANDLER::FindAll( const std::function<bool( SCH_ITEM*, SCH_SHEET
                 m_hitlist.push_back( { item, sheet } );
         }
     }
+
+    m_resultsValid = true;
 }
 
 
@@ -85,9 +91,9 @@ void SCH_SEARCH_HANDLER::Sort( int aCol, bool aAscending, std::vector<long>* aSe
                 // N.B. To meet the iterator sort conditions, we cannot simply invert the truth
                 // to get the opposite sort.  i.e. ~(a<b) != (a>b)
                 if( aAscending )
-                    return StrNumCmp( getResultCell( a, col ), getResultCell( b, col ), true ) < 0;
+                    return StrNumCmp( getResultCell( a, col ), getResultCell( b, col ), CMP_T::IGNORE_CASE ) < 0;
                 else
-                    return StrNumCmp( getResultCell( b, col ), getResultCell( a, col ), true ) < 0;
+                    return StrNumCmp( getResultCell( b, col ), getResultCell( a, col ), CMP_T::IGNORE_CASE ) < 0;
             } );
 
     aSelection->clear();
@@ -102,6 +108,10 @@ void SCH_SEARCH_HANDLER::Sort( int aCol, bool aAscending, std::vector<long>* aSe
 
 void SCH_SEARCH_HANDLER::SelectItems( std::vector<long>& aItemRows )
 {
+    // Queued list events must not select items from an invalidated search.
+    if( !m_resultsValid )
+        return;
+
     EDA_ITEMS                   selectedItems;
     std::vector<SCH_SEARCH_HIT> selectedHits;
 
@@ -222,12 +232,14 @@ wxString SYMBOL_SEARCH_HANDLER::getResultCell( const SCH_SEARCH_HIT& aHit, int a
     if( !sym )
         return wxEmptyString;
 
+    const wxString variant = m_frame->Schematic().GetCurrentVariant();
+
     if( aCol == 0 )
         return sym->GetRef( aHit.sheetPath, true );
     else if( aCol == 1 )
-        return sym->GetField( FIELD_T::VALUE )->GetShownText( aHit.sheetPath, false );
+        return sym->GetField( FIELD_T::VALUE )->GetShownText( aHit.sheetPath, FOR_GUI );
     else if( aCol == 2 )
-        return sym->GetField( FIELD_T::FOOTPRINT )->GetShownText( aHit.sheetPath, false );
+        return sym->GetField( FIELD_T::FOOTPRINT )->GetShownText( aHit.sheetPath, FOR_GUI );
     else if( aCol == 3 )
         return aHit.sheetPath->GetPageNumber();
     else if( aCol == 4 )
@@ -235,19 +247,19 @@ wxString SYMBOL_SEARCH_HANDLER::getResultCell( const SCH_SEARCH_HIT& aHit, int a
     else if( aCol == 5 )
         return m_frame->MessageTextFromValue( sym->GetPosition().y );
     else if( aCol == 6 )
-        return sym->ResolveExcludedFromSim() ? wxS( "X" ) : wxS( " " );
+        return sym->ResolveExcludedFromSim( aHit.sheetPath, variant ) ? wxS( "X" ) : wxS( " " );
     else if( aCol == 7 )
-        return sym->ResolveExcludedFromBOM() ? wxS( "X" ) : wxS( " " );
+        return sym->ResolveExcludedFromBOM( aHit.sheetPath, variant ) ? wxS( "X" ) : wxS( " " );
     else if( aCol == 8 )
-        return sym->ResolveExcludedFromBoard() ? wxS( "X" ) : wxS( " " );
+        return sym->ResolveExcludedFromBoard( aHit.sheetPath, variant ) ? wxS( "X" ) : wxS( " " );
     else if( aCol == 9 )
-        return sym->ResolveExcludedFromPosFiles() ? wxS( "X" ) : wxS( " " );
+        return sym->ResolveExcludedFromPosFiles( aHit.sheetPath, variant ) ? wxS( "X" ) : wxS( " " );
     else if( aCol == 10 )
-        return sym->ResolveDNP( aHit.sheetPath, m_frame->Schematic().GetCurrentVariant() ) ? wxS( "X" ) : wxS( " " );
+        return sym->ResolveDNP( aHit.sheetPath, variant ) ? wxS( "X" ) : wxS( " " );
     else if( aCol == 11 )
         return sym->GetLibId().Format();
     else if( aCol == 12 )
-        return sym->GetShownDescription();
+        return sym->GetShownDescription( FOR_GUI );
 
     return wxEmptyString;
 }
@@ -316,7 +328,7 @@ wxString POWER_SEARCH_HANDLER::getResultCell( const SCH_SEARCH_HIT& aHit, int aC
     if( aCol == 0 )
         return sym->GetRef( aHit.sheetPath, true );
     else if( aCol == 1 )
-        return sym->GetField( FIELD_T::VALUE )->GetShownText( aHit.sheetPath, false );
+        return sym->GetField( FIELD_T::VALUE )->GetShownText( aHit.sheetPath, FOR_GUI );
     else if( aCol == 2 )
         return aHit.sheetPath->GetPageNumber();
     else if( aCol == 3 )
@@ -384,7 +396,7 @@ wxString TEXT_SEARCH_HANDLER::getResultCell( const SCH_SEARCH_HIT& aHit, int aCo
         if( aCol == 0 )
             return _( "Text" );
         else if( aCol == 1 )
-            return txt->GetShownText( false );
+            return txt->GetShownText( FOR_GUI );
         else if( aCol == 2 )
             return aHit.sheetPath->GetPageNumber();
         else if( aCol == 3 )
@@ -402,7 +414,7 @@ wxString TEXT_SEARCH_HANDLER::getResultCell( const SCH_SEARCH_HIT& aHit, int aCo
         if( aCol == 0 )
             return _( "Text Box" );
         else if( aCol == 1 )
-            return txt->GetShownText( false );
+            return txt->GetShownText( FOR_GUI );
         else if( aCol == 2 )
             return aHit.sheetPath->GetPageNumber();
         else if( aCol == 3 )
@@ -483,7 +495,7 @@ wxString LABEL_SEARCH_HANDLER::getResultCell( const SCH_SEARCH_HIT& aHit, int aC
             return _HKI( "Directive" );
     }
     else if( aCol == 1 )
-        return lbl->GetShownText( false );
+        return lbl->GetShownText( FOR_GUI );
     else if( aCol == 2 )
         return aHit.sheetPath->GetPageNumber();
     else if( aCol == 3 )

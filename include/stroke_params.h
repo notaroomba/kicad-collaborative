@@ -20,14 +20,16 @@
 #pragma once
 
 #include <map>
-#include <bitmaps.h>
 #include <units_provider.h>
 #include <gal/color4d.h>
 #include <wx/translation.h>
 #include <geometry/shape.h>
 
+
 class OUTPUTFORMATTER;
 class MSG_PANEL_ITEM;
+
+enum class BITMAPS : unsigned int;
 
 namespace KIGFX
 {
@@ -112,6 +114,8 @@ public:
     }
 
     bool operator!=( const STROKE_PARAMS& aOther ) const { return !( *this == aOther ); }
+
+    bool operator<( const STROKE_PARAMS& aOther ) const;
 
     void Format( OUTPUTFORMATTER* out, const EDA_IU_SCALE& aIuScale ) const;
 

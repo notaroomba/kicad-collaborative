@@ -41,6 +41,7 @@
 #include <pcb_textbox.h>
 #include <pcb_table.h>
 #include <pcb_generator.h>
+#include <generators/pcb_via_stitch.h>
 #include <zone.h>
 #include <pad.h>
 #include <pcb_edit_frame.h>
@@ -54,6 +55,7 @@
 #include <tools/pcb_selection_tool.h>
 #include <tools/constraint_edit_tool.h>
 #include <tools/edit_tool.h>
+#include <tools/multichannel_tool.h>
 #include <tools/graphic_edit.h>
 #include <tools/item_modification_routine.h>
 #include <tools/pcb_picker_tool.h>
@@ -62,6 +64,12 @@
 #include <tools/pcb_grid_helper.h>
 #include <tools/pad_tool.h>
 #include <view/view_controls.h>
+#include <view/view.h>
+#include <preview_items/mirror_axis_item.h>
+#include <preview_items/two_point_geom_manager.h>
+#include <gal/graphics_abstraction_layer.h>
+#include <gal/painter.h>
+#include <geometry/geometry_utils.h>
 #include <connectivity/connectivity_algo.h>
 #include <pcbnew_id.h>
 #include <core/kicad_algo.h>
@@ -78,7 +86,6 @@ using namespace std::placeholders;
 #include <dialogs/dialog_move_exact.h>
 #include <dialogs/dialog_track_via_properties.h>
 #include <dialogs/dialog_tablecell_properties.h>
-#include <dialogs/dialog_table_properties.h>
 #include <dialogs/dialog_multi_unit_entry.h>
 #include <dialogs/dialog_unit_entry.h>
 #include <pcb_reference_image.h>
@@ -134,9 +141,9 @@ static const std::vector<KICAD_T> routableTypes = { PCB_TRACE_T, PCB_ARC_T, PCB_
 
 
 // Types with no Mirror() override, which would fall through to the warning-dialog
-// BOARD_ITEM::Mirror. Free pads are handled specially by the tool but not by PCB_GROUP::Mirror.
+// BOARD_ITEM::Mirror.
 static const std::vector<KICAD_T> nonMirrorableTypes = {
-    PCB_FOOTPRINT_T, PCB_PAD_T, PCB_TARGET_T,
+    PCB_FOOTPRINT_T, PCB_TARGET_T,
 };
 
 
@@ -195,17 +202,19 @@ void EDIT_TOOL::Reset( RESET_REASON aReason )
 }
 
 
-static std::shared_ptr<CONDITIONAL_MENU> makeMirrorRotateMenu( TOOL_INTERACTIVE* aTool )
+static std::shared_ptr<CONDITIONAL_MENU> makeMirrorRotateMenu( EDIT_TOOL* aEditTool )
 {
-    std::shared_ptr<CONDITIONAL_MENU> menu = std::make_shared<CONDITIONAL_MENU>( aTool );
+    std::shared_ptr<CONDITIONAL_MENU> menu = std::make_shared<CONDITIONAL_MENU>( aEditTool );
 
     menu->SetIcon( BITMAPS::special_tools );
     menu->SetUntranslatedTitle( _HKI( "Mirror / Rotate" ) );
 
+    bool isBoardEditor = aEditTool && aEditTool->IsBoardEditor();
+
     auto canMirror =
-            []( const SELECTION& aSelection )
+            [isBoardEditor]( const SELECTION& aSelection )
             {
-                if( SELECTION_CONDITIONS::OnlyTypes( padTypes )( aSelection ) )
+                if( isBoardEditor && SELECTION_CONDITIONS::OnlyTypes( padTypes )( aSelection ) )
                     return false;
 
                 return selectionMirrorable( aSelection );
@@ -215,6 +224,7 @@ static std::shared_ptr<CONDITIONAL_MENU> makeMirrorRotateMenu( TOOL_INTERACTIVE*
     menu->AddItem( PCB_ACTIONS::rotateCw, SELECTION_CONDITIONS::NotEmpty );
     menu->AddItem( PCB_ACTIONS::mirrorH, canMirror );
     menu->AddItem( PCB_ACTIONS::mirrorV, canMirror );
+    menu->AddItem( PCB_ACTIONS::mirrorInteractive, canMirror );
 
     return menu;
 }
@@ -874,6 +884,8 @@ bool EDIT_TOOL::Init()
                                        PCB_DIM_RADIAL_T,
                                        PCB_DIM_ORTHOGONAL_T,
                                        PCB_TABLE_T,
+                                       PCB_DRILL_CHART_T,
+                                       PCB_STACKUP_TABLE_T,
                                        PCB_TABLECELL_T,
                                } );
 
@@ -1046,6 +1058,7 @@ bool EDIT_TOOL::invokeInlineRouter( int aDragMode )
         return true;
     }
 
+    frame()->ShowInfoBarMsg( _( "This selection cannot be dragged in this mode." ) );
     return false;
 }
 
@@ -1116,13 +1129,31 @@ int EDIT_TOOL::Drag( const TOOL_EVENT& aEvent )
                 // Initial gathering of items
                 gatherItemsByType();
 
-                if( !sTool->GetSelection().IsHover() && footprints.size() )
+                // The heuristics below answer "what did the user mean by clicking here", so
+                // they only apply to a hover. An explicit selection already said what it wants,
+                // and trimming it would drop items the block drag is meant to carry.
+                if( !sTool->GetSelection().IsHover() )
                 {
-                    // Remove non-footprints so box-selection will drag footprints.
-                    for( int ii = aCollector.GetCount() - 1; ii >= 0; --ii )
+                    const auto draggable = []( KICAD_T aType )
                     {
-                        if( aCollector[ii]->Type() != PCB_FOOTPRINT_T )
-                            aCollector.Remove( ii );
+                        return aType == PCB_FOOTPRINT_T || aType == PCB_TRACE_T || aType == PCB_ARC_T
+                               || aType == PCB_VIA_T || aType == PCB_PAD_T;
+                    };
+
+                    bool anyDraggable = false;
+
+                    for( int ii = 0; ii < aCollector.GetCount(); ++ii )
+                        anyDraggable |= draggable( aCollector[ii]->Type() );
+
+                    // With nothing draggable the selection is left alone, so the router can
+                    // refuse it with a message rather than silently finding nothing to do
+                    if( anyDraggable )
+                    {
+                        for( int ii = aCollector.GetCount() - 1; ii >= 0; --ii )
+                        {
+                            if( !draggable( aCollector[ii]->Type() ) )
+                                aCollector.Remove( ii );
+                        }
                     }
                 }
                 else if( tracks.size() || vias.size() )
@@ -1290,25 +1321,18 @@ int EDIT_TOOL::ChangeTrackWidth( const TOOL_EVENT& aEvent )
 
             commit.Modify( via );
 
-            int new_width;
-            int new_drill;
-
             if( via->GetViaType() == VIATYPE::MICROVIA )
             {
                 NETCLASS* netClass = via->GetEffectiveNetClass();
 
-                new_width = netClass->GetuViaDiameter();
-                new_drill = netClass->GetuViaDrill();
+                via->SetSizeFromRules( netClass->GetuViaDiameter(), netClass->GetuViaDrill() );
             }
             else
             {
-                new_width = board()->GetDesignSettings().GetCurrentViaSize();
-                new_drill = board()->GetDesignSettings().GetCurrentViaDrill();
+                via->SetDrill( board()->GetDesignSettings().GetCurrentViaDrill() );
+                via->SetPadstackMode( PADSTACK::MODE::NORMAL );
+                via->SetWidth( PADSTACK::ALL_LAYERS, board()->GetDesignSettings().GetCurrentViaSize() );
             }
-
-            via->SetDrill( new_drill );
-            via->SetPadstackMode( PADSTACK::MODE::NORMAL );
-            via->SetWidth( PADSTACK::ALL_LAYERS, new_width );
         }
         else if( item->Type() == PCB_TRACE_T || item->Type() == PCB_ARC_T )
         {
@@ -1669,12 +1693,10 @@ static std::optional<DOGBONE_CORNER_ROUTINE::PARAMETERS> GetDogboneParams( PCB_B
 }
 
 /**
- * Prompt the user for chamfer parameters
+ * Prompt the user for chamfer parameters.
  *
  * @param aFrame
- * @param aErrorMsg filled with an error message if the parameter is invalid somehow
- * @return std::optional<int> the chamfer parameters or std::nullopt if no
- * valid fillet specified
+ * @return std::optional<int> the chamfer parameters or std::nullopt if no valid fillet specified.
  */
 static std::optional<CHAMFER_PARAMS> GetChamferParams( PCB_BASE_EDIT_FRAME& aFrame )
 {
@@ -2313,11 +2335,15 @@ int EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
 
         if( dlg.GetReturnValue() == DIALOG_TABLECELL_PROPERTIES::TABLECELL_PROPS_EDIT_TABLE )
         {
-            PCB_TABLE*              table = static_cast<PCB_TABLE*>( cells[0]->GetParent() );
-            DIALOG_TABLE_PROPERTIES tableDlg( frame(), table );
-
-            tableDlg.ShowQuasiModal(); // Scintilla's auto-complete requires quasiModal
+            // The frame picks the dialog, since a generated table's cell text is not the user's to edit
+            editFrame->OnEditItemRequest( static_cast<PCB_TABLE*>( cells[0]->GetParent() ) );
         }
+    }
+    else if( selection.Size() == 1 && selection.Front()->Type() == PCB_GROUP_T
+             && MULTICHANNEL_TOOL::ChannelZone( static_cast<PCB_GROUP*>( selection.Front() ) ) )
+    {
+        // A repeated channel is edited through the Repeat Layout dialog, which applies to the whole set
+        m_toolMgr->RunAction( PCB_ACTIONS::repeatLayout );
     }
     else if( selection.Size() == 1 && selection.Front()->IsBOARD_ITEM() )
     {
@@ -2507,7 +2533,8 @@ int EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
                     sTool->FilterCollectorForLockedItems( aCollector );
             } );
 
-    m_selectionTool->ReportFilteredLockedItems();
+    if( m_selectionTool->ReportFilteredLockedItems() )
+        return 0;
 
     if( selection.Empty() )
         return 0;
@@ -2523,7 +2550,7 @@ int EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
     // RequestSelection() as we need the reference point when a pad is the selection front.
     if( !m_isFootprintEditor && !frame()->GetPcbNewSettings()->m_AllowFreePads )
     {
-        selection = m_selectionTool->RequestSelection(
+        PCB_SELECTION& filtered = m_selectionTool->RequestSelection(
                 []( const VECTOR2I& aPt, GENERAL_COLLECTOR& aCollector, PCB_SELECTION_TOOL* sTool )
                 {
                     sTool->FilterCollectorForMarkers( aCollector );
@@ -2533,7 +2560,10 @@ int EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
                     sTool->FilterCollectorForLockedItems( aCollector );
                 } );
 
-        m_selectionTool->ReportFilteredLockedItems();
+        if( m_selectionTool->ReportFilteredLockedItems() )
+            return 0;
+
+        selection = filtered;
     }
 
     // Did we filter everything out?  If so, don't try to operate further
@@ -2645,42 +2675,145 @@ int EDIT_TOOL::Rotate( const TOOL_EVENT& aEvent )
 }
 
 
-/**
- * Mirror a pad in the H/V axis passing through a point
- */
-static void mirrorPad( PAD& aPad, const VECTOR2I& aMirrorPoint, FLIP_DIRECTION aFlipDirection )
+const std::vector<KICAD_T> EDIT_TOOL::MirrorableItems = {
+    PCB_SHAPE_T,
+    PCB_FIELD_T,
+    PCB_TEXT_T,
+    PCB_TEXTBOX_T,
+    PCB_ZONE_T,
+    PCB_PAD_T,
+    PCB_TRACE_T,
+    PCB_ARC_T,
+    PCB_VIA_T,
+    PCB_GROUP_T,
+    PCB_GENERATOR_T,
+    PCB_POINT_T,
+    PCB_TABLE_T,
+    PCB_REFERENCE_IMAGE_T,
+    PCB_DRILL_CHART_T,
+    PCB_STACKUP_TABLE_T,
+    PCB_GRID_ITEM_T,
+};
+
+
+// True if a group holds an item that can only be mirrored about the X or Y axis, which the
+// group's arbitrary-axis mirror cannot handle.
+static bool groupHasAxisAlignedItems( const PCB_GROUP* aGroup )
 {
-    aPad.Padstack().ForEachUniqueLayer(
-            [&]( PCB_LAYER_ID layer )
+    bool found = false;
+
+    aGroup->RunOnChildren(
+            [&]( BOARD_ITEM* aChild )
             {
-                if( aPad.GetShape( layer ) == PAD_SHAPE::CUSTOM )
-                    aPad.FlipPrimitives( aFlipDirection );
-            } );
+                if( dynamic_cast<PCB_TABLE*>( aChild ) )
+                    found = true;
+            },
+            RECURSE_MODE::RECURSE );
 
-    VECTOR2I tmpPt = aPad.GetPosition();
-    MIRROR( tmpPt, aMirrorPoint, aFlipDirection );
-    aPad.SetPosition( tmpPt );
-
-    aPad.Padstack().ForEachUniqueLayer(
-            [&]( PCB_LAYER_ID layer )
-            {
-                tmpPt = aPad.GetOffset( layer );
-                MIRROR( tmpPt, VECTOR2I{ 0, 0 }, aFlipDirection );
-                aPad.SetOffset( layer, tmpPt );
-
-                VECTOR2I tmpz = aPad.GetDelta( layer );
-                MIRROR( tmpz, VECTOR2I{ 0, 0 }, aFlipDirection );
-                aPad.SetDelta( layer, tmpz );
-            } );
-
-    aPad.SetOrientation( -aPad.GetOrientation() );
+    return found;
 }
 
 
-const std::vector<KICAD_T> EDIT_TOOL::MirrorableItems = {
-    PCB_SHAPE_T, PCB_FIELD_T, PCB_TEXT_T,  PCB_TEXTBOX_T,   PCB_ZONE_T,  PCB_PAD_T,   PCB_TRACE_T,
-    PCB_ARC_T,   PCB_VIA_T,   PCB_GROUP_T, PCB_GENERATOR_T, PCB_POINT_T, PCB_TABLE_T, PCB_REFERENCE_IMAGE_T,
+/*
+ * Get the items that a mirror of the selection has to transform.
+ */
+static std::vector<BOARD_ITEM*> mirrorTargets( const SELECTION& aSelection )
+{
+    std::vector<BOARD_ITEM*> targets;
+
+    for( EDA_ITEM* item : aSelection )
+    {
+        if( !item->IsBOARD_ITEM() )
+            continue;
+
+        BOARD_ITEM* target = static_cast<BOARD_ITEM*>( item );
+
+        if( EDA_GROUP* parent = target->GetParentGroup() )
+        {
+            PCB_GENERATOR* generator = dynamic_cast<PCB_GENERATOR*>( parent->AsEdaItem() );
+
+            if( generator && generator->ChildrenAreIndividuallySelectable() )
+                target = generator;
+        }
+
+        if( !alg::contains( targets, target ) )
+            targets.push_back( target );
+    }
+
+    return targets;
+}
+
+
+/**
+ * What a mirror operation could not move, so the caller can say why.
+ */
+struct MIRROR_SKIPS
+{
+    size_t footprints = 0;
+    size_t groups = 0;
+    size_t items = 0;
 };
+
+
+/**
+ * Mirror the selection about aAxis, staging an undo entry for everything that moves.
+ *
+ * Items without an arbitrary-axis mirror, are skipped for an oblique axis and mirrored
+ * the axis-aligned way otherwise.
+ */
+static MIRROR_SKIPS mirrorSelection( BOARD_COMMIT& aCommit, const SELECTION& aSelection, const SEG& aAxis )
+{
+    MIRROR_SKIPS skips;
+
+    const bool axisAligned = ( aAxis.A.x == aAxis.B.x ) || ( aAxis.A.y == aAxis.B.y );
+
+    for( BOARD_ITEM* item : mirrorTargets( aSelection ) )
+    {
+        if( !item->IsType( EDIT_TOOL::MirrorableItems ) )
+        {
+            if( item->Type() == PCB_FOOTPRINT_T )
+                skips.footprints++;
+
+            continue;
+        }
+
+        // Skip groups that hold non-mirrorable items, else the rest would tear away from them.
+        if( item->Type() == PCB_GROUP_T )
+        {
+            PCB_GROUP* group = static_cast<PCB_GROUP*>( item );
+
+            if( !groupMirrorable( group ) || ( !axisAligned && groupHasAxisAlignedItems( group ) ) )
+            {
+                skips.groups++;
+                continue;
+            }
+        }
+
+        PCB_TABLE* table = dynamic_cast<PCB_TABLE*>( item );
+
+        if( table && !axisAligned )
+        {
+            skips.items++;
+            continue;
+        }
+
+        aCommit.Modify( item, nullptr, RECURSE_MODE::RECURSE );
+
+        if( table )
+        {
+            const FLIP_DIRECTION flipDirection =
+                    ( aAxis.A.x == aAxis.B.x ) ? FLIP_DIRECTION::LEFT_RIGHT : FLIP_DIRECTION::TOP_BOTTOM;
+
+            table->Mirror( aAxis.A, flipDirection );
+        }
+        else
+        {
+            item->Mirror( aAxis );
+        }
+    }
+
+    return skips;
+}
 
 
 int EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
@@ -2712,86 +2845,13 @@ int EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
         return 0;
 
     updateModificationPoint( selection );
-    VECTOR2I mirrorPoint = selection.GetReferencePoint();
 
-    FLIP_DIRECTION flipDirection = aEvent.IsAction( &PCB_ACTIONS::mirrorV ) ? FLIP_DIRECTION::TOP_BOTTOM
-                                                                            : FLIP_DIRECTION::LEFT_RIGHT;
+    const VECTOR2I       mirrorPoint = selection.GetReferencePoint();
+    const FLIP_DIRECTION flipDirection =
+            aEvent.IsAction( &PCB_ACTIONS::mirrorV ) ? FLIP_DIRECTION::TOP_BOTTOM : FLIP_DIRECTION::LEFT_RIGHT;
 
-    int skippedFootprints = 0;
-    int skippedGroups = 0;
-
-    for( EDA_ITEM* item : selection )
-    {
-        if( !item->IsType( MirrorableItems ) )
-        {
-            if( item->Type() == PCB_FOOTPRINT_T )
-                skippedFootprints++;
-
-            continue;
-        }
-
-        // Skip groups that hold non-mirrorable items, else the rest would tear away from them.
-        if( item->Type() == PCB_GROUP_T && !groupMirrorable( static_cast<PCB_GROUP*>( item ) ) )
-        {
-            skippedGroups++;
-            continue;
-        }
-
-        commit->Modify( item, nullptr, RECURSE_MODE::RECURSE );
-
-        // modify each object as necessary
-        switch( item->Type() )
-        {
-        case PCB_SHAPE_T:
-            static_cast<PCB_SHAPE*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_ZONE_T:
-            static_cast<ZONE*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_FIELD_T:
-        case PCB_TEXT_T:
-            static_cast<PCB_TEXT*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_TEXTBOX_T:
-            static_cast<PCB_TEXTBOX*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_TABLE_T: static_cast<PCB_TABLE*>( item )->Mirror( mirrorPoint, flipDirection ); break;
-
-        case PCB_PAD_T:
-            mirrorPad( *static_cast<PAD*>( item ), mirrorPoint, flipDirection );
-            break;
-
-        case PCB_TRACE_T:
-        case PCB_ARC_T:
-        case PCB_VIA_T:
-            static_cast<PCB_TRACK*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_GROUP_T:
-            static_cast<PCB_GROUP*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_GENERATOR_T:
-            static_cast<PCB_GENERATOR*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        case PCB_POINT_T:
-
-            static_cast<PCB_POINT*>( item )->Mirror( mirrorPoint, flipDirection ); break;
-
-        case PCB_REFERENCE_IMAGE_T:
-            static_cast<PCB_REFERENCE_IMAGE*>( item )->Mirror( mirrorPoint, flipDirection );
-            break;
-
-        default:
-            // it's likely the commit object is wrong if you get here
-            UNIMPLEMENTED_FOR( item->GetClass() );
-        }
-    }
+    const SEG          mirrorAxis = MIRROR_AXIS( mirrorPoint, flipDirection );
+    const MIRROR_SKIPS skips = mirrorSelection( *commit, selection, mirrorAxis );
 
     // Don't push a separate undo entry when we're in the middle of a move operation.
     // The parent move will handle the commit.
@@ -2801,12 +2861,12 @@ int EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
         reSolveConstraintsAfterEdit( selection );
     }
 
-    if( skippedFootprints > 0 && !m_dragging )
+    if( skips.footprints > 0 && !m_dragging )
     {
         frame()->ShowInfoBarMsg( _( "Footprints cannot be mirrored. Use Flip to move them to "
                                     "the other side of the board." ) );
     }
-    else if( skippedGroups > 0 && !m_dragging )
+    else if( skips.groups > 0 && !m_dragging )
     {
         frame()->ShowInfoBarMsg( _( "Groups containing footprints or other items that cannot be "
                                     "mirrored were skipped." ) );
@@ -2822,6 +2882,216 @@ int EDIT_TOOL::Mirror( const TOOL_EVENT& aEvent )
         m_toolMgr->PostAction( PCB_ACTIONS::updateLocalRatsnest, VECTOR2I() );
         m_toolMgr->PostAction( PCB_ACTIONS::refreshPreview );
     }
+
+    return 0;
+}
+
+
+int EDIT_TOOL::MirrorInteractive( const TOOL_EVENT& aEvent )
+{
+    if( isRouterActive() )
+    {
+        wxBell();
+        return 0;
+    }
+
+    PCB_SELECTION& selection = m_selectionTool->RequestSelection(
+            []( const VECTOR2I& aPt, GENERAL_COLLECTOR& aCollector, PCB_SELECTION_TOOL* sTool )
+            {
+                sTool->FilterCollectorForMarkers( aCollector );
+                sTool->FilterCollectorForHierarchy( aCollector, true );
+                sTool->FilterCollectorForFreePads( aCollector );
+                sTool->FilterCollectorForLockedItems( aCollector );
+            } );
+
+    m_selectionTool->ReportFilteredLockedItems();
+
+    if( selection.Empty() )
+        return 0;
+
+    KIGFX::VIEW*          view = getView();
+    KIGFX::VIEW_CONTROLS* controls = getViewControls();
+
+    TOOL_EVENT         originalEvent = aEvent; // This can change out from under us when the event loop runs
+    SCOPED_TOOL_PUSHER raii( frame(), originalEvent );
+
+    PCB_GRID_HELPER grid( m_toolMgr, frame()->GetMagneticItemsSettings() );
+
+    KIGFX::PREVIEW::TWO_POINT_GEOMETRY_MANAGER axisGeom;
+    MIRROR_AXIS_ITEM                           axisPreview( axisGeom );
+    bool                                       applied = false;
+
+    axisPreview.SetStrokeColor( view->GetPainter()->GetSettings()->GetLayerColor( LAYER_ANCHOR ) );
+    view->Add( &axisPreview );
+    view->SetVisible( &axisPreview, false );
+
+    const auto setCursor = [&]()
+    {
+        frame()->GetCanvas()->SetCurrentCursor( KICURSOR::PENCIL );
+    };
+
+    const auto setMsg = [&]( const wxString& aMsg )
+    {
+        m_statusPopup->SetText( aMsg );
+        m_statusPopup->Move( KIPLATFORM::UI::GetMousePosition() + wxPoint( 20, -50 ) );
+    };
+
+    const auto cancelAxis = [&]()
+    {
+        axisGeom.Reset();
+        view->SetVisible( &axisPreview, false );
+        view->Update( &axisPreview, KIGFX::GEOMETRY );
+        controls->SetAutoPan( false );
+        controls->CaptureCursor( false );
+        setMsg( _( "Select the first point of the mirror axis..." ) );
+    };
+
+    const auto applyMirror = [&]( const SEG& aAxis )
+    {
+        BOARD_COMMIT commit( this );
+
+        const MIRROR_SKIPS skips = mirrorSelection( commit, selection, aAxis );
+
+        if( !commit.Empty() )
+        {
+            commit.Push( _( "Mirror" ) );
+            reSolveConstraintsAfterEdit( selection );
+        }
+
+        if( skips.footprints > 0 )
+        {
+            frame()->ShowInfoBarMsg( _( "Footprints cannot be mirrored. Use Flip to move them to "
+                                        "the other side of the board." ) );
+        }
+        else if( skips.groups > 0 )
+        {
+            frame()->ShowInfoBarMsg( _( "Groups containing footprints or other items that cannot be "
+                                        "mirrored were skipped." ) );
+        }
+        else if( skips.items > 0 )
+        {
+            frame()->ShowInfoBarMsg( _( "Items that cannot be mirrored about an arbitrary axis were "
+                                        "skipped." ) );
+        }
+
+        if( selection.IsHover() )
+            m_toolMgr->RunAction( ACTIONS::selectionClear );
+
+        m_toolMgr->ProcessEvent( EVENTS::SelectedItemsModified );
+    };
+
+    Activate();
+    // Must be done after Activate() so that it gets set into the correct context
+    controls->ShowCursor( true );
+    controls->SetAutoPan( false );
+    controls->CaptureCursor( false );
+    controls->ForceCursorPosition( false );
+
+    // Set initial cursor
+    setCursor();
+
+    setMsg( _( "Select the first point of the mirror axis..." ) );
+    m_statusPopup->Popup();
+    canvas()->SetStatusPopup( m_statusPopup->GetPanel() );
+
+    while( TOOL_EVENT* evt = Wait() )
+    {
+        setCursor();
+        grid.SetSnap( !evt->Modifier( MD_SHIFT ) );
+        grid.SetUseGrid( view->GetGAL()->GetGridSnapping() && !evt->DisableGridSnapping() );
+        VECTOR2I cursorPos = evt->HasPosition() ? evt->Position() : controls->GetMousePosition();
+
+        if( !evt->IsActivate() && !evt->IsCancelInteractive() )
+        {
+            // If we are switching, the canvas may not be valid any more
+            cursorPos = grid.ResolveSnap( cursorPos, nullptr ).position;
+
+            // Forward the resolved snap mode to the geom manager
+            if( !axisGeom.IsReset() )
+            {
+                axisGeom.SetAngleSnap( evt->Modifier( MD_CTRL ) ? LEADER_MODE::DEG45 : GetAngleSnapMode() );
+                axisGeom.SetEnd( cursorPos );
+                cursorPos = axisGeom.GetEnd();
+            }
+
+            controls->ForceCursorPosition( true, cursorPos );
+        }
+        else
+        {
+            grid.FullReset();
+        }
+
+        if( evt->IsCancelInteractive() )
+        {
+            if( !axisGeom.IsReset() )
+                cancelAxis();
+            else
+                break;
+        }
+        else if( evt->IsActivate() )
+        {
+            if( !axisGeom.IsReset() )
+                cancelAxis();
+
+            break;
+        }
+        // click or drag starts the axis
+        else if( axisGeom.IsReset() && (   evt->IsDrag( BUT_LEFT )
+                                        || evt->IsClick( BUT_LEFT )
+                                        || evt->IsAction( &ACTIONS::cursorClick ) ) )
+        {
+            axisGeom.SetAngleSnap( LEADER_MODE::DIRECT );
+            axisGeom.SetOrigin( cursorPos );
+            axisGeom.SetEnd( cursorPos );
+
+            controls->CaptureCursor( true );
+            controls->SetAutoPan( true );
+
+            setMsg( _( "Select the second point of the mirror axis..." ) );
+        }
+        // second click or mouse up after a drag mirrors the selection
+        else if( !axisGeom.IsReset() && (   evt->IsClick( BUT_LEFT )
+                                         || evt->IsAction( &ACTIONS::cursorClick )
+                                         || evt->IsMouseUp( BUT_LEFT ) ) )
+        {
+            if( axisGeom.GetEnd() == axisGeom.GetOrigin() )
+            {
+                frame()->ShowInfoBarMsg( _( "The mirror axis must have a non-zero length." ) );
+                continue;
+            }
+
+            applyMirror( SEG( axisGeom.GetOrigin(), axisGeom.GetEnd() ) );
+
+            applied = true;
+            break;
+        }
+        // move or drag when the origin is set updates the axis preview
+        else if( !axisGeom.IsReset() && (   evt->IsMotion()
+                                         || evt->IsDrag( BUT_LEFT )
+                                         || evt->IsAction( &ACTIONS::refreshPreview ) ) )
+        {
+            view->SetVisible( &axisPreview, true );
+            view->Update( &axisPreview, KIGFX::GEOMETRY );
+        }
+        else
+        {
+            evt->SetPassEvent();
+        }
+    }
+
+    view->SetVisible( &axisPreview, false );
+    view->Remove( &axisPreview );
+
+    frame()->GetCanvas()->SetCurrentCursor( KICURSOR::ARROW );
+    controls->SetAutoPan( false );
+    controls->CaptureCursor( false );
+    controls->ForceCursorPosition( false );
+
+    canvas()->SetStatusPopup( nullptr );
+    m_statusPopup->Hide();
+
+    if( applied )
+        canvas()->Refresh();
 
     return 0;
 }
@@ -3058,6 +3328,8 @@ void EDIT_TOOL::DeleteItems( const PCB_SELECTION& aItems, bool aIsCut )
         case PCB_TEXTBOX_T:
         case PCB_BARCODE_T:
         case PCB_TABLE_T:
+        case PCB_DRILL_CHART_T:
+        case PCB_STACKUP_TABLE_T:
         case PCB_REFERENCE_IMAGE_T:
         case PCB_DIMENSION_T:
         case PCB_DIM_ALIGNED_T:
@@ -3071,6 +3343,10 @@ void EDIT_TOOL::DeleteItems( const PCB_SELECTION& aItems, bool aIsCut )
             break;
 
         case PCB_TABLECELL_T:
+            // A generated table's cells report the board, so there is no user text to clear
+            if( IsGeneratedTableCell( board_item ) )
+                break;
+
             // Clear contents of table cell
             commit.Modify( board_item );
             static_cast<PCB_TABLECELL*>( board_item )->SetText( wxEmptyString );
@@ -3131,6 +3407,27 @@ void EDIT_TOOL::DeleteItems( const PCB_SELECTION& aItems, bool aIsCut )
             commit.Remove( board_item );
             itemsDeleted++;
             break;
+
+        case PCB_VIA_T:
+        {
+            if( !aIsCut )
+            {
+                EDA_GROUP* parent = board_item->GetParentGroup();
+                PCB_VIA_STITCH* stitch =
+                        parent ? dynamic_cast<PCB_VIA_STITCH*>( parent->AsEdaItem() ) : nullptr;
+
+                if( stitch && !aItems.Contains( stitch ) )
+                {
+                    // We need to mark the via as excluded on deletion
+                    commit.Modify( stitch );
+                    stitch->ExcludePosition( board_item->GetPosition() );
+                }
+            }
+
+            commit.Remove( board_item );
+            itemsDeleted++;
+            break;
+        }
 
         case PCB_GENERATOR_T:
         {
@@ -3372,6 +3669,37 @@ int EDIT_TOOL::MoveExact( const TOOL_EVENT& aEvent )
 }
 
 
+bool EDIT_TOOL::CanDuplicateSelection( const SELECTION& aSelection )
+{
+    // Some generators cannot be duplicated on their own, and neither can several of them
+    return std::any_of( aSelection.begin(), aSelection.end(),
+                        []( EDA_ITEM* aItem )
+                        {
+                            PCB_GENERATOR* generator = dynamic_cast<PCB_GENERATOR*>( aItem );
+                            return !generator || generator->CanDuplicate();
+                        } );
+}
+
+
+/**
+ * Handle items that have been duplicated. For example, notify the pad tool
+ * about duplicated pads.
+ */
+static void recordDuplicatedItems( TOOL_MANAGER* aToolMgr, const std::vector<BOARD_ITEM*>& aItems )
+{
+    PAD_TOOL* padTool = aToolMgr->GetTool<PAD_TOOL>();
+
+    if( !padTool )
+        return;
+
+    for( BOARD_ITEM* item : aItems )
+    {
+        if( PAD* pad = dynamic_cast<PAD*>( item ) )
+            padTool->RecordMasterPad( *pad );
+    }
+}
+
+
 int EDIT_TOOL::Duplicate( const TOOL_EVENT& aEvent )
 {
     if( isRouterActive() )
@@ -3395,15 +3723,8 @@ int EDIT_TOOL::Duplicate( const TOOL_EVENT& aEvent )
     if( selection.Empty() )
         return 0;
 
-    // Some generators cannot be duplicated on their own.
-    if( selection.Size() == 1 )
-    {
-        if( PCB_GENERATOR* generator = dynamic_cast<PCB_GENERATOR*>( selection.Front() ) )
-        {
-            if( !generator->CanDuplicate() )
-                return 0;
-        }
-    }
+    if( !CanDuplicateSelection( selection ) )
+        return 0;
 
     // we have a selection to work on now, so start the tool process
     PCB_BASE_EDIT_FRAME* editFrame = getEditFrame<PCB_BASE_EDIT_FRAME>();
@@ -3459,7 +3780,7 @@ int EDIT_TOOL::Duplicate( const TOOL_EVENT& aEvent )
             case PCB_DIM_RADIAL_T:
             case PCB_DIM_ORTHOGONAL_T:
             case PCB_DIM_LEADER_T:
-            case PCB_GRIDITEM_T:
+            case PCB_GRID_ITEM_T:
                 if( m_isFootprintEditor )
                     dupe_item = parentFootprint->DuplicateItem( true, &commit, orig_item );
                 else
@@ -3502,6 +3823,12 @@ int EDIT_TOOL::Duplicate( const TOOL_EVENT& aEvent )
                 idMap[orig_item->m_Uuid] = dupe_item->m_Uuid;
                 new_items.push_back( dupe_item );
                 commit.Add( dupe_item );
+                break;
+
+            case PCB_DRILL_CHART_T:
+            case PCB_STACKUP_TABLE_T:
+                // A second copy of a generated table says nothing the first does not, and it
+                // would land on top of it
                 break;
 
             case PCB_GENERATOR_T:
@@ -3555,9 +3882,15 @@ int EDIT_TOOL::Duplicate( const TOOL_EVENT& aEvent )
 
         // If items were duplicated, pick them up
         if( doMoveSelection( aEvent, &commit, true ) )
+        {
             commit.Push( _( "Duplicate" ) );
+
+            recordDuplicatedItems( m_toolMgr, new_items );
+        }
         else
+        {
             commit.Revert();
+        }
 
         // Deselect the duplicated item if we originally started as a hover selection
         if( is_hover )
@@ -3689,7 +4022,7 @@ bool EDIT_TOOL::updateModificationPoint( PCB_SELECTION& aSelection )
         return false;
 
     // When there is only one item selected, the reference point is its position...
-    if( aSelection.Size() == 1 && aSelection.Front()->Type() != PCB_TABLE_T )
+    if( aSelection.Size() == 1 && BaseType( aSelection.Front()->Type() ) != PCB_TABLE_T )
     {
         if( aSelection.Front()->IsBOARD_ITEM() )
         {
@@ -3859,19 +4192,13 @@ int EDIT_TOOL::copyToClipboard( const TOOL_EVENT& aEvent )
                     sTool->FilterCollectorForLockedItems( aCollector );
             } );
 
-    m_selectionTool->ReportFilteredLockedItems();
+    if( m_selectionTool->ReportFilteredLockedItems() )
+        return 1;
 
     if( !selection.Empty() )
     {
-        std::vector<BOARD_ITEM*> items;
-
-        for( EDA_ITEM* item : selection )
-        {
-            if( item->IsBOARD_ITEM() )
-                items.push_back( static_cast<BOARD_ITEM*>( item ) );
-        }
-
-        VECTOR2I refPoint;
+        std::vector<BOARD_ITEM*> items = CLIPBOARD_IO::CopiedItems( selection );
+        VECTOR2I                 refPoint;
 
         if( aEvent.IsAction( &PCB_ACTIONS::copyWithReference ) )
         {
@@ -3893,7 +4220,8 @@ int EDIT_TOOL::copyToClipboard( const TOOL_EVENT& aEvent )
         frame()->SetStatusText( _( "Selection copied" ) );
     }
 
-    if( selection.IsHover() )
+    // Cut needs this selection to delete exactly the items copied to the clipboard.
+    if( selection.IsHover() && !aEvent.IsAction( &ACTIONS::cut ) )
         m_selectionTool->ClearSelection();
 
     return 0;
@@ -3926,16 +4254,18 @@ int EDIT_TOOL::copyToClipboardAsText( const TOOL_EVENT& aEvent )
                 {
                     // These can all go via the PCB_TEXT class
                     const PCB_TEXT& text = static_cast<const PCB_TEXT&>( aItem );
-                    return text.GetShownText( true );
+                    return text.GetShownText( FOR_CANVAS );
                 }
                 case PCB_TEXTBOX_T:
                 case PCB_TABLECELL_T:
                 {
                     // This one goes via EDA_TEXT
                     const PCB_TEXTBOX& textBox = static_cast<const PCB_TEXTBOX&>( aItem );
-                    return textBox.GetShownText( true );
+                    return textBox.GetShownText( FOR_CANVAS );
                 }
                 case PCB_TABLE_T:
+                case PCB_DRILL_CHART_T:
+                case PCB_STACKUP_TABLE_T:
                 {
                     const PCB_TABLE& table = static_cast<const PCB_TABLE&>( aItem );
                     wxString         s;
@@ -3945,7 +4275,7 @@ int EDIT_TOOL::copyToClipboardAsText( const TOOL_EVENT& aEvent )
                         for( int col = 0; col < table.GetColCount(); ++col )
                         {
                             const PCB_TABLECELL* cell = table.GetCell( row, col );
-                            s << cell->GetShownText( true );
+                            s << cell->GetShownText( FOR_CANVAS );
 
                             if( col < table.GetColCount() - 1 )
                                 s << '\t';
@@ -4032,6 +4362,7 @@ void EDIT_TOOL::setTransitions()
     Go( &EDIT_TOOL::Duplicate,                PCB_ACTIONS::duplicateIncrement.MakeEvent() );
     Go( &EDIT_TOOL::Mirror,                   PCB_ACTIONS::mirrorH.MakeEvent() );
     Go( &EDIT_TOOL::Mirror,                   PCB_ACTIONS::mirrorV.MakeEvent() );
+    Go( &EDIT_TOOL::MirrorInteractive,        PCB_ACTIONS::mirrorInteractive.MakeEvent() );
     Go( &EDIT_TOOL::Swap,                     PCB_ACTIONS::swap.MakeEvent() );
     Go( &EDIT_TOOL::SwapPadNets,              PCB_ACTIONS::swapPadNets.MakeEvent() );
     Go( &EDIT_TOOL::SwapGateNets,             PCB_ACTIONS::swapGateNets.MakeEvent() );

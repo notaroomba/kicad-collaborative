@@ -48,7 +48,12 @@ public:
 protected:
     // event handlers
     void onPageChanged( wxBookCtrlEvent& aEvent ) override;
+    void onPageChanging( wxBookCtrlEvent& aEvent ) override;
     void onAuxiliaryAction( wxCommandEvent& aEvent ) override;
+    void onCancelButton( wxCommandEvent& aEvent );
+    void onCloseWindow( wxCloseEvent& aEvent );
+
+    bool TransferDataFromWindow() override;
 
     PCB_EDIT_FRAME*                     m_frame;
     PANEL_SETUP_LAYERS*                 m_layers;
@@ -59,6 +64,8 @@ protected:
     PANEL_SETUP_NETCLASSES*             m_netClasses;
 
 private:
+    bool canDiscardChanges();
+
     size_t m_currentPage;              // the current page index
     size_t m_layersPage;
     size_t m_physicalStackupPage;
@@ -66,6 +73,7 @@ private:
     size_t m_defaultsPage;
     size_t m_formattingPage;
     size_t m_maskAndPastePage;
+    size_t m_drillChartPage;
     size_t m_constraintsPage;
     size_t m_tracksAndViasPage;
     size_t m_viaStacksPage;
@@ -78,4 +86,5 @@ private:
     size_t m_severitiesPage;
     size_t m_embeddedFilesPage;
     size_t m_tuningProfilesPage;
+    bool   m_initComplete;
 };

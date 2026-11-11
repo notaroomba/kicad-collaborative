@@ -20,6 +20,12 @@
 
 #include <kiplatform/app.h>
 
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 #include <glib.h>
 
 #include <wx/string.h>
@@ -117,4 +123,24 @@ void KIPLATFORM::APP::RegisterURLSchemeHandler(
         std::function<void( const wxString& aUrl )> aHandler )
 {
     // URLs arrive on the command line on this platform.
+}
+
+
+
+bool KIPLATFORM::APP::SetCurrentThreadPriority( bool aRaise )
+{
+#ifdef __linux__
+    // Each Linux thread has its own nice value, and a negative one needs privilege
+    const pid_t tid = static_cast<pid_t>( syscall( SYS_gettid ) );
+
+    return setpriority( PRIO_PROCESS, tid, aRaise ? -5 : 5 ) == 0;
+#else
+    return false;
+#endif
+}
+
+
+void KIPLATFORM::APP::TerminateWithCode( int aExitCode )
+{
+    _exit( aExitCode );
 }

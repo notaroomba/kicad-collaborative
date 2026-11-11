@@ -28,6 +28,7 @@
 #include <math/util.h>      // for KiROUND
 #include <geometry/shape_rect.h>
 #include <string_utils.h>
+#include <text_eval/text_eval_wrapper.h>
 #include <trigo.h>
 #include <fmt/format.h>
 
@@ -319,7 +320,7 @@ void PSLIKE_PLOTTER::computeTextParameters( const VECTOR2I&          aPos,
     VECTOR2I start_pos = aPos;
 
     // This is an approximation of the text bounds (in IUs)
-    int tw = returnPostscriptTextWidth( aText, aSize.x, aItalic, aWidth );
+    int tw = returnPostscriptTextWidth( aText, aSize.x, aItalic, aBold );
     int th = aSize.y;
     int dx = 0, dy = 0;
 
@@ -580,7 +581,7 @@ void PS_PLOTTER::PlotPoly( const SHAPE_LINE_CHAIN& aCornerList, FILL_T aFill, in
 }
 
 
-void PS_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor )
+void PS_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double aScaleFactor, double aAlpha )
 {
     VECTOR2I pix_size; // size of the bitmap in pixels
     pix_size.x = aImage.GetWidth();
@@ -645,17 +646,16 @@ void PS_PLOTTER::PlotImage( const wxImage& aImage, const VECTOR2I& aPos, double 
             blue = aImage.GetBlue( xx, yy) & 0xFF;
 
             // PS doesn't support alpha, so premultiply against white background
-            if( aImage.HasAlpha() )
-            {
-                unsigned char alpha = aImage.GetAlpha( xx, yy ) & 0xFF;
+            double alpha = aAlpha;
 
-                if( alpha < 0xFF )
-                {
-                    float a = 1.0 - ( (float) alpha / 255.0 );
-                    red =   ( int )( red   + ( a * 0xFF ) ) & 0xFF;
-                    green = ( int )( green + ( a * 0xFF ) ) & 0xFF;
-                    blue =  ( int )( blue  + ( a * 0xFF ) ) & 0xFF;
-                }
+            if( aImage.HasAlpha() )
+                alpha *= aImage.GetAlpha( xx, yy ) / 255.0;
+
+            if( alpha < 1.0 )
+            {
+                red   = KiROUND( red   * alpha + 255.0 * ( 1.0 - alpha ) );
+                green = KiROUND( green * alpha + 255.0 * ( 1.0 - alpha ) );
+                blue  = KiROUND( blue  * alpha + 255.0 * ( 1.0 - alpha ) );
             }
 
             if( aImage.HasMask() )
@@ -906,15 +906,23 @@ void PS_PLOTTER::Text( const VECTOR2I&        aPos,
     SetCurrentLineWidth( aWidth );
     SetColor( aColor );
 
+    wxString text( aText );
+
+    if( text.Contains( wxS( "@{" ) ) )
+    {
+        EXPRESSION_EVALUATOR evaluator;
+        text = evaluator.Evaluate( text );
+    }
+
     // Draw the hidden postscript text (if requested)
     if( m_textMode == PLOT_TEXT_MODE::PHANTOM )
     {
-        std::string ps_test = encodeStringForPlotter( aText );
+        std::string ps_test = encodeStringForPlotter( text );
         VECTOR2D pos_dev = userToDeviceCoordinates( aPos );
         fmt::print( m_outputFile, "{} {:g} {:g} phantomshow\n", ps_test.c_str(), pos_dev.x, pos_dev.y );
     }
 
-    PLOTTER::Text( aPos, aColor, aText, aOrient, aSize, aH_justify, aV_justify, GetCurrentLineWidth(),
+    PLOTTER::Text( aPos, aColor, text, aOrient, aSize, aH_justify, aV_justify, GetCurrentLineWidth(),
                    aItalic, aBold, aMultilineAllowed, aFont, aFontMetrics, aData );
 }
 
@@ -930,10 +938,18 @@ void PS_PLOTTER::PlotText( const VECTOR2I&        aPos,
     SetCurrentLineWidth( aAttributes.m_StrokeWidth );
     SetColor( aColor );
 
+    wxString text( aText );
+
+    if( text.Contains( wxS( "@{" ) ) )
+    {
+        EXPRESSION_EVALUATOR evaluator;
+        text = evaluator.Evaluate( text );
+    }
+
     // Draw the hidden postscript text (if requested)
     if( m_textMode == PLOT_TEXT_MODE::PHANTOM )
     {
-        std::string ps_test = encodeStringForPlotter( aText );
+        std::string ps_test = encodeStringForPlotter( text );
         VECTOR2D pos_dev = userToDeviceCoordinates( aPos );
         fmt::print( m_outputFile, "{} {:g} {:g} phantomshow\n",
                     ps_test,
@@ -941,7 +957,7 @@ void PS_PLOTTER::PlotText( const VECTOR2I&        aPos,
                     pos_dev.y );
     }
 
-    PLOTTER::PlotText( aPos, aColor, aText, aAttributes, aFont, aFontMetrics, aData );
+    PLOTTER::PlotText( aPos, aColor, text, aAttributes, aFont, aFontMetrics, aData );
 }
 
 

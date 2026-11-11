@@ -123,7 +123,7 @@ int BOARD_EDITOR_CONTROL::GenBOMFileFromBoard( const TOOL_EVENT& aEvent )
         {
             if( curEntry.m_Val == footprint->GetValue() && curEntry.m_FPID == footprint->GetFPID() )
             {
-                curEntry.m_Refs.emplace_back( footprint->Reference().GetShownText( false ) );
+                curEntry.m_Refs.emplace_back( footprint->Reference().GetShownText( RESOLVED ) );
                 curEntry.m_Count++;
 
                 valExist = true;
@@ -136,8 +136,8 @@ int BOARD_EDITOR_CONTROL::GenBOMFileFromBoard( const TOOL_EVENT& aEvent )
         {
             list.emplace_back();
             BOM_ENTRY& newEntry = list.back();
-            newEntry.m_Val = footprint->Value().GetShownText( false );
-            newEntry.m_Refs.emplace_back( footprint->Reference().GetShownText( false ) );
+            newEntry.m_Val = footprint->Value().GetShownText( RESOLVED );
+            newEntry.m_Refs.emplace_back( footprint->Reference().GetShownText( RESOLVED ) );
             newEntry.m_FPID = footprint->GetFPID();
             newEntry.m_Count = 1;
         }
@@ -148,14 +148,14 @@ int BOARD_EDITOR_CONTROL::GenBOMFileFromBoard( const TOOL_EVENT& aEvent )
         std::sort( curEntry.m_Refs.begin(), curEntry.m_Refs.end(),
                 []( const wxString& lhs, const wxString& rhs )
                 {
-                    return StrNumCmp( lhs, rhs, true /* ignore case */ ) < 0;
+                    return StrNumCmp( lhs, rhs, CMP_T::IGNORE_CASE ) < 0;
                 } );
     }
 
     std::sort( list.begin(), list.end(),
             []( const BOM_ENTRY& lhs, const BOM_ENTRY& rhs )
             {
-                return StrNumCmp( lhs.m_Refs[0], rhs.m_Refs[0], true /* ignore case */ ) < 0;
+                return StrNumCmp( lhs.m_Refs[0], rhs.m_Refs[0], CMP_T::IGNORE_CASE ) < 0;
             } );
 
     // Print list.

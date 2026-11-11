@@ -17,6 +17,7 @@
  * with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <qa_utils/file_utils.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <base_units.h>
@@ -40,31 +41,6 @@ BOOST_AUTO_TEST_SUITE( CustomPadPrimitiveRoundTrip )
 
 namespace
 {
-
-/// Temporary file holder that removes the file (and its directory) on destruction.
-class TEMP_FILE_HOLDER
-{
-public:
-    TEMP_FILE_HOLDER( const std::string& aPrefix, const std::string& aSuffix )
-    {
-        std::filesystem::path dir = std::filesystem::temp_directory_path() / aPrefix;
-        std::filesystem::create_directories( dir );
-        m_path = dir / ( "board" + aSuffix );
-    }
-
-    ~TEMP_FILE_HOLDER()
-    {
-        std::error_code ec;
-        std::filesystem::remove( m_path, ec );
-        std::filesystem::remove( m_path.parent_path(), ec );
-    }
-
-    const std::filesystem::path& Path() const { return m_path; }
-
-private:
-    std::filesystem::path m_path;
-};
-
 
 int mm( double aMillimetres )
 {
@@ -171,10 +147,12 @@ BOOST_AUTO_TEST_CASE( BezierAndPolyOnTransformedFootprint )
     fp->Add( pad.release(), ADD_MODE::APPEND, true );
     board->Add( fp.release(), ADD_MODE::APPEND, true );
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_custom_pad_primitive_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_custom_pad_primitive_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
 
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     FOOTPRINT* fpFound = reloaded->Footprints().empty() ? nullptr : reloaded->Footprints().front();
@@ -205,6 +183,85 @@ BOOST_AUTO_TEST_CASE( BezierAndPolyOnTransformedFootprint )
 }
 
 
+BOOST_AUTO_TEST_CASE( SimplePadPrimitivesOnTransformedFootprint )
+{
+    std::unique_ptr<BOARD>     board = std::make_unique<BOARD>();
+    std::unique_ptr<FOOTPRINT> fp = std::make_unique<FOOTPRINT>( board.get() );
+
+    fp->SetReference( "U1" );
+
+    // A non-cardinal rotation and an anisotropic scale make any spurious transform on
+    // the primitives obvious.
+    fp->SetPosition( VECTOR2I( mm( 50.0 ), mm( 25.0 ) ) );
+    fp->SetOrientation( EDA_ANGLE( 30.0, DEGREES_T ) );
+    fp->SetTransformScale( 2.0, 1.5 );
+
+    std::unique_ptr<PAD> pad = std::make_unique<PAD>( fp.get() );
+    pad->SetPadstackMode( PADSTACK::MODE::NORMAL );
+    pad->SetNumber( "1" );
+    pad->SetAttribute( PAD_ATTRIB::SMD );
+    pad->SetLayerSet( LSET( { F_Cu } ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( mm( 1.0 ), mm( 1.0 ) ) );
+    pad->SetAnchorPadShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CUSTOM );
+
+    PCB_SHAPE* seg = new PCB_SHAPE( pad.get() );
+    seg->SetShape( SHAPE_T::SEGMENT );
+    seg->SetStart( VECTOR2I( mm( 1.0 ), mm( 1.0 ) ) );
+    seg->SetEnd( VECTOR2I( mm( 6.0 ), mm( 2.0 ) ) );
+    seg->SetWidth( mm( 0.1 ) );
+    pad->AddPrimitive( PADSTACK::ALL_LAYERS, seg );
+
+    PCB_SHAPE* circle = new PCB_SHAPE( pad.get() );
+    circle->SetShape( SHAPE_T::CIRCLE );
+    circle->SetCenter( VECTOR2I( mm( 3.0 ), mm( 3.0 ) ) );
+    circle->SetEnd( VECTOR2I( mm( 4.0 ), mm( 3.0 ) ) );
+    circle->SetWidth( mm( 0.01 ) );
+    pad->AddPrimitive( PADSTACK::ALL_LAYERS, circle );
+
+    // Capture the in-memory (pre-save) geometry as the round-trip reference.
+    const VECTOR2I       expSegStart = seg->GetLibraryStart();
+    const VECTOR2I       expSegEnd = seg->GetLibraryEnd();
+    const int            expSegWidth = seg->GetWidth();
+    const VECTOR2I       expCircleCenter = circle->GetLibraryStart();
+    const int            expCircleRadius = KiROUND( circle->GetStart().Distance( circle->GetEnd() ) );
+
+    fp->Add( pad.release(), ADD_MODE::APPEND, true );
+    board->Add( fp.release(), ADD_MODE::APPEND, true );
+
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_custom_pad_primitive_roundtrip2" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
+    BOOST_REQUIRE( reloaded );
+
+    FOOTPRINT* fpFound = reloaded->Footprints().empty() ? nullptr : reloaded->Footprints().front();
+    BOOST_REQUIRE_MESSAGE( fpFound, "Footprint not found in reloaded board" );
+    BOOST_REQUIRE_MESSAGE( !fpFound->Pads().empty(), "Pad not found in reloaded footprint" );
+
+    PAD* padFound = fpFound->Pads().front();
+
+    PCB_SHAPE* segFound = findPrimitive( padFound, SHAPE_T::SEGMENT );
+    BOOST_REQUIRE_MESSAGE( segFound, "Segment primitive not found in reloaded pad" );
+
+    BOOST_CHECK_EQUAL( segFound->GetLibraryStart().x, expSegStart.x );
+    BOOST_CHECK_EQUAL( segFound->GetLibraryStart().y, expSegStart.y );
+    BOOST_CHECK_EQUAL( segFound->GetLibraryEnd().x, expSegEnd.x );
+    BOOST_CHECK_EQUAL( segFound->GetLibraryEnd().y, expSegEnd.y );
+    BOOST_CHECK_EQUAL( segFound->GetWidth(), expSegWidth );
+
+    PCB_SHAPE* circleFound = findPrimitive( padFound, SHAPE_T::ELLIPSE );
+    BOOST_REQUIRE_MESSAGE( circleFound, "Elipse primitive not found in reloaded pad" );
+
+    BOOST_CHECK_EQUAL( circleFound->GetLibraryStart().x, expCircleCenter.x );
+    BOOST_CHECK_EQUAL( circleFound->GetLibraryStart().y, expCircleCenter.y );
+    BOOST_CHECK_EQUAL( KiROUND( circleFound->GetStart().Distance( circleFound->GetEnd() ) ), expCircleRadius );
+}
+
+
+
 BOOST_AUTO_TEST_CASE( ScaledFootprintRoundTripStable )
 {
     std::unique_ptr<BOARD>     board = std::make_unique<BOARD>();
@@ -222,9 +279,11 @@ BOOST_AUTO_TEST_CASE( ScaledFootprintRoundTripStable )
     fp->Add( pad.release(), ADD_MODE::APPEND, true );
     board->Add( fp.release(), ADD_MODE::APPEND, true );
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_scaled_fp_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_scaled_fp_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     FOOTPRINT* r = reloaded->Footprints().front();
@@ -257,9 +316,11 @@ BOOST_AUTO_TEST_CASE( PadPositionAndOrientationRoundTripStable )
     const VECTOR2I  posBefore = padPtr->GetPosition();
     const EDA_ANGLE orientBefore = padPtr->GetOrientation();
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_pad_pos_orient_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_pad_pos_orient_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     PAD* r = reloaded->Footprints().front()->Pads().front();
@@ -290,9 +351,11 @@ BOOST_AUTO_TEST_CASE( PadDeltaRoundTripStable )
 
     const VECTOR2I before = padPtr->GetDelta( PADSTACK::ALL_LAYERS );
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_pad_delta_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_pad_delta_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     PAD* r = reloaded->Footprints().front()->Pads().front();
@@ -326,9 +389,11 @@ BOOST_AUTO_TEST_CASE( PadOffsetRoundTripStable )
 
     const VECTOR2I before = padPtr->GetOffset( PADSTACK::ALL_LAYERS );
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_pad_offset_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_pad_offset_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     PAD* r = reloaded->Footprints().front()->Pads().front();
@@ -358,9 +423,11 @@ BOOST_AUTO_TEST_CASE( FootprintPointRoundTripStable )
 
     const VECTOR2I before = ptPtr->GetPosition();
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_fp_point_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_fp_point_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     FOOTPRINT* r = reloaded->Footprints().front();
@@ -395,9 +462,11 @@ BOOST_AUTO_TEST_CASE( RotatedPadSizeRoundTripStable )
 
     const VECTOR2I boardSizeBefore = padPtr->GetSize( PADSTACK::ALL_LAYERS );
 
-    TEMP_FILE_HOLDER tmp( "kicad_qa_rotated_pad_roundtrip", ".kicad_pcb" );
-    KI_TEST::DumpBoardToFile( *board, tmp.Path().string() );
-    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFileOrStream( tmp.Path().string() );
+    KI_TEST::SCOPED_TEMP_DIR tmp( "kicad_qa_rotated_pad_roundtrip" );
+    std::filesystem::path    boardFile = tmp.Path() / "board.kicad_pcb";
+
+    KI_TEST::DumpBoardToFile( *board, boardFile );
+    std::unique_ptr<BOARD> reloaded = KI_TEST::ReadBoardFromFile( boardFile );
     BOOST_REQUIRE( reloaded );
 
     PAD* r = reloaded->Footprints().front()->Pads().front();

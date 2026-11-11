@@ -31,7 +31,7 @@
 #include <memory>
 
 class PL_DRAW_PANEL_GAL;
-class PROPERTIES_FRAME;
+class PL_PROPERTIES_PANEL;
 class DS_DATA_ITEM;
 class wxChoice;
 
@@ -50,7 +50,7 @@ public:
     PL_EDITOR_FRAME( KIWAY* aKiway, wxWindow* aParent );
     ~PL_EDITOR_FRAME();
 
-    PROPERTIES_FRAME* GetPropertiesFrame() { return m_propertiesPagelayout; }
+    PL_PROPERTIES_PANEL* GetPropertiesPanel() { return m_propertiesPagelayout; }
 
     /**
      * Show the dialog displaying the list of DS_DATA_ITEM items in the page layout
@@ -198,10 +198,8 @@ public:
      * Create a new item and build its draw items in the view. The caller is responsible
      * for adding the item to the model.
      *
-     * @param aType is the type of item:
-     *  DS_TEXT, DS_SEGMENT, DS_RECT, DS_POLYPOLYGON
-     * @return the new item, owned by the caller until it is added to the model, or nullptr
-     *         if the creation was cancelled.
+     * @param aType is the type of item DS_TEXT, DS_SEGMENT, DS_RECT, DS_POLYPOLYGON.
+     * @return a reference to the new item.
      */
     DS_DATA_ITEM* CreateDrawingSheetItem( int aType );
 
@@ -264,7 +262,7 @@ private:
 
 protected:
     /// The last filename chosen to be proposed to the user
-    PROPERTIES_FRAME* m_propertiesPagelayout;
+    PL_PROPERTIES_PANEL* m_propertiesPagelayout;
 
 private:
     PL_EDITOR_LAYOUT  m_pageLayout;

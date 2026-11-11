@@ -36,6 +36,8 @@
 #include <api/common/envelope.pb.h>
 #include <core/typeinfo.h>
 
+class KICAD_API_SERVER;
+
 using kiapi::common::ApiRequest, kiapi::common::ApiResponse;
 using kiapi::common::ApiResponseStatus, kiapi::common::ApiStatusCode;
 
@@ -67,13 +69,53 @@ public:
      */
     API_RESULT Handle( ApiRequest& aMsg );
 
-protected:
+    /// @return true if this handler can process the given request message type
+    bool CanHandle( const std::string& aTypeName ) const
+    {
+        return m_handlers.find( aTypeName ) != m_handlers.end();
+    }
 
+    /**
+     * @return true if the given request message is allowed while an async API task is running.
+     */
+    bool AllowsDuringTask( const std::string& aTypeName ) const
+    {
+        auto it = m_handlers.find( aTypeName );
+        return it != m_handlers.end() && it->second.AllowedDuringTask;
+    }
+
+    /**
+     * Called on all registered handlers after project net settings (netclasses or netclass
+     * assignments) have been changed via the API.
+     */
+    virtual void onNetSettingsChanged() {}
+
+    void requestNetSettingsNotification() { m_notifyNetSettings = true; }
+
+    /// Returns true if the notification had been requested at the time of the call
+    bool clearNetSettingsNotification()
+    {
+        bool pending = m_notifyNetSettings;
+        m_notifyNetSettings = false;
+        return pending;
+    }
+
+    /// Set by KICAD_API_SERVER::RegisterHandler; null when the handler is not registered.
+    void setApiServer( KICAD_API_SERVER* aServer ) { m_apiServer = aServer; }
+    KICAD_API_SERVER* apiServer() const { return m_apiServer; }
+
+protected:
     /**
      * A handler for outer messages (envelopes) that will unpack to inner messages and call a
      * specific handler function.  @see registerHandler.
      */
     typedef std::function<HANDLER_RESULT<ApiResponse>( ApiRequest& )> REQUEST_HANDLER;
+
+    struct HANDLER_ENTRY
+    {
+        REQUEST_HANDLER Handler;
+        bool           AllowedDuringTask = false;
+    };
 
     /**
      * Registers an API command handler for the given message types.
@@ -88,10 +130,11 @@ protected:
      * @tparam ResponseType is a protobuf message type containing a command response
      * @tparam HandlerType is the implied type of the API_HANDLER subclass
      * @param aHandler is the handler function for the given request and response types
+     * @param aAllowedDuringTask marks the command as safe to serve while an async task is running
      */
     template <class RequestType, class ResponseType, class HandlerType>
     void registerHandler( HANDLER_RESULT<ResponseType> ( HandlerType::*aHandler )(
-            const HANDLER_CONTEXT<RequestType>& ) )
+            const HANDLER_CONTEXT<RequestType>& ), bool aAllowedDuringTask = false )
     {
         std::string typeName { RequestType().GetTypeName() };
 
@@ -99,7 +142,7 @@ protected:
                       wxString::Format( "Duplicate API handler for type %s", typeName ) );
 
         m_handlers[typeName] =
-                [this, aHandler]( ApiRequest& aRequest ) -> API_RESULT
+                HANDLER_ENTRY{ [this, aHandler, typeName]( ApiRequest& aRequest ) -> API_RESULT
                 {
                     HANDLER_CONTEXT<RequestType> ctx;
                     ApiResponse envelope;
@@ -115,18 +158,25 @@ protected:
                     if( response.has_value() )
                     {
                         envelope.mutable_status()->set_status( ApiStatusCode::AS_OK );
-                        envelope.mutable_message()->PackFrom( *response );
+
+                        if( !envelope.mutable_message()->PackFrom( *response ) )
+                            wxFAIL_MSG( wxString::Format( "Failed to pack '%s'", typeName ) );
+
                         return envelope;
                     }
                     else
                     {
                         return tl::unexpected( response.error() );
                     }
-                };
+                }, aAllowedDuringTask };
     }
 
     /// Maps type name (without the URL prefix) to a handler method
-    std::map<std::string, REQUEST_HANDLER> m_handlers;
+    std::map<std::string, HANDLER_ENTRY> m_handlers;
+
+    bool m_notifyNetSettings = false;
+
+    KICAD_API_SERVER* m_apiServer = nullptr;
 
     static const wxString m_defaultCommitMessage;
 

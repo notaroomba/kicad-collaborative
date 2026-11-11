@@ -50,7 +50,8 @@ enum class FIELD_T : int
     INTERSHEET_REFS,        ///< Global label cross-reference page numbers
     SHEET_NAME,
     SHEET_FILENAME,
-    SHEET_USER
+    SHEET_USER,
+    SHEET_REF_SUFFIX        ///< Optional sheet field appended to the references of the sheet's symbols
 };
 
 #define MANDATORY_FIELDS { FIELD_T::REFERENCE,        \
@@ -77,6 +78,7 @@ enum TRANSLATION
  *
  * These field names are not modifiable but template field names are.
  *
+ * @param aFieldId is the ID of the field.
  * @param aTranslation determines whether the field name is translated for display in dialogs.
  */
 KICOMMON_API wxString GetDefaultFieldName( FIELD_T aFieldId, TRANSLATION aTranslation );
@@ -141,13 +143,13 @@ struct KICOMMON_API TEMPLATE_FIELDNAME
 
     /**
      * Fill this object from information in the input stream \a aSpec, which is a
-     * #TEMPLATE_FIELDNAMES_LEXER.
+     * TEMPLATE_FIELDNAMES_LEXER object.
      *
      * The entire textual element spec is <br>(field (name _yourfieldname_)(value _yourvalue_)
-     * visible))</br>.  The presence of value is optional, the presence of visible is optional.
+     * visible)).  The presence of value is optional, the presence of visible is optional.
      * When this function is called, the input token stream given by \a aSpec is assumed to be
      * positioned at the '^' in the following example, i.e. just after the identifying keyword
-     * and before the content specifying stuff.<br>(field ^ (....) )</br>.
+     * and before the content specifying stuff. <br>(field ^ (....) ).
      *
      * @param aSpec is the input token stream of keywords and symbols.
      */

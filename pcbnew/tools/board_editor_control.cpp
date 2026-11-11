@@ -38,7 +38,7 @@
 #include <collectors.h>
 #include <project/net_settings.h>
 #include <pcb_generator.h>
-#include <pcb_griditem.h>
+#include <pcb_grid_item.h>
 #include <footprint.h>
 #include <pad.h>
 #include <pcb_target.h>
@@ -1037,6 +1037,13 @@ int BOARD_EDITOR_CONTROL::ToggleNetInspector( const TOOL_EVENT& aEvent )
 }
 
 
+int BOARD_EDITOR_CONTROL::ToggleGitCommitPane( const TOOL_EVENT& aEvent )
+{
+    getEditFrame<PCB_EDIT_FRAME>()->ToggleGitCommitPane();
+    return 0;
+}
+
+
 int BOARD_EDITOR_CONTROL::ToggleLibraryTree( const TOOL_EVENT& aEvent )
 {
     getEditFrame<PCB_EDIT_FRAME>()->ToggleLibraryTree();
@@ -1420,7 +1427,7 @@ int BOARD_EDITOR_CONTROL::PlaceFootprint( const TOOL_EVENT& aEvent )
                 if( !fp )
                     return;
 
-                EDA_ANGLE newAngle = GridFrameAngleAt( *board, fp->GetPosition(), PCB_GRIDITEM_ROLE::PLACEMENT );
+                EDA_ANGLE newAngle = GridFrameAngleAt( *board, fp->GetPosition(), PCB_GRID_ROLE::PLACEMENT );
                 EDA_ANGLE delta = GridFrameRotationDelta( prevFrameAngle, newAngle, m_frame->GetRotationAngle() );
 
                 prevFrameAngle = newAngle;
@@ -1436,7 +1443,7 @@ int BOARD_EDITOR_CONTROL::PlaceFootprint( const TOOL_EVENT& aEvent )
 
         // A footprint handed over from another command may already carry the frame
         // rotation of the grid it sits in; count that as applied, like a move pick-up.
-        prevFrameAngle = GridFrameAngleAt( *board, fp->GetPosition(), PCB_GRIDITEM_ROLE::PLACEMENT );
+        prevFrameAngle = GridFrameAngleAt( *board, fp->GetPosition(), PCB_GRID_ROLE::PLACEMENT );
         fp->SetPosition( cursorPos );
         applyPlacementFrameOrientation();
         m_toolMgr->RunAction<EDA_ITEM*>( ACTIONS::selectItem, fp );
@@ -2438,6 +2445,7 @@ void BOARD_EDITOR_CONTROL::setTransitions()
     Go( &BOARD_EDITOR_CONTROL::ToggleLayersManager,    PCB_ACTIONS::showLayersManager.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleProperties,       ACTIONS::showProperties.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleNetInspector,     PCB_ACTIONS::showNetInspector.MakeEvent() );
+    Go( &BOARD_EDITOR_CONTROL::ToggleGitCommitPane, ACTIONS::showGitCommitPane.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleLibraryTree,      PCB_ACTIONS::showDesignBlockPanel.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleSearch,           PCB_ACTIONS::showSearch.MakeEvent() );
     Go( &BOARD_EDITOR_CONTROL::ToggleConstraintsPanel, PCB_ACTIONS::showConstraintsPanel.MakeEvent() );

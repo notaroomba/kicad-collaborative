@@ -608,6 +608,13 @@ TOOL_ACTION ACTIONS::arcPosture( TOOL_ACTION_ARGS()
         .FriendlyName( _( "Switch Arc Posture" ) )
         .Tooltip( _( "Switch arc posture between clockwise and counter-clockwise" ) ) );
 
+TOOL_ACTION ACTIONS::cycleArcDrawMode( TOOL_ACTION_ARGS()
+        .Name( "common.InteractiveDrawing.cycleArcDrawMode" )
+        .Scope( AS_GLOBAL )
+        .DefaultHotkey( MD_ALT + '/' )
+        .FriendlyName( _( "Cycle Arc Drawing Mode" ) )
+        .Tooltip( _( "Switch to the next method of drawing arcs" ) ) );
+
 TOOL_ACTION ACTIONS::deleteLastPoint( TOOL_ACTION_ARGS()
         .Name( "common.InteractiveDrawing.deleteLastPoint" )
         .Scope( AS_GLOBAL )
@@ -1331,6 +1338,14 @@ TOOL_ACTION ACTIONS::showProperties( TOOL_ACTION_ARGS()
         .ToolbarState( TOOLBAR_STATE::TOGGLE )
         .Icon( BITMAPS::tools ) );
 
+TOOL_ACTION ACTIONS::showGitCommitPane( TOOL_ACTION_ARGS()
+                                                .Name( "common.Control.showGitCommitPane" )
+                                                .Scope( AS_GLOBAL )
+                                                .FriendlyName( _( "Version Control" ) )
+                                                .Tooltip( _( "Show/hide the version control panel" ) )
+                                                .ToolbarState( TOOLBAR_STATE::TOGGLE )
+                                                .Icon( BITMAPS::git_good_check ) );
+
 TOOL_ACTION ACTIONS::showDatasheet( TOOL_ACTION_ARGS()
         .Name( "common.Control.showDatasheet" )
         .Scope( AS_GLOBAL )
@@ -1456,6 +1471,18 @@ TOOL_ACTION ACTIONS::pluginsReload( TOOL_ACTION_ARGS()
         .Tooltip( _( "Reload all python plugins and refresh plugin menus" ) )
         .Icon( BITMAPS::reload ) );
 
+TOOL_ACTION ACTIONS::pluginsShowFolder( TOOL_ACTION_ARGS()
+        .Name( "common.API.pluginsShowFolder" )
+        .Scope( AS_GLOBAL )
+#ifdef __WXMAC__
+        .FriendlyName( _( "Reveal Plugin Folder in Finder" ) )
+        .Tooltip( _( "Reveals the plugins folder in a Finder window" ) )
+#else
+        .FriendlyName( _( "Open Plugin Directory" ) )
+        .Tooltip( _( "Opens the directory in the default system file manager" ) )
+#endif
+        .Icon( BITMAPS::directory_open ) );
+
 // Embedding Files
 
 TOOL_ACTION ACTIONS::embeddedFiles( TOOL_ACTION_ARGS()
@@ -1507,5 +1534,5 @@ const TOOL_EVENT
 
 // System-wide undo/redo Events
 
-const TOOL_EVENT EVENTS::UndoRedoPreEvent( TC_MESSAGE, TA_UNDO_REDO_POST, AS_GLOBAL );
+const TOOL_EVENT EVENTS::UndoRedoPreEvent( TC_MESSAGE, TA_UNDO_REDO_PRE, AS_GLOBAL );
 const TOOL_EVENT EVENTS::UndoRedoPostEvent( TC_MESSAGE, TA_UNDO_REDO_POST, AS_GLOBAL );

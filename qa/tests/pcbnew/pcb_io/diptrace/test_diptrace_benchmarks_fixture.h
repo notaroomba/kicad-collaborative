@@ -74,15 +74,13 @@ struct DIPTRACE_BENCHMARK_FIXTURE
 
     std::unique_ptr<BOARD> LoadBoard( const std::string& aFileName )
     {
-        std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-        m_plugin.LoadBoard( GetTestDataDir() + aFileName, board.get() );
+        std::unique_ptr<BOARD> board = m_plugin.LoadBoard( GetTestDataDir() + aFileName );
         return board;
     }
 
     std::unique_ptr<BOARD> LoadBoardFromPath( const std::string& aPath )
     {
-        std::unique_ptr<BOARD> board = std::make_unique<BOARD>();
-        m_plugin.LoadBoard( aPath, board.get() );
+        std::unique_ptr<BOARD> board = m_plugin.LoadBoard( aPath );
         return board;
     }
 };

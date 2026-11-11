@@ -105,7 +105,7 @@ bool FIELDS_TABLE_DATA_MODEL_BASE::cellUsesResolvedTextRenderer( int aRow, int a
     wxCHECK( aCol >= 0 && aCol < GetNumberCols(), false );
 
     return !ColIsItemIdentifier( aCol ) && !ColIsQuantity( aCol ) && !ColIsItemNumber( aCol )
-           && IsGeneratedValue( GetValue( aRow, aCol ) );
+           && ( ColIsComputed( aCol ) || IsGeneratedValue( GetValue( aRow, aCol ) ) );
 }
 
 
@@ -163,7 +163,7 @@ wxGridCellAttr* FIELDS_TABLE_DATA_MODEL_BASE::cloneUrlEditorAttr()
 
 wxGridCellAttr* FIELDS_TABLE_DATA_MODEL_BASE::applyFieldPresenceRenderer( wxGridCellAttr* aAttr, int aRow, int aCol )
 {
-    if( !IsCellClear( aRow, aCol ) || ColIsAttribute( aCol ) )
+    if( !IsCellClear( aRow, aCol ) || ColIsAttribute( aCol ) || ColIsComputed( aCol ) )
         return aAttr;
 
     wxGridCellAttr* stripedAttr = aAttr ? aAttr->Clone() : new wxGridCellAttr;
@@ -265,7 +265,11 @@ void FIELDS_TABLE_DATA_MODEL_BASE::RemoveColumn( int aCol )
 
     for( auto& [unused, fieldsStore] : m_dataStore )
     {
-        fieldsStore.erase( m_cols[aCol].m_fieldName );
+        FIELD_STORE_VALUE& field = fieldsStore[m_cols[aCol].m_fieldName];
+        field.m_present = false;
+
+        for( auto& [variant, state] : field.m_variants )
+            state.m_value = state.m_baseline;
     }
 
     m_cols.erase( m_cols.begin() + aCol );
@@ -304,19 +308,33 @@ void FIELDS_TABLE_DATA_MODEL_BASE::RenameColumn( int aCol, const wxString& newNa
 
     commitPendingGridChanges();
 
+    const wxString oldName = m_cols[aCol].m_fieldName;
+    bool           wasComputed = ColIsComputed( aCol );
+    bool           willBeComputed = IsGeneratedField( newName ) && !fieldIsItemProperty( newName );
+
     for( auto& [unused, fieldsStore] : m_dataStore )
     {
-        auto node = fieldsStore.extract( m_cols[aCol].m_fieldName );
+        auto fieldIt = fieldsStore.find( oldName );
 
-        if( !node.empty() )
+        if( fieldIt == fieldsStore.end() )
+            continue;
+
+        FIELD_STORE_VALUE& oldField = fieldIt->second;
+        FIELD_STORE_VALUE& newField = fieldsStore[newName];
+        newField.m_present = oldField.m_present || wasComputed || willBeComputed;
+
+        // Computed columns are virtual, their stored values are only placeholders for the
+        // generated field name. Don't copy that placeholder into an ordinary field, or
+        // keep ordinary per-item values when the destination is computed.
+        for( const auto& [variant, state] : oldField.m_variants )
         {
-            node.key() = newName;
-            fieldsStore.insert( std::move( node ) );
+            newField.m_variants[variant].m_value = willBeComputed ? newName : wasComputed ? wxString() : state.m_value;
         }
+
+        oldField.m_present = false;
     }
 
     m_cols[aCol].m_fieldName = newName;
-    m_cols[aCol].m_label = newName;
     m_edited = true;
 }
 
@@ -324,7 +342,9 @@ void FIELDS_TABLE_DATA_MODEL_BASE::RenameColumn( int aCol, const wxString& newNa
 void FIELDS_TABLE_DATA_MODEL_BASE::SetColLabelValue( int aCol, const wxString& aLabel )
 {
     wxCHECK_RET( aCol >= 0 && aCol < static_cast<int>( m_cols.size() ), "Invalid Column Number" );
+
     m_cols[aCol].m_label = aLabel;
+    FinalizeTextVarExpansion( m_cols[aCol].m_label, FOR_GUI );
 }
 
 
@@ -459,24 +479,11 @@ bool FIELDS_TABLE_DATA_MODEL_BASE::ColIsComputed( int aCol ) const
 }
 
 
-bool FIELDS_TABLE_DATA_MODEL_BASE::IsExpanderColumn( int aCol ) const
-{
-    // Check if aCol is the first visible column
-    for( int col = 0; col < aCol; ++col )
-    {
-        if( m_cols[col].m_show )
-            return false;
-    }
-
-    return true;
-}
-
-
 bool FIELDS_TABLE_DATA_MODEL_BASE::ColIsReadOnly( int aCol ) const
 {
     wxCHECK( aCol >= 0 && aCol < static_cast<int>( m_cols.size() ), true );
 
-    return ColIsItemIdentifier( aCol ) || IsExpanderColumn( aCol ) || ColIsComputed( aCol );
+    return ColIsItemIdentifier( aCol ) || ColIsComputed( aCol );
 }
 
 
@@ -486,6 +493,12 @@ bool FIELDS_TABLE_DATA_MODEL_BASE::IsCellReadOnly( int aRow, int aCol )
     wxCHECK( aCol >= 0 && aCol < GetNumberCols(), true );
 
     return ColIsReadOnly( aCol );
+}
+
+
+bool FIELDS_TABLE_DATA_MODEL_BASE::CanCopyCellFromVariant( int aRow, int aCol )
+{
+    return !IsCellReadOnly( aRow, aCol ) && fieldSupportsVariants( m_cols[aCol].m_fieldName );
 }
 
 
@@ -775,6 +788,77 @@ wxString FIELDS_TABLE_DATA_MODEL_BASE::getAttributeResolvedValue( const wxString
 }
 
 
+wxString FIELDS_TABLE_DATA_MODEL_BASE::fieldVariant( const wxString& aFieldName, const wxString& aVariantName ) const
+{
+    return fieldSupportsVariants( aFieldName ) ? aVariantName : wxString();
+}
+
+
+void FIELDS_TABLE_DATA_MODEL_BASE::updateEditedState()
+{
+    m_edited = false;
+
+    for( const auto& [key, fields] : m_dataStore )
+    {
+        for( const auto& [name, field] : fields )
+        {
+            if( field.m_present != field.m_baselinePresent )
+            {
+                m_edited = true;
+                return;
+            }
+
+            if( field.m_present )
+            {
+                for( const auto& [variant, state] : field.m_variants )
+                {
+                    if( state.m_value != state.m_baseline )
+                    {
+                        m_edited = true;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+void FIELDS_TABLE_DATA_MODEL_BASE::RenameStoredVariant( const wxString& aOldName, const wxString& aNewName )
+{
+    commitPendingGridChanges();
+
+    for( auto& [key, fields] : m_dataStore )
+    {
+        for( auto& [name, field] : fields )
+        {
+            if( auto it = field.m_variants.find( aOldName ); it != field.m_variants.end() )
+            {
+                field.m_variants[aNewName] = it->second;
+                field.m_variants.erase( it );
+            }
+        }
+    }
+
+    if( m_currentVariant == aOldName )
+        m_currentVariant = aNewName;
+}
+
+
+void FIELDS_TABLE_DATA_MODEL_BASE::DeleteStoredVariant( const wxString& aName )
+{
+    commitPendingGridChanges();
+
+    for( auto& [key, fields] : m_dataStore )
+    {
+        for( auto& [name, field] : fields )
+            field.m_variants.erase( aName );
+    }
+
+    updateEditedState();
+}
+
+
 wxString FIELDS_TABLE_DATA_MODEL_BASE::SerializeUndoState() const
 {
     // Serialize the un-applied edit store keyed by symbol identity (sheet path + UUID), so that
@@ -785,8 +869,19 @@ wxString FIELDS_TABLE_DATA_MODEL_BASE::SerializeUndoState() const
     {
         nlohmann::json jfields = nlohmann::json::object();
 
-        for( const auto& [name, value] : fields )
-            jfields[std::string( name.ToUTF8() )] = std::string( value.ToUTF8() );
+        for( const auto& [name, field] : fields )
+        {
+            auto& stored = jfields[std::string( name.ToUTF8() )];
+            stored["present"] = field.m_present;
+            stored["baseline_present"] = field.m_baselinePresent;
+            stored["variants"] = nlohmann::json::object();
+
+            for( const auto& [variant, state] : field.m_variants )
+            {
+                stored["variants"][std::string( variant.ToUTF8() )] = { std::string( state.m_value.ToUTF8() ),
+                                                                        std::string( state.m_baseline.ToUTF8() ) };
+            }
+        }
 
         j[std::string( key.AsString().ToUTF8() )] = jfields;
     }
@@ -806,17 +901,27 @@ void FIELDS_TABLE_DATA_MODEL_BASE::RestoreUndoState( const wxString& aState )
     // empty vs. not-present
     m_dataStore.clear();
 
-    for( auto it = j.begin(); it != j.end(); ++it )
+    for( auto j_it = j.begin(); j_it != j.end(); ++j_it )
     {
-        KIID_PATH                     key( wxString::FromUTF8( it.key().c_str() ) );
-        std::map<wxString, wxString>& fields = m_dataStore[key];
+        KIID_PATH                              key( wxString::FromUTF8( j_it.key().c_str() ) );
+        std::map<wxString, FIELD_STORE_VALUE>& fields = m_dataStore[key];
 
-        for( auto fit = it.value().begin(); fit != it.value().end(); ++fit )
-            fields[wxString::FromUTF8( fit.key().c_str() )] =
-                    wxString::FromUTF8( fit.value().get<std::string>().c_str() );
+        for( auto j_field_it = j_it.value().begin(); j_field_it != j_it.value().end(); ++j_field_it )
+        {
+            FIELD_STORE_VALUE& field = fields[wxString::FromUTF8( j_field_it.key().c_str() )];
+            field.m_present = j_field_it.value().at( "present" ).get<bool>();
+            field.m_baselinePresent = j_field_it.value().at( "baseline_present" ).get<bool>();
+
+            for( const auto& [variant, state] : j_field_it.value().at( "variants" ).items() )
+            {
+                field.m_variants[wxString::FromUTF8( variant )] =
+                                                            { wxString::FromUTF8( state.at( 0 ).get<std::string>() ),
+                                                              wxString::FromUTF8( state.at( 1 ).get<std::string>() ) };
+            }
+        }
     }
 
-    m_edited = true;
+    SetCurrentVariant( m_currentVariant );
     RebuildRows();
 
     if( GetView() )

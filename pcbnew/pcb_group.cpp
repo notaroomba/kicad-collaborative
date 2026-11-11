@@ -75,11 +75,21 @@ void PCB_GROUP::Serialize( google::protobuf::Any &aContainer ) const
         kiapi::common::PackLibId( group.mutable_lib_id(), GetDesignBlockLibId() );
 
     kiapi::common::PackCustomProperties( group.mutable_custom_properties(), *this );
-    aContainer.PackFrom( group );
+
+    if( !aContainer.PackFrom( group ) )
+        wxFAIL_MSG( wxT( "Failed to pack PCB_GROUP" ) );
 }
 
 
-bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
+bool PCB_GROUP::Deserialize( const google::protobuf::Any& aContainer )
+{
+    return DeserializeGroup( aContainer, nullptr );
+}
+
+
+// Note: this only records the group members in m_deserializedItems.  A proper AddItem() must
+// be done in a second pass (FinalizeGroupDeserialization()).
+bool PCB_GROUP::DeserializeGroup( const google::protobuf::Any& aContainer, COMMIT* aCommit )
 {
     kiapi::board::types::Group group;
 
@@ -90,6 +100,9 @@ bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
     SetName( wxString( group.name().c_str(), wxConvUTF8 ) );
     SetLocked( group.locked() == kiapi::common::types::LockedState::LS_LOCKED );
 
+    m_items.clear();
+    m_deserializedItems.clear();
+
     BOARD* board = GetBoard();
 
     if( !board )
@@ -98,9 +111,13 @@ bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
     for( const kiapi::common::types::KIID& itemId : group.items() )
     {
         KIID id( itemId.value() );
+        EDA_ITEM* item = board->ResolveItem( id, true );
 
-        if( BOARD_ITEM* item = board->ResolveItem( id, true ) )
-            AddItem( item );
+        if( !item && aCommit )
+            item = aCommit->ResolveItem( id );
+
+        if( item )
+            m_deserializedItems.insert( item );
     }
 
     if( group.has_lib_id() )
@@ -110,6 +127,7 @@ bool PCB_GROUP::Deserialize( const google::protobuf::Any &aContainer )
 
     return true;
 }
+
 
 std::unordered_set<BOARD_ITEM*> PCB_GROUP::GetBoardItems() const
 {
@@ -129,17 +147,17 @@ std::unordered_set<BOARD_ITEM*> PCB_GROUP::GetBoardItems() const
  * @return if not in the footprint editor and aItem is in a footprint, returns the
  * footprint's parent group. Otherwise, returns the aItem's parent group.
  */
-EDA_GROUP* getClosestGroup( BOARD_ITEM* aItem, bool isFootprintEditor )
+static EDA_GROUP* getClosestGroup( const BOARD_ITEM& aItem, bool isFootprintEditor )
 {
-    if( !isFootprintEditor && aItem->GetParent() && aItem->GetParent()->Type() == PCB_FOOTPRINT_T )
-        return aItem->GetParent()->GetParentGroup();
+    if( !isFootprintEditor && aItem.GetParent() && aItem.GetParent()->Type() == PCB_FOOTPRINT_T )
+        return aItem.GetParent()->GetParentGroup();
     else
-        return aItem->GetParentGroup();
+        return aItem.GetParentGroup();
 }
 
 
 /// Returns the top level group inside the aScope group, or nullptr
-EDA_GROUP* getNestedGroup( BOARD_ITEM* aItem, EDA_GROUP* aScope, bool isFootprintEditor )
+static EDA_GROUP* getNestedGroup( const BOARD_ITEM& aItem, const EDA_GROUP* aScope, bool isFootprintEditor )
 {
     EDA_GROUP* group = getClosestGroup( aItem, isFootprintEditor );
 
@@ -153,13 +171,13 @@ EDA_GROUP* getNestedGroup( BOARD_ITEM* aItem, EDA_GROUP* aScope, bool isFootprin
 }
 
 
-EDA_GROUP* PCB_GROUP::TopLevelGroup( BOARD_ITEM* aItem, EDA_GROUP* aScope, bool isFootprintEditor )
+EDA_GROUP* PCB_GROUP::TopLevelGroup( const BOARD_ITEM& aItem, const EDA_GROUP* aScope, bool isFootprintEditor )
 {
     return getNestedGroup( aItem, aScope, isFootprintEditor );
 }
 
 
-bool PCB_GROUP::WithinScope( BOARD_ITEM* aItem, PCB_GROUP* aScope, bool isFootprintEditor )
+bool PCB_GROUP::WithinScope( const BOARD_ITEM& aItem, const PCB_GROUP* aScope, bool isFootprintEditor )
 {
     EDA_GROUP* group = getClosestGroup( aItem, isFootprintEditor );
 
@@ -190,12 +208,11 @@ void PCB_GROUP::SetLocked( bool aLockState )
 {
     BOARD_ITEM::SetLocked( aLockState );
 
-    RunOnChildren(
-            [&]( BOARD_ITEM* child )
-            {
-                child->SetLocked( aLockState );
-            },
-            RECURSE_MODE::NO_RECURSE );
+    // Don't set locked flag on children.  BOARD_ITEM::IsLocked() checks the parent group for current
+    // lock status before exmaining its own flag.
+    //
+    // Setting the child flag just leands to endless problems when members get added-to/removed-from
+    // locked groups.
 }
 
 
@@ -311,6 +328,17 @@ void PCB_GROUP::swapChildOwnership( PCB_GROUP* aImage )
                 child->SetParentGroup( this );
             },
             RECURSE_MODE::NO_RECURSE );
+}
+
+
+double PCB_GROUP::GetCoverageArea( int aTextMargin ) const
+{
+    double area = 0.0;
+
+    for( BOARD_ITEM* member : GetBoardItems() )
+        area += member->GetCoverageArea( aTextMargin );
+
+    return area;
 }
 
 
@@ -441,25 +469,41 @@ void PCB_GROUP::Flip( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 }
 
 
+static bool groupHasFootprint( const PCB_GROUP* aGroup )
+{
+    bool found = false;
+
+    aGroup->RunOnChildren(
+            [&]( BOARD_ITEM* aChild )
+            {
+                if( aChild->Type() == PCB_FOOTPRINT_T )
+                    found = true;
+            },
+            RECURSE_MODE::RECURSE );
+
+    return found;
+}
+
+
 void PCB_GROUP::Mirror( const VECTOR2I& aCentre, FLIP_DIRECTION aFlipDirection )
 {
     // Footprints have no mirror, only flip. If the group holds one, leave the whole group alone
     // rather than mirror the rest and tear it apart.
-    bool hasFootprint = false;
-
-    RunOnChildren(
-            [&]( BOARD_ITEM* aChild )
-            {
-                if( aChild->Type() == PCB_FOOTPRINT_T )
-                    hasFootprint = true;
-            },
-            RECURSE_MODE::RECURSE );
-
-    if( hasFootprint )
+    if( groupHasFootprint( this ) )
         return;
 
     for( EDA_ITEM* item : m_items )
         static_cast<BOARD_ITEM*>( item )->Mirror( aCentre, aFlipDirection );
+}
+
+
+void PCB_GROUP::Mirror( const SEG& aAxis )
+{
+    if( groupHasFootprint( this ) )
+        return;
+
+    for( EDA_ITEM* item : m_items )
+        static_cast<BOARD_ITEM*>( item )->Mirror( aAxis );
 }
 
 

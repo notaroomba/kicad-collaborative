@@ -77,8 +77,10 @@ LIBRARY_TABLE::LIBRARY_TABLE( const wxFileName &aPath, LIBRARY_TABLE_SCOPE aScop
         return;
     }
 
-    if( fn.GetSize() <= 1 ) // test for an empty file, 1 byte allowed for BOM
+    if( fn.GetSize() < 1 )
     {
+        // blank files are treated as "new" and "ok" as we want to allow the user to start
+        // fleshing them out and save
         m_ok = true;
         m_type = aExpectedType;
         return;
@@ -105,10 +107,6 @@ LIBRARY_TABLE::LIBRARY_TABLE( const wxFileName &aPath, LIBRARY_TABLE_SCOPE aScop
 }
 
 
-/**
- * Note: @param aFromClipboard isn't actually used, but might keep people from calling this with a string
- *                             filepath, which isn't going to do what they expected.
- */
 LIBRARY_TABLE::LIBRARY_TABLE( bool aFromClipboard, const wxString &aBuffer, LIBRARY_TABLE_SCOPE aScope ) :
         m_path( wxEmptyString ),
         m_scope( aScope )

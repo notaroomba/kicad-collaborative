@@ -108,6 +108,32 @@ std::vector<PROPERTY_BASE*> PROPERTY_MANAGER::GetProperties( const INSPECTABLE* 
 }
 
 
+std::vector<PROPERTY_BASE*>
+PROPERTY_MANAGER::GetCommonDynamicProperties( const std::vector<const INSPECTABLE*>& aObjects ) const
+{
+    if( aObjects.empty() )
+        return {};
+
+    std::vector<PROPERTY_BASE*> common = aObjects.front()->GetDynamicProperties();
+
+    for( size_t ii = 1; ii < aObjects.size() && !common.empty(); ++ii )
+    {
+        std::set<wxString> names;
+
+        for( PROPERTY_BASE* prop : aObjects[ii]->GetDynamicProperties() )
+            names.insert( prop->Name() );
+
+        std::erase_if( common,
+                       [&]( PROPERTY_BASE* aProp )
+                       {
+                           return !names.contains( aProp->Name() );
+                       } );
+    }
+
+    return common;
+}
+
+
 const std::map<PROPERTY_BASE*, int>& PROPERTY_MANAGER::GetDisplayOrder( TYPE_ID aType ) const
 {
     if( m_dirty )
@@ -430,9 +456,9 @@ void PROPERTY_MANAGER::CLASS_DESC::collectPropsRecur( std::vector<PROPERTY_BASE*
 }
 
 
-PROPERTY_MANAGER::CLASSES_INFO PROPERTY_MANAGER::GetAllClasses()
+std::vector<PROPERTY_MANAGER::CLASS_INFO> PROPERTY_MANAGER::GetAllClasses()
 {
-    CLASSES_INFO rv;
+    std::vector<CLASS_INFO> rv;
 
     for( std::pair<const TYPE_ID, CLASS_DESC>& classEntry : m_classes )
     {
@@ -469,17 +495,19 @@ void PROPERTY_MANAGER::PropertyChanged( INSPECTABLE* aObject, PROPERTY_BASE* aPr
 
     callListeners( objectClass.m_id );
 
-    for( CLASS_DESC& superClass : objectClass.m_bases )
-        callListeners( superClass.m_id );
+    for( const std::reference_wrapper<CLASS_DESC>& superClass : objectClass.m_bases )
+        callListeners( superClass.get().m_id );
 }
 
 
 PROPERTY_COMMIT_HANDLER::PROPERTY_COMMIT_HANDLER( COMMIT* aCommit )
 {
-    wxCHECK2_MSG( PROPERTY_MANAGER::Instance().m_managedCommit == nullptr,
-                  return, wxT( "Can't have more than one managed commit at a time!" ) );
+    // This is a hard failure.  wxCHECK2() will just allow us to crash later in a less-pertinent place
+    if( PROPERTY_MANAGER::Instance().m_managedCommit != nullptr )
+        throw std::runtime_error( "Can't have more than one managed commit at a time!" );
 
     PROPERTY_MANAGER::Instance().m_managedCommit = aCommit;
+    m_ownsCommit = true;
 }
 
 
@@ -488,7 +516,8 @@ PROPERTY_COMMIT_HANDLER::~PROPERTY_COMMIT_HANDLER()
     wxASSERT_MSG( PROPERTY_MANAGER::Instance().m_managedCommit != nullptr,
                   wxT( "Something went wrong: m_managedCommit already null!" ) );
 
-    PROPERTY_MANAGER::Instance().m_managedCommit = nullptr;
+    if( m_ownsCommit )
+        PROPERTY_MANAGER::Instance().m_managedCommit = nullptr;
 }
 
 
@@ -511,7 +540,9 @@ void PROPERTY_MANAGER::UnregisterListener( TYPE_ID aType, PROPERTY_LISTENER_HAND
     auto& vec = it->second;
     vec.erase( std::remove_if( vec.begin(), vec.end(),
                                [aHandle]( const auto& aPair )
-                               { return aPair.first == aHandle; } ),
+                               {
+                                   return aPair.first == aHandle;
+                               } ),
                vec.end() );
 }
 

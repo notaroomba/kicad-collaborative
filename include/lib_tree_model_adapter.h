@@ -66,8 +66,7 @@
  * - `SetFilter()` - set whether the view is restricted to power parts
  * - `ShowUnits()` - set whether units are displayed
  * - `SetPreselectNode()` - set a node to highlight when not searching
- * - `AddLibrary()` - populate the model with all aliases in a library
- * - `AddAliasList()` - populate the model with a specific list of aliases
+ * - `DoAddLibrary()` - populate the model with all aliases in a library
  *
  * Quick summary of methods used by the View:
  *
@@ -75,7 +74,6 @@
  * - `AttachTo()` - pass in the wxDataViewCtrl
  * - `GetAliasFor()` - get the LIB_ALIAS* for a selected item
  * - `GetUnitFor()` - get the unit for a selected item
- * - `GetComponentsCount()` - count the aliases loaded
  *
  * Methods implemented as part of wxDataViewModel:
  *
@@ -83,13 +81,10 @@
  * - `IsContainer()` - whether an item is a parent
  * - `GetParent()` - return the parent of an item, or invalid if root
  * - `GetChildren()` - get the children of an item
- * - `GetColumnCount()` - get the number of columns in the view
- * - `GetColumnType()` - get the data type shown in each column
  * - `GetValue()` - get the data shown in a cell
  * - `SetValue()` - edit the data in a cell (does nothing)
  * - `GetAttr()` - get any per-item formatting
  * - `Compare()` - compare two rows, for sorting
- * - `HasDefaultCompare()` - whether sorted by default
  */
 
 #include <project.h>
@@ -181,16 +176,17 @@ public:
     void SetPreselectNode( const LIB_ID& aLibId, int aUnit );
 
     /**
-     * Add the given list of symbols by alias. To be called in the setup
-     * phase.
+     * Add the given list of symbols by alias. To be called in the setup phase.
      *
      * @param aNodeName    the parent node the symbols will appear under
      * @param aDesc        the description field of the parent node
      * @param aItemList    list of symbols
+     * @param aPinned
+     * @param aPresorted
      */
     LIB_TREE_NODE_LIBRARY& DoAddLibrary( const wxString& aNodeName, const wxString& aDesc,
                                          const std::vector<LIB_TREE_ITEM*>& aItemList,
-                                         bool pinned, bool presorted );
+                                         bool aPinned, bool aPresorted );
 
     /**
      * Remove one of the system groups from the library.
@@ -332,6 +328,9 @@ public:
     // Allows subclasses to nominate a context menu handler.
     virtual TOOL_INTERACTIVE* GetContextMenuTool() { return nullptr; }
 
+    /// Pinning writes to the project, so trees of libraries outside it must opt out
+    virtual bool CanPinLibraries() const { return true; }
+
     void PinLibrary( LIB_TREE_NODE* aTreeNode );
     void UnpinLibrary( LIB_TREE_NODE* aTreeNode );
 
@@ -359,12 +358,12 @@ public:
 
 protected:
     /**
-     * Convert #SYM_TREE_NODE -> wxDataViewItem.
+     * Convert #LIB_TREE_NODE -> wxDataViewItem.
      */
     static wxDataViewItem ToItem( const LIB_TREE_NODE* aNode );
 
     /**
-     * Convert wxDataViewItem -> #SYM_TREE_NODE.
+     * Convert wxDataViewItem -> #LIB_TREE_NODE.
      */
     static LIB_TREE_NODE* ToNode( wxDataViewItem aItem );
 

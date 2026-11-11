@@ -456,7 +456,6 @@ bool COMPILER::lexDefault( T_TOKEN& aToken )
     T_TOKEN  retval;
     wxString current;
     int      convertFrom;
-    wxString msg;
 
     retval.value.str = nullptr;
     retval.value.num = 0.0;
@@ -988,10 +987,16 @@ bool COMPILER::generateUCode( UCODE* aCode, CONTEXT* aPreflightContext )
                         reportError( CST_CODEGEN, msg, node->leaf[0]->srcPos + 1 );
                     }
 
-                    if( func )
-                    {
-                        // Preflight the function call
+                    // Expressions have no value until runtime; formatNode() would turn
+                    // them into empty strings and falsely report missing arguments
+                    const bool literalArgs = std::all_of( params.begin(), params.end(),
+                            []( const TREE_NODE* param )
+                            {
+                                return param->op == TR_STRING || param->op == TR_NUMBER;
+                            } );
 
+                    if( func && literalArgs )
+                    {
                         for( TREE_NODE* pnode : params )
                         {
                             VALUE*   param = aPreflightContext->AllocValue();
@@ -1274,19 +1279,37 @@ int UOP::Exec( CONTEXT* ctx )
 
     if( m_op & TR_OP_BINARY_MASK )
     {
+        LIBEVAL::VALUE  autoConverted;
         LIBEVAL::VALUE* arg2 = ctx->Pop();
         LIBEVAL::VALUE* arg1 = ctx->Pop();
         double          result;
 
-        if( ctx->HasErrorCallback() )
+        if( arg1 && arg1->GetType() == VT_STRING && arg2 && arg2->GetType() == VT_NUMERIC )
         {
-            if( arg1 && arg1->GetType() == VT_STRING && arg2 && arg2->GetType() == VT_NUMERIC )
+            double doubleVal;
+
+            if( !arg1->StringIsLiteral() && QuacksLikeADuck( arg1->AsString(), &doubleVal ) )
+            {
+                autoConverted = LIBEVAL::VALUE( doubleVal );
+                arg1 = &autoConverted;
+            }
+            else if( ctx->HasErrorCallback() )
             {
                 ctx->ReportError( wxString::Format( _( "Type mismatch between '%s' and %lf" ),
                                                     arg1->AsString(),
                                                     arg2->AsDouble() ) );
             }
-            else if( arg1 && arg1->GetType() == VT_NUMERIC && arg2 && arg2->GetType() == VT_STRING )
+        }
+        else if( arg1 && arg1->GetType() == VT_NUMERIC && arg2 && arg2->GetType() == VT_STRING )
+        {
+            double doubleVal;
+
+            if( !arg2->StringIsLiteral() && QuacksLikeADuck( arg1->AsString(), &doubleVal ) )
+            {
+                autoConverted = LIBEVAL::VALUE( doubleVal );
+                arg2 = &autoConverted;
+            }
+            else if( ctx->HasErrorCallback() )
             {
                 ctx->ReportError( wxString::Format( _( "Type mismatch between %lf and '%s'" ),
                                                     arg1->AsDouble(),
@@ -1461,6 +1484,17 @@ VALUE* UCODE::Run( CONTEXT* ctx )
         // non-well-formed rules should not be fired on a release build
         return ctx->StoreValue( new VALUE( 0 ) );
     }
+}
+
+
+std::optional<wxString> EscapeStringLiteral( const wxString& aText )
+{
+    if( aText.EndsWith( wxS( "\\" ) ) )
+        return std::nullopt;
+
+    wxString escaped = aText;
+    escaped.Replace( wxS( "'" ), wxS( "\\'" ) );
+    return escaped;
 }
 
 

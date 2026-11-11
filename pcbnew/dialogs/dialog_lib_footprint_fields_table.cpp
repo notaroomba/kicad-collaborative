@@ -52,9 +52,7 @@ static GRID_CELL_URL_EDITOR_CONTEXT getDatasheetContext( const std::vector<FOOTP
     std::vector<EMBEDDED_FILES*> inheritedFiles;
 
     for( FOOTPRINT_REF footprint : aFootprints )
-    {
         embedTargets.push_back( footprint.GetFootprint().GetEmbeddedFiles() );
-    }
 
     return MakeGridCellUrlEditorContext( embedTargets, inheritedFiles );
 }
@@ -72,8 +70,8 @@ class LIB_FOOTPRINT_FIELDS_EDITOR_GRID_TRICKS : public FIELDS_TABLE_GRID_TRICKS
 {
 public:
     LIB_FOOTPRINT_FIELDS_EDITOR_GRID_TRICKS( DIALOG_LIB_FOOTPRINT_FIELDS_TABLE* aParent, WX_GRID* aGrid,
-                                   VIEW_CONTROLS_GRID_DATA_MODEL*     aViewFieldsData,
-                                   LIB_FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL* aDataModel ) :
+                                             VIEW_CONTROLS_GRID_DATA_MODEL* aViewFieldsData,
+                                             LIB_FOOTPRINT_FIELDS_EDITOR_GRID_DATA_MODEL* aDataModel ) :
             FIELDS_TABLE_GRID_TRICKS( aParent, aGrid, aDataModel ),
             m_dlg( aParent ),
             m_viewControlsDataModel( aViewFieldsData ),
@@ -230,7 +228,18 @@ void DIALOG_LIB_FOOTPRINT_FIELDS_TABLE::loadFootprints()
 
     FOOTPRINT_LIBRARY_ADAPTER* libMgr = PROJECT_PCB::FootprintLibAdapter( &Prj() );
     wxString                   libName = m_parent->GetTargetFPID().GetLibNickname();
-    std::vector<wxString>      footprintNames = libMgr->GetFootprintNames( libName );
+    std::vector<wxString>      footprintNames;
+
+    try
+    {
+        footprintNames = libMgr->GetFootprintNames( libName );
+    }
+    catch( const IO_ERROR& ioe )
+    {
+        wxMessageBox( wxString::Format( _( "Error loading footprints from library '%s': %s" ),
+                                        libName, ioe.What() ) );
+        return;
+    }
 
     if( footprintNames.empty() )
     {
@@ -341,8 +350,8 @@ bool DIALOG_LIB_FOOTPRINT_FIELDS_TABLE::TransferDataFromWindow()
     bool allChangesApplied = m_dataModel->ApplyData(
             [&]( FOOTPRINT& aFootprint )
             {
-                bool saved =
-                        m_parent->SaveFootprintInLibrary( &aFootprint, aFootprint.GetFPID().GetUniStringLibNickname() );
+                bool saved = m_parent->SaveFootprintInLibrary( &aFootprint,
+                                                               aFootprint.GetFPID().GetUniStringLibNickname() );
 
                 libraryChanged |= saved;
 

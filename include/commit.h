@@ -33,7 +33,7 @@
 class EDA_GROUP;
 class BASE_SCREEN;
 
-///< Types of changes
+/// Types of changes
 enum CHANGE_TYPE {
     CHT_ADD     = 1,
     CHT_REMOVE  = 2,
@@ -88,7 +88,7 @@ public:
         return Stage( aItem, CHT_REMOVE, aScreen );
     }
 
-    ///< Notify observers that aItem has been removed
+    /// Notify observers that aItem has been removed
     COMMIT& Removed( EDA_ITEM* aItem, BASE_SCREEN *aScreen = nullptr )
     {
         return Stage( aItem, CHT_REMOVE | CHT_DONE, aScreen );
@@ -126,10 +126,21 @@ public:
     void Unmodify( EDA_ITEM* aItem, BASE_SCREEN* aScreen );
 
     /// Execute the changes.
-    virtual void Push( const wxString& aMessage = wxT( "A commit" ), int aFlags = 0 ) = 0;
+    virtual void Push( const wxString& aMessage = wxEmptyString, int aFlags = 0 ) = 0;
 
     /// Revert the commit by restoring the modified items state.
     virtual void Revert() = 0;
+
+    int Checkpoint() { return (int) m_entries.size(); }
+    virtual void RevertToCheckpoint( int aCheckpoint ) = 0;
+
+    /**
+     * Search for an item in this commit that matches the provided KIID.
+     *
+     * @param aID is the KIID to search for in the committed items.
+     * @return null pointer if \a aID is null or the item is not found.
+     */
+    virtual EDA_ITEM* ResolveItem( KIID& aID ) = 0;
 
     bool Empty() const
     {
@@ -140,6 +151,17 @@ public:
     int GetStatus( EDA_ITEM* aItem, BASE_SCREEN *aScreen = nullptr );
 
     EDA_ITEM* GetFirst() const { return m_entries.empty() ? nullptr : m_entries[0].m_item; }
+
+    std::vector<std::pair<EDA_ITEM*, int>> StagedItems() const
+    {
+        std::vector<std::pair<EDA_ITEM*, int>> items;
+        items.reserve( m_entries.size() );
+
+        for( const COMMIT_LINE& entry : m_entries )
+            items.push_back( std::make_pair( entry.m_item, entry.m_type ) );
+
+        return items;
+    };
 
     struct COMMIT_LINE
     {
@@ -160,6 +182,26 @@ protected:
         m_changedItems.clear();
         m_deletedItems.clear();
         m_entries.clear();
+    }
+
+    void dropEntriesAfter( int aCheckpoint )
+    {
+        m_entries.erase( m_entries.begin() + aCheckpoint, m_entries.end() );
+
+        m_addedItems.clear();
+        m_changedItems.clear();
+        m_deletedItems.clear();
+
+        for( const COMMIT_LINE& entry : m_entries )
+        {
+            switch( entry.m_type & CHT_TYPE )
+            {
+            case CHT_ADD: m_addedItems.insert( { entry.m_item, entry.m_screen } ); break;
+            case CHT_REMOVE: m_deletedItems.insert( { entry.m_item, entry.m_screen } ); break;
+            case CHT_MODIFY: m_changedItems.insert( { entry.m_item, entry.m_screen } ); break;
+            default: break;
+            }
+        }
     }
 
     virtual void makeEntry( EDA_ITEM* aItem, CHANGE_TYPE aType, EDA_ITEM* aCopy = nullptr,
@@ -185,4 +227,3 @@ protected:
     std::set<std::pair<EDA_ITEM*, BASE_SCREEN*>> m_deletedItems;
     std::vector<COMMIT_LINE>                     m_entries;
 };
-

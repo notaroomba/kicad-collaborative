@@ -61,6 +61,15 @@ DIALOG_EXECUTECOMMAND_JOB_SETTINGS_BASE::DIALOG_EXECUTECOMMAND_JOB_SETTINGS_BASE
 	m_textCtrlCommand->SetSelForeground( true, wxSystemSettings::GetColour( wxSYS_COLOUR_HIGHLIGHTTEXT ) );
 	fgSizer1->Add( m_textCtrlCommand, 1, wxEXPAND|wxTOP|wxBOTTOM|wxRIGHT, 5 );
 
+	m_textExpanded = new wxStaticText( this, wxID_ANY, _("Expanded command:"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_textExpanded->Wrap( -1 );
+	fgSizer1->Add( m_textExpanded, 0, wxBOTTOM|wxLEFT|wxTOP, 5 );
+
+	m_textCtrlExpanded = new wxTextCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE|wxTE_READONLY );
+	m_textCtrlExpanded->SetMinSize( wxSize( -1,60 ) );
+
+	fgSizer1->Add( m_textCtrlExpanded, 0, wxBOTTOM|wxEXPAND|wxRIGHT|wxTOP, 5 );
+
 	m_textOutputPath = new wxStaticText( this, wxID_ANY, _("Output path:"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_textOutputPath->Wrap( -1 );
 	fgSizer1->Add( m_textOutputPath, 0, wxALIGN_CENTER_VERTICAL|wxTOP|wxBOTTOM|wxLEFT, 5 );
@@ -126,6 +135,10 @@ DIALOG_EXECUTECOMMAND_JOB_SETTINGS_BASE::DIALOG_EXECUTECOMMAND_JOB_SETTINGS_BASE
 	m_path_subs_grid->SetToolTip( _("This is a read-only table which shows pertinent environment variables.") );
 
 	bSizerMain->Add( m_path_subs_grid, 0, wxEXPAND|wxBOTTOM|wxRIGHT|wxLEFT, 10 );
+
+	m_stBuiltinHelp = new wxStaticText( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	m_stBuiltinHelp->Wrap( -1 );
+	bSizerMain->Add( m_stBuiltinHelp, 0, wxBOTTOM|wxRIGHT|wxLEFT, 10 );
 
 	m_sdbSizer1 = new wxStdDialogButtonSizer();
 	m_sdbSizer1OK = new wxButton( this, wxID_OK );

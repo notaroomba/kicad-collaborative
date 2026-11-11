@@ -85,7 +85,7 @@ static const std::map<wxString, ELECTRICAL_PINTYPE> pinDirectionsMap = {
 };
 
 
-///< Compute a bounding box for all items in a schematic sheet
+/// Compute a bounding box for all items in a schematic sheet
 static BOX2I getSheetBbox( SCH_SHEET* aSheet )
 {
     BOX2I bbox;
@@ -97,10 +97,19 @@ static BOX2I getSheetBbox( SCH_SHEET* aSheet )
 }
 
 
-///< Strip the Eagle "@<tag>" linking hint from a pin name (e.g. return 'GND' for 'GND@2')
+/// Strip the Eagle "@<tag>" linking hint from a pin name (e.g. return 'GND' for 'GND@2')
 static inline wxString extractNetName( const wxString& aPinName )
 {
     return aPinName.BeforeFirst( '@' );
+}
+
+
+/// True for the "N$<n>" names Eagle assigns to nets the user never named
+static bool isEagleAutoNetName( const wxString& aNetName )
+{
+    wxString number;
+
+    return aNetName.StartsWith( wxS( "N$" ), &number ) && !number.empty() && number.IsNumber();
 }
 
 
@@ -164,17 +173,17 @@ void SCH_IO_EAGLE::loadLayerDefs( const std::vector<std::unique_ptr<ELAYER>>& aL
          * Layers in KiCad schematics are not actually layers, but abstract groups mainly used to
          * decide item colors.
          *
-         * <layers>
-         *     <layer number="90" name="Modules" color="5" fill="1" visible="yes" active="yes"/>
-         *     <layer number="91" name="Nets" color="2" fill="1" visible="yes" active="yes"/>
-         *     <layer number="92" name="Busses" color="1" fill="1" visible="yes" active="yes"/>
-         *     <layer number="93" name="Pins" color="2" fill="1" visible="no" active="yes"/>
-         *     <layer number="94" name="Symbols" color="4" fill="1" visible="yes" active="yes"/>
-         *     <layer number="95" name="Names" color="7" fill="1" visible="yes" active="yes"/>
-         *     <layer number="96" name="Values" color="7" fill="1" visible="yes" active="yes"/>
-         *     <layer number="97" name="Info" color="7" fill="1" visible="yes" active="yes"/>
-         *     <layer number="98" name="Guide" color="6" fill="1" visible="yes" active="yes"/>
-         * </layers>
+         * \<layers\>
+         *     \<layer number="90" name="Modules" color="5" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="91" name="Nets" color="2" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="92" name="Busses" color="1" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="93" name="Pins" color="2" fill="1" visible="no" active="yes"/\>
+         *     \<layer number="94" name="Symbols" color="4" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="95" name="Names" color="7" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="96" name="Values" color="7" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="97" name="Info" color="7" fill="1" visible="yes" active="yes"/\>
+         *     \<layer number="98" name="Guide" color="6" fill="1" visible="yes" active="yes"/\>
+         * \</layers\>
          */
 
         switch ( elayer->number)
@@ -365,7 +374,7 @@ SCH_SHEET* SCH_IO_EAGLE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aFileName ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( _( "Open canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 
     // Load the document
@@ -453,7 +462,14 @@ SCH_SHEET* SCH_IO_EAGLE::LoadSchematicFile( const wxString& aFileName, SCHEMATIC
         adapter->LoadOne( getLibName() );
     }
 
-    m_eagleDoc = std::make_unique<EAGLE_DOC>( currentNode, this );
+    try
+    {
+        m_eagleDoc = std::make_unique<EAGLE_DOC>( currentNode, this );
+    }
+    catch( const XML_PARSER_ERROR& exc )
+    {
+        THROW_IO_ERROR( exc.what() );
+    }
 
     // If the attribute is found, store the Eagle version;
     // otherwise, store the dummy "0.0" version.
@@ -569,7 +585,7 @@ void SCH_IO_EAGLE::ensureLoadedLibrary( const wxString& aLibraryPath )
         m_progressReporter->Report( wxString::Format( _( "Loading %s..." ), aLibraryPath ) );
 
         if( !m_progressReporter->KeepRefreshing() )
-            THROW_IO_ERROR( ( "Open canceled by user." ) );
+            THROW_IO_CANCELLED();
     }
 
     // Load the document
@@ -1550,12 +1566,17 @@ void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& a
             // signals, so a global bus label would join same-named buses project-wide where
             // Eagle only had visual grouping; (2) nets inside module instances are scoped
             // by the module's ports, so a global label would punch through the hierarchy.
-            if( segmentCount > 1 || m_netCounts[netName] > 1 )
+            bool joinedByName = segmentCount > 1 || m_netCounts[netName] > 1;
+
+            if( aIsBus || !m_modules.empty() )
             {
-                if( aIsBus || !m_modules.empty() )
+                if( joinedByName )
                     label.reset( new SCH_LABEL );
-                else
-                    label.reset( new SCH_GLOBALLABEL );
+            }
+            else if( joinedByName || !isEagleAutoNetName( netName ) )
+            {
+                // A lone segment is already wired, so only a user-chosen name is worth a label
+                label.reset( new SCH_GLOBALLABEL );
             }
 
             if( label )
@@ -1579,6 +1600,8 @@ void SCH_IO_EAGLE::loadSegments( const std::vector<std::unique_ptr<ESEGMENT>>& a
                         label->SetSpinStyle( SPIN_STYLE::UP );
                 }
 
+                // adjustNetLabels() moves the label off a crossing wire so it does not join another net
+                segDesc.labels.push_back( label.get() );
                 screen->Append( label.release() );
             }
         }
@@ -1886,7 +1909,7 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
     {
         Report( wxString::Format( wxS( "Eagle library '%s' not found while looking up symbol for "
                                        "deviceset '%s', device '%s', and gate '%s." ),
-                                  libName, epart->deviceset, epart->device, aInstance->gate ) );
+                                  libName, epart->deviceset, epart->device, aInstance->gate ), RPT_SEVERITY_WARNING );
         return;
     }
 
@@ -1896,7 +1919,7 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
     {
         Report( wxString::Format( wxS( "Symbol not found for deviceset '%s', device '%s', and "
                                        "gate '%s in library '%s'." ),
-                                  epart->deviceset, epart->device, aInstance->gate, libName ) );
+                                  epart->deviceset, epart->device, aInstance->gate, libName ), RPT_SEVERITY_WARNING );
         return;
     }
 
@@ -2155,7 +2178,8 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
 
             if( eLibIt == m_eagleDoc->drawing->schematic->libraries.end() )
             {
-                Report( wxString::Format( wxS( "Library '%s' not found in schematic." ), epart->library ) );
+                Report( wxString::Format( wxS( "Library '%s' not found in schematic." ), epart->library ),
+                        RPT_SEVERITY_WARNING );
                 continue;
             }
 
@@ -2165,7 +2189,7 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
             {
                 Report( wxString::Format( wxS( "Device set '%s' not found in library '%s'." ),
                                           epart->deviceset,
-                                          epart->library ) );
+                                          epart->library ), RPT_SEVERITY_WARNING );
                 continue;
             }
 
@@ -2176,7 +2200,7 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
                 Report( wxString::Format( wxS( "Device '%s' not found in device set '%s' in library '%s'." ),
                                           epart->device,
                                           epart->deviceset,
-                                          epart->library ) );
+                                          epart->library ), RPT_SEVERITY_WARNING );
                 continue;
             }
 
@@ -2189,7 +2213,7 @@ void SCH_IO_EAGLE::loadInstance( const std::unique_ptr<EINSTANCE>& aInstance,
                                           variant->technology.value(),
                                           epart->device,
                                           epart->deviceset,
-                                          epart->library ) );
+                                          epart->library ), RPT_SEVERITY_WARNING );
                 continue;
             }
 
@@ -2285,7 +2309,7 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
                 {
                     Report( wxString::Format( wxS( "Eagle symbol '%s' not found in library '%s'." ),
                                               egate->symbol,
-                                              aLibrary->GetName() ) );
+                                              aLibrary->GetName() ), RPT_SEVERITY_WARNING );
                     continue;
                 }
 
@@ -2416,22 +2440,39 @@ EAGLE_LIBRARY* SCH_IO_EAGLE::loadLibrary( const ELIBRARY* aLibrary, EAGLE_LIBRAR
                     std::map<std::string, UTF8> properties;
                     properties.emplace( SCH_IO_KICAD_SEXPR::PropBuffering, wxEmptyString );
 
-                    LIB_SYMBOL* parentSymbol = new LIB_SYMBOL( *libSymbol );
-                    m_pi->SaveSymbol( getLibFileName().GetFullPath(), parentSymbol, &properties );
 
-                    for( std::unique_ptr<LIB_SYMBOL>& symbol : derivedSymbols )
+                    std::unique_ptr<LIB_SYMBOL> parentSymbol = std::make_unique<LIB_SYMBOL>( *libSymbol );
+
+                    m_pi->SaveSymbol( getLibFileName().GetFullPath(), std::move( parentSymbol ),
+                                      &properties );
+
+                    // The plugin cache owns the parent symbol after the save, we cannot use it
+                    // safely after handing it to the plugin.
+                    // Borrow the parent symbol from the plugin cache.
+                    LIB_SYMBOL* parent = m_pi->LoadSymbol( getLibFileName().GetFullPath(), libSymbol->GetName() );
+
+                    if( !parent )
                     {
-                        if( m_pi->LoadSymbol( getLibFileName().GetFullPath(), symbol->GetName() ) )
+                        Report( wxString::Format( _( "Could not reload saved symbol '%s'" ),
+                                                  UnescapeString( libSymbol->GetName() ) ),
+                                RPT_SEVERITY_ERROR );
+                    }
+                    else
+                    {
+                        for( std::unique_ptr<LIB_SYMBOL>& symbol : derivedSymbols )
                         {
-                            wxString tmp = aEagleLibrary->name + wxT( "_" ) + symbol->GetName();
-                            tmp = EscapeString( tmp, CTX_LIBID );
-                            symbol->SetName( tmp );
+                            if( m_pi->LoadSymbol( getLibFileName().GetFullPath(), symbol->GetName() ) )
+                            {
+                                wxString tmp = aEagleLibrary->name + wxT( "_" ) + symbol->GetName();
+                                tmp = EscapeString( tmp, CTX_LIBID );
+                                symbol->SetName( tmp );
+                            }
+
+                            std::unique_ptr<LIB_SYMBOL> derivedSymbol = std::make_unique<LIB_SYMBOL>( *symbol );
+
+                            derivedSymbol->SetParent( parent );
+                            m_pi->SaveSymbol( getLibFileName().GetFullPath(), std::move( derivedSymbol ), &properties );
                         }
-
-                        LIB_SYMBOL* derivedSymbol = new LIB_SYMBOL( *symbol );
-
-                        derivedSymbol->SetParent( parentSymbol );
-                        m_pi->SaveSymbol( getLibFileName().GetFullPath(), derivedSymbol, &properties );
                     }
                 }
                 catch(...)

@@ -123,6 +123,7 @@ bool DESIGN_BLOCK_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileP
 
     wxArrayString dbNames;
     wxFileName    newFileName( aNewFilePath );
+    wxString      newLibName = LIB_ID::FixIllegalChars( newFileName.GetName(), true ).wx_str();
 
     if( newFileName.HasExt() )
     {
@@ -142,8 +143,9 @@ bool DESIGN_BLOCK_IO_MGR::ConvertLibrary( std::map<std::string, UTF8>* aOldFileP
 
         for( const wxString& dbName : dbNames )
         {
-            std::unique_ptr<const DESIGN_BLOCK> db( oldFilePI->GetEnumeratedDesignBlock( aOldFilePath, dbName,
-                                                                                         aOldFileProps ) );
+            std::unique_ptr<DESIGN_BLOCK> db(
+                    oldFilePI->DesignBlockLoad( aOldFilePath, dbName, false, aOldFileProps ) );
+            db->SetLibId( LIB_ID( newLibName, dbName ) );
             kicadPI->DesignBlockSave( aNewFilePath, db.get() );
         }
     }
@@ -238,7 +240,7 @@ bool DESIGN_BLOCK_IO::DeleteLibrary( const wxString&                    aLibrary
         {
             wxFileName tmp = dirs[i];
 
-            if( tmp.GetExt() != FILEEXT::KiCadDesignBlockLibPathExtension )
+            if( tmp.GetExt() != FILEEXT::KiCadDesignBlockPathExtension )
             {
                 THROW_IO_ERRORF( _( "Unexpected folder '%s' found in library path '%s'." ),
                                  dirs[i].GetData(),
@@ -284,7 +286,7 @@ void DESIGN_BLOCK_IO::DesignBlockEnumerate( wxArrayString&  aDesignBlockNames,
 
     while( cont )
     {
-        aDesignBlockNames.Add( dirname.Before( wxT( '.' ) ) );
+        aDesignBlockNames.Add( dirname.BeforeLast( wxT( '.' ) ) );
         cont = dir.GetNext( &dirname );
     }
 }

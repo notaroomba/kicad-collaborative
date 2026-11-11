@@ -42,6 +42,29 @@ namespace S3D
     SGLIB_API void GetLibVersion( unsigned char* Major, unsigned char* Minor,
                                   unsigned char* Patch, unsigned char* Revision ) noexcept;
 
+    /**
+     * Serialize parser and scene-name operations.
+     *
+     * Ordinary callers use MODEL_IMPORT_LOCK rather than these raw entry points.  A caller
+     * performing a ResetNodeIndex/RenameNodes/write sequence must hold this recursive lock
+     * across the entire sequence.
+     */
+    SGLIB_API void LockModelImport() noexcept;
+    SGLIB_API void UnlockModelImport() noexcept;
+
+    /**
+     * Scoped holder for the recursive model import lock.
+     */
+    class MODEL_IMPORT_LOCK
+    {
+    public:
+        MODEL_IMPORT_LOCK() noexcept { LockModelImport(); }
+        ~MODEL_IMPORT_LOCK() { UnlockModelImport(); }
+
+        MODEL_IMPORT_LOCK( const MODEL_IMPORT_LOCK& ) = delete;
+        MODEL_IMPORT_LOCK& operator=( const MODEL_IMPORT_LOCK& ) = delete;
+    };
+
     // functions to extract information from SGNODE pointers
     SGLIB_API S3D::SGTYPES GetSGNodeType( SGNODE* aNode );
     SGLIB_API SGNODE* GetSGNodeParent( SGNODE* aNode );
@@ -60,21 +83,25 @@ namespace S3D
      * @param aFileName is the name of the file to write
      * @param overwrite must be set to true to overwrite an existing file
      * @param aNode is any node within the node tree which is to be written
+     * @param aPluginInfo is the string that describes the plugin.
      * @return true on success
      */
     SGLIB_API bool WriteCache( const char* aFileName, bool overwrite, SGNODE* aNode,
-        const char* aPluginInfo );
+                               const char* aPluginInfo );
 
     /**
      * Read a binary cache file and creates an SGNODE tree.
      *
-     * @param aFileName is the name of the binary cache file to be read
+     * @param aFileName is the name of the binary cache file to be read.
+     * @param aPluginMgr is the plugin manager.
+     * @param aTagCheck is a callback function to check tags.
+     *
      * @return NULL on failure, on success a pointer to the top level SCENEGRAPH node;
      * if desired this node can be associated with an IFSG_TRANSFORM wrapper via
      * the IFSG_TRANSFORM::Attach() function.
      */
     SGLIB_API SGNODE* ReadCache( const char* aFileName, void* aPluginMgr,
-        bool (*aTagCheck)( const char*, void* ) );
+                                 bool (*aTagCheck)( const char*, void* ) );
 
     /**
      * Write out the given node and its subnodes to a VRML2 file.
@@ -83,10 +110,12 @@ namespace S3D
      * @param overwrite should be set to true to overwrite an existing VRML file
      * @param aTopNode is a pointer to a SCENEGRAPH object representing the VRML scene
      * @param reuse should be set to true to make use of VRML DEF/USE features
+     * @param renameNodes is the flag to allow or prevent node renaming.
+     *
      * @return true on success
      */
     SGLIB_API bool WriteVRML( const char* filename, bool overwrite, SGNODE* aTopNode,
-                    bool reuse, bool renameNodes );
+                              bool reuse, bool renameNodes );
 
     // NOTE: The following functions are used in combination to create a VRML
     // assembly which may use various instances of each SG* representation of a module.
@@ -175,6 +204,6 @@ namespace S3D
      * Create and initialize an #SMESH structure.
      */
     SGLIB_API void Init3DMesh( SMESH& aMesh );
-}
+} // namespace S3D
 
 #endif  // IFSG_API_H

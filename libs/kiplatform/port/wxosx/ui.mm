@@ -23,6 +23,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <wx/dialog.h>
+#include <wx/display.h>
 #include <wx/nonownedwnd.h>
 #include <wx/toplevel.h>
 #include <wx/button.h>
@@ -72,6 +73,12 @@ void KIPLATFORM::UI::GetInfoBarColours( wxColour& aFGColour, wxColour& aBGColour
         aBGColour = wxColour( 28, 27, 20 );
     else
         aBGColour = wxColour( 255, 249, 189 );
+}
+
+
+wxWindow* KIPLATFORM::UI::CreateCanvasOverlay( wxWindow* aCanvas )
+{
+    return nullptr;
 }
 
 
@@ -185,6 +192,22 @@ double KIPLATFORM::UI::GetContentScaleFactor( const wxWindow* aWindow )
 }
 
 
+double KIPLATFORM::UI::GetDisplayRefreshRate( const wxWindow* aWindow )
+{
+    NSView*   view = (NSView*) aWindow->GetHandle();
+    NSScreen* screen = view.window.screen;
+
+    if( !screen )
+        return 0.0;
+
+    if( @available( macOS 12.0, * ) )
+        return static_cast<double>( screen.maximumFramesPerSecond );
+
+    // Built-in panels report 0 here
+    return wxDisplay( aWindow ).GetCurrentMode().refresh;
+}
+
+
 wxSize KIPLATFORM::UI::GetUnobscuredSize( const wxWindow* aWindow )
 {
     return wxSize( aWindow->GetSize().GetX() - wxSystemSettings::GetMetric( wxSYS_VSCROLL_X ),
@@ -199,6 +222,12 @@ void KIPLATFORM::UI::SetOverlayScrolling( const wxWindow* aWindow, bool overlay 
 
 
 bool KIPLATFORM::UI::AllowIconsInMenus()
+{
+    return true;
+}
+
+
+bool KIPLATFORM::UI::SupportsKeyState()
 {
     return true;
 }
@@ -282,4 +311,30 @@ void KIPLATFORM::UI::CancelPendingScroll( wxDataViewCtrl* aCtrl )
 void KIPLATFORM::UI::SetWMClass( wxWindow* aWindow, const wxString& aClass )
 {
     // Not applicable on macOS; the bundle identifier provides the application identity.
+}
+
+
+void KIPLATFORM::UI::GetNativeWindowHandles( wxWindow* aWindow, void** aHandle, void** aDisplay,
+                                             int* aDisplayType )
+{
+    *aHandle = nullptr;
+    *aDisplay = nullptr;
+
+    if( aDisplayType )
+        *aDisplayType = NATIVE_DISPLAY_TYPE::DISPLAY_COCOA;
+
+    if( aWindow )
+        *aHandle = aWindow->GetHandle();
+}
+
+
+void KIPLATFORM::UI::PrepareForExternalRendering( wxWindow* aWindow )
+{
+    // macOS composites Metal layers natively
+}
+
+
+void KIPLATFORM::UI::KeepAboveExternalRendering( wxWindow* aChild )
+{
+    // Child views are composited above the Metal layer of their parent
 }

@@ -22,6 +22,7 @@
 #include <pgm_base.h>
 #include <api/common/commands/cross_probe_commands.pb.h>
 #include <api/cross_probe_client.h>
+#include <api/api_utils.h>
 #include <bitmaps.h>
 #include <confirm.h>
 #include <footprint_library_adapter.h>
@@ -948,8 +949,10 @@ void CVPCB_MAINFRAME::SendComponentSelectionToSch( bool aClearSelectionOnly )
     }
     else
     {
-        std::string payload = sync.SerializeAsString();
-        Kiway().ExpressMail( FRAME_SCH, MAIL_SELECTION, payload, this );
+        std::string payload;
+
+        if( kiapi::common::PackKiwayApiMessage( sync, payload ) )
+            Kiway().ExpressMail( FRAME_SCH, MAIL_SELECTION, payload, this );
     }
 }
 
@@ -1013,7 +1016,7 @@ void CVPCB_MAINFRAME::BuildLibrariesList()
     {
         bool operator()( const wxString& lhs, const wxString& rhs ) const
         {
-            return StrNumCmp( lhs, rhs, true ) < 0;
+            return StrNumCmp( lhs, rhs, CMP_T::IGNORE_CASE ) < 0;
         }
     };
 

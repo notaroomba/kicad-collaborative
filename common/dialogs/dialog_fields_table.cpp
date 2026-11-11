@@ -60,6 +60,29 @@
 
 namespace
 {
+template <typename PRESET>
+int findPresetIndexByPointer( const wxChoice* aChoice, const PRESET* aPreset )
+{
+    for( unsigned i = 0; i < aChoice->GetCount(); ++i )
+    {
+        if( aChoice->GetClientData( i ) == static_cast<const void*>( aPreset ) )
+            return static_cast<int>( i );
+    }
+
+    return wxNOT_FOUND;
+}
+
+
+template <typename PRESET>
+int findPresetIndexByName( const wxChoice* aChoice, const std::map<wxString, PRESET>& aPresets,
+                           const wxString& aName )
+{
+    auto presetIt = aPresets.find( aName );
+
+    return presetIt == aPresets.end() ? wxNOT_FOUND : findPresetIndexByPointer( aChoice, &presetIt->second );
+}
+
+
 enum
 {
     MYID_REVERT_ROW = GRIDTRICKS_FIRST_CLIENT_ID,
@@ -119,6 +142,79 @@ void FIELDS_TABLE_GRID_TRICKS::showPopupMenu( wxMenu& aMenu, wxGridEvent& aEvent
     }
 
     showFieldsTablePopupMenu( aMenu, aEvent );
+}
+
+
+void FIELDS_TABLE_GRID_TRICKS::appendPopupMenuItems( wxMenu& aMenu )
+{
+    if( m_dialog->m_variantListBox->GetCount() < 2 )
+        return;
+
+    // Snapshot the selection before showing the menu, which can change the grid selection.
+    std::vector<wxGridCellCoords> cells;
+    bool                          hasSelection = m_grid->IsSelection();
+
+    if( m_grid->IsEditable() )
+    {
+        for( int row = 0; row < m_grid->GetNumberRows(); ++row )
+        {
+            for( int col = 0; col < m_grid->GetNumberCols(); ++col )
+            {
+                bool selected = hasSelection ? m_grid->IsInSelection( row, col )
+                                             : row == m_grid->GetGridCursorRow() && col == m_grid->GetGridCursorCol();
+
+                if( selected && m_grid->IsColShown( col ) && m_dataModel->CanCopyCellFromVariant( row, col ) )
+                {
+                    cells.emplace_back( row, col );
+                }
+            }
+        }
+    }
+
+    wxMenu* variantsMenu = new wxMenu;
+
+    for( unsigned int i = 0; i < m_dialog->m_variantListBox->GetCount(); ++i )
+    {
+        wxString name = m_dialog->m_variantListBox->GetString( i );
+        wxString variant = name == GetDefaultVariantName() ? wxString() : name;
+        wxString label = name;
+        label.Replace( wxS( "&" ), wxS( "&&" ) );
+
+        wxMenuItem* item = variantsMenu->Append( wxID_ANY, label );
+        item->Enable( !cells.empty() && variant != m_dataModel->GetCurrentVariant() );
+
+        variantsMenu->Bind(
+                wxEVT_COMMAND_MENU_SELECTED,
+                [this, variant, cells]( wxCommandEvent& )
+                {
+                    copyFromVariant( variant, cells );
+                },
+                item->GetId() );
+    }
+
+    aMenu.AppendSeparator();
+    aMenu.AppendSubMenu( variantsMenu, _( "Copy from Variant" ) )->Enable( !cells.empty() );
+}
+
+
+void FIELDS_TABLE_GRID_TRICKS::copyFromVariant( const wxString& aVariant, const std::vector<wxGridCellCoords>& aCells )
+{
+    if( !m_grid->CommitPendingChanges( false ) || aCells.empty() )
+        return;
+
+    for( const wxGridCellCoords& cell : aCells )
+        m_dataModel->CopyCellFromVariant( cell.GetRow(), cell.GetCol(), aVariant );
+
+    if( m_dataModel->IsEdited() )
+        m_dialog->OnModify();
+    else
+        m_dialog->ClearModify();
+
+    // One change event records the entire copy as a single dialog undo step.
+    wxGridEvent event( m_grid->GetId(), wxEVT_GRID_CELL_CHANGED, m_grid, aCells.front().GetRow(),
+                       aCells.front().GetCol() );
+    m_grid->GetEventHandler()->ProcessEvent( event );
+    m_grid->ForceRefresh();
 }
 
 
@@ -231,6 +327,7 @@ DIALOG_FIELDS_TABLE::DIALOG_FIELDS_TABLE( wxWindow* aParent, FIELDS_TABLE_SETTIN
 
     m_filter->SetDescriptiveText( _( "Filter" ) );
 
+    m_expanderWidth = m_grid->GetRowLabelSize();
     m_grid->EnableCursorRowColumnHighlight();
     m_grid->GetGridWindow()->Bind( wxEVT_MOUSEWHEEL, &DIALOG_FIELDS_TABLE::OnGridMouseWheel, this );
 }
@@ -637,14 +734,14 @@ void DIALOG_FIELDS_TABLE::SetupColumnProperties( int aCol )
     if( getDataModel()->ColIsItemIdentifier( aCol ) )
     {
         attr->SetReadOnly();
-        attr->SetRenderer( new GRID_CELL_TEXT_RENDERER() );
+        attr->SetRenderer( new wxGridCellStringRenderer() );
         getDataModel()->SetColAttr( attr, aCol );
     }
     else if( getDataModel()->ColIsReference( aCol ) )
     {
         // Keep this after item identifiers so Reference remains read-only in tables where it
         // identifies the item.
-        attr->SetRenderer( new GRID_CELL_TEXT_RENDERER() );
+        attr->SetRenderer( new wxGridCellStringRenderer() );
         attr->SetEditor( createReferenceEditor() );
         getDataModel()->SetColAttr( attr, aCol );
     }
@@ -680,7 +777,7 @@ void DIALOG_FIELDS_TABLE::SetupColumnProperties( int aCol )
     }
     else
     {
-        attr->SetRenderer( new GRID_CELL_TEXT_RENDERER() );
+        attr->SetRenderer( new wxGridCellStringRenderer() );
         attr->SetEditor( m_grid->GetDefaultEditor() );
         getDataModel()->SetColAttr( attr, aCol );
     }
@@ -689,6 +786,8 @@ void DIALOG_FIELDS_TABLE::SetupColumnProperties( int aCol )
 
 void DIALOG_FIELDS_TABLE::SetupAllColumnProperties()
 {
+    updateExpanderColumn();
+
     wxSize defaultDlgSize = GetDefaultDialogSize();
 
     // Restore column sorting order and widths
@@ -747,6 +846,12 @@ void DIALOG_FIELDS_TABLE::SetupAllColumnProperties()
 }
 
 
+void DIALOG_FIELDS_TABLE::updateExpanderColumn()
+{
+    m_grid->SetRowLabelSize( getDataModel()->GetGroupingEnabled() ? m_grid->FromDIP( m_expanderWidth ) : 0 );
+}
+
+
 void DIALOG_FIELDS_TABLE::setSideBarButtonLook( bool aIsLeftPanelCollapsed )
 {
     // Set bitmap and tooltip according to left panel visibility
@@ -783,22 +888,6 @@ void DIALOG_FIELDS_TABLE::OnSidebarToggle( wxCommandEvent& event )
 }
 
 
-void DIALOG_FIELDS_TABLE::OnTableCellClick( wxGridEvent& event )
-{
-    if( getDataModel()->IsExpanderColumn( event.GetCol() ) )
-    {
-        m_grid->ClearSelection();
-
-        getDataModel()->ExpandCollapseRow( event.GetRow() );
-        m_grid->SetGridCursor( event.GetRow(), event.GetCol() );
-    }
-    else
-    {
-        event.Skip();
-    }
-}
-
-
 void DIALOG_FIELDS_TABLE::OnTableValueChanged( wxGridEvent& aEvent )
 {
     m_grid->ForceRefresh();
@@ -809,6 +898,40 @@ void DIALOG_FIELDS_TABLE::OnTableColSize( wxGridSizeEvent& aEvent )
 {
     aEvent.Skip();
 
+    m_grid->ForceRefresh();
+}
+
+
+void DIALOG_FIELDS_TABLE::OnTableLabelClick( wxGridEvent& aEvent )
+{
+    int row = aEvent.GetRow();
+
+    // Column headers and the corner retain their normal sorting/selection behavior.
+    if( aEvent.GetCol() != -1 || row < 0 || row >= getDataModel()->GetNumberRows() )
+    {
+        aEvent.Skip();
+        return;
+    }
+
+    ROW_STATE state = getDataModel()->GetRowState( row );
+
+    if( !IsRowCollapsed( state ) && !IsRowExpanded( state ) )
+    {
+        aEvent.Skip();
+        return;
+    }
+
+    if( !m_grid->CommitPendingChanges() )
+        return;
+
+    int col = m_grid->GetGridCursorCol();
+    m_grid->ClearSelection();
+    getDataModel()->ExpandCollapseRow( row );
+
+    if( col >= 0 && col < m_grid->GetNumberCols() )
+        m_grid->SetGridCursor( row, col );
+
+    // Refresh the parent arrow as well as the inserted/deleted child rows.
     m_grid->ForceRefresh();
 }
 
@@ -839,8 +962,8 @@ void DIALOG_FIELDS_TABLE::OnSizeViewControlsGrid( wxSizeEvent& event )
     int             groupByColWidth = KIUI::GetTextSize( groupByColLabel, m_viewControlsGrid ).x + COLUMN_MARGIN;
     int             remainingWidth = m_viewControlsGrid->GetSize().GetX() - showColWidth - groupByColWidth;
 
-    m_viewControlsGrid->SetColSize( showColWidth, SHOW_FIELD_COLUMN );
-    m_viewControlsGrid->SetColSize( groupByColWidth, GROUP_BY_COLUMN );
+    m_viewControlsGrid->SetColSize( SHOW_FIELD_COLUMN, showColWidth );
+    m_viewControlsGrid->SetColSize( GROUP_BY_COLUMN, groupByColWidth );
 
     if( m_viewControlsGrid->IsColShown( DISPLAY_NAME_COLUMN ) && m_viewControlsGrid->IsColShown( LABEL_COLUMN ) )
     {
@@ -995,6 +1118,17 @@ void DIALOG_FIELDS_TABLE::OnRemoveField( wxCommandEvent& aEvent )
                     }
                 }
 
+                wxString fieldName = m_viewControlsDataModel->GetUntranslatedFieldName( row );
+                int      col = getDataModel()->GetFieldNameCol( fieldName );
+
+                if( col != -1 && getDataModel()->ColIsItemIdentifier( col ) )
+                {
+                    DisplayError( this, wxString::Format( _( "The '%s' field cannot be removed." ),
+                                                          m_viewControlsDataModel->GetValue(
+                                                                  row, DISPLAY_NAME_COLUMN ) ) );
+                    return false;
+                }
+
                 return IsOK( this, wxString::Format( _( "Are you sure you want to remove the field '%s'?" ),
                                                      m_viewControlsDataModel->GetValue( row, DISPLAY_NAME_COLUMN ) ) );
             },
@@ -1043,6 +1177,13 @@ void DIALOG_FIELDS_TABLE::OnRenameField( wxCommandEvent& aEvent )
     int col = getDataModel()->GetFieldNameCol( fieldName );
     wxCHECK_RET( col != -1, wxS( "Existing field name missing from data model" ) );
 
+    if( getDataModel()->ColIsItemIdentifier( col ) )
+    {
+        DisplayError( this, wxString::Format( _( "The '%s' field cannot be renamed." ),
+                                              m_viewControlsDataModel->GetValue( row, DISPLAY_NAME_COLUMN ) ) );
+        return;
+    }
+
     wxTextEntryDialog dlg( this, _( "New field name:" ), _( "Rename Field" ), fieldName );
 
     if( dlg.ShowModal() != wxID_OK )
@@ -1053,6 +1194,12 @@ void DIALOG_FIELDS_TABLE::OnRenameField( wxCommandEvent& aEvent )
     // No change, no-op
     if( newFieldName == fieldName )
         return;
+
+    if( newFieldName.IsEmpty() )
+    {
+        DisplayError( this, _( "Field must have a name." ) );
+        return;
+    }
 
     // New field name already exists
     if( getDataModel()->GetFieldNameCol( newFieldName ) != -1 )
@@ -1109,6 +1256,7 @@ void DIALOG_FIELDS_TABLE::OnFilterScope( wxCommandEvent& aEvent )
 void DIALOG_FIELDS_TABLE::OnGroupSymbolsToggled( wxCommandEvent& aEvent )
 {
     getDataModel()->SetGroupingEnabled( m_groupSymbolsBox->GetValue() );
+    updateExpanderColumn();
     getDataModel()->RebuildRows();
     m_grid->ForceRefresh();
 
@@ -1182,9 +1330,8 @@ void DIALOG_FIELDS_TABLE::OnColMove( wxGridEvent& aEvent )
                 SetupAllColumnProperties();
 
                 m_grid->ForceRefresh();
+                syncBomPresetSelection();
             } );
-
-    syncBomPresetSelection();
 }
 
 
@@ -1255,8 +1402,7 @@ void DIALOG_FIELDS_TABLE::OnPreviewRefresh( wxCommandEvent& aEvent )
 void DIALOG_FIELDS_TABLE::OnOutputFileBrowseClicked( wxCommandEvent& aEvent )
 {
     // Build the absolute path of current output directory to preselect it in the file browser.
-    wxString path = ExpandEnvVarSubstitutions( m_outputFileName->GetValue(), &Prj() );
-    path = Prj().AbsolutePath( path );
+    wxString path = ResolveProjectPath( m_outputFileName->GetValue(), &Prj() );
 
     // Calculate the export filename
     wxFileName fn( Prj().AbsolutePath( m_parentFrame->GetCurrentFileName() ) );
@@ -1326,7 +1472,7 @@ void DIALOG_FIELDS_TABLE::OnExport( wxCommandEvent& aEvent )
         m_outputFileName->SetValue( path );
     }
 
-    path = ExpandTextVars( NormalizeFilePathForTextVars( path ), &textResolver );
+    path = ExpandTextVars( NormalizeFilePathForTextVars( path ), &textResolver, INTERNAL );
     path = ExpandEnvVarSubstitutions( path, &Prj() );
 
     wxFileName outputFile = wxFileName::FileName( path );
@@ -1591,7 +1737,8 @@ void DIALOG_FIELDS_TABLE::rebuildBomPresetsWidget()
 
     for( const auto& [presetName, preset] : m_bomPresets )
     {
-        m_cbBomPresets->Append( wxGetTranslation( presetName ), (void*) &preset );
+        wxString label = preset.readOnly ? wxGetTranslation( presetName ) : presetName;
+        m_cbBomPresets->Append( label, (void*) &preset );
 
         if( presetName == BOM_PRESET::DefaultEditing().name )
             default_idx = idx;
@@ -1659,13 +1806,7 @@ void DIALOG_FIELDS_TABLE::syncBomPresetSelection()
                     return false;
                 }
 
-                // We should compare preset.name and current.name.  Unfortunately current.name is
-                // empty because m_dataModel->GetBomSettings() does not store the .name member.
-                // So use sortField member as a (not very efficient) auxiliary filter.
-                // As a further complication, sortField can be translated in m_bomPresets list, so
-                // current.sortField needs to be translated.
-                // Probably this not efficient and error prone test should be removed (JPC).
-                if( preset.sortField != wxGetTranslation( current.sortField ) )
+                if( preset.sortField != current.sortField )
                     return false;
 
                 // Only compare shown or grouped fields
@@ -1688,11 +1829,7 @@ void DIALOG_FIELDS_TABLE::syncBomPresetSelection()
 
     if( it != m_bomPresets.end() )
     {
-        // Select the right m_cbBomPresets item.
-        // but these items are translated if they are predefined items.
-        bool     do_translate = it->second.readOnly;
-        wxString text = do_translate ? wxGetTranslation( it->first ) : it->first;
-        m_cbBomPresets->SetStringSelection( text );
+        m_cbBomPresets->SetSelection( findPresetIndexByPointer( m_cbBomPresets, &it->second ) );
     }
     else
     {
@@ -1705,23 +1842,7 @@ void DIALOG_FIELDS_TABLE::syncBomPresetSelection()
 
 void DIALOG_FIELDS_TABLE::updateBomPresetSelection( const wxString& aName )
 {
-    // Look at m_userBomPresets to know if aName is a read only preset, or a user preset.
-    // Read-only presets have translated names in UI, so we have to use a translated name
-    // in UI selection.  But for a user preset name we search for the untranslated aName.
-    wxString ui_label = aName;
-
-    for( const auto& [presetName, preset] : m_bomPresets )
-    {
-        if( presetName == aName )
-        {
-            if( preset.readOnly == true )
-                ui_label = wxGetTranslation( aName );
-
-            break;
-        }
-    }
-
-    int idx = m_cbBomPresets->FindString( ui_label );
+    int idx = findPresetIndexByName( m_cbBomPresets, m_bomPresets, aName );
 
     if( idx >= 0 && m_cbBomPresets->GetSelection() != idx )
     {
@@ -1743,10 +1864,12 @@ void DIALOG_FIELDS_TABLE::onBomPresetChanged( wxCommandEvent& aEvent )
     auto resetSelection =
             [&]()
             {
-                if( m_currentBomPreset )
-                    m_cbBomPresets->SetStringSelection( m_currentBomPreset->name );
-                else
+                int presetIndex = findPresetIndexByPointer( m_cbBomPresets, m_currentBomPreset );
+
+                if( presetIndex == wxNOT_FOUND )
                     m_cbBomPresets->SetSelection( presetDashDashDashIndex( m_cbBomPresets->GetCount() ) );
+                else
+                    m_cbBomPresets->SetSelection( presetIndex );
             };
 
     if( index == presetDashDashDashIndex( count ) )
@@ -1806,7 +1929,7 @@ void DIALOG_FIELDS_TABLE::onBomPresetChanged( wxCommandEvent& aEvent )
             *preset = getDataModelBomPreset();
             preset->name = name;
 
-            index = m_cbBomPresets->FindString( name );
+            index = findPresetIndexByPointer( m_cbBomPresets, preset );
 
             if( m_bomPresetMRU.Index( name ) != wxNOT_FOUND )
                 m_bomPresetMRU.Remove( name );
@@ -1842,14 +1965,17 @@ void DIALOG_FIELDS_TABLE::onBomPresetChanged( wxCommandEvent& aEvent )
         if( dlg.ShowModal() == wxID_OK )
         {
             wxString presetName = dlg.GetTextSelection();
-            int      idx = m_cbBomPresets->FindString( presetName );
+            auto     presetIt = m_bomPresets.find( presetName );
+            int      idx = findPresetIndexByName( m_cbBomPresets, m_bomPresets, presetName );
 
-            if( idx != wxNOT_FOUND )
+            if( idx != wxNOT_FOUND && presetIt != m_bomPresets.end() )
             {
-                m_bomPresets.erase( presetName );
+                if( m_lastSelectedBomPreset == &presetIt->second )
+                    m_lastSelectedBomPreset = nullptr;
 
-                m_cbBomPresets->Delete( idx );
                 m_currentBomPreset = nullptr;
+                m_cbBomPresets->Delete( idx );
+                m_bomPresets.erase( presetIt );
             }
 
             if( m_bomPresetMRU.Index( presetName ) != wxNOT_FOUND )
@@ -1886,7 +2012,16 @@ BOM_FMT_PRESET DIALOG_FIELDS_TABLE::GetCurrentBomFmtSettings()
 {
     BOM_FMT_PRESET current;
 
-    current.name = m_cbBomFmtPresets->GetStringSelection();
+    int selection = m_cbBomFmtPresets->GetSelection();
+
+    if( selection != wxNOT_FOUND )
+    {
+        if( auto* preset = static_cast<BOM_FMT_PRESET*>( m_cbBomFmtPresets->GetClientData( selection ) ) )
+            current.name = preset->name;
+        else
+            current.name = m_cbBomFmtPresets->GetString( selection );
+    }
+
     current.fieldDelimiter = m_textFieldDelimiter->GetValue();
     current.stringDelimiter = m_textStringDelimiter->GetValue();
     current.refDelimiter = m_textRefDelimiter->GetValue();
@@ -1998,7 +2133,8 @@ void DIALOG_FIELDS_TABLE::rebuildBomFmtPresetsWidget()
 
     for( const auto& [presetName, preset] : m_bomFmtPresets )
     {
-        m_cbBomFmtPresets->Append( wxGetTranslation( presetName ), (void*) &preset );
+        wxString label = preset.readOnly ? wxGetTranslation( presetName ) : presetName;
+        m_cbBomFmtPresets->Append( label, (void*) &preset );
 
         if( presetName == BOM_FMT_PRESET::CSV().name )
             default_idx = idx;
@@ -2040,12 +2176,7 @@ void DIALOG_FIELDS_TABLE::syncBomFmtPresetSelection()
 
     if( it != m_bomFmtPresets.end() )
     {
-        // Select the right m_cbBomFmtPresets item.
-        // but these items are translated if they are predefined items.
-        bool     do_translate = it->second.readOnly;
-        wxString text = do_translate ? wxGetTranslation( it->first ) : it->first;
-
-        m_cbBomFmtPresets->SetStringSelection( text );
+        m_cbBomFmtPresets->SetSelection( findPresetIndexByPointer( m_cbBomFmtPresets, &it->second ) );
     }
     else
     {
@@ -2059,23 +2190,7 @@ void DIALOG_FIELDS_TABLE::syncBomFmtPresetSelection()
 
 void DIALOG_FIELDS_TABLE::updateBomFmtPresetSelection( const wxString& aName )
 {
-    // look at m_userBomFmtPresets to know if aName is a read only preset, or a user preset.
-    // Read only presets have translated names in UI, so we have to use a translated name in UI selection.
-    // But for a user preset name we should search for aName (not translated)
-    wxString ui_label = aName;
-
-    for( const auto& [presetName, preset] : m_bomFmtPresets )
-    {
-        if( presetName == aName )
-        {
-            if( preset.readOnly )
-                ui_label = wxGetTranslation( aName );
-
-            break;
-        }
-    }
-
-    int idx = m_cbBomFmtPresets->FindString( ui_label );
+    int idx = findPresetIndexByName( m_cbBomFmtPresets, m_bomFmtPresets, aName );
 
     if( idx >= 0 && m_cbBomFmtPresets->GetSelection() != idx )
     {
@@ -2097,10 +2212,12 @@ void DIALOG_FIELDS_TABLE::onBomFmtPresetChanged( wxCommandEvent& aEvent )
     auto resetSelection =
             [&]()
             {
-                if( m_currentBomFmtPreset )
-                    m_cbBomFmtPresets->SetStringSelection( m_currentBomFmtPreset->name );
-                else
+                int presetIndex = findPresetIndexByPointer( m_cbBomFmtPresets, m_currentBomFmtPreset );
+
+                if( presetIndex == wxNOT_FOUND )
                     m_cbBomFmtPresets->SetSelection( presetDashDashDashIndex( m_cbBomFmtPresets->GetCount() ) );
+                else
+                    m_cbBomFmtPresets->SetSelection( presetIndex );
             };
 
     if( index == presetDashDashDashIndex( count ) )
@@ -2160,7 +2277,7 @@ void DIALOG_FIELDS_TABLE::onBomFmtPresetChanged( wxCommandEvent& aEvent )
             *preset = GetCurrentBomFmtSettings();
             preset->name = name;
 
-            index = m_cbBomFmtPresets->FindString( name );
+            index = findPresetIndexByPointer( m_cbBomFmtPresets, preset );
 
             if( m_bomFmtPresetMRU.Index( name ) != wxNOT_FOUND )
                 m_bomFmtPresetMRU.Remove( name );
@@ -2196,14 +2313,17 @@ void DIALOG_FIELDS_TABLE::onBomFmtPresetChanged( wxCommandEvent& aEvent )
         if( dlg.ShowModal() == wxID_OK )
         {
             wxString presetName = dlg.GetTextSelection();
-            int      idx = m_cbBomFmtPresets->FindString( presetName );
+            auto     presetIt = m_bomFmtPresets.find( presetName );
+            int      idx = findPresetIndexByName( m_cbBomFmtPresets, m_bomFmtPresets, presetName );
 
-            if( idx != wxNOT_FOUND )
+            if( idx != wxNOT_FOUND && presetIt != m_bomFmtPresets.end() )
             {
-                m_bomFmtPresets.erase( presetName );
+                if( m_lastSelectedBomFmtPreset == &presetIt->second )
+                    m_lastSelectedBomFmtPreset = nullptr;
 
-                m_cbBomFmtPresets->Delete( idx );
                 m_currentBomFmtPreset = nullptr;
+                m_cbBomFmtPresets->Delete( idx );
+                m_bomFmtPresets.erase( presetIt );
             }
 
             if( m_bomFmtPresetMRU.Index( presetName ) != wxNOT_FOUND )

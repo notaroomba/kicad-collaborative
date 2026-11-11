@@ -17,8 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-#ifndef EDA_ANGLE_H
-#define EDA_ANGLE_H
+#pragma once
 
 #include <cassert>
 #include <cmath>
@@ -228,6 +227,8 @@ public:
 
     inline EDA_ANGLE Normalize()
     {
+        m_value = foldToTwoPeriods( m_value, 360.0 );
+
         while( m_value < -0.0 )
             m_value += 360.0;
 
@@ -245,6 +246,8 @@ public:
 
     inline EDA_ANGLE NormalizeNegative()
     {
+        m_value = foldToTwoPeriods( m_value, 360.0 );
+
         while( m_value <= -360.0 )
             m_value += 360.0;
 
@@ -256,6 +259,8 @@ public:
 
     inline EDA_ANGLE Normalize90()
     {
+        m_value = foldToTwoPeriods( m_value, 180.0 );
+
         while( m_value < -90.0 )
             m_value += 180.0;
 
@@ -267,6 +272,8 @@ public:
 
     inline EDA_ANGLE Normalize180()
     {
+        m_value = foldToTwoPeriods( m_value, 360.0 );
+
         while( m_value <= -180.0 )
             m_value += 360.0;
 
@@ -278,6 +285,8 @@ public:
 
     inline EDA_ANGLE Normalize720()
     {
+        m_value = foldToTwoPeriods( m_value, 360.0 );
+
         while( m_value < -360.0 )
             m_value += 360.0;
 
@@ -300,6 +309,30 @@ public:
 
     EDA_ANGLE KeepUpright() const;
 
+    /**
+     * Reflection, over a line with direction @a aAxisAngle, of the turn this angle stores.
+     *
+     * Assuming a y-down coordinate system, the turn is measured anti-clockwise from the
+     * positive x-axis (i.e. the same turn convention as RotatePoint()).
+     *
+     *       /45   |     \ 135
+     *      /___   |      \____
+     *        a    |        a'
+     *             |
+     *             |<- reflection axis, 90 or 270 degrees
+     *
+     * In this case, an angle a = 45 degrees is reflected over the y-axis to become
+     * a' = 135 degrees.
+     *
+     * Reflecting over aAxisAngle gives the same result as reflecting over
+     * aAxisAngle + 180 (or any value modulo 180), so the direction of the axis
+     * does not matter.
+     */
+    [[nodiscard]] EDA_ANGLE Reflect( const EDA_ANGLE& aAxisAngle ) const
+    {
+        return EDA_ANGLE( 2.0 * aAxisAngle.AsDegrees() - AsDegrees(), DEGREES_T );
+    }
+
     [[nodiscard]] EDA_ANGLE Round( int digits ) const
     {
         EDA_ANGLE angle( *this );
@@ -321,6 +354,23 @@ public:
     }
 
 private:
+    /**
+     * Exactly remove whole periods from values beyond two periods, keeping the sign, so the
+     * normalization loops run at most twice.  Repeated subtraction alone never terminates once
+     * the spacing between doubles exceeds the period.  Non-finite values become 0.
+     */
+    static double foldToTwoPeriods( double aValue, double aPeriod )
+    {
+        if( !std::isfinite( aValue ) )
+            return 0.0;
+
+        if( std::abs( aValue ) < 2.0 * aPeriod )
+            return aValue;
+
+        // Exact because |aValue| >= 2 * aPeriod keeps the remainder on a grid no finer than the sum
+        return std::fmod( aValue, aPeriod ) + std::copysign( aPeriod, aValue );
+    }
+
     double  m_value;           ///< value in degrees
 
 };
@@ -428,4 +478,126 @@ static constexpr EDA_ANGLE ANGLE_270{ 270 };
 static constexpr EDA_ANGLE ANGLE_360{ 360 };
 
 
-#endif // EDA_ANGLE_H
+/**
+ * An "orientation", held as an angle constrained to the range [0, 360) degrees.
+ *
+ * This makes sure that orientations are always in their normalized form, which
+ * keeps equality, serialisation and display stable.
+ *
+ * Adding or subtracting EDA_ANGLEs and negation wrap around the [0, 360) range.
+ *
+ * There is no meaningful multiplication: e.g. 45 and 405 are the same orientation, yet their
+ * halves are 22.5 and 202.5. In the same way that there's no such thing as "3 x East".
+ *
+ * Do not use this class for angle magnitudes such as an arc extent or an angular spacing,
+ * because those are not constrained to [0, 360). In particular, arc extent has a meaningful
+ * value of 360 degrees that is distinct from 0.
+ */
+class EDA_ORIENTATION
+{
+public:
+    EDA_ORIENTATION() = default;
+
+    explicit EDA_ORIENTATION( const EDA_ANGLE& aAngle ) { SetAngle( aAngle ); }
+
+    /**
+     * Assign a plain angle, normalising it.
+     */
+    EDA_ORIENTATION& operator=( const EDA_ANGLE& aAngle )
+    {
+        SetAngle( aAngle );
+        return *this;
+    }
+
+    bool operator==( const EDA_ORIENTATION& aOther ) const = default;
+
+    /**
+     * Add an EDA_ANGLE to this orientation, wrapping around the [0, 360) range.
+     */
+    EDA_ORIENTATION operator+( const EDA_ANGLE& aAngle ) const
+    {
+        return EDA_ORIENTATION( m_angle + aAngle );
+    }
+
+    /**
+     * Subtract an EDA_ANGLE from this orientation, wrapping around the [0, 360) range.
+     */
+    EDA_ORIENTATION operator-( const EDA_ANGLE& aAngle ) const
+    {
+        return EDA_ORIENTATION( m_angle - aAngle );
+    }
+
+    EDA_ORIENTATION operator-() const
+    {
+        return EDA_ORIENTATION( -m_angle );
+    }
+
+    /**
+     * The difference of two orientations is a signed rotation amount, not an orientation.
+     *
+     * The sign of the result indicates the direction of the difference of the two orientations.
+     */
+    EDA_ANGLE operator-( const EDA_ORIENTATION& aOther ) const
+    {
+        return m_angle - aOther.m_angle;
+    }
+
+    EDA_ORIENTATION& operator+=( const EDA_ANGLE& aAngle )
+    {
+        SetAngle( m_angle + aAngle );
+        return *this;
+    }
+
+    EDA_ORIENTATION& operator-=( const EDA_ANGLE& aAngle )
+    {
+        SetAngle( m_angle - aAngle );
+        return *this;
+    }
+
+    EDA_ANGLE GetAngle() const { return m_angle; }
+
+    void SetAngle( const EDA_ANGLE& aAngle )
+    {
+        m_angle = aAngle;
+        m_angle.Normalize();
+
+        // Normalize -0 to 0 to avoid -0 in display and serialization.
+        if( m_angle == ANGLE_0 )
+            m_angle = ANGLE_0;
+    }
+
+    /**
+     * This orientation reflected over a line with direction @a aAxisAngle.
+     *
+     * The orientation counterpart of EDA_ANGLE::Reflect() with the normalized
+     * result.
+     */
+    [[nodiscard]] EDA_ORIENTATION Reflect( const EDA_ANGLE& aAxisAngle ) const
+    {
+        return EDA_ORIENTATION( m_angle.Reflect( aAxisAngle ) );
+    }
+
+private:
+    EDA_ANGLE m_angle;
+};
+
+
+// Free forms with the angle on the left, so the mirror-style formulas read as-written
+// (180 - orientation, -orientation).
+inline EDA_ORIENTATION operator+( const EDA_ANGLE& aAngle, const EDA_ORIENTATION& aOrientation )
+{
+    return aOrientation + aAngle;
+}
+
+
+inline EDA_ORIENTATION operator-( const EDA_ANGLE& aAngle, const EDA_ORIENTATION& aOrientation )
+{
+    return EDA_ORIENTATION( aAngle - aOrientation.GetAngle() );
+}
+
+
+inline std::ostream& operator<<( std::ostream& aStream, const EDA_ORIENTATION& aOrientation )
+{
+    // Follow EDA_ANGLE's convention of outputting angles in degrees.
+    return aStream << aOrientation.GetAngle().AsDegrees();
+}

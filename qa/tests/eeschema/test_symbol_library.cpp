@@ -19,8 +19,12 @@
  */
 
 #include <fmt/format.h>
-#include <mock_pgm_base.h>
+
+#include <memory>
 #include <qa_utils/wx_utils/unit_test_utils.h>
+#include <qa_utils/env_var_utils.h>
+
+#include <mock_pgm_base.h>
 #include <pgm_base.h>
 #include "eeschema_test_utils.h"
 
@@ -66,14 +70,11 @@ protected:
     /// Ensure KICAD9_SYMBOL_DIR points at the QA data libraries so the global
     /// sym-lib-table's ${KICAD9_SYMBOL_DIR}/Device.kicad_sym URI resolves.
     /// Only needed by tests that load a global library before any project is open.
-    void EnsureGlobalSymbolDir()
+    std::unique_ptr<KI_TEST::SCOPED_PROCESS_ENV_VAR> EnsureGlobalSymbolDir()
     {
-        if( !wxGetEnv( wxT( "KICAD9_SYMBOL_DIR" ), nullptr ) )
-        {
-            wxString path( KI_TEST::GetTestDataRootDir() );
-            path += wxT( "/libraries" );
-            wxSetEnv( wxT( "KICAD9_SYMBOL_DIR" ), path );
-        }
+        wxString path( KI_TEST::GetTestDataRootDir() );
+        path += wxT( "/libraries" );
+        return std::make_unique<KI_TEST::SCOPED_PROCESS_ENV_VAR>( wxT( "KICAD9_SYMBOL_DIR" ), path );
     }
 };
 
@@ -319,7 +320,7 @@ BOOST_AUTO_TEST_CASE( ProjectReloadPreservesShadowing )
         return;
     }
 
-    EnsureGlobalSymbolDir();
+    std::unique_ptr<KI_TEST::SCOPED_PROCESS_ENV_VAR> scopedSymDirEnvVar = EnsureGlobalSymbolDir();
 
     LIBRARY_MANAGER manager;
 
@@ -386,7 +387,7 @@ BOOST_AUTO_TEST_CASE( ProjectReloadReleasesRemovedShadow )
         return;
     }
 
-    EnsureGlobalSymbolDir();
+    std::unique_ptr<KI_TEST::SCOPED_PROCESS_ENV_VAR> scopedSymDirEnvVar = EnsureGlobalSymbolDir();
 
     LIBRARY_MANAGER manager;
 
@@ -509,32 +510,12 @@ BOOST_AUTO_TEST_CASE( MissingLibraryReportsErrorOnEveryLoad )
 // AsyncLoad skip path deterministically without a network dependency.
 BOOST_AUTO_TEST_CASE( AsyncLoadSkipsDisabledRows )
 {
-    // Restores the env var on scope exit even if an assertion aborts the test.
-    struct SCOPED_ENV
-    {
-        SCOPED_ENV( const wxString& aName, const wxString& aValue ) :
-                m_name( aName ), m_hadPrev( wxGetEnv( aName, &m_prev ) )
-        {
-            wxSetEnv( aName, aValue );
-        }
-
-        ~SCOPED_ENV()
-        {
-            if( m_hadPrev )
-                wxSetEnv( m_name, m_prev );
-            else
-                wxUnsetEnv( m_name );
-        }
-
-        wxString m_name;
-        wxString m_prev;
-        bool     m_hadPrev;
-    };
-
     wxFileName deviceDir( KI_TEST::GetTestDataRootDir(), wxEmptyString );
     deviceDir.AppendDir( "libraries" );
     deviceDir.AppendDir( "test_project" );
-    SCOPED_ENV env( wxT( "QA_ISSUE24855_DIR" ), deviceDir.GetPath() );
+
+    // Inject the resolved test-data path to find the library
+    KI_TEST::SCOPED_PROCESS_ENV_VAR env( wxT( "QA_ISSUE24855_DIR" ), deviceDir.GetPath() );
 
     wxFileName fixtureDir( KI_TEST::GetTestDataRootDir(), wxEmptyString );
     fixtureDir.AppendDir( "libraries" );
@@ -570,6 +551,48 @@ BOOST_AUTO_TEST_CASE( AsyncLoadSkipsDisabledRows )
 
     BOOST_CHECK_MESSAGE( validationRow.IsOk() && validationRow.ErrorDescription().IsEmpty(),
                          "CheckTableRow must not probe a disabled row's backend" );
+}
+
+
+/**
+ * A project row that has never been loaded must shadow a same-named LOADED global library.
+ */
+BOOST_AUTO_TEST_CASE( UnloadedProjectRowShadowsLoadedGlobal )
+{
+    if( !wxGetEnv( wxT( "KICAD_CONFIG_HOME_IS_QA" ), nullptr ) )
+    {
+        BOOST_TEST_MESSAGE( "QA test is running using unknown config home; skipping" );
+        return;
+    }
+
+    std::unique_ptr<KI_TEST::SCOPED_PROCESS_ENV_VAR> scopedSymDirEnvVar = EnsureGlobalSymbolDir();
+
+    LIBRARY_MANAGER manager;
+    SYMBOL_LIBRARY_ADAPTER* adapter = RegisterSymbolAdapter( manager );
+
+    manager.LoadGlobalTables();
+
+    adapter->LoadOne( kDeviceLibNickname );
+    BOOST_REQUIRE( adapter->IsLibraryLoaded( kDeviceLibNickname ) );
+
+    // The project sym-lib-table defines its own Device row that shadows the global one
+    LoadSchematic( GetTestProjectSchPath().GetFullPath() );
+    PROJECT& project = SettingsManager().Prj();
+    manager.LoadProjectTables( project.GetProjectDirectory() );
+
+    BOOST_REQUIRE( adapter->GetRow( kDeviceLibNickname, LIBRARY_TABLE_SCOPE::PROJECT ).has_value() );
+
+    // The project row exists but was never loaded: the global entry must not leak
+    // through as the answer for the shared nickname.
+    BOOST_CHECK_MESSAGE( !adapter->HasLibrary( kDeviceLibNickname ),
+                         "an unloaded project library must shadow a loaded global library "
+                         "of the same nickname" );
+    BOOST_CHECK_MESSAGE( adapter->GetLibraryNames().empty(),
+                         "GetLibraryNames must not list the global library for a nickname "
+                         "shadowed by an unloaded project row" );
+    BOOST_CHECK_MESSAGE( !adapter->GetLibraryDescription( kDeviceLibNickname ).has_value(),
+                         "GetLibraryDescription must not return the global library's "
+                         "description for an unloaded project nickname" );
 }
 
 

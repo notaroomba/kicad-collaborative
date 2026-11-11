@@ -63,12 +63,12 @@ BOOST_AUTO_TEST_CASE( FootprintNamesHaveNoUrnSuffix )
                            "Stale rules sidecar present before load: "
                                    + rulesFn.GetFullPath().ToStdString() );
 
-    PCB_IO_EAGLE eaglePlugin;
-    BOARD*       rawBoard = nullptr;
+    PCB_IO_EAGLE           eaglePlugin;
+    std::unique_ptr<BOARD> board;
 
     try
     {
-        rawBoard = eaglePlugin.LoadBoard( dataPath, nullptr, nullptr );
+        board = eaglePlugin.LoadBoard( dataPath );
     }
     catch( const IO_ERROR& e )
     {
@@ -78,8 +78,6 @@ BOOST_AUTO_TEST_CASE( FootprintNamesHaveNoUrnSuffix )
     {
         BOOST_FAIL( std::string( "Exception loading Eagle board: " ) + e.what() );
     }
-
-    std::unique_ptr<BOARD> board( rawBoard );
 
     BOOST_REQUIRE( board );
 

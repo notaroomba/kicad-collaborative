@@ -18,7 +18,15 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+#include <tool/tool_manager.h>
 #include "symbol_editor_edit_tool.h"
+#include "tl/expected.hpp"
+
+#include <optional>
+#include <wx/buffer.h>
+#include <wx/debug.h>
+#include <wx/mstream.h>
+#include <wx/dcmemory.h>
 
 #include <tool/picker_tool.h>
 #include <tools/sch_selection_tool.h>
@@ -30,6 +38,7 @@
 #include <sch_actions.h>
 #include <increment.h>
 #include <pin_layout_cache.h>
+#include <render_utils.h>
 #include <string_utils.h>
 #include <symbol_edit_frame.h>
 #include <sch_commit.h>
@@ -51,16 +60,11 @@
 #include <math/util.h>      // for KiROUND
 #include <io/kicad/kicad_io_utils.h>
 #include <trace_helpers.h>
-#include <plotters/plotters_pslike.h>
 #include <sch_painter.h>
 #include <sch_plotter.h>
-#include <locale_io.h>
 #include <gal/gal_print.h>
 #include <gal/graphics_abstraction_layer.h>
 #include <zoom_defines.h>
-#include <wx/ffile.h>
-#include <wx/mstream.h>
-#include <wx/dcmemory.h>
 
 
 namespace
@@ -95,89 +99,34 @@ void appendMimeData( std::vector<CLIPBOARD_MIME_DATA>& aMimeData, const wxString
 }
 
 
-bool loadFileToBuffer( const wxString& aFileName, wxMemoryBuffer& aBuffer )
-{
-    wxFFile file( aFileName, wxS( "rb" ) );
-
-    if( !file.IsOpened() )
-        return false;
-
-    wxFileOffset size = file.Length();
-
-    if( size <= 0 )
-        return false;
-
-    void* data = aBuffer.GetWriteBuf( size );
-
-    if( file.Read( data, size ) != static_cast<size_t>( size ) )
-    {
-        aBuffer.UngetWriteBuf( 0 );
-        return false;
-    }
-
-    aBuffer.UngetWriteBuf( size );
-    return true;
-}
-
-
-bool plotSymbolToSvg( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSymbol, const BOX2I& aBBox,
+bool plotSymbolToSvg( SYMBOL_EDIT_FRAME& aFrame, LIB_SYMBOL& aSymbol, const BOX2I& aBBox,
                       int aUnit, int aBodyStyle, wxMemoryBuffer& aBuffer )
 {
-    if( !aSymbol )
-        return false;
-
     SCH_RENDER_SETTINGS renderSettings;
-    renderSettings.LoadColors( aFrame->GetColorSettings() );
-    renderSettings.SetDefaultPenWidth( aFrame->GetRenderSettings()->GetDefaultPenWidth() );
-
-    std::unique_ptr<SVG_PLOTTER> plotter = std::make_unique<SVG_PLOTTER>();
-    plotter->SetRenderSettings( &renderSettings );
-
-    PAGE_INFO pageInfo = aFrame->GetScreen()->GetPageSettings();
-    pageInfo.SetWidthMils( schIUScale.IUToMils( aBBox.GetWidth() ) );
-    pageInfo.SetHeightMils( schIUScale.IUToMils( aBBox.GetHeight() ) );
-
-    plotter->SetPageSettings( pageInfo );
-    plotter->SetColorMode( true );
-
-    VECTOR2I plot_offset = aBBox.GetOrigin();
-    plotter->SetViewport( plot_offset, schIUScale.IU_PER_MILS / 10, 1.0, false );
-    plotter->SetCreator( wxT( "Eeschema-SVG" ) );
+    renderSettings.LoadColors( aFrame.GetColorSettings() );
+    renderSettings.SetDefaultPenWidth( aFrame.GetRenderSettings()->GetDefaultPenWidth() );
 
     wxFileName tempFile( wxFileName::CreateTempFileName( wxS( "kicad_symbol_svg" ) ) );
 
-    if( !plotter->OpenFile( tempFile.GetFullPath() ) )
+    // The bbox is the bounding box of the selected items only, so it is passed in rather than
+    // computed from the whole (partial) symbol.
+    if( !PlotSymbolToSVG( aSymbol, aSymbol, aUnit, aBodyStyle, aBBox, renderSettings, false,
+                          tempFile.GetFullPath() ) )
     {
         wxRemoveFile( tempFile.GetFullPath() );
         return false;
     }
 
-    LOCALE_IO     toggle;
-    SCH_PLOT_OPTS plotOpts;
-
-    plotter->StartPlot( wxT( "1" ) );
-
-    constexpr bool background = true;
-    aSymbol->Plot( plotter.get(), background, plotOpts, aUnit, aBodyStyle, VECTOR2I( 0, 0 ), false );
-    aSymbol->Plot( plotter.get(), !background, plotOpts, aUnit, aBodyStyle, VECTOR2I( 0, 0 ), false );
-    aSymbol->PlotFields( plotter.get(), !background, plotOpts, aUnit, aBodyStyle, VECTOR2I( 0, 0 ), false );
-
-    plotter->EndPlot();
-    plotter.reset();
-
-    bool ok = loadFileToBuffer( tempFile.GetFullPath(), aBuffer );
+    bool ok = LoadFileToMemory( tempFile.GetFullPath(), aBuffer );
     wxRemoveFile( tempFile.GetFullPath() );
     return ok;
 }
 
 
-wxImage renderSymbolToBitmap( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSymbol, const BOX2I& aBBox,
+wxImage renderSymbolToBitmap( SYMBOL_EDIT_FRAME& aFrame, LIB_SYMBOL& aSymbol, const BOX2I& aBBox,
                               int aUnit, int aBodyStyle, int aWidth, int aHeight,
                               double aViewScale, const wxColour& aBgColor )
 {
-    if( !aSymbol )
-        return wxImage();
-
     wxBitmap bitmap( aWidth, aHeight, 24 );
     wxMemoryDC dc;
     dc.SelectObject( bitmap );
@@ -207,13 +156,21 @@ wxImage renderSymbolToBitmap( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSymbol, co
     // Clone items and add to view
     std::vector<std::unique_ptr<SCH_ITEM>> clonedItems;
 
-    for( SCH_ITEM& item : aSymbol->GetDrawItems() )
+    for( SCH_ITEM& item : aSymbol.GetDrawItems() )
     {
-        if( aUnit && item.GetUnit() && item.GetUnit() != aUnit )
+        if( aUnit != ALL_UNITS
+                && item.GetUnit() != ALL_UNITS
+                && item.GetUnit() != aUnit )
+        {
             continue;
+        }
 
-        if( aBodyStyle && item.GetBodyStyle() && item.GetBodyStyle() != aBodyStyle )
+        if( aBodyStyle != ALL_BODY_STYLES
+                && item.GetBodyStyle() != ALL_BODY_STYLES
+                && item.GetBodyStyle() != aBodyStyle )
+        {
             continue;
+        }
 
         SCH_ITEM* clone = static_cast<SCH_ITEM*>( item.Clone() );
         clonedItems.emplace_back( clone );
@@ -221,8 +178,8 @@ wxImage renderSymbolToBitmap( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSymbol, co
     }
 
     SCH_RENDER_SETTINGS* dstSettings = painter->GetSettings();
-    dstSettings->LoadColors( aFrame->GetColorSettings() );
-    dstSettings->SetDefaultPenWidth( aFrame->GetRenderSettings()->GetDefaultPenWidth() );
+    dstSettings->LoadColors( aFrame.GetColorSettings() );
+    dstSettings->SetDefaultPenWidth( aFrame.GetRenderSettings()->GetDefaultPenWidth() );
     dstSettings->SetIsPrinting( true );
 
     COLOR4D bgColor4D( aBgColor.Red() / 255.0, aBgColor.Green() / 255.0,
@@ -276,19 +233,16 @@ wxImage renderSymbolToBitmap( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSymbol, co
 }
 
 
-wxImage renderSymbolToImageWithAlpha( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSymbol,
-                                      const BOX2I& aBBox, int aUnit, int aBodyStyle )
+tl::expected<wxImage, std::string> renderSymbolToImageWithAlpha( SYMBOL_EDIT_FRAME& aFrame, LIB_SYMBOL aSymbol,
+                                                                 const BOX2I& aBBox, int aUnit, int aBodyStyle )
 {
-    if( !aSymbol )
-        return wxImage();
-
     VECTOR2I size = aBBox.GetSize();
 
     if( size.x <= 0 || size.y <= 0 )
-        return wxImage();
+        return tl::make_unexpected( "Invalid image size" + std::to_string( size.x ) + "x" + std::to_string( size.y ) );
 
     // Use the current view scale to match what the user sees on screen
-    double viewScale = aFrame->GetCanvas()->GetView()->GetScale();
+    double viewScale = aFrame.GetCanvas()->GetView()->GetScale();
     int    bitmapWidth = KiROUND( size.x * viewScale );
     int    bitmapHeight = KiROUND( size.y * viewScale );
 
@@ -302,60 +256,19 @@ wxImage renderSymbolToImageWithAlpha( SYMBOL_EDIT_FRAME* aFrame, LIB_SYMBOL* aSy
     }
 
     if( bitmapWidth <= 0 || bitmapHeight <= 0 )
-        return wxImage();
+        return tl::make_unexpected( "Invalid image size" + std::to_string( bitmapWidth ) + "x"
+                                    + std::to_string( bitmapHeight ) );
 
     // Render twice with different backgrounds for alpha computation
-    wxImage imageOnWhite = renderSymbolToBitmap( aFrame, aSymbol, aBBox, aUnit, aBodyStyle,
-                                                  bitmapWidth, bitmapHeight, viewScale, *wxWHITE );
-    wxImage imageOnBlack = renderSymbolToBitmap( aFrame, aSymbol, aBBox, aUnit, aBodyStyle,
-                                                  bitmapWidth, bitmapHeight, viewScale, *wxBLACK );
+    wxImage imageOnWhite = renderSymbolToBitmap( aFrame, aSymbol, aBBox, aUnit, aBodyStyle, bitmapWidth, bitmapHeight,
+                                                 viewScale, *wxWHITE );
+    wxImage imageOnBlack = renderSymbolToBitmap( aFrame, aSymbol, aBBox, aUnit, aBodyStyle, bitmapWidth, bitmapHeight,
+                                                 viewScale, *wxBLACK );
 
     if( !imageOnWhite.IsOk() || !imageOnBlack.IsOk() )
-        return wxImage();
+        return tl::make_unexpected( "Failed to render symbol to white/black bitmaps" );
 
-    // Create output image with alpha channel
-    wxImage result( bitmapWidth, bitmapHeight );
-    result.InitAlpha();
-
-    unsigned char* rgbWhite = imageOnWhite.GetData();
-    unsigned char* rgbBlack = imageOnBlack.GetData();
-    unsigned char* rgbResult = result.GetData();
-    unsigned char* alphaResult = result.GetAlpha();
-
-    int pixelCount = bitmapWidth * bitmapHeight;
-
-    for( int i = 0; i < pixelCount; ++i )
-    {
-        int idx = i * 3;
-
-        int rW = rgbWhite[idx], gW = rgbWhite[idx + 1], bW = rgbWhite[idx + 2];
-        int rB = rgbBlack[idx], gB = rgbBlack[idx + 1], bB = rgbBlack[idx + 2];
-
-        // Alpha computation: α = 1 - (white - black) / 255
-        int diffR = rW - rB;
-        int diffG = gW - gB;
-        int diffB = bW - bB;
-        int avgDiff = ( diffR + diffG + diffB ) / 3;
-
-        int alpha = 255 - avgDiff;
-        alpha = std::max( 0, std::min( 255, alpha ) );
-        alphaResult[i] = static_cast<unsigned char>( alpha );
-
-        if( alpha > 0 )
-        {
-            rgbResult[idx] = static_cast<unsigned char>( std::min( 255, rB * 255 / alpha ) );
-            rgbResult[idx + 1] = static_cast<unsigned char>( std::min( 255, gB * 255 / alpha ) );
-            rgbResult[idx + 2] = static_cast<unsigned char>( std::min( 255, bB * 255 / alpha ) );
-        }
-        else
-        {
-            rgbResult[idx] = 0;
-            rgbResult[idx + 1] = 0;
-            rgbResult[idx + 2] = 0;
-        }
-    }
-
-    return result;
+    return CreateAlphaImageFromTwoRenders( imageOnWhite, imageOnBlack );
 }
 
 }  // namespace
@@ -459,7 +372,7 @@ bool SYMBOL_EDITOR_EDIT_TOOL::Init()
 
                     int coLocatedCount = 0;
 
-                    for( SCH_PIN* pin : symbol->GetPins() )
+                    for( SCH_PIN* pin : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
                     {
                         if( pin->GetPosition() == pos )
                         {
@@ -796,7 +709,7 @@ int SYMBOL_EDITOR_EDIT_TOOL::DoDelete( const TOOL_EVENT& aEvent )
 
                 got_unit[curr_pin->GetUnit()] = true;
 
-                for( SCH_PIN* pin : symbol->GetPins() )
+                for( SCH_PIN* pin : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
                 {
                     if( got_unit[pin->GetUnit()] )
                         continue;
@@ -861,6 +774,20 @@ int SYMBOL_EDITOR_EDIT_TOOL::DoDelete( const TOOL_EVENT& aEvent )
 }
 
 
+bool SYMBOL_EDITOR_EDIT_TOOL::ShouldFocusPinNumber( SCH_PIN& aPin, const VECTOR2I& aMousePos,
+                                                    bool aCursorMovedByKeyboard )
+{
+    if( aCursorMovedByKeyboard )
+        return false;
+
+    // Mouse, not cursor, as grid points may well not be under any text
+    if( OPT_BOX2I numberBox = aPin.GetLayoutCache().GetPinNumberBBox() )
+        return numberBox->Contains( aMousePos );
+
+    return false;
+}
+
+
 int SYMBOL_EDITOR_EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
 {
     SCH_SELECTION& selection = m_selectionTool->RequestSelection();
@@ -899,18 +826,12 @@ int SYMBOL_EDITOR_EDIT_TOOL::Properties( const TOOL_EVENT& aEvent )
         {
             SCH_PIN& pin = static_cast<SCH_PIN&>( *item );
 
-            // Mouse, not cursor, as grid points may well not be under any text
-            const VECTOR2I&   mousePos = m_toolMgr->GetMousePosition();
-            PIN_LAYOUT_CACHE& layout = pin.GetLayoutCache();
-
-            bool mouseOverNumber = false;
-            if( OPT_BOX2I numberBox = layout.GetPinNumberBBox() )
-            {
-                mouseOverNumber = numberBox->Contains( mousePos );
-            }
+            const VECTOR2I& mousePos = m_toolMgr->GetMousePosition();
+            const bool      keyboardCursor =
+                    getViewControls()->GetSettings().m_lastKeyboardCursorPositionValid;
 
             if( SYMBOL_EDITOR_PIN_TOOL* pinTool = m_toolMgr->GetTool<SYMBOL_EDITOR_PIN_TOOL>() )
-                pinTool->EditPinProperties( &pin, mouseOverNumber );
+                pinTool->EditPinProperties( &pin, ShouldFocusPinNumber( pin, mousePos, keyboardCursor ) );
 
             break;
         }
@@ -1222,7 +1143,7 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
         SCH_PIN* selectedPin = static_cast<SCH_PIN*>( selection.Front() );
         VECTOR2I pos = selectedPin->GetPosition();
 
-        for( SCH_PIN* pin : symbol->GetPins() )
+        for( SCH_PIN* pin : symbol->GetGraphicalPins( ALL_UNITS, ALL_BODY_STYLES ) )
         {
             if( pin->GetPosition() == pos )
                 pinsToConvert.push_back( pin );
@@ -1262,147 +1183,152 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
 
     // Sort pins for consistent ordering - handle arbitrary pin number formats
     std::sort( pinsToConvert.begin(), pinsToConvert.end(),
-        []( SCH_PIN* a, SCH_PIN* b )
-        {
-            wxString numA = a->GetNumber();
-            wxString numB = b->GetNumber();
+            []( SCH_PIN* a, SCH_PIN* b )
+            {
+                wxString numA = a->GetNumber();
+                wxString numB = b->GetNumber();
 
-            // Try to convert to integers for proper numeric sorting
-            long longA, longB;
-            bool aIsNumeric = numA.ToLong( &longA );
-            bool bIsNumeric = numB.ToLong( &longB );
+                // Try to convert to integers for proper numeric sorting
+                long longA, longB;
+                bool aIsNumeric = numA.ToLong( &longA );
+                bool bIsNumeric = numB.ToLong( &longB );
 
-            // Both are purely numeric - sort numerically
-            if( aIsNumeric && bIsNumeric )
-                return longA < longB;
+                // Both are purely numeric - sort numerically
+                if( aIsNumeric && bIsNumeric )
+                    return longA < longB;
 
-            // Mixed numeric/non-numeric - numeric pins come first
-            if( aIsNumeric && !bIsNumeric )
-                return true;
-            if( !aIsNumeric && bIsNumeric )
-                return false;
+                // Mixed numeric/non-numeric - numeric pins come first
+                if( aIsNumeric && !bIsNumeric )
+                    return true;
+                if( !aIsNumeric && bIsNumeric )
+                    return false;
 
-            // Both non-numeric or mixed alphanumeric - use lexicographic sorting
-            return numA < numB;
-        });
+                // Both non-numeric or mixed alphanumeric - use lexicographic sorting
+                return numA < numB;
+            });
 
     // Build the stacked notation string with range collapsing
     wxString stackedNotation = wxT("[");
 
     // Helper function to collapse consecutive numbers into ranges - handles arbitrary pin formats
-    auto collapseRanges = [&]() -> wxString
-    {
-        if( pinsToConvert.empty() )
-            return wxT("");
-
-        wxString result;
-
-        // Group pins by their alphanumeric prefix for range collapsing
-        std::map<wxString, std::vector<long>> prefixGroups;
-        std::vector<wxString> nonNumericPins;
-
-        // Parse each pin number to separate prefix from numeric suffix
-        for( SCH_PIN* pin : pinsToConvert )
-        {
-            wxString pinNumber = pin->GetNumber();
-
-            // Skip empty pin numbers (shouldn't happen, but be defensive)
-            if( pinNumber.IsEmpty() )
+    auto collapseRanges =
+            [&]() -> wxString
             {
-                nonNumericPins.push_back( wxT("(empty)") );
-                continue;
-            }
+                if( pinsToConvert.empty() )
+                    return wxT("");
 
-            wxString prefix;
-            wxString numericPart;
+                wxString result;
 
-            // Find where numeric part starts (scan from end)
-            size_t numStart = pinNumber.length();
-            for( int i = pinNumber.length() - 1; i >= 0; i-- )
-            {
-                if( !wxIsdigit( pinNumber[i] ) )
+                // Group pins by their alphanumeric prefix for range collapsing
+                std::map<wxString, std::vector<long>> prefixGroups;
+                std::vector<wxString> nonNumericPins;
+
+                // Parse each pin number to separate prefix from numeric suffix
+                for( SCH_PIN* pin : pinsToConvert )
                 {
-                    numStart = i + 1;
-                    break;
-                }
-                if( i == 0 )  // All digits
-                    numStart = 0;
-            }
+                    wxString pinNumber = pin->GetNumber();
 
-            if( numStart < pinNumber.length() )  // Has numeric suffix
-            {
-                prefix = pinNumber.Left( numStart );
-                numericPart = pinNumber.Mid( numStart );
+                    // Skip empty pin numbers (shouldn't happen, but be defensive)
+                    if( pinNumber.IsEmpty() )
+                    {
+                        nonNumericPins.push_back( wxT("(empty)") );
+                        continue;
+                    }
 
-                long numValue;
-                if( numericPart.ToLong( &numValue ) && numValue >= 0 )  // Valid non-negative number
-                {
-                    prefixGroups[prefix].push_back( numValue );
-                }
-                else
-                {
-                    // Numeric part couldn't be parsed or is negative - treat as non-numeric
-                    nonNumericPins.push_back( pinNumber );
-                }
-            }
-            else  // No numeric suffix - consolidate as individual value
-            {
-                nonNumericPins.push_back( pinNumber );
-            }
-        }
+                    wxString prefix;
+                    wxString numericPart;
 
-        // Process each prefix group
-        for( auto& [prefix, numbers] : prefixGroups )
-        {
-            if( !result.IsEmpty() )
-                result += wxT(",");
+                    // Find where numeric part starts (scan from end)
+                    size_t numStart = pinNumber.length();
+                    for( int i = pinNumber.length() - 1; i >= 0; i-- )
+                    {
+                        if( !wxIsdigit( pinNumber[i] ) )
+                        {
+                            numStart = i + 1;
+                            break;
+                        }
 
-            // The prefix may contain characters that are structural in stacked notation (e.g. a pin
-            // numbered "foo,bar3"); escape it so it round-trips as a single pin number.
-            wxString escPrefix = EscapeStackedPinItem( prefix );
+                        if( i == 0 )  // All digits
+                            numStart = 0;
+                    }
 
-            // Sort numeric values for this prefix
-            std::sort( numbers.begin(), numbers.end() );
+                    if( numStart < pinNumber.length() )  // Has numeric suffix
+                    {
+                        prefix = pinNumber.Left( numStart );
+                        numericPart = pinNumber.Mid( numStart );
 
-            // Collapse consecutive ranges within this prefix
-            size_t i = 0;
-            while( i < numbers.size() )
-            {
-                if( i > 0 )  // Not first number in this prefix group
-                    result += wxT(",");
+                        long numValue;
 
-                long start = numbers[i];
-                long end = start;
-
-                // Find the end of consecutive sequence
-                while( i + 1 < numbers.size() && numbers[i + 1] == numbers[i] + 1 )
-                {
-                    i++;
-                    end = numbers[i];
+                        if( numericPart.ToLong( &numValue ) && numValue >= 0 )  // Valid non-negative number
+                        {
+                            prefixGroups[prefix].push_back( numValue );
+                        }
+                        else
+                        {
+                            // Numeric part couldn't be parsed or is negative - treat as non-numeric
+                            nonNumericPins.push_back( pinNumber );
+                        }
+                    }
+                    else  // No numeric suffix - consolidate as individual value
+                    {
+                        nonNumericPins.push_back( pinNumber );
+                    }
                 }
 
-                // Add range or single number with prefix
-                if( end > start + 1 )  // Range of 3+ numbers
-                    result += wxString::Format( wxT("%s%ld-%s%ld"), escPrefix, start, escPrefix, end );
-                else if( end == start + 1 )  // Two consecutive numbers
-                    result += wxString::Format( wxT("%s%ld,%s%ld"), escPrefix, start, escPrefix, end );
-                else  // Single number
-                    result += wxString::Format( wxT("%s%ld"), escPrefix, start );
+                // Process each prefix group
+                for( auto& [prefix, numbers] : prefixGroups )
+                {
+                    if( !result.IsEmpty() )
+                        result += wxT(",");
 
-                i++;
-            }
-        }
+                    // The prefix may contain characters that are structural in stacked notation (e.g. a pin
+                    // numbered "foo,bar3"); escape it so it round-trips as a single pin number.
+                    wxString escPrefix = EscapeStackedPinItem( prefix );
 
-        // Add non-numeric pin numbers as individual comma-separated values
-        for( const wxString& nonNum : nonNumericPins )
-        {
-            if( !result.IsEmpty() )
-                result += wxT(",");
-            result += EscapeStackedPinItem( nonNum );
-        }
+                    // Sort numeric values for this prefix
+                    std::sort( numbers.begin(), numbers.end() );
 
-        return result;
-    };
+                    // Collapse consecutive ranges within this prefix
+                    size_t i = 0;
+
+                    while( i < numbers.size() )
+                    {
+                        if( i > 0 )  // Not first number in this prefix group
+                            result += wxT(",");
+
+                        long start = numbers[i];
+                        long end = start;
+
+                        // Find the end of consecutive sequence
+                        while( i + 1 < numbers.size() && numbers[i + 1] == numbers[i] + 1 )
+                        {
+                            i++;
+                            end = numbers[i];
+                        }
+
+                        // Add range or single number with prefix
+                        if( end > start + 1 )  // Range of 3+ numbers
+                            result += wxString::Format( wxT("%s%ld-%s%ld"), escPrefix, start, escPrefix, end );
+                        else if( end == start + 1 )  // Two consecutive numbers
+                            result += wxString::Format( wxT("%s%ld,%s%ld"), escPrefix, start, escPrefix, end );
+                        else  // Single number
+                            result += wxString::Format( wxT("%s%ld"), escPrefix, start );
+
+                        i++;
+                    }
+                }
+
+                // Add non-numeric pin numbers as individual comma-separated values
+                for( const wxString& nonNum : nonNumericPins )
+                {
+                    if( !result.IsEmpty() )
+                        result += wxT(",");
+
+                    result += EscapeStackedPinItem( nonNum );
+                }
+
+                return result;
+            };
 
     stackedNotation += collapseRanges();
     stackedNotation += wxT("]");
@@ -1412,9 +1338,8 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
     masterPin->SetNumber( stackedNotation );
 
     // Log information about pins being removed before we remove them
-    wxLogTrace( traceStackedPins,
-               wxString::Format( "Converting %zu pins to stacked notation '%s'",
-                               pinsToConvert.size(), stackedNotation ) );
+    wxLogTrace( traceStackedPins, wxString::Format( wxT( "Converting %zu pins to stacked notation '%s'" ),
+                                                    pinsToConvert.size(), stackedNotation ) );
 
     // Remove all other pins from the symbol that were consolidated into the stacked notation
     // Collect pins to remove first, then remove them all at once like the Delete command
@@ -1424,11 +1349,10 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
         SCH_PIN* pinToRemove = pinsToConvert[i];
 
         // Log the pin before removing it
-    wxLogTrace( traceStackedPins,
-           wxString::Format( "Will remove pin '%s' at position (%d, %d)",
-                   pinToRemove->GetNumber(),
-                   pinToRemove->GetPosition().x,
-                   pinToRemove->GetPosition().y ) );
+        wxLogTrace( traceStackedPins, wxString::Format( wxT( "Will remove pin '%s' at position (%d, %d)" ),
+                                                        pinToRemove->GetNumber(),
+                                                        pinToRemove->GetPosition().x,
+                                                        pinToRemove->GetPosition().y ) );
 
         pinsToRemove.push_back( pinToRemove );
     }
@@ -1439,8 +1363,7 @@ int SYMBOL_EDITOR_EDIT_TOOL::ConvertStackedPins( const TOOL_EVENT& aEvent )
         symbol->RemoveDrawItem( pin );
     }
 
-    commit.Push( wxString::Format( _( "Convert %zu Stacked Pins to '%s'" ),
-                                  pinsToConvert.size(), stackedNotation ) );
+    commit.Push( _( "Convert Stacked Pins" ) );
     m_frame->RebuildView();
     return 0;
 }
@@ -1652,7 +1575,7 @@ int SYMBOL_EDITOR_EDIT_TOOL::Copy( const TOOL_EVENT& aEvent )
                       bbox.GetHeight() * clipboardBboxInflation );
 
         // Create a temporary symbol with just the selected items for plotting
-        LIB_SYMBOL* plotSymbol = new LIB_SYMBOL( *symbol );
+        std::unique_ptr<LIB_SYMBOL> plotSymbol = std::make_unique<LIB_SYMBOL>( *symbol );
 
         // Mark unselected items as deleted in the plot copy
         for( SCH_ITEM& item : plotSymbol->GetDrawItems() )
@@ -1680,23 +1603,29 @@ int SYMBOL_EDITOR_EDIT_TOOL::Copy( const TOOL_EVENT& aEvent )
         }
 
         // Now copy only the non-deleted items to a clean symbol for plotting
-        LIB_SYMBOL* cleanSymbol = new LIB_SYMBOL( *plotSymbol );
-        delete plotSymbol;
+        std::unique_ptr<LIB_SYMBOL> cleanSymbol = std::make_unique<LIB_SYMBOL>( *plotSymbol );
+        plotSymbol.reset();
 
         int unit = m_frame->GetUnit();
         int bodyStyle = m_frame->GetBodyStyle();
 
         wxMemoryBuffer svgBuffer;
 
-        if( plotSymbolToSvg( m_frame, cleanSymbol, bbox, unit, bodyStyle, svgBuffer ) )
+        if( plotSymbolToSvg( *m_frame, *cleanSymbol, bbox, unit, bodyStyle, svgBuffer ) )
             appendMimeData( mimeData, wxS( "image/svg+xml" ), svgBuffer );
 
-        wxImage pngImage = renderSymbolToImageWithAlpha( m_frame, cleanSymbol, bbox, unit, bodyStyle );
+        tl::expected<wxImage, std::string> pngImage =
+                renderSymbolToImageWithAlpha( *m_frame, *cleanSymbol, bbox, unit, bodyStyle );
 
-        if( pngImage.IsOk() )
-            appendMimeData( mimeData, wxS( "image/png" ), std::move( pngImage ) );
-
-        delete cleanSymbol;
+        if( pngImage )
+        {
+            wxASSERT( pngImage->IsOk() );
+            appendMimeData( mimeData, wxS( "image/png" ), std::move( *pngImage ) );
+        }
+        else
+        {
+            wxLogWarning( wxS( "Failed to render symbol to PNG: " ) + wxString::FromUTF8( pngImage.error() ) );
+        }
     }
 
     if( SaveClipboard( prettyData, mimeData ) )
@@ -1775,8 +1704,8 @@ int SYMBOL_EDITOR_EDIT_TOOL::Paste( const TOOL_EVENT& aEvent )
         newItem->SetParent( symbol );
         newItem->SetFlags( IS_NEW | IS_PASTED | SELECTED );
 
-        newItem->SetUnit( newItem->GetUnit() ? m_frame->GetUnit() : 0 );
-        newItem->SetBodyStyle( newItem->GetBodyStyle() ? m_frame->GetBodyStyle() : 0 );
+        newItem->SetUnit( newItem->GetUnit() ? m_frame->GetUnit() : ALL_UNITS );
+        newItem->SetBodyStyle( newItem->GetBodyStyle() ? m_frame->GetBodyStyle() : ALL_BODY_STYLES );
 
         symbol->AddDrawItem( newItem );
         getView()->Add( newItem );

@@ -66,7 +66,7 @@
 
 
 /**
- * This class builds a wxGridTableBase by wrapping an #FP_LIB_TABLE object.
+ * This class builds a wxGridTableBase by wrapping an #LIBRARY_TABLE object.
  */
 class FP_LIB_TABLE_GRID_DATA_MODEL : public LIB_TABLE_GRID_DATA_MODEL
 {
@@ -157,16 +157,18 @@ protected:
     {
         LIB_TABLE_GRID_DATA_MODEL* tbl = static_cast<LIB_TABLE_GRID_DATA_MODEL*>( m_grid->GetTable() );
 
-        if( tbl->GetNumberRows() > aRow )
+        if( aRow < tbl->GetNumberRows() )
         {
-            LIBRARY_TABLE_ROW& row = tbl->At( static_cast<size_t>( aRow ) );
-            const wxString& options = row.Options();
-            wxString        result = options;
+            LIBRARY_TABLE_ROW&          row = tbl->At( static_cast<size_t>( aRow ) );
+            const wxString&             options = row.Options();
+            wxString                    result = options;
             std::map<std::string, UTF8> choices;
 
             PCB_IO_MGR::PCB_FILE_T pi_type = PCB_IO_MGR::EnumFromStr( row.Type() );
             IO_RELEASER<PCB_IO>    pi( PCB_IO_MGR::FindPlugin( pi_type ) );
-            pi->GetLibraryOptions( &choices );
+
+            if( pi )
+                pi->GetLibraryOptions( &choices );
 
             DIALOG_PLUGIN_OPTIONS dlg( wxGetTopLevelParent( m_grid ), row.Nickname(), choices, options, &result );
             dlg.ShowModal();
@@ -492,7 +494,7 @@ bool PANEL_FP_LIB_TABLE::verifyTables()
 
 void PANEL_FP_LIB_TABLE::appendRowHandler( wxCommandEvent& event )
 {
-    LIB_TABLE_GRID_TRICKS::AppendRowHandler( cur_grid() );
+    LIB_TABLE_GRID_TRICKS::AppendRowHandler( cur_grid(), PCB_IO_MGR::ShowType( PCB_IO_MGR::KICAD_SEXP ) );
 }
 
 
@@ -759,10 +761,10 @@ void PANEL_FP_LIB_TABLE::onNotebookPageCloseRequest( wxAuiNotebookEvent& aEvent 
 
     if( LIB_TABLE_NOTEBOOK_PANEL* panel = dynamic_cast<LIB_TABLE_NOTEBOOK_PANEL*>( page ) )
     {
-        if( panel->GetClosable() )
+        if( panel->GetClosable() && panel->GetCanClose() )
         {
-            if( !panel->GetCanClose() )
-                aEvent.Veto();
+            m_parent->m_ProjectTableChanged = true;
+            m_parent->m_GlobalTableChanged = true;
         }
         else
         {
@@ -882,46 +884,63 @@ bool PANEL_FP_LIB_TABLE::TransferDataFromWindow()
     if( !verifyTables() )
         return false;
 
-    std::optional<LIBRARY_TABLE*> optTable = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::FOOTPRINT,
-                                                                              LIBRARY_TABLE_SCOPE::GLOBAL );
-    wxCHECK( optTable, false );
-    LIBRARY_TABLE* globalTable = *optTable;
+    bool                          success = true;
+    LIBRARY_MANAGER&              manager = Pgm().GetLibraryManager();
+    int                           firstNestedTable = 1;
+    std::optional<LIBRARY_TABLE*> globalTable = manager.Table( LIBRARY_TABLE_TYPE::FOOTPRINT,
+                                                               LIBRARY_TABLE_SCOPE::GLOBAL );
 
-    if( get_model( 0 )->Table() != *globalTable )
+    if( globalTable.has_value() && get_model( 0 )->Table() != *globalTable.value() )
     {
         m_parent->m_GlobalTableChanged = true;
-        *globalTable = get_model( 0 )->Table();
+        *globalTable.value() = get_model( 0 )->Table();
 
-        globalTable->Save().map_error(
-                []( const LIBRARY_ERROR& aError )
+        globalTable.value()->Save().map_error(
+                [&success]( const LIBRARY_ERROR& aError )
                 {
                     wxMessageBox( _( "Error saving global library table:\n\n" ) + aError.message,
                                   _( "File Save Error" ), wxOK | wxICON_ERROR );
+                    success = false;
                 } );
     }
 
-    optTable = Pgm().GetLibraryManager().Table( LIBRARY_TABLE_TYPE::FOOTPRINT, LIBRARY_TABLE_SCOPE::PROJECT );
+    std::optional<LIBRARY_TABLE*> projectTable = manager.Table( LIBRARY_TABLE_TYPE::FOOTPRINT,
+                                                                LIBRARY_TABLE_SCOPE::PROJECT );
 
-    if( optTable.has_value() && get_model( 1 )->Table().Path() == optTable.value()->Path() )
+    if( projectTable.has_value() && get_model( 1 )->Table().Path() == projectTable.value()->Path() )
     {
-        LIBRARY_TABLE* projectTable = *optTable;
+        firstNestedTable = 2;
 
-        if( get_model( 1 )->Table() != *projectTable )
+        if( get_model( 1 )->Table() != *projectTable.value() )
         {
             m_parent->m_ProjectTableChanged = true;
-            *projectTable = get_model( 1 )->Table();
+            *projectTable.value() = get_model( 1 )->Table();
 
-            projectTable->Save().map_error(
-                    []( const LIBRARY_ERROR& aError )
+            projectTable.value()->Save().map_error(
+                    [&success]( const LIBRARY_ERROR& aError )
                     {
                         wxMessageBox( _( "Error saving project library table:\n\n" ) + aError.message,
                                       _( "File Save Error" ), wxOK | wxICON_ERROR );
+                        success = false;
                     } );
         }
     }
 
-    m_suppressNotebookPageEvents = true;
-    return true;
+    for( int ii = firstNestedTable; ii < (int) m_notebook->GetPageCount(); ++ii )
+    {
+        LIB_TABLE_NOTEBOOK_PANEL* panel = static_cast<LIB_TABLE_NOTEBOOK_PANEL*>( m_notebook->GetPage( ii ) );
+
+        if( panel->TableModified() )
+        {
+            success &= panel->SaveTable();
+
+            m_parent->m_ProjectTableChanged = true;
+            m_parent->m_GlobalTableChanged = true;
+        }
+    }
+
+    m_suppressNotebookPageEvents = success;
+    return success;
 }
 
 

@@ -2,10 +2,19 @@
 #define _ODB_UTIL_H_
 
 #include <map>
+#include <set>
+#include <optional>
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
+#include <tuple>
+#include <layer_ids.h>
+#include <padstack.h>
+#include <base_units.h>
+#include <drill/drill_span.h>
+#include <exporters/fab_model/fab_sections.h>
+#include <jobs/job_export_pcb_odb.h>
 #include <wx/string.h>
 #include "pcb_shape.h"
 #include <wx/filename.h>
@@ -15,6 +24,68 @@ enum class ODB_POLARITY
 {
     POSITIVE,
     NEGATIVE
+};
+
+namespace ODB
+{
+std::vector<wxString> UniqueNames( const std::vector<wxString>& aBases, const std::set<wxString>& aReserved,
+                                   size_t aMaxLength );
+
+struct VARIANT_NAMES
+{
+    static VARIANT_NAMES Build( const std::vector<wxString>& aNames );
+
+    wxString LegalName( const wxString& aName ) const;
+    wxString SelectedName( const wxString& aName ) const;
+    wxString Join( const std::vector<wxString>& aNames ) const;
+
+    std::vector<std::pair<wxString, wxString>> m_names;
+    std::vector<wxString>                      m_renamed;
+    bool                                       m_listsFit = true;
+};
+} // namespace ODB
+
+/// What a caller asks of one ODB++ export
+struct ODB_EXPORT_OPTIONS
+{
+    bool                            m_inch = false;
+    int                             m_precision = 6;
+    /// Unset exports the current variant of the board
+    std::optional<wxString>         m_variant;
+    wxString                        m_mpnField;
+    wxString                        m_productModelName;
+    JOB_EXPORT_PCB_ODB::ORIGIN      m_origin = JOB_EXPORT_PCB_ODB::ORIGIN::ABSOLUTE_COORDS;
+    bool                            m_anonymizeNets = false;
+    bool                            m_boardMetadata = true;
+    /// Unset exports every section
+    std::optional<FAB::SECTION_SET> m_sections;
+    std::vector<ODB_LAYER_OVERRIDE> m_layerOverrides;
+};
+
+struct ODB_FORMAT
+{
+    // Internal units to output units for data values
+    double      m_scale = 1.0 / PCB_IU_PER_MM;
+    // Internal units to thousandths of output units for symbols and drills
+    // This scale is 1000x m_scale
+    double      m_symbolScale = 1.0 / PL_IU_PER_MM;
+    int         m_sigfig = 6;
+    std::string m_unitsStr = "MM";
+    wxString    m_variantName;
+    wxString    m_productModelName;
+    wxString    m_mpnField;
+    VECTOR2I    m_originOffset{ 0, 0 };
+    bool        m_anonymizeNets = false;
+    bool        m_writeEdaNets = true;
+    bool        m_boardMetadata = true;
+    std::optional<FAB::SECTION_SET> m_sections;
+    std::vector<ODB_LAYER_OVERRIDE> m_layerOverrides;
+    ODB::VARIANT_NAMES m_variantNames;
+
+    bool Includes( FAB::SECTION aSection ) const
+    {
+        return !m_sections || m_sections->Contains( aSection );
+    }
 };
 
 enum class ODB_CONTEXT
@@ -79,9 +150,29 @@ enum class ODB_AUX_LAYER_TYPE
     CAPPING,
 };
 
+using ODB_AUX_LAYER_KEY = std::tuple<ODB_AUX_LAYER_TYPE, PCB_LAYER_ID, PCB_LAYER_ID>;
+
+enum class ODB_LAYER_ROLE
+{
+    BOARD_LAYER,
+    DRILL,
+    BACKDRILL,
+    VIA_PROTECTION,
+    ROUT,
+    COMPONENT
+};
+
+class PCB_VIA;
+struct DRILL_OPERATION;
 
 namespace ODB
 {
+int IpcViaType( const DRILL_OPERATION& aOperation, bool aTop );
+bool ViaInPad( const PCB_VIA& aVia );
+
+/// Matrix types a layer override may assign to @a aLayer
+std::vector<ODB_TYPE> OverridableLayerTypes( PCB_LAYER_ID aLayer );
+
 wxString GenODBString( const wxString& aStr );
 
 wxString GenLegalNetName( const wxString& aStr );
@@ -92,15 +183,16 @@ wxString GenLegalEntityName( const wxString& aStr );
 
 void RemoveWhitespace( wxString& aStr );
 
-wxString Double2String( double aVal );
+wxString Double2String( const ODB_FORMAT& aFormat, double aVal );
 
 std::string Double2String( double aVal, int32_t aDigits );
 
-wxString Data2String( double aVal );
+wxString Data2String( const ODB_FORMAT& aFormat, double aVal );
 
-wxString SymDouble2String( double aVal );
+wxString SymDouble2String( const ODB_FORMAT& aFormat, double aVal );
 
-std::pair<wxString, wxString> AddXY( const VECTOR2I& aVec );
+std::pair<wxString, wxString> AddXY( const ODB_FORMAT& aFormat, const VECTOR2I& aVec );
+std::pair<wxString, wxString> AddRelativeXY( const ODB_FORMAT& aFormat, const VECTOR2I& aVec );
 
 VECTOR2I GetShapePosition( const PCB_SHAPE& aShape );
 
@@ -231,7 +323,7 @@ public:
     ODB_FILE_WRITER( ODB_FILE_WRITER const& ) = delete;
     ODB_FILE_WRITER& operator=( ODB_FILE_WRITER const& ) = delete;
 
-    void                 CreateFile( const wxString& aFileName );
+    void                 CreateODBFile( const wxString& aFileName );
     bool                 CloseFile();
     inline std::ostream& GetStream() { return m_ostream; }
 
@@ -348,18 +440,15 @@ public:
     ODB_DRILL_TOOLS( const wxString& aUnits, const wxString& aThickness = "0",
                      const wxString& aUserParams = wxEmptyString );
 
-    void AddDrillTools( const wxString& aType, const wxString& aFinishSize,
-                        const wxString& aType2 = wxT( "STANDARD" ) )
-    {
-        TOOLS tool;
-        tool.m_num = m_tools.size() + 1;
-        tool.m_type = aType;
-        tool.m_type2 = aType2;
-        tool.m_finishSize = aFinishSize;
-        tool.m_drillSize = aFinishSize;
-
-        m_tools.push_back( tool );
-    }
+    /**
+     * Record the drill bit used for a hole.
+     *
+     * @param aType is the ODB++ plating class of the hole (PLATED, NON_PLATED or VIA).
+     * @param aDiameter is the hole diameter in internal units.
+     * @param aType2 is the ODB++ drilling method (STANDARD, LASER, BLIND, ...).
+     */
+    void AddDrillTool( const ODB_FORMAT& aFormat, const wxString& aType, int aDiameter,
+                        const wxString& aType2 = wxT( "STANDARD" ) );
 
     void GenerateFile( std::ostream& aStream );
 
