@@ -277,6 +277,7 @@ export function render(doc, ctx, view, opts) {
   const selGeoms = selPcb ? new Set() : null;
   const hlColor = (c) => highlightColor(c, isPcb);
   const ids = opts.ids ? (opts.ids instanceof Set ? opts.ids : new Set(opts.ids)) : null;
+  const skip = opts.skip && opts.skip.size ? opts.skip : null;   // items a peer is dragging: drawn as ghosts elsewhere
   const netColors = isPcb && opts.netColors && opts.netColors.size ? opts.netColors : null;
   const netNames = isPcb && opts.netNames !== false,   // pcbnew default: net names on pads and tracks ("pcb_display.net_names_mode" 3)
    zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
@@ -371,7 +372,7 @@ export function render(doc, ctx, view, opts) {
   const zHoles = zHoles0 + topOf("holes"), zRats = zHoles + 2, zViaName = zHoles + 1.5;
   const cullM = 4 * Math.max(1, dpr) / s + 0.1; const cx0 = vx0 - cullM, cx1 = vx1 + cullM, cy0 = vy0 - cullM, cy1 = vy1 + cullM;   // per-geometry cull rect: the view plus 4 px
   for (const it of doc.items.values()) {
-    if (ids && !ids.has(it.id)) continue;
+    if ((ids && !ids.has(it.id)) || (skip && skip.has(it.id))) continue;
     const b = it.bbox; if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
     const isHl = hl ? hl.has(it.id) : false;
     const isSel = selPcb ? selPcb.has(it.id) : false;

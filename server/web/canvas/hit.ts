@@ -66,19 +66,24 @@ export function hitTestDetail(doc, x, y, slopMm, opts) {
     if (!it.movable || !it.bbox) continue;
     const b = it.bbox;
     if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
-    let onGeom = false, hitLayer = null, vis = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
+    let onGeom = false, hitLayer = null, vis = null, hull = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
+    const grow = (b, gb) => { if (!b) return gb.slice(); if (gb[0] < b[0]) b[0] = gb[0]; if (gb[1] < b[1]) b[1] = gb[1]; if (gb[2] > b[2]) b[2] = gb[2]; if (gb[3] > b[3]) b[3] = gb[3]; return b; };
     for (const g of it.geom) {
       if (hidden && g.layer && hidden.has(g.layer)) continue;
       const gb = geomBox(g); if (!gb) continue;
-      if (!vis) vis = gb.slice(); else { if (gb[0] < vis[0]) vis[0] = gb[0]; if (gb[1] < vis[1]) vis[1] = gb[1]; if (gb[2] > vis[2]) vis[2] = gb[2]; if (gb[3] > vis[3]) vis[3] = gb[3]; }
+      vis = grow(vis, gb);
       if (g.padText || g.padNum || g.noBox) continue;                       // pad numbers / net names are labels, not selectable geometry
+      if (g.t !== "text") hull = grow(hull, gb);                             // FOOTPRINT::HitTestAccurate / SCH_SYMBOL body box: shapes and pads, never the fields
       if (hitClass > 0 && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g, x, y, slopMm)) {
         onGeom = true; const cls = (g.t === "pad" || (g.t !== "text" && /\.Cu$/.test(g.layer || ""))) ? 0 : 1;   // a pad under the cursor beats another part's silkscreen / courtyard / text over it
         if (cls < hitClass) { hitClass = cls; hitLayer = g.layer || null; }
       }
     }
     if (!vis) continue;                                                   // nothing of it is visible: not selectable
-    if (x < vis[0] - slopMm || x > vis[2] + slopMm || y < vis[1] - slopMm || y > vis[3] + slopMm) continue;
+    // an empty-box hit only counts inside the hull of the item's shapes: a reference text hanging far off
+    // the body must not make the empty space beside a part select it (KiCad's HitTestAccurate)
+    const hb = hull || vis;
+    if (x < hb[0] - slopMm || x > hb[2] + slopMm || y < hb[1] - slopMm || y > hb[3] + slopMm) continue;
     const area = Math.max(0, vis[2] - vis[0]) * Math.max(0, vis[3] - vis[1]);
     const itemSide = it.layer && /^B\./.test(it.layer) ? "B" : "F";
     const score = hitClass * 1e11 + (side && itemSide !== side ? 1e9 : 0) + area;

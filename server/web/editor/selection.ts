@@ -18,7 +18,11 @@ export function groupExpand(ids) { const m = isSch() ? CollabTools.sch : CollabT
 export function selectedSet() { const s = new Set(E.selection); if (E.selected) s.add(E.selected.id); return s.size ? s : null; }
 
    // a selected symbol / footprint field {id, name} and its drag {id, name, startMm, orig, moved}
-export function clearSelection() { E.selection.clear(); E.selected = null; E.selField = null; if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null); }
+export function clearSelection() {
+  E.selection.clear(); E.selected = null; E.selField = null;
+  if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);
+  const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear();   // the board module's own picks (tracks, vias, graphics) clear with everything else
+}
 
 /** World-space delta → the field's own coordinate frame (schematic fields are absolute; footprint fields ride the footprint's rotation/scale). */
 export function fieldLocalDelta(item, dx, dy) {

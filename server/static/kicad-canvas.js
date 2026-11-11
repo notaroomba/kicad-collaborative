@@ -3820,19 +3820,22 @@
       if (!it.movable || !it.bbox) continue;
       const b = it.bbox;
       if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
-      let onGeom = false, hitLayer = null, vis = null, hitClass = 2;
+      let onGeom = false, hitLayer = null, vis = null, hull = null, hitClass = 2;
+      const grow = (b2, gb) => {
+        if (!b2) return gb.slice();
+        if (gb[0] < b2[0]) b2[0] = gb[0];
+        if (gb[1] < b2[1]) b2[1] = gb[1];
+        if (gb[2] > b2[2]) b2[2] = gb[2];
+        if (gb[3] > b2[3]) b2[3] = gb[3];
+        return b2;
+      };
       for (const g of it.geom) {
         if (hidden && g.layer && hidden.has(g.layer)) continue;
         const gb = geomBox(g);
         if (!gb) continue;
-        if (!vis) vis = gb.slice();
-        else {
-          if (gb[0] < vis[0]) vis[0] = gb[0];
-          if (gb[1] < vis[1]) vis[1] = gb[1];
-          if (gb[2] > vis[2]) vis[2] = gb[2];
-          if (gb[3] > vis[3]) vis[3] = gb[3];
-        }
+        vis = grow(vis, gb);
         if (g.padText || g.padNum || g.noBox) continue;
+        if (g.t !== "text") hull = grow(hull, gb);
         if (hitClass > 0 && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g, x, y, slopMm)) {
           onGeom = true;
           const cls = g.t === "pad" || g.t !== "text" && /\.Cu$/.test(g.layer || "") ? 0 : 1;
@@ -3843,7 +3846,8 @@
         }
       }
       if (!vis) continue;
-      if (x < vis[0] - slopMm || x > vis[2] + slopMm || y < vis[1] - slopMm || y > vis[3] + slopMm) continue;
+      const hb = hull || vis;
+      if (x < hb[0] - slopMm || x > hb[2] + slopMm || y < hb[1] - slopMm || y > hb[3] + slopMm) continue;
       const area = Math.max(0, vis[2] - vis[0]) * Math.max(0, vis[3] - vis[1]);
       const itemSide = it.layer && /^B\./.test(it.layer) ? "B" : "F";
       const score = hitClass * 1e11 + (side && itemSide !== side ? 1e9 : 0) + area;
@@ -4124,6 +4128,7 @@
     const selGeoms = selPcb ? /* @__PURE__ */ new Set() : null;
     const hlColor = (c) => highlightColor(c, isPcb);
     const ids = opts.ids ? opts.ids instanceof Set ? opts.ids : new Set(opts.ids) : null;
+    const skip = opts.skip && opts.skip.size ? opts.skip : null;
     const netColors = isPcb && opts.netColors && opts.netColors.size ? opts.netColors : null;
     const netNames = isPcb && opts.netNames !== false, zoneFill = isPcb && !!opts.zoneFill, flip = isPcb && !!opts.flip;
     const rats = isPcb && opts.ratsnest && opts.ratsnest.length ? opts.ratsnest : null, ratsNets = opts.ratsnestNets || null;
@@ -4235,7 +4240,7 @@
     const cullM = 4 * Math.max(1, dpr) / s + 0.1;
     const cx0 = vx0 - cullM, cx1 = vx1 + cullM, cy0 = vy0 - cullM, cy1 = vy1 + cullM;
     for (const it of doc.items.values()) {
-      if (ids && !ids.has(it.id)) continue;
+      if (ids && !ids.has(it.id) || skip && skip.has(it.id)) continue;
       const b = it.bbox;
       if (b && (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1)) continue;
       const isHl = hl ? hl.has(it.id) : false;

@@ -5,7 +5,7 @@ import { drawComments } from "./comments";
 import { loadBase } from "./doc";
 import { $, NS } from "./dom";
 import { drawHover } from "./gestures";
-import { breakFollow, peerName, renderPeers, sendPresence } from "./peers";
+import { anchorMm, breakFollow, peerName, renderPeers, sendPresence } from "./peers";
 import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
 import { activeModule, toolCtx } from "./tools";
@@ -57,7 +57,22 @@ export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
   const view = { ppm, zoom: E.zoom, panX: E.panX, panY: E.panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
-  KiCadCanvas.render(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds }, E.renderOpts));
+  const ghosts = E.peerGhosts || [];
+  const skip = ghosts.length ? new Set(ghosts.flatMap((g) => [...g.ids])) : null;
+  KiCadCanvas.render(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: selectedSet(), highlight: E.highlightIds, skip }, E.renderOpts));
+  // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
+  if (ghosts.length) {
+    const off = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));
+    if (off.width !== canvas.width || off.height !== canvas.height) { off.width = canvas.width; off.height = canvas.height; }
+    const octx = off.getContext("2d"); const sc = view.ppm * view.zoom;
+    for (const g of ghosts) {
+      if (g.hideOnly) continue;   // a wire whose stretched shape the overlay draws instead
+      octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, off.width, off.height);
+      KiCadCanvas.render(E.kdoc, octx, Object.assign({}, view, { panX: view.panX + g.dx * sc, panY: view.panY + g.dy * sc }),
+        Object.assign({}, E.renderOpts, { hidden: E.hiddenLayers, grid: 0, frame: false, background: false, ids: g.ids, markers: null, ratsnest: null, highlight: null, selected: null }));
+      cctx.setTransform(1, 0, 0, 1, 0, 0); cctx.globalAlpha = 0.6; cctx.drawImage(off, 0, 0); cctx.globalAlpha = 1;
+    }
+  }
   const m = activeModule();
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
   drawHover(cctx, view);
@@ -166,8 +181,32 @@ export function svgText(x, y, size, color, text) {
 export function drawPeers(peers) {
   peersG.replaceChildren();
   const s = pxPerMm(), mm = (nm) => nm / E.IU;
+  const ghosts = [];
   for (const [cid, p] of Object.entries(peers)) {
     const st = p.state || {}, color = (p.user && p.user.color) || "#4477ee", name = peerName(p);
+    // Items the peer is dragging: `at[i]` is where they hold selection[i]; a displacement from our copy's own
+    // anchor is a live drag, drawn by drawCanvas as a ghost (one render per distinct offset).
+    if (E.kdoc && Array.isArray(st.at) && Array.isArray(st.selection)) {
+      const byOff = new Map();
+      for (let i = 0; i < st.selection.length && i < st.at.length; i++) {
+        const a = st.at[i], it = E.kdoc.items.get(st.selection[i]); if (!a || !it) continue;
+        const mine = anchorMm(it); if (!mine) continue;
+        const dx = a[0] / E.IU - mine[0], dy = a[1] / E.IU - mine[1];
+        if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) continue;
+        const key = dx.toFixed(4) + "," + dy.toFixed(4); let g = byOff.get(key); if (!g) byOff.set(key, g = { ids: new Set(), dx, dy });
+        g.ids.add(it.id);
+      }
+      for (const g of byOff.values()) ghosts.push(g);
+    }
+    // Stretched wires of a schematic drag (uuid, x1, y1, x2, y2, width, layer): the exact geometry, in place of ours.
+    for (const dl of st.dragLines || []) {
+      if (!Array.isArray(dl) || dl.length < 5) continue;
+      const line = document.createElementNS(NS, "line");
+      line.setAttribute("x1", mm(dl[1])); line.setAttribute("y1", mm(dl[2])); line.setAttribute("x2", mm(dl[3])); line.setAttribute("y2", mm(dl[4]));
+      line.setAttribute("stroke", color); line.setAttribute("stroke-opacity", "0.7"); line.setAttribute("stroke-width", Math.max(mm(dl[5] || 0), 2 / s)); line.setAttribute("stroke-linecap", "round");
+      peersG.appendChild(line);
+      if (E.kdoc && E.kdoc.items.has(dl[0])) ghosts.push({ ids: new Set([dl[0]]), dx: 0, dy: 0, hideOnly: true });
+    }
     for (const g of st.ghost || []) {
       const line = document.createElementNS(NS, "line");
       line.setAttribute("x1", mm(g[0])); line.setAttribute("y1", mm(g[1])); line.setAttribute("x2", mm(g[2])); line.setAttribute("y2", mm(g[3]));
@@ -200,6 +239,8 @@ export function drawPeers(peers) {
       peersG.appendChild(label);
     }
   }
+  const had = (E.peerGhosts || []).length; E.peerGhosts = ghosts;
+  if (had || ghosts.length) requestRender();
 }
 
 export function scheduleRenderRefresh() {

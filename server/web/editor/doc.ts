@@ -311,8 +311,8 @@ export async function openDoc(doc) {
   const url = `/p/${state.project.projectId}/edit` + (state.docs.length > 1 ? `?doc=${doc.docId}` : "");
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
   setStatusBar({ message: isSch()
-    ? "scroll to zoom · middle- or right-drag to pan · right-click for the menu · click to select · drag to move · double-click a sheet to enter it"
-    : "scroll to zoom · middle- or right-drag to pan · right-click for the menu · click to select · drag to move · R rotates" });
+    ? "scroll to zoom · middle- or right-drag to pan · right-click for the menu · click to select · drag a selection to move · double-click a sheet to enter it"
+    : "scroll to zoom · middle- or right-drag to pan · right-click for the menu · click to select · drag a selection to move · R rotates" });
   world.style.width = stage.clientWidth + "px";
   E.viewTouched = false;
   renderProps(); renderPeers(); renderThreads();

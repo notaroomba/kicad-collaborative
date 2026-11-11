@@ -64,18 +64,22 @@ export function sendPresence(mmPos, ghostSegs) {
   // ids in its own copy; with neither the peer is a bare cursor and the desktop cannot tell that
   // the items moving under it belong to that person.  Same frame as the desktop sends:
   // BOX2I(origin, size) in internal units.
-  if (E.kdoc && E.selection && E.selection.size) {
-    const sel = [], boxes = [], plain = [];
-    for (const id of E.selection) {
+  const ids = new Set(E.selection); if (E.selected) ids.add(E.selected.id);
+  if (E.kdoc && ids.size) {
+    const sel = [], boxes = [], at = [], plain = [];
+    for (const id of ids) {
       if (sel.length >= MAX_PRESENCE_ITEMS) break;
       const it = E.kdoc.items.get(id), b = it && it.bbox;
       if (!b) { plain.push(id); continue; }
-      // rebuildOverlay pairs selection[i] with boxes[i], so only items that contribute a box
+      // rebuildOverlay pairs selection[i] with boxes[i] (and at[i]), so only items that contribute a box
       // go in both lists; anything without geometry falls back to the id-only form.
       sel.push(id);
       boxes.push([Math.round(b[0] * E.IU), Math.round(b[1] * E.IU), Math.round((b[2] - b[0]) * E.IU), Math.round((b[3] - b[1]) * E.IU)]);
+      // The item's anchor (its GetPosition on the desktop): a receiver that holds the item ghosts it displaced by
+      // `at − its own anchor`, which is exact, where a bounding-box difference never is (fonts, text layers).
+      const a = anchorMm(it); at.push(a ? [Math.round(a[0] * E.IU), Math.round(a[1] * E.IU)] : null);
     }
-    if (boxes.length) { st.selection = sel; st.boxes = boxes; }
+    if (boxes.length) { st.selection = sel; st.boxes = boxes; st.at = at; }
     else if (plain.length) st.selection = plain;
   }
   // The desktop only draws a peer that says which sheet it is on: SCH_COLLAB_TOOL::rebuildOverlay
@@ -85,6 +89,18 @@ export function sendPresence(mmPos, ghostSegs) {
   const doc = (state.docs || []).find((d) => d.docId === state.docId);
   if (doc && doc.path) st.sheetFile = doc.path;
   E.ws.send(JSON.stringify({ type: "presence", docId: state.docId, state: st }));
+}
+
+/** Where an item is placed by (mm): its (at) / transform for symbols, footprints, vias and texts, else its first point. */
+export function anchorMm(it) {
+  const n = it.node, K = KiCadCanvas;
+  if (!n) return null;
+  if (n[0] === "arc" || n[0] === "gr_arc") return null;   // the desktop anchors arcs on their centre (EDA_SHAPE::getPosition), which the file's three points do not carry
+  if (K.kid(n, "at") || K.kid(n, "transform")) { const a = K.atOf(n); return a ? [a[0], a[1]] : null; }
+  for (const key of ["start", "center"]) { const p = K.kid(n, key); if (p) return [K.num(p[1]), K.num(p[2])]; }
+  const pts = K.ptsOf(n); if (pts.length) return pts[0];
+  const poly = K.kid(n, "polyline"); if (poly) { const pp = K.ptsOf(poly); if (pp.length) return pp[0]; }
+  return null;
 }
 
 /** ws.rs rejects a presence state over 8 KB outright, and the desktop caps its own lists too. */
