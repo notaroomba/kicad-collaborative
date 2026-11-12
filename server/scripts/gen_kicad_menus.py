@@ -22,7 +22,9 @@ TABLES = os.path.join(base.ROOT, "server", "web", "tables.ts")
 # Icons the menu chrome uses that belong to no action (sub-menu titles, the About box).
 EXTRA_ICONS = {"import", "export_file", "fabrication", "language", "add_zone", "contrast_mode", "mw_add_line", "add_aligned_dimension",
                "measurement", "mode_module", "puzzle_piece", "swap", "locked", "show_ratsnest", "group", "component_select_unit",
-               "special_tools", "align_items", "convert", "unit_mm", "checked_ok", "right", "text_align_left", "icon_kicad", "hotkeys", "about"}
+               "special_tools", "align_items", "convert", "unit_mm", "checked_ok", "right", "text_align_left", "icon_kicad", "hotkeys", "about",
+               # the Footprint Wizard frame's toolbar (editor/fpwizard.ts)
+               "module_wizard", "reload", "refresh", "zoom_in", "zoom_out", "zoom_fit_in_page", "export_footprint_names"}
 
 
 MAC_IF = r"#\s*if(?:def\s+|\s+defined\(\s*)__WX(?:OSX_)?MAC__[ \t]*\)?[^\n]*\n"

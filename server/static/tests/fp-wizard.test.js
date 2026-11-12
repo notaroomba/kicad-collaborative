@@ -33,7 +33,7 @@ test("a wizard's answer is checked into pages, values, messages and a footprint"
   assert.strictEqual(M.buildMessage(st), "The wizard did not build a footprint.");
   assert.strictEqual(M.buildMessage(Object.assign({}, st, { messages: "Cannot build" })), "Cannot build");
   assert.strictEqual(M.buildMessage(Object.assign({}, st, { footprint: "(footprint \"x\")" })), "QFN packages", "a built footprint shows the wizard's description (RegenerateFootprint)");
-  assert.deepStrictEqual(["mm", "mils", "degrees", "radians", "%", "integer", "float", "bool", "string", "a,b"].map(M.unitsLabel), ["mm", "mils", "deg", "rad", "%", "", "", "", "", ""]);
+  assert.deepStrictEqual(["mm", "mils", "degrees", "radians", "%", "integer", "float", "bool", "string", "a,b"].map(M.paramKind), ["distance", "distance", "angle", "angle", "real", "int", "real", "bool", "string", "enum"]);
   assert.deepStrictEqual(M.wizardState("nonsense"), { name: "", description: "", pages: [], messages: "", footprint: null });
 });
 
@@ -97,6 +97,44 @@ else test("a legacy Python wizard answers describe / build / reset through kicad
   assert.ok(/Parameters have errors/.test(M.buildMessage(bad)), bad.messages);
   assert.deepStrictEqual(M.pageValues(reset), [["8", "5"], ["1"]]);
   assert.ok(reset.footprint);
+});
+
+test("parameters show as KiCad 10's property grid types: lengths in the user units, angles in degrees", () => {
+  const q = (units, value) => ({ name: "p", value, units, hint: "", designator: "", error: "" });
+  assert.strictEqual(M.paramDisplay(q("mm", "1.27"), "mm"), "1.27 mm");
+  assert.strictEqual(M.paramDisplay(q("mm", "1.27"), "mil"), "50 mils");
+  assert.strictEqual(M.paramDisplay(q("mils", "50"), "mm"), "1.27 mm");
+  assert.strictEqual(M.paramDisplay(q("mils", "100"), "in"), "0.1 in");
+  assert.strictEqual(M.paramDisplay(q("radians", String(Math.PI / 2)), "mm"), "90°");
+  assert.strictEqual(M.paramDisplay(q("degrees", "45"), "mm"), "45°");
+  assert.strictEqual(M.paramDisplay(q("integer", "8"), "mm"), "8");
+  assert.strictEqual(M.paramDisplay(q("bool", "True"), "mm"), "1");
+  // typed text goes back in the wizard's own units
+  assert.strictEqual(M.paramParse(q("mils", "50"), "1.27", "mm"), "50");
+  assert.strictEqual(M.paramParse(q("mils", "50"), "2 mm", "mil"), "78.740157");
+  assert.strictEqual(M.paramParse(q("mm", "1"), "50", "mil"), "1.27");
+  assert.strictEqual(M.paramParse(q("mm", "1"), "1.5 mm", "mm"), "1.5");
+  assert.strictEqual(M.paramParse(q("radians", "0"), "180°", "mm"), String(+Math.PI.toFixed(9)));
+  assert.strictEqual(M.paramParse(q("degrees", "0"), "30", "mm"), "30");
+  assert.strictEqual(M.paramParse(q("integer", "1"), "12", "mm"), "12");
+  assert.strictEqual(M.paramParse(q("integer", "1"), "1.5", "mm"), null, "an int property refuses a fraction");
+  assert.strictEqual(M.paramParse(q("float", "1"), "abc", "mm"), null);
+  assert.strictEqual(M.paramParse(q("mm", "1"), "abc", "mm"), null);
+  assert.strictEqual(M.paramParse(q("a,b", "a"), "b", "mm"), "b");
+  assert.strictEqual(M.paramParse(q("a,b", "a"), "c", "mm"), null);
+  const st = M.wizardState({ pages: [{ name: "Pads", params: [] }, { name: "", params: [] }] });
+  assert.deepStrictEqual(M.paramCategories(st).map((c) => c.name), ["Pads", "Page 2"]);
+});
+
+test("the message panel shows FOOTPRINT::GetMsgPanelInfo's board-frame rows for the built footprint", () => {
+  const t = SX.parse('(footprint "QFN-16" (layer "F.Cu") (descr "Quad flat") (tags "qfn") (property "Reference" "REF**") (property "Value" "QFN-16") (attr smd exclude_from_bom) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Mask")) (model "${KICAD9_3DMODEL_DIR}/x.wrl"))');
+  assert.deepStrictEqual(M.wizardMsgPanel(t), [
+    { title: "REF**", value: "QFN-16" }, { title: "Board Side", value: "Front" }, { title: "Rotation", value: "0" },
+    { title: "Status: ", value: "Attributes: exclude from BOM" }, { title: "Footprint: QFN-16", value: "3D-Shape: ${KICAD9_3DMODEL_DIR}/x.wrl" },
+    { title: "Doc: Quad flat", value: "Keywords: qfn" }]);
+  const bare = M.wizardMsgPanel(SX.parse('(footprint "X" (layer "F.Cu") (fp_line (start 0 0) (end 1 0) (layer "Dwgs.User")))'));
+  assert.ok(!bare.some((m) => m.title === "Board Side"), "an unsided footprint has no Board Side row");
+  assert.deepStrictEqual(M.wizardMsgPanel(null), []);
 });
 
 console.log(`${passed} passed, ${failed} failed`);

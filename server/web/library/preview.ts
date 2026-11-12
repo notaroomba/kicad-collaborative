@@ -24,12 +24,12 @@ function boundsOf(doc: KDoc): [number, number, number, number] | null {
   return b;
 }
 
-function draw(canvas: HTMLCanvasElement, doc: KDoc, opts: Record<string, unknown>, maxPpm: number): void {
+function draw(canvas: HTMLCanvasElement, doc: KDoc, opts: Record<string, unknown>, maxPpm: number, zoom = 1): void {
   const g = canvas.getContext("2d"); if (!g) return;
   const { w, h, dpr } = sizeToBox(canvas);
   const b = boundsOf(doc) || [-5, -5, 5, 5];
   const bw = Math.max(0.5, b[2] - b[0]), bh = Math.max(0.5, b[3] - b[1]);
-  const ppm = Math.min(maxPpm, (w * 0.84) / bw, (h * 0.84) / bh);
+  const ppm = Math.min(maxPpm, (w * 0.84) / bw, (h * 0.84) / bh) * zoom;
   const view: KView = { ppm, zoom: 1, panX: 0, panY: 0, x0: (b[0] + b[2]) / 2 - w / 2 / ppm, y0: (b[1] + b[3]) / 2 - h / 2 / ppm, dpr };
   (K().render as unknown as Render)(doc, g, view, Object.assign({ frame: false, grid: 0 }, opts));
 }
@@ -49,8 +49,8 @@ export function renderSymbolPreview(canvas: HTMLCanvasElement, libId: string, sy
 }
 
 /** A library footprint (.kicad_mod text), every layer shown. */
-export function renderFootprintPreview(canvas: HTMLCanvasElement, fpid: string, footprint: string): void {
+export function renderFootprintPreview(canvas: HTMLCanvasElement, fpid: string, footprint: string, zoom = 1): void {
   const node = footprintInstance({ fpid, footprint, at: [0, 0], uuid: "00000000-0000-4000-8000-000000000002" });
   const doc = K().parseDoc(`(kicad_pcb (version 20260206) (generator "pcbnew") ${PREVIEW_LAYERS} ${K().serialize(node)})`);
-  draw(canvas, doc, { hidden: new Set<string>() }, 60);
+  draw(canvas, doc, { hidden: new Set<string>() }, 60, zoom);
 }
