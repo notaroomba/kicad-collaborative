@@ -1921,6 +1921,7 @@ function expandDocVars(doc, text2) {
     return text2;
   }
 }
+var TILDE_LITERAL_VERSION = 20250318;
 var ORIENT = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
 function symbolTransform(rot2, mirror) {
   let T = ORIENT[(Math.round(rot2) % 360 + 360) % 360] || ORIENT[0];
@@ -2059,7 +2060,7 @@ function buildSchGeom(doc, item) {
     buildSymbolGeom(doc, item);
   }
 }
-function shapeGeom(item, g2, gk, tf, color, layer, z, zBg, w, bodyFill, invertY) {
+function shapeGeom(item, g2, gk, tf2, color, layer, z, zBg, w, bodyFill, invertY) {
   const f = fillOf(g2);
   const sc = strokeColorOf(g2) || color;
   const fill = f.type === "background" ? SCH.body : f.type === "outline" ? sc : f.type === "color" ? f.color : f.type === "solid" ? sc : null;
@@ -2070,11 +2071,11 @@ function shapeGeom(item, g2, gk, tf, color, layer, z, zBg, w, bodyFill, invertY)
     const s0 = kid(g2, "start"), e0 = kid(g2, "end");
     if (!s0 || !e0) return;
     const x0 = num(s0[1]), y0 = num(s0[2]), x1 = num(e0[1]), y1 = num(e0[2]);
-    const pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)];
+    const pts = [tf2(x0, y0), tf2(x1, y0), tf2(x1, y1), tf2(x0, y1)];
     if (fill) G(item, { t: "poly", pts, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
     G(item, Object.assign({ t: "poly", pts, close: true, w, color: sc, layer, z }, ds));
   } else if (gk === "polyline" || gk === "bezier") {
-    const ctrl = ptsOf(g2).map(([x, y]) => tf(x, y));
+    const ctrl = ptsOf(g2).map(([x, y]) => tf2(x, y));
     let p = ctrl;
     if (p.length < 2) return;
     if (gk === "bezier") p = bezierPts(p);
@@ -2099,20 +2100,20 @@ function shapeGeom(item, g2, gk, tf, color, layer, z, zBg, w, bodyFill, invertY)
   } else if (gk === "circle") {
     const c = kid(g2, "center"), r = kid(g2, "radius");
     if (!c) return;
-    const [cx, cy] = tf(num(c[1]), num(c[2]));
+    const [cx, cy] = tf2(num(c[1]), num(c[2]));
     const rad = r ? num(r[1]) : 1;
     if (fill) G(item, { t: "circle", x: cx, y: cy, r: rad, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
     G(item, Object.assign({ t: "circle", x: cx, y: cy, r: rad, w, color: sc, layer, z }, ds));
   } else if (gk === "ellipse" || gk === "ellipse_arc") {
     const e = ellipsePts(g2, invertY);
     if (!e) return;
-    const p = e.pts.map(([x, y]) => tf(x, y));
+    const p = e.pts.map(([x, y]) => tf2(x, y));
     if (fill && p.length > 2) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
     G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color: sc, layer, z }, ds));
   } else if (gk === "arc") {
     const s0 = kid(g2, "start"), m0 = kid(g2, "mid"), e0 = kid(g2, "end");
     if (!s0 || !m0 || !e0) return;
-    const a = arcFrom3(tf(num(s0[1]), num(s0[2])), tf(num(m0[1]), num(m0[2])), tf(num(e0[1]), num(e0[2])));
+    const a = arcFrom3(tf2(num(s0[1]), num(s0[2])), tf2(num(m0[1]), num(m0[2])), tf2(num(e0[1]), num(e0[2])));
     if (a && hasEndings(g2)) {
       const e = readEndings(g2), body = shortenArc(a, e.start, e.end, w), tan = arcTangents(a), [ps, pe] = arcEnds(a);
       if (body) G(item, Object.assign({ t: "arc", w, color: sc, layer, z, fill: closed ? fill : null }, body, ds));
@@ -2120,7 +2121,7 @@ function shapeGeom(item, g2, gk, tf, color, layer, z, zBg, w, bodyFill, invertY)
       emitEnding(item, e.end, pe, tan[1], w, sc, layer, z);
     } else if (a) G(item, Object.assign({ t: "arc", w, color: sc, layer, z, fill: closed ? fill : null }, a, ds));
     else {
-      const p0 = tf(num(s0[1]), num(s0[2])), p1 = tf(num(e0[1]), num(e0[2]));
+      const p0 = tf2(num(s0[1]), num(s0[2])), p1 = tf2(num(e0[1]), num(e0[2]));
       G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color: sc, layer, z }, ds));
     }
   }
@@ -2282,7 +2283,7 @@ function buildSymbolGeom(doc, item) {
   const noSim = yesNo(n, "exclude_from_sim");
   const T = symbolTransform(rot2, mirror);
   const Ti = internalT(T);
-  const tf = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
+  const tf2 = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
   item.movable = true;
   item.x = ax;
   item.y = ay;
@@ -2313,10 +2314,10 @@ function buildSymbolGeom(doc, item) {
     const subs = kids(lib, "symbol");
     let maxNameHalf = 0;
     for (const sub of subs) for (const p of kids(sub, "pin")) {
-      const nm = kid(p, "name");
-      if (nm && str(nm[1]) && str(nm[1]) !== "~") maxNameHalf = Math.max(maxNameHalf, effectsOf(nm).size / 2);
+      const nm2 = kid(p, "name");
+      if (nm2 && str(nm2[1]) && (str(nm2[1]) !== "~" || (doc.version || 0) >= TILDE_LITERAL_VERSION)) maxNameHalf = Math.max(maxNameHalf, effectsOf(nm2).size / 2);
     }
-    const sym = { nameOff, hideNames, hideNums, maxNameHalf, col, alpha };
+    const sym = { nameOff, hideNames, hideNums, maxNameHalf, col, alpha, literalTilde: (doc.version || 0) >= TILDE_LITERAL_VERSION };
     const geomStart = item.geom.length;
     for (const sub of subs) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/);
@@ -2330,13 +2331,13 @@ function buildSymbolGeom(doc, item) {
         const before = item.bbox ? item.bbox.slice() : null;
         item.bbox = null;
         if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc" || gk === "ellipse" || gk === "ellipse_arc") {
-          shapeGeom(item, g2, gk, tf, col(SCH.outline), bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g2, 0) || SCH_PEN, void 0, true);
+          shapeGeom(item, g2, gk, tf2, col(SCH.outline), bodyLayer, SCH_Z.device, SCH_Z.deviceBg, widthOf(g2, 0) || SCH_PEN, void 0, true);
           take("body");
         } else if (gk === "text") {
           const [tx, ty, tr] = atOf(g2);
           const ef = effectsOf(g2);
           if (!ef.hide) {
-            const [px, py] = tf(tx, ty);
+            const [px, py] = tf2(tx, ty);
             transformedText(item, Ti, px, py, str(g2[1]), ef.size, col(strokeColorOf(g2) || SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha });
             take("body");
           }
@@ -2344,7 +2345,7 @@ function buildSymbolGeom(doc, item) {
           const [tx, ty, tr] = atOf(g2);
           const ef = effectsOf(g2);
           const sz = kid(g2, "size");
-          const [px, py] = tf(tx, ty);
+          const [px, py] = tf2(tx, ty);
           if (!ef.hide) {
             transformedText(item, Ti, px, py, str(g2[1]), ef.size, col(SCH.outline), tr, ef.just, bodyLayer, { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, defH: "left", defV: "top" });
             take("body");
@@ -2352,10 +2353,10 @@ function buildSymbolGeom(doc, item) {
         } else if (gk === "pin") {
           if (pinHidden(g2)) {
             const shadow = { geom: [], bbox: null };
-            buildPinGeom(shadow, g2, tf, Object.assign({}, sym, { col: () => SCH.hidden, showHidden: true }));
+            buildPinGeom(shadow, g2, tf2, Object.assign({}, sym, { col: () => SCH.hidden, showHidden: true }));
             if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
           } else {
-            buildPinGeom(item, g2, tf, sym);
+            buildPinGeom(item, g2, tf2, sym);
             take("pin");
           }
         }
@@ -2411,7 +2412,25 @@ function buildSymbolGeom(doc, item) {
   }
   if (!item.bbox) bboxAdd(item, ax, ay, 2.54);
 }
-function buildPinGeom(item, g2, tf, sym) {
+function altPinModesIcon(item, x, y, size, rotate, color) {
+  const w = size / 10, lyo = size / 4, ah = size / 8, layer = "Pin names", z = SCH_Z.pinName;
+  const P = (px, py) => rotate ? [x + py, y - px] : [x + px, y + py];
+  const seg = (a, b) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" });
+  const tr = [size / 2, -lyo], br = [size / 2, lyo];
+  seg(P(tr[0], tr[1]), P(tr[0] - size, tr[1]));
+  seg(P(tr[0], tr[1]), P(tr[0] - ah * 1.2, tr[1] - ah));
+  seg(P(tr[0], tr[1]), P(tr[0] - ah * 1.2, tr[1] + ah));
+  seg(P(br[0], br[1]), P(br[0] - size / 2, br[1]));
+  seg(P(br[0], br[1]), P(br[0] - ah * 1.2, br[1] - ah));
+  seg(P(br[0], br[1]), P(br[0] - ah * 1.2, br[1] + ah));
+  const arc = [];
+  for (let i = 0; i <= 8; i++) {
+    const t = Math.PI - Math.PI / 2 * i / 8;
+    arc.push(P(lyo * Math.cos(t), lyo * Math.sin(t)));
+  }
+  G(item, { t: "poly", pts: arc, close: false, w, color, layer, z });
+}
+function buildPinGeom(item, g2, tf2, sym) {
   const type = str(g2[1]), shape = str(g2[2]);
   const [px, py, pr] = atOf(g2);
   const lenN = kid(g2, "length");
@@ -2420,16 +2439,16 @@ function buildPinGeom(item, g2, tf, sym) {
   const g0 = item.geom.length, numTag = kid(g2, "number");
   const tag = numTag ? str(numTag[1]) : "";
   try {
-    buildPinGeomInner(item, g2, tf, sym, type, shape, px, py, pr, len);
+    buildPinGeomInner(item, g2, tf2, sym, type, shape, px, py, pr, len);
   } finally {
     for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = tag;
   }
 }
-function buildPinGeomInner(item, g2, tf, sym, type, shape, px, py, pr, len) {
+function buildPinGeomInner(item, g2, tf2, sym, type, shape, px, py, pr, len) {
   const dir = (Math.round(pr) % 360 + 360) % 360;
   const d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];
-  const pos = tf(px, py), rootPt = tf(px + d[0] * len, py + d[1] * len);
-  const tip = tf(px + d[0], py + d[1]);
+  const pos = tf2(px, py), rootPt = tf2(px + d[0] * len, py + d[1] * len);
+  const tip = tf2(px + d[0], py + d[1]);
   let ox = pos[0] - tip[0], oy = pos[1] - tip[1];
   const ol = Math.hypot(ox, oy) || 1;
   ox = Math.round(ox / ol);
@@ -2485,19 +2504,28 @@ function buildPinGeomInner(item, g2, tf, sym, type, shape, px, py, pr, len) {
   bboxAdd(item, pos[0], pos[1]);
   bboxAdd(item, p0[0], p0[1]);
   const pinName = nameN ? str(nameN[1]) : "", pinNum = numN ? str(numN[1]) : "";
-  const showName = !!pinName && pinName !== "~" && !sym.hideNames && !nameEf.hide;
+  const named = !!pinName && (pinName !== "~" || !!sym.literalTilde);
+  const showName = named && !sym.hideNames && !nameEf.hide;
   const showNum = !!pinNum && !sym.hideNums && !numEf.hide;
   const nameThick = Math.min(SCH_PEN, 0.18 * nameEf.size), numThick = Math.min(SCH_PEN, 0.18 * numEf.size);
   const clearance = PIN_TEXT_OFFSET + PIN_TEXT_MARGIN;
   const halfLen = len / 2;
   const inside = sym.nameOff > 0;
-  const both = !!pinName && pinName !== "~" && !sym.hideNames && !inside;
+  const both = named && !sym.hideNames && !inside;
   const alongX = orient === "L" ? pos[0] - halfLen : pos[0] + halfLen, alongY = orient === "D" ? pos[1] + halfLen : pos[1] - halfLen;
   const nameColor = sym.col(SCH.pinName), numColor = sym.col(SCH.pinNum);
   if (showNum) {
     const perp = clearance + numEf.size / 2 + numThick;
     if (vertical) textGeom(item, both ? pos[0] + perp : pos[0] - perp, alongY, pinNum, numEf.size, numColor, 90, ["center", "middle"], "Pin numbers", { z: SCH_Z.pinNum, w: numThick });
     else textGeom(item, alongX, both ? pos[1] + perp : pos[1] - perp, pinNum, numEf.size, numColor, 0, ["center", "middle"], "Pin numbers", { z: SCH_Z.pinNum, w: numThick });
+  }
+  if (showName && sym.altIcons && kids(g2, "alternate").length) {
+    const icon = Math.min(nameEf.size, 1.5), nw = textWidth(pinName, nameEf.size, nameThick);
+    const ux = -ox, uy = -oy;
+    const along2 = inside ? len + sym.nameOff + nw + icon * 0.75 : halfLen - nw / 2 - icon * 0.75;
+    const perp = inside ? 0 : vertical ? clearance + nameEf.size / 2 + nameThick : sym.maxNameHalf + clearance + nameThick;
+    const cx = pos[0] + ux * along2 - (vertical ? perp : 0), cy = pos[1] + uy * along2 - (vertical ? 0 : perp);
+    altPinModesIcon(item, cx, cy, icon, vertical, nameColor);
   }
   if (showName) {
     if (inside) {
@@ -2698,7 +2726,7 @@ function buildPcbGeom(doc, item) {
   } else if (k === "gr_text") {
     const [x, y, rot2] = atOf(n);
     const tl = layerOf(n, "Dwgs.User");
-    pcbTextGeom(item, n, x, y, expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot2, tl);
+    pcbTextGeom(item, n, x, y, doc && doc.fpEditor ? fpEditorVars(doc, str(n[1]), tl) : expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot2, tl);
   } else if (k === "gr_text_box") {
     buildTextBoxGeom(item, n, (x, y) => [x, y], layerOf(n, "Dwgs.User"), 0);
   } else if (k === "dimension") {
@@ -2721,6 +2749,15 @@ function buildPcbGeom(doc, item) {
     G(item, { t: "circle", x, y, r, w, color, layer, z });
   } else if (k === "footprint") {
     buildFootprintGeom(doc, item);
+  } else if (k === "pad" && doc && doc.fpEditor) {
+    const [x, y, rot2] = atOf(n);
+    item.x = x;
+    item.y = y;
+    item.rot = rot2;
+    item.layer = padCopperLayer(n) || "F.Cu";
+    buildPadGeom(item, n, (px, py) => [px, py], "F.Cu", doc, 0);
+  } else if (k === "property" && doc && doc.fpEditor) {
+    buildFieldGeom(doc, item);
   } else if (k === "table") {
     buildTableGeom(doc, item, n);
   } else if (k === "image") {
@@ -2843,19 +2880,19 @@ function hatchLines(pts, slope, spacing, lineLen) {
   }
   return out;
 }
-function pointGeom(item, n, tf) {
+function pointGeom(item, n, tf2) {
   const at = kid(n, "at");
   if (!at) return;
-  const [x, y] = tf(num(at[1]), num(at[2]));
+  const [x, y] = tf2(num(at[1]), num(at[2]));
   const sz = kid(n, "size"), size = (sz ? num(sz[1]) : 1) / 2, layer = layerOf(n, "F.SilkS"), z = pcbZ(layer) + 0.9, w = 0.01;
   for (const [dx, dy] of [[1, 1], [1, -1]]) G(item, { t: "line", x1: x - size * dx, y1: y - size * dy, x2: x + size * dx, y2: y + size * dy, w, color: POINT_COLOR, layer, z, cap: "butt", point: true });
   G(item, { t: "circle", x, y, r: size / 2, w, color: pcbColor(layer), layer, z, point: true });
 }
 var POINT_COLOR = "#FF26E2";
-function barcodeGeom(item, n, tf, frot) {
+function barcodeGeom(item, n, tf2, frot) {
   const at = kid(n, "at");
   if (!at) return;
-  const [px, py] = tf(num(at[1]), num(at[2]));
+  const [px, py] = tf2(num(at[1]), num(at[2]));
   const rot2 = num(at[3]) + (frot || 0);
   const sz = kid(n, "size"), W6 = sz ? num(sz[1]) : 5, H = sz ? num(sz[2], W6) : 5;
   if (!(W6 > 0) || !(H > 0)) return;
@@ -2906,9 +2943,9 @@ function barcodeGeom(item, n, tf, frot) {
     textLines(item, tx, ty, text2, th, ink, rot2, ["center", "top"], layer, { pcb: true, z: z + 0.01, w: th * 0.15, mirror: back || void 0 });
   }
 }
-function graphicGeom(item, g2, shape, tf, layer, z) {
+function graphicGeom(item, g2, shape, tf2, layer, z) {
   const first = item.geom ? item.geom.length : 0;
-  graphicShapeGeom(item, g2, shape, tf, layer, z);
+  graphicShapeGeom(item, g2, shape, tf2, layer, z);
   const ls = kid(g2, "layers");
   const mask = ls && ls.slice(1).map(str).find((l) => /\.Mask$/.test(l));
   if (!mask || !item.geom) return;
@@ -2918,7 +2955,7 @@ function graphicGeom(item, g2, shape, tf, layer, z) {
     if (mm) item.geom[i].maskMargin = num(mm[1]);
   }
 }
-function graphicShapeGeom(item, g2, shape, tf, layer, z) {
+function graphicShapeGeom(item, g2, shape, tf2, layer, z) {
   const w = widthOf(g2, 0);
   const color = pcbColor(layer);
   z = z === void 0 ? pcbZ(layer) : z;
@@ -2929,47 +2966,47 @@ function graphicShapeGeom(item, g2, shape, tf, layer, z) {
   if (shape === "line") {
     const s = kid(g2, "start"), e = kid(g2, "end");
     if (!s || !e) return;
-    const a = tf(num(s[1]), num(s[2])), b = tf(num(e[1]), num(e[2]));
+    const a = tf2(num(s[1]), num(s[2])), b = tf2(num(e[1]), num(e[2]));
     G(item, Object.assign({ t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" }, ds));
   } else if (shape === "rect") {
     const s = kid(g2, "start"), e = kid(g2, "end");
     if (!s || !e) return;
     const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]);
-    G(item, Object.assign({ t: "poly", pts: [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)], close: true, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
+    G(item, Object.assign({ t: "poly", pts: [tf2(x0, y0), tf2(x1, y0), tf2(x1, y1), tf2(x0, y1)], close: true, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "circle") {
     const c = kid(g2, "center"), e = kid(g2, "end");
     if (!c) return;
-    const [cx, cy] = tf(num(c[1]), num(c[2]));
+    const [cx, cy] = tf2(num(c[1]), num(c[2]));
     const r = e ? Math.hypot(num(e[1]) - num(c[1]), num(e[2]) - num(c[2])) : num((kid(g2, "radius") || [])[1], 1);
     G(item, Object.assign({ t: "circle", x: cx, y: cy, r, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "arc") {
     const s = kid(g2, "start"), m = kid(g2, "mid"), e = kid(g2, "end");
     if (!s || !m || !e) return;
-    const a = arcFrom3(tf(num(s[1]), num(s[2])), tf(num(m[1]), num(m[2])), tf(num(e[1]), num(e[2])));
+    const a = arcFrom3(tf2(num(s[1]), num(s[2])), tf2(num(m[1]), num(m[2])), tf2(num(e[1]), num(e[2])));
     if (a) G(item, Object.assign({ t: "arc", w, color, layer, z, cap: "round" }, a, ds));
     else {
-      const p0 = tf(num(s[1]), num(s[2])), p1 = tf(num(e[1]), num(e[2]));
+      const p0 = tf2(num(s[1]), num(s[2])), p1 = tf2(num(e[1]), num(e[2]));
       G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color, layer, z, cap: "round" }, ds));
     }
   } else if (shape === "ellipse" || shape === "ellipse_arc") {
     const e = ellipsePts(g2, false);
     if (!e) return;
-    const p = e.pts.map(([x, y]) => tf(x, y));
+    const p = e.pts.map(([x, y]) => tf2(x, y));
     G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color, fill: e.closed ? fillColor : null, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "poly" || shape === "curve") {
-    let p = polyPtsOf(g2).map(([x, y]) => tf(x, y));
+    let p = polyPtsOf(g2).map(([x, y]) => tf2(x, y));
     if (p.length < 2) return;
     if (shape === "curve") p = bezierPts(p);
     G(item, Object.assign({ t: "poly", pts: p, close: shape === "poly", w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   }
 }
-function buildTextBoxGeom(item, n, tf, layer, rotBase) {
+function buildTextBoxGeom(item, n, tf2, layer, rotBase) {
   const ef = effectsOf(n);
   if (ef.hide) return;
   const angN = kid(n, "angle");
   const libAng = angN ? num(angN[1]) : 0;
   const ang = libAng + rotBase;
-  let pts = polyPtsOf(n).map(([x, y]) => tf(x, y));
+  let pts = polyPtsOf(n).map(([x, y]) => tf2(x, y));
   if (pts.length < 4) {
     const s = kid(n, "start"), e = kid(n, "end");
     if (!s || !e) return;
@@ -2977,7 +3014,7 @@ function buildTextBoxGeom(item, n, tf, layer, rotBase) {
     const cx = (l + r) / 2, cy = (t + b) / 2, R2 = rotator((libAng % 360 + 360) % 360);
     pts = [[l, t], [r, t], [r, b], [l, b]].map(([x, y]) => {
       const [dx, dy] = R2(x - cx, y - cy);
-      return tf(cx + dx, cy + dy);
+      return tf2(cx + dx, cy + dy);
     });
   }
   const w = widthOf(n, 0);
@@ -3135,7 +3172,7 @@ function buildFootprintGeom(doc, item) {
   const trN = kid(n, "transform");
   const scN = trN && kid(trN, "scale");
   const sx = scN ? num(scN[1], 1) || 1 : 1, sy = scN ? num(scN[2], 1) || 1 : 1;
-  const tf = (lx, ly) => {
+  const tf2 = (lx, ly) => {
     const [x, y] = R2(lx * sx, ly * sy);
     return [fx + x, fy + y];
   };
@@ -3157,7 +3194,7 @@ function buildFootprintGeom(doc, item) {
     const at = kid(p, "at");
     const [px, py, pr] = atOf(p);
     const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS");
-    const [x, y] = tf(px, py);
+    const [x, y] = tf2(px, py);
     const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
     const field = p[0] === "property" ? str(p[1]) : p[0] === "fp_text" ? str(p[1]) === "reference" ? "Reference" : str(p[1]) === "value" ? "Value" : null : null;
     pcbTextGeom(item, p, x, y, expand(text2), pr, layer, field ? { upright: !unlocked, field } : { upright: !unlocked });
@@ -3169,17 +3206,17 @@ function buildFootprintGeom(doc, item) {
     if (!isList(g2)) continue;
     const gk = g2[0];
     if (gk === "fp_line" || gk === "fp_rect" || gk === "fp_circle" || gk === "fp_arc" || gk === "fp_poly" || gk === "fp_curve" || gk === "fp_ellipse" || gk === "fp_ellipse_arc") {
-      graphicGeom(item, g2, gk.replace("fp_", ""), tf, layerOf(g2, "F.SilkS"));
+      graphicGeom(item, g2, gk.replace("fp_", ""), tf2, layerOf(g2, "F.SilkS"));
     } else if (gk === "point") {
-      pointGeom(item, g2, doc && doc.version > 0 && doc.version < 20260616 ? (x, y) => [x, y] : tf);
+      pointGeom(item, g2, doc && doc.version > 0 && doc.version < 20260616 ? (x, y) => [x, y] : tf2);
     } else if (gk === "barcode") {
-      barcodeGeom(item, g2, tf, frot);
+      barcodeGeom(item, g2, tf2, frot);
     } else if (gk === "fp_text") {
       textAt(g2, str(g2[2]));
     } else if (gk === "fp_text_box") {
-      buildTextBoxGeom(item, g2, tf, layerOf(g2, "F.SilkS"), frot);
+      buildTextBoxGeom(item, g2, tf2, layerOf(g2, "F.SilkS"), frot);
     } else if (gk === "pad") {
-      buildPadGeom(item, g2, tf, side, doc, padIndex++);
+      buildPadGeom(item, g2, tf2, side, doc, padIndex++);
     } else if (gk === "dimension") {
       buildDimensionGeom(item, g2);
     } else if (gk === "zone") {
@@ -3187,9 +3224,9 @@ function buildFootprintGeom(doc, item) {
       buildZoneGeom(doc, item, g2);
       for (let i = before; i < item.geom.length; i++) {
         const z = item.geom[i];
-        if (z.pts) z.pts = z.pts.map(([x, y]) => tf(x, y));
+        if (z.pts) z.pts = z.pts.map(([x, y]) => tf2(x, y));
         else if (z.t === "line") {
-          const a = tf(z.x1, z.y1), b = tf(z.x2, z.y2);
+          const a = tf2(z.x1, z.y1), b = tf2(z.x2, z.y2);
           z.x1 = a[0];
           z.y1 = a[1];
           z.x2 = b[0];
@@ -3199,6 +3236,27 @@ function buildFootprintGeom(doc, item) {
     }
   }
   if (!item.bbox) bboxAdd(item, fx, fy, 1);
+}
+function fpEditorVars(doc, text2, layer) {
+  if (text2.indexOf("${") < 0) return text2;
+  const fields = {};
+  for (const it of doc.items.values()) if (it.kind === "property") fields[(it.node[0] === "fp_text" ? it.node[1] === "reference" ? "Reference" : "Value" : str(it.node[1])).toUpperCase()] = str(it.node[2]);
+  const name = doc.fpState ? str(doc.fpState.fp[1]) : "";
+  return text2.replace(/\$\{([A-Za-z_0-9]+)\}/g, (m, v) => v === "LAYER" ? layer : v === "FOOTPRINT_NAME" ? name : fields[v] !== void 0 ? fields[v] : m);
+}
+function buildFieldGeom(doc, item) {
+  const p = item.node;
+  if (!isList(kid(p, "at"))) return;
+  const at = kid(p, "at");
+  const [px, py, pr] = atOf(p);
+  const layer = layerOf(p, "F.SilkS");
+  const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
+  const field = p[0] === "property" ? str(p[1]) : str(p[1]) === "reference" ? "Reference" : "Value";
+  item.x = px;
+  item.y = py;
+  item.rot = pr;
+  item.layer = layer;
+  pcbTextGeom(item, p, px, py, fpEditorVars(doc, str(p[2]), layer), pr, layer, { upright: !unlocked, field });
 }
 function padPolygon(pad, shape, w, h) {
   const hw = w / 2, hh = h / 2;
@@ -3223,7 +3281,7 @@ function padPolygon(pad, shape, w, h) {
   else pts.push([-hw, hh]);
   return pts;
 }
-function buildPadGeom(item, pad, tf, side, doc, padIndex) {
+function buildPadGeom(item, pad, tf2, side, doc, padIndex) {
   const number = str(pad[1]), type = str(pad[2]);
   let shape = str(pad[3]);
   const netN = kid(pad, "net");
@@ -3232,7 +3290,7 @@ function buildPadGeom(item, pad, tf, side, doc, padIndex) {
   const [px, py, prot] = atOf(pad);
   const sz = kid(pad, "size");
   const w = sz ? num(sz[1]) : 1, h = sz ? num(sz[2], num(sz[1])) : 1;
-  const [cx, cy] = tf(px, py);
+  const [cx, cy] = tf2(px, py);
   const ls = kid(pad, "layers");
   const layers = padLayers(doc || { copper: [] }, ls ? ls.slice(1).map(str) : [side]);
   const copper = padCopperLayer(pad);
@@ -3616,7 +3674,7 @@ function boardSizes(src) {
       const names = (Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string" && !!x);
       if (names.length) out.assignments[net] = names;
     }
-    for (const pt3 of arr(ns.netclass_patterns).map(obj)) if (pt3 && typeof pt3.pattern === "string" && typeof pt3.netclass === "string") out.patterns.push({ pattern: pt3.pattern, netclass: pt3.netclass });
+    for (const pt4 of arr(ns.netclass_patterns).map(obj)) if (pt4 && typeof pt4.pattern === "string" && typeof pt4.netclass === "string") out.patterns.push({ pattern: pt4.pattern, netclass: pt4.netclass });
   }
   return out;
 }
@@ -3876,6 +3934,12 @@ var PcbSizes = class {
     this.useConnectedWidth = true;
     /** m_TempOverrideTrackWidth: W during a route overrides the connected width until the route ends */
     this.tempOverride = false;
+    /**
+     * The custom rules' sizes for a net (PNS_KICAD_IFACE_BASE::ImportSizes queries CT_WIDTH, CT_VIA_DIAMETER,
+     * CT_VIA_HOLE and CT_DIFF_PAIR_GAP while the sizes follow the netclass): set by the board tools from the
+     * project's .kicad_dru; each value is the rule's pinned opt (else min) and null when no custom rule gives it.
+     */
+    this.ruleSizes = null;
     this.layerPair = ["F.Cu", "B.Cu"];
     /** the board editor's active layer ("" until a board is open); the module and the toolbar keep it in step through here */
     this.activeLayer = "";
@@ -4008,14 +4072,17 @@ var PcbSizes = class {
   routeWidth(net, connectedWidth) {
     const min = this.sizes.minTrackWidth;
     if (this.useConnectedWidth && !this.tempOverride && connectedWidth && connectedWidth > 0) return connectedWidth;
-    if (this.useNetclassTrack) return Math.max(min, this.netclassOf(net).track_width);
+    if (this.useNetclassTrack) {
+      const r = this.ruleSizes ? this.ruleSizes(net) : null;
+      return Math.max(min, r && r.width != null ? r.width : this.netclassOf(net).track_width);
+    }
     return Math.max(min, this.currentTrackWidth());
   }
   /** The via a route on `net` drops, or the via tool places over `net`. */
   routeVia(net) {
     if (this.useNetclassVia) {
-      const nc = this.netclassOf(net);
-      return { diameter: Math.max(this.sizes.minViaDiameter, nc.via_diameter), drill: Math.max(this.sizes.minThroughDrill, nc.via_drill) };
+      const nc = this.netclassOf(net), r = this.ruleSizes ? this.ruleSizes(net) : null;
+      return { diameter: Math.max(this.sizes.minViaDiameter, r && r.viaDiameter != null ? r.viaDiameter : nc.via_diameter), drill: Math.max(this.sizes.minThroughDrill, r && r.viaDrill != null ? r.viaDrill : nc.via_drill) };
     }
     return this.currentVia();
   }
@@ -4078,6 +4145,15 @@ var PcbSizes = class {
       gap = nc.diff_pair_gap;
       viaGap = nc.diff_pair_via_gap;
       widthSource = gapSource = ncSource;
+      const r = this.ruleSizes ? this.ruleSizes(net) : null;
+      if (r && r.dpWidth != null) {
+        width = r.dpWidth;
+        widthSource = r.widthRule || widthSource;
+      }
+      if (r && r.dpGap != null) {
+        gap = viaGap = r.dpGap;
+        gapSource = r.gapRule || gapSource;
+      }
     }
     if (width < minW) {
       width = minW;
@@ -4177,241 +4253,6 @@ var pcbSizes = {
   USE_NETCLASS_VIA,
   EDIT_SIZES
 };
-
-// web/canvas/version.ts
-var KICAD_BASE_VERSION = "10.99.0-unknown";
-
-// web/canvas/doc.ts
-function newDoc(type) {
-  return {
-    type,
-    schTheme: schTheme(),
-    items: /* @__PURE__ */ new Map(),
-    lib: /* @__PURE__ */ new Map(),
-    page: PAPER_SIZES.A4.slice(),
-    layers: /* @__PURE__ */ new Map(),
-    copper: [],
-    bbox: null,
-    nets: /* @__PURE__ */ new Map(),
-    version: 0,
-    // drawing-sheet context (web/canvas/sheet.ts): the paper's KiCad name (${PAPER}), the (title_block …)
-    // fields, and the sheet identity the app fills in — fileName / filePath / sheetName / sheetPath /
-    // pageNumber / sheetCount — so the title block resolves the same variables eeschema does.
-    paper: "A4",
-    portrait: false,
-    titleBlock: {},
-    pageNumber: "1",
-    sheetCount: 1,
-    fileName: "",
-    filePath: "",
-    fileRoot: "",
-    sheetName: "",
-    sheetPath: "",
-    projectName: "",
-    projectVars: null,
-    // GetBaseVersion() for this tree (web/canvas/version.ts, regenerated by scripts/gen-version.js):
-    // ${KICAD_VERSION} reads "KiCad E.D.A. " + this, exactly as ds_painter.cpp:119-121 formats it.
-    kicadVersion: KICAD_BASE_VERSION
-  };
-}
-var MM_PER_MIL = 25.4 / 1e3;
-var mm2mils = (mm) => Math.round(mm * 1e3 / 25.4);
-var milsPage = (w, h) => [w * MM_PER_MIL, h * MM_PER_MIL];
-var mmPage = (w, h) => milsPage(mm2mils(w), mm2mils(h));
-var userMm = (mm) => Math.max(mm, 10 * MM_PER_MIL);
-var PAPER_SIZES = {
-  A5: mmPage(210, 148),
-  A4: mmPage(297, 210),
-  A3: mmPage(420, 297),
-  A2: mmPage(594, 420),
-  A1: mmPage(841, 594),
-  A0: mmPage(1189, 841),
-  A: milsPage(11e3, 8500),
-  B: milsPage(17e3, 11e3),
-  C: milsPage(22e3, 17e3),
-  D: milsPage(34e3, 22e3),
-  E: milsPage(44e3, 34e3),
-  GERBER: milsPage(32e3, 32e3),
-  USLetter: milsPage(11e3, 8500),
-  USLegal: milsPage(14e3, 8500),
-  USLedger: milsPage(17e3, 11e3)
-};
-function paperSize(node) {
-  const name = str(node[1]);
-  const sizes = PAPER_SIZES;
-  let s = sizes[name] || (name === "User" ? [userMm(num(node[2], 297)), userMm(num(node[3], 210))] : PAPER_SIZES.A4);
-  if (has(node, "portrait")) s = [s[1], s[0]];
-  return s.slice();
-}
-function titleBlockOf(node) {
-  const tb = {};
-  for (const c of node.slice(1)) {
-    if (!isList(c)) continue;
-    if (c[0] === "comment") tb["comment" + num(c[1], 0)] = str(c[2]);
-    else if (c[0] === "title" || c[0] === "date" || c[0] === "rev" || c[0] === "company") tb[c[0]] = str(c[1]);
-  }
-  return tb;
-}
-function parseDoc(text2, docType) {
-  const tree = parse(text2);
-  if (!tree) throw new Error("not an s-expression document");
-  const type = tree[0] === "kicad_sch" ? "sch" : tree[0] === "kicad_pcb" ? "pcb" : docType === "kicad_sch" ? "sch" : "pcb";
-  const doc = newDoc(type);
-  if (type === "sch") {
-    const ls = kid(tree, "lib_symbols");
-    if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
-  }
-  for (let j = 1; j < tree.length; j++) {
-    const node = tree[j];
-    if (!isList(node)) continue;
-    const k = node[0];
-    if (k === "paper") {
-      doc.page = paperSize(node);
-      doc.paper = str(node[1]) || "A4";
-      doc.portrait = doc.page[1] > doc.page[0];
-    } else if (k === "title_block") {
-      doc.titleBlock = titleBlockOf(node);
-      continue;
-    } else if (k === "sheet_instances") {
-      const p = kid(node, "path");
-      const pg = p && kid(p, "page");
-      if (pg) doc.pageNumber = str(pg[1]) || "1";
-      continue;
-    } else if (k === "version") {
-      doc.version = num(node[1], 0);
-      continue;
-    } else if (k === "uuid") {
-      doc.uuid = str(node[1]);
-      continue;
-    } else if (type === "pcb" && k === "layers") {
-      for (const l of node.slice(1)) if (isList(l)) {
-        const name = str(l[1]), ltype = str(l[2]);
-        doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== void 0 ? str(l[3]) : "" });
-        if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name);
-      }
-    } else if (k === "general") {
-      const t = kid(node, "thickness");
-      if (t && type === "pcb") doc.thickness = num(t[1], 1.6);
-      continue;
-    } else if (k === "net") {
-      if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2]));
-      continue;
-    } else if (type === "pcb" && k === "setup") {
-      const o = setupOrigins(node);
-      doc.auxOrigin = o.aux;
-      doc.gridOrigin = o.grid;
-      doc.stackup = kid(node, "stackup") || null;
-      continue;
-    } else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
-    else addItem(doc, node);
-  }
-  computeBBox(doc);
-  return doc;
-}
-function applyDocProps(doc, props) {
-  if (!doc || !props) return false;
-  let any = false;
-  if (typeof props.paper === "string" && props.paper) {
-    const node = parse(props.paper);
-    if (node && node[0] === "paper") {
-      doc.page = paperSize(node);
-      doc.paper = str(node[1]) || "A4";
-      doc.portrait = doc.page[1] > doc.page[0];
-      any = true;
-    }
-  }
-  if (typeof props.titleBlock === "string") {
-    const node = props.titleBlock ? parse(props.titleBlock) : null;
-    doc.titleBlock = node && node[0] === "title_block" ? titleBlockOf(node) : {};
-    any = true;
-  }
-  return any;
-}
-var SCH_KINDS = /* @__PURE__ */ new Set([
-  "symbol",
-  "wire",
-  "bus",
-  "junction",
-  "label",
-  "global_label",
-  "hierarchical_label",
-  "netclass_flag",
-  "directive_label",
-  "no_connect",
-  "sheet",
-  "text",
-  "text_box",
-  "polyline",
-  "rectangle",
-  "circle",
-  "arc",
-  "bezier",
-  "bus_entry",
-  "image",
-  "table",
-  "rule_area",
-  "ellipse",
-  "ellipse_arc",
-  "net_chain",
-  "group"
-]);
-var PCB_KINDS = /* @__PURE__ */ new Set([
-  "footprint",
-  "segment",
-  "arc",
-  "via",
-  "zone",
-  "gr_line",
-  "gr_rect",
-  "gr_circle",
-  "gr_arc",
-  "gr_poly",
-  "gr_text",
-  "gr_text_box",
-  "gr_curve",
-  "gr_bbox",
-  "dimension",
-  "target",
-  "image",
-  "group",
-  "table",
-  "generated",
-  "gr_ellipse",
-  "gr_ellipse_arc",
-  "barcode",
-  "point",
-  "grid_item"
-]);
-function addItem(doc, node) {
-  const k = node[0];
-  if (doc.type === "sch" ? !SCH_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
-  let id = uuidOf(node);
-  if (!id) id = "anon-" + (doc.items.size + 1) + "-" + Math.random().toString(36).slice(2, 8);
-  const item = { id, kind: k, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
-  buildGeom(doc, item);
-  doc.items.set(id, item);
-  return item;
-}
-function computeBBox(doc) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const take = (b) => {
-    if (!b) return;
-    x0 = Math.min(x0, b[0]);
-    y0 = Math.min(y0, b[1]);
-    x1 = Math.max(x1, b[2]);
-    y1 = Math.max(y1, b[3]);
-  };
-  if (doc.type === "pcb") {
-    for (const it of doc.items.values()) if (it.edge || it.kind === "segment" || it.kind === "via" || it.kind === "footprint" || it.kind === "zone" || it.kind === "arc") take(it.bbox);
-    if (!isFinite(x0)) for (const it of doc.items.values()) take(it.bbox);
-  } else {
-    x0 = 0;
-    y0 = 0;
-    x1 = doc.page[0];
-    y1 = doc.page[1];
-  }
-  doc.bbox = isFinite(x0) ? [x0, y0, x1, y1] : [0, 0, doc.page[0], doc.page[1]];
-}
 
 // web/canvas/hit.ts
 function movableItems(doc) {
@@ -5041,7 +4882,7 @@ function render(doc, ctx, view, opts) {
     }
     ctx.stroke();
   }
-  if (opts.frame !== false) {
+  if (opts.frame !== false && !doc.fpEditor) {
     if (flip) ctx.setTransform(s, 0, 0, s, tx, ty);
     drawDrawingSheet(ctx, doc, s, Math.max(1, dpr) / s);
     if (flip) ctx.setTransform(A, 0, 0, s, E, ty);
@@ -5375,6 +5216,22 @@ function render(doc, ctx, view, opts) {
   }
   ctx.globalAlpha = 1;
   if (obj2 && obj2.show) drawObjectOverlays(ctx, doc, obj2, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
+  if (doc.fpEditor && !(obj2 && obj2.hide && obj2.hide.has("anchors"))) {
+    const a = 5 * Math.max(1, dpr) / s;
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+    ctx.lineCap = "butt";
+    ctx.strokeStyle = ANCHOR_COLOR;
+    ctx.lineWidth = Math.max(1, dpr) / s;
+    ctx.beginPath();
+    ctx.moveTo(-a, 0);
+    ctx.lineTo(a, 0);
+    ctx.moveTo(0, -a);
+    ctx.lineTo(0, a);
+    ctx.stroke();
+    ctx.restore();
+  }
   if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
   if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
   if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
@@ -6221,7 +6078,12 @@ function renderPng(doc, opts) {
   return Promise.reject(new Error("renderPng: canvas cannot produce a blob"));
 }
 function atomText(v, quoted) {
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(+v.toFixed(6));
+  if (typeof v === "number") {
+    if (Number.isInteger(v)) return String(v);
+    const s2 = String(v);
+    if (!/e/i.test(s2) && s2.replace(/^-/, "").replace(".", "").replace(/^0+/, "").length <= 10) return s2;
+    return String(+v.toFixed(6));
+  }
   const s = String(v);
   if (quoted || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) || !/^[A-Za-z_][\w.:*-]*$/.test(s))
     return '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
@@ -6353,6 +6215,1129 @@ function serializeItem(doc, item) {
   }
 }
 
+// web/canvas/prettify.ts
+function prettify(source, mode = "normal") {
+  const quoteChar = '"', indentChar = "	", indentSize = 1;
+  const xySpecialCaseColumnLimit = 99, consecutiveTokenWrapThreshold = 72;
+  const textSpecialCase = mode === "compactText", libSpecialCase = mode === "libraryTable";
+  const src = source, n = src.length;
+  let out = "";
+  let listDepth = 0, libDepth = 0, lastNonWhitespace = "", inQuote = false, hasInsertedSpace = false, inMultiLineList = false;
+  let inXY = false, inShortForm = false, inLibRow = false, shortFormDepth = 0, column = 0, backslashCount = 0;
+  const isWs = (c) => c === " " || c === "	" || c === "\n" || c === "\r";
+  const nextNonWhitespace = (i2) => {
+    while (i2 < n && isWs(src[i2])) i2++;
+    return i2 < n ? src[i2] : "";
+  };
+  const isXY = (i2) => src[i2 + 1] === "x" && src[i2 + 2] === "y" && src[i2 + 3] === " ";
+  const tokenAfter = (i2) => {
+    let t = "";
+    let j = i2 + 1;
+    while (j < n && /[A-Za-z]/.test(src[j])) t += src[j++];
+    return t;
+  };
+  const isShortForm = (i2) => {
+    const t = tokenAfter(i2);
+    return t === "font" || t === "stroke" || t === "fill" || t === "teardrop" || t === "offset" || t === "rotate" || t === "scale";
+  };
+  const isLib = (i2) => tokenAfter(i2) === "lib";
+  const indent = (d) => indentChar.repeat(d * indentSize);
+  let i = 0;
+  while (i < n) {
+    const c = src[i];
+    if (listDepth === 0 && c === "#" && (out === "" || out[out.length - 1] === "\n")) {
+      const e = src.indexOf("\n", i);
+      const end = e < 0 ? n : e;
+      out += src.slice(i, end) + "\n";
+      if (e < 0) break;
+      i = e + 1;
+      continue;
+    }
+    const next = nextNonWhitespace(i);
+    if (isWs(c) && !inQuote) {
+      if (!hasInsertedSpace && listDepth > 0 && lastNonWhitespace !== "(" && next !== ")" && next !== "(") {
+        if (inXY || column < consecutiveTokenWrapThreshold) {
+          out += " ";
+          column++;
+        } else if (inShortForm || inLibRow) out += " ";
+        else {
+          out += "\n" + indent(listDepth);
+          column = listDepth * indentSize;
+          inMultiLineList = true;
+        }
+        hasInsertedSpace = true;
+      }
+    } else {
+      hasInsertedSpace = false;
+      if (c === "(" && !inQuote) {
+        const currentIsXY = isXY(i), currentIsShortForm = textSpecialCase && isShortForm(i), currentIsLib = libSpecialCase && isLib(i);
+        if (out === "" || out[out.length - 1] === "\n") {
+          out += "(";
+          column++;
+        } else if (inXY && currentIsXY && column < xySpecialCaseColumnLimit) {
+          out += " (";
+          column += 2;
+        } else if (inShortForm || inLibRow) {
+          out += " (";
+          column += 2;
+        } else {
+          out += "\n" + indent(listDepth) + "(";
+          column = listDepth * indentSize + 1;
+        }
+        inXY = currentIsXY;
+        if (currentIsShortForm) {
+          inShortForm = true;
+          shortFormDepth = listDepth;
+        } else if (currentIsLib) {
+          inLibRow = true;
+          libDepth = listDepth;
+        }
+        listDepth++;
+      } else if (c === ")" && !inQuote) {
+        if (listDepth > 0) listDepth--;
+        if (inShortForm) {
+          out += ")";
+          column++;
+        } else if (inLibRow && listDepth === libDepth) {
+          out += ")";
+          inLibRow = false;
+        } else if (lastNonWhitespace === ")" || inMultiLineList) {
+          out += "\n" + indent(listDepth) + ")";
+          column = listDepth * indentSize + 1;
+          inMultiLineList = false;
+        } else {
+          out += ")";
+          column++;
+        }
+        if (shortFormDepth === listDepth) {
+          inShortForm = false;
+          shortFormDepth = 0;
+        }
+      } else {
+        if (c === "\\") backslashCount++;
+        else if (c === quoteChar && (backslashCount & 1) === 0) inQuote = !inQuote;
+        if (c !== "\\") backslashCount = 0;
+        out += c;
+        column++;
+      }
+      lastNonWhitespace = c;
+    }
+    i++;
+  }
+  return out + "\n";
+}
+
+// web/canvas/footprint-doc.ts
+var FP_TO_BOARD = {
+  fp_line: "gr_line",
+  fp_rect: "gr_rect",
+  fp_circle: "gr_circle",
+  fp_arc: "gr_arc",
+  fp_poly: "gr_poly",
+  fp_curve: "gr_curve",
+  fp_ellipse: "gr_ellipse",
+  fp_ellipse_arc: "gr_ellipse_arc",
+  fp_text_box: "gr_text_box"
+};
+var BOARD_TO_FP = Object.fromEntries(Object.entries(FP_TO_BOARD).map(([a, b]) => [b, a]));
+var FP_KINDS = /* @__PURE__ */ new Set([
+  "property",
+  "gr_line",
+  "gr_rect",
+  "gr_circle",
+  "gr_arc",
+  "gr_poly",
+  "gr_curve",
+  "gr_ellipse",
+  "gr_ellipse_arc",
+  "gr_text",
+  "gr_text_box",
+  "fp_text",
+  "pad",
+  "zone",
+  "group",
+  "dimension",
+  "image",
+  "table",
+  "point",
+  "barcode"
+]);
+var OWNED_FILE_TOKENS = /* @__PURE__ */ new Set([
+  "property",
+  "fp_text",
+  "fp_text_box",
+  "fp_line",
+  "fp_rect",
+  "fp_circle",
+  "fp_arc",
+  "fp_poly",
+  "fp_curve",
+  "fp_ellipse",
+  "fp_ellipse_arc",
+  "pad",
+  "zone",
+  "group",
+  "dimension",
+  "image",
+  "table",
+  "point",
+  "barcode"
+]);
+var isFieldNode = (n) => n[0] === "property" ? typeof n[2] === "string" && n[1] !== "ki_fp_filters" : n[0] === "fp_text" && (n[1] === "reference" || n[1] === "value");
+function isOwnedFileNode(n) {
+  if (!isList(n) || typeof n[0] !== "string" || !OWNED_FILE_TOKENS.has(n[0])) return false;
+  if (n[0] === "property") return isFieldNode(n);
+  return true;
+}
+function toBoardNode(n) {
+  const k = str(n[0]);
+  if (k === "fp_text" && n[1] !== "reference" && n[1] !== "value") {
+    const q = QUOTED.get(n) || 0;
+    const out = ["gr_text", ...n.slice(2)];
+    const nq = q >> 2 << 1;
+    if (nq) QUOTED.set(out, nq);
+    return out;
+  }
+  if (FP_TO_BOARD[k]) n[0] = FP_TO_BOARD[k];
+  return n;
+}
+function toFileNode(n) {
+  const c = cloneNode(n);
+  const k = str(c[0]);
+  if (k === "gr_text") {
+    const q = QUOTED.get(c) || 0;
+    const out = ["fp_text", "user", ...c.slice(1)];
+    QUOTED.set(out, q >> 1 << 2 | 4);
+    return out;
+  }
+  if (BOARD_TO_FP[k]) c[0] = BOARD_TO_FP[k];
+  return c;
+}
+function fpItemKind(n) {
+  const k = str(n[0]);
+  if (k === "property" || k === "fp_text" && (n[1] === "reference" || n[1] === "value")) return "property";
+  return k;
+}
+function fieldName(n) {
+  if (n[0] === "fp_text") return n[1] === "reference" ? "Reference" : n[1] === "value" ? "Value" : str(n[1]);
+  return str(n[1]);
+}
+function fieldText(n) {
+  return str(n[2]);
+}
+function childSpans(text2) {
+  const out = [];
+  const n = text2.length;
+  let i = text2.indexOf("(");
+  if (i < 0) return out;
+  i++;
+  const ws = (c) => c === " " || c === "	" || c === "\n" || c === "\r";
+  for (; ; ) {
+    while (i < n && ws(text2[i])) i++;
+    if (i >= n || text2[i] === ")") break;
+    const st = i;
+    if (text2[i] === "(") {
+      let depth = 0, inStr = false;
+      for (; i < n; i++) {
+        const c = text2[i];
+        if (inStr) {
+          if (c === "\\") i++;
+          else if (c === '"') inStr = false;
+          continue;
+        }
+        if (c === '"') inStr = true;
+        else if (c === "(") depth++;
+        else if (c === ")") {
+          depth--;
+          if (depth === 0) {
+            i++;
+            break;
+          }
+        }
+      }
+    } else if (text2[i] === '"') {
+      i++;
+      while (i < n && text2[i] !== '"') {
+        if (text2[i] === "\\") i++;
+        i++;
+      }
+      i++;
+    } else {
+      while (i < n && !ws(text2[i]) && text2[i] !== "(" && text2[i] !== ")") i++;
+    }
+    out.push([st, i]);
+  }
+  return out;
+}
+function fnv(s, seed = 2166136261) {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return h >>> 0;
+}
+var hex = (v, w) => (v >>> 0).toString(16).padStart(8, "0").slice(0, w);
+function derivedUuid(index, text2) {
+  const a = fnv(text2), b = fnv(text2, a ^ 2654435769), c = fnv(String(index) + ":" + text2, b);
+  return `${hex(a, 8)}-${hex(b, 4)}-4${hex(b >>> 16, 3)}-${(8 | c & 3).toString(16)}${hex(c, 3)}-${hex(fnv(text2, c), 8)}${hex(c >>> 8, 4)}`;
+}
+function derivesFrom(id, text2) {
+  const a = fnv(text2), b = fnv(text2, a ^ 2654435769);
+  if (!id.startsWith(`${hex(a, 8)}-${hex(b, 4)}-`)) return false;
+  for (let k = 0; k < 64; k++) if (derivedUuid(k, text2) === id) return true;
+  return false;
+}
+function withoutUuid(file, id) {
+  for (let j = 1; j < file.length; j++) {
+    const c = file[j];
+    if (isList(c) && (c[0] === "uuid" || c[0] === "tstamp") && str(c[1]) === id) {
+      const out = file.slice(0, j).concat(file.slice(j + 1));
+      const q = QUOTED.get(file);
+      if (q) QUOTED.set(out, q & (1 << j) - 1 | q >>> j + 1 << j);
+      return out;
+    }
+  }
+  return null;
+}
+function canonical(it) {
+  const file = toFileNode(it.node);
+  const own = uuidOf(file);
+  if (!own) return { file, sig: serialize(file), derived: true };
+  if (own === it.id) {
+    const bare = withoutUuid(file, it.id);
+    if (bare) {
+      const sig = serialize(bare);
+      if (derivesFrom(it.id, sig)) return { file: bare, sig, derived: true };
+    }
+  }
+  return { file, sig: serialize(file), derived: false };
+}
+var FP_EDITOR_LAYERS = [
+  ["F.Cu", "signal"],
+  ["In1.Cu", "signal"],
+  ["B.Cu", "signal"],
+  ["B.Adhes", "user"],
+  ["F.Adhes", "user"],
+  ["B.Paste", "user"],
+  ["F.Paste", "user"],
+  ["B.SilkS", "user"],
+  ["F.SilkS", "user"],
+  ["B.Mask", "user"],
+  ["F.Mask", "user"],
+  ["Dwgs.User", "user"],
+  ["Cmts.User", "user"],
+  ["Eco1.User", "user"],
+  ["Eco2.User", "user"],
+  ["Edge.Cuts", "user"],
+  ["Margin", "user"],
+  ["B.CrtYd", "user"],
+  ["F.CrtYd", "user"],
+  ["B.Fab", "user"],
+  ["F.Fab", "user"],
+  ["User.1", "user"],
+  ["User.2", "user"],
+  ["User.3", "user"],
+  ["User.4", "user"]
+];
+var LAYER_IDS = {
+  "F.Cu": 0,
+  "B.Cu": 2,
+  "In1.Cu": 4,
+  "F.Mask": 1,
+  "B.Mask": 3,
+  "F.SilkS": 5,
+  "B.SilkS": 7,
+  "F.Adhes": 9,
+  "B.Adhes": 11,
+  "F.Paste": 13,
+  "B.Paste": 15,
+  "Dwgs.User": 17,
+  "Cmts.User": 19,
+  "Eco1.User": 21,
+  "Eco2.User": 23,
+  "Edge.Cuts": 25,
+  "Margin": 27,
+  "F.CrtYd": 31,
+  "B.CrtYd": 29,
+  "F.Fab": 35,
+  "B.Fab": 33,
+  "User.1": 39,
+  "User.2": 41,
+  "User.3": 43,
+  "User.4": 45
+};
+function loadFootprintDoc(doc, tree, text2, addItem2) {
+  const d = doc;
+  d.fpEditor = true;
+  const spans = childSpans(text2);
+  const header = [tree[0], tree[1]];
+  const hq = QUOTED.get(tree);
+  if (hq) QUOTED.set(header, hq & 3);
+  const st = { fp: header, source: text2, headerSrc: /* @__PURE__ */ new Map(), itemSrc: /* @__PURE__ */ new Map(), headerSig: "", order: [] };
+  d.fpState = st;
+  for (const [name, type] of FP_EDITOR_LAYERS) {
+    d.layers.set(name, { id: LAYER_IDS[name] ?? 0, type, userName: "" });
+    if (type === "signal") d.copper.push(name);
+  }
+  const seen = /* @__PURE__ */ new Map();
+  for (let j = 2; j < tree.length; j++) {
+    const c = tree[j];
+    const span = spans[j];
+    const src = span ? text2.slice(span[0], span[1]) : serialize(c);
+    if (isList(c) && c[0] === "version") d.version = Number(c[1]) || 0;
+    if (!isOwnedFileNode(c)) {
+      header.push(c);
+      if (isList(c)) st.headerSrc.set(c, src);
+      continue;
+    }
+    const node = toBoardNode(c);
+    const sig = serialize(toFileNode(node));
+    let id = uuidOf(node);
+    if (!id) {
+      const k = seen.get(sig) || 0;
+      seen.set(sig, k + 1);
+      id = derivedUuid(k, sig);
+    }
+    const it = addItem2(d, node, id);
+    if (!it) continue;
+    st.itemSrc.set(it.id, { text: src, sig });
+    st.order.push(it.id);
+  }
+  st.headerSig = serialize(header);
+}
+function applyFootprintHeader(doc, sexpr) {
+  const d = doc;
+  if (!d.fpState) return false;
+  let node = parse(sexpr);
+  if (!node) return false;
+  if (node[0] === "kicad_pcb") {
+    const f = kid(node, "footprint");
+    if (!f) return false;
+    node = f;
+  }
+  if (node[0] !== "footprint" && node[0] !== "module") return false;
+  const header = [node[0], node[1]];
+  const q = QUOTED.get(node);
+  if (q) QUOTED.set(header, q & 3);
+  for (const c of node.slice(2)) if (!isOwnedFileNode(c)) header.push(c);
+  d.fpState.fp = header;
+  const v = kid(header, "version");
+  if (v) d.version = Number(v[1]) || d.version;
+  return true;
+}
+function footprintHeaderSexpr(doc) {
+  const d = doc;
+  return d.fpState ? serialize(d.fpState.fp) : "";
+}
+function footprintName(doc) {
+  const d = doc;
+  return d.fpState ? str(d.fpState.fp[1]) : "";
+}
+var HEADER_RANK = {
+  version: 0,
+  generator: 1,
+  generator_version: 2,
+  locked: 3,
+  placed: 4,
+  layer: 5,
+  uuid: 6,
+  tstamp: 6,
+  at: 7,
+  transform: 7,
+  descr: 8,
+  tags: 9,
+  height: 10,
+  // 11: the fields
+  component_classes: 12,
+  property: 13,
+  path: 14,
+  sheetname: 15,
+  sheetfile: 16,
+  units: 17,
+  solder_mask_margin: 18,
+  solder_paste_margin: 19,
+  solder_paste_margin_ratio: 20,
+  solder_paste_ratio: 20,
+  clearance: 21,
+  zone_connect: 22,
+  thermal_width: 22,
+  thermal_gap: 22,
+  attr: 23,
+  stackup: 24,
+  private_layers: 25,
+  net_tie_pad_groups: 26,
+  duplicate_pad_numbers_are_jumpers: 27,
+  jumper_pad_groups: 28,
+  // 30-35: drawings, points, pads, zones, groups, constraints
+  variant: 40,
+  embedded_fonts: 41,
+  embedded_files: 42,
+  model: 43
+};
+var RANK_FIELDS = 11;
+function itemRank(kind) {
+  if (kind === "property") return RANK_FIELDS;
+  if (kind === "point") return 31;
+  if (kind === "pad") return 32;
+  if (kind === "zone") return 33;
+  if (kind === "group") return 34;
+  return 30;
+}
+function layerOrdinal(name) {
+  if (LAYER_IDS[name] !== void 0) return LAYER_IDS[name];
+  const m = /^In(\d+)\.Cu$/.exec(name);
+  if (m) return 2 + 2 * Number(m[1]);
+  const u = /^User\.(\d+)$/.exec(name);
+  if (u) return 37 + 2 * Number(u[1]);
+  if (name === "Rescue") return 37;
+  return 1e3;
+}
+function layerSeq(node) {
+  const l = kid(node, "layers") || kid(node, "layer");
+  const out = /* @__PURE__ */ new Set();
+  for (const a of l ? l.slice(1) : []) {
+    const n = str(a);
+    if (n === "*.Cu") {
+      for (let i = 0; i <= 64; i += 2) out.add(i);
+    } else if (n === "F&B.Cu") {
+      out.add(0);
+      out.add(2);
+    } else if (n.startsWith("*.")) {
+      out.add(layerOrdinal("F." + n.slice(2)));
+      out.add(layerOrdinal("B." + n.slice(2)));
+    } else out.add(layerOrdinal(n));
+  }
+  return Array.from(out).sort((a, b) => a - b);
+}
+function cmpSeq(a, b) {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return a.length - b.length;
+}
+var nm = (v) => {
+  const x = Number(v);
+  return isNaN(x) ? 0 : Math.round(x * 1e6);
+};
+function pt(node, key) {
+  const k = kid(node, key);
+  return k ? [nm(k[1]), nm(k[2])] : null;
+}
+function cmpPt(a, b) {
+  const p = a || [0, 0], q = b || [0, 0];
+  return p[0] - q[0] || p[1] - q[1];
+}
+function polyPts(node) {
+  const p = kid(node, "pts");
+  return p ? kids(p, "xy").map((x) => [nm(x[1]), nm(x[2])]) : [];
+}
+var SHAPE_ORD = { gr_line: 0, gr_rect: 1, gr_arc: 2, gr_circle: 3, gr_poly: 4, gr_curve: 5, gr_ellipse: 6, gr_ellipse_arc: 7 };
+function typeOrd(kind, node) {
+  if (SHAPE_ORD[kind] !== void 0) return 4;
+  if (kind === "image") return 5;
+  if (kind === "gr_text" || kind === "fp_text") return 8;
+  if (kind === "gr_text_box") return 9;
+  if (kind === "table") return 10;
+  if (kind === "barcode") return 18;
+  if (kind === "dimension") {
+    const t = str((kid(node, "type") || [])[1]);
+    return { aligned: 19, leader: 20, center: 21, radial: 22, orthogonal: 23 }[t] ?? 17;
+  }
+  return 30;
+}
+var PAD_SHAPE_ORD = { circle: 0, rect: 1, oval: 2, trapezoid: 3, roundrect: 4, custom: 6 };
+function padShapeOrd(node) {
+  const s = str(node[3]);
+  if (s === "roundrect" && kid(node, "chamfer")) return 5;
+  return PAD_SHAPE_ORD[s] ?? 7;
+}
+function textCmp(a, b) {
+  const aa = kid(a, "at") || [], ba = kid(b, "at") || [];
+  const c = nm(aa[1]) - nm(ba[1]) || nm(aa[2]) - nm(ba[2]);
+  if (c) return c;
+  const r = Number(aa[3] || 0) - Number(ba[3] || 0);
+  if (r) return r;
+  const font = (n) => {
+    const e = kid(n, "effects");
+    return e ? kid(e, "font") : null;
+  };
+  const fa = font(a), fb = font(b);
+  const size = (f) => {
+    const s = f && kid(f, "size");
+    return s ? [nm(s[2]), nm(s[1])] : [0, 0];
+  };
+  const sa = size(fa), sb = size(fb);
+  const sc = sa[0] - sb[0] || sa[1] - sb[1];
+  if (sc) return sc;
+  const th = (f) => {
+    const t = f && kid(f, "thickness");
+    return t ? nm(t[1]) : 0;
+  };
+  const tc = th(fa) - th(fb);
+  if (tc) return tc;
+  const flag2 = (f, k) => {
+    if (!f) return 0;
+    const x = kid(f, k);
+    return x ? str(x[1]) === "no" ? 0 : 1 : f.includes(k) ? 1 : 0;
+  };
+  for (const k of ["bold", "italic"]) {
+    const d = flag2(fa, k) - flag2(fb, k);
+    if (d) return d;
+  }
+  const mir = (n) => {
+    const e = kid(n, "effects");
+    const j = e && kid(e, "justify");
+    return j && j.includes("mirror") ? 1 : 0;
+  };
+  const md = mir(a) - mir(b);
+  if (md) return md;
+  const ls = (f) => {
+    const l = f && kid(f, "line_spacing");
+    return l ? Number(l[1]) : 1;
+  };
+  const lc = ls(fa) - ls(fb);
+  if (lc) return lc;
+  const ta = str(a[1]), tb = str(b[1]);
+  return ta < tb ? -1 : ta > tb ? 1 : 0;
+}
+function cmpDrawings(ka, a, kb, b) {
+  const t = typeOrd(ka, a) - typeOrd(kb, b);
+  if (t) return t;
+  const la = layerOrdinal(str((kid(a, "layer") || [])[1])), lb = layerOrdinal(str((kid(b, "layer") || [])[1]));
+  if (la !== lb) return la - lb;
+  if (SHAPE_ORD[ka] !== void 0) {
+    const s = SHAPE_ORD[ka] - SHAPE_ORD[kb];
+    if (s) return s;
+    if (ka === "gr_poly") {
+      const pa = polyPts(a), pb = polyPts(b);
+      if (pa.length !== pb.length) return pa.length - pb.length;
+      for (let i = 0; i < pa.length; i++) {
+        const c = cmpPt(pa[i], pb[i]);
+        if (c) return c;
+      }
+    } else if (ka === "gr_curve") {
+      const pa = polyPts(a), pb = polyPts(b);
+      for (const i of [0, 3, 1, 2]) {
+        const c = cmpPt(pa[i] || null, pb[i] || null);
+        if (c) return c;
+      }
+    } else if (ka === "gr_ellipse" || ka === "gr_ellipse_arc") {
+      const c = cmpPt(pt(a, "center"), pt(b, "center"));
+      if (c) return c;
+      for (const k of ["major_radius", "minor_radius", "rotation", "start_angle", "end_angle"]) {
+        const x = kid(a, k), y = kid(b, k);
+        const d = (x ? nm(x[1]) : 0) - (y ? nm(y[1]) : 0);
+        if (d) return d;
+      }
+    } else {
+      const sk = ka === "gr_circle" ? "center" : "start";
+      let c = cmpPt(pt(a, sk), pt(b, sk));
+      if (c) return c;
+      c = cmpPt(pt(a, "end"), pt(b, "end"));
+      if (c) return c;
+      if (ka === "gr_arc") {
+        c = cmpPt(pt(a, "mid"), pt(b, "mid"));
+        if (c) return c;
+      }
+    }
+    const w = (n) => {
+      const s2 = kid(n, "stroke");
+      const x = s2 ? kid(s2, "width") : kid(n, "width");
+      return x ? nm(x[1]) : 0;
+    };
+    return w(a) - w(b);
+  }
+  if (typeOrd(ka, a) === 8) return textCmp(a, b);
+  return 0;
+}
+function cmpPads(a, b, strNum = strNumCmp) {
+  const na = str(a[1]), nb = str(b[1]);
+  if (na !== nb) return strNum(na, nb) < 0 ? -1 : 1;
+  const c = cmpPt(pt(a, "at"), pt(b, "at"));
+  if (c) return c;
+  const sa = pt(a, "size") || [0, 0], sb = pt(b, "size") || [0, 0];
+  if (sa[0] !== sb[0]) return sa[0] - sb[0];
+  if (sa[1] !== sb[1]) return sa[1] - sb[1];
+  const sh = padShapeOrd(a) - padShapeOrd(b);
+  if (sh) return sh;
+  return cmpSeq(layerSeq(a), layerSeq(b));
+}
+function cmpZones(a, b) {
+  const pr = (n) => {
+    const p = kid(n, "priority");
+    return p ? Number(p[1]) : 0;
+  };
+  const d = pr(a) - pr(b);
+  if (d) return d;
+  const l = cmpSeq(layerSeq(a), layerSeq(b));
+  if (l) return l;
+  const outline = (n) => {
+    const out = [];
+    for (const p of kids(n, "polygon")) out.push(...polyPts(p));
+    return out;
+  };
+  const pa = outline(a), pb = outline(b);
+  if (pa.length !== pb.length) return pa.length - pb.length;
+  for (let i = 0; i < pa.length; i++) {
+    const c = cmpPt(pa[i], pb[i]);
+    if (c) return c;
+  }
+  return 0;
+}
+function strNumCmp(a, b) {
+  const ra = a.match(/\d+|\D+/g) || [], rb = b.match(/\d+|\D+/g) || [];
+  for (let i = 0; i < Math.min(ra.length, rb.length); i++) {
+    const x = ra[i], y = rb[i];
+    const nx = /^\d/.test(x), ny = /^\d/.test(y);
+    if (nx && ny) {
+      const d = parseInt(x, 10) - parseInt(y, 10);
+      if (d) return d;
+    } else {
+      const c = x.toUpperCase() < y.toUpperCase() ? -1 : x.toUpperCase() > y.toUpperCase() ? 1 : 0;
+      if (c) return c;
+    }
+  }
+  return ra.length - rb.length;
+}
+var FIELD_ORD = { Reference: 0, Value: 1, Datasheet: 2, Description: 3 };
+function sortedItems(d) {
+  const st = d.fpState;
+  const pos = new Map(st.order.map((id, i) => [id, i]));
+  let next = st.order.length;
+  const list = [];
+  for (const it of d.items.values()) list.push({ it, rank: itemRank(it.kind), pos: pos.has(it.id) ? pos.get(it.id) : next++, c: canonical(it) });
+  const tie = (x, y) => x.c.derived && y.c.derived ? x.pos - y.pos : x.it.id < y.it.id ? -1 : x.it.id > y.it.id ? 1 : x.pos - y.pos;
+  list.sort((x, y) => {
+    if (x.rank !== y.rank) return x.rank - y.rank;
+    const a = x.c.file, b = y.c.file;
+    let c = 0;
+    if (x.rank === RANK_FIELDS) {
+      const fa = FIELD_ORD[fieldName(a)] ?? 4, fb = FIELD_ORD[fieldName(b)] ?? 4;
+      return fa - fb || x.pos - y.pos;
+    }
+    if (x.rank === 30) c = cmpDrawings(str(x.it.node[0]), x.it.node, str(y.it.node[0]), y.it.node);
+    else if (x.rank === 32) c = cmpPads(a, b);
+    else if (x.rank === 33) c = cmpZones(a, b);
+    else if (x.rank === 31) c = cmpPt(pt(a, "at"), pt(b, "at"));
+    return c || tie(x, y);
+  });
+  return list;
+}
+function footprintModified(doc) {
+  const d = doc;
+  const st = d.fpState;
+  if (!st) return false;
+  if (serialize(st.fp) !== st.headerSig) return true;
+  let n = 0;
+  for (const it of d.items.values()) {
+    const s = st.itemSrc.get(it.id);
+    if (!s || s.sig !== canonical(it).sig) return true;
+    n++;
+  }
+  return n !== st.itemSrc.size;
+}
+function serializeFootprintDoc(doc) {
+  const d = doc;
+  const st = d.fpState;
+  if (!st) throw new Error("not a footprint document");
+  if (!footprintModified(doc)) return st.source;
+  const parts = [];
+  let seq = 0, lastRank = 0;
+  for (const c of st.fp.slice(2)) {
+    const head2 = isList(c) ? str(c[0]) : str(c);
+    const r = HEADER_RANK[head2];
+    if (r !== void 0) lastRank = r;
+    const text2 = isList(c) ? st.headerSrc.get(c) || serialize(c) : atomText(c, false);
+    parts.push({ rank: r !== void 0 ? r : lastRank, seq: seq++, text: text2 });
+  }
+  const seen = /* @__PURE__ */ new Map();
+  for (const w of sortedItems(d)) {
+    const s = st.itemSrc.get(w.it.id);
+    let text2;
+    if (w.c.derived) {
+      const k = seen.get(w.c.sig) || 0;
+      if (derivedUuid(k, w.c.sig) === w.it.id) {
+        seen.set(w.c.sig, k + 1);
+        text2 = s && s.sig === w.c.sig ? s.text : w.c.sig;
+      } else {
+        const f = cloneNode(w.c.file);
+        f.push(["uuid", w.it.id]);
+        text2 = serialize(f);
+      }
+    } else text2 = s && s.sig === w.c.sig ? s.text : w.c.sig;
+    parts.push({ rank: w.rank, seq: seq++, text: text2 });
+  }
+  parts.sort((a, b) => a.rank - b.rank || a.seq - b.seq);
+  const q = QUOTED.get(st.fp) || 0;
+  const head = "(" + str(st.fp[0]) + " " + atomText(st.fp[1], st.fp[0] === "footprint" || (q & 2) === 2);
+  return prettify(head + (parts.length ? " " + parts.map((p) => p.text).join(" ") : "") + ")");
+}
+function markFootprintSaved(doc, text2) {
+  const d = doc;
+  const st = d.fpState;
+  if (!st) return;
+  const tree = parse(text2);
+  if (!tree) return;
+  const spans = childSpans(text2);
+  st.source = text2;
+  st.headerSrc = /* @__PURE__ */ new Map();
+  st.itemSrc = /* @__PURE__ */ new Map();
+  st.order = [];
+  const headerBySig = /* @__PURE__ */ new Map();
+  for (const c of st.fp.slice(2)) if (isList(c)) {
+    const k = serialize(c);
+    const l = headerBySig.get(k) || [];
+    l.push(c);
+    headerBySig.set(k, l);
+  }
+  const byId = /* @__PURE__ */ new Map();
+  const bySig = /* @__PURE__ */ new Map();
+  for (const it of d.items.values()) {
+    const k = canonical(it).sig;
+    byId.set(it.id, k);
+    const l = bySig.get(k) || [];
+    l.push(it.id);
+    bySig.set(k, l);
+  }
+  const taken = /* @__PURE__ */ new Set();
+  for (let j = 2; j < tree.length; j++) {
+    const c = tree[j];
+    const span = spans[j];
+    if (!span || !isList(c)) continue;
+    const src = text2.slice(span[0], span[1]);
+    if (!isOwnedFileNode(c)) {
+      const l = headerBySig.get(serialize(c));
+      const h = l && l.shift();
+      if (h) st.headerSrc.set(h, src);
+      continue;
+    }
+    const own = uuidOf(c);
+    let id = "", sig = "";
+    if (own && byId.has(own)) {
+      const bare = withoutUuid(c, own);
+      const bs = bare ? serialize(bare) : "";
+      sig = byId.get(own) === bs ? bs : serialize(c);
+      id = own;
+    } else {
+      sig = serialize(c);
+      const l = bySig.get(sig);
+      while (l && l.length && taken.has(l[0])) l.shift();
+      id = l && l.shift() || "";
+    }
+    if (!id || taken.has(id)) continue;
+    taken.add(id);
+    st.itemSrc.set(id, { text: src, sig });
+    st.order.push(id);
+  }
+  st.headerSig = serialize(st.fp);
+}
+function isMandatoryField(it) {
+  return it.kind === "property" && (fieldName(it.node) === "Reference" || fieldName(it.node) === "Value");
+}
+function footprintFields(doc) {
+  const out = {};
+  for (const it of doc.items.values()) if (it.kind === "property") out[fieldName(it.node)] = fieldText(it.node);
+  return out;
+}
+function footprintNode(doc) {
+  const text2 = serializeFootprintDoc(doc);
+  const n = parse(text2);
+  if (!n) throw new Error("footprint does not parse");
+  return n;
+}
+function headerKids(doc, key) {
+  const d = doc;
+  return d.fpState ? kids(d.fpState.fp, key) : [];
+}
+function footprintDocUrl(fields, descr) {
+  const ds = (fields.Datasheet || "").trim();
+  if (ds && ds !== "~") return ds;
+  let idx = descr.indexOf("http:");
+  if (idx < 0) idx = descr.indexOf("https:");
+  if (idx < 0) return null;
+  let url = "", nesting = 0;
+  for (const ch of descr.slice(idx)) {
+    const c = ch.charCodeAt(0);
+    if (c <= 32 || c >= 127 || ch === '"') break;
+    if (ch === "(") nesting++;
+    else if (ch === ")" && --nesting < 0) break;
+    url += ch;
+  }
+  if (".,:;".includes(url.slice(-1))) url = url.slice(0, -1);
+  return url || null;
+}
+var footprintDocApi = {
+  footprintDocUrl,
+  serializeFootprintDoc,
+  footprintModified,
+  markFootprintSaved,
+  footprintHeaderSexpr,
+  footprintName,
+  footprintFields,
+  footprintNode,
+  toFileNode,
+  toBoardNode,
+  fpItemKind,
+  fieldName,
+  fieldText,
+  isMandatoryField,
+  cmpPads,
+  cmpDrawings,
+  strNumCmp,
+  layerOrdinal,
+  isOwnedFileNode,
+  headerKids,
+  derivedUuid,
+  applyFootprintHeader,
+  prettify,
+  FP_EDITOR_LAYERS,
+  FP_TO_BOARD,
+  BOARD_TO_FP
+};
+
+// web/canvas/version.ts
+var KICAD_BASE_VERSION = "10.99.0-unknown";
+
+// web/canvas/doc.ts
+function newDoc(type) {
+  return {
+    type,
+    schTheme: schTheme(),
+    items: /* @__PURE__ */ new Map(),
+    lib: /* @__PURE__ */ new Map(),
+    page: PAPER_SIZES.A4.slice(),
+    layers: /* @__PURE__ */ new Map(),
+    copper: [],
+    bbox: null,
+    nets: /* @__PURE__ */ new Map(),
+    version: 0,
+    // drawing-sheet context (web/canvas/sheet.ts): the paper's KiCad name (${PAPER}), the (title_block …)
+    // fields, and the sheet identity the app fills in — fileName / filePath / sheetName / sheetPath /
+    // pageNumber / sheetCount — so the title block resolves the same variables eeschema does.
+    paper: "A4",
+    portrait: false,
+    titleBlock: {},
+    pageNumber: "1",
+    sheetCount: 1,
+    fileName: "",
+    filePath: "",
+    fileRoot: "",
+    sheetName: "",
+    sheetPath: "",
+    projectName: "",
+    projectVars: null,
+    // GetBaseVersion() for this tree (web/canvas/version.ts, regenerated by scripts/gen-version.js):
+    // ${KICAD_VERSION} reads "KiCad E.D.A. " + this, exactly as ds_painter.cpp:119-121 formats it.
+    kicadVersion: KICAD_BASE_VERSION
+  };
+}
+var MM_PER_MIL = 25.4 / 1e3;
+var mm2mils = (mm) => Math.round(mm * 1e3 / 25.4);
+var milsPage = (w, h) => [w * MM_PER_MIL, h * MM_PER_MIL];
+var mmPage = (w, h) => milsPage(mm2mils(w), mm2mils(h));
+var userMm = (mm) => Math.max(mm, 10 * MM_PER_MIL);
+var PAPER_SIZES = {
+  A5: mmPage(210, 148),
+  A4: mmPage(297, 210),
+  A3: mmPage(420, 297),
+  A2: mmPage(594, 420),
+  A1: mmPage(841, 594),
+  A0: mmPage(1189, 841),
+  A: milsPage(11e3, 8500),
+  B: milsPage(17e3, 11e3),
+  C: milsPage(22e3, 17e3),
+  D: milsPage(34e3, 22e3),
+  E: milsPage(44e3, 34e3),
+  GERBER: milsPage(32e3, 32e3),
+  USLetter: milsPage(11e3, 8500),
+  USLegal: milsPage(14e3, 8500),
+  USLedger: milsPage(17e3, 11e3)
+};
+function paperSize(node) {
+  const name = str(node[1]);
+  const sizes = PAPER_SIZES;
+  let s = sizes[name] || (name === "User" ? [userMm(num(node[2], 297)), userMm(num(node[3], 210))] : PAPER_SIZES.A4);
+  if (has(node, "portrait")) s = [s[1], s[0]];
+  return s.slice();
+}
+function titleBlockOf(node) {
+  const tb = {};
+  for (const c of node.slice(1)) {
+    if (!isList(c)) continue;
+    if (c[0] === "comment") tb["comment" + num(c[1], 0)] = str(c[2]);
+    else if (c[0] === "title" || c[0] === "date" || c[0] === "rev" || c[0] === "company") tb[c[0]] = str(c[1]);
+  }
+  return tb;
+}
+function parseDoc(text2, docType) {
+  const tree = parse(text2);
+  if (!tree) throw new Error("not an s-expression document");
+  if (tree[0] === "footprint" || tree[0] === "module" || docType === "footprint") {
+    if (tree[0] !== "footprint" && tree[0] !== "module") throw new Error("not a footprint");
+    const doc2 = newDoc("pcb");
+    doc2.page = [0, 0];
+    loadFootprintDoc(doc2, tree, text2, addItem);
+    computeBBox(doc2);
+    return doc2;
+  }
+  const type = tree[0] === "kicad_sch" ? "sch" : tree[0] === "kicad_pcb" ? "pcb" : docType === "kicad_sch" ? "sch" : "pcb";
+  const doc = newDoc(type);
+  if (type === "sch") {
+    const ls = kid(tree, "lib_symbols");
+    if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
+  }
+  for (let j = 1; j < tree.length; j++) {
+    const node = tree[j];
+    if (!isList(node)) continue;
+    const k = node[0];
+    if (k === "paper") {
+      doc.page = paperSize(node);
+      doc.paper = str(node[1]) || "A4";
+      doc.portrait = doc.page[1] > doc.page[0];
+    } else if (k === "title_block") {
+      doc.titleBlock = titleBlockOf(node);
+      continue;
+    } else if (k === "sheet_instances") {
+      const p = kid(node, "path");
+      const pg = p && kid(p, "page");
+      if (pg) doc.pageNumber = str(pg[1]) || "1";
+      continue;
+    } else if (k === "version") {
+      doc.version = num(node[1], 0);
+      continue;
+    } else if (k === "uuid") {
+      doc.uuid = str(node[1]);
+      continue;
+    } else if (type === "pcb" && k === "layers") {
+      for (const l of node.slice(1)) if (isList(l)) {
+        const name = str(l[1]), ltype = str(l[2]);
+        doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== void 0 ? str(l[3]) : "" });
+        if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name);
+      }
+    } else if (k === "general") {
+      const t = kid(node, "thickness");
+      if (t && type === "pcb") doc.thickness = num(t[1], 1.6);
+      continue;
+    } else if (k === "net") {
+      if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2]));
+      continue;
+    } else if (type === "pcb" && k === "setup") {
+      const o = setupOrigins(node);
+      doc.auxOrigin = o.aux;
+      doc.gridOrigin = o.grid;
+      doc.stackup = kid(node, "stackup") || null;
+      continue;
+    } else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
+    else addItem(doc, node);
+  }
+  computeBBox(doc);
+  return doc;
+}
+function applyDocProps(doc, props) {
+  if (!doc || !props) return false;
+  let any = false;
+  if (typeof props.paper === "string" && props.paper) {
+    const node = parse(props.paper);
+    if (node && node[0] === "paper") {
+      doc.page = paperSize(node);
+      doc.paper = str(node[1]) || "A4";
+      doc.portrait = doc.page[1] > doc.page[0];
+      any = true;
+    }
+  }
+  if (typeof props.titleBlock === "string") {
+    const node = props.titleBlock ? parse(props.titleBlock) : null;
+    doc.titleBlock = node && node[0] === "title_block" ? titleBlockOf(node) : {};
+    any = true;
+  }
+  return any;
+}
+var SCH_KINDS = /* @__PURE__ */ new Set([
+  "symbol",
+  "wire",
+  "bus",
+  "junction",
+  "label",
+  "global_label",
+  "hierarchical_label",
+  "netclass_flag",
+  "directive_label",
+  "no_connect",
+  "sheet",
+  "text",
+  "text_box",
+  "polyline",
+  "rectangle",
+  "circle",
+  "arc",
+  "bezier",
+  "bus_entry",
+  "image",
+  "table",
+  "rule_area",
+  "ellipse",
+  "ellipse_arc",
+  "net_chain",
+  "group"
+]);
+var PCB_KINDS = /* @__PURE__ */ new Set([
+  "footprint",
+  "segment",
+  "arc",
+  "via",
+  "zone",
+  "gr_line",
+  "gr_rect",
+  "gr_circle",
+  "gr_arc",
+  "gr_poly",
+  "gr_text",
+  "gr_text_box",
+  "gr_curve",
+  "gr_bbox",
+  "dimension",
+  "target",
+  "image",
+  "group",
+  "table",
+  "generated",
+  "gr_ellipse",
+  "gr_ellipse_arc",
+  "barcode",
+  "point",
+  "grid_item"
+]);
+function addItem(doc, node, givenId) {
+  const k = node[0];
+  if (doc.type === "sch" ? !SCH_KINDS.has(k) : doc.fpEditor ? !FP_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
+  let id = givenId || uuidOf(node);
+  if (!id) id = "anon-" + (doc.items.size + 1) + "-" + Math.random().toString(36).slice(2, 8);
+  const kind = doc.fpEditor && (k === "property" || k === "fp_text") ? "property" : k;
+  const item = { id, kind, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
+  buildGeom(doc, item);
+  doc.items.set(id, item);
+  return item;
+}
+function computeBBox(doc) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const take = (b) => {
+    if (!b) return;
+    x0 = Math.min(x0, b[0]);
+    y0 = Math.min(y0, b[1]);
+    x1 = Math.max(x1, b[2]);
+    y1 = Math.max(y1, b[3]);
+  };
+  if (doc.type === "pcb") {
+    for (const it of doc.items.values()) if (it.edge || it.kind === "segment" || it.kind === "via" || it.kind === "footprint" || it.kind === "zone" || it.kind === "arc") take(it.bbox);
+    if (!isFinite(x0)) for (const it of doc.items.values()) take(it.bbox);
+  } else {
+    x0 = 0;
+    y0 = 0;
+    x1 = doc.page[0];
+    y1 = doc.page[1];
+  }
+  doc.bbox = isFinite(x0) ? [x0, y0, x1, y1] : [0, 0, doc.page[0], doc.page[1]];
+}
+
 // web/canvas/ops.ts
 function fragmentItems(doc, sexpr) {
   const out = [];
@@ -6360,7 +7345,7 @@ function fragmentItems(doc, sexpr) {
     if (tree[0] === "kicad_sch" || tree[0] === "kicad_pcb") {
       const ls = kid(tree, "lib_symbols");
       if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
-      for (const c of tree.slice(1)) if (isList(c) && (doc.type === "sch" ? SCH_KINDS.has(c[0]) : PCB_KINDS.has(c[0]))) out.push(c);
+      for (const c of tree.slice(1)) if (isList(c) && (doc.type === "sch" ? SCH_KINDS.has(c[0]) : doc.fpEditor ? FP_KINDS.has(c[0]) : PCB_KINDS.has(c[0]))) out.push(c);
     } else if (tree[0] === "lib_symbols") {
       for (const s of kids(tree, "symbol")) doc.lib.set(str(s[1]), s);
     } else out.push(tree);
@@ -6413,6 +7398,10 @@ function pruneLibName(doc, name) {
 }
 function applyChange(doc, change, IU) {
   const id = str(change.id), kind = str(change.kind).toUpperCase();
+  if (doc.fpEditor && id === "footprint") {
+    const frag2 = change.sexpr || change.itemSexpr;
+    return kind !== "REMOVED" && !!frag2 && applyFootprintHeader(doc, frag2);
+  }
   const oldLib = libNameOf(doc, id);
   if (kind === "REMOVED") {
     const r = doc.items.delete(id);
@@ -6596,7 +7585,25 @@ function removeChange(item) {
   return { id: item.id, kind: "REMOVED", typeName: typeNameOf(item), properties: [] };
 }
 var SCH_TYPE_NAMES = { symbol: "SCH_SYMBOL", wire: "SCH_LINE", bus: "SCH_LINE", polyline: "SCH_LINE", junction: "SCH_JUNCTION", label: "SCH_LABEL", global_label: "SCH_GLOBALLABEL", hierarchical_label: "SCH_HIERLABEL", no_connect: "SCH_NO_CONNECT", sheet: "SCH_SHEET", text: "SCH_TEXT", text_box: "SCH_TEXTBOX", bus_entry: "SCH_BUS_WIRE_ENTRY", rectangle: "SCH_SHAPE", circle: "SCH_SHAPE", arc: "SCH_SHAPE", netclass_flag: "SCH_DIRECTIVE_LABEL", directive_label: "SCH_DIRECTIVE_LABEL", table: "SCH_TABLE", image: "SCH_BITMAP" };
-var PCB_TYPE_NAMES = { footprint: "FOOTPRINT", segment: "PCB_TRACK", arc: "PCB_ARC", via: "PCB_VIA", zone: "ZONE", gr_line: "PCB_SHAPE", gr_rect: "PCB_SHAPE", gr_circle: "PCB_SHAPE", gr_arc: "PCB_SHAPE", gr_poly: "PCB_SHAPE", gr_text: "PCB_TEXT", gr_text_box: "PCB_TEXTBOX", table: "PCB_TABLE", image: "PCB_REFERENCE_IMAGE" };
+var PCB_TYPE_NAMES = {
+  footprint: "FOOTPRINT",
+  segment: "PCB_TRACK",
+  arc: "PCB_ARC",
+  via: "PCB_VIA",
+  zone: "ZONE",
+  gr_line: "PCB_SHAPE",
+  gr_rect: "PCB_SHAPE",
+  gr_circle: "PCB_SHAPE",
+  gr_arc: "PCB_SHAPE",
+  gr_poly: "PCB_SHAPE",
+  gr_text: "PCB_TEXT",
+  gr_text_box: "PCB_TEXTBOX",
+  table: "PCB_TABLE",
+  image: "PCB_REFERENCE_IMAGE",
+  // the Footprint Editor's own children
+  pad: "PAD",
+  property: "PCB_FIELD"
+};
 function typeNameOf(item) {
   const first = item.docType === "pcb" ? PCB_TYPE_NAMES : SCH_TYPE_NAMES, second = first === SCH_TYPE_NAMES ? PCB_TYPE_NAMES : SCH_TYPE_NAMES;
   return first[item.kind] || second[item.kind] || item.kind.toUpperCase();
@@ -6630,8 +7637,8 @@ function wireEndsAt(doc, x, y, tol) {
   for (const it of doc.items.values()) {
     if (it.kind !== "wire" && it.kind !== "bus") continue;
     const p = ptsOf(it.node);
-    p.forEach((pt3, i) => {
-      if (Math.abs(pt3[0] - x) <= tol && Math.abs(pt3[1] - y) <= tol) out.push({ item: it, index: i });
+    p.forEach((pt4, i) => {
+      if (Math.abs(pt4[0] - x) <= tol && Math.abs(pt4[1] - y) <= tol) out.push({ item: it, index: i });
     });
   }
   return out;
@@ -8197,7 +9204,7 @@ function sheetNodeText(inst, rootName) {
   const parts = inst.human.split("/").filter(Boolean);
   return [rootName, ...parts].join("/");
 }
-var pt = (f, p) => `(${f(p ? p[0] : 0)}, ${f(p ? p[1] : 0)})`;
+var pt2 = (f, p) => `(${f(p ? p[0] : 0)}, ${f(p ? p[1] : 0)})`;
 function describeMember(m, doc, f) {
   const it = doc ? doc.items.get(m.id) : null, n = it ? it.node : null;
   const at = n ? atOf(n).slice(0, 2) : null;
@@ -8209,27 +9216,27 @@ function describeMember(m, doc, f) {
     case "sheet_pin":
       return { label: `Sheet '${m.text || ""}' pin '${unescapeNetName(m.pin || "")}'`, at };
     case "label":
-      return { label: `Label '${unescapeNetName(m.text || "")}' at ${pt(f, at)}`, at };
+      return { label: `Label '${unescapeNetName(m.text || "")}' at ${pt2(f, at)}`, at };
     case "global_label":
-      return { label: `Global label '${unescapeNetName(m.text || "")}' at ${pt(f, at)}`, at };
+      return { label: `Global label '${unescapeNetName(m.text || "")}' at ${pt2(f, at)}`, at };
     case "hierarchical_label":
-      return { label: `Hierarchical label '${unescapeNetName(m.text || "")}' at ${pt(f, at)}`, at };
+      return { label: `Hierarchical label '${unescapeNetName(m.text || "")}' at ${pt2(f, at)}`, at };
     case "netclass_flag":
     case "directive_label":
-      return { label: `Netclass label '${unescapeNetName(m.text || (n ? str(n[1]) : ""))}' at ${pt(f, at)}`, at };
+      return { label: `Netclass label '${unescapeNetName(m.text || (n ? str(n[1]) : ""))}' at ${pt2(f, at)}`, at };
     case "junction":
-      return { label: `Junction at ${pt(f, at)}`, at };
+      return { label: `Junction at ${pt2(f, at)}`, at };
     case "no_connect":
-      return { label: `No-Connect at ${pt(f, at)}`, at };
+      return { label: `No-Connect at ${pt2(f, at)}`, at };
     case "wire":
     case "bus": {
       const p = n ? ptsOf(n) : [];
-      return { label: `${m.kind === "wire" ? "Wire" : "Bus"} from ${pt(f, p[0])} to ${pt(f, p[p.length - 1])}`, at: p[0] ? [p[0][0], p[0][1]] : null };
+      return { label: `${m.kind === "wire" ? "Wire" : "Bus"} from ${pt2(f, p[0])} to ${pt2(f, p[p.length - 1])}`, at: p[0] ? [p[0][0], p[0][1]] : null };
     }
     case "bus_entry": {
       const s = n ? kid(n, "size") : null;
       const e = at ? [at[0] + num(s ? s[1] : 0), at[1] + num(s ? s[2] : 0)] : null;
-      return { label: `Bus to wire entry from ${pt(f, at)} to ${pt(f, e)}`, at };
+      return { label: `Bus to wire entry from ${pt2(f, at)} to ${pt2(f, e)}`, at };
     }
     default:
       return { label: m.kind, at };
@@ -8684,14 +9691,14 @@ function toIU(b, IU) {
   const x = iu(b.x0, IU), y = iu(b.y0, IU);
   return [x, y, iu(b.x1, IU) - x, iu(b.y1, IU) - y];
 }
-var pt2 = (node, key) => {
+var pt3 = (node, key) => {
   const c = kid(node, key);
   return c ? [num(c[1]), num(c[2])] : null;
 };
 function boardItemBox(item, IU = 1e6) {
   const n = item.node, k = item.kind;
   if (k === "segment") {
-    const s = pt2(n, "start"), e = pt2(n, "end");
+    const s = pt3(n, "start"), e = pt3(n, "end");
     if (!s || !e) return null;
     const wN = kid(n, "width"), radius = Math.floor((iu(wN ? num(wN[1]) : 0, IU) + 1) / 2);
     const xs = [iu(s[0], IU), iu(e[0], IU)], ys = [iu(s[1], IU), iu(e[1], IU)];
@@ -8699,7 +9706,7 @@ function boardItemBox(item, IU = 1e6) {
     return [x0, y0, Math.max(xs[0], xs[1]) + radius - x0 + 1, Math.max(ys[0], ys[1]) + radius - y0 + 1];
   }
   if (k === "via") {
-    const at = pt2(n, "at");
+    const at = pt3(n, "at");
     if (!at) return null;
     const sN = kid(n, "size"), dN = kid(n, "drill");
     const radius = Math.floor((Math.max(iu(sN ? num(sN[1]) : 0, IU), iu(dN ? num(dN[1]) : 0, IU)) + 1) / 2), x = iu(at[0], IU), y = iu(at[1], IU);
@@ -9144,6 +10151,156 @@ function writePad(doc, fp, pad, m, was, netCode2) {
 }
 var padModel = { PAD_ORDER, TECH, PROPS, f6, setPadChild, expandLayers, formatPadLayers, copperChoices, readPad, modelLayers, checkPad, writePad };
 
+// web/canvas/libsym.ts
+function subUnitBody(name) {
+  const m = /_(\d+)_(\d+)$/.exec(name);
+  return m ? [+m[1], +m[2]] : [0, 0];
+}
+var PIN_TYPE_NAMES = {
+  input: "Input",
+  output: "Output",
+  bidirectional: "Bidirectional",
+  tri_state: "Tri-state",
+  passive: "Passive",
+  free: "Free",
+  unspecified: "Unspecified",
+  power_in: "Power input",
+  power_out: "Power output",
+  open_collector: "Open collector",
+  open_emitter: "Open emitter",
+  no_connect: "Unconnected"
+};
+var yes4 = (n, key) => {
+  const k = kid(n, key);
+  return k ? str(k[1]) !== "no" : has(n, key);
+};
+var tf = (x, y) => [x, -y];
+var IDENT = [1, 0, 0, 1];
+function pinSymOf(sym, col, fileVersion = 0) {
+  const literalTilde = fileVersion >= TILDE_LITERAL_VERSION;
+  const pn = kid(sym, "pin_names");
+  const nameOff = pn && kid(pn, "offset") ? num(kid(pn, "offset")[1]) : 0.508;
+  const hideNames = !!(pn && (has(pn, "hide") || kid(pn, "hide") && str(kid(pn, "hide")[1]) === "yes"));
+  const pnu = kid(sym, "pin_numbers");
+  const hideNums = !!(pnu && (has(pnu, "hide") || kid(pnu, "hide") && str(kid(pnu, "hide")[1]) === "yes"));
+  let maxNameHalf = 0;
+  for (const sub of kids(sym, "symbol")) for (const p of kids(sub, "pin")) {
+    const nm2 = kid(p, "name");
+    if (nm2 && str(nm2[1]) && (str(nm2[1]) !== "~" || literalTilde)) maxNameHalf = Math.max(maxNameHalf, effectsOf(nm2).size / 2);
+  }
+  return { nameOff, hideNames, hideNums, maxNameHalf, col, literalTilde };
+}
+function libGraphicGeom(item, g2, col) {
+  const gk = String(g2[0]);
+  if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc" || gk === "ellipse" || gk === "ellipse_arc") {
+    shapeGeom(item, g2, gk, tf, col(yes4(g2, "private") ? SCH.privateNotes : SCH.outline), "Symbols", SCH_Z.device, SCH_Z.deviceBg, widthOf(g2, 0) || SCH_PEN, void 0, true);
+    if (col !== ident) for (const x of item.geom) {
+      if (x.color) x.color = col(x.color);
+      if (x.fill) x.fill = col(x.fill);
+    }
+  } else if (gk === "text" || gk === "text_box") {
+    const [x, y, r0] = atOf(g2);
+    const ef = effectsOf(g2);
+    const [px, py] = tf(x, y);
+    const r = gk === "text" ? r0 / 10 : r0;
+    const color = col(ef.hide ? SCH.hidden : yes4(g2, "private") ? SCH.privateNotes : strokeColorOf(g2) || SCH.outline);
+    if (gk === "text_box") {
+      const s = kid(g2, "size");
+      const w = s ? num(s[1]) : 5, h = s ? Math.abs(num(s[2])) : 2.5;
+      const bw = widthOf(g2, 0);
+      if (bw >= 0) G(item, { t: "poly", pts: [[px, py], [px + w, py], [px + w, py + h], [px, py + h]], close: true, w: bw || SCH_PEN, color: col(SCH.outline), layer: "Symbols", z: SCH_Z.device });
+      transformedText(item, IDENT, px, py, str(g2[1]), ef.size, color, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, defH: "left", defV: "top" });
+    } else transformedText(item, IDENT, px, py, str(g2[1]), ef.size, color, r, ef.just, "Symbols", { z: SCH_Z.device, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+  }
+}
+var ident = (c) => c;
+function pinExtras(item, p, color, showType) {
+  const [x, y, r] = atOf(p);
+  const [px, py] = tf(x, y);
+  G(item, { t: "circle", x: px, y: py, r: TARGET_PIN_RADIUS, w: SCH_PEN / 3, color, layer: "Pins", z: SCH_Z.pin });
+  if (!showType) return;
+  const label = PIN_TYPE_NAMES[str(p[1])] || "Unspecified";
+  const nameN = kid(p, "name");
+  const nameSize = nameN ? effectsOf(nameN).size : 1.27;
+  const size = Math.max(nameSize * 3 / 4, 0.7), thick = size / 8;
+  const off = PIN_TEXT_OFFSET + thick / 2 + TARGET_PIN_RADIUS + TARGET_PIN_RADIUS / 2;
+  const dir = (Math.round(r) % 360 + 360) % 360;
+  if (dir === 0) textGeom(item, px - off, py, label, size, SCH.privateNotes, 0, ["right", "middle"], "Pins", { z: SCH_Z.pin, w: thick });
+  else if (dir === 180) textGeom(item, px + off, py, label, size, SCH.privateNotes, 0, ["left", "middle"], "Pins", { z: SCH_Z.pin, w: thick });
+  else if (dir === 90) textGeom(item, px, py + off, label, size, SCH.privateNotes, 90, ["right", "middle"], "Pins", { z: SCH_Z.pin, w: thick });
+  else textGeom(item, px, py - off, label, size, SCH.privateNotes, 90, ["left", "middle"], "Pins", { z: SCH_Z.pin, w: thick });
+}
+function parseLibSymbol(sym, opts) {
+  opts = opts || {};
+  const unit2 = opts.unit || 1, body = opts.bodyStyle || 1;
+  const doc = newDoc("sch");
+  doc.page = [0, 0];
+  const dim = (c) => dimColor(c, SCH.bg);
+  const colAll = opts.disabled ? dim : ident;
+  const showHiddenPins = opts.showHiddenPins !== false, showHiddenFields = opts.showHiddenFields !== false, showType = opts.showElectricalTypes !== false;
+  const add = (id, ref, sink, kind) => {
+    if (!sink.geom.length) return;
+    const it = { id, kind, node: null, geom: sink.geom, bbox: sink.bbox, movable: !ref.inherited, libRef: ref };
+    doc.items.set(id, it);
+  };
+  const shown = (u, b) => (u === 0 || u === unit2) && (b === 0 || b === body);
+  const drawFrom = (owner, inherited) => {
+    const col = inherited ? dim : colAll;
+    const ps = pinSymOf(owner, col, opts.fileVersion || 0);
+    ps.altIcons = opts.showPinAltIcons !== false;
+    for (const sub of kids(owner, "symbol")) {
+      const subName = str(sub[1]);
+      const [u, b] = subUnitBody(subName);
+      if (!shown(u, b)) continue;
+      for (let j = 2; j < sub.length; j++) {
+        const g2 = sub[j];
+        if (!isList(g2)) continue;
+        const gk = String(g2[0]);
+        if (gk === "pin") {
+          const hidden = pinHidden(g2);
+          if (hidden && !showHiddenPins) continue;
+          const sink = { geom: [], bbox: null };
+          const pc = hidden ? () => col(SCH.hidden) : col;
+          buildPinGeom(sink, g2, tf, Object.assign({}, ps, { col: pc, showHidden: true }));
+          pinExtras(sink, g2, hidden ? col(SCH.hidden) : col(SCH.pin), showType);
+          const numN = kid(g2, "number");
+          add("p:" + subName + ":" + j, { kind: "pin", sub: subName, j, unit: u, body: b, inherited, name: numN ? str(numN[1]) : "" }, sink, "lib_pin");
+        } else if (gk === "rectangle" || gk === "polyline" || gk === "bezier" || gk === "circle" || gk === "arc" || gk === "ellipse" || gk === "ellipse_arc" || gk === "text" || gk === "text_box") {
+          const sink = { geom: [], bbox: null };
+          libGraphicGeom(sink, g2, col);
+          add("g:" + subName + ":" + j, { kind: "graphic", sub: subName, j, unit: u, body: b, inherited }, sink, "lib_" + gk);
+        }
+      }
+    }
+  };
+  if (opts.parent) drawFrom(opts.parent, true);
+  drawFrom(sym, false);
+  const props = kids(sym, "property");
+  const fieldOwner = props.length || !opts.parent ? sym : opts.parent;
+  for (let j = 1; j < fieldOwner.length; j++) {
+    const p = fieldOwner[j];
+    if (!isList(p) || p[0] !== "property") continue;
+    const name = str(p[1]), val = str(p[2]);
+    if (name.startsWith("ki_")) continue;
+    const ef = effectsOf(p);
+    const hide = ef.hide || yes4(p, "hide");
+    if (hide && !showHiddenFields) continue;
+    const showName = yes4(p, "show_name");
+    const shownText = (showName ? name + ": " : "") + val;
+    if (!val) continue;
+    const isRV = name === "Reference" || name === "Value";
+    const color = colAll(hide ? SCH.hidden : yes4(p, "private") ? SCH.privateNotes : isRV ? SCH.ref : SCH.field);
+    const [x, y, r] = atOf(p);
+    const sink = { geom: [], bbox: null };
+    transformedText(sink, IDENT, x, -y, shownText, ef.size, color, r, ef.just, isRV ? "Reference & value" : "Fields", { z: name === "Reference" ? SCH_Z.ref : name === "Value" ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: name });
+    add("f:" + name, { kind: "field", sub: "", j, unit: 0, body: 0, inherited: fieldOwner !== sym, name }, sink, "lib_field");
+  }
+  let bb = null;
+  for (const it of doc.items.values()) if (it.bbox) bb = boxUnion(bb, it.bbox[0], it.bbox[1], it.bbox[2], it.bbox[3]);
+  doc.bbox = bb;
+  return doc;
+}
+
 // web/canvas/index.ts
 var api = {
   parse,
@@ -9310,7 +10467,12 @@ var api = {
   GRID_TICK,
   MIN_TEXT_PX,
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
-  pcbSizes
+  pcbSizes,
+  // the Symbol Editor's render mode (web/canvas/libsym.ts): one library symbol as an editable document
+  parseLibSymbol,
+  subUnitBody,
+  PIN_TYPE_NAMES,
+  libGraphicGeom
 };
 api.itemTouchesRect = itemTouchesRect;
 api.itemVisible = itemVisible;
@@ -9323,6 +10485,7 @@ api.boardSetup = boardSetup;
 api.DRC_ITEMS = DRC_ITEMS;
 api.projectFile = projectFile;
 api.padModel = padModel;
+api.footprintDoc = footprintDocApi;
 root.KiCadCanvas = api;
 
 // static/sch-tools.js
@@ -9959,7 +11122,7 @@ root.KiCadCanvas = api;
   function symbolNode(doc, libId, p, rot2, mirror) {
     const lib = K4.resolveLib(doc, libId);
     const T = tFrom(rot2 || 0, mirror || "");
-    const tf = (lx, ly) => [r43(p[0] + T[0] * lx + T[1] * ly), r43(p[1] + T[2] * lx + T[3] * ly)];
+    const tf2 = (lx, ly) => [r43(p[0] + T[0] * lx + T[1] * ly), r43(p[1] + T[2] * lx + T[3] * ly)];
     const n = ["symbol", ["lib_id", libId], ["at", r43(p[0]), r43(p[1]), rot2 || 0]];
     if (mirror) n.push(["mirror", mirror]);
     n.push(["unit", 1], ["body_style", 1], ["exclude_from_sim", "no"], ["in_bom", "yes"], ["on_board", "yes"], ["dnp", "no"], ["uuid", K4.newUuid()]);
@@ -9971,7 +11134,7 @@ root.KiCadCanvas = api;
       if (name === "Reference") val = (val || "U") + "?";
       else if (name === "Value" && !val) val = libId.split(":").pop();
       const [lx, ly, lr] = lp ? atOf2(lp) : [0, 0, 0];
-      const [px, py] = tf(lx, ly);
+      const [px, py] = tf2(lx, ly);
       const out = ["property", name, val, ["at", px, py, lr || 0]];
       const h = lp && kid3(lp, "hide");
       const hidden = lp ? h ? str3(h[1]) !== "no" : lp.includes("hide") : name !== "Reference" && name !== "Value";
@@ -10494,15 +11657,15 @@ ${body}
     }
     const fresh = parsed.nodes.map((n) => cloneNode2({ kind: n[0], node: deep(n) }));
     const used = usedReferences(doc);
-    const mode = opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null)) || (S.annotateAuto ? "unique" : "remove");
+    const mode2 = opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null)) || (S.annotateAuto ? "unique" : "remove");
     for (const n of fresh) {
-      if (n[0] !== "symbol" || mode === "keep") continue;
-      if (mode === "remove") {
+      if (n[0] !== "symbol" || mode2 === "keep") continue;
+      if (mode2 === "remove") {
         const p = refField(n);
         if (p) setReference(n, unannotated(str3(p[2])));
         continue;
       }
-      if (mode === "unique") {
+      if (mode2 === "unique") {
         const auto = S.annotateAuto;
         S.annotateAuto = true;
         try {
@@ -10564,18 +11727,18 @@ ${body}
   function followPaste(ctx, ids, libs, at, label) {
     const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean);
     if (!items.length) return false;
-    const mode = S.dragMode;
+    const mode2 = S.dragMode;
     S.dragMode = "move";
     const d = beginDrag(ctx, items, at, false, { plain: true });
     if (!d) {
-      S.dragMode = mode;
+      S.dragMode = mode2;
       return false;
     }
     d.pasted = true;
     d.local = new Set(ids);
     d.libs = libs || [];
     d.label = label;
-    d.restoreMode = mode;
+    d.restoreMode = mode2;
     d.moved = true;
     setSelectionIds(ctx, ids);
     return true;
@@ -10594,7 +11757,7 @@ ${body}
     const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
     if (opts && (opts.pasteMode || opts.keepAnnotations !== void 0) || !KD || !KD.open) return pasteSelection(ctx, Object.assign({ keepAnnotations: true }, opts || {}));
     const at = snapCursor(ctx);
-    let mode = S.annotateAuto ? "unique" : "remove";
+    let mode2 = S.annotateAuto ? "unique" : "remove";
     const choices = [
       ["unique", "Assign unique reference designators to pasted symbols", "Finds the next available reference designator for any designators that already exist in the design."],
       ["keep", "Keep existing reference designators, even if they are duplicated", ""],
@@ -10604,13 +11767,13 @@ ${body}
       title: "Paste Special",
       width: 460,
       build(body) {
-        body.innerHTML = `<div class="kd-note" style="margin-bottom:6px">Reference Designators</div>` + choices.map(([v, l, tip]) => `<label class="kd-chk" style="display:flex;gap:6px;align-items:center;margin:3px 0"${tip ? ` title="${tip}"` : ""}><input type="radio" name="kd-paste-mode" value="${v}" id="kd-paste-${v}"${v === mode ? " checked" : ""}>${l}</label>`).join("");
+        body.innerHTML = `<div class="kd-note" style="margin-bottom:6px">Reference Designators</div>` + choices.map(([v, l, tip]) => `<label class="kd-chk" style="display:flex;gap:6px;align-items:center;margin:3px 0"${tip ? ` title="${tip}"` : ""}><input type="radio" name="kd-paste-mode" value="${v}" id="kd-paste-${v}"${v === mode2 ? " checked" : ""}>${l}</label>`).join("");
         for (const r of body.querySelectorAll("input[name=kd-paste-mode]")) r.addEventListener("change", () => {
-          if (r.checked) mode = r.value;
+          if (r.checked) mode2 = r.value;
         });
       },
       ok() {
-        setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode, at })), 0);
+        setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode2, at })), 0);
       }
     });
     return true;
@@ -11044,9 +12207,9 @@ ${body}
     t = Math.max(0, Math.min(1, t));
     return [r43(a[0] + t * dx), r43(a[1] + t * dy)];
   }
-  function breakWire(ctx, mode) {
+  function breakWire(ctx, mode2) {
     if (!editable(ctx)) return false;
-    mode = mode === "slice" ? "slice" : "break";
+    mode2 = mode2 === "slice" ? "slice" : "break";
     const c = cursorOf(ctx);
     let lines = selectedItems(ctx).filter((x) => isNetLine(x.kind) && ptsOf2(x.node).length === 2);
     if (!lines.length) {
@@ -11054,7 +12217,7 @@ ${body}
       if (hit2 && isNetLine(hit2.kind)) lines = [hit2];
     }
     if (!lines.length) return false;
-    const doc = ctx.doc, label = mode === "slice" ? "Slice Wire" : "Break Wire";
+    const doc = ctx.doc, label = mode2 === "slice" ? "Slice Wire" : "Break Wire";
     const atFor = (it) => {
       const q = ptsOf2(it.node);
       return lines.length === 1 ? snapCursor(ctx) : [r43((q[0][0] + q[1][0]) / 2), r43((q[0][1] + q[1][1]) / 2)];
@@ -11069,11 +12232,11 @@ ${body}
       }
       if (!changes.length) return false;
       ctx.commit(changes, label);
-      setSelectionIds(ctx, mode === "break" ? cuts2.flatMap((x) => [x.head, x.tail]) : cuts2.map((x) => x.head));
+      setSelectionIds(ctx, mode2 === "break" ? cuts2.flatMap((x) => [x.head, x.tail]) : cuts2.map((x) => x.head));
       return true;
     }
     if (S.drag) endDrag(ctx, false);
-    const brk = { mode, label, orig: /* @__PURE__ */ new Map(), local: /* @__PURE__ */ new Set(), clicks: 0 }, cuts = [];
+    const brk = { mode: mode2, label, orig: /* @__PURE__ */ new Map(), local: /* @__PURE__ */ new Set(), clicks: 0 }, cuts = [];
     for (const it of lines) {
       const cut = splitLocal(doc, brk, it, atFor(it));
       if (cut) cuts.push(cut);
@@ -11092,15 +12255,15 @@ ${body}
       moved: true,
       byPointer: false,
       riders: [],
-      anchors: breakAnchors(cuts, mode),
+      anchors: breakAnchors(cuts, mode2),
       preview: [],
-      mode,
+      mode: mode2,
       brk,
       restoreMode: S.dragMode
     };
     S.dragMode = "drag";
     announceModes(ctx);
-    setSelectionIds(ctx, mode === "break" ? cuts.flatMap((x) => [x.head.id, x.tail.id]) : cuts.map((x) => x.head.id));
+    setSelectionIds(ctx, mode2 === "break" ? cuts.flatMap((x) => [x.head.id, x.tail.id]) : cuts.map((x) => x.head.id));
     return true;
   }
   function splitLocal(doc, brk, item, at, force) {
@@ -11118,10 +12281,10 @@ ${body}
     brk.local.add(tail.id);
     return { head: item, tail, p: q };
   }
-  function breakAnchors(cuts, mode) {
+  function breakAnchors(cuts, mode2) {
     return cuts.map((cut) => {
       const ends = [{ item: cut.head, index: 1, orig: ptsOf2(cut.head.node).map((v) => v.slice()) }];
-      if (mode === "break") ends.push({ item: cut.tail, index: 0, orig: ptsOf2(cut.tail.node).map((v) => v.slice()) });
+      if (mode2 === "break") ends.push({ item: cut.tail, index: 0, orig: ptsOf2(cut.tail.node).map((v) => v.slice()) });
       return { p: cut.p, ends, stub: null, followers: [] };
     });
   }
@@ -11232,13 +12395,13 @@ ${body}
     }
     return null;
   }
-  function computeBreakPoint(doc, seg, next, pos, mode, posture, grid) {
+  function computeBreakPoint(doc, seg, next, pos, mode2, posture, grid) {
     pos = [pos[0], pos[1]];
     const start = seg[0], delta = [pos[0] - start[0], pos[1] - start[1]];
     const xDir = delta[0] > 0 ? 1 : -1, yDir = delta[1] > 0 ? 1 : -1;
     const nz = (v) => Math.abs(v) > 1e-9;
     let preferH, preferV;
-    if (mode === "45" && posture) {
+    if (mode2 === "45" && posture) {
       preferH = nz(next[1][0] - next[0][0]);
       preferV = nz(next[1][1] - next[0][1]);
     } else {
@@ -11253,20 +12416,20 @@ ${body}
     }
     let mid = [0, 0];
     const breakVertical = () => {
-      if (mode === "45") mid = !posture ? [start[0], pos[1] - yDir * Math.abs(delta[0])] : [pos[0], start[1] + yDir * Math.abs(delta[0])];
+      if (mode2 === "45") mid = !posture ? [start[0], pos[1] - yDir * Math.abs(delta[0])] : [pos[0], start[1] + yDir * Math.abs(delta[0])];
       else mid = [start[0], pos[1]];
     };
     const breakHorizontal = () => {
-      if (mode === "45") mid = !posture ? [pos[0] - xDir * Math.abs(delta[1]), start[1]] : [start[0] + xDir * Math.abs(delta[1]), pos[1]];
+      if (mode2 === "45") mid = !posture ? [pos[0] - xDir * Math.abs(delta[1]), start[1]] : [start[0] + xDir * Math.abs(delta[1]), pos[1]];
       else mid = [pos[0], start[1]];
     };
     if (preferV) breakVertical();
     else if (preferH) breakHorizontal();
     const dm = [mid[0] - start[0], mid[1] - start[1]], sb = (v) => v < 0;
-    if (mode === "45" && !posture && (sb(dm[0]) !== sb(delta[0]) || sb(dm[1]) !== sb(delta[1]))) {
+    if (mode2 === "45" && !posture && (sb(dm[0]) !== sb(delta[0]) || sb(dm[1]) !== sb(delta[1]))) {
       preferV = false;
       preferH = false;
-    } else if (mode === "45" && posture && (Math.abs(dm[0]) > Math.abs(delta[0]) + 1e-9 || Math.abs(dm[1]) > Math.abs(delta[1]) + 1e-9)) {
+    } else if (mode2 === "45" && posture && (Math.abs(dm[0]) > Math.abs(delta[0]) + 1e-9 || Math.abs(dm[1]) > Math.abs(delta[1]) + 1e-9)) {
       preferV = false;
       preferH = false;
     }
@@ -11479,25 +12642,25 @@ ${body}
       }
     }
   }
-  function setLineMode(ctx, mode) {
-    if (!LINE_MODES.includes(mode)) return S.lineMode;
+  function setLineMode(ctx, mode2) {
+    if (!LINE_MODES.includes(mode2)) return S.lineMode;
     const from = S.lineMode;
-    S.lineMode = mode;
+    S.lineMode = mode2;
     announceModes(ctx);
     if (S.drag) {
       applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]);
       ctx.requestRender();
     } else if (S.wire) {
-      wireModeChanged(ctx, from, mode);
+      wireModeChanged(ctx, from, mode2);
       ctx.requestRender();
     }
-    return mode;
+    return mode2;
   }
   function cycleLineMode(ctx) {
     return setLineMode(ctx, LINE_MODES[(LINE_MODES.indexOf(S.lineMode) + 1) % LINE_MODES.length]);
   }
-  function setDragMode(ctx, mode) {
-    S.dragMode = mode === "move" ? "move" : "drag";
+  function setDragMode(ctx, mode2) {
+    S.dragMode = mode2 === "move" ? "move" : "drag";
     announceModes(ctx);
     if (S.drag) {
       applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]);
@@ -12341,13 +13504,13 @@ ${body}
     S.lastPlaced = now.map((it) => ({ kind: it.kind, node: deep(it.node) }));
     setSelectionIds(ctx, now.map((it) => it.id));
     if (symbolId && canFollow(ctx)) {
-      const it = doc.items.get(symbolId), mode = S.dragMode;
+      const it = doc.items.get(symbolId), mode2 = S.dragMode;
       S.dragMode = "move";
       const d = it ? beginDrag(ctx, [it], cursorOf(ctx), false) : null;
       if (d) {
-        d.restoreMode = mode;
+        d.restoreMode = mode2;
         d.moved = true;
-      } else S.dragMode = mode;
+      } else S.dragMode = mode2;
     }
     return true;
   }
@@ -12489,6 +13652,1010 @@ ${body}
     ctx.requestRender();
     return item;
   }
+  var norm360 = (a) => (a % 360 + 360) % 360;
+  var ARC_CENTER_START_END = 0;
+  var ARC_START_END_MID = 1;
+  var ARC_START_END_CENTER = 2;
+  var ARC_TANGENT = 3;
+  var ARC_START_DIR_END = 4;
+  var ARC_MODE_ACTIONS = ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd"];
+  var NM = 1e6;
+  var toNm = (p) => [Math.round(p[0] * NM), Math.round(p[1] * NM)];
+  var fromNm = (p) => [p[0] / NM, p[1] / NM];
+  var kiRound = (v) => v < 0 ? -Math.round(-v) : Math.round(v);
+  var crossZ = (ax, ay, bx, by) => ax * by - ay * bx;
+  var NO_ARC = Object.freeze({ valid: false });
+  function arcOnChord(s, e, side, centerT, radius) {
+    const cx = e[0] - s[0], cy = e[1] - s[1], len = Math.hypot(cx, cy);
+    if (len <= 0 || !isFinite(radius) || radius <= 0) return NO_ARC;
+    const n = [-cy / len, cx / len], m = [(s[0] + e[0]) * 0.5, (s[1] + e[1]) * 0.5], half = len * 0.5, off = Math.abs(centerT);
+    const height = side * centerT <= 0 ? half * half / (radius + off) : radius + off;
+    const mx = m[0] + n[0] * side * height, my = m[1] + n[1] * side * height;
+    if (!isFinite(mx) || !isFinite(my) || Math.abs(mx) > 2147483646 || Math.abs(my) > 2147483646) return NO_ARC;
+    const mid = [kiRound(mx), kiRound(my)];
+    if (crossZ(cx, cy, mid[0] - s[0], mid[1] - s[1]) === 0) return NO_ARC;
+    return { valid: true, start: s.slice(), end: e.slice(), mid, center: [m[0] + n[0] * centerT, m[1] + n[1] * centerT], radius };
+  }
+  function projectToChordBisector(s, e, cur2) {
+    const cx = e[0] - s[0], cy = e[1] - s[1], len = Math.hypot(cx, cy);
+    if (len <= 0) return cur2.slice();
+    const n = [-cy / len, cx / len], m = [(s[0] + e[0]) * 0.5, (s[1] + e[1]) * 0.5];
+    const t = (cur2[0] - m[0]) * n[0] + (cur2[1] - m[1]) * n[1];
+    return [kiRound(m[0] + n[0] * t), kiRound(m[1] + n[1] * t)];
+  }
+  function arcThroughPoints(s, on, e) {
+    const b = [e[0] - s[0], e[1] - s[1]], c = [on[0] - s[0], on[1] - s[1]], d = crossZ(b[0], b[1], c[0], c[1]);
+    if (d === 0) return NO_ARC;
+    const bb = b[0] * b[0] + b[1] * b[1], cc = c[0] * c[0] + c[1] * c[1];
+    const rel = [(c[1] * bb - b[1] * cc) / (2 * d), (b[0] * cc - c[0] * bb) / (2 * d)];
+    const len = Math.hypot(b[0], b[1]);
+    const centerT = (-rel[0] * b[1] + rel[1] * b[0]) / len;
+    return arcOnChord(s, e, d > 0 ? 1 : -1, centerT, Math.hypot(rel[0], rel[1]));
+  }
+  function arcFromStartEndMidDrag(s, e, cur2) {
+    const p = projectToChordBisector(s, e, cur2);
+    const sol = arcThroughPoints(s, p, e);
+    return sol.valid ? Object.assign({}, sol, { mid: p }) : sol;
+  }
+  function arcFromStartEndCenterDrag(s, e, cur2, major) {
+    const cx = e[0] - s[0], cy = e[1] - s[1], len = Math.hypot(cx, cy);
+    if (len <= 0) return NO_ARC;
+    const n = [-cy / len, cx / len], m = [(s[0] + e[0]) * 0.5, (s[1] + e[1]) * 0.5];
+    const centerT = (cur2[0] - m[0]) * n[0] + (cur2[1] - m[1]) * n[1];
+    let side = centerT < 0 ? -1 : 1;
+    if (!major) side = -side;
+    return arcOnChord(s, e, side, centerT, Math.hypot(len * 0.5, centerT));
+  }
+  function arcFromStartTangentEnd(s, tan, e) {
+    const tl = Math.hypot(tan[0], tan[1]);
+    if (!(tl > 0) || !isFinite(tl)) return NO_ARC;
+    const t = [tan[0] / tl, tan[1] / tl], d = [e[0] - s[0], e[1] - s[1]], dd = d[0] * d[0] + d[1] * d[1], cross = crossZ(d[0], d[1], t[0], t[1]);
+    if (dd <= 0 || cross === 0) return NO_ARC;
+    const k = -dd / (2 * cross), n = [-t[1], t[0]], len = Math.sqrt(dd), cn = [-d[1] / len, d[0] / len];
+    return arcOnChord(s, e, cross > 0 ? 1 : -1, k * (n[0] * cn[0] + n[1] * cn[1]), Math.abs(k));
+  }
+  var degOf = (v) => {
+    let a = Math.atan2(v[1], v[0]) * 180 / Math.PI;
+    if (Math.abs(a) < 1e-12) a = 0;
+    return a;
+  };
+  var ArcGeom = class {
+    constructor(mode2) {
+      this.mode = mode2;
+      this.reset();
+    }
+    reset() {
+      this.step = 0;
+      this.last = [0, 0];
+      this.changed = true;
+      this.cw = true;
+      this.locked = false;
+      this.snap = false;
+      this.origin = [0, 0];
+      this.radius = 0;
+      this.sa = 0;
+      this.ea = 0;
+      this.pts = [[0, 0], [0, 0], [0, 0]];
+      this.dir = [0, 0];
+      this.hasSeed = false;
+      this.seedAxis = false;
+      this.axisFlipped = false;
+      this.axis = [0, 0];
+      this.major = false;
+      this.sol = NO_ARC;
+    }
+    hasTangentSeed() {
+      return this.mode === ARC_TANGENT && this.hasSeed;
+    }
+    maxStep() {
+      return this.hasTangentSeed() ? 1 : 3;
+    }
+    isReset() {
+      return this.step === 0;
+    }
+    isComplete() {
+      return this.step === this.maxStep();
+    }
+    getStep() {
+      return this.isComplete() ? 3 : this.step;
+    }
+    hasPreview() {
+      return !this.isReset() || this.hasTangentSeed();
+    }
+    usesExact() {
+      return this.mode !== ARC_CENTER_START_END;
+    }
+    usesDirectionClick() {
+      return this.mode === ARC_START_DIR_END || this.mode === ARC_TANGENT && !this.hasSeed;
+    }
+    pointIndex() {
+      return this.step + (this.hasTangentSeed() ? 1 : 0);
+    }
+    addPoint(p, lockIn) {
+      this.last = p.slice();
+      const ok2 = this.accept(p);
+      if (lockIn && (ok2 || this.mode === ARC_CENTER_START_END)) this.performStep(ok2);
+      this.changed = true;
+    }
+    removeLastPoint() {
+      this.performStep(false);
+      this.accept(this.last);
+      this.changed = true;
+    }
+    performStep(fwd) {
+      this.step = Math.max(0, Math.min(this.maxStep(), this.step + (fwd ? 1 : -1)));
+    }
+    accept(p) {
+      if (this.mode !== ARC_CENTER_START_END) return this.acceptExact(p);
+      switch (this.step) {
+        case 0:
+          return this.setOrigin(p);
+        case 1:
+          return this.setStart(p);
+        case 2:
+          return this.setEnd(p);
+        default:
+          return false;
+      }
+    }
+    acceptExact(p) {
+      if (this.isComplete()) return false;
+      const i = this.pointIndex();
+      this.pts[i] = p.slice();
+      if (i < 2 && !this.hasTangentSeed()) {
+        this.clearSolution();
+        if (i === 0) return true;
+        return this.usesDirectionClick() ? this.setDirection(p) : p[0] !== this.pts[0][0] || p[1] !== this.pts[0][1];
+      }
+      if (this.hasTangentSeed() && this.seedAxis) {
+        const ch = [p[0] - this.pts[0][0], p[1] - this.pts[0][1]];
+        const sign = ch[0] * this.axis[0] + ch[1] * this.axis[1] >= 0 !== this.axisFlipped ? 1 : -1;
+        this.dir = [this.axis[0] * sign, this.axis[1] * sign];
+      }
+      let sol = NO_ARC;
+      if (this.mode === ARC_START_END_MID) sol = arcFromStartEndMidDrag(this.pts[0], this.pts[1], p);
+      else if (this.mode === ARC_START_END_CENTER) sol = arcFromStartEndCenterDrag(this.pts[0], this.pts[1], p, this.major);
+      else sol = arcFromStartTangentEnd(this.pts[0], this.dir, p);
+      if (sol.valid) this.applySolution(sol);
+      return sol.valid;
+    }
+    applySolution(sol) {
+      this.sol = sol;
+      const c = sol.center;
+      const s = [sol.start[0] - c[0], sol.start[1] - c[1]], e = [sol.end[0] - c[0], sol.end[1] - c[1]], m = [sol.mid[0] - c[0], sol.mid[1] - c[1]];
+      this.origin = [kiRound(c[0]), kiRound(c[1])];
+      this.radius = sol.radius;
+      this.sa = norm360(degOf(s));
+      this.ea = norm360(degOf(e));
+      this.cw = crossZ(s[0], s[1], m[0], m[1]) < 0;
+    }
+    clearSolution() {
+      this.sol = NO_ARC;
+      this.origin = [0, 0];
+      this.radius = 0;
+      this.sa = 0;
+      this.ea = 0;
+      this.cw = true;
+    }
+    setDirection(p) {
+      const v = [p[0] - this.pts[0][0], p[1] - this.pts[0][1]], len = Math.hypot(v[0], v[1]);
+      if (len === 0) return false;
+      this.dir = v;
+      if (this.snap) {
+        const d = Math.SQRT1_2, units = [[1, 0], [d, d], [0, 1], [-d, d], [-1, 0], [-d, -d], [0, -1], [d, -d]];
+        const oct = (kiRound(degOf(v) / 45) % 8 + 8) % 8;
+        this.dir = [units[oct][0] * len, units[oct][1] * len];
+      }
+      return true;
+    }
+    setMode(m) {
+      if (m === this.mode) return;
+      if (this.isReset()) {
+        this.mode = m;
+        this.clearSolution();
+        this.changed = true;
+        return;
+      }
+      const keep = this.mode !== ARC_CENTER_START_END && m !== ARC_CENTER_START_END;
+      const start = this.pts[0].slice(), cursor = this.last.slice(), snap2 = this.snap;
+      this.mode = m;
+      this.reset();
+      if (!keep) return;
+      this.snap = snap2;
+      this.addPoint(start, true);
+      this.addPoint(cursor, false);
+    }
+    setTangentSeed(start, dir, isAxis) {
+      if (!this.isReset() || dir[0] === 0 && dir[1] === 0) return;
+      this.pts[0] = start.slice();
+      this.dir = dir.slice();
+      this.axis = dir.slice();
+      this.seedAxis = !!isAxis;
+      this.axisFlipped = false;
+      this.hasSeed = true;
+      this.clearSolution();
+      this.changed = true;
+    }
+    /** Switch Arc Posture (/): the center mode's direction, the start-end-center mode's major / minor arc, a tangent seed's side of its axis. */
+    toggleClockwise() {
+      if (this.mode === ARC_CENTER_START_END) {
+        this.cw = !this.cw;
+        this.locked = true;
+        this.changed = true;
+      } else if (this.mode === ARC_START_END_CENTER) {
+        this.major = !this.major;
+        if (this.step === 2) this.accept(this.last);
+        this.changed = true;
+      } else if (this.mode === ARC_TANGENT && this.hasTangentSeed() && this.seedAxis) {
+        this.axisFlipped = !this.axisFlipped;
+        this.accept(this.last);
+        this.changed = true;
+      }
+    }
+    getOrigin() {
+      return this.usesExact() && !this.sol.valid ? this.pts[0] : this.origin;
+    }
+    startRadiusEnd() {
+      if (this.usesExact()) return this.pts[0];
+      const r = Math.trunc(this.radius), a = this.sa * Math.PI / 180;
+      return [this.origin[0] + kiRound(r * Math.cos(a)), this.origin[1] + kiRound(r * Math.sin(a))];
+    }
+    endRadiusEnd() {
+      if (this.usesExact()) return this.sol.valid ? this.sol.end : this.pts[0];
+      const r = Math.trunc(this.radius), a = this.ea * Math.PI / 180;
+      return [this.origin[0] + kiRound(r * Math.cos(a)), this.origin[1] + kiRound(r * Math.sin(a))];
+    }
+    startAngle() {
+      let a = this.sa;
+      if (this.cw) a -= 360;
+      return -a;
+    }
+    subtended() {
+      let a = this.ea - this.sa;
+      if (this.ea <= this.sa) a += 360;
+      if (this.cw) a -= 360;
+      return -a;
+    }
+    setOrigin(p) {
+      this.origin = p.slice();
+      this.sa = 0;
+      this.ea = 0;
+      return true;
+    }
+    setStart(p) {
+      const v = [p[0] - this.origin[0], p[1] - this.origin[1]];
+      this.radius = Math.hypot(v[0], v[1]);
+      this.sa = degOf(v);
+      if (this.snap) this.sa = 45 * kiRound(this.sa / 45);
+      while (this.sa < 0) this.sa += 360;
+      this.ea = this.sa;
+      return this.radius !== 0;
+    }
+    setEnd(p) {
+      const v = [p[0] - this.origin[0], p[1] - this.origin[1]];
+      this.ea = degOf(v);
+      if (this.snap) this.ea = 45 * kiRound(this.ea / 45);
+      while (this.ea < 0) this.ea += 360;
+      if (!this.locked) {
+        let ccw = this.ea - this.sa;
+        if (this.ea <= this.sa) ccw += 360;
+        const cw = Math.abs(ccw - 360);
+        if (Math.min(ccw, cw) >= 90) this.locked = true;
+        else this.cw = cw < ccw;
+      } else if (Math.abs(this.subtended()) < 90) this.locked = false;
+      return this.ea !== this.sa;
+    }
+    /** ARC_DRAW_BEHAVIOR::ApplyToShape as start / mid / end in nm, or null while there is no arc yet. */
+    shape() {
+      if (this.usesExact()) return this.sol.valid ? { start: this.sol.start, mid: this.sol.mid, end: this.sol.end, center: this.sol.center } : null;
+      if (this.step < 2 || !this.radius) return null;
+      const sub = this.subtended();
+      if (!sub) return null;
+      const [s, e] = sub < 0 ? [this.startRadiusEnd(), this.endRadiusEnd()] : [this.endRadiusEnd(), this.startRadiusEnd()];
+      const c = this.origin, a0 = Math.atan2(s[1] - c[1], s[0] - c[0]);
+      let sweep = Math.atan2(e[1] - c[1], e[0] - c[0]) - a0;
+      while (sweep <= 0) sweep += 2 * Math.PI;
+      const r = Math.hypot(s[0] - c[0], s[1] - c[1]), am = a0 + sweep / 2;
+      return { start: s, mid: [kiRound(c[0] + r * Math.cos(am)), kiRound(c[1] + r * Math.sin(am))], end: e, center: c };
+    }
+  };
+  var canvasCurves = () => globalThis.KiCadCanvas;
+  var vsubA = (a, b) => [a[0] - b[0], a[1] - b[1]];
+  var unitOf = (v) => {
+    const l = Math.hypot(v[0], v[1]);
+    return l === 0 ? null : [v[0] / l, v[1] / l];
+  };
+  var perp = (v) => [-v[1], v[0]];
+  function nearestEnd(a, b, p, tol) {
+    const da = Math.hypot(a[0] - p[0], a[1] - p[1]), db = Math.hypot(b[0] - p[0], b[1] - p[1]);
+    const first = da <= db;
+    if (tol !== void 0 && (first ? da : db) > tol) return null;
+    return first ? a : b;
+  }
+  function tangentAtEndpoint(sh, p) {
+    const atStart = p[0] === sh.start[0] && p[1] === sh.start[1];
+    if (!atStart && (p[0] !== sh.end[0] || p[1] !== sh.end[1])) return null;
+    if (sh.t === "seg") return unitOf(atStart ? vsubA(sh.start, sh.end) : vsubA(sh.end, sh.start));
+    if (sh.t !== "arc") return null;
+    const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
+    if (turn === 0) return null;
+    let t = perp(vsubA(p, sh.center));
+    if (turn > 0 === atStart) t = [-t[0], -t[1]];
+    return unitOf(t);
+  }
+  function arcTangentSeedNear(sh, near) {
+    const end = nearestEnd(sh.start, sh.end, near);
+    const d = tangentAtEndpoint(sh, end);
+    return d ? { start: end.slice(), dir: d, axis: false } : null;
+  }
+  function segDist2(a, b, p) {
+    const v = vsubA(b, a), L = v[0] * v[0] + v[1] * v[1];
+    let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    const q = [a[0] + v[0] * t, a[1] + v[1] * t];
+    return { d: Math.hypot(p[0] - q[0], p[1] - q[1]), q: [kiRound(q[0]), kiRound(q[1])] };
+  }
+  function polylineSeedAt(vs, closed, p, tol) {
+    const n = vs.length;
+    if (n < 2) return null;
+    if (!closed) {
+      const end = nearestEnd(vs[0], vs[n - 1], p, tol);
+      if (end) {
+        const inner = end === vs[0] ? vs[1] : vs[n - 2];
+        const d = unitOf(vsubA(end, inner));
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+    }
+    let best = null, bestD = tol;
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const a = vs[i], b = vs[(i + 1) % n], r = segDist2(a, b, p);
+      if (r.d <= bestD) {
+        best = { a, b, q: r.q };
+        bestD = r.d;
+      }
+    }
+    if (!best) return null;
+    const ax = unitOf(vsubA(best.b, best.a));
+    return ax ? { start: best.q, dir: ax, axis: true } : null;
+  }
+  function arcTangentSeedAt(sh, p, tol, geo = canvasCurves()) {
+    if (sh.t === "seg") return polylineSeedAt([sh.start, sh.end], false, p, tol);
+    if (sh.t === "bez") {
+      const ctrl = [sh.start, sh.c1, sh.c2, sh.end];
+      const xs = ctrl.map((c) => c[0]), ys = ctrl.map((c) => c[1]);
+      if (p[0] < Math.min(...xs) - tol || p[0] > Math.max(...xs) + tol || p[1] < Math.min(...ys) - tol || p[1] > Math.max(...ys) + tol) return null;
+      const poly = geo.bezierPts(ctrl.map(fromNm)).map(toNm);
+      poly[0] = sh.start.slice();
+      poly[poly.length - 1] = sh.end.slice();
+      const seed = polylineSeedAt(poly, false, p, tol);
+      if (seed && !seed.axis) {
+        const atStart = seed.start[0] === sh.start[0] && seed.start[1] === sh.start[1];
+        const end = atStart ? sh.start : sh.end, others = atStart ? [sh.c1, sh.c2, sh.end] : [sh.c2, sh.c1, sh.start];
+        for (const c of others) {
+          const d = unitOf(vsubA(end, c));
+          if (d) {
+            seed.dir = d;
+            break;
+          }
+        }
+      }
+      return seed;
+    }
+    if (sh.t === "arc") {
+      const end = nearestEnd(sh.start, sh.end, p, tol);
+      if (end) {
+        const d = tangentAtEndpoint(sh, end);
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+      const a = geo.arcFrom3(fromNm(sh.start), fromNm(sh.mid), fromNm(sh.end));
+      if (!a) return null;
+      const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
+      const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
+      if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
+      const ax = unitOf(perp(vsubA(q, c)));
+      return ax ? { start: q, dir: ax, axis: true } : null;
+    }
+    if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
+    return null;
+  }
+  function arcContainsAngle(a, ang) {
+    const tw = 2 * Math.PI, nrm = (x) => (x % tw + tw) % tw;
+    const sweep = a.anticlockwise ? nrm(a.a0 - a.a1) : nrm(a.a1 - a.a0), off = a.anticlockwise ? nrm(a.a0 - ang) : nrm(ang - a.a0);
+    return off <= sweep + 1e-12;
+  }
+  var SHEET_EXT = ".kicad_sch";
+  var baseName3 = (p) => str3(p).split("/").pop();
+  var dirName = (p) => {
+    const s = str3(p).split("/");
+    s.pop();
+    return s.join("/");
+  };
+  var joinPath2 = (dir, file) => dir ? dir + "/" + file : file;
+  function relPath(dir, path2) {
+    const a = dir ? dir.split("/") : [], b = path2.split("/");
+    let i = 0;
+    while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
+    return [...Array(a.length - i).fill(".."), ...b.slice(i)].join("/");
+  }
+  function schDocs(ctx) {
+    return (ctx.docs || []).filter((d) => d && d.docType === "kicad_sch");
+  }
+  function currentDoc(ctx) {
+    const docs = schDocs(ctx);
+    if (ctx.docId) {
+      const d = docs.find((x) => x.docId === ctx.docId);
+      if (d) return d;
+    }
+    if (ctx.docPath) return { path: ctx.docPath };
+    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro"), stem = pro ? baseName3(pro.path).replace(/\.kicad_pro$/, "") : null;
+    return stem && docs.find((d) => baseName3(d.path) === stem + SHEET_EXT) || docs.slice().sort((x, y) => x.path.split("/").length - y.path.split("/").length || x.path.length - y.path.length)[0] || null;
+  }
+  function normSheetFile(file) {
+    file = str3(file).trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!file) return "";
+    if (!/\.kicad_sch$/i.test(file)) file += SHEET_EXT;
+    return file;
+  }
+  function sheetFileFor(name) {
+    return normSheetFile(str3(name).trim().replace(/[\\/:*?"<>|]+/g, "_"));
+  }
+  function emptySheetDoc() {
+    return `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0") (uuid "${K4.newUuid()}") (paper "A4") (lib_symbols) (sheet_instances (path "/" (page "1"))))
+`;
+  }
+  async function ensureSheetDoc(ctx, file) {
+    file = normSheetFile(file);
+    if (!file) throw new Error("no sheet file name");
+    const cur2 = currentDoc(ctx), dir = cur2 ? dirName(cur2.path) : "", target2 = joinPath2(dir, file);
+    const found = schDocs(ctx).find((d) => d.path === target2 || d.path === file) || schDocs(ctx).find((d) => baseName3(d.path) === baseName3(file));
+    if (found) return { file: relPath(dir, found.path), docId: found.docId, created: false };
+    if (typeof ctx.api !== "function" || !ctx.project || !ctx.project.projectId) throw new Error("this session cannot create sheet files");
+    const res = await ctx.api(`/api/projects/${ctx.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: target2, docType: "kicad_sch" }) });
+    if (!res || !res.docId) throw new Error("no document id returned");
+    if (!res.existing) await ctx.api(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", headers: { "content-type": "text/plain" }, body: emptySheetDoc() });
+    const entry = { docId: res.docId, path: res.path || target2, docType: "kicad_sch" };
+    if (Array.isArray(ctx.docs) && !ctx.docs.some((d) => d && d.docId === entry.docId)) ctx.docs.push(entry);
+    return { file, docId: entry.docId, created: !res.existing };
+  }
+  function sheetPathHere(doc) {
+    const paths = /* @__PURE__ */ new Map(), names = /* @__PURE__ */ new Map(), vote = (m, k) => {
+      if (k) m.set(k, (m.get(k) || 0) + 1);
+    };
+    for (const it of doc.items.values()) {
+      if (it.kind !== "symbol" && it.kind !== "sheet") continue;
+      for (const inst of kids2(it.node, "instances")) for (const pr of kids2(inst, "project")) {
+        vote(names, str3(pr[1]));
+        for (const pa of kids2(pr, "path")) vote(paths, str3(pa[1]));
+      }
+    }
+    const top = (m) => {
+      let best = null, bn = 0;
+      for (const [k, n] of m) if (n > bn) {
+        bn = n;
+        best = k;
+      }
+      return best;
+    };
+    return { path: top(paths), project: top(names) };
+  }
+  function nextPage(ctx, doc) {
+    const used = /* @__PURE__ */ new Set(["1"]);
+    for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids2(it.node, "instances")) for (const pr of kids2(inst, "project")) for (const pa of kids2(pr, "path")) {
+      const pg = kid3(pa, "page");
+      if (pg) used.add(str3(pg[1]));
+    }
+    let n = Math.max(2, schDocs(ctx).length);
+    while (used.has(String(n))) n++;
+    return n;
+  }
+  function sheetInstance(ctx, doc, page) {
+    const { path: path2, project } = sheetPathHere(doc);
+    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro");
+    const name = project || (pro ? baseName3(pro.path).replace(/\.kicad_pro$/, "") : "") || ctx.project && ctx.project.name || "";
+    if (!path2 || !name) return null;
+    return ["instances", ["project", name, ["path", path2, ["page", String(page)]]]];
+  }
+  function placeSheet(ctx, a, b, name, file) {
+    if (S.sheetJob) {
+      ctx.toast("Still creating the previous sheet\u2026");
+      return S.sheetJob.promise;
+    }
+    const doc = ctx.doc, job = { doc, promise: null };
+    S.sheetJob = job;
+    job.promise = (async () => {
+      try {
+        const ref = await ensureSheetDoc(ctx, normSheetFile(file));
+        if (S.sheetJob !== job || ctx.doc !== doc) return null;
+        const node = sheetNode(a, b, name, ref.file);
+        const inst = sheetInstance(ctx, doc, nextPage(ctx, doc));
+        if (inst) node.push(inst);
+        const { item, change } = addNode(doc, node);
+        ctx.commit([change], "sheet");
+        rememberPlaced(item.kind, item.node);
+        ctx.setSelected({ id: item.id });
+        return item;
+      } catch (e) {
+        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
+        return null;
+      } finally {
+        if (S.sheetJob === job) S.sheetJob = null;
+        ctx.requestRender();
+      }
+    })();
+    return job.promise;
+  }
+  function placeSheetNode(ctx, node, file) {
+    if (S.sheetJob) {
+      ctx.toast("Still creating the previous sheet\u2026");
+      return S.sheetJob.promise;
+    }
+    const doc = ctx.doc, job = { doc, promise: null };
+    S.sheetJob = job;
+    job.promise = (async () => {
+      try {
+        file = normSheetFile(file);
+        const cur2 = currentDoc(ctx), dir = cur2 ? dirName(cur2.path) : "", target2 = joinPath2(dir, file);
+        const exists = schDocs(ctx).find((x) => x.path === target2 || x.path === file);
+        if (exists && root4.KDialogs && root4.KDialogs.confirm && !await root4.KDialogs.confirm("Confirmation", `'${baseName3(file)}' already exists.
+
+Link '${target2}' to this file?`)) return null;
+        const ref = await ensureSheetDoc(ctx, file);
+        if (S.sheetJob !== job || ctx.doc !== doc) return null;
+        const fp = kids2(node, "property").find((q) => /^Sheet ?file$/i.test(str3(q[1])));
+        if (fp) fp[2] = ref.file;
+        const { item, change } = addNode(doc, node);
+        ctx.commit([change], "sheet");
+        rememberPlaced(item.kind, item.node);
+        ctx.setSelected({ id: item.id });
+        return item;
+      } catch (e) {
+        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
+        return null;
+      } finally {
+        if (S.sheetJob === job) S.sheetJob = null;
+        ctx.requestRender();
+      }
+    })();
+    return job.promise;
+  }
+  function sheetEdgeAt(doc, p, tol) {
+    let best = null;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "sheet") continue;
+      const [x, y] = atOf2(it.node), s = kid3(it.node, "size"), w = num5(s && s[1], 0), h = num5(s && s[2], 0);
+      const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
+      for (const side of ["top", "right", "bottom", "left"]) {
+        const d = segDist(p, edges[side][0], edges[side][1]);
+        if (d <= tol && (!best || d < best.d)) best = { item: it, side, d, x, y, w, h };
+      }
+    }
+    return best;
+  }
+  function sheetPinPoint(ctx, edge, p) {
+    const g2 = ctx.snap([p[0], p[1]]), clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    if (edge.side === "left") return [r43(edge.x), r43(clamp(g2[1], edge.y, edge.y + edge.h))];
+    if (edge.side === "right") return [r43(edge.x + edge.w), r43(clamp(g2[1], edge.y, edge.y + edge.h))];
+    if (edge.side === "top") return [r43(clamp(g2[0], edge.x, edge.x + edge.w)), r43(edge.y)];
+    return [r43(clamp(g2[0], edge.x, edge.x + edge.w)), r43(edge.y + edge.h)];
+  }
+  function sheetPinClick(ctx, mm) {
+    const edge = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx)));
+    if (!edge) {
+      ctx.toast("Click on the border of a sheet");
+      return null;
+    }
+    const p = sheetPinPoint(ctx, edge, mm);
+    promptImpl("Sheet pin", "", S.cursorClient, (name) => {
+      if (name) placeSheetPin(ctx, edge.item, name, p, edge.side);
+    });
+    return edge;
+  }
+  function placeSheetPin(ctx, sheet, name, p, side) {
+    const node = deep(sheet.node), pin = sheetPinNode(name, p, side);
+    const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
+    if (at >= 0) node.splice(at, 0, pin);
+    else node.push(pin);
+    ctx.commit([modChange(ctx.doc, sheet, node)], "sheet pin");
+    ctx.requestRender();
+    return pin;
+  }
+  function drawPoint(ctx, mm) {
+    return ctx.snap([mm[0], mm[1]]).map(r43);
+  }
+  function startDraw(ctx, shape, p) {
+    S.draw = { shape, pts: [p], cur: p.slice() };
+    ctx.requestRender();
+  }
+  function cancelDraw(ctx) {
+    S.draw = null;
+    closePrompt();
+    ctx.requestRender();
+  }
+  function undoDrawPoint(ctx) {
+    const d = S.draw;
+    if (!d) return;
+    if (d.pts.length > 1) d.pts.pop();
+    else S.draw = null;
+    ctx.requestRender();
+  }
+  function drawClick(ctx, shape, p) {
+    if (shape === "arc") {
+      schArcClick(ctx, p);
+      return;
+    }
+    const d = S.draw;
+    if (!d || d.shape !== shape) {
+      startDraw(ctx, shape, p);
+      return;
+    }
+    d.cur = p.slice();
+    const last = d.pts[d.pts.length - 1];
+    if (shape === "lines" || shape === "polygon" || shape === "rulearea") {
+      if (same(p, last)) {
+        finishDraw(ctx);
+        return;
+      }
+      if (shape !== "lines" && d.pts.length >= 3 && same(p, d.pts[0])) {
+        finishDraw(ctx);
+        return;
+      }
+      d.pts.push(p);
+      ctx.requestRender();
+      return;
+    }
+    if (shape === "bezier") {
+      if (d.pts.length === 2 && same(p, d.pts[0])) {
+        ctx.toast("The curve's end must differ from its start");
+        return;
+      }
+      d.pts.push(p);
+      if (d.pts.length === 4) finishDraw(ctx);
+      else ctx.requestRender();
+      return;
+    }
+    if (same(p, last)) return;
+    d.pts.push(p);
+    finishDraw(ctx);
+  }
+  function finishDraw(ctx) {
+    const d = S.draw;
+    if (!d) return;
+    const doc = ctx.doc, pts = d.pts;
+    let node = null, label = d.shape;
+    if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
+    else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
+    else if (d.shape === "arc") {
+      commitSchArc(ctx, d, false);
+      ctx.requestRender();
+      return;
+    } else if (d.shape === "lines") {
+      const p = simplify2(pts);
+      if (p.length >= 2) node = polylineNode(p);
+      label = "lines";
+    } else if (d.shape === "polygon") {
+      const p = simplify2(pts);
+      if (p.length >= 3) node = polygonNode(p);
+    } else if (d.shape === "rulearea") {
+      const p = simplify2(pts);
+      if (p.length >= 3) node = ruleAreaNode(p);
+      label = "rule area";
+    } else if (d.shape === "bezier") {
+      if (pts.length === 4) {
+        const e = pts[2], c2 = [r43(2 * e[0] - pts[3][0]), r43(2 * e[1] - pts[3][1])];
+        node = bezierNode(pts[0], pts[1], c2, e);
+      }
+    } else if (d.shape === "table") {
+      d.await = true;
+      ctx.requestRender();
+      promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
+        if (S.draw !== d) return;
+        S.draw = null;
+        const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
+        if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
+        else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
+        ctx.requestRender();
+      });
+      return;
+    } else if (d.shape === "sheet") {
+      d.await = true;
+      ctx.requestRender();
+      const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
+      if (KD && KD.schItemDialog && !ctx.viewOnly) {
+        const sn = sheetNode(pts[0], pts[1], "Untitled Sheet", "untitled" + SHEET_EXT);
+        const inst = sheetInstance(ctx, ctx.doc, nextPage(ctx, ctx.doc));
+        if (inst) sn.push(inst);
+        const it = { id: "", kind: "sheet", node: sn, geom: [], bbox: null };
+        KD.schItemDialog(ctx, it, { cancel() {
+          if (S.draw === d) {
+            S.draw = null;
+            ctx.requestRender();
+          }
+        }, onCreate(staged) {
+          if (S.draw !== d) return;
+          S.draw = null;
+          const fp = kids2(staged, "property").find((q) => /^Sheet ?file$/i.test(str3(q[1])));
+          placeSheetNode(ctx, staged, fp ? str3(fp[2]) : "untitled" + SHEET_EXT);
+        } });
+        return;
+      }
+      promptImpl("Sheet name", "", S.cursorClient, (name) => {
+        if (S.draw !== d) return;
+        if (!name) {
+          S.draw = null;
+          ctx.requestRender();
+          return;
+        }
+        promptImpl("Sheet file", sheetFileFor(name), S.cursorClient, (file) => {
+          if (S.draw !== d) return;
+          S.draw = null;
+          if (file) placeSheet(ctx, pts[0], pts[1], name, file);
+          else ctx.requestRender();
+        });
+      });
+      return;
+    } else if (d.shape === "textbox") {
+      d.await = true;
+      ctx.requestRender();
+      const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
+      if (KD && KD.openNew && !ctx.viewOnly) {
+        const tb = textBoxNode("", pts[0], pts[1]);
+        KD.openItem(ctx, { id: "", kind: "text_box", node: tb, geom: [], bbox: null }, {
+          generic: true,
+          cancel() {
+            if (S.draw === d) {
+              S.draw = null;
+              ctx.requestRender();
+            }
+          },
+          onCreate(staged) {
+            if (S.draw !== d) return;
+            S.draw = null;
+            commitShape(ctx, staged, "text box");
+            ctx.requestRender();
+          }
+        });
+        return;
+      }
+      promptImpl("Text box", "", S.cursorClient, (text2) => {
+        if (S.draw !== d) return;
+        S.draw = null;
+        if (text2) commitShape(ctx, textBoxNode(text2, pts[0], pts[1]), "text box");
+        ctx.requestRender();
+      });
+      return;
+    }
+    S.draw = null;
+    if (node) commitShape(ctx, node, label);
+    ctx.requestRender();
+  }
+  function commitShape(ctx, node, label) {
+    const { item, change } = addNode(ctx.doc, node);
+    ctx.commit([change], label);
+    rememberPlaced(item.kind, item.node);
+    S.sel = item.id;
+    ctx.setSelected(null);
+    return item;
+  }
+  var SCH_ARC_MODE_KEY = "kc.sch.arcDrawMode";
+  var lsGet = (k) => {
+    try {
+      return root4.localStorage ? root4.localStorage.getItem(k) : null;
+    } catch {
+      return null;
+    }
+  };
+  var lsSet = (k, v) => {
+    try {
+      if (root4.localStorage) root4.localStorage.setItem(k, v);
+    } catch {
+    }
+  };
+  var mode = null;
+  function schArcDrawMode() {
+    if (mode == null) {
+      const v = lsGet(SCH_ARC_MODE_KEY);
+      mode = v !== null && /^[0-4]$/.test(v) ? +v : ARC_CENTER_START_END;
+    }
+    return mode;
+  }
+  function setSchArcDrawMode(m) {
+    mode = m;
+    lsSet(SCH_ARC_MODE_KEY, String(m));
+  }
+  function showSchArcMode(ctx) {
+    const c = ctx;
+    if (c && c.setGroupCurrent) c.setGroupCurrent("Arc", ARC_MODE_ACTIONS[schArcDrawMode()]);
+  }
+  function schSeedShapeOf(it) {
+    const n = it.node, pt4 = (k) => {
+      const c = kid3(n, k);
+      return c ? toNm([+c[1], +c[2]]) : null;
+    };
+    if (it.kind === "arc") {
+      const s = pt4("start"), m = pt4("mid"), e = pt4("end");
+      if (!s || !m || !e) return null;
+      const a = K4.arcFrom3(fromNm(s), fromNm(m), fromNm(e));
+      return a ? { t: "arc", start: s, mid: m, end: e, center: toNm([a.x, a.y]) } : null;
+    }
+    if (it.kind === "bezier") {
+      const ps = ptsOf2(n).map(toNm);
+      return ps.length === 4 ? { t: "bez", start: ps[0], c1: ps[1], c2: ps[2], end: ps[3] } : null;
+    }
+    if (it.kind === "polyline") {
+      const ps = ptsOf2(n).map(toNm);
+      if (ps.length === 2) return { t: "seg", start: ps[0], end: ps[1] };
+      return ps.length > 2 ? { t: "poly", pts: ps } : null;
+    }
+    return null;
+  }
+  function findSchTangentSeed(ctx, pos) {
+    const tol = kiRound(5 / Math.max(1e-9, ctx.pxPerMm || 1) * NM);
+    for (const it of ctx.doc.items.values()) {
+      if (it.kind !== "arc" && it.kind !== "bezier" && it.kind !== "polyline") continue;
+      const b = it.bbox, t = tol / NM;
+      if (b && (pos[0] / NM < b[0] - t || pos[0] / NM > b[2] + t || pos[1] / NM < b[1] - t || pos[1] / NM > b[3] + t)) continue;
+      const sh = schSeedShapeOf(it);
+      if (!sh) continue;
+      const seed = sh.t === "poly" ? polySeed(sh.pts, pos, tol) : arcTangentSeedAt(sh, pos, tol);
+      if (seed) return seed;
+    }
+    return null;
+  }
+  function polySeed(pts, pos, tol) {
+    let best = null, bestD = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const s = arcTangentSeedAt({ t: "seg", start: pts[i], end: pts[i + 1] }, pos, tol);
+      if (!s) continue;
+      const inner = i > 0 && same2(s.start, pts[i]) || i + 2 < pts.length && same2(s.start, pts[i + 1]);
+      const seed = inner ? { start: s.start, dir: s.dir, axis: true } : s;
+      const d = Math.hypot(seed.start[0] - pos[0], seed.start[1] - pos[1]);
+      if (!best || d < bestD) {
+        best = seed;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+  var same2 = (a, b) => a[0] === b[0] && a[1] === b[1];
+  function newSchArc(chainSeed) {
+    const g2 = new ArcGeom(schArcDrawMode());
+    const d = { shape: "arc", pts: [], cur: [0, 0], arc: g2, started: false, chainSeeded: false, clickSeeded: false };
+    if (chainSeed) {
+      g2.setTangentSeed(chainSeed.start, chainSeed.dir, chainSeed.axis);
+      d.chainSeeded = true;
+      d.started = true;
+    }
+    syncSchArc(d);
+    return d;
+  }
+  function syncSchArc(d) {
+    const g2 = d.arc;
+    d.pts = g2.hasPreview() ? [fromNm(g2.pts[0]).map(r43)] : [];
+  }
+  function switchSchArcMode(ctx, m) {
+    setSchArcDrawMode(m);
+    showSchArcMode(ctx);
+    const d = S.draw;
+    if (d && d.shape === "arc" && d.arc) {
+      d.arc.setMode(m);
+      d.chainSeeded = false;
+      d.clickSeeded = false;
+      syncSchArc(d);
+    }
+    ctx.requestRender();
+  }
+  function schArcClick(ctx, p) {
+    let d = S.draw;
+    if (!d || d.shape !== "arc" || !d.arc) d = S.draw = newSchArc(null);
+    const g2 = d.arc, pos = toNm(p);
+    if (!d.started) {
+      S.sel = null;
+      ctx.setSelected(null);
+      d.started = true;
+    }
+    const first = !d.chainSeeded && !d.clickSeeded && g2.getStep() === 0;
+    if (first && g2.mode === ARC_TANGENT) {
+      const seed = findSchTangentSeed(ctx, pos);
+      if (seed) {
+        g2.setTangentSeed(seed.start, seed.dir, seed.axis);
+        d.clickSeeded = true;
+        syncSchArc(d);
+        ctx.requestRender();
+        return;
+      }
+    }
+    g2.addPoint(pos, true);
+    d.clickSeeded = false;
+    d.lastClick = pos;
+    d.cur = p.slice();
+    syncSchArc(d);
+    if (g2.isComplete()) commitSchArc(ctx, d, true);
+    ctx.requestRender();
+  }
+  function schArcMove(d, p) {
+    const g2 = d.arc;
+    d.cur = p.slice();
+    if (g2.hasPreview()) g2.addPoint(toNm(p), false);
+  }
+  function schArcPoints(d) {
+    const sh = d.arc ? d.arc.shape() : null;
+    if (!sh) return null;
+    return { start: fromNm(sh.start).map(r43), mid: fromNm(sh.mid).map(r43), end: fromNm(sh.end).map(r43) };
+  }
+  function commitSchArc(ctx, d, next) {
+    const a = schArcPoints(d);
+    S.draw = null;
+    if (a) commitShape(ctx, arcNode(a.start, a.mid, a.end), "arc");
+    if (!next) return;
+    const sh = d.arc.shape();
+    const seed = sh && schArcDrawMode() === ARC_TANGENT ? arcTangentSeedNear({ t: "arc", start: sh.start, mid: sh.mid, end: sh.end, center: sh.center }, d.lastClick || sh.end) : null;
+    S.draw = newSchArc(seed);
+    S.draw.cur = d.cur.slice();
+  }
+  function finishSchArc(ctx) {
+    const d = S.draw, a = d && d.started ? schArcPoints(d) : null;
+    S.draw = null;
+    if (a) commitShape(ctx, arcNode(a.start, a.mid, a.end), "arc");
+    ctx.setTool("select");
+    ctx.requestRender();
+  }
+  function schArcBackup(ctx) {
+    const d = S.draw, g2 = d.arc;
+    if (d.clickSeeded) {
+      g2.reset();
+      d.clickSeeded = false;
+    } else if (g2.isReset() && !g2.hasTangentSeed()) {
+      S.draw = null;
+    } else g2.removeLastPoint();
+    if (S.draw) syncSchArc(d);
+    ctx.requestRender();
+  }
+  function schArcUndo(ctx) {
+    const d = S.draw;
+    if (!d || !d.arc) return;
+    S.draw = newSchArc(null);
+    S.draw.cur = d.cur.slice();
+    S.sel = null;
+    ctx.setSelected(null);
+    ctx.requestRender();
+  }
+  function schArcPosture(ctx) {
+    const d = S.draw;
+    if (!d || !d.arc) return false;
+    d.arc.toggleClockwise();
+    ctx.requestRender();
+    return true;
+  }
+  function drawSchArcPreview(c, d, px) {
+    const g2 = d.arc;
+    if (!g2.hasPreview()) return;
+    const a = schArcPoints(d), o = fromNm(g2.getOrigin());
+    c.beginPath();
+    if (a) {
+      const arc = K4.arcFrom3(a.start, a.mid, a.end);
+      if (arc) c.arc(arc.x, arc.y, arc.r, arc.a0, arc.a1, arc.anticlockwise);
+    } else {
+      c.moveTo(o[0], o[1]);
+      c.lineTo(d.cur[0], d.cur[1]);
+    }
+    c.stroke();
+    if (g2.mode === ARC_CENTER_START_END && g2.getStep() >= 1) {
+      c.save();
+      c.setLineDash([2 * px, 2 * px]);
+      c.globalAlpha = 0.5;
+      c.beginPath();
+      const s = fromNm(g2.startRadiusEnd());
+      c.moveTo(o[0], o[1]);
+      c.lineTo(s[0], s[1]);
+      if (g2.getStep() >= 2) {
+        const e = fromNm(g2.endRadiusEnd());
+        c.moveTo(o[0], o[1]);
+        c.lineTo(e[0], e[1]);
+      }
+      c.stroke();
+      c.restore();
+    }
+  }
   function paint(c, item, alpha, px) {
     c.save();
     c.globalAlpha = alpha;
@@ -12601,7 +14768,17 @@ ${body}
     }
     if (S.carry && S.carry.item) box(S.carry.item.bbox || rectOf(S.carry.item));
     const dr = S.draw;
-    if (dr && dr.pts.length && dr.cur) {
+    if (dr && dr.arc) {
+      const a = schArcPoints(dr), arc = a ? K4.arcFrom3(a.start, a.mid, a.end) : null;
+      if (arc) {
+        const sweep = arc.anticlockwise ? -(((arc.a0 - arc.a1) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)) : ((arc.a1 - arc.a0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI), ring = [];
+        for (let i = 0; i <= 24; i++) {
+          const t = arc.a0 + sweep * i / 24;
+          ring.push([arc.x + arc.r * Math.cos(t), arc.y + arc.r * Math.sin(t)]);
+        }
+        path2(ring);
+      } else if (dr.pts.length) path2([dr.pts[0], dr.cur]);
+    } else if (dr && dr.pts.length && dr.cur) {
       const a = dr.pts[0], c = dr.cur;
       if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet" || dr.shape === "table") box(corners(a, c));
       else if (dr.shape === "circle") {
@@ -12817,8 +14994,8 @@ ${body}
           ne = p1;
         }
       }
-      const nm = arcMid(cc, ns, ne, ccw);
-      for (const [key, q] of [["start", ns], ["mid", nm], ["end", ne]]) {
+      const nm2 = arcMid(cc, ns, ne, ccw);
+      for (const [key, q] of [["start", ns], ["mid", nm2], ["end", ne]]) {
         const kk = kid3(n, key);
         kk[1] = r43(q[0]);
         kk[2] = r43(q[1]);
@@ -13107,9 +15284,9 @@ ${body}
   var AUTOSTART_CURSOR = { wire: LINE_CURSOR("#009600", 2), bus: LINE_CURSOR("#0000C2", 4), polyline: LINE_CURSOR("#0000C2", 1.2) };
   var AUTOSTART_TOOL = { wire: "wire", bus: "bus", polyline: "lines" };
   S.autoStartWires = true;
-  var brighten = (hex, f) => {
-    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
-    if (!m) return hex;
+  var brighten = (hex2, f) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex2 || ""));
+    if (!m) return hex2;
     const v = parseInt(m[1], 16);
     const c = [v >> 16 & 255, v >> 8 & 255, v & 255].map((x) => Math.round(x * (1 - f) + 255 * f));
     return `rgb(${c[0]},${c[1]},${c[2]})`;
@@ -13244,16 +15421,8 @@ ${body}
         c.beginPath();
         c.arc(p0[0], p0[1], Math.hypot(cur2[0] - p0[0], cur2[1] - p0[1]), 0, Math.PI * 2);
         c.stroke();
-      } else if (d.shape === "arc") {
-        const a = d.pts.length > 1 ? K4.arcFrom3(p0, cur2, d.pts[1]) : null;
-        c.beginPath();
-        if (a) c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise);
-        else {
-          c.moveTo(p0[0], p0[1]);
-          c.lineTo(cur2[0], cur2[1]);
-        }
-        c.stroke();
-      } else if (d.shape === "bezier") {
+      } else if (d.shape === "arc" && d.arc) drawSchArcPreview(c, d, px);
+      else if (d.shape === "bezier") {
         const n = d.pts.length, e = n > 2 ? d.pts[2] : cur2;
         const ctrl = n === 1 ? [p0, cur2, cur2, cur2] : n === 2 ? [p0, d.pts[1], cur2, cur2] : [p0, d.pts[1], [2 * e[0] - cur2[0], 2 * e[1] - cur2[1]], e];
         const bp = K4.bezierPts(ctrl, 24);
@@ -13491,386 +15660,6 @@ ${body}
       if (S.carry) S.carry.size = px ? [px[0] * 25.4 / IMAGE_PPI, px[1] * 25.4 / IMAGE_PPI] : [20, 20];
     });
   }
-  var SHEET_EXT = ".kicad_sch";
-  var baseName3 = (p) => str3(p).split("/").pop();
-  var dirName = (p) => {
-    const s = str3(p).split("/");
-    s.pop();
-    return s.join("/");
-  };
-  var joinPath2 = (dir, file) => dir ? dir + "/" + file : file;
-  function relPath(dir, path2) {
-    const a = dir ? dir.split("/") : [], b = path2.split("/");
-    let i = 0;
-    while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
-    return [...Array(a.length - i).fill(".."), ...b.slice(i)].join("/");
-  }
-  function schDocs(ctx) {
-    return (ctx.docs || []).filter((d) => d && d.docType === "kicad_sch");
-  }
-  function currentDoc(ctx) {
-    const docs = schDocs(ctx);
-    if (ctx.docId) {
-      const d = docs.find((x) => x.docId === ctx.docId);
-      if (d) return d;
-    }
-    if (ctx.docPath) return { path: ctx.docPath };
-    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro"), stem = pro ? baseName3(pro.path).replace(/\.kicad_pro$/, "") : null;
-    return stem && docs.find((d) => baseName3(d.path) === stem + SHEET_EXT) || docs.slice().sort((x, y) => x.path.split("/").length - y.path.split("/").length || x.path.length - y.path.length)[0] || null;
-  }
-  function normSheetFile(file) {
-    file = str3(file).trim().replace(/\\/g, "/").replace(/^\/+/, "");
-    if (!file) return "";
-    if (!/\.kicad_sch$/i.test(file)) file += SHEET_EXT;
-    return file;
-  }
-  function sheetFileFor(name) {
-    return normSheetFile(str3(name).trim().replace(/[\\/:*?"<>|]+/g, "_"));
-  }
-  function emptySheetDoc() {
-    return `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0") (uuid "${K4.newUuid()}") (paper "A4") (lib_symbols) (sheet_instances (path "/" (page "1"))))
-`;
-  }
-  async function ensureSheetDoc(ctx, file) {
-    file = normSheetFile(file);
-    if (!file) throw new Error("no sheet file name");
-    const cur2 = currentDoc(ctx), dir = cur2 ? dirName(cur2.path) : "", target2 = joinPath2(dir, file);
-    const found = schDocs(ctx).find((d) => d.path === target2 || d.path === file) || schDocs(ctx).find((d) => baseName3(d.path) === baseName3(file));
-    if (found) return { file: relPath(dir, found.path), docId: found.docId, created: false };
-    if (typeof ctx.api !== "function" || !ctx.project || !ctx.project.projectId) throw new Error("this session cannot create sheet files");
-    const res = await ctx.api(`/api/projects/${ctx.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: target2, docType: "kicad_sch" }) });
-    if (!res || !res.docId) throw new Error("no document id returned");
-    if (!res.existing) await ctx.api(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", headers: { "content-type": "text/plain" }, body: emptySheetDoc() });
-    const entry = { docId: res.docId, path: res.path || target2, docType: "kicad_sch" };
-    if (Array.isArray(ctx.docs) && !ctx.docs.some((d) => d && d.docId === entry.docId)) ctx.docs.push(entry);
-    return { file, docId: entry.docId, created: !res.existing };
-  }
-  function sheetPathHere(doc) {
-    const paths = /* @__PURE__ */ new Map(), names = /* @__PURE__ */ new Map(), vote = (m, k) => {
-      if (k) m.set(k, (m.get(k) || 0) + 1);
-    };
-    for (const it of doc.items.values()) {
-      if (it.kind !== "symbol" && it.kind !== "sheet") continue;
-      for (const inst of kids2(it.node, "instances")) for (const pr of kids2(inst, "project")) {
-        vote(names, str3(pr[1]));
-        for (const pa of kids2(pr, "path")) vote(paths, str3(pa[1]));
-      }
-    }
-    const top = (m) => {
-      let best = null, bn = 0;
-      for (const [k, n] of m) if (n > bn) {
-        bn = n;
-        best = k;
-      }
-      return best;
-    };
-    return { path: top(paths), project: top(names) };
-  }
-  function nextPage(ctx, doc) {
-    const used = /* @__PURE__ */ new Set(["1"]);
-    for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids2(it.node, "instances")) for (const pr of kids2(inst, "project")) for (const pa of kids2(pr, "path")) {
-      const pg = kid3(pa, "page");
-      if (pg) used.add(str3(pg[1]));
-    }
-    let n = Math.max(2, schDocs(ctx).length);
-    while (used.has(String(n))) n++;
-    return n;
-  }
-  function sheetInstance(ctx, doc, page) {
-    const { path: path2, project } = sheetPathHere(doc);
-    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro");
-    const name = project || (pro ? baseName3(pro.path).replace(/\.kicad_pro$/, "") : "") || ctx.project && ctx.project.name || "";
-    if (!path2 || !name) return null;
-    return ["instances", ["project", name, ["path", path2, ["page", String(page)]]]];
-  }
-  function placeSheet(ctx, a, b, name, file) {
-    if (S.sheetJob) {
-      ctx.toast("Still creating the previous sheet\u2026");
-      return S.sheetJob.promise;
-    }
-    const doc = ctx.doc, job = { doc, promise: null };
-    S.sheetJob = job;
-    job.promise = (async () => {
-      try {
-        const ref = await ensureSheetDoc(ctx, normSheetFile(file));
-        if (S.sheetJob !== job || ctx.doc !== doc) return null;
-        const node = sheetNode(a, b, name, ref.file);
-        const inst = sheetInstance(ctx, doc, nextPage(ctx, doc));
-        if (inst) node.push(inst);
-        const { item, change } = addNode(doc, node);
-        ctx.commit([change], "sheet");
-        rememberPlaced(item.kind, item.node);
-        ctx.setSelected({ id: item.id });
-        return item;
-      } catch (e) {
-        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
-        return null;
-      } finally {
-        if (S.sheetJob === job) S.sheetJob = null;
-        ctx.requestRender();
-      }
-    })();
-    return job.promise;
-  }
-  function placeSheetNode(ctx, node, file) {
-    if (S.sheetJob) {
-      ctx.toast("Still creating the previous sheet\u2026");
-      return S.sheetJob.promise;
-    }
-    const doc = ctx.doc, job = { doc, promise: null };
-    S.sheetJob = job;
-    job.promise = (async () => {
-      try {
-        file = normSheetFile(file);
-        const cur2 = currentDoc(ctx), dir = cur2 ? dirName(cur2.path) : "", target2 = joinPath2(dir, file);
-        const exists = schDocs(ctx).find((x) => x.path === target2 || x.path === file);
-        if (exists && root4.KDialogs && root4.KDialogs.confirm && !await root4.KDialogs.confirm("Confirmation", `'${baseName3(file)}' already exists.
-
-Link '${target2}' to this file?`)) return null;
-        const ref = await ensureSheetDoc(ctx, file);
-        if (S.sheetJob !== job || ctx.doc !== doc) return null;
-        const fp = kids2(node, "property").find((q) => /^Sheet ?file$/i.test(str3(q[1])));
-        if (fp) fp[2] = ref.file;
-        const { item, change } = addNode(doc, node);
-        ctx.commit([change], "sheet");
-        rememberPlaced(item.kind, item.node);
-        ctx.setSelected({ id: item.id });
-        return item;
-      } catch (e) {
-        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
-        return null;
-      } finally {
-        if (S.sheetJob === job) S.sheetJob = null;
-        ctx.requestRender();
-      }
-    })();
-    return job.promise;
-  }
-  function sheetEdgeAt(doc, p, tol) {
-    let best = null;
-    for (const it of doc.items.values()) {
-      if (it.kind !== "sheet") continue;
-      const [x, y] = atOf2(it.node), s = kid3(it.node, "size"), w = num5(s && s[1], 0), h = num5(s && s[2], 0);
-      const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
-      for (const side of ["top", "right", "bottom", "left"]) {
-        const d = segDist(p, edges[side][0], edges[side][1]);
-        if (d <= tol && (!best || d < best.d)) best = { item: it, side, d, x, y, w, h };
-      }
-    }
-    return best;
-  }
-  function sheetPinPoint(ctx, edge, p) {
-    const g2 = ctx.snap([p[0], p[1]]), clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-    if (edge.side === "left") return [r43(edge.x), r43(clamp(g2[1], edge.y, edge.y + edge.h))];
-    if (edge.side === "right") return [r43(edge.x + edge.w), r43(clamp(g2[1], edge.y, edge.y + edge.h))];
-    if (edge.side === "top") return [r43(clamp(g2[0], edge.x, edge.x + edge.w)), r43(edge.y)];
-    return [r43(clamp(g2[0], edge.x, edge.x + edge.w)), r43(edge.y + edge.h)];
-  }
-  function sheetPinClick(ctx, mm) {
-    const edge = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx)));
-    if (!edge) {
-      ctx.toast("Click on the border of a sheet");
-      return null;
-    }
-    const p = sheetPinPoint(ctx, edge, mm);
-    promptImpl("Sheet pin", "", S.cursorClient, (name) => {
-      if (name) placeSheetPin(ctx, edge.item, name, p, edge.side);
-    });
-    return edge;
-  }
-  function placeSheetPin(ctx, sheet, name, p, side) {
-    const node = deep(sheet.node), pin = sheetPinNode(name, p, side);
-    const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
-    if (at >= 0) node.splice(at, 0, pin);
-    else node.push(pin);
-    ctx.commit([modChange(ctx.doc, sheet, node)], "sheet pin");
-    ctx.requestRender();
-    return pin;
-  }
-  function drawPoint(ctx, mm) {
-    return ctx.snap([mm[0], mm[1]]).map(r43);
-  }
-  function startDraw(ctx, shape, p) {
-    S.draw = { shape, pts: [p], cur: p.slice() };
-    ctx.requestRender();
-  }
-  function cancelDraw(ctx) {
-    S.draw = null;
-    closePrompt();
-    ctx.requestRender();
-  }
-  function undoDrawPoint(ctx) {
-    const d = S.draw;
-    if (!d) return;
-    if (d.pts.length > 1) d.pts.pop();
-    else S.draw = null;
-    ctx.requestRender();
-  }
-  function drawClick(ctx, shape, p) {
-    const d = S.draw;
-    if (!d || d.shape !== shape) {
-      startDraw(ctx, shape, p);
-      return;
-    }
-    d.cur = p.slice();
-    const last = d.pts[d.pts.length - 1];
-    if (shape === "lines" || shape === "polygon" || shape === "rulearea") {
-      if (same(p, last)) {
-        finishDraw(ctx);
-        return;
-      }
-      if (shape !== "lines" && d.pts.length >= 3 && same(p, d.pts[0])) {
-        finishDraw(ctx);
-        return;
-      }
-      d.pts.push(p);
-      ctx.requestRender();
-      return;
-    }
-    if (shape === "bezier") {
-      if (d.pts.length === 2 && same(p, d.pts[0])) {
-        ctx.toast("The curve's end must differ from its start");
-        return;
-      }
-      d.pts.push(p);
-      if (d.pts.length === 4) finishDraw(ctx);
-      else ctx.requestRender();
-      return;
-    }
-    if (shape === "arc") {
-      if (d.pts.length === 1) {
-        if (!same(p, last)) d.pts.push(p);
-        ctx.requestRender();
-        return;
-      }
-      if (!K4.arcFrom3(d.pts[0], p, d.pts[1]) || same(p, d.pts[0]) || same(p, d.pts[1])) {
-        ctx.toast("Click a point on the arc, off the line between its ends");
-        return;
-      }
-      d.pts.push(p);
-      finishDraw(ctx);
-      return;
-    }
-    if (same(p, last)) return;
-    d.pts.push(p);
-    finishDraw(ctx);
-  }
-  function finishDraw(ctx) {
-    const d = S.draw;
-    if (!d) return;
-    const doc = ctx.doc, pts = d.pts;
-    let node = null, label = d.shape;
-    if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
-    else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
-    else if (d.shape === "arc") node = arcNode(pts[0], pts[2], pts[1]);
-    else if (d.shape === "lines") {
-      const p = simplify2(pts);
-      if (p.length >= 2) node = polylineNode(p);
-      label = "lines";
-    } else if (d.shape === "polygon") {
-      const p = simplify2(pts);
-      if (p.length >= 3) node = polygonNode(p);
-    } else if (d.shape === "rulearea") {
-      const p = simplify2(pts);
-      if (p.length >= 3) node = ruleAreaNode(p);
-      label = "rule area";
-    } else if (d.shape === "bezier") {
-      if (pts.length === 4) {
-        const e = pts[2], c2 = [r43(2 * e[0] - pts[3][0]), r43(2 * e[1] - pts[3][1])];
-        node = bezierNode(pts[0], pts[1], c2, e);
-      }
-    } else if (d.shape === "table") {
-      d.await = true;
-      ctx.requestRender();
-      promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
-        if (S.draw !== d) return;
-        S.draw = null;
-        const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
-        if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
-        else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
-        ctx.requestRender();
-      });
-      return;
-    } else if (d.shape === "sheet") {
-      d.await = true;
-      ctx.requestRender();
-      const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
-      if (KD && KD.schItemDialog && !ctx.viewOnly) {
-        const sn = sheetNode(pts[0], pts[1], "Untitled Sheet", "untitled" + SHEET_EXT);
-        const inst = sheetInstance(ctx, ctx.doc, nextPage(ctx, ctx.doc));
-        if (inst) sn.push(inst);
-        const it = { id: "", kind: "sheet", node: sn, geom: [], bbox: null };
-        KD.schItemDialog(ctx, it, { cancel() {
-          if (S.draw === d) {
-            S.draw = null;
-            ctx.requestRender();
-          }
-        }, onCreate(staged) {
-          if (S.draw !== d) return;
-          S.draw = null;
-          const fp = kids2(staged, "property").find((q) => /^Sheet ?file$/i.test(str3(q[1])));
-          placeSheetNode(ctx, staged, fp ? str3(fp[2]) : "untitled" + SHEET_EXT);
-        } });
-        return;
-      }
-      promptImpl("Sheet name", "", S.cursorClient, (name) => {
-        if (S.draw !== d) return;
-        if (!name) {
-          S.draw = null;
-          ctx.requestRender();
-          return;
-        }
-        promptImpl("Sheet file", sheetFileFor(name), S.cursorClient, (file) => {
-          if (S.draw !== d) return;
-          S.draw = null;
-          if (file) placeSheet(ctx, pts[0], pts[1], name, file);
-          else ctx.requestRender();
-        });
-      });
-      return;
-    } else if (d.shape === "textbox") {
-      d.await = true;
-      ctx.requestRender();
-      const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
-      if (KD && KD.openNew && !ctx.viewOnly) {
-        const tb = textBoxNode("", pts[0], pts[1]);
-        KD.openItem(ctx, { id: "", kind: "text_box", node: tb, geom: [], bbox: null }, {
-          generic: true,
-          cancel() {
-            if (S.draw === d) {
-              S.draw = null;
-              ctx.requestRender();
-            }
-          },
-          onCreate(staged) {
-            if (S.draw !== d) return;
-            S.draw = null;
-            commitShape(ctx, staged, "text box");
-            ctx.requestRender();
-          }
-        });
-        return;
-      }
-      promptImpl("Text box", "", S.cursorClient, (text2) => {
-        if (S.draw !== d) return;
-        S.draw = null;
-        if (text2) commitShape(ctx, textBoxNode(text2, pts[0], pts[1]), "text box");
-        ctx.requestRender();
-      });
-      return;
-    }
-    S.draw = null;
-    if (node) commitShape(ctx, node, label);
-    ctx.requestRender();
-  }
-  function commitShape(ctx, node, label) {
-    const { item, change } = addNode(ctx.doc, node);
-    ctx.commit([change], label);
-    rememberPlaced(item.kind, item.node);
-    S.sel = item.id;
-    ctx.setSelected(null);
-    return item;
-  }
   function busyMessage() {
     if (S.wire) return "Press <ESC> to cancel drawing.";
     if (S.drag) return S.drag.mode === "break" ? "Press <ESC> to cancel break." : S.drag.mode === "slice" ? "Press <ESC> to cancel slice." : S.dragMode === "move" ? "Press <ESC> to cancel move." : "Press <ESC> to cancel drag.";
@@ -13908,6 +15697,7 @@ Link '${target2}' to this file?`)) return null;
     S.pending = null;
     if (S.drag) endDrag(ctx, false);
     if (S.draw) S.draw = null;
+    if (toolId === "arc") showSchArcMode(ctx);
     if (!toolOf(toolId)) {
       closePicker();
       S.carry = null;
@@ -13999,6 +15789,10 @@ Link '${target2}' to this file?`)) return null;
     }
     if (DRAW_TOOLS.has(t.id)) {
       if (S.draw && S.draw.await) return true;
+      if (t.id === "arc" && dbl && S.draw && S.draw.arc) {
+        finishSchArc(ctx);
+        return true;
+      }
       drawClick(ctx, t.id, drawPoint(ctx, mm));
       return true;
     }
@@ -14022,6 +15816,14 @@ Link '${target2}' to this file?`)) return null;
     }
     if (S.carry) {
       placeCarry(ctx, mm, ev);
+      return;
+    }
+    if (S.draw && S.draw.arc) {
+      const p = drawPoint(ctx, mm);
+      if (!same(S.draw.cur, p)) {
+        schArcMove(S.draw, p);
+        ctx.requestRender();
+      }
       return;
     }
     if (S.draw && !S.draw.await) {
@@ -14095,6 +15897,25 @@ Link '${target2}' to this file?`)) return null;
       return true;
     };
     if (S.wire && wireKey(ctx, key === "Backspace" ? "Backspace" : key === "Delete" ? "Del" : key)) return true;
+    if (S.draw && S.draw.arc) {
+      if (key === "Enter" || key === "End") {
+        finishSchArc(ctx);
+        return true;
+      }
+      if (key === "Backspace" || key === "Delete" && S.draw.started) {
+        schArcBackup(ctx);
+        return true;
+      }
+      if (key === "/") {
+        if (ev && ev.altKey) switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5);
+        else schArcPosture(ctx);
+        return true;
+      }
+      if (key === "Escape") {
+        cancelDraw(ctx);
+        return true;
+      }
+    }
     if (S.draw && !S.draw.await) {
       if (key === "Enter" || key === "End") {
         const sh = S.draw.shape, n = S.draw.pts.length;
@@ -14215,7 +16036,8 @@ Link '${target2}' to this file?`)) return null;
     } else if (S.carry) S.carry.item = ghost(ctx.doc, S.carry.node);
     if (S.drag) {
       const d = S.drag;
-      if (!(d.local && sameDoc)) {
+      const ours = d.local || d.brk && d.brk.mode === "wirepins" && d.brk.orig.size === 0 && [...d.brk.local].every((id) => ctx.doc.items.has(id));
+      if (!(ours && sameDoc)) {
         S.drag = null;
         if (d.restoreMode) S.dragMode = d.restoreMode;
         if (sameDoc && d.brk) restoreBreak(ctx.doc, d.brk);
@@ -14567,6 +16389,17 @@ Link '${target2}' to this file?`)) return null;
       ev.stopImmediatePropagation();
       ev.preventDefault();
     };
+    if (S.draw && S.draw.arc && S.draw.started) {
+      if (combo === "Ctrl+Z") {
+        schArcUndo(ctx);
+        eat();
+        return;
+      }
+      if (combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z") {
+        eat();
+        return;
+      }
+    }
     if (S.drag && !S.pedit) {
       if (combo === "Ctrl+Z") {
         S.drag.cancel = "undo";
@@ -14749,7 +16582,7 @@ Link '${target2}' to this file?`)) return null;
     if (!lib) return out;
     const [ax, ay, rot2] = atOf2(n), mN = kid3(n, "mirror"), T = K4.symbolTransform(rot2, mN ? str3(mN[1]) : "");
     const unit2 = kid3(n, "unit") ? num5(kid3(n, "unit")[1], 1) : 1, styleN = kid3(n, "body_style") || kid3(n, "convert"), style = styleN ? num5(styleN[1], 1) : 1;
-    const tf = (lx, ly) => [r43(ax + T[0] * lx + T[1] * ly), r43(ay + T[2] * lx + T[3] * ly)];
+    const tf2 = (lx, ly) => [r43(ax + T[0] * lx + T[1] * ly), r43(ay + T[2] * lx + T[3] * ly)];
     for (const sub of kids2(lib, "symbol")) {
       const m = str3(sub[1]).match(/_(\d+)_(\d+)$/);
       const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
@@ -14757,7 +16590,7 @@ Link '${target2}' to this file?`)) return null;
       for (const g2 of kids2(sub, "pin")) {
         const [px, py, pr] = atOf2(g2), lenN = kid3(g2, "length"), len = lenN ? num5(lenN[1]) : 2.54;
         const dir = (Math.round(pr) % 360 + 360) % 360, d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];
-        const pos = tf(px, py), root22 = tf(px + d[0] * len, py + d[1] * len);
+        const pos = tf2(px, py), root22 = tf2(px + d[0] * len, py + d[1] * len);
         const h = kid3(g2, "hide");
         const hidden = h ? str3(h[1]) !== "no" : g2.includes("hide");
         let ox = pos[0] - root22[0], oy = pos[1] - root22[1];
@@ -14765,7 +16598,7 @@ Link '${target2}' to this file?`)) return null;
         ox = Math.round(ox / ol);
         oy = Math.round(oy / ol);
         if (!ox && !oy) {
-          const tip = tf(px - d[0], py - d[1]);
+          const tip = tf2(px - d[0], py - d[1]);
           ox = Math.sign(tip[0] - pos[0]);
           oy = Math.sign(tip[1] - pos[1]);
         }
@@ -14778,7 +16611,9 @@ Link '${target2}' to this file?`)) return null;
           type: str3(g2[1]) || "passive",
           hidden,
           len,
-          side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom"
+          side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom",
+          shape: str3(g2[2]) || "line",
+          libRot: dir
         });
       }
     }
@@ -14829,7 +16664,7 @@ Link '${target2}' to this file?`)) return null;
     const n = item.node, libId = str3((kid3(n, "lib_name") || kid3(n, "lib_id") || [])[1]);
     const lib = K4.resolveLib(doc, libId) || K4.resolveLib(doc, symbolLibId(n));
     const [ax, ay, rot2] = atOf2(n), mN = kid3(n, "mirror"), T = K4.symbolTransform(rot2, mN ? str3(mN[1]) : "");
-    const tf = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
+    const tf2 = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
     let b = null;
     const take = (p) => {
       b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]];
@@ -14845,24 +16680,24 @@ Link '${target2}' to this file?`)) return null;
           const gk = g2[0];
           if (gk === "rectangle") {
             const a = kid3(g2, "start"), e = kid3(g2, "end");
-            take(tf(num5(a[1]), num5(a[2])));
-            take(tf(num5(e[1]), num5(e[2])));
+            take(tf2(num5(a[1]), num5(a[2])));
+            take(tf2(num5(e[1]), num5(e[2])));
           } else if (gk === "circle") {
             const c = kid3(g2, "center"), r = num5((kid3(g2, "radius") || [])[1]);
-            for (const [dx, dy] of [[-r, -r], [r, r], [-r, r], [r, -r]]) take(tf(num5(c[1]) + dx, num5(c[2]) + dy));
+            for (const [dx, dy] of [[-r, -r], [r, r], [-r, r], [r, -r]]) take(tf2(num5(c[1]) + dx, num5(c[2]) + dy));
           } else if (gk === "arc") {
             for (const key of ["start", "mid", "end"]) {
               const k = kid3(g2, key);
-              if (k) take(tf(num5(k[1]), num5(k[2])));
+              if (k) take(tf2(num5(k[1]), num5(k[2])));
             }
           } else if (gk === "polyline" || gk === "bezier") {
-            for (const [x, y] of ptsOf2(g2)) take(tf(x, y));
+            for (const [x, y] of ptsOf2(g2)) take(tf2(x, y));
           } else if (gk === "text") {
             const [tx, ty] = atOf2(g2), ef = K4.effectsOf(g2);
             if (!ef.hide) {
               const w = K4.textWidth(str3(g2[1]), ef.size, 0) / 2;
-              take(tf(tx - w, ty - ef.size / 2));
-              take(tf(tx + w, ty + ef.size / 2));
+              take(tf2(tx - w, ty - ef.size / 2));
+              take(tf2(tx + w, ty + ef.size / 2));
             }
           }
         }
@@ -15651,10 +17486,10 @@ Link '${target2}' to this file?`)) return null;
       if (it.kind !== "symbol") continue;
       const values = {};
       for (const p of kids2(it.node, "property")) {
-        const nm = str3(p[1]);
-        if (nm.startsWith("ki_")) continue;
-        values[nm] = str3(p[2]);
-        if (!fields.includes(nm)) fields.push(nm);
+        const nm2 = str3(p[1]);
+        if (nm2.startsWith("ki_")) continue;
+        values[nm2] = str3(p[2]);
+        if (!fields.includes(nm2)) fields.push(nm2);
       }
       rows.push({ id: it.id, ref: values.Reference || "", values });
     }
@@ -15888,6 +17723,7 @@ Link '${target2}' to this file?`)) return null;
     });
     return true;
   }
+  var ARC_MODE_LABELS = ["Draw Arc: Center, Start, End", "Draw Arc: Start, End, Midpoint", "Draw Arc: Start, End, Center", "Draw Arc: Tangent", "Draw Arc: Start, Direction, End"];
   function act(id, label, key, run) {
     return { id, label, key, run };
   }
@@ -15963,6 +17799,23 @@ Link '${target2}' to this file?`)) return null;
     act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => {
       clearHighlight(ctx);
       return true;
+    }),
+    // EE_GRAPHIC_TOOL::DrawArc's modes (SCH_ACTIONS::drawArcCenter …): each starts Draw Arcs in its mode, or switches the
+    // arc being drawn to it (ARC_MODE_SESSION::HandleModeEvent); the Arc toolbar group then shows that mode's button
+    ...ARC_MODE_ACTIONS.map((id, m) => act(id, ARC_MODE_LABELS[m], "", (ctx) => {
+      if (S.tool === "arc") switchSchArcMode(ctx, m);
+      else {
+        setSchArcDrawMode(m);
+        ctx.setTool("arc");
+        showSchArcMode(ctx);
+      }
+      return true;
+    })),
+    act("arcPosture", "Switch Arc Posture", "/", (ctx) => S.tool === "arc" && schArcPosture(ctx)),
+    act("cycleArcDrawMode", "Cycle Arc Drawing Mode", "Alt+/", (ctx) => {
+      if (S.tool !== "arc") return false;
+      switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5);
+      return true;
     })
   ];
   var actions = {};
@@ -15980,7 +17833,7 @@ Link '${target2}' to this file?`)) return null;
       return false;
     }
   }
-  function segDist2(p, a, b) {
+  function segDist3(p, a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
     const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
     return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
@@ -16027,7 +17880,7 @@ Link '${target2}' to this file?`)) return null;
         const b = pinBox(it, pin);
         const d = Math.max(b[0] - p[0], p[0] - b[2], b[1] - p[1], p[1] - b[3], 0);
         if (d > acc) continue;
-        const l = segDist2(p, [pin.x, pin.y], pin.root);
+        const l = segDist3(p, [pin.x, pin.y], pin.root);
         if (d < bestD - 1e-9 || Math.abs(d - bestD) <= 1e-9 && l < bestL) {
           best = { item: it, pin };
           bestD = d;
@@ -16043,6 +17896,22 @@ Link '${target2}' to this file?`)) return null;
     if (!it || it.kind !== "symbol") return null;
     const pin = symbolPins(doc, it).find((q) => q.number === ref.number);
     return pin ? { item: it, pin } : null;
+  }
+  var PIN_TYPES2 = [["input", "Input"], ["output", "Output"], ["bidirectional", "Bidirectional"], ["tri_state", "Tri-state"], ["passive", "Passive"], ["free", "Free"], ["unspecified", "Unspecified"], ["power_in", "Power input"], ["power_out", "Power output"], ["open_collector", "Open collector"], ["open_emitter", "Open emitter"], ["no_connect", "Unconnected"]];
+  var PIN_SHAPES = [["line", "Line"], ["inverted", "Inverted"], ["clock", "Clock"], ["inverted_clock", "Inverted clock"], ["input_low", "Input low"], ["clock_low", "Clock low"], ["output_low", "Output low"], ["edge_clock_high", "Falling edge clock"], ["non_logic", "NonLogic"]];
+  var PIN_ORIENTS = [["0", "Right"], ["180", "Left"], ["90", "Up"], ["270", "Down"]];
+  function pinProperties(doc, ref) {
+    const h = pinOf(doc, ref);
+    if (!h) return null;
+    const p = h.pin;
+    return [
+      { name: "Pin Name", type: "text", value: p.name },
+      { name: "Pin Number", type: "text", value: p.number },
+      { name: "Electrical Type", type: "enum", value: p.type, choices: PIN_TYPES2 },
+      { name: "Graphic Style", type: "enum", value: p.shape || "line", choices: PIN_SHAPES },
+      { name: "Orientation", type: "enum", value: String(p.libRot || 0), choices: PIN_ORIENTS },
+      { name: "Length", type: "length", value: p.len }
+    ];
   }
   var SIDE_SPIN = { right: 0, top: 1, left: 2, bottom: 3 };
   var SIDE_DIR = { right: [1, 0], top: [0, -1], left: [-1, 0], bottom: [0, 1] };
@@ -16100,10 +17969,47 @@ Link '${target2}' to this file?`)) return null;
       ids.push(item.id);
     }
     if (!changes.length) return [];
+    if (what === "wire" && canFollow(ctx)) return wireStubsInFlight(ctx, ids);
     for (const id of ids) doc.items.delete(id);
     ctx.commit(changes, what === "noconnect" ? "No Connect Pins" : what === "wire" ? "Wire Pins" : "Label Pins");
     if (ctx.setSelection) ctx.setSelection(what === "noconnect" ? [] : ids.filter((id) => doc.items.has(id)));
     else if (what === "noconnect") ctx.setSelected(null);
+    ctx.requestRender();
+    return ids;
+  }
+  function wireStubsInFlight(ctx, ids) {
+    const doc = ctx.doc;
+    if (S.drag) endDrag(ctx, false);
+    const brk = { mode: "wirepins", label: "Wire Pins", orig: /* @__PURE__ */ new Map(), local: new Set(ids), clicks: 0 };
+    const anchors = [];
+    for (const id of ids) {
+      const it = doc.items.get(id);
+      if (!it) continue;
+      const q = ptsOf2(it.node);
+      anchors.push({ p: q[1], ends: [{ item: it, index: 1, orig: q.map((v) => v.slice()) }], stub: null, followers: [] });
+    }
+    const p0 = anchors[0].p, c = cursorOf(ctx);
+    S.drag = {
+      items: [],
+      item: doc.items.get(ids[0]),
+      kind: "wire",
+      orig: null,
+      anchor0: p0,
+      grab: [r43(c[0] - p0[0]), r43(c[1] - p0[1])],
+      last: [0, 0],
+      applied: [0, 0],
+      moved: true,
+      byPointer: false,
+      riders: [],
+      anchors,
+      preview: [],
+      mode: "wirepins",
+      brk,
+      restoreMode: S.dragMode
+    };
+    S.dragMode = "drag";
+    announceModes(ctx);
+    setSelectionIds(ctx, ids);
     ctx.requestRender();
     return ids;
   }
@@ -16216,10 +18122,12 @@ Link '${target2}' to this file?`)) return null;
       setFollow(on) {
         S.forceFollow = !!on;
       },
+      schArcDrawMode,
       pinAt,
       pinBox,
       pinAltFunction,
       pinOf,
+      pinProperties,
       pinHelper,
       PIN_HELPERS,
       labelShapeForPin,
@@ -16534,8 +18442,8 @@ Link '${target2}' to this file?`)) return null;
   };
   var clone2 = (n) => K4.cloneNode(n);
   var samePt = (a, b) => Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3;
-  function rotator2(deg) {
-    const r = deg * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  function rotator2(deg2) {
+    const r = deg2 * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
     return (x, y) => [x * c + y * s, -x * s + y * c];
   }
   var flipLayerName = (l) => /^F\./.test(l) ? "B." + l.slice(2) : /^B\./.test(l) ? "F." + l.slice(2) : l;
@@ -16544,7 +18452,7 @@ Link '${target2}' to this file?`)) return null;
     const l = K4.kid(node, "layer");
     return l ? K4.str(l[1]) : def || "F.Cu";
   };
-  var pt3 = (node, key) => {
+  var pt4 = (node, key) => {
     const k = K4.kid(node, key);
     return k ? [K4.num(k[1]), K4.num(k[2])] : null;
   };
@@ -16559,7 +18467,22 @@ Link '${target2}' to this file?`)) return null;
   var TEXT_STYLE = { silk: [1, 0.1], copper: [1.5, 0.3], edges: [1, 0.15], courtyard: [1, 0.15], fab: [1, 0.15], others: [1, 0.15] };
   var DIM_DEFAULTS = { units: 3, precision: 4, unitsFormat: 0, suppressZeroes: true, textPosition: 0, keepAligned: true, arrowLength: 1.27, extOffset: 0.5 };
   var DIM_DEFAULTS0 = Object.assign({}, DIM_DEFAULTS);
+  var LINE_W0 = Object.assign({}, LINE_W);
+  var TEXT_STYLE0 = JSON.parse(JSON.stringify(TEXT_STYLE));
+  var fpEditorDefaults = false;
+  function useFootprintEditorDefaults(on) {
+    fpEditorDefaults = on;
+    if (on) {
+      Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0);
+      Object.assign(LINE_W, LINE_W0);
+      for (const [k, v] of Object.entries(TEXT_STYLE0)) TEXT_STYLE[k] = v.slice();
+    }
+  }
   function layerDefaults(d) {
+    if (fpEditorDefaults) {
+      useFootprintEditorDefaults(true);
+      return;
+    }
     Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0);
     const dd = d.dimensions || {}, int = (v, lo, hi) => typeof v === "number" && v >= lo && v <= hi ? Math.round(v) : null;
     if (int(d.dimension_units, 0, 3) !== null) DIM_DEFAULTS.units = int(d.dimension_units, 0, 3);
@@ -16607,9 +18530,9 @@ Link '${target2}' to this file?`)) return null;
     const at = K4.kid(node, "at");
     if (at && !K4.kid(node, "transform") && a === 0 && at.length === 4 && typeof at[3] === "number") at.length = 3;
   }
-  function rotateFootprintNode(node, deg) {
+  function rotateFootprintNode(node, deg2) {
     const [x, y, a0] = K4.atOf(node);
-    const a1 = norm1802(a0 + deg);
+    const a1 = norm1802(a0 + deg2);
     setFootprintAt(node, x, y, a1);
     for (const c of node) if (ANGLED(c)) setAngle(c, K4.atOf(c)[2] - a0 + a1);
     return node;
@@ -16768,19 +18691,19 @@ Link '${target2}' to this file?`)) return null;
     if (at.length >= 4) at[3] = a;
     else if (a !== 0) at.push(a);
   }
-  function rotateNode(node, cx, cy, deg) {
+  function rotateNode(node, cx, cy, deg2) {
     const k = node[0];
-    const R2 = rotator2(deg);
+    const R2 = rotator2(deg2);
     const about = (x, y) => {
       const [dx, dy] = R2(x - cx, y - cy);
       return [cx + dx, cy + dy];
     };
     if (k === "footprint") {
-      rotateFootprintNode(node, deg);
+      rotateFootprintNode(node, deg2);
       return mapNodePoints(node, about);
     }
-    if (k === "gr_rect" && norm360(deg) % 90 !== 0) {
-      const a = pt3(node, "start"), b = pt3(node, "end");
+    if (k === "gr_rect" && norm360(deg2) % 90 !== 0) {
+      const a = pt4(node, "start"), b = pt4(node, "end");
       const [x0, y0, x1, y1] = corners(a, b);
       const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(([x, y]) => about(x, y));
       node[0] = "gr_poly";
@@ -16791,20 +18714,20 @@ Link '${target2}' to this file?`)) return null;
       node.splice(1, 0, ["pts", ...pts.map(xy)]);
       return node;
     }
-    if ((k === "gr_text_box" || k === "table_cell") && K4.kid(node, "start") && K4.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg);
+    if ((k === "gr_text_box" || k === "table_cell") && K4.kid(node, "start") && K4.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg2);
     mapNodePoints(node, about);
     if (k === "gr_rect" || k === "gr_text_box") {
-      const a = pt3(node, "start"), b = pt3(node, "end");
+      const a = pt4(node, "start"), b = pt4(node, "end");
       if (a && b) {
         const [x0, y0, x1, y1] = corners(a, b);
         K4.kid(node, "start").splice(1, 2, r62(x0), r62(y0));
         K4.kid(node, "end").splice(1, 2, r62(x1), r62(y1));
       }
-      if (k === "gr_text_box") setTextBoxAngle(node, textBoxAngle(node) + deg);
+      if (k === "gr_text_box") setTextBoxAngle(node, textBoxAngle(node) + deg2);
     }
-    if (k === "gr_text") setAngleKid(node, angleKid(node) + deg);
+    if (k === "gr_text" || k === "pad" || k === "property") setAngleKid(node, angleKid(node) + deg2);
     if (k === "image") {
-      const r = K4.kid(node, "rotate"), a = norm360((r ? K4.num(r[1]) : 0) + deg);
+      const r = K4.kid(node, "rotate"), a = norm360((r ? K4.num(r[1]) : 0) + deg2);
       if (r) {
         if (a) r[1] = r62(a);
         else node.splice(node.indexOf(r), 1);
@@ -16815,9 +18738,9 @@ Link '${target2}' to this file?`)) return null;
     }
     if (k === "dimension") {
       const gt = K4.kid(node, "gr_text");
-      if (gt) setAngleKid(gt, angleKid(gt) + deg);
+      if (gt) setAngleKid(gt, angleKid(gt) + deg2);
       const o = K4.kid(node, "orientation");
-      if (o && norm360(deg) % 180 === 90) o[1] = K4.num(o[1]) ? 0 : 1;
+      if (o && norm360(deg2) % 180 === 90) o[1] = K4.num(o[1]) ? 0 : 1;
     }
     return node;
   }
@@ -16825,9 +18748,9 @@ Link '${target2}' to this file?`)) return null;
     const an = K4.kid(node, "angle");
     return an ? K4.num(an[1]) : 0;
   }
-  function setTextBoxAngle(node, deg) {
+  function setTextBoxAngle(node, deg2) {
     const an = K4.kid(node, "angle");
-    const a1 = r62(norm360(deg)) % 360;
+    const a1 = r62(norm360(deg2)) % 360;
     if (an) {
       if (a1) an[1] = a1;
       else node.splice(node.indexOf(an), 1);
@@ -16838,26 +18761,26 @@ Link '${target2}' to this file?`)) return null;
     const i = ly ? node.indexOf(ly) : node.length;
     node.splice(i, 0, ["angle", a1]);
   }
-  function rotateTextBoxNode(node, cx, cy, deg) {
+  function rotateTextBoxNode(node, cx, cy, deg2) {
     const s = K4.kid(node, "start"), e = K4.kid(node, "end");
     if (!s || !e) return node;
     const sx = K4.num(s[1]), sy = K4.num(s[2]), ex = K4.num(e[1]), ey = K4.num(e[2]);
     const ox = (sx + ex) / 2, oy = (sy + ey) / 2;
-    const [rx, ry] = rotator2(deg)(ox - cx, oy - cy);
+    const [rx, ry] = rotator2(deg2)(ox - cx, oy - cy);
     const dx = Math.round((cx + rx - ox) * 1e6) / 1e6, dy = Math.round((cy + ry - oy) * 1e6) / 1e6;
     s[1] = r62(sx + dx);
     s[2] = r62(sy + dy);
     e[1] = r62(ex + dx);
     e[2] = r62(ey + dy);
-    setTextBoxAngle(node, textBoxAngle(node) + deg);
+    setTextBoxAngle(node, textBoxAngle(node) + deg2);
     return node;
   }
-  function setTextBoxAngleSliding(node, deg) {
+  function setTextBoxAngleSliding(node, deg2) {
     const s = K4.kid(node, "start");
-    const delta = norm360(deg) - norm360(textBoxAngle(node));
+    const delta = norm360(deg2) - norm360(textBoxAngle(node));
     if (!delta) return node;
     if (!s || !K4.kid(node, "end")) {
-      setTextBoxAngle(node, deg);
+      setTextBoxAngle(node, deg2);
       return node;
     }
     return rotateTextBoxNode(node, K4.num(s[1]), K4.num(s[2]), delta);
@@ -16892,10 +18815,11 @@ Link '${target2}' to this file?`)) return null;
         ls.splice(1, ls.length - 1, ...names);
       }
     }
-    if (k === "gr_text" || k === "gr_text_box") {
+    if (k === "gr_text" || k === "gr_text_box" || k === "property") {
       toggleMirror(node);
       setAngleKid(node, -angleKid(node));
     }
+    if (k === "pad") padMirrorX(node);
     if (k === "dimension") {
       const gt = K4.kid(node, "gr_text");
       if (gt) {
@@ -16921,14 +18845,19 @@ Link '${target2}' to this file?`)) return null;
       toggleMirror(n);
       setAngleKid(n, axis === "v" ? 180 - angleKid(n) : -angleKid(n));
     };
-    if (k === "gr_text" || k === "gr_text_box") text2(node);
+    if (k === "gr_text" || k === "gr_text_box" || k === "property") text2(node);
+    if (k === "pad") {
+      if (axis === "v") {
+        padMirrorY(node);
+      } else padMirrorX(node);
+    }
     if (k === "zone") reflectZoneOrientations(node, axis !== "v");
     if (k === "dimension") {
       const gt = K4.kid(node, "gr_text");
       if (gt) text2(gt);
     }
     if (k === "gr_rect" || k === "gr_text_box") {
-      const a = pt3(node, "start"), b = pt3(node, "end");
+      const a = pt4(node, "start"), b = pt4(node, "end");
       if (a && b) {
         const [x0, y0, x1, y1] = corners(a, b);
         K4.kid(node, "start").splice(1, 2, r62(x0), r62(y0));
@@ -16944,11 +18873,11 @@ Link '${target2}' to this file?`)) return null;
       return [x, y];
     }
     if (k === "segment" || k === "arc" || k === "gr_line" || k === "gr_arc") {
-      const p = pt3(n, "start");
+      const p = pt4(n, "start");
       if (p) return p;
     }
     if (k === "gr_circle") {
-      const p = pt3(n, "center");
+      const p = pt4(n, "center");
       if (p) return p;
     }
     if (k === "generated") {
@@ -16984,20 +18913,20 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   var moveChanges = (doc, ids, dx, dy) => dx || dy ? transformChanges(doc, ids, (n) => translateNode(n, dx, dy)) : [];
-  var rotateChanges = (doc, ids, cx, cy, deg) => transformChanges(doc, ids, (n) => rotateNode(n, cx, cy, deg));
+  var rotateChanges = (doc, ids, cx, cy, deg2) => transformChanges(doc, ids, (n) => rotateNode(n, cx, cy, deg2));
   var flipChanges = (doc, ids, cx) => transformChanges(doc, ids, (n) => flipNode(n, cx, doc));
   var mirrorChanges = (doc, ids, cx, cy, axis) => transformChanges(doc, ids, (n) => mirrorNode(n, cx, cy, axis));
   function moveExactChanges(doc, ids, opts) {
     const items = ids.map((id) => doc.items.get(id)).filter(Boolean);
-    const dx = opts.dx || 0, dy = opts.dy || 0, rot2 = opts.rotation || 0;
+    const dx = opts.dx || 0, dy = opts.dy || 0, rot3 = opts.rotation || 0;
     const b = bboxUnion(items);
     let c = opts.about === "anchor" ? null : isList5(opts.about) ? opts.about : b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : selectionCenter(items);
     if (c) c = [c[0] + dx, c[1] + dy];
     return transformChanges(doc, ids, (n, it) => {
       translateNode(n, dx, dy);
-      if (rot2) {
+      if (rot3) {
         const p = c || vadd(anchorOf(it), [dx, dy]);
-        rotateNode(n, p[0], p[1], rot2);
+        rotateNode(n, p[0], p[1], rot3);
       }
     });
   }
@@ -17117,6 +19046,22 @@ Link '${target2}' to this file?`)) return null;
       rowH = Math.max(rowH, h);
     }
     return out;
+  }
+  function padMirrorX(node) {
+    const dr = K4.kid(node, "drill");
+    const off = dr && K4.kid(dr, "offset");
+    if (off) off[1] = r62(-K4.num(off[1]));
+    const rd = K4.kid(node, "rect_delta");
+    if (rd) rd[2] = r62(-K4.num(rd[2]));
+    const prims = K4.kid(node, "primitives");
+    if (prims) {
+      for (const p of prims.slice(1)) if (isList5(p)) mirrorShapeX(p);
+    }
+    setAngleKid(node, -angleKid(node));
+  }
+  function padMirrorY(node) {
+    padMirrorX(node);
+    setAngleKid(node, angleKid(node) + 180);
   }
   function selectionIds(ctx) {
     const s = new Set(S.sel);
@@ -17328,8 +19273,8 @@ Link '${target2}' to this file?`)) return null;
     return inside;
   }
   function inSweep(t, g2) {
-    const norm3 = (v) => (v % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-    return g2.anticlockwise ? norm3(g2.a0 - t) <= norm3(g2.a0 - g2.a1) : norm3(t - g2.a0) <= norm3(g2.a1 - g2.a0);
+    const norm22 = (v) => (v % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    return g2.anticlockwise ? norm22(g2.a0 - t) <= norm22(g2.a0 - g2.a1) : norm22(t - g2.a0) <= norm22(g2.a1 - g2.a0);
   }
   function geomDist(g2, x, y) {
     if (g2.t === "line") return distSeg3(x, y, g2.x1, g2.y1, g2.x2, g2.y2) - g2.w / 2;
@@ -17577,8 +19522,8 @@ Link '${target2}' to this file?`)) return null;
   function segmentNode(doc, a, b, width, layer, net) {
     return ["segment", ["start", r62(a[0]), r62(a[1])], ["end", r62(b[0]), r62(b[1])], ["width", r62(width)], ["layer", layer], netNode(doc, net)];
   }
-  function viaNode(doc, x, y, size, drill, net, layers) {
-    return ["via", ["at", r62(x), r62(y)], ["size", r62(size)], ["drill", r62(drill)], ["layers"].concat(layers || ["F.Cu", "B.Cu"]), netNode(doc, net)];
+  function viaNode(doc, x, y, size, drill2, net, layers) {
+    return ["via", ["at", r62(x), r62(y)], ["size", r62(size)], ["drill", r62(drill2)], ["layers"].concat(layers || ["F.Cu", "B.Cu"]), netNode(doc, net)];
   }
   var gfxWidth = (layer) => LINE_W[layerClass(layer)];
   var strokeNode = (w) => ["stroke", ["width", r62(w)], ["type", "default"]];
@@ -17797,9 +19742,9 @@ Link '${target2}' to this file?`)) return null;
     ];
   }
   function conductorEnds(it) {
-    if (it.kind === "segment" || it.kind === "arc") return [pt3(it.node, "start"), pt3(it.node, "end")].filter(Boolean);
+    if (it.kind === "segment" || it.kind === "arc") return [pt4(it.node, "start"), pt4(it.node, "end")].filter(Boolean);
     if (it.kind === "via") {
-      const a = pt3(it.node, "at");
+      const a = pt4(it.node, "at");
       return a ? [a] : [];
     }
     return [];
@@ -18533,10 +20478,10 @@ Link '${target2}' to this file?`)) return null;
     return { pClip, nClip: { A: lineProject(n, pClip.A), B: lineProject(n, pClip.B) } };
   }
   var DP_PARALLELITY_THRESHOLD = 10;
-  function coupledSegmentPairs(P, N, width, gap) {
+  function coupledSegmentPairs(P, N2, width, gap) {
     const out = [];
-    for (let i = 0; i + 1 < P.length; i++) for (let j = 0; j + 1 < N.length; j++) {
-      const sp = { A: P[i], B: P[i + 1] }, sn = { A: N[j], B: N[j + 1] };
+    for (let i = 0; i + 1 < P.length; i++) for (let j = 0; j + 1 < N2.length; j++) {
+      const sp = { A: P[i], B: P[i + 1] }, sn = { A: N2[j], B: N2[j + 1] };
       const dist = segSegDist(sp.A, sp.B, sn.A, sn.B) - width;
       if (!approxParallelT(sp, sn, DP_PARALLELITY_THRESHOLD) || dist < gap - 1e4 || dist > gap + 1e4) continue;
       const c = commonParallelProjection(sp, sn);
@@ -18625,7 +20570,736 @@ Link '${target2}' to this file?`)) return null;
     };
     return Object.assign({}, base, { finalP: join(spP, tunedP), finalN: join(spN, tunedN), tunedP: chSimplify(tunedP), tunedN: chSimplify(tunedN), status, length: lastLength, hasMeanders });
   }
-  var UNIT = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
+  var netName = (doc, n) => {
+    const r = netOf2(n);
+    return r.name || (r.code > 0 && doc && doc.nets ? String(doc.nets.get(r.code) || "") : "");
+  };
+  var netExists = (doc, name) => boardNets(doc).some((x) => x.name === name) || !!doc.nets && [...doc.nets.values()].some((v) => String(v) === name);
+  var norm3 = (s) => s.replace(/[\s_-]/g, "").toLowerCase();
+  var KNOWN_PROPS = new Set([
+    "Type",
+    "Layer",
+    "Locked",
+    "Parent",
+    "Position X",
+    "Position Y",
+    "Net",
+    "NetName",
+    "Net Name",
+    "Net Code",
+    "NetClass",
+    "Net Class",
+    "Width",
+    "Start X",
+    "Start Y",
+    "End X",
+    "End Y",
+    "Diameter",
+    "Hole",
+    "Hole Size",
+    "Layer Top",
+    "Layer Bottom",
+    "Via Type",
+    "Front Tenting",
+    "Back Tenting",
+    "Soldermask",
+    "Soldermask Margin Override",
+    "Automatically Update Net",
+    "Pad Type",
+    "Pad Shape",
+    "Pad Number",
+    "Pin Name",
+    "Pin Type",
+    "Size X",
+    "Size Y",
+    "Hole Size X",
+    "Hole Size Y",
+    "Hole Shape",
+    "Fabrication Property",
+    "Orientation",
+    "Corner Radius Ratio",
+    "Corner Radius Size",
+    "Clearance Override",
+    "Zone Connection Style",
+    "Thermal Relief Gap",
+    "Thermal Relief Spoke Width",
+    "Thermal Relief Spoke Angle",
+    "Pad To Die Length",
+    "Pad To Die Delay",
+    "Copper Layers",
+    "Solderpaste Margin Override",
+    "Solderpaste Margin Ratio Override",
+    "Backdrill Mode",
+    "Reference",
+    "Value",
+    "Library Link",
+    "Library Description",
+    "Keywords",
+    "Footprint Type",
+    "Do not Populate",
+    "Exclude From Bill of Materials",
+    "Exclude From Position Files",
+    "Exclude From Simulation",
+    "Not in Schematic",
+    "Exempt From Courtyard Requirement",
+    "Component Class",
+    "Height",
+    "Scale X",
+    "Scale Y",
+    "Name",
+    "Priority",
+    "Clearance",
+    "Minimum Width",
+    "Pad Connections",
+    "Fill Mode",
+    "Remove Islands",
+    "Minimum Island Area",
+    "Keep Out Tracks",
+    "Keep Out Vias",
+    "Keep Out Pads",
+    "Keep Out Zone Fills",
+    "Keep Out Footprints",
+    "Hatch Width",
+    "Hatch Gap",
+    "Hatch Orientation",
+    "Enable",
+    "Text",
+    "Thickness",
+    "Bold",
+    "Italic",
+    "Mirrored",
+    "Visible",
+    "Horizontal Justification",
+    "Vertical Justification",
+    "Keep Upright",
+    "Knockout",
+    "Font",
+    "Hyperlink",
+    "Shape",
+    "Line Width",
+    "Line Style",
+    "Line Color",
+    "Fill",
+    "Fill Color",
+    "Radius",
+    "Angle",
+    "Center X",
+    "Center Y",
+    "Corner Radius",
+    "Max Length",
+    "Max Width",
+    "Best Length Ratio",
+    "Max Width Ratio",
+    "Best Width Ratio",
+    "Enable Teardrops",
+    "Allow Teardrops To Span Two Tracks",
+    "Prefer Zone Connections",
+    "Curved Teardrops",
+    "Units",
+    "Precision",
+    "Prefix",
+    "Suffix",
+    "Override Text",
+    "Size"
+  ].map(norm3));
+  var FUNCS = {
+    existsOnLayer: 1,
+    isPlated: 0,
+    insideCourtyard: 1,
+    insideFrontCourtyard: 1,
+    insideBackCourtyard: 1,
+    intersectsCourtyard: 1,
+    intersectsFrontCourtyard: 1,
+    intersectsBackCourtyard: 1,
+    insideArea: 1,
+    intersectsArea: 1,
+    intersectsKeepout: 1,
+    enclosedByArea: 1,
+    isMicroVia: 0,
+    isBlindVia: 0,
+    isBuriedVia: 0,
+    isBlindBuriedVia: 0,
+    isStackedVia: 0,
+    memberOf: 1,
+    memberOfGroup: 1,
+    memberOfFootprint: 1,
+    memberOfSheet: 1,
+    memberOfSheetOrChildren: 1,
+    fromTo: 2,
+    isCoupledDiffPair: 0,
+    inDiffPair: 1,
+    inNetChain: 1,
+    hasNetChain: 0,
+    inNetChainClass: 1,
+    getField: 1,
+    hasNetclass: 1,
+    hasExactNetclass: 1,
+    hasComponentClass: 1,
+    customProperty: 1,
+    hasCustomProperty: 1
+  };
+  var MISSING_ARG = {
+    existsOnLayer: "Missing layer name argument to existsOnLayer().",
+    memberOfGroup: "Missing group name argument to memberOfGroup().",
+    memberOf: "Missing group name argument to memberOfGroup().",
+    memberOfFootprint: "Missing footprint argument (reference designator) to memberOfFootprint().",
+    memberOfSheet: "Missing sheet name argument to memberOfSheet().",
+    memberOfSheetOrChildren: "Missing sheet name argument to memberOfSheetOrChildren().",
+    getField: "Missing field name argument to getField().",
+    inDiffPair: "Missing diff-pair name argument to inDiffPair().",
+    hasNetclass: "Missing netclass name argument to hasNetclass().",
+    hasExactNetclass: "Missing netclass name argument to hasExactNetclass().",
+    hasComponentClass: "Missing component class name argument to hasComponentClass().",
+    intersectsCourtyard: "Missing footprint argument (A, B, or reference designator) to intersectsCourtyard().",
+    intersectsFrontCourtyard: "Missing footprint argument (A, B, or reference designator) to intersectsFrontCourtyard().",
+    intersectsBackCourtyard: "Missing footprint argument (A, B, or reference designator) to intersectsBackCourtyard().",
+    intersectsArea: "Missing rule-area argument (A, B, or rule-area name) to intersectsArea().",
+    enclosedByArea: "Missing rule-area argument (A, B, or rule-area name) to enclosedByArea().",
+    intersectsKeepout: "Missing rule-area argument (A, B, or rule-area name) to intersectsKeepout()."
+  };
+  var FUNC_BY_LOWER = new Map(Object.keys(FUNCS).map((f) => [f.toLowerCase(), f]));
+  var isKnownProp = (name) => KNOWN_PROPS.has(norm3(name));
+  var str3 = (v) => ({ t: "s", v, wild: false });
+  var numv = (v) => ({ t: "n", v });
+  var U = { t: "u" };
+  var NUL = { t: "null" };
+  var bool = (b) => numv(b ? 1 : 0);
+  var kidv = (n, k, i = 1) => {
+    const c = K4.kid(n, k);
+    return c && c[i] !== void 0 ? c[i] : void 0;
+  };
+  var kidStr3 = (n, k) => {
+    const v = kidv(n, k);
+    return v === void 0 ? "" : K4.str(v);
+  };
+  var kidNum2 = (n, k, i = 1) => {
+    const v = kidv(n, k, i);
+    return v === void 0 ? U : numv(K4.num(v));
+  };
+  var yes5 = (n, k) => {
+    const c = K4.kid(n, k);
+    return !!c && (c.length === 1 || K4.str(c[1]) === "yes");
+  };
+  var fieldOf = (fp, name) => {
+    const ps = fp.filter((c) => isList5(c) && c[0] === "property");
+    const p = ps.find((c) => K4.str(c[1]) === name) || ps.find((c) => K4.str(c[1]).toLowerCase() === name.toLowerCase());
+    return p ? K4.str(p[2]) : null;
+  };
+  function parentRuleItem(it) {
+    if (!it || it.kind === "footprint" || !it.parent) return null;
+    const fp = it.parent;
+    return { kind: "footprint", node: fp.node, item: fp, id: fp.id, layer: layerOf2(fp.node) || null };
+  }
+  var fpOf = (it) => it.kind === "footprint" ? it.item || { id: kidStr3(it.node, "uuid"), kind: "footprint", node: it.node } : it.parent || null;
+  var PAD_TYPE = { thru_hole: "Through-hole", smd: "SMD", connect: "Edge connector", np_thru_hole: "NPTH, mechanical" };
+  var PAD_SHAPE = { circle: "Circle", rect: "Rectangle", oval: "Oval", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", custom: "Custom" };
+  var PAD_PROP = { pad_prop_bga: "BGA pad", pad_prop_fiducial_glob: "Fiducial, global to board", pad_prop_fiducial_loc: "Fiducial, local to footprint", pad_prop_testpoint: "Test point pad", pad_prop_heatsink: "Heatsink pad", pad_prop_castellated: "Castellated pad", pad_prop_mechanical: "Mechanical pad", pad_prop_pressfit: "Press-fit pad" };
+  var VIA_TYPE = { blind: "Blind", buried: "Buried", micro: "Micro" };
+  var viaTypeOf = (n) => {
+    const w = n.slice(1).find((c) => !isList5(c));
+    const s = w === void 0 ? "" : K4.str(w);
+    return VIA_TYPE[s] ? s : kidStr3(n, "type") || "through";
+  };
+  var FP_TYPE = (n) => {
+    const a = K4.kid(n, "attr");
+    const w = a ? a.slice(1).map((x) => K4.str(x)) : [];
+    return w.includes("smd") ? "SMD" : w.includes("through_hole") ? "Through hole" : "Unspecified";
+  };
+  var attrHas = (n, w) => {
+    const a = K4.kid(n, "attr");
+    return !!a && a.slice(1).some((x) => K4.str(x) === w);
+  };
+  function propOf(doc, s, it, name, typeName2) {
+    if (!it) return U;
+    const key = norm3(name), n = it.node;
+    const net = () => netName(doc, n);
+    const isPad = it.kind === "pad", isVia = it.kind === "via", isFp = it.kind === "footprint", isZone = it.kind === "zone";
+    switch (key) {
+      case "type":
+        return str3(typeName2(it));
+      case "net":
+      case "netname":
+        return str3(net());
+      case "netcode":
+        return numv(netOf2(n).code || 0);
+      case "netclass":
+        return str3(netclassName(s, net()));
+      case "layer":
+        return str3(it.layer || layerOf2(n) || "");
+      case "locked":
+        return bool(yes5(n, "locked") || n.slice(1).some((c) => !isList5(c) && K4.str(c) === "locked"));
+      case "parent": {
+        const fp = fpOf(it);
+        return fp && !isFp ? str3(fieldOf(fp.node, "Reference") || "") : U;
+      }
+      case "positionx":
+      case "positiony": {
+        const p = pt4(n, "at") || pt4(n, "start") || pt4(n, "center");
+        if (!p) return U;
+        if (isPad && it.parent) {
+          const q = padsOf(it.parent).find((x) => x.node === n);
+          if (q) return numv(key === "positionx" ? q.x : q.y);
+        }
+        return numv(key === "positionx" ? p[0] : p[1]);
+      }
+      case "startx":
+      case "starty": {
+        const p = pt4(n, "start");
+        return p ? numv(p[key === "startx" ? 0 : 1]) : U;
+      }
+      case "endx":
+      case "endy": {
+        const p = pt4(n, "end");
+        return p ? numv(p[key === "endx" ? 0 : 1]) : U;
+      }
+      case "width":
+      case "linewidth": {
+        if (it.kind === "segment" || it.kind === "arc") return kidNum2(n, "width");
+        const st = K4.kid(n, "stroke");
+        if (st) return kidNum2(st, "width");
+        return kidNum2(n, "width");
+      }
+      case "diameter":
+        return isVia ? kidNum2(n, "size") : U;
+      case "hole":
+        return isVia ? kidNum2(n, "drill") : U;
+      case "holesize":
+      case "holesizex":
+      case "holesizey": {
+        if (isVia) return kidNum2(n, "drill");
+        if (!isPad) return U;
+        const d = K4.kid(n, "drill");
+        if (!d) return numv(0);
+        const oval = K4.str(d[1]) === "oval";
+        const a = oval ? K4.num(d[2]) : K4.num(d[1]);
+        const b = oval ? K4.num(d[3], a) : a;
+        return numv(key === "holesizey" ? b : a);
+      }
+      case "holeshape": {
+        if (!isPad) return U;
+        const d = K4.kid(n, "drill");
+        return str3(!d ? "Undefined" : K4.str(d[1]) === "oval" ? "Oblong" : "Round");
+      }
+      case "layertop":
+      case "layerbottom": {
+        if (!isVia) return U;
+        const ls = K4.kid(n, "layers");
+        return ls ? str3(K4.str(ls[key === "layertop" ? 1 : 2])) : U;
+      }
+      case "viatype":
+        return isVia ? str3(VIA_TYPE[viaTypeOf(n)] || "Through") : U;
+      case "padtype":
+        return isPad ? str3(PAD_TYPE[K4.str(n[2])] || K4.str(n[2])) : U;
+      case "padshape":
+        return isPad ? str3(PAD_SHAPE[K4.str(n[3])] || K4.str(n[3])) : U;
+      case "padnumber":
+        return isPad ? str3(K4.str(n[1])) : U;
+      case "pinname":
+        return isPad ? str3(kidStr3(n, "pinfunction")) : U;
+      case "pintype":
+        return isPad ? str3(kidStr3(n, "pintype")) : U;
+      case "fabricationproperty": {
+        if (!isPad) return U;
+        const p = kidStr3(n, "property");
+        return str3(PAD_PROP[p] || "None");
+      }
+      case "sizex":
+      case "sizey":
+        return isPad ? kidNum2(n, "size", key === "sizex" ? 1 : 2) : U;
+      case "size":
+        return isVia ? kidNum2(n, "size") : U;
+      case "orientation": {
+        const a = K4.kid(n, "at");
+        return a ? numv(a[3] !== void 0 ? K4.num(a[3]) : 0) : U;
+      }
+      case "cornerradiusratio":
+        return isPad ? kidNum2(n, "roundrect_rratio") : U;
+      case "clearanceoverride": {
+        if (!isPad && !isFp) return U;
+        const v = kidNum2(n, "clearance");
+        return v.t === "u" ? NUL : v;
+      }
+      // std::optional<int>: unset is null
+      case "padtodielength":
+        return isPad ? kidNum2(n, "die_length") : U;
+      case "reference": {
+        const fp = isFp ? it : null;
+        return fp ? str3(fieldOf(n, "Reference") || "") : U;
+      }
+      case "value": {
+        if (isFp) return str3(fieldOf(n, "Value") || "");
+        return U;
+      }
+      case "librarylink":
+        return isFp ? str3(K4.str(n[1])) : U;
+      case "librarydescription":
+        return isFp ? str3(kidStr3(n, "descr")) : U;
+      case "keywords":
+        return isFp ? str3(kidStr3(n, "tags")) : U;
+      case "footprinttype":
+        return isFp ? str3(FP_TYPE(n)) : U;
+      case "donotpopulate":
+        return isFp ? bool(attrHas(n, "dnp")) : U;
+      case "excludefrombillofmaterials":
+        return isFp ? bool(attrHas(n, "exclude_from_bom")) : U;
+      case "excludefrompositionfiles":
+        return isFp ? bool(attrHas(n, "exclude_from_pos_files")) : U;
+      case "notinschematic":
+        return isFp ? bool(attrHas(n, "board_only")) : U;
+      case "exemptfromcourtyardrequirement":
+        return isFp ? bool(attrHas(n, "allow_missing_courtyard")) : U;
+      case "componentclass": {
+        if (!isFp) return U;
+        const cc = K4.kid(n, "component_classes");
+        return str3(cc ? K4.kids(cc, "class").map((c) => K4.str(c[1])).join(",") : "");
+      }
+      case "name":
+        return isZone ? str3(kidStr3(n, "name")) : it.kind === "group" ? str3(K4.str(n[1])) : U;
+      case "priority":
+        return isZone ? numv(K4.num(kidv(n, "priority") ?? 0)) : U;
+      case "clearance": {
+        if (!isZone) return U;
+        const c = K4.kid(n, "connect_pads");
+        const v = c && K4.kid(c, "clearance");
+        return v ? numv(K4.num(v[1])) : U;
+      }
+      case "minimumwidth":
+        return isZone ? kidNum2(n, "min_thickness") : U;
+      case "text": {
+        const t = n[1];
+        return it.kind === "property" ? str3(K4.str(n[2])) : t !== void 0 && !isList5(t) ? str3(K4.str(t)) : U;
+      }
+      case "height":
+      case "thickness": {
+        const ef = K4.kid(n, "effects"), f = ef && K4.kid(ef, "font");
+        if (!f) return U;
+        return key === "height" ? kidNum2(f, "size", 2) : kidNum2(f, "thickness");
+      }
+      case "visible":
+        return bool(!yes5(n, "hide"));
+      default:
+        return U;
+    }
+  }
+  function itemShape(it) {
+    if (it.shape) return it.shape;
+    const n = it.node;
+    if (it.kind === "segment") {
+      const a = pt4(n, "start"), b2 = pt4(n, "end");
+      const w = K4.num(kidv(n, "width") ?? 0.25);
+      return a && b2 ? { t: "seg", a, b: b2, r: w / 2 } : null;
+    }
+    if (it.kind === "arc") {
+      const a = pt4(n, "start"), m = pt4(n, "mid"), b2 = pt4(n, "end");
+      const w = K4.num(kidv(n, "width") ?? 0.25);
+      if (!a || !m || !b2) return null;
+      const c = K4.arcFrom3(a, m, b2);
+      return { t: "path", pts: c ? arcPoints(c, a, b2) : [a, b2], r: w / 2 };
+    }
+    if (it.kind === "via") {
+      const a = pt4(n, "at");
+      return a ? { t: "circle", x: a[0], y: a[1], r: K4.num(kidv(n, "size") ?? 0.6) / 2 } : null;
+    }
+    if (it.kind === "pad" && it.parent) {
+      const p = padsOf(it.parent).find((q) => q.node === n);
+      return p ? padShape(p) : null;
+    }
+    if (it.kind === "zone") {
+      const poly = K4.kid(n, "polygon");
+      const pts = poly ? K4.ptsOf(poly) : [];
+      return pts.length > 2 ? { t: "poly", pts } : null;
+    }
+    const b = it.item && it.item.bbox;
+    if (b) return { t: "poly", pts: [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]] };
+    return null;
+  }
+  function shapeHitsPoly(sh, P) {
+    if (sh.t === "poly") return polyPolyDist(sh.pts, P) <= 1e-9;
+    return shapeGap(sh, { t: "poly", pts: P }) <= 1e-9;
+  }
+  function shapeInsidePoly(sh, P) {
+    const core = sh.t === "circle" ? [[sh.x, sh.y]] : sh.t === "seg" ? [sh.a, sh.b] : sh.t === "rect" ? rectCore(sh) : sh.pts;
+    if (!core.every((p) => pointInPoly3(P, p[0], p[1]))) return false;
+    const off = shapeOffset(sh);
+    if (off <= 0 && sh.t !== "poly" && sh.t !== "rect") return true;
+    const segs = sh.t === "circle" ? [] : sh.t === "rect" || sh.t === "poly" ? core.map((p, i) => [p, core[(i + 1) % core.length]]) : shapeSegs(sh);
+    for (let i = 0; i < P.length; i++) {
+      const a = P[i], b = P[(i + 1) % P.length];
+      if (sh.t === "circle") {
+        if (dPS([sh.x, sh.y], a, b) < off - 1e-9) return false;
+        continue;
+      }
+      for (const [c, d] of segs) if (segSegDist(c, d, a, b) < off - 1e-9) return false;
+    }
+    return true;
+  }
+  var zonePolys = (z) => K4.kids(z, "polygon").map((p) => K4.ptsOf(p)).filter((p) => p.length > 2);
+  var zoneLayersOf = (z) => {
+    const l = K4.kid(z, "layers") || K4.kid(z, "layer");
+    return l ? l.slice(1).map((x) => K4.str(x)) : [];
+  };
+  var onLayer = (ls, layer) => !layer || ls.some((l) => l === layer || l === "*.Cu" && /\.Cu$/.test(layer) || l === "F&B.Cu" && /^[FB]\.Cu$/.test(layer) || l.startsWith("*.") && layer.endsWith(l.slice(1)));
+  function areasMatching(doc, arg, A, B) {
+    if (arg === "A" || arg === "B") {
+      const it = arg === "A" ? A : B;
+      return it && it.kind === "zone" ? [{ node: it.node, parent: it.parent || null }] : [];
+    }
+    const out = [];
+    const test = (z, parent) => {
+      const name = kidStr3(z, "name"), id = kidStr3(z, "uuid");
+      if (name && wxMatchesLocal(arg, name) || id === arg) out.push({ node: z, parent });
+    };
+    for (const it of doc.items.values()) {
+      if (it.kind === "zone") test(it.node, null);
+      else if (it.kind === "footprint") for (const z of K4.kids(it.node, "zone")) test(z, it);
+    }
+    return out;
+  }
+  function wxMatchesLocal(pat, s) {
+    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+    return re.test(s);
+  }
+  function footprintSelector(fp, sel) {
+    if (!sel) return false;
+    if (/^\$\{CLASS:.*\}$/i.test(sel)) {
+      const name = sel.slice(8, -1);
+      const cc = K4.kid(fp, "component_classes");
+      return !!cc && K4.kids(cc, "class").some((c) => K4.str(c[1]) === name);
+    }
+    if (wxMatchesLocal(sel, fieldOf(fp, "Reference") || "")) return true;
+    return sel.includes(":") && wxMatchesLocal(sel, K4.str(fp[1]));
+  }
+  var GROUPS = /* @__PURE__ */ new WeakMap();
+  function groupOfMap(doc, ver) {
+    const c = GROUPS.get(doc);
+    if (c && c.ver === ver) return c.map;
+    const map = /* @__PURE__ */ new Map();
+    for (const it of doc.items.values()) if (it.kind === "group") {
+      const m = K4.kid(it.node, "members");
+      if (m) for (const id of m.slice(1)) map.set(K4.str(id), it.node);
+    }
+    GROUPS.set(doc, { ver, map });
+    return map;
+  }
+  var uuidOf2 = (n) => kidStr3(n, "uuid");
+  function callFunc(fn, it, args, c, wild, wxm) {
+    const as = args[0] || "", { doc, s } = c;
+    switch (fn) {
+      case "isPlated":
+        return bool(!!it && (it.kind === "via" || it.kind === "pad" && K4.str(it.node[2]) === "thru_hole"));
+      case "existsOnLayer": {
+        if (!it || !as) return bool(false);
+        let ls;
+        if (it.kind === "via") {
+          ls = (c.doc.copper && c.doc.copper.length ? c.doc.copper : ["F.Cu", "B.Cu"]).slice();
+          const L = K4.kid(it.node, "layers");
+          if (L && viaTypeOf(it.node) !== "through") {
+            const all2 = ls, i0 = all2.indexOf(K4.str(L[1])), i1 = all2.indexOf(K4.str(L[2]));
+            if (i0 >= 0 && i1 >= 0) ls = all2.slice(Math.min(i0, i1), Math.max(i0, i1) + 1);
+          }
+        } else if (it.kind === "zone") ls = zoneLayersOf(it.node);
+        else {
+          const L = K4.kid(it.node, "layers");
+          ls = L ? L.slice(1).map((x) => K4.str(x)) : [layerOf2(it.node)];
+        }
+        const expand2 = (l) => l === "*.Cu" || l === "F&B.Cu" ? l === "F&B.Cu" ? ["F.Cu", "B.Cu"] : c.doc.copper && c.doc.copper.length ? c.doc.copper : ["F.Cu", "B.Cu"] : l.startsWith("*.") ? ["F" + l.slice(1), "B" + l.slice(1)] : [l];
+        return bool(ls.flatMap(expand2).some((l) => wild(as, l)));
+      }
+      case "isMicroVia":
+        return bool(!!it && it.kind === "via" && viaTypeOf(it.node) === "micro");
+      case "isBlindVia":
+        return bool(!!it && it.kind === "via" && viaTypeOf(it.node) === "blind");
+      case "isBuriedVia":
+        return bool(!!it && it.kind === "via" && viaTypeOf(it.node) === "buried");
+      case "isBlindBuriedVia":
+        return bool(!!it && it.kind === "via" && (viaTypeOf(it.node) === "blind" || viaTypeOf(it.node) === "buried"));
+      case "isStackedVia": {
+        if (!it || it.kind !== "via" || viaTypeOf(it.node) !== "micro") return bool(false);
+        const p = pt4(it.node, "at");
+        if (!p) return bool(false);
+        for (const o of doc.items.values()) {
+          if (o.kind !== "via" || o.node === it.node || viaTypeOf(o.node) !== "micro") continue;
+          const q = pt4(o.node, "at");
+          if (q && Math.hypot(q[0] - p[0], q[1] - p[1]) < 1e-6) return bool(true);
+        }
+        return bool(false);
+      }
+      case "memberOf":
+      case "memberOfGroup": {
+        if (!it || !as) return bool(false);
+        const map = groupOfMap(doc, c.ver);
+        let g2 = map.get(uuidOf2(it.node)) || (it.parent ? map.get(uuidOf2(it.parent.node)) : void 0);
+        let guard = 0;
+        while (g2 && guard++ < 64) {
+          if (wxm(as, K4.str(g2[1]))) return bool(true);
+          g2 = map.get(uuidOf2(g2));
+        }
+        return bool(false);
+      }
+      case "memberOfFootprint": {
+        const fp = it && it.parent;
+        return bool(!!fp && footprintSelector(fp.node, as));
+      }
+      case "memberOfSheet":
+      case "memberOfSheetOrChildren": {
+        const fp = it ? fpOf(it) : null;
+        if (!fp || !as) return bool(false);
+        let sheet = kidStr3(fp.node, "sheetname") || fieldOf(fp.node, "Sheetname") || "";
+        let ref = as;
+        if (sheet.endsWith("/")) sheet = sheet.slice(0, -1);
+        if (ref.endsWith("/")) ref = ref.slice(0, -1);
+        if ((wxm("/", ref) || !ref) && !sheet) return bool(true);
+        if (fn === "memberOfSheet") return bool(wxm(ref, sheet));
+        const sp = sheet.split("/"), rp2 = ref.split("/");
+        if (rp2.length > sp.length) return bool(false);
+        return bool(rp2.every((r, i) => wxm(r, sp[i])));
+      }
+      case "getField": {
+        if (!it || it.kind !== "footprint" || !as) return str3("");
+        return str3(fieldOf(it.node, as) || "");
+      }
+      case "hasNetclass":
+        return bool(!!it && !!as && wild(as, netclassName(s, netName(doc, it.node))));
+      case "hasExactNetclass":
+        return bool(!!it && !!as && netclassName(s, netName(doc, it.node)) === as);
+      case "hasComponentClass": {
+        const fp = it ? fpOf(it) : null;
+        if (!fp || !as) return bool(false);
+        const cc = K4.kid(fp.node, "component_classes");
+        return bool(!!cc && K4.kids(cc, "class").some((x) => wild(as, K4.str(x[1]))));
+      }
+      case "customProperty":
+        return str3("");
+      // EDA_ITEM custom properties are not written to the board file
+      case "hasCustomProperty":
+        return bool(false);
+      case "inNetChain":
+      case "hasNetChain":
+      case "inNetChainClass":
+        return bool(false);
+      // the board defines no net chains
+      case "inDiffPair": {
+        if (!it || !as) return bool(false);
+        const name = netName(doc, it.node);
+        const m = matchDpSuffix(name);
+        if (!m.rv || !netExists(doc, m.complement)) return bool(false);
+        const base = m.base;
+        return bool(wxm(as, base) || base.endsWith("_") && wxm(as, base.slice(0, base.lastIndexOf("_"))));
+      }
+      case "isCoupledDiffPair": {
+        const a = c.A, b = c.B;
+        const name = a ? netName(doc, a.node) : "";
+        if (!name) return bool(false);
+        const m = matchDpSuffix(name);
+        if (!m.rv) return bool(false);
+        if (c.constraint && ["diff_pair_gap", "length", "skew", "net_chain_length"].includes(c.constraint) && netExists(doc, m.complement)) return bool(true);
+        return bool(!!b && netName(doc, b.node) === m.complement);
+      }
+      case "insideCourtyard":
+      case "intersectsCourtyard":
+      case "insideFrontCourtyard":
+      case "intersectsFrontCourtyard":
+      case "insideBackCourtyard":
+      case "intersectsBackCourtyard": {
+        if (!it || !as) return bool(false);
+        const sh = itemShape(it);
+        if (!sh) return bool(false);
+        const side = /Front/.test(fn) ? ["F.CrtYd"] : /Back/.test(fn) ? ["B.CrtYd"] : ["F.CrtYd", "B.CrtYd"];
+        let fps;
+        if (as === "A" || as === "B") {
+          const o = as === "A" ? c.A : c.B;
+          const f = o ? fpOf(o) : null;
+          fps = f ? [f] : [];
+        } else fps = [...doc.items.values()].filter((f) => f.kind === "footprint" && footprintSelector(f.node, as));
+        const bb = shapeBBox(sh);
+        for (const f of fps) {
+          if (f.bbox && (bb[0] > f.bbox[2] || bb[2] < f.bbox[0] || bb[1] > f.bbox[3] || bb[3] < f.bbox[1])) continue;
+          const cy = courtyardLoops(f);
+          for (const l of side) for (const P of cy[l] || []) if (shapeHitsPoly(sh, P)) return bool(true);
+        }
+        return bool(false);
+      }
+      case "insideArea":
+      case "intersectsArea":
+      case "intersectsKeepout":
+      case "enclosedByArea": {
+        if (!it || !as) return bool(false);
+        const sh = itemShape(it);
+        if (!sh) return bool(false);
+        for (const z of areasMatching(doc, as, c.A, c.B)) {
+          if (z.node === it.node) continue;
+          const zl = zoneLayersOf(z.node);
+          const layer = it.layer || (it.kind === "footprint" ? null : layerOf2(it.node, ""));
+          if (layer && !onLayer(zl, layer) && it.kind !== "via" && it.kind !== "pad") continue;
+          if (it.kind === "footprint" && fn !== "enclosedByArea") {
+            const cy = courtyardLoops(it.item || { id: "", kind: "footprint", node: it.node });
+            const sides = [zl.some((l) => /^F\.|^\*\.|F&B/.test(l)) ? "F.CrtYd" : "", zl.some((l) => /^B\.|^\*\.|F&B/.test(l)) ? "B.CrtYd" : ""].filter(Boolean);
+            for (const P of zonePolys(z.node)) for (const l of sides) for (const Q of cy[l] || []) if (polyPolyDist(Q, P) <= 1e-9) return bool(true);
+            continue;
+          }
+          for (const P of zonePolys(z.node)) if (fn === "enclosedByArea" ? shapeInsidePoly(sh, P) : shapeHitsPoly(sh, P)) return bool(true);
+        }
+        return bool(false);
+      }
+      case "fromTo":
+        return bool(!!it && onFromToPath(doc, it, args[0] || "", args[1] || "", c.ver, wxm));
+      default:
+        return U;
+    }
+  }
+  var courtyardLoops = (fp) => courtyards(fp);
+  var FT = /* @__PURE__ */ new WeakMap();
+  function onFromToPath(doc, it, from, to, ver, wxm) {
+    if (!from || !to) return false;
+    let c = FT.get(doc);
+    if (!c || c.ver !== ver) FT.set(doc, c = { ver, paths: /* @__PURE__ */ new Map() });
+    const key = from + "\0" + to;
+    let set = c.paths.get(key);
+    if (!set) {
+      set = fromToItems(doc, from, to, wxm);
+      c.paths.set(key, set);
+    }
+    return set.has(it.node);
+  }
+  function fromToItems(doc, from, to, wxm) {
+    const out = /* @__PURE__ */ new Set();
+    const nodes = [];
+    const copper = doc.copper && doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const expand2 = (ls) => ls.flatMap((l) => l === "*.Cu" ? copper : l === "F&B.Cu" ? ["F.Cu", "B.Cu"] : /\.Cu$/.test(l) ? [l] : []);
+    for (const it of doc.items.values()) {
+      if (it.kind === "footprint") {
+        const ref = fieldOf(it.node, "Reference") || "";
+        for (const p of padsOf(it)) nodes.push({ node: p.node, shape: padShape(p), layers: expand2(p.layers), name: ref + "-" + p.number, net: p.net.name || netName(doc, p.node) });
+      } else if (it.kind === "segment" || it.kind === "arc" || it.kind === "via") {
+        const sh = itemShape({ kind: it.kind, node: it.node });
+        if (!sh) continue;
+        const ls = it.kind === "via" ? copper : [layerOf2(it.node)];
+        nodes.push({ node: it.node, shape: sh, layers: ls, name: "", net: netName(doc, it.node) });
+      }
+    }
+    const starts = nodes.filter((n) => n.name && wxm(from, n.name)), ends = new Set(nodes.filter((n) => n.name && wxm(to, n.name)));
+    for (const s0 of starts) {
+      const prev = /* @__PURE__ */ new Map([[s0, null]]);
+      const q = [s0];
+      let hit2 = null;
+      while (q.length && !hit2) {
+        const a = q.shift();
+        for (const b of nodes) {
+          if (prev.has(b) || b.net !== s0.net || b.name && !ends.has(b)) continue;
+          if (!b.layers.some((l) => a.layers.includes(l)) || shapeGap(a.shape, b.shape) > 1e-6) continue;
+          prev.set(b, a);
+          if (ends.has(b)) {
+            hit2 = b;
+            break;
+          }
+          q.push(b);
+        }
+      }
+      for (let n = hit2; n; n = prev.get(n)) out.add(n.node);
+    }
+    return out;
+  }
+  var UNIT = { deg: 1, mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
   function druValue(s) {
     const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s));
     if (!m) return null;
@@ -18702,10 +21376,17 @@ Link '${target2}' to this file?`)) return null;
       }
       const n = druValue(tok);
       if (n !== null) return { k: "lit", v: { t: "n", v: n } };
-      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
-      if (!m) throw new Error(`Unrecognized item '${tok}'`);
-      const who = m[1] || null;
+      if (tok.toLowerCase() === "null" && peek() !== "(") return { k: "lit", v: { t: "null" } };
+      const parts = tok.split("."), field2 = parts[parts.length - 1], base = parts.length > 1 ? parts[0] : "";
+      const bad = () => new Error(`Unrecognized item '${tok}'`);
+      if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(field2) || parts.length > 1 && !["A", "B", "AB", "L"].includes(base)) throw bad();
+      const navs = parts.slice(1, -1);
+      if (navs.some((x) => x.toLowerCase() !== "parent") || navs.length && base !== "A" && base !== "B") throw bad();
+      const nav = navs.length;
+      const m = [tok, base, field2];
+      const who = base === "AB" ? "A" : base === "L" ? null : base || null;
       if (peek() === "(") {
+        if (base === "L") throw bad();
         eat("(");
         const args = [];
         if (peek() !== ")") {
@@ -18716,10 +21397,24 @@ Link '${target2}' to this file?`)) return null;
           }
         }
         eat(")");
-        return { k: "call", who, fn: m[2], args };
+        const fn = FUNC_BY_LOWER.get(m[2].toLowerCase());
+        if (!fn) throw new Error(`Unrecognized function '${m[2]}'`);
+        const empty = (x) => !x || x.k === "lit" && x.v.t === "s" && x.v.v === "";
+        if (MISSING_ARG[fn] && empty(args[0])) throw new Error(MISSING_ARG[fn]);
+        if (fn === "fromTo") {
+          if (empty(args[0])) throw new Error("Missing 'from' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo().");
+          if (empty(args[1])) throw new Error("Missing 'to' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo().");
+        }
+        void FUNCS;
+        return { k: "call", who, nav, fn, args };
       }
-      if (!who) throw new Error(`Unrecognized item '${tok}'`);
-      return { k: "prop", who, name: m[2] };
+      if (base === "L") {
+        if (field2.toLowerCase() !== "layer") throw bad();
+        return { k: "prop", who: "L", nav: 0, name: "Layer" };
+      }
+      if (!who || base === "AB") throw bad();
+      if (!isKnownProp(m[2])) throw new Error(`Unrecognized property '${m[2]}'`);
+      return { k: "prop", who, nav, name: m[2] };
     };
     const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
     const and = bin(cmp, ["&&"]);
@@ -18777,43 +21472,19 @@ Link '${target2}' to this file?`)) return null;
     }
     return TYPE_NAME[it.kind] || it.kind;
   }
-  function propOf(doc, s, it, name) {
-    if (!it) return { t: "u" };
-    const key = name.replace(/_/g, "").toLowerCase();
-    const net = () => netOf2(it.node).name || "";
-    const str3 = (v) => ({ t: "s", v, wild: false });
-    switch (key) {
-      case "type":
-        return str3(typeName(it));
-      case "net":
-      case "netname":
-        return str3(net());
-      case "netcode":
-        return { t: "n", v: netOf2(it.node).code || 0 };
-      case "netclass":
-        return str3(netclassName(s, net()));
-      case "layer":
-        return str3(it.layer || layerOf2(it.node) || "");
-      case "width": {
-        const w = K4.kid(it.node, "width");
-        return w ? { t: "n", v: K4.num(w[1]) } : { t: "u" };
-      }
-      case "reference": {
-        const p = it.node.find((c) => Array.isArray(c) && c[0] === "property" && K4.str(c[1]) === "Reference");
-        return p ? str3(K4.str(p[2])) : { t: "u" };
-      }
-      default:
-        return { t: "u" };
-    }
-  }
   var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
   var num5 = (b) => ({ t: "n", v: b ? 1 : 0 });
   function evalExpr(e, doc, s, A, B) {
     switch (e.k) {
       case "lit":
         return e.v;
-      case "prop":
-        return propOf(doc, s, e.who === "A" ? A : B, e.name);
+      case "prop": {
+        if (e.who === "L") {
+          const L = curLayer || (A ? A.layer || layerOf2(A.node) : null);
+          return L ? { t: "s", v: L, wild: false } : { t: "u" };
+        }
+        return propOf(doc, s, navigate(e.who === "A" ? A : B, e.nav), e.name, typeName);
+      }
       case "not":
         return num5(!truth(evalExpr(e.e, doc, s, A, B)));
       case "bin": {
@@ -18822,41 +21493,46 @@ Link '${target2}' to this file?`)) return null;
         const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
         if (e.op === "==" || e.op === "!=") {
           let eq = false;
-          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
+          if (a.t === "u" || b.t === "u") return num5(false);
+          if (a.t === "null" && b.t === "null") eq = true;
+          else if (a.t === "n" && b.t === "n") eq = a.v === b.v;
           else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
-          return num5(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
+          return num5(e.op === "==" ? eq : !eq);
         }
         if (a.t !== "n" || b.t !== "n") return num5(false);
         return num5(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
       }
       case "call": {
-        const it = e.who === "B" ? B : A;
-        const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" };
-        const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
-        switch (e.fn) {
-          case "inDiffPair": {
-            if (!it || !as) return num5(false);
-            const name = netOf2(it.node).name || "";
-            const m = matchDpSuffix(name);
-            if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num5(false);
-            const base = m.base;
-            return num5(wxMatches(as, base) || base.endsWith("_") && wxMatches(as, base.slice(0, base.lastIndexOf("_"))));
-          }
-          case "hasNetclass":
-            return num5(!!it && wildMatch(as, netclassName(s, netOf2(it.node).name || "")));
-          case "existsOnLayer": {
-            if (!it) return num5(false);
-            const L = K4.kid(it.node, "layers");
-            const ls = L ? L.slice(1).map((x) => K4.str(x)) : [layerOf2(it.node)];
-            return num5(ls.some((l) => wildMatch(as, l) || l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)));
-          }
-          case "isPlated":
-            return num5(!!it && (it.kind === "via" || it.kind === "pad" && K4.str(it.node[2]) === "thru_hole"));
-          default:
-            return { t: "u" };
-        }
+        const it = navigate(e.who === "B" ? B : A, e.nav);
+        const args = e.args.map((x) => {
+          const v = evalExpr(x, doc, s, A, B);
+          return v.t === "s" ? v.v : v.t === "n" ? String(v.v) : "";
+        });
+        return callFunc(e.fn, it, args, { doc, s, A, B, constraint: curConstraint, ver: S.docVer }, wildMatch, wxMatches);
       }
     }
+  }
+  function navigate(it, nav) {
+    for (let i = 0; i < nav && it; i++) it = parentRuleItem(it);
+    return it;
+  }
+  var curLayer = null;
+  var curConstraint = null;
+  var ASSERT_CACHE = /* @__PURE__ */ new WeakMap();
+  function evalAssertion(rule, c, doc, s, A) {
+    let e = ASSERT_CACHE.get(c);
+    if (e === void 0) {
+      try {
+        e = parseCondition((c.options || [])[0] || "");
+      } catch {
+        e = null;
+      }
+      ASSERT_CACHE.set(c, e);
+    }
+    if (!e) return null;
+    curConstraint = "assertion";
+    void rule;
+    return truth(evalExpr(e, doc, s, A, null));
   }
   function parseDru(text2) {
     const rules = [], errors = [];
@@ -18908,6 +21584,7 @@ Link '${target2}' to this file?`)) return null;
     return !rule.expr || truth(evalExpr(rule.expr, doc, s, A, B));
   }
   function evalRuleConstraint(rules, type, doc, s, A, B, fmt32) {
+    curConstraint = type;
     for (let i = rules.length - 1; i >= 0; i--) {
       const r = rules[i];
       const c = r.constraints.find((k) => k.type === type);
@@ -18923,6 +21600,7 @@ Link '${target2}' to this file?`)) return null;
     return null;
   }
   function ruleClearance(rules, doc, s, A, B) {
+    curConstraint = "clearance";
     for (let i = rules.length - 1; i >= 0; i--) {
       const r = rules[i], c = r.constraints.find((k) => k.type === "clearance");
       if (!c || c.min == null) continue;
@@ -18937,7 +21615,7 @@ Link '${target2}' to this file?`)) return null;
     const nets = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) {
       if (it.kind !== "segment" && it.kind !== "arc") continue;
-      const name = netOf2(it.node).name || "";
+      const name = netName(doc, it.node);
       if (!name) continue;
       const a = K4.kid(it.node, "start"), b = K4.kid(it.node, "end");
       if (!a || !b) continue;
@@ -19017,7 +21695,7 @@ Link '${target2}' to this file?`)) return null;
     for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K4.groupMemberIds(it.node)) inPattern.add(id);
     const byNet = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) if (it.kind === "segment" || it.kind === "arc") {
-      const n = netOf2(it.node).name || "";
+      const n = netName(doc, it.node);
       if (n) {
         let l = byNet.get(n);
         if (!l) byNet.set(n, l = []);
@@ -19052,16 +21730,16 @@ Link '${target2}' to this file?`)) return null;
     for (const [name, P] of byNet) {
       const m = matchDpSuffix(name);
       if (m.rv <= 0) continue;
-      const N = byNet.get(m.complement);
-      if (!N) continue;
-      const gapR = find("diff_pair_gap", P[0], N[0]), uncR = find("diff_pair_uncoupled", P[0], N[0]);
+      const N2 = byNet.get(m.complement);
+      if (!N2) continue;
+      const gapR = find("diff_pair_gap", P[0], N2[0]), uncR = find("diff_pair_uncoupled", P[0], N2[0]);
       if (!gapR && !uncR) continue;
       const I = (p) => [p[0] * 1e6, p[1] * 1e6];
       const coupled = [];
       for (const sp of P) {
         if (sp.kind !== "segment" || inPattern.has(sp.id)) continue;
         let best = null;
-        for (const sn of N) {
+        for (const sn of N2) {
           if (sn.kind !== "segment" || inPattern.has(sn.id) || layerOf2(sn.node) !== layerOf2(sp.node)) continue;
           const a = { A: I(xy2(sp, "start")), B: I(xy2(sp, "end")) }, b = { A: I(xy2(sn, "start")), B: I(xy2(sn, "end")) };
           if (!approxParallelT(a, b, 10)) continue;
@@ -19083,12 +21761,12 @@ Link '${target2}' to this file?`)) return null;
         if (!d.failMin && !d.failMax) totalCoupled += d.len;
       }
       const sum = (l) => l.filter((it) => !inPattern.has(it.id)).reduce((t, it) => t + len(it), 0);
-      const total = Math.max(sum(P), sum(N)), uncoupled = total - totalCoupled;
+      const total = Math.max(sum(P), sum(N2)), uncoupled = total - totalCoupled;
       let uncFail = false;
       if (uncR && uncR.c.max != null && uncR.c.max >= 0 && uncoupled > uncR.c.max + 1e-6) {
         uncFail = true;
-        const [x, y] = at(N[0]);
-        out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P.concat(N).map((it) => it.id)));
+        const [x, y] = at(N2[0]);
+        out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P.concat(N2).map((it) => it.id)));
       }
       if (gapR && (uncFail || !uncR)) for (const d of coupled) {
         if (!d.failMin && !d.failMax) continue;
@@ -19096,7 +21774,268 @@ Link '${target2}' to this file?`)) return null;
         out.push(marker("diff_pair_gap_out_of_range", gapR.r.severity || "error", x, y, `Differential pair gap out of range (rule '${gapR.r.name}' ${d.failMin ? "minimum" : "maximum"} gap ${mm4(d.failMin ? gapR.c.min : gapR.c.max)}; actual ${mm4(d.gap)})`, [d.p.id, d.n.id]));
       }
     }
-    return out.filter((mk) => s.severities[mk.code] !== "ignore");
+    return out.filter((mk2) => s.severities[mk2.code] !== "ignore");
+  }
+  function resolve(rules, type, doc, s, A, B, implicitMin, implicitName = "board setup constraints") {
+    const h = rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
+    if (h) return h.severity === "ignore" ? null : { min: h.min, max: h.max, name: h.name, severity: h.severity || null };
+    return implicitMin != null && implicitMin > 0 ? { min: implicitMin, max: null, name: implicitName, severity: null } : null;
+  }
+  function fails(c, actual, eps = 1e-6) {
+    if (!c) return null;
+    if (c.min != null && c.min > 0 && actual < c.min - eps) return { kind: "min", v: c.min };
+    if (c.max != null && actual > c.max + eps) return { kind: "max", v: c.max };
+    return null;
+  }
+  var sev = (c) => c.severity === "warning" || c.severity === "error" ? c.severity : "error";
+  var deg = (v) => v.toFixed(1) + "\xB0";
+  function sizeMarkers(doc, s, rules, conds) {
+    const out = [];
+    for (const c of conds) {
+      if (c.kind === "segment" || c.kind === "arc") {
+        const [a, b] = c.anchors;
+        const layer = layerOf2(c.item.node);
+        const A = { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape };
+        const r = resolve(rules, "track_width", doc, s, A, null, s.minTrackWidth || 0);
+        const f = fails(r, c.width);
+        if (r && f) out.push(marker("track_width", sev(r), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (${r.name} ${f.kind} width ${mm4(f.v)}; actual ${mm4(c.width)})`, [c.id]));
+        if (c.kind === "segment" && rules.length) {
+          const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          const rl2 = resolve(rules, "track_segment_length", doc, s, A, null, null);
+          const fl = fails(rl2, L);
+          if (rl2 && fl) out.push(marker("track_segment_length", sev(rl2), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track segment length (${rl2.name} ${fl.kind} length ${mm4(fl.v)}; actual ${mm4(L)})`, [c.id]));
+        }
+      } else if (c.kind === "via") {
+        const [a] = c.anchors;
+        const A = { kind: "via", node: c.item.node, item: c.item, layer: null, shape: c.shape };
+        if (c.drill >= c.size - 1e-6) {
+          out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
+          continue;
+        }
+        const rd = resolve(rules, "via_diameter", doc, s, A, null, s.minViaDiameter || 0);
+        const fd = fails(rd, c.size);
+        if (rd && fd) out.push(marker("via_diameter", sev(rd), a[0], a[1], `Via diameter (${rd.name} ${fd.kind} diameter ${mm4(fd.v)}; actual ${mm4(c.size)})`, [c.id]));
+        const micro = viaTypeOf(c.item.node) === "micro";
+        const rh = resolve(rules, "hole_size", doc, s, A, null, micro ? s.minMicroViaDrill || 0 : s.minViaDrill || 0, micro ? "board setup constraints micro-via" : "board setup constraints");
+        const fh = fails(rh, c.drill);
+        if (rh && fh) out.push(marker(micro ? "microvia_drill_out_of_range" : "drill_out_of_range", sev(rh), a[0], a[1], `${micro ? "Micro via hole size out of range" : "Hole size out of range"} (${rh.name} ${fh.kind} hole ${mm4(fh.v)}; actual ${mm4(c.drill)})`, [c.id]));
+        const ann = (c.size - c.drill) / 2;
+        const ra = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
+        const fa = fails(ra, ann);
+        if (ra && fa) out.push(marker("annular_width", sev(ra), a[0], a[1], `Annular width (${ra.name} ${fa.kind} annular width ${mm4(fa.v)}; actual ${mm4(ann)})`, [c.id]));
+      }
+    }
+    out.push(...padAnnularMarkers(doc, s, rules));
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue;
+      for (const p of padsOf(it)) {
+        const d = K4.kid(p.node, "drill");
+        if (!d) continue;
+        const oval = K4.str(d[1]) === "oval";
+        const w = oval ? K4.num(d[2]) : K4.num(d[1]);
+        const h = oval ? K4.num(d[3], w) : w;
+        const minor = Math.min(w, h), major = Math.max(w, h);
+        if (!(minor > 0)) continue;
+        const A = { kind: "pad", node: p.node, parent: it, layer: null };
+        const r = resolve(rules, "hole_size", doc, s, A, null, s.minViaDrill || 0);
+        if (!r) continue;
+        const f = r.min != null && r.min > 0 && minor < r.min - 1e-6 ? { kind: "min", v: r.min, actual: minor } : r.max != null && major > r.max + 1e-6 ? { kind: "max", v: r.max, actual: major } : null;
+        if (f) out.push(marker("drill_out_of_range", sev(r), p.x, p.y, `Hole size out of range (${r.name} ${f.kind} hole ${mm4(f.v)}; actual ${mm4(f.actual)})`, [it.id]));
+      }
+    }
+    return out;
+  }
+  function insetDepth(sh, q) {
+    if (sh.t === "circle") return sh.r - Math.hypot(q[0] - sh.x, q[1] - sh.y);
+    if (sh.t === "seg") return sh.r - dPS(q, sh.a, sh.b);
+    if (sh.t === "rect") {
+      const [lx, ly] = rotator2(-(sh.rot || 0))(q[0] - sh.x, q[1] - sh.y);
+      const rr = sh.rr || 0;
+      const hw = Math.max(sh.w / 2 - rr, 0), hh = Math.max(sh.h / 2 - rr, 0);
+      const out = rectPointDist(sh, q);
+      return out > 0 ? rr - out : rr + Math.min(hw - Math.abs(lx), hh - Math.abs(ly));
+    }
+    return 0;
+  }
+  function padAnnulus(p, others = []) {
+    const d = K4.kid(p.node, "drill");
+    if (!d) return null;
+    const oval = K4.str(d[1]) === "oval";
+    const dx = oval ? K4.num(d[2]) : K4.num(d[1]), dy = oval ? K4.num(d[3], dx) : dx;
+    const cr = K4.kid(p.node, "chamfer_ratio"), chamfered = !!K4.kid(p.node, "chamfer") && !!cr;
+    const offset = Math.abs(p.off[0]) > 1e-9 || Math.abs(p.off[1]) > 1e-9;
+    const handled = !offset && (["circle", "oval", "rect", "roundrect"].includes(p.shape) && (!chamfered || K4.num(cr[1]) <= 0.3));
+    const fast = Math.abs(Math.min((p.w - dx) / 2, (p.h - dy) / 2));
+    if (others.length) return handled && p.shape === "circle" ? fast : null;
+    if (handled) return fast;
+    if (p.shape !== "circle" && p.shape !== "oval" && p.shape !== "rect" && p.shape !== "roundrect") return null;
+    const R2 = rotator2(p.rot), [ox, oy] = R2(p.off[0], p.off[1]);
+    const sh = padShape({ shape: p.shape, x: p.x + ox, y: p.y + oy, w: p.w, h: p.h, rot: p.rot, node: p.node });
+    if (insetDepth(sh, [p.x, p.y]) < 0) return 0;
+    const half = Math.abs(dx - dy) / 2, [hx, hy] = dx >= dy ? R2(half, 0) : R2(0, half), hr = Math.min(dx, dy) / 2;
+    return Math.max(0, Math.min(insetDepth(sh, [p.x - hx, p.y - hy]), insetDepth(sh, [p.x + hx, p.y + hy])) - hr);
+  }
+  function padAnnularMarkers(doc, s, rules) {
+    const out = [];
+    if (!((s.minViaAnnular || 0) > 0) && !rules.some((r) => r.constraints.some((c) => c.type === "annular_width"))) return out;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue;
+      const pads = padsOf(it);
+      for (const p of pads) {
+        if (p.type !== "thru_hole" || !K4.kid(p.node, "drill")) continue;
+        const box = (q) => {
+          const r2 = Math.hypot(q.w, q.h) / 2 + Math.hypot(q.off[0], q.off[1]);
+          return [q.x - r2, q.y - r2, q.x + r2, q.y + r2];
+        };
+        const b = box(p);
+        const others = p.number ? pads.filter((q) => q !== p && q.number === p.number && (() => {
+          const c = box(q);
+          return c[0] <= b[2] && c[2] >= b[0] && c[1] <= b[3] && c[3] >= b[1];
+        })()) : [];
+        const A = { kind: "pad", node: p.node, parent: it, layer: "F.Cu" };
+        const r = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
+        if (!r) continue;
+        const w = padAnnulus(p, others);
+        if (w == null) continue;
+        const f = fails(r, w);
+        if (!f) continue;
+        out.push(marker("annular_width", sev(r), p.x, p.y, `Annular width (${r.name} ${f.kind} annular width ${mm4(f.v)}; actual ${mm4(w)})`, [it.id]));
+      }
+    }
+    return out;
+  }
+  function segIntersect(a0, a1, b0, b1) {
+    const e = 1e-9;
+    if (Math.max(a0[0], a1[0]) < Math.min(b0[0], b1[0]) - e || Math.max(b0[0], b1[0]) < Math.min(a0[0], a1[0]) - e || Math.max(a0[1], a1[1]) < Math.min(b0[1], b1[1]) - e || Math.max(b0[1], b1[1]) < Math.min(a0[1], a1[1]) - e) return null;
+    const d1 = [a1[0] - a0[0], a1[1] - a0[1]], d2 = [b1[0] - b0[0], b1[1] - b0[1]], off = [b0[0] - a0[0], b0[1] - a0[1]];
+    const det = d2[0] * d1[1] - d2[1] * d1[0];
+    if (Math.abs(det) < 1e-12) {
+      if (Math.abs(d1[0] * off[1] - d1[1] * off[0]) > 1e-9) return null;
+      const ax = Math.abs(d1[0]) >= Math.abs(d1[1]) ? 0 : 1, o = 1 - ax;
+      const s1 = [Math.min(a0[ax], a1[ax]), Math.max(a0[ax], a1[ax])], s2 = [Math.min(b0[ax], b1[ax]), Math.max(b0[ax], b1[ax])];
+      if (s1[1] < s2[0] - e || s2[1] < s1[0] - e) return null;
+      const proj = (Math.max(s1[0], s2[0]) + Math.min(s1[1], s2[1])) / 2;
+      const other = a1[ax] !== a0[ax] ? a0[o] + (proj - a0[ax]) * (a1[o] - a0[o]) / (a1[ax] - a0[ax]) : a0[o];
+      const r = [0, 0];
+      r[ax] = proj;
+      r[o] = other;
+      return r;
+    }
+    const t = (d2[0] * off[1] - d2[1] * off[0]) / det, u = (d1[0] * off[1] - d1[1] * off[0]) / det;
+    if (t < -e || t > 1 + e || u < -e || u > 1 + e) return null;
+    return [a0[0] + t * d1[0], a0[1] + t * d1[1]];
+  }
+  function trackAngleMarkers(doc, s, rules, conds) {
+    const out = [];
+    if (!rules.some((r) => r.constraints.some((c) => c.type === "track_angle"))) return out;
+    const segs = conds.filter((c) => c.kind === "segment");
+    const pads = conds.filter((c) => c.kind === "pad");
+    const same = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
+    const touches = (a, b) => a.anchors.some((p) => dPS(p, b.anchors[0], b.anchors[1]) <= b.width / 2 + 1e-9);
+    for (const a of segs) {
+      const la = layerOf2(a.item.node);
+      for (const b of segs) {
+        if (a === b || a.id === b.id || a.net && b.net && a.net !== b.net || la !== layerOf2(b.item.node)) continue;
+        if (!touches(a, b) && !touches(b, a)) continue;
+        const [a0, a1] = a.anchors, [b0, b1] = b.anchors;
+        const p0 = segIntersect(a0, a1, b0, b1);
+        if (!p0) continue;
+        if (pads.some((c) => c.layers.has(la) && shapeGap(c.shape, { t: "circle", x: p0[0], y: p0[1], r: 0 }) <= 0)) continue;
+        const r = resolve(rules, "track_angle", doc, s, { kind: "segment", node: a.item.node, item: a.item, layer: la }, { kind: "segment", node: b.item.node, item: b.item, layer: la }, null);
+        if (!r) continue;
+        const unit22 = (u, v2) => {
+          const d = [v2[0] - u[0], v2[1] - u[1]];
+          const l = Math.hypot(d[0], d[1]) || 1;
+          return [d[0] / l, d[1] / l];
+        };
+        let da = unit22(a0, a1), db = unit22(b0, b1), below90 = false;
+        if (same(a1, p0)) da = [-da[0], -da[1]];
+        else if (!same(a0, p0)) below90 = true;
+        if (same(b1, p0)) db = [-db[0], -db[1]];
+        else if (!same(b0, p0)) below90 = true;
+        let actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
+        if (below90 && actual > 90) actual -= 90;
+        const fmin = r.min != null && actual < r.min, fmax = r.max != null && actual > r.max;
+        if (!fmin && !fmax) continue;
+        const v = fmax ? r.max : r.min;
+        out.push(marker("track_angle", sev(r), p0[0], p0[1], `Track angle (${r.name} ${fmin ? "min" : "max"} angle ${deg(v)}; actual ${deg(actual)})`, [a.id, b.id]));
+      }
+    }
+    return out;
+  }
+  function disallowKinds(kind, node) {
+    if (kind === "segment" || kind === "arc") return ["track"];
+    if (kind === "via") {
+      const t = viaTypeOf(node);
+      return ["via", t === "micro" ? "micro_via" : t === "blind" ? "blind_via" : t === "buried" ? "buried_via" : "through_via"];
+    }
+    if (kind === "pad") return ["pad"];
+    if (kind === "zone") return ["zone"];
+    if (kind === "footprint") return ["footprint"];
+    if (/^(gr|fp)_text/.test(kind) || kind === "text" || kind === "property") return ["text"];
+    if (/^(gr|fp)_(line|rect|circle|arc|poly|curve)$/.test(kind)) return ["graphic"];
+    return [];
+  }
+  function ruleItems(doc) {
+    const out = [];
+    for (const it of doc.items.values()) {
+      if (it.kind === "group" || it.kind === "generated") continue;
+      out.push({ kind: it.kind, node: it.node, item: it, layer: null });
+      if (it.kind === "footprint") for (const p of K4.kids(it.node, "pad")) out.push({ kind: "pad", node: p, parent: it, layer: null });
+    }
+    return out;
+  }
+  var anchorOf2 = (it) => {
+    if (it.kind === "pad" && it.parent) {
+      const p2 = padsOf(it.parent).find((q) => q.node === it.node);
+      if (p2) return [p2.x, p2.y];
+    }
+    const p = pt4(it.node, "at") || pt4(it.node, "start") || pt4(it.node, "center");
+    if (p) return p;
+    const poly = K4.kid(it.node, "polygon");
+    const pts = poly ? K4.ptsOf(poly) : [];
+    if (pts.length) return pts[0];
+    const b = it.item && it.item.bbox;
+    return b ? [b[0], b[1]] : [0, 0];
+  };
+  var idOf = (it) => it.parent ? it.parent.id : it.item ? it.item.id : "";
+  function disallowMarkers(doc, s, rules, items) {
+    const out = [];
+    const dr = rules.filter((r) => !r.error && r.constraints.some((c) => c.type === "disallow"));
+    if (!dr.length) return out;
+    for (const it of items || ruleItems(doc)) {
+      const kinds = disallowKinds(it.kind, it.node);
+      if (!kinds.length) continue;
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "disallow");
+        if (!c || !ruleMatches(r, doc, s, it, null)) continue;
+        if (r.severity === "ignore") break;
+        const flags = c.options || [];
+        if (!flags.some((f) => kinds.includes(f) || f === "hole" && (it.kind === "via" || it.kind === "pad" && !!K4.kid(it.node, "drill")))) break;
+        const p = anchorOf2(it);
+        out.push(marker("items_not_allowed", r.severity === "warning" ? "warning" : "error", p[0], p[1], `Items not allowed (rule '${r.name}')`, [idOf(it)]));
+        break;
+      }
+    }
+    return out;
+  }
+  function assertionMarkers(doc, s, rules, items) {
+    const out = [];
+    const ar = rules.filter((r) => !r.error && r.constraints.some((c) => c.type === "assertion"));
+    if (!ar.length) return out;
+    for (const it of items || ruleItems(doc)) {
+      for (const r of ar) {
+        if (r.severity === "ignore" || !ruleMatches(r, doc, s, it, null)) continue;
+        for (const c of r.constraints) {
+          if (c.type !== "assertion") continue;
+          const ok2 = evalAssertion(r, c, doc, s, it);
+          if (ok2 !== false) continue;
+          const p = anchorOf2(it);
+          out.push(marker("assertion_failure", r.severity === "warning" ? "warning" : "error", p[0], p[1], `Assertion failure (rule '${r.name}')`, [idOf(it)]));
+        }
+      }
+    }
+    return out;
   }
   var DRC_ITEMS2 = [
     ["Electrical", "", ""],
@@ -19184,7 +22123,7 @@ Link '${target2}' to this file?`)) return null;
   ];
   var MORE_DEFAULTS = { minHoleToHole: 0.25, minHoleClearance: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
   var defaultSeverity = (code) => (DRC_ITEMS2.find((i) => i[1] === code) || ["", "", "error"])[2];
-  var ident = (x, y) => [x, y];
+  var ident2 = (x, y) => [x, y];
   function fpTf(fp) {
     const [fx, fy, frot] = K4.atOf(fp.node);
     const R2 = rotator2(frot);
@@ -19211,7 +22150,7 @@ Link '${target2}' to this file?`)) return null;
     return { id: fp.id, kind: "pad", a: [p.x - dx, p.y - dy], b: [p.x + dx, p.y + dy], w: Math.min(w, h), layers: null, micro: false, pad: p, fp, uuid: K4.uuidOf(p.node) || fp.id + ":" + p.index };
   }
   function viaHole(it) {
-    const a = pt3(it.node, "at");
+    const a = pt4(it.node, "at");
     if (!a) return null;
     const d = K4.kid(it.node, "drill");
     const w = d ? K4.num(d[1], 0) : 0;
@@ -19365,20 +22304,20 @@ Link '${target2}' to this file?`)) return null;
   }
   function boardTexts(doc) {
     const out = [];
-    const take = (n, id, tf, fp, layer) => {
+    const take = (n, id, tf2, fp, layer) => {
       const k = kindOf(n);
-      const at = pt3(n, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K4.ptsOf(n)[0] : null) || [0, 0];
-      out.push({ id, node: n, kind: k, layer: layer || layerOf2(n, "F.SilkS"), pos: tf(at[0], at[1]), fp });
+      const at = pt4(n, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K4.ptsOf(n)[0] : null) || [0, 0];
+      out.push({ id, node: n, kind: k, layer: layer || layerOf2(n, "F.SilkS"), pos: tf2(at[0], at[1]), fp });
     };
     for (const it of doc.items.values()) {
       const n = it.node;
-      if (it.kind === "gr_text" || it.kind === "gr_text_box") take(n, it.id, ident);
+      if (it.kind === "gr_text" || it.kind === "gr_text_box") take(n, it.id, ident2);
       else if (it.kind === "dimension") {
         const t = K4.kid(n, "gr_text");
-        if (t) take(t, it.id, ident, void 0, layerOf2(n, "Dwgs.User"));
+        if (t) take(t, it.id, ident2, void 0, layerOf2(n, "Dwgs.User"));
       } else if (it.kind === "footprint") {
-        const tf = fpTf(it);
-        for (const g2 of n) if (isList5(g2) && (g2[0] === "property" || g2[0] === "fp_text" || g2[0] === "fp_text_box") && K4.kid(g2, "layer")) take(g2, it.id, tf, it);
+        const tf2 = fpTf(it);
+        for (const g2 of n) if (isList5(g2) && (g2[0] === "property" || g2[0] === "fp_text" || g2[0] === "fp_text_box") && K4.kid(g2, "layer")) take(g2, it.id, tf2, it);
       }
     }
     return out;
@@ -19426,7 +22365,7 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   function courtyardOutlines(fp) {
-    const tf = fpTf(fp);
+    const tf2 = fpTf(fp);
     const chains = { "F.CrtYd": [], "B.CrtYd": [] };
     for (const g2 of fp.node) {
       if (!isList5(g2) || !/^fp_(line|rect|circle|arc|poly)$/.test(g2[0])) continue;
@@ -19434,16 +22373,16 @@ Link '${target2}' to this file?`)) return null;
       if (!chains[layer]) continue;
       const kind = g2[0].slice(3);
       const P = (key) => {
-        const p = pt3(g2, key);
-        return p ? tf(p[0], p[1]) : null;
+        const p = pt4(g2, key);
+        return p ? tf2(p[0], p[1]) : null;
       };
       if (kind === "line") {
         const a = P("start"), b = P("end");
         if (a && b) chains[layer].push([a, b]);
       } else if (kind === "rect") {
-        const s0 = pt3(g2, "start"), e = pt3(g2, "end");
+        const s0 = pt4(g2, "start"), e = pt4(g2, "end");
         if (s0 && e) {
-          const pts = [tf(s0[0], s0[1]), tf(e[0], s0[1]), tf(e[0], e[1]), tf(s0[0], e[1])];
+          const pts = [tf2(s0[0], s0[1]), tf2(e[0], s0[1]), tf2(e[0], e[1]), tf2(s0[0], e[1])];
           chains[layer].push(pts.concat([pts[0]]));
         }
       } else if (kind === "circle") {
@@ -19461,7 +22400,7 @@ Link '${target2}' to this file?`)) return null;
           chains[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
         }
       } else if (kind === "poly") {
-        const pts = K4.ptsOf(g2).map(([x, y]) => tf(x, y));
+        const pts = K4.ptsOf(g2).map(([x, y]) => tf2(x, y));
         if (pts.length > 2) chains[layer].push(pts.concat([pts[0]]));
       }
     }
@@ -19519,20 +22458,20 @@ Link '${target2}' to this file?`)) return null;
   var EDGE_TEXT = /* @__PURE__ */ new Set(["gr_text", "gr_text_box", "table", "barcode", "dimension"]);
   function textOnEdgeCutsMarkers(doc) {
     const out = [];
-    const sev = defaultSeverity("text_on_edge_cuts");
+    const sev3 = defaultSeverity("text_on_edge_cuts");
     for (const it of doc.items.values()) {
       if (EDGE_TEXT.has(it.kind) && layerOf2(it.node, "") === "Edge.Cuts") {
-        const p = pt3(it.node, "at") || pt3(it.node, "start") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
-        out.push(marker("text_on_edge_cuts", sev, p[0], p[1], "Text or graphic on Edge.Cuts layer", [it.id]));
+        const p = pt4(it.node, "at") || pt4(it.node, "start") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
+        out.push(marker("text_on_edge_cuts", sev3, p[0], p[1], "Text or graphic on Edge.Cuts layer", [it.id]));
       }
     }
-    for (const t of boardTexts(doc)) if (t.fp && t.layer === "Edge.Cuts") out.push(marker("text_on_edge_cuts", sev, t.pos[0], t.pos[1], "Text or graphic on Edge.Cuts layer", [t.id]));
+    for (const t of boardTexts(doc)) if (t.fp && t.layer === "Edge.Cuts") out.push(marker("text_on_edge_cuts", sev3, t.pos[0], t.pos[1], "Text or graphic on Edge.Cuts layer", [t.id]));
     return out;
   }
   function keepouts(doc) {
     const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
     const out = [];
-    const take = (z, id, tf, fp) => {
+    const take = (z, id, tf2, fp) => {
       const ko = K4.kid(z, "keepout");
       if (!ko) return;
       const no = (k) => {
@@ -19540,21 +22479,21 @@ Link '${target2}' to this file?`)) return null;
         return !!c && K4.str(c[1]) === "not_allowed";
       };
       const poly = K4.kid(z, "polygon");
-      const pts = poly ? K4.ptsOf(poly).map(([x, y]) => tf(x, y)) : [];
+      const pts = poly ? K4.ptsOf(poly).map(([x, y]) => tf2(x, y)) : [];
       if (pts.length < 3) return;
       const layers = /* @__PURE__ */ new Set();
       for (const l of zoneLayers(z)) {
         if (l === "*.Cu" || l === "F&B.Cu") copper.forEach((c) => layers.add(c));
         else layers.add(l);
       }
-      const nm2 = K4.kid(z, "name");
-      out.push({ id, name: nm2 ? K4.str(nm2[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
+      const nm22 = K4.kid(z, "name");
+      out.push({ id, name: nm22 ? K4.str(nm22[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
     };
     for (const it of doc.items.values()) {
-      if (it.kind === "zone") take(it.node, it.id, ident, null);
+      if (it.kind === "zone") take(it.node, it.id, ident2, null);
       else if (it.kind === "footprint") {
-        const tf = fpTf(it);
-        for (const g2 of it.node) if (isList5(g2) && g2[0] === "zone") take(g2, it.id, tf, it);
+        const tf2 = fpTf(it);
+        for (const g2 of it.node) if (isList5(g2) && g2[0] === "zone") take(g2, it.id, tf2, it);
       }
     }
     return out;
@@ -19582,7 +22521,7 @@ Link '${target2}' to this file?`)) return null;
     const out = [];
     const kos = keepouts(doc);
     if (!kos.length) return out;
-    const sev = defaultSeverity("items_not_allowed");
+    const sev3 = defaultSeverity("items_not_allowed");
     const boxes = kos.map((k) => shapeBBox({ t: "poly", pts: k.pts }));
     const hits = (shape, i) => {
       if (!boxesTouch(shapeBBox(shape), boxes[i], 0)) return false;
@@ -19593,13 +22532,13 @@ Link '${target2}' to this file?`)) return null;
     for (const it of doc.items.values()) {
       const n = it.node;
       if (it.kind === "segment" || it.kind === "arc") {
-        const a = pt3(n, "start"), b = pt3(n, "end");
+        const a = pt4(n, "start"), b = pt4(n, "end");
         if (!a || !b) continue;
         const layer = layerOf2(n);
         const w = K4.num((K4.kid(n, "width") || [0, 0.25])[1], 0.25);
         let pts = [a, b];
         if (it.kind === "arc") {
-          const m = pt3(n, "mid");
+          const m = pt4(n, "mid");
           const arc = m && K4.arcFrom3(a, m, b);
           if (arc) pts = arcPoints(arc, a, b);
         }
@@ -19607,17 +22546,17 @@ Link '${target2}' to this file?`)) return null;
         kos.forEach((k, i) => {
           if (k.tracks && k.layers.has(layer) && hits(shape, i)) {
             const p = firstInside(shape, pts, k.pts);
-            out.push(marker("items_not_allowed", sev, p[0], p[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+            out.push(marker("items_not_allowed", sev3, p[0], p[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
           }
         });
       } else if (it.kind === "via") {
-        const a = pt3(n, "at");
+        const a = pt4(n, "at");
         if (!a) continue;
         const size = K4.num((K4.kid(n, "size") || [0, 0.6])[1], 0.6);
         const span = viaSpan(doc, viaHole(it) || { layers: null });
         const shape = { t: "circle", x: a[0], y: a[1], r: size / 2 };
         kos.forEach((k, i) => {
-          if (k.vias && [...span].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev, a[0], a[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+          if (k.vias && [...span].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev3, a[0], a[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
         });
       } else if (it.kind === "footprint") {
         for (const p of padsOf(it)) {
@@ -19628,7 +22567,7 @@ Link '${target2}' to this file?`)) return null;
             else layers.add(l);
           }
           kos.forEach((k, i) => {
-            if (k.pads && k.fp !== it && [...layers].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev, p.x, p.y, `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+            if (k.pads && k.fp !== it && [...layers].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev3, p.x, p.y, `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
           });
         }
       }
@@ -19638,16 +22577,16 @@ Link '${target2}' to this file?`)) return null;
   function disabledLayerMarkers(doc) {
     const out = [];
     if (!doc.layers.size) return out;
-    const sev = defaultSeverity("item_on_disabled_layer");
+    const sev3 = defaultSeverity("item_on_disabled_layer");
     const off = (l) => /\.Cu$/.test(l) && !doc.layers.has(l);
-    const report2 = (id, p, l) => out.push(marker("item_on_disabled_layer", sev, p[0], p[1], `Item on a disabled copper layer (layer ${l})`, [id]));
+    const report2 = (id, p, l) => out.push(marker("item_on_disabled_layer", sev3, p[0], p[1], `Item on a disabled copper layer (layer ${l})`, [id]));
     for (const it of doc.items.values()) {
       const n = it.node;
       if (it.kind === "via") {
         const ls = K4.kid(n, "layers");
         const pair = ls ? [K4.str(ls[1]), K4.str(ls[2])] : [];
         const bad = pair.find(off);
-        const a = pt3(n, "at");
+        const a = pt4(n, "at");
         if (bad && a) report2(it.id, a, bad);
       } else if (it.kind === "footprint") {
         for (const p of padsOf(it)) {
@@ -19658,7 +22597,7 @@ Link '${target2}' to this file?`)) return null;
       } else if (it.kind !== "zone") {
         const l = layerOf2(n, "");
         if (!l || !off(l)) continue;
-        const p = pt3(n, "start") || pt3(n, "at") || pt3(n, "center") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
+        const p = pt4(n, "start") || pt4(n, "at") || pt4(n, "center") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
         report2(it.id, p, l);
       }
     }
@@ -19668,6 +22607,1252 @@ Link '${target2}' to this file?`)) return null;
     const ruleOf = (type, A, B) => rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
     const all2 = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...holeClearanceMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_clearance").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
     return all2.filter((m) => (s.severities[m.code] || m.severity) !== "ignore");
+  }
+  var SCH_DEFAULT2 = Object.freeze({
+    bg: "#F5F4EF",
+    grid: "#B5B5B5",
+    gridAxes: "#000084",
+    wire: "#009600",
+    bus: "#000084",
+    junction: "#009600",
+    outline: "#840000",
+    body: "#FFFFC2",
+    pin: "#840000",
+    pinName: "#006464",
+    pinNum: "#A90000",
+    ref: "#006464",
+    value: "#006464",
+    field: "#840084",
+    label: "#0F0F0F",
+    glabel: "#840000",
+    hlabel: "#725600",
+    sheet: "#840000",
+    sheetName: "#006464",
+    sheetFile: "#725600",
+    sheetFields: "#840084",
+    sheetLabel: "#006464",
+    noconnect: "#000084",
+    notes: "#0000C2",
+    busEntry: "#009600",
+    dnp: "rgba(220,9,13,0.85)",
+    netclass: "#484848",
+    ruleArea: "#FF0000",
+    excluded: "rgba(194,194,194,0.95)",
+    hidden: "#C2C2C2",
+    privateNotes: "#4848FF",
+    frame: "#840000",
+    // LAYER_SCHEMATIC_DRAWINGSHEET ("schematic.worksheet") is `frame`; the page outline is a separate,
+    // lighter layer — DS_PAINTER::DrawBorder paints it in LAYER_SCHEMATIC_PAGE_LIMITS, not the sheet ink
+    // (common/settings/builtin_color_themes.h:78-79, eeschema/sch_view.cpp:137-138).
+    pageLimits: "#B5B5B5",
+    brightened: "#FF00FF"
+    // LAYER_BRIGHTENED: net highlighting / selection disambiguation
+  });
+  var SCH5 = Object.assign({}, SCH_DEFAULT2);
+  var PCB_ORDER2 = ["B.Fab", "B.CrtYd", "B.Adhes", "B.Paste", "B.SilkS", "B.Mask", "B.Cu"];
+  for (let i = 30; i >= 1; i--) PCB_ORDER2.push("In" + i + ".Cu");
+  PCB_ORDER2.push("F.Fab", "F.CrtYd", "F.Adhes", "F.Paste", "F.SilkS", "F.Mask", "F.Cu", "holes");
+  for (let i = 45; i >= 1; i--) PCB_ORDER2.push("User." + i);
+  PCB_ORDER2.push("Margin", "Edge.Cuts", "Eco2.User", "Eco1.User", "Cmts.User", "Dwgs.User");
+  var PCB_ZMAP2 = new Map(PCB_ORDER2.map((l, i) => [l, i * 10]));
+  var isList22 = Array.isArray;
+  function kid3(node, key) {
+    for (let j = 1; j < node.length; j++) {
+      const c = node[j];
+      if (isList22(c) && c[0] === key) return c;
+    }
+    return null;
+  }
+  function num22(v, d = 0) {
+    if (typeof v === "number") return v;
+    if (v === void 0 || v === null || v === "") return d;
+    const x = Number(v);
+    return isNaN(x) ? d : x;
+  }
+  function str22(v) {
+    return v === void 0 || v === null ? "" : String(v);
+  }
+  function polyPtsOf2(node) {
+    const p = kid3(node, "pts");
+    if (!p) return [];
+    const out = [];
+    for (let i = 1; i < p.length; i++) {
+      const c = p[i];
+      if (!isList22(c)) continue;
+      if (c[0] === "xy") out.push([num22(c[1]), num22(c[2])]);
+      else if (c[0] === "arc") {
+        const s = kid3(c, "start"), m = kid3(c, "mid"), e = kid3(c, "end");
+        if (!s || !m || !e) continue;
+        const a = arcFrom32([num22(s[1]), num22(s[2])], [num22(m[1]), num22(m[2])], [num22(e[1]), num22(e[2])]);
+        if (!a) {
+          out.push([num22(s[1]), num22(s[2])], [num22(e[1]), num22(e[2])]);
+          continue;
+        }
+        const TAU = 2 * Math.PI;
+        let sweep = a.anticlockwise ? a.a0 - a.a1 : a.a1 - a.a0;
+        sweep = (sweep % TAU + TAU) % TAU;
+        const step = a.r > 5e-3 ? 2 * Math.acos(1 - 5e-3 / a.r) : Math.PI / 2, n = Math.max(2, Math.ceil(sweep / step));
+        out.push([num22(s[1]), num22(s[2])]);
+        for (let k = 1; k < n; k++) {
+          const t = a.a0 + (a.anticlockwise ? -1 : 1) * sweep * k / n;
+          out.push([a.x + a.r * Math.cos(t), a.y + a.r * Math.sin(t)]);
+        }
+        out.push([num22(e[1]), num22(e[2])]);
+      }
+    }
+    return out;
+  }
+  function arcFrom32(p0, pm, p1) {
+    const ax = p0[0], ay = p0[1], bx = pm[0], by = pm[1], cx = p1[0], cy = p1[1];
+    const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(d) < 1e-9) return null;
+    const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
+    const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
+    const r = Math.hypot(ax - ux, ay - uy);
+    const a0 = Math.atan2(ay - uy, ax - ux), am = Math.atan2(by - uy, bx - ux), a1 = Math.atan2(cy - uy, cx - ux);
+    const norm22 = (a) => (a % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    const ccwSweep = norm22(a1 - a0), ccwMid = norm22(am - a0);
+    const ccw = ccwMid <= ccwSweep;
+    return { x: ux, y: uy, r, a0, a1, anticlockwise: !ccw };
+  }
+  var rad = (deg2) => deg2 * Math.PI / 180;
+  function rot2(x, y, deg2) {
+    if (!deg2) return [x, y];
+    const r = rad(deg2), c = Math.cos(r), s = Math.sin(r);
+    return [x * c + y * s, -x * s + y * c];
+  }
+  function arcPoints2(cx, cy, r, a0, a1, acw, maxErr = 5e-3) {
+    const TAU = 2 * Math.PI;
+    let sweep = acw ? a0 - a1 : a1 - a0;
+    sweep = (sweep % TAU + TAU) % TAU;
+    if (sweep < 1e-12 && Math.abs(a1 - a0) > 1e-9) sweep = TAU;
+    const step = r > maxErr ? 2 * Math.acos(1 - maxErr / r) : Math.PI / 2;
+    const n = Math.max(2, Math.ceil(sweep / step));
+    const out = [];
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + (acw ? -1 : 1) * sweep * i / n;
+      out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    return out;
+  }
+  function circlePoints(cx, cy, r, maxErr = 5e-3) {
+    const step = r > maxErr ? 2 * Math.acos(1 - maxErr / r) : Math.PI / 2;
+    const n = Math.max(8, Math.ceil(2 * Math.PI / step));
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const a = 2 * Math.PI * i / n;
+      out.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    return out;
+  }
+  function area(pts) {
+    let a = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+    return a / 2;
+  }
+  var K22 = (n, key) => n ? kid3(n, key) : null;
+  function boardSettings(setup, doc) {
+    const n = (key) => {
+      const k = K22(setup, key);
+      return k ? num22(k[1], 0) : 0;
+    };
+    const tent = K22(setup, "tenting");
+    let tentFront = true, tentBack = true;
+    if (tent) {
+      const legacy = tent.slice(1).some((x) => !isList22(x));
+      if (legacy) {
+        tentFront = tent.includes("front");
+        tentBack = tent.includes("back");
+      } else {
+        const f = K22(tent, "front"), b = K22(tent, "back");
+        tentFront = f ? str22(f[1]) !== "no" : false;
+        tentBack = b ? str22(b[1]) !== "no" : false;
+      }
+    } else {
+      const pp = K22(setup, "pcbplotparams");
+      const v = K22(pp, "viasonmask");
+      if (v) {
+        const open2 = str22(v[1]) === "true" || str22(v[1]) === "yes";
+        tentFront = tentBack = !open2;
+      }
+    }
+    const ax = K22(setup, "aux_axis_origin");
+    return {
+      maskExpansion: n("pad_to_mask_clearance"),
+      maskMinWidth: n("solder_mask_min_width"),
+      pasteClearance: n("pad_to_paste_clearance"),
+      pasteRatio: n("pad_to_paste_clearance_ratio"),
+      tentFront,
+      tentBack,
+      auxOrigin: ax ? [num22(ax[1]), num22(ax[2])] : doc.auxOrigin ? [doc.auxOrigin[0], doc.auxOrigin[1]] : [0, 0]
+    };
+  }
+  var MAX_ERROR = 5e-3;
+  function pointInPoly22(pts, x, y) {
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+      if (yi > y !== yj > y && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function fracture(paths) {
+    if (paths.length < 2) return paths;
+    const sign = (p) => Math.sign(area(p));
+    let pos = 0, neg = 0;
+    for (const p of paths) {
+      const a = area(p);
+      if (a > 0) pos += a;
+      else neg -= a;
+    }
+    const outerSign = pos >= neg ? 1 : -1;
+    const outers = [];
+    const holes = [];
+    for (const p of paths) {
+      if (sign(p) === outerSign) outers.push({ pts: p, holes: [], a: Math.abs(area(p)) });
+      else holes.push(p);
+    }
+    if (!holes.length) return paths;
+    outers.sort((a, b) => a.a - b.a);
+    for (const h of holes) {
+      const o = outers.find((c) => pointInPoly22(c.pts, h[0][0], h[0][1]) || pointInPoly22(c.pts, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
+      if (o) o.holes.push(h);
+    }
+    const out = [];
+    for (const o of outers) {
+      let poly = o.pts.slice();
+      const hs = o.holes.map((h) => {
+        let mi = 0;
+        for (let i = 1; i < h.length; i++) if (h[i][0] > h[mi][0]) mi = i;
+        return { h, mi };
+      });
+      hs.sort((a, b) => b.h[b.mi][0] - a.h[a.mi][0]);
+      for (const { h, mi } of hs) {
+        const hx = h[mi][0], hy = h[mi][1];
+        let best = -1, bestX = Infinity;
+        for (let i = 0; i < poly.length; i++) {
+          const a = poly[i], b = poly[(i + 1) % poly.length];
+          if (a[1] === b[1]) continue;
+          if (Math.min(a[1], b[1]) > hy || Math.max(a[1], b[1]) < hy) continue;
+          const x = a[0] + (b[0] - a[0]) * (hy - a[1]) / (b[1] - a[1]);
+          if (x >= hx && x < bestX) {
+            bestX = x;
+            best = i;
+          }
+        }
+        if (best < 0) continue;
+        const cut = [bestX, hy];
+        const ring2 = [];
+        for (let k = 0; k <= h.length; k++) ring2.push(h[(mi + k) % h.length]);
+        poly = poly.slice(0, best + 1).concat([cut], ring2, [cut], poly.slice(best + 1));
+      }
+      out.push(poly);
+    }
+    return out;
+  }
+  function clockwise(pts) {
+    return area(pts) < 0 ? pts.slice().reverse() : pts;
+  }
+  var canvas = () => globalThis.KiCadCanvas;
+  var N = (v, d = 0) => typeof v === "number" ? v : d;
+  var S2 = (v) => typeof v === "string" ? v : "";
+  var PlotLog = class {
+    constructor() {
+      this.messages = /* @__PURE__ */ new Set();
+    }
+    warn(m) {
+      this.messages.add(m);
+    }
+  };
+  function dashed(pts, pattern, w, out) {
+    let pi = 0, left = pattern[0], on = true;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      let [x, y] = pts[i];
+      const [ex, ey] = pts[i + 1];
+      let len = Math.hypot(ex - x, ey - y);
+      if (len < 1e-9) continue;
+      const ux = (ex - x) / len, uy = (ey - y) / len;
+      while (len > 1e-9) {
+        const step = Math.min(left, len);
+        const nx = x + ux * step, ny = y + uy * step;
+        if (on) out.push({ k: "seg", x1: x, y1: y, x2: nx, y2: ny, w });
+        x = nx;
+        y = ny;
+        len -= step;
+        left -= step;
+        if (left <= 1e-9) {
+          pi = (pi + 1) % pattern.length;
+          left = pattern[pi];
+          on = !on;
+        }
+      }
+    }
+  }
+  function polyline(pts, close, w, g2, out) {
+    if (!(w > 0) || pts.length < 2) return;
+    const path2 = close ? pts.concat([pts[0]]) : pts;
+    if (g2.dash) {
+      dashed(path2, canvas().dashPattern(S2(g2.dashType), w), w, out);
+      return;
+    }
+    for (let i = 0; i + 1 < path2.length; i++) out.push({ k: "seg", x1: path2[i][0], y1: path2[i][1], x2: path2[i + 1][0], y2: path2[i + 1][1], w });
+  }
+  var clampPen = (pen, size, sizeX) => Math.min(pen, Math.min(Math.abs(size), Math.abs(sizeX)) * 0.25);
+  function cachedOutlines(oc, size, sizeX) {
+    if (oc.polys !== void 0) return oc.polys;
+    oc.polys = null;
+    const rc = oc.node;
+    if (S2(rc[1]) !== oc.shown) return null;
+    const turn = ((num22(rc[2], 0) - oc.rot) % 360 + 360) % 360;
+    if (Math.min(turn, 360 - turn) > 0.01) return null;
+    const polys = [];
+    for (const p of rc.slice(3)) {
+      if (!isList22(p) || str22(p[0]) !== "polygon") continue;
+      const outlines = p.filter((c) => isList22(c) && str22(c[0]) === "pts").map((c) => polyPtsOf2(["x", c])).filter((o) => o.length >= 3);
+      if (!outlines.length) continue;
+      if (outlines.length === 1) polys.push(outlines[0]);
+      else for (const o of fracture([clockwise(outlines[0])].concat(outlines.slice(1).map((h) => clockwise(h).slice().reverse())))) polys.push(o);
+    }
+    if (!polys.length) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const poly of polys) for (const q of poly) {
+      const [lx, ly] = rot2(q[0] - oc.x, q[1] - oc.y, -oc.rot);
+      if (lx < x0) x0 = lx;
+      if (ly < y0) y0 = ly;
+      if (lx > x1) x1 = lx;
+      if (ly > y1) y1 = ly;
+    }
+    const tx = 0.35 * Math.abs(sizeX) + 0.1, ty = 0.6 * Math.abs(size) + 0.1;
+    const onX = Math.abs(x0) <= tx || Math.abs(x1) <= tx || Math.abs((x0 + x1) / 2) <= tx;
+    const onY = Math.abs(y0) <= ty || Math.abs(y1) <= ty || Math.abs((y0 + y1) / 2) <= ty;
+    if (!onX || !onY) return null;
+    oc.polys = polys;
+    return polys;
+  }
+  function knockoutBox(pts, x, y, deg2, margin) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of pts) {
+      const [lx, ly] = rot2(q[0] - x, q[1] - y, -deg2);
+      if (lx < x0) x0 = lx;
+      if (ly < y0) y0 = ly;
+      if (lx > x1) x1 = lx;
+      if (ly > y1) y1 = ly;
+    }
+    return [[x0 - margin, y0 - margin], [x1 + margin, y0 - margin], [x1 + margin, y1 + margin], [x0 - margin, y1 + margin]].map(([lx, ly]) => {
+      const [rx, ry] = rot2(lx, ly, deg2);
+      return [x + rx, y + ry];
+    });
+  }
+  function textPrims(g2, out, knock, log) {
+    const text2 = S2(g2.raw) || S2(g2.text);
+    if (!text2) return;
+    const size = N(g2.size, 1), sizeX = N(g2.sizeX) > 0 ? N(g2.sizeX) : size;
+    const pen = clampPen(N(g2.w) > 0 ? N(g2.w) : size / 8, size, sizeX);
+    const margin = Math.max(pen / 2, size / 9);
+    const dst = g2.knockout ? knock : out, clear = g2.knockout ? true : void 0;
+    if (g2.face) {
+      const oc = g2.outline, polys = oc ? cachedOutlines(oc, size, sizeX) : null;
+      if (oc && polys) {
+        if (!g2.outlineFirst) return;
+        if (g2.knockout) knock.push({ k: "region", pts: knockoutBox(polys.flat(), oc.x, oc.y, oc.rot, margin) });
+        for (const pts of polys) dst.push({ k: "region", pts, clear });
+        return;
+      }
+      log.warn(oc ? `Text set in the font "${S2(g2.face)}" was changed after KiCad last drew it, so its stored outlines no longer fit. It is plotted with the KiCad stroke font; open and save the board in KiCad to refresh them.` : `Text set in the font "${S2(g2.face)}" has no outlines stored in the board (KiCad stores them when it saves). It is plotted with the KiCad stroke font.`);
+    }
+    const C = canvas();
+    const line2 = C.strokeLine(text2, !!g2.italic);
+    const lay = g2.knockout && g2.layoutW !== void 0 ? N(g2.layoutW) : pen;
+    const [ox, oy] = C.strokeOrigin(line2.advance, S2(g2.h) || "center", S2(g2.v) || "middle", lay / sizeX, lay / size);
+    const a = -N(g2.rot) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g2.mirror ? -1 : 1;
+    const x0 = N(g2.x), y0 = N(g2.y);
+    const P = (u, v) => {
+      const lx = (u + ox) * sizeX * mx, ly = (v + oy) * size;
+      return [x0 + lx * c - ly * sn, y0 + lx * sn + ly * c];
+    };
+    const segs = [];
+    const ends = [];
+    for (const st of line2.strokes) {
+      if (st.length === 2) {
+        const p = P(st[0], st[1]);
+        ends.push(p);
+        segs.push({ k: "seg", x1: p[0], y1: p[1], x2: p[0], y2: p[1], w: pen, clear });
+        continue;
+      }
+      for (let i = 0; i + 3 < st.length; i += 2) {
+        const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]);
+        ends.push(p, q);
+        segs.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen, clear });
+      }
+    }
+    if (g2.knockout && ends.length) knock.push({ k: "region", pts: knockoutBox(ends, x0, y0, N(g2.rot), margin + pen / 2) });
+    for (const p of segs) dst.push(p);
+  }
+  function geomPrims(g2, out, knock, log, grow = 0) {
+    const w = N(g2.w) + 2 * grow;
+    if (g2.t === "line") {
+      const pts = [[N(g2.x1), N(g2.y1)], [N(g2.x2), N(g2.y2)]];
+      polyline(pts, false, w, g2, out);
+    } else if (g2.t === "arc") {
+      if (g2.pie || !(w > 0)) return;
+      const cx = N(g2.x), cy = N(g2.y), r = N(g2.r), a0 = N(g2.a0), a1 = N(g2.a1), acw = !!g2.anticlockwise;
+      if (g2.dash) dashed(arcPoints2(cx, cy, r, a0, a1, acw, MAX_ERROR), canvas().dashPattern(S2(g2.dashType), w), w, out);
+      else out.push({ k: "arc", cx, cy, r, a0, a1, acw, w });
+    } else if (g2.t === "circle") {
+      const x = N(g2.x), y = N(g2.y), r = N(g2.r);
+      if (g2.fill) {
+        const d = 2 * r + (g2.noStroke ? 0 : N(g2.w)) + 2 * grow;
+        if (d > 0) out.push({ k: "circle", x, y, d });
+      } else if (w > 0) {
+        if (g2.dash) dashed(circlePoints(x, y, r, MAX_ERROR).concat([[x + r, y]]), canvas().dashPattern(S2(g2.dashType), w), w, out);
+        else out.push({ k: "arc", cx: x, cy: y, r, a0: 0, a1: 2 * Math.PI, acw: false, w });
+      }
+    } else if (g2.t === "poly") {
+      const pts = g2.pts || [];
+      if (pts.length < 2) return;
+      if (g2.fill && pts.length >= 3) out.push({ k: "region", pts });
+      if (!g2.noStroke || grow > 0) polyline(pts, !!g2.close, g2.noStroke ? 2 * grow : w, g2, out);
+    } else if (g2.t === "text") textPrims(g2, out, knock, log);
+  }
+  var EPS2 = 1e-6;
+  var defaultSeverity2 = (code) => (DRC_ITEMS2.find((i) => i[1] === code) || ["", "", "error"])[2];
+  var SILK = ["F.SilkS", "B.SilkS"];
+  function primShapes(p) {
+    if (p.clear) return [];
+    switch (p.k) {
+      case "seg":
+        return p.w > 0 || p.x1 === p.x2 && p.y1 === p.y2 ? [{ t: "seg", a: [p.x1, p.y1], b: [p.x2, p.y2], r: p.w / 2 }] : [];
+      case "arc":
+        return p.w > 0 ? [{ t: "path", pts: arcPoints2(p.cx, p.cy, p.r, p.a0, p.a1, p.acw, 5e-3), r: p.w / 2 }] : [];
+      case "circle":
+        return p.d > 0 ? [{ t: "circle", x: p.x, y: p.y, r: p.d / 2 }] : [];
+      case "rect":
+        return [{ t: "rect", x: p.x, y: p.y, w: p.w, h: p.h, rot: p.rot, rr: 0 }];
+      case "roundrect":
+        return [{ t: "rect", x: p.x, y: p.y, w: p.w, h: p.h, rot: p.rot, rr: p.r }];
+      case "oval":
+        return [padShape({ shape: "oval", x: p.x, y: p.y, w: p.w, h: p.h, rot: p.rot })];
+      case "poly":
+        return p.pts.length >= 3 ? [{ t: "poly", pts: p.pts.map((q) => [p.x + q[0], p.y + q[1]]) }] : [];
+      case "region":
+        return p.pts.length >= 3 ? [{ t: "poly", pts: p.pts }] : [];
+    }
+    return [];
+  }
+  function geomShapes(geoms, layer, grow = 0) {
+    const out = [], knock = [];
+    const log = new PlotLog();
+    for (const g2 of geoms) {
+      if (g2.hiddenText || g2.point || g2.zoneOutline || g2.zoneHatch || g2.pad || g2.hole || g2.padText) continue;
+      if (g2.layer === layer) geomPrims(g2, out, knock, log, 0);
+      else if (g2.maskLayer === layer) geomPrims(g2, out, knock, log, grow || (typeof g2.maskMargin === "number" ? g2.maskMargin : 0));
+    }
+    const shapes = [];
+    for (const p of knock.concat(out)) for (const s of primShapes(p)) shapes.push(s);
+    return shapes;
+  }
+  function bboxOf3(shapes, grow) {
+    let b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const s of shapes) {
+      const q = shapeBBox(s);
+      b = [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.max(b[2], q[2]), Math.max(b[3], q[3])];
+    }
+    return [b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow];
+  }
+  function rawGap(a, b) {
+    const core = a.t === "poly" && b.t === "poly" ? polyPolyDist(a.pts, b.pts) : coreDist(a, b);
+    if (core === 0) {
+      return -Math.max(EPS2 * 2, shapeOffset(a) + shapeOffset(b));
+    }
+    return core - shapeOffset(a) - shapeOffset(b);
+  }
+  function elementGap(a, b) {
+    let best = Infinity;
+    for (const s of a.shapes) for (const t of b.shapes) {
+      const g2 = rawGap(s, t) - a.grow - b.grow;
+      if (g2 < best) best = g2;
+      if (best < -1) return best;
+    }
+    return best;
+  }
+  var collides = (gap, clearance) => gap < clearance - EPS2 || gap < 0 && clearance <= EPS2;
+  var touch = (a, b, slop) => !(b[0] > a[2] + slop || b[2] < a[0] - slop || b[1] > a[3] + slop || b[3] < a[1] - slop);
+  var centre = (a, b) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, (Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2];
+  function elementGrid(els) {
+    const G2 = 2, grid = /* @__PURE__ */ new Map();
+    const cell = (v) => Math.floor(v / G2);
+    els.forEach((e, i) => {
+      if (!isFinite(e.bbox[0])) return;
+      for (let gx = cell(e.bbox[0]); gx <= cell(e.bbox[2]); gx++) for (let gy = cell(e.bbox[1]); gy <= cell(e.bbox[3]); gy++) {
+        const k = gx + "," + gy;
+        const l = grid.get(k);
+        if (l) l.push(i);
+        else grid.set(k, [i]);
+      }
+    });
+    return (b, slop) => {
+      const got = /* @__PURE__ */ new Set();
+      for (let gx = cell(b[0] - slop); gx <= cell(b[2] + slop); gx++) for (let gy = cell(b[1] - slop); gy <= cell(b[3] + slop); gy++) for (const i of grid.get(gx + "," + gy) || []) got.add(i);
+      return [...got].sort((x, y) => x - y).map((i) => els[i]);
+    };
+  }
+  function polyIndex(pts) {
+    const G2 = 1, cells = /* @__PURE__ */ new Map(), rows = /* @__PURE__ */ new Map();
+    const cell = (v) => Math.floor(v / G2);
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      for (let gx = cell(Math.min(a[0], b[0])); gx <= cell(Math.max(a[0], b[0])); gx++) for (let gy = cell(Math.min(a[1], b[1])); gy <= cell(Math.max(a[1], b[1])); gy++) {
+        const k = gx + "," + gy;
+        const l = cells.get(k);
+        if (l) l.push(i);
+        else cells.set(k, [i]);
+      }
+      for (let gy = cell(Math.min(a[1], b[1])); gy <= cell(Math.max(a[1], b[1])); gy++) {
+        const l = rows.get(gy);
+        if (l) l.push(i);
+        else rows.set(gy, [i]);
+      }
+    }
+    const inside = (x, y) => {
+      let c = false;
+      for (const i of rows.get(cell(y)) || []) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+      }
+      return c;
+    };
+    return (e, reach) => {
+      let best = Infinity;
+      for (const sh of e.shapes) {
+        const b = shapeBBox(sh);
+        if (inside((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)) return -1;
+        const seen = /* @__PURE__ */ new Set();
+        const r = reach + Math.max(0, e.grow);
+        for (let gx = cell(b[0] - r); gx <= cell(b[2] + r); gx++) for (let gy = cell(b[1] - r); gy <= cell(b[3] + r); gy++) for (const i of cells.get(gx + "," + gy) || []) {
+          if (seen.has(i)) continue;
+          seen.add(i);
+          const g2 = rawGap(sh, { t: "seg", a: pts[i], b: pts[(i + 1) % pts.length], r: 0 }) - e.grow;
+          if (g2 < best) best = g2;
+        }
+      }
+      return best;
+    };
+  }
+  function setupOf(doc, s) {
+    const own = s.boardSetup;
+    if (own && typeof own !== "string") return own;
+    if (typeof own === "string") {
+      try {
+        const t = K4.parse(own);
+        return t && (t[0] === "setup" ? t : K4.kid(t, "setup")) || null;
+      } catch (e) {
+        return null;
+      }
+    }
+    const cached = doc.boardSetup;
+    return cached && cached.setup ? cached.setup : null;
+  }
+  function maskSetup(doc, s) {
+    const setup = setupOf(doc, s);
+    const b = boardSettings(setup, doc);
+    const ab = setup ? K4.kid(setup, "allow_soldermask_bridges_in_footprints") : null;
+    return { maskExpansion: b.maskExpansion, webWidth: b.maskMinWidth, tentFront: b.tentFront, tentBack: b.tentBack, allowBridgesInFps: !!ab && /^(yes|true)$/.test(K4.str(ab[1])) };
+  }
+  var FP_DRAWN = /* @__PURE__ */ new Set(["property", "fp_text", "fp_text_box", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve", "fp_ellipse", "fp_ellipse_arc", "barcode", "dimension", "zone", "table"]);
+  var expand = (names, copper) => names.flatMap((n) => n === "*.Cu" ? copper : n === "F&B.Cu" ? ["F.Cu", "B.Cu"] : n.startsWith("*.") ? ["F" + n.slice(1), "B" + n.slice(1)] : [n]);
+  var isRuleArea = (n) => !!K4.kid(n, "keepout");
+  function childGeoms(doc, fp, child) {
+    const n = fp.node;
+    const body = [];
+    for (let i = 2; i < n.length; i++) {
+      const g2 = n[i];
+      if (!isList5(g2)) continue;
+      if (g2[0] === "layer" || g2[0] === "at" || g2[0] === "transform") body.push(g2);
+      else if (g2[0] === "property") body.push(g2 === child ? g2 : g2.concat([["hide", "yes"]]));
+    }
+    if (child[0] !== "property") body.push(child);
+    const item = { id: fp.id, kind: "footprint", node: [n[0], n[1], ...body], geom: [], bbox: null, movable: true, docType: "pcb" };
+    try {
+      K4.buildGeom(doc, item);
+    } catch (e) {
+      return [];
+    }
+    return item.geom;
+  }
+  function padMaskMargin(p, fp, ms) {
+    if (!p.layers.some((l) => /\.Cu$/.test(l))) return 0;
+    const own = K4.kid(p.node, "solder_mask_margin"), fpm = K4.kid(fp.node, "solder_mask_margin");
+    let v = own ? K4.num(own[1], 0) : fpm ? K4.num(fpm[1], 0) : ms.maskExpansion;
+    if (v < 0) v = Math.max(v, -Math.min(p.w, p.h) / 2);
+    return v;
+  }
+  function boardElements(doc, s, layers, ms = maskSetup(doc, s)) {
+    const out = [];
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const push = (e) => {
+      if (!e.shapes.length) return;
+      e.bbox = bboxOf3(e.shapes, Math.max(0, e.grow));
+      out.push(e);
+    };
+    const layersOfGeoms = (geoms) => {
+      const ls = /* @__PURE__ */ new Set();
+      for (const g2 of geoms) {
+        if (g2.hiddenText || g2.point || g2.zoneOutline || g2.zoneHatch) continue;
+        if (g2.layer) ls.add(g2.layer);
+        if (typeof g2.maskLayer === "string") ls.add(g2.maskLayer);
+      }
+      return ls;
+    };
+    const fromGeoms = (geoms, id, uuid, kind, node, fp, net) => {
+      const ls = layersOfGeoms(geoms);
+      const cu = new Set([...ls].filter((l) => /\.Cu$/.test(l))), mk2 = new Set([...ls].filter((l) => /\.Mask$/.test(l)));
+      for (const l of ls) if (layers.has(l)) push({ id, uuid, kind, node, fp, layer: l, shapes: geomShapes(geoms, l), grow: 0, net, copper: cu, mask: mk2 });
+    };
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "footprint") {
+        for (let i = 2; i < n.length; i++) {
+          const g2 = n[i];
+          if (!isList5(g2) || !FP_DRAWN.has(String(g2[0]))) continue;
+          if (g2[0] === "zone") {
+            if (isRuleArea(g2)) continue;
+            if (!expand(zoneLayers(g2), copper).some((l) => layers.has(l))) continue;
+          } else if (g2[0] !== "dimension" && g2[0] !== "table" && !layers.has(layerOf2(g2, "F.SilkS"))) continue;
+          const net = g2[0] === "zone" ? netName(doc, g2) : null;
+          fromGeoms(childGeoms(doc, it, g2), it.id, K4.uuidOf(g2) || it.id + ":" + i, String(g2[0]), g2, it, net);
+        }
+        for (const p of padsOf(it)) {
+          const ls = expand(p.layers, copper);
+          const cu = new Set(ls.filter((l) => /\.Cu$/.test(l))), mk2 = new Set(ls.filter((l) => /\.Mask$/.test(l)));
+          const dr = K4.kid(p.node, "drill");
+          const hole = dr ? K4.num(K4.str(dr[1]) === "oval" ? dr[2] : dr[1], 0) : 0;
+          const npthNoCopper = p.type === "np_thru_hole" && hole >= Math.min(p.w, p.h) - EPS2;
+          const net = p.type === "np_thru_hole" ? null : p.net.name || (p.net.code > 0 && doc.nets ? String(doc.nets.get(p.net.code) || "") : "");
+          for (const l of ls) {
+            if (!layers.has(l)) continue;
+            const shape = padShape(p);
+            const grow = /\.Mask$/.test(l) ? padMaskMargin(p, it, ms) : 0;
+            if (/\.Cu$/.test(l) && npthNoCopper) continue;
+            push({ id: it.id, uuid: K4.uuidOf(p.node) || it.id + ":p" + p.index, kind: "pad", node: p.node, fp: it, layer: l, shapes: [shape], grow, net, copper: cu, mask: mk2, pad: p, npthNoCopper });
+          }
+        }
+        continue;
+      }
+      if (it.kind === "zone" && isRuleArea(n)) continue;
+      if (it.kind === "via") {
+        const at = K4.kid(n, "at");
+        if (!at) continue;
+        const x = K4.num(at[1]), y = K4.num(at[2]);
+        const size = K4.num((K4.kid(n, "size") || [0, 0.6])[1], 0.6);
+        const ls = K4.kid(n, "layers");
+        const pair = ls ? [K4.str(ls[1]), K4.str(ls[2])] : ["F.Cu", "B.Cu"];
+        const lo = copper.indexOf(pair[0]), hi = copper.indexOf(pair[1]);
+        const span = new Set(copper.filter((_, i) => i >= Math.min(lo, hi) && i <= Math.max(lo, hi)));
+        const t = K4.kid(n, "tenting");
+        const tf2 = t ? K4.kid(t, "front") : null, tb = t ? K4.kid(t, "back") : null;
+        const tentF = tf2 && K4.str(tf2[1]) !== "none" ? K4.str(tf2[1]) !== "no" : ms.tentFront, tentB = tb && K4.str(tb[1]) !== "none" ? K4.str(tb[1]) !== "no" : ms.tentBack;
+        const mk2 = /* @__PURE__ */ new Set();
+        if (span.has("F.Cu") && !tentF) mk2.add("F.Mask");
+        if (span.has("B.Cu") && !tentB) mk2.add("B.Mask");
+        const net = netName(doc, n);
+        const shapes = [{ t: "circle", x, y, r: size / 2 }];
+        for (const l of [...span, ...mk2]) if (layers.has(l)) push({ id: it.id, uuid: it.id, kind: "via", node: n, fp: null, layer: l, shapes, grow: /\.Mask$/.test(l) ? ms.maskExpansion : 0, net, copper: span, mask: mk2 });
+        continue;
+      }
+      if (it.kind === "group" || it.kind === "image" || it.kind === "generated" || it.kind === "point" || it.kind === "gr_bbox") continue;
+      const connected = it.kind === "segment" || it.kind === "arc" || it.kind === "zone" || /^gr_/.test(it.kind) && /\.Cu$/.test(layerOf2(n, ""));
+      fromGeoms(it.geom || [], it.id, it.id, it.kind, n, null, connected ? netName(doc, n) : null);
+    }
+    return out;
+  }
+  function elementsOn(doc, s, layers, ms, pool) {
+    return pool ? pool.filter((e) => layers.has(e.layer)) : boardElements(doc, s, layers, ms);
+  }
+  var ruleItem = (e, layer) => ({ kind: e.kind, node: e.node, parent: e.fp, item: e.fp ? null : void 0, layer, shape: e.shapes[0] || null, id: e.id });
+  function silkConstraint(rules, doc, s, a, b, layer) {
+    if (rules.length && a) {
+      const A = ruleItem(a, layer || a.layer), B = b ? ruleItem(b, layer || b.layer) : null;
+      const h = evalRuleConstraint(rules, "silk_clearance", doc, s, A, B) || (B ? evalRuleConstraint(rules, "silk_clearance", doc, s, B, A) : null);
+      if (h) return { min: h.severity === "ignore" ? -1 : h.min != null ? h.min : 0, name: h.name };
+    }
+    if (layer === null || SILK.includes(layer)) return { min: typeof s.minSilkClearance === "number" ? s.minSilkClearance : 0, name: "board setup constraints silk" };
+    return null;
+  }
+  var detail = (name, min, actual) => min > 0 ? ` (${name} clearance ${mm4(min)}; actual ${mm4(Math.max(0, actual))})` : "";
+  var TARGETS = {
+    "F.SilkS": ["F.SilkS", "F.Mask", "F.Adhes", "F.Paste", "F.CrtYd", "F.Fab", "F.Cu", "Edge.Cuts", "Margin"],
+    "B.SilkS": ["B.SilkS", "B.Mask", "B.Adhes", "B.Paste", "B.CrtYd", "B.Fab", "B.Cu", "Edge.Cuts", "Margin"]
+  };
+  function silkClearanceMarkers(doc, s, rules, ms = maskSetup(doc, s), pool) {
+    const out = [];
+    const customSilk = rules.some((r) => r.constraints.some((c) => c.type === "silk_clearance"));
+    const checkIndividualMaskItems = !(ms.webWidth > 0);
+    const want = new Set(SILK.concat(["F.Mask", "B.Mask"]));
+    if (customSilk) for (const l of Object.values(TARGETS).flat()) want.add(l);
+    const els = elementsOn(doc, s, want, ms, customSilk ? null : pool);
+    if (!els.some((e) => SILK.includes(e.layer))) return out;
+    const byLayer = /* @__PURE__ */ new Map();
+    for (const e of els) {
+      const l = byLayer.get(e.layer);
+      if (l) l.push(e);
+      else byLayer.set(e.layer, [e]);
+    }
+    const ol = boardOutline(doc);
+    const outline = ol.outline ? { t: "poly", pts: ol.outline } : null;
+    const ob = outline ? shapeBBox(outline) : null;
+    const onBoard = /* @__PURE__ */ new Map();
+    const touchesOutline = (e) => {
+      if (!outline) return true;
+      let v = onBoard.get(e);
+      if (v === void 0) {
+        v = touch(e.bbox, ob, 0) && e.shapes.some((sh) => rawGap(sh, outline) - Math.max(0, e.grow) <= EPS2);
+        onBoard.set(e, v);
+      }
+      return v;
+    };
+    const largest = Math.max(0, typeof s.minSilkClearance === "number" ? s.minSilkClearance : 0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "silk_clearance").map((c) => c.min || 0)));
+    const reported = /* @__PURE__ */ new Set();
+    for (const silkLayer of SILK) {
+      const refs = byLayer.get(silkLayer) || [];
+      for (const target2 of TARGETS[silkLayer]) {
+        const tests = byLayer.get(target2) || [];
+        if (!tests.length) continue;
+        const near = elementGrid(tests);
+        for (const ref of refs) for (const test of near(ref.bbox, largest)) {
+          if (ref === test) continue;
+          if (target2 === silkLayer && ref.uuid > test.uuid) continue;
+          if (!touch(ref.bbox, test.bbox, largest)) continue;
+          if (!touchesOutline(test)) continue;
+          let code = "silk_overlap";
+          const c = silkConstraint(rules, doc, s, ref, test, target2);
+          let min = c ? c.min : -1;
+          const name = c ? c.name : "";
+          if (/\.Mask$/.test(target2)) {
+            if (checkIndividualMaskItems) min = Math.max(min, 0);
+            code = "silk_over_copper";
+          }
+          if (min < 0) continue;
+          const isShape = (e) => /^(fp|gr)_(line|rect|circle|arc|poly|curve|ellipse|ellipse_arc)$/.test(e.kind);
+          if (isShape(ref) && isShape(test) && ref.fp === test.fp) continue;
+          let [a, b] = [ref, test];
+          if (target2 === silkLayer && a.uuid > b.uuid) [a, b] = [b, a];
+          const key = code + "|" + a.uuid + "|" + b.uuid + "|" + target2;
+          if (reported.has(key)) continue;
+          const gap = elementGap(a, b);
+          if (!collides(gap, min)) continue;
+          reported.add(key);
+          const [x, y] = centre(a.bbox, b.bbox);
+          const title = code === "silk_overlap" ? "Silkscreen clearance" : "Silkscreen clipped by solder mask";
+          out.push(marker(code, defaultSeverity2(code), x, y, title + detail(name, min, gap), Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
+        }
+      }
+    }
+    return out;
+  }
+  function silkEdgeMarkers(doc, s, rules, ms = maskSetup(doc, s), pool) {
+    const out = [];
+    const sev3 = defaultSeverity2("silk_edge_clearance");
+    const edges = edgeShapes(doc);
+    if (!edges.shapes.length) return out;
+    const silk = elementsOn(doc, s, new Set(SILK), ms, pool);
+    if (!silk.length) return out;
+    const eb = edges.shapes.map((e) => shapeBBox(e));
+    const edgeEl = (i) => ({ id: edges.ids[i], uuid: edges.ids[i], kind: "gr_line", node: (doc.items.get(edges.ids[i]) || { node: ["gr_line", ["layer", "Edge.Cuts"]] }).node, fp: null, layer: "Edge.Cuts", shapes: [edges.shapes[i]], grow: 0, bbox: eb[i], net: null, copper: /* @__PURE__ */ new Set(), mask: /* @__PURE__ */ new Set() });
+    const ol = boardOutline(doc);
+    for (const e of silk) {
+      let crosses2 = false;
+      for (let i = 0; i < edges.shapes.length; i++) {
+        const edge = edgeEl(i);
+        const c2 = silkConstraint(rules, doc, s, edge, e, null);
+        if (!c2 || c2.min < 0) continue;
+        const clr = Math.max(0, c2.min - EPS2);
+        if (!touch(e.bbox, eb[i], clr)) continue;
+        const gap = elementGap(e, edge);
+        if (!collides(gap, clr)) continue;
+        const [x, y] = centre(e.bbox, eb[i]);
+        out.push(marker("silk_edge_clearance", sev3, x, y, "Silkscreen clipped by board edge" + detail(c2.name, c2.min, gap), Array.from(/* @__PURE__ */ new Set([edge.id, e.id]))));
+        crosses2 = true;
+        break;
+      }
+      if (crosses2 || !ol.outline || e.shapes.length < 2) continue;
+      const inside = (sh) => {
+        const b = shapeBBox(sh);
+        return pointInPoly3(ol.outline, (b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
+      };
+      const first = inside(e.shapes[0]);
+      if (e.shapes.every((sh) => inside(sh) === first)) continue;
+      const cx = (e.bbox[0] + e.bbox[2]) / 2, cy = (e.bbox[1] + e.bbox[3]) / 2;
+      let best = ol.outline[0], bd = Infinity, bi = -1;
+      for (let i = 0; i < ol.outline.length; i++) {
+        const p = ol.outline[i], q = ol.outline[(i + 1) % ol.outline.length];
+        const dx = q[0] - p[0], dy = q[1] - p[1], l2 = dx * dx + dy * dy;
+        const t = l2 ? Math.max(0, Math.min(1, ((cx - p[0]) * dx + (cy - p[1]) * dy) / l2)) : 0;
+        const n = [p[0] + t * dx, p[1] + t * dy];
+        const d = Math.hypot(n[0] - cx, n[1] - cy);
+        if (d < bd) {
+          bd = d;
+          best = n;
+        }
+      }
+      for (let i = 0; i < edges.shapes.length; i++) if (rawGap(edges.shapes[i], { t: "circle", x: best[0], y: best[1], r: 0 }) <= 0.01) {
+        bi = i;
+        break;
+      }
+      if (bi < 0) continue;
+      const c = silkConstraint(rules, doc, s, edgeEl(bi), e, null);
+      if (!c || c.min < 0) continue;
+      out.push(marker("silk_edge_clearance", sev3, best[0], best[1], "Silkscreen clipped by board edge" + detail(c.name, c.min, 0), Array.from(/* @__PURE__ */ new Set([edges.ids[bi], e.id]))));
+    }
+    return out;
+  }
+  function silkToMaskMarkers(doc, s, rules, ms = maskSetup(doc, s), pool) {
+    const out = [];
+    if (!(ms.webWidth > 0)) return out;
+    const els = elementsOn(doc, s, new Set(SILK.concat(["F.Mask", "B.Mask"])), ms, pool);
+    const w = ms.webWidth;
+    for (const silkLayer of SILK) {
+      const maskLayer = silkLayer === "F.SilkS" ? "F.Mask" : "B.Mask";
+      const silk = els.filter((e) => e.layer === silkLayer), mask = els.filter((e) => e.layer === maskLayer);
+      if (!mask.length) continue;
+      for (const e of silk) {
+        let clearance = 0, name = "";
+        if (rules.length) {
+          const h = evalRuleConstraint(rules, "silk_clearance", doc, s, ruleItem(e, maskLayer), null);
+          if (h) {
+            if (h.severity === "ignore") continue;
+            clearance = h.min || 0;
+            name = h.name;
+          }
+        }
+        if (clearance < 0) continue;
+        const near = mask.filter((m) => touch(e.bbox, m.bbox, clearance + w));
+        if (!near.length) continue;
+        const gaps = near.map((m) => elementGap(e, m));
+        let hit2 = gaps.findIndex((g2) => collides(g2, clearance));
+        let actual = hit2 >= 0 ? gaps[hit2] : 0;
+        if (hit2 < 0) {
+          for (let i = 0; i < near.length && hit2 < 0; i++) for (let j = i + 1; j < near.length; j++) {
+            if (gaps[i] >= w / 2 + clearance || gaps[j] >= w / 2 + clearance) continue;
+            if (elementGap(near[i], near[j]) < w - EPS2) {
+              hit2 = i;
+              actual = 0;
+              break;
+            }
+          }
+        }
+        if (hit2 < 0) continue;
+        const [x, y] = centre(e.bbox, near[hit2].bbox);
+        out.push(marker("silk_over_copper", defaultSeverity2("silk_over_copper"), x, y, "Silkscreen clipped by solder mask" + detail(name, clearance, actual), [e.id]));
+      }
+    }
+    return out;
+  }
+  function netTieGroups(fp) {
+    const m = /* @__PURE__ */ new Map();
+    if (!fp) return m;
+    const g2 = K4.kid(fp.node, "net_tie_pad_groups");
+    if (!g2) return m;
+    g2.slice(1).forEach((grp, i) => {
+      for (const n of K4.str(grp).split(/[\s,]+/).filter(Boolean)) m.set(n, i);
+    });
+    return m;
+  }
+  var fpAllowsBridges = (fp) => {
+    if (!fp) return false;
+    const a = K4.kid(fp.node, "attr");
+    return !!a && a.slice(1).some((x) => K4.str(x) === "allow_soldermask_bridges");
+  };
+  function netTieNets(e, els) {
+    const groups = netTieGroups(e.fp);
+    if (!groups.size) return null;
+    const out = /* @__PURE__ */ new Set();
+    const g2 = e.pad ? groups.get(e.pad.number) : void 0;
+    for (const o of els) if (o.fp === e.fp && o.pad && o.net && (g2 === void 0 || groups.get(o.pad.number) === g2)) out.add(o.net);
+    return out;
+  }
+  var isMaskAperture = (e) => e.mask.size > 0 && e.copper.size === 0;
+  var sameLogicalPad = (a, b) => !!a.pad && !!b.pad && a.fp === b.fp && a.pad.number !== "" && a.pad.number === b.pad.number;
+  var sharesNetTie = (a, b) => {
+    if (!a.pad || !b.pad || a.fp !== b.fp) return false;
+    const g2 = netTieGroups(a.fp);
+    const x = g2.get(a.pad.number), y = g2.get(b.pad.number);
+    return x !== void 0 && x === y;
+  };
+  function maskBridgeMarkers(doc, s, rules, ms = maskSetup(doc, s), pool) {
+    const out = [];
+    const els = elementsOn(doc, s, /* @__PURE__ */ new Set(["F.Mask", "B.Mask", "F.Cu", "B.Cu"]), ms, pool).filter((e) => e.kind !== "zone");
+    const zones = conductors(doc).filter((c) => c.kind === "zone");
+    const mtc = typeof s.maskToCopperClearance === "number" ? s.maskToCopperClearance : 0;
+    const ignored = (e, layer) => rules.length > 0 && (evalRuleConstraint(rules, "bridged_mask", doc, s, ruleItem(e, layer), null) || { severity: null }).severity === "ignore";
+    const checked = /* @__PURE__ */ new Set();
+    const bridges = [];
+    const apertures = /* @__PURE__ */ new Map();
+    const record = (ap, test2, testLayer, net, pos, zone) => {
+      if (!net) return;
+      if (testLayer === "F.Mask" && test2 && !test2.copper.has("F.Cu")) return;
+      if (testLayer === "B.Mask" && test2 && !test2.copper.has("B.Cu")) return;
+      if (fpAllowsBridges(ap.fp)) return;
+      const l = apertures.get(ap);
+      const v = { item: test2, zone, net, pos };
+      if (l) l.push(v);
+      else apertures.set(ap, [v]);
+    };
+    const checkItemMask = (e, testNet) => {
+      if (e.fp) {
+        if (fpAllowsBridges(e.fp)) return false;
+        if (e.pad) {
+          const nets = netTieNets(e, els);
+          if (nets && netTieGroups(e.fp).has(e.pad.number)) {
+            if (testNet === null) return false;
+            if (nets.has(testNet)) return false;
+          }
+        }
+      }
+      return true;
+    };
+    const filterOk = (a, b, targetLayer) => {
+      if (b.net && b.net === a.net) return false;
+      if (b.npthNoCopper) return false;
+      if (a.fp && a.fp === b.fp && (ms.allowBridgesInFps || fpAllowsBridges(a.fp))) return false;
+      if (sameLogicalPad(a, b) || sharesNetTie(a, b)) return false;
+      const ta = netTieNets(a, els);
+      if (ta && (b.net === null || ta.has(b.net))) return false;
+      const tb = netTieNets(b, els);
+      if (tb && (a.net === null || tb.has(a.net))) return false;
+      const key = (a.uuid < b.uuid ? a.uuid + "|" + b.uuid : b.uuid + "|" + a.uuid) + "|" + targetLayer;
+      if (checked.has(key)) return false;
+      checked.add(key);
+      return true;
+    };
+    const byLayer = /* @__PURE__ */ new Map();
+    for (const l of ["F.Mask", "B.Mask"]) byLayer.set(l, elementGrid(els.filter((e) => e.layer === l)));
+    const maxGrow = Math.max(0, ...els.map((e) => e.grow));
+    const test = (item, refLayer, targetLayer) => {
+      const clearance = /\.Mask$/.test(refLayer) ? ms.webWidth : mtc;
+      for (const other of byLayer.get(targetLayer)(item.bbox, clearance + 2 * maxGrow)) {
+        if (other === item || other.layer !== targetLayer || other.uuid === item.uuid) continue;
+        if (!touch(item.bbox, other.bbox, clearance + Math.max(0, item.grow) + Math.max(0, other.grow))) continue;
+        if (!filterOk(item, other, targetLayer)) continue;
+        const gap = elementGap(item, other);
+        if (!collides(gap, clearance) && !(clearance > 0 && gap <= EPS2 && gap >= -EPS2)) continue;
+        if (isMaskAperture(item) && ignored(item, refLayer) || isMaskAperture(other) && ignored(other, targetLayer) || ignored(item, refLayer) && ignored(other, targetLayer)) continue;
+        const pos = centre(item.bbox, other.bbox);
+        if (isMaskAperture(item)) record(item, other, refLayer, other.net, pos);
+        else if (isMaskAperture(other)) record(other, item, refLayer, item.net, pos);
+        else if (checkItemMask(other, item.net)) bridges.push({ a: item, b: other, c: null, layer: targetLayer, pos });
+      }
+    };
+    const zoneIdx = /* @__PURE__ */ new Map();
+    const testZones = (item, maskLayer, cuLayer) => {
+      for (const z of zones) {
+        if (!z.layers.has(cuLayer)) continue;
+        if (item.net !== null && z.net === item.net && z.net) continue;
+        const zb = z.bbox;
+        if (!touch(item.bbox, zb, mtc)) continue;
+        const zel = { id: z.id, uuid: z.id + ":" + cuLayer, kind: "zone", node: z.item.node, fp: null, layer: cuLayer, shapes: [z.shape], grow: 0, bbox: zb, net: z.net, copper: /* @__PURE__ */ new Set([cuLayer]), mask: /* @__PURE__ */ new Set() };
+        let idx = zoneIdx.get(z);
+        if (!idx) {
+          idx = polyIndex(z.shape.pts);
+          zoneIdx.set(z, idx);
+        }
+        const gap = idx(item, mtc + EPS2);
+        if (!collides(gap, mtc)) continue;
+        const pos = centre(item.bbox, zb);
+        if (isMaskAperture(item)) record(item, zel, maskLayer, z.net, pos, z.id);
+        else bridges.push({ a: item, b: zel, c: null, layer: cuLayer, pos });
+      }
+    };
+    const seenItems = /* @__PURE__ */ new Set();
+    for (const e of els) {
+      for (const [mask, cu] of [["F.Mask", "F.Cu"], ["B.Mask", "B.Cu"]]) {
+        const k = e.uuid + "|" + mask;
+        if (seenItems.has(k)) continue;
+        if (e.layer === mask && !e.npthNoCopper) {
+          seenItems.add(k);
+          test(e, mask, mask);
+          testZones(e, mask, cu);
+        } else if (e.layer === cu && !e.mask.has(mask)) {
+          seenItems.add(k);
+          test(e, cu, mask);
+        }
+      }
+    }
+    for (const [ap, items] of [...apertures.entries()].sort((x, y) => x[0].uuid < y[0].uuid ? -1 : 1)) {
+      items.sort((x, y) => {
+        const ux = x.item ? x.item.uuid : x.zone || "", uy = y.item ? y.item.uuid : y.zone || "";
+        return ux < uy ? -1 : ux > uy ? 1 : x.net < y.net ? -1 : 1;
+      });
+      const ref = items.find((x) => x.net);
+      if (!ref) continue;
+      const done = /* @__PURE__ */ new Set();
+      const maskLayer = ap.layer;
+      const excluded = (x, y) => {
+        if (!ap.fp || !y || y.fp !== ap.fp || !x) return false;
+        if (x.pad && y.pad) return sameLogicalPad(x, y) || sharesNetTie(x, y);
+        const g2 = netTieGroups(ap.fp);
+        if (x.pad && /^fp_/.test(y.kind)) return g2.has(x.pad.number);
+        if (y.pad && /^fp_/.test(x.kind)) return g2.has(y.pad.number);
+        return false;
+      };
+      for (const col of items) {
+        if (col.net === ref.net) continue;
+        if (excluded(ref.item, col.item)) continue;
+        let track = false;
+        for (const ent of items) {
+          if (ent.net === col.net) continue;
+          if (excluded(ent.item, col.item)) continue;
+          const isTrack = !!ent.item && (ent.item.kind === "segment" || ent.item.kind === "arc");
+          if (isTrack && track) continue;
+          const ka = ent.item ? ent.item.uuid : ent.zone, kb = col.item ? col.item.uuid : col.zone;
+          const key = ka < kb ? ka + "|" + kb : kb + "|" + ka;
+          if (done.has(key)) continue;
+          done.add(key);
+          bridges.push({ a: ap, b: ent.item, c: col.item, layer: maskLayer, pos: col.pos, zoneId: ent.item ? void 0 : ent.zone });
+          if (isTrack) track = true;
+        }
+      }
+    }
+    const front = "Front solder mask aperture bridges items with different nets", back = "Rear solder mask aperture bridges items with different nets";
+    const keys = /* @__PURE__ */ new Set();
+    for (const b of bridges) {
+      const ids = [b.a.id, b.b ? b.b.id : b.zoneId || "", b.c ? b.c.id : ""].filter(Boolean);
+      const key = [b.layer, b.a.uuid, b.b ? b.b.uuid : b.zoneId, b.c ? b.c.uuid : ""].join("|");
+      if (keys.has(key)) continue;
+      keys.add(key);
+      const m = marker("solder_mask_bridge", defaultSeverity2("solder_mask_bridge"), b.pos[0], b.pos[1], /^F\./.test(b.layer) ? front : back, Array.from(new Set(ids)));
+      m.message = true;
+      out.push(m);
+    }
+    return out;
+  }
+  function silkMaskMarkers(doc, s, rules) {
+    const ms = maskSetup(doc, s);
+    const pool = boardElements(doc, s, /* @__PURE__ */ new Set(["F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "F.Cu", "B.Cu"]), ms);
+    return [...silkToMaskMarkers(doc, s, rules, ms, pool), ...maskBridgeMarkers(doc, s, rules, ms, pool), ...silkClearanceMarkers(doc, s, rules, ms, pool), ...silkEdgeMarkers(doc, s, rules, ms, pool)];
+  }
+  var defaultSeverity3 = (code) => (DRC_ITEMS2.find((i) => i[1] === code) || ["", "", "error"])[2];
+  var CONN_CODES = ["none", "thermal", "solid", "tht_thermal"];
+  function zoneConnection(z) {
+    const cp2 = K4.kid(z, "connect_pads");
+    if (!cp2) return "thermal";
+    const mode = cp2.slice(1).find((x) => !Array.isArray(x));
+    const m = mode === void 0 ? "" : K4.str(mode);
+    return m === "yes" ? "solid" : m === "no" ? "none" : m === "thru_hole_only" ? "tht_thermal" : "thermal";
+  }
+  var localConn = (n) => {
+    const z = n && K4.kid(n, "zone_connect");
+    if (!z) return null;
+    const v = K4.num(z[1], -1);
+    return CONN_CODES[v] || null;
+  };
+  function padZoneConnection(pad, fp, zone) {
+    const c = localConn(pad.node) || localConn(fp.node) || zoneConnection(zone);
+    if (c === "tht_thermal") return pad.type === "thru_hole" || pad.type === "np_thru_hole" ? "thermal" : "solid";
+    return c;
+  }
+  function thermalGap(pad, fp, zone) {
+    for (const n of [pad.node, fp.node]) {
+      const g22 = K4.kid(n, "thermal_gap");
+      if (g22) return K4.num(g22[1], 0.5);
+    }
+    const f = K4.kid(zone, "fill");
+    const g2 = f && K4.kid(f, "thermal_gap");
+    return g2 ? K4.num(g2[1], 0.5) : 0.5;
+  }
+  function padOutline(p, grow) {
+    const s = padShape(p);
+    const N2 = 32;
+    const out = [];
+    if (s.t === "circle") {
+      for (let i = 0; i < N2; i++) {
+        const a = 2 * Math.PI * i / N2;
+        out.push([s.x + (s.r + grow) * Math.cos(a), s.y + (s.r + grow) * Math.sin(a)]);
+      }
+      return out;
+    }
+    if (s.t === "seg") {
+      const r = s.r + grow;
+      const a = Math.atan2(s.b[1] - s.a[1], s.b[0] - s.a[0]);
+      for (let i = 0; i <= N2 / 2; i++) {
+        const t = a + Math.PI / 2 + Math.PI * i / (N2 / 2);
+        out.push([s.a[0] + r * Math.cos(t), s.a[1] + r * Math.sin(t)]);
+      }
+      for (let i = 0; i <= N2 / 2; i++) {
+        const t = a - Math.PI / 2 + Math.PI * i / (N2 / 2);
+        out.push([s.b[0] + r * Math.cos(t), s.b[1] + r * Math.sin(t)]);
+      }
+      return out;
+    }
+    if (s.t === "rect") {
+      const rr = Math.max(0, s.rr + grow);
+      const hw = s.w / 2 - s.rr, hh = s.h / 2 - s.rr;
+      const R2 = rotator2(s.rot || 0);
+      const corners2 = [[hw, hh, 0], [-hw, hh, Math.PI / 2], [-hw, -hh, Math.PI], [hw, -hh, 3 * Math.PI / 2]];
+      for (const [cx, cy, a0] of corners2) for (let i = 0; i <= 8; i++) {
+        const t = a0 + Math.PI / 2 * i / 8;
+        const [dx, dy] = R2(cx + rr * Math.cos(t), cy + rr * Math.sin(t));
+        out.push([s.x + dx, s.y + dy]);
+      }
+      return out;
+    }
+    return out;
+  }
+  function crossings(P, Q, qb) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (let i = 0; i < P.length; i++) {
+      const a = P[i], b = P[(i + 1) % P.length];
+      if (Math.max(a[0], b[0]) < qb[0] || Math.min(a[0], b[0]) > qb[2] || Math.max(a[1], b[1]) < qb[1] || Math.min(a[1], b[1]) > qb[3]) continue;
+      for (let j = 0; j < Q.length; j++) {
+        const c = Q[j], d = Q[(j + 1) % Q.length];
+        const r = [b[0] - a[0], b[1] - a[1]], s = [d[0] - c[0], d[1] - c[1]];
+        const den = r[0] * s[1] - r[1] * s[0];
+        if (Math.abs(den) < 1e-15) continue;
+        const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den, u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
+        if (t < 0 || t >= 1 || u < 0 || u >= 1) continue;
+        const p = [a[0] + t * r[0], a[1] + t * r[1]];
+        const k = Math.round(p[0] * 1e6) + "," + Math.round(p[1] * 1e6);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(p);
+      }
+    }
+    return out;
+  }
+  var boxOf2 = (pts) => {
+    let b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of pts) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
+    return b;
+  };
+  var isTeardrop = (z) => {
+    const a = K4.kid(z, "attr");
+    return !!a && !!K4.kid(a, "teardrop");
+  };
+  var padOnLayer = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu" && (layer === "F.Cu" || layer === "B.Cu"));
+  function starvedThermalMarkers(doc, s, rules, conds) {
+    const out = [];
+    const sev3 = defaultSeverity3("starved_thermal");
+    const all2 = conds || conductors(doc);
+    const fills = /* @__PURE__ */ new Map();
+    for (const c of all2) if (c.kind === "zone") {
+      const l = [...c.layers][0];
+      let m = fills.get(c.id);
+      if (!m) fills.set(c.id, m = /* @__PURE__ */ new Map());
+      const a = m.get(l);
+      const pts = c.shape.pts;
+      if (a) a.push(pts);
+      else m.set(l, [pts]);
+    }
+    if (!fills.size) return out;
+    const fps = [...doc.items.values()].filter((it) => it.kind === "footprint");
+    const padsByFp = new Map(fps.map((fp) => [fp, padsOf(fp)]));
+    const netOfPad = (p) => p.net.name || (p.net.code > 0 && doc.nets ? String(doc.nets.get(p.net.code) || "") : "");
+    const defMin = typeof s.minResolvedSpokes === "number" ? s.minResolvedSpokes : 2;
+    for (const z of doc.items.values()) {
+      if (z.kind !== "zone" || K4.kid(z.node, "keepout") || isTeardrop(z.node)) continue;
+      const zf = fills.get(z.id);
+      if (!zf) continue;
+      const zNet = (all2.find((c) => c.id === z.id) || { net: "" }).net;
+      if (!zNet) continue;
+      for (const [layer, outlines] of zf) {
+        const obox = outlines.map(boxOf2);
+        const zb = [Math.min(...obox.map((b) => b[0])), Math.min(...obox.map((b) => b[1])), Math.max(...obox.map((b) => b[2])), Math.max(...obox.map((b) => b[3]))];
+        const single = /* @__PURE__ */ new Map();
+        const singleConn = (jj) => {
+          let v = single.get(jj);
+          if (v !== void 0) return v;
+          const poly = { t: "poly", pts: outlines[jj] };
+          const ids = /* @__PURE__ */ new Set();
+          for (const c of all2) {
+            if (c.kind === "zone" || c.net !== zNet || !c.layers.has(layer)) continue;
+            const b = c.bbox;
+            const ob = obox[jj];
+            if (b[0] > ob[2] || b[2] < ob[0] || b[1] > ob[3] || b[3] < ob[1]) continue;
+            if (coreDist(c.shape, poly) - shapeOffset(c.shape) <= 1e-6) ids.add(c.kind === "pad" ? c.id + ":" + c.index : c.id);
+            if (ids.size > 1) break;
+          }
+          v = ids.size <= 1;
+          single.set(jj, v);
+          return v;
+        };
+        for (const fp of fps) for (const p of padsByFp.get(fp)) {
+          const net = netOfPad(p);
+          if (!net || net !== zNet) continue;
+          if (!padOnLayer(p, layer)) continue;
+          const pb = shapeBBox(padShape(p));
+          if (pb[0] > zb[2] || pb[2] < zb[0] || pb[1] > zb[3] || pb[3] < zb[1]) continue;
+          if (padZoneConnection(p, fp, z.node) !== "thermal") continue;
+          const A = { kind: "pad", node: p.node, parent: fp, layer }, B = { kind: "zone", node: z.node, item: z, layer };
+          const hit2 = rules.length ? evalRuleConstraint(rules, "min_resolved_spokes", doc, s, A, B) : null;
+          if (hit2 && hit2.severity === "ignore") continue;
+          const minCount = hit2 && hit2.min != null ? hit2.min : defMin;
+          const name = hit2 ? hit2.name : "board setup constraints zone fill strategy";
+          if (!(minCount > 0)) continue;
+          const gh = rules.length ? evalRuleConstraint(rules, "thermal_relief_gap", doc, s, A, B) : null;
+          const midGap = (gh && gh.min != null ? gh.min : thermalGap(p, fp, z.node)) / 2;
+          const outline = padOutline(p, midGap);
+          if (outline.length < 3) continue;
+          const ob = boxOf2(outline);
+          let spokes = 0, ignored = 0;
+          let ignoredPos = null;
+          outlines.forEach((fo, jj) => {
+            const b = obox[jj];
+            if (b[0] > ob[2] || b[2] < ob[0] || b[1] > ob[3] || b[3] < ob[1]) return;
+            const x = crossings(fo, outline, ob);
+            if (x.length < 2) return;
+            if (singleConn(jj)) {
+              ignored += Math.floor(x.length / 2);
+              ignoredPos = [(x[0][0] + x[1][0]) / 2, (x[0][1] + x[1][1]) / 2];
+            } else spokes += Math.floor(x.length / 2);
+          });
+          if (spokes === 0 && ignored === 0) continue;
+          if (spokes < minCount) {
+            const inFill = (q) => outlines.some((fo) => pointInPoly3(fo, q[0], q[1]));
+            for (const c of all2) {
+              if (c.kind !== "segment" && c.kind !== "arc" || c.net !== zNet || !c.layers.has(layer)) continue;
+              const [a0, a1] = c.anchors;
+              if (pointInPoly3(outline, a0[0], a0[1])) {
+                if (inFill(a1)) spokes++;
+              } else if (pointInPoly3(outline, a1[0], a1[1])) {
+                if (inFill(a0)) spokes++;
+              }
+            }
+          }
+          if (spokes === 0) {
+            spokes += ignored;
+            ignored = 0;
+          }
+          if (spokes >= minCount) continue;
+          const pos = ignored && ignoredPos ? ignoredPos : [p.x, p.y];
+          const detail2 = ignored ? `(layer ${layer}; ${ignored} spokes connected to isolated island)` : `(layer ${layer}; ${name} min spoke count ${minCount}; actual ${spokes})`;
+          const m = marker("starved_thermal", sev3, pos[0], pos[1], `Thermal relief connection to zone incomplete ${detail2}`, [z.id, fp.id]);
+          m.layer = layer;
+          out.push(m);
+        }
+      }
+    }
+    return out;
+  }
+  function isolatedCopperMarkers(doc, conds) {
+    const out = [];
+    const sev3 = defaultSeverity3("isolated_copper");
+    const all2 = conds || conductors(doc);
+    if (!all2.some((c) => c.kind === "zone")) return out;
+    const roots = clusterRoots(all2);
+    const padded = /* @__PURE__ */ new Set();
+    all2.forEach((c, i) => {
+      if (c.kind === "pad" && c.net) padded.add(roots[i] + "\0" + c.net);
+    });
+    all2.forEach((c, i) => {
+      if (c.kind !== "zone" || !c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) return;
+      if (padded.has(roots[i] + "\0" + c.net)) return;
+      const layer = [...c.layers][0];
+      const poly = c.shape;
+      const m = marker("isolated_copper", sev3, poly.pts[0][0], poly.pts[0][1], "Isolated copper fill", [c.id]);
+      m.layer = layer;
+      out.push(m);
+    });
+    return out;
   }
   var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
   function designSettings(src) {
@@ -19689,17 +23874,17 @@ Link '${target2}' to this file?`)) return null;
       }
       const setup = tree && K4.kid(tree, "setup");
       if (setup) {
-        for (const [key, prop2] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) {
+        for (const [key, prop3] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) {
           const c = K4.kid(setup, key);
-          if (c) s[prop2] = K4.num(c[1], s[prop2]);
+          if (c) s[prop3] = K4.num(c[1], s[prop3]);
         }
       }
       for (const nc of tree ? K4.kids(tree, "net_class") : []) {
         const name = K4.str(nc[1]);
         const e = s.netclasses[name] = Object.assign({}, s.netclasses.Default);
-        for (const [key, prop2] of [["clearance", "clearance"], ["trace_width", "track_width"], ["via_dia", "via_diameter"], ["via_drill", "via_drill"]]) {
+        for (const [key, prop3] of [["clearance", "clearance"], ["trace_width", "track_width"], ["via_dia", "via_diameter"], ["via_drill", "via_drill"]]) {
           const c = K4.kid(nc, key);
-          if (c) e[prop2] = K4.num(c[1]);
+          if (c) e[prop3] = K4.num(c[1]);
         }
         for (const a of K4.kids(nc, "add_net")) s.netclassOf[K4.str(a[1])] = name;
       }
@@ -19712,19 +23897,23 @@ Link '${target2}' to this file?`)) return null;
     if (src.netclasses || src.clearance !== void 0) return Object.assign(s, src);
     src = src;
     const rules = src.board && src.board.design_settings && src.board.design_settings.rules;
-    const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities;
-    if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
+    const sev3 = src.board && src.board.design_settings && src.board.design_settings.rule_severities;
+    if (sev3) for (const [k, v] of Object.entries(sev3)) s.severities[k] = String(v);
     if (rules) {
       s.minClearance = rules.min_clearance || 0;
       s.minTrackWidth = rules.min_track_width || 0;
       s.minViaDiameter = rules.min_via_diameter || 0;
       s.minViaDrill = rules.min_through_hole_diameter || 0;
       s.minViaAnnular = rules.min_via_annular_width || 0;
+      s.minMicroViaDrill = rules.min_microvia_drill || 0;
       if (rules.min_hole_clearance !== void 0) s.holeClearance = rules.min_hole_clearance;
       if (rules.min_copper_edge_clearance !== void 0) s.edgeClearance = rules.min_copper_edge_clearance;
       if (rules.min_hole_to_hole !== void 0) s.minHoleToHole = rules.min_hole_to_hole;
       if (rules.min_text_height !== void 0) s.minTextHeight = rules.min_text_height;
       if (rules.min_text_thickness !== void 0) s.minTextThickness = rules.min_text_thickness;
+      if (rules.min_silk_clearance !== void 0) s.minSilkClearance = rules.min_silk_clearance;
+      if (rules.solder_mask_to_copper_clearance !== void 0) s.maskToCopperClearance = rules.solder_mask_to_copper_clearance;
+      if (rules.min_resolved_spokes !== void 0) s.minResolvedSpokes = rules.min_resolved_spokes;
     }
     const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults;
     if (dflt) layerDefaults(dflt);
@@ -19758,12 +23947,12 @@ Link '${target2}' to this file?`)) return null;
   var mm4 = (v) => v.toFixed(4) + " mm";
   function edgeShapes(doc) {
     const shapes = [], chains = [];
-    const take = (kind, node, tf, layer) => {
+    const take = (kind, node, tf2, layer) => {
       if (layer !== "Edge.Cuts") return;
       const w = K4.kid(node, "stroke") ? K4.num((K4.kid(K4.kid(node, "stroke"), "width") || [0, 0])[1]) : widthOf2(node, 0);
       const P = (key) => {
-        const p = pt3(node, key);
-        return p ? tf(p[0], p[1]) : null;
+        const p = pt4(node, key);
+        return p ? tf2(p[0], p[1]) : null;
       };
       if (kind === "line") {
         const a = P("start"), b = P("end");
@@ -19774,7 +23963,7 @@ Link '${target2}' to this file?`)) return null;
       } else if (kind === "rect") {
         const a = P("start"), b = P("end");
         if (a && b) {
-          const c = tf(pt3(node, "start")[0], pt3(node, "end")[1]), d = tf(pt3(node, "end")[0], pt3(node, "start")[1]);
+          const c = tf2(pt4(node, "start")[0], pt4(node, "end")[1]), d = tf2(pt4(node, "end")[0], pt4(node, "start")[1]);
           const pts = [a, d, b, c];
           shapes.push({ t: "path", pts: pts.concat([a]), r: w / 2 });
           chains.push(pts.concat([a]));
@@ -19798,13 +23987,13 @@ Link '${target2}' to this file?`)) return null;
           chains.push(pts);
         }
       } else if (kind === "poly") {
-        const pts = K4.ptsOf(node).map(([x, y]) => tf(x, y));
+        const pts = K4.ptsOf(node).map(([x, y]) => tf2(x, y));
         if (pts.length > 2) {
           shapes.push({ t: "path", pts: pts.concat([pts[0]]), r: w / 2 });
           chains.push(pts.concat([pts[0]]));
         }
       } else if (kind === "curve") {
-        const pts = K4.bezierPts(K4.ptsOf(node).map(([x, y]) => tf(x, y)));
+        const pts = K4.bezierPts(K4.ptsOf(node).map(([x, y]) => tf2(x, y)));
         if (pts.length > 1) {
           shapes.push({ t: "path", pts, r: w / 2 });
           chains.push(pts);
@@ -19812,20 +24001,23 @@ Link '${target2}' to this file?`)) return null;
       }
     };
     const id = (x, y) => [x, y];
+    const ids = [];
     for (const it of doc.items.values()) {
       const n = it.node;
+      const before = shapes.length;
       if (/^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) take(it.kind.slice(3), n, id, layerOf2(n, "Dwgs.User"));
       else if (it.kind === "footprint") {
         const [fx, fy, frot] = K4.atOf(n);
         const R2 = rotator2(frot);
-        const tf = (x, y) => {
+        const tf2 = (x, y) => {
           const [dx, dy] = R2(x, y);
           return [fx + dx, fy + dy];
         };
-        for (const g2 of n) if (isList5(g2) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g2[0])) take(g2[0].slice(3), g2, tf, layerOf2(g2, "F.SilkS"));
+        for (const g2 of n) if (isList5(g2) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g2[0])) take(g2[0].slice(3), g2, tf2, layerOf2(g2, "F.SilkS"));
       }
+      for (let i = before; i < shapes.length; i++) ids.push(it.id);
     }
-    return { shapes, chains };
+    return { shapes, chains, ids };
   }
   function chainLoops(chains, tol) {
     tol = tol || 0.01;
@@ -19889,7 +24081,7 @@ Link '${target2}' to this file?`)) return null;
     const n = fp.node;
     const [fx, fy, frot] = K4.atOf(n);
     const R2 = rotator2(frot);
-    const tf = (x, y) => {
+    const tf2 = (x, y) => {
       const [dx, dy] = R2(x, y);
       return [fx + dx, fy + dy];
     };
@@ -19900,16 +24092,16 @@ Link '${target2}' to this file?`)) return null;
       if (!out[layer]) continue;
       const kind = g2[0].slice(3);
       const P = (key) => {
-        const p = pt3(g2, key);
-        return p ? tf(p[0], p[1]) : null;
+        const p = pt4(g2, key);
+        return p ? tf2(p[0], p[1]) : null;
       };
       if (kind === "line") {
         const a = P("start"), b = P("end");
         if (a && b) out[layer].push([a, b]);
       } else if (kind === "rect") {
-        const s = pt3(g2, "start"), e = pt3(g2, "end");
+        const s = pt4(g2, "start"), e = pt4(g2, "end");
         if (s && e) {
-          const pts = [tf(s[0], s[1]), tf(e[0], s[1]), tf(e[0], e[1]), tf(s[0], e[1])];
+          const pts = [tf2(s[0], s[1]), tf2(e[0], s[1]), tf2(e[0], e[1]), tf2(s[0], e[1])];
           out[layer].push(pts.concat([pts[0]]));
         }
       } else if (kind === "circle") {
@@ -19927,13 +24119,21 @@ Link '${target2}' to this file?`)) return null;
           out[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
         }
       } else if (kind === "poly") {
-        const pts = K4.ptsOf(g2).map(([x, y]) => tf(x, y));
+        const pts = K4.ptsOf(g2).map(([x, y]) => tf2(x, y));
         if (pts.length > 2) out[layer].push(pts.concat([pts[0]]));
       }
     }
     const res = {};
     for (const layer of Object.keys(out)) res[layer] = out[layer].length ? chainLoops(out[layer]).loops : [];
     return res;
+  }
+  function segCross(p1, p2, p3, p4) {
+    const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]];
+    const den = d1[0] * d2[1] - d1[1] * d2[0];
+    if (Math.abs(den) < 1e-12) return null;
+    const t = ((p3[0] - p1[0]) * d2[1] - (p3[1] - p1[1]) * d2[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
+    if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+    return [p1[0] + t * d1[0], p1[1] + t * d1[1]];
   }
   var marker = (code, severity, x, y, text2, ids) => ({ code, severity, x: r62(x), y: r62(y), text: text2, ids });
   var boxCenter = (a, b) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, (Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2];
@@ -19948,7 +24148,7 @@ Link '${target2}' to this file?`)) return null;
     const clrRules = rules.filter((r) => r.constraints.some((k) => k.type === "clearance" && k.min != null));
     const ruleMax = Math.max(0, ...clrRules.map((r) => r.constraints.find((k) => k.type === "clearance").min || 0));
     const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance, ruleMax);
-    const ruleItem = (c, layer) => ({ kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer });
+    const ruleItem2 = (c, layer) => c.kind === "pad" ? { kind: c.kind, node: c.pad.node, parent: c.item, layer, shape: c.shape } : { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape };
     const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
     for (let i = 0; i < order.length; i++) {
       const a = order[i];
@@ -19960,7 +24160,7 @@ Link '${target2}' to this file?`)) return null;
         let need = Math.max(clr(a), clr(b), s.minClearance || 0), by = "";
         if (clrRules.length && boxesTouch(a.bbox, b.bbox, maxClr)) {
           const layer = [...a.layers].find((l) => b.layers.has(l)) || "";
-          const hit2 = ruleClearance(clrRules, doc, s, ruleItem(a, layer), ruleItem(b, layer));
+          const hit2 = ruleClearance(clrRules, doc, s, ruleItem2(a, layer), ruleItem2(b, layer));
           if (hit2) {
             need = hit2.min > 0 ? Math.max(hit2.min, s.minClearance || 0) : 0;
             by = hit2.name;
@@ -19969,21 +24169,44 @@ Link '${target2}' to this file?`)) return null;
         if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
         const gap = shapeGap(a.shape, b.shape);
         if (gap >= need - DRC_EPS) continue;
+        if (a.kind === "segment" && b.kind === "segment") {
+          const sa = a.shape, sb = b.shape;
+          const X = segCross(sa.a, sa.b, sb.a, sb.b);
+          if (X) {
+            out.push(marker("tracks_crossing", "error", X[0], X[1], "Tracks crossing", [a.id, b.id]));
+            continue;
+          }
+        }
         const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);
         const [x, y] = boxCenter(a.bbox, b.bbox);
         out.push(marker("clearance", "error", x, y, `Clearance violation (${by || `netclass '${cls}'`} clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
       }
     }
     const edges = edgeShapes(doc);
-    if (edges.shapes.length && s.edgeClearance > 0) {
+    const edgeRules = rules.some((r) => r.constraints.some((k) => k.type === "edge_clearance"));
+    if (edges.shapes.length && (s.edgeClearance > 0 || edgeRules)) {
       const eb = edges.shapes.map((e) => shapeBBox(e));
-      for (const c of conds) for (let i = 0; i < edges.shapes.length; i++) {
-        if (!boxesTouch(c.bbox, eb[i], s.edgeClearance)) continue;
-        const gap = shapeGap(c.shape, edges.shapes[i]);
-        if (gap >= s.edgeClearance - DRC_EPS) continue;
-        const [x, y] = boxCenter(c.bbox, eb[i]);
-        out.push(marker("copper_edge_clearance", "error", x, y, `Board edge clearance violation (board setup constraints edge clearance ${mm4(s.edgeClearance)}; actual ${mm4(gap)})`, [c.id]));
-        break;
+      const edgeItem = { kind: "gr_line", node: ["gr_line", ["layer", "Edge.Cuts"]], layer: "Edge.Cuts" };
+      const edgeMax = Math.max(s.edgeClearance, ...rules.flatMap((r) => r.constraints.filter((k) => k.type === "edge_clearance").map((k) => k.min || 0)));
+      for (const c of conds) {
+        let need = s.edgeClearance, name = "board setup constraints edge";
+        if (edgeRules) {
+          const layer = c.layers.values().next().value || "";
+          const h = evalRuleConstraint(rules, "edge_clearance", doc, s, ruleItem2(c, layer), edgeItem) || evalRuleConstraint(rules, "edge_clearance", doc, s, edgeItem, ruleItem2(c, layer));
+          if (h) {
+            need = h.severity === "ignore" ? 0 : h.min || 0;
+            name = h.name;
+          }
+        }
+        if (!(need > 0)) continue;
+        for (let i = 0; i < edges.shapes.length; i++) {
+          if (!boxesTouch(c.bbox, eb[i], Math.max(need, edgeMax))) continue;
+          const gap = shapeGap(c.shape, edges.shapes[i]);
+          if (gap >= need - DRC_EPS) continue;
+          const [x, y] = boxCenter(c.bbox, eb[i]);
+          out.push(marker("copper_edge_clearance", "error", x, y, `Board edge clearance violation (${name} clearance ${mm4(need)}; actual ${mm4(gap)})`, [c.id]));
+          break;
+        }
       }
     }
     if (opts.unconnected !== false) for (const l of ratsnest(doc, nl)) out.push(marker("unconnected_items", "error", l.a[0], l.a[1], `Missing connection between items (net '${l.name}')`, l.ids.slice()));
@@ -19996,22 +24219,18 @@ Link '${target2}' to this file?`)) return null;
       if (c.kind === "segment" || c.kind === "arc") {
         const [a, b] = c.anchors;
         const layer = c.layers.values().next().value;
-        if (c.length < EPS) {
-          out.push(marker("zero_length", "warning", a[0], a[1], "Zero-length track", [c.id]));
-          continue;
-        }
+        if (c.length < EPS) continue;
         const loose = [a, b].find((p) => !touches(p, layer, c));
         if (loose) out.push(marker("track_dangling", "warning", loose[0], loose[1], "Track has unconnected end", [c.id]));
-        if (s.minTrackWidth > 0 && c.width < s.minTrackWidth - 1e-6) out.push(marker("track_width", "error", (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (board setup constraints min width ${mm4(s.minTrackWidth)}; actual ${mm4(c.width)})`, [c.id]));
       } else if (c.kind === "via") {
         const [a] = c.anchors;
-        if (c.drill >= c.size - 1e-6) out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
-        else {
-          if (s.minViaDiameter > 0 && c.size < s.minViaDiameter - 1e-6) out.push(marker("via_diameter", "error", a[0], a[1], `Via diameter (board setup constraints min diameter ${mm4(s.minViaDiameter)}; actual ${mm4(c.size)})`, [c.id]));
-          if (s.minViaDrill > 0 && c.drill < s.minViaDrill - 1e-6) out.push(marker("drill_out_of_range", "error", a[0], a[1], `Hole size out of range (board setup constraints min ${mm4(s.minViaDrill)}; actual ${mm4(c.drill)})`, [c.id]));
-        }
         if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
       }
+    }
+    out.push(...sizeMarkers(doc, s, rules, conds), ...trackAngleMarkers(doc, s, rules, conds));
+    if (rules.length) {
+      const items = ruleItems(doc);
+      out.push(...disallowMarkers(doc, s, rules, items), ...assertionMarkers(doc, s, rules, items));
     }
     const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
     const cy = fps.map((fp) => courtyards(fp));
@@ -20033,19 +24252,21 @@ Link '${target2}' to this file?`)) return null;
       out.push(marker("invalid_outline", "error", p[0], p[1], "Board has malformed outline (Edge.Cuts does not close)", []));
     } else if (ol.outline && opts.outline !== false) {
       const seen = /* @__PURE__ */ new Set();
+      const board = { t: "poly", pts: ol.outline };
       for (const c of nl.conductors) {
         if (seen.has(c.id) || c.kind === "zone") continue;
+        if (boxesTouch(c.bbox, shapeBBox(board), 0) && shapeGap(c.shape, board) <= EPS) continue;
+        seen.add(c.id);
         const p = c.kind === "pad" ? [c.pad.x, c.pad.y] : c.anchors[0];
-        if (p && !pointInPoly3(ol.outline, p[0], p[1])) {
-          seen.add(c.id);
-          out.push(marker("outside_outline", "warning", p[0], p[1], `Item outside board outline (${c.kind === "pad" ? c.item.ref || "footprint" : c.kind})`, [c.id]));
-        }
+        out.push(marker("copper_outside_board", "warning", p[0], p[1], "Copper outside board outline", [c.id]));
       }
     }
     out.push(...moreDrcMarkers(doc, s, rules));
+    out.push(...silkMaskMarkers(doc, s, rules));
+    out.push(...starvedThermalMarkers(doc, s, rules, nl.conductors), ...isolatedCopperMarkers(doc, nl.conductors));
     return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => {
-      const sev = s.severities[m.code];
-      if (sev === "warning" || sev === "error") m.severity = sev;
+      const sev3 = s.severities[m.code];
+      if (sev3 === "warning" || sev3 === "error") m.severity = sev3;
       return m;
     });
   }
@@ -20081,10 +24302,10 @@ Link '${target2}' to this file?`)) return null;
       const it = doc.items.get(rid);
       if (!it) continue;
       if (it.kind === "segment") {
-        const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b = pt4(it.node, "end");
         if (a && b) len += Math.hypot(b[0] - a[0], b[1] - a[1]);
       } else if (it.kind === "arc") {
-        const a = pt3(it.node, "start"), m = pt3(it.node, "mid"), b = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), m = pt4(it.node, "mid"), b = pt4(it.node, "end");
         const arc = a && m && b && K4.arcFrom3(a, m, b);
         len += arc ? arcLength(arc) : a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
       }
@@ -20103,15 +24324,15 @@ Link '${target2}' to this file?`)) return null;
       if (!p) return "";
       const ref = it.ref || "";
       if (p.type === "np_thru_hole") return `NPTH pad of ${ref}`;
-      const num22 = p.number ? p.number + " " : "";
-      if (p.type === "smd" || p.type === "connect") return `Pad ${num22}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
-      return `PTH pad ${num22}${netnameMsg(p.net)} of ${ref}`;
+      const num7 = p.number ? p.number + " " : "";
+      if (p.type === "smd" || p.type === "connect") return `Pad ${num7}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
+      return `PTH pad ${num7}${netnameMsg(p.net)} of ${ref}`;
     }
     if (it.kind === "segment" || it.kind === "arc") {
-      const a = pt3(n, "start"), b = pt3(n, "end");
+      const a = pt4(n, "start"), b = pt4(n, "end");
       let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
       if (it.kind === "arc") {
-        const m2 = pt3(n, "mid");
+        const m2 = pt4(n, "mid");
         const arc = a && m2 && b && K4.arcFrom3(a, m2, b);
         if (arc) len = arcLength(arc);
       }
@@ -20127,8 +24348,8 @@ Link '${target2}' to this file?`)) return null;
     if (it.kind === "zone") {
       const names = zoneLayers(n).map(L);
       const keep = K4.kid(n, "keepout");
-      const nm2 = K4.kid(n, "name");
-      const zn = nm2 ? K4.str(nm2[1]) : "";
+      const nm22 = K4.kid(n, "name");
+      const zn = nm22 ? K4.str(nm22[1]) : "";
       const ld = names.length === 1 ? `on ${names[0]}` : names.length === 2 ? `on ${names[0]} and ${names[1]}` : names.length === 3 ? `on ${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `on ${names[0]}, ${names[1]} and ${names.length - 2} more` : "";
       if (keep) return zn ? `Rule area '${zn}' ${ld}` : `Rule Area ${ld}`;
       const pr = K4.kid(n, "priority");
@@ -20215,7 +24436,7 @@ Link '${target2}' to this file?`)) return null;
     } else if (rule.text) add(`${timeDomain ? "Delay" : "Length"} Constraints: ${rule.text}`, `(from ${rule.name})`);
   }
   var PAD_ATTR = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
-  var PAD_SHAPE = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
+  var PAD_SHAPE2 = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
   function msgPanelInfo(doc, ids, opts) {
     opts = opts || {};
     const units = opts.units || "mm", s = opts.settings || designSettings(null), out = [];
@@ -20256,10 +24477,18 @@ Link '${target2}' to this file?`)) return null;
       return out;
     }
     if (list.length === 1) {
-      const id = String(list[0]), hash = id.indexOf("#");
-      const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
-      if (it && hash > 0 && it.kind === "footprint") {
-        const p = padsOf(it)[+id.slice(hash + 1)];
+      const id = String(list[0]);
+      let hash = id.indexOf("#");
+      let it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
+      if (it && it.kind === "pad" && doc.fpEditor) {
+        const fs2 = doc.fpState;
+        const fp = fs2 && fs2.fp;
+        const refProp2 = Array.from(doc.items.values()).find((x) => x.kind === "property" && K4.str(x.node[1]) === "Reference");
+        it = { id: it.id, kind: "footprint", ref: refProp2 ? K4.str(refProp2.node[2]) : "", node: ["footprint", fp ? fp[1] : "", ["at", 0, 0], ...fp ? fp.filter((k) => Array.isArray(k) && k[0] === "locked") : [], it.node] };
+        hash = 0;
+      }
+      if (it && hash >= 0 && it.kind === "footprint") {
+        const p = padsOf(it)[hash > 0 ? +id.slice(hash + 1) : 0];
         if (p) {
           add("Footprint", it.ref || "");
           add("Pad", p.number);
@@ -20270,9 +24499,9 @@ Link '${target2}' to this file?`)) return null;
           add("Resolved Netclass", NN(p.net.name));
           if (isLocked2(it.node) || isLocked2(p.node)) add("Status", "Locked");
           if (p.type === "smd" || p.type === "connect") add("Layer", padLayerDescribe(doc, p));
-          const prop2 = K4.kid(p.node, "property");
+          const prop3 = K4.kid(p.node, "property");
           const PROP = { pad_prop_bga: "BGA", pad_prop_fiducial_glob: "Fiducial global", pad_prop_fiducial_loc: "Fiducial local", pad_prop_testpoint: "Test point", pad_prop_heatsink: "Heat sink", pad_prop_castellated: "Castellated", pad_prop_mechanical: "Mechanical", pad_prop_pressfit: "Press-fit" };
-          add(PAD_SHAPE[p.shape] || "???", (PAD_ATTR[p.type] || "???") + (prop2 && PROP[K4.str(prop2[1])] ? "," + PROP[K4.str(prop2[1])] : ""));
+          add(PAD_SHAPE2[p.shape] || "???", (PAD_ATTR[p.type] || "???") + (prop3 && PROP[K4.str(prop3[1])] ? "," + PROP[K4.str(prop3[1])] : ""));
           if (p.shape === "circle" || p.shape === "oval" && Math.abs(p.w - p.h) < 1e-9) add("Diameter", V(p.w));
           else {
             add("Width", V(p.w));
@@ -20303,10 +24532,10 @@ Link '${target2}' to this file?`)) return null;
         if (isLocked2(n)) add("Status", "Locked");
         add("Layer", boardLayerName(doc, layer));
         add("Width", V(w));
-        const a = pt3(n, "start"), b = pt3(n, "end");
+        const a = pt4(n, "start"), b = pt4(n, "end");
         let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
         if (it.kind === "arc") {
-          const m = pt3(n, "mid");
+          const m = pt4(n, "mid");
           const arc = a && m && b && K4.arcFrom3(a, m, b);
           if (arc) {
             len = arcLength(arc);
@@ -20385,21 +24614,21 @@ Link '${target2}' to this file?`)) return null;
         if (isLocked2(n)) add("Status", "Locked");
         const names = zl.map((l) => boardLayerName(doc, l));
         add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
-        const nm2 = K4.kid(n, "name");
-        if (nm2 && K4.str(nm2[1])) add("Name", K4.str(nm2[1]));
+        const nm22 = K4.kid(n, "name");
+        if (nm22 && K4.str(nm22[1])) add("Name", K4.str(nm22[1]));
         if (!keep) {
           const fill = K4.kid(n, "fill");
           const fm = fill && K4.kid(fill, "mode") ? K4.str(K4.kid(fill, "mode")[1]) : "";
           add("Fill Mode", fm === "hatch" ? "Hatched" : fm ? "Unknown" : "Solid");
-          let area = 0;
+          let area2 = 0;
           for (const fp of K4.kids(n, "filled_polygon")) {
             const q = K4.ptsOf(fp);
             for (let i = 0; i < q.length; i++) {
               const a = q[i], b = q[(i + 1) % q.length];
-              area += a[0] * b[1] - b[0] * a[1];
+              area2 += a[0] * b[1] - b[0] * a[1];
             }
           }
-          add("Filled Area", msgArea(Math.abs(area) / 2, units));
+          add("Filled Area", msgArea(Math.abs(area2) / 2, units));
           const cp2 = K4.kid(n, "connect_pads");
           const cc = cp2 && K4.kid(cp2, "clearance");
           const c = msgClearance(s, net);
@@ -20415,10 +24644,10 @@ Link '${target2}' to this file?`)) return null;
         add("Type", "Drawing");
         if (isLocked2(n)) add("Status", "Locked");
         add("Shape", SHAPE[kind]);
-        const a = pt3(n, "start"), b = pt3(n, "end"), c = pt3(n, "center");
+        const a = pt4(n, "start"), b = pt4(n, "end"), c = pt4(n, "center");
         if (kind === "circle" && c && b) add("Radius", V(Math.hypot(b[0] - c[0], b[1] - c[1])));
         else if (kind === "arc") {
-          const m = pt3(n, "mid");
+          const m = pt4(n, "mid");
           const arc = a && m && b && K4.arcFrom3(a, m, b);
           if (arc) {
             const L = arcLength(arc);
@@ -20448,15 +24677,15 @@ Link '${target2}' to this file?`)) return null;
     if (opts.net && !list.length) {
       const NT = netTable(doc), name = opts.net;
       let code = 0;
-      for (const [c, nm2] of NT.byCode) if (nm2 === name) {
+      for (const [c, nm22] of NT.byCode) if (nm22 === name) {
         code = c;
         break;
       }
       if (!code) {
         let i = 0;
-        for (const nm2 of NT.byName.keys()) {
+        for (const nm22 of NT.byName.keys()) {
           i++;
-          if (nm2 === name) {
+          if (nm22 === name) {
             code = i;
             break;
           }
@@ -20483,6 +24712,7 @@ Link '${target2}' to this file?`)) return null;
       }
       return out;
     }
+    if (doc.fpEditor) return out;
     let pads = 0, vias = 0, segs = 0;
     const nets = /* @__PURE__ */ new Set();
     for (const it of doc.items.values()) {
@@ -20542,6 +24772,97 @@ Link '${target2}' to this file?`)) return null;
     const need = Math.max(netClearance(s, A[0].net), netClearance(s, B[0].net));
     return { gap: gap === Infinity ? null : r62(gap), required: need, sameNet: !!(A[0].net && A[0].net === B[0].net), nets: [A[0].net, B[0].net] };
   }
+  var CLR_TYPES = /* @__PURE__ */ new Set(["clearance", "hole_clearance", "edge_clearance", "physical_clearance", "physical_hole_clearance", "hole_to_hole"]);
+  function routerRules() {
+    const d = S.dru;
+    if (!d || !d.rules.length) return null;
+    if (S.routerRulesFor !== d) {
+      S.routerRulesFor = d;
+      S.routerRulesList = d.rules.filter((r) => !r.error && r.constraints.some((c) => CLR_TYPES.has(c.type)));
+    }
+    return S.routerRulesList && S.routerRulesList.length ? S.routerRulesList : null;
+  }
+  function routedRuleItem(A) {
+    const net = ["net", A.net || ""];
+    if (A.kind === "via") return { kind: "via", node: ["via", ["at", 0, 0], ["size", A.size || 0.6], ["drill", A.drill || 0.3], ["layers", "F.Cu", "B.Cu"], net], layer: A.layer };
+    return { kind: A.kind || "segment", node: [A.kind || "segment", ["start", 0, 0], ["end", 0, 0], ["width", A.width || 0.25], ["layer", A.layer || "F.Cu"], net], layer: A.layer };
+  }
+  function obstacleRuleItem(ob, layer) {
+    if (ob.rule) return Object.assign({}, ob.rule, { layer });
+    if (ob.kind === "edge") return { kind: "gr_line", node: ["gr_line", ["layer", "Edge.Cuts"]], layer };
+    const kind = ob.kind === "track" || ob.kind === "line" ? "segment" : ob.kind;
+    return { kind, node: [kind, ["layer", layer || "F.Cu"], ["net", ob.net || ""]], layer };
+  }
+  var cache3 = /* @__PURE__ */ new Map();
+  var cacheVer = null;
+  var cacheDru = null;
+  function customRouteClearance(doc, s, A, ob, layer) {
+    const rules = routerRules();
+    if (!rules || !doc) return null;
+    if (cacheVer !== S.docVer || cacheDru !== S.dru) {
+      cache3.clear();
+      cacheVer = S.docVer;
+      cacheDru = S.dru;
+    }
+    const key = (A.kind || "segment") + "|" + A.net + "|" + (layer || "") + "|" + (A.width || "") + "|" + ob.kind + "|" + (ob.id || "") + "|" + ob.net;
+    if (cache3.has(key)) return cache3.get(key);
+    const a = routedRuleItem(Object.assign({}, A, { layer })), b = obstacleRuleItem(ob, layer);
+    const q = (type) => {
+      const h = evalRuleConstraint(rules, type, doc, s, a, b) || evalRuleConstraint(rules, type, doc, s, b, a);
+      return h ? h.severity === "ignore" ? 0 : h.min : null;
+    };
+    let rv = null;
+    const take = (v) => {
+      if (v != null) rv = Math.max(rv ?? 0, v);
+    };
+    const sameNet2 = !!A.net && A.net === ob.net;
+    if (ob.kind === "hole") {
+      if (!sameNet2) take(q("hole_clearance"));
+      take(q("physical_hole_clearance"));
+    } else if (ob.kind === "edge") take(q("edge_clearance"));
+    else if (ob.kind !== "keepout" && !sameNet2) {
+      const c = q("clearance");
+      if (c != null) take(c > 0 ? Math.max(c, s.minClearance || 0) : 0);
+    }
+    take(q("physical_clearance"));
+    cache3.set(key, rv);
+    return rv;
+  }
+  function rulePairClearance(doc, s, netA, netB, layer, kindB) {
+    const base = Math.max(netClearance(s, netA), netClearance(s, netB), s.minClearance || 0);
+    const c = customRouteClearance(doc, s, { net: netA, layer }, { kind: kindB === "via" ? "via" : "segment", net: netB }, layer);
+    return c == null ? base : c;
+  }
+  var pinnedOpt = (h) => {
+    if (h.opt == null) return h.min;
+    let v = h.opt;
+    if (h.min != null) v = Math.max(v, h.min);
+    if (h.max != null) v = Math.min(v, h.max);
+    return v;
+  };
+  function ruleSizes(doc, s, net, layer, coupled) {
+    const d = S.dru;
+    const out = { width: null, viaDiameter: null, viaDrill: null, dpGap: null, dpWidth: null, widthRule: null, gapRule: null };
+    if (!d || !d.rules.length || !doc) return out;
+    const tr = routedRuleItem({ net, layer }), via = routedRuleItem({ kind: "via", net, layer }), co = coupled ? routedRuleItem({ net: coupled, layer }) : null;
+    const w = evalRuleConstraint(d.rules, "track_width", doc, s, tr, null);
+    if (w) out.width = pinnedOpt(w);
+    const vd = evalRuleConstraint(d.rules, "via_diameter", doc, s, via, null);
+    if (vd) out.viaDiameter = pinnedOpt(vd);
+    const vh = evalRuleConstraint(d.rules, "hole_size", doc, s, via, null);
+    if (vh) out.viaDrill = pinnedOpt(vh);
+    const pw = evalRuleConstraint(d.rules, "track_width", doc, s, tr, co);
+    if (pw && pw.opt != null) {
+      out.dpWidth = pw.opt;
+      out.widthRule = pw.name;
+    }
+    const g2 = evalRuleConstraint(d.rules, "diff_pair_gap", doc, s, tr, co);
+    if (g2) {
+      out.dpGap = pinnedOpt(g2);
+      out.gapRule = g2.name;
+    }
+    return out;
+  }
   var ROUTE_EPS = 1e-4;
   var HULL_EPS = 2e-3;
   var DIRS8 = [[1, 0], [Math.SQRT1_2, Math.SQRT1_2], [0, 1], [-Math.SQRT1_2, Math.SQRT1_2], [-1, 0], [-Math.SQRT1_2, -Math.SQRT1_2], [0, -1], [Math.SQRT1_2, -Math.SQRT1_2]];
@@ -20600,13 +24921,21 @@ Link '${target2}' to this file?`)) return null;
     }
     return W6;
   }
-  function routeClearance(s, netKey, ob) {
+  function routeClearance(s, netKey, ob, layer, doc, A) {
+    const custom = doc ? customRouteClearance(doc, s, Object.assign({ net: netKey, layer: layer || null }, A || {}), { kind: ob.kind, net: ob.net, id: ob.id, rule: ob.src ? srcRuleItem(ob.src) : null }, layer || null) : null;
+    if (custom != null) return custom;
     const minC = s.minClearance || 0;
     const mine = Math.max(netClearance(s, netKey), minC);
     if (ob.kind === "edge") return s.edgeClearance || 0;
     if (ob.kind === "hole") return Math.max(s.holeClearance !== void 0 ? s.holeClearance : 0.25, mine);
     if (ob.kind === "keepout") return 0;
     return Math.max(mine, netClearance(s, ob.net), minC);
+  }
+  function srcRuleItem(src) {
+    const c = src;
+    if (c.pad) return { kind: "pad", node: c.pad.node, parent: c.item || null, shape: c.shape };
+    if (c.item) return { kind: c.kind, node: c.item.node, item: c.item, shape: c.shape };
+    return null;
   }
   function isFreePad(p) {
     const t = p && p.node && K4.kid(p.node, "pintype");
@@ -20618,7 +24947,7 @@ Link '${target2}' to this file?`)) return null;
     const out = [];
     const take = (o, net) => {
       const ob = { id: o.id, kind: o.kind, net: net || "", shape: o.shape, bbox: o.bbox, src: o };
-      ob.clr = routeClearance(s, netKey, ob);
+      ob.clr = routeClearance(s, netKey, ob, layer, doc);
       out.push(ob);
     };
     for (const c of W6.conds) {
@@ -21022,11 +25351,11 @@ Link '${target2}' to this file?`)) return null;
     if (!pair) return null;
     const NT = netTable(doc);
     const kP = NT.key(pair.P), other = kP === line2.netKey ? pair.N : pair.P, otherKey = NT.key(other);
-    const a = pt3(item.node, "start"), b = pt3(item.node, "end"), mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const a = pt4(item.node, "start"), b = pt4(item.node, "end"), mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
     let best = null, bd = Infinity;
     for (const it of doc.items.values()) {
       if (it.kind !== "segment" || layerOf2(it.node) !== line2.layer || NT.key(netOf2(it.node)) !== otherKey) continue;
-      const c2 = pt3(it.node, "start"), d = pt3(it.node, "end");
+      const c2 = pt4(it.node, "start"), d = pt4(it.node, "end");
       if (!c2 || !d) continue;
       const dd = distSeg3(mid[0], mid[1], c2[0], c2[1], d[0], d[1]);
       if (dd < bd) {
@@ -21037,7 +25366,7 @@ Link '${target2}' to this file?`)) return null;
     if (!best) return null;
     const ln = assembleLine(doc, best);
     if (!ln) return null;
-    const c = pt3(best.node, "start"), dir = [b[0] - a[0], b[1] - a[1]], n = Math.hypot(dir[0], dir[1]) || 1;
+    const c = pt4(best.node, "start"), dir = [b[0] - a[0], b[1] - a[1]], n = Math.hypot(dir[0], dir[1]) || 1;
     const gap = Math.abs(dir[0] * (c[1] - a[1]) - dir[1] * (c[0] - a[0])) / n - line2.width;
     return { line: ln, net: other, netKey: otherKey, mineIsP: kP === line2.netKey, gap: r62(gap), item: best };
   }
@@ -21049,7 +25378,7 @@ Link '${target2}' to this file?`)) return null;
     let best = null, bd = Infinity;
     for (const it of doc.items.values()) {
       if (it.kind !== "segment" && it.kind !== "arc" || NT.key(netOf2(it.node)) !== other) continue;
-      const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+      const a = pt4(it.node, "start"), b = pt4(it.node, "end");
       if (!a || !b) continue;
       const d = distSeg3(near[0], near[1], a[0], a[1], b[0], b[1]);
       if (d < bd) {
@@ -21071,21 +25400,21 @@ Link '${target2}' to this file?`)) return null;
     const hits = [];
     for (const it of doc.items.values()) {
       if (it.kind !== "segment" && it.kind !== "arc") continue;
-      const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+      const a = pt4(it.node, "start"), b = pt4(it.node, "end");
       if (!a || !b) continue;
       const w = widthOf2(it.node, 0.25);
-      let d, centre;
+      let d, centre2;
       if (it.kind === "arc") {
-        const m = pt3(it.node, "mid");
+        const m = pt4(it.node, "mid");
         const c = m && K4.arcFrom3(a, m, b);
-        centre = m || a;
+        centre2 = m || a;
         d = c ? Math.abs(Math.hypot(mm[0] - c.x, mm[1] - c.y) - c.r) : distSeg3(mm[0], mm[1], a[0], a[1], b[0], b[1]);
       } else {
-        centre = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        centre2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
         d = distSeg3(mm[0], mm[1], a[0], a[1], b[0], b[1]);
       }
       if (d > w / 2 + thr) continue;
-      hits.push({ it, d2: (mm[0] - centre[0]) ** 2 + (mm[1] - centre[1]) ** 2, onActive: layerOf2(it.node) === active });
+      hits.push({ it, d2: (mm[0] - centre2[0]) ** 2 + (mm[1] - centre2[1]) ** 2, onActive: layerOf2(it.node) === active });
     }
     if (!hits.length) return null;
     const pool = hits.some((h) => h.onActive) ? hits.filter((h) => h.onActive) : hits;
@@ -21123,7 +25452,7 @@ Link '${target2}' to this file?`)) return null;
       return;
     }
     if (layerOf2(item.node) !== S.layer) setLayer(ctx, layerOf2(item.node));
-    const a = pt3(item.node, "start"), b = pt3(item.node, "end");
+    const a = pt4(item.node, "start"), b = pt4(item.node, "end");
     const at = closestOnSeg(mm, a, b);
     const s = settingsOf2(ctx);
     const st = tuneCopy(S.tuneSettings[tuneMode()]);
@@ -21209,11 +25538,11 @@ Link '${target2}' to this file?`)) return null;
       T.st.initialSide = st.initialSide;
       return;
     }
-    const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-    T.res = meanderMove({ pts: pts.map(I), origin: I(T.origin), end: I(T.end), cursor: I(T.cursor), st, width: Math.round(T.width * TUNE_IU), clearance: Math.round(T.clearance * TUNE_IU), lineLength: T.lineLength * TUNE_IU, collides });
+    const collides2 = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+    T.res = meanderMove({ pts: pts.map(I), origin: I(T.origin), end: I(T.end), cursor: I(T.cursor), st, width: Math.round(T.width * TUNE_IU), clearance: Math.round(T.clearance * TUNE_IU), lineLength: T.lineLength * TUNE_IU, collides: collides2 });
     T.st.initialSide = st.initialSide;
   }
-  function tuneDp(T, st, I, collides) {
+  function tuneDp(T, st, I, collides2) {
     const dp = T.dp;
     const mine = T.line.pts.map(I), other = dp.line.pts.map(I);
     const r = dpMeanderMove({
@@ -21228,7 +25557,7 @@ Link '${target2}' to this file?`)) return null;
       clearance: Math.round(T.clearance * TUNE_IU),
       lengthP: (dp.mineIsP ? dp.lenMine : dp.lenOther) * TUNE_IU,
       lengthN: (dp.mineIsP ? dp.lenOther : dp.lenMine) * TUNE_IU,
-      collides
+      collides: collides2
     });
     const P = dp.mineIsP;
     return {
@@ -21332,7 +25661,7 @@ Link '${target2}' to this file?`)) return null;
       const old = ln.ids.map((id) => doc.items.get(id)).filter(Boolean);
       const oldKey = /* @__PURE__ */ new Map();
       for (const it of old) {
-        const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b = pt4(it.node, "end");
         oldKey.set(ptKey(a) + "|" + ptKey(b), it);
         oldKey.set(ptKey(b) + "|" + ptKey(a), it);
       }
@@ -21364,42 +25693,42 @@ Link '${target2}' to this file?`)) return null;
   var isTuningPattern = (it) => !!it && it.kind === "generated" && K4.str((K4.kid(it.node, "type") || [])[1]) === "tuning_pattern";
   function tuningPatternInfo(gen) {
     const n = gen.node;
-    const kid3 = (k) => K4.kid(n, k);
-    const num22 = ((k, d) => {
-      const c = kid3(k);
+    const kid22 = (k) => K4.kid(n, k);
+    const num7 = ((k, d) => {
+      const c = kid22(k);
       return c ? K4.num(c[1]) : d;
     });
-    const bool = (k, d) => {
-      const c = kid3(k);
+    const bool2 = (k, d) => {
+      const c = kid22(k);
       return c ? c.length < 2 || K4.str(c[1]) === "yes" : d;
     };
-    const str3 = (k) => {
-      const c = kid3(k);
+    const str10 = (k) => {
+      const c = kid22(k);
       return c ? K4.str(c[1]) : "";
     };
     const ptsOf2 = (k) => {
-      const c = kid3(k);
+      const c = kid22(k);
       const p = c && K4.kid(c, "pts");
       return p ? p.slice(1).filter((xy2) => Array.isArray(xy2) && xy2[0] === "xy").map((xy2) => [K4.num(xy2[1]), K4.num(xy2[2])]) : null;
     };
     const st = meanderDefaults();
     const I = (v) => Math.round(v * TUNE_IU);
-    st.minAmp = I(num22("min_amplitude", 0.2));
-    st.maxAmp = I(num22("max_amplitude", 1));
-    st.spacing = I(num22("min_spacing", 0.6));
-    st.crPct = num22("corner_radius_percent", 80);
-    st.round = bool("rounded", true);
-    st.singleSided = bool("single_sided", false);
-    st.overrideCustomRules = bool("override_custom_rules", false);
-    const side = str3("initial_side");
+    st.minAmp = I(num7("min_amplitude", 0.2));
+    st.maxAmp = I(num7("max_amplitude", 1));
+    st.spacing = I(num7("min_spacing", 0.6));
+    st.crPct = num7("corner_radius_percent", 80);
+    st.round = bool2("rounded", true);
+    st.singleSided = bool2("single_sided", false);
+    st.overrideCustomRules = bool2("override_custom_rules", false);
+    const side = str10("initial_side");
     st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
-    const opt = num22("target_length", null);
-    if (opt != null) st.target = { min: I(num22("target_length_min", opt - 0.1)), opt: I(opt), max: I(num22("target_length_max", opt + 0.1)) };
-    const so = num22("target_skew", null);
-    if (so != null) st.skew = { min: I(num22("target_skew_min", so - 0.1)), opt: I(so), max: I(num22("target_skew_max", so + 0.1)) };
-    const lay = kid3("layer");
+    const opt = num7("target_length", null);
+    if (opt != null) st.target = { min: I(num7("target_length_min", opt - 0.1)), opt: I(opt), max: I(num7("target_length_max", opt + 0.1)) };
+    const so = num7("target_skew", null);
+    if (so != null) st.skew = { min: I(num7("target_skew_min", so - 0.1)), opt: I(so), max: I(num7("target_skew_max", so + 0.1)) };
+    const lay = kid22("layer");
     const xyOf = (k) => {
-      const c = kid3(k);
+      const c = kid22(k);
       const p = c && K4.kid(c, "xy");
       return p ? [K4.num(p[1]), K4.num(p[2])] : null;
     };
@@ -21408,14 +25737,14 @@ Link '${target2}' to this file?`)) return null;
       layer: lay ? K4.str(lay[1]) : "F.Cu",
       base: ptsOf2("base_line"),
       coupled: ptsOf2("base_line_coupled"),
-      mode: str3("tuning_mode") || "single",
+      mode: str10("tuning_mode") || "single",
       origin: xyOf("origin"),
       end: xyOf("end"),
-      status: str3("last_status"),
-      tuningLength: num22("last_tuning_length", null),
-      netName: str3("last_netname"),
-      width: num22("last_track_width", 0.25),
-      gap: num22("last_diff_pair_gap", 0),
+      status: str10("last_status"),
+      tuningLength: num7("last_tuning_length", null),
+      netName: str10("last_netname"),
+      width: num7("last_track_width", 0.25),
+      gap: num7("last_diff_pair_gap", 0),
       members: K4.groupMemberIds(n)
     };
   }
@@ -21433,7 +25762,7 @@ Link '${target2}' to this file?`)) return null;
     lines.forEach((base, li) => {
       if (!base || base.length < 2) return;
       const near = (it) => {
-        const a = pt3(it.node, "start");
+        const a = pt4(it.node, "start");
         return a && base.some((q, i) => i + 1 < base.length && distSeg3(a[0], a[1], q[0], q[1], base[i + 1][0], base[i + 1][1]) < Math.max(T.width, 0.01) * 4 + 1.2);
       };
       let net = null;
@@ -21541,7 +25870,7 @@ Link '${target2}' to this file?`)) return null;
       res = tuneDp({ line: line2, origin, end, cursor: end, width: line2.width, clearance, dp: { line: lineC, net: lineC.net, netKey: lineC.netKey, mineIsP: NT.key(pair.P) === line2.netKey, gap, lenMine, lenOther } }, st, I, hits);
     } else {
       const O = routeObstacles(scratch, settingsOf2(ctx), line2.netKey, line2.layer);
-      const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+      const collides2 = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
       res = meanderMove({
         pts: line2.pts.map(I),
         origin: I(origin),
@@ -21551,7 +25880,7 @@ Link '${target2}' to this file?`)) return null;
         width: Math.round(line2.width * TUNE_IU),
         clearance: Math.round(clearance * TUNE_IU),
         lineLength: routedLength(scratch, seedId) * TUNE_IU,
-        collides
+        collides: collides2
       });
     }
     const ops2 = [], members = [];
@@ -21560,7 +25889,7 @@ Link '${target2}' to this file?`)) return null;
       const oldKey = /* @__PURE__ */ new Map();
       for (const id of ln.ids) {
         const it = scratch.items.get(id);
-        const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b = pt4(it.node, "end");
         oldKey.set(ptKey(a) + "|" + ptKey(b), it);
         oldKey.set(ptKey(b) + "|" + ptKey(a), it);
       }
@@ -21583,7 +25912,7 @@ Link '${target2}' to this file?`)) return null;
     rebuild(line2, res.final);
     if (lineC && res.finalCoupled) rebuild(lineC, res.finalCoupled);
     const g2 = clone2(gen.node);
-    const setKid22 = (k, ...v) => {
+    const setKid3 = (k, ...v) => {
       const c = K4.kid(g2, k);
       if (c) c.splice(1, c.length - 1, ...v);
     };
@@ -21601,23 +25930,23 @@ Link '${target2}' to this file?`)) return null;
       if (e) e.splice(1, e.length - 1, xy2(base[base.length - 1]));
     }
     const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default";
-    setKid22("initial_side", side);
+    setKid3("initial_side", side);
     if (ruled) {
       const mm = (v) => +fmtG(v / TUNE_IU);
       if (info.mode === "diff_pair_skew") {
-        setKid22("target_skew", mm(ist.skew.opt));
-        setKid22("target_skew_min", mm(ist.skew.min));
-        setKid22("target_skew_max", mm(ist.skew.max));
+        setKid3("target_skew", mm(ist.skew.opt));
+        setKid3("target_skew_min", mm(ist.skew.min));
+        setKid3("target_skew_max", mm(ist.skew.max));
       } else {
-        setKid22("target_length", mm(ist.target.opt));
-        setKid22("target_length_min", mm(ist.target.min));
-        setKid22("target_length_max", mm(ist.target.max));
+        setKid3("target_length", mm(ist.target.opt));
+        setKid3("target_length_min", mm(ist.target.min));
+        setKid3("target_length_max", mm(ist.target.max));
       }
     }
-    setKid22("last_status", res.status);
-    setKid22("last_tuning_length", +fmtG(res.length / TUNE_IU));
-    const mk = K4.kid(g2, "members");
-    if (mk) mk.splice(1, mk.length - 1, ...members.slice().sort());
+    setKid3("last_status", res.status);
+    setKid3("last_tuning_length", +fmtG(res.length / TUNE_IU));
+    const mk2 = K4.kid(g2, "members");
+    if (mk2) mk2.splice(1, mk2.length - 1, ...members.slice().sort());
     else g2.push(["members", ...members.slice().sort()]);
     ops2.push({ set: gen.id, node: g2 });
     return branchDoc(scratch, ops2);
@@ -21663,44 +25992,44 @@ Link '${target2}' to this file?`)) return null;
     return true;
   }
   function tuneMove(ctx, mm) {
-    const U = S.tune;
-    if (!U.pattern) {
+    const U2 = S.tune;
+    if (!U2.pattern) {
       const it = tunePick(ctx, mm);
-      U.picker = it ? it.id : null;
-      U.cursor = mm.slice();
+      U2.picker = it ? it.id : null;
+      U2.cursor = mm.slice();
       return;
     }
-    U.pattern.cursor = mm.slice();
-    U.cursor = mm.slice();
+    U2.pattern.cursor = mm.slice();
+    U2.cursor = mm.slice();
     tuneUpdate(ctx);
   }
   function tuneClick(ctx, mm) {
-    const U = S.tune;
+    const U2 = S.tune;
     if (ctx.viewOnly) {
       ctx.toast("View-only access");
       return;
     }
-    if (!U.pattern) {
-      const it = U.picker && ctx.doc.items.get(U.picker) || tunePick(ctx, mm);
+    if (!U2.pattern) {
+      const it = U2.picker && ctx.doc.items.get(U2.picker) || tunePick(ctx, mm);
       if (it) tuneBegin(ctx, it, mm);
       ctx.requestRender();
       return;
     }
-    U.pattern.cursor = mm.slice();
+    U2.pattern.cursor = mm.slice();
     tuneFinish(ctx);
   }
   function tuneStatus(ctx) {
-    const U = S.tune;
+    const U2 = S.tune;
     const doc = ctx.doc;
     const units = sizeUnits();
     let net = null, len = null;
     const skew = tuneMode() === "skew";
-    if (U.pattern) {
-      net = U.pattern.net;
-      len = U.pattern.res ? U.pattern.res.length / TUNE_IU : U.pattern.lineLength;
-      if (U.pattern.coupled != null) len -= U.pattern.coupled;
-    } else if (U.picker) {
-      const it = doc.items.get(U.picker);
+    if (U2.pattern) {
+      net = U2.pattern.net;
+      len = U2.pattern.res ? U2.pattern.res.length / TUNE_IU : U2.pattern.lineLength;
+      if (U2.pattern.coupled != null) len -= U2.pattern.coupled;
+    } else if (U2.picker) {
+      const it = doc.items.get(U2.picker);
       if (!it) return null;
       net = netOf2(it.node);
       len = routedLength(doc, it.id);
@@ -21712,7 +26041,7 @@ Link '${target2}' to this file?`)) return null;
     } else return null;
     const name = netNameOf3(ctx, net);
     const mm = (v) => msgValue(v / TUNE_IU, units).replace(/ (mm|mils|in)$/, "");
-    const st = U.pattern ? U.pattern.st : S.tuneSettings[tuneMode()];
+    const st = U2.pattern ? U2.pattern.st : S.tuneSettings[tuneMode()];
     let min = "---", max = "---";
     if (skew) {
       min = mm(st.skew.min);
@@ -21776,10 +26105,10 @@ Link '${target2}' to this file?`)) return null;
     c.restore();
   }
   function drawTune(c, ctx, px) {
-    const U = S.tune;
+    const U2 = S.tune;
     const doc = ctx.doc;
-    if (U.pattern && U.pattern.res) {
-      const T = U.pattern;
+    if (U2.pattern && U2.pattern.res) {
+      const T = U2.pattern;
       c.globalAlpha = 0.8;
       c.strokeStyle = saturated(color(T.layer));
       c.lineWidth = T.width;
@@ -21796,16 +26125,16 @@ Link '${target2}' to this file?`)) return null;
         }
         line(c, pc.a, pc.b);
       }
-    } else if (!U.pattern && U.picker) {
+    } else if (!U2.pattern && U2.picker) {
       c.globalAlpha = 0.9;
       c.strokeStyle = HL;
-      for (const id of connectedRun(doc, [U.picker])) {
+      for (const id of connectedRun(doc, [U2.picker])) {
         const it = doc.items.get(id);
         if (!it || it.kind !== "segment" && it.kind !== "arc") continue;
-        const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b = pt4(it.node, "end");
         c.lineWidth = widthOf2(it.node, 0.25);
         if (it.kind === "arc") {
-          const m = pt3(it.node, "mid");
+          const m = pt4(it.node, "mid");
           const arc = m && K4.arcFrom3(a, m, b);
           if (arc) {
             c.beginPath();
@@ -21818,7 +26147,7 @@ Link '${target2}' to this file?`)) return null;
       }
     }
     const info = tuneStatus(ctx);
-    if (info && U.cursor) drawTuneStatus(c, U.cursor, px, info);
+    if (info && U2.cursor) drawTuneStatus(c, U2.cursor, px, info);
     c.globalAlpha = 1;
   }
   function tuneHiddenIds() {
@@ -21829,6 +26158,11 @@ Link '${target2}' to this file?`)) return null;
     const d = text2 ? parseDru(text2) : null;
     S.dru = d;
     S.ruleConstraint = d && d.rules.length ? (doc, what, a, b) => evalRuleConstraint(d.rules, what, doc, S.settingsCache || S.settings || designSettings(null), a, b, (v) => msgValue(v, sizeUnits())) : null;
+    const st = K4.pcbSizes && K4.pcbSizes.state;
+    if (st) st.ruleSizes = d && d.rules.some((r) => r.constraints.some((c) => c.type === "track_width" || c.type === "via_diameter" || c.type === "hole_size" || c.type === "diff_pair_gap")) ? (net) => {
+      const m = matchDpSuffix(net);
+      return ruleSizes(S.doc || null, S.settingsCache || S.settings || designSettings(null), net, S.route && S.route.layer || "F.Cu", m.rv ? m.complement : null);
+    } : null;
   }
   var TUNING_COMMIT_MESSAGE = "Edit Tuning Pattern";
   function selectedTuningPattern(ctx, ids) {
@@ -21867,16 +26201,16 @@ Link '${target2}' to this file?`)) return null;
   function offsetSide(pts, d) {
     const P = pts.filter((p, i) => !i || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-9);
     if (P.length < 2) return [];
-    const U = [];
-    for (let i = 0; i + 1 < P.length; i++) U.push(unit2(P[i], P[i + 1]));
+    const U2 = [];
+    for (let i = 0; i + 1 < P.length; i++) U2.push(unit2(P[i], P[i + 1]));
     const out = [];
     const off = (p, u) => {
       const n = perp(u);
       return [p[0] + n[0] * d, p[1] + n[1] * d];
     };
-    out.push(off(P[0], U[0]));
+    out.push(off(P[0], U2[0]));
     for (let k = 1; k + 1 < P.length; k++) {
-      const u0 = U[k - 1], u1 = U[k];
+      const u0 = U2[k - 1], u1 = U2[k];
       const cr = u0[0] * u1[1] - u0[1] * u1[0];
       if (Math.abs(cr) < 1e-12) {
         out.push(off(P[k], u1));
@@ -21893,7 +26227,7 @@ Link '${target2}' to this file?`)) return null;
         out.push(q1);
       }
     }
-    out.push(off(P[P.length - 1], U[U.length - 1]));
+    out.push(off(P[P.length - 1], U2[U2.length - 1]));
     return out;
   }
   function roundOutline(pts, amp) {
@@ -21923,10 +26257,10 @@ Link '${target2}' to this file?`)) return null;
     const dp = info.mode === "diff_pair";
     const w = info.width, gap = info.gap;
     const st = info.st;
-    const IU = 1e6;
+    const IU2 = 1e6;
     const baselineOffset = dp ? (gap + w) / 2 : 0;
     const minAllowed = st.round ? baselineOffset + w : baselineOffset + w * Math.tan(1 - Math.tan(Math.PI / 8));
-    const clamped = Math.max(st.maxAmp / IU, minAllowed);
+    const clamped = Math.max(st.maxAmp / IU2, minAllowed);
     if (st.singleSided && !dp) {
       const amp2 = clamped + w / 2;
       const side = offsetSide(base, st.initialSide >= 0 ? amp2 : -amp2);
@@ -21935,11 +26269,11 @@ Link '${target2}' to this file?`)) return null;
     const amp = dp ? clamped + gap / 2 + w : clamped + w / 2;
     if (dp && info.coupled && info.coupled.length >= 2) {
       const n = Math.min(base.length, info.coupled.length);
-      const centre = [];
-      for (let i = 0; i < n; i++) centre.push([(base[i][0] + info.coupled[i][0]) / 2, (base[i][1] + info.coupled[i][1]) / 2]);
-      centre[centre.length - 1] = [(base[base.length - 1][0] + info.coupled[info.coupled.length - 1][0]) / 2, (base[base.length - 1][1] + info.coupled[info.coupled.length - 1][1]) / 2];
+      const centre2 = [];
+      for (let i = 0; i < n; i++) centre2.push([(base[i][0] + info.coupled[i][0]) / 2, (base[i][1] + info.coupled[i][1]) / 2]);
+      centre2[centre2.length - 1] = [(base[base.length - 1][0] + info.coupled[info.coupled.length - 1][0]) / 2, (base[base.length - 1][1] + info.coupled[info.coupled.length - 1][1]) / 2];
       const sep = Math.hypot(base[0][0] - info.coupled[0][0], base[0][1] - info.coupled[0][1]);
-      return roundOutline(centre, amp + sep / 2);
+      return roundOutline(centre2, amp + sep / 2);
     }
     return roundOutline(base, amp);
   }
@@ -22000,13 +26334,13 @@ Link '${target2}' to this file?`)) return null;
   function tuningEditPoints(gen) {
     const info = tuningPatternInfo(gen);
     const F = handleFrame(info);
-    const IU = 1e6;
-    let amp = info.st.maxAmp / IU + info.width / 2;
+    const IU2 = 1e6;
+    let amp = info.st.maxAmp / IU2 + info.width / 2;
     if (info.mode === "diff_pair") amp += info.width + info.gap;
     if (info.st.initialSide === -1) amp = -amp;
     const d = [F.B[0] - F.A[0], F.B[1] - F.A[1]];
     const wOff = resize(perp(d), amp);
-    const sOff = resize(d, info.st.spacing / IU * 1.5);
+    const sOff = resize(d, info.st.spacing / IU2 * 1.5);
     return [
       { key: "0", p: [F.origin[0] + F.off[0], F.origin[1] + F.off[1]] },
       { key: "1", p: [F.end[0] + F.offEnd[0], F.end[1] + F.offEnd[1]] },
@@ -22099,12 +26433,12 @@ Link '${target2}' to this file?`)) return null;
       if (it.kind !== "segment" && it.kind !== "arc") continue;
       const o = ctx.doc.items.get(id);
       if (o && o.node === it.node && !ge.hidden.has(id)) continue;
-      const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+      const a = pt4(it.node, "start"), b = pt4(it.node, "end");
       if (!a || !b) continue;
       c.strokeStyle = color(K4.str((K4.kid(it.node, "layer") || [])[1]));
       c.lineWidth = widthOf2(it.node, 0.25);
       if (it.kind === "arc") {
-        const m = pt3(it.node, "mid");
+        const m = pt4(it.node, "mid");
         const arc = m && K4.arcFrom3(a, m, b);
         if (arc) {
           c.beginPath();
@@ -22181,11 +26515,11 @@ Link '${target2}' to this file?`)) return null;
       });
     } else if (it.kind === "gr_line") {
       for (const k of ["start", "end"]) {
-        const p = pt3(n, k);
+        const p = pt4(n, k);
         if (p) out.push({ key: k, p });
       }
     } else if (it.kind === "gr_rect") {
-      const a = pt3(n, "start"), b = pt3(n, "end");
+      const a = pt4(n, "start"), b = pt4(n, "end");
       if (!a || !b) return out;
       const c = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
       c.forEach((p, i) => out.push({ key: "r" + i, p }));
@@ -22194,15 +26528,15 @@ Link '${target2}' to this file?`)) return null;
         out.push({ key: "e" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true });
       });
     } else if (it.kind === "gr_circle") {
-      const c = pt3(n, "center"), e = pt3(n, "end");
+      const c = pt4(n, "center"), e = pt4(n, "end");
       if (c) out.push({ key: "center", p: c });
       if (e) out.push({ key: "end", p: e });
     } else if (it.kind === "gr_arc") {
       for (const k of ["start", "mid", "end"]) {
-        const p = pt3(n, k);
+        const p = pt4(n, k);
         if (p) out.push({ key: k, p });
       }
-      const s = pt3(n, "start"), m = pt3(n, "mid"), e = pt3(n, "end"), a = s && m && e ? K4.arcFrom3(s, m, e) : null;
+      const s = pt4(n, "start"), m = pt4(n, "mid"), e = pt4(n, "end"), a = s && m && e ? K4.arcFrom3(s, m, e) : null;
       if (a) {
         const c = [a.x, a.y];
         out.push({ key: "center", p: c, lines: [s, e] });
@@ -22240,8 +26574,8 @@ Link '${target2}' to this file?`)) return null;
     return { start: s, mid: [c[0] + r * Math.cos(a0 + sw / 2), c[1] + r * Math.sin(a0 + sw / 2)], end: e };
   }
   function arcEditGeometry(orig, key, p, raw, mode) {
-    let s = pt3(orig, "start"), e = pt3(orig, "end");
-    const m = pt3(orig, "mid");
+    let s = pt4(orig, "start"), e = pt4(orig, "end");
+    const m = pt4(orig, "mid");
     const a = s && m && e ? K4.arcFrom3(s, m, e) : null;
     if (!a) return null;
     if (crossZ(m[0] - s[0], m[1] - s[1], e[0] - m[0], e[1] - m[1]) < 0) {
@@ -22264,9 +26598,9 @@ Link '${target2}' to this file?`)) return null;
         const ch = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], v = vsub(m, ch), justOff = Math.hypot(s[0] - e[0], s[1] - e[1]) / 100;
         const A = vadd(ch, resized(v, justOff)), u = resized(v, 1);
         const t = Math.max(0, (raw[0] - A[0]) * u[0] + (raw[1] - A[1]) * u[1]);
-        const nm2 = vadd(A, vmul(u, t));
-        if (Math.abs(crossZ(nm2[0] - s[0], nm2[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
-        return { start: s, mid: nm2, end: e };
+        const nm22 = vadd(A, vmul(u, t));
+        if (Math.abs(crossZ(nm22[0] - s[0], nm22[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
+        return { start: s, mid: nm22, end: e };
       }
       const r = Math.max(ARC_MIN_RADIUS, Math.hypot(raw[0] - c[0], raw[1] - c[1]));
       return arcFromCenter(c, vadd(c, resized(vsub(s, c), r)), vadd(c, resized(vsub(e, c), r)));
@@ -22348,7 +26682,7 @@ Link '${target2}' to this file?`)) return null;
       }
     } else if (kind === "gr_line") setXY(node, key, p);
     else if (kind === "gr_rect") {
-      const a = pt3(orig, "start"), b = pt3(orig, "end");
+      const a = pt4(orig, "start"), b = pt4(orig, "end");
       let x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
       const sx = (v) => {
         x0 = v;
@@ -22385,7 +26719,7 @@ Link '${target2}' to this file?`)) return null;
       setXY(node, "end", [x1, y1]);
     } else if (kind === "gr_circle") {
       if (key === "center") {
-        const c = pt3(orig, "center"), e = pt3(orig, "end");
+        const c = pt4(orig, "center"), e = pt4(orig, "end");
         setXY(node, "center", p);
         setXY(node, "end", [e[0] + p[0] - c[0], e[1] + p[1] - c[1]]);
       } else setXY(node, "end", p);
@@ -22435,12 +26769,12 @@ Link '${target2}' to this file?`)) return null;
       const node = clone2(it.node);
       const pn = pePtsNode(node);
       const xs = K4.kids(pn, "xy");
-      const after = xs[bi];
-      pn.splice(pn.indexOf(after) + 1, 0, ["xy", r62(bp[0]), r62(bp[1])]);
+      const after2 = xs[bi];
+      pn.splice(pn.indexOf(after2) + 1, 0, ["xy", r62(bp[0]), r62(bp[1])]);
       return [replacedChange(it, node)];
     }
     if (it.kind === "gr_line") {
-      const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+      const a = pt4(it.node, "start"), b = pt4(it.node, "end");
       const q = closestOnSeg(at, a, b);
       if (samePt(q, a) || samePt(q, b)) return [];
       const first = clone2(it.node);
@@ -22489,7 +26823,7 @@ Link '${target2}' to this file?`)) return null;
   var handleTol = () => 6 * (S.mmPerPx || 0.05);
   function onHandlePointerDown(ev) {
     const ctx = lastCtx;
-    if (!ctx || !isPcbDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
+    if (!ctx || !isBoardLikeDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
     if (S.route || S.draw || S.drag || S.move || S.pedit || ctx.viewOnly) return;
     const stage = ctx.stage;
     if (!stage || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
@@ -22582,6 +26916,173 @@ Link '${target2}' to this file?`)) return null;
     }
     c.restore();
   }
+  var PAD_TOOLS = { pad: "auto", padtht: "tht", padsmd: "smd", padnpth: "npth", padpaste: "paste" };
+  var str32 = (v) => v === void 0 || v === null ? "" : String(v);
+  function refDesPrefix(s) {
+    return s.replace(/\d+$/, "");
+  }
+  function trailingInt(s) {
+    const m = /(\d+)$/.exec(s);
+    return m ? parseInt(m[1], 10) : 0;
+  }
+  function fpPads(doc) {
+    const out = [];
+    for (const it of doc.items.values()) if (it.kind === "pad") out.push(it.node);
+    return out;
+  }
+  function nextPadNumber(doc, last, extraUsed) {
+    const used = new Set(fpPads(doc).map((p) => str32(p[1])));
+    if (extraUsed) for (const u of extraUsed) used.add(u);
+    const prefix = refDesPrefix(last);
+    let num7 = trailingInt(last);
+    while (used.has(prefix + num7)) num7++;
+    return prefix + num7;
+  }
+  var layerSet = (pad) => (K4.kid(pad, "layers") || []).slice(1).map(str32);
+  var isAperture = (pad) => str32(pad[2]) === "smd" && !layerSet(pad).some((l) => /\.Cu$/.test(l));
+  function typeFromPad(pad) {
+    const a = str32(pad[2]);
+    if (a === "thru_hole") return "tht";
+    if (a === "smd") {
+      if (isAperture(pad)) {
+        const ls = layerSet(pad);
+        if (ls.some((l) => /\.Paste$/.test(l))) return "paste";
+        if (ls.some((l) => /\.Mask$/.test(l))) return "mask";
+        return null;
+      }
+      return "smd";
+    }
+    if (a === "connect") return "conn";
+    if (a === "non_component") return "nc";
+    if (a === "np_thru_hole") return "npth";
+    return null;
+  }
+  function strNumCmp2(a, b) {
+    const ra = a.match(/\d+|\D+/g) || [], rb = b.match(/\d+|\D+/g) || [];
+    for (let i = 0; i < Math.min(ra.length, rb.length); i++) {
+      const x = ra[i], y = rb[i];
+      const nx = /^\d/.test(x), ny = /^\d/.test(y);
+      if (nx && ny) {
+        const d = parseInt(x, 10) - parseInt(y, 10);
+        if (d) return d;
+      } else {
+        const c = x.toUpperCase() < y.toUpperCase() ? -1 : x.toUpperCase() > y.toUpperCase() ? 1 : 0;
+        if (c) return c;
+      }
+    }
+    return ra.length - rb.length;
+  }
+  function ipcRoundingRatio(w, h) {
+    const m = Math.min(w, h);
+    return m > 0 ? r62(Math.min(0.25, m * 0.25) / m) : 0.25;
+  }
+  function defaultPad(type) {
+    switch (type) {
+      case "smd":
+        return ["pad", "", "smd", "roundrect", ["at", 0, 0], ["size", 2, 1], ["layers", "F.Cu", "F.Mask", "F.Paste"], ["roundrect_rratio", ipcRoundingRatio(2, 1)]];
+      case "npth":
+        return ["pad", "", "np_thru_hole", "circle", ["at", 0, 0], ["size", 1, 1], ["drill", 1], ["layers", "*.Cu", "*.Mask"]];
+      case "paste":
+        return ["pad", "", "smd", "roundrect", ["at", 0, 0], ["size", 1, 1], ["layers", "F.Paste"], ["roundrect_rratio", ipcRoundingRatio(1, 1)]];
+      case "mask":
+        return ["pad", "", "smd", "roundrect", ["at", 0, 0], ["size", 1, 1], ["layers", "F.Mask"], ["roundrect_rratio", ipcRoundingRatio(1, 1)]];
+      case "conn":
+        return ["pad", "", "connect", "rect", ["at", 0, 0], ["size", 2.54, 1.27], ["layers", "F.Cu", "F.Mask"]];
+      case "nc":
+        return ["pad", "", "non_component", "roundrect", ["at", 0, 0], ["size", 2, 1], ["layers", "F.Cu"], ["roundrect_rratio", ipcRoundingRatio(2, 1)]];
+      default:
+        return ["pad", "", "thru_hole", "oval", ["at", 0, 0], ["size", 2.54, 1.27], ["drill", 0.8], ["layers", "*.Cu", "*.Mask"]];
+    }
+  }
+  var padMemory = { lastType: "auto", lastByType: {}, lastNumber: "1" };
+  function masterPad(doc, type, selected) {
+    const pads = fpPads(doc).slice().sort((a, b) => strNumCmp2(str32(b[1]), str32(a[1])));
+    let t = type;
+    if (t === "auto") {
+      const sel = selected ? typeFromPad(selected) : null;
+      t = sel || (padMemory.lastType !== "auto" ? padMemory.lastType : null) || pads.map(typeFromPad).find((x) => !!x) || "tht";
+      if (selected && sel === t) return strip(clone2(selected));
+    }
+    const lastId = padMemory.lastByType[t];
+    if (lastId) {
+      const it = doc.items.get(lastId);
+      if (it && it.kind === "pad" && typeFromPad(it.node) === t) return strip(clone2(it.node));
+    }
+    const same = pads.find((p) => typeFromPad(p) === t);
+    if (same) return strip(clone2(same));
+    return defaultPad(t);
+  }
+  function strip(n) {
+    for (let i = n.length - 1; i > 0; i--) {
+      const c = n[i];
+      if (isList5(c) && (c[0] === "uuid" || c[0] === "tstamp" || c[0] === "net" || c[0] === "pinfunction" || c[0] === "pintype")) n.splice(i, 1);
+    }
+    return n;
+  }
+  var canHaveNumber = (pad) => str32(pad[2]) !== "np_thru_hole" && !isAperture(pad);
+  function newPadNode(doc, type, selected, at, angle, number) {
+    const p = masterPad(doc, type, selected);
+    p[1] = canHaveNumber(p) ? number || "" : "";
+    const a = K4.kid(p, "at");
+    a.length = 1;
+    a.push(r62(at[0]), r62(at[1]));
+    const ang = r62((angle % 360 + 360) % 360);
+    if (ang) a.push(ang > 180 ? ang - 360 : ang);
+    return p;
+  }
+  function placePad(ctx, type, at, angle) {
+    const doc = ctx.doc;
+    if (!doc) return null;
+    const selected = S.padTemplate || null;
+    const probe2 = masterPad(doc, type, selected);
+    let number = "";
+    if (canHaveNumber(probe2)) {
+      number = nextPadNumber(doc, padMemory.lastNumber);
+      padMemory.lastNumber = number;
+    }
+    const node = newPadNode(doc, type, selected, at, angle, number);
+    const ch = addedChange(doc, node);
+    const t = typeFromPad(node);
+    if (t) {
+      padMemory.lastType = t;
+      padMemory.lastByType[t] = ch.id;
+    }
+    ctx.commit([ch], "Place pad");
+    return ch;
+  }
+  function moveAnchorChanges(doc, at) {
+    const [dx, dy] = [-at[0], -at[1]];
+    if (!dx && !dy) return [];
+    const out = [];
+    for (const it of doc.items.values()) {
+      const n = clone2(it.node);
+      if (it.kind === "zone") {
+        for (const poly of K4.kids(n, "polygon").concat(K4.kids(n, "filled_polygon"))) {
+          const p = K4.kid(poly, "pts");
+          if (p) {
+            for (const xy2 of p.slice(1)) if (isList5(xy2) && xy2[0] === "xy") {
+              xy2[1] = r62(K4.num(xy2[1]) + dx);
+              xy2[2] = r62(K4.num(xy2[2]) + dy);
+            }
+          }
+        }
+      } else translateNode(n, dx, dy);
+      out.push(replacedChange(it, n));
+    }
+    return out;
+  }
+  function enumerateChanges(doc, ids, prefix, start, step) {
+    const out = [];
+    ids.forEach((id, i) => {
+      const it = doc.items.get(id);
+      if (!it || it.kind !== "pad" || !canHaveNumber(it.node)) return;
+      const n = clone2(it.node);
+      n[1] = prefix + (start + i * step);
+      out.push(replacedChange(it, n));
+    });
+    return out;
+  }
+  var padToolApi = { nextPadNumber, masterPad, defaultPad, typeFromPad, newPadNode, placePad, moveAnchorChanges, enumerateChanges, padMemory, strNumCmp: strNumCmp2, ipcRoundingRatio, refDesPrefix, trailingInt, canHaveNumber };
   function layersBlock(doc) {
     const rows = [];
     for (const [name, l] of doc.layers) if (/\./.test(name) || name === "Margin") rows.push([l.id, name, l.type || "user"].concat(l.userName ? [l.userName] : []));
@@ -22781,12 +27282,20 @@ Link '${target2}' to this file?`)) return null;
       }
       return acc;
     };
+    const incUsed = /* @__PURE__ */ new Set();
     for (const id of ids) {
       const it = doc.items.get(id);
       if (!it || coveredByGroup(id)) continue;
+      if (doc.fpEditor && it.kind === "property") continue;
       const src = subtree(it, []);
       const nodes = src.map((x) => clone2(x.node));
       freshUuids(nodes);
+      if (doc.fpEditor && opts && opts.increment) {
+        for (const n of nodes) if (n[0] === "pad" && canHaveNumber(n)) {
+          n[1] = padMemory.lastNumber = nextPadNumber(doc, padMemory.lastNumber, incUsed);
+          incUsed.add(String(n[1]));
+        }
+      }
       if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
       if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);
       const order = nodes.map((n, i) => i).sort((a, b) => isParent(nodes[a]) - isParent(nodes[b]) || b - a);
@@ -22857,7 +27366,7 @@ Link '${target2}' to this file?`)) return null;
     }
     return out;
   }
-  var pairClr = (s, a, b) => Math.max(netClearance(s, a), netClearance(s, b), s.minClearance || 0);
+  var pairClr = (s, a, b, layer, kindB) => S.dru && S.dru.rules.length ? rulePairClearance(S.shoveDoc || null, s, a, b, layer || null, kindB) : Math.max(netClearance(s, a), netClearance(s, b), s.minClearance || 0);
   var sameNetKey = (a, b) => !!a && a === b;
   function insideConvex(P, p) {
     let sign = 0;
@@ -22871,7 +27380,7 @@ Link '${target2}' to this file?`)) return null;
     }
     return true;
   }
-  function segIntersect(p1, p2, p3, p4) {
+  function segIntersect2(p1, p2, p3, p4) {
     const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]];
     const den = d1[0] * d2[1] - d1[1] * d2[0];
     if (Math.abs(den) < 1e-12) return null;
@@ -22885,7 +27394,7 @@ Link '${target2}' to this file?`)) return null;
     if (insideConvex(H, path2[0]) || insideConvex(H, path2[path2.length - 1])) return null;
     const ips = [];
     for (let i = 0; i + 1 < path2.length; i++) for (let j = 0; j < H.length; j++) {
-      const x = segIntersect(path2[i], path2[i + 1], H[j], H[(j + 1) % H.length]);
+      const x = segIntersect2(path2[i], path2[i + 1], H[j], H[(j + 1) % H.length]);
       if (x) ips.push({ i, t: x.t, j, u: x.u, p: x.p });
     }
     if (ips.length < 2) return path2.map((p) => p.slice());
@@ -22966,12 +27475,12 @@ Link '${target2}' to this file?`)) return null;
         maxW = Math.max(maxW, 2 * c.shape.r);
         continue;
       }
-      const o = { kind: "solid", id: c.id, ckind: c.kind, layers: c.layers, net: c.net, shape: c.shape, bbox: c.bbox, pad: c.kind === "pad" ? c.pad : void 0 };
+      const o = { kind: "solid", id: c.id, ckind: c.kind, layers: c.layers, net: c.net, shape: c.shape, bbox: c.bbox, pad: c.kind === "pad" ? c.pad : void 0, src: c };
       solids.push(o);
       gadd(o, c.bbox);
     }
     for (const h of Wd.holes) {
-      const o = { kind: "solid", id: h.id, ckind: "hole", layers: h.layers, net: "", shape: h.shape, bbox: h.bbox };
+      const o = { kind: "solid", id: h.id, ckind: "hole", layers: h.layers, net: "", shape: h.shape, bbox: h.bbox, src: h };
       solids.push(o);
       gadd(o, h.bbox);
     }
@@ -22986,12 +27495,13 @@ Link '${target2}' to this file?`)) return null;
       gadd(o, e.bbox);
     }
     const w = { doc, tracks, vias, solids, grid, CELL, maxW, s };
+    S.shoveDoc = doc;
     if (bc) bc[key] = w;
     else S.sworld = { doc, ver: S.docVer, key, w };
     return w;
   }
-  function solidClr(s, net, o) {
-    return routeClearance(s, net, { kind: o.ckind === "hole" ? "hole" : o.ckind === "keepout" ? "keepout" : o.ckind === "edge" ? "edge" : o.ckind, net: o.net });
+  function solidClr(s, net, o, layer) {
+    return routeClearance(s, net, { kind: o.ckind === "hole" ? "hole" : o.ckind === "keepout" ? "keepout" : o.ckind === "edge" ? "edge" : o.ckind, net: o.net, id: o.id, src: o.src }, layer, S.shoveDoc || null);
   }
   function shoveNear(SW, st, box, grow, fn) {
     const C = SW.CELL, seen = /* @__PURE__ */ new Set();
@@ -23020,11 +27530,11 @@ Link '${target2}' to this file?`)) return null;
     const score = (k, d, x) => {
       if (!found[k] || d < found[k].d) found[k] = Object.assign({ d }, x);
     };
-    const consider = (o, probe2, idx, rL, onLayer) => {
+    const consider = (o, probe2, idx, rL, onLayer3) => {
       if (o.kind === "line") {
         const M = o.L;
-        if (M === L || M.layer !== onLayer || sameNetKey(M.net, L.net)) return;
-        const c = pairClr(s, L.net, M.net);
+        if (M === L || M.layer !== onLayer3 || sameNetKey(M.net, L.net)) return;
+        const c = pairClr(s, L.net, M.net, onLayer3);
         for (let k = 0; k + 1 < M.pts.length; k++) {
           const g2 = probeGap(probe2, rL, { t: "seg", a: M.pts[k], b: M.pts[k + 1], r: M.w / 2 });
           if (g2 < c - ROUTE_EPS) {
@@ -23036,15 +27546,15 @@ Link '${target2}' to this file?`)) return null;
       }
       if (L.ownIds && o.id && L.ownIds.has(o.id)) return;
       if (o.kind === "track") {
-        if (o.layer !== onLayer || sameNetKey(o.net, L.net) || L.ids && L.ids.includes(o.id)) return;
+        if (o.layer !== onLayer3 || sameNetKey(o.net, L.net) || L.ids && L.ids.includes(o.id)) return;
         const g2 = probeGap(probe2, rL, { t: "seg", a: o.a, b: o.b, r: o.w / 2 });
-        if (g2 < pairClr(s, L.net, o.net) - ROUTE_EPS) score("line", idx + probeDist(probe2, o.a), { o });
+        if (g2 < pairClr(s, L.net, o.net, onLayer3) - ROUTE_EPS) score("line", idx + probeDist(probe2, o.a), { o });
       } else if (o.kind === "via") {
-        if (!o.layers.has(onLayer) || sameNetKey(o.net, L.net) || L.viaId && L.viaId === o.id) return;
+        if (!o.layers.has(onLayer3) || sameNetKey(o.net, L.net) || L.viaId && L.viaId === o.id) return;
         const g2 = probeGap(probe2, rL, { t: "circle", x: o.at[0], y: o.at[1], r: o.r });
-        if (g2 < pairClr(s, L.net, o.net) - ROUTE_EPS) score("via", idx + probeDist(probe2, o.at), { o });
+        if (g2 < pairClr(s, L.net, o.net, onLayer3, "via") - ROUTE_EPS) score("via", idx + probeDist(probe2, o.at), { o });
       } else {
-        if (o.layers && !o.layers.has(onLayer)) return;
+        if (o.layers && !o.layers.has(onLayer3)) return;
         if (o.ckind !== "edge" && o.ckind !== "hole" && o.ckind !== "keepout" && (sameNetKey(o.net, L.net) || o.ckind === "pad" && (!o.net ? !L.net : isFreePad(o.pad)))) return;
         if (o.ckind === "keepout") {
           const a = probe2.t === "seg" ? probe2.a : [probe2.x, probe2.y], b = probe2.t === "seg" ? probe2.b : a;
@@ -23052,7 +27562,7 @@ Link '${target2}' to this file?`)) return null;
           return;
         }
         const g2 = probeGap(probe2, rL, o.shape);
-        if (g2 < solidClr(s, L.net, o) - ROUTE_EPS) score("solid", idx + probeDist(probe2, shapeCorePts(o.shape)[0]), { o });
+        if (g2 < solidClr(s, L.net, o, onLayer3) - ROUTE_EPS) score("solid", idx + probeDist(probe2, shapeCorePts(o.shape)[0]), { o });
       }
     };
     const grow = (L.w || 0) / 2 + SW.maxW + 2;
@@ -23213,7 +27723,7 @@ Link '${target2}' to this file?`)) return null;
       if (hit2.kind === "solid") {
         if (cur2.head || cur2.proxy) return null;
         const so = hit2.o;
-        const w = walkLineAround(s, cur2, so.shape, so.ckind === "keepout" ? 0 : solidClr(s, cur2.net, so));
+        const w = walkLineAround(s, cur2, so.shape, so.ckind === "keepout" ? 0 : solidClr(s, cur2.net, so, cur2.layer));
         if (!w) return null;
         setLine(st, cur2, w);
         continue;
@@ -23352,7 +27862,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function padBreakouts(pad, width) {
     const c = [pad.x, pad.y];
-    const rot2 = (pad.rot % 360 + 360) % 360;
+    const rot3 = (pad.rot % 360 + 360) % 360;
     const out = [];
     if (pad.shape === "circle") {
       const r = pad.w / 2;
@@ -23362,8 +27872,8 @@ Link '${target2}' to this file?`)) return null;
       }
       return out;
     }
-    if (rot2 % 90 === 0 && /^(rect|roundrect|oval|chamfered_rect)$/.test(pad.shape)) {
-      const swap = rot2 % 180 === 90;
+    if (rot3 % 90 === 0 && /^(rect|roundrect|oval|chamfered_rect)$/.test(pad.shape)) {
+      const swap = rot3 % 180 === 90;
       const sx = swap ? pad.h : pad.w, sy = swap ? pad.w : pad.h;
       const off = [sx > sy ? (sx - sy) / 2 : 0, sx < sy ? (sy - sx) / 2 : 0];
       const add = (...v) => v.reduce((a, b) => [a[0] + b[0], a[1] + b[1]]);
@@ -23390,7 +27900,7 @@ Link '${target2}' to this file?`)) return null;
       const v = [c[0] + len * Math.cos(t), c[1] - len * Math.sin(t)];
       let hit2 = null;
       for (let i = 0; i < 4; i++) {
-        const q = segIntersect(c, v, poly[i], poly[(i + 1) % 4]);
+        const q = segIntersect2(c, v, poly[i], poly[(i + 1) % 4]);
         if (q) {
           hit2 = q;
           break;
@@ -23502,7 +28012,7 @@ Link '${target2}' to this file?`)) return null;
     return bb ? [bb[0] - w, bb[1] - w, bb[2] + w, bb[3] + w] : null;
   }
   var inBox = (b, p) => p[0] >= b[0] - PEPS && p[0] <= b[2] + PEPS && p[1] >= b[1] - PEPS && p[1] <= b[3] + PEPS;
-  function mergeAllowed(path2, v1, v2, bypass, anchor, area) {
+  function mergeAllowed(path2, v1, v2, bypass, anchor, area2) {
     let covers = false;
     for (let i = v1; i < v2; i++) if (segPtDist(path2[i], path2[i + 1], anchor) <= 1e-6) {
       covers = true;
@@ -23516,14 +28026,14 @@ Link '${target2}' to this file?`)) return null;
       }
       if (!keeps) return false;
     }
-    const p1 = path2[v1], p2 = path2[v2], in1 = inBox(area, p1), in2 = inBox(area, p2);
+    const p1 = path2[v1], p2 = path2[v2], in1 = inBox(area2, p1), in2 = inBox(area2, p2);
     if (in1 && in2) return true;
     const horiz = (a0, a1, b0, b1) => {
       const d1 = dir8(a0, a1), d2 = dir8(b0, b1);
       return d1 >= 0 && d1 === d2;
     };
-    if (v1 < path2.length - 1 && !in1 && in2 && inBox(area, path2[v1 + 1])) return horiz(bypass[0], bypass[1], path2[v1], path2[v1 + 1]);
-    if (in1 && !in2 && inBox(area, path2[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path2[v2 - 1], path2[v2]);
+    if (v1 < path2.length - 1 && !in1 && in2 && inBox(area2, path2[v1 + 1])) return horiz(bypass[0], bypass[1], path2[v1], path2[v1 + 1]);
+    if (in1 && !in2 && inBox(area2, path2[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path2[v2 - 1], path2[v2]);
     return false;
   }
   function optimizeDragged(O, pts, orig, p, w) {
@@ -23543,7 +28053,7 @@ Link '${target2}' to this file?`)) return null;
     }
     let path2 = pts.map((q) => q.slice());
     if (!path2.some((q) => peq(q, anchor))) path2.splice(at + 1, 0, anchor);
-    const area = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
+    const area2 = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
     const r = w / 2;
     path2 = simplifyPts(path2);
     let step = path2.length - 2;
@@ -23559,7 +28069,7 @@ Link '${target2}' to this file?`)) return null;
         for (let i = 0; i < 2; i++) {
           const bypass = initialTrace(a, b, -1, i === 1);
           if (bypass.length < 2) continue;
-          if (!pathClear(O, bypass, r) || !mergeAllowed(path2, n, n + step + 1, bypass, anchor, area)) continue;
+          if (!pathClear(O, bypass, r) || !mergeAllowed(path2, n, n + step + 1, bypass, anchor, area2)) continue;
           cands[i] = simplifyPts(path2.slice(0, n).concat(bypass, path2.slice(n + step + 2)));
           cost[i] = cornerCost(cands[i]);
         }
@@ -23716,11 +28226,11 @@ Link '${target2}' to this file?`)) return null;
     const m = { ids: [it.id], start: snapCursor(ctx, mm, /* @__PURE__ */ new Set([it.id]), {}).p, orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false };
     m.orig.set(it.id, clone2(it.node));
     if (it.kind === "via") {
-      const at = pt3(it.node, "at");
+      const at = pt4(it.node, "at");
       for (const sg of ctx.doc.items.values()) {
         if (sg.kind !== "segment" && sg.kind !== "arc") continue;
         for (const key of ["start", "end"]) {
-          const q = pt3(sg.node, key);
+          const q = pt4(sg.node, key);
           if (q && at && samePt(q, at)) {
             m.ends.push({ id: sg.id, key });
             if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone2(sg.node));
@@ -23758,15 +28268,15 @@ Link '${target2}' to this file?`)) return null;
       return out;
     }
     if (k === "segment" || k === "arc" || k === "gr_line" || k === "gr_arc") {
-      const a = pt3(n, "start"), b = pt3(n, "end");
+      const a = pt4(n, "start"), b = pt4(n, "end");
       add(a);
       add(b);
       if (k === "gr_line" && a && b) add([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-      if (k === "gr_arc" || k === "arc") add(pt3(n, "mid"));
+      if (k === "gr_arc" || k === "arc") add(pt4(n, "mid"));
       return out;
     }
     if (k === "gr_circle") {
-      const c = pt3(n, "center"), e = pt3(n, "end");
+      const c = pt4(n, "center"), e = pt4(n, "end");
       add(c);
       if (c && e) {
         const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
@@ -23775,7 +28285,7 @@ Link '${target2}' to this file?`)) return null;
       return out;
     }
     if (k === "gr_rect" || k === "gr_text_box") {
-      const a = pt3(n, "start"), b = pt3(n, "end");
+      const a = pt4(n, "start"), b = pt4(n, "end");
       if (a && b) {
         const [x0, y0, x1, y1] = corners(a, b);
         for (const p of [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [(x0 + x1) / 2, (y0 + y1) / 2]]) add(p);
@@ -23996,8 +28506,8 @@ Link '${target2}' to this file?`)) return null;
     const rev = t.trail.slice().reverse();
     const straight = simplifyPts(legPts(p0, p, false).concat(rev)), diag = simplifyPts(legPts(p0, p, true).concat(rev));
     const areaS = polyAreaAbs(straight), areaD = polyAreaAbs(diag);
-    const IU = 1e6;
-    const ratio = areaS * IU * IU / (areaD * IU * IU + 1);
+    const IU2 = 1e6;
+    const ratio = areaS * IU2 * IU2 / (areaD * IU2 * IU2 + 1);
     if (t.forced && refLength < 10 * t.tol) {
       t.forced = false;
       t.trail = [p0.slice()];
@@ -24143,7 +28653,7 @@ Link '${target2}' to this file?`)) return null;
   function splitOps(doc, split) {
     const it = doc.items.get(split.id);
     if (!it || it.kind !== "segment" || K4.serialize(it.node) !== K4.serialize(split.node)) return [];
-    const a = pt3(it.node, "start"), b = pt3(it.node, "end"), p = split.point;
+    const a = pt4(it.node, "start"), b = pt4(it.node, "end"), p = split.point;
     if (!a || !b || samePt(a, p) || samePt(b, p)) return [];
     const head = clone2(it.node);
     K4.kid(head, "end").splice(1, 2, r62(p[0]), r62(p[1]));
@@ -24679,20 +29189,20 @@ Link '${target2}' to this file?`)) return null;
       if (!it) continue;
       if (it.kind === "footprint") for (const p of padsOf(it)) pads.push(p);
       else if (it.kind === "via") {
-        const at = pt3(it.node, "at");
+        const at = pt4(it.node, "at");
         if (at) vias.push(at);
       }
     }
     if (!pads.length && !vias.length) return;
-    const onLayer = (layers, l) => layers.some((x) => x === l || x === "*.Cu" && /\.Cu$/.test(l) || x === "F&B.Cu" && (l === "F.Cu" || l === "B.Cu"));
-    const padAtEnd = (q, l) => pads.some((p) => onLayer(p.layers, l) && (samePt(q, [p.x, p.y]) || padCovers(p, q[0], q[1])));
+    const onLayer3 = (layers, l) => layers.some((x) => x === l || x === "*.Cu" && /\.Cu$/.test(l) || x === "F&B.Cu" && (l === "F.Cu" || l === "B.Cu"));
+    const padAtEnd = (q, l) => pads.some((p) => onLayer3(p.layers, l) && (samePt(q, [p.x, p.y]) || padCovers(p, q[0], q[1])));
     const seen = /* @__PURE__ */ new Set();
     m.conns = [];
     for (const sg of Array.from(doc.items.values())) {
       if (sg.kind !== "segment" || m.ids.includes(sg.id) || seen.has(sg.id)) continue;
       const l = layerOf2(sg.node);
       for (const key of ["start", "end"]) {
-        const q = pt3(sg.node, key);
+        const q = pt4(sg.node, key);
         if (!q) continue;
         if (vias.some((v) => samePt(q, v))) {
           m.ends.push({ id: sg.id, key });
@@ -24780,7 +29290,7 @@ Link '${target2}' to this file?`)) return null;
   function onStickyPointerDown(ev) {
     const ctx = lastCtx;
     const m = S.move;
-    if (!m || !m.sticky || !ctx || !isPcbDoc()) return;
+    if (!m || !m.sticky || !ctx || !isBoardLikeDoc()) return;
     if (ev.target.closest && (ev.target.closest("#pcbChip") || ev.target.closest("#cmtPanel"))) return;
     ev.stopImmediatePropagation();
     ev.preventDefault();
@@ -24800,7 +29310,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function onStagePointerMove(ev) {
     const ctx = lastCtx;
-    if (!ctx || !isPcbDoc()) return;
+    if (!ctx || !isBoardLikeDoc()) return;
     if (S.pedit) {
       ev.stopImmediatePropagation();
       editHandleMove(ctx, ctx.worldMm(ev));
@@ -24853,7 +29363,7 @@ Link '${target2}' to this file?`)) return null;
         c.globalAlpha = 0.8;
         c.strokeStyle = color(l.layer);
         c.lineWidth = l.width;
-        polyline(c, pts, false);
+        polyline2(c, pts, false);
       }
     }
     const D = S.drag;
@@ -24867,7 +29377,7 @@ Link '${target2}' to this file?`)) return null;
           c.globalAlpha = 0.8;
           c.strokeStyle = color(L.layer);
           c.lineWidth = L.w;
-          polyline(c, L.pts, false);
+          polyline2(c, L.pts, false);
         }
         for (const v of d.shove.preview.vias) drawViaPreview(c, v.at, v.size, v.drill, px, 0.8);
       }
@@ -24881,12 +29391,12 @@ Link '${target2}' to this file?`)) return null;
           c.globalAlpha = 0.7;
           c.strokeStyle = HALO_COLOR;
           c.lineWidth = l.width + 2 * Math.max(netClearance(s, l.netKey), s.minClearance || 0);
-          polyline(c, pts, false);
+          polyline2(c, pts, false);
         }
         c.globalAlpha = 0.8;
         c.strokeStyle = color(l.layer);
         c.lineWidth = l.width;
-        polyline(c, pts, false);
+        polyline2(c, pts, false);
       }
       if (d.via) {
         const at = d.sol.viaAt || d.viaAt, v = viaNow(d.via.node);
@@ -24910,18 +29420,18 @@ Link '${target2}' to this file?`)) return null;
     }
     line(c, e.a, e.b);
   }
-  function drawViaPreview(c, at, size, drill, px, alpha) {
+  function drawViaPreview(c, at, size, drill2, px, alpha) {
     c.globalAlpha = alpha;
     c.strokeStyle = "rgb(179, 179, 179)";
-    c.lineWidth = Math.max((size - drill) / 2, px);
-    ring(c, at, (size + drill) / 4);
+    c.lineWidth = Math.max((size - drill2) / 2, px);
+    ring(c, at, (size + drill2) / 4);
   }
   function previewOfNode(node) {
-    if (node[0] === "segment") return { layer: layerOf2(node), width: widthOf2(node, 0.25), els: [{ t: "seg", a: pt3(node, "start"), b: pt3(node, "end") }] };
-    if (node[0] === "arc") return { layer: layerOf2(node), width: widthOf2(node, 0.25), els: [{ t: "arc", a: pt3(node, "start"), m: pt3(node, "mid"), b: pt3(node, "end") }] };
+    if (node[0] === "segment") return { layer: layerOf2(node), width: widthOf2(node, 0.25), els: [{ t: "seg", a: pt4(node, "start"), b: pt4(node, "end") }] };
+    if (node[0] === "arc") return { layer: layerOf2(node), width: widthOf2(node, 0.25), els: [{ t: "arc", a: pt4(node, "start"), m: pt4(node, "mid"), b: pt4(node, "end") }] };
     if (node[0] === "via") {
       const v = viaNow(node);
-      return { via: { at: pt3(node, "at"), size: v.size, drill: v.drill } };
+      return { via: { at: pt4(node, "at"), size: v.size, drill: v.drill } };
     }
     return null;
   }
@@ -24951,7 +29461,7 @@ Link '${target2}' to this file?`)) return null;
         c.globalAlpha = 0.8;
         c.strokeStyle = color(L.layer);
         c.lineWidth = L.w;
-        polyline(c, L.pts, false);
+        polyline2(c, L.pts, false);
       }
       for (const v of rt.shove.preview.vias) drawViaPreview(c, v.at, v.size, v.drill, px, 0.8);
     }
@@ -25053,12 +29563,12 @@ Link '${target2}' to this file?`)) return null;
       if (it.kind === "footprint") {
         for (const p of padsOf(it)) if (p.type !== "np_thru_hole") put(mv ? dyn : stat, NT.key(p.net), [p.x, p.y], it.id);
       } else if (it.kind === "via") {
-        const a = pt3(it.node, "at");
+        const a = pt4(it.node, "at");
         if (a) put(mv ? dyn : stat, NT.key(netOf2(it.node)), a, it.id);
       } else if (it.kind === "segment" || it.kind === "arc") {
         const k = NT.key(netOf2(it.node));
         for (const key of ["start", "end"]) {
-          const a = pt3(it.node, key);
+          const a = pt4(it.node, key);
           if (a) put(mv ? dyn : stat, k, a, it.id);
         }
       }
@@ -25146,7 +29656,7 @@ Link '${target2}' to this file?`)) return null;
       c.lineWidth = 2 * off;
       c.lineJoin = "round";
       c.lineCap = "round";
-      polyline(c, pts, closed);
+      polyline2(c, pts, closed);
     }
   }
   function ring(c, p, r) {
@@ -25154,7 +29664,7 @@ Link '${target2}' to this file?`)) return null;
     c.arc(p[0], p[1], r, 0, Math.PI * 2);
     c.stroke();
   }
-  function polyline(c, pts, close) {
+  function polyline2(c, pts, close) {
     if (pts.length < 2) return;
     c.beginPath();
     c.moveTo(pts[0][0], pts[0][1]);
@@ -25183,7 +29693,7 @@ Link '${target2}' to this file?`)) return null;
         ring(c, [g2.x, g2.y], g2.r);
       } else if (g2.t === "poly" && g2.pts) {
         c.lineWidth = Math.max(g2.w || 0, px);
-        polyline(c, g2.pts, !!g2.close);
+        polyline2(c, g2.pts, !!g2.close);
       } else if (g2.t === "text" && base && K4.drawTextStroke) {
         c.save();
         K4.drawTextStroke(c, g2, px, c.strokeStyle, base, false);
@@ -25283,6 +29793,7 @@ Link '${target2}' to this file?`)) return null;
     drawGenEditPreview(c, ctx);
     if (!S.route && !S.draw && !S.drag && !S.modTool) drawTuningSelection(c, ctx, px);
     drawEditPoints(c, ctx, px);
+    if (S.modTool && PAD_TOOLS[S.modTool] && S.hover) drawPadPreview(c, doc, PAD_TOOLS[S.modTool], [S.hover.x, S.hover.y], S.padPlace ? S.padPlace.angle : 0, px);
     if (S.violations) for (const ob of S.violations.obs) {
       drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7);
       drawShape(c, ob.shape, 0, "#00FF00", 1);
@@ -25306,18 +29817,18 @@ Link '${target2}' to this file?`)) return null;
       } else if (d.shape === "garc") drawArcPreview(c, d, px, color(layer));
       else if (d.shape === "gcurve") {
         const pts = d.pts.concat([d.cur]);
-        polyline(c, K4.bezierPts(pts), false);
+        polyline2(c, K4.bezierPts(pts), false);
         c.setLineDash([2 * px, 2 * px]);
-        polyline(c, pts, false);
+        polyline2(c, pts, false);
         c.setLineDash([]);
       } else if (POLY_TOOLS.has(d.shape)) {
         if (d.pending) {
         } else {
-          polyline(c, d.pts.concat((d.leader || [null, d.cur]).slice(1)), false);
+          polyline2(c, d.pts.concat((d.leader || [null, d.cur]).slice(1)), false);
           const loop = d.loop && d.loop.length > 1 ? d.loop : [d.cur, d.pts[0]];
           if (d.pts.length > 1) {
             c.setLineDash([2 * px, 2 * px]);
-            polyline(c, loop, false);
+            polyline2(c, loop, false);
             c.setLineDash([]);
           }
         }
@@ -25388,6 +29899,48 @@ Link '${target2}' to this file?`)) return null;
     }
     c.globalAlpha = 1;
   }
+  function drawPadPreview(c, doc, type, at, angle, px) {
+    const pad = masterPad(doc, type, S.padTemplate || null);
+    const sz = K4.kid(pad, "size");
+    const w = sz ? K4.num(sz[1]) : 1, h = sz ? K4.num(sz[2]) : 1;
+    const layers = (K4.kid(pad, "layers") || []).slice(1).map(String);
+    c.save();
+    c.translate(at[0], at[1]);
+    c.rotate(-angle * Math.PI / 180);
+    c.globalAlpha = 0.6;
+    c.strokeStyle = layers.some((l) => l === "B.Cu") && !layers.some((l) => l === "F.Cu" || l === "*.Cu") ? "#4D7FC4" : "#C83434";
+    c.lineWidth = 1.5 * px;
+    const shape = String(pad[3]);
+    c.beginPath();
+    if (shape === "circle") c.arc(0, 0, w / 2, 0, Math.PI * 2);
+    else if (shape === "oval") {
+      const r = Math.min(w, h) / 2;
+      if (w >= h) {
+        c.moveTo(-w / 2 + r, -r);
+        c.lineTo(w / 2 - r, -r);
+        c.arc(w / 2 - r, 0, r, -Math.PI / 2, Math.PI / 2);
+        c.lineTo(-w / 2 + r, r);
+        c.arc(-w / 2 + r, 0, r, Math.PI / 2, Math.PI * 1.5);
+      } else {
+        c.moveTo(r, -h / 2 + r);
+        c.lineTo(r, h / 2 - r);
+        c.arc(0, h / 2 - r, r, 0, Math.PI);
+        c.lineTo(-r, -h / 2 + r);
+        c.arc(0, -h / 2 + r, r, Math.PI, Math.PI * 2);
+      }
+    } else c.rect(-w / 2, -h / 2, w, h);
+    c.stroke();
+    const drill2 = K4.kid(pad, "drill");
+    if (drill2) {
+      const d = K4.num(drill2.find((x) => typeof x === "number" || /^[\d.]+$/.test(String(x))));
+      if (d > 0) {
+        c.beginPath();
+        c.arc(0, 0, d / 2, 0, Math.PI * 2);
+        c.stroke();
+      }
+    }
+    c.restore();
+  }
   var DP_MSG_NETS = "Unable to find complementary differential pair nets. Make sure the names of the nets belonging to a differential pair end with either N/P or +/-.";
   var DP_MSG_START = "Can't find a suitable starting point.  If starting from an existing differential pair make sure you are at the end.";
   var DP_MSG_NOWHERE = "Cannot start a differential pair in the middle of nowhere.";
@@ -25440,7 +29993,7 @@ Link '${target2}' to this file?`)) return null;
           if (J.NT.key(p.net) === netKey && ls.has(layer)) out.push({ kind: "pad", p: [p.x, p.y], dir: null, id: it.id, layers: Array.from(ls).sort().join(","), pad: p });
         }
       } else if (it.kind === "via") {
-        const a = pt3(it.node, "at");
+        const a = pt4(it.node, "at");
         const ls = viaLayers(it.node, copper);
         if (a && ls.has(layer) && J.NT.key(netOf2(it.node)) === netKey) out.push({ kind: "via", p: a, dir: null, id: it.id, layers: Array.from(ls).sort().join(",") });
       } else if (it.kind === "segment" && layerOf2(it.node) === layer && J.NT.key(netOf2(it.node)) === netKey) {
@@ -25510,18 +30063,18 @@ Link '${target2}' to this file?`)) return null;
     const aP = pair.P.p, aN = pair.N.p;
     const M = [(aP[0] + aN[0]) / 2, (aP[1] + aN[1]) / 2];
     const axis = vunit(vsub(aP, aN));
-    const perp3 = [-axis[1], axis[0]];
+    const perp4 = [-axis[1], axis[0]];
     let cands;
     if (pair.P.dir && pair.N.dir && Math.abs(pair.P.dir[0] * pair.N.dir[0] + pair.P.dir[1] * pair.N.dir[1] - 1) < 1e-3) cands = [DIRS8[dir8([0, 0], pair.P.dir)]];
     else cands = DIRS8;
-    const want = toward && !samePt(toward, M) ? vunit(vsub(toward, M)) : perp3;
+    const want = toward && !samePt(toward, M) ? vunit(vsub(toward, M)) : perp4;
     let best = null;
     for (const d2 of cands) {
       const n2 = [-d2[1], d2[0]];
       const tP2 = (aP[0] - M[0]) * n2[0] + (aP[1] - M[1]) * n2[1];
       if (Math.abs(tP2) < 1e-6) continue;
       const ang = Math.acos(Math.max(-1, Math.min(1, d2[0] * want[0] + d2[1] * want[1])));
-      const offPerp = Math.acos(Math.min(1, Math.abs(d2[0] * perp3[0] + d2[1] * perp3[1])));
+      const offPerp = Math.acos(Math.min(1, Math.abs(d2[0] * perp4[0] + d2[1] * perp4[1])));
       const score = ang + 1.2 * offPerp;
       if (!best || score < best.score - 1e-9) best = { d: d2, n: n2, tP: tP2, score };
     }
@@ -25567,7 +30120,7 @@ Link '${target2}' to this file?`)) return null;
     if (along2 <= 1e-6) return { pts: [gw.mid.slice()], reached: samePt(goal, gw.mid) };
     const lead = Math.abs((goal[0] - gw.mid[0]) * gw.n[0] + (goal[1] - gw.mid[1]) * gw.n[1]);
     if (lead <= h) goal = rp(vadd(gw.mid, vmul(gw.d, along2)));
-    const run = (from) => {
+    const run2 = (from) => {
       const a = legPts(from, goal, false), b = legPts(from, goal, true);
       const score = (p) => p.length > 1 ? dirAngle(gw.dIdx, dir8(p[0], p[1])) : 0;
       let first = rt.diagFirst ? b : a;
@@ -25575,12 +30128,12 @@ Link '${target2}' to this file?`)) return null;
       if (mode === RM_MARK || !O) return { pts: first, reached: true };
       return walkHead(O, from, goal, R2, first === b, gw.dIdx);
     };
-    let r = run(gw.mid);
+    let r = run2(gw.mid);
     const turn = r.pts.length > 1 ? dirAngle(gw.dIdx, dir8(r.pts[0], r.pts[1])) : 0;
     if (turn >= 3) return { pts: [gw.mid.slice()], reached: false };
     if (turn > 0) {
       const ahead = rp(vadd(gw.mid, vmul(gw.d, h * Math.tan(turn * Math.PI / 8) + 1e-3)));
-      const r2 = run(ahead);
+      const r2 = run2(ahead);
       r = { pts: simplifyPts([gw.mid.slice()].concat(r2.pts)), reached: r2.reached };
     }
     return r;
@@ -25606,58 +30159,58 @@ Link '${target2}' to this file?`)) return null;
       return;
     }
     const target2 = rt.placingVia ? null : dpTarget(ctx, rt, hv && hv.snap);
-    let centre, reached = true, tail = null;
+    let centre2, reached = true, tail = null;
     if (target2) {
       const tg = dpGateway(target2, gw.mid, h);
       if (tg && tg.sideP === -gw.sideP) {
         const back = rp(vadd(tg.mid, vmul(tg.d, h + 1e-3)));
         const c = dpCentre(mode === RM_MARK ? null : O, gw, back, R2, rt, mode);
         if (c.reached && samePt(c.pts[c.pts.length - 1], back)) {
-          centre = simplifyPts(c.pts.concat([tg.mid.slice()]));
+          centre2 = simplifyPts(c.pts.concat([tg.mid.slice()]));
           tail = tg;
           rt.dpTargetPair = target2;
         }
       }
     }
-    if (!centre) {
+    if (!centre2) {
       const c = dpCentre(mode === RM_MARK ? null : O, gw, rt.cursor, R2, rt, mode);
-      centre = c.pts;
+      centre2 = c.pts;
       reached = c.reached;
     }
-    while (!tail && centre.length > 2 && Math.hypot(centre[centre.length - 1][0] - centre[centre.length - 2][0], centre[centre.length - 1][1] - centre[centre.length - 2][1]) < 2 * h * TAN_22_5 + 1e-3) centre = centre.slice(0, -1);
-    const lastDir = centre.length > 1 ? vunit(vsub(centre[centre.length - 1], centre[centre.length - 2])) : gw.d;
-    let P = chainAppend(gw.entryP.map((q) => q.slice()), offsetPts(centre, gw.sideP * h, gw.d));
-    let N = chainAppend(gw.entryN.map((q) => q.slice()), offsetPts(centre, -gw.sideP * h, gw.d));
+    while (!tail && centre2.length > 2 && Math.hypot(centre2[centre2.length - 1][0] - centre2[centre2.length - 2][0], centre2[centre2.length - 1][1] - centre2[centre2.length - 2][1]) < 2 * h * TAN_22_5 + 1e-3) centre2 = centre2.slice(0, -1);
+    const lastDir = centre2.length > 1 ? vunit(vsub(centre2[centre2.length - 1], centre2[centre2.length - 2])) : gw.d;
+    let P = chainAppend(gw.entryP.map((q) => q.slice()), offsetPts(centre2, gw.sideP * h, gw.d));
+    let N2 = chainAppend(gw.entryN.map((q) => q.slice()), offsetPts(centre2, -gw.sideP * h, gw.d));
     if (tail) {
       chainAppend(P, tail.entryP.slice().reverse());
-      chainAppend(N, tail.entryN.slice().reverse());
+      chainAppend(N2, tail.entryN.slice().reverse());
     }
     let vias = null;
-    if (rt.placingVia && centre.length) {
-      const e = centre[centre.length - 1];
+    if (rt.placingVia && centre2.length) {
+      const e = centre2[centre2.length - 1];
       const n = [-lastDir[1], lastDir[0]];
       const hv2 = (sz.viaGap + rt.placingVia.diameter) / 2;
       const k = Math.abs(hv2 - h);
       const c2 = vadd(e, vmul(lastDir, k));
       const vP = rp(vadd(c2, vmul(n, gw.sideP * hv2))), vN = rp(vadd(c2, vmul(n, -gw.sideP * hv2)));
       chainAppend(P, [vP]);
-      chainAppend(N, [vN]);
+      chainAppend(N2, [vN]);
       vias = { P: vP, N: vN };
     }
     P = simplifyPts(P);
-    N = simplifyPts(N);
-    rt.dpLines = { P, N, centre, lastDir, vias };
+    N2 = simplifyPts(N2);
+    rt.dpLines = { P, N: N2, centre: centre2, lastDir, vias };
     rt.reached = reached;
-    rt.head = centre;
-    rt.target = centre[centre.length - 1].slice();
+    rt.head = centre2;
+    rt.target = centre2[centre2.length - 1].slice();
     const hits = /* @__PURE__ */ new Set();
-    for (const L of [P, N]) for (const ob of pathHits(O, L, sz.width / 2)) hits.add(ob);
+    for (const L of [P, N2]) for (const ob of pathHits(O, L, sz.width / 2)) hits.add(ob);
     if (vias) for (const L of viaSpanLayers(routeDoc(ctx, rt), rt.placingVia.span)) {
       const OL = L === rt.layer ? O : indexObstacles(routeObstacles(routeDoc(ctx, rt), settingsOf2(ctx), rt.netKey, L, null).list.filter((ob) => ob.net !== rt.netKeyN));
       for (const v of [vias.P, vias.N]) for (const ob of pathHits(OL, [v], rt.placingVia.diameter / 2)) hits.add(ob);
     }
     rt.collisions = hits.size ? Array.from(hits) : null;
-    rt.dpFit = !hits.size && P.length > 1 && N.length > 1;
+    rt.dpFit = !hits.size && P.length > 1 && N2.length > 1;
     rt.els = [];
     rt.ratline = dpRatlines(routeCtx(ctx, rt), rt);
   }
@@ -25765,12 +30318,12 @@ Link '${target2}' to this file?`)) return null;
     }
     const doc = routeDoc(ctx, rt);
     const seg = (pts) => pts.slice(0, -1).map((a, i) => ({ t: "seg", a: a.slice(), b: pts[i + 1].slice() }));
-    let P = L.P, N = L.N;
-    if (!rs.fix_all_segments && !opts.finish && !rt.dpTargetPair && !L.vias && P.length > 2 && N.length > 2) {
+    let P = L.P, N2 = L.N;
+    if (!rs.fix_all_segments && !opts.finish && !rt.dpTargetPair && !L.vias && P.length > 2 && N2.length > 2) {
       P = P.slice(0, -1);
-      N = N.slice(0, -1);
+      N2 = N2.slice(0, -1);
     }
-    const ops = trackOps(doc, seg(P), rt.dpSizes.width, rt.layer, rt.net).concat(trackOps(doc, seg(N), rt.dpSizes.width, rt.layer, rt.netN));
+    const ops = trackOps(doc, seg(P), rt.dpSizes.width, rt.layer, rt.net).concat(trackOps(doc, seg(N2), rt.dpSizes.width, rt.layer, rt.netN));
     let nextPair;
     if (L.vias) {
       const v = rt.placingVia;
@@ -25783,8 +30336,8 @@ Link '${target2}' to this file?`)) return null;
       }
       nextPair = { P: { kind: "via", p: L.vias.P.slice(), dir: null }, N: { kind: "via", p: L.vias.N.slice(), dir: null } };
     } else {
-      const dP = vunit(vsub(P[P.length - 1], P[P.length - 2])), dN = vunit(vsub(N[N.length - 1], N[N.length - 2]));
-      nextPair = { P: { kind: "track", p: P[P.length - 1].slice(), dir: dP }, N: { kind: "track", p: N[N.length - 1].slice(), dir: dN } };
+      const dP = vunit(vsub(P[P.length - 1], P[P.length - 2])), dN = vunit(vsub(N2[N2.length - 1], N2[N2.length - 2]));
+      nextPair = { P: { kind: "track", p: P[P.length - 1].slice(), dir: dP }, N: { kind: "track", p: N2[N2.length - 1].slice(), dir: dN } };
     }
     const prevDir = P.length > 1 ? dir8(P[P.length - 2], P[P.length - 1]) : -1;
     rt.stages.push({ ops, from: rt.last.slice(), layer: rt.layer, net: rt.net, netKey: rt.netKey, placingVia: rt.placingVia, startIds: rt.startIds, split: null, dir: rt.tracer.lastSegDir, dpStart: rt.dpStart });
@@ -25930,13 +30483,13 @@ Link '${target2}' to this file?`)) return null;
       c.globalAlpha = 0.7;
       c.strokeStyle = HALO_COLOR;
       c.lineWidth = w + 2 * clr;
-      polyline(c, L.P, false);
-      polyline(c, L.N, false);
+      polyline2(c, L.P, false);
+      polyline2(c, L.N, false);
       c.globalAlpha = 0.8;
       c.strokeStyle = saturated(color(rt.layer));
       c.lineWidth = w;
-      polyline(c, L.P, false);
-      polyline(c, L.N, false);
+      polyline2(c, L.P, false);
+      polyline2(c, L.N, false);
       if (L.vias && rt.placingVia) for (const at of [L.vias.P, L.vias.N]) {
         c.globalAlpha = 0.7;
         c.fillStyle = HALO_COLOR;
@@ -26137,19 +30690,19 @@ Link '${target2}' to this file?`)) return null;
     let best = null;
     for (const it of doc.items.values()) {
       if (it.kind !== "footprint" || !it.bbox || x < it.bbox[0] || x > it.bbox[2] || y < it.bbox[1] || y > it.bbox[3]) continue;
-      for (const p of padsOf(it)) if ((!layer || padOnLayer(p, layer)) && padCovers(p, x, y) && (!best || p.w * p.h < best.pad.w * best.pad.h)) best = { item: it, index: p.index, pad: p };
+      for (const p of padsOf(it)) if ((!layer || padOnLayer2(p, layer)) && padCovers(p, x, y) && (!best || p.w * p.h < best.pad.w * best.pad.h)) best = { item: it, index: p.index, pad: p };
     }
     return best;
   }
   var closedShapeLoop = (it) => {
     const n = it.node;
     if (it.kind === "gr_rect") {
-      const [x0, y0, x1, y1] = corners(pt3(n, "start"), pt3(n, "end"));
+      const [x0, y0, x1, y1] = corners(pt4(n, "start"), pt4(n, "end"));
       return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
     }
     if (it.kind === "gr_poly") return K4.ptsOf(n);
     if (it.kind === "gr_circle") {
-      const c = pt3(n, "center"), e = pt3(n, "end");
+      const c = pt4(n, "center"), e = pt4(n, "end");
       const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
       const pts = [];
       for (let i = 0; i < 32; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
@@ -26162,10 +30715,10 @@ Link '${target2}' to this file?`)) return null;
     for (const it of items) {
       const n = it.node;
       if (it.kind === "gr_line") {
-        const a = pt3(n, "start"), b = pt3(n, "end");
+        const a = pt4(n, "start"), b = pt4(n, "end");
         if (a && b) chains.push([a, b]);
       } else if (it.kind === "gr_arc") {
-        const a = pt3(n, "start"), m = pt3(n, "mid"), b = pt3(n, "end");
+        const a = pt4(n, "start"), m = pt4(n, "mid"), b = pt4(n, "end");
         const arc = a && m && b && K4.arcFrom3(a, m, b);
         if (arc) chains.push(arcPoints(arc, a, b));
       } else if (it.kind === "gr_curve") {
@@ -26198,10 +30751,10 @@ Link '${target2}' to this file?`)) return null;
         const l = layerOf2(n, layer);
         if (!/\.Cu$/.test(l) || it.kind !== "gr_line" && it.kind !== "gr_arc") continue;
         const w = K4.kid(n, "stroke") ? K4.num((K4.kid(K4.kid(n, "stroke"), "width") || [0, 0.2])[1], 0.2) : 0.2;
-        const a = pt3(n, "start");
+        const a = pt4(n, "start");
         const net = netUnder(doc, a[0], a[1], l);
-        if (it.kind === "gr_line") out.push(addedChange(doc, segmentNode(doc, a, pt3(n, "end"), w, l, net), net));
-        else out.push(addedChange(doc, ["arc", ["start", ...a.map(r62)], ["mid", ...pt3(n, "mid").map(r62)], ["end", ...pt3(n, "end").map(r62)], ["width", r62(w)], ["layer", l], netNode(doc, net)], net));
+        if (it.kind === "gr_line") out.push(addedChange(doc, segmentNode(doc, a, pt4(n, "end"), w, l, net), net));
+        else out.push(addedChange(doc, ["arc", ["start", ...a.map(r62)], ["mid", ...pt4(n, "mid").map(r62)], ["end", ...pt4(n, "end").map(r62)], ["width", r62(w)], ["layer", l], netNode(doc, net)], net));
         out.push(removedChange(it));
       }
       return out;
@@ -26309,11 +30862,11 @@ Link '${target2}' to this file?`)) return null;
         else if (it.node.includes("blind")) st.vias.blind++;
         else st.vias.through++;
       } else if (it.kind === "segment") {
-        const a = pt3(it.node, "start"), b2 = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b2 = pt4(it.node, "end");
         st.tracks.count++;
         if (a && b2) st.tracks.length += Math.hypot(b2[0] - a[0], b2[1] - a[1]);
       } else if (it.kind === "arc") {
-        const a = pt3(it.node, "start"), m = pt3(it.node, "mid"), b2 = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), m = pt4(it.node, "mid"), b2 = pt4(it.node, "end");
         const arc = a && m && b2 && K4.arcFrom3(a, m, b2);
         st.tracks.count++;
         if (arc) st.tracks.length += arcLength(arc);
@@ -26384,7 +30937,7 @@ Link '${target2}' to this file?`)) return null;
   function trackUnder(doc, x, y, layer) {
     const it = hitTestItem(doc, x, y, HIT_MM);
     if (!it || it.kind !== "segment" || layerOf2(it.node) !== layer) return null;
-    const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+    const a = pt4(it.node, "start"), b = pt4(it.node, "end");
     if (!a || !b) return null;
     const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
     const k = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
@@ -26683,7 +31236,7 @@ Link '${target2}' to this file?`)) return null;
       const b = it.bbox;
       if (b && (p[0] < b[0] - 0.01 || p[0] > b[2] + 0.01 || p[1] < b[1] - 0.01 || p[1] > b[3] + 0.01)) continue;
       if (it.kind === "via") {
-        const a = pt3(it.node, "at");
+        const a = pt4(it.node, "at");
         if (a && samePt(a, p) && viaLayers(it.node, cu).has(layer)) return true;
       } else if (it.kind === "footprint") {
         for (const pd of padsOf(it)) if (samePt([pd.x, pd.y], p) && padCopperLayers(pd, cu).has(layer)) return true;
@@ -26715,7 +31268,7 @@ Link '${target2}' to this file?`)) return null;
     if (!ids.length) return;
     const changes = deleteChanges(ctx.doc, ids);
     S.sel.clear();
-    if (!changes.length) return;
+    if (!changes.length && !changes.infoError) return;
     ctx.commit(changes, "delete");
   }
   function hoverDelete(ctx) {
@@ -26813,7 +31366,7 @@ Link '${target2}' to this file?`)) return null;
   }
   var distToItem = (it, p) => {
     if (it.kind === "via") {
-      const a2 = pt3(it.node, "at");
+      const a2 = pt4(it.node, "at");
       return Math.hypot(p[0] - a2[0], p[1] - a2[1]);
     }
     const [a, b] = trackEnds(it);
@@ -27009,13 +31562,13 @@ Link '${target2}' to this file?`)) return null;
     };
     for (const it of doc.items.values()) {
       if (it.kind === "segment" || it.kind === "arc") {
-        const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b = pt4(it.node, "end");
         if (!a || !b) continue;
         const L = layerOf2(it.node);
         add(ends, L + "|" + ptKey(a), it);
         add(ends, L + "|" + ptKey(b), it);
       } else if (it.kind === "via") {
-        const a = pt3(it.node, "at");
+        const a = pt4(it.node, "at");
         if (a) add(vias, ptKey(a), { item: it, layers: viaLayers(it.node, copper), net: NT.key(netOf2(it.node)) });
       } else if (it.kind === "footprint") for (const p of padsOf(it)) add(pads, ptKey([p.x, p.y]), { item: it, pad: p, layers: padCopperLayers(p, copper) });
     }
@@ -27024,7 +31577,7 @@ Link '${target2}' to this file?`)) return null;
     else S.joints = J;
     return J;
   }
-  var trackEnds = (it) => [pt3(it.node, "start"), pt3(it.node, "end")];
+  var trackEnds = (it) => [pt4(it.node, "start"), pt4(it.node, "end")];
   function assembleLine(doc, seg) {
     const J = jointIndex(doc);
     const L = layerOf2(seg.node), w = widthOf2(seg.node, 0.25), net = netOf2(seg.node), key = J.NT.key(net);
@@ -27061,7 +31614,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function viaFanout(doc, via) {
     const J = jointIndex(doc);
-    const at = pt3(via.node, "at");
+    const at = pt4(via.node, "at");
     if (!at) return [];
     const key = J.NT.key(netOf2(via.node));
     const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
@@ -27088,7 +31641,7 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   function arcStubLine(arc, at, layer, netKey) {
-    const a = pt3(arc.node, "start"), m = pt3(arc.node, "mid"), b = pt3(arc.node, "end");
+    const a = pt4(arc.node, "start"), m = pt4(arc.node, "mid"), b = pt4(arc.node, "end");
     if (!a || !m || !b) return null;
     const e = samePt(a, at) ? a : b;
     const c = K4.arcFrom3(a, m, b);
@@ -27101,7 +31654,7 @@ Link '${target2}' to this file?`)) return null;
     return { ids: [], pts: [at.slice(), at.slice()], index: 0, vertex: 0, width: widthOf2(arc.node, 0.25), layer, net: netOf2(arc.node), netKey, arc, arcDiag: diag, tmpl: arc };
   }
   function snapGrab(ctx, it, mm) {
-    if (it.kind === "via") return pt3(it.node, "at").slice();
+    if (it.kind === "via") return pt4(it.node, "at").slice();
     const [a, b] = trackEnds(it);
     const w2 = widthOf2(it.node, 0.25) / 2;
     const da = Math.hypot(mm[0] - a[0], mm[1] - a[1]), db = Math.hypot(mm[0] - b[0], mm[1] - b[1]);
@@ -27119,7 +31672,7 @@ Link '${target2}' to this file?`)) return null;
     if (it.kind === "via") {
       d.mode = "via";
       d.via = it;
-      d.viaAt = pt3(it.node, "at").slice();
+      d.viaAt = pt4(it.node, "at").slice();
       d.lines = viaFanout(doc, it);
       d.netKey = netTable(doc).key(netOf2(it.node));
     } else {
@@ -27238,7 +31791,7 @@ Link '${target2}' to this file?`)) return null;
     });
     return out;
   }
-  var padOnLayer = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu");
+  var padOnLayer2 = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu");
   function padCovers(p, x, y) {
     const [lx, ly] = rotator2(-p.rot)(x - p.x, y - p.y);
     return Math.abs(lx) <= p.w / 2 && Math.abs(ly) <= p.h / 2;
@@ -27261,13 +31814,13 @@ Link '${target2}' to this file?`)) return null;
       if (b && (x < b[0] - tol || x > b[2] + tol || y < b[1] - tol || y > b[3] + tol)) continue;
       if (it.kind === "footprint") {
         padsOf(it).forEach((p, i) => {
-          if (padOnLayer(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y), { fp: it.id, padIndex: p.index !== void 0 ? p.index : i });
+          if (padOnLayer2(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y), { fp: it.id, padIndex: p.index !== void 0 ? p.index : i });
         });
       } else if (it.kind === "via") {
-        const a = pt3(it.node, "at");
+        const a = pt4(it.node, "at");
         if (a) take(a[0], a[1], netOf2(it.node), "via", false, { id: it.id });
       } else if ((it.kind === "segment" || it.kind === "arc") && layerOf2(it.node) === layer) {
-        const a = pt3(it.node, "start"), b2 = pt3(it.node, "end");
+        const a = pt4(it.node, "start"), b2 = pt4(it.node, "end");
         if (!a || !b2) continue;
         take(a[0], a[1], netOf2(it.node), "track", false, { id: it.id });
         take(b2[0], b2[1], netOf2(it.node), "track", false, { id: it.id });
@@ -27287,7 +31840,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function netUnder(doc, x, y, layer) {
     for (const it2 of doc.items.values()) if (it2.kind === "footprint" && it2.bbox && x >= it2.bbox[0] && x <= it2.bbox[2] && y >= it2.bbox[1] && y <= it2.bbox[3]) {
-      for (const p of padsOf(it2)) if ((!layer || padOnLayer(p, layer)) && padCovers(p, x, y)) return p.net;
+      for (const p of padsOf(it2)) if ((!layer || padOnLayer2(p, layer)) && padCovers(p, x, y)) return p.net;
     }
     const it = hitTestItem(doc, x, y, HIT_MM);
     if (it && (it.kind === "via" || (it.kind === "segment" || it.kind === "arc") && (!layer || layerOf2(it.node) === layer))) return netOf2(it.node);
@@ -27331,21 +31884,21 @@ Link '${target2}' to this file?`)) return null;
           push({ id: it.id, kind: "pad", item: it, pad: p, index: p.index, net: NT.key(p.net), netObj: p.net, layers, shape: padShape(p), anchors: [[p.x, p.y]] });
         });
       } else if (it.kind === "segment") {
-        const a = pt3(n, "start"), b = pt3(n, "end");
+        const a = pt4(n, "start"), b = pt4(n, "end");
         if (!a || !b) continue;
         const w = widthOf2(n, 0.25);
         push({ id: it.id, kind: "segment", item: it, net: NT.key(netOf2(n)), netObj: netOf2(n), layers: /* @__PURE__ */ new Set([layerOf2(n)]), shape: { t: "seg", a, b, r: w / 2 }, anchors: [a, b], length: Math.hypot(b[0] - a[0], b[1] - a[1]), width: w });
       } else if (it.kind === "arc") {
-        const a = pt3(n, "start"), m = pt3(n, "mid"), b = pt3(n, "end");
+        const a = pt4(n, "start"), m = pt4(n, "mid"), b = pt4(n, "end");
         if (!a || !m || !b) continue;
         const w = widthOf2(n, 0.25);
         const arc = K4.arcFrom3(a, m, b);
         push({ id: it.id, kind: "arc", item: it, net: NT.key(netOf2(n)), netObj: netOf2(n), layers: /* @__PURE__ */ new Set([layerOf2(n)]), shape: { t: "path", pts: arc ? arcPoints(arc, a, b) : [a, b], r: w / 2 }, anchors: [a, b], length: arc ? arcLength(arc) : Math.hypot(b[0] - a[0], b[1] - a[1]), width: w });
       } else if (it.kind === "via") {
-        const a = pt3(n, "at");
+        const a = pt4(n, "at");
         if (!a) continue;
-        const size = K4.num((K4.kid(n, "size") || [0, 0.8])[1], 0.8), drill = K4.num((K4.kid(n, "drill") || [0, 0.4])[1], 0.4);
-        push({ id: it.id, kind: "via", item: it, net: NT.key(netOf2(n)), netObj: netOf2(n), layers: viaLayers(n, copper), shape: { t: "circle", x: a[0], y: a[1], r: size / 2 }, anchors: [a], size, drill });
+        const size = K4.num((K4.kid(n, "size") || [0, 0.8])[1], 0.8), drill2 = K4.num((K4.kid(n, "drill") || [0, 0.4])[1], 0.4);
+        push({ id: it.id, kind: "via", item: it, net: NT.key(netOf2(n)), netObj: netOf2(n), layers: viaLayers(n, copper), shape: { t: "circle", x: a[0], y: a[1], r: size / 2 }, anchors: [a], size, drill: drill2 });
       } else if (it.kind === "zone" && !K4.kid(n, "keepout")) {
         const net = NT.key(netOf2(n));
         const zl = zoneLayers(n);
@@ -28465,8 +33018,8 @@ Link '${target2}' to this file?`)) return null;
       }
     }, ms);
   }
-  function dimensionLabel(prefix, mm, deg) {
-    if (deg) return `${prefix}: ${mm.toFixed(1)}\xB0`;
+  function dimensionLabel(prefix, mm, deg2) {
+    if (deg2) return `${prefix}: ${mm.toFixed(1)}\xB0`;
     const u = sizeUnits();
     return `${prefix}: ${u === "mil" ? (mm / 0.0254).toFixed(1) + " mils" : u === "in" ? (mm / 25.4).toFixed(4) + " in" : mm.toFixed(3) + " mm"}`;
   }
@@ -28523,7 +33076,8 @@ Link '${target2}' to this file?`)) return null;
     c.save();
     c.globalAlpha = 1;
     c.font = `${fs2}px sans-serif`;
-    const w = c.measureText(p.text).width + 2 * m, h = fs2 + 2 * m, x = p.at[0] + 20 * px, y = p.at[1] + 20 * px;
+    const lines = p.text.split("\n"), lh = fs2 * 1.3;
+    const w = Math.max(...lines.map((l) => c.measureText(l).width)) + 2 * m, h = fs2 + (lines.length - 1) * lh + 2 * m, x = p.at[0] + 20 * px, y = p.at[1] + 20 * px;
     c.fillStyle = css("--panel", "#2b2b2b");
     c.strokeStyle = css("--line", "#555");
     c.lineWidth = px;
@@ -28531,7 +33085,7 @@ Link '${target2}' to this file?`)) return null;
     c.strokeRect(x, y, w, h);
     c.fillStyle = css("--ink", "#e0e0e0");
     c.textBaseline = "top";
-    c.fillText(p.text, x + m, y + m);
+    lines.forEach((l, i) => c.fillText(l, x + m, y + m + i * lh));
     c.restore();
   }
   function placeText(ctx, mm, text2) {
@@ -28553,7 +33107,7 @@ Link '${target2}' to this file?`)) return null;
       const p = K4.atOf(n);
       const moved = Math.abs(p[0] - at[0]) > 1e-9 || Math.abs(p[1] - at[1]) > 1e-9;
       const c = addedChange(ctx.doc, n);
-      ctx.commit([c], "Draw Text");
+      ctx.commit([c], "Draw Text", moved ? void 0 : { tentative: true });
       applySelection(ctx, [c.id]);
       if (!moved) beginCarryMove(ctx, { placing: [c.id], origin: at });
       ctx.requestRender();
@@ -28585,27 +33139,13 @@ Link '${target2}' to this file?`)) return null;
   function setNewItemDialogsImpl(d) {
     newItemDialogs = d;
   }
+  var norm3602 = (a) => (a % 360 + 360) % 360;
   var ARC_CENTER_START_END = 0;
   var ARC_START_END_MID = 1;
   var ARC_START_END_CENTER = 2;
   var ARC_TANGENT = 3;
   var ARC_START_DIR_END = 4;
   var ARC_MODE_ACTIONS = ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd"];
-  var ARC_MODE_KEY = "kc.pcb.arcDrawMode";
-  function arcDrawMode() {
-    if (S.arcMode == null) {
-      const v = lsGet(ARC_MODE_KEY);
-      S.arcMode = v !== null && /^[0-4]$/.test(v) ? +v : ARC_CENTER_START_END;
-    }
-    return S.arcMode;
-  }
-  function showArcMode(ctx) {
-    if (ctx && ctx.setGroupCurrent) ctx.setGroupCurrent("Arc", ARC_MODE_ACTIONS[arcDrawMode()]);
-  }
-  function setArcDrawMode(m) {
-    S.arcMode = m;
-    lsSet(ARC_MODE_KEY, String(m));
-  }
   var NM = 1e6;
   var toNm = (p) => [Math.round(p[0] * NM), Math.round(p[1] * NM)];
   var fromNm = (p) => [p[0] / NM, p[1] / NM];
@@ -28656,10 +33196,10 @@ Link '${target2}' to this file?`)) return null;
   function arcFromStartTangentEnd(s, tan, e) {
     const tl = Math.hypot(tan[0], tan[1]);
     if (!(tl > 0) || !isFinite(tl)) return NO_ARC;
-    const t = [tan[0] / tl, tan[1] / tl], d = [e[0] - s[0], e[1] - s[1]], dd = d[0] * d[0] + d[1] * d[1], cross = crossZ(d[0], d[1], t[0], t[1]);
-    if (dd <= 0 || cross === 0) return NO_ARC;
-    const k = -dd / (2 * cross), n = [-t[1], t[0]], len = Math.sqrt(dd), cn = [-d[1] / len, d[0] / len];
-    return arcOnChord(s, e, cross > 0 ? 1 : -1, k * (n[0] * cn[0] + n[1] * cn[1]), Math.abs(k));
+    const t = [tan[0] / tl, tan[1] / tl], d = [e[0] - s[0], e[1] - s[1]], dd = d[0] * d[0] + d[1] * d[1], cross2 = crossZ(d[0], d[1], t[0], t[1]);
+    if (dd <= 0 || cross2 === 0) return NO_ARC;
+    const k = -dd / (2 * cross2), n = [-t[1], t[0]], len = Math.sqrt(dd), cn = [-d[1] / len, d[0] / len];
+    return arcOnChord(s, e, cross2 > 0 ? 1 : -1, k * (n[0] * cn[0] + n[1] * cn[1]), Math.abs(k));
   }
   var degOf = (v) => {
     let a = Math.atan2(v[1], v[0]) * 180 / Math.PI;
@@ -28772,8 +33312,8 @@ Link '${target2}' to this file?`)) return null;
       const s = [sol.start[0] - c[0], sol.start[1] - c[1]], e = [sol.end[0] - c[0], sol.end[1] - c[1]], m = [sol.mid[0] - c[0], sol.mid[1] - c[1]];
       this.origin = [kiRound(c[0]), kiRound(c[1])];
       this.radius = sol.radius;
-      this.sa = norm360(degOf(s));
-      this.ea = norm360(degOf(e));
+      this.sa = norm3602(degOf(s));
+      this.ea = norm3602(degOf(e));
       this.cw = crossZ(s[0], s[1], m[0], m[1]) < 0;
     }
     clearSolution() {
@@ -28906,6 +33446,8 @@ Link '${target2}' to this file?`)) return null;
       return { start: s, mid: [kiRound(c[0] + r * Math.cos(am)), kiRound(c[1] + r * Math.sin(am))], end: e, center: c };
     }
   };
+  var canvasCurves = () => globalThis.KiCadCanvas;
+  var vsubA = (a, b) => [a[0] - b[0], a[1] - b[1]];
   var unitOf = (v) => {
     const l = Math.hypot(v[0], v[1]);
     return l === 0 ? null : [v[0] / l, v[1] / l];
@@ -28916,6 +33458,112 @@ Link '${target2}' to this file?`)) return null;
     const first = da <= db;
     if (tol !== void 0 && (first ? da : db) > tol) return null;
     return first ? a : b;
+  }
+  function tangentAtEndpoint(sh, p) {
+    const atStart = p[0] === sh.start[0] && p[1] === sh.start[1];
+    if (!atStart && (p[0] !== sh.end[0] || p[1] !== sh.end[1])) return null;
+    if (sh.t === "seg") return unitOf(atStart ? vsubA(sh.start, sh.end) : vsubA(sh.end, sh.start));
+    if (sh.t !== "arc") return null;
+    const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
+    if (turn === 0) return null;
+    let t = perp2(vsubA(p, sh.center));
+    if (turn > 0 === atStart) t = [-t[0], -t[1]];
+    return unitOf(t);
+  }
+  function arcTangentSeedNear(sh, near) {
+    const end = nearestEnd(sh.start, sh.end, near);
+    const d = tangentAtEndpoint(sh, end);
+    return d ? { start: end.slice(), dir: d, axis: false } : null;
+  }
+  function segDist(a, b, p) {
+    const v = vsubA(b, a), L = v[0] * v[0] + v[1] * v[1];
+    let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    const q = [a[0] + v[0] * t, a[1] + v[1] * t];
+    return { d: Math.hypot(p[0] - q[0], p[1] - q[1]), q: [kiRound(q[0]), kiRound(q[1])] };
+  }
+  function polylineSeedAt(vs, closed, p, tol) {
+    const n = vs.length;
+    if (n < 2) return null;
+    if (!closed) {
+      const end = nearestEnd(vs[0], vs[n - 1], p, tol);
+      if (end) {
+        const inner = end === vs[0] ? vs[1] : vs[n - 2];
+        const d = unitOf(vsubA(end, inner));
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+    }
+    let best = null, bestD = tol;
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const a = vs[i], b = vs[(i + 1) % n], r = segDist(a, b, p);
+      if (r.d <= bestD) {
+        best = { a, b, q: r.q };
+        bestD = r.d;
+      }
+    }
+    if (!best) return null;
+    const ax = unitOf(vsubA(best.b, best.a));
+    return ax ? { start: best.q, dir: ax, axis: true } : null;
+  }
+  function arcTangentSeedAt(sh, p, tol, geo = canvasCurves()) {
+    if (sh.t === "seg") return polylineSeedAt([sh.start, sh.end], false, p, tol);
+    if (sh.t === "bez") {
+      const ctrl = [sh.start, sh.c1, sh.c2, sh.end];
+      const xs = ctrl.map((c) => c[0]), ys = ctrl.map((c) => c[1]);
+      if (p[0] < Math.min(...xs) - tol || p[0] > Math.max(...xs) + tol || p[1] < Math.min(...ys) - tol || p[1] > Math.max(...ys) + tol) return null;
+      const poly = geo.bezierPts(ctrl.map(fromNm)).map(toNm);
+      poly[0] = sh.start.slice();
+      poly[poly.length - 1] = sh.end.slice();
+      const seed = polylineSeedAt(poly, false, p, tol);
+      if (seed && !seed.axis) {
+        const atStart = seed.start[0] === sh.start[0] && seed.start[1] === sh.start[1];
+        const end = atStart ? sh.start : sh.end, others = atStart ? [sh.c1, sh.c2, sh.end] : [sh.c2, sh.c1, sh.start];
+        for (const c of others) {
+          const d = unitOf(vsubA(end, c));
+          if (d) {
+            seed.dir = d;
+            break;
+          }
+        }
+      }
+      return seed;
+    }
+    if (sh.t === "arc") {
+      const end = nearestEnd(sh.start, sh.end, p, tol);
+      if (end) {
+        const d = tangentAtEndpoint(sh, end);
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+      const a = geo.arcFrom3(fromNm(sh.start), fromNm(sh.mid), fromNm(sh.end));
+      if (!a) return null;
+      const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
+      const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
+      if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
+      const ax = unitOf(perp2(vsubA(q, c)));
+      return ax ? { start: q, dir: ax, axis: true } : null;
+    }
+    if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
+    return null;
+  }
+  function arcContainsAngle(a, ang) {
+    const tw = 2 * Math.PI, nrm = (x) => (x % tw + tw) % tw;
+    const sweep = a.anticlockwise ? nrm(a.a0 - a.a1) : nrm(a.a1 - a.a0), off = a.anticlockwise ? nrm(a.a0 - ang) : nrm(ang - a.a0);
+    return off <= sweep + 1e-12;
+  }
+  var ARC_MODE_KEY = "kc.pcb.arcDrawMode";
+  function arcDrawMode() {
+    if (S.arcMode == null) {
+      const v = lsGet(ARC_MODE_KEY);
+      S.arcMode = v !== null && /^[0-4]$/.test(v) ? +v : ARC_CENTER_START_END;
+    }
+    return S.arcMode;
+  }
+  function showArcMode(ctx) {
+    if (ctx && ctx.setGroupCurrent) ctx.setGroupCurrent("Arc", ARC_MODE_ACTIONS[arcDrawMode()]);
+  }
+  function setArcDrawMode(m) {
+    S.arcMode = m;
+    lsSet(ARC_MODE_KEY, String(m));
   }
   function seedShapeOf(it) {
     const n = it.node, pt22 = (k) => {
@@ -28937,97 +33585,6 @@ Link '${target2}' to this file?`)) return null;
       return ps.length > 1 ? { t: "poly", pts: ps } : null;
     }
     return null;
-  }
-  function tangentAtEndpoint(sh, p) {
-    const atStart = p[0] === sh.start[0] && p[1] === sh.start[1];
-    if (!atStart && (p[0] !== sh.end[0] || p[1] !== sh.end[1])) return null;
-    if (sh.t === "seg") return unitOf(atStart ? vsub(sh.start, sh.end) : vsub(sh.end, sh.start));
-    if (sh.t !== "arc") return null;
-    const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
-    if (turn === 0) return null;
-    let t = perp2(vsub(p, sh.center));
-    if (turn > 0 === atStart) t = [-t[0], -t[1]];
-    return unitOf(t);
-  }
-  function arcTangentSeedNear(sh, near) {
-    const end = nearestEnd(sh.start, sh.end, near);
-    const d = tangentAtEndpoint(sh, end);
-    return d ? { start: end.slice(), dir: d, axis: false } : null;
-  }
-  function segDist(a, b, p) {
-    const v = vsub(b, a), L = v[0] * v[0] + v[1] * v[1];
-    let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
-    t = Math.max(0, Math.min(1, t));
-    const q = [a[0] + v[0] * t, a[1] + v[1] * t];
-    return { d: Math.hypot(p[0] - q[0], p[1] - q[1]), q: [kiRound(q[0]), kiRound(q[1])] };
-  }
-  function polylineSeedAt(vs, closed, p, tol) {
-    const n = vs.length;
-    if (n < 2) return null;
-    if (!closed) {
-      const end = nearestEnd(vs[0], vs[n - 1], p, tol);
-      if (end) {
-        const inner = end === vs[0] ? vs[1] : vs[n - 2];
-        const d = unitOf(vsub(end, inner));
-        return d ? { start: end.slice(), dir: d, axis: false } : null;
-      }
-    }
-    let best = null, bestD = tol;
-    for (let i = 0; i < (closed ? n : n - 1); i++) {
-      const a = vs[i], b = vs[(i + 1) % n], r = segDist(a, b, p);
-      if (r.d <= bestD) {
-        best = { a, b, q: r.q };
-        bestD = r.d;
-      }
-    }
-    if (!best) return null;
-    const ax = unitOf(vsub(best.b, best.a));
-    return ax ? { start: best.q, dir: ax, axis: true } : null;
-  }
-  function arcTangentSeedAt(sh, p, tol) {
-    if (sh.t === "seg") return polylineSeedAt([sh.start, sh.end], false, p, tol);
-    if (sh.t === "bez") {
-      const ctrl = [sh.start, sh.c1, sh.c2, sh.end];
-      const xs = ctrl.map((c) => c[0]), ys = ctrl.map((c) => c[1]);
-      if (p[0] < Math.min(...xs) - tol || p[0] > Math.max(...xs) + tol || p[1] < Math.min(...ys) - tol || p[1] > Math.max(...ys) + tol) return null;
-      const poly = K4.bezierPts(ctrl.map(fromNm)).map(toNm);
-      poly[0] = sh.start.slice();
-      poly[poly.length - 1] = sh.end.slice();
-      const seed = polylineSeedAt(poly, false, p, tol);
-      if (seed && !seed.axis) {
-        const atStart = seed.start[0] === sh.start[0] && seed.start[1] === sh.start[1];
-        const end = atStart ? sh.start : sh.end, others = atStart ? [sh.c1, sh.c2, sh.end] : [sh.c2, sh.c1, sh.start];
-        for (const c of others) {
-          const d = unitOf(vsub(end, c));
-          if (d) {
-            seed.dir = d;
-            break;
-          }
-        }
-      }
-      return seed;
-    }
-    if (sh.t === "arc") {
-      const end = nearestEnd(sh.start, sh.end, p, tol);
-      if (end) {
-        const d = tangentAtEndpoint(sh, end);
-        return d ? { start: end.slice(), dir: d, axis: false } : null;
-      }
-      const a = K4.arcFrom3(fromNm(sh.start), fromNm(sh.mid), fromNm(sh.end));
-      if (!a) return null;
-      const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
-      const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
-      if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
-      const ax = unitOf(perp2(vsub(q, c)));
-      return ax ? { start: q, dir: ax, axis: true } : null;
-    }
-    if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
-    return null;
-  }
-  function arcContainsAngle(a, ang) {
-    const tw = 2 * Math.PI, nrm = (x) => (x % tw + tw) % tw;
-    const sweep = a.anticlockwise ? nrm(a.a0 - a.a1) : nrm(a.a1 - a.a0), off = a.anticlockwise ? nrm(a.a0 - ang) : nrm(ang - a.a0);
-    return off <= sweep + 1e-12;
   }
   function findTangentSeed(ctx, pos) {
     const tol = kiRound(5 / Math.max(1e-9, ctx.pxPerMm || 1) * NM), layer = S.gfxLayer;
@@ -29158,7 +33715,7 @@ Link '${target2}' to this file?`)) return null;
       c.globalAlpha = dim ? 0.45 : 0.9;
       line(c, mm(a), mm(b));
     };
-    const dashed = (a, b) => {
+    const dashed2 = (a, b) => {
       const v = vsub(b, a), L = Math.hypot(v[0], v[1]), lim = 400 * px * NM;
       const e = L > lim ? vadd(a, vmul(v, lim / L)) : b;
       c.globalAlpha = 0.9;
@@ -29201,7 +33758,7 @@ Link '${target2}' to this file?`)) return null;
         anchor = mm(mid);
         if (i > 1 && sol.valid) {
           const marked = g2.mode === ARC_START_END_MID ? sol.mid : sol.center;
-          dashed(mid, marked);
+          dashed2(mid, marked);
           c.globalAlpha = 0.9;
           ring(c, mm(marked), 4 * px);
           if (g2.mode === ARC_START_END_CENTER) {
@@ -29213,7 +33770,7 @@ Link '${target2}' to this file?`)) return null;
         }
       } else {
         const dir = g2.dir, L = Math.hypot(dir[0], dir[1]);
-        if (L > 0) dashed(start, vadd(start, vmul(dir, Math.max(L, 100 * px * NM) / L)));
+        if (L > 0) dashed2(start, vadd(start, vmul(dir, Math.max(L, 100 * px * NM) / L)));
         if (i === 1) {
           guide(start, g2.last, true);
           strs.push(dimensionLabel("\u03B8", degOf(dir), true));
@@ -29294,8 +33851,8 @@ Link '${target2}' to this file?`)) return null;
       arrows.push([cs, cbAng], [ce, cbAng + 180]);
       const cc = vmul(cb, 0.5), off = thick + size;
       if (type === "aligned") {
-        const rot2 = cc[0] === 0 ? 90 * Math.sign(-cc[1]) : cc[0] < 0 ? -90 : 90;
-        const to = rotator2(rot2)(cc[0], cc[1]);
+        const rot3 = cc[0] === 0 ? 90 * Math.sign(-cc[1]) : cc[0] < 0 ? -90 : 90;
+        const to = rotator2(rot3)(cc[0], cc[1]);
         tpos = vadd(cs, vadd(cc, vmul(vunit(to), off)));
         tang = readableAngle(cc);
       } else {
@@ -29372,8 +33929,8 @@ Link '${target2}' to this file?`)) return null;
     const sg = Math.sign(len);
     return [(v[0] < 0 ? -kiRound(nx) : kiRound(nx)) * sg, (v[1] < 0 ? -kiRound(ny) : kiRound(ny)) * sg];
   };
-  function kiRotate(v, deg) {
-    const a = norm360(deg);
+  function kiRotate(v, deg2) {
+    const a = norm360(deg2);
     if (a === 0) return v.slice();
     if (a === 90) return [v[1], -v[0]];
     if (a === 180) return [-v[0], -v[1]];
@@ -29386,20 +33943,20 @@ Link '${target2}' to this file?`)) return null;
   var ksub = (a, b) => [a[0] - b[0], a[1] - b[1]];
   var kadd = (a, b) => [a[0] + b[0], a[1] + b[1]];
   function dimRead(node) {
-    const kid3 = (p, k) => p ? K4.kid(p, k) : null, val = (p, k, d) => {
-      const n = kid3(p, k);
+    const kid22 = (p, k) => p ? K4.kid(p, k) : null, val = (p, k, d) => {
+      const n = kid22(p, k);
       return n && n.length > 1 ? n[1] : d;
     };
-    const fmt32 = kid3(node, "format"), st = kid3(node, "style"), gt = kid3(node, "gr_text");
-    const xs = K4.kids(kid3(node, "pts") || [], "xy").map((x) => toNm([K4.num(x[1]), K4.num(x[2])]));
-    const ef = kid3(gt, "effects"), font = kid3(ef, "font"), sz = kid3(font, "size"), th = kid3(font, "thickness");
-    const at = kid3(gt, "at"), just = kid3(ef, "justify");
+    const fmt32 = kid22(node, "format"), st = kid22(node, "style"), gt = kid22(node, "gr_text");
+    const xs = K4.kids(kid22(node, "pts") || [], "xy").map((x) => toNm([K4.num(x[1]), K4.num(x[2])]));
+    const ef = kid22(gt, "effects"), font = kid22(ef, "font"), sz = kid22(font, "size"), th = kid22(font, "thickness");
+    const at = kid22(gt, "at"), just = kid22(ef, "justify");
     const yesno = (p, k, d) => {
-      const n = kid3(p, k);
+      const n = kid22(p, k);
       if (!n) return d;
       return n.length < 2 ? true : K4.str(n[1]) !== "no";
     };
-    const ov = kid3(fmt32, "override_value");
+    const ov = kid22(fmt32, "override_value");
     return {
       type: K4.str(val(node, "type", "aligned")),
       start: xs[0] || [0, 0],
@@ -29439,11 +33996,11 @@ Link '${target2}' to this file?`)) return null;
     return Math.min(pen, kiRound(Math.min(Math.abs(m.textW), Math.abs(m.textH)) * 0.25));
   }
   var dimUnits = (m) => m.unitsMode < 3 ? DIM_UNIT_NAMES[m.unitsMode] : sizeUnits() === "mil" ? "mil" : sizeUnits() === "in" ? "in" : "mm";
-  function dimValueString(m, nm2) {
+  function dimValueString(m, nm22) {
     const u = dimUnits(m);
     let p = m.precision;
     if (p >= 6) p = u === "in" ? p - 4 : u === "mil" ? Math.max(0, p - 7) : u === "mm" ? p - 5 : p - 4;
-    const v = u === "in" ? nm2 / 254e5 : u === "mil" ? nm2 / 25400 : nm2 / 1e6;
+    const v = u === "in" ? nm22 / 254e5 : u === "mil" ? nm22 / 25400 : nm22 / 1e6;
     let s = v.toFixed(Math.max(0, p));
     if (m.suppressZeroes && p > 0) while (s.endsWith("0")) {
       s = s.slice(0, -1);
@@ -29454,8 +34011,8 @@ Link '${target2}' to this file?`)) return null;
     }
     return s;
   }
-  function dimBaseText(m, nm2) {
-    let t = m.override !== null ? m.override : dimValueString(m, nm2);
+  function dimBaseText(m, nm22) {
+    let t = m.override !== null ? m.override : dimValueString(m, nm22);
     const u = dimUnits(m);
     if (m.unitsFormat === 1) t += DIM_UNIT_SUFFIX[u];
     else if (m.unitsFormat === 2) t += " (" + DIM_UNIT_SUFFIX[u].trim() + ")";
@@ -29489,8 +34046,8 @@ Link '${target2}' to this file?`)) return null;
       const cc = div2(ksub(ce, cs));
       if (m.posMode === DIM_POS_OUTSIDE) {
         const dist = dimPen(m) + m.textH;
-        const rot2 = cc[0] === 0 ? 90 * Math.sign(-cc[1]) : cc[0] < 0 ? -90 : 90;
-        m.textPos = kadd(cs, kadd(cc, kiResize(kiRotate(cc, rot2), dist)));
+        const rot3 = cc[0] === 0 ? 90 * Math.sign(-cc[1]) : cc[0] < 0 ? -90 : 90;
+        m.textPos = kadd(cs, kadd(cc, kiResize(kiRotate(cc, rot3), dist)));
       } else if (m.posMode === DIM_POS_INLINE) m.textPos = kadd(cs, cc);
       if (m.keepAligned) {
         let a = norm360(360 - kiAngle(cc));
@@ -29558,7 +34115,7 @@ Link '${target2}' to this file?`)) return null;
   }
   var peqNm = (a, b) => a[0] === b[0] && a[1] === b[1];
   function dimWrite(orig, m) {
-    const node = clone2(orig), mm = (v) => r62(v / NM), setKid22 = (p, k, v) => {
+    const node = clone2(orig), mm = (v) => r62(v / NM), setKid3 = (p, k, v) => {
       const n = K4.kid(p, k);
       if (n) n[1] = v;
       return !!n;
@@ -29573,11 +34130,11 @@ Link '${target2}' to this file?`)) return null;
         }
       });
     }
-    if (m.type === "aligned" || m.type === "orthogonal") setKid22(node, "height", mm(m.height));
-    if (m.type === "orthogonal") setKid22(node, "orientation", m.orientation);
-    if (m.type === "radial") setKid22(node, "leader_length", mm(m.leaderLength));
+    if (m.type === "aligned" || m.type === "orthogonal") setKid3(node, "height", mm(m.height));
+    if (m.type === "orthogonal") setKid3(node, "orientation", m.orientation);
+    if (m.type === "radial") setKid3(node, "leader_length", mm(m.leaderLength));
     const st = K4.kid(node, "style");
-    if (st) setKid22(st, "text_position_mode", m.posMode);
+    if (st) setKid3(st, "text_position_mode", m.posMode);
     const gt = K4.kid(node, "gr_text");
     if (gt) {
       gt[1] = m.text;
@@ -29614,19 +34171,19 @@ Link '${target2}' to this file?`)) return null;
     return vadd(ref, sv);
   }
   function dimEditNode(orig, key, p, raw, grid) {
-    const m = dimUpdate(dimRead(orig)), N = toNm, type = m.type;
+    const m = dimUpdate(dimRead(orig)), N2 = toNm, type = m.type;
     if (type === "aligned" || type === "orthogonal") {
       const old = { cs: m.crossbarStart, ce: m.crossbarEnd, textPos: m.textPos.slice() };
       if (key === "cbstart" || key === "cbend") {
         if (type === "aligned") {
           const base = key === "cbstart" ? m.start : m.end, d = ksub(m.end, m.start), L = Math.hypot(d[0], d[1]);
           if (!L) return clone2(orig);
-          const q = N(p), n = [-d[1] / L, d[0] / L];
+          const q = N2(p), n = [-d[1] / L, d[0] / L];
           const t = (q[0] - base[0]) * n[0] + (q[1] - base[1]) * n[1];
           const fl = [kiRound(n[0] * t), kiRound(n[1] * t)];
           m.height = crossZ(fl[0], fl[1], d[0], d[1]) > 0 ? -kiRound(Math.hypot(fl[0], fl[1])) : kiRound(Math.hypot(fl[0], fl[1]));
         } else {
-          const c = N(p), s = m.start, e = m.end;
+          const c = N2(p), s = m.start, e = m.end;
           const x0 = Math.min(s[0], e[0]), x1 = Math.max(s[0], e[0]), y0 = Math.min(s[1], e[1]), y1 = Math.max(s[1], e[1]);
           const dA = ksub(c, s), dB = ksub(c, e);
           const dir = dA[0] * dA[0] + dA[1] * dA[1] < dB[0] * dB[0] + dB[1] * dB[1] ? dA : dB;
@@ -29641,41 +34198,41 @@ Link '${target2}' to this file?`)) return null;
           } else vert = m.orientation === 1;
           m.height = vert ? c[0] - s[0] : c[1] - s[1];
         }
-      } else if (key === "start") m.start = N(p);
-      else if (key === "end") m.end = N(p);
+      } else if (key === "start") m.start = N2(p);
+      else if (key === "end") m.end = N2(p);
       else if (key === "text") {
         m.posMode = DIM_POS_MANUAL;
-        m.textPos = N(p);
+        m.textPos = N2(p);
       }
       dimUpdate(m);
       dimFollowCrossbar(m, old);
     } else if (type === "center") {
-      if (key === "start") m.start = N(p);
-      else if (key === "end") m.end = N(angle45From(fromNm(m.start), raw || p, grid));
+      if (key === "start") m.start = N2(p);
+      else if (key === "end") m.end = N2(angle45From(fromNm(m.start), raw || p, grid));
       dimUpdate(m);
     } else if (type === "radial") {
-      if (key === "start") m.start = N(p);
+      if (key === "start") m.start = N2(p);
       else if (key === "end") {
         const k0 = dimKnee(m);
-        m.end = N(p);
+        m.end = N2(p);
         const k1 = dimKnee(m);
         m.textPos = kadd(m.textPos, ksub(k1, k0));
       } else if (key === "knee") {
-        const k0 = dimKnee(m), q = N(raw || p), d = ksub(m.start, m.end), L2 = d[0] * d[0] + d[1] * d[1];
+        const k0 = dimKnee(m), q = N2(raw || p), d = ksub(m.start, m.end), L2 = d[0] * d[0] + d[1] * d[1];
         if (!L2) return clone2(orig);
         const t = ((q[0] - m.end[0]) * d[0] + (q[1] - m.end[1]) * d[1]) / L2, kp = [kiRound(m.end[0] + d[0] * t), kiRound(m.end[1] + d[1] * t)];
         m.leaderLength = kiRound(Math.hypot(kp[0] - m.end[0], kp[1] - m.end[1]));
         const k1 = dimKnee(m);
         m.textPos = kadd(m.textPos, ksub(k1, k0));
-      } else if (key === "text") m.textPos = N(angle45From(fromNm(dimKnee(m)), raw || p, grid));
+      } else if (key === "text") m.textPos = N2(angle45From(fromNm(dimKnee(m)), raw || p, grid));
       dimUpdate(m);
     } else if (type === "leader") {
-      if (key === "start") m.start = N(p);
+      if (key === "start") m.start = N2(p);
       else if (key === "end") {
-        const q = N(p);
+        const q = N2(p);
         m.textPos = kadd(m.textPos, ksub(q, m.end));
         m.end = q;
-      } else if (key === "text") m.textPos = N(angle45From(fromNm(m.end), raw || p, grid));
+      } else if (key === "text") m.textPos = N2(angle45From(fromNm(m.end), raw || p, grid));
       dimUpdate(m);
     }
     return dimWrite(orig, m);
@@ -29710,15 +34267,51 @@ Link '${target2}' to this file?`)) return null;
     c.typeName = typeNameOf2(item);
     return c;
   }
+  function fieldIsHidden(node) {
+    const yes32 = (n) => !!n && K4.str(n[1]) !== "no";
+    const h = K4.kid(node, "hide");
+    if (h) return yes32(h);
+    if (node.includes("hide")) return true;
+    const e = K4.kid(node, "effects");
+    return !!e && (e.includes("hide") || yes32(K4.kid(e, "hide")));
+  }
+  function hiddenFieldNode(node) {
+    const p = K4.cloneNode(node);
+    const hk = K4.kid(p, "hide");
+    if (hk) p.splice(p.indexOf(hk), 1);
+    const e = K4.kid(p, "effects");
+    if (e) {
+      const i = e.indexOf("hide");
+      if (i > 0) e.splice(i, 1);
+      const he = K4.kid(e, "hide");
+      if (he) e.splice(e.indexOf(he), 1);
+    }
+    const before = ["uuid", "effects"].map((k) => K4.kid(p, k)).find(Boolean);
+    p.splice(before ? p.indexOf(before) : p.length, 0, ["hide", "yes"]);
+    return p;
+  }
   function deleteChanges(doc, items) {
     const out = [], gens = [], ids = /* @__PURE__ */ new Set();
+    let hidden = 0, alreadyHidden = 0, removed2 = 0;
     for (const x of items || []) {
       const it = typeof x === "string" ? doc.items.get(x) : x;
-      if (it && it.id && it.kind && !ids.has(it.id)) {
-        out.push(removedChange(it));
-        ids.add(it.id);
-        if (isTuningPattern(it)) gens.push(it);
+      if (!it || !it.id || !it.kind || ids.has(it.id)) continue;
+      ids.add(it.id);
+      if (doc.fpEditor && it.kind === "property") {
+        if (fieldIsHidden(it.node)) alreadyHidden++;
+        else {
+          out.push(replacedChange(it, hiddenFieldNode(it.node)));
+          hidden++;
+        }
+        continue;
       }
+      out.push(removedChange(it));
+      removed2++;
+      if (isTuningPattern(it)) gens.push(it);
+    }
+    if (!removed2) {
+      if (hidden) out.hideLabel = hidden === 1 ? "Hide Field" : "Hide Fields";
+      else if (alreadyHidden) out.infoError = "Use the Footprint Properties dialog to remove fields.";
     }
     if (!gens.length) return out;
     const owned = /* @__PURE__ */ new Set();
@@ -29928,8 +34521,8 @@ Link '${target2}' to this file?`)) return null;
       apply(v) {
         if (ctx.viewOnly) return;
         const node = clone2(fp.node);
-        const drill = /^\s*$/.test(v.drill) ? "" : /x/i.test(v.drill) ? v.drill.split(/x/i).map((s) => parseFloat(s)) : parseFloat(v.drill);
-        H.setPad(node, index, { number: v.number, type: v.type, shape: v.shape, w: num0(v.w, info.w), h: num0(v.h, info.h), rot: num0(v.rot, 0) + frot, drill, layers: v.layers.split(/\s+/).filter(Boolean), net: v.net, maskMargin: isNaN(v.maskMargin) ? null : v.maskMargin, rratio: isNaN(v.rratio) ? null : v.rratio }, doc);
+        const drill2 = /^\s*$/.test(v.drill) ? "" : /x/i.test(v.drill) ? v.drill.split(/x/i).map((s) => parseFloat(s)) : parseFloat(v.drill);
+        H.setPad(node, index, { number: v.number, type: v.type, shape: v.shape, w: num0(v.w, info.w), h: num0(v.h, info.h), rot: num0(v.rot, 0) + frot, drill: drill2, layers: v.layers.split(/\s+/).filter(Boolean), net: v.net, maskMargin: isNaN(v.maskMargin) ? null : v.maskMargin, rratio: isNaN(v.rratio) ? null : v.rratio }, doc);
         ctx.commit([replacedChange(fp, node)], "pad");
         ctx.requestRender();
       }
@@ -29949,6 +34542,7 @@ Link '${target2}' to this file?`)) return null;
   var editorState = () => root4.CollabEditor || null;
   var appTool = () => appGlobal(() => editorState().tool, S.modTool || "select");
   var isPcbDoc = () => appGlobal(() => editorState().DOC_TYPE === "kicad_pcb" && !!editorState().kdoc && root4.CollabApp.getState().view === "editor", !!(lastCtx && !lastCtx.isSch && lastCtx.doc));
+  var isBoardLikeDoc = () => appGlobal(() => (editorState().DOC_TYPE === "kicad_pcb" || editorState().DOC_TYPE === "footprint") && !!editorState().kdoc && root4.CollabApp.getState().view === "editor", !!(lastCtx && !lastCtx.isSch && lastCtx.doc));
   var liveDoc = () => appGlobal(() => editorState().kdoc, lastCtx && lastCtx.doc);
   var liveZoom = () => appGlobal(() => editorState().zoom, lastCtx ? lastCtx.zoom : 1);
   var liveSelected = () => appGlobal(() => editorState().selected, lastCtx && lastCtx.selected);
@@ -29966,7 +34560,7 @@ Link '${target2}' to this file?`)) return null;
     let best = null, bd = Infinity;
     for (const it of doc.items.values()) {
       if (it.kind !== "segment" && it.kind !== "arc" || layerOf2(it.node) !== layer) continue;
-      const a = pt3(it.node, "start"), b = pt3(it.node, "end");
+      const a = pt4(it.node, "start"), b = pt4(it.node, "end");
       if (!a || !b) continue;
       const w = widthOf2(it.node, 0);
       const ends = samePt(a, p) ? b : samePt(b, p) ? a : null;
@@ -30073,7 +34667,7 @@ Link '${target2}' to this file?`)) return null;
     if (t.rot) rotateNode(node, pos[0] + t.offset[0], pos[1] + t.offset[1], t.rot);
   }
   function arrayChanges(doc, ids, o) {
-    const N = arraySize(o);
+    const N2 = arraySize(o);
     const sel = new Set(ids);
     const out = { changes: [], ids: [], label: o.arrange ? "Arrange selection" : "Create Array" };
     const coveredByGroup = (id) => {
@@ -30089,7 +34683,7 @@ Link '${target2}' to this file?`)) return null;
       const first = roots[0];
       if (!first) return out;
       const p0 = anchorOf(first);
-      roots.slice(0, N).forEach((it, i) => {
+      roots.slice(0, N2).forEach((it, i) => {
         const pos = anchorOf(it), t = arrayTransform(o, i, p0), d = [p0[0] - pos[0], p0[1] - pos[1]];
         if (!t.offset[0] && !t.offset[1] && !t.rot && !d[0] && !d[1]) return;
         moveRoot(it, (n) => {
@@ -30101,7 +34695,7 @@ Link '${target2}' to this file?`)) return null;
       return out;
     }
     const posOf = new Map(roots.map((it) => [it.id, anchorOf(it)]));
-    for (let k = 1; k < N; k++) {
+    for (let k = 1; k < N2; k++) {
       const r = duplicateChanges(doc, roots.map((it) => it.id), null, {
         annotations: o.keepRefs ? "keep" : "unique",
         xform: (n, root22) => {
@@ -30131,11 +34725,11 @@ Link '${target2}' to this file?`)) return null;
         if (wn) wn[1] = r62(w);
         else n.splice(n.indexOf(K4.kid(n, "layer")), 0, ["width", r62(w)]);
       } else if (it.kind === "via") {
-        let size = edit.viaSize, drill = edit.viaDrill;
+        let size = edit.viaSize, drill2 = edit.viaDrill;
         if (edit.netclass) {
           const nc = netclassOf(s, NT.key(netOf2(n)));
           size = nc.via_diameter;
-          drill = nc.via_drill;
+          drill2 = nc.via_drill;
         }
         let did = false;
         if (size > 0) {
@@ -30143,9 +34737,9 @@ Link '${target2}' to this file?`)) return null;
           if (sn) sn[1] = r62(size);
           did = true;
         }
-        if (drill > 0) {
+        if (drill2 > 0) {
           const dn = K4.kid(n, "drill");
-          if (dn) dn[1] = r62(drill);
+          if (dn) dn[1] = r62(drill2);
           did = true;
         }
         if (edit.viaLayers && edit.viaLayers.length === 2) {
@@ -30182,7 +34776,7 @@ Link '${target2}' to this file?`)) return null;
       return it && it.kind === "segment" ? it : null;
     })();
     if (!seg) return [];
-    const a = pt3(seg.node, "start"), b = pt3(seg.node, "end");
+    const a = pt4(seg.node, "start"), b = pt4(seg.node, "end");
     const L2 = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2;
     if (L2 < 1e-12) return [];
     const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / L2));
@@ -30248,13 +34842,13 @@ Link '${target2}' to this file?`)) return null;
           const p = segs[i], q = segs[j];
           if (layerOfC(p) !== layerOfC(q) || p.net && q.net && p.net !== q.net) continue;
           const pn = nodeOf(p), qn = nodeOf(q);
-          const a = pt3(pn, "start"), b = pt3(pn, "end"), c = pt3(qn, "start"), d = pt3(qn, "end");
+          const a = pt4(pn, "start"), b = pt4(pn, "end"), c = pt4(qn, "start"), d = pt4(qn, "end");
           const dir = [b[0] - a[0], b[1] - a[1]];
           const L = Math.hypot(dir[0], dir[1]);
           if (L < EPS) continue;
-          const cross = (r) => Math.abs((r[0] - a[0]) * dir[1] - (r[1] - a[1]) * dir[0]) / L;
+          const cross2 = (r) => Math.abs((r[0] - a[0]) * dir[1] - (r[1] - a[1]) * dir[0]) / L;
           const along2 = (r) => ((r[0] - a[0]) * dir[0] + (r[1] - a[1]) * dir[1]) / L;
-          if (cross(c) > EPS || cross(d) > EPS) continue;
+          if (cross2(c) > EPS || cross2(d) > EPS) continue;
           const tc = along2(c), td = along2(d), lo = Math.min(tc, td), hi = Math.max(tc, td);
           if (lo >= -EPS && hi <= L + EPS && widthOf2(qn, 0.25) <= widthOf2(pn, 0.25) + 1e-9) {
             remove.add(q.id);
@@ -30318,8 +34912,8 @@ Link '${target2}' to this file?`)) return null;
   }
   var VIA_SIZES = [[0.6, 0.3], [0.8, 0.4], [1, 0.5], [1.2, 0.6], [1.6, 0.8]];
   var ACTIONS = {};
-  function act(id, label, key, run, extra) {
-    ACTIONS[id] = Object.assign({ id, label, key, run }, extra || {});
+  function act(id, label, key, run2, extra) {
+    ACTIONS[id] = Object.assign({ id, label, key, run: run2 }, extra || {});
     return ACTIONS[id];
   }
   var alias = (id, of, label, key) => {
@@ -30433,6 +35027,17 @@ Link '${target2}' to this file?`)) return null;
     beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover });
     return true;
   });
+  act("duplicateIncrement", "Duplicate and Increment", "Ctrl+Shift+D", (ctx) => {
+    if (!canEdit(ctx)) return true;
+    const sel = requestSelection(ctx, { locks: false, rerun: (c) => runAction("duplicateIncrement", c) });
+    if (!sel) return true;
+    const r = duplicateChanges(ctx.doc, sel.ids, null, { increment: true });
+    if (!r.changes.length) return true;
+    ctx.commit(r.changes, "duplicate", { tentative: true });
+    applySelection(ctx, r.ids);
+    beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover });
+    return true;
+  });
   act("copyAsText", "Copy as Text", "", (ctx) => {
     const ids = needSel(ctx);
     if (!ids) return true;
@@ -30463,14 +35068,14 @@ Link '${target2}' to this file?`)) return null;
   act("selectConnection", "Select/Expand Connection", "U", (ctx) => {
     const ids = needSel(ctx, "Select a track first");
     if (!ids) return true;
-    const run = connectedRun(ctx.doc, ids);
-    if (!run.size) {
+    const run2 = connectedRun(ctx.doc, ids);
+    if (!run2.size) {
       ctx.toast("No tracks in the selection");
       return true;
     }
-    for (const id of ids) run.add(id);
-    applySelection(ctx, run);
-    ctx.toast(run.size > ids.size ? `Selected the connected run (${run.size} items)` : "Nothing else connected");
+    for (const id of ids) run2.add(id);
+    applySelection(ctx, run2);
+    ctx.toast(run2.size > ids.size ? `Selected the connected run (${run2.size} items)` : "Nothing else connected");
     return true;
   });
   function unconnectedNeighbours(ctx) {
@@ -30705,14 +35310,14 @@ Link '${target2}' to this file?`)) return null;
   alias("distributeHorizontallyCenters", "distributeHCenters");
   alias("distributeVerticallyCenters", "distributeVCenters");
   var moveInFlight = (ctx) => !!S.move || !!(ctx.handoffDrag && ctx.handoffDrag() && S.move);
-  function rotateBy(ctx, deg) {
+  function rotateBy(ctx, deg2) {
     if (S.route) return true;
-    if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg);
+    if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg2);
     if (!canEdit(ctx)) return true;
-    const sel = requestSelection(ctx, { rerun: (c2) => rotateBy(c2, deg) });
+    const sel = requestSelection(ctx, { rerun: (c2) => rotateBy(c2, deg2) });
     if (!sel) return true;
     const c = modificationPoint(ctx, sel.items, true);
-    const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg);
+    const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg2);
     if (ch.length) ctx.commit(ch, "rotate");
     endHover(ctx, sel);
     ctx.requestRender();
@@ -31126,12 +35731,12 @@ Link '${target2}' to this file?`)) return null;
   act("cleanupTracks", "Cleanup Tracks & Vias\u2026", "", (ctx) => {
     if (!canEdit(ctx)) return true;
     const doc = ctx.doc;
-    const preview = cleanupPlan(doc, {});
+    const preview2 = cleanupPlan(doc, {});
     const opts = [["shorts", "Delete tracks connecting different nets"], ["vias", "Delete redundant vias"], ["merge", "Merge co-linear tracks"], ["dangling", "Delete tracks unconnected at one end"], ["danglingVias", "Delete dangling vias"], ["inPads", "Delete tracks fully inside pads"]];
     return openForm({
       title: "Cleanup Tracks and Vias",
       width: 480,
-      fields: opts.map(([k, label]) => ({ k, label, type: "check", value: true })).concat([{ k: "list", type: "table", columns: [{ label: "Action", width: "1fr" }, { label: "Items", width: "60px" }], rows: preview.items.map((i) => [i.text, i.ids.length]), empty: "Nothing to clean up with every option on.", onRow: (i) => highlightIds(ctx, new Set(preview.items[i].ids)) }]),
+      fields: opts.map(([k, label]) => ({ k, label, type: "check", value: true })).concat([{ k: "list", type: "table", columns: [{ label: "Action", width: "1fr" }, { label: "Items", width: "60px" }], rows: preview2.items.map((i) => [i.text, i.ids.length]), empty: "Nothing to clean up with every option on.", onRow: (i) => highlightIds(ctx, new Set(preview2.items[i].ids)) }]),
       apply: (v) => {
         const plan = cleanupPlan(doc, v);
         const ch = cleanupChanges(doc, plan);
@@ -31162,10 +35767,10 @@ Link '${target2}' to this file?`)) return null;
   act("deleteFull", "Delete Full Track", "Shift+Delete", (ctx) => {
     const ids = selectionOrToast(ctx, "Select a track first");
     if (!ids) return true;
-    const run = connectedRun(ctx.doc, ids);
-    for (const id of ids) run.add(id);
+    const run2 = connectedRun(ctx.doc, ids);
+    for (const id of ids) run2.add(id);
     S.sel.clear();
-    return commitSel(ctx, deleteChanges(ctx.doc, Array.from(run)), "delete full track");
+    return commitSel(ctx, deleteChanges(ctx.doc, Array.from(run2)), "delete full track");
   });
   act("runDRC", "Design Rules Checker\u2026", "", (ctx) => {
     bind(ctx);
@@ -31584,6 +36189,14 @@ Link '${target2}' to this file?`)) return null;
     { id: "dimcenter", label: "Draw center dimension", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7" stroke-dasharray="2 2"/><path d="M12 3v18M3 12h18"/>' },
     { id: "dimradial", label: "Draw radial dimension", key: "", cursor: "crosshair", icon: '<circle cx="9" cy="15" r="6"/><path d="M9 15l10-10h2"/><path d="M15 9l-1 3 3-1z"/>' },
     { id: "leader", label: "Draw leader", key: "", cursor: "crosshair", icon: '<path d="M4 18l8-8h8"/><path d="M4 18l4-1-3-3z"/>' },
+    // the Footprint Editor's PAD_TOOL::PlacePad (one tool per action: the master pad type differs) and Place the Footprint Anchor
+    { id: "pad", label: "Add Pad", key: "", cursor: "crosshair", hidden: true, icon: '<rect x="7" y="7" width="10" height="10" rx="2"/>' },
+    { id: "padtht", label: "Add Through-hole Pad", key: "", cursor: "crosshair", hidden: true, icon: '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>' },
+    { id: "padsmd", label: "Add SMD Pad", key: "", cursor: "crosshair", hidden: true, icon: '<rect x="6" y="8" width="12" height="8" rx="2"/>' },
+    { id: "padnpth", label: "Add NPTH", key: "", cursor: "crosshair", hidden: true, icon: '<circle cx="12" cy="12" r="5"/>' },
+    { id: "padpaste", label: "Add Solder Paste Aperture", key: "", cursor: "crosshair", hidden: true, icon: '<rect x="7" y="7" width="10" height="10" rx="2" stroke-dasharray="2 2"/>' },
+    { id: "enumpads", label: "Renumber Pads", key: "", cursor: "crosshair", hidden: true, icon: '<path d="M6 18V6l6 12V6M15 9h4M15 15h4"/>' },
+    { id: "anchor", label: "Place the Footprint Anchor", key: "", cursor: "crosshair", hidden: true, icon: '<path d="M12 4v16M4 12h16"/>' },
     { id: "delete", label: "Delete", key: "", cursor: DELETE_CURSOR, icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
     // KiCad's one-shot pickers (ACTIONS::gridSetOrigin, PCB_ACTIONS::drillOrigin)
     { id: "gridorigin", label: "Grid Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M7 7l10 10M17 7L7 17"/>' },
@@ -31611,12 +36224,1847 @@ Link '${target2}' to this file?`)) return null;
     for (const st of rt.stages) for (const op of st.ops) {
       const n = op.add || op.set && op.node;
       if (!n || n[0] !== "segment" && n[0] !== "arc") continue;
-      const a = pt3(n, "start"), b = pt3(n, "end");
+      const a = pt4(n, "start"), b = pt4(n, "end");
       out.push([a[0], a[1], b[0], b[1], widthOf2(n, 0.25)]);
     }
     const heads = rt.dp ? rt.dpLines ? [rt.dpLines.P, rt.dpLines.N] : [] : [rt.els && rt.els.length ? elemsPts(rt.els) : rt.head || [rt.last]];
     for (const pts of heads) for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rt.width]);
     return out;
+  }
+  var str4 = (v) => v === void 0 || v === null ? "" : String(v);
+  function eachChildUuid(n, fn) {
+    for (let i = 1; i < n.length; i++) {
+      const c = n[i];
+      if (!isList5(c)) continue;
+      if ((c[0] === "uuid" || c[0] === "tstamp") && c.length > 1) fn(c);
+      else eachChildUuid(c, fn);
+    }
+  }
+  function ownUuid(n) {
+    return K4.kid(n, "uuid") || K4.kid(n, "tstamp");
+  }
+  function setLocked2(n, on) {
+    for (let i = n.length - 1; i > 0; i--) {
+      const c = n[i];
+      if (c === "locked" || isList5(c) && c[0] === "locked") n.splice(i, 1);
+    }
+    if (on) {
+      const lay = K4.kid(n, "layer");
+      n.splice(lay ? n.indexOf(lay) : 2, 0, ["locked", "yes"]);
+    }
+  }
+  function stripNets(n) {
+    for (let i = n.length - 1; i > 0; i--) {
+      const c = n[i];
+      if (isList5(c) && c[0] === "net") n.splice(i, 1);
+    }
+  }
+  function scaleOf(n) {
+    const t = K4.kid(n, "transform");
+    const s = t && K4.kid(t, "scale");
+    return s ? [K4.num(s[1], 1) || 1, K4.num(s[2], 1) || 1] : [1, 1];
+  }
+  function setScale(n, sx, sy) {
+    const t = K4.kid(n, "transform");
+    if (!t) return;
+    const s = K4.kid(t, "scale");
+    if (s) {
+      s[1] = sx;
+      s[2] = sy;
+    } else t.push(["scale", sx, sy]);
+  }
+  function editableCopy(boardFp, boardVersion2) {
+    const n = K4.cloneNode(boardFp);
+    const uuidMap = {};
+    const own = ownUuid(n);
+    const link = own ? str4(own[1]) : "";
+    const fresh = (u) => {
+      const id = K4.newUuid();
+      uuidMap[id] = str4(u[1]);
+      u[0] = "uuid";
+      u[1] = id;
+    };
+    if (own) fresh(own);
+    const back = {};
+    eachChildUuid(n, (u) => {
+      fresh(u);
+      back[uuidMap[str4(u[1])]] = str4(u[1]);
+    });
+    for (const g2 of K4.kids(n, "group")) {
+      const m = K4.kid(g2, "members");
+      if (m) for (let i = 1; i < m.length; i++) {
+        const nu = back[str4(m[i])];
+        if (nu) m[i] = nu;
+      }
+    }
+    setLocked2(n, false);
+    for (const c of n) if (isList5(c) && c[0] === "pad") {
+      setLocked2(c, false);
+      stripNets(c);
+    }
+    for (const c of n) if (isList5(c) && c[0] === "zone") stripNets(c);
+    const [, , rot3] = K4.atOf(n);
+    setFootprintAt(n, 0, 0, rot3);
+    if (str4((K4.kid(n, "layer") || [])[1]) !== "F.Cu") flipFootprintNode(n);
+    const a = K4.atOf(n)[2];
+    if (a) rotateFootprintNode(n, -a);
+    setScale(n, 1, 1);
+    if (!K4.kid(n, "version")) n.splice(2, 0, ["version", boardVersion2 || 20260728], ["generator", "pcbnew"]);
+    const refP = K4.kids(n, "property").find((p) => str4(p[1]) === "Reference");
+    return { node: n, uuidMap, link, reference: refP ? str4(refP[2]) : "" };
+  }
+  function orthoAlign(to, from, tol = 1e-4) {
+    if (!to.length || to.length !== from.length) return null;
+    for (const rot3 of [0, 90, 180, 270]) {
+      const R2 = rotator2(rot3);
+      const rf = from.map(([x, y]) => R2(x, y));
+      const t = [to[0][0] - rf[0][0], to[0][1] - rf[0][1]];
+      if (rf.every((p, i) => Math.abs(p[0] + t[0] - to[i][0]) <= tol && Math.abs(p[1] + t[1] - to[i][1]) <= tol)) return { rot: rot3, t: [r62(t[0]), r62(t[1])] };
+    }
+    return null;
+  }
+  function uniquePads(fp) {
+    const out = /* @__PURE__ */ new Map(), dup = /* @__PURE__ */ new Set();
+    for (const p of K4.kids(fp, "pad")) {
+      const num7 = str4(p[1]);
+      if (dup.has(num7)) continue;
+      if (out.has(num7)) {
+        out.delete(num7);
+        dup.add(num7);
+        continue;
+      }
+      const at = K4.kid(p, "at");
+      out.set(num7, [K4.num(at && at[1]), K4.num(at && at[2])]);
+    }
+    return out;
+  }
+  function footprintShift(existing, aNew) {
+    const a = uniquePads(existing), b = uniquePads(aNew);
+    const ex = [], nw = [];
+    for (const [num7, p] of a) {
+      const q = b.get(num7);
+      if (q) {
+        ex.push(p);
+        nw.push(q);
+      }
+    }
+    const tr = orthoAlign(ex, nw);
+    if (!tr) return null;
+    const [, , orient] = K4.atOf(existing);
+    const s = rotator2(orient)(tr.t[0], tr.t[1]);
+    return { shift: [r62(s[0]), r62(s[1])], angle: tr.rot };
+  }
+  function boardCopyFromEditor(editorFp, uuidMap) {
+    const n = K4.cloneNode(editorFp);
+    const fix = (u) => {
+      const id = str4(u[1]);
+      u[0] = "uuid";
+      u[1] = uuidMap && uuidMap[id] ? uuidMap[id] : K4.newUuid();
+    };
+    const own = ownUuid(n);
+    if (own) fix(own);
+    const back = {};
+    eachChildUuid(n, (u) => {
+      const was = str4(u[1]);
+      fix(u);
+      back[was] = str4(u[1]);
+    });
+    for (const g2 of K4.kids(n, "group")) {
+      const m = K4.kid(g2, "members");
+      if (m) for (let i = 1; i < m.length; i++) {
+        const nu = back[str4(m[i])];
+        if (nu) m[i] = nu;
+      }
+    }
+    for (let i = n.length - 1; i > 1; i--) {
+      const c = n[i];
+      if (isList5(c) && (c[0] === "version" || c[0] === "generator" || c[0] === "generator_version")) n.splice(i, 1);
+    }
+    return n;
+  }
+  var field = (fp, name) => K4.kids(fp, "property").find((p) => str4(p[1]) === name) || K4.kids(fp, "fp_text").find((p) => str4(p[1]) === name.toLowerCase()) || null;
+  var isRefOrValue = (p) => p[0] === "property" && (str4(p[1]) === "Reference" || str4(p[1]) === "Value") || p[0] === "fp_text" && (str4(p[1]) === "reference" || str4(p[1]) === "value");
+  var COPPER = /(^|\*|\.)Cu$|^\*\.Cu$|^F&B\.Cu$/;
+  function exchangeFootprint(existing, aNew, opts = {}) {
+    const n = K4.cloneNode(aNew);
+    const [ex, ey, eo] = K4.atOf(existing);
+    if (str4((K4.kid(n, "layer") || [])[1]) !== str4((K4.kid(existing, "layer") || [])[1])) flipFootprintNode(n);
+    let px = ex, py = ey, orient = eo, shifted = false;
+    if (opts.matchPadPositions !== false) {
+      const s = footprintShift(existing, n);
+      if (s) {
+        px = r62(px + s.shift[0]);
+        py = r62(py + s.shift[1]);
+        orient += s.angle;
+        shifted = !!(s.shift[0] || s.shift[1] || s.angle);
+      }
+    }
+    const [, , no] = K4.atOf(n);
+    setFootprintAt(n, px, py, no);
+    if (orient - no) rotateFootprintNode(n, orient - no);
+    const [sx, sy] = scaleOf(existing);
+    setScale(n, sx, sy);
+    setLocked2(n, !!(K4.kid(existing, "locked") || existing.includes("locked")) && str4((K4.kid(existing, "locked") || ["", "yes"])[1]) !== "no");
+    const eu = ownUuid(existing), nu = ownUuid(n);
+    if (eu) {
+      if (nu) nu[1] = eu[1];
+      else n.push(["uuid", eu[1]]);
+    }
+    const oldRef = field(existing, "Reference"), newRef = field(n, "Reference");
+    const oldVal = field(existing, "Value"), newVal = field(n, "Value");
+    const keepUuid = (o, w) => {
+      if (!o || !w) return;
+      const ou = ownUuid(o), wu = ownUuid(w);
+      if (ou && wu) wu[1] = ou[1];
+      else if (ou) w.push(["uuid", ou[1]]);
+    };
+    keepUuid(oldRef, newRef);
+    keepUuid(oldVal, newVal);
+    if (oldRef && newRef) newRef[2] = oldRef[2];
+    const libName = str4(existing[1]).split(":").pop();
+    if (oldVal && newVal && str4(oldVal[2]) !== libName) newVal[2] = oldVal[2];
+    const pairs = matchPads(K4.kids(existing, "pad"), K4.kids(n, "pad"), K4.atOf(existing), K4.atOf(n));
+    const newPads = K4.kids(n, "pad");
+    for (const [op, np] of pairs) {
+      const ou = ownUuid(op), wu = ownUuid(np);
+      if (ou) {
+        if (wu) wu[1] = ou[1];
+        else np.push(["uuid", ou[1]]);
+      }
+      for (const key of ["pinfunction", "pintype"]) {
+        const o = K4.kid(op, key), w = K4.kid(np, key);
+        if (w) np.splice(np.indexOf(w), 1);
+        if (o) {
+          const at = K4.kid(np, "uuid");
+          np.splice(at ? np.indexOf(at) : np.length, 0, K4.cloneNode(o));
+        }
+      }
+      stripNets(np);
+      const onCopper = (K4.kid(np, "layers") || []).slice(1).some((l) => COPPER.test(str4(l)));
+      const onet = K4.kid(op, "net");
+      if (onCopper && onet) {
+        const pf = K4.kid(np, "pinfunction") || K4.kid(np, "pintype") || K4.kid(np, "uuid");
+        np.splice(pf ? np.indexOf(pf) : np.length, 0, K4.cloneNode(onet));
+      }
+    }
+    const taken = new Set(pairs.map(([, np]) => str4((ownUuid(np) || [])[1])));
+    for (const np of newPads) if (!pairs.some((pp) => pp[1] === np)) {
+      stripNets(np);
+      const u = ownUuid(np);
+      if (u && taken.has(str4(u[1]))) u[1] = K4.newUuid();
+    }
+    void isRefOrValue;
+    return { node: n, shifted };
+  }
+  var kidText = (n, key) => {
+    const k = K4.kid(n, key);
+    return k ? K4.serialize(k) : "";
+  };
+  var padLayerSet = (p) => (K4.kid(p, "layers") || []).slice(1).map(str4).sort().join(" ");
+  function padstackSimilarity(a, b) {
+    let s = 1;
+    const differ = (x, y) => {
+      if (x !== y) s *= 0.9;
+    };
+    differ(kidText(a, "padstack") ? str4((K4.kid(K4.kid(a, "padstack"), "mode") || [])[1]) : "", kidText(b, "padstack") ? str4((K4.kid(K4.kid(b, "padstack"), "mode") || [])[1]) : "");
+    differ(padLayerSet(a), padLayerSet(b));
+    differ(String(K4.num((K4.kid(a, "at") || [])[3])), String(K4.num((K4.kid(b, "at") || [])[3])));
+    differ(["solder_mask_margin", "tenting"].map((k) => kidText(a, k)).join(), ["solder_mask_margin", "tenting"].map((k) => kidText(b, k)).join());
+    differ(kidText(a, "remove_unused_layers") + kidText(a, "keep_end_layers"), kidText(b, "remove_unused_layers") + kidText(b, "keep_end_layers"));
+    differ(kidText(a, "options"), kidText(b, "options"));
+    differ(kidText(a, "drill"), kidText(b, "drill"));
+    for (const k of ["size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "primitives"]) differ(kidText(a, k), kidText(b, k));
+    differ(str4(a[3]), str4(b[3]));
+    return s;
+  }
+  function padSimilarity(a, b, fa = [0, 0, 0], fb = [0, 0, 0]) {
+    let s = 1;
+    const pos = (p, f) => {
+      const at = K4.kid(p, "at") || [];
+      const r = rotator2(f[2])(K4.num(at[1]), K4.num(at[2]));
+      return [f[0] + r[0], f[1] + r[1]];
+    };
+    const pa = pos(a, fa), pb = pos(b, fb);
+    if (Math.abs(pa[0] - pb[0]) > 1e-6 || Math.abs(pa[1] - pb[1]) > 1e-6) s *= 0.9;
+    if (str4(a[2]) !== str4(b[2])) s *= 0.9;
+    return s * padstackSimilarity(a, b);
+  }
+  function matchPads(oldPads, newPads, fOld = [0, 0, 0], fNew = [0, 0, 0]) {
+    const cand = [];
+    oldPads.forEach((op, o) => newPads.forEach((np, w) => {
+      const score = padSimilarity(op, np, fOld, fNew) + (str4(op[1]) === str4(np[1]) ? 2 : 0);
+      if (score > 0) cand.push({ o, w, score });
+    }));
+    cand.sort((x, y) => y.score - x.score || x.o - y.o || x.w - y.w);
+    const usedO = /* @__PURE__ */ new Set(), usedW = /* @__PURE__ */ new Set(), out = [];
+    for (const c of cand) {
+      if (usedO.has(c.o) || usedW.has(c.w)) continue;
+      usedO.add(c.o);
+      usedW.add(c.w);
+      out.push([oldPads[c.o], newPads[c.w]]);
+    }
+    return out;
+  }
+  var exchangeApi = { editableCopy, exchangeFootprint, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };
+  var str5 = (v) => v === void 0 || v === null ? "" : String(v);
+  var num32 = (v, d = 0) => typeof v === "number" ? v : v !== void 0 && v !== null && v !== "" && isFinite(Number(v)) ? Number(v) : d;
+  var yes22 = (n) => !!n && (n.length < 2 || str5(n[1]) !== "no");
+  var TEXT_MIN_SIZE_MM = 1e-3;
+  var TEXT_MAX_SIZE_MM = 250;
+  var LIB_NAME_INVALID = '\\ / : " * ? < > |';
+  var INVALID_RE = /[\\/:"*?<>|]/;
+  var ZONE_CHOICES = [["", "Use zone setting"], ["2", "Solid"], ["1", "Thermal relief"], ["0", "None"]];
+  var COPPER_COUNTS = [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32];
+  var header = (doc) => {
+    const st = doc.fpState;
+    return st ? st.fp : null;
+  };
+  var fieldName2 = (n) => n[0] === "fp_text" ? n[1] === "reference" ? "Reference" : n[1] === "value" ? "Value" : str5(n[1]) : str5(n[1]);
+  var MANDATORY2 = ["Reference", "Value", "Datasheet", "Description"];
+  function fieldItems(doc) {
+    const all2 = Array.from(doc.items.values()).filter((i) => i.kind === "property");
+    const rank = (it) => {
+      const i = MANDATORY2.indexOf(fieldName2(it.node));
+      return i >= 0 ? i : MANDATORY2.length;
+    };
+    return all2.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it) - rank(b.it) || a.i - b.i).map((x) => x.it);
+  }
+  function fieldRow(it) {
+    const p = it.node;
+    const at = K4.kid(p, "at") || [];
+    const e = K4.kid(p, "effects");
+    const f = e ? K4.kid(e, "font") : null;
+    const sz = f ? K4.kid(f, "size") : null;
+    const th = f ? K4.kid(f, "thickness") : null;
+    const hide = K4.kid(p, "hide");
+    const hidden = hide ? yes22(hide) : !!(e && (e.includes("hide") || yes22(K4.kid(e, "hide"))));
+    const italic = !!(f && (f.includes("italic") || yes22(K4.kid(f, "italic"))));
+    const unl = !!(at.includes("unlocked") || yes22(K4.kid(p, "unlocked")));
+    return {
+      id: it.id,
+      name: fieldName2(p),
+      value: str5(p[2]),
+      show: !hidden,
+      w: num32(sz && sz[2], 1),
+      h: num32(sz && sz[1], 1),
+      thick: num32(th && th[1], 0.15),
+      italic,
+      layer: str5((K4.kid(p, "layer") || [])[1]) || "F.Fab",
+      rot: num32(at[3], 0),
+      unconstrained: unl,
+      x: num32(at[1]),
+      y: num32(at[2])
+    };
+  }
+  function xyz(n, key, d) {
+    const k = n ? K4.kid(n, key) : null;
+    const v = k ? K4.kid(k, "xyz") : null;
+    return v ? [num32(v[1], d), num32(v[2], d), num32(v[3], d)] : [d, d, d];
+  }
+  function readFpProps(doc) {
+    const h = header(doc) || ["footprint", ""];
+    const one2 = (key) => K4.kid(h, key);
+    const attrs = (one2("attr") || []).slice(1).map(str5);
+    const opt = (key) => {
+      const k = one2(key);
+      return k ? num32(k[1], NaN) : NaN;
+    };
+    const zc = one2("zone_connect");
+    const stack = one2("stackup");
+    const stackLayers = stack ? K4.kids(stack, "layer").map((l) => str5(l[1])) : [];
+    const usedLayers = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) {
+      const l = K4.kid(it.node, "layer");
+      if (l) usedLayers.add(str5(l[1]));
+      const ls = K4.kid(it.node, "layers");
+      if (ls) ls.slice(1).forEach((x) => usedLayers.add(str5(x)));
+    }
+    const nt = one2("net_tie_pad_groups");
+    const jg = one2("jumper_pad_groups");
+    const known = ["through_hole", "smd", "board_only", "exclude_from_pos_files", "exclude_from_bom", "exclude_from_sim", "allow_missing_courtyard", "dnp", "allow_soldermask_bridges"];
+    const models = K4.kids(h, "model").filter((m) => typeof m[1] === "string").map((m) => {
+      const hide = K4.kid(m, "hide");
+      const op = K4.kid(m, "opacity");
+      return { file: str5(m[1]), show: !(hide ? yes22(hide) : m.includes("hide")), opacity: op ? num32(op[1], 1) : 1, offset: xyz(m, "offset", 0), scale: xyz(m, "scale", 1), rotate: xyz(m, "rotate", 0) };
+    });
+    const cuCount = stack ? stackLayers.filter((l) => /\.Cu$/.test(l)).length : minimalCopperCount(usedLayers);
+    return {
+      name: str5(h[1]),
+      descr: str5((one2("descr") || [])[1]),
+      tags: str5((one2("tags") || [])[1]),
+      height: opt("height"),
+      type: attrs.includes("through_hole") ? "through_hole" : attrs.includes("smd") ? "smd" : "",
+      excludeFromSim: attrs.includes("exclude_from_sim"),
+      boardOnly: attrs.includes("board_only"),
+      dnp: attrs.includes("dnp"),
+      excludeFromBom: attrs.includes("exclude_from_bom"),
+      excludeFromPos: attrs.includes("exclude_from_pos_files"),
+      clearance: opt("clearance"),
+      maskMargin: opt("solder_mask_margin"),
+      pasteMargin: opt("solder_paste_margin"),
+      pasteRatio: one2("solder_paste_margin_ratio") ? opt("solder_paste_margin_ratio") : opt("solder_paste_ratio"),
+      allowBridges: attrs.includes("allow_soldermask_bridges"),
+      noCourtyard: attrs.includes("allow_missing_courtyard"),
+      zoneConnect: zc ? str5(zc[1]) : "",
+      privateLayers: (one2("private_layers") || []).slice(1).map(str5),
+      customStackup: !!stack,
+      copperCount: COPPER_COUNTS.includes(cuCount) ? cuCount : 2,
+      userLayers: stack ? stackLayers.filter((l) => /^User\.\d+$/.test(l)) : Array.from(usedLayers).filter((l) => /^User\.\d+$/.test(l)),
+      netTieGroups: nt ? nt.slice(1).map(str5).filter(Boolean) : [],
+      dupPadsAreJumpers: yes22(one2("duplicate_pad_numbers_are_jumpers")),
+      jumperGroups: jg ? jg.slice(1).filter(isList5).map((g2) => g2.map(str5).join(", ")) : [],
+      models,
+      fields: fieldItems(doc).map(fieldRow),
+      otherAttrs: attrs.filter((a) => !known.includes(a))
+    };
+  }
+  function minimalCopperCount(used) {
+    let inner = 0;
+    for (const l of used) {
+      const m = /^In(\d+)\.Cu$/.exec(l);
+      if (m) inner = Math.max(inner, Number(m[1]));
+    }
+    const n = inner + 2;
+    return n % 2 ? n + 1 : n;
+  }
+  function clampTextPenSize(thick, w, h) {
+    const s = Math.min(Math.abs(w), Math.abs(h));
+    return Math.min(thick, s * 0.25);
+  }
+  function validateFpProps(doc, m, opts) {
+    const fmt32 = opts && opts.fmt || ((v) => `${r62(v)} mm`);
+    const name = m.name;
+    if (!name) return { msg: "Footprint must have a name.", page: 0 };
+    if (INVALID_RE.test(name)) return { msg: `Footprint name may not contain '${LIB_NAME_INVALID}'.`, page: 0 };
+    for (let i = 0; i < m.fields.length; i++) {
+      const f = m.fields[i];
+      if (!f.name) return { msg: "Fields must have a name.", page: 0, row: i, col: "name" };
+      if (!(f.w >= TEXT_MIN_SIZE_MM && f.w <= TEXT_MAX_SIZE_MM)) return { msg: `The text width must be between ${fmt32(TEXT_MIN_SIZE_MM)} and ${fmt32(TEXT_MAX_SIZE_MM)}.`, page: 0, row: i, col: "w" };
+      if (!(f.h >= TEXT_MIN_SIZE_MM && f.h <= TEXT_MAX_SIZE_MM)) return { msg: `The text height must be between ${fmt32(TEXT_MIN_SIZE_MM)} and ${fmt32(TEXT_MAX_SIZE_MM)}.`, page: 0, row: i, col: "h" };
+      const max = clampTextPenSize(f.thick, f.w, f.h);
+      if (f.thick > max + 1e-9) return { msg: "The text thickness is too large for the text size.\nIt will be clamped.", page: 0, row: i, col: "thick", fix: () => {
+        f.thick = r62(max);
+      } };
+    }
+    const seen = /* @__PURE__ */ new Set();
+    for (let i = 0; i < m.fields.length; i++) {
+      const n = m.fields[i].name;
+      if (seen.has(n)) return { msg: `Field name '${n}' already in use.`, page: 0, row: i, col: "name" };
+      seen.add(n);
+    }
+    if (isFinite(m.clearance) && m.clearance < 0) return { msg: "Pad clearance must be greater than or equal to 0 mm.", page: 2 };
+    if (m.customStackup) {
+      const allowed = new Set(customLayerSet(m));
+      const orphans = /* @__PURE__ */ new Set();
+      for (const it of doc.items.values()) {
+        const ls = [];
+        const l = K4.kid(it.node, "layer");
+        if (l) ls.push(str5(l[1]));
+        const lss = K4.kid(it.node, "layers");
+        if (lss) ls.push(...lss.slice(1).map(str5));
+        for (const x of ls) if ((/\.Cu$/.test(x) || /^User\.\d+$/.test(x)) && !/^\*/.test(x) && !allowed.has(x)) orphans.add(x);
+      }
+      if (orphans.size) return { msg: `You are trying to remove layers that are used by the footprint: ${Array.from(orphans).join(", ")}.
+Please remove the objects that use these layers first.`, page: 1 };
+    }
+    const pads = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) if (it.kind === "pad") pads.add(str5(it.node[1]));
+    for (let i = 0; i < m.jumperGroups.length; i++) for (const t of splitPadList(m.jumperGroups[i])) if (!pads.has(t)) return { msg: `Pad '${t}' in jumper pad group ${i + 1} does not exist in this footprint.`, page: 3 };
+    const orig = header(doc);
+    const origName = orig ? str5(orig[1]) : "";
+    if (name !== origName && opts && opts.libHas && opts.libHas(name)) return { msg: "", page: 0, overwrite: name };
+    return null;
+  }
+  function splitPadList(text2) {
+    return text2.split(/[,\s]+/).filter(Boolean);
+  }
+  function customLayerSet(m) {
+    const n = m.copperCount;
+    const out = ["F.Cu"];
+    for (let i = 1; i <= n - 2; i++) out.push(`In${i}.Cu`);
+    out.push("B.Cu");
+    return out.concat(m.userLayers);
+  }
+  function formatPaste(offset, ratio, fmt32) {
+    const parts = [];
+    if (isFinite(offset)) parts.push(fmt32(offset));
+    if (isFinite(ratio)) {
+      const pc = r62(ratio * 100);
+      parts.push(parts.length ? `${pc < 0 ? "-" : "+"} ${Math.abs(pc)}%` : `${pc}%`);
+    }
+    return parts.join(" ");
+  }
+  function parsePaste(text2, parseLen) {
+    const t = text2.trim();
+    if (!t) return { offset: NaN, ratio: NaN };
+    const m = /^(.*?)([+-]?)\s*([+-]?\d*[.,]?\d+)\s*%$/.exec(t);
+    let lenPart = t, ratio = NaN;
+    if (m) {
+      const sign = m[2] === "-" ? -1 : 1;
+      ratio = sign * Number(m[3].replace(",", ".")) / 100;
+      lenPart = m[1].trim();
+      if (m[2] && !lenPart) ratio = sign * Math.abs(Number(m[3].replace(",", "."))) / 100;
+    }
+    if (!lenPart) return { offset: NaN, ratio };
+    const off = parseLen(lenPart);
+    if (!isFinite(off)) return null;
+    return { offset: off, ratio };
+  }
+  var qs = (v) => '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+  var mk = (text2) => K4.parse(text2);
+  function setHeader(h, key, vals) {
+    const i = h.findIndex((c, j) => j > 1 && isList5(c) && c[0] === key);
+    if (vals === null) {
+      if (i > 0) h.splice(i, 1);
+      return;
+    }
+    const node = typeof vals === "string" ? mk(`(${key} ${vals})`) : [key, ...vals];
+    if (i > 0) {
+      const cur2 = h[i];
+      if (K4.serialize(cur2) !== K4.serialize(node)) h[i] = node;
+    } else h.push(node);
+  }
+  var optNum2 = (h, key, v) => {
+    const cur2 = K4.kid(h, key);
+    if (isFinite(v)) {
+      if (!cur2 || num32(cur2[1], NaN) !== r62(v)) setHeader(h, key, [r62(v)]);
+    } else if (cur2) setHeader(h, key, null);
+  };
+  function modelNode(m) {
+    const xyzT = (v) => `(xyz ${v.map(r62).join(" ")})`;
+    return mk(`(model ${qs(m.file)}${m.show ? "" : " (hide yes)"}${m.opacity !== 1 ? ` (opacity ${m.opacity.toFixed(4)})` : ""} (offset ${xyzT(m.offset)}) (scale ${xyzT(m.scale)}) (rotate ${xyzT(m.rotate)}))`);
+  }
+  var modelSig = (m) => JSON.stringify([m.file, m.show, +m.opacity.toFixed(4), m.offset.map(r62), m.scale.map(r62), m.rotate.map(r62)]);
+  function newFieldNode(r) {
+    return mk(`(property ${qs(r.name)} ${qs(r.value)} (at ${r62(r.x)} ${r62(r.y)} ${r62(r.rot)}) (layer ${qs(r.layer)})${r.unconstrained ? " (unlocked yes)" : ""}${r.show ? "" : " (hide yes)"} (uuid ${qs(K4.newUuid())}) (effects (font (size ${r62(r.h)} ${r62(r.w)}) (thickness ${r62(r.thick)})${r.italic ? " (italic yes)" : ""})))`);
+  }
+  function applyFieldRow(p, r, modern) {
+    const cur2 = fieldRow({ id: "", kind: "property", node: p });
+    if (p[0] === "fp_text") {
+      if (r.value !== cur2.value) p[2] = r.value;
+    } else {
+      if (r.name !== cur2.name) p[1] = r.name;
+      if (r.value !== cur2.value) p[2] = r.value;
+    }
+    if (r.x !== cur2.x || r.y !== cur2.y || r.rot !== cur2.rot) {
+      const a = K4.kid(p, "at");
+      const rest = a ? a.slice(4).filter((x) => x !== "unlocked") : [];
+      const na = ["at", r62(r.x), r62(r.y)];
+      if (r.rot || a && a.length > 3 && typeof a[3] === "number") na.push(r62(r.rot));
+      na.push(...rest);
+      if (a) p[p.indexOf(a)] = na;
+      else p.splice(2 + (p[0] === "fp_text" ? 1 : 1), 0, na);
+    }
+    if (r.layer !== cur2.layer) {
+      const l = K4.kid(p, "layer");
+      if (l) l[1] = r.layer;
+    }
+    if (r.unconstrained !== cur2.unconstrained) {
+      const a = K4.kid(p, "at");
+      if (a) {
+        const i = a.indexOf("unlocked");
+        if (i > 0) a.splice(i, 1);
+      }
+      const u = K4.kid(p, "unlocked");
+      if (u) p.splice(p.indexOf(u), 1);
+      if (r.unconstrained) {
+        const l = K4.kid(p, "layer");
+        p.splice(l ? p.indexOf(l) + 1 : p.length, 0, ["unlocked", "yes"]);
+      }
+    }
+    if (r.show !== cur2.show) {
+      const e2 = K4.kid(p, "effects");
+      if (e2) {
+        const i = e2.indexOf("hide");
+        if (i > 0) e2.splice(i, 1);
+        const hk2 = K4.kid(e2, "hide");
+        if (hk2) e2.splice(e2.indexOf(hk2), 1);
+      }
+      const hk = K4.kid(p, "hide");
+      if (hk) p.splice(p.indexOf(hk), 1);
+      if (!r.show) {
+        const before = ["uuid", "effects"].map((k) => K4.kid(p, k)).find(Boolean);
+        p.splice(before ? p.indexOf(before) : p.length, 0, ["hide", "yes"]);
+      }
+    }
+    if (r.w === cur2.w && r.h === cur2.h && r.thick === cur2.thick && r.italic === cur2.italic) return;
+    let e = K4.kid(p, "effects");
+    if (!e) {
+      e = ["effects"];
+      p.push(e);
+    }
+    let f = K4.kid(e, "font");
+    if (!f) {
+      f = ["font"];
+      e.splice(1, 0, f);
+    }
+    if (r.w !== cur2.w || r.h !== cur2.h) {
+      const s = K4.kid(f, "size");
+      const ns = ["size", r62(r.h), r62(r.w)];
+      if (s) f[f.indexOf(s)] = ns;
+      else f.splice(1, 0, ns);
+    }
+    if (r.thick !== cur2.thick) {
+      const t = K4.kid(f, "thickness");
+      const nt = ["thickness", r62(r.thick)];
+      if (t) f[f.indexOf(t)] = nt;
+      else {
+        const s = K4.kid(f, "size");
+        f.splice(s ? f.indexOf(s) + 1 : f.length, 0, nt);
+      }
+    }
+    if (r.italic !== cur2.italic) {
+      const bi = f.indexOf("italic");
+      if (bi > 0) f.splice(bi, 1);
+      const ik = K4.kid(f, "italic");
+      if (ik) f.splice(f.indexOf(ik), 1);
+      if (r.italic) {
+        const c = K4.kid(f, "color");
+        const v = modern ? ["italic", "yes"] : "italic";
+        f.splice(c ? f.indexOf(c) : f.length, 0, v);
+      }
+    }
+  }
+  function fpPropsChanges(doc, m) {
+    const h0 = header(doc);
+    if (!h0) return [];
+    const before = readFpProps(doc);
+    const h = clone2(h0);
+    if (m.name !== before.name) h[1] = m.name;
+    if (m.descr !== before.descr) setHeader(h, "descr", m.descr ? qs(m.descr) : null);
+    if (m.tags !== before.tags) setHeader(h, "tags", m.tags ? qs(m.tags) : null);
+    if (!(isNaN(m.height) && isNaN(before.height)) && m.height !== before.height) setHeader(h, "height", isFinite(m.height) && m.height !== 0 ? [r62(m.height)] : null);
+    const attrKeys = [["boardOnly", "board_only"], ["excludeFromPos", "exclude_from_pos_files"], ["excludeFromBom", "exclude_from_bom"], ["excludeFromSim", "exclude_from_sim"], ["noCourtyard", "allow_missing_courtyard"], ["dnp", "dnp"], ["allowBridges", "allow_soldermask_bridges"]];
+    const attrChanged = m.type !== before.type || attrKeys.some(([k]) => m[k] !== before[k]);
+    if (attrChanged) {
+      const toks = [];
+      if (m.type === "smd") toks.push("smd");
+      if (m.type === "through_hole") toks.push("through_hole");
+      for (const [k, t] of attrKeys) if (m[k]) toks.push(t);
+      toks.push(...m.otherAttrs);
+      setHeader(h, "attr", toks.length ? toks : null);
+    }
+    optNum2(h, "clearance", m.clearance);
+    optNum2(h, "solder_mask_margin", m.maskMargin);
+    optNum2(h, "solder_paste_margin", m.pasteMargin);
+    if (!(isNaN(m.pasteRatio) && isNaN(before.pasteRatio)) && m.pasteRatio !== before.pasteRatio) {
+      if (K4.kid(h, "solder_paste_ratio")) setHeader(h, "solder_paste_ratio", null);
+      setHeader(h, "solder_paste_margin_ratio", isFinite(m.pasteRatio) ? [r62(m.pasteRatio)] : null);
+    }
+    if (m.zoneConnect !== before.zoneConnect) setHeader(h, "zone_connect", m.zoneConnect === "" ? null : [Number(m.zoneConnect)]);
+    if (m.customStackup !== before.customStackup || m.customStackup && (m.copperCount !== before.copperCount || m.userLayers.join() !== before.userLayers.join())) {
+      if (!m.customStackup) setHeader(h, "stackup", null);
+      else setHeader(h, "stackup", sortLayers(customLayerSet(m)).map((l) => `(layer ${qs(l)})`).join(" "));
+    }
+    if (m.privateLayers.join() !== before.privateLayers.join()) setHeader(h, "private_layers", m.privateLayers.length ? sortLayers(m.privateLayers).map(qs).join(" ") : null);
+    const nt = m.netTieGroups.map((g2) => g2.trim()).filter(Boolean);
+    if (nt.join("\n") !== before.netTieGroups.join("\n")) setHeader(h, "net_tie_pad_groups", nt.length ? nt.map(qs).join(" ") : null);
+    if (m.dupPadsAreJumpers !== before.dupPadsAreJumpers) setHeader(h, "duplicate_pad_numbers_are_jumpers", [m.dupPadsAreJumpers ? "yes" : "no"]);
+    const jg = m.jumperGroups.map((g2) => Array.from(new Set(splitPadList(g2))).sort()).filter((g2) => g2.length > 1);
+    const jgBefore = before.jumperGroups.map((g2) => Array.from(new Set(splitPadList(g2))).sort());
+    if (JSON.stringify(jg) !== JSON.stringify(jgBefore)) setHeader(h, "jumper_pad_groups", jg.length ? jg.map((g2) => "(" + g2.map(qs).join(" ") + ")").join(" ") : null);
+    if (m.models.map(modelSig).join() !== before.models.map(modelSig).join()) {
+      const old = h.filter((c, j) => j > 1 && isList5(c) && c[0] === "model" && typeof c[1] === "string");
+      const oldBySig = /* @__PURE__ */ new Map();
+      old.forEach((n, i) => oldBySig.set(modelSig(before.models[i]), n));
+      for (const n of old) h.splice(h.indexOf(n), 1);
+      for (const mm of m.models.filter((x) => x.file)) h.push(oldBySig.get(modelSig(mm)) || modelNode(mm));
+    }
+    const changes = [];
+    if (K4.serialize(h) !== K4.serialize(h0)) changes.push({ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: K4.serialize(h) });
+    const modern = (doc.version || 20240108) >= 2023e4;
+    const keep = /* @__PURE__ */ new Set();
+    for (const r of m.fields) {
+      const it = r.id ? doc.items.get(r.id) : null;
+      if (!it) {
+        changes.push(addedChange(doc, newFieldNode(r)));
+        continue;
+      }
+      keep.add(it.id);
+      const n = clone2(it.node);
+      applyFieldRow(n, r, modern);
+      if (K4.serialize(n) !== K4.serialize(it.node)) changes.push(replacedChange(it, n));
+    }
+    for (const it of fieldItems(doc)) if (!keep.has(it.id) && !changes.some((c) => c.id === it.id)) changes.push(removedChange(it));
+    return changes;
+  }
+  var LAYER_ORDER = ["F.Cu", ...Array.from({ length: 30 }, (_, i) => `In${i + 1}.Cu`), "B.Cu", "F.Mask", "B.Mask", "F.SilkS", "B.SilkS", "F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "B.CrtYd", "F.CrtYd", "B.Fab", "F.Fab", ...Array.from({ length: 45 }, (_, i) => `User.${i + 1}`)];
+  function sortLayers(ls) {
+    const r = (l) => {
+      const i = LAYER_ORDER.indexOf(l);
+      return i < 0 ? 999 : i;
+    };
+    return Array.from(new Set(ls)).sort((a, b) => r(a) - r(b));
+  }
+  function newFieldRow(m, activeLayer, textStyle2) {
+    const tech = /^[FB]\.(SilkS|Mask|Adhes|Paste|CrtYd|Fab)$/.test(activeLayer);
+    const layer = tech ? activeLayer : m.fields.length ? m.fields[m.fields.length - 1].layer : "F.Fab";
+    const s = textStyle2(layer);
+    let i = m.fields.length;
+    let name = `Field${i}`;
+    const used = new Set(m.fields.map((f) => f.name));
+    while (used.has(name)) name = `Field${++i}`;
+    return { id: "", name, value: "", show: true, w: s.w, h: s.h, thick: s.thick, italic: s.italic, layer, rot: 0, unconstrained: false, x: 0, y: 0 };
+  }
+  var isMandatoryName = (name) => MANDATORY2.includes(name);
+  var fpPropsApi = { readFpProps, validateFpProps, fpPropsChanges, newFieldRow, fieldItems, parsePaste, formatPaste, customLayerSet, sortLayers, minimalCopperCount, clampTextPenSize, splitPadList, ZONE_CHOICES, COPPER_COUNTS, isMandatoryName };
+  var IU = 1e6;
+  var MAX_ERROR_IU = 5e3;
+  var MIN_SEGCOUNT_FOR_CIRCLE = 8;
+  var str6 = (v) => v === void 0 || v === null ? "" : String(v);
+  var num42 = (v) => {
+    const x = Number(v);
+    return isNaN(x) ? 0 : x;
+  };
+  var rnd = (v) => Math.round(v);
+  function arcToSegmentCount(radius, errorMax, arcDeg) {
+    radius = Math.max(1, radius);
+    errorMax = Math.max(1, errorMax);
+    const rel = errorMax / radius;
+    let inc = 180 / Math.PI * Math.acos(1 - rel) * 2;
+    inc = Math.min(360 / MIN_SEGCOUNT_FOR_CIRCLE, inc);
+    return Math.max(rnd(Math.abs(arcDeg) / inc), 2);
+  }
+  var rot22 = (p, deg2) => rotator2(deg2)(p[0], p[1]);
+  var resize2 = (v, len) => {
+    const l = Math.hypot(v[0], v[1]);
+    return l ? [rnd(v[0] * len / l), rnd(v[1] * len / l)] : [0, 0];
+  };
+  var perp3 = (v) => [-v[1], v[0]];
+  function reflect(a, b, p) {
+    const d = [b[0] - a[0], b[1] - a[1]];
+    const l2 = d[0] * d[0] + d[1] * d[1];
+    if (!l2) return p;
+    const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2;
+    const q = [a[0] + t * d[0], a[1] + t * d[1]];
+    return [rnd(2 * q[0] - p[0]), rnd(2 * q[1] - p[1])];
+  }
+  function circleToPolygon(c, radius, error, minSeg) {
+    let n = Math.max(minSeg, arcToSegmentCount(radius, error, 360));
+    n = Math.floor((n + 7) / 8) * 8;
+    const delta = 360 / n;
+    const out = [];
+    for (let a = delta / 2; a < 360 - 1e-9; a += delta) {
+      const p = rot22([radius, 0], a);
+      out.push([rnd(p[0]) + c[0], rnd(p[1]) + c[1]]);
+    }
+    return out;
+  }
+  function ovalToPolygon(start, end, width, error, minSeg) {
+    const radius = Math.trunc(width / 2);
+    let n = Math.max(minSeg, arcToSegmentCount(radius, error, 360));
+    n = Math.floor((n + 7) / 8) * 8;
+    const delta = 360 / n;
+    let endp = [end[0] - start[0], end[1] - start[1]], startp = start;
+    if (endp[0] < 0) {
+      endp = [start[0] - end[0], start[1] - end[1]];
+      startp = end;
+    }
+    const ang = Math.atan2(endp[1], endp[0]) * 180 / Math.PI;
+    const len = rnd(Math.hypot(endp[0], endp[1]));
+    const poly = [[len, radius]];
+    for (let a = delta / 2; a < 180 - 1e-9; a += delta) {
+      const p = rot22([0, radius], a);
+      poly.push([rnd(p[0]) + len, rnd(p[1])]);
+    }
+    poly.push([len, -radius], [0, -radius]);
+    for (let a = delta / 2; a < 180 - 1e-9; a += delta) {
+      const p = rot22([0, -radius], a);
+      poly.push([rnd(p[0]), rnd(p[1])]);
+    }
+    poly.push([0, radius]);
+    return poly.map((p) => {
+      const q = rot22(p, -ang);
+      return [rnd(q[0]) + startp[0], rnd(q[1]) + startp[1]];
+    });
+  }
+  function cornerListToPolygon(cs, error) {
+    const out = [];
+    let incoming = [cs[0].p[0] - cs[cs.length - 1].p[0], cs[0].p[1] - cs[cs.length - 1].p[1]];
+    for (let i = 0; i < cs.length; i++) {
+      const cur2 = cs[i], next = cs[(i + 1) % cs.length];
+      const outgoing = [next.p[0] - cur2.p[0], next.p[1] - cur2.p[1]];
+      if (!cur2.r) out.push(cur2.p);
+      else {
+        const radius = cur2.r;
+        let endAngle, tan2;
+        if (incoming[0] === 0 && outgoing[1] === 0 || incoming[1] === 0 && outgoing[0] === 0) {
+          endAngle = 90;
+          tan2 = 1;
+        } else {
+          const cosNum = incoming[0] * outgoing[0] + incoming[1] * outgoing[1], cosDen = Math.hypot(incoming[0], incoming[1]) * Math.hypot(outgoing[0], outgoing[1]);
+          const a = Math.acos(cosNum / cosDen);
+          tan2 = Math.tan((Math.PI - a) / 2);
+          endAngle = a * 180 / Math.PI;
+        }
+        const numSegs = Math.max(16, arcToSegmentCount(radius, error, 360));
+        const angDelta = 360 / numSegs;
+        let lastSeg = endAngle;
+        if (lastSeg > 0) {
+          while (lastSeg > angDelta) lastSeg -= angDelta;
+        } else {
+          while (lastSeg < -angDelta) lastSeg += angDelta;
+        }
+        let angPos = Math.abs(lastSeg) < 1e-12 ? angDelta : (angDelta + lastSeg) / 2;
+        const dist = tan2 > 0 ? radius / tan2 : 0;
+        const r1 = resize2(incoming, dist);
+        const arcStart = [cur2.p[0] - r1[0], cur2.p[1] - r1[1]];
+        const r2 = resize2(perp3(incoming), radius);
+        const center = [arcStart[0] + r2[0], arcStart[1] + r2[1]];
+        const arcEnd = reflect(cur2.p, center, arcStart);
+        const origin = [arcStart[0] - center[0], arcStart[1] - center[1]];
+        out.push(arcStart);
+        for (; angPos < endAngle - 1e-9; angPos += angDelta) {
+          const q = rot22(origin, -angPos);
+          out.push([rnd(q[0]) + center[0], rnd(q[1]) + center[1]]);
+        }
+        out.push(arcEnd);
+      }
+      incoming = outgoing;
+    }
+    return out;
+  }
+  function removeDuplicates(cs) {
+    let prev = cs[0].p;
+    for (let i = cs.length - 1; i >= 0; i--) {
+      if (cs[i].p[0] === prev[0] && cs[i].p[1] === prev[1]) cs.splice(i, 1);
+      else prev = cs[i].p;
+    }
+  }
+  function trapezoidToPolygon(size, ddx, ddy, error) {
+    const s = [Math.trunc(size[0] / 2), Math.trunc(size[1] / 2)];
+    const cs = [{ p: [-s[0] + ddy, -s[1] - ddx], r: 0 }, { p: [s[0] - ddy, -s[1] + ddx], r: 0 }, { p: [s[0] + ddy, s[1] - ddx], r: 0 }, { p: [-s[0] - ddy, s[1] + ddx], r: 0 }];
+    if (Math.abs(ddy) === Math.abs(s[0]) || Math.abs(ddx) === Math.abs(s[1])) removeDuplicates(cs);
+    return cornerListToPolygon(cs, error);
+  }
+  var CHAMFER_BITS = { top_left: 1, top_right: 2, bottom_left: 4, bottom_right: 8 };
+  function roundChamferedRectToPolygon(size, radius, chamferRatio, chamferCorners, error) {
+    const s = [Math.trunc(size[0] / 2), Math.trunc(size[1] / 2)];
+    const cs = [{ p: [-s[0], -s[1]], r: radius }, { p: [s[0], -s[1]], r: radius }, { p: [s[0], s[1]], r: radius }, { p: [-s[0], s[1]], r: radius }];
+    if (chamferCorners) {
+      const shorter = Math.min(size[0], size[1]);
+      const chamfer = Math.max(0, rnd(chamferRatio * shorter));
+      const chamId = [CHAMFER_BITS.top_left, CHAMFER_BITS.top_right, CHAMFER_BITS.bottom_right, CHAMFER_BITS.bottom_left];
+      const sign = [0, 1, -1, 0, 0, -1, 1, 0];
+      for (let cc = 0, pos = 0; cc < 4; cc++, pos++) {
+        if (!(chamferCorners & chamId[cc])) continue;
+        cs[pos].r = 0;
+        if (chamfer === 0) continue;
+        cs.splice(pos + 1, 0, { p: [cs[pos].p[0], cs[pos].p[1]], r: 0 });
+        cs[pos].p = [cs[pos].p[0] + sign[2 * cc & 7] * chamfer, cs[pos].p[1] + sign[2 * cc - 2 & 7] * chamfer];
+        cs[pos + 1].p = [cs[pos + 1].p[0] + sign[2 * cc + 1 & 7] * chamfer, cs[pos + 1].p[1] + sign[2 * cc - 1 & 7] * chamfer];
+        pos++;
+      }
+      let cnt = 0;
+      for (const b of chamId) if (chamferCorners & b) cnt++;
+      if (cnt > 1 && 2 * chamfer >= shorter) removeDuplicates(cs);
+    }
+    return cornerListToPolygon(cs, error);
+  }
+  function padShapePolygon(pad, shapePos2, maxError = MAX_ERROR_IU) {
+    const at = K4.kid(pad, "at") || [];
+    const orient = num42(at[3]);
+    const sz = K4.kid(pad, "size");
+    const w = rnd(num42(sz && sz[1]) * IU), h = rnd(num42(sz && sz[2]) * IU);
+    const shape = str6(pad[3]);
+    const minSeg = 16;
+    let local;
+    const dx = Math.trunc(w / 2), dy = Math.trunc(h / 2);
+    if (shape === "circle" || shape === "oval") {
+      if (dx === dy || shape === "circle") local = circleToPolygon([0, 0], dx, maxError, minSeg);
+      else {
+        const half = Math.min(dx, dy);
+        const d = rot22([dx - half, dy - half], orient);
+        const dd = [rnd(d[0]), rnd(d[1])];
+        const pts = ovalToPolygon([-dd[0], -dd[1]], dd, half * 2, maxError, minSeg);
+        return pts.map((p) => [r6mm(p[0]) + shapePos2[0], r6mm(p[1]) + shapePos2[1]]);
+      }
+    } else if (shape === "rect" || shape === "trapezoid") {
+      const d = shape === "trapezoid" ? K4.kid(pad, "rect_delta") : null;
+      const ddx = d ? Math.trunc(rnd(num42(d[1]) * IU) / 2) : 0, ddy = d ? Math.trunc(rnd(num42(d[2]) * IU) / 2) : 0;
+      local = trapezoidToPolygon([w, h], ddx, ddy, maxError);
+    } else {
+      const rr = K4.kid(pad, "roundrect_rratio");
+      const radius = rr ? rnd(num42(rr[1]) * Math.min(w, h)) : 0;
+      const ch = K4.kid(pad, "chamfer");
+      let bits = 0;
+      for (const c of ch ? ch.slice(1) : []) bits |= CHAMFER_BITS[str6(c)] || 0;
+      const cr = K4.kid(pad, "chamfer_ratio");
+      const ratio = cr ? num42(cr[1]) : 0.2;
+      local = roundChamferedRectToPolygon([w, h], shape === "roundrect" ? radius : 0, bits ? ratio : 0, bits, maxError);
+    }
+    return local.map((p) => {
+      const q = rot22(p, orient);
+      return [r6mm(rnd(q[0])) + shapePos2[0], r6mm(rnd(q[1])) + shapePos2[1]];
+    });
+  }
+  var r6mm = (iu2) => +(iu2 / IU).toFixed(6);
+  var str7 = (v) => v === void 0 || v === null ? "" : String(v);
+  var num52 = (v, d = 0) => typeof v === "number" ? v : d;
+  var padItems = (doc) => Array.from(doc.items.values()).filter((i) => i.kind === "pad");
+  var layersOf = (n) => (K4.kid(n, "layers") || []).slice(1).map(str7);
+  var atOf2 = (n) => {
+    const a = K4.kid(n, "at") || [];
+    return [num52(a[1]), num52(a[2]), num52(a[3])];
+  };
+  function setKid22(n, key, vals, after2 = []) {
+    const cur2 = K4.kid(n, key);
+    if (vals === null) {
+      if (cur2) n.splice(n.indexOf(cur2), 1);
+      return;
+    }
+    const node = [key, ...vals];
+    if (cur2) {
+      n[n.indexOf(cur2)] = node;
+      return;
+    }
+    let at = -1;
+    for (const a of after2) {
+      const k = K4.kid(n, a);
+      if (k) at = Math.max(at, n.indexOf(k));
+    }
+    n.splice(at >= 0 ? at + 1 : n.length, 0, node);
+  }
+  var PAD_ORDER2 = ["at", "size", "rect_delta", "drill", "property", "layers", "remove_unused_layers", "keep_end_layers", "zone_layer_connections", "roundrect_rratio", "chamfer_ratio", "chamfer", "net", "pinfunction", "pintype", "die_length", "die_delay"];
+  var qs2 = (v) => '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  var layersNode = (ls) => K4.parse(`(layers ${ls.map(qs2).join(" ")})`).slice(1);
+  var setLayers = (n, ls) => {
+    const cur2 = K4.kid(n, "layers");
+    const node = K4.parse(`(layers ${ls.map(qs2).join(" ")})`);
+    if (cur2) n[n.indexOf(cur2)] = node;
+    else setKid22(n, "layers", layersNode(ls));
+  };
+  var after = (key) => PAD_ORDER2.slice(0, Math.max(0, PAD_ORDER2.indexOf(key)));
+  var isAperture2 = (n) => str7(n[2]) === "smd" && !layersOf(n).some((l) => /\.Cu$/.test(l));
+  var sizeSig = (n) => K4.serialize(["s", K4.kid(n, "size") || [], K4.kid(n, "rect_delta") || [], K4.kid(n, "drill") || [], K4.kid(n, "roundrect_rratio") || [], K4.kid(n, "chamfer_ratio") || [], K4.kid(n, "primitives") || []]);
+  function importPadSettings(target2, master) {
+    const n = clone2(master);
+    const keep = ["net", "pinfunction", "pintype", "die_length", "die_delay", "uuid", "tstamp"];
+    for (const k of keep) {
+      const t = K4.kid(target2, k), m = K4.kid(n, k);
+      if (t && m) n[n.indexOf(m)] = clone2(t);
+      else if (m) n.splice(n.indexOf(m), 1);
+      else if (t) setKid22(n, k, clone2(t).slice(1), k === "uuid" || k === "tstamp" ? n.filter(isList5).map((c) => str7(c[0])) : after(k));
+    }
+    n[1] = canHaveNumber(n) ? target2[1] : "";
+    const [x, y] = atOf2(target2);
+    const ma = K4.kid(n, "at");
+    ma[1] = x;
+    ma[2] = y;
+    if (str7(n[3]) === "circle") {
+      const s = K4.kid(n, "size");
+      if (s) s[2] = s[1];
+    }
+    if (["smd", "connect", "non_component"].includes(str7(n[2]))) setKid22(n, "drill", null);
+    return n;
+  }
+  function pushPadChanges(doc, srcId, f) {
+    const src = doc.items.get(srcId);
+    if (!src || src.kind !== "pad") return [];
+    const out = [];
+    for (const it of padItems(doc)) {
+      if (it.id === srcId) continue;
+      const p = it.node, s = src.node;
+      if (f.shape && (str7(p[3]) !== str7(s[3]) || K4.serialize(K4.kid(p, "padstack") || []) !== K4.serialize(K4.kid(s, "padstack") || []))) continue;
+      if (f.size && sizeSig(p) !== sizeSig(s)) continue;
+      if (f.orient && r62(atOf2(p)[2]) !== r62(atOf2(s)[2])) continue;
+      if (f.layers && layersOf(p).join() !== layersOf(s).join()) continue;
+      if (f.type && str7(p[2]) !== str7(s[2])) continue;
+      if (f.type && str7(p[2]) === "connect" && isAperture2(p) !== isAperture2(s)) continue;
+      const n = importPadSettings(p, s);
+      if (K4.serialize(n) !== K4.serialize(p)) out.push(replacedChange(it, n));
+    }
+    return out;
+  }
+  function principalLayer(pad) {
+    const ls = layersOf(pad);
+    const cu = ls.find((l2) => /\.Cu$/.test(l2));
+    if (cu) return cu === "*.Cu" || cu === "F&B.Cu" ? "F.Cu" : cu;
+    const l = ls[0] || "F.Cu";
+    return l.replace(/^\*\./, "F.");
+  }
+  function shapePos(pad) {
+    const [x, y, a] = atOf2(pad);
+    const d = K4.kid(pad, "drill");
+    const o = d ? K4.kid(d, "offset") : null;
+    if (!o) return [x, y];
+    const [ox, oy] = rotator2(a)(num52(o[1]), num52(o[2]));
+    return [x + ox, y + oy];
+  }
+  function primitiveToShape(g2, pad, layer) {
+    const n = clone2(g2);
+    const k = str7(n[0]);
+    const w = K4.kid(n, "width");
+    const width = w ? num52(w[1]) : 0;
+    if (w) n.splice(n.indexOf(w), 1);
+    const fill = K4.kid(n, "fill");
+    if (fill) n.splice(n.indexOf(fill), 1);
+    const [, , a] = atOf2(pad);
+    const [px, py] = shapePos(pad);
+    if (a) rotateNode(n, 0, 0, a);
+    translateNode(n, px, py);
+    n.push(["stroke", ["width", r62(width)], ["type", "solid"]]);
+    if (k !== "gr_line" && k !== "gr_arc" && k !== "gr_curve") n.push(["fill", fill && str7(fill[1]) !== "no" && str7(fill[1]) !== "none" ? "yes" : "no"]);
+    n.push(K4.parse(`(layer ${qs2(layer)})`), ["uuid", K4.newUuid()]);
+    return n;
+  }
+  function explodePadChanges(doc, padId) {
+    const it = doc.items.get(padId);
+    if (!it || it.kind !== "pad") return [];
+    const pad = clone2(it.node);
+    const out = [];
+    if (str7(pad[3]) === "custom") {
+      const prims = K4.kid(pad, "primitives");
+      const layer = principalLayer(pad);
+      for (const g2 of prims ? prims.slice(1) : []) if (isList5(g2) && /^gr_/.test(str7(g2[0])) && g2[0] !== "gr_bbox") out.push(addedChange(doc, primitiveToShape(g2, pad, layer)));
+      const opts = K4.kid(pad, "options");
+      const anchor = opts ? K4.kid(opts, "anchor") : null;
+      pad[3] = anchor ? str7(anchor[1]) : "circle";
+      setKid22(pad, "primitives", null);
+      setKid22(pad, "options", null);
+    }
+    out.unshift(replacedChange(it, pad));
+    return out;
+  }
+  var pointInPoly32 = (p, pts) => {
+    let c = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const a = pts[i], b = pts[j];
+      if (a[1] > p[1] !== b[1] > p[1] && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+    }
+    return c;
+  };
+  function segDist2(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l = dx * dx + dy * dy;
+    const t = l ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l)) : 0;
+    return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+  }
+  function padOutline2(pad) {
+    return padShapePolygon(pad, shapePos(pad));
+  }
+  function shapePoints(n) {
+    const k = str7(n[0]);
+    const p = (key) => {
+      const c = K4.kid(n, key);
+      return c ? [num52(c[1]), num52(c[2])] : null;
+    };
+    if (k === "gr_poly" || k === "gr_curve") return (K4.kid(n, "pts") || []).slice(1).filter((xy2) => isList5(xy2) && xy2[0] === "xy").map((xy2) => [num52(xy2[1]), num52(xy2[2])]);
+    if (k === "gr_rect") {
+      const a = p("start"), b = p("end");
+      return a && b ? [a, [b[0], a[1]], b, [a[0], b[1]]] : [];
+    }
+    if (k === "gr_circle") {
+      const c = p("center"), e = p("end");
+      if (!c || !e) return [];
+      const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+      const out = [];
+      for (let i = 0; i < 32; i++) {
+        const t = 2 * Math.PI * i / 32;
+        out.push([c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)]);
+      }
+      return out;
+    }
+    const pts = ["start", "mid", "end"].map(p).filter(Boolean);
+    return pts;
+  }
+  function shapeTouchesPad(n, pad) {
+    const outline = padOutline2(pad);
+    const pts = shapePoints(n);
+    if (!pts.length) return false;
+    const w = K4.kid(n, "stroke");
+    const sw = w ? num52((K4.kid(w, "width") || [])[1]) : num52((K4.kid(n, "width") || [])[1]);
+    const closed = ["gr_poly", "gr_rect", "gr_circle"].includes(str7(n[0]));
+    if (pts.some((q) => pointInPoly32(q, outline))) return true;
+    if (closed && outline.some((q) => pointInPoly32(q, pts))) return true;
+    const segs = [];
+    for (let i = 0; i + 1 < pts.length; i++) segs.push([pts[i], pts[i + 1]]);
+    if (closed && pts.length > 2) segs.push([pts[pts.length - 1], pts[0]]);
+    for (const [a, b] of segs) for (let i = 0; i < outline.length; i++) {
+      const c = outline[i], d = outline[(i + 1) % outline.length];
+      if (segDist2(c, a, b) <= sw / 2 + 1e-9 || segDist2(a, c, d) <= sw / 2 + 1e-9 || crosses(a, b, c, d)) return true;
+    }
+    return false;
+  }
+  function crosses(a, b, c, d) {
+    const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+    return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
+  }
+  function shapeToPrimitive(n, pad) {
+    const g2 = clone2(n);
+    const [px, py] = shapePos(pad);
+    const a = atOf2(pad)[2];
+    translateNode(g2, -px, -py);
+    if (a) rotateNode(g2, 0, 0, -a);
+    const st = K4.kid(g2, "stroke");
+    const width = st ? num52((K4.kid(st, "width") || [])[1]) : 0;
+    const fill = K4.kid(g2, "fill");
+    const filled = !!fill && !["no", "none"].includes(str7(fill[1]));
+    for (const k of ["stroke", "fill", "layer", "uuid", "tstamp", "locked", "net"]) setKid22(g2, k, null);
+    g2.push(["width", r62(width)]);
+    if (str7(g2[0]) !== "gr_line" && str7(g2[0]) !== "gr_arc" && str7(g2[0]) !== "gr_curve") g2.push(["fill", filled ? "yes" : "no"]);
+    return g2;
+  }
+  function recombinePadChanges(doc, padId, dryRun = false) {
+    const it = doc.items.get(padId);
+    if (!it || it.kind !== "pad") return { changes: [], merged: [] };
+    const pad = clone2(it.node);
+    const layer = principalLayer(pad);
+    const shapes = Array.from(doc.items.values()).filter((s) => /^gr_(line|rect|circle|arc|poly|curve)$/.test(s.kind) && str7((K4.kid(s.node, "layer") || [])[1]) === layer);
+    const merged = [];
+    const used = /* @__PURE__ */ new Set();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const s of shapes) {
+        if (used.has(s.id)) continue;
+        if (shapeTouchesPad(s.node, pad) || merged.some((m) => shapesTouch(m.node, s.node))) {
+          used.add(s.id);
+          merged.push(s);
+          grew = true;
+        }
+      }
+    }
+    if (dryRun || !merged.length) return { changes: [], merged: merged.map((m) => m.id) };
+    const shape = str7(pad[3]);
+    let prims = K4.kid(pad, "primitives");
+    if (shape !== "custom") {
+      if (shape === "circle" || shape === "rect") setKid22(pad, "options", [["clearance", "outline"], ["anchor", shape]], after("chamfer").concat(["net", "pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap"]));
+      else {
+        const outline = padOutline2(pad);
+        const c = shapePos(pad);
+        let r = Infinity;
+        for (let i = 0; i < outline.length; i++) r = Math.min(r, segDist2(c, outline[i], outline[(i + 1) % outline.length]));
+        const poly = ["gr_poly", ["pts", ...outline.map(([x, y]) => ["xy", r62(x), r62(y)])], ["stroke", ["width", 0], ["type", "solid"]], ["fill", "yes"]];
+        setKid22(pad, "size", [r62(2 * r), r62(2 * r)], after("size"));
+        setKid22(pad, "roundrect_rratio", null);
+        setKid22(pad, "chamfer_ratio", null);
+        setKid22(pad, "chamfer", null);
+        setKid22(pad, "rect_delta", null);
+        setKid22(pad, "options", [["clearance", "outline"], ["anchor", "circle"]], after("chamfer").concat(["net", "pinfunction", "pintype", "die_length", "die_delay"]));
+        prims = ["primitives", shapeToPrimitive(poly, pad)];
+        const o = K4.kid(pad, "options");
+        pad.splice(pad.indexOf(o) + 1, 0, prims);
+      }
+      pad[3] = "custom";
+    }
+    if (!prims) {
+      prims = ["primitives"];
+      const o = K4.kid(pad, "options");
+      pad.splice(o ? pad.indexOf(o) + 1 : pad.length, 0, prims);
+    }
+    for (const s of merged) prims.push(shapeToPrimitive(s.node, pad));
+    const changes = [replacedChange(it, pad)];
+    for (const s of merged) changes.push(removedChange(s));
+    return { changes, merged: merged.map((m) => m.id) };
+  }
+  function shapesTouch(a, b) {
+    const pa = shapePoints(a), pb = shapePoints(b);
+    if (!pa.length || !pb.length) return false;
+    const wa = num52((K4.kid(K4.kid(a, "stroke") || [], "width") || [])[1]), wb = num52((K4.kid(K4.kid(b, "stroke") || [], "width") || [])[1]);
+    const ca = ["gr_poly", "gr_rect", "gr_circle"].includes(str7(a[0])), cb = ["gr_poly", "gr_rect", "gr_circle"].includes(str7(b[0]));
+    if (ca && pb.some((q) => pointInPoly32(q, pa))) return true;
+    if (cb && pa.some((q) => pointInPoly32(q, pb))) return true;
+    const segs = (p, closed) => {
+      const s = [];
+      for (let i = 0; i + 1 < p.length; i++) s.push([p[i], p[i + 1]]);
+      if (closed && p.length > 2) s.push([p[p.length - 1], p[0]]);
+      return s;
+    };
+    const tol = (wa + wb) / 2 + 1e-9;
+    for (const [a1, a2] of segs(pa, ca)) for (const [b1, b2] of segs(pb, cb)) if (crosses(a1, a2, b1, b2) || segDist2(a1, b1, b2) <= tol || segDist2(a2, b1, b2) <= tol || segDist2(b1, a1, a2) <= tol || segDist2(b2, a1, a2) <= tol) return true;
+    return false;
+  }
+  var PAD_TYPES = [["thru_hole", "Through-hole"], ["smd", "SMD"], ["connect", "Connector"], ["np_thru_hole", "NPTH"], ["non_component", "Non-component"], ["aperture", "Aperture"]];
+  var PAD_SHAPES = [["circle", "Circle"], ["oval", "Oval"], ["rect", "Rectangle"], ["trapezoid", "Trapezoid"], ["roundrect", "Rounded rectangle"], ["chamfered", "Chamfered rectangle"], ["custom", "Custom shape"]];
+  var PAD_TABLE_COLS = [["number", "Number"], ["type", "Type"], ["shape", "Shape"], ["x", "Pos X"], ["y", "Pos Y"], ["w", "Size X"], ["h", "Size Y"], ["dx", "Drill X"], ["dy", "Drill Y"], ["dieLen", "Pad to die length"], ["dieDelay", "Pad to die delay"]];
+  var drillsEditable = (type) => type === "thru_hole" || type === "np_thru_hole";
+  function padTypeKey(n) {
+    return isAperture2(n) ? "aperture" : str7(n[2]);
+  }
+  function padShapeKey(n) {
+    const s = str7(n[3]);
+    return s === "roundrect" && K4.kid(n, "chamfer") ? "chamfered" : s;
+  }
+  function padRow(it) {
+    const n = it.node;
+    const [x, y] = atOf2(n);
+    const s = K4.kid(n, "size");
+    const d = K4.kid(n, "drill");
+    const dv = d ? d.slice(1).filter((v) => typeof v === "number") : [];
+    const dl = K4.kid(n, "die_length"), dd = K4.kid(n, "die_delay");
+    return {
+      id: it.id,
+      number: str7(n[1]),
+      type: padTypeKey(n),
+      shape: padShapeKey(n),
+      x,
+      y,
+      w: num52(s && s[1]),
+      h: num52(s && s[2]),
+      dx: dv.length ? dv[0] : NaN,
+      dy: dv.length ? dv[1] ?? dv[0] : NaN,
+      dieLen: dl ? num52(dl[1]) : NaN,
+      dieDelay: dd ? num52(dd[1]) : NaN,
+      complex: !!K4.kid(n, "padstack")
+    };
+  }
+  function padTableRows(doc, cmp) {
+    return padItems(doc).map(padRow).sort((a, b) => cmp(a.number, b.number));
+  }
+  var SMD_MASK = ["F.Cu", "F.Mask", "F.Paste"];
+  var isBackOnly = (ls) => ls.some((l) => /^B\./.test(l)) && !ls.some((l) => /^F\./.test(l) || /^\*\./.test(l));
+  var flipSide = (ls) => ls.map((l) => l.replace(/^F\./, "B."));
+  function applyPadRow(node, r) {
+    const n = clone2(node);
+    const cur2 = padRow({ id: "", kind: "pad", node });
+    if (r.number !== cur2.number) n[1] = r.number;
+    if (r.type !== cur2.type) {
+      const ls = layersOf(n);
+      if (r.type === "thru_hole") n[2] = "thru_hole";
+      else if (r.type === "smd") {
+        if (str7(n[2]) !== "smd" || isAperture2(n)) setLayers(n, isBackOnly(ls) ? flipSide(SMD_MASK) : SMD_MASK);
+        n[2] = "smd";
+      } else if (r.type === "connect") n[2] = "connect";
+      else if (r.type === "non_component") {
+        if (str7(n[2]) !== "non_component") {
+          const cu = ls.filter((l) => /\.Cu$/.test(l));
+          setLayers(n, [cu.length ? cu[0] === "*.Cu" ? "F.Cu" : cu[0] : "F.Cu"]);
+          n[2] = "non_component";
+        }
+      } else if (r.type === "np_thru_hole") n[2] = "np_thru_hole";
+      else if (r.type === "aperture") {
+        if (!isAperture2(n)) {
+          n[2] = "smd";
+          setLayers(n, isBackOnly(ls) ? ["B.Paste"] : ["F.Paste"]);
+        }
+      }
+      if (!canHaveNumber(n)) n[1] = "";
+    }
+    if (r.shape !== cur2.shape) {
+      const s = r.shape === "chamfered" ? "roundrect" : r.shape;
+      n[3] = s;
+      setKid22(n, "chamfer", null);
+      setKid22(n, "chamfer_ratio", null);
+      if (s === "roundrect") {
+        if (!K4.kid(n, "roundrect_rratio")) setKid22(n, "roundrect_rratio", [r.shape === "chamfered" ? 0 : 0.25], after("roundrect_rratio"));
+      } else setKid22(n, "roundrect_rratio", null);
+      if (r.shape === "chamfered") setKid22(n, "chamfer_ratio", [0.2], after("chamfer_ratio"));
+      if (s !== "trapezoid") setKid22(n, "rect_delta", null);
+      if (s !== "custom") {
+        setKid22(n, "options", null);
+        setKid22(n, "primitives", null);
+      }
+    }
+    if (r.x !== cur2.x || r.y !== cur2.y) {
+      const a = K4.kid(n, "at");
+      a[1] = r62(r.x);
+      a[2] = r62(r.y);
+    }
+    if (r.w !== cur2.w || r.h !== cur2.h) setKid22(n, "size", [r62(r.w), r62(r.h)], after("size"));
+    if (drillsEditable(str7(n[2])) && (r.dx !== cur2.dx && !(isNaN(r.dx) && isNaN(cur2.dx)) || r.dy !== cur2.dy && !(isNaN(r.dy) && isNaN(cur2.dy)))) {
+      const d = K4.kid(n, "drill");
+      const off = d ? K4.kid(d, "offset") : null;
+      const oval = !!d && d.includes("oval");
+      const dx = isFinite(r.dx) ? r62(r.dx) : 0, dy = isFinite(r.dy) ? r62(r.dy) : dx;
+      const vals = [];
+      if (oval || dy !== dx && dy > 0) vals.push("oval");
+      if (dx > 0) vals.push(dx);
+      if (dy > 0 && dy !== dx) vals.push(dy);
+      if (off) vals.push(off);
+      setKid22(n, "drill", vals.length ? vals : null, after("drill"));
+    }
+    if (r.dieLen !== cur2.dieLen && !(isNaN(r.dieLen) && isNaN(cur2.dieLen))) setKid22(n, "die_length", isFinite(r.dieLen) && r.dieLen !== 0 ? [r62(r.dieLen)] : null, after("die_length"));
+    if (r.dieDelay !== cur2.dieDelay && !(isNaN(r.dieDelay) && isNaN(cur2.dieDelay))) setKid22(n, "die_delay", isFinite(r.dieDelay) && r.dieDelay !== 0 ? [r62(r.dieDelay)] : null, after("die_delay"));
+    return n;
+  }
+  function padTableChanges(doc, rows, newPad) {
+    const out = [];
+    const keep = /* @__PURE__ */ new Set();
+    for (const r of rows) {
+      const it = r.id ? doc.items.get(r.id) : null;
+      if (!it) {
+        out.push(addedChange(doc, applyPadRow(newPad(r), r)));
+        continue;
+      }
+      keep.add(it.id);
+      const n = applyPadRow(it.node, r);
+      if (K4.serialize(n) !== K4.serialize(it.node)) out.push(replacedChange(it, n));
+    }
+    for (const it of padItems(doc)) if (!keep.has(it.id) && !out.some((c) => c.id === it.id)) out.push(removedChange(it));
+    return out;
+  }
+  function padNumberSummary(numbers, cmp) {
+    const sorted = numbers.filter(Boolean).slice().sort(cmp);
+    const seen = /* @__PURE__ */ new Set(), dup = [];
+    for (const n of sorted) {
+      if (seen.has(n) && !dup.includes(n)) dup.push(n);
+      seen.add(n);
+    }
+    const uniq = Array.from(seen);
+    const parts = [];
+    for (let i = 0; i < uniq.length; ) {
+      let j = i;
+      const m = /^(.*?)(\d+)$/.exec(uniq[i]);
+      if (m) while (j + 1 < uniq.length) {
+        const m2 = /^(.*?)(\d+)$/.exec(uniq[j + 1]);
+        if (!m2 || m2[1] !== m[1] || Number(m2[2]) !== Number(m[2]) + (j + 1 - i)) break;
+        j++;
+      }
+      parts.push(j > i ? `${uniq[i]}-${uniq[j]}` : uniq[i]);
+      i = j + 1;
+    }
+    return { summary: parts.join(", "), duplicates: dup.join(", ") };
+  }
+  function toCsv(table) {
+    return table.map((r) => r.map((c) => /[",\n\r]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c).join(",")).join("\n") + "\n";
+  }
+  function parseCsv(text2) {
+    const first = text2.split(/\r?\n/)[0] || "";
+    const delim = (first.match(/\t/g) || []).length > (first.match(/,/g) || []).length ? "	" : (first.match(/;/g) || []).length > (first.match(/,/g) || []).length ? ";" : ",";
+    const rows = [];
+    let row2 = [], cell = "", q = false;
+    for (let i = 0; i < text2.length; i++) {
+      const c = text2[i];
+      if (q) {
+        if (c === '"') {
+          if (text2[i + 1] === '"') {
+            cell += '"';
+            i++;
+          } else q = false;
+        } else cell += c;
+        continue;
+      }
+      if (c === '"') q = true;
+      else if (c === delim) {
+        row2.push(cell);
+        cell = "";
+      } else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text2[i + 1] === "\n") i++;
+        row2.push(cell);
+        cell = "";
+        if (row2.some((x) => x !== "")) rows.push(row2);
+        row2 = [];
+      } else cell += c;
+    }
+    row2.push(cell);
+    if (row2.some((x) => x !== "")) rows.push(row2);
+    return rows;
+  }
+  function colForLabel(label) {
+    const l = label.trim().toLowerCase();
+    const alias2 = { "x position": "x", "y position": "y", "pad->die length": "dieLen", "pad->die delay": "dieDelay" };
+    if (alias2[l]) return alias2[l];
+    const c = PAD_TABLE_COLS.find(([, lab]) => lab.toLowerCase() === l);
+    return c ? c[0] : null;
+  }
+  function enumBegin(prefix, start, step) {
+    return { prefix, next: start, step, stored: [], old: /* @__PURE__ */ new Map(), picked: /* @__PURE__ */ new Set(), numbers: /* @__PURE__ */ new Map() };
+  }
+  var enumLabel = (st, v) => `${st.prefix}${v}`;
+  var enumNextValue = (st) => st.stored.length ? st.stored[0] : st.next;
+  var enumPopup = (st) => `Click on pad ${enumLabel(st, enumNextValue(st))}
+Press <esc> to cancel all; double-click to finish`;
+  function padsAt(doc, p) {
+    return padItems(doc).filter((it) => canHaveNumber(it.node) && pointInPoly32(p, padOutline2(it.node)));
+  }
+  function enumPick(st, doc, pads, isClick) {
+    let any = false;
+    for (const it of pads) {
+      if (!st.picked.has(it.id)) {
+        const val = st.stored.length ? st.stored.shift() : (st.next += st.step, st.next - st.step);
+        const label = enumLabel(st, val);
+        st.old.set(it.id, { val, was: st.numbers.has(it.id) ? st.numbers.get(it.id) : str7(it.node[1]) });
+        st.numbers.set(it.id, label);
+        st.picked.add(it.id);
+        any = true;
+      } else if (isClick) {
+        const o = st.old.get(it.id);
+        if (o) {
+          st.stored.push(o.val);
+          st.numbers.set(it.id, o.was);
+          st.old.delete(it.id);
+        }
+        st.picked.delete(it.id);
+        any = true;
+      }
+    }
+    return any;
+  }
+  function padsAlong(doc, from, to) {
+    const d = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    const n = Math.floor(d / 0.1) + 1;
+    const out = [];
+    for (let j = 0; j < n; j++) {
+      const p = [to[0] - j * (to[0] - from[0]) / n, to[1] - j * (to[1] - from[1]) / n];
+      for (const it of padsAt(doc, p)) if (!out.includes(it)) out.push(it);
+    }
+    return out;
+  }
+  function enumChanges(doc, st) {
+    const out = [];
+    for (const [id, label] of st.numbers) {
+      const it = doc.items.get(id);
+      if (!it || str7(it.node[1]) === label) continue;
+      const n = clone2(it.node);
+      n[1] = label;
+      out.push(replacedChange(it, n));
+    }
+    return out;
+  }
+  var fpPadsApi = {
+    pushPadChanges,
+    importPadSettings,
+    explodePadChanges,
+    recombinePadChanges,
+    principalLayer,
+    padOutline: padOutline2,
+    shapeTouchesPad,
+    padTableRows,
+    padRow,
+    applyPadRow,
+    padTableChanges,
+    padNumberSummary,
+    toCsv,
+    parseCsv,
+    colForLabel,
+    PAD_TYPES,
+    PAD_SHAPES,
+    PAD_TABLE_COLS,
+    drillsEditable,
+    enumBegin,
+    enumPick,
+    enumChanges,
+    enumPopup,
+    enumNextValue,
+    padsAt,
+    padsAlong,
+    setKid: setKid22
+  };
+  var str8 = (v) => v === void 0 || v === null ? "" : String(v);
+  var num6 = (v, d = 0) => typeof v === "number" ? v : d;
+  var FP_CHECK_TITLES = {
+    malformed_courtyard: "Footprint has malformed courtyard",
+    missing_courtyard: "Footprint has no courtyard defined",
+    footprint_type_mismatch: "Footprint component type doesn't match footprint pads",
+    padstack: "Padstack is questionable",
+    through_hole_pad_without_hole: "Through hole pad has no hole",
+    shorting_items: "Items shorting two nets",
+    holes_co_located: "Drilled holes co-located",
+    hole_to_hole: "Drilled hole too close to other hole",
+    footprint: "Footprint is not valid",
+    silk_over_copper: "Silkscreen clipped by solder mask"
+  };
+  var SEVERITY = { missing_courtyard: "warning", footprint_type_mismatch: "ignore", padstack: "warning", holes_co_located: "warning", hole_to_hole: "warning", silk_over_copper: "warning" };
+  var sev2 = (code) => SEVERITY[code] || "error";
+  var layersOf2 = (n) => (K4.kid(n, "layers") || []).slice(1).map(str8);
+  var onLayer2 = (ls, l) => ls.includes(l) || ls.includes("*." + l.split(".")[1]) || l.endsWith(".Cu") && (ls.includes("*.Cu") || ls.includes("F&B.Cu") && (l === "F.Cu" || l === "B.Cu"));
+  var atOf3 = (n) => {
+    const a = K4.kid(n, "at") || [];
+    return [num6(a[1]), num6(a[2]), num6(a[3])];
+  };
+  function drill(n) {
+    const d = K4.kid(n, "drill");
+    if (!d) return { w: 0, h: 0, oval: false };
+    const v = d.slice(1).filter((x) => typeof x === "number");
+    return { w: v[0] || 0, h: v[1] ?? v[0] ?? 0, oval: d.includes("oval") };
+  }
+  var PAD_TYPE2 = { thru_hole: "Through-hole", smd: "SMD", np_thru_hole: "NPTH", connect: "Connector", non_component: "Non-component" };
+  var prop2 = (n) => str8((K4.kid(n, "property") || [])[1]);
+  function checkPad2(n) {
+    const out = [];
+    const attr = str8(n[2]);
+    const t = PAD_TYPE2[attr] || attr;
+    const ls = layersOf2(n);
+    const d = drill(n);
+    const has2 = (l) => onLayer2(ls, l);
+    const P = (msg) => out.push({ code: "padstack", msg });
+    const techSide = () => {
+      if (has2("F.Cu") && has2("B.Mask") || has2("B.Cu") && has2("F.Mask")) P(`${t} pad has copper and mask layers on different sides of the board`);
+      if (has2("F.Cu") && has2("B.Paste") || has2("B.Cu") && has2("F.Paste")) P(`${t} pad has copper and paste layers on different sides of the board`);
+    };
+    const s = K4.kid(n, "size");
+    if (s && (num6(s[1]) <= 0 || num6(s[2]) <= 0) && str8(n[3]) !== "custom") P("Pad size must be greater than zero");
+    if (!has2("F.Cu") && !has2("B.Cu") && (d.w || d.h) && attr !== "np_thru_hole") P("plated through holes normally have a copper pad on at least one outer layer");
+    const pr = prop2(n);
+    if ((pr === "pad_prop_fiducial_glob" || pr === "pad_prop_fiducial_loc") && attr === "np_thru_hole") P("'fiducial' pads are normally plated");
+    if (pr === "pad_prop_testpoint" && attr === "np_thru_hole") P("'testpoint' pads are normally plated");
+    if (pr === "pad_prop_heatsink" && attr === "np_thru_hole") P("'heatsink' pads are normally plated");
+    if (pr === "pad_prop_castellated" && attr !== "thru_hole") P("'castellated' pads are normally PTH");
+    if (pr === "pad_prop_bga" && attr !== "smd") P("'BGA' property is for SMD pads");
+    if (pr === "pad_prop_mechanical" && attr !== "thru_hole") P("'mechanical' pads are normally PTH");
+    if (pr === "pad_prop_pressfit" && (attr !== "thru_hole" || d.w <= 0)) P("'press-fit' pads are normally PTH with round holes");
+    const cu = ls.filter((l) => /\.Cu$/.test(l));
+    const cuCount = cu.some((l) => l === "*.Cu") ? 2 : cu.some((l) => l === "F&B.Cu") ? 2 : cu.length;
+    if (attr === "np_thru_hole" || attr === "thru_hole") {
+      if (d.w <= 0 || d.h <= 0 && d.oval) out.push({ code: "through_hole_pad_without_hole", msg: "" });
+    } else if (attr === "connect" || attr === "smd") {
+      if (attr === "connect" && (has2("F.Paste") || has2("B.Paste"))) P("connector pads normally have no solder paste; use a SMD pad instead");
+      if (d.w > 0 || d.h > 0) P(`${t} pad has a hole`);
+      if (cuCount > 1) P(`${t} pad has more than one copper layer`);
+      if (cuCount) {
+        if (!has2("F.Cu") && !has2("B.Cu")) P(`${t} pad has no outer layers`);
+        techSide();
+      }
+    } else if (attr === "non_component") {
+      if (d.w > 0 || d.h > 0) P(`${t} pad has a hole`);
+      if (!cuCount) P(`${t} pad has no copper layers`);
+    }
+    return out;
+  }
+  var pip = (p, pts) => {
+    let c = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const a = pts[i], b = pts[j];
+      if (a[1] > p[1] !== b[1] > p[1] && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+    }
+    return c;
+  };
+  var cross = (a, b, c, d) => {
+    const o = (p, q, r) => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+    return o(a, b, c) !== o(a, b, d) && o(c, d, a) !== o(c, d, b);
+  };
+  function polysTouch(a, b) {
+    for (const p of a) if (pip(p, b)) return p;
+    for (const p of b) if (pip(p, a)) return p;
+    for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) if (cross(a[i], a[(i + 1) % a.length], b[j], b[(j + 1) % b.length])) return a[i];
+    return null;
+  }
+  function holeSeg(n) {
+    const d = drill(n);
+    if (d.w <= 0) return null;
+    const [x, y, ang] = atOf3(n);
+    const w = d.w, h = d.oval ? d.h : d.w;
+    const R2 = rotator2(ang);
+    if (w === h) return { a: [x, y], b: [x, y], r: w / 2 };
+    const half = Math.abs(w - h) / 2;
+    const v = w > h ? R2(half, 0) : R2(0, half);
+    return { a: [x - v[0], y - v[1]], b: [x + v[0], y + v[1]], r: Math.min(w, h) / 2 };
+  }
+  function segSeg(a, b, c, d) {
+    if (cross(a, b, c, d)) return 0;
+    const ps = (p, s, e) => {
+      const dx = e[0] - s[0], dy = e[1] - s[1];
+      const l = dx * dx + dy * dy;
+      const t = l ? Math.max(0, Math.min(1, ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / l)) : 0;
+      return Math.hypot(p[0] - s[0] - t * dx, p[1] - s[1] - t * dy);
+    };
+    return Math.min(ps(a, c, d), ps(b, c, d), ps(c, a, b), ps(d, a, b));
+  }
+  function graphicPoints(n) {
+    const k = str8(n[0]);
+    const p = (key) => {
+      const c = K4.kid(n, key);
+      return c ? [num6(c[1]), num6(c[2])] : null;
+    };
+    if (k === "gr_poly" || k === "gr_curve") return (K4.kid(n, "pts") || []).slice(1).filter((xy2) => Array.isArray(xy2) && xy2[0] === "xy").map((xy2) => [num6(xy2[1]), num6(xy2[2])]);
+    if (k === "gr_rect") {
+      const a = p("start"), b = p("end");
+      return a && b ? [a, [b[0], a[1]], b, [a[0], b[1]]] : [];
+    }
+    if (k === "gr_circle") {
+      const c = p("center"), e = p("end");
+      if (!c || !e) return [];
+      const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+      const o = [];
+      for (let i = 0; i < 32; i++) o.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
+      return o;
+    }
+    if (k === "gr_text" || k === "property") {
+      const a = K4.kid(n, "at");
+      return a ? [[num6(a[1]), num6(a[2])]] : [];
+    }
+    return ["start", "mid", "end"].map(p).filter(Boolean);
+  }
+  function maskOutline(pad, fpMargin) {
+    const m = K4.kid(pad, "solder_mask_margin");
+    const g2 = m ? num6(m[1]) : fpMargin;
+    if (!g2) return padOutline2(pad);
+    const n = K4.cloneNode(pad);
+    const s = K4.kid(n, "size");
+    if (s) {
+      s[1] = num6(s[1]) + 2 * g2;
+      s[2] = num6(s[2]) + 2 * g2;
+    }
+    return padOutline2(n);
+  }
+  function checkFootprint(doc) {
+    const out = [];
+    const add = (code, detail2, ids, at) => {
+      const s = sev2(code);
+      if (s === "ignore") return;
+      out.push({ code, severity: s, title: FP_CHECK_TITLES[code] || code, detail: detail2, ids, at });
+    };
+    const header2 = (doc.fpState || { fp: ["footprint", ""] }).fp;
+    const attrs = (K4.kid(header2, "attr") || []).slice(1).map(str8);
+    const items = Array.from(doc.items.values());
+    const pads = items.filter((i) => i.kind === "pad");
+    for (const side of ["F.CrtYd", "B.CrtYd"]) {
+      const chains = [];
+      for (const it of items) {
+        if (!/^gr_(line|rect|circle|arc|poly)$/.test(it.kind) || str8((K4.kid(it.node, "layer") || [])[1]) !== side) continue;
+        const pts = graphicPoints(it.node);
+        if (pts.length < 2) continue;
+        chains.push(/^gr_(rect|circle|poly)$/.test(it.kind) ? pts.concat([pts[0]]) : pts);
+      }
+      if (!chains.length) continue;
+      const { dangling } = chainLoops(chains);
+      if (dangling) add("malformed_courtyard", `(not a closed shape)`, [], [0, 0]);
+    }
+    const hasCrtYd = items.some((i) => ["F.CrtYd", "B.CrtYd"].includes(str8((K4.kid(i.node, "layer") || [])[1])));
+    if (!attrs.includes("allow_missing_courtyard") && !hasCrtYd) add("missing_courtyard", "", [], [0, 0]);
+    const likely = pads.some((p) => str8(p.node[2]) === "thru_hole") ? "through_hole" : pads.some((p) => str8(p.node[2]) === "smd") ? "smd" : "";
+    const set = attrs.includes("through_hole") ? "through_hole" : attrs.includes("smd") ? "smd" : "";
+    if (set && likely && set !== likely) add("footprint_type_mismatch", `(expected '${likely === "smd" ? "SMD" : "Through hole"}'; actual '${set === "smd" ? "SMD" : "Through hole"}')`, [], [0, 0]);
+    for (const p of pads) for (const r of checkPad2(p.node)) {
+      const [x, y] = atOf3(p.node);
+      add(r.code, r.msg ? `(${r.msg})` : "", [p.id], [x, y]);
+    }
+    const netTie = (K4.kid(header2, "net_tie_pad_groups") || []).slice(1).map((g2) => str8(g2).split(/[,\s]+/).filter(Boolean));
+    const tied = (a, b) => netTie.some((g2) => g2.includes(a) && g2.includes(b));
+    for (let i = 0; i < pads.length; i++) for (let j = i + 1; j < pads.length; j++) {
+      const a = pads[i].node, b = pads[j].node;
+      const pa = atOf3(a), pb = atOf3(b);
+      const ha = holeSeg(a), hb = holeSeg(b);
+      if (ha && hb) {
+        if (Math.abs(pa[0] - pb[0]) < 1e-6 && Math.abs(pa[1] - pb[1]) < 1e-6) add("holes_co_located", "", [pads[i].id, pads[j].id], [pa[0], pa[1]]);
+        else if (segSeg(ha.a, ha.b, hb.a, hb.b) < ha.r + hb.r) add("hole_to_hole", "", [pads[i].id, pads[j].id], [pa[0], pa[1]]);
+      }
+      const na = str8(a[1]), nb = str8(b[1]);
+      if (na && na === nb || tied(na, nb)) continue;
+      const la = layersOf2(a), lb = layersOf2(b);
+      const cu = ["F.Cu", "B.Cu", ...Array.from({ length: 30 }, (_, k) => `In${k + 1}.Cu`)];
+      if (!cu.some((l) => onLayer2(la, l) && onLayer2(lb, l))) continue;
+      const hit2 = polysTouch(padOutline2(a), padOutline2(b));
+      if (hit2) add("shorting_items", "", [pads[i].id, pads[j].id], hit2);
+    }
+    if (netTie.length) {
+      const nums = new Set(pads.map((p) => str8(p.node[1])));
+      const seen = /* @__PURE__ */ new Set();
+      for (const g2 of netTie) for (const n of g2) {
+        if (!nums.has(n)) add("footprint", `(net-tie pad group contains unknown pad number ${n})`, [], [0, 0]);
+        else if (seen.has(n)) add("footprint", `(pad ${n} appears in more than one net-tie pad group)`, [], [0, 0]);
+        else seen.add(n);
+      }
+    }
+    const fpMask = num6((K4.kid(header2, "solder_mask_margin") || [])[1]);
+    for (const g2 of items) {
+      if (!/^gr_(line|rect|circle|arc|poly|curve)$/.test(g2.kind)) continue;
+      const gl = str8((K4.kid(g2.node, "layer") || [])[1]);
+      if (gl !== "F.SilkS" && gl !== "B.SilkS") continue;
+      const mask = gl === "F.SilkS" ? "F.Mask" : "B.Mask";
+      const pts = graphicPoints(g2.node);
+      if (!pts.length) continue;
+      const closed = /^gr_(rect|circle|poly)$/.test(g2.kind);
+      const st = K4.kid(g2.node, "stroke");
+      const w = st ? num6((K4.kid(st, "width") || [])[1]) : 0;
+      for (const p of pads) {
+        if (!onLayer2(layersOf2(p.node), mask)) continue;
+        const mo = maskOutline(p.node, fpMask);
+        let hit2 = null;
+        for (const q of pts) if (pip(q, mo)) {
+          hit2 = q;
+          break;
+        }
+        if (!hit2) for (let i = 0; i + (closed ? 0 : 1) < pts.length && !hit2; i++) {
+          const a = pts[i], b = pts[(i + 1) % pts.length];
+          for (let j = 0; j < mo.length; j++) if (segSeg(a, b, mo[j], mo[(j + 1) % mo.length]) <= w / 2) {
+            hit2 = a;
+            break;
+          }
+        }
+        if (!hit2 && closed && pip(mo[0], pts)) hit2 = mo[0];
+        if (hit2) add("silk_over_copper", "", [g2.id, p.id], hit2);
+      }
+    }
+    return out;
+  }
+  var fpCheckApi = { checkFootprint, checkPad: checkPad2, FP_CHECK_TITLES };
+  var str9 = (v) => v === void 0 || v === null ? "" : String(v);
+  var MAX_USER_RESULTS = 400;
+  var splitId2 = (id) => {
+    const i = id.indexOf(":");
+    return i < 0 ? ["", id] : [id.slice(0, i), id.slice(i + 1)];
+  };
+  function referenceMatches(ref, lib, name) {
+    const [rl2, rn] = splitId2(ref);
+    if (!rn || rn.toLowerCase() !== name.toLowerCase()) return false;
+    return !rl2 || !lib || rl2.toLowerCase() === lib.toLowerCase();
+  }
+  function filterMatches(filter, lib, name) {
+    const pat = filter.toLowerCase();
+    const cand = (pat.includes(":") ? lib.toLowerCase() + ":" : "") + name.toLowerCase();
+    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+    return re.test(cand);
+  }
+  var prop22 = (s, key) => {
+    for (const k of K4.kids(s, "property")) if (str9(k[1]) === key) return str9(k[2]);
+    return "";
+  };
+  function pinCount(s) {
+    let n = 0;
+    const walk = (x) => {
+      for (const c of x) if (Array.isArray(c)) {
+        if (c[0] === "pin") n++;
+        else if (c[0] === "symbol") walk(c);
+      }
+    };
+    walk(s);
+    return n;
+  }
+  function footprintUsers(libs, q) {
+    const wantFilter = q.filters !== false, wantField = q.field !== false, wantMap = q.pinMaps !== false, max = q.max === void 0 ? MAX_USER_RESULTS : q.max;
+    const out = [];
+    let limited = false;
+    if (!q.name || !wantFilter && !wantField && !wantMap) return { matches: out, limited };
+    for (const lib of libs) {
+      const syms = K4.kids(lib.tree, "symbol");
+      const byName = new Map(syms.map((s) => [str9(s[1]), s]));
+      const parentOf2 = (s) => {
+        const e = K4.kid(s, "extends");
+        return e ? byName.get(str9(e[1])) || null : null;
+      };
+      const effFootprint = (s, depth = 0) => {
+        const t = prop22(s, "Footprint");
+        if (t || depth > 16) return t;
+        const p = parentOf2(s);
+        return p ? effFootprint(p, depth + 1) : "";
+      };
+      const effAssoc = (s, depth = 0) => {
+        const a = K4.kid(s, "associated_footprints");
+        if (a) return K4.kids(a, "footprint");
+        const p = depth < 16 ? parentOf2(s) : null;
+        return p ? effAssoc(p, depth + 1) : [];
+      };
+      for (const s of syms) {
+        const m = { lib: lib.nickname, symbol: str9(s[1]), pins: 0, derived: !!K4.kid(s, "extends"), filter: "", field: false, pinMaps: [] };
+        let filt = prop22(s, "ki_fp_filters");
+        if (!filt) {
+          const p = parentOf2(s);
+          if (p) filt = prop22(p, "ki_fp_filters");
+        }
+        for (const f of filt.split(/\s+/)) if (f && filterMatches(f, q.lib, q.name)) {
+          m.filter = f;
+          break;
+        }
+        const fpText = effFootprint(s);
+        if (fpText && referenceMatches(fpText, q.lib, q.name)) m.field = true;
+        for (const a of effAssoc(s)) if (referenceMatches(str9(a[1]), q.lib, q.name)) {
+          const mp = K4.kid(a, "map");
+          m.pinMaps.push(mp ? str9(mp[1]) : "");
+        }
+        if (!m.filter && !m.field && !m.pinMaps.length) continue;
+        if (!(wantFilter && m.filter || wantField && m.field || wantMap && m.pinMaps.length)) continue;
+        if (max > 0 && out.length >= max) {
+          limited = true;
+          break;
+        }
+        const root22 = (() => {
+          let r = s;
+          for (let i = 0, p = parentOf2(r); p && i < 16; i++, p = parentOf2(r)) r = p;
+          return r;
+        })();
+        m.pins = pinCount(root22 === s ? s : root22);
+        out.push(m);
+      }
+      if (limited) break;
+    }
+    const cmp = (a, b) => a.localeCompare(b, void 0, { numeric: true, sensitivity: "base" });
+    out.sort((a, b) => cmp(a.lib, b.lib) || cmp(a.symbol, b.symbol));
+    return { matches: out, limited };
+  }
+  function usersStatus(n, limited) {
+    return limited ? `This footprint is referenced by more than ${n} symbols` : `This footprint is referenced by ${n} symbols`;
+  }
+  var fpUsersApi = { footprintUsers, usersStatus, filterMatches, referenceMatches, pinCount, MAX_USER_RESULTS };
+  var run = null;
+  var enumParams = null;
+  function setEnumParams(p) {
+    enumParams = p;
+  }
+  var enumRunning = () => !!run;
+  var escHooked = false;
+  function hookEsc() {
+    if (escHooked || typeof document === "undefined") return;
+    escHooked = true;
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape" && run) run.cancelled = true;
+    }, true);
+  }
+  function popup(ctx, at) {
+    if (!run) return;
+    S.popup = { text: enumPopup(run.st), at: at.slice(), until: Number.MAX_SAFE_INTEGER };
+    ctx.requestRender();
+  }
+  function preview(ctx) {
+    if (!run || !ctx.doc) return;
+    const ch = [];
+    for (const [id, label] of run.st.numbers) {
+      const it = ctx.doc.items.get(id);
+      if (!it) continue;
+      if (!run.orig.has(id)) run.orig.set(id, clone2(it.node));
+      if (String(it.node[1]) === label) continue;
+      const n = clone2(it.node);
+      n[1] = label;
+      ch.push(replacedChange(it, n));
+    }
+    if (ch.length && ctx.applyLocal) ctx.applyLocal(ch);
+    ctx.setHighlight(new Set(run.st.picked));
+  }
+  function restore(ctx) {
+    if (!run || !ctx.doc) return;
+    const ch = [];
+    for (const [id, node] of run.orig) {
+      const it = ctx.doc.items.get(id);
+      if (it) ch.push(replacedChange(it, node));
+    }
+    if (ch.length && ctx.applyLocal) ctx.applyLocal(ch);
+  }
+  function enumActivate(ctx) {
+    hookEsc();
+    const p = enumParams || { start: 1, step: 1, prefix: "" };
+    run = { st: enumBegin(p.prefix, p.start, p.step), orig: /* @__PURE__ */ new Map(), last: null, cancelled: false, clickT: 0, clickAt: null };
+    S.sel.clear();
+    S.padSel = null;
+    if (ctx.setStatus) ctx.setStatus("Renumber Pads");
+    popup(ctx, ctx.cursor || [0, 0]);
+  }
+  function enumLeave(ctx, commit) {
+    if (!run) return;
+    const r = run;
+    restore(ctx);
+    run = null;
+    S.popup = null;
+    ctx.setHighlight(null);
+    if (commit && !r.cancelled && ctx.doc) {
+      const ch = enumChanges(ctx.doc, r.st);
+      if (ch.length) ctx.commit(ch, "Renumber Pads");
+    }
+    if (ctx.setStatus) ctx.setStatus("");
+    ctx.requestRender();
+  }
+  function enumDown(ev, mm, ctx) {
+    if (!run || !ctx.doc) return;
+    const now2 = Date.now(), at = run.clickAt;
+    const dbl = (ev.detail || 0) >= 2 || !!at && now2 - run.clickT < DBL_MS && Math.hypot(mm[0] - at[0], mm[1] - at[1]) < 0.3;
+    run.clickT = now2;
+    run.clickAt = mm.slice();
+    if (dbl) {
+      enumLeave(ctx, true);
+      ctx.setTool("select");
+      return;
+    }
+    run.last = mm.slice();
+    if (enumPick(run.st, ctx.doc, padsAt(ctx.doc, mm), true)) preview(ctx);
+    popup(ctx, mm);
+  }
+  function enumMove(ev, mm, ctx) {
+    if (!run || !ctx.doc) return;
+    if (ev && (ev.buttons || 0) & 1 && run.last) {
+      if (enumPick(run.st, ctx.doc, padsAlong(ctx.doc, run.last, mm), false)) preview(ctx);
+    }
+    run.last = ev && (ev.buttons || 0) & 1 ? mm.slice() : null;
+    popup(ctx, mm);
   }
   var DRCET = { unconnected_items: "UNCONNECTED_ITEMS", shorting_items: "SHORTING_ITEMS", items_not_allowed: "ALLOWED_ITEMS", text_on_edge_cuts: "TEXT_ON_EDGECUTS", clearance: "CLEARANCE", creepage: "CREEPAGE", tracks_crossing: "TRACKS_CROSSING", copper_edge_clearance: "EDGE_CLEARANCE", copper_outside_board: "COPPER_OUTSIDE_BOARD", isolated_copper: "ISOLATED_COPPER", starved_thermal: "STARVED_THERMAL", via_dangling: "DANGLING_VIA", track_dangling: "DANGLING_TRACK", hole_clearance: "HOLE_CLEARANCE", hole_to_hole: "DRILLED_HOLES_TOO_CLOSE", holes_co_located: "DRILLED_HOLES_COLOCATED", connection_width: "CONNECTION_WIDTH", track_width: "TRACK_WIDTH", track_angle: "TRACK_ANGLE", track_segment_length: "TRACK_SEGMENT_LENGTH", annular_width: "ANNULAR_WIDTH", drill_out_of_range: "DRILL_OUT_OF_RANGE", via_diameter: "VIA_DIAMETER", padstack: "PADSTACK", padstack_invalid: "PADSTACK_INVALID", microvia_drill_out_of_range: "MICROVIA_DRILL_OUT_OF_RANGE", malformed_microvia_stack_span: "MALFORMED_MICROVIA_STACK_SPAN", microvia_stack_not_filled: "MICROVIA_STACK_NOT_FILLED", microvia_stack_depth: "MICROVIA_STACK_DEPTH", hole_aspect_ratio: "HOLE_ASPECT_RATIO", microvia_crosses_core: "MICROVIA_CROSSES_CORE", courtyards_overlap: "OVERLAPPING_FOOTPRINTS", missing_courtyard: "MISSING_COURTYARD", malformed_courtyard: "MALFORMED_COURTYARD", pth_inside_courtyard: "PTH_IN_COURTYARD", npth_inside_courtyard: "NPTH_IN_COURTYARD", item_on_disabled_layer: "DISABLED_LAYER_ITEM", invalid_outline: "INVALID_OUTLINE", duplicate_footprints: "DUPLICATE_FOOTPRINT", missing_footprint: "MISSING_FOOTPRINT", extra_footprint: "EXTRA_FOOTPRINT", net_conflict: "NET_CONFLICT", footprint_symbol_mismatch: "SCHEMATIC_PARITY", footprint_filters_mismatch: "FOOTPRINT_FILTERS", footprint_symbol_field_mismatch: "SCHEMATIC_FIELDS_PARITY", lib_footprint_issues: "LIB_FOOTPRINT_ISSUES", lib_footprint_mismatch: "LIB_FOOTPRINT_MISMATCH", unresolved_variable: "UNRESOLVED_VARIABLE", assertion_failure: "ASSERTION_FAILURE", generic_warning: "GENERIC_WARNING", generic_error: "GENERIC_ERROR", copper_sliver: "COPPER_SLIVER", solder_mask_bridge: "SOLDERMASK_BRIDGE", silk_over_copper: "SILK_MASK_CLEARANCE", silk_edge_clearance: "SILK_EDGE_CLEARANCE", silk_overlap: "SILK_CLEARANCE", text_height: "TEXT_HEIGHT", text_thickness: "TEXT_THICKNESS", length_out_of_range: "LENGTH_OUT_OF_RANGE", net_chain_stub_length: "NET_CHAIN_STUB_TOO_LONG", net_chain_return_path: "NET_CHAIN_RETURN_PATH_BREAK", net_chain_tuning_profiles: "NET_CHAIN_TUNING_PROFILES", skew_out_of_range: "SKEW_OUT_OF_RANGE", too_many_vias: "VIA_COUNT_OUT_OF_RANGE", diff_pair_gap_out_of_range: "DIFF_PAIR_GAP_OUT_OF_RANGE", diff_pair_uncoupled_length_too_long: "DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG", footprint: "FOOTPRINT", footprint_type_mismatch: "FOOTPRINT_TYPE_MISMATCH", through_hole_pad_without_hole: "PAD_TH_WITH_NO_HOLE", footprint_scaled_with_pads: "FOOTPRINT_SCALED_WITH_PADS", mirrored_text_on_front_layer: "MIRRORED_TEXT_ON_FRONT_LAYER", nonmirrored_text_on_back_layer: "NONMIRRORED_TEXT_ON_BACK_LAYER", missing_tuning_profile: "MISSING_TUNING_PROFILE", tuning_profile_track_geometries: "TUNING_PROFILE_IMPLICIT_RULES", track_on_post_machined_layer: "TRACK_ON_POST_MACHINED_LAYER", track_not_centered_on_via: "TRACK_NOT_CENTERED_ON_VIA" };
   var LAYER_STORED = /* @__PURE__ */ new Set(["copper_sliver", "generic_warning", "generic_error", "unconnected_items", "starved_thermal"]);
@@ -31627,10 +38075,10 @@ Link '${target2}' to this file?`)) return null;
     const u = it && (K4.kid(it.node, "uuid") || K4.kid(it.node, "tstamp"));
     return u ? K4.str(u[1]) : id.replace(/#.*$/, "");
   }
-  var nm = (mm) => String(Math.round(mm * 1e6));
+  var nm2 = (mm) => String(Math.round(mm * 1e6));
   function exclusionOf(doc, m, comment) {
     const marker2 = { error_type: "DRCET_" + (DRCET[m.code] || "UNKNOWN") };
-    const x = nm(m.x), y = nm(m.y);
+    const x = nm2(m.x), y = nm2(m.y);
     const pos = {};
     if (x !== "0") pos.x_nm = x;
     if (y !== "0") pos.y_nm = y;
@@ -31788,7 +38236,15 @@ Link '${target2}' to this file?`)) return null;
       closeTextPrompt();
       S.hover = null;
       if (t !== "image") S.image = null;
+      if (enumRunning() && t !== "enumpads") enumLeave(ctx, true);
       S.modTool = mine ? t : null;
+      if (t === "enumpads") enumActivate(ctx);
+      S.padPlace = PAD_TOOLS[t] ? { type: PAD_TOOLS[t], angle: 0 } : null;
+      if (PAD_TOOLS[t]) {
+        const selPad = [...S.sel].map((id) => ctx.doc && ctx.doc.items.get(id)).find((it) => it && it.kind === "pad");
+        S.padTemplate = selPad ? selPad.node : null;
+        if (ctx.setStatus) ctx.setStatus("Place pad");
+      }
       if (t === "garc") showArcMode(ctx);
       if (t === "thievingzone" && !ctx.viewOnly && !thievingAllowed(ctx.doc)) {
         S.modTool = null;
@@ -31811,8 +38267,12 @@ Link '${target2}' to this file?`)) return null;
       const t = S.modTool;
       if (!t || ev.button !== 0 || !ctx.doc) return false;
       if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-      const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint", ev);
+      const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint" || t === "anchor" || !!PAD_TOOLS[t], ev);
       S.hover = hv;
+      if (t === "enumpads") {
+        enumDown(ev, mm, ctx);
+        return true;
+      }
       if (t === "route" || t === "routediff") routeClick(ctx, hv, mm);
       else if (isTuneTool(t)) tuneClick(ctx, mm);
       else if (t === "gridorigin") {
@@ -31826,7 +38286,15 @@ Link '${target2}' to this file?`)) return null;
         }
         ctx.setTool("select");
       } else if (t === "via") placeVia(ctx, hv);
-      else if (t === "drag") {
+      else if (PAD_TOOLS[t] && S.padPlace) {
+        if (!ctx.viewOnly) placePad(ctx, S.padPlace.type, [hv.x, hv.y], S.padPlace.angle);
+      } else if (t === "anchor") {
+        if (!ctx.viewOnly) {
+          const ch = moveAnchorChanges(ctx.doc, [hv.x, hv.y]);
+          if (ch.length) ctx.commit(ch, "Move Footprint Anchor");
+        }
+        ctx.setTool("select");
+      } else if (t === "drag") {
         if (S.drag) {
           dragMove(ctx, mm);
           if (S.drag.moved) finishDrag(ctx, true, !!(ev.ctrlKey || ev.metaKey));
@@ -31905,8 +38373,9 @@ Link '${target2}' to this file?`)) return null;
       const t = S.modTool;
       if (!t || !ctx.doc) return;
       if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-      const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint", ev);
+      const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint" || t === "anchor" || !!PAD_TOOLS[t], ev);
       S.hover = hv;
+      if (t === "enumpads") enumMove(ev, mm, ctx);
       if (t === "delete") hv.del = ctx.viewOnly ? null : deleteCandidate(ctx, mm);
       if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
       if (S.route) {
@@ -31936,6 +38405,11 @@ Link '${target2}' to this file?`)) return null;
         return true;
       };
       const shift2 = !!ev.shiftKey;
+      if (S.padPlace && (k === "r" || k === "R")) {
+        S.padPlace.angle = (S.padPlace.angle + (shift2 ? -90 : 90) + 360) % 360;
+        ctx.requestRender();
+        return true;
+      }
       switch (k) {
         case "x":
         case "X":
@@ -32393,7 +38867,18 @@ Link '${target2}' to this file?`)) return null;
   root4.CollabTools = root4.CollabTools || {};
   root4.CollabTools.pcb = pcb;
   root4.PcbTools = {
+    useFootprintEditorDefaults,
+    LINE_W,
+    TEXT_STYLE,
     state: S,
+    pad: padToolApi,
+    exchange: exchangeApi,
+    fpProps: fpPropsApi,
+    fpPads: fpPadsApi,
+    fpCheck: fpCheckApi,
+    fpUsers: fpUsersApi,
+    setEnumParams,
+    openForm: (spec) => formImpl(spec),
     arcEditMode,
     setArcEditMode,
     arcEditGeometry,
@@ -32451,7 +38936,7 @@ Link '${target2}' to this file?`)) return null;
     rotateFootprintNode,
     flipFootprintNode,
     flipLayerName,
-    pt: pt3,
+    pt: pt4,
     selectMoveTo,
     finishSelectMove,
     assembleLine,
@@ -32635,6 +39120,37 @@ Link '${target2}' to this file?`)) return null;
     ARROW_LEN,
     EXT_OFFSET,
     RULE_AREA_LAYERS,
+    // the rules engine in the router and DRC (sweep 4)
+    customRouteClearance,
+    rulePairClearance,
+    ruleSizes,
+    routedRuleItem,
+    pinnedOpt,
+    sizeMarkers,
+    trackAngleMarkers,
+    disallowMarkers,
+    assertionMarkers,
+    ruleItems,
+    segCross,
+    ruleCallFunc: callFunc,
+    itemShape,
+    footprintSelector,
+    // silkscreen and solder mask DRC (sweep 4)
+    starvedThermalMarkers,
+    isolatedCopperMarkers,
+    padZoneConnection,
+    thermalGap,
+    padOutline,
+    silkClearanceMarkers,
+    silkEdgeMarkers,
+    silkToMaskMarkers,
+    maskBridgeMarkers,
+    silkMaskMarkers,
+    boardElements,
+    maskSetup,
+    primShapes,
+    geomShapes,
+    elementGap,
     // the parity pass
     courtyardMarkers,
     courtyardOutlines,
@@ -33513,10 +40029,10 @@ var Router = class _Router {
       const l = K4.kid(n, "layer"), ls = K4.kid(n, "layers");
       const names = l ? [K4.str(l[1])] : ls ? ls.slice(1).map(K4.str) : [];
       const out = /* @__PURE__ */ new Set();
-      for (const nm of names) {
-        if (nm === "*.Cu" || nm === "F&B.Cu") all2.forEach((i) => out.add(i));
+      for (const nm2 of names) {
+        if (nm2 === "*.Cu" || nm2 === "F&B.Cu") all2.forEach((i) => out.add(i));
         else {
-          const i = copper.indexOf(nm);
+          const i = copper.indexOf(nm2);
           if (i >= 0) out.add(i);
         }
       }
@@ -33590,7 +40106,7 @@ var Router = class _Router {
     for (const ko of this.opts.keepouts || []) {
       const b = this.cellBox(ko.box);
       if (!b) continue;
-      const ls = ko.layers && ko.layers.length ? ko.layers.map((nm) => copper.indexOf(nm)).filter((i) => i >= 0) : all2;
+      const ls = ko.layers && ko.layers.length ? ko.layers.map((nm2) => copper.indexOf(nm2)).filter((i) => i >= 0) : all2;
       for (const l of ls) {
         const m = G2.keep[l] || (G2.keep[l] = new Uint8Array(W6 * H));
         for (let iy = b[1]; iy <= b[3]; iy++) m.fill(1, iy * W6 + b[0], iy * W6 + b[2] + 1);
@@ -33747,7 +40263,7 @@ var Router = class _Router {
     const rank = (this.opts.order || []).indexOf(netKey);
     let allowed = null;
     if (plan.layers && plan.layers.length) {
-      allowed = G2.layers.map((nm) => plan.layers.includes(nm));
+      allowed = G2.layers.map((nm2) => plan.layers.includes(nm2));
       if (!allowed.some(Boolean)) allowed = null;
     }
     return {
@@ -35673,7 +42189,7 @@ function openDialog(ctx) {
       if (n) note(body, `Rule-based line-probe router; its route scoring was fitted on ${n} hand-routed connections from ${PROVENANCE.boards.length} open hardware boards.`);
     },
     ok() {
-      const layers = layerBoxes.filter(([, c]) => c.checked).map(([nm]) => nm);
+      const layers = layerBoxes.filter(([, c]) => c.checked).map(([nm2]) => nm2);
       if (!layers.length) {
         ctx.toast("Autoroute: pick at least one layer");
         return false;
@@ -37216,7 +43732,7 @@ function footprintFacts(fpid, sexpr) {
   const k = K();
   const P = PCB2();
   if (!P) throw new ToolError("The board tools are not loaded.");
-  const node = footprintNode(fpid, sexpr, "REF**", "", {});
+  const node = footprintNode2(fpid, sexpr, "REF**", "", {});
   const scratch = k.parseDoc(SCRATCH_PCB, "kicad_pcb");
   const item = k.addItem(scratch, node);
   const pads = P.padsOf(item).map((p) => ({ number: p.number, type: p.type, dx: r33(p.x), dy: r33(p.y), size: [r33(p.w), r33(p.h)] }));
@@ -37235,7 +43751,7 @@ function footprintFacts(fpid, sexpr) {
     pad_list: pads.length <= 80 ? pads : pads.slice(0, 80).concat([{ note: `${pads.length - 80} more pads` }])
   };
 }
-function footprintNode(fpid, sexpr, ref, value, fields, nets) {
+function footprintNode2(fpid, sexpr, ref, value, fields, nets) {
   const k = K();
   const src = k.parse(sexpr);
   if (!src || src[0] !== "footprint" && src[0] !== "module") throw new ToolError(`footprint ${fpid}: the library file could not be read.`);
@@ -37744,7 +44260,7 @@ async function planSync(board, e) {
       const extra2 = {};
       for (const [name, v] of Object.entries(part.fields)) if (!["Reference", "Value", "Footprint"].includes(name) && !name.startsWith("ki_") && v && v !== "~") extra2[name] = v;
       const padNets = {};
-      const node = footprintNode(fpid, sexpr, ref, part.value, extra2, (pad) => {
+      const node = footprintNode2(fpid, sexpr, ref, part.value, extra2, (pad) => {
         const n = part.pins.get(pad);
         if (!n) return null;
         padNets[pad] = n;
