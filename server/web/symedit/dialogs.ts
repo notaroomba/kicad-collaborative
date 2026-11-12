@@ -149,27 +149,8 @@ export async function editField(se: SymbolEditor, id: string): Promise<void> {
     },
   });
 }
-function setBool(n: M.Node, key: string, on: boolean): void { const k = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === key); if (k > 0) (n[k] as M.Node)[1] = on ? "yes" : "no"; else if (on) n.splice(3, 0, M.node(`(${key} yes)`)); }
-/** A field's visibility: KiCad 10 writes (hide yes) on the field, older files inside its (effects). */
-export function isHidden(n: M.Node): boolean {
-  const top = K().kid(n as unknown as SNode, "hide"); if (top) return K().str(top[1]) !== "no";
-  const ef = K().kid(n as unknown as SNode, "effects"); if (!ef) return false;
-  const h2 = K().kid(ef, "hide"); return ef.includes("hide") || (!!h2 && K().str(h2[1]) !== "no");
-}
-function setHide(n: M.Node, hide: boolean): void {
-  if (isHidden(n) === hide) return;
-  const ef = n.find((c, j) => j > 0 && Array.isArray(c) && c[0] === "effects") as M.Node | undefined;
-  if (ef && (ef.includes("hide") || ef.some((c) => Array.isArray(c) && c[0] === "hide"))) {
-    // the file keeps its own layout: the flag stays inside (effects)
-    const bare = ef.indexOf("hide"); if (bare > 0) ef.splice(bare, 1);
-    const k2 = ef.findIndex((c) => Array.isArray(c) && c[0] === "hide"); if (k2 > 0) ef.splice(k2, 1);
-    if (hide) ef.push(M.node("(hide yes)"));
-    return;
-  }
-  const k = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "hide");
-  if (hide) { if (k < 0) { const e = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "effects"); n.splice(e > 0 ? e : n.length, 0, M.node("(hide yes)")); } else (n[k] as M.Node)[1] = "yes"; }
-  else if (k > 0) n.splice(k, 1);
-}
+const setBool = M.setBool, setHide = M.setHide;
+export const isHidden = M.isHidden;
 function textDialog(title: string, initial: string, sizeMm: number, angle: number, multiline: boolean): Promise<{ text: string; size: number; angle: number } | null> {
   return new Promise((resolve) => {
     const ta = h(multiline ? "textarea" : "input", { id: "txt-text", style: "width:100%;min-height:" + (multiline ? "80px" : "auto") }) as HTMLInputElement; ta.value = initial;
@@ -685,6 +666,40 @@ export function checker(se: SymbolEditor): void {
   KD().open({
     title: "Symbol Warnings", width: 640, okLabel: "Close",
     build(body) { const box = h("div", { class: "se-checker", id: "se-checker", style: "max-height:60vh;overflow:auto;padding:4px 8px;background:var(--bg);border:1px solid var(--line)" }); box.innerHTML = msgs.join(""); body.append(box); },
+  });
+}
+
+// ---------------------------------------------------------------- Update Symbol Fields
+/** DIALOG_UPDATE_SYMBOL_FIELDS: reset a derived symbol's fields from its parent (LIB_SYMBOL::SyncFieldsFromParent). */
+export function updateSymbolFields(se: SymbolEditor): void {
+  const sym = se.symbol(); const t = se.tab; if (!sym || !t) return;
+  const lib = se.libMap(se.libs.get(t.lib) || null);
+  if (!M.isDerived(sym)) { se.infoBarError("Symbol is not derived from another symbol."); return; }
+  const names = M.updatableFieldNames(lib, sym);
+  const opt = { removeExtra: false, resetEmpty: false, resetText: true, resetVisibility: true, resetEffects: true, resetPositions: true };
+  const boxes: HTMLInputElement[] = [];
+  KD().open({
+    title: "Update Symbol Fields", width: 560,
+    build(body) {
+      const ro = textInput(M.parentNameOf(sym) || "", undefined, { disabled: true, id: "usf-parent", style: "flex:1" });
+      body.append(h("div", { style: "display:flex;align-items:center;gap:8px;margin-bottom:8px" }, h("span", null, "Parent symbol:"), ro));
+      const fieldsBox = h("div", { style: "flex:1;min-width:0" }), optsBox = h("div", { style: "flex:1;min-width:0" });
+      const left = KD().staticBox(fieldsBox, "Update/reset Fields");
+      const list = h("div", { id: "usf-fields", style: "height:200px;overflow:auto;border:1px solid var(--line);background:var(--panel);padding:2px 4px" });
+      for (const n of names) { const c = checkbox(n, true); boxes.push(c.querySelector("input")!); list.append(h("div", null, c)); }
+      left.append(list, h("div", { style: "display:flex;gap:6px;margin-top:4px" },
+        h("button", { class: "btn", type: "button", id: "usf-all", onclick: () => boxes.forEach((b) => (b.checked = true)) }, "Select All"),
+        h("button", { class: "btn", type: "button", id: "usf-none", onclick: () => boxes.forEach((b) => (b.checked = false)) }, "Select None")));
+      const right = KD().staticBox(optsBox, "Update Options");
+      const opts: [keyof typeof opt, string][] = [["removeExtra", "Remove fields if not in parent symbol"], ["resetEmpty", "Reset fields if empty in parent symbol"], ["resetText", "Update/reset field text"], ["resetVisibility", "Update/reset field visibilities"], ["resetEffects", "Update/reset field sizes and styles"], ["resetPositions", "Update/reset field positions"]];
+      right.append(h("div", { style: "display:flex;flex-direction:column;gap:2px" }, ...opts.map(([k, label]) => checkbox(label, opt[k], (on) => (opt[k] = on), { id: "usf-" + k }))));
+      body.append(h("div", { style: "display:flex;gap:10px" }, fieldsBox, optsBox));
+    },
+    ok() {
+      const fields = new Set<string>(); names.forEach((n, i) => { if (boxes[i].checked) fields.add(n); });
+      se.edit("Update Symbol Fields", (s) => { if (!M.syncFieldsFromParent(lib, s, { fields, ...opt })) return false; });
+      return true;
+    },
   });
 }
 

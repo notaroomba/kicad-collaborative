@@ -950,3 +950,83 @@ export class SymbolImportManager {
     for (const i of this.infos.values()) if (i.checked) for (const a of this.ancestors(i.name)) { const ai = this.infos.get(a)!; if (!ai.checked) ai.auto = true; }
   }
 }
+export function setBool(n: Node, key: string, on: boolean): void { const k = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === key); if (k > 0) (n[k] as Node)[1] = on ? "yes" : "no"; else if (on) { const a = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "at"); n.splice(a > 0 ? a + 1 : 3, 0, node(`(${key} yes)`)); } }
+/** A field's visibility: KiCad 10 writes (hide yes) on the field, older files inside its (effects). */
+export function isHidden(n: Node): boolean {
+  const top = kid(n, "hide"); if (top) return str(top[1]) !== "no";
+  const ef = kid(n, "effects"); if (!ef) return false;
+  const h2 = kid(ef, "hide"); return ef.includes("hide") || (!!h2 && str(h2[1]) !== "no");
+}
+export function setHide(n: Node, hide: boolean): void {
+  if (isHidden(n) === hide) return;
+  const ef = n.find((c, j) => j > 0 && Array.isArray(c) && c[0] === "effects") as Node | undefined;
+  if (ef && (ef.includes("hide") || ef.some((c) => Array.isArray(c) && c[0] === "hide"))) {
+    // the file keeps its own layout: the flag stays inside (effects)
+    const bare = ef.indexOf("hide"); if (bare > 0) ef.splice(bare, 1);
+    const k2 = ef.findIndex((c) => Array.isArray(c) && c[0] === "hide"); if (k2 > 0) ef.splice(k2, 1);
+    if (hide) ef.push(node("(hide yes)"));
+    return;
+  }
+  const k = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "hide");
+  if (hide) { if (k < 0) { const e = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "effects"); n.splice(e > 0 ? e : n.length, 0, node("(hide yes)")); } else (n[k] as Node)[1] = "yes"; }
+  else if (k > 0) n.splice(k, 1);
+}
+
+// ---------------------------------------------------------------- Update Symbol Fields
+/** A user-visible field: the ki_ properties are symbol attributes, not fields, in KiCad 10. */
+const isField = (p: Node): boolean => !str(p[1]).startsWith("ki_");
+/** DIALOG_UPDATE_SYMBOL_FIELDS: the mandatory names, then the sorted other field names of the flattened parent and the symbol. */
+export function updatableFieldNames(lib: SymLib | null, sym: Node): string[] {
+  const parent = lib && parentNameOf(sym) ? lib.symbols.get(parentNameOf(sym)!) : null;
+  const names = new Set<string>();
+  for (const s of [parent ? flatten(lib, parent) : null, sym]) if (s) for (const p of kids(s, "property")) { const n = str(p[1]); if (isField(p) && !MANDATORY_FIELDS.includes(n)) names.add(n); }
+  return [...MANDATORY_FIELDS, ...[...names].sort()];
+}
+export interface FieldSyncOptions { fields: Set<string>; removeExtra: boolean; resetEmpty: boolean; resetText: boolean; resetVisibility: boolean; resetEffects: boolean; resetPositions: boolean }
+/** LIB_SYMBOL::SyncFieldsFromParent, applied to the derived symbol `sym` in place.  False when the parent cannot be found. */
+export function syncFieldsFromParent(lib: SymLib | null, sym: Node, o: FieldSyncOptions): boolean {
+  const pn = parentNameOf(sym); const parentSym = lib && pn ? lib.symbols.get(pn) : null; if (!parentSym) return false;
+  const parent = flatten(lib, parentSym);
+  const pf = (name: string): Node | null => { for (const p of kids(parent, "property")) if (str(p[1]) === name && isField(p)) return p; return null; };
+  const showName = (p: Node): boolean => { const s = kid(p, "show_name"); return !!s && (s.length < 2 || str(s[1]) !== "no"); };
+  for (let j = sym.length - 1; j >= 2; j--) {
+    const f = sym[j]; if (!isList(f) || f[0] !== "property" || !isField(f)) continue;
+    const name = str(f[1]); if (!o.fields.has(name)) continue;
+    const p = pf(name);
+    if (!p) { if (o.removeExtra) sym.splice(j, 1); continue; }
+    if (str(p[2]) === "" ? o.resetEmpty : o.resetText) f[2] = p[2];
+    if (o.resetVisibility) {
+      setHide(f, isHidden(p));
+      const k = f.findIndex((c, i) => i > 0 && isList(c) && c[0] === "show_name");
+      if (showName(p)) { if (k < 0) setBool(f, "show_name", true); else f[k] = node("(show_name yes)"); }
+      else if (k > 0) f.splice(k, 1);
+    }
+    if (o.resetEffects) {
+      // EDA_TEXT::SetAttributes, keeping the field's own visibility and position (and its hyperlink, which is not an attribute)
+      const visible = !isHidden(f);
+      const fa = kid(f, "at"), pa = kid(p, "at");
+      if (fa && pa) { const ang = pa.length > 3 ? pa[3] : 0; if (fa.length > 3) fa[3] = ang; else if (Number(ang) !== 0) fa.push(ang); }
+      const pe = kid(p, "effects"); const ne = pe ? clone(pe) : node("(effects (font (size 1.27 1.27)))");
+      for (let i = ne.length - 1; i > 0; i--) if (ne[i] === "hide" || (isList(ne[i]) && ((ne[i] as Node)[0] === "hide" || (ne[i] as Node)[0] === "href"))) ne.splice(i, 1);
+      const fe = kid(f, "effects"); const href = fe ? kid(fe, "href") : null; if (href) ne.push(clone(href));
+      const ei = f.findIndex((c, i) => i > 0 && isList(c) && c[0] === "effects");
+      if (ei > 0) f[ei] = ne; else f.push(ne);
+      if (isHidden(f) === visible) setHide(f, !visible);
+    }
+    if (o.resetPositions) { const fa = kid(f, "at"), pa = kid(p, "at"); if (fa && pa) { fa[1] = pa[1]; fa[2] = pa[2]; } }
+  }
+  // the parent's selected fields the symbol lacks, after its last field
+  const have = new Set(kids(sym, "property").map((p) => str(p[1])));
+  let at = 1; for (let j = 2; j < sym.length; j++) if (isList(sym[j]) && (sym[j] as Node)[0] === "property") at = j;
+  if (at === 1) { at = sym.findIndex((c, i) => i > 1 && isList(c) && (c[0] === "symbol" || c[0] === "embedded_fonts")); at = at < 0 ? sym.length - 1 : at - 1; }
+  const added: Node[] = [];
+  for (const p of kids(parent, "property")) {
+    const name = str(p[1]); if (!isField(p) || !o.fields.has(name) || have.has(name)) continue;
+    const n = clone(p);
+    // a new SCH_FIELD: no name shown, auto-placement allowed, attributes / text / position from the parent
+    for (let i = n.length - 1; i > 2; i--) if (isList(n[i]) && ["show_name", "do_not_autoplace", "id"].includes(String((n[i] as Node)[0]))) n.splice(i, 1);
+    added.push(n);
+  }
+  sym.splice(at + 1, 0, ...added);
+  return true;
+}

@@ -254,6 +254,10 @@ export class SymbolEditor {
     const t = this.tab; const cur = this.symbol(); if (!t || !cur || !t.redo.length || this.readOnly()) return;
     const step = t.redo.pop()!; t.undo.push({ label: step.label, text: M.text(cur) }); t.sel.clear(); this.store(t, M.node(step.text));
   }
+  /** EDA_BASE_FRAME::ShowInfoBarError: the infobar shows the message until the next refresh. */
+  infoBarError(msg: string): void {
+    const el = this.el.info; if (!el) return; el.innerHTML = ""; el.append(h("span", { class: "se-info-error" }, msg)); el.classList.add("show");
+  }
   readOnlyNotice(): void {
     const t = this.tab; if (!t) return;
     const lib = this.libs.get(t.lib);
@@ -410,7 +414,7 @@ export class SymbolEditor {
         a("compareLibraryWithFile"), S, a("symbolProperties", has), S, { label: "Close", key: "Ctrl+W", run: () => void this.close(), enabled: () => true }]],
       ["Edit", [a("undo", () => !!this.tab && this.tab.undo.length > 0 && !this.readOnly()), a("redo", () => !!this.tab && this.tab.redo.length > 0 && !this.readOnly()), S,
         a("cut", () => can() && this.tab!.sel.size > 0), a("copy", () => has() && this.tab!.sel.size > 0), a("copyAsText", () => has() && this.tab!.sel.size > 0), a("paste", () => can() && !!this.clip), a("doDelete", () => can() && this.tab!.sel.size > 0), a("duplicate", () => can() && this.tab!.sel.size > 0), S,
-        a("selectAll", has), a("unselectAll", has), S, a("find"), a("findAndReplace"), S, a("pinTable", has), a("editSymbolPinMaps"), a("updateSymbolFields")]],
+        a("selectAll", has), a("unselectAll", has), S, a("find"), a("findAndReplace"), S, a("pinTable", has), a("editSymbolPinMaps"), a("updateSymbolFields", () => can() && M.isDerived(this.symbol()!))]],
       ["View", [{ label: "Panels", sub: [a("showProperties", () => true, () => this.showProps), a("showLibraryTree", () => true, () => this.showTree)] }, S, a("showSymbolBrowser"), S,
         a("zoomInCenter"), a("zoomOutCenter"), a("zoomFitScreen"), a("zoomTool"), a("zoomRedraw"), S,
         a("showHiddenPins", () => true, () => this.showHiddenPins), a("showHiddenFields", () => true, () => this.showHiddenFields), a("togglePinAltIcons", () => true, () => this.showAltIcons), S,
@@ -664,7 +668,7 @@ export class SymbolEditor {
       revert: () => { const t = this.tab; if (t && !t.origin) { const l = this.libs.get(t.lib); if (l) void this.revertSymbol(l, t.name); } else if (t && t.origin) void this.revertScratch(); },
       importSymbol: () => { const l = this.currentLib(); if (l && l.kind === "project") void D.importSymbol(this, l); else void messageBox("Select a project library to import into."); },
       exportSymbol: () => void D.exportSymbol(this), exportSymbolView: () => void D.exportPng(this), exportSymbolAsSVG: () => void D.exportSvg(this),
-      symbolProperties: () => void D.symbolProperties(this),
+      symbolProperties: () => void D.symbolProperties(this), updateSymbolFields: () => D.updateSymbolFields(this),
       undo: () => this.undo(), redo: () => this.redo(),
       cut: () => { this.copySel(); this.deleteSel("Delete"); }, copy: () => this.copySel(), copyAsText: () => this.copySel(true), paste: () => this.paste(), doDelete: () => this.deleteSel(), duplicate: () => this.duplicateSel(),
       selectAll: () => this.selectAll(), unselectAll: () => { if (this.tab) { this.tab.sel.clear(); this.selChanged(); } },

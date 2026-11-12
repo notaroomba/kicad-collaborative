@@ -111,6 +111,44 @@ await test("Show Pin Alternate Icons: a pin with alternates and a shown name get
   const s2 = M.node(SYM); assert.strictEqual(L.parseLibSymbol(s2, { showPinAltIcons: true }).items.size, L.parseLibSymbol(s2, { showPinAltIcons: false }).items.size);
 });
 
+await test("Update Symbol Fields: SyncFieldsFromParent options, field list, unselected fields kept", () => {
+  const src = `(kicad_symbol_lib (version 20241209) (generator "kicad_symbol_editor") (generator_version "9.0")
+  (symbol "P" (property "Reference" "U" (at 0 5 0) (effects (font (size 1.27 1.27)))) (property "Value" "P" (at 0 -5 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (property "Datasheet" "ds" (at 0 0 0) (show_name yes) (effects (font (size 2 2) bold) (justify left)))
+    (property "Description" "" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (property "MPN" "123" (at 1 2 90) (effects (font (size 1 1))))
+    (property "ki_keywords" "kw" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (symbol "P_0_1" (rectangle (start -1 -1) (end 1 1) (stroke (width 0) (type default)) (fill (type none)))))
+  (symbol "D" (extends "P") (property "Reference" "Q" (at 3 3 0) (effects (font (size 1.27 1.27)))) (property "Value" "D" (at 0 -5 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "fp" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (property "Datasheet" "mine" (at 4 4 0) (hide yes) (effects (font (size 1.27 1.27)) (href "x")))
+    (property "Description" "desc" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (property "Extra" "e" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "ki_fp_filters" "SO*" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (embedded_fonts no)))`;
+  const lib = M.parseLibrary(src); const d = () => M.clone(lib.symbols.get("D"));
+  assert.deepStrictEqual(M.updatableFieldNames(lib, d()), ["Reference", "Value", "Footprint", "Datasheet", "Description", "Extra", "MPN"]);
+  const all = new Set(M.updatableFieldNames(lib, d()));
+  const o = { fields: all, removeExtra: false, resetEmpty: false, resetText: true, resetVisibility: true, resetEffects: true, resetPositions: true };
+  const s = d(); assert.ok(M.syncFieldsFromParent(lib, s, o));
+  const F = (n) => M.text(M.fieldOf(s, n));
+  assert.strictEqual(F("Reference"), M.text(M.fieldOf(lib.symbols.get("P"), "Reference")), "every attribute reset");
+  assert.strictEqual(M.fieldValue(s, "Footprint"), "fp", "empty parent text is kept unless 'Reset fields if empty'");
+  assert.strictEqual(M.fieldValue(s, "Description"), "desc");
+  assert.strictEqual(F("Datasheet"), '(property "Datasheet" "ds" (at 0 0 0) (show_name yes) (effects (font (size 2 2) bold) (justify left) (href "x")))', "visibility, show_name, effects, position; hyperlink kept");
+  assert.strictEqual(F("MPN"), '(property "MPN" "123" (at 1 2 90) (effects (font (size 1 1))))', "missing parent field appended");
+  assert.ok(M.fieldOf(s, "Extra") && M.fieldOf(s, "ki_fp_filters") && !M.fieldOf(s, "ki_keywords"), "extras kept; ki_ properties are not fields");
+  const names = s.filter((c) => Array.isArray(c) && c[0] === "property").map((p) => p[1]); assert.deepStrictEqual(names.slice(-2), ["ki_fp_filters", "MPN"]);
+  const r = d(); M.syncFieldsFromParent(lib, r, { ...o, removeExtra: true, resetEmpty: true });
+  assert.ok(!M.fieldOf(r, "Extra")); assert.strictEqual(M.fieldValue(r, "Footprint"), ""); assert.ok(M.fieldOf(r, "ki_fp_filters"));
+  const n = d(); M.syncFieldsFromParent(lib, n, { ...o, fields: new Set(["Datasheet"]), resetText: false, resetVisibility: false, resetEffects: false });
+  assert.strictEqual(M.text(M.fieldOf(n, "Datasheet")), '(property "Datasheet" "mine" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27)) (href "x")))', "only the position moved");
+  assert.strictEqual(M.text(M.fieldOf(n, "Reference")), M.text(M.fieldOf(lib.symbols.get("D"), "Reference")), "unselected fields untouched");
+  assert.ok(!M.fieldOf(n, "MPN"));
+  assert.strictEqual(M.syncFieldsFromParent(lib, M.clone(lib.symbols.get("P")), o), false, "not derived");
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();
