@@ -47,6 +47,16 @@ test("pinAt: the pin's line from its end to the body; the body itself and hidden
   assert.strictEqual(_.pinAt(doc, [58.42, 53.34], 0.2), null, "a hidden pin");
   assert.strictEqual(_.pinAt(doc, [58.42, 53.34], 0.2, true).pin.number, "5", "shown hidden pins");
 });
+test("Properties: a selected pin shows SCH_PIN's rows (name, number, type, style, library orientation, length)", () => {
+  const doc = K.parseDoc(SHEET);
+  const v = (r) => r.map((x) => [x.name, x.type, x.value]);
+  assert.deepStrictEqual(v(_.pinProperties(doc, { id: "u1", number: "2" })), [["Pin Name", "text", "OUT"], ["Pin Number", "text", "2"], ["Electrical Type", "enum", "output"], ["Graphic Style", "enum", "line"], ["Orientation", "enum", "180"], ["Length", "length", 2.54]]);
+  const q = _.pinProperties(doc, { id: "u1", number: "3" });
+  assert.strictEqual(q[0].value, "~", "GetName keeps the raw name");
+  assert.strictEqual(q[4].choices.find((c) => c[0] === q[4].value)[1], "Down", "270 is PIN_DOWN");
+  assert.strictEqual(q[2].choices.find((c) => c[0] === q[2].value)[1], "Bidirectional");
+  assert.strictEqual(_.pinProperties(doc, { id: "u1", number: "9" }), null, "a pin that is gone");
+});
 test("Pin Helpers: Net Label named after the pin, facing away from the body (\"Label Pins\")", () => {
   const doc = K.parseDoc(SHEET), ctx = makeCtx(doc);
   _.pinHelper(ctx, [{ id: "u1", number: "1" }], "label");

@@ -87,6 +87,24 @@ export function pinOf(doc: KDoc, ref: PinRef | null | undefined): PinHit | null 
   const pin = symbolPins(doc, it).find((q) => q.number === ref.number);
   return pin ? { item: it, pin } : null;
 }
+// SCH_PIN's property rows (sch_pin.cpp, the PIN property registration) as the schematic editor shows them: the
+// position, text size and Visible rows are available only in the symbol editor, and the rest are read-only
+// outside it (SetWriteableFunc( isSymbolEditor )).  Enum rows carry the file keyword and the ENUM_MAP names.
+const PIN_TYPES: [string, string][] = [["input", "Input"], ["output", "Output"], ["bidirectional", "Bidirectional"], ["tri_state", "Tri-state"], ["passive", "Passive"], ["free", "Free"], ["unspecified", "Unspecified"], ["power_in", "Power input"], ["power_out", "Power output"], ["open_collector", "Open collector"], ["open_emitter", "Open emitter"], ["no_connect", "Unconnected"]];
+const PIN_SHAPES: [string, string][] = [["line", "Line"], ["inverted", "Inverted"], ["clock", "Clock"], ["inverted_clock", "Inverted clock"], ["input_low", "Input low"], ["clock_low", "Clock low"], ["output_low", "Output low"], ["edge_clock_high", "Falling edge clock"], ["non_logic", "NonLogic"]];
+// PIN_ORIENTATION from the library pin's angle (the parser: 0 PIN_RIGHT, 90 PIN_UP, 180 PIN_LEFT, 270 PIN_DOWN)
+const PIN_ORIENTS: [string, string][] = [["0", "Right"], ["180", "Left"], ["90", "Up"], ["270", "Down"]];
+export interface PinPropRow { name: string; type: "text" | "enum" | "length"; value: string | number; choices?: [string, string][] }
+/** The Properties rows of a selected pin (lengths in mm); null when the pin is gone. */
+export function pinProperties(doc: KDoc, ref: PinRef | null | undefined): PinPropRow[] | null {
+  const h = pinOf(doc, ref); if (!h) return null;
+  const p = h.pin;
+  return [
+    { name: "Pin Name", type: "text", value: p.name }, { name: "Pin Number", type: "text", value: p.number },
+    { name: "Electrical Type", type: "enum", value: p.type, choices: PIN_TYPES }, { name: "Graphic Style", type: "enum", value: p.shape || "line", choices: PIN_SHAPES },
+    { name: "Orientation", type: "enum", value: String(p.libRot || 0), choices: PIN_ORIENTS }, { name: "Length", type: "length", value: p.len },
+  ];
+}
 /** The pin's spin away from its body: the side the pin points to, as GetPinSpinStyle / PIN_TRICKS orient things. */
 const SIDE_SPIN: Record<string, Spin> = { right: 0, top: 1, left: 2, bottom: 3 };
 const SIDE_DIR: Record<string, Pt> = { right: [1, 0], top: [0, -1], left: [-1, 0], bottom: [0, 1] };

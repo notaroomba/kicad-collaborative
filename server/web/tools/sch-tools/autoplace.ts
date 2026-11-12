@@ -8,7 +8,7 @@ import { deep, dropKid, modChange, r4, replaceKid } from "./util";
 
 // ---------------------------------------------------------------- symbol pins with their electrical type (lib symbol + transform)
 /** A symbol pin on the sheet: its connection point, the root at the body, number, name, electrical type and side. */
-export interface SymPin { x: number; y: number; root: Pt; number: string; name: string; type: string; hidden: boolean; len: number; side: string }
+export interface SymPin { x: number; y: number; root: Pt; number: string; name: string; type: string; hidden: boolean; len: number; side: string; shape?: string; libRot?: number }
 export function symbolPins(doc: KDoc, item: Pick<KItem, "node">): SymPin[] {
   const n = item.node, out: SymPin[] = [];
   const libId = str((kid(n, "lib_name") || kid(n, "lib_id") || [])[1]);
@@ -27,7 +27,7 @@ export function symbolPins(doc: KDoc, item: Pick<KItem, "node">): SymPin[] {
       let ox = pos[0] - root[0], oy = pos[1] - root[1]; const ol = Math.hypot(ox, oy) || 1; ox = Math.round(ox / ol); oy = Math.round(oy / ol);
       if (!ox && !oy) { const tip = tf(px - d[0], py - d[1]); ox = Math.sign(tip[0] - pos[0]); oy = Math.sign(tip[1] - pos[1]); }
       out.push({ x: pos[0], y: pos[1], root, number: str((kid(g, "number") || [])[1]), name: str((kid(g, "name") || [])[1]), type: str(g[1]) || "passive", hidden, len,
-        side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom" });
+        side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom", shape: str(g[2]) || "line", libRot: dir });
     }
   }
   return out;

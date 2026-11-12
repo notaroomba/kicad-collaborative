@@ -6160,7 +6160,9 @@ Link '${target}' to this file?`)) return null;
           type: str(g[1]) || "passive",
           hidden,
           len,
-          side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom"
+          side: ox > 0 ? "right" : ox < 0 ? "left" : oy < 0 ? "top" : "bottom",
+          shape: str(g[2]) || "line",
+          libRot: dir
         });
       }
     }
@@ -7460,6 +7462,22 @@ Link '${target}' to this file?`)) return null;
     const pin = symbolPins(doc, it).find((q) => q.number === ref.number);
     return pin ? { item: it, pin } : null;
   }
+  var PIN_TYPES2 = [["input", "Input"], ["output", "Output"], ["bidirectional", "Bidirectional"], ["tri_state", "Tri-state"], ["passive", "Passive"], ["free", "Free"], ["unspecified", "Unspecified"], ["power_in", "Power input"], ["power_out", "Power output"], ["open_collector", "Open collector"], ["open_emitter", "Open emitter"], ["no_connect", "Unconnected"]];
+  var PIN_SHAPES = [["line", "Line"], ["inverted", "Inverted"], ["clock", "Clock"], ["inverted_clock", "Inverted clock"], ["input_low", "Input low"], ["clock_low", "Clock low"], ["output_low", "Output low"], ["edge_clock_high", "Falling edge clock"], ["non_logic", "NonLogic"]];
+  var PIN_ORIENTS = [["0", "Right"], ["180", "Left"], ["90", "Up"], ["270", "Down"]];
+  function pinProperties(doc, ref) {
+    const h = pinOf(doc, ref);
+    if (!h) return null;
+    const p = h.pin;
+    return [
+      { name: "Pin Name", type: "text", value: p.name },
+      { name: "Pin Number", type: "text", value: p.number },
+      { name: "Electrical Type", type: "enum", value: p.type, choices: PIN_TYPES2 },
+      { name: "Graphic Style", type: "enum", value: p.shape || "line", choices: PIN_SHAPES },
+      { name: "Orientation", type: "enum", value: String(p.libRot || 0), choices: PIN_ORIENTS },
+      { name: "Length", type: "length", value: p.len }
+    ];
+  }
   var SIDE_SPIN = { right: 0, top: 1, left: 2, bottom: 3 };
   var SIDE_DIR = { right: [1, 0], top: [0, -1], left: [-1, 0], bottom: [0, 1] };
   function labelShapeForPin(type) {
@@ -7676,6 +7694,7 @@ Link '${target}' to this file?`)) return null;
       pinBox,
       pinAltFunction,
       pinOf,
+      pinProperties,
       pinHelper,
       PIN_HELPERS,
       labelShapeForPin,
