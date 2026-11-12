@@ -7,6 +7,7 @@
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
 import { box, checkField, form, grid, h, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { dimensionDialog } from "./dimension";
+import { textBoxDialog } from "./textbox";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -366,7 +367,8 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
   return itemDialog(ctx, item, "Text Properties", 560, (node, body, ro) => {
     const at = K().atOf(node), ly = kid(node, "layer"), fx = FH().fieldEffects(node);
     const eff = kid(node, "effects"), font = eff ? kid(eff, "font") : null, sz = font ? kid(font, "size") : null;
-    const text = h("textarea", { class: "pd-text", style: "min-height:90px", readOnly: ro, "data-key": "text" }); text.value = sval(node).replace(/\\n/g, "\n");
+    const text = h("textarea", { class: "pd-text", style: "min-height:90px", readOnly: ro, "data-key": "text" }); text.value = sval(node);   // the reader already turned the file's "\\n" into new lines
+    text.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.stopPropagation(); if (ev.shiftKey) { ev.preventDefault(); const ok = (body.parentElement as HTMLElement).querySelector<HTMLButtonElement>(".kd-foot > button:last-child"); if (ok) ok.click(); } } });   // SCINTILLA_TRICKS: Shift+Enter accepts, Enter is a new line
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const layer = selectField<string>(sval(ly), withCurrent(allLayers(doc), sval(ly)), { ro, key: "layer" });
     const knockout = checkField(!!ly && ly.includes("knockout"), "Knockout", { ro, key: "knockout" });
@@ -380,7 +382,7 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
         form([["Width:", w.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Thickness:", th.el, unitLabel()], ["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")]])));
     return (n) => {
       if (!(w.get() > 0) || !(ht.get() > 0)) return "Text width and height must be greater than zero.";
-      const t = text.value.replace(/\r/g, "").replace(/\n/g, "\\n");
+      const t = text.value.replace(/\r/g, "");   // new lines stay new lines: the writer escapes them as "\\n"
       if (t !== sval(n)) n[1] = t;
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       K().setAt(n, +f6(x.get()), +f6(y.get()), +f6(rot.get()));
@@ -525,6 +527,7 @@ export function pcbItemDialog(ctx: ToolCtx, item: KItem): boolean {
     case "via": return trackViaDialog(ctx, item);
     case "zone": return kid(item.node, "keepout") ? ruleAreaDialog(ctx, item) : Array.from(zoneLayerSet(ctx.doc, item.node)).some((l) => /\.Cu$/.test(l)) ? zoneDialog(ctx, item) : nonCopperZoneDialog(ctx, item);
     case "gr_text": return textDialog(ctx, item);
+    case "gr_text_box": return textBoxDialog(ctx, item);
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return shapeDialog(ctx, item);
     case "footprint": return footprintDialog(ctx, item);
     case "dimension": return dimensionDialog(ctx, item);

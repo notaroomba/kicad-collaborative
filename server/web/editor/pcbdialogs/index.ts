@@ -6,6 +6,7 @@ import { openBoardSetup } from "./board-setup";
 import { openFootprintFields } from "./fp-fields";
 import { clearDrcMarkers, drcReport, openBoardStatistics, openClearance, openDrc, openNetInspector } from "./inspect";
 import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";
+import { newTextBoxDialog } from "./textbox";
 import { padPropertiesDialog } from "./pad-props";
 import { openUpdatePcb, projectNetlist } from "./update-pcb";
 import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
@@ -24,7 +25,7 @@ export function installPcbDialogs(): void {
   (CollabTools.pcb as ToolModule & { padProperties?: unknown }).padProperties = padPropertiesDialog;   // DIALOG_PAD_PROPERTIES in place of the module's short form
   Object.assign(CollabTools.pcb as object, { drcReport, projectNetlist });   // the DRC dialog's run and the project's netlist as data (plugins' kicad-cli)
   const nd = (CollabTools.pcb as ToolModule & { setNewItemDialogs?(d: Record<string, unknown>): void }).setNewItemDialogs;
-  if (nd) nd({ gr_text: newTextDialog, zone: newZoneDialog });   // Add Text and Draw Zone / Rule Area open their properties dialog first
+  if (nd) nd({ gr_text: newTextDialog, gr_text_box: newTextBoxDialog, zone: newZoneDialog });   // Add Text, Draw Text Box and Draw Zone / Rule Area open their properties dialog first
   action("boardSetup", "Board Setup...", "", (ctx) => { void openBoardSetup(ctx); });
   action("updatePcbFromSchematic", "Update PCB from Schematic...", "F8", (ctx) => { void openUpdatePcb(ctx); });
   action("editFootprintFields", "Bulk Edit Footprint Fields...", "", openFootprintFields);

@@ -4504,7 +4504,14 @@ function drawClick(ctx, hv, t, ev) {
   if (t === "gtextbox" || t === "table") {
     S.draw = null; ctx.requestRender();
     if (samePt(p, d.start)) return;   // clicking the corner again drops the box
-    if (t === "gtextbox") { askText(ctx, "Text box", "", (text) => { if (text) ctx.commit([addedChange(ctx.doc, textBoxNode(text, d.start, p, layer))], "text box"); }); return; }
+    if (t === "gtextbox") {
+      // DRAWING_TOOL::DrawRectangle for a PCB_TEXTBOX: Text Box Properties on the drawn box; OK adds it ("Draw Text Box", selected), Cancel drops it
+      const node = withStroke(textBoxNode("", d.start, p, layer));
+      const dlg = newItemDialogs.gr_text_box;
+      if (!dlg) { askText(ctx, "Text box", "", (text) => { if (text) { node[1] = text; const c = addedChange(ctx.doc, node); ctx.commit([c], "Draw Text Box"); applySelection(ctx, [c.id]); } }); return; }
+      dlg(ctx, node, (n) => { if (!n) return; const c = addedChange(ctx.doc, n); ctx.commit([c], "Draw Text Box"); applySelection(ctx, [c.id]); ctx.requestRender(); });
+      return;
+    }
     const n = tableCounts(d.start, p, layer);
     askText(ctx, "Table rows x cols", `${n.rows} x ${n.cols}`, (v) => {
       const m = /^\s*(\d+)\s*[x×*,]\s*(\d+)\s*$/i.exec(v || "");

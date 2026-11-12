@@ -636,7 +636,7 @@ test("module: text box takes two corners and the prompt; the node follows the wr
   let title = null; pcb.setPrompt((t, initial, client, done) => { title = t; done("Hello\nworld"); });
   ctx.setTool("gtextbox"); pcb.onPointerDown(ev(), [30, 20], ctx); assert.ok(P.state.draw); pcb.onPointerDown(ev(), [10, 12], ctx);
   assert.equal(title, "Text box");
-  const c = log.commits.at(-1); assert.equal(c.label, "text box"); assert.equal(c.changes[0].typeName, "PCB_TEXTBOX");
+  const c = log.commits.at(-1); assert.equal(c.label, "Draw Text Box"); assert.equal(c.changes[0].typeName, "PCB_TEXTBOX");
   const node = lastNode(log, "gr_text_box");
   assert.deepEqual(node.slice(0, 6), ["gr_text_box", "Hello\nworld", ["start", 10, 12], ["end", 30, 20], ["margins", 1.0025, 1.0025, 1.0025, 1.0025], ["layer", "F.SilkS"]]);
   assert.deepEqual(node[6], ["uuid", c.changes[0].id]);
@@ -2026,6 +2026,50 @@ test("Dimension Properties: the dialog's values round-trip, and OK re-derives th
   assert.equal(K.str(K.kid(n, "gr_text")[1]), "SEE NOTE 2"); assert.ok(K.serialize(n).includes("(text_frame 1)"));
   const cv = D.dimDialogValues(node("center")); n = D.applyDimDialog(node("center"), { ...cv, lineThickness: 0.3 });
   assert.ok(!K.kid(n, "format") && !K.kid(n, "gr_text") && K.serialize(K.kid(n, "style")).includes("(thickness 0.3)"), "a centre mark has style only");
+});
+
+test("Draw Text Box opens Text Box Properties on the drawn box: OK adds it selected, Cancel drops it (DRAWING_TOOL::DrawRectangle)", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  let seen = null, reply = (n, done) => done(n);
+  pcb.setNewItemDialogs({ gr_text_box: (c, node, done) => { seen = node; reply(node, done); return true; } });
+  try {
+    ctx.setTool("gtextbox"); pcb.onPointerDown(ev(), [10, 12], ctx); pcb.onPointerMove(ev(), [30, 20], ctx); pcb.onPointerDown(ev(), [30, 20], ctx);
+    assert.equal(K.str(seen[1]), "", "the dialog gets an empty text box");
+    const c = log.commits.at(-1); assert.equal(c.label, "Draw Text Box"); assert.equal(c.changes[0].typeName, "PCB_TEXTBOX");
+    assert.deepEqual(log.selection || [...P.state.sel], [c.changes[0].id], "the new text box is selected");
+    assert.equal(log.tool, "gtextbox", "the tool stays for the next box");
+    const n = log.commits.length; reply = (node, done) => done(null);
+    pcb.onPointerDown(ev(), [40, 40], ctx); pcb.onPointerDown(ev(), [50, 45], ctx); assert.equal(log.commits.length, n, "Cancel: nothing added");
+  } finally { pcb.setNewItemDialogs({ gr_text_box: null }); pcb.onActivate("select", ctx); }
+});
+
+test("Text Box Properties: values round-trip; OK writes size, pen, flags, justification, border; the angle slides the box about its start", () => {
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "textbox.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; globalThis.window = globalThis.window || globalThis; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require);
+  const T = mod.exports;
+  const node = K.parse('(gr_text_box "Line one\\nLine two" (start 10 10) (end 40 30) (margins 1.0025 1.0025 1.0025 1.0025) (layer "F.SilkS") (uuid "tb-1") (effects (font (size 1.5 1.2) (thickness 0.2)) (justify left top)) (border yes) (stroke (width 0.12) (type default)) (knockout no))');
+  const v = T.textBoxValues(node);
+  assert.deepEqual({ ...v }, { text: "Line one\nLine two", locked: false, layer: "F.SilkS", angle: 0, textW: 1.2, textH: 1.5, autoThickness: false, textThick: 0.2, bold: false, italic: false,
+    hJustify: "left", vJustify: "top", mirrored: false, border: true, borderWidth: 0.12, borderStyle: "solid" });
+  let r = T.applyTextBox(node, { ...v, borderStyle: "dash" }, v);
+  assert.equal(K.serialize(r.node).replace("(type dash)", "(type default)"), K.serialize(node), "only the border style changed");
+  r = T.applyTextBox(node, { ...v, text: "A\nB", textW: 2, textH: 2, autoThickness: true, bold: true, hJustify: "center", vJustify: "bottom", mirrored: true, border: false, borderWidth: NaN, locked: true }, v);
+  const s = K.serialize(r.node);
+  assert.ok(s.startsWith('(gr_text_box "A\\nB" (locked yes)'), s);
+  assert.ok(s.includes("(effects (font (size 2 2) (bold yes)) (justify bottom mirror))"), s);
+  assert.ok(s.includes("(border no) (stroke (width 0) (type solid)) (knockout no)"), s);
+  // a pen thicker than a quarter of the size is clamped
+  r = T.applyTextBox(node, { ...v, textThick: 0.5 }, v); assert.equal(r.clamped, true); assert.ok(K.serialize(r.node).includes("(thickness 0.3)"));
+  // 90°: the box turns its centre about the start (axis-aligned, same size), the angle sits before the layer
+  r = T.applyTextBox(node, { ...v, angle: 90 }, v);
+  const st = K.kid(r.node, "start"), en = K.kid(r.node, "end");
+  assert.deepEqual([st[1], st[2], en[1], en[2]], [5, -15, 35, 5]);   // centre (25, 20) turns CCW about (10, 10) to (20, -5)
+  assert.ok(K.serialize(r.node).includes('(angle 90) (layer "F.SilkS")'));
+  // the box grows to hold its text (GetMinSize): ten lines do not fit 20 mm
+  r = T.applyTextBox(node, { ...v, text: Array(10).fill("x").join("\n") }, v);
+  assert.ok(K.num(K.kid(r.node, "end")[2]) > 30, "taller");
+  assert.equal(K.num(K.kid(r.node, "end")[1]), 40, "the width is free");
 });
 
 test("Draw Dimension takes Board Setup's dimension defaults; Switch Dimension Arrows flips the arrows of the one being drawn", () => {
