@@ -530,8 +530,8 @@
     return tableGridNode([x0, y0], rows, cols, cw, ch);
   }
   var DEFAULT_TEXT_SIZE = 1.27;
-  function drawTableSize(origin, cur, grid) {
-    const IU = 1e4, iu = (v) => Math.round(v * IU), g = iu(grid > 0 ? grid : 1.27), fs = iu(DEFAULT_TEXT_SIZE);
+  function drawTableSize(origin, cur, grid, textSize = DEFAULT_TEXT_SIZE) {
+    const IU = 1e4, iu = (v) => Math.round(v * IU), g = iu(grid > 0 ? grid : 1.27), fs = Math.max(1, iu(textSize > 0 ? textSize : DEFAULT_TEXT_SIZE));
     const dx = iu(cur[0]) - iu(origin[0]), dy = iu(cur[1]) - iu(origin[1]);
     const cols = Math.max(1, Math.trunc(dx / (fs * 15))), rows = Math.max(1, Math.trunc(dy / (fs * 2)));
     let cw = Math.max(g * 5, Math.trunc(dx / cols)), ch = Math.max(g * 2, Math.trunc(dy / rows));
@@ -539,17 +539,17 @@
     ch = Math.round(ch / g) * g;
     return { rows, cols, cw: r4(cw / IU), ch: r4(ch / IU) };
   }
-  function drawTableNode(origin, cur, grid) {
-    const z = drawTableSize(origin, cur, grid);
-    return tableGridNode(origin, z.rows, z.cols, z.cw, z.ch);
+  function drawTableNode(origin, cur, grid, textSize = DEFAULT_TEXT_SIZE) {
+    const z = drawTableSize(origin, cur, grid, textSize);
+    return tableGridNode(origin, z.rows, z.cols, z.cw, z.ch, textSize > 0 ? textSize : DEFAULT_TEXT_SIZE);
   }
-  function drawTableLines(origin, cur, grid) {
-    const z = drawTableSize(origin, cur, grid), [x0, y0] = origin, x1 = x0 + z.cols * z.cw, y1 = y0 + z.rows * z.ch, out = [];
+  function drawTableLines(origin, cur, grid, textSize = DEFAULT_TEXT_SIZE) {
+    const z = drawTableSize(origin, cur, grid, textSize), [x0, y0] = origin, x1 = x0 + z.cols * z.cw, y1 = y0 + z.rows * z.ch, out = [];
     for (let r = 0; r <= z.rows; r++) out.push([x0, y0 + r * z.ch, x1, y0 + r * z.ch]);
     for (let c = 0; c <= z.cols; c++) out.push([x0 + c * z.cw, y0, x0 + c * z.cw, y1]);
     return out;
   }
-  function tableGridNode(o, rows, cols, cw, ch) {
+  function tableGridNode(o, rows, cols, cw, ch, textSize = DEFAULT_TEXT_SIZE) {
     const [x0, y0] = o;
     const cells = [];
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push([
@@ -561,7 +561,7 @@
       ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN],
       ["span", 1, 1],
       fillNone(),
-      ["effects", fontNode(1.27), ["justify", "left", "top"]],
+      ["effects", fontNode(r4(textSize)), ["justify", "left", "top"]],
       ["uuid", K.newUuid()]
     ]);
     return [
@@ -1028,7 +1028,7 @@
     const c = S.carry;
     if (c) {
       const ok2 = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw");
-      if (ok2 === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node));
+      if (ok2 === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node), true);
       refreshCarry(ctx);
       return true;
     }
@@ -1380,14 +1380,18 @@ ${body}
     const it = items[0], own = it.kind === "symbol" || LABEL_KINDS.has(it.kind) || POINT_KINDS.has(it.kind) || TEXT_KINDS.has(it.kind);
     return own ? anchorOf(it.kind, it.node) : selectionCentre(items);
   }
-  function tableCentre(node) {
+  function tableRawCentre(node) {
     const M = K.tableModel;
     let b = null;
     for (const c of M.tableInfo(node).cells) {
       const { s, e } = M.cellStartEnd(c, false);
       for (const p of [s, e]) b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]];
     }
-    return b ? [halfGrid((b[0] + b[2]) / 2), halfGrid((b[1] + b[3]) / 2)] : [0, 0];
+    return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
+  }
+  function tableCentre(node) {
+    const c = tableRawCentre(node);
+    return [halfGrid(c[0]), halfGrid(c[1])];
   }
   function mapPoint(op, C, p) {
     const [dx, dy] = SCREEN_OP[op](p[0] - C[0], p[1] - C[1]);
@@ -1407,7 +1411,7 @@ ${body}
     d.sort((a, b) => a[1] - b[1]);
     return d[0][0];
   }
-  function transformNode(kind, node, op, C) {
+  function transformNode(kind, node, op, C, lone = false) {
     const rot = op === "ccw" || op === "cw";
     const mapAt = (n) => {
       const a = kid(n, "at");
@@ -1520,6 +1524,8 @@ ${body}
       case "table": {
         const cells = kid(node, "cells");
         if (!cells || !rot) return false;
+        if (lone) C = tableCentre(node);
+        const before = tableRawCentre(node);
         for (const c of kids(cells, "table_cell")) {
           const a = kid(c, "at"), sz = kid(c, "size");
           if (!a || !sz) continue;
@@ -1533,6 +1539,10 @@ ${body}
           sz[2] = r4(q1[1] - q0[1]);
         }
         K.tableModel.normalizeTable(node, false);
+        const now = tableRawCentre(node);
+        const to = lone ? C : mapPoint(op, C, before), from = lone ? [halfGrid(now[0]), halfGrid(now[1])] : now;
+        const dx = r4(to[0] - from[0]), dy = r4(to[1] - from[1]);
+        if (dx || dy) K.shiftTable(node, dx, dy);
         return true;
       }
       case "sheet": {
@@ -1571,7 +1581,7 @@ ${body}
       if (!DRAG_KINDS.has(it.kind)) continue;
       const n = deep(it.node);
       let ok = true;
-      for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C) !== false;
+      for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C, items.length === 1) !== false;
       if (!ok) continue;
       for (const p of connPoints(doc, it)) touched.push(p);
       for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);
@@ -1600,7 +1610,7 @@ ${body}
       if (!DRAG_KINDS.has(it.kind)) continue;
       const n = deep(it.node);
       let ok = true;
-      for (let k = 0; k < turns && ok; k++) ok = transformNode(it.kind, n, "ccw", C) !== false;
+      for (let k = 0; k < turns && ok; k++) ok = transformNode(it.kind, n, "ccw", C, items.length === 1) !== false;
       if (!ok) continue;
       shiftNode(it.kind, n, r4(dx || 0), r4(dy || 0));
       for (const p of connPoints(doc, it)) touched.push(p);
@@ -3942,7 +3952,7 @@ Link '${target}' to this file?`)) return null;
         node = bezierNode(pts[0], pts[1], c2, e);
       }
     } else if (d.shape === "table") {
-      const node2 = drawTableNode(pts[0], pts[1], ctx.gridPitch);
+      const node2 = drawTableNode(pts[0], pts[1], ctx.gridPitch, labelDefaults().textSize);
       d.await = true;
       ctx.requestRender();
       const done = (n) => {
@@ -4387,7 +4397,7 @@ Link '${target}' to this file?`)) return null;
     } else if (dr && dr.pts.length && dr.cur) {
       const a = dr.pts[0], c = dr.cur;
       if (dr.shape === "table") {
-        for (const l of drawTableLines(a, c, S.ctx && S.ctx.gridPitch || 1.27)) if (out.length < 120) out.push([l[0], l[1], l[2], l[3], 0.1524]);
+        for (const l of drawTableLines(a, c, S.ctx && S.ctx.gridPitch || 1.27, labelDefaults().textSize)) if (out.length < 120) out.push([l[0], l[1], l[2], l[3], 0.1524]);
       } else if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet") box(corners(a, c));
       else if (dr.shape === "circle") {
         const r = Math.hypot(c[0] - a[0], c[1] - a[1]), ring = [];
@@ -5030,7 +5040,7 @@ Link '${target}' to this file?`)) return null;
       }
       if (d.shape === "table") {
         c.beginPath();
-        for (const l of drawTableLines(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27)) {
+        for (const l of drawTableLines(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27, labelDefaults().textSize)) {
           c.moveTo(l[0], l[1]);
           c.lineTo(l[2], l[3]);
         }

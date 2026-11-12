@@ -1,6 +1,6 @@
 import type { SchCtx, Pt } from "./types";
 import { type SymPin, globalPowerPin, symbolPins } from "./autoplace";
-import { curTool, installDom } from "./dom";
+import { curTool, installDom, labelDefaults } from "./dom";
 import { connPoints } from "./drag";
 import { BUS_TEXT, previewJunctions } from "./junction";
 import { anchorOf } from "./orient";
@@ -157,7 +157,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
     c.save(); c.strokeStyle = K.SCH.notes; c.lineWidth = Math.max(0.1524, 2 * px); c.lineCap = "round"; c.lineJoin = "round"; c.globalAlpha = 0.85;
     const cur = d.await ? d.pts[1] : d.cur, p0 = d.pts[0];
     if (d.shape === "sheet") c.strokeStyle = K.SCH.sheet; else if (d.shape === "rulearea") { c.strokeStyle = K.SCH.ruleArea; c.setLineDash([4 * px, 3 * px]); }
-    if (d.shape === "table") { c.beginPath(); for (const l of drawTableLines(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27)) { c.moveTo(l[0], l[1]); c.lineTo(l[2], l[3]); } c.stroke(); }
+    if (d.shape === "table") { c.beginPath(); for (const l of drawTableLines(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27, labelDefaults().textSize)) { c.moveTo(l[0], l[1]); c.lineTo(l[2], l[3]); } c.stroke(); }
     else if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
     else if (d.shape === "circle") { c.beginPath(); c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2); c.stroke(); }
     else if (d.shape === "arc" && d.arc) drawSchArcPreview(c, d, px);

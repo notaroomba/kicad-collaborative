@@ -375,6 +375,13 @@
       return node;
     }
     if ((k === "gr_text_box" || k === "table_cell") && K.kid(node, "start") && K.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg2);
+    if (k === "table") {
+      const cells = K.kid(node, "cells");
+      if (!cells) return node;
+      for (const c of K.kids(cells, "table_cell")) if (K.kid(c, "start") && K.kid(c, "end")) rotateTextBoxNode(c, cx, cy, deg2);
+      K.tableModel.normalizeTable(node, true);
+      return node;
+    }
     mapNodePoints(node, about);
     if (k === "gr_rect" || k === "gr_text_box") {
       const a = pt(node, "start"), b = pt(node, "end");

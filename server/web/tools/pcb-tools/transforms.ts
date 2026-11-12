@@ -51,6 +51,12 @@ export function rotateNode(node: SNode, cx: number, cy: number, deg: number) {
     node.splice(1, 0, ["pts", ...pts.map(xy)]); return node;
   }
   if ((k === "gr_text_box" || k === "table_cell") && K.kid(node, "start") && K.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg);
+  if (k === "table") {   // PCB_TABLE::Rotate: every cell turns (PCB_TEXTBOX::Rotate), then Normalize lays them out about cell 0
+    const cells = K.kid(node, "cells"); if (!cells) return node;
+    for (const c of K.kids(cells, "table_cell")) if (K.kid(c, "start") && K.kid(c, "end")) rotateTextBoxNode(c, cx, cy, deg);
+    (K as unknown as { tableModel: { normalizeTable(n: SNode, pcb: boolean): void } }).tableModel.normalizeTable(node, true);
+    return node;
+  }
   mapNodePoints(node, about);
   if (k === "gr_rect" || k === "gr_text_box") {   // corners stay a corner pair: re-normalise start / end
     const a = pt(node, "start"), b = pt(node, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); K.kid(node, "start")!.splice(1, 2, r6(x0), r6(y0)); K.kid(node, "end")!.splice(1, 2, r6(x1), r6(y1)); }

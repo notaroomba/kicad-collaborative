@@ -1,7 +1,7 @@
 import type { SchCtx, Pt } from "./types";
 import { root } from "../root";
 import { commitSchArc, schArcClick } from "./arcs";
-import { closePrompt, promptImpl } from "./dom";
+import { closePrompt, labelDefaults, promptImpl } from "./dom";
 import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, drawTableNode, textBoxNode } from "./nodes";
 import { rememberPlaced } from "./repeat";
 import { SHEET_EXT, nextPage, placeSheet, placeSheetNode, sheetFileFor, sheetInstance } from "./sheets";
@@ -51,7 +51,7 @@ export function finishDraw(ctx: SchCtx) {
   else if (d.shape === "table") {
     // SCH_DRAWING_TOOLS::DrawTable: the second click fixes the table sized by the drag, then DIALOG_TABLE_PROPERTIES
     // opens on it; OK adds it ("Draw Table") and selects it, Cancel drops it
-    const node = drawTableNode(pts[0], pts[1], ctx.gridPitch);
+    const node = drawTableNode(pts[0], pts[1], ctx.gridPitch, labelDefaults().textSize);
     d.await = true; ctx.requestRender();
     const done = (n: SNode | null) => { if (S.draw !== d) return; S.draw = null; if (n) commitShape(ctx, n, "Draw Table"); ctx.requestRender(); };
     const T = root.CollabTableCells;

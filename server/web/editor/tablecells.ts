@@ -32,17 +32,25 @@ import { breakFollow } from "./peers";
 import { msgHooks, type MsgItem } from "./msgpanel";
 
 type Pt = number[];
-export interface CellSel { tableId: string; cells: Set<number>; anchor: number | null }
+/** `node` is the table node the indexes were taken on: when the document's node is another (an edit, ours or a peer's), the indexes follow the cells by uuid. */
+export interface CellSel { tableId: string; cells: Set<number>; anchor: number | null; node: SNode }
 
 let sel: CellSel | null = null;
 const M = () => KiCadCanvas.tableModel;
 const isPcb = (): boolean => !isSch();
 
-/** The cell selection, pruned against the document (a peer may have removed the table or some of its cells). */
+/**
+ * The cell selection, followed onto the document's current table node (a peer may have added or removed rows or
+ * columns, or the table or some of its cells) and pruned.
+ */
 export function cellSelection(): { item: KItem; cells: number[]; anchor: number | null } | null {
   if (!sel || !E.kdoc) return null;
   const item = (E.kdoc as KDoc).items.get(sel.tableId);
   if (!item || item.kind !== "table") { sel = null; return null; }
+  if (sel.node !== item.node) {
+    const a = sel.anchor !== null ? M().remapCells(sel.node, item.node, [sel.anchor]) : [];
+    sel = { tableId: sel.tableId, cells: new Set(M().remapCells(sel.node, item.node, sel.cells)), anchor: a.length ? a[0] : null, node: item.node };
+  }
   const n = M().tableInfo(item.node).cells;
   const cells = Array.from(sel.cells).filter((i) => i >= 0 && i < n.length && M().selectableCell(n[i])).sort((a, b) => a - b);
   if (!cells.length) { sel = null; return null; }
@@ -51,8 +59,9 @@ export function cellSelection(): { item: KItem; cells: number[]; anchor: number 
 export function hasCellSelection(): boolean { return !!cellSelection(); }
 /** Drop the cell selection (selection.ts clearSelection calls this). */
 export function clearCells(): void { if (sel) { sel = null; requestRender(); } }
-function setCells(tableId: string, cells: Iterable<number>, anchor: number | null): void {
-  const s = new Set(cells); sel = s.size ? { tableId, cells: s, anchor } : null;
+/** Select cells by their indexes in `node` (the table node they were read from). */
+function setCells(tableId: string, cells: Iterable<number>, anchor: number | null, node: SNode): void {
+  const s = new Set(cells); sel = s.size ? { tableId, cells: s, anchor, node } : null;
   publish();
 }
 function publish(): void { selectionChanged(); requestRender(); }
@@ -157,7 +166,7 @@ function stopAutoPan(): void { if (panRaf) cancelAnimationFrame(panRaf); panRaf 
 
 function dragTo(p: Press, mm: Pt): void {
   const cells = dragRange(p, mm);
-  sel = cells.size ? { tableId: p.item.id, cells, anchor: p.shift ? p.anchor : (sel ? sel.anchor : null) } : null;
+  sel = cells.size ? { tableId: p.item.id, cells, anchor: p.shift ? p.anchor : (sel ? sel.anchor : null), node: p.item.node } : null;
   if (sel && !p.shift && sel.anchor === null) sel.anchor = M().cellAt(p.item.node, isPcb(), p.origin[0], p.origin[1]);
   requestRender();
 }
@@ -173,14 +182,14 @@ function onUp(ev: PointerEvent): void {
   if (p.ctrl && !p.shift) {                     // toggleTableCellSelection
     const s = new Set(p.snapshot); if (s.has(p.cell)) s.delete(p.cell); else s.add(p.cell);
     if (!p.snapshot.size) clearAllSelection(false);
-    setCells(p.item.id, s, null); return;
+    setCells(p.item.id, s, null, node); return;
   }
   if (p.shift && p.anchor !== null && p.snapshot.size) {   // extendTableCellSelectionTo
     const cells = M().tableInfo(node).cells;
     const a = M().cellCentre(cells[p.anchor], isPcb()), b = M().cellCentre(cells[p.cell], isPcb());
-    setCells(p.item.id, M().cellsInRect(node, isPcb(), a, b), p.anchor); return;
+    setCells(p.item.id, M().cellsInRect(node, isPcb(), a, b), p.anchor, node); return;
   }
-  clearAllSelection(false); setCells(p.item.id, [p.cell], p.cell);
+  clearAllSelection(false); setCells(p.item.id, [p.cell], p.cell, node);
 }
 
 function cancelPress(): boolean {
@@ -189,7 +198,7 @@ function cancelPress(): boolean {
   // the button is still down: its release belongs to the cancelled drag, not to the select tool underneath
   const swallow = (ev: PointerEvent) => { if (ev.pointerId !== p.pointerId) return; ev.stopImmediatePropagation(); window.removeEventListener("pointerup", swallow, true); };
   window.addEventListener("pointerup", swallow, true);
-  if (p.dragging) { sel = p.snapshot.size ? { tableId: p.item.id, cells: new Set(p.snapshot), anchor: p.anchor } : null; publish(); }
+  if (p.dragging) { sel = p.snapshot.size ? { tableId: p.item.id, cells: new Set(p.snapshot), anchor: p.anchor, node: p.item.node } : null; publish(); }
   return true;
 }
 
@@ -223,7 +232,7 @@ function reselect(item: KItem, before: SNode, after: SNode, cells: number[]): vo
   const pos = new Map(now.map((c, i) => [KiCadCanvas.uuidOf(c), i]));
   const out = cells.map((i) => pos.get(KiCadCanvas.uuidOf(old[i]))).filter((i): i is number => i !== undefined);
   const a = sel && sel.anchor !== null && old[sel.anchor] ? pos.get(KiCadCanvas.uuidOf(old[sel.anchor])) : undefined;
-  sel = out.length ? { tableId: item.id, cells: new Set(out), anchor: a === undefined ? null : a } : null;
+  sel = out.length ? { tableId: item.id, cells: new Set(out), anchor: a === undefined ? null : a, node: after } : null;
 }
 
 type Edit = "addRowAbove" | "addRowBelow" | "addColBefore" | "addColAfter" | "deleteRows" | "deleteColumns" | "mergeCells" | "unmergeCells";
@@ -246,7 +255,7 @@ export function runEdit(what: Edit): boolean {
   case "unmergeCells": if (!M().hasMergedCell(node0, c.cells)) return true; out = M().unmergeCells(node0, pcb, c.cells); label = "Unmerge Cells"; break;
   }
   if (out === "remove" || what === "deleteRows" || what === "deleteColumns") { sel = null; commitTable(c.item, out, label); publish(); return true; }   // clearSelection()
-  if (what === "mergeCells") { const b = M().cellBlockBounds(node0, c.cells); sel = { tableId: c.item.id, cells: new Set([b.rowMin * T.cols + b.colMin]), anchor: null }; }
+  if (what === "mergeCells") { const b = M().cellBlockBounds(node0, c.cells); sel = { tableId: c.item.id, cells: new Set([b.rowMin * T.cols + b.colMin]), anchor: null, node: out }; }
   else reselect(c.item, node0, out, c.cells);
   commitTable(c.item, out, label); publish();
   return true;
@@ -257,7 +266,7 @@ export function selectRowsCols(which: "rows" | "cols" | "table"): boolean {
   const c = cellSelection(); if (!c) return false;
   if (which === "table") { selectTables([c.item.id]); return true; }
   const all = which === "rows" ? M().expandToRows(c.item.node, c.cells) : M().expandToCols(c.item.node, c.cells);
-  sel = { tableId: c.item.id, cells: new Set(all), anchor: c.anchor }; publish(); return true;
+  sel = { tableId: c.item.id, cells: new Set(all), anchor: c.anchor, node: c.item.node }; publish(); return true;
 }
 
 /** EDIT_TOOL::Properties / SCH_EDIT_TOOL::Properties on a cell selection: Table Cell Properties, then maybe the table's. */
@@ -296,10 +305,33 @@ function deleteCellText(): boolean {
 }
 
 // ---------------------------------------------------------------- clipboard
+/**
+ * EDIT_TOOL::copyToClipboard's reference point for cells (PCB_GRID_HELPER::BestDragOrigin): the selected cells'
+ * corner nearest the cursor, else the cursor.
+ */
+export function cellCopyOrigin(node: SNode, cells: number[], cursor: Pt | null): Pt {
+  const list = M().tableInfo(node).cells; if (!cursor) return list[cells[0]] ? M().cellStartEnd(list[cells[0]], true).s : [0, 0];
+  let best: Pt | null = null, bd = Infinity;
+  for (const i of cells) if (list[i]) for (const p of M().cellCorners(list[i], true)) { const d = Math.hypot(p[0] - cursor[0], p[1] - cursor[1]); if (d < bd) { bd = d; best = p; } }
+  return best || cursor;
+}
+/**
+ * The clipboard copy of a cell selection.  On a board, CLIPBOARD_IO::SaveSelection: the table clone is unlocked and
+ * moved so the reference point sits at (0, 0), then deleteUnselectedCells cuts it down and Normalizes it.
+ */
+export function cellsClipboardNode(node0: SNode, cells: number[], pcb: boolean, cursor: Pt | null): SNode {
+  if (!pcb) return M().trimToSelection(node0, false, cells);
+  const node = KiCadCanvas.cloneNode(node0);
+  const lk = node.findIndex((c, i) => i > 0 && Array.isArray(c) && c[0] === "locked"); if (lk > 0) node.splice(lk, 1);
+  const ref = cellCopyOrigin(node0, cells, cursor);
+  KiCadCanvas.shiftTable(node, -ref[0], -ref[1]);
+  return M().trimToSelection(node, true, cells);
+}
 /** Copy of a cell selection: the table cut down to the selected block, in the editor's clipboard format. */
 function copyCells(): boolean {
   const c = cellSelection(); if (!c) return false;
-  const node = M().trimToSelection(c.item.node, isPcb(), c.cells);
+  const cur = E.lastCursorMm as Pt | null | undefined;
+  const node = cellsClipboardNode(c.item.node, c.cells, isPcb(), cur && cur.length >= 2 ? cur : null);
   let text = KiCadCanvas.serialize(node);
   if (isPcb()) text = `(kicad_pcb (version ${(E.kdoc as unknown as { version?: number }).version || 20260728}) (generator "kicad-collab-web") (generator_version "10.0")\n${text}\n)`;
   appClipboard.set(text);
@@ -309,13 +341,14 @@ function copyCells(): boolean {
 function pasteCells(): boolean {
   const c = cellSelection(); if (!c) return false;
   if (!editing()) return true;
-  const id = c.item.id, cells = c.cells;
+  const id = c.item.id, cells0 = c.cells, node0 = c.item.node;
   Promise.resolve(appClipboard.read()).then((text: string) => {
     let src: SNode | null = null;
     try { for (const t of KiCadCanvas.parseAll(String(text || ""))) { const list = t[0] === "kicad_pcb" || t[0] === "kicad_sch" ? t.slice(1) : [t]; for (const n of list) if (Array.isArray(n) && n[0] === "table") { src = n as SNode; break; } if (src) break; } } catch { src = null; }
     const item = (E.kdoc as KDoc | null)?.items.get(id);
     if (!item) return;
     if (!src) { pasteAsItems(); return; }   // no table on the clipboard: the ordinary paste
+    const cells = M().remapCells(node0, item.node, cells0);   // a peer may have changed the table meanwhile
     const err = M().pasteIntoError(item.node, cells, !structureEditable(item));
     if (err) { errorMessage(err); return; }
     const out = M().pasteCells(item.node, isPcb(), cells, src, () => KiCadCanvas.newUuid());
@@ -326,7 +359,13 @@ function pasteCells(): boolean {
 function pasteAsItems(): void { sel = null; runModuleAction("paste"); }
 
 // ---------------------------------------------------------------- the point editor (COL_WIDTH / ROW_HEIGHT handles)
-interface Resize { item: KItem; cell: number; which: "col" | "row"; node: SNode; pointerId: number }
+/**
+ * A drag of a COL_WIDTH / ROW_HEIGHT handle.  `base` is the document's item the resize applies to and `preview` the
+ * item shown while dragging (set in the document locally, never sent).  A peer's change to the table during the drag
+ * replaces the preview in the document: it becomes the new base, so the one commit at the release carries the
+ * peer's edit with the resize on top instead of overwriting it.  `node0` / `cell` are the cell as it was pressed.
+ */
+interface Resize { id: string; cell: number; node0: SNode; which: "col" | "row"; base: KItem; preview: KItem | null; pointerId: number }
 let resize: Resize | null = null;
 const HANDLE_PX = 4;
 /** The one selected cell's handles (the point editor works on a single selected item). */
@@ -343,32 +382,51 @@ function onHandleDown(ev: PointerEvent): void {
   const which = Math.hypot(mm[0] - h.col[0], mm[1] - h.col[1]) <= tol ? "col" : Math.hypot(mm[0] - h.row[0], mm[1] - h.row[1]) <= tol ? "row" : null;
   if (!which) return;
   ev.stopImmediatePropagation(); ev.preventDefault();
-  resize = { item: h.item, cell: h.cell, which, node: h.item.node, pointerId: ev.pointerId };
+  resize = { id: h.item.id, cell: h.cell, node0: h.item.node, which, base: h.item, preview: null, pointerId: ev.pointerId };
   try { stage.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
   window.addEventListener("pointermove", onHandleMove, true); window.addEventListener("pointerup", onHandleUp, true);
 }
+/** Take a peer's change made during the drag as the new base; false when the table or the cell is gone. */
+function resizeBase(r: Resize): boolean {
+  const cur = (E.kdoc as KDoc | null)?.items.get(r.id);
+  if (!cur || cur.kind !== "table") return false;
+  if (cur !== r.preview && cur !== r.base) r.base = cur;
+  return M().remapCells(r.node0, r.base.node, [r.cell]).length > 0;
+}
 function resizedNode(r: Resize, ev: { clientX: number; clientY: number }): SNode {
   const mm = worldMm(ev); const ctx = toolCtx(); const p = ctx.snap ? ctx.snap(mm) : mm;
-  return M().resizeCell(r.node, isPcb(), r.cell, r.which, p);
+  const idx = M().remapCells(r.node0, r.base.node, [r.cell])[0];
+  return M().resizeCell(r.base.node, isPcb(), idx, r.which, p);
 }
+/** Put the base back in the document if our preview is what it shows. */
+function dropPreview(r: Resize): void {
+  const doc = E.kdoc as KDoc | null; if (!doc || !r.preview) return;
+  if (doc.items.get(r.id) === r.preview) doc.items.set(r.id, r.base);
+  r.preview = null;
+}
+function endResize(): void { window.removeEventListener("pointermove", onHandleMove, true); window.removeEventListener("pointerup", onHandleUp, true); resize = null; }
 function onHandleMove(ev: PointerEvent): void {
   const r = resize; if (!r) return; ev.stopImmediatePropagation();
+  if (!resizeBase(r)) { dropPreview(r); endResize(); requestRender(); return; }
   const doc = E.kdoc as KDoc; const node = resizedNode(r, ev);
-  KiCadCanvas.replaceChange(doc, { ...r.item, node, geom: [], bbox: null } as KItem);   // the live preview, applied locally only
+  const pv = { ...r.base, node, geom: [], bbox: null } as unknown as KItem;
+  KiCadCanvas.replaceChange(doc, pv);   // builds the preview's geometry
+  doc.items.set(r.id, pv); r.preview = pv;   // the live preview, shown locally only
   requestRender();
 }
 function onHandleUp(ev: PointerEvent): void {
   const r = resize; if (!r) return; ev.stopImmediatePropagation();
-  window.removeEventListener("pointermove", onHandleMove, true); window.removeEventListener("pointerup", onHandleUp, true); resize = null;
-  const doc = E.kdoc as KDoc; const node = resizedNode(r, ev);
-  KiCadCanvas.replaceChange(doc, { ...r.item, node: r.node, geom: [], bbox: null } as KItem);   // back to the original, then one commit
-  if (KiCadCanvas.serialize(node) !== KiCadCanvas.serialize(r.node)) commitTable({ ...r.item, node: r.node }, node, "Resize Table Cells");
+  endResize();
+  const ok = resizeBase(r); dropPreview(r);   // back to the document's table, then one commit
+  if (ok) {
+    const node = resizedNode(r, ev);
+    if (KiCadCanvas.serialize(node) !== KiCadCanvas.serialize(r.base.node)) commitTable(r.base, node, "Resize Table Cells");
+  }
   requestRender();
 }
 function cancelResize(): boolean {
   const r = resize; if (!r) return false;
-  window.removeEventListener("pointermove", onHandleMove, true); window.removeEventListener("pointerup", onHandleUp, true); resize = null;
-  KiCadCanvas.replaceChange(E.kdoc as KDoc, { ...r.item, node: r.node, geom: [], bbox: null } as KItem); requestRender(); return true;
+  endResize(); resizeBase(r); dropPreview(r); requestRender(); return true;
 }
 /** The two handles, drawn like the point editor's (EDIT_POINTS_PAINTER: a filled square). */
 export function drawCellHandles(ctx: CanvasRenderingContext2D): void {
@@ -408,7 +466,7 @@ export function contextPick(mm: Pt): boolean {
   const hit = cellUnder(mm); if (!hit) return false;
   if (selectionIds().includes(hit.item.id)) return false;
   const c = cellSelection(); if (c && c.item.id === hit.item.id && c.cells.includes(hit.cell)) return true;
-  clearAllSelection(false); setCells(hit.item.id, [hit.cell], hit.cell); return true;
+  clearAllSelection(false); setCells(hit.item.id, [hit.cell], hit.cell, hit.item.node); return true;
 }
 /** The context menu's runners for the table actions, by KiCad action name. */
 export const TABLE_ACTIONS: Record<string, () => boolean> = {

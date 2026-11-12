@@ -70,32 +70,34 @@ export function tableNode(a: Pt, b: Pt, rows: number, cols: number, grid: number
 }
 /** SCH_DRAWING_TOOLS::DrawTable's sizing while the cursor moves: the table grows right and down from the first
  *  click, one column per 15 and one row per 2 default text heights of drag (at least one of each), cells at least
- *  5 x 2 grid steps and rounded to the grid.  Integer schematic IU (100 nm) like KiCad, so the cuts land alike. */
+ *  5 x 2 grid steps and rounded to the grid.  Integer schematic IU (100 nm) like KiCad, so the cuts land alike.
+ *  `textSize` is the schematic's m_DefaultTextSize (Schematic Setup > Formatting), 1.27 mm when not given. */
 export const DEFAULT_TEXT_SIZE = 1.27;
-export function drawTableSize(origin: Pt, cur: Pt, grid: number): { rows: number; cols: number; cw: number; ch: number } {
-  const IU = 10000, iu = (v: number) => Math.round(v * IU), g = iu(grid > 0 ? grid : 1.27), fs = iu(DEFAULT_TEXT_SIZE);
+export function drawTableSize(origin: Pt, cur: Pt, grid: number, textSize = DEFAULT_TEXT_SIZE): { rows: number; cols: number; cw: number; ch: number } {
+  const IU = 10000, iu = (v: number) => Math.round(v * IU), g = iu(grid > 0 ? grid : 1.27), fs = Math.max(1, iu(textSize > 0 ? textSize : DEFAULT_TEXT_SIZE));
   const dx = iu(cur[0]) - iu(origin[0]), dy = iu(cur[1]) - iu(origin[1]);
   const cols = Math.max(1, Math.trunc(dx / (fs * 15))), rows = Math.max(1, Math.trunc(dy / (fs * 2)));
   let cw = Math.max(g * 5, Math.trunc(dx / cols)), ch = Math.max(g * 2, Math.trunc(dy / rows));
   cw = Math.round(cw / g) * g; ch = Math.round(ch / g) * g;
   return { rows, cols, cw: r4(cw / IU), ch: r4(ch / IU) };
 }
-export function drawTableNode(origin: Pt, cur: Pt, grid: number): SNode {
-  const z = drawTableSize(origin, cur, grid);
-  return tableGridNode(origin, z.rows, z.cols, z.cw, z.ch);
+/** The new table; each cell's text size is the default text size (cell->SetTextSize( m_DefaultTextSize )). */
+export function drawTableNode(origin: Pt, cur: Pt, grid: number, textSize = DEFAULT_TEXT_SIZE): SNode {
+  const z = drawTableSize(origin, cur, grid, textSize);
+  return tableGridNode(origin, z.rows, z.cols, z.cw, z.ch, textSize > 0 ? textSize : DEFAULT_TEXT_SIZE);
 }
 /** The preview of the table being drawn: its outline and the row / column lines, as segments. */
-export function drawTableLines(origin: Pt, cur: Pt, grid: number): number[][] {
-  const z = drawTableSize(origin, cur, grid), [x0, y0] = origin, x1 = x0 + z.cols * z.cw, y1 = y0 + z.rows * z.ch, out: number[][] = [];
+export function drawTableLines(origin: Pt, cur: Pt, grid: number, textSize = DEFAULT_TEXT_SIZE): number[][] {
+  const z = drawTableSize(origin, cur, grid, textSize), [x0, y0] = origin, x1 = x0 + z.cols * z.cw, y1 = y0 + z.rows * z.ch, out: number[][] = [];
   for (let r = 0; r <= z.rows; r++) out.push([x0, y0 + r * z.ch, x1, y0 + r * z.ch]);
   for (let c = 0; c <= z.cols; c++) out.push([x0 + c * z.cw, y0, x0 + c * z.cw, y1]);
   return out;
 }
-function tableGridNode(o: Pt, rows: number, cols: number, cw: number, ch: number): SNode {
+function tableGridNode(o: Pt, rows: number, cols: number, cw: number, ch: number, textSize = DEFAULT_TEXT_SIZE): SNode {
   const [x0, y0] = o;
   const cells: SNode[] = [];
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push(["table_cell", "", ["exclude_from_sim", "no"], ["at", r4(x0 + c * cw), r4(y0 + r * ch), 0], ["size", cw, ch],
-    ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN], ["span", 1, 1], fillNone(), ["effects", fontNode(1.27), ["justify", "left", "top"]], ["uuid", K.newUuid()]]);
+    ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN], ["span", 1, 1], fillNone(), ["effects", fontNode(r4(textSize)), ["justify", "left", "top"]], ["uuid", K.newUuid()]]);
   return ["table", ["column_count", cols], ["border", ["external", "yes"], ["header", "yes"], stroke0()], ["separators", ["rows", "yes"], ["cols", "yes"], stroke0()],
     ["column_widths", ...Array(cols).fill(cw)], ["row_heights", ...Array(rows).fill(ch)], ["uuid", K.newUuid()], ["cells", ...cells]];
 }

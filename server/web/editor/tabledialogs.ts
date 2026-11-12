@@ -102,6 +102,17 @@ export function mergedValues(cells: SNode[], isPcb: boolean): { v: CellValues; m
   return { v, mixed };
 }
 
+/**
+ * The fields of a dialog's patch the user changed: a value the cells shared (not in `mixed`) that still equals what
+ * the dialog showed is left out, so the commit, made on the table as it is when OK is pressed, keeps what a peer
+ * wrote there meanwhile.  Without a peer's edit the result is the same, as the cells already hold those values.
+ */
+export function changedFields(patch: Patch, shown: CellValues, mixed: Set<keyof CellValues>): Patch {
+  const out: Patch = {};
+  for (const k of Object.keys(patch) as (keyof CellValues)[]) if (mixed.has(k) || !same(patch[k], shown[k])) (out as Record<string, unknown>)[k] = patch[k];
+  return out;
+}
+
 /** The new table node after writing `patch` into the given cells (a copy; the original is untouched). */
 export function applyCellPatch(table: SNode, isPcb: boolean, cells: number[], patch: Patch): SNode {
   const node = K().cloneNode(table); const list = M().tableInfo(node).cells;
@@ -183,9 +194,13 @@ export function cellPropsDialog(ctx: ToolCtx, item: KItem, cells: number[], isPc
   let api: { close(): void } | null = null;
   const apply = (): boolean => {
     if (ro) return true;
-    const patch = read();
-    const node = applyCellPatch(table0, isPcb, sel, patch);
-    if (K().serialize(node) !== K().serialize(table0)) ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null } as KItem)], "Edit Table Cell Properties");
+    const patch = changedFields(read(), v, mixed);
+    // the table as it is now (a peer may have edited it while the dialog was open), its cells found by uuid
+    const cur = item.id ? doc.items.get(item.id) : item;
+    if (!cur || cur.kind !== "table") return true;
+    const cellsNow = M().remapCells(table0, cur.node, sel);
+    const node = applyCellPatch(cur.node, isPcb, cellsNow, patch);
+    if (K().serialize(node) !== K().serialize(cur.node)) ctx.commit([K().replaceChange(doc, { ...cur, node, geom: [], bbox: null } as KItem)], "Edit Table Cell Properties");
     return true;
   };
   return !!openDialog({ title: "Table Cell Properties", width: isPcb ? 560 : 600, readOnly: ro, noEnter: true,
@@ -282,6 +297,16 @@ export function schTableDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode 
   const border = kid(node0, "border"), seps = kid(node0, "separators"); const bs = schStroke(border), ss = schStroke(seps);
   const inputs: (HTMLTextAreaElement | null)[][] = [];
   let f: Record<string, Field<string | number | boolean>> = {}; let bcol: { el: HTMLElement; get(): string | null } | null = null, scol: { el: HTMLElement; get(): string | null } | null = null;
+  /** (border …) and (separators …) as the dialog's fields say */
+  const strokes = (): { bn: SNode; sn: SNode } => {
+    const b = !!f.external.get() || !!f.header.get(), s = !!f.rows.get() || !!f.cols.get();
+    const bn: SNode = ["border", ["external", f.external.get() ? "yes" : "no"], ["header", f.header.get() ? "yes" : "no"]];
+    if (b) bn.push(strokeNode({ width: Number(f.borderWidth.get()), style: String(f.borderStyle.get()), color: (bcol && bcol.get()) || "" }));
+    const sn: SNode = ["separators", ["rows", f.rows.get() ? "yes" : "no"], ["cols", f.cols.get() ? "yes" : "no"]];
+    if (s) sn.push(strokeNode({ width: Number(f.sepWidth.get()), style: String(f.sepStyle.get()), color: (scol && scol.get()) || "" }));
+    return { bn, sn };
+  };
+  let shown: { bn: string; sn: string } | null = null;   // the strokes as the dialog opened
   return !!openDialog({ title: "Table Properties", width: 640, readOnly: ro, noEnter: true,
     build(body) {
       const tw = T.widths.reduce((a, b) => a + b, 0) || 1;
@@ -317,24 +342,31 @@ export function schTableDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode 
           box("", rows.el, cols2.el, form([["Width:", sw.el, unitLabel()], ["Style:", sstyle.el], ["Color:", scol.el]], true))));
       for (const b of Array.from(body.querySelectorAll<HTMLElement>(".pd-box > .hd"))) if (!b.textContent) b.remove();
       sync();
+      const st0 = strokes(); shown = { bn: K().serialize(st0.bn), sn: K().serialize(st0.sn) };
     },
     cancel: create ? () => create(null) : undefined,
     ok() {
       if (ro) return true;
-      const node = K().cloneNode(node0); const list = M().tableInfo(node).cells;
-      inputs.forEach((row, r) => row.forEach((t, c) => { const cell = list[r * T.cols + c]; if (t && cell && String(cell[1] ?? "") !== t.value.replace(/\r/g, "")) cell[1] = t.value.replace(/\r/g, ""); }));
-      const b = !!f.external.get() || !!f.header.get(), s = !!f.rows.get() || !!f.cols.get();
-      const bn: SNode = ["border", ["external", f.external.get() ? "yes" : "no"], ["header", f.header.get() ? "yes" : "no"]];
-      if (b) bn.push(strokeNode({ width: Number(f.borderWidth.get()), style: String(f.borderStyle.get()), color: (bcol && bcol.get()) || "" }));
-      const sn: SNode = ["separators", ["rows", f.rows.get() ? "yes" : "no"], ["cols", f.cols.get() ? "yes" : "no"]];
-      if (s) sn.push(strokeNode({ width: Number(f.sepWidth.get()), style: String(f.sepStyle.get()), color: (scol && scol.get()) || "" }));
+      // Draw Table's new table is ours alone; an existing one is edited as it is now (a peer may have changed it
+      // while the dialog was open): only what the user changed here is written, each cell found by its uuid
+      const cur = create ? item : doc.items.get(item.id);
+      if (!cur || cur.kind !== "table") return true;
+      const base = cur.node, node = K().cloneNode(base); const list = M().tableInfo(node).cells;
+      inputs.forEach((row, r) => row.forEach((t, c) => {
+        const i = r * T.cols + c, text = t ? t.value.replace(/\r/g, "") : "";
+        if (!t || !T.cells[i] || M().cellText(T.cells[i]) === text) return;
+        const j = M().remapCells(node0, base, [i])[0]; const cell = j === undefined ? null : list[j];
+        if (cell && String(cell[1] ?? "") !== text) cell[1] = text;
+      }));
+      const { bn, sn } = strokes();
       // keep the file's bytes when a part did not change
       const ob = kid(node, "border"), os = kid(node, "separators");
-      if (!ob || K().serialize(ob) !== K().serialize(bn)) put(node, "border", bn, ["separators", "column_widths"]);
-      if (!os || K().serialize(os) !== K().serialize(sn)) put(node, "separators", sn, ["column_widths", "row_heights"]);
+      const bChanged = !!create || !shown || K().serialize(bn) !== shown.bn, sChanged = !!create || !shown || K().serialize(sn) !== shown.sn;
+      if (bChanged && (!ob || K().serialize(ob) !== K().serialize(bn))) put(node, "border", bn, ["separators", "column_widths"]);
+      if (sChanged && (!os || K().serialize(os) !== K().serialize(sn))) put(node, "separators", sn, ["column_widths", "row_heights"]);
       if (create) { create(node); return true; }
-      if (K().serialize(node) === K().serialize(node0)) return true;
-      ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null } as KItem)], "Edit Table");
+      if (K().serialize(node) === K().serialize(base)) return true;
+      ctx.commit([K().replaceChange(doc, { ...cur, node, geom: [], bbox: null } as KItem)], "Edit Table");
       return true;
     } });
 }

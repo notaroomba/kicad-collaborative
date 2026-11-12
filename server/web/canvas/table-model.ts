@@ -7,7 +7,7 @@
 // (size w h); every function takes `isPcb` and writes the cell the way that file's writer does.  Nothing here
 // mutates the node it is given: each edit returns a new node (cloneNode keeps the quoting marks), so the original
 // is exactly what undo puts back.  The file version is never touched.
-import { cloneNode, kid, kids, num, rotPt, str } from "./sexpr";
+import { cloneNode, kid, kids, num, rotPt, str, uuidOf } from "./sexpr";
 import type { Pt } from "./types";
 
 export interface TableInfo { cols: number; rows: number; cells: SNode[]; widths: number[]; heights: number[] }
@@ -340,8 +340,10 @@ export function expandToCols(node: SNode, sel: Iterable<number>): number[] {
 }
 
 /**
- * The clipboard copy of a cell selection (saveTable / format with SKIP_STRUCT): the selected cells only, with the
- * row heights and column widths of their range; cells keep their own positions (no Normalize, as KiCad).
+ * The clipboard copy of a cell selection: the selected cells only, with the row heights and column widths of their
+ * range.  On a board (CLIPBOARD_IO::SaveSelection's deleteUnselectedCells) the cut-down table is Normalized, so the
+ * kept cells close up into a grid about cell 0; a schematic (SCH_IO_KICAD_SEXPR::saveTable) keeps the cells where
+ * they were.
  */
 export function trimToSelection(node0: SNode, isPcb: boolean, sel: Iterable<number>): SNode {
   const node = cloneNode(node0), T = tableInfo(node); const s = new Set(sel);
@@ -354,6 +356,7 @@ export function trimToSelection(node0: SNode, isPcb: boolean, sel: Iterable<numb
   const cols = maxC - minC + 1, cells = T.cells.filter((_, i) => s.has(i));
   setColCount(node, cols); setCells(node, cells);
   writeSizes(node, isPcb, widths, heights, cols, Math.floor(cells.length / cols));
+  if (isPcb) normalizeTable(node, true);
   return node;
 }
 
@@ -369,8 +372,12 @@ export function pasteIntoError(node: SNode | null, sel: number[], generated: boo
   return "";
 }
 
-/** The attributes SetAttributes / SetStroke / SetFill* copy from a source cell (everything but the text, place and id). */
-const CELL_ATTRS = ["effects", "fill", "stroke", "margins", "knockout"];
+/**
+ * What pasteCellsIntoSelection copies from a source cell besides its text: SetAttributes (EDA_TEXT's m_attributes:
+ * font, size, justification, style and colour, i.e. the effects), SetStroke and SetFillMode / SetFillColor.  The
+ * target keeps its own margins and knockout.
+ */
+const CELL_ATTRS = ["effects", "fill", "stroke"];
 /** pasteCellsIntoSelection: the target table grows to fit, then each source cell's text and attributes land on the block. */
 export function pasteCells(target0: SNode, isPcb: boolean, sel: number[], src: SNode, uuid: Uuid): SNode {
   let node = cloneNode(target0); const S = tableInfo(src); const b = cellBlockBounds(node, sel);
@@ -407,7 +414,7 @@ export function pasteCells(target0: SNode, isPcb: boolean, sel: number[], src: S
       const sv = kid(s, key), ti = t.findIndex((c) => Array.isArray(c) && c[0] === key);
       if (sv && ti > 0) t[ti] = cloneNode(sv);
       else if (sv) { const u = t.findIndex((c) => Array.isArray(c) && (c[0] === "uuid" || c[0] === "effects")); t.splice(u > 0 ? u : t.length, 0, cloneNode(sv)); }
-      else if (ti > 0 && key !== "margins") t.splice(ti, 1);
+      else if (ti > 0) t.splice(ti, 1);
     }
   }
   normalizeTable(node, isPcb);
@@ -467,10 +474,31 @@ export function resizeCell(node0: SNode, isPcb: boolean, idx: number, which: "co
   return node;
 }
 
+// ---------------------------------------------------------------- following cells across edits
+/**
+ * KiCad's selection holds the cell objects themselves, so a cell stays selected whichever row or column a peer adds
+ * or deletes.  Cell indexes taken on `before` are mapped onto `after` by the cells' uuids; a cell that is gone is
+ * dropped.  A cell with no uuid keeps its index only while the table's shape (columns and cell count) is unchanged.
+ */
+export function remapCells(before: SNode, after: SNode, sel: Iterable<number>): number[] {
+  if (before === after) return Array.from(sel);
+  const B = tableInfo(before), A = tableInfo(after);
+  const sameShape = B.cols === A.cols && B.cells.length === A.cells.length;
+  const pos = new Map<string, number>(); A.cells.forEach((c, i) => { const u = uuidOf(c); if (u && !pos.has(u)) pos.set(u, i); });
+  const out: number[] = [];
+  for (const i of sel) {
+    const c = B.cells[i]; if (!c) continue;
+    const u = uuidOf(c);
+    const j = u ? pos.get(u) : (sameShape ? i : undefined);
+    if (j !== undefined && !out.includes(j)) out.push(j);
+  }
+  return out;
+}
+
 export const tableModel = {
   tableInfo, spanOf, cellText, cellStartEnd, setCellStartEnd, cellCorners, cellCentre, selectableCell, cellAt, cellsInRect, normalizeTable,
   tablePosition, setTablePosition, copyCell, addRow, addCol, rowsOf, colsOf, deleteRows, deleteCols, cellBlockBounds, isCellBlock, hasMergedCell,
   mergeCells, unmergeCells, expandToRows, expandToCols, trimToSelection, pasteIntoError, pasteCells, tableCsv, columnName, clearCellText,
-  cellHandles, resizeCell,
+  cellHandles, resizeCell, remapCells,
 };
 export type TableModel = typeof tableModel;

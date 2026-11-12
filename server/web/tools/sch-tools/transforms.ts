@@ -25,12 +25,14 @@ export function rotationCentre(items: KItem[]) {
   const it = items[0], own = it.kind === "symbol" || LABEL_KINDS.has(it.kind) || POINT_KINDS.has(it.kind) || TEXT_KINDS.has(it.kind);
   return own ? anchorOf(it.kind, it.node) : selectionCentre(items);
 }
-/** A lone table turns about GetNearestHalfGridPosition( SCH_TABLE::GetCenter() ): the centre of its cells' starts and ends. */
-export function tableCentre(node: SNode): Pt {
+/** SCH_TABLE::GetCenter: the centre of the box of its cells' starts and ends. */
+export function tableRawCentre(node: SNode): Pt {
   const M = K.tableModel; let b: Box | null = null;
   for (const c of M.tableInfo(node).cells) { const { s, e } = M.cellStartEnd(c, false); for (const p of [s, e]) b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]]; }
-  return b ? [halfGrid((b[0] + b[2]) / 2), halfGrid((b[1] + b[3]) / 2)] : [0, 0];
+  return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
 }
+/** A lone table turns about GetNearestHalfGridPosition( SCH_TABLE::GetCenter() ). */
+export function tableCentre(node: SNode): Pt { const c = tableRawCentre(node); return [halfGrid(c[0]), halfGrid(c[1])]; }
 // op: "ccw" | "cw" | "x" (KiCad's Mirror Vertically: y flips) | "y" (Mirror Horizontally: x flips)
 export function mapPoint(op: string, C: Pt, p: Pt): Pt { const [dx, dy] = SCREEN_OP[op](p[0] - C[0], p[1] - C[1]); return [r4(C[0] + dx), r4(C[1] + dy)]; }
 export function setFlagRot(node: SNode, rot: number) {
@@ -38,7 +40,11 @@ export function setFlagRot(node: SNode, rot: number) {
   const p = [num(a[1]), num(a[2])]; for (const pr of kids(node, "property")) replaceKid(pr, flagFieldAt(p, rot));
 }
 export function sideOfEdge(p: Pt, box: Box) { const d: [string, number][] = [["left", Math.abs(p[0] - box[0])], ["right", Math.abs(p[0] - box[2])], ["top", Math.abs(p[1] - box[1])], ["bottom", Math.abs(p[1] - box[3])]]; d.sort((a, b) => a[1] - b[1]); return d[0][0]; }
-export function transformNode(kind: string, node: SNode, op: string, C: Pt) {
+/**
+ * Rotate / mirror one item about C.  `lone`: the item is the selection's only principal item (SCH_EDIT_TOOL::Rotate's
+ * principalItemCount == 1), which a table turns about its own centre instead of C.
+ */
+export function transformNode(kind: string, node: SNode, op: string, C: Pt, lone = false) {
   const rot = op === "ccw" || op === "cw";
   const mapAt = (n: SNode) => { const a = kid(n, "at"); if (!a) return; const q = mapPoint(op, C, [num(a[1]), num(a[2])]); a[1] = q[0]; a[2] = q[1]; };
   const mapPts = (n: SNode) => setPts(n, ptsOf(n).map((p) => mapPoint(op, C, p)));
@@ -72,9 +78,14 @@ export function transformNode(kind: string, node: SNode, op: string, C: Pt) {
   }
   case "table": {
     // SCH_TABLE::Rotate: every cell (an SCH_TEXTBOX) turns its start and end about the pivot and swaps its text angle
-    // between horizontal and vertical, then Normalize lays the cells out again from cell 0.  SCH_TABLE's
-    // MirrorHorizontally / MirrorVertically do nothing ("doesn't seem useful"), so a mirror leaves the table alone.
+    // between horizontal and vertical, then Normalize lays the cells out again from cell 0.  SCH_EDIT_TOOL::Rotate
+    // then moves the table back: a lone table about rotPoint = GetNearestHalfGridPosition( GetCenter() ) by
+    // rotPoint - GetNearestHalfGridPosition( GetCenter() ), one of several so its old centre lands where the
+    // rotation takes it.  SCH_TABLE's MirrorHorizontally / MirrorVertically do nothing ("doesn't seem useful"), so a
+    // mirror leaves the table alone.
     const cells = kid(node, "cells"); if (!cells || !rot) return false;
+    if (lone) C = tableCentre(node);
+    const before = tableRawCentre(node);
     for (const c of kids(cells, "table_cell")) {
       const a = kid(c, "at"), sz = kid(c, "size"); if (!a || !sz) continue;
       const p0: Pt = [num(a[1]), num(a[2])], p1: Pt = [p0[0] + num(sz[1]), p0[1] + num(sz[2])];
@@ -83,6 +94,10 @@ export function transformNode(kind: string, node: SNode, op: string, C: Pt) {
       sz[1] = r4(q1[0] - q0[0]); sz[2] = r4(q1[1] - q0[1]);
     }
     K.tableModel.normalizeTable(node, false);
+    const now = tableRawCentre(node);
+    const to: Pt = lone ? C : mapPoint(op, C, before), from: Pt = lone ? [halfGrid(now[0]), halfGrid(now[1])] : now;
+    const dx = r4(to[0] - from[0]), dy = r4(to[1] - from[1]);
+    if (dx || dy) K.shiftTable(node, dx, dy);   // SCH_TABLE::Move
     return true;
   }
   case "sheet": {
@@ -111,7 +126,7 @@ export function transformChanges(ctx: SchCtx, items: KItem[], op: string, C: Pt,
   for (const it of items) {
     if (!DRAG_KINDS.has(it.kind)) continue;
     const n = deep(it.node); let ok = true;
-    for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C) !== false;
+    for (let k = 0; k < (times || 1) && ok; k++) ok = transformNode(it.kind, n, op, C, items.length === 1) !== false;
     if (!ok) continue;
     for (const p of connPoints(doc, it)) touched.push(p);
     for (const p of connPoints(doc, { kind: it.kind, node: n, id: it.id })) touched.push(p);
@@ -137,7 +152,7 @@ export function moveExactChanges(ctx: SchCtx, items: KItem[], dx: number, dy: nu
   for (const it of items) {
     if (!DRAG_KINDS.has(it.kind)) continue;
     const n = deep(it.node); let ok = true;
-    for (let k = 0; k < turns && ok; k++) ok = transformNode(it.kind, n, "ccw", C) !== false;
+    for (let k = 0; k < turns && ok; k++) ok = transformNode(it.kind, n, "ccw", C, items.length === 1) !== false;
     if (!ok) continue;
     shiftNode(it.kind, n, r4(dx || 0), r4(dy || 0));
     for (const p of connPoints(doc, it)) touched.push(p);

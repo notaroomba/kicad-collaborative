@@ -17,7 +17,7 @@ export function selectedItem(ctx: SchCtx) { const id = ctx.selected ? ctx.select
 // its half-grid box centre); a multi-selection turns as a whole about the selection centre.
 export function orientSelected(ctx: SchCtx, op: string) {
   const c = S.carry;
-  if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node)); refreshCarry(ctx); return true; }
+  if (c) { const ok = op === "x" || op === "y" ? mirrorNode(c.kind, c.node, op) : rotateNode(c.kind, c.node, op === "cw"); if (ok === false) transformNode(c.kind, c.node, op, anchorOf(c.kind, c.node), true); refreshCarry(ctx); return true; }
   const items = selectedItems(ctx);
   if (items.length > 1) return transformSelected(ctx, op, items);
   const it = items[0]; if (!it) return false;
