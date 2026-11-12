@@ -1013,7 +1013,7 @@ test("clipboard: copy writes KiCad's kicad_pcb clipboard document; paste lands a
   assert.deepEqual(K.kid(K.kids(cfp.node, "pad")[0], "net"), ["net", 2, "GND"]); assert.deepEqual(K.kid(K.kids(cfp.node, "pad")[1], "net"), ["net", 0, ""]); assert.deepEqual(K.kid(cseg.node, "net"), ["net", 2]);
   // duplicate: same place, new ids
   const d = P.duplicateChanges(fixture(), ["s-1"]); assert.equal(d.ids.length, 1); assert.notEqual(d.ids[0], "s-1"); assert.deepEqual(K.kid(node(d.changes[0]), "start").slice(1), [110, 50]);
-  const arr = P.arrayChanges(fixture(), ["s-1"], { nx: 3, ny: 2, dx: 10, dy: 5 }); assert.equal(arr.ids.length, 5);
+  const arr = P.arrayChanges(fixture(), ["s-1"], { type: "grid", nx: 3, ny: 2, dx: 10, dy: 5, hThenV: true }); assert.equal(arr.ids.length, 6, "five copies and the original");
   assert.equal(P.referencePoint(doc, ["s-1"], [114, 51])[0], 115, "the item anchor nearest the cursor");
 });
 
@@ -2114,6 +2114,54 @@ test("Reference Image Properties: sizes from the scale, CheckValues' limits and 
   const png = makePng(4, 4, 1000); const withPpi = Buffer.from(R.pngWithPpi(new Uint8Array(png), 254));
   assert.equal(P.imageInfo(new Uint8Array(withPpi)).ppi, 254);
   assert.equal(withPpi.length, png.length, "the old pHYs replaced, not doubled");
+});
+
+test("Create Array: ARRAY_OPTIONS transforms, ARRAY_TOOL's copies, and DIALOG_CREATE_ARRAY's checks", () => {
+  const g = { type: "grid", nx: 3, ny: 2, dx: 10, dy: 5, offX: 0, offY: 0, stagger: 1, staggerRows: true, centred: false, hThenV: true };
+  assert.equal(P.arraySize(g), 6);
+  assert.deepEqual([0, 1, 2, 3, 5].map((n) => P.arrayTransform(g, n, [0, 0]).offset), [[0, 0], [10, 0], [20, 0], [0, 5], [20, 5]]);
+  assert.deepEqual(P.arrayTransform({ ...g, centred: true }, 0, [0, 0]).offset, [-10, -2.5], "centred: minus half the extents");
+  assert.deepEqual(P.arrayTransform({ ...g, offX: 1, offY: 2 }, 4, [0, 0]).offset, [11, 7], "the offsets add per row / column");
+  assert.deepEqual(P.arrayTransform({ ...g, stagger: 2 }, 3, [0, 0]).offset, [5, 5], "stagger 2 on rows: every other row half a pitch over");
+  assert.deepEqual(P.arrayTransform({ ...g, stagger: -2 }, 3, [0, 0]).offset, [-5, 5], "a negative stagger goes the other way");
+  assert.deepEqual(P.arrayTransform({ ...g, hThenV: false }, 1, [0, 0]).offset, [0, 5], "vertical then horizontal");
+  const c = { type: "circular", centre: [0, 0], angle: 90, angleOffset: 0, clockwise: true, count: 4, rotateItems: true };
+  let t = P.arrayTransform(c, 1, [10, 0]); assert.deepEqual([t.offset.map((v) => Math.round(v * 1e6) / 1e6), t.rot], [[-10, 10], -90], "clockwise on screen: (10, 0) to (0, 10)");
+  t = P.arrayTransform({ ...c, clockwise: false, rotateItems: false }, 1, [10, 0]); assert.deepEqual([t.offset.map((v) => Math.round(v * 1e6) / 1e6), t.rot], [[-10, -10], 0]);
+  t = P.arrayTransform({ ...c, angle: 0, count: 3 }, 1, [10, 0]); assert.equal(Math.round(t.rot * 1e6) / 1e6, -120, "angle 0 divides the circle by the count");
+  assert.equal(P.arrayStacked({ ...g, dx: 0, dy: 0 }, [0, 0]), true); assert.equal(P.arrayStacked(g, [0, 0]), false);
+  assert.equal(P.arrayStacked({ ...c, count: 5, rotateItems: false }, [10, 0]), true, "five quarter turns come round to the first");
+  assert.equal(P.arrayStacked({ ...c, count: 5 }, [10, 0]), false, "unless the item turns: -360 is not 0 to EDA_ANGLE");
+  // the copies: footprints reannotated, the original stays the first cell and is selected with them
+  const doc = fixture();
+  let r = P.arrayChanges(doc, ["fp-1", "s-4"], { ...g, nx: 2, ny: 1 });
+  assert.equal(r.label, "Create Array"); assert.equal(r.changes.length, 2); assert.deepEqual(r.ids.slice(-2), ["fp-1", "s-4"]);
+  const fpc = r.changes.find((x) => x.typeName === "FOOTPRINT" || /^\(kicad_pcb.*\(footprint/s.test(x.sexpr) && x.sexpr.includes("(footprint"));
+  assert.ok(fpc && fpc.sexpr.includes('"Reference" "R2"') && fpc.sexpr.includes("(translate 110 50)"), fpc && fpc.sexpr.slice(0, 300));
+  assert.ok(r.changes.some((x) => x.sexpr.includes("(segment (start 140 50) (end 145 50)")));
+  r = P.arrayChanges(fixture(), ["fp-1"], { ...g, nx: 2, ny: 1, keepRefs: true });
+  assert.ok(r.changes[0].sexpr.includes('"Reference" "R1"'), "Keep existing reference designators");
+  // centred: the originals move too (MODIFIED), in the same commit
+  r = P.arrayChanges(fixture(), ["s-4"], { ...g, nx: 3, ny: 1, centred: true });
+  assert.deepEqual(r.changes.map((x) => x.kind), ["ADDED", "ADDED", "MODIFIED"]);
+  assert.ok(r.changes[2].sexpr.includes("(start 120 50) (end 125 50)"), r.changes[2].sexpr);
+  // circular, clockwise on screen: (130, 50) a quarter turn about (130, 60) is (140, 60), and the track turns with it
+  r = P.arrayChanges(fixture(), ["s-4"], { ...c, centre: [130, 60], count: 2, angle: 90 });
+  assert.ok(r.changes[0].sexpr.includes("(start 140 60) (end 140 65)"), r.changes[0].sexpr);
+  // arrange: the selection, in order, one item to a cell from the first one's position
+  r = P.arrayChanges(fixture(), ["s-4", "s-1"], { ...g, nx: 2, ny: 1, arrange: true });
+  assert.equal(r.label, "Arrange selection"); assert.equal(r.changes.length, 1); assert.ok(r.changes[0].sexpr.includes("(start 140 50) (end 145 50)") && r.changes[0].sexpr.includes('"s-1"'), r.changes[0].sexpr);
+
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "array.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; globalThis.window = globalThis.window || globalThis; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require);
+  const A = mod.exports, D = A.ARRAY_DEFAULTS;
+  let o = A.arrayOptions(D); assert.deepEqual(o.errors, []); assert.deepEqual([o.opts.type, o.opts.nx, o.opts.ny, o.opts.dx, o.opts.dy, o.opts.stagger, o.opts.centred, o.opts.keepRefs, o.opts.arrange], ["grid", 5, 5, 2.54, 2.54, 1, false, false, false]);
+  o = A.arrayOptions({ ...D, gridNx: "5x", gridStagger: "" });
+  assert.equal(o.opts, null); assert.deepEqual(o.errors, ["Bad numeric value for horizontal count: 5x", "Bad numeric value for stagger: "]);
+  o = A.arrayOptions({ ...D, tab: 1, circCount: "six" }); assert.deepEqual(o.errors, ["Bad numeric value for point count: six"]);
+  o = A.arrayOptions({ ...D, tab: 1, circFullCircle: true }); assert.deepEqual([o.opts.type, o.opts.count, o.opts.angle, o.opts.clockwise, o.opts.rotateItems], ["circular", 4, 90, true, false]);
+  assert.equal(A.stackedMessage(25), "The array configuration would place 25 items at the same position and rotation, stacking them on top of one another.\n\nProceed anyway?");
 });
 
 test("Table Properties: cells read and write as the table reads (reversed on the back); strokes as DIALOG_TABLE_PROPERTIES writes them", () => {

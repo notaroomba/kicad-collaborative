@@ -6365,7 +6365,7 @@ function clearNets(nodes, doc) {
  * (PCB_GROUP::DeepDuplicate): a new group holding copies of its members.  Returns { changes, ids, restore } where
  * restore holds the groups' nodes before the copies joined them (a cancelled placement puts them back).
  */
-function duplicateChanges(doc, ids, offset) {
+function duplicateChanges(doc, ids, offset, opts) {
   const sel = new Set(ids); const out = { changes: [], ids: [], restore: [] }; const joins = new Map();
   const coveredByGroup = (id) => { for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
   const subtree = (it, acc) => { acc.push(it); if (it.kind === "group") for (const m of groupMembers(it.node)) { const c = doc.items.get(m); if (c) subtree(c, acc); } return acc; };
@@ -6373,6 +6373,8 @@ function duplicateChanges(doc, ids, offset) {
     const it = doc.items.get(id); if (!it || it.kind === "generated" || coveredByGroup(id)) continue;
     const src = subtree(it, []);
     const nodes = src.map((x) => clone(x.node)); freshUuids(nodes);
+    if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
+    if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);   // the array tool's per-copy transform (about the top item)
     // members first, so a group's ADDED change finds them
     const order = nodes.map((n, i) => i).sort((a, b) => (nodes[a][0] === "group") - (nodes[b][0] === "group") || b - a);
     let topId = null;
@@ -6386,10 +6388,85 @@ function duplicateChanges(doc, ids, offset) {
   for (const [gid, add] of joins) { const g = doc.items.get(gid); out.restore.push({ id: gid, node: clone(g.node) }); out.changes.push(...groupMembersChanges(doc, g, add, [])); }
   return out;
 }
-/** createArray: a grid of copies (the originals stay in place as cell 0, 0). */
-function arrayChanges(doc, ids, opts) {
-  const nx = Math.max(1, Math.round(opts.nx || 1)), ny = Math.max(1, Math.round(opts.ny || 1)); const text = clipboardText(doc, ids, [0, 0]); const out = { changes: [], ids: [] };
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { if (!i && !j) continue; const r = pasteChanges(doc, text, [i * (opts.dx || 0), j * (opts.dy || 0)], { annotations: "unique" }); out.changes.push(...r.changes); out.ids.push(...r.ids); }
+// ---------------------------------------------------------------- ARRAY_OPTIONS (common/array_options.cpp), in nanometres
+const AIU = 1e6;
+/** ARRAY_OPTIONS::GetArraySize. */
+const arraySize = (o) => o.type === "circular" ? Math.max(0, Math.trunc(o.count)) : Math.max(0, Math.trunc(o.nx)) * Math.max(0, Math.trunc(o.ny));
+/** ARRAY_GRID_OPTIONS::getGridCoords. */
+function arrayGridCoords(o, n) {
+  const axis = o.hThenV ? o.nx : o.ny; let x = n % axis; const y = Math.trunc(n / axis);
+  if (o.reverseAlt && (y % 2)) x = axis - x - 1;
+  return [x, y];
+}
+/**
+ * ARRAY_OPTIONS::GetTransform( n, aPos ): { offset (mm), rot (degrees) } for the n-th copy of an item whose position
+ * (GetPosition) is pos.  Grid: o = { type: "grid", nx, ny, dx, dy, offX, offY (mm), stagger, staggerRows, centred, hThenV,
+ * reverseAlt }; circular: o = { type: "circular", centre (mm), angle, angleOffset (degrees), clockwise, count, rotateItems }.
+ */
+function arrayTransform(o, n, pos) {
+  const iu = (v) => Math.round((v || 0) * AIU);
+  if (o.type === "circular") {
+    let a = !o.angle ? 360 * n / o.count : o.angle * n;
+    a += o.angleOffset || 0; if (o.clockwise) a = -a;
+    const p = [iu(pos[0]), iu(pos[1])], c = [iu(o.centre[0]), iu(o.centre[1])];
+    const [rx, ry] = rotator(a)(p[0] - c[0], p[1] - c[1]); const np = [Math.round(c[0] + rx), Math.round(c[1] + ry)];   // RotatePoint: KiROUND
+    return { offset: [(np[0] - p[0]) / AIU, (np[1] - p[1]) / AIU], rot: o.rotateItems ? a : 0 };
+  }
+  let [cx, cy] = arrayGridCoords(o, n); if (!o.hThenV) [cx, cy] = [cy, cx];
+  const dx = iu(o.dx), dy = iu(o.dy), ox = iu(o.offX), oy = iu(o.offY);
+  let x = cx * dx + cy * ox, y = cy * dy + cx * oy;
+  const st = Math.trunc(o.stagger || 0);
+  if (Math.abs(st) > 1) {
+    const S_ = Math.abs(st), sr = !!o.staggerRows, idx = (sr ? cy : cx) % S_, f = Math.sign(st) * idx;
+    // VECTOR2I * double, then / int: each step truncates toward zero
+    x += Math.trunc(Math.trunc((sr ? dx : ox) * f) / S_); y += Math.trunc(Math.trunc((sr ? oy : dy) * f) / S_);
+  }
+  if (o.centred) {
+    const ex = (o.nx - 1) * dx + (o.ny - 1) * ox, ey = (o.ny - 1) * dy + (o.nx - 1) * oy;
+    x -= Math.trunc(ex / 2); y -= Math.trunc(ey / 2);
+  }
+  return { offset: [x / AIU, y / AIU], rot: 0 };
+}
+/** arrayHasStackedPositions: two copies would land on the same offset and rotation. */
+function arrayStacked(o, pos) {
+  const seen = new Set();
+  for (let i = 0; i < arraySize(o); i++) { const t = arrayTransform(o, i, pos); const k = `${Math.round(t.offset[0] * AIU)},${Math.round(t.offset[1] * AIU)},${r6(t.rot)}`; if (seen.has(k)) return true; seen.add(k); }
+  return false;
+}
+/** ARRAY_TOOL's origin: a lone item's position, else the selection's centre. */
+function arrayOrigin(doc, ids) { const items = ids.map((id) => doc.items.get(id)).filter(Boolean); return items.length === 1 ? anchorOf(items[0]) : selectionCenter(items); }
+/** TransformItem: Move by the offset, then Rotate about the item's (new) position. */
+function arrayApply(node, t, pos) { if (t.offset[0] || t.offset[1]) translateNode(node, t.offset[0], t.offset[1]); if (t.rot) rotateNode(node, pos[0] + t.offset[0], pos[1] + t.offset[1], t.rot); }
+/**
+ * ARRAY_TOOL::onDialogClosed.  Duplicate (o.arrange false): the selection is copied into every other cell of the array
+ * (BOARD_ITEM::Duplicate / PCB_GROUP::DeepDuplicate, copies in a group join it), footprints reannotated unless
+ * o.keepRefs; the originals take the first cell, which moves them only for a centred grid or a circular first angle.
+ * "Create Array", the copies and the originals selected.  Arrange (o.arrange): the selected items, in order, go one
+ * to a cell starting from the first one's position — "Arrange selection".  Returns { changes, ids, label }.
+ */
+function arrayChanges(doc, ids, o) {
+  const N = arraySize(o); const sel = new Set(ids); const out = { changes: [], ids: [], label: o.arrange ? "Arrange selection" : "Create Array" };
+  const coveredByGroup = (id) => { for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
+  const roots = ids.map((id) => doc.items.get(id)).filter((it) => it && it.kind !== "generated" && !coveredByGroup(it.id));
+  const moveRoot = (it, fn) => { const members = Array.from(expandGroups(doc, [it.id])); out.changes.push(...transformChanges(doc, members, fn)); };
+  if (o.arrange) {
+    const first = roots[0]; if (!first) return out; const p0 = anchorOf(first);
+    roots.slice(0, N).forEach((it, i) => {
+      const pos = anchorOf(it), t = arrayTransform(o, i, p0), d = [p0[0] - pos[0], p0[1] - pos[1]];
+      if (!t.offset[0] && !t.offset[1] && !t.rot && !d[0] && !d[1]) return;
+      moveRoot(it, (n) => { translateNode(n, d[0], d[1]); arrayApply(n, t, p0); });
+    });
+    out.ids = roots.map((it) => it.id);
+    return out;
+  }
+  const posOf = new Map(roots.map((it) => [it.id, anchorOf(it)]));
+  for (let k = 1; k < N; k++) {
+    const r = duplicateChanges(doc, roots.map((it) => it.id), null, { annotations: o.keepRefs ? "keep" : "unique",
+      xform: (n, root) => { const pos = posOf.get(root.id); arrayApply(n, arrayTransform(o, k, pos), pos); } });
+    out.changes.push(...r.changes); out.ids.push(...r.ids);
+  }
+  for (const it of roots) { const pos = posOf.get(it.id), t = arrayTransform(o, 0, pos); if (t.offset[0] || t.offset[1] || t.rot) moveRoot(it, (n) => arrayApply(n, t, pos)); }
+  out.ids.push(...roots.map((it) => it.id));
   return out;
 }
 const textOfItem = (it) => it.kind === "footprint" ? (it.ref || "") : it.kind === "gr_text" || it.kind === "gr_text_box" ? K.str(it.node[1]) : it.kind === "dimension" ? K.str((K.kid(it.node, "gr_text") || [])[1]) : "";
@@ -7115,10 +7192,10 @@ act("pack", "Pack and Move Footprints", "P", (ctx) => {
   const ch = packChanges(ctx.doc, sel.ids); if (ch.length) ctx.commit(ch, "pack footprints"); endHover(ctx, sel); ctx.requestRender(); return true;
 });
 alias("packAndMoveFootprints", "pack");
-act("createArray", "Create Array…", "", (ctx) => {
+act("createArray", "Create Array…", "", (ctx) => {   // DIALOG_CREATE_ARRAY lives in web/editor/pcbdialogs/array.ts; this short form stands in without it
   const ids = selectionOrToast(ctx, "Select items to array"); if (!ids) return true;
-  return openForm({ title: "Create Array", fields: [{ k: "nx", label: "Horizontal count", type: "num", value: 2, step: "1" }, { k: "ny", label: "Vertical count", type: "num", value: 1, step: "1" }, { k: "dx", label: "Horizontal spacing (mm)", type: "num", value: 5 }, { k: "dy", label: "Vertical spacing (mm)", type: "num", value: 5 }],
-    apply: (v) => { const r = arrayChanges(ctx.doc, ids, { nx: num0(v.nx, 1), ny: num0(v.ny, 1), dx: num0(v.dx, 0), dy: num0(v.dy, 0) }); if (!r.changes.length) { ctx.toast("Array: nothing to add (counts of 1)"); return; } ctx.commit(r.changes, "array"); applySelection(ctx, ids.concat(r.ids)); } });
+  return openForm({ title: "Create Array", fields: [{ k: "nx", label: "Horizontal count", type: "num", value: 5, step: "1" }, { k: "ny", label: "Vertical count", type: "num", value: 5, step: "1" }, { k: "dx", label: "Horizontal spacing (mm)", type: "num", value: 2.54 }, { k: "dy", label: "Vertical spacing (mm)", type: "num", value: 2.54 }],
+    apply: (v) => { const r = arrayChanges(ctx.doc, ids, { type: "grid", nx: num0(v.nx, 1), ny: num0(v.ny, 1), dx: num0(v.dx, 0), dy: num0(v.dy, 0), offX: 0, offY: 0, stagger: 1, staggerRows: true, centred: false, hThenV: true }); if (!r.changes.length) return; ctx.commit(r.changes, r.label); applySelection(ctx, r.ids); } });
 });
 act("swapLayers", "Swap Layers…", "", (ctx) => {
   if (!canEdit(ctx)) return true; const doc = ctx.doc; const copper = copperOf(doc); const layers = copper.concat(gfxLayers(doc).filter((l) => !copper.includes(l)));
@@ -7430,8 +7507,25 @@ const liveSelection = () => appGlobal(() => editorState().selection, null);
  * microvia, blind via, select layer and place a blind via), the corner modes (Ctrl+/, Ctrl+W, Ctrl+Shift+W,
  * Ctrl+Alt+W, Alt+W) whenever the Route tool is active.  The browser keeps Ctrl+W and Ctrl+Shift+W for itself.
  */
+/**
+ * PCB_PICKER_TOOL: the next click hands a point (selectPointInteractively, snapped like the cursor) or the item under
+ * the cursor (selectItemInteractively) to done(); Escape hands back null.  Either way the tool goes back to Select.
+ */
+function pickInteractively(ctx, mode, prompt, done) {
+  bind(ctx); S.pick = { done, prompt }; ctx.setTool(mode === "item" ? "pickitem" : "pickpoint");   // the prompt is the tool's hint
+}
+function pickClick(ctx, t, hv, mm) {
+  const pk = S.pick; S.pick = null;
+  let res = null;
+  if (t === "pickpoint") res = [hv.x, hv.y];
+  else { const it = itemAt(ctx, mm); res = it || null; if (!it) { S.pick = pk; return; } }   // a click on nothing keeps picking
+  ctx.setTool("select");
+  if (pk && pk.done) pk.done(res);
+}
+function pickCancel() { const pk = S.pick; S.pick = null; if (lastCtx) lastCtx.setTool("select"); if (pk && pk.done) pk.done(null); return true; }
 /** The first Escape: the operation in flight is cancelled, KiCad style (the next one leaves the tool).  False with none. */
 function cancelInFlight(any) {
+  if (S.pick) return pickCancel();
   if (S.pedit && lastCtx) { editHandleUp(lastCtx, false); return true; }
   if (S.tune.pattern) return tuneCancel(lastCtx);   // the first Escape drops the pattern, the next leaves the tool
   if (S.route || S.draw || S.drag || S.text || S.image || (S.move && (any || S.move.sticky))) {
@@ -7750,6 +7844,9 @@ const TOOLS = [
   // KiCad's one-shot pickers (ACTIONS::gridSetOrigin, PCB_ACTIONS::drillOrigin)
   { id: "gridorigin", label: "Grid Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M7 7l10 10M17 7L7 17"/>' },
   { id: "drillorigin", label: "Drill/Place File Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M12 3v18M3 12h18"/>' },
+  // PCB_PICKER_TOOL (selectPointInteractively / selectItemInteractively) for a dialog that asks for a point or an item
+  { id: "pickpoint", label: "Select Point", key: "", cursor: "crosshair", hidden: true, icon: '<circle cx="12" cy="12" r="3"/><path d="M12 3v5M12 16v5M3 12h5M16 12h5"/>' },
+  { id: "pickitem", label: "Select Item", key: "", cursor: "default", hidden: true, icon: '<path d="M5 3l14 9-6 1.5L10 20z"/>' },
 ];
 const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V via, Ctrl+/ corner mode, Backspace undo segment, End or double-click to finish, Esc to discard",
   routediff: "Route differential pair — click a pad, via or track end of a pair's net to start, click to fix, / posture, V via pair, Backspace undo segment, End or double-click to finish, Esc to discard",
@@ -7769,6 +7866,7 @@ const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V vi
   dimradial: "Radial dimension — click the centre, then a point on the circle",
   leader: "Leader — click the arrow point and the elbow; Dimension Properties then takes the text",
   delete: "Delete — click an item to remove it; Esc to leave the tool",
+  pickpoint: "Select center point...", pickitem: "Select center item...",
   gridorigin: "Grid origin — click where the grid starts", drillorigin: "Drill/place file origin — click the origin point for drill and placement files" };
 
 /**
@@ -7823,7 +7921,7 @@ const pcb = {
   onPointerDown(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || ev.button !== 0 || !ctx.doc) return false;
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint", ev); S.hover = hv;
     if (t === "route" || t === "routediff") routeClick(ctx, hv, mm);
     else if (isTuneTool(t)) tuneClick(ctx, mm);
     else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
@@ -7832,6 +7930,7 @@ const pcb = {
     else if (t === "drag") { if (S.drag) { dragMove(ctx, mm); if (S.drag.moved) finishDrag(ctx, true, !!(ev.ctrlKey || ev.metaKey)); } else ctx.setTool("select"); }   // a click after motion fixes the drag
     else if (t === "gtext") placeTextAt(ctx, [hv.x, hv.y]);
     else if (t === "image") { if (S.image) placeImage(ctx, hv); else openImagePicker(); }
+    else if (t === "pickpoint" || t === "pickitem") pickClick(ctx, t, hv, mm);
     else if (t === "delete") deleteAt(ctx, mm);   // an empty click is ours too: the tool stays armed
     else drawClick(ctx, hv, t, ev);
     return true;
@@ -7879,7 +7978,7 @@ const pcb = {
   onPointerMove(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint", ev); S.hover = hv;
     if (t === "delete") hv.del = ctx.viewOnly ? null : deleteCandidate(ctx, mm);
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
@@ -8080,6 +8179,6 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   selectionIds, applySelection, requestSelection, bestDragOrigin, snapCursor, itemAnchors, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
   shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, netTable, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
-  layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, cursorPoint,
+  layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };
 })(typeof window !== "undefined" ? window : globalThis);

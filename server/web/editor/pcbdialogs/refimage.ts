@@ -6,7 +6,7 @@
 // item as PCB_IO_KICAD_SEXPR::format( PCB_REFERENCE_IMAGE ) does: (at) (layer) (rotate) (scale) (opacity) (locked)
 // (data) (uuid), the optional ones only off their defaults.  An edited bitmap is written back as PNG (a JPEG as JPEG),
 // as BITMAP_BASE::SaveImageData does once m_imageData is cleared.
-import { checkField, confirmBox, form, h, lenField, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
+import { checkField, errorMessage, form, h, lenField, messageBox, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -133,12 +133,6 @@ export function pngWithPpi(png: Uint8Array, ppi: number): Uint8Array {
 const b64ToBytes = (s: string): Uint8Array => { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; };
 const bytesToB64 = (b: Uint8Array): string => { let s = ""; for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...Array.from(b.subarray(i, i + 0x8000))); return btoa(s); };
 
-/** DisplayError: a message with an OK button. */
-function errorBox(message: string): void {
-  const d = openDialog({ title: "Error", width: 440, build(body) { body.append(h("p", { style: "margin:4px 0 6px;white-space:pre-wrap", "data-k": "error" }, message)); }, ok() { return true; } });
-  if (d && d.cancelButton) d.cancelButton.style.display = "none";
-}
-
 interface ImageEntry { w?: number; h?: number; ppi?: number; mime?: string; img?: HTMLImageElement | null; loaded?: boolean }
 
 /** DIALOG_REFERENCE_IMAGE_PROPERTIES (PCB_BASE_EDIT_FRAME::ShowReferenceImagePropertiesDialog). */
@@ -227,8 +221,8 @@ export function refImageDialog(ctx: ToolCtx, item: KItem): boolean {
         ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null })], "Edit Reference Image Properties");
       };
       const chk = v0.pxW && v0.pxH ? checkImageScale(v0, v.scale) : (v.scale < 0 ? { error: "Scale must be a positive number." } : {});
-      if (chk.error) { errorBox(chk.error); return false; }
-      if (chk.confirm) { confirmBox("Confirmation", chk.confirm, "Yes", () => { finish(); if (api) api.close(); }); return false; }   // IsOK: No keeps the dialog
+      if (chk.error) { errorMessage(chk.error); return false; }
+      if (chk.confirm) { messageBox("Confirmation", chk.confirm, [{ label: "No" }, { label: "Yes", fn: () => { finish(); if (api) api.close(); } }]); return false; }   // IsOK: No keeps the dialog
       finish(); return true;
     } });
   return !!api;

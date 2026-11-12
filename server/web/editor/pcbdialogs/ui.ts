@@ -167,6 +167,33 @@ export function openDialog(spec: DialogSpec): DialogApi | null {
   return out;
 }
 
+/**
+ * A message over the dialog that asked for it (DisplayError, wxMessageBox, IsOK): its own overlay on top of the open
+ * dialog, which stays as it is.  buttons: left to right; the last is the default (Enter), Escape picks `escape` (or
+ * the first button).
+ */
+export function messageBox(title: string, message: string, buttons: { label: string; fn?: () => void }[] = [{ label: "OK" }], escape?: number): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  ensureCss();
+  const ov = h("div", { class: "kd-overlay", style: "z-index:10050", "data-k": "messagebox" });
+  const dlg = h("div", { class: "kd-dialog", style: "width:440px", tabIndex: -1 });
+  const body = h("div", { class: "kd-body" }, h("p", { style: "margin:4px 0 6px;white-space:pre-wrap", "data-k": "message" }, message));
+  const foot = h("div", { class: "kd-foot" }, h("span", { class: "spacer" }));
+  const done = (i: number): void => { ov.remove(); const b = buttons[i]; if (b && b.fn) b.fn(); };
+  const btns = buttons.map((b, i) => { const e = h("button", { class: "btn" + (i === buttons.length - 1 ? " primary" : ""), type: "button", "data-k": "mb-" + b.label.toLowerCase() }, b.label); e.addEventListener("click", () => done(i)); return e; });
+  foot.append(...btns);
+  dlg.append(h("div", { class: "kd-title" }, h("span", null, title)), body, foot); ov.append(dlg);
+  ov.addEventListener("keydown", (ev) => {
+    ev.stopPropagation();
+    if (ev.key === "Escape") { ev.preventDefault(); done(escape === undefined ? 0 : escape); }
+    else if (ev.key === "Enter" && !(ev.target instanceof HTMLButtonElement)) { ev.preventDefault(); done(buttons.length - 1); }
+  });
+  document.body.append(ov); const last = btns[btns.length - 1]; if (last) last.focus(); else dlg.focus();
+  return ov;
+}
+/** DisplayError: an "Error" message with an OK button, over the dialog. */
+export const errorMessage = (message: string, then?: () => void): void => { messageBox("Error", message, [{ label: "OK", fn: then }]); };
+
 /** wxMessageBox / confirmation. */
 export function confirmBox(title: string, message: string, okLabel: string, onOk: () => void): void {
   openDialog({ title, width: 440, okLabel, build(body) { body.append(h("p", { style: "margin:4px 0 6px;white-space:pre-wrap" }, message)); }, ok() { setTimeout(onOk, 0); } });

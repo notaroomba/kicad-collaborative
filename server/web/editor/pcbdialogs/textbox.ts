@@ -6,7 +6,7 @@
 // box per PCB_TEXTBOX::SetTextAngle (the box slides about its start, the angle is the text's), and grows the box to
 // GetMinSize when the text no longer fits.  An edited text box is one "Edit Text Box Properties" change; the text
 // box tool (DRAWING_TOOL::DrawRectangle) opens it on the box just drawn and commits "Draw Text Box" on OK.
-import { checkField, fmtLenU, form, h, lenField, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
+import { checkField, errorMessage, fmtLenU, form, h, lenField, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -138,11 +138,8 @@ export function applyTextBox(orig: SNode, v: TextBoxValues, v0: TextBoxValues): 
   return { node, clamped };
 }
 
-/** DisplayError: a message with an OK button. */
-function errorBox(message: string, then?: () => void): void {
-  const d = openDialog({ title: "Error", width: 440, build(body) { body.append(h("p", { style: "margin:4px 0 6px;white-space:pre-wrap", "data-k": "error" }, message)); }, ok() { if (then) setTimeout(then, 0); return true; }, cancel: then ? () => setTimeout(then, 0) : undefined });
-  if (d && d.cancelButton) d.cancelButton.style.display = "none";
-}
+/** DisplayError, over the dialog. */
+const errorBox = (message: string, then?: () => void): void => errorMessage(message, then);
 
 /** DIALOG_TEXTBOX_PROPERTIES.  `create`: the dialog of a text box being drawn (OK hands the node over, Cancel null). */
 export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
