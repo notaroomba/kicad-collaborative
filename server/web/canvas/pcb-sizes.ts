@@ -307,6 +307,12 @@ export class PcbSizes {
   useConnectedWidth = true;
   /** m_TempOverrideTrackWidth: W during a route overrides the connected width until the route ends */
   tempOverride = false;
+  /**
+   * The custom rules' sizes for a net (PNS_KICAD_IFACE_BASE::ImportSizes queries CT_WIDTH, CT_VIA_DIAMETER,
+   * CT_VIA_HOLE and CT_DIFF_PAIR_GAP while the sizes follow the netclass): set by the board tools from the
+   * project's .kicad_dru; each value is the rule's pinned opt (else min) and null when no custom rule gives it.
+   */
+  ruleSizes: ((net: string) => { width: number | null; viaDiameter: number | null; viaDrill: number | null; dpGap: number | null; dpWidth?: number | null; widthRule?: string | null; gapRule?: string | null }) | null = null;
   layerPair: [string, string] = ["F.Cu", "B.Cu"];
   /** the board editor's active layer ("" until a board is open); the module and the toolbar keep it in step through here */
   activeLayer = "";
@@ -376,12 +382,15 @@ export class PcbSizes {
   routeWidth(net: string, connectedWidth?: number | null): number {
     const min = this.sizes.minTrackWidth;
     if (this.useConnectedWidth && !this.tempOverride && connectedWidth && connectedWidth > 0) return connectedWidth;
-    if (this.useNetclassTrack) return Math.max(min, this.netclassOf(net).track_width);
+    if (this.useNetclassTrack) { const r = this.ruleSizes ? this.ruleSizes(net) : null; return Math.max(min, r && r.width != null ? r.width : this.netclassOf(net).track_width); }
     return Math.max(min, this.currentTrackWidth());
   }
   /** The via a route on `net` drops, or the via tool places over `net`. */
   routeVia(net: string): ViaDim {
-    if (this.useNetclassVia) { const nc = this.netclassOf(net); return { diameter: Math.max(this.sizes.minViaDiameter, nc.via_diameter), drill: Math.max(this.sizes.minThroughDrill, nc.via_drill) }; }
+    if (this.useNetclassVia) {
+      const nc = this.netclassOf(net), r = this.ruleSizes ? this.ruleSizes(net) : null;
+      return { diameter: Math.max(this.sizes.minViaDiameter, r && r.viaDiameter != null ? r.viaDiameter : nc.via_diameter), drill: Math.max(this.sizes.minThroughDrill, r && r.viaDrill != null ? r.viaDrill : nc.via_drill) };
+    }
     return this.currentVia();
   }
   /** W / Shift+W with nothing selected (TrackWidthInc / Dec): the next pre-defined width; mid-route it also overrides the connected width. */
@@ -419,7 +428,12 @@ export class PcbSizes {
     let width: number, gap: number, viaGap: number, widthSource: string, gapSource: string;
     if (this.useCustomDiffPair) { width = this.customDiffPair.width; gap = this.customDiffPair.gap; viaGap = this.customDiffPair.via_gap; widthSource = gapSource = "user choice"; }
     else if (!this.useNetclassDiffPair) { const d = this.sizes.diffPairs[this.diffPairIndex]; width = d.width; gap = d.gap > 0 ? d.gap : nc.diff_pair_gap; viaGap = d.via_gap > 0 ? d.via_gap : gap; widthSource = gapSource = "user choice"; }
-    else { width = nc.diff_pair_width; gap = nc.diff_pair_gap; viaGap = nc.diff_pair_via_gap; widthSource = gapSource = ncSource; }
+    else {
+      width = nc.diff_pair_width; gap = nc.diff_pair_gap; viaGap = nc.diff_pair_via_gap; widthSource = gapSource = ncSource;
+      const r = this.ruleSizes ? this.ruleSizes(net) : null;   // a custom track_width / diff_pair_gap rule on the pair wins over the class
+      if (r && r.dpWidth != null) { width = r.dpWidth; widthSource = r.widthRule || widthSource; }
+      if (r && r.dpGap != null) { gap = viaGap = r.dpGap; gapSource = r.gapRule || gapSource; }
+    }
     if (width < minW) { width = minW; widthSource = "board minimum track width"; }
     if (gap < minC) { gap = minC; gapSource = "board minimum clearance"; }
     if (this.useCustomDiffPair && this.diffPairViaGapSameAsGap) viaGap = gap;

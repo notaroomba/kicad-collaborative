@@ -4,11 +4,12 @@
 import type { BoardDoc, DesignSettings, DrcMarker, SAtom } from "./types";
 import { arcLength } from "./distances";
 import { matchDpSuffix } from "./diffpair";
-import { marker, mm4, netclassName } from "./drc";
+import { marker, mm4 } from "./drc";
 import { approxParallelT, commonParallelProjection } from "./meander";
-import { boardNets } from "./changes";
 import { netOf } from "./nets";
-import { K } from "./state";
+import { K, S } from "./state";
+import { FUNCS, FUNC_BY_LOWER, MISSING_ARG, callFunc, isKnownProp, netName, propOf } from "./dru-eval";
+import type { RuleItem, Val } from "./dru-eval";
 import { layerOf } from "./util";
 
 /** A rule's (constraint …): its type and min / opt / max in mm (null when not given). */
@@ -18,11 +19,10 @@ export interface DruRule { name: string; condition: string; layer: string | null
 /** What a resolved constraint reports: the text as MessageTextFromMinOptMax writes it and the rule's name. */
 export interface RuleHit { text: string; name: string; min: number | null; opt: number | null; max: number | null; severity?: string | null }
 
-type Val = { t: "n"; v: number } | { t: "s"; v: string; wild: boolean } | { t: "u" };
 type Expr = { k: "lit"; v: Val } | { k: "prop"; who: "A" | "B"; name: string } | { k: "call"; who: "A" | "B" | null; fn: string; args: Expr[] }
   | { k: "not"; e: Expr } | { k: "bin"; op: string; a: Expr; b: Expr };
 
-const UNIT: Record<string, number> = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 0.001, nm: 1e-6, cm: 10, m: 1000 };
+const UNIT: Record<string, number> = { deg: 1, mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 0.001, nm: 1e-6, cm: 10, m: 1000 };
 /** A rule value: a number with an optional length unit (mm when there is none, as DRC_RULES_PARSER::parseValue). */
 export function druValue(s: unknown): number | null {
   const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s)); if (!m) return null;
@@ -57,8 +57,16 @@ export function parseCondition(src: string): Expr {
     const n = druValue(tok); if (n !== null) return { k: "lit", v: { t: "n", v: n } };
     const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok); if (!m) throw new Error(`Unrecognized item '${tok}'`);
     const who = (m[1] || null) as "A" | "B" | null;
-    if (peek() === "(") { eat("("); const args: Expr[] = []; if (peek() !== ")") { args.push(or()); while (peek() === ",") { eat(","); args.push(or()); } } eat(")"); return { k: "call", who, fn: m[2], args }; }
+    if (peek() === "(") {
+      eat("("); const args: Expr[] = []; if (peek() !== ")") { args.push(or()); while (peek() === ",") { eat(","); args.push(or()); } } eat(")");
+      const fn = FUNC_BY_LOWER.get(m[2].toLowerCase()); if (!fn) throw new Error(`Unrecognized function '${m[2]}'`);   // LIBEVAL looks functions up without case
+      const empty = (x: Expr | undefined) => !x || (x.k === "lit" && x.v.t === "s" && x.v.v === "");
+      if (MISSING_ARG[fn] && empty(args[0])) throw new Error(MISSING_ARG[fn]);
+      if (fn === "fromTo") { if (empty(args[0])) throw new Error("Missing 'from' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo()."); if (empty(args[1])) throw new Error("Missing 'to' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo()."); }
+      void FUNCS; return { k: "call", who, fn, args };
+    }
     if (!who) throw new Error(`Unrecognized item '${tok}'`);
+    if (!isKnownProp(m[2])) throw new Error(`Unrecognized property '${m[2]}'`);
     return { k: "prop", who, name: m[2] };
   };
   const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
@@ -67,8 +75,7 @@ export function parseCondition(src: string): Expr {
   return e;
 }
 
-/** The board item an expression's A / B stands for, with what its properties read. */
-export interface RuleItem { kind: string; node: SNode; layer?: string | null }
+export type { RuleItem } from "./dru-eval";
 /** WildCompareString( pattern, string, false ): * and ? wildcards, case-insensitive. */
 export function wildMatch(pat: string, s: string) { const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i"); return re.test(s); }
 /** wxString::Matches: * and ? wildcards, case-sensitive. */
@@ -87,27 +94,12 @@ export function typeName(it: RuleItem) {
   if (it.kind === "dimension") { const t = K.kid(it.node, "type"); return t && K.str(t[1]) === "leader" ? "Leader" : "Dimension"; }
   return TYPE_NAME[it.kind] || it.kind;
 }
-function propOf(doc: BoardDoc, s: DesignSettings, it: RuleItem | null, name: string): Val {
-  if (!it) return { t: "u" };
-  const key = name.replace(/_/g, "").toLowerCase(); const net = () => netOf(it.node).name || "";
-  const str = (v: string): Val => ({ t: "s", v, wild: false });
-  switch (key) {
-  case "type": return str(typeName(it));
-  case "net": case "netname": return str(net());
-  case "netcode": return { t: "n", v: netOf(it.node).code || 0 };
-  case "netclass": return str(netclassName(s, net()));
-  case "layer": return str(it.layer || layerOf(it.node) || "");
-  case "width": { const w = K.kid(it.node, "width"); return w ? { t: "n", v: K.num(w[1]) } : { t: "u" }; }
-  case "reference": { const p = (it.node as SNode[]).find((c) => Array.isArray(c) && c[0] === "property" && K.str(c[1]) === "Reference"); return p ? str(K.str(p[2])) : { t: "u" }; }
-  default: return { t: "u" };
-  }
-}
 const truth = (v: Val) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
 const num = (b: boolean): Val => ({ t: "n", v: b ? 1 : 0 });
 function evalExpr(e: Expr, doc: BoardDoc, s: DesignSettings, A: RuleItem | null, B: RuleItem | null): Val {
   switch (e.k) {
   case "lit": return e.v;
-  case "prop": return propOf(doc, s, e.who === "A" ? A : B, e.name);
+  case "prop": return propOf(doc, s, e.who === "A" ? A : B, e.name, typeName);
   case "not": return num(!truth(evalExpr(e.e, doc, s, A, B)));
   case "bin": {
     if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
@@ -123,23 +115,23 @@ function evalExpr(e: Expr, doc: BoardDoc, s: DesignSettings, A: RuleItem | null,
     return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
   }
   case "call": {
-    const it = e.who === "B" ? B : A; const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" } as Val; const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
-    switch (e.fn) {
-    case "inDiffPair": {   // the net's base name (suffix character out) matches, with or without a trailing '_'
-      if (!it || !as) return num(false); const name = netOf(it.node).name || ""; const m = matchDpSuffix(name);
-      if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
-      const base = m.base;   // MatchDpSuffix's aBaseDpName; wxString::Matches is case-sensitive
-      return num(wxMatches(as, base) || (base.endsWith("_") && wxMatches(as, base.slice(0, base.lastIndexOf("_")))));
-    }
-    case "hasNetclass": return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
-    case "existsOnLayer": { if (!it) return num(false); const L = K.kid(it.node, "layers"); const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)]; return num(ls.some((l) => wildMatch(as, l) || (l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)))); }
-    case "isPlated": return num(!!it && (it.kind === "via" || (it.kind === "pad" && K.str((it.node as SAtom[])[2]) === "thru_hole")));
-    default: return { t: "u" };
-    }
+    const it = e.who === "B" ? B : A;
+    const args = e.args.map((x) => { const v = evalExpr(x, doc, s, A, B); return v.t === "s" ? v.v : v.t === "n" ? String(v.v) : ""; });
+    return callFunc(e.fn, it, args, { doc, s, A, B, constraint: curConstraint, ver: S.docVer }, wildMatch, wxMatches);
   }
   }
 }
+/** The constraint EvalRules is resolving (isCoupledDiffPair answers differently for the pair constraints). */
+let curConstraint: string | null = null;
 
+/** ProcessAssertions: does the item satisfy the assertion constraint's expression (null when it does not compile)? */
+const ASSERT_CACHE = new WeakMap<DruConstraint, Expr | null>();
+export function evalAssertion(rule: DruRule, c: DruConstraint, doc: BoardDoc, s: DesignSettings, A: RuleItem): boolean | null {
+  let e = ASSERT_CACHE.get(c);
+  if (e === undefined) { try { e = parseCondition((c.options || [])[0] || ""); } catch { e = null; } ASSERT_CACHE.set(c, e); }
+  if (!e) return null; curConstraint = "assertion"; void rule;
+  return truth(evalExpr(e, doc, s, A, null));
+}
 /** DRC_RULES_PARSER: the file's rules in order; a rule whose condition does not compile carries its error and never matches. */
 export function parseDru(text: string): { rules: DruRule[]; errors: string[] } {
   const rules: DruRule[] = [], errors: string[] = [];
@@ -185,6 +177,7 @@ export function ruleMatches(rule: DruRule, doc: BoardDoc, s: DesignSettings, A: 
  * carries the constraint wins (later rules take precedence).  null when no rule gives it.
  */
 export function evalRuleConstraint(rules: DruRule[], type: string, doc: BoardDoc, s: DesignSettings, A: RuleItem | null, B: RuleItem | null, fmt?: (mm: number) => string): RuleHit | null {
+  curConstraint = type;
   for (let i = rules.length - 1; i >= 0; i--) {
     const r = rules[i]; const c = r.constraints.find((k) => k.type === type); if (!c) continue;
     if (!ruleMatches(r, doc, s, A, B)) continue;
@@ -203,6 +196,7 @@ export function evalRuleConstraint(rules: DruRule[], type: string, doc: BoardDoc
  * netclass clearance applies.  A rule with severity ignore gives 0.
  */
 export function ruleClearance(rules: DruRule[], doc: BoardDoc, s: DesignSettings, A: RuleItem, B: RuleItem): { min: number; name: string } | null {
+  curConstraint = "clearance";
   for (let i = rules.length - 1; i >= 0; i--) {
     const r = rules[i], c = r.constraints.find((k) => k.type === "clearance"); if (!c || c.min == null) continue;
     if (!ruleMatches(r, doc, s, A, B) && !ruleMatches(r, doc, s, B, A)) continue;
@@ -220,7 +214,7 @@ export function matchedLengthMarkers(doc: BoardDoc, s: DesignSettings, rules: Dr
   const nets = new Map<string, { name: string; ids: string[]; total: number; first: KItem }>();
   for (const it of doc.items.values()) {
     if (it.kind !== "segment" && it.kind !== "arc") continue;
-    const name = netOf(it.node).name || ""; if (!name) continue;
+    const name = netName(doc, it.node); if (!name) continue;
     const a = K.kid(it.node, "start"), b = K.kid(it.node, "end"); if (!a || !b) continue;
     const A: [number, number] = [K.num(a[1]), K.num(a[2])], B: [number, number] = [K.num(b[1]), K.num(b[2])];
     let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
@@ -277,7 +271,7 @@ export function diffPairMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule
   const out: DrcMarker[] = []; if (!rules.some((r) => r.constraints.some((c) => c.type === "diff_pair_gap" || c.type === "diff_pair_uncoupled"))) return out;
   const inPattern = new Set<string>(); for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K.groupMemberIds(it.node)) inPattern.add(id);
   const byNet = new Map<string, KItem[]>();
-  for (const it of doc.items.values()) if (it.kind === "segment" || it.kind === "arc") { const n = netOf(it.node).name || ""; if (n) { let l = byNet.get(n); if (!l) byNet.set(n, l = []); l.push(it); } }
+  for (const it of doc.items.values()) if (it.kind === "segment" || it.kind === "arc") { const n = netName(doc, it.node); if (n) { let l = byNet.get(n); if (!l) byNet.set(n, l = []); l.push(it); } }
   const xy = (it: KItem, k: string): [number, number] => { const v = K.kid(it.node, k)!; return [K.num(v[1]), K.num(v[2])]; };
   const len = (it: KItem) => { const a = xy(it, "start"), b = xy(it, "end"); if (it.kind === "arc") { const m = xy(it, "mid"); const c = K.arcFrom3(a, m, b); if (c) return arcLength(c); } return Math.hypot(b[0] - a[0], b[1] - a[1]); };
   const width = (it: KItem) => { const w = K.kid(it.node, "width"); return w ? K.num(w[1]) : 0; };

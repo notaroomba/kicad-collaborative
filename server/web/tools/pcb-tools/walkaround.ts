@@ -9,6 +9,9 @@ import { zoneLayers } from "./nodes";
 import { padsOf, routeLeg } from "./route-geom";
 import { K, S } from "./state";
 import { r6, samePt } from "./util";
+import type { RuleItem } from "./dru";
+import { customRouteClearance } from "./rule-resolver";
+import type { RoutedItem } from "./rule-resolver";
 
 // ---------------------------------------------------------------- interactive router: KiCad's default Walk around mode
 // ROUTING_SETTINGS' defaults (pns_routing_settings.cpp): mode RM_Walkaround, start_diagonal false, auto_posture true,
@@ -49,13 +52,26 @@ export function routerWorld(doc: BoardDoc): RouterWorld {
   if (doc.__bc) doc.__bc.rworld = W; else { S.rworld = W; S.sworld = null; }
   return W;
 }
-/** PNS_PCBNEW_RULE_RESOLVER::Clearance for the routed net against an obstacle (the larger netclass clearance, floored at the board minimum). */
-export function routeClearance(s: DesignSettings, netKey: string, ob: Pick<Obstacle, "kind" | "net">) {
+/**
+ * PNS_PCBNEW_RULE_RESOLVER::Clearance for the routed net against an obstacle: a custom rule (.kicad_dru) that
+ * matches the pair decides (customRouteClearance); otherwise the larger netclass clearance, floored at the board
+ * minimum, the board hole clearance for a hole and the edge clearance for the board edge.
+ */
+export function routeClearance(s: DesignSettings, netKey: string, ob: Pick<Obstacle, "kind" | "net"> & { id?: string | null; src?: Conductor | WorldItem }, layer?: string | null, doc?: BoardDoc | null, A?: Partial<RoutedItem>) {
+  const custom = doc ? customRouteClearance(doc, s, Object.assign({ net: netKey, layer: layer || null }, A || {}), { kind: ob.kind, net: ob.net, id: ob.id, rule: ob.src ? srcRuleItem(ob.src) : null }, layer || null) : null;
+  if (custom != null) return custom;
   const minC = s.minClearance || 0; const mine = Math.max(netClearance(s, netKey), minC);
   if (ob.kind === "edge") return s.edgeClearance || 0;
   if (ob.kind === "hole") return Math.max(s.holeClearance !== undefined ? s.holeClearance : 0.25, mine);
   if (ob.kind === "keepout") return 0;
   return Math.max(mine, netClearance(s, ob.net), minC);
+}
+/** The board item an obstacle stands for, as the rules read it (a pad with its footprint, a track, via or zone). */
+export function srcRuleItem(src: Conductor | WorldItem): RuleItem | null {
+  const c = src as Conductor & WorldItem;
+  if (c.pad) return { kind: "pad", node: c.pad.node, parent: (c as Conductor).item || null, shape: c.shape };
+  if ((c as Conductor).item) return { kind: c.kind, node: (c as Conductor).item.node, item: (c as Conductor).item, shape: c.shape };
+  return null;
 }
 /**
  * The obstacles a route on `layer` meets: everything on the layer that is not the routed net's copper.  Pads without a
@@ -69,7 +85,7 @@ export function isFreePad(p: PadInfo | null | undefined) {
 }
 export function routeObstacles(doc: BoardDoc, s: DesignSettings, netKey: string, layer: string, own?: Set<string> | null, skip?: Set<string> | null) {
   const W = routerWorld(doc); const out: Obstacle[] = [];
-  const take = (o: Conductor | WorldItem, net: string) => { const ob = { id: o.id, kind: o.kind, net: net || "", shape: o.shape, bbox: o.bbox, src: o } as Obstacle; ob.clr = routeClearance(s, netKey, ob); out.push(ob); };
+  const take = (o: Conductor | WorldItem, net: string) => { const ob = { id: o.id, kind: o.kind, net: net || "", shape: o.shape, bbox: o.bbox, src: o } as Obstacle; ob.clr = routeClearance(s, netKey, ob, layer, doc); out.push(ob); };
   for (const c of W.conds) {
     if (!c.layers.has(layer) || (skip && skip.has(c.id) && c.kind !== "pad")) continue;
     if (netKey && c.net === netKey) continue;

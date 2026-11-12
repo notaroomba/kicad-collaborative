@@ -131,6 +131,10 @@ export type PcbState = {
   ruleConstraint?: ((doc: BoardDoc, what: string, a: KItem | null, b: KItem | null) => { text: string; name: string; min: number | null; opt: number | null; max: number | null; severity?: string | null } | null) | null;
   /** the project's custom rules (.kicad_dru), parsed */
   dru?: { rules: import("./dru").DruRule[]; errors: string[] } | null;
+  /** rule-resolver: the rules with a clearance-type constraint, for the parsed dru they came from */
+  routerRulesFor?: unknown; routerRulesList?: import("./dru").DruRule[] | null;
+  /** the board the shove world was last built for (its clearance queries resolve rules against it) */
+  shoveDoc?: BoardDoc | null;
   move?: SelectMove | null; pending?: PendingDrag | null; sworld?: { doc: BoardDoc; ver: number; key: string; w: ShoveWorld } | null;
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; hiddenSeverities?: Set<string> | null;
@@ -179,7 +183,7 @@ export interface NetclassRules { clearance: number; track_width: number; via_dia
 /** BOARD_DESIGN_SETTINGS / NETCLASS: what the DRC and the router check against (designSettings). */
 export interface DesignSettings {
   clearance: number; edgeClearance: number; trackWidth: number; viaDiameter: number; viaDrill: number; minTrackWidth: number; minViaDiameter: number; minViaDrill: number;
-  minClearance?: number; minViaAnnular?: number; holeClearance?: number; minHoleToHole?: number; minTextHeight?: number; minTextThickness?: number;
+  minClearance?: number; minViaAnnular?: number; minMicroViaDrill?: number; holeClearance?: number; minHoleToHole?: number; minTextHeight?: number; minTextThickness?: number;
   netclasses: Record<string, NetclassRules>; netclassOf: Record<string, string>; patterns: { re: RegExp; netclass: string }[]; severities: Record<string, string>;
   [k: string]: unknown;
 }

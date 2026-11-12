@@ -16,6 +16,8 @@ import { TUNE_IU, TUNE_MSG_SELECT, chPoints, meanderDefaults, meanderMove, tuneC
 import { msgValue, routedLength, unescapeName } from "./msgpanel";
 import { netTable } from "./netlist";
 import { evalRuleConstraint, parseDru } from "./dru";
+import { ruleSizes } from "./rule-resolver";
+import { matchDpSuffix } from "./diffpair";
 import { netOf } from "./nets";
 import { segmentNode } from "./nodes";
 import { line } from "./overlay";
@@ -293,4 +295,8 @@ export function tuneHiddenIds() { const T = S.tune && S.tune.pattern; return T &
 export function setCustomRules(text: string | null) {
   const d = text ? parseDru(text) : null; S.dru = d;
   S.ruleConstraint = d && d.rules.length ? (doc, what, a, b) => evalRuleConstraint(d.rules, what, doc, S.settingsCache || S.settings || designSettings(null), a, b, (v) => msgValue(v, sizeUnits())) : null;
+  // the router's sizes follow the rules too while the toolbar uses the netclass values (ImportSizes)
+  const st = K.pcbSizes && K.pcbSizes.state as { ruleSizes?: unknown } | undefined;
+  if (st) st.ruleSizes = d && d.rules.some((r) => r.constraints.some((c) => c.type === "track_width" || c.type === "via_diameter" || c.type === "hole_size" || c.type === "diff_pair_gap"))
+    ? (net: string) => { const m = matchDpSuffix(net); return ruleSizes(S.doc || null, S.settingsCache || S.settings || designSettings(null), net, (S.route && S.route.layer) || "F.Cu", m.rv ? m.complement : null); } : null;
 }

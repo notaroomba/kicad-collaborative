@@ -6,7 +6,8 @@ import { netlist, ratsnest } from "./netlist";
 import { K } from "./state";
 import { DRC_EPS, EPS } from "./transforms";
 import { isList, layerDefaults, layerOf, pt, r6, rotator, widthOf } from "./util";
-import { parseDru, ruleClearance } from "./dru";
+import { evalRuleConstraint, parseDru, ruleClearance } from "./dru";
+import { assertionMarkers, disallowMarkers, ruleItems, sizeMarkers, trackAngleMarkers } from "./drc-rules";
 import type { DruRule } from "./dru";
 import { moreDrcMarkers } from "./drc-more";
 
@@ -28,7 +29,7 @@ export function designSettings(src: string | DesignSource | DesignSettings | nul
   src = src as DesignSource;
   const rules = src.board && src.board.design_settings && src.board.design_settings.rules;   // a .kicad_pro
   const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities; if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; if (rules.min_hole_to_hole !== undefined) s.minHoleToHole = rules.min_hole_to_hole; if (rules.min_text_height !== undefined) s.minTextHeight = rules.min_text_height; if (rules.min_text_thickness !== undefined) s.minTextThickness = rules.min_text_thickness; }
+  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; s.minMicroViaDrill = rules.min_microvia_drill || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; if (rules.min_hole_to_hole !== undefined) s.minHoleToHole = rules.min_hole_to_hole; if (rules.min_text_height !== undefined) s.minTextHeight = rules.min_text_height; if (rules.min_text_thickness !== undefined) s.minTextThickness = rules.min_text_thickness; }
   const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults; if (dflt) layerDefaults(dflt);   // Board Setup > Text & Graphics > Defaults: what a new item gets
   const ns = src.net_settings;
   if (ns && isList(ns.classes)) {
@@ -106,6 +107,14 @@ export function courtyards(fp: KItem) {
   const res: Record<string, Pt[][]> = {}; for (const layer of Object.keys(out)) res[layer] = out[layer].length ? chainLoops(out[layer]).loops : [];
   return res;
 }
+/** SEG::Intersect: where two track centre lines cross (touching ends included), or null. */
+export function segCross(p1: Pt, p2: Pt, p3: Pt, p4: Pt): Pt | null {
+  const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]]; const den = d1[0] * d2[1] - d1[1] * d2[0];
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((p3[0] - p1[0]) * d2[1] - (p3[1] - p1[1]) * d2[0]) / den, u = ((p3[0] - p1[0]) * d1[1] - (p3[1] - p1[1]) * d1[0]) / den;
+  if (t < -1e-9 || t > 1 + 1e-9 || u < -1e-9 || u > 1 + 1e-9) return null;
+  return [p1[0] + t * d1[0], p1[1] + t * d1[1]];
+}
 export const marker = (code: string, severity: string, x: number, y: number, text: string, ids: string[]): DrcMarker => ({ code, severity, x: r6(x), y: r6(y), text, ids });
 export const boxCenter = (a: Box, b: Box) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, (Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2];
 /**
@@ -122,7 +131,7 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
   const clrRules = rules.filter((r) => r.constraints.some((k) => k.type === "clearance" && k.min != null));
   const ruleMax = Math.max(0, ...clrRules.map((r) => r.constraints.find((k) => k.type === "clearance")!.min || 0));
   const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance, ruleMax);
-  const ruleItem = (c: Conductor, layer: string) => ({ kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer });
+  const ruleItem = (c: Conductor, layer: string) => (c.kind === "pad" ? { kind: c.kind, node: c.pad.node, parent: c.item, layer, shape: c.shape } : { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape });
   // copper clearance
   const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
   for (let i = 0; i < order.length; i++) {
@@ -137,18 +146,29 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
       }
       if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
       const gap = shapeGap(a.shape, b.shape); if (gap >= need - DRC_EPS) continue;
+      if (a.kind === "segment" && b.kind === "segment") {   // DRC_TEST_PROVIDER_COPPER_CLEARANCE: crossing tracks are their own violation
+        const sa = a.shape as { a: Pt; b: Pt }, sb = b.shape as { a: Pt; b: Pt }; const X = segCross(sa.a, sa.b, sb.a, sb.b);
+        if (X) { out.push(marker("tracks_crossing", "error", X[0], X[1], `Tracks crossing${by ? ` (${by})` : ""}`, [a.id, b.id])); continue; }
+      }
       const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);   // the stricter class of the pair names the rule
       const [x, y] = boxCenter(a.bbox, b.bbox);
       out.push(marker("clearance", "error", x, y, `Clearance violation (${by || `netclass '${cls}'`} clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(new Set([a.id, b.id]))));
     }
   }
-  // copper to board edge
+  // copper to board edge (DRC_TEST_PROVIDER_EDGE_CLEARANCE): a custom edge_clearance rule, else the board setup value
   const edges = edgeShapes(doc);
-  if (edges.shapes.length && s.edgeClearance > 0) {
-    const eb = edges.shapes.map((e) => shapeBBox(e));
-    for (const c of conds) for (let i = 0; i < edges.shapes.length; i++) {
-      if (!boxesTouch(c.bbox, eb[i], s.edgeClearance)) continue; const gap = shapeGap(c.shape, edges.shapes[i]); if (gap >= s.edgeClearance - DRC_EPS) continue;
-      const [x, y] = boxCenter(c.bbox, eb[i]); out.push(marker("copper_edge_clearance", "error", x, y, `Board edge clearance violation (board setup constraints edge clearance ${mm4(s.edgeClearance)}; actual ${mm4(gap)})`, [c.id])); break;
+  const edgeRules = rules.some((r) => r.constraints.some((k) => k.type === "edge_clearance"));
+  if (edges.shapes.length && (s.edgeClearance > 0 || edgeRules)) {
+    const eb = edges.shapes.map((e) => shapeBBox(e)); const edgeItem = { kind: "gr_line", node: ["gr_line", ["layer", "Edge.Cuts"]] as SNode, layer: "Edge.Cuts" };
+    const edgeMax = Math.max(s.edgeClearance, ...rules.flatMap((r) => r.constraints.filter((k) => k.type === "edge_clearance").map((k) => k.min || 0)));
+    for (const c of conds) {
+      let need = s.edgeClearance, name = "board setup constraints edge";
+      if (edgeRules) { const layer = c.layers.values().next().value || ""; const h = evalRuleConstraint(rules, "edge_clearance", doc, s, ruleItem(c, layer), edgeItem) || evalRuleConstraint(rules, "edge_clearance", doc, s, edgeItem, ruleItem(c, layer)); if (h) { need = h.severity === "ignore" ? 0 : h.min || 0; name = h.name; } }
+      if (!(need > 0)) continue;
+      for (let i = 0; i < edges.shapes.length; i++) {
+        if (!boxesTouch(c.bbox, eb[i], Math.max(need, edgeMax))) continue; const gap = shapeGap(c.shape, edges.shapes[i]); if (gap >= need - DRC_EPS) continue;
+        const [x, y] = boxCenter(c.bbox, eb[i]); out.push(marker("copper_edge_clearance", "error", x, y, `Board edge clearance violation (${name} clearance ${mm4(need)}; actual ${mm4(gap)})`, [c.id])); break;
+      }
     }
   }
   // connectivity
@@ -160,16 +180,16 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
   for (const c of conds) {
     if (c.kind === "segment" || c.kind === "arc") {
       const [a, b] = c.anchors; const layer = c.layers.values().next().value!;
-      if (c.length! < EPS) { out.push(marker("zero_length", "warning", a[0], a[1], "Zero-length track", [c.id])); continue; }
+      if (c.length! < EPS) continue;   // KiCad reports nothing for a zero-length track
       const loose = [a, b].find((p) => !touches(p, layer, c)); if (loose) out.push(marker("track_dangling", "warning", loose[0], loose[1], "Track has unconnected end", [c.id]));   // one marker per track, like DRCE_DANGLING_TRACK
-      if (s.minTrackWidth > 0 && c.width! < s.minTrackWidth - 1e-6) out.push(marker("track_width", "error", (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (board setup constraints min width ${mm4(s.minTrackWidth)}; actual ${mm4(c.width!)})`, [c.id]));
     } else if (c.kind === "via") {
       const [a] = c.anchors;
-      if (c.drill >= c.size - 1e-6) out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
-      else { if (s.minViaDiameter > 0 && c.size < s.minViaDiameter - 1e-6) out.push(marker("via_diameter", "error", a[0], a[1], `Via diameter (board setup constraints min diameter ${mm4(s.minViaDiameter)}; actual ${mm4(c.size)})`, [c.id])); if (s.minViaDrill > 0 && c.drill < s.minViaDrill - 1e-6) out.push(marker("drill_out_of_range", "error", a[0], a[1], `Hole size out of range (board setup constraints min ${mm4(s.minViaDrill)}; actual ${mm4(c.drill)})`, [c.id])); }
       if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
     }
   }
+  // track width, via diameter, hole size, annular width, segment length and angle through the rules (drc-rules.ts)
+  out.push(...sizeMarkers(doc, s, rules, conds), ...trackAngleMarkers(doc, s, rules, conds));
+  if (rules.length) { const items = ruleItems(doc); out.push(...disallowMarkers(doc, s, rules, items), ...assertionMarkers(doc, s, rules, items)); }
   // courtyards
   const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint"); const cy = fps.map((fp) => courtyards(fp));
   for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
@@ -180,8 +200,14 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
   const ol = boardOutline(doc);
   if (ol.hasEdges && !ol.outline) { const e = edges.shapes[0] as { a?: Pt; pts: Pt[] }; const p = e.a || e.pts[0]; out.push(marker("invalid_outline", "error", p[0], p[1], "Board has malformed outline (Edge.Cuts does not close)", [])); }
   else if (ol.outline && opts.outline !== false) {
-    const seen = new Set<string>();
-    for (const c of nl.conductors) { if (seen.has(c.id) || c.kind === "zone") continue; const p = c.kind === "pad" ? [c.pad!.x, c.pad!.y] : c.anchors[0]; if (p && !pointInPoly(ol.outline, p[0], p[1])) { seen.add(c.id); out.push(marker("outside_outline", "warning", p[0], p[1], `Item outside board outline (${c.kind === "pad" ? (c.item.ref || "footprint") : c.kind})`, [c.id])); } }
+    // DRC_TEST_PROVIDER_EDGE_CLEARANCE::testCopperOutsideBoard: copper that does not touch the board at all
+    const seen = new Set<string>(); const board = { t: "poly" as const, pts: ol.outline };
+    for (const c of nl.conductors) {
+      if (seen.has(c.id) || c.kind === "zone") continue;
+      if (boxesTouch(c.bbox, shapeBBox(board), 0) && shapeGap(c.shape, board) <= EPS) continue;
+      seen.add(c.id); const p = c.kind === "pad" ? [c.pad!.x, c.pad!.y] : c.anchors[0];
+      out.push(marker("copper_outside_board", "warning", p[0], p[1], "Copper outside board outline", [c.id]));
+    }
   }
   // hole to hole, text dimensions and mirroring, courtyard definitions and holes in courtyards, Edge.Cuts text,
   // keepout areas and disabled layers (drc-more.ts)

@@ -957,12 +957,13 @@ test("DRC: clearance, board edge, missing connections, dangling and zero-length 
   assert.deepEqual(clr[0].ids.sort(), ["s-1", "s-2"]); assert.equal(clr[0].severity, "error"); assert.ok(clr[0].x > 110 && clr[0].x < 115 && near(clr[0].y, 50.175, 1e-3));
   const edge = by("copper_edge_clearance"); assert.equal(edge.length, 1); assert.deepEqual(edge[0].ids, ["s-3"]); assert.ok(/edge clearance 0\.5000 mm; actual 0\.1500 mm/.test(edge[0].text));
   assert.equal(by("unconnected_items").length, P.ratsnest(doc).length); assert.ok(by("unconnected_items").every((x) => x.severity === "error" && /Missing connection/.test(x.text)));
-  assert.deepEqual(by("zero_length").map((x) => x.ids[0]), ["s-0"]);
+  assert.equal(by("zero_length").length, 0, "KiCad has no zero-length track check");
   const dang = by("track_dangling"); assert.deepEqual(dang.map((x) => x.ids[0]).sort(), ["s-1", "s-2", "s-3"], "one marker per loose track"); assert.ok(dang.every((x) => x.severity === "warning"));
   const ann = by("annular_width"); assert.equal(ann.length, 1); assert.deepEqual([ann[0].ids[0], ann[0].x, ann[0].y], ["v-bad", 125, 60]);
   assert.deepEqual(by("via_dangling").map((x) => x.ids[0]), ["v-bad"]);
   const cy = by("courtyards_overlap"); assert.equal(cy.length, 1, "R1 and R2 overlap; R2 and R3 only share an edge"); assert.deepEqual(cy[0].ids, ["fp-1", "fp-2"]);
-  const out = by("outside_outline"); assert.deepEqual(out.map((x) => x.ids[0]), ["fp-4"]); assert.equal(out[0].severity, "warning");
+  assert.equal(by("outside_outline").length, 0, "KiCad's code is copper_outside_board");
+  const out = by("copper_outside_board"); assert.deepEqual(out.map((x) => x.ids[0]), ["fp-4"]); assert.equal(out[0].severity, "warning"); assert.equal(out[0].text, "Copper outside board outline");
   assert.equal(by("invalid_outline").length, 0); assert.equal(by("shorting_items").length, 0);
   assert.ok(m.every((x) => typeof x.x === "number" && typeof x.y === "number" && x.text && Array.isArray(x.ids)));
   // a .kicad_pro's rules: a looser clearance and edge clearance pass, ignored rules vanish, severities follow the project
@@ -974,7 +975,7 @@ test("DRC: clearance, board edge, missing connections, dangling and zero-length 
   assert.equal(m2.filter((x) => x.code === "copper_edge_clearance").length, 0);
   const c2 = m2.filter((x) => x.code === "clearance"); assert.equal(c2.length, 2, "GND's 0.4 mm class now also catches R1's /SIG pad against R2's GND pad");
   assert.ok(c2.every((x) => /netclass 'Power' clearance 0\.4000 mm/.test(x.text)), "the stricter class of the pair names the rule"); assert.ok(c2.some((x) => /actual 0\.2028 mm/.test(x.text) && x.ids.join() === "fp-1,fp-2"));
-  assert.equal(m2.filter((x) => x.code === "track_width").length, 3, "the 0.25 mm tracks under a 0.3 mm minimum (the zero-length one is reported as such)");
+  assert.equal(m2.filter((x) => x.code === "track_width").length, 4, "the four 0.25 mm tracks under a 0.3 mm minimum, the zero-length one too (TRACK_WIDTH checks every track)");
   // a legacy board's (setup …) block and a broken outline
   const legacy = P.designSettings('(kicad_pcb (version 20171130) (setup (trace_clearance 0.3) (edge_clearance 0.2)) (net_class Default "" (clearance 0.3) (trace_width 0.35) (via_dia 0.9) (via_drill 0.45) (add_net GND)))');
   assert.equal(legacy.clearance, 0.3); assert.equal(legacy.edgeClearance, 0.2); assert.equal(P.netclassOf(legacy, "GND").via_diameter, 0.9);

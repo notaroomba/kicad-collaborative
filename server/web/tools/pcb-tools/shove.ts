@@ -1,5 +1,5 @@
 // pcb-tools/shove.ts — SHOVE (pns_shove.cpp).
-import type { Box, BoardDoc, BranchOp, CircleShape, CopperShape, DesignSettings, LegFn, PadInfo, PcbCtx, PolyShape, Pt, Route, SegShape } from "./types";
+import type { Box, BoardDoc, BranchOp, CircleShape, Conductor, CopperShape, WorldItem, DesignSettings, LegFn, PadInfo, PcbCtx, PolyShape, Pt, Route, SegShape } from "./types";
 import type { RouterSettings } from "./router-settings";
 import { headVia, opOn, routeDoc, routeOwn, viaSpanLayers } from "./branch";
 import { settingsOf } from "./dialogs";
@@ -12,6 +12,7 @@ import { pointInPoly } from "./hit";
 import { closestOnSeg } from "./point-editor";
 import { K, S } from "./state";
 import { clone, r6, vunit } from "./util";
+import { rulePairClearance } from "./rule-resolver";
 import { DIRS8, HULL_EPS, ROUTE_EPS, isFreePad, now, pathHits, ptsLength, routeClearance, routeObstacles, routerWorld, shapeCorePts, simplifyPts, walkHead } from "./walkaround";
 
 // ================================================================ SHOVE (pcbnew/router/pns_shove.cpp)
@@ -28,7 +29,7 @@ export interface ShoveTrack { kind: "track"; id: string; a: Pt; b: Pt; w: number
 /** A movable via of the shove's world (moved: at its pushed place). */
 export interface ShoveVia { kind: "via"; id: string; at: Pt; r: number; drill: number; layers: Set<string>; net: string; item: KItem; moved?: boolean }
 /** Something the shove never moves: a pad, hole, rule area, the edge, an arc, a locked track or via. */
-export interface ShoveSolid { kind: "solid"; id: string | null; ckind: string; layers: Set<string> | null | undefined; net: string; shape: CopperShape; bbox: Box; pad?: PadInfo }
+export interface ShoveSolid { kind: "solid"; id: string | null; ckind: string; layers: Set<string> | null | undefined; net: string; shape: CopperShape; bbox: Box; pad?: PadInfo; src?: Conductor | WorldItem }
 export type ShoveObj = ShoveTrack | ShoveVia | ShoveSolid;
 /** The shove's view of the board (shoveWorld). */
 export interface ShoveWorld { doc: BoardDoc; tracks: Map<string, ShoveTrack>; vias: Map<string, ShoveVia>; solids: ShoveSolid[]; grid: Map<string, ShoveObj[]>; CELL: number; maxW: number; s: DesignSettings }
@@ -55,7 +56,8 @@ export function octagon(core: Pt[], off: number) {
   }
   return out;
 }
-export const pairClr = (s: DesignSettings, a: string, b: string) => Math.max(netClearance(s, a), netClearance(s, b), s.minClearance || 0);
+/** The clearance between two lines (or a line and a via, kindB "via") of nets a and b on a layer: the custom rules first, then the netclasses (rulePairClearance). */
+export const pairClr = (s: DesignSettings, a: string, b: string, layer?: string | null, kindB?: string) => (S.dru && S.dru.rules.length ? rulePairClearance(S.shoveDoc || null, s, a, b, layer || null, kindB) : Math.max(netClearance(s, a), netClearance(s, b), s.minClearance || 0));
 export const sameNetKey = (a: string, b: string) => !!a && a === b;
 /** Strictly inside a convex polygon (on the outline is outside). */
 export function insideConvex(P: Pt[], p: Pt) {
@@ -125,17 +127,17 @@ export function shoveWorld(doc: BoardDoc, s: DesignSettings, shoveVias: boolean)
     const locked = c.item && isLocked(c.item.node);
     if (c.kind === "segment" && !locked) { const o: ShoveTrack = { kind: "track", id: c.id, a: (c.shape as SegShape).a, b: (c.shape as SegShape).b, w: c.width, layer: Array.from(c.layers)[0], net: c.net, item: c.item }; tracks.set(c.id, o); gadd(o, c.bbox); maxW = Math.max(maxW, c.width); continue; }
     if (c.kind === "via" && !locked && shoveVias) { const o: ShoveVia = { kind: "via", id: c.id, at: [(c.shape as CircleShape).x, (c.shape as CircleShape).y], r: (c.shape as CircleShape).r, drill: c.drill, layers: c.layers, net: c.net, item: c.item }; vias.set(c.id, o); gadd(o, c.bbox); maxW = Math.max(maxW, 2 * (c.shape as CircleShape).r); continue; }
-    const o: ShoveSolid = { kind: "solid", id: c.id, ckind: c.kind, layers: c.layers, net: c.net, shape: c.shape, bbox: c.bbox, pad: c.kind === "pad" ? c.pad : undefined }; solids.push(o); gadd(o, c.bbox);
+    const o: ShoveSolid = { kind: "solid", id: c.id, ckind: c.kind, layers: c.layers, net: c.net, shape: c.shape, bbox: c.bbox, pad: c.kind === "pad" ? c.pad : undefined, src: c }; solids.push(o); gadd(o, c.bbox);
   }
-  for (const h of Wd.holes) { const o: ShoveSolid = { kind: "solid", id: h.id, ckind: "hole", layers: h.layers, net: "", shape: h.shape, bbox: h.bbox }; solids.push(o); gadd(o, h.bbox); }
+  for (const h of Wd.holes) { const o: ShoveSolid = { kind: "solid", id: h.id, ckind: "hole", layers: h.layers, net: "", shape: h.shape, bbox: h.bbox, src: h }; solids.push(o); gadd(o, h.bbox); }
   for (const k of Wd.keepouts) { const o: ShoveSolid = { kind: "solid", id: k.id, ckind: "keepout", layers: k.layers, net: "", shape: k.shape, bbox: k.bbox }; solids.push(o); gadd(o, k.bbox); }
   for (const e of Wd.edges) { const o: ShoveSolid = { kind: "solid", id: null, ckind: "edge", layers: null, net: "", shape: e.shape, bbox: e.bbox }; solids.push(o); gadd(o, e.bbox); }
-  const w: ShoveWorld = { doc, tracks, vias, solids, grid, CELL, maxW, s };
+  const w: ShoveWorld = { doc, tracks, vias, solids, grid, CELL, maxW, s }; S.shoveDoc = doc;
   if (bc) bc[key] = w; else S.sworld = { doc, ver: S.docVer, key, w };
   return w;
 }
 /** Clearance between a line of net `net` and a solid (PNS_PCBNEW_RULE_RESOLVER's kinds). */
-export function solidClr(s: DesignSettings, net: string, o: ShoveSolid) { return routeClearance(s, net, { kind: o.ckind === "hole" ? "hole" : o.ckind === "keepout" ? "keepout" : o.ckind === "edge" ? "edge" : o.ckind, net: o.net }); }
+export function solidClr(s: DesignSettings, net: string, o: ShoveSolid, layer?: string | null) { return routeClearance(s, net, { kind: o.ckind === "hole" ? "hole" : o.ckind === "keepout" ? "keepout" : o.ckind === "edge" ? "edge" : o.ckind, net: o.net, id: o.id, src: o.src }, layer, S.shoveDoc || null); }
 /** The items of the world (base grid, then the shoved lines and vias) near a box. */
 export function shoveNear(SW: ShoveWorld, st: ShoveState, box: Box, grow: number, fn: (o: ShoveObj | { kind: "line"; L: ShoveLine }) => void) {
   const C = SW.CELL, seen = new Set<ShoveObj>();
@@ -158,22 +160,22 @@ export function shoveNearest(SW: ShoveWorld, st: ShoveState, L: ShoveLine) {
   const consider = (o: ShoveObj | { kind: "line"; L: ShoveLine }, probe: Probe, idx: number, rL: number, onLayer: string) => {
     if (o.kind === "line") {
       const M = o.L; if (M === L || M.layer !== onLayer || sameNetKey(M.net, L.net)) return;
-      const c = pairClr(s, L.net, M.net);
+      const c = pairClr(s, L.net, M.net, onLayer);
       for (let k = 0; k + 1 < M.pts.length; k++) { const g = probeGap(probe, rL, { t: "seg", a: M.pts[k], b: M.pts[k + 1], r: M.w / 2 }); if (g < c - ROUTE_EPS) { score("line", idx + probeDist(probe, M.pts[k]), { L: M }); return; } }
       return;
     }
     if (L.ownIds && o.id && L.ownIds.has(o.id)) return;
     if (o.kind === "track") {
       if (o.layer !== onLayer || sameNetKey(o.net, L.net) || (L.ids && L.ids.includes(o.id))) return;
-      const g = probeGap(probe, rL, { t: "seg", a: o.a, b: o.b, r: o.w / 2 }); if (g < pairClr(s, L.net, o.net) - ROUTE_EPS) score("line", idx + probeDist(probe, o.a), { o });
+      const g = probeGap(probe, rL, { t: "seg", a: o.a, b: o.b, r: o.w / 2 }); if (g < pairClr(s, L.net, o.net, onLayer) - ROUTE_EPS) score("line", idx + probeDist(probe, o.a), { o });
     } else if (o.kind === "via") {
       if (!o.layers.has(onLayer) || sameNetKey(o.net, L.net) || (L.viaId && L.viaId === o.id)) return;
-      const g = probeGap(probe, rL, { t: "circle", x: o.at[0], y: o.at[1], r: o.r }); if (g < pairClr(s, L.net, o.net) - ROUTE_EPS) score("via", idx + probeDist(probe, o.at), { o });
+      const g = probeGap(probe, rL, { t: "circle", x: o.at[0], y: o.at[1], r: o.r }); if (g < pairClr(s, L.net, o.net, onLayer, "via") - ROUTE_EPS) score("via", idx + probeDist(probe, o.at), { o });
     } else {
       if (o.layers && !o.layers.has(onLayer)) return;
       if (o.ckind !== "edge" && o.ckind !== "hole" && o.ckind !== "keepout" && (sameNetKey(o.net, L.net) || (o.ckind === "pad" && (!o.net ? !L.net : isFreePad(o.pad))))) return;
       if (o.ckind === "keepout") { const a = probe.t === "seg" ? probe.a : [probe.x, probe.y], b = probe.t === "seg" ? probe.b : a; if (pointInPoly((o.shape as PolyShape).pts, a[0], a[1]) || pointInPoly((o.shape as PolyShape).pts, b[0], b[1]) || polySegDist((o.shape as PolyShape).pts, a, b) < rL - ROUTE_EPS) score("solid", idx, { o }); return; }
-      const g = probeGap(probe, rL, o.shape); if (g < solidClr(s, L.net, o) - ROUTE_EPS) score("solid", idx + probeDist(probe, shapeCorePts(o.shape)[0]), { o });
+      const g = probeGap(probe, rL, o.shape); if (g < solidClr(s, L.net, o, onLayer) - ROUTE_EPS) score("solid", idx + probeDist(probe, shapeCorePts(o.shape)[0]), { o });
     }
   };
   const grow = (L.w || 0) / 2 + SW.maxW + 2;
@@ -297,7 +299,7 @@ export function shoveRun(SW: ShoveWorld, heads: Omit<ShoveLine, "key" | "rank" |
     if (!hit) { stack.pop(); continue; }
     if (hit.kind === "solid") {
       if (cur.head || cur.proxy) return null;
-      const so = hit.o as ShoveSolid; const w = walkLineAround(s, cur, so.shape, so.ckind === "keepout" ? 0 : solidClr(s, cur.net, so)); if (!w) return null;
+      const so = hit.o as ShoveSolid; const w = walkLineAround(s, cur, so.shape, so.ckind === "keepout" ? 0 : solidClr(s, cur.net, so, cur.layer)); if (!w) return null;
       setLine(st, cur, w); continue;
     }
     if (hit.kind === "via") {

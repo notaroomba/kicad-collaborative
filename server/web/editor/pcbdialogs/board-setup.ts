@@ -364,7 +364,7 @@ export async function openBoardSetup(ctx: ToolCtx, startPage?: string): Promise<
     const check = h("button", { type: "button" }, "Check rule syntax");
     check.addEventListener("click", () => { const err = ruleSyntaxError(ta.value); status.textContent = err || "No errors found."; status.className = "pd-status " + (err ? "err" : "ok"); });
     put(el, h("div", { class: "pd-row" }, h("label", null, "DRC Rules"), h("span", { style: "flex:1" }), check, status), ta,
-      note(dru ? "Custom rules are stored in the project's .kicad_dru file. The web editor evaluates their clearance, length, skew and diff pair constraints (DRC, length tuning, message panel); the desktop DRC evaluates every rule." : "This project has no custom rules file (.kicad_dru)."));
+      note(dru ? "Custom rules are stored in the project's .kicad_dru file. DRC, the interactive router and the length tuner evaluate them." : "This project has no custom rules file (.kicad_dru)."));
   };
 
   const severityPage = (el: HTMLElement): void => {
@@ -422,6 +422,10 @@ export function ruleSyntaxError(text: string): string {
   if (inStr) return "ERROR: unterminated string.";
   if (depth) return `ERROR: ${depth} unclosed '('.`;
   if (any && !/^\s*(#[^\n]*\n\s*)*\(version\s+\d+\)/.test(text)) return "ERROR: missing (version 1) header.";
+  // DRC_RULES_PARSER compiles each condition: an unknown property or function, or a function missing its argument, is an error
+  const tools = (globalThis as { PcbTools?: { parseDru?: (t: string) => { errors: string[] } } }).PcbTools;
+  const res = tools && tools.parseDru ? tools.parseDru(text) : null;
+  if (res && res.errors.length) return "ERROR: " + res.errors[0].replace(/^rule '/, "Rule '");
   return "";
 }
 
