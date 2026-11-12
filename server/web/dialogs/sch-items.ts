@@ -13,8 +13,9 @@
 // kicad-dialogs.js asks KDialogs.schItemDialog / schFieldDialog first (openItem / openNew / openField), so the
 // double-click, E and the tools' creation paths all reach these.  The document edits are in sch-items-logic.ts.
 import { E, toast, toolCtx } from "./editor";
-import { KD, checkbox, confirmBox, h, select, textInput } from "./dom";
+import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
 import * as L from "./sch-items-logic";
+import { commitWithOtherUnits } from "./sync-units";
 import { HL, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
 import { openSheetProperties, openSymbolProperties, sheetPathNow } from "./sch-symbol-sheet";
@@ -115,7 +116,7 @@ function fromG(r: GRow): L.FieldRow {
   return r;
 }
 /** The grid with its Add field / Delete field / Move up / Move down buttons.  -> rows() for TransferDataFromWindow */
-export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number }): { rows(): L.FieldRow[] } {
+export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number; shown?: number[] }): { rows(): L.FieldRow[] } {
   const rows: GRow[] = rows0.map(toG);
   const faces = fontFaces(opts.doc);
   const cols = [
@@ -133,13 +134,23 @@ export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readO
     { key: "yT", label: "Y Position", width: 64 },
     { key: "font", label: "Font", type: "choice" as const, options: faces, width: 110 },
     { key: "colorT", label: "Color", width: 70 },
+    { key: "autoplace", label: "Allow Autoplace", type: "bool" as const, width: 60 },
   ];
-  const g = KD().grid<GRow>(host, cols, rows, {
+  // WX_GRID::ShowHideColumns: a dialog may start with only some columns; the header's right-click menu
+  // (one check item per column) shows or hides the others
+  const shown = new Set(opts.shown || cols.map((_c, i) => i));
+  const visible = () => cols.filter((_c, i) => shown.has(i));
+  const g = KD().grid<GRow>(host, visible(), rows, {
     readOnly: opts.readOnly, height: opts.height || 170,
     onChange(row, key) { if (key === "sizeT" || key === "xT" || key === "yT") { fromG(row); toG(row); g.refresh(); } },
     buttons: { add: () => toG(L.newRow(opts.newName(rows), [0, 0])), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true, canRemove: (r) => { if (r.mandatory) { toast(`The first ${rows.filter((x) => x.mandatory).length} fields are mandatory.`); return false; } return true; } },
   });
   g.el.style.maxWidth = "100%";
+  if (opts.shown) g.el.addEventListener("contextmenu", (ev) => {
+    const t = ev.target as Element | null; if (!t || !t.closest || !t.closest("thead")) return;
+    ev.preventDefault();
+    popupMenu(ev.clientX, ev.clientY, cols.map((c, i) => ({ label: c.label, check: true, checked: shown.has(i), disabled: i < 2, run: () => { if (shown.has(i)) shown.delete(i); else shown.add(i); g.columns = visible(); g.refresh(); } })));
+  });
   return { rows: () => rows.map(fromG) };
 }
 const nextFieldName = (rows: L.FieldRow[]): string => { let n = 1; const names = new Set(rows.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; };
@@ -206,7 +217,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       }
       // Fields
       const fHost = h("div", { style: "margin-top:8px" }); b.append(fHost);
-      grid = fieldsGrid(fHost, L.fieldRows(staged, origin, mandatory), { readOnly: ro, doc, newName: nextFieldName, height: 150 });
+      grid = fieldsGrid(fHost, L.fieldRows(staged, origin, mandatory), { readOnly: ro, doc, newName: nextFieldName, height: 150, shown: [0, 1, 2, 3, 4, 5, 6, 7] });
       // Shape + Formatting
       const bottom = h("div", { style: "display:flex;gap:12px;align-items:stretch;margin-top:4px" });
       const shapes = L.labelShapes(kind);
@@ -410,7 +421,10 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       else if (L.yes(out, "fields_autoplaced") && item.kind === "symbol") {   // the parent is autoplaced again (editFieldText)
         const H = schH(); const a = H && H.autoplaceNode(doc, Object.assign({}, item, { node: out }) as KItem); if (a) out = a;
       }
-      commitItem(ctx, item, out, `Edit ${name}`);
+      if (item.kind === "symbol" && (name === "Value" || name === "Footprint" || name === "Datasheet")) {
+        // the value, footprint and datasheet fields are kept in sync in (annotated) multi-unit parts
+        if (JSON.stringify(out) !== JSON.stringify(item.node)) commitWithOtherUnits(ctx, item, out, [KiCadCanvas.replaceChange(ctx.doc, Object.assign({}, item, { node: out, geom: [], bbox: null }) as KItem)], `Edit ${name}`, "field:" + name);
+      } else commitItem(ctx, item, out, `Edit ${name}`);
       return undefined;
     },
   });

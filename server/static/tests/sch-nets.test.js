@@ -22,21 +22,22 @@ const wire = (a, b, id) => `(wire (pts (xy ${a[0]} ${a[1]}) (xy ${b[0]} ${b[1]})
 const helpers = { symbolPins: sch._.symbolPins, isPower: (d, it) => sch._.isPowerSymbol(d, String((K.kid(it.node, "lib_id") || [])[1])) };
 const U_ROOT = "11111111-1111-1111-1111-111111111111", U_SUB = "22222222-2222-2222-2222-222222222222", U_SHEET = "33333333-3333-3333-3333-333333333333";
 // root: R1 between the label SIG and the sheet pin IN; R2 from SIG to GND, its other... sub: R3 from the hierarchical label IN to a local label
-function build() {
+function build(opts = {}) {
   const rootSyms = sym("Device:R", "R1", "10k", "Resistor_SMD:R_0603_1608Metric", 100, 50, "aaaaaaaa-0000-0000-0000-000000000001", "/" + U_ROOT) + sym("Device:R", "R2", "4k7", "Resistor_SMD:R_0603_1608Metric", 120, 50, "aaaaaaaa-0000-0000-0000-000000000002", "/" + U_ROOT)
     + `(symbol (lib_id "power:GND") (at 120 60 0) (unit 1) (uuid "aaaaaaaa-0000-0000-0000-000000000009") (property "Reference" "#PWR01" (at 120 66 0) (effects (font (size 1.27 1.27)) (hide yes))) (property "Value" "GND" (at 120 64 0) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "g1")) (instances (project "demo" (path "/${U_ROOT}" (reference "#PWR01") (unit 1)))))`;
   const probe = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (uuid "${U_ROOT}") (paper "A4") ${LIB} ${rootSyms})`, "kicad_sch");
   const pins = (id) => { const o = {}; for (const p of helpers.symbolPins(probe, probe.items.get(id))) o[p.number] = [p.x, p.y]; return o; };
   const r1 = pins("aaaaaaaa-0000-0000-0000-000000000001"), r2 = pins("aaaaaaaa-0000-0000-0000-000000000002"), g = pins("aaaaaaaa-0000-0000-0000-000000000009");
   const sheetPin = [80, r1[2][1]];
-  const root = `(kicad_sch (version 20250114) (generator "eeschema") (uuid "${U_ROOT}") (paper "A4") ${LIB} ${rootSyms}
+  const root = `(kicad_sch (version 20250114) (generator "eeschema") (uuid "${U_ROOT}") (paper "A4") ${opts.localPower ? LIB.replace('(symbol "power:GND" (power)', '(symbol "power:GND" (power local)') : LIB} ${rootSyms}
     ${wire(r1[1], r2[1], "w1")} (label "SIG" (at ${r1[1][0]} ${r1[1][1]} 0) (effects (font (size 1.27 1.27))) (uuid "l1"))
     ${wire(r2[2], g[1], "w2")} ${wire(r1[2], sheetPin, "w3")}
     (sheet (at 60 ${sheetPin[1] - 5}) (size 20 10) (stroke (width 0) (type solid)) (fill (color 0 0 0 0)) (uuid "${U_SHEET}") (property "Sheetname" "sub" (at 60 40 0) (effects (font (size 1.27 1.27)))) (property "Sheetfile" "sub.kicad_sch" (at 60 56 0) (effects (font (size 1.27 1.27))))
       (pin "IN" input (at 80 ${sheetPin[1]} 0) (effects (font (size 1.27 1.27))) (uuid "sp1")) (instances (project "demo" (path "/${U_ROOT}" (page "2")))))
     (sheet_instances (path "/" (page "1"))))`;
   const subSyms = sym("Device:R", "R3", "1k", "Resistor_SMD:R_0603_1608Metric", 100, 50, "bbbbbbbb-0000-0000-0000-000000000003", `/${U_ROOT}/${U_SHEET}`);
-  const sub = `(kicad_sch (version 20250114) (generator "eeschema") (uuid "${U_SUB}") (paper "A4") ${LIB} ${subSyms}
+  const subGnd = opts.subGnd ? `(symbol (lib_id "power:GND") (at ${r1[2][0]} ${r1[2][1]} 0) (unit 1) (uuid "bbbbbbbb-0000-0000-0000-000000000009") (property "Reference" "#PWR02" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes))) (property "Value" "GND" (at 0 0 0) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "g2")) (instances (project "demo" (path "/${U_ROOT}/${U_SHEET}" (reference "#PWR02") (unit 1)))))` : "";
+  const sub = `(kicad_sch (version 20250114) (generator "eeschema") (uuid "${U_SUB}") (paper "A4") ${opts.localPower ? LIB.replace('(symbol "power:GND" (power)', '(symbol "power:GND" (power local)') : LIB} ${subSyms} ${subGnd}
     (hierarchical_label "IN" (shape input) (at ${r1[1][0]} ${r1[1][1]} 180) (effects (font (size 1.27 1.27))) (uuid "h1"))
     (label "LOCAL" (at ${r1[2][0]} ${r1[2][1]} 0) (effects (font (size 1.27 1.27))) (uuid "l2")))`;
   const file = (text, uuid, name) => ({ doc: K.parseDoc(text, "kicad_sch"), uuid, file: name });
@@ -52,6 +53,16 @@ test("net map: every named net, the hierarchy instances root first", () => {
   assert.deepStrictEqual(inst.map((i) => i.human), ["/", "/sub/"]);
   assert.deepStrictEqual(inst.map((i) => i.file), ["demo.kicad_sch", "sub.kicad_sch"]);
   for (const n of ["/SIG", "GND", "/sub/IN", "/sub/LOCAL"]) assert.ok(map.has(n), n + " in " + Array.from(map.keys()).join(", "));
+});
+test("local power ((power local), KiCad 10): the net stays on its sheet; a global power symbol joins every sheet", () => {
+  const g = build({ subGnd: true }).nl.netMap;
+  const gnd = g.get("GND"); assert.ok(gnd, Array.from(g.keys()).join(", "));
+  assert.deepStrictEqual(Array.from(new Set(gnd.members.filter((m) => m.kind === "pin").map((m) => m.inst))).sort(), [0, 1], "global GND joins both sheets");
+  const l = build({ subGnd: true, localPower: true }).nl.netMap;
+  assert.ok(!l.has("GND"), "no global GND net: " + Array.from(l.keys()).join(", "));
+  assert.ok(l.has("/GND") && l.has("/sub/GND"), Array.from(l.keys()).join(", "));
+  assert.ok(!l.has("/sub/LOCAL"), "the local power pin outranks the local label on the same net");
+  assert.ok(l.get("/GND").members.every((m) => m.inst === 0) && l.get("/sub/GND").members.every((m) => m.inst === 1));
 });
 test("net map: a net crossing a sheet pin holds the items of both sheets", () => {
   const e = map.get("/sub/IN"), on = (i) => e.members.filter((m) => m.inst === i).map((m) => m.kind + ":" + m.id + (m.pin ? "#" + m.pin : "")).sort();

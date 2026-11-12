@@ -10,6 +10,7 @@ import { E } from "../state";
 import { setNet } from "../pcbdialogs/item-props";
 import { layerDisplayName, netClassOf } from "./appearance";
 import { KC, isSchDoc, kdoc, panelStore, pcbTools, tctx } from "./core";
+import { commitWithOtherUnits } from "../../dialogs/sync-units";
 
 type Raw = string | number | boolean | null;
 interface PropDef {
@@ -559,6 +560,7 @@ function parse(def: PropDef, text: string): { v: Raw } | string {
   }
 }
 
+const SYNCED = new Set(["Value", "Exclude From Board", "Exclude From Bill of Materials", "Exclude From Position Files", "Do not Populate", "Pin Map Mode", "Pin Map Name"]);
 export function setProp(id: string, text: string): string | null {
   const doc = kdoc(); if (!doc) return "No document";
   if (E.viewOnly) return "View-only access";
@@ -576,7 +578,7 @@ export function setProp(id: string, text: string): string | null {
     panelStore.set({ selVersion: panelStore.get().selVersion + 1 });
     return null;
   }
-  const changes: KChange[] = [];
+  const changes: KChange[] = [], nodes: SNode[] = [];
   items.forEach((it, i) => {
     const d = defs[i].get(id); if (!d || !d.set) return;
     let cur: Raw = null; try { cur = d.get(it); } catch (e) { cur = null; }
@@ -586,9 +588,14 @@ export function setProp(id: string, text: string): string | null {
     let res: boolean | void;
     try { res = d.set(node, parsed.v, it); } catch (e) { console.warn(e); return; }
     if (res === false) return;
-    changes.push(K().replaceChange(doc, Object.assign({}, it, { node, geom: [], bbox: null })));
+    changes.push(K().replaceChange(doc, Object.assign({}, it, { node, geom: [], bbox: null }))); nodes.push(node);
   });
   if (!changes.length) return null;
+  // SCH_SYMBOL::SyncOtherUnits( …, aProperty ): these properties follow to the other units of a multi-unit part
+  if (items.length === 1 && items[0].kind === "symbol" && SYNCED.has(head.name)) {
+    const node = nodes[0], ctx = tctx() as unknown as ToolCtx & { doc: KDoc };
+    if (node) { commitWithOtherUnits(Object.assign(ctx, { doc }), items[0], node, changes, head.name.toLowerCase(), head.name); panelStore.set({ selVersion: panelStore.get().selVersion + 1 }); return null; }
+  }
   tctx().commit(changes, head.name.toLowerCase());
   panelStore.set({ selVersion: panelStore.get().selVersion + 1 });
   return null;

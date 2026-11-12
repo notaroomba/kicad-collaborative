@@ -86,6 +86,31 @@ export function confirmBox(title: string, message: string, okLabel = "OK"): Prom
     document.body.append(ov); ok.focus();
   });
 }
+/** A wxMenu popped up inside a dialog (grid header / cell right-click): check items, separators and submenus. */
+export interface PopItem { label?: string; sep?: boolean; check?: boolean; checked?: boolean; disabled?: boolean; run?: () => void; sub?: PopItem[] }
+export function popupMenu(x: number, y: number, items: PopItem[]): HTMLElement {
+  for (const old of Array.from(document.querySelectorAll(".kd-pop"))) old.remove();
+  const build = (list: PopItem[], px: number, py: number, depth: number): HTMLElement => {
+    const m = h("div", { class: "kd-pop", role: "menu", "data-depth": depth, style: `position:fixed;left:${px}px;top:${py}px;z-index:${80 + depth};min-width:160px;background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:0 6px 18px rgba(0,0,0,.25);padding:3px 0;font-size:12px;color:var(--ink)` });
+    for (const it of list) {
+      if (it.sep) { m.append(h("div", { style: "height:1px;background:var(--line);margin:3px 0" })); continue; }
+      const row = h("div", { class: "kd-pop-row", role: "menuitem", "aria-disabled": it.disabled ? "true" : undefined, style: `display:flex;gap:6px;align-items:center;padding:3px 12px 3px 6px;cursor:default;white-space:nowrap;${it.disabled ? "opacity:.45;" : ""}` },
+        h("span", { style: "width:14px;display:inline-block;text-align:center" }, it.check ? (it.checked ? "✓" : "") : ""), h("span", { style: "flex:1" }, it.label || ""), it.sub ? h("span", null, "▸") : null);
+      row.addEventListener("pointerenter", () => { row.style.background = "var(--accent)"; row.style.color = "var(--on-accent)"; for (const o of Array.from(document.querySelectorAll(".kd-pop"))) if (Number((o as HTMLElement).dataset.depth) > depth) o.remove();
+        if (it.sub && !it.disabled) { const r = row.getBoundingClientRect(); document.body.append(build(it.sub, r.right - 2, r.top - 3, depth + 1)); } });
+      row.addEventListener("pointerleave", () => { row.style.background = ""; row.style.color = ""; });
+      row.addEventListener("click", (ev) => { ev.stopPropagation(); if (it.disabled || it.sub) return; closeAll(); if (it.run) it.run(); });
+      m.append(row);
+    }
+    return m;
+  };
+  const closeAll = (): void => { for (const o of Array.from(document.querySelectorAll(".kd-pop"))) o.remove(); document.removeEventListener("pointerdown", away, true); document.removeEventListener("keydown", esc, true); };
+  const away = (ev: Event): void => { const t = ev.target as Element | null; if (t && t.closest && t.closest(".kd-pop")) return; closeAll(); };
+  const esc = (ev: KeyboardEvent): void => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closeAll(); } };
+  const root = build(items, x, y, 0); document.body.append(root);
+  setTimeout(() => { document.addEventListener("pointerdown", away, true); document.addEventListener("keydown", esc, true); }, 0);
+  return root;
+}
 export function download(name: string, text: string, type = "text/csv;charset=utf-8"): void {
   const a = h("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name }); document.body.append(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);

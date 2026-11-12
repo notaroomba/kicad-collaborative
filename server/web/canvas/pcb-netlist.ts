@@ -5,6 +5,7 @@
 // Pure functions over parsed documents; the dialog (web/editor/pcbdialogs/update-pcb.ts) loads the sheets,
 // shows the report and commits the staged nodes.  Exposed for the node tests as KiCadCanvas.pcbNetlist.
 import { atOf, kid, kids, num, parse, ptsOf, str } from "./sexpr";
+import { resolveLib } from "./geom-sch";
 
 type Pt = [number, number];
 
@@ -16,6 +17,8 @@ export interface NetlistHelpers {
   symbolPins(doc: KDoc, item: KItem): SymPin[];
   /** true for power symbols (#PWR, #FLG) */
   isPower(doc: KDoc, item: KItem): boolean;
+  /** true for a (power local) symbol: its net is limited to the sheet, like a local label (KiCad 10) */
+  isLocalPower?(doc: KDoc, item: KItem): boolean;
 }
 /** One schematic file: its parsed document, the file's own (uuid …) and its path in the project. */
 export interface SheetFile { doc: KDoc; uuid: string; file: string }
@@ -96,7 +99,9 @@ const isBusText = (t: string): boolean => /\[\d+\.\.\d+\]/.test(t) || /\{[^}]*\s
 
 // ---------------------------------------------------------------- the schematic's nets
 // CONNECTION_SUBGRAPH::PRIORITY
-const P_PIN = 1, P_SHEET_PIN = 2, P_HIER = 3, P_LOCAL = 4, P_BUS_MEMBER = 5, P_POWER = 6, P_GLOBAL = 7;
+/** LIB_SYMBOL::IsLocalPower: the library copy the symbol draws from carries (power local). */
+function libIsLocalPower(doc: KDoc, n: SNode): boolean { const l = resolveLib(doc, str((kid(n, "lib_name") || kid(n, "lib_id") || [])[1])); const p = l && kid(l, "power"); return !!p && str(p[1]) === "local"; }
+const P_PIN = 1, P_SHEET_PIN = 2, P_HIER = 3, P_LOCAL = 4, P_LOCAL_POWER = 4.5, P_BUS_MEMBER = 5, P_POWER = 6, P_GLOBAL = 7;
 interface Driver { prio: number; name: string; depth: number }
 interface PinRef { comp: string | null; ref: string; unitRef: string; pin: SymPin; pins: SymPin[]; uuid: string; power: boolean; inNetlist: boolean }
 interface Instance { sheet: SheetFile; uuidPath: string[]; human: string; depth: number; index: number; sheetUuids: string[]; name: string }
@@ -270,7 +275,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
           }
         }
       } else if (k === "symbol") {
-        const power = h.isPower(doc, it), value = propVal(n, "Value");
+        const power = h.isPower(doc, it), value = propVal(n, "Value"), localPower = power && (h.isLocalPower ? h.isLocalPower(doc, it) : libIsLocalPower(doc, n));
         const { ref, unit } = instanceRef(n, "/" + inst.uuidPath.join("/"), project);
         const inNetlist = !ref.startsWith("#") && !power, onBoard = yes(n, "on_board", true);
         const pins = h.symbolPins(doc, it);
@@ -290,6 +295,8 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
         for (const pin of pins) {
           const t = terminal([pin.x, pin.y], false);
           addMem(t, { inst: I, id: it.id, kind: "pin", pin: pin.number, pinName: pin.name, ref: unitRef, power });
+          // CONNECTION_GRAPH: a local power pin joins the sheet's local label cache (sheet, name), not the global one
+          if (localPower && value && pin.type === "power_in") { uf.union(t, keyNode(`${I}|local:${value}`)); addDriver(t, { prio: P_LOCAL_POWER, name: inst.human + escapeNetName(value), depth: inst.depth }); continue; }
           if (power && value && pin.type === "power_in") { uf.union(t, keyNode("global:" + value)); addDriver(t, { prio: P_POWER, name: escapeNetName(value), depth: inst.depth }); continue; }
           if (power) continue;                                   // a PWR_FLAG's pin drives nothing by name
           if (pin.hidden && pin.type === "power_in") { uf.union(t, keyNode("global:" + pin.name)); addDriver(t, { prio: P_POWER, name: escapeNetName(pin.name), depth: inst.depth }); }
