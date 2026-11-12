@@ -419,6 +419,47 @@ export function setInstanceData(node: SNode, path: string | null, project: strin
   return true;
 }
 
+// ---------------------------------------------------------------- a sheet file linked anew (ChangeSheetFile)
+/**
+ * SCH_SHEET_LIST::AddNewSymbolInstances / AddNewSheetInstances then SCH_SCREENS::ClearAnnotationOfNewSheetPaths on
+ * one sheet file reached by the new sheet path `path`: every symbol gets an instance entry for the path (added when it
+ * has none) with its reference reset to the prefix and '?', its unit kept; every sub-sheet gets a page entry for the
+ * path (the next virtual page number) and is returned with its own new path, to be walked in turn.
+ */
+export function newSheetPathNodes(doc: KDoc, path: string, project: string, nextPage: () => number): { nodes: Map<string, SNode>; subs: { file: string; path: string }[] } {
+  const P = K() as unknown as { parse(s: string): SNode; cloneNode(n: SNode): SNode };
+  const q = JSON.stringify, nodes = new Map<string, SNode>(), subs: { file: string; path: string }[] = [];
+  const projectOf = (n: SNode): SNode => {
+    let inst = kid(n, "instances");
+    if (!inst) { inst = ["instances"] as unknown as SNode; n.push(inst); }                 // written last, after the pins
+    let pr = kids(inst, "project").find((x) => str(x[1]) === project);
+    if (!pr) { pr = P.parse(`(project ${q(project)})`); inst.push(pr); }
+    return pr;
+  };
+  for (const it of doc.items.values()) {
+    if (it.kind === "symbol") {
+      const n = P.cloneNode(it.node);
+      const all = instanceEntriesOf(n), refP = kids(n, "property").find((p) => fieldName(p) === "Reference");
+      const curRef = all.length && kid(all[0], "reference") ? str((kid(all[0], "reference") as SNode)[1]) : refP ? fieldValue(refP) : "";
+      const unit = all.length && kid(all[0], "unit") ? num((kid(all[0], "unit") as SNode)[1], 1) : num((kid(n, "unit") || [0, 1])[1], 1);
+      const ref = refDesPrefix(curRef) + "?";
+      const pr = projectOf(n); let e = kids(pr, "path").find((x) => str(x[1]) === path);
+      if (!e) { e = P.parse(`(path ${q(path)} (reference ${q(ref)}) (unit ${unit}))`); pr.push(e); }
+      else { const r = kid(e, "reference"); if (r) r[1] = ref as unknown as SNode; else e.splice(2, 0, P.parse(`(reference ${q(ref)})`)); }
+      nodes.set(it.id, n);
+    } else if (it.kind === "sheet") {
+      const n = P.cloneNode(it.node), uuid = str((kid(n, "uuid") || [])[1]);
+      const pr = projectOf(n);
+      if (!kids(pr, "path").some((x) => str(x[1]) === path)) pr.push(P.parse(`(path ${q(path)} (page ${q(String(nextPage()))}))`));
+      nodes.set(it.id, n);
+      const f = kids(n, "property").find((p) => /^Sheet ?file$/i.test(fieldName(p)));
+      if (f && uuid) subs.push({ file: fieldValue(f), path: `${path}/${uuid}` });
+    }
+  }
+  return { nodes, subs };
+}
+function instanceEntriesOf(n: SNode): SNode[] { const inst = kid(n, "instances"); const out: SNode[] = []; if (inst) for (const pr of kids(inst, "project")) out.push(...kids(pr, "path")); return out; }
+
 // ---------------------------------------------------------------- SCH_SHEET_LIST::TestForRecursion
 /**
  * Would linking `srcFiles` (the new sheet file and every file under it) into `dest` (the file of the sheet being

@@ -362,7 +362,12 @@ export function openSheetProperties(ctx: Ctx, item: KItem, opts: SheetOpts = {})
       if (rows.some((r) => L.rowMoved(r, origin))) L.drop(n, "fields_autoplaced");
       if (opts.onCreate) return opts.onCreate(n) as boolean | undefined;
       if (file === oldFile) { commit(n); return undefined; }
-      void changeSheetFile(ctx, item, n, oldFile, file).then((ok) => { if (ok) commit(n); });
+      void changeSheetFile(ctx, item, n, oldFile, file).then((linked) => {
+        if (!linked) return;
+        commit(n);
+        // a file already in the project now loads under this sheet: its symbols are new on these sheet paths
+        if (linked !== true) void annotateNewSheetPaths(ctx, n, linked);
+      });
       return undefined;
     },
   });
@@ -399,7 +404,7 @@ async function subFiles(file: string): Promise<string[]> {
   return out;
 }
 /** SCH_EDIT_FRAME::ChangeSheetFile for an existing sheet: link an existing file, or copy this sheet's contents to a new one. */
-async function changeSheetFile(ctx: Ctx, item: KItem, node: SNode, oldFile: string, newFile: string): Promise<boolean> {
+async function changeSheetFile(ctx: Ctx, item: KItem, node: SNode, oldFile: string, newFile: string): Promise<boolean | string> {
   const cur = (ctx.docs as { docId: string; path: string; docType: string }[] || []).find((d) => d.docId === ctx.docId) || null;
   const dir = cur ? cur.path.split("/").slice(0, -1).join("/") : "";
   const abs = (f: string): string => { const out: string[] = []; for (const p of [...(dir ? dir.split("/") : []), ...f.split("/")]) { if (!p || p === ".") continue; if (p === "..") out.pop(); else out.push(p); } return out.join("/"); };
@@ -410,7 +415,7 @@ async function changeSheetFile(ctx: Ctx, item: KItem, node: SNode, oldFile: stri
     // CheckSheetForRecursion with a temporary sheet on the linked screen
     const dest = cur ? cur.path : "";
     if (dest && L.sheetRecursion(await hierarchyPaths(), await subFiles(target.path), dest)) { await messageBox(L.RECURSION_MSG(dest)); return false; }
-    return true;
+    return target.path;                                  // clearAnnotation: the linked file's contents are new here
   }
   // the sheet's contents are saved under the new name (a sheet used more than once asks first)
   const uses = Array.from(ctx.doc.items.values()).filter((o) => o.kind === "sheet" && o.id !== item.id && L.kids(o.node, "property").some((p) => /^Sheet ?file$/i.test(L.fieldName(p)) && normFile(L.fieldValue(p)) === normFile(oldFile))).length;
@@ -432,5 +437,41 @@ async function changeSheetFile(ctx: Ctx, item: KItem, node: SNode, oldFile: stri
   } catch (e) {
     void messageBox(`Error occurred saving schematic file '${abs(newFile)}'.`); return false;
   }
+}
+/**
+ * SCH_EDIT_TOOL's doClearAnnotation after ChangeSheetFile linked `file`: AddNewSymbolInstances / AddNewSheetInstances
+ * for every new sheet path under the sheet (one per instance of the sheet's parent, and down through the linked
+ * file's own sub-sheets), then ClearAnnotationOfNewSheetPaths — the symbols there read 'R?' on those paths.  The file
+ * change cannot be undone in KiCad either (ClearUndoRedoList), so the other files' edits carry no undo step.
+ */
+async function annotateNewSheetPaths(ctx: Ctx, sheetNode: SNode, file: string): Promise<void> {
+  const uuid = L.str((L.kid(sheetNode, "uuid") || [])[1]); if (!uuid || E.viewOnly) return;
+  const c = netMap(), here = currentInstance(c);
+  const cur = ((ctx.docs as { docId: string; path: string }[] | undefined) || []).find((d) => d.docId === ctx.docId);
+  const parents = c && cur ? c.instances.filter((i) => i.file === cur.path).map((i) => "/" + i.uuidPath.join("/")) : [];
+  if (!parents.length && here) parents.push("/" + here.uuidPath.join("/"));
+  if (!parents.length) return;
+  const pro = projectDocs().find((d) => d.docType === "kicad_pro");
+  const project = pro ? (pro.path.split("/").pop() || "").replace(/\.kicad_pro$/, "") : "";
+  let page = c ? c.instances.length : 1;                // SCH_SHEET_LIST::GetLastVirtualPageNumber
+  const docs = projectDocs().filter((d) => d.docType === "kicad_sch"), loaded = new Map<string, { docId: string; doc: KDoc; before: Map<string, KItem>; touched: Set<string> }>();
+  const todo = parents.map((p) => ({ file, path: `${p}/${uuid}` })), failed: string[] = [];
+  for (let guard = 0; todo.length && guard < 256; guard++) {
+    const t = todo.shift()!;
+    const de = docs.find((d) => d.path === t.file); if (!de) continue;
+    let e = loaded.get(t.file);
+    if (!e) { try { const d = await readDoc(de.docId, "kicad_sch"); e = { docId: de.docId, doc: d, before: new Map(d.items), touched: new Set() }; loaded.set(t.file, e); } catch { failed.push(t.file); continue; } }
+    const r = L.newSheetPathNodes(e.doc, t.path, project, () => ++page);
+    for (const [id, n] of r.nodes) { const it = e.doc.items.get(id); if (it) { e.doc.items.set(id, Object.assign({}, it, { node: n })); e.touched.add(id); } }
+    const dir = t.file.split("/").slice(0, -1);
+    for (const s of r.subs) { const parts = dir.slice(); for (const x of normFile(s.file).split("/")) { if (!x || x === ".") continue; if (x === "..") parts.pop(); else parts.push(x); } todo.push({ file: parts.join("/"), path: s.path }); }
+  }
+  for (const [f, e] of loaded) {
+    const ch: KChange[] = [];
+    for (const id of e.touched) { const was = e.before.get(id), now = e.doc.items.get(id); if (was && now) { e.doc.items.set(id, was); ch.push(KiCadCanvas.replaceChange(e.doc, Object.assign({}, was, { node: now.node, geom: [], bbox: null }) as KItem)); } }
+    if (!ch.length) continue;
+    try { await submitDocOp(e.docId, ch); } catch { failed.push(f); }
+  }
+  if (failed.length) void messageBox(`Could not update ${failed.map((f) => `'${f}'`).join(", ")}.`);
 }
 void E; void toast;

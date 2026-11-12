@@ -105,5 +105,31 @@ test("pin maps: read, edit (identity not stored), rename-safe write in KiCad's o
   const ov = P.readOverride(N(`(symbol (pin_map_override (mode named_map) (map "SOT23") (edit "1" "2")))`));
   assert.deepStrictEqual([ov.mode, ov.map, Array.from(ov.edits)], ["named_map", "SOT23", [["1", "2"]]]);
 });
+const L = load("dialogs/sch-items-logic.ts");
+test("ChangeSheetFile linking an existing file: new sheet path instances with the annotation cleared, sub-sheets paged", () => {
+  const doc = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (uuid "sub-uuid") (paper "A4") (lib_symbols)
+    (symbol (lib_id "Device:R") (at 10 10 0) (unit 1) (uuid "r1")
+      (property "Reference" "R5" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (pin "1" (uuid "p1"))
+      (instances (project "proj" (path "/root/s1" (reference "R5") (unit 1)))))
+    (symbol (lib_id "power:GND") (at 20 10 0) (unit 1) (uuid "g1")
+      (property "Reference" "#PWR03" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (instances (project "proj" (path "/root/s1" (reference "#PWR03") (unit 1)))))
+    (sheet (at 30 30) (size 10 10) (uuid "deep")
+      (property "Sheetname" "Deep" (at 30 29 0) (effects (font (size 1.27 1.27))))
+      (property "Sheetfile" "deep.kicad_sch" (at 30 41 0) (effects (font (size 1.27 1.27))))
+      (instances (project "proj" (path "/root/s1" (page "3"))))))`);
+  let pg = 4;
+  const r = L.newSheetPathNodes(doc, "/root/s2", "proj", () => pg++);
+  const ser = (id) => K.serialize(r.nodes.get(id));
+  assert.ok(ser("r1").includes('(path "/root/s1" (reference "R5") (unit 1)) (path "/root/s2" (reference "R?") (unit 1))'), ser("r1"));
+  assert.ok(ser("g1").includes('(path "/root/s2" (reference "#PWR?") (unit 1))'), ser("g1"));
+  assert.ok(ser("deep").includes('(path "/root/s2" (page "4"))'), ser("deep"));
+  assert.deepStrictEqual(r.subs, [{ file: "deep.kicad_sch", path: "/root/s2/deep" }]);
+  assert.strictEqual(K.serialize(doc.items.get("r1").node).includes("/root/s2"), false, "the document's own nodes are untouched");
+  // an entry that already exists for the path is re-annotated, not duplicated
+  const again = L.newSheetPathNodes(doc, "/root/s1", "proj", () => pg++);
+  const s1 = K.serialize(again.nodes.get("r1")); assert.strictEqual((s1.match(/\/root\/s1/g) || []).length, 1); assert.ok(s1.includes('(path "/root/s1" (reference "R?") (unit 1))'), s1);
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
