@@ -8,7 +8,7 @@
 // Sheet Properties: the fields grid (Sheetname, Sheetfile and user fields), Border width / color, Background fill,
 // Page number:, Hierarchical path:, the Attributes box, and SCH_EDIT_FRAME::ChangeSheetFile's rules for a new file
 // name (link an existing file, or copy this sheet's contents to the new file).  Drawing a sheet opens it first.
-import { E, api, appState, toast } from "./editor";
+import { E, api, appState, rootSchematic, toast } from "./editor";
 import { KD, checkbox, confirmBox, h, popupMenu, promptText, select, textInput, type PopItem } from "./dom";
 import * as P from "./sym-props-logic";
 import { commitWithOtherUnits } from "./sync-units";
@@ -306,13 +306,19 @@ function pinMapPanel(host: HTMLElement, st: P.PinMapState, pins: { number: strin
 function openSimModelFor(grid: { rows(): L.FieldRow[]; setRows?(rows: L.FieldRow[]): void }, doc: KDoc, staged: SNode, lib: SNode | null, nUnits: number, ro: boolean): void {
   const S = (window as unknown as { KiCadSimModel?: { open: typeof openSimModel } }).KiCadSimModel || { open: openSimModel };
   const refN = L.kids(staged, "property").find((p) => L.fieldName(p) === "Reference");
-  const ef = (doc as KDoc & { embeddedFiles?: SNode | null }).embeddedFiles, docRoot = ef ? (["kicad_sch", ef] as unknown as SNode) : null;
-  const files = [...projectModelFiles((appState.project && appState.project.docs) || []), ...embeddedModelFiles([docRoot, lib])];
-  S.open(grid.rows(), {
-    prefix: refPrefix(refN ? L.fieldValue(refN) : ""), pins: simPinsOfLib(lib), unitCount: nUnits, files, readOnly: ro,
-    newRow: (name, value, visible) => { const r = L.newRow(name, [0, 0]); r.value = value; r.show = visible; return r; },
-    clone: (r) => ({ ...r }),
-  }, (next) => { if (grid.setRows) grid.setRows(next); });
+  const owner = (d: KDoc): SNode | null => { const ef = (d as KDoc & { embeddedFiles?: SNode | null }).embeddedFiles; return ef ? (["kicad_sch", ef] as unknown as SNode) : null; };
+  const open = (schOwner: SNode | null): void => {
+    const files = [...projectModelFiles((appState.project && appState.project.docs) || []), ...embeddedModelFiles([schOwner, lib])];
+    S.open(grid.rows(), {
+      prefix: refPrefix(refN ? L.fieldValue(refN) : ""), pins: simPinsOfLib(lib), unitCount: nUnits, files, readOnly: ro,
+      newRow: (name, value, visible) => { const r = L.newRow(name, [0, 0]); r.value = value; r.show = visible; return r; },
+      clone: (r) => ({ ...r }),
+    }, (next) => { if (grid.setRows) grid.setRows(next); });
+  };
+  // SIM_LIB_MGR's embedded files are the schematic's (the root sheet's, whichever sheet the symbol is on) and the symbol's
+  const root = appState.project ? rootSchematic() : undefined;
+  if (root && appState.docId && root.docId !== appState.docId) void readDoc(root.docId).then(owner, () => null).then(open);
+  else open(owner(doc));
 }
 
 // ---------------------------------------------------------------- DIALOG_SHEET_PROPERTIES

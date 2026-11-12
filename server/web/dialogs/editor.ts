@@ -32,6 +32,8 @@ export const requestRender = view.requestRender as () => void;
 export const applyView = view.applyView as () => void;
 export const centerOn = comments.centerOn as (xMm: number, yMm: number) => void;
 export const openDocId = doc.openDocId as (id: string) => void;
+/** The project's root schematic (the .kicad_sch named after the .kicad_pro, else the shallowest). */
+export const rootSchematic = doc.rootSchematic as unknown as () => DocEntry | undefined;
 export const updateGridStatus = doc.updateGridStatus as () => void;
 export const applySheetContext = doc.applySheetContext as unknown as (d: KDoc) => void;
 export const GRID_CHOICES = doc.GRID_CHOICES as unknown as Record<string, [number, string][]>;
