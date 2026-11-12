@@ -250,5 +250,39 @@ test("moving a pattern carries its origin, end and base line", () => {
   const info = P.tuningPatternInfo({ node: n }); assert.deepEqual(info.base[0], [13, 12]);
 });
 
+const SKEW = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (segment (start 10 10) (end 30 10) (width 0.2) (layer "F.Cu") (net "CLK_P") (uuid "p1"))
+  (segment (start 10 10.45) (end 31 10.45) (width 0.2) (layer "F.Cu") (net "CLK_N") (uuid "n1"))
+  (segment (start 10 20) (end 30 20) (width 0.2) (layer "F.Cu") (net "LONE") (uuid "l1"))
+)`;
+test("Tune Skew (9): the clicked line is meandered to its partner's length plus the target skew; 'Skew:' in the status", () => {
+  const { ctx, log, doc } = fakeCtx(SKEW);
+  ctx.setTool("tuneskew");
+  pcb.onPointerMove(ev(), [20, 10], ctx);
+  let info = P.state.tune.picker; assert.equal(info, "p1");
+  pcb.onPointerDown(ev(), [11, 10], ctx); pcb.onPointerMove(ev(), [29, 9], ctx);
+  const T = P.state.tune.pattern; assert.ok(T); assert.ok(Math.abs(T.coupled - 21) < 1e-9, "the partner is 21 mm");
+  assert.equal(T.res.status, "tuned"); assert.ok(Math.abs(T.res.length / IU - 21) < 0.1, "P is brought to N's length (skew 0): " + T.res.length / IU);
+  pcb.onPointerDown(ev(), [29, 9], ctx);
+  assert.equal(log.commits.at(-1).label, "Tune");
+  const gen = [...doc.items.values()].find((it) => it.kind === "generated");
+  assert.equal(K.str(K.kid(gen.node, "tuning_mode")[1]), "diff_pair_skew"); assert.equal(K.kid(gen.node, "target_skew")[1], 0);
+  const pLen = [...doc.items.values()].filter((it) => (it.kind === "segment" || it.kind === "arc") && P.netOf(it.node).name === "CLK_P").reduce((t, it) => t + trackLen(it), 0);
+  assert.ok(Math.abs(pLen - 21) < 0.1, "CLK_P is 21 mm: " + pLen);
+  const n = doc.items.get("n1"); for (const it of [...doc.items.values()].filter((x) => x.kind === "segment" && P.netOf(x.node).name === "CLK_P")) {
+    assert.ok(P.segSegDist(P.pt(it.node, "start"), P.pt(it.node, "end"), P.pt(n.node, "start"), P.pt(n.node, "end")) >= 0.45 - 0.2 - 1e-6, "the meanders keep off the partner");
+  }
+});
+
+test("Tune Skew refusals: a net without a partner, and the skew target in the dialog", () => {
+  const { ctx, log } = fakeCtx(SKEW);
+  ctx.setTool("tuneskew");
+  pcb.onPointerDown(ev(), [15, 20], ctx); assert.equal(log.toasts.pop(), P.TUNE_MSG_SKEW_NETS); assert.equal(P.state.tune.pattern, null);
+  const st = P.meanderDefaults(); P.applyTuneSettings(st, Object.assign(P.tuneSettingsView(st, "skew"), { targetLength: 0.5 }), "skew");
+  assert.deepEqual(st.skew, { min: 0.4 * IU, opt: 0.5 * IU, max: 0.6 * IU }); assert.equal(st.target.opt, P.LENGTH_UNCONSTRAINED, "the length target is untouched");
+  assert.equal(P.tuneSettingsView(st, "skew").targetLength, 0.5);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

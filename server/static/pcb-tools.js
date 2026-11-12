@@ -2356,13 +2356,15 @@ const TUNE_STATUS_TEXT = { [TOO_LONG]: "too long", [TOO_SHORT]: "too short", [TU
 function meanderDefaults() {
   const st = { minAmp: 200000, maxAmp: 1000000, step: 50000, spacing: 600000, crPct: 80, round: true, singleSided: false, initialSide: -1,
     target: null, overrideCustomRules: false, keepEndpoints: false };
-  setTargetLength(st, LENGTH_UNCONSTRAINED); return st;
+  setTargetLength(st, LENGTH_UNCONSTRAINED); setTargetSkew(st, 0); return st;
 }
+/** MEANDER_SETTINGS::SetTargetSkew */
+function setTargetSkew(st, opt) { st.skew = { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE }; }
 /** MEANDER_SETTINGS::SetTargetLength */
 function setTargetLength(st, opt) {
   st.target = opt === LENGTH_UNCONSTRAINED ? { min: 0, opt, max: opt } : { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE };
 }
-const tuneCopy = (st) => Object.assign({}, st, { target: Object.assign({}, st.target) });
+const tuneCopy = (st) => Object.assign({}, st, { target: Object.assign({}, st.target), skew: Object.assign({}, st.skew) });
 // vectors in IU (doubles; KiCad's VECTOR2D turtle) — the y axis points down as on the board
 const vsubI = vsub;
 const vlen = (a) => Math.hypot(a[0], a[1]);
@@ -2682,8 +2684,28 @@ function meanderMove(P) {
 }
 
 // ---- the tool (DRAWING_TOOL::PlaceTuningPattern, PCB_TUNING_PATTERN::Update / EditFinish)
-S.tuneSettings = { single: meanderDefaults() };   // BOARD_DESIGN_SETTINGS::m_SingleTrackMeanderSettings
-const tuneMode = () => "single";
+S.tuneSettings = { single: meanderDefaults(), skew: meanderDefaults() };   // BOARD_DESIGN_SETTINGS::m_SingleTrackMeanderSettings, m_SkewMeanderSettings
+const TUNE_TOOLS = new Set(["tunesingle", "tuneskew"]);
+const isTuneTool = (t) => TUNE_TOOLS.has(t);
+const tuneMode = () => S.modTool === "tuneskew" ? "skew" : "single";
+const TUNE_MSG_SKEW_PICK = "Please select a differential pair track you want to tune.";
+const TUNE_MSG_SKEW_NETS = "Unable to find complementary differential pair net for skew tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
+/** MEANDER_SKEW_PLACER::Start: the routed length of the pair's other line (its tracks connected to the nearest one). */
+function coupledLength(doc, pair, mineKey, near) {
+  const NT = netTable(doc); const kP = NT.key(pair.P), other = kP === mineKey ? NT.key(pair.N) : kP;
+  let best = null, bd = Infinity;
+  for (const it of doc.items.values()) {
+    if ((it.kind !== "segment" && it.kind !== "arc") || NT.key(netOf(it.node)) !== other) continue;
+    const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) continue;
+    const d = distSeg(near[0], near[1], a[0], a[1], b[0], b[1]); if (d < bd) { bd = d; best = it; }
+  }
+  return best ? routedLength(doc, best.id) : 0;
+}
+/** The length target doMove works to: the pattern's own, or for skew the coupled length plus the skew (MEANDER_SKEW_PLACER::Move). */
+function tuneTarget(st, coupled) {
+  if (coupled == null) return st.target;
+  const c = coupled * TUNE_IU; return { min: c + st.skew.min, opt: c + st.skew.opt, max: c + st.skew.max };
+}
 /** The track the tuner picks under the cursor: GENERAL_COLLECTOR on tracks and arcs, 5 px, the nearest centre wins. */
 function tunePick(ctx, mm) {
   const doc = ctx.doc; const thr = 5 * (S.mmPerPx || 0.05); const active = S.layer; const hits = [];
@@ -2709,15 +2731,19 @@ function tuningPatternOf(doc, id) {
 /** PCB_TUNING_PATTERN::CreateNew + the first click: anchored on the track's nearest point. */
 function tuneBegin(ctx, item, mm) {
   const doc = ctx.doc;
+  const skew = tuneMode() === "skew";
   if (tuningPatternOf(doc, item.id)) { ctx.toast(TUNE_MSG_INSIDE); return; }
-  if (item.kind !== "segment") { ctx.toast(TUNE_MSG_PICK); return; }
-  const line = assembleLine(doc, item); if (!line) { ctx.toast(TUNE_MSG_PICK); return; }
+  if (item.kind !== "segment") { ctx.toast(skew ? TUNE_MSG_SKEW_PICK : TUNE_MSG_PICK); return; }
+  const line = assembleLine(doc, item); if (!line) { ctx.toast(skew ? TUNE_MSG_SKEW_PICK : TUNE_MSG_PICK); return; }
+  const pair = skew ? dpNetPair(doc, line.net) : null;
+  if (skew && !pair) { ctx.toast(TUNE_MSG_SKEW_NETS); return; }
   if (layerOf(item.node) !== S.layer) setLayer(ctx, layerOf(item.node));   // m_frame->SetActiveLayer( pickerItem layer )
   const a = pt(item.node, "start"), b = pt(item.node, "end"); const at = closestOnSeg(mm, a, b);
   const s = settingsOf(ctx);
   const st = tuneCopy(S.tuneSettings[tuneMode()]);
   S.tune.pattern = { item: item.id, line, layer: line.layer, net: line.net, netName: netNameOf(ctx, line.net), netKey: line.netKey, width: line.width, origin: at, end: at, cursor: mm.slice(), st,
-    clearance: netClearance(s, line.netKey), lineLength: routedLength(doc, item.id), res: null };
+    clearance: netClearance(s, line.netKey), lineLength: routedLength(doc, item.id), res: null, mode: tuneMode(),
+    coupled: pair ? coupledLength(doc, pair, line.netKey, closestOnSeg(mm, a, b)) : null };
 }
 /** PCB_TUNING_PATTERN::EditStart + Update for the pattern as it is: the side from the end, then MEANDER_PLACER::Move. */
 function tuneUpdate(ctx) {
@@ -2731,7 +2757,7 @@ function tuneUpdate(ctx) {
   const sp = splitLine(pts.map(I), I(T.origin), I(T.end));
   const last = sp.mid.length >= 2 ? { A: sp.mid[sp.mid.length - 2].p, B: sp.mid[sp.mid.length - 1].p } : null;
   if (last && !veq(last.A, last.B)) T.st.initialSide = segSide(last, I(T.cursor)) < 0 ? -1 : 1;   // UpdateSideFromEnd
-  const st = tuneCopy(T.st); st.keepEndpoints = true;
+  const st = tuneCopy(T.st); st.keepEndpoints = true; st.target = tuneTarget(T.st, T.coupled);
   const doc = ctx.doc; const O = routeObstacles(doc, settingsOf(ctx), T.netKey, T.layer);
   const r = T.width / 2;
   const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
@@ -2748,7 +2774,7 @@ const sexprQ = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"'
 const fmtG = (v) => { const x = +(+v).toPrecision(10); return String(x === 0 ? 0 : x); };
 /** PCB_TUNING_PATTERN's (generated …) node, its properties in STRING_ANY_MAP (alphabetical) order as PCB_IO_KICAD_SEXPR writes them. */
 function tuningPatternNode(T, res, members) {
-  const st = res.settings; const mm = (v) => fmtG(v / TUNE_IU); const xy = (p) => `(xy ${fmtG(p[0])} ${fmtG(p[1])})`;
+  const st = T.st ? Object.assign({}, res.settings, { target: T.st.target, skew: T.st.skew }) : res.settings; const mm = (v) => fmtG(v / TUNE_IU); const xy = (p) => `(xy ${fmtG(p[0])} ${fmtG(p[1])})`;
   const base = res.baseline.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
   const side = st.initialSide < 0 ? "left" : st.initialSide > 0 ? "right" : "default";
   const yn = (b) => b ? "yes" : "no";
@@ -2760,8 +2786,8 @@ function tuningPatternNode(T, res, members) {
     `(override_custom_rules ${yn(st.overrideCustomRules)})`, `(rounded ${yn(st.round)})`, `(single_sided ${yn(st.singleSided)})`,
     `(target_delay ${fmtG(DELAY_UNCONSTRAINED_MM)})`, `(target_delay_max ${fmtG(DELAY_UNCONSTRAINED_MM)})`, `(target_delay_min 0)`,
     `(target_length ${mm(st.target.opt)})`, `(target_length_max ${mm(st.target.max)})`, `(target_length_min ${mm(st.target.min)})`,
-    `(target_skew 0)`, `(target_skew_max ${mm(DEFAULT_LENGTH_TOLERANCE)})`, `(target_skew_min ${mm(-DEFAULT_LENGTH_TOLERANCE)})`,
-    `(tuning_mode ${sexprQ("single")})`,
+    `(target_skew ${mm(st.skew.opt)})`, `(target_skew_max ${mm(st.skew.max)})`, `(target_skew_min ${mm(st.skew.min)})`,
+    `(tuning_mode ${sexprQ(T.mode === "skew" ? "diff_pair_skew" : "single")})`,
   ];
   const text = `(generated (uuid ${sexprQ(K.newUuid())}) (type tuning_pattern) (name "Tuning Pattern") (layer ${sexprQ(T.layer)}) ${props.join(" ")} (members ${members.slice().sort().map(sexprQ).join(" ")}))`;
   return K.parse(text);
@@ -2817,6 +2843,7 @@ function tuningPatternInfo(gen) {
   const side = str("initial_side"); st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
   const opt = num("target_length", null);
   if (opt != null) st.target = { min: I(num("target_length_min", opt - 0.1)), opt: I(opt), max: I(num("target_length_max", opt + 0.1)) };
+  const so = num("target_skew", null); if (so != null) st.skew = { min: I(num("target_skew_min", so - 0.1)), opt: I(so), max: I(num("target_skew_max", so + 0.1)) };
   const lay = kid("layer");
   return { st, layer: lay ? K.str(lay[1]) : "F.Cu", base: ptsOf("base_line"), coupled: ptsOf("base_line_coupled"), mode: str("tuning_mode") || "single",
     width: num("last_track_width", 0.25), gap: num("last_diff_pair_gap", 0), members: K.groupMemberIds(n) };
@@ -2866,11 +2893,12 @@ function tuningRemoveChanges(doc, gens, deleting) {
  */
 function regenerateTuningChanges(ctx, gen) {
   const doc = ctx.doc; const { ops, added, info } = baselineOps(doc, gen);
-  if (!added.length || info.mode !== "single") return [];
+  if (!added.length || (info.mode !== "single" && info.mode !== "diff_pair_skew")) return [];
   const scratch = branchDoc(doc, ops);
   const seedId = K.str(K.kid(added[0].node, "uuid")[1]); const seed = scratch.items.get(seedId); if (!seed) return [];
   const line = assembleLine(scratch, seed); if (!line) return [];
   const st = tuneCopy(info.st); st.keepEndpoints = true;
+  if (info.mode === "diff_pair_skew") { const pair = dpNetPair(scratch, line.net); if (!pair) return []; st.target = tuneTarget(info.st, coupledLength(scratch, pair, line.netKey, info.base[0])); }
   const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
   const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer); const r = line.width / 2;
   const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
@@ -2931,11 +2959,18 @@ function tuneClick(ctx, mm) {
 /** The tuner's status (TUNING_STATUS_VIEW_ITEM): the net, "current length  min  max", "Net: <length>  ---  ---". */
 function tuneStatus(ctx) {
   const U = S.tune; const doc = ctx.doc; const units = sizeUnits();
-  let net = null, len = null;
-  if (U.pattern) { net = U.pattern.net; len = U.pattern.res ? U.pattern.res.length / TUNE_IU : U.pattern.lineLength; }
-  else if (U.picker) { const it = doc.items.get(U.picker); if (!it) return null; net = netOf(it.node); len = routedLength(doc, it.id); }
-  else return null;
-  return { scope: net && net.name ? unescapeName(net.name) : "", label: "current length", value: "Net: " + msgValue(len, units), min: "---", max: "---" };
+  let net = null, len = null; const skew = tuneMode() === "skew";
+  if (U.pattern) { net = U.pattern.net; len = U.pattern.res ? U.pattern.res.length / TUNE_IU : U.pattern.lineLength; if (U.pattern.coupled != null) len -= U.pattern.coupled; }
+  else if (U.picker) {
+    const it = doc.items.get(U.picker); if (!it) return null; net = netOf(it.node); len = routedLength(doc, it.id);
+    if (skew) { const pair = dpNetPair(doc, net); const [a, b] = trackEnds(it); if (pair && a && b) len -= coupledLength(doc, pair, netTable(doc).key(net), [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
+  } else return null;
+  const name = netNameOf(ctx, net);
+  // the skew tuner shows the pattern's skew window; the length tuners show DRC length constraints, none here
+  const mm = (v) => msgValue(v / TUNE_IU, units).replace(/ (mm|mils|in)$/, "");
+  const st = U.pattern ? U.pattern.st : S.tuneSettings[tuneMode()];
+  return { scope: name ? unescapeName(name) : "", label: skew ? "current skew" : "current length", value: (skew ? "Skew: " : "Net: ") + msgValue(len, units),
+    min: skew ? mm(st.skew.min) : "---", max: skew ? mm(st.skew.max) : "---" };
 }
 function drawTuneStatus(c, at, px, info) {
   const css = (name, dflt) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
@@ -6387,13 +6422,15 @@ act("cycleRouterMode", "Cycle Router Mode", "", () => { setRouterSettings({ mode
 act("routerSettingsDialog", "Interactive Router Settings...", "", (ctx) => { if (routingDialogs.routerSettings) routingDialogs.routerSettings(ctx); else ctx.toast("Interactive Router Settings: dialogs are unavailable here"); return true; }, { menu: "Route", tip: "Open Interactive Router settings" });
 // the length tuner's settings and steps (PCB_ACTIONS::lengthTunerSettings, spacingIncrease / spacingDecrease, amplIncrease / amplDecrease)
 /** The tuner's settings in mm as the Tuning Pattern Properties dialog shows them. */
-function tuneSettingsView(st) {
-  return { targetLength: st.target.opt === LENGTH_UNCONSTRAINED ? null : st.target.opt / TUNE_IU, minAmp: st.minAmp / TUNE_IU, maxAmp: st.maxAmp / TUNE_IU, spacing: st.spacing / TUNE_IU,
+function tuneSettingsView(st, mode) {
+  const tgt = mode === "skew" ? st.skew.opt / TUNE_IU : st.target.opt === LENGTH_UNCONSTRAINED ? null : st.target.opt / TUNE_IU;
+  return { targetLength: tgt, minAmp: st.minAmp / TUNE_IU, maxAmp: st.maxAmp / TUNE_IU, spacing: st.spacing / TUNE_IU,
     round: st.round, crPct: st.crPct, singleSided: st.singleSided, overrideCustomRules: st.overrideCustomRules };
 }
 /** DIALOG_TUNING_PATTERN_PROPERTIES::TransferDataFromWindow onto MEANDER_SETTINGS. */
-function applyTuneSettings(st, v) {
-  setTargetLength(st, v.targetLength == null ? LENGTH_UNCONSTRAINED : Math.round(v.targetLength * TUNE_IU));
+function applyTuneSettings(st, v, mode) {
+  if (mode === "skew") setTargetSkew(st, v.targetLength == null ? 0 : Math.round(v.targetLength * TUNE_IU));
+  else setTargetLength(st, v.targetLength == null ? LENGTH_UNCONSTRAINED : Math.round(v.targetLength * TUNE_IU));
   st.overrideCustomRules = !!v.overrideCustomRules;
   st.minAmp = Math.round(v.minAmp * TUNE_IU); st.maxAmp = Math.round(v.maxAmp * TUNE_IU); st.spacing = Math.round(v.spacing * TUNE_IU);
   st.round = !!v.round; st.crPct = Math.round(v.crPct); st.singleSided = !!v.singleSided;
@@ -6401,18 +6438,18 @@ function applyTuneSettings(st, v) {
 function openTuneSettings(ctx) {
   const mode = tuneMode(); const T = S.tune.pattern; const cur = T ? T.st : S.tuneSettings[mode];
   if (!routingDialogs.tuning) { ctx.toast("Length Tuning Settings: dialogs are unavailable here"); return true; }
-  routingDialogs.tuning({ mode, settings: tuneSettingsView(cur) }, (v) => {
-    applyTuneSettings(S.tuneSettings[mode], v);   // StoreDefaults
+  routingDialogs.tuning({ mode: mode === "skew" ? "diff_pair_skew" : "single", settings: tuneSettingsView(cur, mode) }, (v) => {
+    applyTuneSettings(S.tuneSettings[mode], v, mode);   // StoreDefaults
     if (S.tune.pattern) { const side = S.tune.pattern.st.initialSide; S.tune.pattern.st = tuneCopy(S.tuneSettings[mode]); S.tune.pattern.st.initialSide = side; tuneUpdate(lastCtx || ctx); }   // ApplyToolSettings, updateTuningPattern
     (lastCtx || ctx).requestRender();
   });
   return true;
 }
 act("lengthTunerSettings", "Length Tuning Settings...", "Ctrl+L", (ctx) => openTuneSettings(ctx), { menu: false, tip: "Displays tuning pattern properties dialog" });
-act("spacingIncrease", "Increase Spacing", "1", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "spacing", 1) : false, { menu: false, tip: "Increase tuning pattern spacing by one step." });
-act("spacingDecrease", "Decrease Spacing", "2", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
-act("amplIncrease", "Increase Amplitude", "3", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "ampl", 1) : false, { menu: false, tip: "Increase tuning pattern amplitude by one step." });
-act("amplDecrease", "Decrease Amplitude", "4", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "ampl", -1) : false, { menu: false, tip: "Decrease tuning pattern amplitude by one step." });
+act("spacingIncrease", "Increase Spacing", "1", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", 1) : false, { menu: false, tip: "Increase tuning pattern spacing by one step." });
+act("spacingDecrease", "Decrease Spacing", "2", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
+act("amplIncrease", "Increase Amplitude", "3", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "ampl", 1) : false, { menu: false, tip: "Increase tuning pattern amplitude by one step." });
+act("amplDecrease", "Decrease Amplitude", "4", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "ampl", -1) : false, { menu: false, tip: "Decrease tuning pattern amplitude by one step." });
 // GENERATOR_TOOL: Edit > Update All Tuning Patterns (and Tools > Rebuild All / Selected Generators where shown)
 act("regenerateAllTuning", "Update All Tuning Patterns", "", (ctx) => regenerateTuning(ctx, [...ctx.doc.items.values()].filter(isTuningPattern), "Update Tuning Patterns"), { menu: false, tip: "Attempt to re-tune existing tuning patterns within their bounds" });
 act("regenerateAll", "Rebuild All Generators", "", (ctx) => regenerateTuning(ctx, [...ctx.doc.items.values()].filter(isTuningPattern), "Regenerate All"), { menu: false, tip: "Rebuilds geometry of all generators" });
@@ -6841,7 +6878,7 @@ function drawOverlay(c, view, ctx) {
   // route in progress (ROUTER::movePlacing): what is fixed on the route's branch, what the shove pushed, the head since
   // the last click (and the via it carries) over its clearance halo, the collisions it marks, then the leading ratsnest line
   if (S.route) drawRoute(c, ctx, px);
-  if (S.modTool === "tunesingle") drawTune(c, ctx, px);
+  if (isTuneTool(S.modTool)) drawTune(c, ctx, px);
   // drawing preview
   if (S.draw) {
     const d = S.draw; const layer = d.layer || (d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
@@ -6904,6 +6941,7 @@ const TOOLS = [
   { id: "route", label: "Route track", key: "X", cursor: "crosshair", icon: '<path d="M4 18h6l4-4h6"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="14" r="1.5"/>' },
   { id: "routediff", label: "Route differential pair", key: "6", cursor: "crosshair", icon: '<path d="M3 9h7l3-3h8M3 15h7l3 3h8"/>' },
   { id: "tunesingle", label: "Tune length of a single track", key: "7", cursor: "crosshair", icon: '<path d="M3 16h4v-6h3v6h3v-6h3v6h5"/>' },
+  { id: "tuneskew", label: "Tune skew of a differential pair", key: "9", cursor: "crosshair", icon: '<path d="M3 9h4v-4h3v4h11M3 15h18"/>' },
   { id: "via", label: "Add via", key: "V", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>' },
   { id: "drag", label: "Drag track segment", key: "D", cursor: "move", icon: '<path d="M5 7h14"/><path d="M5 17h14" stroke-dasharray="2 2"/><path d="M12 9v5M9 12l3 3 3-3"/>' },
   { id: "gline", label: "Draw line", key: "Shift+L", cursor: "crosshair", icon: '<path d="M5 19L19 5"/>' },
@@ -6932,6 +6970,7 @@ const TOOLS = [
 const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V via, Ctrl+/ corner mode, Backspace undo segment, End or double-click to finish, Esc to discard",
   routediff: "Route differential pair — click a pad, via or track end of a pair's net to start, click to fix, / posture, V via pair, Backspace undo segment, End or double-click to finish, Esc to discard",
   tunesingle: "Tune length — click a track to start, move along it and click to finish; 1/2 spacing, 3/4 amplitude, Ctrl+L settings, Esc to cancel",
+  tuneskew: "Tune skew — click a track of a differential pair, move along it and click to finish; 1/2 spacing, 3/4 amplitude, Ctrl+L settings, Esc to cancel",
   via: "Via — click to place", drag: "Drag — move the mouse, click to fix", gline: "Line — click start and end; click the start point or press Enter to stop",
   grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes",
   garc: "Arc — click the start, the end, then a point on the arc", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
@@ -6988,7 +7027,7 @@ const pcb = {
     const mine = TOOLS.some((x) => x.id === t);
     if (S.route && t !== (S.route.dp ? "routediff" : "route")) { const rt = S.route; S.route = null; routeUnhighlight(ctx, rt); }   // leaving the tool drops the unfixed leg
     S.violations = null;
-    if (t !== "tunesingle") { S.tune.pattern = null; S.tune.picker = null; }
+    if (!isTuneTool(t) || t !== S.modTool) { S.tune.pattern = null; S.tune.picker = null; }
     if (S.drag && t !== "drag") { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }
     S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     S.modTool = mine ? t : null;
@@ -7001,7 +7040,7 @@ const pcb = {
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
     const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
     if (t === "route" || t === "routediff") routeClick(ctx, hv, mm);
-    else if (t === "tunesingle") tuneClick(ctx, mm);
+    else if (isTuneTool(t)) tuneClick(ctx, mm);
     else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
     else if (t === "drillorigin") { if (!ctx.viewOnly) { sizesOf(ctx).setAuxOrigin([hv.x, hv.y]); ctx.toast(`Drill/place file origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); } ctx.setTool("select"); }
     else if (t === "via") placeVia(ctx, hv);
@@ -7060,7 +7099,7 @@ const pcb = {
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
     if (S.drag) dragMove(ctx, mm);
-    if (t === "tunesingle") tuneMove(ctx, mm);
+    if (isTuneTool(t)) tuneMove(ctx, mm);
     if (S.draw) { S.drawRaw = [hv.x, hv.y]; S.drawCtrl = !!(ev && (ev.ctrlKey || ev.metaKey)); drawTrack(S.draw, S.drawRaw, S.drawCtrl); }
     ctx.requestRender();
   },
@@ -7109,7 +7148,7 @@ const pcb = {
     case "+": return runAction("layerNext", ctx);
     case "-": return runAction("layerPrev", ctx);
     case "1": case "2": case "3": case "4":
-      if (S.modTool !== "tunesingle" || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
+      if (!isTuneTool(S.modTool) || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
       return runAction({ 1: "spacingIncrease", 2: "spacingDecrease", 3: "amplIncrease", 4: "amplDecrease" }[k], ctx);
     case "End": if (S.route) { if (editing()) endRoute(ctx, true); return true; } return false;
     case "u": case "U": return expandSelection(ctx) || (selectionIds(ctx).size ? runAction("selectConnection", ctx) : false);   // app.js's selection goes through the action
@@ -7241,7 +7280,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, setTargetSkew, coupledLength, TUNE_MSG_SKEW_PICK, TUNE_MSG_SKEW_NETS, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
