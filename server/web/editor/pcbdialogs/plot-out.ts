@@ -5,6 +5,8 @@
 // dialog at a time, where KiCad stacks a modal over its parent.
 import type { KiCadFabApi } from "../../fab/index";
 import { state } from "../appstore";
+import { editProject } from "../../canvas/project-file";
+import { adoptProjectFile, canWriteProject, loadProjectFile, saveProjectFile } from "../projectfile";
 
 export interface OutputFile { name: string; path: string; data: string | Uint8Array }
 
@@ -53,4 +55,24 @@ export function whenDialogsClosed(fn: () => void): void {
   // the caller opens its dialog right after this call (or after a load); give up if none ever appears
   const t = setTimeout(() => { if (!seen) obs.disconnect(); }, 15000);
   setTimeout(check, 0);
+}
+
+// ---------------------------------------------------------------- the project's last plot path
+/** PROJECT_FILE's pcbnew.last_paths.plot (m_PcbLastPath[LAST_PATH_PLOT]): the board Plot dialog starts from it. */
+export async function projectLastPlotPath(): Promise<string> {
+  try {
+    const text = await loadProjectFile(); if (!text) return "";
+    const j = JSON.parse(text) as { pcbnew?: { last_paths?: { plot?: unknown } } };
+    const v = j && j.pcbnew && j.pcbnew.last_paths ? j.pcbnew.last_paths.plot : "";
+    return typeof v === "string" ? v : "";
+  } catch (e) { return ""; }
+}
+/** DIALOG_PLOT::applyPlotSettings: the output directory becomes the project's last plot path. */
+export async function saveProjectLastPlotPath(dir: string): Promise<void> {
+  if (!canWriteProject()) return;
+  try {
+    const text = await loadProjectFile(); if (!text) return;
+    const res = editProject(text, [{ path: ["pcbnew", "last_paths", "plot"], value: dir }]);
+    if (res.changed.length && await saveProjectFile(res.text, res.changed)) adoptProjectFile(res.text);
+  } catch (e) { console.warn("plot path not saved", e); }
 }

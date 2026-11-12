@@ -30,6 +30,9 @@ export interface PlotOptions {
   hideDnpOnFab?: boolean; sketchDnpOnFab?: boolean; crossoutDnpOnFab?: boolean;
   /** "Sketch pads on fabrication layers" and its "Include pad numbers" */
   sketchPadsOnFab?: boolean; plotPadNumbers?: boolean;
+  /** BRDITEMS_PLOTTER::getFineWidthAdj: PostScript's "Track width correction", mm, added to tracks and to the copper
+   *  of pads and vias (and taken off the drill marks) */
+  widthAdj?: number;
 }
 /** PCB_PLOT_PARAMS::m_sketchPadLineWidth and the Fab layers' default line thickness, mm. */
 const SKETCH_WIDTH = 0.1, FAB_LINE_WIDTH = 0.1;
@@ -299,14 +302,15 @@ function customPolys(shape: PadShape): Pt[][] {
 }
 
 /** One pad on one layer (plotPadLayer in PlotStandardLayer, then BRDITEMS_PLOTTER::PlotPad). */
-export function padPrims(pad: Pad, layer: string, m: BoardModel, out: Prim[]): void {
+export function padPrims(pad: Pad, layer: string, m: BoardModel, out: Prim[], adj = 0): void {
   const shape = padShapeOn(pad, layer, m.copper);
   const onMask = /\.Mask$/.test(layer), onPaste = /\.Paste$/.test(layer);
   let mx = 0, my = 0;
   if (onMask) mx = my = maskMargin(pad, m, shape);
   if (onPaste) [mx, my] = pasteMargin(pad, m, shape);
   const same = Math.abs(mx - my) < 1e-9;
-  const w = shape.w + 2 * mx, h = shape.h + 2 * my;
+  // padPlotsSize: the size grown by the margins and the width correction
+  const w = shape.w + 2 * mx + adj, h = shape.h + 2 * my + adj;
   if (shape.shape !== "custom" && (w <= 0 || h <= 0)) return;
   const [ox, oy] = rot(shape.offset[0], shape.offset[1], pad.rot);
   const x = pad.x + ox, y = pad.y + oy, r = pad.rot;
@@ -324,7 +328,7 @@ export function padPrims(pad: Pad, layer: string, m: BoardModel, out: Prim[]): v
       break;
     case "roundrect": {
       const r0 = shape.rratio * Math.min(shape.w, shape.h);
-      const rr = Math.min(same ? Math.max(0, r0 + mx) : shape.rratio * Math.min(w, h), Math.min(w, h) / 2);
+      const rr = Math.min(same ? Math.max(0, r0 + mx + adj / 2) : shape.rratio * Math.min(w, h), Math.min(w, h) / 2);
       if (rr <= 1e-9) out.push({ k: "rect", x, y, w, h, rot: r });
       else if (Math.abs(w - h) < 1e-9 && Math.abs(rr - w / 2) < 1e-9) out.push({ k: "circle", x, y, d: w });
       else out.push({ k: "roundrect", x, y, w, h, r: rr, rot: r });
@@ -546,7 +550,7 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       if (pad.type === "thru_hole" && !flashed(pad.removeUnused, pad.keepEnds, pad.zoneLayers, layer, first, last, pad.x, pad.y, Math.max(shape.w, shape.h) / 2, connections)) continue;
     }
     const at = out.length;
-    padPrims(pad, layer, m, out);
+    padPrims(pad, layer, m, out, cu ? opt.widthAdj || 0 : 0);
     tag(at, knock.length, padMeta(pad, layer, m));
   }
   // "Sketch pads on fabrication layers": the copper outline of the side's pads at the sketch width, with their numbers
@@ -578,6 +582,7 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       const cuLayer = front ? "F.Cu" : "B.Cu";
       d = (v.sizes ? v.sizes.get(cuLayer) ?? v.size : v.size) + 2 * m.settings.maskExpansion;
     } else continue;
+    if (cu) d += opt.widthAdj || 0;
     if (d > 0) out.push({ k: "circle", x: v.x, y: v.y, d, meta: cu ? { af: "ViaPad", info: 2, net: v.net } : undefined });
   }
 
@@ -588,6 +593,7 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       if (!mask || t.maskLayer !== layer) continue;
       w += 2 * (t.maskMargin ?? m.settings.maskExpansion);
     }
+    w += opt.widthAdj || 0;
     if (!(w > 0)) continue;
     const meta: GbrMeta | undefined = cu ? { af: "Conductor", info: 2, net: t.net || "" } : undefined;
     if (t.arc && Math.hypot(t.x2 - t.x1, t.y2 - t.y1) > 1e-5) out.push({ k: "arc", cx: t.arc.cx, cy: t.arc.cy, r: t.arc.r, a0: t.arc.a0, a1: t.arc.a1, acw: t.arc.acw, w, meta });

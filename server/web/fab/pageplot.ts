@@ -76,10 +76,17 @@ export function primItems(prims: Prim[], vp: Viewport, color: string, clearColor
 }
 
 /** BRDITEMS_PLOTTER::PlotDrillMarks: every hole, white where it knocks out a plotted pad, black elsewhere. */
-export function drillMarkItems(m: BoardModel, layers: Set<string>, small: boolean, vp: Viewport, out: PlotItem[], white: string): void {
+export function drillMarkItems(m: BoardModel, layers: Set<string>, small: boolean, vp: Viewport, out: PlotItem[], white: string, adj = 0): void {
+  let padAt: [number, number] | null = null;
   const mark = (x: number, y: number, w: number, h: number, rotDeg: number, color: string): void => {
     let dw = w, dh = h;
     if (small) { dw = Math.min(SMALL_DRILL, w); dh = Math.min(SMALL_DRILL, h); }
+    // PlotDrillMark: the width correction comes off the hole, which stays inside its pad (std::clamp( d, 1, pad - 1 ))
+    if (adj) {
+      const lim = (v: number, pad: number | undefined): number => Math.max(1e-6, pad !== undefined ? Math.min(v, pad - 1e-6) : v);
+      dw = lim(dw - adj, padAt ? padAt[0] : undefined);
+      dh = Math.abs(w - h) < 1e-9 ? dw : lim(dh - adj, padAt ? padAt[1] : undefined);
+    }
     const q = toPage(vp, x, y);
     if (Math.abs(dw - dh) < 1e-9) { out.push({ k: "circle", x: q[0], y: q[1], r: dw / 2 * vp.scale, w: 0, fill: true, color }); return; }
     const polys = primPolys({ k: "oval", x, y, w: dw, h: dh, rot: rotDeg });
@@ -87,12 +94,14 @@ export function drillMarkItems(m: BoardModel, layers: Set<string>, small: boolea
   };
   for (const v of m.vias) {
     if (!(v.drill > 0) || !v.layers.some((l) => layers.has(l))) continue;
+    padAt = [v.size, v.size];
     mark(v.x, v.y, v.drill, v.drill, 0, white);
   }
   for (const fp of m.footprints) for (const pad of fp.pads) {
     if (!pad.drill || !(pad.drill.w > 0)) continue;
     let color = "#000000";
     for (const l of layers) { if (!pad.layers.has(l)) continue; const s = pad.stack.get(l) || pad.base; if (s.w > pad.drill.w || s.h > pad.drill.h) { color = white; break; } }
+    padAt = [pad.base.w, pad.base.h];
     mark(pad.x, pad.y, pad.drill.w, pad.drill.oval ? pad.drill.h : pad.drill.w, pad.rot, color);
   }
 }
@@ -144,7 +153,8 @@ export function boardPage(m: BoardModel, r: PagePlotRequest, log: PlotLog): Plot
   const start = items.length;
   if (neg) { const bb = boardBox(doc); if (bb) { const a = toPage(vp, bb[0] - 5, bb[1] - 5), b = toPage(vp, bb[2] + 5, bb[3] + 5); items.push({ k: "fill", polys: [[[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]], color: "#FFFFFF" }); } }
   const opt: PlotOptions = { plotReference: p.plotReference !== false, plotValue: p.plotValue !== false, subtractMaskFromSilk: p.subtractMaskFromSilk, hideDnpOnFab: p.hideDnpOnFab,
-    sketchDnpOnFab: p.sketchDnpOnFab, crossoutDnpOnFab: p.crossoutDnpOnFab, sketchPadsOnFab: p.sketchPadsOnFab, plotPadNumbers: p.plotPadNumbers };
+    sketchDnpOnFab: p.sketchDnpOnFab, crossoutDnpOnFab: p.crossoutDnpOnFab, sketchPadsOnFab: p.sketchPadsOnFab, plotPadNumbers: p.plotPadNumbers,
+    widthAdj: p.format === 2 ? p.widthAdjust || 0 : 0 };
   const seq = [r.layer, ...r.common.filter((l) => l !== r.layer)];
   // PlotBoardLayers plots the sequence bottom up: the layer itself last, on top
   for (const l of seq.slice().reverse()) {
@@ -152,7 +162,7 @@ export function boardPage(m: BoardModel, r: PagePlotRequest, log: PlotLog): Plot
     const prims = plotFile(m, l, opt, log);
     primItems(prims, vp, mono ? "#000000" : r.colors[l] || "#000000", bg || paper, items);
   }
-  if (p.drillMarks && p.format !== 1) drillMarkItems(m, new Set(seq), p.drillMarks === 1, vp, items, bg || paper);
+  if (p.drillMarks && p.format !== 1) drillMarkItems(m, new Set(seq), p.drillMarks === 1, vp, items, bg || paper, opt.widthAdj || 0);
   if (neg) for (let i = start; i < items.length; i++) items[i] = Object.assign({}, items[i], { color: invert(items[i].color) });
   const out: PlotPage = { w: page[0], h: page[1], name: r.layerName, items, background: bg, viewBox };
   // PlotInteractiveLayer: a property menu over each footprint, a bookmark under "Footprints"

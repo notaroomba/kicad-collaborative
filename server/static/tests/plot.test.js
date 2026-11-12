@@ -269,6 +269,17 @@ test("Schematic design variants: names in GetVariantNamesForUI order, a symbol a
   assert.strictEqual(V.symbolNodeForVariant(node, [], ""), null);
 });
 
+test("PostScript track width correction: tracks, pads and vias grow on copper, limited by the design rules", async () => {
+  const ps = async (adj, fmt) => String((await plot({ format: fmt || 2, widthAdjust: adj }, ["F.Cu"])).files[0].data);
+  const a = await ps(0), b = await ps(0.1);
+  assert.notStrictEqual(a, b, "the correction changes the PostScript");
+  assert.strictEqual(String((await plot({ format: 1, widthAdjust: 0 }, ["F.Cu"])).files[0].data).replace(/CreationDate.*\n/, ""),
+    String((await plot({ format: 1, widthAdjust: 0.1 }, ["F.Cu"])).files[0].data).replace(/CreationDate.*\n/, ""), "Gerber ignores it (getFineWidthAdj is PostScript only)");
+  const L = P.widthAdjustLimits;
+  assert.deepStrictEqual(L(null), [-0.199999, 0.199999], "KiCad's defaults: 0.2 mm min track, 0.2 mm clearance");
+  assert.deepStrictEqual(L(JSON.stringify({ board: { design_settings: { rules: { min_track_width: 0.15 } } }, net_settings: { classes: [{ name: "Default", clearance: 0.3 }, { name: "HV", clearance: 0.5 }, { name: "Fine", clearance: 0.1 }, { name: "Inherit" }] } })), [-0.149999, 0.099999]);
+});
+
 test("Placement files: the plain-text file in inches and the CSV (DIALOG_GEN_FOOTPRINT_POSITION)", () => {
   const rows = F.positions(ctx, { side: "both" });
   const mm = F.placementAscii(rows, "both", "2026-01-01 00:00:00", "Pcbnew test");

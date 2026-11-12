@@ -236,4 +236,20 @@ export function samePlotParams(a: PlotParams, b: PlotParams): boolean {
 /** The scale of a (scaleselection N): 0 is auto (null). */
 export function scaleOf(sel: number): number | null { return [null, 1, 1.5, 2, 3][sel] ?? 1; }
 
-export const plotParams = { readPlotParams, plotParamsText, samePlotParams, defaultPlotParams, lsetHex, lsetNames, fmtHex, parseHex, layerId, layerName, seqStackupForPlotting, scaleOf, PLOT_FORMAT, DRILL_MARKS };
+/** DIALOG_PLOT's m_widthAdjustMinValue / m_widthAdjustMaxValue from the project's design rules, mm (1 nm = 1e-6 mm):
+ *  [-(min track width - 1 nm), smallest netclass clearance - 1 nm]. */
+export function widthAdjustLimits(proText: string | null | undefined): [number, number] {
+  let minTrack = 0.2, clearance = 0.2;
+  try {
+    const j = JSON.parse(proText || "{}") as { board?: { design_settings?: { rules?: { min_track_width?: unknown } } }; net_settings?: { classes?: { name?: unknown; clearance?: unknown }[] } };
+    const r = j.board && j.board.design_settings && j.board.design_settings.rules;
+    if (r && typeof r.min_track_width === "number") minTrack = r.min_track_width;
+    const classes = (j.net_settings && Array.isArray(j.net_settings.classes)) ? j.net_settings.classes : [];
+    const def = classes.find((c) => c && c.name === "Default");
+    if (def && typeof def.clearance === "number") clearance = def.clearance;
+    for (const c of classes) if (c && c.name !== "Default" && typeof c.clearance === "number") clearance = Math.min(clearance, c.clearance);
+  } catch (e) { /* the defaults */ }
+  const nm = 1e-6, r6 = (v: number): number => Math.round(v * 1e6) / 1e6;
+  return [r6(-(minTrack - nm)), r6(clearance - nm)];
+}
+export const plotParams = { widthAdjustLimits, readPlotParams, plotParamsText, samePlotParams, defaultPlotParams, lsetHex, lsetNames, fmtHex, parseHex, layerId, layerName, seqStackupForPlotting, scaleOf, PLOT_FORMAT, DRILL_MARKS };

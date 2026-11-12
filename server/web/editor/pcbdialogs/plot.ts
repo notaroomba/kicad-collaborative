@@ -28,7 +28,7 @@ import { BS, PLOT } from "./canvas";
 import { openDrc } from "./inspect";
 import { runZoneFill } from "./zonefill";
 import { openGendrill } from "./gendrill";
-import { deliver, docDir, loadPrefs, savePrefs, whenDialogsClosed } from "./plot-out";
+import { deliver, docDir, loadPrefs, projectLastPlotPath, savePrefs, saveProjectLastPlotPath, whenDialogsClosed } from "./plot-out";
 import { box, checkField, ensureCss as kitCss, errorMessage, h, iconButton, numField, reportPanel, selectField, textField, type Field, type ReportLine } from "./ui";
 
 interface LayerRow { key: string; name: string; color: string }
@@ -58,24 +58,30 @@ const FAB_TECH = new Set(["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS",
 
 export interface PlotDialogOptions { gerber?: boolean; params?: PlotParams; outputDir?: string; allOrder?: string[]; allChecked?: string[]; variant?: string }
 
+/** StringFromValue( …, true ) in millimetres. */
+const mmText = (v: number): string => `${Number(v.toFixed(6))} mm`;
+
 /** BOARD_EDITOR_CONTROL::Plot (and Fabrication Outputs > Gerbers…, which opens the dialog set to Gerber). */
 export async function openPlotDialog(opts: PlotDialogOptions = {}): Promise<void> {
   const ctx = toolCtx() as ToolCtx;
   if (!E.kdoc || E.kdoc.type !== "pcb") { ctx.toast("Plot needs a board"); return; }
   let fab: KiCadFabApi, header: BoardHeader | null;
-  try { [fab, header] = await Promise.all([loadFab(), loadBoardHeader()]); }
+  let lastPath = "";
+  try { [fab, header, lastPath] = await Promise.all([loadFab(), loadBoardHeader(), projectLastPlotPath()]); }
   catch (e) { console.warn(e); ctx.toast("The plot writers could not be loaded"); return; }
   const P = PLOT().params;
   const version = header ? header.version : 0;
   const stored = P.readPlotParams(header ? header.setup : null, version);
   const p: PlotParams = opts.params ? Object.assign({}, opts.params) : Object.assign({}, stored);
   if (opts.gerber) p.format = 1;
+  // the project's last plot path wins over the board's output directory (DIALOG_PLOT::init_Dialog)
+  if (lastPath && !opts.params) p.outputDirectory = lastPath;
   const user = loadPrefs(USER_KEY, USER_DEFAULTS);
   const mask = BS().maskPaste(header ? header.setup : null);
-  show(fab, ctx, p, stored, version, user, !!(mask.maskExpansion || mask.maskMinWidth), opts, fab.variantNames(header ? header.variants : null));
+  show(fab, ctx, p, stored, version, user, !!(mask.maskExpansion || mask.maskMinWidth), opts, fab.variantNames(header ? header.variants : null), lastPath);
 }
 
-function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams, version: number, user: UserPlot, maskAlert: boolean, opts: PlotDialogOptions, variants: string[]): void {
+function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams, version: number, user: UserPlot, maskAlert: boolean, opts: PlotDialogOptions, variants: string[], lastPath: string): void {
   const P = PLOT().params;
   const doc = E.kdoc as KDoc;
   const enabled = fab.plottableLayers(doc as never);          // UIOrder
@@ -272,13 +278,23 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     t.backgroundColor = fmt === 4 && !t.blackAndWhite ? pdfBg : null;
     return t;
   }
+  let lastPlotPath = lastPath;
   function applyPlotSettings(): PlotParams {
     const t = current();
     // the PostScript adjustments, constrained as setDouble does (PLOT_MIN_SCALE 0.01, PLOT_MAX_SCALE 100)
     const clamp = (f: Field<number>, what: string): number => { const v = f.get(); const c = Math.max(0.01, Math.min(100, v || 0)); if (c !== v) { f.set(c); say("info", `${what} scale constrained.`); } return c; };
-    t.fineScaleX = clamp(fineX, "X"); t.fineScaleY = clamp(fineY, "Y"); t.widthAdjust = widthAdj.get();
+    t.fineScaleX = clamp(fineX, "X"); t.fineScaleY = clamp(fineY, "Y");
+    // PS Width correction: setInt( m_PSWidthAdjust, …, -(m_TrackMinWidth - 1), GetSmallestClearanceValue() - 1 )
+    const [lo, hi] = P.widthAdjustLimits(E.proSettings);
+    const wa = widthAdj.get() || 0, waC = Math.min(hi, Math.max(lo, wa));
+    if (waC !== wa) {
+      widthAdj.set(waC);
+      say("warning", `Width correction constrained.  The width correction value must be in the range of [${mmText(lo)}; ${mmText(hi)}] for the current design rules.`);
+    }
+    t.widthAdjust = waC;
     user.checkZones = zoneCheck.get(); user.fineScaleX = t.fineScaleX; user.fineScaleY = t.fineScaleY; user.widthAdjust = t.widthAdjust; user.pdfBackground = pdfBg; user.svgFitPage = svgFit.get();
     savePrefs(USER_KEY, user);
+    if (!ro && t.outputDirectory !== lastPlotPath) { lastPlotPath = t.outputDirectory; void saveProjectLastPlotPath(t.outputDirectory); }
     if (!ro && !P.samePlotParams(stored, t)) {
       void saveToBoard(t, version).then((ok) => { if (ok) Object.assign(stored, t); });
     }
@@ -291,7 +307,7 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     if (busy) return;
     const t = applyPlotSettings();
     if (!t.layerSelection.length) { errorMessage("No layer selected, Nothing to plot"); return; }
-    busy = true; reportLines.length = 0; report.set([]);
+    busy = true;   // the messages panel keeps what earlier plots reported, as KiCad's does
     try {
       // ZONE_FILLER_TOOL::CheckAllZones: only when the board changed since the last fill
       if (user.checkZones && !ro && zoneFillsDirty && [...doc.items.values()].some((it) => it.kind === "zone")) {
