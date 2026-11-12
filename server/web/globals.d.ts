@@ -1,7 +1,9 @@
 // globals.d.ts — ambient types for the imperative libraries the chrome consumes.
 // They are classic scripts registered on window (static/kicad-canvas.js, sch-tools.js,
 // pcb-tools.js, props.js, kicad-dialogs.js); the contracts are documented at the top of
-// each file.  S-expression trees are dynamic nested arrays, so they stay `SNode`.
+// each file (props.js and kicad-dialogs.js are built from web/tools/<name>/, whose own view
+// of these globals is web/tools/globals.d.ts).  S-expression trees are dynamic nested arrays,
+// so they stay `SNode`.
 
 /** A parsed s-expression: a list whose head is the keyword, e.g. ["at", 10, 20, 90]. */
 type SNode = (string | number | SNode)[];
@@ -177,7 +179,7 @@ interface PropsModule {
   render(el: HTMLElement, selected: { id: string } | null, ctx: ToolCtx): void;
   refresh(): void;
   inspect(item: KItem | null): void;
-  renderInto(el: HTMLElement, item: KItem, ctx: ToolCtx, opts?: unknown): unknown;
+  renderInto(el: HTMLElement, ctx: ToolCtx, item: KItem, opts?: unknown): unknown;
   helpers: Record<string, (...args: never[]) => unknown> & { setFootprintSide?(ctx: ToolCtx, item: KItem, side: string): void };
   KIND_NAMES: Record<string, string>;
 }
