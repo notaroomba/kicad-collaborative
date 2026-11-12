@@ -100,6 +100,16 @@ await test("unit display names go into every sub-symbol of the unit; jumper grou
   assert.deepStrictEqual(M.jumperGroups(s), [["1", "2"]]);
   M.setJumperGroups(s, []); assert.ok(!M.text(s).includes("jumper_pin_groups"));
 });
+await test("Show Pin Alternate Icons: a pin with alternates and a shown name gets drawAltPinModesIcon's strokes, beside the name", () => {
+  const L = load("canvas/libsym.ts");
+  const s = M.node(SYM); const sub = s.find((c) => Array.isArray(c) && c[0] === "symbol" && c[1] === "X_1_1"); const pin = sub.find((c) => Array.isArray(c) && c[0] === "pin");
+  pin.push(M.node('(alternate "SDA" bidirectional line)'));
+  const count = (on) => { const d = L.parseLibSymbol(s, { showPinAltIcons: on }); let n = 0; for (const it of d.items.values()) n += it.geom.length; return n; };
+  assert.strictEqual(count(true) - count(false), 7, "six strokes and the S-bend");
+  const d = L.parseLibSymbol(s, {}); const g = [...d.items.values()].find((it) => it.geom.length > 0 && it.libRef && JSON.stringify(it.geom).includes('"Pin names"'));
+  assert.ok(g, "drawn on the pin-name layer by default (SYMBOL_EDITOR_SETTINGS m_ShowPinAltIcons = true)");
+  const s2 = M.node(SYM); assert.strictEqual(L.parseLibSymbol(s2, { showPinAltIcons: true }).items.size, L.parseLibSymbol(s2, { showPinAltIcons: false }).items.size);
+});
 
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

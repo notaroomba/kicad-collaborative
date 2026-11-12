@@ -17,6 +17,7 @@ import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from ".
 import * as D from "./dialogs";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
+import { openPreferences } from "../dialogs/preferences";
 
 export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
@@ -48,7 +49,7 @@ export class SymbolEditor {
   tabs: Tab[] = [];
   cur = -1;
   tool: ToolId = "select";
-  showHiddenPins = true; showHiddenFields = true; showETypes = true; syncPins = false; showTree = true; showProps = true;
+  showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = false; showTree = true; showProps = true;
   gridMil = 50;
   lastPin = M.initialPinDefaults();
   lastRepeat: M.PinInfo | null = null;
@@ -300,7 +301,7 @@ export class SymbolEditor {
     const parent = this.parentOf(sym);
     const key = [M.text(sym), parent ? M.text(parent) : "", t.unit, t.body, this.showHiddenPins, this.showHiddenFields, this.showETypes].join("§");
     if (this.kcache && this.kcache.key === key) return this.kcache.doc;
-    const doc = K().parseLibSymbol(sym as unknown as SNode, { unit: t.unit, bodyStyle: t.body, showHiddenPins: this.showHiddenPins, showHiddenFields: this.showHiddenFields, showElectricalTypes: this.showETypes, parent: parent as unknown as SNode });
+    const doc = K().parseLibSymbol(sym as unknown as SNode, { unit: t.unit, bodyStyle: t.body, showHiddenPins: this.showHiddenPins, showHiddenFields: this.showHiddenFields, showElectricalTypes: this.showETypes, showPinAltIcons: this.showAltIcons, parent: parent as unknown as SNode });
     this.kcache = { key, doc }; return doc;
   }
   private view(): { s: number; px: number; py: number } {
@@ -402,7 +403,7 @@ export class SymbolEditor {
     const A = this.actions();
     const a = (id: string, enabled?: () => boolean, check?: () => boolean, label?: string): MenuEntry => this.act(id, A[id], { enabled, check, label });
     return [
-      ["File", [a("newLibrary", () => !E.viewOnly), a("addLibrary"), a("saveLibraryAs", () => !!this.currentLib()), a("newSymbol", () => !E.viewOnly), a("editLibSymbolWithLibEdit", fromSch, undefined, "Open Symbol from Library"), S,
+      ["File", [a("newLibrary", () => !E.viewOnly), a("addLibrary", () => !E.viewOnly), a("saveLibraryAs", () => !!this.currentLib()), a("newSymbol", () => !E.viewOnly), a("editLibSymbolWithLibEdit", fromSch, undefined, "Open Symbol from Library"), S,
         a("save", () => has() || !!this.currentLib()), a("saveSymbolAs", has), a("saveSymbolCopyAs", has), ...(fromSch() ? [] : [a("saveAll", () => this.projectLibs().some((l) => l.doc && l.doc.isModified))]), a("revert", () => !!this.tab && this.isModified(this.tab)), S,
         { label: "Import", sub: [a("importSymbol", () => !E.viewOnly, undefined, "Symbol..."), a("importGraphics", undefined, undefined, "Graphics...")] },
         { label: "Export", sub: [a("exportSymbol", has, undefined, "Symbol..."), a("exportSymbolView", has, undefined, "View as PNG..."), a("exportSymbolAsSVG", has, undefined, "Symbol as SVG...")] }, S,
@@ -412,7 +413,7 @@ export class SymbolEditor {
         a("selectAll", has), a("unselectAll", has), S, a("find"), a("findAndReplace"), S, a("pinTable", has), a("editSymbolPinMaps"), a("updateSymbolFields")]],
       ["View", [{ label: "Panels", sub: [a("showProperties", () => true, () => this.showProps), a("showLibraryTree", () => true, () => this.showTree)] }, S, a("showSymbolBrowser"), S,
         a("zoomInCenter"), a("zoomOutCenter"), a("zoomFitScreen"), a("zoomTool"), a("zoomRedraw"), S,
-        a("showHiddenPins", () => true, () => this.showHiddenPins), a("showHiddenFields", () => true, () => this.showHiddenFields), a("togglePinAltIcons"), S,
+        a("showHiddenPins", () => true, () => this.showHiddenPins), a("showHiddenFields", () => true, () => this.showHiddenFields), a("togglePinAltIcons", () => true, () => this.showAltIcons), S,
         a("nextSymbolTab", () => this.tabs.length > 1), a("prevSymbolTab", () => this.tabs.length > 1), a("closeSymbolTab", () => this.tabs.length > 0)]],
       ["Place", ["placeSymbolPin", "placeSymbolText", "drawSymbolTextBox", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawArc", "drawBezier", "drawSymbolLines", "drawSymbolPolygon"].map((id) => a(id, can, () => TOOL_ACTIONS[id] === this.tool))],
       ["Inspect", [a("showDatasheet", () => has() && !!M.fieldValue(this.symbol()!, "Datasheet")), S, a("checkSymbol", has)]],
@@ -445,7 +446,7 @@ export class SymbolEditor {
   private toggled(id: string): boolean {
     if (TOOL_ACTIONS[id]) return this.tool === TOOL_ACTIONS[id];
     switch (id) {
-      case "showElectricalTypes": return this.showETypes; case "showHiddenPins": return this.showHiddenPins; case "showHiddenFields": return this.showHiddenFields;
+      case "showElectricalTypes": return this.showETypes; case "showHiddenPins": return this.showHiddenPins; case "showHiddenFields": return this.showHiddenFields; case "togglePinAltIcons": return this.showAltIcons;
       case "showLibraryTree": return this.showTree; case "showProperties": return this.showProps; case "toggleSyncedPinsMode": return this.syncPins; case "toggleGrid": return true;
       case "millimetersUnits": return this.units === "mm"; case "milsUnits": return this.units === "mil"; case "inchesUnits": return this.units === "in";
     }
@@ -655,7 +656,9 @@ export class SymbolEditor {
     if (this._actions) return this._actions;
     const tool = (t: ToolId) => () => this.setTool(t);
     const A: Record<string, (() => void) | undefined> = {
-      newLibrary: () => void D.newLibrary(this), saveLibraryAs: () => { const l = this.currentLib(); if (l) void D.saveLibraryAs(this, l); },
+      newLibrary: () => void D.newLibrary(this), addLibrary: () => void D.addLibrary(this),
+      openPreferences: () => openPreferences(),
+      showSymbolBrowser: () => void this.symbolBrowser(), saveLibraryAs: () => { const l = this.currentLib(); if (l) void D.saveLibraryAs(this, l); },
       newSymbol: () => void D.newSymbol(this), editLibSymbolWithLibEdit: () => { const t = this.tab; if (t && t.origin) void this.editLibrarySymbol(t.origin.libId); },
       save: () => void this.save(), saveSymbolAs: () => void D.saveSymbolAs(this, false), saveSymbolCopyAs: () => void D.saveSymbolAs(this, true), saveAll: () => void this.saveAll(),
       revert: () => { const t = this.tab; if (t && !t.origin) { const l = this.libs.get(t.lib); if (l) void this.revertSymbol(l, t.name); } else if (t && t.origin) void this.revertScratch(); },
@@ -671,6 +674,7 @@ export class SymbolEditor {
       showHiddenPins: () => { this.showHiddenPins = !this.showHiddenPins; this.kcache = null; this.renderToolbars(); this.paint(); },
       showHiddenFields: () => { this.showHiddenFields = !this.showHiddenFields; this.kcache = null; this.renderToolbars(); this.paint(); },
       showElectricalTypes: () => { this.showETypes = !this.showETypes; this.kcache = null; this.renderToolbars(); this.paint(); },
+      togglePinAltIcons: () => { this.showAltIcons = !this.showAltIcons; this.kcache = null; this.renderToolbars(); this.paint(); },
       toggleSyncedPinsMode: () => { this.syncPins = !this.syncPins; this.renderToolbars(); },
       nextSymbolTab: () => { if (this.tabs.length) { this.cur = (this.cur + 1) % this.tabs.length; this.afterTabChange(); } },
       prevSymbolTab: () => { if (this.tabs.length) { this.cur = (this.cur - 1 + this.tabs.length) % this.tabs.length; this.afterTabChange(); } },
@@ -691,6 +695,15 @@ export class SymbolEditor {
     };
     for (const [id, t] of Object.entries(TOOL_ACTIONS)) A[id] = tool(t);
     return (this._actions = A);
+  }
+  /** View > Symbol Library Browser (SYMBOL_VIEWER_FRAME): browse every library; its Add Symbol to Schematic places the pick on the schematic. */
+  private async symbolBrowser(): Promise<void> {
+    type Chosen = { libId?: string; item: { id: string }; symbol?: string; fields?: unknown; unit?: number; keep?: boolean; allUnits?: boolean };
+    const L = (window as unknown as { KiCadLibrary?: { openChooser(kind: "symbol", o?: { browser?: boolean; title?: string }): Promise<Chosen | null>; placeSymbol(o: Record<string, unknown>): Promise<unknown> } }).KiCadLibrary;
+    if (!L) return;
+    const r = await L.openChooser("symbol", { browser: true }); if (!r) return;
+    await this.close(); if (this.isOpen) return;
+    await L.placeSymbol({ libId: r.libId || r.item.id, symbol: r.symbol || "", fields: r.fields, unit: r.unit, keep: r.keep, allUnits: r.allUnits }).catch((e: Error) => messageBox(e.message));
   }
   setUnits(u: Units): void { E.units = u; try { localStorage.setItem("kui.units", u); } catch (e) { /* no storage */ } this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
   setTool(t: ToolId): void {

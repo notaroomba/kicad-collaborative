@@ -10,7 +10,7 @@ import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
 import type { Box, Doc, GeomSink, Item, Pt, SheetContext, TextEffects, Tf } from "./types";
 
 /** What buildPinGeom needs of the symbol around a pin. */
-export interface PinSym { nameOff: number; hideNames: boolean; hideNums: boolean; maxNameHalf: number; col: (c: string) => string; alpha?: number; showHidden?: boolean }
+export interface PinSym { nameOff: number; hideNames: boolean; hideNums: boolean; maxNameHalf: number; col: (c: string) => string; alpha?: number; showHidden?: boolean; altIcons?: boolean }
 /** ${VAR} in free text: the title-block / sheet / project variables GetShownText resolves; unknown ones stay as written. */
 export function expandDocVars(doc: SheetContext | null | undefined, text: string): string {
   if (!text || text.indexOf("${") < 0) return text;
@@ -396,6 +396,19 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
 }
 
 /** One library pin mapped to the sheet: line, shape decoration, name and number (PIN_LAYOUT_CACHE rules). */
+/** drawAltPinModesIcon (sch_painter.cpp), base function selected: two arrows, the lower one leaving an S-bend. */
+function altPinModesIcon(item: GeomSink, x: number, y: number, size: number, rotate: boolean, color: string): void {
+  const w = size / 10, lyo = size / 4, ah = size / 8, layer = "Pin names", z = SCH_Z.pinName;
+  const P = (px: number, py: number): Pt => (rotate ? [x + py, y - px] : [x + px, y + py]);   // GAL Rotate( 270 deg )
+  const seg = (a: Pt, b: Pt) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" });
+  const tr: Pt = [size / 2, -lyo], br: Pt = [size / 2, lyo];
+  seg(P(tr[0], tr[1]), P(tr[0] - size, tr[1]));
+  seg(P(tr[0], tr[1]), P(tr[0] - ah * 1.2, tr[1] - ah)); seg(P(tr[0], tr[1]), P(tr[0] - ah * 1.2, tr[1] + ah));
+  seg(P(br[0], br[1]), P(br[0] - size / 2, br[1]));
+  seg(P(br[0], br[1]), P(br[0] - ah * 1.2, br[1] - ah)); seg(P(br[0], br[1]), P(br[0] - ah * 1.2, br[1] + ah));
+  const arc: Pt[] = []; for (let i = 0; i <= 8; i++) { const t = Math.PI - (Math.PI / 2) * i / 8; arc.push(P(lyo * Math.cos(t), lyo * Math.sin(t))); }   // centre (0, 0), 180 -> 90 deg
+  G(item, { t: "poly", pts: arc, close: false, w, color, layer, z });
+}
 export function buildPinGeom(item: GeomSink, g: SNode, tf: Tf, sym: PinSym): void {
   const type = str(g[1]), shape = str(g[2]);
   const [px, py, pr] = atOf(g); const lenN = kid(g, "length"); const len = lenN ? num(lenN[1]) : 2.54;
@@ -464,6 +477,15 @@ function buildPinGeomInner(item: GeomSink, g: SNode, tf: Tf, sym: PinSym, type: 
     const perp = clearance + numEf.size / 2 + numThick;
     if (vertical) textGeom(item, both ? pos[0] + perp : pos[0] - perp, alongY, pinNum, numEf.size, numColor, 90, ["center", "middle"], "Pin numbers", { z: SCH_Z.pinNum, w: numThick });
     else textGeom(item, alongX, both ? pos[1] + perp : pos[1] - perp, pinNum, numEf.size, numColor, 0, ["center", "middle"], "Pin numbers", { z: SCH_Z.pinNum, w: numThick });
+  }
+  if (showName && sym.altIcons && kids(g, "alternate").length) {
+    // PIN_LAYOUT_CACHE::getUntransformedAltIconBox + drawAltPinModesIcon: beyond an inside name, before an outside one
+    const icon = Math.min(nameEf.size, 1.5), nw = textWidth(pinName, nameEf.size, nameThick);
+    const ux = -ox, uy = -oy;   // connection point → body
+    const along = inside ? len + sym.nameOff + nw + icon * 0.75 : halfLen - nw / 2 - icon * 0.75;
+    const perp = inside ? 0 : vertical ? clearance + nameEf.size / 2 + nameThick : sym.maxNameHalf + clearance + nameThick;
+    const cx = pos[0] + ux * along - (vertical ? perp : 0), cy = pos[1] + uy * along - (vertical ? 0 : perp);
+    altPinModesIcon(item, cx, cy, icon, vertical, nameColor);
   }
   if (showName) {
     if (inside) {

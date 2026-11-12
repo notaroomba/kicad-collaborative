@@ -471,12 +471,26 @@ export async function newLibrary(se: SymbolEditor, seed?: string): Promise<Lib |
   const nm = await promptText("New Library", "Library name:", ""); if (nm === null) return null;
   const nick = nm.trim().replace(/\.kicad_sym$/i, ""); if (!nick || /[\\/:]/.test(nick)) { await messageBox("Illegal character found in library name."); return null; }
   if (se.libs.has(nick)) { await messageBox(`Library '${nick}' already exists.`); return null; }
+  return createProjectLibrary(se, nick, seed);
+}
+/** File > Add Library... (SYMBOL_EDIT_FRAME::AddLibraryFile( false )): an existing .kicad_sym joins the project as it is, with a sym-lib-table row. */
+export async function addLibrary(se: SymbolEditor): Promise<Lib | null> {
+  const proj = appState.project; if (!proj || E.viewOnly) { await messageBox("You need edit access to the project to add a library."); return null; }
+  const f = await pickFile(".kicad_sym"); if (!f) return null;
+  const nick = f.name.replace(/\.kicad_sym$/i, ""); if (!nick) return null;
+  if (se.libs.has(nick)) { await messageBox(`Library '${nick}' already exists.`); return null; }
+  const text = await f.text();
+  try { M.parseLibrary(text); if (!/^\s*\(kicad_symbol_lib\b/.test(text)) throw new Error("not a library"); } catch (e) { await messageBox("Could not open the library file."); return null; }
+  return createProjectLibrary(se, nick, text);   // the file's own bytes: nothing is rewritten
+}
+async function createProjectLibrary(se: SymbolEditor, nick: string, seed?: string): Promise<Lib | null> {
+  const proj = appState.project; if (!proj) return null;
   const path = nick + ".kicad_sym";
   let doc: { docId: string; path: string; docType: string };
   try { doc = await api(`/api/projects/${proj.projectId}/docs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, docType: "symbol_lib" }) }) as { docId: string; path: string; docType: string }; }
   catch (e) { await messageBox(`Could not create '${path}': ${(e as Error).message}`); return null; }
   const text = seed || M.NEW_LIBRARY_TEXT;
-  if (!(await saveTextDocument(doc.docId, text, { id: "lib", kind: "MODIFIED", typeName: "LIB_SAVED", properties: [] } as unknown as KChange))) { await messageBox(`Could not write '${path}'.`); return null; }
+  if (!(await firstSnapshot(doc.docId, text))) { await messageBox(`Could not write '${path}'.`); return null; }
   if (!proj.docs.some((d) => d.docId === doc.docId)) proj.docs.push({ docId: doc.docId, path: doc.path, docType: doc.docType || "symbol_lib" });
   await addToLibTable(nick, path);
   const ld = libDocFor(doc.docId, doc.path, nick);
@@ -484,6 +498,11 @@ export async function newLibrary(se: SymbolEditor, seed?: string): Promise<Lib |
   se.libs.set(nick, lib); ld.on((why, names) => (se as unknown as { onLibEvent(l: Lib, w: string, n?: string[]): void }).onLibEvent(lib, why, names)); ld.connect();
   se.treeSel = { lib: nick }; se.renderAll();
   return lib;
+}
+/** A document just created holds nothing the server can join yet: its first content is the snapshot at sequence 0. */
+async function firstSnapshot(docId: string, text: string): Promise<boolean> {
+  try { const r = await fetch(`/api/docs/${docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text }); if (r.ok) return true; } catch (e) { /* fall through */ }
+  return saveTextDocument(docId, text, { id: "lib", kind: "MODIFIED", typeName: "LIB_SAVED", properties: [] } as unknown as KChange);
 }
 async function addToLibTable(nick: string, path: string): Promise<void> {
   const proj = appState.project; if (!proj) return;
@@ -498,7 +517,7 @@ async function addToLibTable(nick: string, path: string): Promise<void> {
     } else {
       const d = await api(`/api/projects/${proj.projectId}/docs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "sym-lib-table" }) }) as { docId: string; path: string; docType: string };
       text = M.prettify(`(sym_lib_table (version 7) ${row})`);
-      await saveTextDocument(d.docId, text, { id: "table", kind: "MODIFIED", typeName: "LIB_TABLE", properties: [] } as unknown as KChange);
+      await firstSnapshot(d.docId, text);
       proj.docs.push({ docId: d.docId, path: d.path, docType: d.docType || "lib_table" });
     }
   } catch (e) { /* the library still works by its file name */ }

@@ -25,6 +25,8 @@ import type { Doc, GeomSink, Item, Pt } from "./types";
 export interface LibSymbolOpts {
   unit?: number; bodyStyle?: number;
   showHiddenPins?: boolean; showHiddenFields?: boolean; showElectricalTypes?: boolean;
+  /** View > Show Pin Alternate Icons (SYMBOL_EDITOR_SETTINGS m_ShowPinAltIcons, on by default) */
+  showPinAltIcons?: boolean;
   /** the whole symbol greyed (a legacy library's: m_ShowDisabled) */
   disabled?: boolean;
   /** the parent this derived symbol extends (its drawing is shown disabled, m_ShowGraphicsDisabled) */
@@ -116,7 +118,7 @@ export function parseLibSymbol(sym: SNode, opts?: LibSymbolOpts): Doc {
   const shown = (u: number, b: number) => (u === 0 || u === unit) && (b === 0 || b === body);
   const drawFrom = (owner: SNode, inherited: boolean): void => {
     const col = inherited ? dim : colAll;
-    const ps = pinSymOf(owner, col);
+    const ps = pinSymOf(owner, col); ps.altIcons = opts!.showPinAltIcons !== false;
     for (const sub of kids(owner, "symbol")) {
       const subName = str(sub[1]); const [u, b] = subUnitBody(subName); if (!shown(u, b)) continue;
       for (let j = 2; j < sub.length; j++) {
