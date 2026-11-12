@@ -10,6 +10,7 @@ import { evalRuleConstraint, parseDru, ruleClearance } from "./dru";
 import { assertionMarkers, disallowMarkers, ruleItems, sizeMarkers, trackAngleMarkers } from "./drc-rules";
 import type { DruRule } from "./dru";
 import { moreDrcMarkers } from "./drc-more";
+import { silkMaskMarkers } from "./drc-silk";
 
 // ---------------------------------------------------------------- design settings and DRC
 // BOARD_DESIGN_SETTINGS / NETCLASS defaults (board_design_settings.h, netclass.cpp): what a board without a
@@ -29,7 +30,7 @@ export function designSettings(src: string | DesignSource | DesignSettings | nul
   src = src as DesignSource;
   const rules = src.board && src.board.design_settings && src.board.design_settings.rules;   // a .kicad_pro
   const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities; if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; s.minMicroViaDrill = rules.min_microvia_drill || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; if (rules.min_hole_to_hole !== undefined) s.minHoleToHole = rules.min_hole_to_hole; if (rules.min_text_height !== undefined) s.minTextHeight = rules.min_text_height; if (rules.min_text_thickness !== undefined) s.minTextThickness = rules.min_text_thickness; }
+  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; s.minMicroViaDrill = rules.min_microvia_drill || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; if (rules.min_hole_to_hole !== undefined) s.minHoleToHole = rules.min_hole_to_hole; if (rules.min_text_height !== undefined) s.minTextHeight = rules.min_text_height; if (rules.min_text_thickness !== undefined) s.minTextThickness = rules.min_text_thickness; if (rules.min_silk_clearance !== undefined) s.minSilkClearance = rules.min_silk_clearance; if (rules.solder_mask_to_copper_clearance !== undefined) s.maskToCopperClearance = rules.solder_mask_to_copper_clearance; if (rules.min_resolved_spokes !== undefined) s.minResolvedSpokes = rules.min_resolved_spokes; }
   const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults; if (dflt) layerDefaults(dflt);   // Board Setup > Text & Graphics > Defaults: what a new item gets
   const ns = src.net_settings;
   if (ns && isList(ns.classes)) {
@@ -57,13 +58,14 @@ export function edgeShapes(doc: BoardDoc) {
     else if (kind === "poly") { const pts = K.ptsOf(node).map(([x, y]) => tf(x, y)); if (pts.length > 2) { shapes.push({ t: "path", pts: pts.concat([pts[0]]), r: w / 2 }); chains.push(pts.concat([pts[0]])); } }
     else if (kind === "curve") { const pts = K.bezierPts(K.ptsOf(node).map(([x, y]) => tf(x, y))); if (pts.length > 1) { shapes.push({ t: "path", pts, r: w / 2 }); chains.push(pts); } }
   };
-  const id = (x: number, y: number) => [x, y];
+  const id = (x: number, y: number) => [x, y]; const ids: string[] = [];
   for (const it of doc.items.values()) {
-    const n = it.node;
+    const n = it.node; const before = shapes.length;
     if (/^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) take(it.kind.slice(3), n, id, layerOf(n, "Dwgs.User"));
     else if (it.kind === "footprint") { const [fx, fy, frot] = K.atOf(n); const R = rotator(frot); const tf = (x: number, y: number) => { const [dx, dy] = R(x, y); return [fx + dx, fy + dy]; }; for (const g of n) if (isList(g) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g[0] as string)) take((g[0] as string).slice(3), g, tf, layerOf(g, "F.SilkS")); }
+    for (let i = before; i < shapes.length; i++) ids.push(it.id);
   }
-  return { shapes, chains };
+  return { shapes, chains, ids };
 }
 /** Join open polylines end to end (0.01 mm) into closed loops; returns the loops and whether anything stayed open. */
 export function chainLoops(chains: Pt[][], tol?: number) {
@@ -212,6 +214,8 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
   // hole to hole, text dimensions and mirroring, courtyard definitions and holes in courtyards, Edge.Cuts text,
   // keepout areas and disabled layers (drc-more.ts)
   out.push(...moreDrcMarkers(doc, s, rules));
+  // silkscreen overlaps, silk clipped by mask or by the board edge, solder mask bridges (drc-silk.ts)
+  out.push(...silkMaskMarkers(doc, s, rules));
   // the project's rule severities: ignored rules drop out, the rest take the severity the project gives them
   return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => { const sev = s.severities[m.code]; if (sev === "warning" || sev === "error") m.severity = sev; return m; });
 }

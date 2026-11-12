@@ -11,10 +11,10 @@ import { checkField, download, fmtLenU, grid, h, messageBox, notebook, openDialo
 import { openPopupMenu, type PopupEntry } from "../contextmenu";
 import { adoptProjectFile, canWriteProject, saveProjectFile } from "../projectfile";
 import { editProject, type Plain, type ProjectEdit } from "../../canvas/project-file";
-import { openBoardSetup } from "./board-setup";
+import { loadBoardHeader, openBoardSetup } from "./board-setup";
 
 export interface Marker { code: string; severity: string; x: number; y: number; text: string; ids: string[]; excluded?: boolean; comment?: string }
-interface Settings { severities: Record<string, string>; netclasses: Record<string, { clearance?: number }>; clearance: number; edgeClearance: number; minTrackWidth: number; minViaDrill: number }
+interface Settings { severities: Record<string, string>; netclasses: Record<string, { clearance?: number }>; clearance: number; edgeClearance: number; minTrackWidth: number; minViaDrill: number; boardSetup?: unknown }
 interface NetRow { name: string; code: number; padCount: number; viaCount: number; trackLength: number; zoneCount: number; unconnected: number }
 interface Stats { footprints: { total: number; front: number; back: number; smd: number; tht: number; other: number }; pads: { total: number; smd: number; tht: number; npth: number; connect: number };
   vias: { total: number; through: number; blind: number; micro: number }; tracks: { count: number; length: number }; zones: number; drills: number; width: number; height: number; area: number }
@@ -61,6 +61,8 @@ const prefs = { refill: true, parity: true, errors: true, warnings: true, exclus
 /** One DRC run as DIALOG_DRC lists it: the board checks, then schematic parity when asked and the schematic can be read. */
 async function collectMarkers(doc: KDoc, parity: boolean): Promise<{ markers: Marker[]; parityError: string }> {
   const s = settings();
+  // the board's (setup …) decides the solder mask expansion, minimum web width and via tenting the mask checks use
+  if (!s.boardSetup) { try { const h = await loadBoardHeader(); if (h && h.setup) s.boardSetup = h.setup; } catch (e) { /* the cached copy, if any */ } }
   let markers = PT().drc(doc, s, { rules: E.druText }); const pt = PT(); if (pt.customRuleMarkers && E.druText) markers = markers.concat(pt.customRuleMarkers(doc, s, E.druText)); let parityError = parity ? "" : "not requested";
   if (parity) {
     const res = await projectNetlist();
@@ -72,7 +74,7 @@ async function collectMarkers(doc: KDoc, parity: boolean): Promise<{ markers: Ma
       }
     }
   }
-  markers = markers.map((m) => (m.text.startsWith(drcItemTitle(m.code)) || !DRC_ITEMS.some((i) => i[1] === m.code) ? m : { ...m, text: `${drcItemTitle(m.code)}: ${m.text}` }));
+  markers = markers.map((m) => (m.text.startsWith(drcItemTitle(m.code)) || (m as Marker & { message?: boolean }).message || !DRC_ITEMS.some((i) => i[1] === m.code) ? m : { ...m, text: `${drcItemTitle(m.code)}: ${m.text}` }));
   return { markers, parityError };
 }
 

@@ -79,6 +79,7 @@ import { TOOLS, ghostSegs } from "./tools";
 import { newTracer, tracerFlip, tracerPosture, trailAdd } from "./tracer";
 import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges } from "./track-edit";
 import { DRCET, DRC_RUN_TEXT, fixDrcEntry, inspectDrcAction, violatingRuleName, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions } from "./drc-exclusions";
+import { silkClearanceMarkers, silkEdgeMarkers, silkToMaskMarkers, maskBridgeMarkers, silkMaskMarkers, boardElements, maskSetup, primShapes, geomShapes, elementGap } from "./drc-silk";
 import { courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeClearanceMarkers, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers } from "./drc-more";
 import { PCB_KINDS, rotateTextBoxNode, setTextBoxAngleSliding, textBoxAngle, alignBox, alignChanges, anchorOf, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, flipChanges, flipNode, mapNodePoints, mirrorChanges, mirrorNode, moveChanges, moveExactChanges, packChanges, positionRelativeChanges, rotateChanges, rotateNode, selectionCenter, swapChanges, topLeftAnchor, transformChanges, translateNode } from "./transforms";
 import { customRouteClearance, pinnedOpt, routedRuleItem, rulePairClearance, ruleSizes } from "./rule-resolver";
@@ -381,6 +382,8 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   DIM_TYPE, DIM_CLASS, TEXTBOX_MARGIN, EXT_HEIGHT, ARROW_LEN, EXT_OFFSET, RULE_AREA_LAYERS,
   // the rules engine in the router and DRC (sweep 4)
   customRouteClearance, rulePairClearance, ruleSizes, routedRuleItem, pinnedOpt, sizeMarkers, trackAngleMarkers, disallowMarkers, assertionMarkers, ruleItems, segCross, ruleCallFunc: callFunc, itemShape, footprintSelector,
+  // silkscreen and solder mask DRC (sweep 4)
+  silkClearanceMarkers, silkEdgeMarkers, silkToMaskMarkers, maskBridgeMarkers, silkMaskMarkers, boardElements, maskSetup, primShapes, geomShapes, elementGap,
   // the parity pass
   courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeClearanceMarkers, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers,
   DRCET, DRC_RUN_TEXT, fixDrcEntry, inspectDrcAction, violatingRuleName, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions,
