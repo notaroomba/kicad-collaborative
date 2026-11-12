@@ -5177,6 +5177,211 @@
     return [...silkToMaskMarkers(doc, s, rules, ms, pool), ...maskBridgeMarkers(doc, s, rules, ms, pool), ...silkClearanceMarkers(doc, s, rules, ms, pool), ...silkEdgeMarkers(doc, s, rules, ms, pool)];
   }
 
+  // web/tools/pcb-tools/drc-zones.ts
+  var defaultSeverity3 = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
+  var CONN_CODES = ["none", "thermal", "solid", "tht_thermal"];
+  function zoneConnection(z) {
+    const cp = K.kid(z, "connect_pads");
+    if (!cp) return "thermal";
+    const mode = cp.slice(1).find((x) => !Array.isArray(x));
+    const m = mode === void 0 ? "" : K.str(mode);
+    return m === "yes" ? "solid" : m === "no" ? "none" : m === "thru_hole_only" ? "tht_thermal" : "thermal";
+  }
+  var localConn = (n) => {
+    const z = n && K.kid(n, "zone_connect");
+    if (!z) return null;
+    const v = K.num(z[1], -1);
+    return CONN_CODES[v] || null;
+  };
+  function padZoneConnection(pad, fp, zone) {
+    const c = localConn(pad.node) || localConn(fp.node) || zoneConnection(zone);
+    if (c === "tht_thermal") return pad.type === "thru_hole" || pad.type === "np_thru_hole" ? "thermal" : "solid";
+    return c;
+  }
+  function thermalGap(pad, fp, zone) {
+    for (const n of [pad.node, fp.node]) {
+      const g2 = K.kid(n, "thermal_gap");
+      if (g2) return K.num(g2[1], 0.5);
+    }
+    const f = K.kid(zone, "fill");
+    const g = f && K.kid(f, "thermal_gap");
+    return g ? K.num(g[1], 0.5) : 0.5;
+  }
+  function padOutline(p, grow) {
+    const s = padShape(p);
+    const N2 = 32;
+    const out = [];
+    if (s.t === "circle") {
+      for (let i = 0; i < N2; i++) {
+        const a = 2 * Math.PI * i / N2;
+        out.push([s.x + (s.r + grow) * Math.cos(a), s.y + (s.r + grow) * Math.sin(a)]);
+      }
+      return out;
+    }
+    if (s.t === "seg") {
+      const r = s.r + grow;
+      const a = Math.atan2(s.b[1] - s.a[1], s.b[0] - s.a[0]);
+      for (let i = 0; i <= N2 / 2; i++) {
+        const t = a + Math.PI / 2 + Math.PI * i / (N2 / 2);
+        out.push([s.a[0] + r * Math.cos(t), s.a[1] + r * Math.sin(t)]);
+      }
+      for (let i = 0; i <= N2 / 2; i++) {
+        const t = a - Math.PI / 2 + Math.PI * i / (N2 / 2);
+        out.push([s.b[0] + r * Math.cos(t), s.b[1] + r * Math.sin(t)]);
+      }
+      return out;
+    }
+    if (s.t === "rect") {
+      const rr = Math.max(0, s.rr + grow);
+      const hw = s.w / 2 - s.rr, hh = s.h / 2 - s.rr;
+      const R = rotator(s.rot || 0);
+      const corners2 = [[hw, hh, 0], [-hw, hh, Math.PI / 2], [-hw, -hh, Math.PI], [hw, -hh, 3 * Math.PI / 2]];
+      for (const [cx, cy, a0] of corners2) for (let i = 0; i <= 8; i++) {
+        const t = a0 + Math.PI / 2 * i / 8;
+        const [dx, dy] = R(cx + rr * Math.cos(t), cy + rr * Math.sin(t));
+        out.push([s.x + dx, s.y + dy]);
+      }
+      return out;
+    }
+    return out;
+  }
+  function crossings(P, Q, qb) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (let i = 0; i < P.length; i++) {
+      const a = P[i], b = P[(i + 1) % P.length];
+      if (Math.max(a[0], b[0]) < qb[0] || Math.min(a[0], b[0]) > qb[2] || Math.max(a[1], b[1]) < qb[1] || Math.min(a[1], b[1]) > qb[3]) continue;
+      for (let j = 0; j < Q.length; j++) {
+        const c = Q[j], d = Q[(j + 1) % Q.length];
+        const r = [b[0] - a[0], b[1] - a[1]], s = [d[0] - c[0], d[1] - c[1]];
+        const den = r[0] * s[1] - r[1] * s[0];
+        if (Math.abs(den) < 1e-15) continue;
+        const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den, u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
+        if (t < 0 || t >= 1 || u < 0 || u >= 1) continue;
+        const p = [a[0] + t * r[0], a[1] + t * r[1]];
+        const k = Math.round(p[0] * 1e6) + "," + Math.round(p[1] * 1e6);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(p);
+      }
+    }
+    return out;
+  }
+  var boxOf = (pts) => {
+    let b = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of pts) b = [Math.min(b[0], x), Math.min(b[1], y), Math.max(b[2], x), Math.max(b[3], y)];
+    return b;
+  };
+  var isTeardrop = (z) => {
+    const a = K.kid(z, "attr");
+    return !!a && !!K.kid(a, "teardrop");
+  };
+  var padOnLayer = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu" && (layer === "F.Cu" || layer === "B.Cu"));
+  function starvedThermalMarkers(doc, s, rules, conds) {
+    const out = [];
+    const sev2 = defaultSeverity3("starved_thermal");
+    const all = conds || conductors(doc);
+    const fills = /* @__PURE__ */ new Map();
+    for (const c of all) if (c.kind === "zone") {
+      const l = [...c.layers][0];
+      let m = fills.get(c.id);
+      if (!m) fills.set(c.id, m = /* @__PURE__ */ new Map());
+      const a = m.get(l);
+      const pts = c.shape.pts;
+      if (a) a.push(pts);
+      else m.set(l, [pts]);
+    }
+    if (!fills.size) return out;
+    const fps = [...doc.items.values()].filter((it) => it.kind === "footprint");
+    const padsByFp = new Map(fps.map((fp) => [fp, padsOf(fp)]));
+    const netOfPad = (p) => p.net.name || (p.net.code > 0 && doc.nets ? String(doc.nets.get(p.net.code) || "") : "");
+    const defMin = typeof s.minResolvedSpokes === "number" ? s.minResolvedSpokes : 2;
+    for (const z of doc.items.values()) {
+      if (z.kind !== "zone" || K.kid(z.node, "keepout") || isTeardrop(z.node)) continue;
+      const zf = fills.get(z.id);
+      if (!zf) continue;
+      const zNet = (all.find((c) => c.id === z.id) || { net: "" }).net;
+      if (!zNet) continue;
+      for (const [layer, outlines] of zf) {
+        const obox = outlines.map(boxOf);
+        const zb = [Math.min(...obox.map((b) => b[0])), Math.min(...obox.map((b) => b[1])), Math.max(...obox.map((b) => b[2])), Math.max(...obox.map((b) => b[3]))];
+        const single = /* @__PURE__ */ new Map();
+        const singleConn = (jj) => {
+          let v = single.get(jj);
+          if (v !== void 0) return v;
+          const poly = { t: "poly", pts: outlines[jj] };
+          const ids = /* @__PURE__ */ new Set();
+          for (const c of all) {
+            if (c.kind === "zone" || c.net !== zNet || !c.layers.has(layer)) continue;
+            const b = c.bbox;
+            const ob = obox[jj];
+            if (b[0] > ob[2] || b[2] < ob[0] || b[1] > ob[3] || b[3] < ob[1]) continue;
+            if (coreDist(c.shape, poly) - shapeOffset(c.shape) <= 1e-6) ids.add(c.kind === "pad" ? c.id + ":" + c.index : c.id);
+            if (ids.size > 1) break;
+          }
+          v = ids.size <= 1;
+          single.set(jj, v);
+          return v;
+        };
+        for (const fp of fps) for (const p of padsByFp.get(fp)) {
+          const net = netOfPad(p);
+          if (!net || net !== zNet) continue;
+          if (!padOnLayer(p, layer)) continue;
+          const pb = shapeBBox(padShape(p));
+          if (pb[0] > zb[2] || pb[2] < zb[0] || pb[1] > zb[3] || pb[3] < zb[1]) continue;
+          if (padZoneConnection(p, fp, z.node) !== "thermal") continue;
+          const A = { kind: "pad", node: p.node, parent: fp, layer }, B = { kind: "zone", node: z.node, item: z, layer };
+          const hit = rules.length ? evalRuleConstraint(rules, "min_resolved_spokes", doc, s, A, B) : null;
+          if (hit && hit.severity === "ignore") continue;
+          const minCount = hit && hit.min != null ? hit.min : defMin;
+          const name = hit ? hit.name : "board setup constraints zone fill strategy";
+          if (!(minCount > 0)) continue;
+          const gh = rules.length ? evalRuleConstraint(rules, "thermal_relief_gap", doc, s, A, B) : null;
+          const midGap = (gh && gh.min != null ? gh.min : thermalGap(p, fp, z.node)) / 2;
+          const outline = padOutline(p, midGap);
+          if (outline.length < 3) continue;
+          const ob = boxOf(outline);
+          let spokes = 0, ignored = 0;
+          let ignoredPos = null;
+          outlines.forEach((fo, jj) => {
+            const b = obox[jj];
+            if (b[0] > ob[2] || b[2] < ob[0] || b[1] > ob[3] || b[3] < ob[1]) return;
+            const x = crossings(fo, outline, ob);
+            if (x.length < 2) return;
+            if (singleConn(jj)) {
+              ignored += Math.floor(x.length / 2);
+              ignoredPos = [(x[0][0] + x[1][0]) / 2, (x[0][1] + x[1][1]) / 2];
+            } else spokes += Math.floor(x.length / 2);
+          });
+          if (spokes === 0 && ignored === 0) continue;
+          if (spokes < minCount) {
+            const inFill = (q) => outlines.some((fo) => pointInPoly(fo, q[0], q[1]));
+            for (const c of all) {
+              if (c.kind !== "segment" && c.kind !== "arc" || c.net !== zNet || !c.layers.has(layer)) continue;
+              const [a0, a1] = c.anchors;
+              if (pointInPoly(outline, a0[0], a0[1])) {
+                if (inFill(a1)) spokes++;
+              } else if (pointInPoly(outline, a1[0], a1[1])) {
+                if (inFill(a0)) spokes++;
+              }
+            }
+          }
+          if (spokes === 0) {
+            spokes += ignored;
+            ignored = 0;
+          }
+          if (spokes >= minCount) continue;
+          const pos = ignored && ignoredPos ? ignoredPos : [p.x, p.y];
+          const detail2 = ignored ? `(layer ${layer}; ${ignored} spokes connected to isolated island)` : `(layer ${layer}; ${name} min spoke count ${minCount}; actual ${spokes})`;
+          const m = marker("starved_thermal", sev2, pos[0], pos[1], `Thermal relief connection to zone incomplete ${detail2}`, [z.id, fp.id]);
+          m.layer = layer;
+          out.push(m);
+        }
+      }
+    }
+    return out;
+  }
+
   // web/tools/pcb-tools/drc.ts
   var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
   function designSettings(src) {
@@ -5587,6 +5792,7 @@
     }
     out.push(...moreDrcMarkers(doc, s, rules));
     out.push(...silkMaskMarkers(doc, s, rules));
+    out.push(...starvedThermalMarkers(doc, s, rules, nl.conductors));
     return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => {
       const sev2 = s.severities[m.code];
       if (sev2 === "warning" || sev2 === "error") m.severity = sev2;
@@ -11832,7 +12038,7 @@
     let best = null;
     for (const it of doc.items.values()) {
       if (it.kind !== "footprint" || !it.bbox || x < it.bbox[0] || x > it.bbox[2] || y < it.bbox[1] || y > it.bbox[3]) continue;
-      for (const p of padsOf(it)) if ((!layer || padOnLayer(p, layer)) && padCovers(p, x, y) && (!best || p.w * p.h < best.pad.w * best.pad.h)) best = { item: it, index: p.index, pad: p };
+      for (const p of padsOf(it)) if ((!layer || padOnLayer2(p, layer)) && padCovers(p, x, y) && (!best || p.w * p.h < best.pad.w * best.pad.h)) best = { item: it, index: p.index, pad: p };
     }
     return best;
   }
@@ -12941,7 +13147,7 @@
     });
     return out;
   }
-  var padOnLayer = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu");
+  var padOnLayer2 = (p, layer) => p.layers.some((l) => l === layer || l === "*.Cu" || l === "F&B.Cu");
   function padCovers(p, x, y) {
     const [lx, ly] = rotator(-p.rot)(x - p.x, y - p.y);
     return Math.abs(lx) <= p.w / 2 && Math.abs(ly) <= p.h / 2;
@@ -12964,7 +13170,7 @@
       if (b && (x < b[0] - tol || x > b[2] + tol || y < b[1] - tol || y > b[3] + tol)) continue;
       if (it.kind === "footprint") {
         padsOf(it).forEach((p, i) => {
-          if (padOnLayer(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y), { fp: it.id, padIndex: p.index !== void 0 ? p.index : i });
+          if (padOnLayer2(p, layer)) take(p.x, p.y, p.net, "pad", padCovers(p, x, y), { fp: it.id, padIndex: p.index !== void 0 ? p.index : i });
         });
       } else if (it.kind === "via") {
         const a = pt(it.node, "at");
@@ -12990,7 +13196,7 @@
   }
   function netUnder(doc, x, y, layer) {
     for (const it2 of doc.items.values()) if (it2.kind === "footprint" && it2.bbox && x >= it2.bbox[0] && x <= it2.bbox[2] && y >= it2.bbox[1] && y <= it2.bbox[3]) {
-      for (const p of padsOf(it2)) if ((!layer || padOnLayer(p, layer)) && padCovers(p, x, y)) return p.net;
+      for (const p of padsOf(it2)) if ((!layer || padOnLayer2(p, layer)) && padCovers(p, x, y)) return p.net;
     }
     const it = hitTestItem(doc, x, y, HIT_MM);
     if (it && (it.kind === "via" || (it.kind === "segment" || it.kind === "arc") && (!layer || layerOf(it.node) === layer))) return netOf(it.node);
@@ -18393,6 +18599,10 @@
     itemShape,
     footprintSelector,
     // silkscreen and solder mask DRC (sweep 4)
+    starvedThermalMarkers,
+    padZoneConnection,
+    thermalGap,
+    padOutline,
     silkClearanceMarkers,
     silkEdgeMarkers,
     silkToMaskMarkers,
