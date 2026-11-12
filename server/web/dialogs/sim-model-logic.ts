@@ -5,6 +5,7 @@
 // RestoreInferredValue, DIALOG_SYMBOL_PROPERTIES::OnEditSpiceModel).  Pure: no DOM, so it runs under node.
 import { DEVICES, MODEL_CLASS, NGSPICE_MODEL_OF, PARAMS, PIN_NAMES, SPICE_INFO, TYPES, type ParamTuple } from "./sim-model-data";
 import type { NgspiceModelInfo } from "./sim-model-ngspice";
+import { isSeriesSwitchType, isSeriesType, parseIbis, seriesPartner, type IbisFile } from "./sim-ibis";
 
 // ---------------------------------------------------------------- field names (sim_model.h, sim_library*.h)
 export const F = {
@@ -158,8 +159,12 @@ export const byteSort = (a: string[]): string[] => a.slice().sort((x, y) => (x <
 // ---------------------------------------------------------------- SIM_MODEL
 export interface Param { info: ParamInfo; value: string }
 export interface ModelPin { name: string; symbolPinNumber: string }
+/** SIM_MODEL_IBIS's own state: the component, its pins (number, signal), the selected pin's models, the IO mode. */
+export type IbisIoMode = "SINGLE_ENDED" | "DIFFERENTIAL" | "SERIES";
+export interface IbisState { componentName: string; ibisPins: [string, string][]; ibisModels: string[]; enableDiff: boolean; ioMode: IbisIoMode; partnerPin: string; source: SimModel | null }
 export class SimModel {
   type: string; cls: string; params: Param[] = []; pins: ModelPin[] = []; base: SimModel | null = null;
+  ibis: IbisState | null = null;
   storedInValue = false; enabled = true; spiceCode = ""; fallback = false; readError = "";
   constructor(type: string, cls?: string) { this.type = type; this.cls = cls || modelClass(type); }
   get deviceType(): string { return typeInfo(this.type).deviceType; }
@@ -218,9 +223,81 @@ export class SimModel {
   findModelPinIndex(symbolPin: string): number { return this.pins.findIndex((p) => p.symbolPinNumber === symbolPin); }
 }
 
+// ---------------------------------------------------------------- SIM_MODEL_IBIS (sim_model_ibis.cpp)
+const CORNERS = ["typ", "min", "max"];
+const IBIS_COMMON: Partial<ParamInfo>[] = [
+  { name: "vcc", description: "Power supply" }, { name: "rpin", description: "Parasitic pin resistance" },
+  { name: "lpin", description: "Parasitic pin inductance" }, { name: "cpin", description: "Parasitic pin capacitance" },
+].map((o) => ({ ...o, type: "STRING", unit: "", category: "PRINCIPAL" as Category, defaultValue: "typ", enumValues: CORNERS }));
+const IBIS_WAVEFORM: Record<string, Partial<ParamInfo>[]> = {
+  KIBIS_DRIVER_DC: [{ name: "dc", type: "STRING", unit: "", defaultValue: "hi-Z", description: "DC Value", enumValues: ["hi-Z", "low", "high"] }],
+  KIBIS_DRIVER_RECT: [{ name: "ton", type: "FLOAT", unit: "s", defaultValue: "", description: "ON time" }, { name: "toff", type: "FLOAT", unit: "s", defaultValue: "", description: "OFF time" },
+    { name: "td", type: "FLOAT", unit: "s", defaultValue: "0", description: "Delay" }, { name: "n", type: "INT", unit: "", defaultValue: "1", description: "Number of cycles" }],
+  KIBIS_DRIVER_PRBS: [{ name: "f0", type: "FLOAT", unit: "Hz", defaultValue: "", description: "Bitrate" }, { name: "td", type: "FLOAT", unit: "s", defaultValue: "", description: "Delay" },
+    { name: "n", type: "INT", unit: "", defaultValue: "", description: "Number of bits" }],
+};
+const SW_STATE: Partial<ParamInfo> = { name: "sw_state", type: "FLOAT", unit: "", category: "PRINCIPAL", defaultValue: "1", description: "Switch state (1 = on, 0 = off)", isSpiceInstanceParam: true, spiceInstanceName: "SW_STATE" };
+/** SIM_MODEL_IBIS::GetIbisPins / GetComponentName read through the library's model. */
+export const ibisPinsOf = (m: SimModel): [string, string][] => (m.ibis ? (m.ibis.source ? ibisPinsOf(m.ibis.source) : m.ibis.ibisPins) : []);
+export const ibisComponentOf = (m: SimModel): string => (m.ibis ? (m.ibis.source ? ibisComponentOf(m.ibis.source) : m.ibis.componentName) : "");
+function removeSwitchState(m: SimModel): void { if (m.params.length && m.params[m.params.length - 1].info.name === "sw_state") m.params.pop(); }
+function addSwitchState(m: SimModel): void { if (m.findParamIndex("sw_state") < 0) m.addParam(newInfo(SW_STATE)); }
+/** SIM_MODEL_IBIS::SetIOMode: GND and IN/OUT; GND, + and -; or PIN_A and PIN_B (series), on symbol pins 1, 2, 3. */
+export function setIbisIoMode(m: SimModel, mode: IbisIoMode): void {
+  if (!m.ibis) return;
+  m.ibis.ioMode = mode;
+  const names = mode === "SINGLE_ENDED" ? ["GND", "IN/OUT"] : mode === "DIFFERENTIAL" ? ["GND", "+", "-"] : ["PIN_A", "PIN_B"];
+  m.pins = names.map((name, i) => ({ name, symbolPinNumber: String(i + 1) }));
+  if (mode !== "SERIES") removeSwitchState(m);
+}
+/** SIM_MODEL_IBIS::SwitchSingleEndedDiff. */
+export const switchSingleEndedDiff = (m: SimModel, diff: boolean): void => setIbisIoMode(m, diff ? "DIFFERENTIAL" : "SINGLE_ENDED");
+/** SIM_MODEL_IBIS::ChangePin: the pin's models become the model's list. */
+export function ibisChangePin(lib: IbisFile, m: SimModel, pin: string): boolean {
+  if (!m.ibis) return false;
+  const c = lib.components.find((x) => x.name === ibisComponentOf(m)); if (!c) return false;
+  const p = c.pins.find((x) => x.number === pin); if (!p) return false;
+  m.ibis.ibisModels = p.models.slice();
+  return true;
+}
+/** SIM_MODEL_IBIS::SetIbisModel: a Series / Series_switch model makes the device a two-pin series element. */
+export function ibisSetModel(lib: IbisFile, m: SimModel, pin: string, modelName: string): boolean {
+  if (!m.ibis) return false;
+  const c = lib.components.find((x) => x.name === ibisComponentOf(m)); if (!c) return false;
+  const km = lib.models.find((x) => x.name === modelName); if (!km) return false;
+  const kp = c.pins.find((x) => x.number === pin);
+  if (isSeriesType(km.type)) {
+    setIbisIoMode(m, "SERIES");
+    m.ibis.partnerPin = kp ? seriesPartner(c, kp.number) : "";
+    if (isSeriesSwitchType(km.type)) addSwitchState(m); else removeSwitchState(m);
+  } else {
+    m.ibis.partnerPin = ""; removeSwitchState(m);
+    if (m.ibis.ioMode === "SERIES") setIbisIoMode(m, "SINGLE_ENDED");
+  }
+  return true;
+}
+/** SIM_LIBRARY_IBIS::isPinDiff. */
+export const ibisPinIsDiff = (lib: IbisFile, comp: string, pin: string): boolean => { const c = lib.components.find((x) => x.name === comp); const p = c && c.pins.find((x) => x.number === pin); return !!(p && p.complementary); };
+/** SIM_MODEL_IBIS( type, source ): another waveform type of the same device, its parameters copied by name. */
+export function copyIbisModel(type: string, src: SimModel): SimModel {
+  const m = createModel(type); if (!m.ibis || !src.ibis) return m;
+  for (const p of m.params) { const q = src.params.find((x) => x.info.name === p.info.name); if (q) p.value = q.value; }
+  m.ibis.componentName = ibisComponentOf(src); m.ibis.ibisPins = ibisPinsOf(src).map((x) => [x[0], x[1]] as [string, string]);
+  m.ibis.ibisModels = src.ibis.ibisModels.slice(); m.ibis.enableDiff = src.ibis.enableDiff; m.ibis.partnerPin = src.ibis.partnerPin;
+  setIbisIoMode(m, src.ibis.ioMode);
+  if (src.ibis.ioMode === "SERIES") { const sw = src.findParam("sw_state"); if (sw) { addSwitchState(m); m.setParamValue("sw_state", sw.value); } }
+  return m;
+}
+
 /** SIM_MODEL::Create( TYPE ): the model with its parameters at their defaults (enums) or empty. */
 export function createModel(type: string): SimModel {
   const m = new SimModel(type);
+  if (m.cls === "ibis") {
+    for (const o of [...IBIS_COMMON, ...(IBIS_WAVEFORM[type] || []).map((x) => ({ ...x, category: "WAVEFORM" as Category }))]) m.addParam(newInfo(o));
+    m.ibis = { componentName: "", ibisPins: [], ibisModels: [], enableDiff: false, ioMode: "SINGLE_ENDED", partnerPin: "", source: null };
+    switchSingleEndedDiff(m, false);
+    return m;
+  }
   if (m.cls === "ngspice") {
     const mi = NG && NG[NGSPICE_MODEL_OF[type]]; if (!mi) return m;   // the tables are not loaded: pins only
     for (const t of mi.instanceParams) { const i = infoOf(t); if (i.category === "PRINCIPAL" || i.category === "GEOMETRY" || i.category === "FLAGS") m.addParam(i); }
@@ -238,7 +315,12 @@ export function createFallback(type: string, code = ""): SimModel {
 export function createFromBase(base: SimModel | null, symbolPins: string[], rows?: FieldLike[]): SimModel {
   let m: SimModel;
   if (!base) { m = createFallback(rows ? readTypeFromFields(rows).type : "NONE"); }
-  else {
+  else if (base.ibis && !base.fallback) {
+    // an IBIS component: the type may be overridden by the fields (a driver), the library model is only remembered
+    const over = rows ? readTypeFromFields(rows).type : "NONE";
+    m = createModel(over !== "NONE" && isKibis(over) ? over : base.type);
+    if (m.ibis) m.ibis.source = base;
+  } else {
     m = base.fallback ? createFallback(base.type) : base.cls === "rawspice" ? createModel("RAWSPICE") : createModel(base.type);
     m.base = base;
     if (m.cls === "subckt" && !m.fallback) { for (const p of base.pins) m.pins.push({ ...p }); for (const p of base.params) m.params.push({ info: p.info, value: "" }); }
@@ -315,6 +397,7 @@ export function parseValueField(m: SimModel, v: string): void {
 }
 /** SIM_MODEL::ReadDataFields. */
 export function readDataFields(m: SimModel, rows: FieldLike[] | null, symbolPins: string[]): void {
+  if (m.ibis) switchSingleEndedDiff(m, getFieldValue(rows, F.IBIS_DIFF) === "1");
   const en = getFieldValue(rows, F.ENABLE); if (en && /^[nf0]/i.test(en)) m.enabled = false;
   m.createPins(symbolPins);
   parsePins(m, getFieldValue(rows, F.PINS));
@@ -455,7 +538,7 @@ export const formatDecomposition = (repeat: boolean, shared: string[]): string =
 export interface SpiceItem { refName: string; modelName: string; baseModelName: string }
 function modelLine(m: SimModel, item: SpiceItem): string {
   const c = m.cls;
-  if (!m.fallback && (c === "ideal" || c === "source" || c === "behavioral" || c === "rawspice" || c === "subckt")) return "";
+  if (!m.fallback && (c === "ideal" || c === "source" || c === "behavioral" || c === "rawspice" || c === "subckt" || c === "ibis")) return "";
   if (!m.fallback && c === "tline") {
     let r = "0", l = "0", g = "0", cc = "0", len = "1";
     if (m.type === "TLINE_Z0") {
@@ -580,7 +663,21 @@ export function preview(m: SimModel, item: SpiceItem): string {
 
 // ---------------------------------------------------------------- SPICE library (.lib / .sub / .cir / .mod)
 export interface LibModel { name: string; model: SimModel; code: string }
-export interface SpiceLibrary { models: LibModel[]; errors: string[] }
+export interface SpiceLibrary { models: LibModel[]; errors: string[]; ibis?: IbisFile }
+/** SIM_LIBRARY::Create: a path ending in "ibs" is an IBIS library (SIM_LIBRARY_IBIS), anything else SPICE. */
+export const isIbisPath = (p: string): boolean => p.endsWith("ibs");
+/** SIM_LIBRARY_IBIS::ReadFile: one KIBIS_DEVICE model per [Component], with the component's pins (InitModel). */
+export function parseIbisLibrary(text: string, path: string): SpiceLibrary {
+  const k = parseIbis(text);
+  if (!k.valid) return { models: [], errors: [`Invalid IBIS file '${path}'`], ibis: k };
+  const lib: SpiceLibrary = { models: [], errors: [], ibis: k };
+  for (const c of k.components) {
+    const m = createModel("KIBIS_DEVICE");
+    if (m.ibis) { m.ibis.componentName = c.name; m.ibis.ibisPins = c.pins.map((p) => [p.number, p.signal]); }
+    lib.models.push({ name: c.name, model: m, code: "" });
+  }
+  return lib;
+}
 interface Unit { kind: "model" | "subckt"; name: string; code: string; head: string[]; body: string[] }
 /** Logical lines: '*' comment lines dropped, ';' '$' '//' tail comments cut, '+' and '\\' continuations joined. */
 function logicalLines(text: string): { text: string; raw: string }[] {
@@ -776,7 +873,8 @@ export class SimSession<R extends FieldLike> {
   }
   /** loadLibrary: the library's models, the one named in Sim.Name read with the symbol's overrides. */
   loadLibrary(path: string, text: string): boolean {
-    const lib = parseSpiceLibrary(text); this.libraryPath = path;
+    const lib = isIbisPath(path) ? parseIbisLibrary(text, path) : parseSpiceLibrary(text); this.libraryPath = path;
+    this.ibisPinSel = -1; this.ibisModelValue = ""; this.ibisDiff = false;
     if (lib.errors.length && !lib.models.length) { this.messages.push(...lib.errors); this.library = null; this.libModels.clear(); return false; }
     this.library = { path, lib }; this.libModels.clear(); this.unknownModel = false;
     const mn = getFieldValue(this.fields, F.NAME);
@@ -786,7 +884,68 @@ export class SimSession<R extends FieldLike> {
     if (!lib.models.some((x) => x.name.toLowerCase() === mn.toLowerCase())) { this.messages.push(`No model named '${mn}' in '${path}'.`); this.modelName = ""; void names; return false; }
     this.modelName = names.find((n) => n === mn) || names.find((n) => n.toLowerCase() === mn.toLowerCase()) || names[0] || "";
     this.curType = this.curModel().type;
+    this.restoreIbis();
     return true;
+  }
+  // ---- IBIS (DIALOG_SIM_MODEL: m_pinCombobox, m_pinModelCombobox, m_differentialCheckbox, m_waveformChoice)
+  ibisPinSel = -1; ibisModelValue = ""; ibisDiff = false;
+  /** isIbisLoaded: the library read is an IBIS file. */
+  ibisLoaded(): boolean { return !!(this.library && this.library.lib.ibis); }
+  private ibisFile(): IbisFile | null { return this.library && this.library.lib.ibis ? this.library.lib.ibis : null; }
+  /** The Pin: list, "number - signal" for each pin of the selected component. */
+  ibisPinLabels(): string[] { const m = this.curModel(); return ibisPinsOf(m).map((p) => `${p[0]} - ${p[1]}`); }
+  /** The Model: list of the selected pin (ChangePin). */
+  ibisModelChoices(): string[] { const m = this.curModel(); return m.ibis && this.ibisPinSel >= 0 ? m.ibis.ibisModels.slice() : []; }
+  /** CanDifferential of the selected pin: the Differential checkbox is shown only then. */
+  ibisCanDiff(): boolean { const m = this.curModel(); return !!(m.ibis && m.ibis.enableDiff); }
+  /** onPinCombobox: the pin's models; the only one is selected. */
+  selectIbisPin(i: number): void {
+    const lib = this.ibisFile(); const m = this.curModel(); if (!lib || !m.ibis) return;
+    const pins = ibisPinsOf(m); if (i < 0 || i >= pins.length) { this.ibisPinSel = -1; m.ibis.ibisModels = []; m.ibis.enableDiff = false; return; }
+    this.ibisPinSel = i; ibisChangePin(lib, m, pins[i][0]);
+    m.ibis.enableDiff = ibisPinIsDiff(lib, ibisComponentOf(m), pins[i][0]);
+    if (!m.ibis.enableDiff && this.ibisDiff) { this.ibisDiff = false; switchSingleEndedDiff(m, false); }
+    this.ibisModelValue = m.ibis.ibisModels.length === 1 ? m.ibis.ibisModels[0] : "";
+  }
+  /** onPinModelCombobox: SetIbisModel. */
+  selectIbisModel(name: string): void {
+    const lib = this.ibisFile(); const m = this.curModel(); this.ibisModelValue = name; if (!lib || !m.ibis) return;
+    const pins = ibisPinsOf(m); const pin = this.ibisPinSel >= 0 ? pins[this.ibisPinSel][0] : "";
+    ibisSetModel(lib, m, pin, name);
+  }
+  /** onDifferentialCheckbox. */
+  setIbisDiff(on: boolean): void { const m = this.curModel(); this.ibisDiff = on; if (m.ibis) switchSingleEndedDiff(m, on && m.ibis.enableDiff); }
+  /** The Waveform: choice: the KIBIS types' descriptions. */
+  waveformChoices(): { items: string[]; sel: number } {
+    const m = this.curModel(); const items: string[] = []; let sel = -1;
+    for (const t of TYPE_IDS) if (typeInfo(t).deviceType === "KIBIS") { items.push(typeInfo(t).description); if (t === m.type) sel = items.length - 1; }
+    return { items, sel };
+  }
+  /** onWaveformChoice: the library model is replaced by a SIM_MODEL_IBIS( type, model ), then the fields are read into it. */
+  selectWaveform(description: string): void {
+    const cur = this.curModel(); if (!cur.ibis) return;
+    for (const t of TYPE_IDS) if (typeInfo(t).deviceType === "KIBIS" && typeInfo(t).description === description) {
+      const m = copyIbisModel(t, cur); m.ibis!.source = cur.ibis.source;
+      try { readDataFields(m, this.fields, this.pinNumbers); } catch (e) { this.messages.push((e as Error).message); }
+      if (this.ibisDiff && m.ibis!.enableDiff) switchSingleEndedDiff(m, true);
+      this.libModels.set(this.modelName, m); this.curType = t;
+      break;
+    }
+  }
+  /** onModelNameChoice for an IBIS library: the pin and model lists empty again. */
+  resetIbis(): void { this.ibisPinSel = -1; this.ibisModelValue = ""; this.ibisDiff = false; const m = this.curModel(); if (m.ibis) { m.ibis.ibisModels = []; m.ibis.enableDiff = false; } }
+  /** TransferDataToWindow: the pin, model and differential flag from Sim.Ibis.Pin / Sim.Ibis.Model / Sim.Ibis.Diff. */
+  restoreIbis(): void {
+    if (!this.ibisLoaded()) return;
+    const m = this.curModel(); if (!m.ibis) return;
+    const pin = getFieldValue(this.fields, F.IBIS_PIN); const i = ibisPinsOf(m).findIndex((p) => p[0] === pin);
+    if (i >= 0) {
+      this.selectIbisPin(i);
+      const mn = getFieldValue(this.fields, F.IBIS_MODEL);
+      if (m.ibis.ibisModels.includes(mn)) this.selectIbisModel(mn);
+    }
+    const diff = getFieldValue(this.fields, F.IBIS_DIFF) === "1"; this.ibisDiff = diff; switchSingleEndedDiff(m, diff);
+    if (this.ibisModelValue) this.selectIbisModel(this.ibisModelValue);
   }
   /** wxArrayString::Sort: the model list in case-sensitive code-point order. */
   modelNames(filter = ""): string[] {
@@ -855,6 +1014,12 @@ export class SimSession<R extends FieldLike> {
     }
     setFieldValue(this.fields, F.LIBRARY, path, false, this.mk);
     setFieldValue(this.fields, F.NAME, name, false, this.mk);
+    if (this.ibisLoaded() && m.ibis) {
+      const pins = ibisPinsOf(m);
+      setFieldValue(this.fields, F.IBIS_PIN, this.ibisPinSel >= 0 && this.ibisPinSel < pins.length ? pins[this.ibisPinSel][0] : "", true, this.mk);
+      setFieldValue(this.fields, F.IBIS_MODEL, this.ibisModelValue, true, this.mk);
+      setFieldValue(this.fields, F.IBIS_DIFF, m.ibis.enableDiff && this.ibisDiff ? "1" : "", true, this.mk);
+    }
     if (m.type === "RAWSPICE" && opts.rawCode !== undefined) m.setParamValue("model", opts.rawCode.trim());
     if (m.hasPrimaryValue()) m.storedInValue = this.storeInValue;
     for (let i = 0; i < m.pins.length; i++) if (!this.pinNumbers.includes(m.pins[i].symbolPinNumber)) m.assignByIndex(i, "");

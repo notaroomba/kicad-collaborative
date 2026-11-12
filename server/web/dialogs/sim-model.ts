@@ -122,6 +122,12 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   const browseBtn = h("button", { type: "button", class: "btn", id: "kd-sim-browse", title: "Browse", style: "padding:2px 6px;display:inline-flex;align-items:center", disabled: ro }, folderIcon());
   const filter = h("input", { type: "text", id: "kd-sim-filter", placeholder: "Filter", style: "width:100%", disabled: ro }) as HTMLInputElement;
   const modelList = h("select", { size: 6, id: "kd-sim-models", style: "width:100%;font-size:12px", disabled: ro }) as HTMLSelectElement;
+  // the IBIS rows (shown only when the library is an IBIS file)
+  const ibisPinSel = h("select", { id: "kd-sim-ibis-pin", style: "width:100%", disabled: ro }) as HTMLSelectElement;
+  const ibisDiffCb = h("input", { type: "checkbox", id: "kd-sim-ibis-diff", style: "width:auto;margin:0", disabled: ro }) as HTMLInputElement;
+  const ibisDiffRow = h("label", { style: "display:flex;gap:6px;align-items:center" }, ibisDiffCb, "Differential");
+  const ibisModelSel = h("select", { id: "kd-sim-ibis-model", style: "width:100%", disabled: ro }) as HTMLSelectElement;
+  const waveformSel = h("select", { id: "kd-sim-waveform", style: "width:100%", disabled: ro }) as HTMLSelectElement;
   const deviceSel = h("select", { id: "kd-sim-device", disabled: ro }) as HTMLSelectElement;
   const typeSel = h("select", { id: "kd-sim-type", disabled: ro }) as HTMLSelectElement;
   const typeLabel = h("label", null, "Device type:");
@@ -163,12 +169,30 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
       else { fillSelect(deviceSel, [], -1); fillSelect(typeSel, [], -1); }
       const show = typeSel.options.length > 1; typeSel.style.visibility = typeLabel.style.visibility = show ? "visible" : "hidden";
     }
+    updateIbisWidgets(m);
     if (modelNb) modelNb.select(!m.fallback && m.cls === "rawspice" ? 1 : 0);
     const sv = ses.saveInValueLabel(); saveLabel.textContent = sv.label; saveCb.disabled = ro || !sv.enabled; if (!sv.enabled) ses.storeInValue = false; saveCb.checked = ses.storeInValue;
     if (m !== prevModel) buildParams(m); else refreshParams(m);
     updateCode(m);
     updatePins(m);
     prevModel = m;
+  };
+
+  // ---------------------------------------------------------------- updateIbisWidgets
+  const ibisRows: HTMLElement[] = [];
+  const modelLabel = lbl("Model:", libLabels);
+  const updateIbisWidgets = (m: S.SimModel): void => {
+    const on = ses.ibisLoaded() && ses.source === "library";
+    for (const r of ibisRows) r.style.display = on ? "" : "none";
+    modelLabel.textContent = ses.ibisLoaded() ? "Component:" : "Model:";
+    filter.disabled = ro || ses.ibisLoaded() || !(ses.source === "library" || ses.source === null);
+    if (!on || !m.ibis) return;
+    fillSelect(ibisPinSel, ses.ibisPinLabels(), ses.ibisPinSel);
+    const models = ses.ibisModelChoices(); ibisModelSel.innerHTML = "";
+    for (const n of models) { const o = h("option", { value: n }, n) as HTMLOptionElement; if (n === ses.ibisModelValue) o.selected = true; ibisModelSel.append(o); }
+    if (!models.includes(ses.ibisModelValue)) ibisModelSel.selectedIndex = -1;
+    ibisDiffRow.style.display = ses.ibisCanDiff() ? "flex" : "none"; ibisDiffCb.checked = ses.ibisDiff;
+    const wc = ses.waveformChoices(); fillSelect(waveformSel, wc.items, wc.sel);
   };
 
   // ---------------------------------------------------------------- updateModelParamsTab (a wxPropertyGrid as a table)
@@ -282,6 +306,7 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   };
   const onModelChoice = (): void => {
     ses.source = "library"; ses.modelName = modelList.value;
+    if (ses.ibisLoaded()) ses.resetIbis();
     const m = ses.curModel();
     if (m.fallback && ses.library) showInfo(`Failed to parse:\n\n${m.spiceCode.split("\n").filter((l) => !l.startsWith("*")).join("\n")}\nUsing generic SPICE model.`);
     else showInfo("");
@@ -291,7 +316,12 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   // ---------------------------------------------------------------- layout
   const libBox = h("div", { style: "margin-left:22px;display:grid;grid-template-columns:max-content 1fr;gap:4px 8px;align-items:start" },
     lbl("File:", libLabels), h("div", { style: "display:flex;gap:4px" }, pathText, browseBtn),
-    lbl("Model:", libLabels), h("div", { style: "display:flex;flex-direction:column;gap:3px" }, filter, modelList));
+    modelLabel, h("div", { style: "display:flex;flex-direction:column;gap:3px" }, filter, modelList));
+  {
+    const row = (l: HTMLElement | null, w: HTMLElement) => { const a = l || h("span"); ibisRows.push(a, w); libBox.append(a, w); };
+    row(lbl("Pin:", libLabels), ibisPinSel); row(null, ibisDiffRow); row(lbl("Model:", libLabels), ibisModelSel); row(lbl("Waveform:", libLabels), waveformSel);
+    for (const r of ibisRows) r.style.display = "none";
+  }
   const builtinBox = h("div", { style: "margin-left:22px;display:grid;grid-template-columns:max-content 1fr;gap:4px 8px;align-items:center" },
     lbl("Device:", builtinLabels), deviceSel, typeLabel, typeSel);
   builtinLabels.push(typeLabel);
@@ -331,6 +361,10 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
     ev.preventDefault(); modelList.selectedIndex = sel; onModelChoice();
   });
   modelList.addEventListener("change", onModelChoice);
+  ibisPinSel.addEventListener("change", () => { ses.selectIbisPin(ibisPinSel.selectedIndex); updateWidgets(); });
+  ibisModelSel.addEventListener("change", () => { ses.selectIbisModel(ibisModelSel.value); updateWidgets(); });
+  ibisDiffCb.addEventListener("change", () => { ses.setIbisDiff(ibisDiffCb.checked); updateWidgets(); });
+  waveformSel.addEventListener("change", () => { const o = waveformSel.options[waveformSel.selectedIndex]; if (o) ses.selectWaveform(o.textContent || ""); updateWidgets(); });
   deviceSel.addEventListener("change", () => { ses.selectDevice(deviceSel.options[deviceSel.selectedIndex]?.text || ""); updateWidgets(); });
   typeSel.addEventListener("change", () => { ses.selectType(typeSel.options[typeSel.selectedIndex]?.text || ""); updateWidgets(); });
   saveCb.addEventListener("change", () => { ses.storeInValue = saveCb.checked; });
