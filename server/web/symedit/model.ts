@@ -1030,3 +1030,4 @@ export function syncFieldsFromParent(lib: SymLib | null, sym: Node, o: FieldSync
   sym.splice(at + 1, 0, ...added);
   return true;
 }
+export { kid as kidOf, kids as kidsOf, str as strOf };

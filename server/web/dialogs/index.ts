@@ -82,6 +82,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   // KiCad's hotkeys for these commands; a dialog that is open keeps the keyboard
   window.addEventListener("keydown", (ev) => {
     if (store.get().view !== "editor" || !E.kdoc) return;
+    if (document.getElementById("symedit")) return;   // the Symbol Editor frame is up: its own keys
     const mod = ev.ctrlKey || ev.metaKey, k = ev.key.toLowerCase(); let run: (() => void) | null = null;
     if (mod && !ev.shiftKey && k === "f" && isSch()) run = () => openFind(ev.altKey);
     else if (mod && !ev.altKey && !ev.shiftKey && ev.key === ",") run = () => openPreferences();

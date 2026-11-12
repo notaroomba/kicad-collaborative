@@ -15,6 +15,7 @@ import { comboOf } from "../editor/hotkeys";
 import { fmtCoord, unitName } from "../units";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
 import * as D from "./dialogs";
+import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
 import { openPreferences } from "../dialogs/preferences";
@@ -258,6 +259,17 @@ export class SymbolEditor {
   infoBarError(msg: string): void {
     const el = this.el.info; if (!el) return; el.innerHTML = ""; el.append(h("span", { class: "se-info-error" }, msg)); el.classList.add("show");
   }
+  /** SCH_BASE_FRAME::ShowFindReplaceStatus: an information message for a while (WX_INFOBAR::ShowMessageFor). */
+  infoBarMessage(msg: string, ms: number): void {
+    const el = this.el.info; if (!el) return; el.innerHTML = ""; el.append(h("span", null, msg)); el.classList.add("show");
+    clearTimeout(this.infoTimer); this.infoTimer = setTimeout(() => this.renderInfo(), ms);
+  }
+  private infoTimer: ReturnType<typeof setTimeout> | undefined;
+  /** EDA_DRAW_FRAME::FocusOnLocation: centre the view on a point (mm, Y down) without changing the zoom. */
+  focusOn(x: number, y: number): void {
+    const v = this.view(); if (!this.cv) return;
+    v.px = (this.cv.clientWidth || 800) / 2 - x * v.s; v.py = (this.cv.clientHeight || 600) / 2 - y * v.s; this.paint(); this.renderStatus();
+  }
   readOnlyNotice(): void {
     const t = this.tab; if (!t) return;
     const lib = this.libs.get(t.lib);
@@ -414,7 +426,7 @@ export class SymbolEditor {
         a("compareLibraryWithFile"), S, a("symbolProperties", has), S, { label: "Close", key: "Ctrl+W", run: () => void this.close(), enabled: () => true }]],
       ["Edit", [a("undo", () => !!this.tab && this.tab.undo.length > 0 && !this.readOnly()), a("redo", () => !!this.tab && this.tab.redo.length > 0 && !this.readOnly()), S,
         a("cut", () => can() && this.tab!.sel.size > 0), a("copy", () => has() && this.tab!.sel.size > 0), a("copyAsText", () => has() && this.tab!.sel.size > 0), a("paste", () => can() && !!this.clip), a("doDelete", () => can() && this.tab!.sel.size > 0), a("duplicate", () => can() && this.tab!.sel.size > 0), S,
-        a("selectAll", has), a("unselectAll", has), S, a("find"), a("findAndReplace"), S, a("pinTable", has), a("editSymbolPinMaps"), a("updateSymbolFields", () => can() && M.isDerived(this.symbol()!))]],
+        a("selectAll", has), a("unselectAll", has), S, a("find", has), a("findAndReplace", has), S, a("pinTable", has), a("editSymbolPinMaps"), a("updateSymbolFields", () => can() && M.isDerived(this.symbol()!))]],
       ["View", [{ label: "Panels", sub: [a("showProperties", () => true, () => this.showProps), a("showLibraryTree", () => true, () => this.showTree)] }, S, a("showSymbolBrowser"), S,
         a("zoomInCenter"), a("zoomOutCenter"), a("zoomFitScreen"), a("zoomTool"), a("zoomRedraw"), S,
         a("showHiddenPins", () => true, () => this.showHiddenPins), a("showHiddenFields", () => true, () => this.showHiddenFields), a("togglePinAltIcons", () => true, () => this.showAltIcons), S,
@@ -668,6 +680,7 @@ export class SymbolEditor {
       revert: () => { const t = this.tab; if (t && !t.origin) { const l = this.libs.get(t.lib); if (l) void this.revertSymbol(l, t.name); } else if (t && t.origin) void this.revertScratch(); },
       importSymbol: () => { const l = this.currentLib(); if (l && l.kind === "project") void D.importSymbol(this, l); else void messageBox("Select a project library to import into."); },
       exportSymbol: () => void D.exportSymbol(this), exportSymbolView: () => void D.exportPng(this), exportSymbolAsSVG: () => void D.exportSvg(this),
+      find: () => openSymbolFind(this, false), findAndReplace: () => openSymbolFind(this, true), findNext: () => void findNextMatch(this), findPrevious: () => void findNextMatch(this, true),
       symbolProperties: () => void D.symbolProperties(this), updateSymbolFields: () => D.updateSymbolFields(this),
       undo: () => this.undo(), redo: () => this.redo(),
       cut: () => { this.copySel(); this.deleteSel("Delete"); }, copy: () => this.copySel(), copyAsText: () => this.copySel(true), paste: () => this.paste(), doDelete: () => this.deleteSel(), duplicate: () => this.duplicateSel(),
@@ -1084,7 +1097,11 @@ export class SymbolEditor {
   private onKey(ev: KeyboardEvent): void {
     if (!this.isOpen) return;
     const t = ev.target as HTMLElement | null;
-    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) { if (!this.root!.contains(t) || ev.key !== "Escape") return; }
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) {
+      // the library filter keeps its typing; Find / Find and Replace still open from it, as from any frame control
+      const findKey = (ev.ctrlKey || ev.metaKey) && !ev.shiftKey && ev.key.toLowerCase() === "f";
+      if (!this.root!.contains(t) || (ev.key !== "Escape" && !findKey)) return;
+    }
     if (t && t.closest && t.closest(".kd-overlay, .kd-pop")) return;
     if ((window as unknown as { KDialogs?: { isOpen?: () => boolean } }).KDialogs?.isOpen?.()) return;
     const combo = comboOf(ev); if (!combo) return;
@@ -1098,8 +1115,14 @@ export class SymbolEditor {
     if (combo === "E" && this.tab) return run(() => this.editSelected());
     if (combo === "Delete" || combo === "Backspace" || combo === "Del") return run(() => this.deleteSel());
     if (combo === "Insert" || combo === "Ins") return run(() => this.repeat());
+    if (this.symbol()) {
+      if (combo === "Ctrl+F") return run(() => openSymbolFind(this, false));
+      if (combo === "Ctrl+Alt+F") return run(() => openSymbolFind(this, true));
+      if (combo === "F3") return run(() => void findNextMatch(this));
+      if (combo === "Shift+F3") return run(() => void findNextMatch(this, true));
+    }
     const A = this.actions();
-    const ids = ["undo", "redo", "save", "newSymbol", "cut", "copy", "paste", "duplicate", "selectAll", "rotateCCW", "rotateCW", "mirrorV", "mirrorH", "move", "drag", "placeSymbolPin", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomRedraw", "showDatasheet", "find", "selectionTool", "toggleUnits"];
+    const ids = ["undo", "redo", "save", "newSymbol", "cut", "copy", "paste", "duplicate", "selectAll", "rotateCCW", "rotateCW", "mirrorV", "mirrorH", "move", "drag", "placeSymbolPin", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomRedraw", "showDatasheet", ...(this.symbol() ? ["find"] : []), "selectionTool", "toggleUnits"];
     for (const id of ids) { const k = meta(id).key; if (k && norm(k) === norm(combo) && A[id]) return run(A[id]); }
     if (combo === "Home") return run(() => this.zoomFit());
   }
