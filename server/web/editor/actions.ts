@@ -219,7 +219,10 @@ export const HANDLERS = {
   show3DViewer: () => show3DViewer(),
   generateGerbers: () => openFabOutputs("gerber"), generateDrillFiles: () => openFabOutputs("drill"), generatePosFile: () => openFabOutputs("placement"),
   print: () => printDialog(),
-  lineModeFree: () => { CollabTools.sch.setLineMode(toolCtx(), "free"); syncSchModes(); }, lineMode90: () => { CollabTools.sch.setLineMode(toolCtx(), "90"); syncSchModes(); }, lineMode45: () => { CollabTools.sch.setLineMode(toolCtx(), "45"); syncSchModes(); },
+  // the Line Modes radio: the schematic's wire modes, or the board's angle snap (PCB_ACTIONS::lineModeFree / 90 / 45)
+  lineModeFree: () => { if (isSch()) CollabTools.sch.setLineMode(toolCtx(), "free"); else runModuleAction("lineModeFree"); syncSchModes(); },
+  lineMode90: () => { if (isSch()) CollabTools.sch.setLineMode(toolCtx(), "90"); else runModuleAction("lineMode90"); syncSchModes(); },
+  lineMode45: () => { if (isSch()) CollabTools.sch.setLineMode(toolCtx(), "45"); else runModuleAction("lineMode45"); syncSchModes(); },
   showHierarchy: () => showPane("hier"), showProperties: () => showPane("props"), showLayersManager: () => showPane("appearance"), showAppearance: () => showPane("appearance"),
   showSearch: () => showPane("search"), showNetNavigator: () => showPane("netnav"),
   showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),

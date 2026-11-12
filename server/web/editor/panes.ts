@@ -74,11 +74,19 @@ export function setupEditorChrome() {
 
 // The schematic module owns its line / drag modes (Shift+Space, G, M); mirror them on the toolbar.
 export function syncSchModes() {
-  if (!isSch() || !CollabTools.sch || !CollabTools.sch.state) { store.slice("viewport", { lineMode: null, dragMode: null }); return; }
+  if (!isSch()) {   // the board's angle snap mode (PCBNEW_SETTINGS m_AngleSnapMode) on the same radio
+    const pt = (window as unknown as { PcbTools?: { angleSnapMode?: () => string } }).PcbTools;
+    const am = pt && pt.angleSnapMode ? pt.angleSnapMode() : null;
+    if (am) setRadio("Line modes", am === "free" ? "lineModeFree" : am === "45" ? "lineMode45" : "lineMode90");
+    store.slice("viewport", { lineMode: am === "free" || am === "45" || am === "90" ? am : null, dragMode: null }); return;
+  }
+  if (!CollabTools.sch || !CollabTools.sch.state) { store.slice("viewport", { lineMode: null, dragMode: null }); return; }
   const lm = CollabTools.sch.state.lineMode;
   setRadio("Line modes", lm === "free" ? "lineModeFree" : lm === "45" ? "lineMode45" : "lineMode90");
   store.slice("viewport", { lineMode: lm === "free" ? "free" : lm === "45" ? "45" : "90", dragMode: CollabTools.sch.state.dragMode || null });
 }
+
+if (typeof window !== "undefined") window.addEventListener("kc:pcb-linemode", () => syncSchModes());
 
 export function setUnitsAction(u, id) { if (UNITS[u]) E.units = u; setRadio("Units", id); store.slice("viewport", { units: E.units }); }
 

@@ -229,11 +229,15 @@ function dimValueText(mm) {
   return s;
 }
 /** GetVectorSnapped45: the nearest of the 0 / 45 / 90° directions, staying on the grid. */
-function snap45(v) {
+function snap45(v) { return snapVec45(v, false); }
+/** GetVectorSnapped45( aVec, only45 ): only45 leaves out the axes (a rectangle drawn with Ctrl is a square). */
+function snapVec45(v, only45) {
   const ax = Math.abs(v[0]), ay = Math.abs(v[1]);
-  if (ax > ay * 2) return [v[0], 0]; if (ay > ax * 2) return [0, v[1]];
+  if (!only45 && ax > ay * 2) return [v[0], 0]; if (!only45 && ay > ax * 2) return [0, v[1]];
   return ax > ay ? [v[0], Math.sign(v[1]) * ax] : [Math.sign(v[0]) * ay, v[1]];
 }
+/** GetVectorSnapped90: onto the nearer of the horizontal and vertical axes. */
+function snap90(v) { return Math.abs(v[0]) > Math.abs(v[1]) ? [v[0], 0] : [0, v[1]]; }
 /**
  * Lines, arrows and text of a dimension: PCB_DIM_*::updateGeometry() / updateText() for the OUTSIDE text mode with
  * the text kept aligned.  d = { start, end, height, orientation ("h" | "v"), textPos, text }.  Arrows are [point, angle].
@@ -2316,7 +2320,82 @@ function onStagePointerUp(ev) {
 const POLY_TOOLS = new Set(["gpoly", "zone", "rulearea"]);
 const gfxTool = (t) => /^g/.test(t || "") || t === "table" || t === "image" || !!DIM_TYPE[t];   // draws on the chip's graphics layer
 const RULE_AREA_LAYERS = ["F.Cu", "B.Cu"];
-function drawClick(ctx, hv, t) {
+// ---- PCB_TOOL_BASE::GetAngleSnapMode (PCBNEW_SETTINGS m_AngleSnapMode, DIRECT by default in the board editor):
+// the Line Modes radio on the left toolbar and Shift+Space (lineModeNext) choose it; it is kept per viewer.
+const ANGLE_SNAP_KEY = "kc.pcbnew.angleSnapMode", ANGLE_SNAP_MODES = ["free", "90", "45"];
+const ANGLE_SNAP_MSG = { free: "", "90": "Constrain to H, V", "45": "Constrain to H, V, 45" };   // DRAWING_TOOL::UpdateStatusBar
+function angleSnapMode() {
+  if (!S.angleSnap) { const v = lsGet(ANGLE_SNAP_KEY); S.angleSnap = ANGLE_SNAP_MODES.includes(v) ? v : "free"; }
+  return S.angleSnap;
+}
+/** BOARD_EDITOR_CONTROL::ChangeLineMode: the new mode applies to the shape being drawn at once (refreshPreview). */
+function setAngleSnap(ctx, mode) {
+  if (!ANGLE_SNAP_MODES.includes(mode)) return angleSnapMode();
+  S.angleSnap = mode; lsSet(ANGLE_SNAP_KEY, mode);
+  if (ctx && S.draw && S.drawRaw) { drawTrack(S.draw, S.drawRaw, S.drawCtrl); }
+  if (ctx) ctx.requestRender();
+  // angleSnapModeChanged: the toolbar's Line Modes radio follows (panes.ts listens)
+  try { if (typeof root.dispatchEvent === "function" && typeof CustomEvent === "function") root.dispatchEvent(new CustomEvent("kc:pcb-linemode", { detail: { mode, msg: ANGLE_SNAP_MSG[mode] } })); } catch (e) { /* no DOM */ }
+  return mode;
+}
+const LINE_LIKE = (shape) => shape === "gline" || POLY_TOOLS.has(shape);
+/**
+ * The angle constraint the drawing tools put on the cursor: lines, polygons, zones and rule areas follow the mode
+ * unless Ctrl is held (DrawShape / DrawZone: MD_CTRL → DIRECT); rectangles and circles are free unless Ctrl is held,
+ * which constrains them to 45° (a rectangle to a square: GetVectorSnapped45( v, only45 )); a dimension's end snaps to
+ * 45° whenever any mode is on, and a centre mark always.
+ */
+function drawSnapMode(d, ctrl) {
+  const t = d.shape;
+  if (t === "grect" || t === "gcircle") return ctrl ? "45" : "free";
+  if (LINE_LIKE(t)) return ctrl ? "free" : angleSnapMode();
+  if (DIM_TYPE[t] && !d.end) return DIM_TYPE[t] === "center" || (!ctrl && angleSnapMode() !== "free") ? "45" : "free";
+  return "free";
+}
+function constrainDraw(d, p, ctrl) {
+  const mode = drawSnapMode(d, ctrl); if (mode === "free") return p;
+  const o = POLY_TOOLS.has(d.shape) ? d.pts[d.pts.length - 1] : d.start, v = vsub(p, o);
+  return vadd(o, mode === "90" ? snap90(v) : snapVec45(v, d.shape === "grect"));
+}
+/** The cursor of the shape being drawn: the grid-resolved point, constrained. */
+function drawTrack(d, raw, ctrl) {
+  d.cur = constrainDraw(d, raw, ctrl);
+  if (DIM_TYPE[d.shape] && d.end) dimTrack(d, d.cur);
+}
+/** DRAWING_TOOL::WIDTH_STEP (0.1 mm): Ctrl++ / Ctrl+- while a shape is being drawn (incWidth / decWidth). */
+const WIDTH_STEP = 0.1;
+function drawWidth(layer) { return S.strokeW != null ? S.strokeW : gfxWidth(layer); }
+function stepDrawWidth(ctx, dir) {
+  const d = S.draw; if (!d || d.shape === "gtextbox" || d.shape === "table") return false;
+  if (DIM_TYPE[d.shape] && d.pts.length < 2 && !d.end && d.pts.length === 0) return false;
+  const w = drawWidth(S.gfxLayer);
+  if (dir > 0) S.strokeW = +(w + WIDTH_STEP).toFixed(6);
+  else if (w > WIDTH_STEP) S.strokeW = +(w - WIDTH_STEP).toFixed(6);
+  ctx.requestRender(); return true;
+}
+/** A new graphic as drawn: the session's stroke width (incWidth / decWidth) over the layer default. */
+function withStroke(node) {
+  if (S.strokeW == null || !Array.isArray(node)) return node;
+  const w = r6(S.strokeW);
+  const st = node.find((c) => Array.isArray(c) && c[0] === "stroke");
+  if (st) { const wi = st.find((c) => Array.isArray(c) && c[0] === "width"); if (wi) wi[1] = w; }
+  const style = node.find((c) => Array.isArray(c) && c[0] === "style");   // a dimension's line thickness
+  if (style) { const th = style.find((c) => Array.isArray(c) && c[0] === "thickness"); if (th) th[1] = w; }
+  return node;
+}
+/**
+ * deleteLastPoint (Backspace) / doDelete while a line chain is drawn: the last committed segment is taken back (its
+ * undo entry popped, PutDataInPreviousState) and its start becomes the start of the line being drawn again.
+ */
+function undoChainSegment(ctx) {
+  const d = S.draw; if (!d || d.shape !== "gline" || !d.chain || !d.chain.length) return false;
+  const last = d.chain.pop();
+  if (ctx.doc.items.has(last.id)) ctx.commit(deleteChanges(ctx.doc, [last.id]), "line", { amend: true, discard: true });
+  d.start = last.start; d.pts = [last.start]; d.cur = last.end.slice();
+  ctx.requestRender(); return true;
+}
+function drawClick(ctx, hv, t, ev) {
+  if (S.draw) { const c = constrainDraw(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey))); hv = Object.assign({}, hv, { x: c[0], y: c[1] }); }
   const p = [hv.x, hv.y], layer = S.gfxLayer;
   if (!S.draw) { S.draw = { shape: t, start: p, cur: p.slice(), pts: [p] }; if (t === "dimortho") S.draw.orientation = "h"; ctx.requestRender(); return; }
   const d = S.draw;
@@ -2324,7 +2403,7 @@ function drawClick(ctx, hv, t) {
     if (d.pts.length === 1) { if (!samePt(p, d.start)) d.pts.push(p); ctx.requestRender(); return; }
     const [a, b] = d.pts;
     if (samePt(p, a) || samePt(p, b) || !K.arcFrom3(a, p, b)) { ctx.toast("Click a point on the arc, off the line between its ends"); return; }
-    ctx.commit([addedChange(ctx.doc, arcNode(a, p, b, layer))], "arc");
+    ctx.commit([addedChange(ctx.doc, withStroke(arcNode(a, p, b, layer)))], "arc");
     S.draw = null; ctx.requestRender(); return;
   }
   if (POLY_TOOLS.has(t)) {
@@ -2335,7 +2414,7 @@ function drawClick(ctx, hv, t) {
   if (t === "gcurve") {
     if (samePt(p, d.pts[d.pts.length - 1])) { ctx.toast("Click a different point for the curve"); return; }
     d.pts.push(p);
-    if (d.pts.length === 4) { ctx.commit([addedChange(ctx.doc, curveNode(d.pts, layer))], "curve"); S.draw = null; }
+    if (d.pts.length === 4) { ctx.commit([addedChange(ctx.doc, withStroke(curveNode(d.pts, layer)))], "curve"); S.draw = null; }
     ctx.requestRender(); return;
   }
   if (t === "gtextbox" || t === "table") {
@@ -2352,16 +2431,18 @@ function drawClick(ctx, hv, t) {
   }
   if (DIM_TYPE[t]) { dimClick(ctx, p, t); return; }
   if (samePt(p, d.start)) { S.draw = null; ctx.requestRender(); return; }   // clicking the start again ends the chain
-  const node = t === "gline" ? lineNode(d.start, p, layer) : t === "grect" ? rectNode(d.start, p, layer) : circleNode(d.start, p, layer);
-  ctx.commit([addedChange(ctx.doc, node)], t === "gline" ? "line" : t === "grect" ? "rectangle" : "circle");
-  S.draw = t === "gline" ? { shape: t, start: p, cur: p.slice(), pts: [p] } : null;   // lines chain like KiCad's polyline drawing
+  const node = withStroke(t === "gline" ? lineNode(d.start, p, layer) : t === "grect" ? rectNode(d.start, p, layer) : circleNode(d.start, p, layer));
+  const add = addedChange(ctx.doc, node);
+  ctx.commit([add], t === "gline" ? "line" : t === "grect" ? "rectangle" : "circle");
+  // lines chain like KiCad's polyline drawing; the committed segments stack up for deleteLastPoint (aCommittedGraphics)
+  S.draw = t === "gline" ? { shape: t, start: p, cur: p.slice(), pts: [p], chain: (d.chain || []).concat([{ id: add.id, start: d.start, end: p }]) } : null;
   ctx.requestRender();
 }
 function finishPoly(ctx) {
   const d = S.draw; if (!d || !POLY_TOOLS.has(d.shape)) return;
   S.draw = null; ctx.requestRender();
   if (d.pts.length < 3) { ctx.toast("A polygon needs at least three corners"); return; }
-  if (d.shape === "gpoly") { ctx.commit([addedChange(ctx.doc, polyNode(d.pts, S.gfxLayer))], "polygon"); return; }
+  if (d.shape === "gpoly") { ctx.commit([addedChange(ctx.doc, withStroke(polyNode(d.pts, S.gfxLayer)))], "polygon"); return; }
   if (d.shape === "rulearea") { ctx.commit([addedChange(ctx.doc, ruleAreaNode(d.pts, RULE_AREA_LAYERS))], "rule area"); return; }
   // a copper zone on the active layer: the net comes from the prompt, which offers the board's nets and
   // starts on whatever copper the first corner sits on (KiCad takes the highlighted or selected net)
@@ -2388,7 +2469,7 @@ function dimClick(ctx, p, t) {
   dimTrack(d, p);
   commitDim(ctx, type, d);
 }
-function commitDim(ctx, type, d) { S.draw = null; ctx.commit([addedChange(ctx.doc, dimensionNode(type, d, S.gfxLayer))], "dimension"); ctx.requestRender(); }
+function commitDim(ctx, type, d) { S.draw = null; ctx.commit([addedChange(ctx.doc, withStroke(dimensionNode(type, d, S.gfxLayer)))], "dimension"); ctx.requestRender(); }
 /** The cursor after the second click (the tool's SET_HEIGHT motion). */
 function dimTrack(d, p) {
   const type = DIM_TYPE[d.shape], s = d.start, e = d.end; if (!e) return;
@@ -2456,6 +2537,31 @@ function deleteAt(ctx, mm) {
 function statusPopup(ctx, text, at, ms) {
   S.popup = { text, at: at.slice(), until: Date.now() + ms }; ctx.requestRender();
   if (typeof setTimeout === "function") setTimeout(() => { if (S.popup && Date.now() >= S.popup.until - 5) { S.popup = null; if (lastCtx) lastCtx.requestRender(); } }, ms);
+}
+/** KIGFX::PREVIEW::DimensionLabel: "l: 12.345 mm", at the preview precision of the user's units. */
+function dimensionLabel(prefix, mm, deg) {
+  if (deg) return `${prefix}: ${mm.toFixed(1)}°`;
+  const u = sizeUnits();
+  return `${prefix}: ${u === "mil" ? (mm / 0.0254).toFixed(1) + " mils" : u === "in" ? (mm / 25.4).toFixed(4) + " in" : mm.toFixed(3) + " mm"}`;
+}
+/**
+ * TWO_POINT_ASSISTANT::ViewDraw: next to the cursor, on the side away from the origin, a line shows its length and
+ * angle (+90° up), a rectangle its width and height, a circle its radius (with the radius line drawn).
+ */
+function drawTwoPointAssistant(c, d, px, colour) {
+  const t = d.shape; if ((t !== "gline" && t !== "grect" && t !== "gcircle") || !d.cur) return;
+  const o = d.start, e = d.cur, v = vsub(e, o); if (!v[0] && !v[1]) return;
+  const strs = t === "gline" ? [dimensionLabel("l", Math.hypot(v[0], v[1])), dimensionLabel("θ", Math.atan2(-v[1], v[0]) * 180 / Math.PI, true)]
+    : t === "grect" ? [dimensionLabel("x", Math.abs(v[0])), dimensionLabel("y", Math.abs(v[1]))] : [dimensionLabel("r", Math.hypot(v[0], v[1]))];
+  c.save(); c.globalAlpha = 1;
+  if (t === "gcircle") { c.lineWidth = px; line(c, o, e); }
+  const fs = 12 * px, pitch = fs * 1.4, q = vsub(o, e);   // DrawTextNextToCursor( end, origin - end )
+  c.font = `${fs}px sans-serif`; c.fillStyle = colour; c.textBaseline = "top";
+  let x = e[0], y = e[1];
+  if (q[1] > 0) y -= pitch * (strs.length + 1);
+  if (q[0] < 0) { c.textAlign = "left"; x += 15 * px; } else { c.textAlign = "right"; x -= 15 * px; }
+  strs.forEach((sx, i) => c.fillText(sx, x, y + (i + 0.5) * pitch));
+  c.restore();
 }
 function drawStatusPopup(c, px) {
   const p = S.popup; if (!p) return;
@@ -4482,6 +4588,13 @@ const needSel = (ctx, what) => { const ids = selectionIds(ctx); if (!ids.size) {
 const commitSel = (ctx, changes, label, keep) => { if (!changes.length) { ctx.toast(`${label}: nothing to change`); return true; } ctx.commit(changes, label); if (keep !== false) ctx.requestRender(); return true; };
 const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 function highlightIds(ctx, ids) { if (ctx.setHighlight) ctx.setHighlight(ids && ids.size ? new Set(ids) : null); }
+// Line Modes (BOARD_EDITOR_CONTROL::ChangeLineMode) and lineModeNext (Shift+Space)
+act("lineModeFree", "Line Modes", "", (ctx) => { setAngleSnap(ctx, "free"); return true; });
+act("lineMode90", "Line Modes", "", (ctx) => { setAngleSnap(ctx, "90"); return true; });
+act("lineMode45", "Line Modes", "", (ctx) => { setAngleSnap(ctx, "45"); return true; });
+act("lineModeNext", "Line Modes", "Shift+Space", (ctx) => { const m = angleSnapMode(); setAngleSnap(ctx, ANGLE_SNAP_MODES[(ANGLE_SNAP_MODES.indexOf(m) + 1) % 3]); return true; });
+act("incWidth", "Increase Line Width", "Ctrl++", (ctx) => stepDrawWidth(ctx, 1));
+act("decWidth", "Decrease Line Width", "Ctrl+-", (ctx) => stepDrawWidth(ctx, -1));
 // clipboard
 // EDIT_TOOL::copyToClipboard / cutToClipboard: the selection, or the item under the cursor (a hover selection);
 // the reference point is the anchor nearest the cursor.  KiCad writes "Selection copied" to the status bar only.
@@ -5000,6 +5113,12 @@ function onCaptureKey(ev) {
   if (root.KDialogs && root.KDialogs.isOpen && root.KDialogs.isOpen()) return;
   const k = ev.key;
   if (S.route || S.modTool === "route") { const id = routerKeyAction(ev); if (id && lastCtx) { ev.stopImmediatePropagation(); ev.preventDefault(); runAction(id, lastCtx); return; } }
+  // DRAWING_TOOL's incWidth / decWidth (Ctrl++ / Ctrl+-) while a shape is drawn, ahead of the browser's zoom
+  if (S.draw && (ev.ctrlKey || ev.metaKey) && !ev.altKey && (k === "+" || k === "=" || k === "-" || k === "_") && lastCtx) {
+    ev.stopImmediatePropagation(); ev.preventDefault(); stepDrawWidth(lastCtx, k === "-" || k === "_" ? -1 : 1); return;
+  }
+  // lineModeNext (Shift+Space, AS_GLOBAL)
+  if (k === " " && ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey && lastCtx) { ev.stopImmediatePropagation(); ev.preventDefault(); runAction("lineModeNext", lastCtx); return; }
   if (ev.altKey && !ev.metaKey) { if (!ev.ctrlKey && !ev.shiftKey && ev.code === "KeyZ") repost(ev, "Zone"); else if (!ev.ctrlKey && !ev.shiftKey && ev.code === "KeyS") repost(ev, "Swap"); return; }
   if (ev.ctrlKey || ev.metaKey) {
     if (ev.altKey) return;
@@ -5182,7 +5301,7 @@ function drawOverlay(c, view, ctx) {
   // drawing preview
   if (S.draw) {
     const d = S.draw; const layer = d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer;
-    c.globalAlpha = 0.85; c.strokeStyle = color(layer); c.lineWidth = Math.max(gfxWidth(layer), 1.5 * px);
+    c.globalAlpha = 0.85; c.strokeStyle = color(layer); c.lineWidth = Math.max(drawWidth(layer), 1.5 * px);
     const box = () => [Math.min(d.start[0], d.cur[0]), Math.min(d.start[1], d.cur[1]), Math.abs(d.cur[0] - d.start[0]), Math.abs(d.cur[1] - d.start[1])];
     if (d.shape === "gline") line(c, d.start, d.cur);
     else if (d.shape === "grect" || d.shape === "gtextbox") c.strokeRect(...box());
@@ -5205,6 +5324,7 @@ function drawOverlay(c, view, ctx) {
     } else if (DIM_TYPE[d.shape]) drawDimPreview(c, d, px);
     else ring(c, d.start, Math.hypot(d.cur[0] - d.start[0], d.cur[1] - d.start[1]));
     if (d.pts) { c.fillStyle = HL; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
+    drawTwoPointAssistant(c, d, px, color(layer));
   }
   // the picked reference image, centred on the cursor
   if (S.image && S.hover && S.modTool === "image") {
@@ -5317,7 +5437,7 @@ const pcb = {
     if (S.route && t !== "route") { const rt = S.route; S.route = null; routeUnhighlight(ctx, rt); }   // leaving the tool drops the unfixed leg
     S.violations = null;
     if (S.drag && t !== "drag") { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }
-    S.draw = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
+    S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     S.modTool = mine ? t : null;
     if (t === "drag" && !beginToolDrag(ctx, !!S.dragFree)) { S.modTool = null; ctx.toast("Select a track or a via first, or point at one, then press D to drag it"); ctx.setTool("select"); return; }
     refreshChip(ctx); ctx.requestRender();
@@ -5335,7 +5455,7 @@ const pcb = {
     else if (t === "gtext") placeTextAt(ctx, [hv.x, hv.y]);
     else if (t === "image") { if (S.image) placeImage(ctx, hv); else openImagePicker(); }
     else if (t === "delete") deleteAt(ctx, mm);   // an empty click is ours too: the tool stays armed
-    else drawClick(ctx, hv, t);
+    else drawClick(ctx, hv, t, ev);
     return true;
   },
   /** Select tool, nothing on a footprint's own geometry under the cursor: pick a track / via / graphic and arm its drag. */
@@ -5386,7 +5506,7 @@ const pcb = {
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
     if (S.drag) dragMove(ctx, mm);
-    if (S.draw) { S.draw.cur = [hv.x, hv.y]; if (DIM_TYPE[S.draw.shape] && S.draw.end) dimTrack(S.draw, S.draw.cur); }
+    if (S.draw) { S.drawRaw = [hv.x, hv.y]; S.drawCtrl = !!(ev && (ev.ctrlKey || ev.metaKey)); drawTrack(S.draw, S.drawRaw, S.drawCtrl); }
     ctx.requestRender();
   },
   onPointerUp() {},
@@ -5463,6 +5583,8 @@ const pcb = {
       if (S.draw && (POLY_TOOLS.has(S.draw.shape) || S.draw.shape === "gcurve")) { if (S.draw.pts.length > 1) S.draw.pts.pop(); else S.draw = null; ctx.requestRender(); return true; }
       // fall through: with nothing being drawn Backspace deletes like Delete
     case "Delete":
+      // deleteLastPoint / doDelete in a line chain: take the last committed segment back; with none, end the line
+      if (S.draw && S.draw.shape === "gline") { if (editing() && !undoChainSegment(ctx)) { S.draw = null; ctx.requestRender(); } return true; }
       if (S.route) { if (editing()) undoRouteLeg(ctx); return true; }   // ACTIONS::doDelete while routing: undo the last segment
       if (shift && selectionIds(ctx).size && connectedRun(ctx.doc, selectionIds(ctx)).size) return runAction("deleteFull", ctx);   // Shift+Delete: the whole connected run
       if (S.sel.size) { if (editing()) deleteSelection(ctx); return true; }
@@ -5529,7 +5651,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, snapVec45, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)

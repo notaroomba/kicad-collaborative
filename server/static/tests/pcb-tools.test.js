@@ -1757,3 +1757,42 @@ test("Add Text: Text Properties first on a new text with the layer's defaults; O
   assert.equal(P.state.move, null); assert.deepEqual(K.atOf(doc.items.get(log.commits.at(-1).changes[0].id).node).slice(0, 2), [50, 60]);
   pcb.setNewItemDialogs({ gr_text: null }); pcb.onActivate("select", ctx);
 });
+
+test("Line Modes: lines, polygons and zones follow the angle snap mode (Ctrl frees them), rectangles and circles constrain only with Ctrl; Shift+Space cycles; Backspace takes the last line back; Ctrl++ / Ctrl+- step the width", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc); const cfg = [];
+  ctx.commit = (changes, label, opts) => { log.commits.push({ changes, label, opts }); for (const c of changes) K.applyChange(doc, c, IU); pcb.onDocChanged(ctx); };
+  // GetVectorSnapped45 / 90
+  assert.deepEqual(P.snap45([10, 3]), [10, 0]); assert.deepEqual(P.snap45([10, 6]), [10, 10]); assert.deepEqual(P.snapVec45([10, 3], true), [10, 10], "a rectangle is only ever a square");
+  assert.deepEqual(P.snap90([10, 6]), [10, 0]); assert.deepEqual(P.snap90([3, -6]), [0, -6]);
+  P.setAngleSnap(ctx, "free"); assert.equal(P.angleSnapMode(), "free");
+  pcb.onActivate("gline", ctx); P.state.gfxLayer = "F.SilkS";
+  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerMove(ev(), [20, 13], ctx);
+  assert.deepEqual(P.state.draw.cur, [20, 13], "free: the cursor as it is");
+  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "90"); assert.deepEqual(P.state.draw.cur, [20, 10], "the new mode applies to the line at once");
+  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "45"); pcb.onPointerMove(ev(), [20, 16], ctx); assert.deepEqual(P.state.draw.cur, [20, 20], "GetVectorSnapped45 keeps the longer axis");
+  pcb.onPointerMove(ev({ ctrlKey: true }), [20, 16], ctx); assert.deepEqual(P.state.draw.cur, [20, 16], "Ctrl draws at any angle");
+  // the click takes the constrained point, and the line goes on from there
+  pcb.onPointerDown(ev(), [20, 17], ctx); const l1 = log.commits.at(-1).changes[0].id;
+  assert.deepEqual(K.kid(doc.items.get(l1).node, "end").slice(1), [20, 20]);
+  // Ctrl++ twice then Ctrl+- once: one step wider than the layer's default for the next line
+  const w0 = +K.kid(K.kid(doc.items.get(l1).node, "stroke"), "width")[1];
+  A.incWidth.run(ctx); A.incWidth.run(ctx); A.decWidth.run(ctx);
+  pcb.onPointerDown(ev(), [30, 17], ctx); const l2 = log.commits.at(-1).changes[0].id;
+  assert.ok(Math.abs(+K.kid(K.kid(doc.items.get(l2).node, "stroke"), "width")[1] - (w0 + 0.1)) < 1e-9);
+  // Backspace: l2 goes (its undo step dropped) and the line is drawn again from its start; again: l1; then the tool ends the line
+  pcb.onKey("Backspace", ev(), ctx); assert.ok(!doc.items.has(l2)); assert.deepEqual(log.commits.at(-1).opts, { amend: true, discard: true });
+  assert.deepEqual(P.state.draw.start, [20, 20]);
+  pcb.onKey("Backspace", ev(), ctx); assert.ok(!doc.items.has(l1)); assert.deepEqual(P.state.draw.start, [10, 10]);
+  pcb.onKey("Backspace", ev(), ctx); assert.equal(P.state.draw, null);
+  // rectangles: free unless Ctrl, which squares them
+  pcb.onActivate("grect", ctx); pcb.onPointerDown(ev(), [0, 0], ctx); pcb.onPointerMove(ev(), [10, 4], ctx); assert.deepEqual(P.state.draw.cur, [10, 4]);
+  pcb.onPointerMove(ev({ ctrlKey: true }), [10, 4], ctx); assert.deepEqual(P.state.draw.cur, [10, 10]);
+  // the polygon tool constrains from its last corner
+  pcb.onActivate("gpoly", ctx); pcb.onPointerDown(ev(), [0, 0], ctx); pcb.onPointerDown(ev(), [10, 1], ctx); assert.deepEqual(P.state.draw.pts.at(-1), [10, 0]);
+  pcb.onPointerMove(ev(), [12, 9], ctx); assert.deepEqual(P.state.draw.cur, [10, 9]);
+  // the tool's width resets with the next tool; the mode stays
+  pcb.onActivate("select", ctx); assert.equal(P.state.strokeW, null); assert.equal(P.angleSnapMode(), "45");
+  A.lineModeFree.run(ctx); assert.equal(P.angleSnapMode(), "free");
+  assert.equal(P.dimensionLabel("l", 12.3456), "l: 12.346 mm"); assert.equal(P.dimensionLabel("θ", 45, true), "θ: 45.0°");
+  void cfg;
+});
