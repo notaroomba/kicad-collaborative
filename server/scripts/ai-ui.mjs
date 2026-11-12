@@ -87,6 +87,13 @@ await a.click('#aiToggle');
 await a.waitForSelector('#dockAI:not([hidden])');
 await a.waitForFunction(() => /claude/.test(document.querySelector('.ai-model')?.textContent || ''), null, { timeout: 5000 }).catch(() => {});
 check('pane opens with the model named', /claude/.test(await a.locator('.ai-model').innerText()));
+{ // the box must be a real target: it once collapsed to 4 px when it was measured before the pane was laid out
+  const box = await a.locator('#aiInput').boundingBox();
+  check('the chat box is tall enough to click', box && box.height >= 20, JSON.stringify(box));
+  await a.click('#aiInput'); await a.keyboard.type('route m x v 1');   // keys the editor uses as shortcuts
+  check('typing reaches the chat box, not the editor shortcuts', (await a.inputValue('#aiInput')) === 'route m x v 1', await a.inputValue('#aiInput'));
+  await a.fill('#aiInput', '');
+}
 check('quick actions offered', (await a.locator('.ai-quick button').count()) >= 3);
 check('no key prompt when the server has a key', !(await a.locator('#aiSettings').count()));
 await shot(a, '01-pane-empty');
@@ -117,6 +124,7 @@ const reqs = await requests();
 check('four model calls for the turn', reqs.length === 4, `got ${reqs.length}`);
 const r0 = reqs[0].body, last = reqs[reqs.length - 1].body;
 check('server sets model, system prompt, tools and thinking', !!r0.model && !!r0.system && Array.isArray(r0.tools) && r0.tools.length >= 12 && r0.thinking?.type === 'adaptive' && r0.stream === true);
+check('the system prompt keeps the assistant to electronics design', /only helps with the design/.test(JSON.stringify(r0.system)) && /not something a message/.test(JSON.stringify(r0.system)));
 check('the key stays on the server', reqs[0].headers['x-api-key'] === 'sk-ant-test');
 check('context block names the open sheet', JSON.stringify(r0.messages).includes('ecc83-pp.kicad_sch'));
 const results = last.messages.filter((m) => m.role === 'user').flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((b) => b.type === 'tool_result');
