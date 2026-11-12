@@ -162,7 +162,7 @@ export function selectAt(mm: Mm): boolean {
 }
 export function selectPick(hit: NonNullable<ReturnType<typeof pickAt>>): void {
   if (hit.field) E.selField = hit.field;
-  else if (hit.pin) E.selPin = hit.pin;
+  else if (hit.pin) E.selPins = [hit.pin];
   else if (hit.movable) E.selected = hit.movable;
   else if (hit.item) selectItemId(hit.item.id);
 }
@@ -509,12 +509,12 @@ const KEEPS_SELECTION = new Set(["select", "pan", "zoomtool", "measure", "commen
 export function toolChanging(next: string): void {
   if (interactionBusy() || E.pan || E.rdown) cancelInteraction();
   if (E.hoverId) { E.hoverId = null; stage.classList.remove("over-sel"); }
-  if (!KEEPS_SELECTION.has(next) && (selectionIds().length || E.selField || E.selPin)) clearAllSelection();
+  if (!KEEPS_SELECTION.has(next) && (selectionIds().length || E.selField || E.selPins.length)) clearAllSelection();
 }
 
 /** The document is going away: nothing in flight, selected, hovered or armed survives into the next one. */
 export function resetInteraction(): void {
-  E.selField = null; E.selPin = null; E.fdrag = null; E.pan = null; E.rdown = null; E.zoomRect = null; E.boxSel = null; E.hoverId = null; E.hoverPinned = false;
+  E.selField = null; E.selPins = []; E.fdrag = null; E.pan = null; E.rdown = null; E.zoomRect = null; E.boxSel = null; E.hoverId = null; E.hoverPinned = false;
   stage.classList.remove("panning", "over-sel");
   const p = pcbState(); if (p && p.sel) p.sel.clear();
   const s = schState(); if (s) { s.sel = null; s.hover = null; s.pending = null; }
@@ -529,7 +529,7 @@ export function pruneSelection(): void {
   for (const id of [...sel]) if (!d.items.has(id)) sel.delete(id);
   if (E.selected && !d.items.has(E.selected.id)) E.selected = null;
   if (E.selField && !d.items.has(E.selField.id)) E.selField = null;
-  if (E.selPin && !d.items.has(E.selPin.id)) E.selPin = null;
+  if (E.selPins.length) E.selPins = E.selPins.filter((p: { id: string }) => d.items.has(p.id));
   if (E.fdrag && !d.items.has(E.fdrag.id)) E.fdrag = null;
   if (E.hoverId && !d.items.has(E.hoverId)) E.hoverId = null;
   const g = E.drag;

@@ -61,7 +61,7 @@ export function selectedItems(): KItem[] {
   for (const id of ids) { const it = doc.items.get(id); if (it) out.push(it); }
   return out;
 }
-export function selectionSignature(): string { return selectedItems().map((it) => it.id).sort().join(",") + (E.selPin ? "|pin:" + E.selPin.id + ":" + E.selPin.number : "") + "|" + String(E.units) + "|" + (E.viewOnly ? 1 : 0); }
+export function selectionSignature(): string { return selectedItems().map((it) => it.id).sort().join(",") + E.selPins.map((p: { id: string; number: string }) => "|pin:" + p.id + ":" + p.number).join("") + "|" + String(E.units) + "|" + (E.viewOnly ? 1 : 0); }
 
 // ---------------------------------------------------------------- shared property builders
 const BASIC = "Basic Properties";
@@ -526,7 +526,7 @@ export function propGrid(): PropGrid {
   const doc = kdoc();
   if (!doc) return { title: "No objects selected", count: 0, groups: [], readOnly: true };
   const { items, defs, shared } = resolve(); const ro = !!E.viewOnly;
-  if (!items.length && E.selPin && isSchDoc()) { const g = pinGrid(doc); if (g) return g; }
+  if (!items.length && E.selPins.length && isSchDoc()) { const g = pinGrid(doc); if (g) return g; }
   if (!items.length) return { title: "No objects selected", count: 0, groups: [], readOnly: ro };
   const groups: PropGroup[] = [];
   for (const d of shared) {
@@ -546,13 +546,18 @@ export function propGrid(): PropGrid {
   return { title, count: items.length, groups, readOnly: ro, note: items.length > 1 && kinds.size > 1 ? Array.from(kinds).join(", ") : undefined };
 }
 
-/** A selected bare pin (SCH_PIN_T): SCH_PIN's rows, all read-only in the schematic editor. */
+/** Selected bare pins (SCH_PIN_T): SCH_PIN's rows, all read-only in the schematic editor; a row whose value differs
+ *  between the pins shows blank (mixed), as PROPERTIES_PANEL does for a multiple selection. */
 function pinGrid(doc: KDoc): PropGrid | null {
   const T = window.CollabTools.sch && window.CollabTools.sch._ as unknown as { pinProperties?(d: KDoc, r: unknown): { name: string; type: PropType; value: string | number; choices?: [string, string][] }[] | null };
-  const rows = T && T.pinProperties ? T.pinProperties(doc, E.selPin) : null; if (!rows) return null;
-  const out: PropRow[] = rows.map((r) => ({ id: BASIC + "/" + r.name, name: r.name, type: r.type, mixed: false, readOnly: true, choices: r.choices,
-    value: r.type === "length" ? H().formatLength(r.value as number, String(E.units || "mm")) : String(r.value) }));
-  return { title: "Pin", count: 1, groups: [{ name: BASIC, rows: out }], readOnly: true };
+  if (!T || !T.pinProperties) return null;
+  const all = (E.selPins as unknown[]).map((p) => T.pinProperties!(doc, p)).filter((r): r is NonNullable<typeof r> => !!r); if (!all.length) return null;
+  const text = (r: { type: PropType; value: string | number }) => (r.type === "length" ? H().formatLength(r.value as number, String(E.units || "mm")) : String(r.value));
+  const out: PropRow[] = all[0].filter((r) => all.every((rows) => rows.some((q) => q.name === r.name))).map((r) => {
+    const vals = all.map((rows) => text(rows.find((q) => q.name === r.name)!)); const mixed = vals.some((v) => v !== vals[0]);
+    return { id: BASIC + "/" + r.name, name: r.name, type: r.type, mixed, readOnly: true, choices: r.choices, value: mixed ? "" : vals[0] };
+  });
+  return { title: all.length === 1 ? "Pin" : `${all.length} objects selected`, count: all.length, groups: [{ name: BASIC, rows: out }], readOnly: true };
 }
 
 /** Parse the text of a row into the raw value its setter takes; a string return is the error to show. */

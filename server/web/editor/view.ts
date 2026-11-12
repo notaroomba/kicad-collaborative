@@ -100,12 +100,12 @@ export function drawCanvas() {
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
   try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); drawAppOverlays(cctx, view, isSch()); } catch (e) { console.warn(e); } finally { cctx.restore(); }
   drawHover(cctx, view);
-  if (E.selPin && CollabTools.sch && CollabTools.sch._) {
-    // the selected pin drawn in the selection colour over its symbol
+  if (E.selPins.length && CollabTools.sch && CollabTools.sch._) {
+    // the selected pins drawn in the selection colour over their symbols
     const of = (CollabTools.sch._ as unknown as { pinOf?: (d: KDoc, r: unknown) => { pin: { x: number; y: number; root: [number, number] } } | null }).pinOf;
-    const h = of ? of(E.kdoc, E.selPin) : null;
-    if (!h) E.selPin = null;
-    else {
+    const found = E.selPins.map((p: unknown) => (of ? of(E.kdoc, p) : null));
+    if (found.some((h: unknown) => !h)) E.selPins = E.selPins.filter((_p: unknown, i: number) => !!found[i]);
+    for (const h of found) if (h) {
       cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
       const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
       // the selection halo drawSelectionHalo puts around a selected item (#66B2FF at 0.55)

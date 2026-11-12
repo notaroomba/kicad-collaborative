@@ -76,7 +76,7 @@ function attributeChecks(items: KItem[]): Record<string, boolean> {
 
 function menuCtx(): MenuCtx {
   const items = selectionItems(), s = schState(), p = pcbState(), sch = isSch();
-  const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPin && !kinds.length) kinds.push("pin");
+  const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPins.length && !kinds.length) kinds.push("pin");
   const cells = tableMenu.state(); if (cells) for (let i = 0; i < cells.n; i++) kinds.push("table_cell");   // PCB_TABLECELL_T / SCH_TABLECELL_T
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
@@ -94,7 +94,7 @@ function menuCtx(): MenuCtx {
     busy: interactionBusy() || drawingLine || routing || !!draw || (sch && !!s && !!s.carry),
     canAddCorner, canRemoveCorner,
     canClose: outline && n >= 3, canUndoPoint: (outline || (!!draw && (draw.shape === "lines" || draw.shape === "gcurve"))) && n >= 1,
-    pinAlts: !!(E.selPin && E.kdoc && schPins() && schPins()!.pinAlternates(E.kdoc as KDoc, E.selPin)),
+    pinAlts: !!(E.selPins.length === 1 && E.kdoc && schPins() && schPins()!.pinAlternates(E.kdoc as KDoc, E.selPins[0])),   // ALT_PIN_FUNCTION_MENU: one pin only
     highlight: !!E.highlightIds, belowRoot: !!root && (state as { doc?: unknown }).doc !== root,
     hasLocked: items.some((it) => isLocked(it.node)), hasUnlocked: items.some((it) => !isLocked(it.node)),
     hasItems: !!E.kdoc && E.kdoc.items.size > 0, checks: attributeChecks(items),
@@ -109,13 +109,14 @@ const escape: Run = () => { document.dispatchEvent(new KeyboardEvent("keydown", 
 function openProperties(): void {
   const d = E.kdoc as KDoc | null, K = window.KDialogs; if (!d || !K) return;
   if (E.selField) { const it = d.items.get(E.selField.id); if (it) K.openField(toolCtx(), it, E.selField.name); return; }
-  if (E.selPin) { const it = d.items.get(E.selPin.id); if (it) K.openItem(toolCtx(), it); return; }   // Properties promotes a single pin to its symbol
+  if (E.selPins.length) { const it = d.items.get(E.selPins[0].id); if (it) K.openItem(toolCtx(), it); return; }   // Properties promotes a pin to its symbol
   const it = selectionItems()[0]; if (it) K.openItem(toolCtx(), it);
 }
-/** SCH_MOVE_TOOL: a lone selected pin moves as its parent symbol. */
+/** SCH_MOVE_TOOL: selected pins move as their parent symbols. */
 function promotePin(): void {
-  if (!E.selPin) return; const id = E.selPin.id; E.selPin = null;
-  const fp = (E.items as { id: string }[]).find((f) => f.id === id); if (fp) E.selected = fp;
+  if (!E.selPins.length) return; const ids = Array.from(new Set((E.selPins as { id: string }[]).map((p) => p.id))); E.selPins = [];
+  const fps = ids.map((id) => (E.items as { id: string }[]).find((f) => f.id === id)).filter((f): f is { id: string } => !!f);
+  if (fps.length) E.selected = fps[0] as typeof E.selected; if (fps.length > 1) E.selection = new Set(fps.map((f) => f.id));
 }
 function deleteAll(): void {
   const ids = selectionIds(); if (!ids.length) return;
@@ -138,9 +139,9 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "PCB_ACTIONS::properties": () => (window.KDialogs ? openProperties : NOT_YET),
   "ACTIONS::selectAll": () => () => { clearAllSelection(false); selectAll(); requestRender(); },
   "ACTIONS::unselectAll": () => () => clearAllSelection(),
-  "ACTIONS::doDelete": () => (E.selField ? DESKTOP : E.selPin ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
-  "SCH_ACTIONS::move": () => (selectionItems().length || E.selPin ? () => { promotePin(); startMove("move"); } : NOT_YET),
-  "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPin ? () => { promotePin(); startMove("drag"); } : NOT_YET),
+  "ACTIONS::doDelete": () => (E.selField ? DESKTOP : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
+  "SCH_ACTIONS::move": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
+  "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),
   "PCB_ACTIONS::move": () => (selectionItems().length ? () => { startMove("move"); } : NOT_YET),
   "PCB_ACTIONS::drag45Degree": () => dragTrack(false), "PCB_ACTIONS::dragFreeAngle": () => dragTrack(true),
   "SCH_ACTIONS::enterSheet": () => { const it = selectionItems()[0]; const file = it && it.file; return file ? () => enterSheet(file) : NOT_YET; },
@@ -235,7 +236,7 @@ interface SchPins {
 function schPins(): SchPins | null { const m = CollabTools.sch; const u = m && (m._ as unknown as SchPins | undefined); return u && typeof u.pinHelper === "function" ? u : null; }
 /** ALT_PIN_FUNCTION_MENU::update: the base function, then the alternates (a std::map, so by name), as check items. */
 function pinFunctionRows(): CtxItem[] {
-  const P = schPins(), pin = E.selPin as PinRef | null; if (!P || !pin || !E.kdoc) return [];
+  const P = schPins(), pin = (E.selPins.length === 1 ? E.selPins[0] : null) as PinRef | null; if (!P || !pin || !E.kdoc) return [];
   const info = P.pinAlternates(E.kdoc as KDoc, pin); if (!info) return [];
   const ro = !!E.viewOnly;
   const one = (name: string, on: boolean): CtxItem => { const it: CtxItem = { label: name, check: true, checked: on }; if (ro) it.why = VIEW_ONLY; else it.run = runRow(() => { P.setAltPinFunction(toolCtx(), pin, name); requestRender(); }); return it; };
@@ -245,11 +246,11 @@ function pinFunctionRows(): CtxItem[] {
 }
 /** PIN_TRICKS_MENU::update: Wire, No Connect, Net Label, Hierarchical Label, Global Label on the selected pins. */
 function pinHelperRows(): CtxItem[] {
-  const P = schPins(), pin = E.selPin as PinRef | null; if (!P || !pin) return [];
+  const P = schPins(), pins = E.selPins.slice() as PinRef[]; if (!P || !pins.length) return [];
   return P.PIN_HELPERS.map((h): CtxItem => {
     const it: CtxItem = { label: h.label, icon: h.icon };
     if (E.viewOnly) it.why = VIEW_ONLY;
-    else it.run = runRow(() => { E.selPin = null; P.pinHelper(toolCtx(), [pin], h.id); selectionChanged(); requestRender(); });
+    else it.run = runRow(() => { E.selPins = []; P.pinHelper(toolCtx(), pins, h.id); selectionChanged(); requestRender(); });
     return it;
   });
 }
@@ -418,9 +419,9 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
   E.lastCursorMm = mm;
   if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy() && tableMenu.pick(mm)) { /* a table cell under the cursor (selectPoint collects cells) */ }
   else if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy()) {
-    if (E.selPin) {
+    if (E.selPins.length) {
       const hit = pickAt(mm);
-      if (!(hit && hit.pin && hit.pin.id === E.selPin.id && hit.pin.number === E.selPin.number)) selectAt(mm);
+      if (!(hit && hit.pin && (E.selPins as PinRef[]).some((p) => p.id === hit.pin!.id && p.number === hit.pin!.number))) selectAt(mm);
     } else if (E.selField) {
       const hit = pickAt(mm);
       if (!(hit && hit.field && hit.field.id === E.selField.id && hit.field.name === E.selField.name)) selectAt(mm);

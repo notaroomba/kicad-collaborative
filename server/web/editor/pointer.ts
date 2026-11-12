@@ -18,7 +18,7 @@ export function openSelectionProperties() {
   const ctx = toolCtx();
   if (!isSch() && CollabTools.pcb && CollabTools.pcb.tunerProperties && CollabTools.pcb.tunerProperties(ctx)) return true;
   if (E.selField) { const it = E.kdoc.items.get(E.selField.id); if (it) { KDialogs!.openField(ctx, it, E.selField.name); return true; } }
-  if (isSch() && E.selPin) { const it = E.kdoc.items.get(E.selPin.id); if (it) { KDialogs!.openItem(ctx, it); return true; } }   // a lone pin: its parent symbol
+  if (isSch() && E.selPins.length) { const it = E.kdoc.items.get(E.selPins[0].id); if (it) { KDialogs!.openItem(ctx, it); return true; } }   // a lone pin: its parent symbol
   if (isSch() && KDialogs!.schProperties && KDialogs!.schProperties()) return true;   // SCH_EDIT_TOOL::Properties (web/dialogs/sch-items.ts)
   if (!isSch() && CollabTools.pcb && CollabTools.pcb.selectedPad && CollabTools.pcb.padProperties) {   // a pad picked on its own: Pad Properties
     const p = CollabTools.pcb.selectedPad(E.kdoc); if (p) { CollabTools.pcb.padProperties(ctx, p.item, p.index); return true; }
