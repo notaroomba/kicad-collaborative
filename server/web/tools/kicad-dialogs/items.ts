@@ -12,7 +12,11 @@ export type DialogItem = Pick<KItem, "id" | "kind" | "node" | "geom" | "bbox"> &
 /** The editor context the dialogs are opened with (the chrome's toolCtx()). */
 export type DialogCtx = Omit<PropsCtx, "setSelected"> & { setSelected?(fp: { id: string } | null): void; toast?(msg: string, ms?: number): void; enterSheet?(file: string): void };
 /** openItem's options: a title / width override, the undo label, a new item's placement, or the generic sheet. */
-export interface ItemOpts { title?: string; width?: number; label?: string; generic?: boolean; onCreate?(node: SNode): boolean | void }
+export interface ItemOpts {
+  title?: string; width?: number; label?: string; generic?: boolean; onCreate?(node: SNode, more?: SNode[]): boolean | void;
+  /** the sch-items dialogs (schItemDialog) call it when the dialog is dismissed; the generic sheet does not */
+  cancel?(): void;
+}
 
 export const TITLES: Record<string, string> = { symbol: "Symbol Properties", footprint: "Footprint Properties", wire: "Wire & Bus Line Properties", bus: "Wire & Bus Line Properties", polyline: "Line Properties",
   label: "Label Properties", global_label: "Global Label Properties", hierarchical_label: "Hierarchical Label Properties", netclass_flag: "Directive Label Properties", directive_label: "Directive Label Properties",
@@ -61,7 +65,7 @@ export function openItem(ctx: DialogCtx, item: DialogItem, opts?: ItemOpts): Dlg
 
 /** The properties dialog of an item that is not on the sheet yet (KiCad's label tools open their dialog first):
  *  OK hands the edited node to onCreate, Cancel drops it. */
-export function openNew(ctx: DialogCtx, kind: string, node: SNode, onCreate: (node: SNode) => boolean | void): DlgApi | null {
+export function openNew(ctx: DialogCtx, kind: string, node: SNode, onCreate: (node: SNode, more?: SNode[]) => boolean | void): DlgApi | null {
   return openItem(ctx, { id: "", kind, node, geom: [], bbox: null }, { generic: true, onCreate });
 }
 

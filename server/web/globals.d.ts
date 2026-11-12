@@ -60,7 +60,8 @@ interface KiCadCanvasApi {
   parse(text: string): SNode | null;
   parseAll(text: string): SNode[];
   serialize(node: SNode): string;
-  serializeItem(doc: KDoc, item: KItem): string;
+  /** only the item's kind and node are read */
+  serializeItem(doc: KDoc, item: Pick<KItem, "kind" | "node">): string;
   parseDoc(text: string, docType?: string): KDoc;
   addItem(doc: KDoc, node: SNode): KItem | null;
   createItem(doc: KDoc, node: SNode): KItem | null;
@@ -69,7 +70,7 @@ interface KiCadCanvasApi {
   replaceChange(doc: KDoc, item: KItem): KChange;
   addChange(doc: KDoc, item: KItem): KChange;
   removeChange(item: KItem): KChange;
-  typeNameOf(item: KItem): string;
+  typeNameOf(item: Pick<KItem, "kind"> & Partial<Pick<KItem, "docType">>): string;
   render(doc: KDoc, ctx: CanvasRenderingContext2D, view: KView, opts?: KRenderOpts): void;
   setViewTransform(ctx: CanvasRenderingContext2D, view: KView): void;
   drawSelectionHalo(ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden?: Set<string>): void;
@@ -80,11 +81,14 @@ interface KiCadCanvasApi {
   computeBBox(doc: KDoc): void;
   fieldBoxes(item: KItem): { name: string; pts: [number, number][] }[];
   fieldAt(doc: KDoc, x: number, y: number): { item: KItem; name: string } | null;
-  pinPoints(doc: KDoc, item: KItem): [number, number][];
-  wireEndsAt(doc: KDoc, x: number, y: number, tol?: number): KItem[];
+  /** a symbol's pins on the sheet (mm), with their number and name */
+  pinPoints(doc: KDoc, item: Pick<KItem, "kind" | "node">): { x: number; y: number; number: string; name: string }[];
+  /** the wire / bus ends at a point: the line and the index of the end point */
+  wireEndsAt(doc: KDoc, x: number, y: number, tol?: number): { item: KItem; index: number }[];
   newUuid(): string;
-  setPts(node: SNode, pts: [number, number][]): void;
-  setAt(node: SNode, x: number, y: number, rot?: number): void;
+  setPts(node: SNode, pts: readonly (readonly number[])[]): void;
+  /** x / y / rot left undefined keep the node's current value */
+  setAt(node: SNode, x: number | undefined, y: number | undefined, rot?: number): void;
   atOf(node: SNode): [number, number, number];
   ptsOf(node: SNode): [number, number][];
   kid(node: SNode, key: string): SNode | null;
@@ -166,7 +170,8 @@ interface SchToolModule extends ToolModule {
   setLineMode(ctx: ToolCtx, mode: string): void;
   cycleLineMode(ctx: ToolCtx): void;
   modeText(): string;
-  netItems(doc: KDoc, item: KItem, near?: unknown): KItem[];
+  /** the ids of the items on the net of `item` (near: the pin or end it was picked at) */
+  netItems(doc: KDoc, item: KItem, near?: unknown): Set<string>;
   _: Record<string, unknown>;
 }
 

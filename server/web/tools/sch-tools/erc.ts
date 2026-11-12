@@ -1,0 +1,209 @@
+import type { SchCtx, Pt, ErcMarker } from "./types";
+import { type SymPin, symbolIsPower, symbolPins } from "./autoplace";
+import { editable, selectedItems } from "./commands";
+import { lineEndsAt, lineMidsAt, pinsAt } from "./connect";
+import { LABEL_KINDS, busEntriesAt, isNetLine, labelsAt, noConnectsAt, sheetPinsAt } from "./drag";
+import { conducts, joins, terminalsOf } from "./highlight";
+import { sheetPinNode } from "./nodes";
+import { baseName } from "./sheets";
+import { K, S, atOf, kid, kids, num, ptsOf, str } from "./state";
+import { deep, modChange, onSegMid, r4, segs } from "./util";
+
+// ---------------------------------------------------------------- ERC (eeschema/erc/erc.cpp subset)
+export const PIN_TYPES = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"];
+export const PIN_TYPE_TEXT: Record<string, string> = { input: "Input", output: "Output", bidirectional: "Bidirectional", tri_state: "Tri-state", passive: "Passive", free: "Free", unspecified: "Unspecified", power_in: "Power input", power_out: "Power output", open_collector: "Open collector", open_emitter: "Open emitter", no_connect: "Unconnected" };
+// ERC_SETTINGS::m_defaultPinMap: 0 ok, 1 warning, 2 error
+export const PIN_MATRIX = [
+  [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2], [0, 2, 0, 1, 0, 0, 1, 0, 2, 2, 2, 2], [0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2], [0, 1, 0, 0, 0, 0, 1, 1, 2, 1, 1, 2],
+  [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 2], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 2], [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 2],
+  [0, 2, 1, 2, 0, 0, 1, 0, 2, 2, 2, 2], [0, 2, 0, 1, 0, 0, 1, 0, 2, 0, 0, 2], [0, 2, 1, 1, 0, 0, 1, 0, 2, 0, 0, 2], [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]];
+export const DRIVING = new Set(["output", "power_out", "passive", "tri_state", "bidirectional"]), DRIVEN = new Set(["input", "power_in"]);
+export const pinTypeIndex = (t: string) => { const i = PIN_TYPES.indexOf(t); return i < 0 ? 6 : i; };
+export const ptKey = (p: Pt) => r4(p[0]) + "," + r4(p[1]);
+/** A terminal of an ERC net: a symbol pin, a sheet pin or an item's connection point; attached once it touches another. */
+export interface ErcTerm { item: KItem; p: Pt; net: string; key?: string; pin?: SymPin; power?: boolean; sheetPin?: string; attached?: boolean }
+/** An ERC net: its terminals and the ids of the items they belong to. */
+export interface ErcNet { terms: ErcTerm[]; ids: Set<string> }
+/** ercCheck's options: the project's Pin Conflicts Map, the sub-sheet docs, the parent sheet's pin names. */
+export interface ErcOpts { pinMap?: number[][]; sheetDocs?: SheetDocs | null; parentPins?: Iterable<string> | null }
+/** ctx.sheetDocs: Sheetfile (or docId / path) -> parsed doc or its text. */
+export type SheetDocs = NonNullable<SchCtx["sheetDocs"]>;
+// Every terminal on the sheet joined into nets (the rules of netItems, evaluated once with union-find).
+export function ercNets(doc: KDoc) {
+  const terms: ErcTerm[] = [];
+  for (const it of doc.items.values()) {
+    if (it.kind === "symbol") {
+      const power = symbolIsPower(doc, it), value = kids(it.node, "property").find((p) => str(p[1]) === "Value");
+      for (const pin of symbolPins(doc, it)) {
+        let key: string | undefined; if (power && value && pin.type === "power_in") key = "global:" + str(value[2]); else if (pin.hidden && pin.type === "power_in") key = "global:" + pin.name;
+        terms.push({ item: it, p: [pin.x, pin.y], net: "wire", key, pin, power });
+      }
+    } else if (it.kind === "sheet") { for (const pin of kids(it.node, "pin")) terms.push({ item: it, p: atOf(pin).slice(0, 2).map(r4), net: "any", sheetPin: str(pin[1]) }); }
+    else for (const t of terminalsOf(doc, it)) terms.push(Object.assign({ item: it }, t));
+  }
+  const parent = terms.map((_, i) => i);
+  const find = (i: number) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const union = (a: number, b: number) => { a = find(a); b = find(b); if (a !== b) parent[b] = a; };
+  const byItem = new Map<KItem, number[]>(), byPoint = new Map<string, number[]>(), byKey = new Map<string, number[]>(), touch = terms.map(() => false);
+  terms.forEach((t, i) => {
+    if (!byItem.has(t.item)) byItem.set(t.item, []); byItem.get(t.item)!.push(i);
+    const pk = ptKey(t.p); if (!byPoint.has(pk)) byPoint.set(pk, []); byPoint.get(pk)!.push(i);
+    if (t.key) { if (!byKey.has(t.key)) byKey.set(t.key, []); byKey.get(t.key)!.push(i); }
+  });
+  for (const [it, idx] of byItem) if (conducts(it)) for (let k = 1; k < idx.length; k++) union(idx[0], idx[k]);
+  for (const idx of byPoint.values()) for (let a = 0; a < idx.length; a++) for (let b = a + 1; b < idx.length; b++) if (terms[idx[a]].item !== terms[idx[b]].item && joins(terms[idx[a]], terms[idx[b]])) { union(idx[a], idx[b]); touch[idx[a]] = touch[idx[b]] = true; }
+  for (const [it, idx] of byItem) {
+    if (!isNetLine(it.kind)) continue;
+    const sg = segs(it), lineT = { net: it.kind };
+    terms.forEach((u, i) => { if (u.item === it || !joins(lineT, u)) return; if (sg.some(([a, b]) => onSegMid(u.p, a, b))) { union(idx[0], i); touch[i] = true; } });
+  }
+  for (const idx of byKey.values()) for (let k = 1; k < idx.length; k++) union(idx[0], idx[k]);
+  const nets = new Map<number, ErcNet>();
+  terms.forEach((t, i) => { const r = find(i); if (!nets.has(r)) nets.set(r, { terms: [], ids: new Set() }); const n = nets.get(r)!; n.terms.push(t); n.ids.add(t.item.id); t.attached = touch[i]; });
+  return { terms, nets: Array.from(nets.values()) };
+}
+// A no-connect flag at p, a sheet pin at p, any net line end / middle at p.
+export function noConnectAt(doc: KDoc, p: Pt) { return noConnectsAt(doc, p).length > 0; }
+export function pinLabel(t: ErcTerm & { pin: SymPin }) { return `${t.item.ref || "?"} pin ${t.pin.number}${t.pin.name && t.pin.name !== "~" ? " (" + t.pin.name + ")" : ""}`; }
+export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
+  opts = opts || {};
+  const markers: ErcMarker[] = [], mark = (code: string, severity: string, p: Pt, text: string, ids: Iterable<string>) => markers.push({ code, severity, x: r4(p[0]), y: r4(p[1]), text, ids: Array.from(new Set(ids || [])) });
+  const { nets } = ercNets(doc);
+  // symbols: annotation and duplicate references
+  const byRef = new Map<string, KItem>();
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol") continue;
+    const ref = it.ref || "", [x, y] = atOf(it.node);
+    if (!ref || /\?$/.test(ref)) { mark("unannotated", "error", [x, y], `Symbol ${ref || "(no reference)"} is not annotated`, [it.id]); continue; }
+    const unit = kid(it.node, "unit") ? num(kid(it.node, "unit")![1], 1) : 1, k = ref + "#" + unit;
+    if (byRef.has(k)) mark("duplicate_reference", "error", [x, y], `Duplicate reference designators ${ref}`, [it.id, byRef.get(k)!.id]); else byRef.set(k, it);
+  }
+  // nets: pins, drivers, labels
+  for (const net of nets) {
+    const pins = net.terms.filter((t): t is ErcTerm & { pin: SymPin } => !!t.pin), labels = net.terms.filter((t) => LABEL_KINDS.has(t.item.kind));
+    const leaves = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label" || t.item.kind === "global_label" || t.power || (t.pin && t.key));
+    for (const t of pins) {
+      if (t.pin.hidden || t.pin.type === "no_connect" || t.key) continue;
+      if (!t.attached && !noConnectAt(doc, t.p)) mark("pin_not_connected", "error", t.p, `Pin not connected: ${pinLabel(t)}`, [t.item.id]);
+      if (t.pin.type === "no_connect" || (noConnectAt(doc, t.p) && net.terms.some((u) => u !== t && u.item !== t.item)))
+        mark("no_connect_connected", "warning", t.p, `A pin with a "no connection" flag is connected: ${pinLabel(t)}`, [t.item.id]);
+    }
+    const visible = pins.filter((t) => !t.pin.hidden || t.power);
+    let hasDriver = false, isPower = visible.some((t) => t.pin.type === "power_in"), needs: (typeof pins)[number] | null = null, worst: { e: number; a: (typeof pins)[number]; b: (typeof pins)[number] } | null = null;
+    for (let i = 0; i < visible.length; i++) {
+      const a = visible[i];
+      if (isPower ? a.pin.type === "power_out" : DRIVING.has(a.pin.type)) hasDriver = true;
+      if (DRIVEN.has(a.pin.type) && (!needs || (isPower && a.pin.type === "power_in" && needs.pin.type !== "power_in"))) needs = a;
+      for (let j = i + 1; j < visible.length; j++) {
+        const b = visible[j]; if (a.item === b.item && a.pin.number === b.pin.number) continue;
+        const e = (opts.pinMap || PIN_MATRIX)[pinTypeIndex(a.pin.type)][pinTypeIndex(b.pin.type)];   // the project's Pin Conflicts Map when given
+        if (e && (!worst || e > worst.e)) worst = { e, a, b };
+      }
+    }
+    if (worst) mark(worst.e === 2 ? "pin_to_pin_error" : "pin_to_pin_warning", worst.e === 2 ? "error" : "warning", worst.a.p, `Pins of type ${PIN_TYPE_TEXT[worst.a.pin.type]} and ${PIN_TYPE_TEXT[worst.b.pin.type]} are connected: ${pinLabel(worst.a)} and ${pinLabel(worst.b)}`, [worst.a.item.id, worst.b.item.id]);
+    if (needs && !hasDriver && visible.length > 1 && !net.terms.some((t) => t.pin && noConnectAt(doc, t.p))) {
+      const leavesSheet = net.terms.some((t) => t.sheetPin || t.item.kind === "hierarchical_label");
+      if (!leavesSheet) mark(isPower ? "power_pin_not_driven" : "pin_not_driven", leaves ? "warning" : "error", needs.p,
+        (isPower ? "Input Power pin not driven by any Output Power pins" : "Input pin not driven by any Output pins") + ": " + pinLabel(needs) + (leaves ? " (no driver on this sheet)" : ""), [needs.item.id]);
+    }
+    for (const t of labels) {
+      if (t.item.kind === "netclass_flag" || t.item.kind === "directive_label") continue;
+      const text = str(t.item.node[1]);
+      if (!text.trim()) mark("empty_label_name", "error", t.p, "Label has an empty name", [t.item.id]);
+      if (!t.attached) mark("label_dangling", "error", t.p, `Label not connected: ${text}`, [t.item.id]);
+      else if (t.item.kind === "label" && pins.length === 1 && labels.length === 1 && !leaves) mark("isolated_pin_label", "warning", t.p, `Label connected to only one pin: ${text}`, [t.item.id]);
+      const wires = new Set<string>(); for (const it of doc.items.values()) if (it.kind === "wire" && (K.wireEndsAt(doc, t.p[0], t.p[1], 1e-3).some((e) => e.item === it) || segs(it).some(([a, b]) => onSegMid(t.p, a, b)))) wires.add(it.id);
+      if (wires.size > 1) mark("label_multiple_wires", "warning", t.p, `Label connects more than one wire: ${text}`, [t.item.id, ...wires]);
+    }
+  }
+  // wires: dangling ends
+  for (const it of doc.items.values()) {
+    if (!isNetLine(it.kind)) continue;
+    const pts = ptsOf(it.node); if (pts.length < 2) continue;
+    const loose = [pts[0], pts[pts.length - 1]].filter((p) => {
+      if (K.wireEndsAt(doc, p[0], p[1], 1e-3).some((e) => e.item !== it)) return false;
+      if (lineMidsAt(doc, p[0], p[1], "wire").length || lineMidsAt(doc, p[0], p[1], "bus").length) return false;
+      if (it.kind === "wire" && pinsAt(doc, p[0], p[1]).length) return false;
+      return !labelsAt(doc, p).length && !sheetPinsAt(doc, p).length && !busEntriesAt(doc, p).length && !noConnectsAt(doc, p).length;
+    });
+    if (loose.length === 2) mark("wire_dangling", "error", [(pts[0][0] + pts[pts.length - 1][0]) / 2, (pts[0][1] + pts[pts.length - 1][1]) / 2], "Wires not connected to anything", [it.id]);
+    else for (const p of loose) mark("unconnected_wire_endpoint", "warning", p, "Unconnected wire endpoint", [it.id]);
+  }
+  // no-connect flags on nothing, four-way junctions
+  for (const it of doc.items.values()) {
+    if (it.kind === "no_connect") { const [x, y] = atOf(it.node); if (!pinsAt(doc, x, y).length && !K.wireEndsAt(doc, x, y, 1e-3).length) mark("no_connect_dangling", "warning", [x, y], 'Unconnected "no connection" flag', [it.id]); }
+    if (it.kind === "junction") { const [x, y] = atOf(it.node); if (lineEndsAt(doc, x, y, "wire").length >= 4) mark("four_way_junction", "warning", [x, y], "Four connection points are joined together", [it.id]); }
+  }
+  // similar labels (case-insensitive twins)
+  const names = new Map<string, Map<string, KItem>>();
+  for (const it of doc.items.values()) if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") { const t = str(it.node[1]); const k = t.toLowerCase(); if (!names.has(k)) names.set(k, new Map()); names.get(k)!.set(t, it); }
+  for (const m of names.values()) if (m.size > 1) { const its = Array.from(m.values()); mark("similar_labels", "warning", atOf(its[0].node), `Labels are similar: ${Array.from(m.keys()).join(", ")}`, its.map((x) => x.id)); }
+  // sheet pins vs the sub-sheet's hierarchical labels (when the sub-sheet document is known)
+  const sheetDocs = opts.sheetDocs || null;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "sheet") continue;
+    const sub = sheetDocs ? subsheetDoc(sheetDocs, it) : null;
+    const pinNames = new Map<string, SNode>(); for (const pin of kids(it.node, "pin")) pinNames.set(str(pin[1]), pin);
+    if (sub) {
+      const hier = new Set<string>(); for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str(o.node[1]));
+      for (const [name, pin] of pinNames) if (!hier.has(name)) mark("hier_label_mismatch", "error", atOf(pin), `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id]);
+      const [x, y] = atOf(it.node);
+      for (const name of hier) if (!pinNames.has(name)) mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id]);
+    }
+  }
+  if (opts.parentPins) { const pp = new Set(opts.parentPins); for (const it of doc.items.values()) if (it.kind === "hierarchical_label" && !pp.has(str(it.node[1]))) mark("hier_label_mismatch", "error", atOf(it.node), `Hierarchical label ${str(it.node[1])} has no sheet pin on the parent sheet`, [it.id]); }
+  markers.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "error" ? -1 : 1) || a.y - b.y || a.x - b.x);
+  return markers;
+}
+// ctx.sheetDocs: a Map or object of Sheetfile (or docId / path) -> parsed doc or its text.
+export function subsheetDoc(sheetDocs: SheetDocs, sheet: KItem): KDoc | null {
+  // a Map, or a plain object that may itself have a "get" / "set" key: the original tests for the methods
+  const asMap = sheetDocs as Partial<Map<string, KDoc | string>>, asObj = sheetDocs as Record<string, KDoc | string>;
+  const get = (k: string) => (typeof asMap.get === "function" ? asMap.get(k) : asObj[k]);
+  const file = sheet.file || str((kids(sheet.node, "property").find((p) => str(p[1]) === "Sheetfile") || [])[2]);
+  let d = get(file) || get(baseName(file)) || get(sheet.id); if (!d) return null;
+  if (typeof d === "string") { try { d = K.parseDoc(d); } catch (e) { return null; } if (typeof asMap.set === "function") asMap.set(file, d); }
+  return d && d.items ? d : null;
+}
+export function runERC(ctx: SchCtx, opts?: ErcOpts | null) {
+  const markers = ercCheck(ctx.doc, Object.assign({ sheetDocs: ctx.sheetDocs, parentPins: ctx.parentSheetPins }, opts || {}));
+  S.markers = markers; S.markersDoc = ctx.doc;
+  if (typeof ctx.setMarkers === "function") ctx.setMarkers(markers);
+  const errors = markers.filter((m) => m.severity === "error").length;
+  ctx.toast(markers.length ? `ERC: ${errors} error${errors === 1 ? "" : "s"}, ${markers.length - errors} warning${markers.length - errors === 1 ? "" : "s"}` : "ERC: no problems found");
+  ctx.requestRender(); return true;
+}
+// Sheet pins the sub-sheet's hierarchical labels ask for (syncSheetPins); cleanupSheetPins removes the orphans.
+export function syncSheetPins(ctx: SchCtx) {
+  if (!editable(ctx)) return false;
+  const doc = ctx.doc, changes: KChange[] = []; let added = 0;
+  for (const it of selectedItems(ctx)) {
+    if (it.kind !== "sheet") continue;
+    const sub = ctx.sheetDocs ? subsheetDoc(ctx.sheetDocs, it) : null; if (!sub) { ctx.toast("The sheet's file is not loaded"); continue; }
+    const have = new Set<string>(kids(it.node, "pin").map((p) => str(p[1]))); const node = deep(it.node);
+    const [x, y] = atOf(node), s = kid(node, "size"), h = num(s && s[2]); let row = 0;
+    for (const o of sub.items.values()) {
+      if (o.kind !== "hierarchical_label" || have.has(str(o.node[1]))) continue;
+      const py = Math.min(y + h, r4(y + 1.27 * (++row)));
+      const pin = sheetPinNode(str(o.node[1]), [x, py], "left"); const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (at >= 0) node.splice(at, 0, pin); else node.push(pin);
+      have.add(str(o.node[1])); added++;
+    }
+    if (added) changes.push(modChange(doc, it, node));
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, "sync sheet pins"); return true;
+}
+export function cleanupSheetPins(ctx: SchCtx) {
+  if (!editable(ctx)) return false;
+  const doc = ctx.doc, changes: KChange[] = [];
+  for (const it of selectedItems(ctx)) {
+    if (it.kind !== "sheet") continue;
+    const sub = ctx.sheetDocs ? subsheetDoc(ctx.sheetDocs, it) : null; if (!sub) { ctx.toast("The sheet's file is not loaded"); continue; }
+    const hier = new Set<string>(); for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str(o.node[1]));
+    const node = deep(it.node); const before = kids(node, "pin").length;
+    for (let i = node.length - 1; i > 0; i--) { const c = node[i]; if (Array.isArray(c) && c[0] === "pin" && !hier.has(str(c[1]))) node.splice(i, 1); }
+    if (kids(node, "pin").length !== before) changes.push(modChange(doc, it, node));
+  }
+  if (!changes.length) return false;
+  ctx.commit(changes, "cleanup sheet pins"); return true;
+}
