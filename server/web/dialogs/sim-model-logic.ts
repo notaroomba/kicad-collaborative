@@ -764,6 +764,39 @@ function paramPairs(toks: string[]): [string, string][] {
   for (let i = 0; i + 1 < toks.length; i++) if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(toks[i])) { out.push([toks[i], toks[i + 1]]); i++; }
   return out;
 }
+/** SPICE_LIBRARY_PARSER::parseFile's dotInclude: ".inc…" then a path, quoted, in apostrophes or bare. */
+const DOT_INCLUDE = /^[ \t]*\.inc\S*[ \t]+(?:"([^"]*)"|'([^']*)'|(.*?))[ \t]*$/i;
+/** The directory part of a library path ("" for none). */
+const dirOf = (p: string): string => { const n = p.replace(/\\/g, "/"); const i = n.lastIndexOf("/"); return i < 0 ? "" : n.slice(0, i); };
+/** ResolveEmbeddedLibraryPath: an included path relative to the including file's directory when that file exists, else as it is. */
+export function includeCandidates(inc: string, relativeTo: string): string[] {
+  const n = inc.replace(/\\/g, "/");
+  if (/^(\/|[A-Za-z]:\/|\$\{|kicad-embed:\/\/)/.test(n)) return [n];
+  const d = dirOf(relativeTo); const parts: string[] = [];
+  for (const seg of (d ? d + "/" + n : n).split("/")) { if (seg === "." || seg === "") continue; if (seg === ".." && parts.length && parts[parts.length - 1] !== "..") parts.pop(); else parts.push(seg); }
+  const rel = parts.join("/");
+  return rel === n ? [n] : [rel, n];
+}
+/** The models of every .include, in place of the .include line (SPICE_LIBRARY_PARSER queues them where they occur);
+ *  a file that cannot be read is reported and skipped.  read: the text of a resolved path, or null. */
+export async function expandSpiceIncludes(text: string, path: string, read: (candidates: string[]) => Promise<string | null>, errors: string[], seen: Set<string> = new Set([path])): Promise<string> {
+  const out: string[] = []; let depth = 0;
+  for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+    // a .include inside a .subckt is part of that subcircuit's code
+    const lt = line.trim().toLowerCase();
+    if (lt.startsWith(".subckt")) depth++; else if (lt.startsWith(".ends") && depth) depth--;
+    const m = depth ? null : DOT_INCLUDE.exec(line);
+    if (!m) { out.push(line); continue; }
+    const inc = (m[1] ?? m[2] ?? m[3] ?? "").trim();
+    const cands = includeCandidates(inc, path);
+    if (cands.some((c) => seen.has(c))) continue;
+    const t = await read(cands);
+    if (t === null) { errors.push(`File '${cands[0]}' does not exist.`); continue; }
+    const next = new Set(seen); next.add(cands[0]);
+    out.push(await expandSpiceIncludes(t, cands[0], read, errors, next));
+  }
+  return out.join("\n");
+}
 /** SIM_LIBRARY_SPICE: every .model and .subckt of the file, in file order (SIM_MODEL_SPICE::Create per unit). */
 export function parseSpiceLibrary(text: string): SpiceLibrary {
   const lib: SpiceLibrary = { models: [], errors: [] };

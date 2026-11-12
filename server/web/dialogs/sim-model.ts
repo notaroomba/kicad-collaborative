@@ -291,17 +291,25 @@ function build<R extends S.FieldLike>(rows0: R[], ctx: SimModelCtx<R>, done: (ro
   const readLibrary = async (p: string): Promise<string | null> => {
     const f = resolveFile(p);
     if (!f) { ses.messages.push(`Simulation model library not found at '${p}'`); return null; }
-    try { const t = await f.load(); if (t === null) ses.messages.push(`Cannot open file '${p}'.`); return t; } catch (e) { ses.messages.push(`Cannot open file '${p}'.`); return null; }
+    let t: string | null;
+    try { t = await f.load(); if (t === null) ses.messages.push(`Cannot open file '${p}'.`); } catch (e) { ses.messages.push(`Cannot open file '${p}'.`); return null; }
+    if (t === null || S.isIbisPath(p)) return t;
+    // .include: the included files' models where the line is
+    return S.expandSpiceIncludes(t, p, async (cands) => {
+      for (const c of cands) { const g = resolveFile(c); if (!g) continue; try { const x = await g.load(); if (x !== null) return x; } catch (e) { /* the next candidate */ } }
+      return null;
+    }, ses.messages);
   };
   const flushMessages = (): void => { const m = ses.messages.splice(0); showInfo(m.join("\n")); };
   const loadPath = async (p: string, force = false): Promise<void> => {
     if (!force && p === ses.libraryPath && ses.library) return;
     ses.source = "library";
     const text = p ? await readLibrary(p) : null;
-    const ok = text !== null && ses.loadLibrary(p, text);
-    if (text === null) { ses.library = null; ses.libModels.clear(); ses.libraryPath = p; ses.modelName = ""; }
+    if (text !== null) ses.loadLibrary(p, text);
+    else { ses.library = null; ses.libModels.clear(); ses.libraryPath = p; ses.modelName = ""; }
     fillModelList(ses.modelNames(filter.value));
-    if (ok || !p) showInfo(""); else flushMessages();
+    // the reader's messages (a missing model, an unreadable .include) in the infobar
+    if (!p) { ses.messages.length = 0; showInfo(""); } else flushMessages();
     updateWidgets();
   };
   const onModelChoice = (): void => {

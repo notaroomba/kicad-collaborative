@@ -220,5 +220,23 @@ require(path.join(__dirname, "..", "kicad-canvas.js"));
   const ok = note === "[][${SIM.Params}][${FOO}]";
   if (ok) { passed++; console.log("  ok   ${SIM.*} of a symbol without the field resolves to an empty string (case-sensitive)"); } else { failed++; console.log("  FAIL ${SIM.*} resolution: " + note); }
 }
-console.log(`${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+// SPICE_LIBRARY_PARSER: a .include brings the included file's models in where it stands (relative to the including file)
+(async () => {
+  try {
+    const files = { "models/main.lib": `.model DA D(is=1n)\n.include "sub/more.lib"\n.INC 'missing.lib'\n.model DZ D(is=2n)\n.subckt X a b\n.include inner.lib\nR1 a b 1k\n.ends\n`,
+      "models/sub/more.lib": `.model DB D(is=3n)\n.inc ../loop.lib\n`, "models/loop.lib": `.model DC D(is=4n)\n.include main.lib\n` };
+    const tried = [];
+    const read = async (c) => { tried.push(c.join("|")); for (const p of c) if (files[p] !== undefined) return files[p]; return null; };
+    const errs = [];
+    const text = await L.expandSpiceIncludes(files["models/main.lib"], "models/main.lib", read, errs);
+    const lib = L.parseSpiceLibrary(text);
+    assert.deepStrictEqual(lib.models.map((m) => m.name), ["DA", "DB", "DC", "DZ", "X"]);
+    assert.deepStrictEqual(errs, ["File 'models/missing.lib' does not exist."]);
+    assert.ok(/\.include inner\.lib/.test(lib.models.find((m) => m.name === "X").code), "a .include inside a .subckt stays in its code");
+    assert.deepStrictEqual(L.includeCandidates("${KIPRJMOD}/x.lib", "models/a.lib"), ["${KIPRJMOD}/x.lib"]);
+    assert.deepStrictEqual(L.includeCandidates("x.lib", "a.lib"), ["x.lib"]);
+    passed++; console.log("  ok   .include: the included models in place, relative paths, a missing file reported, no cycles");
+  } catch (e) { failed++; console.log("  FAIL .include: " + (e.stack || e)); }
+  console.log(`${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
+})();
