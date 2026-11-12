@@ -396,6 +396,14 @@ export const libs: Record<string, (a: any) => Promise<unknown>> = {
   footprint: async (a) => { const lib = libName(a.lib), name = libName(a.name); const j = await libGet(`/api/libs/footprints/${encodeURIComponent(lib)}/${encodeURIComponent(name)}`); return j && typeof j.footprint === "string" ? { library: lib, name, fpid: `${lib}:${name}`, footprint: j.footprint } : {}; },
 };
 
+// ---------------------------------------------------------------- undo / redo
+
+/** Edit → Undo and Redo of the open document, for a plugin that takes back its own failed edit as it would on the desktop. */
+export const history: Record<string, () => Promise<unknown>> = {
+  undo: async () => { const { ed } = mayWrite(); const depth = () => { try { return Number(appState().undo.undo) || 0; } catch { return -1; } }; const before = depth(); ed.api.undoLast(); return { done: depth() !== before }; },
+  redo: async () => { const { ed } = mayWrite(); const depth = () => { try { return Number(appState().undo.redo) || 0; } catch { return -1; } }; const before = depth(); ed.api.redoLast(); return { done: depth() !== before }; },
+};
+
 // ---------------------------------------------------------------- view
 
 const idsOf = (doc: any, a: any): string[] => {
@@ -407,7 +415,17 @@ const idsOf = (doc: any, a: any): string[] => {
 
 export const views: Record<string, (a: any) => Promise<unknown>> = {
   select: async (a) => { const { ed, doc } = liveDoc(); const ids = idsOf(doc, a); ed.api.toolCtx().setSelection(ids); return { selected: ids.length }; },
-  highlight: async (a) => { const { ed, doc } = liveDoc(); const ids = idsOf(doc, a); ed.api.toolCtx().setHighlight(ids.length ? new Set(ids) : null); return { highlighted: ids.length }; },
+  highlight: async (a) => {
+    const { ed, doc } = liveDoc(); const ids = idsOf(doc, a);
+    // By net name: the board editor's own net highlight (Highlight Net), so the message panel and the router know it too.
+    const names: string[] = (Array.isArray(a.nets) ? a.nets : []).filter((n: any) => typeof n === "string" && n).slice(0, 2000);
+    const P = (window as any).CollabTools && (window as any).CollabTools.pcb;
+    if (Array.isArray(a.nets) && doc.type === "pcb" && P && typeof P.netHighlightIds === "function") {
+      for (const n of names) for (const id of P.netHighlightIds(doc, n)) ids.push(id);
+      if (P.state) P.state.highlightNet = names.length ? names[0] : null;
+    }
+    ed.api.toolCtx().setHighlight(ids.length ? new Set(ids) : null); return { highlighted: ids.length };
+  },
   focus: async (a) => {
     const { doc } = liveDoc(); const ids = idsOf(doc, a);
     if (ids.length) {
@@ -417,6 +435,21 @@ export const views: Record<string, (a: any) => Promise<unknown>> = {
     } else if (typeof a.x === "number" && typeof a.y === "number" && isFinite(a.x) && isFinite(a.y)) design.centreOn(a.x, a.y);
     else throw new ApiError("focus needs ids, refs, or x and y that are on the open document.", "invalid");
     return { shown: ids.length };
+  },
+  /** The Nets part of the Appearance panel: read it, or change net colours, which ratsnest lines show, and the two display modes. */
+  appearance: async (a) => {
+    liveDoc(); const P = (window as any).CollabPanels;
+    if (!P || typeof P.dispatch !== "function") throw new ApiError("The Appearance panel is not available here.", "unavailable");
+    const known = new Set<string>((P.getState().appearance.nets || []).map((n: any) => n.name));
+    for (const act of Array.isArray(a.actions) ? a.actions.slice(0, 5000) : []) {
+      if (!act || typeof act !== "object") continue;
+      if (act.t === "netVisible" && known.has(act.name)) P.dispatch({ t: "netVisible", name: act.name, on: !!act.on });
+      else if (act.t === "netColor" && known.has(act.name)) P.dispatch({ t: "netColor", name: act.name, color: typeof act.color === "string" && /^#[0-9a-fA-F]{6}$/.test(act.color) ? act.color : null });
+      else if (act.t === "netColorMode" && ["all", "ratsnest", "off"].includes(act.mode)) P.dispatch({ t: "netColorMode", mode: act.mode });
+      else if (act.t === "ratsnestMode" && ["all", "visible", "none"].includes(act.mode)) P.dispatch({ t: "ratsnestMode", mode: act.mode });
+    }
+    const ap = P.getState().appearance;
+    return { nets: (ap.nets || []).map((n: any) => ({ name: n.name, color: n.color || null, visible: n.visible !== false })), netColorMode: ap.netColorMode, ratsnestMode: ap.ratsnestMode };
   },
   setMarkers: async (a) => {
     const { ed, doc } = liveDoc(); const list = Array.isArray(a.markers) ? a.markers.slice(0, 2000) : [];

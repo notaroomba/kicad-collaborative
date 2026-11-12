@@ -160,6 +160,11 @@ export function pythonRuntime(): void {
     while (depth-- > 0) ctx.restore();
   };
   // The person closed the floating dialog (its ×, or Escape): the topmost wx window gets its close event.
+  // What happens in the editor while a plugin's window is open: the person's selection (plugins that ask to "pick an item
+  // on the board" wait for it) and changes to the board (the plugin's copy is read again before its next handler runs).
+  const tell = (name: string, data: any) => { if (py) py.runPythonAsync("import kicad_web\nkicad_web.editor_event(" + JSON.stringify(name) + ", " + JSON.stringify(JSON.stringify(data || {})) + ")").catch((e: any) => console.error(say(e))); };
+  kicad.on("selection", (d: any) => tell("selection", { ids: d && Array.isArray(d.ids) ? d.ids : [] }));
+  kicad.on("change", (d: any) => tell("change", d));
   kicad.on("window-closed", () => { if (py) py.runPythonAsync("import wx\nwx._user_closed()").catch((e: any) => console.error(say(e))); });
 
   // ---- the bridge Python blocks on
@@ -185,6 +190,10 @@ export function pythonRuntime(): void {
       case "project.saveVersion": out = await kicad.project.saveVersion(a); break;
       case "net.fetch": out = await kicad.net.fetch(a); break;
       case "view.select": out = await kicad.view.select(a); break;
+      case "view.highlight": out = await kicad.view.highlight(a); break;
+      case "view.appearance": out = await kicad.view.appearance(a); break;
+      case "design.undo": out = await kicad.design.undo(); break;
+      case "design.redo": out = await kicad.design.redo(); break;
       case "view.focus": out = await kicad.view.focus(a); break;
       case "ui.confirm": out = await kicad.ui.confirm(a); break;
       case "ui.openLink": out = await kicad.ui.openLink(a); break;
@@ -237,6 +246,9 @@ export function pythonRuntime(): void {
       "from pyodide.ffi import run_sync",
       "def _kc_bridge(method, args):",
       "    return run_sync(js.__kcCall(method, args))",
+      // the web addresses this plugin was granted: a connection to this computer itself is carried only when one of them names it
+      "import kicad_net",
+      "kicad_net.granted = set(" + JSON.stringify((Array.isArray(kicad.plugin.hosts) ? kicad.plugin.hosts : []).filter((h: any) => typeof h === "string")) + ")",
       "kicad_web.boot(" + JSON.stringify(kicad.plugin.identifier) + ", _kc_files, _kc_bridge, " + JSON.stringify(kicad.plugin.name) + ")",
     ].join("\n")));
     py.globals.delete("_kc_files");

@@ -238,8 +238,8 @@
   "status": "works"
  },
  "com.github.samuelcicuitstudio.traceforge-kicad": {
-  "status": "unsupported",
-  "note": "It starts a second program that talks to KiCad over a local network port; neither exists in a browser."
+  "status": "partly",
+  "note": "Its helper and its panel both run in the page and talk over a local port that stays inside the page. The first launch sets its net highlight shortcut and asks to be opened again, as on the desktop. Signal paths, export, rotation, via and trace tools, net colours and manufacturing checks work. Stitching, fences and rounded corners need the shapely package. Teardrops drive KiCad's own Windows dialog, on the desktop too, and are not available here."
  },
  "com.github.seigedigital.setholediameterpluginforkicad": {
   "status": "works"
@@ -268,7 +268,7 @@
  },
  "com.github.usetraces.traces": {
   "status": "unsupported",
-  "note": "It needs the traces server running on the same computer."
+  "note": "It is a client for the traces server (traces-serve), which is installed separately from its own source and is not part of this package. A plugin here cannot reach a server on your own computer."
  },
  "com.github.weirdgyn.viastitcher": {
   "status": "works"
@@ -307,7 +307,7 @@
  },
  "com.infernoembedded.vulcans-trials": {
   "status": "unsupported",
-  "note": "It runs a program that is bundled for the desktop."
+  "note": "The package holds only a launcher for the vulcans-trials program, a compiled desktop application that is installed separately. Without it the plugin reports that it cannot find the program, on the desktop too."
  },
  "com.pcbtools.kinotes": {
   "status": "works"

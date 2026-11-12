@@ -1295,6 +1295,27 @@ class KeyEvent(_wx.Event):
 
     GetKeyCode = lambda self: self._wx_key
     GetUnicodeKey = lambda self: self._uni
+
+    # a key event a plugin makes itself, to send to a window
+    def SetKeyCode(self, code):
+        self._wx_key = int(code)
+
+    def SetUnicodeKey(self, code):
+        self._uni = int(code or 0)
+
+    def SetControlDown(self, on=True):
+        self._ctrl = bool(on)
+
+    def SetShiftDown(self, on=True):
+        self._shift = bool(on)
+
+    def SetAltDown(self, on=True):
+        self._alt = bool(on)
+
+    def SetMetaDown(self, on=True):
+        self._meta = bool(on)
+
+    SetRawControlDown = SetControlDown
     GetRawKeyCode = lambda self: self._wx_key
     GetRawKeyFlags = lambda self: 0
     KeyCode = property(lambda self: self._wx_key)

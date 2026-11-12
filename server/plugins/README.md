@@ -282,10 +282,27 @@ How it works:
   requests a minute.  Every request is written to the plugin's log.
   `KC_PLUGIN_NETWORK=off` turns this off for the whole server.
 
-What does not carry over, by nature of a browser: running other programs (ngspice, FreeCAD, a
-3D renderer, a helper server on a local port), Python packages with native code that Pyodide
-does not ship, and custom painting on a device context.  A plugin that needs one of these says
-so in its log.
+- **Local ports and helper programs.**  A plugin that listens on `127.0.0.1` and starts a second
+  Python program that connects to it (TraceForge's helper and panel) gets both inside the page:
+  `kicad_net.py` pairs a loopback `connect` with a `listen` in the same interpreter, each
+  `threading.Thread` runs as a parked task that is resumed when its socket has work, and
+  `Event.wait` lets the page breathe.  Nothing leaves the page and nothing outside it can
+  connect; a loopback address with no listener in the page is refused, unless the plugin's
+  package lists it as a web service address, in which case the server carries it as above.
+- **The board editor window.**  `pcbnew.GetBoard()`-era plugins that find the "PCB Editor" frame
+  with `wx.GetTopLevelWindows()` get a stand-in (`wx._PcbFrame`): its menu bar holds Edit
+  (Undo, Redo, which undo and redo in the real editor) and Tools, External Plugins; its canvas
+  child receives the person's selection as clicks and key presses; its "Appearance" child holds
+  a Nets grid and the net colour and ratsnest radio buttons, which read and write the editor's
+  own Appearance panel.  `BOARD.SetHighLightNet`/`HighLightON` highlight the nets in the editor.
+  A board changed by someone else is reloaded before the plugin's next event handler runs.
+- **More of wx.**  `wx.lib.agw.hypertreelist` and `wx.TreeCtrl` (`wx/_tree.py`), accelerator
+  tables, `wx.ColourDialog`, screen geometry, `wx.DateTime`.
+
+What does not carry over, by nature of a browser: running programs that are not Python and not
+stood in for here (ngspice, FreeCAD, a 3D renderer, a compiled desktop application), a server
+on the person's own computer, and Python packages with native code that Pyodide does not ship.
+A plugin that needs one of these says so in its log.
 
 The label beside each plugin in the manager is one of *works*, *partly works*, *limited*,
 *not supported* and *not tested yet* (it needs something this check could not load or reach).

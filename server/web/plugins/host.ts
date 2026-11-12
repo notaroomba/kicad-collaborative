@@ -8,7 +8,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useSyncExternalStore } from "react";
-import { ApiError, editorState, fab, libs, project, reads, selectionSummary, views, writes } from "./api";
+import { ApiError, editorState, fab, history, libs, project, reads, selectionSummary, views, writes } from "./api";
 import { pythonRuntime } from "./pyruntime";
 import { createSandbox, type Sandbox } from "./sandbox";
 import { inScope, isPython, manifestFiles, validateFiles, validateManifest, type InstalledPlugin, type PluginAction, type PluginManifest, type PluginPorter } from "./types";
@@ -340,7 +340,7 @@ async function startPython(p: InstalledPlugin) {
   const run: Run = { plugin: p, key: keyOf(p), sandbox: null as unknown as Sandbox, pending: new Map(), seq: 0, commits: [], actions: [] };
   runs.set(id, run);
   run.sandbox = createSandbox(p, frameHost, {
-    plugin: { identifier: id, name: p.manifest.name, version: p.manifest.version || "", pyodide: `${location.origin}/static/pyodide/` }, granted: p.granted.slice(), theme: themeNow(),
+    plugin: { identifier: id, name: p.manifest.name, version: p.manifest.version || "", pyodide: `${location.origin}/static/pyodide/`, hosts: has(p, "network") && p.manifest.network && Array.isArray(p.manifest.network.hosts) ? p.manifest.network.hosts.slice(0, 200) : [] }, granted: p.granted.slice(), theme: themeNow(),
     entry: `(${pythonRuntime.toString()})();`, entryName: "kicad-python.js", html: "", resources: files, defer: true,
     editor: editorState(has(p, "design:read")),
   }, (msg) => onMessage(run, msg));
@@ -424,8 +424,8 @@ async function whenReady(id: string, tries = 100): Promise<Run> {
 const NEEDS: Record<string, string | null> = {
   "design.overview": "design:read", "design.documents": "design:read", "design.components": "design:read", "design.component": "design:read", "design.nets": "design:read",
   "design.items": "design:read", "design.selection": "design:read", "design.runChecks": "design:read", "design.boardInfo": "design:read", "design.board": "design:read",
-  "design.apply": "design:write", "design.commit": "design:write",
-  "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
+  "design.apply": "design:write", "design.commit": "design:write", "design.undo": "design:write", "design.redo": "design:write",
+  "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
   "fab.svg": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write",
@@ -461,6 +461,7 @@ async function handleCall(run: Run, method: string, a: any): Promise<unknown> {
   const [ns, fn] = method.split(".");
   if (ns === "design") {
     if (reads[fn]) return reads[fn](a);
+    if (fn === "undo" || fn === "redo") { const out = await history[fn](); log(p.identifier, "host", fn === "undo" ? "Chose Edit → Undo" : "Chose Edit → Redo"); return out; }
     // A plugin that writes in a loop (an edit event answered with an edit) is stopped here rather than flooding the session.
     const now = Date.now(); run.commits = run.commits.filter((t) => now - t < 10000);
     if (run.commits.length >= 30) throw new ApiError("That is too many changes in a few seconds; this one was not applied.", "rate_limited");

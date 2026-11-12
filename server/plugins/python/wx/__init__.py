@@ -33,6 +33,9 @@ _headless_main = None      # headless: callable() run by App.MainLoop of a plugi
 _process_mode = False      # the running plugin is its own program (KiCad's IPC kind): App.MainLoop blocks while its windows are open
 _in_mainloop = [0]
 _bridge = None             # set by the runtime: host calls (confirm, prompt, pick, status, toast)
+_before_event = None       # set by the runtime: called before each handler (brings the board up to date with the editor)
+_filters = []              # wx.EventFilter objects, see EvtHandler.AddFilter
+_editor = {}               # set by the runtime: what the board editor's window does (its plugin menu, undo, its keys)
 _after_event = None        # set by the runtime: called after each handler (commits board changes)
 
 
@@ -365,7 +368,7 @@ SYS_DEFAULT_GUI_FONT, SYS_ANSI_FIXED_FONT, SYS_SYSTEM_FONT, SYS_OEM_FIXED_FONT =
 SYS_SCREEN_X, SYS_SCREEN_Y, SYS_VSCROLL_X, SYS_HSCROLL_Y = 1, 2, 28, 29
 NOT_FOUND = -1
 WXK_RETURN, WXK_ESCAPE, WXK_TAB, WXK_DELETE, WXK_BACK, WXK_SPACE, WXK_NUMPAD_ENTER, WXK_UP, WXK_DOWN, WXK_LEFT, WXK_RIGHT, WXK_F1 = 13, 27, 9, 127, 8, 32, 370, 315, 317, 314, 316, 340
-MOD_NONE, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_CMD = 0, 1, 2, 4, 2
+MOD_NONE, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_CMD, MOD_WIN = 0, 1, 2, 4, 2, 8
 ACCEL_NORMAL, ACCEL_ALT, ACCEL_CTRL, ACCEL_SHIFT = 0, 1, 2, 4
 LANGUAGE_DEFAULT, LANGUAGE_ENGLISH = 0, 58
 ITEM_NORMAL, ITEM_CHECK, ITEM_RADIO, ITEM_SEPARATOR = 0, 1, 2, -1
@@ -1524,6 +1527,7 @@ for _n in ("CLOSE", "SIZE", "PAINT", "SHOW", "ACTIVATE", "IDLE", "TIMER", "INIT_
            "END_PROCESS", "THREAD", "CHILD_FOCUS", "DROP_FILES", "MENU_OPEN", "MENU_CLOSE", "MENU_HIGHLIGHT", "SCROLLWIN", "MOUSE_CAPTURE_LOST"):
     globals()["EVT_" + _n] = _binder("EVT_" + _n, False)
 EVT_COMMAND_SCROLL_CHANGED = EVT_SCROLL_CHANGED          # noqa: F821
+EVT_HOTKEY = _binder("EVT_HOTKEY", False)
 wxEVT_COMMAND_BUTTON_CLICKED = wxEVT_BUTTON = EVT_BUTTON.typeId          # noqa: F821
 wxEVT_CLOSE_WINDOW = EVT_CLOSE.typeId          # noqa: F821
 wxEVT_NULL = 0
@@ -1698,12 +1702,24 @@ class EvtHandler:
 
     QueueEvent = AddPendingEvent
     GetEventHandler = lambda self: self
-    AddFilter = RemoveFilter = staticmethod(lambda *a: None)
+    @staticmethod
+    def AddFilter(f):
+        """An event filter sees events before the window they are for.  The events of the board editor's own window
+        (a click on the canvas, a key) are shown to filters; see _editor_canvas_event."""
+        if f is not None and f not in _filters:
+            _filters.append(f)
+
+    @staticmethod
+    def RemoveFilter(f):
+        if f in _filters:
+            _filters.remove(f)
     SetEvtHandlerEnabled = lambda self, on: None
 
 
 def _call(fn, *a):
     try:
+        if _before_event is not None:
+            _before_event()
         fn(*a)
     finally:
         if _after_event is not None:
@@ -1738,6 +1754,8 @@ _CSS = """
 .wx-table td input{width:100%;border:0;background:none;padding:1px 2px}
 .wx-table table{border-collapse:collapse;width:100%}
 .wx-table th{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:2px 6px;font-weight:600;text-align:left;white-space:nowrap}
+.wx-tree-exp{display:inline-block;width:14px;cursor:pointer;color:var(--ink2,inherit)}
+.wx-tree td{cursor:default}
 .wx-table td{border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding:1px 6px;white-space:nowrap}
 .wx-grid-table td{border-right:1px solid color-mix(in srgb,var(--line) 60%,transparent);padding:0 2px}
 .wx-grid-table td select{width:100%;border:0;background:none}
@@ -2026,15 +2044,71 @@ class Window(EvtHandler):
 
     GetClientSize = GetBestSize = GetMinSize = GetVirtualSize = GetEffectiveMinSize = GetBestVirtualSize = GetMaxSize = GetSize
     GetSizeTuple = lambda self: tuple(self._wx_box())
-    GetRect = GetClientRect = GetScreenRect = lambda self: Rect(0, 0, *self._wx_box())
-    GetPosition = GetScreenPosition = lambda self: Point(0, 0)
+    GetClientRect = lambda self: Rect(0, 0, *self._wx_box())
+
+    def _wx_origin(self):
+        """Where this window is in the page (the page stands for the screen)."""
+        if _DOM:
+            try:
+                r = self.el.getBoundingClientRect()
+                return int(r.left), int(r.top)
+            except Exception:
+                pass
+        return 0, 0
+
+    def GetScreenPosition(self):
+        return Point(*self._wx_origin())
+
+    def GetScreenRect(self):
+        return Rect(*self._wx_origin(), *self._wx_box())
+
+    def GetPosition(self):
+        x, y = self._wx_origin()
+        if self._wx_parent is not None and not isinstance(self, TopLevelWindow):
+            px, py = self._wx_parent._wx_origin()
+            return Point(x - px, y - py)
+        return Point(x, y)
+
+    def GetRect(self):
+        p = self.GetPosition()
+        return Rect(p.x, p.y, *self._wx_box())
+
+    def ScreenToClient(self, *a):
+        x, y = _xy(a)
+        ox, oy = self._wx_origin()
+        return Point(int(x) - ox, int(y) - oy)
+
+    def ClientToScreen(self, *a):
+        x, y = _xy(a)
+        ox, oy = self._wx_origin()
+        return Point(int(x) + ox, int(y) + oy)
+
+    def SetPosition(self, *a):
+        """Put a child window at a point of its parent (a window that floats over its siblings, not one a sizer places)."""
+        if isinstance(self, TopLevelWindow):
+            return
+        x, y = _xy(a)
+        if self._wx_parent is not None and not str(self._wx_parent.el.style.position or ""):
+            self._wx_parent.el.style.position = "relative"
+        self.el.style.position = "absolute"
+        self.el.style.left, self.el.style.top = "%dpx" % int(x), "%dpx" % int(y)
+
+    Move = SetPosition
+
+    def Raise(self):
+        self.el.style.zIndex = "5"
+
+    def Lower(self):
+        self.el.style.zIndex = ""
+
+    def FitInside(self):
+        self.Layout()
     GetTextExtent = lambda self, text: Size(int(len(str(text)) * 7), 16)
     GetFullTextExtent = lambda self, text, *_: (int(len(str(text)) * 7), 16, 0, 0)
     GetCharWidth = lambda self: 7
     GetCharHeight = lambda self: 16
     GetDPIScaleFactor = GetContentScaleFactor = lambda self: 1.0
     FromDIP = ToDIP = ConvertDialogToPixels = ConvertPixelsToDialog = lambda self, v, *_: v
-    ClientToScreen = ScreenToClient = lambda self, *a: Point(0, 0)
 
     # sizers
     def SetSizer(self, sizer, deleteOld=True):
@@ -2181,8 +2255,23 @@ class Window(EvtHandler):
         object.__setattr__(self, name, value)
 
 
-Control = Window
-PyWindow = PyControl = Window
+class _ControlMeta(type):
+    """Every widget here is built on Window, so "is this a control?" (as opposed to a panel, a frame or a bare window
+    that is drawn on) is answered by what the window is."""
+
+    def __instancecheck__(cls, obj):
+        if cls is Control:
+            return (isinstance(obj, Window) and type(obj) is not Window and not getattr(obj, "_wx_plain", False)
+                    and not isinstance(obj, (Panel, TopLevelWindow)))
+        return type.__instancecheck__(cls, obj)
+
+
+class Control(Window, metaclass=_ControlMeta):
+    pass
+
+
+PyWindow = Window
+PyControl = Control
 
 
 class Panel(Window):
@@ -3097,6 +3186,41 @@ class StaticBox(Window):
         return self._blabel
 
 
+class DateTime:
+    """A moment, as plugins use it: now, formatted or as a number."""
+
+    def __init__(self, *a):
+        import datetime as _dt
+        self._t = _dt.datetime(*a) if len(a) >= 3 else _dt.datetime.now()
+
+    @staticmethod
+    def Now():
+        return DateTime()
+
+    UNow = Today = Now
+
+    @staticmethod
+    def FromTimeT(seconds):
+        import datetime as _dt
+        d = DateTime(); d._t = _dt.datetime.fromtimestamp(seconds); return d
+
+    def IsValid(self): return True
+    def Format(self, fmt="%c", tz=None): return self._t.strftime(fmt)
+    def FormatTime(self): return self._t.strftime("%H:%M:%S")
+    def FormatDate(self): return self._t.strftime("%x")
+    def FormatISODate(self): return self._t.strftime("%Y-%m-%d")
+    def FormatISOTime(self): return self._t.strftime("%H:%M:%S")
+    def FormatISOCombined(self, sep="T"): return self._t.strftime("%Y-%m-%d" + sep + "%H:%M:%S")
+    def GetTicks(self): return int(self._t.timestamp())
+    def GetYear(self): return self._t.year
+    def GetMonth(self): return self._t.month - 1
+    def GetDay(self): return self._t.day
+    def GetHour(self): return self._t.hour
+    def GetMinute(self): return self._t.minute
+    def GetSecond(self): return self._t.second
+    def GetMillisecond(self): return self._t.microsecond // 1000
+
+
 class HyperlinkCtrl(_Labelled):
     _TAG, _CLS = "a", ""
 
@@ -3110,6 +3234,25 @@ class HyperlinkCtrl(_Labelled):
 
     def _wx_show_label(self):
         self.el.textContent = self._wx_label
+
+    def SetNormalColour(self, colour):
+        self._normal = Colour(colour)
+        self.el.style.color = self._normal.GetAsString()
+
+    def GetNormalColour(self):
+        return getattr(self, "_normal", Colour(0, 0, 255))
+
+    def SetVisitedColour(self, colour):
+        self._visited = Colour(colour)
+
+    def GetVisitedColour(self):
+        return getattr(self, "_visited", self.GetNormalColour())
+
+    def SetHoverColour(self, colour):
+        self._hover = Colour(colour)
+
+    def GetHoverColour(self):
+        return getattr(self, "_hover", self.GetNormalColour())
 
     def GetURL(self):
         return self._url
@@ -4829,10 +4972,111 @@ StockCursor = Cursor
 SetCursor = lambda *a: None
 
 
+class ColourData:
+    def __init__(self, *a):
+        self._colour = Colour(0, 0, 0)
+        self._custom = {}
+        self._full = True
+
+    def GetColour(self):
+        return self._colour
+
+    def SetColour(self, c):
+        self._colour = Colour(c)
+
+    def GetChooseFull(self):
+        return self._full
+
+    def SetChooseFull(self, flag):
+        self._full = bool(flag)
+
+    GetChooseAlpha = lambda self: False
+    SetChooseAlpha = lambda self, flag: None
+
+    def GetCustomColour(self, i):
+        return self._custom.get(int(i), Colour(255, 255, 255))
+
+    def SetCustomColour(self, i, c):
+        self._custom[int(i)] = Colour(c)
+
+    ToString = lambda self: self._colour.GetAsString()
+    FromString = lambda self, text: bool(self.SetColour(text) or True)
+
+
+class ColourDialog(Dialog):
+    """Choose a colour: the browser's own colour field in a small dialog."""
+
+    def __init__(self, parent=None, data=None, *a, **k):
+        Dialog.__init__(self, parent, title="Choose colour")
+        self._data = ColourData()
+        if isinstance(data, ColourData):
+            self._data.SetColour(data.GetColour())
+            self._data._custom = dict(data._custom)
+        box = BoxSizer(VERTICAL)
+        self._picker = ColourPickerCtrl(self, colour=self._data.GetColour())
+        self._hex = TextCtrl(self, value=self._data.GetColour().GetAsString())
+        row = BoxSizer(HORIZONTAL)
+        row.Add(self._picker, 0, ALL, 6)
+        row.Add(self._hex, 1, ALL | EXPAND, 6)
+        box.Add(row, 0, EXPAND)
+        box.Add(self.CreateButtonSizer(OK | CANCEL), 0, ALL | EXPAND, 6)
+        self.SetSizer(box)
+        self._picker.Bind(EVT_COLOURPICKER_CHANGED, lambda e: self._hex.SetValue(self._picker.GetColour().GetAsString()))          # noqa: F821
+        self._hex.Bind(EVT_TEXT, self._wx_typed)          # noqa: F821
+
+    def _wx_typed(self, event=None):
+        text = self._hex.GetValue().strip()
+        if len(text) == 7 and text[0] == "#" and all(ch in "0123456789abcdefABCDEF" for ch in text[1:]):
+            self._picker.SetColour(Colour(text))
+
+    def GetColourData(self):
+        self._wx_typed()
+        self._data.SetColour(self._picker.GetColour())
+        return self._data
+
+
+def GetColourFromUser(parent=None, colInit=None, caption="", data=None):
+    d = ColourData()
+    if colInit is not None:
+        d.SetColour(colInit)
+    dlg = ColourDialog(parent, d)
+    try:
+        return dlg.GetColourData().GetColour() if dlg.ShowModal() == ID_OK else Colour(0, 0, 0, 0)
+    finally:
+        dlg.Destroy()
+
+
+
 # ----------------------------------------------------------------------------- application
 
+class _PcbCanvas(Window):
+    """The board editor's drawing area, as a window of its frame: plugins send it keys (KiCad's own hotkeys) and watch
+    for clicks on it."""
+    _wx_plain = True
+
+    def __init__(self, frame):
+        EvtHandler.__init__(self)
+        self._wx_parent, self._wx_children, self._wx_id, self._wx_name = frame, [], NewId(), "GAL canvas"
+        self._wx_shown, self._wx_enabled, self._wx_destroyed = True, True, False
+        self._wx_style, self._wx_sizer, self._wx_tooltip, self._wx_font, self._wx_label, self._wx_data = 0, None, "", None, "", None
+        self.el = _FakeEl("canvas")
+
+    def _wx_box(self):
+        return _pcb_frame._wx_box()
+
+    IsShown = IsShownOnScreen = lambda self: True
+    GetTitle = lambda self: ""
+
+    def _wx_fire(self, binder, event=None):
+        if binder in (EVT_CHAR, EVT_KEY_DOWN, EVT_CHAR_HOOK) and event is not None and callable(_editor.get("key")):          # noqa: F821
+            return bool(_editor["key"](event))
+        return EvtHandler._wx_fire(self, binder, event)
+
+
 class _PcbFrame(Frame):
-    """Stands for KiCad's board editor window, which plugins look up to parent their dialogs."""
+    """Stands for KiCad's board editor window.  Plugins look it up to parent their dialogs, and some work it as they
+    would on the desktop: they find their own entry in Tools → External Plugins and choose it, choose Edit → Undo,
+    send the canvas one of KiCad's hotkeys, or watch for the person's click on the board."""
 
     def __init__(self):
         EvtHandler.__init__(self)
@@ -4840,6 +5084,10 @@ class _PcbFrame(Frame):
         self._wx_visible = self._wx_shown = self._wx_modal = self._wx_destroyed = False
         self._wx_style, self._wx_sizer, self._wx_enabled, self._wx_default, self._wx_want = 0, None, True, None, None
         self.el = _FakeEl("div")
+        self._canvas = None
+        self._bar = None
+        self._plugin_items = {}          # menu item id -> the action plugin it runs
+        self._undo_id = self._redo_id = None
 
     def _wx_adopt(self, child):
         pass
@@ -4847,14 +5095,80 @@ class _PcbFrame(Frame):
     def _wx_present(self):
         pass
 
+    def _wx_box(self):
+        if _DOM:
+            try:
+                return int(_js.innerWidth or 1280), int(_js.innerHeight or 800)
+            except Exception:
+                pass
+        return 1280, 800
+
+    def GetChildren(self):
+        if self._canvas is None:
+            self._canvas = _PcbCanvas(self)
+        if callable(_editor.get("panels")):
+            _editor["panels"](self)             # the editor's side panels, brought up to date with what they show
+        return [self._canvas] + [c for c in self._wx_children if c is not self._canvas]
+
     def GetTitle(self):
-        return "PCB Editor"
+        name = _editor["title"]() if callable(_editor.get("title")) else ""
+        return (name + " \u2014 PCB Editor") if name else "PCB Editor"
+
+    IsShown = IsShownOnScreen = IsActive = lambda self: True
+
+    def GetMenuBar(self):
+        if self._bar is None:
+            self._bar = MenuBar()
+            edit, tools, self._plugins_menu = Menu(), Menu(), Menu()
+            self._undo_id = edit.Append(ID_UNDO, "Undo").GetId()
+            self._redo_id = edit.Append(ID_REDO, "Redo").GetId()
+            tools.AppendSubMenu(self._plugins_menu, "External Plugins")
+            self._bar.Append(edit, "Edit")
+            self._bar.Append(tools, "Tools")
+        have = {id(p) for p in self._plugin_items.values()}
+        for name, plugin in (_editor["actions"]() if callable(_editor.get("actions")) else []):
+            if id(plugin) not in have:
+                item = self._plugins_menu.Append(NewId(), name)
+                self._plugin_items[item.GetId()] = plugin
+        return self._bar
+
+    def _wx_fire(self, binder, event=None):
+        if binder is EVT_MENU and event is not None:          # noqa: F821
+            eid = event.GetId()
+            if eid in self._plugin_items and callable(_editor.get("run")):
+                return bool(_editor["run"](self._plugin_items[eid]))
+            if eid == self._undo_id and callable(_editor.get("undo")):
+                return bool(_editor["undo"]())
+            if eid == self._redo_id and callable(_editor.get("redo")):
+                return bool(_editor["redo"]())
+        return EvtHandler._wx_fire(self, binder, event)
 
     def Show(self, *a):
         return True
 
     def Destroy(self):
         return True
+
+
+def _editor_canvas_event(kind, key=0):
+    """Something happened on the board editor's canvas (the person clicked an item, pressed Escape): the event filters
+    plugins installed are shown it, as wxWidgets shows a filter every event of the program."""
+    if not _filters:
+        return
+    canvas = _pcb_frame.GetChildren()[0]
+    if kind == "click":
+        events = [_paint.MouseEvent(canvas, EVT_LEFT_DOWN, None, "mousedown"), _paint.MouseEvent(canvas, EVT_LEFT_UP, None, "mouseup")]          # noqa: F821
+        for ev in events:
+            ev._x, ev._y, ev._button = 400, 300, 0
+    else:
+        events = [_paint.KeyEvent(canvas, EVT_KEY_DOWN, key), _paint.KeyEvent(canvas, EVT_KEY_UP, key)]          # noqa: F821
+    for ev in events:
+        for f in list(_filters):
+            try:
+                _call(f.FilterEvent, ev)
+            except Exception:
+                import traceback
+                traceback.print_exc()
 
 
 _pcb_frame = _PcbFrame()
@@ -5533,6 +5847,7 @@ class MenuBar(Window):
     Insert = lambda self, pos, menu, title="": self.Append(menu, title)
     GetMenuCount = lambda self: len(self._menus)
     GetMenu = lambda self, i: self._menus[i][0]
+    GetMenus = lambda self: list(self._menus)
 
     def FindItemById(self, id):
         for m, _t in self._menus:
@@ -5875,11 +6190,76 @@ class RichTextCtrl(StyledTextCtrl):
         return False
 
 
-class AcceleratorTable(_Thing):
-    pass
+class AcceleratorEntry:
+    def __init__(self, flags=0, keyCode=0, cmd=0, item=None):
+        self._flags, self._key, self._cmd = int(flags or 0), int(keyCode or 0), int(cmd or 0)
+
+    Set = __init__
+    GetFlags = lambda self: self._flags
+    GetKeyCode = lambda self: self._key
+    GetCommand = lambda self: self._cmd
+    IsOk = lambda self: bool(self._key)
+
+    def FromString(self, text):
+        return False
 
 
-AcceleratorEntry = AcceleratorTable
+class AcceleratorTable:
+    """Keys that stand for menu commands in one window: (modifiers, key, command id)."""
+
+    def __init__(self, entries=()):
+        self._entries = []
+        for e in entries or ():
+            if isinstance(e, AcceleratorEntry):
+                self._entries.append((e._flags, e._key, e._cmd))
+            else:
+                flags, key, cmd = tuple(e)[:3]
+                self._entries.append((int(flags or 0), int(key), int(cmd)))
+
+    IsOk = lambda self: True
+
+    def _wx_command(self, event):
+        """The command a key event stands for, or None."""
+        code = event.GetKeyCode()
+        flags = (ACCEL_CTRL if event.ControlDown() or event.MetaDown() else 0) | (ACCEL_SHIFT if event.ShiftDown() else 0) | (ACCEL_ALT if event.AltDown() else 0)
+        for f, key, cmd in self._entries:
+            k = ord(chr(key).upper()) if 0 < key < 256 else key
+            if k == code and (f & (ACCEL_CTRL | ACCEL_SHIFT | ACCEL_ALT)) == flags:
+                return cmd
+        return None
+
+
+def _set_accelerators(self, table):
+    """Window.SetAcceleratorTable: from now a key pressed anywhere inside this window that the table names is the menu
+    command it stands for (an EVT_MENU with that id), unless a handler in the window took the key first."""
+    first = "_wx_accel" not in self.__dict__
+    self.__dict__["_wx_accel"] = table if isinstance(table, AcceleratorTable) else None
+
+    def down(e=None, key=None):
+        t = self.__dict__.get("_wx_accel")
+        if t is None:
+            return False
+        ev = _paint.KeyEvent(self, EVT_KEY_DOWN, e if e is not None else key)          # noqa: F821
+        cmd = t._wx_command(ev)
+        if cmd is None:
+            return False
+        menu = Event(self, EVT_MENU, cmd)          # noqa: F821
+        handled = self._wx_fire(EVT_MENU, menu)          # noqa: F821
+        if handled and e is not None and _DOM:
+            e.preventDefault()
+        return handled
+
+    self.__dict__["_wx_accel_key"] = down
+    if first:
+        _listen(self.el, "keydown", lambda e=None: down(e))
+
+
+Window.SetAcceleratorTable = _set_accelerators
+Window.GetAcceleratorTable = lambda self: self.__dict__.get("_wx_accel")
+# A key that works while another program has the keyboard: a page cannot have one, and says so (False, as on a desktop
+# where another program already took the key).
+Window.RegisterHotKey = lambda self, hotkeyId, modifiers=0, virtualKeyCode=0: False
+Window.UnregisterHotKey = lambda self, hotkeyId: False
 NullAcceleratorTable = None
 
 
@@ -5922,6 +6302,12 @@ def _stub_class(name):
 # ----------------------------------------------------------------------------- keys, focus, scrolling, owner-drawn lists
 import math as _math          # noqa: E402
 from ._paint import KeyEvent, FocusEvent          # noqa: E402,F401
+from ._tree import (TreeCtrl, HyperTreeList, TreeListCtrl, CustomTreeCtrl, GenericTreeCtrl, TreeItemId, TreeEvent, TreeItemData,          # noqa: E402,F401
+                    TreeListColumnInfo)
+from . import _tree as _tree_mod          # noqa: E402
+for _n in dir(_tree_mod):
+    if _n.startswith(("TR_", "TREE_HITTEST_", "EVT_TREE_", "TreeItemIcon_")):
+        globals()[_n] = getattr(_tree_mod, _n)
 
 SpinEvent = SpinDoubleEvent = BookCtrlEvent = NotebookEvent = ScrollWinEvent = ChildFocusEvent = EraseEvent = PaintEvent = Event
 for _n in ("SCROLLWIN_THUMBTRACK", "SCROLLWIN_THUMBRELEASE", "SCROLLWIN_TOP", "SCROLLWIN_BOTTOM", "SCROLLWIN_LINEUP", "SCROLLWIN_LINEDOWN",

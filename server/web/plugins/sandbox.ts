@@ -17,7 +17,7 @@ import { hostsOf, type InstalledPlugin } from "./types";
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 export interface SandboxInit {
-  plugin: { identifier: string; name: string; version: string; pyodide?: string };
+  plugin: { identifier: string; name: string; version: string; hosts?: string[]; pyodide?: string };
   /** The entry script reports by itself when the plugin is ready (the Python runtime, which has an interpreter to start first). */
   defer?: boolean;
   granted: string[];
@@ -61,8 +61,8 @@ export function sandboxRuntime(): void {
     importers: { register: reg("importer") },
     exporters: { register: reg("exporter") },
     assistant: { registerTool: reg("tool") },
-    design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit"]),
-    view: group("view", ["select", "highlight", "focus", "setMarkers", "clearMarkers", "openDocument"]),
+    design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit", "undo", "redo"]),
+    view: group("view", ["select", "highlight", "focus", "appearance", "setMarkers", "clearMarkers", "openDocument"]),
     fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom", "svg", "drc", "netlist"]),
     project: group("project", ["versions", "saveVersion"]),
     libs: group("libs", ["libraries", "footprints", "footprint"]),

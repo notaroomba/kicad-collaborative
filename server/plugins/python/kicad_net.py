@@ -21,6 +21,21 @@ import ssl
 _fetch = None            # callable(dict) -> dict, set by install()
 _real = {}
 
+# Connections inside this interpreter.  A plugin that listens on a port of this computer does it to talk to another part
+# of itself (a helper it starts, a second window): both ends are here, so a connection to such a port is a pair of
+# buffers, and the listening end is given its turn when the caller starts to read.
+_LOOPBACK = ("127.0.0.1", "localhost", "::1", "0.0.0.0", "", "::")
+_listening = {}          # port -> the socket listening on it
+_next_port = [49152]
+granted = set()          # the web addresses (host, or host:port) the person granted this plugin
+park = None              # callable(listener): set aside the thread that waits in accept(); set by kicad_web
+serve = None             # callable(listener): give that thread its turn now; set by kicad_web
+
+
+def _is_loopback(host):
+    host = str(host or "")
+    return host in _LOOPBACK or host.startswith("127.")
+
 
 class _Raw(io.RawIOBase):
     def __init__(self, sock):
@@ -59,10 +74,32 @@ class WebSocketStandIn:
         self._timeout = None
         self.context = None
         self.server_hostname = None
+        self._bound = None          # (host, port) once bound to a port of this computer
+        self._listener = False
+        self._pending = []          # connections made to it and not accepted yet
+        self._peer = None           # the other end, for a connection inside this interpreter
+        self._buf = bytearray()     # what the other end wrote
+        self._local = False
 
     # ---- connecting
 
     def connect(self, address):
+        if isinstance(address, (tuple, list)) and len(address) >= 2 and _is_loopback(address[0]):
+            listener = _listening.get(int(address[1]))
+            named = {str(address[0]), "%s:%s" % (address[0], address[1])} & granted
+            if (listener is None or listener._closed) and named and _fetch is not None:
+                # no part of the plugin listens there, and the person granted it this address: a web request, carried as any other
+                self._host, self._port = str(address[0]), int(address[1])
+                return
+            if listener is None or listener._closed:
+                raise ConnectionRefusedError(errno.ECONNREFUSED, "nothing is listening on port %s of this computer: in the web editor "
+                                             "a plugin runs in the browser, where no other program can be reached" % address[1])
+            other = WebSocketStandIn()
+            other._peer, other._local, other._host, other._port = self, True, "127.0.0.1", _next_port[0]
+            _next_port[0] += 1
+            self._peer, self._local, self._host, self._port = other, True, str(address[0]), int(address[1])
+            listener._pending.append(other)
+            return
         if _fetch is None:
             raise OSError(errno.ENETUNREACH, "this plugin has no network access in the web editor")
         if not isinstance(address, (tuple, list)) or len(address) < 2:
@@ -77,13 +114,39 @@ class WebSocketStandIn:
             return e.errno or errno.ECONNREFUSED
 
     def bind(self, address):
-        pass
+        if not isinstance(address, (tuple, list)) or len(address) < 2:
+            return
+        if not _is_loopback(address[0]):
+            raise OSError(errno.EADDRNOTAVAIL, "only ports of this computer itself can be listened on in the web editor")
+        port = int(address[1] or 0)
+        if not port:
+            while _next_port[0] in _listening:
+                _next_port[0] += 1
+            port = _next_port[0]
+            _next_port[0] += 1
+        other = _listening.get(port)
+        if other is not None and other is not self and not other._closed:
+            raise OSError(errno.EADDRINUSE, "Address already in use")
+        self._bound = (str(address[0]) or "127.0.0.1", port)
 
     def listen(self, *a):
-        pass
+        if self._bound is None:
+            self.bind(("127.0.0.1", 0))
+        self._listener = True
+        _listening[self._bound[1]] = self
 
     def accept(self):
-        raise OSError(95, "listening for connections is not possible in the browser")
+        if not self._listener or self._closed:
+            raise OSError(errno.EINVAL, "the socket is not listening")
+        if self._pending:
+            conn = self._pending.pop(0)
+            return conn, ("127.0.0.1", conn._port)
+        if park is not None:
+            park(self)              # inside a thread: it is set aside here until someone connects
+        # Only code of this interpreter can connect, and it is not running while this code waits.
+        if self._timeout is not None:
+            raise socket.timeout("timed out")
+        raise BlockingIOError(errno.EAGAIN, "nothing has connected, and nothing can while this code waits")
 
     def settimeout(self, t):
         self._timeout = t
@@ -113,13 +176,15 @@ class WebSocketStandIn:
         return (self._host or "0.0.0.0", self._port)
 
     def getsockname(self):
-        return ("127.0.0.1", 0)
+        return self._bound or ("127.0.0.1", 0)
 
     def detach(self):
         return -1
 
     def close(self):
         self._closed = True
+        if self._listener and self._bound and _listening.get(self._bound[1]) is self:
+            del _listening[self._bound[1]]
 
     def __enter__(self):
         return self
@@ -163,6 +228,11 @@ class WebSocketStandIn:
     # ---- the exchange
 
     def sendall(self, data, *a):
+        if self._local:
+            if self._peer is None or self._peer._closed:
+                raise BrokenPipeError(errno.EPIPE, "the other end closed the connection")
+            self._peer._buf += bytes(data)
+            return
         if self._host is None:
             raise OSError(errno.ENOTCONN, "the socket is not connected")
         if self._in is not None:            # the previous answer was read: this is the next request on the connection
@@ -180,6 +250,14 @@ class WebSocketStandIn:
         return len(data)
 
     def recv(self, n=65536, *a):
+        if self._local:
+            if not self._buf and self._peer is not None and not self._peer._closed and serve is not None:
+                listener = _listening.get(self._port)
+                if listener is not None:
+                    serve(listener)             # the listening end reads what was sent and answers
+            data = bytes(self._buf[:n])
+            del self._buf[:n]
+            return data                         # empty: the other end has nothing more to say
         if self._in is None:
             self._in = io.BytesIO(self._exchange())
         return self._in.read(n)

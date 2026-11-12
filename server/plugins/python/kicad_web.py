@@ -491,7 +491,15 @@ def _patch_threads():
     a few seconds' worth without finishing is set aside: what it watches for (a download folder,
     another program) does not happen here."""
     def start(self):
-        run_thread(self, self.run)
+        # Thread.run forgets its target when it returns; a thread that is set aside and picked up again needs it.
+        self._kc_target = (getattr(self, "_target", None), getattr(self, "_args", ()), getattr(self, "_kwargs", {}))
+        run_thread(self, lambda: again(self))
+
+    def again(thread):
+        saved = getattr(thread, "_kc_target", None)
+        if saved is not None and not hasattr(thread, "_target"):
+            thread._target, thread._args, thread._kwargs = saved
+        thread.run()
 
     # A worker thread that takes its jobs from a queue: it runs until the queue is empty, is set aside there, and is
     # picked up again when a job is put in (after the code that put it has finished what it was doing).
@@ -514,7 +522,26 @@ def _patch_threads():
         waiting = self.__dict__.get("_kc_waiters")
         if waiting:
             worker = waiting.pop(0)
-            wx.CallAfter(lambda: run_thread(worker, worker.run))
+            wx.CallAfter(lambda: run_thread(worker, lambda: again(worker)))
+
+    # A thread that listens on a local port: it is set aside in accept() and given its turn when code of this
+    # interpreter connects and waits for the answer (kicad_net).
+    import kicad_net
+
+    def park_listener(listener):
+        if _thread_objs:
+            listener._kc_thread = _thread_objs[-1]
+            raise _Parked("queue")
+
+    def serve_listener(listener):
+        worker = getattr(listener, "_kc_thread", None)
+        if worker is None or worker in _thread_objs:
+            return
+        listener._kc_thread = None
+        run_thread(worker, lambda: again(worker))
+
+    kicad_net.park = park_listener
+    kicad_net.serve = serve_listener
 
     queue.Queue.get = q_get
     queue.Queue.put = q_put
@@ -574,8 +601,21 @@ def _patch_threads():
         pass
     threading.Timer.start = timer_start
     threading.Timer.run = timer_run
-    # Nothing else runs while this code runs, so waiting for another thread to signal can only time out.
-    threading.Event.wait = lambda self, timeout=None: self.is_set()
+    def event_wait(self, timeout=None):
+        """Nothing else runs while this code runs.  What can still set the event is work handed to the window system
+        (wx.CallAfter, a timer, the person's click): in the browser that gets its turn here, until the time is up."""
+        if self.is_set() or not wx._DOM:
+            return self.is_set()
+        import time
+        end = time.monotonic() + (float(timeout) if timeout is not None else 600.0)
+        try:
+            while not self.is_set() and time.monotonic() < end:
+                wx._wait(wx._kc().sleep(15))
+        except Exception:
+            pass                    # this stack cannot be suspended: the answer is what it is now
+        return self.is_set()
+
+    threading.Event.wait = event_wait
     threading.Thread.start = start
     threading.Thread.join = lambda self, timeout=None: None
     threading.Thread.is_alive = lambda self: getattr(self, "_kc_alive", False)
@@ -764,7 +804,12 @@ def _patch_desktop():
         return kicad_programs.which(cmd) or real_which(cmd, *a, **k)
 
     shutil.which = which
-    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/python3", "/usr/bin/python"):
+    # KiCad ships its own Python two folders above pcbnew; plugins that start a second program look for it there.
+    try:
+        beside = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(pcbnew.__file__))))
+    except Exception:
+        beside = "/usr/bin"
+    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/python3", "/usr/bin/python", os.path.join(beside, "python3")):
         try:
             if not os.path.exists(stub):
                 _write(stub, b"#!/bin/sh\n")
@@ -772,18 +817,13 @@ def _patch_desktop():
         except OSError:
             pass
 
-    # Nothing can connect to this interpreter: a plugin that listens on a local port (to talk to a helper program or
-    # to a page in the browser) is told so at once instead of waiting for a caller that cannot come.
-    import socket
+    # Nothing outside this interpreter can connect to it.  A plugin's own parts can (kicad_net: a listening socket and
+    # a connection to it are two ends here); a server that serves files to another program or a browser page cannot.
     import socketserver
-
-    def no_listen(self, *a, **k):
-        raise OSError(95, "listening for connections is not possible in the browser")
 
     def no_serve(self, *a, **k):
         raise pcbnew.WebUnsupported("Serving files to another program over a local network port")
 
-    socket.socket.accept = no_listen
     socketserver.BaseServer.serve_forever = no_serve
     socketserver.BaseServer.handle_request = no_serve
 
@@ -979,8 +1019,13 @@ def boot(identifier, files, bridge=None, name=""):
     import kicad_net
     kicad_net.install((lambda request: _call("net.fetch", request)) if bridge is not None else None)
     pcbnew._Host.focus = _focus
+    pcbnew._Host.highlight = _highlight
     wx._bridge = _WxBridge() if bridge is not None else None
     wx._after_event = _after_event
+    wx._before_event = _before_event
+    wx._editor.update(actions=lambda: [(str(getattr(p, "name", "") or type(p).__name__), p) for p in _actions], run=_editor_run,
+                      panels=_appearance.refresh, undo=lambda: _editor_history("design.undo"), redo=lambda: _editor_history("design.redo"), key=_editor_key,
+                      title=lambda: os.path.splitext(os.path.basename(pcbnew._Host.board.GetFileName()))[0] if pcbnew._Host.board is not None else "")
     pkg = install_files(identifier, files)
     _plugin.update(identifier=identifier, package=pkg, name=name or identifier)
     if PLUGIN_DIR not in sys.path:
@@ -1253,6 +1298,263 @@ def _after_event():
         traceback.print_exc()
     finally:
         _event_depth[0] -= 1
+
+
+# ----------------------------------------------------------------------------- the board editor, as plugins work it
+
+_stale = [False]          # the editor's board changed since this interpreter read it
+
+
+def _highlight(nets):
+    if _bridge is None:
+        return
+    try:
+        _call("view.highlight", {"nets": list(nets or [])})
+    except Exception:
+        pass
+
+
+def _before_event():
+    """A handler of a window the plugin left open is about to run.  KiCad's plugins read the live board; here the board
+    is a copy, so when the editor's board changed since it was read (the person edited, someone else did, an undo), it is
+    read again first.  Not while the plugin's own unsent changes are in it."""
+    if not _stale[0] or _running[0] or _event_depth[0] or _bridge is None:
+        return
+    b = pcbnew._Host.board
+    if b is None or b._modified:
+        return
+    _stale[0] = False
+    _event_depth[0] += 1
+    try:
+        load_board()
+    except Exception:
+        traceback.print_exc()
+    finally:
+        _event_depth[0] -= 1
+
+
+def editor_event(name, payload="{}"):
+    """The editor says something happened in it: the selection changed (the person clicked), or the board did."""
+    try:
+        data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+    except ValueError:
+        data = {}
+    if name == "change":
+        _stale[0] = True
+        return
+    if name != "selection":
+        return
+    b = pcbnew._Host.board
+    if b is None:
+        return
+    ids = set(str(i) for i in (data.get("ids") or []))
+    was = {it.m_Uuid.AsString() for it in b.GetCurrentSelection()}
+    if ids == was:
+        return
+    changed = b._selection_changed
+    for it in list(b.GetCurrentSelection()):
+        it._selected = False
+    for uid in ids:
+        it = b.GetItem(uid)
+        if it is not None:
+            it._selected = True
+    b._selection_changed = changed          # this is the editor's selection arriving, not one to send back
+    wx._editor_canvas_event("click")
+
+
+def _editor_run(plugin):
+    """An action plugin chosen from the editor's Tools → External Plugins menu: KiCad runs it inside one board commit."""
+    label = _label[0]
+    _label[0] = str(getattr(plugin, "name", "") or "edit")[:80]
+    try:
+        plugin.Run()
+    finally:
+        try:
+            b = pcbnew._Host.board
+            if b is not None and (b._modified or b._selection_changed):
+                flush()
+        finally:
+            _label[0] = label
+    return True
+
+
+def _editor_history(method):
+    """Edit → Undo / Redo of the board editor."""
+    if _bridge is None:
+        return False
+    out = _call(method, {}) or {}
+    if out.get("done"):
+        _stale[0] = True
+        try:
+            _event_depth[0] += 1
+            load_board()
+            _stale[0] = False
+        finally:
+            _event_depth[0] -= 1
+    return bool(out.get("done"))
+
+
+class _Appearance:
+    """The Nets part of KiCad's Appearance panel, as windows of the board editor's frame: a grid with one row per net
+    (colour, ratsnest shown, name) and the two choices under it (net colours: All / Ratsnest / None; ratsnest display:
+    All / Visible layers / None).  A plugin that works these on the desktop works the web editor's Appearance panel."""
+
+    COLOR_MODES = (("All", "all"), ("Ratsnest", "ratsnest"), ("None", "off"))
+    RATSNEST_MODES = (("All", "all"), ("Visible layers", "visible"), ("None", "none"))
+
+    def __init__(self):
+        self.panel = None
+        self.batch = 0
+        self.queue = []
+        self.filling = False
+
+    def state(self, actions=None):
+        if _bridge is not None:
+            try:
+                out = _call("view.appearance", {"actions": actions or []})
+                if isinstance(out, dict) and isinstance(out.get("nets"), list):
+                    return out
+            except Exception:
+                traceback.print_exc()
+        b = pcbnew._Host.board
+        names = [n.GetNetname() for n in b.GetNetsByNetcode().values() if n.GetNetname()] if b is not None else []
+        return {"nets": [{"name": n, "color": None, "visible": True} for n in names], "netColorMode": "ratsnest", "ratsnestMode": "all"}
+
+    def send(self, action):
+        if self.filling:
+            return
+        if self.batch:
+            self.queue.append(action)
+        else:
+            self.state([action])
+
+    def build(self, frame):
+        import wx.grid as wxgrid
+        me = self
+
+        class NetsGrid(wxgrid.Grid):
+            def SetCellValue(self, row, col, value=None):
+                wxgrid.Grid.SetCellValue(self, row, col, value)
+                if isinstance(row, int) and isinstance(col, int) and 0 <= row < self.GetNumberRows():
+                    name, text = wxgrid.Grid.GetCellValue(self, row, 2), str(value)
+                    if col == 0:
+                        ok = len(text) == 7 and text[0] == "#" and all(ch in "0123456789abcdefABCDEF" for ch in text[1:])
+                        me.send({"t": "netColor", "name": name, "color": text if ok else None})
+                    elif col == 1:
+                        me.send({"t": "netVisible", "name": name, "on": text != "0"})
+
+            def BeginBatch(self):
+                me.batch += 1
+
+            def EndBatch(self):
+                me.batch = max(0, me.batch - 1)
+                if not me.batch and me.queue:
+                    queued, me.queue = me.queue, []
+                    me.state(queued)
+
+        self.panel = wx.Panel(frame)
+        self.panel.SetName("Appearance")
+        self.grid = NetsGrid(self.panel)
+        self.grid.CreateGrid(0, 3)
+        self.radios = {}
+        for key, modes in (("netColorMode", self.COLOR_MODES), ("ratsnestMode", self.RATSNEST_MODES)):
+            box = wx.Panel(self.panel)
+            for label, mode in modes:
+                radio = wx.RadioButton(box, label=label)
+                radio.Bind(wx.EVT_RADIOBUTTON, lambda e, k=key, m=mode: self.choose(k, m))
+                self.radios[key, mode] = radio
+
+    def choose(self, key, mode):
+        for (k, m), radio in self.radios.items():
+            if k == key:
+                radio.SetValue(m == mode)
+        self.send({"t": key, "mode": mode})
+
+    def refresh(self, frame):
+        if pcbnew._Host.board is None:
+            return
+        if self.panel is None:
+            self.build(frame)
+        import wx.grid as wxgrid
+        st = self.state()
+        self.filling = True
+        try:
+            g, rows = self.grid, st["nets"]
+            have = g.GetNumberRows()
+            if have < len(rows):
+                g.AppendRows(len(rows) - have)
+            elif have > len(rows):
+                g.DeleteRows(len(rows), have - len(rows))
+            for i, n in enumerate(rows):
+                for col, text in ((0, n.get("color") or "rgba(0,0,0,0)"), (1, "1" if n.get("visible", True) else "0"), (2, n.get("name") or "")):
+                    if wxgrid.Grid.GetCellValue(g, i, col) != text:
+                        wxgrid.Grid.SetCellValue(g, i, col, text)
+            for (key, mode), radio in self.radios.items():
+                radio.SetValue(st.get(key) == mode)
+        finally:
+            self.filling = False
+
+
+_appearance = _Appearance()
+
+
+_HOTKEY_DEFAULTS = {"pcbnew.EditorControl.highlightNet": "`", "pcbnew.EditorControl.clearHighlight": "~"}
+
+
+def _hotkey_actions():
+    """KiCad's hotkeys as the plugin sees them: the defaults, then the person's user.hotkeys file (action, key, …)."""
+    keys = dict(_HOTKEY_DEFAULTS)
+    try:
+        with open(os.path.join(CONFIG_DIR, "user.hotkeys"), encoding="utf-8-sig") as fh:
+            for line in fh:
+                fields = line.rstrip("\n").split("\t")
+                if len(fields) > 1 and fields[0] and not fields[0].startswith("#"):
+                    keys[fields[0]] = fields[1]
+    except OSError:
+        pass
+    return keys
+
+
+def _key_name(event):
+    code = event.GetKeyCode()
+    names = {27: "Esc", 13: "Enter", 9: "Tab", 32: "Space", 8: "Back", 127: "Del"}
+    if wx.WXK_F1 <= code <= wx.WXK_F1 + 23:
+        name = "F%d" % (code - wx.WXK_F1 + 1)
+    elif code in names:
+        name = names[code]
+    elif 32 < code < 127:
+        name = chr(code).upper()
+    else:
+        return None
+    mods = [m for m, on in (("Ctrl", event.ControlDown()), ("Alt", event.AltDown()), ("Shift", event.ShiftDown())) if on]
+    return frozenset(mods), name
+
+
+def _editor_key(event):
+    """A key sent to the board editor's canvas: the editor action that key stands for is done.  The actions a plugin
+    can work this way are the ones about highlighting nets; True when the key was one of them."""
+    pressed = _key_name(event)
+    b = pcbnew._Host.board
+    if pressed is None or b is None:
+        return False
+    for action, text in _hotkey_actions().items():
+        parts = [p for p in str(text).split("+") if p]
+        if not parts or (frozenset(parts[:-1]), parts[-1].upper()) != (pressed[0], pressed[1].upper()):
+            continue
+        if action == "pcbnew.EditorControl.highlightNetSelection":
+            nets = sorted({it.GetNetCode() for it in b.GetCurrentSelection() if hasattr(it, "GetNetCode") and it.GetNetCode() > 0})
+            if not nets:
+                return False
+            b.ResetNetHighLight()
+            for i, code in enumerate(nets):
+                b.SetHighLightNet(code, i > 0)
+            b.HighLightON()
+            return True
+        if action == "pcbnew.EditorControl.clearHighlight":
+            b.ResetNetHighLight()
+            return True
+        return False
+    return False
 
 
 # ----------------------------------------------------------------------------- files a plugin writes

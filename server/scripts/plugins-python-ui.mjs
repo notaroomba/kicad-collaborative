@@ -322,6 +322,210 @@ class Commit(pcbnew.ActionPlugin):
         print("DESKTOOL commit " + json.dumps([r.returncode, r.stdout.strip()]))
 
 
+class Nudge(pcbnew.ActionPlugin):
+    def defaults(self):
+        self.name = "Desk: nudge"
+        self.category = "Test"
+        self.description = "Moves R2 one millimetre to the right"
+
+    def Run(self):
+        fp = pcbnew.GetBoard().FindFootprintByReference("R2")
+        p = fp.GetPosition()
+        fp.SetPosition(pcbnew.VECTOR2I(p.x + pcbnew.FromMM(1), p.y))
+
+
+class Helper(pcbnew.ActionPlugin):
+    """As plugins with a helper program do: listen on a port of this computer, start a second program (this plugin's
+    own client.py) that connects and asks, answer on the window system's thread."""
+
+    def defaults(self):
+        self.name = "Desk: helper"
+        self.category = "Test"
+        self.description = "Listens on a local port and starts a second program that calls it"
+
+    def Run(self):
+        import socket
+        import threading
+        import wx
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(2)
+        srv.settimeout(0.5)
+        port = srv.getsockname()[1]
+        stop = threading.Event()
+
+        def answer(request, state, done):
+            fp = pcbnew.GetBoard().FindFootprintByReference(request["ref"])
+            state["reply"] = len(fp.Pads())
+            done.set()
+
+        def serve():
+            while not stop.is_set():
+                try:
+                    conn, _ = srv.accept()
+                except socket.timeout:
+                    continue
+                except OSError:
+                    return
+                with conn:
+                    with conn.makefile("rb") as stream:
+                        request = json.loads(stream.readline())
+                    done, state = threading.Event(), {}
+                    wx.CallAfter(answer, request, state, done)
+                    ok = done.wait(5)
+                    conn.sendall(json.dumps({"ok": ok, "pads": state.get("reply")}).encode() + b"\n")
+
+        threading.Thread(target=serve, daemon=True).start()
+        client = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client.py")
+        r = subprocess.run([shutil.which("python3"), client], env=dict(os.environ, DESK_PORT=str(port)), capture_output=True, text=True)
+        stop.set()
+        srv.close()
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.5)
+            closed = "connected"
+        except OSError as e:
+            closed = type(e).__name__
+        print("DESKTOOL helper " + json.dumps([r.returncode, r.stdout.strip(), closed]))
+
+
+class Editor(pcbnew.ActionPlugin):
+    """Works KiCad's own window as some plugins do: its Tools → External Plugins menu, Edit → Undo, a hotkey sent to
+    the canvas, and the Appearance panel's net grid."""
+
+    def defaults(self):
+        self.name = "Desk: editor"
+        self.category = "Test"
+        self.description = "Chooses its own menu entry, undoes it, highlights a net and colours it"
+
+    def Run(self):
+        import wx
+        import wx.grid
+        out = {}
+        frame = next(w for w in wx.GetTopLevelWindows() if isinstance(w, wx.Frame) and w.GetTitle().endswith("PCB Editor"))
+
+        def find(menu, label):
+            for item in menu.GetMenuItems():
+                if item.GetItemLabelText() == label:
+                    return item
+                if item.GetSubMenu():
+                    hit = find(item.GetSubMenu(), label)
+                    if hit:
+                        return hit
+
+        def menu_item(label):
+            return next((hit for menu, _ in frame.GetMenuBar().GetMenus() if (hit := find(menu, label))), None)
+
+        x = lambda: pcbnew.GetBoard().FindFootprintByReference("R2").GetPosition().x
+        x0 = x()
+        ran = frame.GetEventHandler().ProcessEvent(wx.CommandEvent(wx.EVT_MENU.typeId, menu_item("Desk: nudge").GetId()))
+        x1 = x()
+        undone = frame.GetEventHandler().ProcessEvent(wx.CommandEvent(wx.EVT_MENU.typeId, menu_item("Undo").GetId()))
+        out["menu"] = [bool(ran), x1 - x0 == pcbnew.FromMM(1), bool(undone), x() == x0]
+
+        board = pcbnew.GetBoard()
+        pad = next(p for p in board.FindFootprintByReference("R2").Pads() if p.GetNetCode() > 0)
+        for it in list(pcbnew.GetCurrentSelection()):
+            it.ClearSelected()
+        pad.SetSelected()
+        hotkeys = os.path.join(pcbnew.GetSettingsManager().GetUserSettingsPath(), "user.hotkeys")
+        with open(hotkeys, "a") as fh:
+            fh.write("pcbnew.EditorControl.highlightNetSelection\tCtrl+Alt+Shift+F12\t\n")
+        canvas = next(c for c in frame.GetChildren() if not isinstance(c, wx.Control) and c.GetClientSize().width > 200)
+        key = wx.KeyEvent(wx.EVT_CHAR.typeId)
+        key.SetKeyCode(wx.WXK_F12)
+        key.SetControlDown(True)
+        key.SetAltDown(True)
+        key.SetShiftDown(True)
+        key.SetEventObject(canvas)
+        out["highlight"] = [bool(canvas.GetEventHandler().ProcessEvent(key)), board.IsHighLightNetON(), sorted(board.GetHighLightNetCodes()) == [pad.GetNetCode()], pad.GetNetname()]
+
+        def kids(w):
+            for c in w.GetChildren():
+                yield c
+                yield from kids(c)
+
+        grid = next(g for g in kids(frame) if isinstance(g, wx.grid.Grid) and g.GetNumberCols() == 3)
+        rows = {grid.GetCellValue(r, 2): r for r in range(grid.GetNumberRows())}
+        grid.SetCellValue(rows[pad.GetNetname()], 0, "#FF8800")
+        grid.BeginBatch()
+        grid.SetCellValue(rows[pad.GetNetname()], 1, "0")
+        grid.EndBatch()
+        radio = next(r for r in kids(frame) if isinstance(r, wx.RadioButton) and r.GetLabel() == "All"
+                     and {"All", "Ratsnest", "None"} <= {c.GetLabel() for c in r.GetParent().GetChildren()})
+        radio.SetValue(True)
+        ev = wx.CommandEvent(wx.EVT_RADIOBUTTON.typeId, radio.GetId())
+        ev.SetEventObject(radio)
+        radio.GetEventHandler().ProcessEvent(ev)
+        out["appearance"] = [len(rows) > 3, pad.GetNetname() in rows]
+        print("DESKTOOL editor " + json.dumps(out, sort_keys=True))
+
+
+class Tree(pcbnew.ActionPlugin):
+    def defaults(self):
+        self.name = "Desk: tree"
+        self.category = "Test"
+        self.description = "A tree with columns, a colour chooser and an F5 accelerator"
+
+    def Run(self):
+        import wx
+        import wx.lib.agw.hypertreelist as htl
+        dlg = wx.Dialog(None, title="Parts by value")
+        box = wx.BoxSizer(wx.VERTICAL)
+        tree = htl.HyperTreeList(dlg, agwStyle=wx.TR_HIDE_ROOT | wx.TR_HAS_BUTTONS | wx.TR_FULL_ROW_HIGHLIGHT)
+        tree.AddColumn("Value / reference", width=200)
+        tree.AddColumn("Pads", width=60, flag=wx.ALIGN_RIGHT)
+        root = tree.AddRoot("parts")
+        groups = {}
+        for fp in sorted(pcbnew.GetBoard().GetFootprints(), key=lambda f: f.GetReference()):
+            g = groups.get(fp.GetValue())
+            if g is None:
+                g = groups[fp.GetValue()] = tree.AppendItem(root, fp.GetValue())
+                tree.SetItemBold(g, True)
+            item = tree.AppendItem(g, fp.GetReference())
+            tree.SetItemText(item, str(len(fp.Pads())), 1)
+            tree.SetItemData(item, fp.GetReference())
+        said = wx.StaticText(dlg, label="Nothing chosen")
+        clicks = []
+
+        def chosen(e):
+            data = tree.GetItemData(e.GetItem())
+            said.SetLabel("Chosen: %s" % data if data else "Chosen: a group")
+
+        def clicked(e):
+            item, _flags, column = tree.GetMainWindow().HitTest(e.GetPosition())
+            clicks.append([tree.GetItemText(item) if item else None, column])
+            e.Skip()
+
+        tree.Bind(wx.EVT_TREE_SEL_CHANGED, chosen)
+        tree.GetMainWindow().Bind(wx.EVT_LEFT_UP, clicked)
+        refresh = wx.NewIdRef()
+        hits = []
+        dlg.Bind(wx.EVT_MENU, lambda e: (hits.append(1), said.SetLabel("Refreshed %d" % len(hits))), id=refresh)
+        dlg.SetAcceleratorTable(wx.AcceleratorTable([(wx.ACCEL_NORMAL, wx.WXK_F5, refresh)]))
+        colour = wx.Button(dlg, label="Colour")
+        picked = []
+
+        def choose(e):
+            data = wx.ColourData()
+            data.SetColour(wx.Colour("#44AAFF"))
+            with wx.ColourDialog(dlg, data) as d:
+                if d.ShowModal() == wx.ID_OK:
+                    c = d.GetColourData().GetColour()
+                    picked.append("#%02X%02X%02X" % (c.Red(), c.Green(), c.Blue()))
+                    said.SetLabel("Colour " + picked[-1])
+
+        colour.Bind(wx.EVT_BUTTON, choose)
+        done = wx.Button(dlg, wx.ID_OK, "Done")
+        for w, grow in ((tree, 1), (said, 0), (colour, 0), (done, 0)):
+            box.Add(w, grow, wx.EXPAND | wx.ALL, 4)
+        dlg.SetSizer(box)
+        dlg.SetSize((420, 420))
+        first = tree.GetFirstChild(root)[0]
+        code = dlg.ShowModal()
+        print("DESKTOOL tree " + json.dumps([code == wx.ID_OK, len(groups), tree.GetChildrenCount(root, False), tree.IsExpanded(first), clicks[-1:] , len(hits), picked]))
+        dlg.Destroy()
+
+
 class Window(pcbnew.ActionPlugin):
     def defaults(self):
         self.name = "Desk: Qt window"
@@ -377,9 +581,21 @@ class Ring(FootprintWizardBase.FootprintWizard):
         self.draw.Value(0, r + pcbnew.FromMM(3), self.GetTextSize())
 
 
-for cls in (Programs, Commit, Window):
+for cls in (Programs, Commit, Window, Nudge, Helper, Editor, Tree):
     cls().register()
 Ring().register()
+`;
+// The second program the Helper action starts: it connects to the port the plugin listens on and asks one question.
+const DESK_CLIENT = String.raw`
+import json
+import os
+import socket
+
+with socket.create_connection(("127.0.0.1", int(os.environ["DESK_PORT"])), timeout=1) as conn:
+    conn.settimeout(6)
+    conn.sendall(json.dumps({"ref": "R2"}).encode() + b"\n")
+    with conn.makefile("rb") as stream:
+        print(stream.readline().decode().strip())
 `;
 const DESK_META = { $schema: 'https://go.kicad.org/pcm/schemas/v1', name: 'Desk Tool', description: 'A plugin that uses desktop programs, Qt and a footprint wizard, used to test the web runtime.', description_full: 'Runs kicad-cli and git, opens a Qt window and registers a footprint wizard.', identifier: DESK_ID, type: 'plugin',
   author: { name: 'KiCad Collaborative tests', contact: { web: 'https://example.com' } }, license: 'MIT', resources: { homepage: 'https://example.com' }, versions: [{ version: '1.0.0', status: 'stable', kicad_version: '8.0' }] };
@@ -447,7 +663,7 @@ const pcmBase = `http://127.0.0.1:${PCM_PORT}`;
 const packages = [Object.assign({}, METADATA, { versions: [Object.assign({}, METADATA.versions[0], { download_url: `${pcmBase}/zips/${ID}.zip`, download_sha256: crypto.createHash('sha256').update(packageZip).digest('hex'), download_size: packageZip.length, install_size: PLUGIN_PY.length })] })];
 const ipcZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(IPC_META)), 'plugins/plugin.json': Buffer.from(JSON.stringify(IPC_JSON)), 'plugins/main.py': Buffer.from(IPC_PY), 'plugins/requirements.txt': Buffer.from('kicad-python>=0.3.0\n') });
 packages.push(Object.assign({}, IPC_META, { versions: [Object.assign({}, IPC_META.versions[0], { download_url: `${pcmBase}/zips/${IPC_ID}.zip`, download_sha256: crypto.createHash('sha256').update(ipcZip).digest('hex'), download_size: ipcZip.length, install_size: IPC_PY.length })] }));
-const deskZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(DESK_META)), 'plugins/__init__.py': Buffer.from('from .desk import *\n'), 'plugins/desk.py': Buffer.from(DESK_PY) });
+const deskZip = zip({ 'metadata.json': Buffer.from(JSON.stringify(DESK_META)), 'plugins/__init__.py': Buffer.from('from .desk import *\n'), 'plugins/desk.py': Buffer.from(DESK_PY), 'plugins/client.py': Buffer.from(DESK_CLIENT) });
 packages.push(Object.assign({}, DESK_META, { versions: [Object.assign({}, DESK_META.versions[0], { download_url: `${pcmBase}/zips/${DESK_ID}.zip`, download_sha256: crypto.createHash('sha256').update(deskZip).digest('hex'), download_size: deskZip.length, install_size: deskZip.length })] }));
 const zips = { [`${ID}.zip`]: packageZip, [`${IPC_ID}.zip`]: ipcZip, [`${DESK_ID}.zip`]: deskZip };
 const REAL = {};   // real official packages, when a checkout of them is given
@@ -733,7 +949,7 @@ await ready(a, DESK_ID, 120000);
 const deskActs = ((await state(a)).py[DESK_ID] || []);
 const deskRun = (name) => a.evaluate(([i, x]) => { window.KcPlugins.runUi(`plugin:${i}:${x}`); }, [DESK_ID, (deskActs.find((x) => x.name === name) || {}).identifier || '']);
 const deskLine = async (tag) => { await waitLog(a, DESK_ID, new RegExp('DESKTOOL ' + tag + ' '), 90000).catch(() => {}); const l = (await logOf(a, DESK_ID)).find((x) => x.includes('DESKTOOL ' + tag + ' ')) || ''; try { return JSON.parse(l.slice(l.indexOf('DESKTOOL ' + tag + ' ') + 10 + tag.length)); } catch { return { failed: l || (await logOf(a, DESK_ID)).slice(-4).join(' | ') }; } };
-check('a footprint wizard is offered as a command beside the plugin\'s actions', deskActs.map((x) => x.name).join() === 'Desk: programs,Desk: commit,Desk: Qt window,Footprint Wizard: Test ring', JSON.stringify(deskActs.map((x) => x.name)));
+check('a footprint wizard is offered as a command beside the plugin\'s actions', deskActs.map((x) => x.name).join() === 'Desk: programs,Desk: commit,Desk: Qt window,Desk: nudge,Desk: helper,Desk: editor,Desk: tree,Footprint Wizard: Test ring', JSON.stringify(deskActs.map((x) => x.name)));
 await deskRun('Desk: programs');
 const prog = await deskLine('programs');
 check('kicad-cli is found and reports a version', prog.cli === true && /^\d+\.\d+/.test(prog.version || ''), JSON.stringify(prog).slice(0, 300));
@@ -761,6 +977,52 @@ await shot(a, 'py-07-qt');
 await qt.getByText('Done', { exact: true }).click();
 const qtOut = await deskLine('qt');
 check('QDialog.exec returns when the dialog is accepted', Array.isArray(qtOut) && qtOut[0] === 1 && qtOut[1] === 'Pads on R2: 2', JSON.stringify(qtOut));
+await idle(a, DESK_ID);
+
+// ---- a plugin with a helper: a local port, a second program, an answer given on the window system's thread
+await deskRun('Desk: helper');
+const helper = await deskLine('helper');
+let helperSaid = {}; try { helperSaid = JSON.parse(helper[1]); } catch { /* reported below */ }
+check('a plugin that listens on a local port is reached by the second program it starts', Array.isArray(helper) && helper[0] === 0 && helperSaid.ok === true && helperSaid.pads === 2, JSON.stringify(helper));
+check('a port nothing listens on refuses the connection', Array.isArray(helper) && helper[2] === 'ConnectionRefusedError', JSON.stringify(helper));
+await idle(a, DESK_ID);
+
+// ---- a plugin that works KiCad's own window: its plugin menu, Undo, a hotkey on the canvas, the Appearance panel
+const edDepth = await undoDepth(a);
+await deskRun('Desk: editor');
+const edOut = await deskLine('editor');
+check('a plugin finds its own entry in Tools → External Plugins, chooses it, and Edit → Undo takes it back', edOut.menu && edOut.menu.every(Boolean) && (await undoDepth(a)) === edDepth, `${JSON.stringify(edOut.menu)} undo ${edDepth} → ${await undoDepth(a)}`);
+const lit = await a.evaluate(() => (window.CollabEditor && window.CollabEditor.highlightIds ? window.CollabEditor.highlightIds.size : 0));
+check('KiCad\'s highlight-net hotkey sent to the canvas highlights the selected net in the editor', edOut.highlight && edOut.highlight.slice(0, 3).every(Boolean) && lit > 0, `${JSON.stringify(edOut.highlight)} lit ${lit}`);
+const netRow = await a.evaluate((name) => { const ap = window.CollabPanels.getState().appearance; const n = ap.nets.find((x) => x.name === name); return n ? [n.color, n.visible, ap.netColorMode] : null; }, edOut.highlight ? edOut.highlight[3] : '');
+check('the Appearance panel\'s net grid is the editor\'s: a colour, a hidden ratsnest and the colour mode set by the plugin show there', edOut.appearance && edOut.appearance.every(Boolean) && netRow && /^#ff8800$/i.test(netRow[0] || '') && netRow[1] === false && netRow[2] === 'all', `${JSON.stringify(edOut.appearance)} ${JSON.stringify(netRow)}`);
+await idle(a, DESK_ID);
+
+// ---- a tree with columns, an accelerator key and the colour chooser
+await deskRun('Desk: tree');
+await a.waitForSelector('#pluginWindow', { timeout: 30000 });
+const tr = a.frameLocator(`iframe[data-plugin="${DESK_ID}"]`);
+const groupRows = await tr.locator('.wx-tree tr:has(td)').count();
+await tr.locator('.wx-tree .wx-tree-exp').first().click();
+await tr.locator('.wx-tree tr:has(td)').nth(groupRows).waitFor({ timeout: 10000 }).catch(() => {});
+const openRows = await tr.locator('.wx-tree tr:has(td)').count();
+check('a tree with columns shows its groups and opens one', groupRows > 1 && openRows > groupRows && (await tr.locator('.wx-tree th').count()) === 2, `${groupRows} → ${openRows}`);
+await tr.locator('.wx-tree tr:has(td)').nth(1).locator('td').nth(1).click();
+await tr.getByText(/^Chosen: [A-Z]+\d+$/).waitFor({ timeout: 10000 }).catch(() => {});
+check('choosing a row tells the plugin which item it is', (await tr.getByText(/^Chosen: [A-Z]+\d+$/).count()) === 1, await tr.locator('.wx-text').allInnerTexts().then((t) => t.join('|')).catch(() => ''));
+await shot(a, 'py-08-tree');
+await tr.getByText('Colour', { exact: true }).focus();
+await a.keyboard.press('F5');
+await tr.getByText('Refreshed 1').waitFor({ timeout: 10000 }).catch(() => {});
+check('an accelerator key runs its menu command', (await tr.getByText('Refreshed 1').count()) === 1);
+await tr.getByText('Colour', { exact: true }).click();
+await tr.locator('input[type="text"]:visible').last().fill('#12AB34');
+await tr.locator('button:visible', { hasText: /^OK$/ }).last().click();
+await tr.getByText('Colour #12AB34').waitFor({ timeout: 10000 }).catch(() => {});
+check('the colour chooser returns the colour typed', (await tr.getByText('Colour #12AB34').count()) === 1);
+await tr.locator('button:visible', { hasText: /^Done$/ }).last().click();
+const treeOut = await deskLine('tree');
+check('the tree reports its items, the column clicked and the key', Array.isArray(treeOut) && treeOut[0] === true && treeOut[1] > 1 && treeOut[2] === treeOut[1] && treeOut[3] === true && treeOut[4][0] && treeOut[4][0][1] === 1 && treeOut[5] === 1 && treeOut[6][0] === '#12AB34', JSON.stringify(treeOut));
 await idle(a, DESK_ID);
 const fpsBefore = await count(a, 'footprint'), wizDepth = await undoDepth(a);
 await deskRun('Footprint Wizard: Test ring');

@@ -1594,6 +1594,17 @@ class PCB_TRACK(BOARD_CONNECTED_ITEM):
         s, e = self.GetStart(), self.GetEnd()
         return VECTOR2I((s.x + e.x) / 2, (s.y + e.y) / 2)
 
+    def GetLocalSolderMaskMargin(self):
+        """The track's own solder mask expansion, or None when it uses the board's."""
+        k = _kid(self._node, "solder_mask_margin")
+        return FromMM(_f(k[1])) if k is not None and len(k) > 1 else None
+
+    def SetLocalSolderMaskMargin(self, margin=None):
+        self._node[:] = [c for c in self._node if not (isinstance(c, list) and c and c[0] == "solder_mask_margin")]
+        if margin is not None:
+            self._node.append([Sym("solder_mask_margin"), _n(ToMM(margin))])
+        self._touch()
+
     def HasSolderMask(self):
         return False
 
@@ -4685,14 +4696,57 @@ class BOARD_DESIGN_SETTINGS:
     def IsLayerEnabled(self, layer):
         return self._board.IsLayerEnabled(layer)
 
+    # The sizes new tracks and vias get: entry 0 of each list is "the net class's size", the others are the board's
+    # predefined sizes (Board Setup → Pre-defined Sizes).
+    def _vias(self):
+        nc = _netclasses()["Default"]._v
+        ds = (_project().get("board") or {}).get("design_settings") or {}
+        out = [(FromMM(nc.get("via", 0.6)), FromMM(nc.get("drill", 0.3)))]
+        for v in ds.get("via_dimensions") or []:
+            if isinstance(v, dict) and (v.get("diameter") or 0) > 0:
+                out.append((FromMM(v["diameter"]), FromMM(v.get("drill") or 0)))
+        return out
+
+    # the colour a net is drawn in (Appearance → Nets); the editor keeps these, see the Appearance panel of its frame
+    def SetNetColorAssignment(self, netname, color):
+        colors = self._board.__dict__.setdefault("_net_colors", {})
+        if color is None or color == COLOR4D.UNSPECIFIED:
+            colors.pop(str(netname), None)
+        else:
+            colors[str(netname)] = COLOR4D(color)
+
+    def GetNetColorAssignments(self):
+        return dict(self._board.__dict__.get("_net_colors", {}))
+
+    HasNetColorAssignment = lambda self, netname: str(netname) in self._board.__dict__.get("_net_colors", {})
+
+    # m_NetSettings is this object: the net class a net gets (its assignment or pattern, else Default)
+    def GetEffectiveNetClass(self, netname):
+        return _netclasses()[_netclass_name(str(netname))]
+
+    GetNetClassByName = lambda self, name: _netclasses().get(str(name), _netclasses()["Default"])
+    GetDefaultNetclass = lambda self: _netclasses()["Default"]
+
+    def GetTrackWidthIndex(self):
+        return min(self.__dict__.get("_track_index", 0), len(self.m_TrackWidthList) - 1)
+
+    def SetTrackWidthIndex(self, index):
+        self.__dict__["_track_index"] = max(0, min(int(index), len(self.m_TrackWidthList) - 1))
+
+    def GetViaSizeIndex(self):
+        return min(self.__dict__.get("_via_index", 0), len(self._vias()) - 1)
+
+    def SetViaSizeIndex(self, index):
+        self.__dict__["_via_index"] = max(0, min(int(index), len(self._vias()) - 1))
+
     def GetCurrentTrackWidth(self):
-        return FromMM(0.25)
+        return self.m_TrackWidthList[self.GetTrackWidthIndex()]
 
     def GetCurrentViaSize(self):
-        return FromMM(0.6)
+        return self._vias()[self.GetViaSizeIndex()][0]
 
     def GetCurrentViaDrill(self):
-        return FromMM(0.3)
+        return self._vias()[self.GetViaSizeIndex()][1]
 
     def GetCurrentNetClassName(self):
         return "Default"
@@ -4756,7 +4810,50 @@ class TEXT_ATTRIBUTES:
 
 class COLOR4D:
     def __init__(self, r=0.0, g=0.0, b=0.0, a=1.0):
+        if isinstance(r, str):              # "#RRGGBB", "#RRGGBBAA", "rgb(r, g, b)", "rgba(r, g, b, a)"
+            text = r.strip()
+            r, g, b, a = 0.0, 0.0, 0.0, 1.0
+            if text.startswith("#") and len(text) in (7, 9):
+                r, g, b = (int(text[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+                if len(text) == 9:
+                    a = int(text[7:9], 16) / 255.0
+            else:
+                nums = _re.findall(r"[0-9.]+", text)
+                if len(nums) >= 3:
+                    r, g, b = (float(n) / 255.0 for n in nums[:3])
+                    a = float(nums[3]) if len(nums) > 3 else 1.0
+        elif isinstance(r, COLOR4D):
+            r, g, b, a = r.r, r.g, r.b, r.a
         self.r, self.g, self.b, self.a = r, g, b, a
+
+    def __eq__(self, other):
+        return isinstance(other, COLOR4D) and (self.r, self.g, self.b, self.a) == (other.r, other.g, other.b, other.a)
+
+    def __hash__(self):
+        return hash((self.r, self.g, self.b, self.a))
+
+    def ToCSSString(self):
+        r, g, b = (int(round(max(0.0, min(1.0, v)) * 255)) for v in (self.r, self.g, self.b))
+        return "rgb(%d, %d, %d)" % (r, g, b) if self.a >= 1.0 else "rgba(%d, %d, %d, %.3f)" % (r, g, b, self.a)
+
+    def ToHexString(self):
+        r, g, b, a = (int(round(max(0.0, min(1.0, v)) * 255)) for v in (self.r, self.g, self.b, self.a))
+        return "#%02X%02X%02X%02X" % (r, g, b, a)
+
+    def WithAlpha(self, alpha):
+        return COLOR4D(self.r, self.g, self.b, alpha)
+
+    def Brightened(self, factor):
+        return COLOR4D(*(v + (1.0 - v) * factor for v in (self.r, self.g, self.b)), self.a)
+
+    def Darkened(self, factor):
+        return COLOR4D(*(v * (1.0 - factor) for v in (self.r, self.g, self.b)), self.a)
+
+
+COLOR4D.UNSPECIFIED = COLOR4D(0.0, 0.0, 0.0, 0.0)
+COLOR4D.WHITE = COLOR4D(1.0, 1.0, 1.0, 1.0)
+COLOR4D.BLACK = COLOR4D(0.0, 0.0, 0.0, 1.0)
+COLOR4D.CLEAR = COLOR4D(1.0, 0.0, 1.0, 0.0)
 
 
 class CONNECTIVITY_DATA:
@@ -4798,6 +4895,63 @@ class CONNECTIVITY_DATA:
 
     def IsConnectedOnLayer(self, *_):
         return True
+
+    def _touches(self, track, point):
+        """Does copper of the same net, other than `track`, reach this point on one of the track's layers?"""
+        b = self._board
+        layers = set(track.GetLayerSet().Seq()) if hasattr(track, "GetLayerSet") else {track.GetLayer()}
+        net = track.GetNetCode()
+        px, py = point.x, point.y
+        for other in b.GetTracks():
+            if other is track or other == track or other.GetNetCode() != net:
+                continue
+            if isinstance(other, PCB_VIA):
+                if not (layers & set(other.GetLayerSet().Seq())):
+                    continue
+                c = other.GetPosition()
+                if _math.hypot(px - c.x, py - c.y) <= other.GetWidth() / 2 + 1:
+                    return True
+                continue
+            if other.GetLayer() not in layers:
+                continue
+            reach = other.GetWidth() / 2 + 1
+            if isinstance(other, PCB_ARC):
+                # an arc joins at its two ends
+                ends = (other.GetStart(), other.GetEnd())
+                if any(_math.hypot(px - e.x, py - e.y) <= reach for e in ends):
+                    return True
+                continue
+            a, e = other.GetStart(), other.GetEnd()
+            dx, dy = e.x - a.x, e.y - a.y
+            ln = dx * dx + dy * dy
+            t = 0.0 if not ln else max(0.0, min(1.0, ((px - a.x) * dx + (py - a.y) * dy) / ln))
+            if _math.hypot(px - (a.x + t * dx), py - (a.y + t * dy)) <= reach:
+                return True
+        for pad in b.GetPads():
+            if pad.GetNetCode() != net:
+                continue
+            try:
+                on = layers & set(pad.GetLayerSet().Seq())
+            except Exception:
+                on = layers
+            if on and pad.HitTest(VECTOR2I(px, py)):
+                return True
+        return False
+
+    def TestTrackEndpointDangling(self, track, ignoreTracksInPads=True, pos=None):
+        """True when an end of the track (a via: the via) joins nothing of its net.  With `pos` given, the dangling
+        end's position is written into it, as KiCad does."""
+        if isinstance(track, PCB_VIA):
+            dangling = not self._touches(track, track.GetPosition())
+            if dangling and pos is not None and hasattr(pos, "x"):
+                pos.x, pos.y = track.GetPosition().x, track.GetPosition().y
+            return dangling
+        for end in (track.GetStart(), track.GetEnd()):
+            if not self._touches(track, end):
+                if pos is not None and hasattr(pos, "x"):
+                    pos.x, pos.y = end.x, end.y
+                return True
+        return False
 
     def RecalculateRatsnest(self, *_):
         pass
@@ -5276,6 +5430,43 @@ class BOARD(EDA_ITEM):
             it._selected = False
         self._selection_changed = True
 
+    # ---- net highlight: the nets a plugin asks the editor to show brightly
+    def ResetNetHighLight(self):
+        self.__dict__["_hl_nets"] = set()
+        self.__dict__["_hl_on"] = False
+        self._show_highlight()
+
+    def SetHighLightNet(self, code, multi=False):
+        nets = self.__dict__.setdefault("_hl_nets", set())
+        if not multi:
+            nets.clear()
+        if int(code) > 0:
+            nets.add(int(code))
+        if self.__dict__.get("_hl_on"):
+            self._show_highlight()
+
+    def GetHighLightNetCodes(self):
+        return set(self.__dict__.get("_hl_nets", ()))
+
+    def GetHighLightNetCode(self):
+        return next(iter(sorted(self.__dict__.get("_hl_nets", ()))), -1)
+
+    def IsHighLightNetON(self):
+        return bool(self.__dict__.get("_hl_on"))
+
+    def HighLightON(self, on=True):
+        self.__dict__["_hl_on"] = bool(on)
+        self._show_highlight()
+
+    def HighLightOFF(self):
+        self.HighLightON(False)
+
+    def _show_highlight(self):
+        if _Host.highlight is None or self is not _Host.board:
+            return
+        codes = self.__dict__.get("_hl_nets", set()) if self.__dict__.get("_hl_on") else set()
+        _Host.highlight(sorted(self._net_names[c] for c in codes if self._net_names.get(c)))
+
     def GetCurrentSelection(self):
         return [it for it in self._items if it._selected] + [k for f in self.GetFootprints() for g in (f._kids_cache or {}).values() for k in g if isinstance(k, BOARD_ITEM) and k._selected]
 
@@ -5435,6 +5626,7 @@ class _Host:
     board = None
     refresh = None           # called by Refresh(): pushes the changes so far to the editor
     focus = None
+    highlight = None         # called with the names of the nets to show brightly (none: no highlight)
     version = "10.0.0"
     plugins = []             # registered ActionPlugins
     plugin_dir = "/plugins"
@@ -5589,6 +5781,15 @@ class SETTINGS_MANAGER:
     @staticmethod
     def GetUserSettingsPath():
         return _Host.config_dir
+
+    @staticmethod
+    def SaveProject(*_):
+        """The web editor saves the project's settings as they change; there is nothing left to write."""
+        return True
+
+    @staticmethod
+    def IsProjectOpen():
+        return _Host.board is not None
 
     @staticmethod
     def GetSettingsVersion():
