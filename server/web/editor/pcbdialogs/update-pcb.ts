@@ -10,7 +10,7 @@ import { state } from "../appstore";
 import type { Netlist, SheetFile, UpdateOptions, UpdatePlan } from "../../canvas/pcb-netlist";
 import { liveDocument, projectDocs, type ProjectDocInfo } from "../projectfile";
 import { NL } from "./canvas";
-import { box, checkField, h, openDialog, reportPanel, type Field } from "./ui";
+import { box, checkField, confirmBox, h, openDialog, reportPanel, type Field } from "./ui";
 
 interface SchModuleInternals { _?: { symbolPins(doc: KDoc, item: KItem): { x: number; y: number; number: string; name: string; type: string; hidden: boolean }[]; isPowerSymbol(doc: KDoc, libId: string): boolean } }
 const SCH_IU = 10000;
@@ -151,4 +151,43 @@ export async function openUpdatePcb(ctx: ToolCtx): Promise<void> {
   if ("error" in res) { report.set([{ severity: "error", text: res.error }]); return; }
   netlist = res.netlist;
   await dryRun();
+}
+
+// ---------------------------------------------------------------- from the schematic editor (SCH_EDIT_FRAME::OnUpdatePCB)
+/**
+ * Tools > Update PCB from Schematic… (F8) in the schematic editor: open the project's board (creating it after
+ * pcbnew's "PCB '%s' does not exist. Do you wish to create it?" when the project has none), then DIALOG_UPDATE_PCB
+ * on it (MAIL_PCB_UPDATE).
+ */
+export async function updatePcbFromSchematicEditor(ctx: ToolCtx): Promise<void> {
+  const { openDoc } = await import("../doc");
+  const { toolCtx } = await import("../tools");
+  const docs = projectDocs(); const target = NL().projectBoardPath(docs);
+  const project = state.project as { projectId?: string } | null;
+  const run = async (doc: ProjectDocInfo): Promise<void> => {
+    const tabs = (state as { docs?: ProjectDocInfo[] }).docs || [];
+    if (!tabs.some((d) => d.docId === doc.docId)) tabs.push(doc);
+    await openDoc(doc);
+    for (let i = 0; i < 100 && !(E.kdoc && (E.kdoc as KDoc).type === "pcb"); i++) await new Promise((r) => setTimeout(r, 50));
+    if (!E.kdoc || (E.kdoc as KDoc).type !== "pcb") { ctx.toast("The board could not be opened"); return; }
+    await openUpdatePcb((toolCtx as unknown as () => ToolCtx)());
+  };
+  if (target.doc) { await run(target.doc); return; }
+  if (!target.path || !project || !project.projectId) {
+    ctx.toast("Cannot update the PCB because the Schematic Editor is opened in stand-alone mode. In order to create/update PCBs from schematics, launch the main KiCad application and create a project.");
+    return;
+  }
+  if (E.viewOnly) { ctx.toast("View-only access"); return; }
+  confirmBox("Confirmation", `PCB '${target.path}' does not exist. Do you wish to create it?`, "OK", () => { void (async () => {
+    try {
+      const { api } = await import("../util");
+      const res = await api(`/api/projects/${project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: target.path, docType: "kicad_pcb" }) }) as { docId?: string; path?: string; existing?: boolean };
+      if (!res || !res.docId) throw new Error("no document id returned");
+      const pt = (window as unknown as { PcbTools?: { BOARD_VERSION?: number } }).PcbTools;   // the version the board tools write
+      if (!res.existing) await api(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", headers: { "content-type": "text/plain" }, body: NL().newBoardText((pt && pt.BOARD_VERSION) || 20260728) });
+      const entry: ProjectDocInfo = { docId: res.docId, path: res.path || target.path, docType: "kicad_pcb" };
+      const all = (state.project as { docs?: ProjectDocInfo[] } | null)?.docs; if (all && !all.some((d) => d.docId === entry.docId)) all.push(entry);
+      await run(entry);
+    } catch (e) { ctx.toast(`Could not create the board: ${(e as Error).message}`); }
+  })(); });
 }

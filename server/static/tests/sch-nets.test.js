@@ -129,5 +129,15 @@ test("sch-tools: with a highlighter installed, a highlight click hands it the pi
   } finally { sch.setNetHighlighter(null); }
 });
 
+test("update PCB from the schematic: the project's board is <project>.kicad_pcb; a new board parses with two copper layers", () => {
+  const docs = [{ docId: "1", path: "dir/demo.kicad_pro", docType: "kicad_pro" }, { docId: "2", path: "dir/demo.kicad_sch", docType: "kicad_sch" }, { docId: "3", path: "dir/other.kicad_pcb", docType: "kicad_pcb" }];
+  assert.deepStrictEqual(N.projectBoardPath(docs), { path: "dir/demo.kicad_pcb", doc: null }, "another board is not the project's");
+  docs.push({ docId: "4", path: "dir/demo.kicad_pcb", docType: "kicad_pcb" });
+  assert.strictEqual(N.projectBoardPath(docs).doc.docId, "4");
+  const b = K.parseDoc(N.newBoardText(20260728), "kicad_pcb");
+  assert.strictEqual(b.type, "pcb"); assert.ok(/\(version 20260728\)/.test(N.newBoardText(20260728)));
+  assert.deepStrictEqual(b.copper, ["F.Cu", "B.Cu"]); assert.ok(b.layers.has("Edge.Cuts"));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -10,7 +10,7 @@ import { newTextBoxDialog } from "./textbox";
 import { newTableDialog } from "./table";
 import { createArrayDialog } from "./array";
 import { padPropertiesDialog } from "./pad-props";
-import { openUpdatePcb, projectNetlist } from "./update-pcb";
+import { openUpdatePcb, projectNetlist, updatePcbFromSchematicEditor } from "./update-pcb";
 import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
 import { commitObservers, toolCtx } from "../tools";
 
@@ -43,5 +43,8 @@ export function installPcbDialogs(): void {
   action("zoneFill", "Draft Fill Selected Zone(s)", "", zoneFillSelected);
   (window as unknown as { PcbZoneFill: unknown }).PcbZoneFill = { fillAll: zoneFillAll, fillSelected: zoneFillSelected, run: runZoneFill };
   commitObservers.push((phase, changes, label) => noteCommit(phase, changes as KChange[], label, () => toolCtx({}) as ToolCtx));
+  // the schematic editor's Tools > Update PCB from Schematic… (F8) opens the board and runs the same dialog there
+  const sch = CollabTools.sch as (ToolModule & { actions?: Record<string, unknown> }) | undefined;
+  if (sch && sch.actions) (sch.actions as Record<string, unknown>).updatePcbFromSchematic = { id: "updatePcbFromSchematic", label: "Update PCB from Schematic...", key: "F8", run: (ctx: ToolCtx) => { void updatePcbFromSchematicEditor(ctx); return true; } };
 }
 installPcbDialogs();

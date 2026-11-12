@@ -754,4 +754,17 @@ export function schematicParity(doc: KDoc, netlist: Netlist): ParityIssue[] {
   return out;
 }
 
-export const pcbNetlist = { buildNetlist, planUpdate, schematicParity, footprintFromLibrary, escapeNetName, unescapeNetName, busVector };
+/** A new, empty board as pcbnew creates it for a project that has none (two copper layers, the default layer set). */
+const NEW_BOARD_LAYERS = '(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (9 "F.Adhes" user "F.Adhesive") (11 "B.Adhes" user "B.Adhesive") (13 "F.Paste" user) (15 "B.Paste" user) (5 "F.SilkS" user "F.Silkscreen") (7 "B.SilkS" user "B.Silkscreen") (1 "F.Mask" user) (3 "B.Mask" user) (17 "Dwgs.User" user "User.Drawings") (19 "Cmts.User" user "User.Comments") (21 "Eco1.User" user "User.Eco1") (23 "Eco2.User" user "User.Eco2") (25 "Edge.Cuts" user) (27 "Margin" user) (31 "F.CrtYd" user "F.Courtyard") (29 "B.CrtYd" user "B.Courtyard") (35 "F.Fab" user) (33 "B.Fab" user))';
+export function newBoardText(version: number): string {
+  return `(kicad_pcb (version ${version}) (generator "pcbnew") (generator_version "10.0") (general (thickness 1.6) (legacy_teardrops no)) (paper "A4") ${NEW_BOARD_LAYERS} (setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no)) (net 0 ""))\n`;
+}
+/** The project's board: <project>.kicad_pcb next to the .kicad_pro (Prj().GetProjectFullName() with the board extension). */
+export function projectBoardPath(docs: { docId: string; path: string; docType: string }[]): { path: string; doc: { docId: string; path: string; docType: string } | null } {
+  const pro = docs.find((d) => d.docType === "kicad_pro");
+  const path = pro ? pro.path.replace(/\.kicad_pro$/, ".kicad_pcb") : "";
+  const doc = docs.find((d) => d.docType === "kicad_pcb" && d.path === path) || (pro ? null : docs.find((d) => d.docType === "kicad_pcb") || null);
+  return { path: path || (doc ? doc.path : ""), doc };
+}
+
+export const pcbNetlist = { newBoardText, projectBoardPath, buildNetlist, planUpdate, schematicParity, footprintFromLibrary, escapeNetName, unescapeNetName, busVector };
