@@ -2501,9 +2501,9 @@
       if (!p) return "";
       const ref = it.ref || "";
       if (p.type === "np_thru_hole") return `NPTH pad of ${ref}`;
-      const num = p.number ? p.number + " " : "";
-      if (p.type === "smd" || p.type === "connect") return `Pad ${num}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
-      return `PTH pad ${num}${netnameMsg(p.net)} of ${ref}`;
+      const num2 = p.number ? p.number + " " : "";
+      if (p.type === "smd" || p.type === "connect") return `Pad ${num2}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
+      return `PTH pad ${num2}${netnameMsg(p.net)} of ${ref}`;
     }
     if (it.kind === "segment" || it.kind === "arc") {
       const a = pt(n, "start"), b = pt(n, "end");
@@ -2939,6 +2939,259 @@
     for (const a of A) for (const b of B) if (shareLayer(a.layers, b.layers)) gap = Math.min(gap, shapeGap(a.shape, b.shape));
     const need = Math.max(netClearance(s, A[0].net), netClearance(s, B[0].net));
     return { gap: gap === Infinity ? null : r6(gap), required: need, sameNet: !!(A[0].net && A[0].net === B[0].net), nets: [A[0].net, B[0].net] };
+  }
+
+  // web/tools/pcb-tools/dru.ts
+  var UNIT = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
+  function druValue(s) {
+    const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s));
+    if (!m) return null;
+    const u = m[2].toLowerCase();
+    if (u && !(u in UNIT)) return null;
+    return +m[1] * (u ? UNIT[u] : 1);
+  }
+  function tokenize(src) {
+    const out = [];
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (/\s/.test(c)) {
+        i++;
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        let j = i + 1, s = "";
+        while (j < src.length && src[j] !== c) {
+          if (src[j] === "\\" && j + 1 < src.length) j++;
+          s += src[j++];
+        }
+        if (j >= src.length) throw new Error("Missing closing quote");
+        out.push("'" + s);
+        i = j + 1;
+        continue;
+      }
+      const two = src.slice(i, i + 2);
+      if (["||", "&&", "==", "!=", "<=", ">="].includes(two)) {
+        out.push(two);
+        i += 2;
+        continue;
+      }
+      if ("()<>!,".includes(c)) {
+        out.push(c);
+        i++;
+        continue;
+      }
+      const m = /^[A-Za-z_0-9.]+/.exec(src.slice(i));
+      if (!m) throw new Error(`Unexpected '${c}'`);
+      out.push(m[0]);
+      i += m[0].length;
+    }
+    return out;
+  }
+  function parseCondition(src) {
+    const t = tokenize(src);
+    let p = 0;
+    const peek = () => t[p], eat = (x) => {
+      const v = t[p++];
+      if (x && v !== x) throw new Error(`Expected '${x}'`);
+      return v;
+    };
+    const bin = (next, ops) => () => {
+      let a = next();
+      while (ops.includes(peek())) {
+        const op = eat();
+        a = { k: "bin", op, a, b: next() };
+      }
+      return a;
+    };
+    const primary = () => {
+      const tok = eat();
+      if (tok === void 0) throw new Error("Unexpected end of expression");
+      if (tok === "(") {
+        const e2 = or();
+        eat(")");
+        return e2;
+      }
+      if (tok === "!") return { k: "not", e: primary() };
+      if (tok[0] === "'") {
+        const s = tok.slice(1);
+        return { k: "lit", v: { t: "s", v: s, wild: /[*?]/.test(s) } };
+      }
+      const n = druValue(tok);
+      if (n !== null) return { k: "lit", v: { t: "n", v: n } };
+      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
+      if (!m) throw new Error(`Unrecognized item '${tok}'`);
+      const who = m[1] || null;
+      if (peek() === "(") {
+        eat("(");
+        const args = [];
+        if (peek() !== ")") {
+          args.push(or());
+          while (peek() === ",") {
+            eat(",");
+            args.push(or());
+          }
+        }
+        eat(")");
+        return { k: "call", who, fn: m[2], args };
+      }
+      if (!who) throw new Error(`Unrecognized item '${tok}'`);
+      return { k: "prop", who, name: m[2] };
+    };
+    const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
+    const and = bin(cmp, ["&&"]);
+    const or = bin(and, ["||"]);
+    const e = or();
+    if (p < t.length) throw new Error(`Unexpected '${t[p]}'`);
+    return e;
+  }
+  function wildMatch(pat, s) {
+    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+    return re.test(s);
+  }
+  var TYPE_NAME = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
+  function propOf(doc, s, it, name) {
+    if (!it) return { t: "u" };
+    const key = name.replace(/_/g, "").toLowerCase();
+    const net = () => netOf(it.node).name || "";
+    const str = (v) => ({ t: "s", v, wild: false });
+    switch (key) {
+      case "type":
+        return str(TYPE_NAME[it.kind] || it.kind);
+      case "net":
+      case "netname":
+        return str(net());
+      case "netcode":
+        return { t: "n", v: netOf(it.node).code || 0 };
+      case "netclass":
+        return str(netclassName(s, net()));
+      case "layer":
+        return str(it.layer || layerOf(it.node) || "");
+      case "width": {
+        const w = K.kid(it.node, "width");
+        return w ? { t: "n", v: K.num(w[1]) } : { t: "u" };
+      }
+      case "reference": {
+        const p = it.node.find((c) => Array.isArray(c) && c[0] === "property" && K.str(c[1]) === "Reference");
+        return p ? str(K.str(p[2])) : { t: "u" };
+      }
+      default:
+        return { t: "u" };
+    }
+  }
+  var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
+  var num = (b) => ({ t: "n", v: b ? 1 : 0 });
+  function evalExpr(e, doc, s, A, B) {
+    switch (e.k) {
+      case "lit":
+        return e.v;
+      case "prop":
+        return propOf(doc, s, e.who === "A" ? A : B, e.name);
+      case "not":
+        return num(!truth(evalExpr(e.e, doc, s, A, B)));
+      case "bin": {
+        if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
+        if (e.op === "||") return num(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
+        const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
+        if (e.op === "==" || e.op === "!=") {
+          let eq = false;
+          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
+          else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
+          return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
+        }
+        if (a.t !== "n" || b.t !== "n") return num(false);
+        return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
+      }
+      case "call": {
+        const it = e.who === "B" ? B : A;
+        const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" };
+        const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
+        switch (e.fn) {
+          case "inDiffPair": {
+            if (!it || !as) return num(false);
+            const name = netOf(it.node).name || "";
+            const m = matchDpSuffix(name);
+            if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
+            let i = name.length - 1;
+            while (i >= 0 && /[0-9_]/.test(name[i])) i--;
+            const base = name.slice(0, i) + name.slice(i + 1);
+            return num(wildMatch(as, base) || base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_"))));
+          }
+          case "hasNetclass":
+            return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
+          case "existsOnLayer": {
+            if (!it) return num(false);
+            const L = K.kid(it.node, "layers");
+            const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)];
+            return num(ls.some((l) => wildMatch(as, l) || l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)));
+          }
+          case "isPlated":
+            return num(!!it && (it.kind === "via" || it.kind === "pad" && K.str(it.node[2]) === "thru_hole"));
+          default:
+            return { t: "u" };
+        }
+      }
+    }
+  }
+  function parseDru(text) {
+    const rules = [], errors = [];
+    let root2;
+    try {
+      root2 = K.parse("(dru " + (text || "") + "\n)");
+    } catch (e) {
+      return { rules, errors: [String(e.message || e)] };
+    }
+    for (const r of root2.slice(1)) {
+      if (!Array.isArray(r) || r[0] !== "rule") continue;
+      const rule = { name: K.str(r[1]), condition: "", layer: null, severity: null, constraints: [], expr: null, error: null };
+      for (const c of r.slice(2)) {
+        if (!Array.isArray(c)) continue;
+        if (c[0] === "condition") rule.condition = K.str(c[1]);
+        else if (c[0] === "layer") rule.layer = K.str(c[1]);
+        else if (c[0] === "severity") rule.severity = K.str(c[1]);
+        else if (c[0] === "constraint") {
+          const k = { type: K.str(c[1]), min: null, opt: null, max: null };
+          for (const v of c.slice(2)) if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
+          rule.constraints.push(k);
+        }
+      }
+      if (rule.condition) {
+        try {
+          rule.expr = parseCondition(rule.condition);
+        } catch (e) {
+          rule.error = e.message;
+          errors.push(`rule '${rule.name}': ${rule.error}`);
+        }
+      }
+      rules.push(rule);
+    }
+    return { rules, errors };
+  }
+  var layerOk = (rule, layer) => {
+    if (!rule.layer || !layer) return true;
+    if (rule.layer === "outer") return /^(F|B)\.Cu$/.test(layer);
+    if (rule.layer === "inner") return /^In\d+\.Cu$/.test(layer);
+    return wildMatch(rule.layer, layer);
+  };
+  function ruleMatches(rule, doc, s, A, B) {
+    if (rule.error) return false;
+    if (!layerOk(rule, A ? A.layer || layerOf(A.node) : null)) return false;
+    return !rule.expr || truth(evalExpr(rule.expr, doc, s, A, B));
+  }
+  function evalRuleConstraint(rules, type, doc, s, A, B, fmt3) {
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i];
+      const c = r.constraints.find((k) => k.type === type);
+      if (!c) continue;
+      if (!ruleMatches(r, doc, s, A, B)) continue;
+      const f = fmt3 || ((v) => v.toFixed(4) + " mm");
+      const parts = [];
+      if (c.min != null && c.min > 0) parts.push("min " + f(c.min));
+      if (c.opt != null) parts.push("opt " + f(c.opt));
+      if (c.max != null) parts.push("max " + f(c.max));
+      return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
+    }
+    return null;
   }
 
   // web/tools/pcb-tools/walkaround.ts
@@ -3549,12 +3802,30 @@
       mode: tuneMode(),
       coupled: pair ? coupledLength(doc, pair, line2.netKey, closestOnSeg(mm, a, b)) : null
     };
+    applyRuleTarget(doc, st, tuneMode(), item, dpa ? dpa.item : null);
     if (dpa) {
       const lenMine = S.tune.pattern.lineLength, lenOther = routedLength(doc, dpa.item.id);
       S.tune.pattern.dp = { line: dpa.line, net: dpa.net, netKey: dpa.netKey, mineIsP: dpa.mineIsP, gap: dpa.gap, lenMine, lenOther };
       S.tune.pattern.lineLength = Math.max(lenMine, lenOther);
       S.tune.pattern.dpGap = dpa.gap;
     }
+  }
+  function applyRuleTarget(doc, st, mode, a, b) {
+    if (st.overrideCustomRules || !S.ruleConstraint || !a) return false;
+    const skew = mode === "skew" || mode === "diff_pair_skew";
+    const c = S.ruleConstraint(doc, skew ? "skew" : "length", a, b);
+    if (!c) return false;
+    const I = (v) => Math.round(v * TUNE_IU), opt = c.opt != null ? c.opt : c.min != null ? c.min : 0;
+    if (skew) {
+      setTargetSkew(st, I(opt));
+      if (c.min != null) st.skew.min = I(c.min);
+      if (c.max != null) st.skew.max = I(c.max);
+    } else {
+      setTargetLength(st, I(opt));
+      if (c.min != null) st.target.min = I(c.min);
+      if (c.max != null) st.target.max = I(c.max);
+    }
+    return true;
   }
   function tuneUpdate(ctx) {
     const T = S.tune.pattern;
@@ -3753,7 +4024,7 @@
   function tuningPatternInfo(gen) {
     const n = gen.node;
     const kid = (k) => K.kid(n, k);
-    const num = ((k, d) => {
+    const num2 = ((k, d) => {
       const c = kid(k);
       return c ? K.num(c[1]) : d;
     });
@@ -3772,19 +4043,19 @@
     };
     const st = meanderDefaults();
     const I = (v) => Math.round(v * TUNE_IU);
-    st.minAmp = I(num("min_amplitude", 0.2));
-    st.maxAmp = I(num("max_amplitude", 1));
-    st.spacing = I(num("min_spacing", 0.6));
-    st.crPct = num("corner_radius_percent", 80);
+    st.minAmp = I(num2("min_amplitude", 0.2));
+    st.maxAmp = I(num2("max_amplitude", 1));
+    st.spacing = I(num2("min_spacing", 0.6));
+    st.crPct = num2("corner_radius_percent", 80);
     st.round = bool("rounded", true);
     st.singleSided = bool("single_sided", false);
     st.overrideCustomRules = bool("override_custom_rules", false);
     const side = str("initial_side");
     st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
-    const opt = num("target_length", null);
-    if (opt != null) st.target = { min: I(num("target_length_min", opt - 0.1)), opt: I(opt), max: I(num("target_length_max", opt + 0.1)) };
-    const so = num("target_skew", null);
-    if (so != null) st.skew = { min: I(num("target_skew_min", so - 0.1)), opt: I(so), max: I(num("target_skew_max", so + 0.1)) };
+    const opt = num2("target_length", null);
+    if (opt != null) st.target = { min: I(num2("target_length_min", opt - 0.1)), opt: I(opt), max: I(num2("target_length_max", opt + 0.1)) };
+    const so = num2("target_skew", null);
+    if (so != null) st.skew = { min: I(num2("target_skew_min", so - 0.1)), opt: I(so), max: I(num2("target_skew_max", so + 0.1)) };
     const lay = kid("layer");
     const xyOf = (k) => {
       const c = kid(k);
@@ -3800,10 +4071,10 @@
       origin: xyOf("origin"),
       end: xyOf("end"),
       status: str("last_status"),
-      tuningLength: num("last_tuning_length", null),
+      tuningLength: num2("last_tuning_length", null),
       netName: str("last_netname"),
-      width: num("last_track_width", 0.25),
-      gap: num("last_diff_pair_gap", 0),
+      width: num2("last_track_width", 0.25),
+      gap: num2("last_diff_pair_gap", 0),
       members: K.groupMemberIds(n)
     };
   }
@@ -3883,6 +4154,12 @@
     if (!line2) return null;
     const st = tuneCopy(info.st);
     st.keepEndpoints = true;
+    const ist = tuneCopy(info.st);
+    const ruled = applyRuleTarget(scratch, ist, info.mode, seed, null);
+    if (ruled) {
+      st.target = ist.target;
+      st.skew = ist.skew;
+    }
     const nearOnLine = (p) => {
       let best = line2.pts[0], bd = Infinity;
       for (let i = 0; i + 1 < line2.pts.length; i++) {
@@ -3903,7 +4180,7 @@
     if (info.mode === "diff_pair_skew") {
       const pair = dpNetPair(scratch, line2.net);
       if (!pair) return null;
-      st.target = tuneTarget(info.st, coupledLength(scratch, pair, line2.netKey, origin));
+      st.target = tuneTarget(ist, coupledLength(scratch, pair, line2.netKey, origin));
     }
     const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
     const r = line2.width / 2, clearance = netClearance(settingsOf(ctx), line2.netKey);
@@ -3919,7 +4196,7 @@
       const gap = info.gap > 0 ? info.gap : 0.1;
       const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer, null, new Set(lineC.ids));
       const hits = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-      st.target = info.st.target;
+      st.target = ist.target;
       res = tuneDp({ line: line2, origin, end, cursor: end, width: line2.width, clearance, dp: { line: lineC, net: lineC.net, netKey: lineC.netKey, mineIsP: NT.key(pair.P) === line2.netKey, gap, lenMine, lenOther } }, st, I, hits);
     } else {
       const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer);
@@ -3984,6 +4261,18 @@
     }
     const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default";
     setKid2("initial_side", side);
+    if (ruled) {
+      const mm = (v) => +fmtG(v / TUNE_IU);
+      if (info.mode === "diff_pair_skew") {
+        setKid2("target_skew", mm(ist.skew.opt));
+        setKid2("target_skew_min", mm(ist.skew.min));
+        setKid2("target_skew_max", mm(ist.skew.max));
+      } else {
+        setKid2("target_length", mm(ist.target.opt));
+        setKid2("target_length_min", mm(ist.target.min));
+        setKid2("target_length_max", mm(ist.target.max));
+      }
+    }
     setKid2("last_status", res.status);
     setKid2("last_tuning_length", +fmtG(res.length / TUNE_IU));
     const mk = K.kid(g, "members");
@@ -4083,13 +4372,24 @@
     const name = netNameOf(ctx, net);
     const mm = (v) => msgValue(v / TUNE_IU, units).replace(/ (mm|mils|in)$/, "");
     const st = U.pattern ? U.pattern.st : S.tuneSettings[tuneMode()];
-    return {
-      scope: name ? unescapeName(name) : "",
-      label: skew ? "current skew" : "current length",
-      value: (skew ? "Skew: " : "Net: ") + msgValue(len, units),
-      min: skew ? mm(st.skew.min) : "---",
-      max: skew ? mm(st.skew.max) : "---"
-    };
+    let min = "---", max = "---";
+    if (skew) {
+      min = mm(st.skew.min);
+      max = mm(st.skew.max);
+    } else if (S.ruleConstraint && net) {
+      const NT = netTable(doc), k = NT.key(net);
+      let rep = null;
+      for (const it of doc.items.values()) if ((it.kind === "segment" || it.kind === "arc") && NT.key(netOf(it.node)) === k) {
+        rep = it;
+        break;
+      }
+      const c = rep ? S.ruleConstraint(doc, "length", rep, null) : null;
+      if (c && c.severity !== "ignore") {
+        min = mm((c.min || 0) * TUNE_IU);
+        max = c.max != null ? mm(c.max * TUNE_IU) : "---";
+      }
+    }
+    return { scope: name ? unescapeName(name) : "", label: skew ? "current skew" : "current length", value: (skew ? "Skew: " : "Net: ") + msgValue(len, units), min, max };
   }
   function drawTuneStatus(c, at, px, info) {
     const css = (name, dflt) => {
@@ -4180,6 +4480,11 @@
   function tuneHiddenIds() {
     const T = S.tune && S.tune.pattern;
     return T && T.res ? new Set(T.line.ids.concat(T.dp ? T.dp.line.ids : [])) : null;
+  }
+  function setCustomRules(text) {
+    const d = text ? parseDru(text) : null;
+    S.dru = d;
+    S.ruleConstraint = d && d.rules.length ? (doc, what, a, b) => evalRuleConstraint(d.rules, what, doc, S.settingsCache || S.settings || designSettings(null), a, b, (v) => msgValue(v, sizeUnits())) : null;
   }
 
   // web/tools/pcb-tools/tuning-edit.ts
@@ -12273,6 +12578,10 @@
   var openForm = (spec) => formImpl(spec);
   var copperOf = (doc) => doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
   function settingsOf(ctx) {
+    if (ctx && ctx.customRules !== void 0 && ctx.customRules !== S.druSrc) {
+      S.druSrc = ctx.customRules;
+      setCustomRules(ctx.customRules || null);
+    }
     const src = ctx && ctx.designSettings;
     if (src) {
       if (S.settingsSrc !== src) {
@@ -14663,6 +14972,9 @@
       S.settings = src ? designSettings(src) : null;
       S.settingsSrc = null;
     },
+    setCustomRules(text) {
+      setCustomRules(text);
+    },
     setForm(fn) {
       setFormImpl(fn);
     }
@@ -14824,6 +15136,12 @@
     assembleDiffPair,
     tuneHiddenIds,
     chPoints,
+    setCustomRules,
+    parseDru,
+    evalRuleConstraint,
+    parseCondition,
+    wildMatch,
+    tuneStatus,
     meanderDefaults,
     setTargetLength,
     meanderMove,

@@ -364,7 +364,7 @@ export async function openBoardSetup(ctx: ToolCtx, startPage?: string): Promise<
     const check = h("button", { type: "button" }, "Check rule syntax");
     check.addEventListener("click", () => { const err = ruleSyntaxError(ta.value); status.textContent = err || "No errors found."; status.className = "pd-status " + (err ? "err" : "ok"); });
     put(el, h("div", { class: "pd-row" }, h("label", null, "DRC Rules"), h("span", { style: "flex:1" }), check, status), ta,
-      note(dru ? "Custom rules are stored in the project's .kicad_dru file. The DRC of the web editor does not evaluate them; the desktop application does." : "This project has no custom rules file (.kicad_dru)."));
+      note(dru ? "Custom rules are stored in the project's .kicad_dru file. The web editor resolves their length, skew and diff pair constraints for length tuning and the message panel; the desktop DRC evaluates every rule." : "This project has no custom rules file (.kicad_dru)."));
   };
 
   const severityPage = (el: HTMLElement): void => {
@@ -441,7 +441,7 @@ async function save(ctx: ToolCtx, proText: string | null, edits: ProjectEdit[], 
   }
   if (druDocId && rulesText !== null) {
     const ok = await saveTextDocument(druDocId, rulesText, { id: "rules", kind: "MODIFIED", typeName: "DESIGN_RULES_FILE", properties: [{ name: "text", after: { type: "string", v: rulesText } }] });
-    if (ok) done.push("custom rules"); else failed.push("custom rules");
+    if (ok) { done.push("custom rules"); E.druText = rulesText; } else failed.push("custom rules");
   }
   if (failed.length) ctx.toast(`Board Setup: could not save the ${failed.join(" and ")}`, 5000);
   else if (done.length) ctx.toast(`Board Setup: ${done.join(", ")} saved`);

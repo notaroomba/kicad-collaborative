@@ -9,18 +9,19 @@ import { connectedRun, ptKey } from "./connected";
 import { settingsOf } from "./dialogs";
 import { dpNetPair } from "./diffpair";
 import { assembleLine, peq, trackEnds } from "./dragger";
-import { netClearance } from "./drc";
+import { designSettings, netClearance } from "./drc";
 import { sizeUnits } from "./edit-commands";
 import { distSeg } from "./hit";
 import { TUNE_IU, TUNE_MSG_SELECT, chPoints, meanderDefaults, meanderMove, tuneCopy } from "./meander";
 import { msgValue, routedLength, unescapeName } from "./msgpanel";
 import { netTable } from "./netlist";
+import { evalRuleConstraint, parseDru } from "./dru";
 import { netOf } from "./nets";
 import { segmentNode } from "./nodes";
 import { line } from "./overlay";
 import { arcTrackNode } from "./posture";
 import { HL, K, S, saturated } from "./state";
-import { coupledLength, fmtG, inTuneOutline, tuneBegin, tuneDp, tuneFinish, tuneMode, tunePick, tunePieces, tuneTarget, tuneUpdate } from "./tuning-tool";
+import { applyRuleTarget, coupledLength, fmtG, inTuneOutline, tuneBegin, tuneDp, tuneFinish, tuneMode, tunePick, tunePieces, tuneTarget, tuneUpdate } from "./tuning-tool";
 import { clone, color, pt, r6, widthOf } from "./util";
 import { closestOnSeg } from "./point-editor";
 import { pathHits, routeObstacles, simplifyPts } from "./walkaround";
@@ -111,10 +112,12 @@ export function regenerateTuningBranch(ctx: PcbCtx, gen: Pick<KItem, "id" | "kin
   const seedId = K.str(K.kid(added[0].node, "uuid")![1]); const seed = scratch.items.get(seedId); if (!seed) return null;
   const line = assembleLine(scratch, seed); if (!line) return null;
   const st = tuneCopy(info.st); st.keepEndpoints = true;
+  const ist = tuneCopy(info.st); const ruled = applyRuleTarget(scratch, ist, info.mode, seed, null);   // Update: a custom rule's target unless overridden
+  if (ruled) { st.target = ist.target; st.skew = ist.skew; }
   const nearOnLine = (p: Pt) => { let best: Pt = line.pts[0], bd = Infinity; for (let i = 0; i + 1 < line.pts.length; i++) { const q = closestOnSeg(p, line.pts[i], line.pts[i + 1]); const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = q; } } return [r6(best[0]), r6(best[1])]; };
   let origin = nearOnLine(info.origin || info.base![0]), end = nearOnLine(info.end || info.base![info.base!.length - 1]);
   if (Math.hypot(end[0] - origin[0], end[1] - origin[1]) < 0.1) { origin = info.base![0]; end = info.base![info.base!.length - 1]; }   // "Don't allow points too close"
-  if (info.mode === "diff_pair_skew") { const pair = dpNetPair(scratch, line.net); if (!pair) return null; st.target = tuneTarget(info.st, coupledLength(scratch, pair, line.netKey, origin)); }
+  if (info.mode === "diff_pair_skew") { const pair = dpNetPair(scratch, line.net); if (!pair) return null; st.target = tuneTarget(ist, coupledLength(scratch, pair, line.netKey, origin)); }
   const I = (p: Pt) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
   const r = line.width / 2, clearance = netClearance(settingsOf(ctx), line.netKey);
   let res: TuneResult, lineC: TrackLine | null = null;
@@ -127,7 +130,7 @@ export function regenerateTuningBranch(ctx: PcbCtx, gen: Pick<KItem, "id" | "kin
     const gap = info.gap > 0 ? info.gap : 0.1;
     const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer, null, new Set(lineC.ids));
     const hits = (ch: Chain) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-    st.target = info.st.target;
+    st.target = ist.target;
     res = tuneDp({ line, origin, end, cursor: end, width: line.width, clearance, dp: { line: lineC, net: lineC.net, netKey: lineC.netKey, mineIsP: NT.key(pair.P) === line.netKey, gap, lenMine, lenOther } }, st, I, hits);
   } else {
     const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer);
@@ -161,6 +164,11 @@ export function regenerateTuningBranch(ctx: PcbCtx, gen: Pick<KItem, "id" | "kin
   const blc = K.kid(g, "base_line_coupled"); if (blc && cbase && cbase.length >= 2) blc.splice(1, blc.length - 1, ["pts", ...cbase.map(xy)]);
   if (base.length >= 2) { const o = K.kid(g, "origin"); if (o) o.splice(1, o.length - 1, xy(base[0])); const e = K.kid(g, "end"); if (e) e.splice(1, e.length - 1, xy(base[base.length - 1])); }
   const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default"; setKid("initial_side", side);
+  if (ruled) {
+    const mm = (v: number) => +fmtG(v / TUNE_IU);
+    if (info.mode === "diff_pair_skew") { setKid("target_skew", mm(ist.skew.opt)); setKid("target_skew_min", mm(ist.skew.min)); setKid("target_skew_max", mm(ist.skew.max)); }
+    else { setKid("target_length", mm(ist.target.opt)); setKid("target_length_min", mm(ist.target.min)); setKid("target_length_max", mm(ist.target.max)); }
+  }
   setKid("last_status", res.status); setKid("last_tuning_length", +fmtG(res.length / TUNE_IU));
   const mk = K.kid(g, "members"); if (mk) mk.splice(1, mk.length - 1, ...members.slice().sort()); else g.push(["members", ...members.slice().sort()]);
   ops2.push({ set: gen.id, node: g });
@@ -213,11 +221,19 @@ export function tuneStatus(ctx: PcbCtx): TuneStatus | null {
     if (skew) { const pair = dpNetPair(doc, net); const [a, b] = trackEnds(it); if (pair && a && b) len -= coupledLength(doc, pair, netTable(doc).key(net), [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]); }
   } else return null;
   const name = netNameOf(ctx, net);
-  // the skew tuner shows the pattern's skew window; the length tuners show DRC length constraints, none here
+  // the skew tuner shows the pattern's skew window; the length tuners the net's LENGTH_CONSTRAINT straight from the
+  // rules (a track of the net stands for it), "---" without one or when the rule's severity is ignore
   const mm = (v: number) => msgValue(v / TUNE_IU, units).replace(/ (mm|mils|in)$/, "");
   const st = U.pattern ? U.pattern.st : S.tuneSettings[tuneMode()];
-  return { scope: name ? unescapeName(name) : "", label: skew ? "current skew" : "current length", value: (skew ? "Skew: " : "Net: ") + msgValue(len, units),
-    min: skew ? mm(st.skew.min) : "---", max: skew ? mm(st.skew.max) : "---" };
+  let min = "---", max = "---";
+  if (skew) { min = mm(st.skew.min); max = mm(st.skew.max); }
+  else if (S.ruleConstraint && net) {
+    const NT = netTable(doc), k = NT.key(net); let rep: KItem | null = null;
+    for (const it of doc.items.values()) if ((it.kind === "segment" || it.kind === "arc") && NT.key(netOf(it.node)) === k) { rep = it; break; }
+    const c = rep ? S.ruleConstraint(doc, "length", rep, null) : null;
+    if (c && c.severity !== "ignore") { min = mm((c.min || 0) * TUNE_IU); max = c.max != null ? mm(c.max * TUNE_IU) : "---"; }
+  }
+  return { scope: name ? unescapeName(name) : "", label: skew ? "current skew" : "current length", value: (skew ? "Skew: " : "Net: ") + msgValue(len, units), min, max };
 }
 export function drawTuneStatus(c: CanvasRenderingContext2D, at: Pt, px: number, info: TuneStatus) {
   const css = (name: string, dflt: string) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
@@ -257,3 +273,11 @@ export function drawTune(c: CanvasRenderingContext2D, ctx: PcbCtx, px: number) {
 }
 /** What the board render leaves out while the tuner shows the rebuilt line. */
 export function tuneHiddenIds() { const T = S.tune && S.tune.pattern; return T && T.res ? new Set(T.line.ids.concat(T.dp ? T.dp.line.ids : [])) : null; }
+/**
+ * The project's custom rules (.kicad_dru text, or null): parsed once, and S.ruleConstraint resolves a constraint for
+ * an item pair from them (DRC_ENGINE::EvalRules), its values in the user's units for the message panel.
+ */
+export function setCustomRules(text: string | null) {
+  const d = text ? parseDru(text) : null; S.dru = d;
+  S.ruleConstraint = d && d.rules.length ? (doc, what, a, b) => evalRuleConstraint(d.rules, what, doc, S.settingsCache || S.settings || designSettings(null), a, b, (v) => msgValue(v, sizeUnits())) : null;
+}

@@ -42,7 +42,7 @@ const ev = (extra) => Object.assign({ button: 0, shiftKey: false, clientX: 0, cl
 const key = (k) => Object.assign({ key: k, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, preventDefault() {} });
 function reset() {
   try { pcb.cancel && pcb.cancel(); } catch (e) { /* nothing in progress */ }
-  P.state.tune.pattern = null; P.state.tune.picker = null; P.state.tuneSettings.single = P.meanderDefaults();
+  P.state.tune.pattern = null; P.state.tune.picker = null; P.state.tuneSettings.single = P.meanderDefaults(); P.setCustomRules(null); P.state.druSrc = undefined;
 }
 const tracks = (doc, net) => [...doc.items.values()].filter((it) => (it.kind === "segment" || it.kind === "arc") && P.netOf(it.node).code === net);
 function trackLen(it) {
@@ -479,6 +479,46 @@ test("Tune DP length refusals: a net without a partner; the dialog runs in diff_
   ctx.setTool("tunediff");
   pcb.onPointerDown(ev(), [15, 20], ctx); assert.equal(log.toasts.pop(), P.TUNE_MSG_DP_NETS); assert.equal(P.state.tune.pattern, null);
   assert.ok(P.TUNE_MSG_DP_NETS.startsWith("Unable to find complementary differential pair net for length tuning."));
+});
+
+
+// ---- custom rules (.kicad_dru): DRC_RULES_PARSER, PCBEXPR conditions, DRC_ENGINE::EvalRules
+const DRU = `(version 1)
+(rule "usb length"
+  (condition "A.inDiffPair('USB')")
+  (constraint length (min 23.9mm) (opt 24mm) (max 24.1mm)))
+(rule "sig len" (condition "A.NetName == 'SIG'") (constraint length (min 39.5mm) (max 41mm)))
+(rule "later wins" (condition "A.NetName == 'S*' && A.Type == 'Track'") (constraint length (opt 40mm) (min 39.9mm) (max 40.1mm)))
+(rule "bad" (condition "A.NetName == ") (constraint length (opt 1mm)))
+(rule "skew" (condition "A.inDiffPair('*') || A.hasNetclass('HS*')") (constraint skew (max 0.5mm)) (layer outer))
+`;
+test("custom rules: values with units, conditions with wildcards / functions, the later rule wins, a broken one never matches", () => {
+  assert.equal(P.parseDru("(rule a (constraint length (min 10mil)))").rules[0].constraints[0].min, 0.254);
+  const d = P.parseDru(DRU); assert.equal(d.rules.length, 5); assert.equal(d.errors.length, 1, "the broken condition is reported: " + d.errors);
+  const doc = K.parseDoc(DP.replace('(net "LONE")', '(net "SIG")'), "kicad_pcb"); const s = P.designSettings(null);
+  const p1 = doc.items.get("p1"), l1 = doc.items.get("l1");
+  const usb = P.evalRuleConstraint(d.rules, "length", doc, s, p1, null);
+  assert.deepEqual([usb.name, usb.min, usb.opt, usb.max], ["rule 'usb length'", 23.9, 24, 24.1]);
+  assert.equal(usb.text, "min 23.9000 mm; opt 24.0000 mm; max 24.1000 mm", "MessageTextFromMinOptMax");
+  const sig = P.evalRuleConstraint(d.rules, "length", doc, s, l1, null); assert.equal(sig.name, "rule 'later wins'", "later rules take precedence");
+  assert.equal(P.evalRuleConstraint(d.rules, "skew", doc, s, p1, null).max, 0.5);
+  assert.equal(P.evalRuleConstraint(d.rules, "skew", doc, s, l1, null), null);
+  assert.ok(P.wildMatch("us?_*", "USB_DATA")); assert.throws(() => P.parseCondition("A.NetName == 'x"));
+});
+
+test("a custom rule sets the tuner's target (Update without Override Custom Rules) and the status min / max", () => {
+  const { ctx, log, doc } = fakeCtx(DP);
+  P.setCustomRules(DRU); P.state.tuneSettings.diffpair = P.meanderDefaults();
+  ctx.setTool("tunediff");
+  pcb.onPointerMove(ev(), [20, 10], ctx);
+  const info = P.tuneStatus(ctx); assert.equal(info.min, "23.9000"); assert.equal(info.max, "24.1000");
+  pcb.onPointerDown(ev(), [13, 10], ctx); assert.deepEqual(P.state.tune.pattern.st.target, { min: 23.9 * IU, opt: 24 * IU, max: 24.1 * IU });
+  pcb.onPointerMove(ev(), [27, 9], ctx); pcb.onPointerDown(ev(), [27, 9], ctx);
+  assert.equal(log.commits.at(-1).label, "Tune");
+  const lp = netLenN(doc, "USB_P"), ln = netLenN(doc, "USB_N"); assert.ok(Math.abs(Math.max(lp, ln) - 24) < 0.1, "tuned to the rule's 24 mm: " + lp + " " + ln);
+  const gen = [...doc.items.values()].find((it) => it.kind === "generated"); assert.equal(K.kid(gen.node, "target_length")[1], 24);
+  const rows = P.msgPanelInfo(doc, [gen.id]);
+  assert.ok(rows.some((r) => r.title === "Length Constraints: min 23.9000 mm; opt 24.0000 mm; max 24.1000 mm" && r.value === "(from rule 'usb length')"), JSON.stringify(rows));
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

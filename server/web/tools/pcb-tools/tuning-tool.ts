@@ -9,7 +9,7 @@ import { dpNetPair } from "./diffpair";
 import { assembleLine, peq } from "./dragger";
 import { netClearance } from "./drc";
 import { distSeg } from "./hit";
-import { DELAY_UNCONSTRAINED_MM, TUNE_IU, TUNE_MSG_INSIDE, TUNE_MSG_PICK, TUNE_STATUS_TEXT, chPoints, dpMeanderMove, meanderDefaults, meanderMove, segSide, splitLine, tuneCopy, veq } from "./meander";
+import { DELAY_UNCONSTRAINED_MM, TUNE_IU, TUNE_MSG_INSIDE, TUNE_MSG_PICK, TUNE_STATUS_TEXT, chPoints, dpMeanderMove, meanderDefaults, meanderMove, segSide, setTargetLength, setTargetSkew, splitLine, tuneCopy, veq } from "./meander";
 import { routedLength } from "./msgpanel";
 import { netTable } from "./netlist";
 import { netOf } from "./nets";
@@ -120,12 +120,27 @@ export function tuneBegin(ctx: PcbCtx, item: KItem, mm: Pt) {
   S.tune.pattern = { item: item.id, line, layer: line.layer, net: line.net, netName: netNameOf(ctx, line.net), netKey: line.netKey, width: line.width, origin: at, end: at, cursor: mm.slice(), st,
     clearance: netClearance(s, line.netKey), lineLength: routedLength(doc, item.id), res: null, mode: tuneMode(),
     coupled: pair ? coupledLength(doc, pair, line.netKey, closestOnSeg(mm, a!, b!)) : null };
+  applyRuleTarget(doc, st, tuneMode(), item, dpa ? dpa.item : null);
   if (dpa) {
     const lenMine = S.tune.pattern.lineLength, lenOther = routedLength(doc, dpa.item.id);
     S.tune.pattern.dp = { line: dpa.line, net: dpa.net, netKey: dpa.netKey, mineIsP: dpa.mineIsP, gap: dpa.gap, lenMine, lenOther };
     S.tune.pattern.lineLength = Math.max(lenMine, lenOther);   // origPathLength
     S.tune.pattern.dpGap = dpa.gap;
   }
+}
+/**
+ * PCB_TUNING_PATTERN::Update without Override Custom Rules: a matching custom rule's length (or, for skew, its skew)
+ * constraint becomes the target (MEANDER_SETTINGS::SetTargetLength( MINOPTMAX ): opt, then its min / max when given;
+ * a rule without opt has MINOPTMAX's Opt() = Min()).  True when a rule applied.
+ */
+export function applyRuleTarget(doc: BoardDoc, st: MeanderSettings, mode: string, a: KItem | null, b: KItem | null) {
+  if (st.overrideCustomRules || !S.ruleConstraint || !a) return false;
+  const skew = mode === "skew" || mode === "diff_pair_skew";
+  const c = S.ruleConstraint(doc, skew ? "skew" : "length", a, b); if (!c) return false;
+  const I = (v: number) => Math.round(v * TUNE_IU), opt = c.opt != null ? c.opt : c.min != null ? c.min : 0;
+  if (skew) { setTargetSkew(st, I(opt)); if (c.min != null) st.skew.min = I(c.min); if (c.max != null) st.skew.max = I(c.max); }
+  else { setTargetLength(st, I(opt)); if (c.min != null) st.target.min = I(c.min); if (c.max != null) st.target.max = I(c.max); }
+  return true;
 }
 /** PCB_TUNING_PATTERN::EditStart + Update for the pattern as it is: the side from the end, then MEANDER_PLACER::Move. */
 export function tuneUpdate(ctx: PcbCtx) {

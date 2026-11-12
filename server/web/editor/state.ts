@@ -65,6 +65,7 @@ export const E: any = {
   activeLayer: "",
   markers: [],
   proSettings: null,
+  druText: null,
   selection: new Set(),
   selMode: "rect",
   boxSel: null,

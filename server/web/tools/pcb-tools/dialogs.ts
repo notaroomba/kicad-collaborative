@@ -5,6 +5,7 @@ import { boardNets, replacedChange } from "./changes";
 import { designSettings } from "./drc";
 import { padsOf } from "./route-geom";
 import { K, S, bind, lastCtx } from "./state";
+import { setCustomRules } from "./tuning-patterns";
 import { clone, isList, norm180, r6 } from "./util";
 
 // ---------------------------------------------------------------- dialogs (KDialogs at runtime, a swappable form for the tests)
@@ -64,6 +65,7 @@ export const openForm = <V>(spec: FormSpec<V>) => formImpl(spec as unknown as Fo
 export const copperOf = (doc: BoardDoc) => doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
 /** The design rules in force: ctx.designSettings (a .kicad_pro object, a legacy board text or our shape), pcb.setDesignSettings, else KiCad's defaults. */
 export function settingsOf(ctx: PcbCtx) {
+  if (ctx && ctx.customRules !== undefined && ctx.customRules !== S.druSrc) { S.druSrc = ctx.customRules; setCustomRules(ctx.customRules || null); }
   const src = ctx && ctx.designSettings; if (src) { if (S.settingsSrc !== src) { S.settingsSrc = src; S.settingsCache = designSettings(src); } return S.settingsCache!; }
   return S.settings || (S.settings = designSettings(null));
 }

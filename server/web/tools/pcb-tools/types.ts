@@ -27,6 +27,8 @@ export interface PcbCtx extends ToolCtx {
   snap(mm: Pt): [number, number];
   /** the project's design settings (.kicad_pro as text or parsed, a legacy board's (setup …), or our shape) */
   designSettings?: string | DesignSource | DesignSettings | null;
+  /** the project's .kicad_dru text (custom rules) */
+  customRules?: string | null;
   /** where the pointer is (paste, the array tool) */
   cursor?: Pt | null;
   /** the clipboard bridge app.js may hand over */
@@ -117,7 +119,7 @@ export type PcbState = {
   /** the last DRC run's markers */
   markers: DrcMarker[];
   showRatsnest: boolean; localRatsnest: boolean; hiddenNets: Set<string>; rats: { doc: BoardDoc; lines: RatsnestLine[] } | null; ratsDirty: boolean;
-  settings: DesignSettings | null; settingsSrc: unknown; settingsCache: DesignSettings | null; highlightNet: string | null;
+  settings: DesignSettings | null; settingsSrc: unknown; settingsCache: DesignSettings | null; druSrc?: string | null; highlightNet: string | null;
   /** the router's caches (per document change) and the obstacles shown in violation */
   docVer: number; rworld: RouterWorld | null; nlc: { doc: BoardDoc; ver: number; nl: Netlist } | null; violations: { obs: Obstacle[]; at: Pt } | null;
   /** the length tuner: the pattern being placed, the track under the cursor */
@@ -126,7 +128,9 @@ export type PcbState = {
   rs: import("./router-settings").RouterSettings; tuneSettings: { single: MeanderSettings; diffpair: MeanderSettings; skew: MeanderSettings };
   genEdit?: import("./tuning-edit").GenEdit | null;
   /** the board's custom rules for the tuner: a length / skew constraint on the pattern's tracks ({ text, name, min, opt, max } in mm) */
-  ruleConstraint?: ((doc: BoardDoc, what: "length" | "skew" | "chain", a: KItem | null, b: KItem | null) => { text: string; name: string; min: number | null; opt: number | null; max: number | null } | null) | null;
+  ruleConstraint?: ((doc: BoardDoc, what: string, a: KItem | null, b: KItem | null) => { text: string; name: string; min: number | null; opt: number | null; max: number | null; severity?: string | null } | null) | null;
+  /** the project's custom rules (.kicad_dru), parsed */
+  dru?: { rules: import("./dru").DruRule[]; errors: string[] } | null;
   move?: SelectMove | null; pending?: PendingDrag | null; sworld?: { doc: BoardDoc; ver: number; key: string; w: ShoveWorld } | null;
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; hiddenSeverities?: Set<string> | null;

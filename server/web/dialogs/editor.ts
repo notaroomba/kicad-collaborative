@@ -13,7 +13,7 @@ export interface UndoEntry { label: string; changes: unknown[]; inverse: unknown
 /** The editor's mutable state (web/editor/state.ts); the fields the dialogs read and set. */
 export interface EditorState {
   kdoc: (KDoc & { schSettings?: { junctionDiameter: number }; paper?: string; portrait?: boolean; titleBlock?: Record<string, string>; sheetCount?: number; pageNumber?: string }) | null;
-  viewOnly: boolean; DOC_TYPE: string; units: string; tool: string; zoom: number; viewTouched: boolean; gridPitch: number; proSettings: string | null;
+  viewOnly: boolean; DOC_TYPE: string; units: string; tool: string; zoom: number; viewTouched: boolean; gridPitch: number; proSettings: string | null; druText: string | null;
   selection: Set<string>; selected: { id: string } | null; drag: { fp?: { id: string } } | null; fdrag: unknown; renderOpts: Record<string, unknown>;
   zoomStep?: number; middleDragPan?: boolean; rightDragPan?: boolean; gridFor?: () => number; gridDefault?: () => number; dialogs?: unknown;
 }

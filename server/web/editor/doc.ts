@@ -266,6 +266,9 @@ export function rootSchematic(): DocEntry | undefined {
   if (pro && E.proSettings === null) { E.proSettings = ""; api(`/api/docs/${pro.docId}/content`).then((t) => { E.proSettings = typeof t === "string" ? t : JSON.stringify(t); if (CollabTools.pcb && CollabTools.pcb.setDesignSettings) { try { CollabTools.pcb.setDesignSettings(E.proSettings); } catch (e) { /* module without rules */ } }
     // the title block's last resolver arrives with this file, so a sheet already on screen needs a repaint
     if (E.kdoc) { applySheetContext(E.kdoc); requestRender(); } }).catch(() => { E.proSettings = ""; }); }
+  // the custom rules (.kicad_dru) the PCB tools resolve length / skew constraints from
+  const dru = state.project!.docs.find((d) => d.docType === "design_rules");
+  if (dru && E.druText === null) { E.druText = ""; api(`/api/docs/${dru.docId}/content`).then((t) => { E.druText = typeof t === "string" ? t : ""; }).catch(() => { E.druText = ""; }); }
   const stem = pro && pro.path.split("/").pop()!.replace(/\.kicad_pro$/, "");
   return sch.find((d) => d.path.split("/").pop() === stem + ".kicad_sch")
     || sch.sort((a, b) => a.path.split("/").length - b.path.split("/").length || a.path.length - b.path.length)[0];
