@@ -1417,6 +1417,17 @@ function updateHead(ctx) {
   if (via && rs.mode === RM_WALK) { const vh = viaHits(ctx, rt, Object.assign({}, via, { at: rt.target })); rt.viaBad = vh.length ? vh : null; }
   rt.els = headElems(rt.head, cm, rs.mode === RM_MARK ? null : (p) => pathClear(O, p, r));
   rt.ratline = leadingRatline(rc, rt);
+  rt.loopHidden = previewLoops(ctx, rt, rc);
+}
+/**
+ * LINE_PLACER::Move: when the head reaches an item of its net, removeLoops runs on the head's node, so the tracks it
+ * would erase vanish from the preview.  The ids the board render leaves out, or null.
+ */
+function previewLoops(ctx, rt, rc) {
+  if (!S.rs.remove_loops || !rt.reached || !rt.netKey || !rt.els || !rt.els.length) return null;
+  const doc = rc.doc; if (!jointAt(doc, rt.layer, rt.target, rt.netKey).count) return null;
+  const b = branchDoc(doc, trackOps(doc, rt.els, rt.width, rt.layer, rt.net));
+  const ids = loopRemovals(ctx.doc, b); return ids.size ? ids : null;
 }
 /** NODE::NearestObstacle: the obstacle met first along the line. */
 function firstHit(O, pts, r) {
@@ -1538,13 +1549,15 @@ function fixHead(ctx, opts) {
   const ops = [];
   if (rs.mode === RM_MARK && opts.snap) ops.push(...adoptNetOps(doc, rt, opts.snap));
   ops.push(...trackOps(doc, els, rt.width, rt.layer, rt.net));
-  if (rt.split && els.length) { ops.push(...splitOps(doc, rt.split)); rt.split = null; }
-  if (opts.endSplit) ops.push(...splitOps(doc, opts.endSplit));
+  const antennas = [];   // the tracks split at the route's start / end: removeAntennas looks at their halves when the route is committed
+  const noteSplit = (sp, sops) => { if (sops.length === 2 && sops[1].add) { const u = K.kid(sops[1].add, "uuid"); antennas.push({ p: sp.point.slice(), layer: layerOf(sp.node), ids: [sp.id, u ? K.str(u[1]) : ""] }); } return sops; };
+  if (rt.split && els.length) { ops.push(...noteSplit(rt.split, splitOps(doc, rt.split))); rt.split = null; }
+  if (opts.endSplit) ops.push(...noteSplit(opts.endSplit, splitOps(doc, opts.endSplit)));
   if (rt.shove && rs.mode === RM_SHOVE) ops.push(...rt.shove.ops);
   const end = els.length ? els[els.length - 1].b.slice() : rt.last.slice();
   if (via) { const node = viaNode(doc, end[0], end[1], via.diameter, via.drill, rt.net, via.type === "through" ? viaSpan(doc) : [via.layers[0], via.layers[1]]); if (via.type !== "through") node.splice(1, 0, via.type); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); }
   const prevDir = els.length ? dirOfElem(els[els.length - 1]) : -1;
-  rt.stages.push({ ops, from: rt.last.slice(), layer: rt.layer, net: rt.net, netKey: rt.netKey, placingVia: rt.placingVia, startIds: rt.startIds, split: rt.split, dir: rt.tracer.lastSegDir });
+  rt.stages.push({ ops, from: rt.last.slice(), layer: rt.layer, net: rt.net, netKey: rt.netKey, placingVia: rt.placingVia, startIds: rt.startIds, split: rt.split, dir: rt.tracer.lastSegDir, antennas });
   rt.bdoc = null; rt.obs = null;
   rt.last = end; rt.head = [end.slice()]; rt.els = []; rt.target = end.slice(); rt.ratline = null; rt.shove = null; rt.collisions = null; rt.startIds = [];
   if (via) {   // switchLayerOnViaPlacement: on to the via's other layer
@@ -1556,9 +1569,114 @@ function fixHead(ctx, opts) {
   return true;
 }
 const dirOfElem = (e) => (e.t === "seg" ? dir8(e.a, e.b) : -1);
+// ---- "Remove redundant tracks" (ROUTING_SETTINGS::RemoveLoops): PLACEMENT_ALGO::removeLoops and LINE_PLACER::removeAntennas
+/** The copper meeting at one point of one layer, on one net: the tracks ending there and whether a pad or via anchors it (a JOINT). */
+function jointAt(doc, layer, p, netKey) {
+  const J = jointIndex(doc); const k = ptKey(p);
+  const links = (J.ends.get(layer + "|" + k) || []).filter((o) => J.NT.key(netOf(o.node)) === netKey);
+  const solid = (J.vias.get(k) || []).some((v) => v.layers.has(layer) && v.net === netKey) ||
+    (J.pads.get(k) || []).some((x) => x.layers.has(layer) && samePt([x.pad.x, x.pad.y], p) && J.NT.key(x.pad.net) === netKey);
+  return { links, solid, count: links.length + (solid ? 1 : 0) };
+}
+/** NODE::AssembleLine with arcs: the track and those reached through line corners (two tracks of one width, no pad or via, unlocked). */
+function assembleLoopLine(doc, it) {
+  const L = layerOf(it.node), w = widthOf(it.node, 0.25), key = jointIndex(doc).NT.key(netOf(it.node));
+  const [A, B] = trackEnds(it); if (!A || !B) return null;
+  const ids = [it.id], pts = [A.slice(), B.slice()];
+  const corner = (j) => !j.solid && j.links.length === 2 && j.links.every((o) => !isLocked(o.node)) && Math.abs(widthOf(j.links[0].node, 0.25) - widthOf(j.links[1].node, 0.25)) < 1e-9;
+  const walk = (q, atEnd) => {
+    let cur = it;
+    for (let guard = 0; guard < 10000; guard++) {
+      const j = jointAt(doc, L, q, key); if (!corner(j)) return;
+      const o = j.links[0] === cur ? j.links[1] : j.links[0]; if (ids.includes(o.id)) return;
+      const [a, b] = trackEnds(o); const nq = samePt(a, q) ? b : a;
+      if (atEnd) { ids.push(o.id); pts.push(nq.slice()); } else { ids.unshift(o.id); pts.unshift(nq.slice()); }
+      cur = o; q = nq;
+    }
+  };
+  if (!isLocked(it.node)) { walk(B, true); walk(A, false); }
+  return { ids, pts, layer: L, netKey: key, width: w };
+}
+/**
+ * PLACEMENT_ALGO::removeLoops over the routed board: for each new track, the line through it and its two end joints;
+ * every other line leaving the first joint that passes the second (clipped to the stretch between them) is erased
+ * unless one of its tracks is locked.  Returns the ids to delete.
+ */
+function loopRemovals(base, b) {
+  const fresh = [...b.items.values()].filter((it) => (it.kind === "segment" || it.kind === "arc") && !base.items.has(it.id));
+  const erase = new Set(), freshIds = new Set(fresh.map((f) => f.id));
+  for (const seg of fresh) {
+    const our = assembleLoopLine(b, seg); if (!our) continue;
+    let a = our.pts[0], z = our.pts[our.pts.length - 1];
+    if (samePt(a, z)) continue;
+    const ja = jointAt(b, our.layer, a, our.netKey);
+    for (const o of ja.links) {
+      if (our.ids.includes(o.id)) continue;
+      const line = assembleLoopLine(b, o); if (!line || line.ids.includes(seg.id)) continue;
+      let i0 = line.pts.findIndex((p) => samePt(p, a)), i1 = line.pts.findIndex((p) => samePt(p, z));
+      if (i0 < 0 || i1 < 0) continue;
+      if (i1 < i0) [i0, i1] = [i1, i0];
+      const links = line.ids.slice(i0, i1);   // ClipVertexRange: the tracks between the two joints
+      if (!links.length || links.some((id) => freshIds.has(id) || isLocked(b.items.get(id).node))) continue;
+      for (const id of links) erase.add(id);
+    }
+  }
+  return erase;
+}
+/** LINE_PLACER::removeAntennas: the dangling half of a track the route split at its start or end, once the route is anchored. */
+function antennaRemovals(base, b, ant, netKey) {
+  const halves = ant.ids.map((id) => b.items.get(id)).filter(Boolean); if (!halves.length) return [];
+  const J = jointAt(b, ant.layer, ant.p, netKey);
+  const isNew = (o) => !base.items.has(o.id), isTarget = (o) => ant.ids.includes(o.id);
+  const newLinks = J.links.filter(isNew); if (!newLinks.length) return [];
+  const reachesAnchor = (start, includeNew, skipTarget) => {
+    const pending = [start], seen = new Set();
+    while (pending.length) {
+      const q = pending.pop(); const k = ptKey(q); if (samePt(q, ant.p) || seen.has(k)) continue; seen.add(k);
+      const j = jointAt(b, ant.layer, q, netKey); if (j.solid) return true;
+      for (const o of j.links) {
+        if ((!includeNew && isNew(o)) || (skipTarget && isTarget(o))) continue;
+        for (const e of trackEnds(o)) if (!samePt(e, q)) pending.push(e);
+      }
+    }
+    return false;
+  };
+  let anchored = false;
+  for (const o of newLinks) for (const e of trackEnds(o)) if (!samePt(e, ant.p) && reachesAnchor(e, true, true)) anchored = true;
+  if (!anchored) return [];
+  const candidates = []; let hasAnchoredSide = false, sides = 0;
+  for (const h of J.links.filter(isTarget)) {
+    sides++;
+    const [a0, a1] = trackEnds(h); const far = samePt(a0, ant.p) ? a1 : a0;
+    if (reachesAnchor(far, false, false)) { hasAnchoredSide = true; continue; }
+    let link = h, from = ant.p; const branch = [], seen = new Set();
+    while (link && !isLocked(link.node) && !seen.has(link.id)) {
+      seen.add(link.id);
+      const [e0, e1] = trackEnds(link); if (!samePt(e0, from) && !samePt(e1, from)) break;
+      branch.push(link.id); const fe = samePt(e0, from) ? e1 : e0;
+      const j = jointAt(b, ant.layer, fe, netKey);
+      if (j.count === 1) { candidates.push(branch); break; }
+      if (j.count !== 2 || j.solid) break;
+      link = j.links[0] === link ? j.links[1] : j.links[0]; from = fe;
+    }
+  }
+  return (sides === 2 && hasAnchoredSide) || sides === 1 ? candidates.flat() : [];
+}
+/** The routed board with the redundant tracks taken out (Remove redundant tracks on). */
+function removeRedundant(base, b, rt) {
+  if (!S.rs.remove_loops) return b;
+  const out = Object.assign({}, b, { items: new Map(b.items), __bc: {} });
+  for (const id of loopRemovals(base, out)) out.items.delete(id);
+  out.__bc = {};
+  for (const st of rt.stages) for (const ant of st.antennas || []) {
+    const key = st.netKey; for (const id of antennaRemovals(base, out, ant, key)) out.items.delete(id); out.__bc = {};
+  }
+  return out;
+}
 /** ROUTER::CommitRouting: the route's branch onto the board as one undo step ("Route Track"). */
 function commitRoute(ctx, rt) {
-  const b = routeDoc(ctx, rt); if (b === ctx.doc) return false;
+  let b = routeDoc(ctx, rt); if (b === ctx.doc) return false;
+  b = removeRedundant(ctx.doc, b, rt);   // DIFF_PAIR_PLACER::FixRoute runs removeLoops on both lines too
   const changes = branchChanges(ctx.doc, b); if (!changes.length) return false;
   ctx.commit(changes, "Route Track"); return true;
 }
@@ -2907,6 +3025,7 @@ function routeHiddenIds() {
   const rt = S.route; if (!rt) return null; const out = new Set();
   for (const st of rt.stages) for (const op of st.ops) { if (op.set) out.add(op.set); if (op.del) out.add(op.del); }
   if (rt.shove) for (const id of rt.shove.preview.hidden) out.add(id);
+  if (rt.loopHidden) for (const id of rt.loopHidden) out.add(id);
   return out.size ? out : null;
 }
 /** ROUTER_STATUS_VIEW_ITEM: a boxed message and hint above and to the right of the cursor, in the UI's colours. */
@@ -6866,7 +6985,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  loopRemovals, antennaRemovals, removeRedundant, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
