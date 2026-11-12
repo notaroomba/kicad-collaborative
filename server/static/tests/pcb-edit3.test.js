@@ -102,5 +102,68 @@ test("projectExclusions reads board.design_settings.drc_exclusions", () => {
   assert.deepEqual(P.projectExclusions("{bad"), []); assert.deepEqual(P.projectExclusions(null), []);
 });
 
+// ---- DRC test providers (drc-more.ts)
+const LAYERS = `(layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user) (7 "B.SilkS" user) (25 "Edge.Cuts" user) (31 "F.CrtYd" user) (29 "B.CrtYd" user) (35 "F.Fab" user) (37 "B.Fab" user))`;
+const drcBoard = (body) => K.parseDoc(`(kicad_pcb (version 20241229) (generator "pcbnew") ${LAYERS} (net 0 "") (net 1 "A") ${body})`, "kicad_pcb");
+const codes = (m, code) => m.filter((x) => x.code === code);
+test("DRC hole to hole: drilled holes closer than 0.25 mm, co-located holes, a slot measured along its axis", () => {
+  const doc = drcBoard(`(via (at 10 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1"))
+    (via (at 10.5 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v2"))
+    (via (at 20 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v3"))
+    (via (at 20 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v4"))
+    (footprint "X" (layer "F.Cu") (uuid "fp1") (at 30 10) (pad "1" thru_hole oval (at 0 0) (size 3 1.5) (drill oval 2.5 1) (layers "*.Cu") (uuid "p1")))
+    (via (at 31.5 10) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v5"))`);
+  const m = P.drc(doc, null, { unconnected: false });
+  const h = codes(m, "hole_to_hole"); assert.equal(h.length, 2, JSON.stringify(h));
+  assert.equal(h[0].text, "Drilled hole too close to other hole (board setup constraints min 0.2500 mm; actual 0.2000 mm)"); assert.deepEqual(h[0].ids, ["v1", "v2"]); assert.equal(h[0].severity, "warning");
+  assert.ok(h.some((x) => x.ids.includes("v5") && /actual 0\.1000 mm/.test(x.text)), "the slot end sits 0.75 mm from its centre: 1.5 - 0.75 - 0.5 - 0.15 = 0.1");
+  const c = codes(m, "holes_co_located"); assert.equal(c.length, 1); assert.deepEqual(c[0].ids, ["v3", "v4"]);
+  const s = P.designSettings({ board: { design_settings: { rules: { min_hole_to_hole: 0.1 } } } }); assert.equal(codes(P.drc(doc, s, { unconnected: false }), "hole_to_hole").length, 0);
+  const r = P.drc(doc, null, { unconnected: false, rules: `(version 1) (rule tight (constraint hole_to_hole (min 0.15mm)))` }); assert.ok(codes(r, "hole_to_hole").every((x) => /rule 'tight' min 0\.1500 mm/.test(x.text)));
+});
+test("DRC text dimensions and mirroring: silk minimums from Board Setup, custom text rules, mirrored front / unmirrored back", () => {
+  const doc = drcBoard(`(gr_text "small" (at 10 10) (layer "F.SilkS") (uuid "t1") (effects (font (size 0.5 0.5) (thickness 0.05))))
+    (gr_text "fab" (at 10 20) (layer "F.Fab") (uuid "t2") (effects (font (size 0.5 0.5) (thickness 0.05))))
+    (gr_text "ok" (at 10 30) (layer "F.SilkS") (uuid "t3") (effects (font (size 1 1) (thickness 0.15))))
+    (gr_text "mirrored" (at 10 40) (layer "F.SilkS") (uuid "t4") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)))
+    (gr_text "back" (at 10 50) (layer "B.SilkS") (uuid "t5") (effects (font (size 1 1) (thickness 0.15))))
+    (gr_text "hidden" (at 10 60) (layer "F.SilkS") (uuid "t6") (hide yes) (effects (font (size 0.2 0.2) (thickness 0.01))))`);
+  const m = P.drc(doc, null, { unconnected: false });
+  assert.deepEqual(codes(m, "text_height").map((x) => [x.ids[0], x.text]), [["t1", "Text height out of range (board setup constraints silk text height min height 0.8000 mm; actual 0.5000 mm)"]]);
+  assert.deepEqual(codes(m, "text_thickness").map((x) => [x.ids[0], x.text]), [["t1", "Text thickness out of range (board setup constraints silk text thickness min thickness 0.0800 mm; actual 0.0500 mm)"]]);
+  assert.deepEqual(codes(m, "mirrored_text_on_front_layer").map((x) => x.ids[0]), ["t4"]); assert.deepEqual(codes(m, "nonmirrored_text_on_back_layer").map((x) => x.ids[0]), ["t5"]);
+  const r = P.drc(doc, null, { unconnected: false, rules: `(version 1) (rule fab (layer "F.Fab") (constraint text_height (min 0.6mm) (max 2mm)))` });
+  assert.ok(codes(r, "text_height").some((x) => x.ids[0] === "t2" && /rule 'fab' min height 0\.6000 mm; actual 0\.5000 mm/.test(x.text)));
+  assert.equal(P.effectivePenWidth(K.parse(`(gr_text "x" (effects (font (size 1 1))))`), 0), 0.125, "no thickness: size / 8");
+  assert.equal(P.effectivePenWidth(K.parse(`(gr_text "x" (effects (font (size 1 1) (thickness 0.5))))`), 0), 0.25, "clamped to a quarter of the size");
+});
+test("DRC courtyards: malformed and missing courtyards, holes inside another footprint's courtyard", () => {
+  const doc = drcBoard(`(footprint "A" (layer "F.Cu") (uuid "a") (at 10 10) (fp_rect (start -3 -3) (end 3 3) (layer "F.CrtYd") (uuid "ca")))
+    (footprint "B" (layer "F.Cu") (uuid "b") (at 11 10) (pad "1" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu") (uuid "pb")) (pad "2" np_thru_hole circle (at 1 0) (size 1 1) (drill 1) (layers "*.Cu") (uuid "pb2")))
+    (footprint "C" (layer "F.Cu") (uuid "c") (at 40 10) (attr smd allow_missing_courtyard))
+    (footprint "D" (layer "F.Cu") (uuid "d") (at 60 10) (fp_line (start -1 -1) (end 1 -1) (layer "F.CrtYd") (uuid "l1")) (fp_line (start 1 -1) (end 1 1) (layer "F.CrtYd") (uuid "l2")))`);
+  const m = P.drc(doc, null, { unconnected: false });
+  assert.equal(codes(m, "missing_courtyard").length, 0, "missing courtyards are ignored by default");
+  const mal = codes(m, "malformed_courtyard"); assert.deepEqual(mal.map((x) => x.ids[0]), ["d"]); assert.equal(mal[0].text, "Footprint has malformed courtyard (not a closed shape)");
+  assert.deepEqual(codes(m, "pth_inside_courtyard").map((x) => x.ids), [["b", "a"]]); assert.deepEqual(codes(m, "npth_inside_courtyard").map((x) => [x.x, x.y]), [[12, 10]]);
+  const s = P.designSettings({ board: { design_settings: { rule_severities: { missing_courtyard: "warning" } } } });
+  assert.deepEqual(codes(P.drc(doc, s, { unconnected: false }), "missing_courtyard").map((x) => [x.ids[0], x.severity]), [["b", "warning"]], "B has none; C allows it");
+});
+test("DRC disallow and misc: text on Edge.Cuts, tracks / vias in keepout areas, items on disabled copper layers", () => {
+  const doc = drcBoard(`(gr_text "edge" (at 5 5) (layer "Edge.Cuts") (uuid "te") (effects (font (size 1 1) (thickness 0.15))))
+    (zone (net 0) (net_name "") (layers "F.Cu" "B.Cu") (uuid "ko") (name "keep") (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed)) (polygon (pts (xy 20 20) (xy 30 20) (xy 30 30) (xy 20 30))))
+    (segment (start 15 25) (end 35 25) (width 0.2) (layer "F.Cu") (net 1) (uuid "s1"))
+    (segment (start 15 30.05) (end 35 30.05) (width 0.2) (layer "F.Cu") (net 1) (uuid "s2"))
+    (segment (start 15 30.1) (end 35 30.1) (width 0.2) (layer "B.Cu") (net 1) (uuid "s3"))
+    (via (at 25 22) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1"))
+    (segment (start 50 50) (end 55 50) (width 0.2) (layer "In1.Cu") (net 1) (uuid "s4"))`);
+  const m = P.drc(doc, null, { unconnected: false });
+  assert.deepEqual(codes(m, "text_on_edge_cuts").map((x) => x.ids[0]), ["te"]);
+  const ko = codes(m, "items_not_allowed"); assert.deepEqual(ko.map((x) => x.ids[0]).sort(), ["s1", "s2", "v1"], "s3 only touches the edge"); assert.ok(ko.every((x) => x.text === "Items not allowed (keepout area 'keep')"));
+  const dl = codes(m, "item_on_disabled_layer"); assert.deepEqual(dl.map((x) => [x.ids[0], x.text]), [["s4", "Item on a disabled copper layer (layer In1.Cu)"]]);
+  const s = P.designSettings({ board: { design_settings: { rule_severities: { items_not_allowed: "ignore", text_on_edge_cuts: "warning" } } } });
+  const m2 = P.drc(doc, s, { unconnected: false }); assert.equal(codes(m2, "items_not_allowed").length, 0); assert.equal(codes(m2, "text_on_edge_cuts")[0].severity, "warning");
+});
+
 module.exports = { test, K, P, assert, kid };
 process.on("exit", () => { console.log(`\npcb-edit3: ${passed} passed, ${failed} failed`); if (failed) process.exitCode = 1; });

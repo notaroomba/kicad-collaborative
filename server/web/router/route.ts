@@ -150,14 +150,34 @@ export class Router {
     // A zone's outline may carry holes as further polygons: inside means inside an odd number of them.
     const zones: { net: string; layers: number[]; polys: Pt[][]; clr: number; minW: number }[] = [];
     const cellsIn = (polys: Pt[][]): Uint8Array => { const t = new Uint8Array(W * H); for (const pts of polys) fillPoly(G, pts, (x0, x1, iy) => { for (let i = iy * W + x0; i <= iy * W + x1; i++) t[i] ^= 1; }); return t; };
+    const ncs = Object.values(s.netclasses || {}) as { track_width?: number; via_diameter?: number }[];
+    const maxTrack = Math.max(s.trackWidth || 0, ...ncs.map((c) => c.track_width || 0)), maxVia = Math.max(s.viaDiameter || 0, ...ncs.map((c) => c.via_diameter || 0));
+    const band = (polys: Pt[][], inside: Uint8Array, r: number): Uint8Array => {
+      const t = inside.slice(); if (!(r > 0)) return t;
+      for (const pts of polys) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const p of pts) { x0 = Math.min(x0, p[0]); y0 = Math.min(y0, p[1]); x1 = Math.max(x1, p[0]); y1 = Math.max(y1, p[1]); }
+        const ix0 = Math.max(0, Math.floor((x0 - r - G.ox) / G.g)), ix1 = Math.min(W - 1, Math.ceil((x1 + r - G.ox) / G.g)), iy0 = Math.max(0, Math.floor((y0 - r - G.oy) / G.g)), iy1 = Math.min(H - 1, Math.ceil((y1 + r - G.oy) / G.g));
+        for (let iy = iy0; iy <= iy1; iy++) for (let ix = ix0; ix <= ix1; ix++) {
+          const i = iy * W + ix; if (t[i]) continue; const x = G.ox + ix * G.g, y = G.oy + iy * G.g;
+          for (let k = 0, j = pts.length - 1; k < pts.length; j = k++) {
+            const a = pts[j], b = pts[k], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; const u = l2 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
+            if (Math.hypot(x - a[0] - u * dx, y - a[1] - u * dy) < r - 1e-6) { t[i] = 1; break; }
+          }
+        }
+      }
+      return t;
+    };
     for (const it of doc.items.values()) {
       if (it.kind !== "zone") continue; const n = it.node; const polys: Pt[][] = K.kids(n, "polygon").map((poly: any) => K.ptsOf(poly) as Pt[]).filter((pts: Pt[]) => pts.length >= 3); if (!polys.length) continue;
       const ko = K.kid(n, "keepout"); const layers = zoneLayers(n);
       if (ko) {
         const no = (k: string) => { const c = K.kid(ko, k); return !!c && K.str(c[1]) === "not_allowed"; };
         if (!no("tracks") && !no("vias")) continue; const t = cellsIn(polys);
-        if (no("tracks")) for (const l of layers) { const m = G.keep[l] || (G.keep[l] = new Uint8Array(W * H)); for (let i = 0; i < t.length; i++) if (t[i]) m[i] = 1; }
-        for (let i = 0; i < t.length; i++) if (t[i]) G.noVia[i]++;
+        // a track or via whose centre sits on the area's edge still reaches into it by its half width (the DRC's
+        // DRC_TEST_PROVIDER_DISALLOW): the band within the widest half width of the edge is kept out too
+        const tt = band(polys, t, maxTrack / 2), tv = band(polys, t, maxVia / 2);
+        if (no("tracks")) for (const l of layers) { const m = G.keep[l] || (G.keep[l] = new Uint8Array(W * H)); for (let i = 0; i < tt.length; i++) if (tt[i]) m[i] = 1; }
+        if (no("vias")) for (let i = 0; i < tv.length; i++) if (tv[i]) G.noVia[i]++;
       } else if (layers.length) { const cp = K.kid(n, "connect_pads"), cc = cp && K.kid(cp, "clearance"), mt = K.kid(n, "min_thickness"); zones.push({ net: nl.table.key(P.netOf(n)), layers, polys, clr: cc ? K.num(cc[1], 0) : 0, minW: mt ? K.num(mt[1], 0.25) : 0.25 }); }
     }
     for (const ko of this.opts.keepouts || []) {

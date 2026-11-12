@@ -8,6 +8,7 @@ import { DRC_EPS, EPS } from "./transforms";
 import { isList, layerDefaults, layerOf, pt, r6, rotator, widthOf } from "./util";
 import { parseDru, ruleClearance } from "./dru";
 import type { DruRule } from "./dru";
+import { moreDrcMarkers } from "./drc-more";
 
 // ---------------------------------------------------------------- design settings and DRC
 // BOARD_DESIGN_SETTINGS / NETCLASS defaults (board_design_settings.h, netclass.cpp): what a board without a
@@ -27,7 +28,7 @@ export function designSettings(src: string | DesignSource | DesignSettings | nul
   src = src as DesignSource;
   const rules = src.board && src.board.design_settings && src.board.design_settings.rules;   // a .kicad_pro
   const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities; if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; }
+  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; if (rules.min_hole_to_hole !== undefined) s.minHoleToHole = rules.min_hole_to_hole; if (rules.min_text_height !== undefined) s.minTextHeight = rules.min_text_height; if (rules.min_text_thickness !== undefined) s.minTextThickness = rules.min_text_thickness; }
   const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults; if (dflt) layerDefaults(dflt);   // Board Setup > Text & Graphics > Defaults: what a new item gets
   const ns = src.net_settings;
   if (ns && isList(ns.classes)) {
@@ -182,6 +183,9 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
     const seen = new Set<string>();
     for (const c of nl.conductors) { if (seen.has(c.id) || c.kind === "zone") continue; const p = c.kind === "pad" ? [c.pad!.x, c.pad!.y] : c.anchors[0]; if (p && !pointInPoly(ol.outline, p[0], p[1])) { seen.add(c.id); out.push(marker("outside_outline", "warning", p[0], p[1], `Item outside board outline (${c.kind === "pad" ? (c.item.ref || "footprint") : c.kind})`, [c.id])); } }
   }
+  // hole to hole, text dimensions and mirroring, courtyard definitions and holes in courtyards, Edge.Cuts text,
+  // keepout areas and disabled layers (drc-more.ts)
+  out.push(...moreDrcMarkers(doc, s, rules));
   // the project's rule severities: ignored rules drop out, the rest take the severity the project gives them
   return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => { const sev = s.severities[m.code]; if (sev === "warning" || sev === "error") m.severity = sev; return m; });
 }

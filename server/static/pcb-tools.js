@@ -2635,6 +2635,520 @@
     return out.filter((mk) => s.severities[mk.code] !== "ignore");
   }
 
+  // web/canvas/drc-items.ts
+  var DRC_ITEMS = [
+    ["Electrical", "", ""],
+    ["Items shorting two nets", "shorting_items", "error"],
+    ["Tracks crossing", "tracks_crossing", "error"],
+    ["Clearance violation", "clearance", "error"],
+    ["Creepage violation", "creepage", "error"],
+    ["Via is not connected or connected on only one layer", "via_dangling", "warning"],
+    ["Track has unconnected end", "track_dangling", "warning"],
+    ["Thermal relief connection to zone incomplete", "starved_thermal", "error"],
+    ["Design for Manufacturing", "", ""],
+    ["Board edge clearance violation", "copper_edge_clearance", "error"],
+    ["Hole clearance violation", "hole_clearance", "error"],
+    ["Drilled hole too close to other hole", "hole_to_hole", "warning"],
+    ["Drilled holes co-located", "holes_co_located", "warning"],
+    ["Track width", "track_width", "error"],
+    ["Track angle", "track_angle", "error"],
+    ["Track segment length", "track_segment_length", "error"],
+    ["Annular width", "annular_width", "error"],
+    ["Hole size out of range", "drill_out_of_range", "error"],
+    ["Micro via hole size out of range", "microvia_drill_out_of_range", "error"],
+    ["Microvia stack has malformed span", "malformed_microvia_stack_span", "error"],
+    ["Microvia under microvia not filled", "microvia_stack_not_filled", "warning"],
+    ["Microvia stack too deep", "microvia_stack_depth", "error"],
+    ["Microvia too deep for its diameter", "microvia_aspect_ratio", "error"],
+    ["Microvia crosses core material", "microvia_crosses_core", "warning"],
+    ["Via diameter", "via_diameter", "error"],
+    ["Courtyards overlap", "courtyards_overlap", "error"],
+    ["Footprint has no courtyard defined", "missing_courtyard", "ignore"],
+    ["Footprint has malformed courtyard", "malformed_courtyard", "error"],
+    ["Board has malformed outline", "invalid_outline", "error"],
+    ["Copper sliver", "copper_sliver", "warning"],
+    ["Solder mask aperture bridges items with different nets", "solder_mask_bridge", "error"],
+    ["Copper connection too narrow", "connection_width", "warning"],
+    ["Track connected to post-machined or backdrilled layer", "track_on_post_machined_layer", "error"],
+    ["Track endpoint not centered on via", "track_not_centered_on_via", "ignore"],
+    ["Via-stitching zones overlap for same net", "via_stitch_overlap", "error"],
+    ["Tuning profile track geometries", "tuning_profile_track_geometries", "ignore"],
+    ["Schematic Parity", "", ""],
+    ["Duplicate footprints", "duplicate_footprints", "warning"],
+    ["Missing footprint", "missing_footprint", "warning"],
+    ["Extra footprint", "extra_footprint", "warning"],
+    ["Footprint attributes don't match symbol", "footprint_symbol_mismatch", "warning"],
+    ["Footprint field does not match symbol field", "footprint_symbol_field_mismatch", "warning"],
+    ["Footprint doesn't match symbol's footprint filters", "footprint_filters_mismatch", "ignore"],
+    ["Pad net doesn't match schematic", "net_conflict", "warning"],
+    ["Missing connection between items", "unconnected_items", "error"],
+    ["Signal Integrity", "", ""],
+    ["Track length out of range", "length_out_of_range", "error"],
+    ["Net chain stub length out of range", "net_chain_stub_length", "error"],
+    ["Net chain routed without continuous copper on the required reference layer", "net_chain_return_path", "error"],
+    ["Net chain nets do not have consistent tuning profile assignment", "net_chain_tuning_profiles", "error"],
+    ["Skew between tracks out of range", "skew_out_of_range", "error"],
+    ["Too many or too few vias on a connection", "too_many_vias", "error"],
+    ["Differential pair gap out of range", "diff_pair_gap_out_of_range", "error"],
+    ["Differential uncoupled length too long", "diff_pair_uncoupled_length_too_long", "error"],
+    ["Readability", "", ""],
+    ["Silkscreen clearance", "silk_overlap", "warning"],
+    ["Silkscreen clipped by solder mask", "silk_over_copper", "warning"],
+    ["Silkscreen clipped by board edge", "silk_edge_clearance", "warning"],
+    ["Text height out of range", "text_height", "warning"],
+    ["Text thickness out of range", "text_thickness", "warning"],
+    ["Mirrored text on front layer", "mirrored_text_on_front_layer", "warning"],
+    ["Non-Mirrored text on back layer", "nonmirrored_text_on_back_layer", "warning"],
+    ["Miscellaneous", "", ""],
+    ["Items not allowed", "items_not_allowed", "error"],
+    ["Text or graphic on Edge.Cuts layer", "text_on_edge_cuts", "error"],
+    ["Isolated copper fill", "isolated_copper", "warning"],
+    ["Footprint is not valid", "footprint", "error"],
+    ["Padstack is questionable", "padstack", "warning"],
+    ["PTH inside courtyard", "pth_inside_courtyard", "error"],
+    ["NPTH inside courtyard", "npth_inside_courtyard", "error"],
+    ["Item on a disabled copper layer", "item_on_disabled_layer", "error"],
+    ["Unresolved text variable", "unresolved_variable", "error"],
+    ["Assertion failure", "assertion_failure", "error"],
+    ["Footprint component type doesn't match footprint pads", "footprint_type_mismatch", "ignore"],
+    ["Footprint not found in libraries", "lib_footprint_issues", "warning"],
+    ["Footprint doesn't match copy in library", "lib_footprint_mismatch", "warning"],
+    ["Through hole pad has no hole", "through_hole_pad_without_hole", "error"],
+    ["Footprint with pads is scaled (physical part size unchanged)", "footprint_scaled_with_pads", "warning"],
+    ["Missing tuning profile", "missing_tuning_profile", "warning"],
+    ["Padstack is not valid", "padstack_invalid", "error"],
+    ["Error", "generic_error", "error"],
+    ["Warning", "generic_warning", "error"]
+  ];
+
+  // web/tools/pcb-tools/drc-more.ts
+  var MORE_DEFAULTS = { minHoleToHole: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
+  var defaultSeverity = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
+  var ident = (x, y) => [x, y];
+  function fpTf(fp) {
+    const [fx, fy, frot] = K.atOf(fp.node);
+    const R = rotator(frot);
+    return (x, y) => {
+      const [dx, dy] = R(x, y);
+      return [fx + dx, fy + dy];
+    };
+  }
+  var kindOf = (n) => String(n[0]);
+  function padHole(fp, p) {
+    if (p.type !== "thru_hole" && p.type !== "np_thru_hole") return null;
+    const d = K.kid(p.node, "drill");
+    if (!d) return null;
+    let w, h;
+    if (K.str(d[1]) === "oval") {
+      w = K.num(d[2], 0);
+      h = K.num(d[3], w);
+    } else {
+      w = h = K.num(d[1], 0);
+    }
+    if (!(w > 0) || !(h > 0)) return null;
+    const half = Math.abs(w - h) / 2;
+    const [dx, dy] = rotator(p.rot)(w >= h ? half : 0, w >= h ? 0 : half);
+    return { id: fp.id, kind: "pad", a: [p.x - dx, p.y - dy], b: [p.x + dx, p.y + dy], w: Math.min(w, h), layers: null, micro: false, pad: p, fp, uuid: K.uuidOf(p.node) || fp.id + ":" + p.index };
+  }
+  function viaHole(it) {
+    const a = pt(it.node, "at");
+    if (!a) return null;
+    const d = K.kid(it.node, "drill");
+    const w = d ? K.num(d[1], 0) : 0;
+    if (!(w > 0)) return null;
+    const ls = K.kid(it.node, "layers");
+    const pair = ls ? [K.str(ls[1]), K.str(ls[2])] : ["F.Cu", "B.Cu"];
+    const typed = it.node.includes("blind") || it.node.includes("micro") || it.node.includes("buried");
+    return { id: it.id, kind: "via", a, b: a, w, layers: typed ? new Set(pair) : null, micro: it.node.includes("micro"), uuid: it.id };
+  }
+  var holeShape = (h) => ({ t: "seg", a: h.a, b: h.b, r: h.w / 2 });
+  var holeCentre = (h) => [(h.a[0] + h.b[0]) / 2, (h.a[1] + h.b[1]) / 2];
+  function viaSpan(doc, h) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    if (!h.layers) return new Set(copper);
+    const [x, y] = [...h.layers].map((l) => copper.indexOf(l));
+    const lo = Math.min(x, y), hi = Math.max(x, y);
+    return new Set(copper.filter((_, i) => i >= lo && i <= hi));
+  }
+  function boardHoles(doc) {
+    const out = [];
+    for (const it of doc.items.values()) {
+      if (it.kind === "via") {
+        const h = viaHole(it);
+        if (h) out.push(h);
+      } else if (it.kind === "footprint") for (const p of padsOf(it)) {
+        const h = padHole(it, p);
+        if (h) out.push(h);
+      }
+    }
+    return out;
+  }
+  function holeToHoleMarkers(doc, s, ruleOf, worstRule = 0) {
+    const out = [];
+    const holes = boardHoles(doc);
+    const min0 = typeof s.minHoleToHole === "number" ? s.minHoleToHole : MORE_DEFAULTS.minHoleToHole;
+    const seen = /* @__PURE__ */ new Set();
+    const box = (h) => shapeBBox(holeShape(h));
+    const ri = (h) => ({ kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: "" });
+    const test = (a, b) => {
+      if (a.kind === "via" && b.kind === "via") {
+        const sa = viaSpan(doc, a), sb = viaSpan(doc, b);
+        if (![...sa].some((l) => sb.has(l))) return;
+      }
+      const ca = holeCentre(a), cb = holeCentre(b);
+      const [p, q] = a.uuid > b.uuid ? [b, a] : [a, b];
+      if (Math.hypot(ca[0] - cb[0], ca[1] - cb[1]) < DRC_EPS) {
+        out.push(marker("holes_co_located", defaultSeverity("holes_co_located"), ca[0], ca[1], "Drilled holes co-located", [p.id, q.id]));
+        return;
+      }
+      const actual = Math.max(0, coreDist(holeShape(a), holeShape(b)) - a.w / 2 - b.w / 2);
+      const hit = ruleOf("hole_to_hole", ri(a), ri(b));
+      if (hit && hit.severity === "ignore") return;
+      const min = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints";
+      if (min >= 0 && actual < Math.max(0, min - DRC_EPS)) out.push(marker("hole_to_hole", defaultSeverity("hole_to_hole"), ca[0], ca[1], `Drilled hole too close to other hole (${name} min ${mm4(min)}; actual ${mm4(actual)})`, [p.id, q.id]));
+    };
+    const reach = Math.max(min0, worstRule, 0.01);
+    const boxes = holes.map(box);
+    const order = holes.map((_, i) => i).sort((a, b) => boxes[a][0] - boxes[b][0]);
+    const rank = new Int32Array(holes.length);
+    order.forEach((h, k) => {
+      rank[h] = k;
+    });
+    const query = (i) => {
+      const near = [];
+      for (let k = rank[i] - 1; k >= 0; k--) {
+        const j = order[k];
+        if (boxes[j][0] < boxes[i][0] - 30) break;
+        near.push(j);
+      }
+      for (let k = rank[i] + 1; k < order.length; k++) {
+        const j = order[k];
+        if (boxes[j][0] > boxes[i][2] + reach) break;
+        near.push(j);
+      }
+      for (const j of near) {
+        if (!boxesTouch(boxes[i], boxes[j], reach)) continue;
+        const key = i < j ? i + ":" + j : j + ":" + i;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        test(holes[i], holes[j]);
+      }
+    };
+    holes.forEach((h, i) => {
+      if (h.kind === "via" && !h.micro) query(i);
+    });
+    holes.forEach((h, i) => {
+      if (h.kind === "pad") query(i);
+    });
+    return out;
+  }
+  function boardTexts(doc) {
+    const out = [];
+    const take = (n, id, tf, fp, layer) => {
+      const k = kindOf(n);
+      const at = pt(n, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K.ptsOf(n)[0] : null) || [0, 0];
+      out.push({ id, node: n, kind: k, layer: layer || layerOf(n, "F.SilkS"), pos: tf(at[0], at[1]), fp });
+    };
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "gr_text" || it.kind === "gr_text_box") take(n, it.id, ident);
+      else if (it.kind === "dimension") {
+        const t = K.kid(n, "gr_text");
+        if (t) take(t, it.id, ident, void 0, layerOf(n, "Dwgs.User"));
+      } else if (it.kind === "footprint") {
+        const tf = fpTf(it);
+        for (const g of n) if (isList(g) && (g[0] === "property" || g[0] === "fp_text" || g[0] === "fp_text_box") && K.kid(g, "layer")) take(g, it.id, tf, it);
+      }
+    }
+    return out;
+  }
+  function effectivePenWidth(n, boardVersion) {
+    const ef = K.effectsOf(n);
+    const minSize = Math.min(Math.abs(ef.size), Math.abs(ef.sizeX));
+    let w;
+    if (ef.thick <= 1e-6) w = ef.bold ? ef.sizeX / 5 : ef.sizeX / 8;
+    else if (ef.bold && !ef.face) w = boardVersion > 0 && boardVersion < 20260826 ? ef.thick : ef.thick * 1.6;
+    else w = ef.thick;
+    return Math.min(w, minSize * 0.25);
+  }
+  function textDimsMarkers(doc, s, ruleOf) {
+    const out = [];
+    const minH = typeof s.minTextHeight === "number" ? s.minTextHeight : MORE_DEFAULTS.minTextHeight, minT = typeof s.minTextThickness === "number" ? s.minTextThickness : MORE_DEFAULTS.minTextThickness;
+    for (const t of boardTexts(doc)) {
+      const ef = K.effectsOf(t.node);
+      if (ef.hide) continue;
+      const silk = t.layer === "F.SilkS" || t.layer === "B.SilkS";
+      const A = { kind: t.kind, node: t.node, layer: t.layer };
+      const check = (type, implicit, implicitName, actual, what) => {
+        const hit = ruleOf(type, A, null);
+        if (hit && hit.severity === "ignore") return;
+        const min = hit ? hit.min : silk ? implicit : null, max = hit ? hit.max : null, name = hit ? hit.name : implicitName;
+        if (min != null && min > 0 && actual < min - 1e-9) out.push(marker(type, defaultSeverity(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} min ${what} ${mm4(min)}; actual ${mm4(actual)})`, [t.id]));
+        if (max != null && actual > max + 1e-9) out.push(marker(type, defaultSeverity(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} max ${what} ${mm4(max)}; actual ${mm4(actual)})`, [t.id]));
+      };
+      if (!ef.face) check("text_thickness", minT, "board setup constraints silk text thickness", effectivePenWidth(t.node, doc.version || 0), "thickness");
+      check("text_height", minH, "board setup constraints silk text height", Math.abs(ef.size), "height");
+    }
+    return out;
+  }
+  function textMirroringMarkers(doc) {
+    const out = [];
+    const top = /* @__PURE__ */ new Set(["F.Cu", "F.SilkS", "F.Mask", "F.Fab"]), bottom = /* @__PURE__ */ new Set(["B.Cu", "B.SilkS", "B.Mask", "B.Fab"]);
+    for (const t of boardTexts(doc)) {
+      if (!top.has(t.layer) && !bottom.has(t.layer)) continue;
+      if (doc.layers.size && !doc.layers.has(t.layer)) continue;
+      const ef = K.effectsOf(t.node);
+      if (ef.hide) continue;
+      if (ef.mirror && top.has(t.layer)) out.push(marker("mirrored_text_on_front_layer", defaultSeverity("mirrored_text_on_front_layer"), t.pos[0], t.pos[1], "Mirrored text on front layer", [t.id]));
+      if (!ef.mirror && bottom.has(t.layer)) out.push(marker("nonmirrored_text_on_back_layer", defaultSeverity("nonmirrored_text_on_back_layer"), t.pos[0], t.pos[1], "Non-Mirrored text on back layer", [t.id]));
+    }
+    return out;
+  }
+  function courtyardOutlines(fp) {
+    const tf = fpTf(fp);
+    const chains = { "F.CrtYd": [], "B.CrtYd": [] };
+    for (const g of fp.node) {
+      if (!isList(g) || !/^fp_(line|rect|circle|arc|poly)$/.test(g[0])) continue;
+      const layer = layerOf(g, "");
+      if (!chains[layer]) continue;
+      const kind = g[0].slice(3);
+      const P = (key) => {
+        const p = pt(g, key);
+        return p ? tf(p[0], p[1]) : null;
+      };
+      if (kind === "line") {
+        const a = P("start"), b = P("end");
+        if (a && b) chains[layer].push([a, b]);
+      } else if (kind === "rect") {
+        const s0 = pt(g, "start"), e = pt(g, "end");
+        if (s0 && e) {
+          const pts = [tf(s0[0], s0[1]), tf(e[0], s0[1]), tf(e[0], e[1]), tf(s0[0], e[1])];
+          chains[layer].push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "circle") {
+        const c = P("center"), e = P("end");
+        if (c && e) {
+          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+          const pts = [];
+          for (let i = 0; i < 32; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
+          chains[layer].push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "arc") {
+        const a = P("start"), m = P("mid"), b = P("end");
+        if (a && m && b) {
+          const arc = K.arcFrom3(a, m, b);
+          chains[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
+        }
+      } else if (kind === "poly") {
+        const pts = K.ptsOf(g).map(([x, y]) => tf(x, y));
+        if (pts.length > 2) chains[layer].push(pts.concat([pts[0]]));
+      }
+    }
+    const res = {};
+    for (const layer of Object.keys(chains)) {
+      if (!chains[layer].length) {
+        res[layer] = { loops: [], open: null };
+        continue;
+      }
+      const { loops, dangling } = chainLoops(chains[layer], 0.02);
+      let open = null;
+      if (dangling) {
+        const ends = [];
+        for (const c of chains[layer]) {
+          const a = c[0], b = c[c.length - 1];
+          if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 0.02) ends.push(a, b);
+        }
+        const free = ends.filter((e) => ends.filter((o) => Math.hypot(o[0] - e[0], o[1] - e[1]) <= 0.02).length < 2);
+        open = free[0] || ends[0] || chains[layer][0][0];
+      }
+      res[layer] = { loops, open };
+    }
+    return res;
+  }
+  var allowsMissingCourtyard = (fp) => {
+    const a = K.kid(fp.node, "attr");
+    return !!a && a.slice(1).some((x) => K.str(x) === "allow_missing_courtyard");
+  };
+  function courtyardMarkers(doc) {
+    const out = [];
+    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint").sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const cy = fps.map((fp) => courtyardOutlines(fp));
+    fps.forEach((fp, i) => {
+      const c = cy[i];
+      const bad = ["F.CrtYd", "B.CrtYd"].map((l) => c[l].open).find((p) => p);
+      const [fx, fy] = K.atOf(fp.node);
+      if (bad) out.push(marker("malformed_courtyard", defaultSeverity("malformed_courtyard"), bad[0], bad[1], "Footprint has malformed courtyard (not a closed shape)", [fp.id]));
+      else if (!c["F.CrtYd"].loops.length && !c["B.CrtYd"].loops.length && !allowsMissingCourtyard(fp)) out.push(marker("missing_courtyard", defaultSeverity("missing_courtyard"), fx, fy, "Footprint has no courtyard defined", [fp.id]));
+    });
+    const holes = fps.map((fp) => padsOf(fp).map((p) => ({ p, h: padHole(fp, p) })).filter((x) => x.h && !/heatsink/.test(String((K.kid(x.p.node, "property") || [])[1] || ""))));
+    const hitIn = (h, loops) => loops.some((L) => shapeGap({ t: "poly", pts: L }, holeShape(h)) <= 0);
+    const testPads = (bi, ai) => {
+      for (const { p, h } of holes[bi]) {
+        const code = p.type === "np_thru_hole" ? "npth_inside_courtyard" : "pth_inside_courtyard";
+        if (hitIn(h, cy[ai]["F.CrtYd"].loops) || hitIn(h, cy[ai]["B.CrtYd"].loops)) out.push(marker(code, defaultSeverity(code), p.x, p.y, code === "pth_inside_courtyard" ? "PTH inside courtyard" : "NPTH inside courtyard", [fps[bi].id, fps[ai].id]));
+      }
+    };
+    for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
+      if (fps[i].bbox && fps[j].bbox && !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
+      testPads(j, i);
+      testPads(i, j);
+    }
+    return out;
+  }
+  var EDGE_TEXT = /* @__PURE__ */ new Set(["gr_text", "gr_text_box", "table", "barcode", "dimension"]);
+  function textOnEdgeCutsMarkers(doc) {
+    const out = [];
+    const sev = defaultSeverity("text_on_edge_cuts");
+    for (const it of doc.items.values()) {
+      if (EDGE_TEXT.has(it.kind) && layerOf(it.node, "") === "Edge.Cuts") {
+        const p = pt(it.node, "at") || pt(it.node, "start") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
+        out.push(marker("text_on_edge_cuts", sev, p[0], p[1], "Text or graphic on Edge.Cuts layer", [it.id]));
+      }
+    }
+    for (const t of boardTexts(doc)) if (t.fp && t.layer === "Edge.Cuts") out.push(marker("text_on_edge_cuts", sev, t.pos[0], t.pos[1], "Text or graphic on Edge.Cuts layer", [t.id]));
+    return out;
+  }
+  function keepouts(doc) {
+    const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
+    const out = [];
+    const take = (z, id, tf, fp) => {
+      const ko = K.kid(z, "keepout");
+      if (!ko) return;
+      const no = (k) => {
+        const c = K.kid(ko, k);
+        return !!c && K.str(c[1]) === "not_allowed";
+      };
+      const poly = K.kid(z, "polygon");
+      const pts = poly ? K.ptsOf(poly).map(([x, y]) => tf(x, y)) : [];
+      if (pts.length < 3) return;
+      const layers = /* @__PURE__ */ new Set();
+      for (const l of zoneLayers(z)) {
+        if (l === "*.Cu" || l === "F&B.Cu") copper.forEach((c) => layers.add(c));
+        else layers.add(l);
+      }
+      const nm2 = K.kid(z, "name");
+      out.push({ id, name: nm2 ? K.str(nm2[1]) : "", layers, pts, fp, tracks: no("tracks"), vias: no("vias"), pads: no("pads") });
+    };
+    for (const it of doc.items.values()) {
+      if (it.kind === "zone") take(it.node, it.id, ident, null);
+      else if (it.kind === "footprint") {
+        const tf = fpTf(it);
+        for (const g of it.node) if (isList(g) && g[0] === "zone") take(g, it.id, tf, it);
+      }
+    }
+    return out;
+  }
+  function keepoutRuleName(k) {
+    const ref = k.fp ? k.fp.ref || "" : "";
+    if (k.name) return ref ? `keepout area '${k.name}' of ${ref}` : `keepout area '${k.name}'`;
+    return ref ? `keepout area of ${ref}` : "keepout area";
+  }
+  function pointInPolyShape(shape, P) {
+    const probe = shape.t === "circle" ? [[shape.x, shape.y]] : shape.t === "rect" ? [[shape.x, shape.y]] : shape.t === "seg" ? [shape.a, shape.b, [(shape.a[0] + shape.b[0]) / 2, (shape.a[1] + shape.b[1]) / 2]] : shape.t === "path" ? shape.pts.concat(shape.pts.slice(1).map((p, i) => [(p[0] + shape.pts[i][0]) / 2, (p[1] + shape.pts[i][1]) / 2])) : shape.pts;
+    return probe.some((p) => pointInPoly(P, p[0], p[1]) && polyEdgeDist(P, p) > DRC_EPS);
+  }
+  var polyEdgeDist = (P, p) => {
+    let d = Infinity;
+    for (let i = 0; i < P.length; i++) {
+      const a = P[i], b = P[(i + 1) % P.length];
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+      d = Math.min(d, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
+    }
+    return d;
+  };
+  function keepoutMarkers(doc) {
+    const out = [];
+    const kos = keepouts(doc);
+    if (!kos.length) return out;
+    const sev = defaultSeverity("items_not_allowed");
+    const boxes = kos.map((k) => shapeBBox({ t: "poly", pts: k.pts }));
+    const hits = (shape, i) => {
+      if (!boxesTouch(shapeBBox(shape), boxes[i], 0)) return false;
+      const core = coreDist({ t: "poly", pts: kos[i].pts }, shape);
+      return core === 0 && pointInPolyShape(shape, kos[i].pts) || core < shapeOffset(shape) - DRC_EPS;
+    };
+    const firstInside = (shape, pts, P) => pts.find((p) => pointInPoly(P, p[0], p[1])) || (shape.t === "seg" ? shape.a : pts[0]);
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "segment" || it.kind === "arc") {
+        const a = pt(n, "start"), b = pt(n, "end");
+        if (!a || !b) continue;
+        const layer = layerOf(n);
+        const w = K.num((K.kid(n, "width") || [0, 0.25])[1], 0.25);
+        let pts = [a, b];
+        if (it.kind === "arc") {
+          const m = pt(n, "mid");
+          const arc = m && K.arcFrom3(a, m, b);
+          if (arc) pts = arcPoints(arc, a, b);
+        }
+        const shape = { t: "path", pts, r: w / 2 };
+        kos.forEach((k, i) => {
+          if (k.tracks && k.layers.has(layer) && hits(shape, i)) {
+            const p = firstInside(shape, pts, k.pts);
+            out.push(marker("items_not_allowed", sev, p[0], p[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+          }
+        });
+      } else if (it.kind === "via") {
+        const a = pt(n, "at");
+        if (!a) continue;
+        const size = K.num((K.kid(n, "size") || [0, 0.6])[1], 0.6);
+        const span = viaSpan(doc, viaHole(it) || { layers: null });
+        const shape = { t: "circle", x: a[0], y: a[1], r: size / 2 };
+        kos.forEach((k, i) => {
+          if (k.vias && [...span].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev, a[0], a[1], `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+        });
+      } else if (it.kind === "footprint") {
+        for (const p of padsOf(it)) {
+          const shape = padShape(p);
+          const layers = /* @__PURE__ */ new Set();
+          for (const l of p.layers) {
+            if (l === "*.Cu" || l === "F&B.Cu") (doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]).forEach((c) => layers.add(c));
+            else layers.add(l);
+          }
+          kos.forEach((k, i) => {
+            if (k.pads && k.fp !== it && [...layers].some((l) => k.layers.has(l)) && hits(shape, i)) out.push(marker("items_not_allowed", sev, p.x, p.y, `Items not allowed (${keepoutRuleName(k)})`, [it.id]));
+          });
+        }
+      }
+    }
+    return out;
+  }
+  function disabledLayerMarkers(doc) {
+    const out = [];
+    if (!doc.layers.size) return out;
+    const sev = defaultSeverity("item_on_disabled_layer");
+    const off = (l) => /\.Cu$/.test(l) && !doc.layers.has(l);
+    const report = (id, p, l) => out.push(marker("item_on_disabled_layer", sev, p[0], p[1], `Item on a disabled copper layer (layer ${l})`, [id]));
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (it.kind === "via") {
+        const ls = K.kid(n, "layers");
+        const pair = ls ? [K.str(ls[1]), K.str(ls[2])] : [];
+        const bad = pair.find(off);
+        const a = pt(n, "at");
+        if (bad && a) report(it.id, a, bad);
+      } else if (it.kind === "footprint") {
+        for (const p of padsOf(it)) {
+          if (p.type !== "smd" && p.type !== "connect") continue;
+          const l = p.layers.find((x) => /\.Cu$/.test(x) && x !== "*.Cu");
+          if (l && off(l)) report(it.id, [p.x, p.y], l);
+        }
+      } else if (it.kind !== "zone") {
+        const l = layerOf(n, "");
+        if (!l || !off(l)) continue;
+        const p = pt(n, "start") || pt(n, "at") || pt(n, "center") || (it.bbox ? [it.bbox[0], it.bbox[1]] : [0, 0]);
+        report(it.id, p, l);
+      }
+    }
+    return out;
+  }
+  function moreDrcMarkers(doc, s, rules) {
+    const ruleOf = (type, A, B) => rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
+    const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
+    return all.filter((m) => (s.severities[m.code] || m.severity) !== "ignore");
+  }
+
   // web/tools/pcb-tools/drc.ts
   var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
   function designSettings(src) {
@@ -2689,6 +3203,9 @@
       s.minViaAnnular = rules.min_via_annular_width || 0;
       if (rules.min_hole_clearance !== void 0) s.holeClearance = rules.min_hole_clearance;
       if (rules.min_copper_edge_clearance !== void 0) s.edgeClearance = rules.min_copper_edge_clearance;
+      if (rules.min_hole_to_hole !== void 0) s.minHoleToHole = rules.min_hole_to_hole;
+      if (rules.min_text_height !== void 0) s.minTextHeight = rules.min_text_height;
+      if (rules.min_text_thickness !== void 0) s.minTextThickness = rules.min_text_thickness;
     }
     const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults;
     if (dflt) layerDefaults(dflt);
@@ -3006,6 +3523,7 @@
         }
       }
     }
+    out.push(...moreDrcMarkers(doc, s, rules));
     return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => {
       const sev = s.severities[m.code];
       if (sev === "warning" || sev === "error") m.severity = sev;
@@ -3524,7 +4042,7 @@
     if (!doc.__bc && S.rworld && S.rworld.doc === doc && S.rworld.ver === S.docVer) return S.rworld;
     const copper = copperOf(doc);
     const conds = conductors(doc).filter((c) => c.kind !== "zone");
-    const holes = [], keepouts = [];
+    const holes = [], keepouts2 = [];
     for (const it of doc.items.values()) {
       if (it.kind === "footprint") {
         for (const p of padsOf(it)) {
@@ -3555,11 +4073,11 @@
         const pts = poly ? K.ptsOf(poly) : [];
         if (pts.length < 3) continue;
         const shape = { t: "poly", pts };
-        keepouts.push({ id: it.id, kind: "keepout", layers, shape, bbox: shapeBBox(shape) });
+        keepouts2.push({ id: it.id, kind: "keepout", layers, shape, bbox: shapeBBox(shape) });
       }
     }
     const edges = edgeShapes(doc).shapes.map((shape) => ({ id: null, kind: "edge", shape, bbox: shapeBBox(shape) }));
-    const W = { doc, ver: S.docVer, conds, holes, keepouts, edges, copper };
+    const W = { doc, ver: S.docVer, conds, holes, keepouts: keepouts2, edges, copper };
     if (doc.__bc) doc.__bc.rworld = W;
     else {
       S.rworld = W;
@@ -7221,7 +7739,7 @@
     if (rt.shove && rs.mode === RM_SHOVE) ops.push(...rt.shove.ops);
     const end = els.length ? els[els.length - 1].b.slice() : rt.last.slice();
     if (via) {
-      const node = viaNode(doc, end[0], end[1], via.diameter, via.drill, rt.net, via.type === "through" ? viaSpan(doc) : [via.layers[0], via.layers[1]]);
+      const node = viaNode(doc, end[0], end[1], via.diameter, via.drill, rt.net, via.type === "through" ? viaSpan2(doc) : [via.layers[0], via.layers[1]]);
       if (via.type !== "through") node.splice(1, 0, via.type);
       node.push(["uuid", K.newUuid()]);
       ops.push({ add: node });
@@ -8772,7 +9290,7 @@
     let nextPair;
     if (L.vias) {
       const v = rt.placingVia;
-      const layers = v.type === "through" ? viaSpan(doc) : [v.span[0], v.span[1]];
+      const layers = v.type === "through" ? viaSpan2(doc) : [v.span[0], v.span[1]];
       for (const [at, net] of [[L.vias.P, rt.net], [L.vias.N, rt.netN]]) {
         const node = viaNode(doc, at[0], at[1], v.diameter, v.drill, net, layers);
         if (v.type !== "through") node.splice(1, 0, v.type);
@@ -9538,7 +10056,7 @@
     refreshChip(ctx);
     ctx.requestRender();
   }
-  function viaSpan(doc) {
+  function viaSpan2(doc) {
     const cu = K.pcbSizes.copperStack(copperOf(doc));
     return [cu[0], cu[cu.length - 1]];
   }
@@ -9640,7 +10158,7 @@
   function placeVia(ctx, hv) {
     const net = hv.snap ? hv.snap.net : netUnder(ctx.doc, hv.x, hv.y, null);
     const via = sizesOf(ctx).routeVia(netNameOf(ctx, net));
-    ctx.commit([addedChange(ctx.doc, viaNode(ctx.doc, hv.x, hv.y, via.diameter, via.drill, net, viaSpan(ctx.doc)), net)], "via");
+    ctx.commit([addedChange(ctx.doc, viaNode(ctx.doc, hv.x, hv.y, via.diameter, via.drill, net, viaSpan2(ctx.doc)), net)], "via");
   }
   function setLayer(ctx, layer) {
     const rt = S.route;
@@ -13946,11 +14464,11 @@
     return true;
   }, { toggle: () => !!K.pcbSizes.state.useConnectedWidth, menu: "-" });
   act("layerTop", "Switch to Component (F.Cu) layer", "PgUp", (ctx) => {
-    setLayer(ctx, viaSpan(ctx.doc)[0]);
+    setLayer(ctx, viaSpan2(ctx.doc)[0]);
     return true;
   }, { menu: "-" });
   act("layerBottom", "Switch to Copper (B.Cu) Layer", "PgDn", (ctx) => {
-    setLayer(ctx, viaSpan(ctx.doc)[1]);
+    setLayer(ctx, viaSpan2(ctx.doc)[1]);
     return true;
   }, { menu: "-" });
   act("layerNext", "Switch to Next Layer", "+", (ctx) => stepLayer(ctx, true), { menu: "-" });
@@ -15635,6 +16153,16 @@
     EXT_OFFSET,
     RULE_AREA_LAYERS,
     // the parity pass
+    courtyardMarkers,
+    courtyardOutlines,
+    disabledLayerMarkers,
+    effectivePenWidth,
+    holeToHoleMarkers,
+    keepoutMarkers,
+    moreDrcMarkers,
+    textDimsMarkers,
+    textMirroringMarkers,
+    textOnEdgeCutsMarkers,
     DRCET,
     applyExclusions,
     exclusionKey,
