@@ -261,7 +261,8 @@ function candidatesAt(mm: Mm): string[] {
   if (isSch() || !E.kdoc) return ids;
   // FOOTPRINT::HitTest: a footprint is hit inside its bounding hull, not only on its drawn shapes (as a left click's pickAt)
   const fp = nearestFootprint(mm[0], mm[1], 5 / Math.max(1, E.zoom * 0.6)) as { id: string } | null;
-  if (fp && !ids.includes(fp.id)) ids.push(fp.id);
+  // (only where nothing drawn is hit: over its own shapes or another item the existing candidates already decide)
+  if (fp && !ids.length) ids.push(fp.id);
   let pad: { item?: KItem; index?: number } | null = null;
   try { pad = (KiCadCanvas.padAt as (d: KDoc, x: number, y: number) => { item?: KItem; index?: number } | null)(E.kdoc as KDoc, mm[0], mm[1]); } catch { pad = null; }
   const f = store.get().filter as Record<string, boolean>;

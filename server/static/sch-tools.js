@@ -4144,6 +4144,7 @@ Link '${target}' to this file?`)) return null;
     const sh = d.arc.shape();
     const seed = sh && schArcDrawMode() === ARC_TANGENT ? arcTangentSeedNear({ t: "arc", start: sh.start, mid: sh.mid, end: sh.end, center: sh.center }, d.lastClick || sh.end) : null;
     S.draw = newSchArc(seed);
+    S.draw.cur = d.cur.slice();
   }
   function finishSchArc(ctx) {
     const d = S.draw, a = d && d.started ? schArcPoints(d) : null;

@@ -115,7 +115,7 @@ export function commitSchArc(ctx: SchCtx, d: SchDraw, next: boolean) {
   if (!next) return;
   const sh = d.arc!.shape();
   const seed = sh && schArcDrawMode() === ARC_TANGENT ? arcTangentSeedNear({ t: "arc", start: sh.start, mid: sh.mid, end: sh.end, center: sh.center }, d.lastClick || sh.end) : null;
-  S.draw = newSchArc(seed);
+  S.draw = newSchArc(seed); S.draw.cur = d.cur.slice();   // the next arc previews from where the cursor is
 }
 /** A double click or finishInteractive (Enter / End): the arc drawn so far is kept and the tool ends (FINISHED). */
 export function finishSchArc(ctx: SchCtx) {
