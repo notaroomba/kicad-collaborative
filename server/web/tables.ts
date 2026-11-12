@@ -163,6 +163,8 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "routerHighlightMode", "routerShoveMode", "routerWalkaroundMode", "cycleRouterMode", "routerUndoLastSegment", "routerDiffPairDialog",
     // the length tuner's commands: the drawing tool's context menu while a tuning tool runs (drawing_tool.cpp tuningToolActive), hotkeys 1-4 and Ctrl+L
     "spacingIncrease", "spacingDecrease", "amplIncrease", "amplDecrease", "lengthTunerSettings",
+    // Tools > Rebuild All / Selected Generators: pcbnew lists them only with the EnableGenerators advanced setting
+    "regenerateAll", "regenerateSelected",
     "ACT_SwitchCornerModeToNext", "ACT_SwitchCornerMode45", "ACT_SwitchCornerModeArc45", "ACT_SwitchCornerMode90", "ACT_SwitchCornerModeArc90",
     "ACT_PlaceThroughVia", "ACT_PlaceBlindVia", "ACT_PlaceMicroVia", "ACT_SelLayerAndPlaceThroughVia", "ACT_SelLayerAndPlaceBlindVia", "ACT_SelLayerAndPlaceMicroVia",
     // Line Modes live on the left toolbar's radio group and Shift+Space; Ctrl++ / Ctrl+- (incWidth / decWidth) are the drawing tools' context menu

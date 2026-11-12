@@ -363,9 +363,10 @@ function replacedChange(item, node) { return upsertChange({ id: item.id, kind: i
 function removedChange(item) { const c = K.removeChange(item); c.typeName = typeNameOf(item); return c; }
 /** REMOVED changes for a multi-selection (items or ids); app.js deletes a group through this. */
 function deleteChanges(doc, items) {
-  const out = [];
-  for (const x of items || []) { const it = typeof x === "string" ? doc.items.get(x) : x; if (it && it.id && it.kind) out.push(removedChange(it)); }
-  return out;
+  const out = [], gens = [], ids = new Set();
+  for (const x of items || []) { const it = typeof x === "string" ? doc.items.get(x) : x; if (it && it.id && it.kind) { out.push(removedChange(it)); ids.add(it.id); if (isTuningPattern(it)) gens.push(it); } }
+  // a tuning pattern goes back to its base line (PCB_TUNING_PATTERN::Remove)
+  return gens.length ? tuningRemoveChanges(doc, gens, ids) : out;
 }
 /** The board's nets, from every pad, track, via and zone (kicad-canvas drops the (net …) table). */
 function boardNets(doc) {
@@ -2696,6 +2697,113 @@ function tuneFinish(ctx) {
   S.tune.pattern = null; S.tune.picker = null;
   ctx.commit(changes, "Tune"); ctx.requestRender();
 }
+// ---- tuning patterns on the board (PCB_TUNING_PATTERN as a PCB_GENERATOR: SetProperties, removeToBaseline, Update)
+const isTuningPattern = (it) => !!it && it.kind === "generated" && K.str((K.kid(it.node, "type") || [])[1]) === "tuning_pattern";
+/** PCB_TUNING_PATTERN::SetProperties: the stored settings, base line(s), layer, width and members. */
+function tuningPatternInfo(gen) {
+  const n = gen.node;
+  const kid = (k) => K.kid(n, k); const num = (k, d) => { const c = kid(k); return c ? K.num(c[1]) : d; };
+  const bool = (k, d) => { const c = kid(k); return c ? (c.length < 2 || K.str(c[1]) === "yes") : d; };
+  const str = (k) => { const c = kid(k); return c ? K.str(c[1]) : ""; };
+  const ptsOf = (k) => { const c = kid(k); const p = c && K.kid(c, "pts"); return p ? p.slice(1).filter((xy) => Array.isArray(xy) && xy[0] === "xy").map((xy) => [K.num(xy[1]), K.num(xy[2])]) : null; };
+  const st = meanderDefaults(); const I = (v) => Math.round(v * TUNE_IU);
+  st.minAmp = I(num("min_amplitude", 0.2)); st.maxAmp = I(num("max_amplitude", 1)); st.spacing = I(num("min_spacing", 0.6));
+  st.crPct = num("corner_radius_percent", 80); st.round = bool("rounded", true); st.singleSided = bool("single_sided", false);
+  st.overrideCustomRules = bool("override_custom_rules", false);
+  const side = str("initial_side"); st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
+  const opt = num("target_length", null);
+  if (opt != null) st.target = { min: I(num("target_length_min", opt - 0.1)), opt: I(opt), max: I(num("target_length_max", opt + 0.1)) };
+  const lay = kid("layer");
+  return { st, layer: lay ? K.str(lay[1]) : "F.Cu", base: ptsOf("base_line"), coupled: ptsOf("base_line_coupled"), mode: str("tuning_mode") || "single",
+    width: num("last_track_width", 0.25), gap: num("last_diff_pair_gap", 0), members: K.groupMemberIds(n) };
+}
+/** removeToBaseline as branch edits: the members out, the base line(s) back as straight tracks of the members' net and width. */
+function baselineOps(doc, gen) {
+  const T = tuningPatternInfo(gen); const ops = []; const mem = T.members.map((id) => doc.items.get(id)).filter(Boolean);
+  for (const it of mem) ops.push({ del: it.id });
+  const lines = [T.base].concat(T.mode === "diff_pair" && T.coupled ? [T.coupled] : []);
+  const added = [];
+  lines.forEach((base, li) => {
+    if (!base || base.length < 2) return;
+    // the members on this base line give its net and width (the coupled line is the partner net's)
+    const near = (it) => { const a = pt(it.node, "start"); return a && base.some((q, i) => i + 1 < base.length && distSeg(a[0], a[1], q[0], q[1], base[i + 1][0], base[i + 1][1]) < Math.max(T.width, 0.01) * 4 + 1.2); };
+    const tmpl = mem.find((it) => (it.kind === "segment" || it.kind === "arc") && (li === 0 ? near(it) : near(it))) || mem[0];
+    const net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" }, width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
+    for (let i = 0; i + 1 < base.length; i++) {
+      if (peq(base[i], base[i + 1])) continue;
+      const node = segmentNode(doc, base[i], base[i + 1], width, T.layer, net); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); added.push({ node, net, width });
+    }
+  });
+  return { ops, added, info: T };
+}
+/**
+ * EDIT_TOOL delete with tuning patterns in it (PCB_TUNING_PATTERN::Remove → removeToBaseline): the deleted items and
+ * the patterns' meanders go, each base line comes back, and the line it sits on is rebuilt simplified (the straight
+ * chain pre + base line + post, collinear runs merged).  All the board changes of the delete.
+ */
+function tuningRemoveChanges(doc, gens, deleting) {
+  const ops = [...deleting].map((id) => ({ del: id })); const seeds = [];
+  for (const gen of gens) { const r = baselineOps(doc, gen); ops.push(...r.ops.filter((op) => !op.del || !deleting.has(op.del))); for (const a of r.added) seeds.push(K.str(K.kid(a.node, "uuid")[1])); }
+  let b = branchDoc(doc, ops);
+  for (const id of seeds) {
+    const it = b.items.get(id); if (!it) continue;
+    const line = assembleLine(b, it); if (!line) continue;
+    const sp = simplifyPts(line.pts); if (sp.length >= line.pts.length) continue;
+    const ops2 = line.ids.map((x) => ({ del: x }));
+    for (let i = 0; i + 1 < sp.length; i++) { const node = segmentNode(b, sp[i], sp[i + 1], line.width, line.layer, line.net); node.push(["uuid", K.newUuid()]); ops2.push({ add: node }); }
+    b = branchDoc(b, ops2);
+  }
+  return branchChanges(doc, b);
+}
+/**
+ * PCB_TUNING_PATTERN::EditStart / Update / EditFinish on a placed pattern: back to its base line, the line re-tuned
+ * with the pattern's own settings (MEANDER_PLACER on the base line from origin to end), the new copper its members.
+ * Returns the board changes, or [] when the base line cannot be found.
+ */
+function regenerateTuningChanges(ctx, gen) {
+  const doc = ctx.doc; const { ops, added, info } = baselineOps(doc, gen);
+  if (!added.length || info.mode !== "single") return [];
+  const scratch = branchDoc(doc, ops);
+  const seedId = K.str(K.kid(added[0].node, "uuid")[1]); const seed = scratch.items.get(seedId); if (!seed) return [];
+  const line = assembleLine(scratch, seed); if (!line) return [];
+  const st = tuneCopy(info.st); st.keepEndpoints = true;
+  const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
+  const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer); const r = line.width / 2;
+  const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+  const origin = info.base[0], end = info.base[info.base.length - 1];
+  const res = meanderMove({ pts: line.pts.map(I), origin: I(origin), end: I(end), cursor: I(end), st, width: Math.round(line.width * TUNE_IU),
+    clearance: Math.round(netClearance(settingsOf(ctx), line.netKey) * TUNE_IU), lineLength: routedLength(scratch, seedId) * TUNE_IU, collides });
+  // the rebuilt line onto the scratch board: kept segments stay, the rest of the line is replaced
+  const oldKey = new Map(); for (const id of line.ids) { const it = scratch.items.get(id); const a = pt(it.node, "start"), b = pt(it.node, "end"); oldKey.set(ptKey(a) + "|" + ptKey(b), it); oldKey.set(ptKey(b) + "|" + ptKey(a), it); }
+  const kept = new Set(), ops2 = [], members = [];
+  const T = { width: line.width, layer: line.layer, net: line.net };
+  for (const pc of tunePieces(res.final)) {
+    const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+    if (same && !kept.has(same.id)) { kept.add(same.id); if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id); continue; }
+    const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, line.width, line.layer, line.net) : segmentNode(scratch, pc.a, pc.b, line.width, line.layer, line.net);
+    const u = K.newUuid(); node.push(["uuid", u]); ops2.push({ add: node });
+    if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
+  }
+  for (const id of line.ids) if (!kept.has(id)) ops2.unshift({ del: id });
+  const g = clone(gen.node);
+  const setKid = (k, v) => { const c = K.kid(g, k); if (c) c.splice(1, c.length - 1, v); };
+  setKid("last_status", res.status); setKid("last_tuning_length", +fmtG(res.length / TUNE_IU));
+  const mk = K.kid(g, "members"); if (mk) mk.splice(1, mk.length - 1, ...members.slice().sort()); else g.push(["members", ...members.slice().sort()]);
+  ops2.push({ set: gen.id, node: g });
+  const fin = branchDoc(scratch, ops2);
+  return branchChanges(doc, fin);
+}
+/** GENERATOR_TOOL::RegenerateAllOfType / RegenerateSelected: every pattern re-tuned in one commit. */
+function regenerateTuning(ctx, gens, label) {
+  if (!canEdit(ctx)) return true;
+  let changes = [];
+  for (const gen of gens) {
+    const ch = regenerateTuningChanges(ctx, gen); if (!ch.length) continue;
+    changes = changes.concat(ch);
+  }
+  if (changes.length) ctx.commit(changes, label);
+  ctx.requestRender(); return true;
+}
 /** Escape / Undo / another tool with a pattern pending: EditCancel, the board untouched. */
 function tuneCancel(ctx) { if (!S.tune.pattern) return false; S.tune.pattern = null; if (ctx) ctx.requestRender(); return true; }
 /** Increase / Decrease Spacing (1 / 2), Increase / Decrease Amplitude (3 / 4): MEANDER_PLACER_BASE::SpacingStep / AmplitudeStep. */
@@ -3201,7 +3309,7 @@ function finishSelectMove(ctx, commit, force) {
  */
 function beginCarryMove(ctx, opts) {
   const doc = ctx.doc; if (!doc) return false; opts = opts || {};
-  const ids = Array.from(expandGroups(doc, opts.placing ? new Set(opts.placing) : opts.ids ? new Set(opts.ids) : selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group" && it.kind !== "generated"; });
+  const ids = Array.from(expandGroups(doc, opts.placing ? new Set(opts.placing) : opts.ids ? new Set(opts.ids) : selectionIds(ctx))).filter((id) => { const it = doc.items.get(id); return it && it.kind !== "group"; });
   if (!ids.length) return false;
   const free = unlockedIds(ctx, ids);
   if (!free.length) return true;
@@ -3839,6 +3947,10 @@ function mapNodePoints(node, fn) {
   for (const key of ["start", "end", "mid", "center", "at"]) mapKey(node, key);
   mapPts(node);
   if (k === "zone") for (const poly of K.kids(node, "polygon").concat(K.kids(node, "filled_polygon"))) mapPts(poly);
+  if (k === "generated") {   // PCB_GENERATOR::Move / Rotate: its stored points (origin, end, base lines) go with it
+    for (const key of ["origin", "end"]) { const c = K.kid(node, key); const xy = c && K.kid(c, "xy"); if (xy) { const [x, y] = fn(K.num(xy[1]), K.num(xy[2])); xy[1] = r6(x); xy[2] = r6(y); } }
+    for (const key of ["base_line", "base_line_coupled"]) { const c = K.kid(node, key); if (c) mapPts(c); }
+  }
   if (k === "dimension") { const gt = K.kid(node, "gr_text"); if (gt) mapKey(gt, "at"); }
   return node;
 }
@@ -3906,7 +4018,7 @@ function selectionCenter(items) {
 function transformChanges(doc, ids, fn) {
   const out = [];
   for (const id of ids) {
-    const it = doc.items.get(id); if (!it || it.kind === "group" || it.kind === "generated") continue;
+    const it = doc.items.get(id); if (!it || it.kind === "group") continue;
     const node = clone(it.node); if (fn(node, it) === false) continue; out.push(replacedChange(it, node));
   }
   return out;
@@ -4033,7 +4145,7 @@ function expandGroups(doc, ids) {
   while (grew) {
     grew = false;
     for (const it of doc.items.values()) {
-      if (it.kind !== "group") continue; const m = groupMembers(it.node);
+      if (it.kind !== "group" && it.kind !== "generated") continue; const m = groupMembers(it.node);   // a generator holds its members as a group does
       if (!out.has(it.id) && !m.some((id) => out.has(id))) continue;
       for (const id of m.concat([it.id])) if (!out.has(id) && doc.items.has(id)) { out.add(id); grew = true; }
     }
@@ -6161,6 +6273,10 @@ act("spacingIncrease", "Increase Spacing", "1", (ctx) => S.modTool === "tunesing
 act("spacingDecrease", "Decrease Spacing", "2", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
 act("amplIncrease", "Increase Amplitude", "3", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "ampl", 1) : false, { menu: false, tip: "Increase tuning pattern amplitude by one step." });
 act("amplDecrease", "Decrease Amplitude", "4", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "ampl", -1) : false, { menu: false, tip: "Decrease tuning pattern amplitude by one step." });
+// GENERATOR_TOOL: Edit > Update All Tuning Patterns (and Tools > Rebuild All / Selected Generators where shown)
+act("regenerateAllTuning", "Update All Tuning Patterns", "", (ctx) => regenerateTuning(ctx, [...ctx.doc.items.values()].filter(isTuningPattern), "Update Tuning Patterns"), { menu: false, tip: "Attempt to re-tune existing tuning patterns within their bounds" });
+act("regenerateAll", "Rebuild All Generators", "", (ctx) => regenerateTuning(ctx, [...ctx.doc.items.values()].filter(isTuningPattern), "Regenerate All"), { menu: false, tip: "Rebuilds geometry of all generators" });
+act("regenerateSelected", "Rebuild Selected Generators", "", (ctx) => { const sel = expandGroups(ctx.doc, selectionIds(ctx)); return regenerateTuning(ctx, [...sel].map((id) => ctx.doc.items.get(id)).filter(isTuningPattern), "Regenerate Selected"); }, { menu: false, tip: "Rebuilds geometry of selected generator(s)" });
 // handlePnSCornerModeChange: Ctrl+/ steps MITERED_45 → ROUNDED_45 → MITERED_90 → ROUNDED_90
 act("ACT_SwitchCornerModeToNext", "Track Corner Mode Switch", "", () => { setRouterSettings({ corner_mode: (S.rs.corner_mode + 1) % 4 }); return true; }, Object.assign({ tip: "Switches between sharp/rounded and 45°/90° corners when routing tracks." }, ROUTER_ACTION));
 act("ACT_SwitchCornerMode45", "Track Corner Mode 45", "", () => { setRouterSettings({ corner_mode: CM_M45 }); return true; }, Object.assign({ tip: "Switch to 45° corner when routing tracks.", check: () => S.rs.corner_mode === CM_M45 }, ROUTER_ACTION));
@@ -6985,7 +7101,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  loopRemovals, antennaRemovals, removeRedundant, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,

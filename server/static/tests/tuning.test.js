@@ -202,5 +202,53 @@ test("the drawing tool menu offers the tuner's steps and settings while tuning",
   for (const a of ["PCB_ACTIONS::spacingIncrease", "PCB_ACTIONS::spacingDecrease", "PCB_ACTIONS::amplIncrease", "PCB_ACTIONS::amplDecrease", "PCB_ACTIONS::lengthTunerSettings"]) assert.ok(acts.includes(a), a);
 });
 
+function placeTuned(target) {
+  const f = fakeCtx(); P.setTargetLength(P.state.tuneSettings.single, target * IU);
+  f.ctx.setTool("tunesingle");
+  pcb.onPointerDown(ev(), [12, 10], f.ctx); pcb.onPointerMove(ev(), [28, 9], f.ctx); pcb.onPointerDown(ev(), [28, 9], f.ctx);
+  f.ctx.setTool("select");
+  f.gen = () => [...f.doc.items.values()].find((it) => it.kind === "generated");
+  f.len = () => netLen(f.doc, 1, tracks(f.doc, 1).filter((t) => P.pt(t.node, "start")[1] < 30 && P.pt(t.node, "end")[1] < 30).map((t) => t.id));
+  return f;
+}
+
+test("a meander belongs to its pattern: selecting one expands to the generator and every member", () => {
+  const { doc, gen } = placeTuned(40);
+  const g = gen(); const m = K.groupMemberIds(g.node);
+  const ex = P.expandGroups(doc, [m[0]]); assert.ok(ex.has(g.id)); for (const id of m) assert.ok(ex.has(id));
+  const info = P.tuningPatternInfo(g); assert.equal(info.mode, "single"); assert.equal(info.st.target.opt, 40 * IU); assert.deepEqual(info.base[0], [12, 10]);
+});
+
+test("Update All Tuning Patterns re-tunes each pattern to its stored target in one commit", () => {
+  const f = placeTuned(40);
+  const g = f.gen(); const node = JSON.parse(JSON.stringify(g.node));   // the pattern's properties edited to a 37 mm target
+  for (const [k, v] of [["target_length", 37], ["target_length_min", 36.9], ["target_length_max", 37.1]]) K.kid(node, k)[1] = v;
+  g.node.length = 0; g.node.push(...node);
+  const before = f.log.commits.length;
+  pcb.runAction("regenerateAllTuning", f.ctx);
+  assert.equal(f.log.commits.length, before + 1); assert.equal(f.log.commits.at(-1).label, "Update Tuning Patterns");
+  assert.ok(Math.abs(f.len() - 37) < 0.1, "re-tuned to 37 mm, got " + f.len());
+  const gens = [...f.doc.items.values()].filter((it) => it.kind === "generated"); assert.equal(gens.length, 1);
+  for (const id of K.groupMemberIds(gens[0].node)) assert.ok(f.doc.items.has(id));
+  assert.equal(K.kid(gens[0].node, "last_status")[1], "tuned");
+});
+
+test("deleting a pattern puts its base line back (PCB_TUNING_PATTERN::Remove)", () => {
+  const f = placeTuned(40);
+  const ids = [...P.expandGroups(f.doc, [f.gen().id])];
+  f.ctx.commit(P.deleteChanges(f.doc, ids), "Delete");
+  assert.ok(!f.gen(), "the generator is gone");
+  assert.ok(Math.abs(f.len() - (20 + Math.SQRT2 * 10)) < 1e-3, "straight again: " + f.len());
+  assert.ok(tracks(f.doc, 1).every((t) => t.kind === "segment"));
+  assert.equal(tracks(f.doc, 1).filter((t) => P.pt(t.node, "start")[1] < 30).length, 2, "the straight run is one segment again (removeToBaseline simplifies the line)");
+});
+
+test("moving a pattern carries its origin, end and base line", () => {
+  const f = placeTuned(40); const g = f.gen();
+  const n = P.translateNode(JSON.parse(JSON.stringify(g.node)), 1, 2);
+  assert.deepEqual(K.kid(n, "origin")[1].slice(1), [13, 12]);
+  const info = P.tuningPatternInfo({ node: n }); assert.deepEqual(info.base[0], [13, 12]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
