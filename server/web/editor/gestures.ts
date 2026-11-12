@@ -111,6 +111,23 @@ export function pinUnder(mm: Mm, exact?: boolean): { id: string; number: string 
 }
 // sch-tools' pick asks this first: an exact pin hit beats a wire or label ending on it (GuessSelectionCandidates)
 E.pinExactAt = (mm: Mm): boolean => !!pinUnder(mm, true);
+/** SCH_SYMBOL::HitTest( aPos, 0 ): the point lies in the symbol's body bounding box (pins and fields left out). */
+function symbolBodyHit(d: KDoc, id: string, mm: Mm): boolean {
+  const it = d.items.get(id), m = CollabTools.sch; if (!it || it.kind !== "symbol" || !m || !m._) return false;
+  const bodyBox = (m._ as unknown as { bodyBox?: (d: KDoc, it: KItem) => number[] | null }).bodyBox; if (!bodyBox) return false;
+  try { const b = bodyBox(d, it); return !!b && mm[0] >= b[0] && mm[0] <= b[2] && mm[1] >= b[1] && mm[1] <= b[3]; } catch { return false; }
+}
+/**
+ * The pin a plain click at `mm` selects on its own (GuessSelectionCandidates): an exact pin hit always; a pin only
+ * within the pixel threshold loses to an exact hit on a symbol's body.
+ */
+export function pinForClick(mm: Mm): { id: string; number: string } | null {
+  const exact = pinUnder(mm, true); if (exact) return exact;
+  const pin = pinUnder(mm); if (!pin) return null;
+  const d = doc(); if (!d) return pin;
+  const best = nearestFootprint(mm[0], mm[1], clickSlop()) as { id: string } | null;
+  return best && symbolBodyHit(d, best.id, mm) ? null : pin;
+}
 /** What a plain left click at `mm` selects, without touching the selection: the field, movable item or module item. */
 export function pickAt(mm: Mm): { field?: { id: string; name: string }; pin?: { id: string; number: string }; movable?: { id: string }; item?: KItem } | null {
   const d = doc(); if (!d) return null;
@@ -121,9 +138,13 @@ export function pickAt(mm: Mm): { field?: { id: string; name: string }; pin?: { 
     const f = (KiCadCanvas.fieldAt as (d: KDoc, x: number, y: number, hidden: Set<string>) => { item: KItem; name: string } | null)(d, x, y, E.hiddenLayers);
     if (f) return { field: { id: f.item.id, name: f.name } };
   }
-  if (isSch()) { const pin = pinUnder(mm); if (pin) return { pin }; }
   const best = nearestFootprint(x, y, clickSlop()) as { id: string } | null;
-  if (isSch()) return best ? { movable: best } : null;
+  if (isSch()) {
+    // GuessSelectionCandidates: exact hits beat sloppy ones.  An exact pin hit wins outright; a click inside a
+    // symbol's body box (SCH_SYMBOL::HitTest at accuracy 0) beats a pin that is only within the pixel threshold.
+    const pin = pinForClick(mm); if (pin) return { pin };
+    return best ? { movable: best } : null;
+  }
   // board: a track / via / graphic under the cursor beats a footprint whose only claim is its bounding box
   if (best && E.lastFpHit && E.lastFpHit.onGeom && !copperUnderBeatsFootprint(mm)) return { movable: best };
   const it = pcbPick(mm);

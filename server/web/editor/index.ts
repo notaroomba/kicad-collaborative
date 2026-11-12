@@ -23,7 +23,7 @@ import { closeThread, placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
-import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, pinUnder, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
+import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -190,7 +190,7 @@ stage.addEventListener("pointerdown", (ev) => {
   let pinPromote: { id: string; number: string } | null = null, pinClick: { id: string; number: string } | null = null;
   if (E.tool === "select" && E.kdoc && isSch() && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     // SCH_SELECTION_TOOL: a pin under the cursor is selected on its own, ahead of its symbol's body
-    const pin = pinUnder([x, y]);
+    const pin = pinForClick([x, y]);
     if (pin) {
       const was = !!(E.selPin && E.selPin.id === pin.id && E.selPin.number === pin.number);
       // its symbol is already selected: a drag moves the selection (RequestSelection( MovableItems )), only a click
