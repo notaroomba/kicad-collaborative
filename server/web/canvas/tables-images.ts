@@ -194,6 +194,13 @@ export function buildImageGeom(doc, item, n) {
   const pxMm = 25.4 / (e.ppi || 300);
   const w = (e.w * pxMm * scale) || 10, h = (e.h * pxMm * scale) || 10;   // unknown pixel size: a 10 mm placeholder
   const layer = isPcb ? layerOf(n, "Dwgs.User") : "Images";
-  G(item, { t: "image", x: x - w / 2, y: y - h / 2, w, h, entry: e, pxMm, scale, color: isPcb ? pcbColor(layer) : SCH.notes, layer, z: isPcb ? Z_BITMAP : SCH_Z.bitmap });
-  item.movable = true; item.x = x; item.y = y; item.rot = 0; item.w = w; item.h = h; item.scale = scale; if (isPcb) item.layer = layer;
+  // PCB_REFERENCE_IMAGE: (rotate a) turns the bitmap about its centre (counter-clockwise, as EDA_ANGLE), (opacity o) 0..1
+  const rN = isPcb ? kid(n, "rotate") : null, rot = rN ? num(rN[1], 0) : 0;
+  const oN = isPcb ? kid(n, "opacity") : null; let opacity = oN ? num(oN[1], 1) : 1; if (!isFinite(opacity)) opacity = 1; opacity = Math.min(1, Math.max(0, opacity));
+  G(item, { t: "image", x: x - w / 2, y: y - h / 2, w, h, entry: e, pxMm, scale, rot, opacity, color: isPcb ? pcbColor(layer) : SCH.notes, layer, z: isPcb ? Z_BITMAP : SCH_Z.bitmap });
+  if (rot) {   // the bounding box of the turned bitmap
+    const c = Math.cos(rot * Math.PI / 180), sn = Math.sin(rot * Math.PI / 180);
+    for (const [px, py] of [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]]) bboxAdd(item, x + px * c + py * sn, y - px * sn + py * c);
+  }
+  item.movable = true; item.x = x; item.y = y; item.rot = rot; item.w = w; item.h = h; item.scale = scale; if (isPcb) item.layer = layer;
 }

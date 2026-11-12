@@ -499,6 +499,11 @@ export function render(doc, ctx, view, opts) {
       if (t === "text") { drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG); curStroke = curFill = null; curWidth = -1; curCap = "round"; continue; }
       if (t === "image") {
         const e = g.entry;
+        // PCB_PAINTER: translate to the centre, rotate by -orientation, the opacity as the alpha
+        const turned = !!g.rot, faded = g.opacity != null && g.opacity < 1;
+        if (turned || faded) ctx.save();
+        if (faded) ctx.globalAlpha *= g.opacity;
+        if (turned) { const cx = g.x + g.w / 2, cy = g.y + g.h / 2; ctx.translate(cx, cy); ctx.rotate(-g.rot * Math.PI / 180); ctx.translate(-cx, -cy); }
         if (e && e.loaded && !e.failed && e.img && typeof ctx.drawImage === "function") {
           // the decoded pixel size wins over the header estimate, keeping the centre
           const w = e.w > 0 ? e.w * g.pxMm * g.scale : g.w, h = e.h > 0 ? e.h * g.pxMm * g.scale : g.h;
@@ -510,6 +515,7 @@ export function render(doc, ctx, view, opts) {
           ctx.beginPath(); ctx.moveTo(g.x, g.y); ctx.lineTo(g.x + g.w, g.y + g.h); ctx.moveTo(g.x + g.w, g.y); ctx.lineTo(g.x, g.y + g.h); ctx.stroke();
           ctx.setLineDash([]);
         }
+        if (turned || faded) ctx.restore();
         continue;
       }
       // LAYER_VIA_HOLEWALLS under the hole; PCB_PAINTER underpaints it filled in the outline mode too
@@ -772,6 +778,7 @@ export function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
         ctx.fillRect(x0 - extra / 2, y0 - extra / 4, w + extra, h + extra / 2); ctx.restore();
         continue;
       }
+      if (g.t === "image" && g.rot) { const cx = g.x + g.w / 2, cy = g.y + g.h / 2; ctx.save(); ctx.translate(cx, cy); ctx.rotate(-g.rot * Math.PI / 180); ctx.lineWidth = minW + extra; ctx.strokeRect(-g.w / 2, -g.h / 2, g.w, g.h); ctx.restore(); continue; }
       if (g.t === "rect" || g.t === "image") { ctx.lineWidth = Math.max(g.wd || 0, minW) + extra; ctx.strokeRect(g.x, g.y, g.w, g.h); continue; }
       if (g.t === "poly" && (!g.pts || g.pts.length < 2)) continue;
       ctx.lineWidth = Math.max(g.w || 0, minW) + extra;

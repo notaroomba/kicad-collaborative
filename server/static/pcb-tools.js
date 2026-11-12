@@ -4624,18 +4624,22 @@ function dimTrack(d, p) {
     d.height = d.orientation === "v" ? p[0] - s[0] : p[1] - s[1];
   }
 }
-// Reference images: the picker (a file dialog; tests swap it) hands back { base64, name }; the image then rides the
-// cursor and a click places its centre, as PlaceReferenceImage does.
+// Reference images (DRAWING_TOOL::PlaceReferenceImage): the picker (a file dialog; tests swap it) hands back
+// { base64, name }; the image then rides the cursor and a click places its centre ("Place Image", selected).  A file
+// that is not an image: KiCad's "Could not load image from '…'." and the tool waits for the next click.
 function loadImage(ctx, res) {
-  if (!res || !res.base64) { ctx.toast("No image chosen"); return; }
-  const info = imageInfo(base64Bytes(res.base64)); if (!info) { ctx.toast("Only PNG and JPEG images can be placed"); return; }
-  const [w, h] = imageMm(info); S.image = { base64: res.base64, info, w, h, name: res.name || "" };
-  ctx.toast(`${res.name || "Image"} ${info.w} × ${info.h} px at ${info.ppi} ppi — click to place its centre`, 3000); ctx.requestRender();
+  if (!res || !res.base64) return;                                   // the file dialog was cancelled
+  const info = imageInfo(base64Bytes(res.base64));
+  if (!info) { openForm({ title: "Message", width: 420, fields: [{ type: "note", value: `Could not load image from '${res.name || ""}'.` }] }); return; }
+  const [w, h] = imageMm(info); S.image = { base64: res.base64, info, w, h, name: res.name || "", el: null };
+  if (typeof Image !== "undefined") { const el = new Image(); el.onload = () => { if (lastCtx) lastCtx.requestRender(); }; el.src = `data:image/${info.type === "jpeg" ? "jpeg" : "png"};base64,${res.base64}`; S.image.el = el; }
+  ctx.requestRender();
 }
 function openImagePicker() { pickerImpl((res) => { if (lastCtx && S.modTool === "image") loadImage(lastCtx, res); }); }
 function placeImage(ctx, hv) {
   const img = S.image; S.image = null;
-  ctx.commit([addedChange(ctx.doc, imageNode(hv.x, hv.y, img.base64, S.gfxLayer))], "image"); ctx.requestRender();
+  const c = addedChange(ctx.doc, imageNode(hv.x, hv.y, img.base64, S.gfxLayer));
+  ctx.commit([c], "Place Image"); applySelection(ctx, [c.id]); ctx.requestRender();
 }
 /** The inline prompt: done(text) on Enter ("" allowed), done(null) on Escape or blur. */
 function askText(ctx, title, initial, done, options) { promptImpl(title, initial || "", S.client, (v) => { S.text = null; done(v); }, options || null); }
@@ -4890,7 +4894,12 @@ function rotateNode(node, cx, cy, deg) {
     const a = pt(node, "start"), b = pt(node, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); K.kid(node, "start").splice(1, 2, r6(x0), r6(y0)); K.kid(node, "end").splice(1, 2, r6(x1), r6(y1)); }
     if (k === "gr_text_box") { const an = K.kid(node, "angle"); const a1 = norm360((an ? K.num(an[1]) : 0) + deg); if (an) an[1] = r6(a1); else if (a1 !== 0) node.splice(node.indexOf(K.kid(node, "layer")), 0, ["angle", r6(a1)]); }
   }
-  if (k === "gr_text" || k === "image") setAngleKid(node, angleKid(node) + deg);
+  if (k === "gr_text") setAngleKid(node, angleKid(node) + deg);
+  if (k === "image") {   // REFERENCE_IMAGE::Rotate: the centre turns about the point, the orientation is its own (rotate) after the layer
+    const r = K.kid(node, "rotate"), a = norm360((r ? K.num(r[1]) : 0) + deg);
+    if (r) { if (a) r[1] = r6(a); else node.splice(node.indexOf(r), 1); }
+    else if (a) { const ly = K.kid(node, "layer"); node.splice(ly ? node.indexOf(ly) + 1 : 2, 0, ["rotate", r6(a)]); }
+  }
   if (k === "dimension") {
     const gt = K.kid(node, "gr_text"); if (gt) setAngleKid(gt, angleKid(gt) + deg);
     const o = K.kid(node, "orientation"); if (o && norm360(deg) % 180 === 90) o[1] = K.num(o[1]) ? 0 : 1;
@@ -7683,10 +7692,15 @@ function drawOverlay(c, view, ctx) {
   }
   // the picked reference image, centred on the cursor
   if (S.image && S.hover && S.modTool === "image") {
-    const img = S.image; c.globalAlpha = 0.85; c.strokeStyle = color(S.gfxLayer); c.lineWidth = 1.5 * px; c.setLineDash([4 * px, 3 * px]);
+    const img = S.image;
+    // the image itself, as the preview of the item being placed; a frame until it has decoded
+    if (img.el && img.el.complete && img.el.naturalWidth) { c.drawImage(img.el, S.hover.x - img.w / 2, S.hover.y - img.h / 2, img.w, img.h); }
+    else {
+    c.globalAlpha = 0.85; c.strokeStyle = color(S.gfxLayer); c.lineWidth = 1.5 * px; c.setLineDash([4 * px, 3 * px]);
     c.strokeRect(S.hover.x - img.w / 2, S.hover.y - img.h / 2, img.w, img.h); c.setLineDash([]);
     line(c, [S.hover.x - img.w / 2, S.hover.y - img.h / 2], [S.hover.x + img.w / 2, S.hover.y + img.h / 2]);
     line(c, [S.hover.x + img.w / 2, S.hover.y - img.h / 2], [S.hover.x - img.w / 2, S.hover.y + img.h / 2]);
+    }
   }
   drawStatusPopup(c, px * (view.dpr || 1));
   // delete tool: what the click would remove
@@ -7746,7 +7760,7 @@ const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V vi
   garc: "Arc — click the points the drawing mode asks for; / switches the posture, Alt+/ the mode, Backspace takes back a point", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
   gcurve: "Bezier — click the start, the first control point, the second control point, then the end",
   gtextbox: "Text box — click two corners", table: "Table — click the top-left corner, then the size",
-  image: "Image — choose a PNG or JPEG, then click where its centre goes",
+  image: "Image — choose a file, then click where its centre goes",
   zone: "Zone — click the corners; click the first corner or press Enter to close, then pick the net",
   rulearea: "Rule area — click the corners on F.Cu and B.Cu; click the first corner or press Enter to close",
   dimaligned: "Aligned dimension — click the two points, then how far out the crossbar goes",

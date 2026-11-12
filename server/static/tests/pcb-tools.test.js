@@ -699,7 +699,8 @@ test("module: a reference image comes from the picker, rides the cursor and land
   assert.ok(near(img.w, 5.08) && near(img.h, 2.54), "1000 mils per ppi, so 100 ppi is 0.254 mm a pixel");
   pcb.onPointerMove(ev(), [50, 50], ctx);
   assert.equal(pcb.onPointerDown(ev(), [50, 50], ctx), true);
-  const c = log.commits.at(-1); assert.equal(c.label, "image"); assert.equal(c.changes[0].typeName, "PCB_REFERENCE_IMAGE"); assert.equal(P.state.image, null);
+  const c = log.commits.at(-1); assert.equal(c.label, "Place Image"); assert.equal(c.changes[0].typeName, "PCB_REFERENCE_IMAGE"); assert.equal(P.state.image, null);
+  assert.ok(P.state.sel.has(c.changes[0].id), "PlaceReferenceImage selects the placed image");
   const node = lastNode(log, "image");
   assert.deepEqual(node.slice(0, 3), ["image", ["at", 50, 50], ["layer", "F.SilkS"]]);
   const data = node[3]; assert.equal(data[0], "data"); assert.equal(node[4][0], "uuid"); assert.equal(node.length, 5, "no (scale) at 1");
@@ -713,7 +714,14 @@ test("module: a reference image comes from the picker, rides the cursor and land
   assert.equal(P.imageInfo(P.base64Bytes(b64)).ppi, 100);
   ctx.setTool("select"); assert.equal(P.state.image, null, "leaving the tool drops the image");
   pcb.setImagePicker((done) => done({ base64: Buffer.from("GIF89a").toString("base64"), name: "x.gif" }));
-  ctx.setTool("image"); assert.equal(P.state.image, null); assert.ok(log.toasts.at(-1).includes("PNG"));
+  let msg = null; pcb.setForm((spec) => { msg = spec; return true; });
+  ctx.setTool("image"); assert.equal(P.state.image, null);
+  assert.equal(msg && msg.fields[0].value, "Could not load image from 'x.gif'.", "KiCad's message in a dialog, not a toast");
+  pcb.setForm(null);
+  // REFERENCE_IMAGE::Rotate: the centre turns about the point, the orientation is a (rotate) after the layer
+  const r = P.rotateNode(["image", ["at", 10, 0], ["layer", "F.SilkS"], ["data", "x"]], 0, 0, 90);
+  assert.deepEqual(r.slice(0, 4), ["image", ["at", 0, -10], ["layer", "F.SilkS"], ["rotate", 90]]);
+  P.rotateNode(r, 0, 0, -90); assert.equal(K.kid(r, "rotate"), null, "back at 0: no (rotate) written");
 });
 
 test("module: zone (Alt+Z) closes on the first corner, asks for the net and writes ZONE_SETTINGS' defaults unfilled", () => {
@@ -2078,6 +2086,36 @@ test("Text Box Properties: values round-trip; OK writes size, pen, flags, justif
 });
 
 // (after the module tests: loading a dialog bundle installs the editor state the board module then sees)
+test("Reference Image Properties: sizes from the scale, CheckValues' limits and the writer's order", () => {
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "refimage.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; globalThis.window = globalThis.window || globalThis; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require);
+  const R = mod.exports;
+  const node = K.parse('(image (at 50 40) (layer "F.SilkS") (data "QUJD") (uuid "11111111-2222-3333-4444-555555555555"))');
+  const v = R.refImageValues(node, { w: 200, h: 100, ppi: 100, mime: "image/png" });
+  assert.deepEqual([v.x, v.y, v.rotation, v.opacity, v.layer, v.locked, v.scale, v.ppi], [50, 40, 0, 1, "F.SilkS", false, 1, 100]);
+  assert.deepEqual(R.refImageSize(v, 1), [50.8, 25.4], "25.4 mm / ppi a pixel");
+  assert.deepEqual(R.refImageSize(v, 0.5), [25.4, 12.7]);
+  assert.deepEqual(R.checkImageScale(v, -1), { error: "Scale must be a positive number." });
+  assert.deepEqual(R.checkImageScale(v, 0.1), { error: "This scale results in an image which is too small (0.85 mm or 33.3 mil)." });
+  assert.deepEqual(R.checkImageScale(v, 31), { confirm: "This scale results in an image which is very large (524.9 mm or 20.67 in). Are you sure?" });
+  assert.deepEqual(R.checkImageScale(v, 1), {});
+  assert.equal(K.serialize(R.applyRefImage(node, v)), K.serialize(node), "unchanged values write the same item");
+  const n = R.applyRefImage(node, { ...v, x: 10, y: 20, rotation: 30, scale: 0.5, opacity: 0.4, layer: "F.Fab", locked: true });
+  assert.equal(K.serialize(n), '(image (at 10 20) (layer "F.Fab") (rotate 30) (scale 0.5) (opacity 0.4) (locked yes) (data "QUJD") (uuid "11111111-2222-3333-4444-555555555555"))');
+  assert.equal(K.serialize(R.applyRefImage(n, { ...v, opacity: 3 })), K.serialize(node), "SetOpacity clamps to 0..1; the defaults drop their tokens");
+  // PANEL_IMAGE_EDITOR's pixel operations
+  const px = [255, 0, 0, 255, 10, 20, 30, 128]; R.invertPixels(px); assert.deepEqual(px, [0, 255, 255, 255, 245, 235, 225, 128]);
+  const gpx = [255, 0, 0, 200]; R.greyscalePixels(gpx); assert.deepEqual(gpx, [76, 76, 76, 200]);
+  const apx = [255, 255, 255, 255, 0, 0, 0, 255, 255, 128, 128, 255]; R.colourToAlpha(apx, [255, 255, 255]);
+  assert.deepEqual([apx[3], apx[7], apx[11]], [0, 255, 127], "white goes, black stays, half red half there");
+  assert.deepEqual(apx.slice(8, 11), [255, 0, 0], "the background's contribution taken out");
+  // the re-encoded PNG carries the resolution
+  const png = makePng(4, 4, 1000); const withPpi = Buffer.from(R.pngWithPpi(new Uint8Array(png), 254));
+  assert.equal(P.imageInfo(new Uint8Array(withPpi)).ppi, 254);
+  assert.equal(withPpi.length, png.length, "the old pHYs replaced, not doubled");
+});
+
 test("Table Properties: cells read and write as the table reads (reversed on the back); strokes as DIALOG_TABLE_PROPERTIES writes them", () => {
   const esbuild = require("esbuild");
   const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "table.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });

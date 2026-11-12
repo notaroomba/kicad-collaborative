@@ -9,6 +9,7 @@ import { box, checkField, form, grid, h, lenField, notebook, numField, openDialo
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
 import { tableDialog } from "./table";
+import { refImageDialog } from "./refimage";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -530,6 +531,7 @@ export function pcbItemDialog(ctx: ToolCtx, item: KItem): boolean {
     case "gr_text": return textDialog(ctx, item);
     case "gr_text_box": return textBoxDialog(ctx, item);
     case "table": return tableDialog(ctx, item);
+    case "image": return (ctx.doc as KDoc).type === "pcb" ? refImageDialog(ctx, item) : false;
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return shapeDialog(ctx, item);
     case "footprint": return footprintDialog(ctx, item);
     case "dimension": return dimensionDialog(ctx, item);
