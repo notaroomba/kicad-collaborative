@@ -829,3 +829,51 @@ export function setMetaField(sym: Node, name: string, value: string): void {
   let last = -1; for (let j = 1; j < sym.length; j++) if (isList(sym[j]) && (sym[j] as Node)[0] === "property") last = j;
   sym.splice(last + 1, 0, node(`(property ${q(name)} ${q(value)} (at 0 0 0) (show_name no) (do_not_autoplace no) (hide yes) (effects (font (size 1.27 1.27))))`));
 }
+
+// ---------------------------------------------------------------- SYMBOL_IMPORT_MANAGER (eeschema/symbol_import_manager.cpp)
+export interface ImportInfo { name: string; parent: string; power: boolean; exists: boolean; checked: boolean; auto: boolean; derived: boolean }
+/** The import selection model behind DIALOG_IMPORT_SYMBOL_SELECT: picking a derived symbol pulls in its ancestors. */
+export class SymbolImportManager {
+  /** std::map order: names sorted by code point. */
+  readonly infos = new Map<string, ImportInfo>();
+  private parents = new Map<string, string>();
+  private derivatives = new Map<string, string[]>();
+  constructor(lib: SymLib, exists: (name: string) => boolean) {
+    const names = [...lib.symbols.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    for (const n of names) { const s = lib.symbols.get(n)!; const p = parentNameOf(s) || ""; this.infos.set(n, { name: n, parent: p, power: !!kid(s, "power"), exists: exists(n), checked: false, auto: false, derived: !!p }); }
+    for (const [n, i] of this.infos) if (i.parent) { this.parents.set(n, i.parent); const d = this.derivatives.get(i.parent) || []; d.push(n); this.derivatives.set(i.parent, d); }
+  }
+  names(): string[] { return [...this.infos.keys()]; }
+  ancestors(name: string): Set<string> {
+    const out = new Set<string>(); let cur = name;
+    for (;;) { const p = this.parents.get(cur); if (!p || !this.infos.has(p) || out.has(p)) break; out.add(p); cur = p; }
+    return out;
+  }
+  descendants(name: string): Set<string> {
+    const out = new Set<string>(); const todo = [name];
+    while (todo.length) { const c = todo.pop()!; for (const ch of this.derivatives.get(c) || []) if (!out.has(ch)) { out.add(ch); todo.push(ch); } }
+    return out;
+  }
+  setSelected(name: string, on: boolean): void {
+    const i = this.infos.get(name); if (!i) return;
+    if (on) { i.checked = true; i.auto = false; for (const a of this.ancestors(name)) { const ai = this.infos.get(a)!; if (!ai.checked && !ai.auto) ai.auto = true; } }
+    else { i.checked = false; i.auto = false; this.recalc(); }
+  }
+  deselectWithDescendants(name: string): void {
+    for (const n of [name, ...this.descendants(name)]) { const i = this.infos.get(n); if (i) { i.checked = false; i.auto = false; } }
+    this.recalc();
+  }
+  selectAll(filter?: (n: string) => boolean): void { for (const i of this.infos.values()) if (!filter || filter(i.name)) { i.checked = true; i.auto = false; } this.recalc(); }
+  deselectAll(filter?: (n: string) => boolean): void { for (const i of this.infos.values()) if (!filter || filter(i.name)) { i.checked = false; i.auto = false; } this.recalc(); }
+  toImport(): string[] { return [...this.infos.values()].filter((i) => i.checked || i.auto).map((i) => i.name); }
+  manualCount(): number { return [...this.infos.values()].filter((i) => i.checked).length; }
+  autoCount(): number { return [...this.infos.values()].filter((i) => i.auto && !i.checked).length; }
+  conflicts(): string[] { return [...this.infos.values()].filter((i) => (i.checked || i.auto) && i.exists).map((i) => i.name); }
+  static matches(name: string, filter: string): boolean { return !filter || name.toLowerCase().includes(filter.toLowerCase()); }
+  /** DIALOG_IMPORT_SYMBOL_SELECT::updateStatusLine */
+  status(): string { const a = this.autoCount(), m = this.manualCount(); return a > 0 ? `${m} symbols selected, ${a} parents auto-included` : `${m} symbols selected`; }
+  private recalc(): void {
+    for (const i of this.infos.values()) i.auto = false;
+    for (const i of this.infos.values()) if (i.checked) for (const a of this.ancestors(i.name)) { const ai = this.infos.get(a)!; if (!ai.checked) ai.auto = true; }
+  }
+}

@@ -11,6 +11,7 @@ import { UNITS, unitName } from "../units";
 import { hotkeyRows } from "../menuspec";
 import type { SymbolEditor, Lib } from "./editor";
 import { nodeOf } from "./editor";
+import { icon } from "./ui";
 import { libDocFor } from "./libdoc";
 import type { Units } from "../store";
 
@@ -485,16 +486,110 @@ export async function editableCopy(se: SymbolEditor): Promise<void> {
 function pickFile(accept: string): Promise<File | null> {
   return new Promise((resolve) => { const i = h("input", { type: "file", accept, style: "display:none" }) as HTMLInputElement; i.addEventListener("change", () => { resolve(i.files && i.files[0] ? i.files[0] : null); i.remove(); }); document.body.append(i); i.click(); });
 }
+/** SYMBOL_EDIT_FRAME::ImportSymbol: pick a library file, choose its symbols (DIALOG_IMPORT_SYMBOL_SELECT), resolve conflicts. */
 export async function importSymbol(se: SymbolEditor, lib: Lib): Promise<void> {
   if (!lib.doc || !lib.doc.canEdit) return;
   const f = await pickFile(".kicad_sym"); if (!f) return;
-  let src: M.SymLib; try { src = M.parseLibrary(await f.text()); } catch (e) { await messageBox(`Cannot import symbol library '${f.name}'.`); return; }
-  const names = [...src.symbols.keys()]; if (!names.length) { await messageBox(`Symbol library file '${f.name}' is empty.`); return; }
-  let pick = names[0];
-  if (names.length > 1) { const p = await promptText("Import Symbol", `Symbol to import (${names.slice(0, 8).join(", ")}${names.length > 8 ? ", …" : ""}):`, names[0]); if (p === null) return; pick = p.trim(); if (!src.symbols.has(pick)) { await messageBox(`Symbol '${pick}' not found in library '${f.name}'.`); return; } }
-  const s = M.flatten(src, src.symbols.get(pick)!);
-  if (lib.doc.lib.symbols.has(pick) && !(await confirmBox("Import Symbol", `Symbol '${pick}' already exists in library '${lib.nick}'.`, "Overwrite"))) return;
-  await lib.doc.commit([[pick, M.text(s)]]).catch(() => 0); lib.rows = null; await se.loadSymbol(lib.nick, pick);
+  let src: M.SymLib; try { src = M.parseLibrary(await f.text()); } catch (e) { await messageBox(`Cannot read symbol library '${f.name}'.`); return; }
+  if (!src.symbols.size) { await messageBox(`Symbol library '${f.name}' is empty.`); return; }
+  const dest = lib.doc.lib;
+  const mgr = new M.SymbolImportManager(src, (n) => dest.symbols.has(n));
+  const state = { filter: "", selected: "" };
+  for (;;) {
+    if (!(await importSelectDialog(f.name, src, mgr, state))) return;
+    const res = await importConflictsDialog(mgr.conflicts());
+    if (res) { await doImport(se, lib, src, mgr.toImport(), res); return; }
+  }
+}
+async function doImport(se: SymbolEditor, lib: Lib, src: M.SymLib, names: string[], skip: Set<string>): Promise<void> {
+  const out: [string, string][] = []; let skipped = 0;
+  for (const n of names) { if (skip.has(n)) { skipped++; continue; } const s = M.clone(src.symbols.get(n)!); out.push([n, M.text(s)]); }   // LoadSymbol + UpdateSymbol: derived symbols stay derived
+  if (!out.length || !lib.doc) return;
+  await lib.doc.commit(out).catch(() => 0); lib.rows = null;
+  await se.loadSymbol(lib.nick, out[0][0]);
+  if (skipped > 0) await messageBox(`Imported ${out.length} symbol(s), skipped ${skipped}.`, "Information");
+}
+/** DIALOG_IMPORT_SYMBOL_SELECT: search, a checked list (derived symbols in italics, power and existing ones marked), preview with a unit choice. */
+function importSelectDialog(file: string, src: M.SymLib, mgr: M.SymbolImportManager, state: { filter: string; selected: string }): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false; const fin = (v: boolean) => { if (!done) { done = true; resolve(v); } };
+    const search = textInput(state.filter, undefined, { id: "imp-search", placeholder: "Search", style: "width:100%" });
+    const list = h("div", { id: "imp-list", class: "kd-list", role: "listbox", style: "flex:1;min-height:260px;max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:3px;background:var(--field)" });
+    const unit = select([], "", undefined, { id: "imp-unit", disabled: true, style: "min-width:100px" });
+    const cv = h("canvas", { id: "imp-preview", style: "width:100%;height:300px;display:block;border:1px solid var(--line);border-radius:3px" }) as HTMLCanvasElement;
+    const status = h("div", { id: "imp-status", style: "margin-top:8px" });
+    let okBtn: HTMLButtonElement | null = null;
+    const matches = (n: string) => M.SymbolImportManager.matches(n, state.filter);
+    const refreshButtons = () => { status.textContent = mgr.status(); if (okBtn) okBtn.disabled = mgr.toImport().length === 0; };
+    const preview = () => {
+      const dpr = window.devicePixelRatio || 1; const W = cv.clientWidth || 360, H = cv.clientHeight || 300; cv.width = W * dpr; cv.height = H * dpr;
+      const ctx = cv.getContext("2d"); if (!ctx) return; ctx.fillStyle = K().SCH.bg; ctx.fillRect(0, 0, cv.width, cv.height);
+      const s0 = state.selected ? src.symbols.get(state.selected) : null; if (!s0) return;
+      const flat = M.isDerived(s0) ? M.flatten(src, s0) : s0;
+      const doc = K().parseLibSymbol(flat as unknown as SNode, { unit: Number(unit.value) || 1, showHiddenPins: false, showHiddenFields: false, showElectricalTypes: false });
+      const bb = doc.bbox; if (!bb) return;
+      const sc = Math.min(W / ((bb[2] - bb[0]) * 1.15 || 1), H / ((bb[3] - bb[1]) * 1.15 || 1), 60);
+      K().render(doc, ctx, { ppm: 1, zoom: sc, panX: W / 2 - (bb[0] + bb[2]) / 2 * sc, panY: H / 2 - (bb[1] + bb[3]) / 2 * sc, x0: 0, y0: 0, dpr }, { frame: false } as KRenderOpts);
+    };
+    const updatePreview = () => {
+      unit.innerHTML = ""; const s0 = state.selected ? src.symbols.get(state.selected) : null;
+      const root = s0 ? M.rootOf(src, s0) : null; const n = root ? Math.max(M.unitCount(root), 1) : 1;
+      unit.disabled = !s0 || n < 2;
+      if (root && n > 1) { const names = M.unitNames(root); for (let u = 1; u <= n; u++) unit.append(h("option", { value: String(u) }, names.get(u) || `Unit ${M.unitLetter(u)}`)); unit.value = "1"; }
+      preview();
+    };
+    const renderList = () => {
+      list.innerHTML = "";
+      for (const n of mgr.names()) {
+        if (!matches(n)) continue; const i = mgr.infos.get(n)!;
+        const cb = h("input", { type: "checkbox", "data-name": n, style: "width:auto;margin:0 6px 0 0" }) as HTMLInputElement; cb.checked = i.checked || i.auto;
+        cb.addEventListener("click", (ev) => { ev.stopPropagation(); if (cb.checked) mgr.setSelected(n, true); else mgr.deselectWithDescendants(n); syncChecks(); refreshButtons(); });
+        const ic = i.power ? icon("add_power") : i.exists ? icon("small_warning") : h("span", { style: "display:inline-block;width:16px" });
+        if (i.exists && !i.power) (ic as Element).setAttribute("aria-label", "exists in the destination library");
+        const row = h("div", { class: "imp-row" + (n === state.selected ? " sel" : ""), role: "option", "data-name": n, style: `display:flex;align-items:center;gap:4px;padding:2px 6px;cursor:default;${n === state.selected ? "background:var(--sel);" : ""}` },
+          cb, ic, h("span", { style: i.derived ? "font-style:italic" : "" }, n));
+        row.addEventListener("click", () => { state.selected = n; renderList(); updatePreview(); });
+        list.append(row);
+      }
+    };
+    const syncChecks = () => { for (const cb of list.querySelectorAll<HTMLInputElement>("input[type=checkbox]")) { const i = mgr.infos.get(cb.dataset.name!)!; cb.checked = i.checked || i.auto; } };
+    search.addEventListener("input", () => { state.filter = search.value.toLowerCase(); renderList(); });
+    unit.addEventListener("change", preview);
+    KD().open({
+      title: `Import Symbols from ${file}`, width: 820, cls: "kd-wide", okLabel: "Import",
+      build(body, api) {
+        const allB = h("button", { class: "btn sm", id: "imp-all", onclick: () => { mgr.selectAll(matches); renderList(); refreshButtons(); } }, "Select All");
+        const noneB = h("button", { class: "btn sm", id: "imp-none", onclick: () => { mgr.deselectAll(matches); renderList(); refreshButtons(); } }, "Select None");
+        const left = h("div", { style: "flex:2;display:flex;flex-direction:column;gap:5px;min-width:0" }, search, list, h("div", { style: "display:flex;gap:6px;margin-top:5px" }, allB, noneB));
+        const right = h("div", { style: "flex:3;display:flex;flex-direction:column;gap:5px;min-width:0" }, h("div", { style: "display:flex;align-items:center;gap:5px" }, h("span", null, "Unit:"), unit), cv);
+        body.append(h("div", { style: "display:flex;gap:10px" }, left, right), status);
+        okBtn = api.foot.querySelector<HTMLButtonElement>(".btn.primary");
+        renderList(); refreshButtons();
+        requestAnimationFrame(() => { updatePreview(); search.focus(); });
+      },
+      ok() { if (!mgr.toImport().length) return false; fin(true); return true; },
+      cancel() { fin(false); },
+    });
+  });
+}
+/** DIALOG_IMPORT_SYMBOL_SELECT::resolveConflicts: Overwrite (default) or Skip for each symbol the library already has; null on Cancel. */
+function importConflictsDialog(conflicts: string[]): Promise<Set<string> | null> {
+  if (!conflicts.length) return Promise.resolve(new Set());
+  return new Promise((resolve) => {
+    const rows = conflicts.map((name) => ({ name, action: "Overwrite" }));
+    let grid: { refresh(): void } | null = null; let done = false;
+    KD().open({
+      title: "Resolve Import Conflicts", width: 500, okLabel: "Import",
+      build(body) {
+        body.append(h("div", { style: "max-width:450px;margin-bottom:8px" }, "The following symbols already exist in the destination library. Choose how to handle each conflict:"));
+        grid = KD().grid(body, [{ key: "name", label: "Symbol", type: "ro", width: 200 }, { key: "action", label: "Action", type: "choice", options: ["Overwrite", "Skip"], width: 100 }], rows, { height: 220 });
+        const set = (a: string) => { for (const r of rows) r.action = a; grid && grid.refresh(); };
+        body.append(h("div", { style: "display:flex;gap:5px;margin-top:8px" }, h("button", { class: "btn sm", id: "imp-skip-all", onclick: () => set("Skip") }, "Skip All"), h("button", { class: "btn sm", id: "imp-over-all", onclick: () => set("Overwrite") }, "Overwrite All")));
+      },
+      ok() { done = true; resolve(new Set(rows.filter((r) => r.action === "Skip").map((r) => r.name))); return true; },
+      cancel() { if (!done) resolve(null); },
+    });
+  });
 }
 export function exportSymbol(se: SymbolEditor): void {
   const t = se.tab; const sym = se.symbol(); if (!t || !sym) return;
@@ -537,7 +632,7 @@ export function pinTable(se: SymbolEditor): void {
   let grid: { refresh(): void } | null = null;
   const len = (k: keyof M.PinRow) => ({ key: k as string, label: "", width: 76, format: (v: unknown) => toUser(Number(v)) });
   KD().open({
-    title: `Pin Table`, width: 1100, readOnly: ro,
+    title: `Pin Table`, width: 1100, cls: "kd-wide", readOnly: ro,
     build(body) {
       grid = KD().grid(body, [
         { key: "number", label: "Number", width: 70 }, { key: "name", label: "Name", width: 120 },

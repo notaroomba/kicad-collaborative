@@ -54,6 +54,22 @@ await test("a file's ten-digit angles and coordinates are written back as read",
   assert.strictEqual(M.text(M.node(src)), src);
   const n = M.node("(xy 0 0)"); n[1] = 0.1 + 0.2; assert.strictEqual(M.text(n), "(xy 0.3 0)", "arithmetic noise still rounds");
 });
+await test("SYMBOL_IMPORT_MANAGER on 4xxx.kicad_sym: ancestors auto-included, descendants dropped with their parent", () => {
+  const fs = require("fs"); const f = path.join(__dirname, "..", "..", "..", "qa", "data", "eeschema", "libs", "4xxx.kicad_sym");
+  const lib = M.parseLibrary(fs.readFileSync(f, "utf8"));
+  const m = new M.SymbolImportManager(lib, (n) => n === "4001");
+  assert.strictEqual(m.names().length, 51);
+  assert.deepStrictEqual([...m.ancestors("4066")], ["4016"]); assert.deepStrictEqual([...m.descendants("4538")].sort(), ["14528", "14538", "4528"]);
+  m.setSelected("4066", true);
+  assert.ok(m.infos.get("4066").checked && !m.infos.get("4016").checked && m.infos.get("4016").auto);
+  assert.deepStrictEqual(m.toImport(), ["4016", "4066"]); assert.strictEqual(m.status(), "1 symbols selected, 1 parents auto-included");
+  m.setSelected("4538", true); assert.ok(!m.infos.get("14528").checked && !m.infos.get("14528").auto, "a parent does not pull its children");
+  m.setSelected("14528", true); m.setSelected("4528", true); m.deselectWithDescendants("4538");
+  assert.deepStrictEqual(m.toImport(), ["4016", "4066"]);
+  m.setSelected("4001", true); assert.deepStrictEqual(m.conflicts(), ["4001"]);
+  m.deselectAll(); m.selectAll((n) => M.SymbolImportManager.matches(n, "453")); assert.deepStrictEqual(m.toImport(), ["14538", "4538"]); assert.strictEqual(m.status(), "2 symbols selected");
+  m.selectAll(); assert.strictEqual(m.toImport().length, 51); assert.strictEqual(m.autoCount(), 0);
+});
 
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
