@@ -76,7 +76,9 @@ export function placeTextAt(ctx: PcbCtx, at: Pt) {
   dlg(ctx, textNode("", at[0], at[1], S.gfxLayer), (n: SNode | null) => {
     if (!n || !/[^\s]/.test(K.str(n[1]).replace(/\\n/g, ""))) return;   // NoPrintableChars
     const p = K.atOf(n); const moved = Math.abs(p[0] - at[0]) > 1e-9 || Math.abs(p[1] - at[1]) > 1e-9;
-    const c = addedChange(ctx.doc, n); ctx.commit([c], "Draw Text"); applySelection(ctx, [c.id]);
+    // DRAWING_TOOL::PlaceText: a text left where it was clicked hangs on the cursor and is committed ("Draw Text") by
+    // the click that places it; Escape deletes it with nothing to undo (the paste's tentative commit)
+    const c = addedChange(ctx.doc, n); ctx.commit([c], "Draw Text", moved ? undefined : { tentative: true }); applySelection(ctx, [c.id]);
     if (!moved) beginCarryMove(ctx, { placing: [c.id], origin: at });
     ctx.requestRender();
   });

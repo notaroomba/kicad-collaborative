@@ -16,6 +16,7 @@ import { enterSheet, rootSchematic, setGridPitch } from "./doc";
 import { ARC_EDIT_MODE_MENU, evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
 import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
+import { nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
 import { isSch, pxPerMm, requestRender } from "./view";
 
@@ -258,6 +259,9 @@ function describe(it: KItem | string): string {
 function candidatesAt(mm: Mm): string[] {
   const hits = hitsAt(mm); const ids = hits.map((it) => it.id);
   if (isSch() || !E.kdoc) return ids;
+  // FOOTPRINT::HitTest: a footprint is hit inside its bounding hull, not only on its drawn shapes (as a left click's pickAt)
+  const fp = nearestFootprint(mm[0], mm[1], 5 / Math.max(1, E.zoom * 0.6)) as { id: string } | null;
+  if (fp && !ids.includes(fp.id)) ids.push(fp.id);
   let pad: { item?: KItem; index?: number } | null = null;
   try { pad = (KiCadCanvas.padAt as (d: KDoc, x: number, y: number) => { item?: KItem; index?: number } | null)(E.kdoc as KDoc, mm[0], mm[1]); } catch { pad = null; }
   const f = store.get().filter as Record<string, boolean>;
