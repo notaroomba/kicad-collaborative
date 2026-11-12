@@ -145,7 +145,7 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
   if (isTuneTool(S.modTool)) drawTune(c, ctx, px);
   // drawing preview
   if (S.draw) {
-    const d = S.draw; const layer = d.layer || (d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
+    const d = S.draw; const layer = d.layer || (d.shape === "zone" || d.shape === "thievingzone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
     c.globalAlpha = 0.85; c.strokeStyle = color(layer); c.lineWidth = Math.max(drawWidth(layer), 1.5 * px);
     const box = (): [number, number, number, number] => [Math.min(d.start[0], d.cur[0]), Math.min(d.start[1], d.cur[1]), Math.abs(d.cur[0] - d.start[0]), Math.abs(d.cur[1] - d.start[1])];
     if (d.shape === "gline") line(c, d.start, d.cur);

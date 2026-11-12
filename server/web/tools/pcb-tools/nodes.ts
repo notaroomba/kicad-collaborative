@@ -88,6 +88,58 @@ export function zonePriority(doc: BoardDoc) {
   }
   let p = 0; while (used.has(p)) p++; return p;
 }
+// ---------------------------------------------------------------- zone fill mode (ZONE::SetFillMode) and THIEVING_SETTINGS
+export type ZoneFillMode = "solid" | "hatch" | "thieving";
+export interface ThievingSettings { type: "dots" | "squares" | "hatch"; size: number; gap: number; width: number; stagger: boolean; orientation: number }
+/** ZONE_SETTINGS' thieving defaults (zone_settings.cpp:59-64): dots, 0.5 mm, 1.0 mm gap, max(min thickness, 0.3) lines, no stagger, 0°. */
+export const thievingDefaults = (minThickness: number): ThievingSettings => ({ type: "dots", size: 0.5, gap: 1, width: Math.max(minThickness, 0.3), stagger: false, orientation: 0 });
+export const zoneFillMode = (node: SNode): ZoneFillMode => { const f = K.kid(node, "fill"), m = f && K.kid(f, "mode"); const v = m ? K.str(m[1]) : ""; return v === "hatch" || v === "thieving" ? v : "solid"; };
+/** The zone's thieving settings: the file's (thieving …) over the defaults. */
+export function thievingOf(node: SNode): ThievingSettings {
+  const mt = K.kid(node, "min_thickness"); const d = thievingDefaults(mt ? K.num(mt[1]) : 0.25);
+  const f = K.kid(node, "fill"), t = f && K.kid(f, "thieving"); if (!t) return d;
+  const n = (k: string, dv: number) => { const c = K.kid(t, k); return c ? K.num(c[1]) : dv; };
+  const ty = K.kid(t, "type"), st = K.kid(t, "stagger"); const tv = ty ? K.str(ty[1]) : "dots";
+  return { type: tv === "squares" || tv === "hatch" ? tv : "dots", size: n("size", d.size), gap: n("gap", d.gap), width: n("width", d.width), stagger: st ? K.str(st[1]) === "yes" : false, orientation: n("orientation", 0) };
+}
+/** PCB_IO_KICAD_SEXPR's (thieving (type ..) (size ..) (gap ..) (width ..) (stagger ..) (orientation ..)), always whole and in that order. */
+export const thievingNode = (t: ThievingSettings): SNode => ["thieving", ["type", t.type], ["size", r6(t.size)], ["gap", r6(t.gap)], ["width", r6(t.width)], ["stagger", t.stagger ? "yes" : "no"], ["orientation", r6(t.orientation)]];
+/** Write the zone's thieving settings (the fill's last child, as the writer puts it). */
+export function setThieving(node: SNode, patch: Partial<ThievingSettings>) {
+  const f = K.kid(node, "fill"); if (!f) return node;
+  const t = Object.assign(thievingOf(node), patch); const old = K.kid(f, "thieving");
+  if (old) f.splice(f.indexOf(old), 1, thievingNode(t)); else f.push(thievingNode(t));
+  return node;
+}
+const HATCH_KEYS = ["hatch_thickness", "hatch_gap", "hatch_orientation", "hatch_smoothing_level", "hatch_smoothing_value", "hatch_border_algorithm", "hatch_min_hole_area"];
+/**
+ * ZONE::SetFillMode as the Properties panel's Fill Mode edits it, written as PCB_IO_KICAD_SEXPR writes the fill:
+ * (mode …) after the fill flag, the hatch keys or the (thieving …) block at the end.  A thieving zone is net-less,
+ * single-layer and connects no pads (ZONE_SETTINGS::ExportSetting forces ZONE_CONNECTION::NONE and net 0).
+ */
+export function setZoneFillMode(node: SNode, mode: ZoneFillMode) {
+  let f = K.kid(node, "fill");
+  if (!f) { f = ["fill"]; const poly = K.kid(node, "polygon"); node.splice(poly ? node.indexOf(poly) : node.length, 0, f); }
+  const del = (k: string) => { const c = K.kid(f!, k); if (c) f!.splice(f!.indexOf(c), 1); };
+  del("mode"); for (const k of HATCH_KEYS) del(k); del("thieving");
+  if (mode !== "solid") f.splice(f[1] === "yes" ? 2 : 1, 0, ["mode", mode]);
+  const mt = K.kid(node, "min_thickness"); const minT = mt ? K.num(mt[1]) : 0.25;
+  if (mode === "hatch") {   // ZONE_SETTINGS: max(4 × min width, 1 mm) lines, max(6 × min width, 1.5 mm) gap
+    f.push(["hatch_thickness", r6(Math.max(minT * 4, 1))], ["hatch_gap", r6(Math.max(minT * 6, 1.5))], ["hatch_orientation", 0], ["hatch_border_algorithm", "hatch_thickness"], ["hatch_min_hole_area", 0.3]);
+  }
+  if (mode === "thieving") {
+    f.push(thievingNode(thievingDefaults(minT)));
+    for (const k of ["net", "net_name"]) { const c = K.kid(node, k); if (c) node.splice(node.indexOf(c), 1); }
+    const ls = K.kid(node, "layers"); if (ls && ls.length > 2) node.splice(node.indexOf(ls), 1, ["layer", K.str(ls[1])]);
+    let cp = K.kid(node, "connect_pads"); if (!cp) { cp = ["connect_pads", ["clearance", 0.5]]; node.splice(node.indexOf(K.kid(node, "min_thickness") || f), 0, cp); }
+    if (typeof cp[1] === "string") cp[1] = "no"; else cp.splice(1, 0, "no");
+  }
+  return node;
+}
+/** ZONE_CREATE_HELPER::createNewZone with m_thieving (zone_create_helper.cpp): fill mode COPPER_THIEVING, net 0, no pad connections. */
+export function thievingZoneNode(doc: BoardDoc, pts: Pt[], layer: string): SNode {
+  return setZoneFillMode(zoneNode(doc, pts, layer, null), "thieving");
+}
 export function zoneNode(doc: BoardDoc, pts: Pt[], layer: string, net: NetRef | null): SNode {
   const node: SNode = ["zone"]; const nn = netNode(doc, net); if (nn[1]) node.push(nn);   // (net …) only for a real net
   node.push(["layer", layer], ["uuid", K.newUuid()], ["hatch", "edge", 0.5]);

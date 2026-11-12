@@ -97,11 +97,19 @@ export function setTextBoxAngleSliding(node: SNode, deg: number) {
   if (!s || !K.kid(node, "end")) { setTextBoxAngle(node, deg); return node; }
   return rotateTextBoxNode(node, K.num(s[1]), K.num(s[2]), delta);
 }
+/** ZONE::Mirror: the hatch and thieving orientations reflect over the mirror axis (axis angle 0 for a top / bottom mirror, -90 for left / right), Normalized. */
+export function reflectZoneOrientations(node: SNode, leftRight: boolean) {
+  const f = K.kid(node, "fill"); if (!f) return;
+  const axis = leftRight ? -90 : 0; const refl = (c: SNode | null | undefined) => { if (c && c.length > 1) c[1] = r6(norm360(2 * axis - K.num(c[1]))); };
+  const h = K.kid(f, "hatch_orientation"); if (h) refl(h);
+  const t = K.kid(f, "thieving"); if (t) refl(K.kid(t, "orientation"));
+}
 /** KiCad's Flip (left / right) about the vertical axis x = cx: other side, layers swapped, texts mirrored. */
 export function flipNode(node: SNode, cx: number, doc: BoardDoc) {
   const k = node[0]; const mirror = (x: number, y: number) => [2 * cx - x, y];
   if (k === "footprint") { flipFootprintNode(node); return mapNodePoints(node, mirror); }
   mapNodePoints(node, mirror); flipLayerKid(node);
+  if (k === "zone") reflectZoneOrientations(node, true);
   if (k === "via") { const ls = K.kid(node, "layers"); if (ls && doc) { const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]; const names = ls.slice(1).map(K.str).sort((a, b) => copper.indexOf(a) - copper.indexOf(b)); ls.splice(1, ls.length - 1, ...names); } }
   if (k === "gr_text" || k === "gr_text_box") { toggleMirror(node); setAngleKid(node, -angleKid(node)); }
   if (k === "dimension") { const gt = K.kid(node, "gr_text"); if (gt) { flipLayerKid(gt); toggleMirror(gt); setAngleKid(gt, -angleKid(gt)); } }
@@ -114,6 +122,7 @@ export function mirrorNode(node: SNode, cx: number, cy: number, axis: string) {
   mapNodePoints(node, axis === "v" ? (x: number, y: number) => [x, 2 * cy - y] : (x: number, y: number) => [2 * cx - x, y]);
   const text = (n: SNode) => { toggleMirror(n); setAngleKid(n, axis === "v" ? 180 - angleKid(n) : -angleKid(n)); };
   if (k === "gr_text" || k === "gr_text_box") text(node);
+  if (k === "zone") reflectZoneOrientations(node, axis !== "v");
   if (k === "dimension") { const gt = K.kid(node, "gr_text"); if (gt) text(gt); }
   if (k === "gr_rect" || k === "gr_text_box") { const a = pt(node, "start"), b = pt(node, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); K.kid(node, "start")!.splice(1, 2, r6(x0), r6(y0)); K.kid(node, "end")!.splice(1, 2, r6(x1), r6(y1)); } }
   return node;

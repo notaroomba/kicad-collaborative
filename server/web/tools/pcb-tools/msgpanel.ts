@@ -255,8 +255,8 @@ export function msgPanelInfo(doc: BoardDoc, ids: Iterable<string>, opts?: MsgPan
       add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
       const nm = K.kid(n, "name"); if (nm && K.str(nm[1])) add("Name", K.str(nm[1]));
       if (!keep) {
-        const fill = K.kid(n, "fill"); const hatched = fill && K.kid(fill, "mode") && K.str(K.kid(fill, "mode")![1]) === "hatch";
-        add("Fill Mode", hatched ? "Hatched" : "Solid");
+        const fill = K.kid(n, "fill"); const fm = fill && K.kid(fill, "mode") ? K.str(K.kid(fill, "mode")![1]) : "";
+        add("Fill Mode", fm === "hatch" ? "Hatched" : fm ? "Unknown" : "Solid");   // ZONE::GetMsgPanelInfo: COPPER_THIEVING falls to the default case
         let area = 0; for (const fp of K.kids(n, "filled_polygon")) { const q = K.ptsOf(fp); for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; area += a[0] * b[1] - b[0] * a[1]; } }
         add("Filled Area", msgArea(Math.abs(area) / 2, units));
         const cp = K.kid(n, "connect_pads"); const cc = cp && K.kid(cp, "clearance"); const c = msgClearance(s, net);

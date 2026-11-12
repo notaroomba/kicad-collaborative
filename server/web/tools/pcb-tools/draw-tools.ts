@@ -15,7 +15,7 @@ import { applySelection, selectionIds } from "./groups";
 import { base64Bytes, imageInfo, imageMm } from "./images";
 import { netTable } from "./netlist";
 import { netOf } from "./nets";
-import { circleNode, curveNode, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, tableNode, textBoxNode, zoneLayers, zoneNode } from "./nodes";
+import { circleNode, curveNode, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, tableNode, textBoxNode, thievingZoneNode, zoneLayers, zoneNode } from "./nodes";
 import { netUnder } from "./route-geom";
 import { K, S, lastCtx } from "./state";
 import { samePt, vadd, vsub, xy } from "./util";
@@ -24,6 +24,12 @@ export function drawClick(ctx: PcbCtx, hv: Hover, t: string, ev: PtrEvent) {
   if (S.draw && S.draw.shape !== "garc") { const c = constrainDraw(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey))); hv = Object.assign({}, hv, { x: c[0], y: c[1] }); }
   if (t === "garc" && S.draw && S.draw.shape === "garc") arcMove(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey)));
   const p = [hv.x, hv.y], layer = S.gfxLayer;
+  if (!S.draw && t === "thievingzone") {
+    // ZONE_CREATE_HELPER::createNewZone with m_thieving: no pre-draw dialog, COPPER_THIEVING on the active layer, net 0
+    const tpl = zoneTemplate(ctx, false, true);
+    S.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: tpl, layer: zoneLayers(tpl)[0] }; ctx.requestRender();
+    return;
+  }
   if (!S.draw && (t === "zone" || t === "rulearea") && newItemDialogs.zone) {
     // ZONE_CREATE_HELPER::OnFirstPoint → createNewZone: the properties dialog on a template first; Cancel ends it
     const tpl = zoneTemplate(ctx, t === "rulearea"), d: DrawState = { shape: t, start: p, cur: p.slice(), pts: [p], pending: true, template: null, layer: zoneLayers(tpl)[0] };
@@ -89,9 +95,10 @@ export function drawClick(ctx: PcbCtx, hv: Hover, t: string, ev: PtrEvent) {
  * ZONE_CREATE_HELPER::createNewZone: the board's default zone settings on the active layer, no name, the highlighted
  * net (else the first selected connected item's), a unique priority on copper; a rule area keeps out tracks, vias and pads.
  */
-export function zoneTemplate(ctx: PcbCtx, keepout: boolean) {
+export function zoneTemplate(ctx: PcbCtx, keepout: boolean, thieving = false) {
   const doc = ctx.doc, layer = sizesOf(ctx).activeLayer || S.layer;
   if (keepout) return ruleAreaNode([], [layer]);
+  if (thieving) return thievingZoneNode(doc, [], layer);
   let net = { code: 0, name: "" };
   if (S.highlightNet) { const t = netTable(doc); const n = boardNets(doc).find((x) => t.key(x) === S.highlightNet); if (n) net = n; }
   if (!net.name) {
@@ -121,7 +128,7 @@ export function finishPoly(ctx: PcbCtx) {
     const node = JSON.parse(JSON.stringify(d.template)), poly = K.kid(node, "polygon");
     const pts = ["pts", ...d.pts.map(xy)];
     if (poly) poly.splice(1, poly.length - 1, pts); else node.push(["polygon", pts]);
-    ctx.commit([addedChange(ctx.doc, node, netOf(node))], d.shape === "rulearea" ? "rule area" : "zone"); return;
+    ctx.commit([addedChange(ctx.doc, node, netOf(node))], d.shape === "rulearea" ? "rule area" : d.shape === "thievingzone" ? "copper thieving zone" : "zone"); return;
   }
   if (d.pts.length < 3) { ctx.toast("A polygon needs at least three corners"); return; }
   if (d.shape === "gpoly") { ctx.commit([addedChange(ctx.doc, withStroke(polyNode(d.pts, S.gfxLayer)))], "polygon"); return; }

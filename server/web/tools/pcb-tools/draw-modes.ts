@@ -14,7 +14,7 @@ import { r6, samePt, vadd, vsub } from "./util";
 // any number of corners until the first corner is clicked again (or the last one twice, or Enter), a
 // text box or table two corners and then a prompt, a dimension two points and (aligned, orthogonal,
 // radial) a third for the offset or the text.
-export const POLY_TOOLS = new Set(["gpoly", "zone", "rulearea"]);
+export const POLY_TOOLS = new Set(["gpoly", "zone", "thievingzone", "rulearea"]);
 export const gfxTool = (t: string | null | undefined) => /^g/.test(t || "") || t === "table" || t === "image" || !!DIM_TYPE[t!];   // draws on the chip's graphics layer
 export const RULE_AREA_LAYERS = ["F.Cu", "B.Cu"];
 // ---- PCB_TOOL_BASE::GetAngleSnapMode (PCBNEW_SETTINGS m_AngleSnapMode, DIRECT by default in the board editor):

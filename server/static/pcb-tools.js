@@ -429,6 +429,18 @@
     }
     return rotateTextBoxNode(node, K.num(s[1]), K.num(s[2]), delta);
   }
+  function reflectZoneOrientations(node, leftRight) {
+    const f = K.kid(node, "fill");
+    if (!f) return;
+    const axis = leftRight ? -90 : 0;
+    const refl = (c) => {
+      if (c && c.length > 1) c[1] = r6(norm360(2 * axis - K.num(c[1])));
+    };
+    const h = K.kid(f, "hatch_orientation");
+    if (h) refl(h);
+    const t = K.kid(f, "thieving");
+    if (t) refl(K.kid(t, "orientation"));
+  }
   function flipNode(node, cx, doc) {
     const k = node[0];
     const mirror = (x, y) => [2 * cx - x, y];
@@ -438,6 +450,7 @@
     }
     mapNodePoints(node, mirror);
     flipLayerKid(node);
+    if (k === "zone") reflectZoneOrientations(node, true);
     if (k === "via") {
       const ls = K.kid(node, "layers");
       if (ls && doc) {
@@ -476,6 +489,7 @@
       setAngleKid(n, axis === "v" ? 180 - angleKid(n) : -angleKid(n));
     };
     if (k === "gr_text" || k === "gr_text_box") text(node);
+    if (k === "zone") reflectZoneOrientations(node, axis !== "v");
     if (k === "dimension") {
       const gt = K.kid(node, "gr_text");
       if (gt) text(gt);
@@ -1256,6 +1270,77 @@
     let p = 0;
     while (used.has(p)) p++;
     return p;
+  }
+  var thievingDefaults = (minThickness) => ({ type: "dots", size: 0.5, gap: 1, width: Math.max(minThickness, 0.3), stagger: false, orientation: 0 });
+  var zoneFillMode = (node) => {
+    const f = K.kid(node, "fill"), m = f && K.kid(f, "mode");
+    const v = m ? K.str(m[1]) : "";
+    return v === "hatch" || v === "thieving" ? v : "solid";
+  };
+  function thievingOf(node) {
+    const mt = K.kid(node, "min_thickness");
+    const d = thievingDefaults(mt ? K.num(mt[1]) : 0.25);
+    const f = K.kid(node, "fill"), t = f && K.kid(f, "thieving");
+    if (!t) return d;
+    const n = (k, dv) => {
+      const c = K.kid(t, k);
+      return c ? K.num(c[1]) : dv;
+    };
+    const ty = K.kid(t, "type"), st = K.kid(t, "stagger");
+    const tv = ty ? K.str(ty[1]) : "dots";
+    return { type: tv === "squares" || tv === "hatch" ? tv : "dots", size: n("size", d.size), gap: n("gap", d.gap), width: n("width", d.width), stagger: st ? K.str(st[1]) === "yes" : false, orientation: n("orientation", 0) };
+  }
+  var thievingNode = (t) => ["thieving", ["type", t.type], ["size", r6(t.size)], ["gap", r6(t.gap)], ["width", r6(t.width)], ["stagger", t.stagger ? "yes" : "no"], ["orientation", r6(t.orientation)]];
+  function setThieving(node, patch) {
+    const f = K.kid(node, "fill");
+    if (!f) return node;
+    const t = Object.assign(thievingOf(node), patch);
+    const old = K.kid(f, "thieving");
+    if (old) f.splice(f.indexOf(old), 1, thievingNode(t));
+    else f.push(thievingNode(t));
+    return node;
+  }
+  var HATCH_KEYS = ["hatch_thickness", "hatch_gap", "hatch_orientation", "hatch_smoothing_level", "hatch_smoothing_value", "hatch_border_algorithm", "hatch_min_hole_area"];
+  function setZoneFillMode(node, mode) {
+    let f = K.kid(node, "fill");
+    if (!f) {
+      f = ["fill"];
+      const poly = K.kid(node, "polygon");
+      node.splice(poly ? node.indexOf(poly) : node.length, 0, f);
+    }
+    const del = (k) => {
+      const c = K.kid(f, k);
+      if (c) f.splice(f.indexOf(c), 1);
+    };
+    del("mode");
+    for (const k of HATCH_KEYS) del(k);
+    del("thieving");
+    if (mode !== "solid") f.splice(f[1] === "yes" ? 2 : 1, 0, ["mode", mode]);
+    const mt = K.kid(node, "min_thickness");
+    const minT = mt ? K.num(mt[1]) : 0.25;
+    if (mode === "hatch") {
+      f.push(["hatch_thickness", r6(Math.max(minT * 4, 1))], ["hatch_gap", r6(Math.max(minT * 6, 1.5))], ["hatch_orientation", 0], ["hatch_border_algorithm", "hatch_thickness"], ["hatch_min_hole_area", 0.3]);
+    }
+    if (mode === "thieving") {
+      f.push(thievingNode(thievingDefaults(minT)));
+      for (const k of ["net", "net_name"]) {
+        const c = K.kid(node, k);
+        if (c) node.splice(node.indexOf(c), 1);
+      }
+      const ls = K.kid(node, "layers");
+      if (ls && ls.length > 2) node.splice(node.indexOf(ls), 1, ["layer", K.str(ls[1])]);
+      let cp = K.kid(node, "connect_pads");
+      if (!cp) {
+        cp = ["connect_pads", ["clearance", 0.5]];
+        node.splice(node.indexOf(K.kid(node, "min_thickness") || f), 0, cp);
+      }
+      if (typeof cp[1] === "string") cp[1] = "no";
+      else cp.splice(1, 0, "no");
+    }
+    return node;
+  }
+  function thievingZoneNode(doc, pts, layer) {
+    return setZoneFillMode(zoneNode(doc, pts, layer, null), "thieving");
   }
   function zoneNode(doc, pts, layer, net) {
     const node = ["zone"];
@@ -3269,8 +3354,8 @@
         if (nm && K.str(nm[1])) add("Name", K.str(nm[1]));
         if (!keep) {
           const fill = K.kid(n, "fill");
-          const hatched = fill && K.kid(fill, "mode") && K.str(K.kid(fill, "mode")[1]) === "hatch";
-          add("Fill Mode", hatched ? "Hatched" : "Solid");
+          const fm = fill && K.kid(fill, "mode") ? K.str(K.kid(fill, "mode")[1]) : "";
+          add("Fill Mode", fm === "hatch" ? "Hatched" : fm ? "Unknown" : "Solid");
           let area = 0;
           for (const fp of K.kids(n, "filled_polygon")) {
             const q = K.ptsOf(fp);
@@ -8206,7 +8291,7 @@
     if (isTuneTool(S.modTool)) drawTune(c, ctx, px);
     if (S.draw) {
       const d = S.draw;
-      const layer = d.layer || (d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
+      const layer = d.layer || (d.shape === "zone" || d.shape === "thievingzone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
       c.globalAlpha = 0.85;
       c.strokeStyle = color(layer);
       c.lineWidth = Math.max(drawWidth(layer), 1.5 * px);
@@ -10456,6 +10541,12 @@
     }
     if (t === "garc" && S.draw && S.draw.shape === "garc") arcMove(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey)));
     const p = [hv.x, hv.y], layer = S.gfxLayer;
+    if (!S.draw && t === "thievingzone") {
+      const tpl = zoneTemplate(ctx, false, true);
+      S.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: tpl, layer: zoneLayers(tpl)[0] };
+      ctx.requestRender();
+      return;
+    }
     if (!S.draw && (t === "zone" || t === "rulearea") && newItemDialogs.zone) {
       const tpl = zoneTemplate(ctx, t === "rulearea"), d2 = { shape: t, start: p, cur: p.slice(), pts: [p], pending: true, template: null, layer: zoneLayers(tpl)[0] };
       S.draw = d2;
@@ -10572,9 +10663,10 @@
     S.draw = t === "gline" ? { shape: t, start: p, cur: p.slice(), pts: [p], chain: (d.chain || []).concat([{ id: add.id, start: d.start, end: p }]) } : null;
     ctx.requestRender();
   }
-  function zoneTemplate(ctx, keepout) {
+  function zoneTemplate(ctx, keepout, thieving = false) {
     const doc = ctx.doc, layer = sizesOf(ctx).activeLayer || S.layer;
     if (keepout) return ruleAreaNode([], [layer]);
+    if (thieving) return thievingZoneNode(doc, [], layer);
     let net = { code: 0, name: "" };
     if (S.highlightNet) {
       const t = netTable(doc);
@@ -10614,7 +10706,7 @@
       const pts = ["pts", ...d.pts.map(xy)];
       if (poly) poly.splice(1, poly.length - 1, pts);
       else node.push(["polygon", pts]);
-      ctx.commit([addedChange(ctx.doc, node, netOf(node))], d.shape === "rulearea" ? "rule area" : "zone");
+      ctx.commit([addedChange(ctx.doc, node, netOf(node))], d.shape === "rulearea" ? "rule area" : d.shape === "thievingzone" ? "copper thieving zone" : "zone");
       return;
     }
     if (d.pts.length < 3) {
@@ -10722,7 +10814,7 @@
   }
 
   // web/tools/pcb-tools/draw-modes.ts
-  var POLY_TOOLS = /* @__PURE__ */ new Set(["gpoly", "zone", "rulearea"]);
+  var POLY_TOOLS = /* @__PURE__ */ new Set(["gpoly", "zone", "thievingzone", "rulearea"]);
   var gfxTool = (t) => /^g/.test(t || "") || t === "table" || t === "image" || !!DIM_TYPE[t];
   var RULE_AREA_LAYERS = ["F.Cu", "B.Cu"];
   var ANGLE_SNAP_KEY = "kc.pcbnew.angleSnapMode";
@@ -14521,6 +14613,7 @@
     { id: "table", label: "Draw table", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14"/><path d="M3 10h18M3 14.5h18M9 5v14M15 5v14"/>' },
     { id: "image", label: "Place reference image", key: "", cursor: "crosshair", icon: '<rect x="3" y="5" width="18" height="14" rx="1"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5-7 7"/>' },
     { id: "zone", label: "Draw filled zone", key: "Alt+Z", cursor: "crosshair", icon: '<path d="M4 5h16v14H4z"/><path d="M4 12l7-7M4 19l14-14M11 19l9-9M18 19l2-2"/>' },
+    { id: "thievingzone", label: "Draw Copper Thieving Zone", key: "", cursor: "crosshair", hidden: true, icon: '<path d="M4 5h16v14H4z"/><circle cx="8" cy="9" r="1"/><circle cx="12" cy="9" r="1"/><circle cx="16" cy="9" r="1"/><circle cx="8" cy="15" r="1"/><circle cx="12" cy="15" r="1"/><circle cx="16" cy="15" r="1"/>' },
     { id: "rulearea", label: "Draw rule area", key: "Ctrl+Shift+K", cursor: "crosshair", icon: '<path d="M4 5h16v14H4z" stroke-dasharray="3 2"/><path d="M8 8l8 8M16 8l-8 8"/>' },
     { id: "dimaligned", label: "Draw aligned dimension", key: "", cursor: "crosshair", icon: '<path d="M4 20L20 4"/><path d="M4 20l6-1-5-5zM20 4l-6 1 5 5z"/>' },
     { id: "dimortho", label: "Draw orthogonal dimension", key: "Ctrl+Shift+H", cursor: "crosshair", icon: '<path d="M4 18h16M4 13v8M20 13v8"/><path d="M4 18l4-2v4zM20 18l-4-2v4z"/>' },
@@ -15427,6 +15520,12 @@
     zoneNode,
     ruleAreaNode,
     zonePriority,
+    setZoneFillMode,
+    setThieving,
+    thievingOf,
+    zoneFillMode,
+    thievingZoneNode,
+    thievingDefaults,
     boardNets,
     dimensionNode,
     dimGeometry,

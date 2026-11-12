@@ -294,6 +294,8 @@ function viaProps(doc: KDoc): PropDef[] {
     ...netProps(doc)];
 }
 const ZONE_CONNECT: [string, string][] = [["", "Thermal reliefs"], ["no", "None"], ["yes", "Solid"], ["thru_hole_only", "Thermal reliefs for PTH"]];
+const FILL_MODES: [string, string][] = [["solid", "Solid fill"], ["hatch", "Hatch pattern"], ["thieving", "Copper thieving"]];
+const THIEVING_PATTERNS: [string, string][] = [["dots", "Dots"], ["squares", "Squares"], ["hatch", "Hatch"]];
 function zoneProps(it: KItem, doc: KDoc): PropDef[] {
   const h = H(), El = "Electrical";
   const cp = (n: SNode) => h.kid(n, "connect_pads");
@@ -306,6 +308,28 @@ function zoneProps(it: KItem, doc: KDoc): PropDef[] {
     { group: BASIC, name: "Priority", type: "int", get: (x) => h.num((h.kid(x.node, "priority") || [])[1], 0), set: (n, v) => { h.setZonePriority(n, v as number); } },
   ];
   if (h.kid(it.node, "keepout")) return out;
+  // ZONE_DESC: Fill Mode on copper zones; a copper-thieving zone hides its net, pad connections and thermal rows
+  // and shows its THIEVING_SETTINGS (Element Size writable for dots and squares, Line Width for hatch)
+  type ZT = { zoneFillMode(n: SNode): string; setZoneFillMode(n: SNode, m: string): SNode; thievingOf(n: SNode): Record<string, number | string | boolean>; setThieving(n: SNode, p: Record<string, unknown>): SNode };
+  const Z = pcbTools() as unknown as ZT | null;
+  const copper = (x: KItem) => { const s = h.kid(x.node, "layer"), m = h.kid(x.node, "layers"); const l = s ? h.str(s[1]) : m ? h.str(m[1]) : ""; return /\.Cu$/.test(l) || /^\*\.Cu$|^F&B\.Cu$/.test(l); };
+  if (!Z || !copper(it)) return out;
+  const FS = "Fill Style";
+  const thieving = Z.zoneFillMode(it.node) === "thieving";
+  if (thieving) out.splice(1, 0, layerProp(doc, true, "F.Cu"));
+  const tv = (key: string, type: PropType, writable?: (x: KItem) => boolean): PropDef => ({ group: FS, name: "", type, get: (x) => Z.thievingOf(x.node)[key] as Raw,
+    set: (n, v, x) => { if (writable && !writable(x)) return false; if ((type === "length") && !((v as number) > 0)) return false; Z.setThieving(n, { [key]: type === "bool" ? !!v : type === "enum" ? String(v) : +(v as number) }); } });
+  const named = (d: PropDef, name: string): PropDef => Object.assign(d, { name });
+  const isHatch = (x: KItem) => Z.thievingOf(x.node).type === "hatch";
+  out.push({ group: FS, name: "Fill Mode", type: "enum", choices: FILL_MODES, get: (x) => Z.zoneFillMode(x.node), set: (n, v) => { if (Z.zoneFillMode(n) === String(v)) return false; Z.setZoneFillMode(n, String(v)); } });
+  if (thieving) {
+    out.push(named(Object.assign(tv("type", "enum"), { choices: THIEVING_PATTERNS }), "Thieving Pattern"),
+      named(tv("size", "length", (x) => !isHatch(x)), "Thieving Element Size"), named(tv("gap", "length"), "Thieving Gap"),
+      named(tv("width", "length", isHatch), "Thieving Line Width"), named(tv("stagger", "bool"), "Thieving Stagger"), named(tv("orientation", "angle"), "Thieving Orientation"),
+      { group: El, name: "Clearance", type: "length", get: (x) => { const c = cp(x.node), k = c && h.kid(c, "clearance"); return k ? h.num(k[1]) : 0; }, set: (n, v) => { let c = cp(n); if (!c) c = h.setKid(n, "connect_pads", [], ["min_thickness", "filled_areas_thickness", "keepout", "fill"]); h.setKid(c, "clearance", [r6(Math.max(0, v as number))]); } },
+      { group: El, name: "Minimum Width", type: "length", get: (x) => h.num((h.kid(x.node, "min_thickness") || [])[1], 0.25), set: (n, v) => { if (!((v as number) > 0)) return false; h.setKid(n, "min_thickness", [r6(v as number)], ["filled_areas_thickness", "keepout", "fill"]); } });
+    return out;
+  }
   out.push(...netProps(doc),
     { group: El, name: "Clearance", type: "length", get: (x) => { const c = cp(x.node), k = c && h.kid(c, "clearance"); return k ? h.num(k[1]) : 0; }, set: (n, v) => { let c = cp(n); if (!c) c = h.setKid(n, "connect_pads", [], ["min_thickness", "filled_areas_thickness", "keepout", "fill"]); h.setKid(c, "clearance", [r6(Math.max(0, v as number))]); } },
     { group: El, name: "Minimum Width", type: "length", get: (x) => h.num((h.kid(x.node, "min_thickness") || [])[1], 0.25), set: (n, v) => { if (!((v as number) > 0)) return false; h.setKid(n, "min_thickness", [r6(v as number)], ["filled_areas_thickness", "keepout", "fill"]); } },

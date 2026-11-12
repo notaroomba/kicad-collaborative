@@ -43,5 +43,34 @@ test("Mirror reflects the box centre only", () => {
   assert.deepEqual(kid(n, "start").slice(1), [-16, 20]); assert.deepEqual(kid(n, "end").slice(1), [-10, 22]);
 });
 
+// ---- copper thieving zones (ZONE_CREATE_HELPER m_thieving, ZONE::SetFillMode, THIEVING_SETTINGS)
+const BOARD = `(kicad_pcb (version 20260206) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal)) (net 0 "") (net 1 "GND"))`;
+test("Draw Copper Thieving Zone's template: net 0, no pad connections, (mode thieving) and the default settings in token order", () => {
+  const doc = K.parseDoc(BOARD, "kicad_pcb");
+  const z = P.thievingZoneNode(doc, [[0, 0], [10, 0], [10, 10]], "F.Cu");
+  assert.equal(kid(z, "net"), undefined);
+  const cp = kid(z, "connect_pads"); assert.equal(cp[1], "no");
+  const f = kid(z, "fill"); assert.deepEqual(f[1], ["mode", "thieving"]);
+  assert.deepEqual(f[f.length - 1], ["thieving", ["type", "dots"], ["size", 0.5], ["gap", 1], ["width", 0.3], ["stagger", "no"], ["orientation", 0]]);
+  assert.equal(P.zoneFillMode(z), "thieving");
+});
+test("Fill Mode edits: thieving clamps to one layer and drops the net; hatch writes its keys; solid clears both", () => {
+  const z = ["zone", ["net", 1], ["net_name", "GND"], ["layers", "F.Cu", "B.Cu"], ["uuid", "u"], ["connect_pads", ["clearance", 0.5]], ["min_thickness", 0.25], ["fill", "yes", ["thermal_gap", 0.5], ["thermal_bridge_width", 0.5], ["island_removal_mode", 0]], ["polygon", ["pts"]]];
+  P.setZoneFillMode(z, "thieving");
+  assert.deepEqual(kid(z, "layer"), ["layer", "F.Cu"]); assert.equal(kid(z, "layers"), undefined); assert.equal(kid(z, "net"), undefined);
+  assert.deepEqual(kid(z, "fill").slice(0, 3), ["fill", "yes", ["mode", "thieving"]]);
+  P.setThieving(z, { type: "hatch", width: 0.4, stagger: true });
+  assert.deepEqual(kid(kid(z, "fill"), "thieving"), ["thieving", ["type", "hatch"], ["size", 0.5], ["gap", 1], ["width", 0.4], ["stagger", "yes"], ["orientation", 0]]);
+  P.setZoneFillMode(z, "hatch");
+  const f = kid(z, "fill"); assert.equal(kid(f, "thieving"), undefined); assert.deepEqual(kid(f, "mode"), ["mode", "hatch"]); assert.deepEqual(kid(f, "hatch_thickness"), ["hatch_thickness", 1]); assert.deepEqual(kid(f, "hatch_gap"), ["hatch_gap", 1.5]);
+  P.setZoneFillMode(z, "solid");
+  assert.equal(kid(kid(z, "fill"), "mode"), undefined); assert.equal(kid(kid(z, "fill"), "hatch_gap"), undefined);
+});
+test("ZONE::Mirror reflects the thieving orientation over the axis", () => {
+  const z = ["zone", ["layer", "F.Cu"], ["fill", ["mode", "thieving"], ["thieving", ["type", "dots"], ["size", 0.5], ["gap", 1], ["width", 0.3], ["stagger", "no"], ["orientation", 30]]], ["polygon", ["pts", ["xy", 0, 0], ["xy", 1, 0], ["xy", 1, 1]]]];
+  P.mirrorNode(z, 0, 0, "h"); assert.equal(kid(kid(kid(z, "fill"), "thieving"), "orientation")[1], 150);
+  P.mirrorNode(z, 0, 0, "v"); assert.equal(kid(kid(kid(z, "fill"), "thieving"), "orientation")[1], 210);
+});
+
 module.exports = { test, K, P, assert, kid };
 process.on("exit", () => { console.log(`\npcb-edit3: ${passed} passed, ${failed} failed`); if (failed) process.exitCode = 1; });

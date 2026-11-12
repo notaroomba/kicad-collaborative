@@ -203,4 +203,41 @@ test("filledZoneNode writes (fill yes …) and the filled polygons after the out
   });
 }
 
+// ---- copper thieving (ZONE_FILLER::addCopperThievingPattern)
+const thief = (t, extra = {}) => zone(Object.assign({ net: "", uuid: "zt", connect: "no", fill: "(mode thieving)", hatch: t, pts: [[110, 110], [120, 110], [120, 120], [110, 120]] }, extra));
+test("thieving dots: stamps of the element size on the size + gap grid, disconnected and kept", async () => {
+  const { doc, layer } = await fill(board(thief("(thieving (type dots) (size 0.5) (gap 1) (width 0.3) (stagger no) (orientation 0))")));
+  const lf = layer(zid(doc, "zt"), "F.Cu");
+  // the zone is 10 mm wide less the 0.5 mm clearance on nothing: centres on the 1.5 mm grid inside 110 + 0.125 + 1 nm
+  assert.ok(lf.outlines.length > 25, "many separate dots: " + lf.outlines.length);
+  const d = bbox({ outlines: [lf.outlines[0]] }); assert.ok(Math.abs((d[2] - d[0]) - 0.5) < 0.015, "a dot is 0.5 mm across: " + (d[2] - d[0]));
+  assert.equal(lf.islands.size, 0, "thieving stamps are never islands");
+  const xs = [...new Set(lf.outlines.map((o) => Math.round(bbox({ outlines: [o] })[0] * 1000 + 250) / 1000))].sort((a, b) => a - b);
+  for (let i = 1; i < xs.length; i++) assert.ok(Math.abs(xs[i] - xs[i - 1] - 1.5) < 1e-3, "1.5 mm stride");
+  assert.ok(xs.every((x) => Math.abs(x / 1.5 - Math.round(x / 1.5)) < 1e-6), "the grid is anchored at the origin: " + xs.join(","));
+});
+test("thieving squares and stagger: rows alternate by half a stride", async () => {
+  const { doc, layer } = await fill(board(thief("(thieving (type squares) (size 0.6) (gap 0.9) (width 0.3) (stagger yes) (orientation 0))")));
+  const lf = layer(zid(doc, "zt"), "F.Cu");
+  const rows = new Map(); for (const o of lf.outlines) { const b = bbox({ outlines: [o] }); const y = Math.round((b[1] + b[3]) / 2 * 1000) / 1000; (rows.get(y) || rows.set(y, []).get(y)).push(Math.round((b[0] + b[2]) / 2 * 1000) / 1000); }
+  const ys = [...rows.keys()].sort((a, b) => a - b); assert.ok(ys.length >= 4);
+  const x0 = Math.min(...rows.get(ys[0])), x1 = Math.min(...rows.get(ys[1]));
+  assert.ok(Math.abs(Math.abs(x1 - x0) - 0.75) < 1e-3, "staggered by half the 1.5 mm stride: " + x0 + " " + x1);
+  const b = bbox({ outlines: [lf.outlines[0]] }); assert.ok(Math.abs((b[2] - b[0]) - 0.6) < 0.02, "square side 0.6 (reinflated by the min width): " + (b[2] - b[0]));
+});
+test("thieving hatch: one mesh with its border, square voids; zero gap gives no fill", async () => {
+  const { doc, layer } = await fill(board(thief("(thieving (type hatch) (size 0.5) (gap 1) (width 0.3) (stagger no) (orientation 0))")));
+  const lf = layer(zid(doc, "zt"), "F.Cu");
+  assert.equal(lf.outlines.length, 1, "a single mesh");
+  const full = 100; assert.ok(totalArea(lf) < full * 0.6 && totalArea(lf) > full * 0.2, "voids carved: " + totalArea(lf));
+  assert.ok(filledAt(lf, 110.05, 115), "the border survives");
+  const z = await fill(board(thief("(thieving (type dots) (size 0.5) (gap 0) (width 0.3) (stagger no) (orientation 0))")));
+  assert.equal(z.layer(zid(z.doc, "zt"), "F.Cu").outlines.length, 0, "a zero gap gives no fill");
+});
+test("thieving dots keep clear of a pad by the clearance", async () => {
+  const { doc, layer } = await fill(board(thief("(thieving (type dots) (size 0.5) (gap 1) (width 0.3) (stagger no) (orientation 0))"), smdFp("R1", 115, 115, "SIG")));
+  const lf = layer(zid(doc, "zt"), "F.Cu");
+  for (const o of lf.outlines) { const b = bbox({ outlines: [o] }); const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2; const dx = Math.max(Math.abs(cx - 115) - 1, 0), dy = Math.max(Math.abs(cy - 115) - 1, 0); assert.ok(Math.hypot(dx, dy) >= 0.5 + 0.25 - 0.01, "dot clear of the pad: " + cx + "," + cy); }
+});
+
 Promise.all(pending).then(() => { console.log(`zonefill: ${passed} passed, ${failed} failed`); if (failed) process.exit(1); });

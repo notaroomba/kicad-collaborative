@@ -69,7 +69,7 @@ function menuCtx(): MenuCtx {
   const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field");
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
-  const outline = !!draw && (sch ? draw.shape === "polygon" || draw.shape === "rulearea" : ["gpoly", "zone", "rulearea"].includes(draw.shape));
+  const outline = !!draw && (sch ? draw.shape === "polygon" || draw.shape === "rulearea" : ["gpoly", "zone", "thievingzone", "rulearea"].includes(draw.shape));
   const drawingLine = sch && !!s && (!!s.wire || (!!s.draw && s.draw.shape === "lines"));
   const routing = !sch && !!p && !!p.route;
   const root = sch ? rootSchematic() : null;

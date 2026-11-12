@@ -159,6 +159,17 @@ export function chamferFillet(contour: Pt[], fillet: boolean, dist: number, maxE
 
 // ---------------------------------------------------------------- the zones
 export interface ZoneHatch { thickness: number; gap: number; orientation: number; smoothingLevel: number; smoothingValue: number; borderHatch: boolean; minHoleArea: number; offsets: Map<string, Pt> }
+/** THIEVING_SETTINGS (zone_settings.h): the stamp pattern of a copper-thieving fill, mm and degrees. */
+export interface ZoneThieving { pattern: "dots" | "squares" | "hatch"; size: number; gap: number; width: number; stagger: boolean; orientation: number; offsets: Map<string, Pt> }
+/** ZONE_SETTINGS' thieving defaults (zone_settings.cpp): dots, 0.5 mm, 1.0 mm gap, line width max(min thickness, 0.3), no stagger, 0°. */
+export const THIEVING_DEFAULTS = { pattern: "dots" as const, size: 0.5, gap: 1, width: 0.3, stagger: false, orientation: 0 };
+export function readThieving(fill: Node | null, minThickness: number, offsets: Map<string, Pt>): ZoneThieving {
+  const t = fill ? K(fill, "thieving") : null;
+  const f = (key: string, d: number): number => { const k = t ? K(t, key) : null; return k ? num(k[1], d) : d; };
+  const ty = t ? K(t, "type") : null; const pat = ty ? str(ty[1]) : "dots"; const st = t ? K(t, "stagger") : null;
+  return { pattern: pat === "squares" || pat === "hatch" ? pat : "dots", size: f("size", THIEVING_DEFAULTS.size), gap: f("gap", THIEVING_DEFAULTS.gap),
+    width: f("width", Math.max(minThickness, THIEVING_DEFAULTS.width)), stagger: !!st && str(st[1]) === "yes", orientation: f("orientation", 0), offsets };
+}
 export interface ZoneModel {
   id: string; node: Node; uuid: string;
   net: string; layers: string[]; priority: number;
@@ -170,7 +181,7 @@ export interface ZoneModel {
   thermalGap: number; spokeWidth: number;
   smoothing: "" | "chamfer" | "fillet"; radius: number;
   islandMode: number; islandAreaMin: number;
-  hatch: ZoneHatch | null; thieving: boolean;
+  hatch: ZoneHatch | null; thieving: ZoneThieving | null;
   /** the fill stored in the document: layer → outlines */
   stored: Map<string, Poly>;
 }
@@ -204,7 +215,7 @@ export function readZone(item: KItem, copper: string[]): ZoneModel | null {
     smoothing: smoothing === "chamfer" || smoothing === "fillet" ? smoothing : "", radius: f("radius", 0),
     islandMode: f("island_removal_mode", 0), islandAreaMin: f("island_area_min", 10),
     hatch: mode === "hatch" ? { thickness: f("hatch_thickness", 1), gap: f("hatch_gap", 1.5), orientation: f("hatch_orientation", 0), smoothingLevel: f("hatch_smoothing_level", 0), smoothingValue: f("hatch_smoothing_value", 0.1), borderHatch: fs("hatch_border_algorithm") !== "min_thickness", minHoleArea: f("hatch_min_hole_area", 0.3), offsets } : null,
-    thieving: mode === "thieving", stored: new Map() };
+    thieving: mode === "thieving" ? readThieving(fill, mt ? num(mt[1], 0.25) : 0.25, offsets) : null, stored: new Map() };
   for (const fp of kids(n, "filled_polygon") as Node[]) {
     const l = K(fp, "layer"); const pts = polyPtsOf(fp) as Pt[]; if (pts.length < 3) continue;
     const key = l ? str(l[1]) : layers[0]; const cur = z.stored.get(key) || []; cur.push(shape(pts)); z.stored.set(key, cur);
@@ -427,7 +438,8 @@ export class ZoneFiller {
     const islandsOf = this.isolatedIslands(zones);
     for (const z of zones) {
       const res: ZoneFillResult = { id: z.id, layers: [] };
-      const zoneIslands = islandsOf.get(z) || new Map<string, Set<number>>();
+      // copper-thieving fills are intentionally disconnected stamps: never classified as islands
+      const zoneIslands = (!z.thieving && islandsOf.get(z)) || new Map<string, Set<number>>();
       // a zone with no pad connection on any layer is a deliberately unconnected pour: kept as it is
       let allIsolated = true;
       for (const l of z.layers) { if (!isCopper(l)) continue; const polys = this.fillOutlines(z, l); const iso = zoneIslands.get(l); if (!polys.length) continue; if (!iso || iso.size !== polys.length) allIsolated = false; }
@@ -822,7 +834,7 @@ export class ZoneFiller {
       const discs: Poly = []; for (const v of solidVias) if (v.layers.includes(layer)) for (const d of this.viaShape(v, layer, 0)) discs.push(d);
       const protect = union(union(rings, clearanceHoles), discs.length ? intersect(union(discs), smoothed) : []);
       fill = this.addHatch(z, layer, fill, protect);
-    }
+    } else if (z.thieving) fill = this.addCopperThievingPattern(z, layer, fill);
     if (prune) fill = inflate(fill, halfMin - eps, true, this.maxError);
     if (rings.length) fill = union(fill, rings);
     const padHoles: Poly = []; for (const it of thermal) if ((it as Pad).fp) for (const h of this.holeShape(it as Pad, 0)) padHoles.push(h);
@@ -928,6 +940,69 @@ export class ZoneFiller {
     return subtract(fill, fromPolygons(polys));
   }
 
+  // ------------------------------------------------------------ copper thieving
+  /**
+   * ZONE_FILLER::addCopperThievingPattern, on the fill deflated by half the min thickness (the caller re-inflates).
+   * Dots and squares replace the fill with stamps on a grid of element size + gap whose centres sit far enough
+   * inside the fill (the inset sideLen / 2 or the dot radius, + 1 nm) for a whole stamp; hatch keeps a line-width
+   * border and carves (gap + min thickness) voids from the interior.  A zero gap or size gives no fill.
+   */
+  private addCopperThievingPattern(z: ZoneModel, layer: string, fill: Poly): Poly {
+    const t = z.thieving as ZoneThieving; const IU = 1e6; const iu = (mm: number): number => Math.round(mm * IU);
+    const needsSize = t.pattern !== "hatch", needsWidth = t.pattern === "hatch";
+    if (t.gap <= 0 || (needsSize && t.size <= 0) || (needsWidth && t.width <= 0)) return [];
+    if (!fill.length) return [];
+    const orient = t.orientation;
+    const rotP = (a: Poly, deg: number): Poly => a.map((p) => p.map((q) => { const [x, y] = rot(q.x, q.y, deg); return { x, y }; }));
+    let region = orient ? rotP(fill, -orient) : fill;
+    const bb = bboxOf(region);
+    const left = iu(bb.x0), top = iu(bb.y0), right = iu(bb.x1), bottom = iu(bb.y1);
+    let off = t.offsets.get(layer) || [0, 0];
+    if (orient) off = rot(off[0], off[1], -orient);
+    const ox = iu(off[0]), oy = iu(off[1]);
+    const minT = iu(z.minThickness), size = iu(t.size), gap = iu(t.gap), width = iu(t.width);
+    const cmod = (a: number, b: number): number => a - b * Math.trunc(a / b);   // C++ % (truncating)
+    if (t.pattern === "hatch") {
+      const voidSize = gap + minT, lineStride = width + gap;
+      const interior = inflate(fill, -t.width, false, this.maxError);
+      if (!interior.length) return fill;
+      let xVoid = left - cmod(left, lineStride) + ox + Math.trunc(lineStride / 2);
+      let yVoid = top - cmod(top, lineStride) + oy + Math.trunc(lineStride / 2);
+      const hv = Math.trunc(voidSize / 2);
+      while (xVoid - hv > left) xVoid -= lineStride;
+      while (yVoid - hv > top) yVoid -= lineStride;
+      const voids: PathD[] = [];
+      for (let yy = yVoid; yy <= bottom + voidSize; yy += lineStride) for (let xx = xVoid; xx <= right + voidSize; xx += lineStride) {
+        const sq: Pt[] = [[xx - hv, yy - hv], [xx + hv, yy - hv], [xx + hv, yy + hv], [xx - hv, yy + hv]];
+        voids.push(shape(sq.map(([x, y]) => { const p: Pt = [x / IU, y / IU]; return orient ? rot(p[0], p[1], orient) : p; })));
+      }
+      return subtract(fill, intersect(voids, interior));
+    }
+    const dotStride = size + gap;
+    const dotRadius = Math.max(Math.trunc(size / 2) - Math.trunc(minT / 2), 1);
+    const sideLen = Math.max(size - minT, 1);
+    const inset = (t.pattern === "squares" ? Math.trunc(sideLen / 2) : dotRadius) + 1;
+    region = inflate(region, -inset / IU, false, this.maxError);
+    if (!region.length) return [];
+    let xStart = left - cmod(left, dotStride) + ox, yStart = top - cmod(top, dotStride) + oy;
+    while (xStart > left) xStart -= dotStride;
+    while (yStart > top) yStart -= dotStride;
+    const idx = region.map((p) => ({ index: new PathIndex(p), w: signedArea(p) >= 0 ? 1 : -1 }));
+    const inside = (x: number, y: number): boolean => { let w = 0; for (const p of idx) if (p.index.contains(x, y)) w += p.w; return w > 0; };
+    const stamps: PathD[] = []; let row = 0;
+    for (let yy = yStart; yy <= bottom + dotRadius; yy += dotStride, row++) {
+      const rowOff = t.stagger && (row & 1) ? Math.trunc(dotStride / 2) : 0;
+      for (let xx = xStart + rowOff; xx <= right + dotRadius; xx += dotStride) {
+        const cx = xx / IU, cy = yy / IU; if (!inside(cx, cy)) continue;
+        let pts: Pt[];
+        if (t.pattern === "squares") { const h = sideLen / 2 / IU; pts = [[cx - h, cy - h], [cx + h, cy - h], [cx + h, cy + h], [cx - h, cy + h]]; }
+        else pts = circlePoints(cx, cy, dotRadius / IU + this.maxError, this.maxError);   // ERROR_OUTSIDE
+        stamps.push(shape(orient ? pts.map((p) => rot(p[0], p[1], orient)) : pts));
+      }
+    }
+    return stamps;
+  }
+
   // ------------------------------------------------------------ non-copper
   private fillNonCopperZone(z: ZoneModel, layer: string, smoothed: Poly): Poly {
     const holes: Poly[] = [];
@@ -945,6 +1020,7 @@ export class ZoneFiller {
     const half = z.minThickness / 2, eps = EPSILON;
     fill = inflate(fill, -(half - eps), false, this.maxError);
     if (z.hatch) fill = this.addHatch(z, layer, fill, []);
+    else if (z.thieving) fill = this.addCopperThievingPattern(z, layer, fill);
     if (half - eps > eps) fill = inflate(fill, half - eps, true, this.maxError);
     return fill;
   }
