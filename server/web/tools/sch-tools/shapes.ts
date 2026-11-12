@@ -2,7 +2,7 @@ import type { SchCtx, Pt } from "./types";
 import { root } from "../root";
 import { commitSchArc, schArcClick } from "./arcs";
 import { closePrompt, promptImpl } from "./dom";
-import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, tableNode, textBoxNode } from "./nodes";
+import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, drawTableNode, textBoxNode } from "./nodes";
 import { rememberPlaced } from "./repeat";
 import { SHEET_EXT, nextPage, placeSheet, placeSheetNode, sheetFileFor, sheetInstance } from "./sheets";
 import { K, S, kids, str } from "./state";
@@ -32,7 +32,7 @@ export function drawClick(ctx: SchCtx, shape: string, p: Pt) {
     if (d.pts.length === 2 && same(p, d.pts[0])) { ctx.toast("The curve's end must differ from its start"); return; }
     d.pts.push(p); if (d.pts.length === 4) finishDraw(ctx); else ctx.requestRender(); return;
   }
-  if (same(p, last)) return;                     // a zero-size shape is not a shape
+  if (same(p, last) && shape !== "table") return;   // a zero-size shape is not a shape (a table is at least one cell)
   d.pts.push(p); finishDraw(ctx);
 }
 export function finishDraw(ctx: SchCtx) {
@@ -49,15 +49,14 @@ export function finishDraw(ctx: SchCtx) {
     if (pts.length === 4) { const e = pts[2], c2 = [r4(2 * e[0] - pts[3][0]), r4(2 * e[1] - pts[3][1])]; node = bezierNode(pts[0], pts[1], c2, e); }
   }
   else if (d.shape === "table") {
+    // SCH_DRAWING_TOOLS::DrawTable: the second click fixes the table sized by the drag, then DIALOG_TABLE_PROPERTIES
+    // opens on it; OK adds it ("Draw Table") and selects it, Cancel drops it
+    const node = drawTableNode(pts[0], pts[1], ctx.gridPitch);
     d.await = true; ctx.requestRender();
-    promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
-      if (S.draw !== d) return; S.draw = null;
-      const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
-      if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
-      else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
-      ctx.requestRender();
-    });
-    return;
+    const done = (n: SNode | null) => { if (S.draw !== d) return; S.draw = null; if (n) commitShape(ctx, n, "Draw Table"); ctx.requestRender(); };
+    const T = root.CollabTableCells;
+    if (T && T.newSchTableDialog && !ctx.viewOnly) { T.newSchTableDialog(ctx, node, done); return; }
+    done(node); return;
   }
   else if (d.shape === "sheet") {
     // the rectangle is fixed; DIALOG_SHEET_PROPERTIES opens on "Untitled Sheet" / "untitled.kicad_sch", then the file is made

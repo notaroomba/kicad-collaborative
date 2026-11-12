@@ -35,7 +35,7 @@ import { busyMessage, onActivate, onDocChanged, onKey, onPointerDown, onPointerM
 import { type ImagePickerFn, openImagePicker, setImagePickerImpl } from "./images";
 import { analyzePoint, cancelWire, editTxn, explicitJunctionAllowed, explicitJunctionNeeded, finishWire, previewJunctions, txnCleanUp, txnTrimWire } from "./junction";
 import { selectConnection, selectNode, stepNetItem } from "./netwalk";
-import { SHEET_FILE_OFF, SHEET_NAME_OFF, arcNode, base64ToBytes, bezierNode, busEntryNode, bytesToBase64, circleNode, classLabelNode, imageData, imageNode, imageSize, junctionNode, labelNode, lineNode, noConnectNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, sheetPinNode, symbolNode, tableNode, textBoxNode } from "./nodes";
+import { SHEET_FILE_OFF, SHEET_NAME_OFF, arcNode, base64ToBytes, bezierNode, busEntryNode, bytesToBase64, circleNode, classLabelNode, imageData, imageNode, imageSize, junctionNode, labelNode, lineNode, noConnectNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, sheetPinNode, symbolNode, tableNode, drawTableNode, drawTableSize, textBoxNode } from "./nodes";
 import { MX, MY, RCCW, anchorOf, cloneNode, mirrorNode, mul, orientOf, orientSymbol, rotateNode, shiftNode, tFrom } from "./orient";
 import { ghostSegs } from "./overlay";
 import { applyPointEdit, editFollowers, editHandles, editPoints, pointEditEnd, pointEditMove, pointEditStart, textBoxMinSize } from "./point-edit";
@@ -82,7 +82,7 @@ const sch = {
     rectangleNode, circleNode, arcNode, polylineNode, textBoxNode, classLabelNode, placeClassLabel, isPowerSymbol, powerSymbols, pickSymbol,
     drawClick, finishDraw, cancelDraw, deleteChanges, deleteAt, pickAny, geomDist, anchorOf, DELETE_CURSOR,
     // sheets, sheet pins, tables, curves, polygons, rule areas, images and net highlighting
-    sheetNode, sheetPinNode, tableNode, bezierNode, polygonNode, ruleAreaNode, imageNode, imageData, imageSize, bytesToBase64, base64ToBytes,
+    sheetNode, sheetPinNode, tableNode, drawTableNode, drawTableSize, bezierNode, polygonNode, ruleAreaNode, imageNode, imageData, imageSize, bytesToBase64, base64ToBytes,
     placeSheet, ensureSheetDoc, sheetInstance, sheetPathHere, nextPage, emptySheetDoc, relPath, currentDoc, sheetEdgeAt, sheetPinPoint, sheetPinClick, placeSheetPin,
     openImagePicker, netItems, terminalsOf, pickNet, highlightClick, setHighlight, typeNameFor, ruleAreaId, itemSexpr, SHEET_NAME_OFF, SHEET_FILE_OFF },
 };

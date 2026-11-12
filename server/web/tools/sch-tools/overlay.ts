@@ -1,6 +1,6 @@
 import type { Box, PaintGeom, Pt } from "./types";
 import { rectOf } from "./hit";
-import { corners } from "./nodes";
+import { corners, drawTableLines } from "./nodes";
 import { K, LINE_KINDS, S, ptsOf } from "./state";
 import { schArcPoints } from "./arcs";
 import { segNull } from "./wire";
@@ -64,7 +64,8 @@ export function ghostSegs() {
   }
   else if (dr && dr.pts.length && dr.cur) {
     const a = dr.pts[0], c = dr.cur;
-    if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet" || dr.shape === "table") box(corners(a, c));
+    if (dr.shape === "table") { for (const l of drawTableLines(a, c, (S.ctx && S.ctx.gridPitch) || 1.27)) if (out.length < 120) out.push([l[0], l[1], l[2], l[3], 0.1524]); }
+    else if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet") box(corners(a, c));
     else if (dr.shape === "circle") { const r = Math.hypot(c[0] - a[0], c[1] - a[1]), ring: Pt[] = []; for (let i = 0; i <= 24; i++) ring.push([a[0] + r * Math.cos(i * Math.PI / 12), a[1] + r * Math.sin(i * Math.PI / 12)]); path(ring); }
     else path(dr.pts.concat([c]));
   }

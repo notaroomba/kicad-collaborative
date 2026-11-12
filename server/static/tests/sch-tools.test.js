@@ -757,24 +757,31 @@ test("sheet pin: a click near a sheet border prompts for the name; the pin lands
   }
 });
 
-test("table: two corners then 'rows x cols'; KiCad's (table …) with border/separator strokes, widths, heights, uuid, then the cells", () => {
+test("table: SCH_DRAWING_TOOLS::DrawTable sizes rows and columns from the drag; KiCad's (table …) with border/separator strokes, widths, heights, uuid, then the cells", () => {
   const { d, c } = fresh();
-  sch.setPrompt((title, initial, client, done) => { assert.strictEqual(title, "Rows x cols"); assert.strictEqual(initial, "2x2"); done("2x3"); });
   sch.onActivate("table", c);
   sch.onPointerDown(ev(), [25.4, 25.4], c); sch.onPointerMove(ev(), [40, 30], c); assert.deepStrictEqual(sch.state.draw.cur, [39.37, 30.48]);
+  // a 38.1 x 10.16 drag: one column per 15 text heights (19.05), one row per 2 (2.54)
   sch.onPointerDown(ev(), [63.5, 35.56], c);
-  const cm = lastCommit(c); assert.strictEqual(cm.label, "table"); assert.strictEqual(cm.changes[0].typeName, "SCH_TABLE"); assert.strictEqual(cm.changes[0].kind, "ADDED");
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "Draw Table"); assert.strictEqual(cm.changes[0].typeName, "SCH_TABLE"); assert.strictEqual(cm.changes[0].kind, "ADDED");
   const n = fragItem(cm.changes[0]);
-  assert.deepStrictEqual(n.slice(0, 6), ["table", ["column_count", 3], ["border", ["external", "yes"], ["header", "yes"], STROKE0], ["separators", ["rows", "yes"], ["cols", "yes"], STROKE0], ["column_widths", 12.7, 12.7, 12.7], ["row_heights", 5.08, 5.08]]);
+  assert.deepStrictEqual(n.slice(0, 6), ["table", ["column_count", 2], ["border", ["external", "yes"], ["header", "yes"], STROKE0], ["separators", ["rows", "yes"], ["cols", "yes"], STROKE0], ["column_widths", 19.05, 19.05], ["row_heights", 2.54, 2.54, 2.54, 2.54]]);
   assert.strictEqual(n[6][0], "uuid"); assert.strictEqual(n[7][0], "cells"); assert.strictEqual(n.length, 8);
-  const cells = kids(n[7], "table_cell"); assert.strictEqual(cells.length, 6);
-  assert.deepStrictEqual(cells[4].slice(0, 9), ["table_cell", "", ["exclude_from_sim", "no"], ["at", 38.1, 30.48, 0], ["size", 12.7, 5.08], ["margins", 0.9525, 0.9525, 0.9525, 0.9525], ["span", 1, 1], FILL_NONE, ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "top"]]]);
-  assert.strictEqual(cells[4][9][0], "uuid"); assert.strictEqual(cells[4].length, 10);
+  const cells = kids(n[7], "table_cell"); assert.strictEqual(cells.length, 8);
+  assert.deepStrictEqual(cells[3].slice(0, 9), ["table_cell", "", ["exclude_from_sim", "no"], ["at", 44.45, 27.94, 0], ["size", 19.05, 2.54], ["margins", 0.9525, 0.9525, 0.9525, 0.9525], ["span", 1, 1], FILL_NONE, ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "top"]]]);
+  assert.strictEqual(cells[3][9][0], "uuid"); assert.strictEqual(cells[3].length, 10);
   assert.ok(/\(table_cell "" /.test(cm.changes[0].sexpr), "empty cell text is a quoted string");
   assert.ok(d.items.get(cm.changes[0].id)); assert.strictEqual(sch.state.draw, null); assert.strictEqual(sch.state.tool, "table");
   const t2 = _.tableNode([0, 0], [1, 1], 1, 1, 1.27); assert.deepStrictEqual([kid(t2, "column_widths")[1], kid(t2, "row_heights")[1]], [6.35, 2.54], "5 × 2 grid steps minimum");
-  sch.setPrompt((t, i, cl, done) => done("lots")); const before = c.log.length; sch.onPointerDown(ev(), [10.16, 10.16], c); sch.onPointerDown(ev(), [20.32, 20.32], c);
-  assert.strictEqual(c.log.length, before, "an unreadable spec places nothing"); assert.strictEqual(sch.state.draw, null);
+  // a click on the first point, or a drag up / left, is still one minimum cell from the first click
+  assert.deepStrictEqual(_.drawTableSize([10, 10], [10, 10], 1.27), { rows: 1, cols: 1, cw: 6.35, ch: 2.54 });
+  assert.deepStrictEqual(_.drawTableSize([10, 10], [0, 0], 1.27), { rows: 1, cols: 1, cw: 6.35, ch: 2.54 });
+  assert.deepStrictEqual(_.drawTableSize([0, 0], [60, 8], 1.27), { rows: 3, cols: 3, cw: 20.32, ch: 2.54 });
+  assert.deepStrictEqual(kid(_.drawTableNode([0, 0], [60, 8], 1.27), "column_widths"), ["column_widths", 20.32, 20.32, 20.32]);
+  // the dialog decides when the editor provides it: Cancel adds nothing
+  const before = c.log.length; globalThis.CollabTableCells = { newSchTableDialog(ctx, node, done) { assert.strictEqual(node[0], "table"); done(null); return true; } };
+  try { sch.onPointerDown(ev(), [10.16, 10.16], c); sch.onPointerDown(ev(), [20.32, 20.32], c); } finally { delete globalThis.CollabTableCells; }
+  assert.strictEqual(c.log.length, before, "Cancel places nothing"); assert.strictEqual(sch.state.draw, null);
 });
 
 test("bezier: start, control 1, end, then the far handle (BEZIER_GEOM_MANAGER); control 2 is the handle reflected over the end", () => {

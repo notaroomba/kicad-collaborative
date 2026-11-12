@@ -23,7 +23,7 @@ import { clearHooks } from "./selection";
 import { clearAllSelection, interactionBusy, pcbState, schState, selectionChanged, selectionIds, stage, worldMm } from "./gestures";
 import { keyHooks } from "./hotkeys";
 import { E } from "./state";
-import { cellPropsDialog, errorMessage, tablePropsDialog } from "./tabledialogs";
+import { cellPropsDialog, errorMessage, newSchTableDialog, tablePropsDialog } from "./tabledialogs";
 import { selFilter } from "./selection";
 import { download } from "./pcbdialogs/ui";
 import { isSch, pxPerMm, requestRender } from "./view";
@@ -414,5 +414,5 @@ export function installTableCells(): void {
   overlayHooks.push(drawCellSelection, drawCellHandles);
   propertiesHooks.push(cellProperties);
   tableMenu.state = cellMenuState; tableMenu.pick = contextPick; tableMenu.actions = TABLE_ACTIONS;
-  (window as unknown as { CollabTableCells?: unknown }).CollabTableCells = { cellSelection, clearCells, selectTables, runEdit, selectRowsCols, cellProperties, editTable, exportCsv, cellUnder, promoteToTable, TABLE_ACTIONS, cellMenuState };
+  (window as unknown as { CollabTableCells?: unknown }).CollabTableCells = { newSchTableDialog, cellSelection, clearCells, selectTables, runEdit, selectRowsCols, cellProperties, editTable, exportCsv, cellUnder, promoteToTable, TABLE_ACTIONS, cellMenuState };
 }

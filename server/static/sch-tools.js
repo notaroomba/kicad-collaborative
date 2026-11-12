@@ -527,6 +527,30 @@
     rows = Math.max(1, rows | 0);
     cols = Math.max(1, cols | 0);
     const cw = r4(Math.max(5 * grid, Math.round((x1 - x0) / cols / grid) * grid)), ch = r4(Math.max(2 * grid, Math.round((y1 - y0) / rows / grid) * grid));
+    return tableGridNode([x0, y0], rows, cols, cw, ch);
+  }
+  var DEFAULT_TEXT_SIZE = 1.27;
+  function drawTableSize(origin, cur, grid) {
+    const IU = 1e4, iu = (v) => Math.round(v * IU), g = iu(grid > 0 ? grid : 1.27), fs = iu(DEFAULT_TEXT_SIZE);
+    const dx = iu(cur[0]) - iu(origin[0]), dy = iu(cur[1]) - iu(origin[1]);
+    const cols = Math.max(1, Math.trunc(dx / (fs * 15))), rows = Math.max(1, Math.trunc(dy / (fs * 2)));
+    let cw = Math.max(g * 5, Math.trunc(dx / cols)), ch = Math.max(g * 2, Math.trunc(dy / rows));
+    cw = Math.round(cw / g) * g;
+    ch = Math.round(ch / g) * g;
+    return { rows, cols, cw: r4(cw / IU), ch: r4(ch / IU) };
+  }
+  function drawTableNode(origin, cur, grid) {
+    const z = drawTableSize(origin, cur, grid);
+    return tableGridNode(origin, z.rows, z.cols, z.cw, z.ch);
+  }
+  function drawTableLines(origin, cur, grid) {
+    const z = drawTableSize(origin, cur, grid), [x0, y0] = origin, x1 = x0 + z.cols * z.cw, y1 = y0 + z.rows * z.ch, out = [];
+    for (let r = 0; r <= z.rows; r++) out.push([x0, y0 + r * z.ch, x1, y0 + r * z.ch]);
+    for (let c = 0; c <= z.cols; c++) out.push([x0 + c * z.cw, y0, x0 + c * z.cw, y1]);
+    return out;
+  }
+  function tableGridNode(o, rows, cols, cw, ch) {
+    const [x0, y0] = o;
     const cells = [];
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) cells.push([
       "table_cell",
@@ -3865,7 +3889,7 @@ Link '${target}' to this file?`)) return null;
       else ctx.requestRender();
       return;
     }
-    if (same(p, last)) return;
+    if (same(p, last) && shape !== "table") return;
     d.pts.push(p);
     finishDraw(ctx);
   }
@@ -3897,16 +3921,21 @@ Link '${target}' to this file?`)) return null;
         node = bezierNode(pts[0], pts[1], c2, e);
       }
     } else if (d.shape === "table") {
+      const node2 = drawTableNode(pts[0], pts[1], ctx.gridPitch);
       d.await = true;
       ctx.requestRender();
-      promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
+      const done = (n) => {
         if (S.draw !== d) return;
         S.draw = null;
-        const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
-        if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
-        else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
+        if (n) commitShape(ctx, n, "Draw Table");
         ctx.requestRender();
-      });
+      };
+      const T = root.CollabTableCells;
+      if (T && T.newSchTableDialog && !ctx.viewOnly) {
+        T.newSchTableDialog(ctx, node2, done);
+        return;
+      }
+      done(node2);
       return;
     } else if (d.shape === "sheet") {
       d.await = true;
@@ -4336,7 +4365,9 @@ Link '${target}' to this file?`)) return null;
       } else if (dr.pts.length) path([dr.pts[0], dr.cur]);
     } else if (dr && dr.pts.length && dr.cur) {
       const a = dr.pts[0], c = dr.cur;
-      if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet" || dr.shape === "table") box(corners(a, c));
+      if (dr.shape === "table") {
+        for (const l of drawTableLines(a, c, S.ctx && S.ctx.gridPitch || 1.27)) if (out.length < 120) out.push([l[0], l[1], l[2], l[3], 0.1524]);
+      } else if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet") box(corners(a, c));
       else if (dr.shape === "circle") {
         const r = Math.hypot(c[0] - a[0], c[1] - a[1]), ring = [];
         for (let i = 0; i <= 24; i++) ring.push([a[0] + r * Math.cos(i * Math.PI / 12), a[1] + r * Math.sin(i * Math.PI / 12)]);
@@ -4976,7 +5007,14 @@ Link '${target}' to this file?`)) return null;
         c.strokeStyle = K.SCH.ruleArea;
         c.setLineDash([4 * px, 3 * px]);
       }
-      if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet" || d.shape === "table") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
+      if (d.shape === "table") {
+        c.beginPath();
+        for (const l of drawTableLines(p0, cur, S.ctx ? S.ctx.gridPitch : 1.27)) {
+          c.moveTo(l[0], l[1]);
+          c.lineTo(l[2], l[3]);
+        }
+        c.stroke();
+      } else if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
       else if (d.shape === "circle") {
         c.beginPath();
         c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2);
@@ -7901,6 +7939,8 @@ Link '${target}' to this file?`)) return null;
       sheetNode,
       sheetPinNode,
       tableNode,
+      drawTableNode,
+      drawTableSize,
       bezierNode,
       polygonNode,
       ruleAreaNode,

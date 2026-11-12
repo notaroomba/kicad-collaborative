@@ -50,6 +50,8 @@ interface ToolsRoot {
   };
   /** web/editor: the chrome's store (the board tools read the view and whether a context menu is up). */
   CollabApp?: { getState(): { view?: string; contextMenu?: unknown } };
+  /** web/editor/tablecells.ts: the table cell editing; the schematic Draw Table hands its new table to the dialog. */
+  CollabTableCells?: { newSchTableDialog?(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean };
   /** web/router (static/dist/autoroute.js): the autorouter and placer dialogs. */
   PcbAutoRouter?: { open?(ctx: ToolCtx): boolean; openPlace?(ctx: ToolCtx): boolean };
   /** web/editor/pcbdialogs: the zone filler. */
