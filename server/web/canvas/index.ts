@@ -52,6 +52,7 @@ import { boardItemBox, presenceSelection } from "./kicad-bbox";
 import { padModel } from "./pad-model";
 import { parseLibSymbol, subUnitBody, PIN_TYPE_NAMES, libGraphicGeom } from "./libsym";
 import { footprintDocApi } from "./footprint-doc";
+import { tableModel } from "./table-model";
 export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS, PCB_BG,
   // schematic colour themes (colors.ts): KiCad Default / KiCad Classic / Dark; the painters rebuild stale geometry,
   // renderSvg / renderPng use opts.colorTheme (KiCad Default unless given)
@@ -87,7 +88,7 @@ type Api = typeof api & {
   itemTouchesRect: typeof itemTouchesRect; itemVisible: typeof itemVisible; geomTouchesRect: typeof geomTouchesRect;
   boardItemBox: typeof boardItemBox; presenceSelection: typeof presenceSelection;
   pcbNetlist: typeof pcbNetlist; schNets: typeof schNets; boardSetup: typeof boardSetup; DRC_ITEMS: typeof DRC_ITEMS; projectFile: typeof projectFile; padModel: typeof padModel;
-  footprintDoc: typeof footprintDocApi; plot: typeof plotApi;
+  footprintDoc: typeof footprintDocApi; plot: typeof plotApi; tableModel: typeof tableModel;
 };
 const plotApi = { PlotRecorder, plotRecorder, plotItems, sheetPlotItems, itemsBox, dashRuns, blackAndWhite, luminance, params: plotParams };
 (api as Api).itemTouchesRect = itemTouchesRect; (api as Api).itemVisible = itemVisible; (api as Api).geomTouchesRect = geomTouchesRect;
@@ -95,4 +96,5 @@ const plotApi = { PlotRecorder, plotRecorder, plotItems, sheetPlotItems, itemsBo
 (api as Api).pcbNetlist = pcbNetlist; (api as Api).schNets = schNets; (api as Api).boardSetup = boardSetup; (api as Api).DRC_ITEMS = DRC_ITEMS; (api as Api).projectFile = projectFile; (api as Api).padModel = padModel;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 (api as Api).footprintDoc = footprintDocApi;
 (api as Api).plot = plotApi;   // File > Plot / Print: the painter recorded as plot items (web/canvas/plot-rec.ts), the board's plot settings   // the Footprint Editor's document (web/canvas/footprint-doc.ts)
+(api as Api).tableModel = tableModel;   // a table's structure edits and layout (web/canvas/table-model.ts), shared by both editors   // the Footprint Editor's document (web/canvas/footprint-doc.ts)
 root.KiCadCanvas = api;

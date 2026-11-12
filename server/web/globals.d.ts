@@ -128,6 +128,8 @@ interface KiCadCanvasApi {
   PIN_TYPE_NAMES: Record<string, string>;
   /** the Footprint Editor's document: a .kicad_mod's children as items (web/canvas/footprint-doc.ts) */
   footprintDoc: typeof import("./canvas/footprint-doc").footprintDocApi;
+  /** a table's structure edits and Normalize (web/canvas/table-model.ts) */
+  tableModel: typeof import("./canvas/table-model").tableModel;
   /** the board's own settings sections (web/canvas/board-setup.ts) */
   boardSetup?: { applyBoardSetup(doc: KDoc, change: KChange): boolean };
   [extra: string]: unknown;
