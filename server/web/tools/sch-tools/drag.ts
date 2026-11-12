@@ -203,7 +203,9 @@ export function moveDrag(ctx: SchCtx, mm: Pt) {
 }
 export function endDrag(ctx: SchCtx, commit: boolean) {
   const d = S.drag; S.drag = null; if (!d) return;
-  S.dragEndedAt = Date.now();
+  // only a drag that really moved (or a key-started move) eats the following double click; an unmoved
+  // press/release on a selected item must leave the dblclick to open its properties (SCH_SELECTION_TOOL::Main)
+  if (d.moved || !d.byPointer) S.dragEndedAt = Date.now();
   const [dx, dy] = d.last, doc = ctx.doc;
   applyDrag(doc, d, 0, 0);                      // originals back first, so commit() records a true inverse
   const done = () => { if (d.restoreMode) { S.dragMode = d.restoreMode; announceModes(ctx); } ctx.requestRender(); };

@@ -553,6 +553,20 @@ test("pin on pin (the GND case): dragging the symbol away spawns a wire between 
   assert.ok(Array.from(d.items.values()).some((it) => it.kind === "wire" && ptsOf(it.node)[1][1] === 111.76), "wire applied to the document");
 });
 
+test("an unmoved press/release on a selected symbol leaves the next double click alone (opens properties)", () => {
+  const { d, c } = fresh();
+  const r2 = addR(d, [25.4, 107.95]);
+  sch.state.dragEndedAt = 0;
+  assert.ok(_.beginDrag(c, r2, [25.4, 107.95], true)); _.endDrag(c, true);
+  assert.ok(!sch.state.dragEndedAt, "no drag-ended stamp without movement");
+  assert.ok(_.beginDrag(c, r2, [25.4, 107.95], true)); _.moveDrag(c, [25.4, 115.57]); _.endDrag(c, true);
+  assert.ok(sch.state.dragEndedAt > 0, "a real drag still swallows the dblclick that ends it");
+  sch.state.dragEndedAt = 0;
+  assert.ok(_.beginDrag(c, r2, [25.4, 115.57], false)); _.endDrag(c, true);
+  assert.ok(sch.state.dragEndedAt > 0, "a key-started move (M) is still stamped");
+  sch.state.dragEndedAt = 0;
+});
+
 test("move (M) is KiCad's plain move: the symbol goes, the connection is left behind", () => {
   const { d, c } = fresh();
   const r2 = addR(d, [25.4, 107.95]);

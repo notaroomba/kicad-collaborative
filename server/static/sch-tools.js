@@ -2316,7 +2316,7 @@ ${body}
     const d = S.drag;
     S.drag = null;
     if (!d) return;
-    S.dragEndedAt = Date.now();
+    if (d.moved || !d.byPointer) S.dragEndedAt = Date.now();
     const [dx, dy] = d.last, doc = ctx.doc;
     applyDrag(doc, d, 0, 0);
     const done = () => {
