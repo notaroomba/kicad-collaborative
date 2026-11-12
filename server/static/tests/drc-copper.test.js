@@ -120,5 +120,32 @@ test("boxGrid: the same candidates as a scan over every box, in their order", ()
   for (let q = 0; q < 300; q++) { const x = rnd() * 100, y = rnd() * 100, b = [x, y, x + rnd() * 2, y + rnd() * 2];
     assert.deepEqual(g.query(b, 0.01).map((t) => t.i), items.filter((t) => P.boxesTouch(t.b, b, 0.01)).map((t) => t.i)); }
 });
-console.log(`${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+// test_drc_copper_conn.cpp fills the zones first (KI_TEST::FillZones) and counts every error-severity violation;
+// issue9870 needs ERROR_OUTSIDE circles and track ends (a 0.5 mm via just touching a fill corner)
+async function refilled(name) {
+  require(path.join(__dirname, "..", "dist", "fab.js")); const F = globalThis.KiCadFab;
+  const text = read(name, ".kicad_pcb"), pro = read(name, ".kicad_pro"); const s = P.designSettings(pro ? JSON.parse(pro) : null);
+  const doc = K.parseDoc(text, "kicad_pcb");
+  const rules = { netClearance: (n) => { const nc = P.netclassOf(s, n); return nc && nc.clearance !== undefined ? nc.clearance : s.clearance; }, minClearance: s.minClearance || 0, holeClearance: s.holeClearance || 0, edgeClearance: s.edgeClearance };
+  for (const r of await F.fillZones({ doc, setup: text }, rules, null)) { const it = doc.items.get(r.id); it.node = F.filledZoneNode(it.node, r, doc.copper, (n) => K.cloneNode(n)); }
+  for (const k of ["invalid_outline", "unconnected_items", "copper_sliver", "starved_thermal", "drill_out_of_range", "via_diameter", "lib_footprint_issues", "lib_footprint_mismatch"]) s.severities[k] = "ignore";
+  s.severities.connection_width = "error";
+  return P.drc(doc, s, { unconnected: false, rules: read(name, ".kicad_dru") }).filter((m) => m.severity === "error");
+}
+const asyncTests = [];
+if (read("issue9870", ".kicad_pcb")) asyncTests.push(["connection_width after a refill: issue9870 12, connection_width_rules 3, issue12831 / issue14130 0 (test_drc_copper_conn.cpp)", async () => {
+  for (const [name, n] of [["issue9870", 12], ["connection_width_rules", 3], ["issue12831", 0], ["issue14130", 0]]) assert.equal((await refilled(name)).length, n, name);
+}]);
+test("ERROR_OUTSIDE circle and oval: every vertex outside the true shape, chord middles on it, the track's width kept", () => {
+  const c = P.circleOutside(10, 10, 0.25); assert.equal(c.length % 8, 0);
+  for (let i = 0; i < c.length; i++) { const a = c[i], b = c[(i + 1) % c.length]; assert.ok(Math.hypot(a[0] - 10, a[1] - 10) >= 0.25); assert.ok(Math.abs(Math.hypot((a[0] + b[0]) / 2 - 10, (a[1] + b[1]) / 2 - 10) - 0.25) < 2e-6); }
+  const o = P.ovalOutside([0, 0], [3, 4], 0.635); const ys = o.map((p) => (-p[0] * 4 + p[1] * 3) / 5);
+  assert.ok(Math.max(...ys) <= 0.3175 + 1e-6 && Math.min(...ys) >= -0.3175 - 1e-6, "cut back to the width");
+  assert.ok(Math.max(...o.map((p) => (p[0] * 3 + p[1] * 4) / 5)) > 5 + 0.3175, "the ends pushed out");
+});
+
+(async () => {
+  for (const [name, fn] of asyncTests) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { failed++; console.log("  FAIL " + name + "\n       " + (e.stack || String(e)).split("\n").slice(0, 6).join("\n       ")); } }
+  console.log(`${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
+})();

@@ -47,7 +47,7 @@ import { changedArea, dragChanges, dragTo, optimizeDragged } from "./drag-optimi
 import { assembleLine, dragCorner45, dragCornerFree, dragSegment45, dragSolution, dragStart, initialTrace } from "./dragger";
 import { POLY_TOOLS, RULE_AREA_LAYERS, angleSnapMode, build45Leader, constrainDraw, drawTrack, nextLineMode, setAngleSnap, stepDrawWidth, undoChainSegment, withStroke } from "./draw-modes";
 import { drawClick, finishPoly, openImagePicker, placeImage, polyOutline, zoneTemplate } from "./draw-tools";
-import { clipperArea, sliverMarkers, sliverPoints } from "./drc-sliver";
+import { circleOutside, clipperArea, ovalOutside, sliverMarkers, sliverPoints } from "./drc-sliver";
 import { PolygonTest, connectionWidthMarkers } from "./drc-connwidth";
 import { DEFAULT_SETTINGS, boardOutline, chainLoops, courtyards, designSettings, drc, edgeShapes, netClearance, netclassOf, segCross } from "./drc";
 import { cycleWidth, deleteSelection, expandSelection, flipSelected, fmtSize, hoverDelete, rotateSelected, routableItems } from "./edit-commands";
@@ -428,7 +428,7 @@ root.PcbTools = { useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad:
   selectionIds, applySelection, requestSelection, bestDragOrigin, snapCursor, itemAnchors, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
   // netTable, editPoints and editPointNode are listed above (the script named them twice, to the same values)
   shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
-  sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch,
+  sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch, circleOutside, ovalOutside,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

@@ -8,7 +8,7 @@ import type { BoardDoc, Conductor, CopperShape, DrcMarker } from "./types";
 import { boardModel, type FabDoc, type Pad as FabPad, type BoardModel } from "../../fab/model";
 import { padPrims } from "../../fab/plot";
 import { type Prim, type Pt, circlePoints } from "../../fab/prims";
-import { MAX_ERROR, primPolys, roundRectPoints, stadium, union } from "../../fab/poly";
+import { MAX_ERROR, clockwise, primPolys, roundRectPoints, stadium, union } from "../../fab/poly";
 import { geomShapes } from "./drc-silk";
 import { marker } from "./drc";
 
@@ -34,21 +34,84 @@ export function copperCtx(doc: BoardDoc): CopperCtx {
   for (const fp of m.footprints) for (const p of fp.pads) pads.set(p.node, p);
   return { m, pads, nets: new Map() };
 }
-/** The merged copper of each net on `layer` (outers and holes, mm), net-less copper under "": computed once a DRC run. */
-export function netCopper(layer: string, conds: Conductor[], cc: CopperCtx): Map<string, Pt[][]> {
-  let got = cc.nets.get(layer); if (got) return got;
+/**
+ * The merged copper of each net on `layer` (outers and holes, mm), net-less copper under "": computed once a DRC
+ * run for each way of building it.  `outside` gives circles and track ends KiCad's ERROR_OUTSIDE polygons at
+ * ARC_HIGH_DEF (the connection width check); otherwise they are the plotter's.
+ */
+export function netCopper(layer: string, conds: Conductor[], cc: CopperCtx, outside = false): Map<string, Pt[][]> {
+  const key = (outside ? "out:" : "") + layer;
+  let got = cc.nets.get(key); if (got) return got;
   const byNet = new Map<string, Pt[][]>();
-  for (const c of conds) if (c.layers.has(layer)) { const k = c.net || ""; let l = byNet.get(k); if (!l) byNet.set(k, l = []); for (const p of conductorPolys(c, layer, cc)) l.push(p); }
+  for (const c of conds) if (c.layers.has(layer)) { const k = c.net || ""; let l = byNet.get(k); if (!l) byNet.set(k, l = []); for (const p of conductorPolys(c, layer, cc, outside)) l.push(p); }
   got = new Map(); for (const [k, polys] of byNet) got.set(k, union(polys));
-  cc.nets.set(layer, got); return got;
+  cc.nets.set(key, got); return got;
 }
 /** One conductor's copper on a layer (TransformShapeToPolygon): a pad's real outline, else its shape. */
-export function conductorPolys(c: Conductor, layer: string, cc: CopperCtx): Pt[][] {
+export function conductorPolys(c: Conductor, layer: string, cc: CopperCtx, outside = false): Pt[][] {
   if (c.kind === "pad") {
     const fp = cc.pads.get(c.pad.node);
-    if (fp) { const out: Prim[] = []; padPrims(fp, layer, cc.m, out); return out.flatMap(primPolys); }
+    if (fp) {
+      const out: Prim[] = []; padPrims(fp, layer, cc.m, out);
+      return out.flatMap((p) => (outside && p.k === "circle" && p.d > 0 ? [circleOutside(p.x, p.y, p.d / 2)] : primPolys(p)));
+    }
+  }
+  if (outside) {
+    const s = c.shape;
+    if (s.t === "circle" && s.r > 0) return [circleOutside(s.x, s.y, s.r)];
+    if (s.t === "seg" && s.r > 0) return [ovalOutside(s.a, s.b, 2 * s.r)];
   }
   return shapePolys(c.shape);
+}
+
+/** ARC_HIGH_DEF (mm). */
+export const ARC_HIGH_DEF = 0.005;
+/** GetArcToSegmentCount for a full circle, rounded up to a multiple of 8 as TransformCircleToPolygon does (nm). */
+function circleSegs(rIU: number, errIU: number): number {
+  const r = Math.max(1, rIU), e = Math.max(1, errIU);
+  const inc = Math.min(360 / 8, 180 / Math.PI * Math.acos(1 - e / r) * 2);
+  const n = Math.max(Math.round(360 / inc), 2);
+  return Math.ceil(n / 8) * 8;
+}
+/** The radius pushed out so the chords' middles lie on the circle (CircleToEndSegmentDeltaRadius). */
+function outsideRadius(rIU: number, n: number): number { const a = Math.PI / (n <= 2 ? 3 : n); return rIU + Math.round(Math.abs(rIU * (1 - 1 / Math.cos(a)))); }
+const iu = (v: number) => Math.round(v * 1e6);
+/** RotatePoint( VECTOR2I ) at `deg`: KiCad's sense (y down), rounded to the nanometre. */
+const rotIU = (x: number, y: number, deg: number): Pt => { const a = deg * Math.PI / 180, c = Math.cos(a), s = Math.sin(a); return [Math.round(x * c + y * s), Math.round(y * c - x * s)]; };
+
+/** TransformCircleToPolygon( ERROR_OUTSIDE, ARC_HIGH_DEF ), mm, wound like the other shapes. */
+export function circleOutside(x: number, y: number, r: number, err = ARC_HIGH_DEF): Pt[] {
+  const rIU = iu(r), n = circleSegs(rIU, iu(err)), R = outsideRadius(rIU, n), d = 360 / n, cx = iu(x), cy = iu(y);
+  const out: Pt[] = [];
+  for (let k = 0; k < n; k++) { const p = rotIU(R, 0, d / 2 + k * d); out.push([(p[0] + cx) / 1e6, (p[1] + cy) / 1e6]); }
+  return clockwise(out);
+}
+
+/** TransformOvalToPolygon( ERROR_OUTSIDE, ARC_HIGH_DEF ): round ends on a pushed-out radius, cut back to the
+ *  track's width, mm. */
+export function ovalOutside(a: number[], b: number[], w: number, err = ARC_HIGH_DEF): Pt[] {
+  const wIU = iu(w), r0 = Math.trunc(wIU / 2), n = circleSegs(r0, iu(err)), R = outsideRadius(r0, n), d = 360 / n;
+  let sx = iu(a[0]), sy = iu(a[1]), ex = iu(b[0]) - sx, ey = iu(b[1]) - sy;
+  if (ex < 0) { sx = iu(b[0]); sy = iu(b[1]); ex = -ex; ey = -ey; }
+  const len = Math.round(Math.hypot(ex, ey)), ang = Math.atan2(ey, ex);
+  const poly: Pt[] = [[len, R]];
+  for (let t = d / 2; t < 180; t += d) { const c = rotIU(0, R, t); poly.push([c[0] + len, c[1]]); }
+  poly.push([len, -R], [0, -R]);
+  for (let t = d / 2; t < 180; t += d) poly.push(rotIU(0, -R, t));
+  poly.push([0, R]);
+  // the slab |y| <= width / 2 (BooleanIntersection with the segment's box)
+  const hw = Math.trunc(wIU / 2); let pts = poly;
+  for (const [lim, sign] of [[hw, 1], [-hw, -1]] as [number, number][]) {
+    const res: Pt[] = []; const inside = (p: Pt) => sign * p[1] <= sign * lim;
+    for (let i = 0; i < pts.length; i++) {
+      const P = pts[i], Q = pts[(i + 1) % pts.length], pi = inside(P), qi = inside(Q);
+      if (pi) res.push(P);
+      if (pi !== qi) { const t = (lim - P[1]) / (Q[1] - P[1]); res.push([Math.round(P[0] + t * (Q[0] - P[0])), lim]); }
+    }
+    pts = res;
+  }
+  const c = Math.cos(ang), s = Math.sin(ang);
+  return clockwise(pts.map((p) => [(Math.round(p[0] * c - p[1] * s) + sx) / 1e6, (Math.round(p[0] * s + p[1] * c) + sy) / 1e6] as Pt));
 }
 
 /** Clipper's signed area (Clipper2 Area): positive for an outer contour of a union result. */

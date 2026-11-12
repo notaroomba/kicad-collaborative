@@ -147,7 +147,7 @@ export function connectionWidthMarkers(doc: BoardDoc, s: DesignSettings, rules: 
   for (const layer of doc.copper) {
     const onLayer = conductors.filter((c) => c.layers.has(layer));
     const ordered = [...onLayer.filter((c) => c.kind !== "zone"), ...onLayer.filter((c) => c.kind === "zone")];
-    for (const merged of netCopper(layer, conductors, ctx).values()) {
+    for (const merged of netCopper(layer, conductors, ctx, true).values()) {
       const polys = fracture(merged).map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)] as Pt));
       for (const minW of widths) {
         const test = new PolygonTest(Math.round((minW - eps) * 1e6));
