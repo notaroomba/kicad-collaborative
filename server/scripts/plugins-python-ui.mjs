@@ -741,7 +741,7 @@ check('kicad-cli pcb export gerbers writes the editor\'s Gerbers where the plugi
 check('kicad-cli pcb export svg draws each layer', prog.svg && prog.svg[0] === 0 && prog.svg[1].length === 2 && prog.svg[2] && prog.svg[3], JSON.stringify(prog.svg));
 check('kicad-cli pcb drc writes KiCad\'s JSON report from the editor\'s checker', prog.drc && prog.drc[0] === 0 && ['schematic_parity', 'unconnected_items', 'violations'].every((k) => prog.drc[1].includes(k)) && prog.drc[2], JSON.stringify(prog.drc));
 check('kicad-cli sch export bom and netlist read the project\'s schematic', prog.bom && prog.bom[0] === 0 && prog.bom[1] === '"Refs","Value","Footprint"' && prog.bom[2] && prog.netlist && prog.netlist.every((v, i) => (i ? v === true : v === 0)), JSON.stringify([prog.bom, prog.netlist]));
-check('a kicad-cli command the web has no form for is refused, not faked', prog.render === 'WebUnsupported', String(prog.render));
+check('a kicad-cli command the web has no form for fails with an exit code, as kicad-cli does, not faked', prog.render === 'CalledProcessError', String(prog.render));
 check('git answers for the project folder', prog.git && prog.git[0] === 0 && prog.git[1] && prog.git[2], JSON.stringify(prog.git));
 await idle(a, DESK_ID);
 const versionsBefore = (await db.query('SELECT count(*)::int AS n FROM versions WHERE project_id = $1 AND name = $2', [projectId, 'Plugin checkpoint']).catch(() => ({ rows: [{ n: -1 }] }))).rows[0].n;

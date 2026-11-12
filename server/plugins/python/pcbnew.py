@@ -808,13 +808,22 @@ class LSET:
     def size(self):
         return PCB_LAYER_ID_COUNT
 
-    def Seq(self, *_):
+    def Seq(self, order=None, *_):
+        """The layers in the order given, or by layer number as KiCad does (F.Cu 0, F.Mask 1, B.Cu 2, …)."""
+        if order is not None and not isinstance(order, (int, bool)):
+            try:
+                return [int(l) for l in order if int(l) in self._s]
+            except TypeError:
+                pass
+        return sorted(self._s)
+
+    def _stack_order(self, *_):
         cu = [l for l in _CU_ORDER if l in self._s]
         return cu + sorted(l for l in self._s if l not in cu)
 
-    SeqStackupForPlotting = Seq
-    SeqStackupTop2Bottom = Seq
-    UIOrder = Seq
+    SeqStackupForPlotting = _stack_order
+    SeqStackupTop2Bottom = _stack_order
+    UIOrder = _stack_order
     CuStack = lambda self, *_: [l for l in _CU_ORDER if l in self._s]
 
     def Technicals(self, *_):
@@ -2383,23 +2392,89 @@ class SHAPE_POLY_SET:
     def IterateWithHoles(self, *_):
         return [p for o in self._outlines for c in o for p in c._pts]
 
-    # set operations need a polygon clipper, which the web runtime does not carry
-    def Inflate(self, *_):
-        _unsupported("SHAPE_POLY_SET.Inflate")
+    # -- set operations: done with shapely (GEOS), which the runtime loads for a plugin that uses them
+    @staticmethod
+    def _shapely():
+        try:
+            import shapely
+            import shapely.geometry          # noqa: F401
+            return shapely
+        except ImportError:
+            _unsupported("Polygon set operations (the shapely package could not be loaded)")
 
-    Deflate = Inflate
+    def _geom(self):
+        sh = self._shapely()
+        polys = []
+        for o in self._outlines:
+            pts = [(p.x, p.y) for p in o[0]._pts]
+            if len(pts) < 3:
+                continue
+            g = sh.geometry.Polygon(pts, [[(p.x, p.y) for p in h._pts] for h in o[1:] if len(h._pts) >= 3])
+            if not g.is_valid:
+                g = g.buffer(0)
+            if not g.is_empty:
+                polys.append(g)
+        return sh.unary_union(polys) if polys else sh.geometry.Polygon()
 
-    def BooleanAdd(self, other, *_):
-        self.Append(other)
+    def _take_geom(self, g):
+        self._outlines = []
+        parts = [g] if g.geom_type == "Polygon" else [p for p in getattr(g, "geoms", []) if p.geom_type == "Polygon"]
+        for part in parts:
+            if part.is_empty:
+                continue
+            chain = lambda ring: SHAPE_LINE_CHAIN([VECTOR2I(int(round(x)), int(round(y))) for x, y in list(ring.coords)[:-1]], True)
+            self._outlines.append([chain(part.exterior)] + [chain(r) for r in part.interiors])
 
-    def BooleanSubtract(self, *_):
-        _unsupported("SHAPE_POLY_SET.BooleanSubtract")
+    def Inflate(self, amount, cornerStrategy=None, maxError=None, *_):
+        """Grow (or, with a negative amount, shrink) the polygons, with KiCad's corner strategies."""
+        amount = float(amount)
+        if not self._outlines or amount == 0:
+            return
+        g = self._geom()
+        err = float(maxError) if isinstance(maxError, (int, float)) and maxError and maxError > 0 else 5000.0
+        r = abs(amount)
+        segs = 4
+        if r > err:
+            segs = max(2, min(32, int(_math.ceil((_math.pi / 2) / (2 * _math.acos(1 - err / r))))))
+        join = "round"
+        if cornerStrategy in (CORNER_STRATEGY_ALLOW_ACUTE_CORNERS, CORNER_STRATEGY_CHAMFER_ACUTE_CORNERS, CORNER_STRATEGY_ROUND_ACUTE_CORNERS):
+            join = "mitre"
+        elif cornerStrategy == CORNER_STRATEGY_CHAMFER_ALL_CORNERS:
+            join = "bevel"
+        self._take_geom(g.buffer(amount, quad_segs=segs, join_style=join, mitre_limit=5.0))
 
-    def BooleanIntersection(self, *_):
-        _unsupported("SHAPE_POLY_SET.BooleanIntersection")
+    def Deflate(self, amount, *a):
+        self.Inflate(-float(amount), *a)
+
+    InflateWithLinkedHoles = Inflate
+
+    def _boolean(self, op, a):
+        polys = [x for x in a if isinstance(x, SHAPE_POLY_SET)]
+        if not polys:
+            return
+        left, right = (polys[0], polys[1]) if len(polys) > 1 else (self, polys[0])
+        self._take_geom(getattr(left._geom(), op)(right._geom()))
+
+    def BooleanAdd(self, *a):
+        self._boolean("union", a)
+
+    def BooleanSubtract(self, *a):
+        self._boolean("difference", a)
+
+    def BooleanIntersection(self, *a):
+        self._boolean("intersection", a)
+
+    def BooleanXor(self, *a):
+        self._boolean("symmetric_difference", a)
 
     def Simplify(self, *_):
-        pass
+        # overlapping outlines become one; without the clipper they are left as they are
+        try:
+            import shapely          # noqa: F401
+        except ImportError:
+            return
+        if len(self._outlines) > 1 or any(len(o) > 1 for o in self._outlines):
+            self._take_geom(self._geom())
 
     def Fracture(self, *_):
         pass
@@ -2425,6 +2500,42 @@ class SHAPE_POLY_SET:
                 pts.append([Sym("xy"), _n(x), _n(y)])
             out.append(pts)
         return out
+
+
+class _ZoneOutline(SHAPE_POLY_SET):
+    """zone.Outline(): the zone's own outline, as on the desktop.  What is changed through it is changed in the zone."""
+
+    def _sync(self):
+        z = self._zone
+        z.SetOutline(self)
+        z.__dict__["_live"] = (z.__dict__.get("_rev", 0), self, z._node)
+
+    def AddOutline(self, chain):
+        i = SHAPE_POLY_SET.AddOutline(self, chain)
+        z = self._zone                    # one more polygon: appended, so that a thousand of them stay cheap
+        one = SHAPE_POLY_SET()
+        one._outlines = [self._outlines[i]]
+        for pts in one._to_nodes(z._to_local):
+            z._node.append([Sym("polygon"), pts])
+        z._touch()
+        z.__dict__["_live"] = (z.__dict__.get("_rev", 0), self, z._node)         # still the zone's outline as it stands
+        return i
+
+
+def _zone_outline_method(name):
+    base = getattr(SHAPE_POLY_SET, name)
+
+    def method(self, *a, **k):
+        r = base(self, *a, **k)
+        self._sync()
+        return r
+    method.__name__ = name
+    return method
+
+
+for _name in ("NewOutline", "NewHole", "AddHole", "Append", "RemoveAllContours", "RemoveContour", "DeletePolygon", "Move", "Rotate", "Mirror",
+              "Inflate", "BooleanAdd", "BooleanSubtract", "BooleanIntersection", "Simplify", "Fracture", "Unfracture"):
+    setattr(_ZoneOutline, _name, _zone_outline_method(_name))
 
 
 def _pts_of(node, to_board):
@@ -2660,11 +2771,25 @@ class PCB_SHAPE(BOARD_CONNECTED_ITEM):
         _drop_kid(self._node, "width")
         self._touch()
 
+    _LINE_STYLES = ("default", "solid", "dash", "dot", "dash_dot", "dash_dot_dot")
+
+    def GetLineStyle(self):
+        s = self._stroke()
+        t = _kid(s, "type") if s is not None else None
+        name = str(t[1]) if t is not None and len(t) > 1 else "default"
+        return self._LINE_STYLES.index(name) if name in self._LINE_STYLES else 0
+
+    def SetLineStyle(self, style):
+        style = int(style)
+        _set_kid(self._stroke(True), "type", Sym(self._LINE_STYLES[style] if 0 <= style < len(self._LINE_STYLES) else "default"))
+        self._touch()
+
     def GetStroke(self):
-        return STROKE_PARAMS(self.GetWidth())
+        return STROKE_PARAMS(self.GetWidth(), self.GetLineStyle())
 
     def SetStroke(self, stroke):
         self.SetWidth(stroke.GetWidth())
+        self.SetLineStyle(stroke.GetLineStyle())
 
     def IsFilled(self):
         k = _kid(self._node, "fill")
@@ -2772,6 +2897,9 @@ class PCB_SHAPE(BOARD_CONNECTED_ITEM):
 DRAWSEGMENT = PCB_SHAPE
 FP_SHAPE = PCB_SHAPE
 EDGE_MODULE = PCB_SHAPE
+
+
+LINE_STYLE_DEFAULT, LINE_STYLE_SOLID, LINE_STYLE_DASH, LINE_STYLE_DOT, LINE_STYLE_DASHDOT, LINE_STYLE_DASHDOTDOT = range(6)
 
 
 class STROKE_PARAMS:
@@ -3778,12 +3906,21 @@ class ZONE(BOARD_CONNECTED_ITEM):
     def _polygon(self):
         return _kid(self._node, "polygon")
 
+    def _touch(self):
+        self.__dict__["_rev"] = self.__dict__.get("_rev", 0) + 1
+        BOARD_ITEM._touch(self)
+
     def Outline(self):
-        s = SHAPE_POLY_SET()
+        live = self.__dict__.get("_live")
+        if live is not None and live[0] == self.__dict__.get("_rev", 0) and live[2] is self._node:
+            return live[1]
+        s = _ZoneOutline()
+        s._zone = self
         for poly in _kids(self._node, "polygon"):
             pts = _pts_of(poly, self._to_board)
             if pts:
                 s._outlines.append([SHAPE_LINE_CHAIN(pts, True)])
+        self.__dict__["_live"] = (self.__dict__.get("_rev", 0), s, self._node)
         return s
 
     def SetOutline(self, poly):
@@ -3892,6 +4029,27 @@ class ZONE(BOARD_CONNECTED_ITEM):
 
     def GetFilledArea(self):
         return sum(self.GetFilledPolysList(l).Area() for l in self.GetLayerSet()._s)
+
+    def HitTestForCorner(self, pos, accuracy=0, *_):
+        """True when `pos` is within `accuracy` of an outline corner (KiCad also reports which one)."""
+        p = VECTOR2I(pos)
+        acc = max(int(accuracy or 0), 1)
+        return any(abs(c.x - p.x) <= acc and abs(c.y - p.y) <= acc for c in [self.GetCornerPosition(i) for i in range(self.GetNumCorners())])
+
+    def HitTestForEdge(self, pos, accuracy=0, *_):
+        """True when `pos` is within `accuracy` of an outline edge."""
+        import math as _m
+        p = VECTOR2I(pos)
+        acc = max(int(accuracy or 0), 1)
+        pts = [self.GetCornerPosition(i) for i in range(self.GetNumCorners())]
+        for i in range(len(pts)):
+            a, b = pts[i], pts[(i + 1) % len(pts)]
+            dx, dy = b.x - a.x, b.y - a.y
+            L = dx * dx + dy * dy
+            t = max(0.0, min(1.0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L)) if L else 0.0
+            if _m.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)) <= acc:
+                return True
+        return False
 
     def HitTestFilledArea(self, layer, pos, *_):
         return self.GetFilledPolysList(layer).Contains(pos)
@@ -4037,6 +4195,29 @@ class ZONE(BOARD_CONNECTED_ITEM):
             _set_kid(f, "mode", Sym("hatch"))
         else:
             _drop_kid(f, "mode")
+        self._touch()
+
+    def GetHatchThickness(self):
+        return self._fill_num("hatch_thickness", 0)
+
+    def SetHatchThickness(self, v):
+        _set_kid(self._fill(True), "hatch_thickness", ToMM(v))
+        self._touch()
+
+    def GetHatchGap(self):
+        return self._fill_num("hatch_gap", 0)
+
+    def SetHatchGap(self, v):
+        _set_kid(self._fill(True), "hatch_gap", ToMM(v))
+        self._touch()
+
+    def GetHatchOrientation(self):
+        k = self._fill()
+        c = _kid(k, "hatch_orientation") if k is not None else None
+        return EDA_ANGLE(_f(c[1]) if c is not None and len(c) > 1 else 0.0, DEGREES_T)
+
+    def SetHatchOrientation(self, angle):
+        _set_kid(self._fill(True), "hatch_orientation", _n(_deg(angle)))
         self._touch()
 
     def GetHatchStyle(self):
@@ -4954,6 +5135,8 @@ class BOARD(EDA_ITEM):
     def GetVisibleLayers(self):
         return self.GetEnabledLayers()
 
+    GetLayerSet = GetEnabledLayers
+
     def IsLayerEnabled(self, layer):
         return int(layer) in self.GetEnabledLayers()._s
 
@@ -5258,6 +5441,7 @@ class _Host:
     config_dir = "/config"
     project = {}             # the open project's .kicad_pro, parsed: net classes and design rules
     on_register = None
+    library = None           # callable(what, args): KiCad's footprint libraries, read through the editor
     wizards = []             # registered footprint wizards
     on_register_wizard = None
 
@@ -5433,14 +5617,74 @@ class SETTINGS_MANAGER:
         pass
 
 
-def GetFootprints(*_):
-    _unsupported("The footprint libraries")
+# ----------------------------------------------------------------------------- footprint libraries
+# KiCad's official footprint libraries are read through the editor (the server keeps them: src/libs.rs).  They are
+# read-only here, as they are on a desktop where they are installed system-wide.
+
+FOOTPRINT_DIR = "/usr/share/kicad/footprints"
 
 
-FootprintLoad = FootprintEnumerate = FootprintLibDelete = FootprintLibCreate = FootprintSave = FootprintDelete = GetFootprints
+def _lib_nick(lib):
+    """A library by nickname ("Connector_Wire") or by its folder (".../footprints/Connector_Wire.pretty")."""
+    s = str(lib or "").replace("\\", "/").rstrip("/")
+    s = s.split("/")[-1]
+    return s[:-7] if s.endswith(".pretty") else s
+
+
+def _library(what, **args):
+    if _Host.library is None:
+        _unsupported("The footprint libraries")
+    return _Host.library(what, args)
+
+
+def FootprintLoad(lib, name, *_):
+    """The footprint `name` of a library, as a FOOTPRINT that is not on a board yet; None when there is none."""
+    r = _library("footprint", lib=_lib_nick(lib), name=str(name))
+    text = (r or {}).get("footprint")
+    if not text:
+        return None
+    node = _parse(text)[0]
+    if _kid(node, "at") is None:
+        node.insert(2, [Sym("at"), _n(0), _n(0)])
+    if len(node) > 1 and not isinstance(node[1], list):
+        node[1] = "%s:%s" % (_lib_nick(lib), name)
+
+    def new_ids(n):         # every copy placed on a board is its own item, with its own ids
+        for k in n:
+            if isinstance(k, list) and k:
+                if str(k[0]) == "uuid" and len(k) > 1:
+                    k[1] = str(_uuid.uuid4())
+                else:
+                    new_ids(k)
+    new_ids(node)
+    if _kid(node, "uuid") is None:
+        _set_kid(node, "uuid", str(_uuid.uuid4()))
+    fp = FOOTPRINT._wrap(node, None)
+    fp._library = _lib_nick(lib)
+    return fp
+
+
+def FootprintEnumerate(lib, *_):
+    r = _library("footprints", lib=_lib_nick(lib))
+    return [str(n) for n in (r or {}).get("footprints", [])]
+
+
+def GetFootprintLibraries(*_):
+    r = _library("libraries")
+    return [str(n) for n in (r or {}).get("libraries", [])]
+
+
+def GetFootprints(lib, *_):
+    return FootprintEnumerate(lib)
+
+
+def _lib_read_only(*_):
+    _unsupported("Writing to KiCad's footprint libraries (they are read-only in the web editor)")
+
+
+FootprintLibDelete = FootprintLibCreate = FootprintSave = FootprintDelete = _lib_read_only
 FootprintIsWritable = lambda *_: False
-GetFootprintLibraries = lambda *_: []
-GetFootprintLibraryTable = GetFootprints
+GetFootprintLibraryTable = lambda *_: _unsupported("The footprint library table")
 
 
 class ActionPlugin:
@@ -6038,21 +6282,113 @@ class GERBER_JOBFILE_WRITER:
         _unsupported("The Gerber job file")
 
 
-class ZONE_FILLER:
-    """Zone filling is done by the desktop application; from here a refill is requested for it."""
+class ZONE_SETTINGS:
+    """The values of the zone properties dialog, with KiCad's defaults; ExportSetting writes them into a zone."""
+    SMOOTHING_UNDEFINED, SMOOTHING_NONE, SMOOTHING_CHAMFER, SMOOTHING_FILLET, SMOOTHING_LAST = -1, 0, 1, 2, 3
 
-    def __init__(self, board, *_):
-        self._board = board
+    def __init__(self, *_):
+        self.m_ZonePriority = 0
+        self.m_FillMode = ZONE_FILL_MODE_POLYGONS
+        self.m_ZoneClearance = FromMM(0.508)
+        self.m_ZoneMinThickness = FromMM(0.254)
+        self.m_HatchThickness = 0
+        self.m_HatchGap = 0
+        self.m_HatchOrientation = EDA_ANGLE(0)
+        self.m_HatchSmoothingLevel = 0
+        self.m_HatchSmoothingValue = 0.1
+        self.m_HatchHoleMinArea = 0.3
+        self.m_HatchBorderAlgorithm = 1
+        self.m_NetcodeSelection = 0
+        self.m_Netcode = 0
+        self.m_Name = ""
+        self.m_Layers = LSET([F_Cu])
+        self.m_ZoneBorderDisplayStyle = ZONE_BORDER_DISPLAY_STYLE_DIAGONAL_EDGE
+        self.m_BorderHatchPitch = FromMM(0.5)
+        self.m_ThermalReliefGap = FromMM(0.508)
+        self.m_ThermalReliefSpokeWidth = FromMM(0.508)
+        self.m_Locked = False
+        self.m_TeardropType = 0
+        self._pad_connection = ZONE_CONNECTION_THERMAL
+        self._corner_smoothing = 0
+        self._corner_radius = 0
+        self._island_mode = ISLAND_REMOVAL_MODE_ALWAYS
+        self._island_area = FromMM(10) * FromMM(1)
+        self._rule_area = False
+        self._keepout = {"tracks": False, "vias": False, "pads": False, "copperpour": False, "footprints": False}
 
-    def Fill(self, zones, check=False, *_):
-        self._board._wants_refill = True
-        return True
+    GetPadConnection = lambda self: self._pad_connection
+    SetPadConnection = lambda self, v: setattr(self, "_pad_connection", v)
+    GetCornerSmoothingType = lambda self: self._corner_smoothing
+    SetCornerSmoothingType = lambda self, v: setattr(self, "_corner_smoothing", v)
+    GetCornerRadius = lambda self: self._corner_radius
+    SetCornerRadius = lambda self, v: setattr(self, "_corner_radius", v)
+    GetIslandRemovalMode = lambda self: self._island_mode
+    SetIslandRemovalMode = lambda self, v: setattr(self, "_island_mode", v)
+    GetMinIslandArea = lambda self: self._island_area
+    SetMinIslandArea = lambda self, v: setattr(self, "_island_area", v)
+    GetIsRuleArea = lambda self: self._rule_area
+    SetIsRuleArea = lambda self, v: setattr(self, "_rule_area", bool(v))
+    GetDoNotAllowTracks = lambda self: self._keepout["tracks"]
+    GetDoNotAllowVias = lambda self: self._keepout["vias"]
+    GetDoNotAllowPads = lambda self: self._keepout["pads"]
+    GetDoNotAllowCopperPour = lambda self: self._keepout["copperpour"]
+    GetDoNotAllowFootprints = lambda self: self._keepout["footprints"]
+    GetDoNotAllowZoneFills = GetDoNotAllowCopperPour
+    SetDoNotAllowTracks = lambda self, v: self._keepout.__setitem__("tracks", bool(v))
+    SetDoNotAllowVias = lambda self, v: self._keepout.__setitem__("vias", bool(v))
+    SetDoNotAllowPads = lambda self, v: self._keepout.__setitem__("pads", bool(v))
+    SetDoNotAllowCopperPour = lambda self, v: self._keepout.__setitem__("copperpour", bool(v))
+    SetDoNotAllowFootprints = lambda self, v: self._keepout.__setitem__("footprints", bool(v))
+    SetDoNotAllowZoneFills = SetDoNotAllowCopperPour
 
-    def SetProgressReporter(self, *_):
+    def __lshift__(self, zone):
+        """settings << zone: take the zone's values."""
+        self.m_ZonePriority = zone.GetAssignedPriority()
+        self.m_FillMode = zone.GetFillMode()
+        self.m_ZoneClearance = zone.GetLocalClearance() or 0
+        self.m_ZoneMinThickness = zone.GetMinThickness()
+        self.m_HatchThickness, self.m_HatchGap = zone.GetHatchThickness(), zone.GetHatchGap()
+        self.m_HatchOrientation = zone.GetHatchOrientation()
+        self.m_NetcodeSelection = self.m_Netcode = zone.GetNetCode()
+        self.m_Name = zone.GetZoneName()
+        self.m_Layers = zone.GetLayerSet()
+        self.m_ZoneBorderDisplayStyle = zone.GetHatchStyle()
+        self.m_ThermalReliefGap, self.m_ThermalReliefSpokeWidth = zone.GetThermalReliefGap(), zone.GetThermalReliefSpokeWidth()
+        self._pad_connection = zone.GetPadConnection()
+        self._island_mode, self._island_area = zone.GetIslandRemovalMode(), zone.GetMinIslandArea()
+        self._rule_area = zone.GetIsRuleArea()
+        for what in self._keepout:
+            self._keepout[what] = zone._keepout(what)
+        return self
+
+    def ExportSetting(self, zone, aFullExport=True):
+        zone.SetFillMode(self.m_FillMode)
+        zone.SetLocalClearance(self.m_ZoneClearance)
+        zone.SetMinThickness(self.m_ZoneMinThickness)
+        if self.m_FillMode == ZONE_FILL_MODE_HATCH_PATTERN:
+            zone.SetHatchThickness(self.m_HatchThickness)
+            zone.SetHatchGap(self.m_HatchGap)
+            zone.SetHatchOrientation(self.m_HatchOrientation)
+        zone.SetPadConnection(self._pad_connection)
+        zone.SetThermalReliefGap(self.m_ThermalReliefGap)
+        zone.SetThermalReliefSpokeWidth(self.m_ThermalReliefSpokeWidth)
+        zone.SetIslandRemovalMode(self._island_mode)
+        if self._island_mode == ISLAND_REMOVAL_MODE_AREA:
+            zone.SetMinIslandArea(self._island_area)
+        if self._rule_area or zone.GetIsRuleArea():
+            zone.SetIsRuleArea(self._rule_area)
+            for what, on in self._keepout.items():
+                zone._set_keepout(what, on)
+        if aFullExport:
+            zone.SetAssignedPriority(self.m_ZonePriority)
+            zone.SetLayerSet(self.m_Layers)
+            zone.SetZoneName(self.m_Name)
+            if not self._rule_area:
+                zone.SetNetCode(self.m_Netcode or self.m_NetcodeSelection)
+        zone.SetHatchStyle(self.m_ZoneBorderDisplayStyle)
+
+    def SetupLayersList(self, *_):
         pass
-
-    def IsDebug(self):
-        return False
 
 
 class DRC_ENGINE:
@@ -6064,8 +6400,6 @@ def WriteDRCReport(*_):
     _unsupported("Running DRC from a plugin")
 
 
-def ExportSpecctraDSN(*_):
-    _unsupported("Specctra DSN export")
 
 
 def ImportSpecctraSES(*_):
@@ -6106,10 +6440,16 @@ class PCB_IO_KICAD_SEXPR:
     def __init__(self, *_):
         pass
 
-    def FootprintLoad(self, *_):
-        _unsupported("The footprint libraries")
+    def FootprintLoad(self, lib, name, *_):
+        return FootprintLoad(lib, name)
 
-    FootprintEnumerate = FootprintSave = FootprintDelete = FootprintLoad
+    def FootprintEnumerate(self, lib, *_):
+        return FootprintEnumerate(lib)
+
+    def FootprintSave(self, *_):
+        _lib_read_only()
+
+    FootprintDelete = FootprintSave
 
     def Format(self, item, *_):
         return _dump(item._node)
@@ -6185,6 +6525,1143 @@ class wxApp:
 # Anything else a plugin names is given a placeholder: importing the plugin and running the parts
 # of it that stay within what the web has must not fail because of a name another part mentions.
 _missing = set()
+
+
+# ----------------------------------------------------------------------------- item geometry
+# What KiCad answers from its own geometry kernel (an item's copper as a polygon, whether two
+# shapes are closer than a clearance, the board outline as polygons) is answered here with
+# shapely (GEOS), which the runtime loads for a plugin that asks for any of it.
+
+def _sh():
+    return SHAPE_POLY_SET._shapely()
+
+
+def _quad_segs(r, err=None):
+    """Segments per quarter circle that keep a circle of radius r within `err` of the true one."""
+    err = float(err) if isinstance(err, (int, float)) and err and err > 0 else 5000.0
+    if r <= err:
+        return 2
+    return max(2, min(32, int(_math.ceil((_math.pi / 2) / (2 * _math.acos(1 - err / r))))))
+
+
+def _arc_points(s, m, e, err=None):
+    """Points along the arc through start, mid and end."""
+    c = _circle3(s, m, e)
+    if not c:
+        return [(s.x, s.y), (e.x, e.y)]
+    cx, cy, r = c
+    a0, a1, a2 = (_math.atan2(p.y - cy, p.x - cx) for p in (s, m, e))
+    d1, d2 = (a1 - a0) % (2 * _math.pi), (a2 - a0) % (2 * _math.pi)
+    sweep = d2 if d1 <= d2 else d2 - 2 * _math.pi
+    n = max(2, int(_math.ceil(abs(sweep) / (_math.pi / 2) * _quad_segs(r, err))))
+    pts = [(cx + r * _math.cos(a0 + sweep * i / n), cy + r * _math.sin(a0 + sweep * i / n)) for i in range(n + 1)]
+    pts[0], pts[-1] = (s.x, s.y), (e.x, e.y)
+    return pts
+
+
+def _bezier_points(p0, p1, p2, p3, n=24):
+    out = []
+    for i in range(n + 1):
+        t = i / n
+        u = 1 - t
+        out.append((u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+                    u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y))
+    return out
+
+
+def _shape_path(d, err=None):
+    """A graphic's centre line: (points, closed)."""
+    k = d._kind()
+    if k == "rect":
+        return [(p.x, p.y) for p in d.GetRectCorners()], True
+    if k == "circle":
+        c, r = d.GetCenter(), d.GetRadius()
+        n = 4 * _quad_segs(r, err)
+        return [(c.x + r * _math.cos(2 * _math.pi * i / n), c.y + r * _math.sin(2 * _math.pi * i / n)) for i in range(n)], True
+    if k == "arc":
+        return _arc_points(d.GetStart(), d.GetArcMid(), d.GetEnd(), err), False
+    if k == "poly":
+        return [(p.x, p.y) for p in d._poly_points()], True
+    if k in ("curve", "bezier"):
+        return _bezier_points(d.GetStart(), d.GetBezierC1(), d.GetBezierC2(), d.GetEnd()), False
+    s, e = d.GetStart(), d.GetEnd()
+    return [(s.x, s.y), (e.x, e.y)], False
+
+
+def _shape_geom(d, err=None):
+    """A graphic as the copper (or ink) it puts down: the stroke, plus the inside when it is filled."""
+    sh = _sh()
+    G = sh.geometry
+    pts, closed = _shape_path(d, err)
+    w = d.GetWidth() or 0
+    half = w / 2.0
+    if len(pts) < 2:
+        return G.Polygon()
+    if not closed:
+        if pts[0] == pts[-1] and len(pts) == 2:
+            return G.Point(pts[0]).buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+        return G.LineString(pts).buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+    if len(pts) < 3:
+        return G.LineString(pts).buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+    filled = d.IsFilled() or (d._kind() == "poly" and _kid(d._node, "fill") is None)
+    ring = G.LinearRing(pts)
+    if filled:
+        g = G.Polygon(pts)
+        if not g.is_valid:
+            g = g.buffer(0)
+        return g.buffer(half, quad_segs=_quad_segs(half, err)) if half > 0 else g
+    return ring.buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+
+
+def _place_geom(g, rot, x, y):
+    """Rotate about the origin the way `_rot` does, then move to (x, y)."""
+    from shapely import affinity
+    if rot:
+        a = _math.radians(rot)
+        c, s = _math.cos(a), _math.sin(a)
+        return affinity.affine_transform(g, [c, s, -s, c, x, y])
+    return affinity.translate(g, x, y)
+
+
+def _pad_geom(pad, layer=None, err=None):
+    sh = _sh()
+    G = sh.geometry
+    p, s, off = pad.GetPosition(), pad.GetSize(), pad.GetOffset()
+    hx, hy = s.x / 2.0, s.y / 2.0
+    shape = pad.GetShape()
+    if shape == PAD_SHAPE_CIRCLE:
+        g = G.Point(0, 0).buffer(hx, quad_segs=_quad_segs(hx, err))
+    elif shape == PAD_SHAPE_OVAL:
+        r = min(hx, hy)
+        dx, dy = hx - r, hy - r
+        g = (G.Point(0, 0) if dx == dy == 0 else G.LineString([(-dx, -dy), (dx, dy)])).buffer(r, quad_segs=_quad_segs(r, err))
+    elif shape == PAD_SHAPE_ROUNDRECT:
+        r = min(pad.GetRoundRectCornerRadius(), hx, hy)
+        if r > 0 and hx > r and hy > r:
+            g = G.box(-hx + r, -hy + r, hx - r, hy - r).buffer(r, quad_segs=_quad_segs(r, err))
+        elif r > 0:
+            g = G.LineString([(-(hx - r), -(hy - r)), (hx - r, hy - r)]).buffer(r, quad_segs=_quad_segs(r, err))
+        else:
+            g = G.box(-hx, -hy, hx, hy)
+    elif shape == PAD_SHAPE_TRAPEZOID:
+        k = _kid(pad._node, "rect_delta")
+        ddy, ddx = (FromMM(_f(k[1])) / 2.0, FromMM(_f(k[2])) / 2.0) if k is not None and len(k) > 2 else (0, 0)
+        g = G.Polygon([(-hx - ddx, hy + ddy), (-hx + ddx, -hy - ddy), (hx - ddx, -hy + ddy), (hx + ddx, hy - ddy)])
+        if not g.is_valid:
+            g = g.buffer(0)
+    else:
+        g = G.box(-hx, -hy, hx, hy)
+        if shape == PAD_SHAPE_CUSTOM:
+            anchor = _kid(_kid(pad._node, "options") or [], "anchor")
+            if anchor is not None and len(anchor) > 1 and str(anchor[1]) == "circle":
+                g = G.Point(0, 0).buffer(hx, quad_segs=_quad_segs(hx, err))
+            parts = [g]
+            for prim in (_kid(pad._node, "primitives") or [])[1:]:
+                if not isinstance(prim, list) or not prim:
+                    continue
+                kind = str(prim[0])
+                wk = _kid(prim, "width")
+                half = FromMM(_f(wk[1])) / 2.0 if wk is not None and len(wk) > 1 else 0
+                xy = lambda name: (lambda q: (FromMM(_f(q[1])), FromMM(_f(q[2]))) if q is not None and len(q) > 2 else None)(_kid(prim, name))
+                if kind == "gr_poly":
+                    pp = [(FromMM(_f(q[1])), FromMM(_f(q[2]))) for q in (_kid(prim, "pts") or [])[1:] if isinstance(q, list) and len(q) > 2]
+                    if len(pp) >= 3:
+                        q = G.Polygon(pp)
+                        q = q if q.is_valid else q.buffer(0)
+                        parts.append(q.buffer(half) if half > 0 else q)
+                elif kind == "gr_line" and xy("start") and xy("end"):
+                    parts.append(G.LineString([xy("start"), xy("end")]).buffer(max(half, 1)))
+                elif kind == "gr_circle" and xy("center") and xy("end"):
+                    c, e = xy("center"), xy("end")
+                    rr = _math.hypot(e[0] - c[0], e[1] - c[1])
+                    fk = _kid(prim, "fill")
+                    solid = fk is not None and len(fk) > 1 and str(fk[1]) not in ("none", "no")
+                    parts.append(G.Point(c).buffer(rr + half) if solid or half == 0 else G.Point(c).buffer(rr).exterior.buffer(half))
+                elif kind == "gr_rect" and xy("start") and xy("end"):
+                    a, b = xy("start"), xy("end")
+                    parts.append(G.box(min(a[0], b[0]), min(a[1], b[1]), max(a[0], b[0]), max(a[1], b[1])))
+                elif kind == "gr_arc" and xy("start") and xy("mid") and xy("end"):
+                    parts.append(G.LineString(_arc_points(VECTOR2I(*xy("start")), VECTOR2I(*xy("mid")), VECTOR2I(*xy("end")), err)).buffer(max(half, 1)))
+            g = sh.unary_union(parts)
+    if off.x or off.y:
+        from shapely import affinity
+        g = affinity.translate(g, off.x, off.y)
+    return _place_geom(g, pad.GetOrientation().AsDegrees(), p.x, p.y)
+
+
+def _track_geom(t, err=None):
+    G = _sh().geometry
+    half = t.GetWidth() / 2.0
+    if isinstance(t, PCB_VIA):
+        p = t.GetPosition()
+        return G.Point(p.x, p.y).buffer(half, quad_segs=_quad_segs(half, err))
+    if isinstance(t, PCB_ARC):
+        pts = _arc_points(t.GetStart(), t.GetMid(), t.GetEnd(), err)
+    else:
+        s, e = t.GetStart(), t.GetEnd()
+        pts = [(s.x, s.y), (e.x, e.y)]
+    if len(pts) == 2 and pts[0] == pts[1]:
+        return G.Point(pts[0]).buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+    return G.LineString(pts).buffer(max(half, 1), quad_segs=_quad_segs(half, err))
+
+
+def _item_geom(item, layer=None, err=None):
+    """The copper (or ink) of one board item as a shapely geometry; kept until the item changes."""
+    d = item.__dict__
+    par = getattr(item, "_parent", None)
+    key = (d.get("_rev", 0), par.__dict__.get("_rev", 0) if par is not None else 0, id(item._node),
+           int(layer) if isinstance(item, ZONE) and layer is not None else None, err)
+    hit = d.get("_geomc")
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    if isinstance(item, PAD):
+        g = _pad_geom(item, layer, err)
+    elif isinstance(item, PCB_TRACK):
+        g = _track_geom(item, err)
+    elif isinstance(item, ZONE):
+        if layer is None:
+            g = _sh().unary_union([item.GetFilledPolysList(l)._geom() for l in item.GetLayerSet().Seq()])
+        else:
+            g = item.GetFilledPolysList(layer)._geom()
+    elif isinstance(item, PCB_SHAPE):
+        g = _shape_geom(item, err)
+    elif isinstance(item, FOOTPRINT):
+        g = _sh().unary_union([_pad_geom(p, layer, err) for p in item.Pads()])
+    else:
+        b = item.GetBoundingBox()
+        g = _sh().geometry.box(b.GetLeft(), b.GetTop(), b.GetRight(), b.GetBottom())
+    d["_geomc"] = (key, g)
+    return g
+
+
+def _geom_of(x):
+    """Anything KiCad would take as a shape, as a shapely geometry."""
+    if isinstance(x, SHAPE):
+        return x._g
+    if isinstance(x, SHAPE_POLY_SET):
+        return x._geom()
+    if isinstance(x, SHAPE_LINE_CHAIN):
+        key = (id(x._pts), len(x._pts), x.IsClosed())
+        hit = x.__dict__.get("_gc")
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        G = _sh().geometry
+        pts = [(p.x, p.y) for p in x._pts]
+        if len(pts) == 1:
+            g = G.Point(pts[0])
+        elif x.IsClosed() and len(pts) >= 3:
+            g = G.Polygon(pts)
+            g = g if g.is_valid else g.buffer(0)
+        else:
+            g = G.LineString(pts) if len(pts) > 1 else G.Polygon()
+        try:
+            _sh().prepare(g)
+        except Exception:
+            pass
+        x.__dict__["_gc"] = (key, g)
+        return g
+    if isinstance(x, BOX2I):
+        return _sh().geometry.box(x.GetLeft(), x.GetTop(), x.GetRight(), x.GetBottom())
+    if isinstance(x, BOARD_ITEM):
+        return _item_geom(x)
+    p = VECTOR2I(x)
+    return _sh().geometry.Point(p.x, p.y)
+
+
+def _collide(a, b, clearance=0):
+    """KiCad's rule: two shapes collide when they touch, or are closer than the clearance."""
+    if a.is_empty or b.is_empty:
+        return False
+    clearance = float(clearance or 0)
+    if clearance <= 0:
+        return bool(a.intersects(b))
+    sh = _sh()
+    near = getattr(sh, "dwithin", None)
+    if near is not None:
+        try:
+            return bool(near(a, b, clearance)) and (bool(a.intersects(b)) or a.distance(b) < clearance)
+        except Exception:
+            pass
+    return bool(a.intersects(b)) or a.distance(b) < clearance
+
+
+class SHAPE:
+    """A geometric shape (KiCad's SHAPE): what `GetEffectiveShape` returns and what `Collide` takes."""
+
+    def __init__(self, geom=None):
+        self._g = geom if geom is not None else _sh().geometry.Polygon()
+
+    def Collide(self, other, clearance=0, *_):
+        return _collide(self._g, _geom_of(other), clearance if isinstance(clearance, (int, float)) else 0)
+
+    def BBox(self, clearance=0, *_):
+        if self._g.is_empty:
+            return BOX2I()
+        x0, y0, x1, y1 = self._g.bounds
+        c = int(clearance or 0)
+        return BOX2I._of(int(x0) - c, int(y0) - c, int(x1) + c, int(y1) + c)
+
+    def Centre(self):
+        c = self._g.centroid if not self._g.is_empty else None
+        return VECTOR2I(int(round(c.x)), int(round(c.y))) if c is not None else VECTOR2I(0, 0)
+
+    def Move(self, d):
+        from shapely import affinity
+        d = VECTOR2I(d)
+        self._g = affinity.translate(self._g, d.x, d.y)
+
+    def Rotate(self, angle, centre=(0, 0)):
+        c = VECTOR2I(centre)
+        from shapely import affinity
+        self._g = affinity.translate(_place_geom(affinity.translate(self._g, -c.x, -c.y), _deg(angle), 0, 0), c.x, c.y)
+
+    def IsSolid(self):
+        return True
+
+    def Area(self):
+        return float(self._g.area)
+
+    def GetClearance(self, other):
+        return int(self._g.distance(_geom_of(other)))
+
+    def PointInside(self, point, accuracy=0, *_):
+        p = VECTOR2I(point)
+        return _collide(self._g, _sh().geometry.Point(p.x, p.y), accuracy)
+
+    def TransformToPolygon(self, polyset, maxError=None, errorLoc=None):
+        polyset._add_geom(self._g)
+
+    def GetSubshapes(self):
+        return [SHAPE(g) for g in getattr(self._g, "geoms", [self._g])]
+
+    Shapes = GetSubshapes
+
+    def Size(self):
+        return len(self.GetSubshapes())
+
+
+SHAPE_COMPOUND = SHAPE
+SHAPE_SIMPLE = SHAPE
+
+
+class SHAPE_CIRCLE(SHAPE):
+    def __init__(self, *a):
+        if len(a) >= 2 and not isinstance(a[0], (int, float)):
+            c, r = VECTOR2I(a[0]), a[1]
+        elif len(a) >= 3:
+            c, r = VECTOR2I(a[0], a[1]), a[2]
+        else:
+            c, r = VECTOR2I(0, 0), 0
+        self._c, self._r = c, int(r)
+        self._make()
+
+    def _make(self):
+        G = _sh().geometry
+        self._g = G.Point(self._c.x, self._c.y).buffer(self._r, quad_segs=_quad_segs(self._r, 2000)) if self._r > 0 else G.Point(self._c.x, self._c.y)
+
+    def Collide(self, other, clearance=0, *_):
+        # exact against the true circle, not its polygon
+        o = _geom_of(other)
+        if o.is_empty:
+            return False
+        centre = _sh().geometry.Point(self._c.x, self._c.y)
+        gap = centre.distance(o) - self._r
+        c = clearance if isinstance(clearance, (int, float)) else 0
+        return gap <= 0 or gap < c
+
+    def GetCenter(self):
+        return VECTOR2I(self._c)
+
+    Centre = GetCenter
+
+    def GetRadius(self):
+        return self._r
+
+    def SetRadius(self, r):
+        self._r = int(r)
+        self._make()
+
+    def SetCenter(self, c):
+        self._c = VECTOR2I(c)
+        self._make()
+
+    def Move(self, d):
+        self._c = self._c + VECTOR2I(d)
+        self._make()
+
+
+class SEG:
+    def __init__(self, a=(0, 0), b=(0, 0), *more):
+        if more:
+            a, b = (a, b), more[:2]
+        self.A, self.B = VECTOR2I(a), VECTOR2I(b)
+
+    def Length(self):
+        return int(self.A.Distance(self.B))
+
+    def Center(self):
+        return VECTOR2I((self.A.x + self.B.x) // 2, (self.A.y + self.B.y) // 2)
+
+    def Distance(self, other):
+        G = _sh().geometry
+        me = G.LineString([(self.A.x, self.A.y), (self.B.x, self.B.y)])
+        return int(me.distance(_geom_of(other) if not isinstance(other, SEG) else G.LineString([(other.A.x, other.A.y), (other.B.x, other.B.y)])))
+
+
+class SHAPE_SEGMENT(SHAPE):
+    def __init__(self, a=None, b=None, width=0):
+        if isinstance(a, SEG):
+            a, b, width = a.A, a.B, (b or 0)
+        self._a, self._b, self._w = VECTOR2I(a or (0, 0)), VECTOR2I(b or (0, 0)), int(width or 0)
+        G = _sh().geometry
+        line = G.LineString([(self._a.x, self._a.y), (self._b.x, self._b.y)]) if self._a != self._b else G.Point(self._a.x, self._a.y)
+        self._g = line.buffer(self._w / 2.0, quad_segs=_quad_segs(self._w / 2.0, 2000)) if self._w > 0 else line
+
+    def GetSeg(self):
+        return SEG(self._a, self._b)
+
+    def GetWidth(self):
+        return self._w
+
+
+class SHAPE_RECT(SHAPE):
+    def __init__(self, *a):
+        if len(a) == 1 and isinstance(a[0], BOX2I):
+            x, y, w, h = a[0].GetX(), a[0].GetY(), a[0].GetWidth(), a[0].GetHeight()
+        elif len(a) >= 3 and not isinstance(a[0], (int, float)):
+            p = VECTOR2I(a[0])
+            x, y, w, h = p.x, p.y, a[1], a[2]
+        elif len(a) >= 4:
+            x, y, w, h = a[:4]
+        else:
+            x = y = w = h = 0
+        self._x, self._y, self._w, self._h = int(x), int(y), int(w), int(h)
+        self._g = _sh().geometry.box(self._x, self._y, self._x + self._w, self._y + self._h)
+
+    def GetPosition(self):
+        return VECTOR2I(self._x, self._y)
+
+    def GetSize(self):
+        return VECTOR2I(self._w, self._h)
+
+    def GetWidth(self):
+        return self._w
+
+    def GetHeight(self):
+        return self._h
+
+
+def _poly_add_geom(self, g):
+    """Append a shapely geometry's polygons as outlines (no merging, as KiCad's transforms do)."""
+    parts = [g] if g.geom_type == "Polygon" else [p for p in getattr(g, "geoms", []) if p.geom_type == "Polygon"]
+    for part in parts:
+        if part.is_empty:
+            continue
+        chain = lambda ring: SHAPE_LINE_CHAIN([VECTOR2I(int(round(x)), int(round(y))) for x, y in list(ring.coords)[:-1]], True)
+        self._outlines.append([chain(part.exterior)] + [chain(r) for r in part.interiors])
+
+
+def _poly_geom_cached(self):
+    key = hash(tuple((len(o), tuple((p.x, p.y) for c in o for p in c._pts)) for o in self._outlines))
+    hit = self.__dict__.get("_gc")
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    g = _poly_geom_raw(self)
+    try:
+        _sh().prepare(g)
+    except Exception:
+        pass
+    self.__dict__["_gc"] = (key, g)
+    return g
+
+
+def _poly_collide(self, *a):
+    if not a:
+        return False
+    other = a[0]
+    clearance = a[1] if len(a) > 1 and isinstance(a[1], (int, float)) else 0
+    try:
+        import shapely          # noqa: F401
+    except ImportError:
+        return self.Contains(other) if not isinstance(other, (SHAPE, SHAPE_POLY_SET)) else False
+    return _collide(self._geom(), _geom_of(other), clearance)
+
+
+def _poly_contains(self, point, subpolyIndex=-1, accuracy=0, *_):
+    hit = self.__dict__.get("_gc")
+    if hit is None and self.TotalVertices() < 400:
+        return _poly_contains_plain(self, point)
+    try:
+        import shapely          # noqa: F401
+    except ImportError:
+        return _poly_contains_plain(self, point)
+    p = VECTOR2I(point)
+    return _collide(self._geom(), _sh().geometry.Point(p.x, p.y), accuracy if isinstance(accuracy, (int, float)) else 0)
+
+
+def _chain_collide(self, other, clearance=0, *_):
+    return _collide(_geom_of(self), _geom_of(other), clearance if isinstance(clearance, (int, float)) else 0)
+
+
+SHAPE_LINE_CHAIN.Collide = _chain_collide
+_poly_geom_raw = SHAPE_POLY_SET._geom
+_poly_contains_plain = SHAPE_POLY_SET.Contains
+SHAPE_POLY_SET._geom = _poly_geom_cached
+SHAPE_POLY_SET._add_geom = _poly_add_geom
+SHAPE_POLY_SET.Collide = _poly_collide
+SHAPE_POLY_SET.Contains = _poly_contains
+
+
+def _transform_to_polygon(self, polyset, *a):
+    """TransformShapeToPolygon( buffer, layer, clearance, maxError, errorLoc ): this item's shape,
+    grown by the clearance, added to the buffer."""
+    nums = [x for x in a if isinstance(x, (int, float)) and not isinstance(x, bool)]
+    layer = nums[0] if len(nums) > 0 else None
+    clearance = nums[1] if len(nums) > 1 else 0
+    err = nums[2] if len(nums) > 2 else None
+    if isinstance(self, (PAD, PCB_VIA, ZONE)) and layer is not None and layer >= 0 and not self.IsOnLayer(int(layer)):
+        return
+    g = _item_geom(self, layer, err)
+    if clearance:
+        g = g.buffer(clearance, quad_segs=_quad_segs(abs(clearance), err))
+    polyset._add_geom(g)
+
+
+def _effective_shape(self, layer=None, *_):
+    return SHAPE(_item_geom(self, layer if isinstance(layer, (int, float)) and layer >= 0 else None))
+
+
+def _via_shape(self, layer=None, *_):
+    p = self.GetPosition()
+    return SHAPE_CIRCLE(p, self.GetWidth() // 2)
+
+
+def _pad_polygon(self, *a):
+    out = SHAPE_POLY_SET()
+    try:
+        out._add_geom(_pad_geom(self, None, 2000))
+    except WebUnsupported:
+        return _pad_polygon_plain(self)
+    return out
+
+
+def _own_clearance(self, *_):
+    local = self.GetLocalClearance() if hasattr(self, "GetLocalClearance") else 0
+    if local:
+        return int(local)
+    try:
+        return int(self.GetNetClass().GetClearance())
+    except Exception:
+        return FromMM(0.2)
+
+
+def _outline_polys(shapes, err=None):
+    """Closed outlines drawn with lines, arcs, rectangles, circles and polygons, as polygons;
+    an outline inside another is a hole (and one inside that is solid again)."""
+    sh = _sh()
+    G = sh.geometry
+    rings, lines = [], []
+    for d in shapes:
+        pts, closed = _shape_path(d, err)
+        pts = [(int(round(x)), int(round(y))) for x, y in pts]
+        if closed and len(pts) >= 3:
+            rings.append(pts + [pts[0]])
+        elif len(pts) >= 2 and pts[0] != pts[-1]:
+            lines.append(pts)
+    faces = []
+    for tol in (0, 1000, 10000):          # outlines drawn a hair apart still close, as in KiCad
+        work = [list(l) for l in lines]
+        if tol:
+            ends = []
+            for l in work:
+                for i in (0, -1):
+                    for q in ends:
+                        if abs(q[0] - l[i][0]) <= tol and abs(q[1] - l[i][1]) <= tol:
+                            l[i] = q
+                            break
+                    else:
+                        ends.append(l[i])
+        geoms = [G.LineString(l) for l in work if l[0] != l[-1] or len(l) > 2] + [G.LineString(r) for r in rings]
+        if not geoms:
+            return []
+        faces = list(sh.polygonize([sh.unary_union(geoms)]).geoms) if hasattr(sh, "polygonize") else []
+        if faces and (not lines or len(faces) > len(rings) or not rings):
+            break
+    hulls = [G.Polygon(f.exterior) for f in faces]
+    out = []
+    for i, f in enumerate(faces):
+        p = f.representative_point()
+        depth = sum(1 for j, h in enumerate(hulls) if j != i and h.contains(p))
+        if depth % 2 == 0:
+            out.append(f)
+    return out
+
+
+def _board_outlines(self, outlines, *_):
+    """GetBoardPolygonOutlines: the Edge.Cuts drawing as polygons with their cutouts."""
+    edge = [d for d in self.GetDrawings() if isinstance(d, PCB_SHAPE) and d.GetLayer() == Edge_Cuts]
+    for fp in self.GetFootprints():
+        edge += [d for d in fp.GraphicalItems() if isinstance(d, PCB_SHAPE) and d.GetLayer() == Edge_Cuts]
+    polys = _outline_polys(edge)
+    outlines.RemoveAllContours()
+    for g in polys:
+        outlines._add_geom(g)
+    return bool(polys)
+
+
+def _courtyard(self, layer):
+    shapes = [s for s in self._kids()["shapes"] if s.GetLayer() == int(layer)]
+    out = SHAPE_POLY_SET()
+    if not shapes:
+        return out
+    try:
+        for g in _outline_polys(shapes):
+            out._add_geom(g)
+    except WebUnsupported:
+        return _courtyard_plain(self, layer)
+    return out
+
+
+def _bump_rev(self):
+    self.__dict__["_rev"] = self.__dict__.get("_rev", 0) + 1
+    top = getattr(self, "_parent", None)
+    if top is not None:
+        top.__dict__["_rev"] = top.__dict__.get("_rev", 0) + 1
+    _item_touch_plain(self)
+
+
+def _hole_shape(self, *_):
+    """The drilled hole as a shape: a segment as wide as the drill (a point-long one for a round hole)."""
+    d = self.GetDrillSize() if isinstance(self, PAD) else VECTOR2I(self.GetDrillValue(), self.GetDrillValue())
+    p = self.GetPosition()
+    if d.x <= 0 and d.y <= 0:
+        return SHAPE_SEGMENT(p, p, 0)
+    w = min(d.x, d.y) if d.x > 0 and d.y > 0 else max(d.x, d.y)
+    half = (max(d.x, d.y) - w) / 2.0
+    if half <= 0:
+        return SHAPE_SEGMENT(p, p, w)
+    ax = (half, 0) if d.x >= d.y else (0, half)
+    rot = self.GetOrientation().AsDegrees() if isinstance(self, PAD) else 0
+    dx, dy = _rot(ax[0], ax[1], rot)
+    return SHAPE_SEGMENT(VECTOR2I(int(round(p.x - dx)), int(round(p.y - dy))), VECTOR2I(int(round(p.x + dx)), int(round(p.y + dy))), w)
+
+
+def _flash_layer(self, layer, *_):
+    """Whether the pad or via has its copper ring on this layer.  With "remove unused layers" set, an inner layer
+    (and an outer one too, unless the end layers are kept) only has it where something of the same net connects."""
+    if isinstance(layer, LSET):
+        return any(_flash_layer(self, l) for l in layer.Seq())
+    layer = int(layer)
+    if not self.IsOnLayer(layer):
+        return False
+    if not IsCopperLayer(layer):
+        return True
+    node = self._node
+    if not _flag(node, "remove_unused_layers") and _kid(node, "remove_unused_layers") is None:
+        return True
+    rk = _kid(node, "remove_unused_layers")
+    if rk is not None and len(rk) > 1 and str(rk[1]) in ("no", "false"):
+        return True
+    kk = _kid(node, "keep_end_layers")
+    keep_ends = _flag(node, "keep_end_layers") or (kk is not None and not (len(kk) > 1 and str(kk[1]) in ("no", "false")))
+    if keep_ends and layer in (F_Cu, B_Cu):
+        return True
+    b = self._board
+    if b is None:
+        return True
+    net, pos = self.GetNetCode(), self.GetPosition()
+    for t in b.GetTracks():
+        if t is self or t.GetNetCode() != net or isinstance(t, PCB_VIA) or t.GetLayer() != layer:
+            continue
+        if t.GetStart() == pos or t.GetEnd() == pos:
+            return True
+    for z in b.Zones():
+        if not z.GetIsRuleArea() and z.GetNetCode() == net and z.IsOnLayer(layer) and z.Outline().Contains(pos):
+            return True
+    return False
+
+
+PAD.GetEffectiveHoleShape = _hole_shape
+PCB_VIA.GetEffectiveHoleShape = _hole_shape
+PAD.FlashLayer = _flash_layer
+PCB_VIA.FlashLayer = _flash_layer
+ZONE.HasFilledPolysForLayer = lambda self, layer: any(
+    (_kid(fp, "layer") is None or _layer_id(_kid(fp, "layer")[1]) == int(layer)) for fp in _kids(self._node, "filled_polygon"))
+_item_touch_plain = BOARD_ITEM._touch
+BOARD_ITEM._touch = _bump_rev
+_pad_polygon_plain = PAD.GetEffectivePolygon
+_courtyard_plain = FOOTPRINT.GetCourtyard
+PAD.GetEffectivePolygon = _pad_polygon
+FOOTPRINT.GetCourtyard = _courtyard
+BOARD.GetBoardPolygonOutlines = _board_outlines
+BOARD_CONNECTED_ITEM.GetOwnClearance = _own_clearance
+for _cls in (PAD, PCB_TRACK, PCB_SHAPE, ZONE):
+    _cls.TransformShapeToPolygon = _transform_to_polygon
+    _cls.TransformShapeWithClearanceToPolygon = _transform_to_polygon
+    _cls.GetEffectiveShape = _effective_shape
+PCB_VIA.GetEffectiveShape = _via_shape
+del _cls
+
+
+# ----------------------------------------------------------------------------- zone filling
+
+def _fracture(poly):
+    """One closed outline for a polygon with holes: each hole is joined to the outline on its left
+    by a zero-width bridge, which is how KiCad stores a zone's filled islands."""
+    from shapely.geometry.polygon import orient
+    poly = orient(poly, 1.0)
+    ring = [(int(round(x)), int(round(y))) for x, y in list(poly.exterior.coords)[:-1]]
+    holes = [[(int(round(x)), int(round(y))) for x, y in list(r.coords)[:-1]] for r in poly.interiors]
+    holes = [h for h in holes if len(h) >= 3]
+    if not holes:
+        return ring
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    holes.sort(key=lambda h: min(h))
+    for h in holes:
+        k = min(range(len(h)), key=lambda i: h[i])
+        hx, hy = h[k]
+        best, at = None, -1
+        if np is not None:
+            a = np.asarray(ring, dtype=np.float64)
+            b = np.roll(a, -1, axis=0)
+            ay, by = a[:, 1], b[:, 1]
+            m = ((ay <= hy) & (by > hy)) | ((by <= hy) & (ay > hy))
+            idx = np.nonzero(m)[0]
+            if len(idx):
+                x = a[idx, 0] + (hy - ay[idx]) * (b[idx, 0] - a[idx, 0]) / (by[idx] - ay[idx])
+                ok = x <= hx
+                if ok.any():
+                    j = int(np.argmax(np.where(ok, x, -np.inf)))
+                    best, at = float(x[j]), int(idx[j])
+        else:
+            n = len(ring)
+            for i in range(n):
+                (ax, ay), (bx, by) = ring[i], ring[(i + 1) % n]
+                if (ay <= hy < by) or (by <= hy < ay):
+                    x = ax + (hy - ay) * (bx - ax) / (by - ay)
+                    if x <= hx and (best is None or x > best):
+                        best, at = x, i
+        if best is None:
+            continue
+        p = (int(round(best)), hy)
+        loop = h[k:] + h[:k]
+        ring = ring[:at + 1] + [p] + loop + [loop[0], p] + ring[at + 1:]
+    return ring
+
+
+class ZONE_FILLER:
+    """Fills zones the way KiCad does: the outline, less the clearance around other nets' copper,
+    with thermal reliefs, the minimum width and island removal. It works when the geometry package
+    (shapely) is loaded; otherwise a refill is only requested from the desktop application.
+    Either way the desktop refills with its own filler the next time zones are filled there."""
+
+    def __init__(self, board, *_):
+        self._board = board
+        self._grown = {}
+        self._done = {}
+
+    def SetProgressReporter(self, *_):
+        pass
+
+    def IsDebug(self):
+        return False
+
+    def InstallNewProgressReporter(self, *_):
+        pass
+
+    def Fill(self, zones, check=False, *_):
+        b = self._board
+        try:
+            import shapely          # noqa: F401
+        except ImportError:
+            b._wants_refill = True
+            return True
+        if b._wants_refill is not True:
+            b._wants_refill = "filled"
+        zones = [z for z in (list(zones) if not isinstance(zones, ZONE) else [zones]) if isinstance(z, ZONE) and not z.GetIsRuleArea()]
+        if not zones:
+            return True
+        scene = self._scene()
+        # higher priority first: a lower one keeps clear of what the higher ones filled
+        for z in sorted(zones, key=lambda z: -z.GetAssignedPriority()):
+            self._fill_zone(z, scene)
+        return True
+
+    # -- what is on the board, per copper layer
+    def _scene(self):
+        b = self._board
+        sh = _sh()
+        edge = SHAPE_POLY_SET()
+        outline = None
+        if b.GetBoardPolygonOutlines(edge):
+            outline = edge._geom()
+        tracks = list(b.GetTracks())
+        pads = [p for fp in b.GetFootprints() for p in fp.Pads()]
+        gfx = [d for d in b.GetDrawings() if isinstance(d, PCB_SHAPE) and IsCopperLayer(d.GetLayer())]
+        for fp in b.GetFootprints():
+            gfx += [d for d in fp.GraphicalItems() if isinstance(d, PCB_SHAPE) and IsCopperLayer(d.GetLayer())]
+        zones = list(b.Zones())
+        ds = b.GetDesignSettings()
+        return {"sh": sh, "outline": outline, "tracks": tracks, "pads": pads, "gfx": gfx, "zones": zones,
+                "min": int(ds.m_MinClearance), "edge": int(ds.m_CopperEdgeClearance),
+                "hole": int(getattr(ds, "m_HoleClearance", 0) or 0)}
+
+    def _grow(self, item, amount, layer=None):
+        g = _item_geom(item, layer)
+        key = (id(item), int(amount))
+        hit = self._grown.get(key)
+        if hit is None or hit[0] is not g:
+            hit = (g, g.buffer(amount, quad_segs=_quad_segs(amount, 5000)) if amount > 0 else g)
+            self._grown[key] = hit
+        return hit[1]
+
+    def _fill_zone(self, z, scene):
+        sh = scene["sh"]
+        G = sh.geometry
+        net = z.GetNetCode()
+        zclr = max(int(z.GetLocalClearance() or 0), scene["min"])
+        half = z.GetMinThickness() / 2.0
+        body = z.Outline()._geom()
+        if body.is_empty:
+            return
+        box = body.bounds
+        near = lambda g: not g.is_empty and not (g.bounds[2] < box[0] - reach or g.bounds[0] > box[2] + reach or g.bounds[3] < box[1] - reach or g.bounds[1] > box[3] + reach)
+        connection = z.GetPadConnection()
+        gap, spoke_w = z.GetThermalReliefGap(), z.GetThermalReliefSpokeWidth()
+        reach = zclr + gap + FromMM(2)
+        layers = [l for l in z.GetLayerSet().Seq() if IsCopperLayer(l)]
+        z._node[:] = [c for c in z._node if not (isinstance(c, list) and c and c[0] in ("filled_polygon", "fill_segments"))]
+        for L in layers:
+            area = body
+            if scene["outline"] is not None:
+                area = area.intersection(scene["outline"].buffer(-scene["edge"]) if scene["edge"] > 0 else scene["outline"])
+            holes, spokes, anchors, foreign = [], [], [], []
+            for t in scene["tracks"]:
+                if not t.IsOnLayer(L):
+                    continue
+                if net and t.GetNetCode() == net:
+                    anchors.append(t)
+                    continue
+                g = self._grow(t, max(zclr, t.GetOwnClearance(L)))
+                if near(g):
+                    holes.append(g)
+                    foreign.append(g)
+            for p in scene["pads"]:
+                on = p.IsOnLayer(L)
+                drill = p.GetDrillSize()
+                if not on:
+                    # a hole goes through every layer, with or without copper around it
+                    if drill.x > 0 and near(G.Point(p.GetPosition().x, p.GetPosition().y)):
+                        pos = p.GetPosition()
+                        holes.append(G.Point(pos.x, pos.y).buffer(max(drill.x, drill.y) / 2.0 + max(zclr, scene["hole"])))
+                    continue
+                same = bool(net) and p.GetNetCode() == net
+                if not same:
+                    g = self._grow(p, max(zclr, p.GetLocalClearance() or 0))
+                    if near(g):
+                        holes.append(g)
+                        foreign.append(g)
+                    continue
+                anchors.append(p)
+                how = p.GetZoneConnection()
+                how = connection if how == ZONE_CONNECTION_INHERITED else how
+                if how == ZONE_CONNECTION_THT_THERMAL:
+                    how = ZONE_CONNECTION_THERMAL if drill.x > 0 else ZONE_CONNECTION_FULL
+                if how == ZONE_CONNECTION_FULL:
+                    continue
+                pg = _item_geom(p, L)
+                if not near(pg):
+                    continue
+                if how == ZONE_CONNECTION_NONE:
+                    holes.append(self._grow(p, zclr))
+                    continue
+                pgap = p.GetThermalGap() or gap
+                pw = p.GetThermalSpokeWidth() or spoke_w
+                holes.append(self._grow(p, pgap))
+                # four spokes along the pad's own axes (at 45 degrees for a round pad, as KiCad draws them)
+                pos, size = p.GetPosition(), p.GetSize()
+                rot = p.GetOrientation().AsDegrees() + (45 if p.GetShape() == PAD_SHAPE_CIRCLE else 0)
+                for k in range(4):
+                    ext = (size.x if k % 2 == 0 else size.y) / 2.0 + pgap + half + pw / 2.0
+                    dx, dy = _rot(ext if k == 0 else -ext if k == 2 else 0, ext if k == 1 else -ext if k == 3 else 0, rot)
+                    spokes.append(G.LineString([(pos.x, pos.y), (pos.x + dx, pos.y + dy)]).buffer(pw / 2.0, cap_style="flat"))
+            for d in scene["gfx"]:
+                if d.GetLayer() != L:
+                    continue
+                dn = d.GetNetCode() if hasattr(d, "GetNetCode") else 0
+                if net and dn == net:
+                    anchors.append(d)
+                    continue
+                g = self._grow(d, zclr)
+                if near(g):
+                    holes.append(g)
+                    foreign.append(g)
+            for o in scene["zones"]:
+                if o is z or not o.IsOnLayer(L):
+                    continue
+                if o.GetIsRuleArea():
+                    if o._keepout("copperpour"):
+                        holes.append(o.Outline()._geom())
+                    continue
+                if o.GetNetCode() == net:
+                    continue
+                if o.GetAssignedPriority() > z.GetAssignedPriority():
+                    og = o.Outline()._geom()
+                    if near(og):
+                        holes.append(og.buffer(max(zclr, int(o.GetLocalClearance() or 0))))
+                elif o.GetAssignedPriority() == z.GetAssignedPriority():
+                    og = self._done.get((id(o), L))
+                    if og is None and o.IsFilled():
+                        og = o.GetFilledPolysList(L)._geom()
+                    if og is not None and near(og):
+                        holes.append(og.buffer(max(zclr, int(o.GetLocalClearance() or 0))))
+            cut = sh.unary_union(holes) if holes else G.Polygon()
+            solid = area.difference(cut)
+            if half > 0:
+                # shrink and grow by half the minimum width: no neck narrower than the minimum is left
+                solid = solid.buffer(-half).buffer(half)
+            if spokes:
+                arms = sh.unary_union(spokes).intersection(area)
+                if foreign:
+                    arms = arms.difference(sh.unary_union(foreign))
+                solid = sh.unary_union([solid, arms])
+            solid = solid.intersection(area)
+            if z.GetFillMode() == ZONE_FILL_MODE_HATCH_PATTERN:
+                solid = self._hatch(z, solid, G, sh)
+            parts = [solid] if solid.geom_type == "Polygon" else [p for p in getattr(solid, "geoms", []) if p.geom_type == "Polygon"]
+            parts = [p for p in parts if not p.is_empty and p.area > 0]
+            mode = z.GetIslandRemovalMode()
+            if net and mode != ISLAND_REMOVAL_MODE_NEVER and parts:
+                touch = [_item_geom(a, L) for a in anchors]
+                tree = sh.STRtree(touch) if touch else None
+                kept = []
+                for p in parts:
+                    joined = tree is not None and len(tree.query(p, predicate="intersects")) > 0
+                    if joined or (mode == ISLAND_REMOVAL_MODE_AREA and p.area >= float(z.GetMinIslandArea()) * 1.0):
+                        kept.append(p)
+                parts = kept
+            for p in parts:
+                pts = [Sym("pts")]
+                for x, y in _fracture(p):
+                    lx, ly = z._to_local(ToMM(x), ToMM(y))
+                    pts.append([Sym("xy"), _n(lx), _n(ly)])
+                z._node.append([Sym("filled_polygon"), [Sym("layer"), _layer_name(L)], pts])
+            self._done[(id(z), L)] = sh.unary_union(parts) if parts else G.Polygon()
+        f = z._fill(True)
+        if not any(isinstance(c, Sym) and c == "yes" for c in f[1:]):
+            f.insert(1, Sym("yes"))
+        z._touch()
+
+    def _hatch(self, z, solid, G, sh):
+        """A hatched fill: square holes of the hatch gap, a hatch thickness apart, turned by the hatch angle."""
+        thick, gap = z.GetHatchThickness(), z.GetHatchGap()
+        if gap <= 0 or solid.is_empty:
+            return solid
+        from shapely import affinity
+        angle = z.GetHatchOrientation().AsDegrees() if hasattr(z.GetHatchOrientation(), "AsDegrees") else float(z.GetHatchOrientation() or 0)
+        c = solid.centroid
+        flat = affinity.rotate(solid, angle, origin=c)
+        x0, y0, x1, y1 = flat.bounds
+        step = thick + gap
+        cells = []
+        y = y0 - step
+        while y < y1 + step:
+            x = x0 - step
+            while x < x1 + step:
+                cells.append(G.box(x, y, x + gap, y + gap))
+                x += step
+            y += step
+        holes = affinity.rotate(sh.unary_union(cells), -angle, origin=c)
+        inner = solid.buffer(-thick) if thick > 0 else solid          # a solid border, one hatch line wide
+        holes = holes.intersection(inner)
+        whole = [h for h in (getattr(holes, "geoms", [holes])) if h.geom_type == "Polygon" and h.area >= 0.3 * gap * gap]
+        return solid.difference(sh.unary_union(whole)) if whole else solid
+
+
+# ----------------------------------------------------------------------------- Specctra DSN export
+
+def _dsn_q(s):
+    s = str(s)
+    return '"%s"' % s.replace('"', "'") if (not s or any(c in s for c in ' ()"\t')) else s
+
+
+def _dsn_um(v):
+    v = v / 1000.0
+    return ("%.1f" % v).rstrip("0").rstrip(".") if v != int(v) else str(int(v))
+
+
+def _dsn_padstack(pad, layers):
+    """(name, lines) of the padstack of one pad, the way KiCad names them."""
+    s = pad.GetSize()
+    on = [l for l in layers if pad.IsOnLayer(l)]
+    side = "A" if len(on) > 1 else ("T" if on and on[0] == F_Cu else "B")
+    shape = pad.GetShape()
+    w, h = _dsn_um(s.x), _dsn_um(s.y)
+    if shape == PAD_SHAPE_CIRCLE:
+        name, body = "Round[%s]Pad_%s_um" % (side, w), "(circle %%s %s)" % w
+    elif shape == PAD_SHAPE_OVAL:
+        r = min(s.x, s.y)
+        dx, dy = (s.x - r) / 2.0, (s.y - r) / 2.0
+        name = "Oval[%s]Pad_%sx%s_um" % (side, w, h)
+        body = "(path %%s %s  %s %s  %s %s)" % (_dsn_um(r), _dsn_um(-dx), _dsn_um(-dy), _dsn_um(dx), _dsn_um(dy))
+    elif shape == PAD_SHAPE_ROUNDRECT:
+        name = "RoundRect[%s]Pad_%sx%s_%s_um" % (side, w, h, _dsn_um(pad.GetRoundRectCornerRadius()))
+        g = _pad_local_ring(pad)
+        body = "(polygon %%s 0  %s)" % "  ".join("%s %s" % (_dsn_um(x), _dsn_um(-y)) for x, y in g)
+    elif shape in (PAD_SHAPE_TRAPEZOID, PAD_SHAPE_CUSTOM, PAD_SHAPE_CHAMFERED_RECT):
+        name = "Cust[%s]Pad_%sx%s_um_%s" % (side, w, h, abs(hash(repr(pad._node))) % 100000)
+        g = _pad_local_ring(pad)
+        body = "(polygon %%s 0  %s)" % "  ".join("%s %s" % (_dsn_um(x), _dsn_um(-y)) for x, y in g)
+    else:
+        name = "Rect[%s]Pad_%sx%s_um" % (side, w, h)
+        body = "(rect %%s %s %s %s %s)" % (_dsn_um(-s.x / 2.0), _dsn_um(-s.y / 2.0), _dsn_um(s.x / 2.0), _dsn_um(s.y / 2.0))
+    lines = ["      (shape %s)" % (body % _layer_name(l)) for l in on]
+    return name, lines + ["      (attach off)"]
+
+
+def _pad_local_ring(pad):
+    """The pad's outline about its own centre, unrotated (what a padstack is drawn in)."""
+    try:
+        g = _pad_geom(pad, None, 5000)
+    except WebUnsupported:
+        s = pad.GetSize()
+        return [(-s.x / 2.0, -s.y / 2.0), (s.x / 2.0, -s.y / 2.0), (s.x / 2.0, s.y / 2.0), (-s.x / 2.0, s.y / 2.0)]
+    p, rot = pad.GetPosition(), pad.GetOrientation().AsDegrees()
+    hull = g.convex_hull if g.geom_type != "Polygon" else g
+    out = []
+    for x, y in list(hull.exterior.coords)[:-1]:
+        out.append(_rot(x - p.x, y - p.y, -rot))
+    return out
+
+
+def ExportSpecctraDSN(*a):
+    """ExportSpecctraDSN(board, path) / ExportSpecctraDSN(path): the board as a Specctra design file (.dsn) for an
+    autorouter: layers, outline, rules, footprints with their pads, nets and the copper already laid."""
+    board = a[0] if a and isinstance(a[0], BOARD) else GetBoard()
+    path = str(a[-1])
+    layers = [l for l in board.GetEnabledLayers().CuStack()]
+    lname = _layer_name
+    ds = board.GetDesignSettings()
+    out = ['(pcb %s' % _dsn_q(path), "  (parser", '    (string_quote ")', "    (space_in_quoted_tokens on)",
+           '    (host_cad "KiCad\'s Pcbnew")', '    (host_version "%s")' % GetBuildVersion(), "  )", "  (resolution um 10)", "  (unit um)", "  (structure"]
+    plane = {}
+    for z in board.Zones():
+        if not z.GetIsRuleArea() and z.GetNetCode() > 0:
+            for l in z.GetLayerSet().Seq():
+                plane.setdefault(l, 0)
+    for i, l in enumerate(layers):
+        out += ["    (layer %s" % lname(l), "      (type signal)", "      (property", "        (index %d)" % i, "      )", "    )"]
+    edge = SHAPE_POLY_SET()
+    got = False
+    try:
+        got = board.GetBoardPolygonOutlines(edge)
+    except WebUnsupported:
+        got = False
+    if got and edge.OutlineCount():
+        for i in range(edge.OutlineCount()):
+            pts = edge.Outline(i).CPoints()
+            pts = list(pts) + [pts[0]]
+            out += ["    (boundary", "      (path pcb 0  %s)" % "  ".join("%s %s" % (_dsn_um(p.x), _dsn_um(-p.y)) for p in pts), "    )"]
+            for hno in range(edge.HoleCount(i)):
+                hp = edge.Hole(i, hno).CPoints()
+                out.append('    (keepout "" (polygon signal 0  %s))' % "  ".join("%s %s" % (_dsn_um(p.x), _dsn_um(-p.y)) for p in list(hp) + [hp[0]]))
+    else:
+        b = board.ComputeBoundingBox(True)
+        out += ["    (boundary", "      (rect pcb %s %s %s %s)" % (_dsn_um(b.GetLeft()), _dsn_um(-b.GetBottom()), _dsn_um(b.GetRight()), _dsn_um(-b.GetTop())), "    )"]
+    for z in board.Zones():
+        if z.GetIsRuleArea() and (z._keepout("tracks") or z._keepout("vias")):
+            kind = "keepout" if z._keepout("tracks") and z._keepout("vias") else ("via_keepout" if z._keepout("vias") else "wire_keepout")
+            o = z.Outline()
+            for i in range(o.OutlineCount()):
+                pts = list(o.Outline(i).CPoints())
+                for l in z.GetLayerSet().Seq():
+                    if l in layers and pts:
+                        out.append('    (%s "" (polygon %s 0  %s))' % (kind, lname(l), "  ".join("%s %s" % (_dsn_um(p.x), _dsn_um(-p.y)) for p in pts + [pts[0]])))
+    classes = _netclasses()
+    default = classes.get("Default") or next(iter(classes.values()))
+    vd, vh = default.GetViaDiameter(), default.GetViaDrill()
+    via_name = "Via[0-%d]_%s:%s_um" % (len(layers) - 1, _dsn_um(vd), _dsn_um(vh))
+    out += ['    (via "%s")' % via_name, "    (rule", "      (width %s)" % _dsn_um(default.GetTrackWidth()),
+            "      (clearance %s)" % _dsn_um(default.GetClearance()), "      (clearance %s (type default_smd))" % _dsn_um(default.GetClearance()),
+            "      (clearance %s (type smd_smd))" % _dsn_um(default.GetClearance() / 4.0), "    )", "  )", "  (placement"]
+    stacks, images, placed = {}, {}, {}
+    for fp in board.GetFootprints():
+        name = str(fp.GetFPID().GetUniStringLibId()) if hasattr(fp.GetFPID(), "GetUniStringLibId") else str(fp.GetFPIDAsString())
+        back = fp.IsFlipped()
+        rot = fp.GetOrientation().AsDegrees()
+        o = fp.GetPosition()
+        pins, seen = [], {}
+        for pad in fp.Pads():
+            if not any(pad.IsOnLayer(l) for l in layers):
+                continue
+            sname, lines = _dsn_padstack(pad, layers)
+            stacks.setdefault(sname, lines)
+            p = pad.GetPosition()
+            lx, ly = _rot(p.x - o.x, p.y - o.y, -rot)
+            if back:
+                lx = -lx
+            num = str(pad.GetNumber()) or "~"
+            seen[num] = seen.get(num, 0) + 1
+            pin = num if seen[num] == 1 else "%s@%d" % (num, seen[num] - 1)
+            prot = (pad.GetOrientation().AsDegrees() - rot) % 360
+            pins.append("      (pin %s %s%s %s %s)" % (_dsn_q(sname), "(rotate %s) " % _num(prot) if prot else "", _dsn_q(pin), _dsn_um(lx), _dsn_um(-ly)))
+        key = (name, tuple(pins))
+        if key not in images:
+            n = sum(1 for k in images if k[0] == name)
+            images[key] = (name if n == 0 else "%s::%d" % (name, n), pins)
+        iname = images[key][0]
+        placed.setdefault(iname, []).append("      (place %s %s %s %s %s (PN %s))" % (
+            _dsn_q(fp.GetReference()), _dsn_um(o.x), _dsn_um(-o.y), "back" if back else "front", _num(rot % 360), _dsn_q(fp.GetValue())))
+    for iname, rows in placed.items():
+        out += ["    (component %s" % _dsn_q(iname)] + rows + ["    )"]
+    out += ["  )", "  (library"]
+    for iname, pins in images.values():
+        out += ["    (image %s" % _dsn_q(iname)] + pins + ["    )"]
+    for sname, lines in stacks.items():
+        out += ["    (padstack %s" % _dsn_q(sname)] + lines + ["    )"]
+    out += ['    (padstack "%s"' % via_name] + ["      (shape (circle %s %s))" % (lname(l), _dsn_um(vd)) for l in layers] + ["      (attach off)", "    )", "  )", "  (network"]
+    nets = {}
+    for fp in board.GetFootprints():
+        seen = {}
+        for pad in fp.Pads():
+            if not any(pad.IsOnLayer(l) for l in layers):
+                continue
+            num = str(pad.GetNumber()) or "~"
+            seen[num] = seen.get(num, 0) + 1
+            n = pad.GetNetname()
+            if n:
+                nets.setdefault(n, []).append("%s-%s" % (fp.GetReference(), num if seen[num] == 1 else "%s@%d" % (num, seen[num] - 1)))
+    for n, pins in nets.items():
+        out += ["    (net %s" % _dsn_q(n), "      (pins %s)" % " ".join(_dsn_q(p) for p in pins), "    )"]
+    by_class = {}
+    for n in nets:
+        by_class.setdefault(_netclass_name(n), []).append(n)
+    for cname, members in by_class.items():
+        nc = classes.get(cname, default)
+        out += ["    (class %s %s" % (_dsn_q("kicad_default" if cname == "Default" else cname), " ".join(['""'] + [_dsn_q(m) for m in members])),
+                "      (circuit", '        (use_via "%s")' % via_name, "      )", "      (rule", "        (width %s)" % _dsn_um(nc.GetTrackWidth()),
+                "        (clearance %s)" % _dsn_um(nc.GetClearance()), "      )", "    )"]
+    out += ["  )", "  (wiring"]
+    for t in board.GetTracks():
+        kind = "protect" if t.IsLocked() else "route"
+        if isinstance(t, PCB_VIA):
+            p = t.GetPosition()
+            out.append('    (via "%s"  %s %s (net %s)(type %s))' % (via_name, _dsn_um(p.x), _dsn_um(-p.y), _dsn_q(t.GetNetname()), kind))
+        else:
+            pts = [VECTOR2I(int(x), int(y)) for x, y in _arc_points(t.GetStart(), t.GetMid(), t.GetEnd())] if isinstance(t, PCB_ARC) else [t.GetStart(), t.GetEnd()]
+            out.append("    (wire (path %s %s  %s)(net %s)(type %s))" % (lname(t.GetLayer()), _dsn_um(t.GetWidth()),
+                       "  ".join("%s %s" % (_dsn_um(p.x), _dsn_um(-p.y)) for p in pts), _dsn_q(t.GetNetname()), kind))
+    out += ["  )", ")", ""]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out))
+    return True
+
+
+# Plugins written with `from pcbnew import *` lean on a few math names coming along with it.
+from math import floor, ceil  # noqa: E402,F401
 
 
 class _Placeholder:

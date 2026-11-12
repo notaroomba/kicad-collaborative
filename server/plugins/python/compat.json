@@ -1,7 +1,6 @@
 {
  "ch.ethz.atuzlak.splitplane": {
-  "status": "untested",
-  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
+  "status": "works"
  },
  "com.ahmedmikatonik.kisidian": {
   "status": "works"
@@ -92,6 +91,9 @@
  "com.github.adamws.kicad-via-patterns": {
   "status": "works"
  },
+ "com.github.adrianwest.bakery": {
+  "status": "works"
+ },
  "com.github.aislerhq.PushForKiCad": {
   "status": "works"
  },
@@ -109,7 +111,8 @@
   "status": "works"
  },
  "com.github.bbenchoff.orthoroute": {
-  "status": "works"
+  "status": "partly",
+  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.bennymeg.JLC-Plugin-for-KiCad": {
   "status": "works"
@@ -121,12 +124,18 @@
   "status": "works"
  },
  "com.github.cooked.kimotor": {
-  "status": "untested",
-  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
+  "status": "works"
  },
  "com.github.danielboston38.prefab-gate": {
   "status": "partly",
-  "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC, and zones are not refilled first. Read a pass as a first check, not as KiCad's verdict."
+  "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
+ },
+ "com.github.drandyhaas.kicadroutingtools": {
+  "status": "works"
+ },
+ "com.github.drewsum.kipi": {
+  "status": "unsupported",
+  "note": "Its Qt window and its numpy, scipy and matplotlib parts load. Its solver meshes the copper with the Triangle library, which is compiled code that has no build for the browser."
  },
  "com.github.ducky64.SubLayout": {
   "status": "works"
@@ -134,9 +143,12 @@
  "com.github.easyw.kicad-action-tools": {
   "status": "works"
  },
+ "com.github.easyw.kicad-rf-tools": {
+  "status": "works"
+ },
  "com.github.f-blaze.velatrace": {
-  "status": "untested",
-  "note": "Its Qt window opens in the editor. Routing needs the numpy package, which is compiled code the test machine could not download."
+  "status": "partly",
+  "note": "Its window opens and its own router routes the board and draws the preview. Its approval step checks the route with the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC, and its optional Freerouting engine needs Java on a computer."
  },
  "com.github.fablabkerala.gerber2png-plugin-for-kicad": {
   "status": "partly",
@@ -149,6 +161,9 @@
   "status": "works"
  },
  "com.github.gauravmm.kleplacement": {
+  "status": "works"
+ },
+ "com.github.gregdavill.KiBuzzard": {
   "status": "works"
  },
  "com.github.heronitec-solutions.kicomlib": {
@@ -170,31 +185,26 @@
   "status": "works"
  },
  "com.github.jsreynaud.kicad-action-scripts": {
-  "status": "partly",
-  "note": "1 of its 2 commands run. Via Stitching Generator: SHAPE_POLY_SET.Inflate is not available in the web editor"
+  "status": "works"
  },
  "com.github.kerstensrobin.kicad-breadboard": {
-  "status": "unsupported",
-  "note": "Its breadboard is drawn with custom painting, which the web runtime does not carry, and simulating needs the ngspice program."
+  "status": "partly",
+  "note": "Its breadboard window opens, draws and takes parts. Simulating the circuit needs the ngspice program, which a browser does not have."
  },
  "com.github.kicadlab.CopperFiller": {
-  "status": "untested",
-  "note": "It needs the shapely package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
+  "status": "works"
  },
  "com.github.lou270.pinout-image-generator": {
-  "status": "untested",
-  "note": "Its kicad-cli export runs in the editor. Drawing the pinout image needs the pillow package, which is compiled code the test machine could not download."
+  "status": "works"
  },
  "com.github.mey-26.kicad-layout-clone": {
   "status": "works"
  },
  "com.github.mey-26.pcb-heatmap": {
-  "status": "untested",
-  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
+  "status": "works"
  },
  "com.github.michaelgaylor.tracklayer": {
-  "status": "untested",
-  "note": "It needs the numpy package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it."
+  "status": "works"
  },
  "com.github.mitxela.kicad-round-tracks": {
   "status": "works"
@@ -218,6 +228,9 @@
   "status": "partly",
   "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
+ "com.github.riehlies.kisi": {
+  "status": "works"
+ },
  "com.github.sagarHackeD.PlaceBySchKiCad": {
   "status": "works"
  },
@@ -240,12 +253,15 @@
  "com.github.sparkfun.SparkFunKiCadPanelizer": {
   "status": "works"
  },
+ "com.github.spice-projects.kicad-xyce-plugin": {
+  "status": "unsupported",
+  "note": "It adds no board editor command."
+ },
  "com.github.tnaegele.kicad-cut-tracks-at-line": {
   "status": "works"
  },
  "com.github.tobiglaser.KiPNG": {
-  "status": "untested",
-  "note": "Its kicad-cli export runs in the editor. Turning the result into a PNG needs the pillow package and the Cairo graphics library, which were not tested here."
+  "status": "works"
  },
  "com.github.ulikoehler.kicad-bulk-hide-silkscreen-designators": {
   "status": "works"
@@ -272,8 +288,7 @@
   "note": "Its windows open and the setup is saved. Simulating needs the Z2 EMS engine, a desktop program."
  },
  "com.github.z2labs.z2viacolino": {
-  "status": "untested",
-  "note": "It needs the numpy package, which is compiled code the test machine could not download."
+  "status": "works"
  },
  "com.gitlab.dennevi.Board2Pdf": {
   "status": "works"

@@ -142,6 +142,82 @@ class QWidget(QObject):
         self._w._q_owner = self
         if self._TOP:
             self._w.Bind(wx.EVT_CLOSE, self._wx_close)
+        self._q_wire()
+
+    # -- the events a subclass overrides (paintEvent, mousePressEvent, keyPressEvent, …) are fed from the page
+
+    _Q_MOUSE = (("mousePressEvent", ("EVT_LEFT_DOWN", "EVT_RIGHT_DOWN", "EVT_MIDDLE_DOWN"), 2),
+                ("mouseReleaseEvent", ("EVT_LEFT_UP", "EVT_RIGHT_UP", "EVT_MIDDLE_UP"), 3),
+                ("mouseDoubleClickEvent", ("EVT_LEFT_DCLICK",), 4), ("mouseMoveEvent", ("EVT_MOTION",), 5),
+                ("wheelEvent", ("EVT_MOUSEWHEEL",), 31), ("enterEvent", ("EVT_ENTER_WINDOW",), 10), ("leaveEvent", ("EVT_LEAVE_WINDOW",), 11))
+    _Q_KEYS = {13: 0x01000004, 370: 0x01000005, 27: 0x01000000, 9: 0x01000001, 8: 0x01000003, 127: 0x01000007, 322: 0x01000006,
+               313: 0x01000010, 312: 0x01000011, 314: 0x01000012, 315: 0x01000013, 316: 0x01000014, 317: 0x01000015,
+               366: 0x01000016, 367: 0x01000017, 306: 0x01000020, 308: 0x01000021, 307: 0x01000023}
+
+    def _q_wire(self):
+        cls, w = type(self), self._w
+        over = lambda name: getattr(cls, name, None) is not getattr(QWidget, name, None)
+        if over("paintEvent"):
+            w.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+            w.Bind(wx.EVT_PAINT, self._q_paint)
+        for name, binders, kind in self._Q_MOUSE:
+            if over(name):
+                for b in binders:
+                    w.Bind(getattr(wx, b), lambda e, n=name, k=kind: self._q_mouse(e, n, k))
+        if over("keyPressEvent"):
+            w.Bind(wx.EVT_KEY_DOWN, lambda e: self._q_key(e, "keyPressEvent", 6))
+        if over("keyReleaseEvent"):
+            w.Bind(wx.EVT_KEY_UP, lambda e: self._q_key(e, "keyReleaseEvent", 7))
+        if over("resizeEvent"):
+            w.Bind(wx.EVT_SIZE, lambda e: (self.resizeEvent(QtGui.QResizeEvent(self.size(), self.size())), e.Skip()))
+        if over("focusInEvent"):
+            w.Bind(wx.EVT_SET_FOCUS, lambda e: (self.focusInEvent(QtGui.QFocusEvent(QEvent.Type.FocusIn)), e.Skip()))
+        if over("focusOutEvent"):
+            w.Bind(wx.EVT_KILL_FOCUS, lambda e: (self.focusOutEvent(QtGui.QFocusEvent(QEvent.Type.FocusOut)), e.Skip()))
+
+    def _q_paint(self, event=None):
+        self.paintEvent(QtGui.QPaintEvent(self.rect()))
+
+    def _q_mods(self, e):
+        m = Qt.KeyboardModifier.NoModifier
+        for test, flag in (("ControlDown", "ControlModifier"), ("ShiftDown", "ShiftModifier"), ("AltDown", "AltModifier"), ("MetaDown", "MetaModifier")):
+            try:
+                if getattr(e, test)():
+                    m = m | getattr(Qt.KeyboardModifier, flag)
+            except Exception:
+                pass
+        return m
+
+    def _q_mouse(self, e, name, kind):
+        qe = QtGui.QMouseEvent()
+        qe._type = kind
+        qe._pos = QtCore.QPointF(e.GetX(), e.GetY())
+        buttons = Qt.MouseButton
+        qe._button = {1: buttons.LeftButton, 2: buttons.MiddleButton, 3: buttons.RightButton}.get(e.GetButton(), buttons.NoButton)
+        held = buttons.NoButton
+        for test, flag in (("LeftIsDown", buttons.LeftButton), ("RightIsDown", buttons.RightButton), ("MiddleIsDown", buttons.MiddleButton)):
+            if getattr(e, test)():
+                held = held | flag
+        qe._buttons = held
+        qe.buttons = lambda: qe._buttons
+        qe._mods = self._q_mods(e)
+        qe._delta = e.GetWheelRotation()
+        getattr(self, name)(qe)
+        e.Skip()
+
+    def _q_key(self, e, name, kind):
+        qe = QtGui.QKeyEvent()
+        qe._type = kind
+        code = e.GetKeyCode()
+        qe._key = self._Q_KEYS.get(code, (0x01000030 + code - 340) if 340 <= code <= 363 else code)
+        uni = e.GetUnicodeKey()
+        qe._text = chr(uni) if uni and uni >= 32 and uni != 127 else ("\r" if code in (13, 370) else "")
+        qe._mods = self._q_mods(e)
+        qe.isAutoRepeat = lambda: bool(e.IsAutoRepeat())
+        qe.accept()
+        getattr(self, name)(qe)
+        if not qe.isAccepted():
+            e.Skip()
 
     # -- the wx side
 
@@ -295,10 +371,14 @@ class QWidget(QObject):
     showMinimized = lambda self: None
     isActiveWindow = lambda self: self.isVisible()
     isMaximized = isMinimized = isFullScreen = isModal = lambda self: False
-    lower = stackUnder = repaint = unsetCursor = clearFocus = ensurePolished = clearMask = lambda self, *a: None
+    lower = stackUnder = unsetCursor = clearFocus = ensurePolished = clearMask = lambda self, *a: None
 
     def update(self, *a):
-        pass
+        self._w.Refresh()
+
+    def repaint(self, *a):
+        self._w.Refresh()
+        self._w.Update()
 
     # -- events a subclass may override
 
@@ -317,7 +397,11 @@ class QWidget(QObject):
     def paintEvent(self, e):
         pass
 
-    keyPressEvent = keyReleaseEvent = mousePressEvent = mouseReleaseEvent = mouseMoveEvent = mouseDoubleClickEvent = wheelEvent = \
+    def keyPressEvent(self, e):
+        e.ignore()          # not handled here: the key goes on to whatever else wants it
+
+    keyReleaseEvent = keyPressEvent
+    mousePressEvent = mouseReleaseEvent = mouseMoveEvent = mouseDoubleClickEvent = wheelEvent = \
         enterEvent = leaveEvent = focusInEvent = focusOutEvent = changeEvent = moveEvent = contextMenuEvent = \
         dragEnterEvent = dragMoveEvent = dropEvent = lambda self, e: None
 

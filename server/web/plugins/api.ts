@@ -338,7 +338,8 @@ export const fab: Record<string, (a: any) => Promise<unknown>> = {
     const { doc } = liveDoc(); if (doc.type !== "pcb") throw new ApiError("The design rule check runs on a board; the open document is a schematic.", "not_board");
     const tools = (window as any).CollabTools && (window as any).CollabTools.pcb;
     if (!tools || typeof tools.drcReport !== "function") throw new ApiError("The Design Rules Checker is not loaded.", "not_ready");
-    const r = await tools.drcReport({ parity: a.parity !== false }); if (!r) throw new ApiError("The Design Rules Checker needs a board.", "not_board");
+    const text = typeof a.text === "string" && a.text.length <= 64 * 1024 * 1024 ? a.text : undefined;
+    const r = await tools.drcReport({ parity: a.parity !== false, text }); if (!r) throw new ApiError("The Design Rules Checker needs a board.", "not_board");
     return { parityError: r.parityError, markers: r.markers.map((m: any) => ({ code: m.code, severity: m.severity, text: m.text, x: r3(m.x), y: r3(m.y), group: m.group, items: m.items })),
       note: "The web editor checks clearance, edge clearance, unconnected items, shorts, dangling tracks, annular width, courtyards and schematic parity; KiCad's desktop DRC checks more rules." };
   },
@@ -376,6 +377,23 @@ export const project: Record<string, (a: any) => Promise<unknown>> = {
     else { app.dispatch({ type: "versions", cmd: "dialog", dialog: { kind: "save" } }); app.dispatch({ type: "showPane", pane: "history", show: true }); }
     return { saved: !!name, dialog: !name };
   },
+};
+
+// ---------------------------------------------------------------- KiCad's footprint libraries
+//
+// pcbnew.FootprintLoad, FootprintEnumerate and GetFootprintLibraries on the desktop read the installed libraries; here
+// they are the libraries the editor's own footprint chooser reads (the server's /api/libs, KiCad's official ones).
+
+const libName = (t: unknown): string => { const v = String(t ?? ""); if (!/^[A-Za-z0-9_.+\- ]{1,120}$/.test(v) || v.includes("..")) throw new ApiError("That is not a library or footprint name.", "bad_request"); return v; };
+const libGet = async (path: string): Promise<any> => {
+  const r = await fetch(path); if (r.status === 404) return null;
+  if (!r.ok) throw new ApiError(`The footprint libraries could not be read (the server answered ${r.status}).`, "not_found");
+  return r.json();
+};
+export const libs: Record<string, (a: any) => Promise<unknown>> = {
+  libraries: async () => { const j = await libGet("/api/libs/footprints"); return { libraries: (j && Array.isArray(j.libraries) ? j.libraries : []).map((l: any) => String(l.name || "")).filter(Boolean) }; },
+  footprints: async (a) => { const lib = libName(a.lib); const j = await libGet(`/api/libs/footprints/${encodeURIComponent(lib)}`); return { library: lib, footprints: (j && Array.isArray(j.footprints) ? j.footprints : []).map((f: any) => String(f.n || "")).filter(Boolean) }; },
+  footprint: async (a) => { const lib = libName(a.lib), name = libName(a.name); const j = await libGet(`/api/libs/footprints/${encodeURIComponent(lib)}/${encodeURIComponent(name)}`); return j && typeof j.footprint === "string" ? { library: lib, name, fpid: `${lib}:${name}`, footprint: j.footprint } : {}; },
 };
 
 // ---------------------------------------------------------------- view

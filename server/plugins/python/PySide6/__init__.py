@@ -7,7 +7,8 @@ QMainWindow is a KiCad dialog in the editor, a QPushButton is a button in it, si
 as they do in Qt.
 
 It covers the widgets, layouts, models and helpers that plugins in KiCad's repository use.  Custom
-painting (QPainter) is accepted and draws nothing.
+painting (QPainter in paintEvent, or on a QPixmap) is drawn on a canvas in the widget, and a widget
+that overrides the mouse, key, wheel or resize events gets them from the page.
 """
 
 __version__ = "6.10.2"

@@ -2254,3 +2254,125 @@ class QOperatingSystemVersion:
 
     majorVersion = minorVersion = microVersion = lambda self: 0
     name = lambda self: "Linux"
+
+
+class QLockFile:
+    """A lock file in this interpreter's own file system.  Each plugin runs alone in its interpreter, so the lock is
+    taken unless this same run already holds it."""
+    NoError, LockFailedError, PermissionError, UnknownError = range(4)
+    _held = {}
+
+    def __init__(self, fileName=""):
+        self._name, self._locked, self._error, self._stale = str(fileName), False, QLockFile.NoError, 30000
+
+    def fileName(self):
+        return self._name
+
+    def setStaleLockTime(self, ms):
+        self._stale = int(ms)
+
+    def staleLockTime(self):
+        return self._stale
+
+    def tryLock(self, timeout=0):
+        import os
+        if self._locked:
+            return True
+        if QLockFile._held.get(self._name) is not None:
+            self._error = QLockFile.LockFailedError
+            return False
+        try:
+            d = os.path.dirname(self._name)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(self._name, "w", encoding="utf-8") as fh:
+                fh.write("%d\nweb\nkicad\n" % os.getpid())
+        except OSError:
+            self._error = QLockFile.PermissionError
+            return False
+        QLockFile._held[self._name] = self
+        self._locked, self._error = True, QLockFile.NoError
+        return True
+
+    def lock(self):
+        return self.tryLock(-1)
+
+    def unlock(self):
+        import os
+        if self._locked:
+            QLockFile._held.pop(self._name, None)
+            self._locked = False
+            try:
+                os.remove(self._name)
+            except OSError:
+                pass
+
+    def isLocked(self):
+        return self._locked
+
+    def error(self):
+        return self._error
+
+    def getLockInfo(self):
+        import os
+        try:
+            with open(self._name, encoding="utf-8") as fh:
+                pid, host, app = (fh.read().split("\n") + ["", "", ""])[:3]
+            return (int(pid or 0), host, app)
+        except (OSError, ValueError):
+            return (os.getpid() if self._locked else 0, "web", "kicad")
+
+    def removeStaleLockFile(self):
+        import os
+        if QLockFile._held.get(self._name) is None:
+            try:
+                os.remove(self._name)
+                return True
+            except OSError:
+                return False
+        return False
+
+
+class QFileSystemWatcher(QObject):
+    """Keeps the paths it is given.  Nothing outside the plugin changes files in its interpreter's file system, so the
+    change signals have nothing to report."""
+    fileChanged = Signal(str)
+    directoryChanged = Signal(str)
+
+    def __init__(self, paths=None, parent=None):
+        if paths is not None and not isinstance(paths, (list, tuple)):
+            paths, parent = None, paths
+        QObject.__init__(self, parent)
+        self._files, self._dirs = [], []
+        if paths:
+            self.addPaths(paths)
+
+    def addPath(self, path):
+        import os
+        path = str(path)
+        if not os.path.exists(path):
+            return False
+        box = self._dirs if os.path.isdir(path) else self._files
+        if path in box:
+            return False
+        box.append(path)
+        return True
+
+    def addPaths(self, paths):
+        return [p for p in paths if not self.addPath(p)]
+
+    def removePath(self, path):
+        for box in (self._files, self._dirs):
+            if str(path) in box:
+                box.remove(str(path))
+                return True
+        return False
+
+    def removePaths(self, paths):
+        return [p for p in paths if not self.removePath(p)]
+
+    def files(self):
+        return list(self._files)
+
+    def directories(self):
+        return list(self._dirs)

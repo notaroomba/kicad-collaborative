@@ -10,8 +10,15 @@
 //   OUT=compat.json  writes the table as JSON too.  ONLY=substring narrows the run.
 //
 // Each package folder is an unpacked PCM zip: metadata.json, plugins/, resources/.
+//
+// Pressing a window's main button proves little for a plugin whose work starts only after a person has
+// chosen nets, layers or files.  For those, scripts/plugin-drives/<identifier>.py plays the person: it may
+// name its own board in a first line "# board: <path from the repository root>", and defines
+// after_run(action_name), which works the plugin's window and raises if the plugin did not do its job.
+// A plugin whose window is a modal dialog is worked from modal(dialog), called while the dialog is open.
+// What after_run returns is reported as the action's "drive".  NO_DRIVE=1 runs without them.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,8 +52,53 @@ export function readPackage(dir) {
   return files;
 }
 
-async function one(dir, boardPath) {
+/**
+ * What the editor answers for kicad.libs.*: KC_FOOTPRINTS names a folder laid out like kicad-footprints; without it each
+ * file asked for is downloaded once from the official repository (the ref src/libs.rs pins) into node_modules/.cache.
+ */
+const LIBS_REF = process.env.KC_LIBS_REF || "10.0.8";
+function library(what, a) {
+  const cache = process.env.KC_FOOTPRINTS || path.join(server, "node_modules", ".cache", "kicad-footprints-" + LIBS_REF);
+  const safe = (t) => /^[A-Za-z0-9_.+\- ]{1,120}$/.test(String(t || "")) && !String(t).includes("..");
+  const curl = (url) => { const r = spawnSync("curl", ["-sS", "-f", "-L", "-m", "60", url], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 }); return r.status === 0 ? r.stdout : null; };
+  const api = "https://gitlab.com/api/v4/projects/kicad%2Flibraries%2Fkicad-footprints/repository";
+  try {
+    if (what === "footprint") {
+      if (!safe(a.lib) || !safe(a.name)) return { error: "not a footprint name" };
+      const f = path.join(cache, a.lib + ".pretty", a.name + ".kicad_mod");
+      if (!fs.existsSync(f)) {
+        if (process.env.KC_FOOTPRINTS) return {};
+        const buf = curl(`${api}/files/${encodeURIComponent(`${a.lib}.pretty/${a.name}.kicad_mod`)}/raw?ref=${encodeURIComponent(LIBS_REF)}`); if (!buf) return {};
+        fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, buf);
+      }
+      return { library: a.lib, name: a.name, fpid: `${a.lib}:${a.name}`, footprint: fs.readFileSync(f, "utf8") };
+    }
+    const list = (p) => {
+      const f = path.join(cache, ".index", (p || "root") + ".json"); if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, "utf8"));
+      if (process.env.KC_FOOTPRINTS) return fs.readdirSync(p ? path.join(cache, p) : cache);
+      const names = []; for (let page = 1; page < 40; page++) { const buf = curl(`${api}/tree?ref=${encodeURIComponent(LIBS_REF)}&per_page=100&page=${page}${p ? "&path=" + encodeURIComponent(p) : ""}`); const rows = buf ? JSON.parse(buf.toString("utf8")) : []; for (const r of rows) names.push(r.name); if (rows.length < 100) break; }
+      fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(names)); return names;
+    };
+    if (what === "footprints") { if (!safe(a.lib)) return { error: "not a library name" }; return { library: a.lib, footprints: list(a.lib + ".pretty").filter((n) => n.endsWith(".kicad_mod")).map((n) => n.slice(0, -10)) }; }
+    if (what === "libraries") return { libraries: list("").filter((n) => n.endsWith(".pretty")).map((n) => n.slice(0, -7)) };
+  } catch (e) { return { error: String(e && e.message || e) }; }
+  return { error: "no such library call" };
+}
+
+/** What a commit creates, counted by kind of item ("segment", "via", "zone", …). */
+function kindsOf(create) {
+  const n = {};
+  for (const c of create || []) { const t = typeof c === "string" ? c : c && (c.sexpr || c.text || c.fragment || JSON.stringify(c)); const m = /^\s*\(\s*(?:kicad_pcb\s*\(\s*)?([a-z_0-9]+)/.exec(String(t || "")); const k = m ? m[1] : "other"; n[k] = (n[k] || 0) + 1; }
+  if (process.env.DUMP_CREATE) fs.writeFileSync(process.env.DUMP_CREATE, JSON.stringify(create, null, 1));
+  return n;
+}
+
+async function one(dir, boardPath, boardGiven) {
   const require = createRequire(path.join(server, "package.json"));
+  let driveSrc = null;
+  { let id = path.basename(dir); try { id = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf8")).identifier || id; } catch { /* none */ }
+    const f = path.join(here, "plugin-drives", id + ".py");
+    if (!process.env.NO_DRIVE && fs.existsSync(f)) { driveSrc = fs.readFileSync(f, "utf8"); const m = /^# board: (\S+)/m.exec(driveSrc); if (m && !boardGiven) boardPath = path.resolve(server, "..", m[1]); } }
   const { loadPyodide } = require("pyodide");
   const logs = []; if (process.env.KICAD_WEB_DEBUG) { /* set below, inside Python */ }
   // the packages the build put beside the interpreter (static/dist/pyodide), loaded when the plugin imports them
@@ -56,15 +108,28 @@ async function one(dir, boardPath) {
   for (const rel of walk(shimDir)) { const dst = "/kicad/lib/" + rel; py.FS.mkdirTree(path.posix.dirname(dst)); py.FS.writeFile(dst, fs.readFileSync(path.join(shimDir, rel))); }
   let meta = {}; try { meta = JSON.parse(fs.readFileSync(path.join(dir, "metadata.json"), "utf8")); } catch { /* none */ }
   const identifier = meta.identifier || path.basename(dir);
-  const board = fs.readFileSync(boardPath, "utf8");
+  let board = fs.readFileSync(boardPath, "utf8");
+  // a drive may put something on the board and select it before the plugin starts, as a person would have:
+  //   "# insert: <one board item as KiCad text>"   "# select: <uuid>[,<uuid>…]"
+  const startSelection = [];
+  if (driveSrc) {
+    for (const m of driveSrc.matchAll(/^# insert: (.+)$/gm)) board = board.slice(0, board.lastIndexOf(")")) + "\t" + m[1].trim() + "\n)\n";
+    for (const m of driveSrc.matchAll(/^# select: (.+)$/gm)) startSelection.push(...m[1].split(",").map((x) => x.trim()).filter(Boolean));
+  }
   // the project file and schematics beside the board, as the editor hands them over
   const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro)$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
-  const calls = []; const said = [];
+  const calls = []; const said = []; let edited = false;
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
-    calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75) } : undefined });
-    if (method === "design.board") return JSON.stringify({ path: path.basename(boardPath), text: board, selection: [], version: "10.0.0", files: siblings });
+    calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75) } : undefined });
+    // After a commit the stand-in editor's board is what the plugin's own copy now says, as the real editor's would be.
+    if (method === "design.commit") edited = true;
+    if (method === "design.board") {
+      let text = board;
+      if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
+      return JSON.stringify({ path: path.basename(boardPath), text, selection: edited ? [] : startSelection, version: "10.0.0", files: siblings });
+    }
     if (method === "ui.confirm") { said.push(`${a.title || ""}: ${String(a.message || "").slice(0, 300)}`); return "true"; }
     if (method === "ui.prompt") { const v = {}; for (const f of a.fields || []) v[f.name] = f.default ?? ""; return JSON.stringify(v); }
     if (method === "files.pick") return "null";
@@ -86,11 +151,20 @@ async function one(dir, boardPath) {
     if (method === "fab.svg") { const ls = a.single ? [(a.layers || []).join("+")] : (a.layers || []); return JSON.stringify({ files: ls.map((l) => ({ name: a.single ? `${stem}.svg` : `${stem}-${l.replace(/\./g, "_")}.svg`, layer: l, text: '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10"></svg>\n' })), warnings: [], missing: [], box: [0, 0, 10, 10], page: [297, 210] }); }
     if (method === "fab.drc") return JSON.stringify({ markers: [], parityError: "", note: "stand-in design rule check" });
     if (method === "fab.netlist") return JSON.stringify({ root: `${stem}.kicad_sch`, warnings: [], components: [], nets: [] });
+    // KiCad's footprint libraries: the real files of the official repository at the server's pinned ref, fetched once and kept
+    if (method.startsWith("libs.")) return JSON.stringify(library(method.slice(5), a));
     if (method === "project.versions") return JSON.stringify({ branch: null, versions: [] });
     if (method === "project.saveVersion") return JSON.stringify({ saved: !!a.name, dialog: !a.name });
     return "null";
   };
+  if (driveSrc) { py.FS.mkdirTree("/kicad/drive"); py.FS.writeFile("/kicad/drive/kc_drive.py", driveSrc); py.FS.writeFile("/kicad/drive/drive_util.py", fs.readFileSync(path.join(here, "plugin-drives", "drive_util.py"))); }
   py.globals.set("_kc_files", py.toPy(readPackage(dir)));
+  // cairosvg.svg2png is drawn by the browser the plugin runs in; without one, a real browser is started for the picture.
+  globalThis.__kcSvgPng = (svg, w, h, background, negate) => {
+    const r = spawnSync(process.execPath, [path.join(here, "plugin-svg-raster.mjs")], { input: JSON.stringify({ svg, w, h, background, negate }), encoding: "utf8", maxBuffer: 1 << 30, timeout: 120000 });
+    if (r.status !== 0) throw new Error("SVG drawing failed: " + String(r.stderr || r.error || "").slice(-400));
+    return r.stdout;
+  };
   py.globals.set("_kc_bridge", bridge);
   const loaded = [];
   if (built) {
@@ -105,12 +179,28 @@ os.environ["KICAD_WEB_DEBUG"] = "1"
 sys.path.insert(0, "/kicad/lib")
 import wx, kicad_web
 wx._headless_modal = lambda dlg: wx.ID_OK
+_kc_drove = []
 def _kc_main():
     import json
+    if ${driveSrc ? "True" : "False"}:
+        # the plugin is its own program with a main loop: the person acts while that loop runs
+        if "/kicad/drive" not in sys.path: sys.path.append("/kicad/drive")
+        import kc_drive
+        _kc_drove.append(kc_drive.after_run(None))
+        return
     r = json.loads(kicad_web.press_default())
     if r.get("error"):
         raise RuntimeError(r["error"])
 wx._headless_main = _kc_main
+if ${driveSrc ? "True" : "False"}:
+    sys.path.append("/kicad/drive")
+    import drive_util          # listens to what the plugin says from the start
+    import kc_drive
+    def _kc_modal(dlg):
+        # a dialog the plugin waits on: the drive works it while it is open (modal(dialog)), then it closes with OK
+        r = kc_drive.modal(dlg) if hasattr(kc_drive, "modal") else None
+        return wx.ID_OK if r is None else r
+    wx._headless_modal = _kc_modal
 # WATCHDOG=<seconds>: a plugin that never returns is stopped where it stands, so the table says where it waits
 _kc_limit = ${Number(process.env.WATCHDOG || 0)}
 if _kc_limit:
@@ -130,9 +220,26 @@ kicad_web.boot(${JSON.stringify(identifier)}, _kc_files, _kc_bridge, ${JSON.stri
     const before = calls.length; const t1 = Date.now();
     let out; try { out = JSON.parse(await py.runPythonAsync(`kicad_web.run_action(${a.index})`)); } catch (e) { out = { ok: false, error: String(e).split("\n").slice(-2).join(" ").slice(0, 300) }; }
     // A plugin that opened a window and returned has done nothing yet: press the window's main button, as a person would.
-    let pressed = []; if (out.ok) { try { const p = JSON.parse(await py.runPythonAsync("kicad_web.press_default()")); pressed = p.pressed; if (p.error) out = { ok: false, error: `after pressing ${JSON.stringify(p.pressed[p.pressed.length - 1] || "")}: ${p.error}` }; } catch (e) { out = { ok: false, error: String(e).split("\n").slice(-2).join(" ").slice(0, 300) }; } }
+    let pressed = []; let drive;
+    if (out.ok && driveSrc) {
+      py.globals.set("_kc_action", a.name);
+      try { const d = JSON.parse(await py.runPythonAsync(`
+import sys, json, traceback
+if "/kicad/drive" not in sys.path: sys.path.append("/kicad/drive")
+import kc_drive, kicad_web
+kicad_web._running[0] += 1
+try:
+    _kc_r = {"result": _kc_drove.pop() if _kc_drove else kc_drive.after_run(_kc_action)}
+    kicad_web.flush(); kicad_web._export_outputs()
+except BaseException as e:
+    traceback.print_exc()
+    _kc_r = {"error": "%s: %s" % (type(e).__name__, e)}
+finally:
+    kicad_web._running[0] -= 1
+json.dumps(_kc_r, default=str)`)); if (d.error) out = { ok: false, error: "driven as a person would: " + d.error }; else drive = d.result; } catch (e) { out = { ok: false, error: String(e).split("\n").slice(-2).join(" ").slice(0, 300) }; }
+    } else if (out.ok) { try { const p = JSON.parse(await py.runPythonAsync("kicad_web.press_default()")); pressed = p.pressed; if (p.error) out = { ok: false, error: `after pressing ${JSON.stringify(p.pressed[p.pressed.length - 1] || "")}: ${p.error}` }; } catch (e) { out = { ok: false, error: String(e).split("\n").slice(-2).join(" ").slice(0, 300) }; } }
     const mine = calls.slice(before);
-    result.actions.push({ name: a.name, ok: !!out.ok, error: out.error || null, ms: Date.now() - t1, commits: mine.filter((c) => c.method === "design.commit").map((c) => c.summary), saved: mine.filter((c) => c.method === "files.save").map((c) => c.summary), dialogs: mine.filter((c) => c.method.startsWith("ui.") && c.method !== "ui.status").length, pressed, fab: mine.filter((c) => c.method.startsWith("fab.")).length });
+    result.actions.push({ name: a.name, ok: !!out.ok, error: out.error || null, ms: Date.now() - t1, commits: mine.filter((c) => c.method === "design.commit").map((c) => c.summary), saved: mine.filter((c) => c.method === "files.save").map((c) => c.summary), dialogs: mine.filter((c) => c.method.startsWith("ui.") && c.method !== "ui.status").length, pressed, fab: mine.filter((c) => c.method.startsWith("fab.")).length, ...(drive !== undefined ? { drive } : {}) });
   }
   const after = JSON.parse(py.runPython("import json, kicad_web; json.dumps(kicad_web.describe()['missing'])"));
   result.missing = after; result.messages = py.runPython("import json, wx; json.dumps(wx._messages[-6:])");
@@ -200,5 +307,5 @@ async function all() {
 const i = process.argv.indexOf("--one");
 if (i > 0) {
   const b = process.argv.indexOf("--board");
-  one(process.argv[i + 1], b > 0 ? process.argv[b + 1] : defaultBoard).then((r) => { process.stdout.write("\n" + JSON.stringify(r) + "\n"); process.exit(0); }, (e) => { console.error(e); process.exit(1); });
+  one(process.argv[i + 1], b > 0 ? process.argv[b + 1] : defaultBoard, b > 0).then((r) => { process.stdout.write("\n" + JSON.stringify(r) + "\n"); process.exit(0); }, (e) => { console.error(e); process.exit(1); });
 } else await all();

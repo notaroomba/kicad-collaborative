@@ -145,7 +145,29 @@ def _pcb_drc(argv, cwd):
     web = _web()
     web.flush()
     parity = a.has("--schematic-parity")
-    res = web._call("fab.drc", {"parity": parity})
+    # The open board is checked as the editor holds it; any other board file (a copy or a candidate a plugin wrote) is
+    # checked from its own text, so the answer is about the file that was named.
+    host = pcbnew._Host.board
+    own = host is not None and os.path.abspath(board) == os.path.abspath(str(getattr(host, "_filename", "") or ""))
+    refilled = None
+    if a.has("--refill-zones"):
+        try:
+            import shapely  # noqa: F401
+            target = host if own else pcbnew.BOARD(open(board, encoding="utf-8").read(), board)
+            pcbnew.ZONE_FILLER(target).Fill(target.Zones())
+            if own:
+                web.flush()
+                refilled = "open"
+            else:
+                refilled = target._text()
+                if a.has("--save-board"):
+                    _write(board, refilled)
+        except ImportError:
+            refilled = None
+    req = {"parity": parity}
+    if not own:
+        req["text"] = refilled if isinstance(refilled, str) else open(board, encoding="utf-8").read()
+    res = web._call("fab.drc", req)
     if res is None:
         return Result(3, "", "Failed to load board\n")
     want = {s for s, flag in (("error", "--severity-error"), ("warning", "--severity-warning")) if a.has(flag)}
@@ -181,9 +203,9 @@ def _pcb_drc(argv, cwd):
     _write(out, body)
     say = ["Loading board", "Running DRC..."]
     err = []
-    if a.has("--refill-zones"):
+    if a.has("--refill-zones") and refilled is None:
         err.append("Zones were not refilled: the web editor checks the fills the board holds (Edit > Fill All Zones refills them).")
-    if a.has("--save-board"):
+    if a.has("--save-board") and own:
         err.append("The board was not written: the web editor saves every change as it is made.")
     say.append(f"Found {len(groups['violation'])} violations")
     say.append(f"Found {len(groups['unconnected'])} unconnected items")
@@ -427,6 +449,66 @@ def _netlist_sexpr(n, source):
     return "\n".join(out) + "\n"
 
 
+def _netlist_xml(n, source):
+    """KiCad's XML netlist (--format kicadxml): the same tree as the s-expression netlist, written as elements."""
+    from xml.sax.saxutils import escape, quoteattr
+
+    def at(**kw):
+        return "".join(f" {k}={quoteattr(str(v if v is not None else ''))}" for k, v in kw.items())
+
+    def el(tag, text):
+        return f"<{tag}>{escape(str(text if text is not None else ''))}</{tag}>"
+
+    out = ['<?xml version="1.0" encoding="UTF-8"?>', '<export version="E">', "  <design>", "    " + el("source", source),
+           "    " + el("date", datetime.datetime.now().astimezone().isoformat(timespec="seconds")), "    " + el("tool", "Eeschema " + _version()), "  </design>", "  <components>"]
+    for c in n.get("components") or []:
+        lib, _, part = str(c.get("libId") or "").partition(":")
+        path = (c.get("paths") or ["/"])[0]
+        sheet, _, stamp = path.rpartition("/")
+        fields = c.get("fields") or {}
+        out.append(f"    <comp{at(ref=c.get('ref'))}>")
+        out.append("      " + el("value", c.get("value")))
+        if c.get("footprint"):
+            out.append("      " + el("footprint", c["footprint"]))
+        if fields.get("Datasheet"):
+            out.append("      " + el("datasheet", fields["Datasheet"]))
+        if fields.get("Description"):
+            out.append("      " + el("description", fields["Description"]))
+        out.append("      <fields>")
+        for k, v in [("Footprint", c.get("footprint")), ("Datasheet", fields.get("Datasheet", "")), ("Description", fields.get("Description", ""))] + \
+                [(k, v) for k, v in fields.items() if k not in ("Datasheet", "Description")]:
+            out.append(f"        <field{at(name=k)}>{escape(str(v if v is not None else ''))}</field>")
+        out.append("      </fields>")
+        out.append(f"      <libsource{at(lib=lib, part=part, description=fields.get('Description', ''))}/>")
+        out.append(f"      <property{at(name='Sheetname', value=c.get('sheetName') or 'Root')}/>")
+        out.append(f"      <property{at(name='Sheetfile', value=c.get('sheetFile') or source)}/>")
+        for flag, name in (("dnp", "dnp"), ("excludeFromBom", "exclude_from_bom"), ("excludeFromBoard", "exclude_from_board")):
+            if c.get(flag):
+                out.append(f"      <property{at(name=name)}/>")
+        out.append(f"      <sheetpath{at(names='/' if not sheet else '/' + (c.get('sheetName') or '') + '/', tstamps=(sheet or '') + '/')}/>")
+        out.append("      " + el("tstamps", stamp))
+        out.append("    </comp>")
+    out.append("  </components>")
+    pins = {}
+    for c in n.get("components") or []:
+        for p in c.get("pins") or []:
+            pins[(c.get("ref"), str(p.get("num")))] = p
+    out.append("  <nets>")
+    for i, net in enumerate(sorted(n.get("nets") or [], key=lambda x: x.get("name") or "")):
+        out.append(f"    <net{at(code=i + 1, name=net.get('name'))} class=\"Default\">")
+        for node in net.get("nodes") or []:
+            p = pins.get((node.get("ref"), str(node.get("pin")))) or {}
+            kw = {"ref": node.get("ref"), "pin": node.get("pin")}
+            if p.get("name") and p.get("name") != "~":
+                kw["pinfunction"] = p["name"]
+            kw["pintype"] = p.get("type") or "passive"
+            out.append(f"      <node{at(**kw)}/>")
+        out.append("    </net>")
+    out.append("  </nets>")
+    out.append("</export>")
+    return "\n".join(out) + "\n"
+
+
 _NET_VALUES = {"--output", "--format", "--variant", "--define-var"}
 
 
@@ -438,14 +520,14 @@ def _sch_netlist(argv, cwd):
     if bad:
         return bad
     fmt = a.get("--format", "kicadsexpr")
-    if fmt != "kicadsexpr":
-        return Result(2, "", f"The web editor writes netlists in KiCad's own format (--format kicadsexpr), not {fmt}.\n")
+    if fmt not in ("kicadsexpr", "kicadxml"):
+        return Result(2, "", f"The web editor writes netlists in KiCad's own formats (--format kicadsexpr or kicadxml), not {fmt}.\n")
     try:
         n = _web()._call("fab.netlist") or {}
     except Exception as e:
         return Result(3, "", f"Failed to load schematic: {e}\n")
     out = _abs(a.get("--output") or os.path.splitext(sch)[0] + ".net", cwd)
-    _write(out, _netlist_sexpr(n, os.path.basename(sch)))
+    _write(out, (_netlist_xml if fmt == "kicadxml" else _netlist_sexpr)(n, os.path.basename(sch)))
     return Result(0, "", "")
 
 
@@ -587,7 +669,11 @@ def kicad_cli(argv, cwd=None):
                 return fn(rest, cwd)
     for key, what in _DESKTOP_ONLY.items():
         if tuple(argv[:len(key)]) == key:
-            raise pcbnew.WebUnsupported(f"kicad-cli {' '.join(key)}: {what} needs the KiCad desktop application")
+            # The command fails, as kicad-cli does when it cannot do something, so a plugin that has another way (many
+            # fall back from a 3D render to an SVG export) takes it; the reason is on stderr and in the log.
+            why = f"kicad-cli {' '.join(key)}: {what} needs the KiCad desktop application"
+            log.warning("%s", why)
+            return Result(1, "", why + "\n")
     words = " ".join(x for x in argv[:3] if not x.startswith("-"))
     raise pcbnew.WebUnsupported(f"kicad-cli {words}: the web editor answers kicad-cli's version, pcb drc, pcb export gerbers, drill, pos and svg, and sch export netlist and bom")
 

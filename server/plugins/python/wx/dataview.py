@@ -140,7 +140,7 @@ class DataViewEvent(Event):
 class DataViewListCtrl(Window):
     _CLS = "wx-table"
 
-    def __init__(self, parent=None, id=wx.ID_ANY, pos=wx.DefaultPosition, size=wx.DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=wx.ID_ANY, pos=wx.DefaultPosition, size=wx.DefaultSize, style=0, *more, **kw):
         Window.__init__(self, parent, id, pos, size, style, **kw)
 
     def _wx_build(self, kw):

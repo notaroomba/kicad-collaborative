@@ -53,6 +53,111 @@ export function pythonRuntime(): void {
     sleep: (ms: number) => new Promise<void>((ok) => setTimeout(ok, Math.max(0, ms | 0))),
     later: (fn: any, ms: number) => setTimeout(() => promised(fn, []), Math.max(0, ms | 0)),
     copy: (_text: string) => undefined,
+    /** Width and height of one line of text in a CSS font, for a plugin that lays out what it draws. */
+    measure(text: string, font: string): [number, number] {
+      measureCtx.font = font; const m = measureCtx.measureText(text);
+      const h = (m.fontBoundingBoxAscent || 0) + (m.fontBoundingBoxDescent || 0) || parseFloat(font.replace(/^.*?([\d.]+)px.*$/, "$1")) * 1.25;
+      return [m.width, h];
+    },
+    /** Play a window's drawing steps on its canvas (wx/_paint.py lists them).  The newest picture of a canvas wins. */
+    paint(canvas: HTMLCanvasElement, json: string, w: number, h: number, clear: boolean) {
+      const ops = JSON.parse(json) as any[]; const seq = (paintSeq.get(canvas) || 0) + 1; paintSeq.set(canvas, seq);
+      const all = clear ? ops : (kept.get(canvas) || []).concat(ops); kept.set(canvas, all);
+      loadImages(all).then(() => {
+        if (paintSeq.get(canvas) !== seq) return;
+        const dpr = window.devicePixelRatio || 1; const cw = Math.max(1, Math.round(w * dpr)), ch = Math.max(1, Math.round(h * dpr));
+        if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+        const ctx = canvas.getContext("2d"); if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h); play(ctx, all, w, h);
+      });
+    },
+    /** A bitmap a plugin drew on, as a PNG address. */
+    async raster(w: number, h: number, json: string): Promise<string> {
+      const ops = JSON.parse(json) as any[]; await loadImages(ops);
+      const c = document.createElement("canvas"); c.width = Math.max(1, w); c.height = Math.max(1, h);
+      const ctx = c.getContext("2d"); if (!ctx) return ""; play(ctx, ops, w, h); return c.toDataURL("image/png");
+    },
+    /** An SVG document drawn by the browser's own renderer at w x h, as a PNG address (what cairosvg.svg2png returns). */
+    async svgPng(svg: string, w: number, h: number, background: string, negate: boolean): Promise<string> {
+      const img = new Image();
+      await new Promise<void>((ok, bad) => { img.onload = () => ok(); img.onerror = () => bad(new Error("The browser could not read this SVG")); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg); });
+      const c = document.createElement("canvas"); c.width = Math.max(1, w); c.height = Math.max(1, h);
+      const ctx = c.getContext("2d"); if (!ctx) return "";
+      if (background) { ctx.fillStyle = background; ctx.fillRect(0, 0, c.width, c.height); }
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      if (negate) { const d = ctx.getImageData(0, 0, c.width, c.height); const p = d.data; for (let i = 0; i < p.length; i += 4) { p[i] = 255 - p[i]; p[i + 1] = 255 - p[i + 1]; p[i + 2] = 255 - p[i + 2]; } ctx.putImageData(d, 0, 0); }
+      return c.toDataURL("image/png");
+    },
+    /** Tell Python when an element's size changes (and once, when it is first laid out). */
+    observe(el: HTMLElement, fn: (ev: any) => void) { new ResizeObserver(() => fn(null)).observe(el); },
+  };
+  // ---- drawing: the steps a wx device context recorded, on a canvas
+  const measureCtx = document.createElement("canvas").getContext("2d") as CanvasRenderingContext2D;
+  const paintSeq = new WeakMap<HTMLCanvasElement, number>(); const kept = new WeakMap<HTMLCanvasElement, any[]>();
+  const images = new Map<string, HTMLImageElement | null>();
+  const loadImages = (ops: any[]): Promise<void> => {
+    const need: string[] = []; for (const o of ops) if (o[0] === "img" && !images.has(o[1]) && need.indexOf(o[1]) < 0) need.push(o[1]);
+    if (!need.length) return Promise.resolve();
+    if (images.size > 400) images.clear();
+    return Promise.all(need.map((url) => new Promise<void>((ok) => { const im = new Image(); im.onload = () => { images.set(url, im); ok(); }; im.onerror = () => { images.set(url, null); ok(); }; im.src = url; }))).then(() => undefined);
+  };
+  const play = (ctx: CanvasRenderingContext2D, ops: any[], w: number, h: number) => {
+    let stroke: string | null = "#000", fill: string | CanvasGradient | null = null, textColor = "#000", depth = 0;
+    const stack: Array<[string | null, string | CanvasGradient | null, string]> = [];
+    ctx.lineWidth = 1; ctx.textBaseline = "top"; ctx.font = "400 13.33px system-ui, sans-serif"; ctx.lineJoin = "round"; ctx.lineCap = "butt";
+    const paintPath = (mode: number) => { if (fill && mode !== 0) { ctx.fillStyle = fill; ctx.fill(); } if (stroke && mode !== 1) { ctx.strokeStyle = stroke; ctx.stroke(); } };
+    // a one pixel line on whole coordinates lies between two pixel rows: it is moved half a pixel, as wx draws it
+    const half = () => (ctx.lineWidth % 2 === 1 ? 0.5 : 0);
+    const round = (x: number, y: number, rw: number, rh: number, r: number) => { const q = Math.max(0, Math.min(r, rw / 2, rh / 2)); ctx.moveTo(x + q, y); ctx.arcTo(x + rw, y, x + rw, y + rh, q); ctx.arcTo(x + rw, y + rh, x, y + rh, q); ctx.arcTo(x, y + rh, x, y, q); ctx.arcTo(x, y, x + rw, y, q); ctx.closePath(); };
+    for (const o of ops) {
+      switch (o[0]) {
+        case "pen": stroke = o[1]; ctx.lineWidth = o[2] || 1; ctx.setLineDash(o[3] || []); break;
+        case "brush": fill = o[1]; break;
+        case "grad": { const c = o[2]; const g = o[1] === "linear" ? ctx.createLinearGradient(c[0], c[1], c[2], c[3]) : ctx.createRadialGradient(c[0], c[1], c[2], c[3], c[4], c[5]); for (const st of o[3]) g.addColorStop(Math.max(0, Math.min(1, st[0])), st[1]); fill = g; break; }
+        case "font": ctx.font = o[1]; break;
+        case "tfg": textColor = o[1]; break;
+        case "clear": if (o[1]) { ctx.save(); ctx.setTransform(ctx.getTransform().a === 0 ? 1 : ctx.getTransform().a, 0, 0, ctx.getTransform().d === 0 ? 1 : ctx.getTransform().d, 0, 0); ctx.fillStyle = o[1]; ctx.fillRect(0, 0, w, h); ctx.restore(); } else ctx.clearRect(0, 0, w, h); break;
+        case "line": if (stroke) { const k = half(); ctx.beginPath(); ctx.moveTo(o[1] + k, o[2] + k); ctx.lineTo(o[3] + k, o[4] + k); ctx.strokeStyle = stroke; ctx.stroke(); } break;
+        case "lines": if (stroke && o[1].length >= 4) { const k = half(), p = o[1]; ctx.beginPath(); ctx.moveTo(p[0] + k, p[1] + k); for (let i = 2; i + 1 < p.length; i += 2) ctx.lineTo(p[i] + k, p[i + 1] + k); ctx.strokeStyle = stroke; ctx.stroke(); } break;
+        case "poly": if (o[1].length >= 4) { const p = o[1]; ctx.beginPath(); ctx.moveTo(p[0], p[1]); for (let i = 2; i + 1 < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]); ctx.closePath(); paintPath(2); } break;
+        case "point": if (stroke) { ctx.fillStyle = stroke; ctx.fillRect(o[1], o[2], 1, 1); } break;
+        case "rect": if (fill) { ctx.fillStyle = fill; ctx.fillRect(o[1], o[2], o[3], o[4]); } if (stroke) { const k = half(); ctx.strokeStyle = stroke; ctx.strokeRect(o[1] + k, o[2] + k, Math.max(0, o[3] - 1), Math.max(0, o[4] - 1)); } break;
+        case "rrect": ctx.beginPath(); round(o[1], o[2], o[3], o[4], o[5]); paintPath(2); break;
+        case "ellipse": ctx.beginPath(); ctx.ellipse(o[1] + o[3] / 2, o[2] + o[4] / 2, Math.abs(o[3] / 2), Math.abs(o[4] / 2), 0, 0, Math.PI * 2); paintPath(2); break;
+        case "arc": ctx.beginPath(); if (o[7] && fill) ctx.moveTo(o[1], o[2]); ctx.arc(o[1], o[2], o[3], o[4], o[5], !!o[6]); if (o[7] && fill) { ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); ctx.beginPath(); ctx.arc(o[1], o[2], o[3], o[4], o[5], !!o[6]); } if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); } break;
+        case "earc": ctx.beginPath(); ctx.ellipse(o[1] + o[3] / 2, o[2] + o[4] / 2, Math.abs(o[3] / 2), Math.abs(o[4] / 2), 0, o[5], o[6], true); if (fill) { ctx.lineTo(o[1] + o[3] / 2, o[2] + o[4] / 2); ctx.fillStyle = fill; ctx.fill(); ctx.beginPath(); ctx.ellipse(o[1] + o[3] / 2, o[2] + o[4] / 2, Math.abs(o[3] / 2), Math.abs(o[4] / 2), 0, o[5], o[6], true); } if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); } break;
+        case "text": { ctx.fillStyle = textColor; const lines = String(o[1]).split("\n"); const lh = parseFloat(ctx.font.replace(/^.*?([\d.]+)px.*$/, "$1")) * 1.25 || 16; for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], o[2], o[3] + i * lh); break; }
+        case "rtext": ctx.save(); ctx.translate(o[2], o[3]); ctx.rotate(o[4]); ctx.fillStyle = textColor; ctx.fillText(String(o[1]), 0, 0); ctx.restore(); break;
+        case "img": { const im = images.get(o[1]); if (im) { try { ctx.drawImage(im, o[2], o[3], o[4] || im.naturalWidth, o[5] || im.naturalHeight); } catch { /* a broken picture is left out */ } } break; }
+        case "path": {
+          const c = o[1]; ctx.beginPath();
+          for (let i = 0; i < c.length;) {
+            const k = c[i++];
+            if (k === "M") { ctx.moveTo(c[i], c[i + 1]); i += 2; }
+            else if (k === "L") { ctx.lineTo(c[i], c[i + 1]); i += 2; }
+            else if (k === "C") { ctx.bezierCurveTo(c[i], c[i + 1], c[i + 2], c[i + 3], c[i + 4], c[i + 5]); i += 6; }
+            else if (k === "Q") { ctx.quadraticCurveTo(c[i], c[i + 1], c[i + 2], c[i + 3]); i += 4; }
+            else if (k === "A") { ctx.arc(c[i], c[i + 1], c[i + 2], c[i + 3], c[i + 4], !!c[i + 5]); i += 6; }
+            else if (k === "T") { ctx.arcTo(c[i], c[i + 1], c[i + 2], c[i + 3], c[i + 4]); i += 5; }
+            else if (k === "E") { ctx.ellipse(c[i] + c[i + 2] / 2, c[i + 1] + c[i + 3] / 2, Math.abs(c[i + 2] / 2), Math.abs(c[i + 3] / 2), 0, 0, Math.PI * 2); ctx.closePath(); i += 4; }
+            else if (k === "R") { ctx.rect(c[i], c[i + 1], c[i + 2], c[i + 3]); i += 4; }
+            else if (k === "O") { round(c[i], c[i + 1], c[i + 2], c[i + 3], c[i + 4]); i += 5; }
+            else if (k === "Z") ctx.closePath();
+            else break;
+          }
+          paintPath(o[2]); break;
+        }
+        case "save": ctx.save(); stack.push([stroke, fill, textColor]); depth++; break;
+        case "restore": if (depth > 0) { ctx.restore(); const st = stack.pop(); if (st) { stroke = st[0]; fill = st[1]; textColor = st[2]; } depth--; } break;
+        case "translate": ctx.translate(o[1], o[2]); break;
+        case "scale": ctx.scale(o[1], o[2]); break;
+        case "rotate": ctx.rotate(o[1]); break;
+        case "clip": ctx.beginPath(); ctx.rect(o[1], o[2], o[3], o[4]); ctx.clip(); break;
+        case "alpha": ctx.globalAlpha = o[1]; break;
+        default: break;          // "unclip" has no canvas form outside save/restore
+      }
+    }
+    while (depth-- > 0) ctx.restore();
   };
   // The person closed the floating dialog (its ×, or Escape): the topmost wx window gets its close event.
   kicad.on("window-closed", () => { if (py) py.runPythonAsync("import wx\nwx._user_closed()").catch((e: any) => console.error(say(e))); });
@@ -74,6 +179,9 @@ export function pythonRuntime(): void {
       case "fab.drc": out = await kicad.fab.drc(a); break;
       case "fab.netlist": out = await kicad.fab.netlist(); break;
       case "project.versions": out = await kicad.project.versions(); break;
+      case "libs.libraries": out = await kicad.libs.libraries(); break;
+      case "libs.footprints": out = await kicad.libs.footprints(a); break;
+      case "libs.footprint": out = await kicad.libs.footprint(a); break;
       case "project.saveVersion": out = await kicad.project.saveVersion(a); break;
       case "net.fetch": out = await kicad.net.fetch(a); break;
       case "view.select": out = await kicad.view.select(a); break;

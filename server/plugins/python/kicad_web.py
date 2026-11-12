@@ -139,6 +139,31 @@ class _WxFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             module.__all__ = ["AdjustAlpha", "AdjustColour", "BestLabelColour", "GetHighlightColour"]
         elif name == "wx.lib.scrolledpanel":
             module.ScrolledPanel = wx.ScrolledWindow
+        elif name == "wx.lib.wordwrap":
+            def wordwrap(text, width, dc, breakLongWords=True, margin=0):
+                """Break text into lines no wider than `width` in the font of `dc`."""
+                out = []
+                room = max(1, width - 2 * margin)
+                wide = lambda t: dc.GetTextExtent(t)[0]
+                for para in str(text).split("\n"):
+                    line = ""
+                    for word in para.split(" "):
+                        trial = word if not line else line + " " + word
+                        if wide(trial) <= room:
+                            line = trial
+                            continue
+                        if line:
+                            out.append(line)
+                        line = word
+                        while breakLongWords and len(line) > 1 and wide(line) > room:
+                            cut = len(line) - 1
+                            while cut > 1 and wide(line[:cut]) > room:
+                                cut -= 1
+                            out.append(line[:cut])
+                            line = line[cut:]
+                    out.append(line)
+                return "\n".join(out)
+            module.wordwrap = wordwrap
         elif name == "wx.lib.intctrl":
             class IntCtrl(wx.TextCtrl):
                 def __init__(self, parent=None, id=wx.ID_ANY, value=0, *a, **k):
@@ -178,6 +203,8 @@ class _WxFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             module.HyperlinkCtrl = wx.HyperlinkCtrl
             module.EVT_HYPERLINK = wx.EVT_HYPERLINK
             module.HL_DEFAULT_STYLE = 0
+        elif name.startswith("wx.lib.agw.persist"):
+            _persist_module(module)
         elif name == "wx.xrc":
             def no_xrc(*a, **k):
                 raise pcbnew.WebUnsupported("Dialogs loaded from XRC resource files are not available in the web editor")
@@ -194,6 +221,204 @@ class _WxFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
             module.XmlResource = XmlResource
             module.EmptyXmlResource = XmlResource
             module.XRC_USE_LOCALE = module.XRC_NO_SUBCLASSING = 0
+
+
+class _Persistence:
+    """wx.lib.agw.persist: a dialog's values are kept in a settings file and put back the next time it opens."""
+    _one = None
+
+    def __init__(self):
+        self._file = None
+        self._objects = {}          # window -> PersistentObject
+
+    @classmethod
+    def Get(cls):
+        if cls._one is None:
+            cls._one = cls()
+        return cls._one
+
+    @classmethod
+    def Free(cls):
+        cls._one = None
+
+    def SetPersistenceFile(self, path):
+        self._file = str(path)
+
+    def GetPersistenceFile(self):
+        return self._file or os.path.join(CONFIG_DIR, "persist.cfg")
+
+    def GetPersistenceDirectory(self):
+        return os.path.dirname(self.GetPersistenceFile())
+
+    def SetManagerStyle(self, *_):
+        pass
+
+    GetManagerStyle = lambda self: 0
+    SetConfigurationHandler = lambda self, *_: None
+    GetConfigurationHandler = lambda self: None
+
+    def _read(self):
+        try:
+            with open(self.GetPersistenceFile(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _write(self, data):
+        try:
+            os.makedirs(self.GetPersistenceDirectory(), exist_ok=True)
+            with open(self.GetPersistenceFile(), "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=1, sort_keys=True)
+        except OSError:
+            log.warning("the dialog's values could not be saved to %s", self.GetPersistenceFile())
+
+    @staticmethod
+    def _key(window):
+        return "%s/%s" % (type(window).__name__, window.GetName())
+
+    @staticmethod
+    def _value_of(window):
+        for getter in ("GetValue", "GetSelection", "GetPath", "GetStringSelection"):
+            f = getattr(type(window), getter, None)
+            if f is not None:
+                try:
+                    v = f(window)
+                except Exception:
+                    continue
+                if isinstance(v, (bool, int, float, str)):
+                    return {"get": getter, "value": v}
+        return None
+
+    def Find(self, window):
+        return self._objects.get(window)
+
+    def Register(self, window, persistenceHandler=None):
+        if window in self._objects:
+            return False
+        obj = window if isinstance(window, _PersistentObject) else _PersistentObject(window, persistenceHandler)
+        self._objects[window] = obj
+        return True
+
+    def Unregister(self, window):
+        return self._objects.pop(window, None) is not None
+
+    def Save(self, window):
+        if window not in self._objects:
+            return False
+        v = self._value_of(window)
+        if v is None or not window.GetName():
+            return False
+        data = self._read()
+        data[self._key(window)] = v
+        self._write(data)
+        return True
+
+    def Restore(self, window):
+        if window not in self._objects:
+            return False
+        v = self._read().get(self._key(window))
+        if not isinstance(v, dict) or "value" not in v:
+            return False
+        setter = getattr(window, "Set" + str(v.get("get", "GetValue"))[3:], None)
+        try:
+            setter(v["value"])
+        except Exception:
+            return False
+        return True
+
+    def RegisterAndRestore(self, window):
+        return self.Register(window) and self.Restore(window)
+
+    def SaveAndUnregister(self, window=None):
+        if window is None:
+            data = self._read()
+            for w in list(self._objects):
+                v = self._value_of(w)
+                if v is not None and w.GetName():
+                    data[self._key(w)] = v
+            self._write(data)
+            self._objects.clear()
+            return True
+        ok = self.Save(window)
+        self.Unregister(window)
+        return ok
+
+    def _named(self, window):
+        # what a person would expect to come back: the fields they filled in, not labels or buttons
+        out = []
+        for c in getattr(window, "_wx_children", []):
+            if c is window:
+                continue
+            if isinstance(c, _PersistentObject) or (c.GetName() and self._value_of(c) is not None and not isinstance(c, (wx.StaticText, wx.Button))):
+                out.append(c)
+            out.extend(self._named(c))
+        return out
+
+    def RegisterAndRestoreAll(self, window, children=True):
+        ok = False
+        for c in self._named(window) if children else [window]:
+            self.Register(c)
+            ok = self.Restore(c) or ok
+        return ok
+
+    def SaveValue(self, obj, name, value):
+        data = self._read()
+        data["%s/%s" % (self._key(obj.GetWindow()), name)] = {"value": value}
+        self._write(data)
+        return True
+
+    def RestoreValue(self, obj, name):
+        v = self._read().get("%s/%s" % (self._key(obj.GetWindow()), name))
+        return v.get("value") if isinstance(v, dict) else None
+
+    DisableSaving = DisableRestoring = EnableSaving = EnableRestoring = lambda self, *_: None
+
+
+class _PersistentObject:
+    def __init__(self, window, persistenceHandler=None):
+        self._window = window
+        self._persistentHandler = persistenceHandler
+
+    def GetWindow(self):
+        return self._window
+
+    def GetName(self):
+        return self._window.GetName()
+
+    def GetKind(self):
+        return type(self._window).__name__
+
+    def Save(self):
+        return _Persistence.Get().Save(self._window)
+
+    def Restore(self):
+        return _Persistence.Get().Restore(self._window)
+
+    def SaveValue(self, name, value):
+        return _Persistence.Get().SaveValue(self, name, value)
+
+    SaveCtrlValue = SaveValue
+
+    def RestoreValue(self, name):
+        return _Persistence.Get().RestoreValue(self, name)
+
+    RestoreCtrlValue = RestoreValue
+
+
+def _persist_module(module):
+    module.PersistenceManager = _Persistence
+    module.PersistentObject = _PersistentObject
+    module.PersistentHandler = module.AbstractHandler = type("AbstractHandler", (), {"__init__": lambda self, *a, **k: None})
+    for kind in ("Spin", "TextCtrl", "CheckBox", "Choice", "ComboBox", "Slider", "RadioBox", "RadioButton", "ListBox", "CheckListBox", "TLW", "Book", "TreeCtrl",
+                 "ListCtrl", "ToggleButton", "FilePicker", "DirPicker", "ColourPicker", "FontPicker", "SearchCtrl", "Gauge", "SplitterWindow", "Menu", "ToolBar"):
+        setattr(module, kind + "Handler", type(kind + "Handler", (module.AbstractHandler,), {}))
+    for i, flag in enumerate(("PM_SAVE_RESTORE_AUI_PERSPECTIVES", "PM_SAVE_RESTORE_TREE_LIST_SELECTIONS", "PM_PERSIST_CONTROL_VALUE", "PM_RESTORE_CAPTION_FROM_CODE", "PM_DEFAULT_STYLE")):
+        setattr(module, flag, 1 << i)
+    from importlib import import_module
+    if module.__name__ == "wx.lib.agw.persist":
+        module.persistencemanager = import_module("wx.lib.agw.persist.persistencemanager")
+        module.persist_handlers = import_module("wx.lib.agw.persist.persist_handlers")
 
 
 class _OwnNameFinder(importlib.abc.MetaPathFinder):
@@ -303,8 +528,7 @@ def _patch_threads():
                 if not self.finished.is_set():
                     self.function(*self.args, **self.kwargs)
                     self.finished.set()
-            from pyodide.ffi import create_once_callable
-            wx._kc().later(create_once_callable(lambda: wx._call(fire)), int(max(0.0, float(self.interval)) * 1000))
+            wx._kc().later(wx._once(lambda: wx._call(fire)), int(max(0.0, float(self.interval)) * 1000))
             return
         start(self)
 
@@ -313,6 +537,41 @@ def _patch_threads():
             self.function(*self.args, **self.kwargs)
         self.finished.set()
 
+    # A pool of worker threads: each job runs where it is submitted, and its future is already done when it is handed back.
+    import concurrent.futures as cf
+    import concurrent.futures.thread as cft
+
+    class _NowExecutor(cf.Executor):
+        def __init__(self, max_workers=None, *a, **k):
+            self._max_workers = max_workers or 1
+            self._kc_down = False
+            init = k.get("initializer")
+            if callable(init):
+                init(*k.get("initargs", ()))
+
+        def submit(self, fn, /, *a, **k):
+            if self._kc_down:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            f = cf.Future()
+            f.set_running_or_notify_cancel()
+            try:
+                f.set_result(fn(*a, **k))
+            except BaseException as e:          # the caller gets it from future.result(), as with a real pool
+                if isinstance(e, (_Parked, KeyboardInterrupt, SystemExit)):
+                    raise
+                f.set_exception(e)
+            return f
+
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            self._kc_down = True
+
+    cf.ThreadPoolExecutor = cft.ThreadPoolExecutor = _NowExecutor
+    cf.ProcessPoolExecutor = _NowExecutor
+    try:
+        import concurrent.futures.process as cfp
+        cfp.ProcessPoolExecutor = _NowExecutor
+    except Exception:
+        pass
     threading.Timer.start = timer_start
     threading.Timer.run = timer_run
     # Nothing else runs while this code runs, so waiting for another thread to signal can only time out.
@@ -406,15 +665,22 @@ def _patch_desktop():
         if not rest:
             raise pcbnew.WebUnsupported("Starting an interactive Python: there is no terminal in the browser")
         done = Done(args)
-        argv, path, out = sys.argv, list(sys.path), sys.stdout
+        argv, path, out, err = sys.argv, list(sys.path), sys.stdout, sys.stderr
         capture = k.get("capture_output") or k.get("stdout") == subprocess.PIPE
-        buf = io.StringIO()
+        buf, ebuf = io.StringIO(), io.StringIO()
         if capture:
             sys.stdout = buf
+        if k.get("stderr") == subprocess.STDOUT and capture:
+            sys.stderr = buf
+        elif k.get("capture_output") or k.get("stderr") == subprocess.PIPE:
+            sys.stderr = ebuf
         cwd = os.getcwd()
+        environ = dict(os.environ)
         try:
             if k.get("cwd"):
                 os.chdir(str(k["cwd"]))
+            if isinstance(k.get("env"), dict):
+                os.environ.update({str(a): str(b) for a, b in k["env"].items()})
             if rest[0] == "-m" and len(rest) > 1:
                 sys.argv = [rest[1]] + rest[2:]
                 runpy.run_module(rest[1], run_name="__main__", alter_sys=True)
@@ -428,13 +694,18 @@ def _patch_desktop():
         except SystemExit as e:
             done.returncode = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
         finally:
-            sys.argv, sys.path[:], sys.stdout = argv, path, out
+            sys.argv, sys.path[:], sys.stdout, sys.stderr = argv, path, out, err
+            for name in [n for n in os.environ if n not in environ]:          # the other program's environment ends with it
+                del os.environ[name]
+            os.environ.update(environ)
             try:
                 os.chdir(cwd)
             except OSError:
                 pass
         text = buf.getvalue()
-        done.stdout = text if (k.get("text") or k.get("universal_newlines") or k.get("encoding")) else text.encode("utf-8")
+        as_text = bool(k.get("text") or k.get("universal_newlines") or k.get("encoding"))
+        done.stdout = text if as_text else text.encode("utf-8")
+        done.stderr = ebuf.getvalue() if as_text else ebuf.getvalue().encode("utf-8")
         if k.get("check") and done.returncode:
             raise subprocess.CalledProcessError(done.returncode, args)
         return done
@@ -493,7 +764,7 @@ def _patch_desktop():
         return kicad_programs.which(cmd) or real_which(cmd, *a, **k)
 
     shutil.which = which
-    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git"):
+    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/python3", "/usr/bin/python"):
         try:
             if not os.path.exists(stub):
                 _write(stub, b"#!/bin/sh\n")
@@ -516,6 +787,12 @@ def _patch_desktop():
     socketserver.BaseServer.serve_forever = no_serve
     socketserver.BaseServer.handle_request = no_serve
 
+    def leave(code=0):
+        """os._exit ends the whole program at once; here that program is the editor's interpreter, which other
+        plugins share, so only the code that asked is ended."""
+        raise SystemExit(code)
+
+    os._exit = leave
     subprocess.Popen = popen
     subprocess.run = launch
     subprocess.call = lambda args, *a, **k: launch(args, **k).returncode
@@ -537,8 +814,17 @@ def _patch_platform():
             importlib.import_module(mod)
         except Exception:
             pass
+    # sysconfig finds its build data by the platform's name: read it while the name is still the real one
+    # (scipy asks for a build variable when it is imported, and fails as "broken install" otherwise)
+    try:
+        import sysconfig
+        sysconfig.get_config_vars()
+    except Exception:
+        pass
     sys.platform = "linux"
     sys.executable = "/usr/bin/python3"
+    sys._base_executable = sys.executable  # tools are looked for beside the interpreter, as in a KiCad install
+    os.environ.setdefault("PATH", "/usr/bin")
     platform.system = lambda: "Linux"
     platform.platform = lambda *a, **k: "Linux-web-x86_64"
     platform.machine = lambda: "x86_64"
@@ -613,7 +899,25 @@ def needed_packages(files, lock):
                 top = name.strip().split(".")[0]
                 if top and top not in local and top in by_import:
                     wanted.add(by_import[top])
-    return json.dumps(sorted(wanted))
+    # polygon set operations of pcbnew (Inflate, BooleanSubtract, …) are done with shapely
+    if "shapely" in packages and any(isinstance(body, str) and str(path).endswith(".py") and _CLIPPER.search(body) for path, body in files.items()):
+        wanted.add("shapely")
+    # a package's own requirements come first (shapely needs numpy)
+    out, seen = [], set()
+
+    def add(name):
+        if name in seen or name not in packages:
+            return
+        seen.add(name)
+        for dep in packages[name].get("depends") or []:
+            add(dep)
+        out.append(name)
+    for name in sorted(wanted):
+        add(name)
+    return json.dumps(out)
+
+
+_CLIPPER = __import__("re").compile(r"\.(Inflate|Deflate|InflateWithLinkedHoles|BooleanAdd|BooleanSubtract|BooleanIntersection|BooleanXor|TransformShapeToPolygon|TransformShapeWithClearanceToPolygon|GetEffectiveShape|GetBoardPolygonOutlines|Collide|refill_zones)\s*\(|\b(ZONE_FILLER|SHAPE_CIRCLE|SHAPE_SEGMENT|SHAPE_RECT)\b|--refill-zones|\bRefillZones\b|ZONE_FILL\b")
 
 
 def _on_register(plugin):
@@ -664,7 +968,13 @@ def boot(identifier, files, bridge=None, name=""):
     pcbnew._Host.on_register = _on_register
     pcbnew._Host.on_register_wizard = _on_register_wizard
     pcbnew._Host.refresh = flush
+    # where a desktop installation keeps KiCad's libraries: plugins build library paths from these
+    for v in ("", "6", "7", "8", "9", "10"):
+        os.environ.setdefault("KICAD%s_FOOTPRINT_DIR" % v, pcbnew.FOOTPRINT_DIR)
+        os.environ.setdefault("KICAD%s_SYMBOL_DIR" % v, "/usr/share/kicad/symbols")
+        os.environ.setdefault("KICAD%s_3DMODEL_DIR" % v, "/usr/share/kicad/3dmodels")
     if bridge is not None:
+        pcbnew._Host.library = _library
         _install_fabrication()
     import kicad_net
     kicad_net.install((lambda request: _call("net.fetch", request)) if bridge is not None else None)
@@ -805,6 +1115,15 @@ def _call(method, args=None):
     return json.loads(out) if isinstance(out, str) and out else out
 
 
+def _library(what, args):
+    """KiCad's footprint libraries, through the editor.  An unknown library or footprint is an empty answer."""
+    r = _call("libs." + what, args)
+    if isinstance(r, dict) and r.get("error"):
+        log.warning("footprint library: %s", r["error"])
+        return {}
+    return r or {}
+
+
 class _WxBridge:
     """The stock dialogs wx asks the editor to draw."""
 
@@ -911,7 +1230,7 @@ def flush():
         except Exception:
             pass
     if refill:
-        _refill_note[0] = True
+        _refill_note[0] = "filled" if refill == "filled" and _refill_note[0] in (False, "filled") else True
     return out
 
 
@@ -929,7 +1248,7 @@ def _after_event():
         b = pcbnew._Host.board
         if b is not None and b._modified:
             flush()
-            _export_outputs()
+        _export_outputs()          # a handler may only write files (an image, a report): they are handed over as well
     except Exception:
         traceback.print_exc()
     finally:
@@ -940,7 +1259,8 @@ def _after_event():
 
 def _tree(root):
     out = {}
-    for base, _dirs, names in os.walk(root):
+    for base, dirs, names in os.walk(root):
+        dirs[:] = [d for d in dirs if not d.startswith(".")]      # a plugin's hidden housekeeping folders are never handed over
         for n in names:
             p = os.path.join(base, n)
             try:
@@ -960,7 +1280,8 @@ def _export_outputs():
     now = _tree(PROJECT_DIR)
     board = pcbnew._Host.board
     skip = {board.GetFileName()} if board is not None else set()
-    fresh = sorted(p for p, sig in now.items() if _seen_files.get(p) != sig and p not in skip and not os.path.basename(p).startswith("."))
+    fresh = sorted(p for p, sig in now.items() if _seen_files.get(p) != sig and p not in skip
+                   and not any(part.startswith(".") for part in os.path.relpath(p, PROJECT_DIR).split(os.sep)))   # hidden files and folders are a plugin's own housekeeping
     _seen_files = now
     if not fresh or _bridge is None:
         return fresh
@@ -1164,5 +1485,8 @@ def run_action(index):
     if error:
         out["error"] = error
     if _refill_note[0]:
-        out["note"] = "Zone fills were cleared for the changed zones. Edit → Fill All Zones (B) refills them."
+        out["note"] = ("Zones were filled here, by the web editor's own filler. KiCad on the desktop fills them again with its own "
+                       "(Edit → Fill All Zones, B), which can differ slightly at the edges."
+                       if _refill_note[0] == "filled" else
+                       "Zone fills were cleared for the changed zones. Edit → Fill All Zones (B) refills them.")
     return json.dumps(out)

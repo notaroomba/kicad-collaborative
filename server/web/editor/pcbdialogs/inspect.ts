@@ -73,8 +73,9 @@ async function collectMarkers(doc: KDoc, parity: boolean): Promise<{ markers: Ma
  * The Design Rules Checker's result as data, for callers that have no dialog (a plugin running `kicad-cli pcb drc`):
  * each marker with the tab it belongs to and a description of every item it names.
  */
-export async function drcReport(o: { parity?: boolean } = {}): Promise<{ markers: (Marker & { group: "violation" | "unconnected" | "parity"; items: { id: string; description: string }[] })[]; parityError: string } | null> {
-  const doc = board(); if (!doc) return null;
+export async function drcReport(o: { parity?: boolean; text?: string } = {}): Promise<{ markers: (Marker & { group: "violation" | "unconnected" | "parity"; items: { id: string; description: string }[] })[]; parityError: string } | null> {
+  // `text` is another board file's contents (a copy or a candidate a plugin wrote): it is checked instead of the open board, under the open project's rules.
+  const doc = typeof o.text === "string" && o.text ? (KiCadCanvas.parseDoc as (t: string, k: string) => KDoc)(o.text, "kicad_pcb") : board(); if (!doc) return null;
   const r = await collectMarkers(doc, o.parity !== false);
   return { parityError: r.parityError, markers: r.markers.map((m) => ({ ...m, group: UNCONNECTED.has(m.code) ? "unconnected" as const : PARITY.has(m.code) ? "parity" as const : "violation" as const,
     items: m.ids.map((id) => ({ id, description: describeItem(doc, id) })) })) };

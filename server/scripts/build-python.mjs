@@ -37,7 +37,12 @@ const pypiWheel = async (name, ver, file) => {
   return buf;
 };
 const packages = {}; const missing = [];
-const fromLock = async (name) => {
+// The lock file is not consistent about a name's spelling (jsonschema depends on "jsonschema_specifications",
+// which it lists as "jsonschema-specifications"): names are compared the way pip compares them.
+const norm = (n) => n.toLowerCase().replace(/[-_.]+/g, "-");
+const lockName = new Map(Object.keys(lock.packages).map((k) => [norm(k), k]));
+const fromLock = async (asked) => {
+  const name = lockName.get(norm(asked)) || asked;
   if (packages[name] || missing.includes(name)) return !!packages[name];
   const e = lock.packages[name]; if (!e) { missing.push(name); return false; }
   for (const d of e.depends || []) if (!(await fromLock(d))) { missing.push(name); return false; }
@@ -71,7 +76,7 @@ for (const p of want.pypi) {
   packages[p.name] = { depends: p.depends, file_name: p.file, imports: p.imports, install_dir: "site", name: p.name, package_type: "package", sha256: p.sha256, tool: {}, unvendored_tests: false, version: p.version };
 }
 for (const name of want.pyodide) if (!want.pypi.some((q) => q.name === name)) await fromLock(name);
-for (const name of Object.keys(packages)) packages[name] = { ...packages[name], depends: packages[name].depends.filter((d) => packages[d]) };
+for (const name of Object.keys(packages)) packages[name] = { ...packages[name], depends: packages[name].depends.map((d) => lockName.get(norm(d)) || d).filter((d) => packages[d]) };
 fs.writeFileSync(path.join(out, "pyodide-lock.json"), JSON.stringify({ info: lock.info, packages }));
 console.log(`python runtime: ${Object.keys(packages).length} packages a plugin can import` + (missing.length ? `; not downloaded: ${[...new Set(missing)].join(", ")}` : ""));
 console.log(`python runtime: ${Object.keys(files).length} shim modules, pyodide ${JSON.parse(fs.readFileSync(path.join(pkg, "package.json"), "utf8")).version}`);

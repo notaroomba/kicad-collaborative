@@ -248,6 +248,24 @@ def _listen(el, name, fn):
         el.addEventListener(name, fn)
 
 
+def _once(fn):
+    """A callback for JavaScript to call once (a timer).  Unlike pyodide's create_once_callable it is a Python proxy, so
+    the caller can enter it with callPromising and the callback may block on the editor (read the board, open a dialog)."""
+    from pyodide.ffi import create_proxy
+    box = []
+
+    def run(*a):
+        try:
+            return fn(*a)
+        finally:
+            try:
+                box[0].destroy()
+            except Exception:
+                pass
+    box.append(create_proxy(run))
+    return box[0]
+
+
 def _wait(promise):
     """Block this Python stack on a JavaScript promise."""
     from pyodide.ffi import run_sync
@@ -422,14 +440,86 @@ class Size(Point):
     def IsFullySpecified(self):
         return self.x >= 0 and self.y >= 0
 
+    Width = property(lambda s: s.x, lambda s, v: setattr(s, "x", v))
+    Height = property(lambda s: s.y, lambda s, v: setattr(s, "y", v))
+
+    @staticmethod
+    def _delta(a, k):
+        if "dx" in k or "dy" in k:
+            return k.get("dx", 0), k.get("dy", 0)
+        if "pt" in k or "size" in k or "d" in k:
+            a = (k.get("pt", k.get("size", k.get("d"))),)
+        if len(a) == 1 and not isinstance(a[0], (int, float)):
+            return a[0][0], a[0][1]
+        return a[0], (a[1] if len(a) > 1 else a[0])
+
+    def IncBy(self, *a, **k):
+        dx, dy = self._delta(a, k)
+        self.x += dx
+        self.y += dy
+
+    def DecBy(self, *a, **k):
+        dx, dy = self._delta(a, k)
+        self.x -= dx
+        self.y -= dy
+
+    def IncTo(self, sz):
+        self.x, self.y = max(self.x, sz[0]), max(self.y, sz[1])
+
+    def DecTo(self, sz):
+        self.x, self.y = min(self.x, sz[0]), min(self.y, sz[1])
+
+    def DecToIfSpecified(self, sz):
+        if sz[0] != -1:
+            self.x = min(self.x, sz[0])
+        if sz[1] != -1:
+            self.y = min(self.y, sz[1])
+
+    def Scale(self, xs, ys):
+        self.x, self.y = int(self.x * xs), int(self.y * ys)
+        return self
+
+    def SetDefaults(self, sz):
+        if self.x == -1:
+            self.x = sz[0]
+        if self.y == -1:
+            self.y = sz[1]
+
+    def Set(self, w, h):
+        self.x, self.y = w, h
+
 
 RealPoint = Point
 Point2D = Point
 
 
 class Rect:
-    def __init__(self, x=0, y=0, width=0, height=0):
-        self.x, self.y, self.width, self.height = x, y, width, height
+    """wx.Rect: Rect(), Rect(x, y, w, h), Rect(pos, size), Rect(topLeft, bottomRight), Rect(size)."""
+
+    def __init__(self, *a, **k):
+        x = y = width = height = 0
+        if len(a) == 4:
+            x, y, width, height = a
+        elif len(a) == 2:
+            p, q = a
+            x, y = p[0], p[1]
+            if isinstance(q, Point) and not isinstance(q, Size):
+                width, height = q[0] - x + 1, q[1] - y + 1
+            else:
+                width, height = q[0], q[1]
+        elif len(a) == 1:
+            if isinstance(a[0], Rect):
+                x, y, width, height = a[0].Get()
+            else:
+                width, height = a[0][0], a[0][1]
+        self.x, self.y = k.get("x", x), k.get("y", y)
+        self.width, self.height = k.get("width", width), k.get("height", height)
+
+    def GetX(self):
+        return self.x
+
+    def GetY(self):
+        return self.y
 
     def GetWidth(self):
         return self.width
@@ -437,17 +527,169 @@ class Rect:
     def GetHeight(self):
         return self.height
 
+    def SetX(self, v):
+        self.x = v
+
+    def SetY(self, v):
+        self.y = v
+
+    def SetWidth(self, v):
+        self.width = v
+
+    def SetHeight(self, v):
+        self.height = v
+
     def GetSize(self):
         return Size(self.width, self.height)
+
+    def SetSize(self, s):
+        self.width, self.height = s[0], s[1]
 
     def GetPosition(self):
         return Point(self.x, self.y)
 
+    def SetPosition(self, p):
+        self.x, self.y = p[0], p[1]
+
+    def GetLeft(self):
+        return self.x
+
+    def GetTop(self):
+        return self.y
+
+    def GetRight(self):
+        return self.x + self.width - 1
+
+    def GetBottom(self):
+        return self.y + self.height - 1
+
+    def SetLeft(self, v):
+        self.width += self.x - v
+        self.x = v
+
+    def SetTop(self, v):
+        self.height += self.y - v
+        self.y = v
+
+    def SetRight(self, v):
+        self.width = v - self.x + 1
+
+    def SetBottom(self, v):
+        self.height = v - self.y + 1
+
+    left = Left = property(GetLeft, SetLeft)
+    top = Top = property(GetTop, SetTop)
+    right = Right = property(GetRight, SetRight)
+    bottom = Bottom = property(GetBottom, SetBottom)
+    X = property(GetX, SetX)
+    Y = property(GetY, SetY)
+    Width = property(GetWidth, SetWidth)
+    Height = property(GetHeight, SetHeight)
+    Size = property(GetSize, SetSize)
+    Position = property(GetPosition, SetPosition)
+
+    def GetTopLeft(self):
+        return Point(self.x, self.y)
+
+    def GetTopRight(self):
+        return Point(self.GetRight(), self.y)
+
+    def GetBottomLeft(self):
+        return Point(self.x, self.GetBottom())
+
+    def GetBottomRight(self):
+        return Point(self.GetRight(), self.GetBottom())
+
+    TopLeft = property(GetTopLeft)
+    TopRight = property(GetTopRight)
+    BottomLeft = property(GetBottomLeft)
+    BottomRight = property(GetBottomRight)
+
+    def GetCentre(self):
+        return Point(self.x + self.width // 2, self.y + self.height // 2)
+
+    GetCenter = GetCentre
+
     def Get(self):
         return (self.x, self.y, self.width, self.height)
 
+    def IsEmpty(self):
+        return self.width <= 0 or self.height <= 0
+
+    def Contains(self, *a):
+        if len(a) == 1 and isinstance(a[0], Rect):
+            r = a[0]
+            return self.Contains(r.x, r.y) and self.Contains(r.GetRight(), r.GetBottom())
+        px, py = (a[0], a[1]) if len(a) >= 2 else (a[0][0], a[0][1])
+        return self.x <= px < self.x + self.width and self.y <= py < self.y + self.height
+
+    Inside = Contains
+
+    def Intersects(self, r):
+        return not (r.x >= self.x + self.width or r.x + r.width <= self.x or r.y >= self.y + self.height or r.y + r.height <= self.y)
+
+    def Intersect(self, r):
+        x0, y0 = max(self.x, r.x), max(self.y, r.y)
+        x1, y1 = min(self.x + self.width, r.x + r.width), min(self.y + self.height, r.y + r.height)
+        self.x, self.y, self.width, self.height = (x0, y0, x1 - x0, y1 - y0) if x1 > x0 and y1 > y0 else (0, 0, 0, 0)
+        return self
+
+    def Union(self, r):
+        if r.IsEmpty():
+            return self
+        if self.IsEmpty():
+            self.x, self.y, self.width, self.height = r.Get()
+            return self
+        x0, y0 = min(self.x, r.x), min(self.y, r.y)
+        x1, y1 = max(self.x + self.width, r.x + r.width), max(self.y + self.height, r.y + r.height)
+        self.x, self.y, self.width, self.height = x0, y0, x1 - x0, y1 - y0
+        return self
+
+    def Inflate(self, dx, dy=None):
+        dy = dx if dy is None else dy
+        self.x -= dx
+        self.y -= dy
+        self.width += 2 * dx
+        self.height += 2 * dy
+        return self
+
+    def Deflate(self, dx, dy=None):
+        return self.Inflate(-dx, -(dx if dy is None else dy))
+
+    def Offset(self, *a):
+        dx, dy = (a[0], a[1]) if len(a) >= 2 else (a[0][0], a[0][1])
+        self.x += dx
+        self.y += dy
+
+    def CentreIn(self, r, dir=0x0004 | 0x0008):
+        return Rect(r.x + (r.width - self.width) // 2 if dir & 0x0004 else self.x,
+                    r.y + (r.height - self.height) // 2 if dir & 0x0008 else self.y, self.width, self.height)
+
+    CenterIn = CentreIn
+
     def __iter__(self):
         return iter(self.Get())
+
+    def __getitem__(self, i):
+        return self.Get()[i]
+
+    def __len__(self):
+        return 4
+
+    def __eq__(self, o):
+        try:
+            return tuple(self.Get()) == tuple(o)
+        except TypeError:
+            return False
+
+    def __ne__(self, o):
+        return not self.__eq__(o)
+
+    def __hash__(self):
+        return hash(self.Get())
+
+    def __repr__(self):
+        return f"wx.Rect({self.x}, {self.y}, {self.width}, {self.height})"
 
 
 DefaultPosition = Point(-1, -1)
@@ -498,6 +740,33 @@ class Colour:
 
     def GetLuminance(self):
         return (0.299 * self.r + 0.587 * self.g + 0.114 * self.b) / 255.0
+
+    def Set(self, *a):
+        """Set(r, g, b, a=255), Set("#rrggbb") or Set(0xBBGGRR)."""
+        if len(a) == 1 and isinstance(a[0], int):
+            v = a[0]
+            self.r, self.g, self.b, self.a = v & 255, (v >> 8) & 255, (v >> 16) & 255, 255
+        else:
+            c = Colour(*a)
+            self.r, self.g, self.b, self.a = c.r, c.g, c.b, c.a
+        return True
+
+    SetRGB = Set
+
+    def SetRGBA(self, v):
+        self.r, self.g, self.b, self.a = v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255
+
+    def GetRGBA(self):
+        return self.r | (self.g << 8) | (self.b << 16) | (self.a << 24)
+
+    red = property(lambda self: self.r)
+    green = property(lambda self: self.g)
+    blue = property(lambda self: self.b)
+    alpha = property(lambda self: self.a)
+
+    def MakeDisabled(self, brightness=255):
+        f = lambda v: int((v + brightness) / 2)
+        return Colour(f(self.r), f(self.g), f(self.b), self.a)
 
     def ChangeLightness(self, *_):
         return Colour(self)
@@ -690,19 +959,197 @@ def _data_url(path):
     return f"data:{mime};base64," + _b64.b64encode(raw).decode("ascii")
 
 
+# ----------------------------------------------------------------------------- images
+# A bitmap here is real: its pixels (RGBA), or the file it was read from, or what was drawn on it through a
+# MemoryDC.  Shown in a window it becomes a PNG; drawn on a canvas it is drawn there.
+
+def _png_encode(w, h, rgba):
+    import struct
+    import zlib
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    stride = w * 4
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)
+        raw += rgba[y * stride:(y + 1) * stride]
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + chunk(b"IEND", b"")
+
+
+def _png_size(data):
+    import struct
+    if len(data) >= 24 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return struct.unpack(">II", data[16:24])
+    return None
+
+
+def _png_decode(data):
+    """(width, height, RGBA bytes) of a PNG, or None.  Pillow reads it where the plugin loaded Pillow; otherwise the
+    plain 8-bit kinds are read here."""
+    try:
+        from PIL import Image as _PILImage
+        import io
+        im = _PILImage.open(io.BytesIO(bytes(data))).convert("RGBA")
+        return im.width, im.height, bytearray(im.tobytes())
+    except Exception:
+        pass
+    import struct
+    import zlib
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, plte, trns, hdr = 8, [], None, None, None
+    while pos + 8 <= len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if kind == b"IHDR":
+            hdr = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"PLTE":
+            plte = body
+        elif kind == b"tRNS":
+            trns = body
+        elif kind == b"IEND":
+            break
+    if hdr is None or hdr[2] != 8 or hdr[6] != 0:
+        return None
+    w, h, _depth, ctype = hdr[0], hdr[1], hdr[2], hdr[3]
+    bpp = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}.get(ctype)
+    if bpp is None:
+        return None
+    raw = zlib.decompress(b"".join(idat))
+    stride = w * bpp
+    out = bytearray(w * h * 4)
+    prev = bytearray(stride)
+    p = 0
+    for y in range(h):
+        f = raw[p]
+        line = bytearray(raw[p + 1:p + 1 + stride])
+        p += 1 + stride
+        if f == 1:
+            for i in range(bpp, stride):
+                line[i] = (line[i] + line[i - bpp]) & 255
+        elif f == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 255
+        elif f == 3:
+            for i in range(stride):
+                line[i] = (line[i] + (((line[i - bpp] if i >= bpp else 0) + prev[i]) >> 1)) & 255
+        elif f == 4:
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                pa, pb, pc = abs(b - c), abs(a - c), abs(a + b - 2 * c)
+                line[i] = (line[i] + (a if pa <= pb and pa <= pc else (b if pb <= pc else c))) & 255
+        prev = line
+        row = memoryview(out)[y * w * 4:(y + 1) * w * 4]
+        if ctype == 6:
+            row[:] = line
+        elif ctype == 2:
+            row[0::4], row[1::4], row[2::4] = line[0::3], line[1::3], line[2::3]
+            row[3::4] = b"\xff" * w
+        elif ctype == 0:
+            row[0::4] = row[1::4] = row[2::4] = line
+            row[3::4] = b"\xff" * w
+        elif ctype == 4:
+            row[0::4] = row[1::4] = row[2::4] = line[0::2]
+            row[3::4] = line[1::2]
+        else:
+            for x in range(w):
+                k = line[x]
+                row[x * 4:x * 4 + 3] = (plte or b"")[k * 3:k * 3 + 3].ljust(3, b"\0")
+                row[x * 4 + 3] = trns[k] if trns is not None and k < len(trns) else 255
+    return w, h, out
+
+
+def _url_bytes(url):
+    if isinstance(url, str) and url.startswith("data:") and ";base64," in url:
+        try:
+            return _b64.b64decode(url.split(";base64,", 1)[1])
+        except Exception:
+            return None
+    return None
+
+
 class Bitmap:
     def __init__(self, name=None, *a, **k):
-        self._url = ""
+        self._src = ""           # a data: address, for an image read from a file
+        self._rgba = None        # or its pixels
+        self._ops = None         # and what was drawn on it (MemoryDC)
+        self._png = None
+        self._blank = False
         self._w = self._h = 16
         if isinstance(name, str) and name:
-            self._url = _data_url(name)
-        elif isinstance(name, (Bitmap, Image)):
-            self._url, self._w, self._h = name._url, name._w, name._h
-        elif isinstance(name, int) and a and isinstance(a[0], int):
-            self._w, self._h = name, a[0]
+            self._load(name)
+        elif isinstance(name, Bitmap):
+            self._take(name)
+        elif isinstance(name, (Size, tuple, list)) and len(name) >= 2:
+            self._w, self._h, self._blank = max(0, int(name[0])), max(0, int(name[1])), True
+        elif isinstance(name, int) and not isinstance(name, bool) and a and isinstance(a[0], int):
+            self._w, self._h, self._blank = max(0, name), max(0, a[0]), True
+        elif isinstance(name, (bytes, bytearray, memoryview)):
+            self._set_src("data:image/png;base64," + _b64.b64encode(bytes(name)).decode("ascii"))
+
+    # -- what it holds
+    def _take(self, other):
+        self._src, self._w, self._h, self._blank, self._png = other._src, other._w, other._h, other._blank, other._png
+        self._rgba = bytearray(other._rgba) if other._rgba is not None else None
+        self._ops = list(other._ops) if other._ops else None
+
+    def _set_src(self, url):
+        self._src, self._rgba, self._ops, self._png, self._blank = url or "", None, None, None, False
+        if self._src.startswith("data:image/png;base64,"):
+            try:
+                size = _png_size(_b64.b64decode(self._src[22:22 + 44]))
+            except Exception:
+                size = None
+            if size:
+                self._w, self._h = int(size[0]), int(size[1])
+
+    def _load(self, path):
+        self._set_src(_data_url(path))
+        return bool(self._src)
+
+    def _get_url(self):
+        if self._ops:
+            return _paint.raster(self)
+        if self._rgba is not None:
+            if self._png is None:
+                self._png = "data:image/png;base64," + _b64.b64encode(_png_encode(self._w, self._h, self._rgba)).decode("ascii")
+            return self._png
+        return self._src
+
+    _url = property(_get_url, _set_src)
+
+    def _pixels(self):
+        """The pixels, RGBA, to read and to change."""
+        if self._rgba is None:
+            got = None
+            raw = _url_bytes(self._src)
+            if raw is not None:
+                got = _png_decode(raw)
+            if got is not None:
+                self._w, self._h, self._rgba = got
+            else:
+                self._rgba = bytearray(b"\0\0\0\xff" * (self._w * self._h))
+            self._src = ""
+        self._png = None
+        return self._rgba
+
+    def _set_rgb(self, rgb, alpha=None):
+        n = self._w * self._h
+        px = bytearray(b"\xff" * (n * 4))
+        rgb = bytes(rgb)[:n * 3].ljust(n * 3, b"\0")
+        px[0::4], px[1::4], px[2::4] = rgb[0::3], rgb[1::3], rgb[2::3]
+        if alpha is not None:
+            px[3::4] = bytes(alpha)[:n].ljust(n, b"\xff")
+        self._rgba, self._src, self._ops, self._png, self._blank = px, "", None, None, False
 
     def IsOk(self):
-        return bool(self._url)
+        return bool(self._src) or self._rgba is not None or bool(self._ops) or self._blank
 
     Ok = IsOk
 
@@ -715,33 +1162,97 @@ class Bitmap:
     def GetSize(self):
         return Size(self._w, self._h)
 
+    GetLogicalSize = GetDIPSize = GetScaledSize = GetSize
+    GetLogicalWidth = GetScaledWidth = GetWidth
+    GetLogicalHeight = GetScaledHeight = GetHeight
+    GetDepth = lambda self: 32
+    HasAlpha = lambda self: True
+
     def ConvertToImage(self):
         return Image(self)
 
     def LoadFile(self, name, *_):
-        self._url = _data_url(name)
-        return bool(self._url)
+        return self._load(name)
+
+    def SaveFile(self, name, *_):
+        url = self._url
+        raw = _url_bytes(url)
+        if raw is None:
+            return False
+        try:
+            with open(name, "wb") as fh:
+                fh.write(raw)
+        except OSError:
+            return False
+        return True
 
     def SetSize(self, *a):
         pass
 
+    SetWidth = SetHeight = SetDepth = SetMask = SetScaleFactor = lambda self, *a: None
+
     def GetScaleFactor(self):
         return 1.0
 
+    def Create(self, w, h=None, *_):
+        if h is None:
+            w, h = w[0], w[1]
+        self._w, self._h, self._blank = int(w), int(h), True
+        self._src, self._rgba, self._ops, self._png = "", None, None, None
+        return True
+
+    def GetSubBitmap(self, rect):
+        x, y, w, h = (rect.x, rect.y, rect.width, rect.height) if isinstance(rect, Rect) else tuple(rect)[:4]
+        return Bitmap(Image(self).GetSubImage(Rect(x, y, w, h)))
+
     @staticmethod
-    def FromRGBA(w, h, *_):
-        return Bitmap(w, h)
+    def FromRGBA(w, h, red=0, green=0, blue=0, alpha=0):
+        b = Bitmap(int(w), int(h))
+        b._rgba = bytearray(bytes((red & 255, green & 255, blue & 255, alpha & 255)) * (b._w * b._h))
+        return b
+
+    @staticmethod
+    def FromBufferRGBA(w, h, data):
+        b = Bitmap(int(w), int(h))
+        n = b._w * b._h * 4
+        b._rgba = bytearray(bytes(data)[:n].ljust(n, b"\0"))
+        return b
+
+    @staticmethod
+    def FromBuffer(w, h, data):
+        b = Bitmap(int(w), int(h))
+        b._set_rgb(data)
+        return b
+
+    @staticmethod
+    def FromBufferAndAlpha(w, h, data, alpha):
+        b = Bitmap(int(w), int(h))
+        b._set_rgb(data, alpha)
+        return b
+
+    def CopyFromBuffer(self, data, format=None, stride=-1):
+        n = self._w * self._h
+        data = bytes(data)
+        if len(data) >= n * 4:
+            self._rgba, self._src, self._ops, self._png = bytearray(data[:n * 4]), "", None, None
+        else:
+            self._set_rgb(data)
+
+    def CopyToBuffer(self, data, *_):
+        px = self._pixels()
+        try:
+            data[:len(px)] = px
+        except Exception:
+            pass
 
     @staticmethod
     def NewFromPNGData(data, *_):
-        b = Bitmap()
-        b._url = "data:image/png;base64," + _b64.b64encode(bytes(data)).decode("ascii")
-        return b
+        return Bitmap(bytes(data))
 
     FromPNGData = NewFromPNGData
 
     def CopyFromIcon(self, icon):
-        self._url = icon._url
+        self._take(icon)
 
     def __getattr__(self, name):
         if name.startswith("_"):
@@ -750,26 +1261,198 @@ class Bitmap:
 
 
 class Image(Bitmap):
-    def Scale(self, w, h, *_):
-        i = Image(self)
-        i._w, i._h = w, h
-        return i
+    def __init__(self, name=None, *a, **k):
+        clear = True
+        if isinstance(name, int) and not isinstance(name, bool) and len(a) >= 2 and isinstance(a[1], (bytes, bytearray, memoryview)):
+            Bitmap.__init__(self, name, a[0])          # Image(width, height, data[, alpha])
+            self._set_rgb(a[1], a[2] if len(a) > 2 else None)
+            return
+        Bitmap.__init__(self, name, *a, **k)
+        if self._blank and clear:
+            self._rgba = bytearray(b"\0\0\0\xff" * (self._w * self._h))
 
-    Rescale = Scale
+    def Create(self, w, h=None, *_):
+        Bitmap.Create(self, w, h)
+        self._rgba = bytearray(b"\0\0\0\xff" * (self._w * self._h))
+        return True
 
-    def ConvertToBitmap(self, *_):
-        return Bitmap(self)
+    def SetData(self, data, *size):
+        if len(size) >= 2:
+            self._w, self._h = int(size[0]), int(size[1])
+        alpha = bytes(self._rgba[3::4]) if self._rgba is not None and len(self._rgba) == self._w * self._h * 4 else None
+        self._set_rgb(data, alpha)
+
+    SetDataBuffer = SetData
+
+    def GetData(self):
+        px = self._pixels()
+        out = bytearray(self._w * self._h * 3)
+        out[0::3], out[1::3], out[2::3] = px[0::4], px[1::4], px[2::4]
+        return out
+
+    GetDataBuffer = GetData
+
+    def SetAlpha(self, *a):
+        px = self._pixels()
+        if len(a) == 3:                              # SetAlpha(x, y, alpha)
+            x, y, v = int(a[0]), int(a[1]), int(a[2])
+            if 0 <= x < self._w and 0 <= y < self._h:
+                px[(y * self._w + x) * 4 + 3] = v & 255
+        elif a:
+            n = self._w * self._h
+            px[3::4] = bytes(a[0])[:n].ljust(n, b"\xff")
+
+    SetAlphaData = SetAlphaBuffer = SetAlpha
+
+    def GetAlpha(self, *a):
+        px = self._pixels()
+        if len(a) == 2:
+            return px[(int(a[1]) * self._w + int(a[0])) * 4 + 3]
+        return bytearray(px[3::4])
+
+    GetAlphaData = GetAlphaBuffer = GetAlpha
 
     def HasAlpha(self):
         return True
 
-    def SaveFile(self, *_):
-        return False
+    def InitAlpha(self):
+        self._pixels()
+
+    ClearAlpha = lambda self: self.SetAlpha(b"\xff" * (self._w * self._h))
+
+    def SetRGB(self, *a):
+        px = self._pixels()
+        if isinstance(a[0], Rect):
+            rect, r, g, b = a[0], a[1], a[2], a[3]
+            for y in range(max(0, rect.y), min(self._h, rect.y + rect.height)):
+                for x in range(max(0, rect.x), min(self._w, rect.x + rect.width)):
+                    px[(y * self._w + x) * 4:(y * self._w + x) * 4 + 3] = bytes((r & 255, g & 255, b & 255))
+            return
+        x, y, r, g, b = int(a[0]), int(a[1]), a[2], a[3], a[4]
+        if 0 <= x < self._w and 0 <= y < self._h:
+            px[(y * self._w + x) * 4:(y * self._w + x) * 4 + 3] = bytes((r & 255, g & 255, b & 255))
+
+    def _at(self, x, y, k):
+        px = self._pixels()
+        return px[(int(y) * self._w + int(x)) * 4 + k] if 0 <= x < self._w and 0 <= y < self._h else 0
+
+    GetRed = lambda self, x, y: self._at(x, y, 0)
+    GetGreen = lambda self, x, y: self._at(x, y, 1)
+    GetBlue = lambda self, x, y: self._at(x, y, 2)
+
+    def Copy(self):
+        return Image(self)
+
+    def Clear(self, value=0):
+        self._rgba = bytearray(bytes((value & 255, value & 255, value & 255, 255)) * (self._w * self._h))
+        self._png = None
+
+    def Scale(self, w, h, *_):
+        w, h = max(1, int(w)), max(1, int(h))
+        i = Image(self)
+        if self._rgba is None and not (self._src.startswith("data:image/png") and not self._ops):
+            i._w, i._h = w, h                           # a file the browser scales when it shows it
+            return i
+        px, sw, sh = self._pixels(), self._w, self._h
+        i._src, i._ops, i._png = "", None, None
+        if sw == 0 or sh == 0:
+            i._w, i._h, i._rgba = w, h, bytearray(b"\0\0\0\xff" * (w * h))
+            return i
+        cols = [min(sw - 1, x * sw // w) * 4 for x in range(w)]
+        out = bytearray()
+        last_y, last_row = -1, b""
+        for y in range(h):
+            sy = min(sh - 1, y * sh // h)
+            if sy != last_y:
+                row = px[sy * sw * 4:(sy + 1) * sw * 4]
+                last_row = b"".join([row[c:c + 4] for c in cols]) if w != sw else bytes(row)
+                last_y = sy
+            out += last_row
+        i._w, i._h, i._rgba = w, h, out
+        return i
+
+    def Rescale(self, w, h, *_):
+        self._take(self.Scale(w, h))
+        return self
+
+    ResampleNearest = ResampleBilinear = ResampleBicubic = ResampleBox = Scale
+
+    def GetSubImage(self, rect):
+        px = self._pixels()
+        x0, y0 = max(0, int(rect.x)), max(0, int(rect.y))
+        w, h = max(0, min(self._w - x0, int(rect.width))), max(0, min(self._h - y0, int(rect.height)))
+        i = Image(w, h)
+        out = bytearray()
+        for y in range(y0, y0 + h):
+            out += px[(y * self._w + x0) * 4:(y * self._w + x0 + w) * 4]
+        i._rgba = out
+        return i
+
+    def Mirror(self, horizontally=True):
+        px, w, h = self._pixels(), self._w, self._h
+        i = Image(w, h)
+        out = bytearray()
+        rows = [px[y * w * 4:(y + 1) * w * 4] for y in range(h)]
+        if horizontally:
+            for row in rows:
+                out += b"".join([row[x * 4:x * 4 + 4] for x in range(w - 1, -1, -1)])
+        else:
+            for row in reversed(rows):
+                out += row
+        i._rgba = out
+        return i
+
+    def Rotate90(self, clockwise=True):
+        px, w, h = self._pixels(), self._w, self._h
+        i = Image(h, w)
+        out = bytearray(w * h * 4)
+        for y in range(h):
+            for x in range(w):
+                nx, ny = (h - 1 - y, x) if clockwise else (y, w - 1 - x)
+                out[(ny * h + nx) * 4:(ny * h + nx) * 4 + 4] = px[(y * w + x) * 4:(y * w + x) * 4 + 4]
+        i._rgba = out
+        return i
+
+    def ConvertToGreyscale(self, *_):
+        px = self._pixels()
+        i = Image(self._w, self._h)
+        r, g, b = px[0::4], px[1::4], px[2::4]
+        grey = bytes((299 * r[k] + 587 * g[k] + 114 * b[k]) // 1000 for k in range(self._w * self._h))
+        out = bytearray(px)
+        out[0::4] = out[1::4] = out[2::4] = grey
+        i._rgba = out
+        return i
+
+    ConvertToDisabled = ConvertToGreyscale
+
+    def AdjustChannels(self, fr=1.0, fg=1.0, fb=1.0, fa=1.0):
+        px = self._pixels()
+        i = Image(self._w, self._h)
+        out = bytearray(px)
+        for k, f in enumerate((fr, fg, fb, fa)):
+            if f != 1.0:
+                out[k::4] = bytes(min(255, int(v * f)) for v in px[k::4])
+        i._rgba = out
+        return i
+
+    def ConvertToBitmap(self, *_):
+        return Bitmap(self)
+
+    def LoadFile(self, name, *_):
+        if hasattr(name, "read"):
+            data = name.read()
+            self._set_src("data:image/png;base64," + _b64.b64encode(bytes(data)).decode("ascii"))
+            return True
+        return self._load(name)
+
+    LoadStream = LoadFile
+    SetOption = SetMaskColour = SetMask = lambda self, *a: None
+    HasMask = lambda self: False
 
 
 class Icon(Bitmap):
     def CopyFromBitmap(self, bmp):
-        self._url = bmp._url
+        self._take(bmp)
 
 
 class BitmapBundle(Bitmap):
@@ -1083,6 +1766,8 @@ button.primary{background:var(--blue);border-color:var(--blue);color:var(--on-ac
 .wx-stdbtns{display:flex;justify-content:flex-end;gap:6px;align-self:stretch;padding-top:6px}
 textarea{resize:vertical;min-height:60px}
 select[multiple]{min-height:70px}
+.wx-painted{position:relative;isolation:isolate}
+.wx-canvas{position:absolute;left:0;top:0;width:100%;height:100%;z-index:-1;pointer-events:none}
 [hidden]{display:none!important}
 """
 _css_done = [False]
@@ -1104,13 +1789,17 @@ class Window(EvtHandler):
     _TAG = "div"
     _CLS = "wx-panel"
 
-    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, name="", **kw):
+    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, name="", *more, **kw):
         EvtHandler.__init__(self)
+        if "name" in kw:
+            name = kw.pop("name")
         _ensure_css()
         self._wx_parent = parent if isinstance(parent, Window) else None
         self._wx_id = id if isinstance(id, int) and id != ID_ANY else NewId()
         self._wx_style = style if isinstance(style, int) else 0
         self._wx_name = name if isinstance(name, str) else ""
+        if not self._wx_name:           # given by position, after the arguments particular to the widget (and a validator)
+            self._wx_name = next((m for m in reversed(more) if isinstance(m, str)), "")
         self._wx_children = []
         self._wx_sizer = None
         self._wx_shown = True
@@ -1294,6 +1983,7 @@ class Window(EvtHandler):
     # geometry: the browser lays things out; sizes given by a plugin are kept as minimums
     def SetMinSize(self, size):
         w, h = tuple(size)[:2]
+        self.__dict__["_wx_min"] = (w, h)
         if w is not None and w > 0:
             self.el.style.minWidth = _px(min(w, 900))
         if h is not None and h > 0:
@@ -1328,7 +2018,8 @@ class Window(EvtHandler):
         if _DOM:
             r = self.el.getBoundingClientRect()
             return int(r.width), int(r.height)
-        return 100, 24
+        w, h = self.__dict__.get("_wx_min") or (-1, -1)
+        return (int(w) if w and w > 0 else 100), (int(h) if h and h > 0 else 24)
 
     def GetSize(self):
         return Size(*self._wx_box())
@@ -1422,14 +2113,72 @@ class Window(EvtHandler):
     def PopupMenu(self, menu, *a):
         return _wx_popup_menu(self, menu, a[0] if a and isinstance(a[0], Point) else None)
 
+    # -- a window that draws itself, and hears the mouse (wx/_paint.py)
+    def Bind(self, event, handler, source=None, id=ID_ANY, id2=ID_ANY):
+        EvtHandler.Bind(self, event, handler, source, id, id2)
+        if handler is not None and not getattr(event, "command", True):
+            _paint.wire(source if isinstance(source, Window) else self, event)
+
+    def Refresh(self, *a, **k):
+        _paint.schedule_paint(self)
+        for c in self._wx_children:
+            if c.__dict__.get("_wx_canvas") is not None:
+                _paint.schedule_paint(c)
+
+    RefreshRect = Refresh
+
+    def Update(self):
+        if self.__dict__.get("_wx_paint_due") and not _DOM:
+            _paint.paint_now(self)
+
+    def SetBackgroundStyle(self, style):
+        self.__dict__["_wx_bg_style"] = style
+        return True
+
+    def GetBackgroundStyle(self):
+        return self.__dict__.get("_wx_bg_style", 0)
+
+    def InvalidateBestSize(self):
+        if self.__dict__.get("_wx_best_done"):
+            self.__dict__["_wx_best_done"] = False
+            _paint._best_size(self)
+
+    def CaptureMouse(self):
+        self.__dict__["_wx_captured"] = True
+
+    def ReleaseMouse(self):
+        self.__dict__["_wx_captured"] = False
+
+    def HasCapture(self):
+        return bool(self.__dict__.get("_wx_captured"))
+
+    def SetDoubleBuffered(self, *_):
+        pass
+
+    IsDoubleBuffered = lambda self: True
+
     def __getattr__(self, name):
-        # Layout and look calls that mean nothing in a browser (Centre, Refresh, Thaw, …) are accepted.
+        # Layout and look calls that mean nothing in a browser (Centre, Thaw, …) are accepted.
         if name.startswith("_") or name in ("el",):
             raise AttributeError(name)
         if name[:1].isupper():
+            # wxPython gives every GetX/SetX pair a property X (spin.Value, text.Label, win.Size, …)
+            getter = getattr(type(self), "Get" + name, None) or getattr(type(self), "Is" + name, None)
+            if getter is not None:
+                return getter(self)
             _missing.add(f"{type(self).__name__}.{name}")
             return _NULL
         raise AttributeError(name)
+
+    def __setattr__(self, name, value):
+        if name[:1].isupper():
+            cls = type(self)
+            if not hasattr(cls, name):
+                setter = getattr(cls, "Set" + name, None)
+                if setter is not None:
+                    setter(self, value)
+                    return
+        object.__setattr__(self, name, value)
 
 
 Control = Window
@@ -1444,22 +2193,115 @@ PyPanel = Panel
 
 
 class ScrolledWindow(Panel):
+    """A panel that scrolls.  One that holds widgets scrolls as the page does.  One that paints itself (EVT_PAINT) has a
+    virtual size larger than what shows: its view start moves with the wheel and the window repaints, as wx does it."""
+
     def _wx_build(self, kw):
         self.el.style.overflow = "auto"
+        self.__dict__.update(_sw_rate=(1, 1), _sw_view=[0, 0], _sw_virtual=None)
+        _listen(self.el, "wheel", self._sw_wheel)
 
-    def SetScrollRate(self, *_):
-        pass
+    def _sw_painted(self):
+        return any(h[0] is EVT_PAINT for h in self._wx_handlers)
 
-    SetScrollbars = EnableScrolling = Scroll = SetupScrolling = lambda self, *a, **k: None
+    def _sw_client(self):
+        try:
+            sz = self.GetClientSize()
+            return int(sz[0]), int(sz[1])
+        except Exception:
+            return 0, 0
+
+    def _sw_limit(self, x, y):
+        vw, vh = self._sw_virtual or (0, 0)
+        cw, ch = self._sw_client()
+        rx, ry = self._sw_rate
+        mx = max(0, -(-(vw - cw) // rx)) if rx else 0
+        my = max(0, -(-(vh - ch) // ry)) if ry else 0
+        return max(0, min(int(x), mx)), max(0, min(int(y), my))
+
+    def _sw_wheel(self, e):
+        if not self._sw_painted() or any(h[0] is EVT_MOUSEWHEEL for h in self._wx_handlers):
+            return
+        dy = float(getattr(e, "deltaY", 0) or 0)
+        dx = float(getattr(e, "deltaX", 0) or 0)
+        rx, ry = self._sw_rate
+        before = list(self._sw_view)
+        self.Scroll(self._sw_view[0] + (int(round(dx / rx)) or (dx > 0) - (dx < 0)) if rx and dx else self._sw_view[0],
+                    self._sw_view[1] + (int(round(dy / ry)) or (dy > 0) - (dy < 0)) if ry and dy else self._sw_view[1])
+        if before != self._sw_view and hasattr(e, "preventDefault"):
+            e.preventDefault()
+
+    def SetScrollRate(self, x=0, y=0):
+        self._sw_rate = (max(0, int(x)), max(0, int(y)))
+
+    def SetScrollbars(self, ppu_x=1, ppu_y=1, units_x=0, units_y=0, x=0, y=0, *_):
+        self._sw_rate = (max(0, int(ppu_x)), max(0, int(ppu_y)))
+        self.SetVirtualSize(int(ppu_x) * int(units_x), int(ppu_y) * int(units_y))
+        self.Scroll(x, y)
+
+    def GetScrollPixelsPerUnit(self):
+        return self._sw_rate
+
+    def SetVirtualSize(self, *a):
+        sz = a[0] if len(a) == 1 else a
+        self._sw_virtual = (int(sz[0]), int(sz[1]))
+        self._sw_view[:] = self._sw_limit(*self._sw_view)
+
+    def GetVirtualSize(self):
+        if self._sw_virtual:
+            cw, ch = self._sw_client()
+            return Size(max(self._sw_virtual[0], cw), max(self._sw_virtual[1], ch))
+        if _DOM:
+            return Size(int(self.el.scrollWidth or 0), int(self.el.scrollHeight or 0))
+        return self.GetClientSize()
+
+    def GetViewStart(self):
+        if not self._sw_painted() and _DOM:
+            rx, ry = self._sw_rate
+            return (int((self.el.scrollLeft or 0) // rx) if rx else 0, int((self.el.scrollTop or 0) // ry) if ry else 0)
+        return (self._sw_view[0], self._sw_view[1])
+
+    def Scroll(self, x=-1, y=-1):
+        if isinstance(x, (tuple, list, Point)):
+            x, y = x[0], x[1]
+        x = self._sw_view[0] if x is None or x < 0 else x
+        y = self._sw_view[1] if y is None or y < 0 else y
+        if self._sw_painted():
+            new = list(self._sw_limit(x, y))
+            if new != self._sw_view:
+                self._sw_view[:] = new
+                self.Refresh()
+            return
+        self._sw_view[:] = [int(x), int(y)]
+        if _DOM:
+            self.el.scrollLeft = int(x) * self._sw_rate[0]
+            self.el.scrollTop = int(y) * self._sw_rate[1]
+
+    def CalcUnscrolledPosition(self, *a):
+        p = a[0] if len(a) == 1 else a
+        vx, vy = self.GetViewStart()
+        return Point(int(p[0]) + vx * self._sw_rate[0], int(p[1]) + vy * self._sw_rate[1])
+
+    def CalcScrolledPosition(self, *a):
+        p = a[0] if len(a) == 1 else a
+        vx, vy = self.GetViewStart()
+        return Point(int(p[0]) - vx * self._sw_rate[0], int(p[1]) - vy * self._sw_rate[1])
+
+    def DoPrepareDC(self, dc):
+        vx, vy = self.GetViewStart()
+        dc.SetDeviceOrigin(-vx * self._sw_rate[0], -vy * self._sw_rate[1])
+
+    PrepareDC = DoPrepareDC
+    EnableScrolling = SetupScrolling = ShowScrollbars = SetTargetWindow = lambda self, *a, **k: None
 
 
 ScrolledPanel = ScrolledWindow
 
 
 class _Labelled(Window):
-    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._init_label = label if isinstance(label, str) else ""
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self.SetLabel(self._init_label)
 
 
@@ -1537,8 +2379,8 @@ def _set_img(el, bmp, text=""):
 
 
 class BitmapButton(Button):
-    def __init__(self, parent=None, id=ID_ANY, bitmap=None, pos=DefaultPosition, size=DefaultSize, style=0, **kw):
-        Button.__init__(self, parent, id, "", pos, size, style, **kw)
+    def __init__(self, parent=None, id=ID_ANY, bitmap=None, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        Button.__init__(self, parent, id, "", pos, size, style, *more, **kw)
         if bitmap is not None:
             self.SetBitmap(bitmap)
         if not getattr(bitmap, "_url", ""):
@@ -1616,10 +2458,10 @@ class RadioButton(CheckBox):
 
 
 class TextCtrl(Window):
-    def __init__(self, parent=None, id=ID_ANY, value="", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, value="", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._multi = bool((style if isinstance(style, int) else 0) & TE_MULTILINE)
         self._TAG = "textarea" if self._multi else "input"
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self.SetValue(value if isinstance(value, str) else "")
 
     _CLS = ""
@@ -1701,10 +2543,10 @@ class SearchCtrl(TextCtrl):
 class _Choices(Window):
     """Choice, ComboBox and ListBox share the list-of-strings half."""
 
-    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, choices=None, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, choices=None, style=0, *more, **kw):
         self._wx_items = []
         self._wx_client = []
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         for c in (kw.get("choices", choices) or []):
             self.Append(c)
 
@@ -1789,13 +2631,16 @@ class _Choices(Window):
     GetCurrentSelection = GetSelection
 
     def SetSelection(self, n):
-        self.el.selectedIndex = int(n)
+        n = int(n)
+        if n != -1 and not 0 <= n < len(self._wx_items):
+            return          # wxWidgets checks the index and leaves the selection as it was
+        self.el.selectedIndex = n
 
     Select = SetSelection
 
     def GetStringSelection(self):
         i = self.GetSelection()
-        return self._wx_items[i] if i >= 0 else ""
+        return self._wx_items[i] if 0 <= i < len(self._wx_items) else ""
 
     def SetStringSelection(self, s):
         if s in self._wx_items:
@@ -1830,11 +2675,11 @@ class Choice(_Choices):
 class ComboBox(_Choices):
     """A read-only combo is a <select>; an editable one is a text field with the choices as suggestions."""
 
-    def __init__(self, parent=None, id=ID_ANY, value="", pos=DefaultPosition, size=DefaultSize, choices=None, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, value="", pos=DefaultPosition, size=DefaultSize, choices=None, style=0, *more, **kw):
         self._ro = bool((style if isinstance(style, int) else 0) & CB_READONLY)
         self._TAG = "select" if self._ro else "input"
         self._CLS = ""
-        _Choices.__init__(self, parent, id, pos, size, choices, style, **kw)
+        _Choices.__init__(self, parent, id, pos, size, choices, style, *more, **kw)
         if isinstance(value, str) and value:
             self.SetValue(value)
 
@@ -1882,7 +2727,7 @@ class ComboBox(_Choices):
 
     def SetSelection(self, n, *_):
         if self._ro:
-            self.el.selectedIndex = int(n)
+            _Choices.SetSelection(self, n)
         elif 0 <= n < len(self._wx_items):
             self.el.value = self._wx_items[n]
 
@@ -2003,11 +2848,11 @@ class CheckListBox(_Choices):
 class RadioBox(Window):
     _TAG, _CLS = "fieldset", "wx-box"
 
-    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, choices=None, majorDimension=0, style=RA_SPECIFY_COLS, **kw):
+    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, choices=None, majorDimension=0, style=RA_SPECIFY_COLS, *more, **kw):
         self._choices = list(kw.get("choices", choices) or [])
         self._rlabel = label if isinstance(label, str) else ""
         self._major = majorDimension
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
 
     def _wx_build(self, kw):
         leg = _el("legend")
@@ -2076,9 +2921,9 @@ class SpinCtrl(Window):
     _TAG, _CLS = "input", ""
     _FLOAT = False
 
-    def __init__(self, parent=None, id=ID_ANY, value="", pos=DefaultPosition, size=DefaultSize, style=SP_ARROW_KEYS, min=0, max=100, initial=0, inc=1, **kw):
+    def __init__(self, parent=None, id=ID_ANY, value="", pos=DefaultPosition, size=DefaultSize, style=SP_ARROW_KEYS, min=0, max=100, initial=0, inc=1, *more, **kw):
         self._lo, self._hi, self._inc = kw.get("min", min), kw.get("max", max), kw.get("inc", inc)
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         try:
             start = float(value) if value not in ("", None) else kw.get("initial", initial)
         except (TypeError, ValueError):
@@ -2139,9 +2984,9 @@ SpinButton = SpinCtrl
 class Slider(Window):
     _TAG, _CLS = "input", ""
 
-    def __init__(self, parent=None, id=ID_ANY, value=0, minValue=0, maxValue=100, pos=DefaultPosition, size=DefaultSize, style=SL_HORIZONTAL, **kw):
+    def __init__(self, parent=None, id=ID_ANY, value=0, minValue=0, maxValue=100, pos=DefaultPosition, size=DefaultSize, style=SL_HORIZONTAL, *more, **kw):
         self._lo, self._hi = kw.get("minValue", minValue), kw.get("maxValue", maxValue)
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self.SetValue(value)
 
     def _wx_build(self, kw):
@@ -2172,9 +3017,9 @@ class Slider(Window):
 class Gauge(Window):
     _TAG, _CLS = "progress", ""
 
-    def __init__(self, parent=None, id=ID_ANY, range=100, pos=DefaultPosition, size=DefaultSize, style=GA_HORIZONTAL, **kw):
+    def __init__(self, parent=None, id=ID_ANY, range=100, pos=DefaultPosition, size=DefaultSize, style=GA_HORIZONTAL, *more, **kw):
         self._range = kw.get("range", range)
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
 
     def _wx_build(self, kw):
         self.el.max = self._range
@@ -2214,8 +3059,8 @@ class StaticLine(Window):
 class StaticBitmap(Window):
     _TAG, _CLS = "img", ""
 
-    def __init__(self, parent=None, id=ID_ANY, bitmap=None, pos=DefaultPosition, size=DefaultSize, style=0, **kw):
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+    def __init__(self, parent=None, id=ID_ANY, bitmap=None, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self.SetBitmap(kw.get("bitmap", bitmap))
 
     def SetBitmap(self, bmp):
@@ -2235,9 +3080,9 @@ GenericStaticBitmap = StaticBitmap
 class StaticBox(Window):
     _TAG, _CLS = "fieldset", "wx-box"
 
-    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._blabel = label if isinstance(label, str) else ""
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
 
     def _wx_build(self, kw):
         self._legend = _el("legend")
@@ -2255,9 +3100,9 @@ class StaticBox(Window):
 class HyperlinkCtrl(_Labelled):
     _TAG, _CLS = "a", ""
 
-    def __init__(self, parent=None, id=ID_ANY, label="", url="", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, label="", url="", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._url = kw.get("url", url)
-        _Labelled.__init__(self, parent, id, label or self._url, pos, size, style, **kw)
+        _Labelled.__init__(self, parent, id, label or self._url, pos, size, style, *more, **kw)
 
     def _wx_build(self, kw):
         self.el.title = str(self._url)
@@ -2365,9 +3210,9 @@ Choicebook = Listbook = Simplebook = Treebook = Toolbook = Notebook
 class CollapsiblePane(Window):
     _TAG, _CLS = "details", ""
 
-    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, label="", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._plabel = label if isinstance(label, str) else ""
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
 
     def _wx_build(self, kw):
         s = _el("summary")
@@ -2405,11 +3250,69 @@ class ListCtrl(Window):
 
     def InsertColumn(self, col, heading="", format=LIST_FORMAT_LEFT, width=-1):
         text = heading if isinstance(heading, str) else getattr(heading, "_text", "")
+        if not isinstance(heading, str) and getattr(heading, "_width", -1) > 0:
+            width = heading._width
         th = _el("th")
         th.textContent = text
         self._head.appendChild(th)
         self._cols.append(text)
+        self.__dict__.setdefault("_col_els", []).append(th)
+        self.__dict__.setdefault("_col_widths", []).append(-1)
+        if self._wx_style & LC_NO_HEADER:
+            self._head.style.display = "none"          # the columns stay (they carry the widths), the heading row is not shown
+        self.SetColumnWidth(len(self._cols) - 1, width)
         return len(self._cols) - 1
+
+    def SetColumnWidth(self, col, width):
+        widths = self.__dict__.setdefault("_col_widths", [])
+        if not 0 <= col < len(widths):
+            return False
+        widths[col] = int(width)
+        css = f"{int(width)}px" if width and width > 0 else ""
+        self.__dict__["_col_els"][col].style.width = css
+        for row in self._rows:
+            if col < len(row["tds"]):
+                row["tds"][col].style.width = css
+        return True
+
+    def GetColumnWidth(self, col):
+        widths = self.__dict__.get("_col_widths", [])
+        if not 0 <= col < len(widths):
+            return 0
+        if widths[col] > 0:
+            return widths[col]
+        if _DOM:
+            try:
+                w = int(self.__dict__["_col_els"][col].getBoundingClientRect().width)
+                if w <= 0 and self._rows and col < len(self._rows[0]["tds"]):
+                    w = int(self._rows[0]["tds"][col].getBoundingClientRect().width)
+                if w > 0:
+                    return w
+            except Exception:
+                pass
+        return 80
+
+    def GetColumn(self, col):
+        if not 0 <= col < len(self._cols):
+            return None
+        item = ListItem(self._cols[col], col)
+        item._width = self.GetColumnWidth(col)
+        return item
+
+    def SetColumn(self, col, item):
+        if not 0 <= col < len(self._cols):
+            return False
+        text = item if isinstance(item, str) else item.GetText()
+        self._cols[col] = text
+        self.__dict__["_col_els"][col].textContent = text
+        if not isinstance(item, str) and getattr(item, "_width", -1) > 0:
+            self.SetColumnWidth(col, item._width)
+        return True
+
+    def SetTextColour(self, colour):
+        return self.SetForegroundColour(colour)
+
+    GetTextColour = lambda self: self.GetForegroundColour()
 
     AppendColumn = lambda self, heading="", format=LIST_FORMAT_LEFT, width=-1: self.InsertColumn(len(self._cols), heading, format, width)
 
@@ -2520,8 +3423,20 @@ class ListCtrl(Window):
 
     def Select(self, index, on=True):
         if 0 <= index < len(self._rows):
-            self._rows[index]["sel"] = bool(on)
-            self._rows[index]["tr"].classList.toggle("sel", bool(on))
+            row = self._rows[index]
+            was = row["sel"]
+            if on and self._wx_style & LC_SINGLE_SEL:
+                for r in self._rows:
+                    if r is not row and r["sel"]:
+                        r["sel"] = False
+                        r["tr"].classList.remove("sel")
+            row["sel"] = bool(on)
+            row["tr"].classList.toggle("sel", bool(on))
+            if bool(on) != bool(was):          # wxWidgets tells the handlers about a selection made in code too
+                kind = EVT_LIST_ITEM_SELECTED if on else EVT_LIST_ITEM_DESELECTED          # noqa: F821
+                ev = Event(self, kind)
+                ev._int = index
+                self._wx_fire(kind, ev)
 
     def SetItemState(self, index, state, mask):
         if mask & LIST_STATE_SELECTED:
@@ -2536,8 +3451,7 @@ class ListCtrl(Window):
     def GetFocusedItem(self):
         return self.GetFirstSelected()
 
-    SetColumnWidth = EnsureVisible = SetImageList = AssignImageList = SetItemBackgroundColour = SetItemTextColour = SetItemFont = EnableCheckBoxes = SortItems = lambda self, *a, **k: None
-    GetColumnWidth = lambda self, c: 80
+    EnsureVisible = SetImageList = AssignImageList = SetItemBackgroundColour = SetItemTextColour = SetItemFont = EnableCheckBoxes = SortItems = lambda self, *a, **k: None
     IsItemChecked = lambda self, i: False
     CheckItem = lambda self, i, on=True: None
 
@@ -2545,9 +3459,24 @@ class ListCtrl(Window):
 ListView = ListCtrl
 
 
+LIST_MASK_STATE, LIST_MASK_TEXT, LIST_MASK_IMAGE, LIST_MASK_DATA, LIST_MASK_WIDTH, LIST_MASK_FORMAT = 1, 2, 4, 8, 64, 128
+
+
 class ListItem:
     def __init__(self, text="", index=0):
-        self._text, self._index = text, index
+        self._text, self._index, self._width, self._align = text, index, -1, 0
+
+    def GetWidth(self):
+        return self._width
+
+    def SetWidth(self, w):
+        self._width = int(w)
+
+    def GetAlign(self):
+        return self._align
+
+    def SetAlign(self, a):
+        self._align = a
 
     def GetText(self):
         return self._text
@@ -2559,7 +3488,17 @@ class ListItem:
         return self._index
 
     SetId = lambda self, i: setattr(self, "_index", i)
-    SetColumn = SetMask = SetWidth = SetAlign = SetImage = SetData = lambda self, *a: None
+    SetColumn = SetImage = SetData = lambda self, *a: None
+
+    def GetMask(self):
+        return self.__dict__.get("_mask", 0)
+
+    def SetMask(self, m):
+        self._mask = int(m)
+
+    GetColumn = lambda self: self.__dict__.get("_column", 0)
+    GetImage = lambda self: -1
+    GetData = lambda self: 0
 
 
 class ToolTip:
@@ -2578,9 +3517,9 @@ class _Picker(Window):
     _CLS = "wx-sizer wx-h"
     _DIR = False
 
-    def __init__(self, parent=None, id=ID_ANY, path="", message="", wildcard="*.*", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
+    def __init__(self, parent=None, id=ID_ANY, path="", message="", wildcard="*.*", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
         self._wild = kw.get("wildcard", wildcard)
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self.SetPath(kw.get("path", path))
 
     def _wx_build(self, kw):
@@ -2625,15 +3564,15 @@ class FilePickerCtrl(_Picker):
 class DirPickerCtrl(_Picker):
     _DIR = True
 
-    def __init__(self, parent=None, id=ID_ANY, path="", message="", pos=DefaultPosition, size=DefaultSize, style=0, **kw):
-        _Picker.__init__(self, parent, id, path, message, "", pos, size, style, **kw)
+    def __init__(self, parent=None, id=ID_ANY, path="", message="", pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        _Picker.__init__(self, parent, id, path, message, "", pos, size, style, *more, **kw)
 
 
 class ColourPickerCtrl(Window):
     _TAG, _CLS = "input", ""
 
-    def __init__(self, parent=None, id=ID_ANY, colour=None, pos=DefaultPosition, size=DefaultSize, style=0, **kw):
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+    def __init__(self, parent=None, id=ID_ANY, colour=None, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self.SetColour(kw.get("colour", colour) or BLACK)
 
     def _wx_build(self, kw):
@@ -3212,7 +4151,7 @@ class StdDialogButtonSizer(BoxSizer):
 class TopLevelWindow(Window):
     _CLS = "wx-top"
 
-    def __init__(self, parent=None, id=ID_ANY, title="", pos=DefaultPosition, size=DefaultSize, style=DEFAULT_DIALOG_STYLE, name="", **kw):
+    def __init__(self, parent=None, id=ID_ANY, title="", pos=DefaultPosition, size=DefaultSize, style=DEFAULT_DIALOG_STYLE, name="", *more, **kw):
         self._wx_title = title if isinstance(title, str) else ""
         self._wx_modal = False
         self._wx_return = ID_CANCEL
@@ -3405,7 +4344,7 @@ class StatusBar(Window):
 
 
 class Frame(TopLevelWindow):
-    def __init__(self, parent=None, id=ID_ANY, title="", pos=DefaultPosition, size=DefaultSize, style=DEFAULT_FRAME_STYLE, name="frame", **kw):
+    def __init__(self, parent=None, id=ID_ANY, title="", pos=DefaultPosition, size=DefaultSize, style=DEFAULT_FRAME_STYLE, name="frame", *more, **kw):
         TopLevelWindow.__init__(self, parent, id, title, pos, size, style, name, **kw)
 
 
@@ -3413,7 +4352,7 @@ MiniFrame = Frame
 
 
 class Dialog(TopLevelWindow):
-    def __init__(self, parent=None, id=ID_ANY, title="", pos=DefaultPosition, size=DefaultSize, style=DEFAULT_DIALOG_STYLE, name="dialog", **kw):
+    def __init__(self, parent=None, id=ID_ANY, title="", pos=DefaultPosition, size=DefaultSize, style=DEFAULT_DIALOG_STYLE, name="dialog", *more, **kw):
         TopLevelWindow.__init__(self, parent, id, title, pos, size, style, name, **kw)
         self._affirmative, self._escape = ID_OK, ID_CANCEL
 
@@ -3539,7 +4478,7 @@ def _log_message(kind, text):
 
 
 class MessageDialog(Dialog):
-    def __init__(self, parent=None, message="", caption="Message", style=OK | CENTRE, pos=DefaultPosition, **kw):
+    def __init__(self, parent=None, message="", caption="Message", style=OK | CENTRE, pos=DefaultPosition, *more, **kw):
         self._message, self._caption, self._mstyle = str(message), str(caption), style
         self._ext = ""
         self._labels = {}
@@ -3592,7 +4531,7 @@ GenericMessageDialog = RichMessageDialog = MessageDialog
 
 
 class TextEntryDialog(MessageDialog):
-    def __init__(self, parent=None, message="", caption="Please enter text", value="", style=OK | CANCEL, pos=DefaultPosition, **kw):
+    def __init__(self, parent=None, message="", caption="Please enter text", value="", style=OK | CANCEL, pos=DefaultPosition, *more, **kw):
         MessageDialog.__init__(self, parent, message, caption, style)
         self._value = str(kw.get("value", value))
         self._password = False
@@ -3635,7 +4574,7 @@ def GetNumberFromUser(message, prompt, caption, value, min=0, max=100, parent=No
 
 
 class SingleChoiceDialog(MessageDialog):
-    def __init__(self, parent=None, message="", caption="", choices=None, style=OK | CANCEL, **kw):
+    def __init__(self, parent=None, message="", caption="", choices=None, style=OK | CANCEL, *more, **kw):
         MessageDialog.__init__(self, parent, message, caption, style)
         self._choices = [str(c) for c in (kw.get("choices", choices) or [])]
         self._sel = 0
@@ -3663,7 +4602,7 @@ class FileDialog(MessageDialog):
     """Opening reads a file the person picks into the plugin's own file system; saving names a file
     in the output folder, which the editor offers as a download when the plugin is done."""
 
-    def __init__(self, parent=None, message="Select a file", defaultDir="", defaultFile="", wildcard="*.*", style=FD_DEFAULT_STYLE, pos=DefaultPosition, **kw):
+    def __init__(self, parent=None, message="Select a file", defaultDir="", defaultFile="", wildcard="*.*", style=FD_DEFAULT_STYLE, pos=DefaultPosition, *more, **kw):
         MessageDialog.__init__(self, parent, message, kw.get("message", message), style)
         self._dir, self._file = str(kw.get("defaultDir", defaultDir) or ""), str(kw.get("defaultFile", defaultFile) or "")
         self._wild = str(kw.get("wildcard", wildcard) or "")
@@ -3749,7 +4688,7 @@ def _out_dir():
 class DirDialog(MessageDialog):
     """There are no folders to choose from in a browser: the plugin is given the output folder."""
 
-    def __init__(self, parent=None, message="Choose a directory", defaultPath="", style=DD_DEFAULT_STYLE, pos=DefaultPosition, **kw):
+    def __init__(self, parent=None, message="Choose a directory", defaultPath="", style=DD_DEFAULT_STYLE, pos=DefaultPosition, *more, **kw):
         MessageDialog.__init__(self, parent, message, message, style)
         self._path = str(kw.get("defaultPath", defaultPath) or "") or _out_dir()
 
@@ -3855,9 +4794,35 @@ WindowDisabler = BusyCursor
 BeginBusyCursor = EndBusyCursor = lambda *a: None
 IsBusy = lambda: False
 HOURGLASS_CURSOR = STANDARD_CURSOR = NullCursor = None
-CURSOR_WAIT, CURSOR_ARROW, CURSOR_HAND = 1, 0, 2
+(CURSOR_ARROW, CURSOR_WAIT, CURSOR_HAND, CURSOR_CROSS, CURSOR_IBEAM, CURSOR_SIZING, CURSOR_SIZENS, CURSOR_SIZEWE, CURSOR_SIZENESW,
+ CURSOR_SIZENWSE, CURSOR_NO_ENTRY, CURSOR_ARROWWAIT, CURSOR_BLANK, CURSOR_MAGNIFIER, CURSOR_QUESTION_ARROW, CURSOR_PENCIL,
+ CURSOR_BULLSEYE, CURSOR_DEFAULT, CURSOR_NONE, CURSOR_RIGHT_ARROW, CURSOR_CHAR, CURSOR_LEFT_BUTTON, CURSOR_MIDDLE_BUTTON,
+ CURSOR_RIGHT_BUTTON, CURSOR_PAINT_BRUSH, CURSOR_POINT_LEFT, CURSOR_POINT_RIGHT, CURSOR_SPRAYCAN, CURSOR_WATCH, CURSOR_OPEN_HAND,
+ CURSOR_CLOSED_HAND) = range(31)
+_CURSOR_CSS = {CURSOR_ARROW: "default", CURSOR_WAIT: "wait", CURSOR_HAND: "pointer", CURSOR_CROSS: "crosshair", CURSOR_IBEAM: "text",
+               CURSOR_SIZING: "move", CURSOR_SIZENS: "ns-resize", CURSOR_SIZEWE: "ew-resize", CURSOR_SIZENESW: "nesw-resize",
+               CURSOR_SIZENWSE: "nwse-resize", CURSOR_NO_ENTRY: "not-allowed", CURSOR_ARROWWAIT: "progress", CURSOR_BLANK: "none",
+               CURSOR_MAGNIFIER: "zoom-in", CURSOR_QUESTION_ARROW: "help", CURSOR_PENCIL: "crosshair", CURSOR_BULLSEYE: "crosshair",
+               CURSOR_DEFAULT: "", CURSOR_NONE: "", CURSOR_WATCH: "wait", CURSOR_OPEN_HAND: "grab", CURSOR_CLOSED_HAND: "grabbing"}
+
+
 class Cursor(_Thing):
-    pass
+    def __init__(self, *a, **k):
+        _Thing.__init__(self, *a, **k)
+        self._stock = a[0] if a and isinstance(a[0], int) else CURSOR_DEFAULT
+
+    def IsOk(self):
+        return True
+
+
+def _win_set_cursor(self, cursor=None):
+    stock = getattr(cursor, "_stock", CURSOR_DEFAULT) if cursor is not None else CURSOR_DEFAULT
+    self.el.style.cursor = _CURSOR_CSS.get(stock, "")
+    return True
+
+
+Window.SetCursor = _win_set_cursor
+NullCursor = Cursor(CURSOR_DEFAULT)
 
 
 StockCursor = Cursor
@@ -4032,8 +4997,7 @@ Bell = lambda: None
 
 def CallAfter(fn, *a, **k):
     if _DOM:
-        from pyodide.ffi import create_once_callable
-        _kc().later(create_once_callable(lambda: _call(fn, *a, **k)), 0)
+        _kc().later(_once(lambda: _call(fn, *a, **k)), 0)
     else:
         fn(*a, **k)
 
@@ -4042,8 +5006,7 @@ class CallLater:
     def __init__(self, millis, fn, *a, **k):
         self._fn, self._a, self._k, self._running = fn, a, k, True
         if _DOM:
-            from pyodide.ffi import create_once_callable
-            _kc().later(create_once_callable(self._go), int(millis))
+            _kc().later(_once(self._go), int(millis))
 
     def _go(self):
         if self._running:
@@ -4599,8 +5562,8 @@ class ToolBar(Window):
     """A row of tool buttons; a click fires EVT_TOOL (and EVT_MENU) with the tool's id, as on the desktop."""
     _CLS = "wx-toolbar"
 
-    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, **kw):
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self._tools = {}
 
     def AddTool(self, toolId=ID_ANY, label="", bitmap=None, *a, **kw):
@@ -4715,8 +5678,8 @@ class SplitterWindow(Window):
     """Two panes side by side or stacked.  The sash is fixed where the browser lays the panes out."""
     _CLS = "wx-split"
 
-    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, **kw):
-        Window.__init__(self, parent, id, pos, size, style, **kw)
+    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        Window.__init__(self, parent, id, pos, size, style, *more, **kw)
         self._panes = [None, None]
         self._sash = 0
 
@@ -4854,7 +5817,6 @@ class PopupWindow(Panel):
         return True
 
 
-PopupTransientWindow = PopupWindow
 
 
 class StyledTextCtrl(TextCtrl):
@@ -4933,47 +5895,491 @@ class ImageList:
     RemoveAll = lambda self: True
 
 
-class DC:
-    """Custom drawing is not carried to the web; the calls are accepted."""
-
-    def __init__(self, *a, **k):
-        pass
-
-    def GetTextExtent(self, text):
-        return (int(len(str(text)) * 7), 16)
-
-    GetMultiLineTextExtent = GetTextExtent
-    GetFullTextExtent = lambda self, text, *_: (int(len(str(text)) * 7), 16, 0, 0)
-    GetSize = lambda self: Size(100, 100)
-    GetCharHeight = lambda self: 16
-    GetCharWidth = lambda self: 7
-
-    def __getattr__(self, name):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return lambda *a, **k: None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-PaintDC = ClientDC = MemoryDC = BufferedPaintDC = AutoBufferedPaintDC = WindowDC = ScreenDC = BufferedDC = GCDC = DC
-class Pen(_Thing):
-    pass
-
-
-class Brush(_Thing):
-    pass
-BLACK_PEN = WHITE_PEN = TRANSPARENT_PEN = BLACK_BRUSH = WHITE_BRUSH = TRANSPARENT_BRUSH = NullPen = NullBrush = None
-GraphicsContext = type("GraphicsContext", (), {"Create": staticmethod(lambda *a: DC())})
+# ----------------------------------------------------------------------------- drawing (wx/_paint.py)
+from . import _paint          # noqa: E402
+from ._paint import (DC, PaintDC, BufferedPaintDC, AutoBufferedPaintDC, ClientDC, WindowDC, ScreenDC, MemoryDC, BufferedDC, GCDC,          # noqa: E402,F401
+                     AutoBufferedPaintDCFactory, Pen, PenInfo, Brush, GraphicsContext, GraphicsPath, GraphicsRenderer, GraphicsGradientStops,
+                     MouseEvent, ThePenList, TheBrushList,
+                     BLACK_PEN, WHITE_PEN, RED_PEN, GREEN_PEN, BLUE_PEN, CYAN_PEN, GREY_PEN, MEDIUM_GREY_PEN, LIGHT_GREY_PEN, TRANSPARENT_PEN, NullPen, NullGraphicsPen,
+                     BLACK_BRUSH, WHITE_BRUSH, RED_BRUSH, GREEN_BRUSH, BLUE_BRUSH, CYAN_BRUSH, GREY_BRUSH, MEDIUM_GREY_BRUSH, LIGHT_GREY_BRUSH, TRANSPARENT_BRUSH,
+                     NullBrush, NullGraphicsBrush, PENSTYLE_DOT, PENSTYLE_LONG_DASH, PENSTYLE_SHORT_DASH, PENSTYLE_DOT_DASH, PENSTYLE_USER_DASH,
+                     PENSTYLE_TRANSPARENT, BRUSHSTYLE_TRANSPARENT)
+DOT, LONG_DASH, SHORT_DASH, DOT_DASH, USER_DASH = PENSTYLE_DOT, PENSTYLE_LONG_DASH, PENSTYLE_SHORT_DASH, PENSTYLE_DOT_DASH, PENSTYLE_USER_DASH
+BG_STYLE_ERASE, BG_STYLE_SYSTEM, BG_STYLE_PAINT, BG_STYLE_COLOUR, BG_STYLE_TRANSPARENT, BG_STYLE_CUSTOM = 0, 1, 2, 3, 4, 2
+ANTIALIAS_NONE, ANTIALIAS_DEFAULT = 0, 1
+INTERPOLATION_DEFAULT, INTERPOLATION_NONE, INTERPOLATION_FAST, INTERPOLATION_GOOD, INTERPOLATION_BEST = 0, 1, 2, 3, 4
+CAP_ROUND, CAP_PROJECTING, CAP_BUTT, JOIN_BEVEL, JOIN_MITER, JOIN_ROUND = 130, 131, 132, 120, 121, 122
+ODDEVEN_RULE, WINDING_RULE = 1, 2
+IMAGE_QUALITY_NEAREST, IMAGE_QUALITY_BILINEAR, IMAGE_QUALITY_BICUBIC, IMAGE_QUALITY_BOX_AVERAGE, IMAGE_QUALITY_NORMAL, IMAGE_QUALITY_HIGH = 0, 1, 2, 3, 0, 4
+BufferedPaintDCFactory = AutoBufferedPaintDCFactory
 
 
 def _stub_class(name):
     cls = type(name, (_Stub,), {})
     return cls
+
+
+# ----------------------------------------------------------------------------- keys, focus, scrolling, owner-drawn lists
+import math as _math          # noqa: E402
+from ._paint import KeyEvent, FocusEvent          # noqa: E402,F401
+
+SpinEvent = SpinDoubleEvent = BookCtrlEvent = NotebookEvent = ScrollWinEvent = ChildFocusEvent = EraseEvent = PaintEvent = Event
+for _n in ("SCROLLWIN_THUMBTRACK", "SCROLLWIN_THUMBRELEASE", "SCROLLWIN_TOP", "SCROLLWIN_BOTTOM", "SCROLLWIN_LINEUP", "SCROLLWIN_LINEDOWN",
+           "SCROLLWIN_PAGEUP", "SCROLLWIN_PAGEDOWN"):
+    globals()["EVT_" + _n] = _binder("EVT_" + _n, False)
+del _n
+(WXK_END, WXK_HOME, WXK_INSERT, WXK_PAGEUP, WXK_PAGEDOWN, WXK_SHIFT, WXK_ALT, WXK_CONTROL, WXK_MENU, WXK_PAUSE, WXK_CAPITAL) = (
+    312, 313, 322, 366, 367, 306, 307, 308, 309, 310, 311)
+for _i in range(1, 25):
+    globals()["WXK_F%d" % _i] = 339 + _i
+del _i
+WXK_NUMPAD0 = 324
+(WXK_NUMPAD_SPACE, WXK_NUMPAD_TAB, WXK_NUMPAD_HOME, WXK_NUMPAD_LEFT, WXK_NUMPAD_UP, WXK_NUMPAD_RIGHT, WXK_NUMPAD_DOWN, WXK_NUMPAD_PAGEUP,
+ WXK_NUMPAD_PAGEDOWN, WXK_NUMPAD_END, WXK_NUMPAD_DELETE, WXK_NUMPAD_ADD, WXK_NUMPAD_SUBTRACT) = (368, 369, 375, 376, 377, 378, 379, 380, 381, 382, 385, 388, 390)
+WXK_NONE, WXK_WINDOWS_LEFT, WXK_WINDOWS_RIGHT, WXK_COMMAND = 0, 393, 394, 308
+_focus = [None]          # the window that has the keyboard
+
+
+def FindFocus():
+    return _focus[0]
+
+
+Window.FindFocus = staticmethod(FindFocus)
+
+
+def GetTopLevelParent(window):
+    return window.GetTopLevelParent() if window is not None else None
+
+
+BORDER_MASK = 0x1f200000
+SP_3D, SP_LIVE_UPDATE, SP_BORDER, SP_NOBORDER, SP_3DSASH, SP_3DBORDER, SP_NOSASH, SP_THIN_SASH, SP_PERMIT_UNSPLIT = 0x00C0, 0x0080, 0x0200, 0, 0x0100, 0x0200, 0x0010, 0, 0x0040
+EVT_LIST_ITEM_FOCUSED = _binder("EVT_LIST_ITEM_FOCUSED")
+
+
+def GetStockLabel(id, flags=0):
+    return Button._STOCK.get(id, "")
+
+
+def _win_has_focus(self):
+    return _focus[0] is self or bool(self.__dict__.get("_wx_focused"))
+
+
+def _win_set_focus(self):
+    _paint._focusable(self)
+    try:
+        self.el.focus()
+    except Exception:
+        pass
+    if not _DOM and _focus[0] is not self:
+        old, _focus[0] = _focus[0], self
+        if old is not None:
+            old.__dict__["_wx_focused"] = False
+            old._wx_fire(EVT_KILL_FOCUS, FocusEvent(old, EVT_KILL_FOCUS, self))          # noqa: F821
+        self.__dict__["_wx_focused"] = True
+        self._wx_fire(EVT_SET_FOCUS, FocusEvent(self, EVT_SET_FOCUS, old))          # noqa: F821
+
+
+def _win_scroller(self):
+    return self.el
+
+
+def _win_scroll_pos(self, orientation=VERTICAL):
+    try:
+        el = self._wx_scroller()
+        return int(el.scrollLeft if orientation == HORIZONTAL else el.scrollTop)
+    except Exception:
+        return 0
+
+
+def _win_set_scroll_pos(self, orientation, pos, refresh=True):
+    try:
+        el = self._wx_scroller()
+        if orientation == HORIZONTAL:
+            el.scrollLeft = int(pos)
+        else:
+            el.scrollTop = int(pos)
+    except Exception:
+        pass
+
+
+def _win_scroll_range(self, orientation=VERTICAL):
+    try:
+        el = self._wx_scroller()
+        return int(el.scrollWidth if orientation == HORIZONTAL else el.scrollHeight)
+    except Exception:
+        return 0
+
+
+def _win_scroll_thumb(self, orientation=VERTICAL):
+    w, h = self._wx_box()
+    return w if orientation == HORIZONTAL else h
+
+
+def _win_screen_pos(self):
+    if _DOM:
+        try:
+            r = self.el.getBoundingClientRect()
+            return Point(int(r.left), int(r.top))
+        except Exception:
+            pass
+    return Point(0, 0)
+
+
+def _win_pos(self):
+    if _DOM:
+        try:
+            return Point(int(self.el.offsetLeft), int(self.el.offsetTop))
+        except Exception:
+            pass
+    return Point(0, 0)
+
+
+def _xy(a):
+    if len(a) >= 2:
+        return int(a[0]), int(a[1])
+    p = a[0] if a else (0, 0)
+    return int(p[0]), int(p[1])
+
+
+def _win_to_screen(self, *a):
+    x, y = _xy(a)
+    o = _win_screen_pos(self)
+    return Point(o.x + x, o.y + y)
+
+
+def _win_to_client(self, *a):
+    x, y = _xy(a)
+    o = _win_screen_pos(self)
+    return Point(x - o.x, y - o.y)
+
+
+def _win_text_extent(self, text):
+    w, h = _paint.text_extent(text, self.GetFont())
+    return Size(int(_math.ceil(w)), int(_math.ceil(h)))
+
+
+Window.HasFocus = _win_has_focus
+Window.SetFocus = Window.SetFocusFromKbd = _win_set_focus
+Window._wx_scroller = _win_scroller
+Window.GetScrollPos = _win_scroll_pos
+Window.SetScrollPos = _win_set_scroll_pos
+Window.GetScrollRange = _win_scroll_range
+Window.GetScrollThumb = _win_scroll_thumb
+Window.SetScrollbar = lambda self, *a, **k: None
+Window.ScrollWindow = lambda self, *a, **k: None
+Window.SetThemeEnabled = lambda self, *a: None
+Window.GetThemeEnabled = lambda self: False
+Window.UnsetToolTip = lambda self: Window.SetToolTip(self, "")
+Window.GetScreenPosition = _win_screen_pos
+Window.GetPosition = _win_pos
+Window.GetScreenRect = lambda self: Rect(_win_screen_pos(self).x, _win_screen_pos(self).y, *self._wx_box())
+Window.ClientToScreen = _win_to_screen
+Window.ScreenToClient = _win_to_client
+Window.GetTextExtent = _win_text_extent
+Window.GetFullTextExtent = lambda self, text, *a: (_win_text_extent(self, text).x, _win_text_extent(self, text).y, 0, 0)
+Window.AcceptsFocus = Window.AcceptsFocusFromKeyboard = Window.CanAcceptFocus = lambda self: True
+Window.IsShownOnScreen = lambda self: self.IsShown()
+App.SetAppearance = lambda self, *a: 0
+App.GetAppearance = lambda self: 0
+
+
+class VListBox(Panel):
+    """A list whose rows the plugin measures and draws itself (OnMeasureItem, OnDrawItem): the rows are
+    painted on one canvas as tall as the whole list, inside a box that scrolls."""
+
+    def __init__(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        self._vl_count, self._vl_sel, self._vl_multi = 0, -1, set()
+        self._vl_heights, self._vl_selbg = [], None
+        Panel.__init__(self, parent, id, pos, size, style, *more, **kw)
+        self.el.style.overflowY = "auto"
+        self.el.style.overflowX = "hidden"
+        if not (size is not None and tuple(size)[1] > 0):
+            self.el.style.minHeight = "60px"
+        self._vl_rows = Panel(self)
+        self._vl_rows.el.style.width = "100%"
+        self._vl_rows.Bind(EVT_PAINT, self._vl_paint)          # noqa: F821
+        for binder in (EVT_LEFT_DOWN, EVT_LEFT_DCLICK, EVT_KEY_DOWN):          # noqa: F821
+            _paint.wire(self, binder)
+
+    # -- for the plugin to override
+    def OnMeasureItem(self, index):
+        return 20
+
+    def OnDrawItem(self, dc, rect, index):
+        pass
+
+    def OnDrawSeparator(self, dc, rect, index):
+        pass
+
+    def OnDrawBackground(self, dc, rect, index):
+        if self.IsSelected(index):
+            dc.SetBrush(Brush(self._vl_selbg or SystemSettings.GetColour(SYS_COLOUR_HIGHLIGHT)))
+            dc.SetPen(TRANSPARENT_PEN)
+            dc.DrawRectangle(rect)
+
+    # -- rows
+    def _vl_measure(self):
+        hs = []
+        for i in range(self._vl_count):
+            try:
+                hs.append(max(1, int(self.OnMeasureItem(i))))
+            except Exception:
+                hs.append(20)
+        self._vl_heights = hs
+        total = sum(hs)
+        self._vl_rows.el.style.height = f"{total}px"
+        self._vl_rows.__dict__["_wx_min"] = (-1, total)
+        return total
+
+    def _vl_width(self):
+        w = self._wx_box()[0]
+        return w if w > 0 else 200
+
+    def _vl_paint(self, event=None):
+        dc = PaintDC(self._vl_rows)
+        w, y = self._vl_width(), 0
+        for i, h in enumerate(self._vl_heights):
+            r = Rect(0, y, w, h)
+            self.OnDrawBackground(dc, Rect(r.x, r.y, r.width, r.height), i)
+            self.OnDrawSeparator(dc, r, i)
+            self.OnDrawItem(dc, r, i)
+            y += h
+
+    def SetItemCount(self, count):
+        self._vl_count = max(0, int(count))
+        if self._vl_sel >= self._vl_count:
+            self._vl_sel = -1
+        self._vl_multi = {i for i in self._vl_multi if i < self._vl_count}
+        self._vl_measure()
+        self.RefreshAll()
+
+    SetRowCount = SetItemCount
+    GetItemCount = GetRowCount = lambda self: self._vl_count
+
+    def Clear(self):
+        self.SetItemCount(0)
+
+    def RefreshAll(self, *_):
+        if len(self._vl_heights) != self._vl_count:
+            self._vl_measure()
+        _paint.schedule_paint(self._vl_rows)
+
+    RefreshRow = RefreshRows = Refresh = RefreshAll
+
+    def GetSelection(self):
+        return self._vl_sel
+
+    def SetSelection(self, index):
+        index = int(index)
+        self._vl_sel = index if 0 <= index < self._vl_count else -1
+        if self._vl_sel >= 0:
+            self.ScrollToRow(self._vl_sel, False)
+        self.RefreshAll()
+        return True
+
+    def IsSelected(self, index):
+        return index == self._vl_sel or index in self._vl_multi
+
+    IsCurrent = lambda self, index: index == self._vl_sel
+    HasMultipleSelection = lambda self: bool(self._wx_style & LB_MULTIPLE)
+    GetSelectedCount = lambda self: len(self._vl_multi) if self._vl_multi else (1 if self._vl_sel >= 0 else 0)
+
+    def Select(self, index, select=True):
+        if select:
+            self._vl_multi.add(int(index))
+        else:
+            self._vl_multi.discard(int(index))
+        self.RefreshAll()
+        return True
+
+    def SelectAll(self):
+        self._vl_multi = set(range(self._vl_count))
+        self.RefreshAll()
+
+    def DeselectAll(self):
+        self._vl_multi = set()
+        self.RefreshAll()
+
+    def GetFirstSelected(self):
+        s = sorted(self._vl_multi)
+        return (s[0], 0) if s else (-1, 0)
+
+    def GetNextSelected(self, cookie):
+        s = sorted(self._vl_multi)
+        return (s[cookie + 1], cookie + 1) if cookie + 1 < len(s) else (-1, cookie)
+
+    def SetSelectionBackground(self, colour):
+        self._vl_selbg = colour
+
+    GetSelectionBackground = lambda self: self._vl_selbg or SystemSettings.GetColour(SYS_COLOUR_HIGHLIGHT)
+    SetMargins = lambda self, *a: None
+    GetMargins = lambda self: Point(0, 0)
+
+    def _vl_top(self, index):
+        return sum(self._vl_heights[:index])
+
+    def VirtualHitTest(self, y):
+        y = int(y) + self.GetScrollPos(VERTICAL)
+        top = 0
+        for i, h in enumerate(self._vl_heights):
+            if top <= y < top + h:
+                return i
+            top += h
+        return NOT_FOUND
+
+    def HitTest(self, *a):
+        return self.VirtualHitTest(_xy(a)[1])
+
+    def GetItemRect(self, index):
+        if not 0 <= index < len(self._vl_heights):
+            return Rect(0, 0, 0, 0)
+        return Rect(0, self._vl_top(index) - self.GetScrollPos(VERTICAL), self._vl_width(), self._vl_heights[index])
+
+    def GetVisibleRowsBegin(self):
+        i = self.VirtualHitTest(0)
+        return max(0, i)
+
+    def GetVisibleRowsEnd(self):
+        h = self._wx_box()[1]
+        i = self.VirtualHitTest(max(0, h - 1)) if h > 0 else NOT_FOUND
+        return self._vl_count if i == NOT_FOUND else i + 1
+
+    GetVisibleBegin, GetVisibleEnd = GetVisibleRowsBegin, GetVisibleRowsEnd
+
+    def IsVisible(self, index):
+        return self.GetVisibleRowsBegin() <= index < self.GetVisibleRowsEnd()
+
+    IsRowVisible = IsVisible
+
+    def ScrollToRow(self, index, always=True):
+        if not 0 <= index < len(self._vl_heights):
+            return False
+        top, h, view = self._vl_top(index), self._vl_heights[index], self._wx_box()[1]
+        pos = self.GetScrollPos(VERTICAL)
+        if always or top < pos:
+            self.SetScrollPos(VERTICAL, top)
+        elif view > 0 and top + h > pos + view:
+            self.SetScrollPos(VERTICAL, top + h - view)
+        return True
+
+    ScrollToLine = ScrollToRow
+    ScrollRows = ScrollLines = ScrollRowPages = ScrollPages = lambda self, *a: False
+
+    def DoGetBestSize(self):
+        return Size(120, max(60, min(240, sum(self._vl_heights))))
+
+    # -- what the list does by itself with a click or a key the plugin did not take
+    def _vl_choose(self, index, binder):
+        if index == NOT_FOUND:
+            return
+        self._vl_sel = index
+        self.RefreshAll()
+        ev = Event(self, binder)
+        ev._int = index
+        ev.GetInt = ev.GetSelection = lambda: index
+        self._wx_fire(binder, ev)
+
+    def _wx_default_mouse(self, ev):
+        if ev._kind == "mousedown" and ev._button in (0, -1):
+            self.SetFocus()
+            self._vl_choose(self.VirtualHitTest(ev.GetY()), EVT_LISTBOX)          # noqa: F821
+        elif ev._kind == "dblclick":
+            self._vl_choose(self.VirtualHitTest(ev.GetY()), EVT_LISTBOX_DCLICK)          # noqa: F821
+
+    def _wx_default_key(self, ev):
+        code, n = ev.GetKeyCode(), self._vl_count
+        if not n:
+            return False
+        step = {WXK_UP: -1, WXK_DOWN: 1, WXK_PAGEUP: -8, WXK_PAGEDOWN: 8}.get(code)
+        if code == WXK_HOME:
+            target = 0
+        elif code == WXK_END:
+            target = n - 1
+        elif step is not None:
+            target = max(0, min(n - 1, (self._vl_sel if self._vl_sel >= 0 else (0 if step > 0 else n) - step) + step))
+        else:
+            return False
+        self.ScrollToRow(target, False)
+        self._vl_choose(target, EVT_LISTBOX)          # noqa: F821
+        return True
+
+
+HtmlListBox = SimpleHtmlListBox = VListBox
+VScrolledWindow = HVScrolledWindow = HScrolledWindow = ScrolledWindow
+
+
+class PopupTransientWindow(PopupWindow):
+    """A popup that goes away when the person clicks anywhere else (a drop-down list, a small editor)."""
+
+    def __init__(self, parent=None, flags=0, *a, **kw):
+        PopupWindow.__init__(self, parent, flags)
+        self.__dict__["_wx_owner"] = parent
+        if _DOM:
+            def outside(e=None):
+                if self.el.hidden or getattr(self, "_wx_destroyed", False):
+                    return
+                try:
+                    if self.el.contains(e.target):
+                        return
+                    owner = self.__dict__.get("_wx_owner")
+                    if owner is not None and owner.el.contains(e.target) and self.__dict__.get("_wx_just_shown"):
+                        return
+                except Exception:
+                    return
+                self.Dismiss()
+            _listen(_js.document, "mousedown", outside)
+
+    def Popup(self, focus=None):
+        self.__dict__["_wx_just_shown"] = True
+        PopupWindow.Popup(self, focus)
+        self.el.style.zIndex = "100000"
+        if _DOM:
+            _kc().later(_once(lambda: self.__dict__.__setitem__("_wx_just_shown", False)), 0)
+        else:
+            self.__dict__["_wx_just_shown"] = False
+        if focus is not None and hasattr(focus, "SetFocus"):
+            focus.SetFocus()
+
+    def Dismiss(self):
+        was = not self.el.hidden
+        self.el.hidden = True
+        if was:
+            self.OnDismiss()
+
+    def IsShown(self):
+        return not self.el.hidden
+
+
+def _popup_position(self, origin=None, size=None):
+    """Position(point on the screen, size of the thing it belongs to): just below that thing."""
+    if origin is None:
+        return
+    x, y = int(origin[0]), int(origin[1])
+    h = int(size[1]) if size is not None else 0
+    self.el.style.position = "fixed"
+    self.el.style.left = f"{x}px"
+    self.el.style.top = f"{y + h}px"
+
+
+def _popup_set_size(self, *a, **k):
+    nums = [int(v) for v in (a[0] if len(a) == 1 and not isinstance(a[0], (int, float)) else a)]
+    if len(nums) == 4:
+        self.el.style.position = "fixed"
+        self.el.style.left, self.el.style.top = f"{nums[0]}px", f"{nums[1]}px"
+        nums = nums[2:]
+    if len(nums) >= 2:
+        if nums[0] > 0:
+            self.el.style.width = f"{nums[0]}px"
+        if nums[1] > 0:
+            self.el.style.height = f"{nums[1]}px"
+        self.__dict__["_wx_min"] = (nums[0], nums[1])
+
+
+PopupWindow.Position = _popup_position
+PopupWindow.SetSize = PopupWindow.SetClientSize = PopupWindow.SetInitialSize = _popup_set_size
+PopupWindow.Move = PopupWindow.SetPosition = lambda self, *a: _popup_position(self, Point(*_xy(a)))
+ComboPopup = PopupTransientWindow
+
 
 
 _SUBMODULES = ("adv", "lib", "grid", "dataview", "xrc", "html", "html2", "aui", "richtext", "stc", "propgrid", "svg", "media", "glcanvas", "core", "ribbon")

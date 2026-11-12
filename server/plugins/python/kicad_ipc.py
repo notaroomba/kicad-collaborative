@@ -298,7 +298,9 @@ def _shape(s):
         _net(m.net, s)
     g = m.shape
     g.attributes.stroke.width.value_nm = int(_try(s.GetWidth, 0) or 0)
-    g.attributes.stroke.style = _p()["en"].SLS_SOLID
+    # the file's line styles in order (default, solid, dash, dot, dash-dot, dash-dot-dot); KiCad reports "default" as solid
+    g.attributes.stroke.style = (_p()["en"].SLS_SOLID, _p()["en"].SLS_SOLID, _p()["en"].SLS_DASH, _p()["en"].SLS_DOT, _p()["en"].SLS_DASHDOT,
+                                 _p()["en"].SLS_DASHDOTDOT)[int(_try(s.GetLineStyle, 0) or 0)]
     filled = bool(_try(s.IsFilled, False))
     g.attributes.fill.fill_type = getattr(base, "GFT_FILLED", 2) if filled else getattr(base, "GFT_UNFILLED", 1)
     kind = s.GetShape()
@@ -665,6 +667,8 @@ def _write_shape(s, m):
     elif which == "bezier":
         raise ApiFail("Bezier curves cannot be created through the IPC interface in the web editor yet")
     s.SetWidth(int(g.attributes.stroke.width.value_nm))
+    en = _p()["en"]
+    s.SetLineStyle({en.SLS_SOLID: 1, en.SLS_DASH: 2, en.SLS_DOT: 3, en.SLS_DASHDOT: 4, en.SLS_DASHDOTDOT: 5}.get(g.attributes.stroke.style, 0))
     if which in ("rectangle", "circle", "polygon"):
         s.SetFilled(g.attributes.fill.fill_type == getattr(base, "GFT_FILLED", 2))
     layer = _unlayer(m.layer)
@@ -916,6 +920,14 @@ def create_items(cmd):
         try:
             item = cls(board)
             write(item, m)
+            # KiCad keeps the identifier a caller supplies for a new item, as long as nothing on the board has it yet.
+            want = str(_message_id(name, m) or "")
+            if want and board.GetItem(want) is None:
+                try:
+                    import uuid as _uuid
+                    pcbnew._set_kid(item._node, "uuid", str(_uuid.UUID(want)))
+                except (ValueError, AttributeError):
+                    pass
             board.Add(item)
             res.status.code = ec.ISC_OK
             res.item.Pack(_to_message(item))
@@ -1084,7 +1096,7 @@ def run_action(cmd):
         r.status = ec.RAS_OK
     elif "refresh" in name or "selectionclear" in name or "zonefill" in name:
         if "zonefill" in name:
-            _board()._wants_refill = True
+            _refill()
             _changed()
         r.status = ec.RAS_OK
     else:
@@ -1311,8 +1323,13 @@ def get_stackup(cmd):
     return r
 
 
+def _refill():
+    b = _board()
+    pcbnew.ZONE_FILLER(b).Fill([z for z in b.Zones() if not z.GetIsRuleArea()])
+
+
 def refill_zones(cmd):
-    _board()._wants_refill = True
+    _refill()
     _changed()
     return _p()["empty"].Empty()
 

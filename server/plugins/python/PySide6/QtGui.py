@@ -186,8 +186,20 @@ def qRgba(r, g, b, a):
 
 class QBrush:
     def __init__(self, *a):
-        self._color = QColor(a[0]) if a and not isinstance(a[0], QGradient) else QColor(0, 0, 0)
+        self._gradient = a[0] if a and isinstance(a[0], QGradient) else None
         self._style = a[1] if len(a) > 1 else Qt.BrushStyle.SolidPattern
+        if not a:
+            self._color, self._style = QColor(0, 0, 0), Qt.BrushStyle.NoBrush
+        elif isinstance(a[0], QBrush):
+            self._color, self._style, self._gradient = a[0]._color, a[0]._style, a[0]._gradient
+        elif isinstance(a[0], Qt.BrushStyle):
+            self._color, self._style = QColor(0, 0, 0), a[0]
+        elif self._gradient is not None:
+            self._color = QColor(0, 0, 0)
+        else:
+            self._color = QColor(a[0])
+
+    gradient = lambda self: self._gradient
 
     color = lambda self: self._color
     style = lambda self: self._style
@@ -201,8 +213,40 @@ class QBrush:
 
 class QPen:
     def __init__(self, *a):
-        self._color = QColor(a[0]) if a and not isinstance(a[0], (int, float)) or (a and isinstance(a[0], enum.Enum)) else QColor(0, 0, 0)
+        self._style, self._cap, self._join = Qt.PenStyle.SolidLine, None, None
+        if a and isinstance(a[0], QPen):
+            self._color, self._width, self._style, self._cap, self._join = a[0]._color, a[0]._width, a[0]._style, a[0]._cap, a[0]._join
+            return
+        if a and isinstance(a[0], Qt.PenStyle):
+            self._color, self._width, self._style = QColor(0, 0, 0), 1, a[0]
+            return
+        first = a[0].color() if a and isinstance(a[0], QBrush) else (a[0] if a else None)
+        self._color = QColor(first) if a and not isinstance(first, (int, float)) or (a and isinstance(first, enum.Enum)) else QColor(0, 0, 0)
         self._width = a[1] if len(a) > 1 else 1
+        if len(a) > 2:
+            self._style = a[2]
+        if len(a) > 3:
+            self._cap = a[3]
+        if len(a) > 4:
+            self._join = a[4]
+
+    style = lambda self: self._style
+    capStyle = lambda self: self._cap
+    joinStyle = lambda self: self._join
+    brush = lambda self: QBrush(self._color)
+    isCosmetic = lambda self: self._width == 0
+
+    def setStyle(self, s):
+        self._style = s
+
+    def setCapStyle(self, c):
+        self._cap = c
+
+    def setJoinStyle(self, j):
+        self._join = j
+
+    def setBrush(self, b):
+        self._color = b.color() if isinstance(b, QBrush) else QColor(b)
 
     color = lambda self: self._color
     width = widthF = lambda self: self._width
@@ -214,7 +258,7 @@ class QPen:
         self._width = w
 
     setWidthF = setWidth
-    setStyle = setCapStyle = setJoinStyle = setCosmetic = setDashPattern = setBrush = lambda self, *a: None
+    setCosmetic = setDashPattern = setDashOffset = setMiterLimit = lambda self, *a: None
 
 
 class QGradient:
@@ -231,11 +275,21 @@ class QGradient:
 
     def __init__(self, *a):
         self._stops = []
+        nums = []
+        for v in a:
+            if hasattr(v, "x") and callable(v.x):
+                nums.extend((v.x(), v.y()))
+            elif isinstance(v, (int, float)):
+                nums.append(v)
+        self._geom = nums          # linear: x1, y1, x2, y2; radial: cx, cy, radius
 
     def setColorAt(self, pos, color):
         self._stops.append((pos, QColor(color)))
 
-    setSpread = setCoordinateMode = setStops = lambda self, *a: None
+    def setStops(self, stops):
+        self._stops = [(p, QColor(c)) for p, c in stops]
+
+    setSpread = setCoordinateMode = lambda self, *a: None
     stops = lambda self: list(self._stops)
 
 
@@ -455,13 +509,18 @@ class QFontMetrics:
             return f._px
         return (f._size if f._size and f._size > 0 else 9) * 4 / 3
 
+    def _measure(self, text):
+        from ._qpaint import _wx_font
+        from wx import _paint
+        return _paint.text_extent(str(text), _wx_font(self._font))
+
     def horizontalAdvance(self, text, *a):
-        return int(len(str(text)) * self._em() * 0.55)
+        return int(round(self._measure(text)[0]))
 
     width = horizontalAdvance
 
     def height(self):
-        return int(self._em() * 1.3)
+        return int(round(self._measure("Ag")[1]))
 
     lineSpacing = height
     ascent = lambda self: int(self._em())
@@ -537,10 +596,36 @@ class QPixmap:
 
     def load(self, path, *a):
         self._path = str(path)
+        self.__dict__.pop("_bmp", None)
         return os.path.exists(self._path)
 
     def isNull(self):
         return not (self._path and os.path.exists(self._path)) and not (self._w and self._h)
+
+    def _pixels(self):
+        """The wx bitmap behind this pixmap: what a painter draws into, and what is shown."""
+        bmp = self.__dict__.get("_bmp")
+        if bmp is None:
+            if self._path and os.path.exists(self._path):
+                bmp = wx.Bitmap(self._path)
+                if not self._w or not self._h:
+                    self._w, self._h = bmp.GetWidth(), bmp.GetHeight()
+            else:
+                bmp = wx.Bitmap(max(1, int(self._w)), max(1, int(self._h)))
+            self.__dict__["_bmp"] = bmp
+        return bmp
+
+    def fill(self, color=None):
+        bmp = self._pixels()
+        dc = wx.MemoryDC(bmp)
+        c = QColor(color) if color is not None else QColor(255, 255, 255)
+        r, g, b, a = c._c
+        if a == 0:
+            dc.SetBackground(wx.Brush(wx.Colour(0, 0, 0, 0), wx.BRUSHSTYLE_TRANSPARENT))
+        else:
+            dc.SetBackground(wx.Brush(wx.Colour(r, g, b, a)))
+        dc.Clear()
+        dc.SelectObject(wx.NullBitmap)
 
     width = lambda self: self._w
     height = lambda self: self._h
@@ -558,19 +643,31 @@ class QPixmap:
 
     scaledToWidth = scaledToHeight = lambda self, *a: QPixmap(self)
     copy = transformed = lambda self, *a: QPixmap(self)
-    toImage = lambda self: QImage(self._path) if self._path else QImage(self._w, self._h)
-    fill = setDevicePixelRatio = setMask = lambda self, *a: None
+    setDevicePixelRatio = setMask = lambda self, *a: None
+
+    def toImage(self):
+        img = QImage(self._path) if self._path else QImage(self._w, self._h)
+        if "_bmp" in self.__dict__:
+            img.__dict__["_bmp"] = self.__dict__["_bmp"]
+        return img
 
     def save(self, path, *a):
-        return False
+        try:
+            return bool(self._pixels().SaveFile(str(path), wx.BITMAP_TYPE_PNG))
+        except Exception:
+            return False
 
     @staticmethod
     def fromImage(img, *a):
         p = QPixmap()
         p._path, p._w, p._h = getattr(img, "_path", ""), getattr(img, "_w", 0), getattr(img, "_h", 0)
+        if "_bmp" in getattr(img, "__dict__", {}):
+            p.__dict__["_bmp"] = img.__dict__["_bmp"]
         return p
 
     def _url(self):
+        if "_bmp" in self.__dict__:
+            return self.__dict__["_bmp"]._url or ""
         return wx._data_url(self._path) if self._path and os.path.exists(self._path) else ""
 
 
@@ -583,6 +680,35 @@ class QImage(QPixmap):
         Format_RGB888 = 13
         Format_RGBA8888 = 17
         Format_Grayscale8 = 24
+
+    def __init__(self, *a):
+        """QImage(w, h, format), QImage(path), QImage(data, w, h[, bytesPerLine], format): pixel data becomes a real picture."""
+        if a and isinstance(a[0], (bytes, bytearray, memoryview)) or (a and hasattr(a[0], "tobytes") and not isinstance(a[0], str)):
+            data = a[0].tobytes() if hasattr(a[0], "tobytes") else bytes(a[0])
+            nums = [v for v in a[1:] if isinstance(v, (int, enum.Enum))]
+            w, h = int(nums[0]), int(nums[1])
+            fmt = int(nums[-1]) if len(nums) > 2 else int(QImage.Format.Format_RGB888)
+            stride = int(nums[2]) if len(nums) > 3 else 0
+            QPixmap.__init__(self, w, h)
+            self._format = fmt
+            bpp = {13: 3, 17: 4, 4: 4, 5: 4, 6: 4, 24: 1}.get(fmt, 4)
+            stride = stride or (len(data) // h if h else w * bpp)
+            rows = [data[y * stride:y * stride + w * bpp] for y in range(h)]
+            raw = b"".join(rows)
+            if fmt == 13:
+                self.__dict__["_bmp"] = wx.Bitmap.FromBuffer(w, h, raw)
+            elif fmt == 17:
+                self.__dict__["_bmp"] = wx.Bitmap.FromBufferRGBA(w, h, raw)
+            elif fmt == 24:
+                self.__dict__["_bmp"] = wx.Bitmap.FromBuffer(w, h, bytes(v for g in raw for v in (g, g, g)))
+            else:                                   # 0xAARRGGBB, little-endian: B, G, R, A
+                out = bytearray(len(raw))
+                out[0::4], out[1::4], out[2::4] = raw[2::4], raw[1::4], raw[0::4]
+                out[3::4] = raw[3::4] if fmt != 4 else b"\xff" * (len(raw) // 4)
+                self.__dict__["_bmp"] = wx.Bitmap.FromBufferRGBA(w, h, bytes(out))
+            return
+        QPixmap.__init__(self, *[v for v in a if not isinstance(v, enum.Enum)][:2] if a and isinstance(a[0], (int, float)) else a[:1])
+        self._format = int(a[2]) if len(a) > 2 and isinstance(a[0], (int, float)) else int(QImage.Format.Format_ARGB32)
 
     def setPixelColor(self, *a):
         pass
@@ -735,22 +861,6 @@ class QTransform:
     isIdentity = lambda self: True
 
 
-class QPainterPath:
-    def __init__(self, *a):
-        self._pts = []
-
-    def moveTo(self, *a):
-        self._pts.append(a)
-
-    lineTo = cubicTo = quadTo = arcTo = addRect = addEllipse = addRoundedRect = addPolygon = addPath = addText = moveTo
-    closeSubpath = lambda self: None
-    setFillRule = lambda self, *a: None
-    isEmpty = lambda self: not self._pts
-    boundingRect = controlPointRect = lambda self: QRectF(0, 0, 0, 0)
-    contains = intersects = lambda self, *a: False
-    simplified = translated = lambda self, *a: self
-
-
 class QPolygon(list):
     def __init__(self, pts=()):
         list.__init__(self, pts)
@@ -766,84 +876,6 @@ class QPolygon(list):
 
 
 QPolygonF = QPolygon
-
-
-class QPainter:
-    """Custom painting.  A widget in the web editor is HTML, so there is nothing to paint on: the calls are accepted."""
-
-    class RenderHint(enum.IntFlag):
-        Antialiasing = 1
-        TextAntialiasing = 2
-        SmoothPixmapTransform = 4
-        LosslessImageRendering = 0x40
-
-    class CompositionMode(enum.IntEnum):
-        CompositionMode_SourceOver = 0
-        CompositionMode_Source = 3
-        CompositionMode_Clear = 2
-
-    Antialiasing, TextAntialiasing, SmoothPixmapTransform = RenderHint.Antialiasing, RenderHint.TextAntialiasing, RenderHint.SmoothPixmapTransform
-    CompositionMode_SourceOver, CompositionMode_Source, CompositionMode_Clear = (CompositionMode.CompositionMode_SourceOver,
-                                                                                CompositionMode.CompositionMode_Source, CompositionMode.CompositionMode_Clear)
-
-    def __init__(self, device=None):
-        self._device = device
-        self._pen, self._brush, self._font = QPen(), QBrush(), QFont()
-
-    def begin(self, device):
-        self._device = device
-        return True
-
-    def end(self):
-        return True
-
-    def isActive(self):
-        return True
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-    def pen(self):
-        return self._pen
-
-    def setPen(self, p):
-        self._pen = p if isinstance(p, QPen) else QPen(p)
-
-    def brush(self):
-        return self._brush
-
-    def setBrush(self, b):
-        self._brush = b if isinstance(b, QBrush) else QBrush(b)
-
-    def font(self):
-        return self._font
-
-    def setFont(self, f):
-        self._font = f
-
-    def fontMetrics(self):
-        return QFontMetrics(self._font)
-
-    def device(self):
-        return self._device
-
-    def window(self):
-        return QRect(0, 0, 0, 0)
-
-    viewport = window
-    transform = worldTransform = lambda self: QTransform()
-    opacity = lambda self: 1.0
-
-    def boundingRect(self, *a):
-        return QRect(0, 0, 0, 0)
-
-    def __getattr__(self, name):
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return lambda *a, **k: None
 
 
 class QAction(QObject):
@@ -1465,8 +1497,9 @@ class QResizeEvent(QEvent):
 class QPaintEvent(QEvent):
     def __init__(self, *a):
         QEvent.__init__(self, QEvent.Type.Paint)
+        self._rect = a[0] if a and isinstance(a[0], QRect) else QRect(0, 0, 0, 0)
 
-    rect = lambda self: QRect(0, 0, 0, 0)
+    rect = lambda self: self._rect
     region = rect
 
 
@@ -1551,3 +1584,6 @@ class QImageReader:
 
 class QImageWriter(QImageReader):
     write = lambda self, *a: False
+
+
+from ._qpaint import QPainter, QPainterPath          # noqa: E402,F401  (after the classes they draw with)
