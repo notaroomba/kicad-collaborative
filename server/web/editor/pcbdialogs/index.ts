@@ -4,7 +4,7 @@
 // and hotkeys find it the way they find every other board command.
 import { openBoardSetup } from "./board-setup";
 import { openFootprintFields } from "./fp-fields";
-import { clearDrcMarkers, drcReport, openBoardStatistics, openClearance, openDrc, openNetInspector } from "./inspect";
+import { clearDrcMarkers, drcReport, excludeMarker, nextMarker, openBoardStatistics, openClearance, openDrc, openNetInspector, prevMarker } from "./inspect";
 import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";
 import { newTextBoxDialog } from "./textbox";
 import { newTableDialog } from "./table";
@@ -34,6 +34,9 @@ export function installPcbDialogs(): void {
   action("editFootprintFields", "Bulk Edit Footprint Fields...", "", openFootprintFields);
   action("runDRC", "Design Rules Checker", "", openDrc);
   action("clearMarkers", "Clear DRC Markers", "", clearDrcMarkers);
+  action("prevMarker", "Previous Marker", "", prevMarker);
+  action("nextMarker", "Next Marker", "", nextMarker);
+  action("excludeMarker", "Exclude Marker", "", () => excludeMarker());
   action("netInspector", "Net Inspector", "", openNetInspector);
   action("showNetInspector", "Net Inspector", "", openNetInspector);
   action("boardStatistics", "Board Statistics", "", openBoardStatistics);

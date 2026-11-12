@@ -72,5 +72,35 @@ test("ZONE::Mirror reflects the thieving orientation over the axis", () => {
   P.mirrorNode(z, 0, 0, "v"); assert.equal(kid(kid(kid(z, "fill"), "thieving"), "orientation")[1], 210);
 });
 
+// ---- DRC exclusions (DRC_EXCLUSION ProtoJSON in board.design_settings.drc_exclusions)
+const XBOARD = `(kicad_pcb (version 20260206) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal)) (net 0 "") (net 1 "A") (net 2 "B")
+  (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1) (uuid "aaaaaaaa-0000-0000-0000-000000000001"))
+  (segment (start 0 0.3) (end 10 0.3) (width 0.25) (layer "F.Cu") (net 2) (uuid "aaaaaaaa-0000-0000-0000-000000000002")))`;
+test("exclusionOf writes DRC_EXCLUSION's ProtoJSON: DRCET type, nm position as strings, item KIIDs, MT_DRC", () => {
+  const doc = K.parseDoc(XBOARD, "kicad_pcb"); const ids = [...doc.items.values()].filter((i) => i.kind === "segment").map((i) => i.id);
+  const ex = P.exclusionOf(doc, { code: "clearance", x: 5, y: 0.15, ids }, "known");
+  assert.deepEqual(ex, { marker: { error_type: "DRCET_CLEARANCE", position: { x_nm: "5000000", y_nm: "150000" }, items: [{ value: "aaaaaaaa-0000-0000-0000-000000000001" }, { value: "aaaaaaaa-0000-0000-0000-000000000002" }], marker_type: "MT_DRC" }, comment: "known" });
+  const st = P.exclusionOf(doc, { code: "starved_thermal", x: 0, y: 1, ids: [] });
+  assert.equal(st.marker.layer, "BL_F_Cu"); assert.equal(st.marker.position.x_nm, undefined, "zero fields are left out");
+});
+test("applyExclusions marks the matching markers (comment kept), legacy strings and objects alike; withoutExclusions removes by key", () => {
+  const doc = K.parseDoc(XBOARD, "kicad_pcb"); const ids = [...doc.items.values()].filter((i) => i.kind === "segment").map((i) => i.id);
+  const m1 = { code: "clearance", x: 5, y: 0.15, ids, severity: "error" }, m2 = { code: "track_width", x: 1, y: 1, ids: [ids[0]], severity: "error" };
+  let entries = P.withExclusion([], P.exclusionOf(doc, m1, "ok by design"));
+  entries.push(["track_width|1000000|1000000|aaaaaaaa-0000-0000-0000-000000000001|00000000-0000-0000-0000-000000000000", "legacy"]);
+  const out = P.applyExclusions(doc, [m1, m2, { code: "clearance", x: 6, y: 0.15, ids, severity: "error" }], entries);
+  assert.equal(out[0].excluded, true); assert.equal(out[0].comment, "ok by design");
+  assert.equal(out[1].excluded, true, "a legacy pipe-delimited entry still matches"); assert.equal(out[1].comment, "legacy");
+  assert.equal(out[2].excluded, undefined, "another position is another violation");
+  entries = P.withExclusion(entries, P.exclusionOf(doc, m1, "edited"));
+  assert.equal(entries.length, 2, "re-excluding replaces (erase + insert)"); assert.equal(entries[1].comment, "edited");
+  const left = P.withoutExclusions(entries, new Set([P.exclusionKey(P.exclusionOf(doc, m1))]));
+  assert.equal(left.length, 1); assert.ok(Array.isArray(left[0]), "the other (legacy) entry is kept as written");
+});
+test("projectExclusions reads board.design_settings.drc_exclusions", () => {
+  assert.deepEqual(P.projectExclusions(JSON.stringify({ board: { design_settings: { drc_exclusions: [{ marker: { error_type: "DRCET_CLEARANCE" } }] } } })), [{ marker: { error_type: "DRCET_CLEARANCE" } }]);
+  assert.deepEqual(P.projectExclusions("{bad"), []); assert.deepEqual(P.projectExclusions(null), []);
+});
+
 module.exports = { test, K, P, assert, kid };
 process.on("exit", () => { console.log(`\npcb-edit3: ${passed} passed, ${failed} failed`); if (failed) process.exitCode = 1; });

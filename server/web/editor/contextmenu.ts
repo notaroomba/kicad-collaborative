@@ -408,6 +408,22 @@ export function openArcEditModeMenu(at?: { left: number; bottom: number } | null
   requestRender();
 }
 
+/** A plain entry of a stand-alone popup (a dialog's wxMenu): a label and what it runs, a separator, or a radio / check row. */
+export interface PopupEntry { sep?: boolean; label?: string; tip?: string; run?: () => void; check?: boolean; checked?: boolean; disabled?: boolean }
+/** wxWindow::GetPopupMenuSelectionFromUser: a popup of plain rows at a client position, drawn by the chrome's context menu. */
+export function openPopupMenu(x: number, y: number, entries: PopupEntry[]): void {
+  runners = new Map(); anchor = null;
+  const items: CtxItem[] = entries.map((e): CtxItem => {
+    if (e.sep) return { sep: true };
+    const it: CtxItem = { label: e.label || "" };
+    if (e.check) { it.check = true; it.checked = !!e.checked; }
+    if (e.run && !e.disabled) it.run = runRow(e.run); else it.why = e.tip || " ";
+    return it;
+  });
+  E.contextMenuOpen = true;
+  store.set({ contextMenu: { id: ++menuId, x, y, items } });
+}
+
 export function closeContextMenu(): void {
   if (!E.contextMenuOpen && !store.get().contextMenu) return;
   E.contextMenuOpen = false; runners = new Map(); anchor = null;

@@ -7,9 +7,13 @@ import { DRC_ITEMS, drcItemTitle } from "../../canvas/drc-items";
 import { NL } from "./canvas";
 import { projectNetlist } from "./update-pcb";
 import { runZoneFill } from "./zonefill";
-import { checkField, download, fmtLenU, grid, h, notebook, openDialog, textField, type CellValue } from "./ui";
+import { checkField, download, fmtLenU, grid, h, messageBox, notebook, openDialog, textEntryBox, textField, type CellValue } from "./ui";
+import { openPopupMenu, type PopupEntry } from "../contextmenu";
+import { adoptProjectFile, canWriteProject, saveProjectFile } from "../projectfile";
+import { editProject, type Plain, type ProjectEdit } from "../../canvas/project-file";
+import { openBoardSetup } from "./board-setup";
 
-export interface Marker { code: string; severity: string; x: number; y: number; text: string; ids: string[] }
+export interface Marker { code: string; severity: string; x: number; y: number; text: string; ids: string[]; excluded?: boolean; comment?: string }
 interface Settings { severities: Record<string, string>; netclasses: Record<string, { clearance?: number }>; clearance: number; edgeClearance: number; minTrackWidth: number; minViaDrill: number }
 interface NetRow { name: string; code: number; padCount: number; viaCount: number; trackLength: number; zoneCount: number; unconnected: number }
 interface Stats { footprints: { total: number; front: number; back: number; smd: number; tht: number; other: number }; pads: { total: number; smd: number; tht: number; npth: number; connect: number };
@@ -84,91 +88,227 @@ export async function drcReport(o: { parity?: boolean; text?: string } = {}): Pr
     items: m.ids.map((id) => ({ id, description: describeItem(doc, id) })) })) };
 }
 
+// ---------------------------------------------------------------- exclusions and severities (.kicad_pro)
+interface ExclusionApi {
+  exclusionOf(doc: KDoc, m: Marker, comment?: string): unknown; exclusionKey(ex: unknown): string; readExclusion(e: unknown): unknown;
+  projectExclusions(text: string | null): unknown[]; applyExclusions(doc: KDoc, markers: Marker[], entries: unknown[]): Marker[];
+  withExclusion(entries: unknown[], ex: unknown): unknown[]; withoutExclusions(entries: unknown[], keys: Set<string>): unknown[];
+}
+const XA = (): ExclusionApi => (window as unknown as { PcbTools: ExclusionApi }).PcbTools;
+/** The exclusions in force: the project's, or this session's when the project file cannot be written. */
+let sessionExclusions: unknown[] | null = null;
+const exclusions = (): unknown[] => sessionExclusions || XA().projectExclusions(E.proSettings || null);
+/** Write project-file edits (board.design_settings …) and make the editor use the new file; false when it could not be saved. */
+async function saveProjectEdits(edits: ProjectEdit[]): Promise<boolean> {
+  const text = E.proSettings || null; if (!text || !canWriteProject()) return false;
+  let res: { text: string; changed: ProjectEdit[] };
+  try { res = editProject(text, edits); } catch (e) { return false; }
+  if (!res.changed.length) return true;
+  adoptProjectFile(res.text);                      // the dialog sees the change at once; the upload follows
+  return saveProjectFile(res.text, res.changed);
+}
+const DS = ["board", "design_settings"];
+function storeExclusions(ctx: ToolCtx, entries: unknown[]): void {
+  sessionExclusions = entries;
+  void saveProjectEdits([{ path: [...DS, "drc_exclusions"], value: entries as Plain }]).then((ok) => { if (ok) sessionExclusions = null; else if (!ctx.viewOnly) ctx.toast("The exclusion is kept for this session: the project file could not be written", 4000); });
+}
+function storeSeverity(ctx: ToolCtx, code: string, sev: string): void {
+  sevOverride[code] = sev;
+  void saveProjectEdits([{ path: [...DS, "rule_severities", code], value: sev }]).then((ok) => { if (ok) delete sevOverride[code]; else if (!ctx.viewOnly) ctx.toast("The severity is kept for this session: the project file could not be written", 4000); });
+}
+const sevOverride: Record<string, string> = {};
+const severityOf = (code: string): string => sevOverride[code] || settings().severities[code] || (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
+const errorText = (code: string): string => drcItemTitle(code);
+
+// DIALOG_DRC's gear menu options (persisted like the dialog's settings)
+const OPT_KEY = "kc.drc.options";
+const opts = ((): { reportAllTrackErrors: boolean; crossprobe: boolean; scrollOnCrossprobe: boolean } => {
+  const d = { reportAllTrackErrors: false, crossprobe: true, scrollOnCrossprobe: true };
+  try { const j = JSON.parse(localStorage.getItem(OPT_KEY) || "null"); if (j && typeof j === "object") Object.assign(d, j); } catch (e) { /* defaults */ }
+  return d;
+})();
+const saveOpts = (): void => { try { localStorage.setItem(OPT_KEY, JSON.stringify(opts)); } catch (e) { /* not kept */ } };
+/** DIALOG_DRC's formatElapsed: "%.2f s", or "%d min %d s" from a minute on. */
+export function formatElapsed(ms: number): string { const t = Math.round(ms / 1000); return t >= 60 ? `${Math.floor(t / 60)} min ${t % 60} s` : `${(ms / 1000).toFixed(2)} s`; }
+
+/** The open DRC dialog's handles for Inspect > Previous / Next Marker and Exclude Marker (DRC_TOOL). */
+let live: { step(dir: 1 | -1): void; exclude(): void } | null = null;
+export function prevMarker(ctx: ToolCtx): void { if (live) live.step(-1); else openDrc(ctx); }
+export function nextMarker(ctx: ToolCtx): void { if (live) live.step(1); else openDrc(ctx); }
+export function excludeMarker(): void { if (live) live.exclude(); }
+
 export function openDrc(ctx: ToolCtx): void {
   const doc = board(); if (!doc) { ctx.toast("The Design Rules Checker needs a board"); return; }
   if (last.doc !== doc) { last.doc = doc; last.markers = []; last.ran = false; }
   let selected: Marker | null = null, book: ReturnType<typeof notebook> | null = null;
   const lists: HTMLElement[] = [h("div", { class: "pd-list pd-drclist" }), h("div", { class: "pd-list pd-drclist" }), h("div", { class: "pd-list pd-drclist" }), h("div", { class: "pd-list pd-drclist" })];
-  const status = h("span", { class: "pd-status" });
-  const badge = { errors: h("span", { class: "pd-badge" }, "0"), warnings: h("span", { class: "pd-badge" }, "0"), exclusions: h("span", { class: "pd-badge" }, "0") };
+  const status = h("span", { class: "pd-status", "data-k": "drc-status" });
+  const gauge = h("progress", { class: "pd-gauge", max: "100", value: "0", style: "display:none;width:160px" }) as HTMLProgressElement;
+  const badge = { errors: h("span", { class: "pd-badge", "data-k": "count-errors" }, "0"), warnings: h("span", { class: "pd-badge", "data-k": "count-warnings" }, "0"), exclusions: h("span", { class: "pd-badge", "data-k": "count-exclusions" }, "0") };
   const tabOf = (m: Marker): number => (UNCONNECTED.has(m.code) ? 1 : PARITY.has(m.code) ? 2 : 0);
-  const shown = (m: Marker): boolean => (m.severity === "error" ? prefs.errors : prefs.warnings);
-  const show = (): void => { PT().state.markers = last.markers.filter(shown); ctx.requestRender(); };
+  const shown = (m: Marker): boolean => (m.excluded ? prefs.exclusions : m.severity === "error" ? prefs.errors : prefs.warnings);
+  // the canvas: excluded markers in LAYER_DRC_EXCLUSION's colour
+  const show = (): void => { PT().state.markers = last.markers.filter(shown).map((m) => (m.excluded ? { ...m, severity: "exclusion" } : m)); ctx.requestRender(); };
+  const rowsOf = (): { m: Marker; row: HTMLElement }[] => { const out: { m: Marker; row: HTMLElement }[] = []; for (const l of lists.slice(0, 3)) for (const r of Array.from(l.querySelectorAll<HTMLElement>(".it[data-i]"))) out.push({ m: last.markers[Number(r.dataset.i)], row: r }); return out; };
   const select = (m: Marker, row: HTMLElement): void => {
     selected = m;
     for (const l of lists) for (const r of Array.from(l.querySelectorAll(".it.sel"))) r.classList.remove("sel");
-    row.classList.add("sel");
-    ctx.setHighlight(m.ids.length ? new Set(m.ids) : null);
-    if (m.ids.length || m.x || m.y) fitBox([m.x - 12, m.y - 9, m.x + 12, m.y + 9], 0.9);   // "Center on Cross-probe"
+    row.classList.add("sel"); row.scrollIntoView({ block: "nearest" });
+    if (opts.crossprobe) ctx.setHighlight(m.ids.length ? new Set(m.ids) : null);
+    if (opts.crossprobe && opts.scrollOnCrossprobe && (m.ids.length || m.x || m.y)) fitBox([m.x - 12, m.y - 9, m.x + 12, m.y + 9], 0.9);   // "Center on Cross-probe"
     ctx.requestRender();
   };
+  const reExclude = (): void => { XA().applyExclusions(doc, last.markers, exclusions()); };
   const fill = (): void => {
-    const sev = settings().severities;
     const counts = [0, 0, 0];
+    const keep = selected;
     for (const l of lists) l.replaceChildren();
-    for (const m of last.markers) {
-      const t = tabOf(m); counts[t]++;
-      if (!shown(m)) continue;
-      const row = h("div", { class: "it", "data-code": m.code }, h("span", { class: "pd-sev " + m.severity }), h("div", null, h("div", null, m.text),
-        ...m.ids.map((id) => h("div", { class: "sub" }, describeItem(doc, id)))));
+    last.markers.forEach((m, i) => {
+      const t = tabOf(m); if (!shown(m)) return; counts[t]++;
+      const row = h("div", { class: "it" + (m === keep ? " sel" : ""), "data-code": m.code, "data-i": String(i) }, h("span", { class: "pd-sev " + (m.excluded ? "exclusion" : m.severity) }), h("div", null, h("div", null, m.text),
+        ...m.ids.map((id) => h("div", { class: "sub" }, describeItem(doc, id))), m.excluded && m.comment ? h("div", { class: "sub", "data-k": "comment" }, m.comment) : null));
       row.addEventListener("click", () => select(m, row));
+      row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); select(m, row); rowMenu(m, ev.clientX, ev.clientY); });
       lists[t].append(row);
-    }
+    });
     if (!last.ran) for (const l of lists.slice(0, 3)) l.append(h("div", { class: "pd-empty" }, "DRC has not been run."));
     // ignored tests: the rules the project's severities switch off
-    const ignored = DRC_ITEMS.filter((i) => i[1] && (sev[i[1]] || i[2]) === "ignore");
-    for (const i of ignored) lists[3].append(h("div", { class: "it" }, h("span", { class: "pd-sev ignore" }), h("div", null, i[0])));
+    const ignored = DRC_ITEMS.filter((i) => i[1] && severityOf(i[1]) === "ignore");
+    for (const i of ignored) {
+      const row = h("div", { class: "it", "data-code": i[1] }, h("span", { class: "pd-sev ignore" }), h("div", null, " • " + i[0]));
+      row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ignoredMenu(i[1], ev.clientX, ev.clientY); });
+      lists[3].append(row);
+    }
     if (book) { book.setLabel(0, `Violations (${last.ran ? counts[0] : "not run"})`); book.setLabel(1, `Unconnected Items (${last.ran ? counts[1] : "not run"})`); book.setLabel(2, `Schematic Parity (${last.ran ? counts[2] : "not run"})`); book.setLabel(3, `Ignored Tests (${ignored.length})`); }
-    badge.errors.textContent = String(last.markers.filter((m) => m.severity === "error").length);
-    badge.warnings.textContent = String(last.markers.filter((m) => m.severity !== "error").length);
+    badge.errors.textContent = String(last.markers.filter((m) => !m.excluded && m.severity === "error").length);
+    badge.warnings.textContent = String(last.markers.filter((m) => !m.excluded && m.severity !== "error").length);
+    badge.exclusions.textContent = String(last.markers.filter((m) => m.excluded).length);
   };
+  const refresh = (): void => { fill(); show(); };
+
+  // ---- the violation's right-click menu (DIALOG_DRC::OnDRCItemRClick)
+  const listName = (code: string): string => { const s = severityOf(code); return s === "error" ? "errors" : s === "warning" ? "warnings" : "appropriate"; };
+  const exclude = (m: Marker, comment: string): void => {
+    m.excluded = true; m.comment = comment;
+    storeExclusions(ctx, XA().withExclusion(exclusions(), XA().exclusionOf(doc, m, comment)));
+    refresh();
+  };
+  const unexclude = (m: Marker): void => {
+    m.excluded = false; m.comment = "";
+    storeExclusions(ctx, XA().withoutExclusions(exclusions(), new Set([XA().exclusionKey(XA().exclusionOf(doc, m))])));
+    refresh();
+  };
+  const setSeverity = (code: string, sev: string): void => {
+    storeSeverity(ctx, code, sev);
+    if (sev === "ignore") { last.markers = last.markers.filter((m) => m.code !== code); if (selected && selected.code === code) { selected = null; ctx.setHighlight(null); } }
+    else for (const m of last.markers) if (m.code === code) m.severity = sev;
+    refresh();
+  };
+  const CLEARANCE_CODES = new Set(["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"]);
+  const rowMenu = (m: Marker, x: number, y: number): void => {
+    const ln = listName(m.code), et = errorText(m.code), sev = severityOf(m.code);
+    const entries: PopupEntry[] = m.excluded
+      ? [{ label: "Remove exclusion for this violation", tip: `It will be placed back in the ${ln} list`, run: () => unexclude(m) },
+         { label: "Edit exclusion comment...", run: () => textEntryBox("Exclusion Comment", "", m.comment || "", true, (t) => exclude(m, t)) }]
+      : [{ label: "Exclude this violation", tip: `It will be excluded from the ${ln} list`, run: () => exclude(m, "") },
+         { label: "Exclude with comment...", tip: `It will be excluded from the ${ln} list`, run: () => textEntryBox("Exclusion Comment", "", "", true, (t) => exclude(m, t)) }];
+    entries.push({ sep: true });
+    if (CLEARANCE_CODES.has(m.code) && m.ids.length === 2) entries.push({ label: "Run: Inspect > Clearance Resolution", run: () => { const P = PT() as unknown as { applySelection?(c: ToolCtx, ids: string[]): void }; if (P.applySelection) P.applySelection(ctx, m.ids); openClearance(ctx); } }, { sep: true });
+    if (sev === "warning") entries.push({ label: `Change severity to Error for all '${et}' violations`, tip: "Violation severities can also be edited in Board Setup", run: () => setSeverity(m.code, "error") });
+    else entries.push({ label: `Change severity to Warning for all '${et}' violations`, tip: "Violation severities can also be edited in Board Setup", run: () => setSeverity(m.code, "warning") });
+    entries.push({ label: `Ignore all '${et}' violations`, tip: "Violations will not be checked or reported", run: () => setSeverity(m.code, "ignore") },
+      { sep: true }, { label: "Edit violation severities...", tip: "Open the Board Setup dialog", run: () => { void openBoardSetup(ctx, "Violation Severity"); } });
+    openPopupMenu(x, y, entries);
+  };
+  // DIALOG_DRC::OnIgnoredItemRClick: Error / Warning / Ignore radio items
+  const ignoredMenu = (code: string, x: number, y: number): void => {
+    const cur = severityOf(code);
+    openPopupMenu(x, y, ([["error", "Error"], ["warning", "Warning"], ["ignore", "Ignore"]] as [string, string][]).map(([v, label]) => ({ label, check: true, checked: cur === v, run: () => { if (cur !== v) { storeSeverity(ctx, code, v); refresh(); } } })));
+  };
+
   const run = async (): Promise<void> => {
     const t0 = Date.now();
-    // DRC_TOOL::RunTests: "Refilling all zones..." and ZONE_FILLER_TOOL::FillAllZones into the dialog's reporter
-    if (prefs.refill && !ctx.viewOnly && [...doc.items.values()].some((it) => it.kind === "zone")) {
-      status.textContent = "Refilling all zones...";
-      await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), status, label: "Fill Zone(s)" });
-    }
-    status.textContent = "Tests Running...";
-    const markers = (await collectMarkers(doc, prefs.parity)).markers;
-    last.markers = markers; last.ran = true; last.elapsed = (Date.now() - t0) / 1000; selected = null;
-    status.textContent = `Done. Completed in ${last.elapsed.toFixed(2)} s`;
-    ctx.setHighlight(null); fill(); show();
+    const tick = setInterval(() => { status.textContent = `Elapsed: ${Math.round((Date.now() - t0) / 1000)} s`; }, 1000);
+    gauge.style.display = ""; gauge.value = 5;
+    try {
+      // DRC_TOOL::RunTests: "Refilling all zones..." and ZONE_FILLER_TOOL::FillAllZones into the dialog's reporter
+      if (prefs.refill && !ctx.viewOnly && [...doc.items.values()].some((it) => it.kind === "zone")) {
+        status.textContent = "Refilling all zones...";
+        await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), status, label: "Fill Zone(s)" });
+      }
+      gauge.value = 40; status.textContent = "Elapsed: 0 s";
+      await new Promise((r) => setTimeout(r, 0));
+      let markers = (await collectMarkers(doc, prefs.parity)).markers;
+      for (const m of markers) { const sv = sevOverride[m.code]; if (sv === "error" || sv === "warning") m.severity = sv; }
+      markers = markers.filter((m) => sevOverride[m.code] !== "ignore");
+      last.markers = XA().applyExclusions(doc, markers, exclusions()); last.ran = true; last.elapsed = (Date.now() - t0) / 1000; selected = null;
+      gauge.value = 100;
+      status.textContent = `Completed in ${formatElapsed(Date.now() - t0)}`;
+    } finally { clearInterval(tick); setTimeout(() => { gauge.style.display = "none"; }, 300); }
+    ctx.setHighlight(null); refresh();
   };
   const report = (): string => {
     const lines = ["** Drc report for " + ((E.kdoc as KDoc & { fileName?: string }).fileName || "board") + " **", `** Created on ${new Date().toISOString().replace("T", " ").slice(0, 19)} **`, ""];
     const sect = (title: string, tab: number): void => {
       const list = last.markers.filter((m) => tabOf(m) === tab && shown(m));
       lines.push(`** Found ${list.length} ${title} **`);
-      for (const m of list) { lines.push(`[${m.code}]: ${m.text}`, `    @(${m.x.toFixed(4)} mm, ${m.y.toFixed(4)} mm): ${m.severity}`); for (const id of m.ids) lines.push("    " + describeItem(doc, id)); }
+      for (const m of list) { lines.push(`[${m.code}]: ${m.text}`, `    @(${m.x.toFixed(4)} mm, ${m.y.toFixed(4)} mm): ${m.excluded ? "Excluded" : m.severity}`); for (const id of m.ids) lines.push("    " + describeItem(doc, id)); if (m.excluded && m.comment) lines.push("    " + m.comment); }
       lines.push("");
     };
     sect("DRC violations", 0); sect("unconnected pads", 1); sect("Footprint errors", 2);
     lines.push("** End of Report **", "");
     return lines.join("\n");
   };
-  const delMarker = (): void => { if (!selected) return; last.markers = last.markers.filter((m) => m !== selected); selected = null; ctx.setHighlight(null); fill(); show(); };
-  const delAll = (): void => { last.markers = []; last.ran = false; selected = null; ctx.setHighlight(null); fill(); show(); };
+  const delMarker = (): void => {
+    if (!selected) return;
+    if (selected.excluded) storeExclusions(ctx, XA().withoutExclusions(exclusions(), new Set([XA().exclusionKey(XA().exclusionOf(doc, selected))])));   // RecordDRCExclusions drops it
+    last.markers = last.markers.filter((m) => m !== selected); selected = null; ctx.setHighlight(null); refresh();
+  };
+  // DIALOG_DRC::OnDeleteAllClick: with exclusions on the board, "Delete exclusions too?"
+  const deleteAll = (withExclusions: boolean): void => {
+    const gone = last.markers.filter((m) => withExclusions || !m.excluded);
+    if (withExclusions) { const keys = new Set(gone.filter((m) => m.excluded).map((m) => XA().exclusionKey(XA().exclusionOf(doc, m)))); if (keys.size) storeExclusions(ctx, XA().withoutExclusions(exclusions(), keys)); }
+    last.markers = last.markers.filter((m) => !gone.includes(m)); last.ran = false; selected = null; ctx.setHighlight(null); refresh();
+  };
+  const delAll = (): void => {
+    if (!last.markers.some((m) => m.excluded)) { deleteAll(false); return; }
+    messageBox("Delete All Markers", "Delete exclusions too?", [{ label: "Cancel" }, { label: "Errors, Warnings and Exclusions", fn: () => deleteAll(true) }, { label: "Errors and Warnings Only", fn: () => deleteAll(false) }], 0);
+  };
+  const step = (dir: 1 | -1): void => {
+    const rows = rowsOf(); if (!rows.length) return;
+    let i = rows.findIndex((r) => r.m === selected); i = i < 0 ? (dir > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + dir));
+    const r = rows[i]; if (book) book.show(tabOf(r.m)); select(r.m, r.row);
+  };
 
-  openDialog({ title: "Design Rules Checker", width: 760, okLabel: "Run DRC", cancelLabel: "Close", noEnter: true,
+  reExclude();
+  openDialog({ title: "Design Rules Checker", width: 760, okLabel: "Run DRC", cancelLabel: "Close", noEnter: true, modeless: true,
     extra: [{ label: "Delete Marker", fn: delMarker }, { label: "Delete All Markers", fn: delAll }],
     build(body) {
       const refill = checkField(prefs.refill, "Refill all zones before performing DRC", { key: "refill", ro: ctx.viewOnly, onChange: (v) => { prefs.refill = v; } });
       const parity = checkField(prefs.parity, "Test for parity between PCB and schematic", { key: "parity", onChange: (v) => { prefs.parity = v; } });
       book = notebook([{ label: "Violations", build: (el) => el.append(lists[0]) }, { label: "Unconnected Items", build: (el) => el.append(lists[1]) }, { label: "Schematic Parity", build: (el) => el.append(lists[2]) }, { label: "Ignored Tests", build: (el) => el.append(lists[3]) }]);
-      const all = checkField(prefs.errors && prefs.warnings, "All", { key: "showAll", onChange: (v) => { prefs.errors = prefs.warnings = v; errors.set(v); warnings.set(v); fill(); show(); } });
-      const sync = (): void => { all.set(prefs.errors && prefs.warnings); fill(); show(); };
+      // OnSeverity: "All" ticks Errors and sets Warnings and Exclusions to itself
+      const all = checkField(prefs.errors && prefs.warnings && prefs.exclusions, "All", { key: "showAll", onChange: (v) => { prefs.errors = true; prefs.warnings = prefs.exclusions = v; errors.set(true); warnings.set(v); excl.set(v); refresh(); } });
+      const sync = (): void => { all.set(prefs.errors && prefs.warnings && prefs.exclusions); refresh(); };
       const errors = checkField(prefs.errors, "Errors", { key: "showErrors", onChange: (v) => { prefs.errors = v; sync(); } });
       const warnings = checkField(prefs.warnings, "Warnings", { key: "showWarnings", onChange: (v) => { prefs.warnings = v; sync(); } });
-      const exclusions = checkField(prefs.exclusions, "Exclusions", { key: "showExclusions", ro: true, tip: "Marker exclusions are kept by the desktop application." });
+      const excl = checkField(prefs.exclusions, "Exclusions", { key: "showExclusions", onChange: (v) => { prefs.exclusions = v; sync(); } });
       const save = h("button", { type: "button" }, "Save...");
       save.addEventListener("click", () => download("DRC.rpt", report()));
-      body.append(h("div", { class: "pd-row" }, refill.el, parity.el, h("span", { style: "flex:1" }), status), book.el,
-        h("div", { class: "pd-row pd-showrow" }, h("label", null, "Show:"), all.el, errors.el, badge.errors, warnings.el, badge.warnings, exclusions.el, badge.exclusions, h("span", { style: "flex:1" }), save));
-      fill(); show();
+      // the gear button (m_bMenu): the three persisted options
+      const gear = h("button", { type: "button", class: "btn", title: "Options", "data-k": "drc-options", style: "padding:2px 6px" }, "⚙");
+      gear.addEventListener("click", () => { const r = gear.getBoundingClientRect(); openPopupMenu(r.left, r.bottom, [
+        { label: "Report All Errors for Each Track", tip: "If unchecked, only the first error will be reported for each track", check: true, checked: opts.reportAllTrackErrors, run: () => { opts.reportAllTrackErrors = !opts.reportAllTrackErrors; saveOpts(); } },
+        { sep: true },
+        { label: "Cross-probe Selected Items", tip: "Highlight corresponding items on canvas when selected in the DRC list", check: true, checked: opts.crossprobe, run: () => { opts.crossprobe = !opts.crossprobe; saveOpts(); } },
+        { label: "Center on Cross-probe", tip: "When cross-probing, scroll the canvas so that the item is visible", check: true, checked: opts.scrollOnCrossprobe, run: () => { opts.scrollOnCrossprobe = !opts.scrollOnCrossprobe; saveOpts(); } }]); });
+      body.append(h("div", { class: "pd-row" }, refill.el, parity.el, h("span", { style: "flex:1" }), gauge, status, gear), book.el,
+        h("div", { class: "pd-row pd-showrow" }, h("label", null, "Show:"), all.el, errors.el, badge.errors, warnings.el, badge.warnings, excl.el, badge.exclusions, h("span", { style: "flex:1" }), save));
+      live = { step, exclude: () => { if (selected && !selected.excluded) exclude(selected, ""); } };
+      refresh();
     },
     ok() { void run(); return false; },
-    cancel() { ctx.setHighlight(null); } });
+    cancel() { live = null; ctx.setHighlight(null); } });
 }
 
 /** Inspect > Clear DRC Markers. */

@@ -3092,8 +3092,8 @@
     if (it.kind === "zone") {
       const names = zoneLayers(n).map(L);
       const keep = K.kid(n, "keepout");
-      const nm = K.kid(n, "name");
-      const zn = nm ? K.str(nm[1]) : "";
+      const nm2 = K.kid(n, "name");
+      const zn = nm2 ? K.str(nm2[1]) : "";
       const ld = names.length === 1 ? `on ${names[0]}` : names.length === 2 ? `on ${names[0]} and ${names[1]}` : names.length === 3 ? `on ${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `on ${names[0]}, ${names[1]} and ${names.length - 2} more` : "";
       if (keep) return zn ? `Rule area '${zn}' ${ld}` : `Rule Area ${ld}`;
       const pr = K.kid(n, "priority");
@@ -3350,8 +3350,8 @@
         if (isLocked(n)) add("Status", "Locked");
         const names = zl.map((l) => boardLayerName(doc, l));
         add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
-        const nm = K.kid(n, "name");
-        if (nm && K.str(nm[1])) add("Name", K.str(nm[1]));
+        const nm2 = K.kid(n, "name");
+        if (nm2 && K.str(nm2[1])) add("Name", K.str(nm2[1]));
         if (!keep) {
           const fill = K.kid(n, "fill");
           const fm = fill && K.kid(fill, "mode") ? K.str(K.kid(fill, "mode")[1]) : "";
@@ -3413,15 +3413,15 @@
     if (opts.net && !list.length) {
       const NT = netTable(doc), name = opts.net;
       let code = 0;
-      for (const [c, nm] of NT.byCode) if (nm === name) {
+      for (const [c, nm2] of NT.byCode) if (nm2 === name) {
         code = c;
         break;
       }
       if (!code) {
         let i = 0;
-        for (const nm of NT.byName.keys()) {
+        for (const nm2 of NT.byName.keys()) {
           i++;
-          if (nm === name) {
+          if (nm2 === name) {
             code = i;
             break;
           }
@@ -5241,9 +5241,9 @@
         const ch = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], v = vsub(m, ch), justOff = Math.hypot(s[0] - e[0], s[1] - e[1]) / 100;
         const A = vadd(ch, resized(v, justOff)), u = resized(v, 1);
         const t = Math.max(0, (raw[0] - A[0]) * u[0] + (raw[1] - A[1]) * u[1]);
-        const nm = vadd(A, vmul(u, t));
-        if (Math.abs(crossZ(nm[0] - s[0], nm[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
-        return { start: s, mid: nm, end: e };
+        const nm2 = vadd(A, vmul(u, t));
+        if (Math.abs(crossZ(nm2[0] - s[0], nm2[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
+        return { start: s, mid: nm2, end: e };
       }
       const r = Math.max(ARC_MIN_RADIUS, Math.hypot(raw[0] - c[0], raw[1] - c[1]));
       return arcFromCenter(c, vadd(c, resized(vsub(s, c), r)), vadd(c, resized(vsub(e, c), r)));
@@ -12461,11 +12461,11 @@
     return Math.min(pen, kiRound(Math.min(Math.abs(m.textW), Math.abs(m.textH)) * 0.25));
   }
   var dimUnits = (m) => m.unitsMode < 3 ? DIM_UNIT_NAMES[m.unitsMode] : sizeUnits() === "mil" ? "mil" : sizeUnits() === "in" ? "in" : "mm";
-  function dimValueString(m, nm) {
+  function dimValueString(m, nm2) {
     const u = dimUnits(m);
     let p = m.precision;
     if (p >= 6) p = u === "in" ? p - 4 : u === "mil" ? Math.max(0, p - 7) : u === "mm" ? p - 5 : p - 4;
-    const v = u === "in" ? nm / 254e5 : u === "mil" ? nm / 25400 : nm / 1e6;
+    const v = u === "in" ? nm2 / 254e5 : u === "mil" ? nm2 / 25400 : nm2 / 1e6;
     let s = v.toFixed(Math.max(0, p));
     if (m.suppressZeroes && p > 0) while (s.endsWith("0")) {
       s = s.slice(0, -1);
@@ -12476,8 +12476,8 @@
     }
     return s;
   }
-  function dimBaseText(m, nm) {
-    let t = m.override !== null ? m.override : dimValueString(m, nm);
+  function dimBaseText(m, nm2) {
+    let t = m.override !== null ? m.override : dimValueString(m, nm2);
     const u = dimUnits(m);
     if (m.unitsFormat === 1) t += DIM_UNIT_SUFFIX[u];
     else if (m.unitsFormat === 2) t += " (" + DIM_UNIT_SUFFIX[u].trim() + ")";
@@ -14655,6 +14655,93 @@
     return out;
   }
 
+  // web/tools/pcb-tools/drc-exclusions.ts
+  var DRCET = { unconnected_items: "UNCONNECTED_ITEMS", shorting_items: "SHORTING_ITEMS", items_not_allowed: "ALLOWED_ITEMS", text_on_edge_cuts: "TEXT_ON_EDGECUTS", clearance: "CLEARANCE", creepage: "CREEPAGE", tracks_crossing: "TRACKS_CROSSING", copper_edge_clearance: "EDGE_CLEARANCE", copper_outside_board: "COPPER_OUTSIDE_BOARD", isolated_copper: "ISOLATED_COPPER", starved_thermal: "STARVED_THERMAL", via_dangling: "DANGLING_VIA", track_dangling: "DANGLING_TRACK", hole_clearance: "HOLE_CLEARANCE", hole_to_hole: "DRILLED_HOLES_TOO_CLOSE", holes_co_located: "DRILLED_HOLES_COLOCATED", connection_width: "CONNECTION_WIDTH", track_width: "TRACK_WIDTH", track_angle: "TRACK_ANGLE", track_segment_length: "TRACK_SEGMENT_LENGTH", annular_width: "ANNULAR_WIDTH", drill_out_of_range: "DRILL_OUT_OF_RANGE", via_diameter: "VIA_DIAMETER", padstack: "PADSTACK", padstack_invalid: "PADSTACK_INVALID", microvia_drill_out_of_range: "MICROVIA_DRILL_OUT_OF_RANGE", malformed_microvia_stack_span: "MALFORMED_MICROVIA_STACK_SPAN", microvia_stack_not_filled: "MICROVIA_STACK_NOT_FILLED", microvia_stack_depth: "MICROVIA_STACK_DEPTH", hole_aspect_ratio: "HOLE_ASPECT_RATIO", microvia_crosses_core: "MICROVIA_CROSSES_CORE", courtyards_overlap: "OVERLAPPING_FOOTPRINTS", missing_courtyard: "MISSING_COURTYARD", malformed_courtyard: "MALFORMED_COURTYARD", pth_inside_courtyard: "PTH_IN_COURTYARD", npth_inside_courtyard: "NPTH_IN_COURTYARD", item_on_disabled_layer: "DISABLED_LAYER_ITEM", invalid_outline: "INVALID_OUTLINE", duplicate_footprints: "DUPLICATE_FOOTPRINT", missing_footprint: "MISSING_FOOTPRINT", extra_footprint: "EXTRA_FOOTPRINT", net_conflict: "NET_CONFLICT", footprint_symbol_mismatch: "SCHEMATIC_PARITY", footprint_filters_mismatch: "FOOTPRINT_FILTERS", footprint_symbol_field_mismatch: "SCHEMATIC_FIELDS_PARITY", lib_footprint_issues: "LIB_FOOTPRINT_ISSUES", lib_footprint_mismatch: "LIB_FOOTPRINT_MISMATCH", unresolved_variable: "UNRESOLVED_VARIABLE", assertion_failure: "ASSERTION_FAILURE", generic_warning: "GENERIC_WARNING", generic_error: "GENERIC_ERROR", copper_sliver: "COPPER_SLIVER", solder_mask_bridge: "SOLDERMASK_BRIDGE", silk_over_copper: "SILK_MASK_CLEARANCE", silk_edge_clearance: "SILK_EDGE_CLEARANCE", silk_overlap: "SILK_CLEARANCE", text_height: "TEXT_HEIGHT", text_thickness: "TEXT_THICKNESS", length_out_of_range: "LENGTH_OUT_OF_RANGE", net_chain_stub_length: "NET_CHAIN_STUB_TOO_LONG", net_chain_return_path: "NET_CHAIN_RETURN_PATH_BREAK", net_chain_tuning_profiles: "NET_CHAIN_TUNING_PROFILES", skew_out_of_range: "SKEW_OUT_OF_RANGE", too_many_vias: "VIA_COUNT_OUT_OF_RANGE", diff_pair_gap_out_of_range: "DIFF_PAIR_GAP_OUT_OF_RANGE", diff_pair_uncoupled_length_too_long: "DIFF_PAIR_UNCOUPLED_LENGTH_TOO_LONG", footprint: "FOOTPRINT", footprint_type_mismatch: "FOOTPRINT_TYPE_MISMATCH", through_hole_pad_without_hole: "PAD_TH_WITH_NO_HOLE", footprint_scaled_with_pads: "FOOTPRINT_SCALED_WITH_PADS", mirrored_text_on_front_layer: "MIRRORED_TEXT_ON_FRONT_LAYER", nonmirrored_text_on_back_layer: "NONMIRRORED_TEXT_ON_BACK_LAYER", missing_tuning_profile: "MISSING_TUNING_PROFILE", tuning_profile_track_geometries: "TUNING_PROFILE_IMPLICIT_RULES", track_on_post_machined_layer: "TRACK_ON_POST_MACHINED_LAYER", track_not_centered_on_via: "TRACK_NOT_CENTERED_ON_VIA" };
+  var LAYER_STORED = /* @__PURE__ */ new Set(["copper_sliver", "generic_warning", "generic_error", "unconnected_items", "starved_thermal"]);
+  var LEGACY_LAYER_FIELD = /* @__PURE__ */ new Set(["copper_sliver", "generic_warning", "generic_error"]);
+  var boardLayerEnum = (layer) => "BL_" + layer.replace(/\./g, "_");
+  function kiidOf(doc, id) {
+    const it = doc && doc.items.get(id);
+    const u = it && (K.kid(it.node, "uuid") || K.kid(it.node, "tstamp"));
+    return u ? K.str(u[1]) : id.replace(/#.*$/, "");
+  }
+  var nm = (mm) => String(Math.round(mm * 1e6));
+  function exclusionOf(doc, m, comment) {
+    const marker2 = { error_type: "DRCET_" + (DRCET[m.code] || "UNKNOWN") };
+    const x = nm(m.x), y = nm(m.y);
+    const pos = {};
+    if (x !== "0") pos.x_nm = x;
+    if (y !== "0") pos.y_nm = y;
+    if (pos.x_nm || pos.y_nm) marker2.position = pos;
+    const items = m.ids.map((id) => kiidOf(doc, id)).filter((v) => v && v !== "00000000-0000-0000-0000-000000000000");
+    if (items.length) marker2.items = items.map((value) => ({ value }));
+    if (LAYER_STORED.has(m.code)) marker2.layer = boardLayerEnum(m.layer || "F.Cu");
+    marker2.marker_type = "MT_DRC";
+    const out = { marker: marker2 };
+    if (comment) out.comment = comment;
+    return out;
+  }
+  function exclusionKey(ex) {
+    if (!ex || !ex.marker) return "";
+    const m = ex.marker;
+    const p = m.position || {};
+    const parts = [m.error_type || "", String(p.x_nm || "0"), String(p.y_nm || "0"), (m.items || []).map((i) => i.value).join(","), m.error_type === "DRCET_UNCONNECTED_ITEMS" ? "" : m.layer || "", m.marker_type || ""];
+    return parts.join("|");
+  }
+  function legacyExclusion(data, comment) {
+    const p = data.split("|");
+    if (p.length < 5 || !DRCET[p[0]]) return null;
+    const code = p[0], x = parseInt(p[1], 10) || 0, y = parseInt(p[2], 10) || 0;
+    let ids = [p[3], p[4]], layer = "F.Cu";
+    if (LEGACY_LAYER_FIELD.has(code)) {
+      ids = [p[3]];
+      layer = p[4] || "F.Cu";
+    } else if (code === "unconnected_items" && p.length > 6) ids = [p[5], p[6]];
+    return exclusionOf(null, { code, x: x / 1e6, y: y / 1e6, ids: ids.filter(Boolean), layer }, comment);
+  }
+  function readExclusion(entry) {
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) return entry.marker ? entry : null;
+    if (Array.isArray(entry) && entry.length) return legacyExclusion(String(entry[0]), entry.length > 1 ? String(entry[1]) : "");
+    if (typeof entry === "string") return legacyExclusion(entry, "");
+    return null;
+  }
+  function projectExclusions(proText) {
+    if (!proText) return [];
+    try {
+      const j = JSON.parse(proText);
+      const a = j && j.board && j.board.design_settings && j.board.design_settings.drc_exclusions;
+      return Array.isArray(a) ? a : [];
+    } catch (e) {
+      return [];
+    }
+  }
+  function applyExclusions(doc, markers, entries) {
+    const byKey = /* @__PURE__ */ new Map();
+    for (const e of entries) {
+      const ex = readExclusion(e);
+      const k = exclusionKey(ex);
+      if (k && ex) byKey.set(k, ex);
+    }
+    for (const m of markers) {
+      const ex = byKey.get(exclusionKey(exclusionOf(doc, m)));
+      if (ex) {
+        m.excluded = true;
+        m.comment = ex.comment || "";
+      } else {
+        delete m.excluded;
+        delete m.comment;
+      }
+    }
+    return markers;
+  }
+  function withExclusion(entries, ex) {
+    const k = exclusionKey(ex);
+    return entries.filter((e) => exclusionKey(readExclusion(e)) !== k).concat([ex]);
+  }
+  function withoutExclusions(entries, keys) {
+    return entries.filter((e) => !keys.has(exclusionKey(readExclusion(e))));
+  }
+
   // web/tools/pcb-tools/index.ts
   var pcb = {
     id: "pcb",
@@ -15548,6 +15635,15 @@
     EXT_OFFSET,
     RULE_AREA_LAYERS,
     // the parity pass
+    DRCET,
+    applyExclusions,
+    exclusionKey,
+    exclusionOf,
+    legacyExclusion,
+    projectExclusions,
+    readExclusion,
+    withExclusion,
+    withoutExclusions,
     ACTIONS,
     runAction,
     mapNodePoints,

@@ -143,6 +143,8 @@ export interface DialogSpec {
   extra?: { label: string; fn(): void }[];
   /** Enter does not press the default button (grids, multi-line editors) */
   noEnter?: boolean;
+  /** a modeless dialog: the canvas and the menus stay usable while it is open (DIALOG_DRC) */
+  modeless?: boolean;
 }
 interface KDialogOpenApi { body: HTMLElement; close(): void }
 /** KDialogs.open with KiCad's button wording and a size beyond the default cap. */
@@ -150,7 +152,7 @@ export function openDialog(spec: DialogSpec): DialogApi | null {
   if (typeof KDialogs === "undefined" || !KDialogs) return null;
   ensureCss();
   let out: DialogApi | null = null;
-  KDialogs.open({ title: spec.title, width: spec.width, okLabel: spec.okLabel, readOnly: spec.readOnly, extra: spec.extra, ok: spec.ok, cancel: spec.cancel,
+  KDialogs.open({ title: spec.title, width: spec.width, okLabel: spec.okLabel, readOnly: spec.readOnly, extra: spec.extra, ok: spec.ok, cancel: spec.cancel, modeless: spec.modeless,
     build(body: HTMLElement, a: KDialogOpenApi) {
       const dlg = body.parentElement as HTMLElement;
       if (spec.width) dlg.style.maxWidth = "96vw";
@@ -189,6 +191,30 @@ export function messageBox(title: string, message: string, buttons: { label: str
     else if (ev.key === "Enter" && !(ev.target instanceof HTMLButtonElement)) { ev.preventDefault(); done(buttons.length - 1); }
   });
   document.body.append(ov); const last = btns[btns.length - 1]; if (last) last.focus(); else dlg.focus();
+  return ov;
+}
+/**
+ * WX_TEXT_ENTRY_DIALOG over the dialog that asked for it: a caption, a (multi-line) text field and Cancel / OK.
+ * OK hands the text to onOk; Cancel or Escape leaves it alone.
+ */
+export function textEntryBox(title: string, caption: string, value: string, multiline: boolean, onOk: (text: string) => void): HTMLElement | null {
+  if (typeof document === "undefined") return null;
+  ensureCss();
+  const ov = h("div", { class: "kd-overlay", style: "z-index:10050", "data-k": "textentry" });
+  const dlg = h("div", { class: "kd-dialog", style: "width:440px", tabIndex: -1 });
+  const field = multiline ? h("textarea", { class: "pd-text", style: "min-height:90px;width:100%", "data-k": "entry" }) : h("input", { type: "text", style: "width:100%", "data-k": "entry" });
+  (field as HTMLInputElement | HTMLTextAreaElement).value = value;
+  const body = h("div", { class: "kd-body" }, caption ? h("p", { style: "margin:4px 0 6px" }, caption) : null, field);
+  const done = (ok: boolean): void => { ov.remove(); if (ok) onOk((field as HTMLInputElement | HTMLTextAreaElement).value); };
+  const cancel = h("button", { class: "btn", type: "button", "data-k": "te-cancel" }, "Cancel"), okb = h("button", { class: "btn primary", type: "button", "data-k": "te-ok" }, "OK");
+  cancel.addEventListener("click", () => done(false)); okb.addEventListener("click", () => done(true));
+  dlg.append(h("div", { class: "kd-title" }, h("span", null, title)), body, h("div", { class: "kd-foot" }, h("span", { class: "spacer" }), cancel, okb)); ov.append(dlg);
+  ov.addEventListener("keydown", (ev) => {
+    ev.stopPropagation();
+    if (ev.key === "Escape") { ev.preventDefault(); done(false); }
+    else if (ev.key === "Enter" && (!multiline || ev.shiftKey || ev.ctrlKey || ev.metaKey) && !(ev.target instanceof HTMLButtonElement)) { ev.preventDefault(); done(true); }
+  });
+  document.body.append(ov); field.focus();
   return ov;
 }
 /** DisplayError: an "Error" message with an OK button, over the dialog. */
