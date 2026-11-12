@@ -521,5 +521,18 @@ test("a custom rule sets the tuner's target (Update without Override Custom Rule
   assert.ok(rows.some((r) => r.title === "Length Constraints: min 23.9000 mm; opt 24.0000 mm; max 24.1000 mm" && r.value === "(from rule 'usb length')"), JSON.stringify(rows));
 });
 
+test("DRC with custom rules: 'Track length out of range' and 'Skew between tracks out of range' (within_diff_pairs)", () => {
+  const doc = K.parseDoc(DP.replace("(end 30 10.3)", "(end 31 10.3)"), "kicad_pcb"); const s = P.designSettings(null);
+  const rules = P.parseDru(`(version 1)
+(rule "len" (condition "A.NetName == 'USB_*'") (constraint length (min 20.5mm)))
+(rule "dp skew" (condition "A.inDiffPair('USB')") (constraint skew (max 0.5mm) (within_diff_pairs)))
+(rule "lone" (condition "A.NetName == 'LONE'") (severity ignore) (constraint length (max 1mm)))`).rules;
+  const m = P.matchedLengthMarkers(doc, s, rules);
+  const len = m.filter((x) => x.code === "length_out_of_range");
+  assert.equal(len.length, 1, JSON.stringify(m)); assert.equal(len[0].text, "Track length out of range (rule 'len' min length 20.5000 mm; actual 20.0000 mm)"); assert.deepEqual(len[0].ids, ["p1"]);
+  const sk = m.filter((x) => x.code === "skew_out_of_range");
+  assert.equal(sk.length, 1); assert.equal(sk[0].text, "Skew between tracks out of range (rule 'dp skew' max skew 0.5000 mm; actual -1.0000 mm; target net length 21.0000 mm (from USB_N); actual 20.0000 mm)");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

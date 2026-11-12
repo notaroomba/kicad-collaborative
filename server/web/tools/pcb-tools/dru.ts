@@ -1,16 +1,17 @@
 // pcb-tools/dru.ts — custom design rules (.kicad_dru): DRC_RULES_PARSER, the PCBEXPR condition language and
 // DRC_ENGINE::EvalRules for the constraints the web editor uses (length, skew, diff_pair_gap,
 // diff_pair_uncoupled, clearance, track_width).  Lengths are in mm.
-import type { BoardDoc, DesignSettings, SAtom } from "./types";
+import type { BoardDoc, DesignSettings, DrcMarker, SAtom } from "./types";
+import { arcLength } from "./distances";
 import { matchDpSuffix } from "./diffpair";
-import { netclassName } from "./drc";
+import { marker, mm4, netclassName } from "./drc";
 import { boardNets } from "./changes";
 import { netOf } from "./nets";
 import { K } from "./state";
 import { layerOf } from "./util";
 
 /** A rule's (constraint …): its type and min / opt / max in mm (null when not given). */
-export interface DruConstraint { type: string; min: number | null; opt: number | null; max: number | null }
+export interface DruConstraint { type: string; min: number | null; opt: number | null; max: number | null; options?: string[] }
 /** A parsed (rule …). */
 export interface DruRule { name: string; condition: string; layer: string | null; severity: string | null; constraints: DruConstraint[]; expr: Expr | null; error: string | null }
 /** What a resolved constraint reports: the text as MessageTextFromMinOptMax writes it and the rule's name. */
@@ -138,7 +139,11 @@ export function parseDru(text: string): { rules: DruRule[]; errors: string[] } {
       else if (c[0] === "severity") rule.severity = K.str(c[1]);
       else if (c[0] === "constraint") {
         const k: DruConstraint = { type: K.str(c[1]), min: null, opt: null, max: null };
-        for (const v of c.slice(2)) if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0] as "min" | "opt" | "max"] = druValue(K.str(v[1]));
+        for (const v of c.slice(2)) {
+          if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0] as "min" | "opt" | "max"] = druValue(K.str(v[1]));
+          else if (Array.isArray(v) && v.length === 1) (k.options = k.options || []).push(K.str(v[0]));   // (within_diff_pairs)
+          else if (!Array.isArray(v)) (k.options = k.options || []).push(K.str(v));
+        }
         rule.constraints.push(k);
       }
     }
@@ -174,4 +179,59 @@ export function evalRuleConstraint(rules: DruRule[], type: string, doc: BoardDoc
     return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
   }
   return null;
+}
+
+/**
+ * DRC_TEST_PROVIDER_MATCHED_LENGTH for the custom rules: every net whose tracks a rule gives a length constraint is
+ * checked as one connection (its routed track length; via heights and pad-to-die lengths are not counted), and the
+ * nets one skew rule covers are compared with the longest of them (within_diff_pairs: each pair on its own).
+ */
+export function matchedLengthMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[]): DrcMarker[] {
+  const out: DrcMarker[] = []; if (!rules.some((r) => r.constraints.some((c) => c.type === "length" || c.type === "skew"))) return out;
+  const nets = new Map<string, { name: string; ids: string[]; total: number; first: KItem }>();
+  for (const it of doc.items.values()) {
+    if (it.kind !== "segment" && it.kind !== "arc") continue;
+    const name = netOf(it.node).name || ""; if (!name) continue;
+    const a = K.kid(it.node, "start"), b = K.kid(it.node, "end"); if (!a || !b) continue;
+    const A: [number, number] = [K.num(a[1]), K.num(a[2])], B: [number, number] = [K.num(b[1]), K.num(b[2])];
+    let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+    if (it.kind === "arc") { const m = K.kid(it.node, "mid"); const c = m && K.arcFrom3(A, [K.num(m[1]), K.num(m[2])], B); if (c) L = arcLength(c); }
+    let n = nets.get(name); if (!n) nets.set(name, n = { name, ids: [], total: 0, first: it });
+    n.ids.push(it.id); n.total += L;
+  }
+  const at = (it: KItem) => { const a = K.kid(it.node, "start")!; return [K.num(a[1]), K.num(a[2])]; };
+  const groups = new Map<string, { c: DruConstraint; rule: DruRule; nets: typeof nets extends Map<string, infer V> ? V[] : never }>();
+  for (const n of nets.values()) {
+    for (let i = rules.length - 1; i >= 0; i--) {   // the rule that gives this net its length constraint
+      const r = rules[i], c = r.constraints.find((k) => k.type === "length"); if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+      if (r.severity === "ignore") break;
+      const name = `rule '${r.name}'`, [x, y] = at(n.first);
+      if (c.min != null && n.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n.total)})`, n.ids.slice())));
+      else if (c.max != null && n.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n.total)})`, n.ids.slice()));
+      break;
+    }
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i], c = r.constraints.find((k) => k.type === "skew"); if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+      if (r.severity === "ignore") break;
+      let g = groups.get(r.name + "\u0000" + i); if (!g) groups.set(r.name + "\u0000" + i, g = { c, rule: r, nets: [] }); g.nets.push(n); break;
+    }
+  }
+  for (const g of groups.values()) {
+    let sets: (typeof g.nets)[] = [g.nets];
+    if (g.c.options && g.c.options.includes("within_diff_pairs")) {
+      sets = []; const left = new Map(g.nets.map((n) => [n.name, n]));
+      for (const n of g.nets) { if (!left.has(n.name)) continue; const m = matchDpSuffix(n.name); const o = m.rv ? left.get(m.complement) : null; if (o) { sets.push([n, o]); left.delete(n.name); left.delete(o.name); } }
+    }
+    for (const set of sets) {
+      let ref = set[0]; for (const n of set) if (n.total > ref.total) ref = n;
+      for (const n of set) {
+        const skew = Math.abs(n.total - ref.total), name = `rule '${g.rule.name}'`; let kind = "";
+        if (g.c.max != null && skew > g.c.max + 1e-6) kind = "max"; else if (g.c.min != null && n !== ref && skew < g.c.min - 1e-6) kind = "min";
+        if (!kind) continue;
+        const [x, y] = at(n.first);
+        out.push(marker("skew_out_of_range", g.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g.c.max! : g.c.min!)}; actual ${mm4(n.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n.total)})`, n.ids.slice()));
+      }
+    }
+  }
+  return out.filter((m) => s.severities[m.code] !== "ignore");
 }

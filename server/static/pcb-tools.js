@@ -3151,7 +3151,11 @@
         else if (c[0] === "severity") rule.severity = K.str(c[1]);
         else if (c[0] === "constraint") {
           const k = { type: K.str(c[1]), min: null, opt: null, max: null };
-          for (const v of c.slice(2)) if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
+          for (const v of c.slice(2)) {
+            if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
+            else if (Array.isArray(v) && v.length === 1) (k.options = k.options || []).push(K.str(v[0]));
+            else if (!Array.isArray(v)) (k.options = k.options || []).push(K.str(v));
+          }
           rule.constraints.push(k);
         }
       }
@@ -3192,6 +3196,85 @@
       return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
     }
     return null;
+  }
+  function matchedLengthMarkers(doc, s, rules) {
+    const out = [];
+    if (!rules.some((r) => r.constraints.some((c) => c.type === "length" || c.type === "skew"))) return out;
+    const nets = /* @__PURE__ */ new Map();
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" && it.kind !== "arc") continue;
+      const name = netOf(it.node).name || "";
+      if (!name) continue;
+      const a = K.kid(it.node, "start"), b = K.kid(it.node, "end");
+      if (!a || !b) continue;
+      const A = [K.num(a[1]), K.num(a[2])], B = [K.num(b[1]), K.num(b[2])];
+      let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      if (it.kind === "arc") {
+        const m = K.kid(it.node, "mid");
+        const c = m && K.arcFrom3(A, [K.num(m[1]), K.num(m[2])], B);
+        if (c) L = arcLength(c);
+      }
+      let n = nets.get(name);
+      if (!n) nets.set(name, n = { name, ids: [], total: 0, first: it });
+      n.ids.push(it.id);
+      n.total += L;
+    }
+    const at = (it) => {
+      const a = K.kid(it.node, "start");
+      return [K.num(a[1]), K.num(a[2])];
+    };
+    const groups = /* @__PURE__ */ new Map();
+    for (const n of nets.values()) {
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "length");
+        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+        if (r.severity === "ignore") break;
+        const name = `rule '${r.name}'`, [x, y] = at(n.first);
+        if (c.min != null && n.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n.total)})`, n.ids.slice())));
+        else if (c.max != null && n.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n.total)})`, n.ids.slice()));
+        break;
+      }
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "skew");
+        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+        if (r.severity === "ignore") break;
+        let g = groups.get(r.name + "\0" + i);
+        if (!g) groups.set(r.name + "\0" + i, g = { c, rule: r, nets: [] });
+        g.nets.push(n);
+        break;
+      }
+    }
+    for (const g of groups.values()) {
+      let sets = [g.nets];
+      if (g.c.options && g.c.options.includes("within_diff_pairs")) {
+        sets = [];
+        const left = new Map(g.nets.map((n) => [n.name, n]));
+        for (const n of g.nets) {
+          if (!left.has(n.name)) continue;
+          const m = matchDpSuffix(n.name);
+          const o = m.rv ? left.get(m.complement) : null;
+          if (o) {
+            sets.push([n, o]);
+            left.delete(n.name);
+            left.delete(o.name);
+          }
+        }
+      }
+      for (const set of sets) {
+        let ref = set[0];
+        for (const n of set) if (n.total > ref.total) ref = n;
+        for (const n of set) {
+          const skew = Math.abs(n.total - ref.total), name = `rule '${g.rule.name}'`;
+          let kind = "";
+          if (g.c.max != null && skew > g.c.max + 1e-6) kind = "max";
+          else if (g.c.min != null && n !== ref && skew < g.c.min - 1e-6) kind = "min";
+          if (!kind) continue;
+          const [x, y] = at(n.first);
+          out.push(marker("skew_out_of_range", g.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g.c.max : g.c.min)}; actual ${mm4(n.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n.total)})`, n.ids.slice()));
+        }
+      }
+    }
+    return out.filter((m) => s.severities[m.code] !== "ignore");
   }
 
   // web/tools/pcb-tools/walkaround.ts
@@ -13879,7 +13962,8 @@
   });
   act("runDRC", "Design Rules Checker\u2026", "", (ctx) => {
     bind(ctx);
-    S.markers = drc(ctx.doc, settingsOf(ctx));
+    const s = settingsOf(ctx);
+    S.markers = drc(ctx.doc, s).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules) : []);
     ctx.requestRender();
     const errors = S.markers.filter((m) => m.severity === "error").length, warnings = S.markers.length - errors;
     openForm({ title: "DRC Control", width: 620, fields: [{ type: "note", value: `${plural(errors, "error")}, ${plural(warnings, "warning")} \u2014 click a row to highlight it.` }, { k: "list", type: "table", columns: [{ label: "Severity", width: "70px" }, { label: "Violation", width: "1fr" }], rows: S.markers.map((m) => [m.severity, m.text]), empty: "No violations found.", onRow: (i) => {
@@ -15142,6 +15226,8 @@
     parseCondition,
     wildMatch,
     tuneStatus,
+    matchedLengthMarkers,
+    customRuleMarkers: (doc, s, text) => text ? matchedLengthMarkers(doc, s, parseDru(text).rules) : [],
     meanderDefaults,
     setTargetLength,
     meanderMove,
