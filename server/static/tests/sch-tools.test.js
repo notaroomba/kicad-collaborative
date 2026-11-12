@@ -426,18 +426,44 @@ test("circle: centre then a radius point; a zero radius is not a circle", () => 
   assert.strictEqual(sch.state.draw, null);
 });
 
-test("arc: start, end, then a point on the arc; a point on the chord is refused", () => {
-  sch.onActivate("arc", ctx);
+test("arc: KiCad 10's five drawing modes (EE_GRAPHIC_TOOL::DrawArc with ARC_MODE_SESSION); start, end, midpoint refuses a point on the chord", () => {
+  const groups = []; ctx.setGroupCurrent = (g, id) => groups.push([g, id]);
+  // Start, End, Midpoint: the third point is projected onto the chord's bisector
+  assert.ok(sch.actions.drawArcStartEndMid.run(ctx)); assert.strictEqual(sch.state.tool, "arc");
+  assert.deepStrictEqual(groups[groups.length - 1], ["Arc", "drawArcStartEndMid"], "the Arc group shows the mode");
   sch.onPointerDown(ev(), [76.2, 101.6], ctx); sch.onPointerDown(ev(), [86.36, 101.6], ctx);
-  assert.deepStrictEqual(sch.state.draw.pts, [[76.2, 101.6], [86.36, 101.6]]);
-  ctx.toasts.length = 0; sch.onPointerDown(ev(), [81.28, 101.6], ctx);
-  assert.ok(sch.state.draw && sch.state.draw.pts.length === 2 && ctx.toasts.length, "collinear point refused");
+  assert.deepStrictEqual(sch.state.draw.pts, [[76.2, 101.6]]); assert.strictEqual(sch.state.draw.arc.getStep(), 2);
+  const n0 = ctx.log.length; sch.onPointerDown(ev(), [81.28, 101.6], ctx);
+  assert.ok(sch.state.draw && sch.state.draw.arc.getStep() === 2 && ctx.log.length === n0, "a point on the chord makes no arc");
   sch.onPointerDown(ev(), [81.28, 96.52], ctx);
   const c = lastCommit(ctx); assert.strictEqual(c.label, "arc"); assert.strictEqual(c.changes[0].typeName, "SCH_SHAPE");
   const n = fragItem(c.changes[0]);
   assert.deepStrictEqual(n.slice(0, 6), ["arc", ["start", 76.2, 101.6], ["mid", 81.28, 96.52], ["end", 86.36, 101.6], STROKE0, FILL_NONE]); assert.strictEqual(n[6][0], "uuid");
   const g = doc.items.get(c.changes[0].id).geom.find((x) => x.t === "arc"); assert.ok(g); assert.ok(near(g.r, 5.08) && near(g.x, 81.28) && near(g.y, 101.6));
-  assert.strictEqual(sch.state.draw, null);
+  assert.ok(sch.state.draw && sch.state.draw.arc && sch.state.draw.arc.isReset(), "the tool goes on with the next arc");
+  // Center, Start, End: a quarter turn about (50.8, 15.24); Backspace takes back the last point
+  assert.ok(sch.actions.drawArcCenter.run(ctx)); assert.deepStrictEqual(groups[groups.length - 1], ["Arc", "drawArcCenter"]);
+  sch.onPointerDown(ev(), [50.8, 15.24], ctx); sch.onPointerDown(ev(), [55.88, 20.32], ctx);
+  assert.ok(sch.onKey("Backspace", {}, ctx)); assert.strictEqual(sch.state.draw.arc.getStep(), 1);
+  sch.onPointerDown(ev(), [60.96, 15.24], ctx); sch.onPointerMove(ev(), [50.8, 5.08], ctx);
+  sch.onPointerDown(ev(), [50.8, 5.08], ctx);
+  const a = fragItem(lastCommit(ctx).changes[0]); assert.strictEqual(a[0], "arc");
+  const ga = K.arcFrom3(a[1].slice(1), a[2].slice(1), a[3].slice(1)); assert.ok(near(ga.x, 50.8, 1e-3) && near(ga.y, 15.24, 1e-3) && near(ga.r, 10.16, 1e-3), JSON.stringify(a.slice(1, 4)));
+  // Cycle Arc Drawing Mode (Alt+/) walks the modes and is remembered
+  sch.onKey("/", { altKey: true }, ctx); assert.deepStrictEqual(groups[groups.length - 1], ["Arc", "drawArcStartEndMid"]);
+  assert.strictEqual(sch.state.draw.arc.mode, 1);
+  // Tangent: a click on a graphic line's end leaves along it; Enter keeps the arc and ends the tool
+  // Tangent: a click on the end of a graphic seeds the arc from it; the next click ends it, on the same circle here
+  sch.actions.drawArcTangent.run(ctx); assert.strictEqual(sch.state.draw.arc.mode, 3);
+  const n1 = ctx.log.length;
+  sch.onPointerDown(ev(), [50.8, 5.08], ctx); assert.ok(sch.state.draw.clickSeeded && ctx.log.length === n1, "the click seeds, nothing is committed");
+  sch.onPointerMove(ev(), [40.64, 15.24], ctx); sch.onPointerDown(ev(), [40.64, 15.24], ctx);
+  const t = fragItem(lastCommit(ctx).changes[0]), gt = K.arcFrom3(t[1].slice(1), t[2].slice(1), t[3].slice(1));
+  assert.ok(near(gt.x, 50.8, 1e-3) && near(gt.y, 15.24, 1e-3) && near(gt.r, 10.16, 1e-3), JSON.stringify([t.slice(1, 4), gt]));
+  assert.ok(sch.state.draw && sch.state.draw.chainSeeded, "the next arc leaves from where this one ended");
+  // Enter (finishInteractive) with no arc yet commits nothing and ends the tool
+  const n2 = ctx.log.length; assert.ok(sch.onKey("Enter", {}, ctx)); assert.strictEqual(ctx.log.length, n2); assert.strictEqual(sch.state.tool, "select");
+  sch.actions.drawArcCenter.run(ctx); sch.onActivate("select", ctx);   // leave the remembered mode at its default
 });
 
 test("lines (I): KiCad's drawLines — one SCH_LINE per segment on the notes layer, a double click finishes, Enter too, a lone point is dropped", () => {

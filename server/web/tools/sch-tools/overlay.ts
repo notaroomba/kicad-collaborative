@@ -1,7 +1,8 @@
 import type { Box, PaintGeom, Pt } from "./types";
 import { rectOf } from "./hit";
 import { corners } from "./nodes";
-import { LINE_KINDS, S, ptsOf } from "./state";
+import { K, LINE_KINDS, S, ptsOf } from "./state";
+import { schArcPoints } from "./arcs";
 import { segNull } from "./wire";
 
 // ---------------------------------------------------------------- overlay painting
@@ -55,7 +56,13 @@ export function ghostSegs() {
   if (d && d.moved) for (const e of d.items) { if (LINE_KINDS.has(e.kind)) path(ptsOf(e.item.node)); else box(e.item.bbox || rectOf(e.item)); }
   if (S.carry && S.carry.item) box(S.carry.item.bbox || rectOf(S.carry.item));
   const dr = S.draw;
-  if (dr && dr.pts.length && dr.cur) {
+  if (dr && dr.arc) {   // the arc as it previews, or its construction line until there is one
+    const a = schArcPoints(dr), arc = a ? K.arcFrom3(a.start, a.mid, a.end) : null;
+    if (arc) { const sweep = arc.anticlockwise ? -(((arc.a0 - arc.a1) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)) : ((arc.a1 - arc.a0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI), ring: Pt[] = [];
+      for (let i = 0; i <= 24; i++) { const t = arc.a0 + sweep * i / 24; ring.push([arc.x + arc.r * Math.cos(t), arc.y + arc.r * Math.sin(t)]); } path(ring); }
+    else if (dr.pts.length) path([dr.pts[0], dr.cur]);
+  }
+  else if (dr && dr.pts.length && dr.cur) {
     const a = dr.pts[0], c = dr.cur;
     if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet" || dr.shape === "table") box(corners(a, c));
     else if (dr.shape === "circle") { const r = Math.hypot(c[0] - a[0], c[1] - a[1]), ring: Pt[] = []; for (let i = 0; i <= 24; i++) ring.push([a[0] + r * Math.cos(i * Math.PI / 12), a[1] + r * Math.sin(i * Math.PI / 12)]); path(ring); }

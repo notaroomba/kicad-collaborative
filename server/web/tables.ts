@@ -9,7 +9,7 @@ export const TOOL_MAP: Record<Editor, Record<string, string>> = {
   sch: { selectSetRect: "select", selectSetLasso: "select", highlightNetTool: "highlight", placeSymbol: "place", placePower: "power", drawWire: "wire", drawBus: "bus", placeBusWireEntry: "busentry",
     placeNoConnect: "noconnect", placeJunction: "junction", placeLabel: "label", placeClassLabel: "classlabel", placeGlobalLabel: "glabel",
     placeHierLabel: "hlabel", drawRuleArea: "rulearea", drawSheet: "sheet", placeSheetPin: "sheetpin", placeSchematicText: "text", drawTextBox: "textbox", drawTable: "table",
-    drawRectangle: "rect", drawCircle: "circle", drawArc: "arc", drawBezier: "bezier", drawPolygon: "polygon", drawLines: "lines", placeImage: "image",
+    drawRectangle: "rect", drawCircle: "circle", drawArc: "arc", drawArcCenter: "arc", drawArcStartEndMid: "arc", drawArcStartEndCenter: "arc", drawArcTangent: "arc", drawArcStartDirEnd: "arc", drawBezier: "bezier", drawPolygon: "polygon", drawLines: "lines", placeImage: "image",
     deleteTool: "delete", zoomTool: "zoomtool", measureTool: "measure" },
   pcb: { selectSetRect: "select", selectSetLasso: "select", routeSingleTrack: "route", routeDiffPair: "routediff", tuneSingleTrack: "tunesingle", tuneDiffPair: "tunediff", tuneSkew: "tuneskew", drawVia: "via", drawZone: "zone", drawCopperThievingZone: "thievingzone", drawRuleArea: "rulearea", drawLine: "gline", drawArc: "garc", drawArcCenter: "garc", drawArcStartEndMid: "garc", drawArcStartEndCenter: "garc", drawArcTangent: "garc", drawArcStartDirEnd: "garc", drawRectangle: "grect",
     drawCircle: "gcircle", drawPolygon: "gpoly", drawBezier: "gcurve", placeReferenceImage: "image", placeText: "gtext", drawTextBox: "gtextbox", drawTable: "table",
@@ -80,7 +80,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["&Inspect", ["showBusSyntaxHelp", "-", "runERC", "prevMarker", "nextMarker", "excludeMarker", "clearMarkers", "-", "diffSymbol", "-", "showSimulator",
       "-", "highlightNetTool", "clearHighlight", "measureTool"]],
     ["&Tools", ["updatePcbFromSchematic", "showPcbNew", "showProjectManager", "showCalculatorTools", "-", "showSymbolEditor", "updateSymbols", "-", "rescueSymbols", "remapSymbols",
-      "-", "editSymbolFields", "editSymbolLibraryLinks", "-", "annotate", "module:clearAnnotation", "toggleAnnotateAuto", "incrementAnnotations", "-", "assignFootprints", "generateBOM", "generateBOMLegacy",
+      "-", "editSymbolFields", "editSymbolLibraryLinks", "-", "annotate", "incrementAnnotations", "-", "assignFootprints", "generateBOM", "generateBOMLegacy",
       "-", "updateSchematicFromPcb", "-", "createNetChain", "-",
       ["Variants", ["addVariant", "removeVariant", "editVariantDescription", "renameVariant", "copyVariant"]]]],
     ["P&references", ["configurePaths", "showSymbolLibTable", "showDesignBlockLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
@@ -157,7 +157,11 @@ export const MODULE_ALIAS: Record<Editor, Record<string, string>> = {
 };
 /** Module action ids that only repeat another one (the same command under a second name), or that KiCad offers only in a context menu: never listed on their own. */
 export const MODULE_DUPLICATES: Record<Editor, string[]> = {
-  sch: ["highlightNet"],
+  sch: ["highlightNet",
+    // Clear Annotation is the Annotate dialog's button and Annotate Automatically the left toolbar's toggle: KiCad's Tools menu has neither
+    "clearAnnotation", "toggleAnnotateAuto",
+    // the arc tool's modes: the Arc toolbar group and EE_GRAPHIC_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
+    "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode"],
   pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneFill", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",
     // the interactive router's own commands: KiCad offers them in the router's context menu and the route tool's toolbar menu only
     "routerHighlightMode", "routerShoveMode", "routerWalkaroundMode", "cycleRouterMode", "routerUndoLastSegment", "routerDiffPairDialog",

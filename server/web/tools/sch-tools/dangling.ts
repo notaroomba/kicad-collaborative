@@ -7,6 +7,7 @@ import { anchorOf } from "./orient";
 import { outline, paint } from "./overlay";
 import { drawEditPoints } from "./point-edit";
 import { snapConn } from "./snap";
+import { drawSchArcPreview } from "./arcs";
 import { CLR, K, S, atOf, kids, ptsOf, str, toolOf } from "./state";
 import { r4, same, segDist, segs } from "./util";
 import { segNull } from "./wire";
@@ -157,12 +158,8 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
     if (d.shape === "sheet") c.strokeStyle = K.SCH.sheet; else if (d.shape === "rulearea") { c.strokeStyle = K.SCH.ruleArea; c.setLineDash([4 * px, 3 * px]); }
     if (d.shape === "rect" || d.shape === "textbox" || d.shape === "sheet" || d.shape === "table") c.strokeRect(Math.min(p0[0], cur[0]), Math.min(p0[1], cur[1]), Math.abs(cur[0] - p0[0]), Math.abs(cur[1] - p0[1]));
     else if (d.shape === "circle") { c.beginPath(); c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2); c.stroke(); }
-    else if (d.shape === "arc") {
-      const a = d.pts.length > 1 ? K.arcFrom3(p0, cur, d.pts[1]) : null;
-      c.beginPath();
-      if (a) c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise); else { c.moveTo(p0[0], p0[1]); c.lineTo(cur[0], cur[1]); }
-      c.stroke();
-    } else if (d.shape === "bezier") {
+    else if (d.shape === "arc" && d.arc) drawSchArcPreview(c, d, px);
+    else if (d.shape === "bezier") {
       // the manager's preview: end and control 2 trail the cursor until they are fixed
       const n = d.pts.length, e = n > 2 ? d.pts[2] : cur;
       const ctrl = n === 1 ? [p0, cur, cur, cur] : n === 2 ? [p0, d.pts[1], cur, cur] : [p0, d.pts[1], [2 * e[0] - cur[0], 2 * e[1] - cur[1]], e];

@@ -12,6 +12,7 @@ import { finishWire } from "./junction";
 import { busEntryNode, junctionNode, noConnectNode } from "./nodes";
 import { repeatLast } from "./repeat";
 import { deleteAt, deleteSelected, duplicateSelected, orientSelected } from "./selection-edits";
+import { finishSchArc, showSchArcMode, schArcBackup, schArcDrawMode, schArcMove, schArcPosture, switchSchArcMode } from "./arcs";
 import { cancelDraw, drawClick, drawPoint, finishDraw, undoDrawPoint } from "./shapes";
 import { sheetEdgeAt, sheetPinClick } from "./sheets";
 import { mmPerPx, snapConn } from "./snap";
@@ -53,6 +54,7 @@ export function onActivate(toolId: string, ctx: SchCtx) {
   S.tool = toolId;
   closePrompt(); S.pending = null; if (S.drag) endDrag(ctx, false);
   if (S.draw) S.draw = null;                      // an unfinished shape is dropped with its tool
+  if (toolId === "arc") showSchArcMode(ctx);       // SelectToolbarAction( DrawArcForMode ): the Arc group shows the mode
   if (!toolOf(toolId)) { closePicker(); S.carry = null; ctx.requestRender(); return; }
   S.sel = null; S.hover = null;
   if (toolId !== "place" && toolId !== "power" && toolId !== "image") S.carry = null;   // a carried duplicate rides into the place tool
@@ -107,7 +109,11 @@ export function onPointerDown(ev: DownEvent, mm: Pt, ctx: SchCtx) {
   if (t.id === "sheetpin") { sheetPinClick(ctx, mm); return true; }
   if (t.id === "highlight") { highlightClick(ctx, mm); return true; }   // empty space clears it
   if (t.id === "sheet" && S.sheetJob) { ctx.toast("Still creating the previous sheet…"); return true; }
-  if (DRAW_TOOLS.has(t.id)) { if (S.draw && S.draw.await) return true; drawClick(ctx, t.id, drawPoint(ctx, mm)); return true; }
+  if (DRAW_TOOLS.has(t.id)) {
+    if (S.draw && S.draw.await) return true;
+    if (t.id === "arc" && dbl && S.draw && S.draw.arc) { finishSchArc(ctx); return true; }   // drawManagedShape: IsDblClick keeps what is drawn
+    drawClick(ctx, t.id, drawPoint(ctx, mm)); return true;
+  }
   if (t.id === "delete") { deleteAt(ctx, mm); return true; }   // an empty click is ours too: the tool stays armed
   return false;
 }
@@ -115,6 +121,7 @@ export function onPointerMove(ev: PtrEvent | null | undefined, mm: Pt, ctx: SchC
   S.ctx = ctx; S.cursor = mm; if (ev && ev.clientX !== undefined) S.cursorClient = [ev.clientX, ev.clientY!];
   if (S.wire) { const p = snapConn(ctx, mm, S.wire.kind, ev); if (!same(S.wire.cur, p)) { wireFollow(ctx, p); ctx.requestRender(); } return; }
   if (S.carry) { placeCarry(ctx, mm, ev); return; }
+  if (S.draw && S.draw.arc) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { schArcMove(S.draw, p); ctx.requestRender(); } return; }
   if (S.draw && !S.draw.await) { const p = drawPoint(ctx, mm); if (!same(S.draw.cur, p)) { S.draw.cur = p; ctx.requestRender(); } return; }
   if (S.tool === "highlight" || S.tool === "sheetpin") {   // what the click would pick: a net item / pin, or the sheet whose border is near
     let id: string | null = null;
@@ -159,6 +166,12 @@ export function onKey(key: string, ev: Mods | null | undefined, ctx: SchCtx) {
     return true;
   };
   if (S.wire && wireKey(ctx, key === "Backspace" ? "Backspace" : key === "Delete" ? "Del" : key)) return true;
+  if (S.draw && S.draw.arc) {   // EE_GRAPHIC_TOOL::drawManagedShape with an ARC_MODE_SESSION
+    if (key === "Enter" || key === "End") { finishSchArc(ctx); return true; }
+    if (key === "Backspace" || key === "Delete") { schArcBackup(ctx); return true; }
+    if (key === "/") { if (ev && ev.altKey) switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5); else schArcPosture(ctx); return true; }
+    if (key === "Escape") { cancelDraw(ctx); return true; }
+  }
   if (S.draw && !S.draw.await) {
     if (key === "Enter" || key === "End") {
       const sh = S.draw.shape, n = S.draw.pts.length;

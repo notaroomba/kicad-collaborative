@@ -83,7 +83,11 @@ export interface SchWire { kind: string; segs: Pt[][]; cur: Pt; quitOnDraw: bool
 /** S.carry: an item riding on the cursor until a click places it. */
 export interface SchCarry { kind: string; node: SNode; item: KItem | null; pos: Pt | null; size?: Pt }
 /** S.draw: a graphic shape being drawn (pts are the fixed clicks, cur the cursor); await while a dialog is up. */
-export interface SchDraw { shape: string; pts: Pt[]; cur: Pt; await?: boolean }
+export interface SchDraw {
+  shape: string; pts: Pt[]; cur: Pt; await?: boolean;
+  /** an arc: its ARC_GEOM_MANAGER, whether the first click happened, whether its start came from a tangent seed, the last click (nm) */
+  arc?: import("../arc-geom").ArcGeom; started?: boolean; chainSeeded?: boolean; clickSeeded?: boolean; lastClick?: Pt;
+}
 /** The editable points of an item (point editor) and the segments between them. */
 export interface EditPoints { pts: Pt[]; lines: number[][]; guides: number[][] }
 /** An item that follows a point edit: a connected line end, a label or a no-connect on the edited point. */

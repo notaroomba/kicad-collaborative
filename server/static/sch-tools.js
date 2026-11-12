@@ -1191,15 +1191,15 @@ ${body}
     }
     const fresh = parsed.nodes.map((n) => cloneNode({ kind: n[0], node: deep(n) }));
     const used = usedReferences(doc);
-    const mode = opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null)) || (S.annotateAuto ? "unique" : "remove");
+    const mode2 = opts && (opts.pasteMode || (opts.keepAnnotations ? "keep" : null)) || (S.annotateAuto ? "unique" : "remove");
     for (const n of fresh) {
-      if (n[0] !== "symbol" || mode === "keep") continue;
-      if (mode === "remove") {
+      if (n[0] !== "symbol" || mode2 === "keep") continue;
+      if (mode2 === "remove") {
         const p = refField(n);
         if (p) setReference(n, unannotated(str(p[2])));
         continue;
       }
-      if (mode === "unique") {
+      if (mode2 === "unique") {
         const auto = S.annotateAuto;
         S.annotateAuto = true;
         try {
@@ -1261,18 +1261,18 @@ ${body}
   function followPaste(ctx, ids, libs, at, label) {
     const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean);
     if (!items.length) return false;
-    const mode = S.dragMode;
+    const mode2 = S.dragMode;
     S.dragMode = "move";
     const d = beginDrag(ctx, items, at, false, { plain: true });
     if (!d) {
-      S.dragMode = mode;
+      S.dragMode = mode2;
       return false;
     }
     d.pasted = true;
     d.local = new Set(ids);
     d.libs = libs || [];
     d.label = label;
-    d.restoreMode = mode;
+    d.restoreMode = mode2;
     d.moved = true;
     setSelectionIds(ctx, ids);
     return true;
@@ -1291,7 +1291,7 @@ ${body}
     const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
     if (opts && (opts.pasteMode || opts.keepAnnotations !== void 0) || !KD || !KD.open) return pasteSelection(ctx, Object.assign({ keepAnnotations: true }, opts || {}));
     const at = snapCursor(ctx);
-    let mode = S.annotateAuto ? "unique" : "remove";
+    let mode2 = S.annotateAuto ? "unique" : "remove";
     const choices = [
       ["unique", "Assign unique reference designators to pasted symbols", "Finds the next available reference designator for any designators that already exist in the design."],
       ["keep", "Keep existing reference designators, even if they are duplicated", ""],
@@ -1301,13 +1301,13 @@ ${body}
       title: "Paste Special",
       width: 460,
       build(body) {
-        body.innerHTML = `<div class="kd-note" style="margin-bottom:6px">Reference Designators</div>` + choices.map(([v, l, tip]) => `<label class="kd-chk" style="display:flex;gap:6px;align-items:center;margin:3px 0"${tip ? ` title="${tip}"` : ""}><input type="radio" name="kd-paste-mode" value="${v}" id="kd-paste-${v}"${v === mode ? " checked" : ""}>${l}</label>`).join("");
+        body.innerHTML = `<div class="kd-note" style="margin-bottom:6px">Reference Designators</div>` + choices.map(([v, l, tip]) => `<label class="kd-chk" style="display:flex;gap:6px;align-items:center;margin:3px 0"${tip ? ` title="${tip}"` : ""}><input type="radio" name="kd-paste-mode" value="${v}" id="kd-paste-${v}"${v === mode2 ? " checked" : ""}>${l}</label>`).join("");
         for (const r of body.querySelectorAll("input[name=kd-paste-mode]")) r.addEventListener("change", () => {
-          if (r.checked) mode = r.value;
+          if (r.checked) mode2 = r.value;
         });
       },
       ok() {
-        setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode, at })), 0);
+        setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode2, at })), 0);
       }
     });
     return true;
@@ -1743,9 +1743,9 @@ ${body}
     t = Math.max(0, Math.min(1, t));
     return [r4(a[0] + t * dx), r4(a[1] + t * dy)];
   }
-  function breakWire(ctx, mode) {
+  function breakWire(ctx, mode2) {
     if (!editable(ctx)) return false;
-    mode = mode === "slice" ? "slice" : "break";
+    mode2 = mode2 === "slice" ? "slice" : "break";
     const c = cursorOf(ctx);
     let lines = selectedItems(ctx).filter((x) => isNetLine(x.kind) && ptsOf(x.node).length === 2);
     if (!lines.length) {
@@ -1753,7 +1753,7 @@ ${body}
       if (hit && isNetLine(hit.kind)) lines = [hit];
     }
     if (!lines.length) return false;
-    const doc = ctx.doc, label = mode === "slice" ? "Slice Wire" : "Break Wire";
+    const doc = ctx.doc, label = mode2 === "slice" ? "Slice Wire" : "Break Wire";
     const atFor = (it) => {
       const q = ptsOf(it.node);
       return lines.length === 1 ? snapCursor(ctx) : [r4((q[0][0] + q[1][0]) / 2), r4((q[0][1] + q[1][1]) / 2)];
@@ -1768,11 +1768,11 @@ ${body}
       }
       if (!changes.length) return false;
       ctx.commit(changes, label);
-      setSelectionIds(ctx, mode === "break" ? cuts2.flatMap((x) => [x.head, x.tail]) : cuts2.map((x) => x.head));
+      setSelectionIds(ctx, mode2 === "break" ? cuts2.flatMap((x) => [x.head, x.tail]) : cuts2.map((x) => x.head));
       return true;
     }
     if (S.drag) endDrag(ctx, false);
-    const brk = { mode, label, orig: /* @__PURE__ */ new Map(), local: /* @__PURE__ */ new Set(), clicks: 0 }, cuts = [];
+    const brk = { mode: mode2, label, orig: /* @__PURE__ */ new Map(), local: /* @__PURE__ */ new Set(), clicks: 0 }, cuts = [];
     for (const it of lines) {
       const cut = splitLocal(doc, brk, it, atFor(it));
       if (cut) cuts.push(cut);
@@ -1791,15 +1791,15 @@ ${body}
       moved: true,
       byPointer: false,
       riders: [],
-      anchors: breakAnchors(cuts, mode),
+      anchors: breakAnchors(cuts, mode2),
       preview: [],
-      mode,
+      mode: mode2,
       brk,
       restoreMode: S.dragMode
     };
     S.dragMode = "drag";
     announceModes(ctx);
-    setSelectionIds(ctx, mode === "break" ? cuts.flatMap((x) => [x.head.id, x.tail.id]) : cuts.map((x) => x.head.id));
+    setSelectionIds(ctx, mode2 === "break" ? cuts.flatMap((x) => [x.head.id, x.tail.id]) : cuts.map((x) => x.head.id));
     return true;
   }
   function splitLocal(doc, brk, item, at, force) {
@@ -1817,10 +1817,10 @@ ${body}
     brk.local.add(tail.id);
     return { head: item, tail, p: q };
   }
-  function breakAnchors(cuts, mode) {
+  function breakAnchors(cuts, mode2) {
     return cuts.map((cut) => {
       const ends = [{ item: cut.head, index: 1, orig: ptsOf(cut.head.node).map((v) => v.slice()) }];
-      if (mode === "break") ends.push({ item: cut.tail, index: 0, orig: ptsOf(cut.tail.node).map((v) => v.slice()) });
+      if (mode2 === "break") ends.push({ item: cut.tail, index: 0, orig: ptsOf(cut.tail.node).map((v) => v.slice()) });
       return { p: cut.p, ends, stub: null, followers: [] };
     });
   }
@@ -1933,13 +1933,13 @@ ${body}
     }
     return null;
   }
-  function computeBreakPoint(doc, seg, next, pos, mode, posture, grid) {
+  function computeBreakPoint(doc, seg, next, pos, mode2, posture, grid) {
     pos = [pos[0], pos[1]];
     const start = seg[0], delta = [pos[0] - start[0], pos[1] - start[1]];
     const xDir = delta[0] > 0 ? 1 : -1, yDir = delta[1] > 0 ? 1 : -1;
     const nz = (v) => Math.abs(v) > 1e-9;
     let preferH, preferV;
-    if (mode === "45" && posture) {
+    if (mode2 === "45" && posture) {
       preferH = nz(next[1][0] - next[0][0]);
       preferV = nz(next[1][1] - next[0][1]);
     } else {
@@ -1954,20 +1954,20 @@ ${body}
     }
     let mid = [0, 0];
     const breakVertical = () => {
-      if (mode === "45") mid = !posture ? [start[0], pos[1] - yDir * Math.abs(delta[0])] : [pos[0], start[1] + yDir * Math.abs(delta[0])];
+      if (mode2 === "45") mid = !posture ? [start[0], pos[1] - yDir * Math.abs(delta[0])] : [pos[0], start[1] + yDir * Math.abs(delta[0])];
       else mid = [start[0], pos[1]];
     };
     const breakHorizontal = () => {
-      if (mode === "45") mid = !posture ? [pos[0] - xDir * Math.abs(delta[1]), start[1]] : [start[0] + xDir * Math.abs(delta[1]), pos[1]];
+      if (mode2 === "45") mid = !posture ? [pos[0] - xDir * Math.abs(delta[1]), start[1]] : [start[0] + xDir * Math.abs(delta[1]), pos[1]];
       else mid = [pos[0], start[1]];
     };
     if (preferV) breakVertical();
     else if (preferH) breakHorizontal();
     const dm = [mid[0] - start[0], mid[1] - start[1]], sb = (v) => v < 0;
-    if (mode === "45" && !posture && (sb(dm[0]) !== sb(delta[0]) || sb(dm[1]) !== sb(delta[1]))) {
+    if (mode2 === "45" && !posture && (sb(dm[0]) !== sb(delta[0]) || sb(dm[1]) !== sb(delta[1]))) {
       preferV = false;
       preferH = false;
-    } else if (mode === "45" && posture && (Math.abs(dm[0]) > Math.abs(delta[0]) + 1e-9 || Math.abs(dm[1]) > Math.abs(delta[1]) + 1e-9)) {
+    } else if (mode2 === "45" && posture && (Math.abs(dm[0]) > Math.abs(delta[0]) + 1e-9 || Math.abs(dm[1]) > Math.abs(delta[1]) + 1e-9)) {
       preferV = false;
       preferH = false;
     }
@@ -2182,25 +2182,25 @@ ${body}
       }
     }
   }
-  function setLineMode(ctx, mode) {
-    if (!LINE_MODES.includes(mode)) return S.lineMode;
+  function setLineMode(ctx, mode2) {
+    if (!LINE_MODES.includes(mode2)) return S.lineMode;
     const from = S.lineMode;
-    S.lineMode = mode;
+    S.lineMode = mode2;
     announceModes(ctx);
     if (S.drag) {
       applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]);
       ctx.requestRender();
     } else if (S.wire) {
-      wireModeChanged(ctx, from, mode);
+      wireModeChanged(ctx, from, mode2);
       ctx.requestRender();
     }
-    return mode;
+    return mode2;
   }
   function cycleLineMode(ctx) {
     return setLineMode(ctx, LINE_MODES[(LINE_MODES.indexOf(S.lineMode) + 1) % LINE_MODES.length]);
   }
-  function setDragMode(ctx, mode) {
-    S.dragMode = mode === "move" ? "move" : "drag";
+  function setDragMode(ctx, mode2) {
+    S.dragMode = mode2 === "move" ? "move" : "drag";
     announceModes(ctx);
     if (S.drag) {
       applyDrag(ctx.doc, S.drag, S.drag.last[0], S.drag.last[1]);
@@ -3048,13 +3048,13 @@ ${body}
     S.lastPlaced = now.map((it) => ({ kind: it.kind, node: deep(it.node) }));
     setSelectionIds(ctx, now.map((it) => it.id));
     if (symbolId && canFollow(ctx)) {
-      const it = doc.items.get(symbolId), mode = S.dragMode;
+      const it = doc.items.get(symbolId), mode2 = S.dragMode;
       S.dragMode = "move";
       const d = it ? beginDrag(ctx, [it], cursorOf(ctx), false) : null;
       if (d) {
-        d.restoreMode = mode;
+        d.restoreMode = mode2;
         d.moved = true;
-      } else S.dragMode = mode;
+      } else S.dragMode = mode2;
     }
     return true;
   }
@@ -3199,6 +3199,1008 @@ ${body}
     return item;
   }
 
+  // web/tools/arc-geom.ts
+  var norm360 = (a) => (a % 360 + 360) % 360;
+  var ARC_CENTER_START_END = 0;
+  var ARC_START_END_MID = 1;
+  var ARC_START_END_CENTER = 2;
+  var ARC_TANGENT = 3;
+  var ARC_START_DIR_END = 4;
+  var ARC_MODE_ACTIONS = ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd"];
+  var NM = 1e6;
+  var toNm = (p) => [Math.round(p[0] * NM), Math.round(p[1] * NM)];
+  var fromNm = (p) => [p[0] / NM, p[1] / NM];
+  var kiRound = (v) => v < 0 ? -Math.round(-v) : Math.round(v);
+  var crossZ = (ax, ay, bx, by) => ax * by - ay * bx;
+  var NO_ARC = Object.freeze({ valid: false });
+  function arcOnChord(s, e, side, centerT, radius) {
+    const cx = e[0] - s[0], cy = e[1] - s[1], len = Math.hypot(cx, cy);
+    if (len <= 0 || !isFinite(radius) || radius <= 0) return NO_ARC;
+    const n = [-cy / len, cx / len], m = [(s[0] + e[0]) * 0.5, (s[1] + e[1]) * 0.5], half = len * 0.5, off = Math.abs(centerT);
+    const height = side * centerT <= 0 ? half * half / (radius + off) : radius + off;
+    const mx = m[0] + n[0] * side * height, my = m[1] + n[1] * side * height;
+    if (!isFinite(mx) || !isFinite(my) || Math.abs(mx) > 2147483646 || Math.abs(my) > 2147483646) return NO_ARC;
+    const mid = [kiRound(mx), kiRound(my)];
+    if (crossZ(cx, cy, mid[0] - s[0], mid[1] - s[1]) === 0) return NO_ARC;
+    return { valid: true, start: s.slice(), end: e.slice(), mid, center: [m[0] + n[0] * centerT, m[1] + n[1] * centerT], radius };
+  }
+  function projectToChordBisector(s, e, cur) {
+    const cx = e[0] - s[0], cy = e[1] - s[1], len = Math.hypot(cx, cy);
+    if (len <= 0) return cur.slice();
+    const n = [-cy / len, cx / len], m = [(s[0] + e[0]) * 0.5, (s[1] + e[1]) * 0.5];
+    const t = (cur[0] - m[0]) * n[0] + (cur[1] - m[1]) * n[1];
+    return [kiRound(m[0] + n[0] * t), kiRound(m[1] + n[1] * t)];
+  }
+  function arcThroughPoints(s, on, e) {
+    const b = [e[0] - s[0], e[1] - s[1]], c = [on[0] - s[0], on[1] - s[1]], d = crossZ(b[0], b[1], c[0], c[1]);
+    if (d === 0) return NO_ARC;
+    const bb = b[0] * b[0] + b[1] * b[1], cc = c[0] * c[0] + c[1] * c[1];
+    const rel = [(c[1] * bb - b[1] * cc) / (2 * d), (b[0] * cc - c[0] * bb) / (2 * d)];
+    const len = Math.hypot(b[0], b[1]);
+    const centerT = (-rel[0] * b[1] + rel[1] * b[0]) / len;
+    return arcOnChord(s, e, d > 0 ? 1 : -1, centerT, Math.hypot(rel[0], rel[1]));
+  }
+  function arcFromStartEndMidDrag(s, e, cur) {
+    const p = projectToChordBisector(s, e, cur);
+    const sol = arcThroughPoints(s, p, e);
+    return sol.valid ? Object.assign({}, sol, { mid: p }) : sol;
+  }
+  function arcFromStartEndCenterDrag(s, e, cur, major) {
+    const cx = e[0] - s[0], cy = e[1] - s[1], len = Math.hypot(cx, cy);
+    if (len <= 0) return NO_ARC;
+    const n = [-cy / len, cx / len], m = [(s[0] + e[0]) * 0.5, (s[1] + e[1]) * 0.5];
+    const centerT = (cur[0] - m[0]) * n[0] + (cur[1] - m[1]) * n[1];
+    let side = centerT < 0 ? -1 : 1;
+    if (!major) side = -side;
+    return arcOnChord(s, e, side, centerT, Math.hypot(len * 0.5, centerT));
+  }
+  function arcFromStartTangentEnd(s, tan, e) {
+    const tl = Math.hypot(tan[0], tan[1]);
+    if (!(tl > 0) || !isFinite(tl)) return NO_ARC;
+    const t = [tan[0] / tl, tan[1] / tl], d = [e[0] - s[0], e[1] - s[1]], dd = d[0] * d[0] + d[1] * d[1], cross = crossZ(d[0], d[1], t[0], t[1]);
+    if (dd <= 0 || cross === 0) return NO_ARC;
+    const k = -dd / (2 * cross), n = [-t[1], t[0]], len = Math.sqrt(dd), cn = [-d[1] / len, d[0] / len];
+    return arcOnChord(s, e, cross > 0 ? 1 : -1, k * (n[0] * cn[0] + n[1] * cn[1]), Math.abs(k));
+  }
+  var degOf = (v) => {
+    let a = Math.atan2(v[1], v[0]) * 180 / Math.PI;
+    if (Math.abs(a) < 1e-12) a = 0;
+    return a;
+  };
+  var ArcGeom = class {
+    constructor(mode2) {
+      this.mode = mode2;
+      this.reset();
+    }
+    reset() {
+      this.step = 0;
+      this.last = [0, 0];
+      this.changed = true;
+      this.cw = true;
+      this.locked = false;
+      this.snap = false;
+      this.origin = [0, 0];
+      this.radius = 0;
+      this.sa = 0;
+      this.ea = 0;
+      this.pts = [[0, 0], [0, 0], [0, 0]];
+      this.dir = [0, 0];
+      this.hasSeed = false;
+      this.seedAxis = false;
+      this.axisFlipped = false;
+      this.axis = [0, 0];
+      this.major = false;
+      this.sol = NO_ARC;
+    }
+    hasTangentSeed() {
+      return this.mode === ARC_TANGENT && this.hasSeed;
+    }
+    maxStep() {
+      return this.hasTangentSeed() ? 1 : 3;
+    }
+    isReset() {
+      return this.step === 0;
+    }
+    isComplete() {
+      return this.step === this.maxStep();
+    }
+    getStep() {
+      return this.isComplete() ? 3 : this.step;
+    }
+    hasPreview() {
+      return !this.isReset() || this.hasTangentSeed();
+    }
+    usesExact() {
+      return this.mode !== ARC_CENTER_START_END;
+    }
+    usesDirectionClick() {
+      return this.mode === ARC_START_DIR_END || this.mode === ARC_TANGENT && !this.hasSeed;
+    }
+    pointIndex() {
+      return this.step + (this.hasTangentSeed() ? 1 : 0);
+    }
+    addPoint(p, lockIn) {
+      this.last = p.slice();
+      const ok = this.accept(p);
+      if (lockIn && (ok || this.mode === ARC_CENTER_START_END)) this.performStep(ok);
+      this.changed = true;
+    }
+    removeLastPoint() {
+      this.performStep(false);
+      this.accept(this.last);
+      this.changed = true;
+    }
+    performStep(fwd) {
+      this.step = Math.max(0, Math.min(this.maxStep(), this.step + (fwd ? 1 : -1)));
+    }
+    accept(p) {
+      if (this.mode !== ARC_CENTER_START_END) return this.acceptExact(p);
+      switch (this.step) {
+        case 0:
+          return this.setOrigin(p);
+        case 1:
+          return this.setStart(p);
+        case 2:
+          return this.setEnd(p);
+        default:
+          return false;
+      }
+    }
+    acceptExact(p) {
+      if (this.isComplete()) return false;
+      const i = this.pointIndex();
+      this.pts[i] = p.slice();
+      if (i < 2 && !this.hasTangentSeed()) {
+        this.clearSolution();
+        if (i === 0) return true;
+        return this.usesDirectionClick() ? this.setDirection(p) : p[0] !== this.pts[0][0] || p[1] !== this.pts[0][1];
+      }
+      if (this.hasTangentSeed() && this.seedAxis) {
+        const ch = [p[0] - this.pts[0][0], p[1] - this.pts[0][1]];
+        const sign = ch[0] * this.axis[0] + ch[1] * this.axis[1] >= 0 !== this.axisFlipped ? 1 : -1;
+        this.dir = [this.axis[0] * sign, this.axis[1] * sign];
+      }
+      let sol = NO_ARC;
+      if (this.mode === ARC_START_END_MID) sol = arcFromStartEndMidDrag(this.pts[0], this.pts[1], p);
+      else if (this.mode === ARC_START_END_CENTER) sol = arcFromStartEndCenterDrag(this.pts[0], this.pts[1], p, this.major);
+      else sol = arcFromStartTangentEnd(this.pts[0], this.dir, p);
+      if (sol.valid) this.applySolution(sol);
+      return sol.valid;
+    }
+    applySolution(sol) {
+      this.sol = sol;
+      const c = sol.center;
+      const s = [sol.start[0] - c[0], sol.start[1] - c[1]], e = [sol.end[0] - c[0], sol.end[1] - c[1]], m = [sol.mid[0] - c[0], sol.mid[1] - c[1]];
+      this.origin = [kiRound(c[0]), kiRound(c[1])];
+      this.radius = sol.radius;
+      this.sa = norm360(degOf(s));
+      this.ea = norm360(degOf(e));
+      this.cw = crossZ(s[0], s[1], m[0], m[1]) < 0;
+    }
+    clearSolution() {
+      this.sol = NO_ARC;
+      this.origin = [0, 0];
+      this.radius = 0;
+      this.sa = 0;
+      this.ea = 0;
+      this.cw = true;
+    }
+    setDirection(p) {
+      const v = [p[0] - this.pts[0][0], p[1] - this.pts[0][1]], len = Math.hypot(v[0], v[1]);
+      if (len === 0) return false;
+      this.dir = v;
+      if (this.snap) {
+        const d = Math.SQRT1_2, units = [[1, 0], [d, d], [0, 1], [-d, d], [-1, 0], [-d, -d], [0, -1], [d, -d]];
+        const oct = (kiRound(degOf(v) / 45) % 8 + 8) % 8;
+        this.dir = [units[oct][0] * len, units[oct][1] * len];
+      }
+      return true;
+    }
+    setMode(m) {
+      if (m === this.mode) return;
+      if (this.isReset()) {
+        this.mode = m;
+        this.clearSolution();
+        this.changed = true;
+        return;
+      }
+      const keep = this.mode !== ARC_CENTER_START_END && m !== ARC_CENTER_START_END;
+      const start = this.pts[0].slice(), cursor = this.last.slice(), snap = this.snap;
+      this.mode = m;
+      this.reset();
+      if (!keep) return;
+      this.snap = snap;
+      this.addPoint(start, true);
+      this.addPoint(cursor, false);
+    }
+    setTangentSeed(start, dir, isAxis) {
+      if (!this.isReset() || dir[0] === 0 && dir[1] === 0) return;
+      this.pts[0] = start.slice();
+      this.dir = dir.slice();
+      this.axis = dir.slice();
+      this.seedAxis = !!isAxis;
+      this.axisFlipped = false;
+      this.hasSeed = true;
+      this.clearSolution();
+      this.changed = true;
+    }
+    /** Switch Arc Posture (/): the center mode's direction, the start-end-center mode's major / minor arc, a tangent seed's side of its axis. */
+    toggleClockwise() {
+      if (this.mode === ARC_CENTER_START_END) {
+        this.cw = !this.cw;
+        this.locked = true;
+        this.changed = true;
+      } else if (this.mode === ARC_START_END_CENTER) {
+        this.major = !this.major;
+        if (this.step === 2) this.accept(this.last);
+        this.changed = true;
+      } else if (this.mode === ARC_TANGENT && this.hasTangentSeed() && this.seedAxis) {
+        this.axisFlipped = !this.axisFlipped;
+        this.accept(this.last);
+        this.changed = true;
+      }
+    }
+    getOrigin() {
+      return this.usesExact() && !this.sol.valid ? this.pts[0] : this.origin;
+    }
+    startRadiusEnd() {
+      if (this.usesExact()) return this.pts[0];
+      const r = Math.trunc(this.radius), a = this.sa * Math.PI / 180;
+      return [this.origin[0] + kiRound(r * Math.cos(a)), this.origin[1] + kiRound(r * Math.sin(a))];
+    }
+    endRadiusEnd() {
+      if (this.usesExact()) return this.sol.valid ? this.sol.end : this.pts[0];
+      const r = Math.trunc(this.radius), a = this.ea * Math.PI / 180;
+      return [this.origin[0] + kiRound(r * Math.cos(a)), this.origin[1] + kiRound(r * Math.sin(a))];
+    }
+    startAngle() {
+      let a = this.sa;
+      if (this.cw) a -= 360;
+      return -a;
+    }
+    subtended() {
+      let a = this.ea - this.sa;
+      if (this.ea <= this.sa) a += 360;
+      if (this.cw) a -= 360;
+      return -a;
+    }
+    setOrigin(p) {
+      this.origin = p.slice();
+      this.sa = 0;
+      this.ea = 0;
+      return true;
+    }
+    setStart(p) {
+      const v = [p[0] - this.origin[0], p[1] - this.origin[1]];
+      this.radius = Math.hypot(v[0], v[1]);
+      this.sa = degOf(v);
+      if (this.snap) this.sa = 45 * kiRound(this.sa / 45);
+      while (this.sa < 0) this.sa += 360;
+      this.ea = this.sa;
+      return this.radius !== 0;
+    }
+    setEnd(p) {
+      const v = [p[0] - this.origin[0], p[1] - this.origin[1]];
+      this.ea = degOf(v);
+      if (this.snap) this.ea = 45 * kiRound(this.ea / 45);
+      while (this.ea < 0) this.ea += 360;
+      if (!this.locked) {
+        let ccw = this.ea - this.sa;
+        if (this.ea <= this.sa) ccw += 360;
+        const cw = Math.abs(ccw - 360);
+        if (Math.min(ccw, cw) >= 90) this.locked = true;
+        else this.cw = cw < ccw;
+      } else if (Math.abs(this.subtended()) < 90) this.locked = false;
+      return this.ea !== this.sa;
+    }
+    /** ARC_DRAW_BEHAVIOR::ApplyToShape as start / mid / end in nm, or null while there is no arc yet. */
+    shape() {
+      if (this.usesExact()) return this.sol.valid ? { start: this.sol.start, mid: this.sol.mid, end: this.sol.end, center: this.sol.center } : null;
+      if (this.step < 2 || !this.radius) return null;
+      const sub = this.subtended();
+      if (!sub) return null;
+      const [s, e] = sub < 0 ? [this.startRadiusEnd(), this.endRadiusEnd()] : [this.endRadiusEnd(), this.startRadiusEnd()];
+      const c = this.origin, a0 = Math.atan2(s[1] - c[1], s[0] - c[0]);
+      let sweep = Math.atan2(e[1] - c[1], e[0] - c[0]) - a0;
+      while (sweep <= 0) sweep += 2 * Math.PI;
+      const r = Math.hypot(s[0] - c[0], s[1] - c[1]), am = a0 + sweep / 2;
+      return { start: s, mid: [kiRound(c[0] + r * Math.cos(am)), kiRound(c[1] + r * Math.sin(am))], end: e, center: c };
+    }
+  };
+  var canvasCurves = () => globalThis.KiCadCanvas;
+  var vsubA = (a, b) => [a[0] - b[0], a[1] - b[1]];
+  var unitOf = (v) => {
+    const l = Math.hypot(v[0], v[1]);
+    return l === 0 ? null : [v[0] / l, v[1] / l];
+  };
+  var perp = (v) => [-v[1], v[0]];
+  function nearestEnd(a, b, p, tol) {
+    const da = Math.hypot(a[0] - p[0], a[1] - p[1]), db = Math.hypot(b[0] - p[0], b[1] - p[1]);
+    const first = da <= db;
+    if (tol !== void 0 && (first ? da : db) > tol) return null;
+    return first ? a : b;
+  }
+  function tangentAtEndpoint(sh, p) {
+    const atStart = p[0] === sh.start[0] && p[1] === sh.start[1];
+    if (!atStart && (p[0] !== sh.end[0] || p[1] !== sh.end[1])) return null;
+    if (sh.t === "seg") return unitOf(atStart ? vsubA(sh.start, sh.end) : vsubA(sh.end, sh.start));
+    if (sh.t !== "arc") return null;
+    const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
+    if (turn === 0) return null;
+    let t = perp(vsubA(p, sh.center));
+    if (turn > 0 === atStart) t = [-t[0], -t[1]];
+    return unitOf(t);
+  }
+  function arcTangentSeedNear(sh, near) {
+    const end = nearestEnd(sh.start, sh.end, near);
+    const d = tangentAtEndpoint(sh, end);
+    return d ? { start: end.slice(), dir: d, axis: false } : null;
+  }
+  function segDist2(a, b, p) {
+    const v = vsubA(b, a), L = v[0] * v[0] + v[1] * v[1];
+    let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    const q = [a[0] + v[0] * t, a[1] + v[1] * t];
+    return { d: Math.hypot(p[0] - q[0], p[1] - q[1]), q: [kiRound(q[0]), kiRound(q[1])] };
+  }
+  function polylineSeedAt(vs, closed, p, tol) {
+    const n = vs.length;
+    if (n < 2) return null;
+    if (!closed) {
+      const end = nearestEnd(vs[0], vs[n - 1], p, tol);
+      if (end) {
+        const inner = end === vs[0] ? vs[1] : vs[n - 2];
+        const d = unitOf(vsubA(end, inner));
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+    }
+    let best = null, bestD = tol;
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const a = vs[i], b = vs[(i + 1) % n], r = segDist2(a, b, p);
+      if (r.d <= bestD) {
+        best = { a, b, q: r.q };
+        bestD = r.d;
+      }
+    }
+    if (!best) return null;
+    const ax = unitOf(vsubA(best.b, best.a));
+    return ax ? { start: best.q, dir: ax, axis: true } : null;
+  }
+  function arcTangentSeedAt(sh, p, tol, geo = canvasCurves()) {
+    if (sh.t === "seg") return polylineSeedAt([sh.start, sh.end], false, p, tol);
+    if (sh.t === "bez") {
+      const ctrl = [sh.start, sh.c1, sh.c2, sh.end];
+      const xs = ctrl.map((c) => c[0]), ys = ctrl.map((c) => c[1]);
+      if (p[0] < Math.min(...xs) - tol || p[0] > Math.max(...xs) + tol || p[1] < Math.min(...ys) - tol || p[1] > Math.max(...ys) + tol) return null;
+      const poly = geo.bezierPts(ctrl.map(fromNm)).map(toNm);
+      poly[0] = sh.start.slice();
+      poly[poly.length - 1] = sh.end.slice();
+      const seed = polylineSeedAt(poly, false, p, tol);
+      if (seed && !seed.axis) {
+        const atStart = seed.start[0] === sh.start[0] && seed.start[1] === sh.start[1];
+        const end = atStart ? sh.start : sh.end, others = atStart ? [sh.c1, sh.c2, sh.end] : [sh.c2, sh.c1, sh.start];
+        for (const c of others) {
+          const d = unitOf(vsubA(end, c));
+          if (d) {
+            seed.dir = d;
+            break;
+          }
+        }
+      }
+      return seed;
+    }
+    if (sh.t === "arc") {
+      const end = nearestEnd(sh.start, sh.end, p, tol);
+      if (end) {
+        const d = tangentAtEndpoint(sh, end);
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+      const a = geo.arcFrom3(fromNm(sh.start), fromNm(sh.mid), fromNm(sh.end));
+      if (!a) return null;
+      const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
+      const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
+      if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
+      const ax = unitOf(perp(vsubA(q, c)));
+      return ax ? { start: q, dir: ax, axis: true } : null;
+    }
+    if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
+    return null;
+  }
+  function arcContainsAngle(a, ang) {
+    const tw = 2 * Math.PI, nrm = (x) => (x % tw + tw) % tw;
+    const sweep = a.anticlockwise ? nrm(a.a0 - a.a1) : nrm(a.a1 - a.a0), off = a.anticlockwise ? nrm(a.a0 - ang) : nrm(ang - a.a0);
+    return off <= sweep + 1e-12;
+  }
+
+  // web/tools/sch-tools/sheets.ts
+  var SHEET_EXT = ".kicad_sch";
+  var baseName = (p) => str(p).split("/").pop();
+  var dirName = (p) => {
+    const s = str(p).split("/");
+    s.pop();
+    return s.join("/");
+  };
+  var joinPath = (dir, file) => dir ? dir + "/" + file : file;
+  function relPath(dir, path) {
+    const a = dir ? dir.split("/") : [], b = path.split("/");
+    let i = 0;
+    while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
+    return [...Array(a.length - i).fill(".."), ...b.slice(i)].join("/");
+  }
+  function schDocs(ctx) {
+    return (ctx.docs || []).filter((d) => d && d.docType === "kicad_sch");
+  }
+  function currentDoc(ctx) {
+    const docs = schDocs(ctx);
+    if (ctx.docId) {
+      const d = docs.find((x) => x.docId === ctx.docId);
+      if (d) return d;
+    }
+    if (ctx.docPath) return { path: ctx.docPath };
+    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro"), stem = pro ? baseName(pro.path).replace(/\.kicad_pro$/, "") : null;
+    return stem && docs.find((d) => baseName(d.path) === stem + SHEET_EXT) || docs.slice().sort((x, y) => x.path.split("/").length - y.path.split("/").length || x.path.length - y.path.length)[0] || null;
+  }
+  function normSheetFile(file) {
+    file = str(file).trim().replace(/\\/g, "/").replace(/^\/+/, "");
+    if (!file) return "";
+    if (!/\.kicad_sch$/i.test(file)) file += SHEET_EXT;
+    return file;
+  }
+  function sheetFileFor(name) {
+    return normSheetFile(str(name).trim().replace(/[\\/:*?"<>|]+/g, "_"));
+  }
+  function emptySheetDoc() {
+    return `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0") (uuid "${K.newUuid()}") (paper "A4") (lib_symbols) (sheet_instances (path "/" (page "1"))))
+`;
+  }
+  async function ensureSheetDoc(ctx, file) {
+    file = normSheetFile(file);
+    if (!file) throw new Error("no sheet file name");
+    const cur = currentDoc(ctx), dir = cur ? dirName(cur.path) : "", target = joinPath(dir, file);
+    const found = schDocs(ctx).find((d) => d.path === target || d.path === file) || schDocs(ctx).find((d) => baseName(d.path) === baseName(file));
+    if (found) return { file: relPath(dir, found.path), docId: found.docId, created: false };
+    if (typeof ctx.api !== "function" || !ctx.project || !ctx.project.projectId) throw new Error("this session cannot create sheet files");
+    const res = await ctx.api(`/api/projects/${ctx.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: target, docType: "kicad_sch" }) });
+    if (!res || !res.docId) throw new Error("no document id returned");
+    if (!res.existing) await ctx.api(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", headers: { "content-type": "text/plain" }, body: emptySheetDoc() });
+    const entry = { docId: res.docId, path: res.path || target, docType: "kicad_sch" };
+    if (Array.isArray(ctx.docs) && !ctx.docs.some((d) => d && d.docId === entry.docId)) ctx.docs.push(entry);
+    return { file, docId: entry.docId, created: !res.existing };
+  }
+  function sheetPathHere(doc) {
+    const paths = /* @__PURE__ */ new Map(), names = /* @__PURE__ */ new Map(), vote = (m, k) => {
+      if (k) m.set(k, (m.get(k) || 0) + 1);
+    };
+    for (const it of doc.items.values()) {
+      if (it.kind !== "symbol" && it.kind !== "sheet") continue;
+      for (const inst of kids(it.node, "instances")) for (const pr of kids(inst, "project")) {
+        vote(names, str(pr[1]));
+        for (const pa of kids(pr, "path")) vote(paths, str(pa[1]));
+      }
+    }
+    const top = (m) => {
+      let best = null, bn = 0;
+      for (const [k, n] of m) if (n > bn) {
+        bn = n;
+        best = k;
+      }
+      return best;
+    };
+    return { path: top(paths), project: top(names) };
+  }
+  function nextPage(ctx, doc) {
+    const used = /* @__PURE__ */ new Set(["1"]);
+    for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids(it.node, "instances")) for (const pr of kids(inst, "project")) for (const pa of kids(pr, "path")) {
+      const pg = kid(pa, "page");
+      if (pg) used.add(str(pg[1]));
+    }
+    let n = Math.max(2, schDocs(ctx).length);
+    while (used.has(String(n))) n++;
+    return n;
+  }
+  function sheetInstance(ctx, doc, page) {
+    const { path, project } = sheetPathHere(doc);
+    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro");
+    const name = project || (pro ? baseName(pro.path).replace(/\.kicad_pro$/, "") : "") || ctx.project && ctx.project.name || "";
+    if (!path || !name) return null;
+    return ["instances", ["project", name, ["path", path, ["page", String(page)]]]];
+  }
+  function placeSheet(ctx, a, b, name, file) {
+    if (S.sheetJob) {
+      ctx.toast("Still creating the previous sheet\u2026");
+      return S.sheetJob.promise;
+    }
+    const doc = ctx.doc, job = { doc, promise: null };
+    S.sheetJob = job;
+    job.promise = (async () => {
+      try {
+        const ref = await ensureSheetDoc(ctx, normSheetFile(file));
+        if (S.sheetJob !== job || ctx.doc !== doc) return null;
+        const node = sheetNode(a, b, name, ref.file);
+        const inst = sheetInstance(ctx, doc, nextPage(ctx, doc));
+        if (inst) node.push(inst);
+        const { item, change } = addNode(doc, node);
+        ctx.commit([change], "sheet");
+        rememberPlaced(item.kind, item.node);
+        ctx.setSelected({ id: item.id });
+        return item;
+      } catch (e) {
+        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
+        return null;
+      } finally {
+        if (S.sheetJob === job) S.sheetJob = null;
+        ctx.requestRender();
+      }
+    })();
+    return job.promise;
+  }
+  function placeSheetNode(ctx, node, file) {
+    if (S.sheetJob) {
+      ctx.toast("Still creating the previous sheet\u2026");
+      return S.sheetJob.promise;
+    }
+    const doc = ctx.doc, job = { doc, promise: null };
+    S.sheetJob = job;
+    job.promise = (async () => {
+      try {
+        file = normSheetFile(file);
+        const cur = currentDoc(ctx), dir = cur ? dirName(cur.path) : "", target = joinPath(dir, file);
+        const exists = schDocs(ctx).find((x) => x.path === target || x.path === file);
+        if (exists && root.KDialogs && root.KDialogs.confirm && !await root.KDialogs.confirm("Confirmation", `'${baseName(file)}' already exists.
+
+Link '${target}' to this file?`)) return null;
+        const ref = await ensureSheetDoc(ctx, file);
+        if (S.sheetJob !== job || ctx.doc !== doc) return null;
+        const fp = kids(node, "property").find((q) => /^Sheet ?file$/i.test(str(q[1])));
+        if (fp) fp[2] = ref.file;
+        const { item, change } = addNode(doc, node);
+        ctx.commit([change], "sheet");
+        rememberPlaced(item.kind, item.node);
+        ctx.setSelected({ id: item.id });
+        return item;
+      } catch (e) {
+        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
+        return null;
+      } finally {
+        if (S.sheetJob === job) S.sheetJob = null;
+        ctx.requestRender();
+      }
+    })();
+    return job.promise;
+  }
+  function sheetEdgeAt(doc, p, tol) {
+    let best = null;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "sheet") continue;
+      const [x, y] = atOf(it.node), s = kid(it.node, "size"), w = num(s && s[1], 0), h = num(s && s[2], 0);
+      const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
+      for (const side of ["top", "right", "bottom", "left"]) {
+        const d = segDist(p, edges[side][0], edges[side][1]);
+        if (d <= tol && (!best || d < best.d)) best = { item: it, side, d, x, y, w, h };
+      }
+    }
+    return best;
+  }
+  function sheetPinPoint(ctx, edge, p) {
+    const g = ctx.snap([p[0], p[1]]), clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    if (edge.side === "left") return [r4(edge.x), r4(clamp(g[1], edge.y, edge.y + edge.h))];
+    if (edge.side === "right") return [r4(edge.x + edge.w), r4(clamp(g[1], edge.y, edge.y + edge.h))];
+    if (edge.side === "top") return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y)];
+    return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y + edge.h)];
+  }
+  function sheetPinClick(ctx, mm) {
+    const edge = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx)));
+    if (!edge) {
+      ctx.toast("Click on the border of a sheet");
+      return null;
+    }
+    const p = sheetPinPoint(ctx, edge, mm);
+    promptImpl("Sheet pin", "", S.cursorClient, (name) => {
+      if (name) placeSheetPin(ctx, edge.item, name, p, edge.side);
+    });
+    return edge;
+  }
+  function placeSheetPin(ctx, sheet, name, p, side) {
+    const node = deep(sheet.node), pin = sheetPinNode(name, p, side);
+    const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
+    if (at >= 0) node.splice(at, 0, pin);
+    else node.push(pin);
+    ctx.commit([modChange(ctx.doc, sheet, node)], "sheet pin");
+    ctx.requestRender();
+    return pin;
+  }
+
+  // web/tools/sch-tools/shapes.ts
+  function drawPoint(ctx, mm) {
+    return ctx.snap([mm[0], mm[1]]).map(r4);
+  }
+  function startDraw(ctx, shape, p) {
+    S.draw = { shape, pts: [p], cur: p.slice() };
+    ctx.requestRender();
+  }
+  function cancelDraw(ctx) {
+    S.draw = null;
+    closePrompt();
+    ctx.requestRender();
+  }
+  function undoDrawPoint(ctx) {
+    const d = S.draw;
+    if (!d) return;
+    if (d.pts.length > 1) d.pts.pop();
+    else S.draw = null;
+    ctx.requestRender();
+  }
+  function drawClick(ctx, shape, p) {
+    if (shape === "arc") {
+      schArcClick(ctx, p);
+      return;
+    }
+    const d = S.draw;
+    if (!d || d.shape !== shape) {
+      startDraw(ctx, shape, p);
+      return;
+    }
+    d.cur = p.slice();
+    const last = d.pts[d.pts.length - 1];
+    if (shape === "lines" || shape === "polygon" || shape === "rulearea") {
+      if (same(p, last)) {
+        finishDraw(ctx);
+        return;
+      }
+      if (shape !== "lines" && d.pts.length >= 3 && same(p, d.pts[0])) {
+        finishDraw(ctx);
+        return;
+      }
+      d.pts.push(p);
+      ctx.requestRender();
+      return;
+    }
+    if (shape === "bezier") {
+      if (d.pts.length === 2 && same(p, d.pts[0])) {
+        ctx.toast("The curve's end must differ from its start");
+        return;
+      }
+      d.pts.push(p);
+      if (d.pts.length === 4) finishDraw(ctx);
+      else ctx.requestRender();
+      return;
+    }
+    if (same(p, last)) return;
+    d.pts.push(p);
+    finishDraw(ctx);
+  }
+  function finishDraw(ctx) {
+    const d = S.draw;
+    if (!d) return;
+    const doc = ctx.doc, pts = d.pts;
+    let node = null, label = d.shape;
+    if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
+    else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
+    else if (d.shape === "arc") {
+      commitSchArc(ctx, d, false);
+      ctx.requestRender();
+      return;
+    } else if (d.shape === "lines") {
+      const p = simplify(pts);
+      if (p.length >= 2) node = polylineNode(p);
+      label = "lines";
+    } else if (d.shape === "polygon") {
+      const p = simplify(pts);
+      if (p.length >= 3) node = polygonNode(p);
+    } else if (d.shape === "rulearea") {
+      const p = simplify(pts);
+      if (p.length >= 3) node = ruleAreaNode(p);
+      label = "rule area";
+    } else if (d.shape === "bezier") {
+      if (pts.length === 4) {
+        const e = pts[2], c2 = [r4(2 * e[0] - pts[3][0]), r4(2 * e[1] - pts[3][1])];
+        node = bezierNode(pts[0], pts[1], c2, e);
+      }
+    } else if (d.shape === "table") {
+      d.await = true;
+      ctx.requestRender();
+      promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
+        if (S.draw !== d) return;
+        S.draw = null;
+        const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
+        if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
+        else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
+        ctx.requestRender();
+      });
+      return;
+    } else if (d.shape === "sheet") {
+      d.await = true;
+      ctx.requestRender();
+      const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+      if (KD && KD.schItemDialog && !ctx.viewOnly) {
+        const sn = sheetNode(pts[0], pts[1], "Untitled Sheet", "untitled" + SHEET_EXT);
+        const inst = sheetInstance(ctx, ctx.doc, nextPage(ctx, ctx.doc));
+        if (inst) sn.push(inst);
+        const it = { id: "", kind: "sheet", node: sn, geom: [], bbox: null };
+        KD.schItemDialog(ctx, it, { cancel() {
+          if (S.draw === d) {
+            S.draw = null;
+            ctx.requestRender();
+          }
+        }, onCreate(staged) {
+          if (S.draw !== d) return;
+          S.draw = null;
+          const fp = kids(staged, "property").find((q) => /^Sheet ?file$/i.test(str(q[1])));
+          placeSheetNode(ctx, staged, fp ? str(fp[2]) : "untitled" + SHEET_EXT);
+        } });
+        return;
+      }
+      promptImpl("Sheet name", "", S.cursorClient, (name) => {
+        if (S.draw !== d) return;
+        if (!name) {
+          S.draw = null;
+          ctx.requestRender();
+          return;
+        }
+        promptImpl("Sheet file", sheetFileFor(name), S.cursorClient, (file) => {
+          if (S.draw !== d) return;
+          S.draw = null;
+          if (file) placeSheet(ctx, pts[0], pts[1], name, file);
+          else ctx.requestRender();
+        });
+      });
+      return;
+    } else if (d.shape === "textbox") {
+      d.await = true;
+      ctx.requestRender();
+      const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+      if (KD && KD.openNew && !ctx.viewOnly) {
+        const tb = textBoxNode("", pts[0], pts[1]);
+        KD.openItem(ctx, { id: "", kind: "text_box", node: tb, geom: [], bbox: null }, {
+          generic: true,
+          cancel() {
+            if (S.draw === d) {
+              S.draw = null;
+              ctx.requestRender();
+            }
+          },
+          onCreate(staged) {
+            if (S.draw !== d) return;
+            S.draw = null;
+            commitShape(ctx, staged, "text box");
+            ctx.requestRender();
+          }
+        });
+        return;
+      }
+      promptImpl("Text box", "", S.cursorClient, (text) => {
+        if (S.draw !== d) return;
+        S.draw = null;
+        if (text) commitShape(ctx, textBoxNode(text, pts[0], pts[1]), "text box");
+        ctx.requestRender();
+      });
+      return;
+    }
+    S.draw = null;
+    if (node) commitShape(ctx, node, label);
+    ctx.requestRender();
+  }
+  function commitShape(ctx, node, label) {
+    const { item, change } = addNode(ctx.doc, node);
+    ctx.commit([change], label);
+    rememberPlaced(item.kind, item.node);
+    S.sel = item.id;
+    ctx.setSelected(null);
+    return item;
+  }
+
+  // web/tools/sch-tools/arcs.ts
+  var SCH_ARC_MODE_KEY = "kc.sch.arcDrawMode";
+  var lsGet = (k) => {
+    try {
+      return root.localStorage ? root.localStorage.getItem(k) : null;
+    } catch {
+      return null;
+    }
+  };
+  var lsSet = (k, v) => {
+    try {
+      if (root.localStorage) root.localStorage.setItem(k, v);
+    } catch {
+    }
+  };
+  var mode = null;
+  function schArcDrawMode() {
+    if (mode == null) {
+      const v = lsGet(SCH_ARC_MODE_KEY);
+      mode = v !== null && /^[0-4]$/.test(v) ? +v : ARC_CENTER_START_END;
+    }
+    return mode;
+  }
+  function setSchArcDrawMode(m) {
+    mode = m;
+    lsSet(SCH_ARC_MODE_KEY, String(m));
+  }
+  function showSchArcMode(ctx) {
+    const c = ctx;
+    if (c && c.setGroupCurrent) c.setGroupCurrent("Arc", ARC_MODE_ACTIONS[schArcDrawMode()]);
+  }
+  function schSeedShapeOf(it) {
+    const n = it.node, pt = (k) => {
+      const c = kid(n, k);
+      return c ? toNm([+c[1], +c[2]]) : null;
+    };
+    if (it.kind === "arc") {
+      const s = pt("start"), m = pt("mid"), e = pt("end");
+      if (!s || !m || !e) return null;
+      const a = K.arcFrom3(fromNm(s), fromNm(m), fromNm(e));
+      return a ? { t: "arc", start: s, mid: m, end: e, center: toNm([a.x, a.y]) } : null;
+    }
+    if (it.kind === "bezier") {
+      const ps = ptsOf(n).map(toNm);
+      return ps.length === 4 ? { t: "bez", start: ps[0], c1: ps[1], c2: ps[2], end: ps[3] } : null;
+    }
+    if (it.kind === "polyline") {
+      const ps = ptsOf(n).map(toNm);
+      if (ps.length === 2) return { t: "seg", start: ps[0], end: ps[1] };
+      return ps.length > 2 ? { t: "poly", pts: ps } : null;
+    }
+    return null;
+  }
+  function findSchTangentSeed(ctx, pos) {
+    const tol = kiRound(5 / Math.max(1e-9, ctx.pxPerMm || 1) * NM);
+    for (const it of ctx.doc.items.values()) {
+      if (it.kind !== "arc" && it.kind !== "bezier" && it.kind !== "polyline") continue;
+      const b = it.bbox, t = tol / NM;
+      if (b && (pos[0] / NM < b[0] - t || pos[0] / NM > b[2] + t || pos[1] / NM < b[1] - t || pos[1] / NM > b[3] + t)) continue;
+      const sh = schSeedShapeOf(it);
+      if (!sh) continue;
+      const seed = sh.t === "poly" ? polySeed(sh.pts, pos, tol) : arcTangentSeedAt(sh, pos, tol);
+      if (seed) return seed;
+    }
+    return null;
+  }
+  function polySeed(pts, pos, tol) {
+    let best = null, bestD = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const s = arcTangentSeedAt({ t: "seg", start: pts[i], end: pts[i + 1] }, pos, tol);
+      if (!s) continue;
+      const inner = i > 0 && same2(s.start, pts[i]) || i + 2 < pts.length && same2(s.start, pts[i + 1]);
+      const seed = inner ? { start: s.start, dir: s.dir, axis: true } : s;
+      const d = Math.hypot(seed.start[0] - pos[0], seed.start[1] - pos[1]);
+      if (!best || d < bestD) {
+        best = seed;
+        bestD = d;
+      }
+    }
+    return best;
+  }
+  var same2 = (a, b) => a[0] === b[0] && a[1] === b[1];
+  function newSchArc(chainSeed) {
+    const g = new ArcGeom(schArcDrawMode());
+    const d = { shape: "arc", pts: [], cur: [0, 0], arc: g, started: false, chainSeeded: false, clickSeeded: false };
+    if (chainSeed) {
+      g.setTangentSeed(chainSeed.start, chainSeed.dir, chainSeed.axis);
+      d.chainSeeded = true;
+      d.started = true;
+    }
+    syncSchArc(d);
+    return d;
+  }
+  function syncSchArc(d) {
+    const g = d.arc;
+    d.pts = g.hasPreview() ? [fromNm(g.pts[0]).map(r4)] : [];
+  }
+  function switchSchArcMode(ctx, m) {
+    setSchArcDrawMode(m);
+    showSchArcMode(ctx);
+    const d = S.draw;
+    if (d && d.shape === "arc" && d.arc) {
+      d.arc.setMode(m);
+      d.chainSeeded = false;
+      d.clickSeeded = false;
+      syncSchArc(d);
+    }
+    ctx.requestRender();
+  }
+  function schArcClick(ctx, p) {
+    let d = S.draw;
+    if (!d || d.shape !== "arc" || !d.arc) d = S.draw = newSchArc(null);
+    const g = d.arc, pos = toNm(p);
+    if (!d.started) {
+      S.sel = null;
+      ctx.setSelected(null);
+      d.started = true;
+    }
+    const first = !d.chainSeeded && !d.clickSeeded && g.getStep() === 0;
+    if (first && g.mode === ARC_TANGENT) {
+      const seed = findSchTangentSeed(ctx, pos);
+      if (seed) {
+        g.setTangentSeed(seed.start, seed.dir, seed.axis);
+        d.clickSeeded = true;
+        syncSchArc(d);
+        ctx.requestRender();
+        return;
+      }
+    }
+    g.addPoint(pos, true);
+    d.clickSeeded = false;
+    d.lastClick = pos;
+    d.cur = p.slice();
+    syncSchArc(d);
+    if (g.isComplete()) commitSchArc(ctx, d, true);
+    ctx.requestRender();
+  }
+  function schArcMove(d, p) {
+    const g = d.arc;
+    d.cur = p.slice();
+    if (g.hasPreview()) g.addPoint(toNm(p), false);
+  }
+  function schArcPoints(d) {
+    const sh = d.arc ? d.arc.shape() : null;
+    if (!sh) return null;
+    return { start: fromNm(sh.start).map(r4), mid: fromNm(sh.mid).map(r4), end: fromNm(sh.end).map(r4) };
+  }
+  function commitSchArc(ctx, d, next) {
+    const a = schArcPoints(d);
+    S.draw = null;
+    if (a) commitShape(ctx, arcNode(a.start, a.mid, a.end), "arc");
+    if (!next) return;
+    const sh = d.arc.shape();
+    const seed = sh && schArcDrawMode() === ARC_TANGENT ? arcTangentSeedNear({ t: "arc", start: sh.start, mid: sh.mid, end: sh.end, center: sh.center }, d.lastClick || sh.end) : null;
+    S.draw = newSchArc(seed);
+  }
+  function finishSchArc(ctx) {
+    const d = S.draw, a = d && d.started ? schArcPoints(d) : null;
+    S.draw = null;
+    if (a) commitShape(ctx, arcNode(a.start, a.mid, a.end), "arc");
+    ctx.setTool("select");
+    ctx.requestRender();
+  }
+  function schArcBackup(ctx) {
+    const d = S.draw, g = d.arc;
+    if (d.clickSeeded) {
+      g.reset();
+      d.clickSeeded = false;
+    } else if (g.isReset() && !g.hasTangentSeed()) {
+      S.draw = null;
+    } else g.removeLastPoint();
+    if (S.draw) syncSchArc(d);
+    ctx.requestRender();
+  }
+  function schArcPosture(ctx) {
+    const d = S.draw;
+    if (!d || !d.arc) return false;
+    d.arc.toggleClockwise();
+    ctx.requestRender();
+    return true;
+  }
+  function drawSchArcPreview(c, d, px) {
+    const g = d.arc;
+    if (!g.hasPreview()) return;
+    const a = schArcPoints(d), o = fromNm(g.getOrigin());
+    c.beginPath();
+    if (a) {
+      const arc = K.arcFrom3(a.start, a.mid, a.end);
+      if (arc) c.arc(arc.x, arc.y, arc.r, arc.a0, arc.a1, arc.anticlockwise);
+    } else {
+      c.moveTo(o[0], o[1]);
+      c.lineTo(d.cur[0], d.cur[1]);
+    }
+    c.stroke();
+    if (g.mode === ARC_CENTER_START_END && g.getStep() >= 1) {
+      c.save();
+      c.setLineDash([2 * px, 2 * px]);
+      c.globalAlpha = 0.5;
+      c.beginPath();
+      const s = fromNm(g.startRadiusEnd());
+      c.moveTo(o[0], o[1]);
+      c.lineTo(s[0], s[1]);
+      if (g.getStep() >= 2) {
+        const e = fromNm(g.endRadiusEnd());
+        c.moveTo(o[0], o[1]);
+        c.lineTo(e[0], e[1]);
+      }
+      c.stroke();
+      c.restore();
+    }
+  }
+
   // web/tools/sch-tools/overlay.ts
   function paint(c, item, alpha, px) {
     c.save();
@@ -3312,7 +4314,17 @@ ${body}
     }
     if (S.carry && S.carry.item) box(S.carry.item.bbox || rectOf(S.carry.item));
     const dr = S.draw;
-    if (dr && dr.pts.length && dr.cur) {
+    if (dr && dr.arc) {
+      const a = schArcPoints(dr), arc = a ? K.arcFrom3(a.start, a.mid, a.end) : null;
+      if (arc) {
+        const sweep = arc.anticlockwise ? -(((arc.a0 - arc.a1) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI)) : ((arc.a1 - arc.a0) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI), ring = [];
+        for (let i = 0; i <= 24; i++) {
+          const t = arc.a0 + sweep * i / 24;
+          ring.push([arc.x + arc.r * Math.cos(t), arc.y + arc.r * Math.sin(t)]);
+        }
+        path(ring);
+      } else if (dr.pts.length) path([dr.pts[0], dr.cur]);
+    } else if (dr && dr.pts.length && dr.cur) {
       const a = dr.pts[0], c = dr.cur;
       if (dr.shape === "rect" || dr.shape === "textbox" || dr.shape === "sheet" || dr.shape === "table") box(corners(a, c));
       else if (dr.shape === "circle") {
@@ -3959,16 +4971,8 @@ ${body}
         c.beginPath();
         c.arc(p0[0], p0[1], Math.hypot(cur[0] - p0[0], cur[1] - p0[1]), 0, Math.PI * 2);
         c.stroke();
-      } else if (d.shape === "arc") {
-        const a = d.pts.length > 1 ? K.arcFrom3(p0, cur, d.pts[1]) : null;
-        c.beginPath();
-        if (a) c.arc(a.x, a.y, a.r, a.a0, a.a1, a.anticlockwise);
-        else {
-          c.moveTo(p0[0], p0[1]);
-          c.lineTo(cur[0], cur[1]);
-        }
-        c.stroke();
-      } else if (d.shape === "bezier") {
+      } else if (d.shape === "arc" && d.arc) drawSchArcPreview(c, d, px);
+      else if (d.shape === "bezier") {
         const n = d.pts.length, e = n > 2 ? d.pts[2] : cur;
         const ctrl = n === 1 ? [p0, cur, cur, cur] : n === 2 ? [p0, d.pts[1], cur, cur] : [p0, d.pts[1], [2 * e[0] - cur[0], 2 * e[1] - cur[1]], e];
         const bp = K.bezierPts(ctrl, 24);
@@ -4211,390 +5215,6 @@ ${body}
     });
   }
 
-  // web/tools/sch-tools/sheets.ts
-  var SHEET_EXT = ".kicad_sch";
-  var baseName = (p) => str(p).split("/").pop();
-  var dirName = (p) => {
-    const s = str(p).split("/");
-    s.pop();
-    return s.join("/");
-  };
-  var joinPath = (dir, file) => dir ? dir + "/" + file : file;
-  function relPath(dir, path) {
-    const a = dir ? dir.split("/") : [], b = path.split("/");
-    let i = 0;
-    while (i < a.length && i < b.length - 1 && a[i] === b[i]) i++;
-    return [...Array(a.length - i).fill(".."), ...b.slice(i)].join("/");
-  }
-  function schDocs(ctx) {
-    return (ctx.docs || []).filter((d) => d && d.docType === "kicad_sch");
-  }
-  function currentDoc(ctx) {
-    const docs = schDocs(ctx);
-    if (ctx.docId) {
-      const d = docs.find((x) => x.docId === ctx.docId);
-      if (d) return d;
-    }
-    if (ctx.docPath) return { path: ctx.docPath };
-    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro"), stem = pro ? baseName(pro.path).replace(/\.kicad_pro$/, "") : null;
-    return stem && docs.find((d) => baseName(d.path) === stem + SHEET_EXT) || docs.slice().sort((x, y) => x.path.split("/").length - y.path.split("/").length || x.path.length - y.path.length)[0] || null;
-  }
-  function normSheetFile(file) {
-    file = str(file).trim().replace(/\\/g, "/").replace(/^\/+/, "");
-    if (!file) return "";
-    if (!/\.kicad_sch$/i.test(file)) file += SHEET_EXT;
-    return file;
-  }
-  function sheetFileFor(name) {
-    return normSheetFile(str(name).trim().replace(/[\\/:*?"<>|]+/g, "_"));
-  }
-  function emptySheetDoc() {
-    return `(kicad_sch (version 20250114) (generator "kicad-collab-web") (generator_version "9.0") (uuid "${K.newUuid()}") (paper "A4") (lib_symbols) (sheet_instances (path "/" (page "1"))))
-`;
-  }
-  async function ensureSheetDoc(ctx, file) {
-    file = normSheetFile(file);
-    if (!file) throw new Error("no sheet file name");
-    const cur = currentDoc(ctx), dir = cur ? dirName(cur.path) : "", target = joinPath(dir, file);
-    const found = schDocs(ctx).find((d) => d.path === target || d.path === file) || schDocs(ctx).find((d) => baseName(d.path) === baseName(file));
-    if (found) return { file: relPath(dir, found.path), docId: found.docId, created: false };
-    if (typeof ctx.api !== "function" || !ctx.project || !ctx.project.projectId) throw new Error("this session cannot create sheet files");
-    const res = await ctx.api(`/api/projects/${ctx.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: target, docType: "kicad_sch" }) });
-    if (!res || !res.docId) throw new Error("no document id returned");
-    if (!res.existing) await ctx.api(`/api/docs/${res.docId}/snapshots?seq=0`, { method: "POST", headers: { "content-type": "text/plain" }, body: emptySheetDoc() });
-    const entry = { docId: res.docId, path: res.path || target, docType: "kicad_sch" };
-    if (Array.isArray(ctx.docs) && !ctx.docs.some((d) => d && d.docId === entry.docId)) ctx.docs.push(entry);
-    return { file, docId: entry.docId, created: !res.existing };
-  }
-  function sheetPathHere(doc) {
-    const paths = /* @__PURE__ */ new Map(), names = /* @__PURE__ */ new Map(), vote = (m, k) => {
-      if (k) m.set(k, (m.get(k) || 0) + 1);
-    };
-    for (const it of doc.items.values()) {
-      if (it.kind !== "symbol" && it.kind !== "sheet") continue;
-      for (const inst of kids(it.node, "instances")) for (const pr of kids(inst, "project")) {
-        vote(names, str(pr[1]));
-        for (const pa of kids(pr, "path")) vote(paths, str(pa[1]));
-      }
-    }
-    const top = (m) => {
-      let best = null, bn = 0;
-      for (const [k, n] of m) if (n > bn) {
-        bn = n;
-        best = k;
-      }
-      return best;
-    };
-    return { path: top(paths), project: top(names) };
-  }
-  function nextPage(ctx, doc) {
-    const used = /* @__PURE__ */ new Set(["1"]);
-    for (const it of doc.items.values()) if (it.kind === "sheet") for (const inst of kids(it.node, "instances")) for (const pr of kids(inst, "project")) for (const pa of kids(pr, "path")) {
-      const pg = kid(pa, "page");
-      if (pg) used.add(str(pg[1]));
-    }
-    let n = Math.max(2, schDocs(ctx).length);
-    while (used.has(String(n))) n++;
-    return n;
-  }
-  function sheetInstance(ctx, doc, page) {
-    const { path, project } = sheetPathHere(doc);
-    const pro = (ctx.docs || []).find((d) => d && d.docType === "kicad_pro");
-    const name = project || (pro ? baseName(pro.path).replace(/\.kicad_pro$/, "") : "") || ctx.project && ctx.project.name || "";
-    if (!path || !name) return null;
-    return ["instances", ["project", name, ["path", path, ["page", String(page)]]]];
-  }
-  function placeSheet(ctx, a, b, name, file) {
-    if (S.sheetJob) {
-      ctx.toast("Still creating the previous sheet\u2026");
-      return S.sheetJob.promise;
-    }
-    const doc = ctx.doc, job = { doc, promise: null };
-    S.sheetJob = job;
-    job.promise = (async () => {
-      try {
-        const ref = await ensureSheetDoc(ctx, normSheetFile(file));
-        if (S.sheetJob !== job || ctx.doc !== doc) return null;
-        const node = sheetNode(a, b, name, ref.file);
-        const inst = sheetInstance(ctx, doc, nextPage(ctx, doc));
-        if (inst) node.push(inst);
-        const { item, change } = addNode(doc, node);
-        ctx.commit([change], "sheet");
-        rememberPlaced(item.kind, item.node);
-        ctx.setSelected({ id: item.id });
-        return item;
-      } catch (e) {
-        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
-        return null;
-      } finally {
-        if (S.sheetJob === job) S.sheetJob = null;
-        ctx.requestRender();
-      }
-    })();
-    return job.promise;
-  }
-  function placeSheetNode(ctx, node, file) {
-    if (S.sheetJob) {
-      ctx.toast("Still creating the previous sheet\u2026");
-      return S.sheetJob.promise;
-    }
-    const doc = ctx.doc, job = { doc, promise: null };
-    S.sheetJob = job;
-    job.promise = (async () => {
-      try {
-        file = normSheetFile(file);
-        const cur = currentDoc(ctx), dir = cur ? dirName(cur.path) : "", target = joinPath(dir, file);
-        const exists = schDocs(ctx).find((x) => x.path === target || x.path === file);
-        if (exists && root.KDialogs && root.KDialogs.confirm && !await root.KDialogs.confirm("Confirmation", `'${baseName(file)}' already exists.
-
-Link '${target}' to this file?`)) return null;
-        const ref = await ensureSheetDoc(ctx, file);
-        if (S.sheetJob !== job || ctx.doc !== doc) return null;
-        const fp = kids(node, "property").find((q) => /^Sheet ?file$/i.test(str(q[1])));
-        if (fp) fp[2] = ref.file;
-        const { item, change } = addNode(doc, node);
-        ctx.commit([change], "sheet");
-        rememberPlaced(item.kind, item.node);
-        ctx.setSelected({ id: item.id });
-        return item;
-      } catch (e) {
-        ctx.toast("Could not create the sheet: " + (e && e.message || e), 4e3);
-        return null;
-      } finally {
-        if (S.sheetJob === job) S.sheetJob = null;
-        ctx.requestRender();
-      }
-    })();
-    return job.promise;
-  }
-  function sheetEdgeAt(doc, p, tol) {
-    let best = null;
-    for (const it of doc.items.values()) {
-      if (it.kind !== "sheet") continue;
-      const [x, y] = atOf(it.node), s = kid(it.node, "size"), w = num(s && s[1], 0), h = num(s && s[2], 0);
-      const edges = { top: [[x, y], [x + w, y]], right: [[x + w, y], [x + w, y + h]], bottom: [[x, y + h], [x + w, y + h]], left: [[x, y], [x, y + h]] };
-      for (const side of ["top", "right", "bottom", "left"]) {
-        const d = segDist(p, edges[side][0], edges[side][1]);
-        if (d <= tol && (!best || d < best.d)) best = { item: it, side, d, x, y, w, h };
-      }
-    }
-    return best;
-  }
-  function sheetPinPoint(ctx, edge, p) {
-    const g = ctx.snap([p[0], p[1]]), clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-    if (edge.side === "left") return [r4(edge.x), r4(clamp(g[1], edge.y, edge.y + edge.h))];
-    if (edge.side === "right") return [r4(edge.x + edge.w), r4(clamp(g[1], edge.y, edge.y + edge.h))];
-    if (edge.side === "top") return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y)];
-    return [r4(clamp(g[0], edge.x, edge.x + edge.w)), r4(edge.y + edge.h)];
-  }
-  function sheetPinClick(ctx, mm) {
-    const edge = sheetEdgeAt(ctx.doc, mm, Math.max(1.27, 8 * mmPerPx(ctx)));
-    if (!edge) {
-      ctx.toast("Click on the border of a sheet");
-      return null;
-    }
-    const p = sheetPinPoint(ctx, edge, mm);
-    promptImpl("Sheet pin", "", S.cursorClient, (name) => {
-      if (name) placeSheetPin(ctx, edge.item, name, p, edge.side);
-    });
-    return edge;
-  }
-  function placeSheetPin(ctx, sheet, name, p, side) {
-    const node = deep(sheet.node), pin = sheetPinNode(name, p, side);
-    const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
-    if (at >= 0) node.splice(at, 0, pin);
-    else node.push(pin);
-    ctx.commit([modChange(ctx.doc, sheet, node)], "sheet pin");
-    ctx.requestRender();
-    return pin;
-  }
-
-  // web/tools/sch-tools/shapes.ts
-  function drawPoint(ctx, mm) {
-    return ctx.snap([mm[0], mm[1]]).map(r4);
-  }
-  function startDraw(ctx, shape, p) {
-    S.draw = { shape, pts: [p], cur: p.slice() };
-    ctx.requestRender();
-  }
-  function cancelDraw(ctx) {
-    S.draw = null;
-    closePrompt();
-    ctx.requestRender();
-  }
-  function undoDrawPoint(ctx) {
-    const d = S.draw;
-    if (!d) return;
-    if (d.pts.length > 1) d.pts.pop();
-    else S.draw = null;
-    ctx.requestRender();
-  }
-  function drawClick(ctx, shape, p) {
-    const d = S.draw;
-    if (!d || d.shape !== shape) {
-      startDraw(ctx, shape, p);
-      return;
-    }
-    d.cur = p.slice();
-    const last = d.pts[d.pts.length - 1];
-    if (shape === "lines" || shape === "polygon" || shape === "rulearea") {
-      if (same(p, last)) {
-        finishDraw(ctx);
-        return;
-      }
-      if (shape !== "lines" && d.pts.length >= 3 && same(p, d.pts[0])) {
-        finishDraw(ctx);
-        return;
-      }
-      d.pts.push(p);
-      ctx.requestRender();
-      return;
-    }
-    if (shape === "bezier") {
-      if (d.pts.length === 2 && same(p, d.pts[0])) {
-        ctx.toast("The curve's end must differ from its start");
-        return;
-      }
-      d.pts.push(p);
-      if (d.pts.length === 4) finishDraw(ctx);
-      else ctx.requestRender();
-      return;
-    }
-    if (shape === "arc") {
-      if (d.pts.length === 1) {
-        if (!same(p, last)) d.pts.push(p);
-        ctx.requestRender();
-        return;
-      }
-      if (!K.arcFrom3(d.pts[0], p, d.pts[1]) || same(p, d.pts[0]) || same(p, d.pts[1])) {
-        ctx.toast("Click a point on the arc, off the line between its ends");
-        return;
-      }
-      d.pts.push(p);
-      finishDraw(ctx);
-      return;
-    }
-    if (same(p, last)) return;
-    d.pts.push(p);
-    finishDraw(ctx);
-  }
-  function finishDraw(ctx) {
-    const d = S.draw;
-    if (!d) return;
-    const doc = ctx.doc, pts = d.pts;
-    let node = null, label = d.shape;
-    if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
-    else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
-    else if (d.shape === "arc") node = arcNode(pts[0], pts[2], pts[1]);
-    else if (d.shape === "lines") {
-      const p = simplify(pts);
-      if (p.length >= 2) node = polylineNode(p);
-      label = "lines";
-    } else if (d.shape === "polygon") {
-      const p = simplify(pts);
-      if (p.length >= 3) node = polygonNode(p);
-    } else if (d.shape === "rulearea") {
-      const p = simplify(pts);
-      if (p.length >= 3) node = ruleAreaNode(p);
-      label = "rule area";
-    } else if (d.shape === "bezier") {
-      if (pts.length === 4) {
-        const e = pts[2], c2 = [r4(2 * e[0] - pts[3][0]), r4(2 * e[1] - pts[3][1])];
-        node = bezierNode(pts[0], pts[1], c2, e);
-      }
-    } else if (d.shape === "table") {
-      d.await = true;
-      ctx.requestRender();
-      promptImpl("Rows x cols", "2x2", S.cursorClient, (spec) => {
-        if (S.draw !== d) return;
-        S.draw = null;
-        const m = spec && spec.match(/^\s*(\d+)\s*[x×*,\s]\s*(\d+)\s*$/i);
-        if (m) commitShape(ctx, tableNode(pts[0], pts[1], +m[1], +m[2], ctx.gridPitch), "table");
-        else if (spec) ctx.toast("Rows x cols, e.g. 3x2");
-        ctx.requestRender();
-      });
-      return;
-    } else if (d.shape === "sheet") {
-      d.await = true;
-      ctx.requestRender();
-      const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
-      if (KD && KD.schItemDialog && !ctx.viewOnly) {
-        const sn = sheetNode(pts[0], pts[1], "Untitled Sheet", "untitled" + SHEET_EXT);
-        const inst = sheetInstance(ctx, ctx.doc, nextPage(ctx, ctx.doc));
-        if (inst) sn.push(inst);
-        const it = { id: "", kind: "sheet", node: sn, geom: [], bbox: null };
-        KD.schItemDialog(ctx, it, { cancel() {
-          if (S.draw === d) {
-            S.draw = null;
-            ctx.requestRender();
-          }
-        }, onCreate(staged) {
-          if (S.draw !== d) return;
-          S.draw = null;
-          const fp = kids(staged, "property").find((q) => /^Sheet ?file$/i.test(str(q[1])));
-          placeSheetNode(ctx, staged, fp ? str(fp[2]) : "untitled" + SHEET_EXT);
-        } });
-        return;
-      }
-      promptImpl("Sheet name", "", S.cursorClient, (name) => {
-        if (S.draw !== d) return;
-        if (!name) {
-          S.draw = null;
-          ctx.requestRender();
-          return;
-        }
-        promptImpl("Sheet file", sheetFileFor(name), S.cursorClient, (file) => {
-          if (S.draw !== d) return;
-          S.draw = null;
-          if (file) placeSheet(ctx, pts[0], pts[1], name, file);
-          else ctx.requestRender();
-        });
-      });
-      return;
-    } else if (d.shape === "textbox") {
-      d.await = true;
-      ctx.requestRender();
-      const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
-      if (KD && KD.openNew && !ctx.viewOnly) {
-        const tb = textBoxNode("", pts[0], pts[1]);
-        KD.openItem(ctx, { id: "", kind: "text_box", node: tb, geom: [], bbox: null }, {
-          generic: true,
-          cancel() {
-            if (S.draw === d) {
-              S.draw = null;
-              ctx.requestRender();
-            }
-          },
-          onCreate(staged) {
-            if (S.draw !== d) return;
-            S.draw = null;
-            commitShape(ctx, staged, "text box");
-            ctx.requestRender();
-          }
-        });
-        return;
-      }
-      promptImpl("Text box", "", S.cursorClient, (text) => {
-        if (S.draw !== d) return;
-        S.draw = null;
-        if (text) commitShape(ctx, textBoxNode(text, pts[0], pts[1]), "text box");
-        ctx.requestRender();
-      });
-      return;
-    }
-    S.draw = null;
-    if (node) commitShape(ctx, node, label);
-    ctx.requestRender();
-  }
-  function commitShape(ctx, node, label) {
-    const { item, change } = addNode(ctx.doc, node);
-    ctx.commit([change], label);
-    rememberPlaced(item.kind, item.node);
-    S.sel = item.id;
-    ctx.setSelected(null);
-    return item;
-  }
-
   // web/tools/sch-tools/hooks.ts
   function busyMessage() {
     if (S.wire) return "Press <ESC> to cancel drawing.";
@@ -4633,6 +5253,7 @@ Link '${target}' to this file?`)) return null;
     S.pending = null;
     if (S.drag) endDrag(ctx, false);
     if (S.draw) S.draw = null;
+    if (toolId === "arc") showSchArcMode(ctx);
     if (!toolOf(toolId)) {
       closePicker();
       S.carry = null;
@@ -4724,6 +5345,10 @@ Link '${target}' to this file?`)) return null;
     }
     if (DRAW_TOOLS.has(t.id)) {
       if (S.draw && S.draw.await) return true;
+      if (t.id === "arc" && dbl && S.draw && S.draw.arc) {
+        finishSchArc(ctx);
+        return true;
+      }
       drawClick(ctx, t.id, drawPoint(ctx, mm));
       return true;
     }
@@ -4747,6 +5372,14 @@ Link '${target}' to this file?`)) return null;
     }
     if (S.carry) {
       placeCarry(ctx, mm, ev);
+      return;
+    }
+    if (S.draw && S.draw.arc) {
+      const p = drawPoint(ctx, mm);
+      if (!same(S.draw.cur, p)) {
+        schArcMove(S.draw, p);
+        ctx.requestRender();
+      }
       return;
     }
     if (S.draw && !S.draw.await) {
@@ -4820,6 +5453,25 @@ Link '${target}' to this file?`)) return null;
       return true;
     };
     if (S.wire && wireKey(ctx, key === "Backspace" ? "Backspace" : key === "Delete" ? "Del" : key)) return true;
+    if (S.draw && S.draw.arc) {
+      if (key === "Enter" || key === "End") {
+        finishSchArc(ctx);
+        return true;
+      }
+      if (key === "Backspace" || key === "Delete") {
+        schArcBackup(ctx);
+        return true;
+      }
+      if (key === "/") {
+        if (ev && ev.altKey) switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5);
+        else schArcPosture(ctx);
+        return true;
+      }
+      if (key === "Escape") {
+        cancelDraw(ctx);
+        return true;
+      }
+    }
     if (S.draw && !S.draw.await) {
       if (key === "Enter" || key === "End") {
         const sh = S.draw.shape, n = S.draw.pts.length;
@@ -6631,6 +7283,7 @@ Link '${target}' to this file?`)) return null;
   }
 
   // web/tools/sch-tools/actions.ts
+  var ARC_MODE_LABELS = ["Draw Arc: Center, Start, End", "Draw Arc: Start, End, Midpoint", "Draw Arc: Start, End, Center", "Draw Arc: Tangent", "Draw Arc: Start, Direction, End"];
   function act(id, label, key, run) {
     return { id, label, key, run };
   }
@@ -6706,6 +7359,23 @@ Link '${target}' to this file?`)) return null;
     act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => {
       clearHighlight(ctx);
       return true;
+    }),
+    // EE_GRAPHIC_TOOL::DrawArc's modes (SCH_ACTIONS::drawArcCenter …): each starts Draw Arcs in its mode, or switches the
+    // arc being drawn to it (ARC_MODE_SESSION::HandleModeEvent); the Arc toolbar group then shows that mode's button
+    ...ARC_MODE_ACTIONS.map((id, m) => act(id, ARC_MODE_LABELS[m], "", (ctx) => {
+      if (S.tool === "arc") switchSchArcMode(ctx, m);
+      else {
+        setSchArcDrawMode(m);
+        ctx.setTool("arc");
+        showSchArcMode(ctx);
+      }
+      return true;
+    })),
+    act("arcPosture", "Switch Arc Posture", "/", (ctx) => S.tool === "arc" && schArcPosture(ctx)),
+    act("cycleArcDrawMode", "Cycle Arc Drawing Mode", "Alt+/", (ctx) => {
+      if (S.tool !== "arc") return false;
+      switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5);
+      return true;
     })
   ];
   var actions = {};
@@ -6725,7 +7395,7 @@ Link '${target}' to this file?`)) return null;
   }
 
   // web/tools/sch-tools/pins.ts
-  function segDist2(p, a, b) {
+  function segDist3(p, a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
     const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
     return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
@@ -6772,7 +7442,7 @@ Link '${target}' to this file?`)) return null;
         const b = pinBox(it, pin);
         const d = Math.max(b[0] - p[0], p[0] - b[2], b[1] - p[1], p[1] - b[3], 0);
         if (d > acc) continue;
-        const l = segDist2(p, [pin.x, pin.y], pin.root);
+        const l = segDist3(p, [pin.x, pin.y], pin.root);
         if (d < bestD - 1e-9 || Math.abs(d - bestD) <= 1e-9 && l < bestL) {
           best = { item: it, pin };
           bestD = d;

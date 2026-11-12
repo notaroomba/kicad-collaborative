@@ -13225,7 +13225,7 @@
       const p = K.atOf(n);
       const moved = Math.abs(p[0] - at[0]) > 1e-9 || Math.abs(p[1] - at[1]) > 1e-9;
       const c = addedChange(ctx.doc, n);
-      ctx.commit([c], "Draw Text");
+      ctx.commit([c], "Draw Text", moved ? void 0 : { tentative: true });
       applySelection(ctx, [c.id]);
       if (!moved) beginCarryMove(ctx, { placing: [c.id], origin: at });
       ctx.requestRender();
@@ -13258,28 +13258,14 @@
     newItemDialogs = d;
   }
 
-  // web/tools/pcb-tools/arcs.ts
+  // web/tools/arc-geom.ts
+  var norm3602 = (a) => (a % 360 + 360) % 360;
   var ARC_CENTER_START_END = 0;
   var ARC_START_END_MID = 1;
   var ARC_START_END_CENTER = 2;
   var ARC_TANGENT = 3;
   var ARC_START_DIR_END = 4;
   var ARC_MODE_ACTIONS = ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd"];
-  var ARC_MODE_KEY = "kc.pcb.arcDrawMode";
-  function arcDrawMode() {
-    if (S.arcMode == null) {
-      const v = lsGet(ARC_MODE_KEY);
-      S.arcMode = v !== null && /^[0-4]$/.test(v) ? +v : ARC_CENTER_START_END;
-    }
-    return S.arcMode;
-  }
-  function showArcMode(ctx) {
-    if (ctx && ctx.setGroupCurrent) ctx.setGroupCurrent("Arc", ARC_MODE_ACTIONS[arcDrawMode()]);
-  }
-  function setArcDrawMode(m) {
-    S.arcMode = m;
-    lsSet(ARC_MODE_KEY, String(m));
-  }
   var NM = 1e6;
   var toNm = (p) => [Math.round(p[0] * NM), Math.round(p[1] * NM)];
   var fromNm = (p) => [p[0] / NM, p[1] / NM];
@@ -13446,8 +13432,8 @@
       const s = [sol.start[0] - c[0], sol.start[1] - c[1]], e = [sol.end[0] - c[0], sol.end[1] - c[1]], m = [sol.mid[0] - c[0], sol.mid[1] - c[1]];
       this.origin = [kiRound(c[0]), kiRound(c[1])];
       this.radius = sol.radius;
-      this.sa = norm360(degOf(s));
-      this.ea = norm360(degOf(e));
+      this.sa = norm3602(degOf(s));
+      this.ea = norm3602(degOf(e));
       this.cw = crossZ(s[0], s[1], m[0], m[1]) < 0;
     }
     clearSolution() {
@@ -13580,6 +13566,8 @@
       return { start: s, mid: [kiRound(c[0] + r * Math.cos(am)), kiRound(c[1] + r * Math.sin(am))], end: e, center: c };
     }
   };
+  var canvasCurves = () => globalThis.KiCadCanvas;
+  var vsubA = (a, b) => [a[0] - b[0], a[1] - b[1]];
   var unitOf = (v) => {
     const l = Math.hypot(v[0], v[1]);
     return l === 0 ? null : [v[0] / l, v[1] / l];
@@ -13590,6 +13578,114 @@
     const first = da <= db;
     if (tol !== void 0 && (first ? da : db) > tol) return null;
     return first ? a : b;
+  }
+  function tangentAtEndpoint(sh, p) {
+    const atStart = p[0] === sh.start[0] && p[1] === sh.start[1];
+    if (!atStart && (p[0] !== sh.end[0] || p[1] !== sh.end[1])) return null;
+    if (sh.t === "seg") return unitOf(atStart ? vsubA(sh.start, sh.end) : vsubA(sh.end, sh.start));
+    if (sh.t !== "arc") return null;
+    const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
+    if (turn === 0) return null;
+    let t = perp2(vsubA(p, sh.center));
+    if (turn > 0 === atStart) t = [-t[0], -t[1]];
+    return unitOf(t);
+  }
+  function arcTangentSeedNear(sh, near) {
+    const end = nearestEnd(sh.start, sh.end, near);
+    const d = tangentAtEndpoint(sh, end);
+    return d ? { start: end.slice(), dir: d, axis: false } : null;
+  }
+  function segDist(a, b, p) {
+    const v = vsubA(b, a), L = v[0] * v[0] + v[1] * v[1];
+    let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
+    t = Math.max(0, Math.min(1, t));
+    const q = [a[0] + v[0] * t, a[1] + v[1] * t];
+    return { d: Math.hypot(p[0] - q[0], p[1] - q[1]), q: [kiRound(q[0]), kiRound(q[1])] };
+  }
+  function polylineSeedAt(vs, closed, p, tol) {
+    const n = vs.length;
+    if (n < 2) return null;
+    if (!closed) {
+      const end = nearestEnd(vs[0], vs[n - 1], p, tol);
+      if (end) {
+        const inner = end === vs[0] ? vs[1] : vs[n - 2];
+        const d = unitOf(vsubA(end, inner));
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+    }
+    let best = null, bestD = tol;
+    for (let i = 0; i < (closed ? n : n - 1); i++) {
+      const a = vs[i], b = vs[(i + 1) % n], r = segDist(a, b, p);
+      if (r.d <= bestD) {
+        best = { a, b, q: r.q };
+        bestD = r.d;
+      }
+    }
+    if (!best) return null;
+    const ax = unitOf(vsubA(best.b, best.a));
+    return ax ? { start: best.q, dir: ax, axis: true } : null;
+  }
+  function arcTangentSeedAt(sh, p, tol, geo = canvasCurves()) {
+    if (sh.t === "seg") return polylineSeedAt([sh.start, sh.end], false, p, tol);
+    if (sh.t === "bez") {
+      const ctrl = [sh.start, sh.c1, sh.c2, sh.end];
+      const xs = ctrl.map((c) => c[0]), ys = ctrl.map((c) => c[1]);
+      if (p[0] < Math.min(...xs) - tol || p[0] > Math.max(...xs) + tol || p[1] < Math.min(...ys) - tol || p[1] > Math.max(...ys) + tol) return null;
+      const poly = geo.bezierPts(ctrl.map(fromNm)).map(toNm);
+      poly[0] = sh.start.slice();
+      poly[poly.length - 1] = sh.end.slice();
+      const seed = polylineSeedAt(poly, false, p, tol);
+      if (seed && !seed.axis) {
+        const atStart = seed.start[0] === sh.start[0] && seed.start[1] === sh.start[1];
+        const end = atStart ? sh.start : sh.end, others = atStart ? [sh.c1, sh.c2, sh.end] : [sh.c2, sh.c1, sh.start];
+        for (const c of others) {
+          const d = unitOf(vsubA(end, c));
+          if (d) {
+            seed.dir = d;
+            break;
+          }
+        }
+      }
+      return seed;
+    }
+    if (sh.t === "arc") {
+      const end = nearestEnd(sh.start, sh.end, p, tol);
+      if (end) {
+        const d = tangentAtEndpoint(sh, end);
+        return d ? { start: end.slice(), dir: d, axis: false } : null;
+      }
+      const a = geo.arcFrom3(fromNm(sh.start), fromNm(sh.mid), fromNm(sh.end));
+      if (!a) return null;
+      const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
+      const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
+      if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
+      const ax = unitOf(perp2(vsubA(q, c)));
+      return ax ? { start: q, dir: ax, axis: true } : null;
+    }
+    if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
+    return null;
+  }
+  function arcContainsAngle(a, ang) {
+    const tw = 2 * Math.PI, nrm = (x) => (x % tw + tw) % tw;
+    const sweep = a.anticlockwise ? nrm(a.a0 - a.a1) : nrm(a.a1 - a.a0), off = a.anticlockwise ? nrm(a.a0 - ang) : nrm(ang - a.a0);
+    return off <= sweep + 1e-12;
+  }
+
+  // web/tools/pcb-tools/arcs.ts
+  var ARC_MODE_KEY = "kc.pcb.arcDrawMode";
+  function arcDrawMode() {
+    if (S.arcMode == null) {
+      const v = lsGet(ARC_MODE_KEY);
+      S.arcMode = v !== null && /^[0-4]$/.test(v) ? +v : ARC_CENTER_START_END;
+    }
+    return S.arcMode;
+  }
+  function showArcMode(ctx) {
+    if (ctx && ctx.setGroupCurrent) ctx.setGroupCurrent("Arc", ARC_MODE_ACTIONS[arcDrawMode()]);
+  }
+  function setArcDrawMode(m) {
+    S.arcMode = m;
+    lsSet(ARC_MODE_KEY, String(m));
   }
   function seedShapeOf(it) {
     const n = it.node, pt2 = (k) => {
@@ -13611,97 +13707,6 @@
       return ps.length > 1 ? { t: "poly", pts: ps } : null;
     }
     return null;
-  }
-  function tangentAtEndpoint(sh, p) {
-    const atStart = p[0] === sh.start[0] && p[1] === sh.start[1];
-    if (!atStart && (p[0] !== sh.end[0] || p[1] !== sh.end[1])) return null;
-    if (sh.t === "seg") return unitOf(atStart ? vsub(sh.start, sh.end) : vsub(sh.end, sh.start));
-    if (sh.t !== "arc") return null;
-    const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
-    if (turn === 0) return null;
-    let t = perp2(vsub(p, sh.center));
-    if (turn > 0 === atStart) t = [-t[0], -t[1]];
-    return unitOf(t);
-  }
-  function arcTangentSeedNear(sh, near) {
-    const end = nearestEnd(sh.start, sh.end, near);
-    const d = tangentAtEndpoint(sh, end);
-    return d ? { start: end.slice(), dir: d, axis: false } : null;
-  }
-  function segDist(a, b, p) {
-    const v = vsub(b, a), L = v[0] * v[0] + v[1] * v[1];
-    let t = L ? ((p[0] - a[0]) * v[0] + (p[1] - a[1]) * v[1]) / L : 0;
-    t = Math.max(0, Math.min(1, t));
-    const q = [a[0] + v[0] * t, a[1] + v[1] * t];
-    return { d: Math.hypot(p[0] - q[0], p[1] - q[1]), q: [kiRound(q[0]), kiRound(q[1])] };
-  }
-  function polylineSeedAt(vs, closed, p, tol) {
-    const n = vs.length;
-    if (n < 2) return null;
-    if (!closed) {
-      const end = nearestEnd(vs[0], vs[n - 1], p, tol);
-      if (end) {
-        const inner = end === vs[0] ? vs[1] : vs[n - 2];
-        const d = unitOf(vsub(end, inner));
-        return d ? { start: end.slice(), dir: d, axis: false } : null;
-      }
-    }
-    let best = null, bestD = tol;
-    for (let i = 0; i < (closed ? n : n - 1); i++) {
-      const a = vs[i], b = vs[(i + 1) % n], r = segDist(a, b, p);
-      if (r.d <= bestD) {
-        best = { a, b, q: r.q };
-        bestD = r.d;
-      }
-    }
-    if (!best) return null;
-    const ax = unitOf(vsub(best.b, best.a));
-    return ax ? { start: best.q, dir: ax, axis: true } : null;
-  }
-  function arcTangentSeedAt(sh, p, tol) {
-    if (sh.t === "seg") return polylineSeedAt([sh.start, sh.end], false, p, tol);
-    if (sh.t === "bez") {
-      const ctrl = [sh.start, sh.c1, sh.c2, sh.end];
-      const xs = ctrl.map((c) => c[0]), ys = ctrl.map((c) => c[1]);
-      if (p[0] < Math.min(...xs) - tol || p[0] > Math.max(...xs) + tol || p[1] < Math.min(...ys) - tol || p[1] > Math.max(...ys) + tol) return null;
-      const poly = K.bezierPts(ctrl.map(fromNm)).map(toNm);
-      poly[0] = sh.start.slice();
-      poly[poly.length - 1] = sh.end.slice();
-      const seed = polylineSeedAt(poly, false, p, tol);
-      if (seed && !seed.axis) {
-        const atStart = seed.start[0] === sh.start[0] && seed.start[1] === sh.start[1];
-        const end = atStart ? sh.start : sh.end, others = atStart ? [sh.c1, sh.c2, sh.end] : [sh.c2, sh.c1, sh.start];
-        for (const c of others) {
-          const d = unitOf(vsub(end, c));
-          if (d) {
-            seed.dir = d;
-            break;
-          }
-        }
-      }
-      return seed;
-    }
-    if (sh.t === "arc") {
-      const end = nearestEnd(sh.start, sh.end, p, tol);
-      if (end) {
-        const d = tangentAtEndpoint(sh, end);
-        return d ? { start: end.slice(), dir: d, axis: false } : null;
-      }
-      const a = K.arcFrom3(fromNm(sh.start), fromNm(sh.mid), fromNm(sh.end));
-      if (!a) return null;
-      const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
-      const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
-      if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
-      const ax = unitOf(perp2(vsub(q, c)));
-      return ax ? { start: q, dir: ax, axis: true } : null;
-    }
-    if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
-    return null;
-  }
-  function arcContainsAngle(a, ang) {
-    const tw = 2 * Math.PI, nrm = (x) => (x % tw + tw) % tw;
-    const sweep = a.anticlockwise ? nrm(a.a0 - a.a1) : nrm(a.a1 - a.a0), off = a.anticlockwise ? nrm(a.a0 - ang) : nrm(ang - a.a0);
-    return off <= sweep + 1e-12;
   }
   function findTangentSeed(ctx, pos) {
     const tol = kiRound(5 / Math.max(1e-9, ctx.pxPerMm || 1) * NM), layer = S.gfxLayer;

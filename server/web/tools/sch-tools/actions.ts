@@ -11,6 +11,10 @@ import { selectConnection, selectNode, stepNetItem, unselectAll } from "./netwal
 import { incrementSelection, repeatLast } from "./repeat";
 import { orientSelected } from "./selection-edits";
 import { S } from "./state";
+import { ARC_MODE_ACTIONS } from "../arc-geom";
+import { schArcDrawMode, schArcPosture, setSchArcDrawMode, showSchArcMode, switchSchArcMode } from "./arcs";
+/** SCH_ACTIONS::drawArcCenter … FriendlyName. */
+const ARC_MODE_LABELS = ["Draw Arc: Center, Start, End", "Draw Arc: Start, End, Midpoint", "Draw Arc: Start, End, Center", "Draw Arc: Tangent", "Draw Arc: Start, Direction, End"];
 import { alignEdges, alignToGrid, breakWire, moveExactly, swapSelection } from "./transforms";
 import { unfoldAction } from "./unfold";
 
@@ -81,6 +85,14 @@ export const ACTION_LIST = [
   act("cleanupSheetPins", "Cleanup Sheet Pins", "", (ctx: SchCtx) => cleanupSheetPins(ctx)),
   act("highlightNet", "Highlight Net", "`", (ctx: SchCtx) => highlightNetNow(ctx)),
   act("clearHighlight", "Clear Net Highlighting", "~", (ctx: SchCtx) => { clearHighlight(ctx); return true; }),
+  // EE_GRAPHIC_TOOL::DrawArc's modes (SCH_ACTIONS::drawArcCenter …): each starts Draw Arcs in its mode, or switches the
+  // arc being drawn to it (ARC_MODE_SESSION::HandleModeEvent); the Arc toolbar group then shows that mode's button
+  ...ARC_MODE_ACTIONS.map((id, m) => act(id, ARC_MODE_LABELS[m], "", (ctx: SchCtx) => {
+    if (S.tool === "arc") switchSchArcMode(ctx, m); else { setSchArcDrawMode(m); ctx.setTool("arc"); showSchArcMode(ctx); }
+    return true;
+  })),
+  act("arcPosture", "Switch Arc Posture", "/", (ctx: SchCtx) => S.tool === "arc" && schArcPosture(ctx)),
+  act("cycleArcDrawMode", "Cycle Arc Drawing Mode", "Alt+/", (ctx: SchCtx) => { if (S.tool !== "arc") return false; switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5); return true; }),
 ];
 export const actions: Record<string, SchAction> = {}; for (const a of ACTION_LIST) actions[a.id] = a;
 export function runAction(id: string, ctx: SchCtx, opts?: unknown) { const a = actions[id]; if (!a) return false; S.ctx = ctx; installDom(ctx); try { return !!a.run(ctx, opts); } catch (e) { console.warn(e); if (ctx && ctx.toast) ctx.toast(a.label + " failed: " + (e && (e as Error).message)); return false; } }

@@ -1,7 +1,8 @@
 import type { SchCtx, Pt } from "./types";
 import { root } from "../root";
+import { commitSchArc, schArcClick } from "./arcs";
 import { closePrompt, promptImpl } from "./dom";
-import { arcNode, bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, tableNode, textBoxNode } from "./nodes";
+import { bezierNode, circleNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, tableNode, textBoxNode } from "./nodes";
 import { rememberPlaced } from "./repeat";
 import { SHEET_EXT, nextPage, placeSheet, placeSheetNode, sheetFileFor, sheetInstance } from "./sheets";
 import { K, S, kids, str } from "./state";
@@ -17,6 +18,7 @@ export function startDraw(ctx: SchCtx, shape: string, p: Pt) { S.draw = { shape,
 export function cancelDraw(ctx: SchCtx) { S.draw = null; closePrompt(); ctx.requestRender(); }
 export function undoDrawPoint(ctx: SchCtx) { const d = S.draw; if (!d) return; if (d.pts.length > 1) d.pts.pop(); else S.draw = null; ctx.requestRender(); }
 export function drawClick(ctx: SchCtx, shape: string, p: Pt) {
+  if (shape === "arc") { schArcClick(ctx, p); return; }   // EE_GRAPHIC_TOOL::DrawArc and its five drawing modes
   const d = S.draw;
   if (!d || d.shape !== shape) { startDraw(ctx, shape, p); return; }
   d.cur = p.slice();
@@ -30,11 +32,6 @@ export function drawClick(ctx: SchCtx, shape: string, p: Pt) {
     if (d.pts.length === 2 && same(p, d.pts[0])) { ctx.toast("The curve's end must differ from its start"); return; }
     d.pts.push(p); if (d.pts.length === 4) finishDraw(ctx); else ctx.requestRender(); return;
   }
-  if (shape === "arc") {
-    if (d.pts.length === 1) { if (!same(p, last)) d.pts.push(p); ctx.requestRender(); return; }
-    if (!K.arcFrom3(d.pts[0], p, d.pts[1]) || same(p, d.pts[0]) || same(p, d.pts[1])) { ctx.toast("Click a point on the arc, off the line between its ends"); return; }
-    d.pts.push(p); finishDraw(ctx); return;
-  }
   if (same(p, last)) return;                     // a zero-size shape is not a shape
   d.pts.push(p); finishDraw(ctx);
 }
@@ -43,7 +40,7 @@ export function finishDraw(ctx: SchCtx) {
   const doc = ctx.doc, pts = d.pts; let node = null, label = d.shape;
   if (d.shape === "rect") node = rectangleNode(pts[0], pts[1]), label = "rectangle";
   else if (d.shape === "circle") node = circleNode(pts[0], Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]));
-  else if (d.shape === "arc") node = arcNode(pts[0], pts[2], pts[1]);
+  else if (d.shape === "arc") { commitSchArc(ctx, d, false); ctx.requestRender(); return; }
   else if (d.shape === "lines") { const p = simplify(pts); if (p.length >= 2) node = polylineNode(p); label = "lines"; }
   else if (d.shape === "polygon") { const p = simplify(pts); if (p.length >= 3) node = polygonNode(p); }
   else if (d.shape === "rulearea") { const p = simplify(pts); if (p.length >= 3) node = ruleAreaNode(p); label = "rule area"; }
