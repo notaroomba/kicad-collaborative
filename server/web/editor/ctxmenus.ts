@@ -47,7 +47,7 @@ export interface MenuDef {
   icon?: string;
   entries: Entry[];
   /** filled in by the editor: the zoom presets, the grid list */
-  dynamic?: "zoom" | "grid";
+  dynamic?: "zoom" | "grid" | "diffpair";
 }
 export type Entry =
   | { order: number; cond: Cond; act: string; check?: boolean }
@@ -57,7 +57,7 @@ export type Entry =
 const always: Cond = () => true;
 
 export class CondMenu implements MenuDef {
-  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid";
+  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair";
   constructor(title = "", icon?: string) { this.title = title; this.icon = icon; }
   private add(e: Entry, order: number | undefined): this {
     e.order = order === undefined || order < 0 ? this.entries.length : order;
@@ -88,6 +88,8 @@ const set = (...k: string[]) => new Set(k);
 // ---------------------------------------------------------------- Zoom / Grid (EDA_DRAW_FRAME::AddStandardSubMenus)
 export const ZOOM_MENU: MenuDef = { title: "Zoom", icon: "zoom_selection", entries: [], dynamic: "zoom" };
 export const GRID_MENU: MenuDef = { title: "Grid", icon: "grid_select", entries: [], dynamic: "grid" };
+/** ROUTER_TOOL's DIFF_PAIR_MENU: Use Net Class Values, Use Custom Values... and the pre-defined pair dimensions (filled in by the board module). */
+export const DIFF_PAIR_MENU: MenuDef = { title: "Select Differential Pair Dimensions", icon: "width_track_via", entries: [], dynamic: "diffpair" };
 /** GRID_MENU::update() puts this above the grid list. */
 export const GRID_ORIGIN = "ACTIONS::gridOrigin";
 function standardSubMenus(m: CondMenu): CondMenu { return m.sep(1000).sub(ZOOM_MENU, always, 1000).sub(GRID_MENU, always, 1000); }
@@ -350,6 +352,7 @@ function pcbRouterMenu(): CondMenu {
     .check("ACT_SwitchCornerMode45").check("ACT_SwitchCornerModeArc45").check("ACT_SwitchCornerMode90").check("ACT_SwitchCornerModeArc90"));
   m.sep();
   m.sub(new CondMenu("Select Track/Via Width", "width_track_via").item("ACT_CustomTrackWidth"));
+  m.sub(DIFF_PAIR_MENU, (c) => c.tool === "routediff");   // diffPairCond: the router is in PNS_MODE_ROUTE_DIFF_PAIR
   m.item("PCB_ACTIONS::routerSettingsDialog").sep();
   standardSubMenus(m);
   return m;
@@ -379,7 +382,7 @@ export function menuFor(c: MenuCtx, moduleTool: boolean): MenuDef {
   if (c.tool === "select" || c.tool === "highlight") return c.editor === "sch" ? MENUS.schSelection : MENUS.pcbSelection;
   if (!moduleTool) return MENUS.basic;                       // pan, zoom-to-selection, measure, comment: Cancel + Zoom + Grid
   if (c.editor === "sch") return [...SCH_WIRE_TOOLS, "lines"].includes(c.tool) ? MENUS.schWire : c.tool === "delete" ? MENUS.basic : MENUS.schDrawing;
-  return c.tool === "route" ? MENUS.pcbRouter : c.tool === "delete" || c.tool === "drag" ? MENUS.basic : MENUS.pcbDrawing;
+  return c.tool === "route" || c.tool === "routediff" ? MENUS.pcbRouter : c.tool === "delete" || c.tool === "drag" ? MENUS.basic : MENUS.pcbDrawing;
 }
 
 /** One evaluated entry: CONDITIONAL_MENU::Evaluate's output before labels and availability are attached. */

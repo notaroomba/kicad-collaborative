@@ -17,9 +17,12 @@ export type SizeUnits = "mm" | "in" | "mil";
 export interface ViaDim { diameter: number; drill: number }
 export interface DiffPairDim { width: number; gap: number; via_gap: number }
 /** A netclass as the project file stores it; a missing value is "not set" and falls through to a lower-priority class. */
-export interface NetClassDef { name: string; priority: number; clearance?: number; track_width?: number; via_diameter?: number; via_drill?: number }
+export interface NetClassDef { name: string; priority: number; clearance?: number; track_width?: number; via_diameter?: number; via_drill?: number;
+  diff_pair_width?: number; diff_pair_gap?: number; diff_pair_via_gap?: number }
 /** What a net resolves to: every value filled in (the Default class completes the set). */
-export interface NetClassValues { name: string; clearance: number; track_width: number; via_diameter: number; via_drill: number }
+export interface NetClassValues { name: string; clearance: number; track_width: number; via_diameter: number; via_drill: number; diff_pair_width: number; diff_pair_gap: number; diff_pair_via_gap: number }
+/** What the router draws a differential pair with (PNS::SIZES_SETTINGS DiffPairWidth / DiffPairGap / DiffPairViaGap) and where each came from. */
+export interface DiffPairSizes { width: number; gap: number; viaGap: number; widthSource: string; gapSource: string }
 /** board.layer_pairs entry; layers by KiCad name here (the file stores PCB_LAYER_ID numbers). */
 export interface LayerPairPreset { top: string; bottom: string; enabled: boolean; name?: string }
 
@@ -34,10 +37,12 @@ export interface BoardSizes {
   assignments: Record<string, string[]>;
   patterns: { pattern: string; netclass: string }[];
   minTrackWidth: number; minViaDiameter: number; minThroughDrill: number;
+  /** design_settings.rules.min_clearance (BOARD_DESIGN_SETTINGS::m_MinClearance) */
+  minClearance: number;
 }
 
-// NETCLASS defaults (common/netclass.cpp): 0.2 mm clearance and track, 0.6 / 0.3 mm via.
-const DEFAULT_CLASS: NetClassValues = { name: "Default", clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 };
+// NETCLASS defaults (common/netclass.cpp): 0.2 mm clearance and track, 0.6 / 0.3 mm via, 0.2 mm pair width, 0.25 mm gaps.
+const DEFAULT_CLASS: NetClassValues = { name: "Default", clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3, diff_pair_width: 0.2, diff_pair_gap: 0.25, diff_pair_via_gap: 0.25 };
 const DEFAULT_PRIORITY = 2147483647;
 // Without a .kicad_pro there is nothing pre-defined; these keep the size hotkeys useful on a lone board.
 const FALLBACK_TRACKS = [0, 0.2, 0.25, 0.3, 0.5, 0.8, 1.0];
@@ -55,7 +60,7 @@ export function boardSizes(src: unknown): BoardSizes {
   if (typeof src === "string") { try { pro = src.trim() ? JSON.parse(src) : null; } catch (e) { pro = null; } }
   const p = obj(pro), board = p && obj(p.board), ds = board && obj(board.design_settings), ns = p && obj(p.net_settings);
   const out: BoardSizes = { hasProject: !!(ds || ns), trackWidths: [0], vias: [{ diameter: 0, drill: 0 }], diffPairs: [{ width: 0, gap: 0, via_gap: 0 }],
-    classes: [], assignments: {}, patterns: [], minTrackWidth: 0, minViaDiameter: 0, minThroughDrill: 0 };
+    classes: [], assignments: {}, patterns: [], minTrackWidth: 0, minViaDiameter: 0, minThroughDrill: 0, minClearance: 0 };
   if (!out.hasProject) { out.trackWidths = FALLBACK_TRACKS.slice(); out.vias = FALLBACK_VIAS.map((v) => ({ ...v })); }
   if (ds) {
     const tw = arr(ds.track_widths).filter((v): v is number => typeof v === "number");
@@ -66,12 +71,13 @@ export function boardSizes(src: unknown): BoardSizes {
       .map((v) => ({ width: v.width as number, gap: v.gap as number, via_gap: v.via_gap as number }));
     if (dp.length) out.diffPairs = dp;
     const rules = obj(ds.rules);
-    if (rules) { out.minTrackWidth = numOr(rules.min_track_width, 0); out.minViaDiameter = numOr(rules.min_via_diameter, 0); out.minThroughDrill = numOr(rules.min_through_hole_diameter, 0); }
+    if (rules) { out.minTrackWidth = numOr(rules.min_track_width, 0); out.minViaDiameter = numOr(rules.min_via_diameter, 0); out.minThroughDrill = numOr(rules.min_through_hole_diameter, 0); out.minClearance = numOr(rules.min_clearance, 0); }
   }
   if (ns) {
     for (const c of arr(ns.classes).map(obj)) {
       if (!c || typeof c.name !== "string" || !c.name) continue;
-      out.classes.push({ name: c.name, priority: numOr(c.priority, c.name === "Default" ? DEFAULT_PRIORITY : 0), clearance: optNum(c.clearance), track_width: optNum(c.track_width), via_diameter: optNum(c.via_diameter), via_drill: optNum(c.via_drill) });
+      out.classes.push({ name: c.name, priority: numOr(c.priority, c.name === "Default" ? DEFAULT_PRIORITY : 0), clearance: optNum(c.clearance), track_width: optNum(c.track_width), via_diameter: optNum(c.via_diameter), via_drill: optNum(c.via_drill),
+        diff_pair_width: optNum(c.diff_pair_width), diff_pair_gap: optNum(c.diff_pair_gap), diff_pair_via_gap: optNum(c.diff_pair_via_gap) });
     }
     const asg = obj(ns.netclass_assignments);
     if (asg) for (const [net, v] of Object.entries(asg)) { const names = (Array.isArray(v) ? v : [v]).filter((x): x is string => typeof x === "string" && !!x); if (names.length) out.assignments[net] = names; }
@@ -84,7 +90,9 @@ export function boardSizes(src: unknown): BoardSizes {
 export function defaultNetclass(s: BoardSizes): NetClassValues {
   const d = s.classes.find((c) => c.name === "Default");
   return { name: "Default", clearance: d && d.clearance !== undefined ? d.clearance : DEFAULT_CLASS.clearance, track_width: d && d.track_width !== undefined ? d.track_width : DEFAULT_CLASS.track_width,
-    via_diameter: d && d.via_diameter !== undefined ? d.via_diameter : DEFAULT_CLASS.via_diameter, via_drill: d && d.via_drill !== undefined ? d.via_drill : DEFAULT_CLASS.via_drill };
+    via_diameter: d && d.via_diameter !== undefined ? d.via_diameter : DEFAULT_CLASS.via_diameter, via_drill: d && d.via_drill !== undefined ? d.via_drill : DEFAULT_CLASS.via_drill,
+    diff_pair_width: d && d.diff_pair_width !== undefined ? d.diff_pair_width : DEFAULT_CLASS.diff_pair_width, diff_pair_gap: d && d.diff_pair_gap !== undefined ? d.diff_pair_gap : DEFAULT_CLASS.diff_pair_gap,
+    diff_pair_via_gap: d && d.diff_pair_via_gap !== undefined ? d.diff_pair_via_gap : DEFAULT_CLASS.diff_pair_via_gap };
 }
 
 const PATTERN_CACHE = new Map<string, RegExp | null>();
@@ -128,6 +136,9 @@ export function effectiveNetclass(s: BoardSizes, net: string): NetClassValues {
     if (c.track_width !== undefined) out.track_width = c.track_width;
     if (c.via_diameter !== undefined) out.via_diameter = c.via_diameter;
     if (c.via_drill !== undefined) out.via_drill = c.via_drill;
+    if (c.diff_pair_width !== undefined) out.diff_pair_width = c.diff_pair_width;
+    if (c.diff_pair_gap !== undefined) out.diff_pair_gap = c.diff_pair_gap;
+    if (c.diff_pair_via_gap !== undefined) out.diff_pair_via_gap = c.diff_pair_via_gap;
   }
   return out;
 }
@@ -285,6 +296,13 @@ export class PcbSizes {
   src: unknown = undefined;
   trackIndex = 0;
   viaIndex = 0;
+  /** BOARD_DESIGN_SETTINGS::m_DiffPairIndex (0 = the net class values) */
+  diffPairIndex = 0;
+  /** m_useCustomDiffPair and m_customDiffPair (Use Custom Values… / Differential Pair Dimensions…) */
+  useCustomDiffPair = false;
+  customDiffPair: DiffPairDim = { width: 0.2, gap: 0.25, via_gap: 0.25 };
+  /** SIZES_SETTINGS::m_diffPairViaGapSameAsTraceGap — the dialog's "Via gap same as track gap" (on by default) */
+  diffPairViaGapSameAsGap = true;
   /** PROJECT_LOCAL_SETTINGS::m_AutoTrackWidth — on by default */
   useConnectedWidth = true;
   /** m_TempOverrideTrackWidth: W during a route overrides the connected width until the route ends */
@@ -303,7 +321,8 @@ export class PcbSizes {
   emit(): void { for (const fn of Array.from(this.listeners)) { try { fn(); } catch (e) { console.warn(e); } } }
   /** Back to a fresh board editor (the node tests share one module instance). */
   reset(): void {
-    this.sizes = boardSizes(null); this.src = undefined; this.trackIndex = 0; this.viaIndex = 0; this.useConnectedWidth = true; this.tempOverride = false;
+    this.sizes = boardSizes(null); this.src = undefined; this.trackIndex = 0; this.viaIndex = 0; this.diffPairIndex = 0; this.useCustomDiffPair = false;
+    this.customDiffPair = { width: 0.2, gap: 0.25, via_gap: 0.25 }; this.diffPairViaGapSameAsGap = true; this.useConnectedWidth = true; this.tempOverride = false;
     this.layerPair = ["F.Cu", "B.Cu"]; this.activeLayer = ""; this.layerPairPresets = []; this.curvedRatsnest = false; this.gridOrigin = [0, 0]; this.auxOrigin = [0, 0]; this.emit();
   }
   /** Take the project's settings (.kicad_pro text or object; empty = no project).  The same source again is a no-op. */
@@ -313,6 +332,7 @@ export class PcbSizes {
     this.src = key; this.sizes = boardSizes(key);
     if (this.trackIndex >= this.sizes.trackWidths.length) this.trackIndex = 0;
     if (this.viaIndex >= this.sizes.vias.length) this.viaIndex = 0;
+    if (this.diffPairIndex >= this.sizes.diffPairs.length) this.diffPairIndex = 0;
     this.emit(); return true;
   }
   /** Replace the pre-defined lists (the Pre-defined Sizes page): sorted, the netclass placeholder first. */
@@ -323,6 +343,7 @@ export class PcbSizes {
     if (diffPairs) this.sizes.diffPairs = [{ width: 0, gap: 0, via_gap: 0 }, ...diffPairs.filter((d) => d.width > 0).sort((a, b) => a.width - b.width || a.gap - b.gap || a.via_gap - b.via_gap)];
     if (this.trackIndex >= this.sizes.trackWidths.length) this.trackIndex = 0;
     if (this.viaIndex >= this.sizes.vias.length) this.viaIndex = 0;
+    if (this.diffPairIndex >= this.sizes.diffPairs.length) this.diffPairIndex = 0;
     this.emit();
   }
   setTrackIndex(i: number): void { this.trackIndex = Math.max(0, Math.min(Math.round(i) || 0, this.sizes.trackWidths.length - 1)); this.emit(); }
@@ -373,6 +394,42 @@ export class PcbSizes {
   stepViaSize(forward: boolean): ViaDim {
     this.viaIndex = nextPredefinedIndex(this.viaIndex, forward, this.sizes.vias.length);
     this.emit(); return this.currentVia();
+  }
+  /** BOARD_DESIGN_SETTINGS::UseNetClassDiffPair: the list's netclass entry and no custom values. */
+  get useNetclassDiffPair(): boolean { return !this.useCustomDiffPair && (this.diffPairIndex <= 0 || this.diffPairIndex >= this.sizes.diffPairs.length); }
+  /** DIFF_PAIR_MENU: Use Net Class Values (index 0), an entry of the list (1 …), or Use Custom Values… ("custom"). */
+  setDiffPairIndex(i: number | "custom"): void {
+    if (i === "custom") this.useCustomDiffPair = true;
+    else { this.useCustomDiffPair = false; this.diffPairIndex = Math.max(0, Math.min(Math.round(i) || 0, this.sizes.diffPairs.length - 1)); }
+    this.emit();
+  }
+  /** ROUTER_TOOL::DpDimensionsDialog's OK: the custom values (SetCustomDiffPairWidth / Gap / ViaGap). */
+  setCustomDiffPair(d: DiffPairDim, viaGapSameAsGap: boolean): void {
+    this.customDiffPair = { width: d.width, gap: d.gap, via_gap: d.via_gap }; this.diffPairViaGapSameAsGap = !!viaGapSameAsGap; this.useCustomDiffPair = true; this.emit();
+  }
+  /**
+   * The pair a route on the nets P / N gets (BOARD_DESIGN_SETTINGS::GetCurrentDiffPair* through ROUTER_TOOL's
+   * size update): the custom values, else the selected list entry, else the net's class; the class values are
+   * floored at the board minimum track width and clearance, as are list or custom values below them.  The via gap
+   * follows the track gap with "Via gap same as track gap" (SIZES_SETTINGS::EffectiveDiffPairViaGap).
+   */
+  routeDiffPair(net: string): DiffPairSizes {
+    const nc = this.netclassOf(net), minW = this.sizes.minTrackWidth, minC = this.sizes.minClearance;
+    const ncSource = nc.name === "Default" ? "netclass 'Default'" : `netclass '${nc.name}'`;
+    let width: number, gap: number, viaGap: number, widthSource: string, gapSource: string;
+    if (this.useCustomDiffPair) { width = this.customDiffPair.width; gap = this.customDiffPair.gap; viaGap = this.customDiffPair.via_gap; widthSource = gapSource = "user choice"; }
+    else if (!this.useNetclassDiffPair) { const d = this.sizes.diffPairs[this.diffPairIndex]; width = d.width; gap = d.gap > 0 ? d.gap : nc.diff_pair_gap; viaGap = d.via_gap > 0 ? d.via_gap : gap; widthSource = gapSource = "user choice"; }
+    else { width = nc.diff_pair_width; gap = nc.diff_pair_gap; viaGap = nc.diff_pair_via_gap; widthSource = gapSource = ncSource; }
+    if (width < minW) { width = minW; widthSource = "board minimum track width"; }
+    if (gap < minC) { gap = minC; gapSource = "board minimum clearance"; }
+    if (this.useCustomDiffPair && this.diffPairViaGapSameAsGap) viaGap = gap;
+    if (!(viaGap > 0)) viaGap = gap;
+    return { width, gap, viaGap, widthSource, gapSource };
+  }
+  /** DIFF_PAIR_MENU's entries for the list (index 1 …): "Width %s", "Width %s, gap %s", "Width %s, via gap %s", "Width %s, gap %s, via gap %s". */
+  diffPairLabels(fmt: (mm: number) => string): string[] {
+    return this.sizes.diffPairs.slice(1).map((d) => d.gap <= 0 ? (d.via_gap <= 0 ? `Width ${fmt(d.width)}` : `Width ${fmt(d.width)}, via gap ${fmt(d.via_gap)}`)
+      : d.via_gap <= 0 ? `Width ${fmt(d.width)}, gap ${fmt(d.gap)}` : `Width ${fmt(d.width)}, gap ${fmt(d.gap)}, via gap ${fmt(d.via_gap)}`);
   }
   /** The route ended: the W override of the connected width is dropped. */
   endRoute(): void { if (this.tempOverride) { this.tempOverride = false; this.emit(); } }

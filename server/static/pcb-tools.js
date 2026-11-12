@@ -1177,7 +1177,8 @@ function hoverPoint(ctx, mm, magnetic, mods) {
     const rt = S.route;
     // TOOL_BASE::updateEndItem: while routing only the routed net's items are end candidates (a route without a net has none)
     // (Highlight collisions connects to net-less items too, and a net-less route to anything: FixRoute adopts the net)
-    const s = rt ? (S.rs.mode === RM_MARK ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.netKey ? rt.net : null, false) : rt.netKey ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true) : null) : snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.layer, null);
+    const near = (a, b) => (!a ? b : !b ? a : Math.hypot(a.x - mm[0], a.y - mm[1]) <= Math.hypot(b.x - mm[0], b.y - mm[1]) ? a : b);
+    const s = rt && rt.dp ? near(snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true), snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.netN, true)) : rt ? (S.rs.mode === RM_MARK ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.netKey ? rt.net : null, false) : rt.netKey ? snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, rt.layer, rt.net, true) : null) : snapTarget(ctx.doc, mm[0], mm[1], SNAP_MM, S.layer, null);
     if (s) { out.x = s.x; out.y = s.y; out.snap = s; }
   }
   return out;
@@ -1382,6 +1383,7 @@ function viaSpanLayers(doc, pair) {
  */
 function updateHead(ctx) {
   const rt = S.route; if (!rt || !ctx.doc) return;
+  if (rt.dp) { dpUpdateHead(ctx, S.hover); return; }
   const rs = S.rs, rc = routeCtx(ctx, rt), O = routeObs(ctx, rt); const r = rt.width / 2;
   trailAdd(rt.tracer, rt.cursor);
   // MOUSE_TRAIL_TRACER: the posture follows the mouse unless "Use mouse path to set track posture" is off (then the
@@ -1453,7 +1455,11 @@ function leadingRatline(ctx, rt) {
   return [end.slice(), best.p.slice()];
 }
 /** highlightNets( true, { net } ): the routed net brightened, the rest dimmed; a highlight the user had on that net is kept for afterwards. */
-function routeHighlight(ctx, rt) { if (rt && rt.netKey) highlightIds(ctx, netHighlightIds(routeDoc(ctx, rt), rt.netKey, netlistCached(routeDoc(ctx, rt)))); }
+function routeHighlight(ctx, rt) {
+  if (!rt || !rt.netKey) return; const d = routeDoc(ctx, rt); const ids = netHighlightIds(d, rt.netKey, netlistCached(d));
+  if (rt.netKeyN) for (const id of netHighlightIds(d, rt.netKeyN, netlistCached(d))) ids.add(id);   // a differential pair: both nets
+  highlightIds(ctx, ids);
+}
 function routeUnhighlight(ctx, rt) {
   if (!ctx || !rt || !rt.netKey) return;
   if (rt.keepHighlight && S.highlightNet === rt.netKey) highlightIds(ctx, netHighlightIds(ctx.doc, rt.netKey, netlistCached(ctx.doc)));
@@ -1558,7 +1564,8 @@ function commitRoute(ctx, rt) {
 /** End the route: fix the head when asked (End / double click: FixRoute( forceFinish )), then commit everything fixed. */
 function endRoute(ctx, fixCurrent) {
   const rt = S.route; if (!rt) return;
-  if (fixCurrent && ((rt.els && rt.els.length) || rt.placingVia)) fixHead(ctx, { finish: true });
+  if (rt.dp) { if (fixCurrent && rt.dpLines) dpFix(ctx, { finish: true }); }
+  else if (fixCurrent && ((rt.els && rt.els.length) || rt.placingVia)) fixHead(ctx, { finish: true });
   S.route = null; commitRoute(ctx, rt); routeUnhighlight(ctx, rt); sizesOf(ctx).endRoute(); refreshChip(ctx); ctx.requestRender();
 }
 /** Escape / another tool (ROUTER::AbortPlacement): the route and everything fixed in it are dropped. */
@@ -1572,6 +1579,7 @@ function abortRoute(ctx) {
  * comes off the branch and routing carries on from where it began.  Silent when nothing is fixed.
  */
 function undoRouteLeg(ctx) {
+  if (S.route && S.route.dp) return dpUndoLeg(ctx);
   const rt = S.route; const st = rt && rt.stages.pop(); if (!st) return false;
   rt.bdoc = null; rt.obs = null;
   rt.last = st.from.slice(); rt.net = st.net; rt.netKey = st.netKey; rt.startIds = st.startIds || []; rt.split = st.split || null; rt.placingVia = null;
@@ -1612,6 +1620,7 @@ function startRefusal(ctx, p, mm, net, width, layer, own, snapped) {
   return null;
 }
 function routeClick(ctx, hv, mm, opts) {
+  if ((S.route && S.route.dp) || (!S.route && S.modTool === "routediff")) { dpClick(ctx, hv, mm, opts); return; }
   opts = opts || {}; const now = Date.now(); let p = [hv.x, hv.y];
   S.violations = null;
   if (!S.route) {
@@ -1697,7 +1706,8 @@ function viaPlan(ctx, rt, type, target) {
  */
 function toggleViaPlacement(ctx, type, target) {
   const rt = S.route;
-  if (!rt) { startWithVia(ctx); return true; }
+  if (rt && rt.dp) return dpToggleVia(ctx, type, target);
+  if (!rt) { if (S.modTool === "routediff") return true; startWithVia(ctx); return true; }
   if (rt.placingVia && !target) { rt.placingVia = null; S.layer = rt.layer; sizesOf(ctx).setActiveLayer(rt.layer); if (rt.cursor) updateHead(ctx); refreshChip(ctx); ctx.requestRender(); return true; }
   const plan = viaPlan(ctx, rt, type, target);
   if (typeof plan === "string") { ctx.toast(plan); return true; }
@@ -1733,6 +1743,7 @@ function placeVia(ctx, hv) {
  */
 function setLayer(ctx, layer) {
   const rt = S.route;
+  if (rt && rt.dp) { dpSetLayer(ctx, layer); return; }
   if (rt) {
     if (layer === rt.layer) { if (rt.placingVia) toggleViaPlacement(ctx); return; }
     const spans = !rt.stages.length && (!rt.startKind || ((rt.startKind === "pad" || rt.startKind === "via") && startSpans(ctx, rt, layer)));
@@ -1758,6 +1769,350 @@ function startSpans(ctx, rt, layer) {
 }
 // The layer picker (PCB_EDIT_FRAME::SelectOneLayer) is DOM; the editor installs the real one, the tests a stub.
 let layerPickerImpl = function (opts, done) { done(null); };
+
+// ================================================================ DIFF_PAIR_PLACER (pcbnew/router/pns_diff_pair_placer.cpp)
+// Route Differential Pair (6): both nets of a pair routed together at the pair's width and gap.  The pair starts on
+// a pad, via or dangling track end of one net and the nearest primitive of the same kind on the complementary net
+// (FindDpPrimitivePair); each leg leaves that pair through a gateway (the two coupled start points, DP_GATEWAYS) and
+// runs as two lines offset either side of one 45° centre line, walked round the obstacles of other nets as one wide
+// track (tryWalkDp), straight with the collisions marked in Highlight collisions (rhMarkObstacles).  A click fixes
+// both lines (FixRoute); V ends them on a via pair at the via gap; a click on a pad / via / track end of either net
+// with its partner beside it lands the pair on that target and finishes.  One commit, "Route Track".
+const DP_MSG_NETS = "Unable to find complementary differential pair nets. Make sure the names of the nets belonging to a differential pair end with either N/P or +/-.";
+const DP_MSG_START = "Can't find a suitable starting point.  If starting from an existing differential pair make sure you are at the end.";
+const DP_MSG_NOWHERE = "Cannot start a differential pair in the middle of nowhere.";
+const DP_MSG_GAP = "Diff pair gap is less than board minimum clearance.";
+const TAN_22_5 = Math.tan(Math.PI / 8);
+/**
+ * BOARD::MatchDpSuffix: scanning the name from its end past digits and '_', a final '+' / 'P' makes it the pair's
+ * positive net (1) and '-' / 'N' its negative (-1); the complement swaps that character.  { rv, complement }.
+ */
+function matchDpSuffix(name) {
+  name = String(name || ""); let rv = 0, count = 0, comp = "";
+  for (let i = name.length - 1; i >= 0 && rv === 0; i--, count++) {
+    const ch = name[i];
+    if ((ch >= "0" && ch <= "9") || ch === "_") continue;
+    if (ch === "+") { comp = "-"; rv = 1; } else if (ch === "-") { comp = "+"; rv = -1; } else if (ch === "N") { comp = "P"; rv = -1; } else if (ch === "P") { comp = "N"; rv = 1; } else break;
+  }
+  if (rv !== 0 && count >= 1) comp = name.slice(0, name.length - count) + comp + name.slice(name.length - count + 1);
+  return { rv, complement: rv ? comp : "" };
+}
+/** RULE_RESOLVER::DpNetPair: { P, N } (net objects) when the net and its complement both exist on the board. */
+function dpNetPair(doc, net) {
+  const name = net && net.name ? net.name : (net && net.code > 0 ? netTable(doc).byCode.get(net.code) || "" : "");
+  const m = matchDpSuffix(name); if (!m.rv) return null;
+  const other = boardNets(doc).find((n) => n.name === m.complement); if (!other) return null;
+  const self = { code: net.code > 0 ? net.code : (netTable(doc).byName.get(name) || {}).code || 0, name };
+  return m.rv > 0 ? { P: self, N: other } : { P: other, N: self };
+}
+/**
+ * DIFF_PAIR_PLACER::getDanglingAnchor for every primitive of a net that can carry a pair's end: pads and vias on the
+ * layer (their centre), and track ends on the layer that nothing else of the net joins (the direction pointing out of
+ * the track).  [{ kind: "pad" | "via" | "track", p, dir: [dx, dy] | null, id, layers, width }].
+ */
+function dpPrimitives(doc, netKey, layer) {
+  const J = jointIndex(doc); const copper = copperOf(doc); const out = [];
+  for (const it of doc.items.values()) {
+    if (it.kind === "footprint") { for (const p of padsOf(it)) { const ls = padCopperLayers(p, copper); if (J.NT.key(p.net) === netKey && ls.has(layer)) out.push({ kind: "pad", p: [p.x, p.y], dir: null, id: it.id, layers: Array.from(ls).sort().join(","), pad: p }); } }
+    else if (it.kind === "via") { const a = pt(it.node, "at"); const ls = viaLayers(it.node, copper); if (a && ls.has(layer) && J.NT.key(netOf(it.node)) === netKey) out.push({ kind: "via", p: a, dir: null, id: it.id, layers: Array.from(ls).sort().join(",") }); }
+    else if (it.kind === "segment" && layerOf(it.node) === layer && J.NT.key(netOf(it.node)) === netKey) {
+      const [a, b] = trackEnds(it); if (!a || !b || samePt(a, b)) continue;
+      for (const [q, o] of [[a, b], [b, a]]) {
+        const k = ptKey(q);
+        if ((J.vias.get(k) || []).some((v) => v.layers.has(layer)) || (J.pads.get(k) || []).some((x) => x.layers.has(layer) && samePt([x.pad.x, x.pad.y], q))) continue;
+        const links = (J.ends.get(layer + "|" + k) || []).filter((x) => J.NT.key(netOf(x.node)) === netKey);
+        if (links.length !== 1) continue;
+        out.push({ kind: "track", p: q.slice(), dir: vunit(vsub(q, o)), id: it.id, layers: layer, width: widthOf(it.node, 0.25) });
+      }
+    }
+  }
+  return out;
+}
+/** The clicked primitive: the pad / via / track end of the snapped item, or the dangling end of the track under the point. */
+function dpClickedPrimitive(doc, snap, p, netKey, layer) {
+  const prims = dpPrimitives(doc, netKey, layer);
+  if (snap && (snap.kind === "pad" || snap.kind === "via")) return prims.find((q) => q.kind === snap.kind && samePt(q.p, [snap.x, snap.y])) || null;
+  // a track: its dangling anchor within half its width of the click (findDpEndingPrimitives' distThreshold)
+  let best = null, bd = Infinity;
+  for (const q of prims) { if (q.kind !== "track") continue; const d = Math.hypot(q.p[0] - p[0], q.p[1] - p[1]); if (d <= q.width / 2 + 1e-6 && d < bd) { bd = d; best = q; } }
+  return best;
+}
+/**
+ * DIFF_PAIR_PLACER::FindDpPrimitivePair: the clicked primitive and the nearest primitive of the same kind (pads and
+ * vias on the same layers) on the complementary net.  { pair: { P, N, nets, keys } } or { error }.
+ */
+function findDpPrimitivePair(doc, snap, p, layer, net) {
+  const nets = dpNetPair(doc, net); if (!nets) return { error: DP_MSG_NETS };
+  const NT = netTable(doc); const refKey = NT.key(net), keyP = NT.key(nets.P), keyN = NT.key(nets.N);
+  const ref = dpClickedPrimitive(doc, snap, p, refKey, layer); if (!ref) return { error: DP_MSG_START };
+  const coupledKey = refKey === keyP ? keyN : keyP; let best = null, bd = Infinity;
+  for (const q of dpPrimitives(doc, coupledKey, layer)) {
+    if (q.kind !== ref.kind || (q.kind !== "track" && q.layers !== ref.layers)) continue;
+    const d = Math.hypot(q.p[0] - ref.p[0], q.p[1] - ref.p[1]); if (d < bd) { bd = d; best = q; }
+  }
+  if (!best) return { error: DP_MSG_START };
+  return { pair: refKey === keyP ? { P: ref, N: best } : { P: best, N: ref }, nets, keys: { P: keyP, N: keyN } };
+}
+/** A polyline offset sideways by `off` (left of travel positive), mitred at the corners; `inDir` the travel direction before the first point. */
+function offsetPts(pts, off, inDir) {
+  const nrm = (u) => [-u[1], u[0]]; const out = [];
+  const dirs = []; for (let i = 0; i + 1 < pts.length; i++) dirs.push(vunit(vsub(pts[i + 1], pts[i])));
+  if (!dirs.length) return pts.length ? [vadd(pts[0], vmul(nrm(inDir || [1, 0]), off))] : [];
+  for (let k = 0; k < pts.length; k++) {
+    const u0 = k === 0 ? (inDir || dirs[0]) : dirs[k - 1], u1 = k < dirs.length ? dirs[k] : dirs[dirs.length - 1];
+    const n0 = nrm(u0), n1 = nrm(u1); const den = 1 + n0[0] * n1[0] + n0[1] * n1[1];
+    const m = den < 1e-6 ? n1 : vmul(vadd(n0, n1), 1 / den);
+    out.push(rp(vadd(pts[k], vmul(m, off))));
+  }
+  return out;
+}
+/**
+ * The gateway a pair leaves through (DP_GATEWAYS::BuildFromPrimitivePair, reduced to the exits the router ends up
+ * taking): the exit direction (the tracks' own for a pair of track ends, else the 45° direction nearest the cursor
+ * that does not run along the pads' axis, perpendicular preferred), the centre point where both lines are coupled at
+ * the pair's gap, which side the P line is on, and each anchor's 45° entry into its coupled line.
+ */
+function dpGateway(pair, toward, h) {
+  const aP = pair.P.p, aN = pair.N.p; const M = [(aP[0] + aN[0]) / 2, (aP[1] + aN[1]) / 2];
+  const axis = vunit(vsub(aP, aN)); const perp = [-axis[1], axis[0]];
+  let cands;
+  if (pair.P.dir && pair.N.dir && Math.abs(pair.P.dir[0] * pair.N.dir[0] + pair.P.dir[1] * pair.N.dir[1] - 1) < 1e-3) cands = [DIRS8[dir8([0, 0], pair.P.dir)]];   // parallel track ends: carry on
+  else cands = DIRS8;
+  const want = toward && !samePt(toward, M) ? vunit(vsub(toward, M)) : perp;
+  let best = null;
+  for (const d of cands) {
+    const n = [-d[1], d[0]]; const tP = (aP[0] - M[0]) * n[0] + (aP[1] - M[1]) * n[1];
+    if (Math.abs(tP) < 1e-6) continue;   // the pads lie along the exit: the lines would cross
+    const ang = Math.acos(Math.max(-1, Math.min(1, d[0] * want[0] + d[1] * want[1])));
+    const offPerp = Math.acos(Math.min(1, Math.abs(d[0] * perp[0] + d[1] * perp[1])));
+    const score = ang + 1.2 * offPerp;   // the exit square to the pads is the one the gateways favour
+    if (!best || score < best.score - 1e-9) best = { d, n, tP, score };
+  }
+  if (!best) return null;
+  const { d, n, tP } = best; const sideP = tP > 0 ? 1 : -1;
+  const alongP = (aP[0] - M[0]) * d[0] + (aP[1] - M[1]) * d[1], lat = Math.abs(Math.abs(tP) - h);
+  const L = Math.max(alongP, -alongP) + lat;
+  const mid = rp(vadd(M, vmul(d, L))); const sP = rp(vadd(mid, vmul(n, sideP * h))), sN = rp(vadd(mid, vmul(n, -sideP * h)));
+  const df = !isDiagDir(dir8([0, 0], d));   // converge first (45° off the exit), then run along it
+  const entry = (a, s) => simplifyPts(legPts(a.map(r6), s, df).map(rp));
+  return { d, dIdx: dir8([0, 0], d), n, sideP, mid, sP, sN, entryP: entry(aP, sP), entryN: entry(aN, sN), anchorP: aP.slice(), anchorN: aN.slice() };
+}
+/** The pair's sizes for a route of the nets (ROUTER_TOOL's size update) and the half spacing of the coupled lines. */
+function dpSizes(ctx, nets) { const d = sizesOf(ctx).routeDiffPair(nets.P.name || ""); return Object.assign({}, d, { h: (d.gap + d.width) / 2 }); }
+/** The obstacles of a pair: everything on the layer but the copper of either net (rhMarkObstacles' filter). */
+function dpObstacles(ctx, rt) {
+  const doc = routeDoc(ctx, rt); const key = S.docVer + "|" + rt.layer + "|" + rt.stages.length + "|" + rt.netKey;
+  if (!rt.dpObs || rt.dpObs.key !== key || rt.dpObs.doc !== doc) {
+    const O = routeObstacles(doc, settingsOf(ctx), rt.netKey, rt.layer, null);
+    rt.dpObs = indexObstacles(O.list.filter((ob) => ob.net !== rt.netKeyN)); rt.dpObs.key = key; rt.dpObs.doc = doc;
+  }
+  return rt.dpObs;
+}
+/** The target pair under the cursor: a primitive of either net and its partner (routeHead's FindDpPrimitivePair on the end item). */
+function dpTarget(ctx, rt, snap) {
+  if (!snap || !(snap.kind === "pad" || snap.kind === "via" || snap.kind === "track")) return null;
+  if (!sameNet(snap.net, rt.net) && !sameNet(snap.net, rt.netN)) return null;
+  const doc = routeDoc(ctx, rt); const r = findDpPrimitivePair(doc, snap, [snap.x, snap.y], rt.layer, snap.net);
+  if (!r.pair) return null;
+  const st = rt.dpStart; if (samePt(r.pair.P.p, st.P.p) && samePt(r.pair.N.p, st.N.p)) return null;   // the pair it starts from
+  return r.pair;
+}
+/**
+ * A centre line from the gateway towards `goal` that leaves along the gateway's direction: when the leg turns at once
+ * it starts a little ahead, far enough for the inner line to make the turn (h·tan(θ/2)), so neither line doubles back.
+ */
+function dpCentre(O, gw, goal, R, rt, mode) {
+  const h = rt.dpSizes.h;
+  const along = (goal[0] - gw.mid[0]) * gw.d[0] + (goal[1] - gw.mid[1]) * gw.d[1];
+  if (along <= 1e-6) return { pts: [gw.mid.slice()], reached: samePt(goal, gw.mid) };   // behind the gateway: hold at it
+  // routeHead: a cursor within half the pair's pitch of the gateway's extension keeps the straight part only, projected
+  const lead = Math.abs((goal[0] - gw.mid[0]) * gw.n[0] + (goal[1] - gw.mid[1]) * gw.n[1]);
+  if (lead <= h) goal = rp(vadd(gw.mid, vmul(gw.d, along)));
+  const run = (from) => {
+    const a = legPts(from, goal, false), b = legPts(from, goal, true);
+    const score = (p) => (p.length > 1 ? dirAngle(gw.dIdx, dir8(p[0], p[1])) : 0);
+    let first = rt.diagFirst ? b : a; if (score(first === a ? b : a) < score(first)) first = first === a ? b : a;
+    if (mode === RM_MARK || !O) return { pts: first, reached: true };
+    return walkHead(O, from, goal, R, first === b, gw.dIdx);
+  };
+  let r = run(gw.mid);
+  const turn = r.pts.length > 1 ? dirAngle(gw.dIdx, dir8(r.pts[0], r.pts[1])) : 0;
+  if (turn >= 3) return { pts: [gw.mid.slice()], reached: false };   // an acute turn straight out of the gateway: no fit
+  if (turn > 0) {
+    const ahead = rp(vadd(gw.mid, vmul(gw.d, h * Math.tan(turn * Math.PI / 8) + 1e-3)));
+    const r2 = run(ahead); r = { pts: simplifyPts([gw.mid.slice()].concat(r2.pts)), reached: r2.reached };
+  }
+  return r;
+}
+/**
+ * DIFF_PAIR_PLACER::routeHead and the mode's walk: the two lines from the current pair towards the cursor (or onto a
+ * target pair, or ending on a via pair), their collisions, and whether the fit is clean enough to fix (m_fitOk).
+ */
+function dpUpdateHead(ctx, hv) {
+  const rt = S.route; if (!rt || !ctx.doc) return;
+  const rs = S.rs; const sz = rt.dpSizes; const h = sz.h; const R = h + sz.width / 2;
+  trailAdd(rt.tracer, rt.cursor);
+  if (rs.auto_posture || rt.tracer.manuallyForced) rt.diagFirst = isDiagDir(tracerPosture(rt.tracer, rt.cursor));
+  const O = dpObstacles(ctx, rt); const mode = rs.mode;
+  const gw = dpGateway(rt.dpStart, rt.cursor, h); rt.dpGw = gw; rt.collisions = null; rt.dpTargetPair = null;
+  if (!gw) { rt.dpLines = null; rt.dpFit = false; return; }
+  const target = rt.placingVia ? null : dpTarget(ctx, rt, hv && hv.snap);
+  let centre, reached = true, tail = null;
+  if (target) {
+    const tg = dpGateway(target, gw.mid, h);
+    // the pair has to arrive on the target with P on P's side: travelling into the target the left / right swap
+    if (tg && tg.sideP === -gw.sideP) {
+      const back = rp(vadd(tg.mid, vmul(tg.d, h + 1e-3)));   // room for the inner line to turn in
+      const c = dpCentre(mode === RM_MARK ? null : O, gw, back, R, rt, mode);
+      if (c.reached && samePt(c.pts[c.pts.length - 1], back)) { centre = simplifyPts(c.pts.concat([tg.mid.slice()])); tail = tg; rt.dpTargetPair = target; }
+    }
+  }
+  if (!centre) { const c = dpCentre(mode === RM_MARK ? null : O, gw, rt.cursor, R, rt, mode); centre = c.pts; reached = c.reached; }
+  // a last run too short to carry both lines round its corner would fold the inner line back: the head stops before it
+  while (!tail && centre.length > 2 && Math.hypot(centre[centre.length - 1][0] - centre[centre.length - 2][0], centre[centre.length - 1][1] - centre[centre.length - 2][1]) < 2 * h * TAN_22_5 + 1e-3) centre = centre.slice(0, -1);
+  const lastDir = centre.length > 1 ? vunit(vsub(centre[centre.length - 1], centre[centre.length - 2])) : gw.d;
+  let P = chainAppend(gw.entryP.map((q) => q.slice()), offsetPts(centre, gw.sideP * h, gw.d));
+  let N = chainAppend(gw.entryN.map((q) => q.slice()), offsetPts(centre, -gw.sideP * h, gw.d));
+  if (tail) { chainAppend(P, tail.entryP.slice().reverse()); chainAppend(N, tail.entryN.slice().reverse()); }
+  let vias = null;
+  if (rt.placingVia && centre.length) {
+    // DP_GATEWAYS::SetFitVias: the lines fan out (or in) at 45° to two vias spaced at the via gap
+    const e = centre[centre.length - 1]; const n = [-lastDir[1], lastDir[0]]; const hv2 = (sz.viaGap + rt.placingVia.diameter) / 2;
+    const k = Math.abs(hv2 - h); const c2 = vadd(e, vmul(lastDir, k));
+    const vP = rp(vadd(c2, vmul(n, gw.sideP * hv2))), vN = rp(vadd(c2, vmul(n, -gw.sideP * hv2)));
+    chainAppend(P, [vP]); chainAppend(N, [vN]); vias = { P: vP, N: vN };
+  }
+  P = simplifyPts(P); N = simplifyPts(N);
+  rt.dpLines = { P, N, centre, lastDir, vias }; rt.reached = reached;
+  rt.head = centre; rt.target = centre[centre.length - 1].slice();
+  // collisions: both lines (and the vias) against everything but the pair's own nets
+  const hits = new Set(); for (const L of [P, N]) for (const ob of pathHits(O, L, sz.width / 2)) hits.add(ob);
+  if (vias) for (const L of viaSpanLayers(routeDoc(ctx, rt), rt.placingVia.span)) {
+    const OL = L === rt.layer ? O : indexObstacles(routeObstacles(routeDoc(ctx, rt), settingsOf(ctx), rt.netKey, L, null).list.filter((ob) => ob.net !== rt.netKeyN));
+    for (const v of [vias.P, vias.N]) for (const ob of pathHits(OL, [v], rt.placingVia.diameter / 2)) hits.add(ob);
+  }
+  rt.collisions = hits.size ? Array.from(hits) : null;
+  rt.dpFit = !hits.size && P.length > 1 && N.length > 1;
+  rt.els = []; rt.ratline = dpRatlines(routeCtx(ctx, rt), rt);
+}
+/** updateLeadingRatLine for both nets: from each line's end to the nearest unconnected anchor of its net. */
+function dpRatlines(ctx, rt) {
+  const L = rt.dpLines; if (!L) return null; const out = [];
+  for (const [line, net, key] of [[L.P, rt.net, rt.netKey], [L.N, rt.netN, rt.netKeyN]]) {
+    const fake = { netKey: key, net, target: line[line.length - 1], last: line[0], layer: rt.layer, start: null, startLayer: rt.layer };
+    const r = leadingRatline(ctx, fake); if (r) out.push(r);
+  }
+  return out.length ? out : null;
+}
+/** ROUTER::StartRouting in PNS_MODE_ROUTE_DIFF_PAIR: the start checks, then the placer's start pair. */
+function dpStart(ctx, hv, mm) {
+  const p = [hv.x, hv.y]; const doc = ctx.doc; const layer = S.layer;
+  const snap = hv.snap && hv.snap.kind !== "anchor" ? hv.snap : null;
+  let net = snap ? snap.net : null, s2 = snap;
+  if (!snap) { const on = trackUnder(doc, mm ? mm[0] : hv.x, mm ? mm[1] : hv.y, layer); if (on) { net = netOf(on.item.node); s2 = { kind: "track", x: on.point[0], y: on.point[1], net, id: on.item.id }; } }
+  if (!s2 || !hasNet(net)) { ctx.toast(DP_MSG_NOWHERE); return; }
+  if (!/\.Cu$/.test(layer)) { ctx.toast("Tracks on Copper layers only."); return; }
+  const nets = dpNetPair(doc, net); if (!nets) { ctx.toast(DP_MSG_NETS); return; }
+  const sizes = dpSizes(ctx, nets);
+  if (!S.rs.can_violate_drc && sizes.gap < (settingsOf(ctx).minClearance || 0) - 1e-9) { ctx.toast(DP_MSG_GAP); return; }
+  const fp = findDpPrimitivePair(doc, s2.kind === "track" ? null : s2, [s2.x, s2.y], layer, net); if (fp.error) { ctx.toast(fp.error); return; }
+  const NT = netTable(doc);
+  S.route = { dp: true, start: p.slice(), startLayer: layer, startKind: s2.kind, last: p.slice(), target: p.slice(), cursor: p.slice(), head: [p.slice()], els: [], reached: true,
+    net: nets.P, netKey: NT.key(nets.P), netN: nets.N, netKeyN: NT.key(nets.N), layer, width: sizes.width, dpSizes: sizes, dpStart: fp.pair, dpLines: null, dpFit: false,
+    diagFirst: !!S.rs.start_diagonal, clickT: Date.now(), clickAt: p.slice(), stages: [], split: null, startIds: [fp.pair.P.id, fp.pair.N.id], ratline: null, placingVia: null, chained: false,
+    collisions: null, shove: null, tracer: newTracer(sizes.width, -1), keepHighlight: false };
+  const rt = S.route; trailAdd(rt.tracer, p);
+  const R = sizesOf(ctx); if (R.activeLayer !== layer) R.setActiveLayer(layer);
+  routeHighlight(ctx, rt); dpUpdateHead(ctx, hv); refreshChip(ctx); ctx.requestRender();
+}
+/** DIFF_PAIR_PLACER::FixRoute: both lines (and the via pair) onto the route's branch; false when the fit is not clean. */
+function dpFix(ctx, opts) {
+  opts = opts || {}; const rt = S.route; const L = rt.dpLines; const rs = S.rs;
+  if (!L || L.P.length < 2 || L.N.length < 2) return false;
+  if (!rt.dpFit && !(rs.mode === RM_MARK && rs.can_violate_drc)) { if (rt.collisions) showViolations(rt.collisions, rt.target); return false; }
+  const doc = routeDoc(ctx, rt); const seg = (pts) => pts.slice(0, -1).map((a, i) => ({ t: "seg", a: a.slice(), b: pts[i + 1].slice() }));
+  let P = L.P, N = L.N;
+  if (!rs.fix_all_segments && !opts.finish && !rt.dpTargetPair && !L.vias && P.length > 2 && N.length > 2) { P = P.slice(0, -1); N = N.slice(0, -1); }
+  const ops = trackOps(doc, seg(P), rt.dpSizes.width, rt.layer, rt.net).concat(trackOps(doc, seg(N), rt.dpSizes.width, rt.layer, rt.netN));
+  let nextPair;
+  if (L.vias) {
+    const v = rt.placingVia; const layers = v.type === "through" ? viaSpan(doc) : [v.span[0], v.span[1]];
+    for (const [at, net] of [[L.vias.P, rt.net], [L.vias.N, rt.netN]]) { const node = viaNode(doc, at[0], at[1], v.diameter, v.drill, net, layers); if (v.type !== "through") node.splice(1, 0, v.type); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); }
+    nextPair = { P: { kind: "via", p: L.vias.P.slice(), dir: null }, N: { kind: "via", p: L.vias.N.slice(), dir: null } };
+  } else {
+    const dP = vunit(vsub(P[P.length - 1], P[P.length - 2])), dN = vunit(vsub(N[N.length - 1], N[N.length - 2]));
+    nextPair = { P: { kind: "track", p: P[P.length - 1].slice(), dir: dP }, N: { kind: "track", p: N[N.length - 1].slice(), dir: dN } };
+  }
+  const prevDir = P.length > 1 ? dir8(P[P.length - 2], P[P.length - 1]) : -1;
+  rt.stages.push({ ops, from: rt.last.slice(), layer: rt.layer, net: rt.net, netKey: rt.netKey, placingVia: rt.placingVia, startIds: rt.startIds, split: null, dir: rt.tracer.lastSegDir, dpStart: rt.dpStart });
+  rt.bdoc = null; rt.obs = null; rt.dpObs = null; rt.dpStart = nextPair; rt.last = nextPair.P.p.slice(); rt.startIds = [];
+  rt.dpLines = null; rt.head = [rt.last.slice()]; rt.target = rt.last.slice(); rt.ratline = null; rt.collisions = null;
+  if (P.length > 2) rt.diagFirst = !isDiagDir(dir8(P[P.length - 3], P[P.length - 2]));   // m_initialDiagonal
+  if (L.vias) { rt.layer = rt.placingVia.toLayer; S.layer = rt.layer; sizesOf(ctx).setActiveLayer(rt.layer); rt.placingVia = null; rt.tracer = newTracer(rt.width, -1); }
+  else rt.tracer = newTracer(rt.width, prevDir);
+  rt.chained = !L.vias; trailAdd(rt.tracer, rt.last);
+  return true;
+}
+/** A click while routing a pair: fix both lines; landing on a target pair ends the route. */
+function dpClick(ctx, hv, mm, opts) {
+  opts = opts || {}; const now = Date.now(); const p = [hv.x, hv.y]; S.violations = null;
+  if (!S.route) { dpStart(ctx, hv, mm); return; }
+  const rt = S.route;
+  const dbl = !opts.enter && now - rt.clickT < DBL_MS && Math.hypot(p[0] - rt.clickAt[0], p[1] - rt.clickAt[1]) < 0.3;
+  rt.clickT = now; rt.clickAt = p.slice();
+  if (dbl) { endRoute(ctx, true); return; }
+  rt.cursor = p.slice(); dpUpdateHead(ctx, hv);
+  const landed = !!rt.dpTargetPair;
+  if (!dpFix(ctx, { finish: landed })) { ctx.requestRender(); return; }
+  if (landed) { endRoute(ctx, false); return; }
+  dpUpdateHead(ctx, hv); routeHighlight(ctx, rt); refreshChip(ctx); ctx.requestRender();
+}
+/** Backspace while routing a pair (UnfixRoute): the last fixed stage comes off and the pair it started from is current again. */
+function dpUndoLeg(ctx) {
+  const rt = S.route; const st = rt && rt.stages.pop(); if (!st) return false;
+  rt.bdoc = null; rt.obs = null; rt.dpObs = null; rt.dpStart = st.dpStart; rt.last = st.from.slice(); rt.startIds = st.startIds || []; rt.placingVia = null;
+  if (st.layer !== rt.layer) { rt.layer = st.layer; S.layer = st.layer; sizesOf(ctx).setActiveLayer(st.layer); }
+  rt.tracer = newTracer(rt.width, rt.stages.length ? st.dir : -1); trailAdd(rt.tracer, rt.last); rt.dpLines = null;
+  rt.chained = rt.stages.length > 0 && !rt.stages[rt.stages.length - 1].placingVia;
+  dpUpdateHead(ctx, S.hover); routeHighlight(ctx, rt); refreshChip(ctx); ctx.requestRender(); return true;
+}
+/** DIFF_PAIR_PLACER::ToggleVia: a via pair at the lines' ends, through to the routing pair's other layer (or `target`). */
+function dpToggleVia(ctx, type, target) {
+  const rt = S.route; if (!rt) return false;
+  if (rt.placingVia && !target) { rt.placingVia = null; S.layer = rt.layer; sizesOf(ctx).setActiveLayer(rt.layer); }
+  else {
+    const plan = viaPlan(ctx, Object.assign({}, rt, { ratAnchor: null }), type, target);
+    if (typeof plan === "string") { ctx.toast(plan); return true; }
+    rt.placingVia = plan; sizesOf(ctx).setActiveLayer(plan.toLayer); S.layer = rt.layer;
+  }
+  dpUpdateHead(ctx, S.hover); refreshChip(ctx); ctx.requestRender(); return true;
+}
+/** DIFF_PAIR_PLACER::SetLayer: before anything is fixed the pair moves to the layer when both its pads / vias reach it; otherwise a via pair is armed. */
+function dpSetLayer(ctx, layer) {
+  const rt = S.route; if (layer === rt.layer) { if (rt.placingVia) dpToggleVia(ctx); return; }
+  const st = rt.dpStart; const doc = routeDoc(ctx, rt);
+  const reaches = (q) => q.kind === "pad" || q.kind === "via" ? dpPrimitives(doc, q === st.P ? rt.netKey : rt.netKeyN, layer).some((x) => x.kind === q.kind && samePt(x.p, q.p)) : false;
+  if (!rt.placingVia && ((!rt.stages.length && reaches(st.P) && reaches(st.N)) || (rt.stages.length && !rt.chained))) {
+    rt.layer = layer; S.layer = layer; sizesOf(ctx).setActiveLayer(layer); rt.dpObs = null; rt.tracer = newTracer(rt.width, -1); trailAdd(rt.tracer, rt.last);
+    dpUpdateHead(ctx, S.hover); refreshChip(ctx); ctx.requestRender(); return;
+  }
+  rt.placingVia = null; dpToggleVia(ctx, "through", layer);
+}
+/** The pair being routed: both lines with the clearance halo, the via pair, and the leading ratsnest of both nets. */
+function drawDpRoute(c, ctx, px) {
+  const rt = S.route; const L = rt.dpLines; const w = rt.dpSizes.width; const clr = routeHaloClearance(ctx, rt);
+  const marks = rt.collisions || [];
+  for (const ob of marks) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
+  if (L) {
+    c.globalAlpha = 0.7; c.strokeStyle = HALO_COLOR; c.lineWidth = w + 2 * clr; polyline(c, L.P, false); polyline(c, L.N, false);
+    c.globalAlpha = 0.8; c.strokeStyle = saturated(color(rt.layer)); c.lineWidth = w; polyline(c, L.P, false); polyline(c, L.N, false);
+    if (L.vias && rt.placingVia) for (const at of [L.vias.P, L.vias.N]) {
+      c.globalAlpha = 0.7; c.fillStyle = HALO_COLOR; c.beginPath(); c.arc(at[0], at[1], rt.placingVia.diameter / 2 + clr, 0, 2 * Math.PI); c.fill();
+      drawViaPreview(c, at, rt.placingVia.diameter, rt.placingVia.drill, px, 0.8);
+    }
+  }
+  if (rt.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; for (const r of rt.ratline) line(c, r[0], r[1]); }
+}
 /** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
 function stepLayer(ctx, forward) {
   const R = sizesOf(ctx); const hidden = appGlobal(() => editorState().hiddenLayers, null);
@@ -1996,6 +2351,7 @@ function drawRoute(c, ctx, px) {
     if (pv.via) { drawViaPreview(c, pv.via.at, pv.via.size, pv.via.drill, px, 0.8); continue; }
     c.globalAlpha = 0.8; c.strokeStyle = color(pv.layer); c.lineWidth = pv.width; for (const e of pv.els) strokeElem(c, e);
   }
+  if (rt.dp) { drawDpRoute(c, ctx, px); return; }
   if (rt.shove) {
     for (const L of rt.shove.preview.lines) { if (L.pts.length < 2) continue; c.globalAlpha = 0.8; c.strokeStyle = color(L.layer); c.lineWidth = L.w; polyline(c, L.pts, false); }
     for (const v of rt.shove.preview.vias) drawViaPreview(c, v.at, v.size, v.drill, px, 0.8);
@@ -3534,7 +3890,10 @@ function routeObstacles(doc, s, netKey, layer, own, skip) {
   for (const h of W.holes) take(h, "");
   for (const k of W.keepouts) if (k.layers.has(layer)) take(k, "");
   for (const e of W.edges) take(e, "");
-  // a coarse grid so a leg only meets the obstacles near it
+  return indexObstacles(out);
+}
+/** The obstacle list with a coarse grid so a leg only meets the obstacles near it. */
+function indexObstacles(out) {
   const CELL = 2.5, grid = new Map(); let maxClr = 0;
   out.forEach((ob, i) => {
     maxClr = Math.max(maxClr, ob.clr); const b = ob.bbox;
@@ -4550,8 +4909,17 @@ function msgPanelInfo(doc, ids, opts) {
   const rt = opts.route;
   if (rt) {   // ROUTER_TOOL::UpdateMessagePanel
     const net = rt.net && (rt.net.name || "");
-    if (net) add(`Routing Track: ${unescapeName(net)}`, `Resolved Netclass: ${NN(net)}`); else add("Routing Track", "(no net)");
     const rs = opts.routerSettings || S.rs;
+    if (rt.dp) {   // PNS_MODE_ROUTE_DIFF_PAIR
+      const netB = (rt.netN && rt.netN.name) || ""; const ncA = NN(net), ncB = NN(netB);
+      add(`Routing Diff Pair: ${unescapeName(net)}, ${unescapeName(netB)}`, `Resolved Netclass: ${ncA === ncB ? ncA : ncA + ", " + ncB}`);
+      add("Corner Style", cornerStyleName(rs)); add("Mode", MODE_NAMES[rs.mode]);
+      const d = rt.dpSizes; add(`Track Width: ${V(d.width)}`, `(from ${d.widthSource})`);
+      const c = msgClearance(s, net); add(`Min Clearance: ${V(c.v)}`, `(from ${c.from === "board setup constraints" ? "board minimum clearance" : c.from})`);
+      add(`Diff Pair Gap: ${V(d.gap)}`, `(from ${d.gapSource})`);
+      return out;
+    }
+    if (net) add(`Routing Track: ${unescapeName(net)}`, `Resolved Netclass: ${NN(net)}`); else add("Routing Track", "(no net)");
     add("Corner Style", cornerStyleName(rs));
     add("Mode", MODE_NAMES[rs.mode]);
     const R = K.pcbSizes && K.pcbSizes.state;
@@ -5124,6 +5492,7 @@ act("ACT_SwitchCornerModeArc90", "Track Corner Mode Arc 90", "", () => { setRout
 const routingOnly = (ctx, fn) => { if (!S.route) return false; if (!canEdit(ctx)) return true; fn(); return true; };
 act("ACT_PlaceThroughVia", "Place Through Via", "", (ctx) => {
   if (S.route) return routingOnly(ctx, () => toggleViaPlacement(ctx, "through"));
+  if (S.modTool === "routediff") return true;   // the pair's vias come with a route (DIFF_PAIR_PLACER::ToggleVia)
   if (S.modTool !== "route") return false;
   startWithVia(ctx); return true;
 }, Object.assign({ tip: "Adds a through-hole via at the end of currently routed track." }, ROUTER_ACTION));
@@ -5132,6 +5501,7 @@ act("ACT_PlaceMicroVia", "Place Microvia", "", (ctx) => routingOnly(ctx, () => t
 act("ACT_SelLayerAndPlaceThroughVia", "Select Layer and Place Through Via...", "", (ctx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "through")), Object.assign({ tip: "Select a layer, then add a through-hole via at the end of currently routed track." }, ROUTER_ACTION));
 act("ACT_SelLayerAndPlaceBlindVia", "Select Layer and Place Blind/Buried Via...", "", (ctx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "blind")), Object.assign({ tip: "Select a layer, then add a blind or buried via at the end of currently routed track." }, ROUTER_ACTION));
 act("ACT_SelLayerAndPlaceMicroVia", "Select Layer and Place Micro Via...", "", (ctx) => routingOnly(ctx, () => selectLayerAndPlaceVia(ctx, "micro")), Object.assign({ tip: "Select a layer, then add a micro via at the end of currently routed track." }, ROUTER_ACTION));
+act("routerDiffPairDialog", "Differential Pair Dimensions...", "", (ctx) => { if (routingDialogs.diffPair) routingDialogs.diffPair(ctx); else ctx.toast("Differential Pair Dimensions: dialogs are unavailable here"); return true; }, Object.assign({ tip: "Open Differential Pair Dimension settings" }, ROUTER_ACTION));
 act("routerUndoLastSegment", "Undo Last Segment", "", (ctx) => routingOnly(ctx, () => undoRouteLeg(ctx)), Object.assign({ tip: "Walks the current track back one segment." }, ROUTER_ACTION));
 act("selectLayerPair", "Set Layer Pair...", "", (ctx) => { if (routingDialogs.layerPair) routingDialogs.layerPair(ctx); else ctx.toast("Set Layer Pair: dialogs are unavailable here"); return true; }, { menu: "-" });
 act("editPredefinedSizes", "Edit Pre-defined Sizes...", "", (ctx) => { if (routingDialogs.sizes) routingDialogs.sizes(ctx); else ctx.toast("Edit Pre-defined Sizes: dialogs are unavailable here"); return true; }, { menu: "-" });
@@ -5351,8 +5721,10 @@ function onCaptureKey(ev) {
   if (!isPcbDoc()) return;
   const tag = ev.target && ev.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
   if (root.KDialogs && root.KDialogs.isOpen && root.KDialogs.isOpen()) return;
+  // a context menu or the menu bar owns the keys while it is open (Escape closes the menu, not the route under it)
+  if ((typeof document !== "undefined" && document.body && document.body.dataset.menuOpen === "1") || appGlobal(() => !!root.CollabApp.getState().contextMenu, false)) return;
   const k = ev.key;
-  if (S.route || S.modTool === "route") { const id = routerKeyAction(ev); if (id && lastCtx) { ev.stopImmediatePropagation(); ev.preventDefault(); runAction(id, lastCtx); return; } }
+  if (S.route || S.modTool === "route" || S.modTool === "routediff") { const id = routerKeyAction(ev); if (id && lastCtx) { ev.stopImmediatePropagation(); ev.preventDefault(); runAction(id, lastCtx); return; } }
   // DRAWING_TOOL's incWidth / decWidth (Ctrl++ / Ctrl+-) while a shape is drawn, ahead of the browser's zoom
   if (S.draw && (ev.ctrlKey || ev.metaKey) && !ev.altKey && (k === "+" || k === "=" || k === "-" || k === "_") && lastCtx) {
     ev.stopImmediatePropagation(); ev.preventDefault(); stepDrawWidth(lastCtx, k === "-" || k === "_" ? -1 : 1); return;
@@ -5593,6 +5965,7 @@ function drawOverlay(c, view, ctx) {
 // ---------------------------------------------------------------- module
 const TOOLS = [
   { id: "route", label: "Route track", key: "X", cursor: "crosshair", icon: '<path d="M4 18h6l4-4h6"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="14" r="1.5"/>' },
+  { id: "routediff", label: "Route differential pair", key: "6", cursor: "crosshair", icon: '<path d="M3 9h7l3-3h8M3 15h7l3 3h8"/>' },
   { id: "via", label: "Add via", key: "V", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>' },
   { id: "drag", label: "Drag track segment", key: "D", cursor: "move", icon: '<path d="M5 7h14"/><path d="M5 17h14" stroke-dasharray="2 2"/><path d="M12 9v5M9 12l3 3 3-3"/>' },
   { id: "gline", label: "Draw line", key: "Shift+L", cursor: "crosshair", icon: '<path d="M5 19L19 5"/>' },
@@ -5619,6 +5992,7 @@ const TOOLS = [
   { id: "drillorigin", label: "Drill/Place File Origin", key: "", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><path d="M12 3v18M3 12h18"/>' },
 ];
 const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V via, Ctrl+/ corner mode, Backspace undo segment, End or double-click to finish, Esc to discard",
+  routediff: "Route differential pair — click a pad, via or track end of a pair's net to start, click to fix, / posture, V via pair, Backspace undo segment, End or double-click to finish, Esc to discard",
   via: "Via — click to place", drag: "Drag — move the mouse, click to fix", gline: "Line — click start and end; click the start point or press Enter to stop",
   grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes",
   garc: "Arc — click the start, the end, then a point on the arc", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
@@ -5652,8 +6026,8 @@ function ghostSegs() {
   // the route's fixed stages are not on the board until the route ends: they travel as ghosts too, with the head
   const out = [];
   for (const st of rt.stages) for (const op of st.ops) { const n = op.add || (op.set && op.node); if (!n || (n[0] !== "segment" && n[0] !== "arc")) continue; const a = pt(n, "start"), b = pt(n, "end"); out.push([a[0], a[1], b[0], b[1], widthOf(n, 0.25)]); }
-  const pts = rt.els && rt.els.length ? elemsPts(rt.els) : (rt.head || [rt.last]);
-  for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rt.width]);
+  const heads = rt.dp ? (rt.dpLines ? [rt.dpLines.P, rt.dpLines.N] : []) : [rt.els && rt.els.length ? elemsPts(rt.els) : (rt.head || [rt.last])];
+  for (const pts of heads) for (let i = 0; i + 1 < pts.length; i++) out.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], rt.width]);
   return out;
 }
 
@@ -5673,7 +6047,7 @@ const pcb = {
   onActivate(t, ctx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);
-    if (S.route && t !== "route") { const rt = S.route; S.route = null; routeUnhighlight(ctx, rt); }   // leaving the tool drops the unfixed leg
+    if (S.route && t !== (S.route.dp ? "routediff" : "route")) { const rt = S.route; S.route = null; routeUnhighlight(ctx, rt); }   // leaving the tool drops the unfixed leg
     S.violations = null;
     if (S.drag && t !== "drag") { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }
     S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
@@ -5685,8 +6059,8 @@ const pcb = {
   onPointerDown(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || ev.button !== 0 || !ctx.doc) return false;
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
-    if (t === "route") routeClick(ctx, hv, mm);
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
+    if (t === "route" || t === "routediff") routeClick(ctx, hv, mm);
     else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
     else if (t === "drillorigin") { if (!ctx.viewOnly) { sizesOf(ctx).setAuxOrigin([hv.x, hv.y]); ctx.toast(`Drill/place file origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); } ctx.setTool("select"); }
     else if (t === "via") placeVia(ctx, hv);
@@ -5740,7 +6114,7 @@ const pcb = {
   onPointerMove(ev, mm, ctx) {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
-    const hv = hoverPoint(ctx, mm, t === "route" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
+    const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
     if (t === "delete") hv.del = ctx.viewOnly ? null : deleteCandidate(ctx, mm);
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
@@ -5757,7 +6131,7 @@ const pcb = {
     case "x": case "X": if (!shift) { ctx.setTool("route"); return true; } return false;
     // V: ACT_PlaceThroughVia while the router is active (a via rides the head; idle, the next route starts with one),
     // elsewhere PCB_ACTIONS::layerToggle (the spec table); Place Vias is Ctrl+Shift+X
-    case "v": case "V": if (shift) return false; if (S.route || S.modTool === "route") { if (editing()) runAction("ACT_PlaceThroughVia", ctx); return true; } return false;
+    case "v": case "V": if (shift) return false; if (S.route || S.modTool === "route" || S.modTool === "routediff") { if (editing()) runAction("ACT_PlaceThroughVia", ctx); return true; } return false;
     case "<": if (S.route) { if (editing()) runAction("ACT_SelLayerAndPlaceThroughVia", ctx); return true; } return false;
     case "ViaTool": ctx.setTool("via"); return true;
     case "d": case "D": case "g": case "G":
@@ -5786,7 +6160,7 @@ const pcb = {
     case "Zone": ctx.setTool("zone"); return true;
     case "RuleArea": ctx.setTool("rulearea"); return true;
     case "Flip": return editing() && flipSelected(ctx);
-    case "/": if ((ev.ctrlKey || ev.metaKey) && S.modTool === "route") return runAction("ACT_SwitchCornerModeToNext", ctx);
+    case "/": if ((ev.ctrlKey || ev.metaKey) && (S.modTool === "route" || S.modTool === "routediff")) return runAction("ACT_SwitchCornerModeToNext", ctx);
       if (S.route) { const rt = S.route; tracerFlip(rt.tracer, rt.head && rt.head.length > 1 ? dir8(rt.head[0], rt.head[1]) : -1); updateHead(ctx); ctx.requestRender(); return true; } return false;   // ACT_SwitchPosture, until the next fix
     case "PageUp": return runAction("layerTop", ctx);
     case "PageDown": return runAction("layerBottom", ctx);
@@ -5884,6 +6258,25 @@ const pcb = {
   routerDefaults: () => Object.assign({}, RS_DEFAULTS),
   /** Check marks of the router mode and corner mode actions, by KiCad action name. */
   routerChecks,
+  /**
+   * DIFF_PAIR_MENU ("Select Differential Pair Dimensions", the router's menu while routing pairs): Use Net Class Values,
+   * Use Custom Values... (which opens the dialog), then the list's entries.  [{ label, tip, checked, run() } | { sep: true }].
+   */
+  diffPairMenu(ctx) {
+    bind(ctx); const R = sizesOf(ctx); const fmt = (v) => fmtSize(v);
+    const pick = (i) => () => { R.setDiffPairIndex(i); if (S.route && S.route.dp && lastCtx) { S.route.dpSizes = dpSizes(lastCtx, { P: S.route.net }); S.route.width = S.route.dpSizes.width; updateHead(lastCtx); lastCtx.requestRender(); } };
+    const rows = [
+      { label: "Use Net Class Values", tip: "Use differential pair dimensions from the net class", checked: !R.useCustomDiffPair && R.diffPairIndex === 0, run: pick(0) },
+      { label: "Use Custom Values...", tip: "Specify custom differential pair dimensions", checked: R.useCustomDiffPair, run: () => { R.setDiffPairIndex("custom"); runAction("routerDiffPairDialog", lastCtx || ctx); } },
+      { sep: true },
+    ];
+    R.diffPairLabels(fmt).forEach((label, k) => rows.push({ label, checked: !R.useCustomDiffPair && R.diffPairIndex === k + 1, run: pick(k + 1) }));
+    return rows;
+  },
+  /** The net being routed (the first of a pair), "" with none: what the size dialogs resolve the netclass of. */
+  routedNet() { return S.route && S.route.net ? S.route.net.name || "" : ""; },
+  /** The router's pair sizes changed (the Differential Pair Dimensions dialog): a pair being routed takes them at once. */
+  diffPairSizesChanged(ctx) { ctx = ctx || lastCtx; if (!ctx) return; bind(ctx); const rt = S.route; if (rt && rt.dp) { rt.dpSizes = dpSizes(ctx, { P: rt.net }); rt.width = rt.dpSizes.width; updateHead(ctx); ctx.requestRender(); } },
   /** The layer picker the Select Layer and Place Via commands open (PCB_EDIT_FRAME::SelectOneLayer). */
   setLayerPicker(fn) { layerPickerImpl = fn || ((o, done) => done(null)); },
   netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
@@ -5902,6 +6295,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   // the interactive router (Highlight collisions, Shove, Walk around)
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
+  matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,

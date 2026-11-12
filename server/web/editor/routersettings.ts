@@ -7,6 +7,8 @@
 // pcb-tools.js owns the settings and the router; this module only builds the pages and registers them through
 // CollabTools.pcb.setRoutingDialogs / setLayerPicker.
 import { KD, checkbox, h } from "../dialogs/dom";
+import { E } from "./state";
+import { toast } from "./util";
 
 /** pcb-tools.js's ROUTING_SETTINGS, by the parameter names KiCad stores in pcbnew.json's "tools.pns". */
 export interface RouterSettings {
@@ -50,6 +52,7 @@ const CSS = `.pns-cols{display:flex;gap:14px;align-items:flex-start}.pns-cols>di
 .lsel-list{display:flex;flex-direction:column;max-height:360px;overflow:auto;border:1px solid var(--line);border-radius:3px}
 .lsel-row{display:flex;align-items:center;gap:8px;padding:4px 8px;cursor:pointer;color:var(--ink)}
 .lsel-row:hover,.lsel-row.cur{background:var(--hover,rgba(127,127,127,.15))}.lsel-row.off{opacity:.45;cursor:default}
+.dpd-grid{display:grid;grid-template-columns:auto 1fr auto;gap:6px 8px;align-items:center;margin-bottom:10px}.dpd-grid .off{opacity:.5}
 .lsel-sw{width:14px;height:14px;border-radius:2px;border:1px solid var(--line);flex:none}`;
 function styles(): void {
   if (typeof document === "undefined" || document.getElementById("pnsDialogCss")) return;
@@ -115,6 +118,67 @@ export function openRouterSettings(): void {
     ok() { api.setRouterSettings!(form.result()); return true; } });
 }
 
+// ---------------------------------------------------------------- DIALOG_PNS_DIFF_PAIR_DIMENSIONS
+export interface DpDims { width: number; gap: number; via_gap: number }
+/**
+ * The dialog's logic without the page: TransferDataToWindow (the router's current pair sizes), updateCheckbox
+ * ("Via gap same as track gap" disables the via gap) and TransferDataFromWindow (the track gap must be positive).
+ */
+export function dpDimsForm(cur: DpDims, sameAsGap: boolean) {
+  const v = { width: cur.width, gap: cur.gap, via_gap: cur.via_gap, same: !!sameAsGap };
+  return {
+    values: v,
+    viaGapEnabled(): boolean { return !v.same; },
+    /** null when OK may close, else KiCad's message */
+    validate(): string | null { return v.gap > 0 ? null : "Track gap must be greater than 0."; },
+    result(): { dims: DpDims; same: boolean } { return { dims: { width: v.width, gap: v.gap, via_gap: v.same ? v.gap : v.via_gap }, same: v.same }; },
+  };
+}
+const lengthText = (mm: number, u: string): string => (u === "mil" ? `${+(mm / 0.0254).toFixed(4)}` : u === "in" ? `${+(mm / 25.4).toFixed(6)}` : `${+mm.toFixed(6)}`);
+/** A UNIT_BINDER entry: a bare number is in the editor's units; mm / mils / in are understood. NaN when it is not a length. */
+export function parseLength(text: string, u: string): number {
+  const t = text.trim().toLowerCase().replace(",", "."); const m = /^(-?\d*\.?\d+)\s*(mm|mils?|thou|in|inch|")?$/.exec(t); if (!m) return NaN;
+  const val = parseFloat(m[1]); const unit = m[2] || (u === "mil" ? "mil" : u === "in" ? "in" : "mm");
+  return +(unit === "mm" ? val : unit === "in" || unit === "inch" || unit === '"' ? val * 25.4 : val * 0.0254).toFixed(6);
+}
+interface SizesState { routeDiffPair(net: string): { width: number; gap: number; viaGap: number }; diffPairViaGapSameAsGap: boolean; setCustomDiffPair(d: DpDims, same: boolean): void }
+/** ROUTER_TOOL::DpDimensionsDialog — "Differential Pair Dimensions": Width, Track gap, Via gap, "Via gap same as track gap". */
+export function openDiffPairDimensions(): void {
+  const sizes = (KiCadCanvas as unknown as { pcbSizes: { state: SizesState } }).pcbSizes.state;
+  const api = pcbApi() as (RouterApi & { routedNet?(): string; diffPairSizesChanged?(ctx: unknown): void }) | null;
+  const net = api && api.routedNet ? api.routedNet() : "";
+  const cur = sizes.routeDiffPair(net);
+  const form = dpDimsForm({ width: cur.width, gap: cur.gap, via_gap: cur.viaGap }, sizes.diffPairViaGapSameAsGap);
+  const u = String(E.units || "mm");
+  const unitName = u === "mil" ? "mils" : u === "in" ? "in" : "mm";
+  styles();
+  const inputs: Record<string, HTMLInputElement> = {};
+  KD().open({ title: "Differential Pair Dimensions", width: 340,
+    build(body) {
+      const grid = h("div", { class: "dpd-grid" }); body.appendChild(grid);
+      const row = (key: "width" | "gap" | "via_gap", label: string) => {
+        const inp = h("input", { type: "text", value: lengthText(form.values[key], u), "data-k": key }); inputs[key] = inp;
+        const lab = h("span", { class: "dpd-l" }, label), unit = h("span", { class: "dpd-u" }, unitName);
+        grid.append(lab, inp, unit); return [lab, inp, unit] as HTMLElement[];
+      };
+      row("width", "Width:"); row("gap", "Track gap:"); const via = row("via_gap", "Via gap:");
+      const sync = () => { const on = form.viaGapEnabled(); (via[1] as HTMLInputElement).disabled = !on; for (const e of via) e.classList.toggle("off", !on); };
+      body.appendChild(checkbox("Via gap same as track gap", form.values.same, (on) => { form.values.same = on; sync(); }));
+      sync();
+    },
+    ok() {
+      for (const k of ["width", "gap", "via_gap"] as const) {
+        const inp = inputs[k]; if (!inp || (k === "via_gap" && inp.disabled)) continue;
+        const v = parseLength(inp.value, u); if (isNaN(v)) { toast("Please enter a valid value."); inp.focus(); return false; }
+        form.values[k] = v;
+      }
+      const err = form.validate(); if (err) { toast(err); if (inputs.gap) inputs.gap.focus(); return false; }
+      const r = form.result(); sizes.setCustomDiffPair(r.dims, r.same);
+      if (api && api.diffPairSizesChanged) api.diffPairSizesChanged(null);
+      return true;
+    } });
+}
+
 /** PCB_ONE_LAYER_SELECTOR — "Select Layer": the copper layers, the current one marked, the disallowed ones greyed. */
 export const pickLayer: LayerPicker = (opts, done) => {
   styles();
@@ -141,6 +205,6 @@ export const pickLayer: LayerPicker = (opts, done) => {
 /** Registers both with pcb-tools.js. */
 export function installRouterDialogs(): void {
   const api = pcbApi(); if (!api) return;
-  if (api.setRoutingDialogs) api.setRoutingDialogs({ routerSettings: openRouterSettings });
+  if (api.setRoutingDialogs) api.setRoutingDialogs({ routerSettings: openRouterSettings, diffPair: openDiffPairDimensions });
   if (api.setLayerPicker) api.setLayerPicker(pickLayer);
 }

@@ -195,7 +195,14 @@ function rows(list: Resolved[], c: MenuCtx): CtxItem[] {
     return row(e.act, e.check, c);
   });
 }
-function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : rows(items, c); }
+/** DIFF_PAIR_MENU's rows, from the board module (pcb-tools.js diffPairMenu). */
+interface DpRow { sep?: boolean; label?: string; tip?: string; checked?: boolean; run?: () => void }
+function diffPairRows(): CtxItem[] {
+  const pcb = (CollabTools as unknown as { pcb?: { diffPairMenu?: (ctx: unknown) => DpRow[] } }).pcb;
+  if (!pcb || !pcb.diffPairMenu) return [];
+  return pcb.diffPairMenu(toolCtx()).map((r): CtxItem => (r.sep ? { sep: true } : { label: r.label, check: true, checked: !!r.checked, run: runRow(() => { if (r.run) r.run(); }) }));
+}
+function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : rows(items, c); }
 
 /** "Symbol R1 (10k)", "Wire", "Track [VCC] on B.Cu, length 0.6400 mm": how KiCad names an item in a disambiguation menu. */
 function describe(it: KItem | string): string {
