@@ -30,8 +30,19 @@ export const TEXT_STYLE: Record<string, number[]> = { silk: [1, 0.1], copper: [1
  */
 export const DIM_DEFAULTS = { units: 3, precision: 4, unitsFormat: 0, suppressZeroes: true, textPosition: 0, keepAligned: true, arrowLength: 1.27, extOffset: 0.5 };
 export const DIM_DEFAULTS0 = Object.assign({}, DIM_DEFAULTS);
+const LINE_W0 = Object.assign({}, LINE_W), TEXT_STYLE0: Record<string, number[]> = JSON.parse(JSON.stringify(TEXT_STYLE));
+let fpEditorDefaults = false;
+/**
+ * The Footprint Editor's own design settings (FOOTPRINT_EDITOR_SETTINGS::m_DesignSettings, whose defaults are the
+ * DEFAULT_* of board_design_settings_defaults.h): a footprint takes them, never the open project's board settings.
+ */
+export function useFootprintEditorDefaults(on: boolean) {
+  fpEditorDefaults = on;
+  if (on) { Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0); Object.assign(LINE_W, LINE_W0); for (const [k, v] of Object.entries(TEXT_STYLE0)) TEXT_STYLE[k] = v.slice(); }
+}
 /** Take the project's per-layer-class defaults (board.design_settings.defaults) for new graphics and text. */
 export function layerDefaults(d: DesignDefaults) {
+  if (fpEditorDefaults) { useFootprintEditorDefaults(true); return; }
   Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0);
   const dd = d.dimensions || {}, int = (v: unknown, lo: number, hi: number) => (typeof v === "number" && v >= lo && v <= hi ? Math.round(v) : null);
   if (int(d.dimension_units, 0, 3) !== null) DIM_DEFAULTS.units = int(d.dimension_units, 0, 3)!;

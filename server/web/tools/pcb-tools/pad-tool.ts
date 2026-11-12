@@ -48,6 +48,7 @@ export function typeFromPad(pad: SNode): PadType | null {
     return "smd";
   }
   if (a === "connect") return "conn";
+  if (a === "non_component") return "nc";
   if (a === "np_thru_hole") return "npth";
   return null;
 }
@@ -74,7 +75,7 @@ export function defaultPad(type: PadType): SNode {
   case "paste": return ["pad", "", "smd", "roundrect", ["at", 0, 0], ["size", 1, 1], ["layers", "F.Paste"], ["roundrect_rratio", ipcRoundingRatio(1, 1)]];
   case "mask": return ["pad", "", "smd", "roundrect", ["at", 0, 0], ["size", 1, 1], ["layers", "F.Mask"], ["roundrect_rratio", ipcRoundingRatio(1, 1)]];
   case "conn": return ["pad", "", "connect", "rect", ["at", 0, 0], ["size", 2.54, 1.27], ["layers", "F.Cu", "F.Mask"]];
-  case "nc": return ["pad", "", "smd", "roundrect", ["at", 0, 0], ["size", 2, 1], ["layers", "F.Cu"], ["roundrect_rratio", ipcRoundingRatio(2, 1)]];
+  case "nc": return ["pad", "", "non_component", "roundrect", ["at", 0, 0], ["size", 2, 1], ["layers", "F.Cu"], ["roundrect_rratio", ipcRoundingRatio(2, 1)]];
   default: return ["pad", "", "thru_hole", "oval", ["at", 0, 0], ["size", 2.54, 1.27], ["drill", 0.8], ["layers", "*.Cu", "*.Mask"]];
   }
 }

@@ -59,6 +59,10 @@ export function toolCtx(extra?: Record<string, unknown>) {
 /** Watchers of local edits (ZONE_FILLER_TOOL's dirty-zone refill): called before the edit applies and after. */
 export const commitObservers: ((phase: "before" | "after", changes: unknown[], label: string | undefined, opts: unknown) => void)[] = [];
 export function commitChanges(changes: KChange[] | null | undefined, label?: string, opts?: CommitOpts) {
+  // EDIT_TOOL::DeleteItems on fields only: "Hide Field(s)", or the info bar when nothing changes (pcb-tools deleteChanges)
+  const tag = changes as (KChange[] & { hideLabel?: string; infoError?: string }) | null | undefined;
+  if (tag && tag.infoError && !tag.length) { toast(tag.infoError, 4000); return; }
+  if (tag && tag.hideLabel && (label === "delete" || label === "Delete")) label = tag.hideLabel;
   if (!changes || !changes.length) return;
   for (const f of commitObservers) { try { f("before", changes, label, opts); } catch (e) { console.error(e); } }
   const inverse: KChange[] = [];

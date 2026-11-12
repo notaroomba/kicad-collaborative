@@ -4,7 +4,7 @@ import type { BoardDoc, Obstacle, PadInfo, PcbChange, PcbCtx, PendingDrag, Pt, S
 /** Where the obstacles a component drag hit were first met. */
 export type DragHits = Obstacle[] & { at?: Pt | null };
 import { unlockedIds } from "./actions";
-import { isPcbDoc } from "./app-state";
+import { isBoardLikeDoc } from "./app-state";
 import { cancelOps } from "./assistants";
 import { deleteChanges, replacedChange } from "./changes";
 import { cursorPoint } from "./clipboard";
@@ -224,7 +224,7 @@ export function componentDragHits(ctx: PcbCtx, m: SelectMove, dx: number, dy: nu
 export function connLines(m: SelectMove, dx: number, dy: number) { return (m.conns || []).map((c) => { const p = c.l.pts[c.vertex]; return { l: c.l, pts: dragCorner45(c.l.pts, c.vertex, rp([p[0] + dx, p[1] + dy]), 0) }; }); }
 /** A press while the selection follows the cursor: the left button drops it there (and the click goes no further). */
 export function onStickyPointerDown(ev: PointerEvent) {
-  const ctx = lastCtx; const m = S.move; if (!m || !m.sticky || !ctx || !isPcbDoc()) return;
+  const ctx = lastCtx; const m = S.move; if (!m || !m.sticky || !ctx || !isBoardLikeDoc()) return;
   if ((ev.target as Element).closest && ((ev.target as Element).closest("#pcbChip") || (ev.target as Element).closest("#cmtPanel"))) return;
   ev.stopImmediatePropagation(); ev.preventDefault();
   if (ev.button !== 0) return;
@@ -243,7 +243,7 @@ export function startPendingDrag(ctx: PcbCtx, pd: PendingDrag) {
   return beginSelectDrag(ctx, ctx.doc.items.get(ids[0])!, pd.mm);
 }
 export function onStagePointerMove(ev: PointerEvent) {
-  const ctx = lastCtx; if (!ctx || !isPcbDoc()) return;
+  const ctx = lastCtx; if (!ctx || !isBoardLikeDoc()) return;
   if (S.pedit) { ev.stopImmediatePropagation(); editHandleMove(ctx, ctx.worldMm(ev)); return; }
   if (S.pending) {
     const pd = S.pending;

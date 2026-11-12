@@ -134,3 +134,41 @@ test("ExchangeFootprint: the edited copy goes back in place, keeping side, angle
   assert.equal(K.kids(node, "property").find((p) => p[1] === "Reference")[2], "R7");
   assert.equal(K.kids(node, "property").find((p) => p[1] === "Value")[2], "10k");
 });
+
+test("ExchangeFootprint matches pads by number before geometry (matchItemsBySimilarity: +2 for the same number)", () => {
+  const FP = ["footprint", "Lib:R_0603", ["layer", "F.Cu"], ["uuid", "fp-board"], ["at", 50, 40, 0],
+    ["property", "Reference", "R7", ["at", 0, -1.43, 0], ["layer", "F.SilkS"], ["uuid", "ref-board"], ["effects", ["font", ["size", 1, 1]]]],
+    ["pad", "1", "smd", "roundrect", ["at", -0.825, 0, 0], ["size", 0.8, 0.95], ["layers", "F.Cu", "F.Mask", "F.Paste"], ["net", "GND"], ["uuid", "pad1-board"]],
+    ["pad", "2", "smd", "roundrect", ["at", 0.825, 0, 0], ["size", 0.8, 0.95], ["layers", "F.Cu", "F.Mask", "F.Paste"], ["net", "/SIG"], ["uuid", "pad2-board"]]];
+  const e = X.editableCopy(FP, 20241229);
+  const ps = K.kids(e.node, "pad"); ps[0][1] = "2"; ps[1][1] = "1";   // the numbers swapped in the editor
+  const { node } = X.exchangeFootprint(FP, X.boardCopyFromEditor(e.node, e.uuidMap));
+  const p1 = K.kids(node, "pad").find((p) => p[1] === "1"), p2 = K.kids(node, "pad").find((p) => p[1] === "2");
+  assert.deepEqual(K.kid(p1, "net"), ["net", "GND"]); assert.equal(K.kid(p1, "uuid")[1], "pad1-board");
+  assert.deepEqual(K.kid(p2, "net"), ["net", "/SIG"]); assert.equal(K.kid(p2, "uuid")[1], "pad2-board");
+  // geometry still decides between pads of the same number
+  const a = ["pad", "3", "smd", "rect", ["at", 0, 0], ["size", 1, 1], ["layers", "F.Cu"]], b = ["pad", "3", "smd", "rect", ["at", 5, 0], ["size", 1, 1], ["layers", "F.Cu"]];
+  const m = X.matchPads([a], [b, K.cloneNode(a)]); assert.equal(m.length, 1); assert.deepEqual(K.kid(m[0][1], "at"), ["at", 0, 0]);
+  assert.ok(Math.abs(X.padSimilarity(a, b) - 0.9) < 1e-9);
+});
+test("PAD_MASTER_PROVIDER: the non-component default pad is written as non_component", () => {
+  const nc = PT.defaultPad("nc"); assert.equal(nc[2], "non_component"); assert.deepEqual(K.kid(nc, "layers").slice(1), ["F.Cu"]);
+  assert.equal(PT.typeFromPad(nc), "nc");
+});
+test("Recombine keeps the pad's real copper: TransformShapeToPolygon of roundrect, oval (stadium), trapezoid, chamfered rect", () => {
+  const FPP = P.fpPads;
+  const bbox = (pts) => [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+  const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 2e-6);
+  const rr = FPP.padOutline(["pad", "1", "smd", "roundrect", ["at", 1, 2], ["size", 2, 1], ["layers", "F.Cu"], ["roundrect_rratio", 0.25]]);
+  assert.ok(near(bbox(rr), [0, 1.5, 2, 2.5]), "the roundrect's extent"); assert.ok(rr.length > 8, "rounded corners have arc points");
+  assert.ok(!rr.some((p) => Math.abs(p[0] - 2) < 1e-6 && Math.abs(p[1] - 2.5) < 1e-6), "no sharp corner");
+  const ov = FPP.padOutline(["pad", "1", "thru_hole", "oval", ["at", 0, 0], ["size", 3, 1], ["drill", 0.5], ["layers", "*.Cu"]]);
+  const ob = bbox(ov); assert.ok(ob[2] <= 1.5 && ob[2] > 1.49 && ob[0] >= -1.5 && ob[0] < -1.49 && Math.abs(ob[3] - 0.5) < 1e-6, "a stadium 3 x 1, its arcs inside the outline (ERROR_INSIDE)");
+  assert.ok(ov.some((p) => Math.abs(p[0]) < 1e-6 && Math.abs(Math.abs(p[1]) - 0.5) < 1e-6) || ov.some((p) => Math.abs(p[0] - 1) < 1e-6 && Math.abs(p[1] - 0.5) < 1e-6), "straight sides at the half width");
+  const tz = FPP.padOutline(["pad", "1", "smd", "trapezoid", ["at", 0, 0], ["size", 2, 2], ["rect_delta", 0, 1], ["layers", "F.Cu"]]);
+  assert.equal(tz.length, 4); assert.ok(near(bbox(tz), [-1.5, -1, 1.5, 1]), "rect_delta widens one side");
+  const ch = FPP.padOutline(["pad", "1", "smd", "roundrect", ["at", 0, 0], ["size", 2, 2], ["layers", "F.Cu"], ["roundrect_rratio", 0], ["chamfer_ratio", 0.25], ["chamfer", "top_left"]]);
+  assert.equal(ch.length, 5); assert.ok(ch.some((p) => near(p, [-1, -0.5])) && ch.some((p) => near(p, [-0.5, -1])));
+  const ci = FPP.padOutline(["pad", "1", "thru_hole", "circle", ["at", 0, 0], ["size", 1, 1], ["drill", 0.5], ["layers", "*.Cu"]]);
+  assert.equal(ci.length, 24); assert.ok(ci.every((p) => Math.abs(Math.hypot(p[0], p[1]) - 0.5) < 2e-6), "ERROR_INSIDE: on the circle");
+});

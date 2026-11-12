@@ -25,7 +25,7 @@ export function rotateSelected(ctx: PcbCtx) { return runAction("rotateSelection"
 export function flipSelected(ctx: PcbCtx) { return runAction("flipSelection", ctx); }
 export function deleteSelection(ctx: PcbCtx) {
   const ids = unlockedIds(ctx, Array.from(expandGroups(ctx.doc, S.sel))); if (!ids.length) return;   // locked: the warning, nothing deleted
-  const changes = deleteChanges(ctx.doc, ids); S.sel.clear(); if (!changes.length) return;
+  const changes = deleteChanges(ctx.doc, ids); S.sel.clear(); if (!changes.length && !changes.infoError) return;
   ctx.commit(changes, "delete");   // EDIT_TOOL::Remove says nothing
 }
 /** EDIT_TOOL::Remove with nothing selected: the item under the cursor (hover), locks honoured; silent. */

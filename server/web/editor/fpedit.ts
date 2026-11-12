@@ -20,7 +20,7 @@ import { commitObservers, setTool, toolCtx, undoStack } from "./tools";
 import { api, toast } from "./util";
 import { liveDocument, saveTextDocument, sendDocOps } from "./projectfile";
 import { confirmBox, promptText } from "../dialogs/dom";
-import { listDialog } from "./pcbdialogs/ui";
+import { listDialog, messageBox } from "./pcbdialogs/ui";
 import { enumPadsDialog, footprintCheckerDialog, footprintUsersDialog, footprintPropertiesDialog, padTableDialog, pushPadDialog } from "./pcbdialogs/fp-editor";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ActionHandler } from "./types";
@@ -35,7 +35,7 @@ const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 const NEW_FILE_VERSION = 20260728;
 
 interface BoardCopy { boardDocId: string; fpUuid: string; uuidMap: Record<string, string>; link: string; reference: string; boardPath: string; text: string }
-export const FP: { board: BoardCopy | null; snapSeq: number; title: string; timer: number; padEdit: string | null } = { board: null, snapSeq: 0, title: "", timer: 0, padEdit: null };
+export const FP: { board: BoardCopy | null; snapSeq: number; title: string; timer: number; padEdit: string | null; framed: boolean } = { board: null, snapSeq: 0, title: "", timer: 0, padEdit: null, framed: false };
 
 export const isFpEdit = (): boolean => E.DOC_TYPE === "footprint";
 /** The open footprint is a private copy of a board footprint (nothing goes over the socket until Save). */
@@ -121,6 +121,14 @@ export function privateText(doc: DocEntry): string | null { return doc.docType =
 /** After the text loaded: the snapshot seq it came from, the title, the pad dialog for pads, the libraries. */
 export function onFootprintOpened(snapSeq: number): void {
   FP.snapSeq = snapSeq;
+  // FOOTPRINT_EDITOR_SETTINGS' design settings for new graphics and text, never the project board's
+  if (PT() && PT().useFootprintEditorDefaults) PT().useFootprintEditorDefaults(true);
+  if (!FP.framed) {
+    // FOOTPRINT_EDIT_FRAME's constructor: SetActiveLayer( F_SilkS )
+    FP.framed = true;
+    E.activeLayer = "F.SilkS"; E.renderOpts.activeLayer = "F.SilkS"; store.slice("viewport", { activeLayer: "F.SilkS" });
+    const mod = CollabTools.pcb as Any; if (mod && mod.setLayer) { try { mod.setLayer(toolCtx(), "F.SilkS"); } catch { /* module without layer API */ } }
+  }
   hookPadDialog();
   libTableRows().then(publishLibs).catch(() => publishLibs());
   refreshTitle();
@@ -168,6 +176,8 @@ async function waitPending(ms: number): Promise<void> { const t0 = Date.now(); w
 /** FOOTPRINT_EDIT_FRAME::SaveFootprint: the file KiCad would write becomes the newest snapshot. */
 export async function saveFootprint(): Promise<boolean> {
   if (!E.kdoc || !isFpEdit()) return false;
+  // PAD_TOOL::InPadEditMode: the pad is recombined first (PCB_ACTIONS::recombinePad), so the file holds the custom pad
+  if (FP.padEdit && !E.viewOnly) exitPadEditMode();
   if (isFpPrivate()) return saveToBoard();
   if (E.viewOnly) { toast("You can view this project but not change it"); return false; }
   const text = FD().serializeFootprintDoc(E.kdoc);
@@ -177,7 +187,24 @@ export async function saveFootprint(): Promise<boolean> {
   const r = await fetch(`/api/docs/${docId}/snapshots?seq=${seq}&saved=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text });
   const { lib, name } = fpLibIdOf(state.doc!.path);
   if (!r.ok) { toast(`Footprint '${name}' could not be saved to library '${lib}'.`, 5000); return false; }
-  FD().markFootprintSaved(E.kdoc, text); FP.snapSeq = seq; refreshTitle();
+  FD().markFootprintSaved(E.kdoc, text); FP.snapSeq = seq;
+  // a .pretty footprint's name is its file name: a renamed footprint is saved under the new name and the old entry
+  // goes (SaveFootprintInLibrary, then DeleteFootprintFromLibrary of the name it was loaded with)
+  const newName = FD().footprintName(E.kdoc);
+  if (newName && newName !== name && !/[\\/:"*?<>|]/.test(newName)) {
+    const path = state.doc!.path.split("/").slice(0, -1).concat(newName + ".kicad_mod").join("/");
+    const pr = await fetch(`/api/docs/${docId}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }) }).catch(() => null);
+    if (pr && pr.ok) {
+      const d = state.project && state.project.docs.find((x) => x.docId === docId); if (d) d.path = path;
+      if (state.doc) state.doc.path = path;
+      if (state.project) store.set({ project: Object.assign({}, state.project) });
+      publishLibs(); refreshTitle();
+      setStatusBar({ message: `Footprint '${newName}' saved in library '${lib}'.` });
+      return true;
+    }
+    toast(pr && (pr.status === 404 || pr.status === 405) ? "This server cannot rename files yet" : `Footprint '${name}' could not be renamed to '${newName}'.`, 5000);
+  }
+  refreshTitle();
   setStatusBar({ message: `Footprint '${name}' saved in library '${lib}'.` });
   return true;
 }
@@ -214,16 +241,30 @@ export async function revertFootprint(): Promise<void> {
 
 // ---------------------------------------------------------------- write back to the board
 const bc: BroadcastChannel | null = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("kc-fpedit") : null;
-let reqN = 0; const waiting = new Map<string, (ok: boolean, msg?: string) => void>();
+/** This tab, as the board side of the channel names itself. */
+const tabId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+let reqN = 0;
+const waiting = new Map<string, { offer: (tab: string, ok: boolean, msg?: string) => void; reply: (ok: boolean, msg?: string) => void }>();
+/**
+ * A request to the board tabs: every board tab that could take it offers, the first that can is told to go, and only
+ * that one applies it (KiCad has one board frame: two tabs of the same board must not both commit the update).
+ */
 function ask(msg: Record<string, unknown>, timeoutMs = 1200): Promise<{ ok: boolean; msg?: string } | null> {
   if (!bc) return Promise.resolve(null);
-  const reqId = `${Date.now().toString(36)}-${++reqN}`;
+  const reqId = `${Date.now().toString(36)}-${++reqN}-${tabId}`;
   return new Promise((resolve) => {
-    const t = setTimeout(() => { waiting.delete(reqId); resolve(null); }, timeoutMs);
-    waiting.set(reqId, (ok, m) => { clearTimeout(t); waiting.delete(reqId); resolve({ ok, msg: m }); });
+    let chosen = false; let refusal: { ok: boolean; msg?: string } | null = null;
+    const done = (r: { ok: boolean; msg?: string } | null) => { clearTimeout(t); waiting.delete(reqId); resolve(r); };
+    const t = setTimeout(() => done(chosen ? { ok: false, msg: "The board did not answer." } : refusal), timeoutMs);
+    waiting.set(reqId, {
+      offer: (tab, ok, m) => { if (chosen) return; if (!ok) { refusal = { ok, msg: m }; return; } chosen = true; bc.postMessage({ type: "go", reqId, tabId: tab }); },
+      reply: (ok, m) => done({ ok, msg: m }),
+    });
     bc.postMessage(Object.assign({ reqId }, msg));
   });
 }
+/** Requests this board tab offered to take, until the footprint editor picks one tab. */
+const offered = new Map<string, Record<string, unknown>>();
 
 /** FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard: ExchangeFootprint on the board, one "Update Footprint" step there. */
 export async function saveToBoard(): Promise<boolean> {
@@ -261,23 +302,39 @@ export function exchangeChange(board: KDoc, fpUuid: string, text: string, uuidMa
   return PT().replacedChange(it, node);
 }
 
-/** The board tab's side: requests from footprint editor tabs of the same project. */
+/** The board tab's side: requests from footprint editor tabs of the same project (offer, then apply on "go"). */
 if (bc) bc.onmessage = (ev: MessageEvent) => {
   const m = ev.data as Any; if (!m || typeof m !== "object") return;
-  if (m.type === "reply") { const w = waiting.get(m.reqId); if (w) w(!!m.ok, m.msg); return; }
+  if (m.type === "offer") { const w = waiting.get(m.reqId); if (w) w.offer(String(m.tabId), !!m.ok, m.msg); return; }
+  if (m.type === "reply") { const w = waiting.get(m.reqId); if (w) w.reply(!!m.ok, m.msg); return; }
+  if (m.type === "go") {
+    const req = offered.get(m.reqId); offered.delete(m.reqId);
+    if (!req || m.tabId !== tabId) return;
+    const reply = (ok: boolean, msg?: string) => bc.postMessage({ type: "reply", reqId: m.reqId, ok, msg });
+    const r = req as Any;
+    if (!E.kdoc) { reply(false, "No board currently open."); return; }
+    if (r.type === "update") {
+      const ch = exchangeChange(E.kdoc, r.fpUuid, r.text, r.uuidMap);
+      if (!ch) { reply(false, "Unable to find the footprint on the main board.\nCannot save."); return; }
+      toolCtx().commit([ch], "Update Footprint"); reply(true); return;
+    }
+    if (r.type === "insert") {
+      reply(true); window.focus();
+      W.KiCadLibrary.placeFootprint({ fpid: r.fpid, footprint: r.text }).catch(() => {});
+    }
+    return;
+  }
   if (isFpEdit() || !E.kdoc || !state.project || m.projectId !== state.project.projectId) return;
-  const reply = (ok: boolean, msg?: string) => bc.postMessage({ type: "reply", reqId: m.reqId, ok, msg });
+  const offer = (ok: boolean, msg?: string) => { if (ok) { offered.set(m.reqId, m); setTimeout(() => offered.delete(m.reqId), 5000); } bc.postMessage({ type: "offer", reqId: m.reqId, tabId, ok, msg }); };
   if (m.type === "update" && state.docId === m.boardDocId) {
-    if (E.viewOnly) { reply(false, "You can view this board but not change it"); return; }
-    const ch = exchangeChange(E.kdoc, m.fpUuid, m.text, m.uuidMap);
-    if (!ch) { reply(false, "Unable to find the footprint on the main board.\nCannot save."); return; }
-    toolCtx().commit([ch], "Update Footprint"); reply(true); return;
+    if (E.viewOnly) { offer(false, "You can view this board but not change it"); return; }
+    if (!E.kdoc.items.has(m.fpUuid)) { offer(false, "Unable to find the footprint on the main board.\nCannot save."); return; }
+    offer(true); return;
   }
   if (m.type === "insert" && E.DOC_TYPE === "kicad_pcb") {
-    if (E.viewOnly) { reply(false, "You can view this board but not change it"); return; }
-    if (!W.KiCadLibrary || !W.KiCadLibrary.placeFootprint) { reply(false, "No board currently open."); return; }
-    reply(true); window.focus();
-    W.KiCadLibrary.placeFootprint({ fpid: m.fpid, footprint: m.text }).catch(() => {});
+    if (E.viewOnly) { offer(false, "You can view this board but not change it"); return; }
+    if (!W.KiCadLibrary || !W.KiCadLibrary.placeFootprint) { offer(false, "No board currently open."); return; }
+    offer(true);
   }
 };
 
@@ -326,16 +383,27 @@ function openFootprintDoc(docId: string): void {
   history.pushState(null, "", url);
   window.dispatchEvent(new CustomEvent("kc-fpedit-open", { detail: { docId } }));
 }
-/** The library a new footprint goes into: the one the tree has selected, else the open footprint's, else asked. */
-async function pickLibrary(title: string): Promise<FpLib | null> {
-  const libs = projectFpLibs();
-  const cur = state.doc && state.doc.docType === "footprint" && !isFpPrivate() ? fpLibIdOf(state.doc.path).lib : "";
-  if (!libs.length) { toast("Please create a library first (File > New Library...)", 4000); return null; }
+/** PCB_BASE_FRAME::GetLibraryItemsForListDialog: Library / Description rows, by StrNumCmp. */
+function libraryRows(): string[][] {
+  const descr = new Map((libTableCache ? libTableCache.rows : []).map((r) => [r.name, r.descr]));
+  return projectFpLibs().map((l) => [l.name, descr.get(l.name) || ""]).sort((a, b) => PT().pad.strNumCmp(a[0], b[0]));
+}
+/** Characters a footprint name cannot hold (FOOTPRINT::StringLibNameInvalidChars( false )). */
+const FP_NAME_INVALID = "\\/:\"*?<>|\t\n\r";
+/**
+ * PCB_BASE_EDIT_FRAME::SelectLibrary: EDA_LIST_DIALOG of the libraries (Library / Description) with "New Library...",
+ * which makes one and shows the list again with it selected.
+ */
+async function pickLibrary(title: string, listLabel = "Save in library:", preselect?: string): Promise<FpLib | null> {
+  const cur = preselect || (state.doc && state.doc.docType === "footprint" && !isFpPrivate() ? fpLibIdOf(state.doc.path).lib : "");
+  if (!projectFpLibs().length) { toast("Please create a library first (File > New Library...)", 4000); return null; }
   return new Promise((resolve) => {
-    const ok = PT().openForm({ title, width: 380, fields: [{ k: "lib", label: "Library:", type: "select", value: cur || libs[0].name, options: libs.map((l) => [l.name, l.name]) }],
-      apply: (v: { lib: string }) => { resolve(libs.find((l) => l.name === v.lib) || null); } });
-    if (!ok) resolve(null);
-    // a cancelled form resolves nothing: the promise is dropped with the dialog
+    let api: Any = null;
+    api = listDialog(title, ["Library", "Description"], libraryRows(), (row) => resolve(projectFpLibs().find((l) => l.name === row[0]) || null), {
+      select: cur, width: 520, listLabel,
+      extra: [{ label: "New Library...", fn: () => { if (api) api.close(); newLibrary().then((nick) => pickLibrary(title, listLabel, nick || cur).then(resolve)); } }],
+    });
+    if (!api) resolve(null);
   });
 }
 async function newFootprint(): Promise<void> {
@@ -350,31 +418,60 @@ async function newFootprint(): Promise<void> {
   const d = await createFootprintDoc(lib, name, newFootprintText(name, attr)); if (!d) return;
   publishLibs(); openFootprintDoc(d.docId);
 }
-async function saveAs(): Promise<void> {
+/** FOOTPRINT_EDIT_FRAME::SaveFootprintAs: SAVE_AS_DIALOG (Name, "Save in library:", New Library..., Save). */
+async function saveAs(preselect?: string): Promise<void> {
   if (!E.kdoc || E.viewOnly || !state.project) return;
   await libTableRows();
-  const lib = await pickLibrary("Save Footprint As"); if (!lib) return;
+  if (FP.padEdit) exitPadEditMode();
   const cur = FD().footprintName(E.kdoc);
-  const name = await promptText("Save Footprint As", "Footprint name:", cur); if (!name) return;
-  const clean = name.trim(); if (!clean || /[\\/:"*?<>|]/.test(clean)) { toast("Footprint name contains illegal characters", 4000); return; }
-  const tree = KiCadCanvas.parse(FD().serializeFootprintDoc(E.kdoc))!; tree[1] = clean;
+  const curLib = preselect || (!isFpPrivate() && state.doc ? fpLibIdOf(state.doc.path).lib : "");
+  let api: Any = null;
+  api = listDialog("Save Footprint As", ["Library", "Description"], libraryRows(), () => { /* onOk below */ }, {
+    select: curLib, width: 520, listLabel: "Save in library:", okLabel: "Save",
+    name: { label: "Name:", value: cur, invalidChars: FP_NAME_INVALID },
+    extra: [{ label: "New Library...", fn: () => { if (api) api.close(); newLibrary().then((nick) => saveAs(nick || curLib)); } }],
+    validate: async (row, name) => {
+      if (!row) { await messageBoxAsync("A library must be specified."); return false; }
+      if (!name) { await messageBoxAsync("Footprint must have a name."); return false; }
+      const lib = projectFpLibs().find((l) => l.name === row[0]); if (!lib) return false;
+      const existing = lib.footprints.find((f) => f.name === name);
+      if (existing) {
+        if (!(await confirmBox("Confirmation", `Footprint ${name} already exists in ${lib.name}.`, "Overwrite"))) return false;
+        if (existing.docId === state.docId) return true;
+        return deleteFootprintDoc(existing.docId, true);
+      }
+      return true;
+    },
+    onOk: (row, name) => { void saveAsTo(row ? row[0] : "", name, cur); },
+  });
+}
+/** wxMessageBox: the themed message box over the dialog, resolved when it is dismissed. */
+function messageBoxAsync(msg: string): Promise<void> { return new Promise((r) => { if (!messageBox("Message", msg, [{ label: "OK", fn: () => r() }])) { toast(msg, 4000); r(); } }); }
+async function saveAsTo(libName: string, name: string, oldName: string): Promise<void> {
+  const lib = projectFpLibs().find((l) => l.name === libName); if (!lib || !E.kdoc) return;
+  const tree = KiCadCanvas.parse(FD().serializeFootprintDoc(E.kdoc))!; tree[1] = name;
+  // SaveFootprintAs: a value that named the footprint follows the new name
+  for (const c of tree) if (Array.isArray(c) && c[0] === "property" && c[1] === "Value" && c[2] === oldName) c[2] = name;
+  const same = lib.footprints.find((f) => f.name === name && f.docId === state.docId);
+  if (same) { await saveFootprint(); return; }
   // uuids stay the footprint's own: KiCad's Save As writes the same footprint under the new name
-  const d = await createFootprintDoc(lib, clean, FD().prettify(KiCadCanvas.serialize(tree))); if (!d) return;
+  const d = await createFootprintDoc(lib, name, FD().prettify(KiCadCanvas.serialize(tree))); if (!d) return;
+  setStatusBar({ message: `Footprint '${name}' saved in library '${lib.name}'.` });
   publishLibs(); openFootprintDoc(d.docId);
 }
 /** ACTIONS::newLibrary: a <name>.pretty row in the project's fp-lib-table (the folder appears with its first footprint). */
-async function newLibrary(): Promise<void> {
-  if (E.viewOnly || !state.project) { toast("You can view this project but not change it"); return; }
-  const name = await promptText("New Footprint Library", "Library name:", ""); if (!name) return;
+async function newLibrary(): Promise<string | null> {
+  if (E.viewOnly || !state.project) { toast("You can view this project but not change it"); return null; }
+  const name = await promptText("New Footprint Library", "Library name:", ""); if (!name) return null;
   const nick = name.trim().replace(/\.pretty$/i, "");
-  if (!nick || /[\\/:"*?<>|]/.test(nick)) { toast("Library name contains illegal characters", 4000); return; }
+  if (!nick || /[\\/:"*?<>|]/.test(nick)) { toast("Library name contains illegal characters", 4000); return null; }
   const rows = await libTableRows(true);
-  if (rows.some((r) => r.name === nick) || projectFpLibs().some((l) => l.name === nick)) { toast(`Library '${nick}' already exists.`, 4000); return; }
+  if (rows.some((r) => r.name === nick) || projectFpLibs().some((l) => l.name === nick)) { toast(`Library '${nick}' already exists.`, 4000); return null; }
   let d = libTableDoc(); let text = "";
   if (d) { try { const live = await liveDocument(d.docId); text = live.file; } catch { const r = await fetch(`/api/docs/${d.docId}/content?v=${Date.now()}`, { credentials: "same-origin" }); text = r.ok ? await r.text() : ""; } }
   else {
     const res = await api(`/api/projects/${state.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: "fp-lib-table" }) }) as { docId?: string; path?: string; docType?: string };
-    if (!res.docId) { toast("The library table could not be created"); return; }
+    if (!res.docId) { toast("The library table could not be created"); return null; }
     d = { docId: res.docId, path: res.path || "fp-lib-table", docType: res.docType || "lib_table" }; state.project.docs.push(d);
   }
   // FP_LIB_TABLE::Format through Prettify's library-table mode: one row per line, the existing rows untouched
@@ -387,9 +484,10 @@ async function newLibrary(): Promise<void> {
   // a new table has no snapshot to join yet: its first content is snapshot 0
   const ok = text.trim() ? await saveTextDocument(d.docId, out, { id: "table", kind: "MODIFIED", typeName: "LIB_TABLE_FILE", properties: [{ name: "text", after: { type: "string", v: out } }] })
     : (await fetch(`/api/docs/${d.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: out })).ok;
-  if (!ok) { toast("The library table could not be saved", 4000); return; }
+  if (!ok) { toast("The library table could not be saved", 4000); return null; }
   libTableCache = { docId: d.docId, rows: parseLibTable(out) }; publishLibs();
   setStatusBar({ message: `Library '${nick}' added to the project library table` });
+  return nick;
 }
 
 /** FOOTPRINT_EDIT_FRAME::DeleteFootprintFromLibrary: the document goes (DELETE /api/docs/{id}) after a themed confirmation. */
@@ -449,7 +547,7 @@ function footprintProperties(): void {
     libHas: (name: string) => !!libFps && libFps.footprints.some((f) => f.name === name && f.docId !== state.docId),
     overwrite: async (name: string) => { const f = libFps && libFps.footprints.find((x) => x.name === name); if (!f) return true; return deleteFootprintDoc(f.docId, true); },
     activeLayer: E.activeLayer || "F.Fab",
-    textStyle: (layer: string) => { const st = (PT().TEXT_STYLE || {})[/^[FB]\.SilkS$/.test(layer) ? "silk" : /^[FB]\.Fab$/.test(layer) ? "fab" : "others"] || [1, 0.15]; return { w: st[0], h: st[0], thick: st[1], italic: false }; },
+    textStyle: (layer: string) => { const st = (PT().TEXT_STYLE || {})[/^[FB]\.SilkS$/.test(layer) ? "silk" : /\.Cu$/.test(layer) ? "copper" : layer === "Edge.Cuts" ? "edges" : /^[FB]\.CrtYd$/.test(layer) ? "courtyard" : /^[FB]\.Fab$/.test(layer) ? "fab" : "others"] || [1, 0.15]; return { w: st[0], h: st[0], thick: st[1], italic: false }; },
     libName: lib,
   } as unknown as Parameters<typeof footprintPropertiesDialog>[1]);
 }
@@ -483,14 +581,17 @@ function pushPadSettings(): void {
 }
 
 /** PAD_TOOL::EditPad: Ctrl+E on a selected pad explodes it (pad edit mode); Ctrl+E again recombines it ("Edit Pad"). */
+/** PAD_TOOL::ExitPadEditMode / RecombinePad: the shapes drawn on the pad's layer go back into the custom pad. */
+function exitPadEditMode(): void {
+  const doc = E.kdoc as KDoc | null; const id = FP.padEdit; if (!doc || !id) return;
+  const ctx = toolCtx(); FP.padEdit = null;
+  if (doc.items.has(id)) { const r = PT().fpPads.recombinePadChanges(doc, id); ctx.setSelection([]); if (r.changes.length) ctx.commit(r.changes, "Edit Pad"); }
+  toast("", 1);
+}
 function editPad(): void {
   const doc = E.kdoc as KDoc | null; if (!doc || !isFpEdit() || E.viewOnly) return;
   const ctx = toolCtx();
-  if (FP.padEdit) {
-    const id = FP.padEdit; FP.padEdit = null;
-    if (doc.items.has(id)) { const r = PT().fpPads.recombinePadChanges(doc, id); ctx.setSelection([]); if (r.changes.length) ctx.commit(r.changes, "Edit Pad"); }
-    toast("", 1); return;
-  }
+  if (FP.padEdit) { exitPadEditMode(); return; }
   const id = selectedPadId(); if (!id) return;
   const it0 = doc.items.get(id);
   const ch = (PT().fpPads.explodePadChanges(doc, id) as KChange[]).filter((c) => !(c.kind === "MODIFIED" && c.id === id && it0 && c.sexpr === PT().wrapBoard(it0.node)));   // an unchanged pad is no step (an empty BOARD_COMMIT)

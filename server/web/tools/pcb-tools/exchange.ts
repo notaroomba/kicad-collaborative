@@ -162,13 +162,10 @@ export function exchangeFootprint(existing: SNode, aNew: SNode, opts: { matchPad
   if (oldRef && newRef) newRef[2] = oldRef[2];
   const libName = str(existing[1]).split(":").pop();
   if (oldVal && newVal && str(oldVal[2]) !== libName) newVal[2] = oldVal[2];
-  // pads: matched by uuid first (SaveFootprintToBoard mapped them back), then by number (matchItemsBySimilarity adds
-  // 2 to the similarity of same-numbered pads)
-  const oldPads = K.kids(existing, "pad"), newPads = K.kids(n, "pad");
-  const used = new Set<SNode>(), pairs: [SNode, SNode][] = [];
-  const uid = (p: SNode) => str((ownUuid(p) || [])[1]);
-  for (const np of newPads) { const o = oldPads.find((op) => !used.has(op) && uid(op) && uid(op) === uid(np)); if (o) { used.add(o); pairs.push([o, np]); } }
-  for (const np of newPads) { if (pairs.some((pp) => pp[1] === np)) continue; const o = oldPads.find((op) => !used.has(op) && str(op[1]) === str(np[1])); if (o) { used.add(o); pairs.push([o, np]); } }
+  // pads: matchItemsBySimilarity — every (old, new) pair scored by PAD::Similarity plus 2 for the same number, taken
+  // greedily from the best score down (so a pad keeps its number's net and pin function wherever it moved)
+  const pairs = matchPads(K.kids(existing, "pad"), K.kids(n, "pad"), K.atOf(existing), K.atOf(n));
+  const newPads = K.kids(n, "pad");
   for (const [op, np] of pairs) {
     const ou = ownUuid(op), wu = ownUuid(np); if (ou) { if (wu) wu[1] = ou[1]; else np.push(["uuid", ou[1]]); }
     for (const key of ["pinfunction", "pintype"]) {
@@ -181,11 +178,54 @@ export function exchangeFootprint(existing: SNode, aNew: SNode, opts: { matchPad
     const onet = K.kid(op, "net");
     if (onCopper && onet) { const pf = K.kid(np, "pinfunction") || K.kid(np, "pintype") || K.kid(np, "uuid"); np.splice(pf ? np.indexOf(pf) : np.length, 0, K.cloneNode(onet)); }
   }
-  for (const np of newPads) if (!pairs.some((pp) => pp[1] === np)) stripNets(np);
+  // an unmatched pad keeps its own uuid unless a matched pad now carries it
+  const taken = new Set(pairs.map(([, np]) => str((ownUuid(np) || [])[1])));
+  for (const np of newPads) if (!pairs.some((pp) => pp[1] === np)) { stripNets(np); const u = ownUuid(np); if (u && taken.has(str(u[1]))) u[1] = K.newUuid(); }
   // texts and fields other than Reference / Value: aDeleteExtraTexts and the reset flags — the new footprint's own
   void isRefOrValue;
   return { node: n, shifted };
 }
 
+const kidText = (n: SNode, key: string) => { const k = K.kid(n, key); return k ? K.serialize(k) : ""; };
+const padLayerSet = (p: SNode) => (K.kid(p, "layers") || []).slice(1).map(str).sort().join(" ");
+/** PADSTACK::Similarity: 0.9 for each property that differs (mode, layers, orientation, mask props, drill, copper shape). */
+function padstackSimilarity(a: SNode, b: SNode): number {
+  let s = 1;
+  const differ = (x: string, y: string) => { if (x !== y) s *= 0.9; };
+  differ(kidText(a, "padstack") ? str((K.kid(K.kid(a, "padstack")!, "mode") || [])[1]) : "", kidText(b, "padstack") ? str((K.kid(K.kid(b, "padstack")!, "mode") || [])[1]) : "");
+  differ(padLayerSet(a), padLayerSet(b));
+  differ(String(K.num((K.kid(a, "at") || [])[3])), String(K.num((K.kid(b, "at") || [])[3])));
+  differ(["solder_mask_margin", "tenting"].map((k) => kidText(a, k)).join(), ["solder_mask_margin", "tenting"].map((k) => kidText(b, k)).join());
+  differ(kidText(a, "remove_unused_layers") + kidText(a, "keep_end_layers"), kidText(b, "remove_unused_layers") + kidText(b, "keep_end_layers"));
+  differ(kidText(a, "options"), kidText(b, "options"));
+  differ(kidText(a, "drill"), kidText(b, "drill"));
+  // COPPER_LAYER_PROPS::Similarity of the copper shape
+  for (const k of ["size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "primitives"]) differ(kidText(a, k), kidText(b, k));
+  differ(str(a[3]), str(b[3]));
+  return s;
+}
+/** PAD::Similarity (both pads in the same footprint frame): position, attribute, then the padstack. */
+export function padSimilarity(a: SNode, b: SNode, fa: [number, number, number] = [0, 0, 0], fb: [number, number, number] = [0, 0, 0]): number {
+  let s = 1;
+  // GetPosition: the board position (the footprint's position plus the pad's offset turned by its orientation)
+  const pos = (p: SNode, f: [number, number, number]) => { const at = K.kid(p, "at") || []; const r = rotator(f[2])(K.num(at[1]), K.num(at[2])); return [f[0] + r[0], f[1] + r[1]]; };
+  const pa = pos(a, fa), pb = pos(b, fb);
+  if (Math.abs(pa[0] - pb[0]) > 1e-6 || Math.abs(pa[1] - pb[1]) > 1e-6) s *= 0.9;
+  if (str(a[2]) !== str(b[2])) s *= 0.9;
+  return s * padstackSimilarity(a, b);
+}
+/** matchItemsBySimilarity for pads (board_exchange_footprint.cpp): [old, new] pairs. */
+export function matchPads(oldPads: SNode[], newPads: SNode[], fOld: [number, number, number] = [0, 0, 0], fNew: [number, number, number] = [0, 0, 0]): [SNode, SNode][] {
+  const cand: { o: number; w: number; score: number }[] = [];
+  oldPads.forEach((op, o) => newPads.forEach((np, w) => {
+    const score = padSimilarity(op, np, fOld, fNew) + (str(op[1]) === str(np[1]) ? 2 : 0);
+    if (score > 0) cand.push({ o, w, score });
+  }));
+  cand.sort((x, y) => y.score - x.score || x.o - y.o || x.w - y.w);
+  const usedO = new Set<number>(), usedW = new Set<number>(), out: [SNode, SNode][] = [];
+  for (const c of cand) { if (usedO.has(c.o) || usedW.has(c.w)) continue; usedO.add(c.o); usedW.add(c.w); out.push([oldPads[c.o], newPads[c.w]]); }
+  return out;
+}
+
 /** The node tests reach these through PcbTools.exchange. */
-export const exchangeApi = { editableCopy, exchangeFootprint, footprintShift, boardCopyFromEditor, orthoAlign };
+export const exchangeApi = { editableCopy, exchangeFootprint, footprintShift, boardCopyFromEditor, orthoAlign, matchPads, padSimilarity };

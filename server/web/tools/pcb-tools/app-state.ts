@@ -18,6 +18,8 @@ export function appGlobal<T, F>(fn: () => T, fallback: F): T | F { try { const v
 export const editorState = () => root.CollabEditor || null;   // the editor bundle's state object (the former app.js script-scope lets)
 export const appTool = () => appGlobal(() => editorState()!.tool, S.modTool || "select");
 export const isPcbDoc = () => appGlobal(() => editorState()!.DOC_TYPE === "kicad_pcb" && !!editorState()!.kdoc && root.CollabApp!.getState().view === "editor", !!(lastCtx && !lastCtx.isSch && lastCtx.doc));
+/** A board or the Footprint Editor's footprint (its children are board items): the canvas gestures of both. */
+export const isBoardLikeDoc = () => appGlobal(() => (editorState()!.DOC_TYPE === "kicad_pcb" || editorState()!.DOC_TYPE === "footprint") && !!editorState()!.kdoc && root.CollabApp!.getState().view === "editor", !!(lastCtx && !lastCtx.isSch && lastCtx.doc));
 export const liveDoc = () => appGlobal(() => editorState()!.kdoc, lastCtx && lastCtx.doc);
 export const liveZoom = () => appGlobal(() => editorState()!.zoom, lastCtx ? lastCtx.zoom : 1);
 export const liveSelected = () => appGlobal(() => editorState()!.selected, lastCtx && lastCtx.selected);

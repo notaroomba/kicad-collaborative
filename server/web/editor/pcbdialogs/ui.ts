@@ -410,7 +410,22 @@ export function grid(columns: GridColumn[], rows: Record<string, CellValue>[], o
 }
 /** EDA_LIST_DIALOG: a filter box (wildcards, "*text*", case-insensitive, on the first column), "Items:" and a
  *  read-only list; OK, Enter or a double-click picks the selected row.  `onPick` gets the row's columns. */
-export function listDialog(title: string, headers: string[], items: string[][], onPick: (row: string[]) => void, opts?: { select?: string; width?: number }): DialogApi | null {
+export interface ListDialogOpts {
+  select?: string; width?: number;
+  /** EDA_LIST_DIALOG::SetListLabel (default "Items:") */
+  listLabel?: string;
+  /** EDA_LIST_DIALOG::SetOKLabel */
+  okLabel?: string;
+  /** SAVE_AS_DIALOG's "Name:" field above the list */
+  name?: { label: string; value: string; invalidChars?: string };
+  /** buttons left of the standard pair ("New Library...") */
+  extra?: { label: string; fn(): void }[];
+  /** TransferDataFromWindow: false (or a promise of false) keeps the dialog open */
+  validate?(row: string[] | null, name: string): boolean | Promise<boolean>;
+  /** OK with the row and the name (when there is a name field) */
+  onOk?(row: string[] | null, name: string): void;
+}
+export function listDialog(title: string, headers: string[], items: string[][], onPick: (row: string[]) => void, opts?: ListDialogOpts): DialogApi | null {
   const cols: GridColumn[] = headers.map((label, i) => ({ key: "c" + i, label, type: "ro" as const }));
   const toRows = (list: string[][]) => list.map((r) => { const o: Record<string, CellValue> = {}; r.forEach((v, i) => { o["c" + i] = v; }); return o; });
   let shown = items.slice();
@@ -418,14 +433,28 @@ export function listDialog(title: string, headers: string[], items: string[][], 
   const filter = h("input", { type: "text", placeholder: "Filter", "data-k": "filter", style: "width:100%;margin-bottom:6px" });
   const wild = (pat: string) => new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
   filter.addEventListener("input", () => { const re = wild("*" + filter.value.toLowerCase() + "*"); shown = items.filter((r) => re.test(String(r[0] || "").toLowerCase())); g.setRows(toRows(shown)); if (shown.length) g.select(0); });
-  let api: DialogApi | null = null;
-  const pick = (): boolean => { const i = g.selected(); const row = i >= 0 ? shown[i] : null; if (!row) return false; onPick(row); return true; };
-  api = openDialog({ title, width: opts && opts.width || 400,
+  const nameIn = opts && opts.name ? h("input", { type: "text", "data-k": "name", value: opts.name.value, style: "flex:1" }) as HTMLInputElement : null;
+  if (nameIn && opts!.name!.invalidChars) { const bad = opts!.name!.invalidChars; nameIn.addEventListener("input", () => { const v = nameIn.value.split("").filter((c) => !bad.includes(c)).join(""); if (v !== nameIn.value) nameIn.value = v; }); }
+  let api: DialogApi | null = null; let busy = false;
+  const row = (): string[] | null => { const i = g.selected(); return i >= 0 ? shown[i] || null : null; };
+  const pick = (): boolean => {
+    const r = row(); const name = nameIn ? nameIn.value.trim() : "";
+    if (!opts || (!opts.validate && !opts.onOk)) { if (!r) return false; onPick(r); return true; }
+    if (busy) return false;
+    const v = opts.validate ? opts.validate(r, name) : true;
+    const finish = (ok: boolean) => { busy = false; if (!ok) return; if (opts.onOk) opts.onOk(r, name); else if (r) onPick(r); if (api) api.close(); };
+    if (v instanceof Promise) { busy = true; v.then(finish, () => { busy = false; }); return false; }
+    if (!v) return false;
+    if (opts.onOk) opts.onOk(r, name); else if (r) onPick(r);
+    return true;
+  };
+  api = openDialog({ title, width: opts && opts.width || 400, okLabel: opts && opts.okLabel, extra: opts && opts.extra,
     build(body) {
-      body.append(filter, h("div", { class: "pd-lbl", style: "margin-bottom:4px" }, "Items:"), g.el);
+      if (nameIn) body.append(h("div", { style: "display:flex;align-items:center;gap:6px;margin-bottom:8px" }, h("span", { class: "pd-lbl" }, opts!.name!.label), nameIn));
+      body.append(filter, h("div", { class: "pd-lbl", style: "margin-bottom:4px" }, (opts && opts.listLabel) || "Items:"), g.el);
       g.el.addEventListener("dblclick", () => { if (pick() && api) api.close(); });
       const at = opts && opts.select ? shown.findIndex((r) => r[0] === opts.select) : 0; if (shown.length) g.select(Math.max(0, at));
-      setTimeout(() => filter.focus(), 0);
+      setTimeout(() => { if (nameIn) { nameIn.focus(); nameIn.select(); } else filter.focus(); }, 0);
     },
     ok() { return pick(); } });
   return api;

@@ -32,9 +32,40 @@ export function addedChange(doc: BoardDoc, node: SNode, net?: NetRef | null) { r
 export function replacedChange(item: KItem, node: SNode) { return upsertChange({ id: item.id, kind: item.kind, node }, "MODIFIED"); }
 export function removedChange(item: KItem): PcbChange { const c = K.removeChange(item); c.typeName = typeNameOf(item); return c; }
 /** REMOVED changes for a multi-selection (items or ids); app.js deletes a group through this. */
-export function deleteChanges(doc: BoardDoc, items: Iterable<KItem | string> | null | undefined): PcbChange[] {
-  const out: PcbChange[] = [], gens: KItem[] = [], ids = new Set<string>();
-  for (const x of items || []) { const it = typeof x === "string" ? doc.items.get(x) : x; if (it && it.id && it.kind && !ids.has(it.id)) { out.push(removedChange(it)); ids.add(it.id); if (isTuningPattern(it)) gens.push(it); } }
+/** Is a footprint field (property / old fp_text reference|value) hidden? */
+export function fieldIsHidden(node: SNode): boolean {
+  const yes = (n: SNode | null) => !!n && K.str(n[1]) !== "no";
+  const h = K.kid(node, "hide"); if (h) return yes(h);
+  if (node.includes("hide")) return true;
+  const e = K.kid(node, "effects"); return !!e && (e.includes("hide") || yes(K.kid(e, "hide")));
+}
+/** The field node with (hide yes) (PCB_FIELD::SetVisible( false ) as the file writes it). */
+export function hiddenFieldNode(node: SNode): SNode {
+  const p = K.cloneNode(node);
+  const hk = K.kid(p, "hide"); if (hk) p.splice(p.indexOf(hk), 1);
+  const e = K.kid(p, "effects"); if (e) { const i = e.indexOf("hide"); if (i > 0) e.splice(i, 1); const he = K.kid(e, "hide"); if (he) e.splice(e.indexOf(he), 1); }
+  const before = ["uuid", "effects"].map((k) => K.kid(p, k)).find(Boolean);
+  p.splice(before ? p.indexOf(before) : p.length, 0, ["hide", "yes"]);
+  return p;
+}
+/**
+ * EDIT_TOOL::DeleteItems: the changes that delete `items`.  A footprint's field (in the Footprint Editor) is never
+ * removed: it is hidden (PCB_FIELD::SetVisible( false )).  The array says how KiCad names the step: `hideLabel`
+ * "Hide Field" / "Hide Fields" when only fields were hidden, `infoError` when every field was already hidden.
+ */
+export function deleteChanges(doc: BoardDoc, items: Iterable<KItem | string> | null | undefined): PcbChange[] & { hideLabel?: string; infoError?: string } {
+  const out: PcbChange[] & { hideLabel?: string; infoError?: string } = [], gens: KItem[] = [], ids = new Set<string>();
+  let hidden = 0, alreadyHidden = 0, removed = 0;
+  for (const x of items || []) {
+    const it = typeof x === "string" ? doc.items.get(x) : x; if (!it || !it.id || !it.kind || ids.has(it.id)) continue;
+    ids.add(it.id);
+    if ((doc as { fpEditor?: boolean }).fpEditor && it.kind === "property") {
+      if (fieldIsHidden(it.node)) alreadyHidden++; else { out.push(replacedChange(it, hiddenFieldNode(it.node))); hidden++; }
+      continue;
+    }
+    out.push(removedChange(it)); removed++; if (isTuningPattern(it)) gens.push(it);
+  }
+  if (!removed) { if (hidden) out.hideLabel = hidden === 1 ? "Hide Field" : "Hide Fields"; else if (alreadyHidden) out.infoError = "Use the Footprint Properties dialog to remove fields."; }
   if (!gens.length) return out;
   // EDIT_TOOL::DeleteItems: a selection of only generators (a selected pattern is the generator with its members here)
   // runs genRemove — each pattern goes back to its base line (PCB_TUNING_PATTERN::Remove); with anything else in the

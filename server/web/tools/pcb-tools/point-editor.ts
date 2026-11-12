@@ -3,7 +3,7 @@ import type { BoardDoc, PcbCtx, Pt } from "./types";
 
 /** A handle of the point editor: its key, where it sits, round or square, and the indicator lines it draws. */
 export interface EditPoint { key: string; p: Pt; circle?: boolean; lines?: Pt[] }
-import { appTool, isPcbDoc, liveDoc } from "./app-state";
+import { appTool, isBoardLikeDoc, liveDoc } from "./app-state";
 import { crossZ } from "./arcs";
 import { addedChange, replacedChange } from "./changes";
 import { dimEditNode, dimEditPoints } from "./dimensions";
@@ -207,7 +207,7 @@ export function removeCornerChanges(doc: BoardDoc, id: string, at: Pt, tol: numb
 }
 export const handleTol = () => 6 * (S.mmPerPx || 0.05);   // a few screen pixels around the 8 px handle
 export function onHandlePointerDown(ev: PointerEvent) {
-  const ctx = lastCtx; if (!ctx || !isPcbDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
+  const ctx = lastCtx; if (!ctx || !isBoardLikeDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
   if (S.route || S.draw || S.drag || S.move || S.pedit || ctx.viewOnly) return;
   const stage = ctx.stage; if (!stage || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
   const doc = liveDoc(); if (!doc) return; const mm = ctx.worldMm(ev);

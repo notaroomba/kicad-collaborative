@@ -184,5 +184,49 @@ test(`every .kicad_mod in the repository round-trips (${FILES.length} files)`, (
   console.log("       (" + pretty + " pcbnew-written files equal Prettify of their compact form)");
 });
 
+
+const SOIC = fs.readFileSync(path.join(REPO, "server", "scripts", "landing-demo", "lib", "SOIC-8_3.9x4.9mm_P1.27mm.kicad_mod"), "utf8");
+const padOf = (d, n) => [...d.items.values()].filter((i) => i.kind === "pad" && String(i.node[1]) === n);
+test("a client that opens a saved snapshot derives the same ids as the clients that were open (no duplicate pads)", () => {
+  const a = K.parseDoc(SOIC, "footprint"), b = K.parseDoc(SOIC, "footprint");
+  const line = [...a.items.values()].find((i) => i.kind === "gr_line");
+  K.applyChange(a, { id: line.id, kind: "REMOVED", typeName: "PCB_SHAPE", properties: [] }, 1e6);
+  K.applyChange(b, { id: line.id, kind: "REMOVED", typeName: "PCB_SHAPE", properties: [] }, 1e6);
+  const saved = F.serializeFootprintDoc(a); F.markFootprintSaved(a, saved); F.markFootprintSaved(b, saved);
+  const c = K.parseDoc(saved, "footprint");
+  assert.deepEqual([...c.items.keys()].sort(), [...a.items.keys()].sort(), "same ids on the late joiner");
+  // b widens pad 1: every client changes the same pad
+  const p1 = padOf(b, "1")[0]; K.kid(p1.node, "size")[1] = 3; const ch = K.replaceChange(b, p1);
+  K.applyChange(a, ch, 1e6); K.applyChange(c, ch, 1e6);
+  assert.equal(padOf(c, "1").length, 1); assert.equal(c.items.size, a.items.size);
+  assert.equal(F.serializeFootprintDoc(c), F.serializeFootprintDoc(a));
+  assert.equal(F.serializeFootprintDoc(b), F.serializeFootprintDoc(a));
+});
+test("Delete, Save, Undo: the child comes back in its place and without a uuid it never had", () => {
+  const d = K.parseDoc(SAMPLE, "footprint");
+  const line = [...d.items.values()].find((i) => i.kind === "gr_line"); const before = K.serializeItem(d, line);
+  K.applyChange(d, { id: line.id, kind: "REMOVED", typeName: "PCB_SHAPE", properties: [] }, 1e6);
+  const saved = F.serializeFootprintDoc(d); F.markFootprintSaved(d, saved); assert.ok(!saved.includes("(fp_line"));
+  K.applyChange(d, { id: line.id, kind: "ADDED", typeName: "PCB_SHAPE", sexpr: before }, 1e6);
+  assert.equal(F.serializeFootprintDoc(d), SAMPLE);
+  // the Reference field (deleted, saved, undone) is written first again
+  const ref = d.items.get("11111111-1111-4111-8111-111111111111"); const rs = K.serializeItem(d, ref);
+  K.applyChange(d, { id: ref.id, kind: "REMOVED", typeName: "PCB_FIELD", properties: [] }, 1e6);
+  F.markFootprintSaved(d, F.serializeFootprintDoc(d));
+  K.applyChange(d, { id: ref.id, kind: "ADDED", typeName: "PCB_FIELD", sexpr: rs }, 1e6);
+  assert.equal(F.serializeFootprintDoc(d), SAMPLE);
+});
+test("edited footprints are written in KiCad's order: drawings by cmp_drawings, pads by cmp_pads", () => {
+  const d = K.parseDoc(SAMPLE, "footprint");
+  const line = K.parse(`(gr_line (start 0 0) (end 1 1) (stroke (width 0.2) (type solid)) (layer "F.Cu") (uuid "77777777-7777-4777-8777-777777777777"))`);
+  K.applyChange(d, { id: "77777777-7777-4777-8777-777777777777", kind: "ADDED", typeName: "PCB_SHAPE", sexpr: K.serializeItem(d, { kind: "gr_line", node: line }) }, 1e6);
+  // renumber: pad "2" becomes "0" -> written before pad "1"
+  const p2 = d.items.get("55555555-5555-4555-8555-555555555555"); p2.node[1] = "0"; K.applyChange(d, K.replaceChange(d, p2), 1e6);
+  const out = F.serializeFootprintDoc(d);
+  assert.ok(out.indexOf("77777777") < out.indexOf("(fp_line\n\t\t(start -0.8"), "the F.Cu line before the F.Fab line (layer order)");
+  assert.ok(out.indexOf('(pad "0"') < out.indexOf('(pad "1"'), "pads by number");
+  assert.ok(F.strNumCmp("10", "9") > 0 && F.strNumCmp("A2", "a10") < 0);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

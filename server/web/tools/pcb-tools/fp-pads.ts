@@ -15,6 +15,7 @@ import { addedChange, removedChange, replacedChange } from "./changes";
 import { rotateNode, translateNode } from "./transforms";
 import { clone, isList, r6, rotator } from "./util";
 import { canHaveNumber } from "./pad-tool";
+import { padShapePolygon } from "./pad-outline";
 
 const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 const num = (v: unknown, d = 0) => (typeof v === "number" ? v : d);
@@ -120,17 +121,8 @@ export function explodePadChanges(doc: BoardDoc, padId: string): PcbChange[] {
 
 const pointInPoly = (p: Pt, pts: Pt[]) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const a = pts[i], b = pts[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) c = !c; } return c; };
 function segDist(p: Pt, a: Pt, b: Pt): number { const dx = b[0] - a[0], dy = b[1] - a[1]; const l = dx * dx + dy * dy; const t = l ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l)) : 0; return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); }
-/** The pad's copper outline on its layer, as a polygon (rect / roundrect / oval / circle / trapezoid approximated; custom: anchor + primitives' hulls are not needed: a custom pad recombines through its anchor). */
-export function padOutline(pad: SNode): Pt[] {
-  const [x, y, a] = atOf(pad); const s = K.kid(pad, "size"); const w = num(s && s[1]), h = num(s && s[2]);
-  const [cx, cy] = shapePos(pad); const R = rotator(a);
-  const shape = str(pad[3]);
-  const local: Pt[] = [];
-  if (shape === "circle" || shape === "oval") { const n = 32; for (let i = 0; i < n; i++) { const t = 2 * Math.PI * i / n; local.push([w / 2 * Math.cos(t), h / 2 * Math.sin(t)]); } }
-  else local.push([-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]);
-  void x; void y;
-  return local.map(([lx, ly]) => { const [rx, ry] = R(lx, ly); return [cx + rx, cy + ry] as Pt; });
-}
+/** The pad's copper outline on its layer (PAD::TransformShapeToPolygon, ERROR_INSIDE: pad-outline.ts), footprint frame. */
+export function padOutline(pad: SNode): Pt[] { return padShapePolygon(pad, shapePos(pad)); }
 /** The points of a footprint shape that tell whether it touches the pad (its outline, sampled). */
 function shapePoints(n: SNode): Pt[] {
   const k = str(n[0]); const p = (key: string): Pt | null => { const c = K.kid(n, key); return c ? [num(c[1]), num(c[2])] : null; };

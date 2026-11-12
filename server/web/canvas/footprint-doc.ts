@@ -15,10 +15,11 @@
 // net_tie_pad_groups, jumper groups, clearances, model, embedded files and any token this reader does not know)
 // stays in the header node, doc.fp, verbatim.  The wire id of the header is "footprint".
 //
-// serializeFootprintDoc writes the file back in PCB_IO_KICAD_SEXPR::format( FOOTPRINT ) order: a document nobody
-// edited comes back byte for byte; otherwise each child nobody touched is its original text, edited ones are
-// written from their nodes, and the whole runs through KiCad's Prettify, so the result reads as pcbnew's own.  The
-// (version …) is never changed, and a child that had no uuid gets none unless it is edited.
+// serializeFootprintDoc writes the file back in PCB_IO_KICAD_SEXPR::format( FOOTPRINT ) order (the fields, then the
+// drawings by cmp_drawings, the pads by cmp_pads, the zones by cmp_zones): a document nobody edited comes back byte
+// for byte; otherwise each child nobody touched is its original text, edited ones are written from their nodes, and
+// the whole runs through KiCad's Prettify, so the result reads as pcbnew's own.  The (version …) is never changed,
+// and a child that had no uuid gets none while its content still derives its id (see derivedUuid).
 import { atomText, serialize } from "./export";
 import { QUOTED, cloneNode, isList, kid, kids, parse, str, uuidOf } from "./sexpr";
 import { prettify } from "./prettify";
@@ -117,15 +118,47 @@ export function childSpans(text: string): [number, number][] {
 // ---------------------------------------------------------------- ids
 /** FNV-1a over a string, as 32-bit unsigned. */
 function fnv(s: string, seed = 0x811c9dc5): number { let h = seed >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h >>> 0; }
+const hex = (v: number, w: number) => (v >>> 0).toString(16).padStart(8, "0").slice(0, w);
 /**
- * An id for a child the file gave no uuid: every client derives the same one from the same snapshot (position and
- * text), so an op for it addresses the same child everywhere.  It is a valid uuid, and it is only ever written into
- * the file once the child is edited (an edited child carries its id, as KiCad gives every child one).
+ * An id for a child the file gave no uuid.  `text` is the child's canonical form (serialize of its file node) and
+ * `index` how many children with that same form came before it in the file, so every client derives the same id
+ * from the same content however the file around it was reordered or edited by a Save: an op for it addresses the
+ * same child everywhere, including on a client that opened a later snapshot.  The id is a valid uuid, and the file
+ * only ever carries it once the child no longer derives it (it was edited, or its twins changed order).
  */
 export function derivedUuid(index: number, text: string): string {
   const a = fnv(text), b = fnv(text, a ^ 0x9e3779b9), c = fnv(String(index) + ":" + text, b);
-  const hex = (v: number, w: number) => (v >>> 0).toString(16).padStart(8, "0").slice(0, w);
   return `${hex(a, 8)}-${hex(b, 4)}-4${hex(b >>> 16, 3)}-${(8 | (c & 3)).toString(16)}${hex(c, 3)}-${hex(fnv(text, c), 8)}${hex(c >>> 8, 4)}`;
+}
+/** Is `id` the id derivedUuid gives `text` at some occurrence index? (the first 13 characters depend on the text only) */
+function derivesFrom(id: string, text: string): boolean {
+  const a = fnv(text), b = fnv(text, a ^ 0x9e3779b9);
+  if (!id.startsWith(`${hex(a, 8)}-${hex(b, 4)}-`)) return false;
+  for (let k = 0; k < 64; k++) if (derivedUuid(k, text) === id) return true;
+  return false;
+}
+/** The file node without its (uuid `id`), or null when it carries none / another one. */
+function withoutUuid(file: SNode, id: string): SNode | null {
+  for (let j = 1; j < file.length; j++) {
+    const c = file[j];
+    if (isList(c) && (c[0] === "uuid" || c[0] === "tstamp") && str(c[1]) === id) {
+      const out = file.slice(0, j).concat(file.slice(j + 1)) as SNode;
+      const q = QUOTED.get(file); if (q) QUOTED.set(out, (q & ((1 << j) - 1)) | ((q >>> (j + 1)) << j));
+      return out;
+    }
+  }
+  return null;
+}
+/**
+ * The form of an item that tells whether it changed: a child whose id is derived from its content compares without
+ * the (uuid …) an op gave it (an Undo that brings back an unedited child is no change, and writes no uuid).
+ */
+function canonical(it: Pick<Item, "id" | "node">): { file: SNode; sig: string; derived: boolean } {
+  const file = toFileNode(it.node);
+  const own = uuidOf(file);
+  if (!own) return { file, sig: serialize(file), derived: true };
+  if (own === it.id) { const bare = withoutUuid(file, it.id); if (bare) { const sig = serialize(bare); if (derivesFrom(it.id, sig)) return { file: bare, sig, derived: true }; } }
+  return { file, sig: serialize(file), derived: false };
 }
 
 // ---------------------------------------------------------------- the document
@@ -171,15 +204,18 @@ export function loadFootprintDoc(doc: Doc, tree: SNode, text: string, addItem: (
   const st: FpDocState = { fp: header, source: text, headerSrc: new Map(), itemSrc: new Map(), headerSig: "", order: [] };
   d.fpState = st;
   for (const [name, type] of FP_EDITOR_LAYERS) { d.layers.set(name, { id: LAYER_IDS[name] ?? 0, type, userName: "" }); if (type === "signal") d.copper.push(name); }
+  const seen = new Map<string, number>();
   for (let j = 2; j < tree.length; j++) {
     const c = tree[j]; const span = spans[j]; const src = span ? text.slice(span[0], span[1]) : serialize(c);
     if (isList(c) && c[0] === "version") d.version = Number(c[1]) || 0;
     if (!isOwnedFileNode(c)) { header.push(c); if (isList(c)) st.headerSrc.set(c, src); continue; }
     const node = toBoardNode(c);
-    const id = uuidOf(node) || derivedUuid(j, src);
+    const sig = serialize(toFileNode(node));
+    let id = uuidOf(node);
+    if (!id) { const k = seen.get(sig) || 0; seen.set(sig, k + 1); id = derivedUuid(k, sig); }
     const it = addItem(d, node, id);
     if (!it) continue;
-    st.itemSrc.set(it.id, { text: src, sig: serialize(toFileNode(node)) });
+    st.itemSrc.set(it.id, { text: src, sig });
     st.order.push(it.id);
   }
   st.headerSig = serialize(header);
@@ -224,12 +260,153 @@ function itemRank(kind: string): number {
   return 30;   // shapes, texts, text boxes, dimensions, tables, images, barcodes: FOOTPRINT::GraphicalItems
 }
 
+// ---------------------------------------------------------------- format( FOOTPRINT )'s sort orders
+/** PCB_LAYER_ID of a layer name (KiCad 9+ numbering: F.Cu 0, B.Cu 2, InN.Cu 2+2N, technical layers odd). */
+export function layerOrdinal(name: string): number {
+  if (LAYER_IDS[name] !== undefined) return LAYER_IDS[name];
+  const m = /^In(\d+)\.Cu$/.exec(name); if (m) return 2 + 2 * Number(m[1]);
+  const u = /^User\.(\d+)$/.exec(name); if (u) return 37 + 2 * Number(u[1]);
+  if (name === "Rescue") return 37;
+  return 1000;
+}
+/** LSET::Seq of a (layers …) list (wildcards expanded), ascending. */
+function layerSeq(node: SNode): number[] {
+  const l = kid(node, "layers") || kid(node, "layer"); const out = new Set<number>();
+  for (const a of l ? l.slice(1) : []) {
+    const n = str(a);
+    if (n === "*.Cu") { for (let i = 0; i <= 64; i += 2) out.add(i); }
+    else if (n === "F&B.Cu") { out.add(0); out.add(2); }
+    else if (n.startsWith("*.")) { out.add(layerOrdinal("F." + n.slice(2))); out.add(layerOrdinal("B." + n.slice(2))); }
+    else out.add(layerOrdinal(n));
+  }
+  return Array.from(out).sort((a, b) => a - b);
+}
+function cmpSeq(a: number[], b: number[]): number { for (let i = 0; i < Math.min(a.length, b.length); i++) if (a[i] !== b[i]) return a[i] - b[i]; return a.length - b.length; }
+const nm = (v: unknown) => { const x = Number(v); return isNaN(x) ? 0 : Math.round(x * 1e6); };   // internal units (nm): KiCad compares integers
+function pt(node: SNode, key: string): [number, number] | null { const k = kid(node, key); return k ? [nm(k[1]), nm(k[2])] : null; }
+function cmpPt(a: [number, number] | null, b: [number, number] | null): number { const p = a || [0, 0], q = b || [0, 0]; return p[0] - q[0] || p[1] - q[1]; }
+function polyPts(node: SNode): [number, number][] { const p = kid(node, "pts"); return p ? kids(p, "xy").map((x) => [nm(x[1]), nm(x[2])] as [number, number]) : []; }
+const SHAPE_ORD: Record<string, number> = { gr_line: 0, gr_rect: 1, gr_arc: 2, gr_circle: 3, gr_poly: 4, gr_curve: 5, gr_ellipse: 6, gr_ellipse_arc: 7 };
+/** KICAD_T order of a graphical item (PCB_SHAPE_T < PCB_REFERENCE_IMAGE_T < PCB_TEXT_T < PCB_TEXTBOX_T < PCB_TABLE_T < dimensions). */
+function typeOrd(kind: string, node: SNode): number {
+  if (SHAPE_ORD[kind] !== undefined) return 4;
+  if (kind === "image") return 5;
+  if (kind === "gr_text" || kind === "fp_text") return 8;
+  if (kind === "gr_text_box") return 9;
+  if (kind === "table") return 10;
+  if (kind === "barcode") return 18;
+  if (kind === "dimension") { const t = str((kid(node, "type") || [])[1]); return ({ aligned: 19, leader: 20, center: 21, radial: 22, orthogonal: 23 } as Record<string, number>)[t] ?? 17; }
+  return 30;
+}
+const PAD_SHAPE_ORD: Record<string, number> = { circle: 0, rect: 1, oval: 2, trapezoid: 3, roundrect: 4, custom: 6 };
+function padShapeOrd(node: SNode): number { const s = str(node[3]); if (s === "roundrect" && kid(node, "chamfer")) return 5; return PAD_SHAPE_ORD[s] ?? 7; }
+function textCmp(a: SNode, b: SNode): number {
+  const aa = kid(a, "at") || [], ba = kid(b, "at") || [];
+  const c = nm(aa[1]) - nm(ba[1]) || nm(aa[2]) - nm(ba[2]); if (c) return c;
+  const r = Number(aa[3] || 0) - Number(ba[3] || 0); if (r) return r;
+  const font = (n: SNode) => { const e = kid(n, "effects"); return e ? kid(e, "font") : null; };
+  const fa = font(a), fb = font(b);
+  const size = (f: SNode | null) => { const s = f && kid(f, "size"); return s ? [nm(s[2]), nm(s[1])] : [0, 0]; };   // GetTextSize: (width, height); the file writes height width
+  const sa = size(fa), sb = size(fb); const sc = sa[0] - sb[0] || sa[1] - sb[1]; if (sc) return sc;
+  const th = (f: SNode | null) => { const t = f && kid(f, "thickness"); return t ? nm(t[1]) : 0; };
+  const tc = th(fa) - th(fb); if (tc) return tc;
+  const flag = (f: SNode | null, k: string) => { if (!f) return 0; const x = kid(f, k); return x ? (str(x[1]) === "no" ? 0 : 1) : (f.includes(k) ? 1 : 0); };
+  for (const k of ["bold", "italic"]) { const d = flag(fa, k) - flag(fb, k); if (d) return d; }
+  const mir = (n: SNode) => { const e = kid(n, "effects"); const j = e && kid(e, "justify"); return j && j.includes("mirror") ? 1 : 0; };
+  const md = mir(a) - mir(b); if (md) return md;
+  const ls = (f: SNode | null) => { const l = f && kid(f, "line_spacing"); return l ? Number(l[1]) : 1; };
+  const lc = ls(fa) - ls(fb); if (lc) return lc;
+  const ta = str(a[1]), tb = str(b[1]); return ta < tb ? -1 : ta > tb ? 1 : 0;
+}
+/** FOOTPRINT::cmp_drawings without its final uuid / pointer tie-break. */
+export function cmpDrawings(ka: string, a: SNode, kb: string, b: SNode): number {
+  const t = typeOrd(ka, a) - typeOrd(kb, b); if (t) return t;
+  const la = layerOrdinal(str((kid(a, "layer") || [])[1])), lb = layerOrdinal(str((kid(b, "layer") || [])[1])); if (la !== lb) return la - lb;
+  if (SHAPE_ORD[ka] !== undefined) {
+    const s = SHAPE_ORD[ka] - SHAPE_ORD[kb]; if (s) return s;
+    if (ka === "gr_poly") {
+      const pa = polyPts(a), pb = polyPts(b); if (pa.length !== pb.length) return pa.length - pb.length;
+      for (let i = 0; i < pa.length; i++) { const c = cmpPt(pa[i], pb[i]); if (c) return c; }
+    } else if (ka === "gr_curve") {
+      const pa = polyPts(a), pb = polyPts(b);
+      for (const i of [0, 3, 1, 2]) { const c = cmpPt(pa[i] || null, pb[i] || null); if (c) return c; }
+    } else if (ka === "gr_ellipse" || ka === "gr_ellipse_arc") {
+      const c = cmpPt(pt(a, "center"), pt(b, "center")); if (c) return c;
+      for (const k of ["major_radius", "minor_radius", "rotation", "start_angle", "end_angle"]) { const x = kid(a, k), y = kid(b, k); const d = (x ? nm(x[1]) : 0) - (y ? nm(y[1]) : 0); if (d) return d; }
+    } else {
+      const sk = ka === "gr_circle" ? "center" : "start";
+      let c = cmpPt(pt(a, sk), pt(b, sk)); if (c) return c;
+      c = cmpPt(pt(a, "end"), pt(b, "end")); if (c) return c;
+      if (ka === "gr_arc") { c = cmpPt(pt(a, "mid"), pt(b, "mid")); if (c) return c; }
+    }
+    const w = (n: SNode) => { const s = kid(n, "stroke"); const x = s ? kid(s, "width") : kid(n, "width"); return x ? nm(x[1]) : 0; };
+    return w(a) - w(b);
+  }
+  if (typeOrd(ka, a) === 8) return textCmp(a, b);
+  return 0;
+}
+/** FOOTPRINT::cmp_pads without its final uuid / pointer tie-break. */
+export function cmpPads(a: SNode, b: SNode, strNum: (x: string, y: string) => number = strNumCmp): number {
+  const na = str(a[1]), nb = str(b[1]);
+  if (na !== nb) return strNum(na, nb) < 0 ? -1 : 1;
+  const c = cmpPt(pt(a, "at"), pt(b, "at")); if (c) return c;
+  const sa = pt(a, "size") || [0, 0], sb = pt(b, "size") || [0, 0];
+  if (sa[0] !== sb[0]) return sa[0] - sb[0];
+  if (sa[1] !== sb[1]) return sa[1] - sb[1];
+  const sh = padShapeOrd(a) - padShapeOrd(b); if (sh) return sh;
+  return cmpSeq(layerSeq(a), layerSeq(b));
+}
+/** FOOTPRINT::cmp_zones without its final uuid / pointer tie-break. */
+function cmpZones(a: SNode, b: SNode): number {
+  const pr = (n: SNode) => { const p = kid(n, "priority"); return p ? Number(p[1]) : 0; };
+  const d = pr(a) - pr(b); if (d) return d;
+  const l = cmpSeq(layerSeq(a), layerSeq(b)); if (l) return l;
+  const outline = (n: SNode) => { const out: [number, number][] = []; for (const p of kids(n, "polygon")) out.push(...polyPts(p)); return out; };
+  const pa = outline(a), pb = outline(b); if (pa.length !== pb.length) return pa.length - pb.length;
+  for (let i = 0; i < pa.length; i++) { const c = cmpPt(pa[i], pb[i]); if (c) return c; }
+  return 0;
+}
+/** StrNumCmp (KiCad's natural string order, case-insensitive). */
+export function strNumCmp(a: string, b: string): number {
+  const ra = a.match(/\d+|\D+/g) || [], rb = b.match(/\d+|\D+/g) || [];
+  for (let i = 0; i < Math.min(ra.length, rb.length); i++) {
+    const x = ra[i], y = rb[i]; const nx = /^\d/.test(x), ny = /^\d/.test(y);
+    if (nx && ny) { const d = parseInt(x, 10) - parseInt(y, 10); if (d) return d; }
+    else { const c = x.toUpperCase() < y.toUpperCase() ? -1 : x.toUpperCase() > y.toUpperCase() ? 1 : 0; if (c) return c; }
+  }
+  return ra.length - rb.length;
+}
+/** FOOTPRINT::GetFields order: the mandatory fields first, then the others as they were added. */
+const FIELD_ORD: Record<string, number> = { Reference: 0, Value: 1, Datasheet: 2, Description: 3 };
+
+interface Written { it: Item; rank: number; pos: number; c: ReturnType<typeof canonical> }
+/** The items in the order format( FOOTPRINT ) writes them. */
+function sortedItems(d: FpDoc): Written[] {
+  const st = d.fpState!; const pos = new Map(st.order.map((id, i) => [id, i]));
+  let next = st.order.length;
+  const list: Written[] = [];
+  for (const it of d.items.values()) list.push({ it, rank: itemRank(it.kind), pos: pos.has(it.id) ? pos.get(it.id)! : next++, c: canonical(it) });
+  // the uuid tie-break: KiCad's random ids for children a file gave none keep no order, so those keep the file's
+  const tie = (x: Written, y: Written) => (x.c.derived && y.c.derived ? x.pos - y.pos : x.it.id < y.it.id ? -1 : x.it.id > y.it.id ? 1 : x.pos - y.pos);
+  list.sort((x, y) => {
+    if (x.rank !== y.rank) return x.rank - y.rank;
+    const a = x.c.file, b = y.c.file; let c = 0;
+    if (x.rank === RANK_FIELDS) { const fa = FIELD_ORD[fieldName(a)] ?? 4, fb = FIELD_ORD[fieldName(b)] ?? 4; return fa - fb || x.pos - y.pos; }
+    if (x.rank === 30) c = cmpDrawings(str(x.it.node[0]), x.it.node, str(y.it.node[0]), y.it.node);
+    else if (x.rank === 32) c = cmpPads(a, b);
+    else if (x.rank === 33) c = cmpZones(a, b);
+    else if (x.rank === 31) c = cmpPt(pt(a, "at"), pt(b, "at"));
+    return c || tie(x, y);
+  });
+  return list;
+}
+
 /** Has anything of the footprint changed since it was read? */
 export function footprintModified(doc: Doc): boolean {
   const d = doc as FpDoc; const st = d.fpState; if (!st) return false;
   if (serialize(st.fp) !== st.headerSig) return true;
   let n = 0;
-  for (const it of d.items.values()) { const s = st.itemSrc.get(it.id); if (!s || s.sig !== serialize(toFileNode(it.node))) return true; n++; }
+  for (const it of d.items.values()) { const s = st.itemSrc.get(it.id); if (!s || s.sig !== canonical(it).sig) return true; n++; }
   return n !== st.itemSrc.size;
 }
 
@@ -246,12 +423,17 @@ export function serializeFootprintDoc(doc: Doc): string {
     const text = isList(c) ? (st.headerSrc.get(c) || serialize(c)) : atomText(c, false);
     parts.push({ rank: r !== undefined ? r : lastRank, seq: seq++, text });
   }
-  // items: file order first, then the ones added since in the order they arrived
-  const pos = new Map(st.order.map((id, i) => [id, i]));
-  const items = [...d.items.values()].sort((a, b) => (pos.has(a.id) ? pos.get(a.id)! : 1e9) - (pos.has(b.id) ? pos.get(b.id)! : 1e9));
-  for (const it of items) {
-    const file = toFileNode(it.node); const s = st.itemSrc.get(it.id); const sig = serialize(file);
-    parts.push({ rank: itemRank(it.kind), seq: seq++, text: s && s.sig === sig ? s.text : sig });
+  // items in KiCad's order; a child whose id the reader derives from its content (and its place among identical
+  // twins) is written without a uuid, any other carries its id so every reader keys it the same
+  const seen = new Map<string, number>();
+  for (const w of sortedItems(d)) {
+    const s = st.itemSrc.get(w.it.id); let text: string;
+    if (w.c.derived) {
+      const k = seen.get(w.c.sig) || 0;
+      if (derivedUuid(k, w.c.sig) === w.it.id) { seen.set(w.c.sig, k + 1); text = s && s.sig === w.c.sig ? s.text : w.c.sig; }
+      else { const f = cloneNode(w.c.file); f.push(["uuid", w.it.id]); text = serialize(f); }
+    } else text = s && s.sig === w.c.sig ? s.text : w.c.sig;
+    parts.push({ rank: w.rank, seq: seq++, text });
   }
   parts.sort((a, b) => a.rank - b.rank || a.seq - b.seq);
   const q = QUOTED.get(st.fp) || 0;
@@ -268,14 +450,19 @@ export function markFootprintSaved(doc: Doc, text: string): void {
   // re-key the sources by the parsed children: the header nodes are matched by their text, the items by id
   const headerBySig = new Map<string, SNode[]>();
   for (const c of st.fp.slice(2)) if (isList(c)) { const k = serialize(c); const l = headerBySig.get(k) || []; l.push(c); headerBySig.set(k, l); }
-  const itemIdsBySig = new Map<string, string[]>();
-  for (const it of d.items.values()) { const k = serialize(toFileNode(it.node)); const l = itemIdsBySig.get(k) || []; l.push(it.id); itemIdsBySig.set(k, l); }
+  const byId = new Map<string, string>(); const bySig = new Map<string, string[]>();
+  for (const it of d.items.values()) { const k = canonical(it).sig; byId.set(it.id, k); const l = bySig.get(k) || []; l.push(it.id); bySig.set(k, l); }
+  const taken = new Set<string>();
   for (let j = 2; j < tree.length; j++) {
     const c = tree[j]; const span = spans[j]; if (!span || !isList(c)) continue;
-    const src = text.slice(span[0], span[1]); const sig = serialize(c);
-    if (!isOwnedFileNode(c)) { const l = headerBySig.get(sig); const h = l && l.shift(); if (h) st.headerSrc.set(h, src); continue; }
-    const l = itemIdsBySig.get(sig); const id = l && l.shift(); if (!id) continue;
-    st.itemSrc.set(id, { text: src, sig }); st.order.push(id);
+    const src = text.slice(span[0], span[1]);
+    if (!isOwnedFileNode(c)) { const l = headerBySig.get(serialize(c)); const h = l && l.shift(); if (h) st.headerSrc.set(h, src); continue; }
+    // a child the file names by id is that item; one without an id the item of the same content
+    const own = uuidOf(c); let id = "", sig = "";
+    if (own && byId.has(own)) { const bare = withoutUuid(c, own); const bs = bare ? serialize(bare) : ""; sig = byId.get(own) === bs ? bs : serialize(c); id = own; }
+    else { sig = serialize(c); const l = bySig.get(sig); while (l && l.length && taken.has(l[0])) l.shift(); id = (l && l.shift()) || ""; }
+    if (!id || taken.has(id)) continue;
+    taken.add(id); st.itemSrc.set(id, { text: src, sig }); st.order.push(id);
   }
   st.headerSig = serialize(st.fp);
 }
@@ -301,4 +488,4 @@ export function headerKids(doc: Doc, key: string): SNode[] { const d = doc as Fp
 
 /** What KiCadCanvas.footprintDoc publishes to the editor and the tools (one sexpr module: the quoting marks live there). */
 export const footprintDocApi = { serializeFootprintDoc, footprintModified, markFootprintSaved, footprintHeaderSexpr, footprintName, footprintFields, footprintNode,
-  toFileNode, toBoardNode, fpItemKind, fieldName, fieldText, isMandatoryField, isOwnedFileNode, headerKids, derivedUuid, applyFootprintHeader, prettify, FP_EDITOR_LAYERS, FP_TO_BOARD, BOARD_TO_FP };
+  toFileNode, toBoardNode, fpItemKind, fieldName, fieldText, isMandatoryField, cmpPads, cmpDrawings, strNumCmp, layerOrdinal, isOwnedFileNode, headerKids, derivedUuid, applyFootprintHeader, prettify, FP_EDITOR_LAYERS, FP_TO_BOARD, BOARD_TO_FP };
