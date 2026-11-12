@@ -31,7 +31,7 @@ import { placeCrosshair } from "./crosshair";
 import { installPcbRouting, pcbLayerKey } from "./pcbrouting";
 import { installProjectWatch } from "./projectwatch";
 import { breakFollow, sendPresence } from "./peers";
-import { collapseSelectionTo, drawDrag, drawMeasure, drawZoomRect, finishGroupDrag, finishZoomRect, measureClick, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
+import { collapseSelectionTo, drawDrag, drawZoomRect, finishGroupDrag, finishZoomRect, measureCopy, measureDown, measureMove, measureUp, moveGroupDrag, openSelectionProperties, startGroupDrag } from "./pointer";
 import { clearSelection, selectedSet, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto, hitOpts } from "./selection";
 import { E } from "./state";
 import "./panels/index";
@@ -166,7 +166,7 @@ stage.addEventListener("pointerdown", (ev) => {
   }
   if (ev.button !== 0) return;
   if (E.tool === "zoomtool") { E.zoomRect = { start: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return; }
-  if (E.tool === "measure") { measureClick(snapMm(worldMm(ev))); return; }
+  if (E.tool === "measure") { measureDown(snapMm(worldMm(ev)), ev); return; }
   if (E.tool === "comment") { placeComment(ev); return; }
   const [x, y] = worldMm(ev);
   const mod = activeModule();
@@ -252,7 +252,7 @@ stage.addEventListener("pointermove", (ev) => {
   placeCrosshair(mm);
   if (E.zoomRect) { drawZoomRect(ev); return; }
   if (E.boxSel) { E.boxSel.cur = mm; if (E.boxSel.lasso) E.boxSel.pts.push(mm); drawBoxSel(); return; }
-  if (E.measure && !E.measure.b) { drawMeasure(snapMm(mm)); }
+  if (E.measure && E.measure.set) { measureMove(snapMm(mm), ev.shiftKey); }
   if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
   const modM = activeModule();
   if (modM && moduleTool(E.tool) && modM.onPointerMove) { try { modM.onPointerMove(ev, mm, toolCtx()); } catch (e) { console.warn(e); } sendPresence(mm, liveGhost(modM)); return; }
@@ -318,6 +318,7 @@ const onPointerUp = (ev) => {
   }
   if (E.zoomRect) { finishZoomRect(ev); return; }
   if (E.boxSel) { finishBoxSel(ev); return; }
+  if (E.tool === "measure" && ev.button === 0) { measureUp(ev); return; }
   const modU = activeModule();
   if (modU && moduleTool(E.tool) && modU.onPointerUp) { try { modU.onPointerUp(ev, worldMm(ev), toolCtx()); } catch (e) { console.warn(e); } sendPresence(worldMm(ev), liveGhost(modU)); return; }
   if (ev.button !== 0 || !E.drag) return;
@@ -438,6 +439,7 @@ document.addEventListener("keydown", (ev) => {
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
     if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField) CollabTools.sch.exitGroup();
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
+  if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   hoverSelect(ev);                                                      // SCH_SELECTION_TOOL::RequestSelection: nothing selected -> the item under the cursor
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }

@@ -99,6 +99,7 @@ export function runSpecHotkey(ev: KeyboardEvent): boolean {
 export function preemptKey(ev: KeyboardEvent): void {
   if ((state as { view?: string }).view !== "editor" || !E.kdoc || typingTarget(ev)) return;
   const combo = comboOf(ev); if (!combo) return;
+  if (E.tool === "measure" && combo === "Ctrl+C") return;   // the measure tool takes ACTIONS::copy itself (index.ts)
   const what = KICAD_KEY_WINS[editorKind()][combo]; if (!what) return;
   if (what === "spec") runSpecHotkey(ev);
   else if (what.startsWith("key:")) {

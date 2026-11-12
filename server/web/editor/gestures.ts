@@ -171,7 +171,7 @@ export function hitsAt(mm: Mm): KItem[] {
 // ---------------------------------------------------------------- drags in flight
 /** Is the user in the middle of something a click or Esc would end? */
 export function interactionBusy(): boolean {
-  if (E.drag || E.fdrag || E.boxSel || E.zoomRect) return true;
+  if (E.drag || E.fdrag || E.boxSel || E.zoomRect || (E.measure && E.measure.set)) return true;
   if (isSch()) { const s = schState(); return !!(s && (s.drag || s.pending)); }
   const p = pcbState(); return !!(p && (p.move || p.pending || (p.drag && p.drag.bySelect)));
 }
@@ -215,8 +215,9 @@ export function cancelInteraction(): boolean {
   let took = false;
   if (E.rdown) { E.rdown = null; }
   if (E.pan) { E.pan = null; stage.classList.remove("panning"); took = true; }
-  if (E.zoomRect) { E.zoomRect = null; dragG.replaceChildren(); took = true; }
-  if (E.boxSel) { E.boxSel = null; dragG.replaceChildren(); took = true; }
+  if (E.zoomRect) { E.zoomRect = null; took = true; }
+  if (E.boxSel) { E.boxSel = null; took = true; }
+  if (E.measure && E.measure.set) { E.measure = null; took = true; }   // MeasureTool: Esc drops a ruler that follows the cursor; the tool stays
   if (E.fdrag) { revertFieldDrag(); took = true; }
   if (E.drag) { revertAppDrag(); took = true; }
   const s = schState();

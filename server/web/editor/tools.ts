@@ -183,7 +183,7 @@ export function setTool(t) {
   store.slice("tool", { current: t });
   const mt = moduleTool(t);
   stage.className = t === "pan" ? "pan" : t === "comment" ? "comment" : t === "zoomtool" ? "zoomtool" : t === "measure" ? "measure" : "";
-  if (t !== "measure" && E.measure) { E.measure = null; dragG.replaceChildren(); setStatusBar({ message: "" }); }
+  if (t !== "measure" && E.measure) { E.measure = null; requestRepaint(); }
   stage.style.cursor = mt && mt.cursor ? toolCursor(mt.cursor) : "";
   if (t === "comment" && !E.canComment) { toast(state.me ? "You have view-only access: ask the owner to let you comment" : "Sign in to comment"); setTool("select"); return; }
   const m = activeModule(); if (m && m.onActivate && (mt || moduleTool(prev))) { try { m.onActivate(t, toolCtx()); } catch (e) { console.warn(e); } }

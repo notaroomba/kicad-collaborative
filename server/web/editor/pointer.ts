@@ -1,14 +1,13 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
-import { setStatusBar } from "./appstore";
 import { fpName, snapMm, syncItemsFromDoc } from "./doc";
 import { NS } from "./dom";
 import { sendOp } from "./net";
 import { drawSelection, groupExpand, renderProps } from "./selection";
 import { E } from "./state";
-import { moveOp, publishUndo, redoStack, toolCtx, undoStack, unlockedForEdit } from "./tools";
-import { UNITS, fmtLen } from "./util";
-import { dragG, fitBox, isSch, pxPerMm, requestRender, stage, svgText, worldMm, zoomBy } from "./view";
+import { appClipboard, moveOp, publishUndo, redoStack, toolCtx, undoStack, unlockedForEdit } from "./tools";
+import { rulerStrings, snapped45, type RulerUnits } from "./ruler";
+import { dragG, fitBox, isSch, pxPerMm, requestRender, requestRepaint, stage, svgText, worldMm, zoomBy } from "./view";
 /** E: KiCad's "Edit properties" for whatever is selected — a field, the app selection, or a tool module's own selection. */
 export function openSelectionProperties() {
   if (!E.kdoc || !window.KDialogs) return false;
@@ -49,31 +48,44 @@ export function drawDrag() {
   dragG.appendChild(svgText(x + 6 / s, y - 6 / s, 12 / s, "#ffb43a", isSch() ? fpName(E.drag.fp) : E.drag.fp.lib.split(":").pop()));
 }
 
-// measure tool: two clicks, the distance goes to the status bar
-export function measureClick(mm) {
-  if (!E.measure || E.measure.b) { E.measure = { a: mm }; dragG.replaceChildren(); setStatusBar({ message: "Measure — click the second point" }); return; }
-  E.measure.b = mm; drawMeasure(mm);
-  const dx = mm[0] - E.measure.a[0], dy = mm[1] - E.measure.a[1];
-  setStatusBar({ message: `dist ${fmtLen(Math.hypot(dx, dy))} ${UNITS[E.units].name} · dx ${fmtLen(dx)} · dy ${fmtLen(dy)} · ${(Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1)}°` });
+// ---- measure tool: PCB_VIEWER_TOOLS::MeasureTool with a RULER_ITEM (drawn by overlays.ts, in nm) ----
+const toNm = (mm: number[]): [number, number] => [Math.round(mm[0] * 1e6), Math.round(mm[1] * 1e6)];
+
+/** A click (or the press of a drag) sets the origin; the next click, or the release of that drag, freezes the ruler where it is. */
+export function measureDown(mm: number[], ev: { clientX: number; clientY: number }): void {
+  if (!E.measure || !E.measure.set) { const p = toNm(mm); E.measure = { a: p, b: p, set: true, down: [ev.clientX, ev.clientY] }; requestRepaint(); return; }
+  measureStop();
+}
+export function measureUp(ev: { clientX: number; clientY: number }): void {
+  const m = E.measure; if (!m || !m.set || !m.down) return;
+  if (Math.hypot(ev.clientX - m.down[0], ev.clientY - m.down[1]) > 3) { measureStop(); return; }   // the mouse-up that ends a drag
+  m.down = null;                                                                                  // a click: the ruler now follows the cursor
+}
+function measureStop(): void { const m = E.measure; if (!m) return; m.set = false; m.down = null; requestRepaint(); }
+
+/** The cursor moved: the end follows it, held to 45° steps with Shift (LEADER_MODE::DEG45). */
+export function measureMove(mm: number[], shift: boolean): void {
+  const m = E.measure; if (!m || !m.set) return;
+  const p = toNm(mm); m.b = shift ? snapped45(m.a, p) : p; requestRepaint();
 }
 
-export function drawMeasure(mm) {
-  if (!E.measure) return; dragG.replaceChildren();
-  const s = pxPerMm(), a = E.measure.a;
-  const line = document.createElementNS(NS, "line"); line.setAttribute("x1", a[0]); line.setAttribute("y1", a[1]); line.setAttribute("x2", mm[0]); line.setAttribute("y2", mm[1]);
-  line.setAttribute("stroke", "#ffb43a"); line.setAttribute("stroke-width", 1.5 / s); dragG.appendChild(line);
-  const t = svgText((a[0] + mm[0]) / 2, (a[1] + mm[1]) / 2 - 6 / s, 11 / s, "#ffb43a", `${fmtLen(Math.hypot(mm[0] - a[0], mm[1] - a[1]))} ${UNITS[E.units].name}`); t.setAttribute("text-anchor", "middle"); dragG.appendChild(t);
+/** Ctrl+C while measuring: the ruler's readout, one value a line (RULER_ITEM::GetDimensionStrings). */
+export function measureCopy(): boolean {
+  const m = E.measure; if (!m || !m.set) return false;
+  appClipboard.set(rulerStrings(m.a, m.b, (E.units === "in" || E.units === "mil" ? E.units : "mm") as RulerUnits).join("\n"));
+  return true;
 }
+
+/** Esc while the ruler follows the cursor drops it (the tool stays). */
+export function measureCancel(): boolean { if (!E.measure || !E.measure.set) return false; E.measure = null; requestRepaint(); return true; }
 
 // zoom-area tool: drag a rectangle, the view fits it
 export function drawZoomRect(ev) {
-  dragG.replaceChildren(); const a = worldMm({ clientX: E.zoomRect.start[0], clientY: E.zoomRect.start[1] }), b = worldMm(ev);
-  const r = document.createElementNS(NS, "rect"); r.setAttribute("x", Math.min(a[0], b[0])); r.setAttribute("y", Math.min(a[1], b[1])); r.setAttribute("width", Math.abs(b[0] - a[0])); r.setAttribute("height", Math.abs(b[1] - a[1]));
-  r.setAttribute("fill", "#4D7FC433"); r.setAttribute("stroke", "#4D7FC4"); r.setAttribute("stroke-width", 1 / pxPerMm()); dragG.appendChild(r);
+  E.zoomRect.a = worldMm({ clientX: E.zoomRect.start[0], clientY: E.zoomRect.start[1] }); E.zoomRect.b = worldMm(ev); requestRepaint();
 }
 
 export function finishZoomRect(ev) {
-  const a = worldMm({ clientX: E.zoomRect.start[0], clientY: E.zoomRect.start[1] }), b = worldMm(ev); E.zoomRect = null; dragG.replaceChildren();
+  const a = worldMm({ clientX: E.zoomRect.start[0], clientY: E.zoomRect.start[1] }), b = worldMm(ev); E.zoomRect = null; requestRepaint();
   const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
   if (w < 0.5 || h < 0.5) { zoomBy(2, ev.clientX, ev.clientY); return; }
   fitBox([Math.min(a[0], b[0]), Math.min(a[1], b[1]), w, h], 0.9);

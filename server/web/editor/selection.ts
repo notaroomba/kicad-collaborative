@@ -8,7 +8,7 @@ import { editorId } from "./panes";
 import { E } from "./state";
 import { activeModule, deleteSelected, moveOp, rotateSelected, toolCtx } from "./tools";
 import { esc } from "./util";
-import { dragG, isSch, pxPerMm, requestRender, selG, svgText } from "./view";
+import { dragG, isSch, pxPerMm, requestRender, requestRepaint, selG, svgText } from "./view";
 /** Board groups: a member drags/deletes with its whole group (KiCad's default). */
 export function groupExpand(ids) { const m = isSch() ? CollabTools.sch : CollabTools.pcb; if (!E.kdoc || !m || !m.expandGroups) return new Set(ids); try { return new Set(m.expandGroups(E.kdoc, [...ids])); } catch (e) { return new Set(ids); } }
 
@@ -159,22 +159,12 @@ export function itemBoxCentre(it) { const b = it.bbox; return b ? [(b[0] + b[2])
 
 export function pointInPoly(p, poly) { let inside = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const a = poly[i], b = poly[j]; if ((a[1] > p[1]) !== (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside; } return inside; }
 
-export function drawBoxSel() {
-  dragG.replaceChildren(); if (!E.boxSel) return;
-  const s = pxPerMm();
-  if (E.boxSel.lasso) {
-    const p = document.createElementNS(NS, "polygon"); p.setAttribute("points", E.boxSel.pts.map((q) => q.join(",")).join(" "));
-    p.setAttribute("fill", "#4D7FC422"); p.setAttribute("stroke", "#4D7FC4"); p.setAttribute("stroke-width", 1 / s); p.setAttribute("stroke-dasharray", `${4 / s} ${3 / s}`); dragG.appendChild(p);
-  } else {
-    const a = E.boxSel.start, b = E.boxSel.cur, ltr = b[0] >= a[0];
-    const r = document.createElementNS(NS, "rect"); r.setAttribute("x", Math.min(a[0], b[0])); r.setAttribute("y", Math.min(a[1], b[1])); r.setAttribute("width", Math.abs(b[0] - a[0])); r.setAttribute("height", Math.abs(b[1] - a[1]));
-    r.setAttribute("fill", ltr ? "#4D7FC422" : "#00960022"); r.setAttribute("stroke", ltr ? "#4D7FC4" : "#009600"); r.setAttribute("stroke-width", 1 / s); if (!ltr) r.setAttribute("stroke-dasharray", `${4 / s} ${3 / s}`); dragG.appendChild(r);
-  }
-}
+/** The box / lasso is a SELECTION_AREA painted on the canvas (overlays.ts). */
+export function drawBoxSel() { requestRepaint(); }
 
 // KiCad: dragging left-to-right selects what the box encloses, right-to-left what it touches; the lasso takes what it contains.
 export function finishBoxSel(ev) {
-  const b = E.boxSel; E.boxSel = null; dragG.replaceChildren(); if (!b || !E.kdoc) return;
+  const b = E.boxSel; E.boxSel = null; requestRepaint(); if (!b || !E.kdoc) return;
   const moved = Math.hypot(ev.clientX - b.startClient[0], ev.clientY - b.startClient[1]);
   if (moved < 4) return;
   const picked = [];

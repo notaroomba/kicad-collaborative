@@ -12,6 +12,7 @@ import { drawSelection, selectedSet } from "./selection";
 import { E } from "./state";
 import { paintDocument, stats as paintStats } from "./paint";
 import { activeModule, toolCtx } from "./tools";
+import { drawAppOverlays } from "./overlays";
 import { toast } from "./util";
 // ================================================================ EDITOR
 export const stage = $("#stage"), world = $("#world"), base = $("#base"), overlay = $("#overlay");
@@ -95,6 +96,7 @@ export function drawCanvas() {
   }
   const m = activeModule();
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
+  try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); drawAppOverlays(cctx, view, isSch()); } catch (e) { console.warn(e); } finally { cctx.restore(); }
   drawHover(cctx, view);
   if (E.selField) {
     const it = E.kdoc.items.get(E.selField.id); if (!it) { E.selField = null; return; }
