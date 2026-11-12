@@ -743,6 +743,133 @@
     return out;
   }
 
+  // web/tools/sch-tools/autorotate.ts
+  var SPIN_RIGHT = 0;
+  var SPIN_UP = 1;
+  var SPIN_LEFT = 2;
+  var SPIN_BOTTOM = 3;
+  var autoIds = () => S.autoRotateIds = S.autoRotateIds || /* @__PURE__ */ new Set();
+  function autoRotateOf(id) {
+    return autoIds().has(id);
+  }
+  function setAutoRotate(id, on) {
+    if (on) autoIds().add(id);
+    else autoIds().delete(id);
+  }
+  var supportsAutoRotate = (kind) => kind === "global_label" || kind === "hierarchical_label";
+  var eq = (a, b) => Math.abs(a[0] - b[0]) < 1e-6 && Math.abs(a[1] - b[1]) < 1e-6;
+  function overlapsLine(a, b, w, p) {
+    const m = w / 2 + 1e-6;
+    return p[0] >= Math.min(a[0], b[0]) - m && p[0] <= Math.max(a[0], b[0]) + m && p[1] >= Math.min(a[1], b[1]) - m && p[1] <= Math.max(a[1], b[1]) + m;
+  }
+  var lineW = (n, kind) => {
+    const s = kid(n, "stroke"), w = s && kid(s, "width");
+    const v = w ? num(w[1]) : 0;
+    return v > 0 ? v : kind === "bus" ? 0.3048 : 0.1524;
+  };
+  var angleIs = (a, b, deg) => deg === 90 ? Math.abs(a[0] - b[0]) < 1e-9 && b[1] > a[1] : Math.abs(a[1] - b[1]) < 1e-9 && b[0] > a[0];
+  function onSegment(p, a, b) {
+    const cross = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
+    if (Math.abs(cross) > 1e-6) return false;
+    return p[0] >= Math.min(a[0], b[0]) - 1e-6 && p[0] <= Math.max(a[0], b[0]) + 1e-6 && p[1] >= Math.min(a[1], b[1]) - 1e-6 && p[1] <= Math.max(a[1], b[1]) + 1e-6;
+  }
+  function labelOrientationForPoint(doc, p, dflt, skipId) {
+    let ret = dflt;
+    for (const it of doc.items.values()) {
+      if (it.id === skipId) continue;
+      const n = it.node;
+      if (it.kind === "bus_entry") {
+        const [x, y] = atOf(n);
+        const sz = kid(n, "size");
+        const dx = sz ? num(sz[1]) : 2.54, dy = sz ? num(sz[2]) : 2.54;
+        const e0 = [x, y], e1 = [x + dx, y + dy];
+        if (!overlapsLine(e0, e1, 0, p)) continue;
+        let bus = null;
+        for (const o of doc.items.values()) {
+          if (o.kind !== "bus") continue;
+          const q = ptsOf(o.node);
+          if (q.length >= 2 && (onSegment(e0, q[0], q[1]) || onSegment(e1, q[0], q[1]))) {
+            bus = q;
+            break;
+          }
+        }
+        if (!bus) continue;
+        if (angleIs(bus[0], bus[1], 90)) {
+          if (p[0] < bus[0][0]) ret = SPIN_LEFT;
+          else if (p[0] > bus[0][0]) ret = SPIN_RIGHT;
+        } else if (angleIs(bus[0], bus[1], 0)) {
+          if (p[1] < bus[0][1]) ret = SPIN_UP;
+          else if (p[1] > bus[0][1]) ret = SPIN_BOTTOM;
+        }
+      } else if (it.kind === "wire" || it.kind === "bus" || it.kind === "polyline") {
+        const q = ptsOf(n);
+        if (q.length !== 2) continue;
+        const [s, e] = q;
+        if (!overlapsLine(s, e, lineW(n, it.kind), p)) continue;
+        let ang = Math.atan2(e[1] - s[1], e[0] - s[0]) * 180 / Math.PI;
+        while (ang > 90) ang -= 180;
+        while (ang <= -90) ang += 180;
+        if (-45 < ang && ang <= 45) ret = s[0] <= e[0] ? eq(e, p) ? SPIN_RIGHT : SPIN_LEFT : eq(e, p) ? SPIN_LEFT : SPIN_RIGHT;
+        else ret = s[1] <= e[1] ? eq(e, p) ? SPIN_BOTTOM : SPIN_UP : eq(e, p) ? SPIN_UP : SPIN_BOTTOM;
+      } else if (it.kind === "symbol") {
+        for (const pin of symbolPins(doc, it)) if (eq([pin.x, pin.y], p)) {
+          ret = pin.side === "right" ? SPIN_RIGHT : pin.side === "left" ? SPIN_LEFT : pin.side === "top" ? SPIN_UP : SPIN_BOTTOM;
+          break;
+        }
+      }
+    }
+    return ret;
+  }
+  var spinOfNode = (n) => {
+    const r = (Math.round(atOf(n)[2]) % 360 + 360) % 360;
+    return Math.round(r / 90) % 4;
+  };
+  function setSpinOfNode(kind, n, spin) {
+    const a = kid(n, "at");
+    if (a) a[3] = spin * 90;
+    const e = kid(n, "effects");
+    if (!e) return;
+    const right = spin === SPIN_LEFT || spin === SPIN_BOTTOM;
+    const j = kid(e, "justify");
+    const mirror = !!j && j.includes("mirror");
+    const jv = ["justify", right ? "right" : "left"];
+    if (kind === "label") jv.push("bottom");
+    if (mirror) jv.push("mirror");
+    if (j) e[e.indexOf(j)] = jv;
+    else e.push(jv);
+  }
+  function autoRotateNode(doc, kind, n, id, force) {
+    if (!supportsAutoRotate(kind) || !(force || id && autoRotateOf(id))) return null;
+    const cur = spinOfNode(n), [x, y] = atOf(n);
+    const spin = labelOrientationForPoint(doc, [x, y], cur, id || void 0);
+    if (spin === cur) return null;
+    const out = K.cloneNode(n);
+    setSpinOfNode(kind, out, spin);
+    return out;
+  }
+  function autoRotateChanges(doc, changes, IU) {
+    const want = changes.filter((c) => c.kind === "MODIFIED" && autoRotateOf(c.id) && supportsAutoRotate((doc.items.get(c.id) || { kind: "" }).kind));
+    if (!want.length) return changes;
+    const saved = /* @__PURE__ */ new Map();
+    for (const c of changes) if (!saved.has(c.id)) saved.set(c.id, doc.items.get(c.id) || null);
+    const swap = /* @__PURE__ */ new Map();
+    try {
+      for (const c of changes) K.applyChange(doc, c, IU);
+      for (const c of want) {
+        const it = doc.items.get(c.id);
+        if (!it) continue;
+        const n = autoRotateNode(doc, it.kind, it.node, it.id);
+        if (n) swap.set(c.id, modChange(doc, it, n));
+      }
+    } finally {
+      for (const [id, obj] of saved) {
+        if (obj) doc.items.set(id, obj);
+        else doc.items.delete(id);
+      }
+    }
+    return swap.size ? changes.map((c) => swap.get(c.id) || c) : changes;
+  }
+
   // web/tools/sch-tools/snap.ts
   function mmPerPx(ctx) {
     if (ctx.worldMm && ctx.stage) {
@@ -2423,7 +2550,7 @@ ${body}
     const keep = /* @__PURE__ */ new Set([...d.items.map((e) => e.item.id), ...d.riders.map((r) => r.item.id)]);
     for (const c of cleanupAt(doc, Array.from(out.values()), touched, keep, ctx.IU || 1e4)) put(c);
     for (const c of out.values()) if (c.kind === "ADDED") doc.items.delete(c.id);
-    return Array.from(out.values());
+    return autoRotateChanges(doc, Array.from(out.values()), ctx.IU || 1e4);
   }
   function cleanupAt(doc, changes, touched, keep, IU) {
     const saved = /* @__PURE__ */ new Map();
@@ -2979,6 +3106,11 @@ ${body}
     if (!c) return null;
     S.carry = null;
     const doc = ctx.doc, p = anchorOf(c.kind, c.node);
+    const auto = supportsAutoRotate(c.kind) && !!S.lastAutoRotate;
+    if (auto) {
+      const n = autoRotateNode(doc, c.kind, c.node, uuidOf(c.node) || null, true);
+      if (n) c.node = n;
+    }
     if (c.kind === "junction" && junctionAt(doc, p[0], p[1])) {
       ctx.toast("There is already a junction here");
       ctx.requestRender();
@@ -2986,6 +3118,7 @@ ${body}
     }
     const { item, change } = addNode(doc, c.node);
     const changes = [change];
+    if (auto) setAutoRotate(item.id, true);
     if (c.kind === "symbol") changes.push(...junctionChanges(doc, K.pinPoints(doc, item).map((q) => [q.x, q.y]), "wire"));
     else if (LINE_KINDS.has(c.kind) && c.kind !== "polyline") changes.push(...junctionChanges(doc, ptsOf(c.node), c.kind));
     else if (c.kind === "junction") changes.push(...breakLinesAt(doc, p, "wire"), ...breakLinesAt(doc, p, "bus"));
@@ -6622,6 +6755,13 @@ Link '${target}' to this file?`)) return null;
       setFollow(on) {
         S.forceFollow = !!on;
       },
+      labelOrientationForPoint,
+      autoRotateNode,
+      autoRotateChanges,
+      autoRotateOf,
+      setAutoRotate,
+      setSpinOfNode,
+      spinOfNode,
       textBoxMinSize,
       globalPowerPin,
       breakAgain,

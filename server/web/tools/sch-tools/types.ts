@@ -111,7 +111,7 @@ export type SchState = {
   dragEndedAt?: number; forceFollow?: boolean; internalSwitch?: boolean; multi?: Set<string> | null; otherRefs?: Iterable<string> | null;
   showDangling?: boolean; docGen: number;
   labelQueue?: SNode[] | null;
-  lastLabelShape?: string; lastFlagShape?: string;
+  lastLabelShape?: string; lastFlagShape?: string; lastAutoRotate?: boolean; autoRotateIds?: Set<string>;
   lastTextH?: string; lastTextV?: string; lastTextBold?: boolean; lastTextItalic?: boolean; lastTextVertical?: boolean; lastTextSpin?: number;
   // commands
   markers: ErcMarker[]; markersDoc: KDoc | null; lastPlaced: Placed[] | null; repeatOffset: Pt; repeatIncrement: number;

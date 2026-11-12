@@ -201,7 +201,7 @@ export interface LabelState {
 export function readLabel(kind: string, n: SNode): LabelState {
   const fx = readFx(n), sh = kid(n, "shape"), len = kid(n, "length");
   return { text: str(n[1]), shape: sh ? str(sh[1]) : (isDirective(kind) ? "round" : "input"), font: fx.font, size: isDirective(kind) ? (len ? num(len[1], 2.54) : 2.54) : fx.size,
-    bold: fx.bold, italic: fx.italic, color: fx.color, spin: spinOf(n), autoRotate: yes(n, "auto_rotate") };
+    bold: fx.bold, italic: fx.italic, color: fx.color, spin: spinOf(n), autoRotate: false };   // m_autoRotateOnPlacement is not in the file: the caller fills it in
 }
 /** Write the dialog's label state into the node (the fields are written by writeFields). */
 export function writeLabel(kind: string, n: SNode, s: LabelState): void {

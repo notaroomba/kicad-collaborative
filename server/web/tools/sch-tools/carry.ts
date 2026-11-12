@@ -1,11 +1,12 @@
 import type { PtrEvent, SchCtx, Pt } from "./types";
 import { breakLinesAt, junctionAt, junctionChanges } from "./connect";
+import { autoRotateNode, setAutoRotate, supportsAutoRotate } from "./autorotate";
 import { editTxn, explicitJunctionAllowed, switchTool, txnAddJunction } from "./junction";
 import { labelNode } from "./nodes";
 import { anchorOf, cloneNode, shiftNode } from "./orient";
 import { rememberPlaced } from "./repeat";
 import { snapConn } from "./snap";
-import { K, LINE_KINDS, S, SHAPE_KINDS, TEXT_KINDS, atOf, ptsOf } from "./state";
+import { K, LINE_KINDS, S, SHAPE_KINDS, TEXT_KINDS, atOf, ptsOf, uuidOf } from "./state";
 import { addNode, deep, ghost, r4, removeChange, same } from "./util";
 
 // ---------------------------------------------------------------- carried item (ghost that follows the cursor)
@@ -29,8 +30,12 @@ export function cancelCarry(ctx: SchCtx) { S.carry = null; S.labelQueue = null; 
 export function dropCarry(ctx: SchCtx) {
   const c = S.carry; if (!c) return null; S.carry = null;
   const doc = ctx.doc, p = anchorOf(c.kind, c.node);
+  // SCH_DRAWING_TOOLS::TwoClickPlace: a global / hierarchical label placed with "Auto" faces away from what it lands on
+  const auto = supportsAutoRotate(c.kind) && !!S.lastAutoRotate;
+  if (auto) { const n = autoRotateNode(doc, c.kind, c.node, uuidOf(c.node) || null, true); if (n) c.node = n; }
   if (c.kind === "junction" && junctionAt(doc, p[0], p[1])) { ctx.toast("There is already a junction here"); ctx.requestRender(); return null; }
   const { item, change } = addNode(doc, c.node); const changes = [change];
+  if (auto) setAutoRotate(item.id, true);
   if (c.kind === "symbol") changes.push(...junctionChanges(doc, K.pinPoints(doc, item).map((q) => [q.x, q.y]), "wire"));
   else if (LINE_KINDS.has(c.kind) && c.kind !== "polyline") changes.push(...junctionChanges(doc, ptsOf(c.node), c.kind));
   else if (c.kind === "junction") changes.push(...breakLinesAt(doc, p, "wire"), ...breakLinesAt(doc, p, "bus"));

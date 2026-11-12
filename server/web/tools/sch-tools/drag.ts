@@ -1,5 +1,6 @@
 import type { Anchor, LineEnd, Rider, SchCtx, SchDrag, Pt } from "./types";
 import { symbolLibId } from "./autoplace";
+import { autoRotateChanges } from "./autorotate";
 import { setSelectionIds } from "./commands";
 import { junctionAt, lineEndsAt, lineMidsAt, needsJunction, pinsAt } from "./connect";
 import { junctionNode, lineNode } from "./nodes";
@@ -265,7 +266,7 @@ export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number) {
   const keep = new Set([...d.items.map((e) => e.item.id), ...d.riders.map((r) => r.item.id)]);
   for (const c of cleanupAt(doc, Array.from(out.values()), touched, keep, ctx.IU || 1e4)) put(c);
   for (const c of out.values()) if (c.kind === "ADDED") doc.items.delete(c.id);   // commit re-adds them from the fragments
-  return Array.from(out.values());
+  return autoRotateChanges(doc, Array.from(out.values()), ctx.IU || 1e4);
 }
 // SCHEMATIC::CleanUp + AddJunctionsIfNeeded around the touched points, evaluated on a dry run
 // of the changes (applied, inspected, then swapped back so the document is untouched).

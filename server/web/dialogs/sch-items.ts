@@ -178,6 +178,9 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
   const kind = item.kind, doc = ctx.doc, isNew = !!opts.onCreate, dir = L.isDirective(kind);
   const staged = L.clone(item.node), st = L.readLabel(kind, staged), [ox, oy] = L.atOf(staged), origin: [number, number] = [ox, oy];
   st.text = L.unescapeString(st.text);   // TransferDataToWindow shows control characters in a human-readable format
+  const AR = (): { autoRotateOf(id: string): boolean; setAutoRotate(id: string, on: boolean): void; labelOrientationForPoint(d: KDoc, p: [number, number], dflt: number, skip?: string): 0 | 1 | 2 | 3 } | null => {
+    const m = CollabTools.sch; return m && m._ && (m._ as Record<string, unknown>).labelOrientationForPoint ? m._ as never : null; };
+  if (!isNew && (kind === "global_label" || kind === "hierarchical_label")) { const ar = AR(); st.autoRotate = !!ar && ar.autoRotateOf(item.id); }
   const mandatory = kind === "global_label" ? ["Intersheetrefs"] : [];
   const ro = !!ctx.viewOnly;
   let textEl: HTMLInputElement | HTMLTextAreaElement | null = null, multiCb: HTMLInputElement | null = null, grid: { rows(): L.FieldRow[] } | null = null;
@@ -261,6 +264,9 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       const next: L.LabelState = { text: raw, shape: radioValue(body, "kd-lbl-shape") || st.shape, font: fontSel ? fontSel.value : st.font, size,
         bold: boldB ? isOn(boldB) : st.bold, italic: italB ? isOn(italB) : st.italic, color: color ? color.get() : st.color,
         spin: spinBtn ? Number(spinBtn.dataset.spin) as 0 | 1 | 2 | 3 : st.spin, autoRotate: !!(autoCb && autoCb.checked) };
+      // "Auto": the label takes its spin from what it sits on (GetLabelOrientationForPoint) and the spin buttons are skipped
+      const ar = AR();
+      if (!isNew && next.autoRotate && ar) next.spin = ar.labelOrientationForPoint(doc, origin, st.spin, item.id);
       const moved = rows.some((r) => L.rowMoved(r, origin));
       const lines = dir ? [""] : L.labelLines(raw, multi, isNew);
       if (!lines.length) { void messageBox("Label can not be empty."); return false; }
@@ -281,6 +287,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         for (let i = 1; i < nodes.length; i++) { const u = L.kid(nodes[i], "uuid"); if (u) u[1] = KiCadCanvas.newUuid() as unknown as SNode; }
         return opts.onCreate ? opts.onCreate(nodes[0], nodes.slice(1)) as boolean | undefined : undefined;
       }
+      if (ar && (kind === "global_label" || kind === "hierarchical_label")) ar.setAutoRotate(item.id, next.autoRotate);
       commitItem(ctx, item, build(dir ? "" : lines[0]), "Edit Label Properties");
       return undefined;
     },
