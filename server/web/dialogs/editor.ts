@@ -9,7 +9,7 @@ import * as util from "../editor/util";
 import * as view from "../editor/view";
 
 export interface DialogCtx extends ToolCtx { setSelection(ids: Iterable<string>): void; setMarkers?(list: unknown[]): void }
-export interface UndoEntry { label: string; changes: unknown[]; inverse: unknown[] }
+export interface UndoEntry { label: string; changes: unknown[]; inverse: unknown[]; undoOthers?: () => void; redoOthers?: () => void }
 /** The editor's mutable state (web/editor/state.ts); the fields the dialogs read and set. */
 export interface EditorState {
   kdoc: (KDoc & { schSettings?: { junctionDiameter: number }; paper?: string; portrait?: boolean; titleBlock?: Record<string, string>; sheetCount?: number; pageNumber?: string }) | null;

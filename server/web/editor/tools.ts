@@ -123,13 +123,15 @@ export function undoLast() {
   const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
   const redo = e.changes.map((c) => { const it = E.kdoc.items.get(c.id); return c.kind === "REMOVED" ? c : (it ? { id: c.id, kind: c.kind === "ADDED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) } : c); });
   applyChanges(e.inverse); sendOp(e.inverse);
-  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse }); publishUndo();   // pcbnew / eeschema say nothing on an undo
+  if (e.undoOthers) e.undoOthers();   // one commit over several sheets (Edit Text and Graphics) undoes them all
+  redoStack.push({ label: e.label, changes: redo, inverse: e.inverse, undoOthers: e.undoOthers, redoOthers: e.redoOthers }); publishUndo();   // pcbnew / eeschema say nothing on an undo
 }
 
 export function redoLast() {
   if (moduleTakesUndo("redo")) return;
   const e = redoStack.pop(); if (!e) { toast("Nothing to redo"); return; }
   applyChanges(e.changes); sendOp(e.changes);
+  if (e.redoOthers) e.redoOthers();
   undoStack.push(e); publishUndo();
 }
 

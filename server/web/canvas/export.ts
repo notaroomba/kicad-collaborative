@@ -304,7 +304,8 @@ export const BOARD_FILE_VERSION = 20260728;
 
 export function serializeItem(doc, item) {
   if (doc.type === "sch") {
-    const lib = item.kind === "symbol" ? doc.lib.get(str((kid(item.node, "lib_id") || [])[1])) : null;
+    // the library copy the symbol draws from: its (lib_name …) when it has one (a split-off variant), else its lib_id
+    const lib = item.kind === "symbol" ? (doc.lib.get(str((kid(item.node, "lib_name") || [])[1])) || doc.lib.get(str((kid(item.node, "lib_id") || [])[1]))) : null;
     return (lib ? "(lib_symbols " + serialize(lib) + ") " : "") + serialize(item.node);
   }
   legacyBare = Number(doc.version) > 0 && Number(doc.version) < 20200000;

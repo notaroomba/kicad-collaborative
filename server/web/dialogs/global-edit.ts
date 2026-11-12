@@ -9,8 +9,9 @@
 // starts at "-- leave unchanged --").  OK walks every sheet instance of the hierarchy (visitItem) and changes only
 // effects, strokes, fills and junction dots: the sheet on screen is one "Edit Text and Graphics" step, each other
 // sheet one step on its own undo list.
-import { E, appState, pushUndoFor, toolCtx } from "./editor";
+import { E, appState, pushUndoFor, toolCtx, undoStack } from "./editor";
 import { KD, checkbox, h, select, textInput } from "./dom";
+import { messageBox } from "./sch-items";
 import { projectDocs, readDoc, submitDocOp } from "./project";
 import * as L from "./global-edit-logic";
 import { HL, loadSheets, netMap } from "../editor/schnets";
@@ -173,7 +174,10 @@ export function openGlobalEdit(): void {
         if (out) acc.set(it.id, out);
       }
     }
+    // one SCH_COMMIT over the whole hierarchy, pushed once: a single Ctrl+Z undoes every sheet
     const label = "Edit Text and Graphics";
+    let here: { changes: KChange[]; inverse: KChange[] } = { changes: [], inverse: [] };
+    const others: { docId: string; file: string; changes: KChange[]; inverse: KChange[] }[] = [];
     for (const [file, acc] of edited) {
       if (!acc.size) continue;
       const sheet = docs.get(file) as { docId: string; doc: KDoc; current: boolean };
@@ -183,9 +187,16 @@ export function openGlobalEdit(): void {
         inverse.push(KiCadCanvas.replaceChange(sheet.doc, it));
         changes.push(KiCadCanvas.replaceChange(sheet.doc, Object.assign({}, it, { node, geom: [], bbox: null }) as KItem));
       }
-      if (sheet.current) { toolCtx().commit(changes, label); continue; }
-      try { await submitDocOp(sheet.docId, changes); pushUndoFor(sheet.docId, { label, changes, inverse }); } catch (e) { console.warn("Edit Text and Graphics:", file, e); }
+      if (!changes.length) continue;
+      if (sheet.current) here = { changes, inverse }; else others.push({ docId: sheet.docId, file, changes, inverse });
     }
+    const failed: string[] = [], done: typeof others = [];
+    for (const o of others) { try { await submitDocOp(o.docId, o.changes); done.push(o); } catch (e) { failed.push(o.file); } }
+    const replay = (which: "changes" | "inverse") => () => { for (const o of done) submitDocOp(o.docId, o[which]).catch(() => { void messageBox(`Could not update '${o.file}'.`); }); };
+    const hooks = done.length ? { undoOthers: replay("inverse"), redoOthers: replay("changes") } : {};
+    if (here.changes.length) { toolCtx().commit(here.changes, label); const top = undoStack[undoStack.length - 1]; if (top && done.length) Object.assign(top, hooks); }
+    else if (done.length) pushUndoFor(String(appState.docId || ""), Object.assign({ label, changes: [], inverse: [] }, hooks));
+    if (failed.length) void messageBox(`Could not update ${failed.map((f) => `'${f}'`).join(", ")}.`);
   };
 
   KD().open({

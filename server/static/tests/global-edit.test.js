@@ -69,5 +69,25 @@ test("colour helpers and wildcards", () => {
   assert.deepStrictEqual(L.hexToColor("#ff8000"), [255, 128, 0, 1]); assert.strictEqual(L.colorToHex([255, 128, 0, 1]), "#ff8000");
   assert.ok(L.wild("U*", "u12")); assert.ok(!L.wild("U?", "U12"));
 });
+test("V Align flips on a symbol whose TRANSFORM y1 < 0 (the parser's 270, not 90)", () => {
+  const at = (rot, mirror = "") => K.parse(`(symbol (lib_id "Device:R") (at 100 50 ${rot}) ${mirror} (unit 1) (uuid "s1") (property "Reference" "R1" (at 102 50 0) ${F}) (instances (project "demo" (path "/root" (reference "R1") (unit 1)))))`);
+  assert.deepStrictEqual(L.symbolTransform(at(90)), { x1: 0, y1: 1 });
+  assert.deepStrictEqual(L.symbolTransform(at(270)), { x1: 0, y1: -1 });
+  assert.deepStrictEqual(L.symbolTransform(at(180)), { x1: -1, y1: 0 });
+  assert.deepStrictEqual(L.symbolTransform(at(90, "(mirror y)")), { x1: -0, y1: -1 });
+  assert.deepStrictEqual(L.symbolTransform(at(90, "(mirror x)")), { x1: 0, y1: 1 });
+  const j = (rot) => { const n = L.visitItem({ id: "s1", kind: "symbol", node: at(rot) }, scope({ references: true }), nf, { vAlign: "top" }, ctx()); return K.serialize(K.kid(K.kid(prop(n, "Reference"), "effects"), "justify")); };
+  assert.strictEqual(j(0), "(justify top)"); assert.strictEqual(j(90), "(justify top)");
+  assert.strictEqual(j(180), "(justify top)"); assert.strictEqual(j(270), "(justify bottom)");
+});
+test("fill goes on a polygon (SCH_SHAPE), never on a 2-point graphic line (SCH_LINE)", () => {
+  const line = K.parse(`(polyline (pts (xy 0 0) (xy 10 0)) (stroke (width 0) (type default)) (uuid "l"))`);
+  const poly = K.parse(`(polyline (pts (xy 0 0) (xy 10 0) (xy 10 10)) (stroke (width 0) (type default)) (fill (type none)) (uuid "p"))`);
+  const s = { lineWidth: 0.3, fillColor: [255, 0, 0, 1] };
+  const a = L.visitItem({ id: "l", kind: "polyline", node: line }, scope({ schTextAndGraphics: true }), nf, s, ctx());
+  assert.strictEqual(K.kid(a, "fill"), null); assert.deepStrictEqual(K.kid(K.kid(a, "stroke"), "width"), ["width", 0.3]);
+  const b = L.visitItem({ id: "p", kind: "polyline", node: poly }, scope({ schTextAndGraphics: true }), nf, s, ctx());
+  assert.strictEqual(K.serialize(K.kid(b, "fill")), "(fill (type color) (color 255 0 0 1))");
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

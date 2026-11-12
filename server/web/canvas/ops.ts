@@ -32,9 +32,25 @@ export function setAt(node, x, y, rot) {
 }
 
 /** Apply one wire-format change {id, kind, sexpr?, itemSexpr?, properties?} (IU per mm given). */
+/** The schematic-only library copy a symbol names with (lib_name …), or null. */
+function libNameOf(doc, id) {
+  const it = doc.type === "sch" ? doc.items.get(id) : null; if (!it || it.kind !== "symbol") return null;
+  const n = kid(it.node, "lib_name"); return n ? str(n[1]) : null;
+}
+/**
+ * SCH_SCREEN::Remove -> PruneUnusedLibSymbol for a split-off library copy (a symbol's (lib_name "R_1")): once no
+ * symbol on the sheet names it any more, it leaves (lib_symbols).  Copies named by their lib_id stay, as other
+ * edits in flight (a symbol being placed) rely on them.
+ */
+function pruneLibName(doc, name) {
+  if (!name || !doc.lib || !doc.lib.has(name)) return;
+  for (const it of doc.items.values()) if (it.kind === "symbol") { const n = kid(it.node, "lib_name") || kid(it.node, "lib_id"); if (n && str(n[1]) === name) return; }
+  doc.lib.delete(name);
+}
 export function applyChange(doc, change, IU) {
   const id = str(change.id), kind = str(change.kind).toUpperCase();
-  if (kind === "REMOVED") return doc.items.delete(id);
+  const oldLib = libNameOf(doc, id);
+  if (kind === "REMOVED") { const r = doc.items.delete(id); pruneLibName(doc, oldLib); return r; }
   const frag = change.sexpr || change.itemSexpr;
   if (frag) {
     const nodes = fragmentItems(doc, frag);
@@ -46,7 +62,7 @@ export function applyChange(doc, change, IU) {
       doc.items.delete(nid);
       const it = addItem(doc, node); if (it) { applied = true; }
     }
-    if (applied) return true;
+    if (applied) { pruneLibName(doc, oldLib); return true; }
   }
   const item = doc.items.get(id);
   if (!item) return false;

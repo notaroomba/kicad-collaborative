@@ -17,7 +17,7 @@ import { KD, checkbox, confirmBox, h, select, textInput } from "./dom";
 import * as L from "./sch-items-logic";
 import { HL, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
-import { openSheetProperties, openSymbolProperties } from "./sch-symbol-sheet";
+import { openSheetProperties, openSymbolProperties, sheetPathNow } from "./sch-symbol-sheet";
 import { openPageSettings } from "./page-settings";
 
 type Ctx = ToolCtx & { doc: KDoc };
@@ -151,10 +151,10 @@ function existingLabels(kind: string, doc: KDoc): string[] {
   const c = netMap(); if (c) for (const d of c.docs.values()) if (d !== doc) docs.push(d);
   const H = schH();
   for (const d of docs) for (const it of d.items.values()) {
-    if (it.kind === kind) out.add(L.str(it.node[1]));
+    if (it.kind === kind) out.add(L.unescapeString(L.str(it.node[1])));
     if ((kind === "global_label" || kind === "label") && it.kind === "symbol" && H) {
       const lib = L.kid(it.node, "lib_id"); if (!lib || !H.isPowerSymbol(d, L.str(lib[1]))) continue;
-      const v = L.kids(it.node, "property").find((p) => L.fieldName(p) === "Value"); if (v && kind === "global_label") out.add(L.fieldValue(v));
+      const v = L.kids(it.node, "property").find((p) => L.fieldName(p) === "Value"); if (v && kind === "global_label") out.add(L.unescapeString(L.fieldValue(v)));
     }
   }
   out.delete("");
@@ -166,6 +166,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
   ensureCss();
   const kind = item.kind, doc = ctx.doc, isNew = !!opts.onCreate, dir = L.isDirective(kind);
   const staged = L.clone(item.node), st = L.readLabel(kind, staged), [ox, oy] = L.atOf(staged), origin: [number, number] = [ox, oy];
+  st.text = L.unescapeString(st.text);   // TransferDataToWindow shows control characters in a human-readable format
   const mandatory = kind === "global_label" ? ["Intersheetrefs"] : [];
   const ro = !!ctx.viewOnly;
   let textEl: HTMLInputElement | HTMLTextAreaElement | null = null, multiCb: HTMLInputElement | null = null, grid: { rows(): L.FieldRow[] } | null = null;
@@ -250,7 +251,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         bold: boldB ? isOn(boldB) : st.bold, italic: italB ? isOn(italB) : st.italic, color: color ? color.get() : st.color,
         spin: spinBtn ? Number(spinBtn.dataset.spin) as 0 | 1 | 2 | 3 : st.spin, autoRotate: !!(autoCb && autoCb.checked) };
       const moved = rows.some((r) => L.rowMoved(r, origin));
-      const lines = dir ? [""] : L.labelLines(raw, multi);
+      const lines = dir ? [""] : L.labelLines(raw, multi, isNew);
       if (!lines.length) { void messageBox("Label can not be empty."); return false; }
       const build = (text: string): SNode => {
         const n = L.clone(staged); L.writeLabel(kind, n, Object.assign({}, next, { text }));
@@ -269,7 +270,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
         for (let i = 1; i < nodes.length; i++) { const u = L.kid(nodes[i], "uuid"); if (u) u[1] = KiCadCanvas.newUuid() as unknown as SNode; }
         return opts.onCreate ? opts.onCreate(nodes[0], nodes.slice(1)) as boolean | undefined : undefined;
       }
-      commitItem(ctx, item, build(raw.replace(/\r/g, "")), "Edit Label Properties");
+      commitItem(ctx, item, build(dir ? "" : lines[0]), "Edit Label Properties");
       return undefined;
     },
   });
@@ -326,7 +327,6 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
     ok() {
       if (ro || !body) return;
       const text = (els.text as HTMLTextAreaElement).value.replace(/\r/g, "\n");
-      if (!text.trim() && !box) { void messageBox("Text can not be empty."); return false; }
       const size = lenValue(els.size as HTMLInputElement);
       if (size === undefined || size < 0.01 || size > 1000) { void messageBox(`The value must be between ${fmtLen(0.01)} and ${fmtLen(1000)} ${unitName()}.`); return false; }
       if (!L.validHyperlink((els.link as HTMLInputElement).value.trim())) { void messageBox(L.BAD_LINK); return false; }
@@ -389,6 +389,11 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       if (ro) return;
       const size = lenValue(els.size as HTMLInputElement);
       if (size === undefined || size < 0.01 || size > 1000) { void messageBox(`The value must be between ${fmtLen(0.01)} and ${fmtLen(1000)} ${unitName()}.`); return false; }
+      // FIELD_VALIDATOR on the text of a Reference, Footprint, Datasheet, Sheetname or Sheetfile field
+      const fid: L.FieldId | null = item.kind === "symbol" ? (name === "Reference" ? "REFERENCE" : name === "Footprint" ? "FOOTPRINT" : name === "Datasheet" ? "DATASHEET" : null)
+        : item.kind === "sheet" ? (/^Sheet ?name$/i.test(name) ? "SHEET_NAME" : isFile ? "SHEET_FILENAME" : null) : null;
+      const verr = fid && !isFile ? L.fieldValidationError(fid, (els.text as HTMLInputElement).value) : "";
+      if (verr) { void messageBox(verr, "Field Validation Error"); (els.text as HTMLInputElement).focus(); return false; }
       const staged = L.clone(item.node); const p = L.kids(staged, "property").find((q) => L.fieldName(q) === name) as SNode;
       const hv = (["left", "center", "right"] as const).find((v, i) => isOn(els["h" + i])) || fx.h, vv = (["top", "center", "bottom"] as const).find((v, i) => isOn(els["v" + i])) || fx.v;
       const row = L.rowFromField(p, [0, 0], false);
@@ -399,7 +404,7 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       const np = L.fieldFromRow(row, [0, 0]);
       for (let j = 1; j < staged.length; j++) if (staged[j] === p) staged[j] = np;
       // a symbol's reference also lives in its instance data (SCH_SYMBOL::SetRef)
-      if (name === "Reference" && item.kind === "symbol") for (const inst of L.kids(staged, "instances")) for (const pr of L.kids(inst, "project")) for (const pa of L.kids(pr, "path")) { const r = L.kid(pa, "reference"); if (r) r[1] = row.value as unknown as SNode; }
+      if (name === "Reference" && item.kind === "symbol") { const here = sheetPathNow(doc); L.setInstanceData(staged, here.path, here.project, { reference: row.value }); }   // SetUserRef( *aSheetPath, m_text )
       let out = staged;
       if (moved) L.drop(out, "fields_autoplaced");
       else if (L.yes(out, "fields_autoplaced") && item.kind === "symbol") {   // the parent is autoplaced again (editFieldText)
@@ -419,15 +424,23 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
   const w = L.common(strokes.map((s) => s.width)), sty = L.common(strokes.map((s) => s.style)), c = L.common(strokes.map((s) => s.color));
   const jd = L.common(juncs.map((j) => L.readJunction(j.node).diameter));
   let width: HTMLInputElement, style: HTMLSelectElement, jsize: HTMLInputElement | null = null, col: Swatch | null = null, colTouched = false;
+  // lineTypeNames (Solid … Dash-Dot-Dot); the wire & bus list ends with DEFAULT_WIRE_STYLE_LABEL, the line list has no
+  // Default entry (a default-styled line shows DEFAULT_LINE_STYLE_LABEL, "Solid"); mixed styles add INDETERMINATE_STYLE
+  const named = L.LINE_STYLES.filter(([v]) => v !== "default");
+  const styles: [string, string][] = kind === "wires" ? [...named, ["default", "Default"]] : named;
+  if (sty === undefined) styles.push(["", "Leave unchanged"]);
+  const sty0 = sty === undefined ? "" : kind === "lines" && sty === "default" ? "solid" : sty;
   KD().open({
     title: kind === "lines" ? "Line Properties" : "Wire & Bus Properties", width: 420, readOnly: ro,
+    // DIALOG_WIRE_BUS_PROPERTIES::resetDefaults
+    extra: kind === "wires" && !ro ? [{ label: "Default", fn: () => { width.value = fmtLen(0); if (col) { col.set(null); colTouched = true; } style.value = "default"; if (jsize && !jsize.disabled) jsize.value = fmtLen(0); } }] : [],
     build(b) {
       const g = h("div", { class: "kd-fmt" });
       width = lenBox(w, "kd-ln-width"); if (w === undefined) width.placeholder = "INDETERMINATE";
       g.append(h("label", null, kind === "lines" ? "Width:" : "Wire/bus width:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, width, units()), h("span"));
       col = swatch(c === undefined ? null : c, "kd-ln-color", () => { colTouched = true; }, ro);
       g.append(h("label", null, "Color:"), col.el, h("span"));
-      style = select(sty === undefined ? [["", "-- mixed values --"], ...L.LINE_STYLES] : L.LINE_STYLES, sty === undefined ? "" : sty, undefined, { id: "kd-ln-style", disabled: ro });
+      style = select(styles, sty0, undefined, { id: "kd-ln-style", disabled: ro });
       g.append(h("label", null, "Style:"), style, h("span"));
       if (kind === "wires") {
         jsize = lenBox(jd, "kd-ln-jsize"); jsize.disabled = ro || !juncs.length; if (juncs.length && jd === undefined) jsize.placeholder = "INDETERMINATE";
@@ -437,7 +450,7 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
     },
     ok() {
       if (ro) return;
-      const nw = lenValue(width), ns = style.value || undefined, nj = jsize ? lenValue(jsize) : undefined;
+      const nw = lenValue(width), ns = style.value && style.value !== sty0 ? style.value : undefined, nj = jsize ? lenValue(jsize) : undefined;
       const changes: KChange[] = [];
       for (const it of items) {
         const n = L.clone(it.node);
@@ -479,7 +492,8 @@ function junctionDialog(ctx: Ctx, items: KItem[]): void {
 }
 
 // ---------------------------------------------------------------- DIALOG_SHAPE_PROPERTIES / DIALOG_IMAGE_PROPERTIES
-const SHAPE_NAMES: Record<string, string> = { rectangle: "Rectangle", circle: "Circle", arc: "Arc", bezier: "Bezier Curve", polyline: "Polyline", rule_area: "Rule Area" };
+/** EDA_SHAPE::GetFriendlyName (the title is "%s Properties"). */
+const SHAPE_NAMES: Record<string, string> = { rectangle: "Rectangle", circle: "Circle", arc: "Arc", bezier: "Curve", polyline: "Polygon", rule_area: "Rule Area" };
 function shapeDialog(ctx: Ctx, item: KItem): void {
   ensureCss();
   const ro = !!ctx.viewOnly, st = L.readStroke(item.node), fl = L.readFill(item.node), name = SHAPE_NAMES[item.kind] || "Shape", rule = item.kind === "rule_area";
@@ -552,7 +566,8 @@ export function schItemDialog(ctx: ToolCtx, item: KItem, opts: ItemOpts = {}): b
   if (L.LABEL_KINDS.has(k)) { openLabelDialog(c, item, opts); return true; }
   if (k === "text" || k === "text_box") { openTextDialog(c, item, opts); return true; }
   if (opts.onCreate && k !== "sheet") return false;   // other new items keep the generic sheet
-  if (k === "polyline") { strokeDialog(c, [item], "lines"); return true; }
+  if (k === "polyline" && L.isGraphicLine(k, item.node)) { strokeDialog(c, [item], "lines"); return true; }
+  if (k === "polyline") { shapeDialog(c, item); return true; }   // a polygon (SCH_SHAPE): DIALOG_SHAPE_PROPERTIES
   if (k === "wire" || k === "bus" || k === "bus_entry") { strokeDialog(c, [item], "wires"); return true; }
   if (k === "junction") { junctionDialog(c, [item]); return true; }
   if (SHAPE_KINDS.has(k)) { shapeDialog(c, item); return true; }
@@ -580,7 +595,7 @@ export function schProperties(): boolean {
   if (!E.kdoc || E.kdoc.type !== "sch") return false;
   const ctx = toolCtx() as Ctx;
   const items = Array.from(selectedIds()).map((id) => (E.kdoc as KDoc).items.get(id)).filter((x): x is KItem => !!x);
-  const t = L.propertiesTarget(items.map((i) => ({ id: i.id, kind: i.kind })));
+  const t = L.propertiesTarget(items.map((i) => ({ id: i.id, kind: i.kind, node: i.node })));
   if (t.dialog === "lines") { strokeDialog(ctx, items, "lines"); return true; }
   if (t.dialog === "junctions") { junctionDialog(ctx, items); return true; }
   if (t.dialog === "wires") { strokeDialog(ctx, items, "wires"); return true; }

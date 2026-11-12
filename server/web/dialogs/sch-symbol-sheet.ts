@@ -13,8 +13,8 @@ import { KD, checkbox, confirmBox, h, select, textInput } from "./dom";
 import * as L from "./sch-items-logic";
 import { fieldsGrid, messageBox, swatch, type Swatch } from "./sch-items";
 import { openChangeSymbols } from "./change-symbols";
-import { docBase, projectDocs, submitDocOp } from "./project";
-import { currentInstance, netMap } from "../editor/schnets";
+import { docBase, projectDocs, readDoc, submitDocOp } from "./project";
+import { currentInstance, loadSheets, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
 
 type Ctx = ToolCtx & { doc: KDoc };
@@ -32,6 +32,16 @@ const lenBox = (mm: number, id: string): HTMLInputElement => { const i = textInp
 const lenOf = (i: HTMLInputElement, d: number): number => { const v = parseLen(i.value); return Number.isFinite(v) ? v : d; };
 const flag = (n: SNode, k: string, dflt: boolean): boolean => (L.kid(n, k) ? L.yes(n, k) : dflt);
 function setFlag(n: SNode, k: string, on: boolean): void { const c = L.kid(n, k); if (c) c[1] = (on ? "yes" : "no") as unknown as SNode; else L.put(n, k, [on ? "yes" : "no"], ["fields_autoplaced", "stroke", "uuid", "property"]); }
+
+/** The sheet path on screen ("/<root uuid>/<sheet uuid>…") and the project name its instance data is filed under. */
+export function sheetPathNow(doc: KDoc): { path: string | null; project: string | null } {
+  const inst = currentInstance(netMap());
+  const pro = projectDocs().find((d) => d.docType === "kicad_pro");
+  let project: string | null = pro ? (pro.path.split("/").pop() || "").replace(/\.kicad_pro$/, "") : null;
+  let path: string | null = inst && inst.uuidPath.length ? "/" + inst.uuidPath.join("/") : null;
+  if (!path || !project) { const H = SH() as (SchHelpers & { sheetPathHere?(d: KDoc): { path: string | null; project: string | null } }) | null; const f = H && H.sheetPathHere ? H.sheetPathHere(doc) : null; if (f) { path = path || f.path; project = project || f.project; } }
+  return { path, project };
+}
 
 // ---------------------------------------------------------------- the library symbol's pins and options
 interface LibPin { number: string; name: string; type: string; style: string; alternates: string[] }
@@ -104,7 +114,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem): void {
         { label: "Pin Functions", build(pg) {
           if (!pinRows.length) { pg.append(h("p", { class: "kd-note" }, "This symbol has no pins.")); return; }
           KD().grid(pg, [
-            { key: "number", label: "Pin Number", type: "ro", width: 80 }, { key: "name", label: "Base Pin Name", type: "ro", width: 140 },
+            { key: "number", label: "Number", type: "ro", width: 80 }, { key: "name", label: "Base Name", type: "ro", width: 140 },
             { key: "alt", label: "Alternate Assignment", type: "choice", width: 160, options: (r: typeof pinRows[number]) => [["", r.name], ...r.alts.map((a): [string, string] => [a, a])], ro: (r: typeof pinRows[number]) => !r.alts.length },
             { key: "type", label: "Electrical Type", type: "ro", width: 120 }, { key: "style", label: "Graphic Style", type: "ro", width: 120 },
           ], pinRows, { readOnly: ro, height: 360 });
@@ -114,12 +124,15 @@ export function openSymbolProperties(ctx: Ctx, item: KItem): void {
     ok() {
       if (ro || !grid) return;
       const rows = grid.rows(); const dup = L.duplicateFieldName(rows); if (dup) { void messageBox(dup); return false; }
-      const ref = rows.find((r) => r.name === "Reference"); if (ref && !ref.value.trim()) { void messageBox("References must start with a letter."); return false; }
+      const bad = L.validateFieldRows("symbol", rows); if (bad) { void messageBox(bad.message, bad.title); return false; }
+      const ref = rows.find((r) => r.name === "Reference");
       const n = L.clone(staged);
       const moved = rows.some((r) => L.rowMoved(r, origin));
       L.writeFields(n, rows, origin);
-      if (ref) for (const inst of L.kids(n, "instances")) for (const pr of L.kids(inst, "project")) for (const pa of L.kids(pr, "path")) { const r = L.kid(pa, "reference"); if (r) r[1] = ref.value as unknown as SNode; }
-      const nu = Number(els.unit.value); if (nu !== unit) { PH().setSymbolUnit(n, nu); for (const inst of L.kids(n, "instances")) for (const pr of L.kids(inst, "project")) for (const pa of L.kids(pr, "path")) { const u = L.kid(pa, "unit"); if (u) u[1] = nu as unknown as SNode; } }
+      // SetUserRef( currentSheet, base ) / SetUnitSelection( &GetCurrentSheet(), … ): only this sheet path's instance data
+      const here = sheetPathNow(doc);
+      if (ref) L.setInstanceData(n, here.path, here.project, { reference: ref.value });
+      const nu = Number(els.unit.value); if (nu !== unit) { PH().setSymbolUnit(n, nu); L.setInstanceData(n, here.path, here.project, { unit: nu }); }
       const nb = Number(els.body.value); if (nb !== body) { const k = L.kid(n, "body_style") ? "body_style" : L.kid(n, "convert") ? "convert" : "body_style"; L.put(n, k, [nb], ["exclude_from_sim", "in_bom", "uuid", "property"]); }
       const na = Number(els.angle.value), nm = els.mirror.value;
       if (na !== angle || nm !== mirror) { PH().setSymbolRotation(n, na); PH().setSymbolMirror(n, nm); }
@@ -138,8 +151,10 @@ export function openSymbolProperties(ctx: Ctx, item: KItem): void {
         const copy = L.clone(lib); L.setPinVisibility(copy, "pin_numbers", showNum); L.setPinVisibility(copy, "pin_names", showName);
         const shared = Array.from(doc.items.values()).some((o) => o.id !== item.id && o.kind === "symbol" && L.str(((L.kid(o.node, "lib_name") || L.kid(o.node, "lib_id")) || [])[1]) === libName);
         if (shared) {
-          const base = libId.split(":").pop() || libId; let k = 1; while (doc.lib.has(`${base}_${k}`)) k++;
-          const nn = `${base}_${k}`; copy[1] = nn as unknown as SNode; L.drop(out, "lib_name"); out.splice(1, 0, L.qnode("lib_name", nn));
+          // SCH_SCREEN::Append: an existing variant equal to the edited copy is reused, else a new "<name>_<n>"
+          const v = L.libVariantName(doc.lib, libId, copy);
+          copy[1] = v.name as unknown as SNode; L.drop(out, "lib_name");
+          if (v.name !== libId) { const at = out.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "lib_id"); out.splice(at > 0 ? at : 1, 0, L.qnode("lib_name", v.name)); }
         }
         sexpr = "(lib_symbols " + KiCadCanvas.serialize(copy) + ") " + KiCadCanvas.serialize(out);
       }
@@ -189,8 +204,10 @@ export function openSheetProperties(ctx: Ctx, item: KItem, opts: SheetOpts = {})
     ok() {
       if (ro || !grid) return;
       const rows = grid.rows(); const dup = L.duplicateFieldName(rows); if (dup) { void messageBox(dup); return false; }
-      const name = nameOf(rows);
-      if (!name.trim()) { void messageBox("A sheet must have a name."); return false; }
+      // the grid's FIELD_VALIDATORs (an emptied Sheetname cell is vetoed: "A sheet must have a name.") and Validate()
+      const bad = L.validateFieldRows("sheet", rows); if (bad) { void messageBox(bad.message, bad.title); return false; }
+      const nr = rows.find((x) => /^Sheet ?name$/i.test(x.name));
+      if (nr && !nr.value) nr.value = "Untitled Sheet";   // unedited data from a file can still be empty
       const fr = rows.find((x) => /^Sheet ?file$/i.test(x.name));
       let file = fr ? normFile(fr.value) : "";
       if (!file) { void messageBox("A sheet must have a valid file name."); return false; }
@@ -213,6 +230,33 @@ export function openSheetProperties(ctx: Ctx, item: KItem, opts: SheetOpts = {})
     ctx.commit([KiCadCanvas.replaceChange(doc, Object.assign({}, item, { node: n, geom: [], bbox: null }) as KItem)], "Edit Sheet Properties");
   }
 }
+/** The hierarchy's sheet paths as file names from the root down (SCH_SHEET_LIST of the schematic). */
+async function hierarchyPaths(): Promise<string[][]> {
+  try { await loadSheets(true); } catch (e) { /* the sheets as last read */ }
+  const c = netMap(); if (!c) return [];
+  const byPath = new Map<string, string>(); for (const i of c.instances) byPath.set(i.uuidPath.join("/"), i.file);
+  return c.instances.map((i) => i.uuidPath.map((_, k) => byPath.get(i.uuidPath.slice(0, k + 1).join("/")) || ""));
+}
+/** A sheet file and every file under it (SCH_SHEET_LIST( aSheet ) of the loaded file), read from the project. */
+async function subFiles(file: string): Promise<string[]> {
+  const c = netMap(), docs = projectDocs().filter((d) => d.docType === "kicad_sch");
+  const out: string[] = [], seen = new Set<string>(), todo = [file];
+  while (todo.length && out.length < 500) {
+    const f = todo.shift() as string; if (seen.has(f)) continue; seen.add(f); out.push(f);
+    let d: KDoc | null = c ? c.docs.get(f) || null : null;
+    const entry = docs.find((x) => x.path === f);
+    if (!d && entry) { try { d = await readDoc(entry.docId, "kicad_sch"); } catch (e) { d = null; } }
+    if (!d) continue;
+    const dir = f.split("/").slice(0, -1);
+    for (const it of d.items.values()) {
+      if (it.kind !== "sheet") continue;
+      const p = L.kids(it.node, "property").find((q) => /^Sheet ?file$/i.test(L.fieldName(q))); if (!p) continue;
+      const parts: string[] = []; for (const s of [...dir, ...normFile(L.fieldValue(p)).split("/")]) { if (!s || s === ".") continue; if (s === "..") parts.pop(); else parts.push(s); }
+      todo.push(parts.join("/"));
+    }
+  }
+  return out;
+}
 /** SCH_EDIT_FRAME::ChangeSheetFile for an existing sheet: link an existing file, or copy this sheet's contents to a new one. */
 async function changeSheetFile(ctx: Ctx, item: KItem, node: SNode, oldFile: string, newFile: string): Promise<boolean> {
   const cur = (ctx.docs as { docId: string; path: string; docType: string }[] || []).find((d) => d.docId === ctx.docId) || null;
@@ -221,7 +265,11 @@ async function changeSheetFile(ctx: Ctx, item: KItem, node: SNode, oldFile: stri
   const docs = projectDocs().filter((d) => d.docType === "kicad_sch");
   const target = docs.find((d) => d.path === abs(newFile)), source = docs.find((d) => d.path === abs(oldFile));
   if (target) {
-    return confirmBox("Confirmation", `Change '${abs(newFile)}' link from '${oldFile}' to '${newFile}'?\n\nThis action cannot be undone.`);
+    if (!(await confirmBox("Confirmation", `Change '${abs(newFile)}' link from '${oldFile}' to '${newFile}'?\n\nThis action cannot be undone.`))) return false;
+    // CheckSheetForRecursion with a temporary sheet on the linked screen
+    const dest = cur ? cur.path : "";
+    if (dest && L.sheetRecursion(await hierarchyPaths(), await subFiles(target.path), dest)) { await messageBox(L.RECURSION_MSG(dest)); return false; }
+    return true;
   }
   // the sheet's contents are saved under the new name (a sheet used more than once asks first)
   const uses = Array.from(ctx.doc.items.values()).filter((o) => o.kind === "sheet" && o.id !== item.id && L.kids(o.node, "property").some((p) => /^Sheet ?file$/i.test(L.fieldName(p)) && normFile(L.fieldValue(p)) === normFile(oldFile))).length;

@@ -109,5 +109,82 @@ test("symbol pin options: pin text visibility on the library copy, alternates on
   L.setPinAlternate(n, "1", ""); assert.strictEqual(S(K.kids(n, "pin")[0]), '(pin "1" (uuid "p1"))');
   L.setPinAlternate(n, "7", "SDA"); assert.deepStrictEqual(n.filter(Array.isArray).map((c) => c[0]), ["lib_id", "at", "uuid", "pin", "pin", "instances"]);
 });
+test("Properties dispatch: a 2-point polyline is a graphic line, 3+ points a polygon (its own shape dialog)", () => {
+  const two = K.parse(`(polyline (pts (xy 0 0) (xy 1 0)) (uuid "a"))`), three = K.parse(`(polyline (pts (xy 0 0) (xy 1 0) (xy 1 1)) (uuid "b"))`);
+  assert.strictEqual(L.propertiesTarget([{ id: "a", kind: "polyline", node: two }]).dialog, "lines");
+  assert.deepStrictEqual(L.propertiesTarget([{ id: "b", kind: "polyline", node: three }]), { dialog: "item", id: "b" });
+  assert.strictEqual(L.propertiesTarget([{ id: "a", kind: "polyline", node: two }, { id: "b", kind: "polyline", node: three }]).dialog, "mixed");
+});
+test("FIELD_VALIDATOR messages (common/validators.cpp)", () => {
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "R1"), "");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "1R"), "", "GetRefDesPrefix('1R') is '1R': KiCad accepts it");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "12"), "References must start with a letter.");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "?"), "References must start with a letter.");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "R 5"), "The reference designator cannot contain space character(s).");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", ""), "The value of the field cannot be empty.");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "R${X}"), "The reference designator cannot contain text variable references");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "R\t 1"), "The reference designator cannot contain tab or space character(s).");
+  assert.strictEqual(L.fieldValidationError("REFERENCE", "R\n\t 1"), "The reference designator cannot contain line feed, tab, space character(s).");
+  assert.strictEqual(L.fieldValidationError("SHEET_NAME", ""), "A sheet must have a name.");
+  assert.strictEqual(L.fieldValidationError("SHEET_NAME", "a/b"), "The sheet name cannot contain '/' character(s).");
+  assert.strictEqual(L.fieldValidationError("SHEET_FILENAME", ""), "A sheet must have a file specified.");
+  assert.strictEqual(L.fieldValidationError("USER", ""), "");
+});
+test("fields grid validation at OK: cell validators, then nameless fields", () => {
+  const row = (name, value, mandatory = false) => Object.assign(L.newRow(name, [0, 0]), { value, mandatory });
+  assert.strictEqual(L.validateFieldRows("symbol", [row("Reference", "R1", true), row("Value", "a\tb", true)]), null, "a symbol's Value has no validator");
+  assert.deepStrictEqual(L.validateFieldRows("symbol", [row("Reference", "R 5", true)]), { title: "Field Validation Error", message: "The reference designator cannot contain space character(s)." });
+  assert.deepStrictEqual(L.validateFieldRows("symbol", [row("Reference", "R1", true), row("", "xyz")]), { title: "Error", message: "Fields must have a name." });
+  assert.strictEqual(L.validateFieldRows("sheet", [row("Sheetname", "a", true), row("Sheetfile", "a.kicad_sch", true), row("", "")]), null, "a sheet minds only a nameless field with text");
+  assert.strictEqual(L.validateFieldRows("sheet", [row("Sheetname", "", true)]).message, "A sheet must have a name.");
+});
+test("label text: EscapeString( CTX_NETNAME ) on OK, UnescapeString to show", () => {
+  assert.deepStrictEqual(L.labelLines("A/B", false, true), ["A{slash}B"]);
+  assert.deepStrictEqual(L.labelLines("  A/B  ", false, false), ["  A{slash}B  "], "an edited label keeps the text as typed");
+  assert.deepStrictEqual(L.labelLines(" X \n\n Y/Z\r", true, true), ["X", "Y{slash}Z"]);
+  assert.strictEqual(L.unescapeString("A{slash}B"), "A/B");
+  assert.strictEqual(L.unescapeString("~{RESET}/x{dblquote}"), "~{RESET}/x\"");
+  assert.strictEqual(L.unescapeString("${VAR}"), "${VAR}");
+  assert.strictEqual(L.unescapeString("{foo}"), "{foo}");
+});
+test("instance data: SetRef / SetUnitSelection change the current sheet path only", () => {
+  const n = K.parse(`(symbol (lib_id "Device:R") (uuid "s") (instances (project "pic" (path "/r" (reference "R1") (unit 1)) (path "/r/s2" (reference "R101") (unit 1))) (project "other" (path "/aaaa" (reference "R9") (unit 1)))))`);
+  assert.ok(L.setInstanceData(n, "/r", "pic", { reference: "R77", unit: 2 }));
+  assert.strictEqual(K.serialize(K.kid(n, "instances")), '(instances (project "pic" (path "/r" (reference "R77") (unit 2)) (path "/r/s2" (reference "R101") (unit 1))) (project "other" (path "/aaaa" (reference "R9") (unit 1))))');
+  assert.ok(!L.setInstanceData(n, "/nope", "pic", { reference: "X1" }), "an unknown path with several entries changes nothing");
+  const one = K.parse(`(symbol (uuid "s") (instances (project "p" (path "/q" (reference "U1") (unit 1)))))`);
+  assert.ok(L.setInstanceData(one, null, null, { reference: "U2" })); assert.ok(K.serialize(one).includes('(reference "U2")'));
+});
+test("CheckSheetForRecursion (SCH_SHEET_LIST::TestForRecursion)", () => {
+  const paths = [["root.kicad_sch"], ["root.kicad_sch", "a.kicad_sch"], ["root.kicad_sch", "a.kicad_sch", "b.kicad_sch"]];
+  assert.ok(L.sheetRecursion(paths, ["root.kicad_sch", "a.kicad_sch"], "root.kicad_sch"), "the root linked into itself");
+  assert.ok(L.sheetRecursion(paths, ["a.kicad_sch", "b.kicad_sch"], "b.kicad_sch"), "a parent linked under its child");
+  assert.ok(L.sheetRecursion(paths, ["root.kicad_sch"], "b.kicad_sch"));
+  assert.ok(!L.sheetRecursion(paths, ["c.kicad_sch"], "b.kicad_sch"));
+  assert.ok(!L.sheetRecursion(paths, ["b.kicad_sch"], "root.kicad_sch"), "a second instance of a sub-sheet is fine");
+  assert.ok(/^The sheet changes cannot be made because the destination sheet already has the sheet 'x' /.test(L.RECURSION_MSG("x")));
+});
+test("library variants: an equal existing copy is reused (SCH_SCREEN::Append), else a new <name>_<n>", () => {
+  const lib = new Map();
+  const R = K.parse(`(symbol "Device:R" (pin_numbers (hide yes)) (symbol "R_0_1"))`), R1 = K.parse(`(symbol "R_1" (symbol "R_0_1"))`);
+  lib.set("Device:R", R); lib.set("R_1", R1); lib.set("R_x", K.parse(`(symbol "R_x")`));
+  assert.deepStrictEqual(L.libVariantName(lib, "Device:R", K.parse(`(symbol "Device:R" (symbol "R_0_1"))`)), { name: "R_1", reused: true });
+  assert.deepStrictEqual(L.libVariantName(lib, "Device:R", K.parse(`(symbol "Device:R" (pin_numbers (hide yes)) (symbol "R_0_1"))`)), { name: "Device:R", reused: true });
+  assert.deepStrictEqual(L.libVariantName(lib, "Device:R", K.parse(`(symbol "Device:R" (pin_names (hide yes)) (symbol "R_0_1"))`)), { name: "R_2", reused: false });
+});
+test("a split-off library copy leaves lib_symbols with its last user (PruneUnusedLibSymbol); an item carries its own copy", () => {
+  const doc = K.parseDoc(`(kicad_sch (version 20250114) (generator "eeschema") (uuid "root") (paper "A4") (lib_symbols (symbol "Device:R" (symbol "R_0_1")) (symbol "R_1" (pin_numbers (hide yes)) (symbol "R_0_1")))
+    (symbol (lib_id "Device:R") (at 10 10 0) (unit 1) (uuid "a") (property "Reference" "R1" (at 10 10 0) (effects (font (size 1.27 1.27)))))
+    (symbol (lib_name "R_1") (lib_id "Device:R") (at 20 10 0) (unit 1) (uuid "b") (property "Reference" "R2" (at 20 10 0) (effects (font (size 1.27 1.27))))))`, "kicad_sch");
+  const b = doc.items.get("b");
+  assert.ok(K.serializeItem(doc, b).startsWith('(lib_symbols (symbol "R_1"'), "the inverse of an edit carries the R_1 copy");
+  const plain = K.cloneNode(b.node); plain.splice(plain.findIndex((c) => Array.isArray(c) && c[0] === "lib_name"), 1);
+  K.applyChange(doc, { id: "b", kind: "MODIFIED", typeName: "SCH_SYMBOL", sexpr: K.serialize(plain) }, 1e4);
+  assert.ok(!doc.lib.has("R_1") && doc.lib.has("Device:R"));
+  K.applyChange(doc, { id: "b", kind: "MODIFIED", typeName: "SCH_SYMBOL", sexpr: '(lib_symbols (symbol "R_1" (symbol "R_0_1"))) ' + K.serialize(b.node) }, 1e4);
+  assert.ok(doc.lib.has("R_1"));
+  K.applyChange(doc, { id: "b", kind: "REMOVED", typeName: "SCH_SYMBOL" }, 1e4);
+  assert.ok(!doc.lib.has("R_1") && doc.lib.has("Device:R"));
+});
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

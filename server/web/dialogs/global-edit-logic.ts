@@ -136,11 +136,14 @@ function editSpin(kind: string, n: SNode, spin: number): void {
 export function symbolTransform(node: SNode): { x1: number; y1: number } {
   const a = kid(node, "at"), rot = ((Math.round(a ? num(a[3]) : 0) % 360) + 360) % 360;
   let x1 = 1, y1 = 0;
-  if (rot === 90) { x1 = 0; y1 = -1; } else if (rot === 180) { x1 = -1; y1 = 0; } else if (rot === 270) { x1 = 0; y1 = 1; }
+  // the parser's TRANSFORM for (at x y 90) is (0, 1, -1, 0) and for 270 (0, -1, 1, 0); (mirror y) negates x1 / y1, (mirror x) keeps them
+  if (rot === 90) { x1 = 0; y1 = 1; } else if (rot === 180) { x1 = -1; y1 = 0; } else if (rot === 270) { x1 = 0; y1 = -1; }
   const m = kid(node, "mirror");
   if (m && str(m[1]) === "y") { x1 = -x1; y1 = -y1; }
   return { x1, y1 };
 }
+
+const polyPoints = (n: SNode): number => { const p = kid(n, "pts"); return p ? kids(p, "xy").length : 0; };
 
 // ---------------------------------------------------------------- the walk
 const LABELS = new Set(["label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
@@ -194,7 +197,7 @@ export function visitItem(item: { id: string; kind: string; node: SNode }, scope
     if ((kind === "polyline" && scope.schTextAndGraphics) || (kind === "wire" && scope.wires) || (kind === "bus" && scope.buses)) {
       if (!pass(false)) return null;
       editStroke(out, s);
-      if (kind === "polyline" && s.fillColor !== undefined) editFill(out, s.fillColor);
+      if (kind === "polyline" && s.fillColor !== undefined && polyPoints(item.node) > 2) editFill(out, s.fillColor);   // a 2-point line is a SCH_LINE, not a SCH_SHAPE
     }
   } else if (LABELS.has(kind)) {
     const at = ctx.attached(item.id);

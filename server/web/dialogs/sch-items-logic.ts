@@ -216,11 +216,41 @@ export function writeLabel(kind: string, n: SNode, s: LabelState): void {
   }
   if (spinOf(n) !== s.spin) setSpin(kind, n, s.spin);
 }
-/** EscapeString( text, CTX_NETNAME ) for one line of a label: '/' and other reserved characters stay, a newline is not allowed. */
-export function labelLines(text: string, multi: boolean): string[] {
+/** EscapeString( aSource, CTX_NETNAME ): '/' becomes {slash}, carriage returns and line feeds are dropped. */
+export function escapeNetName(text: string): string { return text.replace(/\//g, "{slash}").replace(/[\r\n]/g, ""); }
+const UNESCAPE: Record<string, string> = { dblquote: "\"", quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "\t", return: "\n", brace: "{" };
+/** UnescapeString (common/string_utils.cpp): {slash} -> '/' and the other tokens; ${…}, ~{…}, ^{…}, _{…} stay. */
+export function unescapeString(src: string): string {
+  if (src.length <= 2) return src;
+  let out = "", prev = "", ch = "";
+  for (let i = 0; i < src.length; ++i) {
+    prev = ch; ch = src[i];
+    if (ch === "{") {
+      let token = "", depth = 1, terminated = false;
+      for (i = i + 1; i < src.length; ++i) {
+        ch = src[i];
+        if (ch === "{") depth++; else if (ch === "}") depth--;
+        if (depth <= 0) { terminated = true; break; }
+        token += ch;
+      }
+      if (!terminated) out += "{" + unescapeString(token);
+      else if (prev === "$" || prev === "~" || prev === "^" || prev === "_") out += "{" + unescapeString(token) + "}";
+      else if (Object.prototype.hasOwnProperty.call(UNESCAPE, token)) out += UNESCAPE[token];
+      else out += "{" + unescapeString(token) + "}";
+    } else out += ch;
+  }
+  return out;
+}
+/**
+ * The label texts DIALOG_LABEL_PROPERTIES::TransferDataFromWindow writes.  An edited label keeps the text as typed,
+ * escaped (EscapeString( text, CTX_NETNAME )); a new label's text goes through m_labelList, one label per line,
+ * each line escaped and trimmed, empty lines skipped.
+ */
+export function labelLines(text: string, multi: boolean, isNew = true): string[] {
   const t = text.replace(/\r/g, "\n");
-  if (!multi) return [t.trim()];
-  return t.split("\n").map((l) => l.trim()).filter((l) => !!l);
+  if (!isNew) return [escapeNetName(t)];
+  const lines = multi ? t.split("\n") : [t];
+  return lines.map((l) => escapeNetName(l).trim()).filter((l) => !!l);
 }
 
 // ---------------------------------------------------------------- strokes, fills, junctions
@@ -264,13 +294,22 @@ export type PropsTarget =
   | { dialog: "mixed" } | { dialog: "item"; id: string } | { dialog: "promote"; id: string };
 const WIRE_KINDS = new Set(["wire", "bus", "bus_entry", "bus_wire_entry", "junction"]);
 /**
+ * A schematic (polyline) with two points is a SCH_LINE graphic line; with more it is a SCH_SHAPE polygon
+ * (SCH_IO_KICAD_SEXPR_PARSER: "keep SCH_SHAPE for a polygon and convert to SCH_LINE when the item has only 2 corners").
+ */
+export function isGraphicLine(kind: string, node?: SNode | null): boolean {
+  if (kind !== "polyline") return false;
+  if (!node) return true;
+  const pts = kid(node, "pts"); return !pts || kids(pts, "xy").length <= 2;
+}
+/**
  * Which dialog E opens for a selection (SCH_EDIT_TOOL::Properties): only graphic lines -> the line dialog, only
  * junctions -> the junction dialog, wires / buses / entries / junctions -> the wire & bus dialog, any other mix ->
  * the infobar; one item -> its own dialog, but nothing for a no-connect and a pin promoted to its symbol.
  */
-export function propertiesTarget(items: { id: string; kind: string }[]): PropsTarget {
+export function propertiesTarget(items: { id: string; kind: string; node?: SNode }[]): PropsTarget {
   if (!items.length) return { dialog: "none" };
-  if (items.every((i) => i.kind === "polyline")) return { dialog: "lines", ids: items.map((i) => i.id) };
+  if (items.every((i) => isGraphicLine(i.kind, i.node))) return { dialog: "lines", ids: items.map((i) => i.id) };
   if (items.every((i) => i.kind === "junction")) return { dialog: "junctions", ids: items.map((i) => i.id) };
   if (items.every((i) => WIRE_KINDS.has(i.kind))) return { dialog: "wires", ids: items.map((i) => i.id) };
   if (items.length > 1) return { dialog: "mixed" };
@@ -310,3 +349,105 @@ export function setPinAlternate(node: SNode, number: string, alt: string): void 
   drop(p, "alternate"); if (alt) p.push(qnode("alternate", alt));
 }
 
+
+
+// ---------------------------------------------------------------- FIELD_VALIDATOR (common/validators.cpp)
+export type FieldId = "REFERENCE" | "VALUE" | "FOOTPRINT" | "DATASHEET" | "SHEET_NAME" | "SHEET_FILENAME" | "USER";
+/** UTIL::GetRefDesPrefix: the reference up to its trailing digits and question marks. */
+export function refDesPrefix(ref: string): string { let i = ref.length; while (i > 0 && (ref[i - 1] === "?" || /[0-9]/.test(ref[i - 1]))) i--; return ref.slice(0, i); }
+/** GetFieldValidationErrorMessage: "" when the text is acceptable for that field. */
+export function fieldValidationError(id: FieldId, value: string): string {
+  let excludes = "\r\n\t";
+  if (id === "REFERENCE") excludes += " "; else if (id === "SHEET_NAME") excludes += "/";
+  const empty = id === "REFERENCE" || id === "SHEET_NAME" || id === "SHEET_FILENAME";
+  if (empty && !value) return id === "SHEET_NAME" ? "A sheet must have a name." : id === "SHEET_FILENAME" ? "A sheet must have a file specified." : "The value of the field cannot be empty.";
+  const found: string[] = [];
+  for (const c of excludes) if (value.includes(c)) found.push(c === "\r" ? "carriage return" : c === "\n" ? "line feed" : c === "\t" ? "tab" : c === " " ? "space" : `'${c}'`);
+  if (found.length) {
+    let bad = "";
+    found.forEach((f, i) => { if (bad) bad += found.length === 2 ? " or " : i < found.length - 2 ? ", or " : ", "; bad += f; });
+    const what: Record<FieldId, string> = { REFERENCE: "The reference designator", VALUE: "The value field", FOOTPRINT: "The footprint field", DATASHEET: "The datasheet field", SHEET_NAME: "The sheet name", SHEET_FILENAME: "The sheet filename", USER: "The field" };
+    return `${what[id]} cannot contain ${bad} character(s).`;
+  }
+  if (id === "REFERENCE" && value.includes("${")) return "The reference designator cannot contain text variable references";
+  if (id === "REFERENCE" && !refDesPrefix(value)) return "References must start with a letter.";
+  return "";
+}
+/** Which FIELD_VALIDATOR a fields-grid row's value gets (FIELDS_GRID_TABLE::GetAttr; a symbol's Value cell is a styled-text editor without one). */
+export function fieldIdOf(parentKind: string, name: string): FieldId | null {
+  if (parentKind === "symbol") return name === "Reference" ? "REFERENCE" : name === "Value" ? null : "USER";
+  if (parentKind === "sheet") return /^Sheet ?name$/i.test(name) ? "SHEET_NAME" : /^Sheet ?file$/i.test(name) ? "SHEET_FILENAME" : "USER";
+  return "USER";
+}
+/**
+ * The fields grid's checks at OK, in KiCad's order: each cell's FIELD_VALIDATOR (a wx grid vetoes the edit with
+ * "Field Validation Error"), then "Fields must have a name." for a user field without one (a sheet only minds a
+ * nameless field that has text).
+ */
+export function validateFieldRows(parentKind: string, rows: FieldRow[]): { title: string; message: string } | null {
+  for (const r of rows) {
+    const nameErr = r.mandatory ? "" : fieldValidationError("USER", r.name);
+    if (nameErr) return { title: "Field Validation Error", message: nameErr };
+    const id = fieldIdOf(parentKind, r.name), err = id ? fieldValidationError(id, r.value) : "";
+    if (err) return { title: "Field Validation Error", message: err };
+  }
+  for (const r of rows) {
+    if (r.mandatory || r.name) continue;
+    if (parentKind === "sheet" && !r.value) continue;
+    return { title: "Error", message: "Fields must have a name." };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- symbol instance data (SCH_SYMBOL::SetRef / SetUnitSelection)
+/**
+ * The (instances (project …) (path "…")) entry of one sheet path: the exact path (the named project first), or —
+ * when the hierarchy is not known — the only entry there is.  null when the symbol has no entry for the path.
+ */
+export function instanceEntry(node: SNode, path: string | null, project: string | null): SNode | null {
+  const inst = kid(node, "instances"); if (!inst) return null;
+  const prs = kids(inst, "project").slice().sort((a, b) => Number(str(b[1]) === project) - Number(str(a[1]) === project));
+  const all: SNode[] = []; for (const pr of prs) all.push(...kids(pr, "path"));
+  if (path) { const hit = all.find((p) => str(p[1]) === path); if (hit) return hit; }
+  return all.length === 1 ? all[0] : null;
+}
+/** SetRef / SetUnitSelection on the current sheet path only: the other projects' and sheet instances' data stay. */
+export function setInstanceData(node: SNode, path: string | null, project: string | null, data: { reference?: string; unit?: number }): boolean {
+  const e = instanceEntry(node, path, project); if (!e) return false;
+  if (data.reference !== undefined) { const r = kid(e, "reference"); if (r) r[1] = data.reference as unknown as SNode; else put(e, "reference", [data.reference], ["unit"]); }
+  if (data.unit !== undefined) { const u = kid(e, "unit"); if (u) u[1] = data.unit as unknown as SNode; else put(e, "unit", [data.unit]); }
+  return true;
+}
+
+// ---------------------------------------------------------------- SCH_SHEET_LIST::TestForRecursion
+/**
+ * Would linking `srcFiles` (the new sheet file and every file under it) into `dest` (the file of the sheet being
+ * edited's parent) make a loop?  `paths` are the hierarchy's sheet paths as file names from the root down.
+ */
+export function sheetRecursion(paths: string[][], srcFiles: string[], dest: string): boolean {
+  for (const src of srcFiles) {
+    if (src === dest) return true;                       // the source and destination file names cannot be the same
+    for (const p of paths) {
+      let i = p.indexOf(dest); if (i <= 0) continue;     // not in this path, or the root: no recursion possible
+      while (i > 0) { i--; if (p[i] === src) return true; }
+    }
+  }
+  return false;
+}
+export const RECURSION_MSG = (dest: string): string => `The sheet changes cannot be made because the destination sheet already has the sheet '${dest}' or one of its subsheets as a parent somewhere in the schematic hierarchy.`;
+
+// ---------------------------------------------------------------- SCH_SCREEN::Append's library symbol variants
+/**
+ * getLibSymbolNameMatches + the comparison in SCH_SCREEN::Append: the name of an existing library copy (the
+ * lib_id itself or "<item name>_<n>") that equals `copy` apart from its name, else a new "<item name>_<n>".
+ */
+export function libVariantName(lib: Map<string, SNode>, libId: string, copy: SNode): { name: string; reused: boolean } {
+  const item = libId.split(":").pop() || libId;
+  const matches: string[] = []; if (lib.has(libId)) matches.push(libId);
+  for (const n of lib.keys()) if (n.startsWith(item + "_") && /^\d+$/.test(n.slice(item.length + 1))) matches.push(n);
+  const body = (n: SNode): string => JSON.stringify((n as unknown[]).slice(2));
+  const want = body(copy);
+  for (const n of matches) { const l = lib.get(n); if (l && body(l) === want) return { name: n, reused: true }; }
+  let k = 1; while (lib.has(`${item}_${k}`)) k++;
+  return { name: `${item}_${k}`, reused: false };
+}
