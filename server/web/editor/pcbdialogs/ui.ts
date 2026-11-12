@@ -408,6 +408,28 @@ export function grid(columns: GridColumn[], rows: Record<string, CellValue>[], o
   refresh();
   return { el: wrap, rows: () => data, setRows(r) { data = r; sel = -1; refresh(); }, selected: () => sel, select, refresh };
 }
+/** EDA_LIST_DIALOG: a filter box (wildcards, "*text*", case-insensitive, on the first column), "Items:" and a
+ *  read-only list; OK, Enter or a double-click picks the selected row.  `onPick` gets the row's columns. */
+export function listDialog(title: string, headers: string[], items: string[][], onPick: (row: string[]) => void, opts?: { select?: string; width?: number }): DialogApi | null {
+  const cols: GridColumn[] = headers.map((label, i) => ({ key: "c" + i, label, type: "ro" as const }));
+  const toRows = (list: string[][]) => list.map((r) => { const o: Record<string, CellValue> = {}; r.forEach((v, i) => { o["c" + i] = v; }); return o; });
+  let shown = items.slice();
+  const g = grid(cols, toRows(shown), { height: "300px" });
+  const filter = h("input", { type: "text", placeholder: "Filter", "data-k": "filter", style: "width:100%;margin-bottom:6px" });
+  const wild = (pat: string) => new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  filter.addEventListener("input", () => { const re = wild("*" + filter.value.toLowerCase() + "*"); shown = items.filter((r) => re.test(String(r[0] || "").toLowerCase())); g.setRows(toRows(shown)); if (shown.length) g.select(0); });
+  let api: DialogApi | null = null;
+  const pick = (): boolean => { const i = g.selected(); const row = i >= 0 ? shown[i] : null; if (!row) return false; onPick(row); return true; };
+  api = openDialog({ title, width: opts && opts.width || 400,
+    build(body) {
+      body.append(filter, h("div", { class: "pd-lbl", style: "margin-bottom:4px" }, "Items:"), g.el);
+      g.el.addEventListener("dblclick", () => { if (pick() && api) api.close(); });
+      const at = opts && opts.select ? shown.findIndex((r) => r[0] === opts.select) : 0; if (shown.length) g.select(Math.max(0, at));
+      setTimeout(() => filter.focus(), 0);
+    },
+    ok() { return pick(); } });
+  return api;
+}
 /** The add / delete buttons KiCad puts under a grid. */
 export function gridButtons(g: GridApi, make: () => Record<string, CellValue>, opts?: { ro?: boolean; canDelete?(row: Record<string, CellValue>, i: number): boolean; onChange?(): void; move?: boolean; addTip?: string; delTip?: string }): HTMLElement {
   const ro = !!(opts && opts.ro);

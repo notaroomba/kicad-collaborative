@@ -20,6 +20,7 @@ import { commitObservers, setTool, toolCtx, undoStack } from "./tools";
 import { api, toast } from "./util";
 import { liveDocument, saveTextDocument, sendDocOps } from "./projectfile";
 import { confirmBox, promptText } from "../dialogs/dom";
+import { listDialog } from "./pcbdialogs/ui";
 import { enumPadsDialog, footprintCheckerDialog, footprintPropertiesDialog, padTableDialog, pushPadDialog } from "./pcbdialogs/fp-editor";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ActionHandler } from "./types";
@@ -588,6 +589,7 @@ async function showFootprintUsers(): Promise<void> {
 }
 
 /** PCB_ACTIONS::loadFpFromBoard: a board footprint (by reference) into the editor. */
+let lastBoardPick = "";
 async function loadFromBoard(): Promise<void> {
   const project = state.project; if (!project) return;
   const board = project.docs.find((d) => d.docType === "kicad_pcb"); if (!board) { toast("No board currently open.", 3500); return; }
@@ -597,8 +599,11 @@ async function loadFromBoard(): Promise<void> {
   const bd = KiCadCanvas.parseDoc(file, "kicad_pcb");
   const fps = Array.from(bd.items.values()).filter((i) => i.kind === "footprint").map((i) => ({ id: i.id, ref: i.ref || "?" })).sort((a, b) => PT().pad.strNumCmp(a.ref, b.ref));
   if (!fps.length) { toast("The board has no footprints", 3500); return; }
-  PT().openForm({ title: "Load Footprint from PCB", width: 360, fields: [{ k: "fp", label: "Reference:", type: "select", value: fps[0].id, options: fps.map((f) => [f.id, f.ref]) }],
-    apply: (v: Any) => { location.href = `/p/${project.projectId}/edit?fp=${encodeURIComponent(boardCopyId(board.docId, v.fp))}`; } });
+  // FOOTPRINT_EDIT_FRAME::SelectFootprintFromBoard: EDA_LIST_DIALOG "Footprints [N items]", one "Footprint" column of references
+  listDialog(`Footprints [${fps.length} items]`, ["Footprint"], fps.map((f) => [f.ref]), (row) => {
+    const f = fps.find((x) => x.ref === row[0]); if (!f) return; lastBoardPick = f.ref;
+    location.href = `/p/${project.projectId}/edit?fp=${encodeURIComponent(boardCopyId(board.docId, f.id))}`;
+  }, { select: lastBoardPick });
 }
 
 /** PCB_ACTIONS::editFpInFpEditor (Ctrl+E on the board): the selected footprint in a Footprint Editor window. */
