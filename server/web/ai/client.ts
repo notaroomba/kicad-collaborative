@@ -34,13 +34,15 @@ export interface AiState {
   status: AiStatus | null; statusError: string | null;
   messages: UiMessage[]; busy: boolean; activity: string;
   proposals: Record<string, Proposal>; previewId: string | null; settings: boolean;
+  /** Messages sent while a turn was running: each runs, oldest first, when the turn before it ends. */
+  queue: { id: number; text: string }[];
 }
 
 const LS_OPEN = "kui.ai.open", LS_WIDTH = "kui.ai.width", lsChat = (pid: string) => `kui.ai.chat.${pid}`;
 const ls = { get(k: string) { try { return localStorage.getItem(k); } catch { return null; } }, set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* full or blocked */ } }, del(k: string) { try { localStorage.removeItem(k); } catch { /* blocked */ } } };
 
 let S: AiState = { open: ls.get(LS_OPEN) === "1", width: Math.min(640, Math.max(300, Number(ls.get(LS_WIDTH)) || 380)), projectId: null, status: null, statusError: null,
-  messages: [], busy: false, activity: "", proposals: {}, previewId: null, settings: false };
+  messages: [], busy: false, activity: "", proposals: {}, previewId: null, settings: false, queue: [] };
 /** The conversation as the API sees it.  Kept beside the UI messages, never derived from them. */
 let history: any[] = [];
 /** What happened to proposals since the last message, told to the model at the start of the next one. */
@@ -128,7 +130,7 @@ export async function saveKey(key: string): Promise<string | null> {
 export async function removeKey() { await fetch("/api/ai/key", { method: "DELETE" }); await refreshStatus(); }
 
 export function newChat() {
-  stop(); hidePreview(); history = []; decisions = [];
+  set({ queue: [] }); stop(); hidePreview(); history = []; decisions = [];
   set({ messages: [], proposals: {} });
   if (S.projectId) ls.del(lsChat(S.projectId));
 }
@@ -309,8 +311,22 @@ async function streamTurn(ui: UiMessage, signal: AbortSignal): Promise<{ content
 
 export function stop() { if (abort) { abort.abort(); abort = null; } }
 
+let queueSeq = 0;
+/** Take a queued message back before it runs. */
+export function unqueue(id: number) { set({ queue: S.queue.filter((q) => q.id !== id) }); }
+/** Run the oldest queued message, if the pane is free. */
+function drain() { if (S.busy || !S.queue.length) return; const [next, ...rest] = S.queue; set({ queue: rest }); void run(next.text); }
+
+/** Send a message; while a turn is running it waits in the queue instead of being dropped. */
 export async function send(text: string): Promise<void> {
+  const say = text.trim(); if (!say || !S.projectId) return;
+  if (S.busy || S.queue.length) { set({ queue: [...S.queue, { id: ++queueSeq, text: say }] }); drain(); return; }
+  return run(say);
+}
+
+async function run(text: string): Promise<void> {
   const say = text.trim(); if (!say || S.busy || !S.projectId) return;
+  let failed = false;
   const user: UiMessage = { role: "user", blocks: [{ t: "text", text: say }] };
   const ui: UiMessage = { role: "assistant", blocks: [] };
   const notes = decisions.splice(0);
@@ -355,6 +371,7 @@ export async function send(text: string): Promise<void> {
     if (aborted) ui.blocks.push({ t: "notice", tone: "info", text: "Stopped." });
     else {
       const f = e instanceof ApiFailure ? e : null; if (!f) console.warn("assistant: request failed", e);
+      failed = true;   // what is queued stays queued: it would only fail the same way
       ui.blocks.push({ t: "notice", tone: "error", text: f ? f.message : "The connection to the assistant was lost. Try again." });
       if (f && (f.code === "ai_not_configured" || f.code === "ai_key_rejected" || f.code === "ai_daily_limit")) set({ settings: true });
     }
@@ -363,6 +380,7 @@ export async function send(text: string): Promise<void> {
     for (const b of ui.blocks) if (b.t === "thinking") b.done = true;
     set({ busy: false, activity: "", messages: S.messages.slice() });
     save(); refreshStatus();
+    if (!failed) drain();
   }
 }
 /** Drop the bookkeeping fields this file adds to a block before it goes back to the API. */

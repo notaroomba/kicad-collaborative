@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { useApp } from "../store";
 import { cx } from "../util";
 import { Markdown } from "./markdown";
-import { accept, aiStore, newChat, preview, refreshStatus, reject, removeKey, saveKey, send, setOpen, setProject, setWidth, showSettings, stop, toggleOpen, whyBlocked,
+import { accept, aiStore, newChat, preview, refreshStatus, reject, removeKey, saveKey, send, setOpen, setProject, setWidth, showSettings, stop, toggleOpen, unqueue, whyBlocked,
   type AiState, type UiBlock, type UiMessage } from "./client";
 import { refreshPreview, type Proposal } from "./proposals";
 
@@ -118,17 +118,28 @@ function Composer() {
   const signedIn = useApp((s) => !!s.me);
   const [text, setText] = useState(""); const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => { const el = ref.current; if (!el) return; el.style.height = "auto"; const h = el.scrollHeight; el.style.height = h > 0 ? Math.min(140, h) + "px" : ""; }, [text]);   // measured while the pane is hidden it is 0: leave the height to the stylesheet's minimum, or the box collapses to a sliver that cannot be clicked
-  const go = () => { if (busy || !text.trim()) return; const t = text; setText(""); void send(t); };
+  const queue = useAi((s) => s.queue);
+  const go = () => { if (!text.trim()) return; const t = text; setText(""); void send(t); };   // while a turn runs, send() queues it
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => { e.stopPropagation(); if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); go(); } };
   return (
     <div className="ai-foot">
+      {queue.length ? (
+        <div className="ai-queue" id="aiQueue">
+          {queue.map((q, i) => (
+            <div className="ai-q" key={q.id}>
+              <span className="n">{i === 0 && !busy ? "Next" : "Queued"}</span><span className="t" title={q.text}>{q.text}</span>
+              <button type="button" className="x" title="Remove from the queue" onClick={() => unqueue(q.id)}>×</button>
+            </div>
+          ))}
+        </div>
+      ) : null}
       <div className="ai-box" onMouseDown={(e) => { if (e.target === e.currentTarget) { e.preventDefault(); ref.current?.focus(); } }}>
         <textarea ref={ref} id="aiInput" rows={1} value={text} disabled={!signedIn} placeholder={signedIn ? (available ? "Ask about this design…" : "Add an API key in settings to start") : "Sign in to use the assistant"}
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} onKeyUp={(e) => e.stopPropagation()} />
-        {busy ? <button type="button" className="ai-send stop" id="aiStop" title="Stop" onClick={() => stop()}>{Glyphs.stop}</button>
-          : <button type="button" className="ai-send" id="aiSend" title="Send (Enter)" disabled={!text.trim() || !signedIn} onClick={go}>{Glyphs.send}</button>}
+        {busy ? <button type="button" className="ai-send stop" id="aiStop" title="Stop" onClick={() => stop()}>{Glyphs.stop}</button> : null}
+        {!busy || text.trim() ? <button type="button" className="ai-send" id="aiSend" title={busy ? "Queue this message (Enter)" : "Send (Enter)"} disabled={!text.trim() || !signedIn} onClick={go}>{Glyphs.send}</button> : null}
       </div>
-      <div className="ai-hint">{busy ? <span className="busy">{activity || "Working…"}</span> : <span>Enter to send · Shift+Enter for a new line</span>}<span className="sp" /><span>Changes are proposed, never applied silently</span></div>
+      <div className="ai-hint">{busy ? <span className="busy">{activity || "Working…"}</span> : <span>Enter to send · Shift+Enter for a new line</span>}{busy && queue.length === 0 ? <span>· Enter queues a message</span> : null}<span className="sp" /><span>Changes are proposed, never applied silently</span></div>
     </div>
   );
 }

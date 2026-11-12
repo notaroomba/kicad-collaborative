@@ -145,6 +145,21 @@ check('proposal card is shown', (await a.locator('[data-proposal]').count()) ===
 check('nothing changed before accepting', (await valueOf(a, 'R1')) === '1.5K', String(await valueOf(a, 'R1')));
 await shot(a, '02-review-with-proposal');
 
+// ---- messages sent while a turn is running wait in a queue, can be taken back, and run in order
+{
+  const before = await a.locator('#aiBody .ai-msg.user').count();
+  await script([{ content: [{ type: 'text', text: 'Slow answer. ' + 'x '.repeat(300) }], delayMs: 20 }, { content: [{ type: 'text', text: 'Queued answer.' }] }]);
+  const type = async (t) => { await a.click('#aiInput'); await a.keyboard.type(t); await a.keyboard.press('Enter'); };
+  await type('first while idle'); await a.waitForSelector('#aiStop', { timeout: 5000 });
+  await type('queued one'); await type('queued two');
+  check('messages sent while it works are queued', JSON.stringify(await a.locator('#aiQueue .ai-q .t').allInnerTexts()) === '["queued one","queued two"]');
+  await a.locator('#aiQueue .ai-q', { hasText: 'queued two' }).locator('.x').click();
+  check('a queued message can be removed', (await a.locator('#aiQueue .ai-q').count()) === 1);
+  await a.waitForFunction((n) => !document.querySelector('#aiStop') && !document.querySelector('#aiQueue') && document.querySelectorAll('#aiBody .ai-msg.user').length === n + 2, before, { timeout: 30000 });
+  const said = await a.locator('#aiBody .ai-msg.user').allInnerTexts();
+  check('the queue runs in order after the turn, without the removed one', said.slice(-2).join('|') === 'first while idle|queued one' && /Queued answer/.test(await a.locator('#aiBody .ai-msg.assistant').last().innerText()), said.slice(-3).join('|'));
+}
+
 // ---- preview, then accept; a second person sees the change
 const b = await open('ai-lee', lee, `/p/${projectId}/edit?doc=${docs['ecc83-pp.kicad_sch']}`);
 await editorReady(b); await b.waitForTimeout(1500);
