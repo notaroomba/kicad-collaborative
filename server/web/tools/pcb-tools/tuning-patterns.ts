@@ -235,17 +235,30 @@ export function tuneStatus(ctx: PcbCtx): TuneStatus | null {
   }
   return { scope: name ? unescapeName(name) : "", label: skew ? "current skew" : "current length", value: (skew ? "Skew: " : "Net: ") + msgValue(len, units), min, max };
 }
+/**
+ * TUNING_STATUS_VIEW_ITEM::ViewDraw in the stroke font with KiCad's preview metrics (GetConstantGlyphHeight: header
+ * -2 = 10 px, values -1 = 12 px, pen 0.2 × height, line pitch 1.9 × height; glyph width 12 px, margin (5, 12) px,
+ * 38 glyphs wide, min / max columns 18 and 7 glyphs + margin on), anchored above-right of the cursor.  The box takes
+ * the theme's panel / ink colours (wxSYS_COLOUR_BTNFACE / BTNTEXT), the fill at 0.9 alpha, a 2 px border.
+ */
 export function drawTuneStatus(c: CanvasRenderingContext2D, at: Pt, px: number, info: TuneStatus) {
   const css = (name: string, dflt: string) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
-  const hs = 13 * px, fs = 12 * px, m = 6 * px, gw = 7 * px;
-  const rows = (info.scope ? 1 : 0) + 2, w = gw * 38 + 2 * m, h = rows * hs * 1.35 + m;
-  const x = at[0] + 2 * m, y = at[1] - h - 2 * m;
-  c.save(); c.globalAlpha = 1; c.fillStyle = css("--color-panel", "#2b2b2b"); c.strokeStyle = css("--color-ink", "#e0e0e0"); c.lineWidth = px;
-  c.globalAlpha = 0.9; c.fillRect(x - m, y - m, w + 2 * m, h + 2 * m); c.globalAlpha = 1; c.strokeRect(x - m, y - m, w + 2 * m, h + 2 * m);
-  c.fillStyle = css("--color-ink", "#e0e0e0"); c.textBaseline = "top"; let ty = y;
-  const cols = (a: string, b: string, d: string, size: number) => { c.font = `${size}px sans-serif`; c.fillText(a, x, ty); c.fillText(b, x + gw * 18 + m, ty); c.fillText(d, x + gw * 25 + 2 * m, ty); ty += size * 1.35; };
-  if (info.scope) { c.font = `${hs}px sans-serif`; c.fillText(info.scope, x, ty); ty += hs * 1.35; }
-  cols(info.label, "min", "max", hs); cols(info.value, info.min, info.max, fs);
+  const head = 10 * px, txt = 12 * px, gw = 12 * px, mx = Math.round(12 * 0.4) * px, my = gw;
+  const scope = info.scope ? 1 : 0, valueLines = 1, total = scope + 1 + valueLines;
+  const w = gw * 38 + mx * 2, h = head * total + txt * valueLines;
+  const ox = at[0] + mx * 2, oy = at[1] - (h + my * 2);
+  const ink = css("--color-ink", "#e0e0e0");
+  c.save(); c.globalAlpha = 0.9; c.fillStyle = css("--color-panel", "#2b2b2b"); c.fillRect(ox - mx, oy - my, w + 2 * mx, h + 2 * my);
+  c.globalAlpha = 1; c.strokeStyle = ink; c.lineWidth = 2 * px; c.strokeRect(ox - mx, oy - my, w + 2 * mx, h + 2 * my);
+  const m = c.getTransform(), base = [m.a, m.b, m.c, m.d, m.e, m.f];
+  const stroke = K.drawStrokeText as (ctx: CanvasRenderingContext2D, base: number[], t: Record<string, unknown>, color: string, minPen: number) => void;
+  const text = (s: string, x: number, y: number, size: number) => { if (s) stroke(c, base, { x, y, text: s, size, rot: 0, mirror: false, h: "left", v: "center", pen: size * 0.2, italic: false, dy: 0 }, ink, px); };
+  const pitch = head * 1.9; let y = oy;
+  if (scope) { text(info.scope, ox, y, head); y += Math.round(pitch * 1.1 / px) * px; }
+  const col1 = ox + gw * 18 + mx, col2 = col1 + gw * 7 + mx;
+  text(info.label, ox, y, head); text("min", col1, y, head); text("max", col2, y, head);
+  y = oy + (scope ? Math.round(pitch * 1.1 / px) * px : 0) + Math.round(pitch * 1.3 / px) * px;
+  text(info.value, ox, y, txt); text(info.min, col1, y, txt); text(info.max, col2, y, txt);
   c.restore();
 }
 /** The tuner over the board: the picked track's run highlighted, or the pattern's line with its meanders, and the status. */
