@@ -665,6 +665,31 @@ Once every connection has been tried, a few passes work on the finished board (a
   and N, Ethernet pairs to through-hole pins, a Bluetooth antenna feed on four and on two layers) and prints
   completion, rule errors, pairs, widths and lengths.
 
+### Signal domains, ground via fences and keepouts
+
+- **Net kinds** (`PcbAutoRouter.netKind(name)`): analog (ADC and DAC lines, references, audio, sense and feedback,
+  crystals), RF (antenna and RF feeds), switching (a converter's switch node, bootstrap and gate drives), fast
+  (clocks, differential pairs), supply, and digital for everything else. A net KiCad named after a pin
+  (`Net-(U3-SW)`) is judged by the pin's name. `netOpts[net].kind` overrides the name.
+- **Separation** (`separate`, on when the board has an analog or RF net): a track of one kind keeps an extra gap from
+  the tracks and vias of another: `quiet` mm between analog or RF and digital (default two clearances, at least
+  0.3 mm), `noisy` mm between analog or RF and switching or fast (three clearances, at least 0.5 mm). Pads are
+  exempt, and so is copper within `nearPads` mm of any pad (default 1.2), since parts sit where they sit and a
+  fine-pitch fan-out has no room to give; supply nets are shared by every domain. It is done in the occupancy
+  maps (each rule class carries its kind, and an obstacle of another kind is grown by the gap), so it costs nothing
+  in the search. A connection that cannot be made with the gap is made without it as a last resort and named in
+  `result.domains.relaxed`.
+- **Ground via fence** (`fence`): every track of an RF net (and of the nets in `fence.nets`) gets ground vias down
+  both sides, `spacing` mm apart (default 2 mm). **Return vias**: each layer change of an RF, clock or pair net gets a
+  ground via beside it. A via goes in only where the ground pour lies on two layers and is not cut there, where the
+  rules leave room (exact check), and a hole's width from the other ground vias; `result.fences` counts them and
+  says why any are missing.
+- **Keepouts**: KiCad rule areas on the board are honoured (tracks, vias, and the band a track's half width reaches
+  into); `keepouts` adds areas for one run and `netOpts[net].avoid` keeps one net out of an area.
+- From Python: `board.route(kinds=..., separate=..., fence=...)` and `board.keepout(box, ...)`; over MCP the
+  `autoroute` edit takes `separate`, `fence` and `net_options.<net>.kind`. The design guide (`web/mcp/guide.md`,
+  "Keeping signals apart") tells the model how to place by domain and when to use each.
+
 ### Planning and judging from outside
 
 The engine does the geometry and keeps the rules; what to route first, on which layers and how wide can come from a

@@ -561,6 +561,12 @@
                 "type": "integer",
                 "description": "autoroute: the most vias one pad-to-pad connection may use."
               },
+              "separate": {
+                "description": "autoroute: signal domains. By default analog and RF nets (told by name, or net_options.<net>.kind) are kept quiet mm from digital tracks and noisy mm from switching nodes, clocks and pairs, except within 1.2 mm of a pad. false turns it off; {quiet, noisy} sets the gaps in mm."
+              },
+              "fence": {
+                "description": "autoroute: ground vias. By default RF nets get a fence of ground vias down both sides (where ground is poured on two layers) and RF, clock and pair nets get a ground via beside each layer change. false turns it off; {spacing, nets, return_vias} sets the via pitch in mm, names more nets to fence, or drops the return vias."
+              },
               "net_class": {
                 "type": "string"
               },

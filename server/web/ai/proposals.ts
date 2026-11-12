@@ -506,11 +506,16 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           for (const [name, o] of Object.entries((e.net_options && typeof e.net_options === "object" ? e.net_options : {}) as Record<string, any>)) {
             const net = boardNet(doc, name).name; if (!o || typeof o !== "object") continue;
             netOpts[net] = { layers: Array.isArray(o.layers) && o.layers.length ? o.layers : undefined, width: typeof o.width === "number" ? o.width : undefined, allowVias: typeof o.allow_vias === "boolean" ? o.allow_vias : undefined,
-              maxVias: typeof o.max_vias === "number" ? o.max_vias : undefined, avoid: Array.isArray(o.avoid) ? o.avoid : undefined };
+              maxVias: typeof o.max_vias === "number" ? o.max_vias : undefined, avoid: Array.isArray(o.avoid) ? o.avoid : undefined,
+              kind: ["analog", "rf", "switching", "fast", "digital", "supply"].includes(o.kind) ? o.kind : undefined, impedance: typeof o.impedance === "number" && o.impedance > 0 ? o.impedance : undefined };
+            if (o.kind !== undefined && !netOpts[net].kind) throw new ToolError(`net_options.${name}.kind must be one of analog, rf, switching, fast, digital, supply`);
           }
           const order = Array.isArray(e.order) ? e.order.map((n: unknown) => boardNet(doc, text(n, "net")).name) : undefined;
           const keepouts = Array.isArray(e.keepouts) ? e.keepouts.filter((q: any) => q && Array.isArray(q.box) && q.box.length === 4).map((q: any) => ({ layers: Array.isArray(q.layers) ? q.layers : undefined, box: q.box })) : undefined;
-          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : undefined, timeMs: Math.round(1000 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : undefined });
+          const num = (v: unknown) => typeof v === "number" && v >= 0 ? v : undefined;
+          const separate = e.separate === false ? false : e.separate && typeof e.separate === "object" ? { quiet: num(e.separate.quiet), noisy: num(e.separate.noisy) } : undefined;
+          const fence = e.fence === false ? false : e.fence && typeof e.fence === "object" ? { spacing: num(e.fence.spacing), nets: Array.isArray(e.fence.nets) ? e.fence.nets.map((n: unknown) => boardNet(doc, text(n, "net")).name) : undefined, returnVias: e.fence.return_vias === false ? false : undefined } : undefined;
+          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { separate, fence, nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : undefined, timeMs: Math.round(1000 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : undefined });
           const failed = (res.failed || []).map((f: any) => ({ net: f.net, from: f.a.map(r4), to: f.b.map(r4) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);
@@ -520,6 +525,8 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           details.push({ autoroute: { connections: res.total, routed: res.routed, segments: res.segments, vias: res.vias, length_mm: r4(res.length),
             unrouted: conns.length ? conns.filter((c) => !c.routed).slice(0, 40).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, reason: c.reason, detail: c.detail, blocked_by_nets: c.blockedBy && c.blockedBy.nets })) : failed.slice(0, 40),
             longest_detours: conns.filter((c) => c.routed && c.detourRatio > 1.6).sort((a, b) => b.detourRatio - a.detourRatio).slice(0, 12).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, length_mm: r4(c.length), detour_ratio: r4(c.detourRatio), vias: c.vias, layers: c.layers })),
+            domains: res.domains ? { kept_apart: res.domains.kinds, quiet_mm: res.domains.quiet, noisy_mm: res.domains.noisy, relaxed: res.domains.relaxed } : undefined,
+            ground_vias: Array.isArray(res.fences) && res.fences.length ? res.fences.map((f: any) => ({ net: f.net, ground: f.ground, fence: f.fence, return_vias: f.returns, spacing_mm: f.spacing, note: f.note })) : undefined,
             note: "Judge this before the person does: a net left unrouted, a power net with a long detour or many vias, or a sensitive net crossing the board is a reason to change the placement or the net order and options and propose again instead." } });
           lines.push({ kind: "add", text: `Autoroute ${nets ? nets.join(", ") : "all unrouted nets"}: ${res.routed} of ${res.total} connection${res.total === 1 ? "" : "s"}, ${res.segments} track segment${res.segments === 1 ? "" : "s"}, ${res.vias} via${res.vias === 1 ? "" : "s"}, ${Math.round(res.length * 10) / 10} mm${failed.length ? ` (${failed.length} left unrouted)` : ""}`, ids });
           break;

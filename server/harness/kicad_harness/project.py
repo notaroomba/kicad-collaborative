@@ -1216,6 +1216,21 @@ class Board(_Doc):
         self.add_item(f'(zone (net "{net}") (layer "{layer}") (uuid "{_uuid.uuid4()}") (hatch edge 0.5) (connect_pads{' yes' if connect == 'solid' else ''} (clearance {clearance})) (min_thickness 0.25) '
                       f'(fill (thermal_gap 0.3) (thermal_bridge_width 0.4)) (polygon (pts {pts})))')
 
+    def keepout(self, box, layers=None, tracks: bool = True, vias: bool = True, copper: bool = True, footprints: bool = False, name: str = "") -> None:
+        """A rule area (KiCad keepout) over a rectangle [x0, y0, x1, y1]: nothing of the kinds named may enter it.
+
+        Use it under an antenna (no copper on any layer), for the gap between an analog and a digital section, or to
+        hold tracks off a switching converter's inductor.  layers: copper layers it applies to (default all of
+        them).  tracks / vias / copper (pours) / footprints: True keeps that out.  The autorouter, the zone filler
+        and the design rule check all honour it."""
+        ls = list(layers) if layers else list(self.info().get("copper_layers") or ["F.Cu", "B.Cu"])
+        x0, y0, x1, y1 = (min(box[0], box[2]), min(box[1], box[3]), max(box[0], box[2]), max(box[1], box[3]))
+        pts = " ".join(f"(xy {_r(x)} {_r(y)})" for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)))
+        ok = lambda keep: "not_allowed" if keep else "allowed"
+        lay = f'(layer "{ls[0]}")' if len(ls) == 1 else "(layers " + " ".join(f'"{l}"' for l in ls) + ")"
+        self.add_item(f'(zone (net 0) (net_name "") {lay} (uuid "{_uuid.uuid4()}")' + (f' (name "{name}")' if name else "") + ' (hatch edge 0.5) (connect_pads (clearance 0)) (min_thickness 0.25) '
+                      f'(keepout (tracks {ok(tracks)}) (vias {ok(vias)}) (pads allowed) (copperpour {ok(copper)}) (footprints {ok(footprints)})) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5)) (polygon (pts {pts})))')
+
     def fill(self) -> dict:
         """Fill every copper zone (KiCad's Fill All Zones) and report the connections still open.
 
@@ -1397,12 +1412,23 @@ class Board(_Doc):
 
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
-              fill: bool = True, max_vias: int | None = None) -> dict:
+              fill: bool = True, max_vias: int | None = None, kinds: dict | None = None, separate=None, fence=None) -> dict:
         """Autoroute the missing connections (every unrouted net by default) and report what was done.
 
         order: the few nets to lay first (USB pair, crystal); widths: {net: mm} for supply nets; net_options and
         keepouts are passed to the engine as they are.  Route a whole board in one call.
         max_vias: the most vias one pad-to-pad connection may use (2 keeps every track to one trip to the other side).
+
+        Signal domains.  The engine tells analog nets (ADC, VREF, crystal, sense, feedback), RF nets (ANT, RF),
+        switching nodes (SW, LX), fast nets (clocks, differential pairs) and plain digital ones apart by name, and
+        keeps analog and RF tracks away from the rest (except at pads and within 1.2 mm of one).  kinds: {net: "analog" | "rf" | "switching" |
+        "fast" | "digital" | "supply"} says what a net is when its name does not.  separate: False turns this off,
+        {"quiet": mm, "noisy": mm} sets the gap to digital tracks and to switching / fast ones.
+        fence: RF nets get ground vias down both sides of their tracks, and RF, clock and pair nets a ground via beside
+        each layer change, wherever ground is poured on two layers.  False turns it off; {"spacing": mm, "nets":
+        [...], "return_vias": False} sets the pitch, fences more nets, or drops the return vias.
+        The result's `domains` and `ground_vias` say what was kept apart, where the gap had to give, and how many
+        vias went in.  Areas nothing may cross (under an antenna, an isolation gap) are `board.keepout(...)`.
 
         On a board with copper zones the zones are then filled, what the real fill leaves open is routed again
         (twice at most) and the zones are filled once more, so the result counts a pour the way KiCad does.
@@ -1418,6 +1444,8 @@ class Board(_Doc):
         opts = {fix(k): dict(v) for k, v in (net_options or {}).items()}
         for n, w in (widths or {}).items():
             opts.setdefault(fix(n), {})["width"] = w
+        for n, kd in (kinds or {}).items():
+            opts.setdefault(fix(n), {})["kind"] = kd
         if opts:
             e["net_options"] = opts
         if layers:
@@ -1430,6 +1458,10 @@ class Board(_Doc):
             e["time_s"] = time_s
         if max_vias is not None:
             e["max_vias"] = max_vias
+        if separate is not None:
+            e["separate"] = separate
+        if fence is not None:
+            e["fence"] = dict(fence, nets=[fix(n) for n in fence["nets"]]) if isinstance(fence, dict) and fence.get("nets") else fence
         out = self._autoroute(e)
         if fill:
             f = self.fill()
@@ -1480,6 +1512,9 @@ class Board(_Doc):
         out = {"routed": d.get("routed"), "connections": d.get("connections"), "segments": d.get("segments"), "vias": d.get("vias"), "length_mm": d.get("length_mm"), "unrouted": un[:25]}
         if len(un) > 25:
             out["more_unrouted"] = len(un) - 25
+        for k in ("domains", "ground_vias"):
+            if d.get(k):
+                out[k] = d[k]
         return out
 
     def layers(self, count: int, planes: list | None = None) -> None:

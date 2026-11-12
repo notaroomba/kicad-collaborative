@@ -39,9 +39,10 @@ export interface RouteOptions {
   fence?: boolean | { spacing?: number; nets?: string[]; returnVias?: boolean };
   /** Keep sensitive nets (analog, RF) away from the rest: `quiet` mm from ordinary digital tracks and `noisy` mm
    *  from switching nodes, clocks and pairs (defaults: twice and three times the board clearance, at least 0.3 and
-   *  0.5 mm).  Pads are exempt — parts sit where they sit.  false turns it off.  A connection that cannot be made
+   *  0.5 mm).  Pads are exempt, and so is the copper within `nearPads` mm of any pad (default 1.2): parts sit where
+   *  they sit, and a fine-pitch fan-out has no room to give.  false turns it off.  A connection that cannot be made
    *  with the gap is made without it and named in `result.domains.relaxed`. */
-  separate?: boolean | { quiet?: number; noisy?: number };
+  separate?: boolean | { quiet?: number; noisy?: number; nearPads?: number };
   nets?: string[] | null;        // only these nets (names); default every net with a missing connection
   layers?: string[] | null;      // copper layers tracks may use; default the signal layers
   allowVias?: boolean;           // default true
@@ -314,6 +315,7 @@ export class Router {
         const quiet = o.quiet !== undefined ? o.quiet : Math.max(2 * base, 0.3), noisy = o.noisy !== undefined ? o.noisy : Math.max(3 * base, 0.5); this.sepGaps = { quiet, noisy };
         const sens = (k: string) => k === "analog" || k === "rf", loud = (k: string) => k === "switching" || k === "fast";
         G.kinds = new Proxy(new Map<string, string>(), { get: (_t, prop) => prop === "get" ? (n: string) => { const k = this.kindOf(n); return k === "supply" ? undefined : k; } : undefined }) as any;
+        { const near = G.nearPad = new Uint8Array(G.W * G.H); const reach = o.nearPads !== undefined ? o.nearPads : 1.2; for (const list of G.obstacles.values()) for (const ob of list) if (ob.pad) stamp(G, near as any, ob.shape, reach, 1); }
         G.sep = (a, b) => a === b || a === "supply" || b === "supply" ? 0 : sens(a) && sens(b) ? quiet : sens(a) ? (loud(b) ? noisy : quiet) : sens(b) ? (loud(a) ? noisy : quiet) : 0;
       }
     }

@@ -195,6 +195,37 @@ class Blinker(unittest.TestCase):
         with open(os.path.join(self.dir, "blinky.kicad_sch"), encoding="utf-8") as f:
             self.assertIn(f'(paper "{built["page"]}")', f.read())
 
+    def test_signal_domains_ground_vias_and_keepouts(self):
+        p = self.project
+        sch = p.schematic()
+        r = {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0603_1608Metric"}
+        sch.build({"R1": r, "R2": r, "R3": r, "R4": r},
+                  {"GND": ["R1.2", "R2.2", "R3.2", "R4.2"], "ANT": ["R1.1", "R2.1"], "TEMP_OUT": ["R3.1", "R4.1"]})
+        board = p.board()
+        board.sync()
+        board.outline(100, 100, 130, 120)
+        for ref, at in {"R1": (105, 105), "R2": (125, 105), "R3": (105, 112), "R4": (125, 112)}.items():
+            board.move(ref, at)
+        board.zone("GND", layer="F.Cu", connect="solid")
+        board.zone("GND", layer="B.Cu", connect="solid")
+        board.keepout([112, 114, 118, 119], name="no copper here")
+        routed = board.route(kinds={"TEMP_OUT": "analog"}, fence={"spacing": 2.5}, time_s=15)
+        self.assertEqual(routed["left"], {}, routed)
+        self.assertEqual(routed["domains"]["kept_apart"], {"/ANT": "rf", "/TEMP_OUT": "analog"})
+        fence = next(f for f in routed["ground_vias"] if f["net"] == "/ANT")
+        self.assertGreaterEqual(fence["fence"], 8, routed)          # a 20 mm run, both sides, every 2.5 mm
+        self.assertEqual(fence["ground"], "GND")
+        self.assertEqual(board.check()["errors"], 0)
+        off = board.route(nets=["ANT"], separate=False, fence=False)   # both can be turned off; nothing left to route here
+        self.assertEqual(off["routed"], 0)
+        p.save()
+        with open(os.path.join(self.dir, "blinky.kicad_pcb"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("(keepout", text)
+        self.assertIn("(copperpour not_allowed)", text)
+        with self.assertRaises(Exception):
+            board.route(kinds={"TEMP_OUT": "loud"})
+
     def test_four_layers_plain_net_names_and_a_blocked_net_is_a_result(self):
         sch, built = self._sheet()
         board = self.project.board()

@@ -330,9 +330,9 @@ const gapBetween = (res, a, b) => { let g = Infinity; for (const x of segs(res, 
 test("signal domains: nets are told apart by name, and a digital track keeps its distance from an analog one", () => {
   const kinds = { "/ADC_IN": "analog", "Net-(U1-XIN)": "analog", "Net-(U2-FB)": "analog", "/ANT": "rf", "Net-(AE1-A)": "rf", "Net-(U3-SW)": "switching", "/SPI.SCK": "fast", "/USB_D+": "fast", "GND": "supply", "+3V3": "supply", "/GPIO4": "digital", "/SW1": "digital", "Net-(SW1-Pad1)": "digital", "/BOOTSEL": "digital", "/RUN": "digital" };
   for (const [net, kind] of Object.entries(kinds)) assert.equal(R.netKind(net), kind, net);
-  // the digital net has to pass between the analog track and a pad: 0.3 mm from the track is within the rules,
+  // the digital net has to pass between the analog track and a piece of copper (away from any pad): 0.3 mm from the track is within the rules,
   // but not far enough from an analog signal, so it changes layer instead
-  const make = () => board(smd(100, 51, "ADC_IN"), smd(120, 51, "ADC_IN"), smd(100, 52.3, "GPIO1"), smd(120, 52.3, "GPIO1"), smd(110, 52.3, "W"),
+  const make = () => board(smd(100, 51, "ADC_IN"), smd(120, 51, "ADC_IN"), smd(100, 52.3, "GPIO1"), smd(120, 52.3, "GPIO1"), `(segment (start 109.6 52.3) (end 110.4 52.3) (width 1) (layer "F.Cu") (net "W") (uuid "block"))`,
     `(segment (start 95 53.6) (end 125 53.6) (width 0.4) (layer "F.Cu") (net "W") (uuid "wall2"))`);
   const off = make(); const r0 = R.route(K, P, off, null, { separate: false }); assert.equal(r0.routed, r0.total); assert.equal(r0.domains, undefined);
   assert.ok(gapBetween(r0, "ADC_IN", "GPIO1") < 0.39, "without separation the short way is taken: " + gapBetween(r0, "ADC_IN", "GPIO1"));
@@ -343,7 +343,7 @@ test("signal domains: nets are told apart by name, and a digital track keeps its
   // a plan can say what a net is when its name does not
   const r2 = R.route(K, P, make(), null, { netOpts: { ADC_IN: { kind: "digital" } } }); assert.equal(r2.domains, undefined);
   // where the gap cannot be kept the connection is still made, and the report says so
-  const tight = make(); const r3 = R.route(K, P, tight, null, { separate: { quiet: 3 } }); assert.equal(r3.routed, r3.total); assert.equal(r3.domains.quiet, 3);
+  const tight = make(); const r3 = R.route(K, P, tight, null, { separate: { quiet: 3, nearPads: 0 } }); assert.equal(r3.routed, r3.total); assert.equal(r3.domains.quiet, 3);
   assert.ok(r3.domains.relaxed.length >= 1, "pads 1.3 mm apart cannot have tracks 3 mm apart");
   apply(tight, r3); assert.deepEqual(errors(tight), []);
 });

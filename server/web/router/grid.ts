@@ -32,6 +32,7 @@ export interface Grid {
   weights: Weights;
   /** Signal domains: the extra gap a track of one kind keeps from another net's tracks and vias (not its pads). */
   kinds?: Map<string, string>; sep?: (a: string, b: string) => number;
+  nearPad?: Uint8Array;                  // cells within reach of a pad: where parts sit close, tracks cannot keep a domain gap
 }
 
 export const DX = [1, 1, 0, -1, -1, -1, 0, 1], DY = [0, 1, 1, 1, 0, -1, -1, -1];
@@ -85,7 +86,16 @@ function pieces(s: Shape): Shape[] {
 }
 
 /** Add (sign = 1) or take away (sign = -1) a shape grown by `grow` in an occupancy map. */
-export function stamp(G: Grid, map: Uint16Array, s: Shape, grow: number, sign: number): void {
+export function stamp(G: Grid, map: Uint16Array, s: Shape, grow: number, sign: number, far = grow, near?: Uint8Array): void {
+  if (far > grow && near) {   // a wider gap that holds only away from pads
+    for (const p of pieces(s)) {
+      const b = bboxOf(p);
+      const x0 = Math.max(0, Math.ceil((b[0] - far - G.ox) / G.g)), x1 = Math.min(G.W - 1, Math.floor((b[2] + far - G.ox) / G.g));
+      const y0 = Math.max(0, Math.ceil((b[1] - far - G.oy) / G.g)), y1 = Math.min(G.H - 1, Math.floor((b[3] + far - G.oy) / G.g));
+      for (let iy = y0; iy <= y1; iy++) { const y = G.oy + iy * G.g; let row = iy * G.W + x0; for (let ix = x0; ix <= x1; ix++, row++) { const d = pointGap(p, G.ox + ix * G.g, y); if (d <= grow || (d <= far && !near[row])) map[row] += sign; } }
+    }
+    return;
+  }
   for (const p of pieces(s)) {
     const b = bboxOf(p);
     const x0 = Math.max(0, Math.ceil((b[0] - grow - G.ox) / G.g)), x1 = Math.min(G.W - 1, Math.floor((b[2] + grow - G.ox) / G.g));
@@ -139,20 +149,20 @@ export function pickGrid(pads: (Pt | number[])[], bounds: [number, number, numbe
   return { g: best.g, ox, oy };
 }
 
-const gapOf = (G: Grid, c: RuleClass, o: Obstacle): number => {
-  if (o.edge) return G.edgeClr; let g = Math.max(c.clr, o.clr);
-  if (c.kind && G.kinds && G.sep && !o.pad && o.net) { const k = G.kinds.get(o.net); if (k && k !== c.kind) g = Math.max(g, G.sep(c.kind, k)); }
-  return g;
+export const growFor = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr : Math.max(c.clr, o.clr)) + c.width / 2 + G.margin;
+export const growVia = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr : Math.max(c.clr, o.clr)) + c.viaD / 2 + G.margin;
+/** The extra a track of another signal domain adds to the gap (0 when the two are of a kind, or it is a pad). */
+const domainGap = (G: Grid, c: RuleClass, o: Obstacle): number => {
+  if (!c.kind || !G.kinds || !G.sep || o.pad || o.edge || !o.net) return 0; const k = G.kinds.get(o.net); if (!k || k === c.kind) return 0;
+  return Math.max(0, G.sep(c.kind, k) - Math.max(c.clr, o.clr));
 };
-export const growFor = (G: Grid, c: RuleClass, o: Obstacle) => gapOf(G, c, o) + c.width / 2 + G.margin;
-export const growVia = (G: Grid, c: RuleClass, o: Obstacle) => gapOf(G, c, o) + c.viaD / 2 + G.margin;
+function stampObstacle(G: Grid, c: RuleClass, o: Obstacle, sign: number, t: Uint16Array[], v: Uint16Array[]): void {
+  const gt = growFor(G, c, o), gv = growVia(G, c, o), x = domainGap(G, c, o);
+  for (const l of o.layers) { stamp(G, t[l], o.shape, gt, sign, gt + x, G.nearPad); stamp(G, v[l], o.shape, gv, sign, gv + x, G.nearPad); }
+}
 /** Put an obstacle into (or take it out of) a class's maps: the run's maps, and the board's own too when `fixed`. */
 export function stampClass(G: Grid, c: RuleClass, o: Obstacle, sign: number, fixed: boolean): void {
-  const gt = growFor(G, c, o), gv = growVia(G, c, o);
-  for (const l of o.layers) {
-    stamp(G, c.full[l], o.shape, gt, sign); stamp(G, c.vfull[l], o.shape, gv, sign);
-    if (fixed) { stamp(G, c.fixed[l], o.shape, gt, sign); stamp(G, c.vfixed[l], o.shape, gv, sign); }
-  }
+  stampObstacle(G, c, o, sign, c.full, c.vfull); if (fixed) stampObstacle(G, c, o, sign, c.fixed, c.vfixed);
 }
 
 /** Build the occupancy maps of a rule class from the board's obstacles. */
@@ -164,7 +174,7 @@ export function buildClass(G: Grid, key: string, width: number, clr: number, via
     const k = G.keep[l]; if (k) for (let i = 0; i < n; i++) if (k[i]) m[i]++;
     c.fixed.push(m); c.vfixed.push(m.slice());
   }
-  for (const list of G.obstacles.values()) for (const o of list) { const gt = growFor(G, c, o), gv = growVia(G, c, o); for (const l of o.layers) { stamp(G, c.fixed[l], o.shape, gt, 1); stamp(G, c.vfixed[l], o.shape, gv, 1); } }
+  for (const list of G.obstacles.values()) for (const o of list) stampObstacle(G, c, o, 1, c.fixed, c.vfixed);
   for (let l = 0; l < G.layers.length; l++) { c.full.push(c.fixed[l].slice()); c.vfull.push(c.vfixed[l].slice()); }
   G.classes.set(key, c);
   return c;

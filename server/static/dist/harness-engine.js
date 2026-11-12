@@ -39388,7 +39388,23 @@ function pieces(s) {
   } else out.push(s);
   return out;
 }
-function stamp(G2, map, s, grow3, sign) {
+function stamp(G2, map, s, grow3, sign, far = grow3, near) {
+  if (far > grow3 && near) {
+    for (const p of pieces(s)) {
+      const b = bboxOf2(p);
+      const x0 = Math.max(0, Math.ceil((b[0] - far - G2.ox) / G2.g)), x1 = Math.min(G2.W - 1, Math.floor((b[2] + far - G2.ox) / G2.g));
+      const y0 = Math.max(0, Math.ceil((b[1] - far - G2.oy) / G2.g)), y1 = Math.min(G2.H - 1, Math.floor((b[3] + far - G2.oy) / G2.g));
+      for (let iy = y0; iy <= y1; iy++) {
+        const y = G2.oy + iy * G2.g;
+        let row2 = iy * G2.W + x0;
+        for (let ix = x0; ix <= x1; ix++, row2++) {
+          const d = pointGap(p, G2.ox + ix * G2.g, y);
+          if (d <= grow3 || d <= far && !near[row2]) map[row2] += sign;
+        }
+      }
+    }
+    return;
+  }
   for (const p of pieces(s)) {
     const b = bboxOf2(p);
     const x0 = Math.max(0, Math.ceil((b[0] - grow3 - G2.ox) / G2.g)), x1 = Math.min(G2.W - 1, Math.floor((b[2] + grow3 - G2.ox) / G2.g));
@@ -39459,20 +39475,26 @@ function pickGrid(pads, bounds, nLayers, forced) {
 }
 var growFor = (G2, c, o) => (o.edge ? G2.edgeClr : Math.max(c.clr, o.clr)) + c.width / 2 + G2.margin;
 var growVia = (G2, c, o) => (o.edge ? G2.edgeClr : Math.max(c.clr, o.clr)) + c.viaD / 2 + G2.margin;
-function stampClass(G2, c, o, sign, fixed) {
-  const gt = growFor(G2, c, o), gv = growVia(G2, c, o);
+var domainGap = (G2, c, o) => {
+  if (!c.kind || !G2.kinds || !G2.sep || o.pad || o.edge || !o.net) return 0;
+  const k = G2.kinds.get(o.net);
+  if (!k || k === c.kind) return 0;
+  return Math.max(0, G2.sep(c.kind, k) - Math.max(c.clr, o.clr));
+};
+function stampObstacle(G2, c, o, sign, t, v) {
+  const gt = growFor(G2, c, o), gv = growVia(G2, c, o), x = domainGap(G2, c, o);
   for (const l of o.layers) {
-    stamp(G2, c.full[l], o.shape, gt, sign);
-    stamp(G2, c.vfull[l], o.shape, gv, sign);
-    if (fixed) {
-      stamp(G2, c.fixed[l], o.shape, gt, sign);
-      stamp(G2, c.vfixed[l], o.shape, gv, sign);
-    }
+    stamp(G2, t[l], o.shape, gt, sign, gt + x, G2.nearPad);
+    stamp(G2, v[l], o.shape, gv, sign, gv + x, G2.nearPad);
   }
 }
-function buildClass(G2, key, width, clr, viaD, viaDrill) {
+function stampClass(G2, c, o, sign, fixed) {
+  stampObstacle(G2, c, o, sign, c.full, c.vfull);
+  if (fixed) stampObstacle(G2, c, o, sign, c.fixed, c.vfixed);
+}
+function buildClass(G2, key, width, clr, viaD, viaDrill, kind) {
   const n = G2.W * G2.H;
-  const c = { key, width, clr, viaD, viaDrill, full: [], fixed: [], vfull: [], vfixed: [] };
+  const c = { key, width, clr, viaD, viaDrill, kind, full: [], fixed: [], vfull: [], vfixed: [] };
   for (let l = 0; l < G2.layers.length; l++) {
     const m = new Uint16Array(n);
     if (G2.outside) {
@@ -39485,13 +39507,7 @@ function buildClass(G2, key, width, clr, viaD, viaDrill) {
     c.fixed.push(m);
     c.vfixed.push(m.slice());
   }
-  for (const list of G2.obstacles.values()) for (const o of list) {
-    const gt = growFor(G2, c, o), gv = growVia(G2, c, o);
-    for (const l of o.layers) {
-      stamp(G2, c.fixed[l], o.shape, gt, 1);
-      stamp(G2, c.vfixed[l], o.shape, gv, 1);
-    }
-  }
+  for (const list of G2.obstacles.values()) for (const o of list) stampObstacle(G2, c, o, 1, c.fixed, c.vfixed);
   for (let l = 0; l < G2.layers.length; l++) {
     c.full.push(c.fixed[l].slice());
     c.vfull.push(c.vfixed[l].slice());
@@ -39867,6 +39883,19 @@ function usualImpedance(net, paired) {
 
 // web/router/route.ts
 var isSupply = (net) => /^\/?(.*\/)?(A|D|P)?(GND|VSS|VEE)\w*$|^\/?(.*\/)?[+-]?\d+(V\d*|\.\d+V)\w*$|^\/?(.*\/)?(VCC|VDD|VBUS|VBAT|VIN|VSYS|VPP|VAA|VREF|VOUT|V\d+V\d*|PWR|\+BATT|-BATT)\w*$/i.test(net) && !/(_|\b)(EN|SENSE|SNS|FB|PG|OK|DET|MON|ADC)\w*$/i.test(net);
+function netKind(net, paired = /(\+|-|_P|_N)\)?$/.test(net)) {
+  if (isSupply(net)) return "supply";
+  const m = /^Net-\((.+)-([^-]+)\)$/.exec(net);
+  const n = m ? m[2] : net.replace(/^.*\//, "");
+  const auto = !!m;
+  if (auto && /^(Pad)?\d+$/i.test(n)) return "digital";
+  if (usualImpedance(net, false) || /^(ANT\d*|RF\w*|ANTENNA)$/i.test(n) || m && /^(AE|ANT)\d+$/i.test(m[1])) return "rf";
+  if (/(^|[_\-.])(SW|LX|PHASE|PH|BST|SWN|GATE|HG|LG|HDRV|LDRV|UGATE|LGATE)\d*([_\-.]|$)/i.test(n) && !/SW(D|O|CLK|DIO)/i.test(n) && (auto || !/^SW\d+$/i.test(n))) return "switching";
+  if (auto && /^(BOOT|CB|BS)$/i.test(n)) return "switching";
+  if (/(^|[_\-.])(AIN|ADC|DAC|VREF|AREF|REF|MIC|AUDIO|AUD|LINE_?IN|LINE_?OUT|HP_?[LR]|SENSE|SNS|ISENSE|ISNS|VSENSE|THERM|NTC|XTAL|XIN|XOUT|XI|XO|XC|XL|OSC_?IN|OSC_?OUT|OSCI|OSCO|COMP|FB|VFB|ANALOG|ANA)[A-Z]?\d*([_\-.+]|$)/i.test(n)) return "analog";
+  if (paired && pairName(net) || /(CLK|SCK|LRCK|CLOCK)\d*(_\w+)?$/i.test(n) || /(^|[_\-.])CK\d*$/i.test(n)) return "fast";
+  return "digital";
+}
 function pairName(net) {
   const m = /^(.*?)(\+|-|_P|_N|DP|DM|P|N)(\)?)$/.exec(net);
   if (!m || !m[1] || isSupply(net) || /(^|[\/_(])V$/i.test(m[1])) return null;
@@ -39891,6 +39920,12 @@ var Router = class _Router {
     this.zoneCovered = 0;
     this.dropped = [];
     this.stat = { noSoft: 0, noBlockers: 0, tooMany: 0, ripped: 0, ripLimit: 0 };
+    this.relax = false;
+    this.relaxed = /* @__PURE__ */ new Set();
+    this.pairNets = /* @__PURE__ */ new Set();
+    this.kindMemo = /* @__PURE__ */ new Map();
+    this.domains = null;
+    this.sepGaps = { quiet: 0, noisy: 0 };
     this.padNames = /* @__PURE__ */ new Map();
     this.zWidth = /* @__PURE__ */ new Map();
     this.zGap = /* @__PURE__ */ new Map();
@@ -39903,6 +39938,9 @@ var Router = class _Router {
     this.cur = null;
     this.curSoft = false;
     this.oidx = null;
+    this.fenceVias = [];
+    this.fenceReports = [];
+    this.fenceShapes = [];
     this.ruleHit = /* @__PURE__ */ new Map();
     this.reports = /* @__PURE__ */ new Map();
     this.ms = 0;
@@ -39928,7 +39966,7 @@ var Router = class _Router {
       if (c.kind === "zone") continue;
       const layers = Array.from(c.layers).map((l) => copper.indexOf(l)).filter((i) => i >= 0);
       if (!layers.length) continue;
-      push({ net: c.net || "", layers, shape: c.shape, clr: P.netClearance(s, c.net), thru: L > 1 && layers.length === L && (c.kind === "pad" || c.kind === "via") ? [c.anchors[0][0], c.anchors[0][1]] : void 0 });
+      push({ net: c.net || "", layers, shape: c.shape, clr: P.netClearance(s, c.net), pad: c.kind === "pad", thru: L > 1 && layers.length === L && (c.kind === "pad" || c.kind === "via") ? [c.anchors[0][0], c.anchors[0][1]] : void 0 });
     }
     for (const it of doc.items.values()) if (it.kind === "footprint") {
       for (const p of P.padsOf(it)) if (p.type === "np_thru_hole") {
@@ -39947,6 +39985,10 @@ var Router = class _Router {
     this.G.obstacles = this.collectObstacles(this.P.netlist(this.doc));
     this.oidx = null;
     this.validate();
+    if (this.fenceVias.length) {
+      const g2 = this.fenceVias[0];
+      this.fenceVias = this.fenceVias.filter((v) => this.G.layers.every((_, l) => this.clearOf({ t: "circle", x: v.p[0], y: v.p[1], r: g2.cls.viaD / 2 }, l, v.net, g2.cls.clr)));
+    }
     return before - this.conns.filter((c) => c.nodes).length;
   }
   // ------------------------------------------------------------------ board → grid
@@ -40236,8 +40278,75 @@ var Router = class _Router {
         viaDrill = Math.min(viaDrill, s.minViaDrill);
       }
     }
-    const key = `${width}/${clr}/${viaD}/${viaDrill}`;
-    return G2.classes.get(key) || buildClass(G2, key, width, clr, viaD, viaDrill);
+    const kind = this.relax ? void 0 : this.kindFor(netKey);
+    const key = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : "");
+    let c = G2.classes.get(key);
+    if (!c) {
+      c = buildClass(G2, key, width, clr, viaD, viaDrill, kind);
+      if (this.conns.length) {
+        for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G2, c, sh, 1, false);
+      }
+    }
+    return c;
+  }
+  /** The net's kind, as planned or by name. */
+  kindOf(netKey) {
+    let k = this.kindMemo.get(netKey);
+    if (!k) {
+      const plan = (this.opts.netOpts || {})[netKey];
+      k = plan && plan.kind || netKind(netKey, this.pairNets.has(netKey) || void 0);
+      this.kindMemo.set(netKey, k);
+    }
+    return k;
+  }
+  /** The kind a net's rule class carries: none when the board has nothing sensitive on it (or separation is off),
+   *  and none for supply nets, which every domain shares. */
+  kindFor(netKey) {
+    const G2 = this.G;
+    if (this.domains === null) {
+      const names = /* @__PURE__ */ new Set([...G2.obstacles.keys(), ...Object.keys(this.opts.netOpts || {})]);
+      names.delete("");
+      {
+        const by = /* @__PURE__ */ new Map();
+        for (const n of names) {
+          const k2 = pairName(n);
+          if (k2) {
+            const e = by.get(k2.base) || [];
+            by.set(k2.base, e);
+            e[k2.pol > 0 ? 0 : 1] = n;
+          }
+        }
+        for (const e of by.values()) if (e[0] && e[1]) {
+          this.pairNets.add(e[0]);
+          this.pairNets.add(e[1]);
+        }
+        this.kindMemo.clear();
+      }
+      this.domains = this.opts.separate !== false && Array.from(names).some((n) => {
+        const k2 = this.kindOf(n);
+        return k2 === "analog" || k2 === "rf";
+      });
+      if (this.domains) {
+        const o = typeof this.opts.separate === "object" ? this.opts.separate : {};
+        const base = Math.max(this.s.clearance || 0.2, this.s.minClearance || 0);
+        const quiet = o.quiet !== void 0 ? o.quiet : Math.max(2 * base, 0.3), noisy = o.noisy !== void 0 ? o.noisy : Math.max(3 * base, 0.5);
+        this.sepGaps = { quiet, noisy };
+        const sens = (k2) => k2 === "analog" || k2 === "rf", loud = (k2) => k2 === "switching" || k2 === "fast";
+        G2.kinds = new Proxy(/* @__PURE__ */ new Map(), { get: (_t, prop2) => prop2 === "get" ? (n) => {
+          const k2 = this.kindOf(n);
+          return k2 === "supply" ? void 0 : k2;
+        } : void 0 });
+        {
+          const near = G2.nearPad = new Uint8Array(G2.W * G2.H);
+          const reach = o.nearPads !== void 0 ? o.nearPads : 1.2;
+          for (const list of G2.obstacles.values()) for (const ob of list) if (ob.pad) stamp(G2, near, ob.shape, reach, 1);
+        }
+        G2.sep = (a, b) => a === b || a === "supply" || b === "supply" ? 0 : sens(a) && sens(b) ? quiet : sens(a) ? loud(b) ? noisy : quiet : sens(b) ? loud(a) ? noisy : quiet : 0;
+      }
+    }
+    if (!this.domains) return void 0;
+    const k = this.kindOf(netKey);
+    return k === "supply" ? void 0 : k;
   }
   /** Supply nets carry the board's current: where the net has no class or plan of its own, they run wider. */
   powerWidth(netKey) {
@@ -40613,7 +40722,7 @@ var Router = class _Router {
     const key = `pair/${w}/${gap}/${clr}`;
     let wide = G2.classes.get(key);
     if (!wide) {
-      wide = buildClass(G2, key, 2 * w + gap, clr, cp2.cls.viaD, cp2.cls.viaDrill);
+      wide = buildClass(G2, key, 2 * w + gap, clr, cp2.cls.viaD, cp2.cls.viaDrill, cp2.cls.kind);
       for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G2, wide, sh, 1, false);
     }
     const half = (a) => {
@@ -41407,6 +41516,7 @@ var Router = class _Router {
     }
     if (this.opts.matchLengths !== false && !this.stopped) this.tune();
     this.validate();
+    if (this.opts.fence !== false && !this.stopped) this.fence();
     if (this.opts.explain !== false) this.explain();
     this.ms = Date.now() - t0;
     this.passes = pass;
@@ -41470,17 +41580,23 @@ var Router = class _Router {
     const floor = Math.max(this.s.minTrackWidth || 0, 0.1);
     for (const c of conns) {
       if (c.nodes || c.why === "budget" || timeUp() || c.pair) continue;
-      const known = new Set(this.G.classes.keys());
       const wide = c.cls;
-      const thin = this.classFor(c.net, Math.min(floor, wide.width), 0, this.opts.smallVias !== false);
-      if (thin === wide) continue;
-      if (!known.has(thin.key)) {
-        for (const o of conns) if (o.nodes) for (const sh of o.shapes) stampClass(this.G, thin, sh, 1, false);
-      }
-      c.cls = thin;
-      const snap2 = snapOf();
-      const n0 = snap2.filter((x) => x.nodes).length;
-      if (!(force(c, 3, /* @__PURE__ */ new Set()) && conns.filter((x) => x.nodes).length > n0)) {
+      for (const relax of wide.kind ? [false, true] : [false]) {
+        let thin;
+        this.relax = relax;
+        try {
+          thin = this.classFor(c.net, Math.min(floor, wide.width), 0, this.opts.smallVias !== false);
+        } finally {
+          this.relax = false;
+        }
+        if (thin === wide) continue;
+        c.cls = thin;
+        const snap2 = snapOf();
+        const n0 = snap2.filter((x) => x.nodes).length;
+        if (force(c, 3, /* @__PURE__ */ new Set()) && conns.filter((x) => x.nodes).length > n0) {
+          if (relax) this.relaxed.add(c.net);
+          break;
+        }
         c.cls = wide;
         back(snap2);
       }
@@ -41819,6 +41935,118 @@ var Router = class _Router {
     };
     for (const id of bad) kill(id);
   }
+  /** Ground vias beside high-frequency tracks and their layer changes.  Each one sits in the ground pour on at least
+   *  two layers (else it would join nothing), keeps every clearance in the exact check, and stays a hole's width from
+   *  the other ground vias. */
+  fence() {
+    const G2 = this.G, W7 = G2.W, o = this.opts.fence;
+    const fo = typeof o === "object" && o ? o : {};
+    const spacing = Math.max(0.6, fo.spacing || 2);
+    const named = new Set(fo.nets || []);
+    const wantFence = (n) => named.has(n) || this.kindOf(n) === "rf";
+    const wantRet = (n) => fo.returnVias !== false && (wantFence(n) || this.kindOf(n) === "fast");
+    const nets = /* @__PURE__ */ new Map();
+    for (const c of this.conns) if (c.nodes && (wantFence(c.net) || wantRet(c.net) && c.viaCells.length)) {
+      const l = nets.get(c.net) || [];
+      nets.set(c.net, l);
+      l.push(c);
+    }
+    if (!nets.size) return;
+    const cover = (n) => n.pour.mask.reduce((t, m) => t + (m ? 1 : 0), 0);
+    const gnd = this.nets.filter((n) => n.pour && /(^|\/)[ADP]?(GND|VSS)\w*$/i.test(n.key) && cover(n) >= 2).sort((a, b) => cover(b) - cover(a))[0];
+    if (!gnd) {
+      for (const n of nets.keys()) this.fenceReports.push({ net: n, ground: "", fence: 0, returns: 0, spacing, note: "the board has no ground pour on two layers for the vias to join" });
+      return;
+    }
+    const pour = gnd.pour, cls = gnd.cls;
+    const pkey2 = `pour/${pour.width}/${pour.clr}`;
+    let pcls = G2.classes.get(pkey2);
+    if (!pcls) {
+      pcls = buildClass(G2, pkey2, pour.width, pour.clr, cls.viaD, cls.viaDrill);
+      for (const c of this.conns) if (c.nodes) for (const sh of c.shapes) stampClass(G2, pcls, sh, 1, false);
+    }
+    const holes = [];
+    for (const ob of G2.obstacles.get(gnd.key) || []) if (ob.thru) holes.push(ob.thru);
+    for (const c of gnd.conns) if (c.nodes) for (const gi of c.viaCells) holes.push(this.mm({ ix: gi % W7, iy: gi / W7 | 0 }));
+    const apart = cls.viaD + 0.25;
+    const r = cls.viaD / 2;
+    const all2 = G2.layers.map((_, i) => i);
+    this.lift(gnd, 1, cls);
+    this.lift(gnd, 1, pcls);
+    this.cur = null;
+    this.curSoft = false;
+    const tryAt = (x, y) => {
+      const ix = Math.round((x - G2.ox) / G2.g), iy = Math.round((y - G2.oy) / G2.g);
+      if (ix < 1 || iy < 1 || ix >= W7 - 1 || iy >= G2.H - 1) return false;
+      const gi = iy * W7 + ix;
+      if (!viaFits(G2, cls.vfull, gi)) return false;
+      let n = 0;
+      for (let l = 0; l < pour.mask.length; l++) {
+        const m = pour.mask[l];
+        if (m && m[gi] && !pcls.full[l][gi]) n++;
+      }
+      if (n < 2) return false;
+      const p = this.mm({ ix, iy });
+      if (holes.some((h) => Math.hypot(h[0] - p[0], h[1] - p[1]) < apart)) return false;
+      const shape2 = { t: "circle", x: p[0], y: p[1], r };
+      for (const l of all2) if (!this.clearOf(shape2, l, gnd.key, cls.clr)) return false;
+      holes.push(p);
+      this.fenceVias.push({ p, net: gnd.key, cls, obj: gnd.obj });
+      const ob = { net: gnd.key, layers: all2, shape: shape2, clr: cls.clr };
+      this.fenceShapes.push(ob);
+      return true;
+    };
+    try {
+      for (const [net, conns] of nets) {
+        const rep = { net, ground: gnd.key, fence: 0, returns: 0, spacing };
+        this.fenceReports.push(rep);
+        let wanted = 0;
+        const clr = Math.max(conns[0].cls.clr, cls.clr, pour.clr);
+        if (wantFence(net)) for (const c of conns) {
+          let carry = spacing / 2;
+          for (const sh of c.shapes) {
+            const g2 = sh.shape;
+            if (g2.t !== "seg") continue;
+            const dx = g2.b[0] - g2.a[0], dy = g2.b[1] - g2.a[1], len = Math.hypot(dx, dy);
+            if (len < 1e-6) continue;
+            const ux = dx / len, uy = dy / len;
+            const off = g2.r + clr + r + G2.g;
+            for (let t = carry; t <= len; t += spacing) {
+              for (const sgn of [1, -1]) {
+                wanted++;
+                const bx = g2.a[0] + ux * t, by = g2.a[1] + uy * t;
+                for (const [dt, extra] of [[0, 0], [0, G2.g * 2], [spacing / 4, 0], [-spacing / 4, 0], [0, G2.g * 4]]) if (tryAt(bx + ux * dt - uy * sgn * (off + extra), by + uy * dt + ux * sgn * (off + extra))) {
+                  rep.fence++;
+                  break;
+                }
+              }
+            }
+            carry = (carry - len) % spacing;
+            if (carry < 0) carry += spacing;
+          }
+        }
+        if (wantRet(net)) for (const c of conns) for (const gi of c.viaCells) {
+          const v = this.mm({ ix: gi % W7, iy: gi / W7 | 0 });
+          const d0 = c.cls.viaD / 2 + clr + r + G2.g;
+          let done = false;
+          for (const d of [d0, d0 + 2 * G2.g, d0 + 0.4, d0 + 0.8]) {
+            for (let k = 0; k < 8 && !done; k++) {
+              const a = k * Math.PI / 4;
+              if (tryAt(v[0] + Math.cos(a) * d, v[1] + Math.sin(a) * d)) done = true;
+            }
+            if (done) break;
+          }
+          if (done) rep.returns++;
+          else rep.note = "no room in the ground pour beside " + (rep.note ? "some layer changes" : "a layer change");
+        }
+        if (wantFence(net) && rep.fence < wanted) rep.note = (rep.note ? rep.note + "; " : "") + `${wanted - rep.fence} of ${wanted} fence positions had no room or no ground pour on two layers`;
+      }
+    } finally {
+      this.lift(gnd, -1, pcls);
+      this.lift(gnd, -1, cls);
+    }
+    for (const c of G2.classes.values()) for (const ob of this.fenceShapes) stampClass(G2, c, ob, 1, false);
+  }
   /** Why each connection that is still open failed: what is in its way, or that there is no way at all. */
   explain() {
     for (const c of this.conns) {
@@ -41881,6 +42109,15 @@ var Router = class _Router {
   padName(p) {
     return this.padNames.get(p[0].toFixed(3) + "," + p[1].toFixed(3)) || `(${r6(p[0])}, ${r6(p[1])})`;
   }
+  domainReport() {
+    if (!this.domains) return void 0;
+    const kinds = {};
+    for (const n of this.G.obstacles.keys()) if (n) {
+      const k = this.kindOf(n);
+      if (k !== "digital" && k !== "supply") kinds[n] = k;
+    }
+    return { kinds, quiet: this.sepGaps.quiet, noisy: this.sepGaps.noisy, relaxed: Array.from(this.relaxed) };
+  }
   result() {
     const ms = this.ms, passes = this.passes;
     const { P, doc, G: G2 } = this;
@@ -41941,6 +42178,10 @@ var Router = class _Router {
         vias++;
       }
     }
+    for (const v of this.fenceVias) {
+      items.push({ kind: "via", node: P.viaNode(doc, v.p[0], v.p[1], v.cls.viaD, v.cls.viaDrill, v.obj, span), net: v.obj, netName: v.net, conn: -1 });
+      vias++;
+    }
     const total = this.conns.filter((c) => c.nodes || !c.moot).length;
     return {
       items,
@@ -41959,7 +42200,9 @@ var Router = class _Router {
       connections,
       pairs: Array.from(this.pairReports.values()),
       impedance: this.zReports,
-      matched: this.matchReports
+      matched: this.matchReports,
+      domains: this.domainReport(),
+      fences: this.fenceReports
     };
   }
 };
@@ -43094,7 +43337,7 @@ function openPlace(ctx) {
 }
 
 // web/router/index.ts
-var api2 = { route, Router, isSupply, pairName, impedance: { stackupOf, traceOn, z0, zdiff, widthFor, usualImpedance }, place, placementChanges, evaluate, autoplace, openPlace, placeSummaryText, autoroute, open, summaryText, probe, featuresOf, costOf, DEFAULT_WEIGHTS, TRAINED, PROVENANCE };
+var api2 = { route, Router, isSupply, pairName, netKind, impedance: { stackupOf, traceOn, z0, zdiff, widthFor, usualImpedance }, place, placementChanges, evaluate, autoplace, openPlace, placeSummaryText, autoroute, open, summaryText, probe, featuresOf, costOf, DEFAULT_WEIGHTS, TRAINED, PROVENANCE };
 globalThis.PcbAutoRouter = api2;
 install();
 
@@ -52890,12 +53133,18 @@ function build(input) {
               width: typeof o.width === "number" ? o.width : void 0,
               allowVias: typeof o.allow_vias === "boolean" ? o.allow_vias : void 0,
               maxVias: typeof o.max_vias === "number" ? o.max_vias : void 0,
-              avoid: Array.isArray(o.avoid) ? o.avoid : void 0
+              avoid: Array.isArray(o.avoid) ? o.avoid : void 0,
+              kind: ["analog", "rf", "switching", "fast", "digital", "supply"].includes(o.kind) ? o.kind : void 0,
+              impedance: typeof o.impedance === "number" && o.impedance > 0 ? o.impedance : void 0
             };
+            if (o.kind !== void 0 && !netOpts[net].kind) throw new ToolError(`net_options.${name}.kind must be one of analog, rf, switching, fast, digital, supply`);
           }
           const order = Array.isArray(e.order) ? e.order.map((n) => boardNet(doc, text(n, "net")).name) : void 0;
           const keepouts = Array.isArray(e.keepouts) ? e.keepouts.filter((q) => q && Array.isArray(q.box) && q.box.length === 4).map((q) => ({ layers: Array.isArray(q.layers) ? q.layers : void 0, box: q.box })) : void 0;
-          const res = R2.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : void 0, timeMs: Math.round(1e3 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : void 0 });
+          const num5 = (v) => typeof v === "number" && v >= 0 ? v : void 0;
+          const separate = e.separate === false ? false : e.separate && typeof e.separate === "object" ? { quiet: num5(e.separate.quiet), noisy: num5(e.separate.noisy) } : void 0;
+          const fence = e.fence === false ? false : e.fence && typeof e.fence === "object" ? { spacing: num5(e.fence.spacing), nets: Array.isArray(e.fence.nets) ? e.fence.nets.map((n) => boardNet(doc, text(n, "net")).name) : void 0, returnVias: e.fence.return_vias === false ? false : void 0 } : void 0;
+          const res = R2.route(k, P, doc, P.designSettings(ed.proSettings || null), { separate, fence, nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : void 0, timeMs: Math.round(1e3 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : void 0 });
           const failed = (res.failed || []).map((f) => ({ net: f.net, from: f.a.map(r42), to: f.b.map(r42) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);
@@ -52915,6 +53164,8 @@ function build(input) {
             length_mm: r42(res.length),
             unrouted: conns.length ? conns.filter((c) => !c.routed).slice(0, 40).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, reason: c.reason, detail: c.detail, blocked_by_nets: c.blockedBy && c.blockedBy.nets })) : failed.slice(0, 40),
             longest_detours: conns.filter((c) => c.routed && c.detourRatio > 1.6).sort((a, b) => b.detourRatio - a.detourRatio).slice(0, 12).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, length_mm: r42(c.length), detour_ratio: r42(c.detourRatio), vias: c.vias, layers: c.layers })),
+            domains: res.domains ? { kept_apart: res.domains.kinds, quiet_mm: res.domains.quiet, noisy_mm: res.domains.noisy, relaxed: res.domains.relaxed } : void 0,
+            ground_vias: Array.isArray(res.fences) && res.fences.length ? res.fences.map((f) => ({ net: f.net, ground: f.ground, fence: f.fence, return_vias: f.returns, spacing_mm: f.spacing, note: f.note })) : void 0,
             note: "Judge this before the person does: a net left unrouted, a power net with a long detour or many vias, or a sensitive net crossing the board is a reason to change the placement or the net order and options and propose again instead."
           } });
           lines.push({ kind: "add", text: `Autoroute ${nets ? nets.join(", ") : "all unrouted nets"}: ${res.routed} of ${res.total} connection${res.total === 1 ? "" : "s"}, ${res.segments} track segment${res.segments === 1 ? "" : "s"}, ${res.vias} via${res.vias === 1 ? "" : "s"}, ${Math.round(res.length * 10) / 10} mm${failed.length ? ` (${failed.length} left unrouted)` : ""}`, ids });
