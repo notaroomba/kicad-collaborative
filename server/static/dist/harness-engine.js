@@ -41087,7 +41087,8 @@ var Router = class _Router {
       }
       let used = 0;
       for (const c of net.conns) if (c.nodes && c !== conn && c.feat) used += c.feat.vias;
-      const maxVias = Math.min(gd.maxVias - used, this.viaCap);
+      const perConn = this.opts.maxViasPerConnection;
+      const maxVias = Math.min(gd.maxVias - used, this.viaCap, perConn === void 0 || perConn === null ? Infinity : Math.max(0, +perConn));
       const src = this.access(A, maps, rt), tgt = this.access(B, maps, rt);
       if (!src) return null;
       let term = tb;
@@ -52347,7 +52348,7 @@ function build(input) {
           }
           const order = Array.isArray(e.order) ? e.order.map((n) => boardNet(doc, text(n, "net")).name) : void 0;
           const keepouts = Array.isArray(e.keepouts) ? e.keepouts.filter((q) => q && Array.isArray(q.box) && q.box.length === 4).map((q) => ({ layers: Array.isArray(q.layers) ? q.layers : void 0, box: q.box })) : void 0;
-          const res = R2.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: Math.round(1e3 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts });
+          const res = R2.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: Math.round(1e3 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : void 0 });
           const failed = (res.failed || []).map((f) => ({ net: f.net, from: f.a.map(r42), to: f.b.map(r42) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);

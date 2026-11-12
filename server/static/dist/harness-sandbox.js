@@ -1009,11 +1009,12 @@ class Board(_Doc):
 
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
-              fill: bool = True) -> dict:
+              fill: bool = True, max_vias: int | None = None) -> dict:
         """Autoroute the missing connections (every unrouted net by default) and report what was done.
 
         order: the few nets to lay first (USB pair, crystal); widths: {net: mm} for supply nets; net_options and
         keepouts are passed to the engine as they are.  Route a whole board in one call.
+        max_vias: the most vias one pad-to-pad connection may use (2 keeps every track to one trip to the other side).
 
         On a board with copper zones the zones are then filled, what the real fill leaves open is routed again
         (twice at most) and the zones are filled once more, so the result counts a pour the way KiCad does.
@@ -1037,6 +1038,8 @@ class Board(_Doc):
             e["allow_vias"] = False
         if time_s:
             e["time_s"] = time_s
+        if max_vias is not None:
+            e["max_vias"] = max_vias
         out = self._autoroute(e)
         if fill:
             f = self.fill()

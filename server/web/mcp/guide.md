@@ -76,7 +76,7 @@ Schematic (`sch = project.schematic()`, or `project.schematic("power")` for a sh
 Board (`board = project.board()`):
 - `board.sync()` brings footprints and nets across from the schematic (generated parts bring their footprints). `board.outline(x0, y0, x1, y1)` draws the edge; `board.rules(clearance=0.15, track_width=0.2, ...)` sets the rules; `board.zone("GND", layer="B.Cu")` adds a pour over the outline.
 - `board.autoplace(groups={block: [refs]}, near={"C1": "U1"}, edges={"J1": "left"}, fixed={"U1": (x, y, rotation)})` places by block; `board.place(ref, (x, y), rotation=None, side=None)`, `board.move`, `board.rotate`, `board.flip` place by hand.
-- `board.route(nets=None, order=[...], widths={"VBUS": 0.5}, time_s=120)` runs the autorouter over every unrouted net (or the ones named) and reports what is left; `board.connect("U1.3", "R1.1")` routes one connection; `board.track(net, [(x, y), ...])` and `board.via(net, (x, y))` draw copper by hand.
+- `board.route(nets=None, order=[...], widths={"VBUS": 0.5}, time_s=120, max_vias=2)` runs the autorouter over every unrouted net (or the ones named) and reports what is left; `board.connect("U1.3", "R1.1")` routes one connection; `board.track(net, [(x, y), ...])` and `board.via(net, (x, y))` draw copper by hand.
 - `board.fill()` fills every copper zone (KiCad's Fill All Zones) and reports the connections still open; a pour connects nothing until it is filled. `board.route()` and `board.check()` fill for you when the board has zones, so a ground pour counts the way it does in KiCad.
 - Reading: `board.refs()`, `board.pads(ref)`, `board.nets()`, `board.unrouted()`, `board.info()`, `board.check()` (DRC).
 

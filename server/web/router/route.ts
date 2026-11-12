@@ -26,6 +26,8 @@ export interface RouteOptions {
   pairs?: boolean;               // route differential pairs (D+/D-, _P/_N, DP/DM …) side by side at a constant gap; default true
   pairGap?: number;              // the gap between a pair's tracks in mm; default the nets' clearance
   fewerVias?: boolean;
+  /** the most vias any one connection (pad to pad) may use; a connection that cannot be made within it is left open and reported */
+  maxViasPerConnection?: number;
   /** false keeps every via at its net class's size.  By default a connection that cannot be made with it may use
    *  the smallest via Board Setup's constraints permit. */
   smallVias?: boolean;           // after routing, lay each route that changes layer again without (or with fewer) vias where the finished board leaves room; default true
@@ -709,7 +711,7 @@ export class Router {
         extra = (nodes) => { let hit = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const m = full[a.l]; for (let k = 0; k <= n; k++) if (m[(a.iy + sy * k) * G.W + a.ix + sx * k]) hit++; } return hit * G.g * 12 * this.W.length + (plan ? plan(nodes) : 0); };
       }
       let used = 0; for (const c of net.conns) if (c.nodes && c !== conn && c.feat) used += c.feat.vias;
-      const maxVias = Math.min(gd.maxVias - used, this.viaCap);
+      const perConn = this.opts.maxViasPerConnection; const maxVias = Math.min(gd.maxVias - used, this.viaCap, perConn === undefined || perConn === null ? Infinity : Math.max(0, +perConn));
       const src = this.access(A, maps, rt), tgt = this.access(B, maps, rt); if (!src) return null;
       let term = tb; let zoneSet: Set<number> | null = null;
       if (zoneAt(B.cluster)) { zoneSet = new Set(); term = tb.slice(); let own = false; for (const z of net.zoneCells!) if (!maps[z.l][z.iy * G.W + z.ix]) { if (!rt[z.l]) { if (!own) { rt = rt.slice(); own = true; } rt[z.l] = true; }   // a plane layer takes no tracks, but a via may drop into the net's own pour on it
