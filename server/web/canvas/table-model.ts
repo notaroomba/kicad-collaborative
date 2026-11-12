@@ -456,7 +456,7 @@ export function resizeCell(node0: SNode, isPcb: boolean, idx: number, which: "co
   const schRot = !isPcb && ((Math.round(angle) % 180) + 180) % 180 !== 0;
   if (which === "col") {
     const ne: Pt = [roundIU(p[0], isPcb), e[1]]; setCellStartEnd(cell, isPcb, s, ne);
-    if (schRot) { let h = Math.abs(ne[0] - s[0]); for (let k = 0; k < rs - 1; k++) h -= at0(heights, row + k); heights[row + rs - 1] = h; }
+    if (schRot) { let h = ne[0] - s[0]; for (let k = 0; k < rs - 1; k++) h -= at0(heights, row + k); heights[row + rs - 1] = h; }
     else { let w = ne[0] - s[0]; if (isPcb) w = Math.abs(w); for (let k = 0; k < cs - 1; k++) w -= at0(widths, col + k); widths[col + cs - 1] = w; }
   } else {
     const ne: Pt = [e[0], roundIU(p[1], isPcb)]; setCellStartEnd(cell, isPcb, s, ne);

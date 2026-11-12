@@ -26,9 +26,10 @@ import { E } from "./state";
 import { cellPropsDialog, errorMessage, newSchTableDialog, tablePropsDialog } from "./tabledialogs";
 import { selFilter } from "./selection";
 import { download } from "./pcbdialogs/ui";
-import { isSch, pxPerMm, requestRender } from "./view";
+import { applyView, isSch, pxPerMm, requestRender } from "./view";
 import { toast } from "./util";
-import { projectTextVars } from "./doc";
+import { breakFollow } from "./peers";
+import { msgHooks, type MsgItem } from "./msgpanel";
 
 type Pt = number[];
 export interface CellSel { tableId: string; cells: Set<number>; anchor: number | null }
@@ -130,13 +131,38 @@ function onMove(ev: PointerEvent): void {
   ev.stopImmediatePropagation();
   if (!p.dragging && Math.hypot(ev.clientX - p.client[0], ev.clientY - p.client[1]) < 4) return;
   if (!p.dragging) { p.dragging = true; if (!p.shift && !p.ctrl) clearAllSelection(false); }
-  const cells = dragRange(p, worldMm(ev));
+  lastClient = [ev.clientX, ev.clientY];
+  dragTo(p, worldMm(ev));
+  autoPan();
+}
+
+// ---------------------------------------------------------------- auto-pan (selectTableCells runs with SetAutoPan( true ))
+let lastClient: Pt = [0, 0], panRaf = 0, panT = 0;
+/** WX_VIEW_CONTROLS::onTimer while AUTO_PANNING: the cursor in the border pans the view, and the range follows the cursor. */
+function autoPan(): void {
+  if (panRaf) return;
+  const tick = (t: number) => {
+    panRaf = 0; const p = press; if (!p || !p.dragging) return;
+    const r = stage.getBoundingClientRect();
+    const [dx, dy] = KiCadCanvas.autoPanStep(lastClient[0] - r.left, lastClient[1] - r.top, r.width, r.height);
+    if (!dx && !dy) { panT = 0; return; }
+    const ticks = panT ? Math.min(12, Math.max(0, t - panT) / KiCadCanvas.AUTOPAN_TICK_MS) : 1; panT = t;
+    E.viewTouched = true; E.panX -= dx * ticks; E.panY -= dy * ticks; breakFollow(); applyView();
+    dragTo(p, worldMm({ clientX: lastClient[0], clientY: lastClient[1] }));
+    panRaf = requestAnimationFrame(tick);
+  };
+  panRaf = requestAnimationFrame(tick);
+}
+function stopAutoPan(): void { if (panRaf) cancelAnimationFrame(panRaf); panRaf = 0; panT = 0; }
+
+function dragTo(p: Press, mm: Pt): void {
+  const cells = dragRange(p, mm);
   sel = cells.size ? { tableId: p.item.id, cells, anchor: p.shift ? p.anchor : (sel ? sel.anchor : null) } : null;
   if (sel && !p.shift && sel.anchor === null) sel.anchor = M().cellAt(p.item.node, isPcb(), p.origin[0], p.origin[1]);
   requestRender();
 }
 
-function endPress(): void { window.removeEventListener("pointermove", onMove, true); window.removeEventListener("pointerup", onUp, true); press = null; }
+function endPress(): void { stopAutoPan(); window.removeEventListener("pointermove", onMove, true); window.removeEventListener("pointerup", onUp, true); press = null; }
 
 function onUp(ev: PointerEvent): void {
   const p = press; if (!p) return;
@@ -160,6 +186,9 @@ function onUp(ev: PointerEvent): void {
 function cancelPress(): boolean {
   const p = press; if (!p) return false;
   endPress();
+  // the button is still down: its release belongs to the cancelled drag, not to the select tool underneath
+  const swallow = (ev: PointerEvent) => { if (ev.pointerId !== p.pointerId) return; ev.stopImmediatePropagation(); window.removeEventListener("pointerup", swallow, true); };
+  window.addEventListener("pointerup", swallow, true);
   if (p.dragging) { sel = p.snapshot.size ? { tableId: p.item.id, cells: new Set(p.snapshot), anchor: p.anchor } : null; publish(); }
   return true;
 }
@@ -251,13 +280,10 @@ export function exportCsv(): boolean {
   download("table.csv", M().tableCsv(c.item.node, shown), "text/csv;charset=utf-8");
   return true;
 }
-/** GetShownText of a cell: ${ROW} ${COL} ${ADDR} ${LAYER} and the document's own variables. */
-export function shownCellText(item: KItem, text: string, row: number, col: number): string {
-  if (!text.includes("${")) return text;
-  const layer = String((KiCadCanvas.kid(item.node, "layer") || [])[1] || "");
-  const vars: Record<string, string> = { ROW: String(row + 1), COL: String(col + 1), ADDR: M().columnName(col) + (row + 1), LAYER: layer };
-  const docVars = projectTextVars() || {};
-  return text.replace(/\$\{([^}]+)\}/g, (m, k: string) => (k in vars ? vars[k] : k in docVars ? String(docVars[k]) : m));
+/** GetShownText of a cell (canvas/tables-images.ts tableCellShownText, the text the canvas draws): ${ROW} ${COL} ${ADDR} ${LAYER}, ${CELL(…)} and the document's own variables. */
+export function shownCellText(item: KItem, _text: string, row: number, col: number): string {
+  const cols = M().tableInfo(item.node).cols;
+  return KiCadCanvas.tableCellShownText(E.kdoc as never, item.node, row * cols + col, isPcb());
 }
 
 /** DoDelete on cells: their text is cleared (a generated table's cells have none of the user's). */
@@ -397,6 +423,50 @@ export const TABLE_ACTIONS: Record<string, () => boolean> = {
   "ACTIONS::cut": () => { copyCells(); return deleteCellText(); },
 };
 
+// ---------------------------------------------------------------- message panel
+/** MessageTextFromValue: "%.4f mm", "%.2f mils", "%.4f in". */
+const msgValue = (v: number, units: string) => units === "mil" ? (v / 0.0254).toFixed(2) + " mils" : units === "in" ? (v / 25.4).toFixed(4) + " in" : v.toFixed(4) + " mm";
+/** KIUI::EllipsizeStatusText: unescaped, line breaks and tabs as spaces, cut with an ellipsis to 30 % of the first 800 px of the window plus 60 % of the rest. */
+export function ellipsizeStatusText(text: string, windowPx: number, charPx = 7): string {
+  let msg = String(text || "").replace(/\{(slash|backslash|lt|gt|colon|dblquote|quote|space|tab|return|brace|bar)\}/g, (_m, k: string) => ({ slash: "/", backslash: "\\", lt: "<", gt: ">", colon: ":", dblquote: '"', quote: "'", space: " ", tab: "\t", return: "\n", brace: "{", bar: "|" } as Record<string, string>)[k]);
+  msg = msg.replace(/[\n\r\t]/g, " ");
+  const px = Math.min(windowPx, 800) * 0.3 + Math.max(windowPx - 800, 0) * 0.6, max = Math.max(1, Math.floor(px / charPx));
+  return msg.length > max ? msg.slice(0, Math.max(0, max - 1)) + "\u2026" : msg;
+}
+/** PCB_TABLECELL / SCH_TABLECELL::GetMsgPanelInfo for a single selected cell (the frame shows one item's panel only). */
+export function cellMsgPanel(units: string): MsgItem[] | null {
+  const c = cellSelection(); if (!c || c.cells.length !== 1) return null;
+  const pcb = isPcb(), T = M().tableInfo(c.item.node), i = c.cells[0], cell = T.cells[i]; if (!cell) return null;
+  const row = Math.floor(i / T.cols), col = i % T.cols;
+  const out: MsgItem[] = []; const add = (title: string, value: string) => out.push({ title, value });
+  const K = KiCadCanvas as unknown as { effectsOf(n: SNode): { size: number; sizeX: number; thick: number; bold?: boolean; italic?: boolean; face?: string; mirror?: boolean; just?: string[] } };
+  const ef = K.effectsOf(cell);
+  const fontN = KiCadCanvas.kid(KiCadCanvas.kid(cell, "effects") || [], "font"); const faceN = fontN ? KiCadCanvas.kid(fontN, "face") : null;
+  const font = faceN && String(faceN[1] || "") ? String(faceN[1]) : "Default";
+  const { s: a, e: b } = M().cellStartEnd(cell, pcb);
+  add("Table Cell", KiCadCanvas.cellAddr(row, col, pcb));
+  add("Text", ellipsizeStatusText(M().cellText(cell), stage.clientWidth || 800));   // GetText, not the shown text
+  if (pcb) {
+    // "Status: Locked" needs the cell's own m_isLocked or a locked group of the cell; a cell has neither (BOARD_ITEM::IsLocked)
+    const ln = String((KiCadCanvas.kid(c.item.node, "layer") || [])[1] || "Dwgs.User");
+    const L = (E.kdoc as unknown as { layers?: Map<string, { userName?: string }> }).layers; const l = L && L.get ? L.get(ln) : null;
+    add("Layer", l && l.userName ? l.userName : ln);
+    add("Mirror", ef.mirror ? "Yes" : "No");
+  }
+  add("Cell Width", msgValue(Math.abs(b[0] - a[0]), units));
+  add("Cell Height", msgValue(Math.abs(b[1] - a[1]), units));
+  add("Font", font);
+  if (pcb) {
+    add("Text Thickness", ef.thick > 0 ? msgValue(ef.thick, units) : "Auto");
+    add("Text Width", msgValue(ef.sizeX, units));
+    add("Text Height", msgValue(ef.size, units));
+  } else {
+    add("Style", ef.bold && ef.italic ? "Bold Italic" : ef.bold ? "Bold" : ef.italic ? "Italic" : "Normal");
+    add("Text Size", msgValue(ef.sizeX, units));
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- install
 let installed = false;
 export function installTableCells(): void {
@@ -413,6 +483,7 @@ export function installTableCells(): void {
   clearHooks.push(clearCells);
   overlayHooks.push(drawCellSelection, drawCellHandles);
   propertiesHooks.push(cellProperties);
+  msgHooks.push(cellMsgPanel);
   tableMenu.state = cellMenuState; tableMenu.pick = contextPick; tableMenu.actions = TABLE_ACTIONS;
   (window as unknown as { CollabTableCells?: unknown }).CollabTableCells = { newSchTableDialog, cellSelection, clearCells, selectTables, runEdit, selectRowsCols, cellProperties, editTable, exportCsv, cellUnder, promoteToTable, TABLE_ACTIONS, cellMenuState };
 }

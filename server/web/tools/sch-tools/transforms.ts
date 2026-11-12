@@ -21,8 +21,15 @@ export function selectionCentre(items: KItem[]): Pt { const b = itemsBox(items);
 // half-grid box centre; a multi-selection about the selection centre.
 export function rotationCentre(items: KItem[]) {
   if (items.length !== 1) return selectionCentre(items);
+  if (items[0].kind === "table") return tableCentre(items[0].node);
   const it = items[0], own = it.kind === "symbol" || LABEL_KINDS.has(it.kind) || POINT_KINDS.has(it.kind) || TEXT_KINDS.has(it.kind);
   return own ? anchorOf(it.kind, it.node) : selectionCentre(items);
+}
+/** A lone table turns about GetNearestHalfGridPosition( SCH_TABLE::GetCenter() ): the centre of its cells' starts and ends. */
+export function tableCentre(node: SNode): Pt {
+  const M = K.tableModel; let b: Box | null = null;
+  for (const c of M.tableInfo(node).cells) { const { s, e } = M.cellStartEnd(c, false); for (const p of [s, e]) b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]]; }
+  return b ? [halfGrid((b[0] + b[2]) / 2), halfGrid((b[1] + b[3]) / 2)] : [0, 0];
 }
 // op: "ccw" | "cw" | "x" (KiCad's Mirror Vertically: y flips) | "y" (Mirror Horizontally: x flips)
 export function mapPoint(op: string, C: Pt, p: Pt): Pt { const [dx, dy] = SCREEN_OP[op](p[0] - C[0], p[1] - C[1]); return [r4(C[0] + dx), r4(C[1] + dy)]; }
@@ -63,7 +70,21 @@ export function transformNode(kind: string, node: SNode, op: string, C: Pt) {
     if (!rot && ((op === "y" && !vertical) || (op === "x" && vertical))) { const ef = kid(node, "effects"), j = ef && kid(ef, "justify"); if (j) { const i = j.indexOf("left") > 0 ? j.indexOf("left") : j.indexOf("right"); if (i > 0) j[i] = j[i] === "left" ? "right" : "left"; } }
     return true;
   }
-  case "table": { const cells = kid(node, "cells"), c0 = cells && kid(cells, "table_cell"); if (!c0) return false; moveTo(atOf(c0).slice(0, 2)); return true; }   // tables keep their orientation
+  case "table": {
+    // SCH_TABLE::Rotate: every cell (an SCH_TEXTBOX) turns its start and end about the pivot and swaps its text angle
+    // between horizontal and vertical, then Normalize lays the cells out again from cell 0.  SCH_TABLE's
+    // MirrorHorizontally / MirrorVertically do nothing ("doesn't seem useful"), so a mirror leaves the table alone.
+    const cells = kid(node, "cells"); if (!cells || !rot) return false;
+    for (const c of kids(cells, "table_cell")) {
+      const a = kid(c, "at"), sz = kid(c, "size"); if (!a || !sz) continue;
+      const p0: Pt = [num(a[1]), num(a[2])], p1: Pt = [p0[0] + num(sz[1]), p0[1] + num(sz[2])];
+      const q0 = mapPoint(op, C, p0), q1 = mapPoint(op, C, p1), na = num(a[3]) === 90 ? 0 : 90;
+      a[1] = q0[0]; a[2] = q0[1]; if (a.length >= 4) a[3] = na; else a.push(na);
+      sz[1] = r4(q1[0] - q0[0]); sz[2] = r4(q1[1] - q0[1]);
+    }
+    K.tableModel.normalizeTable(node, false);
+    return true;
+  }
   case "sheet": {
     const [x, y] = atOf(node), s = kid(node, "size"); if (!s) return false;
     const [x0, y0, x1, y1] = corners(mapPoint(op, C, [x, y]), mapPoint(op, C, [x + num(s[1]), y + num(s[2])]));

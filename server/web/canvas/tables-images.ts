@@ -7,7 +7,9 @@ import { atOf, boolOf, boxOf, colorOf, cornersInSequence, effectsOf, fillOf, jus
 import { SCH_PEN, textPen } from "./text";
 import { linebreakText } from "./stroke-font";
 import { unescapeText } from "./text";
-import type { BoxRot, Doc, ImageEntry, Item, Pt, StrokeInfo } from "./types";
+import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
+import type { VarResolver, VarValue } from "./sheet";
+import type { BoxRot, Doc, ImageEntry, Item, Pt, SheetContext, StrokeInfo } from "./types";
 
 /** node's Buffer, when the module runs under node (tests, the MCP host); absent in a browser. */
 declare const Buffer: { from(s: string, encoding: string): ArrayLike<number> } | undefined;
@@ -20,6 +22,74 @@ declare const Buffer: { from(s: string, encoding: string): ArrayLike<number> } |
  * SCH_TABLE/PCB_TABLE::DrawBorders; cell text is anchored per SCH_TEXTBOX/PCB_TEXTBOX::GetDrawPos.
  * Cells covered by a span carry (span 0 0) and draw nothing.  The table's anchor is its first cell's position.
  */
+/** PCB_TABLECELL / SCH_TABLECELL::GetAddr: one column letter ('A' + col % 26) and the row — 1-based on a board, 0-based in a schematic. */
+export function cellAddr(row: number, col: number, isPcb: boolean): string { return String.fromCharCode(65 + (col % 26)) + (isPcb ? row + 1 : row); }
+
+/** SCH_TABLECELL's parseCellAddress: "A0", "b12", "AA3" → 0-based row and column (both 0-based in the address). */
+export function parseCellAddress(addr: string): { row: number; col: number } | null {
+  const m = /^([A-Za-z]+)(.*)$/.exec(addr); if (!m) return null;
+  let col = 0; for (const ch of m[1].toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64); col -= 1;
+  const rs = m[2]; if (!rs || !/^[+-]?\d+$/.test(rs.trim()) || rs.trim() !== rs) return null;
+  const row = parseInt(rs, 10); if (!(row >= 0)) return null;
+  return { row, col };
+}
+
+/** ADVANCED_CFG m_ResolveTextRecursionDepth. */
+const CELL_DEPTH = 6;
+
+/**
+ * The shown text of cell `index` of a (table …) node before line breaking: PCB_TABLECELL::GetUnwrappedShownText
+ * (${ROW} ${COL} 1-based, ${ADDR}, ${LAYER}, then the board's variables) or SCH_TABLECELL::GetShownText
+ * (${ROW} ${COL} 0-based, ${ADDR}, ${CELL("A0")} / ${CELL(row, col)} with KiCad's <Unresolved: …> texts, then the sheet's variables).
+ */
+export function tableCellShownText(doc: SheetContext | Doc | null | undefined, table: SNode, index: number, isPcb?: boolean, depth?: number): string {
+  const pcb = isPcb === undefined ? !!(doc && (doc as Doc).type === "pcb") : isPcb;
+  const cols = Math.max(1, Math.round(num((kid(table, "column_count") || [])[1], 1)) || 1);
+  const cellsN = kid(table, "cells"); const cellNodes = cellsN ? kids(cellsN, "table_cell") : [];
+  const rows = Math.ceil(cellNodes.length / cols);
+  const cell = cellNodes[index]; const text = cell ? str(cell[1]) : "";
+  if (text.indexOf("${") < 0) return text;
+  const row = Math.floor(index / cols), col = index % cols, d = depth || 0;
+  // GetLayerName: the board's own (user) name for the layer when it gives one
+  const lc = pcb ? layerOf(table, "Dwgs.User") : "";
+  const ll = pcb && doc ? (doc as { layers?: { get?: (k: string) => { userName?: string } | undefined } }).layers : null;
+  const lu = ll && typeof ll.get === "function" ? ll.get(lc) : null;
+  const layer = lu && lu.userName ? lu.userName : lc;
+  let base: VarResolver | null = null;
+  const fallback = (token: string): VarValue => {
+    if (!base) { try { base = varResolver(sheetTextVars(doc as SheetContext), { project: (doc && (doc as SheetContext).projectVars) || null }); } catch (e) { base = () => null; } }
+    return base!(token);
+  };
+  const resolve = (token: string): VarValue => {
+    if (token === "ROW") return String(pcb ? row + 1 : row);
+    if (token === "COL") return String(pcb ? col + 1 : col);
+    if (token === "ADDR") return cellAddr(row, col, pcb);
+    if (pcb && token === "LAYER") return layer;
+    if (!pcb && token.startsWith("CELL(") && token.endsWith(")")) {
+      const args = token.slice(5, -1).trim();
+      let tr = -1, tc = -1;
+      if (args.length >= 2 && args.startsWith("\"") && args.endsWith("\"")) {
+        const a = args.slice(1, -1); const p = parseCellAddress(a);
+        if (!p) return `<Unresolved: Invalid cell address: ${a}>`;
+        tr = p.row; tc = p.col;
+      } else if (args.indexOf(",") >= 0) {
+        const i = args.indexOf(","); const rs = args.slice(0, i).trim(), cs = args.slice(i + 1).trim();
+        if (!/^[+-]?\d+$/.test(rs) || !/^[+-]?\d+$/.test(cs)) return `<Unresolved: Invalid cell coordinates: ${args}>`;
+        tr = parseInt(rs, 10); tc = parseInt(cs, 10);
+      } else return `<Unresolved: Invalid CELL() syntax: ${args}>`;
+      if (tr < 0 || tr >= rows || tc < 0 || tc >= cols) {
+        const a = tr >= 0 && tc >= 0 ? String.fromCharCode(65 + (tc % 26)) + tr : args;
+        return `<Unresolved: Cell ${a} not found>`;
+      }
+      if (!cellNodes[tr * cols + tc]) return "<Unresolved: Cell not found>";
+      if (d >= CELL_DEPTH) return "<Circular reference>";
+      return tableCellShownText(doc, table, tr * cols + tc, pcb, d + 1);
+    }
+    return fallback(token);
+  };
+  try { return expandTextVars(text, resolve); } catch (e) { return text; }
+}
+
 export function buildTableGeom(doc: Doc, item: Item, n: SNode): void {
   const isPcb = doc.type === "pcb";
   const cols = Math.max(1, Math.round(num((kid(n, "column_count") || [])[1], 1)) || 1);
@@ -33,7 +103,7 @@ export function buildTableGeom(doc: Doc, item: Item, n: SNode): void {
   const bs = strokeOf(borderN, isPcb ? 0 : SCH_PEN), ss = strokeOf(sepN, isPcb ? 0 : SCH_PEN);
   const lineColor = (st: StrokeInfo) => isPcb ? pcbColor(layer) : (st.color || SCH.notes);
   const lineWidth = (st: StrokeInfo) => isPcb ? Math.max(st.w, 0) : (st.w > 0 ? st.w : SCH_PEN);   // SCH_PAINTER: width 0 → default pen
-  const cells = cellNodes.map((c, i): { node: SNode; box: BoxRot; cs: number; rs: number } | null => {
+  const cells = cellNodes.map((c): { node: SNode; box: BoxRot; cs: number; rs: number } | null => {
     const b = boxOf(c); if (!b) return null;
     const sp = kid(c, "span"); const cs = sp ? num(sp[1], 1) : 1, rs = sp ? num(sp[2], 1) : 1;
     return { node: c, box: b, cs, rs };
@@ -44,8 +114,8 @@ export function buildTableGeom(doc: Doc, item: Item, n: SNode): void {
   const a0 = (kid(first.node, "at") || kid(first.node, "start"))!; item.x = num(a0[1]); item.y = num(a0[2]);   // boxOf found one of them
   const drawAngle = first.box.rot;
   // cells: fill + text
-  for (const c of cells) {
-    if (!c) continue;
+  for (let ci = 0; ci < cells.length; ci++) {
+    const c = cells[ci]; if (!c) continue;
     const b = c.box; bboxAdd(item, b.x0, b.y0); bboxAdd(item, b.x1, b.y1);
     if (c.cs <= 0 || c.rs <= 0) continue;
     const cn = c.node; const ef = effectsOf(cn);
@@ -54,6 +124,7 @@ export function buildTableGeom(doc: Doc, item: Item, n: SNode): void {
       if (fill) G(item, { t: "rect", x: b.x0, y: b.y0, w: b.x1 - b.x0, h: b.y1 - b.y0, wd: 0, color: fill, fill, layer, z: zBg, noStroke: true });
     }
     let text = str(cn[1]); if (ef.hide || !text) continue;
+    if (text.indexOf("${") >= 0) { text = tableCellShownText(doc, n, ci, isPcb); if (!text) continue; }   // GetShownText: ${ROW} ${COL} ${ADDR} …
     const mg = kid(cn, "margins"); const dm = ef.size * 0.75;
     const lm = mg ? num(mg[1]) : dm, tm = mg ? num(mg[2]) : dm, rm = mg ? num(mg[3]) : dm, bm = mg ? num(mg[4]) : dm;
     // a cell is a text box: its text wraps to the cell's inner width (GetShownText → FONT::LinebreakText)

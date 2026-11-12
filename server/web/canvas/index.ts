@@ -41,7 +41,7 @@ import { schNets } from "./sch-nets";
 import { projectFile } from "./project-file";
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
-import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable } from "./tables-images";
+import { IMAGE_CACHE, base64Bytes, imageInfo, shiftTable, tableCellShownText, cellAddr, parseCellAddress } from "./tables-images";
 import { TEXT_INTERLINE, lineOffsets, parseMarkup, textWidth, unescapeText } from "./text";
 import { drawStrokeText, linebreakText, parseStrokeMarkup, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin } from "./stroke-font";
 import { displayNetName, netCode } from "./geom-pcb";
@@ -53,6 +53,7 @@ import { padModel } from "./pad-model";
 import { parseLibSymbol, subUnitBody, PIN_TYPE_NAMES, libGraphicGeom } from "./libsym";
 import { footprintDocApi } from "./footprint-doc";
 import { tableModel } from "./table-model";
+import { autoPanDirection, autoPanStep, AUTOPAN_TICK_MS } from "./autopan";
 export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS, PCB_BG,
   // schematic colour themes (colors.ts): KiCad Default / KiCad Classic / Dark; the painters rebuild stale geometry,
   // renderSvg / renderPng use opts.colorTheme (KiCad Default unless given)
@@ -60,7 +61,7 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   // asset hook: set to a function ({ id, kind: "image", ok }) => void; called once an image item's bitmap has
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
-  drawHalo, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable,
+  drawHalo, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable, tableCellShownText, cellAddr, parseCellAddress, autoPanDirection, autoPanStep, AUTOPAN_TICK_MS,
   // the drawing sheet (web/canvas/sheet.ts): KiCad's built-in (kicad_wks …) description, its interpreter
   // and the text-variable resolution the title block uses; render()/renderSvg() paint what it returns
   DEFAULT_DRAWING_SHEET, parseDrawingSheet, defaultDrawingSheet, buildDrawingSheet, documentDrawingSheet,

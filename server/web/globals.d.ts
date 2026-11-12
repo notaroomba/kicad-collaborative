@@ -130,6 +130,12 @@ interface KiCadCanvasApi {
   footprintDoc: typeof import("./canvas/footprint-doc").footprintDocApi;
   /** a table's structure edits and Normalize (web/canvas/table-model.ts) */
   tableModel: typeof import("./canvas/table-model").tableModel;
+  /** a table cell's shown text: ${ROW} ${COL} ${ADDR} ${LAYER} ${CELL(…)} and the document's variables (web/canvas/tables-images.ts) */
+  tableCellShownText: typeof import("./canvas/tables-images").tableCellShownText;
+  cellAddr: typeof import("./canvas/tables-images").cellAddr;
+  /** WX_VIEW_CONTROLS auto-panning (web/canvas/autopan.ts) */
+  autoPanStep: typeof import("./canvas/autopan").autoPanStep;
+  AUTOPAN_TICK_MS: number;
   /** the board's own settings sections (web/canvas/board-setup.ts) */
   boardSetup?: { applyBoardSetup(doc: KDoc, change: KChange): boolean };
   [extra: string]: unknown;

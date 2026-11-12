@@ -784,6 +784,22 @@ test("table: SCH_DRAWING_TOOLS::DrawTable sizes rows and columns from the drag; 
   assert.strictEqual(c.log.length, before, "Cancel places nothing"); assert.strictEqual(sch.state.draw, null);
 });
 
+test("table rotate: SCH_TABLE::Rotate turns every cell about the pivot, swaps the text angle, then Normalize; mirror leaves it alone", () => {
+  const t = _.tableNode([10.16, 20.32], [50.8, 25.4], 2, 2, 1.27);   // 2 x 2, columns 20.32, rows 2.54
+  const at = (n, i) => kid(kids(kid(n, "cells"), "table_cell")[i], "at").slice(1), size = (n, i) => kid(kids(kid(n, "cells"), "table_cell")[i], "size").slice(1);
+  const n = JSON.parse(JSON.stringify(t)); const C = [30.48, 22.86];
+  assert.ok(_.transformNode("table", n, "ccw", C) !== false);
+  // cell 0 starts at (10.16, 20.32): turned 90° CCW about C it starts at (C.x + dy, C.y - dx) = (27.94, 43.18), text vertical
+  assert.deepStrictEqual(at(n, 0), [27.94, 43.18, 90]);
+  assert.deepStrictEqual(size(n, 0), [2.54, -20.32], "end - start: the row height across, the column width up");
+  assert.deepStrictEqual(at(n, 1), [27.94, 22.86, 90], "the next column goes up the sheet");
+  assert.deepStrictEqual(at(n, 2), [30.48, 43.18, 90], "the next row goes right");
+  assert.deepStrictEqual(kid(n, "column_widths").slice(1), [20.32, 20.32]); assert.deepStrictEqual(kid(n, "row_heights").slice(1), [2.54, 2.54]);
+  const back = JSON.parse(JSON.stringify(n)); assert.ok(_.transformNode("table", back, "cw", C) !== false);
+  assert.deepStrictEqual(back, t, "CW undoes CCW exactly");
+  const m = JSON.parse(JSON.stringify(t)); assert.strictEqual(_.transformNode("table", m, "y", C), false); assert.deepStrictEqual(m, t, "mirror: nothing changes");
+});
+
 test("bezier: start, control 1, end, then the far handle (BEZIER_GEOM_MANAGER); control 2 is the handle reflected over the end", () => {
   const { d, c } = fresh();
   sch.onActivate("bezier", c);

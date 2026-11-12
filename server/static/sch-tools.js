@@ -1376,8 +1376,18 @@ ${body}
   }
   function rotationCentre(items) {
     if (items.length !== 1) return selectionCentre(items);
+    if (items[0].kind === "table") return tableCentre(items[0].node);
     const it = items[0], own = it.kind === "symbol" || LABEL_KINDS.has(it.kind) || POINT_KINDS.has(it.kind) || TEXT_KINDS.has(it.kind);
     return own ? anchorOf(it.kind, it.node) : selectionCentre(items);
+  }
+  function tableCentre(node) {
+    const M = K.tableModel;
+    let b = null;
+    for (const c of M.tableInfo(node).cells) {
+      const { s, e } = M.cellStartEnd(c, false);
+      for (const p of [s, e]) b = b ? [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])] : [p[0], p[1], p[0], p[1]];
+    }
+    return b ? [halfGrid((b[0] + b[2]) / 2), halfGrid((b[1] + b[3]) / 2)] : [0, 0];
   }
   function mapPoint(op, C, p) {
     const [dx, dy] = SCREEN_OP[op](p[0] - C[0], p[1] - C[1]);
@@ -1508,12 +1518,23 @@ ${body}
         return true;
       }
       case "table": {
-        const cells = kid(node, "cells"), c0 = cells && kid(cells, "table_cell");
-        if (!c0) return false;
-        moveTo(atOf(c0).slice(0, 2));
+        const cells = kid(node, "cells");
+        if (!cells || !rot) return false;
+        for (const c of kids(cells, "table_cell")) {
+          const a = kid(c, "at"), sz = kid(c, "size");
+          if (!a || !sz) continue;
+          const p0 = [num(a[1]), num(a[2])], p1 = [p0[0] + num(sz[1]), p0[1] + num(sz[2])];
+          const q0 = mapPoint(op, C, p0), q1 = mapPoint(op, C, p1), na = num(a[3]) === 90 ? 0 : 90;
+          a[1] = q0[0];
+          a[2] = q0[1];
+          if (a.length >= 4) a[3] = na;
+          else a.push(na);
+          sz[1] = r4(q1[0] - q0[0]);
+          sz[2] = r4(q1[1] - q0[1]);
+        }
+        K.tableModel.normalizeTable(node, false);
         return true;
       }
-      // tables keep their orientation
       case "sheet": {
         const [x, y] = atOf(node), s = kid(node, "size");
         if (!s) return false;

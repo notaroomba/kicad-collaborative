@@ -5,8 +5,9 @@
 import { useApp } from "../store";
 
 export function MsgPanel() {
-  const show = useApp((s) => s.view === "editor" && s.document.editor === "pcb");
   const items = useApp((s) => s.msgPanel.items);
+  // eeschema's panel: only while something answers (a selected table cell, SCH_TABLECELL::GetMsgPanelInfo)
+  const show = useApp((s) => s.view === "editor" && (s.document.editor === "pcb" || (s.document.editor === "sch" && s.msgPanel.items.length > 0)));
   if (!show) return null;
   return (
     <div

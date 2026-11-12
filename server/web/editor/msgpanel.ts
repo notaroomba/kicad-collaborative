@@ -13,12 +13,24 @@ export interface MsgItem { title: string; value: string }
 type PcbApi = { msgPanelInfo?: (doc: KDoc, ids: string[], opts: Record<string, unknown>) => MsgItem[]; designSettings?: (src: unknown) => unknown };
 type RouteState = { net?: { name?: string }; netKey?: string; width?: number; layer?: string; connected?: number | null } | null;
 
+/**
+ * Sub-item panels registered by other modules (tablecells.ts: a single selected table cell's
+ * PCB_TABLECELL / SCH_TABLECELL::GetMsgPanelInfo).  The first hook that answers wins; null passes.
+ */
+export const msgHooks: Array<(units: string) => MsgItem[] | null> = [];
+
 let lastKey = "", settingsSrc: unknown = undefined, settings: unknown = null;
 
 /** Recompute the panel when the document, the selection, the units or the route changed (called every frame: cheap). */
 export function updateMsgPanel(): void {
   const doc = E.kdoc as KDoc | null;
   const P = (window as unknown as { PcbTools?: PcbApi }).PcbTools;
+  if (doc) for (const h of msgHooks) {
+    let hi: MsgItem[] | null = null; try { hi = h(E.units); } catch (e) { console.warn(e); }
+    if (!hi) continue;
+    const k = "hook§" + JSON.stringify(hi); if (k !== lastKey) { lastKey = k; store.set({ msgPanel: { items: hi } }); }
+    return;
+  }
   if (!doc || isSch() || !P || !P.msgPanelInfo) { if (lastKey) { lastKey = ""; store.set({ msgPanel: { items: [] } }); } return; }
   const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { route?: RouteState; sel?: Set<string>; padSel?: string | null; highlightNet?: string | null });
   const rt = pcb ? pcb.route || null : null;
