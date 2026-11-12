@@ -5141,21 +5141,26 @@ Link '${target}' to this file?`)) return null;
   var conducts = (it) => isNetLine(it.kind) || it.kind === "junction" || it.kind === "bus_entry";
   var joins = (a, b) => a.net === "any" || b.net === "any" || a.net === b.net;
   function netItems(doc, item, near) {
+    return netWalk(doc, item, near, false).ids;
+  }
+  function netWalk(doc, item, near, physical) {
+    const reached = /* @__PURE__ */ new Map();
     const terms = /* @__PURE__ */ new Map();
     for (const it of doc.items.values()) {
       const t = terminalsOf(doc, it);
       if (t.length) terms.set(it, t);
     }
     const mine = terms.get(item), set = /* @__PURE__ */ new Set([item.id]);
-    if (!mine) return set;
+    if (!mine) return { ids: set, reached };
     const done = /* @__PURE__ */ new Set(), keys = /* @__PURE__ */ new Set(), keysDone = /* @__PURE__ */ new Set(), work = [];
     const reach = (it, t) => {
       set.add(it.id);
       for (const u of conducts(it) ? terms.get(it) : [t]) {
         if (done.has(u)) continue;
         done.add(u);
+        reached.set(u, it);
         work.push(u);
-        if (u.key) keys.add(u.key);
+        if (u.key && !physical) keys.add(u.key);
       }
       if (isNetLine(it.kind)) {
         const sg = segs(it), lineT = { net: it.kind };
@@ -5191,7 +5196,7 @@ Link '${target}' to this file?`)) return null;
         for (const [o, ts] of terms) for (const u of ts) if (u.key === key && !done.has(u)) reach(o, u);
       }
     }
-    return set;
+    return { ids: set, reached };
   }
   function pickNet(ctx, mm) {
     const doc = ctx.doc, tol = Math.max(0.3, 5 * mmPerPx(ctx)), pinTol = Math.max(tol, 0.6);
@@ -7719,6 +7724,53 @@ Link '${target}' to this file?`)) return null;
     ctx.commit([modChange(doc, it, n)], "Set Pin Function");
     return true;
   }
+  var NET_LABELS = /* @__PURE__ */ new Set(["label", "global_label", "hierarchical_label"]);
+  var isBusName = (t) => /\[[^\]]*\.\.[^\]]*\]/.test(t) || /\{[^}]*\}/.test(t);
+  function singleNetLabelForPin(doc, ref) {
+    const h = pinOf(doc, ref);
+    if (!h) return null;
+    const { reached } = netWalk(doc, h.item, [h.pin.x, h.pin.y], true);
+    let pins = 0;
+    let label = null;
+    for (const [, it] of reached) if (it.kind === "symbol") pins++;
+    const seen = /* @__PURE__ */ new Set();
+    for (const it of reached.values()) {
+      if (seen.has(it.id)) continue;
+      seen.add(it.id);
+      if (!NET_LABELS.has(it.kind) || isBusName(str(it.node[1]))) continue;
+      if (label) return null;
+      label = it;
+    }
+    return pins === 1 ? label : null;
+  }
+  function swapPinLabels(ctx, pins) {
+    if (pins.length < 2) return null;
+    const doc = ctx.doc;
+    const labels = [];
+    for (const r of pins) {
+      const l = singleNetLabelForPin(doc, r);
+      if (!l) return "Each selected pin must have exactly one attached net label and no other pin connections.";
+      labels.push(l);
+    }
+    const text = /* @__PURE__ */ new Map();
+    for (const l of labels) text.set(l.id, str(l.node[1]));
+    for (let i = 0; i < labels.length - 1; i++) {
+      const a = labels[i], b = labels[(i + 1) % labels.length];
+      const at = text.get(a.id), bt = text.get(b.id);
+      text.set(a.id, bt);
+      text.set(b.id, at);
+    }
+    const changes = [];
+    for (const l of new Set(labels)) {
+      if (text.get(l.id) === str(l.node[1])) continue;
+      const n = deep(l.node);
+      n[1] = text.get(l.id);
+      changes.push(modChange(doc, l, n));
+    }
+    if (changes.length) ctx.commit(changes, "Swap Pin Labels");
+    ctx.requestRender();
+    return null;
+  }
 
   // web/tools/sch-tools/index.ts
   root.CollabTools = root.CollabTools || {};
@@ -7787,6 +7839,8 @@ Link '${target}' to this file?`)) return null;
       pinProperties,
       pinHelper,
       PIN_HELPERS,
+      swapPinLabels,
+      singleNetLabelForPin,
       labelShapeForPin,
       pinAlternates,
       setAltPinFunction,

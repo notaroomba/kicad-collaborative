@@ -161,5 +161,35 @@ test("Attributes: the editor's toggleAttribute hook gets the selection with the 
   assert.strictEqual(ctx.log.length, 0, "the hook commits");
 });
 
+test("Swap Pin Labels: each pin's single net label takes the next pin's text, one commit (SwapPinLabels)", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc);
+  _.pinHelper(ctx, [{ id: "u1", number: "1" }, { id: "u1", number: "2" }, { id: "u1", number: "4" }], "label");
+  const txt = () => ["1", "2", "4"].map((n) => str(_.singleNetLabelForPin(doc, { id: "u1", number: n }).node[1]));
+  assert.deepStrictEqual(txt(), ["IN", "OUT", "PA0"]);
+  ctx.log.length = 0;
+  assert.strictEqual(_.swapPinLabels(ctx, [{ id: "u1", number: "1" }, { id: "u1", number: "2" }]), null);
+  assert.strictEqual(ctx.log.length, 1); assert.strictEqual(ctx.log[0].label, "Swap Pin Labels"); assert.strictEqual(ctx.log[0].changes.length, 2);
+  assert.deepStrictEqual(txt(), ["OUT", "IN", "PA0"]);
+  // three pins rotate in selection order: a<->b, then b<->c
+  _.swapPinLabels(ctx, [{ id: "u1", number: "1" }, { id: "u1", number: "2" }, { id: "u1", number: "4" }]);
+  assert.deepStrictEqual(txt(), ["IN", "PA0", "OUT"]);
+});
+test("Swap Pin Labels: a pin without exactly one net label, or wired to another pin, is refused with the infobar error", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc);
+  _.pinHelper(ctx, [{ id: "u1", number: "1" }], "label");
+  assert.strictEqual(_.singleNetLabelForPin(doc, { id: "u1", number: "2" }), null);
+  const n0 = ctx.log.length;
+  assert.strictEqual(_.swapPinLabels(ctx, [{ id: "u1", number: "1" }, { id: "u1", number: "2" }]), "Each selected pin must have exactly one attached net label and no other pin connections.");
+  assert.strictEqual(ctx.log.length, n0, "nothing committed");
+  // a second label on the same pin: no single label
+  _.pinHelper(ctx, [{ id: "u1", number: "1" }], "global_label");
+  assert.strictEqual(_.singleNetLabelForPin(doc, { id: "u1", number: "1" }), null);
+  // pin 2 wired to pin 1's net (a wire between the two pin ends) puts two pins in the subgraph
+  const doc2 = K.parseDoc(SHEET), ctx2 = makeCtx(doc2);
+  _.pinHelper(ctx2, [{ id: "u1", number: "1" }], "label");
+  ctx2.commit([{ id: "w1", kind: "ADDED", typeName: "SCH_LINE", sexpr: '(wire (pts (xy 43.18 48.26) (xy 58.42 48.26)) (stroke (width 0) (type default)) (uuid "w1"))' }], "w");
+  assert.strictEqual(_.singleNetLabelForPin(doc2, { id: "u1", number: "1" }), null);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -38,14 +38,20 @@ export function terminalsOf(doc: KDoc, it: KItem): Terminal[] {
 export const conducts = (it: KItem) => isNetLine(it.kind) || it.kind === "junction" || it.kind === "bus_entry";
 export const joins = (a: { net: string }, b: { net: string }) => a.net === "any" || b.net === "any" || a.net === b.net;
 /** Ids of everything on the net of `item` on this sheet; `near` picks the pin of a symbol or sheet. */
-export function netItems(doc: KDoc, item: KItem, near?: Pt | null) {
+export function netItems(doc: KDoc, item: KItem, near?: Pt | null) { return netWalk(doc, item, near, false).ids; }
+/**
+ * The walk netItems does: the items and the terminals reached.  `physical` stops at what touches (the
+ * CONNECTION_SUBGRAPH of the item): labels of the same name elsewhere on the sheet are not followed.
+ */
+export function netWalk(doc: KDoc, item: KItem, near: Pt | null | undefined, physical: boolean): { ids: Set<string>; reached: Map<Terminal, KItem> } {
+  const reached = new Map<Terminal, KItem>();
   const terms = new Map<KItem, Terminal[]>();
   for (const it of doc.items.values()) { const t = terminalsOf(doc, it); if (t.length) terms.set(it, t); }
-  const mine = terms.get(item), set = new Set([item.id]); if (!mine) return set;
+  const mine = terms.get(item), set = new Set([item.id]); if (!mine) return { ids: set, reached };
   const done = new Set<Terminal>(), keys = new Set<string>(), keysDone = new Set<string>(), work: Terminal[] = [];
   const reach = (it: KItem, t: Terminal) => {
     set.add(it.id);
-    for (const u of conducts(it) ? terms.get(it)! : [t]) { if (done.has(u)) continue; done.add(u); work.push(u); if (u.key) keys.add(u.key); }
+    for (const u of conducts(it) ? terms.get(it)! : [t]) { if (done.has(u)) continue; done.add(u); reached.set(u, it); work.push(u); if (u.key && !physical) keys.add(u.key); }
     if (isNetLine(it.kind)) {                                 // things sitting on the middle of a reached line
       const sg = segs(it), lineT = { net: it.kind };
       for (const [o, ts] of terms) { if (o === it) continue; for (const u of ts) if (!done.has(u) && joins(lineT, u) && sg.some(([a, b]) => onSegMid(u.p, a, b))) reach(o, u); }
@@ -67,7 +73,7 @@ export function netItems(doc: KDoc, item: KItem, near?: Pt | null) {
     const fresh = Array.from(keys).filter((k) => !keysDone.has(k)); if (!fresh.length) break;
     for (const key of fresh) { keysDone.add(key); for (const [o, ts] of terms) for (const u of ts) if (u.key === key && !done.has(u)) reach(o, u); }
   }
-  return set;
+  return { ids: set, reached };
 }
 // What the highlight tool picks under the cursor: a net item, a symbol pin, or a sheet pin.
 export function pickNet(ctx: SchCtx, mm: Pt): { item: KItem; at: Pt; pin?: string } | null {

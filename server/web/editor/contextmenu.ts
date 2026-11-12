@@ -21,6 +21,7 @@ import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, 
 import { isSch, pxPerMm, requestRender } from "./view";
 /** The table cell selection's view for the menu, filled in by editor/tablecells.ts at install. */
 export const tableMenu: { state(): { n: number; block: boolean; merged: boolean; structure: boolean } | null; pick(mm: Mm): boolean; actions: Record<string, () => boolean> } = { state: () => null, pick: () => false, actions: {} };
+import { toast } from "./util";
 
 type Mm = [number, number];
 type Run = () => void;
@@ -76,7 +77,7 @@ function attributeChecks(items: KItem[]): Record<string, boolean> {
 
 function menuCtx(): MenuCtx {
   const items = selectionItems(), s = schState(), p = pcbState(), sch = isSch();
-  const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPins.length && !kinds.length) kinds.push("pin");
+  const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPins.length && !kinds.length) for (let i = 0; i < E.selPins.length; i++) kinds.push("pin");
   const cells = tableMenu.state(); if (cells) for (let i = 0; i < cells.n; i++) kinds.push("table_cell");   // PCB_TABLECELL_T / SCH_TABLECELL_T
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
@@ -139,6 +140,8 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "PCB_ACTIONS::properties": () => (window.KDialogs ? openProperties : NOT_YET),
   "ACTIONS::selectAll": () => () => { clearAllSelection(false); selectAll(); requestRender(); },
   "ACTIONS::unselectAll": () => () => clearAllSelection(),
+  // SCH_EDIT_TOOL::SwapPinLabels (the error goes to the infobar)
+  "SCH_ACTIONS::swapPinLabels": () => (schPins() ? () => { const P = schPins()!; const err = P.swapPinLabels(toolCtx(), (E.selPins as PinRef[]).slice()); if (err) toast(err, 5000); selectionChanged(); requestRender(); } : NOT_YET),
   "ACTIONS::doDelete": () => (E.selField ? DESKTOP : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
   "SCH_ACTIONS::move": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
   "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),
@@ -231,6 +234,7 @@ interface SchPins {
   pinAlternates(d: KDoc, r: PinRef): { base: string; alts: string[]; current: string } | null;
   setAltPinFunction(ctx: unknown, r: PinRef, alt: string): boolean;
   pinHelper(ctx: unknown, pins: PinRef[], what: string, ref?: (it: KItem) => string): string[];
+  swapPinLabels(ctx: unknown, pins: PinRef[]): string | null;
   PIN_HELPERS: { id: string; label: string; icon: string }[];
 }
 function schPins(): SchPins | null { const m = CollabTools.sch; const u = m && (m._ as unknown as SchPins | undefined); return u && typeof u.pinHelper === "function" ? u : null; }

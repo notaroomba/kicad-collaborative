@@ -13,6 +13,7 @@ import { announceModes, endDrag } from "./drag";
 import { K, S, kid, kids, ptsOf, str } from "./state";
 import { addNode, deep, modChange, r4 } from "./util";
 import { setSpinOfNode, type Spin } from "./autorotate";
+import { netWalk } from "./highlight";
 
 export interface PinRef { id: string; number: string }
 export interface PinHit { item: KItem; pin: SymPin }
@@ -226,4 +227,54 @@ export function setAltPinFunction(ctx: SchCtx, ref: PinRef, alt: string): boolea
   if (want) p.push(K.parse(`(alternate ${JSON.stringify(want)})`) as SNode);
   ctx.commit([modChange(doc, it, n)], "Set Pin Function");
   return true;
+}
+
+// ---------------------------------------------------------------- Swap Pin Labels (SCH_EDIT_TOOL::SwapPinLabels)
+const NET_LABELS = new Set(["label", "global_label", "hierarchical_label"]);
+/** A label text that names a bus (a vector "D[0..7]" or a group "{A B}"): its connection is not a net. */
+const isBusName = (t: string) => /\[[^\]]*\.\.[^\]]*\]/.test(t) || /\{[^}]*\}/.test(t);
+/**
+ * findSingleNetLabelForPin: the one net label (local, global or hierarchical) of the pin's subgraph on this sheet,
+ * when that subgraph holds no other pin; else null.
+ */
+export function singleNetLabelForPin(doc: KDoc, ref: PinRef): KItem | null {
+  const h = pinOf(doc, ref); if (!h) return null;
+  const { reached } = netWalk(doc, h.item, [h.pin.x, h.pin.y], true);
+  let pins = 0; let label: KItem | null = null;
+  for (const [, it] of reached) if (it.kind === "symbol") pins++;
+  const seen = new Set<string>();
+  for (const it of reached.values()) {
+    if (seen.has(it.id)) continue; seen.add(it.id);
+    if (!NET_LABELS.has(it.kind) || isBusName(str(it.node[1]))) continue;
+    if (label) return null;                       // more than one label
+    label = it;
+  }
+  return pins === 1 ? label : null;
+}
+/**
+ * SCH_ACTIONS::swapPinLabels on two or more selected pins, in selection order: each pin's single net label takes the
+ * next pin's text (a swap for two, a rotation for more), one "Swap Pin Labels" commit.  Returns the error the
+ * infobar shows, or null.
+ */
+export function swapPinLabels(ctx: SchCtx, pins: PinRef[]): string | null {
+  if (pins.length < 2) return null;
+  const doc = ctx.doc; const labels: KItem[] = [];
+  for (const r of pins) {
+    const l = singleNetLabelForPin(doc, r);
+    if (!l) return "Each selected pin must have exactly one attached net label and no other pin connections.";
+    labels.push(l);
+  }
+  const text = new Map<string, string>(); for (const l of labels) text.set(l.id, str(l.node[1]));
+  for (let i = 0; i < labels.length - 1; i++) {
+    const a = labels[i], b = labels[(i + 1) % labels.length];
+    const at = text.get(a.id)!, bt = text.get(b.id)!; text.set(a.id, bt); text.set(b.id, at);
+  }
+  const changes: KChange[] = [];
+  for (const l of new Set(labels)) {
+    if (text.get(l.id) === str(l.node[1])) continue;
+    const n = deep(l.node); n[1] = text.get(l.id)!; changes.push(modChange(doc, l, n));
+  }
+  if (changes.length) ctx.commit(changes, "Swap Pin Labels");
+  ctx.requestRender();
+  return null;
 }
