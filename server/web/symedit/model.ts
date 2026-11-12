@@ -205,6 +205,7 @@ export function moveNode(n: Node, dx: number, dy: number): void { mapPoints(n, (
 export function rotateNode(n: Node, cx: number, cy: number, ccw: boolean): void {
   const k = String(n[0]);
   if (k === "circle") { setXY(kid(n, "center"), (x, y) => rot(x, y, cx, cy, ccw)); return; }
+  if (k === "ellipse" || k === "ellipse_arc") { setXY(kid(n, "center"), (x, y) => rot(x, y, cx, cy, ccw)); rotateEllipse(n, ccw); return; }
   mapPoints(n, (x, y) => rot(x, y, cx, cy, ccw));
   if (k === "rectangle") { const s = kid(n, "start"), e = kid(n, "end"); if (s && e) { const x0 = Math.min(num(s[1]), num(e[1])), x1 = Math.max(num(s[1]), num(e[1])), y0 = Math.min(num(s[2]), num(e[2])), y1 = Math.max(num(s[2]), num(e[2])); s[1] = +fmt(x0); s[2] = +fmt(y1); e[1] = +fmt(x1); e[2] = +fmt(y0); } }
   const at = kid(n, "at");
@@ -217,6 +218,7 @@ const rot = (x: number, y: number, cx: number, cy: number, ccw: boolean): [numbe
 export function mirrorNode(n: Node, cx: number, cy: number, horizontal: boolean): void {
   const k = String(n[0]);
   mapPoints(n, (x, y) => horizontal ? [2 * cx - x, y] : [x, 2 * cy - y]);
+  if (k === "ellipse" || k === "ellipse_arc") mirrorEllipse(n, horizontal);
   if (k === "arc") { const s = kid(n, "start"), e = kid(n, "end"); if (s && e) { const t1 = s[1], t2 = s[2]; s[1] = e[1]; s[2] = e[2]; e[1] = t1; e[2] = t2; } }
   const at = kid(n, "at");
   if (k === "pin" && at) { const a = num(at[3]); at[3] = horizontal ? (a === 0 ? 180 : a === 180 ? 0 : a) : (a === 90 ? 270 : a === 270 ? 90 : a); }
@@ -715,6 +717,67 @@ export function shapeNode(kind: "rectangle" | "circle" | "arc" | "polyline" | "b
   if (kind === "arc") return node(`(arc (start ${fmt(pts[0][0])} ${fmt(pts[0][1])}) (mid ${fmt(pts[1][0])} ${fmt(pts[1][1])}) (end ${fmt(pts[2][0])} ${fmt(pts[2][1])})${st})`);
   return node(`(${kind} (pts ${pts.map((p) => `(xy ${fmt(p[0])} ${fmt(p[1])})`).join(" ")})${st})`);
 }
+// ---------------------------------------------------------------- ellipses (EDA_SHAPE / ELLIPSE_GEOM_MANAGER)
+/** EDA_UNIT_UTILS::FormatAngle: fmt::format( "{:.10g}", degrees ). */
+export function fmtAngle(deg: number): string {
+  if (!isFinite(deg)) return "0";
+  if (deg === 0) return Object.is(deg, -0) ? "-0" : "0";
+  const e = Math.floor(Math.log10(Math.abs(deg)));
+  const strip = (m: string) => (m.includes(".") ? m.replace(/0+$/, "").replace(/\.$/, "") : m);
+  if (e < -4 || e >= 10) { const [m, x] = deg.toExponential(9).split("e"); const n = Number(x); return strip(m) + "e" + (n < 0 ? "-" : "+") + String(Math.abs(n)).padStart(2, "0"); }
+  return strip(deg.toFixed(Math.max(0, 9 - e)));
+}
+const IU = 1e4;   // schIUScale: 100 nm
+const iu = (mm: number): number => Math.round(mm * IU);
+const tdiv = (a: number, b: number): number => Math.trunc(a / b);   // C++ integer division
+export interface EllipseGeom { cx: number; cy: number; major: number; minor: number; rotation: number; start: number; end: number }
+/**
+ * ELLIPSE_GEOM_MANAGER::setBboxCorner2 / EDA_SHAPE::calcEdit (ELLIPSE): the ellipse inscribed in the box from corner `a`
+ * to corner `b` (file millimetres, Y up), major axis along the longer side.  Done in internal units, Y down.
+ */
+export function ellipseFromBox(a: number[], b: number[]): EllipseGeom {
+  const x1 = iu(a[0]), y1 = -iu(a[1]), x2 = iu(b[0]), y2 = -iu(b[1]);
+  const cx = tdiv(x1 + x2, 2), cy = tdiv(y1 + y2, 2);
+  const halfW = tdiv(Math.abs(x2 - x1), 2), halfH = tdiv(Math.abs(y2 - y1), 2);
+  const wide = halfW >= halfH;
+  return { cx: cx / IU, cy: -cy / IU, major: Math.max(wide ? halfW : halfH, 1) / IU, minor: Math.max(wide ? halfH : halfW, 1) / IU, rotation: wide ? 0 : 90, start: 0, end: 360 };
+}
+/** ELLIPSE::GetAngleAtPoint, in internal (Y down) space, degrees. */
+export function ellipseAngleAt(e: EllipseGeom, p: number[]): number {
+  const a = Math.max(1, e.major * IU), b = Math.max(1, e.minor * IU);
+  const dx = iu(p[0]) - Math.round(e.cx * IU) + 0, dy = -iu(p[1]) + Math.round(e.cy * IU) + 0;   // integers, never -0
+  const r = e.rotation * Math.PI / 180, c = Math.cos(r), s = Math.sin(r);
+  const lx = dx * c + dy * s, ly = -dx * s + dy * c;
+  return Math.atan2(ly / b, lx / a) * 180 / Math.PI;
+}
+/** ELLIPSE_GEOM_MANAGER::setStartAngle / setEndAngle: the end always after the start, wrapped by 360. */
+export function ellipseArcAngles(e: EllipseGeom, startPt: number[], endPt?: number[]): { start: number; end: number } {
+  const start = ellipseAngleAt(e, startPt);
+  if (!endPt) return { start, end: start + 360 };
+  let end = ellipseAngleAt(e, endPt);
+  while (end <= start) end += 360;
+  return { start, end };
+}
+const angNum = (deg: number): number => Number(fmtAngle(deg));
+/** formatEllipse / formatEllipseArc for a library (centre written with Y up). */
+export function ellipseNode(e: EllipseGeom, arc: boolean, fill = "none", width = 0): Node {
+  const n = node(`(${arc ? "ellipse_arc" : "ellipse"} (center ${fmt(e.cx)} ${fmt(e.cy)}) (major_radius ${fmt(e.major)}) (minor_radius ${fmt(e.minor)}) (rotation_angle 0)${arc ? " (start_angle 0) (end_angle 0)" : ""} (stroke (width ${fmt(width)}) (type default)) (fill (type ${fill})))`);
+  setAngle(n, "rotation_angle", e.rotation);
+  if (arc) { setAngle(n, "start_angle", e.start); setAngle(n, "end_angle", e.end); }
+  return n;
+}
+function setAngle(n: Node, key: string, deg: number): void { const k = kid(n, key); if (k) k[1] = angNum(deg); }
+const getAngle = (n: Node, key: string, d = 0): number => { const k = kid(n, key); return k ? num(k[1], d) : d; };
+/** EDA_SHAPE::rotate for ELLIPSE / ELLIPSE_ARC: Rotation -= aAngle (SCH_SHAPE::Rotate passes 90 for CCW, 270 for CW). */
+function rotateEllipse(n: Node, ccw: boolean): void { setAngle(n, "rotation_angle", getAngle(n, "rotation_angle") - (ccw ? 90 : 270)); }
+/** ELLIPSE::Mirror: Rotation = -Rotation; LEFT_RIGHT [s, e] -> [180 - e, 180 - s], TOP_BOTTOM [s, e] -> [-e, -s]. */
+function mirrorEllipse(n: Node, horizontal: boolean): void {
+  setAngle(n, "rotation_angle", -getAngle(n, "rotation_angle"));
+  if (n[0] !== "ellipse_arc") return;
+  const s = getAngle(n, "start_angle"), e = getAngle(n, "end_angle", 90);
+  setAngle(n, "start_angle", horizontal ? 180 - e : -e); setAngle(n, "end_angle", horizontal ? 180 - s : -s);
+}
+
 export function textNode(s: string, x: number, y: number, size = 1.27, angle = 0): Node {
   return node(`(text ${q(s)} (at ${fmt(x)} ${fmt(y)} ${Math.round(angle * 10)}) (effects (font (size ${fmt(size)} ${fmt(size)}))))`);   // angle in tenths (saveText)
 }

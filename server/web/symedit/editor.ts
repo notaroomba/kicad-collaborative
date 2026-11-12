@@ -18,14 +18,14 @@ import * as D from "./dialogs";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
 
-export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
+export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
 export interface Lib { nick: string; kind: "project" | "official"; doc: LibDoc | null; rows: Row[] | null; syms: Map<string, M.Node>; open: boolean; loading: boolean; error?: string }
 export interface Origin { docId: string; itemId: string; libId: string; ref: string; sheet: string }
 interface Step { label: string; text: string }
 export interface Tab { lib: string; name: string; origin?: Origin; scratch?: M.Node; modified?: boolean; undo: Step[]; redo: Step[]; unit: number; body: number; sel: Set<string>; view: { s: number; px: number; py: number } | null; fitted?: boolean }
 
-const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawArc: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
+const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
 const GRIDS_MIL = [100, 50, 25, 10, 5, 2, 1];
 const ANCHOR = "#0000FF";   // LAYER_SCHEMATIC_ANCHOR
 
@@ -688,7 +688,6 @@ export class SymbolEditor {
       cancelInteractive: () => this.cancelInteraction(),
     };
     for (const [id, t] of Object.entries(TOOL_ACTIONS)) A[id] = tool(t);
-    delete A.drawEllipse; delete A.drawEllipseArc;
     return (this._actions = A);
   }
   setUnits(u: Units): void { E.units = u; try { localStorage.setItem("kui.units", u); } catch (e) { /* no storage */ } this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
@@ -981,12 +980,12 @@ export class SymbolEditor {
     this.edit(c.label, (x) => { x.length = 0; x.push(...M.node(text)); return ids.map((id) => nodeOf(x, id)).filter((n): n is M.Node => !!n); }, { amend: c.amend });
   }
   // drawing tools -----------------------------------------------------------
-  private need(kind: ToolId): number { return kind === "rectangle" || kind === "circle" || kind === "textbox" ? 2 : kind === "arc" ? 3 : kind === "bezier" ? 4 : Infinity; }
+  private need(kind: ToolId): number { return kind === "rectangle" || kind === "circle" || kind === "textbox" || kind === "ellipse" ? 2 : kind === "arc" ? 3 : kind === "bezier" || kind === "ellipse_arc" ? 4 : Infinity; }
   private drawClick(fx: number, fy: number, dbl: boolean): void {
     if (!this.draw) { this.draw = { kind: this.tool, pts: [[fx, fy]] }; this.drawPreview(); this.paint(); return; }
     const d = this.draw; const last = d.pts[d.pts.length - 1];
     if (dbl && (d.kind === "polyline" || d.kind === "polygon")) { this.finishDraw(); return; }
-    if (last[0] === fx && last[1] === fy) { if (d.kind === "polyline" || d.kind === "polygon") this.finishDraw(); return; }
+    if (last[0] === fx && last[1] === fy && !(d.kind === "ellipse_arc" && d.pts.length >= 2)) { if (d.kind === "polyline" || d.kind === "polygon") this.finishDraw(); return; }
     d.pts.push([fx, fy]);
     if (d.pts.length >= this.need(d.kind)) this.finishDraw(); else { this.drawPreview(); this.paint(); }
   }
@@ -994,6 +993,13 @@ export class SymbolEditor {
     if (kind === "rectangle" && pts.length >= 2) return M.shapeNode("rectangle", pts);
     if (kind === "circle" && pts.length >= 2) return M.shapeNode("circle", pts);
     if (kind === "textbox" && pts.length >= 2) return M.shapeNode("rectangle", pts);
+    // EDA_SHAPE::calcEdit (ELLIPSE) and ELLIPSE_GEOM_MANAGER: box corner, box corner, then for an arc start and end angle
+    if ((kind === "ellipse" || kind === "ellipse_arc") && pts.length >= 2) {
+      const e = M.ellipseFromBox(pts[0], pts[1]);
+      if (kind === "ellipse" || pts.length < 3) return M.ellipseNode(e, kind === "ellipse_arc");
+      Object.assign(e, M.ellipseArcAngles(e, pts[2], pts[3]));
+      return M.ellipseNode(e, true);
+    }
     if (kind === "arc" && pts.length >= 2) {
       const [c, s] = pts; const e = pts[2] || s; const r = Math.hypot(s[0] - c[0], s[1] - c[1]); if (r <= 0) return null;
       const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]); let a1 = Math.atan2(e[1] - c[1], e[0] - c[0]); if (pts.length < 3) a1 = a0 + Math.PI / 2;
@@ -1015,7 +1021,7 @@ export class SymbolEditor {
     const d = this.draw; const t = this.tab; this.draw = null; this.preview = null; this.kcache = null; if (!d || !t) { this.paint(); return; }
     if (d.kind === "textbox") { if (d.pts.length >= 2) void D.newTextBox(this, d.pts[0], d.pts[1]); this.paint(); return; }
     const n = this.shapeFor(d.kind, d.pts); if (!n) { this.paint(); return; }
-    const label = { rectangle: "Draw Rectangle", circle: "Draw Circle", arc: "Draw Arc", bezier: "Draw Bezier", polyline: "Draw Lines", polygon: "Draw Polygon" }[d.kind as string] || "Draw";
+    const label = { rectangle: "Draw Rectangle", circle: "Draw Circle", ellipse: "Draw Ellipse", ellipse_arc: "Draw Elliptical Arc", arc: "Draw Arc", bezier: "Draw Bezier", polyline: "Draw Lines", polygon: "Draw Polygon" }[d.kind as string] || "Draw";
     this.edit(label, (s) => { M.addDrawItem(s, 0, t.body, n); return [n]; });
   }
   private contextMenu(ev: PointerEvent, x: number, y: number): void {

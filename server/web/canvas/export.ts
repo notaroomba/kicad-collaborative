@@ -229,7 +229,14 @@ export function renderPng(doc: Doc, opts?: ExportOpts | null): Promise<Blob> {
 
 
 export function atomText(v: unknown, quoted: boolean): string {
-  if (typeof v === "number") return Number.isInteger(v) ? String(v) : String(+v.toFixed(6));
+  if (typeof v === "number") {
+    if (Number.isInteger(v)) return String(v);
+    // A value read from a file keeps its digits (KiCad writes angles "{:.10g}", e.g. an ellipse_arc's 33.69006753);
+    // arithmetic noise (0.30000000000000004) has more than ten significant digits and is rounded to 1 nm.
+    const s = String(v);
+    if (!/e/i.test(s) && s.replace(/^-/, "").replace(".", "").replace(/^0+/, "").length <= 10) return s;
+    return String(+v.toFixed(6));
+  }
   const s = String(v);
   if (quoted || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)   // KiCad always quotes uuids
       || !/^[A-Za-z_][\w.:*-]*$/.test(s))
