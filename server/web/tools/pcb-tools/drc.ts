@@ -6,6 +6,8 @@ import { netlist, ratsnest } from "./netlist";
 import { K } from "./state";
 import { DRC_EPS, EPS } from "./transforms";
 import { isList, layerDefaults, layerOf, pt, r6, rotator, widthOf } from "./util";
+import { parseDru, ruleClearance } from "./dru";
+import type { DruRule } from "./dru";
 
 // ---------------------------------------------------------------- design settings and DRC
 // BOARD_DESIGN_SETTINGS / NETCLASS defaults (board_design_settings.h, netclass.cpp): what a board without a
@@ -110,10 +112,16 @@ export const boxCenter = (a: Box, b: Box) => [(Math.max(a[0], b[0]) + Math.min(a
  * board edge, missing connections (from the ratsnest), shorts, zero-length and dangling tracks, via annular
  * width, courtyard overlaps and items outside the outline.  Returns markers [{ x, y, severity, text, ids, code }].
  */
-export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | string | null | undefined, opts?: { unconnected?: boolean; outline?: boolean }) {
+export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | string | null | undefined, opts?: { unconnected?: boolean; outline?: boolean; rules?: DruRule[] | string | null }) {
   const s = settings && (settings as DesignSettings).netclasses ? settings as DesignSettings : designSettings(settings); opts = opts || {}; const out: DrcMarker[] = [];
   const nl = netlist(doc); const conds = nl.conductors.filter((c) => c.kind !== "zone");
-  const clr = (c: Conductor) => netClearance(s, c.net); const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance);
+  const clr = (c: Conductor) => netClearance(s, c.net);
+  // the custom rules' clearance constraints (.kicad_dru) take over from the netclass clearance where they match
+  const rules = typeof opts.rules === "string" ? parseDru(opts.rules).rules : opts.rules || [];
+  const clrRules = rules.filter((r) => r.constraints.some((k) => k.type === "clearance" && k.min != null));
+  const ruleMax = Math.max(0, ...clrRules.map((r) => r.constraints.find((k) => k.type === "clearance")!.min || 0));
+  const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance, ruleMax);
+  const ruleItem = (c: Conductor, layer: string) => ({ kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer });
   // copper clearance
   const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
   for (let i = 0; i < order.length; i++) {
@@ -121,11 +129,16 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
     for (let j = i + 1; j < order.length; j++) {
       const b = order[j]; if (b.bbox[0] > a.bbox[2] + maxClr) break;
       if (a.net && a.net === b.net) continue; if (!shareLayer(a.layers, b.layers)) continue;
-      const need = Math.max(clr(a), clr(b), s.minClearance || 0); if (!boxesTouch(a.bbox, b.bbox, need)) continue;   // Board Setup > Constraints: the board minimum is a floor
+      let need = Math.max(clr(a), clr(b), s.minClearance || 0), by = "";   // Board Setup > Constraints: the board minimum is a floor
+      if (clrRules.length && boxesTouch(a.bbox, b.bbox, maxClr)) {
+        const layer = [...a.layers].find((l) => b.layers.has(l)) || ""; const hit = ruleClearance(clrRules, doc, s, ruleItem(a, layer), ruleItem(b, layer));
+        if (hit) { need = hit.min > 0 ? Math.max(hit.min, s.minClearance || 0) : 0; by = hit.name; }
+      }
+      if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
       const gap = shapeGap(a.shape, b.shape); if (gap >= need - DRC_EPS) continue;
       const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);   // the stricter class of the pair names the rule
       const [x, y] = boxCenter(a.bbox, b.bbox);
-      out.push(marker("clearance", "error", x, y, `Clearance violation (netclass '${cls}' clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(new Set([a.id, b.id]))));
+      out.push(marker("clearance", "error", x, y, `Clearance violation (${by || `netclass '${cls}'`} clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(new Set([a.id, b.id]))));
     }
   }
   // copper to board edge

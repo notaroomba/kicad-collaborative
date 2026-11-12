@@ -476,7 +476,7 @@ act("unrouteSelected", "Unroute Selected", "", (ctx: PcbCtx) => { const ids = se
 act("deleteFull", "Delete Full Track", "Shift+Delete", (ctx: PcbCtx) => { const ids = selectionOrToast(ctx, "Select a track first"); if (!ids) return true; const run = connectedRun(ctx.doc, ids); for (const id of ids) run.add(id); S.sel.clear(); return commitSel(ctx, deleteChanges(ctx.doc, Array.from(run)), "delete full track"); });
 // inspection
 act("runDRC", "Design Rules Checker…", "", (ctx: PcbCtx) => {
-  bind(ctx); const s = settingsOf(ctx); S.markers = drc(ctx.doc, s).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules) : []); ctx.requestRender();
+  bind(ctx); const s = settingsOf(ctx); S.markers = drc(ctx.doc, s, { rules: S.dru ? S.dru.rules : null }).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules) : []); ctx.requestRender();
   const errors = S.markers.filter((m) => m.severity === "error").length, warnings = S.markers.length - errors;
   openForm({ title: "DRC Control", width: 620, fields: [{ type: "note", value: `${plural(errors, "error")}, ${plural(warnings, "warning")} — click a row to highlight it.` }, { k: "list", type: "table", columns: [{ label: "Severity", width: "70px" }, { label: "Violation", width: "1fr" }], rows: S.markers.map((m) => [m.severity, m.text]), empty: "No violations found.", onRow: (i: number) => { highlightIds(ctx, new Set(S.markers[i].ids)); if (ctx.setSelection && S.markers[i].ids.length) applySelection(ctx, S.markers[i].ids); } }], apply: () => { highlightIds(ctx, null); } });
   return true;

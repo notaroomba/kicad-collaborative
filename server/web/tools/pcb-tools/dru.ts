@@ -182,6 +182,19 @@ export function evalRuleConstraint(rules: DruRule[], type: string, doc: BoardDoc
 }
 
 /**
+ * DRC_ENGINE::EvalRules( CLEARANCE_CONSTRAINT, a, b, layer ) over the custom rules: the last rule with a clearance
+ * constraint whose condition holds for (A, B) or (B, A) gives the clearance (its min); null when none does, and the
+ * netclass clearance applies.  A rule with severity ignore gives 0.
+ */
+export function ruleClearance(rules: DruRule[], doc: BoardDoc, s: DesignSettings, A: RuleItem, B: RuleItem): { min: number; name: string } | null {
+  for (let i = rules.length - 1; i >= 0; i--) {
+    const r = rules[i], c = r.constraints.find((k) => k.type === "clearance"); if (!c || c.min == null) continue;
+    if (!ruleMatches(r, doc, s, A, B) && !ruleMatches(r, doc, s, B, A)) continue;
+    return { min: r.severity === "ignore" ? 0 : c.min, name: `rule '${r.name}'` };
+  }
+  return null;
+}
+/**
  * DRC_TEST_PROVIDER_MATCHED_LENGTH for the custom rules: every net whose tracks a rule gives a length constraint is
  * checked as one connection (its routed track length; via heights and pad-to-die lengths are not counted), and the
  * nets one skew rule covers are compared with the longest of them (within_diff_pairs: each pair on its own).

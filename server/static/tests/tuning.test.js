@@ -534,5 +534,18 @@ test("DRC with custom rules: 'Track length out of range' and 'Skew between track
   assert.equal(sk.length, 1); assert.equal(sk[0].text, "Skew between tracks out of range (rule 'dp skew' max skew 0.5000 mm; actual -1.0000 mm; target net length 21.0000 mm (from USB_N); actual 20.0000 mm)");
 });
 
+test("DRC with custom rules: a clearance rule overrides the netclass clearance, in either order of A / B; severity ignore drops it", () => {
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal))
+  (segment (start 0 0) (end 10 0) (width 0.2) (layer "F.Cu") (net "HV") (uuid "a"))
+  (segment (start 0 0.5) (end 10 0.5) (width 0.2) (layer "F.Cu") (net "LV") (uuid "b")))`, "kicad_pcb");
+  const clr = (rules) => P.drc(doc, null, { unconnected: false, outline: false, rules }).filter((m) => m.code === "clearance");
+  assert.equal(clr(null).length, 0, "0.3 mm clears the default 0.2 mm");
+  const m = clr(`(version 1) (rule "hv" (condition "A.NetName == 'LV' && B.NetName == 'HV'") (constraint clearance (min 0.4mm)))`);
+  assert.equal(m.length, 1); assert.equal(m[0].text, "Clearance violation (rule 'hv' clearance 0.4000 mm; actual 0.3000 mm)");
+  assert.equal(clr(`(version 1) (rule "hv" (condition "A.NetName == 'HV'") (constraint clearance (min 0.4mm)) (severity ignore))`).length, 0);
+  assert.equal(clr(`(version 1) (rule "hv" (condition "A.NetName == 'HV'") (constraint clearance (min 0.4mm)))
+(rule "relax" (condition "A.NetName == 'HV'") (constraint clearance (min 0.1mm)))`).length, 0, "the later rule wins");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

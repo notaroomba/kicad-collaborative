@@ -1397,6 +1397,351 @@
     };
   }
 
+  // web/tools/pcb-tools/dru.ts
+  var UNIT = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
+  function druValue(s) {
+    const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s));
+    if (!m) return null;
+    const u = m[2].toLowerCase();
+    if (u && !(u in UNIT)) return null;
+    return +m[1] * (u ? UNIT[u] : 1);
+  }
+  function tokenize(src) {
+    const out = [];
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (/\s/.test(c)) {
+        i++;
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        let j = i + 1, s = "";
+        while (j < src.length && src[j] !== c) {
+          if (src[j] === "\\" && j + 1 < src.length) j++;
+          s += src[j++];
+        }
+        if (j >= src.length) throw new Error("Missing closing quote");
+        out.push("'" + s);
+        i = j + 1;
+        continue;
+      }
+      const two = src.slice(i, i + 2);
+      if (["||", "&&", "==", "!=", "<=", ">="].includes(two)) {
+        out.push(two);
+        i += 2;
+        continue;
+      }
+      if ("()<>!,".includes(c)) {
+        out.push(c);
+        i++;
+        continue;
+      }
+      const m = /^[A-Za-z_0-9.]+/.exec(src.slice(i));
+      if (!m) throw new Error(`Unexpected '${c}'`);
+      out.push(m[0]);
+      i += m[0].length;
+    }
+    return out;
+  }
+  function parseCondition(src) {
+    const t = tokenize(src);
+    let p = 0;
+    const peek = () => t[p], eat = (x) => {
+      const v = t[p++];
+      if (x && v !== x) throw new Error(`Expected '${x}'`);
+      return v;
+    };
+    const bin = (next, ops) => () => {
+      let a = next();
+      while (ops.includes(peek())) {
+        const op = eat();
+        a = { k: "bin", op, a, b: next() };
+      }
+      return a;
+    };
+    const primary = () => {
+      const tok = eat();
+      if (tok === void 0) throw new Error("Unexpected end of expression");
+      if (tok === "(") {
+        const e2 = or();
+        eat(")");
+        return e2;
+      }
+      if (tok === "!") return { k: "not", e: primary() };
+      if (tok[0] === "'") {
+        const s = tok.slice(1);
+        return { k: "lit", v: { t: "s", v: s, wild: /[*?]/.test(s) } };
+      }
+      const n = druValue(tok);
+      if (n !== null) return { k: "lit", v: { t: "n", v: n } };
+      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
+      if (!m) throw new Error(`Unrecognized item '${tok}'`);
+      const who = m[1] || null;
+      if (peek() === "(") {
+        eat("(");
+        const args = [];
+        if (peek() !== ")") {
+          args.push(or());
+          while (peek() === ",") {
+            eat(",");
+            args.push(or());
+          }
+        }
+        eat(")");
+        return { k: "call", who, fn: m[2], args };
+      }
+      if (!who) throw new Error(`Unrecognized item '${tok}'`);
+      return { k: "prop", who, name: m[2] };
+    };
+    const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
+    const and = bin(cmp, ["&&"]);
+    const or = bin(and, ["||"]);
+    const e = or();
+    if (p < t.length) throw new Error(`Unexpected '${t[p]}'`);
+    return e;
+  }
+  function wildMatch(pat, s) {
+    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+    return re.test(s);
+  }
+  var TYPE_NAME = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
+  function propOf(doc, s, it, name) {
+    if (!it) return { t: "u" };
+    const key = name.replace(/_/g, "").toLowerCase();
+    const net = () => netOf(it.node).name || "";
+    const str = (v) => ({ t: "s", v, wild: false });
+    switch (key) {
+      case "type":
+        return str(TYPE_NAME[it.kind] || it.kind);
+      case "net":
+      case "netname":
+        return str(net());
+      case "netcode":
+        return { t: "n", v: netOf(it.node).code || 0 };
+      case "netclass":
+        return str(netclassName(s, net()));
+      case "layer":
+        return str(it.layer || layerOf(it.node) || "");
+      case "width": {
+        const w = K.kid(it.node, "width");
+        return w ? { t: "n", v: K.num(w[1]) } : { t: "u" };
+      }
+      case "reference": {
+        const p = it.node.find((c) => Array.isArray(c) && c[0] === "property" && K.str(c[1]) === "Reference");
+        return p ? str(K.str(p[2])) : { t: "u" };
+      }
+      default:
+        return { t: "u" };
+    }
+  }
+  var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
+  var num = (b) => ({ t: "n", v: b ? 1 : 0 });
+  function evalExpr(e, doc, s, A, B) {
+    switch (e.k) {
+      case "lit":
+        return e.v;
+      case "prop":
+        return propOf(doc, s, e.who === "A" ? A : B, e.name);
+      case "not":
+        return num(!truth(evalExpr(e.e, doc, s, A, B)));
+      case "bin": {
+        if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
+        if (e.op === "||") return num(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
+        const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
+        if (e.op === "==" || e.op === "!=") {
+          let eq = false;
+          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
+          else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
+          return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
+        }
+        if (a.t !== "n" || b.t !== "n") return num(false);
+        return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
+      }
+      case "call": {
+        const it = e.who === "B" ? B : A;
+        const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" };
+        const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
+        switch (e.fn) {
+          case "inDiffPair": {
+            if (!it || !as) return num(false);
+            const name = netOf(it.node).name || "";
+            const m = matchDpSuffix(name);
+            if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
+            let i = name.length - 1;
+            while (i >= 0 && /[0-9_]/.test(name[i])) i--;
+            const base = name.slice(0, i) + name.slice(i + 1);
+            return num(wildMatch(as, base) || base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_"))));
+          }
+          case "hasNetclass":
+            return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
+          case "existsOnLayer": {
+            if (!it) return num(false);
+            const L = K.kid(it.node, "layers");
+            const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)];
+            return num(ls.some((l) => wildMatch(as, l) || l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)));
+          }
+          case "isPlated":
+            return num(!!it && (it.kind === "via" || it.kind === "pad" && K.str(it.node[2]) === "thru_hole"));
+          default:
+            return { t: "u" };
+        }
+      }
+    }
+  }
+  function parseDru(text) {
+    const rules = [], errors = [];
+    let root2;
+    try {
+      root2 = K.parse("(dru " + (text || "") + "\n)");
+    } catch (e) {
+      return { rules, errors: [String(e.message || e)] };
+    }
+    for (const r of root2.slice(1)) {
+      if (!Array.isArray(r) || r[0] !== "rule") continue;
+      const rule = { name: K.str(r[1]), condition: "", layer: null, severity: null, constraints: [], expr: null, error: null };
+      for (const c of r.slice(2)) {
+        if (!Array.isArray(c)) continue;
+        if (c[0] === "condition") rule.condition = K.str(c[1]);
+        else if (c[0] === "layer") rule.layer = K.str(c[1]);
+        else if (c[0] === "severity") rule.severity = K.str(c[1]);
+        else if (c[0] === "constraint") {
+          const k = { type: K.str(c[1]), min: null, opt: null, max: null };
+          for (const v of c.slice(2)) {
+            if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
+            else if (Array.isArray(v) && v.length === 1) (k.options = k.options || []).push(K.str(v[0]));
+            else if (!Array.isArray(v)) (k.options = k.options || []).push(K.str(v));
+          }
+          rule.constraints.push(k);
+        }
+      }
+      if (rule.condition) {
+        try {
+          rule.expr = parseCondition(rule.condition);
+        } catch (e) {
+          rule.error = e.message;
+          errors.push(`rule '${rule.name}': ${rule.error}`);
+        }
+      }
+      rules.push(rule);
+    }
+    return { rules, errors };
+  }
+  var layerOk = (rule, layer) => {
+    if (!rule.layer || !layer) return true;
+    if (rule.layer === "outer") return /^(F|B)\.Cu$/.test(layer);
+    if (rule.layer === "inner") return /^In\d+\.Cu$/.test(layer);
+    return wildMatch(rule.layer, layer);
+  };
+  function ruleMatches(rule, doc, s, A, B) {
+    if (rule.error) return false;
+    if (!layerOk(rule, A ? A.layer || layerOf(A.node) : null)) return false;
+    return !rule.expr || truth(evalExpr(rule.expr, doc, s, A, B));
+  }
+  function evalRuleConstraint(rules, type, doc, s, A, B, fmt3) {
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i];
+      const c = r.constraints.find((k) => k.type === type);
+      if (!c) continue;
+      if (!ruleMatches(r, doc, s, A, B)) continue;
+      const f = fmt3 || ((v) => v.toFixed(4) + " mm");
+      const parts = [];
+      if (c.min != null && c.min > 0) parts.push("min " + f(c.min));
+      if (c.opt != null) parts.push("opt " + f(c.opt));
+      if (c.max != null) parts.push("max " + f(c.max));
+      return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
+    }
+    return null;
+  }
+  function ruleClearance(rules, doc, s, A, B) {
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i], c = r.constraints.find((k) => k.type === "clearance");
+      if (!c || c.min == null) continue;
+      if (!ruleMatches(r, doc, s, A, B) && !ruleMatches(r, doc, s, B, A)) continue;
+      return { min: r.severity === "ignore" ? 0 : c.min, name: `rule '${r.name}'` };
+    }
+    return null;
+  }
+  function matchedLengthMarkers(doc, s, rules) {
+    const out = [];
+    if (!rules.some((r) => r.constraints.some((c) => c.type === "length" || c.type === "skew"))) return out;
+    const nets = /* @__PURE__ */ new Map();
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" && it.kind !== "arc") continue;
+      const name = netOf(it.node).name || "";
+      if (!name) continue;
+      const a = K.kid(it.node, "start"), b = K.kid(it.node, "end");
+      if (!a || !b) continue;
+      const A = [K.num(a[1]), K.num(a[2])], B = [K.num(b[1]), K.num(b[2])];
+      let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      if (it.kind === "arc") {
+        const m = K.kid(it.node, "mid");
+        const c = m && K.arcFrom3(A, [K.num(m[1]), K.num(m[2])], B);
+        if (c) L = arcLength(c);
+      }
+      let n = nets.get(name);
+      if (!n) nets.set(name, n = { name, ids: [], total: 0, first: it });
+      n.ids.push(it.id);
+      n.total += L;
+    }
+    const at = (it) => {
+      const a = K.kid(it.node, "start");
+      return [K.num(a[1]), K.num(a[2])];
+    };
+    const groups = /* @__PURE__ */ new Map();
+    for (const n of nets.values()) {
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "length");
+        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+        if (r.severity === "ignore") break;
+        const name = `rule '${r.name}'`, [x, y] = at(n.first);
+        if (c.min != null && n.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n.total)})`, n.ids.slice())));
+        else if (c.max != null && n.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n.total)})`, n.ids.slice()));
+        break;
+      }
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "skew");
+        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+        if (r.severity === "ignore") break;
+        let g = groups.get(r.name + "\0" + i);
+        if (!g) groups.set(r.name + "\0" + i, g = { c, rule: r, nets: [] });
+        g.nets.push(n);
+        break;
+      }
+    }
+    for (const g of groups.values()) {
+      let sets = [g.nets];
+      if (g.c.options && g.c.options.includes("within_diff_pairs")) {
+        sets = [];
+        const left = new Map(g.nets.map((n) => [n.name, n]));
+        for (const n of g.nets) {
+          if (!left.has(n.name)) continue;
+          const m = matchDpSuffix(n.name);
+          const o = m.rv ? left.get(m.complement) : null;
+          if (o) {
+            sets.push([n, o]);
+            left.delete(n.name);
+            left.delete(o.name);
+          }
+        }
+      }
+      for (const set of sets) {
+        let ref = set[0];
+        for (const n of set) if (n.total > ref.total) ref = n;
+        for (const n of set) {
+          const skew = Math.abs(n.total - ref.total), name = `rule '${g.rule.name}'`;
+          let kind = "";
+          if (g.c.max != null && skew > g.c.max + 1e-6) kind = "max";
+          else if (g.c.min != null && n !== ref && skew < g.c.min - 1e-6) kind = "min";
+          if (!kind) continue;
+          const [x, y] = at(n.first);
+          out.push(marker("skew_out_of_range", g.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g.c.max : g.c.min)}; actual ${mm4(n.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n.total)})`, n.ids.slice()));
+        }
+      }
+    }
+    return out.filter((m) => s.severities[m.code] !== "ignore");
+  }
+
   // web/tools/pcb-tools/drc.ts
   var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
   function designSettings(src) {
@@ -1670,7 +2015,11 @@
     const nl = netlist(doc);
     const conds = nl.conductors.filter((c) => c.kind !== "zone");
     const clr = (c) => netClearance(s, c.net);
-    const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance);
+    const rules = typeof opts.rules === "string" ? parseDru(opts.rules).rules : opts.rules || [];
+    const clrRules = rules.filter((r) => r.constraints.some((k) => k.type === "clearance" && k.min != null));
+    const ruleMax = Math.max(0, ...clrRules.map((r) => r.constraints.find((k) => k.type === "clearance").min || 0));
+    const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance, ruleMax);
+    const ruleItem = (c, layer) => ({ kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer });
     const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
     for (let i = 0; i < order.length; i++) {
       const a = order[i];
@@ -1679,13 +2028,21 @@
         if (b.bbox[0] > a.bbox[2] + maxClr) break;
         if (a.net && a.net === b.net) continue;
         if (!shareLayer(a.layers, b.layers)) continue;
-        const need = Math.max(clr(a), clr(b), s.minClearance || 0);
-        if (!boxesTouch(a.bbox, b.bbox, need)) continue;
+        let need = Math.max(clr(a), clr(b), s.minClearance || 0), by = "";
+        if (clrRules.length && boxesTouch(a.bbox, b.bbox, maxClr)) {
+          const layer = [...a.layers].find((l) => b.layers.has(l)) || "";
+          const hit = ruleClearance(clrRules, doc, s, ruleItem(a, layer), ruleItem(b, layer));
+          if (hit) {
+            need = hit.min > 0 ? Math.max(hit.min, s.minClearance || 0) : 0;
+            by = hit.name;
+          }
+        }
+        if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
         const gap = shapeGap(a.shape, b.shape);
         if (gap >= need - DRC_EPS) continue;
         const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);
         const [x, y] = boxCenter(a.bbox, b.bbox);
-        out.push(marker("clearance", "error", x, y, `Clearance violation (netclass '${cls}' clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
+        out.push(marker("clearance", "error", x, y, `Clearance violation (${by || `netclass '${cls}'`} clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
       }
     }
     const edges = edgeShapes(doc);
@@ -2939,342 +3296,6 @@
     for (const a of A) for (const b of B) if (shareLayer(a.layers, b.layers)) gap = Math.min(gap, shapeGap(a.shape, b.shape));
     const need = Math.max(netClearance(s, A[0].net), netClearance(s, B[0].net));
     return { gap: gap === Infinity ? null : r6(gap), required: need, sameNet: !!(A[0].net && A[0].net === B[0].net), nets: [A[0].net, B[0].net] };
-  }
-
-  // web/tools/pcb-tools/dru.ts
-  var UNIT = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
-  function druValue(s) {
-    const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s));
-    if (!m) return null;
-    const u = m[2].toLowerCase();
-    if (u && !(u in UNIT)) return null;
-    return +m[1] * (u ? UNIT[u] : 1);
-  }
-  function tokenize(src) {
-    const out = [];
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (/\s/.test(c)) {
-        i++;
-        continue;
-      }
-      if (c === "'" || c === '"') {
-        let j = i + 1, s = "";
-        while (j < src.length && src[j] !== c) {
-          if (src[j] === "\\" && j + 1 < src.length) j++;
-          s += src[j++];
-        }
-        if (j >= src.length) throw new Error("Missing closing quote");
-        out.push("'" + s);
-        i = j + 1;
-        continue;
-      }
-      const two = src.slice(i, i + 2);
-      if (["||", "&&", "==", "!=", "<=", ">="].includes(two)) {
-        out.push(two);
-        i += 2;
-        continue;
-      }
-      if ("()<>!,".includes(c)) {
-        out.push(c);
-        i++;
-        continue;
-      }
-      const m = /^[A-Za-z_0-9.]+/.exec(src.slice(i));
-      if (!m) throw new Error(`Unexpected '${c}'`);
-      out.push(m[0]);
-      i += m[0].length;
-    }
-    return out;
-  }
-  function parseCondition(src) {
-    const t = tokenize(src);
-    let p = 0;
-    const peek = () => t[p], eat = (x) => {
-      const v = t[p++];
-      if (x && v !== x) throw new Error(`Expected '${x}'`);
-      return v;
-    };
-    const bin = (next, ops) => () => {
-      let a = next();
-      while (ops.includes(peek())) {
-        const op = eat();
-        a = { k: "bin", op, a, b: next() };
-      }
-      return a;
-    };
-    const primary = () => {
-      const tok = eat();
-      if (tok === void 0) throw new Error("Unexpected end of expression");
-      if (tok === "(") {
-        const e2 = or();
-        eat(")");
-        return e2;
-      }
-      if (tok === "!") return { k: "not", e: primary() };
-      if (tok[0] === "'") {
-        const s = tok.slice(1);
-        return { k: "lit", v: { t: "s", v: s, wild: /[*?]/.test(s) } };
-      }
-      const n = druValue(tok);
-      if (n !== null) return { k: "lit", v: { t: "n", v: n } };
-      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
-      if (!m) throw new Error(`Unrecognized item '${tok}'`);
-      const who = m[1] || null;
-      if (peek() === "(") {
-        eat("(");
-        const args = [];
-        if (peek() !== ")") {
-          args.push(or());
-          while (peek() === ",") {
-            eat(",");
-            args.push(or());
-          }
-        }
-        eat(")");
-        return { k: "call", who, fn: m[2], args };
-      }
-      if (!who) throw new Error(`Unrecognized item '${tok}'`);
-      return { k: "prop", who, name: m[2] };
-    };
-    const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
-    const and = bin(cmp, ["&&"]);
-    const or = bin(and, ["||"]);
-    const e = or();
-    if (p < t.length) throw new Error(`Unexpected '${t[p]}'`);
-    return e;
-  }
-  function wildMatch(pat, s) {
-    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
-    return re.test(s);
-  }
-  var TYPE_NAME = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
-  function propOf(doc, s, it, name) {
-    if (!it) return { t: "u" };
-    const key = name.replace(/_/g, "").toLowerCase();
-    const net = () => netOf(it.node).name || "";
-    const str = (v) => ({ t: "s", v, wild: false });
-    switch (key) {
-      case "type":
-        return str(TYPE_NAME[it.kind] || it.kind);
-      case "net":
-      case "netname":
-        return str(net());
-      case "netcode":
-        return { t: "n", v: netOf(it.node).code || 0 };
-      case "netclass":
-        return str(netclassName(s, net()));
-      case "layer":
-        return str(it.layer || layerOf(it.node) || "");
-      case "width": {
-        const w = K.kid(it.node, "width");
-        return w ? { t: "n", v: K.num(w[1]) } : { t: "u" };
-      }
-      case "reference": {
-        const p = it.node.find((c) => Array.isArray(c) && c[0] === "property" && K.str(c[1]) === "Reference");
-        return p ? str(K.str(p[2])) : { t: "u" };
-      }
-      default:
-        return { t: "u" };
-    }
-  }
-  var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
-  var num = (b) => ({ t: "n", v: b ? 1 : 0 });
-  function evalExpr(e, doc, s, A, B) {
-    switch (e.k) {
-      case "lit":
-        return e.v;
-      case "prop":
-        return propOf(doc, s, e.who === "A" ? A : B, e.name);
-      case "not":
-        return num(!truth(evalExpr(e.e, doc, s, A, B)));
-      case "bin": {
-        if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
-        if (e.op === "||") return num(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
-        const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
-        if (e.op === "==" || e.op === "!=") {
-          let eq = false;
-          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
-          else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
-          return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
-        }
-        if (a.t !== "n" || b.t !== "n") return num(false);
-        return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
-      }
-      case "call": {
-        const it = e.who === "B" ? B : A;
-        const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" };
-        const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
-        switch (e.fn) {
-          case "inDiffPair": {
-            if (!it || !as) return num(false);
-            const name = netOf(it.node).name || "";
-            const m = matchDpSuffix(name);
-            if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
-            let i = name.length - 1;
-            while (i >= 0 && /[0-9_]/.test(name[i])) i--;
-            const base = name.slice(0, i) + name.slice(i + 1);
-            return num(wildMatch(as, base) || base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_"))));
-          }
-          case "hasNetclass":
-            return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
-          case "existsOnLayer": {
-            if (!it) return num(false);
-            const L = K.kid(it.node, "layers");
-            const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)];
-            return num(ls.some((l) => wildMatch(as, l) || l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)));
-          }
-          case "isPlated":
-            return num(!!it && (it.kind === "via" || it.kind === "pad" && K.str(it.node[2]) === "thru_hole"));
-          default:
-            return { t: "u" };
-        }
-      }
-    }
-  }
-  function parseDru(text) {
-    const rules = [], errors = [];
-    let root2;
-    try {
-      root2 = K.parse("(dru " + (text || "") + "\n)");
-    } catch (e) {
-      return { rules, errors: [String(e.message || e)] };
-    }
-    for (const r of root2.slice(1)) {
-      if (!Array.isArray(r) || r[0] !== "rule") continue;
-      const rule = { name: K.str(r[1]), condition: "", layer: null, severity: null, constraints: [], expr: null, error: null };
-      for (const c of r.slice(2)) {
-        if (!Array.isArray(c)) continue;
-        if (c[0] === "condition") rule.condition = K.str(c[1]);
-        else if (c[0] === "layer") rule.layer = K.str(c[1]);
-        else if (c[0] === "severity") rule.severity = K.str(c[1]);
-        else if (c[0] === "constraint") {
-          const k = { type: K.str(c[1]), min: null, opt: null, max: null };
-          for (const v of c.slice(2)) {
-            if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
-            else if (Array.isArray(v) && v.length === 1) (k.options = k.options || []).push(K.str(v[0]));
-            else if (!Array.isArray(v)) (k.options = k.options || []).push(K.str(v));
-          }
-          rule.constraints.push(k);
-        }
-      }
-      if (rule.condition) {
-        try {
-          rule.expr = parseCondition(rule.condition);
-        } catch (e) {
-          rule.error = e.message;
-          errors.push(`rule '${rule.name}': ${rule.error}`);
-        }
-      }
-      rules.push(rule);
-    }
-    return { rules, errors };
-  }
-  var layerOk = (rule, layer) => {
-    if (!rule.layer || !layer) return true;
-    if (rule.layer === "outer") return /^(F|B)\.Cu$/.test(layer);
-    if (rule.layer === "inner") return /^In\d+\.Cu$/.test(layer);
-    return wildMatch(rule.layer, layer);
-  };
-  function ruleMatches(rule, doc, s, A, B) {
-    if (rule.error) return false;
-    if (!layerOk(rule, A ? A.layer || layerOf(A.node) : null)) return false;
-    return !rule.expr || truth(evalExpr(rule.expr, doc, s, A, B));
-  }
-  function evalRuleConstraint(rules, type, doc, s, A, B, fmt3) {
-    for (let i = rules.length - 1; i >= 0; i--) {
-      const r = rules[i];
-      const c = r.constraints.find((k) => k.type === type);
-      if (!c) continue;
-      if (!ruleMatches(r, doc, s, A, B)) continue;
-      const f = fmt3 || ((v) => v.toFixed(4) + " mm");
-      const parts = [];
-      if (c.min != null && c.min > 0) parts.push("min " + f(c.min));
-      if (c.opt != null) parts.push("opt " + f(c.opt));
-      if (c.max != null) parts.push("max " + f(c.max));
-      return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
-    }
-    return null;
-  }
-  function matchedLengthMarkers(doc, s, rules) {
-    const out = [];
-    if (!rules.some((r) => r.constraints.some((c) => c.type === "length" || c.type === "skew"))) return out;
-    const nets = /* @__PURE__ */ new Map();
-    for (const it of doc.items.values()) {
-      if (it.kind !== "segment" && it.kind !== "arc") continue;
-      const name = netOf(it.node).name || "";
-      if (!name) continue;
-      const a = K.kid(it.node, "start"), b = K.kid(it.node, "end");
-      if (!a || !b) continue;
-      const A = [K.num(a[1]), K.num(a[2])], B = [K.num(b[1]), K.num(b[2])];
-      let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
-      if (it.kind === "arc") {
-        const m = K.kid(it.node, "mid");
-        const c = m && K.arcFrom3(A, [K.num(m[1]), K.num(m[2])], B);
-        if (c) L = arcLength(c);
-      }
-      let n = nets.get(name);
-      if (!n) nets.set(name, n = { name, ids: [], total: 0, first: it });
-      n.ids.push(it.id);
-      n.total += L;
-    }
-    const at = (it) => {
-      const a = K.kid(it.node, "start");
-      return [K.num(a[1]), K.num(a[2])];
-    };
-    const groups = /* @__PURE__ */ new Map();
-    for (const n of nets.values()) {
-      for (let i = rules.length - 1; i >= 0; i--) {
-        const r = rules[i], c = r.constraints.find((k) => k.type === "length");
-        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
-        if (r.severity === "ignore") break;
-        const name = `rule '${r.name}'`, [x, y] = at(n.first);
-        if (c.min != null && n.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n.total)})`, n.ids.slice())));
-        else if (c.max != null && n.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n.total)})`, n.ids.slice()));
-        break;
-      }
-      for (let i = rules.length - 1; i >= 0; i--) {
-        const r = rules[i], c = r.constraints.find((k) => k.type === "skew");
-        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
-        if (r.severity === "ignore") break;
-        let g = groups.get(r.name + "\0" + i);
-        if (!g) groups.set(r.name + "\0" + i, g = { c, rule: r, nets: [] });
-        g.nets.push(n);
-        break;
-      }
-    }
-    for (const g of groups.values()) {
-      let sets = [g.nets];
-      if (g.c.options && g.c.options.includes("within_diff_pairs")) {
-        sets = [];
-        const left = new Map(g.nets.map((n) => [n.name, n]));
-        for (const n of g.nets) {
-          if (!left.has(n.name)) continue;
-          const m = matchDpSuffix(n.name);
-          const o = m.rv ? left.get(m.complement) : null;
-          if (o) {
-            sets.push([n, o]);
-            left.delete(n.name);
-            left.delete(o.name);
-          }
-        }
-      }
-      for (const set of sets) {
-        let ref = set[0];
-        for (const n of set) if (n.total > ref.total) ref = n;
-        for (const n of set) {
-          const skew = Math.abs(n.total - ref.total), name = `rule '${g.rule.name}'`;
-          let kind = "";
-          if (g.c.max != null && skew > g.c.max + 1e-6) kind = "max";
-          else if (g.c.min != null && n !== ref && skew < g.c.min - 1e-6) kind = "min";
-          if (!kind) continue;
-          const [x, y] = at(n.first);
-          out.push(marker("skew_out_of_range", g.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g.c.max : g.c.min)}; actual ${mm4(n.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n.total)})`, n.ids.slice()));
-        }
-      }
-    }
-    return out.filter((m) => s.severities[m.code] !== "ignore");
   }
 
   // web/tools/pcb-tools/walkaround.ts
@@ -13966,7 +13987,7 @@
   act("runDRC", "Design Rules Checker\u2026", "", (ctx) => {
     bind(ctx);
     const s = settingsOf(ctx);
-    S.markers = drc(ctx.doc, s).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules) : []);
+    S.markers = drc(ctx.doc, s, { rules: S.dru ? S.dru.rules : null }).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules) : []);
     ctx.requestRender();
     const errors = S.markers.filter((m) => m.severity === "error").length, warnings = S.markers.length - errors;
     openForm({ title: "DRC Control", width: 620, fields: [{ type: "note", value: `${plural(errors, "error")}, ${plural(warnings, "warning")} \u2014 click a row to highlight it.` }, { k: "list", type: "table", columns: [{ label: "Severity", width: "70px" }, { label: "Violation", width: "1fr" }], rows: S.markers.map((m) => [m.severity, m.text]), empty: "No violations found.", onRow: (i) => {

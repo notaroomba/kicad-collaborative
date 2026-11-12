@@ -16,7 +16,7 @@ interface Stats { footprints: { total: number; front: number; back: number; smd:
   vias: { total: number; through: number; blind: number; micro: number }; tracks: { count: number; length: number }; zones: number; drills: number; width: number; height: number; area: number }
 interface PcbToolsApi {
   state: { markers: Marker[] };
-  drc(doc: KDoc, settings: unknown, opts?: { unconnected?: boolean; outline?: boolean }): Marker[];
+  drc(doc: KDoc, settings: unknown, opts?: { unconnected?: boolean; outline?: boolean; rules?: string | null }): Marker[];
   /** the custom rules' (.kicad_dru) matched-length checks */
   customRuleMarkers?(doc: KDoc, settings: unknown, rules: string | null): Marker[];
   designSettings(src: unknown): Settings;
@@ -57,7 +57,7 @@ const prefs = { refill: true, parity: true, errors: true, warnings: true, exclus
 /** One DRC run as DIALOG_DRC lists it: the board checks, then schematic parity when asked and the schematic can be read. */
 async function collectMarkers(doc: KDoc, parity: boolean): Promise<{ markers: Marker[]; parityError: string }> {
   const s = settings();
-  let markers = PT().drc(doc, s); const pt = PT(); if (pt.customRuleMarkers && E.druText) markers = markers.concat(pt.customRuleMarkers(doc, s, E.druText)); let parityError = parity ? "" : "not requested";
+  let markers = PT().drc(doc, s, { rules: E.druText }); const pt = PT(); if (pt.customRuleMarkers && E.druText) markers = markers.concat(pt.customRuleMarkers(doc, s, E.druText)); let parityError = parity ? "" : "not requested";
   if (parity) {
     const res = await projectNetlist();
     if ("error" in res) parityError = res.error;
