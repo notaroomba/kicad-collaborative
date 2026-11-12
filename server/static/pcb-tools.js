@@ -4173,7 +4173,9 @@
       return false;
     }
     const changes = (extra || []).concat(branchChanges(ctx.doc, ge.fin));
+    const wasSelected = selectionIds(ctx).has(ge.id);
     if (changes.length) ctx.commit(changes, ge.label);
+    if (wasSelected && ctx.doc.items.has(ge.id)) applySelection(ctx, expandGroups(ctx.doc, [ge.id]));
     ctx.requestRender();
     return true;
   }

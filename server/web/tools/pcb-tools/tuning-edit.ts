@@ -5,7 +5,7 @@
 import type { BoardDoc, PcbCtx, Pt, SAtom } from "./types";
 import type { MeanderSettings } from "./meander";
 import { branchChanges } from "./branch";
-import { selectionIds } from "./groups";
+import { applySelection, expandGroups, selectionIds } from "./groups";
 import { line } from "./overlay";
 import { K, S } from "./state";
 import { isTuningPattern, regenerateTuningBranch, tuningPatternInfo } from "./tuning-patterns";
@@ -191,7 +191,10 @@ export function genFinishEdit(ctx: PcbCtx, extra?: KChange[]) {
   const ge = S.genEdit as GenEdit | null | undefined; S.genEdit = null; if (!ge) return false;
   if (!ge.fin || K.serialize(ge.node) === K.serialize(ge.orig)) { ctx.requestRender(); return false; }
   const changes = (extra || []).concat(branchChanges(ctx.doc, ge.fin));
+  const wasSelected = selectionIds(ctx).has(ge.id);
   if (changes.length) ctx.commit(changes, ge.label);
+  // the generator stays selected; its members are the re-tuned copper now
+  if (wasSelected && ctx.doc.items.has(ge.id)) applySelection(ctx, expandGroups(ctx.doc, [ge.id]));
   ctx.requestRender(); return true;
 }
 /** genCancelEdit: the board as it was. */
