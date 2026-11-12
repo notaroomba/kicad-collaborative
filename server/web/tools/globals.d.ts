@@ -1,5 +1,5 @@
 // tools/globals.d.ts — the global object as the classic tool scripts built from web/tools/<name>/ see it
-// (static/props.js, ...): window in the browser, globalThis under node.  The scripts
+// (static/kicad-dialogs.js, props.js, ...): window in the browser, globalThis under node.  The scripts
 // talk to each other and to the chrome only through these globals; web/globals.d.ts holds the chrome's
 // (consumer-side) view of the same objects.
 
@@ -19,4 +19,5 @@ interface ToolsCollab {
 interface ToolsRoot {
   KiCadCanvas: ToolsCanvasApi;
   CollabTools: ToolsCollab;
+  KDialogs: import("./kicad-dialogs/index").KDialogsModule;
 }
