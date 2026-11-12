@@ -332,6 +332,31 @@ function boardShapeProps(it: KItem, doc: KDoc): PropDef[] {
     set: (n, v) => { const f = h.kid(n, "fill"); const old = f ? h.str(f[1]) : ""; const legacy = old === "solid" || old === "none"; h.setKid(n, "fill", [v ? (legacy ? "solid" : "yes") : (legacy ? "none" : "no")], ["layer", "net", "uuid", "tstamp"]); } });
   return out;
 }
+/** PCB_TEXTBOX::SetTextAngle through the board module: the box slides about its start, the angle is the text's. */
+function slideTextBox(n: SNode, deg: number) {
+  const P = pcbTools() as unknown as { setTextBoxAngleSliding?(n: SNode, d: number): SNode } | null;
+  if (P && P.setTextBoxAngleSliding) P.setTextBoxAngleSliding(n, deg);
+}
+function boardTextBoxProps(doc: KDoc): PropDef[] {
+  const h = H(), T = "Text Properties";
+  const base = boardTextProps(doc).filter((d) => d.name !== "Position X" && d.name !== "Position Y" && d.name !== "Orientation" && d.name !== "Knockout");
+  // PCB_SHAPE::GetPosition is the box's start; SetPosition moves the whole box
+  const pos = (name: string, i: 1 | 2): PropDef => ({ group: BASIC, name, type: "coord", get: (x) => h.num((h.kid(x.node, "start") || [])[i], 0),
+    set: (n, v) => { const s = h.kid(n, "start"), e = h.kid(n, "end"); if (!s) return false; const d = (v as number) - h.num(s[i]); s[i] = r6(h.num(s[i]) + d); if (e) e[i] = r6(h.num(e[i]) + d); } });
+  const margin = (name: string, i: number): PropDef => ({ group: T, name, type: "length", get: (x) => { const m = h.kid(x.node, "margins"); return m ? h.num(m[i], 0) : 0; },
+    set: (n, v) => { const m = h.kid(n, "margins"); if (!m || !((v as number) >= 0)) return false; m[i] = r6(v as number); } });
+  const orient: PropDef = { group: T, name: "Orientation", type: "angle", get: (x) => { const a = h.kid(x.node, "angle"); return h.normDeg(a ? h.num(a[1]) : 0); }, set: (n, v) => { slideTextBox(n, v as number); } };
+  const out = [pos("Position X", 1), pos("Position Y", 2), ...base];
+  out.splice(out.findIndex((d) => d.name === "Text") + 1, 0, orient);
+  out.push(
+    { group: T, name: "Knockout", type: "bool", get: (x) => { const l = h.kid(x.node, "layer"); return !!l && l.indexOf("knockout") > 0; }, set: (n, v) => { const l = h.kid(n, "layer"); if (!l) return false; const i = l.indexOf("knockout"); if (i > 0) l.splice(i, 1); if (v) l.push("knockout"); } },
+    { group: T, name: "Border", type: "bool", get: (x) => h.yes(x.node, "border", false), set: (n, v) => { h.setKid(n, "border", [v ? "yes" : "no"], ["stroke", "knockout", "uuid"]); } },
+    { group: T, name: "Border Style", type: "enum", choices: LINE_STYLES.slice(1), get: (x) => { const st = h.kid(x.node, "stroke"), t = st && h.kid(st, "type"); return t ? h.str(t[1]) : "solid"; },
+      set: (n, v) => { const st = h.kid(n, "stroke") || h.setKid(n, "stroke", [["width", 0.1]], ["knockout", "uuid"]); h.setKid(st, "type", [String(v)]); } },
+    { group: T, name: "Border Width", type: "length", get: (x) => h.strokeWidth(x.node), set: (n, v) => { h.setStrokeWidth(n, Math.max(0, v as number)); } },
+    margin("Margin Left", 1), margin("Margin Top", 2), margin("Margin Right", 3), margin("Margin Bottom", 4));
+  return out;
+}
 function boardTextProps(doc: KDoc): PropDef[] {
   const h = H(), T = "Text Properties";
   const size = (name: string, i: 1 | 2): PropDef => ({ group: T, name, type: "length", get: (x) => { const f = fontOf(x.node, false), s = f && h.kid(f, "size"); return s ? h.num(s[i], 1) : 1; },
@@ -418,6 +443,7 @@ function pcbProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
     case "zone": return zoneProps(it, doc);
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return boardShapeProps(it, doc);
     case "gr_text": return boardTextProps(doc);
+    case "gr_text_box": return h.kid(it.node, "start") ? boardTextBoxProps(doc) : boardTextProps(doc).filter((d) => !/^Position|^Orientation/.test(d.name));
     case "dimension": return [layerProp(doc, false, "Dwgs.User"), lockedProp(),
       { group: "Dimension Properties", name: "Value", type: "text", get: (x) => { const t = h.kid(x.node, "gr_text"); return t ? h.str(t[1]) : ""; } }];
     default: {

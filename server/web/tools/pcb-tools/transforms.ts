@@ -50,10 +50,11 @@ export function rotateNode(node: SNode, cx: number, cy: number, deg: number) {
     node[0] = "gr_poly"; for (const key of ["start", "end"]) { const i = node.indexOf(K.kid(node, key)!); if (i > 0) node.splice(i, 1); }
     node.splice(1, 0, ["pts", ...pts.map(xy)]); return node;
   }
+  if ((k === "gr_text_box" || k === "table_cell") && K.kid(node, "start") && K.kid(node, "end")) return rotateTextBoxNode(node, cx, cy, deg);
   mapNodePoints(node, about);
   if (k === "gr_rect" || k === "gr_text_box") {   // corners stay a corner pair: re-normalise start / end
     const a = pt(node, "start"), b = pt(node, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); K.kid(node, "start")!.splice(1, 2, r6(x0), r6(y0)); K.kid(node, "end")!.splice(1, 2, r6(x1), r6(y1)); }
-    if (k === "gr_text_box") { const an = K.kid(node, "angle"); const a1 = norm360((an ? K.num(an[1]) : 0) + deg); if (an) an[1] = r6(a1); else if (a1 !== 0) node.splice(node.indexOf(K.kid(node, "layer")!), 0, ["angle", r6(a1)]); }
+    if (k === "gr_text_box") setTextBoxAngle(node, textBoxAngle(node) + deg);
   }
   if (k === "gr_text") setAngleKid(node, angleKid(node) + deg);
   if (k === "image") {   // REFERENCE_IMAGE::Rotate: the centre turns about the point, the orientation is its own (rotate) after the layer
@@ -66,6 +67,35 @@ export function rotateNode(node: SNode, cx: number, cy: number, deg: number) {
     const o = K.kid(node, "orientation"); if (o && norm360(deg) % 180 === 90) o[1] = K.num(o[1]) ? 0 : 1;
   }
   return node;
+}
+/** A text box's (angle), 0 when absent. */
+export function textBoxAngle(node: SNode) { const an = K.kid(node, "angle"); return an ? K.num(an[1]) : 0; }
+/** Write a text box's (angle) normalised to [0, 360): KiCad writes it before the layer, and drops it at 0. */
+export function setTextBoxAngle(node: SNode, deg: number) {
+  const an = K.kid(node, "angle"); const a1 = r6(norm360(deg)) % 360;
+  if (an) { if (a1) an[1] = a1; else node.splice(node.indexOf(an), 1); return; }
+  if (!a1) return;
+  const ly = K.kid(node, "layer"); const i = ly ? node.indexOf(ly) : node.length; node.splice(i, 0, ["angle", a1]);
+}
+/**
+ * PCB_TEXTBOX::Rotate: "Slide the axis-aligned box, rotation lives in the text angle."  The box's centre turns about
+ * (cx, cy); start and end move by that delta rounded to the nanometre (KiROUND), keeping the width and height, and
+ * the text angle becomes (angle + deg).Normalize().
+ */
+export function rotateTextBoxNode(node: SNode, cx: number, cy: number, deg: number) {
+  const s = K.kid(node, "start"), e = K.kid(node, "end"); if (!s || !e) return node;
+  const sx = K.num(s[1]), sy = K.num(s[2]), ex = K.num(e[1]), ey = K.num(e[2]);
+  const ox = (sx + ex) / 2, oy = (sy + ey) / 2; const [rx, ry] = rotator(deg)(ox - cx, oy - cy);
+  const dx = Math.round((cx + rx - ox) * 1e6) / 1e6, dy = Math.round((cy + ry - oy) * 1e6) / 1e6;
+  s[1] = r6(sx + dx); s[2] = r6(sy + dy); e[1] = r6(ex + dx); e[2] = r6(ey + dy);
+  setTextBoxAngle(node, textBoxAngle(node) + deg);
+  return node;
+}
+/** PCB_TEXTBOX::SetTextAngle: a new angle turns the box by the difference about GetPosition() (its start). */
+export function setTextBoxAngleSliding(node: SNode, deg: number) {
+  const s = K.kid(node, "start"); const delta = norm360(deg) - norm360(textBoxAngle(node)); if (!delta) return node;
+  if (!s || !K.kid(node, "end")) { setTextBoxAngle(node, deg); return node; }
+  return rotateTextBoxNode(node, K.num(s[1]), K.num(s[2]), delta);
 }
 /** KiCad's Flip (left / right) about the vertical axis x = cx: other side, layers swapped, texts mirrored. */
 export function flipNode(node: SNode, cx: number, doc: BoardDoc) {

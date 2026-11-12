@@ -361,11 +361,19 @@ function graphicShapeGeom(item: Item, g: SNode, shape: string, tf: Tf, layer: st
 
 export function buildTextBoxGeom(item: Item, n: SNode, tf: Tf, layer: string, rotBase: number): void {
   const ef = effectsOf(n); if (ef.hide) return;
+  // the file holds the library box and angle (a footprint's own rotation added on top): the angle is the text's
+  const angN = kid(n, "angle"); const libAng = angN ? num(angN[1]) : 0; const ang = libAng + rotBase;
   let pts = polyPtsOf(n).map(([x, y]) => tf(x, y));
-  if (pts.length < 4) { const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]); pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)]; }
+  if (pts.length < 4) {
+    // PCB_TEXTBOX::GetCornersInSequence: the axis-aligned (left, top) (right, top) (right, bottom) (left, bottom),
+    // turned about the box's centre by the text angle
+    const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return;
+    const l = Math.min(num(s[1]), num(e[1])), r = Math.max(num(s[1]), num(e[1])), t = Math.min(num(s[2]), num(e[2])), b = Math.max(num(s[2]), num(e[2]));
+    const cx = (l + r) / 2, cy = (t + b) / 2, R = rotator(((libAng % 360) + 360) % 360);
+    pts = [[l, t], [r, t], [r, b], [l, b]].map(([x, y]) => { const [dx, dy] = R(x - cx, y - cy); return tf(cx + dx, cy + dy); });
+  }
   const w = widthOf(n, 0); const color = pcbColor(layer); const z = pcbZ(layer);
   if (yesNo(n, "border") || w > 0) G(item, Object.assign({ t: "poly" as const, pts, close: true, w, color, layer, z }, dashOf(n)));
-  const angN = kid(n, "angle"); const ang = angN ? num(angN[1]) : rotBase;
   const mg = kid(n, "margins"); const dm = w / 2 + ef.size * 0.75;
   const lm = mg ? num(mg[1]) : dm, tm = mg ? num(mg[2], lm) : dm, rm = mg ? num(mg[3], lm) : dm, bm = mg ? num(mg[4], tm) : dm;
   // PCB_TEXTBOX::GetDrawPos: the corner / edge mid-point matching the justification (file default centre / centre),
