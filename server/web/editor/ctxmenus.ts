@@ -365,7 +365,10 @@ function pcbDrawingToolMenu(): CondMenu {
   const m = new CondMenu();
   m.item("ACTIONS::cancelInteractive", always, 1).sep(1);
   m.item("PCB_ACTIONS::clearHighlight", haveHighlight, 2).sep(haveHighlight, 2);
-  m.item("PCB_ACTIONS::closeOutline", (c) => c.canClose, 200).item("ACTIONS::deleteLastPoint", (c) => c.canUndoPoint, 200).item("ACTIONS::arcPosture", tool(...PCB_ARC_TOOLS), 200);
+  const arcTool = tool(...PCB_ARC_TOOLS);
+  m.item("PCB_ACTIONS::closeOutline", (c) => c.canClose, 200).item("ACTIONS::deleteLastPoint", (c) => c.canUndoPoint, 200).item("ACTIONS::arcPosture", arcTool, 200);
+  m.check("PCB_ACTIONS::drawArcCenter", arcTool, 200).check("PCB_ACTIONS::drawArcStartEndMid", arcTool, 200).check("PCB_ACTIONS::drawArcStartEndCenter", arcTool, 200)
+    .check("PCB_ACTIONS::drawArcTangent", arcTool, 200).check("PCB_ACTIONS::drawArcStartDirEnd", arcTool, 200).item("ACTIONS::cycleArcDrawMode", arcTool, 200);
   const tuning = tool(...PCB_TUNING_TOOLS);
   m.item("PCB_ACTIONS::spacingIncrease", tuning, 200).item("PCB_ACTIONS::spacingDecrease", tuning, 200).item("PCB_ACTIONS::amplIncrease", tuning, 200)
     .item("PCB_ACTIONS::amplDecrease", tuning, 200).item("PCB_ACTIONS::lengthTunerSettings", tuning, 200);

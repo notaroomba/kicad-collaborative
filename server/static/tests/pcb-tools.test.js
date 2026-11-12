@@ -365,23 +365,92 @@ test("drag collisions: walk around keeps the last valid step, a first step in vi
   pcb.onPointerDown(ev(), [115, 54], f2.ctx); assert.equal(f2.log.commits.length, 0);
 });
 
-test("module: graphic arc (Ctrl+Shift+A) takes the start, the end, then a point on the arc", () => {
+const arcOf = (c) => { const n = K.kid(K.parse(c.changes[0].sexpr), "gr_arc"); return { start: K.kid(n, "start").slice(1), mid: K.kid(n, "mid").slice(1), end: K.kid(n, "end").slice(1), node: n }; };
+const nearPt = (a, b, tol = 1e-5) => Math.abs(a[0] - b[0]) < tol && Math.abs(a[1] - b[1]) < tol;
+const clickAt = (ctx, p, extra) => { pcb.onPointerMove(ev(extra), p, ctx); pcb.onPointerDown(ev(extra), p, ctx); };
+
+test("module: Draw Arcs (Ctrl+Shift+A) in KiCad's default mode, Center, Start, End; / flips the sweep; the tool goes on", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.setArcDrawMode(0);
   assert.ok(pcb.tools.some((t) => t.id === "garc" && t.key === "Ctrl+Shift+A"));
   assert.equal(pcb.onKey("Arc", ev(), ctx), true); assert.equal(log.tool, "garc");
-  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [20, 10], ctx);
-  assert.deepEqual(P.state.draw.pts, [[10, 10], [20, 10]]);
-  pcb.onPointerDown(ev(), [15, 10], ctx);                                  // on the chord: refused
-  assert.ok(P.state.draw && P.state.draw.pts.length === 2); assert.ok(log.toasts.at(-1).includes("off the line"));
-  pcb.onPointerMove(ev(), [15, 15], ctx); assert.deepEqual(P.state.draw.cur, [15, 15]);
-  pcb.onPointerDown(ev(), [15, 15], ctx);
-  const c = log.commits.at(-1); assert.equal(c.label, "arc"); assert.equal(c.changes[0].kind, "ADDED"); assert.equal(c.changes[0].typeName, "PCB_SHAPE");
-  const node = K.kid(K.parse(c.changes[0].sexpr), "gr_arc");
-  assert.deepEqual(node.slice(0, 6), ["gr_arc", ["start", 10, 10], ["mid", 15, 15], ["end", 20, 10], ["stroke", ["width", 0.1], ["type", "default"]], ["layer", "F.SilkS"]]);
-  assert.equal(node[6][0], "uuid"); assert.equal(node.length, 7);
-  const it = doc.items.get(c.changes[0].id); assert.equal(it.kind, "gr_arc"); assert.equal(it.geom[0].t, "arc"); assert.ok(near(it.geom[0].r, 5) && near(it.geom[0].x, 15) && near(it.geom[0].y, 10));
-  assert.equal(P.state.draw, null); assert.equal(log.tool, "garc");
-  assert.deepEqual(K.kid(P.arcNode([0, 0], [1, 1], [2, 0], "Edge.Cuts"), "stroke"), ["stroke", ["width", 0.05], ["type", "default"]], "outline layer takes the edge width");
+  clickAt(ctx, [10, 10]); clickAt(ctx, [15, 10]);                         // the centre, then the start (radius 5)
+  assert.equal(P.state.draw.arc.getStep(), 2);
+  pcb.onPointerMove(ev(), [15, 11], ctx);                                  // a small sweep picks the direction ...
+  clickAt(ctx, [10, 15]);                                                  // ... which holds once it reaches 90 degrees
+  let c = log.commits.at(-1); assert.equal(c.label, "Draw Arc"); assert.equal(c.changes[0].typeName, "PCB_SHAPE");
+  let a = arcOf(c); const h = 5 * Math.SQRT1_2;
+  assert.deepEqual([a.start, a.end], [[15, 10], [10, 15]]); assert.ok(nearPt(a.mid, [10 + h, 10 + h]), JSON.stringify(a.mid));
+  assert.deepEqual(a.node.slice(4, 6), [["stroke", ["width", 0.1], ["type", "default"]], ["layer", "F.SilkS"]]);
+  assert.ok(P.state.sel.has(c.changes[0].id), "the new arc is selected");
+  assert.equal(log.tool, "garc"); assert.ok(P.state.draw && P.state.draw.arc.isReset(), "the next arc starts afresh");
+  // Switch Arc Posture (/): the other way round the circle (270 degrees)
+  clickAt(ctx, [10, 10]); clickAt(ctx, [15, 10]); pcb.onPointerMove(ev(), [15, 11], ctx); pcb.onPointerMove(ev(), [10, 15], ctx);
+  assert.equal(pcb.onKey("/", ev(), ctx), true);
+  clickAt(ctx, [10, 15]); a = arcOf(log.commits.at(-1));
+  assert.deepEqual([a.start, a.end], [[10, 15], [15, 10]]); assert.ok(nearPt(a.mid, [10 - h, 10 - h]), JSON.stringify(a.mid));
+  // a start on the centre is refused and the centre is asked for again (the center mode steps back)
+  clickAt(ctx, [10, 10]); clickAt(ctx, [10, 10]); assert.equal(P.state.draw.arc.getStep(), 0);
+  // Backspace takes back a point; with none, the arc in progress goes
+  clickAt(ctx, [10, 10]); clickAt(ctx, [15, 10]); assert.equal(pcb.onKey("Backspace", ev(), ctx), true); assert.equal(P.state.draw.arc.getStep(), 1);
+  pcb.onKey("Backspace", ev(), ctx); assert.equal(P.state.draw.arc.getStep(), 0);
+});
+
+test("module: arc modes: Start, End, Midpoint / Start, End, Center (/ = major arc) / Start, Direction, End / Tangent chains", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  P.setArcDrawMode(0); pcb.onKey("Arc", ev(), ctx);
+  // a mode action while the tool runs switches the arc in progress (ARC_MODE_SESSION::HandleModeEvent)
+  assert.equal(pcb.actions.drawArcStartEndMid.run(ctx), true); assert.equal(P.arcDrawMode(), 1); assert.equal(log.tool, "garc");
+  assert.equal(pcb.actions.drawArcStartEndMid.check(), true); assert.equal(pcb.actions.drawArcCenter.check(), false);
+  assert.equal(pcb.routerChecks()["PCB_ACTIONS::drawArcStartEndMid"], true);
+  clickAt(ctx, [10, 10]); clickAt(ctx, [20, 10]);
+  clickAt(ctx, [15, 10]); assert.equal(P.state.draw.arc.getStep(), 2, "a midpoint on the chord is no arc: nothing locks in");
+  clickAt(ctx, [17, 15]);                                                  // the cursor is projected onto the chord's bisector
+  let a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.mid, a.end], [[10, 10], [15, 15], [20, 10]]);
+  // Start, End, Center: the minor arc bulges away from the centre; / gives the major arc
+  pcb.actions.drawArcStartEndCenter.run(ctx);
+  clickAt(ctx, [10, 30]); clickAt(ctx, [20, 30]); clickAt(ctx, [15, 32]);
+  a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.end], [[10, 30], [20, 30]]); const r = Math.hypot(5, 2);
+  assert.ok(nearPt(a.mid, [15, 32 - r]), "minor: " + a.mid);
+  clickAt(ctx, [10, 30]); clickAt(ctx, [20, 30]); pcb.onPointerMove(ev(), [15, 32], ctx); pcb.onKey("/", ev(), ctx); clickAt(ctx, [15, 32]);
+  a = arcOf(log.commits.at(-1)); assert.ok(nearPt(a.mid, [15, 32 + r]), "major: " + a.mid);
+  // Start, Direction, End
+  pcb.actions.drawArcStartDirEnd.run(ctx);
+  clickAt(ctx, [0, 50]); clickAt(ctx, [5, 50]); clickAt(ctx, [5, 55]);
+  a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.end], [[0, 50], [5, 55]]); assert.ok(nearPt(a.mid, [5 * Math.SQRT1_2, 55 - 5 * Math.SQRT1_2]), "" + a.mid);
+  // Tangent: from a line on the layer; then each arc leaves from the end of the last
+  pcb.onKey("Escape", ev(), ctx); P.state.draw = null; pcb.onKey("L", ev({ shiftKey: true }), ctx); assert.equal(log.tool, "gline");
+  clickAt(ctx, [30, 70]); clickAt(ctx, [40, 70]); P.state.draw = null;
+  pcb.actions.drawArcTangent.run(ctx); assert.equal(log.tool, "garc"); assert.equal(P.arcDrawMode(), 3);
+  clickAt(ctx, [40, 70]); assert.ok(P.state.draw.clickSeeded, "a click on the line's end seeds the arc");
+  clickAt(ctx, [45, 75]);
+  a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.end], [[40, 70], [45, 75]]); assert.ok(nearPt(a.mid, [40 + 5 * Math.SQRT1_2, 75 - 5 * Math.SQRT1_2]), "" + a.mid);
+  assert.ok(P.state.draw.chainSeeded && P.state.draw.arc.hasTangentSeed(), "the next arc starts tangent at the end");
+  clickAt(ctx, [40, 80]);
+  a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.end], [[45, 75], [40, 80]]); assert.ok(nearPt(a.mid, [40 + 5 * Math.SQRT1_2, 75 + 5 * Math.SQRT1_2]), "" + a.mid);
+  // Cycle Arc Drawing Mode (Alt+/): Tangent -> Start, Direction, End -> Center, Start, End
+  assert.equal(pcb.onKey("/", ev({ altKey: true }), ctx), true); assert.equal(P.arcDrawMode(), 4);
+  pcb.actions.cycleArcDrawMode.run(ctx); assert.equal(P.arcDrawMode(), 0);
+  // Enter keeps the arc drawn so far and ends the tool
+  pcb.actions.drawArcStartEndMid.run(ctx); clickAt(ctx, [10, 90]); clickAt(ctx, [20, 90]); pcb.onPointerMove(ev(), [15, 95], ctx);
+  const n = log.commits.length; pcb.onKey("Enter", ev(), ctx); assert.equal(log.commits.length, n + 1); assert.equal(log.tool, "select");
+});
+
+test("arc construction (KIGEOM::ArcFrom…) and tangent seeds (ArcTangentSeedAt) in internal units", () => {
+  const sol = P.arcFromStartEndCenterDrag([0, 0], [10e6, 0], [5e6, 5e6], false);
+  assert.ok(sol.valid); assert.ok(near(sol.radius, Math.hypot(5e6, 5e6))); assert.ok(sol.mid[1] < 0, "the minor arc bulges away from the centre");
+  assert.equal(P.arcFromStartEndMidDrag([0, 0], [10e6, 0], [3e6, 0]).valid, false, "an apex on the chord");
+  const t = P.arcFromStartTangentEnd([0, 0], [1, 0], [5e6, 5e6]); assert.ok(t.valid && near(t.center[0], 0) && near(t.center[1], 5e6));
+  assert.equal(P.arcFromStartTangentEnd([0, 0], [1, 0], [5e6, 0]).valid, false, "an end straight ahead");
+  // a seed on the middle of a segment knows the axis only; / picks the side
+  const seg = { t: "seg", start: [0, 0], end: [10e6, 0] };
+  const mid = P.arcTangentSeedAt(seg, [5e6, 1e5], 5e5); assert.deepEqual(mid, { start: [5e6, 0], dir: [1, 0], axis: true });
+  const end = P.arcTangentSeedAt(seg, [10e6, 1e5], 5e5); assert.deepEqual(end, { start: [10e6, 0], dir: [1, 0], axis: false });
+  const g = new P.ArcGeom(3); g.setTangentSeed(mid.start, mid.dir, true); g.addPoint([0, 5e6], false);
+  assert.ok(g.sol.valid && g.sol.center[1] > 0); g.toggleClockwise(); assert.ok(g.sol.valid);
+  // an arc's end leaves along its direction of travel
+  const arc = { t: "arc", start: [10e6, 0], mid: [0, 10e6], end: [-10e6, 0], center: [0, 0] };
+  const s = P.arcTangentSeedNear(arc, [-9e6, 0]); assert.deepEqual(s.start, [-10e6, 0]); assert.ok(near(s.dir[1], -1) && near(s.dir[0], 0), JSON.stringify(s.dir));
 });
 
 test("module: graphic polygon (Ctrl+Shift+P) closes on the first corner or Enter; fewer than three corners is refused", () => {

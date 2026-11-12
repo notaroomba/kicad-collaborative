@@ -1,6 +1,6 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
-import { setStatusBar, state, store } from "./appstore";
+import { setGroupCurrent, setStatusBar, state, store } from "./appstore";
 import { refreshCrosshair, toolCursor } from "./crosshair";
 import { applyChanges, enterSheet, publishDocs, renderObjects, snapMm } from "./doc";
 import { toolChanging } from "./gestures";
@@ -34,6 +34,8 @@ export function toolCtx(extra) {
     undo() { undoLast(); },
     applyLocal(changes) { applyChanges(changes); },
     requestRender: requestRepaint, toast, enterSheet, setTool,
+    // PCB_BASE_FRAME::SelectToolbarAction: a toolbar group shows the given action (the arc tool's drawing mode)
+    setGroupCurrent(group, id) { if (store.get().groupCurrent[group] !== id) setGroupCurrent(group, id); },
     // PCB_SELECTION_TOOL's hover selection: the Clarify Selection candidates under a point, the popup that asks
     // between them (the pick is selected, then `then` runs with a fresh context), and the app's own footprint
     // drag handed to the module's move (a turn in flight)

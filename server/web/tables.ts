@@ -11,7 +11,7 @@ export const TOOL_MAP: Record<Editor, Record<string, string>> = {
     placeHierLabel: "hlabel", drawRuleArea: "rulearea", drawSheet: "sheet", placeSheetPin: "sheetpin", placeSchematicText: "text", drawTextBox: "textbox", drawTable: "table",
     drawRectangle: "rect", drawCircle: "circle", drawArc: "arc", drawBezier: "bezier", drawPolygon: "polygon", drawLines: "lines", placeImage: "image",
     deleteTool: "delete", zoomTool: "zoomtool", measureTool: "measure" },
-  pcb: { selectSetRect: "select", selectSetLasso: "select", routeSingleTrack: "route", routeDiffPair: "routediff", tuneSingleTrack: "tunesingle", tuneSkew: "tuneskew", drawVia: "via", drawZone: "zone", drawRuleArea: "rulearea", drawLine: "gline", drawArc: "garc", drawRectangle: "grect",
+  pcb: { selectSetRect: "select", selectSetLasso: "select", routeSingleTrack: "route", routeDiffPair: "routediff", tuneSingleTrack: "tunesingle", tuneSkew: "tuneskew", drawVia: "via", drawZone: "zone", drawRuleArea: "rulearea", drawLine: "gline", drawArc: "garc", drawArcCenter: "garc", drawArcStartEndMid: "garc", drawArcStartEndCenter: "garc", drawArcTangent: "garc", drawArcStartDirEnd: "garc", drawRectangle: "grect",
     drawCircle: "gcircle", drawPolygon: "gpoly", drawBezier: "gcurve", placeReferenceImage: "image", placeText: "gtext", drawTextBox: "gtextbox", drawTable: "table",
     drawAlignedDimension: "dimaligned", drawOrthogonalDimension: "dimortho", drawCenterDimension: "dimcenter", drawRadialDimension: "dimradial", drawLeader: "leader",
     deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool", gridSetOrigin: "gridorigin", drillOrigin: "drillorigin" },
@@ -120,7 +120,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawPolygon", "drawBezier", "placeReferenceImage", "placeText", "drawTextBox", "drawTable", "placePoint", "placeBarcode", "-",
       ["Draw Dimensions", ["drawOrthogonalDimension", "drawAlignedDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader"]],
       ["Geometric Constraints", ["removeConstraints"]],
-      "-", "placeCharacteristics", "placeStackup", "-", "drillOrigin", "drillResetOrigin", "gridSetOrigin", "gridResetOrigin", "-", "placeGridItem", "-",
+      "-", "placeCharacteristics", "placeStackup", "-", "drillOrigin", "drillResetOrigin", "gridSetOrigin", "gridResetOrigin", "-", "placeSubGrid", "-",
       ["Auto-Place Footprints", ["autoplaceOffboardComponents", "autoplaceSelectedComponents"]]]],
     ["Ro&ute", ["selectLayerPair", "-", "routeSingleTrack", "routeDiffPair", "-", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "-", "module:autoroute", "module:autoplace", "-", "routerSettingsDialog",
       "-", "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "module:autoTrackWidth", "module:editPredefinedSizes", "-", "layerTop", "layerBottom", "layerNext", "layerPrev", "module:layerToggle"]],
@@ -168,7 +168,9 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "ACT_SwitchCornerModeToNext", "ACT_SwitchCornerMode45", "ACT_SwitchCornerModeArc45", "ACT_SwitchCornerMode90", "ACT_SwitchCornerModeArc90",
     "ACT_PlaceThroughVia", "ACT_PlaceBlindVia", "ACT_PlaceMicroVia", "ACT_SelLayerAndPlaceThroughVia", "ACT_SelLayerAndPlaceBlindVia", "ACT_SelLayerAndPlaceMicroVia",
     // Line Modes live on the left toolbar's radio group and Shift+Space; Ctrl++ / Ctrl+- (incWidth / decWidth) are the drawing tools' context menu
-    "lineModeFree", "lineModeNext", "incWidth", "decWidth"],
+    "lineModeFree", "lineModeNext", "incWidth", "decWidth",
+    // the arc tool's modes: the Arc toolbar group and DRAWING_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
+    "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode"],
 };
 /** What an entry needs before it can run (KiCad's SELECTION_CONDITIONS / the read-only frame): greyed out otherwise. */
 export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete", "duplicate", "increment", "decrement", "move", "drag", "drag45Degree", "dragFreeAngle", "rotateCCW", "rotateCW", "rotateCcw", "rotateCw",
