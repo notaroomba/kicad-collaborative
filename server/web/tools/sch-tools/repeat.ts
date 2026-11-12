@@ -4,7 +4,8 @@ import { cursorOf, editable, selectedItems, setSelectionIds, snapCursor } from "
 import { LABEL_KINDS, beginDrag, connPoints, isNetLine } from "./drag";
 import { type EditTxn, editTxn, explicitJunctionNeeded, screenConnections, segOf, txnAddJunction, txnCleanUp, txnTrimWire } from "./junction";
 import { anchorOf, cloneNode, shiftNode } from "./orient";
-import { LINE_KINDS, S, TEXT_KINDS, str } from "./state";
+import { LINE_KINDS, S, TEXT_KINDS, str, uuidOf } from "./state";
+import { autoRotateOf, setAutoRotate, supportsAutoRotate } from "./autorotate";
 import { deep, modChange, r4, segDist, segs } from "./util";
 
 // ---------------------------------------------------------------- repeat last item (Insert)
@@ -64,6 +65,8 @@ export function repeatLast(ctx: SchCtx) {
         if (S.annotateAuto) { const rf = refField(node); if (rf) setReference(node, unannotated(str(rf[2]))); assignPastedRef(doc, node, used); }
       } else shiftNode(lp.kind, node, S.repeatOffset[0], S.repeatOffset[1]);
       const it = t.add(node); added.push(it.id); if (lp.kind === "symbol" && !symbolId) symbolId = it.id;
+      // SCH_ITEM::Duplicate copies SCH_LABEL_BASE::m_autoRotateOnPlacement: the repeated label keeps its Auto flag
+      if (supportsAutoRotate(lp.kind) && autoRotateOf(uuidOf(lp.node) || "")) setAutoRotate(it.id, true);
     }
     const items = added.map((id) => doc.items.get(id)).filter(Boolean) as KItem[];
     txnTrimOverlapping(t, doc, items);

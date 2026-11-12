@@ -91,6 +91,8 @@ function lenBox(mm: number | undefined, id: string, width = 90): HTMLInputElemen
   i.addEventListener("change", () => { const v = parseLen(i.value); if (Number.isFinite(v)) i.value = fmtLen(v); });
   return i;
 }
+/** include/widgets/ui_common.h INDETERMINATE_ACTION: what a value box shows when the selected items differ. */
+const INDETERMINATE_ACTION = "-- leave unchanged --";
 const lenValue = (i: HTMLInputElement): number | undefined => { const t = i.value.trim(); if (!t) return undefined; const v = parseLen(t); return Number.isFinite(v) ? v : undefined; };
 const units = () => h("span", { class: "kd-note" }, unitName());
 const ensureCss = (() => { let done = false; return () => { if (done) return; done = true; document.head.append(h("style", { id: "kd-schitems-css" }, `
@@ -134,7 +136,7 @@ export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readO
     { key: "yT", label: "Y Position", width: 64 },
     { key: "font", label: "Font", type: "choice" as const, options: faces, width: 110 },
     { key: "colorT", label: "Color", width: 70 },
-    { key: "autoplace", label: "Allow Autoplace", type: "bool" as const, width: 60 },
+    { key: "autoplace", label: "Allow Autoplacement", type: "bool" as const, width: 60 },
   ];
   // WX_GRID::ShowHideColumns: a dialog may start with only some columns; the header's right-click menu
   // (one check item per column) shows or hides the others
@@ -455,7 +457,7 @@ function endingGlyph(style: L.EndingStyle, atEnd: boolean): HTMLCanvasElement {
   else if (style === "square") { g.rect(tip + back * L0 - (atEnd ? 0 : L0), y - W / 2, L0, W); g.fill(); }
   return c;
 }
-interface EndingsBlock { el: HTMLElement; apply(n: SNode): void }
+interface EndingsBlock { el: HTMLElement; apply(n: SNode): void; reset(): void }
 /** The Start Shape / End Shape columns with Length / Width / Thickness and the help line, over one or more nodes. */
 function endingsBlock(nodes: SNode[], ro: boolean, version: number): EndingsBlock {
   const off = ro || version < L.LINE_ENDING_VERSION;
@@ -466,7 +468,7 @@ function endingsBlock(nodes: SNode[], ro: boolean, version: number): EndingsBloc
     const glyphHost = h("span", { style: "display:inline-flex;align-items:center;min-width:38px" });
     const showGlyph = (v: string): void => { glyphHost.innerHTML = ""; if (v) glyphHost.append(endingGlyph(v as L.EndingStyle, key === "end_shape")); };
     const sel = select(opts, sty === undefined ? "" : sty, (v) => showGlyph(v), { id: "kd-ln-" + key, disabled: off }); showGlyph(sel.value);
-    const box = (v: number | undefined, id: string): HTMLInputElement => { const i = lenBox(v, id); if (v === undefined) i.placeholder = "INDETERMINATE"; i.disabled = off; return i; };
+    const box = (v: number | undefined, id: string): HTMLInputElement => { const i = lenBox(v, id); if (v === undefined) i.value = INDETERMINATE_ACTION; i.disabled = off; return i; };
     const l = box(len, `kd-ln-${key}-length`), w = box(wid, `kd-ln-${key}-width`), t = box(thk, `kd-ln-${key}-thickness`);
     const col = h("div", { class: "kd-fmt", style: "display:grid;grid-template-columns:max-content auto max-content;gap:3px 6px;align-items:center" },
       h("label", null, label), h("span", { style: "display:flex;gap:4px;align-items:center" }, glyphHost, sel), h("span"),
@@ -481,12 +483,13 @@ function endingsBlock(nodes: SNode[], ro: boolean, version: number): EndingsBloc
       const probe = L.clone(n); L.writeEndingState(probe, key, cur);
       if (KiCadCanvas.serialize(L.kid(probe, key) as SNode) !== before) L.writeEndingState(n, key, cur);
     };
-    return { col, apply };
+    const reset = (): void => { if (off) return; sel.value = "none"; showGlyph("none"); for (const i of [l, w, t]) i.value = fmtLen(0); };
+    return { col, apply, reset };
   };
   const a = side("start_shape", "Start Shape:"), b = side("end_shape", "End Shape:");
   const el = h("div", { id: "kd-ln-endings", style: "margin-top:10px" }, h("div", { style: "display:flex;gap:20px" }, a.col, b.col), h("p", { class: "kd-note", style: "font-style:italic;margin:8px 0 0" }, L.ENDINGS_HELP));
   if (version < L.LINE_ENDING_VERSION) el.title = "Line endings need a schematic saved by KiCad 10 or later";
-  return { el, apply: (n) => { if (off) return; a.apply(n); b.apply(n); } };
+  return { el, apply: (n) => { if (off) return; a.apply(n); b.apply(n); }, reset: () => { a.reset(); b.reset(); } };
 }
 
 // ---------------------------------------------------------------- lines, wires & buses, junctions (several at once)
@@ -505,17 +508,19 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
   KD().open({
     title: kind === "lines" ? "Line Properties" : "Wire & Bus Properties", width: kind === "lines" ? 620 : 420, readOnly: ro,
     // DIALOG_WIRE_BUS_PROPERTIES::resetDefaults
-    extra: kind === "wires" && !ro ? [{ label: "Default", fn: () => { width.value = fmtLen(0); if (col) { col.set(null); colTouched = true; } style.value = "default"; if (jsize && !jsize.disabled) jsize.value = fmtLen(0); } }] : [],
+    // DIALOG_WIRE_BUS_PROPERTIES::resetDefaults / DIALOG_LINE_PROPERTIES::resetDefaults (width 0, colour unspecified,
+    // DEFAULT_LINE_STYLE_LABEL; both ending shapes None and their six sizes 0)
+    extra: !ro ? [{ label: "Default", fn: () => { width.value = fmtLen(0); if (col) { col.set(null); colTouched = true; } style.value = kind === "wires" ? "default" : "solid"; if (jsize && !jsize.disabled) jsize.value = fmtLen(0); if (ends) ends.reset(); } }] : [],
     build(b) {
       const g = h("div", { class: "kd-fmt" });
-      width = lenBox(w, "kd-ln-width"); if (w === undefined) width.placeholder = "INDETERMINATE";
+      width = lenBox(w, "kd-ln-width"); if (w === undefined) width.value = INDETERMINATE_ACTION;
       g.append(h("label", null, kind === "lines" ? "Width:" : "Wire/bus width:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, width, units()), h("span"));
       col = swatch(c === undefined ? null : c, "kd-ln-color", () => { colTouched = true; }, ro);
       g.append(h("label", null, "Color:"), col.el, h("span"));
       style = select(styles, sty0, undefined, { id: "kd-ln-style", disabled: ro });
       g.append(h("label", null, "Style:"), style, h("span"));
       if (kind === "wires") {
-        jsize = lenBox(jd, "kd-ln-jsize"); jsize.disabled = ro || !juncs.length; if (juncs.length && jd === undefined) jsize.placeholder = "INDETERMINATE";
+        jsize = lenBox(jd, "kd-ln-jsize"); jsize.disabled = ro || !juncs.length; if (juncs.length && jd === undefined) jsize.value = INDETERMINATE_ACTION;
         g.append(h("label", null, "Junction size:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, jsize, units()), h("span"));
       }
       b.append(g);
@@ -545,7 +550,7 @@ function junctionDialog(ctx: Ctx, items: KItem[]): void {
     title: "Junction Properties", width: 400, readOnly: ro,
     build(b) {
       const g = h("div", { class: "kd-fmt" });
-      dia = lenBox(d, "kd-jn-diameter"); if (d === undefined) dia.placeholder = "INDETERMINATE";
+      dia = lenBox(d, "kd-jn-diameter"); if (d === undefined) dia.value = INDETERMINATE_ACTION;
       g.append(h("label", null, "Diameter:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, dia, units()), h("span"));
       col = swatch(c === undefined ? null : c, "kd-jn-color", () => { colTouched = true; }, ro);
       g.append(h("label", null, "Color:"), col.el, h("span"));

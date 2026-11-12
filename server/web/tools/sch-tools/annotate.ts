@@ -109,14 +109,39 @@ export function editFieldPrompt(ctx: SchCtx, name: string, title: string, quiet:
   return true;
 }
 export function insertField(node: SNode, p: SNode) { const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances")); if (at >= 0) node.splice(at, 0, p); else node.push(p); }
-export const FLAG_KEYS: Record<string, string[]> = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"] };
+export const FLAG_KEYS: Record<string, string[]> = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"], setExcludeFromPosFiles: ["in_pos_files", "no", "yes"] };
+/** The token the s-expression writer puts each attribute flag after, for a node that does not have it yet. */
+const FLAG_AFTER: Record<string, string[]> = { exclude_from_sim: ["body_style", "convert", "unit", "mirror", "at", "lib_id"], in_bom: ["exclude_from_sim"], on_board: ["in_bom"], in_pos_files: ["on_board"], dnp: ["in_pos_files", "on_board"] };
+/** A copy of `node` with the flag `key` set to `val`, added where the writer puts it when the node lacks it. */
+export function withFlag(node: SNode, key: string, val: string): SNode {
+  const n = deep(node), k = kid(n, key);
+  if (k) { k[1] = val; return n; }
+  let at = -1;
+  for (const a of FLAG_AFTER[key] || []) { at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === a); if (at > 0) break; }
+  n.splice(at > 0 ? at + 1 : n.length, 0, [key, val]);
+  return n;
+}
+/**
+ * SCH_EDIT_TOOL::SetAttribute: the Attributes toggles on the selected symbols, sheets and rule areas (Exclude from
+ * Position Files: symbols only).  Every annotated multi-unit symbol takes its other units on every sheet along ("The
+ * attributes should be kept in sync in multi-unit parts"); the flag goes on when any of them has it off.  One
+ * "Toggle Attribute" commit.
+ */
 export function toggleSymbolFlag(ctx: SchCtx, which: string) {
   if (!editable(ctx)) return false;
-  const [key, onVal, offVal] = FLAG_KEYS[which], changes: KChange[] = [];
-  const items = selectedItems(ctx).filter((it) => it.kind === "symbol"); if (!items.length) return false;
-  const allOn = items.every((it) => { const k = kid(it.node, key); return k && str(k[1]) === onVal; });
-  for (const it of items) { const node = deep(it.node); replaceKid(node, [key, allOn ? offVal : onVal]); changes.push(modChange(ctx.doc, it, node)); }
-  ctx.commit(changes, which.replace(/^set/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase()); return true;
+  const [key, onVal, offVal] = FLAG_KEYS[which];
+  const kinds = which === "setExcludeFromPosFiles" ? ["symbol"] : ["symbol", "sheet", "rule_area"];
+  const items = selectedItems(ctx).filter((it) => kinds.includes(it.kind)); if (!items.length) return false;
+  // KiCad's defaults when the token is missing: in the BOM, on the board and in the position files; not DNP or excluded from simulation
+  const isOn = (n: SNode) => { const k = kid(n, key); return !!k && str(k[1]) === onVal; };
+  const set = (n: SNode, on: boolean) => withFlag(n, key, on ? onVal : offVal);
+  const hook = root.CollabEditor && root.CollabEditor.toggleAttribute;
+  if (hook) return hook(ctx, items, isOn, set);
+  let on = false; for (const it of items) if (!isOn(it.node)) { on = true; break; }
+  const changes: KChange[] = [];
+  for (const it of items) { const node = set(it.node, on); if (JSON.stringify(node) !== JSON.stringify(it.node)) changes.push(modChange(ctx.doc, it, node)); }
+  if (changes.length) ctx.commit(changes, "Toggle Attribute");
+  return true;
 }
 export function libUnits(doc: KDoc, node: SNode) {
   const lib = K.resolveLib(doc, symbolLibId(node)); const units = new Set<number>(), styles = new Set<number>();

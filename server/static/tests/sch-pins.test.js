@@ -84,5 +84,50 @@ test("Pin Function: alternates by name after the base; choosing one writes (alte
   assert.ok(!_.setAltPinFunction(ctx, r, "PA0"), "no change, no commit");
 });
 
+test("pinAt: the pin's shown name and number are part of it (GetBoundingBox( false, true )); m_PinSymbolSize / 4 floors an exact hit", () => {
+  const doc = K.parseDoc(SHEET);
+  // pin 1 (IN): connection point 43.18, root 45.72, the name inside the body from 46.736
+  const h = _.pinAt(doc, [47.4, 48.26], 0); assert.ok(h, "on the name text"); assert.strictEqual(h.pin.number, "1");
+  assert.strictEqual(_.pinAt(doc, [44.45, 47.2], 0).pin.number, "1", "on the number above the line");
+  assert.strictEqual(_.pinAt(doc, [43.18 - 0.1, 48.26], 0).pin.number, "1", "just off the connection point, inside the floor");
+  assert.strictEqual(_.pinAt(doc, [43.18 - 0.5, 48.26], 0), null, "beyond the floor");
+  assert.strictEqual(_.pinAt(doc, [50.8, 50.8], 0), null, "the body centre");
+  const u = doc.items.get("u1"), b = _.pinBox(u, _.pinOf(doc, { id: "u1", number: "1" }).pin);
+  assert.ok(b[2] > 46.736 && b[2] < 50.8, "the box reaches over the name, not to the centre: " + b);
+});
+test("Pin Helpers: No Connect leaves nothing selected (ClearSelection); Wire selects the stub", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc); ctx.selection = new Set(["u1"]);
+  _.pinHelper(ctx, [{ id: "u1", number: "2" }], "noconnect");
+  assert.deepStrictEqual([...ctx.selection], []);
+  _.pinHelper(ctx, [{ id: "u1", number: "1" }], "wire");
+  assert.strictEqual(ctx.selection.size, 1);
+});
+test("Pin Helpers: a label on a pin with an alternate takes the alternate's name and type (GetShownName / GetType)", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc), r = { id: "u1", number: "4" };
+  assert.ok(_.setAltPinFunction(ctx, r, "UART_TX"));
+  _.pinHelper(ctx, [r], "global_label");
+  const [g] = added(ctx); assert.strictEqual(str(g.node[1]), "UART_TX"); assert.strictEqual(str(kid(g.node, "shape")[1]), "output");
+  assert.ok(_.setAltPinFunction(ctx, r, "PA0"));
+  _.pinHelper(ctx, [r], "global_label");
+  const [g2] = added(ctx); assert.strictEqual(str(g2.node[1]), "PA0"); assert.strictEqual(str(kid(g2.node, "shape")[1]), "passive");
+});
+test("Attributes: Toggle Attribute turns the flag on when any selected item has it off, writes in_pos_files after on_board", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc); ctx.selection = new Set(["u1"]);
+  assert.ok(sch.runAction("setExcludeFromPosFiles", ctx));
+  const c = ctx.log[ctx.log.length - 1]; assert.strictEqual(c.label, "Toggle Attribute");
+  assert.ok(/\(on_board yes\) \(in_pos_files no\) \(dnp no\)/.test(c.changes[0].sexpr), c.changes[0].sexpr);
+  assert.ok(sch.runAction("setExcludeFromPosFiles", ctx));
+  assert.ok(/\(in_pos_files yes\)/.test(ctx.log[ctx.log.length - 1].changes[0].sexpr));
+  assert.ok(sch.runAction("setDNP", ctx)); assert.deepStrictEqual(kid(doc.items.get("u1").node, "dnp"), ["dnp", "yes"]);
+});
+test("Attributes: the editor's toggleAttribute hook gets the selection with the flag test and setter", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc); ctx.selection = new Set(["u1"]);
+  const E0 = globalThis.CollabEditor; let got = null;
+  globalThis.CollabEditor = Object.assign({}, E0 || {}, { toggleAttribute(c, items, isOn, set) { got = { items: items.map((i) => i.id), on: isOn(items[0].node), set: set(items[0].node, true) }; return true; } });
+  try { assert.ok(sch.runAction("setExcludeFromBOM", ctx)); } finally { globalThis.CollabEditor = E0; }
+  assert.deepStrictEqual(got.items, ["u1"]); assert.strictEqual(got.on, false); assert.deepStrictEqual(kid(got.set, "in_bom"), ["in_bom", "no"]);
+  assert.strictEqual(ctx.log.length, 0, "the hook commits");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

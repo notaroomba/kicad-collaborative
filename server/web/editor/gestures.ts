@@ -98,17 +98,19 @@ function schPick(mm: Mm): KItem | null {
  * SCH_PIN::HitTest under the cursor (KiCad's 5 px selection threshold): the pin a click selects on its own, ahead of
  * its symbol's body, while the selection filter takes pins.  Hidden pins only while they are shown.
  */
-export function pinUnder(mm: Mm): { id: string; number: string } | null {
+export function pinUnder(mm: Mm, exact?: boolean): { id: string; number: string } | null {
   const m = CollabTools.sch, d = doc(); if (!isSch() || !m || !d || !m._) return null;
   const f = selFilter() as Record<string, boolean>; if (f.pins === false) return null;
   const pinAt = (m._ as unknown as { pinAt?: (d: KDoc, p: Mm, tol: number, hidden?: boolean) => { item: KItem; pin: { number: string } } | null }).pinAt;
   if (!pinAt) return null;
   try {
-    const h = pinAt(d, mm, 5 / Math.max(1e-6, pxPerMm()), !!(E.renderOpts && E.renderOpts.showHiddenPins));
+    const h = pinAt(d, mm, exact ? 0 : 5 / Math.max(1e-6, pxPerMm()), !!(E.renderOpts && E.renderOpts.showHiddenPins));
     if (!h || (f.lockedItems === false && h.item.node && KiCadCanvas.kid(h.item.node, "locked"))) return null;
     return { id: h.item.id, number: h.pin.number };
   } catch { return null; }
 }
+// sch-tools' pick asks this first: an exact pin hit beats a wire or label ending on it (GuessSelectionCandidates)
+E.pinExactAt = (mm: Mm): boolean => !!pinUnder(mm, true);
 /** What a plain left click at `mm` selects, without touching the selection: the field, movable item or module item. */
 export function pickAt(mm: Mm): { field?: { id: string; name: string }; pin?: { id: string; number: string }; movable?: { id: string }; item?: KItem } | null {
   const d = doc(); if (!d) return null;

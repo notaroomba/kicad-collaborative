@@ -19,18 +19,60 @@ function segDist(p: Pt, a: Pt, b: Pt): number {
   const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
   return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
 }
+/** The schematic setting m_PinSymbolSize (25 mils) a quarter of which floors SCH_PIN::HitTest's accuracy. */
+export const PIN_SYMBOL_SIZE = 0.635;
+type GeomBox = [number, number, number, number];
+/** One drawn primitive's box; a text by its own extent, placed by its justification and turned with it. */
+function geomBoxOf(g: KGeom): GeomBox | null {
+  const q = g as unknown as Record<string, number> & { t: string; text?: string; h?: string; v?: string; pts?: number[][] };
+  const w = (q.w || 0) / 2;
+  if (q.t === "line") return [Math.min(q.x1, q.x2) - w, Math.min(q.y1, q.y2) - w, Math.max(q.x1, q.x2) + w, Math.max(q.y1, q.y2) + w];
+  if (q.t === "poly" && q.pts && q.pts.length) { const xs = q.pts.map((p) => p[0]), ys = q.pts.map((p) => p[1]); return [Math.min(...xs) - w, Math.min(...ys) - w, Math.max(...xs) + w, Math.max(...ys) + w]; }
+  if (q.t === "circle" || q.t === "arc") return [q.x - q.r - w, q.y - q.r - w, q.x + q.r + w, q.y + q.r + w];
+  if (q.t === "text") {
+    const tw = K.textWidth(q.text || "", q.sizeX || q.size || 1, q.w || 0), th = q.size || 1;
+    const x0 = q.h === "left" ? 0 : q.h === "right" ? -tw : -tw / 2, y0 = q.v === "top" ? 0 : q.v === "bottom" ? -th : -th / 2;
+    const r = (q.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+    // the inverse of the canvas rotator(-rot): local (u, v) -> world
+    const pts = [[x0, y0], [x0 + tw, y0], [x0 + tw, y0 + th], [x0, y0 + th]].map(([u, v]) => [q.x + u * c + v * sn, q.y - u * sn + v * c]);
+    const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  }
+  return null;
+}
 /**
- * SCH_PIN::HitTest: the pin's line from its connection point to the body, within `tol`.  Hidden pins count only while
- * hidden pins are shown (SCH_SELECTION_TOOL::Selectable).  The nearest pin wins.
+ * SCH_PIN::GetBoundingBox( false, true, false ) on the sheet: the pin's line and decoration plus its shown name and
+ * number (PIN_LAYOUT_CACHE::GetPinBoundingBox), from what the canvas draws for the pin.
+ */
+export function pinBox(item: KItem, pin: SymPin): GeomBox {
+  let b: GeomBox = [Math.min(pin.x, pin.root[0]), Math.min(pin.y, pin.root[1]), Math.max(pin.x, pin.root[0]), Math.max(pin.y, pin.root[1])];
+  const src = pin.hidden ? item.hiddenGeom || [] : item.geom || [];
+  for (const g of src) {
+    if ((g as { pinNo?: string }).pinNo !== pin.number) continue;
+    const gb = geomBoxOf(g); if (!gb) continue;
+    b = [Math.min(b[0], gb[0]), Math.min(b[1], gb[1]), Math.max(b[2], gb[2]), Math.max(b[3], gb[3])];
+  }
+  return b;
+}
+/**
+ * SCH_PIN::HitTest: the pin's box (its line, decoration, shown name and number) inflated by `tol`, with
+ * m_PinSymbolSize / 4 as the floor of the accuracy.  Hidden pins count only while hidden pins are shown
+ * (SCH_SELECTION_TOOL::Selectable).  Of several pins hit, the one whose box the point is deepest in, then the one
+ * whose line is nearest, wins.
  */
 export function pinAt(doc: KDoc, p: Pt, tol: number, showHidden?: boolean): PinHit | null {
-  let best: PinHit | null = null, bestD = Infinity;
+  let best: PinHit | null = null, bestD = Infinity, bestL = Infinity;
+  const acc = Math.max(tol, PIN_SYMBOL_SIZE / 4);
   for (const it of doc.items.values()) {
     if (it.kind !== "symbol") continue;
+    if (it.bbox && (p[0] < it.bbox[0] - acc - 5 || p[0] > it.bbox[2] + acc + 5 || p[1] < it.bbox[1] - acc - 5 || p[1] > it.bbox[3] + acc + 5)) continue;
     for (const pin of symbolPins(doc, it)) {
       if (pin.hidden && !showHidden) continue;
-      const d = segDist(p, [pin.x, pin.y], pin.root);
-      if (d <= tol && d < bestD) { best = { item: it, pin }; bestD = d; }
+      const b = pinBox(it, pin);
+      const d = Math.max(b[0] - p[0], p[0] - b[2], b[1] - p[1], p[1] - b[3], 0);
+      if (d > acc) continue;
+      const l = segDist(p, [pin.x, pin.y], pin.root);
+      if (d < bestD - 1e-9 || (Math.abs(d - bestD) <= 1e-9 && l < bestL)) { best = { item: it, pin }; bestD = d; bestL = l; }
     }
   }
   return best;
@@ -66,7 +108,8 @@ export const PIN_HELPERS: { id: PinHelper; label: string; icon: string }[] = [
 /**
  * The Pin Helpers commands on the selected pins: a no-connect on each ("No Connect Pins"), a wire stub one grid step
  * out of each ("Wire Pins"), or a label named after the pin ("Label Pins") facing away from the body with the shape
- * its electrical type gives.  The new items become the selection.  Returns their ids.
+ * its electrical type gives (the assigned alternate's name and type when the pin has one).  The wire and labels become
+ * the selection; the no-connects leave nothing selected.  Returns their ids.
  */
 export function pinHelper(ctx: SchCtx, pins: PinRef[], what: PinHelper, sheetRef?: (it: KItem) => string): string[] {
   const doc = ctx.doc, changes: KChange[] = [], ids: string[] = [];
@@ -78,11 +121,12 @@ export function pinHelper(ctx: SchCtx, pins: PinRef[], what: PinHelper, sheetRef
     if (what === "noconnect") node = noConnectNode(p);
     else if (what === "wire") { const d = SIDE_DIR[side] || [1, 0]; node = lineNode("wire", p, [r4(p[0] + d[0] * grid), r4(p[1] + d[1] * grid)]); }
     else {
-      let text = shownName(h.pin);
+      const alt = pinAltFunction(doc, h.item, h.pin.number);
+      let text = alt ? alt.name : shownName(h.pin);
       if (!text) text = `${sheetRef ? sheetRef(h.item) : (h.item.ref || "")}_${h.pin.number}`;
       node = labelNode(what, text, p, 0);
       setSpinOfNode(what, node, SIDE_SPIN[side] === undefined ? 0 : SIDE_SPIN[side]);
-      if (what !== "label") { const sh = kid(node, "shape"); if (sh) sh[1] = labelShapeForPin(h.pin.type); }
+      if (what !== "label") { const sh = kid(node, "shape"); if (sh) sh[1] = labelShapeForPin(alt ? alt.type : h.pin.type); }
     }
     if (!K.uuidOf(node)) node.push(["uuid", K.newUuid()]);
     const { item, change } = addNode(doc, node); changes.push(change); ids.push(item.id);
@@ -90,12 +134,30 @@ export function pinHelper(ctx: SchCtx, pins: PinRef[], what: PinHelper, sheetRef
   if (!changes.length) return [];
   for (const id of ids) doc.items.delete(id);           // commit adds them from the fragments
   ctx.commit(changes, what === "noconnect" ? "No Connect Pins" : what === "wire" ? "Wire Pins" : "Label Pins");
-  if (ctx.setSelection) ctx.setSelection(ids.filter((id) => doc.items.has(id)));
+  // ID_POPUP_SCH_PIN_TRICKS_NO_CONNECT ends in ClearSelection(); the Wire and Label helpers select what they added
+  if (ctx.setSelection) ctx.setSelection(what === "noconnect" ? [] : ids.filter((id) => doc.items.has(id)));
+  else if (what === "noconnect") ctx.setSelected(null);
   ctx.requestRender();
   return ids;
 }
 
 // ---------------------------------------------------------------- Pin Function (PIN_FUNCTION_MENU)
+/**
+ * The instance pin's assigned alternate (SCH_PIN::m_alt) as the library defines it: SCH_PIN::GetShownName returns its
+ * name and SCH_PIN::GetType its electrical type.  Null for the base function or an alternate the library lacks.
+ */
+export function pinAltFunction(doc: KDoc, it: KItem, number: string): { name: string; type: string } | null {
+  const ip = kids(it.node, "pin").find((x) => str(x[1]) === number), a = ip && kid(ip, "alternate"); if (!a) return null;
+  const want = str(a[1]); if (!want) return null;
+  const libId = str((kid(it.node, "lib_name") || kid(it.node, "lib_id") || [])[1]);
+  const lib = K.resolveLib(doc, libId) || K.resolveLib(doc, str((kid(it.node, "lib_id") || [])[1])); if (!lib) return null;
+  for (const sub of kids(lib, "symbol")) for (const g of kids(sub, "pin")) {
+    if (str((kid(g, "number") || [])[1]) !== number) continue;
+    const alt = kids(g, "alternate").find((x) => str(x[1]) === want);
+    if (alt) return { name: want, type: str(alt[2]) || "unspecified" };
+  }
+  return null;
+}
 /** The lib pin's alternates (SCH_PIN::GetAlternates), empty when it has none. */
 export function pinAlternates(doc: KDoc, ref: PinRef): { base: string; alts: string[]; current: string } | null {
   const it = doc.items.get(ref.id); if (!it || it.kind !== "symbol") return null;

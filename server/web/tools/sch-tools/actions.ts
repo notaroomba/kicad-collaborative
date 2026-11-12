@@ -49,6 +49,7 @@ export const ACTION_LIST = [
   act("setExcludeFromBOM", "Exclude from Bill of Materials", "", (ctx: SchCtx) => toggleSymbolFlag(ctx, "setExcludeFromBOM")),
   act("setExcludeFromSim", "Exclude from Simulation", "", (ctx: SchCtx) => toggleSymbolFlag(ctx, "setExcludeFromSim")),
   act("setExcludeFromBoard", "Exclude from Board", "", (ctx: SchCtx) => toggleSymbolFlag(ctx, "setExcludeFromBoard")),
+  act("setExcludeFromPosFiles", "Exclude from Position Files", "", (ctx: SchCtx) => toggleSymbolFlag(ctx, "setExcludeFromPosFiles")),
   act("nextUnit", "Next Symbol Unit", "", (ctx: SchCtx) => stepUnit(ctx, 1)),
   act("previousUnit", "Previous Symbol Unit", "", (ctx: SchCtx) => stepUnit(ctx, -1)),
   act("placeNextSymbolUnit", "Place Next Symbol Unit", "", (ctx: SchCtx) => placeNextUnit(ctx)),

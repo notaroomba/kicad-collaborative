@@ -39,6 +39,10 @@ interface ToolsRoot {
    *  tools read the live editor state (the former app.js script-scope lets) through it. */
   CollabEditor?: {
     pickAllowed?(item: KItem): boolean;
+    /** SCH_PIN::HitTest with no slop (m_PinSymbolSize / 4): a pin the Selection Filter takes is exactly under mm. */
+    pinExactAt?(mm: [number, number]): boolean;
+    /** dialogs/sync-units.ts toggleAttribute: SetAttribute over the items and the other units of multi-unit parts. */
+    toggleAttribute?(ctx: unknown, items: KItem[], isOn: (node: SNode) => boolean, set: (node: SNode, on: boolean) => SNode): boolean;
     tool?: string; DOC_TYPE?: string; kdoc?: KDoc | null; zoom?: number; selected?: { id: string; x: number; y: number; rot?: number } | null;
     selection?: Set<string> | null; hiddenLayers?: Set<string> | null; overrideLocks?: boolean; units?: string;
     /** the editor's own footprint drag (a group drag carries every footprint) */

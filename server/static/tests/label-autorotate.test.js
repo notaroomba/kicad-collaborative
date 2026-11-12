@@ -95,5 +95,17 @@ test("a move ends with the flagged label re-spun for where it lands; an unflagge
   assert.strictEqual(atOf(doc.items.get("g1").node)[2], 270);
 });
 
+test("Repeat Item (Insert) copies the Auto flag to the repeated label (SCH_ITEM::Duplicate copies m_autoRotateOnPlacement)", () => {
+  const doc = K.parseDoc(SHEET), ctx = makeCtx(doc);
+  _.setAutoRotate("g1", true); _.rememberPlaced("global_label", doc.items.get("g1").node);
+  assert.ok(sch.runAction("repeatLast", ctx));
+  const id = ctx.log[ctx.log.length - 1].changes.find((c) => c.kind === "ADDED" && /global_label/.test(c.sexpr)).id;
+  assert.notStrictEqual(id, "g1"); assert.ok(_.autoRotateOf(id), "the copy keeps Auto");
+  _.setAutoRotate("g1", false); _.setAutoRotate(id, false); _.rememberPlaced("global_label", doc.items.get("g1").node);
+  assert.ok(sch.runAction("repeatLast", ctx));
+  const id2 = ctx.log[ctx.log.length - 1].changes.find((c) => c.kind === "ADDED" && /global_label/.test(c.sexpr)).id;
+  assert.ok(!_.autoRotateOf(id2), "an unflagged label repeats unflagged");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

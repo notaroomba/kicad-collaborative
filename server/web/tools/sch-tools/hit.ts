@@ -48,6 +48,9 @@ export function hitNonSymbol(doc: KDoc, x: number, y: number, tol: number) {
 export function pickNonSymbol(ctx: SchCtx, mm: Pt) {
   const hit = hitNonSymbol(ctx.doc, mm[0], mm[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (!hit) return null;
   const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(hit)) return null;   // the Selection Filter pane
+  // GuessSelectionCandidates: an exact pin hit wins over everything but a junction (the pin is the editor's to select)
+  const pinExact = root.CollabEditor && root.CollabEditor.pinExactAt;
+  if (hit.kind !== "junction" && pinExact && pinExact([mm[0], mm[1]])) return null;
   const symId = K.hitTest(ctx.doc, mm[0], mm[1], 0.5);
   if (symId && !LINE_KINDS.has(hit.kind)) { const sym = ctx.doc.items.get(symId); if (sym && area(sym.bbox) < area(rectOf(hit))) return null; }
   return hit;

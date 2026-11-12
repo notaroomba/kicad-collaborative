@@ -187,21 +187,27 @@ stage.addEventListener("pointerdown", (ev) => {
       ev.preventDefault(); return;
     }
   }
+  let pinPromote: { id: string; number: string } | null = null, pinClick: { id: string; number: string } | null = null;
   if (E.tool === "select" && E.kdoc && isSch() && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     // SCH_SELECTION_TOOL: a pin under the cursor is selected on its own, ahead of its symbol's body
     const pin = pinUnder([x, y]);
     if (pin) {
       const was = !!(E.selPin && E.selPin.id === pin.id && E.selPin.number === pin.number);
-      if (!was) {
+      // its symbol is already selected: a drag moves the selection (RequestSelection( MovableItems )), only a click
+      // (released where it was pressed) selects the pin on its own
+      const symSel = !was && (E.selection.has(pin.id) || (!!E.selected && E.selected.id === pin.id));
+      if (symSel) { pinPromote = pin; pinClick = pin; }
+      else if (!was) {
         clearSelection(); E.selPin = pin; drawSelection(); renderProps(); renderObjects(); requestRender();
         E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId);
         ev.preventDefault(); return;
       }
       // a press on the selected pin moves its symbol: SCH_MOVE_TOOL promotes a lone pin to its parent
-      E.selPin = null; const fp = (E.items as ItemSummary[]).find((f) => f.id === pin.id); if (fp) E.selected = fp;
+      else { E.selPin = null; const fp = (E.items as ItemSummary[]).find((f) => f.id === pin.id); if (fp) E.selected = fp; pinPromote = pin; pinClick = pin; }
     }
   }
   let best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
+  if (pinPromote) { const fp = (E.items as ItemSummary[]).find((f) => f.id === pinPromote!.id); if (fp) best = fp; }
   // Board: a click on a pad selects the pad, not its footprint (PCB_SELECTION_TOOL; the footprint is picked by its body)
   let padWasSelected = false;
   if (!isSch() && E.tool === "select" && mod && mod.selectPadAt) {
@@ -243,7 +249,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (E.viewOnly || !E.ws || E.ws.readyState !== 1) return;
   if (!isSch() && !unlockedForEdit([best.id], true).length) return;   // a locked footprint is selected by the click but does not follow a drag
   { const g = groupExpand([best.id]); if (g.size > 1) { E.selection = g; drawSelection(); renderObjects(); startGroupDrag({ id: best.id, fp: best }, [x, y], ev); return; } }   // a group member moves its group
-  E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false };
+  E.drag = { fp: best, startMm: [x, y], curMm: [best.x / E.IU, best.y / E.IU], moved: false, grabOff: [x - best.x / E.IU, y - best.y / E.IU], wires: [], engine: false, clickPin: pinClick };
   // Schematic moves run through sch-tools' connected drag: attached wires stretch (with bends in
   // 90° mode), a pin or junction under a moved pin gets a new wire, no-connects follow — KiCad's drag.
   if (E.kdoc && isSch() && CollabTools.sch && CollabTools.sch.beginDrag) {
@@ -252,6 +258,12 @@ stage.addEventListener("pointerdown", (ev) => {
   }
   stage.setPointerCapture(ev.pointerId); ev.preventDefault();
 });
+
+/** SelectPoint on a pin of the selected symbol: the click (no drag) leaves the pin alone selected. */
+function selectPinOnly(pin: { id: string; number: string }): void {
+  if (!E.kdoc || !E.kdoc.items.has(pin.id)) return;
+  clearSelection(); E.selPin = pin; drawSelection(); renderProps(); renderObjects(); requestRender();
+}
 
 /** SELECTION_TOOL::setModifiersState: Shift adds, Ctrl (Cmd on macOS) toggles, Ctrl+Shift removes; null replaces. */
 const smodeOf = (ev: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => selModifier(ev);
@@ -343,18 +355,19 @@ const onPointerUp = (ev: PointerEvent) => {
   if (ev.button !== 0 || !E.drag) return;
   if (E.drag.group) { finishGroupDrag(); return; }
   if (E.drag.engine) {
-    const fpE = E.drag.fp, cur = E.drag.curMm, clickId = E.drag.moved ? null : E.drag.clickId; E.drag = null; dragG.replaceChildren();
+    const fpE = E.drag.fp, cur = E.drag.curMm, clickId = E.drag.moved ? null : E.drag.clickId, clickPin = E.drag.moved ? null : E.drag.clickPin; E.drag = null; dragG.replaceChildren();
     if (CollabTools.sch!.state.drag) { try { CollabTools.sch!.endDrag(toolCtx(), true); } catch (e) { console.warn(e); } }
     sendPresence(cur, []);
     if (clickId) { collapseSelectionTo(clickId); return; }
+    if (clickPin) { selectPinOnly(clickPin); return; }
     if (E.kdoc) syncItemsFromDoc(); E.selected = E.items.find((f: ItemSummary) => f.id === fpE.id) || E.selected; drawSelection(); renderProps(); requestRender();
     return;
   }
-  const fp = E.drag.fp, wasMoved = E.drag.moved, wires = E.drag.wires || [];
+  const fp = E.drag.fp, wasMoved = E.drag.moved, wires = E.drag.wires || [], clickPin0 = E.drag.clickPin as { id: string; number: string } | null;
   const nx = Math.round(E.drag.curMm[0] * E.IU), ny = Math.round(E.drag.curMm[1] * E.IU);
   E.drag = null; dragG.replaceChildren();
   sendPresence([nx / E.IU, ny / E.IU], []);
-  if (!wasMoved) return;
+  if (!wasMoved) { if (clickPin0) selectPinOnly(clickPin0); return; }
   const changes: KChange[] = [];
   if (nx !== fp.x || ny !== fp.y) changes.push(moveOp(fp, nx, ny));
   for (const w of wires) changes.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, w.item) });

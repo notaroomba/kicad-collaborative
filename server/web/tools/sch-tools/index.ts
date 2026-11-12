@@ -48,7 +48,7 @@ import { DELETE_CURSOR, S, TOOLS } from "./state";
 import { alignEdgeChanges, alignEdges, alignToGrid, alignToGridChanges, breakAgain, breakWire, breakWireChanges, endBreak, halfGrid, moveExactChanges, moveExactly, rotationCentre, selectionCentre, swapChanges, swapNodes, swapSelection, transformChanges, transformNode, transformSelected } from "./transforms";
 import { busLabelsOf, busMembers, unfoldAction, unfoldBus, unfoldMembers } from "./unfold";
 import { itemSexpr, modChange, ruleAreaId, typeNameFor } from "./util";
-import { PIN_HELPERS, labelShapeForPin, pinAlternates, pinAt, pinHelper, pinOf, setAltPinFunction } from "./pins";
+import { PIN_HELPERS, labelShapeForPin, pinAltFunction, pinAlternates, pinAt, pinBox, pinHelper, pinOf, setAltPinFunction } from "./pins";
 import { autoRotateChanges, autoRotateNode, autoRotateOf, labelOrientationForPoint, setAutoRotate, setSpinOfNode, spinOfNode } from "./autorotate";
 import { computeBreakPoint, isTerminalPoint, mergeOverlap, simplify, simplifyWireList, sourceLine, startWire, switchPosture, undoSegment, wireClick, wireFollow, wirePoints } from "./wire";
 
@@ -68,7 +68,7 @@ const sch = {
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
   clipboardText, parseClipboard, ercCheck, annotateChanges, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
-  _: { setFollow(on: boolean) { S.forceFollow = !!on; }, pinAt, pinOf, pinHelper, PIN_HELPERS, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
+  _: { setFollow(on: boolean) { S.forceFollow = !!on; }, pinAt, pinBox, pinAltFunction, pinOf, pinHelper, PIN_HELPERS, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
     convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
     ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,

@@ -6,6 +6,7 @@ import type { PanelAction, PanelsApi } from "../../panels-api";
 import { store } from "../appstore";
 import { filterAllows } from "../selection";
 import { E } from "../state";
+import { toggleAttribute } from "../../dialogs/sync-units";
 import { appearanceDispatch, appearanceDocOpened, applyAppearance, itemObjectHidden, publishAppearance } from "./appearance";
 import { panelStore } from "./core";
 import { hierarchyDispatch, loadSheets, publishHierarchy } from "./hierarchy";
@@ -23,6 +24,8 @@ window.CollabPanels = api;
 
 /** The select tool's gate for the tool modules' own picks (the app's picks go through filterAllows directly). */
 E.pickAllowed = (it: KItem): boolean => !!it && filterAllows(it.kind, it) && !itemObjectHidden(it);
+// sch-tools' Attributes toggles (SCH_EDIT_TOOL::SetAttribute) keep the other units of a multi-unit part in step
+E.toggleAttribute = toggleAttribute;
 
 // ---- follow the app store
 let last = { docId: null as string | null, hasDoc: false, version: -1, hidden: null as unknown, toggles: null as unknown, active: "", pro: null as unknown, markers: null as unknown, docs: null as unknown };

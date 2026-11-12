@@ -979,6 +979,8 @@
     if (!hit) return null;
     const allowed = root.CollabEditor && root.CollabEditor.pickAllowed;
     if (allowed && !allowed(hit)) return null;
+    const pinExact = root.CollabEditor && root.CollabEditor.pinExactAt;
+    if (hit.kind !== "junction" && pinExact && pinExact([mm[0], mm[1]])) return null;
     const symId = K.hitTest(ctx.doc, mm[0], mm[1], 0.5);
     if (symId && !LINE_KINDS.has(hit.kind)) {
       const sym = ctx.doc.items.get(symId);
@@ -3027,6 +3029,7 @@ ${body}
         const it = t.add(node);
         added.push(it.id);
         if (lp.kind === "symbol" && !symbolId) symbolId = it.id;
+        if (supportsAutoRotate(lp.kind) && autoRotateOf(uuidOf(lp.node) || "")) setAutoRotate(it.id, true);
       }
       const items = added.map((id) => doc.items.get(id)).filter(Boolean);
       txnTrimOverlapping(t, doc, items);
@@ -5869,22 +5872,46 @@ Link '${target}' to this file?`)) return null;
     if (at >= 0) node.splice(at, 0, p);
     else node.push(p);
   }
-  var FLAG_KEYS = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"] };
+  var FLAG_KEYS = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"], setExcludeFromPosFiles: ["in_pos_files", "no", "yes"] };
+  var FLAG_AFTER = { exclude_from_sim: ["body_style", "convert", "unit", "mirror", "at", "lib_id"], in_bom: ["exclude_from_sim"], on_board: ["in_bom"], in_pos_files: ["on_board"], dnp: ["in_pos_files", "on_board"] };
+  function withFlag(node, key, val) {
+    const n = deep(node), k = kid(n, key);
+    if (k) {
+      k[1] = val;
+      return n;
+    }
+    let at = -1;
+    for (const a of FLAG_AFTER[key] || []) {
+      at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === a);
+      if (at > 0) break;
+    }
+    n.splice(at > 0 ? at + 1 : n.length, 0, [key, val]);
+    return n;
+  }
   function toggleSymbolFlag(ctx, which) {
     if (!editable(ctx)) return false;
-    const [key, onVal, offVal] = FLAG_KEYS[which], changes = [];
-    const items = selectedItems(ctx).filter((it) => it.kind === "symbol");
+    const [key, onVal, offVal] = FLAG_KEYS[which];
+    const kinds = which === "setExcludeFromPosFiles" ? ["symbol"] : ["symbol", "sheet", "rule_area"];
+    const items = selectedItems(ctx).filter((it) => kinds.includes(it.kind));
     if (!items.length) return false;
-    const allOn = items.every((it) => {
-      const k = kid(it.node, key);
-      return k && str(k[1]) === onVal;
-    });
-    for (const it of items) {
-      const node = deep(it.node);
-      replaceKid(node, [key, allOn ? offVal : onVal]);
-      changes.push(modChange(ctx.doc, it, node));
+    const isOn = (n) => {
+      const k = kid(n, key);
+      return !!k && str(k[1]) === onVal;
+    };
+    const set = (n, on2) => withFlag(n, key, on2 ? onVal : offVal);
+    const hook = root.CollabEditor && root.CollabEditor.toggleAttribute;
+    if (hook) return hook(ctx, items, isOn, set);
+    let on = false;
+    for (const it of items) if (!isOn(it.node)) {
+      on = true;
+      break;
     }
-    ctx.commit(changes, which.replace(/^set/, "").replace(/([A-Z])/g, " $1").trim().toLowerCase());
+    const changes = [];
+    for (const it of items) {
+      const node = set(it.node, on);
+      if (JSON.stringify(node) !== JSON.stringify(it.node)) changes.push(modChange(ctx.doc, it, node));
+    }
+    if (changes.length) ctx.commit(changes, "Toggle Attribute");
     return true;
   }
   function libUnits(doc, node) {
@@ -6636,6 +6663,7 @@ Link '${target}' to this file?`)) return null;
     act("setExcludeFromBOM", "Exclude from Bill of Materials", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromBOM")),
     act("setExcludeFromSim", "Exclude from Simulation", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromSim")),
     act("setExcludeFromBoard", "Exclude from Board", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromBoard")),
+    act("setExcludeFromPosFiles", "Exclude from Position Files", "", (ctx) => toggleSymbolFlag(ctx, "setExcludeFromPosFiles")),
     act("nextUnit", "Next Symbol Unit", "", (ctx) => stepUnit(ctx, 1)),
     act("previousUnit", "Previous Symbol Unit", "", (ctx) => stepUnit(ctx, -1)),
     act("placeNextSymbolUnit", "Place Next Symbol Unit", "", (ctx) => placeNextUnit(ctx)),
@@ -6702,16 +6730,53 @@ Link '${target}' to this file?`)) return null;
     const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
     return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
   }
+  var PIN_SYMBOL_SIZE = 0.635;
+  function geomBoxOf(g) {
+    const q = g;
+    const w = (q.w || 0) / 2;
+    if (q.t === "line") return [Math.min(q.x1, q.x2) - w, Math.min(q.y1, q.y2) - w, Math.max(q.x1, q.x2) + w, Math.max(q.y1, q.y2) + w];
+    if (q.t === "poly" && q.pts && q.pts.length) {
+      const xs = q.pts.map((p) => p[0]), ys = q.pts.map((p) => p[1]);
+      return [Math.min(...xs) - w, Math.min(...ys) - w, Math.max(...xs) + w, Math.max(...ys) + w];
+    }
+    if (q.t === "circle" || q.t === "arc") return [q.x - q.r - w, q.y - q.r - w, q.x + q.r + w, q.y + q.r + w];
+    if (q.t === "text") {
+      const tw = K.textWidth(q.text || "", q.sizeX || q.size || 1, q.w || 0), th = q.size || 1;
+      const x0 = q.h === "left" ? 0 : q.h === "right" ? -tw : -tw / 2, y0 = q.v === "top" ? 0 : q.v === "bottom" ? -th : -th / 2;
+      const r = (q.rot || 0) * Math.PI / 180, c = Math.cos(r), sn = Math.sin(r);
+      const pts = [[x0, y0], [x0 + tw, y0], [x0 + tw, y0 + th], [x0, y0 + th]].map(([u, v]) => [q.x + u * c + v * sn, q.y - u * sn + v * c]);
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+    }
+    return null;
+  }
+  function pinBox(item, pin) {
+    let b = [Math.min(pin.x, pin.root[0]), Math.min(pin.y, pin.root[1]), Math.max(pin.x, pin.root[0]), Math.max(pin.y, pin.root[1])];
+    const src = pin.hidden ? item.hiddenGeom || [] : item.geom || [];
+    for (const g of src) {
+      if (g.pinNo !== pin.number) continue;
+      const gb = geomBoxOf(g);
+      if (!gb) continue;
+      b = [Math.min(b[0], gb[0]), Math.min(b[1], gb[1]), Math.max(b[2], gb[2]), Math.max(b[3], gb[3])];
+    }
+    return b;
+  }
   function pinAt(doc, p, tol, showHidden) {
-    let best = null, bestD = Infinity;
+    let best = null, bestD = Infinity, bestL = Infinity;
+    const acc = Math.max(tol, PIN_SYMBOL_SIZE / 4);
     for (const it of doc.items.values()) {
       if (it.kind !== "symbol") continue;
+      if (it.bbox && (p[0] < it.bbox[0] - acc - 5 || p[0] > it.bbox[2] + acc + 5 || p[1] < it.bbox[1] - acc - 5 || p[1] > it.bbox[3] + acc + 5)) continue;
       for (const pin of symbolPins(doc, it)) {
         if (pin.hidden && !showHidden) continue;
-        const d = segDist2(p, [pin.x, pin.y], pin.root);
-        if (d <= tol && d < bestD) {
+        const b = pinBox(it, pin);
+        const d = Math.max(b[0] - p[0], p[0] - b[2], b[1] - p[1], p[1] - b[3], 0);
+        if (d > acc) continue;
+        const l = segDist2(p, [pin.x, pin.y], pin.root);
+        if (d < bestD - 1e-9 || Math.abs(d - bestD) <= 1e-9 && l < bestL) {
           best = { item: it, pin };
           bestD = d;
+          bestL = l;
         }
       }
     }
@@ -6764,13 +6829,14 @@ Link '${target}' to this file?`)) return null;
         const d = SIDE_DIR[side] || [1, 0];
         node = lineNode("wire", p, [r4(p[0] + d[0] * grid), r4(p[1] + d[1] * grid)]);
       } else {
-        let text = shownName(h.pin);
+        const alt = pinAltFunction(doc, h.item, h.pin.number);
+        let text = alt ? alt.name : shownName(h.pin);
         if (!text) text = `${sheetRef ? sheetRef(h.item) : h.item.ref || ""}_${h.pin.number}`;
         node = labelNode(what, text, p, 0);
         setSpinOfNode(what, node, SIDE_SPIN[side] === void 0 ? 0 : SIDE_SPIN[side]);
         if (what !== "label") {
           const sh = kid(node, "shape");
-          if (sh) sh[1] = labelShapeForPin(h.pin.type);
+          if (sh) sh[1] = labelShapeForPin(alt ? alt.type : h.pin.type);
         }
       }
       if (!K.uuidOf(node)) node.push(["uuid", K.newUuid()]);
@@ -6781,9 +6847,25 @@ Link '${target}' to this file?`)) return null;
     if (!changes.length) return [];
     for (const id of ids) doc.items.delete(id);
     ctx.commit(changes, what === "noconnect" ? "No Connect Pins" : what === "wire" ? "Wire Pins" : "Label Pins");
-    if (ctx.setSelection) ctx.setSelection(ids.filter((id) => doc.items.has(id)));
+    if (ctx.setSelection) ctx.setSelection(what === "noconnect" ? [] : ids.filter((id) => doc.items.has(id)));
+    else if (what === "noconnect") ctx.setSelected(null);
     ctx.requestRender();
     return ids;
+  }
+  function pinAltFunction(doc, it, number) {
+    const ip = kids(it.node, "pin").find((x) => str(x[1]) === number), a = ip && kid(ip, "alternate");
+    if (!a) return null;
+    const want = str(a[1]);
+    if (!want) return null;
+    const libId = str((kid(it.node, "lib_name") || kid(it.node, "lib_id") || [])[1]);
+    const lib = K.resolveLib(doc, libId) || K.resolveLib(doc, str((kid(it.node, "lib_id") || [])[1]));
+    if (!lib) return null;
+    for (const sub of kids(lib, "symbol")) for (const g of kids(sub, "pin")) {
+      if (str((kid(g, "number") || [])[1]) !== number) continue;
+      const alt = kids(g, "alternate").find((x) => str(x[1]) === want);
+      if (alt) return { name: want, type: str(alt[2]) || "unspecified" };
+    }
+    return null;
   }
   function pinAlternates(doc, ref) {
     const it = doc.items.get(ref.id);
@@ -6882,6 +6964,8 @@ Link '${target}' to this file?`)) return null;
         S.forceFollow = !!on;
       },
       pinAt,
+      pinBox,
+      pinAltFunction,
       pinOf,
       pinHelper,
       PIN_HELPERS,
