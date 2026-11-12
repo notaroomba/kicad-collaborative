@@ -209,7 +209,7 @@ stage.addEventListener("pointerdown", (ev) => {
     // SCH_SELECTION_TOOL: a pin under the cursor is selected on its own, ahead of its symbol's body
     const pin = pinForClick([x, y]);
     if (pin) {
-      const was = E.selPins.length === 1 && E.selPins[0].id === pin.id && E.selPins[0].number === pin.number;
+      const was = (E.selPins as { id: string; number: string }[]).some((p) => p.id === pin.id && p.number === pin.number);
       // its symbol is already selected: a drag moves the selection (RequestSelection( MovableItems )), only a click
       // (released where it was pressed) selects the pin on its own
       const symSel = !was && (E.selection.has(pin.id) || (!!E.selected && E.selected.id === pin.id));
@@ -219,8 +219,20 @@ stage.addEventListener("pointerdown", (ev) => {
         E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId);
         ev.preventDefault(); return;
       }
-      // a press on the selected pin moves its symbol: SCH_MOVE_TOOL promotes a lone pin to its parent
-      else { E.selPins = []; const fp = (E.items as ItemSummary[]).find((f) => f.id === pin.id); if (fp) E.selected = fp; pinPromote = pin; pinClick = pin; }
+      // a press on a selected pin moves its symbol: on a drag start SCH_SELECTION_TOOL unselects every selected pin and
+      // selects its parent symbol instead (RequestSelection( { SCH_PIN_T } ) -> parents), then runs move; a click
+      // without a drag still leaves this pin alone selected
+      else {
+        const parents = Array.from(new Set((E.selPins as { id: string }[]).map((p) => p.id))).filter((id) => E.kdoc.items.has(id));
+        E.selPins = []; const fp = (E.items as ItemSummary[]).find((f) => f.id === pin.id);
+        if (parents.length > 1 && fp && !E.viewOnly && E.ws && E.ws.readyState === 1) {
+          E.selection = new Set(parents); E.selected = fp; drawSelection(); renderProps(); renderObjects();
+          startGroupDrag({ id: pin.id, fp }, [x, y], ev);
+          if (E.drag) { E.drag.clickId = null; E.drag.clickPin = pin; }
+          ev.preventDefault(); return;
+        }
+        if (fp) E.selected = fp; pinPromote = pin; pinClick = pin;
+      }
     }
   }
   let best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));

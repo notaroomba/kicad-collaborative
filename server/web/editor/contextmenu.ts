@@ -110,7 +110,7 @@ const escape: Run = () => { document.dispatchEvent(new KeyboardEvent("keydown", 
 function openProperties(): void {
   const d = E.kdoc as KDoc | null, K = window.KDialogs; if (!d || !K) return;
   if (E.selField) { const it = d.items.get(E.selField.id); if (it) K.openField(toolCtx(), it, E.selField.name); return; }
-  if (E.selPins.length) { const it = d.items.get(E.selPins[0].id); if (it) K.openItem(toolCtx(), it); return; }   // Properties promotes a pin to its symbol
+  if (E.selPins.length) { if (E.selPins.length === 1) { const it = d.items.get(E.selPins[0].id); if (it) K.openItem(toolCtx(), it); } return; }   // Properties promotes a lone pin to its symbol; several pins open nothing
   const it = selectionItems()[0]; if (it) K.openItem(toolCtx(), it);
 }
 /** SCH_MOVE_TOOL: selected pins move as their parent symbols. */
