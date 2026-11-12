@@ -174,31 +174,31 @@ function textBoxNode(text, a, b, layer) {
   return ["gr_text_box", text, ["start", r6(x0), r6(y0)], ["end", r6(x1), r6(y1)], ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN],
     ["layer", layer], ["uuid", K.newUuid()], effectsNode(layer, ["left", "top"]), ["border", "yes"], strokeNode(gfxWidth(layer)), ["knockout", "no"]];
 }
-// DRAWING_TOOL::DrawTable sizes the grid from the dragged rectangle: one column per 15 text sizes, one row per 3, cells
-// at least 5 × 3 text sizes and rounded to the grid.  The web asks for the counts and shares the rectangle out.
-function tableCounts(a, b, layer) {
-  const [x0, y0, x1, y1] = corners(a, b); const { size } = textStyle(layer);
-  return { rows: Math.max(1, Math.floor((y1 - y0) / (size * 3))), cols: Math.max(1, Math.floor((x1 - x0) / (size * 15))) };
+// DRAWING_TOOL::DrawTable, on every motion: the table hangs from the first click; one column per 15 text widths and one
+// row per 3 text heights of the drag (integer division in nm, so a drag up or left gives one), cells at least 5 × 3 text
+// sizes, each rounded to the grid.
+function tableGrid(origin, cursor, layer, grid) {
+  const { size } = textStyle(layer); const fs = Math.round(size * 1e6), g = Math.round((grid || 0) * 1e6);
+  const rx = Math.round((cursor[0] - origin[0]) * 1e6), ry = Math.round((cursor[1] - origin[1]) * 1e6);
+  const cols = Math.max(1, Math.trunc(rx / (fs * 15))), rows = Math.max(1, Math.trunc(ry / (fs * 3)));
+  let cw = Math.max(fs * 5, Math.trunc(rx / cols)), ch = Math.max(fs * 3, Math.trunc(ry / rows));
+  if (g > 0) { cw = Math.round(cw / g) * g; ch = Math.round(ch / g) * g; }
+  return { x: origin[0], y: origin[1], cw: r6(cw / 1e6), ch: r6(ch / 1e6), rows, cols };
 }
-function tableLayout(a, b, rows, cols, layer, grid) {
-  const [x0, y0, x1, y1] = corners(a, b); const { size } = textStyle(layer);
-  let cw = Math.max(size * 5, (x1 - x0) / cols), ch = Math.max(size * 3, (y1 - y0) / rows);
-  if (grid > 0) { cw = Math.max(grid, Math.round(cw / grid) * grid); ch = Math.max(grid, Math.round(ch / grid) * grid); }
-  return { x: x0, y: y0, cw: r6(cw), ch: r6(ch), rows, cols };
-}
-// PCB_TABLE with PCB_TABLECELLs as the drawing tool creates them: borders and separators in the layer's line width,
-// every cell empty with the text box constructor's margins and EDA_TEXT's own 1.27 size (auto thickness), left / middle.
-function tableNode(a, b, rows, cols, layer, grid) {
-  const L = tableLayout(a, b, rows, cols, layer, grid); const w = gfxWidth(layer); const cells = ["cells"];
+// PCB_TABLE with PCB_TABLECELLs as the drawing tool creates them, in PCB_IO_KICAD_SEXPR::format( PCB_TABLE ) order (uuid,
+// layer, then formatTableData): borders and separators in the layer's line width, every cell empty with the text box
+// constructor's margins and EDA_TEXT's own 1.27 size (auto thickness), left / middle, mirrored on a back layer.
+function tableNode(origin, cursor, layer, grid) {
+  const L = tableGrid(origin, cursor, layer, grid); const w = gfxWidth(layer); const cells = ["cells"];
   const just = ["justify", "left"]; if (isBack(layer)) just.push("mirror");
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+  for (let r = 0; r < L.rows; r++) for (let c = 0; c < L.cols; c++) {
     const x = r6(L.x + c * L.cw), y = r6(L.y + r * L.ch);
     cells.push(["table_cell", "", ["start", x, y], ["end", r6(x + L.cw), r6(y + L.ch)], ["margins", TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN], ["span", 1, 1],
       ["layer", layer], ["uuid", K.newUuid()], ["effects", ["font", ["size", 1.27, 1.27]], just.slice()], ["knockout", "no"]]);
   }
-  return ["table", ["column_count", cols], ["uuid", K.newUuid()], ["layer", layer],
+  return ["table", ["uuid", K.newUuid()], ["layer", layer], ["column_count", L.cols],
     ["border", ["external", "yes"], ["header", "yes"], strokeNode(w)], ["separators", ["rows", "yes"], ["cols", "yes"], strokeNode(w)],
-    ["column_widths", ...Array(cols).fill(L.cw)], ["row_heights", ...Array(rows).fill(L.ch)], cells];
+    ["column_widths", ...Array(L.cols).fill(L.cw)], ["row_heights", ...Array(L.rows).fill(L.ch)], cells];
 }
 // PCB_REFERENCE_IMAGE: anchored at its centre, the file's own bytes as base64 in KICAD_FORMAT::FormatStreamData's
 // 76-column rows.  (scale) is only written when it differs from 1, so a fresh image carries none.
@@ -4503,7 +4503,7 @@ function drawClick(ctx, hv, t, ev) {
   }
   if (t === "gtextbox" || t === "table") {
     S.draw = null; ctx.requestRender();
-    if (samePt(p, d.start)) return;   // clicking the corner again drops the box
+    if (t === "gtextbox" && samePt(p, d.start)) return;   // clicking the corner again drops the box
     if (t === "gtextbox") {
       // DRAWING_TOOL::DrawRectangle for a PCB_TEXTBOX: Text Box Properties on the drawn box; OK adds it ("Draw Text Box", selected), Cancel drops it
       const node = withStroke(textBoxNode("", d.start, p, layer));
@@ -4512,12 +4512,12 @@ function drawClick(ctx, hv, t, ev) {
       dlg(ctx, node, (n) => { if (!n) return; const c = addedChange(ctx.doc, n); ctx.commit([c], "Draw Text Box"); applySelection(ctx, [c.id]); ctx.requestRender(); });
       return;
     }
-    const n = tableCounts(d.start, p, layer);
-    askText(ctx, "Table rows x cols", `${n.rows} x ${n.cols}`, (v) => {
-      const m = /^\s*(\d+)\s*[x×*,]\s*(\d+)\s*$/i.exec(v || "");
-      if (!m || !+m[1] || !+m[2]) { if (v) ctx.toast("Table size as rows x cols, e.g. 2 x 3"); return; }
-      ctx.commit([addedChange(ctx.doc, tableNode(d.start, p, +m[1], +m[2], layer, ctx.snapOn ? ctx.gridPitch : 0))], "table");
-    });
+    // the second click: Table Properties on the new table; OK adds it ("Draw Table", selected), Cancel drops it
+    const node = tableNode(d.start, p, layer, ctx.gridPitch || 0);
+    const dlg = newItemDialogs.table;
+    const add = (n) => { const c = addedChange(ctx.doc, n); ctx.commit([c], "Draw Table"); applySelection(ctx, [c.id]); ctx.requestRender(); };
+    if (!dlg) { add(node); return; }
+    dlg(ctx, node, (n) => { if (n) add(n); });
     return;
   }
   if (DIM_TYPE[t]) { dimClick(ctx, p, t); return; }
@@ -7661,12 +7661,11 @@ function drawOverlay(c, view, ctx) {
     const box = () => [Math.min(d.start[0], d.cur[0]), Math.min(d.start[1], d.cur[1]), Math.abs(d.cur[0] - d.start[0]), Math.abs(d.cur[1] - d.start[1])];
     if (d.shape === "gline") line(c, d.start, d.cur);
     else if (d.shape === "grect" || d.shape === "gtextbox") c.strokeRect(...box());
-    else if (d.shape === "table") {   // the rectangle and the grid KiCad would size it into
-      const [x, y, w, h] = box(); c.strokeRect(x, y, w, h);
-      const n = tableCounts(d.start, d.cur, layer); c.setLineDash([2 * px, 2 * px]);
-      for (let i = 1; i < n.cols; i++) line(c, [x + w * i / n.cols, y], [x + w * i / n.cols, y + h]);
-      for (let i = 1; i < n.rows; i++) line(c, [x, y + h * i / n.rows], [x + w, y + h * i / n.rows]);
-      c.setLineDash([]);
+    else if (d.shape === "table") {   // the table KiCad would make of the drag: it hangs from the first click
+      const L = tableGrid(d.start, d.cur, layer, ctx.gridPitch || 0), w = L.cols * L.cw, h = L.rows * L.ch;
+      c.strokeRect(L.x, L.y, w, h);
+      for (let i = 1; i < L.cols; i++) line(c, [L.x + L.cw * i, L.y], [L.x + L.cw * i, L.y + h]);
+      for (let i = 1; i < L.rows; i++) line(c, [L.x, L.y + L.ch * i], [L.x + w, L.y + L.ch * i]);
     } else if (d.shape === "garc") drawArcPreview(c, d, px, color(layer)); else if (d.shape === "gcurve") {
       const pts = d.pts.concat([d.cur]); polyline(c, K.bezierPts(pts), false);
       c.setLineDash([2 * px, 2 * px]); polyline(c, pts, false); c.setLineDash([]);   // the control polygon
@@ -7746,7 +7745,7 @@ const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V vi
   grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes",
   garc: "Arc — click the points the drawing mode asks for; / switches the posture, Alt+/ the mode, Backspace takes back a point", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
   gcurve: "Bezier — click the start, the first control point, the second control point, then the end",
-  gtextbox: "Text box — click two corners, then type the text", table: "Table — click two corners, then give rows x cols",
+  gtextbox: "Text box — click two corners", table: "Table — click the top-left corner, then the size",
   image: "Image — choose a PNG or JPEG, then click where its centre goes",
   zone: "Zone — click the corners; click the first corner or press Enter to close, then pick the net",
   rulearea: "Rule area — click the corners on F.Cu and B.Cu; click the first corner or press Enter to close",
@@ -8058,7 +8057,7 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, setTargetSkew, coupledLength, TUNE_MSG_SKEW_PICK, TUNE_MSG_SKEW_NETS, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
-  layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
+  layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableGrid, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
   zoneNode, ruleAreaNode, zonePriority, boardNets, dimensionNode, dimGeometry, dimRead, dimUpdate, dimWrite, dimEditPoints, dimEditNode, dimBaseText, dimValueText, readableAngle, snap45, typeNameOf, deleteChanges,
   DIM_TYPE, DIM_CLASS, TEXTBOX_MARGIN, EXT_HEIGHT, ARROW_LEN, EXT_OFFSET, RULE_AREA_LAYERS,
   // the parity pass

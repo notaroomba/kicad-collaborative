@@ -8,6 +8,7 @@
 import { box, checkField, form, grid, h, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
+import { tableDialog } from "./table";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -528,6 +529,7 @@ export function pcbItemDialog(ctx: ToolCtx, item: KItem): boolean {
     case "zone": return kid(item.node, "keepout") ? ruleAreaDialog(ctx, item) : Array.from(zoneLayerSet(ctx.doc, item.node)).some((l) => /\.Cu$/.test(l)) ? zoneDialog(ctx, item) : nonCopperZoneDialog(ctx, item);
     case "gr_text": return textDialog(ctx, item);
     case "gr_text_box": return textBoxDialog(ctx, item);
+    case "table": return tableDialog(ctx, item);
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return shapeDialog(ctx, item);
     case "footprint": return footprintDialog(ctx, item);
     case "dimension": return dimensionDialog(ctx, item);

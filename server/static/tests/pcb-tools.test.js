@@ -648,32 +648,37 @@ test("module: text box takes two corners and the prompt; the node follows the wr
   assert.deepEqual(K.kid(K.kid(P.textBoxNode("x", [0, 0], [5, 5], "B.SilkS"), "effects"), "justify"), ["justify", "left", "top", "mirror"]);
 });
 
-test("module: table takes two corners and 'rows x cols'; the node carries the writer's border, separators, widths and cells", () => {
-  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
-  let initial = null; pcb.setPrompt((t, i, client, done) => { initial = i; done(t === "Table rows x cols" ? "2 x 3" : null); });
-  ctx.setTool("table"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [40, 16], ctx);
-  assert.equal(initial, "2 x 2", "KiCad's own sizing of a 30 × 6 mm drag: 15 and 3 text sizes per cell");
-  const c = log.commits.at(-1); assert.equal(c.label, "table"); assert.equal(c.changes[0].typeName, "PCB_TABLE");
-  const node = lastNode(log, "table");
-  assert.deepEqual(node[1], ["column_count", 3]); assert.deepEqual(node[2], ["uuid", c.changes[0].id]);
-  assert.deepEqual(node.slice(3, 8), [["layer", "F.SilkS"], ["border", ["external", "yes"], ["header", "yes"], ["stroke", ["width", 0.1], ["type", "default"]]],
-    ["separators", ["rows", "yes"], ["cols", "yes"], ["stroke", ["width", 0.1], ["type", "default"]]], ["column_widths", 10, 10, 10], ["row_heights", 3, 3]]);
-  const cells = node[8]; assert.equal(cells[0], "cells"); assert.equal(cells.length, 7); assert.equal(node.length, 9);
-  const uuids = new Set();
-  cells.slice(1).forEach((cell, i) => {
-    const r = Math.floor(i / 3), col = i % 3;
-    assert.deepEqual(cell.slice(0, 6), ["table_cell", "", ["start", 10 + col * 10, 10 + r * 3], ["end", 20 + col * 10, 13 + r * 3], ["margins", 1.0025, 1.0025, 1.0025, 1.0025], ["span", 1, 1]]);
-    assert.deepEqual(cell[6], ["layer", "F.SilkS"]); assert.equal(cell[7][0], "uuid"); uuids.add(cell[7][1]);
-    assert.deepEqual(cell.slice(8), [["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]], ["knockout", "no"]]);
-  });
-  assert.equal(uuids.size, 6, "every cell has its own uuid");
-  assert.equal(doc.items.get(c.changes[0].id).kind, "table");
-  // nonsense sizes are refused and the box dropped; the grid rounds the cell size like KiCad; back layers mirror the cells
-  const n = log.commits.length; pcb.setPrompt((t, i, cl, done) => done("lots"));
-  pcb.onPointerDown(ev(), [50, 50], ctx); pcb.onPointerDown(ev(), [60, 55], ctx); assert.equal(log.commits.length, n); assert.ok(log.toasts.at(-1).includes("rows x cols"));
-  assert.deepEqual(P.tableLayout([0, 0], [10.3, 4.1], 1, 1, "F.SilkS", 0.5), { x: 0, y: 0, cw: 10.5, ch: 4, rows: 1, cols: 1 });
-  assert.deepEqual(K.kid(K.kid(P.tableNode([0, 0], [10, 3], 1, 1, "B.SilkS", 0)[8][1], "effects"), "justify"), ["justify", "left", "mirror"]);
+test("module: Draw Table sizes the table from the drag as DRAWING_TOOL::DrawTable, opens Table Properties, and writes PCB_TABLE in the writer's order", () => {
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx); ctx.gridPitch = 0;
+  let seen = null, reply = (n, done) => done(n);
+  pcb.setNewItemDialogs({ table: (c, node, done) => { seen = node; reply(node, done); return true; } });
+  try {
+    ctx.setTool("table"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerMove(ev(), [40, 16], ctx); pcb.onPointerDown(ev(), [40, 16], ctx);
+    assert.ok(seen, "Table Properties opens on the new table");
+    const c = log.commits.at(-1); assert.equal(c.label, "Draw Table"); assert.equal(c.changes[0].typeName, "PCB_TABLE");
+    const node = lastNode(log, "table");
+    assert.deepEqual(node[1], ["uuid", c.changes[0].id]); assert.deepEqual(node[2], ["layer", "F.SilkS"]); assert.deepEqual(node[3], ["column_count", 2]);
+    assert.deepEqual(node.slice(4, 8), [["border", ["external", "yes"], ["header", "yes"], ["stroke", ["width", 0.1], ["type", "default"]]],
+      ["separators", ["rows", "yes"], ["cols", "yes"], ["stroke", ["width", 0.1], ["type", "default"]]], ["column_widths", 15, 15], ["row_heights", 3, 3]]);
+    const cells = node[8]; assert.equal(cells[0], "cells"); assert.equal(cells.length, 5); assert.equal(node.length, 9);
+    const uuids = new Set();
+    cells.slice(1).forEach((cell, i) => {
+      const r = Math.floor(i / 2), col = i % 2;
+      assert.deepEqual(cell.slice(0, 6), ["table_cell", "", ["start", 10 + col * 15, 10 + r * 3], ["end", 25 + col * 15, 13 + r * 3], ["margins", 1.0025, 1.0025, 1.0025, 1.0025], ["span", 1, 1]]);
+      assert.deepEqual(cell[6], ["layer", "F.SilkS"]); assert.equal(cell[7][0], "uuid"); uuids.add(cell[7][1]);
+      assert.deepEqual(cell.slice(8), [["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left"]], ["knockout", "no"]]);
+    });
+    assert.equal(uuids.size, 4, "every cell has its own uuid");
+    assert.deepEqual([...P.state.sel], [c.changes[0].id], "the new table is selected");
+    // Cancel drops it; a drag up and left still hangs one minimum cell from the first click
+    const n = log.commits.length; reply = (nd, done) => done(null);
+    pcb.onPointerDown(ev(), [50, 50], ctx); pcb.onPointerDown(ev(), [60, 55], ctx); assert.equal(log.commits.length, n);
+  } finally { pcb.setNewItemDialogs({ table: null }); pcb.onActivate("select", ctx); }
+  assert.deepEqual(P.tableGrid([20, 20], [10, 10], "F.SilkS", 0), { x: 20, y: 20, cw: 5, ch: 3, rows: 1, cols: 1 });
+  assert.deepEqual(P.tableGrid([0, 0], [10.3, 4.1], "F.SilkS", 0.5), { x: 0, y: 0, cw: 10.5, ch: 4, rows: 1, cols: 1 });
+  assert.deepEqual(K.kid(K.kid(P.tableNode([0, 0], [10, 3], "B.SilkS", 0)[8][1], "effects"), "justify"), ["justify", "left", "mirror"]);
 });
+
 
 // a PNG built from its chunks: 8-bit RGB, a pHYs of 3937 px/m (100 ppi), proper CRCs
 function crc32(buf) { let crc = 0xFFFFFFFF; for (const b of buf) { let c = (crc ^ b) & 0xFF; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crc = (crc >>> 8) ^ c; } return (crc ^ 0xFFFFFFFF) >>> 0; }
@@ -2070,6 +2075,31 @@ test("Text Box Properties: values round-trip; OK writes size, pen, flags, justif
   r = T.applyTextBox(node, { ...v, text: Array(10).fill("x").join("\n") }, v);
   assert.ok(K.num(K.kid(r.node, "end")[2]) > 30, "taller");
   assert.equal(K.num(K.kid(r.node, "end")[1]), 40, "the width is free");
+});
+
+// (after the module tests: loading a dialog bundle installs the editor state the board module then sees)
+test("Table Properties: cells read and write as the table reads (reversed on the back); strokes as DIALOG_TABLE_PROPERTIES writes them", () => {
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "table.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; globalThis.window = globalThis.window || globalThis; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require);
+  const T = mod.exports;
+  const node = P.tableNode([0, 0], [30, 6], "F.SilkS", 0);
+  const v = T.tableValues(node);
+  assert.deepEqual(v, { cells: [["", ""], ["", ""]], layer: "F.SilkS", locked: false, external: true, header: true, borderWidth: 0.1, borderStyle: "solid", rows: true, cols: true, sepWidth: 0.1, sepStyle: "solid" });
+  let n = T.applyTable(node, { ...v, cells: [["A", "B"], ["C\nD", ""]] });
+  const cells = K.kids(K.kid(n, "cells"), "table_cell");
+  assert.deepEqual(cells.map((c) => c[1]), ["A", "B", "C\nD", ""]);
+  assert.ok(K.serialize(n).includes("(border (external yes) (header yes) (stroke (width 0.1) (type solid)))"), "DEFAULT becomes the combo's Solid");
+  n = T.applyTable(node, { ...v, external: false, header: false, cols: false, sepStyle: "dash", layer: "F.Fab", locked: true });
+  const s = K.serialize(n);
+  assert.ok(s.includes("(border (external no) (header no))"), "no border lines: no stroke written");
+  assert.ok(s.includes("(separators (rows yes) (cols no) (stroke (width 0.1) (type dash)))"), s);
+  assert.ok(/^\(table \(uuid "[^"]+"\) \(locked yes\) \(layer "F\.Fab"\) \(column_count 2\)/.test(s), s.slice(0, 120));
+  assert.equal((s.match(/\(layer "F\.Fab"\)/g) || []).length, 5, "the table and its four cells change layer together");
+  // a back-layer table lists its columns as it reads (mirrored)
+  const back = P.tableNode([0, 0], [30, 6], "B.SilkS", 0);
+  n = T.applyTable(back, { ...T.tableValues(back), cells: [["left", "right"], ["", ""]] });
+  assert.deepEqual(K.kids(K.kid(n, "cells"), "table_cell").slice(0, 2).map((c) => c[1]), ["right", "left"]);
 });
 
 test("Draw Dimension takes Board Setup's dimension defaults; Switch Dimension Arrows flips the arrows of the one being drawn", () => {
