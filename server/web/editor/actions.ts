@@ -16,10 +16,13 @@ import { api, esc, setRadio, showPopover, toast } from "./util";
 import { applyView, fitView, isSch, requestRender, zoomBy } from "./view";
 import { show3DViewer } from "./viewer3d-loader";
 import { openFabOutputs } from "./fab-outputs";
+import { openPlotDialog } from "./pcbdialogs/plot";
+import { openGendrill } from "./pcbdialogs/gendrill";
+import { openPosFile } from "./pcbdialogs/posfile";
+import { openPlotSchematic } from "../dialogs/plot-schematic";
+import { printDialog } from "./print";
 import type { AppAction } from "../store";
 import type { ActionAnchor, ActionHandler, ItemSummary } from "./types";
-/** File > Print's remembered choices (E.printOpts). */
-interface PrintOpts { mono?: boolean; frame?: boolean; background?: boolean; scale?: string; custom?: number; layers?: string[] | null; layersDoc?: KDoc }
 // ---- actions (the home menu's entries and the collab items of the editor menus) ----
 export async function runAction(act: string, el?: ActionAnchor) {
   const id = state.project && state.project.projectId;
@@ -59,118 +62,6 @@ export async function runAction(act: string, el?: ActionAnchor) {
     case "checkpoint": if (!id) break; saveVersionDialog(); showPane("history", true); break;   // the Save Version dialog (components/VersionHistory.tsx)
     case "kicad": showPopover("kicad", null, el); break;
   }
-}
-
-/** File → Plot: SVG or PNG of the current document (KiCad's plot dialog, the web's subset). */
-export function plotDialog() {
-  if (!E.kdoc || !window.KDialogs) return;
-  const name = (state.docs!.find((d) => d.docId === state.docId) || {} as { path?: string }).path || (isSch() ? "sheet.kicad_sch" : "board.kicad_pcb");
-  const stem = name.split("/").pop()!.replace(/\.kicad_(sch|pcb)$/, "");
-  KDialogs!.open({ title: "Plot", width: 460,
-    build(body: HTMLElement) {
-      body.innerHTML = `<div class="kv"><label>Format</label><select id="kd-fmt"><option value="svg">SVG</option><option value="png">PNG</option></select>
-        <label>Resolution (PNG)</label><input id="kd-dpi" type="number" value="300" min="72" max="1200" step="1">
-        <label>Content</label><select id="kd-scope"><option value="all">Whole ${isSch() ? "sheet" : "board"}</option><option value="sel"${E.selection.size ? "" : " disabled"}>Selection only</option></select>
-        <label></label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="kd-bg" type="checkbox" style="width:auto;margin:0"> Include background</label>
-        <label></label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="kd-hid" type="checkbox" style="width:auto;margin:0"${isSch() ? "" : " disabled"}> Show hidden pins</label></div>
-        <p class="kd-note" style="margin-top:10px">Hidden layers stay hidden; the file downloads as ${esc(stem)}.svg / .png.</p>`;
-    },
-    okLabel: "Plot",
-    ok() {
-      const g = (id: string) => document.querySelector("#" + id) as HTMLInputElement;
-      const fmt = g("kd-fmt").value, dpi = Math.max(72, Math.min(1200, +g("kd-dpi").value || 300));
-      const opts: { hidden: Set<string>; background?: false; showHiddenPins: boolean; zoneOutline: boolean; ids?: string[] } = { hidden: E.hiddenLayers, background: g("kd-bg").checked ? undefined : false, showHiddenPins: !!g("kd-hid").checked, zoneOutline: !!E.renderOpts.zoneOutline };
-      if (g("kd-scope").value === "sel" && E.selection.size) opts.ids = [...E.selection];
-      const download = (blob: Blob, ext: string) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${stem}.${ext}`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
-      try {
-        if (fmt === "svg") { download(new Blob([KiCadCanvas.renderSvg(E.kdoc, opts)], { type: "image/svg+xml" }), "svg"); toast("Plotted " + stem + ".svg"); }
-        else { toast("Rendering PNG…"); KiCadCanvas.renderPng(E.kdoc, Object.assign({ dpi }, opts, E.renderOpts)).then((blob) => { download(blob, "png"); toast("Plotted " + stem + ".png"); }).catch((e) => { console.warn(e); toast("PNG export failed"); }); }
-      } catch (e) { console.warn(e); toast("Plot failed: " + ((e as Error).message || e)); }
-    } });
-}
-
-/**
- * File → Print: KiCad's Print dialog (eeschema DIALOG_PRINT / pcbnew DIALOG_PRINT_PCBNEW on
- * DIALOG_PRINT_GENERIC): output mode, drawing sheet, scale (and the board's included layers), then
- * Print Preview / Print / Close.  Printing renders the document as SVG into a window the browser prints.
- */
-export function printDialog() {
-  if (!E.kdoc) return;
-  if (!window.KDialogs) { printDocument({}); return; }
-  const sch = isSch();
-  const P: PrintOpts = E.printOpts || (E.printOpts = { mono: false, frame: true, background: false, scale: "fit", custom: 1, layers: null });
-  const layerNames: string[] = sch || !E.kdoc.layers ? [] : [...E.kdoc.layers.keys()];
-  if (P.layersDoc !== E.kdoc) { P.layers = null; P.layersDoc = E.kdoc; }   // another board: its own layers, not the last one's
-  const included = new Set(P.layers || layerNames.filter((l) => !(E.hiddenLayers && E.hiddenLayers.has(l))));
-  const cb = (id: string, on: unknown, label: string, dis?: unknown) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
-  const radio = (name: string, value: string, on: boolean, label: string) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="radio" name="${name}" value="${value}" style="width:auto;margin:0"${on ? " checked" : ""}> ${esc(label)}</label>`;
-  const read = () => {
-    const g = (id: string) => document.querySelector("#" + id) as HTMLInputElement;
-    P.mono = g("kd-pr-mode").value === "bw"; P.frame = !!g("kd-pr-frame").checked;
-    if (sch) P.background = !!g("kd-pr-bg").checked;
-    else {
-      const r = document.querySelector<HTMLInputElement>('input[name="kd-pr-scale"]:checked'); P.scale = r ? r.value : "fit";
-      P.custom = Math.max(0.01, Math.min(100, +g("kd-pr-custom").value || 1));
-      P.layers = [...document.querySelectorAll<HTMLInputElement>(".kd-pr-layer")].filter((c) => c.checked).map((c) => c.dataset.layer!);
-    }
-  };
-  KDialogs!.open({ title: "Print", width: sch ? 420 : 560,
-    build(body: HTMLElement) {
-      const options = `<h3>Options</h3>
-        <div class="kv"><label>Output mode:</label><select id="kd-pr-mode"><option value="color"${P.mono ? "" : " selected"}>Color</option><option value="bw"${P.mono ? " selected" : ""}>Black and White</option></select></div>
-        <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${cb("kd-pr-frame", P.frame, "Print drawing sheet")}${sch ? cb("kd-pr-bg", P.background, "Print background color") : ""}</div>`;
-      if (sch) { body.innerHTML = options; return; }
-      const layers = layerNames.map((l) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input class="kd-pr-layer" data-layer="${esc(l)}" type="checkbox" style="width:auto;margin:0"${included.has(l) ? " checked" : ""}> ${esc(l)}</label>`).join("");
-      body.innerHTML = `<div class="kd-cols" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div><h3>Included Layers</h3><div style="max-height:260px;overflow:auto;border:1px solid var(--line);padding:4px 6px;display:flex;flex-direction:column;gap:2px">${layers}</div></div>
-        <div>${options}<h3>Scale</h3><div style="display:flex;flex-direction:column;gap:6px">${radio("kd-pr-scale", "1", P.scale === "1", "1:1")}${radio("kd-pr-scale", "fit", P.scale === "fit", "Fit to page")}
-          <div style="display:flex;gap:6px;align-items:center">${radio("kd-pr-scale", "custom", P.scale === "custom", "Custom:")}<input id="kd-pr-custom" type="number" min="0.01" max="100" step="0.1" value="${P.custom}" style="width:80px"></div></div></div></div>`;
-    },
-    buttons: [
-      { label: "Print Preview", fn: () => { read(); printDocument(P, true); } },
-      { label: "Print", primary: true, isDefault: true, fn: () => { read(); printDocument(P, false); } },
-      { label: "Close", close: true },
-    ] });
-}
-
-/**
- * Black and White: KiCad prints every item in black on white paper.  On a schematic a pale *fill* (a symbol
- * body, a sheet background) stays paper white; strokes and text are always black.  Translucent colours (mask
- * layers) keep their alpha, so a print does not turn into one black slab.
- */
-function monochrome(svg: string, sch: boolean) {
-  const lum = (r: number, g: number, b: number) => (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  const map = (k: string, c: string) => {
-    let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c), r: number, g: number, b: number, a = 1;
-    if (m) { let h = m[1]; if (h.length === 3) h = h.replace(/./g, "$&$&"); r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16); }
-    else if ((m = /^rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+))?/i.exec(c))) { r = +m[1]; g = +m[2]; b = +m[3]; if (m[4] !== undefined) a = +m[4]; }
-    else return c;
-    if (sch && k === "fill" && lum(r, g, b) > 0.85) return "#ffffff";
-    return a < 1 ? `rgba(0,0,0,${a})` : "#000000";
-  };
-  return svg.replace(/\b(fill|stroke)="([^"]+)"/g, (all: string, k: string, c: string) => (c === "none" ? all : `${k}="${map(k, c)}"`));
-}
-
-/** Render the document for printing and open it in a print window (preview: shown, not printed). */
-export function printDocument(P: PrintOpts | null | undefined, preview?: boolean) {
-  if (!E.kdoc) return;
-  P = P || {}; const sch = isSch();
-  const hidden = new Set<string>(E.hiddenLayers || []);
-  if (!sch && P.layers) for (const l of E.kdoc.layers ? E.kdoc.layers.keys() : []) { if (P.layers.includes(l)) hidden.delete(l); else hidden.add(l); }
-  const frame = P.frame !== false;
-  const opts: { hidden: Set<string>; background?: false; zoneOutline: boolean; frame: boolean; bbox?: number[] } = { hidden, background: sch && P.background ? undefined : false, zoneOutline: !!E.renderOpts.zoneOutline, frame };
-  if (!sch && frame && E.kdoc.page) opts.bbox = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
-  let svg: string; try { svg = KiCadCanvas.renderSvg(E.kdoc, opts); } catch (e) { toast("Print failed: " + ((e as Error).message || e)); return; }
-  if (P.mono) svg = monochrome(svg, sch);
-  // 1:1 keeps the SVG's own millimetre size; Custom scales it; Fit to page (and a schematic page) fills the paper
-  const m = /width="([\d.]+)mm" height="([\d.]+)mm"/.exec(svg);
-  const k = !sch && P.scale === "1" ? 1 : !sch && P.scale === "custom" ? (P.custom || 1) : 0;
-  const size = k && m ? `svg{width:${(+m[1] * k).toFixed(2)}mm;height:${(+m[2] * k).toFixed(2)}mm}` : "svg{width:100%;height:auto;max-height:100vh}";
-  const w = window.open("", "_blank"); if (!w) { toast("Allow pop-ups to print"); return; }
-  w.document.write(`<!doctype html><title>${preview ? "Print Preview" : "Print"}</title><style>html,body{margin:0;background:#fff}${size}@page{margin:10mm}</style>${svg}`); w.document.close();
-  if (preview) return;
-  let printed = false; const go = () => { if (printed) return; printed = true; try { w.print(); } catch (e) { /* the window was closed */ } };
-  w.addEventListener("load", () => setTimeout(go, 200)); setTimeout(go, 800);
 }
 
 export function toggleRenderOpt(key: string, id: string) { E.renderOpts[key] = !E.renderOpts[key]; setToggle(id, !!E.renderOpts[key]); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); }
@@ -222,9 +113,11 @@ export const HANDLERS: Record<string, ActionHandler> = {
   zoneFillPreview: () => toggleRenderOpt("zoneFill", "zoneFillPreview"),
   showPadNumbers: () => { E.renderOpts.padNumbers = E.renderOpts.padNumbers === false; setToggle("showPadNumbers", E.renderOpts.padNumbers !== false); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); },
   clearMarkers: () => { E.markers = []; E.renderOpts.markers = undefined; const m = activeModule(); if (m && m.actions && m.actions.clearMarkers) { try { m.actions.clearMarkers.run(toolCtx()); } catch (e) { /* module without markers */ } } store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); },
-  plot: () => plotDialog(),
+  plot: () => { if (isSch()) void openPlotSchematic(); else void openPlotDialog(); },
   show3DViewer: () => show3DViewer(),
-  generateGerbers: () => openFabOutputs("gerber"), generateDrillFiles: () => openFabOutputs("drill"), generatePosFile: () => openFabOutputs("placement"),
+  // DIALOG_PLOT set to Gerber, DIALOG_GENDRILL, DIALOG_GEN_FOOTPRINT_POSITION; the order-form package is the web's own entry
+  generateGerbers: () => { void openPlotDialog({ gerber: true }); }, generateDrillFiles: () => { void openGendrill(); }, generatePosFile: () => { void openPosFile(); },
+  fabPackage: () => openFabOutputs("gerber"),
   print: () => printDialog(),
   // the Line Modes radio: the schematic's wire modes, or the board's angle snap (PCB_ACTIONS::lineModeFree / 90 / 45)
   lineModeFree: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "free"); else runModuleAction("lineModeFree"); syncSchModes(); },

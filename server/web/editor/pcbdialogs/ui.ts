@@ -119,7 +119,8 @@ const CSS = `
 textarea.pd-text { width: 100%; min-height: 260px; font-family: var(--mono); font-size: 12px; white-space: pre; }
 `;
 let cssDone = false;
-function ensureCss(): void {
+/** The kit's stylesheet, for a dialog opened with KDialogs.open directly (its own button row). */
+export function ensureCss(): void {
   if (cssDone || typeof document === "undefined") return;
   cssDone = true;
   const st = document.createElement("style"); st.id = "pcbdialogs-css"; st.textContent = CSS; document.head.appendChild(st);

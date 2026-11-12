@@ -159,6 +159,42 @@ test("PostScript and DXF", async () => {
   assert.ok(/\nLAYER\n2\nEdge.Cuts\n/.test(dxf) && /\$INSUNITS\n70\n4\n/.test(dxf) && /\nPOLYLINE\n/.test(dxf) && dxf.endsWith("EOF\n"));
 });
 
+test("Drill files: Excellon and Gerber X2 sets, drill maps and the report (DIALOG_GENDRILL)", () => {
+  const base = { metric: true, zeros: "decimal", merge: false, minimalHeader: false, mirrorY: false, ovalMode: "route", useAuxOrigin: false, genDrill: true, genMap: false, mapFormat: 4, gerberPrecision: 6, outputDir: "fab" };
+  const ex = F.drillJob(ctx, base);
+  assert.deepStrictEqual(ex.files.map((f) => f.path), ["fab/t-PTH.drl", "fab/t-NPTH.drl"]);
+  assert.deepStrictEqual(ex.report.map((l) => l.text), ["Created file 'fab/t-PTH.drl'", "Created file 'fab/t-NPTH.drl'", "Done."]);
+  const gb = F.drillJob(ctx, Object.assign({}, base, { format: "gerber", genMap: true, mapFormat: 5 }));
+  assert.deepStrictEqual(gb.files.map((f) => f.name), ["t-PTH-drl.gbr", "t-NPTH-drl.gbr", "t-PTH-drl_map.svg", "t-NPTH-drl_map.svg"]);
+  const pth = String(gb.files[0].data);
+  assert.ok(/%TF.FileFunction,Plated,1,2,PTH,(Drill|Mixed|Rout)\*%/.test(pth), pth.slice(0, 400));
+  assert.ok(/%TF.FilePolarity,Positive\*%/.test(pth));
+  assert.ok(/%TA.AperFunction,ViaDrill\*%/.test(pth) && /%TA.AperFunction,ComponentDrill\*%/.test(pth));
+  assert.ok(/%TO.C,J1\*%/.test(pth), "a pad hole carries its component");
+  assert.ok(/%TF.FileFunction,NonPlated,1,2,NPTH,/.test(String(gb.files[1].data)));
+  assert.ok(/^<\?xml/.test(String(gb.files[2].data)) && /<path|<circle|<polyline/.test(String(gb.files[2].data)), "the map is a drawing");
+  assert.strictEqual(gb.report[gb.report.length - 1].text, "Done.");
+  const rpt = F.drillReport(ctx, { merge: false, gerber: false });
+  const lines = rpt.split("\n");
+  assert.strictEqual(lines[0], "Drill report for t.kicad_pcb");
+  assert.ok(/^Created on \d{4}-\d\d-\d\dT/.test(lines[1]));
+  assert.ok(rpt.includes("Copper Layer Stackup:\n    =============================================================\n    L1 :  F.Cu                      front\n    L2 :  B.Cu                      back\n"), rpt.slice(0, 300));
+  assert.ok(rpt.includes("Drill file 't-PTH.drl' contains\n    plated through holes:\n"));
+  assert.ok(/    T\d+  1\.000mm  0\.0394"  \(\d+ holes?\)?/.test(rpt));
+  assert.ok(rpt.includes("Drill file 't-NPTH.drl' contains\n    unplated through holes:\n") && /Total unplated holes count \d+\n$/.test(rpt));
+  assert.ok(F.drillReport(ctx, { merge: true, gerber: false }).includes("Not plated through holes are merged with plated holes\n"));
+});
+
+test("Placement files: the plain-text file in inches and the CSV (DIALOG_GEN_FOOTPRINT_POSITION)", () => {
+  const rows = F.positions(ctx, { side: "both" });
+  const mm = F.placementAscii(rows, "both", "2026-01-01 00:00:00", "Pcbnew test");
+  const inch = F.placementAscii(rows, "both", "2026-01-01 00:00:00", "Pcbnew test", true);
+  assert.ok(mm.includes("## Unit = mm, Angle = deg.") && inch.includes("## Unit = inches, Angle = deg."));
+  const r1 = rows.find((r) => r.ref === "R1");
+  assert.ok(inch.includes((r1.x / 25.4).toFixed(4)), "inches are mm / 25.4");
+  assert.ok(F.placementCsv(rows, true).split("\n")[0] === "Ref,Val,Package,PosX,PosY,Rot,Side");
+});
+
 test("plot recorder: the painter drawn as plot items (strokes, fills, dashes split, transforms applied)", () => {
   const { rec } = K.plot.plotRecorder({ width: 100, height: 100, ppm: 10 });
   rec.setTransform(10, 0, 0, 10, 0, 0);

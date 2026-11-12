@@ -2,7 +2,7 @@
 // (editor/actions.ts) under KiCad's action ids so the menu entries, toolbar buttons and hotkeys light up:
 //
 //   File     Save a Copy / Save Current Sheet Copy As (download the document), Export > Netlist and
-//            Drawing to Clipboard, Plot (SVG / PNG / PDF of the whole sheet or board, with the layer list)
+//            Drawing to Clipboard (File > Plot is pcbdialogs/plot.ts and dialogs/plot-schematic.ts)
 //   Edit     Properties, Move / Drag (schematic)
 //   View     Zoom to Selected Objects, zoom at cursor, centre on cursor, pan, grid next / previous,
 //            units (remembered), reset local coordinates, Show Hidden Fields, sheet navigation
@@ -129,92 +129,6 @@ function exportNetlist(): void {
   download(text, stem + ".net"); toast("Exported " + stem + ".net (this sheet)");
 }
 
-// ---------------------------------------------------------------- plot
-/** A one-page PDF holding a JPEG (DCTDecode) at the given physical size. */
-export function pdfFromJpeg(jpeg: Uint8Array, wPx: number, hPx: number, wMm: number, hMm: number): Blob {
-  const pt = (mm: number) => (mm * 72 / 25.4).toFixed(2);
-  const enc = new TextEncoder(); const parts: Uint8Array[] = []; const offsets: number[] = []; let len = 0;
-  const push = (d: Uint8Array | string) => { const b = typeof d === "string" ? enc.encode(d) : d; parts.push(b); len += b.length; };
-  const obj = (n: number, body: string) => { offsets[n] = len; push(`${n} 0 obj\n${body}\nendobj\n`); };
-  push("%PDF-1.4\n%âãÏÓ\n");
-  obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
-  obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
-  obj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pt(wMm)} ${pt(hMm)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
-  offsets[4] = len; push(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${wPx} /Height ${hPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`); push(jpeg); push("\nendstream\nendobj\n");
-  const content = `q ${pt(wMm)} 0 0 ${pt(hMm)} 0 0 cm /Im0 Do Q`;
-  obj(5, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
-  const xref = len;
-  push(`xref\n0 6\n0000000000 65535 f \n${[1, 2, 3, 4, 5].map((n) => String(offsets[n]).padStart(10, "0") + " 00000 n \n").join("")}trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
-  return new Blob(parts as BlobPart[], { type: "application/pdf" });
-}
-
-interface LayerRow { key: string; name: string; color: string }
-/** File > Plot: the whole sheet / board (or the selection) as SVG, PNG or PDF, with KiCad's "Include Layers" list on a board. */
-export function plotDialog(): void {
-  const K = W.KiCadCanvas, D = W.KDialogs;
-  if (!E.kdoc || !D) return;
-  const sch = isSch(); const { stem } = fileStem();
-  const layers = (store.get().document.layers || []) as LayerRow[];
-  D.open({ title: "Plot", width: sch ? 460 : 620,
-    build(body) {
-      const layerList = sch ? "" : `<div><h3>Include Layers</h3><div id="kd-layers" style="max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:var(--r-2);padding:4px 6px;background:var(--panel)">
-        ${layers.map((l) => `<label style="display:flex;gap:6px;align-items:center;padding:1px 0;color:var(--ink)"><input type="checkbox" data-layer="${esc(l.key)}" style="width:auto;margin:0"${E.hiddenLayers.has(l.key) ? "" : " checked"}><i style="width:10px;height:10px;border-radius:var(--r-1);display:inline-block;background:${esc(l.color)}"></i>${esc(l.name)}</label>`).join("")}</div>
-        <div class="actions" style="display:flex;gap:6px;margin-top:6px"><button type="button" class="btn sm" id="kd-all">Select All</button><button type="button" class="btn sm" id="kd-none">Deselect All</button></div></div>`;
-      const check = (id: string, label: string, on: boolean, off?: boolean) => `<label></label><label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${off ? " disabled" : ""}> ${label}</label>`;
-      body.innerHTML = `<div style="display:grid;grid-template-columns:${sch ? "1fr" : "220px 1fr"};gap:6px 18px">${layerList}<div><h3>${sch ? "Options" : "General Options"}</h3><div class="kv">
-        <label>Plot format</label><select id="kd-fmt"><option value="svg">SVG</option><option value="pdf">PDF</option><option value="png">PNG</option></select>
-        <label>Content</label><select id="kd-scope"><option value="all">${sch ? "Whole sheet" : "Whole board"}</option>${sch ? "" : '<option value="page">Whole page</option>'}<option value="sel"${E.selection.size ? "" : " disabled"}>Selection only</option></select>
-        <label>Resolution (PNG, PDF)</label><input id="kd-dpi" type="number" value="${sch ? 300 : 600}" min="72" max="2400" step="1">
-        ${sch ? `<label>Color theme</label><select id="kd-theme">${Object.entries(KiCadCanvas.SCH_THEMES).map(([id, t]) => `<option value="${id}">${esc(t.name)}</option>`).join("")}</select>` : ""}
-        ${check("kd-frame", "Plot drawing sheet", sch)}
-        ${check("kd-bg", sch ? "Plot background color" : "Plot background color", false)}
-        ${sch ? check("kd-hid", "Show hidden pins", !!E.renderOpts.showHiddenPins) : ""}</div>
-        <p class="kd-note" style="margin-top:10px">Output: ${esc(stem)}.svg / .pdf / .png, downloaded by the browser.</p></div></div>`;
-      const boxes = () => Array.from(body.querySelectorAll<HTMLInputElement>("[data-layer]"));
-      const all = body.querySelector("#kd-all"), none = body.querySelector("#kd-none");
-      if (all) all.addEventListener("click", () => boxes().forEach((b) => { b.checked = true; }));
-      if (none) none.addEventListener("click", () => boxes().forEach((b) => { b.checked = false; }));
-    },
-    okLabel: "Plot",
-    ok() {
-      const g = <T extends HTMLElement>(id: string) => document.querySelector<T>("#" + id);
-      const fmt = g<HTMLSelectElement>("kd-fmt")!.value, scope = g<HTMLSelectElement>("kd-scope")!.value;
-      const dpi = Math.max(72, Math.min(2400, +g<HTMLInputElement>("kd-dpi")!.value || 300));
-      const withBg = g<HTMLInputElement>("kd-bg")!.checked, frame = g<HTMLInputElement>("kd-frame")!.checked;
-      const hidden = sch ? new Set(E.hiddenLayers) : new Set(Array.from(document.querySelectorAll<HTMLInputElement>("#kd-layers [data-layer]")).filter((b) => !b.checked).map((b) => b.dataset.layer || ""));
-      if (!sch && hidden.size >= layers.length) { toast("Select at least one layer to plot"); return false; }
-      const hid = g<HTMLInputElement>("kd-hid");
-      const opts: Record<string, unknown> = { hidden, showHiddenPins: !!(hid && hid.checked), zoneOutline: !!E.renderOpts.zoneOutline };
-      // DIALOG_PLOT_SCHEMATIC's colour theme: KiCad Default unless another is picked, whatever the screen shows
-      const theme = g<HTMLSelectElement>("kd-theme"); if (theme) opts.colorTheme = theme.value;
-      if (scope === "sel" && E.selection.size) opts.ids = [...E.selection];
-      else if (scope === "page" || (sch && scope === "all")) { opts.bbox = [0, 0, E.kdoc.page[0], E.kdoc.page[1]]; opts.margin = 0; }
-      opts.frame = frame && scope !== "sel";
-      const page = E.kdoc.page as number[], box = E.kdoc.bbox as number[];
-      // the physical size of the plotted area, for the PDF page
-      const area = opts.ids ? null : opts.bbox ? [page[0], page[1]] : [box[2] - box[0] + 2, box[3] - box[1] + 2];
-      try {
-        if (fmt === "svg") {
-          download(new Blob([K.renderSvg(E.kdoc, Object.assign({ background: withBg ? undefined : false }, opts))], { type: "image/svg+xml" }), stem + ".svg");
-          toast("Plotted " + stem + ".svg");
-        } else if (fmt === "png") {
-          toast("Rendering PNG…");
-          K.renderPng(E.kdoc, Object.assign({}, E.renderOpts, { dpi, background: withBg ? undefined : false }, opts)).then((blob) => { download(blob, stem + ".png"); toast("Plotted " + stem + ".png"); })
-            .catch((e: Error) => { console.warn(e); toast("Plot failed: " + e.message, 4000); });
-        } else {
-          toast("Rendering PDF…");
-          // a PDF page is opaque: paper white unless the editor background is asked for
-          K.renderPng(E.kdoc, Object.assign({}, E.renderOpts, { dpi, background: withBg ? undefined : "#ffffff", type: "image/jpeg", quality: 0.92 }, opts)).then(async (blob) => {
-            const bmp = await createImageBitmap(blob); const wPx = bmp.width, hPx = bmp.height; bmp.close();
-            const wMm = area ? area[0] : wPx / dpi * 25.4, hMm = area ? area[1] : hPx / dpi * 25.4;
-            download(pdfFromJpeg(new Uint8Array(await blob.arrayBuffer()), wPx, hPx, wMm, hMm), stem + ".pdf"); toast("Plotted " + stem + ".pdf");
-          }).catch((e: Error) => { console.warn(e); toast("Plot failed: " + e.message, 4000); });
-        }
-      } catch (e) { console.warn(e); toast("Plot failed: " + (e as Error).message, 4000); }
-      return undefined;
-    } });
-}
-
 /** File > Export > Drawing to Clipboard: the sheet as a PNG image on the system clipboard. */
 async function drawingToClipboard(): Promise<void> {
   if (!E.kdoc) return;
@@ -225,6 +139,7 @@ async function drawingToClipboard(): Promise<void> {
   } catch (e) { toast("Couldn't copy the drawing: " + (e as Error).message, 4000); }
 }
 
+interface LayerRow { key: string; name: string; color: string }
 // ---------------------------------------------------------------- view
 /** The cursor's position in stage pixels (zoom-at-cursor and centre-on-cursor work from it). */
 function cursorPx(): [number, number] {
@@ -288,7 +203,6 @@ const leaveSheet = () => { const r = rootSchematic(); if (r && (state as unknown
 export const MENU_HANDLERS: Record<string, ActionHandler> = {
   saveCopy: () => saveDocCopy(), saveCurrSheetCopyAs: () => saveDocCopy(),
   exportNetlist: () => exportNetlist(), drawSheetOnClipboard: () => drawingToClipboard(),
-  plot: () => plotDialog(),
   properties: () => { openSelectionProperties(); },
   zoomFitSelection, zoomIn: () => zoomAtCursor(1.25), zoomOut: () => zoomAtCursor(0.8), zoomCenter: centreOnCursor,
   panUp: () => panStep(0, 1), panDown: () => panStep(0, -1), panLeft: () => panStep(1, 0), panRight: () => panStep(-1, 0),

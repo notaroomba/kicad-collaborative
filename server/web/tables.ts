@@ -93,7 +93,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       ["Import", ["importNetlist|Netlist...", "importSpecctraSession|Specctra Session...", "placeImportedGraphics|Graphics...", "openNonKicadBoard"]],
       ["Export", ["exportSpecctraDSN|Specctra DSN...", "exportGenCAD|GenCAD...", "exportVRML|VRML...", "exportIDF|IDFv3...", "exportSTEP|STEP/GLB/BREP/XAO/PLY/STL...", "exportCmpFile|Footprint Association (.cmp) File...", "exportHyperlynx|Hyperlynx...",
         "-", "exportFootprints|Footprints..."]],
-      ["Fabrication Outputs", ["generateGerbers", "generateDrillFiles", "generateIPC2581File", "generateODBPPFile", "generatePosFile", "generateReportFile", "generateD356File", "generateBOM", "generateBOMLegacy"]],
+      ["Fabrication Outputs", ["generateGerbers", "generateDrillFiles", "generateIPC2581File", "generateODBPPFile", "generatePosFile", "generateReportFile", "generateD356File", "generateBOM", "generateBOMLegacy", "-", "fabPackage"]],
       "-", ...COLLAB_FILE, "-", "boardSetup", "-", "pageSettings", "print", "plot", "-", "home"]],
     ["&Edit", ["undo", "redo", "-", "cut", "copy", "paste", "pasteSpecial", "doDelete", "-",
       ["&Select", ["selectAll", "unselectAll", "-", "filterSelection", "-", "selectConnection", "selectNet", "deselectNet", "selectNetChain", "selectSameSheet", "selectOnSchematic", "module:selectAllOnLayer", "-", "selectUnconnected", "grabUnconnected"]],
@@ -269,7 +269,7 @@ export const HOME_MENUS: [string, MenuEntry[]][] = [];
 
 /** Labels for entries that are ours rather than KiCad TOOL_ACTIONs. */
 export const LOCAL_LABELS: Record<string, string> = {
-  github: "GitHub Sync...", drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
+  github: "GitHub Sync...", fabPackage: "Fabrication Package (JLCPCB, PCBWay)...", drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
   collabCopyLink: "Copy Share Link", collabComments: "Comments...", collabFollow: "Follow Next Peer", collabHistory: "History",
   collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative...", home: "Back to Projects",
   showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",

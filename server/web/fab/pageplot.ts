@@ -31,6 +31,8 @@ export interface PagePlotRequest {
   pageNumber: number; pageCount: number;
   /** the PDF interactive layer (property popups and bookmarks) */
   interactive?: boolean;
+  /** a scale of the user's own (File > Print's Custom), over the scale selection */
+  customScale?: number;
 }
 
 /** PCB_PLOT_PARAMS::GetScale for a scale selection (0 = auto). */
@@ -113,7 +115,7 @@ function fpOnLayers(fp: Footprint, layers: Set<string>): boolean {
 /** One page of a board plot: the drawing sheet, the layer and its companions, the drill marks. */
 export function boardPage(m: BoardModel, r: PagePlotRequest, log: PlotLog): PlotPage {
   const p = r.params, doc = m.doc;
-  const autoScale = p.scaleSelection === 0, scale = SCALES[p.scaleSelection] || 1;
+  const autoScale = !r.customScale && p.scaleSelection === 0, scale = r.customScale || SCALES[p.scaleSelection] || 1;
   const fit = p.format === 5 && !!p.svgFitPageToBoard;
   const mono = p.blackAndWhite;
   const a4 = p.format === 2 && p.a4Output;

@@ -74,19 +74,20 @@ export function placements(m: BoardModel, opt: PlacementOptions): Placement[] {
 }
 
 /** KiCad's CSV placement file. */
-export function placementCsv(rows: Placement[]): string {
-  const L = ["Ref,Val,Package,PosX,PosY,Rot,Side"];
-  for (const r of rows) L.push([csvField(r.ref, true), csvField(r.value, true), csvField(r.pkg, true), r.x.toFixed(6), r.y.toFixed(6), r.rot.toFixed(6), r.side].join(","));
+export function placementCsv(rows: Placement[], inch = false): string {
+  const L = ["Ref,Val,Package,PosX,PosY,Rot,Side"]; const k = inch ? 1 / 25.4 : 1;
+  for (const r of rows) L.push([csvField(r.ref, true), csvField(r.value, true), csvField(r.pkg, true), (r.x * k).toFixed(6), (r.y * k).toFixed(6), r.rot.toFixed(6), r.side].join(","));
   return L.join("\n") + "\n";
 }
 
 /** KiCad's plain-text (.pos) placement file. */
-export function placementAscii(rows: Placement[], side: string, date: string, software: string): string {
+export function placementAscii(rows: Placement[], side: string, date: string, software: string, inch = false): string {
+  const k = inch ? 1 / 25.4 : 1;
   const u = (s: string): string => s.replace(/ /g, "_");
   const lr = Math.max(8, ...rows.map((r) => r.ref.length)), lv = Math.max(8, ...rows.map((r) => r.value.length)), lp = Math.max(16, ...rows.map((r) => r.pkg.length));
-  const L = [`### Footprint positions - created on ${date} ###`, `### Printed by ${software}`, "## Unit = mm, Angle = deg.", `## Side : ${side === "front" ? "top" : side === "back" ? "bottom" : "All"}`,
+  const L = [`### Footprint positions - created on ${date} ###`, `### Printed by ${software}`, inch ? "## Unit = inches, Angle = deg." : "## Unit = mm, Angle = deg.", `## Side : ${side === "front" ? "top" : side === "back" ? "bottom" : "All"}`,
     `${"# Ref".padEnd(lr)}  ${"Val".padEnd(lv)}  ${"Package".padEnd(lp)}  ${"PosX".padStart(9)}  ${"PosY".padStart(9)}  ${"Rot".padStart(8)}  Side`];
-  for (const r of rows) L.push(`${u(r.ref).padEnd(lr)}  ${u(r.value).padEnd(lv)}  ${u(r.pkg).padEnd(lp)}  ${r.x.toFixed(4).padStart(9)}  ${r.y.toFixed(4).padStart(9)}  ${r.rot.toFixed(4).padStart(8)}  ${r.side}`);
+  for (const r of rows) L.push(`${u(r.ref).padEnd(lr)}  ${u(r.value).padEnd(lv)}  ${u(r.pkg).padEnd(lp)}  ${(r.x * k).toFixed(4).padStart(9)}  ${(r.y * k).toFixed(4).padStart(9)}  ${r.rot.toFixed(4).padStart(8)}  ${r.side}`);
   L.push("## End");
   return L.join("\n") + "\n";
 }
