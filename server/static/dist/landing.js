@@ -1072,199 +1072,209 @@
 		(uuid "040a9323-79fb-4510-a747-1626b57e2f7d")
 	)
 	(wire
-		(pts (xy 60.96 53.34) (xy 60.96 55.88))
+		(pts (xy 60.96 43.18) (xy 71.12 43.18))
 		(stroke (width 0) (type default))
 		(uuid "3b909043-1648-40b4-ad23-51fe8858d54d")
 	)
 	(wire
-		(pts (xy 60.96 43.18) (xy 71.12 43.18))
+		(pts (xy 71.12 43.18) (xy 71.12 45.72))
 		(stroke (width 0) (type default))
 		(uuid "d9521404-53ec-464f-a63e-f07846d94730")
 	)
 	(wire
-		(pts (xy 71.12 43.18) (xy 71.12 45.72))
+		(pts (xy 60.96 53.34) (xy 60.96 55.88))
 		(stroke (width 0) (type default))
 		(uuid "3bcb5564-535c-4c93-a6ba-d82e1526efb9")
 	)
 	(wire
-		(pts (xy 71.12 53.34) (xy 71.12 55.88))
+		(pts (xy 60.96 55.88) (xy 66.04 55.88))
 		(stroke (width 0) (type default))
 		(uuid "9e5997d5-dcb1-4484-a073-044ac1f52a10")
 	)
 	(wire
-		(pts (xy 45.72 66.04) (xy 60.96 66.04))
+		(pts (xy 71.12 53.34) (xy 71.12 55.88))
 		(stroke (width 0) (type default))
 		(uuid "239c84f6-3e1e-4da6-a3df-b6fde05079d3")
 	)
 	(wire
-		(pts (xy 60.96 66.04) (xy 60.96 68.58))
+		(pts (xy 71.12 55.88) (xy 66.04 55.88))
 		(stroke (width 0) (type default))
 		(uuid "947bc76a-9712-4514-af77-477e11f9437c")
 	)
 	(wire
-		(pts (xy 60.96 76.2) (xy 60.96 78.74))
+		(pts (xy 66.04 55.88) (xy 66.04 58.42))
 		(stroke (width 0) (type default))
 		(uuid "b3076fc4-abf9-45f0-a53d-6e7a5135a6d7")
 	)
 	(wire
-		(pts (xy 45.72 68.58) (xy 53.34 68.58))
+		(pts (xy 60.96 55.88) (xy 55.88 55.88))
 		(stroke (width 0) (type default))
 		(uuid "419fffe0-7bdc-424f-a66b-11041f98693c")
 	)
 	(wire
-		(pts (xy 53.34 68.58) (xy 53.34 71.12))
-		(stroke (width 0) (type default))
-		(uuid "55bcccdd-7194-492d-a78b-ae20ed68deea")
-	)
-	(wire
-		(pts (xy 53.34 78.74) (xy 53.34 81.28))
+		(pts (xy 45.72 66.04) (xy 52.07 66.04))
 		(stroke (width 0) (type default))
 		(uuid "cd370942-e9a6-4a14-ab49-6d37d20a5ee1")
 	)
 	(wire
-		(pts (xy 22.86 78.74) (xy 22.86 81.28))
+		(pts (xy 45.72 68.58) (xy 52.07 68.58))
 		(stroke (width 0) (type default))
 		(uuid "bf0cee54-3b95-453a-a184-3cdc0b6d9657")
 	)
 	(wire
-		(pts (xy 22.86 81.28) (xy 30.48 81.28))
+		(pts (xy 59.69 66.04) (xy 62.23 66.04))
 		(stroke (width 0) (type default))
 		(uuid "aa38fd7c-2b15-4c69-a01e-5ccde1d60ac8")
 	)
 	(wire
-		(pts (xy 30.48 78.74) (xy 30.48 81.28))
+		(pts (xy 62.23 66.04) (xy 62.23 68.58))
+		(stroke (width 0) (type default))
+		(uuid "49b7f212-ce6a-417f-a5d2-7c9bacd486be")
+	)
+	(wire
+		(pts (xy 59.69 68.58) (xy 62.23 68.58))
 		(stroke (width 0) (type default))
 		(uuid "362d9d49-52b5-4208-acd4-3cec162350b1")
 	)
 	(wire
-		(pts (xy 30.48 81.28) (xy 30.48 83.82))
+		(pts (xy 62.23 68.58) (xy 62.23 73.66))
 		(stroke (width 0) (type default))
 		(uuid "67205d91-5358-44e1-a77a-1ab0d57e62fb")
 	)
 	(wire
-		(pts (xy 71.12 43.18) (xy 78.74 43.18))
+		(pts (xy 22.86 78.74) (xy 22.86 83.82))
 		(stroke (width 0) (type default))
 		(uuid "3da98d3a-2f65-4ac6-ae89-5b785d491322")
 	)
 	(wire
-		(pts (xy 78.74 43.18) (xy 86.36 43.18))
+		(pts (xy 30.48 78.74) (xy 30.48 83.82))
 		(stroke (width 0) (type default))
 		(uuid "7a816392-bec3-4b05-ad27-7db34024b98a")
 	)
 	(wire
-		(pts (xy 86.36 43.18) (xy 86.36 46.99))
+		(pts (xy 71.12 43.18) (xy 78.74 43.18))
 		(stroke (width 0) (type default))
 		(uuid "98f3fb12-52b3-446a-aa9c-53bf3ac4279a")
 	)
 	(wire
-		(pts (xy 86.36 54.61) (xy 86.36 58.42))
+		(pts (xy 78.74 43.18) (xy 86.36 43.18))
 		(stroke (width 0) (type default))
 		(uuid "e1e6ebae-eff0-4f02-a746-6c06744df15c")
 	)
 	(wire
-		(pts (xy 86.36 66.04) (xy 86.36 72.39))
+		(pts (xy 86.36 43.18) (xy 86.36 46.99))
 		(stroke (width 0) (type default))
 		(uuid "fe5ade89-5fb4-481c-a4a5-90cc9cf3ed89")
 	)
 	(wire
-		(pts (xy 86.36 80.01) (xy 86.36 82.55))
+		(pts (xy 86.36 54.61) (xy 86.36 58.42))
 		(stroke (width 0) (type default))
 		(uuid "0f0ea7b8-7ff4-44cd-a216-aee5f67c3f2e")
 	)
 	(wire
-		(pts (xy 86.36 43.18) (xy 99.06 43.18))
+		(pts (xy 86.36 66.04) (xy 86.36 72.39))
 		(stroke (width 0) (type default))
 		(uuid "62c4eadb-14e0-49b7-abaa-3d1f871c5430")
 	)
 	(wire
-		(pts (xy 99.06 43.18) (xy 99.06 60.96))
-		(stroke (width 0) (type default))
-		(uuid "1a3a99ad-65e1-4611-a4b6-cbd8a5b29739")
-	)
-	(wire
-		(pts (xy 99.06 60.96) (xy 104.14 60.96))
-		(stroke (width 0) (type default))
-		(uuid "f303bcab-d9c7-4177-a9f2-fde6f26ab95c")
-	)
-	(wire
-		(pts (xy 86.36 55.88) (xy 93.98 55.88))
+		(pts (xy 86.36 80.01) (xy 86.36 82.55))
 		(stroke (width 0) (type default))
 		(uuid "c093405f-bf72-4e1f-a822-54c62ca8920c")
 	)
 	(wire
-		(pts (xy 93.98 55.88) (xy 93.98 63.5))
-		(stroke (width 0) (type default))
-		(uuid "959f7b65-c94b-4f80-a33b-b31d872145af")
-	)
-	(wire
-		(pts (xy 93.98 63.5) (xy 104.14 63.5))
-		(stroke (width 0) (type default))
-		(uuid "5ea79684-1c95-40ba-acbe-191a884d3257")
-	)
-	(wire
-		(pts (xy 86.36 68.58) (xy 99.06 68.58))
+		(pts (xy 86.36 43.18) (xy 99.06 43.18))
 		(stroke (width 0) (type default))
 		(uuid "b1e043f9-0192-45f9-aa12-480bd975373a")
 	)
 	(wire
-		(pts (xy 99.06 68.58) (xy 104.14 68.58))
+		(pts (xy 99.06 43.18) (xy 99.06 60.96))
+		(stroke (width 0) (type default))
+		(uuid "4323e4e9-3209-434e-ad49-3efbe9bb3932")
+	)
+	(wire
+		(pts (xy 99.06 60.96) (xy 104.14 60.96))
+		(stroke (width 0) (type default))
+		(uuid "146dd956-5a09-4aa9-a79f-0156d1f3cf84")
+	)
+	(wire
+		(pts (xy 86.36 55.88) (xy 93.98 55.88))
 		(stroke (width 0) (type default))
 		(uuid "b9c7efac-5360-40e8-acee-f45f11bbb4fb")
 	)
 	(wire
-		(pts (xy 99.06 68.58) (xy 99.06 71.12))
+		(pts (xy 93.98 55.88) (xy 93.98 63.5))
+		(stroke (width 0) (type default))
+		(uuid "6b3625e6-52b1-481d-a762-0fc4ff381110")
+	)
+	(wire
+		(pts (xy 93.98 63.5) (xy 104.14 63.5))
+		(stroke (width 0) (type default))
+		(uuid "d4f261af-e5ec-4133-abf6-a52ad0f62082")
+	)
+	(wire
+		(pts (xy 86.36 68.58) (xy 99.06 68.58))
 		(stroke (width 0) (type default))
 		(uuid "26136f21-9b0b-49f0-ab57-a053d5dffccf")
 	)
 	(wire
-		(pts (xy 99.06 71.12) (xy 104.14 71.12))
-		(stroke (width 0) (type default))
-		(uuid "30d71884-4854-4e76-a9f3-ceaf2909f07e")
-	)
-	(wire
-		(pts (xy 116.84 55.88) (xy 116.84 53.34))
+		(pts (xy 99.06 68.58) (xy 104.14 68.58))
 		(stroke (width 0) (type default))
 		(uuid "00ab265d-73ff-4324-a12b-03629c39f943")
 	)
 	(wire
-		(pts (xy 114.3 76.2) (xy 114.3 78.74))
+		(pts (xy 99.06 68.58) (xy 99.06 71.12))
 		(stroke (width 0) (type default))
 		(uuid "24067b07-dc01-44e7-a4bb-877728678556")
 	)
 	(wire
-		(pts (xy 114.3 55.88) (xy 114.3 45.72))
+		(pts (xy 99.06 71.12) (xy 104.14 71.12))
+		(stroke (width 0) (type default))
+		(uuid "99105c0a-e7d1-43e5-af61-d0ba9b6eaecf")
+	)
+	(wire
+		(pts (xy 116.84 55.88) (xy 116.84 53.34))
 		(stroke (width 0) (type default))
 		(uuid "bbe5678e-b59e-49b0-a6a7-3794d2cb892f")
 	)
 	(wire
-		(pts (xy 114.3 45.72) (xy 129.54 45.72))
-		(stroke (width 0) (type default))
-		(uuid "916dad8f-38f1-4170-a3d0-76ae0ad53bcd")
-	)
-	(wire
-		(pts (xy 129.54 53.34) (xy 129.54 55.88))
+		(pts (xy 114.3 76.2) (xy 114.3 78.74))
 		(stroke (width 0) (type default))
 		(uuid "ea91a696-3cdd-431b-ab38-7d7e7baf8752")
 	)
 	(wire
-		(pts (xy 124.46 66.04) (xy 134.62 66.04))
+		(pts (xy 114.3 55.88) (xy 114.3 45.72))
 		(stroke (width 0) (type default))
 		(uuid "3732c551-0f32-43dc-aee3-0ca51263f504")
 	)
 	(wire
-		(pts (xy 142.24 66.04) (xy 147.32 66.04))
+		(pts (xy 114.3 45.72) (xy 129.54 45.72))
+		(stroke (width 0) (type default))
+		(uuid "a54e0286-b673-48e8-adcc-cf3eab909bd7")
+	)
+	(wire
+		(pts (xy 129.54 53.34) (xy 129.54 55.88))
 		(stroke (width 0) (type default))
 		(uuid "2d07906e-cf35-40d7-a7eb-64ac9a9f75fa")
 	)
 	(wire
+		(pts (xy 124.46 66.04) (xy 134.62 66.04))
+		(stroke (width 0) (type default))
+		(uuid "c310bd47-35d7-409d-a5bb-7c0f4f89e689")
+	)
+	(wire
+		(pts (xy 142.24 66.04) (xy 147.32 66.04))
+		(stroke (width 0) (type default))
+		(uuid "145204bb-904f-4f66-abd3-f9ffa4491953")
+	)
+	(wire
 		(pts (xy 147.32 66.04) (xy 147.32 68.58))
 		(stroke (width 0) (type default))
-		(uuid "45c5fb9b-e3ef-4219-ac02-82d1d88baf89")
+		(uuid "04fd72f4-69dd-4097-a363-b6f4431a369f")
 	)
 	(wire
 		(pts (xy 147.32 76.2) (xy 147.32 78.74))
 		(stroke (width 0) (type default))
-		(uuid "c310bd47-35d7-409d-a5bb-7c0f4f89e689")
+		(uuid "4b87470f-16a1-41b9-a070-afe887b1a509")
 	)
 	(junction
 		(at 50.8 43.18)
@@ -1291,28 +1301,40 @@
 		(uuid "7ecdfd67-2596-4b1a-aa75-a1e90e0c5a49")
 	)
 	(junction
-		(at 30.48 81.28)
+		(at 60.96 55.88)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "521bd3a9-50f5-455c-a54b-3545c175c0fa")
 	)
 	(junction
-		(at 86.36 55.88)
+		(at 66.04 55.88)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "84acd9b3-17d7-4c35-a8bb-bf8583ea7197")
 	)
 	(junction
-		(at 86.36 68.58)
+		(at 62.23 68.58)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "fac45b41-dbc1-4970-ab17-eb9d05f31bf2")
 	)
 	(junction
-		(at 99.06 68.58)
+		(at 86.36 55.88)
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "81fceb66-ab9c-4247-a656-fe391ba0bfd0")
+	)
+	(junction
+		(at 86.36 68.58)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "5095ed75-3cdd-4564-afd2-8dde620e31eb")
+	)
+	(junction
+		(at 99.06 68.58)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "4b65123b-ec4f-4724-a078-443ce0e7e5f7")
 	)
 	(text "f = 1.44 / ((R3 + 2 R4) C3) = 1.4 Hz"
 		(exclude_from_sim no)
@@ -1385,7 +1407,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 60.96 72.39 0)
+		(at 55.88 66.04 90)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1394,23 +1416,23 @@
 		(fields_autoplaced yes)
 		(uuid "83269ecf-0834-4cbc-af34-e9bf2452513c")
 		(property "Reference" "R1"
-			(at 63.5 71.12 0)
-			(effects (font (size 1.27 1.27)) (justify left))
+			(at 53.975 63.754 90)
+			(effects (font (size 1.27 1.27)))
 		)
 		(property "Value" "5k1"
-			(at 63.5 73.66 0)
-			(effects (font (size 1.27 1.27)) (justify left))
+			(at 57.785 63.754 90)
+			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 60.96 72.39 0)
+			(at 55.88 66.04 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Datasheet" ""
-			(at 60.96 72.39 0)
+			(at 55.88 66.04 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Description" ""
-			(at 60.96 72.39 0)
+			(at 55.88 66.04 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(pin "1"
@@ -1427,7 +1449,7 @@
 	)
 	(symbol
 		(lib_id "Device:R")
-		(at 53.34 74.93 0)
+		(at 55.88 68.58 90)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1436,23 +1458,23 @@
 		(fields_autoplaced yes)
 		(uuid "03c9025d-ec51-4dc3-af8b-29b4e06e17ba")
 		(property "Reference" "R2"
-			(at 50.8 73.66 0)
-			(effects (font (size 1.27 1.27)) (justify right))
+			(at 53.975 70.866 90)
+			(effects (font (size 1.27 1.27)))
 		)
 		(property "Value" "5k1"
-			(at 50.8 76.2 0)
-			(effects (font (size 1.27 1.27)) (justify right))
+			(at 57.785 70.866 90)
+			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
-			(at 53.34 74.93 0)
+			(at 55.88 68.58 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Datasheet" ""
-			(at 53.34 74.93 0)
+			(at 55.88 68.58 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Description" ""
-			(at 53.34 74.93 0)
+			(at 55.88 68.58 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(pin "1"
@@ -1982,7 +2004,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 53.34 81.28 0)
+		(at 22.86 83.82 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1991,23 +2013,23 @@
 		(fields_autoplaced yes)
 		(uuid "9303988f-9965-4ce5-a03e-c02bdd0701d0")
 		(property "Reference" "#PWR04"
-			(at 53.34 87.63 0)
+			(at 22.86 90.17 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Value" "GND"
-			(at 53.34 85.09 0)
+			(at 22.86 87.63 0)
 			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" ""
-			(at 53.34 81.28 0)
+			(at 22.86 83.82 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Datasheet" ""
-			(at 53.34 81.28 0)
+			(at 22.86 83.82 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Description" ""
-			(at 53.34 81.28 0)
+			(at 22.86 83.82 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(pin "1"
@@ -2021,7 +2043,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 60.96 78.74 0)
+		(at 62.23 73.66 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2030,23 +2052,23 @@
 		(fields_autoplaced yes)
 		(uuid "59dc1c76-d3b6-471c-aeac-bd356bdc63fb")
 		(property "Reference" "#PWR05"
-			(at 60.96 85.09 0)
+			(at 62.23 80.01 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Value" "GND"
-			(at 60.96 82.55 0)
+			(at 62.23 77.47 0)
 			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" ""
-			(at 60.96 78.74 0)
+			(at 62.23 73.66 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Datasheet" ""
-			(at 60.96 78.74 0)
+			(at 62.23 73.66 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Description" ""
-			(at 60.96 78.74 0)
+			(at 62.23 73.66 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(pin "1"
@@ -2060,7 +2082,7 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 60.96 55.88 0)
+		(at 66.04 58.42 0)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2069,23 +2091,23 @@
 		(fields_autoplaced yes)
 		(uuid "087f0b5e-d489-4dce-af06-27bd7de4179c")
 		(property "Reference" "#PWR06"
-			(at 60.96 62.23 0)
+			(at 66.04 64.77 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Value" "GND"
-			(at 60.96 59.69 0)
+			(at 66.04 62.23 0)
 			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" ""
-			(at 60.96 55.88 0)
+			(at 66.04 58.42 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Datasheet" ""
-			(at 60.96 55.88 0)
+			(at 66.04 58.42 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Description" ""
-			(at 60.96 55.88 0)
+			(at 66.04 58.42 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(pin "1"
@@ -2099,45 +2121,6 @@
 	)
 	(symbol
 		(lib_id "power:GND")
-		(at 71.12 55.88 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "a2ae8cc2-1e03-4b19-a2d5-8a3a6bf00932")
-		(property "Reference" "#PWR07"
-			(at 71.12 62.23 0)
-			(effects (font (size 1.27 1.27)) (hide yes))
-		)
-		(property "Value" "GND"
-			(at 71.12 59.69 0)
-			(effects (font (size 1.27 1.27)))
-		)
-		(property "Footprint" ""
-			(at 71.12 55.88 0)
-			(effects (font (size 1.27 1.27)) (hide yes))
-		)
-		(property "Datasheet" ""
-			(at 71.12 55.88 0)
-			(effects (font (size 1.27 1.27)) (hide yes))
-		)
-		(property "Description" ""
-			(at 71.12 55.88 0)
-			(effects (font (size 1.27 1.27)) (hide yes))
-		)
-		(pin "1"
-			(uuid "a887a2f5-d5ae-4ef2-a44e-a65c939dccf7")
-		)
-		(instances
-			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR07") (unit 1))
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
 		(at 86.36 82.55 0)
 		(unit 1)
 		(exclude_from_sim no)
@@ -2146,7 +2129,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "322f5217-70a5-479d-aa01-84859e6df7fc")
-		(property "Reference" "#PWR08"
+		(property "Reference" "#PWR07"
 			(at 86.36 88.9 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -2171,7 +2154,7 @@
 		)
 		(instances
 			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR08") (unit 1))
+				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR07") (unit 1))
 			)
 		)
 	)
@@ -2185,7 +2168,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "09d09737-ddfe-4539-aee7-18a7374d3e0e")
-		(property "Reference" "#PWR09"
+		(property "Reference" "#PWR08"
 			(at 114.3 85.09 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -2210,7 +2193,7 @@
 		)
 		(instances
 			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR09") (unit 1))
+				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR08") (unit 1))
 			)
 		)
 	)
@@ -2224,7 +2207,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "4c2735b6-4398-4f31-a419-b37f58bc6247")
-		(property "Reference" "#PWR10"
+		(property "Reference" "#PWR09"
 			(at 129.54 62.23 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -2249,7 +2232,7 @@
 		)
 		(instances
 			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR10") (unit 1))
+				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR09") (unit 1))
 			)
 		)
 	)
@@ -2263,7 +2246,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "e66f64c2-0a9d-492a-a2d5-7eefe55f759e")
-		(property "Reference" "#PWR11"
+		(property "Reference" "#PWR10"
 			(at 147.32 85.09 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -2288,7 +2271,7 @@
 		)
 		(instances
 			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR11") (unit 1))
+				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#PWR10") (unit 1))
 			)
 		)
 	)
@@ -2302,7 +2285,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "0a60419d-faa7-4627-a92d-d9fca6d9098c")
-		(property "Reference" "#FLG12"
+		(property "Reference" "#FLG11"
 			(at 78.74 39.37 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
@@ -2327,13 +2310,13 @@
 		)
 		(instances
 			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#FLG12") (unit 1))
+				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#FLG11") (unit 1))
 			)
 		)
 	)
 	(symbol
 		(lib_id "power:PWR_FLAG")
-		(at 22.86 81.28 180)
+		(at 55.88 55.88 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -2341,24 +2324,24 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "b9e8368a-5e29-4707-a2bb-0241b41788a7")
-		(property "Reference" "#FLG13"
-			(at 22.86 77.47 0)
+		(property "Reference" "#FLG12"
+			(at 55.88 52.07 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Value" "PWR_FLAG"
-			(at 22.86 85.852 0)
+			(at 55.88 60.452 0)
 			(effects (font (size 1.27 1.27)))
 		)
 		(property "Footprint" ""
-			(at 22.86 81.28 0)
+			(at 55.88 55.88 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Datasheet" ""
-			(at 22.86 81.28 0)
+			(at 55.88 55.88 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(property "Description" ""
-			(at 22.86 81.28 0)
+			(at 55.88 55.88 0)
 			(effects (font (size 1.27 1.27)) (hide yes))
 		)
 		(pin "1"
@@ -2366,7 +2349,7 @@
 		)
 		(instances
 			(project "blinker"
-				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#FLG13") (unit 1))
+				(path "/4cf97708-de7b-429b-a18f-01f9c0ca5573" (reference "#FLG12") (unit 1))
 			)
 		)
 	)
@@ -5353,6 +5336,6 @@
 	)
 	(embedded_fonts no)
 )
-`;var _f={board:{x:127,y:91.5,w:42,h:27,r:2},parts:[{ref:"J1",value:"USB-C",id:"a923b6d9-3cf9-4b42-a66a-41bb18c01e4c",x:131,y:105,rot:270,pile:[178,97.5]},{ref:"R1",value:"5k1",id:"1147fe53-cc23-423f-ac13-c5145a43d54e",x:138.2,y:103.7,rot:0,pile:[175,106.5]},{ref:"R2",value:"5k1",id:"d71395d8-5030-4730-a1bd-bd31c356023b",x:138.2,y:106.3,rot:0,pile:[179.5,106.5]},{ref:"C1",value:"10u",id:"c0afc87d-ac4a-4971-aa63-1198ce32bfda",x:144,y:102.25,rot:270,pile:[184,106.5]},{ref:"C2",value:"100n",id:"82a280ac-d10f-4b4e-a1c0-fbd896b674fd",x:147.5,y:102.075,rot:270,pile:[188,106.5]},{ref:"U1",value:"NE555D",id:"3f2d40e1-e9bf-455d-aa95-2abbc661cfc0",x:154,y:105.5,rot:0,pile:[186,98]},{ref:"R3",value:"10k",id:"a784103d-8559-4036-a646-20c164f8bbc3",x:160,y:103.595,rot:0,pile:[175,111]},{ref:"R4",value:"47k",id:"a0ba1809-44d9-4df7-aded-12eb75b3d301",x:163.3,y:104.42,rot:270,pile:[179.5,111]},{ref:"C3",value:"10u",id:"10542ce2-b594-4cb5-a7d5-7767ce1546d5",x:163.3,y:108.65,rot:270,pile:[184,111]},{ref:"C4",value:"10n",id:"8a50c6d4-c21f-4154-add6-7a4a9c96f99f",x:160,y:107.405,rot:0,pile:[188,111]},{ref:"R5",value:"330",id:"0117b19e-c764-468e-a81c-812a22ba123f",x:147.5,y:110.925,rot:270,pile:[177,115.5]},{ref:"D1",value:"LED",id:"3d59de53-705a-43c3-ac74-080d0fc22723",x:152.1,y:114,rot:180,pile:[184,115.5]}],holes:["ce44fd8c-9787-4fc8-ad4f-c91a7bf3652f","85ae44ef-aa1b-4792-a1ac-38f1f5c4c6ae","f6e8d490-04a4-4e57-a508-24336a39a6da","9b57066d-5528-4e03-afed-f18d4c413800"],routes:[{net:"Net-(J1-CC1)",layer:"F.Cu",ids:["f60dd3f5-3535-4655-adee-9f8b2ddc2fb7","c09e67ad-6a1a-44c6-ae97-e0043ea59344","03de3d63-a8a2-41e6-a67e-c5f1f505bc82"],pts:[[134.08,104.5],[135.6,104.5],[136.4,103.7],[137.375,103.7]],who:0,via:null},{net:"Net-(J1-CC2)",layer:"F.Cu",ids:["1c9def31-8606-4995-a331-2aaaa8ca779a","ca81abbc-e894-42c9-a06c-f0491aab4a5c","738aeb08-7c16-4893-a7b7-cda9677cdddb"],pts:[[134.08,105.5],[135.6,105.5],[136.4,106.3],[137.375,106.3]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["829c90bf-5c7c-4565-add3-1f1525732b13"],pts:[[139.025,103.7],[140.3,103.7]],who:0,via:"40c9c47d-da80-442d-af2f-3c76877e2be2"},{net:"GND",layer:"F.Cu",ids:["30efb44b-43e1-4255-ae59-fee762c28f18"],pts:[[139.025,106.3],[140.3,106.3]],who:0,via:"5b69faac-42a8-4e9a-a5a6-6d5dfd43099d"},{net:"+5V",layer:"F.Cu",ids:["ac5cc1f8-e352-4727-ae7d-0edef89533fb"],pts:[[134.08,103.48],[135.4,103.48]],who:1,via:"c3f1c0ec-2ecd-4d5b-aefa-4918ea7d12b1"},{net:"+5V",layer:"F.Cu",ids:["5daa1f1d-0b66-402d-a05d-2ad382ef3a65","a19c0892-f24d-4ed0-a6c6-47eb0364ec61"],pts:[[135.4,103.48],[137.58,101.3],[144,101.3]],who:1,via:null},{net:"+5V",layer:"F.Cu",ids:["24ebc96a-3d25-4023-a188-7c86ee68918c"],pts:[[144,101.3],[147.5,101.3]],who:1,via:null},{net:"+5V",layer:"F.Cu",ids:["36c18233-3b6d-4f16-aebd-741e818839b1","7178092a-b059-4d8c-ac64-4805ccb1d02f","53ba4527-25bf-4218-a654-fce513185f09"],pts:[[147.5,101.3],[155.4,101.3],[156.475,102.375],[156.475,103.595]],who:1,via:null},{net:"+5V",layer:"F.Cu",ids:["4a82f19d-aece-4652-a385-1d192a5be2b4"],pts:[[134.08,106.52],[135.4,106.52]],who:0,via:"8cd9063d-a802-4608-a0bf-37301e515cb6"},{net:"+5V",layer:"B.Cu",ids:["3ceba865-2440-46dc-a525-ad81a99898f9"],pts:[[135.4,106.52],[135.4,103.48]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["ab3c644e-cf84-444a-a3a4-431b6b74216a"],pts:[[134.08,102.25],[134.08,100.9]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["69e7eafc-0470-44dc-a03f-16c134ff70dc"],pts:[[134.08,107.75],[134.08,109.1]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["2fbdbb81-26ca-4771-a7f6-dd777e46603c"],pts:[[144,103.2],[144,104.6]],who:1,via:"92b73e55-d64d-40ed-a762-964d780c86e4"},{net:"GND",layer:"F.Cu",ids:["9344d995-00dc-4963-a01f-c9dd4655eef6"],pts:[[147.5,102.85],[147.5,104.2]],who:1,via:"09027abf-d6f8-490a-a6a1-d8c68e68ed24"},{net:"GND",layer:"F.Cu",ids:["c7bd3fc2-bc89-46b4-a199-b4bcb070ccd9","a4ac3dc7-afc0-4354-af3a-69a016e472af"],pts:[[151.525,103.595],[150,103.595],[149.3,102.895]],who:1,via:"b5d4614a-b743-4609-ae0b-083a4cd2cfab"},{net:"+5V",layer:"F.Cu",ids:["be81aa4d-fc86-499a-af01-66ca3ae1ecdc"],pts:[[156.475,103.595],[159.175,103.595]],who:0,via:null},{net:"+5V",layer:"F.Cu",ids:["556e773b-3ce3-49e4-a263-135fea089faf","61055542-8a86-4613-aded-3f7feb4a500c","dfa2b204-7f04-4d27-a57e-7073ab165f30","bbd497ff-0a3f-487d-a124-cb15da82a23c"],pts:[[151.525,107.405],[153,107.405],[153.6,106.805],[153.6,101.9],[154.2,101.3]],who:1,via:null},{net:"Net-(U1-DISCH)",layer:"F.Cu",ids:["54116c15-b204-4da2-a97e-7898d30d6987","f0edb941-f125-4093-ac18-ae5db7004081"],pts:[[156.475,104.865],[159.555,104.865],[160.825,103.595]],who:0,via:null},{net:"Net-(U1-DISCH)",layer:"F.Cu",ids:["a3752d4e-8bfd-41a1-af4c-8e0f26c50e70"],pts:[[160.825,103.595],[163.3,103.595]],who:0,via:null},{net:"Net-(U1-THRES)",layer:"F.Cu",ids:["7170ba8a-c0a5-41be-a08f-b07d53609ba4"],pts:[[151.525,104.865],[149.7,104.865]],who:1,via:"d4a38d38-4100-4184-a20b-a90bcda7e251"},{net:"Net-(U1-THRES)",layer:"B.Cu",ids:["b40660b2-21f7-46b3-a142-709f84f9149c","3c93ea08-4bd0-4844-a0ff-a33db348ee0b"],pts:[[149.7,104.865],[150.97,106.135],[158.2,106.135]],who:1,via:"2420f0c9-eab9-4df8-a49c-81fddea4f6bf"},{net:"Net-(U1-THRES)",layer:"F.Cu",ids:["3f274bf0-75e1-43ca-a2f5-a1fe4554c772","a3abda74-0f64-45ac-a7e1-ff4a34a73814","2ece4f7b-152f-4e13-aad4-9f227ee73677"],pts:[[156.475,106.135],[158.2,106.135],[162.41,106.135],[163.3,105.245]],who:0,via:null},{net:"Net-(U1-THRES)",layer:"F.Cu",ids:["acadf015-5709-4a95-ac9e-2102f6723b70"],pts:[[163.3,105.245],[163.3,107.7]],who:0,via:null},{net:"Net-(U1-CONT)",layer:"F.Cu",ids:["1b6e4f85-9592-437c-a2fb-55b7c3c987ab"],pts:[[156.475,107.405],[159.225,107.405]],who:1,via:null},{net:"GND",layer:"F.Cu",ids:["394a1e9d-d868-4f1a-abf7-3958f38aaf8a"],pts:[[160.775,107.405],[160.775,108.8]],who:1,via:"60fb787e-45f6-4a68-a26a-d9b7d7a2fbe8"},{net:"GND",layer:"F.Cu",ids:["54767c26-7f96-44a3-ae83-6c60dc0172b2"],pts:[[163.3,109.6],[163.3,111]],who:0,via:"ff8d5954-8ee6-47bc-a22e-314db4d05ca1"},{net:"Net-(U1-OUT)",layer:"F.Cu",ids:["440da6ab-a11d-465e-a330-f61b52d21ac1","be501c2a-c1a9-4d37-a14f-19f457e35a9d","5c6d08f3-2796-449e-a110-d84180bb2335"],pts:[[151.525,106.135],[149.5,106.135],[147.5,108.135],[147.5,110.1]],who:1,via:null},{net:"Net-(D1-A)",layer:"F.Cu",ids:["1eeb9a4f-f19b-4c9f-af69-4eeef0deae9c","ec231107-3eec-486d-a686-e867c99c408a","d169c045-0823-4f07-a4f5-abd74a006db5"],pts:[[147.5,111.75],[147.5,113.1],[148.4,114],[151.163,114]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["fd90e420-6295-4ea3-a7fc-6ceb0cfa09b5"],pts:[[153.038,114],[154.5,114]],who:1,via:"1b58d16a-e7a4-4c37-a18c-269228cea4c0"}],vias:[{id:"40c9c47d-da80-442d-af2f-3c76877e2be2",x:140.3,y:103.7,after:2},{id:"5b69faac-42a8-4e9a-a5a6-6d5dfd43099d",x:140.3,y:106.3,after:3},{id:"c3f1c0ec-2ecd-4d5b-aefa-4918ea7d12b1",x:135.4,y:103.48,after:4},{id:"8cd9063d-a802-4608-a0bf-37301e515cb6",x:135.4,y:106.52,after:8},{id:"92b73e55-d64d-40ed-a762-964d780c86e4",x:144,y:104.6,after:12},{id:"09027abf-d6f8-490a-a6a1-d8c68e68ed24",x:147.5,y:104.2,after:13},{id:"b5d4614a-b743-4609-ae0b-083a4cd2cfab",x:149.3,y:102.895,after:14},{id:"d4a38d38-4100-4184-a20b-a90bcda7e251",x:149.7,y:104.865,after:19},{id:"2420f0c9-eab9-4df8-a49c-81fddea4f6bf",x:158.2,y:106.135,after:20},{id:"60fb787e-45f6-4a68-a26a-d9b7d7a2fbe8",x:160.775,y:108.8,after:24},{id:"ff8d5954-8ee6-47bc-a22e-314db4d05ca1",x:163.3,y:111,after:25},{id:"1b58d16a-e7a4-4c37-a18c-269228cea4c0",x:154.5,y:114,after:28}],zone:"870b6204-6aa6-4654-a4ba-f2695d0f70a3",sch:{symbols:[{ref:"J1",id:"7241b1d8-25a0-4a2e-a4f5-9ec5b35b038a"},{ref:"R1",id:"83269ecf-0834-4cbc-af34-e9bf2452513c"},{ref:"R2",id:"03c9025d-ec51-4dc3-af8b-29b4e06e17ba"},{ref:"C1",id:"912a407d-77e2-4dd6-a8f2-08594996f510"},{ref:"C2",id:"e746af6c-d0fd-45e3-a739-f945b8697bca"},{ref:"R3",id:"865e660b-4ee9-4798-a88f-5924205c5a7f"},{ref:"R4",id:"9a53f4f7-1f73-4a8c-aa8c-c6651dceba6d"},{ref:"C3",id:"b63390a8-5aef-4b44-af36-034d3db666f8"},{ref:"U1",id:"9dcc47dc-0bd8-4fe5-a519-b4fe400c737a"},{ref:"C4",id:"babc9ba2-136c-40a4-ab8c-03b64940f6ea"},{ref:"R5",id:"b8ee751b-3a34-4aa3-aa38-6c469be22365"},{ref:"D1",id:"3f9591d6-809b-48c6-ab76-30ccec401994"}],power:[{id:"9ca409c4-d212-4844-af18-d9f4d327021f",at:[50.8,40.64]},{id:"fe9c3007-127e-4994-a9c9-419028bdf9df",at:[116.84,53.34]},{id:"123f7aa0-aa99-4437-a4f9-0cab9ad1c7fe",at:[30.48,83.82]},{id:"9303988f-9965-4ce5-a03e-c02bdd0701d0",at:[53.34,81.28]},{id:"59dc1c76-d3b6-471c-aeac-bd356bdc63fb",at:[60.96,78.74]},{id:"087f0b5e-d489-4dce-af06-27bd7de4179c",at:[60.96,55.88]},{id:"a2ae8cc2-1e03-4b19-a2d5-8a3a6bf00932",at:[71.12,55.88]},{id:"322f5217-70a5-479d-aa01-84859e6df7fc",at:[86.36,82.55]},{id:"09d09737-ddfe-4539-aee7-18a7374d3e0e",at:[114.3,78.74]},{id:"4c2735b6-4398-4f31-a419-b37f58bc6247",at:[129.54,55.88]},{id:"e66f64c2-0a9d-492a-a2d5-7eefe55f759e",at:[147.32,78.74]},{id:"0a60419d-faa7-4627-a92d-d9fca6d9098c",at:[78.74,43.18]},{id:"b9e8368a-5e29-4707-a2bb-0241b41788a7",at:[22.86,81.28]}],wires:[{ids:["ce88b442-58a3-4846-a781-ddcd62725f85","f5a664c4-a9fa-44f8-ad78-81e5800a020f"],pts:[[45.72,53.34],[50.8,53.34],[50.8,43.18]]},{ids:["751859ef-4c8a-42c1-ac95-36fe58539693"],pts:[[50.8,43.18],[50.8,40.64]]},{ids:["bb05d842-2f99-4a95-aff2-e580f9fa2c86"],pts:[[50.8,43.18],[60.96,43.18]]},{ids:["040a9323-79fb-4510-a747-1626b57e2f7d"],pts:[[60.96,43.18],[60.96,45.72]]},{ids:["3b909043-1648-40b4-ad23-51fe8858d54d"],pts:[[60.96,53.34],[60.96,55.88]]},{ids:["d9521404-53ec-464f-a63e-f07846d94730"],pts:[[60.96,43.18],[71.12,43.18]]},{ids:["3bcb5564-535c-4c93-a6ba-d82e1526efb9"],pts:[[71.12,43.18],[71.12,45.72]]},{ids:["9e5997d5-dcb1-4484-a073-044ac1f52a10"],pts:[[71.12,53.34],[71.12,55.88]]},{ids:["239c84f6-3e1e-4da6-a3df-b6fde05079d3","947bc76a-9712-4514-af77-477e11f9437c"],pts:[[45.72,66.04],[60.96,66.04],[60.96,68.58]]},{ids:["b3076fc4-abf9-45f0-a53d-6e7a5135a6d7"],pts:[[60.96,76.2],[60.96,78.74]]},{ids:["419fffe0-7bdc-424f-a66b-11041f98693c","55bcccdd-7194-492d-a78b-ae20ed68deea"],pts:[[45.72,68.58],[53.34,68.58],[53.34,71.12]]},{ids:["cd370942-e9a6-4a14-ab49-6d37d20a5ee1"],pts:[[53.34,78.74],[53.34,81.28]]},{ids:["bf0cee54-3b95-453a-a184-3cdc0b6d9657"],pts:[[22.86,78.74],[22.86,81.28]]},{ids:["aa38fd7c-2b15-4c69-a01e-5ccde1d60ac8"],pts:[[22.86,81.28],[30.48,81.28]]},{ids:["362d9d49-52b5-4208-acd4-3cec162350b1"],pts:[[30.48,78.74],[30.48,81.28]]},{ids:["67205d91-5358-44e1-a77a-1ab0d57e62fb"],pts:[[30.48,81.28],[30.48,83.82]]},{ids:["3da98d3a-2f65-4ac6-ae89-5b785d491322"],pts:[[71.12,43.18],[78.74,43.18]]},{ids:["7a816392-bec3-4b05-ad27-7db34024b98a"],pts:[[78.74,43.18],[86.36,43.18]]},{ids:["98f3fb12-52b3-446a-aa9c-53bf3ac4279a"],pts:[[86.36,43.18],[86.36,46.99]]},{ids:["e1e6ebae-eff0-4f02-a746-6c06744df15c"],pts:[[86.36,54.61],[86.36,58.42]]},{ids:["fe5ade89-5fb4-481c-a4a5-90cc9cf3ed89"],pts:[[86.36,66.04],[86.36,72.39]]},{ids:["0f0ea7b8-7ff4-44cd-a216-aee5f67c3f2e"],pts:[[86.36,80.01],[86.36,82.55]]},{ids:["62c4eadb-14e0-49b7-abaa-3d1f871c5430","1a3a99ad-65e1-4611-a4b6-cbd8a5b29739","f303bcab-d9c7-4177-a9f2-fde6f26ab95c"],pts:[[86.36,43.18],[99.06,43.18],[99.06,60.96],[104.14,60.96]]},{ids:["c093405f-bf72-4e1f-a822-54c62ca8920c","959f7b65-c94b-4f80-a33b-b31d872145af","5ea79684-1c95-40ba-acbe-191a884d3257"],pts:[[86.36,55.88],[93.98,55.88],[93.98,63.5],[104.14,63.5]]},{ids:["b1e043f9-0192-45f9-aa12-480bd975373a"],pts:[[86.36,68.58],[99.06,68.58]]},{ids:["b9c7efac-5360-40e8-acee-f45f11bbb4fb"],pts:[[99.06,68.58],[104.14,68.58]]},{ids:["26136f21-9b0b-49f0-ab57-a053d5dffccf","30d71884-4854-4e76-a9f3-ceaf2909f07e"],pts:[[99.06,68.58],[99.06,71.12],[104.14,71.12]]},{ids:["00ab265d-73ff-4324-a12b-03629c39f943"],pts:[[116.84,55.88],[116.84,53.34]]},{ids:["24067b07-dc01-44e7-a4bb-877728678556"],pts:[[114.3,76.2],[114.3,78.74]]},{ids:["bbe5678e-b59e-49b0-a6a7-3794d2cb892f","916dad8f-38f1-4170-a3d0-76ae0ad53bcd"],pts:[[114.3,55.88],[114.3,45.72],[129.54,45.72]]},{ids:["ea91a696-3cdd-431b-ab38-7d7e7baf8752"],pts:[[129.54,53.34],[129.54,55.88]]},{ids:["3732c551-0f32-43dc-aee3-0ca51263f504"],pts:[[124.46,66.04],[134.62,66.04]]},{ids:["2d07906e-cf35-40d7-a7eb-64ac9a9f75fa","45c5fb9b-e3ef-4219-ac02-82d1d88baf89"],pts:[[142.24,66.04],[147.32,66.04],[147.32,68.58]]},{ids:["c310bd47-35d7-409d-a5bb-7c0f4f89e689"],pts:[[147.32,76.2],[147.32,78.74]]}],junctions:[{id:"fb40dbb6-fc09-4c1b-ad1e-e4e515defbdc",at:[50.8,43.18]},{id:"7c3f6582-d493-44a9-a7e7-4f2d9ebebe2d",at:[60.96,43.18]},{id:"985ef68c-8453-45c6-aabd-7c2963f6863e",at:[71.12,43.18]},{id:"7ecdfd67-2596-4b1a-aa75-a1e90e0c5a49",at:[86.36,43.18]},{id:"521bd3a9-50f5-455c-a54b-3545c175c0fa",at:[30.48,81.28]},{id:"84acd9b3-17d7-4c35-a8bb-bf8583ea7197",at:[86.36,55.88]},{id:"fac45b41-dbc1-4970-ab17-eb9d05f31bf2",at:[86.36,68.58]},{id:"81fceb66-ab9c-4247-a656-fe391ba0bfd0",at:[99.06,68.58]}],notes:["89d10dd8-c7dc-452e-af18-09822d118d09","afea062a-530a-473a-a751-614e43647b66"]}};var Ue=globalThis.KiCadCanvas,ze=_f,Ke=ze.board,Pf=()=>Ue.parseDoc(Sf),Yo=()=>Ue.parseDoc(ss);function ll(){let e=Ue.parse(ss);for(let t of Ue.kids(e,"zone"))for(let n=t.length-1;n>=0;n--)Array.isArray(t[n])&&t[n][0]==="filled_polygon"&&t.splice(n,1);return Ue.parseDoc(Ue.serialize(e))}function xf(e){let t=Ue.parse(ss),n=[],r=new Set,o=Yo().items;for(let i of t){let s=Array.isArray(i)?Ue.uuidOf(i):"";if(!s||!o.has(s)){n.push(i);continue}let a=e.items.get(s);a&&(r.add(s),n.push(i[0]==="zone"?i:a.node))}for(let i of e.items.values()){if(r.has(i.id))continue;let s=i.node.map(a=>Array.isArray(a)&&a[0]==="uuid"?Ue.parse(`(uuid "${Ue.newUuid()}")`):a);n.push(s)}return Ue.serialize(n)+`
+`;var _f={board:{x:127,y:91.5,w:42,h:27,r:2},parts:[{ref:"J1",value:"USB-C",id:"a923b6d9-3cf9-4b42-a66a-41bb18c01e4c",x:131,y:105,rot:270,pile:[178,97.5]},{ref:"R1",value:"5k1",id:"1147fe53-cc23-423f-ac13-c5145a43d54e",x:138.2,y:103.7,rot:0,pile:[175,106.5]},{ref:"R2",value:"5k1",id:"d71395d8-5030-4730-a1bd-bd31c356023b",x:138.2,y:106.3,rot:0,pile:[179.5,106.5]},{ref:"C1",value:"10u",id:"c0afc87d-ac4a-4971-aa63-1198ce32bfda",x:144,y:102.25,rot:270,pile:[184,106.5]},{ref:"C2",value:"100n",id:"82a280ac-d10f-4b4e-a1c0-fbd896b674fd",x:147.5,y:102.075,rot:270,pile:[188,106.5]},{ref:"U1",value:"NE555D",id:"3f2d40e1-e9bf-455d-aa95-2abbc661cfc0",x:154,y:105.5,rot:0,pile:[186,98]},{ref:"R3",value:"10k",id:"a784103d-8559-4036-a646-20c164f8bbc3",x:160,y:103.595,rot:0,pile:[175,111]},{ref:"R4",value:"47k",id:"a0ba1809-44d9-4df7-aded-12eb75b3d301",x:163.3,y:104.42,rot:270,pile:[179.5,111]},{ref:"C3",value:"10u",id:"10542ce2-b594-4cb5-a7d5-7767ce1546d5",x:163.3,y:108.65,rot:270,pile:[184,111]},{ref:"C4",value:"10n",id:"8a50c6d4-c21f-4154-add6-7a4a9c96f99f",x:160,y:107.405,rot:0,pile:[188,111]},{ref:"R5",value:"330",id:"0117b19e-c764-468e-a81c-812a22ba123f",x:147.5,y:110.925,rot:270,pile:[177,115.5]},{ref:"D1",value:"LED",id:"3d59de53-705a-43c3-ac74-080d0fc22723",x:152.1,y:114,rot:180,pile:[184,115.5]}],holes:["ce44fd8c-9787-4fc8-ad4f-c91a7bf3652f","85ae44ef-aa1b-4792-a1ac-38f1f5c4c6ae","f6e8d490-04a4-4e57-a508-24336a39a6da","9b57066d-5528-4e03-afed-f18d4c413800"],routes:[{net:"Net-(J1-CC1)",layer:"F.Cu",ids:["f60dd3f5-3535-4655-adee-9f8b2ddc2fb7","c09e67ad-6a1a-44c6-ae97-e0043ea59344","03de3d63-a8a2-41e6-a67e-c5f1f505bc82"],pts:[[134.08,104.5],[135.6,104.5],[136.4,103.7],[137.375,103.7]],who:0,via:null},{net:"Net-(J1-CC2)",layer:"F.Cu",ids:["1c9def31-8606-4995-a331-2aaaa8ca779a","ca81abbc-e894-42c9-a06c-f0491aab4a5c","738aeb08-7c16-4893-a7b7-cda9677cdddb"],pts:[[134.08,105.5],[135.6,105.5],[136.4,106.3],[137.375,106.3]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["829c90bf-5c7c-4565-add3-1f1525732b13"],pts:[[139.025,103.7],[140.3,103.7]],who:0,via:"40c9c47d-da80-442d-af2f-3c76877e2be2"},{net:"GND",layer:"F.Cu",ids:["30efb44b-43e1-4255-ae59-fee762c28f18"],pts:[[139.025,106.3],[140.3,106.3]],who:0,via:"5b69faac-42a8-4e9a-a5a6-6d5dfd43099d"},{net:"+5V",layer:"F.Cu",ids:["ac5cc1f8-e352-4727-ae7d-0edef89533fb"],pts:[[134.08,103.48],[135.4,103.48]],who:1,via:"c3f1c0ec-2ecd-4d5b-aefa-4918ea7d12b1"},{net:"+5V",layer:"F.Cu",ids:["5daa1f1d-0b66-402d-a05d-2ad382ef3a65","a19c0892-f24d-4ed0-a6c6-47eb0364ec61"],pts:[[135.4,103.48],[137.58,101.3],[144,101.3]],who:1,via:null},{net:"+5V",layer:"F.Cu",ids:["24ebc96a-3d25-4023-a188-7c86ee68918c"],pts:[[144,101.3],[147.5,101.3]],who:1,via:null},{net:"+5V",layer:"F.Cu",ids:["36c18233-3b6d-4f16-aebd-741e818839b1","7178092a-b059-4d8c-ac64-4805ccb1d02f","53ba4527-25bf-4218-a654-fce513185f09"],pts:[[147.5,101.3],[155.4,101.3],[156.475,102.375],[156.475,103.595]],who:1,via:null},{net:"+5V",layer:"F.Cu",ids:["4a82f19d-aece-4652-a385-1d192a5be2b4"],pts:[[134.08,106.52],[135.4,106.52]],who:0,via:"8cd9063d-a802-4608-a0bf-37301e515cb6"},{net:"+5V",layer:"B.Cu",ids:["3ceba865-2440-46dc-a525-ad81a99898f9"],pts:[[135.4,106.52],[135.4,103.48]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["ab3c644e-cf84-444a-a3a4-431b6b74216a"],pts:[[134.08,102.25],[134.08,100.9]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["69e7eafc-0470-44dc-a03f-16c134ff70dc"],pts:[[134.08,107.75],[134.08,109.1]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["2fbdbb81-26ca-4771-a7f6-dd777e46603c"],pts:[[144,103.2],[144,104.6]],who:1,via:"92b73e55-d64d-40ed-a762-964d780c86e4"},{net:"GND",layer:"F.Cu",ids:["9344d995-00dc-4963-a01f-c9dd4655eef6"],pts:[[147.5,102.85],[147.5,104.2]],who:1,via:"09027abf-d6f8-490a-a6a1-d8c68e68ed24"},{net:"GND",layer:"F.Cu",ids:["c7bd3fc2-bc89-46b4-a199-b4bcb070ccd9","a4ac3dc7-afc0-4354-af3a-69a016e472af"],pts:[[151.525,103.595],[150,103.595],[149.3,102.895]],who:1,via:"b5d4614a-b743-4609-ae0b-083a4cd2cfab"},{net:"+5V",layer:"F.Cu",ids:["be81aa4d-fc86-499a-af01-66ca3ae1ecdc"],pts:[[156.475,103.595],[159.175,103.595]],who:0,via:null},{net:"+5V",layer:"F.Cu",ids:["556e773b-3ce3-49e4-a263-135fea089faf","61055542-8a86-4613-aded-3f7feb4a500c","dfa2b204-7f04-4d27-a57e-7073ab165f30","bbd497ff-0a3f-487d-a124-cb15da82a23c"],pts:[[151.525,107.405],[153,107.405],[153.6,106.805],[153.6,101.9],[154.2,101.3]],who:1,via:null},{net:"Net-(U1-DISCH)",layer:"F.Cu",ids:["54116c15-b204-4da2-a97e-7898d30d6987","f0edb941-f125-4093-ac18-ae5db7004081"],pts:[[156.475,104.865],[159.555,104.865],[160.825,103.595]],who:0,via:null},{net:"Net-(U1-DISCH)",layer:"F.Cu",ids:["a3752d4e-8bfd-41a1-af4c-8e0f26c50e70"],pts:[[160.825,103.595],[163.3,103.595]],who:0,via:null},{net:"Net-(U1-THRES)",layer:"F.Cu",ids:["7170ba8a-c0a5-41be-a08f-b07d53609ba4"],pts:[[151.525,104.865],[149.7,104.865]],who:1,via:"d4a38d38-4100-4184-a20b-a90bcda7e251"},{net:"Net-(U1-THRES)",layer:"B.Cu",ids:["b40660b2-21f7-46b3-a142-709f84f9149c","3c93ea08-4bd0-4844-a0ff-a33db348ee0b"],pts:[[149.7,104.865],[150.97,106.135],[158.2,106.135]],who:1,via:"2420f0c9-eab9-4df8-a49c-81fddea4f6bf"},{net:"Net-(U1-THRES)",layer:"F.Cu",ids:["3f274bf0-75e1-43ca-a2f5-a1fe4554c772","a3abda74-0f64-45ac-a7e1-ff4a34a73814","2ece4f7b-152f-4e13-aad4-9f227ee73677"],pts:[[156.475,106.135],[158.2,106.135],[162.41,106.135],[163.3,105.245]],who:0,via:null},{net:"Net-(U1-THRES)",layer:"F.Cu",ids:["acadf015-5709-4a95-ac9e-2102f6723b70"],pts:[[163.3,105.245],[163.3,107.7]],who:0,via:null},{net:"Net-(U1-CONT)",layer:"F.Cu",ids:["1b6e4f85-9592-437c-a2fb-55b7c3c987ab"],pts:[[156.475,107.405],[159.225,107.405]],who:1,via:null},{net:"GND",layer:"F.Cu",ids:["394a1e9d-d868-4f1a-abf7-3958f38aaf8a"],pts:[[160.775,107.405],[160.775,108.8]],who:1,via:"60fb787e-45f6-4a68-a26a-d9b7d7a2fbe8"},{net:"GND",layer:"F.Cu",ids:["54767c26-7f96-44a3-ae83-6c60dc0172b2"],pts:[[163.3,109.6],[163.3,111]],who:0,via:"ff8d5954-8ee6-47bc-a22e-314db4d05ca1"},{net:"Net-(U1-OUT)",layer:"F.Cu",ids:["440da6ab-a11d-465e-a330-f61b52d21ac1","be501c2a-c1a9-4d37-a14f-19f457e35a9d","5c6d08f3-2796-449e-a110-d84180bb2335"],pts:[[151.525,106.135],[149.5,106.135],[147.5,108.135],[147.5,110.1]],who:1,via:null},{net:"Net-(D1-A)",layer:"F.Cu",ids:["1eeb9a4f-f19b-4c9f-af69-4eeef0deae9c","ec231107-3eec-486d-a686-e867c99c408a","d169c045-0823-4f07-a4f5-abd74a006db5"],pts:[[147.5,111.75],[147.5,113.1],[148.4,114],[151.163,114]],who:0,via:null},{net:"GND",layer:"F.Cu",ids:["fd90e420-6295-4ea3-a7fc-6ceb0cfa09b5"],pts:[[153.038,114],[154.5,114]],who:1,via:"1b58d16a-e7a4-4c37-a18c-269228cea4c0"}],vias:[{id:"40c9c47d-da80-442d-af2f-3c76877e2be2",x:140.3,y:103.7,after:2},{id:"5b69faac-42a8-4e9a-a5a6-6d5dfd43099d",x:140.3,y:106.3,after:3},{id:"c3f1c0ec-2ecd-4d5b-aefa-4918ea7d12b1",x:135.4,y:103.48,after:4},{id:"8cd9063d-a802-4608-a0bf-37301e515cb6",x:135.4,y:106.52,after:8},{id:"92b73e55-d64d-40ed-a762-964d780c86e4",x:144,y:104.6,after:12},{id:"09027abf-d6f8-490a-a6a1-d8c68e68ed24",x:147.5,y:104.2,after:13},{id:"b5d4614a-b743-4609-ae0b-083a4cd2cfab",x:149.3,y:102.895,after:14},{id:"d4a38d38-4100-4184-a20b-a90bcda7e251",x:149.7,y:104.865,after:19},{id:"2420f0c9-eab9-4df8-a49c-81fddea4f6bf",x:158.2,y:106.135,after:20},{id:"60fb787e-45f6-4a68-a26a-d9b7d7a2fbe8",x:160.775,y:108.8,after:24},{id:"ff8d5954-8ee6-47bc-a22e-314db4d05ca1",x:163.3,y:111,after:25},{id:"1b58d16a-e7a4-4c37-a18c-269228cea4c0",x:154.5,y:114,after:28}],zone:"870b6204-6aa6-4654-a4ba-f2695d0f70a3",sch:{symbols:[{ref:"J1",id:"7241b1d8-25a0-4a2e-a4f5-9ec5b35b038a"},{ref:"R1",id:"83269ecf-0834-4cbc-af34-e9bf2452513c"},{ref:"R2",id:"03c9025d-ec51-4dc3-af8b-29b4e06e17ba"},{ref:"C1",id:"912a407d-77e2-4dd6-a8f2-08594996f510"},{ref:"C2",id:"e746af6c-d0fd-45e3-a739-f945b8697bca"},{ref:"R3",id:"865e660b-4ee9-4798-a88f-5924205c5a7f"},{ref:"R4",id:"9a53f4f7-1f73-4a8c-aa8c-c6651dceba6d"},{ref:"C3",id:"b63390a8-5aef-4b44-af36-034d3db666f8"},{ref:"U1",id:"9dcc47dc-0bd8-4fe5-a519-b4fe400c737a"},{ref:"C4",id:"babc9ba2-136c-40a4-ab8c-03b64940f6ea"},{ref:"R5",id:"b8ee751b-3a34-4aa3-aa38-6c469be22365"},{ref:"D1",id:"3f9591d6-809b-48c6-ab76-30ccec401994"}],power:[{id:"9ca409c4-d212-4844-af18-d9f4d327021f",at:[50.8,40.64]},{id:"fe9c3007-127e-4994-a9c9-419028bdf9df",at:[116.84,53.34]},{id:"123f7aa0-aa99-4437-a4f9-0cab9ad1c7fe",at:[30.48,83.82]},{id:"9303988f-9965-4ce5-a03e-c02bdd0701d0",at:[22.86,83.82]},{id:"59dc1c76-d3b6-471c-aeac-bd356bdc63fb",at:[62.23,73.66]},{id:"087f0b5e-d489-4dce-af06-27bd7de4179c",at:[66.04,58.42]},{id:"322f5217-70a5-479d-aa01-84859e6df7fc",at:[86.36,82.55]},{id:"09d09737-ddfe-4539-aee7-18a7374d3e0e",at:[114.3,78.74]},{id:"4c2735b6-4398-4f31-a419-b37f58bc6247",at:[129.54,55.88]},{id:"e66f64c2-0a9d-492a-a2d5-7eefe55f759e",at:[147.32,78.74]},{id:"0a60419d-faa7-4627-a92d-d9fca6d9098c",at:[78.74,43.18]},{id:"b9e8368a-5e29-4707-a2bb-0241b41788a7",at:[55.88,55.88]}],wires:[{ids:["ce88b442-58a3-4846-a781-ddcd62725f85","f5a664c4-a9fa-44f8-ad78-81e5800a020f"],pts:[[45.72,53.34],[50.8,53.34],[50.8,43.18]]},{ids:["751859ef-4c8a-42c1-ac95-36fe58539693"],pts:[[50.8,43.18],[50.8,40.64]]},{ids:["bb05d842-2f99-4a95-aff2-e580f9fa2c86"],pts:[[50.8,43.18],[60.96,43.18]]},{ids:["040a9323-79fb-4510-a747-1626b57e2f7d"],pts:[[60.96,43.18],[60.96,45.72]]},{ids:["3b909043-1648-40b4-ad23-51fe8858d54d"],pts:[[60.96,43.18],[71.12,43.18]]},{ids:["d9521404-53ec-464f-a63e-f07846d94730"],pts:[[71.12,43.18],[71.12,45.72]]},{ids:["3bcb5564-535c-4c93-a6ba-d82e1526efb9"],pts:[[60.96,53.34],[60.96,55.88]]},{ids:["9e5997d5-dcb1-4484-a073-044ac1f52a10"],pts:[[60.96,55.88],[66.04,55.88]]},{ids:["239c84f6-3e1e-4da6-a3df-b6fde05079d3","947bc76a-9712-4514-af77-477e11f9437c"],pts:[[71.12,53.34],[71.12,55.88],[66.04,55.88]]},{ids:["b3076fc4-abf9-45f0-a53d-6e7a5135a6d7"],pts:[[66.04,55.88],[66.04,58.42]]},{ids:["419fffe0-7bdc-424f-a66b-11041f98693c"],pts:[[60.96,55.88],[55.88,55.88]]},{ids:["cd370942-e9a6-4a14-ab49-6d37d20a5ee1"],pts:[[45.72,66.04],[52.07,66.04]]},{ids:["bf0cee54-3b95-453a-a184-3cdc0b6d9657"],pts:[[45.72,68.58],[52.07,68.58]]},{ids:["aa38fd7c-2b15-4c69-a01e-5ccde1d60ac8","49b7f212-ce6a-417f-a5d2-7c9bacd486be"],pts:[[59.69,66.04],[62.23,66.04],[62.23,68.58]]},{ids:["362d9d49-52b5-4208-acd4-3cec162350b1"],pts:[[59.69,68.58],[62.23,68.58]]},{ids:["67205d91-5358-44e1-a77a-1ab0d57e62fb"],pts:[[62.23,68.58],[62.23,73.66]]},{ids:["3da98d3a-2f65-4ac6-ae89-5b785d491322"],pts:[[22.86,78.74],[22.86,83.82]]},{ids:["7a816392-bec3-4b05-ad27-7db34024b98a"],pts:[[30.48,78.74],[30.48,83.82]]},{ids:["98f3fb12-52b3-446a-aa9c-53bf3ac4279a"],pts:[[71.12,43.18],[78.74,43.18]]},{ids:["e1e6ebae-eff0-4f02-a746-6c06744df15c"],pts:[[78.74,43.18],[86.36,43.18]]},{ids:["fe5ade89-5fb4-481c-a4a5-90cc9cf3ed89"],pts:[[86.36,43.18],[86.36,46.99]]},{ids:["0f0ea7b8-7ff4-44cd-a216-aee5f67c3f2e"],pts:[[86.36,54.61],[86.36,58.42]]},{ids:["62c4eadb-14e0-49b7-abaa-3d1f871c5430"],pts:[[86.36,66.04],[86.36,72.39]]},{ids:["c093405f-bf72-4e1f-a822-54c62ca8920c"],pts:[[86.36,80.01],[86.36,82.55]]},{ids:["b1e043f9-0192-45f9-aa12-480bd975373a","4323e4e9-3209-434e-ad49-3efbe9bb3932","146dd956-5a09-4aa9-a79f-0156d1f3cf84"],pts:[[86.36,43.18],[99.06,43.18],[99.06,60.96],[104.14,60.96]]},{ids:["b9c7efac-5360-40e8-acee-f45f11bbb4fb","6b3625e6-52b1-481d-a762-0fc4ff381110","d4f261af-e5ec-4133-abf6-a52ad0f62082"],pts:[[86.36,55.88],[93.98,55.88],[93.98,63.5],[104.14,63.5]]},{ids:["26136f21-9b0b-49f0-ab57-a053d5dffccf"],pts:[[86.36,68.58],[99.06,68.58]]},{ids:["00ab265d-73ff-4324-a12b-03629c39f943"],pts:[[99.06,68.58],[104.14,68.58]]},{ids:["24067b07-dc01-44e7-a4bb-877728678556","99105c0a-e7d1-43e5-af61-d0ba9b6eaecf"],pts:[[99.06,68.58],[99.06,71.12],[104.14,71.12]]},{ids:["bbe5678e-b59e-49b0-a6a7-3794d2cb892f"],pts:[[116.84,55.88],[116.84,53.34]]},{ids:["ea91a696-3cdd-431b-ab38-7d7e7baf8752"],pts:[[114.3,76.2],[114.3,78.74]]},{ids:["3732c551-0f32-43dc-aee3-0ca51263f504","a54e0286-b673-48e8-adcc-cf3eab909bd7"],pts:[[114.3,55.88],[114.3,45.72],[129.54,45.72]]},{ids:["2d07906e-cf35-40d7-a7eb-64ac9a9f75fa"],pts:[[129.54,53.34],[129.54,55.88]]},{ids:["c310bd47-35d7-409d-a5bb-7c0f4f89e689"],pts:[[124.46,66.04],[134.62,66.04]]},{ids:["145204bb-904f-4f66-abd3-f9ffa4491953","04fd72f4-69dd-4097-a363-b6f4431a369f"],pts:[[142.24,66.04],[147.32,66.04],[147.32,68.58]]},{ids:["4b87470f-16a1-41b9-a070-afe887b1a509"],pts:[[147.32,76.2],[147.32,78.74]]}],junctions:[{id:"fb40dbb6-fc09-4c1b-ad1e-e4e515defbdc",at:[50.8,43.18]},{id:"7c3f6582-d493-44a9-a7e7-4f2d9ebebe2d",at:[60.96,43.18]},{id:"985ef68c-8453-45c6-aabd-7c2963f6863e",at:[71.12,43.18]},{id:"7ecdfd67-2596-4b1a-aa75-a1e90e0c5a49",at:[86.36,43.18]},{id:"521bd3a9-50f5-455c-a54b-3545c175c0fa",at:[60.96,55.88]},{id:"84acd9b3-17d7-4c35-a8bb-bf8583ea7197",at:[66.04,55.88]},{id:"fac45b41-dbc1-4970-ab17-eb9d05f31bf2",at:[62.23,68.58]},{id:"81fceb66-ab9c-4247-a656-fe391ba0bfd0",at:[86.36,55.88]},{id:"5095ed75-3cdd-4564-afd2-8dde620e31eb",at:[86.36,68.58]},{id:"4b65123b-ec4f-4724-a078-443ce0e7e5f7",at:[99.06,68.58]}],notes:["89d10dd8-c7dc-452e-af18-09822d118d09","afea062a-530a-473a-a751-614e43647b66"]}};var Ue=globalThis.KiCadCanvas,ze=_f,Ke=ze.board,Pf=()=>Ue.parseDoc(Sf),Yo=()=>Ue.parseDoc(ss);function ll(){let e=Ue.parse(ss);for(let t of Ue.kids(e,"zone"))for(let n=t.length-1;n>=0;n--)Array.isArray(t[n])&&t[n][0]==="filled_polygon"&&t.splice(n,1);return Ue.parseDoc(Ue.serialize(e))}function xf(e){let t=Ue.parse(ss),n=[],r=new Set,o=Yo().items;for(let i of t){let s=Array.isArray(i)?Ue.uuidOf(i):"";if(!s||!o.has(s)){n.push(i);continue}let a=e.items.get(s);a&&(r.add(s),n.push(i[0]==="zone"?i:a.node))}for(let i of e.items.values()){if(r.has(i.id))continue;let s=i.node.map(a=>Array.isArray(a)&&a[0]==="uuid"?Ue.parse(`(uuid "${Ue.newUuid()}")`):a);n.push(s)}return Ue.serialize(n)+`
 `}var Zo=new Set(["F.Fab","B.Fab","F.Paste","B.Paste","F.Adhes","B.Adhes"]);function Nr(e,t,n,r){let o=r[2]-r[0],i=r[3]-r[1],s=Math.min(e/o,t/i);return{ppm:s,zoom:1,dpr:n,panX:(e-o*s)/2,panY:(t-i*s)/2,x0:r[0],y0:r[1]}}var kn=(e,t,n)=>[e.panX+(t-e.x0)*e.ppm*e.zoom,e.panY+(n-e.y0)*e.ppm*e.zoom],Kf=(e,t,n)=>[e.x0+(t-e.panX)/(e.ppm*e.zoom),e.y0+(n-e.panY)/(e.ppm*e.zoom)],cl=(e,t,n)=>[Ft(e[0],t[0],n),Ft(e[1],t[1],n),Ft(e[2],t[2],n),Ft(e[3],t[3],n)];function Tt(e,t,n,r,o,i){let s=o-n,a=i-r,l=s*s+a*a,c=l?Math.max(0,Math.min(1,((e-n)*s+(t-r)*a)/l)):0;return Math.hypot(e-(n+c*s),t-(r+c*a))}function fl(e,t){let n=[];for(let r of e.items.values())if(r.kind==="footprint"){let o=new Map;for(let i of r.geom){if(!i.pad||i.hole||i.padIndex===void 0||i.t==="text"||!/\.Cu$/.test(i.layer)||!i.net)continue;let s=o.get(i.padIndex);if(s){s.layers.push(i.layer);continue}let a=Math.round((i.rot||0)/90)%2!==0,l=i.w||(i.r||0)*2,c=i.h||(i.r||0)*2,f={id:r.id,net:i.net,kind:"pad",x:i.x,y:i.y,r:0,hw:(a?c:l)/2,hh:(a?l:c)/2,layers:[i.layer]};o.set(i.padIndex,f),n.push(f)}}else if(r.kind==="segment"){if(t&&!t.has(r.id))continue;let o=r.geom[0];if(!o||!o.net)continue;n.push({id:r.id,net:o.net,kind:"seg",x:o.x1,y:o.y1,x2:o.x2,y2:o.y2,r:o.w/2,layers:[o.layer]})}else if(r.kind==="via"){if(t&&!t.has(r.id))continue;let o=r.geom[0];if(!o||!o.net)continue;n.push({id:r.id,net:o.net,kind:"via",x:o.x,y:o.y,r:o.r,layers:null})}return n}var gf=(e,t)=>!e.layers||!t.layers||e.layers.some(n=>t.layers.includes(n)),as=(e,t,n,r)=>Math.abs(t-e.x)<=e.hw+r&&Math.abs(n-e.y)<=e.hh+r;function np(e,t){if(!gf(e,t))return!1;if(e.kind>t.kind){let r=e;e=t,t=r}let n=.02;if(e.kind==="pad"&&t.kind==="pad")return!1;if(e.kind==="pad"&&t.kind==="seg")return as(e,t.x,t.y,n)||as(e,t.x2,t.y2,n);if(e.kind==="pad"&&t.kind==="via")return as(e,t.x,t.y,n);if(e.kind==="seg"&&t.kind==="seg"){let r=Math.max(e.r,t.r)+n;return Tt(e.x,e.y,t.x,t.y,t.x2,t.y2)<=r||Tt(e.x2,e.y2,t.x,t.y,t.x2,t.y2)<=r||Tt(t.x,t.y,e.x,e.y,e.x2,e.y2)<=r||Tt(t.x2,t.y2,e.x,e.y,e.x2,e.y2)<=r}return e.kind==="seg"&&t.kind==="via"?Tt(t.x,t.y,e.x,e.y,e.x2,e.y2)<=t.r+n:Math.hypot(e.x-t.x,e.y-t.y)<=n}function Wo(e,t={}){let n=fl(e,t.only||null),r=n.length,o=n.map((c,f)=>f),i=c=>{for(;o[c]!==c;)o[c]=o[o[c]],c=o[c];return c},s=-1;for(let c=0;c<r;c++){let f=n[c];t.poured&&f.net===t.poured&&(!f.layers||f.layers.includes("B.Cu"))&&(s<0?s=c:o[i(c)]=i(s));for(let u=c+1;u<r;u++){let d=n[u];f.net===d.net&&i(c)!==i(u)&&np(f,d)&&(o[i(c)]=i(u))}}let a=new Map;n.forEach((c,f)=>{let u=a.get(c.net);u||a.set(c.net,u=new Map);let d=i(f),p=u.get(d);p||u.set(d,p=[]),p.push(c)});let l=[];for(let[c,f]of a){let u=[...f.values()].map(b=>{let y=b.filter(M=>M.kind!=="seg");return y.length?y:b});if(u.length<2)continue;let d=String(e.nets.get(c)||""),p=(b,y)=>{let M=[1/0,b[0],y[0]];for(let K of b)for(let S of y){let T=Math.hypot(K.x-S.x,K.y-S.y);T<M[0]&&(M=[T,K,S])}return M},h=u.map(()=>!1),R=u.map(()=>null),m=b=>{for(let y=0;y<u.length;y++){if(h[y])continue;let M=p(u[b],u[y]);(!R[y]||M[0]<R[y][0])&&(R[y]=M)}};h[0]=!0,m(0);for(let b=1;b<u.length;b++){let y=-1;for(let K=0;K<u.length;K++)!h[K]&&(y<0||R[K][0]<R[y][0])&&(y=K);h[y]=!0;let M=R[y];l.push({net:c,name:d,a:[M[1].x,M[1].y],b:[M[2].x,M[2].y],ids:[M[1].id,M[2].id]}),m(y)}}return l}function ul(e,t,n,r){let o=null;for(let i of fl(e,null)){let s=1/0,a=i.x,l=i.y;if(i.kind==="pad")(!i.layers||i.layers.includes(r))&&as(i,t,n,.05)&&(s=0);else if(i.kind==="via")Math.hypot(t-i.x,n-i.y)<=i.r+.1&&(s=.01);else if(i.layers.includes(r)){let c=Math.hypot(t-i.x,n-i.y),f=Math.hypot(t-i.x2,n-i.y2);Math.min(c,f)<=i.r+.2?(s=.02+Math.min(c,f),f<c&&(a=i.x2,l=i.y2)):Tt(t,n,i.x,i.y,i.x2,i.y2)<=i.r+.05&&(s=.5,a=t,l=n)}s<(o?o.d:1/0)&&(o={net:i.net,x:a,y:l,kind:i.kind,id:i.id,d:s})}return o}function rp(e,t,n,r,o){let i=o.x-o.hw,s=o.x+o.hw,a=o.y-o.hh,l=o.y+o.hh,c=0,f=1,u=n-e,d=r-t,p=!0;for(let[R,m]of[[-u,e-i],[u,s-e],[-d,t-a],[d,l-t]]){if(Math.abs(R)<1e-12){if(m<0){p=!1;break}continue}let b=m/R;if(R<0){if(b>f){p=!1;break}b>c&&(c=b)}else{if(b<c){p=!1;break}b<f&&(f=b)}}if(p)return 0;let h=(R,m)=>Math.hypot(Math.max(i-R,0,R-s),Math.max(a-m,0,m-l));return Math.min(h(e,t),h(n,r),Tt(i,a,e,t,n,r),Tt(s,a,e,t,n,r),Tt(i,l,e,t,n,r),Tt(s,l,e,t,n,r))}function op(e,t,n,r,o,i,s,a){let l=(p,h,R,m,b,y)=>(R-p)*(y-h)-(m-h)*(b-p),c=l(o,i,s,a,e,t),f=l(o,i,s,a,n,r),u=l(e,t,n,r,o,i),d=l(e,t,n,r,s,a);return(c>0&&f<0||c<0&&f>0)&&(u>0&&d<0||u<0&&d>0)?0:Math.min(Tt(e,t,o,i,s,a),Tt(n,r,o,i,s,a),Tt(o,i,e,t,n,r),Tt(s,a,e,t,n,r))}function ls(e,t,n,r,o,i,s){let a={layers:o},l=1e-6;for(let c of fl(e,null)){if(c.net===i||!gf(a,c))continue;let f;if(c.kind==="pad"?f=rp(t[0],t[1],n[0],n[1],c):c.kind==="via"?f=Tt(c.x,c.y,t[0],t[1],n[0],n[1])-c.r:f=op(t[0],t[1],n[0],n[1],c.x,c.y,c.x2,c.y2)-c.r,f-r/2<s-l)return!0}return!1}function Vf(e,t,n,r){let o=null,i=1/0;for(let s of e.items.values()){let a=s.geom[0];if(!a)continue;let l=1/0;s.kind==="segment"?l=Tt(t,n,a.x1,a.y1,a.x2,a.y2)-a.w/2:s.kind==="via"&&(l=Math.hypot(t-a.x,n-a.y)-a.r-.05),l<=r&&l<i&&(i=l,o=s.id)}return o}function ip(e,t,n,r,o,i){e.beginPath(),e.moveTo(t+i,n),e.lineTo(t+r-i,n),e.arcTo(t+r,n,t+r,n+i,i),e.lineTo(t+r,n+o-i),e.arcTo(t+r,n+o,t+r-i,n+o,i),e.lineTo(t+i,n+o),e.arcTo(t,n+o,t,n+o-i,i),e.lineTo(t,n+i),e.arcTo(t,n,t+i,n,i),e.closePath()}function cs(e,t,n,r,o,i,s=1){if(s<=0)return;e.save(),e.globalAlpha=s,e.translate(Math.round(t),Math.round(n)),e.beginPath(),e.moveTo(0,0),e.lineTo(0,15.5),e.lineTo(4.2,11.6),e.lineTo(10.8,11.2),e.closePath(),e.fillStyle=o,e.strokeStyle="#fff",e.lineWidth=1.4,e.lineJoin="round",e.stroke(),e.fill(),e.font=`500 11px ${i}`,e.textBaseline="middle",e.textAlign="left";let a=e.measureText(r).width+12;ip(e,9,15,a,18,3),e.fillStyle=o,e.fill(),e.fillStyle="#fff",e.fillText(r,15,24.5),e.restore()}var Br=[{name:"Mara",color:"#A45BD6"},{name:"Jun",color:"#149C94"},{name:"Ada",color:"#D9822B"}],er=e=>e<=0?0:e>=1?1:e*e*(3-2*e),fs=e=>e<=0?0:e>=1?1:1-Math.pow(1-e,3),en=(e,t=0,n=1)=>e<t?t:e>n?n:e;function Ft(e,t,n){return e+(t-e)*n}var tt=(e,t,n)=>en((e-t)/(n-t)),Ct=(e,t)=>Math.hypot(e[0]-t[0],e[1]-t[1]);var Tf=e=>{let t=Ue;return t.strokeGlyph(e.codePointAt(0))||t.strokeGlyph(63)},sp=e=>{let t=0;for(let n of e)t+=Tf(n).adv;return t};function ap(e){let t=e.dataset.text||(e.dataset.text=(e.textContent||"").trim().replace(/\s+/g," ")),n=parseFloat(getComputedStyle(e).fontSize)*.78,r=e.clientWidth;if(!r||!n||e.dataset.at===r+":"+n)return;e.dataset.at=r+":"+n;let o=[],i="";for(let p of t.split(" ")){let h=i?i+" "+p:p;i&&sp(h)*n>r?(o.push(i),i=p):i=h}i&&o.push(i);let s=n*1.6,a=Math.max(1.4,n*(e.tagName==="H1"?.15:.14)),l=a/2+1,c="",f=0;o.forEach((p,h)=>{let R=l,m=l+n+h*s;for(let b of p){let y=Tf(b);for(let M of y.strokes)for(let K=0;K+1<M.length;K+=2)c+=(K?"L":"M")+(R+M[K]*n).toFixed(1)+" "+(m+M[K+1]*n).toFixed(1);R+=y.adv*n}f=Math.max(f,R)});let u=Math.ceil(f+l),d=Math.ceil(l*2+n*1.32+(o.length-1)*s);e.innerHTML=`<span class="t"></span><svg aria-hidden="true" width="${u}" height="${d}" viewBox="0 0 ${u} ${d}"><path d="${c}" stroke-width="${a.toFixed(2)}"/></svg>`,e.firstChild.textContent=t,e.classList.add("lettered")}function Yf(){let e=Array.from(document.querySelectorAll("[data-stroke]")),t=()=>e.forEach(ap);t(),window.addEventListener("resize",t),document.fonts&&document.fonts.ready&&document.fonts.ready.then(t).catch(()=>{})}var us=()=>matchMedia("(prefers-reduced-motion: reduce)").matches;function ds(e,t){let n=e.getContext("2d"),r=0,o=0,i={ctx:n,w:0,h:0,dpr:1,visible:!1,invalidate(){!r&&i.visible&&(r=requestAnimationFrame(a))}};function s(){let l=e.getBoundingClientRect(),c=Math.min(2,window.devicePixelRatio||1),f=Math.max(1,Math.round(l.width)),u=Math.max(1,Math.round(l.height));f===i.w&&u===i.h&&c===i.dpr||(i.w=f,i.h=u,i.dpr=c,e.width=Math.round(f*c),e.height=Math.round(u*c),i.visible&&(r&&cancelAnimationFrame(r),r=0,a(performance.now())))}function a(l){if(r=0,!i.w)return;let c=o?Math.min(64,l-o):16;o=l,t(i,l,c)&&i.visible?r=requestAnimationFrame(a):o=0}return new ResizeObserver(s).observe(e),new IntersectionObserver(l=>{i.visible=l[l.length-1].isIntersecting,i.visible&&(s(),i.invalidate())},{rootMargin:"80px"}).observe(e),document.addEventListener("visibilitychange",()=>{document.hidden||i.invalidate()}),document.fonts&&document.fonts.ready&&document.fonts.ready.then(()=>i.invalidate()),i}var Zf='"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace',ps='"IBM Plex Sans", -apple-system, "Segoe UI", system-ui, sans-serif';var $r=.25,Oo={size:.6,drill:.3},dl=.2,pl={"F.Cu":"#C83434","B.Cu":"#4D7FC4"},tr=[Ke.x-3,Ke.y-3,Ke.x+Ke.w+3,Ke.y+Ke.h+3],Wf=[26,27,28,20],Of=new Set(ze.parts.map(e=>e.id)),nr=(e,t)=>t+Math.round((e-t)/$r)*$r,Rs=[[{ref:"R1",dwell:3.4,hold:!0},{at:[14.75,9],dwell:1.1},{ref:"C1",dwell:2.2,hold:!0},{at:[9.5,13.25],dwell:.9},{ref:"R2",dwell:2.6,hold:!0},{at:[6,20],dwell:1.8},{ref:"J1",dwell:1.4}],[{ref:"R4",dwell:3.8,hold:!0},{at:[33.75,15.25],dwell:1},{ref:"C3",dwell:2.4,hold:!0},{at:[39,21],dwell:2},{ref:"R3",dwell:2.8,hold:!0},{at:[29.5,13.25],dwell:1.2}]],Kn=.11,Rl=2200,hl=900,Lf=e=>e<=0?0:e>=1?1:e*e*e*(10-15*e+6*e*e);function Xf(e){let t=e.querySelector("canvas"),n=L=>e.querySelector(L),r=n("[data-xy]"),o=n("[data-z]"),i=n("[data-counts]"),s=n("[data-unrouted]"),a=n("[data-toolname]"),l=us(),c=ll(),f="select",u="F.Cu",d=tr.slice(),p=null,h=null,R=null,m=[],b=!0,y=!1,M=null,K=null,S=null,T=[],O=null,Q=[null,null],v=null,Z=null,V=0,P=0,W=0,E=null,z=null,H=0,N=0,g=new Map;function k(){if(g.clear(),!l)for(let L of Wf){let X=ze.routes[L];for(let U of[...X.ids,...X.via?[X.via]:[]]){let te=c.items.get(U);te&&(g.set(U,te),c.items.delete(U))}}}k();let J=L=>{let X=c.nets&&c.nets.get?c.nets.get(L):null;return typeof X=="string"&&X?X:`net ${L}`},Y=L=>L===1||L===2?.4:.25,I=()=>`mini-${++N}-${Math.random().toString(36).slice(2,8)}`,C=L=>Math.round(L*1e3)/1e3;function A(L,X,U,te){let pe=I();return Ue.addItem(c,Ue.parse(`(segment (start ${C(L[0])} ${C(L[1])}) (end ${C(X[0])} ${C(X[1])}) (width ${Y(U)}) (layer "${te}") (net ${U}) (uuid "${pe}"))`)),pe}function D(L,X){let U=I();return Ue.addItem(c,Ue.parse(`(via (at ${C(L[0])} ${C(L[1])}) (size ${Oo.size}) (drill ${Oo.drill}) (layers "F.Cu" "B.Cu") (net ${X}) (uuid "${U}"))`)),U}let G=L=>{let X=Ue.atOf(L.node);return[X[0],X[1]]};function w(L){let X=Ue.hitTest(c,L[0],L[1],.3,{hidden:Zo});if(X&&(Of.has(X)||c.items.get(X)?.kind==="gr_text"))return X;for(let U of c.items.values())if(U.kind==="gr_text"&&U.bbox&&L[0]>=U.bbox[0]&&L[0]<=U.bbox[2]&&L[1]>=U.bbox[1]&&L[1]<=U.bbox[3])return U.id;return X}function $(L){if(!S||!L)return null;let X=ul(c,L[0],L[1],S.layer);return X&&X.net!==S.net?X.net:null}let B=L=>!!L&&(Of.has(L)||c.items.get(L)?.kind==="gr_text");function q(L){L.length&&T.push({kind:"add",ids:L})}function Re(L){if(L.kind==="move"){let X=c.items.get(L.id);X&&Ue.moveItem(c,X,L.from[0],L.from[1],1e6)}else if(L.kind==="add")for(let X of L.ids)c.items.delete(X);else c.items.set(L.item.id,L.item)}function ne(){b=!0,Zt.invalidate(),Nt()}function _e(){y=!0,V=performance.now(),ne(),l&&(clearTimeout(W),W=window.setTimeout(ue,Rl+600))}function ue(){if(M||S){W=window.setTimeout(ue,hl);return}let L=T.pop();L&&(Re(L),h=null,ne(),T.length&&(W=window.setTimeout(ue,hl+300)))}let Ve=L=>ze.parts.find(X=>X.ref===L)?.id;function Te(L){let X=L.ref?c.items.get(Ve(L.ref)||""):null;if(X){let te=G(X);return[nr(te[0],Ke.x),nr(te[1],Ke.y)]}let U=L.at||[0,0];return[Ke.x+U[0],Ke.y+U[1]]}function Oe(L,X){let U=Rs[L],te=Q[L];if(!te){let it=Te(U[0]);te=Q[L]={i:0,from:it,to:it,t0:X,dur:0,until:X+(l?1e12:1200+L*900)}}if(!(O&&O.who===L)&&X>=te.until){let it=(te.i+1)%U.length,ct=Te(U[it]),ht=xe(te.to,ct)*1e3;te=Q[L]={i:it,from:te.to,to:ct,t0:X,dur:ht,until:X+ht+(Kn+U[it].dwell)*1e3}}let pe=te.dur?(X-te.t0)/te.dur:1,Fe=Lf(pe),We=te.to[0]-te.from[0],he=te.to[1]-te.from[1],se=Math.hypot(We,he)||1,Me=Math.sin(Math.PI*Fe)*Math.min(1.6,se*.07)*(L?-1:1),ye=U[te.i],He=X>=te.t0+te.dur+Kn*1e3;return{at:[te.from[0]+We*Fe-he/se*Me,te.from[1]+he*Fe+We/se*Me],held:ye.hold&&ye.ref&&He&&Ve(ye.ref)||null}}function De(L,X,U){let te=Q[L];if(!te)return;let pe=Te(Rs[L][te.i]),Fe=xe(X,pe)*1e3;Q[L]={i:te.i,from:X,to:pe,t0:U,dur:Fe,until:U+Fe+(Kn+Rs[L][te.i].dwell)*1e3}}let xe=(L,X)=>en(.35+Ct(L,X)/28,.45,1.1);function Se(L){let X=T.pop(),U=Math.random()<.5?0:1,te=[],pe=Oe(U,L).at,Fe=pe,We=se=>{te.push({dur:xe(pe,se),to:se}),pe=se},he=null;if(X.kind==="move"){let se=c.items.get(X.id);if(!se)return;let Me=G(se),ye=X.from;if(Ct(Me,ye)<1e-6)return;he={id:X.id,from:ye},We(Me),te.push({dur:Kn,to:Me,end:()=>{v={id:X.id,who:U}}}),te.push({dur:en(Ct(Me,ye)/4.5,1.2,3.2),to:ye,straight:!0,tick:He=>{let it=nr(He[0],ye[0]),ct=nr(He[1],ye[1]),ht=G(se);(ht[0]!==it||ht[1]!==ct)&&(Ue.moveItem(c,se,it,ct,1e6),b=!0)},end:()=>{Ue.moveItem(c,se,ye[0],ye[1],1e6),ne()}}),te.push({dur:.3,to:ye,end:()=>{v=null}})}else if(X.kind==="add")for(let se of X.ids.slice().reverse()){let Me=c.items.get(se),ye=Me&&Me.geom[0];if(!ye)continue;let He=Me.kind==="via"?[ye.x,ye.y]:[(ye.x1+ye.x2)/2,(ye.y1+ye.y2)/2];We(He),te.push({dur:Kn+.28,to:He,start:()=>{v={id:se,who:U}},end:()=>{c.items.delete(se),v=null,ne()}})}else{let se=X.item,Me=se.geom[0];if(se.kind==="via"||!Me){let ye=Me?[Me.x,Me.y]:pe;We(ye),te.push({dur:Kn+.1,to:ye,end:()=>{c.items.set(se.id,se),ne()}})}else{let ye=[Me.x1,Me.y1],He=[Me.x2,Me.y2];We(ye),te.push({dur:Kn,to:ye,end:()=>{Z={a:ye,b:He,at:ye,layer:Me.layer,w:Me.w}}}),te.push({dur:en(Ct(ye,He)/7,.5,1.6),to:He,straight:!0,tick:it=>{Z&&(Z.at=it)}}),te.push({dur:Kn,to:He,end:()=>{Z=null,c.items.set(se.id,se),ne()}})}}te.length&&(te.push({dur:.25,to:pe}),O={who:U,steps:te,i:0,t0:L,from:Fe,at:Fe,move:he})}function Ne(L,X){let U=X.who===0?0:1,te=[],pe=X.pts,Fe=Oe(U,L).at,We=X.layer,he=se=>{let Me=g.get(X.ids[se]);Z=Me?{a:pe[se],b:pe[se+1],at:pe[se],layer:We,w:Me.geom[0].w}:null};te.push({dur:xe(Fe,pe[0]),to:pe[0]}),te.push({dur:Kn,to:pe[0],end:()=>he(0)});for(let se=1;se<pe.length;se++){let Me=pe[se-1],ye=pe[se],He=X.ids[se-1],it=se===pe.length-1;te.push({dur:en(Ct(Me,ye)/6,.45,1.4),to:ye,straight:!0,tick:ct=>{Z&&(Z.at=[nr(ct[0],Me[0]),nr(ct[1],Me[1])])}}),te.push({dur:Kn+(it?0:.06),to:ye,end:()=>{let ct=g.get(He);if(ct&&c.items.set(He,ct),it){Z=null;let ht=X.via?g.get(X.via):null;ht&&c.items.set(ht.id,ht)}else he(se);ne()}})}te.push({dur:.35,to:pe[pe.length-1]}),O={who:U,steps:te,i:0,t0:L,from:Fe,at:Fe,move:null}}function re(){for(let L of Wf){let X=ze.routes[L];if(X.ids.some(U=>g.has(U)&&!c.items.has(U)))return X}return null}function le(L){for(;O;){let X=O,U=X.steps[X.i],te=(L-X.t0)/(U.dur*1e3);te>=0&&U.start&&(U.start(),U.start=void 0);let pe=Lf(te),Fe=U.to[0]-X.from[0],We=U.to[1]-X.from[1],he=Math.hypot(Fe,We),se=U.straight||he<.5?0:Math.sin(Math.PI*pe)*Math.min(1.6,he*.07)*(X.who?-1:1);if(X.at=[X.from[0]+Fe*pe-We/(he||1)*se,X.from[1]+We*pe+Fe/(he||1)*se],U.tick&&U.tick(X.at),te<1)return;if(U.end&&U.end(),X.from=U.to,X.t0+=U.dur*1e3,X.i++,X.i>=X.steps.length){ge(L);return}}}function ge(L){O&&(De(O.who,O.at,L),O=null,v=null,Z=null,P=L+hl)}function Ye(L){!O||!O.move||O.move.id!==L||(T.push({kind:"move",id:L,from:O.move.from}),ge(performance.now()))}let Be=document.querySelector("[data-keep]");if(Be){let L="/?start=mini";Be.href=document.documentElement.dataset.me?L:"/auth/github/login?next="+encodeURIComponent(L),Be.addEventListener("click",()=>{we();try{localStorage.setItem("kc.onboard.mini",JSON.stringify({board:xf(c),at:Date.now()}))}catch{}})}function nt(L,X){let U=X[0]-L[0],te=X[1]-L[1],pe=Math.abs(U),Fe=Math.abs(te);if(pe<.001||Fe<.001||Math.abs(pe-Fe)<.001)return[L,X];let We=Math.min(pe,Fe),he=pe>Fe?[X[0]-Math.sign(U)*We,L[1]]:[L[0],X[1]-Math.sign(te)*We];return[L,he,X]}function Pe(L,X){let U=nt(X,L);return U.length===3?[L,U[1],X]:U}function rt(L,X,U){let te=Y(X),pe=[L[0]],Fe=0;for(let We=1;We<L.length;We++){let he=L[We-1],se=L[We],Me=Ct(he,se);if(!ls(c,he,se,te,[U],X,dl)){pe.push(se),Fe+=Me;continue}let ye=0;for(let He=.05;He<Me;He+=.05){let it=[Ft(he[0],se[0],He/Me),Ft(he[1],se[1],He/Me)];if(ls(c,he,it,te,[U],X,dl))break;ye=He}return ye>0&&(pe.push([Ft(he[0],se[0],ye/Me),Ft(he[1],se[1],ye/Me)]),Fe+=ye),{pts:pe,whole:!1,len:Fe}}return{pts:pe,whole:!0,len:Fe}}function ot(L,X,U,te){let pe=rt(nt(L,X),U,te);if(pe.whole)return pe;let Fe=rt(Pe(L,X),U,te);return Fe.whole||Fe.len>pe.len+1e-6?Fe:pe}let ft=(L,X)=>!ls(c,L,L,Oo.size,null,X,dl);function Qe(L,X){let U=ul(c,L[0],L[1],u);return U&&(X===null||X===0||U.net===X)?{at:[U.x,U.y],net:U.net,onCopper:!0}:{at:[nr(L[0],Ke.x),nr(L[1],Ke.y)],net:X||0,onCopper:!1}}function Yt(L){S&&L!=="route"&&we(),f=L,L!=="select"&&(h=null),Nt(),Zt.invalidate()}function Ze(L){if(L!==u){if(S&&R){let X=S.made,U=Qe(R,S.net),te=ot(S.from,U.at,S.net,S.layer),pe=te.pts[te.pts.length-1];if(!ft(pe,S.net))return;for(let Fe=1;Fe<te.pts.length;Fe++)X.push(A(te.pts[Fe-1],te.pts[Fe],S.net,S.layer));X.push(D(pe,S.net)),S={net:S.net,from:pe,layer:L,made:X}}u=L,b=!0,Nt(),Zt.invalidate()}}function we(){S&&(q(S.made),S=null,_e())}function ut(){c=ll(),k(),T.length=0,O=null,Q[0]=Q[1]=null,v=null,Z=null,clearTimeout(W),S=null,M=null,h=null,d=tr.slice(),f="select",u="F.Cu",b=!0,y=!1,P=performance.now()+1800,Nt(),Zt.invalidate()}function xt(L,X){let U=X?X[0]:(d[0]+d[2])/2,te=X?X[1]:(d[1]+d[3])/2,pe=en((d[2]-d[0])*L,(tr[2]-tr[0])/6,(tr[2]-tr[0])*1.5),Fe=pe/(d[2]-d[0]);d=[U-(U-d[0])*Fe,te-(te-d[1])*Fe,U+(d[2]-U)*Fe,te+(d[3]-te)*Fe],b=!0,Zt.invalidate()}function pn(){if(!h)return;let L=c.items.get(h);if(!L||L.kind!=="segment"&&L.kind!=="via")return;c.items.delete(L.id);let X=T.find(U=>U.kind==="add"&&U.ids.includes(L.id));X&&X.kind==="add"?(X.ids.splice(X.ids.indexOf(L.id),1),X.ids.length||T.splice(T.indexOf(X),1)):T.push({kind:"del",item:L}),h=null,_e()}function Nt(){e.dataset.tool=f,e.dataset.layer=u,e.querySelectorAll("[data-tool-btn]").forEach(U=>U.setAttribute("aria-pressed",String(U.dataset.toolBtn===f))),e.querySelectorAll("[data-layer-btn]").forEach(U=>U.setAttribute("aria-pressed",String(U.dataset.layerBtn===u)));let L=n("[data-act=undo]");L&&(L.disabled=!T.length&&!S);let X=n("[data-act=reset]");if(X&&(X.disabled=!y),a&&(a.textContent=f==="route"?S?$(R)!==null?`Route Tracks: ${J(S.net)} cannot connect to ${J($(R))}`:`Route Tracks: ${J(S.net)}, click to place, double-click to finish`:"Route Tracks: click a pad or a track to start":f==="via"?"Add Via":"Select item(s)"),b&&(m=Wo(c,{poured:1})),i){let U=0,te=0;for(let pe of c.items.values())pe.kind==="via"?U++:pe.kind==="segment"&&te++;i.textContent=`Pads 42   Vias ${U}   Track Segments ${te}   Nets 9`,s&&(s.textContent=`Unrouted ${m.length}`,s.classList.toggle("ok",m.length===0))}}let Zt=ds(t,(L,X)=>{H||(H=X,P=X+1800);let{ctx:U,w:te,h:pe,dpr:Fe}=L;p=Nr(te,pe,Fe,d),z||(z=document.createElement("canvas")),(z.width!==t.width||z.height!==t.height)&&(z.width=t.width,z.height=t.height,b=!0),b&&(m=Wo(c,{poured:1}),Ue.render(c,z.getContext("2d"),p,{hidden:Zo,grid:1,ratsnest:m,selected:h?new Set([h]):null,zoneFill:!0,activeLayer:u}),b=!1,o&&(o.textContent=`Z ${(p.ppm/3.78).toFixed(2)}`)),U.setTransform(1,0,0,1,0,0),U.drawImage(z,0,0),U.setTransform(Fe,0,0,Fe,0,0);let We=he=>kn(p,he[0],he[1]);if(S&&R){let he=Qe(R,S.net),se=ot(S.from,he.at,S.net,S.layer).pts.map(We);U.strokeStyle=pl[S.layer],U.globalAlpha=.85,U.lineWidth=Math.max(1.5,Y(S.net)*p.ppm),U.lineCap="round",U.lineJoin="round",U.beginPath(),se.forEach((Me,ye)=>ye?U.lineTo(Me[0],Me[1]):U.moveTo(Me[0],Me[1])),U.stroke(),U.globalAlpha=1}if(f==="via"&&R){let he=Qe(R,null),se=We(he.at);U.globalAlpha=ft(he.at,he.net)?.8:.22,U.fillStyle="#ECECEC",U.beginPath(),U.arc(se[0],se[1],Oo.size/2*p.ppm,0,6.3),U.fill(),U.fillStyle="#001023",U.beginPath(),U.arc(se[0],se[1],Oo.drill/2*p.ppm,0,6.3),U.fill(),U.globalAlpha=1}if(f!=="select"&&R){let he=Qe(R,S?S.net:null),se=We(he.at);U.strokeStyle="#FFFFFFB0",U.lineWidth=1,U.beginPath(),U.moveTo(Math.round(se[0])+.5,se[1]-9),U.lineTo(Math.round(se[0])+.5,se[1]+9),U.moveTo(se[0]-9,Math.round(se[1])+.5),U.lineTo(se[0]+9,Math.round(se[1])+.5),U.stroke(),he.onCopper&&(U.beginPath(),U.arc(se[0],se[1],6,0,6.3),U.stroke())}if(!l){if(!O&&T.length&&!M&&!S&&!K&&X-V>Rl&&X>P)Se(X);else if(!O&&!T.length&&!M&&!S&&!K&&X-V>Rl&&X>P){let he=re();he&&Ne(X,he)}le(X)}if(v){let he=c.items.get(v.id),se=he&&he.geom[0];if(U.strokeStyle=Br[v.who].color,U.lineCap="round",he&&he.kind==="segment"&&se){let Me=We([se.x1,se.y1]),ye=We([se.x2,se.y2]);U.globalAlpha=.75,U.lineWidth=se.w*p.ppm+4,U.beginPath(),U.moveTo(Me[0],Me[1]),U.lineTo(ye[0],ye[1]),U.stroke(),U.globalAlpha=1}else if(he&&he.bbox){let Me=We([he.bbox[0],he.bbox[1]]),ye=We([he.bbox[2],he.bbox[3]]);U.lineWidth=1.5,U.strokeRect(Me[0]-3,Me[1]-3,ye[0]-Me[0]+6,ye[1]-Me[1]+6)}}if(Z){let he=We(Z.a),se=We(Z.at);U.strokeStyle=pl[Z.layer]||pl["F.Cu"],U.globalAlpha=.85,U.lineWidth=Math.max(1.5,Z.w*p.ppm),U.lineCap="round",U.beginPath(),U.moveTo(he[0],he[1]),U.lineTo(se[0],se[1]),U.stroke(),U.globalAlpha=1}return Rs.forEach((he,se)=>{let Me=Br[se],ye=Oe(se,X),He=!!O&&O.who===se,it=He?O.at:ye.at,ct=!He&&ye.held?c.items.get(ye.held):null;if(ct&&ct.bbox){let ee=kn(p,ct.bbox[0],ct.bbox[1]),me=kn(p,ct.bbox[2],ct.bbox[3]);U.strokeStyle=Me.color,U.lineWidth=1.5,U.strokeRect(ee[0]-3,ee[1]-3,me[0]-ee[0]+6,me[1]-ee[1]+6)}let ht=kn(p,it[0],it[1]);cs(U,ht[0],ht[1],Me.name,Me.color,ps)}),!l});function Bt(L){if(!p)return null;let X=t.getBoundingClientRect();return Kf(p,L.clientX-X.left,L.clientY-X.top)}t.addEventListener("pointerdown",L=>{let X=Bt(L);if(!(!X||L.button!==0))if(t.focus({preventScroll:!0}),R=X,V=performance.now(),f==="select"){let U=w(X);if(B(U)){let te=c.items.get(U);h=U,Ye(U),M={id:U,from:G(te),grab:X,moved:!1},t.setPointerCapture(L.pointerId)}else h=Vf(c,X[0],X[1],.25),h||(K={at:[L.clientX,L.clientY],box:d.slice()},t.setPointerCapture(L.pointerId));b=!0,Zt.invalidate()}else if(f==="via"){let U=Qe(X,null);ft(U.at,U.net)&&(q([D(U.at,U.net)]),_e())}else if(S){if($(X)!==null)return;let U=Qe(X,S.net);if(Ct(S.from,U.at)<1e-6){we();return}let te=ot(S.from,U.at,S.net,S.layer);for(let pe=1;pe<te.pts.length;pe++)S.made.push(A(te.pts[pe-1],te.pts[pe],S.net,S.layer));S.from=te.pts[te.pts.length-1],U.onCopper&&te.whole?we():_e()}else{let U=Qe(X,null);U.onCopper&&(S={net:U.net,from:U.at,layer:u,made:[]},Nt(),Zt.invalidate())}}),t.addEventListener("pointermove",L=>{let X=Bt(L);if(X){if(R=X,r&&(r.textContent=`X ${(X[0]-Ke.x).toFixed(2)}  Y ${(X[1]-Ke.y).toFixed(2)}`),M){let U=Math.round((X[0]-M.grab[0])/$r)*$r,te=Math.round((X[1]-M.grab[1])/$r)*$r,pe=c.items.get(M.id),Fe=M.from[0]+U,We=M.from[1]+te,he=G(pe);V=performance.now(),(he[0]!==Fe||he[1]!==We)&&(Ue.moveItem(c,pe,Fe,We,1e6),M.moved=!0,b=!0)}else if(K&&p){let U=(L.clientX-K.at[0])/p.ppm,te=(L.clientY-K.at[1])/p.ppm;d=[K.box[0]-U,K.box[1]-te,K.box[2]-U,K.box[3]-te],b=!0}else if(S){let U=$(X);U!==E&&(E=U,Nt())}else f==="select"&&(t.style.cursor=B(w(X))?"move":"");Zt.invalidate()}});let rr=()=>{if(M&&M.moved){let L=M;T.some(X=>X.kind==="move"&&X.id===L.id)||T.push({kind:"move",id:L.id,from:L.from}),_e()}M=null,K=null};t.addEventListener("pointerup",rr),t.addEventListener("pointercancel",rr),t.addEventListener("pointerleave",()=>{!M&&!K&&(R=null,r&&(r.textContent="X --.--  Y --.--"),Zt.invalidate())}),t.addEventListener("dblclick",()=>{S&&we()}),t.addEventListener("wheel",L=>{if(!L.ctrlKey&&!L.metaKey)return;L.preventDefault();let X=Bt(L);xt(L.deltaY>0?1.15:1/1.15,X||void 0)},{passive:!1}),t.addEventListener("keydown",L=>{let X=L.key.toLowerCase();if(V=performance.now(),(L.ctrlKey||L.metaKey)&&X==="z"){L.preventDefault(),or("undo");return}L.ctrlKey||L.metaKey||L.altKey||(X==="escape"?S?we():f!=="select"?Yt("select"):(h=null,b=!0,Zt.invalidate()):X==="x"?Yt("route"):X==="v"?S?Ze(u==="F.Cu"?"B.Cu":"F.Cu"):Yt("via"):X==="pageup"?(L.preventDefault(),Ze("F.Cu")):X==="pagedown"?(L.preventDefault(),Ze("B.Cu")):X==="delete"||X==="backspace"?(L.preventDefault(),pn()):X==="+"||X==="="?xt(1/1.25):X==="-"?xt(1.25):X==="home"&&(L.preventDefault(),d=tr.slice(),b=!0,Zt.invalidate()))});function or(L){if(L==="undo")if(S){for(let X of S.made)c.items.delete(X);S=null,_e()}else{let X=T.pop();X&&(Re(X),h=null,_e())}else L==="zoom-in"?xt(1/1.25):L==="zoom-out"?xt(1.25):L==="zoom-fit"?(d=tr.slice(),b=!0,Zt.invalidate()):L==="reset"&&ut()}e.querySelectorAll("[data-tool-btn]").forEach(L=>L.addEventListener("click",()=>Yt(L.dataset.toolBtn))),e.querySelectorAll("[data-layer-btn]").forEach(L=>L.addEventListener("click",()=>Ze(L.dataset.layerBtn))),e.querySelectorAll("[data-act]").forEach(L=>L.addEventListener("click",()=>or(L.dataset.act))),Nt()}var ml=1.6,jr={mask:"#1E6A3C",maskCu:"#2A8A4F",gold:"#D9B45C",silk:"#F3F3EC",fr4:"#B49B62",hole:"#0A0D10"};function Gt(e,t,n,r){let o=t-e.cx,i=n-e.cy,s=Math.cos(e.yaw),a=Math.sin(e.yaw),l=o*s-i*a,c=o*a+i*s;return[e.ox+l*e.scale,e.oy+(c*Math.cos(e.pitch)-r*Math.sin(e.pitch))*e.scale]}function lp(e,t,n,r=0){let o=Math.cos(t.yaw),i=Math.sin(t.yaw),s=Math.cos(t.pitch),a=t.scale,l=Gt(t,0,0,r);e.setTransform(a*o*n,a*i*s*n,-a*i*n,a*o*s*n,l[0]*n,l[1]*n)}function kf(e,t){let n=parseInt(e.slice(1),16),r=o=>Math.max(0,Math.min(255,Math.round((n>>o&255)*t)));return`rgb(${r(16)},${r(8)},${r(0)})`}function cp(e,t,n){let r=parseInt(e.slice(1),16),o=parseInt(t.slice(1),16),i=s=>Math.round((r>>s&255)+((o>>s&255)-(r>>s&255))*n);return`rgb(${i(16)},${i(8)},${i(0)})`}function fp(){let{x:e,y:t,w:n,h:r,r:o}=Ke,i=[],s=(a,l,c)=>{for(let f=0;f<=6;f++){let u=c+f/6*Math.PI/2;i.push([a+Math.cos(u)*o,l+Math.sin(u)*o])}};return s(e+n-o,t+o,-Math.PI/2),s(e+n-o,t+r-o,0),s(e+o,t+r-o,Math.PI/2),s(e+o,t+o,Math.PI),i}var wf=fp(),dn=30;function Qf(e){let t=document.createElement("canvas");t.width=Ke.w*dn,t.height=Ke.h*dn;let n=document.createElement("canvas");n.width=t.width,n.height=t.height;let r=t.getContext("2d"),o=n.getContext("2d");r.setTransform(dn,0,0,dn,-Ke.x*dn,-Ke.y*dn),r.beginPath(),wf.forEach((f,u)=>u?r.lineTo(f[0],f[1]):r.moveTo(f[0],f[1])),r.closePath(),r.fillStyle=jr.mask,r.fill(),r.setTransform(1,0,0,1,0,0);let i={ppm:dn,zoom:1,dpr:1,panX:0,panY:0,x0:Ke.x,y0:Ke.y},s=Ue.layerList(e).map(f=>f.key).concat(["holes"]),a=(f,u,d)=>{Ue.render(e,o,i,{background:!1,grid:0,ids:new Set(f),hidden:new Set(s.filter(p=>!u.includes(p))),layerColors:new Map(d),netNames:!1,padNumbers:!1}),o.setTransform(1,0,0,1,0,0),r.drawImage(n,0,0)},l=[],c=[];for(let f of e.items.values())(f.kind==="segment"||f.kind==="via"?l:f.kind==="zone"?[]:c).push(f.id);a(l,["F.Cu"],[["F.Cu",jr.maskCu]]),a(c,["F.Cu","F.SilkS"],[["F.Cu",jr.gold],["F.SilkS",jr.silk]]),r.setTransform(dn,0,0,dn,-Ke.x*dn,-Ke.y*dn),r.fillStyle=jr.hole;for(let f of e.items.values())for(let u of f.geom){if(u.layer!=="holes"||u.via)continue;let d=Math.round((u.rot||0)/90)%2!==0,p=(d?u.h:u.w)||u.r*2,h=(d?u.w:u.h)||u.r*2,R=Math.min(p,h)/2;r.beginPath(),r.roundRect(u.x-p/2,u.y-h/2,p,h,R),r.fill()}return r.setTransform(1,0,0,1,0,0),t}function Ef(e,t,n){if(n<=0||t.pitch<.01)return;let r=wf;e.save(),e.globalAlpha=n,e.save(),e.shadowColor="rgba(0,0,0,.55)",e.shadowBlur=26*Math.min(1,t.pitch*2),e.shadowOffsetY=14*t.pitch,e.fillStyle="rgba(0,0,0,.55)",e.beginPath(),r.forEach((o,i)=>{let s=Gt(t,o[0],o[1],-ml-1.2);i?e.lineTo(s[0],s[1]):e.moveTo(s[0],s[1])}),e.closePath(),e.fill(),e.restore();for(let o=0;o<r.length;o++){let i=r[o],s=r[(o+1)%r.length],a=s[1]-i[1],l=-(s[0]-i[0]);if(a*Math.sin(t.yaw)+l*Math.cos(t.yaw)<=0)continue;let c=Gt(t,i[0],i[1],0),f=Gt(t,s[0],s[1],0),u=Gt(t,s[0],s[1],-ml),d=Gt(t,i[0],i[1],-ml),p=.72+.28*Math.max(0,(a*Math.cos(t.yaw)-l*Math.sin(t.yaw))/Math.hypot(a,l));e.fillStyle=kf(jr.fr4,p),e.strokeStyle=e.fillStyle,e.lineWidth=.6,e.beginPath(),e.moveTo(c[0],c[1]),e.lineTo(f[0],f[1]),e.lineTo(u[0],u[1]),e.lineTo(d[0],d[1]),e.closePath(),e.fill(),e.stroke()}e.restore()}function If(e,t,n,r,o){o<=0||(e.save(),lp(e,t,n),e.globalAlpha=o,e.imageSmoothingQuality="medium",e.drawImage(r,Ke.x,Ke.y,Ke.w,Ke.h),e.restore())}var bl="#C5C8CC",yl="#8E9297";function hs(e,t,n,r,o,i=!1){let s=e*.22;return[{x:-(e-s)/2,y:0,w:s,h:t,z0:0,z1:n,top:bl,side:yl},{x:0,y:0,w:e-2*s,h:t,z0:0,z1:n+.03,top:r,side:o,led:i},{x:(e-s)/2,y:0,w:s,h:t,z0:0,z1:n,top:bl,side:yl}]}function up(e){let t=e.ref[0];if(t==="R")return hs(1.6,.8,.45,"#1B1B1E","#0E0E10");if(t==="C")return e.value==="10u"?hs(2,1.25,1,"#B79A68","#8A7147"):hs(1.6,.8,.8,"#B79A68","#8A7147");if(t==="D")return hs(2,1.25,.75,"#F4EED8","#CFC8AE",!0);if(t==="U"){let n=[];for(let r of[-1,1])for(let o of[-1.905,-.635,.635,1.905])n.push({x:r*2.45,y:o,w:1.1,h:.4,z0:0,z1:.25,top:bl,side:yl});return[{x:0,y:0,w:3.9,h:4.9,z0:.1,z1:1.5,top:"#1D1D20",side:"#0D0D0F"},...n]}return[{x:0,y:.15,w:8.94,h:7.1,z0:0,z1:3.16,top:"#D4D7DB",side:"#9A9EA4"}]}var Ml=[];for(let e of ze.parts){let t=e.rot*Math.PI/180,n=Math.cos(t),r=Math.sin(t),o=Math.round(e.rot/90)%2!==0;for(let i of up(e))Ml.push({x:e.x+i.x*n+i.y*r,y:e.y-i.x*r+i.y*n,w:o?i.h:i.w,h:o?i.w:i.h,z0:i.z0,z1:i.z1,top:i.top,side:i.side,led:!!i.led})}var Uf=ze.parts.find(e=>e.ref==="U1"),dp=Ml.find(e=>e.led);function Cf(e,t,n){if(n<=.01)return;let r=dp,o=r.x-r.w/2,i=r.x+r.w/2,s=r.y-r.h/2,a=r.y+r.h/2;e.save(),e.fillStyle=cp(r.top,"#FF5A3C",n),e.beginPath(),[[o,s],[i,s],[i,a],[o,a]].forEach((u,d)=>{let p=Gt(t,u[0],u[1],r.z1);d?e.lineTo(p[0],p[1]):e.moveTo(p[0],p[1])}),e.closePath(),e.fill();let l=Gt(t,r.x,r.y,r.z1),c=t.scale*4.2,f=e.createRadialGradient(l[0],l[1],0,l[0],l[1],c);f.addColorStop(0,`rgba(255,96,60,${.6*n})`),f.addColorStop(.3,`rgba(255,80,50,${.2*n})`),f.addColorStop(1,"rgba(255,80,50,0)"),e.globalCompositeOperation="lighter",e.fillStyle=f,e.beginPath(),e.arc(l[0],l[1],c,0,6.3),e.fill(),e.restore()}function Gf(e,t,n,r,o){if(r<=0||n<=0)return;let i=Math.cos(t.yaw),s=Math.sin(t.yaw),a=Ml.map(u=>({b:u,depth:(u.x-t.cx)*s+(u.y-t.cy)*i+u.z1*.01})).sort((u,d)=>u.depth-d.depth);e.save(),e.globalAlpha=r,e.lineJoin="round";for(let{b:u}of a){let d=u.z0*n,p=u.z0+(u.z1-u.z0)*n,h=u.x-u.w/2,R=u.x+u.w/2,m=u.y-u.h/2,b=u.y+u.h/2,y=[[h,m],[R,m],[R,b],[h,b]],M=[[0,-1],[1,0],[0,1],[-1,0]];for(let K=0;K<4;K++){let[S,T]=M[K];if(S*s+T*i<=.001)continue;let O=y[K],Q=y[(K+1)%4],v=Gt(t,O[0],O[1],p),Z=Gt(t,Q[0],Q[1],p),V=Gt(t,Q[0],Q[1],d),P=Gt(t,O[0],O[1],d);e.fillStyle=kf(u.side,.8+.3*Math.max(0,S*i-T*s)),e.strokeStyle=e.fillStyle,e.lineWidth=.5,e.beginPath(),e.moveTo(v[0],v[1]),e.lineTo(Z[0],Z[1]),e.lineTo(V[0],V[1]),e.lineTo(P[0],P[1]),e.closePath(),e.fill(),e.stroke()}e.fillStyle=u.top,e.strokeStyle=e.fillStyle,e.lineWidth=.5,e.beginPath(),y.forEach((K,S)=>{let T=Gt(t,K[0],K[1],p);S?e.lineTo(T[0],T[1]):e.moveTo(T[0],T[1])}),e.closePath(),e.fill(),e.stroke()}let l=Gt(t,Uf.x,Uf.y,1.5*n),c=Math.cos(t.pitch),f=t.scale;e.save(),e.transform(f*i,f*s*c,-f*s,f*i*c,l[0],l[1]),e.globalAlpha=r*Math.max(0,n*2-1)*.7,e.fillStyle="#B9BBBE",e.rotate(-Math.PI/2),e.textAlign="center",e.textBaseline="middle",e.save(),e.scale(.04,.04),e.font=`500 20px ${o}`,e.fillText("NE555",0,-9),e.restore(),e.save(),e.scale(.031,.031),e.font=`500 20px ${o}`,e.fillText("2614",0,24),e.restore(),e.beginPath(),e.arc(1.75,-1.35,.22,0,6.3),e.fill(),e.restore(),e.restore()}var Jf=[15,9,12,4.2],pp=7,Rp="#001023",Bf=.11,Hf=e=>{let t=Math.sin(e*12.9898+4.1)*43758.5453;return t-Math.floor(t)},ms=e=>e<=0?0:e>=1?1:e*e*e*(10-15*e+6*e*e),Fl=(e,t)=>[Math.round(e[0]/t)*t,Math.round(e[1]/t)*t];function Sl(e,t,n,r){let o=[],i=0,s=n,a=0,l=(c,f,u)=>{let d=Ct(s,c),p=.2+.15*Math.sqrt(d),h=Hf(++a+t*57);o.push({t0:i,t1:i+p,from:s,to:c,line:f,seg:u,bow:(h<.5?-1:1)*Math.min(r,d*.1)*(.35+Hf(a+9)*.65)}),i+=p+Bf+(u<0?.05:0),s=c};return e.forEach((c,f)=>{if(c.who===t){l(c.pts[0],f,-1);for(let u=1;u<c.pts.length;u++)l(c.pts[u],f,u-1);i+=.12}}),{steps:o,total:i}}function hp(e,t){let n=ms((t-e.t0)/(e.t1-e.t0)),r=e.to[0]-e.from[0],o=e.to[1]-e.from[1],i=Math.hypot(r,o)||1,s=Math.sin(Math.PI*n)*e.bow;return[e.from[0]+r*n-o/i*s,e.from[1]+o*n+r/i*s]}function Nl(e,t,n){let r=e.steps[0].from,o=null;for(let i of e.steps){if(t<i.t0)break;if(r=t<i.t1?hp(i,t):i.to,i.seg<0){o=null;continue}t>=i.t1+Bf?(n(i.line,i.seg),o=null):o={line:i.line,seg:i.seg,from:i.from,to:i.to,near:t>=i.t1||Ct(r,i.to)<.45}}return{ptr:r,live:o}}var _r=ze.sch.wires.map((e,t)=>({ids:e.ids,pts:e.pts,who:t%2})),vf=[0,1].map(e=>Sl(_r,e,[_r[e].pts[0][0]-9,_r[e].pts[0][1]+7],1.5)),Df=1.27,mp=.25,Sr=["J1","U1","C1","C2","R1","R3","R2","R4","C4","C3","R5","D1"].map(e=>ze.parts.find(t=>t.ref===e)),Af=[0,1].map(e=>Sl(ze.routes,e,[Sr[10+e].x,Sr[10+e].y],.5)),bp=e=>Sl(e.map((t,n)=>({pts:[n?e[n-1]:[t[0]+16,t[1]-12],t],who:0})),0,[e[0][0]+16,e[0][1]-12],2.2),zf=(e,t)=>Math.abs(e[0]-t[0])<.01&&Math.abs(e[1]-t[1])<.01;function yp(e,t){for(let n=1;n<e.length;n++){let r=e[n-1],o=e[n];if(Math.abs(Ct(r,t)+Ct(t,o)-Ct(r,o))<.01)return!0}return!1}var Mp=ze.sch.junctions.map(e=>_r.map((t,n)=>yp(t.pts,e.at)?n:-1).filter(t=>t>=0)),Fp=ze.sch.power.map(e=>_r.findIndex(t=>zf(t.pts[0],e.at)||zf(t.pts[t.pts.length-1],e.at)));function $f(e){let t=e.querySelector("canvas"),n=Array.from(e.querySelectorAll("[data-step]")),r=e.querySelector(".story-track"),o=us(),i=0,s=-1,a=[0,0,0,0],l=0,c=0,f=null,u=null,d=null,p=null,h=null,R=null,m=new Map,b=[],y=null,M="",K=[],S=null,T="",O=e.querySelector("[data-3d]"),Q=null,v=!1,Z="";function V(){if(v||!O)return;v=!0;let Y=document.createElement("script");Y.src="/static/dist/viewer3d.js",Y.async=!0,Y.onload=()=>{try{let I=window.KiCadViewer3D;if(!I)return;let C=I.embed(O,{wheel:!1});C.canvas.style.touchAction="pan-y",C.setDoc(Yo(),!0),Q=C,Z="",E.invalidate()}catch{Q=null}},document.head.appendChild(Y)}function P(){let Y=r.getBoundingClientRect();Y.top<window.innerHeight*1.5&&Y.bottom>-window.innerHeight&&V();let I=Y.height-window.innerHeight;i=I>0?en(-Y.top/I)*4:0,Y.top>window.innerHeight*.9&&a[0]>0&&(a.fill(0),y=null),E.invalidate()}function W(Y){Y!==s&&(s=Y,n.forEach((I,C)=>{I.classList.toggle("on",C===Y),I.classList.toggle("done",C<Y)}),e.dataset.chapter=String(Y))}let E=ds(t,(Y,I,C)=>{let A=Math.min(3,Math.floor(i));W(A);let D=!1;for(let w=0;w<4;w++){let $=a[w];o?a[w]=w<=A?1:0:i>=w+1||w===0&&i>.8?a[w]=Math.min(1,a[w]+C/1e3*pp/Jf[w]):A===w&&(w===0||a[w-1]>=1)&&(a[w]=Math.min(1,a[w]+C/1e3/Jf[w])),(a[w]!==$||A>=w&&a[w]<1)&&(D=!0),n[w].style.setProperty("--p",a[w].toFixed(3))}!f&&A!==3&&(c=0),l=o?c:l+(c-l)*(1-Math.exp(-C/90)),Math.abs(c-l)<5e-4&&(l=c);let G=J(Y,I,C);return D||l!==c||G||y!==null&&z}),z=!1;t.addEventListener("pointerdown",Y=>{s===3&&(f={x:Y.clientX,from:c},t.setPointerCapture(Y.pointerId))}),t.addEventListener("pointermove",Y=>{f&&(c=f.from+(Y.clientX-f.x)*.008,E.invalidate())});let H=()=>{f=null};t.addEventListener("pointerup",H),t.addEventListener("pointercancel",H),window.addEventListener("scroll",P,{passive:!0}),window.addEventListener("resize",P),P(),n.forEach((Y,I)=>Y.addEventListener("click",()=>{let C=r.getBoundingClientRect(),A=C.height-window.innerHeight,D=[.3,1.5,2.5,3.6][I]/4;window.scrollTo({top:window.scrollY+C.top+A*D,behavior:o?"auto":"smooth"})}));function N(Y,I,C,A,D,G,w){if(w<=0)return;let $=A.live,B=G?mp:Df,q=$&&$.near?$.to:Fl(A.ptr,B);if(Y.save(),Y.setTransform(C,0,0,C,0,0),Y.globalAlpha=w,Y.lineCap="round",Y.lineJoin="round",$){let ue=$.from,Ve=q[0]-ue[0],Te=q[1]-ue[1],Oe=[ue],De=Math.abs($.to[0]-ue[0])<1e-6||Math.abs($.to[1]-ue[1])<1e-6;if(!G)Oe.push(Math.abs($.to[1]-ue[1])<1e-6?[q[0],ue[1]]:[ue[0],q[1]]);else{let Ne=Math.min(Math.abs(Ve),Math.abs(Te)),re=Math.sign(Ve)*Ne,le=Math.sign(Te)*Ne;Oe.push(De?[q[0]-re,q[1]-le]:[ue[0]+re,ue[1]+le])}Oe.push(q);let xe=.1524,Se=Ue.SCH.wire;if(G){let Ne=ze.routes[$.line],re=Ue.kid(d.items.get(Ne.ids[$.seg]).node,"width");xe=re?Number(re[1]):.25,Se=Ne.layer==="B.Cu"?"#4D7FC4":"#C83434"}Y.strokeStyle=Se,Y.lineWidth=Math.max(1,xe*I.ppm*I.zoom),Y.beginPath(),Oe.forEach((Ne,re)=>{let le=kn(I,Ne[0],Ne[1]);re?Y.lineTo(le[0],le[1]):Y.moveTo(le[0],le[1])}),Y.stroke()}let Re=kn(I,q[0],q[1]),ne=Math.round(Re[0])+.5,_e=Math.round(Re[1])+.5;Y.strokeStyle=G?"#ffffff":"#1b1b1b",Y.globalAlpha=w*.85,Y.lineWidth=1,Y.beginPath(),Y.moveTo(ne-9,_e),Y.lineTo(ne+9,_e),Y.moveTo(ne,_e-9),Y.lineTo(ne,_e+9),Y.stroke(),Y.restore()}function g(Y,I,C,A){u||(u=Pf(),b=ze.sch.symbols.map(Ze=>{let we=Ue.atOf(u.items.get(Ze.id).node);return[we[0],we[1]]}));let D=u,G=new Set,w=b.length;R||(R=bp(b));let $=tt(C,.02,.34),B=new Set,q=Nl(R,$*R.total,Ze=>B.add(Ze)),Re=q.ptr;b.forEach((Ze,we)=>{let ut=q.live&&q.live.line===we&&!B.has(we);if(!ut&&!B.has(we))return;G.add(ze.sch.symbols[we].id);let xt=ut&&!q.live.near?Fl(q.ptr,Df):Ze,pn=xt[0].toFixed(3)+","+xt[1].toFixed(3),Nt=ze.sch.symbols[we].id;(m.get(Nt)||Ze[0].toFixed(3)+","+Ze[1].toFixed(3))!==pn&&(m.set(Nt,pn),Ue.moveItem(D,D.items.get(Nt),xt[0],xt[1],1))});let ne=tt(C,.35,.96),_e=[new Map,new Map],ue=[0,1].map(Ze=>Nl(vf[Ze],ne*vf[Ze].total,(we,ut)=>{G.add(_r[we].ids[ut]),_e[Ze].set(we,ut)})),Ve={head:ue[0].ptr},Te={head:ue[1].ptr},Oe=new Set;for(let Ze of _e)for(let[we,ut]of Ze)ut===_r[we].ids.length-1&&Oe.add(we);ze.sch.power.forEach((Ze,we)=>{Oe.has(Fp[we])&&G.add(Ze.id)}),ze.sch.junctions.forEach((Ze,we)=>{Mp[we].every(ut=>Oe.has(ut))&&G.add(Ze.id)});let De=tt(C,.955,.985);if(De>0&&G.add(ze.sch.notes[1]),De>=1&&G.add(ze.sch.notes[0]),ne>0){let Ze=ms(tt(C,.35,.42));Re=[Ft(Re[0],126,Ze),Ft(Re[1],92,Ze)]}let xe=Y.w,Se=Y.h,Ne=[0,0,u.page[0],u.page[1]],re=en(xe/6.4,84,Ne[2]),le=re*Se/xe;le>74&&(le=74,re=Math.max(60,le*xe/Se),le=re*Se/xe);let ge=ne>0?[(Ve.head[0]+Te.head[0])/2,(Ve.head[1]+Te.head[1])/2-2]:[Re[0],Re[1]-4],Ye=en(ge[0],14+re/2,Math.max(14+re/2,162-re/2)),Be=en(ge[1],Math.min(60,28+le/2),Math.max(60,97-le/2));if(!y||o)y=[Ye,Be];else{let Ze=1-Math.exp(-A/520);y=[y[0]+(Ye-y[0])*Ze,y[1]+(Be-y[1])*Ze]}z=Math.abs(Ye-y[0])+Math.abs(Be-y[1])>.05&&C<1;let nt=[y[0]-re/2,y[1]-le/2,y[0]+re/2,y[1]+le/2],Pe=er(tt(C,.9,1)),rt=Nr(xe,Se,Y.dpr,[Ne[0]-4,Ne[1]-4,Ne[2]+4,Ne[3]+4]),ot=[rt.x0-rt.panX/rt.ppm,rt.y0-rt.panY/rt.ppm,0,0];ot[2]=ot[0]+xe/rt.ppm,ot[3]=ot[1]+Se/rt.ppm;let ft=Nr(xe,Se,Y.dpr,cl(nt,ot,Pe));Ue.render(u,I,ft,{ids:G,grid:1.27});let Qe=C>0?1:0,Yt=Qe*tt(C,.33,.36)*(1-tt(C,.955,.975));return ue.forEach((Ze,we)=>N(I,ft,Y.dpr,Ze,we,!1,Yt)),$<1&&N(I,ft,Y.dpr,{ptr:q.ptr,live:null},2,!1,Qe),{view:ft,cursors:[[Ve.head,0,Qe*tt(C,.33,.36)],[Te.head,1,Qe*tt(C,.33,.36)],[Re,2,Qe]]}}function k(Y,I,C,A){d||(d=Yo());let D=d,G=Y.w,w=Y.h,$=G/w>1.15,B=Ke,q=Pe=>$?Pe:[B.x+4+(Pe[0]-B.x-47)*2.3,B.y+30+(Pe[1]-B.y-5)*.75],Re=new Set(ze.holes),ne=new Set,_e=[];for(let Pe of D.items.values())Pe.kind!=="segment"&&Pe.kind!=="via"&&Pe.kind!=="zone"&&Re.add(Pe.id);let ue=tt(C,.05,.86),Ve=Sr.length/2,Te=[[B.x+B.w+8,B.y+2],[B.x+B.w+14,B.y+B.h-2]].map(Pe=>q(Pe));Sr.forEach((Pe,rt)=>{let ot=rt%2,ft=(rt-ot)/2,Qe=ue*Ve-ft,Yt=q(Pe.pile),Ze=ms(tt(Qe,.38,.94)),we=[Ft(Yt[0],Pe.x,Ze),Ft(Yt[1],Pe.y,Ze)],ut=Ze<=0?Yt:Ze>=1?[Pe.x,Pe.y]:Fl(we,.5),xt=ut[0].toFixed(3)+","+ut[1].toFixed(3);if(m.get(Pe.id)!==xt&&(m.set(Pe.id,xt),Ue.moveItem(D,D.items.get(Pe.id),ut[0],ut[1],1e6)),Qe>0&&Qe<=1){let pn=ft>0?[Sr[rt-2].x,Sr[rt-2].y]:Te[ot],Nt=ms(tt(Qe,0,.33));Te[ot]=Qe<.38?[Ft(pn[0],Yt[0],Nt),Ft(pn[1],Yt[1],Nt)]:we,Qe>=.36&&Qe<1&&ne.add(Pe.id)}else Qe>1&&(Te[ot]=[Pe.x,Pe.y])});let Oe=tt(A,.03,.9),De=new Set,xe=[new Map,new Map],Se=[0,1].map(Pe=>Nl(Af[Pe],Oe*Af[Pe].total,(rt,ot)=>{Re.add(ze.routes[rt].ids[ot]),xe[Pe].set(rt,ot)}));for(let Pe of xe)for(let[rt,ot]of Pe){let ft=ze.routes[rt];ot===ft.ids.length-1&&(ft.ids.forEach(Qe=>De.add(Qe)),ft.via&&(Re.add(ft.via),De.add(ft.via)))}let Ne=A>=.93;Ne&&Re.add(ze.zone),Oe>0&&(Te[0]=Se[0].ptr,Te[1]=Se[1].ptr);let re=Sr.map(Pe=>m.get(Pe.id)).join(";")+"|"+De.size+"|"+Ne;re!==M&&(M=re,K=Wo(D,{only:De,poured:Ne?1:0}));let le=[B.x-3,B.y-3,B.x+B.w+3,B.y+B.h+3],ge=$?[B.x-3,B.y-3,B.x+66,B.y+B.h+3]:[B.x-3,B.y-3,B.x+B.w+3,B.y+48],Ye=Nr(G,w,Y.dpr,cl(ge,le,er(tt(C,.88,1))));Ue.render(D,I,Ye,{ids:Re,hidden:Zo,grid:1,ratsnest:K,selected:ne.size?ne:null,zoneFill:Ne,activeLayer:"F.Cu"});let Be=C>0?tt(C,0,.04):0,nt=1-tt(A,.95,1)*0;return Oe>0&&Oe<1&&Se.forEach((Pe,rt)=>N(I,Ye,Y.dpr,Pe,rt,!0,1)),_e.push([Te[0],0,Be*nt],[Te[1],1,Be*nt]),{view:Ye,cursors:_e}}function J(Y,I,C){let{ctx:A,w:D,h:G,dpr:w}=Y,$=!1,B=a[0]>=1?er(tt(i,.84,1)):i>=1?1:0,q=(le,ge)=>{A.setTransform(w,0,0,w,0,0);for(let[Ye,Be,nt]of le.cursors){let Pe=kn(le.view,Ye[0],Ye[1]);cs(A,Pe[0],Pe[1],Br[Be].name,Br[Be].color,ps,nt*ge)}};if(B<1&&q(g(Y,A,a[0],C),1-B),O&&(B<=0||a[2]<1||a[3]<=0)&&O.style.opacity!=="0"&&(O.style.opacity="0",O.style.pointerEvents="none",Z=""),B<=0)return!1;let Re=A;B<1&&(h||(h=document.createElement("canvas")),(h.width!==t.width||h.height!==t.height)&&(h.width=t.width,h.height=t.height),Re=h.getContext("2d"));let ne=a[2]>=1?a[3]:0,ue=ne>=.3?null:k(Y,Re,a[1],a[1]>=1?a[2]:0);if(Re!==A&&(A.setTransform(1,0,0,1,0,0),A.globalAlpha=B,A.drawImage(h,0,0),A.globalAlpha=1),ue&&q(ue,B*(1-tt(ne,0,.12))),ne<=0)return!1;let Ve=Nr(D,G,w,[Ke.x-3,Ke.y-3,Ke.x+Ke.w+3,Ke.y+Ke.h+3]).ppm;if(Q&&O){let le=er(tt(ne,0,.3)),ge=er(tt(ne,.2,.86)),Ye=Math.min(D/(Ke.w*1.08),G/(Ke.h*1.08)),Be=Ft(Ve/Ye,.7,ge),nt=`${D}x${G}:${ge.toFixed(4)}`;return nt!==Z&&(Z=nt,Q.pose(-48*ge,0,18*ge,Be)),O.style.opacity=le.toFixed(3),O.style.pointerEvents=ne>=1?"auto":"none",!1}p||(p=Qf(Yo()));let Te=er(tt(ne,0,.3)),Oe=er(tt(ne,.2,.82)),De=fs(tt(ne,.52,.97)),xe={cx:Ke.x+Ke.w/2,cy:Ke.y+Ke.h/2,scale:Ve*Ft(1,.86,Oe),yaw:-.5*Oe+l,pitch:.98*Oe,ox:D/2,oy:G/2+Oe*G*.035},Se=le=>{le.setTransform(w,0,0,w,0,0),le.globalAlpha=Te,le.fillStyle=Rp,le.fillRect(0,0,D,G);let ge=le.createRadialGradient(D/2,G*.45,0,D/2,G*.45,Math.max(D,G)*.7);ge.addColorStop(0,`rgba(46,74,112,${.5*Oe})`),ge.addColorStop(1,"rgba(0,16,35,0)"),le.fillStyle=ge,le.fillRect(0,0,D,G),le.globalAlpha=1,Ef(le,xe,Te),If(le,xe,w,p,Te),le.setTransform(w,0,0,w,0,0),Gf(le,xe,De,Te,Zf)};if(ne<1||l!==c||f)return Se(A),T="",!1;let Ne=`${t.width}x${t.height}:${l.toFixed(4)}`;S||(S=document.createElement("canvas")),T!==Ne&&(S.width=t.width,S.height=t.height,Se(S.getContext("2d")),T=Ne),A.setTransform(1,0,0,1,0,0),A.drawImage(S,0,0),A.setTransform(w,0,0,w,0,0);let re=1;if(!o){let le=I/1e3*1.38%1;re=le<.5?fs(tt(le,0,.06)):1-fs(tt(le,.5,.58)),$=s===3}return Cf(A,xe,re),$}}function Np(){let e=document.getElementById("theme");e&&e.addEventListener("click",()=>{let t=document.documentElement,r=(t.dataset.theme||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"))==="dark"?"light":"dark";t.dataset.theme=r;try{localStorage.setItem("kui.theme",r)}catch{}})}function Sp(){let e=document.getElementById("nav");if(!e)return;let t=()=>e.classList.toggle("stuck",window.scrollY>8);window.addEventListener("scroll",t,{passive:!0}),t()}function _p(){let e=document.getElementById("hero");if(!e||matchMedia("(prefers-reduced-motion: reduce)").matches)return;let t=0,n=()=>{t=0;let r=e.getBoundingClientRect(),o=window.innerHeight,i=Math.max(0,Math.min(1,(r.top-o*.3)/(o*.45)));e.style.setProperty("--lean",i.toFixed(3))};window.addEventListener("scroll",()=>{t||(t=requestAnimationFrame(n))},{passive:!0}),window.addEventListener("resize",n),n()}function Pp(){let e=Array.from(document.querySelectorAll(".rv"));if(!("IntersectionObserver"in window)){e.forEach(n=>n.classList.add("in"));return}let t=new IntersectionObserver(n=>{for(let r of n)r.isIntersecting&&(r.target.classList.add("in"),t.unobserve(r.target))},{rootMargin:"0px 0px -8% 0px",threshold:.05});e.forEach(n=>t.observe(n))}function xp(){document.documentElement.dataset.me&&(document.querySelectorAll("[data-template]").forEach(e=>{e.href="/?new=template"}),document.querySelectorAll("[data-signin]").forEach(e=>{e.href="/";let t=e.dataset.long!==void 0?"Open your projects":"Projects",n=e.querySelector("span");n?n.textContent=t:e.textContent=t,e.querySelector("svg")?.remove()}))}function jf(){Np(),Sp(),_p(),Pp();let e=document.getElementById("hero"),t=document.getElementById("make");Yf(),e&&Xf(e),t&&$f(t),xp()}document.readyState==="loading"?document.addEventListener("DOMContentLoaded",jf):jf();})();
 //# sourceMappingURL=landing.js.map

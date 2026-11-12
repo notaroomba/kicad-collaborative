@@ -53,8 +53,9 @@ const FOOTPRINTS = {
 // ref, lib, value, footprint, x, y, rot, reference field [dx, dy, angle, justify], value field
 const SYMS = [
   ["J1", "Connector:USB_C_Receptacle_PowerOnly_6P", "USB-C", FOOTPRINTS.J, 30.48, 60.96, 0, [-10.16, -17.78, 0, "left"], [-10.16, -15.24, 0, "left"]],
-  ["R1", "Device:R", "5k1", FOOTPRINTS.R, 60.96, 72.39, 0, [2.54, -1.27, 0, "left"], [2.54, 1.27, 0, "left"]],
-  ["R2", "Device:R", "5k1", FOOTPRINTS.R, 53.34, 74.93, 0, [-2.54, -1.27, 0, "right"], [-2.54, 1.27, 0, "right"]],
+  // The CC resistors lie in line with their pins, one above the other, and share one ground.
+  ["R1", "Device:R", "5k1", FOOTPRINTS.R, 55.88, 66.04, 90, [-1.905, -2.286, 90, ""], [1.905, -2.286, 90, ""]],
+  ["R2", "Device:R", "5k1", FOOTPRINTS.R, 55.88, 68.58, 90, [-1.905, 2.286, 90, ""], [1.905, 2.286, 90, ""]],
   ["C1", "Device:C", "10u", FOOTPRINTS.C8, 60.96, 49.53, 0, [3.81, -1.27, 0, "left"], [3.81, 1.27, 0, "left"]],
   ["C2", "Device:C", "100n", FOOTPRINTS.C6, 71.12, 49.53, 0, [3.81, -1.27, 0, "left"], [3.81, 1.27, 0, "left"]],
   ["R3", "Device:R", "10k", FOOTPRINTS.R, 86.36, 50.8, 0, [-2.54, -1.27, 0, "right"], [-2.54, 1.27, 0, "right"]],
@@ -67,10 +68,12 @@ const SYMS = [
 ];
 const POWER = [   // id, lib, x, y
   ["P5a", "power:+5V", 50.8, 40.64], ["P5b", "power:+5V", 116.84, 53.34],
-  ["G1", "power:GND", 30.48, 83.82], ["G2", "power:GND", 53.34, 81.28], ["G3", "power:GND", 60.96, 78.74], ["G4", "power:GND", 60.96, 55.88], ["G5", "power:GND", 71.12, 55.88],
+  // Each of the connector's ground pins goes straight down to its own symbol; the two CC
+  // resistors share one; the decoupling capacitors share one, in the middle of their ground rail.
+  ["G1", "power:GND", 30.48, 83.82], ["G2", "power:GND", 22.86, 83.82], ["G3", "power:GND", 62.23, 73.66], ["G4", "power:GND", 66.04, 58.42],
   ["G6", "power:GND", 86.36, 82.55], ["G7", "power:GND", 114.3, 78.74], ["G8", "power:GND", 129.54, 55.88], ["G9", "power:GND", 147.32, 78.74],
   // ERC wants every power net driven: the connector's pins are passive, so each rail gets a flag.
-  ["F1", "power:PWR_FLAG", 78.74, 43.18, 0], ["F2", "power:PWR_FLAG", 22.86, 81.28, 180],
+  ["F1", "power:PWR_FLAG", 78.74, 43.18, 0], ["F2", "power:PWR_FLAG", 55.88, 55.88, 180],
 ];
 
 function field(name, value, x, y, angle, justify, hide) {
@@ -102,14 +105,18 @@ for (const s of symNodes) for (const p of K.pinPoints(probe, probe.items.get(uui
 const pin = (name) => { if (!PIN[name]) throw new Error("no pin " + name); return PIN[name]; };
 
 // Wires in the order someone would draw them.  A string is a pin, a pair is a corner.
-const RAIL = 43.18;
+const RAIL = 43.18, GRAIL = 55.88;
+// The lying resistors' ends by side, whichever pin number the rotation puts there.
+for (const r of ["R1", "R2"]) { const a = pin(r + ".1"), b = pin(r + ".2"); PIN[r + ".L"] = a[0] < b[0] ? a : b; PIN[r + ".R"] = a[0] < b[0] ? b : a; }
 const WIRES = [
   ["J1.A9", [50.8, 53.34], [50.8, RAIL]], [[50.8, RAIL], "P5a.1"],
-  [[50.8, RAIL], [60.96, RAIL]], [[60.96, RAIL], "C1.1"], ["C1.2", "G4.1"],
-  [[60.96, RAIL], [71.12, RAIL]], [[71.12, RAIL], "C2.1"], ["C2.2", "G5.1"],
-  ["J1.A5", [60.96, 66.04], "R1.1"], ["R1.2", "G3.1"],
-  ["J1.B5", [53.34, 68.58], "R2.1"], ["R2.2", "G2.1"],
-  ["J1.SH", "F2.1"], ["F2.1", [30.48, 81.28]], ["J1.A12", [30.48, 81.28]], [[30.48, 81.28], "G1.1"],
+  [[50.8, RAIL], [60.96, RAIL]], [[60.96, RAIL], "C1.1"],
+  [[60.96, RAIL], [71.12, RAIL]], [[71.12, RAIL], "C2.1"],
+  ["C1.2", [60.96, GRAIL]], [[60.96, GRAIL], [66.04, GRAIL]], ["C2.2", [71.12, GRAIL], [66.04, GRAIL]], [[66.04, GRAIL], "G4.1"],
+  [[60.96, GRAIL], "F2.1"],
+  ["J1.A5", "R1.L"], ["J1.B5", "R2.L"],
+  ["R1.R", [62.23, 66.04], [62.23, 68.58]], ["R2.R", [62.23, 68.58]], [[62.23, 68.58], "G3.1"],
+  ["J1.SH", "G2.1"], ["J1.A12", "G1.1"],
   [[71.12, RAIL], "F1.1"], ["F1.1", [86.36, RAIL]], [[86.36, RAIL], "R3.1"],
   ["R3.2", "R4.1"], ["R4.2", "C3.1"], ["C3.2", "G6.1"],
   [[86.36, RAIL], [99.06, RAIL], [99.06, 60.96], "U1.4"],
@@ -119,7 +126,7 @@ const WIRES = [
   ["U1.5", [114.3, 45.72], [129.54, 45.72]], ["C4.2", "G8.1"],
   ["U1.3", "R5.1"], ["R5.2", [147.32, 66.04], "D1.2"], ["D1.1", "G9.1"],
 ];
-const JUNCTIONS = [[50.8, RAIL], [60.96, RAIL], [71.12, RAIL], [86.36, RAIL], [30.48, 81.28], [86.36, 55.88], [86.36, 68.58], [99.06, 68.58]];
+const JUNCTIONS = [[50.8, RAIL], [60.96, RAIL], [71.12, RAIL], [86.36, RAIL], [60.96, GRAIL], [66.04, GRAIL], [62.23, 68.58], [86.36, 55.88], [86.36, 68.58], [99.06, 68.58]];
 
 const schItems = [], schWires = [];
 WIRES.forEach((w, wi) => {
