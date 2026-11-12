@@ -5,6 +5,7 @@
 import { E, isSch, requestRender, setToggle, store, toast, toolCtx } from "./editor";
 import { openAssignFootprints } from "./assign-footprints";
 import { openChangeSymbols } from "./change-symbols";
+import { openGlobalEdit } from "./global-edit";
 import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
 import { openErc } from "./erc";
@@ -74,6 +75,8 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   // the old one-sheet fields table action now opens the full dialog
   const sch = CollabTools.sch as (SchToolModule & { actions: Record<string, { run(ctx: ToolCtx): unknown }> }) | undefined;
   if (sch && sch.actions && sch.actions.fieldsTable) sch.actions.fieldsTable.run = () => { openFieldsTable(false); return true; };
+  // SCH_EDIT_TOOL::GlobalEdit (Edit > Edit Text & Graphics Properties…)
+  if (sch && sch.actions) (sch.actions as Record<string, unknown>).editTextAndGraphics = { id: "editTextAndGraphics", label: "Edit Text & Graphics Properties...", run: () => { openGlobalEdit(); return true; } };
 
   // KiCad's hotkeys for these commands; a dialog that is open keeps the keyboard
   window.addEventListener("keydown", (ev) => {
