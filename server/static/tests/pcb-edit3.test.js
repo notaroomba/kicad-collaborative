@@ -164,6 +164,21 @@ test("DRC disallow and misc: text on Edge.Cuts, tracks / vias in keepout areas, 
   const s = P.designSettings({ board: { design_settings: { rule_severities: { items_not_allowed: "ignore", text_on_edge_cuts: "warning" } } } });
   const m2 = P.drc(doc, s, { unconnected: false }); assert.equal(codes(m2, "items_not_allowed").length, 0); assert.equal(codes(m2, "text_on_edge_cuts")[0].severity, "warning");
 });
+test("DRC hole clearance: copper of another net near an NPTH or a thin-ringed via; same-net tracks and copper-clearance pairs are not repeated", () => {
+  const doc = drcBoard(`(net 2 "B")
+    (footprint "H" (layer "F.Cu") (uuid "fh") (at 10 10) (pad "" np_thru_hole circle (at 0 0) (size 1 1) (drill 1) (layers "*.Cu") (uuid "ph")))
+    (segment (start 5 10.6) (end 15 10.6) (width 0.2) (layer "F.Cu") (net 1) (uuid "s1"))
+    (segment (start 5 9.4) (end 15 9.4) (width 0.2) (layer "F.Cu") (net 0) (uuid "s0"))
+    (via (at 30 10) (size 0.35) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1"))
+    (segment (start 25 10.485) (end 35 10.485) (width 0.2) (layer "F.Cu") (net 2) (uuid "s2"))
+    (segment (start 25 9.6) (end 35 9.6) (width 0.2) (layer "B.Cu") (net 2) (uuid "s3"))`);
+  const m = codes(P.drc(doc, null, { unconnected: false }), "hole_clearance");
+  assert.deepEqual(m.map((x) => x.ids.join()), ["s1,fh", "s2,v1"], JSON.stringify(m));
+  assert.equal(m[0].text, "Hole clearance violation (board setup constraints hole clearance 0.2500 mm; actual 0.0000 mm)");
+  assert.ok(/actual 0\.2350 mm/.test(m[1].text), m[1].text);
+  const cl = codes(P.drc(doc, null, { unconnected: false }), "clearance"); assert.ok(cl.some((x) => x.ids.includes("s3")) && !m.some((x) => x.ids.includes("s3")), "s3 breaks the copper clearance and is reported as that");
+  const s = P.designSettings({ board: { design_settings: { rules: { min_hole_clearance: 0.2 } } } }); assert.deepEqual(codes(P.drc(doc, s, { unconnected: false }), "hole_clearance").map((x) => x.ids[0]), ["s1"]);
+});
 
 module.exports = { test, K, P, assert, kid };
 process.on("exit", () => { console.log(`\npcb-edit3: ${passed} passed, ${failed} failed`); if (failed) process.exitCode = 1; });

@@ -79,7 +79,7 @@ import { TOOLS, ghostSegs } from "./tools";
 import { newTracer, tracerFlip, tracerPosture, trailAdd } from "./tracer";
 import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges } from "./track-edit";
 import { DRCET, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions } from "./drc-exclusions";
-import { courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers } from "./drc-more";
+import { courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeClearanceMarkers, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers } from "./drc-more";
 import { PCB_KINDS, rotateTextBoxNode, setTextBoxAngleSliding, textBoxAngle, alignBox, alignChanges, anchorOf, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, flipChanges, flipNode, mapNodePoints, mirrorChanges, mirrorNode, moveChanges, moveExactChanges, packChanges, positionRelativeChanges, rotateChanges, rotateNode, selectionCenter, swapChanges, topLeftAnchor, transformChanges, translateNode } from "./transforms";
 import { diffPairMarkers, evalRuleConstraint, matchedLengthMarkers, parseCondition, parseDru, wildMatch } from "./dru";
 import { isTuningPattern, regenerateTuningChanges, setCustomRules, tuneClick, tuneHiddenIds, tuneStatus, tuneMove, tuningPatternInfo, tuningRemoveChanges } from "./tuning-patterns";
@@ -376,7 +376,7 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   zoneNode, ruleAreaNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, boardNets, dimensionNode, dimGeometry, dimRead, dimUpdate, dimWrite, dimEditPoints, dimEditNode, dimBaseText, dimValueText, readableAngle, snap45, typeNameOf, deleteChanges,
   DIM_TYPE, DIM_CLASS, TEXTBOX_MARGIN, EXT_HEIGHT, ARROW_LEN, EXT_OFFSET, RULE_AREA_LAYERS,
   // the parity pass
-  courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers,
+  courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeClearanceMarkers, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers,
   DRCET, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions,
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, rotateTextBoxNode, setTextBoxAngleSliding, textBoxAngle, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,

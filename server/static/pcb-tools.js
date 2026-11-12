@@ -2722,7 +2722,7 @@
   ];
 
   // web/tools/pcb-tools/drc-more.ts
-  var MORE_DEFAULTS = { minHoleToHole: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
+  var MORE_DEFAULTS = { minHoleToHole: 0.25, minHoleClearance: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
   var defaultSeverity = (code) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
   var ident = (x, y) => [x, y];
   function fpTf(fp) {
@@ -2840,6 +2840,67 @@
     holes.forEach((h, i) => {
       if (h.kind === "pad") query(i);
     });
+    return out;
+  }
+  function holeClearanceMarkers(doc, s, ruleOf, worstRule = 0) {
+    const out = [];
+    const min0 = typeof s.holeClearance === "number" ? s.holeClearance : MORE_DEFAULTS.minHoleClearance;
+    const conds = conductors(doc).filter((c) => c.kind !== "zone");
+    if (!conds.length) return out;
+    const holes = boardHoles(doc);
+    const reach = Math.max(min0, worstRule, 0.01);
+    const G = 2, grid = /* @__PURE__ */ new Map();
+    const cell = (v) => Math.floor(v / G);
+    conds.forEach((c, i) => {
+      for (let gx = cell(c.bbox[0]); gx <= cell(c.bbox[2]); gx++) for (let gy = cell(c.bbox[1]); gy <= cell(c.bbox[3]); gy++) {
+        const k = gx + "," + gy;
+        const l = grid.get(k);
+        if (l) l.push(i);
+        else grid.set(k, [i]);
+      }
+    });
+    const near = (b) => {
+      const got = /* @__PURE__ */ new Set();
+      for (let gx = cell(b[0] - reach); gx <= cell(b[2] + reach); gx++) for (let gy = cell(b[1] - reach); gy <= cell(b[3] + reach); gy++) for (const i of grid.get(gx + "," + gy) || []) got.add(i);
+      return [...got].sort((a, b2) => a - b2).map((i) => conds[i]);
+    };
+    const seen = /* @__PURE__ */ new Set();
+    const ownOf = /* @__PURE__ */ new Map();
+    for (const c of conds) {
+      if (c.kind === "via") ownOf.set("v:" + c.id, c);
+      else if (c.kind === "pad") ownOf.set("p:" + c.id + ":" + c.index, c);
+    }
+    for (const h of holes) {
+      const shape = holeShape(h);
+      const hb = shapeBBox(shape);
+      const span = h.kind === "via" ? viaSpan(doc, h) : null;
+      const own = ownOf.get(h.kind === "via" ? "v:" + h.id : "p:" + h.id + ":" + h.pad.index);
+      const hNet = own ? own.net : "";
+      for (const c of near(hb)) {
+        if (!boxesTouch(c.bbox, hb, reach)) continue;
+        if (span && ![...c.layers].some((l) => span.has(l))) continue;
+        if (h.kind === "via" && c.kind === "via" && c.id === h.id) continue;
+        if (h.kind === "pad" && c.kind === "pad" && c.id === h.id && (c.index === h.pad.index || c.pad.number === h.pad.number)) continue;
+        if (c.kind !== "pad" || h.kind === "via") {
+          if (c.net === hNet && (c.kind !== "pad" || hNet)) continue;
+        } else if (hNet && c.net === hNet) continue;
+        const hit = ruleOf("hole_clearance", { kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: [...c.layers][0] }, { kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer: [...c.layers][0] });
+        if (hit && hit.severity === "ignore") continue;
+        const clr = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints hole";
+        if (c.kind === "pad" && !(clr > 0)) continue;
+        const gap = shapeGap(c.shape, shape);
+        if (gap >= clr - DRC_EPS && !(clr === 0 && gap === 0 && coreDist(c.shape, shape) < shapeOffset(c.shape) + shapeOffset(shape) - DRC_EPS)) continue;
+        {
+          if (own && own.net !== c.net && shapeGap(own.shape, c.shape) < Math.max(netClearance(s, own.net), netClearance(s, c.net), s.minClearance || 0) - DRC_EPS) continue;
+        }
+        const ids = [c.id, h.id];
+        const key = ids.join("|") + "|" + h.uuid;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const [cx, cy] = holeCentre(h);
+        out.push(marker("hole_clearance", defaultSeverity("hole_clearance"), cx, cy, clr ? `Hole clearance violation (${name} clearance ${mm4(clr)}; actual ${mm4(gap)})` : `Hole clearance violation (${name} clearance ${mm4(clr)}; actual < 0)`, ids));
+      }
+    }
     return out;
   }
   function boardTexts(doc) {
@@ -3145,7 +3206,7 @@
   }
   function moreDrcMarkers(doc, s, rules) {
     const ruleOf = (type, A, B) => rules.length ? evalRuleConstraint(rules, type, doc, s, A, B) : null;
-    const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
+    const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...holeClearanceMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_clearance").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
     return all.filter((m) => (s.severities[m.code] || m.severity) !== "ignore");
   }
 
@@ -16157,6 +16218,7 @@
     courtyardOutlines,
     disabledLayerMarkers,
     effectivePenWidth,
+    holeClearanceMarkers,
     holeToHoleMarkers,
     keepoutMarkers,
     moreDrcMarkers,

@@ -8,7 +8,8 @@ import type { BoardDoc, CopperShape, DesignSettings, DrcMarker, PadInfo, Pt } fr
 import { pointInPoly } from "./hit";
 import { DRC_ITEMS } from "../../canvas/drc-items";
 import { arcPoints, boxesTouch, coreDist, padShape, shapeBBox, shapeGap, shapeOffset } from "./distances";
-import { chainLoops, marker, mm4 } from "./drc";
+import { chainLoops, marker, mm4, netClearance } from "./drc";
+import { conductors } from "./netlist";
 import type { DruRule, RuleHit } from "./dru";
 import { evalRuleConstraint } from "./dru";
 import { zoneLayers } from "./nodes";
@@ -17,8 +18,8 @@ import { K } from "./state";
 import { DRC_EPS } from "./transforms";
 import { isList, layerOf, pt, rotator } from "./util";
 
-/** BOARD_DESIGN_SETTINGS' constructor: m_HoleToHoleMin, m_MinSilkTextHeight, m_MinSilkTextThickness. */
-export const MORE_DEFAULTS = { minHoleToHole: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
+/** BOARD_DESIGN_SETTINGS' constructor: m_HoleToHoleMin, m_HoleClearance, m_MinSilkTextHeight, m_MinSilkTextThickness. */
+export const MORE_DEFAULTS = { minHoleToHole: 0.25, minHoleClearance: 0.25, minTextHeight: 0.8, minTextThickness: 0.08 };
 const defaultSeverity = (code: string) => (DRC_ITEMS.find((i) => i[1] === code) || ["", "", "error"])[2];
 
 type Tf = (x: number, y: number) => Pt;
@@ -91,6 +92,49 @@ export function holeToHoleMarkers(doc: BoardDoc, s: DesignSettings, ruleOf: Rule
   };
   holes.forEach((h, i) => { if (h.kind === "via" && !h.micro) query(i); });
   holes.forEach((h, i) => { if (h.kind === "pad") query(i); });
+  return out;
+}
+
+/**
+ * DRC_TEST_PROVIDER_COPPER_CLEARANCE's hole tests: copper of another net (or of no net, for a pad) nearer a drilled
+ * hole than the hole clearance (Board Setup's min_hole_clearance, or a hole_clearance rule).  A pair whose copper
+ * already breaks the copper clearance is reported once, as that; tracks, arcs and vias of the hole's own net, the
+ * hole's own pad or via and pads of the same number in one footprint are waived.
+ */
+export function holeClearanceMarkers(doc: BoardDoc, s: DesignSettings, ruleOf: RuleOf, worstRule = 0): DrcMarker[] {
+  const out: DrcMarker[] = []; const min0 = typeof s.holeClearance === "number" ? s.holeClearance : MORE_DEFAULTS.minHoleClearance;
+  const conds = conductors(doc).filter((c) => c.kind !== "zone"); if (!conds.length) return out;
+  const holes = boardHoles(doc); const reach = Math.max(min0, worstRule, 0.01);
+  // a 2 mm bucket grid of the copper (the R-tree's job in KiCad)
+  const G = 2, grid = new Map<string, number[]>(); const cell = (v: number) => Math.floor(v / G);
+  conds.forEach((c, i) => { for (let gx = cell(c.bbox[0]); gx <= cell(c.bbox[2]); gx++) for (let gy = cell(c.bbox[1]); gy <= cell(c.bbox[3]); gy++) { const k = gx + "," + gy; const l = grid.get(k); if (l) l.push(i); else grid.set(k, [i]); } });
+  const near = (b: number[]) => { const got = new Set<number>(); for (let gx = cell(b[0] - reach); gx <= cell(b[2] + reach); gx++) for (let gy = cell(b[1] - reach); gy <= cell(b[3] + reach); gy++) for (const i of grid.get(gx + "," + gy) || []) got.add(i); return [...got].sort((a, b2) => a - b2).map((i) => conds[i]); };
+  const seen = new Set<string>(); const ownOf = new Map<string, (typeof conds)[number]>();
+  for (const c of conds) { if (c.kind === "via") ownOf.set("v:" + c.id, c); else if (c.kind === "pad") ownOf.set("p:" + c.id + ":" + c.index, c); }
+  for (const h of holes) {
+    const shape = holeShape(h); const hb = shapeBBox(shape); const span = h.kind === "via" ? viaSpan(doc, h) : null;
+    const own = ownOf.get(h.kind === "via" ? "v:" + h.id : "p:" + h.id + ":" + h.pad!.index); const hNet = own ? own.net : "";
+    for (const c of near(hb)) {
+      if (!boxesTouch(c.bbox, hb, reach)) continue;
+      if (span && ![...c.layers].some((l) => span.has(l))) continue;
+      if (h.kind === "via" && c.kind === "via" && c.id === h.id) continue;
+      if (h.kind === "pad" && c.kind === "pad" && c.id === h.id && (c.index === h.pad!.index || c.pad.number === h.pad!.number)) continue;
+      if (c.kind !== "pad" || h.kind === "via") { if (c.net === hNet && (c.kind !== "pad" || hNet)) continue; }   // tracks: same net (or both none); pads: same defined net
+      else if (hNet && c.net === hNet) continue;
+      const hit = ruleOf("hole_clearance", { kind: h.kind, node: h.kind === "pad" ? h.pad!.node : (doc.items.get(h.id) as KItem).node, layer: [...c.layers][0] }, { kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer: [...c.layers][0] });
+      if (hit && hit.severity === "ignore") continue;
+      const clr = hit && hit.min != null ? hit.min : min0, name = hit ? hit.name : "board setup constraints hole";
+      if (c.kind === "pad" && !(clr > 0)) continue;
+      const gap = shapeGap(c.shape, shape); if (gap >= clr - DRC_EPS && !(clr === 0 && gap === 0 && coreDist(c.shape, shape) < shapeOffset(c.shape) + shapeOffset(shape) - DRC_EPS)) continue;
+      // the copper clearance already reported this pair
+      {
+        if (own && own.net !== c.net && shapeGap(own.shape, c.shape) < Math.max(netClearance(s, own.net), netClearance(s, c.net), s.minClearance || 0) - DRC_EPS) continue;
+      }
+      const ids = [c.id, h.id]; const key = ids.join("|") + "|" + h.uuid; if (seen.has(key)) continue; seen.add(key);
+      const [cx, cy] = holeCentre(h);
+      out.push(marker("hole_clearance", defaultSeverity("hole_clearance"), cx, cy, clr ? `Hole clearance violation (${name} clearance ${mm4(clr)}; actual ${mm4(gap)})` : `Hole clearance violation (${name} clearance ${mm4(clr)}; actual < 0)`, ids));
+    }
+  }
   return out;
 }
 
@@ -291,6 +335,6 @@ export function disabledLayerMarkers(doc: BoardDoc): DrcMarker[] {
 /** The providers above as one pass, with the project's severities applied (ignored rules drop out). */
 export function moreDrcMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[]): DrcMarker[] {
   const ruleOf: RuleOf = (type, A, B) => (rules.length ? evalRuleConstraint(rules, type, doc, s, A as never, B as never) : null);
-  const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
+  const all = [...disabledLayerMarkers(doc), ...courtyardMarkers(doc), ...holeToHoleMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_to_hole").map((c) => c.min || 0)))), ...holeClearanceMarkers(doc, s, ruleOf, Math.max(0, ...rules.flatMap((r) => r.constraints.filter((c) => c.type === "hole_clearance").map((c) => c.min || 0)))), ...textOnEdgeCutsMarkers(doc), ...keepoutMarkers(doc), ...textDimsMarkers(doc, s, ruleOf), ...textMirroringMarkers(doc)];
   return all.filter((m) => (s.severities[m.code] || m.severity) !== "ignore");
 }
