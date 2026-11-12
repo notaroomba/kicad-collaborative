@@ -39889,6 +39889,7 @@ function netKind(net, paired = /(\+|-|_P|_N)\)?$/.test(net)) {
   const n = m ? m[2] : net.replace(/^.*\//, "");
   const auto = !!m;
   if (auto && /^(Pad)?\d+$/i.test(n)) return "digital";
+  if (/^(GPIO|GP|IO|P[A-Z]?)_?\d+([_.\-]|$)/i.test(n)) return "digital";
   if (usualImpedance(net, false) || /^(ANT\d*|RF\w*|ANTENNA)$/i.test(n) || m && /^(AE|ANT)\d+$/i.test(m[1])) return "rf";
   if (/(^|[_\-.])(SW|LX|PHASE|PH|BST|SWN|GATE|HG|LG|HDRV|LDRV|UGATE|LGATE)\d*([_\-.]|$)/i.test(n) && !/SW(D|O|CLK|DIO)/i.test(n) && (auto || !/^SW\d+$/i.test(n))) return "switching";
   if (auto && /^(BOOT|CB|BS)$/i.test(n)) return "switching";

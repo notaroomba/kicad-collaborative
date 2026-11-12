@@ -13,12 +13,14 @@ export const isSupply = (net: string): boolean => /^\/?(.*\/)?(A|D|P)?(GND|VSS|V
 export type NetKind = "analog" | "rf" | "switching" | "fast" | "digital" | "supply";
 /** A net's kind from its name.  Analog: ADC and DAC inputs, references, audio, sense and feedback lines, crystals.
  *  RF: antenna and RF feeds.  Switching: a converter's switch node, bootstrap and gate drives.  Fast: clocks and
- *  differential pairs.  Supply: rails and ground.  Everything else is digital.  A net KiCad named after a pin
+ *  differential pairs.  Supply: rails and ground.  Everything else is digital, and so is a general-purpose pin
+ *  (GPIO26_ADC0), whatever its second function.  A net KiCad named after a pin
  *  (Net-(U3-SW)) is judged by the pin's name. */
 export function netKind(net: string, paired = /(\+|-|_P|_N)\)?$/.test(net)): NetKind {
   if (isSupply(net)) return "supply";
   const m = /^Net-\((.+)-([^-]+)\)$/.exec(net); const n = m ? m[2] : net.replace(/^.*\//, ""); const auto = !!m;
   if (auto && /^(Pad)?\d+$/i.test(n)) return "digital";
+  if (/^(GPIO|GP|IO|P[A-Z]?)_?\d+([_.\-]|$)/i.test(n)) return "digital";   // a general-purpose pin broken out, whatever else it can do
   if (usualImpedance(net, false) || /^(ANT\d*|RF\w*|ANTENNA)$/i.test(n) || (m && /^(AE|ANT)\d+$/i.test(m[1]))) return "rf";
   if (/(^|[_\-.])(SW|LX|PHASE|PH|BST|SWN|GATE|HG|LG|HDRV|LDRV|UGATE|LGATE)\d*([_\-.]|$)/i.test(n) && !/SW(D|O|CLK|DIO)/i.test(n) && (auto || !/^SW\d+$/i.test(n))) return "switching";
   if (auto && /^(BOOT|CB|BS)$/i.test(n)) return "switching";

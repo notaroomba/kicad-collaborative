@@ -328,7 +328,7 @@ test("tracks are sized for impedance from the board's stackup, and the router sa
 
 const gapBetween = (res, a, b) => { let g = Infinity; for (const x of segs(res, a)) for (const y of segs(res, b)) { if (layerOf(x) !== layerOf(y)) continue; const s = (i) => { const p = K.kid(i.node, "start"), q = K.kid(i.node, "end"); return { t: "seg", a: [p[1], p[2]], b: [q[1], q[2]], r: widthOf(i) / 2 }; }; g = Math.min(g, P.shapeGap(s(x), s(y))); } return g; };
 test("signal domains: nets are told apart by name, and a digital track keeps its distance from an analog one", () => {
-  const kinds = { "/ADC_IN": "analog", "Net-(U1-XIN)": "analog", "Net-(U2-FB)": "analog", "/ANT": "rf", "Net-(AE1-A)": "rf", "Net-(U3-SW)": "switching", "/SPI.SCK": "fast", "/USB_D+": "fast", "GND": "supply", "+3V3": "supply", "/GPIO4": "digital", "/SW1": "digital", "Net-(SW1-Pad1)": "digital", "/BOOTSEL": "digital", "/RUN": "digital" };
+  const kinds = { "/ADC_IN": "analog", "Net-(U1-XIN)": "analog", "Net-(U2-FB)": "analog", "/ANT": "rf", "Net-(AE1-A)": "rf", "Net-(U3-SW)": "switching", "/SPI.SCK": "fast", "/USB_D+": "fast", "GND": "supply", "+3V3": "supply", "/GPIO4": "digital", "/GPIO26_ADC0": "digital", "/PA5_ADC": "digital", "/SW1": "digital", "Net-(SW1-Pad1)": "digital", "/BOOTSEL": "digital", "/RUN": "digital" };
   for (const [net, kind] of Object.entries(kinds)) assert.equal(R.netKind(net), kind, net);
   // the digital net has to pass between the analog track and a piece of copper (away from any pad): 0.3 mm from the track is within the rules,
   // but not far enough from an analog signal, so it changes layer instead
