@@ -79,7 +79,7 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     const fctx = await fabContext(); if (!fctx) return;
     try {
       const res = fab.drillJob(fctx, { format: rbGerber.checked ? "gerber" : "excellon", metric: units.get() === 0, zeros: ZEROS[zeros.get()], merge: merge.get(), minimalHeader: minimal.get(), mirrorY: mirror.get(),
-        ovalMode: altOval.get() ? "g85" : "route", useAuxOrigin: origin.get() === 1, genDrill: true, genMap: genMap.get(), mapFormat: MAP_PLOT[mapFmt.get()] || 4, gerberPrecision: p.gerberPrecision,
+        ovalMode: altOval.get() ? "g85" : "route", useAuxOrigin: origin.get() === 1, genDrill: true, genMap: genMap.get(), mapFormat: MAP_PLOT[mapFmt.get()] || 4, gerberPrecision: p.gerberPrecision, genTenting: rbGerber.checked && tenting.get(),
         outputDir: p.outputDirectory, boardDir: docDir() });
       say(res.report.map((l) => l.text));
       await deliver(fab, res.files, `${fctx.projectName}-drill.zip`);

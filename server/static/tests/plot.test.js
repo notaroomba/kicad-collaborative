@@ -87,13 +87,13 @@ test("Gerber: aperture functions on each aperture, net / pad / component attribu
   assert.deepStrictEqual(r.report.map((l) => l.text), ["Plotted to 'plots/t-F_Cu.gbr'.", "Plotted to 'plots/t-F_Mask.gbr'.", "Plotted to 'plots/t-Edge_Cuts.gbr'.", "Created Gerber job file 'plots/t-job.gbrjob'.", "Done."]);
   const cu = String(r.files[0].data);
   assert.ok(/%TA.AperFunction,SMDPad,CuDef\*%\n%ADD\d+RoundRect,/.test(cu), "SMD pad aperture function");
-  assert.ok(/%TA.AperFunction,ComponentPad\*%\n%ADD\d+R,1.7X1.7\*%\n%TD\*%/.test(cu), "PTH pad");
+  assert.ok(/%TA.AperFunction,ComponentPad\*%\n%ADD\d+R,1.700000X1.700000\*%\n%TD\*%/.test(cu), "PTH pad");
   assert.ok(/%TA.AperFunction,ViaPad\*%/.test(cu) && /%TA.AperFunction,Conductor\*%/.test(cu));
   assert.ok(/%TO.P,R1,1\*%\n%TO.N,GND\*%/.test(cu), "pad object attributes");
   assert.ok(/%TO.C,J1\*%/.test(cu) || /%TO.P,J1,/.test(cu), "the connector's pads carry its reference");
   assert.ok(/%TD\*%\nM02\*/.test(cu), "the dictionary is cleared at the end");
   const edge = String(r.files[2].data);
-  assert.ok(/%TA.AperFunction,Profile\*%\n%ADD10C,0.1\*%/.test(edge));
+  assert.ok(/%TA.AperFunction,Profile\*%\n%ADD10C,0.100000\*%/.test(edge));
   const job = JSON.parse(String(r.files[3].data));
   assert.strictEqual(job.Header.GenerationSoftware.Application, "Pcbnew");
   assert.deepStrictEqual(job.GeneralSpecs.Size, { X: 40, Y: 30 });
@@ -183,6 +183,28 @@ test("Drill files: Excellon and Gerber X2 sets, drill maps and the report (DIALO
   assert.ok(/    T\d+  1\.000mm  0\.0394"  \(\d+ holes?\)?/.test(rpt));
   assert.ok(rpt.includes("Drill file 't-NPTH.drl' contains\n    unplated through holes:\n") && /Total unplated holes count \d+\n$/.test(rpt));
   assert.ok(F.drillReport(ctx, { merge: true, gerber: false }).includes("Not plated through holes are merged with plated holes\n"));
+});
+
+test("Gerber X2 drill: IPC-4761 protection files, tenting only when asked (GERBER_WRITER::createProtectionFile)", () => {
+  const base = { format: "gerber", metric: true, zeros: "decimal", merge: false, minimalHeader: false, mirrorY: false, ovalMode: "route", useAuxOrigin: false, genDrill: true, genMap: false, mapFormat: 4, gerberPrecision: 6, outputDir: "fab" };
+  const off = F.drillJob(ctx, base);
+  assert.deepStrictEqual(off.files.map((f) => f.name), ["t-PTH-drl.gbr", "t-NPTH-drl.gbr"]);
+  const on = F.drillJob(ctx, Object.assign({}, base, { genTenting: true }));
+  assert.deepStrictEqual(on.files.map((f) => f.name), ["t-PTH-drl.gbr", "t-NPTH-drl.gbr", "t-tenting-back.gbr", "t-tenting-front.gbr"]);
+  assert.deepStrictEqual(on.report.map((l) => l.text), ["Created file 'fab/t-PTH-drl.gbr'.", "Created file 'fab/t-NPTH-drl.gbr'.", "Created file 'fab/t-tenting-back.gbr'.", "Created file 'fab/t-tenting-front.gbr'.", "Done."]);
+  const tf = String(on.files[3].data);
+  assert.ok(tf.includes("%TF,FileFunction,Other,Tenting-Front*%\n%TF.FilePolarity,Positive*%"), tf.slice(0, 500));
+  assert.ok(/%TA.AperFunction,Tenting\*%\n%ADD10C,0.600000\*%/.test(tf), "the via's pad diameter, Tenting aperture");
+  assert.strictEqual((tf.match(/D03\*/g) || []).length, 1, "only the tented via (v2 opts out)");
+  // per-via and board-level covering / plugging / filling / capping
+  const B2 = BOARD.replace("(tenting (front yes) (back yes)) (aux", "(tenting (front yes) (back yes)) (covering (front no) (back no)) (plugging (front no) (back yes)) (capping no) (filling yes) (aux")
+    .replace('(tenting (front no) (back no)) (net 1)', '(tenting (front no) (back no)) (capping yes) (covering (front yes) (back none)) (filling no) (net 1)');
+  const ctx2 = Object.assign({}, ctx, { doc: K.parseDoc(B2, "kicad_pcb"), setup: B2 });
+  const r = F.drillJob(ctx2, Object.assign({}, base, { genDrill: false }));
+  assert.deepStrictEqual(r.files.map((f) => f.name), ["t-filling-front-back.gbr", "t-capping-front-back.gbr", "t-covering-front.gbr", "t-plugging-back.gbr"]);
+  const fill = String(r.files[0].data);
+  assert.ok(fill.includes("%TF,FileFunction,Other,Filling*%") && /%ADD10C,0.300000\*%/.test(fill) && (fill.match(/D03\*/g) || []).length === 1, "v1 filled from the board, v2 not");
+  assert.strictEqual((String(r.files[3].data).match(/D03\*/g) || []).length, 2, "both vias plugged from the board's back setting");
 });
 
 test("Placement files: the plain-text file in inches and the CSV (DIALOG_GEN_FOOTPRINT_POSITION)", () => {

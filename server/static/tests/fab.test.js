@@ -78,7 +78,7 @@ test("a Gerber file states its format, its function and the drill/place origin",
 
 test("copper: pads by shape, the track drawn with its width, vias flashed", async () => {
   const p = await F.buildPackage(ctx, { preset: "jlcpcb" }); const cu = file(p, /F_Cu/), A = apertures(cu).join("\n");
-  assert(/R,1\.7X1\.7\*%/.test(A) && /O,1\.7X2\.4\*%/.test(A) && /C,0\.6\*%/.test(A) && /C,0\.25\*%/.test(A), A);
+  assert(/R,1\.700000X1\.700000\*%/.test(A) && /O,1\.700000X2\.400000\*%/.test(A) && /C,0\.600000\*%/.test(A) && /C,0\.250000\*%/.test(A), A);
   const L = lines(cu), i = L.indexOf("X10825000Y20000000D02*");
   assert(i > 0 && L[i + 1] === "X20000000Y20000000D01*", "the track from R1 to R2");
   assert(!L.includes("X22000000Y10000000D03*"), "a mounting hole no larger than its pad has no copper");
@@ -87,13 +87,13 @@ test("copper: pads by shape, the track drawn with its width, vias flashed", asyn
 
 test("solder mask: pads grown by the board's clearance, tented vias left covered", async () => {
   const p = await F.buildPackage(ctx, { preset: "jlcpcb" }); const m = file(p, /F_Mask/), A = apertures(m).join("\n");
-  assert(/O,1\.8X2\.5\*%/.test(A) && /C,2\.3\*%/.test(A), "0.05 mm on every side: " + A);
-  const via = apertures(m).find((l) => /C,0\.7\*%/.test(l));
+  assert(/O,1\.800000X2\.500000\*%/.test(A) && /C,2\.300000\*%/.test(A), "0.05 mm on every side: " + A);
+  const via = apertures(m).find((l) => /C,0\.700000\*%/.test(l));
   assert(via, "the via with (tenting none) is open");
   const d = via.replace(/^%ADD(\d+).*/, "D$1");
   assert.deepStrictEqual(flashes(m, d), ["X18000000Y15000000D03*"], "…and only that one");
   const t = await F.buildPackage(ctx, { preset: "jlcpcb", forceTentVias: true });
-  assert(!apertures(file(t, /F_Mask/)).some((l) => /C,0\.7\*%/.test(l)), "Tent all vias covers it");
+  assert(!apertures(file(t, /F_Mask/)).some((l) => /C,0\.700000\*%/.test(l)), "Tent all vias covers it");
 });
 
 test("silkscreen: text as strokes, cleared where the mask is open when asked", async () => {
@@ -101,7 +101,7 @@ test("silkscreen: text as strokes, cleared where the mask is open when asked", a
   assert(s.includes("%LPC*%"), "the JLCPCB preset subtracts the mask");
   const k = await F.buildPackage(ctx, { preset: "kicad" }); const ks = lines(file(k, /F_Silkscreen/));
   assert(!ks.includes("%LPC*%"), "KiCad's default does not");
-  assert(apertures(file(k, /F_Silkscreen/)).some((l) => /C,0\.2\*%/.test(l)), "REV B is drawn with its 0.2 mm pen");
+  assert(apertures(file(k, /F_Silkscreen/)).some((l) => /C,0\.200000\*%/.test(l)), "REV B is drawn with its 0.2 mm pen");
   const none = await F.buildPackage(ctx, { preset: "kicad", plotReference: false });
   assert(lines(file(none, /F_Silkscreen/)).length < ks.length, "reference designators can be left out");
 });

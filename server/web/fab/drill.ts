@@ -3,7 +3,7 @@
 // pair for blind and buried vias.  Tools are numbered by rising diameter, vias before pad holes; an oblong
 // hole is routed (G00 … M15 G01 … M16) or drilled as a slot (G85).  Y is negated like the Gerbers, so the
 // two always register.
-import { type BoardModel } from "./model";
+import { type BoardModel, type Via } from "./model";
 import { type Pt, rot } from "./prims";
 
 export interface DrillOptions {
@@ -36,6 +36,8 @@ export interface Hole {
   plated: boolean; attr: number;
   /** the copper layers the hole runs between */
   from: string; to: string;
+  /** the via a via hole comes from (the IPC-4761 protection files read its covering, plugging … modes) */
+  via?: Via;
 }
 
 /** Every hole of the board: pad holes and vias. */
@@ -52,7 +54,7 @@ export function boardHoles(m: BoardModel): Hole[] {
   for (const v of m.vias) {
     if (!(v.drill > 0)) continue;
     const through = v.type === "through";
-    out.push({ x: v.x, y: v.y, d: v.drill, slot: null, plated: true, attr: through ? ATTR.viaThrough : ATTR.viaBuried, from: through ? first : v.layers[0], to: through ? last : v.layers[v.layers.length - 1] });
+    out.push({ x: v.x, y: v.y, d: v.drill, slot: null, plated: true, attr: through ? ATTR.viaThrough : ATTR.viaBuried, from: through ? first : v.layers[0], to: through ? last : v.layers[v.layers.length - 1], via: v });
   }
   return out;
 }

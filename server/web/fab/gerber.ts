@@ -14,6 +14,8 @@ export interface GerberAttrs {
   fileFunction: string;
   /** %TF.FilePolarity: "Positive" or "Negative"; empty for layers that have none (outline, drawings). */
   polarity: string;
+  /** a header line written in place of the FileFunction one, as is (the IPC-4761 protection files' "%TF,FileFunction,Other,…*%") */
+  fileFunctionLine?: string;
 }
 
 export interface GerberOptions {
@@ -49,6 +51,12 @@ export function gerberString(s: string): string {
 export function mm(v: number): string {
   const s = (Math.round(v * 1e6) / 1e6).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
   return s === "-0" || s === "" ? "0" : s;
+}
+
+/** A standard aperture's size as GERBER_PLOTTER::writeApertureList prints it: fmt's {:#f}, six decimals kept. */
+export function f6(v: number): string {
+  const s = (Math.round(v * 1e6) / 1e6).toFixed(6);
+  return s === "-0.000000" ? "0.000000" : s;
 }
 
 /** A field of a %TF attribute: commas, asterisks, percent signs and non-ASCII are not allowed in one. */
@@ -125,14 +133,14 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
     return name;
   };
   const flashAperture = (p: Prim): number => {
-    if (p.k === "circle") return aperture(`C,${mm(p.d)}`);
+    if (p.k === "circle") return aperture(`C,${f6(p.d)}`);
     if (p.k === "rect" || p.k === "oval") {
       const a = norm360(p.rot);
       const quarter = Math.abs(a - Math.round(a / 90) * 90) < 1e-6;
       if (quarter) {
         const turned = Math.round(a / 90) % 2 === 1;
         const w = turned ? p.h : p.w, h = turned ? p.w : p.h;
-        return aperture(`${p.k === "rect" ? "R" : "O"},${mm(w)}X${mm(h)}`);
+        return aperture(`${p.k === "rect" ? "R" : "O"},${f6(w)}X${f6(h)}`);
       }
       if (p.k === "rect") { usesRotRect = true; return aperture(`RotRect,${mm(p.w)}X${mm(p.h)}X${mm(a)}`); }
       // an oval at an angle: a thick line between the centres of its two round ends
@@ -198,12 +206,12 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
     if (p.k === "seg") {
       if (!(p.w > 0)) continue;
       objectAttrs(p.meta);
-      select(aperture(`C,${mm(p.w)}`));
+      select(aperture(`C,${f6(p.w)}`));
       moveTo(p.x1, p.y1); lineTo(p.x2, p.y2);
     } else if (p.k === "arc") {
       if (!(p.w > 0)) continue;
       objectAttrs(p.meta);
-      select(aperture(`C,${mm(p.w)}`));
+      select(aperture(`C,${f6(p.w)}`));
       const sx = p.cx + p.r * Math.cos(p.a0), sy = p.cy + p.r * Math.sin(p.a0);
       const ex = p.cx + p.r * Math.cos(p.a1), ey = p.cy + p.r * Math.sin(p.a1);
       const TAU = 2 * Math.PI; let sweep = p.acw ? p.a0 - p.a1 : p.a1 - p.a0; sweep = ((sweep % TAU) + TAU) % TAU;
@@ -247,7 +255,7 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
   out.push(tf(`CreationDate,${opt.date}`));
   out.push(tf(`ProjectId,${attrField(opt.project.name) || "board"},${opt.project.guid},${attrField(opt.project.rev) || "rev?"}`));
   out.push(tf("SameCoordinates,Original"));
-  out.push(tf(`FileFunction,${attrs.fileFunction}`));
+  out.push(attrs.fileFunctionLine !== undefined ? attrs.fileFunctionLine : tf(`FileFunction,${attrs.fileFunction}`));
   if (attrs.polarity) out.push(tf(`FilePolarity,${attrs.polarity}`));
   out.push(`%FSLAX4${prec}Y4${prec}*%`);
   out.push(`G04 Gerber Fmt 4.${prec}, Leading zero omitted, Abs format (unit mm)*`);

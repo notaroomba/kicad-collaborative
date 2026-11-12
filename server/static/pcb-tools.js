@@ -4473,7 +4473,15 @@
       }
     }
     const ax = K2(setup, "aux_axis_origin");
+    const yn = (k) => !!k && /^(yes|true)$/.test(str2(k[1]));
+    const cov = K2(setup, "covering"), plug = K2(setup, "plugging");
     return {
+      coverFront: yn(K2(cov, "front")),
+      coverBack: yn(K2(cov, "back")),
+      plugFront: yn(K2(plug, "front")),
+      plugBack: yn(K2(plug, "back")),
+      capVias: yn(K2(setup, "capping")),
+      fillVias: yn(K2(setup, "filling")),
       maskExpansion: n("pad_to_mask_clearance"),
       maskMinWidth: n("solder_mask_min_width"),
       pasteClearance: n("pad_to_paste_clearance"),

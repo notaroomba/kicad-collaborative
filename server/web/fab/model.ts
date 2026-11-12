@@ -13,6 +13,8 @@ export type FabDoc = KDoc & { version?: number; auxOrigin?: [number, number] | n
 export interface BoardSettings {
   maskExpansion: number; maskMinWidth: number; pasteClearance: number; pasteRatio: number;
   tentFront: boolean; tentBack: boolean;
+  /** IPC-4761 via protection defaults: (covering (front no) (back no)) (plugging …) (capping no) (filling no) */
+  coverFront: boolean; coverBack: boolean; plugFront: boolean; plugBack: boolean; capVias: boolean; fillVias: boolean;
   /** (aux_axis_origin x y): the drill / place file origin. */
   auxOrigin: Pt;
 }
@@ -32,7 +34,10 @@ export function boardSettings(setup: Node | null, doc: FabDoc): BoardSettings {
     if (v) { const open = str(v[1]) === "true" || str(v[1]) === "yes"; tentFront = tentBack = !open; }
   }
   const ax = K(setup, "aux_axis_origin");
-  return { maskExpansion: n("pad_to_mask_clearance"), maskMinWidth: n("solder_mask_min_width"), pasteClearance: n("pad_to_paste_clearance"), pasteRatio: n("pad_to_paste_clearance_ratio"),
+  const yn = (k: Node | null): boolean => !!k && /^(yes|true)$/.test(str(k[1]));
+  const cov = K(setup, "covering"), plug = K(setup, "plugging");
+  return { coverFront: yn(K(cov, "front")), coverBack: yn(K(cov, "back")), plugFront: yn(K(plug, "front")), plugBack: yn(K(plug, "back")),
+    capVias: yn(K(setup, "capping")), fillVias: yn(K(setup, "filling")), maskExpansion: n("pad_to_mask_clearance"), maskMinWidth: n("solder_mask_min_width"), pasteClearance: n("pad_to_paste_clearance"), pasteRatio: n("pad_to_paste_clearance_ratio"),
     tentFront, tentBack, auxOrigin: ax ? [num(ax[1]), num(ax[2])] : doc.auxOrigin ? [doc.auxOrigin[0], doc.auxOrigin[1]] : [0, 0] };
 }
 
@@ -217,6 +222,9 @@ export interface Via {
   sizes: Map<string, number> | null;
   net: string; removeUnused: boolean; keepEnds: boolean; zoneLayers: Set<string>;
   tentFront: boolean | null; tentBack: boolean | null;
+  /** (covering …) (plugging …) (capping …) (filling …) on the via: null follows the board's setup */
+  coverFront: boolean | null; coverBack: boolean | null; plugFront: boolean | null; plugBack: boolean | null;
+  capped: boolean | null; filled: boolean | null;
 }
 export interface ZoneFill { layer: string; pts: Pt[]; net?: string }
 
@@ -271,7 +279,9 @@ function readVia(n: Node, copper: string[], nets: Map<number, string>): Via {
   }
   const ru = K(n, "remove_unused_layers"), ke = K(n, "keep_end_layers"), zl = K(n, "zone_layer_connections");
   const [tf, tb] = frontBack(K(n, "tenting"));
-  return { x, y, size, drill: dr ? num(dr[1], 0.4) : 0.4, type, layers, sizes, net: netName(n, nets),
+  const [cf, cb] = frontBack(K(n, "covering")), [pf, pb] = frontBack(K(n, "plugging"));
+  const opt = (k: Node | null): boolean | null => (k && k.length > 1 && str(k[1]) !== "none" ? str(k[1]) !== "no" : null);
+  return { coverFront: cf, coverBack: cb, plugFront: pf, plugBack: pb, capped: opt(K(n, "capping")), filled: opt(K(n, "filling")), x, y, size, drill: dr ? num(dr[1], 0.4) : 0.4, type, layers, sizes, net: netName(n, nets),
     removeUnused: ru ? (ru.length < 2 || str(ru[1]) !== "no") : has(n, "remove_unused_layers"), keepEnds: ke ? (ke.length < 2 || str(ke[1]) !== "no") : has(n, "keep_end_layers"),
     zoneLayers: new Set(zl ? zl.slice(1).map(str) : []), tentFront: tf, tentBack: tb };
 }

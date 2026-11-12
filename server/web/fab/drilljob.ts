@@ -35,6 +35,8 @@ export interface DrillJobRequest {
   /** the map format: PLOT_FORMAT ids 2 PS, 1 Gerber, 3 DXF, 5 SVG, 4 PDF */
   mapFormat: number;
   gerberPrecision: 5 | 6;
+  /** "Generate tenting layers" (Gerber X2 only): the -tenting-front / -tenting-back protection files */
+  genTenting?: boolean;
   outputDir: string; boardDir?: string;
 }
 export interface DrillJobResult { files: PlotFile[]; report: ReportLine[] }
@@ -96,6 +98,54 @@ function gerberDrill(s: Span, m: BoardModel, ctx: FabContext, req: DrillJobReque
   }
   const board = projectNameOf(ctx);
   return writeGerber(prims, { fileFunction: fileFunction(s, m), polarity: "Positive" }, { x2: true, origin: req.useAuxOrigin ? m.settings.auxOrigin : [0, 0], software: `KiCad,Pcbnew,${version(ctx)}`, date,
+    project: { name: board, guid: projectGuid(board + ".kicad_pcb"), rev: (ctx.doc.titleBlock && ctx.doc.titleBlock.rev) || "rev?" }, precision: req.gerberPrecision, netAttributes: true });
+}
+
+// ---------------------------------------------------------------- IPC-4761 via protection files
+/** IPC4761_FEATURES, as GERBER_WRITER::createProtectionFile names and filters them. */
+type Feature = "filled" | "capped" | "coverBack" | "coverFront" | "plugBack" | "plugFront" | "tentBack" | "tentFront";
+const FEATURE: Record<Feature, { func: string; af: string; file: string; side: 0 | 1 | 2 }> = {
+  capped: { func: "Capping", af: "Capping", file: "capping", side: 0 }, filled: { func: "Filling", af: "Filling", file: "filling", side: 0 },
+  coverBack: { func: "Covering-Back", af: "Covering", file: "covering", side: 2 }, coverFront: { func: "Covering-Front", af: "Covering", file: "covering", side: 1 },
+  plugBack: { func: "Plugging-Back", af: "Plugging", file: "plugging", side: 2 }, plugFront: { func: "Plugging-Front", af: "Plugging", file: "plugging", side: 1 },
+  tentBack: { func: "Tenting-Back", af: "Tenting", file: "tenting", side: 2 }, tentFront: { func: "Tenting-Front", af: "Tenting", file: "tenting", side: 1 },
+};
+/** The resolved mode of one via (PCB_VIA::Resolve…Mode): its own value, else the board's setup.  A front / back
+ *  mode only counts when the via reaches that outer layer (drill_enumerator.cpp's m_TopCovered … flags). */
+export function viaHasFeature(h: Hole, f: Feature, m: BoardModel): boolean {
+  const v = h.via; if (!v) return false;
+  const s = m.settings, top = h.from === m.copper[0], bot = h.to === m.copper[m.copper.length - 1];
+  const r = (own: boolean | null, dflt: boolean): boolean => (own !== null ? own : dflt);
+  switch (f) {
+    case "filled": return r(v.filled, s.fillVias);
+    case "capped": return r(v.capped, s.capVias);
+    case "coverFront": return top && r(v.coverFront, s.coverFront);
+    case "coverBack": return bot && r(v.coverBack, s.coverBack);
+    case "plugFront": return top && r(v.plugFront, s.plugFront);
+    case "plugBack": return bot && r(v.plugBack, s.plugBack);
+    case "tentFront": return top && r(v.tentFront, s.tentFront);
+    case "tentBack": return bot && r(v.tentBack, s.tentBack);
+  }
+}
+const generic = (l: string, m: BoardModel): string => (l === m.copper[0] ? "front" : l === m.copper[m.copper.length - 1] ? "back" : "in" + m.copper.indexOf(l));
+/** getProtectionFileName: <board>-filling-front-back.gbr, <board>-tenting-front.gbr … */
+function protectionName(base: string, f: Feature, from: string, to: string, m: BoardModel): string {
+  const d = FEATURE[f];
+  const tail = d.side === 0 ? `${generic(from, m)}-${generic(to, m)}` : generic(d.side === 1 ? from : to, m);
+  return `${base}-${d.file}-${tail}.gbr`;
+}
+/** createProtectionFile: one flash per via with the feature, the via's pad on that side for covering and tenting. */
+function protectionFile(holes: Hole[], f: Feature, m: BoardModel, ctx: FabContext, req: DrillJobRequest, date: string): string {
+  const d = FEATURE[f], prims: Prim[] = [];
+  for (const h of holes) {
+    if (!h.via || !viaHasFeature(h, f, m)) continue;
+    const v = h.via;
+    const padOn = (l: string): number => (v.sizes && v.sizes.get(l)) || v.size;
+    const dia = f === "coverBack" || f === "tentBack" ? padOn(v.layers[v.layers.length - 1]) : f === "coverFront" || f === "tentFront" ? padOn(v.layers[0]) : h.d;
+    prims.push({ k: "circle", x: h.x, y: h.y, d: dia, meta: { af: d.af } } as Prim);
+  }
+  const board = projectNameOf(ctx);
+  return writeGerber(prims, { fileFunction: "", polarity: "Positive", fileFunctionLine: `%TF,FileFunction,Other,${d.func}*%` }, { x2: true, origin: req.useAuxOrigin ? m.settings.auxOrigin : [0, 0], software: `KiCad,Pcbnew,${version(ctx)}`, date,
     project: { name: board, guid: projectGuid(board + ".kicad_pcb"), rev: (ctx.doc.titleBlock && ctx.doc.titleBlock.rev) || "rev?" }, precision: req.gerberPrecision, netAttributes: true });
 }
 
@@ -162,17 +212,36 @@ export function drillJob(ctx: FabContext, req: DrillJobRequest): DrillJobResult 
   const refOf = (h: Hole): string => refs.get(`${h.x.toFixed(4)},${h.y.toFixed(4)}`) || "";
   const sp = spans(m, board, req.merge, gerber);
   if (req.genDrill) {
-    if (gerber) {
-      for (const s of sp) {
-        if (!s.holes.length && !s.npth && s.from !== m.copper[0]) continue;
-        const n = s.name; files.push({ name: n, path: path(n), data: gerberDrill(s, m, ctx, req, date, refOf) });
-        report.push({ severity: "action", text: `Created file '${path(n)}'` });
-      }
-    } else {
+    if (!gerber) {
       const set = drillFiles(m, board, { metric: req.metric, zeros: req.zeros, merge: req.merge, minimalHeader: req.minimalHeader, mirrorY: req.mirrorY, ovalMode: req.ovalMode,
         origin: req.useAuxOrigin ? m.settings.auxOrigin : [0, 0], software: `KiCad ${version(ctx)}`, softwareAttr: `Kicad,Pcbnew,${version(ctx)}`, date });
       for (const f of set) { files.push({ name: f.name, path: path(f.name), data: f.text }); report.push({ severity: "action", text: `Created file '${path(f.name)}'` }); }
     }
+  }
+  if (gerber) {
+    // GERBER_WRITER::CreateDrillandMapFilesSet: per span the drill file, then (plated spans) the filling and capping
+    // files; then the covering, plugging (and, asked for, tenting) files of every via reaching an outer layer
+    const writeProtection = (f: Feature, holes: Hole[], from: string, to: string): void => {
+      if (!holes.some((h) => viaHasFeature(h, f, m))) return;
+      const n = protectionName(board, f, from, to, m);
+      files.push({ name: n, path: path(n), data: protectionFile(holes, f, m, ctx, req, date) });
+      report.push({ severity: "action", text: `Created file '${path(n)}'.` });
+    };
+    const side: Hole[] = [];
+    for (const s of sp) {
+      if (!s.holes.length) continue;
+      if (req.genDrill) {
+        const n = s.name; files.push({ name: n, path: path(n), data: gerberDrill(s, m, ctx, req, date, refOf) });
+        report.push({ severity: "action", text: `Created file '${path(n)}'.` });
+      }
+      if (s.npth) continue;
+      for (const h of toolsOf(s.holes).sorted) if (h.via) side.push(h);
+      writeProtection("filled", toolsOf(s.holes).sorted, s.from, s.to);
+      writeProtection("capped", toolsOf(s.holes).sorted, s.from, s.to);
+    }
+    const feats: Feature[] = ["coverBack", "coverFront", "plugBack", "plugFront"];
+    if (req.genTenting) feats.push("tentBack", "tentFront");
+    for (const f of feats) writeProtection(f, side, m.copper[0], m.copper[m.copper.length - 1]);
   }
   if (req.genMap) {
     for (const s of sp) {
