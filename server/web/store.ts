@@ -9,7 +9,7 @@ import { useSyncExternalStore } from "react";
 
 // ---------------------------------------------------------------- state slices
 export type Editor = "sch" | "pcb";
-export type DocType = "kicad_pcb" | "kicad_sch";
+export type DocType = "kicad_pcb" | "kicad_sch" | "footprint";
 export type Units = "mm" | "in" | "mil";
 export type ConnStatus = "offline" | "connecting" | "live" | "error" | "idle";
 
@@ -160,6 +160,8 @@ export interface CtxItem {
 }
 export interface ContextMenuState { id: number; x: number; y: number; title?: string; items: CtxItem[] }
 
+/** A footprint library of the project as the Libraries pane lists it. */
+export interface FpLibRow { name: string; uri: string; footprints: { name: string; docId: string; path: string }[] }
 export interface AppState {
   view: "home" | "editor";
   /** which page of the home view is showing, and a counter bumped on every visit (web/home) */
@@ -209,6 +211,9 @@ export interface AppState {
   filter: Record<string, boolean>;
   panes: Record<string, boolean>;
   undo: { undo: number; redo: number };
+  /** the Footprint Editor (web/editor/fpedit.ts): the project's footprint libraries and the open footprint's title */
+  fpLibs?: { libs: FpLibRow[]; current: string | null; version: number };
+  fpTitle?: { label: string; modified: boolean; fromBoard: boolean };
   status: { message: string; mode: string };
   /** EDA_MSG_PANEL: the columns (title over value) of the selection's GetMsgPanelInfo, the board summary or the router */
   msgPanel: { items: { title: string; value: string }[] };

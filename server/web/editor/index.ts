@@ -43,6 +43,7 @@ import type { ItemSummary, SheetEntry } from "./types";
 /** The schematic module's drag in flight (sch-tools S.drag), as far as the app reads it. */
 type SchDrag = { moved?: boolean; last: number[]; kind?: string };
 import { installLibrary } from "./library";
+import { installFpEditHandlers } from "./fpedit";
 import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
 window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el), selectionCount };
@@ -516,10 +517,12 @@ document.addEventListener("keydown", (ev) => {
 installSchNets();   // the net highlight kept by name across the hierarchy (editor/schnets.ts)
 installSymbolEditor(HANDLERS as unknown as Record<string, (a?: unknown) => void>);   // the Symbol Editor (web/symedit): showSymbolEditor, editWithLibEdit, editLibSymbolWithLibEdit
 installDialogs(HANDLERS);   // Page Settings, Find and Replace, Symbol Fields Table / BOM, Assign Footprints, Schematic Setup, Preferences, groups
+installFpEditHandlers(HANDLERS);   // the Footprint Editor's File / Edit / Place / Tools actions and Ctrl+E on the board (editor/fpedit.ts)
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();
 installProjectWatch();
 installLibrary();   // window.KiCadLibrary + the placeFootprint / library browser actions (editor/library.ts)
+
 
 
 // ---------- boot ----------

@@ -22,7 +22,7 @@ export function activeModule(): SchToolModule | PcbToolModule | null | undefined
 
 export function toolCtx(extra?: Record<string, unknown>) {
   return Object.assign({
-    K: KiCadCanvas, doc: E.kdoc, IU: E.IU, isSch: isSch(), zoom: E.zoom, pxPerMm: pxPerMm(), gridPitch: E.gridPitch, snapOn: E.snapOn, snap: snapMm, tool: E.tool, selFilter: selFilter(), activeLayer: E.activeLayer,
+    K: KiCadCanvas, doc: E.kdoc, IU: E.IU, isSch: isSch(), fpEditor: !!(E.kdoc && E.kdoc.fpEditor), zoom: E.zoom, pxPerMm: pxPerMm(), gridPitch: E.gridPitch, snapOn: E.snapOn, snap: snapMm, tool: E.tool, selFilter: selFilter(), activeLayer: E.activeLayer,
     selected: E.selected, items: E.items, sheets: E.sheets, viewOnly: E.viewOnly, live: !!(E.ws && E.ws.readyState === 1), stage, worldMm, selection: E.selection, docs: state.docs!, project: state.project, api, docId: state.docId,
     setHighlight(ids: Set<string> | null) { E.highlightIds = ids && ids.size ? new Set(ids) : null; requestRender(); },
     cursor: E.lastCursorMm, clipboard: appClipboard, designSettings: E.proSettings, customRules: E.druText,
@@ -66,6 +66,7 @@ export function commitChanges(changes: KChange[] | null | undefined, label?: str
     const it = E.kdoc && E.kdoc.items.get(c.id);
     if (c.kind === "ADDED") inverse.push({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] });
     else if (c.kind === "REMOVED" && it) inverse.push({ id: c.id, kind: "ADDED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) });
+    else if (c.kind === "MODIFIED" && c.id === "footprint" && E.kdoc && E.kdoc.fpEditor) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.footprintDoc.footprintHeaderSexpr(E.kdoc) });   // the Footprint Editor's own footprint
     else if (c.kind === "MODIFIED" && it) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) });
   }
   applyChanges(changes);

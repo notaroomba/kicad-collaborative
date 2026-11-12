@@ -85,6 +85,11 @@ function withDocument<T>(docId: string, onJoined: (live: LiveDocument, sendOp: (
 /** A document as the server has it now: its newest snapshot and the ops journalled after it. */
 export function liveDocument(docId: string): Promise<LiveDocument> { return withDocument(docId, (live) => Promise.resolve(live)); }
 
+/** Send item ops to a document that is not the open one (the board a footprint editor tab writes back to); resolves with the seq. */
+export function sendDocOps(docId: string, changes: KChange[]): Promise<number> {
+  return withDocument(docId, async (live, sendOp) => { if (live.role !== "editor") throw new Error("permission_denied"); return sendOp(changes); });
+}
+
 /** The ops a whole-file document picked up after its snapshot (an upload that failed half way), laid over the text. */
 function withFileOps(text: string, ops: JournalOp[]): string {
   const edits: ProjectEdit[] = [];

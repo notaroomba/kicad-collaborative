@@ -28,7 +28,7 @@ const comments = (): CommentRow[] => E.comments as CommentRow[];
 const kdoc = (): KDoc | null => E.kdoc as KDoc | null;
 const IU = (): number => E.IU as number;
 const me = (): Me | null => (state as unknown as { me: Me | null }).me;
-const docId = (): string | null => (state as unknown as { docId: string | null }).docId;
+const docId = (): string | null => { const id = (state as unknown as { docId: string | null }).docId; return id && !id.startsWith("board:") ? id : null; };   // a board footprint's private copy (editor/fpedit.ts) has no comments of its own
 const project = (): { projectId: string; ownerId?: number } | null => (state as unknown as { project: { projectId: string; ownerId?: number } | null }).project;
 /** Who may write comments: the roles work publishes E.canComment; before it, anyone signed in. */
 export const canComment = (): boolean => !!E.canComment;

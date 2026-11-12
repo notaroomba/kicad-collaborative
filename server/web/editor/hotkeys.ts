@@ -14,7 +14,7 @@
 //   runSpecHotkey(ev)  from index.ts's keydown handler after the module had its turn: the generic table.
 // Nothing fires while the user types in a field, a dialog or an open menu (typingTarget).
 import { hotkeyOwners, type EditorKind } from "../menuspec";
-import { EDITOR_ONLY, KICAD_KEY_WINS, MODULE_ALIAS, toolFor } from "../tables";
+import { EDITOR_ONLY, FPEDIT_BLOCKED, FPEDIT_ONLY, KICAD_KEY_WINS, MODULE_ALIAS, toolFor } from "../tables";
 import { HANDLERS } from "./actions";
 import { state, store } from "./appstore";
 import { E } from "./state";
@@ -61,9 +61,12 @@ export function typingTarget(ev: KeyboardEvent): boolean {
 }
 
 const editorKind = (): EditorKind => (isSch() ? "sch" : "pcb");
+/** The Footprint Editor runs on the board editor's tables: its own actions only there, the board's routing and zones never. */
+const fpEditAllows = (id: string): boolean => (E.DOC_TYPE === "footprint" ? !FPEDIT_BLOCKED.has(id) : !FPEDIT_ONLY.has(id));
 
 /** Run the web's implementation of one KiCad action; false when there is none (or the module declined it). */
 export function runKicadAction(id: string): boolean {
+  if (!fpEditAllows(id)) return false;
   const ed = editorKind(); const mod = activeModule() as ToolModule | null;
   const alias = MODULE_ALIAS[ed][id];
   if (alias && mod && mod.actions && mod.actions[alias]) return runModuleAction(alias) !== false;
@@ -80,6 +83,7 @@ export function runKicadAction(id: string): boolean {
 
 /** Whether a KiCad action has an implementation here (the hotkey list marks the rest as desktop-only). */
 export function kicadActionAvailable(id: string): boolean {
+  if (!fpEditAllows(id)) return false;
   const ed = editorKind(); const mod = activeModule() as ToolModule | null;
   const alias = MODULE_ALIAS[ed][id];
   if ((HANDLERS as Record<string, Handler>)[id] && (!EDITOR_ONLY[id] || EDITOR_ONLY[id] === ed)) return true;

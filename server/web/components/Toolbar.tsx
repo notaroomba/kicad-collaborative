@@ -188,8 +188,9 @@ function Items({ items, a, v }: { items: ToolbarItem[]; a: Avail; v?: boolean })
   );
 }
 function useBar(loc: ToolbarLoc): ToolbarItem[] {
-  const editor = useEditor();
-  return (editor && SPEC.toolbars[editor] && SPEC.toolbars[editor][loc]) || [];
+  const editor = useEditor(); const fp = useApp((s) => s.document.docType === "footprint");
+  const key = fp ? "fpedit" : editor;   // the Footprint Editor: toolbars_footprint_editor.cpp on the board editor's machinery
+  return (key && SPEC.toolbars[key] && SPEC.toolbars[key][loc]) || [];
 }
 
 export function TopToolbar() {

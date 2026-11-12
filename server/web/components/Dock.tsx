@@ -18,6 +18,7 @@ import { CollaboratorsPane } from "./panes/Collaborators";
 import { CommentsPane } from "./panes/Comments";
 import { SearchPane } from "./panes/Search";
 import { NetNavigatorPane } from "./panes/NetNavigator";
+import { LibrariesPane } from "./panes/Libraries";
 
 // ---------------------------------------------------------------- remembered sizes
 interface DockLayout { left?: number; right?: number; bottom?: number; panes: Record<string, number> }
@@ -75,7 +76,7 @@ function dragSash(ev: RPointerEvent, move: (dx: number, dy: number) => void, don
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // How each pane shares the dock's height until it is resized (was `.kpane[data-pane=…] { flex: … }`).
-const PANE_FLEX: Record<string, string> = { props: "flex-[2_1_0]", filter: "flex-none", history: "flex-[1.4_1_0]", appearance: "flex-[3_1_0]" };
+const PANE_FLEX: Record<string, string> = { libtree: "flex-[2_1_0]", props: "flex-[2_1_0]", filter: "flex-none", history: "flex-[1.4_1_0]", appearance: "flex-[3_1_0]" };
 const MIN_PANE = 46;
 
 /** The sash above a pane: drags the boundary with the visible pane before it. */
@@ -128,6 +129,7 @@ function PaneFor({ name, first }: { name: string; first: boolean }) {
     case "appearance": return <Pane name={name} first={first}><AppearancePane /></Pane>;
     case "search": return <Pane name={name} first={first}><SearchPane /></Pane>;
     case "netnav": return <Pane name={name} first={first}><NetNavigatorPane /></Pane>;
+    case "libtree": return <Pane name={name} first={first}><LibrariesPane /></Pane>;
     default: return null;
   }
 }
@@ -136,7 +138,9 @@ function Dock({ side }: { side: "left" | "right" | "bottom" }) {
   const editor = useApp((s) => s.document.editor);
   const panes = useApp((s) => s.panes);
   const layout = useLayout(editor || "x");
-  const names = editor ? DOCKS[editor as Editor][side] || [] : [];
+  const fpEdit = useApp((s) => s.document.docType === "footprint");
+  // the Footprint Editor: the Libraries tree heads the left dock (FOOTPRINT_EDIT_FRAME's m_treePane)
+  const names = editor ? (fpEdit && side === "left" ? ["libtree", ...(DOCKS[editor as Editor][side] || [])] : DOCKS[editor as Editor][side] || []) : [];
   const any = names.some((n) => panes[n]);
   const firstShown = names.find((n) => panes[n]);
   const ed = editor || "x";

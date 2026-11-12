@@ -11,7 +11,7 @@ import { UNITS, setRadio } from "./util";
 import { isSch, requestRender } from "./view";
 // ================================================================ KiCad frame (the React chrome reads the store)
 // Docked panes: which are open, per editor, remembered in localStorage (kui.panes.<editor>).
-export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav"];
+export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav", "libtree"];
 
 export const PANE_EDITOR_ONLY: Record<string, "sch" | "pcb" | undefined> = { hier: "sch", netnav: "sch" };
 
@@ -26,13 +26,13 @@ export function savedPanes(ed: string): Record<string, boolean> { try { return J
 
 export function loadPanes(ed: "sch" | "pcb") {
   const saved = savedPanes(ed), out: Record<string, boolean> = {};
-  for (const n of PANE_NAMES) { const allowed = !PANE_EDITOR_ONLY[n] || PANE_EDITOR_ONLY[n] === ed; out[n] = allowed && (saved[n] !== undefined ? !!saved[n] : !PANE_DEFAULT_HIDDEN[ed].includes(n)); }
+  for (const n of PANE_NAMES) { const allowed = n === "libtree" ? E.DOC_TYPE === "footprint" : !PANE_EDITOR_ONLY[n] || PANE_EDITOR_ONLY[n] === ed; out[n] = allowed && (saved[n] !== undefined ? !!saved[n] : !PANE_DEFAULT_HIDDEN[ed].includes(n)); }
   return out;
 }
 
 export function showPane(name: string, show?: unknown) {
   const ed = editorId();
-  if (!PANE_NAMES.includes(name) || (PANE_EDITOR_ONLY[name] && PANE_EDITOR_ONLY[name] !== ed)) return;
+  if (!PANE_NAMES.includes(name) || (PANE_EDITOR_ONLY[name] && PANE_EDITOR_ONLY[name] !== ed) || (name === "libtree" && E.DOC_TYPE !== "footprint")) return;
   const next = show === undefined ? !E.panes[name] : !!show;
   E.panes = Object.assign({}, E.panes, { [name]: next });
   const saved = savedPanes(ed); saved[name] = next;

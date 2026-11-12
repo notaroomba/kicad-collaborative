@@ -13,6 +13,7 @@ import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
 import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
+import { fpEntryFor, fpParam, isFpPrivate, onFootprintOpened, privateText } from "./fpedit";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ItemSummary, SheetEntry, SvgLayer, WireChange } from "./types";
 import { applyView, base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
@@ -245,6 +246,12 @@ export async function openEditor(id: string) {
   store.set({ project: info, role: info.role || null, canJoin: E.canJoin, viewOnly: E.viewOnly, canComment: E.canComment, guest: !state.me, can });
   publishDocs();
   loadHistory();
+  // ?fp=: the Footprint Editor on a footprint of the project, or on a private copy of a board footprint
+  const fp = fpParam();
+  if (fp) {
+    const entry = await fpEntryFor(info, fp);
+    if (entry) { await openDoc(entry); return; }
+  }
   const wanted = new URLSearchParams(location.search).get("doc");
   // Open what has something to show: a rendered board first, else the root
   // schematic (a schematic-only project has an empty placeholder board).
@@ -322,7 +329,7 @@ export async function openDoc(doc: DocEntry) {
   setStatusBar({ mode: "" });
   if (!docNav.lock) { docNav.list.length = docNav.idx + 1; docNav.list.push(doc.docId); docNav.idx = docNav.list.length - 1; }
   setupEditorChrome(); publishDocs();
-  const url = `/p/${state.project!.projectId}/edit` + (state.docs!.length > 1 ? `?doc=${doc.docId}` : "");
+  const url = `/p/${state.project!.projectId}/edit` + (doc.docType === "footprint" ? `?fp=${encodeURIComponent(doc.docId)}` : state.docs!.length > 1 ? `?doc=${doc.docId}` : "");
   if (location.pathname + location.search !== url) history.replaceState(null, "", url);
   setStatusBar({ message: "" });   // KiCad leaves the message field empty until something reports there
   world.style.width = stage.clientWidth + "px";
@@ -335,9 +342,14 @@ export async function openDoc(doc: DocEntry) {
   // desktop-pushed render is only a fallback when the file can't be read.
   let ok = false;
   try {
-    const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
-    if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; ok = setDocFromText(text); }
-  } catch {}
+    const own = privateText(doc);   // a board footprint's private copy: no document on the server
+    if (own !== null) ok = setDocFromText(own);
+    else {
+      const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`);
+      if (r.ok) { const text = await r.text(); if (state.docId !== docId) return; ok = setDocFromText(text); if (ok && doc.docType === "footprint") onFootprintOpened(Number(r.headers.get("x-snapshot-seq")) || 0); }
+    }
+    if (ok && own !== null) onFootprintOpened(0);
+  } catch (e) { console.warn(e); }
   // a subsheet opened cold knows neither its Sheetname nor its page number: both live in its parent
   if (ok && isSch() && state.doc && !(sheetNames.has(state.doc.path) && sheetPages.has(state.doc.path))) {
     const rootSch = state.project ? rootSchematic() : null;
@@ -359,7 +371,8 @@ export async function openDoc(doc: DocEntry) {
     }
   }
   setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
-  if (E.canJoin) connect().catch(() => setConn("err", "connection failed"));
+  if (isFpPrivate()) setConn("", "private copy of a board footprint");   // nothing goes over the socket until Save
+  else if (E.canJoin) connect().catch(() => setConn("err", "connection failed"));
   else setConn("", "sign in to collaborate");
 }
 

@@ -14,7 +14,9 @@ export const TOOL_MAP: Record<Editor, Record<string, string>> = {
   pcb: { selectSetRect: "select", selectSetLasso: "select", routeSingleTrack: "route", routeDiffPair: "routediff", tuneSingleTrack: "tunesingle", tuneDiffPair: "tunediff", tuneSkew: "tuneskew", drawVia: "via", drawZone: "zone", drawCopperThievingZone: "thievingzone", drawRuleArea: "rulearea", drawLine: "gline", drawArc: "garc", drawArcCenter: "garc", drawArcStartEndMid: "garc", drawArcStartEndCenter: "garc", drawArcTangent: "garc", drawArcStartDirEnd: "garc", drawRectangle: "grect",
     drawCircle: "gcircle", drawPolygon: "gpoly", drawBezier: "gcurve", placeReferenceImage: "image", placeText: "gtext", drawTextBox: "gtextbox", drawTable: "table",
     drawAlignedDimension: "dimaligned", drawOrthogonalDimension: "dimortho", drawCenterDimension: "dimcenter", drawRadialDimension: "dimradial", drawLeader: "leader",
-    deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool", gridSetOrigin: "gridorigin", drillOrigin: "drillorigin" },
+    deleteTool: "delete", measureTool: "measure", zoomTool: "zoomtool", gridSetOrigin: "gridorigin", drillOrigin: "drillorigin",
+    // the footprint editor's PAD_TOOL and anchor (pcb-tools/pad-tool.ts); FPEDIT_ONLY keeps them out of the board editor
+    placePad: "pad", placeThtPad: "padtht", placeSmdPad: "padsmd", placeNpthPad: "padnpth", placePasteAperturePad: "padpaste", setAnchor: "anchor" },
 };
 /** The collab tools app.js keeps at the foot of the draw toolbar. */
 export const EXTRA_TOOLS: { id: string; tool: string; name: string; key: string; glyph: string }[] = [
@@ -133,6 +135,37 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
     ["&Help", HELP_MENU],
   ],
 };
+/** The Footprint Editor's menu bar (pcbnew/menubar_footprint_editor.cpp), in its order. */
+export const FPEDIT_MENUS: [string, MenuEntry[]][] = [
+  ["&File", ["newLibrary", "addLibrary", "newFootprint", "createFootprint", "editLibFpInFpEditor", "-", "save", "saveAs", "revert", "-",
+    ["Import", ["importFootprint|Footprint...", "placeImportedGraphics|Graphics..."]],
+    ["Export", ["exportFootprint|Footprint...", "exportFootprintAsSVG|Footprint as &SVG...", "exportFootprintAsPNG|View as &PNG..."]],
+    "-", "compareFpLibraryWithFile", "-", "footprintProperties", "-", "print", "-", ...COLLAB_FILE, "-", "home"]],
+  ["&Edit", ["undo", "redo", "-", "cut", "copy", "paste", "doDelete", "duplicate", "-", ["&Select", ["selectAll", "unselectAll"]], "-",
+    "editTextAndGraphics", "mirrorInteractive", "showLibFootprintFieldsTable", "padTable", "extendGraphic", "trimGraphic", "enumeratePads", "gridOrigin"]],
+  ["&View", [["Panels", ["showProperties", "showLibraryTree", "showLayersManager", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments"]], "-",
+    "nextFootprintTab", "prevFootprintTab", "closeFootprintTab", "-", "showFootprintBrowser", "show3DViewer", "-",
+    "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomTool", "zoomRedraw", "-",
+    ["&Drawing Mode", ["padDisplayMode", "graphicsOutlines", "textOutlines"]],
+    ["&Contrast Mode", ["highContrastMode", "layerAlphaDec", "layerAlphaInc"]],
+    "flipBoard", "-", ...VIEW_WEB]],
+  ["&Place", ["placePad", "drawRuleArea", "-", "drawLine", "drawArc", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawPolygon", "drawBezier", "placeReferenceImage", "placeText", "drawTextBox", "drawTable", "placePoint", "placeBarcode", "-",
+    "drawOrthogonalDimension", "drawAlignedDimension", "drawCenterDimension", "drawRadialDimension", "drawLeader", "-", "setAnchor", "gridSetOrigin", "-", "gridResetOrigin"]],
+  ["&Inspect", ["measureTool", "-", "checkFootprint", "showFootprintUsers", "-", "showDatasheet"]],
+  ["&Tools", ["loadFpFromBoard", "saveFpToBoard", "-", "cleanupGraphics", "repairFootprint", "-", ["External Plugins", ["pluginsReload", "pluginsShowFolder"]]]],
+  ["P&references", ["configurePaths", "showFootprintLibTable", "openPreferences", "-", LANG_MENU, "-", THEME_MENU]],
+  ["&Help", HELP_MENU],
+];
+/** Actions only the Footprint Editor runs: the board editor's hotkeys skip them (Ctrl+N stays New there). */
+export const FPEDIT_ONLY = new Set(["newLibrary", "addLibrary", "newFootprint", "createFootprint", "editLibFpInFpEditor", "saveAs", "footprintProperties", "importFootprint", "exportFootprint",
+  "exportFootprintAsSVG", "exportFootprintAsPNG", "compareFpLibraryWithFile", "showLibFootprintFieldsTable", "padTable", "enumeratePads", "showLibraryTree", "nextFootprintTab", "prevFootprintTab", "closeFootprintTab",
+  "placePad", "placeThtPad", "placeSmdPad", "placeNpthPad", "placePasteAperturePad", "setAnchor", "checkFootprint", "showFootprintUsers", "loadFpFromBoard", "saveFpToBoard", "repairFootprint",
+  "explodePad", "recombinePad", "pushPadSettings", "defaultPadProperties"]);
+/** Board-only actions the Footprint Editor does not have (its tools and menus leave them out; their hotkeys do nothing there). */
+export const FPEDIT_BLOCKED = new Set(["routeSingleTrack", "routeDiffPair", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "drawVia", "drawZone", "drawCopperThievingZone", "drillOrigin", "placeFootprint",
+  "runDRC", "zoneFillAll", "zoneUnfillAll", "zoneFill", "zoneUnfill", "showRatsnest", "editFpInFpEditor", "editLibFpInFpEditor_board", "updateFootprint", "changeFootprint", "boardSetup", "selectLayerPair",
+  "trackWidthInc", "trackWidthDec", "viaSizeInc", "viaSizeDec", "updatePcbFromSchematic", "showEeschema", "highlightNet", "clearHighlight", "toggleNetHighlight"]);
+
 /** The icon KiCad gives a sub-menu (ACTION_MENU::SetIcon in the menubars and the tools' context menus), by its title. */
 export const SUBMENU_ICONS: Record<string, string> = { Import: "import", Export: "export_file", "Fabrication Outputs": "fabrication", "Set Language": "language", "Drawing Mode": "add_zone", "Contrast Mode": "contrast_mode",
   "Draw Microwave Shapes": "mw_add_line", "Draw Dimensions": "add_aligned_dimension", "Geometric Constraints": "measurement", "Auto-Place Footprints": "mode_module", "Multi-Channel": "mode_module",
@@ -256,8 +289,8 @@ export const LINKS: Record<string, string> = {
 };
 
 /** Docked pane ids and the KiCad "show …" action that toggles each. */
-export const PANE_ACTION: Record<string, string> = { props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showHistory", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator" };
-export const PANE_TITLES: Record<string, string> = { props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance", search: "Search", netnav: "Net Navigator" };
+export const PANE_ACTION: Record<string, string> = { libtree: "showLibraryTree", props: "showProperties", hier: "showHierarchy", filter: "showSelectionFilter", history: "showHistory", peers: "showPeers", comments: "showComments", appearance: "showLayersManager", search: "showSearch", netnav: "showNetNavigator" };
+export const PANE_TITLES: Record<string, string> = { libtree: "Libraries", props: "Properties", hier: "Schematic Hierarchy", filter: "Selection Filter", history: "History", peers: "Collaborators", comments: "Comments", appearance: "Appearance", search: "Search", netnav: "Net Navigator" };
 /** Dock layout per editor: Properties · Hierarchy · Selection Filter · History left; the board keeps Appearance (with the filter below it) on the right. */
 export const DOCKS: Record<Editor, { left: string[]; right: string[]; bottom?: string[] }> = {
   sch: { left: ["props", "hier", "netnav", "filter", "history", "peers", "comments", "appearance"], right: [], bottom: ["search"] },

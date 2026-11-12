@@ -15,7 +15,7 @@
 // A tool-module action KiCad's menus do not place (CollabTools.<m>.actions) lands in a trailing "Other Commands"
 // sub-menu of the menu it names (default Edit) rather than as a flat list.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { HOME_MENUS, LINKS, MENUS, MENU_CHECKS, MODULE_ACTION_MENUS, MODULE_ALIAS, MODULE_DUPLICATES, NEEDS_SELECTION, READ_ONLY_OK, SUBMENU_ICONS, type MenuEntry } from "../tables";
+import { FPEDIT_MENUS, HOME_MENUS, LINKS, MENUS, MENU_CHECKS, MODULE_ACTION_MENUS, MODULE_ALIAS, MODULE_DUPLICATES, NEEDS_SELECTION, READ_ONLY_OK, SUBMENU_ICONS, type MenuEntry } from "../tables";
 import { dispatch, useApp, type AppState, type Editor, type ModuleAction } from "../store";
 import { iconFor, isOn, keyFor, labelFor, runUiAction, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
@@ -285,9 +285,11 @@ export function MenuBar() {
   const guest = useApp((s) => s.guest);
   const undo = useApp((s) => s.undo);
   const inEditor = view === "editor" && !!editor;
-  const withPlugins = usePluginMenus(inEditor && editor ? MENUS[editor] : HOME_MENUS, inEditor && editor ? editor : null);   // plugin actions, importers and exporters join KiCad's menus
-  const menus = useMemo<TopMenu[]>(() => (inEditor && editor ? editorMenus(editor, moduleActions, withPlugins)
-    : HOME_MENUS.map(([raw, entries]) => { const [title, mnemonic] = splitTitle(raw); return { title, mnemonic, nodes: build(entries) }; })), [inEditor, editor, moduleActions, withPlugins]);
+  const fpEdit = useApp((s) => s.document.docType === "footprint");
+  const withPlugins = usePluginMenus(inEditor && editor ? (fpEdit ? FPEDIT_MENUS : MENUS[editor]) : HOME_MENUS, inEditor && editor ? editor : null);   // plugin actions, importers and exporters join KiCad's menus
+  // the Footprint Editor's menus are KiCad's exactly: the board module's own commands do not join them
+  const menus = useMemo<TopMenu[]>(() => (inEditor && editor ? editorMenus(editor, fpEdit ? [] : moduleActions, withPlugins)
+    : HOME_MENUS.map(([raw, entries]) => { const [title, mnemonic] = splitTitle(raw); return { title, mnemonic, nodes: build(entries) }; })), [inEditor, editor, moduleActions, withPlugins, fpEdit]);
 
   const [st, setSt] = useState<Open | null>(null);       // the open menu, the highlighted index per depth, how many sub-menus are open
   const [focus, setFocus] = useState<number | null>(null); // a title focused from the keyboard without its menu open (Alt)

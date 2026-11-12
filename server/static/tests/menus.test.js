@@ -46,6 +46,21 @@ function flatten(entries, trail, out) {
     for (const ed of ["sch", "pcb"]) { const letters = T.MENUS[ed].map((m) => m[0].charAt(m[0].indexOf("&") + 1).toLowerCase()); assert.strictEqual(new Set(letters).size, letters.length, ed + ": mnemonics are unique"); }
   });
 
+  test("the Footprint Editor's menu bar is menubar_footprint_editor.cpp: KiCad's titles and every entry a KiCad action", () => {
+    assert.deepStrictEqual(T.FPEDIT_MENUS.map((m) => m[0]), ["&File", "&Edit", "&View", "&Place", "&Inspect", "&Tools", "P&references", "&Help"]);
+    const ids = [];
+    for (const [title, entries] of T.FPEDIT_MENUS) for (const e of flatten(entries, [title.replace("&", "")], [])) {
+      ids.push(e.id);
+      assert.ok(meta("pcb", e.id) || T.LOCAL_LABELS[e.id] || T.LINKS[e.id] || e.label, `fpedit ${e.trail.join(" > ")}: unknown entry "${e.id}"`);
+    }
+    const place = T.FPEDIT_MENUS.find((m) => m[0] === "&Place")[1].filter((e) => e !== "-");
+    assert.deepStrictEqual(place.slice(0, 2), ["placePad", "drawRuleArea"]);
+    assert.ok(place.includes("setAnchor") && ids.includes("saveFpToBoard") && ids.includes("loadFpFromBoard") && ids.includes("enumeratePads"));
+    // the pad tools and the anchor are tools of the board module, kept out of the board editor
+    for (const id of ["placePad", "placeThtPad", "placeSmdPad", "placeNpthPad", "placePasteAperturePad", "setAnchor"]) { assert.ok(T.TOOL_MAP.pcb[id], id); assert.ok(T.FPEDIT_ONLY.has(id), id); }
+    for (const [, entries] of T.MENUS.pcb) for (const e of flatten(entries, [], [])) assert.ok(!T.FPEDIT_ONLY.has(e.id), `board menu has footprint-editor-only ${e.id}`);
+  });
+
   test("every entry is a KiCad action of that editor, one of our own entries or a module command", () => {
     for (const ed of ["sch", "pcb"]) {
       const mod = globalThis.CollabTools[ed];
