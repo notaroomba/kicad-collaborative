@@ -124,6 +124,8 @@ interface KiCadCanvasApi {
   /** a library symbol (lib_symbols / .kicad_sym entry) as a drawable document in library space (web/canvas/libsym.ts) */
   parseLibSymbol(sym: SNode, opts?: import("./canvas/libsym").LibSymbolOpts): KDoc;
   PIN_TYPE_NAMES: Record<string, string>;
+  /** the Footprint Editor's document: a .kicad_mod's children as items (web/canvas/footprint-doc.ts) */
+  footprintDoc: typeof import("./canvas/footprint-doc").footprintDocApi;
   /** the board's own settings sections (web/canvas/board-setup.ts) */
   boardSetup?: { applyBoardSetup(doc: KDoc, change: KChange): boolean };
   [extra: string]: unknown;

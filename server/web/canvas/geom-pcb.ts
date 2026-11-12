@@ -140,7 +140,7 @@ export function buildPcbGeom(doc: Doc, item: Item): void {
   } else if (k === "barcode") {
     barcodeGeom(item, n, (x: number, y: number) => [x, y], 0);
   } else if (k === "gr_text") {
-    const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
+    const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, doc && doc.fpEditor ? fpEditorVars(doc, str(n[1]), tl) : expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
   } else if (k === "gr_text_box") {
     buildTextBoxGeom(item, n, (x: number, y: number) => [x, y], layerOf(n, "Dwgs.User"), 0);
   } else if (k === "dimension") {
@@ -154,6 +154,12 @@ export function buildPcbGeom(doc: Doc, item: Item): void {
     G(item, { t: "circle", x, y, r, w, color, layer, z });
   } else if (k === "footprint") {
     buildFootprintGeom(doc, item);
+  } else if (k === "pad" && doc && doc.fpEditor) {
+    // the Footprint Editor: a pad is an item of its own, in the frame of the footprint at the origin
+    const [x, y, rot] = atOf(n); item.x = x; item.y = y; item.rot = rot; item.layer = padCopperLayer(n) || "F.Cu";
+    buildPadGeom(item, n, (px: number, py: number) => [px, py], "F.Cu", doc, 0);
+  } else if (k === "property" && doc && doc.fpEditor) {
+    buildFieldGeom(doc, item);
   } else if (k === "table") {
     buildTableGeom(doc, item, n);
   } else if (k === "image") {
@@ -499,6 +505,25 @@ export function buildFootprintGeom(doc: Doc, item: Item): void {
     }
   }
   if (!item.bbox) bboxAdd(item, fx, fy, 1);
+}
+
+/** The Footprint Editor's text variables: ${REFERENCE}, ${VALUE}, ${FOOTPRINT_NAME}, ${LAYER} as FOOTPRINT::ResolveTextVar answers them there. */
+export function fpEditorVars(doc: Doc, text: string, layer: string): string {
+  if (text.indexOf("${") < 0) return text;
+  const fields: Record<string, string> = {};
+  for (const it of doc.items.values()) if (it.kind === "property") fields[(it.node[0] === "fp_text" ? (it.node[1] === "reference" ? "Reference" : "Value") : str(it.node[1])).toUpperCase()] = str(it.node[2]);
+  const name = doc.fpState ? str(doc.fpState.fp[1]) : "";
+  return text.replace(/\$\{([A-Za-z_0-9]+)\}/g, (m: string, v: string) => v === "LAYER" ? layer : v === "FOOTPRINT_NAME" ? name : fields[v] !== undefined ? fields[v] : m);
+}
+
+/** A footprint field (PCB_FIELD) on its own: the Footprint Editor's Reference, Value and user fields. */
+export function buildFieldGeom(doc: Doc, item: Item): void {
+  const p = item.node; if (!isList(kid(p, "at"))) return;
+  const at = kid(p, "at")!; const [px, py, pr] = atOf(p); const layer = layerOf(p, "F.SilkS");
+  const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
+  const field = p[0] === "property" ? str(p[1]) : str(p[1]) === "reference" ? "Reference" : "Value";
+  item.x = px; item.y = py; item.rot = pr; item.layer = layer;
+  pcbTextGeom(item, p, px, py, fpEditorVars(doc, str(p[2]), layer), pr, layer, { upright: !unlocked, field });
 }
 
 /** Outline polygon (local, unrotated) for chamfered / trapezoid pads. */

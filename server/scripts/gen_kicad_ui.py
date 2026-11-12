@@ -17,7 +17,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(ROOT, "server", "web", "generated", "kicad-ui-spec.json")
 
 ACTION_SOURCES = ["common/tool/actions.cpp", "eeschema/tools/sch_actions.cpp", "pcbnew/tools/pcb_actions.cpp"]
-TOOLBAR_SOURCES = {"sch": "eeschema/toolbars_sch_editor.cpp", "pcb": "pcbnew/toolbars_pcb_editor.cpp", "symedit": "eeschema/symbol_editor/toolbars_symbol_editor.cpp"}
+TOOLBAR_SOURCES = {"sch": "eeschema/toolbars_sch_editor.cpp", "pcb": "pcbnew/toolbars_pcb_editor.cpp", "symedit": "eeschema/symbol_editor/toolbars_symbol_editor.cpp", "fpedit": "pcbnew/toolbars_footprint_editor.cpp"}
 LOCS = {"TOP_MAIN": "top", "TOP_AUX": "aux", "LEFT": "left", "RIGHT": "right"}
 # Standalone-only or debug-only entries the desktop hides in project mode.
 SKIP = {"ACTIONS::doNew", "ACTIONS::open", "PCB_ACTIONS::importNetlist", "ACTIONS::toggleBoundingBoxes",

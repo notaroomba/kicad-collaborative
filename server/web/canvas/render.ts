@@ -380,7 +380,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   // the drawing sheet (frame, tick band, title block) and, above it, the page outline.  Under the
   // flipped board view KiCad mirrors the sheet back about the page — "Draw the title block normally
   // even if the view is flipped" (ds_proxy_view_item.cpp:114-128) — so it is drawn unflipped here.
-  if (opts.frame !== false) {
+  if (opts.frame !== false && !(doc as { fpEditor?: boolean }).fpEditor) {   // the Footprint Editor has no drawing sheet
     if (flip) ctx.setTransform(s, 0, 0, s, tx, ty);
     drawDrawingSheet(ctx, doc, s, Math.max(1, dpr) / s);
     if (flip) ctx.setTransform(A, 0, 0, s, E, ty);
@@ -568,6 +568,12 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   if (previews) while (previewIdx < previews.length) { const pg = previews[previewIdx++]; drawZonePreview(ctx, pg, obstacles!, base, W, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms!.has(pg) ? HL_DIM : 1)); }
   ctx.globalAlpha = 1;
   if (obj && obj.show) drawObjectOverlays(ctx, doc, obj, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
+  // the Footprint Editor's footprint sits at the origin: its anchor is the LAYER_ANCHOR cross there
+  if ((doc as { fpEditor?: boolean }).fpEditor && !(obj && obj.hide && obj.hide.has("anchors"))) {
+    const a = 5 * Math.max(1, dpr) / s;
+    ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineCap = "butt"; ctx.strokeStyle = ANCHOR_COLOR; ctx.lineWidth = Math.max(1, dpr) / s; ctx.beginPath();
+    ctx.moveTo(-a, 0); ctx.lineTo(a, 0); ctx.moveTo(0, -a); ctx.lineTo(0, a); ctx.stroke(); ctx.restore();
+  }
   // highlight: the brightened items get a translucent halo of the highlight colour (the schematic's LAYER_SELECTION_SHADOWS pass for brightened items)
   if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });   // skipped items (drawn elsewhere) get none
   // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)

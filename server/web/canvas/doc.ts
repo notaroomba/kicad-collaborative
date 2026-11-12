@@ -2,6 +2,7 @@
 import { schTheme } from "./colors";
 import { buildGeom } from "./geom";
 import { setupOrigins } from "./pcb-sizes";
+import { FP_KINDS, loadFootprintDoc } from "./footprint-doc";
 import { has, isList, kid, kids, num, parse, str, uuidOf } from "./sexpr";
 import { KICAD_BASE_VERSION } from "./version";
 import type { Box, Doc, Item, Pt, SAtom } from "./types";
@@ -64,6 +65,14 @@ export function titleBlockOf(node: SNode): Record<string, string> {
 export function parseDoc(text: string, docType?: string): Doc {
   const tree = parse(text);
   if (!tree) throw new Error("not an s-expression document");
+  if (tree[0] === "footprint" || tree[0] === "module" || docType === "footprint") {
+    // a library footprint (.kicad_mod) opened in the Footprint Editor: its children are the items (footprint-doc.ts)
+    if (tree[0] !== "footprint" && tree[0] !== "module") throw new Error("not a footprint");   // (module …): KiCad 5 and older
+    const doc = newDoc("pcb"); doc.page = [0, 0];
+    loadFootprintDoc(doc, tree, text, addItem);
+    computeBBox(doc);
+    return doc;
+  }
   const type = tree[0] === "kicad_sch" ? "sch" : tree[0] === "kicad_pcb" ? "pcb" : (docType === "kicad_sch" ? "sch" : "pcb");
   const doc = newDoc(type);
   if (type === "sch") { const ls = kid(tree, "lib_symbols"); if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s); }
@@ -113,12 +122,13 @@ export const PCB_KINDS = new Set<SAtom>(["footprint", "segment", "arc", "via", "
   "gr_ellipse", "gr_ellipse_arc", "barcode", "point", "grid_item"]);
 
 
-export function addItem(doc: Doc, node: SNode): Item | null {
+export function addItem(doc: Doc, node: SNode, givenId?: string): Item | null {
   const k = node[0];
-  if (doc.type === "sch" ? !SCH_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
-  let id = uuidOf(node);
+  if (doc.type === "sch" ? !SCH_KINDS.has(k) : (doc as { fpEditor?: boolean }).fpEditor ? !FP_KINDS.has(k as string) : !PCB_KINDS.has(k)) return null;
+  let id = givenId || uuidOf(node);
   if (!id) id = "anon-" + (doc.items.size + 1) + "-" + Math.random().toString(36).slice(2, 8);
-  const item: Item = { id, kind: k as string, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
+  const kind = (doc as { fpEditor?: boolean }).fpEditor && (k === "property" || k === "fp_text") ? "property" : k as string;
+  const item: Item = { id, kind, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
   buildGeom(doc, item);
   doc.items.set(id, item);
   return item;

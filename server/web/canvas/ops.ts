@@ -1,5 +1,6 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 import { PCB_KINDS, SCH_KINDS, addItem } from "./doc";
+import { FP_KINDS, applyFootprintHeader } from "./footprint-doc";
 import { buildGeom } from "./geom";
 import { atOf, isList, kid, kids, num, parseAll, ptsOf, str, uuidOf } from "./sexpr";
 import { shiftTable } from "./tables-images";
@@ -10,7 +11,7 @@ export function fragmentItems(doc: Doc, sexpr: string): SNode[] {
   for (const tree of parseAll(sexpr)) {
     if (tree[0] === "kicad_sch" || tree[0] === "kicad_pcb") {
       const ls = kid(tree, "lib_symbols"); if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
-      for (const c of tree.slice(1)) if (isList(c) && (doc.type === "sch" ? SCH_KINDS.has(c[0]) : PCB_KINDS.has(c[0]))) out.push(c);
+      for (const c of tree.slice(1)) if (isList(c) && (doc.type === "sch" ? SCH_KINDS.has(c[0]) : doc.fpEditor ? FP_KINDS.has(c[0] as string) : PCB_KINDS.has(c[0]))) out.push(c);
     } else if (tree[0] === "lib_symbols") { for (const s of kids(tree, "symbol")) doc.lib.set(str(s[1]), s); }
     else out.push(tree);
   }
@@ -49,6 +50,8 @@ function pruneLibName(doc: Doc, name: string | null): void {
 }
 export function applyChange(doc: Doc, change: WireChange, IU: number): boolean {
   const id = str(change.id), kind = str(change.kind).toUpperCase();
+  // the Footprint Editor's footprint itself (its name, attributes, description, models …): the header node
+  if (doc.fpEditor && id === "footprint") { const frag = change.sexpr || change.itemSexpr; return kind !== "REMOVED" && !!frag && applyFootprintHeader(doc, frag); }
   const oldLib = libNameOf(doc, id);
   if (kind === "REMOVED") { const r = doc.items.delete(id); pruneLibName(doc, oldLib); return r; }
   const frag = change.sexpr || change.itemSexpr;
