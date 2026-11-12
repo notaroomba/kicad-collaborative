@@ -3,7 +3,10 @@
 //
 // The library joins its document's socket (the protocol's ordinary join, as editor/projectwatch.ts does for the
 // project file).  A working edit is an op on that document whose changes are whole top-level symbols:
-//     { id: "sym:<name>", kind: "ADDED" | "MODIFIED" | "REMOVED", typeName: "LIB_SYMBOL", sexpr: "(symbol \"<name>\" …)" }
+//     { id: "sym:<name>", kind: "ADDED" | "MODIFIED" | "REMOVED", typeName: "LIB_SYMBOL", sexpr: "(symbol \"<name>\" …)", base?: "…" }
+// An edit of one symbol carries `base`, the symbol's text it was made against: a client applying it to a symbol that
+// has changed since (another user's edit sequenced in between) carries over only the edit's own item changes
+// (symedit/merge.ts), so concurrent edits both survive and an undo takes back only its own user's change.
 // (a rename or a delete with derived symbols is one op holding several changes).  Every peer applies it to its own
 // copy of the library, so everyone sees the same buffer and the same '*' modified markers.  The file itself — what
 // the desktop and the content route read — changes only on Save: a marker op { typeName: "LIB_SAVED" } and then the
@@ -13,8 +16,9 @@
 // Local ops are applied at once and kept until acknowledged; a remote op is applied and the unacknowledged local
 // ones are laid over it again (editor/net.ts reapplyPending), so every client converges on the server's order.
 import { parseLibrary, serializeLibrary, text, node, NEW_LIBRARY_TEXT, type SymLib } from "./model";
+import { mergeSymbolText } from "./merge";
 
-export interface LibChange { id: string; kind: "ADDED" | "MODIFIED" | "REMOVED"; typeName: "LIB_SYMBOL" | "LIB_SAVED"; sexpr?: string; properties?: unknown[] }
+export interface LibChange { id: string; kind: "ADDED" | "MODIFIED" | "REMOVED"; typeName: "LIB_SYMBOL" | "LIB_SAVED"; sexpr?: string; base?: string; properties?: unknown[] }
 interface OpMsg { seq?: number; changes?: LibChange[] }
 interface WireMsg { type?: string; docId?: string; seq?: number; file?: string; thenOps?: OpMsg[]; ops?: OpMsg[]; changes?: LibChange[]; clientOpId?: string; role?: string; code?: string }
 
@@ -68,7 +72,14 @@ export class LibDoc {
       if (c.typeName !== "LIB_SYMBOL") continue;
       const name = c.id.startsWith("sym:") ? c.id.slice(4) : c.id; names.push(name);
       if (c.kind === "REMOVED") to.symbols.delete(name);
-      else if (c.sexpr) { try { const n = node(c.sexpr); to.symbols.set(name, n); } catch (e) { console.warn("bad LIB_SYMBOL change", e); } }
+      else if (c.sexpr) {
+        try {
+          const cur = to.symbols.get(name);
+          let t = c.sexpr;
+          if (c.base && cur) { const ct = text(cur); if (ct !== c.base) t = mergeSymbolText(c.base, c.sexpr, ct, node); }
+          to.symbols.set(name, node(t));
+        } catch (e) { console.warn("bad LIB_SYMBOL change", e); }
+      }
     }
     return names;
   }
@@ -81,13 +92,16 @@ export class LibDoc {
   }
 
   // ------------------------------------------------------------ edits
-  /** Change = the new whole symbols (null removes); sends one op.  Resolves with its sequence number. */
-  commit(symbols: [string, string | null][], extraRemoved: string[] = []): Promise<number> {
+  /**
+   * Change = the new whole symbols (null removes), each optionally with the text the edit was made against (merged
+   * over whatever the symbol holds when the op is applied); sends one op.  Resolves with its sequence number.
+   */
+  commit(symbols: ([string, string | null] | [string, string, string])[], extraRemoved: string[] = []): Promise<number> {
     const changes: LibChange[] = [];
     for (const n of extraRemoved) if (this.lib.symbols.has(n)) changes.push({ id: symId(n), kind: "REMOVED", typeName: "LIB_SYMBOL", properties: [] });
-    for (const [n, t] of symbols) {
+    for (const [n, t, base] of symbols) {
       if (t === null) { if (this.lib.symbols.has(n)) changes.push({ id: symId(n), kind: "REMOVED", typeName: "LIB_SYMBOL", properties: [] }); }
-      else changes.push({ id: symId(n), kind: this.lib.symbols.has(n) ? "MODIFIED" : "ADDED", typeName: "LIB_SYMBOL", sexpr: t });
+      else { const c: LibChange = { id: symId(n), kind: this.lib.symbols.has(n) ? "MODIFIED" : "ADDED", typeName: "LIB_SYMBOL", sexpr: t }; if (base && this.lib.symbols.has(n)) c.base = base; changes.push(c); }
     }
     if (!changes.length) return Promise.resolve(this.lastSeq);
     const names = this.applyLocal(changes);
@@ -203,10 +217,11 @@ export class LibDoc {
       if (ch.some((c) => c.typeName === "LIB_SAVED")) { this.onSaved(); saved = true; continue; }
       names.push(...this.applyLocal(ch, this.confirmed));
     }
-    // our unacknowledged edits stay on top (the server sequences them after what we just received)
-    names.push(...this.rebase());
+    // our unacknowledged edits stay on top (the server sequences them after what we just received); the listeners
+    // hear only the symbols the remote ops changed (a pending local rename is not someone else's delete)
+    const local = this.rebase();
     if (saved) this.emit("saved");
-    if (names.length) this.emit("remote", names);
+    if (names.length || local.length) this.emit("remote", names);
   }
 }
 

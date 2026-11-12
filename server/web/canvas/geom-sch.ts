@@ -10,12 +10,15 @@ import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
 import type { Box, Doc, GeomSink, Item, Pt, SheetContext, TextEffects, Tf } from "./types";
 
 /** What buildPinGeom needs of the symbol around a pin. */
-export interface PinSym { nameOff: number; hideNames: boolean; hideNums: boolean; maxNameHalf: number; col: (c: string) => string; alpha?: number; showHidden?: boolean; altIcons?: boolean }
+/** `literalTilde`: the file is at version 20250318 or later, where a pin named "~" is literally "~" (older files meant no name). */
+export interface PinSym { literalTilde?: boolean; nameOff: number; hideNames: boolean; hideNums: boolean; maxNameHalf: number; col: (c: string) => string; alpha?: number; showHidden?: boolean; altIcons?: boolean }
 /** ${VAR} in free text: the title-block / sheet / project variables GetShownText resolves; unknown ones stay as written. */
 export function expandDocVars(doc: SheetContext | null | undefined, text: string): string {
   if (!text || text.indexOf("${") < 0) return text;
   try { return expandTextVars(text, varResolver(sheetTextVars(doc), { project: (doc && doc.projectVars) || null })); } catch (e) { return text; }
 }
+/** The file version from which a pin name "~" is no longer read as an empty name. */
+export const TILDE_LITERAL_VERSION = 20250318;
 // ---- schematic ----
 // KiCad TRANSFORM matrices on library (Y up) coordinates: screen = T·lib + origin (x' = T0·x + T1·y, y' = T2·x + T3·y)
 export const ORIENT: Record<number, number[]> = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
@@ -319,8 +322,8 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
     const subs = kids(lib, "symbol");
     // tallest visible pin name of the whole symbol positions names above horizontal pins
     let maxNameHalf = 0;
-    for (const sub of subs) for (const p of kids(sub, "pin")) { const nm = kid(p, "name"); if (nm && str(nm[1]) && str(nm[1]) !== "~") maxNameHalf = Math.max(maxNameHalf, effectsOf(nm).size / 2); }
-    const sym: PinSym = { nameOff, hideNames, hideNums, maxNameHalf, col, alpha };
+    for (const sub of subs) for (const p of kids(sub, "pin")) { const nm = kid(p, "name"); if (nm && str(nm[1]) && (str(nm[1]) !== "~" || (doc.version || 0) >= TILDE_LITERAL_VERSION)) maxNameHalf = Math.max(maxNameHalf, effectsOf(nm).size / 2); }
+    const sym: PinSym = { nameOff, hideNames, hideNums, maxNameHalf, col, alpha, literalTilde: (doc.version || 0) >= TILDE_LITERAL_VERSION };
     const geomStart = item.geom.length;
     for (const sub of subs) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
@@ -465,12 +468,13 @@ function buildPinGeomInner(item: GeomSink, g: SNode, tf: Tf, sym: PinSym, type: 
   bboxAdd(item, pos[0], pos[1]); bboxAdd(item, p0[0], p0[1]);
   // --- text ---
   const pinName = nameN ? str(nameN[1]) : "", pinNum = numN ? str(numN[1]) : "";
-  const showName = !!pinName && pinName !== "~" && !sym.hideNames && !nameEf.hide;
+  const named = !!pinName && (pinName !== "~" || !!sym.literalTilde);   // SCH_IO_KICAD_SEXPR_PARSER: "~" is empty only before 20250318
+  const showName = named && !sym.hideNames && !nameEf.hide;
   const showNum = !!pinNum && !sym.hideNums && !numEf.hide;
   const nameThick = Math.min(SCH_PEN, 0.18 * nameEf.size), numThick = Math.min(SCH_PEN, 0.18 * numEf.size);
   const clearance = PIN_TEXT_OFFSET + PIN_TEXT_MARGIN; const halfLen = len / 2;
   const inside = sym.nameOff > 0;
-  const both = !!pinName && pinName !== "~" && !sym.hideNames && !inside;   // name drawn outside → number moves to the other side
+  const both = named && !sym.hideNames && !inside;   // name drawn outside → number moves to the other side
   const alongX = orient === "L" ? pos[0] - halfLen : pos[0] + halfLen, alongY = orient === "D" ? pos[1] + halfLen : pos[1] - halfLen;
   const nameColor = sym.col(SCH.pinName), numColor = sym.col(SCH.pinNum);
   if (showNum) {

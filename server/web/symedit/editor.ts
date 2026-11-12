@@ -4,8 +4,9 @@
 //
 // What is edited: a symbol of one of the project's .kicad_sym libraries (a live shared buffer, symedit/libdoc.ts),
 // a read-only symbol of the official libraries (its editable copy goes through Save As), or a schematic symbol's
-// library copy (symedit/schematic.ts; Save writes it back to the schematic).  Each edit replaces the whole symbol;
-// a tab's undo list holds the symbol's text before every edit (SYMBOL_EDIT_FRAME's undo of a LIB_SYMBOL copy).
+// library copy (symedit/schematic.ts; Save writes it back to the schematic).  Each edit sends the whole symbol with
+// the text it was made against; a tab's undo list holds the symbol before and after each of this user's edits, and
+// undo carries back only that change (symedit/merge.ts), leaving what other users changed since in place.
 import * as M from "./model";
 import { LibDoc, libDocFor } from "./libdoc";
 import { h, confirmBox, download } from "../dialogs/dom";
@@ -18,13 +19,15 @@ import * as D from "./dialogs";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
+import { mergeSymbolText } from "./merge";
 import { openPreferences } from "../dialogs/preferences";
 
 export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
 export interface Lib { nick: string; kind: "project" | "official"; doc: LibDoc | null; rows: Row[] | null; syms: Map<string, M.Node>; open: boolean; loading: boolean; error?: string }
 export interface Origin { docId: string; itemId: string; libId: string; ref: string; sheet: string }
-interface Step { label: string; text: string }
+/** One undo step: the symbol before and after the edit (the undo lays after → before over the current symbol). */
+export interface Step { label: string; before: string; after: string }
 export interface Tab { lib: string; name: string; origin?: Origin; scratch?: M.Node; modified?: boolean; undo: Step[]; redo: Step[]; unit: number; body: number; sel: Set<string>; view: { s: number; px: number; py: number } | null; fitted?: boolean }
 
 const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
@@ -50,8 +53,10 @@ export class SymbolEditor {
   tabs: Tab[] = [];
   cur = -1;
   tool: ToolId = "select";
-  showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = false; showTree = true; showProps = true;
+  showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = true; showTree = true; showProps = true;
   gridMil = 50;
+  /** BASE_SCREEN::m_LocalOrigin (file coordinates) */
+  localOrigin: [number, number] = [0, 0];
   lastPin = M.initialPinDefaults();
   lastRepeat: M.PinInfo | null = null;
   lastTextAngle = 0;
@@ -78,6 +83,10 @@ export class SymbolEditor {
     setTimeout(() => { const a = document.activeElement as HTMLElement | null; if (this.isOpen && (!a || a === document.body || !this.root!.contains(a)) && !(a && a.closest && a.closest(".kd-overlay, .kd-pop, [role='dialog']"))) this.el.cwrap.focus({ preventScroll: true }); }, 0);
   };
 
+  /** multiUnitModeCond: the symbol has several units and they are interchangeable (not locked). */
+  multiUnitMode(sym: M.Node | null = this.symbol()): boolean { if (!sym) return false; const r = this.rootSym(sym); return M.unitCount(r) > 1 && !M.unitsLocked(r); }
+  /** SYMBOL_EDIT_FRAME::SynchronizePins: the setting (sync_pin_edit, on by default), for a multi-unit symbol whose units are not locked. */
+  synchronizePins(sym: M.Node | null = this.symbol()): boolean { return this.syncPins && this.multiUnitMode(sym); }
   get isOpen(): boolean { return !!this.root && this.root.isConnected; }
   get tab(): Tab | null { return this.tabs[this.cur] || null; }
   get units(): Units { return (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units; }
@@ -97,9 +106,9 @@ export class SymbolEditor {
     requestAnimationFrame(() => { this.resize(); if (this.tab && !this.tab.fitted) this.zoomFit(); this.paint(); });
   }
   async close(): Promise<void> {
-    const dirty = this.tabs.filter((t) => t.origin && t.modified);
+    const dirty = this.tabs.filter((t) => (t.origin && t.modified) || (t.scratch && !t.origin));
     if (dirty.length && !(await confirmBox("Close Symbol Editor", `Save changes to "${dirty[0].name}" before closing?\n\nChanges made to the schematic copy will be lost.`, "Discard Changes"))) return;
-    this.tabs = this.tabs.filter((t) => !t.origin); this.cur = Math.min(this.cur, this.tabs.length - 1);
+    this.tabs = this.tabs.filter((t) => !t.origin && !t.scratch); this.cur = Math.min(this.cur, this.tabs.length - 1);
     closeMenus();
     window.removeEventListener("keydown", this.keyHook, true);
     document.removeEventListener("focusin", this.focusHook, true);
@@ -226,11 +235,12 @@ export class SymbolEditor {
   readOnly(t: Tab | null = this.tab): boolean {
     if (!t) return true;
     if (E.viewOnly) return true;
-    if (t.origin) return false;
+    if (t.origin || t.scratch) return false;
     const lib = this.libs.get(t.lib); return !lib || lib.kind === "official" || !lib.doc || !lib.doc.canEdit;
   }
   isModified(t: Tab): boolean {
     if (t.origin) return !!t.modified;
+    if (t.scratch) return true;   // an unsaved symbol
     const lib = this.libs.get(t.lib); return !!lib && !!lib.doc && lib.doc.loaded && lib.doc.isSymbolModified(t.name);
   }
   /**
@@ -243,28 +253,44 @@ export class SymbolEditor {
     const before = M.text(cur); const s = M.node(before);
     const res = fn(s); if (res === false) return false;
     const after = M.text(s); if (after === before) return false;
-    if (!opts.amend || !t.undo.length) t.undo.push({ label, text: before });
+    if (!opts.amend || !t.undo.length) t.undo.push({ label, before, after });
+    else t.undo[t.undo.length - 1].after = after;
     if (t.undo.length > 100) t.undo.shift();
     t.redo = [];
     if (Array.isArray(res)) { t.sel = new Set(res.map((n) => idOfNode(s, n)).filter((x): x is string => !!x)); }
     else t.sel = new Set([...t.sel].filter((id) => nodeOf(s, id)));
-    this.store(t, s);
+    this.store(t, s, before);
     return true;
   }
-  private store(t: Tab, s: M.Node): void {
+  /** `base`: the symbol's text the change was made against (merged over a symbol another user changed meanwhile). */
+  private store(t: Tab, s: M.Node, base: string): void {
     if (t.origin || t.scratch) { t.scratch = s; t.modified = true; }
-    else { const lib = this.libs.get(t.lib); if (lib && lib.doc) { lib.doc.commit([[t.name, M.text(s)]]).catch((e: Error) => void messageBox(`The edit was not accepted: ${e.message}`)); lib.rows = null; } }
+    else {
+      const lib = this.libs.get(t.lib);
+      if (lib && lib.doc) {
+        const nn = M.symName(s);
+        // an undone or redone rename (Symbol Properties): the symbol moves back under its other name
+        const ch: ([string, string | null] | [string, string, string])[] = nn !== t.name && nn && !lib.doc.lib.symbols.has(nn) ? [[t.name, null], [nn, M.text(s)]] : [[t.name, M.text(s), base]];
+        if (ch.length === 2) t.name = nn;
+        lib.doc.commit(ch).catch((e: Error) => void messageBox(`The edit was not accepted: ${e.message}`)); lib.rows = null;
+      }
+    }
     this.kcache = null;
     this.renderTree(); this.renderTabs(); this.renderMsg(); this.renderToolbars(); this.paint();
   }
   undo(): void {
     const t = this.tab; const cur = this.symbol(); if (!t || !cur || !t.undo.length || this.readOnly()) return;
-    const step = t.undo.pop()!; t.redo.push({ label: step.label, text: M.text(cur) }); t.sel.clear(); this.store(t, M.node(step.text));
+    const step = t.undo.pop()!; t.redo.push(step); t.sel.clear(); this.applyStep(t, cur, step.after, step.before);
     if (t.origin && !t.undo.length) t.modified = false;
+  }
+  /** Lay the change from → to over the current symbol: only this user's edit is taken back (or redone). */
+  private applyStep(t: Tab, cur: M.Node, from: string, to: string): void {
+    const ct = M.text(cur);
+    this.store(t, M.node(mergeSymbolText(from, to, ct, M.node)), ct);
   }
   redo(): void {
     const t = this.tab; const cur = this.symbol(); if (!t || !cur || !t.redo.length || this.readOnly()) return;
-    const step = t.redo.pop()!; t.undo.push({ label: step.label, text: M.text(cur) }); t.sel.clear(); this.store(t, M.node(step.text));
+    const step = t.redo.pop()!; t.undo.push(step); t.sel.clear(); this.applyStep(t, cur, step.before, step.after);
   }
   /** EDA_BASE_FRAME::ShowInfoBarError: the infobar shows the message until the next refresh. */
   infoBarError(msg: string): void {
@@ -303,6 +329,11 @@ export class SymbolEditor {
     try { const u = new URL(location.href); u.searchParams.set("symedit", `${libNick}:${name}`); history.replaceState(history.state, "", u.toString()); } catch (e) { /* no history */ }
     return true;
   }
+  /** SYMBOL_EDIT_FRAME::CreateUnsavedSymbolTab: a new symbol with no library yet; its first save asks for one. */
+  openUnsaved(sym: M.Node): void {
+    this.tabs.push({ lib: "", name: M.symName(sym), scratch: sym, modified: true, undo: [], redo: [], unit: 1, body: 1, sel: new Set(), view: null });
+    this.cur = this.tabs.length - 1; this.treeSel = null; this.afterTabChange();
+  }
   openScratch(origin: Origin, sym: M.Node, unit: number, body: number): void {
     const i = this.tabs.findIndex((t) => t.origin && t.origin.itemId === origin.itemId && t.origin.docId === origin.docId);
     const tab: Tab = { lib: origin.libId.split(":")[0] || "", name: M.symName(sym), origin, scratch: sym, modified: false, undo: [], redo: [], unit: unit || 1, body: body || 1, sel: new Set(), view: null };
@@ -312,6 +343,7 @@ export class SymbolEditor {
   async closeTab(i: number, force = false): Promise<void> {
     const t = this.tabs[i]; if (!t) return;
     if (!force && t.origin && t.modified && !(await confirmBox("Close Symbol Tab", `Discard changes to the schematic copy of '${t.name}'?`, "Discard Changes"))) return;
+    if (!force && t.scratch && !t.origin && !(await confirmBox("Close Symbol Tab", `Discard the unsaved symbol '${M.unescapeLibId(t.name)}'?`, "Discard Changes"))) return;
     this.tabs.splice(i, 1); if (this.cur >= this.tabs.length) this.cur = this.tabs.length - 1; else if (i < this.cur) this.cur--;
     this.afterTabChange();
   }
@@ -323,12 +355,19 @@ export class SymbolEditor {
   setBody(b: number): void { const t = this.tab; if (!t) return; t.body = b; t.sel.clear(); this.kcache = null; this.renderToolbars(); this.paint(); }
 
   // ---------------------------------------------------------------- canvas model
+  /** The (version …) of the file the tab's symbol lives in (a schematic copy: the schematic's; an unsaved one: this tree's). */
+  fileVersion(t: Tab | null = this.tab): number {
+    if (!t) return 0;
+    if (t.origin) { const kd = E.kdoc as { version?: number } | null; return (kd && kd.version) || 0; }
+    if (t.scratch) return M.SYMBOL_LIB_FILE_VERSION;
+    const lib = this.libs.get(t.lib); return lib && lib.doc ? lib.doc.lib.version : 0;
+  }
   kdoc(): KDoc | null {
     const t = this.tab; const sym = this.preview || this.symbol(); if (!t || !sym) return null;
     const parent = this.parentOf(sym);
     const key = [M.text(sym), parent ? M.text(parent) : "", t.unit, t.body, this.showHiddenPins, this.showHiddenFields, this.showETypes].join("§");
     if (this.kcache && this.kcache.key === key) return this.kcache.doc;
-    const doc = K().parseLibSymbol(sym as unknown as SNode, { unit: t.unit, bodyStyle: t.body, showHiddenPins: this.showHiddenPins, showHiddenFields: this.showHiddenFields, showElectricalTypes: this.showETypes, showPinAltIcons: this.showAltIcons, parent: parent as unknown as SNode });
+    const doc = K().parseLibSymbol(sym as unknown as SNode, { unit: t.unit, bodyStyle: t.body, showHiddenPins: this.showHiddenPins, showHiddenFields: this.showHiddenFields, showElectricalTypes: this.showETypes, showPinAltIcons: this.showAltIcons, fileVersion: this.fileVersion(t), parent: parent as unknown as SNode });
     this.kcache = { key, doc }; return doc;
   }
   private view(): { s: number; px: number; py: number } {
@@ -431,7 +470,7 @@ export class SymbolEditor {
     const a = (id: string, enabled?: () => boolean, check?: () => boolean, label?: string): MenuEntry => this.act(id, A[id], { enabled, check, label });
     return [
       ["File", [a("newLibrary", () => !E.viewOnly), a("addLibrary", () => !E.viewOnly), a("saveLibraryAs", () => !!this.currentLib()), a("newSymbol", () => !E.viewOnly), a("editLibSymbolWithLibEdit", fromSch, undefined, "Open Symbol from Library"), S,
-        a("save", () => has() || !!this.currentLib()), a("saveSymbolAs", has), a("saveSymbolCopyAs", has), ...(fromSch() ? [] : [a("saveAll", () => this.projectLibs().some((l) => l.doc && l.doc.isModified))]), a("revert", () => !!this.tab && this.isModified(this.tab)), S,
+        a("save", () => has() || !!this.currentLib()), a("saveSymbolAs", has), a("saveSymbolCopyAs", has), ...(fromSch() ? [] : [a("saveAll", () => this.projectLibs().some((l) => l.doc && l.doc.isModified))]), a("revert", () => !!this.tab && !(this.tab.scratch && !this.tab.origin) && this.isModified(this.tab)), S,
         { label: "Import", sub: [a("importSymbol", () => !E.viewOnly, undefined, "Symbol..."), a("importGraphics", undefined, undefined, "Graphics...")] },
         { label: "Export", sub: [a("exportSymbol", has, undefined, "Symbol..."), a("exportSymbolView", has, undefined, "View as PNG..."), a("exportSymbolAsSVG", has, undefined, "Symbol as SVG...")] }, S,
         a("compareLibraryWithFile"), S, a("symbolProperties", has), S, { label: "Close", key: "Ctrl+W", run: () => void this.close(), enabled: () => true }]],
@@ -458,7 +497,7 @@ export class SymbolEditor {
       mb.append(b);
     }
     const t = this.tab;
-    mb.append(h("span", { class: "se-title", id: "se-title" }, t ? `Symbol Editor — ${t.origin ? t.name + " [from schematic]" : t.lib + ":" + t.name}${t && this.isModified(t) ? " *" : ""}` : "Symbol Editor"));
+    mb.append(h("span", { class: "se-title", id: "se-title" }, t ? `Symbol Editor — ${t.origin ? t.name + " [from schematic]" : t.lib ? t.lib + ":" + M.unescapeLibId(t.name) : M.unescapeLibId(t.name)}${t && this.isModified(t) ? " *" : ""}` : "Symbol Editor"));
     mb.append(h("button", { class: "btn sm se-close", id: "se-close", onclick: () => void this.close() }, "Close"));
   }
 
@@ -468,13 +507,19 @@ export class SymbolEditor {
     const on = this.toggled(id);
     const b = h("button", { class: "se-btn" + (on ? " on" : "") + (run ? "" : " dim"), "data-act": id, title: m.tip + (m.key ? ` (${m.key})` : "") + (run ? "" : " — runs in the KiCad desktop app"), "aria-label": m.label, "aria-pressed": onTool || on ? String(!!on) : undefined }, icon(m.icon));
     if (run) b.addEventListener("click", () => { run(); }); else (b as HTMLButtonElement).disabled = true;
+    if (run && !this.tbEnabled(id)) { (b as HTMLButtonElement).disabled = true; b.classList.add("dim"); }
     return b;
+  }
+  /** ACTION_CONDITIONS::Enable of the toolbar buttons that have one. */
+  private tbEnabled(id: string): boolean {
+    if (id === "toggleSyncedPinsMode") return this.multiUnitMode();
+    return true;
   }
   private toggled(id: string): boolean {
     if (TOOL_ACTIONS[id]) return this.tool === TOOL_ACTIONS[id];
     switch (id) {
       case "showElectricalTypes": return this.showETypes; case "showHiddenPins": return this.showHiddenPins; case "showHiddenFields": return this.showHiddenFields; case "togglePinAltIcons": return this.showAltIcons;
-      case "showLibraryTree": return this.showTree; case "showProperties": return this.showProps; case "toggleSyncedPinsMode": return this.syncPins; case "toggleGrid": return true;
+      case "showLibraryTree": return this.showTree; case "showProperties": return this.showProps; case "toggleSyncedPinsMode": return this.synchronizePins(); case "toggleGrid": return true;
       case "millimetersUnits": return this.units === "mm"; case "milsUnits": return this.units === "mil"; case "inchesUnits": return this.units === "in";
     }
     return false;
@@ -561,7 +606,7 @@ export class SymbolEditor {
         const sel = this.treeSel && this.treeSel.lib === lib.nick && this.treeSel.name === r.name;
         const mod = !!lib.doc && lib.doc.loaded && lib.doc.isSymbolModified(r.name);
         const sr = h("div", { class: "se-row" + (sel || cur ? " cur" : ""), "data-sym": lib.nick + ":" + r.name, style: "padding-left:18px", title: r.desc },
-          h("span", { class: "tw" }, r.units > 1 ? "▸" : ""), h("span", { class: "nm", style: cur ? "font-weight:600" : "" }, (mod ? "*" : "") + r.name), h("span", { class: "ds" }, r.desc));
+          h("span", { class: "tw" }, r.units > 1 ? "▸" : ""), h("span", { class: "nm", style: cur ? "font-weight:600" : "" }, (mod ? "*" : "") + M.unescapeLibId(r.name)), h("span", { class: "ds" }, r.desc));
         sr.addEventListener("click", () => { this.treeSel = { lib: lib.nick, name: r.name }; this.renderTree(); });
         sr.addEventListener("dblclick", () => void this.loadSymbol(lib.nick, r.name));
         sr.addEventListener("contextmenu", (ev) => { ev.preventDefault(); this.treeSel = { lib: lib.nick, name: r.name }; this.renderTree(); showMenu(ev.clientX, ev.clientY, this.symMenu(lib, r.name)); });
@@ -616,7 +661,7 @@ export class SymbolEditor {
     const host = this.el.tabs; if (!host) return; host.innerHTML = "";
     this.tabs.forEach((t, i) => {
       const x = h("span", { class: "x", title: "Close", "aria-label": "Close tab" }, "×");
-      const el = h("div", { class: "se-tab" + (i === this.cur ? " cur" : ""), "data-tab": i, title: t.origin ? `${t.name} (from schematic)` : `${t.lib}:${t.name}` }, (this.isModified(t) ? "*" : "") + (t.origin ? t.origin.ref || t.name : t.name), x);
+      const el = h("div", { class: "se-tab" + (i === this.cur ? " cur" : ""), "data-tab": i, title: t.origin ? `${t.name} (from schematic)` : t.lib ? `${t.lib}:${t.name}` : t.name }, (this.isModified(t) ? "*" : "") + (t.origin ? t.origin.ref || t.name : M.unescapeLibId(t.name)), x);
       el.addEventListener("click", (ev) => { if (ev.target === x) { void this.closeTab(i); return; } this.cur = i; this.afterTabChange(); });
       host.append(el);
     });
@@ -650,7 +695,7 @@ export class SymbolEditor {
     if (n && n[0] === "pin") {
       const i = M.pinInfo(n);
       cell("Type", "Pin"); cell("Name", i.name); cell("Number", i.number); cell("Type", D.typeLabel(i.type)); cell("Style", D.shapeLabel(i.shape)); cell("Visible", i.visible ? "Yes" : "No");
-      cell("Length", this.fmt(i.length)); cell("Orientation", D.orientLabel(i.orient)); cell("Pos X", this.fmt(i.x)); cell("Pos Y", this.fmt(i.y));
+      cell("Length", this.fmt(i.length)); cell("Orientation", D.orientLabel(i.orient)); cell("Pos X", this.fmt(i.x)); cell("Pos Y", this.fmt(-i.y || 0));
       this.renderProps(); return;
     }
     const root = this.rootSym(sym); const pw = K().kid(root as unknown as SNode, "power");
@@ -671,8 +716,11 @@ export class SymbolEditor {
     }
     (el.querySelector("#se-grid") as HTMLSelectElement).value = String(this.gridMil);
     el.querySelector("#se-zoom")!.textContent = `Z ${(v / 12).toFixed(2)}`;
-    el.querySelector("#se-xy")!.textContent = `X ${fmtCoord(fx, this.units)}  Y ${fmtCoord(fy, this.units)}`;
-    el.querySelector("#se-dxy")!.textContent = "";
+    // eeschema shows internal coordinates: Y grows downward (the file's library Y is up)
+    el.querySelector("#se-xy")!.textContent = `X ${fmtCoord(fx, this.units)}  Y ${fmtCoord(-fy || 0, this.units)}`;
+    // dx / dy / dist from the local origin (Space: resetLocalCoords)
+    const dx = fx - this.localOrigin[0], dy = -(fy - this.localOrigin[1]) || 0;
+    el.querySelector("#se-dxy")!.textContent = `dx ${fmtCoord(dx, this.units)}  dy ${fmtCoord(dy, this.units)}  dist ${fmtCoord(Math.hypot(dx, dy), this.units)}`;
     el.querySelector("#se-units")!.textContent = unitName(this.units);
     el.querySelector("#se-tool")!.textContent = meta(Object.keys(TOOL_ACTIONS).find((k) => TOOL_ACTIONS[k] === this.tool) || "selectionTool").label;
   }
@@ -703,7 +751,7 @@ export class SymbolEditor {
       showHiddenFields: () => { this.showHiddenFields = !this.showHiddenFields; this.kcache = null; this.renderToolbars(); this.paint(); },
       showElectricalTypes: () => { this.showETypes = !this.showETypes; this.kcache = null; this.renderToolbars(); this.paint(); },
       togglePinAltIcons: () => { this.showAltIcons = !this.showAltIcons; this.kcache = null; this.renderToolbars(); this.paint(); },
-      toggleSyncedPinsMode: () => { this.syncPins = !this.syncPins; this.renderToolbars(); },
+      toggleSyncedPinsMode: () => { if (!this.multiUnitMode()) return; this.syncPins = !this.syncPins; this.renderToolbars(); },
       nextSymbolTab: () => { if (this.tabs.length) { this.cur = (this.cur + 1) % this.tabs.length; this.afterTabChange(); } },
       prevSymbolTab: () => { if (this.tabs.length) { this.cur = (this.cur - 1 + this.tabs.length) % this.tabs.length; this.afterTabChange(); } },
       closeSymbolTab: () => { if (this.cur >= 0) void this.closeTab(this.cur); },
@@ -720,9 +768,40 @@ export class SymbolEditor {
       move: () => this.startCarry("Move"), drag: () => this.startCarry("Move"),
       listHotKeys: () => void D.hotkeys(),
       cancelInteractive: () => this.cancelInteraction(),
+      // COMMON_TOOLS: grids (GRID_SETTINGS last_size_idx; fast_grid_1 / fast_grid_2 default to indexes 1 and 2), pan, local origin
+      gridNext: () => this.setGridIdx(GRIDS_MIL.indexOf(this.gridMil) + 1), gridPrev: () => this.setGridIdx(GRIDS_MIL.indexOf(this.gridMil) - 1),
+      gridFast1: () => this.setGridIdx(1), gridFast2: () => this.setGridIdx(2),
+      gridFastCycle: () => this.setGridIdx(GRIDS_MIL.indexOf(this.gridMil) === 1 ? 2 : 1),
+      panUp: () => this.pan(0, -1), panDown: () => this.pan(0, 1), panLeft: () => this.pan(-1, 0), panRight: () => this.pan(1, 0),
+      resetLocalCoords: () => { this.localOrigin = this.snapFile(this.mouse.x, this.mouse.y); this.renderStatus(); },
+      libraryTreeSearch: () => { if (!this.showTree) { this.showTree = true; this.renderToolbars(); this.paint(); } const f = this.el.filter as HTMLInputElement | undefined; if (f) { f.focus(); f.select(); } },
+      finishInteractive: () => { if (this.draw) this.finishDraw(); },
+      deleteLastPoint: () => this.deleteLastPoint(),
     };
     for (const [id, t] of Object.entries(TOOL_ACTIONS)) A[id] = tool(t);
     return (this._actions = A);
+  }
+  /** COMMON_TOOLS::GridNext / GridPrev / GridPreset: the index wraps around the grid list. */
+  setGridIdx(i: number): void {
+    const n = GRIDS_MIL.length; const k = ((i % n) + n) % n;
+    this.gridMil = GRIDS_MIL[k]; this.renderStatus(); this.paint();
+  }
+  /** COMMON_TOOLS::PanControl: the view centre moves by ten grid steps. */
+  pan(dx: number, dy: number): void {
+    const v = this.view(); const d = this.gridMm * 10 * v.s;
+    v.px -= dx * d; v.py -= dy * d; this.paint(); this.renderStatus();
+  }
+  /**
+   * ACTIONS::deleteLastPoint (Backspace, also doDelete's alternate) while a multi-point shape is being drawn: the
+   * arc / Bezier / elliptical-arc sessions take back their last point (EE_GRAPHIC_TOOL's RemoveLastPoint); the
+   * rectangle / circle / polyline tool (DrawShape) has no handler for it.
+   */
+  deleteLastPoint(): void {
+    const d = this.draw; if (!d) return;
+    if (d.kind !== "arc" && d.kind !== "bezier" && d.kind !== "ellipse_arc") return;
+    d.pts.pop();
+    if (!d.pts.length) { this.cancelInteraction(); return; }
+    this.drawPreview(); this.paint();
   }
   /** View > Symbol Library Browser (SYMBOL_VIEWER_FRAME): browse every library; its Add Symbol to Schematic places the pick on the schematic. */
   private async symbolBrowser(): Promise<void> {
@@ -742,7 +821,7 @@ export class SymbolEditor {
     if (this.el.cwrap) this.el.cwrap.style.cursor = t === "select" ? "default" : "crosshair";
   }
   cancelInteraction(): void {
-    if (this.carry) { const c = this.carry; this.carry = null; this.preview = null; if (c.amend) { const t = this.tab; if (t && t.undo.length) { const step = t.undo.pop()!; this.store(t, M.node(step.text)); } } }
+    if (this.carry) { const c = this.carry; this.carry = null; this.preview = null; if (c.amend) { const t = this.tab; const cur = this.symbol(); if (t && cur && t.undo.length) { const step = t.undo.pop()!; this.applyStep(t, cur, step.after, step.before); } } }
     this.drag = null; this.draw = null; this.floating = null; this.preview = null; this.kcache = null; this.paint();
   }
   selChanged(): void { this.renderMsg(); this.renderMenus(); this.paint(); }
@@ -763,19 +842,39 @@ export class SymbolEditor {
     if (c0) { const b = M.node(c0.base); for (const id of c0.ids) { const n = nodeOf(b, id); if (n) fn(n, [c0.sx, c0.sy]); } c0.base = M.text(b); this.carryPreview(); this.paint(); return; }
     this.edit(label, (s) => { const ns = this.selNodes(s); for (const n of ns) fn(n, c); return ns; });
   }
+  /**
+   * SYMBOL_EDITOR_EDIT_TOOL::DoDelete.  A field is never removed: a visible one is hidden ("Hide Field(s)"), an
+   * already hidden one points at the Symbol Properties dialog.  In synchronized pins mode a pin also takes, from
+   * every other unit, at most one pin at the same position with the same body style, type and name.
+   */
   deleteSel(label = "Delete"): void {
     const t = this.tab; if (!t || !t.sel.size) return;
-    this.edit(label, (s) => {
+    let alreadyHidden = 0, hideLabel = "";
+    const ok = this.edit(label, (s) => {
       const ns = this.selNodes(s); const doomed = new Set<M.Node>();
+      let hidden = 0; alreadyHidden = 0;
+      const sync = this.synchronizePins(s);
       for (const n of ns) {
-        if (n[0] === "property") { if (M.MANDATORY_FIELDS.includes(String(n[1]))) continue; doomed.add(n); continue; }
+        if (n[0] === "property") { if (!M.isHidden(n)) { M.setHide(n, true); hidden++; } else alreadyHidden++; continue; }
         doomed.add(n);
-        // SYMBOL_EDITOR_EDIT_TOOL::DoDelete: in synchronized pins mode the pin goes from every unit
-        if (n[0] === "pin" && this.syncPins) { const i = M.pinInfo(n); const r = M.findRef(s, n); for (const d of M.allPins(s)) { const o = M.pinInfo(d.node); if (d.node !== n && Math.abs(o.x - i.x) < 1e-6 && Math.abs(o.y - i.y) < 1e-6 && r && d.body === r.body) doomed.add(d.node); } }
+        if (n[0] === "pin" && sync) {
+          const i = M.pinInfo(n); const r = M.findRef(s, n); if (!r) continue;
+          const got = new Set<number>([r.unit]);
+          for (const d of M.allPins(s)) {
+            if (got.has(d.unit) || d.node === n) continue;
+            const o = M.pinInfo(d.node);
+            if (Math.abs(o.x - i.x) > 1e-6 || Math.abs(o.y - i.y) > 1e-6) continue;
+            if (d.body !== r.body || o.type !== i.type || o.name !== i.name) continue;
+            doomed.add(d.node); got.add(d.unit);
+          }
+        }
       }
-      for (const n of doomed) { if (n[0] === "property") { const k = s.indexOf(n); if (k > 0) s.splice(k, 1); } else { const r = M.findRef(s, n); if (r) M.removeDrawItem(s, r); } }
+      for (const n of doomed) { const r = M.findRef(s, n); if (r) M.removeDrawItem(s, r); }
+      if (!doomed.size) { if (!hidden) return false; hideLabel = hidden === 1 ? "Hide Field" : "Hide Fields"; }
       return [];
     });
+    if (ok && hideLabel) { const st = t.undo[t.undo.length - 1]; if (st) st.label = hideLabel; }
+    if (!ok && alreadyHidden > 0) this.infoBarError("Use the Symbol Properties dialog to remove fields.");
   }
   copySel(asText = false): void {
     const sym = this.symbol(); if (!sym) return;
@@ -818,9 +917,9 @@ export class SymbolEditor {
     const t = this.tab; const last = this.lastRepeat; if (!t || !last || this.readOnly()) return;
     const p = M.repeatPin(last); const sym = this.symbol(); if (!sym) return;
     const go = () => {
-      if (this.edit("Repeat Pin", (s) => { const r = M.placePin(s, p, this.syncPins && p.unit !== 0); const n = M.itemAt(s, r); return n ? [n] : []; })) this.lastRepeat = p;
+      if (this.edit("Repeat Pin", (s) => { const r = M.placePin(s, p, this.synchronizePins(s) && p.unit !== 0); const n = M.itemAt(s, r); return n ? [n] : []; })) this.lastRepeat = p;
     };
-    const occ = this.syncPins ? M.occupiedBy(sym, p) : null;
+    const occ = this.synchronizePins(sym) ? M.occupiedBy(sym, p) : null;
     if (occ !== null) void confirmBox("Confirmation", M.OCCUPIED_MSG(occ) + "\n\n" + M.OCCUPIED_EXT, "Place Pin Anyway").then((ok) => { if (ok) go(); });
     else go();
   }
@@ -848,15 +947,16 @@ export class SymbolEditor {
     if (f.kind === "text") { const n = M.clone(f.node); M.mapPoints(n, () => [fx, fy]); this.edit("Draw Text", (s) => { M.addDrawItem(s, 0, f.body, n); return [n]; }); return; }
     const res: M.PinInfo = { ...f.pin, x: fx, y: fy };
     const cur = this.symbol(); if (!cur) return;
-    const occ = this.syncPins ? M.occupiedBy(cur, res) : null;
+    const occ = this.synchronizePins(cur) ? M.occupiedBy(cur, res) : null;
     if (occ !== null && !(await confirmBox("Confirmation", M.OCCUPIED_MSG(occ) + "\n\n" + M.OCCUPIED_EXT, "Place Pin Anyway"))) return;
-    if (this.edit("Place Pin", (s) => { const r = M.placePin(s, res, this.syncPins && res.unit !== 0); const n = M.itemAt(s, r); return n ? [n] : []; })) { this.lastRepeat = res; }
+    if (this.edit("Place Pin", (s) => { const r = M.placePin(s, res, this.synchronizePins(s) && res.unit !== 0); const n = M.itemAt(s, r); return n ? [n] : []; })) { this.lastRepeat = res; }
   }
 
   // library-level actions ------------------------------------------------------
   async save(): Promise<void> {
     const t = this.tab;
     if (t && t.origin) { await saveToSchematic(this, t); return; }
+    if (t && t.scratch) { D.saveSymbolAs(this, false); return; }   // an unsaved symbol: the first save asks for a library
     const lib = t ? this.libs.get(t.lib) : this.currentLib();
     if (!lib) return;
     if (lib.kind === "official" || !lib.doc || !lib.doc.canEdit) { await messageBox(`Symbol library '${lib.nick}' is not writable.\n\nYou must save to a different location.`); if (t) await D.saveSymbolAs(this, false); return; }
@@ -875,7 +975,8 @@ export class SymbolEditor {
     const t = this.tabs.find((x) => !x.origin && x.lib === lib.nick && x.name === name);
     const had = lib.doc.lib.symbols.get(name);
     await lib.doc.revert([name]).catch(() => 0);
-    if (t) { if (had) t.undo.push({ label: "Revert", text: M.text(had) }); t.sel.clear(); }
+    const now = lib.doc.lib.symbols.get(name);
+    if (t) { if (had && now) t.undo.push({ label: "Revert", before: M.text(had), after: M.text(now) }); t.sel.clear(); }
     if (!lib.doc.saved.symbols.has(name) && t) await this.closeTab(this.tabs.indexOf(t), true);
     this.kcache = null; this.renderAll();
   }
@@ -887,7 +988,7 @@ export class SymbolEditor {
   async revertScratch(): Promise<void> {
     const t = this.tab; if (!t || !t.origin || !t.undo.length) return;
     if (!(await confirmBox("Revert", `You are about to revert your changes to "${t.name}".  All changes will be lost.  Continue?`, "Revert"))) return;
-    t.scratch = M.node(t.undo[0].text); t.undo = []; t.redo = []; t.modified = false; t.sel.clear(); this.kcache = null; this.renderAll();
+    t.scratch = M.node(t.undo[0].before); t.undo = []; t.redo = []; t.modified = false; t.sel.clear(); this.kcache = null; this.renderAll();
   }
   async deleteSymbol(lib: Lib, name: string): Promise<void> {
     if (!lib.doc || !lib.doc.canEdit) return;
@@ -1121,6 +1222,11 @@ export class SymbolEditor {
     const run = (fn: () => void) => { ev.preventDefault(); fn(); };
     if (combo === "Esc") return run(() => { if (this.carry || this.draw || this.floating) this.cancelInteraction(); else if (this.tool !== "select") this.setTool("select"); else if (this.tab) { this.tab.sel.clear(); this.selChanged(); } });
     if (combo === "Enter" && this.draw) return run(() => this.finishDraw());
+    if (this.draw) {
+      // a shape being drawn takes End (finishInteractive) and Backspace / Delete (deleteLastPoint or doDelete) itself
+      if (combo === "End") return run(() => this.finishDraw());
+      if (combo === "Backspace" || combo === "Delete" || combo === "Del") return run(() => this.deleteLastPoint());
+    }
     if (combo === "Ctrl+W") return run(() => void this.close());
     if (combo === "Ctrl+Shift+Z") return run(() => this.redo());
     if (combo === "E" && this.tab) return run(() => this.editSelected());
@@ -1132,12 +1238,17 @@ export class SymbolEditor {
       if (combo === "F3") return run(() => void findNextMatch(this));
       if (combo === "Shift+F3") return run(() => void findNextMatch(this, true));
     }
-    const A = this.actions();
-    const ids = ["undo", "redo", "save", "newSymbol", "cut", "copy", "paste", "duplicate", "selectAll", "rotateCCW", "rotateCW", "mirrorV", "mirrorH", "move", "drag", "placeSymbolPin", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomRedraw", "showDatasheet", ...(this.symbol() ? ["find"] : []), "selectionTool", "toggleUnits"];
-    for (const id of ids) { const k = meta(id).key; if (k && norm(k) === norm(combo) && A[id]) return run(A[id]); }
     if (combo === "Home") return run(() => this.zoomFit());
+    // every action of the frame that KiCad gives a hotkey (TOOL_MANAGER's hotkey map over the registered actions)
+    const A = this.actions();
+    for (const [id, fn] of Object.entries(A)) {
+      if (!fn || NO_HOTKEY.has(id) || (id === "find" && !this.symbol())) continue;
+      const k = meta(id).key; if (k && norm(k) === norm(combo)) return run(fn);
+    }
   }
 }
+/** Actions dispatched above or not handled by the Symbol Editor's tools (their hotkeys belong to other frames). */
+const NO_HOTKEY = new Set(["doDelete", "repeatDrawItem", "properties", "cancelInteractive", "deleteLastPoint", "finishInteractive"]);
 const norm = (k: string) => k.replace(/\s/g, "").toLowerCase().replace("delete", "del").replace("insert", "ins");
 
 export const editor = new SymbolEditor();

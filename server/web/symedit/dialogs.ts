@@ -43,28 +43,28 @@ export function pinDialog(se: SymbolEditor, p: M.PinInfo, existing: M.Node | nul
     const multiUnit = M.unitCount(root) > 1, multiBody = M.bodyStyles(root).count > 1;
     const out: M.PinInfo = { ...p, alternates: p.alternates.map((a) => ({ ...a })) };
     const name = textInput(p.name, undefined, { id: "pin-name" }), number = textInput(p.number, undefined, { id: "pin-number" });
-    const px = lenInput(p.x, "pin-x"), py = lenInput(p.y, "pin-y"), len = lenInput(p.length, "pin-length"), ns = lenInput(p.nameSize, "pin-name-size"), nus = lenInput(p.numSize, "pin-num-size");
+    const px = lenInput(p.x, "pin-x"), py = lenInput(-p.y, "pin-y"), len = lenInput(p.length, "pin-length"), ns = lenInput(p.nameSize, "pin-name-size"), nus = lenInput(p.numSize, "pin-num-size");
     const orient = select(M.PIN_ORIENTATIONS.map(([a, l]) => [String(a), l] as [string, string]), String(p.orient), undefined, { id: "pin-orient" });
     const type = select(M.PIN_TYPES.map(([a, l]) => [a, l] as [string, string]), p.type, undefined, { id: "pin-type" });
     const shape = select(M.PIN_SHAPES.map(([a, l]) => [a, l] as [string, string]), p.shape, undefined, { id: "pin-shape" });
     const allUnits = checkbox("Common to all units in symbol", multiUnit && p.unit === 0, () => { syncMsg(); preview(); }, { disabled: !multiUnit, id: "pin-all-units",
-      title: se.syncPins ? "Synchronized pins mode is enabled.\nSimilar pins will be edited regardless of this option." : multiUnit ? "If checked, this pin will exist in all units." : "This symbol only has one unit. This control has no effect." });
+      title: se.synchronizePins() ? "Synchronized pins mode is enabled.\nSimilar pins will be edited regardless of this option." : multiUnit ? "If checked, this pin will exist in all units." : "This symbol only has one unit. This control has no effect." });
     if (!multiUnit) allUnits.title = "This symbol only has one unit. This control has no effect.";
     const allBodies = checkbox("Common to all body styles", p.body === 0, undefined, { disabled: !multiBody, id: "pin-all-bodies" });
     const visible = checkbox("Visible", p.visible, () => preview(), { id: "pin-visible" });
     const cbOf = (l: HTMLLabelElement) => l.querySelector("input") as HTMLInputElement;
     const info = h("div", { class: "kd-infobar", id: "pin-sync-info", style: "display:none;padding:4px 8px;margin-bottom:6px;background:color-mix(in srgb,var(--blue) 14%,var(--panel));border-radius:3px" });
     const syncMsg = () => {
-      if (!se.syncPins) return; info.style.display = "flex"; info.innerHTML = "";
+      if (!se.synchronizePins()) return; info.style.display = "flex"; info.innerHTML = "";
       const m = cbOf(allUnits).checked ? "Synchronized Pins Mode." : !existing ? "Synchronized Pins Mode.  New pin will be added to all units." : "Synchronized Pins Mode.  Matching pins in other units will be updated.";
       info.append(h("span", null, m), h("a", { style: "margin-left:auto;color:var(--blue);cursor:pointer", onclick: () => { se.syncPins = false; se.renderToolbars(); info.style.display = "none"; } }, "Exit sync pins mode"));
     };
     const cv = h("canvas", { class: "se-pinprev", id: "pin-preview" }) as HTMLCanvasElement;
-    const read = (): M.PinInfo => ({ ...out, name: name.value, number: number.value, x: lenOf(px, p.x), y: lenOf(py, p.y), orient: Number(orient.value), type: type.value, shape: shape.value, visible: cbOf(visible).checked,
+    const read = (): M.PinInfo => ({ ...out, name: name.value, number: number.value, x: lenOf(px, p.x), y: -lenOf(py, -p.y), orient: Number(orient.value), type: type.value, shape: shape.value, visible: cbOf(visible).checked,
       nameSize: lenOf(ns, p.nameSize), numSize: lenOf(nus, p.numSize), unit: cbOf(allUnits).checked ? 0 : se.tab!.unit, body: cbOf(allBodies).checked ? 0 : se.tab!.body, length: lenOf(len, p.length) });
     const preview = () => {
       const r = read(); const one = M.node(`(symbol "pin_preview" (symbol "pin_preview_1_1" ${M.text(M.pinNode({ ...r, x: 0, y: 0, unit: 1, body: 1 }))}))`);
-      const doc = K().parseLibSymbol(one as unknown as SNode, { showHiddenPins: true, showElectricalTypes: true });
+      const doc = K().parseLibSymbol(one as unknown as SNode, { showHiddenPins: true, showElectricalTypes: true, fileVersion: se.fileVersion() });
       const dpr = window.devicePixelRatio || 1; const W = cv.clientWidth || 300, H = cv.clientHeight || 160; cv.width = W * dpr; cv.height = H * dpr;
       const ctx = cv.getContext("2d"); if (!ctx) return; const bb = doc.bbox || [-3, -3, 3, 3];
       const s = Math.min(W / ((bb[2] - bb[0]) * 1.6 || 1), H / ((bb[3] - bb[1]) * 1.6 || 1), 40);
@@ -119,7 +119,7 @@ export async function editPin(se: SymbolEditor, id: string): Promise<void> {
   se.edit("Edit Pin Properties", (s) => {
     let pin = nodeOf(s, id); if (!pin) return false;
     M.setPin(pin, res); pin = M.relocatePin(s, pin, res.unit, res.body);
-    if (se.syncPins) M.synchronizeOtherUnits(s, pin, before);
+    if (se.synchronizePins(s)) M.synchronizeOtherUnits(s, pin, before);
     return [pin];
   });
 }
@@ -130,7 +130,7 @@ export async function editField(se: SymbolEditor, id: string): Promise<void> {
   const name = String(f[1]); const at = K().kid(f as unknown as SNode, "at"); const ef = K().kid(f as unknown as SNode, "effects"); const font = ef ? K().kid(ef, "font") : null; const sz = font ? K().kid(font, "size") : null;
   const hidden = isHidden(f);
   const sn = K().kid(f as unknown as SNode, "show_name"); const showName = !!sn && K().str(sn[1]) !== "no";
-  const val = textInput(String(f[2]), undefined, { id: "fld-value" }); const x = lenInput(at ? Number(at[1]) : 0, "fld-x"), y = lenInput(at ? Number(at[2]) : 0, "fld-y"), size = lenInput(sz ? Number(sz[1]) : 1.27, "fld-size");
+  const val = textInput(String(f[2]), undefined, { id: "fld-value" }); const x = lenInput(at ? Number(at[1]) : 0, "fld-x"), y = lenInput(at ? -Number(at[2]) : 0, "fld-y"), size = lenInput(sz ? Number(sz[1]) : 1.27, "fld-size");
   const ang = select([["0", "Horizontal"], ["90", "Vertical"]], String(at ? Number(at[3]) || 0 : 0), undefined, { id: "fld-angle" });
   const vis = checkbox("Visible", !hidden, undefined, { id: "fld-visible" }), shn = checkbox("Show field name", showName, undefined, { id: "fld-showname" });
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
@@ -141,7 +141,7 @@ export async function editField(se: SymbolEditor, id: string): Promise<void> {
       if (name === "Reference" && !val.value.trim()) { void messageBox("References must start with a letter."); return false; }
       se.edit(`Edit ${name}`, (s) => {
         const g = M.fieldOf(s, name); if (!g) return false;
-        g[2] = val.value; const a = K().kid(g as unknown as SNode, "at"); if (a) { a[1] = lenOf(x, 0); a[2] = lenOf(y, 0); a[3] = Number(ang.value); }
+        g[2] = val.value; const a = K().kid(g as unknown as SNode, "at"); if (a) { a[1] = lenOf(x, 0); a[2] = -lenOf(y, 0); a[3] = Number(ang.value); }
         setBool(g, "show_name", cb(shn)); setHide(g, !cb(vis));
         const e2 = K().kid(g as unknown as SNode, "effects"); const fo = e2 ? K().kid(e2, "font") : null; const s2 = fo ? K().kid(fo, "size") : null; if (s2) { s2[1] = lenOf(size, 1.27); s2[2] = lenOf(size, 1.27); }
         if (name === "Value" && !M.isPower(se.rootSym(s))) { /* the Value of a library symbol is its name: kept as typed */ }
@@ -225,7 +225,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
     const n = p as unknown as M.Node; const a = K().kid(p, "at"); const sn = K().kid(p, "show_name");
     return { name: K().str(p[1]), value: K().str(p[2]), show: !isHidden(n), showName: !!sn && K().str(sn[1]) !== "no", x: a ? Number(a[1]) : 0, y: a ? Number(a[2]) : 0, mandatory: M.MANDATORY_FIELDS.includes(K().str(p[1])), node: n };
   });
-  const name = textInput(M.symName(sym), undefined, { id: "sp-name" });
+  const name = textInput(M.unescapeLibId(M.symName(sym)), undefined, { id: "sp-name" });
   const keywords = textInput(M.fieldValue(sym, "ki_keywords"), undefined, { id: "sp-keywords" });
   const filters = h("textarea", { id: "sp-fpfilters", style: "width:100%;min-height:70px" }) as HTMLTextAreaElement; filters.value = M.fieldValue(sym, "ki_fp_filters").split(/\s+/).filter(Boolean).join("\n");
   const unitsIn = textInput(String(M.unitCount(root)), undefined, { id: "sp-units", type: "number", min: "1", max: "64", style: "width:70px" });
@@ -267,8 +267,8 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
             { key: "show", label: "Show", type: "bool", width: 46 },
             { key: "showName", label: "Show Name", type: "bool", width: 72 },
             { key: "x", label: "X Position", width: 80, format: (v) => toUser(Number(v)) },
-            { key: "y", label: "Y Position", width: 80, format: (v) => toUser(Number(v)) },
-          ], rows, { readOnly: ro, height: 190, onChange(r, key, v) { if ((key === "x" || key === "y") && typeof v === "string") { const n = parseLen(v); (r as unknown as Record<string, number>)[key] = n === null ? 0 : n; } }, buttons: { add: () => ({ name: `Field${rows.length - 4}`, value: "", show: false, showName: false, x: 0, y: 0, mandatory: false, node: null }), remove: true, canRemove: (r: FRow) => !r.mandatory } });
+            { key: "y", label: "Y Position", width: 80, format: (v) => toUser(-Number(v) || 0) },   // internal coordinates: Y down
+          ], rows, { readOnly: ro, height: 190, onChange(r, key, v) { if ((key === "x" || key === "y") && typeof v === "string") { const n = parseLen(v); (r as unknown as Record<string, number>)[key] = n === null ? 0 : key === "y" ? -n || 0 : n; } }, buttons: { add: () => ({ name: `Field${rows.length - 4}`, value: "", show: false, showName: false, x: 0, y: 0, mandatory: false, node: null }), remove: true, canRemove: (r: FRow) => !r.mandatory } });
           pg.append(form([["Symbol name:", name], ["Keywords:", keywords], ["Derive from symbol:", h("span", { class: "ro" }, M.parentNameOf(sym) || "<None>")]]));
           if (!derived) pg.append(h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px" },
             h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Attributes"), power, local, exSim, exBom, exBoard, exPos),
@@ -296,11 +296,11 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
       ], { selected: opts.pinMaps ? (derived ? 2 : 4) : 0 });
     },
     ok() {
-      const newName = name.value.trim();
+      const newName = M.escapeLibId(name.value.trim());   // EscapeString( m_SymbolNameCtrl->GetValue(), CTX_LIBID )
       if (!newName) { void messageBox("Symbol must have a name."); return false; }
       const lib = se.libs.get(t.lib);
       const oldName = M.symName(sym);
-      if (newName !== oldName && !t.origin && lib && lib.doc && lib.doc.lib.symbols.has(newName)) { void messageBox(`Symbol '${newName}' already exists in library '${lib.nick}'.`); return false; }
+      if (newName !== oldName && !t.origin && lib && lib.doc && lib.doc.lib.symbols.has(newName)) { void messageBox(`Symbol name '${M.unescapeLibId(newName)}' already in use in library '${lib.nick}'.`); return false; }
       const nu = Math.max(1, Math.min(64, Math.round(Number(unitsIn.value) || 1)));
       void bodyGrid;
       if (!derived) {
@@ -352,8 +352,8 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         const tmp: M.SymLib = { head: [] as unknown as M.SymLib["head"], version: 0, symbols: new Map([...lib.doc.lib.symbols].map(([k, v]) => [k, M.node(M.text(v))])) };
         const s = tmp.symbols.get(oldName)!; apply(s);
         const touched = M.renameSymbol(tmp, oldName, newName);
-        const undoText = M.text(sym);
-        void lib.doc.commit([[oldName, null], ...touched.filter((n) => n !== oldName).map((n): [string, string] => [n, M.text(tmp.symbols.get(n)!)])]).then(() => { t.name = newName; t.undo.push({ label: "Edit Symbol Properties", text: undoText }); lib.rows = null; se.renderAll(); });
+        const undoText = M.text(sym), afterText = M.text(tmp.symbols.get(newName)!);
+        void lib.doc.commit([[oldName, null], ...touched.filter((n) => n !== oldName).map((n): [string, string] => [n, M.text(tmp.symbols.get(n)!)])]).then(() => { t.name = newName; t.undo.push({ label: "Edit Symbol Properties", before: undoText, after: afterText }); lib.rows = null; se.renderAll(); });
         t.name = newName; return true;
       }
       se.edit("Edit Symbol Properties", (s) => { apply(s); if (t.origin && newName !== oldName) { s[1] = newName; } });
@@ -363,17 +363,19 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
 }
 
 // ---------------------------------------------------------------- New Symbol / Save As / Rename / New Library
+/**
+ * SYMBOL_EDIT_FRAME::CreateNewSymbol: DIALOG_LIB_NEW_SYMBOL for the target library (getTargetLib: the tree's library,
+ * else the current symbol's).  With no target library the symbol opens in an unsaved tab and its first save asks for
+ * a library (CreateUnsavedSymbolTab).
+ */
 export function newSymbol(se: SymbolEditor): void {
-  const lib = se.currentLib(); const projLibs = se.projectLibs().filter((l) => l.doc && l.doc.canEdit);
   if (E.viewOnly) { void messageBox("You have view-only access to this project."); return; }
-  if (!projLibs.length) { void messageBox("The project has no editable symbol library.  Create one with File ▸ New Library... first."); return; }
-  const target = lib && projLibs.includes(lib) ? lib : projLibs[0];
+  const cand = se.currentLib();
+  const target = cand && cand.kind === "project" && cand.doc && cand.doc.canEdit ? cand : null;
   const p = M.defaultNewSymbolProps();
-  const libSel = select(projLibs.map((l) => l.nick), target.nick, undefined, { id: "ns-lib" });
   const name = textInput("", undefined, { id: "ns-name" }); name.title = "The symbol name in library and also the default\nsymbol value when loaded in the schematic.";
-  const parents = () => { const l = se.libs.get(libSel.value); return l && l.doc ? [...l.doc.lib.symbols.keys()].sort(M.numCompare) : []; };
-  const parent = select([["", ""], ...parents().map((n) => [n, n] as [string, string])], "", undefined, { id: "ns-parent" });
-  libSel.addEventListener("change", () => { parent.innerHTML = ""; for (const n of ["", ...parents()]) parent.append(h("option", { value: n }, n)); });
+  const parents = () => (target && target.doc ? [...target.doc.lib.symbols.keys()].sort(M.numCompare) : []);
+  const parent = select([["", ""], ...parents().map((n) => [n, M.unescapeLibId(n)] as [string, string])], "", undefined, { id: "ns-parent" });
   const ref = textInput("U", undefined, { id: "ns-ref" }); const unitsIn = textInput("1", undefined, { id: "ns-units", type: "number", min: "1", max: "64", style: "width:70px" });
   const inter = checkbox("All units are interchangeable", false, undefined, { id: "ns-inter" }); inter.title = "Check this option when all symbol units are identical except\nfor pin numbers.";
   const demorgan = checkbox("Create symbol with alternate body style (De Morgan)", false, undefined, { id: "ns-demorgan" });
@@ -384,29 +386,31 @@ export function newSymbol(se: SymbolEditor): void {
   const keepFp = checkbox("Keep linked footprint", true, undefined, { id: "ns-keepfp" }), keepDs = checkbox("Keep linked datasheet", true, undefined, { id: "ns-keepds" }), xfer = checkbox("Transfer user-defined fields", true, undefined, { id: "ns-xfer" }), keepUser = checkbox("Keep content of user-defined fields", false, undefined, { id: "ns-keepuser" });
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
   const info = h("div", { style: "display:none;padding:4px 8px;margin-bottom:6px;background:color-mix(in srgb,var(--blue) 14%,var(--panel));border-radius:3px", id: "ns-info" });
-  parent.addEventListener("change", () => { info.style.display = parent.value ? "block" : "none"; info.textContent = `Deriving from symbol '${parent.value}'.`; if (parent.value && !name.value) name.value = parent.value; });
+  parent.addEventListener("change", () => { info.style.display = parent.value ? "block" : "none"; info.textContent = `Deriving from symbol '${parent.value}'.`; if (parent.value && !name.value) name.value = M.unescapeLibId(parent.value); });
   KD().open({
     title: "New Symbol", width: 560,
     build(body) {
-      body.append(info, form([["Library:", libSel], ["Symbol name:", name], ["Derive from existing symbol:", parent], ["Default reference designator:", ref], ["Number of units per package:", unitsIn]]),
+      body.append(info, form([["Symbol name:", name], ["Derive from existing symbol:", parent], ["Default reference designator:", ref], ["Number of units per package:", unitsIn]]),
         h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px" }, inter, demorgan, power, exBom, exBoard, h("span"), inside, form([["Pin name position offset:", offset, unitName(units())]], 3), showNum, showName),
         h("div", { style: "display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px" }, keepFp, keepDs, xfer, keepUser));
       name.focus();
     },
     ok() {
-      const nm = name.value.trim(); const l = se.libs.get(libSel.value)!;
-      if (!nm) { void messageBox("Symbol must have a name."); return false; }
+      const nm = M.escapeLibId(name.value);   // DIALOG_LIB_NEW_SYMBOL::GetName: EscapeString( …, CTX_LIBID )
+      const l = target;
+      if (!nm) { void messageBox("Symbol must have a name.", "Message"); return false; }
       Object.assign(p, { name: nm, parent: parent.value || null, reference: ref.value.trim() || "U", unitCount: Math.max(1, Math.round(Number(unitsIn.value) || 1)), unitsInterchangeable: cb(inter), alternateBodyStyle: cb(demorgan),
         power: cb(power), pinNameInside: cb(inside), pinTextPosition: lenOf(offset, M.DEFAULT_PIN_NAME_OFFSET), showPinNumber: cb(showNum), showPinName: cb(showName), includeInBom: !cb(exBom), includeOnBoard: !cb(exBoard),
         keepFootprint: cb(keepFp), keepDatasheet: cb(keepDs), transferUserFields: cb(xfer), keepContentUserFields: cb(keepUser) });
       const create = () => {
-        const par = p.parent && l.doc ? l.doc.lib.symbols.get(p.parent) || null : null;
+        const par = p.parent && l && l.doc ? l.doc.lib.symbols.get(p.parent) || null : null;
         const s = M.createSymbol(p, par);
+        if (!l) { se.openUnsaved(s); return; }
         void l.doc!.commit([[nm, M.text(s)]]).then(() => { l.rows = null; void se.loadSymbol(l.nick, nm); });
         l.rows = null; void se.loadSymbol(l.nick, nm);
       };
-      if (l.doc && l.doc.lib.symbols.has(nm)) {
-        void confirmBox("New Symbol", `Symbol '${nm}' already exists in library '${l.nick}'.`, "Overwrite").then((ok) => { if (ok) { KD().close(); create(); } });
+      if (l && l.doc && l.doc.lib.symbols.has(nm)) {
+        void confirmBox("Confirmation", `Symbol '${M.unescapeLibId(nm)}' already exists in library '${l.nick}'.`, "Overwrite").then((ok) => { if (ok) { KD().close(); create(); } });
         return false;
       }
       create(); return true;
@@ -417,14 +421,16 @@ export function newSymbol(se: SymbolEditor): void {
 export function saveSymbolAs(se: SymbolEditor, copy: boolean): void {
   const t = se.tab; const sym = se.symbol(); if (!t || !sym) return;
   const libs = se.projectLibs().filter((l) => l.doc && l.doc.canEdit);
-  if (!libs.length) { void messageBox("The project has no editable symbol library.  Create one with File ▸ New Library... first."); return; }
-  const lib0 = se.libs.get(t.lib); const start = lib0 && libs.includes(lib0) ? lib0.nick : libs[0].nick;
-  const libSel = select(libs.map((l) => l.nick), start, undefined, { id: "sa-lib" }); const name = textInput(M.symName(sym), undefined, { id: "sa-name" });
+  const lib0 = se.libs.get(t.lib); const start = lib0 && libs.includes(lib0) ? lib0.nick : libs.length ? libs[0].nick : "";
+  const libSel = select(libs.map((l) => l.nick), start, undefined, { id: "sa-lib" }); const name = textInput(M.unescapeLibId(M.symName(sym)), undefined, { id: "sa-name" });
   KD().open({
     title: copy ? "Save Symbol Copy As" : "Save Symbol As", width: 460,
     build(body) { body.append(form([["Library:", libSel], ["Name:", name]])); name.focus(); name.select(); },
     ok() {
-      const nm = name.value.trim(); const l = se.libs.get(libSel.value)!; if (!nm) { void messageBox("Symbol must have a name."); return false; }
+      // SAVE_AS_DIALOG::getSymbolName: trimmed, spaces to '_', EscapeString( …, CTX_LIBID )
+      const nm = M.escapeLibId(name.value.trim().replace(/ /g, "_")); const l = se.libs.get(libSel.value);
+      if (!l || !libSel.value) { void messageBox("A library must be specified.", "Message"); return false; }
+      if (!nm) { void messageBox("Symbol must have a name.", "Message"); return false; }
       const go = () => {
         const srcLib = se.libMap(se.libs.get(t.lib) || null);
         let s = M.node(M.text(sym));
@@ -433,23 +439,39 @@ export function saveSymbolAs(se: SymbolEditor, copy: boolean): void {
         const tmp = { symbols: new Map([[M.symName(s), s]]) } as unknown as M.SymLib; M.renameSymbol(tmp, M.symName(s), nm); s = tmp.symbols.get(nm)!;
         void l.doc!.commit([[nm, M.text(s)]]).then(() => { l.rows = null; se.renderTree(); });
         l.rows = null;
-        if (!copy) { if (t.origin) { /* the schematic tab stays; the library copy opens */ } void se.loadSymbol(l.nick, nm); }
+        // an unsaved symbol's tab is promoted: it becomes the library symbol's tab
+        if (t.scratch && !t.origin) { const i = se.tabs.indexOf(t); if (i >= 0) se.tabs.splice(i, 1); if (se.cur >= se.tabs.length) se.cur = se.tabs.length - 1; }
+        if (!copy || (t.scratch && !t.origin)) { void se.loadSymbol(l.nick, nm); }
         else se.renderTree();
       };
-      if (l.doc && l.doc.lib.symbols.has(nm)) { void confirmBox("Save Symbol As", `Symbol '${nm}' already exists in library '${l.nick}'.`, "Overwrite").then((ok) => { if (ok) { KD().close(); go(); } }); return false; }
+      if (l.doc && l.doc.lib.symbols.has(nm)) { void confirmBox("Confirmation", `Symbol '${M.unescapeLibId(nm)}' already exists in library '${l.nick}'. Do you want to overwrite it?`, "Overwrite").then((ok) => { if (ok) { KD().close(); go(); } }); return false; }
       go(); return true;
     },
   });
 }
+/** SYMBOL_EDITOR_CONTROL::RenameSymbol: "Change Symbol Name" (LIBRARY_EDITOR_CONTROL's RENAME_DIALOG validates in place). */
 export async function renameSymbol(se: SymbolEditor, lib: Lib, name: string): Promise<void> {
   if (!lib.doc) return;
-  const nn = await promptText("Rename Symbol", "New name:", name); if (nn === null) return;
-  const v = nn.trim(); if (!v || v === name) { if (!v) await messageBox("Symbol must have a name."); return; }
-  if (lib.doc.lib.symbols.has(v)) { await messageBox(`Symbol '${v}' already exists in library '${lib.nick}'.`); return; }
-  const tmp: M.SymLib = { head: [] as unknown as M.SymLib["head"], version: 0, symbols: new Map([...lib.doc.lib.symbols].map(([k, s]) => [k, M.node(M.text(s))])) };
-  const touched = M.renameSymbol(tmp, name, v);
-  await lib.doc.commit([[name, null], ...touched.filter((n) => n !== name).map((n): [string, string] => [n, M.text(tmp.symbols.get(n)!)])]).catch(() => 0);
-  for (const t of se.tabs) if (!t.origin && t.lib === lib.nick && t.name === name) t.name = v;
+  const doc = lib.doc;
+  let newName = "";
+  const nn = await promptText("Change Symbol Name", "New name:", M.unescapeLibId(name), async (typed) => {
+    newName = M.escapeLibId(typed.trim());
+    if (!newName) { await messageBox("Symbol must have a name.", "Message"); return false; }
+    // no change: accepted without prompting
+    if (newName !== name && doc.lib.symbols.has(newName))
+      return confirmBox("Confirmation", `Symbol '${M.unescapeLibId(newName)}' already exists in library '${lib.nick}'.`, "Overwrite");
+    return true;
+  });
+  if (nn === null || newName === name) return;
+  const tmp: M.SymLib = { head: [] as unknown as M.SymLib["head"], version: 0, symbols: new Map([...doc.lib.symbols].map(([k, s]) => [k, M.node(M.text(s))])) };
+  const overwritten = tmp.symbols.has(newName);
+  if (overwritten) tmp.symbols.delete(newName);   // libMgr.RemoveSymbol( newName, libName )
+  const touched = M.renameSymbol(tmp, name, newName);
+  // the overwritten symbol's tab goes; the renamed symbol's tab follows it
+  if (overwritten) for (let i = se.tabs.length - 1; i >= 0; i--) { const t = se.tabs[i]; if (!t.origin && t.lib === lib.nick && t.name === newName) await se.closeTab(i, true); }
+  for (const t of se.tabs) if (!t.origin && t.lib === lib.nick && t.name === name) t.name = newName;
+  await doc.commit([[name, null], ...touched.filter((n) => n !== name).map((n): [string, string] => [n, M.text(tmp.symbols.get(n)!)])]).catch(() => 0);
+  if (se.treeSel && se.treeSel.lib === lib.nick && se.treeSel.name === name) se.treeSel = { lib: lib.nick, name: newName };
   lib.rows = null; se.renderAll();
 }
 /** New Library: a .kicad_sym document in the project, its first snapshot, and a sym-lib-table row. */

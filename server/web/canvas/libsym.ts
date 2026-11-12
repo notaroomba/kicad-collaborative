@@ -16,7 +16,7 @@
 // selection survives a rebuild after a move.  item.libRef says where the node lives.
 import { SCH, SCH_Z, dimColor } from "./colors";
 import { G, boxUnion, textGeom, transformedText } from "./geom";
-import { PIN_TEXT_OFFSET, TARGET_PIN_RADIUS, buildPinGeom, pinHidden, shapeGeom, type PinSym } from "./geom-sch";
+import { PIN_TEXT_OFFSET, TARGET_PIN_RADIUS, TILDE_LITERAL_VERSION, buildPinGeom, pinHidden, shapeGeom, type PinSym } from "./geom-sch";
 import { atOf, effectsOf, faceOf, has, isList, kid, kids, num, str, strokeColorOf, widthOf } from "./sexpr";
 import { SCH_PEN, textPen } from "./text";
 import { newDoc } from "./doc";
@@ -24,6 +24,8 @@ import type { Doc, GeomSink, Item, Pt } from "./types";
 
 export interface LibSymbolOpts {
   unit?: number; bodyStyle?: number;
+  /** the library file's (version …): from 20250318 a pin named "~" is literally "~" */
+  fileVersion?: number;
   showHiddenPins?: boolean; showHiddenFields?: boolean; showElectricalTypes?: boolean;
   /** View > Show Pin Alternate Icons (SYMBOL_EDITOR_SETTINGS m_ShowPinAltIcons, on by default) */
   showPinAltIcons?: boolean;
@@ -52,13 +54,14 @@ const yes = (n: SNode, key: string): boolean => { const k = kid(n, key); return 
 const tf = (x: number, y: number): Pt => [x, -y];
 const IDENT = [1, 0, 0, 1];
 
-function pinSymOf(sym: SNode, col: (c: string) => string): PinSym {
+function pinSymOf(sym: SNode, col: (c: string) => string, fileVersion = 0): PinSym {
+  const literalTilde = fileVersion >= TILDE_LITERAL_VERSION;
   const pn = kid(sym, "pin_names"); const nameOff = pn && kid(pn, "offset") ? num(kid(pn, "offset")![1]) : 0.508;
   const hideNames = !!(pn && (has(pn, "hide") || (kid(pn, "hide") && str(kid(pn, "hide")![1]) === "yes")));
   const pnu = kid(sym, "pin_numbers"); const hideNums = !!(pnu && (has(pnu, "hide") || (kid(pnu, "hide") && str(kid(pnu, "hide")![1]) === "yes")));
   let maxNameHalf = 0;
-  for (const sub of kids(sym, "symbol")) for (const p of kids(sub, "pin")) { const nm = kid(p, "name"); if (nm && str(nm[1]) && str(nm[1]) !== "~") maxNameHalf = Math.max(maxNameHalf, effectsOf(nm).size / 2); }
-  return { nameOff, hideNames, hideNums, maxNameHalf, col };
+  for (const sub of kids(sym, "symbol")) for (const p of kids(sub, "pin")) { const nm = kid(p, "name"); if (nm && str(nm[1]) && (str(nm[1]) !== "~" || literalTilde)) maxNameHalf = Math.max(maxNameHalf, effectsOf(nm).size / 2); }
+  return { nameOff, hideNames, hideNums, maxNameHalf, col, literalTilde };
 }
 
 /** One shape / text / text box of a sub-symbol into `item` (library coordinates, Y up). */
@@ -118,7 +121,7 @@ export function parseLibSymbol(sym: SNode, opts?: LibSymbolOpts): Doc {
   const shown = (u: number, b: number) => (u === 0 || u === unit) && (b === 0 || b === body);
   const drawFrom = (owner: SNode, inherited: boolean): void => {
     const col = inherited ? dim : colAll;
-    const ps = pinSymOf(owner, col); ps.altIcons = opts!.showPinAltIcons !== false;
+    const ps = pinSymOf(owner, col, opts!.fileVersion || 0); ps.altIcons = opts!.showPinAltIcons !== false;
     for (const sub of kids(owner, "symbol")) {
       const subName = str(sub[1]); const [u, b] = subUnitBody(subName); if (!shown(u, b)) continue;
       for (let j = 2; j < sub.length; j++) {

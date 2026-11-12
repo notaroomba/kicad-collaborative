@@ -127,6 +127,13 @@ export function serializeLibrary(lib: SymLib): string {
 
 // ---------------------------------------------------------------- one symbol
 export const symName = (sym: Node): string => str(sym[1]);
+/** EscapeString( aSource, CTX_LIBID ) (common/string_utils.cpp): the characters a LIB_ID may not hold become {tokens}. */
+export function escapeLibId(src: string): string {
+  return src.replace(/[\\<>:"\r\n]/g, (c) => ({ "\\": "{backslash}", "<": "{lt}", ">": "{gt}", ":": "{colon}", "\"": "{dblquote}" } as Record<string, string>)[c] || "");
+}
+const UNESC: Record<string, string> = { dblquote: "\"", quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "\t", return: "\n", brace: "{" };
+/** UnescapeString: a symbol name as the dialogs and messages show it. */
+export function unescapeLibId(src: string): string { return src.indexOf("{") < 0 ? src : src.replace(/(?<![$~^_])\{(dblquote|quote|lt|gt|backslash|slash|bar|comma|colon|space|dollar|tab|return|brace)\}/g, (_m, k: string) => UNESC[k]); }
 export const parentNameOf = (sym: Node): string | null => { const e = kid(sym, "extends"); return e ? str(e[1]) : null; };
 export const isDerived = (sym: Node): boolean => !!kid(sym, "extends");
 export function subUnitBody(name: string): [number, number] { const m = /_(\d+)_(\d+)$/.exec(name); return m ? [+m[1], +m[2]] : [0, 0]; }
@@ -275,7 +282,7 @@ export interface PinDefaults { orient: number; type: string; shape: string; visi
 export function initialPinDefaults(): PinDefaults { return { orient: 0, type: "input", shape: "line", visible: true, commonUnit: false, commonBody: false, length: DEFAULTS.pinLength, nameSize: DEFAULTS.pinNameSize, numSize: DEFAULTS.pinNumSize }; }
 /** SYMBOL_EDITOR_PIN_TOOL::CreatePin before the dialog. */
 export function newPinInfo(x: number, y: number, last: PinDefaults, unit: number, body: number): PinInfo {
-  return { type: last.type, shape: last.shape, x, y, orient: last.orient, length: last.length, visible: last.visible, name: "~", number: "", nameSize: last.nameSize, numSize: last.numSize,
+  return { type: last.type, shape: last.shape, x, y, orient: last.orient, length: last.length, visible: last.visible, name: "", number: "", nameSize: last.nameSize, numSize: last.numSize,
     unit: last.commonUnit ? 0 : unit, body: last.commonBody ? 0 : body, alternates: [] };
 }
 /** EditPinProperties' tail: what the next new pin starts from. */
@@ -716,10 +723,11 @@ export function cacheName(cache: Map<string, Node>, libId: string, copy: Node): 
 export function asCacheEntry(flat: Node, name: string): Node { const c = clone(flat); c[1] = name; const ef = c.findIndex((x, j) => j > 0 && isList(x) && x[0] === "embedded_fonts"); if (ef > 0 && kid(c, "embedded_files") === null) { /* keep */ } return c; }
 
 // ---------------------------------------------------------------- pin table
+/** A Pin Table row: positions as KiCad shows them (internal coordinates, Y down), not the file's Y up. */
 export interface PinRow { count: number; number: string; name: string; type: string; shape: string; orient: number; numSize: number; nameSize: number; length: number; x: number; y: number; visible: boolean; unit: number; body: number; node?: Node | null }
 export const PIN_TABLE_COLUMNS = ["Count", "Number", "Name", "Electrical Type", "Graphic Style", "Orientation", "Number Text Size", "Name Text Size", "Length", "X Position", "Y Position", "Visible", "Unit", "Body Style"];
 export function pinRows(sym: Node): PinRow[] {
-  return allPins(sym).map((d) => { const i = pinInfo(d.node, d.unit, d.body); return { count: 1, number: i.number, name: i.name, type: i.type, shape: i.shape, orient: i.orient, numSize: i.numSize, nameSize: i.nameSize, length: i.length, x: i.x, y: i.y, visible: i.visible, unit: i.unit, body: i.body, node: d.node }; });
+  return allPins(sym).map((d) => { const i = pinInfo(d.node, d.unit, d.body); return { count: 1, number: i.number, name: i.name, type: i.type, shape: i.shape, orient: i.orient, numSize: i.numSize, nameSize: i.nameSize, length: i.length, x: i.x, y: -i.y, visible: i.visible, unit: i.unit, body: i.body, node: d.node }; });
 }
 const typeName = (t: string) => (PIN_TYPES.find((p) => p[0] === t) || [t, t])[1];
 const shapeName = (t: string) => (PIN_SHAPES.find((p) => p[0] === t) || [t, t])[1];
@@ -772,12 +780,25 @@ export function pinNumberSummary(rows: PinRow[]): { numbers: string; count: numb
   }
   return { numbers: parts.join(", "), count: nums.length, duplicates: dups.join(", ") };
 }
-/** Write a pin table back: every pin of the symbol replaced by the rows, in one whole-symbol change. */
+/**
+ * Write a pin table back: every pin of the symbol replaced by the rows, in one whole-symbol change.  A row that came
+ * from a pin keeps that pin's node — a row the user did not touch is written back exactly, an edited one keeps what
+ * the table does not show (alternates, custom properties, …), as DIALOG_LIB_EDIT_PIN_TABLE edits the SCH_PIN copies.
+ */
 export function applyPinRows(sym: Node, rows: PinRow[]): void {
   for (const d of allPins(sym).reverse()) removeDrawItem(sym, d);
   for (const r of rows) {
     const keepAlts = r.node ? kids(r.node, "alternate").map((a) => ({ name: str(a[1]), type: str(a[2]), shape: str(a[3]) })) : [];
-    addDrawItem(sym, r.unit, r.body, pinNode({ type: r.type, shape: r.shape, x: r.x, y: r.y, orient: r.orient, length: r.length, visible: r.visible, name: r.name, number: r.number, nameSize: r.nameSize, numSize: r.numSize, unit: r.unit, body: r.body, alternates: keepAlts }));
+    const info: PinInfo = { type: r.type, shape: r.shape, x: r.x, y: -r.y, orient: r.orient, length: r.length, visible: r.visible, name: r.name, number: r.number, nameSize: r.nameSize, numSize: r.numSize, unit: r.unit, body: r.body, alternates: keepAlts };
+    let n: Node;
+    if (r.node) {
+      n = clone(r.node);
+      const o = pinInfo(n);
+      const same = o.type === info.type && o.shape === info.shape && o.x === info.x && o.y === info.y && o.orient === info.orient && o.length === info.length && o.visible === info.visible
+        && o.name === info.name && o.number === info.number && o.nameSize === info.nameSize && o.numSize === info.numSize;
+      if (!same) setPin(n, info);
+    } else n = pinNode(info);
+    addDrawItem(sym, r.unit, r.body, n);
   }
 }
 

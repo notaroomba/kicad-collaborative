@@ -29,7 +29,7 @@ test("Repeat Pin: horizontal pins step down (file y - 100 mil), vertical pins st
 });
 test("new pins start from the last pin's settings; common unit / body give unit 0 / body 0", () => {
   const last = M.initialPinDefaults(); const p = M.newPinInfo(1, 2, last, 2, 1);
-  assert.strictEqual(p.unit, 2); assert.strictEqual(p.length, 100 * MIL); assert.strictEqual(p.type, "input"); assert.strictEqual(p.name, "~");
+  assert.strictEqual(p.unit, 2); assert.strictEqual(p.length, 100 * MIL); assert.strictEqual(p.type, "input"); assert.strictEqual(p.name, "", "KiCad 10: a new pin has no name (SCH_PIN leaves m_name empty)");
   p.type = "output"; p.unit = 0; p.length = 5.08; M.rememberPin(last, p);
   const q = M.newPinInfo(0, 0, last, 2, 1); assert.strictEqual(q.unit, 0); assert.strictEqual(q.type, "output"); assert.strictEqual(q.length, 5.08);
 });
@@ -86,6 +86,28 @@ test("pin table: CSV export and import round-trip, summary collapses runs and li
 test("anchor move shifts every item and field the other way", () => {
   const s = mk(1); const p = M.newPinInfo(2.54, 2.54, M.initialPinDefaults(), 1, 1); M.placePin(s, p, false);
   M.moveAnchor(s, 2.54, 2.54); const i = M.pinInfo(M.allPins(s)[0].node); assert.strictEqual(i.x, 0); assert.strictEqual(i.y, 0);
+});
+
+test("Pin Table: rows show Y down; OK keeps untouched pins exactly (custom properties) and an edited pin's extras", () => {
+  const s = mk(1);
+  for (const [n, y] of [["1", 2.54], ["2", -5.08]]) { const p = M.newPinInfo(0, y, M.initialPinDefaults(), 1, 1); p.number = n; p.name = "P" + n; M.placePin(s, p, false); }
+  const pins = M.allPins(s); pins[0].node.push(M.node('(custom_property "MPN" "abc")')); pins[1].node.push(M.node('(custom_property "X" "y")'));
+  const before1 = M.text(M.allPins(s)[0].node);
+  const rows = M.pinRows(s);
+  assert.deepStrictEqual(rows.map((r) => r.y), [-2.54, 5.08], "internal coordinates: a pin above the anchor has a negative Y");
+  rows[1].name = "Q2"; rows[1].y = 7.62;
+  M.applyPinRows(s, rows);
+  const after = M.allPins(s);
+  assert.strictEqual(M.text(after[0].node), before1, "the untouched row's pin is written back as it was");
+  assert.ok(M.text(after[1].node).includes('(custom_property "X" "y")') && M.text(after[1].node).includes('(name "Q2"'));
+  assert.strictEqual(M.pinInfo(after[1].node).y, -7.62);
+});
+test("symbol names: EscapeString( CTX_LIBID ) and back", () => {
+  assert.strictEqual(M.escapeLibId('R<1>:"a"\\b\n'), "R{lt}1{gt}{colon}{dblquote}a{dblquote}{backslash}b");
+  assert.strictEqual(M.unescapeLibId("R{lt}1{gt}{colon}x"), "R<1>:x");
+  assert.strictEqual(M.escapeLibId(M.escapeLibId("A:B")), "A{colon}B", "escaping twice changes nothing");
+  const s = M.createSymbol(Object.assign(M.defaultNewSymbolProps(), { name: M.escapeLibId("R<1>") }));
+  assert.ok(M.text(s).startsWith('(symbol "R{lt}1{gt}"'), M.text(s).slice(0, 40));
 });
 
 console.log(`${passed} passed, ${failed} failed`);

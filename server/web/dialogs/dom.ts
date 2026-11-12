@@ -65,10 +65,16 @@ export function form(rows: ([string, Node, string?] | null)[], cols = 2): HTMLDi
   return f;
 }
 /** A small modal question on top of whatever dialog is open (wxTextEntryDialog). */
-export function promptText(title: string, label: string, initial = ""): Promise<string | null> {
+/** `validate` is TransferDataFromWindow: false keeps the dialog open (the validator shows its own message). */
+export function promptText(title: string, label: string, initial = "", validate?: (v: string) => boolean | Promise<boolean>): Promise<string | null> {
   return new Promise((resolve) => {
     const input = h("input", { type: "text", value: initial, id: "kd-prompt-input" });
-    const done = (v: string | null) => { ov.remove(); resolve(v); };
+    let busy = false;
+    const done = (v: string | null) => {
+      if (v === null || !validate) { ov.remove(); resolve(v); return; }
+      if (busy) return; busy = true;
+      void Promise.resolve(validate(v)).then((good) => { busy = false; if (good) { ov.remove(); resolve(v); } else { input.focus(); } });
+    };
     const ok = h("button", { class: "btn primary", onclick: () => done(input.value) }, "OK"), cancel = h("button", { class: "btn", onclick: () => done(null) }, "Cancel");
     const dlg = h("div", { class: "kd-dialog", style: "width:380px;min-width:0" }, h("div", { class: "kd-title" }, h("span", null, title)), h("div", { class: "kd-body" }, h("div", { class: "kv" }, h("label", null, label), input)), h("div", { class: "kd-foot" }, cancel, ok));
     const ov = h("div", { class: "kd-overlay kd-prompt", style: "z-index:70" }, dlg);
