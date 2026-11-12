@@ -82,10 +82,20 @@ nets = {
     "N6": "R3.2 U1.46",
     "N7": "R4.2 U1.47",
 }
-groups = {"usb": "J1 R1 R2 R3 R4", "regulator": "U2 C1 C2", "mcu": "U1 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14", "flash": "U3 C15 R5 R6 SW1",
-          "crystal": "Y1 R7 C16 C17", "reset and led": "SW2 R8 D1 R9", "headers": "J2 J3 J4"}
+# One titled frame per functional block, and a note wherever a choice is not the textbook one.
+groups = {"USB-C connector": "J1 R1 R2 R3 R4", "3.3 V regulator": "U2 C1 C2", "RP2040 and decoupling": "U1 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14",
+          "QSPI flash and BOOTSEL": "U3 C15 R5 R6 SW1", "12 MHz crystal": "Y1 R7 C16 C17", "Reset and LED": "SW2 R8 D1 R9", "Headers and SWD": "J2 J3 J4"}
+notes = {
+    "USB-C connector": ["R3 and R4 are 27 ohm, not 22: the RP2040 datasheet asks for 27 ohm in series with D+ and D- to match the USB impedance.",
+                        "The shield is tied straight to ground; there is no RC filter because the board has no metal case."],
+    "12 MHz crystal": "R7 (1k) in series with XOUT limits the drive level of the crystal, as in the Raspberry Pi hardware design guide.",
+    "QSPI flash and BOOTSEL": "R6 is 1k so that BOOTSEL can pull QSPI_SS low without fighting the flash chip select.",
+}
 sch = project.schematic()
-built = sch.build(parts, {k: v.split() for k, v in nets.items()}, {k: v.split() for k, v in groups.items()}, no_connect="J1.A8 J1.B8 U1.35 U1.36 U1.41 J3.17".split())
+built = sch.build(parts, {k: v.split() for k, v in nets.items()}, {k: v.split() for k, v in groups.items()},
+                  no_connect="J1.A8 J1.B8 U1.35 U1.36 U1.41 J3.17".split(), notes=notes)
+sch.note("D1 is on GPIO25 like the Pico, so Pico example code blinks it unchanged.", near="D1")
+assert sch.overlaps() == [], sch.overlaps()                                 # nothing drawn over anything else, nothing off the page
 print("schematic", built, sch.check())
 
 # ---- board: Pico outline, floorplan in mm from the top left corner, rules for the 0.4 mm QFN, ground pour, one routing call
@@ -106,14 +116,17 @@ board = project.board()
 print("sync", board.sync())
 board.outline(X0, Y0, X0 + W, Y0 + H)
 board.rules(clearance=0.15, track_width=0.2, via_diameter=0.6, via_drill=0.3, min_track_width=0.15, min_clearance=0.15, edge_clearance=0.3)
-placed = board.autoplace(fixed={ref: (X0 + x, Y0 + y, rot) for ref, (x, y, rot) in FLOOR.items()}, outline=(X0, Y0, X0 + W, Y0 + H))
-board.move("J2", to=(X0 + 1.57, Y0 + 1.42), rotation=0)                    # header rows exactly 22.86 mm apart, pin 1 top left
-board.move("J3", to=(X0 + 1.57 + 22.86, Y0 + 1.42 + 48.26), rotation=180)   # pin 21 bottom right, as on a Pico
+fixed = {ref: (X0 + x, Y0 + y, rot) for ref, (x, y, rot) in FLOOR.items()}
+fixed["J2"] = (X0 + 1.57, Y0 + 1.42, 0)                                     # header rows exactly 22.86 mm apart, pin 1 top left
+fixed["J3"] = (X0 + 1.57 + 22.86, Y0 + 1.42 + 48.26, 180)                    # pin 21 bottom right, as on a Pico
+placed = board.autoplace(fixed=fixed, outline=(X0, Y0, X0 + W, Y0 + H))
 print("placed", placed["score"])
 board.zone("GND", layer="B.Cu")
 board.via("GND", (X0 + 13, Y0 + 31))                                       # the RP2040's exposed pad is its only ground
 critical = [n for n in board.nets() if any(k in n for k in ("USB_D", "XIN", "XOUT", "QSPI"))]
 print("routed", board.route(order=critical, widths={"VBUS": 0.4}, time_s=120))
 print("drc", board.check())
+if len(sys.argv) > 2:
+    sch.svg(sys.argv[2])
 print("board", board.info())
 project.save()

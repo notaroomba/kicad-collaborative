@@ -11,6 +11,7 @@
 import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } from "./design";
 import { projectDocs, resolveDoc } from "./design";
 import { footprintNode, kicadFootprint, kicadSymbol, vendorPart, vendorSymbol } from "./library";
+import { fieldShifts, itemsWithin } from "./layout";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -206,7 +207,9 @@ function points(e: Edit): number[][] {
 }
 
 function boardNet(doc: any, name: string): any {
-  const all = PCB().boardNets(doc); const n = all.find((x: any) => x.name === name) || all.find((x: any) => x.name === "/" + name);   // a schematic label "SDA" is the board net "/SDA"
+  // a net of a sheet's local label is "/NAME" on the board: either spelling finds it
+  const all = PCB().boardNets(doc); const bare = String(name).replace(/^\//, "");
+  const n = all.find((x: any) => x.name === name) || all.find((x: any) => x.name === "/" + bare) || all.find((x: any) => x.name === bare);
   if (!n) throw new ToolError(`there is no net "${name}" on the board`);
   return n;
 }
@@ -437,6 +440,13 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
         case "add_text": {
           const t = text(e.text, "text"); const x = num(e.x, "x"), y = num(e.y, "y");
           const node = isSch ? SCH()._.labelNode("text", t, [x, y], 0) : PCB().textNode(t, x, y, typeof e.layer === "string" && e.layer ? e.layer : "Cmts.User");
+          if (isSch && (e.size !== undefined || e.bold || e.italic)) {
+            // a heading or a note: its own size and weight, the way the Text Properties dialog writes them
+            const size = e.size === undefined ? 1.27 : num(e.size, "size"); if (size < 0.5 || size > 20) throw new ToolError("size is the text height in millimetres, 0.5 to 20");
+            const font = k.kid(k.kid(node, "effects"), "font"); const sz = k.kid(font, "size"); sz[1] = r4(size); sz[2] = r4(size);
+            if (e.bold) { font.push(["thickness", r4(size / 5)]); font.push(["bold", "yes"]); }
+            if (e.italic) font.push(["italic", "yes"]);
+          }
           const c = added(doc, node); changes.push(c);
           lines.push({ kind: "add", text: `Add text "${t.length > 40 ? t.slice(0, 40) + "…" : t}" at (${fmt(x)}, ${fmt(y)})`, ids: [c.id] });
           break;
@@ -500,7 +510,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           }
           const order = Array.isArray(e.order) ? e.order.map((n: unknown) => boardNet(doc, text(n, "net")).name) : undefined;
           const keepouts = Array.isArray(e.keepouts) ? e.keepouts.filter((q: any) => q && Array.isArray(q.box) && q.box.length === 4).map((q: any) => ({ layers: Array.isArray(q.layers) ? q.layers : undefined, box: q.box })) : undefined;
-          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, timeMs: Math.round(1000 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts , maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : undefined });
+          const res = R.route(k, P, doc, P.designSettings(ed.proSettings || null), { nets, layers: Array.isArray(e.layers) && e.layers.length ? e.layers : null, allowVias: e.allow_vias !== false, zones: e.zones === false ? false : undefined, timeMs: Math.round(1000 * Math.min(300, Math.max(5, typeof e.time_s === "number" ? e.time_s : 20))), order, netOpts, keepouts, maxViasPerConnection: typeof e.max_vias === "number" && e.max_vias >= 0 ? Math.floor(e.max_vias) : undefined });
           const failed = (res.failed || []).map((f: any) => ({ net: f.net, from: f.a.map(r4), to: f.b.map(r4) }));
           if (!res.total) throw new ToolError(`nothing to route: every connection ${nets ? "of " + nets.join(", ") : "on the board"} is already made`);
           if (!res.items.length) throw new ToolError(`the autorouter could not make any of the ${res.total} missing connection${res.total === 1 ? "" : "s"} within the design rules: ${JSON.stringify(failed.slice(0, 12))}`);
@@ -554,6 +564,105 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           if (!probe) throw new ToolError(`"${kind}" is not an item kind a ${isSch ? "schematic sheet" : "board"} holds, or the item is malformed`);
           const c = added(doc, node); changes.push(c);
           lines.push({ kind: "add", text: `Add ${kind.replace(/_/g, " ")}`, ids: [c.id] });
+          break;
+        }
+        case "add_rectangle": {
+          schOnly(e.op); const x0 = num(e.x0, "x0"), y0 = num(e.y0, "y0"), x1 = num(e.x1, "x1"), y1 = num(e.y1, "y1");
+          if (Math.abs(x1 - x0) < 1 || Math.abs(y1 - y0) < 1) throw new ToolError("a rectangle needs two opposite corners at least a millimetre apart");
+          const style = e.style === undefined ? "dash" : String(e.style);
+          if (!["default", "solid", "dash", "dot", "dash_dot", "dash_dot_dot"].includes(style)) throw new ToolError("style is solid, dash, dot, dash_dot or dash_dot_dot");
+          const node = SCH()._.rectangleNode([x0, y0], [x1, y1]); const st = k.kid(node, "stroke");
+          if (st) { const ty = k.kid(st, "type"); if (ty) ty[1] = style; if (e.width !== undefined) { const wd = k.kid(st, "width"); if (wd) wd[1] = r4(num(e.width, "width")); } }
+          const c = added(doc, node); changes.push(c);
+          lines.push({ kind: "add", text: `Add frame (${fmt(Math.min(x0, x1))}, ${fmt(Math.min(y0, y1))}) to (${fmt(Math.max(x0, x1))}, ${fmt(Math.max(y0, y1))})`, ids: [c.id] });
+          break;
+        }
+        case "autoplace_fields": {
+          // KiCad's Autoplace Fields (O): reference and value beside the body, on the side with the fewest pins and nothing in the way
+          schOnly(e.op); const s = SCH(); const want = Array.isArray(e.refs) && e.refs.length ? new Set(e.refs.map((r: unknown) => String(r).toLowerCase())) : null;
+          const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v: unknown) => num(v, "within")) : null;
+          const ids: string[] = [];
+          for (const it of Array.from(doc.items.values()) as any[]) {
+            if (it.kind !== "symbol" || touched.has(it.id)) continue;
+            if (want && !want.has(String(it.ref || "").toLowerCase())) continue;
+            if (!want && !e.power && /^#/.test(it.ref || "")) continue;
+            if (within && !(it.x >= within[0] && it.x <= within[2] && it.y >= within[1] && it.y <= within[3])) continue;
+            let node: any = null; try { node = s._.autoplaceNode(doc, it, { manual: true }); } catch { node = null; }
+            if (!node || k.serialize(node) === k.serialize(it.node)) continue;
+            touch(it, e.op); changes.push(modified(doc, it, node)); ids.push(it.id);
+          }
+          if (want && !ids.length && e.refs.some((r: unknown) => !findByRef(doc, String(r)).length)) throw new ToolError(`no component ${e.refs.find((r: unknown) => !findByRef(doc, String(r)).length)} on the open document`);
+          lines.push({ kind: "modify", text: `Autoplace the fields of ${ids.length} symbol${ids.length === 1 ? "" : "s"}`, ids });
+          break;
+        }
+        case "clear_fields": {
+          // the look a person takes after Autoplace Fields: a reference or value still drawn over a label, a wire or a part moves to the nearest clear spot
+          schOnly(e.op); const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v: unknown) => num(v, "within")) : undefined;
+          const by = new Map<string, { field: string; dx: number; dy: number }[]>();
+          for (const f of fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
+          const ids: string[] = [];
+          for (const [id, moves] of by) {
+            const it = doc.items.get(id); if (!it || touched.has(it.id)) continue; const node = k.cloneNode(it.node); let any = false;
+            for (const m of moves) { const p = k.kids(node, "property").find((q: any) => k.str(q[1]) === m.field); const at = p && k.kid(p, "at"); if (!at) continue; at[1] = r4(k.num(at[1]) + m.dx); at[2] = r4(k.num(at[2]) + m.dy); any = true; }
+            if (!any) continue; touch(it, e.op); changes.push(modified(doc, it, node)); ids.push(it.id);
+          }
+          lines.push({ kind: "modify", text: `Move the fields of ${ids.length} symbol${ids.length === 1 ? "" : "s"} clear of what they were drawn over`, ids });
+          break;
+        }
+        case "move_region": {
+          // everything wholly inside a box moves together, so a finished block keeps its wiring
+          schOnly(e.op); const s = SCH(); const box = [num(e.x0, "x0"), num(e.y0, "y0"), num(e.x1, "x1"), num(e.y1, "y1")]; const dx = num(e.dx, "dx"), dy = num(e.dy, "dy");
+          if (box[2] <= box[0] || box[3] <= box[1]) throw new ToolError("the box is given as x0, y0 (top left) and x1, y1 (bottom right)");
+          const ids = itemsWithin(doc, box);
+          if (!ids.length) throw new ToolError("nothing lies wholly inside that box");
+          for (const id of ids) { const it = doc.items.get(id); if (!it || touched.has(id)) continue; touch(it, e.op); const node = k.cloneNode(it.node); s._.shiftNode(it.kind, node, r4(dx), r4(dy)); changes.push(modified(doc, it, node)); }
+          lines.push({ kind: "modify", text: `Move ${ids.length} item${ids.length === 1 ? "" : "s"} by (${fmt(dx)}, ${fmt(dy)})`, ids });
+          break;
+        }
+        case "pad_connection": {
+          // Pad Properties, Connections: how this pad joins a zone of its net.  Solid is the usual cure for a thermal relief with too few spokes.
+          pcbOnly(e.op); const it = one(target(doc, e), e); if (it.kind !== "footprint") throw new ToolError("pad_connection applies to a footprint's pads");
+          const code = ({ inherit: null, none: 0, thermal: 1, solid: 2 } as Record<string, number | null>)[String(e.connect)]; if (code === undefined) throw new ToolError("connect is solid, thermal, none or inherit");
+          const want = (Array.isArray(e.pads) ? e.pads : [e.pad]).filter((v: unknown) => v !== undefined).map(String); if (!want.length) throw new ToolError("give pad (or pads): the pad numbers");
+          const node = k.cloneNode(it.node); const hit: string[] = [];
+          for (const pad of k.kids(node, "pad")) {
+            if (!want.includes(k.str(pad[1]))) continue; hit.push(k.str(pad[1]));
+            const at = pad.findIndex((q: any) => Array.isArray(q) && q[0] === "zone_connect"); if (at >= 0) pad.splice(at, 1);
+            if (code !== null) { const before = pad.findIndex((q: any) => Array.isArray(q) && ["thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "tenting", "uuid", "tstamp", "teardrops"].includes(q[0])); pad.splice(before >= 0 ? before : pad.length, 0, ["zone_connect", code]); }
+          }
+          const missing = want.find((w: string) => !hit.includes(w)); if (missing) throw new ToolError(`${nameOf(it)} has no pad ${missing}`);
+          if (k.serialize(node) === k.serialize(it.node)) throw new ToolError(`${nameOf(it)} pad ${want.join(", ")} already connects that way`);
+          touch(it, e.op); changes.push(modified(doc, it, node));
+          lines.push({ kind: "modify", text: `${nameOf(it)} pad ${want.join(", ")}: zone connection ${e.connect}`, ids: [it.id] });
+          break;
+        }
+        case "set_layers": {
+          // the copper layer count (Board Setup, Board Editor Layers): inner layers appear as signal layers, or go away when nothing is on them
+          pcbOnly(e.op); const BS = k.boardSetup; if (!BS || !BS.setCopperCount) throw new ToolError("the board setup tools are not loaded in this editor");
+          const count = num(e.count, "count"); if (count < 2 || count > 32 || count % 2) throw new ToolError("count is the number of copper layers: 2, 4, 6, ... 32");
+          const node: any[] = ["layers"]; for (const [name, l] of doc.layers as Map<string, any>) node.push(l.userName ? [l.id, name, l.type, l.userName] : [l.id, name, l.type]);
+          const before = BS.layerRows(node); const now = doc.copper.length || before.filter((r: any) => r.copper).length;
+          if (count === now) throw new ToolError(`the board already has ${count} copper layers`);
+          const rows = BS.setCopperCount(before, count); const keep = new Set(rows.filter((r: any) => r.copper).map((r: any) => r.name));
+          const planes = Array.isArray(e.planes) ? new Set(e.planes.map(String)) : new Set<string>();
+          for (const r of rows) if (r.copper && planes.has(r.name)) r.type = "power";
+          const gone = (doc.copper as string[]).filter((l) => !keep.has(l));
+          if (gone.length) for (const it of doc.items.values() as Iterable<any>) { const ly = it.layer || (it.node && k.kid(it.node, "layer") ? k.str(k.kid(it.node, "layer")[1]) : ""); if (gone.includes(ly)) throw new ToolError(`${ly} still has copper on it (${nameOf(it)}); remove it before taking the layer away`); }
+          const c = BS.boardSetupChange({ layers: BS.layersText(rows) }); c.was = { layers: BS.layersText(before) };
+          changes.push(c);
+          lines.push({ kind: "modify", text: `Copper layers ${now} → ${count} (${rows.filter((r: any) => r.copper).map((r: any) => r.name).join(", ")})`, ids: [] });
+          break;
+        }
+        case "set_page": {
+          schOnly(e.op); const paper = text(e.paper, "paper");
+          if (!["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
+          if (doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
+          const tb = doc.titleBlock || {}; const q = (v: string) => JSON.stringify(String(v)); const parts: string[] = [];
+          for (const [key, word] of [["title", "title"], ["date", "date"], ["rev", "rev"], ["company", "company"]]) if (tb[key]) parts.push(`(${word} ${q(tb[key])})`);
+          for (let n = 1; n <= 9; n++) if (tb["comment" + n]) parts.push(`(comment ${n} ${q(tb["comment" + n])})`);
+          changes.push({ id: "00000000-0000-0000-0000-0000000d0c00", kind: "MODIFIED", typeName: "PAGE_SETTINGS", docProps: { paper: `(paper "${paper}")`, titleBlock: parts.length ? `(title_block ${parts.join(" ")})` : "" },
+            was: { paper: doc.paper === "User" ? `(paper "User" ${r4(doc.page[0])} ${r4(doc.page[1])})` : `(paper "${doc.paper || "A4"}"${doc.portrait ? " portrait" : ""})` } });
+          lines.push({ kind: "modify", text: `Page size ${doc.paper || "A4"} → ${paper}`, ids: [] });
           break;
         }
         default: throw new ToolError(`unknown op "${e.op}"`);

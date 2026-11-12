@@ -22,6 +22,7 @@ import "../router/index";
 import "../fab/index";
 import * as design from "../ai/design";
 import { ToolError } from "../ai/design";
+import { checkLayout } from "../ai/layout";
 import * as library from "../ai/library";
 import { buildProposal, staleReason, writeRules } from "../ai/proposals";
 import { renderPicture } from "./picture";
@@ -236,7 +237,7 @@ declare const __dirname: string;
 const PY_OUTPUT_MAX = 6000, PY_DEFAULT_S = 180, PY_MAX_S = 400;
 /** The calls a script's kicad_harness makes, by the names the harness uses, and the tools that answer them. */
 const HARNESS_CALLS: Record<string, string> = {
-  overview: "get_design_overview", list_components: "list_components", get_component: "get_component", list_nets: "list_nets", get_geometry: "get_geometry",
+  overview: "get_design_overview", list_components: "list_components", get_component: "get_component", list_nets: "list_nets", get_geometry: "get_geometry", check_layout: "check_layout",
   run_checks: "run_checks", get_board_info: "get_board_info", get_items: "get_items", find_datasheets: "find_datasheets", find_parts: "find_parts",
   get_library_part: "get_library_part", read_datasheet: "read_datasheet",
 };
@@ -507,6 +508,7 @@ const TOOLS: Record<string, (req: Request) => Promise<Reply>> = {
   run_checks: (req) => withDocument(req, req.args.document, async () => ({ result: await design.runChecks({}) })),
   get_items: (req) => withDocument(req, req.args.document, async () => ({ result: await design.getItems(without(req.args)) })),
   get_geometry: (req) => withDocument(req, req.args.document, async () => ({ result: await design.geometry({}) })),
+  check_layout: (req) => withDocument(req, req.args.document, async () => ({ result: await checkLayout({ within: req.args.within, of: req.args.of, wrap: req.args.wrap, limit: req.args.limit, free: req.args.free }) })),
   find_datasheets: (req) => withDocument(req, req.args.document, async () => ({ result: await design.findDatasheets(without(req.args)) })),
   get_board_info: (req) => withDocument(req, "board", async () => ({ result: await design.boardInfo() })),
   read_datasheet: async (req) => ({ result: await library.readDatasheet(req.args || {}) }),

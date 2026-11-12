@@ -762,10 +762,13 @@ export class Router {
     const G = this.G, { res, flip } = found; const nodes = res.nodes; const w = conn.cls.width; const all = G.layers.map((_, i) => i);
     const shapes: Obstacle[] = [], viaCells: number[] = []; const clr = conn.cls.clr; const net = this.netOf(conn.net);
     // thru cells are only known while the net is lifted
+    // Only a plated hole of a pad or of copper already on the board saves a via.  A via of another connection of this
+    // net does not: that connection may be ripped and laid elsewhere later, which would leave this one changing layer in thin air.
+    const holes = new Set<number>(); for (const o of G.obstacles.get(conn.net) || []) if (o.thru) holes.add(Math.round((o.thru[1] - G.oy) / G.g) * G.W + Math.round((o.thru[0] - G.ox) / G.g));
     this.lift(net, 1, conn.cls);
     for (let i = 0; i + 1 < nodes.length; i++) {
       const a = nodes[i], b = nodes[i + 1];
-      if (a.l !== b.l) { const gi = a.iy * G.W + a.ix; if (!G.thru[gi] && !viaCells.includes(gi)) { viaCells.push(gi); const p = this.mm(a); shapes.push({ net: conn.net, layers: all, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr }); } }
+      if (a.l !== b.l) { const gi = a.iy * G.W + a.ix; if ((!G.thru[gi] || !holes.has(gi)) && !viaCells.includes(gi)) { viaCells.push(gi); const p = this.mm(a); shapes.push({ net: conn.net, layers: all, shape: { t: "circle", x: p[0], y: p[1], r: conn.cls.viaD / 2 }, clr }); } }
       else shapes.push({ net: conn.net, layers: [a.l], shape: { t: "seg", a: this.mm(a), b: this.mm(b), r: w / 2 }, clr });
     }
     this.lift(net, -1, conn.cls);
@@ -1097,6 +1100,7 @@ export class Router {
     const { P, doc, G } = this; const items: RouteItem[] = []; let segments = 0, vias = 0, length = 0, zoneEnds = 0; const failed: RouteResult["failed"] = [];
     const span = [G.layers[0], G.layers[G.layers.length - 1]];
     const connections: ConnReport[] = []; const end = (p: Pt) => { const pad = this.padNames.get(p[0].toFixed(3) + "," + p[1].toFixed(3)); return pad ? { x: r6(p[0]), y: r6(p[1]), pad } : { x: r6(p[0]), y: r6(p[1]) }; };
+    const viaSeen = new Set<string>();   // two connections of a net may each hold a via at the same spot: one is laid
     for (const c of this.conns) {
       if (c.moot && !c.nodes) continue;
       const ea = c.ends ? c.ends[0] : c.a, eb = c.ends ? c.ends[1] : c.b; const rep: ConnReport = { net: c.net, from: end(ea.p), to: end(eb.p), routed: !!c.nodes, length: 0, vias: 0, bends: 0, layers: [], detourRatio: 0 }; connections.push(rep);
@@ -1106,7 +1110,7 @@ export class Router {
       const net = this.netOf(c.net).obj; if (c.zoneEnd) zoneEnds++;
       const seg = (a: Pt, b: Pt, l: number, w: number) => { if (Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6) return; items.push({ kind: "segment", node: P.segmentNode(doc, a, b, w, G.layers[l], net), net, netName: c.net, conn: c.id }); segments++; length += Math.hypot(a[0] - b[0], a[1] - b[1]); };
       for (const o of c.shapes) { const sh = o.shape as any; if (sh.t === "seg") seg(sh.a, sh.b, o.layers[0], +(sh.r * 2).toFixed(4)); }   // stubs and runs, each at its own width
-      for (const gi of c.viaCells) { const p = this.mm({ ix: gi % G.W, iy: (gi / G.W) | 0 }); items.push({ kind: "via", node: P.viaNode(doc, p[0], p[1], c.cls.viaD, c.cls.viaDrill, net, span), net, netName: c.net, conn: c.id }); vias++; }
+      for (const gi of c.viaCells) { const vk = c.net + "\n" + gi; if (viaSeen.has(vk)) continue; viaSeen.add(vk); const p = this.mm({ ix: gi % G.W, iy: (gi / G.W) | 0 }); items.push({ kind: "via", node: P.viaNode(doc, p[0], p[1], c.cls.viaD, c.cls.viaDrill, net, span), net, netName: c.net, conn: c.id }); vias++; }
     }
     const total = this.conns.filter((c) => c.nodes || !c.moot).length;
     return { items, total, routed: total - failed.length, failed, segments, vias, length, ms, passes, zoneEnds, zoneCovered: this.zoneCovered,

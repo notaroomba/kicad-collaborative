@@ -185,6 +185,65 @@ print([p for p in board.refs() if p == "U7"], len(board.pads("U7")))
   check('a generated part is placed on the sheet and reaches the board with its footprint', !r.isError && r.data.ok && /U7 \['EN', 'GND', 'NC', 'VIN', 'VOUT'\]/.test(r.data.output) && /\['U7'\] 5/.test(r.data.output), r.text);
 }
 
+// ------------------------------------------------------------------ a sheet in titled sections, checked for overlaps
+
+{
+  const N2 = 'harness-e2e-sections';
+  const made2 = await call('create_project', { name: N2 });
+  check('a second project', !made2.isError, made2.text);
+  const r = await call('run_python', { project: N2, live: false, title: 'Draw the sheet in sections', code: `
+R, C = "Resistor_SMD:R_0402_1005Metric", "Capacitor_SMD:C_0402_1005Metric"
+parts = {"U1": {"lib": "Timer:NE555D", "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"},
+         "R1": {"lib": "Device:R", "value": "10k", "footprint": R}, "R2": {"lib": "Device:R", "value": "47k", "footprint": R},
+         "C1": {"lib": "Device:C", "value": "10uF", "footprint": C}, "C2": {"lib": "Device:C", "value": "100nF", "footprint": C},
+         "D1": {"lib": "Device:LED", "footprint": "LED_SMD:LED_0603_1608Metric"}, "R3": {"lib": "Device:R", "value": "330", "footprint": R},
+         "J1": {"lib": "Connector_Generic:Conn_01x02", "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"}}
+nets = {"+5V": ["U1.VCC", "U1.RST", "R1.1", "C2.1", "J1.1"], "GND": ["U1.GND", "C1.2", "C2.2", "R3.2", "J1.2"],
+        "DISCH": ["U1.DISCH", "R1.2", "R2.1"], "THRES": ["U1.THRES", "U1.TRIG", "R2.2", "C1.1"], "OUT": ["U1.OUT", "D1.2"], "LED_K": ["D1.1", "R3.1"]}
+groups = {"Power input": ["J1", "C2"], "Timer": ["U1", "R1", "R2", "C1"], "Indicator": ["D1", "R3"]}
+sch = project.schematic()
+built = sch.build(parts, nets, groups, no_connect=["U1.CONT"], notes={"Timer": "C1 is 10 uF, not the usual 1 uF, for a 1 Hz blink."})
+sch.note("R3 is 330 ohm for 10 mA: the LED is read in daylight.", near="R3")
+result = {"built": built, "overlaps": sch.overlaps(), "sections": sch.sections(), "erc": sch.check()["errors"], "open": sch.unconnected()}
+` });
+  const res = (r.data && r.data.result) || {};
+  check('build draws one titled frame per group', !r.isError && r.data.ok === true && res.built && res.built.sections === 3 && res.sections.map((x) => x.title).sort().join() === 'Indicator,Power input,Timer', r.text.slice(0, 600));
+  check('each frame holds its own parts', (res.sections || []).find((x) => x.title === 'Timer')?.parts.join() === 'C1,R1,R2,U1', JSON.stringify(res.sections));
+  check('nothing is drawn over anything else, and the sheet is electrically complete', res.built && res.built.overlaps === 0 && res.overlaps.length === 0 && res.erc === 0 && res.open.length === 0, JSON.stringify([res.overlaps, res.erc, res.open]));
+  const lay = await call('check_layout', { project: N2, document: 'schematic' });
+  check('check_layout: a clean sheet inside the drawing area', !lay.isError && lay.data.count === 0 && lay.data.sections.length === 3 && lay.data.extent[0] >= lay.data.drawing_area[0] && lay.data.extent[3] <= lay.data.drawing_area[3], lay.text.slice(0, 400));
+  const text = await call('read_document', { project: N2, document: 'schematic', max_chars: 400000 });
+  check('the notes are on the sheet in words', /Note: C1 is 10 uF/.test(text.data.text || '') && /R3 is 330 ohm/.test(text.data.text || ''), (text.text || '').slice(0, 200));
+  const bad = await call('run_python', { project: N2, live: false, code: `
+sch = project.schematic()
+x, y = [(p["x"], p["y"]) for p in sch.parts() if p["ref"] == "U1"][0]
+sch.text("In the way", (x - 4, y))
+sch.flush()
+result = sch.overlaps()
+` });
+  check('text drawn across a part is found', !bad.isError && bad.data.ok && (bad.data.result || []).some((o) => /^text over a symbol/.test(o) && /In the way/.test(o)), bad.text.slice(0, 400));
+  const lay2 = await call('check_layout', { project: N2, document: 'schematic' });
+  check('check_layout counts it by kind', !lay2.isError && lay2.data.count >= 1 && lay2.data.by_kind['text over a symbol'] >= 1, lay2.text.slice(0, 300));
+  await call('undo_changes', { project: N2 });
+  const lay3 = await call('check_layout', { project: N2, document: 'schematic' });
+  check('undo takes the text back', !lay3.isError && lay3.data.count === 0, lay3.text.slice(0, 300));
+
+  const big = await call('run_python', { project: N2, live: false, timeout_s: 120, code: `
+board = project.board()
+board.sync()
+board.outline(100, 100, 130, 125)
+board.layers(4, planes=["In1.Cu"])
+board.zone("GND", layer="In1.Cu")
+board.autoplace(outline=(100, 100, 130, 125))
+routed = board.route(order=["THRES"], widths={"+5V": 0.4}, time_s=20)
+again = board.route(nets=["THRES"])
+result = {"layers": board.info()["copper_layers"], "left": routed["left"], "again": again["routed"], "open": board.check(kind="unconnected_items")["first"], "errors": board.check()["errors"]}
+` });
+  const b = (big.data && big.data.result) || {};
+  check('a four layer board with a ground plane routes clean, by the schematic\'s net names', !big.isError && big.data.ok === true && (b.layers || []).join() === 'F.Cu,In1.Cu,In2.Cu,B.Cu' && Object.keys(b.left || { x: 1 }).length === 0 && b.open.length === 0 && b.errors === 0, big.text.slice(0, 700));
+  check('routing a net that is already routed is a result, not an error', b.again === 0, JSON.stringify(b));
+}
+
 schWatch.ws.close(); pcbWatch.ws.close();
 await db.end();
 console.log(`\n${pass} passed, ${fail} failed`);

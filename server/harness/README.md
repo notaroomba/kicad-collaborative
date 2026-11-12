@@ -56,9 +56,21 @@ Schematic (`project.schematic()`): `place`, `attach`, `decouple`, `connect`, `ne
 `no_connect`, `move`, `rotate`, `remove`, `set`, `text`, `build` (a whole sheet from a netlist), and to
 read: `refs`, `parts`, `pins`, `pin`, `nets`, `net_of`, `unconnected`, `check`.
 
+How the sheet reads: `build(groups={"Title": [refs]}, notes={"Title": "why ..."})` draws each group as a
+framed section with its title and notes; `section(title, refs, notes)`, `frame(box, title, notes)` and
+`note(text, near=ref)` do the same on a sheet that exists. `overlaps()` lists everything that is drawn on top
+of something else or off the page (an empty list is a clean sheet), `tidy()` runs KiCad's field autoplace
+and reports what is left, `autoplace_fields(refs)`, `page("A3")`, `layout()`, `sections()` and `svg(path)` (a picture, on
+local files) are the tools around them. `build` draws every block off the page, measures it as drawn and
+packs the blocks onto the smallest page they fit on, so its result has `overlaps: 0`.
+
 Board (`project.board()`): `sync`, `outline`, `rules`, `zone`, `autoplace`, `place`, `move`, `rotate`,
-`flip`, `group`, `route`, `fill`, `connect`, `track`, `via`, and to read: `refs`, `parts`, `pads`, `pad`,
-`nets`, `unrouted`, `info`, `check`.
+`flip`, `group`, `layers`, `route`, `fill`, `fix_thermals`, `pad_connection`, `connect`, `track`, `via`,
+and to read: `refs`, `parts`, `pads`, `pad`, `nets`, `unrouted`, `info`, `check`. `layers(4, planes=["In1.Cu"])`
+makes a four layer board. `route()` reports `left` (connections still open by net) instead of failing on a
+blocked net, lays tracks where the filled pour leaves a pad open, and joins a pad with a starved thermal
+relief solidly. `check(kind="clearance")` lists one kind of violation. Net names are the schematic's:
+`"SW"` finds the board's `"/SW"`.
 
 Pins are `"U1.3"` or `"U1.VDD"`. Positions are millimetres and are optional almost everywhere: parts
 go to free space, wires are routed between the pins you name. Results are short summaries (references,

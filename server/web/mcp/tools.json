@@ -236,6 +236,26 @@
     }
   },
   {
+    "name": "check_layout",
+    "title": "Check sheet layout",
+    "write": false,
+    "description": "How a schematic sheet reads: every place where something is drawn on top of something else (text over text, text over a symbol, a wire through text or through a symbol, symbols overlapping, a frame cutting through anything), and anything outside the page border or over the title block. Each finding names the two things and where. Run it after drawing or changing a sheet and fix what it finds: autoplace_fields moves references and values, move and move_region move parts and whole blocks, set_page makes the page larger. It also returns the box around everything on the sheet (extent), the usable drawing area and the title block. Optional: within [x0, y0, x1, y1] measures only what lies inside that box; of [refs] measures those parts with the stubs, labels and power symbols on their pins (what a frame around them must contain); wrap [{text, size, width}] breaks notes into lines that fit a width.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string", "description": "Project id or exact name."},
+        "document": {"type": "string", "description": "Which sheet: its path or file name."},
+        "within": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "Measure only the items wholly inside this box [x0, y0, x1, y1] in mm."},
+        "of": {"type": "array", "items": {"type": "string"}, "description": "Measure these parts (references) with what hangs on their pins."},
+        "wrap": {"type": "array", "items": {"type": "object", "properties": {"text": {"type": "string"}, "size": {"type": "number"}, "width": {"type": "number"}}, "required": ["text", "width"], "additionalProperties": false}, "description": "Notes to break into lines no wider than width mm at this text size."},
+        "free": {"type": "object", "properties": {"near": {"type": "string"}, "w": {"type": "number"}, "h": {"type": "number"}}, "required": ["w", "h"], "additionalProperties": false, "description": "Find free room for a box of w by h mm, beside the part named in near when given; the answer's free is its top left corner."},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "How many findings to list (40 by default); the counts are always complete."}
+      },
+      "required": ["project", "document"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "get_geometry",
     "title": "Get geometry",
     "write": false,

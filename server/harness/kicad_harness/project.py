@@ -15,6 +15,12 @@ from .transport import HarnessError, Transport
 
 GRID = 1.27
 STUB = 2.54
+_PAD = 3.81      # between a frame and what it holds
+_HEAD = 6.35     # the strip a frame's heading takes
+_TITLE = 2.54    # heading text height
+_LINE = 2.286    # pitch of note lines
+_PAPERS = [("A4", 297.0, 210.0), ("A3", 420.0, 297.0), ("A2", 594.0, 420.0), ("A1", 841.0, 594.0), ("A0", 1189.0, 841.0)]
+_STAGE = (1524.0, 127.0)   # blocks are drawn off the page first, measured, then moved into place
 _DIR = {"left": (-1, 0), "right": (1, 0), "top": (0, -1), "bottom": (0, 1)}
 _LABEL_ROT = {"left": 180, "right": 0, "top": 90, "bottom": 270}
 _GND_ROT = {"bottom": 0, "right": 90, "top": 180, "left": 270}
@@ -187,16 +193,21 @@ class _Doc:
             self._geom = self._call("get_geometry")
         return self._geom
 
-    def check(self, limit: int = 6) -> dict:
-        """Run the rules check (ERC on a sheet, DRC on the board): counts by kind and the first few violations."""
+    def check(self, limit: int = 6, kind: str | None = None, warnings: bool = False) -> dict:
+        """Run the rules check (ERC on a sheet, DRC on the board): counts by kind and the first few violations, errors first.
+        `kind` lists only that kind ("unconnected_items", "clearance"); `warnings=True` lists warnings after the errors."""
         r = self._call("run_checks")
-        kinds: dict = {}
+        kinds, wkinds = {}, {}
         for v in r.get("violations", []):
-            if v["severity"] == "error":
-                kinds[v["code"]] = kinds.get(v["code"], 0) + 1
-        first = [f"{v['severity']} {v['code']}: {v['message']}" + (f" [{', '.join(v['refs'])}]" if v.get("refs") else "") + f" at ({v['x']}, {v['y']})"
-                 for v in r.get("violations", []) if v["severity"] == "error"][:limit]
-        return {"check": r.get("check"), "errors": r.get("errors", 0), "warnings": r.get("warnings", 0), "by_kind": kinds, "first": first}
+            d = kinds if v["severity"] == "error" else wkinds
+            d[v["code"]] = d.get(v["code"], 0) + 1
+        rows = [v for v in r.get("violations", []) if (v["code"] == kind if kind else v["severity"] == "error" or warnings)]
+        rows.sort(key=lambda v: v["severity"] != "error")
+        first = [f"{v['severity']} {v['code']}: {v['message']}" + (f" [{', '.join(v['refs'])}]" if v.get("refs") else "") + f" at ({v['x']}, {v['y']})" for v in rows[:limit]]
+        out = {"check": r.get("check"), "errors": r.get("errors", 0), "warnings": r.get("warnings", 0), "by_kind": kinds, "first": first}
+        if warnings or kind:
+            out["warnings_by_kind"] = wkinds
+        return out
 
     def remove(self, *refs: str) -> None:
         for ref in refs:
@@ -208,8 +219,24 @@ class _Doc:
             self._edit({"op": "set_field", "ref": ref, "field": {"value": "Value", "footprint": "Footprint", "datasheet": "Datasheet", "reference": "Reference"}.get(name, name), "value": str(value)}, "item:" + ref)
             self.flush()   # one item may take several fields: each is its own batch
 
-    def text(self, text: str, at) -> None:
-        self._edit({"op": "add_text", "text": text, "x": at[0], "y": at[1]})
+    def text(self, text: str, at, size: float | None = None, bold: bool = False, italic: bool = False) -> None:
+        """Free text; `at` is its bottom left.  On a sheet `size` is the height in mm (1.27 by default) and `bold` makes a heading."""
+        e = {"op": "add_text", "text": text, "x": _r(at[0]), "y": _r(at[1])}
+        if size:
+            e["size"] = size
+        if bold:
+            e["bold"] = True
+        if italic:
+            e["italic"] = True
+        self._edit(e)
+
+    def svg(self, path: str | None = None, box=None) -> str:
+        """The sheet or the board as an SVG drawing, the way the editor shows it (local projects).  Written to `path` when given."""
+        r = self._call("render", **({"box": list(box)} if box else {}))
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(r["svg"])
+        return r["svg"]
 
     def add_item(self, sexpr: str) -> None:
         """Escape hatch for an item the other calls do not cover: one complete KiCad s-expression."""
@@ -621,60 +648,336 @@ class Schematic(_Doc):
         self.flush()
         return out
 
+    # ---- how the sheet reads: overlaps, frames, notes
+    def layout(self, within=None, of=None, wrap=None, limit: int = 40) -> dict:
+        """The sheet's layout check: overlaps (what, a, b, x, y), counts by kind, the extent of what is drawn
+        (or of the items inside `within`, or of the parts `of` with what hangs on their pins), the usable drawing
+        area and the title block.  `wrap` breaks notes into lines: [{"text", "size", "width"}]."""
+        args: dict = {"limit": limit}
+        if within:
+            args["within"] = [_r(v) for v in within]
+        if of:
+            args["of"] = list(of)
+        if wrap:
+            args["wrap"] = wrap
+        return self._call("check_layout", **args)
+
+    def sections(self) -> list:
+        """The framed sections on the sheet: [{"title", "box", "parts"}], top to bottom."""
+        self.flush()
+        return self.layout(limit=1).get("sections", [])
+
+    def overlaps(self, limit: int = 40) -> list:
+        """Everything drawn on top of something else, or off the page, as short lines.  An empty list is a clean sheet."""
+        r = self.layout(limit=limit)
+        out = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]
+        if r.get("count", 0) > len(out):
+            out.append(f"... and {r['count'] - len(out)} more")
+        return out
+
+    def autoplace_fields(self, *refs: str) -> None:
+        """KiCad's Autoplace Fields for these parts (all parts without arguments): reference and value beside the body, clear of what is around."""
+        self.flush()
+        self._edit({"op": "autoplace_fields", **({"refs": list(refs)} if refs else {})})
+        self.flush()
+        self._edit({"op": "clear_fields", **({"refs": list(refs)} if refs else {})})   # a value that landed on a pin's label
+        self.flush()
+
+    def tidy(self) -> dict:
+        """Put every part's fields where nothing is in the way, then report what still overlaps: {"overlaps": n, "by_kind": {...}, "first": [...]}."""
+        self.autoplace_fields()
+        r = self.layout(limit=12)
+        return {"overlaps": r.get("count", 0), "by_kind": r.get("by_kind", {}), "first": [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]}
+
+    def page(self, paper: str) -> None:
+        """Set the page size: "A4", "A3", "A2", "A1", "A0" (or the US sizes)."""
+        self._edit({"op": "set_page", "paper": paper})
+        self.flush()
+
+    def frame(self, box, title: str | None = None, notes=None, style: str = "dash") -> list:
+        """Draw a frame with a heading inside its top left corner and notes along its bottom.  `box` is [x0, y0, x1, y1]
+        around the content; the frame is drawn with room for the heading above and the notes below.  Returns the frame's box."""
+        lines = self._note_lines(notes, max(box[2] - box[0], 60.0) - 2 * _PAD)
+        tw = self.layout(wrap=[{"text": title, "size": _TITLE, "width": 1e6}])["wrapped"][0]["width"] if title else 0
+        nw = max([w for _, w in lines] + [0])
+        x0, y0 = box[0] - _PAD, box[1] - _PAD - (_HEAD if title else 0)
+        x1 = max(box[2] + _PAD, x0 + tw * 1.08 + 2 * _PAD, x0 + nw + 2 * _PAD)
+        y1 = box[3] + _PAD + (len(lines) * _LINE + _PAD if lines else 0)
+        self._edit({"op": "add_rectangle", "x0": _r(x0), "y0": _r(y0), "x1": _r(x1), "y1": _r(y1), "style": style})
+        if title:
+            self.text(title, (x0 + _PAD / 2 + 0.6, y0 + _HEAD - 1.4), size=_TITLE, bold=True)
+        y = box[3] + _PAD + _LINE
+        for line, _ in lines:
+            self.text(line, (x0 + _PAD, y), italic=True)
+            y += _LINE
+        self.flush()
+        return [_r(x0), _r(y0), _r(x1), _r(y1)]
+
+    def _note_lines(self, notes, width: float) -> list:
+        notes = [notes] if isinstance(notes, str) else list(notes or [])
+        if not notes:
+            return []
+        got = self.layout(wrap=[{"text": ("" if n.lower().startswith("note") else "Note: ") + n, "size": 1.27, "width": width} for n in notes])["wrapped"]
+        out = []
+        for w in got:
+            for i, line in enumerate(w["lines"]):
+                out.append((line if i == 0 else "  " + line, w["width"] + (1.5 if i else 0)))
+        return out
+
+    def section(self, title: str, refs: list, notes=None) -> list:
+        """Frame the parts of one functional block, with a heading and optional notes that say why something is unusual.
+        The frame goes around the parts and everything on their pins (stubs, labels, power symbols).  Returns the frame's box;
+        run overlaps() afterwards, since a frame drawn around parts that sit among others can cut through a neighbour."""
+        self.flush()
+        ext = self.layout(of=refs).get("extent")
+        if not ext:
+            raise HarnessError("None of those parts is on the sheet: " + ", ".join(refs))
+        return self.frame(ext, title, notes)
+
+    def note(self, text: str, near: str | None = None, at=None, width: float = 60.0) -> list:
+        """A note on the sheet, for a design choice somebody reading it would not expect.  With `near` (a reference) it is put
+        in the closest free space beside that part; with `at` exactly there (top left).  Returns where it went."""
+        self.flush()
+        lines = self._note_lines(text, width)
+        w, h = max(x for _, x in lines) + 1.0, len(lines) * _LINE + 0.6
+        if at is None:
+            spot = self._call("check_layout", limit=1, free={"near": near, "w": _r(w), "h": _r(h)} if near else {"w": _r(w), "h": _r(h)}).get("free")
+            if not spot:
+                raise HarnessError("There is no free space for that note on the page; make the page larger with page(\"A3\") or give at=(x, y).")
+            at = (spot["x"], spot["y"])
+        y = at[1] + _LINE - 0.4
+        for line, _ in lines:
+            self.text(line, (at[0] + 0.5, y), italic=True)
+            y += _LINE
+        self.flush()
+        return [_r(at[0]), _r(at[1])]
+
+    # ---- room: how much space a part takes once its pins carry stubs, labels and power symbols
+    def _width(self, *names) -> float:
+        """The drawn width of these texts at the default size (the widest of them)."""
+        tws = self.__dict__.setdefault("_tws", {})
+        missing = [n for n in dict.fromkeys(names) if n and n not in tws]
+        if missing:
+            got = self.layout(wrap=[{"text": n, "size": 1.27, "width": 1e6} for n in missing], limit=1)["wrapped"]
+            for n, w in zip(missing, got):
+                tws[n] = w["width"]
+        return max([tws[n] for n in names if n] + [0.0])
+
+    def _lib_pins(self, lib, rotation=0):
+        """A library part's body box and pins at this rotation, relative to the symbol's position: (box, [(number, name, x, y, side)])."""
+        try:
+            unit = self.lib(lib)["units"][0] if lib is not None and not isinstance(lib, dict) else None
+        except HarnessError:
+            unit = None
+        b0 = (unit or {}).get("body_box") or [-5.08, -5.08, 5.08, 5.08]
+        cs = [_rot(x, y, rotation) for x in (b0[0], b0[2]) for y in (b0[1], b0[3])]
+        box = [min(c[0] for c in cs), min(c[1] for c in cs), max(c[0] for c in cs), max(c[1] for c in cs)]
+        pins = []
+        for q in (unit or {}).get("pins", []):
+            x, y = _rot(q["dx"], q["dy"], rotation)
+            d = {"left": x - box[0], "right": box[2] - x, "top": y - box[1], "bottom": box[3] - y}
+            pins.append((q["number"], q.get("name", ""), x, y, min(d, key=d.get)))
+        return box, pins
+
+    def _room(self, ref, spec, intent) -> list:
+        """The box a part will take, relative to its position: body, stubs, labels, power symbols and its own fields."""
+        lib = spec.get("lib")
+        box, pins = self._lib_pins(lib, spec.get("rotation", 0))
+        out = [box[0] - 1.27, box[1] - 1.27, box[2] + 1.27, box[3] + 1.27]
+        sides = set()
+        for number, _, x, y, side in pins:
+            name = intent.get((ref, number))
+            if not name:
+                continue
+            sides.add(side)
+            w = self._width(name)
+            if self._is_power(name):
+                along, across = (STUB + 5.5 + w + 1.5, 2.3) if side in ("left", "right") else (STUB + 7.0, max(2.8, w / 2 + 0.6))
+            else:
+                along, across = STUB + w + 2.0, 2.0
+            dx, dy = _DIR[side]
+            ex, ey = x + dx * along, y + dy * along
+            out = [min(out[0], ex, x - (across if dy else 0)), min(out[1], ey, y - (across if dx else 0)),
+                   max(out[2], ex, x + (across if dy else 0)), max(out[3], ey, y + (across if dx else 0))]
+        fw = self._width(ref, str(spec.get("value") or "")) + 2.0
+        if "right" not in sides:
+            out[2] = max(out[2], box[2] + fw)
+        elif "top" not in sides:
+            out[1] = min(out[1], box[1] - 5.6)
+            out[0], out[2] = min(out[0], -fw / 2), max(out[2], fw / 2)
+        elif "bottom" not in sides:
+            out[3] = max(out[3], box[3] + 5.6)
+            out[0], out[2] = min(out[0], -fw / 2), max(out[2], fw / 2)
+        else:
+            out[1], out[3] = out[1] - 5.6, out[3] + 5.6
+        return out
+
+    def _intent(self, parts, nets) -> dict:
+        """(ref, pin number) -> net name, from a netlist written by pin number or pin name."""
+        out = {}
+        cache = {}
+        for name, specs in nets.items():
+            for spec in specs:
+                ref, _, which = str(spec).partition(".")
+                p = parts.get(ref)
+                if p is None:
+                    continue
+                lib = p.get("lib") if isinstance(p, dict) else p
+                if ref not in cache:
+                    try:
+                        cache[ref] = self._lib_pins(lib)[1] if not isinstance(lib, dict) else []
+                    except HarnessError:
+                        cache[ref] = []
+                bare = lambda n: re.sub(r"~\{(.*?)\}", r"\1", n).lower()
+                pins = cache[ref]
+                hit = [q for q in pins if q[0] == which] or [q for q in pins if q[1].lower() == which.lower()] or [q for q in pins if bare(q[1]) == bare(which)]
+                for q in hit or [(which,)]:
+                    out[(ref, q[0])] = name
+        return out
+
+    def _power_pins(self, ref: str, intent: dict) -> None:
+        """Power symbols for the supply pins of a part with many pins, drawn the way a person would: pins of one supply
+        on the same side share a rail and one symbol, and a symbol beside labelled pins stands clear of their text."""
+        self.flush()
+        sides: dict = {}
+        for p in self.pins(ref):
+            if not p["hidden"]:
+                sides.setdefault(p["side"], []).append(p)
+        want = lambda p: intent.get((ref, p["number"])) or ""
+        todo = lambda p: self._is_power(want(p)) and p["net"] != want(p)
+        for side, ps in sides.items():
+            d = _DIR[side]
+            horiz = side in ("top", "bottom")
+            pos = (lambda p: p["x"]) if horiz else (lambda p: p["y"])
+            ps.sort(key=pos)
+            power = [p for p in ps if todo(p)]
+            if not power:
+                continue
+            rot = lambda name: (_GND_ROT if _GROUND.search(name) else _SUPPLY_ROT)[side]
+            if horiz:
+                lo, hi = pos(power[0]), pos(power[-1])
+                if len(power) < 2 or any(want(q) and not self._is_power(want(q)) and lo - 1e-6 <= pos(q) <= hi + 1e-6 for q in ps):
+                    continue   # one pin, or a labelled pin in between: each pin gets its own symbol
+                order = list(dict.fromkeys(want(p) for p in power))
+                for k, name in enumerate(order):
+                    mine = [p for p in power if want(p) == name]
+                    rail = _r(mine[0]["y"] + d[1] * (STUB + k * STUB))
+                    sx = _r(lo - 7.62 * (k // 2 + 1)) if k % 2 == 0 else _r(hi + 7.62 * (k // 2 + 1))
+                    xs = sorted({p["x"] for p in mine} | {sx})
+                    for p in mine:
+                        self._edit({"op": "add_wire", "points": [[p["x"], p["y"]], [p["x"], rail]]})
+                    self._edit({"op": "add_wire", "points": [[x, rail] for x in xs]})
+                    for x in xs[1:-1]:
+                        self._edit({"op": "add_junction", "x": x, "y": rail})
+                    self._edit({"op": "add_symbol", "lib_id": "power:" + name, "x": sx, "y": rail, "rotation": rot(name)})
+                self.flush()
+                continue
+            # left and right: runs of neighbouring pins on one supply share a rail; the stub is long enough to clear the neighbours' text
+            runs, reach = [], None
+            for p in power:
+                if runs and want(runs[-1][-1]) == want(p) and abs(pos(p) - pos(runs[-1][-1])) <= STUB + 1e-3:
+                    runs[-1].append(p)
+                else:
+                    runs.append([p])
+            last = None
+            for run in runs:
+                name = want(run[0])
+                need = STUB
+                for q in ps:
+                    near = min(abs(pos(q) - pos(run[0])), abs(pos(q) - pos(run[-1])))
+                    if q in run or near > STUB + 1e-3:
+                        continue
+                    if want(q) and not self._is_power(want(q)):
+                        need = max(need, STUB + self._width(want(q)) + 2.2)
+                    elif last is not None and q in last[0]:
+                        need = max(need, last[1] + 1.27)
+                length = math.ceil(need / STUB - 1e-6) * STUB
+                ex = _r(run[0]["x"] + d[0] * length)
+                for p in run:
+                    self._edit({"op": "add_wire", "points": [[p["x"], p["y"]], [ex, p["y"]]]})
+                if len(run) > 1:
+                    self._edit({"op": "add_wire", "points": [[ex, p["y"]] for p in run]})
+                    for p in run[1:-1]:
+                        self._edit({"op": "add_junction", "x": ex, "y": p["y"]})
+                at = run[len(run) // 2] if len(run) > 2 else run[0]
+                self._edit({"op": "add_symbol", "lib_id": "power:" + name, "x": ex, "y": at["y"], "rotation": rot(name)})
+                last = (run, length + 5.5 + self._width(name) + 1.0)
+            self.flush()
+
     # ---- a whole sheet from a netlist
-    def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None) -> dict:
+    def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None,
+              notes: dict | None = None, frames: bool = True) -> dict:
         """Draw a schematic from a netlist in one call.
 
         parts: {ref: {"lib": "Device:R", "value": "10k", "footprint": "...", "fields": {...}}} (lib may be a
-        generated part or a vendor part).  nets: {name: ["U1.3", "R1.1", ...]}.  groups: {block: [refs]} keeps the
-        parts of one functional block together.  Every pin gets a power symbol or a net label on a short stub, so
-        the result is correct by construction; ICs sit at the left of their block with their passives beside them.
-        Returns counts and anything that did not connect.
+        generated part or a vendor part).  nets: {name: ["U1.3", "R1.1", ...]}.  groups: {"Block title": [refs]} is
+        the sheet's organisation: each group is drawn as a framed section with its title, ICs at the left and their
+        passives beside them.  notes: {"Block title": "why ..." or [..]} puts notes in that section; write one wherever
+        a choice is not the standard one (an unusual value, a part left out, a pin tied off) so a reader knows why.
+        Every pin gets a power symbol or a net label on a short stub, so the result is correct by construction.
+
+        Blocks are drawn off the page, measured as drawn (fields, labels and all), and then packed onto the page, so
+        nothing overlaps; the page grows (A4, A3, ...) when the design needs it.  Returns counts, anything that did
+        not connect, and "overlaps": what the layout check still finds (0 for a clean sheet).
         """
-        groups = groups or {"main": list(parts)}
+        named = bool(groups)
+        groups = dict(groups or {"main": list(parts)})
         seen = {r for rs in groups.values() for r in rs}
         rest = [r for r in parts if r not in seen]
         if rest:
-            groups = {**groups, "other": rest}
+            groups["Other"] = rest
+        notes = dict(notes or {})
+        for r, spec in parts.items():   # a note given with a part belongs to its block
+            if isinstance(spec, dict) and spec.get("note"):
+                g = next((n for n, rs in groups.items() if r in rs), None)
+                if g:
+                    notes[g] = ([notes[g]] if isinstance(notes.get(g), str) else list(notes.get(g) or [])) + [f"{r}: {spec['note']}"]
         self.flush()
-        g = self.geometry()
-        page = g.get("page") or [297, 210]
-        top = max([p["box"][3] for p in g["parts"] if p.get("box")] + [12.7]) + 12.7
-        x0 = 25.4
-        cx, cy, row_h = x0, top, 0.0
-        placed = []
+        before = self.layout(limit=1)
+        # ---- 1. every block off the page, one under the other: ICs in a column, their passives in rows beside them
+        intent = self._intent(parts, nets)
+        sx, sy = _STAGE
+        bands, placed, bigs, y = [], [], [], sy
         for gname, refs in groups.items():
             big, small = [], []
             for r in refs:
-                spec = parts[r]
-                lib = spec.get("lib") if isinstance(spec, dict) else spec
-                b = self._box(lib if not isinstance(lib, dict) else None)
+                if r not in parts:
+                    raise HarnessError(f"Group {gname} names {r}, which is not in parts.")
+                spec = parts[r] if isinstance(parts[r], dict) else {"lib": parts[r]}
+                lib = spec.get("lib")
                 n = len(self.lib(lib)["units"][0]["pins"]) if not isinstance(lib, dict) else 8
-                (big if n > 3 else small).append((r, spec if isinstance(spec, dict) else {"lib": spec}, lib, b))
-            # block size: ICs in a column, small parts in rows of up to six beside them
-            cell_w, cell_h = 20.32, 30.48
-            bw = max([b[2] - b[0] + 50.8 for _, _, _, b in big] + [0])
-            bh = sum(b[3] - b[1] + 25.4 for _, _, _, b in big)
-            cols = min(6, max(1, len(small)))
-            sw = cols * cell_w if small else 0
-            sh = math.ceil(len(small) / cols) * cell_h if small else 0
-            w, h = bw + sw + 10.16, max(bh, sh) + 10.16
-            if cx > x0 and cx + w > page[0] - 15:
-                cx, cy, row_h = x0, cy + row_h + 7.62, 0.0
-            y = cy + 12.7
-            for r, spec, lib, b in big:
-                at = (_snap(cx + 25.4 - b[0], 2.54), _snap(y - b[1], 2.54))
-                self.place(lib, at=at, ref=r, value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=spec.get("rotation", 0))
-                y += b[3] - b[1] + 25.4
-            for i, (r, spec, lib, b) in enumerate(small):
-                at = (_snap(cx + bw + (i % cols) * cell_w + cell_w / 2, 2.54), _snap(cy + (i // cols) * cell_h + cell_h / 2, 2.54))
-                self.place(lib, at=at, ref=r, value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=spec.get("rotation", 0))
-            if gname not in ("main", "other"):
-                self.text(gname, (cx + 2.54, cy + 2.54))
+                (big if n > 3 else small).append((r, spec, self._room(r, spec, intent)))
+            def put(r, spec, at):
+                self.place(spec.get("lib"), at=at, ref=r, value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=spec.get("rotation", 0))
+            yy, bw = y, 0.0
+            for r, spec, room in big:
+                at = (_snap(sx - room[0], 2.54), _snap(yy - room[1] + 1.27, 2.54))
+                put(r, spec, at)
+                yy = at[1] + room[3] + 5.08
+                bw = max(bw, at[0] + room[2] - sx)
+                bigs.append(r)
+            x0 = sx + (bw + 7.62 if big else 0)
+            total = sum(room[2] - room[0] + 2.54 for _, _, room in small)
+            limit = max(100.0, min(150.0, total / max(1, round(total / 125.0)) + 12.0)) if small else 0
+            cx, cy, row_h = x0, y, 0.0
+            for r, spec, room in small:
+                w, h = room[2] - room[0], room[3] - room[1]
+                if cx > x0 and cx + w - x0 > limit:
+                    cx, cy, row_h = x0, cy + row_h + 3.81, 0.0
+                at = (_snap(cx - room[0] + 1.27, 2.54), _snap(cy - room[1] + 1.27, 2.54))
+                put(r, spec, at)
+                cx = at[0] + room[2] + 1.27
+                row_h = max(row_h, at[1] + room[3] - cy)
+            h = max(yy - y, cy + row_h - y, 25.4)
+            bands.append((gname, [sx - 200.0, y - 45.0, sx + 1500.0, y + h + 45.0]))
             placed += refs
-            cx += w
-            row_h = max(row_h, h)
+            y = _snap(y + h + 127.0, 2.54)
         self.flush()
+        for r in placed:
+            spec = parts[r] if isinstance(parts[r], dict) else {"lib": parts[r]}
+            if isinstance(spec.get("lib"), dict) or len(self.lib(spec.get("lib"))["units"][0]["pins"]) > 2:
+                self._power_pins(r, intent)
+        # ---- 2. connections: a power symbol or a label on every pin
         problems = []
         for name, pins in nets.items():
             for spec in pins:
@@ -688,6 +991,66 @@ class Schematic(_Doc):
             except HarnessError as e:
                 problems.append(str(e))
         self.flush()
+        self._edit({"op": "autoplace_fields", "within": [sx - 200.0, sy - 45.0, sx + 1500.0, y + 45.0]})
+        self.flush()
+        self._edit({"op": "clear_fields", "within": [sx - 200.0, sy - 45.0, sx + 1500.0, y + 45.0]})
+        self.flush()
+        # ---- 3. measure each block as drawn, and what its heading and notes need
+        blocks = []
+        for gname, band in bands:
+            ext = self.layout(within=band, limit=1).get("extent")
+            if not ext:
+                continue
+            title = gname if named or gname == "Other" and len(groups) > 1 else None
+            lines = self._note_lines(notes.get(gname), max(ext[2] - ext[0], 60.0) - _PAD) if frames else []
+            tw = self.layout(wrap=[{"text": title, "size": _TITLE, "width": 1e6}], limit=1)["wrapped"][0]["width"] * 1.08 if title and frames else 0
+            framed = frames and (title or lines)
+            pad = _PAD if framed else 0
+            w = max(ext[2] - ext[0] + 2 * pad, tw + 2 * pad + 1.2, max([lw for _, lw in lines] + [0]) + 2 * pad)
+            h = ext[3] - ext[1] + 2 * pad + (_HEAD if title and frames else 0) + (len(lines) * _LINE + pad if lines else 0)
+            blocks.append({"name": gname, "band": band, "ext": ext, "title": title if frames else None, "lines": lines, "w": w, "h": h, "framed": framed})
+        # ---- 4. the smallest page they fit on, packed in rows in the order given
+        used = before.get("extent")
+        top = (used[3] + 7.62) if used else None
+        papers = [p for p in _PAPERS if p[1] >= (before.get("page") or [297, 210])[0] - 1] or [_PAPERS[-1]]
+        spots, paper = None, papers[-1]
+        orders = [blocks, sorted(blocks, key=lambda b: -b["h"]), sorted(blocks, key=lambda b: -b["w"] * b["h"])]
+        for cand in papers:   # the order given when it fits; tallest or largest first when that saves a page size
+            for order in orders:
+                spots = self._pack(order, cand, top)
+                if spots:
+                    blocks, paper = order, cand
+                    break
+            if spots:
+                break
+        if not spots:
+            spots = self._pack(blocks, paper, top, force=True)
+            problems.append(f"The sheet does not fit on {paper[0]}; split it over several sheets.")
+        if paper[0] != before.get("paper", "A4") and abs(paper[1] - (before.get("page") or [297, 210])[0]) > 1:
+            self.page(paper[0])
+        # ---- 5. move each block into place, then its frame, heading and notes
+        for blk, (bx, by) in zip(blocks, spots):
+            pad = _PAD if blk["framed"] else 0
+            cx, cy = bx + pad, by + pad + (_HEAD if blk["title"] else 0)
+            dx, dy = _snap(cx - blk["ext"][0], 2.54), _snap(cy - blk["ext"][1], 2.54)
+            if dx < cx - blk["ext"][0]:
+                dx += 2.54
+            if dy < cy - blk["ext"][1]:
+                dy += 2.54
+            self._edit({"op": "move_region", "x0": blk["band"][0], "y0": blk["band"][1], "x1": blk["band"][2], "y1": blk["band"][3], "dx": dx, "dy": dy})
+            self.flush()
+            if not blk["framed"]:
+                continue
+            x0, y0 = blk["ext"][0] + dx - pad, blk["ext"][1] + dy - pad - (_HEAD if blk["title"] else 0)
+            self._edit({"op": "add_rectangle", "x0": _r(x0), "y0": _r(y0), "x1": _r(x0 + blk["w"]), "y1": _r(y0 + blk["h"]), "style": "dash"})
+            if blk["title"]:
+                self.text(blk["title"], (x0 + _PAD / 2 + 0.6, y0 + _HEAD - 1.4), size=_TITLE, bold=True)
+            ny = blk["ext"][3] + dy + pad + _LINE
+            for line, _ in blk["lines"]:
+                self.text(line, (x0 + pad, ny), italic=True)
+                ny += _LINE
+            self.flush()
+        # ---- 6. what was asked for against what is there
         got = self.nets()
         wrong = []
         for name, pins in nets.items():
@@ -698,9 +1061,57 @@ class Schematic(_Doc):
             want = {f"{q['ref']}.{q['number']}" for spec in pins for q in self._try_pins(spec)}
             if want - have:
                 wrong.append(f"{name}: missing {', '.join(sorted(want - have))}")
-        out = {"placed": len(placed), "nets": len(nets), "problems": problems + wrong, "unconnected": self.unconnected()[:40]}
-        self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets" + (f", {len(out['problems'])} problems" if out["problems"] else ""))
+        lay = self.layout(limit=8)
+        out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
+               "problems": problems + wrong, "unconnected": self.unconnected()[:40], "overlaps": lay.get("count", 0)}
+        if lay.get("count"):
+            out["overlap_list"] = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in lay.get("overlaps", [])]
+        self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
+                          + (f", {len(out['problems'])} problems" if out["problems"] else "") + (f", {out['overlaps']} overlaps" if out["overlaps"] else ""))
         return out
+
+    def _pack(self, blocks, paper, top=None, force: bool = False):
+        """Where each block goes on a page: in the order given, each as high and then as far left as it fits, clear of
+        the border and the title block (a skyline, so a short block sits under a short neighbour instead of starting a new row)."""
+        _, pw, ph = paper
+        left, right, bottom, gap = 15.24, pw - 15.24, ph - 15.24, 5.08
+        ty0 = max(top or 15.24, 15.24)
+        title = (pw - 125.0, ph - 49.0)
+        sky = [(left, right, ty0)]   # (x0, x1, y): the drawing is free below y between x0 and x1
+        spots = []
+        for b in blocks:
+            w, h = b["w"], b["h"]
+            best = None
+            xs = sorted({seg[0] for seg in sky})
+            for x in xs:
+                if x + w > right + 1e-6:
+                    continue
+                y = max(seg[2] for seg in sky if seg[0] < x + w - 1e-6 and seg[1] > x + 1e-6)
+                if y + h > title[1] and x + w > title[0]:
+                    continue
+                if y + h > bottom + 1e-6:
+                    continue
+                if best is None or (y, x) < (best[1], best[0]):
+                    best = (x, y)
+            if best is None:
+                if not force:
+                    return None
+                best = (left, max(seg[2] for seg in sky))
+            x, y = best
+            spots.append((x, y))
+            nx0, nx1, ny = x, min(right, x + w + gap), y + h + gap
+            new = []
+            for a0, a1, ay in sky:
+                if a1 <= nx0 or a0 >= nx1:
+                    new.append((a0, a1, ay))
+                    continue
+                if a0 < nx0:
+                    new.append((a0, nx0, ay))
+                if a1 > nx1:
+                    new.append((nx1, a1, ay))
+            new.append((nx0, nx1, ny))
+            sky = sorted(new)
+        return spots
 
     def _try_pins(self, spec):
         try:
@@ -801,6 +1212,7 @@ class Board(_Doc):
         if not b:
             raise HarnessError("The board has no outline yet; draw one or give the zone a box.")
         pts = " ".join(f"(xy {_r(x)} {_r(y)})" for x, y in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])))
+        net = self._net(net)
         self.add_item(f'(zone (net "{net}") (layer "{layer}") (uuid "{_uuid.uuid4()}") (hatch edge 0.5) (connect_pads{' yes' if connect == 'solid' else ''} (clearance {clearance})) (min_thickness 0.25) '
                       f'(fill (thermal_gap 0.3) (thermal_bridge_width 0.4)) (polygon (pts {pts})))')
 
@@ -818,11 +1230,48 @@ class Board(_Doc):
             raise
         return next((x["fill_zones"] for x in res.get("details") or [] if "fill_zones" in x), {})
 
-    def check(self, limit: int = 6, refill: bool = True) -> dict:
-        """DRC: counts by kind and the first few violations.  Zones are refilled first, as KiCad's DRC dialog does."""
+    def pad_connection(self, spec: str, connect: str = "solid") -> None:
+        """How a pad joins a zone of its net: "solid", "thermal", "none" or "inherit" (the zone's own setting).  spec is "J2.3"."""
+        ref, _, num = spec.partition(".")
+        self._edit({"op": "pad_connection", "ref": ref, "pad": num, "connect": connect}, "item:" + ref)
+
+    def fix_thermals(self) -> list:
+        """Pads whose thermal relief reaches the pour with too few spokes (DRC: starved_thermal) are joined to it
+        solidly, as a person does in Pad Properties, and the zones are filled again.  Returns the pads changed."""
+        done: list = []
+        for _ in range(3):
+            self.fill()
+            rows = [v for v in self._call("run_checks").get("violations", []) if v["code"] == "starved_thermal"]
+            todo: dict = {}
+            for v in rows:
+                best = None
+                for ref in v.get("refs") or []:
+                    try:
+                        pads = self.pads(ref)
+                    except HarnessError:
+                        continue
+                    for q in pads:
+                        d = (q["x"] - v["x"]) ** 2 + (q["y"] - v["y"]) ** 2
+                        if best is None or d < best[0]:
+                            best = (d, q["ref"], q["number"])
+                if best and f"{best[1]}.{best[2]}" not in done:
+                    todo.setdefault(best[1], []).append(best[2])
+            if not todo:
+                break
+            for ref, nums in todo.items():
+                self._edit({"op": "pad_connection", "ref": ref, "pads": sorted(set(nums)), "connect": "solid"})
+                done += [f"{ref}.{n}" for n in sorted(set(nums))]
+            self.flush()
+        if done:
+            self.fill()
+        return done
+
+    def check(self, limit: int = 6, kind: str | None = None, warnings: bool = False, refill: bool = True) -> dict:
+        """DRC: counts by kind and the first few violations, errors first.  Zones are refilled first, as KiCad's DRC dialog does.
+        `kind` lists only that kind ("unconnected_items", "clearance"); `warnings=True` lists warnings after the errors."""
         if refill:
             self.fill()
-        return super().check(limit)
+        return super().check(limit, kind, warnings)
 
     # ---- placing
     def place(self, ref: str, at, rotation: float | None = None, side: str | None = None) -> None:
@@ -920,6 +1369,14 @@ class Board(_Doc):
             e["drill"] = drill
         self._edit(e)
 
+    def _net(self, name: str) -> str:
+        """A net by the name the schematic gave it: the board calls a sheet's local net "/NAME"."""
+        names = self.__dict__.get("_names")
+        if names is None or name not in names and "/" + name.lstrip("/") not in names:
+            names = self._names = set(self.nets())
+        bare = name.lstrip("/")
+        return name if name in names else "/" + bare if "/" + bare in names else bare if bare in names else name
+
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
               fill: bool = True, max_vias: int | None = None) -> dict:
@@ -931,16 +1388,18 @@ class Board(_Doc):
 
         On a board with copper zones the zones are then filled, what the real fill leaves open is routed again
         (twice at most) and the zones are filled once more, so the result counts a pour the way KiCad does.
-        `left` is the connections still open at the end, by net.
+        `left` is the connections still open at the end, by net.  Net names are the schematic's ("SW" finds "/SW").
         """
+        self.flush()
+        fix = self._net
         e: dict = {"op": "autoroute"}
         if nets:
-            e["nets"] = list(nets)
+            e["nets"] = [fix(n) for n in nets]
         if order:
-            e["order"] = list(order)
-        opts = {k: dict(v) for k, v in (net_options or {}).items()}
+            e["order"] = [fix(n) for n in order]
+        opts = {fix(k): dict(v) for k, v in (net_options or {}).items()}
         for n, w in (widths or {}).items():
-            opts.setdefault(n, {})["width"] = w
+            opts.setdefault(fix(n), {})["width"] = w
         if opts:
             e["net_options"] = opts
         if layers:
@@ -962,6 +1421,11 @@ class Board(_Doc):
                 for _ in range(2):
                     if not f.get("unconnected"):
                         break
+                    # what the real fill left open is laid with tracks: the engine must not count on the pour again
+                    again["zones"] = False
+                    again["nets"] = sorted(f.get("unconnected_by_net") or {}) or again.get("nets")
+                    if not again["nets"]:
+                        again.pop("nets")
                     more = self._autoroute(again)
                     if not more["routed"]:
                         break
@@ -970,8 +1434,14 @@ class Board(_Doc):
                     out["length_mm"] = round((out["length_mm"] or 0) + (more["length_mm"] or 0), 3)
                     out["unrouted"] = more["unrouted"]
                     f = self.fill()
+                solid = self.fix_thermals()
+                if solid:
+                    out["pads_made_solid"] = solid   # a relief the tracks left with too few spokes
+                    f = dict(self.fill(), zones=f.get("zones"))
                 out["zones_filled"] = f.get("zones")
                 out["left"] = f.get("unconnected_by_net") or {}
+        if "left" not in out:
+            out["left"] = self.unrouted()
         self.project.note(f"board: routed {out['routed']} of {out['connections']} connections, {out['vias']} vias, {out['length_mm']} mm" + (f", {len(out['unrouted'])} left" if out["unrouted"] else ""))
         return out
 
@@ -993,6 +1463,17 @@ class Board(_Doc):
         if len(un) > 25:
             out["more_unrouted"] = len(un) - 25
         return out
+
+    def layers(self, count: int, planes: list | None = None) -> None:
+        """Set the number of copper layers (2, 4, 6, ...).  Inner layers are In1.Cu, In2.Cu, ...; `planes` names the ones
+        that are power planes, for example layers(4, planes=["In1.Cu", "In2.Cu"]) and then zone("GND", "In1.Cu")."""
+        e: dict = {"op": "set_layers", "count": count}
+        if planes:
+            e["planes"] = list(planes)
+        self.flush()
+        self._edit(e)
+        self.flush()
+        self._geom = None
 
     def connect(self, *pads, width: float | None = None, time_s: float | None = None) -> dict:
         """Route the net that joins these pads ("U1.3", "R1.1")."""

@@ -14,6 +14,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as design from "../ai/design";
 import { ToolError } from "../ai/design";
+import { checkLayout } from "../ai/layout";
+import { renderPicture } from "../mcp/picture";
 import * as library from "../ai/library";
 import { buildProposal, writeRules, type EditLine } from "../ai/proposals";
 
@@ -26,7 +28,7 @@ export interface Fetched { ok: boolean; status: number; body: string }
 /** Where site-relative requests of the tool modules go (KiCad's libraries, vendor parts, the datasheet reader). */
 export type Backend = (url: string, init?: { method?: string; body?: string }) => Promise<Fetched>;
 
-interface Held { docId: string; path: string; docType: string; text: string; kdoc: any; changes: Map<string, any>; basis: Record<string, string>; lines: EditLine[]; dirty: boolean }
+interface Held { docId: string; path: string; docType: string; text: string; kdoc: any; changes: Map<string, any>; basis: Record<string, string>; lines: EditLine[]; dirty: boolean; paper?: string; layers?: string }
 
 const HEADER = ["version", "generator", "generator_version", "general", "paper", "layers", "setup", "uuid", "title_block", "embedded_fonts"];
 const typeOf = (path: string) => (/\.kicad_pcb$/i.test(path) ? "kicad_pcb" : /\.kicad_sch$/i.test(path) ? "kicad_sch" : /\.kicad_pro$/i.test(path) ? "kicad_pro" : "");
@@ -105,7 +107,7 @@ export class Workspace {
   private textOf(h: Held): string {
     if (!h.kdoc || !h.dirty) return h.text;
     const k = K(); const doc = h.kdoc; const base = k.parse(h.text); const out: any[] = [base[0]];
-    for (const n of base.slice(1)) if (Array.isArray(n) && HEADER.includes(n[0])) out.push(n);
+    for (const n of base.slice(1)) if (Array.isArray(n) && HEADER.includes(n[0])) out.push(n[0] === "paper" && h.paper ? k.parse(h.paper) : n[0] === "layers" && h.layers ? k.parse(h.layers) : n);
     if (doc.type === "sch") out.push(["lib_symbols", ...doc.lib.values()]);
     else for (const n of base.slice(1)) if (Array.isArray(n) && n[0] === "net") out.push(n);
     for (const it of doc.items.values()) out.push(it.node);
@@ -118,6 +120,8 @@ export class Workspace {
     const prop = await buildProposal({ title: args.title, rationale: args.rationale, edits: args.edits });
     for (const [id, was] of Object.entries(prop.basis)) if (!(id in h.basis) && !(h.changes.get(id)?.kind === "ADDED")) h.basis[id] = was;
     for (const c of prop.changes) {
+      if (c.typeName === "BOARD_SETUP") { k.boardSetup.applyBoardSetup(doc, c); const lp = (c.properties || []).find((q: any) => q.name === "layers"); if (lp && lp.after) h.layers = lp.after.v; h.dirty = true; continue; }   // layer stack: kept for the file's header
+      if (c.docProps) { k.applyDocProps(doc, c.docProps); h.paper = c.docProps.paper; h.dirty = true; continue; }   // page size: kept for the file's header
       let ok = false; try { ok = k.applyChange(doc, c, ed.IU); } catch (e) { console.warn("harness: change not applied", e); }
       if (!ok && c.kind !== "REMOVED") throw new ToolError(`An edit could not be applied to ${h.path}; nothing after it was applied.`);
       const prev = h.changes.get(c.id);
@@ -151,6 +155,8 @@ export class Workspace {
       case "get_component": return on(() => design.getComponent(rest()));
       case "list_nets": return on(() => design.listNets(rest()));
       case "get_geometry": return on(() => design.geometry(rest()));
+      case "check_layout": return on(() => checkLayout(rest()));
+      case "render": { const h = this.find(args.document); const ed = this.open(h); return { document: h.path, svg: renderPicture(ed.kdoc, args.box ? { bbox: args.box, frame: false } : {}) }; }
       case "run_checks": return on(() => design.runChecks(rest()));
       case "get_board_info": { const b = this.docs.find((d) => d.docType === "kicad_pcb"); if (!b) throw new ToolError("This project has no board."); this.open(b); return design.boardInfo(); }
       case "get_items": return on(() => design.getItems(rest()));

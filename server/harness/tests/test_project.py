@@ -110,6 +110,107 @@ class Blinker(unittest.TestCase):
         self.assertEqual(board.sync()["problems"], [])
         self.assertEqual(len(board.pads("U1")), 5)
 
+    def _sheet(self, **more):
+        R, C = "Resistor_SMD:R_0402_1005Metric", "Capacitor_SMD:C_0402_1005Metric"
+        parts = {"U1": {"lib": "Timer:NE555D", "footprint": "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"},
+                 "R1": {"lib": "Device:R", "value": "10k", "footprint": R}, "R2": {"lib": "Device:R", "value": "47k", "footprint": R},
+                 "C1": {"lib": "Device:C", "value": "10uF", "footprint": C}, "C2": {"lib": "Device:C", "value": "100nF", "footprint": C},
+                 "D1": {"lib": "Device:LED", "footprint": "LED_SMD:LED_0603_1608Metric"}, "R3": {"lib": "Device:R", "value": "330", "footprint": R},
+                 "J1": {"lib": "Connector_Generic:Conn_01x02", "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"}}
+        nets = {"+5V": ["U1.VCC", "U1.RST", "R1.1", "C2.1", "J1.1"], "GND": ["U1.GND", "C1.2", "C2.2", "R3.2", "J1.2"],
+                "DISCH": ["U1.DISCH", "R1.2", "R2.1"], "THRES": ["U1.THRES", "U1.TRIG", "R2.2", "C1.1"], "OUT": ["U1.OUT", "D1.2"], "LED_K": ["D1.1", "R3.1"]}
+        groups = {"Power input": ["J1", "C2"], "Timer": ["U1", "R1", "R2", "C1"], "Indicator": ["D1", "R3"]}
+        sch = self.project.schematic()
+        return sch, sch.build(parts, nets, groups, no_connect=["U1.CONT"], **more)
+
+    def test_groups_are_framed_sections_with_titles_and_notes_and_nothing_overlaps(self):
+        sch, built = self._sheet(notes={"Indicator": "R3 is 330 ohm for 10 mA: the LED is read in daylight.", "Timer": ["C1 is 10 uF, not the usual 1 uF, for a 1 Hz blink."]})
+        self.assertEqual(built["problems"], [])
+        self.assertEqual(built["sections"], 3)
+        self.assertEqual(built["overlaps"], 0, built.get("overlap_list"))
+        self.assertEqual(sch.overlaps(), [])
+        self.assertEqual(sch.unconnected(), [])
+        self.assertEqual(sch.check()["errors"], 0)
+        self.project.save()
+        with open(os.path.join(self.dir, "blinky.kicad_sch"), encoding="utf-8") as f:
+            text = f.read()
+        secs = {s["title"]: s["parts"] for s in sch.sections()}
+        self.assertEqual(secs, {"Power input": ["C2", "J1"], "Timer": ["C1", "R1", "R2", "U1"], "Indicator": ["D1", "R3"]})
+        for title in ("Power input", "Timer", "Indicator"):
+            self.assertIn(f'(text "{title}"', text)
+        self.assertIn("Note: R3 is 330 ohm", text)
+        self.assertIn("for a 1 Hz blink", text)
+        lay = sch.layout()
+        area = lay["drawing_area"]
+        self.assertTrue(area[0] <= lay["extent"][0] and lay["extent"][2] <= area[2] and lay["extent"][3] <= area[3], lay)
+
+    def test_the_layout_check_finds_what_is_drawn_over_something_else(self):
+        sch, built = self._sheet()
+        self.assertEqual(built["overlaps"], 0, built.get("overlap_list"))
+        x, y = [(p["x"], p["y"]) for p in sch.parts() if p["ref"] == "U1"][0]
+        sch.text("In the way", (x - 4, y))                      # text across the IC
+        sch.place("Device:R", at=(x, y), ref="R9")               # a part on top of it
+        sch.flush()
+        found = sch.overlaps()
+        self.assertTrue(any(o.startswith("text over a symbol") and "In the way" in o for o in found), found)
+        self.assertTrue(any(o.startswith("symbols overlap") and "R9" in o and "U1" in o for o in found), found)
+        sch.remove("R9")
+        sch.flush()
+        self.assertFalse(any("R9" in o for o in sch.overlaps()))
+
+    def test_a_section_and_a_note_can_be_added_to_a_sheet_that_exists(self):
+        sch = self.project.schematic()
+        sch.place("Device:R", at=(60.96, 60.96), ref="R1", value="4k7")
+        sch.place("Device:R", at=(76.2, 60.96), ref="R2", value="4k7")
+        sch.net("+3V3", "R1.1", "R2.1")
+        sch.net("SDA", "R1.2")
+        sch.net("SCL", "R2.2")
+        box = sch.section("I2C pull-ups", ["R1", "R2"], notes="4k7 because the bus is 400 kHz with three devices on it.")
+        self.assertEqual(sch.overlaps(), [])
+        ext = sch.layout(of=["R1", "R2"])["extent"]
+        self.assertTrue(box[0] < ext[0] and box[1] < ext[1] and box[2] > ext[2] and box[3] > ext[3], (box, ext))
+        at = sch.note("R2 is fitted only on the board with the display.", near="R2")
+        self.assertEqual(sch.overlaps(), [])
+        self.assertTrue(abs(at[0] - 76.2) < 60 and abs(at[1] - 60.96) < 60, at)
+
+    def test_a_design_too_large_for_the_page_gets_a_larger_page(self):
+        sch = self.project.schematic()
+        parts, nets, groups = {}, {}, {}
+        for b in range(6):
+            refs = []
+            for i in range(10):
+                r = f"R{b * 10 + i + 1}"
+                parts[r] = {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0402_1005Metric"}
+                nets.setdefault(f"BUS{b}_{i}", []).append(r + ".1")
+                nets.setdefault("GND", []).append(r + ".2")
+                refs.append(r)
+            groups[f"Bank {b + 1}"] = refs
+        built = sch.build(parts, nets, groups)
+        self.assertEqual(built["overlaps"], 0, built.get("overlap_list"))
+        self.assertIn(built["page"], ("A3", "A2"))
+        self.project.save()
+        with open(os.path.join(self.dir, "blinky.kicad_sch"), encoding="utf-8") as f:
+            self.assertIn(f'(paper "{built["page"]}")', f.read())
+
+    def test_four_layers_plain_net_names_and_a_blocked_net_is_a_result(self):
+        sch, built = self._sheet()
+        board = self.project.board()
+        board.sync()
+        board.outline(100, 100, 130, 125)
+        board.layers(4, planes=["In1.Cu"])
+        self.assertEqual(board.info()["copper_layers"], ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"])
+        board.zone("GND", layer="In1.Cu")
+        board.autoplace(outline=(100, 100, 130, 125))
+        self.assertIn("/THRES", board.nets())
+        routed = board.route(order=["THRES"], widths={"+5V": 0.4}, time_s=20)   # the schematic's names, without the slash
+        self.assertEqual(routed["left"], {}, routed)
+        self.assertEqual(board.check(kind="unconnected_items")["first"], [])
+        again = board.route(nets=["THRES"])                                     # nothing left: a result, not an exception
+        self.assertEqual(again["routed"], 0)
+        self.project.save()
+        with open(os.path.join(self.dir, "blinky.kicad_pcb"), encoding="utf-8") as f:
+            self.assertIn('"In2.Cu"', f.read())
+
     def test_a_wrong_call_says_what_is_wrong(self):
         sch = self.project.schematic()
         with self.assertRaises(kh.HarnessError) as e:
