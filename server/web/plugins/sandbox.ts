@@ -35,7 +35,7 @@ export function sandboxRuntime(): void {
   let port: MessagePort | null = null; let seq = 0;
   const waiting = new Map<number, { ok: (v: any) => void; no: (e: Error) => void }>();
   const queue: any[] = [];
-  const handlers: Record<string, Record<string, (arg: any) => any>> = { action: {}, importer: {}, exporter: {}, tool: {} };
+  const handlers: Record<string, Record<string, (arg: any) => any>> = { action: {}, importer: {}, exporter: {}, tool: {}, wizard: {} };
   const listeners: Record<string, Array<(d: any) => void>> = {};
   let resources: Record<string, string> = {};
   const post = (m: any, transfer?: Transferable[]) => { if (port) port.postMessage(m, transfer || []); else queue.push(m); };
@@ -61,6 +61,7 @@ export function sandboxRuntime(): void {
     importers: { register: reg("importer") },
     exporters: { register: reg("exporter") },
     assistant: { registerTool: reg("tool") },
+    wizards: { register: reg("wizard") },
     design: group("design", ["overview", "documents", "components", "component", "nets", "items", "selection", "runChecks", "boardInfo", "board", "apply", "commit", "undo", "redo"]),
     view: group("view", ["select", "highlight", "focus", "appearance", "setMarkers", "clearMarkers", "openDocument"]),
     fab: group("fab", ["layers", "gerbers", "drill", "positions", "bom", "svg", "drc", "netlist", "render", "model"]),

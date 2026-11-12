@@ -236,6 +236,19 @@ export function pythonRuntime(): void {
     return next;
   };
 
+  // ---- footprint wizards (kicad_wizard.web_op), queued with the actions: the wizard object is shared
+  const wizardOp = (index: number, req: any) => {
+    const next = chain.then(async () => {
+      py.globals.set("_kc_wiz", JSON.stringify(req && typeof req === "object" ? req : {}));
+      const out = JSON.parse(await py.runPythonAsync("kicad_web.wizard_op(" + index + ", _kc_wiz)"));
+      py.globals.delete("_kc_wiz");
+      if (out.error) throw new Error(out.error);
+      return out;
+    });
+    chain = next.catch(() => undefined);
+    return next;
+  };
+
   const loadScript = (src: string) => new Promise<void>((ok, no) => { const s = document.createElement("script"); s.src = src; s.onload = () => ok(); s.onerror = () => no(new Error("the Python runtime could not be downloaded")); document.head.appendChild(s); });
   (async () => {
     kicad.ui.status("Starting Python…").catch(() => undefined);
@@ -270,7 +283,9 @@ export function pythonRuntime(): void {
       "kicad_web.boot(" + JSON.stringify(kicad.plugin.identifier) + ", _kc_files, _kc_bridge, " + JSON.stringify(kicad.plugin.name) + ")",
     ].join("\n")));
     py.globals.delete("_kc_files");
-    for (const a of info.actions) kicad.actions.register("py" + a.index, () => runAction(a.index), { name: a.name, description: a.description, icon: a.icon, button: !!a.button });
+    for (const a of info.actions) kicad.actions.register("py" + a.index, () => runAction(a.index), { name: a.name, description: a.description, icon: a.icon, button: !!a.button, wizard: !!a.wizard });
+    // a footprint wizard is also offered to the footprint editor's wizard dialog, which talks to it directly
+    for (const a of info.actions) if (a.wizard) kicad.wizards.register("py" + a.index, (req: any) => wizardOp(a.index, req), { name: String(a.name).replace(/^Footprint Wizard: /, ""), description: a.description });
     kicad.ui.status("").catch(() => undefined);
     if (info.error) console.error("This plugin could not be loaded: " + info.error);
     else if (!info.actions.length) console.warn("This plugin loaded but added no board editor actions.");

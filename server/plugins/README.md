@@ -59,7 +59,7 @@ editing; the installed copy is replaced. The manager shows each plugin's `consol
 | `version`, `author`, `homepage`, `license` | shown in the manager |
 | `runtime` | `{ "type": "web", "entrypoint": "main.js" }` |
 | `permissions` | what the plugin may do; see below |
-| `actions[]` | commands: `identifier`, `name`, `description`, `scopes` (`"schematic"`, `"pcb"`), `show-button`, `icon` (inline SVG shapes for a 24×24 stroke glyph), `key` (`"Ctrl+Shift+B"`), `menu` (`"tools"` by default, or `"inspect"`, `"edit"`, `"place"`) |
+| `actions[]` | commands: `identifier`, `name`, `description`, `scopes` (`"schematic"`, `"pcb"`, or `"footprint_wizard"` for a footprint wizard, see below), `show-button`, `icon` (inline SVG shapes for a 24×24 stroke glyph), `key` (`"Ctrl+Shift+B"`), `menu` (`"tools"` by default, or `"inspect"`, `"edit"`, `"place"`) |
 | `panel` | one docked panel: `name`, `html` (a file used as the panel's body), `scopes` |
 | `importers[]`, `exporters[]` | entries under File → Import / Export: `identifier`, `name`, `scopes`, `extensions` |
 | `assistant_tools[]` | tools the design assistant may call: `name`, `description`, `input_schema` |
@@ -97,6 +97,12 @@ Every call returns a promise. A refused call rejects with an `Error` whose `code
 - `kicad.exporters.register(id, async () => ({ filename, mime, text }))` (or `bytes`)
 - `kicad.importers.register(id, async ({ name, size, text, bytes }) => {})`
 - `kicad.assistant.registerTool(name, async (input) => result)`
+- `kicad.wizards.register(id, async (req) => state)`: a footprint wizard, for an action of scope `"footprint_wizard"`.
+  The footprint editor's Create Footprint lists it and asks `{ op: "describe" }`, `{ op: "build", values }` (every
+  page's values, as strings, in order) or `{ op: "reset" }`; it answers `{ name, description, pages: [{ name, params:
+  [{ name, value, units, hint, error }] }], messages, footprint }`, `footprint` being `.kicad_mod` text (or null when
+  the values have errors).  `units` is `mm`, `mils`, `integer`, `float`, `bool` (`"1"`/`"0"`), `degrees`, `radians`,
+  `%`, `string` or a list of choices `"a,b,c"`.  A Python plugin's `FootprintWizardPlugin` is offered the same way.
 - `kicad.on(event, fn)` with `"document"`, `"selection"`, `"change"`, `"editor"`, `"theme"`
 
 **Reading** (`design:read`). These return the same facts the design assistant reads.

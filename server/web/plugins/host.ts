@@ -379,12 +379,12 @@ function onMessage(run: Run, m: any) {
       break;
     case "log": log(id, m.level === "error" ? "error" : m.level === "warn" ? "warn" : "log", String(m.text || "")); break;
     case "registered": {
-      if (typeof m.kind !== "string" || typeof m.name !== "string" || !["action", "importer", "exporter", "tool"].includes(m.kind)) break;
+      if (typeof m.kind !== "string" || typeof m.name !== "string" || !["action", "importer", "exporter", "tool", "wizard"].includes(m.kind)) break;
       const reg = Object.assign({}, (S.running[id] || { registered: {} }).registered); reg[m.kind] = Array.from(new Set((reg[m.kind] || []).concat(m.name.slice(0, 80)))); setRun(id, { registered: reg });
       // A Python plugin says what its actions are called as it registers them; that is the only description there is.
       if (run.actions && m.kind === "action" && m.meta && typeof m.meta === "object" && /^py\d{1,3}$/.test(m.name) && run.actions.length < 60 && !run.actions.some((a) => a.identifier === m.name)) {
         const icon = typeof m.meta.icon === "string" && /^data:image\/(png|jpeg|gif|svg\+xml|bmp|x-icon);base64,[A-Za-z0-9+/=]+$/.test(m.meta.icon) && m.meta.icon.length < 120000 ? m.meta.icon : undefined;
-        run.actions.push({ identifier: m.name, name: String(m.meta.name || "Action").slice(0, 120), description: String(m.meta.description || "").slice(0, 400), scopes: ["pcb"], "show-button": !!m.meta.button, iconUrl: icon });
+        run.actions.push({ identifier: m.name, name: String(m.meta.name || "Action").slice(0, 120), description: String(m.meta.description || "").slice(0, 400), scopes: m.meta.wizard ? ["pcb", "footprint_wizard"] : ["pcb"], "show-button": !!m.meta.button, iconUrl: icon });
       }
       break;
     }
@@ -628,6 +628,25 @@ export function runImporter(plugin: string, id: string): void {
   };
   input.click();
 }
+/** A footprint wizard a plugin offers (an action of scope "footprint_wizard", KiCad's api.v1 PluginAction scope),
+ *  as the footprint editor's wizard dialog lists it.  A Python plugin's wizards are the ones it registered when it
+ *  last ran ("Footprint Wizard: <name>" commands). */
+export interface WizardContribution { plugin: string; pluginName: string; id: string; name: string; description: string; python: boolean }
+export function footprintWizards(s: PluginState = S): WizardContribution[] {
+  const out: WizardContribution[] = [];
+  for (const p of s.installed) if (p.enabled) for (const a of actionsOf(p, s)) if ((a.scopes || []).includes("footprint_wizard"))
+    out.push({ plugin: p.identifier, pluginName: p.manifest.name, id: a.identifier, name: a.name.replace(/^Footprint Wizard: /, ""), description: a.description || "", python: isPython(p.manifest) });
+  return out;
+}
+/** One request to a footprint wizard (see web/editor/fpwizard.ts for what it is asked and answers); a Python
+ *  plugin's interpreter starts on the first one, as for its actions. */
+export async function callWizard(plugin: string, id: string, req: unknown): Promise<unknown> {
+  const p = find(plugin); if (!p) throw new Error("that plugin is not installed");
+  const python = isPython(p.manifest);
+  if (python) { pyActive.add(plugin); pyFailed.delete(plugin); syncRunning(); }
+  const run = await whenReady(plugin, python ? 1800 : 100);
+  return invoke(run, "wizard", id, req, python ? 0 : 30000);
+}
 /** A click on one of our menu or toolbar entries. */
 export function runPluginUi(id: string): void {
   if (id === "pluginManager") { openManager(); return; }
@@ -697,6 +716,8 @@ let wired = false;
 /** Called once the chrome is mounted: follow the editor's state and keep the running plugins in step with it. */
 export function initPlugins(): void {
   if (wired) return; wired = true;
+  // the footprint editor's wizard dialog lives in the editor bundle: it reaches this one through the window
+  (window as unknown as { KiCadPluginWizards?: unknown }).KiCadPluginWizards = { list: () => footprintWizards(), call: callWizard };
   const app = APP(); if (!app) return;
   let last: any = {}; let changeTimer = 0;
   const onState = (st: any) => {

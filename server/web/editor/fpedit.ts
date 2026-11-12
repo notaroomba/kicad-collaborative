@@ -23,6 +23,8 @@ import { confirmBox, promptText } from "../dialogs/dom";
 import { listDialog, messageBox } from "./pcbdialogs/ui";
 import { enumPadsDialog, footprintCheckerDialog, footprintUsersDialog, footprintPropertiesDialog, padTableDialog, pushPadDialog } from "./pcbdialogs/fp-editor";
 import type { DocEntry, ProjectInfo } from "../store";
+import { footprintWizardDialog } from "./fpwizard";
+import { wizardFootprintTree } from "./fpwizard-model";
 import type { ActionHandler } from "./types";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -488,6 +490,32 @@ async function newFootprint(): Promise<void> {
   const d = await createFootprintDoc(lib, name, newFootprintText(name, attr)); if (!d) return;
   publishLibs(); openFootprintDoc(d.docId);
 }
+/**
+ * FOOTPRINT_EDITOR_CONTROL::CreateFootprintFromWizard: the Footprint Wizard (editor/fpwizard.ts); what it exports
+ * becomes a new footprint (BeginNewFootprint / AddFootprintToBoard: at the origin, written as a new file) in the
+ * target library (GetTargetFPID: the library picked in the tree, else the open footprint's), saved there as
+ * tryToSaveFootprintInLibrary does; a read-only or missing target asks for a library.
+ */
+async function createFootprint(targetLib?: string): Promise<void> {
+  if (E.viewOnly || !state.project) { toast("You can view this project but not change it"); return; }
+  const text = await footprintWizardDialog(); if (!text) return;
+  let t: Any = null; try { t = KiCadCanvas.parse(text); } catch { t = null; }
+  if (!Array.isArray(t) || t[0] !== "footprint") { toast("The wizard did not build a footprint the editor can read.", 4000); return; }
+  const t2: Any = wizardFootprintTree(t, NEW_FILE_VERSION, KiCadCanvas.parse);
+  await libTableRows();
+  const want = targetLib || (isFpReadOnlyLib() ? state.docId!.slice(4).split(":")[0] : state.doc && state.doc.docType === "footprint" && !isFpPrivate() ? fpLibIdOf(state.doc.path).lib : "");
+  let lib = want ? projectFpLibs().find((l) => l.name === want) || null : null;
+  if (want && !lib) await messageBoxAsync(`The footprint could not be added to the selected library ('${want}'). This library is read-only.`);
+  if (!lib) lib = await pickLibrary("Create Footprint"); if (!lib) return;
+  const name = str(t2[1]).split("").filter((c) => !FP_NAME_INVALID.includes(c)).join("") || "Untitled"; t2[1] = name;
+  const existing = lib.footprints.find((f) => f.name === name);
+  if (existing) {
+    if (!(await confirmBox("Confirmation", `Footprint ${name} already exists in ${lib.name}.`, "Overwrite"))) return;
+    if (!(await deleteFootprintDoc(existing.docId, true))) return;
+  }
+  const d = await createFootprintDoc(lib, name, FD().prettify(KiCadCanvas.serialize(t2))); if (!d) return;
+  publishLibs(); openFootprintDoc(d.docId);
+}
 /** FOOTPRINT_EDIT_FRAME::SaveFootprintAs: SAVE_AS_DIALOG (Name, "Save in library:", New Library..., Save). */
 async function saveAs(preselect?: string): Promise<void> {
   if (!E.kdoc || E.viewOnly || !state.project) return;
@@ -657,7 +685,7 @@ window.addEventListener("kc-fpedit-lib", ((ev: CustomEvent) => {
   case "delete": if (id) { if (ro) readOnlyError(id.slice(4).split(":")[0]); else void deleteFootprint(id); } break;
   case "rename": if (id) { if (ro) readOnlyError(id.slice(4).split(":")[0]); else void renameFootprint(id); } break;
   case "new": if (m.lib && !projectFpLibs().some((l) => l.name === m.lib)) readOnlyError(m.lib); else void newFootprint(); break;
-  case "create": runHandler("createFootprint"); break;
+  case "create": void createFootprint(m.lib); break;
   case "newLibrary": void newLibrary(); break;
   case "save": void saveFootprint(); break;
   case "saveAs": if (id) void onOpenFootprint(id, () => void saveAs()); else void saveAs(m.lib); break;
@@ -937,7 +965,7 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   Object.assign(HANDLERS, {
   save: ((a) => { if (isFpEdit()) { saveFootprint(); return; } prevSave(a); }) as ActionHandler,
   revert: ((a) => { if (isFpEdit()) { revertFootprint(); return; } if (prevRevert) prevRevert(a); }) as ActionHandler,
-  saveAs: fpOnly(saveAs), newFootprint: fpOnly(newFootprint), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
+  saveAs: fpOnly(saveAs), newFootprint: fpOnly(newFootprint), createFootprint: fpOnly(() => createFootprint()), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
   enumeratePads: fpOnly(enumeratePads), checkFootprint: fpOnly(checkFootprint), padTable: fpOnly(padTable), pushPadSettings: fpOnly(pushPadSettings),
   explodePad: fpOnly(editPad), recombinePad: fpOnly(editPad), exportFootprint: fpOnly(exportFootprint), exportFootprintAsSVG: fpOnly(exportFootprintAsSVG), exportFootprintAsPNG: fpOnly(exportFootprintAsPNG),
   importFootprint: fpOnly(importFootprint), showFootprintUsers: fpOnly(showFootprintUsers), loadFpFromBoard: fpOnly(loadFromBoard), saveFpToBoard: fpOnly(insertIntoBoard),

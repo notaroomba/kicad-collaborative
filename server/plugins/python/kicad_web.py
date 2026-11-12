@@ -1158,7 +1158,8 @@ def describe():
     out = []
     for i, p in enumerate(_actions):
         out.append({"index": i, "name": str(getattr(p, "name", "") or f"Action {i + 1}")[:120], "description": str(getattr(p, "description", "") or "")[:400],
-                    "category": str(getattr(p, "category", "") or "")[:80], "button": bool(getattr(p, "show_toolbar_button", False)), "icon": _icon(p)})
+                    "category": str(getattr(p, "category", "") or "")[:80], "button": bool(getattr(p, "show_toolbar_button", False)), "icon": _icon(p),
+                    "wizard": hasattr(p, "wizard")})
     return {"actions": out, "error": _load_error, "missing": {"pcbnew": sorted(pcbnew._missing), "wx": sorted(wx._missing)}}
 
 
@@ -1765,6 +1766,20 @@ def press_default():
     finally:
         _running[0] -= 1
     return json.dumps({"pressed": pressed, "error": error})
+
+
+def wizard_op(index, req):
+    """A request of the footprint editor's wizard dialog to the footprint wizard registered as action `index`
+    (kicad_wizard.web_op).  Returns JSON: the wizard's state, or {"error": "..."}."""
+    plugin = _actions[index] if 0 <= index < len(_actions) else None
+    if plugin is None or not hasattr(plugin, "wizard"):
+        return json.dumps({"error": "the plugin has no such footprint wizard"})
+    import kicad_wizard
+    try:
+        return json.dumps(kicad_wizard.web_op(plugin.wizard, json.loads(req) if isinstance(req, str) else {}))
+    except BaseException as e:
+        traceback.print_exc()
+        return json.dumps({"error": _describe(e)})
 
 
 def run_action(index):

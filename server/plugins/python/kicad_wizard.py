@@ -354,3 +354,40 @@ class WizardAction:
                 self.wizard.module = None
         finally:
             dlg.Destroy()
+
+
+def _web_pages(w):
+    """The wizard's parameter pages as the footprint editor's wizard dialog lists them (FOOTPRINT_WIZARD_FRAME's
+    parameter grid: Parameter / Value / Units, a page per tab), with each value's errors."""
+    pages = []
+    for i in range(w.GetNumParameterPages()):
+        params = []
+        for p in w.GetParametersByPageIndex(i):
+            params.append({"name": str(p.name), "value": str(p.raw_value), "units": str(p.units), "hint": str(p.hint or ""),
+                           "designator": str(p.designator or "").strip(), "error": "\n".join(str(e) for e in p.error_list)})
+        pages.append({"name": str(w.GetParameterPageName(i)), "params": params})
+    return pages
+
+
+def web_op(w, req):
+    """One request of the footprint editor's wizard dialog: "describe" (the values as they stand), "build" (the
+    values of every page, then a build) or "reset" (ResetWizard).  Every answer builds the footprint and carries
+    the pages, the build messages and the footprint as a .kicad_mod (None when the wizard reported errors)."""
+    op = str(req.get("op") or "describe")
+    if op == "reset":
+        w.ResetWizard()
+    elif op == "build":
+        values = req.get("values") or []
+        for i in range(min(len(values), w.GetNumParameterPages())):
+            if isinstance(values[i], list):
+                w.SetParameterValues(i, [str(v) for v in values[i]])
+    w.module = None
+    footprint = None
+    try:
+        w.BuildFootprint()
+        text = str(w.GetBuildMessages() or "")
+        if not w.AnyErrors() and w.module is not None:
+            footprint = footprint_file(w.module)[0]
+    except Exception as e:                         # a wizard that fails on these values: its own message, nothing built
+        text = f"The wizard could not build a footprint from these values: {type(e).__name__}: {e}"
+    return {"name": str(w.GetName()), "description": str(w.GetDescription() or ""), "pages": _web_pages(w), "messages": text, "footprint": footprint}

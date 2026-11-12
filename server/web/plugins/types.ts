@@ -7,7 +7,7 @@
 // `exporters`, `assistant_tools`.  A folder can therefore carry a desktop plugin (python / exec,
 // which KiCad Collaborative on the desktop runs exactly as KiCad does) and a web one side by side.
 
-export type Scope = "pcb" | "schematic";
+export type Scope = "pcb" | "schematic" | "footprint_wizard";
 
 /** What a plugin may be allowed to do.  Nothing is granted that is not listed and consented to. */
 export const PERMISSIONS: Record<string, { title: string; detail: string; risk: "low" | "medium" | "high" }> = {
@@ -64,7 +64,7 @@ const SUB_ID_RE = /^[a-zA-Z][-_a-zA-Z0-9.]{0,48}[a-zA-Z0-9]$/;
 const TOOL_RE = /^[a-z][a-z0-9_]{1,40}$/;
 const HOST_RE = /^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}(:\d{1,5})?$/;
 const PATH_RE = /^[A-Za-z0-9_][A-Za-z0-9_.\-/]{0,120}$/;
-const SCOPES = new Set(["pcb", "schematic"]);
+const SCOPES = new Set(["pcb", "schematic", "footprint_wizard"]);
 export const MAX_FILES = 40, MAX_BYTES = 2 * 1024 * 1024;
 
 /** One of KiCad's own Python plugins (installed from KiCad's repository, run by the Python runtime in the sandbox). */
@@ -123,7 +123,7 @@ export function validateManifest(m: any): string[] {
     else if (seen.has(where.split("[")[0] + x.identifier)) bad.push(`${where}.identifier "${x.identifier}" is used twice`);
     else seen.add(where.split("[")[0] + x.identifier);
     if (!str(x.name, 200)) bad.push(`${where}.name is required`);
-    if (!scopesOk(x.scopes)) bad.push(`${where}.scopes may hold "pcb" and "schematic" (the editors the web has)`);
+    if (!scopesOk(x.scopes)) bad.push(`${where}.scopes may hold "pcb", "schematic" and "footprint_wizard"`);
   };
   list("actions", m.actions, (x, w) => {
     ident(x, w);
