@@ -1,4 +1,4 @@
-//! The MCP endpoint: `POST /mcp` (Streamable HTTP), where Claude works on a person's online
+//! The MCP endpoint: `POST /mcp` (Streamable HTTP), where an AI assistant (any model or service that speaks MCP) works on a person's online
 //! projects.
 //!
 //! A tool call here does what the design assistant in the web editor does (web/ai), with the
@@ -7,7 +7,7 @@
 //! (mcp_host.rs, web/mcp/host.ts) that has the document open over the collaboration socket.
 //! An edit therefore travels the ordinary op pipeline and appears live for everybody in the
 //! document.  The one difference from the assistant is deliberate: in the editor a person
-//! accepts a proposal card, here the person approves the tool call in their own Claude, so
+//! accepts a proposal card, here the person approves the tool call in their own AI client, so
 //! `apply_changes` applies.  Every change is recorded with its inverse and can be taken back
 //! with `undo_changes`.
 //!
@@ -532,7 +532,7 @@ async fn list_changes(state: &AppState, caller: &Caller, p: &ProjectCtx, args: &
                 "document": p.docs.iter().find(|d| d.id == doc_id).map(|d| d.path.clone()),
                 "edits": edits.iter().take(12).collect::<Vec<_>>(),
                 "more_edits": if edits.len() > 12 { Some(edits.len() - 12) } else { None },
-                "made_with": Some(r.get::<String, _>("client")).filter(|c| !c.is_empty()).unwrap_or_else(|| "Claude".into()),
+                "made_with": Some(r.get::<String, _>("client")).filter(|c| !c.is_empty()).unwrap_or_else(|| "AI assistant".into()),
                 "at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
                 "undone": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("undone_at").map(|t| t.to_rfc3339()),
                 "can_undo": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("undone_at").is_none() && r.get::<bool, _>("can_undo"),
@@ -614,7 +614,7 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
     let project = if tool.project { Some(resolve_project(state, caller, &args["project"]).await?) } else { None };
 
     // The person's role on the project decides, whatever the connection was allowed: a
-    // commenter's Claude may comment, a viewer's may only read.  The endpoints the tools
+    // commenter's assistant may comment, a viewer's may only read.  The endpoints the tools
     // go through refuse as well (http.rs, ws.rs); this is the answer a model can act on.
     if let (true, Some(p)) = (tool.write, &project) {
         let commenting = matches!(name, "add_comment" | "resolve_comment");
@@ -705,7 +705,7 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
     let request = json!({
         "base": own_address(),
         "token": internal_token(state, caller),
-        "agent": if caller.client.is_empty() { "Claude" } else { caller.client.as_str() },
+        "agent": if caller.client.is_empty() { "AI assistant" } else { caller.client.as_str() },
         "canWrite": caller.can_write,
         "user": { "id": caller.user.id, "login": caller.user.login, "name": caller.user.name.clone().unwrap_or_else(|| caller.user.login.clone()) },
         "tool": name,

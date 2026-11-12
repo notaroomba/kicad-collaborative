@@ -30,7 +30,7 @@ autorouter), so the files stay valid and open in KiCad.
 |---|---|---|
 | Local files | a folder of KiCad files | `kh.open(folder)` / `kh.new(folder)`, then `project.save()`. Needs Node 20+ for the engine. |
 | Online project, from your computer | a project on a KiCad Collaborative server | `kh.connect("https://site", token, "project name")`. Edits appear live for everyone, with a cursor. |
-| Online project, from Claude | the same | Claude calls the server's `run_python` MCP tool with a script; `project`, `kh` and `parts` are already defined. |
+| Online project, from an AI assistant | the same | The assistant calls the server's `run_python` MCP tool with a script; `project`, `kh` and `parts` are already defined. |
 
 Install for local use, from the repository:
 
@@ -44,9 +44,11 @@ not on the PATH. KiCad's libraries are read from a KiCad installation when there
 (`KICAD_SYMBOL_DIR`, `KICAD_FOOTPRINT_DIR`), else from KiCad's library repository, cached in
 `~/.cache/kicad-harness`.
 
-With Claude Code, the cheapest setup is local: ask it to write and run a script with this package in
-the project folder. For a project on the server, add the MCP server (`claude mcp add --transport
-http kicad https://<site>/mcp`) and it uses `run_python`.
+With a coding agent (Claude Code, Codex, Gemini CLI, Cursor, Copilot and the like), the cheapest
+setup is local: ask it to write and run a script with this package in the project folder. For a
+project on the server, add the MCP server `https://<site>/mcp` to the agent (the site's `/connect`
+page has the line for each one) and it uses `run_python`. No model is assumed anywhere: the package
+is plain Python and the server speaks standard MCP.
 
 ## The calls
 

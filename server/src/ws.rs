@@ -311,7 +311,7 @@ async fn handle_socket(
                 // peers see whose it is and that it is not the person's own hand.
                 let label: String = agent.as_deref().unwrap_or("").chars().filter(|c| !c.is_control()).take(40).collect();
                 let label = label.trim();
-                format!("{name} ({})", if label.is_empty() { "Claude" } else { label })
+                format!("{name} ({})", if label.is_empty() { "AI assistant" } else { label })
             } else {
                 name
             }

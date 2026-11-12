@@ -1,6 +1,6 @@
 //! The OAuth 2.1 authorization server in front of the MCP endpoint (mcp.rs).
 //!
-//! An MCP client (Claude Code, the Claude desktop app, a claude.ai connector) is given
+//! An MCP client (an AI app, a coding agent, a connector of any vendor) is given
 //! nothing but the endpoint's URL.  It is answered 401 with a pointer to the protected
 //! resource metadata, reads the authorization server metadata from there, registers
 //! itself (RFC 7591), and sends the person's browser to `/oauth/authorize` with a PKCE
@@ -32,6 +32,10 @@ use crate::persist::User;
 use crate::AppState;
 
 const ACCESS_TTL_SECS: i64 = 3600;
+/// An access key (made on `/connect` for a service that cannot sign in) lasts a year.
+const KEY_TTL_SECS: i64 = 365 * 24 * 3600;
+const KEY_CLIENT_PREFIX: &str = "kcm_key_";
+const MAX_KEYS: i64 = 20;
 const REFRESH_TTL_SECS: i64 = 90 * 24 * 3600;
 /// A refresh token that was just spent may be presented once more (the reply that carried
 /// its successor was lost on the way).  After this it is treated as stolen.
@@ -706,7 +710,7 @@ pub async fn list_grants(State(state): State<AppState>, AuthUser(user): AuthUser
 
 async fn grants_of(state: &AppState, user_id: i64) -> AppResult<Vec<Value>> {
     let rows = sqlx::query(
-        "SELECT g.id, c.name, g.scope, g.created_at, g.last_used_at FROM mcp_grants g
+        "SELECT g.id, c.name, c.client_id, g.scope, g.created_at, g.last_used_at FROM mcp_grants g
          JOIN mcp_clients c ON c.client_id = g.client_id
          WHERE g.user_id = $1
            AND EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.grant_id = g.id AND t.expires_at > now() AND t.replaced_at IS NULL)
@@ -722,12 +726,71 @@ async fn grants_of(state: &AppState, user_id: i64) -> AppResult<Vec<Value>> {
             json!({
                 "id": r.get::<i64, _>("id"),
                 "name": r.get::<String, _>("name"),
+                "key": r.get::<String, _>("client_id").starts_with(KEY_CLIENT_PREFIX),
                 "canWrite": scope.split_whitespace().any(|s| s == SCOPE_WRITE),
                 "createdAt": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
                 "lastUsedAt": r.get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_used_at").map(|t| t.to_rfc3339()),
             })
         })
         .collect())
+}
+
+#[derive(Deserialize)]
+pub struct NewKey {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    write: bool,
+}
+
+/// `POST /api/mcp/keys`: an access key, for an AI service or script that cannot open a
+/// sign-in page (a model API's remote MCP tool, an automation, an agent around a local
+/// model).  It is a connection like any other: a grant with one long-lived access token and
+/// no refresh token, listed with the connected apps and removed there.  The key is shown
+/// once; only its hash is kept.
+pub async fn create_key(State(state): State<AppState>, AuthUser(user): AuthUser, Json(req): Json<NewKey>) -> AppResult<Response> {
+    let name: String = req.name.chars().filter(|c| !c.is_control()).take(60).collect::<String>().trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("Give the key a name, such as the service that will use it.".into()));
+    }
+    let have: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mcp_grants g WHERE g.user_id = $1 AND g.client_id LIKE 'kcm\\_key\\_%'
+           AND EXISTS (SELECT 1 FROM mcp_tokens t WHERE t.grant_id = g.id AND t.expires_at > now())",
+    )
+    .bind(user.id)
+    .fetch_one(&state.pool)
+    .await?;
+    if have >= MAX_KEYS {
+        return Err(AppError::BadRequest(format!("You already have {MAX_KEYS} access keys. Remove one you no longer use first.")));
+    }
+    let scope = if req.write { format!("{SCOPE_READ} {SCOPE_WRITE}") } else { SCOPE_READ.to_string() };
+    let client_id = format!("{KEY_CLIENT_PREFIX}{}{}", auth::random_token(), auth::random_token());
+    let key = new_token(ACCESS_PREFIX);
+    let mut tx = state.pool.begin().await?;
+    // No redirect URI, so the client cannot be used on the authorization endpoint.
+    sqlx::query("INSERT INTO mcp_clients (client_id, name, redirect_uris) VALUES ($1, $2, '[]'::jsonb)")
+        .bind(&client_id)
+        .bind(&name)
+        .execute(&mut *tx)
+        .await?;
+    let grant_id: i64 = sqlx::query_scalar("INSERT INTO mcp_grants (user_id, client_id, scope) VALUES ($1, $2, $3) RETURNING id")
+        .bind(user.id)
+        .bind(&client_id)
+        .bind(&scope)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO mcp_tokens (hash, grant_id, kind, expires_at) VALUES ($1, $2, 'access', now() + make_interval(secs => $3))")
+        .bind(hash(&key))
+        .bind(grant_id)
+        .bind(KEY_TTL_SECS as f64)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({ "id": grant_id, "name": name, "key": key, "canWrite": req.write, "expiresIn": KEY_TTL_SECS })),
+    )
+        .into_response())
 }
 
 /// `DELETE /api/mcp/grants/{id}`: disconnect one.  Its tokens stop working at once.
@@ -744,7 +807,7 @@ pub async fn delete_grant(State(state): State<AppState>, AuthUser(user): AuthUse
     Ok(Json(json!({ "ok": true })))
 }
 
-/// `GET /connect`: how to connect Claude, and what is connected now.
+/// `GET /connect`: how to connect an AI assistant, and what is connected now.
 pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar: CookieJar) -> AppResult<Response> {
     let origin = origin_of(&state, &headers);
     let url = format!("{origin}/mcp");
@@ -760,9 +823,11 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
                     .iter()
                     .map(|g| {
                         format!(
-                            r#"<tr data-grant="{id}"><td><b>{name}</b></td><td>{access}</td><td class="when" data-t="{created}"></td><td class="when" data-t="{used}"></td><td><button class="btn" data-disconnect="{id}">Disconnect</button></td></tr>"#,
+                            r#"<tr data-grant="{id}"><td><b>{name}</b>{kind}</td><td>{access}</td><td class="when" data-t="{created}"></td><td class="when" data-t="{used}"></td><td><button class="btn" data-disconnect="{id}">{remove}</button></td></tr>"#,
                             id = g["id"],
                             name = esc(g["name"].as_str().filter(|n| !n.is_empty()).unwrap_or("Unnamed app")),
+                            remove = if g["key"] == true { "Remove" } else { "Disconnect" },
+                            kind = if g["key"] == true { r#" <span class="tag">access key</span>"# } else { "" },
                             access = if g["canWrite"] == true { "Read and change" } else { "Read only" },
                             created = esc(g["createdAt"].as_str().unwrap_or("")),
                             used = esc(g["lastUsedAt"].as_str().unwrap_or("")),
@@ -773,8 +838,24 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
             }
         }
     };
+    let keys = if user.is_some() {
+        r#"<form id="keyForm" class="keyform" autocomplete="off">
+  <input id="keyName" type="text" maxlength="60" placeholder="Name, such as the service that will use it" aria-label="Key name">
+  <label class="chk"><input id="keyWrite" type="checkbox" checked> Let it make changes</label>
+  <button class="btn primary" type="submit">Create key</button>
+</form>
+<p class="err" id="keyErr" hidden></p>
+<div class="card" id="keyOut" hidden>
+  <h3>Your new key</h3>
+  <p class="muted">Copy it now: it is shown only this once. Anyone who has it can act as you in your projects, so keep it out of chats and repositories.</p>
+  <div class="url"><code id="keyValue"></code><button class="btn primary" id="keyCopy" type="button">Copy</button></div>
+  <p class="muted">Send it with every request as the header <code>Authorization: Bearer &lt;key&gt;</code>.</p>
+</div>"#
+    } else {
+        r#"<p class="muted"><a href="/auth/github/login?next=/connect">Sign in</a> to create an access key.</p>"#
+    };
     let html = format!(
-        r#"<!doctype html><html><head><meta charset="utf-8"><title>Connect Claude — KiCad Collaborative</title>{STYLE}
+        r#"<!doctype html><html><head><meta charset="utf-8"><title>Connect an AI assistant — KiCad Collaborative</title>{STYLE}
 <style>
   body {{ display: block; }}
   main {{ max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }}
@@ -796,34 +877,61 @@ pub async fn connect_page(State(state): State<AppState>, headers: HeaderMap, jar
   table.apps th {{ text-align: left; font-weight: 500; color: var(--ink-2); font-size: 13px; }}
   table.apps th, table.apps td {{ padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); }}
   .muted {{ color: var(--ink-2); }}
+  .tag {{ font-size: 12px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 400; white-space: nowrap; }}
+  .keyform {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0 4px; }}
+  .keyform input[type=text] {{ flex: 1 1 260px; min-width: 0; height: 34px; padding: 0 10px; font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); border-radius: 6px; }}
+  .keyform input[type=text]:focus {{ outline: 2px solid var(--blue); outline-offset: -1px; }}
+  .chk {{ display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }}
+  .err {{ color: var(--err); margin: 4px 0; }}
   ul.can {{ columns: 2; column-gap: 28px; padding-left: 18px; line-height: 1.6; }}
   @media (max-width: 640px) {{ ul.can {{ columns: 1; }} table.apps th:nth-child(3), table.apps td:nth-child(3) {{ display: none; }} }}
 </style></head><body><main>
 <header class="top"><span class="mark">{MARK}</span><b>KiCad Collaborative</b><a href="/">Back to projects</a></header>
-<h1>Connect Claude</h1>
-<p class="lead">Claude can open your online projects, read schematics and boards, run the rule checks, look parts up, and make
-changes that everyone in the project sees live. It connects over MCP and signs in as you; you choose whether it may change things.</p>
+<h1>Connect an AI assistant</h1>
+<p class="lead">Any AI model or service can open your online projects, read schematics and boards, run the rule checks, look parts
+up, and make changes that everyone in the project sees live, with its own cursor. It connects over MCP, the open standard that
+Claude, ChatGPT, Gemini, Copilot, Cursor and most agent tools speak, and signs in as you; you choose whether it may change things.
+Nothing here is tied to one vendor, and the work runs on whatever plan or key you already have.</p>
 <div class="url"><code id="url">{url}</code><button class="btn primary" id="copy">Copy</button></div>
 
 <h2>How to connect</h2>
 <div class="card">
-  <h3>Claude on the web and the desktop app</h3>
-  <ol><li>Open <b>Settings</b>, then <b>Connectors</b>, and choose <b>Add custom connector</b>.</li>
-      <li>Name it KiCad Collaborative and paste the address above.</li>
-      <li>Choose <b>Connect</b>, sign in here and allow it.</li></ol>
-  <h3>Claude Code</h3>
+  <h3>Claude</h3>
+  <ol><li>On the web or in the desktop app, open <b>Settings</b>, then <b>Connectors</b>, and choose <b>Add custom connector</b>.</li>
+      <li>Name it KiCad Collaborative, paste the address above, choose <b>Connect</b>, sign in here and allow it.</li></ol>
+  <p class="muted">In Claude Code, run the line below, then <code>/mcp</code>, pick <b>kicad</b> and sign in.</p>
   <pre>claude mcp add --transport http kicad {url}</pre>
-  <p class="muted">Then run <code>/mcp</code> inside Claude Code, pick <b>kicad</b> and sign in.</p>
+  <h3>ChatGPT</h3>
+  <ol><li>Open <b>Settings</b>, then <b>Apps and connectors</b>, and turn on <b>Developer mode</b> under the advanced settings.</li>
+      <li>Choose <b>Create</b>, paste the address above, sign in here and allow it.</li></ol>
+  <p class="muted">In Codex CLI, run the line below and sign in when it asks.</p>
+  <pre>codex mcp add kicad --url {url}</pre>
+  <h3>Gemini CLI</h3>
+  <pre>gemini mcp add --transport http kicad {url}</pre>
+  <h3>Cursor</h3>
+  <p class="muted">Add this to <code>~/.cursor/mcp.json</code>, then sign in from Cursor's MCP settings.</p>
+  <pre>{{ "mcpServers": {{ "kicad": {{ "url": "{url}" }} }} }}</pre>
+  <h3>VS Code with GitHub Copilot</h3>
+  <p class="muted">Add this to <code>.vscode/mcp.json</code> in your workspace and start the server from the editor.</p>
+  <pre>{{ "servers": {{ "kicad": {{ "type": "http", "url": "{url}" }} }} }}</pre>
+  <h3>Anything else</h3>
+  <p class="muted">Add a remote MCP server (Streamable HTTP) with the address above. Sign-in is standard OAuth with automatic
+  registration, so there is no client ID or secret to fill in. A model you run yourself works through any agent that speaks MCP.</p>
 </div>
 
-<h2>What Claude can do</h2>
+<h2>Access keys</h2>
+<p class="lead">For a service that cannot open a sign-in page, such as a model API's remote MCP tool, an automation or an agent
+around a local model, create a key and give it to that service instead.</p>
+{keys}
+
+<h2>What it can do</h2>
 <ul class="can">
   <li>List and open your projects</li><li>Read components, nets, pins and raw items</li>
   <li>Run ERC and DRC</li><li>See the schematic or board as an image</li>
-  <li>Find parts and datasheet links</li><li>Place symbols, wires and labels</li>
+  <li>Find parts and read datasheets</li><li>Place symbols, wires and labels</li>
   <li>Update the board from the schematic</li><li>Place footprints and autoroute</li>
   <li>Set design rules</li><li>Comment on the design</li>
-  <li>Undo any change it made</li><li>Read the raw KiCad source</li>
+  <li>Run a Python script that does a whole design step</li><li>Undo any change it made</li>
 </ul>
 
 <h2>Connected apps</h2>
@@ -833,12 +941,57 @@ changes that everyone in the project sees live. It connects over MCP and signs i
   document.getElementById("copy").addEventListener("click", async (e) => {{
     try {{ await navigator.clipboard.writeText(document.getElementById("url").textContent); e.target.textContent = "Copied"; setTimeout(() => (e.target.textContent = "Copy"), 1500); }} catch (err) {{ /* blocked: the address is selectable */ }}
   }});
-  for (const td of document.querySelectorAll("td.when")) {{ const t = td.dataset.t; td.textContent = t ? new Date(t).toLocaleString(undefined, {{ dateStyle: "medium", timeStyle: "short" }}) : "Never"; }}
-  for (const b of document.querySelectorAll("[data-disconnect]")) b.addEventListener("click", async () => {{
+  const kf = document.getElementById("keyForm");
+  if (kf) {{
+    const err = document.getElementById("keyErr");
+    kf.addEventListener("submit", async (e) => {{
+      e.preventDefault();
+      err.hidden = true;
+      const name = document.getElementById("keyName").value.trim();
+      if (!name) {{ err.textContent = "Give the key a name, such as the service that will use it."; err.hidden = false; document.getElementById("keyName").focus(); return; }}
+      const button = kf.querySelector("button"); button.disabled = true;
+      try {{
+        const r = await fetch("/api/mcp/keys", {{ method: "POST", headers: {{ "content-type": "application/json" }}, body: JSON.stringify({{ name, write: document.getElementById("keyWrite").checked }}) }});
+        const j = await r.json().catch(() => ({{}}));
+        if (!r.ok) throw new Error(j.message || "The key could not be created.");
+        document.getElementById("keyValue").textContent = j.key;
+        document.getElementById("keyOut").hidden = false;
+        document.getElementById("keyName").value = "";
+        addRow(j);
+      }} catch (ex) {{ err.textContent = ex.message; err.hidden = false; }}
+      button.disabled = false;
+    }});
+    document.getElementById("keyCopy").addEventListener("click", async (e) => {{
+      try {{ await navigator.clipboard.writeText(document.getElementById("keyValue").textContent); e.target.textContent = "Copied"; setTimeout(() => (e.target.textContent = "Copy"), 1500); }} catch (ex) {{ /* blocked: the key is selectable */ }}
+    }});
+  }}
+  const stamp = (td) => {{ const t = td.dataset.t; td.textContent = t ? new Date(t).toLocaleString(undefined, {{ dateStyle: "medium", timeStyle: "short" }}) : "Never"; }};
+  function addRow(k) {{
+    let table = document.querySelector("table.apps");
+    if (!table) {{
+      const none = document.getElementById("none");
+      none.outerHTML = '<table class="apps"><thead><tr><th>App</th><th>Access</th><th>Connected</th><th>Last used</th><th></th></tr></thead><tbody></tbody></table>';
+      table = document.querySelector("table.apps");
+    }}
+    const tr = document.createElement("tr");
+    const cell = () => tr.appendChild(document.createElement("td"));
+    const b = document.createElement("b"); b.textContent = k.name;
+    const tag = document.createElement("span"); tag.className = "tag"; tag.textContent = "access key";
+    cell().append(b, " ", tag);
+    cell().textContent = k.canWrite ? "Read and change" : "Read only";
+    const made = cell(); made.className = "when"; made.dataset.t = new Date().toISOString(); stamp(made);
+    const used = cell(); used.className = "when"; used.dataset.t = ""; stamp(used);
+    const rm = document.createElement("button"); rm.className = "btn"; rm.dataset.disconnect = k.id; rm.textContent = "Remove";
+    cell().append(rm); wire(rm);
+    table.tBodies[0].prepend(tr);
+  }}
+  for (const td of document.querySelectorAll("td.when")) stamp(td);
+  function wire(b) {{ b.addEventListener("click", async () => {{
     b.disabled = true;
     const r = await fetch("/api/mcp/grants/" + b.dataset.disconnect, {{ method: "DELETE" }});
     if (r.ok) {{ const row = b.closest("tr"); const body = row.parentElement; row.remove(); if (!body.children.length) body.closest("table").outerHTML = '<p class="muted" id="none">No app is connected to your account yet.</p>'; }} else b.disabled = false;
-  }});
+  }}); }}
+  for (const b of document.querySelectorAll("[data-disconnect]")) wire(b);
 </script></body></html>"#
     );
     Ok(([(header::CACHE_CONTROL, "no-store")], Html(html)).into_response())

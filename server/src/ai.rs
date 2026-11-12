@@ -2,8 +2,8 @@
 //! library.ts), which run in the browser for plugins and in the headless editor behind the MCP
 //! endpoint (src/mcp.rs).
 //!
-//! There is no chat in the editor and the server holds no model API key: Claude works on a
-//! project from outside, through the MCP endpoint, on the person's own Claude plan.  The tools'
+//! There is no chat in the editor and the server holds no model API key: an AI assistant works on a
+//! project from outside, through the MCP endpoint, with whichever model or service the person uses.  The tools'
 //! other server-side needs live elsewhere: datasheets in datasheet.rs, libraries in kicadlib.rs.
 
 use axum::extract::{Path, State};

@@ -827,7 +827,7 @@ export function Home() {
               {me ? <a className="hp-side-btn" href="/github"><Ic name="branch" size={18} /><span>Import from GitHub</span></a> : null}
               {me ? <button type="button" id="homeParts" className="hp-side-btn" onClick={() => (window as unknown as { KiCadParts?: { open(o: { tab: string }): void } }).KiCadParts?.open({ tab: "libraries" })}><Ic name="grid" size={18} /><span>Part libraries</span></button> : null}
               {me ? <button type="button" id="homePlugins" className="hp-side-btn" onClick={() => (window as unknown as { KcPlugins?: { openManager(): void } }).KcPlugins?.openManager()}><Ic name="plugin" size={18} /><span>Plugins</span></button> : null}
-              {me ? <a className="hp-side-btn" id="homeConnect" href="/connect"><Ic name="link" size={18} /><span>Connect Claude</span></a> : null}
+              {me ? <a className="hp-side-btn" id="homeConnect" href="/connect"><Ic name="link" size={18} /><span>Connect AI</span></a> : null}
             </div>
             <div className="hp-side-foot">
               <a className="hp-side-btn" href={RELEASES} target="_blank" rel="noreferrer"><Ic name="desktop" size={18} /><span>Get the desktop app</span></a>
@@ -863,7 +863,7 @@ export function Home() {
       {account && me ? <Menu at={account} title={me.login} onClose={() => setAccount(null)} items={[
         { id: "trash", label: "Trash", icon: "trash", run: () => go("/trash") },
         { id: "sync", label: "GitHub sync", icon: "branch", run: () => { location.href = "/github"; } },
-        { id: "mcp", label: "Connect Claude (MCP)", icon: "link", run: () => { location.href = "/connect"; } },
+        { id: "mcp", label: "Connect an AI assistant (MCP)", icon: "link", run: () => { location.href = "/connect"; } },
         { id: "gh", label: "GitHub profile", icon: "open", run: () => { window.open(`https://github.com/${me.login}`, "_blank", "noopener"); } },
         { id: "app", label: "Get the desktop app", icon: "desktop", run: () => { window.open(RELEASES, "_blank", "noopener"); } },
         "-",

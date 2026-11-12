@@ -240,7 +240,7 @@ export const HANDLERS: Record<string, ActionHandler> = {
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
   theme: () => toggleTheme(), themeLight: () => setTheme("light"), themeDark: () => setTheme("dark"), themeSystem: () => setTheme("system"), about: (a) => runAction("about", a),
   // the app menu (the "KiCad Collaborative" title in the menu bar): places outside the current editor
-  explore: () => navigate("/gallery"), connectClaude: () => { location.href = "/connect"; },
+  explore: () => navigate("/gallery"), connectAI: () => { location.href = "/connect"; },
   symbolLibrary: () => { if (window.KiCadLibrary) window.KiCadLibrary.openChooser("symbol", { browser: true }); },
   footprintLibrary: () => { if (window.KiCadLibrary) window.KiCadLibrary.openChooser("footprint", { browser: true }); },
   pluginManager: () => { const P = (window as unknown as { KcPlugins?: { openManager?: () => void } }).KcPlugins; if (P && P.openManager) P.openManager(); else toast("Plugins are not loaded yet"); },

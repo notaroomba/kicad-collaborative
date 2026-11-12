@@ -297,12 +297,13 @@ File → GitHub Sync… in the web editor).
 `GITHUB_API_URL` / `GITHUB_WEB_URL` point the server at another GitHub
 (Enterprise, or the test stand-in).
 
-## Designing with Claude
+## Designing with an AI assistant
 
-There is no chat inside the editor and the server holds no model API key. Claude works on a project
-from outside, through the MCP endpoint (next section), from Claude Code, the Claude desktop app or
-claude.ai, so the work runs on the person's own Claude plan instead of on API tokens the server pays
-for. The menu bar's **Claude** button opens the page that connects one.
+There is no chat inside the editor and the server holds no model API key. An AI assistant works on a
+project from outside, through the MCP endpoint (next section). Any model or service that speaks MCP
+will do (Claude, ChatGPT, Gemini, Copilot, Cursor, a local model behind an agent), so the work runs
+on whatever plan or key the person already has instead of on API tokens the server pays for. The
+menu bar's **AI** button opens the page that connects one.
 
 The design tools (`web/ai/`: `design.ts`, `proposals.ts`, `library.ts`, with `tools.json` as their
 catalog) read components, nets, ERC/DRC and board statistics from the live document and turn
@@ -321,7 +322,7 @@ README has the API. It reaches a design three ways, with the same calls:
 - **Local files**: `kh.open(folder)` runs the engine with Node (`web/harness/cli.ts` and
   `workspace.ts`, bundled to `static/dist/harness-engine.js`) on KiCad files, no server involved.
 - **An online project from outside**: `kh.connect(url, token, project)` goes through `/mcp`.
-- **`run_python`**, an MCP tool: Claude sends a script, the server runs it and returns only what
+- **`run_python`**, an MCP tool: the assistant sends a script, the server runs it and returns only what
   the script printed. The script runs in a process of its own (`web/harness/sandbox.ts`): Pyodide
   under Node's permission model with no file, network, child process or environment access and
   JavaScript code generation disabled; its only way out is a blocking call to the headless editor,
@@ -368,19 +369,27 @@ datasheet pages.
 |---|---|
 | `KICAD_LIBS_URL`, `KICAD_LIBS_REF` | where KiCad's libraries are read from (default `https://gitlab.com`, `master`); `scripts/kicad-libs-mirror.mjs` is a caching mirror for machines whose outbound traffic goes through a proxy |
 
-## MCP server (Claude and other MCP clients)
+## MCP server (any AI model or service)
 
-`/mcp` is a Model Context Protocol endpoint, so Claude (Claude Code, the desktop app, claude.ai) can work on a
+`/mcp` is a Model Context Protocol endpoint, so an AI assistant (Claude, ChatGPT, Gemini, Copilot, Cursor, or any other MCP client) can work on a
 person's online projects from outside the editor: list and open projects, read schematics and boards, look at
 them as pictures, run the checks, find parts, and make changes that everyone in the project sees live.
 
-Connecting (the same steps are on the site's **Connect Claude** page, `/connect`, with the address filled in):
+Connecting (the same steps are on the site's **Connect an AI assistant** page, `/connect`, with the address filled in):
 
 - **Claude Code**: `claude mcp add --transport http kicad https://<site>/mcp`, then `/mcp` inside Claude Code,
   pick `kicad` and sign in.
 - **claude.ai and the desktop app**: Settings, Connectors, Add custom connector, paste `https://<site>/mcp`.
-- Anything else that speaks MCP over Streamable HTTP with OAuth works the same way. A script can skip OAuth and
-  send the session token the desktop app uses as `Authorization: Bearer <token>`.
+- **ChatGPT**: Settings, Apps and connectors, Developer mode on, Create, paste the address.
+- **Cursor** (`~/.cursor/mcp.json`): `{"mcpServers":{"kicad":{"url":"https://<site>/mcp"}}}`.
+- **VS Code with Copilot** (`.vscode/mcp.json`): `{"servers":{"kicad":{"type":"http","url":"https://<site>/mcp"}}}`.
+- **Gemini CLI**: `gemini mcp add --transport http kicad https://<site>/mcp`. **Codex CLI**: `codex mcp add kicad --url https://<site>/mcp`.
+- Anything else that speaks MCP over Streamable HTTP with OAuth works the same way; nothing in the server is
+  specific to one vendor.
+- **Access keys**, for a service that cannot open a sign-in page (a model API's remote MCP tool, an automation,
+  an agent around a local model): `/connect` makes a key (`POST /api/mcp/keys`, shown once, stored hashed, valid
+  a year, read only unless changes are allowed) that is sent as `Authorization: Bearer <key>`. It is listed with
+  the connected apps and removed there.
 
 How it is built:
 
@@ -401,7 +410,7 @@ How it is built:
   document over the ordinary collaboration WebSocket as a peer named "Name (App)", keeps it in step with
   everyone's edits, and sends its own as ordinary ops. Nothing about a change made this way is special to the
   desktop app or the web editor.
-- **Changes apply at once.** The person's own Claude app already asks before a tool runs, so `apply_changes`
+- **Changes apply at once.** The person's own AI client already asks before a tool runs, so `apply_changes`
   applies immediately (with `dry_run` to look first). Every call is recorded (`mcp_changes`) with what it takes to
   reverse it, so `undo_changes` and `redo_changes` take a whole call back or put it back; both are refused when
   somebody has edited the same items since, so nobody's newer work is overwritten.

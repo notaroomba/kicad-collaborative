@@ -102,7 +102,7 @@ const isCheckable = (id: string) => MENU_CHECKS.has(id);
 
 // ---------------------------------------------------------------- the app menu
 /* The "KiCad Collaborative" title opens the application menu, like the application menu of a desktop program:
-   the places outside the current editor (projects, public projects, the part libraries, plugins, GitHub, Claude)
+   the places outside the current editor (projects, public projects, the part libraries, plugins, GitHub, AI assistants)
    and the account.  Each entry is an editor action (web/editor/actions.ts HANDLERS). */
 interface AppEntry { id: string; label: string; icon: string; key?: string }
 function appEntries(me: AppState["me"], project: AppState["project"], inEditor: boolean): (AppEntry | "-")[] {
@@ -117,7 +117,7 @@ function appEntries(me: AppState["me"], project: AppState["project"], inEditor: 
     { id: "pluginManager", label: "Plugin and Content Manager", icon: "puzzle_piece" },
     "-",
     { id: "github", label: inEditor && project ? "GitHub Sync for This Project..." : "GitHub Sync...", icon: "import" },
-    { id: "connectClaude", label: "Connect Claude...", icon: "special_tools" },
+    { id: "connectAI", label: "Connect an AI Assistant...", icon: "special_tools" },
     "-",
     { id: "about", label: "About KiCad Collaborative", icon: "about" });
   if (me) out.push({ id: "signOut", label: "Log Out", icon: "" });
@@ -467,9 +467,9 @@ export function MenuBar() {
       ) : null}
       <div className="spacer flex-1" />
       {inEditor ? (
-        <a id="claudeConnect" className="claude-connect" href="/connect" target="_blank" rel="noopener" title="Design with Claude: connect Claude Code or the Claude app to this project. It edits here live, with its own cursor.">
+        <a id="aiConnect" className="ai-connect" href="/connect" target="_blank" rel="noopener" title="Design with AI: connect any AI model or service that speaks MCP (Claude, ChatGPT, Gemini, Copilot, Cursor, your own) to this project. It edits here live, with its own cursor.">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" /></svg>
-          Claude
+          AI
         </a>
       ) : null}
       <div className="user flex flex-none items-center gap-2 text-ink-2 min-w-0" id="userBox">

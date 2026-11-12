@@ -475,6 +475,38 @@ const pcbWatch = await watch(pcbDocId, adaJwt);
   check('Connected apps lists the connections', grants.length >= 1 && grants.every((g) => g.name === 'MCP e2e client') && grants.some((g) => g.canWrite) && grants.some((g) => !g.canWrite), JSON.stringify(grants).slice(0, 300));
   const page = await (await fetch(`${BASE}/connect`, { headers: { cookie: `kc_session=${adaJwt}` } })).text();
   check('the Connect page shows the address and the connected apps', page.includes(`${BASE}/mcp`) && /MCP e2e client/.test(page) && /data-disconnect/.test(page));
+  check('the Connect page is written for any AI model or service', /Connect an AI assistant/.test(page) && /ChatGPT/.test(page) && /Gemini/.test(page) && /Cursor/.test(page) && /Copilot/.test(page) && /Access keys/.test(page) && !/Connect Claude/.test(page));
+
+  // Access keys: for a service that cannot open a sign-in page
+  const mk = (jwt, body) => fetch(`${BASE}/api/mcp/keys`, { method: 'POST', headers: { authorization: `Bearer ${jwt}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const unnamed = await mk(adaJwt, { name: '  ' });
+  check('an access key needs a name', unnamed.status === 400, String(unnamed.status));
+  const roKey = await (await mk(adaJwt, { name: 'Reader service' })).json();
+  const rwKey = await (await mk(adaJwt, { name: 'Local model agent', write: true })).json();
+  check('an access key is created and shown once', /^kcm_at_/.test(roKey.key || '') && /^kcm_at_/.test(rwKey.key || '') && roKey.canWrite === false && rwKey.canWrite === true, JSON.stringify(roKey).slice(0, 200));
+  const stored = await db.query(`SELECT count(*)::int AS n FROM mcp_tokens WHERE encode(hash, 'escape') LIKE '%' || $1 || '%'`, [rwKey.key.slice(7, 20)]);
+  check('only the hash of a key is stored', stored.rows[0].n === 0);
+  const viaKey = async (key, name, args) => {
+    const r = await fetch(`${BASE}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) });
+    const text = await r.text();
+    const line = text.split('\n').filter((l) => l.startsWith('data: ')).pop();
+    return { status: r.status, body: JSON.parse(line ? line.slice(6) : text) };
+  };
+  const listed = await viaKey(roKey.key, 'list_projects', {});
+  check('a key works on the endpoint as its owner', listed.status === 200 && !listed.body.error && !listed.body.result?.isError, JSON.stringify(listed.body).slice(0, 300));
+  const roWrite = await viaKey(roKey.key, 'add_comment', { project: NAME, document: schPath, ref: 'R2', text: 'from a read-only key' });
+  check('a read-only key cannot change anything', roWrite.body.result?.isError === true || !!roWrite.body.error, JSON.stringify(roWrite.body).slice(0, 300));
+  const afterKeys = (await (await fetch(`${BASE}/api/mcp/grants`, { headers: { authorization: `Bearer ${adaJwt}` } })).json()).grants;
+  check('keys are listed with the connected apps', afterKeys.filter((g) => g.key).length === 2 && afterKeys.some((g) => g.key && g.name === 'Local model agent' && g.canWrite), JSON.stringify(afterKeys).slice(0, 300));
+  const theirs = await fetch(`${BASE}/api/mcp/grants/${rwKey.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${bobJwt}` } });
+  await fetch(`${BASE}/api/mcp/grants/${rwKey.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${adaJwt}` } });
+  const deadKey = await fetch(`${BASE}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${rwKey.key}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) });
+  check('a removed key stops working, and only its owner can remove it', theirs.status === 404 && deadKey.status === 401, `${theirs.status} ${deadKey.status}`);
+  const asClient = await fetch(`${BASE}/oauth/authorize?response_type=code&client_id=${encodeURIComponent('kcm_key_x')}&redirect_uri=${encodeURIComponent('https://evil.example/cb')}&code_challenge=x&code_challenge_method=S256`, { redirect: 'manual', headers: { cookie: `kc_session=${adaJwt}` } });
+  check('a key is not an OAuth client', asClient.status >= 400, String(asClient.status));
+  await fetch(`${BASE}/api/mcp/grants/${roKey.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${adaJwt}` } });
+
   const notMine = await fetch(`${BASE}/api/mcp/grants/${grants[0].id}`, { method: 'DELETE', headers: { authorization: `Bearer ${bobJwt}` } });
   check('nobody else can disconnect them', notMine.status === 404);
   for (const g of grants) await fetch(`${BASE}/api/mcp/grants/${g.id}`, { method: 'DELETE', headers: { authorization: `Bearer ${adaJwt}` } });
@@ -500,11 +532,11 @@ if (SHOTS) {
   const open = async (docId) => { await page.goto(`${BASE}/p/${projectId}/edit?doc=${docId}`); await page.waitForFunction(() => window.CollabEditor && window.CollabEditor.kdoc, null, { timeout: 30000 }); await page.waitForTimeout(1500); };
   await open(schDocId);
   const before = await page.evaluate(() => window.CollabEditor.kdoc.items.size);
-  // Ada's Claude adds a part while Bob has the sheet open in his browser
+  // Ada's assistant adds a part while Bob has the sheet open in his browser
   const ro = await authorize(clientId, adaJwt); const t = await (await exchange(clientId, ro.code, ro.verifier)).json();
   const add = await call(t.access_token, 'apply_changes', { project: NAME, document: schPath, title: 'Add a filter capacitor', edits: [
     { op: 'add_symbol', lib_id: 'Device:C', x: 115.57, y: 91.44, reference: 'C1', value: '100n', fields: { Footprint: 'Capacitor_SMD:C_0603_1608Metric' } },
-    { op: 'add_text', text: 'Added by Claude over MCP', x: 95.25, y: 109.22 } ] });
+    { op: 'add_text', text: 'Added by an assistant over MCP', x: 95.25, y: 109.22 } ] });
   const arrived = await page.waitForFunction((n) => window.CollabEditor.kdoc.items.size >= n + 2, before, { timeout: 10000 }).then(() => true, () => false);
   check('a browser with the sheet open shows the new part without a reload', !add.isError && arrived, add.text.slice(0, 200));
   const peer = await page.waitForFunction(() => Object.values(window.CollabEditor.peerState || {}).map((p) => p.user && p.user.name).find((n) => /\(MCP e2e client\)/.test(n || '')), null, { timeout: 8000 }).then((h) => h.jsonValue(), () => null);
