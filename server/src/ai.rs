@@ -86,8 +86,9 @@ fn tools() -> &'static Value {
     TOOLS.get_or_init(|| {
         let mut list: Vec<Value> = serde_json::from_str(DESIGN_TOOLS).expect("web/ai/tools.json is valid JSON");
         if config().web_tools {
-            // A fetched page is capped: a whole datasheet PDF is otherwise 100k tokens or more, resent on
-            // every later turn.  PDFs go through read_datasheet (datasheet.rs), which returns pages.
+            // A fetched web page is capped.  The cap does not apply to PDFs, which the fetch tool passes
+            // whole (a datasheet is 100k tokens or more, resent on every later turn): those go through
+            // read_datasheet (datasheet.rs), which returns only the pages that answer.
             list.push(json!({ "type": "web_search_20260209", "name": "web_search", "max_uses": 8 }));
             list.push(json!({ "type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 8, "max_content_tokens": 25000, "citations": { "enabled": true } }));
         }
