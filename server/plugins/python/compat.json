@@ -110,7 +110,7 @@
  },
  "com.github.bbenchoff.orthoroute": {
   "status": "partly",
-  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "note": "Its button runs, but its window is built with PyQt6, which the web editor does not have, so the router window does not open."
  },
  "com.github.bennymeg.JLC-Plugin-for-KiCad": {
   "status": "works"

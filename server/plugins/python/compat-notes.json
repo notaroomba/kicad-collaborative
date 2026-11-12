@@ -5,6 +5,10 @@
       "status": "works",
       "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
     },
+    "com.github.bbenchoff.orthoroute": {
+      "status": "partly",
+      "note": "Its button runs, but its window is built with PyQt6, which the web editor does not have, so the router window does not open."
+    },
     "com.github.danielboston38.prefab-gate": {
       "status": "partly",
       "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
