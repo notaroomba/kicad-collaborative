@@ -34,9 +34,15 @@ export function removedChange(item: KItem): PcbChange { const c = K.removeChange
 /** REMOVED changes for a multi-selection (items or ids); app.js deletes a group through this. */
 export function deleteChanges(doc: BoardDoc, items: Iterable<KItem | string> | null | undefined): PcbChange[] {
   const out: PcbChange[] = [], gens: KItem[] = [], ids = new Set<string>();
-  for (const x of items || []) { const it = typeof x === "string" ? doc.items.get(x) : x; if (it && it.id && it.kind) { out.push(removedChange(it)); ids.add(it.id); if (isTuningPattern(it)) gens.push(it); } }
-  // a tuning pattern goes back to its base line (PCB_TUNING_PATTERN::Remove)
-  return gens.length ? tuningRemoveChanges(doc, gens, ids) : out;
+  for (const x of items || []) { const it = typeof x === "string" ? doc.items.get(x) : x; if (it && it.id && it.kind && !ids.has(it.id)) { out.push(removedChange(it)); ids.add(it.id); if (isTuningPattern(it)) gens.push(it); } }
+  if (!gens.length) return out;
+  // EDIT_TOOL::DeleteItems: a selection of only generators (a selected pattern is the generator with its members here)
+  // runs genRemove — each pattern goes back to its base line (PCB_TUNING_PATTERN::Remove); with anything else in the
+  // selection the generators and their members are removed outright
+  const owned = new Set<string>(); for (const g of gens) { owned.add(g.id); for (const m of K.groupMemberIds(g.node)) owned.add(m); }
+  if (Array.from(ids).every((id) => owned.has(id))) return tuningRemoveChanges(doc, gens, ids);
+  for (const id of owned) { const it = doc.items.get(id); if (it && !ids.has(id)) { out.push(removedChange(it)); ids.add(id); } }
+  return out;
 }
 /** The board's nets, from every pad, track, via and zone (kicad-canvas drops the (net …) table). */
 export function boardNets(doc: BoardDoc) {

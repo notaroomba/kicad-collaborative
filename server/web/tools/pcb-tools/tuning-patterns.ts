@@ -21,7 +21,8 @@ import { line } from "./overlay";
 import { arcTrackNode } from "./posture";
 import { HL, K, S, saturated } from "./state";
 import { coupledLength, fmtG, inTuneOutline, tuneBegin, tuneFinish, tuneMode, tunePick, tunePieces, tuneTarget, tuneUpdate } from "./tuning-tool";
-import { clone, color, pt, widthOf } from "./util";
+import { clone, color, pt, r6, widthOf } from "./util";
+import { closestOnSeg } from "./point-editor";
 import { pathHits, routeObstacles, simplifyPts } from "./walkaround";
 
 // ---- tuning patterns on the board (PCB_TUNING_PATTERN as a PCB_GENERATOR: SetProperties, removeToBaseline, Update)
@@ -43,7 +44,9 @@ export function tuningPatternInfo(gen: Pick<KItem, "node">) {
   if (opt != null) st.target = { min: I(num("target_length_min", opt - 0.1)), opt: I(opt), max: I(num("target_length_max", opt + 0.1)) };
   const so = num("target_skew", null); if (so != null) st.skew = { min: I(num("target_skew_min", so - 0.1)), opt: I(so), max: I(num("target_skew_max", so + 0.1)) };
   const lay = kid("layer");
+  const xyOf = (k: string): Pt | null => { const c = kid(k); const p = c && K.kid(c, "xy"); return p ? [K.num(p[1]), K.num(p[2])] : null; };
   return { st, layer: lay ? K.str(lay[1]) : "F.Cu", base: ptsOf("base_line"), coupled: ptsOf("base_line_coupled"), mode: str("tuning_mode") || "single",
+    origin: xyOf("origin"), end: xyOf("end"), status: str("last_status"), tuningLength: num("last_tuning_length", null), netName: str("last_netname"),
     width: num("last_track_width", 0.25), gap: num("last_diff_pair_gap", 0), members: K.groupMemberIds(n) };
 }
 /** removeToBaseline as branch edits: the members out, the base line(s) back as straight tracks of the members' net and width. */
@@ -87,20 +90,25 @@ export function tuningRemoveChanges(doc: BoardDoc, gens: Iterable<KItem>, deleti
 /**
  * PCB_TUNING_PATTERN::EditStart / Update / EditFinish on a placed pattern: back to its base line, the line re-tuned
  * with the pattern's own settings (MEANDER_PLACER on the base line from origin to end), the new copper its members.
- * Returns the board changes, or [] when the base line cannot be found.
+ * The generator node may carry edited settings, origin and end (the point editor, the properties, a move): as in
+ * resetToBaseline the origin and end are pulled onto the straightened line (kept the base line's own ends when they
+ * come closer than 0.1 mm), the base line becomes the stretch between them.  Returns the board as it would be after
+ * the update (a branch of ctx.doc), or null when the base line cannot be found.
  */
-export function regenerateTuningChanges(ctx: PcbCtx, gen: KItem) {
-  const doc = ctx.doc; const { ops, added, info } = baselineOps(doc, gen);
-  if (!added.length || (info.mode !== "single" && info.mode !== "diff_pair_skew")) return [];
+export function regenerateTuningBranch(ctx: PcbCtx, gen: Pick<KItem, "id" | "kind" | "node">, doc0?: BoardDoc) {
+  const doc = doc0 || ctx.doc; const { ops, added, info } = baselineOps(doc, gen);
+  if (!added.length || (info.mode !== "single" && info.mode !== "diff_pair_skew")) return null;
   const scratch = branchDoc(doc, ops);
-  const seedId = K.str(K.kid(added[0].node, "uuid")![1]); const seed = scratch.items.get(seedId); if (!seed) return [];
-  const line = assembleLine(scratch, seed); if (!line) return [];
+  const seedId = K.str(K.kid(added[0].node, "uuid")![1]); const seed = scratch.items.get(seedId); if (!seed) return null;
+  const line = assembleLine(scratch, seed); if (!line) return null;
   const st = tuneCopy(info.st); st.keepEndpoints = true;
-  if (info.mode === "diff_pair_skew") { const pair = dpNetPair(scratch, line.net); if (!pair) return []; st.target = tuneTarget(info.st, coupledLength(scratch, pair, line.netKey, info.base![0])); }
+  const nearOnLine = (p: Pt) => { let best: Pt = line.pts[0], bd = Infinity; for (let i = 0; i + 1 < line.pts.length; i++) { const q = closestOnSeg(p, line.pts[i], line.pts[i + 1]); const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (d < bd) { bd = d; best = q; } } return [r6(best[0]), r6(best[1])]; };
+  let origin = nearOnLine(info.origin || info.base![0]), end = nearOnLine(info.end || info.base![info.base!.length - 1]);
+  if (Math.hypot(end[0] - origin[0], end[1] - origin[1]) < 0.1) { origin = info.base![0]; end = info.base![info.base!.length - 1]; }   // "Don't allow points too close"
+  if (info.mode === "diff_pair_skew") { const pair = dpNetPair(scratch, line.net); if (!pair) return null; st.target = tuneTarget(info.st, coupledLength(scratch, pair, line.netKey, origin)); }
   const I = (p: Pt) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
   const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer); const r = line.width / 2;
   const collides = (ch: Chain) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-  const origin = info.base![0], end = info.base![info.base!.length - 1];
   const res = meanderMove({ pts: line.pts.map(I), origin: I(origin), end: I(end), cursor: I(end), st, width: Math.round(line.width * TUNE_IU),
     clearance: Math.round(netClearance(settingsOf(ctx), line.netKey) * TUNE_IU), lineLength: routedLength(scratch, seedId) * TUNE_IU, collides });
   // the rebuilt line onto the scratch board: kept segments stay, the rest of the line is replaced
@@ -116,12 +124,20 @@ export function regenerateTuningChanges(ctx: PcbCtx, gen: KItem) {
   }
   for (const id of line.ids) if (!kept.has(id)) ops2.unshift({ del: id });
   const g = clone(gen.node);
-  const setKid = (k: string, v: SAtom) => { const c = K.kid(g, k); if (c) c.splice(1, c.length - 1, v); };
+  const setKid = (k: string, ...v: SAtom[]) => { const c = K.kid(g, k); if (c) c.splice(1, c.length - 1, ...v); };
+  const xy = (p: Pt): SNode => ["xy", +fmtG(p[0]), +fmtG(p[1])];
+  const base = res.baseline.map((n: { p: Pt }) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
+  const bl = K.kid(g, "base_line"); if (bl && base.length >= 2) bl.splice(1, bl.length - 1, ["pts", ...base.map(xy)]);
+  if (base.length >= 2) { const o = K.kid(g, "origin"); if (o) o.splice(1, o.length - 1, xy(base[0])); const e = K.kid(g, "end"); if (e) e.splice(1, e.length - 1, xy(base[base.length - 1])); }
+  const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default"; setKid("initial_side", side);
   setKid("last_status", res.status); setKid("last_tuning_length", +fmtG(res.length / TUNE_IU));
   const mk = K.kid(g, "members"); if (mk) mk.splice(1, mk.length - 1, ...members.slice().sort()); else g.push(["members", ...members.slice().sort()]);
   ops2.push({ set: gen.id, node: g });
-  const fin = branchDoc(scratch, ops2);
-  return branchChanges(doc, fin);
+  return branchDoc(scratch, ops2);
+}
+/** regenerateTuningBranch as board changes against ctx.doc ([] when the base line cannot be found). */
+export function regenerateTuningChanges(ctx: PcbCtx, gen: Pick<KItem, "id" | "kind" | "node">) {
+  const fin = regenerateTuningBranch(ctx, gen); return fin ? branchChanges(ctx.doc, fin) : [];
 }
 /** GENERATOR_TOOL::RegenerateAllOfType / RegenerateSelected: every pattern re-tuned in one commit. */
 export function regenerateTuning(ctx: PcbCtx, gens: Iterable<KItem>, label: string) {

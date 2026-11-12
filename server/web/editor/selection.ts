@@ -192,6 +192,9 @@ export function finishBoxSel(ev: { clientX: number; clientY: number }) {
     return;
   }
   for (const it of picked) E.selection.add(it.id);
+  // FilterCollectorForHierarchy: a boxed member of a group or generator (a tuning pattern's meanders) brings its
+  // top-level parent, which this selection holds as the parent's id with all its members
+  if (!isSch()) E.selection = groupExpand(E.selection);
   const prim = picked.find((it) => it.kind === "symbol" || it.kind === "footprint");
   E.selected = prim ? (E.items.find((f: ItemSummary) => f.id === prim.id) || E.selected) : (b.add ? E.selected : null);
   if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);

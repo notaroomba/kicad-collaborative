@@ -51,7 +51,7 @@ import { DEFAULT_SETTINGS, boardOutline, chainLoops, courtyards, designSettings,
 import { cycleWidth, deleteSelection, expandSelection, flipSelected, fmtSize, hoverDelete, rotateSelected, routableItems } from "./edit-commands";
 import { flipFootprintNode, rotateFootprintNode } from "./footprint";
 import { bestDragOrigin, itemAnchors, snapCursor } from "./grid-helper";
-import { applySelection, expandGroups, groupChanges, groupMembers, groupMembersChanges, groupNode, groupOf, isLocked, lockChanges, selectionIds, setLocked, ungroupChanges } from "./groups";
+import { applySelection, expandGroups, groupChanges, groupMembers, groupMembersChanges, groupNode, groupOf, isLocked, lockChanges, selectionIds, setLocked, topParentOf, ungroupChanges } from "./groups";
 import { deleteAt, deleteCandidate, guessCandidates, hitTestDistance, itemAt } from "./guess";
 import { hitTestItem } from "./hit";
 import { base64Bytes, imageInfo, imageMm } from "./images";
@@ -62,6 +62,7 @@ import { clusterRoots, conductors, connectedCopperIds, localRatsnest, netHighlig
 import { netNode, netOf, netStyle } from "./nets";
 import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority } from "./nodes";
 import { drawOverlay, dynamicRatsnest } from "./overlay";
+import { genHiddenIds, selectedTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit } from "./tuning-edit";
 import { addCornerChanges, arcEditGeometry, arcEditMode, canAddCorner, canRemoveCorner, editPointNode, editPoints, removeCornerChanges, setArcEditMode } from "./point-editor";
 import { cornerLeg, elemsPts, headElems, roundCorners } from "./posture";
 import { antennaRemovals, loopRemovals, removeRedundant } from "./redundant";
@@ -95,7 +96,7 @@ export const pcb = {
     S.pending = { ids: Array.from(ids), item: ctx.doc.items.get(ids[0]), mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0], app: true }; return true;
   },
   /** What the canvas leaves out while it is drawn elsewhere (the lines being dragged). */
-  hiddenIds() { return routeHiddenIds() || tuneHiddenIds() || dragHiddenIds(); },
+  hiddenIds() { return routeHiddenIds() || tuneHiddenIds() || genHiddenIds() || dragHiddenIds(); },
   onActivate(t: string, ctx: PcbCtx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);
@@ -161,8 +162,11 @@ export const pcb = {
     // anything not selected it draws a selection box.  The press still picks the item, as the click would.
     const wasSelected = S.sel.has(it.id), mode = selMode(ev);   // Shift adds, Ctrl toggles, Ctrl+Shift removes
     S.padSel = null;
-    if (mode) applySelMode(S.sel, it.id, mode);
-    else if (!wasSelected) S.sel = new Set([it.id]);
+    // FilterCollectorForHierarchy: a member of a group or generator (a tuning pattern's meander) selects its parent,
+    // which in this selection model is the parent's id with all its members
+    const pick = topParentOf(ctx.doc, it.id) ? Array.from(expandGroups(ctx.doc, [it.id])) : [it.id];
+    if (mode) { const on = mode === "toggle" ? !S.sel.has(it.id) : mode === "add"; for (const id of pick) applySelMode(S.sel, id, mode === "toggle" ? (on ? "add" : "remove") : mode); }
+    else if (!wasSelected) S.sel = new Set(pick);
     if (ctx.setSelection && !mode && !wasSelected) ctx.setSelection([]);   // the module owns this pick; app.js's selection empties
     S.pending = (!ctx.viewOnly && ctx.live && !mode && wasSelected) ? { ids: Array.from(S.sel), item: it, mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0] } : null;
     ctx.requestRender(); return (wasSelected || mode) ? true : "box";
@@ -361,7 +365,7 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, setTargetSkew, coupledLength, TUNE_MSG_SKEW_PICK, TUNE_MSG_SKEW_NETS, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, selectedTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit, topParentOf, tuningRemoveChanges, setTargetSkew, coupledLength, TUNE_MSG_SKEW_PICK, TUNE_MSG_SKEW_NETS, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableGrid, tableNode, imageNode, imageInfo, base64Bytes, imageMm,

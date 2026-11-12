@@ -12,6 +12,9 @@ import { line } from "./overlay";
 import { lsGet, lsSet } from "./router-settings";
 import { K, S, lastCtx } from "./state";
 import { clone, pt, r6, samePt, vadd, vmul, vsub } from "./util";
+import { isTuningPattern } from "./tuning-patterns";
+import { genCancelEdit, genFinishEdit, genStartEdit, genUpdateEdit, selectedTuningPattern, tuningEditNode, tuningEditPoints } from "./tuning-edit";
+import type { GenEdit } from "./tuning-edit";
 
 // ---------------------------------------------------------------- point editor (PCB_POINT_EDITOR)
 // A single selected zone, rule area, polygon, line, rectangle, circle, arc or dimension carries KiCad's edit handles: squares on
@@ -24,6 +27,7 @@ export function pePtsNode(node: SNode) { const host = node[0] === "zone" ? K.kid
 export function pePolyPts(node: SNode) { const p = pePtsNode(node); return p ? K.kids(p, "xy").map((x) => [K.num(x[1]), K.num(x[2])]) : []; }
 /** EDIT_POINTS of an item: [{ key, p, circle }] in drawing order. */
 export function editPoints(it: KItem): EditPoint[] {
+  if (it && it.kind === "generated") return isTuningPattern(it) ? tuningEditPoints(it) : [];   // PCB_TUNING_PATTERN::MakeEditPoints
   if (!it || !PE_KINDS.has(it.kind)) return [];
   const n = it.node, out: EditPoint[] = [];
   if (it.kind === "dimension") return dimEditPoints(n);
@@ -156,7 +160,11 @@ export function editPointNode(orig: SNode, kind: string, key: string, p: Pt, raw
   return node;
 }
 /** The one selected item's id (the module's own selection or the app's), or null. */
-export function peSingleId(ctx?: PcbCtx) { const c = ctx || lastCtx; const ids = c && c.doc ? selectionIds(c) : S.sel; return ids.size === 1 ? ids.values().next().value : null; }
+export function peSingleId(ctx?: PcbCtx) {
+  const c = ctx || lastCtx; const ids = c && c.doc ? selectionIds(c) : S.sel;
+  if (c && c.doc && ids.size > 1) { const gen = selectedTuningPattern(c, ids); if (gen) return gen.id; }   // a selected pattern is one generator
+  return ids.size === 1 ? ids.values().next().value : null;
+}
 /** The handle of the single selected editable item within `tol` mm of (x, y), or null. */
 export function editHandleAt(doc: BoardDoc, x: number, y: number, tol: number) {
   const id = peSingleId(); const it = id ? doc.items.get(id) : null; if (!it || isLocked(it.node)) return null;
@@ -205,25 +213,29 @@ export function onHandlePointerDown(ev: PointerEvent) {
   const doc = liveDoc(); if (!doc) return; const mm = ctx.worldMm(ev);
   const hit = editHandleAt(doc, mm[0], mm[1], handleTol()); if (!hit) return;
   ev.stopImmediatePropagation(); ev.preventDefault();
-  S.pedit = { id: hit.it.id, kind: hit.it.kind, key: hit.h.key, orig: clone(hit.it.node), start: mm, moved: false };
+  S.pedit = { id: hit.it.id, kind: hit.it.kind, key: hit.h.key, orig: clone(hit.it.node), start: mm, moved: false, ignoreGrid: !!(hit.h as { ignoreGrid?: boolean }).ignoreGrid };
+  if (isTuningPattern(hit.it)) genStartEdit(ctx, hit.it);   // PCB_POINT_EDITOR: genStartEdit
   try { stage.setPointerCapture(ev.pointerId!); } catch (e) { /* synthetic event */ }
 }
 export function editHandleMove(ctx: PcbCtx, mm: Pt) {
   const pe = S.pedit; if (!pe) return; const it = ctx.doc.items.get(pe.id); if (!it) { S.pedit = null; return; }
   if (!pe.moved && Math.hypot(mm[0] - pe.start[0], mm[1] - pe.start[1]) < 1e-3) return;
-  const p = ctx.snapOn && ctx.snap ? ctx.snap([mm[0], mm[1]]) : mm;
+  const p = pe.ignoreGrid ? mm : ctx.snapOn && ctx.snap ? ctx.snap([mm[0], mm[1]]) : mm;   // the amplitude and spacing handles ignore the grid
+  if (pe.kind === "generated") { pe.moved = true; pe.node = tuningEditNode(pe.orig, pe.key, p); genUpdateEdit(ctx, pe.node); return; }   // genUpdateEdit: re-tuned live
   pe.moved = true; pe.node = editPointNode(pe.orig, pe.kind, pe.key, p, mm, ctx.snapOn && ctx.snap ? ctx.snap : null);
   it.node.length = 0; it.node.push(...clone(pe.node!)); K.replaceChange(ctx.doc, it); ctx.requestRender();
 }
 export function editHandleUp(ctx: PcbCtx, commit: boolean) {
-  const pe = S.pedit; S.pedit = null; if (!pe) return; const it = ctx.doc.items.get(pe.id); if (!it) return;
+  const pe = S.pedit; S.pedit = null; if (!pe) return; const it = ctx.doc.items.get(pe.id); if (!it) { genCancelEdit(ctx); return; }
+  if (pe.kind === "generated") { if (commit && pe.moved) genFinishEdit(ctx); else genCancelEdit(ctx); return; }   // genFinishEdit: "Edit Tuning Pattern"
   it.node.length = 0; it.node.push(...clone(pe.orig)); K.replaceChange(ctx.doc, it);   // the original back first: commit records the inverse
   if (commit && pe.moved && pe.node && K.serialize(pe.node) !== K.serialize(pe.orig)) ctx.commit([replacedChange(it, pe.node)], "edit points");
   ctx.requestRender();
 }
 export function drawEditPoints(c: CanvasRenderingContext2D, ctx: PcbCtx, px: number) {
   if (S.route || S.draw || S.drag || S.move || S.modTool) return;
-  const id = peSingleId(ctx); const it = id ? ctx.doc.items.get(id) : null; if (!it || isLocked(it.node)) return; const hs = editPoints(it); if (!hs.length) return;
+  const id = peSingleId(ctx); const ge = S.genEdit as GenEdit | null | undefined;
+  const it = id ? (ge && ge.id === id && ge.fin && ge.fin.items.get(id)) || ctx.doc.items.get(id) : null; if (!it || isLocked(it.node)) return; const hs = editPoints(it); if (!hs.length) return;
   const cur = ctx.cursor || null; const size = 4 * px;   // POINT_SIZE 8 px
   const hotKey = S.pedit ? S.pedit.key : (cur ? ((editHandleAt(ctx.doc, cur[0], cur[1], handleTol()) || {}).h || {}).key : null);
   c.save(); c.globalAlpha = 1; c.setLineDash([]);

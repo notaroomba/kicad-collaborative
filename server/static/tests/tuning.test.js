@@ -297,5 +297,68 @@ test("Tune Skew refusals: a net without a partner, and the skew target in the di
   assert.equal(P.tuneSettingsView(st, "skew").targetLength, 0.5);
 });
 
+// ---- a placed pattern as one object (PCB_TUNING_PATTERN is a PCB_GENERATOR): selection, delete, edit points
+test("a click on a meander selects the whole pattern (FilterCollectorForHierarchy), the requested selection keeps the generator", () => {
+  const f = placeTuned(40); const g = f.gen(); const m = K.groupMemberIds(g.node);
+  const mem = f.doc.items.get(m.find((id) => f.doc.items.get(id).kind === "segment"));
+  const a = P.pt(mem.node, "start"), b = P.pt(mem.node, "end");
+  P.state.sel.clear(); pcb.onSelectDown(ev(), [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], f.ctx);
+  assert.ok(P.state.sel.has(g.id), "the generator is selected"); for (const id of m) assert.ok(P.state.sel.has(id));
+  assert.equal(P.selectedTuningPattern(f.ctx).id, g.id);
+  assert.equal(P.topParentOf(f.doc, mem.id).id, g.id);
+  const r = P.requestSelection(f.ctx, {}); assert.ok(r.ids.includes(g.id)); assert.ok(!r.items.some((it) => it.kind === "generated"));
+  P.state.sel.clear();
+});
+
+test("Delete: the pattern alone goes back to its base line; with another item it is removed with its members", () => {
+  let f = placeTuned(40);
+  f.ctx.commit(P.deleteChanges(f.doc, [...P.expandGroups(f.doc, [f.gen().id])]), "Delete");
+  assert.ok(!f.gen()); assert.ok(Math.abs(f.len() - (20 + Math.SQRT2 * 10)) < 1e-3, "baseline restored");
+  f = placeTuned(40); const m = K.groupMemberIds(f.gen().node);
+  const ids = [...P.expandGroups(f.doc, [f.gen().id]), "t1"];
+  f.ctx.commit(P.deleteChanges(f.doc, ids), "Delete");
+  assert.ok(!f.gen()); for (const id of m) assert.ok(!f.doc.items.has(id), "member removed outright"); assert.ok(!f.doc.items.has("t1"));
+  assert.ok(f.len() < 20 + Math.SQRT2 * 10 - 1, "no base line put back: " + f.len());
+});
+
+test("edit points: origin, end, amplitude handle at maxAmp + width/2 off the base line, spacing handle 1.5 spacings along", () => {
+  const f = placeTuned(40); const g = f.gen(); const info = P.tuningPatternInfo(g);
+  const hs = P.tuningEditPoints(g); assert.equal(hs.length, 4);
+  assert.deepEqual(hs[0].p, info.base[0]); assert.deepEqual(hs[1].p, info.base[info.base.length - 1]);
+  const A = info.base[0], B = info.base[1]; const L = Math.hypot(B[0] - A[0], B[1] - A[1]); const u = [(B[0] - A[0]) / L, (B[1] - A[1]) / L];
+  const amp = info.st.maxAmp / IU + info.width / 2; const sgn = info.st.initialSide === -1 ? -1 : 1;
+  const w = [A[0] - u[1] * amp * sgn, A[1] + u[0] * amp * sgn];
+  assert.ok(Math.hypot(hs[2].p[0] - w[0], hs[2].p[1] - w[1]) < 1e-9, "width handle " + hs[2].p + " vs " + w); assert.ok(hs[2].ignoreGrid && hs[3].ignoreGrid);
+  const sp = info.st.spacing / IU * 1.5; assert.ok(Math.hypot(hs[3].p[0] - (w[0] + u[0] * sp), hs[3].p[1] - (w[1] + u[1] * sp)) < 1e-9);
+  // dragging the width handle 0.5 mm further out: max amplitude + 0.5, rounded to 0.01 mm, side from the handle
+  const n2 = P.tuningEditNode(g.node, "2", [w[0] - u[1] * 0.5 * sgn + 0.001, w[1] + u[0] * 0.5 * sgn]);
+  assert.ok(Math.abs(K.kid(n2, "max_amplitude")[1] - (info.st.maxAmp / IU + 0.5)) < 0.011);
+  assert.equal(K.str(K.kid(n2, "initial_side")[1]), sgn < 0 ? "left" : "right");
+  const n3 = P.tuningEditNode(g.node, "3", [w[0] + u[0] * 1.5, w[1] + u[1] * 1.5]); assert.equal(K.kid(n3, "min_spacing")[1], 1);
+  const n0 = P.tuningEditNode(g.node, "0", [15, 10]); assert.deepEqual(K.kid(n0, "origin")[1].slice(1), [15, 10]);
+});
+
+test("Edit Tuning Pattern: a new end re-tunes live (preview hides the old copper) and commits once; Escape leaves the board", () => {
+  const f = placeTuned(40); const g = f.gen(); const before = f.log.commits.length;
+  P.genStartEdit(f.ctx, g); const node = P.tuningEditNode(g.node, "1", [25, 10]);
+  const fin = P.genUpdateEdit(f.ctx, node); assert.ok(fin, "an update"); assert.ok(P.state.genEdit.hidden.size > 0);
+  assert.equal(f.log.commits.length, before, "nothing committed while dragging");
+  P.genCancelEdit(f.ctx); assert.equal(f.log.commits.length, before); assert.equal(P.state.genEdit, null);
+  P.genStartEdit(f.ctx, g); P.genUpdateEdit(f.ctx, node); P.genFinishEdit(f.ctx);
+  assert.equal(f.log.commits.length, before + 1); assert.equal(f.log.commits.at(-1).label, "Edit Tuning Pattern");
+  const g2 = f.gen(); const info = P.tuningPatternInfo(g2);
+  assert.deepEqual(info.end, [25, 10], "the end moved"); assert.deepEqual(info.base.at(-1), [25, 10], "the base line follows");
+  assert.ok(Math.abs(f.len() - 40) < 0.1, "still tuned to 40 mm: " + f.len());
+  for (const id of K.groupMemberIds(g2.node)) assert.ok(f.doc.items.has(id));
+});
+
+test("getOutline: the base line grown by the clamped max amplitude + width/2 (round ends); single-sided keeps one side", () => {
+  const info = { base: [[0, 0], [10, 0]], coupled: null, mode: "single", width: 0.2, gap: 0, st: Object.assign(P.meanderDefaults(), { maxAmp: 1 * IU }) };
+  const o = P.tuningOutline(info); const ys = o.map((p) => p[1]), xs = o.map((p) => p[0]);
+  assert.ok(Math.abs(Math.max(...ys) - 1.1) < 1e-9 && Math.abs(Math.min(...ys) + 1.1) < 1e-9); assert.ok(Math.abs(Math.max(...xs) - 11.1) < 1e-9 && Math.abs(Math.min(...xs) + 1.1) < 1e-9);
+  info.st.singleSided = true; info.st.initialSide = 1; const s1 = P.tuningOutline(info);
+  assert.ok(Math.max(...s1.map((p) => p[1])) > 1 && Math.min(...s1.map((p) => p[1])) > -1e-9, "right side (+y) only");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

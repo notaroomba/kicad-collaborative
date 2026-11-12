@@ -124,6 +124,7 @@ export type PcbState = {
   tune: { pattern: TunePattern | null; picker: TunePicker | null; cursor: Pt | null };
   // set by the later sections
   rs: import("./router-settings").RouterSettings; tuneSettings: { single: MeanderSettings; skew: MeanderSettings };
+  genEdit?: import("./tuning-edit").GenEdit | null;
   move?: SelectMove | null; pending?: PendingDrag | null; sworld?: { doc: BoardDoc; ver: number; key: string; w: ShoveWorld } | null;
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; hiddenSeverities?: Set<string> | null;
@@ -246,7 +247,7 @@ export interface DragSub {
 export interface TrackDrag { subs: DragSub[]; tool: boolean; bySelect: boolean; moved: boolean; cursor: Pt; appSel: boolean; [extra: string]: unknown }
 
 /** S.pedit: a point-editor drag in flight. */
-export interface PointEdit { id: string; kind: string; key: string; orig: SNode; start: Pt; moved: boolean; node?: SNode; [extra: string]: unknown }
+export interface PointEdit { id: string; kind: string; key: string; orig: SNode; start: Pt; moved: boolean; node?: SNode; ignoreGrid?: boolean; [extra: string]: unknown }
 
 /** S.draw: a graphic, zone or dimension being drawn (pts are the fixed clicks, cur the cursor); arcs keep their ARC_GEOM_MANAGER. */
 export interface DrawState {

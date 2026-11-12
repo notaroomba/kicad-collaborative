@@ -28,7 +28,7 @@ import { angleSnapMode, nextLineMode, setAngleSnap, stepDrawWidth } from "./draw
 import { askText } from "./draw-tools";
 import { drc, mm4 } from "./drc";
 import { cycleVia, cycleWidth, stepLayer } from "./edit-commands";
-import { applySelection, expandGroups, groupChanges, groupMembersChanges, groupOf, isLocked, lockChanges, selectedItems, selectionIds, ungroupChanges } from "./groups";
+import { applySelection, expandGroups, groupChanges, groupMembers, groupMembersChanges, groupOf, isLocked, lockChanges, selectedItems, selectionIds, topParentOf, ungroupChanges } from "./groups";
 import { itemAt } from "./guess";
 import { hitTestItem } from "./hit";
 import { LENGTH_UNCONSTRAINED, TUNE_IU, setTargetLength, setTargetSkew, tuneCopy } from "./meander";
@@ -160,7 +160,7 @@ export function cursorCandidates(ctx: PcbCtx, mm: Pt) {
   const out: string[] = [];
   for (let id of ids) {
     const h = typeof id === "string" ? id.indexOf("#") : -1; if (h > 0) id = id.slice(0, h);
-    let g = groupOf(ctx.doc, id); while (g) { id = g.id; g = groupOf(ctx.doc, id); }
+    const top = topParentOf(ctx.doc, id); if (top) id = top.id;   // a group or generator member stands for its parent
     if (ctx.doc.items.has(id) && !out.includes(id)) out.push(id);
   }
   return out;
@@ -175,7 +175,8 @@ export function cursorCandidates(ctx: PcbCtx, mm: Pt) {
  */
 export function requestSelection(ctx: PcbCtx, opts?: RequestOpts) {
   opts = opts || {};
-  const keep = (it: KItem) => it && it.kind !== "generated" && (!opts!.filter || opts!.filter(it));   // opts is set from here on
+  // a generator (tuning pattern) passes the action's filter when one of its members does (it is a PCB_GROUP)
+  const keep = (it: KItem): boolean => !!it && (!opts!.filter || (it.kind === "generated" ? groupMembers(it.node).some((id) => { const m = ctx.doc.items.get(id); return !!m && opts!.filter!(m); }) : opts!.filter(it)));
   let ids = Array.from(selectionIds(ctx)), hover = !!S.forceHover;
   if (!ids.length && S.padSel) { const i = S.padSel.lastIndexOf("#"), fp = S.padSel.slice(0, i); if (ctx.doc.items.has(fp)) ids = [fp]; }   // a selected pad stands for its footprint (FilterCollectorForFreePads)
   if (!ids.length) {
@@ -193,7 +194,7 @@ export function requestSelection(ctx: PcbCtx, opts?: RequestOpts) {
   ids = Array.from(expandGroups(ctx.doc, ids)).filter((id) => keep(ctx.doc.items.get(id)!) || ctx.doc.items.get(id)!.kind === "group");
   if (!ids.length) return null;
   if (opts.locks !== false && !unlockedIds(ctx, ids, opts.quiet).length) return null;
-  return { ids, items: ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group") as KItem[], hover };
+  return { ids, items: ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group" && it.kind !== "generated") as KItem[], hover };
 }
 /** The end of an action on a hover selection: selection.IsHover() -> selectionClear. */
 export function endHover(ctx: PcbCtx, sel: { hover: boolean } | null) { if (sel && sel.hover) applySelection(ctx, []); }

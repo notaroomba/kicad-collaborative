@@ -16,6 +16,7 @@ import { padsOf } from "./route-geom";
 import { drawDragPreview, drawRoute } from "./route-preview";
 import { DEL, HALO_COLOR, HL, K, RATSNEST, RATSNEST_BRIGHT, S, VIA, bind } from "./state";
 import { drawTune } from "./tuning-patterns";
+import { drawGenEditPreview, drawTuningSelection } from "./tuning-edit";
 import { isTuneTool } from "./tuning-tool";
 import { color, pt, samePt, vadd, vsub } from "./util";
 
@@ -132,6 +133,8 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
   }
   // drag in progress (ROUTER::moveDragging): the rebuilt lines over the hidden originals
   drawDragPreview(c, ctx, view, px);
+  drawGenEditPreview(c, ctx);   // a tuning pattern being edited: its re-tuned line over the hidden originals
+  if (!S.route && !S.draw && !S.drag && !S.modTool) drawTuningSelection(c, ctx, px);   // PCB_TUNING_PATTERN::ViewDraw while selected
   drawEditPoints(c, ctx, px);   // PCB_POINT_EDITOR's EDIT_POINTS over the selected item
   // route in progress: fixed legs are already in the document, the current one lives here
   // ROUTER::markViolations: obstacles in violation (a refused start or via) in pure green over their clearance halo

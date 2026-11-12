@@ -658,6 +658,18 @@
     const m = K.kid(node, "members");
     return m ? m.slice(1).map(K.str) : [];
   };
+  function parentOf(doc, id) {
+    for (const it of doc.items.values()) if ((it.kind === "group" || it.kind === "generated") && groupMembers(it.node).includes(id)) return it;
+    return null;
+  }
+  function topParentOf(doc, id) {
+    let g = parentOf(doc, id), top = null, guard = 0;
+    while (g && guard++ < 32) {
+      top = g;
+      g = parentOf(doc, g.id);
+    }
+    return top;
+  }
   function groupOf(doc, id) {
     for (const it of doc.items.values()) if (it.kind === "group" && groupMembers(it.node).includes(id)) return it;
     return null;
@@ -1385,411 +1397,6 @@
     };
   }
 
-  // web/tools/pcb-tools/point-editor.ts
-  var PE_KINDS = /* @__PURE__ */ new Set(["zone", "gr_poly", "gr_line", "gr_rect", "gr_circle", "gr_arc", "dimension"]);
-  function pePtsNode(node) {
-    const host = node[0] === "zone" ? K.kid(node, "polygon") : node;
-    return host ? K.kid(host, "pts") : null;
-  }
-  function pePolyPts(node) {
-    const p = pePtsNode(node);
-    return p ? K.kids(p, "xy").map((x) => [K.num(x[1]), K.num(x[2])]) : [];
-  }
-  function editPoints(it) {
-    if (!it || !PE_KINDS.has(it.kind)) return [];
-    const n = it.node, out = [];
-    if (it.kind === "dimension") return dimEditPoints(n);
-    if (it.kind === "zone" || it.kind === "gr_poly") {
-      const pts = pePolyPts(n);
-      pts.forEach((p, i) => out.push({ key: "c" + i, p }));
-      if (pts.length > 1) pts.forEach((p, i) => {
-        const q = pts[(i + 1) % pts.length];
-        out.push({ key: "m" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true });
-      });
-    } else if (it.kind === "gr_line") {
-      for (const k of ["start", "end"]) {
-        const p = pt(n, k);
-        if (p) out.push({ key: k, p });
-      }
-    } else if (it.kind === "gr_rect") {
-      const a = pt(n, "start"), b = pt(n, "end");
-      if (!a || !b) return out;
-      const c = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
-      c.forEach((p, i) => out.push({ key: "r" + i, p }));
-      c.forEach((p, i) => {
-        const q = c[(i + 1) % 4];
-        out.push({ key: "e" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true });
-      });
-    } else if (it.kind === "gr_circle") {
-      const c = pt(n, "center"), e = pt(n, "end");
-      if (c) out.push({ key: "center", p: c });
-      if (e) out.push({ key: "end", p: e });
-    } else if (it.kind === "gr_arc") {
-      for (const k of ["start", "mid", "end"]) {
-        const p = pt(n, k);
-        if (p) out.push({ key: k, p });
-      }
-      const s = pt(n, "start"), m = pt(n, "mid"), e = pt(n, "end"), a = s && m && e ? K.arcFrom3(s, m, e) : null;
-      if (a) {
-        const c = [a.x, a.y];
-        out.push({ key: "center", p: c, lines: [s, e] });
-      }
-    }
-    return out;
-  }
-  var ARC_KEEP_CENTER = 0;
-  var ARC_KEEP_ENDPOINTS = 1;
-  var ARC_KEEP_RADIUS = 2;
-  var ARC_EDIT_KEY = "kc.pcb.arcEditMode";
-  var ARC_EDIT_ACTIONS = ["pointEditorArcKeepCenter", "pointEditorArcKeepEndpoint", "pointEditorArcKeepRadius"];
-  function arcEditMode() {
-    if (S.arcEditMode == null) {
-      const v = lsGet(ARC_EDIT_KEY);
-      S.arcEditMode = v !== null && /^[0-2]$/.test(v) ? +v : ARC_KEEP_CENTER;
-    }
-    return S.arcEditMode;
-  }
-  function setArcEditMode(m) {
-    S.arcEditMode = m;
-    lsSet(ARC_EDIT_KEY, String(m));
-  }
-  var nextArcEditMode = (m) => m === ARC_KEEP_CENTER ? ARC_KEEP_RADIUS : m === ARC_KEEP_RADIUS ? ARC_KEEP_ENDPOINTS : ARC_KEEP_CENTER;
-  var ARC_MIN_RADIUS = 0.0254;
-  var resized = (v, len) => {
-    const l = Math.hypot(v[0], v[1]);
-    return l ? [v[0] * len / l, v[1] * len / l] : [0, 0];
-  };
-  function arcFromCenter(c, s, e) {
-    const r = Math.hypot(s[0] - c[0], s[1] - c[1]);
-    const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]);
-    let sw = Math.atan2(e[1] - c[1], e[0] - c[0]) - a0;
-    while (sw <= 0) sw += 2 * Math.PI;
-    return { start: s, mid: [c[0] + r * Math.cos(a0 + sw / 2), c[1] + r * Math.sin(a0 + sw / 2)], end: e };
-  }
-  function arcEditGeometry(orig, key, p, raw, mode) {
-    let s = pt(orig, "start"), e = pt(orig, "end");
-    const m = pt(orig, "mid");
-    const a = s && m && e ? K.arcFrom3(s, m, e) : null;
-    if (!a) return null;
-    if (crossZ(m[0] - s[0], m[1] - s[1], e[0] - m[0], e[1] - m[1]) < 0) {
-      [s, e] = [e, s];
-      if (key === "start" || key === "end") key = key === "start" ? "end" : "start";
-    }
-    const c = [a.x, a.y];
-    if (key === "center") {
-      if (mode === ARC_KEEP_ENDPOINTS) {
-        const mid = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], n = resized([-(e[1] - s[1]), e[0] - s[0]], 1);
-        const t = (p[0] - mid[0]) * n[0] + (p[1] - mid[1]) * n[1];
-        const nc2 = [mid[0] + n[0] * t, mid[1] + n[1] * t];
-        return arcFromCenter(nc2, s, e);
-      }
-      const d = [p[0] - c[0], p[1] - c[1]];
-      return { start: vadd(s, d), mid: vadd(m, d), end: vadd(e, d) };
-    }
-    if (key === "mid") {
-      if (mode === ARC_KEEP_ENDPOINTS) {
-        const ch = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], v = vsub(m, ch), justOff = Math.hypot(s[0] - e[0], s[1] - e[1]) / 100;
-        const A = vadd(ch, resized(v, justOff)), u = resized(v, 1);
-        const t = Math.max(0, (raw[0] - A[0]) * u[0] + (raw[1] - A[1]) * u[1]);
-        const nm = vadd(A, vmul(u, t));
-        if (Math.abs(crossZ(nm[0] - s[0], nm[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
-        return { start: s, mid: nm, end: e };
-      }
-      const r = Math.max(ARC_MIN_RADIUS, Math.hypot(raw[0] - c[0], raw[1] - c[1]));
-      return arcFromCenter(c, vadd(c, resized(vsub(s, c), r)), vadd(c, resized(vsub(e, c), r)));
-    }
-    if (key !== "start" && key !== "end") return null;
-    const movingStart = key === "start";
-    if (mode === ARC_KEEP_CENTER) {
-      let p12 = vsub(p, c);
-      const p22 = vsub(movingStart ? e : s, c);
-      if (!p12[0] && !p12[1]) p12 = vsub(movingStart ? s : e, c);
-      const r = Math.max(ARC_MIN_RADIUS, Math.hypot(p12[0], p12[1]));
-      const n1 = vadd(c, resized(p12, r)), n2 = vadd(c, p22[0] || p22[1] ? resized(p22, r) : [r, 0]);
-      return movingStart ? arcFromCenter(c, n1, n2) : arcFromCenter(c, n2, n1);
-    }
-    if (mode === ARC_KEEP_RADIUS) {
-      const n1 = vadd(c, resized(vsub(p, c), a.r));
-      return movingStart ? arcFromCenter(c, n1, e) : arcFromCenter(c, s, n1);
-    }
-    const p1 = movingStart ? e : s, p2 = p, p3 = m;
-    let v1 = vsub(p1, c), v2 = vsub(p2, c);
-    const v3 = vsub(p3, c);
-    if (!Math.hypot(v1[0], v1[1]) || !Math.hypot(v2[0], v2[1])) return null;
-    const u1 = resized(v1, 1);
-    let u2 = vsub(v3, vmul(u1, u1[0] * v3[0] + u1[1] * v3[1]));
-    u2 = resized(u2, 1);
-    const det = u1[0] * u2[1] - u2[0] * u1[1];
-    if (!det) return null;
-    v1 = [(v1[0] * u2[1] - v1[1] * u2[0]) / det, (-v1[0] * u1[1] + v1[1] * u1[0]) / det];
-    v2 = [(v2[0] * u2[1] - v2[1] * u2[0]) / det, (-v2[0] * u1[1] + v2[1] * u1[0]) / det];
-    const R = Math.hypot(v1[0], v1[1]);
-    if (v2[0] === R) return null;
-    let flip = false;
-    if (v2[0] > R) {
-      flip = true;
-      v2[0] = 2 * R - v2[0];
-    }
-    const delta = (R * R - v2[0] * v2[0] - v2[1] * v2[1]) / (2 * v2[0] - 2 * R);
-    if (Math.abs(v2[1] / (R - v2[0])) > 50 || !isFinite(delta)) return null;
-    const v4 = flip ? [2 * R + delta, 0] : [-delta, 0];
-    const nc = vadd(c, [v4[0] * u1[0] + v4[1] * u2[0], v4[0] * u1[1] + v4[1] * u2[1]]);
-    return movingStart ? arcFromCenter(nc, p, e) : arcFromCenter(nc, s, p);
-  }
-  var setXY = (node, key, p) => {
-    const k = K.kid(node, key);
-    if (k) {
-      k[1] = r6(p[0]);
-      k[2] = r6(p[1]);
-    }
-  };
-  function editPointNode(orig, kind, key, p, raw, grid) {
-    if (kind === "dimension") return dimEditNode(orig, key, p, raw || p, grid || null);
-    if (kind === "gr_arc") {
-      const g = arcEditGeometry(orig, key, p, raw || p, arcEditMode());
-      if (!g) return clone(orig);
-      const node2 = clone(orig), cw = crossZ(g.mid[0] - g.start[0], g.mid[1] - g.start[1], g.end[0] - g.mid[0], g.end[1] - g.mid[1]) >= 0;
-      setXY(node2, "start", cw ? g.start : g.end);
-      setXY(node2, "mid", g.mid);
-      setXY(node2, "end", cw ? g.end : g.start);
-      return node2;
-    }
-    const node = clone(orig);
-    if (kind === "zone" || kind === "gr_poly") {
-      const pn = pePtsNode(node);
-      const xs = pn ? K.kids(pn, "xy") : [];
-      const nn = xs.length;
-      if (!nn) return node;
-      const i = +key.slice(1);
-      if (key[0] === "c") {
-        xs[i][1] = r6(p[0]);
-        xs[i][2] = r6(p[1]);
-      } else {
-        const j = (i + 1) % nn;
-        const a = [K.num(xs[i][1]), K.num(xs[i][2])], b = [K.num(xs[j][1]), K.num(xs[j][2])];
-        const d = [p[0] - (a[0] + b[0]) / 2, p[1] - (a[1] + b[1]) / 2];
-        xs[i][1] = r6(a[0] + d[0]);
-        xs[i][2] = r6(a[1] + d[1]);
-        xs[j][1] = r6(b[0] + d[0]);
-        xs[j][2] = r6(b[1] + d[1]);
-      }
-    } else if (kind === "gr_line") setXY(node, key, p);
-    else if (kind === "gr_rect") {
-      const a = pt(orig, "start"), b = pt(orig, "end");
-      let x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
-      const sx = (v) => {
-        x0 = v;
-      }, sy = (v) => {
-        y0 = v;
-      }, ex = (v) => {
-        x1 = v;
-      }, ey = (v) => {
-        y1 = v;
-      };
-      ({
-        r0: () => {
-          sx(p[0]);
-          sy(p[1]);
-        },
-        r1: () => {
-          ex(p[0]);
-          sy(p[1]);
-        },
-        r2: () => {
-          ex(p[0]);
-          ey(p[1]);
-        },
-        r3: () => {
-          sx(p[0]);
-          ey(p[1]);
-        },
-        e0: () => sy(p[1]),
-        e1: () => ex(p[0]),
-        e2: () => ey(p[1]),
-        e3: () => sx(p[0])
-      })[key]();
-      setXY(node, "start", [x0, y0]);
-      setXY(node, "end", [x1, y1]);
-    } else if (kind === "gr_circle") {
-      if (key === "center") {
-        const c = pt(orig, "center"), e = pt(orig, "end");
-        setXY(node, "center", p);
-        setXY(node, "end", [e[0] + p[0] - c[0], e[1] + p[1] - c[1]]);
-      } else setXY(node, "end", p);
-    }
-    return node;
-  }
-  function peSingleId(ctx) {
-    const c = ctx || lastCtx;
-    const ids = c && c.doc ? selectionIds(c) : S.sel;
-    return ids.size === 1 ? ids.values().next().value : null;
-  }
-  function editHandleAt(doc, x, y, tol) {
-    const id = peSingleId();
-    const it = id ? doc.items.get(id) : null;
-    if (!it || isLocked(it.node)) return null;
-    let best = null, bd = tol;
-    for (const h of editPoints(it)) {
-      const d = Math.max(Math.abs(h.p[0] - x), Math.abs(h.p[1] - y));
-      if (d <= bd) {
-        bd = d;
-        best = h;
-      }
-    }
-    return best ? { it, h: best } : null;
-  }
-  function addCornerChanges(doc, id, at) {
-    const it = doc.items.get(id);
-    if (!it) return [];
-    if (it.kind === "zone" || it.kind === "gr_poly") {
-      const pts = pePolyPts(it.node);
-      if (pts.length < 2) return [];
-      let bi = -1, bd = Infinity, bp = null;
-      for (let i = 0; i < pts.length; i++) {
-        const a = pts[i], b = pts[(i + 1) % pts.length];
-        const q = closestOnSeg(at, a, b);
-        const d = Math.hypot(q[0] - at[0], q[1] - at[1]);
-        if (d < bd) {
-          bd = d;
-          bi = i;
-          bp = q;
-        }
-      }
-      const node = clone(it.node);
-      const pn = pePtsNode(node);
-      const xs = K.kids(pn, "xy");
-      const after = xs[bi];
-      pn.splice(pn.indexOf(after) + 1, 0, ["xy", r6(bp[0]), r6(bp[1])]);
-      return [replacedChange(it, node)];
-    }
-    if (it.kind === "gr_line") {
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      const q = closestOnSeg(at, a, b);
-      if (samePt(q, a) || samePt(q, b)) return [];
-      const first = clone(it.node);
-      setXY(first, "end", q);
-      const second = clone(it.node);
-      setXY(second, "start", q);
-      const u = K.kid(second, "uuid");
-      if (u) u[1] = K.newUuid ? K.newUuid() : u[1] + "-1";
-      return [replacedChange(it, first), addedChange(doc, second)];
-    }
-    return [];
-  }
-  function canAddCorner(it) {
-    return !!it && (it.kind === "zone" || it.kind === "gr_poly" || it.kind === "gr_line");
-  }
-  function canRemoveCorner(doc, id, at) {
-    const it = doc.items.get(id);
-    if (!it || it.kind !== "zone" && it.kind !== "gr_poly" || pePolyPts(it.node).length <= 3) return false;
-    return !at || removeCornerChanges(doc, id, at, handleTol()).length > 0;
-  }
-  function closestOnSeg(p, a, b) {
-    const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
-    if (!L) return a.slice();
-    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L));
-    return [a[0] + t * dx, a[1] + t * dy];
-  }
-  function removeCornerChanges(doc, id, at, tol) {
-    const it = doc.items.get(id);
-    if (!it || it.kind !== "zone" && it.kind !== "gr_poly") return [];
-    const pts = pePolyPts(it.node);
-    if (pts.length <= 3) return [];
-    let bi = -1, bd = tol;
-    pts.forEach((p, i) => {
-      const d = Math.max(Math.abs(p[0] - at[0]), Math.abs(p[1] - at[1]));
-      if (d <= bd) {
-        bd = d;
-        bi = i;
-      }
-    });
-    if (bi < 0) return [];
-    const node = clone(it.node);
-    const pn = pePtsNode(node);
-    pn.splice(pn.indexOf(K.kids(pn, "xy")[bi]), 1);
-    return [replacedChange(it, node)];
-  }
-  var handleTol = () => 6 * (S.mmPerPx || 0.05);
-  function onHandlePointerDown(ev) {
-    const ctx = lastCtx;
-    if (!ctx || !isPcbDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
-    if (S.route || S.draw || S.drag || S.move || S.pedit || ctx.viewOnly) return;
-    const stage = ctx.stage;
-    if (!stage || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
-    const doc = liveDoc();
-    if (!doc) return;
-    const mm = ctx.worldMm(ev);
-    const hit = editHandleAt(doc, mm[0], mm[1], handleTol());
-    if (!hit) return;
-    ev.stopImmediatePropagation();
-    ev.preventDefault();
-    S.pedit = { id: hit.it.id, kind: hit.it.kind, key: hit.h.key, orig: clone(hit.it.node), start: mm, moved: false };
-    try {
-      stage.setPointerCapture(ev.pointerId);
-    } catch (e) {
-    }
-  }
-  function editHandleMove(ctx, mm) {
-    const pe = S.pedit;
-    if (!pe) return;
-    const it = ctx.doc.items.get(pe.id);
-    if (!it) {
-      S.pedit = null;
-      return;
-    }
-    if (!pe.moved && Math.hypot(mm[0] - pe.start[0], mm[1] - pe.start[1]) < 1e-3) return;
-    const p = ctx.snapOn && ctx.snap ? ctx.snap([mm[0], mm[1]]) : mm;
-    pe.moved = true;
-    pe.node = editPointNode(pe.orig, pe.kind, pe.key, p, mm, ctx.snapOn && ctx.snap ? ctx.snap : null);
-    it.node.length = 0;
-    it.node.push(...clone(pe.node));
-    K.replaceChange(ctx.doc, it);
-    ctx.requestRender();
-  }
-  function editHandleUp(ctx, commit) {
-    const pe = S.pedit;
-    S.pedit = null;
-    if (!pe) return;
-    const it = ctx.doc.items.get(pe.id);
-    if (!it) return;
-    it.node.length = 0;
-    it.node.push(...clone(pe.orig));
-    K.replaceChange(ctx.doc, it);
-    if (commit && pe.moved && pe.node && K.serialize(pe.node) !== K.serialize(pe.orig)) ctx.commit([replacedChange(it, pe.node)], "edit points");
-    ctx.requestRender();
-  }
-  function drawEditPoints(c, ctx, px) {
-    if (S.route || S.draw || S.drag || S.move || S.modTool) return;
-    const id = peSingleId(ctx);
-    const it = id ? ctx.doc.items.get(id) : null;
-    if (!it || isLocked(it.node)) return;
-    const hs = editPoints(it);
-    if (!hs.length) return;
-    const cur = ctx.cursor || null;
-    const size = 4 * px;
-    const hotKey = S.pedit ? S.pedit.key : cur ? ((editHandleAt(ctx.doc, cur[0], cur[1], handleTol()) || {}).h || {}).key : null;
-    c.save();
-    c.globalAlpha = 1;
-    c.setLineDash([]);
-    for (const h of hs) if (h.lines) {
-      c.lineWidth = 0.5 * px;
-      c.strokeStyle = "rgba(77,77,77,0.8)";
-      for (const q of h.lines) line(c, h.p, q);
-    }
-    for (const h of hs) {
-      const on = h.key === hotKey;
-      c.lineWidth = (on ? 5 : 2) * px;
-      c.strokeStyle = on ? "rgba(128,128,128,0.8)" : "rgba(77,77,77,0.8)";
-      c.fillStyle = "#FFFFFF";
-      c.beginPath();
-      if (h.circle) c.arc(h.p[0], h.p[1], size, 0, Math.PI * 2);
-      else c.rect(h.p[0] - size, h.p[1] - size, 2 * size, 2 * size);
-      c.fill();
-      c.stroke();
-    }
-    c.restore();
-  }
-
   // web/tools/pcb-tools/drc.ts
   var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
   function designSettings(src) {
@@ -2156,265 +1763,985 @@
     });
   }
 
-  // web/tools/pcb-tools/clipboard.ts
-  function layersBlock(doc) {
-    const rows = [];
-    for (const [name, l] of doc.layers) if (/\./.test(name) || name === "Margin") rows.push([l.id, name, l.type || "user"].concat(l.userName ? [l.userName] : []));
-    if (!rows.length) rows.push([0, "F.Cu", "signal"], [2, "B.Cu", "signal"]);
-    const copper = copperOf(doc);
-    const rank = (r) => {
-      const i = copper.indexOf(r[1]);
-      return i >= 0 ? i : /\.Cu$/.test(r[1]) ? 500 + r[0] : 1e3 + r[0];
+  // web/tools/pcb-tools/meander.ts
+  var TUNE_IU = 1e6;
+  var LENGTH_UNCONSTRAINED = 1e6 * TUNE_IU;
+  var DEFAULT_LENGTH_TOLERANCE = 0.1 * TUNE_IU;
+  var LENGTH_TARGET_TOLERANCE = 20;
+  var DELAY_UNCONSTRAINED_MM = 1e6;
+  var MT_SINGLE = 1;
+  var MT_START = 2;
+  var MT_FINISH = 3;
+  var MT_TURN = 4;
+  var MT_CHECK_START = 5;
+  var MT_CHECK_FINISH = 6;
+  var MT_CORNER = 7;
+  var MT_ARC = 8;
+  var MT_EMPTY = 9;
+  var TUNED = "tuned";
+  var TOO_SHORT = "too_short";
+  var TOO_LONG = "too_long";
+  var TUNE_MSG_INSIDE = "Unable to tune segments inside other tuning patterns.";
+  var TUNE_MSG_SELECT = "Select a track to tune first.";
+  var TUNE_MSG_PICK = "Please select a track whose length you want to tune.";
+  var TUNE_STATUS_TEXT = { [TOO_LONG]: "too long", [TOO_SHORT]: "too short", [TUNED]: "tuned" };
+  function meanderDefaults() {
+    const st = {
+      minAmp: 2e5,
+      maxAmp: 1e6,
+      step: 5e4,
+      spacing: 6e5,
+      crPct: 80,
+      round: true,
+      singleSided: false,
+      initialSide: -1,
+      target: null,
+      overrideCustomRules: false,
+      keepEndpoints: false
     };
-    rows.sort((a, b) => rank(a) - rank(b));
-    return ["layers", ...rows];
+    setTargetLength(st, LENGTH_UNCONSTRAINED);
+    setTargetSkew(st, 0);
+    return st;
   }
-  var quote = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
-  function layersText(doc) {
-    return "(layers " + layersBlock(doc).slice(1).map((r) => `(${r[0]} ${quote(r[1])} ${r[2]}${r[3] !== void 0 ? " " + quote(r[3]) : ""})`).join(" ") + ")";
+  function setTargetSkew(st, opt) {
+    st.skew = { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE };
   }
-  function referencePoint(doc, ids, cursor) {
-    const items = ids.map((id) => doc.items.get(id)).filter(Boolean);
-    let best = null, bd = Infinity;
-    if (cursor) for (const it of items) {
-      const pts = it.kind === "footprint" ? [anchorOf(it)].concat(padsOf(it).map((p) => [p.x, p.y])) : [anchorOf(it)].concat(conductorEnds(it));
-      for (const p of pts) {
-        const d = Math.hypot(p[0] - cursor[0], p[1] - cursor[1]);
-        if (d < bd) {
-          bd = d;
-          best = p;
-        }
-      }
-    }
-    return best || cursor || selectionCenter(items);
+  function setTargetLength(st, opt) {
+    st.target = opt === LENGTH_UNCONSTRAINED ? { min: 0, opt, max: opt } : { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE };
   }
-  function clipboardText(doc, ids, ref) {
-    ref = ref || [0, 0];
-    const NT = netTable(doc);
-    const items = Array.from(expandGroups(doc, ids)).map((id) => doc.items.get(id)).filter(Boolean);
-    const refd = /* @__PURE__ */ new Map();
-    const take = (n) => {
-      const key = NT.key(n);
-      if (key && !refd.has(key)) refd.set(key, n.code > 0 ? n.code : 0);
-    };
-    for (const it of items) {
-      if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) take(netOf(p));
-      else if (K.kid(it.node, "net")) take(netOf(it.node));
-    }
-    let next = 1;
-    const used = new Set(refd.values());
-    for (const [k, v] of refd) if (!v) {
-      while (used.has(next)) next++;
-      refd.set(k, next);
-      used.add(next);
-    }
-    const parts = [`(kicad_pcb (version ${BOARD_VERSION}) (generator "kicad-collab-web") (generator_version "10.0")`, layersText(doc), '(net 0 "")'];
-    for (const [name, code] of Array.from(refd).sort((a, b) => a[1] - b[1])) parts.push(`(net ${code} ${quote(name)})`);
-    for (const it of items) {
-      const node = clone(it.node);
-      translateNode(node, -ref[0], -ref[1]);
-      setLocked(node, false);
-      parts.push(K.serialize(node));
-    }
-    return parts.join("\n") + "\n)";
+  var tuneCopy = (st) => Object.assign({}, st, { target: Object.assign({}, st.target), skew: Object.assign({}, st.skew) });
+  var vsubI = vsub;
+  var vlen = (a) => Math.hypot(a[0], a[1]);
+  var vresize = (a, l) => {
+    const n = vlen(a);
+    return n ? [a[0] * l / n, a[1] * l / n] : [0, 0];
+  };
+  var vperp = (a) => [-a[1], a[0]];
+  var vrot = (a, cw) => cw ? [a[1], -a[0]] : [-a[1], a[0]];
+  var veq = (a, b) => Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[1] - b[1]) < 0.5;
+  var segSide = (s, p) => {
+    const d = (s.B[0] - s.A[0]) * (p[1] - s.A[1]) - (s.B[1] - s.A[1]) * (p[0] - s.A[0]);
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+  };
+  function lineProject(s, p) {
+    const d = vsubI(s.B, s.A), l2 = d[0] * d[0] + d[1] * d[1];
+    if (!l2) return s.A.slice();
+    const t = ((p[0] - s.A[0]) * d[0] + (p[1] - s.A[1]) * d[1]) / l2;
+    return [s.A[0] + d[0] * t, s.A[1] + d[1] * t];
   }
-  function parseClipboard(text) {
-    let trees;
-    try {
-      trees = K.parseAll(text);
-    } catch (e) {
-      return null;
-    }
-    const nodes = [], codeToName = /* @__PURE__ */ new Map();
-    for (const t of trees || []) {
-      if (!isList(t)) continue;
-      if (t[0] === "kicad_pcb") {
-        for (const c of t.slice(1)) {
-          if (!isList(c)) continue;
-          if (c[0] === "net" && typeof c[1] === "number") codeToName.set(c[1], K.str(c[2]));
-          else if (PCB_KINDS.has(c[0])) nodes.push(c);
-        }
-      } else if (PCB_KINDS.has(t[0])) nodes.push(t);
-    }
-    return nodes.length ? { nodes, codeToName } : null;
+  function approxParallel(s, o) {
+    const p = s.A[1] - s.B[1], q = s.B[0] - s.A[0], r = -p * s.A[0] - q * s.A[1], n = Math.hypot(p, q);
+    if (!n) return true;
+    return Math.abs((p * o.A[0] + q * o.A[1] + r) / n - (p * o.B[0] + q * o.B[1] + r) / n) <= 1;
   }
-  function freshUuids(nodes) {
-    const map = /* @__PURE__ */ new Map();
-    const walk = (n) => {
-      for (let i = 1; i < n.length; i++) {
-        const c = n[i];
-        if (!isList(c)) continue;
-        if ((c[0] === "uuid" || c[0] === "tstamp") && c.length > 1) {
-          const old = K.str(c[1]);
-          if (!map.has(old)) map.set(old, K.newUuid());
-          c[1] = map.get(old);
-        } else walk(c);
-      }
-    };
-    for (const n of nodes) walk(n);
-    for (const n of nodes) if (n[0] === "group") {
-      const m = K.kid(n, "members");
+  function chAppend(ch, p) {
+    if (ch.length && veq(ch[ch.length - 1].p, p)) return;
+    ch.push({ p: p.slice() });
+  }
+  function chAppendChain(ch, o) {
+    o.forEach((n, i) => {
+      if (!i || !n.m) chAppend(ch, n.p);
+      else ch.push({ p: n.p.slice(), m: n.m.slice() });
+    });
+  }
+  function chLength(ch) {
+    let L = 0;
+    for (let i = 1; i < ch.length; i++) {
+      const a = ch[i - 1].p, b = ch[i].p, m = ch[i].m;
       if (m) {
-        const ids = m.slice(1).map(K.str).filter((id) => map.has(id)).map((id) => map.get(id));
-        m.splice(1, m.length - 1, ...ids);
+        const c = K.arcFrom3(a, m, b);
+        if (c) {
+          L += arcLength(c);
+          continue;
+        }
       }
+      L += Math.hypot(b[0] - a[0], b[1] - a[1]);
     }
-    return map;
+    return L;
   }
-  function rewriteNets(nodes, codeToName, doc) {
-    const NT = netTable(doc);
-    const style = netStyle(doc);
-    const walk = (n) => {
-      for (let i = 1; i < n.length; i++) {
-        const c = n[i];
-        if (!isList(c)) continue;
-        if (c[0] === "net" && c.length > 1 && n[0] !== "kicad_pcb") {
-          const name = typeof c[1] === "number" ? c.length > 2 ? K.str(c[2]) : codeToName.get(c[1]) || "" : K.str(c[1]);
-          if (style === "name") n[i] = ["net", name];
-          else {
-            const t = name ? NT.byName.get(name) : null;
-            const code = t && t.code > 0 ? t.code : 0;
-            n[i] = c.length > 2 || n[0] === "pad" ? ["net", code, code ? name : ""] : ["net", code];
+  function chPoints(ch) {
+    const out = [];
+    ch.forEach((n, i) => {
+      if (i && n.m) {
+        const a = ch[i - 1].p, c = K.arcFrom3(a, n.m, n.p);
+        if (c) {
+          let sw = c.anticlockwise ? c.a0 - c.a1 : c.a1 - c.a0;
+          sw = (sw % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+          const k = Math.max(2, Math.ceil(sw / (Math.PI / 18)));
+          for (let j = 1; j < k; j++) {
+            const t = c.a0 + (c.anticlockwise ? -1 : 1) * sw * j / k;
+            out.push([c.x + c.r * Math.cos(t), c.y + c.r * Math.sin(t)]);
           }
-        } else walk(c);
+        }
       }
-    };
-    for (const n of nodes) walk(n);
+      out.push(n.p);
+    });
+    return out;
   }
-  var refProp = (node) => K.kids(node, "property").find((p) => K.str(p[1]) === "Reference");
-  function annotate(nodes, doc, mode) {
-    if (mode === "keep") return;
-    const used = /* @__PURE__ */ new Set();
-    for (const it of doc.items.values()) if (it.kind === "footprint" && it.ref) used.add(it.ref);
-    for (const n of nodes) {
-      if (!isFootprintNode(n)) continue;
-      const p = refProp(n);
-      if (!p) continue;
-      const ref = K.str(p[2]);
-      if (mode === "clear") {
-        p[2] = "REF**";
-        continue;
-      }
-      const m = /^(.*?)(\d+)$/.exec(ref);
-      if (!m) continue;
-      if (!used.has(ref)) {
-        used.add(ref);
-        continue;
-      }
-      let k = 1;
-      while (used.has(m[1] + k)) k++;
-      p[2] = m[1] + k;
-      used.add(p[2]);
-    }
-  }
-  function pasteChanges(doc, text, at, opts) {
-    opts = opts || {};
-    const parsed = parseClipboard(text);
-    if (!parsed) return { changes: [], ids: [] };
-    const nodes = parsed.nodes.map(clone);
-    freshUuids(nodes);
-    rewriteNets(nodes, parsed.codeToName, doc);
-    annotate(nodes, doc, opts.annotations || "keep");
-    if (opts.clearNets) clearNets(nodes, doc);
-    const changes = [], ids = [];
-    for (const n of nodes) {
-      if (at && (at[0] || at[1])) translateNode(n, at[0], at[1]);
-      const c = addedChange(doc, n);
-      changes.push(c);
-      ids.push(c.id);
-    }
-    return { changes, ids };
-  }
-  function clearNets(nodes, doc) {
-    const walk = (n) => {
-      for (let i = n.length - 1; i > 0; i--) {
-        const c = n[i];
-        if (!isList(c)) continue;
-        if (c[0] === "net" && n[0] !== "kicad_pcb") {
-          if (n[0] === "pad") n.splice(i, 1);
-          else n[i] = netNode(doc, null);
-        } else if (c[0] === "net_name") c[1] = "";
-        else walk(c);
-      }
+  function chMirror(ch, P, dir) {
+    const s = { A: P, B: vadd(P, dir) };
+    const m = (p) => {
+      const q = lineProject(s, p);
+      return [2 * q[0] - p[0], 2 * q[1] - p[1]];
     };
-    for (const n of nodes) walk(n);
+    return ch.map((n) => n.m ? { p: m(n.p), m: m(n.m) } : { p: m(n.p) });
   }
-  function duplicateChanges(doc, ids, offset, opts) {
-    const sel = new Set(ids);
-    const out = { changes: [], ids: [], restore: [] };
-    const joins = /* @__PURE__ */ new Map();
-    const coveredByGroup = (id) => {
-      for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true;
-      return false;
-    };
-    const subtree = (it, acc) => {
-      acc.push(it);
-      if (it.kind === "group") for (const m of groupMembers(it.node)) {
-        const c = doc.items.get(m);
-        if (c) subtree(c, acc);
+  function chSimplify(ch) {
+    const out = [];
+    for (const n of ch) {
+      if (out.length && !n.m && veq(out[out.length - 1].p, n.p)) continue;
+      if (out.length >= 2 && !n.m && !out[out.length - 1].m) {
+        const a = out[out.length - 2].p, b = out[out.length - 1].p, c = n.p;
+        const cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if (Math.abs(cr) / Math.max(1, Math.hypot(c[0] - a[0], c[1] - a[1])) < 1 && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) >= 0) {
+          out[out.length - 1] = { p: c.slice() };
+          continue;
+        }
       }
-      return acc;
-    };
-    for (const id of ids) {
-      const it = doc.items.get(id);
-      if (!it || it.kind === "generated" || coveredByGroup(id)) continue;
-      const src = subtree(it, []);
-      const nodes = src.map((x) => clone(x.node));
-      freshUuids(nodes);
-      if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
-      if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);
-      const order = nodes.map((n, i) => i).sort((a, b) => (nodes[a][0] === "group") - (nodes[b][0] === "group") || b - a);
-      let topId = null;
-      for (const i of order) {
-        const n = nodes[i];
-        if (offset && (offset[0] || offset[1])) translateNode(n, offset[0], offset[1]);
-        const c = addedChange(doc, n);
-        out.changes.push(c);
-        out.ids.push(c.id);
-        if (i === 0) topId = c.id;
-      }
-      const g = groupOf(doc, id);
-      if (g && topId) {
-        if (!joins.has(g.id)) joins.set(g.id, []);
-        joins.get(g.id).push(topId);
-      }
-    }
-    for (const [gid, add] of joins) {
-      const g = doc.items.get(gid);
-      out.restore.push({ id: gid, node: clone(g.node) });
-      out.changes.push(...groupMembersChanges(doc, g, add, []));
+      out.push(n.m ? { p: n.p.slice(), m: n.m.slice() } : { p: n.p.slice() });
     }
     return out;
   }
-  var textOfItem = (it) => it.kind === "footprint" ? it.ref || "" : it.kind === "gr_text" || it.kind === "gr_text_box" ? K.str(it.node[1]) : it.kind === "dimension" ? K.str((K.kid(it.node, "gr_text") || [])[1]) : "";
-  var clipBuffer = "";
-  function clipSet(ctx, text) {
-    clipBuffer = text;
-    if (ctx.clipboard && ctx.clipboard.set) ctx.clipboard.set(text);
-    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {
-    });
+  function newShape(pl, width) {
+    return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset: 0 };
   }
-  function clipGet(ctx, done) {
-    if (ctx.clipboard && ctx.clipboard.get) {
-      const v = ctx.clipboard.get();
-      if (v && typeof v.then === "function") {
-        v.then((t) => done(t || clipBuffer), () => done(clipBuffer));
+  var shapeCopy = (m) => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)) });
+  var isMeanderType = (t) => t === MT_SINGLE || t === MT_START || t === MT_FINISH || t === MT_TURN;
+  var shapeSpacing = (m) => Math.max(m.width + m.pl.clearance, m.pl.st.spacing);
+  function minAmplitude(m) {
+    const st = m.pl.st;
+    if (st.round) return Math.max(st.minAmp, Math.abs(m.offset) + m.width);
+    return Math.max(st.minAmp, Math.abs(m.offset) + Math.trunc(m.width * Math.tan(1 - Math.tan(Math.PI / 8))));
+  }
+  function cornerRadius(m) {
+    if (m.amp === 0) return 0;
+    const st = m.pl.st;
+    const minCr = st.round ? Math.abs(m.offset) + Math.trunc(m.width / 2) : Math.abs(m.offset) + Math.trunc(m.width / 2 * (1 - Math.tan(Math.PI / 8)));
+    const maxCr = Math.min(Math.trunc((m.amp + Math.abs(m.offset)) / 2), Math.trunc(shapeSpacing(m) / 2));
+    if (maxCr < minCr) return maxCr;
+    const optCr = Math.trunc(shapeSpacing(m) * st.crPct / 200);
+    return Math.min(Math.max(optCr, minCr), maxCr);
+  }
+  function genMeanderShape(m, P, dir, side, type, baseOffset) {
+    let cr = cornerRadius(m), offset = baseOffset;
+    const spc = shapeSpacing(m), amplitude = m.amp, tbl = m.targetBaseLen;
+    if (side) offset *= -1;
+    const dub = vresize(dir, offset), dvb = vperp(dub);
+    if (2 * cr > amplitude + Math.abs(offset)) cr = Math.trunc((amplitude + Math.abs(offset)) / 2);
+    if (2 * cr > spc) cr = Math.trunc(spc / 2);
+    if (cr - offset < 0) cr = offset;
+    m.meanCr = cr;
+    const sCorner = cr - offset, uCorner = cr + offset, startSide = amplitude - 2 * cr + Math.abs(offset), turnSide = amplitude - cr;
+    let top = spc - 2 * cr;
+    let lc = [], pos, cur;
+    const start = (w, d) => {
+      lc = [{ p: w.slice() }];
+      pos = w.slice();
+      cur = d.slice();
+    };
+    const forward = (len) => {
+      if (len < 5) return;
+      pos = vadd(pos, vresize(cur, len));
+      chAppend(lc, pos);
+    };
+    const turn = (cw) => {
+      cur = vrot(cur, cw);
+    };
+    const miter = (r, s) => {
+      if (r <= 0) {
+        turn(s);
         return;
       }
-      done(v || clipBuffer);
-      return;
+      const u = vresize(cur, r), v = vperp(u), sv = s ? -1 : 1;
+      const end = vadd(vadd(pos, u), vmul(v, sv));
+      if (m.pl.st.round) {
+        const c = vadd(pos, vmul(v, sv));
+        const mid = vadd(c, vmul(vadd(vsubI(pos, c), vsubI(end, c)), Math.SQRT1_2));
+        chAppend(lc, pos);
+        lc.push({ p: end, m: mid });
+      } else {
+        chAppend(lc, pos);
+        chAppend(lc, end);
+      }
+      pos = end;
+      turn(s);
+    };
+    const uShape = (sides, corner, t) => {
+      forward(sides);
+      miter(corner, true);
+      forward(t);
+      miter(corner, true);
+      forward(sides);
+    };
+    start(vadd(P, dvb), dir);
+    switch (type) {
+      case MT_EMPTY:
+        chAppend(lc, vadd(vadd(P, dvb), dir));
+        break;
+      case MT_START:
+        if (tbl) top = Math.max(top, tbl - sCorner - uCorner * 2 + offset);
+        miter(sCorner, false);
+        uShape(startSide, uCorner, top);
+        forward(Math.min(sCorner, uCorner));
+        forward(Math.abs(offset));
+        break;
+      case MT_FINISH:
+        if (tbl) top = Math.max(top, tbl - cr - spc);
+        start(vsubI(P, dub), dir);
+        turn(false);
+        forward(Math.min(sCorner, uCorner));
+        forward(Math.abs(offset));
+        uShape(startSide, uCorner, top);
+        miter(sCorner, false);
+        chAppend(lc, vadd(vadd(P, dvb), vresize(dir, tbl >= spc + cr ? tbl : 2 * spc - cr)));
+        break;
+      case MT_TURN:
+        if (tbl) top = Math.max(top, tbl - uCorner * 2 + offset * 2);
+        start(vsubI(P, dub), dir);
+        turn(false);
+        forward(Math.abs(offset));
+        uShape(turnSide, uCorner, top);
+        forward(Math.abs(offset));
+        break;
+      case MT_SINGLE:
+        if (tbl) top = Math.max(top, Math.trunc((tbl - sCorner * 2 - uCorner * 2) / 2));
+        miter(sCorner, false);
+        uShape(startSide, uCorner, top);
+        miter(sCorner, false);
+        chAppend(lc, vadd(vadd(P, dvb), vresize(dir, 2 * spc)));
+        break;
+      default:
+        break;
     }
-    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.readText) {
-      navigator.clipboard.readText().then((t) => done(t && /\(kicad_pcb|\(footprint|\(segment|\(via|\(gr_|\(zone/.test(t) ? t : clipBuffer), () => done(clipBuffer));
-      return;
-    }
-    done(clipBuffer);
+    return side ? chMirror(lc, P, dir) : lc;
   }
-  function cursorPoint(ctx) {
-    let p = ctx.cursor || (S.hover ? [S.hover.x, S.hover.y] : null);
-    if (!p && ctx.doc && ctx.doc.bbox) p = [(ctx.doc.bbox[0] + ctx.doc.bbox[2]) / 2, (ctx.doc.bbox[1] + ctx.doc.bbox[3]) / 2];
-    if (!p) return [0, 0];
-    return ctx.snapOn && ctx.snap ? ctx.snap(p) : p;
+  function updateBaseSegment(m) {
+    m.clipped = { A: lineProject(m.baseSeg, m.line[0].p), B: lineProject(m.baseSeg, m.line[m.line.length - 1].p) };
+  }
+  var baselineLength = (m) => vlen(vsubI(m.clipped.B, m.clipped.A));
+  var currentLength = (m) => chLength(m.line);
+  function recalcShape(m) {
+    m.line = genMeanderShape(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type, 0);
+    updateBaseSegment(m);
+  }
+  function resizeShape(m, a) {
+    if (a < 0) return;
+    m.amp = Math.max(a, minAmplitude(m));
+    recalcShape(m);
+  }
+  function makeEmpty(m) {
+    updateBaseSegment(m);
+    const d = vsubI(m.clipped.B, m.clipped.A);
+    m.type = MT_EMPTY;
+    m.amp = 0;
+    m.line = genMeanderShape(m, m.p0, d, m.side, MT_EMPTY, 0);
+  }
+  function minTunableLength(m) {
+    const c = shapeCopy(m);
+    c.targetBaseLen = baselineLength(m);
+    resizeShape(c, minAmplitude(c));
+    return currentLength(c);
+  }
+  function fitShape(m, type, seg, P, side) {
+    const st = m.pl.st;
+    if (type === MT_CHECK_START || type === MT_CHECK_FINISH) {
+      const prim1 = type === MT_CHECK_START ? MT_START : MT_TURN, prim2 = type === MT_CHECK_START ? MT_TURN : MT_FINISH;
+      const m1 = newShape(m.pl, m.width), m2 = newShape(m.pl, m.width);
+      const c1 = fitShape(m1, prim1, seg, P, side);
+      const c2 = c1 && fitShape(m2, prim2, seg, m1.clipped.B, !side);
+      if (c1 && c2) {
+        Object.assign(m, shapeCopy(m1));
+        m.type = prim1;
+        m.p0 = P.slice();
+        m.side = side;
+        updateBaseSegment(m);
+        return true;
+      }
+      return false;
+    }
+    const minAmpl = minAmplitude(m), maxAmpl = Math.max(st.maxAmp, minAmpl), minCr = Math.trunc(m.width / 2);
+    for (let ampl = maxAmpl; ampl >= minAmpl; ampl -= st.step) {
+      m.amp = ampl;
+      m.line = genMeanderShape(m, P, vsubI(seg.B, seg.A), side, type, 0);
+      m.type = type;
+      m.baseSeg = { A: seg.A.slice(), B: seg.B.slice() };
+      m.p0 = P.slice();
+      m.side = side;
+      updateBaseSegment(m);
+      if (m.meanCr < minCr) continue;
+      if (m.pl.checkFit(m)) return true;
+    }
+    return false;
+  }
+  function newMLine(pl, width) {
+    return { pl, width, meanders: [], last: [0, 0] };
+  }
+  function mlAddCorner(L, a) {
+    const m = newShape(L.pl, L.width);
+    m.type = MT_CORNER;
+    m.line = [{ p: a.slice() }];
+    m.clipped = { A: a.slice(), B: a.slice() };
+    L.last = a.slice();
+    L.meanders.push(m);
+  }
+  function mlAddMeander(L, m) {
+    L.last = m.clipped.B.slice();
+    L.meanders.push(shapeCopy(m));
+  }
+  function checkSelfIntersections(L, shape, clearance) {
+    let pts = null;
+    for (let i = L.meanders.length - 1; i >= 0; i--) {
+      const m = L.meanders[i];
+      if (m.type === MT_EMPTY || m.type === MT_CORNER) continue;
+      if (approxParallel(shape.clipped, m.clipped)) continue;
+      pts = pts || chPoints(shape.line);
+      const mp = chPoints(m.line);
+      for (let j = mp.length - 2; j >= 0; j--) for (let k = 0; k + 1 < pts.length; k++) if (segSegDist(pts[k], pts[k + 1], mp[j], mp[j + 1]) < clearance) return false;
+    }
+    return true;
+  }
+  function meanderSegment(L, base, aSide) {
+    const st = L.pl.st, baseLen = vlen(vsubI(base.B, base.A)), singleSided = st.singleSided, dir = vsubI(base.B, base.A);
+    let side = aSide;
+    mlAddCorner(L, base.A);
+    let turning = false, started = false;
+    L.last = base.A.slice();
+    for (let guard = 0; guard < 1e5; guard++) {
+      const m = newShape(L.pl, L.width);
+      const thr = shapeSpacing(m);
+      let fail = false;
+      let remaining = baseLen - vlen(vsubI(L.last, base.A));
+      const flipInitialSide = () => {
+        L.pl.st.initialSide = -L.pl.st.initialSide;
+      };
+      const addSingleIfFits = () => {
+        fail = true;
+        if (fitShape(m, MT_SINGLE, base, L.last, side)) {
+          mlAddMeander(L, m);
+          fail = false;
+          started = false;
+        }
+        if (fail && !singleSided && fitShape(m, MT_SINGLE, base, L.last, !side)) {
+          if (!started) flipInitialSide();
+          mlAddMeander(L, m);
+          fail = false;
+          started = false;
+          side = !side;
+        }
+      };
+      if (remaining < st.step) break;
+      if (!singleSided && remaining > 3 * thr) {
+        if (!turning) {
+          for (let i = 0; i < 2; i++) {
+            const checkSide = i === 0 ? side : !side;
+            if (fitShape(m, MT_CHECK_START, base, L.last, checkSide)) {
+              if (!started && checkSide !== side) flipInitialSide();
+              turning = true;
+              mlAddMeander(L, m);
+              side = !checkSide;
+              started = true;
+              break;
+            }
+          }
+          if (!turning) addSingleIfFits();
+        } else {
+          if (fitShape(m, MT_CHECK_FINISH, base, L.last, side)) {
+            fitShape(m, MT_TURN, base, L.last, side);
+            mlAddMeander(L, m);
+            side = !side;
+            started = true;
+          } else {
+            fitShape(m, MT_FINISH, base, L.last, side);
+            started = false;
+            mlAddMeander(L, m);
+            turning = false;
+          }
+        }
+      } else if (!singleSided && started) {
+        if (fitShape(m, MT_FINISH, base, L.last, side)) mlAddMeander(L, m);
+        break;
+      } else if (!turning && remaining > thr * 2) addSingleIfFits();
+      else fail = true;
+      remaining = baseLen - vlen(vsubI(L.last, base.A));
+      if (remaining < st.step) break;
+      if (fail) {
+        const tmp = newShape(L.pl, L.width);
+        const nextP = shapeSpacing(tmp) - 2 * cornerRadius(tmp) + st.step;
+        const pn = vadd(L.last, vresize(dir, nextP));
+        const q = lineProject(base, pn), t = ((pn[0] - base.A[0]) * dir[0] + (pn[1] - base.A[1]) * dir[1]) / (baseLen * baseLen || 1);
+        if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8) mlAddCorner(L, pn);
+        else break;
+      }
+    }
+    mlAddCorner(L, base.B);
+  }
+  function findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp) {
+    if (minAmp === maxAmp) return maxAmp;
+    resizeShape(copy, minAmp);
+    const minLen = Math.trunc(currentLength(copy));
+    resizeShape(copy, maxAmp);
+    const maxLen = Math.trunc(currentLength(copy));
+    if (minLen > targetLength || maxLen < targetLength) return 0;
+    const minError = minLen - targetLength, maxError = maxLen - targetLength;
+    if (Math.abs(minError) < LENGTH_TARGET_TOLERANCE || Math.abs(maxError) < LENGTH_TARGET_TOLERANCE) return Math.abs(minError) < Math.abs(maxError) ? minAmp : maxAmp;
+    const mid = Math.trunc((minAmp + maxAmp) / 2);
+    return findAmplitudeBinarySearch(copy, targetLength, minAmp, mid) || findAmplitudeBinarySearch(copy, targetLength, mid, maxAmp) || 0;
+  }
+  function findAmplitudeForLength(m, targetLength, minAmp, maxAmp) {
+    const copy = shapeCopy(m);
+    copy.targetBaseLen = baselineLength(m);
+    const initialGuess = Math.trunc(m.amp - (currentLength(m) - targetLength) / 2);
+    if (initialGuess >= minAmp && initialGuess <= maxAmp) {
+      resizeShape(copy, minAmp);
+      if (Math.abs(currentLength(copy) - targetLength) < LENGTH_TARGET_TOLERANCE) return initialGuess;
+    }
+    return findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp);
+  }
+  function tuneLineLength(L, elongation) {
+    let maxElongation = 0, minElongation = 0, finished = false;
+    for (const m of L.meanders) {
+      if (m.type === MT_CORNER || m.type === MT_ARC) continue;
+      const end = shapeCopy(m);
+      const endType = m.type === MT_START || m.type === MT_SINGLE ? MT_SINGLE : MT_FINISH;
+      end.type = endType;
+      recalcShape(end);
+      const maxEndElongation = currentLength(end) - baselineLength(end);
+      if (maxElongation + maxEndElongation > elongation) {
+        if (!finished) {
+          m.type = endType;
+          recalcShape(m);
+          if (endType === MT_SINGLE) {
+            const endMin = minTunableLength(m) - baselineLength(m);
+            if (minElongation + endMin >= elongation) makeEmpty(m);
+          }
+          finished = true;
+        } else makeEmpty(m);
+      }
+      maxElongation += currentLength(m) - baselineLength(m);
+      minElongation += minTunableLength(m) - baselineLength(m);
+    }
+    let remaining = elongation, count = 0;
+    for (const m of L.meanders) if (m.type !== MT_CORNER && m.type !== MT_ARC && m.type !== MT_EMPTY) {
+      remaining -= currentLength(m) - baselineLength(m);
+      count++;
+    }
+    let reductionLeft = -remaining, left = count;
+    if (reductionLeft < 0 || !left) return;
+    for (const m of L.meanders) {
+      if (m.type === MT_CORNER || m.type === MT_ARC || m.type === MT_EMPTY) continue;
+      const here = reductionLeft / left, initialLen = currentLength(m), minAmpl = minAmplitude(m);
+      let amp = findAmplitudeForLength(m, Math.trunc(initialLen - here), minAmpl, m.amp);
+      if (amp < minAmpl) amp = minAmpl;
+      m.targetBaseLen = baselineLength(m);
+      resizeShape(m, amp);
+      reductionLeft -= initialLen - currentLength(m);
+      left--;
+      if (!left) break;
+    }
+  }
+  function splitLine(pts, a, b) {
+    const near = (p) => {
+      let best = null;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const q = closestOnSeg(p, pts[i], pts[i + 1]);
+        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (!best || d < best.d - 1e-9) best = { d, i, q };
+      }
+      return best;
+    };
+    const at = (n) => {
+      const s = pts[n.i];
+      return n.i + Math.hypot(n.q[0] - s[0], n.q[1] - s[1]) / Math.max(1e-12, Math.hypot(pts[n.i + 1][0] - s[0], pts[n.i + 1][1] - s[1]));
+    };
+    let na = near(a), nb = near(b);
+    let P = pts;
+    if (at(na) > at(nb)) {
+      P = pts.slice().reverse();
+      const ra = { i: P.length - 2 - na.i, q: na.q }, rb = { i: P.length - 2 - nb.i, q: nb.q };
+      na = ra;
+      nb = rb;
+    }
+    const pre = P.slice(0, na.i + 1).map((p) => ({ p: p.slice() }));
+    chAppend(pre, na.q);
+    const mid = [{ p: na.q.slice() }];
+    for (let i = na.i + 1; i <= nb.i; i++) chAppend(mid, P[i]);
+    chAppend(mid, nb.q);
+    const post = [{ p: nb.q.slice() }];
+    for (let i = nb.i + 1; i < P.length; i++) chAppend(post, P[i]);
+    return { pre, mid, post, start: na.q, end: nb.q };
+  }
+  function meanderMove(P) {
+    const st = P.st;
+    const pl = {
+      st,
+      clearance: P.clearance,
+      width: P.width,
+      result: null,
+      checkFit(m) {
+        if (P.collides && P.collides(m.line)) return false;
+        return checkSelfIntersections(this.result, m, m.width + st.spacing);
+      }
+    };
+    const sp = splitLine(P.pts, P.origin, P.end);
+    const L = newMLine(pl, P.width);
+    pl.result = L;
+    for (let i = 0; i + 1 < sp.mid.length; i++) {
+      const s = { A: sp.mid[i].p, B: sp.mid[i + 1].p };
+      const side = st.initialSide === 0 ? segSide(s, P.cursor || P.end) < 0 : st.initialSide < 0;
+      mlAddCorner(L, s.A);
+      meanderSegment(L, s, side);
+      mlAddCorner(L, s.B);
+    }
+    const lineLen = P.lineLength;
+    let lastLength = lineLen, status = TUNED, hasMeanders = false;
+    let tuned = sp.mid;
+    if (lineLen > st.target.max) status = TOO_LONG;
+    else {
+      lastLength = lineLen - chLength(sp.mid);
+      tuneLineLength(L, st.target.opt - lineLen);
+    }
+    if (status !== TOO_LONG) {
+      tuned = [];
+      for (const m of L.meanders) if (m.type !== MT_EMPTY) {
+        chAppendChain(tuned, m.line);
+        hasMeanders = hasMeanders || isMeanderType(m.type);
+      }
+      lastLength += chLength(tuned);
+      status = lastLength > st.target.max ? TOO_LONG : lastLength < st.target.min ? TOO_SHORT : TUNED;
+    }
+    const fin = [];
+    if (st.keepEndpoints) {
+      chAppendChain(fin, chSimplify(sp.pre));
+      chAppendChain(fin, chSimplify(tuned));
+      chAppendChain(fin, chSimplify(sp.post));
+    } else {
+      chAppendChain(fin, sp.pre);
+      chAppendChain(fin, tuned);
+      chAppendChain(fin, sp.post);
+    }
+    return { final: st.keepEndpoints ? fin : chSimplify(fin), tuned: chSimplify(tuned), status, length: lastLength, hasMeanders, settings: st, start: sp.start, end: sp.end, baseline: sp.mid };
+  }
+
+  // web/tools/pcb-tools/msgpanel.ts
+  function msgValue(v, units) {
+    const u = units || "mm";
+    return u === "mil" ? (v / 0.0254).toFixed(2) + " mils" : u === "in" ? (v / 25.4).toFixed(4) + " in" : v.toFixed(4) + " mm";
+  }
+  function msgArea(a, units) {
+    const u = units || "mm";
+    return u === "mil" ? (a / 0.0254 / 0.0254).toFixed(0) + " mils\xB2" : u === "in" ? (a / 25.4 / 25.4).toFixed(3) + " in\xB2" : a.toFixed(3) + " mm\xB2";
+  }
+  var UNESC = { slash: "/", backslash: "\\", lt: "<", gt: ">", colon: ":", dblquote: '"', quote: "'", space: " ", tab: "	", return: "\n", brace: "{", bar: "|" };
+  var unescapeName = (t) => String(t || "").replace(/\{(slash|backslash|lt|gt|colon|dblquote|quote|space|tab|return|brace|bar)\}/g, (_, k) => UNESC[k]);
+  var msgAngle = (v) => String(+(+v).toPrecision(4));
+  function boardLayerName(doc, name) {
+    const l = doc && doc.layers && doc.layers.get ? doc.layers.get(name) : null;
+    return l && l.userName ? l.userName : name;
+  }
+  function padLayerDescribe(doc, p) {
+    const copper = copperOf(doc), cu = padCopperLayers(p, copper);
+    if (cu.size === copper.length) return "all copper layers";
+    const tech = p.layers.filter((l) => !/\.Cu$/.test(l) && l !== "*.Cu");
+    for (const set of [Array.from(cu), tech, p.layers]) if (set.length) return boardLayerName(doc, set[0].replace(/^\*\./, "F.")) + (set.length > 1 ? " and others" : "");
+    return "no layers";
+  }
+  function msgClearance(s, net) {
+    const nc = netClearance(s, net), min = s.minClearance || 0;
+    return nc >= min ? { v: nc, from: `netclass '${netclassName(s, net)}'` } : { v: min, from: "board setup constraints" };
+  }
+  function routedLength(doc, id) {
+    let len = 0;
+    for (const rid of connectedRun(doc, [id])) {
+      const it = doc.items.get(rid);
+      if (!it) continue;
+      if (it.kind === "segment") {
+        const a = pt(it.node, "start"), b = pt(it.node, "end");
+        if (a && b) len += Math.hypot(b[0] - a[0], b[1] - a[1]);
+      } else if (it.kind === "arc") {
+        const a = pt(it.node, "start"), m = pt(it.node, "mid"), b = pt(it.node, "end");
+        const arc = a && m && b && K.arcFrom3(a, m, b);
+        len += arc ? arcLength(arc) : a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+      }
+    }
+    return len;
+  }
+  var SHAPE_NAMES = { line: "Segment", rect: "Rectangle", circle: "Circle", arc: "Arc", poly: "Polygon", curve: "Curve" };
+  var netnameMsg = (net) => net && net.name ? `[${unescapeName(net.name)}]` : "[<no net>]";
+  function itemDescription(doc, id, units) {
+    const V = (v) => msgValue(v, units), L = (l) => boardLayerName(doc, l);
+    const hash = String(id).indexOf("#"), it = doc.items.get(hash > 0 ? String(id).slice(0, hash) : id);
+    if (!it) return "";
+    const n = it.node;
+    if (hash > 0 && it.kind === "footprint") {
+      const p = padsOf(it)[+String(id).slice(hash + 1)];
+      if (!p) return "";
+      const ref = it.ref || "";
+      if (p.type === "np_thru_hole") return `NPTH pad of ${ref}`;
+      const num = p.number ? p.number + " " : "";
+      if (p.type === "smd" || p.type === "connect") return `Pad ${num}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
+      return `PTH pad ${num}${netnameMsg(p.net)} of ${ref}`;
+    }
+    if (it.kind === "segment" || it.kind === "arc") {
+      const a = pt(n, "start"), b = pt(n, "end");
+      let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+      if (it.kind === "arc") {
+        const m2 = pt(n, "mid");
+        const arc = a && m2 && b && K.arcFrom3(a, m2, b);
+        if (arc) len = arcLength(arc);
+      }
+      return `${it.kind === "arc" ? "Track (arc)" : "Track"} ${netnameMsg(netOf(n))} on ${L(layerOf(n))}, length ${V(len)}`;
+    }
+    if (it.kind === "via") {
+      const ls = K.kid(n, "layers");
+      const pair = ls ? ls.slice(1).map(K.str) : ["F.Cu", "B.Cu"];
+      const kind = n.includes("micro") ? "Micro via" : n.includes("blind") ? "Blind via" : n.includes("buried") ? "Buried via" : "Via";
+      return `${kind} ${netnameMsg(netOf(n))} on ${L(pair[0] || "F.Cu")} - ${L(pair[pair.length - 1] || "B.Cu")}`;
+    }
+    if (it.kind === "footprint") return `Footprint ${it.ref || "<no reference designator>"}`;
+    if (it.kind === "zone") {
+      const names = zoneLayers(n).map(L);
+      const keep = K.kid(n, "keepout");
+      const nm = K.kid(n, "name");
+      const zn = nm ? K.str(nm[1]) : "";
+      const ld = names.length === 1 ? `on ${names[0]}` : names.length === 2 ? `on ${names[0]} and ${names[1]}` : names.length === 3 ? `on ${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `on ${names[0]}, ${names[1]} and ${names.length - 2} more` : "";
+      if (keep) return zn ? `Rule area '${zn}' ${ld}` : `Rule Area ${ld}`;
+      const pr = K.kid(n, "priority");
+      const prio = pr ? K.num(pr[1]) : 0;
+      return zn ? `Zone '${zn}' ${netnameMsg(netOf(n))} ${ld}, priority ${prio}` : `Zone ${netnameMsg(netOf(n))} ${ld}, priority ${prio}`;
+    }
+    if (it.kind === "gr_text") {
+      const t = K.str(n[1]);
+      return `PCB text '${t.length > 36 ? t.slice(0, 33) + "..." : t}' on ${L(layerOf(n))}`;
+    }
+    const m = /^gr_(line|rect|circle|arc|poly|curve)$/.exec(it.kind);
+    if (m) {
+      const layer = layerOf(n);
+      return /\.Cu$/.test(layer) ? `${SHAPE_NAMES[m[1]]} ${netnameMsg(netOf(n))} on ${L(layer)}` : `${SHAPE_NAMES[m[1]]} on ${L(layer)}`;
+    }
+    return "";
+  }
+  var PAD_ATTR = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
+  var PAD_SHAPE = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
+  function msgPanelInfo(doc, ids, opts) {
+    opts = opts || {};
+    const units = opts.units || "mm", s = opts.settings || designSettings(null), out = [];
+    const add = (title, value) => out.push({ title: String(title), value: String(value === void 0 || value === null ? "" : value) });
+    const V = (v) => msgValue(v, units), NN = (net) => netclassName(s, net);
+    const rt = opts.route;
+    if (rt) {
+      const net = rt.net && (rt.net.name || "");
+      const rs = opts.routerSettings || S.rs;
+      if (rt.dp) {
+        const netB = rt.netN && rt.netN.name || "";
+        const ncA = NN(net), ncB = NN(netB);
+        add(`Routing Diff Pair: ${unescapeName(net)}, ${unescapeName(netB)}`, `Resolved Netclass: ${ncA === ncB ? ncA : ncA + ", " + ncB}`);
+        add("Corner Style", cornerStyleName(rs));
+        add("Mode", MODE_NAMES[rs.mode]);
+        const d = rt.dpSizes;
+        add(`Track Width: ${V(d.width)}`, `(from ${d.widthSource})`);
+        const c2 = msgClearance(s, net);
+        add(`Min Clearance: ${V(c2.v)}`, `(from ${c2.from === "board setup constraints" ? "board minimum clearance" : c2.from})`);
+        add(`Diff Pair Gap: ${V(d.gap)}`, `(from ${d.gapSource})`);
+        return out;
+      }
+      if (net) add(`Routing Track: ${unescapeName(net)}`, `Resolved Netclass: ${NN(net)}`);
+      else add("Routing Track", "(no net)");
+      add("Corner Style", cornerStyleName(rs));
+      add("Mode", MODE_NAMES[rs.mode]);
+      const R = K.pcbSizes && K.pcbSizes.state;
+      const widthFrom = rt.connected && R && R.useConnectedWidth && !R.tempOverride ? "existing track" : R && !R.useNetclassTrack ? "user choice" : `netclass '${NN(net)}'`;
+      add(`Track Width: ${V(rt.width)}`, `(from ${widthFrom})`);
+      const c = msgClearance(s, net);
+      add(`Min Clearance: ${V(c.v)}`, `(from ${c.from === "board setup constraints" ? "board minimum clearance" : c.from})`);
+      return out;
+    }
+    const list = Array.from(ids || []);
+    if (list.length === 1) {
+      const id = String(list[0]), hash = id.indexOf("#");
+      const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
+      if (it && hash > 0 && it.kind === "footprint") {
+        const p = padsOf(it)[+id.slice(hash + 1)];
+        if (p) {
+          add("Footprint", it.ref || "");
+          add("Pad", p.number);
+          const pf = K.kid(p.node, "pinfunction"), ptp = K.kid(p.node, "pintype");
+          if (pf && K.str(pf[1])) add("Pin Name", K.str(pf[1]));
+          if (ptp && K.str(ptp[1])) add("Pin Type", K.str(ptp[1]));
+          add("Net", unescapeName(p.net.name));
+          add("Resolved Netclass", NN(p.net.name));
+          if (isLocked(it.node) || isLocked(p.node)) add("Status", "Locked");
+          if (p.type === "smd" || p.type === "connect") add("Layer", padLayerDescribe(doc, p));
+          const prop = K.kid(p.node, "property");
+          const PROP = { pad_prop_bga: "BGA", pad_prop_fiducial_glob: "Fiducial global", pad_prop_fiducial_loc: "Fiducial local", pad_prop_testpoint: "Test point", pad_prop_heatsink: "Heat sink", pad_prop_castellated: "Castellated", pad_prop_mechanical: "Mechanical", pad_prop_pressfit: "Press-fit" };
+          add(PAD_SHAPE[p.shape] || "???", (PAD_ATTR[p.type] || "???") + (prop && PROP[K.str(prop[1])] ? "," + PROP[K.str(prop[1])] : ""));
+          if (p.shape === "circle" || p.shape === "oval" && Math.abs(p.w - p.h) < 1e-9) add("Diameter", V(p.w));
+          else {
+            add("Width", V(p.w));
+            add("Height", V(p.h));
+          }
+          const frot = K.atOf(it.node)[2] || 0;
+          const prel = norm180(p.rot - frot);
+          add("Rotation", frot ? `${msgAngle(prel)}(+ ${msgAngle(frot)})` : msgAngle(p.rot));
+          const dr = K.kid(p.node, "drill");
+          if (dr) {
+            const oval = K.str(dr[1]) === "oval";
+            const nums = dr.slice(oval ? 2 : 1).filter((x) => typeof x === "number");
+            if (nums.length && nums[0] > 0) {
+              if (oval) add("Hole X / Y", `${V(nums[0])} / ${V(nums.length > 1 ? nums[1] : nums[0])}`);
+              else add("Hole", V(nums[0]));
+            }
+          }
+          const c = msgClearance(s, p.net.name);
+          add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
+          return out;
+        }
+      }
+      if (it && (it.kind === "segment" || it.kind === "arc")) {
+        const n = it.node, net = netOf(n).name || "", w = widthOf(n, 0.25), layer = layerOf(n);
+        add("Type", it.kind === "arc" ? "Track (arc)" : "Track");
+        add("Net", unescapeName(net));
+        add("Resolved Netclass", NN(net));
+        if (isLocked(n)) add("Status", "Locked");
+        add("Layer", boardLayerName(doc, layer));
+        add("Width", V(w));
+        const a = pt(n, "start"), b = pt(n, "end");
+        let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
+        if (it.kind === "arc") {
+          const m = pt(n, "mid");
+          const arc = a && m && b && K.arcFrom3(a, m, b);
+          if (arc) {
+            len = arcLength(arc);
+            add("Radius", V(arc.r));
+            add("Angle", (len / arc.r * 180 / Math.PI * (arc.anticlockwise ? -1 : 1)).toFixed(2) + "deg");
+          }
+        }
+        add("Segment Length", V(len));
+        if (hasNet(netOf(n))) add("Routed Length", V(routedLength(doc, it.id)));
+        add("Copper Area", msgArea(len * w + Math.PI * w * w / 4, units));
+        const c = msgClearance(s, net);
+        add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
+        const nc = netclassOf(s, net);
+        const mn = s.minTrackWidth || 0;
+        const parts = [];
+        if (mn > 0) parts.push("min " + V(mn));
+        if (nc && nc.track_width !== void 0) parts.push("opt " + V(nc.track_width));
+        if (parts.length) add(`Width Constraints: ${parts.join("; ")}`, `(from netclass '${NN(net)}')`);
+        return out;
+      }
+      if (it && it.kind === "via") {
+        const n = it.node, net = netOf(n).name || "";
+        const v = viaNow(n);
+        add("Type", n.includes("micro") ? "Micro Via" : n.includes("blind") ? "Blind Via" : n.includes("buried") ? "Buried Via" : "Through Via");
+        add("Net", unescapeName(net));
+        add("Resolved Netclass", NN(net));
+        if (isLocked(n)) add("Status", "Locked");
+        const ls = K.kid(n, "layers");
+        const pair = ls ? ls.slice(1).map(K.str) : ["F.Cu", "B.Cu"];
+        add("Layer", `${boardLayerName(doc, pair[0] || "F.Cu")} - ${boardLayerName(doc, pair[pair.length - 1] || "B.Cu")}`);
+        add("Diameter", V(v.size));
+        add("Hole", V(v.drill));
+        const c = msgClearance(s, net);
+        add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
+        add(`Min Annular Width: ${V(s.minViaAnnular || 0)}`, "(from board setup constraints)");
+        return out;
+      }
+      if (it && it.kind === "footprint") {
+        const n = it.node;
+        const val = K.kids(n, "property").find((q) => K.str(q[1]) === "Value");
+        add(it.ref || "", it.value !== void 0 ? it.value : val ? K.str(val[2]) : "");
+        add("Board Side", it.layer === "B.Cu" ? "Back (Flipped)" : "Front");
+        add("Rotation", msgAngle(K.atOf(n)[2] || 0));
+        const status = [], attrs = [];
+        if (isLocked(n)) status.push("Locked");
+        if (n.includes("placed") || K.kid(n, "placed")) status.push("autoplaced");
+        const at = K.kid(n, "attr");
+        const toks = at ? at.slice(1).map(K.str) : [];
+        if (toks.includes("board_only")) attrs.push("not in schematic");
+        if (toks.includes("exclude_from_pos_files")) attrs.push("exclude from pos files");
+        if (toks.includes("exclude_from_bom")) attrs.push("exclude from BOM");
+        if (toks.includes("dnp")) attrs.push("DNP");
+        add("Status: " + status.join(", "), "Attributes: " + attrs.join(", "));
+        const m3 = K.kid(n, "model");
+        add(`Footprint: ${K.str(n[1])}`, `3D-Shape: ${m3 ? K.str(m3[1]) : "<none>"}`);
+        const descr = K.kid(n, "descr"), tags = K.kid(n, "tags");
+        add(`Doc: ${descr ? K.str(descr[1]) : ""}`, `Keywords: ${tags ? K.str(tags[1]) : ""}`);
+        return out;
+      }
+      if (it && it.kind === "zone") {
+        const n = it.node, keep = K.kid(n, "keepout"), net = netOf(n).name || "", zl = zoneLayers(n);
+        add("Type", keep ? "Rule Area" : "Zone");
+        if (keep) {
+          const r = [];
+          for (const [k, l] of [["vias", "No vias"], ["tracks", "No tracks"], ["pads", "No pads"], ["copperpour", "No zone fills"], ["footprints", "No footprints"]]) {
+            const x = K.kid(keep, k);
+            if (x && K.str(x[1]) === "not_allowed") r.push(l);
+          }
+          if (r.length) add("Restrictions", r.join(", "));
+        } else if (zl.some((l) => /\.Cu$/.test(l) || l === "*.Cu")) {
+          add("Net", unescapeName(net));
+          add("Resolved Netclass", NN(net));
+          const pr = K.kid(n, "priority");
+          add("Priority", pr ? K.num(pr[1]) : 0);
+        }
+        if (isLocked(n)) add("Status", "Locked");
+        const names = zl.map((l) => boardLayerName(doc, l));
+        add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
+        const nm = K.kid(n, "name");
+        if (nm && K.str(nm[1])) add("Name", K.str(nm[1]));
+        if (!keep) {
+          const fill = K.kid(n, "fill");
+          const hatched = fill && K.kid(fill, "mode") && K.str(K.kid(fill, "mode")[1]) === "hatch";
+          add("Fill Mode", hatched ? "Hatched" : "Solid");
+          let area = 0;
+          for (const fp of K.kids(n, "filled_polygon")) {
+            const q = K.ptsOf(fp);
+            for (let i = 0; i < q.length; i++) {
+              const a = q[i], b = q[(i + 1) % q.length];
+              area += a[0] * b[1] - b[0] * a[1];
+            }
+          }
+          add("Filled Area", msgArea(Math.abs(area) / 2, units));
+          const cp = K.kid(n, "connect_pads");
+          const cc = cp && K.kid(cp, "clearance");
+          const c = msgClearance(s, net);
+          const zc = cc ? K.num(cc[1]) : 0;
+          const v = Math.max(zc, c.v);
+          add(`Min Clearance: ${V(v)}`, `(from ${zc >= c.v && cc ? "zone" : c.from})`);
+        }
+        return out;
+      }
+      if (it && /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) {
+        const n = it.node, kind = it.kind.slice(3);
+        const SHAPE = SHAPE_NAMES;
+        add("Type", "Drawing");
+        if (isLocked(n)) add("Status", "Locked");
+        add("Shape", SHAPE[kind]);
+        const a = pt(n, "start"), b = pt(n, "end"), c = pt(n, "center");
+        if (kind === "circle" && c && b) add("Radius", V(Math.hypot(b[0] - c[0], b[1] - c[1])));
+        else if (kind === "arc") {
+          const m = pt(n, "mid");
+          const arc = a && m && b && K.arcFrom3(a, m, b);
+          if (arc) {
+            const L = arcLength(arc);
+            add("Length", V(L));
+            add("Angle", (L / arc.r * 180 / Math.PI).toFixed(1) + "\xB0");
+            add("Radius", V(arc.r));
+          }
+        } else if (kind === "curve") {
+          const q = K.bezierPts(K.ptsOf(n));
+          let L = 0;
+          for (let i = 1; i < q.length; i++) L += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]);
+          add("Length", V(L));
+        } else if (kind === "poly") add("Points", K.ptsOf(n).length);
+        else if (kind === "rect" && a && b) {
+          add("Width", V(Math.abs(b[0] - a[0])));
+          add("Height", V(Math.abs(b[1] - a[1])));
+        } else if (kind === "line" && a && b) {
+          add("Length", V(Math.hypot(b[0] - a[0], b[1] - a[1])));
+          add("Angle", (Math.atan2(a[1] - b[1], b[0] - a[0]) * 180 / Math.PI).toFixed(1) + "\xB0");
+        }
+        const layer = layerOf(n);
+        add("Layer", boardLayerName(doc, layer));
+        if (/\.Cu$/.test(layer) && hasNet(netOf(n))) add("Net", unescapeName(netOf(n).name));
+        return out;
+      }
+    }
+    if (opts.net && !list.length) {
+      const NT = netTable(doc), name = opts.net;
+      let code = 0;
+      for (const [c, nm] of NT.byCode) if (nm === name) {
+        code = c;
+        break;
+      }
+      if (!code) {
+        let i = 0;
+        for (const nm of NT.byName.keys()) {
+          i++;
+          if (nm === name) {
+            code = i;
+            break;
+          }
+        }
+      }
+      let padCount = 0, viaCount = 0, first = null;
+      for (const it of doc.items.values()) {
+        if (it.kind === "footprint") {
+          for (const p of K.kids(it.node, "pad")) if (NT.key(netOf(p)) === name) padCount++;
+        } else if ((it.kind === "via" || it.kind === "segment" || it.kind === "arc") && NT.key(netOf(it.node)) === name) {
+          if (it.kind === "via") viaCount++;
+          else if (!first) first = it;
+        }
+      }
+      add("Net Name", unescapeName(name));
+      add("Net Code", code);
+      add("Pads", padCount);
+      add("Vias", viaCount);
+      if (first) {
+        const L = routedLength(doc, first.id);
+        add("Net Length", V(L));
+        add("On Board", V(L));
+        add("In Package", V(0));
+      }
+      return out;
+    }
+    let pads = 0, vias = 0, segs = 0;
+    const nets = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) {
+      if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) {
+        pads++;
+        const nn = netOf(p);
+        if (hasNet(nn)) nets.add(nn.name || nn.code);
+      }
+      else if (it.kind === "via" || it.kind === "segment" || it.kind === "arc") {
+        if (it.kind === "via") vias++;
+        else segs++;
+        const nn = netOf(it.node);
+        if (hasNet(nn)) nets.add(nn.name || nn.code);
+      }
+    }
+    add("Pads", pads);
+    add("Vias", vias);
+    add("Track Segments", segs);
+    add("Nets", nets.size);
+    add("Unrouted", ratsnest(doc, opts.nl || netlist(doc)).length);
+    return out;
+  }
+  function bboxOfPts(pts) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
+    }
+    return [x0, y0, x1, y1];
+  }
+  function idsOnLayer(doc, layer) {
+    const out = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) {
+      if (it.kind === "group") continue;
+      if (it.kind === "footprint" && it.layer === layer || it.geom.some((g) => g.layer === layer)) out.add(it.id);
+    }
+    return out;
+  }
+  var SELECTION_TYPES = { footprints: (it) => it.kind === "footprint", tracks: (it) => it.kind === "segment" || it.kind === "arc", vias: (it) => it.kind === "via", zones: (it) => it.kind === "zone", graphics: (it) => /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind) || it.kind === "image", text: (it) => it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "table", dimensions: (it) => it.kind === "dimension", other: (it) => it.kind === "group" || it.kind === "target" || it.kind === "generated" };
+  function filterIds(doc, ids, keep) {
+    return Array.from(ids).filter((id) => {
+      const it = doc.items.get(id);
+      if (!it) return false;
+      for (const [type, test] of Object.entries(SELECTION_TYPES)) if (test(it)) return keep[type] !== false;
+      return true;
+    });
+  }
+  function inspectClearance(doc, idA, idB, settings) {
+    const s = settings && settings.netclasses ? settings : designSettings(settings);
+    const conds = conductors(doc).filter((c) => c.kind !== "zone");
+    const A = conds.filter((c) => c.id === idA), B = conds.filter((c) => c.id === idB);
+    if (!A.length || !B.length) return null;
+    let gap = Infinity;
+    for (const a of A) for (const b of B) if (shareLayer(a.layers, b.layers)) gap = Math.min(gap, shapeGap(a.shape, b.shape));
+    const need = Math.max(netClearance(s, A[0].net), netClearance(s, B[0].net));
+    return { gap: gap === Infinity ? null : r6(gap), required: need, sameNet: !!(A[0].net && A[0].net === B[0].net), nets: [A[0].net, B[0].net] };
   }
 
   // web/tools/pcb-tools/walkaround.ts
@@ -2814,6 +3141,1693 @@
     };
     options.sort((a, b) => dist(a) - dist(b) || ptsLength(a) - ptsLength(b));
     return { pts: options[0], reached: false };
+  }
+
+  // web/tools/pcb-tools/posture.ts
+  function cornerLeg(a, b, diagFirst, cm, free) {
+    if (free) return samePt(a, b) ? [a.slice()] : [a.slice(), b.slice()];
+    if (!is90(cm)) return legPts(a, b, diagFirst);
+    const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+    if (w < 1e-9 || h < 1e-9) return samePt(a, b) ? [a.slice()] : [a.slice(), b.slice()];
+    const mid = diagFirst === h >= w ? [b[0], a[1]] : [a[0], b[1]];
+    return [a.slice(), rp(mid), b.slice()];
+  }
+  function roundCorners(pts) {
+    const n = pts.length;
+    if (n < 3) return pts.length > 1 ? [{ t: "seg", a: pts[0].slice(), b: pts[1].slice() }] : [];
+    const len = (i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    const corners2 = [];
+    for (let i = 1; i < n - 1; i++) {
+      const lp = len(i - 1) * (i - 1 === 0 ? 1 : 0.5), ln = len(i) * (i + 1 === n - 1 ? 1 : 0.5);
+      const t = Math.min(lp, ln);
+      const u1 = vunit(vsub(pts[i - 1], pts[i])), u2 = vunit(vsub(pts[i + 1], pts[i]));
+      const cos = u1[0] * u2[0] + u1[1] * u2[1];
+      if (t < 1e-6 || cos < -1 + 1e-9) {
+        corners2.push(null);
+        continue;
+      }
+      const half = Math.acos(Math.max(-1, Math.min(1, cos))) / 2;
+      const bis = vunit(vadd(u1, u2));
+      const R = t * Math.tan(half), dc = t / Math.cos(half);
+      corners2.push({ a: rp(vadd(pts[i], vmul(u1, t))), b: rp(vadd(pts[i], vmul(u2, t))), m: rp(vadd(pts[i], vmul(bis, dc - R))) });
+    }
+    const out = [];
+    let cur = pts[0].slice();
+    for (let i = 1; i < n - 1; i++) {
+      const c = corners2[i - 1];
+      if (!c) continue;
+      if (!peq(cur, c.a)) out.push({ t: "seg", a: cur, b: c.a });
+      out.push({ t: "arc", a: c.a, m: c.m, b: c.b });
+      cur = c.b;
+    }
+    if (!peq(cur, pts[n - 1])) out.push({ t: "seg", a: cur, b: pts[n - 1].slice() });
+    return out;
+  }
+  function elemsPts(els) {
+    const out = [];
+    for (const e of els) {
+      if (e.t === "seg") {
+        chainAppend(out, [e.a, e.b]);
+        continue;
+      }
+      const arc = K.arcFrom3(e.a, e.m, e.b);
+      if (!arc) {
+        chainAppend(out, [e.a, e.b]);
+        continue;
+      }
+      let sweep = arc.anticlockwise ? arc.a0 - arc.a1 : arc.a1 - arc.a0;
+      sweep = (sweep % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+      const pts = [e.a];
+      for (let k = 1; k < 8; k++) {
+        const a = arc.a0 + (arc.anticlockwise ? -1 : 1) * sweep * k / 8;
+        pts.push([arc.x + arc.r * Math.cos(a), arc.y + arc.r * Math.sin(a)]);
+      }
+      pts.push(e.b);
+      chainAppend(out, pts);
+    }
+    return out;
+  }
+  function headElems(pts, cm, clear) {
+    const plain = () => pts.slice(0, -1).map((p, i) => ({ t: "seg", a: p.slice(), b: pts[i + 1].slice() }));
+    if (!isRounded(cm) || pts.length < 3) return plain();
+    const els = roundCorners(pts);
+    return !clear || clear(elemsPts(els)) ? els : plain();
+  }
+  function arcTrackNode(doc, a, m, b, width, layer, net) {
+    return ["arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], ["width", r6(width)], ["layer", layer], netNode(doc, net)];
+  }
+
+  // web/tools/pcb-tools/tuning-tool.ts
+  S.tuneSettings = { single: meanderDefaults(), skew: meanderDefaults() };
+  var TUNE_TOOLS = /* @__PURE__ */ new Set(["tunesingle", "tuneskew"]);
+  var isTuneTool = (t) => TUNE_TOOLS.has(t);
+  var tuneMode = () => S.modTool === "tuneskew" ? "skew" : "single";
+  var TUNE_MSG_SKEW_PICK = "Please select a differential pair track you want to tune.";
+  var TUNE_MSG_SKEW_NETS = "Unable to find complementary differential pair net for skew tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
+  function coupledLength(doc, pair, mineKey, near) {
+    const NT = netTable(doc);
+    const kP = NT.key(pair.P), other = kP === mineKey ? NT.key(pair.N) : kP;
+    let best = null, bd = Infinity;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" && it.kind !== "arc" || NT.key(netOf(it.node)) !== other) continue;
+      const a = pt(it.node, "start"), b = pt(it.node, "end");
+      if (!a || !b) continue;
+      const d = distSeg(near[0], near[1], a[0], a[1], b[0], b[1]);
+      if (d < bd) {
+        bd = d;
+        best = it;
+      }
+    }
+    return best ? routedLength(doc, best.id) : 0;
+  }
+  function tuneTarget(st, coupled) {
+    if (coupled == null) return st.target;
+    const c = coupled * TUNE_IU;
+    return { min: c + st.skew.min, opt: c + st.skew.opt, max: c + st.skew.max };
+  }
+  function tunePick(ctx, mm) {
+    const doc = ctx.doc;
+    const thr = 5 * (S.mmPerPx || 0.05);
+    const active = S.layer;
+    const hits = [];
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" && it.kind !== "arc") continue;
+      const a = pt(it.node, "start"), b = pt(it.node, "end");
+      if (!a || !b) continue;
+      const w = widthOf(it.node, 0.25);
+      let d, centre;
+      if (it.kind === "arc") {
+        const m = pt(it.node, "mid");
+        const c = m && K.arcFrom3(a, m, b);
+        centre = m || a;
+        d = c ? Math.abs(Math.hypot(mm[0] - c.x, mm[1] - c.y) - c.r) : distSeg(mm[0], mm[1], a[0], a[1], b[0], b[1]);
+      } else {
+        centre = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        d = distSeg(mm[0], mm[1], a[0], a[1], b[0], b[1]);
+      }
+      if (d > w / 2 + thr) continue;
+      hits.push({ it, d2: (mm[0] - centre[0]) ** 2 + (mm[1] - centre[1]) ** 2, onActive: layerOf(it.node) === active });
+    }
+    if (!hits.length) return null;
+    const pool = hits.some((h) => h.onActive) ? hits.filter((h) => h.onActive) : hits;
+    pool.sort((x, y) => x.d2 - y.d2);
+    return pool[0].it;
+  }
+  function tuningPatternOf(doc, id) {
+    for (const it of doc.items.values()) if (it.kind === "generated" && /^tuning_pattern$/.test(K.str((K.kid(it.node, "type") || [])[1])) && K.groupMemberIds(it.node).includes(id)) return it;
+    return null;
+  }
+  function tuneBegin(ctx, item, mm) {
+    const doc = ctx.doc;
+    const skew = tuneMode() === "skew";
+    if (tuningPatternOf(doc, item.id)) {
+      ctx.toast(TUNE_MSG_INSIDE);
+      return;
+    }
+    if (item.kind !== "segment") {
+      ctx.toast(skew ? TUNE_MSG_SKEW_PICK : TUNE_MSG_PICK);
+      return;
+    }
+    const line2 = assembleLine(doc, item);
+    if (!line2) {
+      ctx.toast(skew ? TUNE_MSG_SKEW_PICK : TUNE_MSG_PICK);
+      return;
+    }
+    const pair = skew ? dpNetPair(doc, line2.net) : null;
+    if (skew && !pair) {
+      ctx.toast(TUNE_MSG_SKEW_NETS);
+      return;
+    }
+    if (layerOf(item.node) !== S.layer) setLayer(ctx, layerOf(item.node));
+    const a = pt(item.node, "start"), b = pt(item.node, "end");
+    const at = closestOnSeg(mm, a, b);
+    const s = settingsOf(ctx);
+    const st = tuneCopy(S.tuneSettings[tuneMode()]);
+    S.tune.pattern = {
+      item: item.id,
+      line: line2,
+      layer: line2.layer,
+      net: line2.net,
+      netName: netNameOf(ctx, line2.net),
+      netKey: line2.netKey,
+      width: line2.width,
+      origin: at,
+      end: at,
+      cursor: mm.slice(),
+      st,
+      clearance: netClearance(s, line2.netKey),
+      lineLength: routedLength(doc, item.id),
+      res: null,
+      mode: tuneMode(),
+      coupled: pair ? coupledLength(doc, pair, line2.netKey, closestOnSeg(mm, a, b)) : null
+    };
+  }
+  function tuneUpdate(ctx) {
+    const T = S.tune.pattern;
+    if (!T) return;
+    const ln = T.line;
+    const pts = ln.pts;
+    let best = null;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const q = closestOnSeg(T.cursor, pts[i], pts[i + 1]);
+      const d = Math.hypot(q[0] - T.cursor[0], q[1] - T.cursor[1]);
+      if (!best || d < best.d) best = { d, q };
+    }
+    T.end = best.q;
+    if (peq(T.end, T.origin)) {
+      T.res = null;
+      return;
+    }
+    const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
+    const sp = splitLine(pts.map(I), I(T.origin), I(T.end));
+    const last = sp.mid.length >= 2 ? { A: sp.mid[sp.mid.length - 2].p, B: sp.mid[sp.mid.length - 1].p } : null;
+    if (last && !veq(last.A, last.B)) T.st.initialSide = segSide(last, I(T.cursor)) < 0 ? -1 : 1;
+    const st = tuneCopy(T.st);
+    st.keepEndpoints = true;
+    st.target = tuneTarget(T.st, T.coupled);
+    const doc = ctx.doc;
+    const O = routeObstacles(doc, settingsOf(ctx), T.netKey, T.layer);
+    const r = T.width / 2;
+    const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+    T.res = meanderMove({ pts: pts.map(I), origin: I(T.origin), end: I(T.end), cursor: I(T.cursor), st, width: Math.round(T.width * TUNE_IU), clearance: Math.round(T.clearance * TUNE_IU), lineLength: T.lineLength * TUNE_IU, collides });
+    T.st.initialSide = st.initialSide;
+  }
+  function tunePieces(ch) {
+    const out = [];
+    const M = (p) => [r6(p[0] / TUNE_IU), r6(p[1] / TUNE_IU)];
+    for (let i = 1; i < ch.length; i++) {
+      const a = M(ch[i - 1].p), b = M(ch[i].p);
+      if (peq(a, b)) continue;
+      out.push(ch[i].m ? { a, m: M(ch[i].m), b } : { a, b });
+    }
+    return out;
+  }
+  var sexprQ = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  var fmtG = (v) => {
+    const x = +(+v).toPrecision(10);
+    return String(x === 0 ? 0 : x);
+  };
+  function tuningPatternNode(T, res, members) {
+    const st = T.st ? Object.assign({}, res.settings, { target: T.st.target, skew: T.st.skew }) : res.settings;
+    const mm = (v) => fmtG(v / TUNE_IU);
+    const xy2 = (p) => `(xy ${fmtG(p[0])} ${fmtG(p[1])})`;
+    const base = res.baseline.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
+    const side = st.initialSide < 0 ? "left" : st.initialSide > 0 ? "right" : "default";
+    const yn = (b) => b ? "yes" : "no";
+    const props = [
+      `(base_line (pts ${base.map(xy2).join(" ")}))`,
+      `(corner_radius_percent ${st.crPct})`,
+      `(end ${xy2(base[base.length - 1])})`,
+      `(initial_side ${sexprQ(side)})`,
+      `(is_time_domain no)`,
+      `(last_diff_pair_gap ${fmtG(T.dpGap)})`,
+      `(last_netname ${sexprQ(T.netName || "")})`,
+      `(last_status ${sexprQ(res.status)})`,
+      `(last_track_width ${fmtG(T.width)})`,
+      `(last_tuning_length ${mm(res.length)})`,
+      `(max_amplitude ${mm(st.maxAmp)})`,
+      `(min_amplitude ${mm(st.minAmp)})`,
+      `(min_spacing ${mm(st.spacing)})`,
+      `(origin ${xy2(base[0])})`,
+      `(override_custom_rules ${yn(st.overrideCustomRules)})`,
+      `(rounded ${yn(st.round)})`,
+      `(single_sided ${yn(st.singleSided)})`,
+      `(target_delay ${fmtG(DELAY_UNCONSTRAINED_MM)})`,
+      `(target_delay_max ${fmtG(DELAY_UNCONSTRAINED_MM)})`,
+      `(target_delay_min 0)`,
+      `(target_length ${mm(st.target.opt)})`,
+      `(target_length_max ${mm(st.target.max)})`,
+      `(target_length_min ${mm(st.target.min)})`,
+      `(target_skew ${mm(st.skew.opt)})`,
+      `(target_skew_max ${mm(st.skew.max)})`,
+      `(target_skew_min ${mm(st.skew.min)})`,
+      `(tuning_mode ${sexprQ(T.mode === "skew" ? "diff_pair_skew" : "single")})`
+    ];
+    const text = `(generated (uuid ${sexprQ(K.newUuid())}) (type tuning_pattern) (name "Tuning Pattern") (layer ${sexprQ(T.layer)}) ${props.join(" ")} (members ${members.slice().sort().map(sexprQ).join(" ")}))`;
+    return K.parse(text);
+  }
+  function inTuneOutline(T, res, p) {
+    const st = res.settings;
+    const minA = st.round ? T.width : T.width * Math.tan(1 - Math.tan(Math.PI / 8));
+    const amp = Math.max(st.maxAmp / TUNE_IU, minA) + T.width / 2 + 5e-4;
+    const base = res.baseline.map((n) => [n.p[0] / TUNE_IU, n.p[1] / TUNE_IU]);
+    for (let i = 0; i + 1 < base.length; i++) if (distSeg(p[0], p[1], base[i][0], base[i][1], base[i + 1][0], base[i + 1][1]) <= amp) return true;
+    return false;
+  }
+  function tuneFinish(ctx) {
+    const T = S.tune.pattern;
+    if (!T) return;
+    tuneUpdate(ctx);
+    const res = T.res;
+    if (!res) return;
+    if (!res.hasMeanders) {
+      S.tune.pattern = null;
+      S.tune.picker = null;
+      ctx.toast(`No tuning pattern added: no meanders were needed or would fit (${TUNE_STATUS_TEXT[res.status]}).`);
+      ctx.requestRender();
+      return;
+    }
+    const doc = ctx.doc;
+    const changes = [], members = [];
+    const old = T.line.ids.map((id) => doc.items.get(id)).filter(Boolean);
+    const oldKey = /* @__PURE__ */ new Map();
+    for (const it of old) {
+      const a = pt(it.node, "start"), b = pt(it.node, "end");
+      oldKey.set(ptKey(a) + "|" + ptKey(b), it);
+      oldKey.set(ptKey(b) + "|" + ptKey(a), it);
+    }
+    const kept = /* @__PURE__ */ new Set();
+    const scratch = Object.assign({}, doc, { items: new Map(doc.items) });
+    for (const pc of tunePieces(res.final)) {
+      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+      if (same && !kept.has(same.id)) {
+        kept.add(same.id);
+        continue;
+      }
+      const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, T.net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, T.net);
+      const it = K.createItem(scratch, node);
+      changes.push(upsertChange(it, "ADDED", T.net));
+      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(it.id);
+    }
+    for (const it of old) if (!kept.has(it.id)) changes.unshift(removedChange(it));
+    T.dpGap = sizesOf(ctx).routeDiffPair ? sizesOf(ctx).routeDiffPair(T.netName).gap : 0.25;
+    const gen = K.createItem(scratch, tuningPatternNode(T, res, members));
+    changes.push(upsertChange(gen, "ADDED"));
+    S.tuneSettings[tuneMode()].initialSide = T.st.initialSide;
+    S.tune.pattern = null;
+    S.tune.picker = null;
+    ctx.commit(changes, "Tune");
+    ctx.requestRender();
+  }
+
+  // web/tools/pcb-tools/tuning-patterns.ts
+  var isTuningPattern = (it) => !!it && it.kind === "generated" && K.str((K.kid(it.node, "type") || [])[1]) === "tuning_pattern";
+  function tuningPatternInfo(gen) {
+    const n = gen.node;
+    const kid = (k) => K.kid(n, k);
+    const num = ((k, d) => {
+      const c = kid(k);
+      return c ? K.num(c[1]) : d;
+    });
+    const bool = (k, d) => {
+      const c = kid(k);
+      return c ? c.length < 2 || K.str(c[1]) === "yes" : d;
+    };
+    const str = (k) => {
+      const c = kid(k);
+      return c ? K.str(c[1]) : "";
+    };
+    const ptsOf = (k) => {
+      const c = kid(k);
+      const p = c && K.kid(c, "pts");
+      return p ? p.slice(1).filter((xy2) => Array.isArray(xy2) && xy2[0] === "xy").map((xy2) => [K.num(xy2[1]), K.num(xy2[2])]) : null;
+    };
+    const st = meanderDefaults();
+    const I = (v) => Math.round(v * TUNE_IU);
+    st.minAmp = I(num("min_amplitude", 0.2));
+    st.maxAmp = I(num("max_amplitude", 1));
+    st.spacing = I(num("min_spacing", 0.6));
+    st.crPct = num("corner_radius_percent", 80);
+    st.round = bool("rounded", true);
+    st.singleSided = bool("single_sided", false);
+    st.overrideCustomRules = bool("override_custom_rules", false);
+    const side = str("initial_side");
+    st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
+    const opt = num("target_length", null);
+    if (opt != null) st.target = { min: I(num("target_length_min", opt - 0.1)), opt: I(opt), max: I(num("target_length_max", opt + 0.1)) };
+    const so = num("target_skew", null);
+    if (so != null) st.skew = { min: I(num("target_skew_min", so - 0.1)), opt: I(so), max: I(num("target_skew_max", so + 0.1)) };
+    const lay = kid("layer");
+    const xyOf = (k) => {
+      const c = kid(k);
+      const p = c && K.kid(c, "xy");
+      return p ? [K.num(p[1]), K.num(p[2])] : null;
+    };
+    return {
+      st,
+      layer: lay ? K.str(lay[1]) : "F.Cu",
+      base: ptsOf("base_line"),
+      coupled: ptsOf("base_line_coupled"),
+      mode: str("tuning_mode") || "single",
+      origin: xyOf("origin"),
+      end: xyOf("end"),
+      status: str("last_status"),
+      tuningLength: num("last_tuning_length", null),
+      netName: str("last_netname"),
+      width: num("last_track_width", 0.25),
+      gap: num("last_diff_pair_gap", 0),
+      members: K.groupMemberIds(n)
+    };
+  }
+  function baselineOps(doc, gen) {
+    const T = tuningPatternInfo(gen);
+    const ops = [];
+    const mem = T.members.map((id) => doc.items.get(id)).filter(Boolean);
+    for (const it of mem) ops.push({ del: it.id });
+    const lines = [T.base].concat(T.mode === "diff_pair" && T.coupled ? [T.coupled] : []);
+    const added = [];
+    lines.forEach((base, li) => {
+      if (!base || base.length < 2) return;
+      const near = (it) => {
+        const a = pt(it.node, "start");
+        return a && base.some((q, i) => i + 1 < base.length && distSeg(a[0], a[1], q[0], q[1], base[i + 1][0], base[i + 1][1]) < Math.max(T.width, 0.01) * 4 + 1.2);
+      };
+      const tmpl = mem.find((it) => (it.kind === "segment" || it.kind === "arc") && (li === 0 ? near(it) : near(it))) || mem[0];
+      const net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" }, width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
+      for (let i = 0; i + 1 < base.length; i++) {
+        if (peq(base[i], base[i + 1])) continue;
+        const node = segmentNode(doc, base[i], base[i + 1], width, T.layer, net);
+        node.push(["uuid", K.newUuid()]);
+        ops.push({ add: node });
+        added.push({ node, net, width });
+      }
+    });
+    return { ops, added, info: T };
+  }
+  function tuningRemoveChanges(doc, gens, deleting) {
+    const ops = [...deleting].map((id) => ({ del: id }));
+    const seeds = [];
+    for (const gen of gens) {
+      const r = baselineOps(doc, gen);
+      ops.push(...r.ops.filter((op) => !op.del || !deleting.has(op.del)));
+      for (const a of r.added) seeds.push(K.str(K.kid(a.node, "uuid")[1]));
+    }
+    let b = branchDoc(doc, ops);
+    for (const id of seeds) {
+      const it = b.items.get(id);
+      if (!it) continue;
+      const line2 = assembleLine(b, it);
+      if (!line2) continue;
+      const sp = simplifyPts(line2.pts);
+      if (sp.length >= line2.pts.length) continue;
+      const ops2 = line2.ids.map((x) => ({ del: x }));
+      for (let i = 0; i + 1 < sp.length; i++) {
+        const node = segmentNode(b, sp[i], sp[i + 1], line2.width, line2.layer, line2.net);
+        node.push(["uuid", K.newUuid()]);
+        ops2.push({ add: node });
+      }
+      b = branchDoc(b, ops2);
+    }
+    return branchChanges(doc, b);
+  }
+  function regenerateTuningBranch(ctx, gen, doc0) {
+    const doc = doc0 || ctx.doc;
+    const { ops, added, info } = baselineOps(doc, gen);
+    if (!added.length || info.mode !== "single" && info.mode !== "diff_pair_skew") return null;
+    const scratch = branchDoc(doc, ops);
+    const seedId = K.str(K.kid(added[0].node, "uuid")[1]);
+    const seed = scratch.items.get(seedId);
+    if (!seed) return null;
+    const line2 = assembleLine(scratch, seed);
+    if (!line2) return null;
+    const st = tuneCopy(info.st);
+    st.keepEndpoints = true;
+    const nearOnLine = (p) => {
+      let best = line2.pts[0], bd = Infinity;
+      for (let i = 0; i + 1 < line2.pts.length; i++) {
+        const q = closestOnSeg(p, line2.pts[i], line2.pts[i + 1]);
+        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
+        if (d < bd) {
+          bd = d;
+          best = q;
+        }
+      }
+      return [r6(best[0]), r6(best[1])];
+    };
+    let origin = nearOnLine(info.origin || info.base[0]), end = nearOnLine(info.end || info.base[info.base.length - 1]);
+    if (Math.hypot(end[0] - origin[0], end[1] - origin[1]) < 0.1) {
+      origin = info.base[0];
+      end = info.base[info.base.length - 1];
+    }
+    if (info.mode === "diff_pair_skew") {
+      const pair = dpNetPair(scratch, line2.net);
+      if (!pair) return null;
+      st.target = tuneTarget(info.st, coupledLength(scratch, pair, line2.netKey, origin));
+    }
+    const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
+    const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer);
+    const r = line2.width / 2;
+    const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+    const res = meanderMove({
+      pts: line2.pts.map(I),
+      origin: I(origin),
+      end: I(end),
+      cursor: I(end),
+      st,
+      width: Math.round(line2.width * TUNE_IU),
+      clearance: Math.round(netClearance(settingsOf(ctx), line2.netKey) * TUNE_IU),
+      lineLength: routedLength(scratch, seedId) * TUNE_IU,
+      collides
+    });
+    const oldKey = /* @__PURE__ */ new Map();
+    for (const id of line2.ids) {
+      const it = scratch.items.get(id);
+      const a = pt(it.node, "start"), b = pt(it.node, "end");
+      oldKey.set(ptKey(a) + "|" + ptKey(b), it);
+      oldKey.set(ptKey(b) + "|" + ptKey(a), it);
+    }
+    const kept = /* @__PURE__ */ new Set(), ops2 = [], members = [];
+    const T = { width: line2.width, layer: line2.layer, net: line2.net };
+    for (const pc of tunePieces(res.final)) {
+      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+      if (same && !kept.has(same.id)) {
+        kept.add(same.id);
+        if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id);
+        continue;
+      }
+      const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, line2.width, line2.layer, line2.net) : segmentNode(scratch, pc.a, pc.b, line2.width, line2.layer, line2.net);
+      const u = K.newUuid();
+      node.push(["uuid", u]);
+      ops2.push({ add: node });
+      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
+    }
+    for (const id of line2.ids) if (!kept.has(id)) ops2.unshift({ del: id });
+    const g = clone(gen.node);
+    const setKid2 = (k, ...v) => {
+      const c = K.kid(g, k);
+      if (c) c.splice(1, c.length - 1, ...v);
+    };
+    const xy2 = (p) => ["xy", +fmtG(p[0]), +fmtG(p[1])];
+    const base = res.baseline.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
+    const bl = K.kid(g, "base_line");
+    if (bl && base.length >= 2) bl.splice(1, bl.length - 1, ["pts", ...base.map(xy2)]);
+    if (base.length >= 2) {
+      const o = K.kid(g, "origin");
+      if (o) o.splice(1, o.length - 1, xy2(base[0]));
+      const e = K.kid(g, "end");
+      if (e) e.splice(1, e.length - 1, xy2(base[base.length - 1]));
+    }
+    const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default";
+    setKid2("initial_side", side);
+    setKid2("last_status", res.status);
+    setKid2("last_tuning_length", +fmtG(res.length / TUNE_IU));
+    const mk = K.kid(g, "members");
+    if (mk) mk.splice(1, mk.length - 1, ...members.slice().sort());
+    else g.push(["members", ...members.slice().sort()]);
+    ops2.push({ set: gen.id, node: g });
+    return branchDoc(scratch, ops2);
+  }
+  function regenerateTuningChanges(ctx, gen) {
+    const fin = regenerateTuningBranch(ctx, gen);
+    return fin ? branchChanges(ctx.doc, fin) : [];
+  }
+  function regenerateTuning(ctx, gens, label) {
+    if (!canEdit(ctx)) return true;
+    let changes = [];
+    for (const gen of gens) {
+      const ch = regenerateTuningChanges(ctx, gen);
+      if (!ch.length) continue;
+      changes = changes.concat(ch);
+    }
+    if (changes.length) ctx.commit(changes, label);
+    ctx.requestRender();
+    return true;
+  }
+  function tuneCancel(ctx) {
+    if (!S.tune.pattern) return false;
+    S.tune.pattern = null;
+    if (ctx) ctx.requestRender();
+    return true;
+  }
+  function tuneStep(ctx, what, sign) {
+    const T = S.tune.pattern;
+    if (!T) {
+      ctx.toast(TUNE_MSG_SELECT);
+      return true;
+    }
+    const st = T.st, keep = S.tuneSettings[tuneMode()];
+    if (what === "spacing") {
+      st.spacing = Math.max(st.spacing + sign * st.step, Math.round(T.width * TUNE_IU) + Math.round(T.clearance * TUNE_IU));
+      keep.spacing = st.spacing;
+    } else {
+      st.maxAmp = Math.max(st.maxAmp + sign * st.step, st.minAmp);
+      keep.maxAmp = st.maxAmp;
+    }
+    tuneUpdate(ctx);
+    ctx.requestRender();
+    return true;
+  }
+  function tuneMove(ctx, mm) {
+    const U = S.tune;
+    if (!U.pattern) {
+      const it = tunePick(ctx, mm);
+      U.picker = it ? it.id : null;
+      U.cursor = mm.slice();
+      return;
+    }
+    U.pattern.cursor = mm.slice();
+    U.cursor = mm.slice();
+    tuneUpdate(ctx);
+  }
+  function tuneClick(ctx, mm) {
+    const U = S.tune;
+    if (ctx.viewOnly) {
+      ctx.toast("View-only access");
+      return;
+    }
+    if (!U.pattern) {
+      const it = U.picker && ctx.doc.items.get(U.picker) || tunePick(ctx, mm);
+      if (it) tuneBegin(ctx, it, mm);
+      ctx.requestRender();
+      return;
+    }
+    U.pattern.cursor = mm.slice();
+    tuneFinish(ctx);
+  }
+  function tuneStatus(ctx) {
+    const U = S.tune;
+    const doc = ctx.doc;
+    const units = sizeUnits();
+    let net = null, len = null;
+    const skew = tuneMode() === "skew";
+    if (U.pattern) {
+      net = U.pattern.net;
+      len = U.pattern.res ? U.pattern.res.length / TUNE_IU : U.pattern.lineLength;
+      if (U.pattern.coupled != null) len -= U.pattern.coupled;
+    } else if (U.picker) {
+      const it = doc.items.get(U.picker);
+      if (!it) return null;
+      net = netOf(it.node);
+      len = routedLength(doc, it.id);
+      if (skew) {
+        const pair = dpNetPair(doc, net);
+        const [a, b] = trackEnds(it);
+        if (pair && a && b) len -= coupledLength(doc, pair, netTable(doc).key(net), [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+      }
+    } else return null;
+    const name = netNameOf(ctx, net);
+    const mm = (v) => msgValue(v / TUNE_IU, units).replace(/ (mm|mils|in)$/, "");
+    const st = U.pattern ? U.pattern.st : S.tuneSettings[tuneMode()];
+    return {
+      scope: name ? unescapeName(name) : "",
+      label: skew ? "current skew" : "current length",
+      value: (skew ? "Skew: " : "Net: ") + msgValue(len, units),
+      min: skew ? mm(st.skew.min) : "---",
+      max: skew ? mm(st.skew.max) : "---"
+    };
+  }
+  function drawTuneStatus(c, at, px, info) {
+    const css = (name, dflt) => {
+      try {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        return v || dflt;
+      } catch (e) {
+        return dflt;
+      }
+    };
+    const hs = 13 * px, fs = 12 * px, m = 6 * px, gw = 7 * px;
+    const rows = (info.scope ? 1 : 0) + 2, w = gw * 38 + 2 * m, h = rows * hs * 1.35 + m;
+    const x = at[0] + 2 * m, y = at[1] - h - 2 * m;
+    c.save();
+    c.globalAlpha = 1;
+    c.fillStyle = css("--color-panel", "#2b2b2b");
+    c.strokeStyle = css("--color-ink", "#e0e0e0");
+    c.lineWidth = px;
+    c.globalAlpha = 0.9;
+    c.fillRect(x - m, y - m, w + 2 * m, h + 2 * m);
+    c.globalAlpha = 1;
+    c.strokeRect(x - m, y - m, w + 2 * m, h + 2 * m);
+    c.fillStyle = css("--color-ink", "#e0e0e0");
+    c.textBaseline = "top";
+    let ty = y;
+    const cols = (a, b, d, size) => {
+      c.font = `${size}px sans-serif`;
+      c.fillText(a, x, ty);
+      c.fillText(b, x + gw * 18 + m, ty);
+      c.fillText(d, x + gw * 25 + 2 * m, ty);
+      ty += size * 1.35;
+    };
+    if (info.scope) {
+      c.font = `${hs}px sans-serif`;
+      c.fillText(info.scope, x, ty);
+      ty += hs * 1.35;
+    }
+    cols(info.label, "min", "max", hs);
+    cols(info.value, info.min, info.max, fs);
+    c.restore();
+  }
+  function drawTune(c, ctx, px) {
+    const U = S.tune;
+    const doc = ctx.doc;
+    if (U.pattern && U.pattern.res) {
+      const T = U.pattern;
+      c.globalAlpha = 0.8;
+      c.strokeStyle = saturated(color(T.layer));
+      c.lineWidth = T.width;
+      for (const pc of tunePieces(T.res.final)) {
+        if (pc.m) {
+          const a = K.arcFrom3(pc.a, pc.m, pc.b);
+          if (a) {
+            c.beginPath();
+            c.arc(a.x, a.y, a.r, a.a0, a.a1, !!a.anticlockwise);
+            c.stroke();
+            continue;
+          }
+        }
+        line(c, pc.a, pc.b);
+      }
+    } else if (!U.pattern && U.picker) {
+      c.globalAlpha = 0.9;
+      c.strokeStyle = HL;
+      for (const id of connectedRun(doc, [U.picker])) {
+        const it = doc.items.get(id);
+        if (!it || it.kind !== "segment" && it.kind !== "arc") continue;
+        const a = pt(it.node, "start"), b = pt(it.node, "end");
+        c.lineWidth = widthOf(it.node, 0.25);
+        if (it.kind === "arc") {
+          const m = pt(it.node, "mid");
+          const arc = m && K.arcFrom3(a, m, b);
+          if (arc) {
+            c.beginPath();
+            c.arc(arc.x, arc.y, arc.r, arc.a0, arc.a1, !!arc.anticlockwise);
+            c.stroke();
+            continue;
+          }
+        }
+        line(c, a, b);
+      }
+    }
+    const info = tuneStatus(ctx);
+    if (info && U.cursor) drawTuneStatus(c, U.cursor, px, info);
+    c.globalAlpha = 1;
+  }
+  function tuneHiddenIds() {
+    const T = S.tune && S.tune.pattern;
+    return T && T.res ? new Set(T.line.ids) : null;
+  }
+
+  // web/tools/pcb-tools/tuning-edit.ts
+  var TUNING_COMMIT_MESSAGE = "Edit Tuning Pattern";
+  function selectedTuningPattern(ctx, ids) {
+    const doc = ctx.doc;
+    if (!doc) return null;
+    const sel = Array.from(ids || selectionIds(ctx));
+    let gen = null;
+    for (const id of sel) {
+      const it = doc.items.get(id);
+      if (isTuningPattern(it)) {
+        if (gen) return null;
+        gen = it;
+      }
+    }
+    if (!gen) return null;
+    const mem = new Set(K.groupMemberIds(gen.node));
+    for (const id of sel) if (id !== gen.id && !mem.has(id)) return null;
+    return gen;
+  }
+  var ARC_STEPS = 16;
+  var perp = (u) => [-u[1], u[0]];
+  var unit = (a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy) || 1;
+    return [dx / l, dy / l];
+  };
+  function arcPts(c, r, a0, a1, out) {
+    let sw = a1 - a0;
+    while (sw > Math.PI) sw -= 2 * Math.PI;
+    while (sw < -Math.PI) sw += 2 * Math.PI;
+    const n = Math.max(2, Math.ceil(Math.abs(sw) / (Math.PI / ARC_STEPS)));
+    for (let i = 1; i < n; i++) {
+      const a = a0 + sw * i / n;
+      out.push([c[0] + r * Math.cos(a), c[1] + r * Math.sin(a)]);
+    }
+  }
+  function offsetSide(pts, d) {
+    const P = pts.filter((p, i) => !i || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 1e-9);
+    if (P.length < 2) return [];
+    const U = [];
+    for (let i = 0; i + 1 < P.length; i++) U.push(unit(P[i], P[i + 1]));
+    const out = [];
+    const off = (p, u) => {
+      const n = perp(u);
+      return [p[0] + n[0] * d, p[1] + n[1] * d];
+    };
+    out.push(off(P[0], U[0]));
+    for (let k = 1; k + 1 < P.length; k++) {
+      const u0 = U[k - 1], u1 = U[k];
+      const cr = u0[0] * u1[1] - u0[1] * u1[0];
+      if (Math.abs(cr) < 1e-12) {
+        out.push(off(P[k], u1));
+        continue;
+      }
+      if (cr * d > 0) {
+        const n0 = perp(u0), n1 = perp(u1);
+        const den = 1 + n0[0] * n1[0] + n0[1] * n1[1];
+        out.push([P[k][0] + (n0[0] + n1[0]) / den * d, P[k][1] + (n0[1] + n1[1]) / den * d]);
+      } else {
+        const q0 = off(P[k], u0), q1 = off(P[k], u1);
+        out.push(q0);
+        arcPts(P[k], Math.abs(d), Math.atan2(q0[1] - P[k][1], q0[0] - P[k][0]), Math.atan2(q1[1] - P[k][1], q1[0] - P[k][0]), out);
+        out.push(q1);
+      }
+    }
+    out.push(off(P[P.length - 1], U[U.length - 1]));
+    return out;
+  }
+  function roundOutline(pts, amp) {
+    const R = offsetSide(pts, amp), L = offsetSide(pts, -amp);
+    if (!R.length) return [];
+    const out = R.slice();
+    const e = pts[pts.length - 1], s = pts[0];
+    const cap = (c, from, to, mid) => {
+      const a0 = Math.atan2(from[1] - c[1], from[0] - c[0]), am = Math.atan2(mid[1] - c[1], mid[0] - c[0]), a1 = Math.atan2(to[1] - c[1], to[0] - c[0]);
+      const tmp = [];
+      arcPts(c, amp, a0, am, tmp);
+      out.push(...tmp);
+      out.push(mid);
+      const t2 = [];
+      arcPts(c, amp, am, a1, t2);
+      out.push(...t2);
+    };
+    const ue = unit(pts[pts.length - 2], e), us = unit(pts[0], pts[1]);
+    cap(e, R[R.length - 1], L[L.length - 1], [e[0] + ue[0] * amp, e[1] + ue[1] * amp]);
+    out.push(...L.slice().reverse());
+    cap(s, L[0], R[0], [s[0] - us[0] * amp, s[1] - us[1] * amp]);
+    return out;
+  }
+  function tuningOutline(info) {
+    const base = info.base;
+    if (!base || base.length < 2) return [];
+    const dp = info.mode === "diff_pair";
+    const w = info.width, gap = info.gap;
+    const st = info.st;
+    const IU = 1e6;
+    const baselineOffset = dp ? (gap + w) / 2 : 0;
+    const minAllowed = st.round ? baselineOffset + w : baselineOffset + w * Math.tan(1 - Math.tan(Math.PI / 8));
+    const clamped = Math.max(st.maxAmp / IU, minAllowed);
+    if (st.singleSided && !dp) {
+      const amp2 = clamped + w / 2;
+      const side = offsetSide(base, st.initialSide >= 0 ? amp2 : -amp2);
+      return side.length ? side.concat(base.slice().reverse()) : [];
+    }
+    const amp = dp ? clamped + gap / 2 + w : clamped + w / 2;
+    if (dp && info.coupled && info.coupled.length >= 2) {
+      const n = Math.min(base.length, info.coupled.length);
+      const centre = [];
+      for (let i = 0; i < n; i++) centre.push([(base[i][0] + info.coupled[i][0]) / 2, (base[i][1] + info.coupled[i][1]) / 2]);
+      centre[centre.length - 1] = [(base[base.length - 1][0] + info.coupled[info.coupled.length - 1][0]) / 2, (base[base.length - 1][1] + info.coupled[info.coupled.length - 1][1]) / 2];
+      const sep = Math.hypot(base[0][0] - info.coupled[0][0], base[0][1] - info.coupled[0][1]);
+      return roundOutline(centre, amp + sep / 2);
+    }
+    return roundOutline(base, amp);
+  }
+  function dashedLine(c, a, b, step, fill) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (!L || step <= 0) return;
+    c.beginPath();
+    for (let i = 0; i < L; i += step) {
+      const j = Math.min(i + fill, L);
+      c.moveTo(a[0] + dx * i / L, a[1] + dy * i / L);
+      c.lineTo(a[0] + dx * j / L, a[1] + dy * j / L);
+    }
+    c.stroke();
+  }
+  function drawTuningSelection(c, ctx, px) {
+    const ge = S.genEdit;
+    const gen = ge ? (ge.fin ? ge.fin.items.get(ge.id) : null) || { node: ge.node } : selectedTuningPattern(ctx);
+    if (!gen) return;
+    const info = tuningPatternInfo(gen);
+    const size = Math.max(0.8 * 8 * px, 0.05);
+    c.save();
+    c.setLineDash([]);
+    c.lineWidth = px;
+    c.strokeStyle = "#FFFFFF";
+    c.lineCap = "butt";
+    if (!ge) {
+      c.globalAlpha = 0.5;
+      const lines = [info.base].concat(info.mode === "diff_pair" ? [info.coupled] : []);
+      for (const b of lines) {
+        if (b && b.length >= 2) for (let i = 0; i + 1 < b.length; i++) dashedLine(c, b[i], b[i + 1], size, size / 6);
+      }
+      if (!info.base && info.origin && info.end) {
+        c.globalAlpha = 1;
+        dashedLine(c, info.origin, info.end, size, size / 6);
+      }
+    }
+    c.globalAlpha = 1;
+    const o = tuningOutline(info);
+    for (let i = 0; i + 1 < o.length; i++) dashedLine(c, o[i], o[i + 1], size, size / 2);
+    if (o.length > 2) dashedLine(c, o[o.length - 1], o[0], size, size / 2);
+    c.restore();
+  }
+  function handleFrame(info) {
+    const origin = info.origin || (info.base ? info.base[0] : [0, 0]), end = info.end || (info.base ? info.base[info.base.length - 1] : origin);
+    let off = [0, 0], offEnd = [0, 0];
+    if (info.mode === "diff_pair" && info.coupled && info.coupled.length >= 2) {
+      off = [(info.coupled[0][0] - origin[0]) / 2, (info.coupled[0][1] - origin[1]) / 2];
+      const cl = info.coupled[info.coupled.length - 1];
+      offEnd = [(cl[0] - end[0]) / 2, (cl[1] - end[1]) / 2];
+    }
+    const bA = info.base && info.base.length >= 2 ? info.base[0] : origin, bB = info.base && info.base.length >= 2 ? info.base[1] : end;
+    return { origin, end, off, offEnd, A: [bA[0] + off[0], bA[1] + off[1]], B: [bB[0] + off[0], bB[1] + off[1]] };
+  }
+  var resize = (v, l) => {
+    const n = Math.hypot(v[0], v[1]);
+    return n ? [v[0] * l / n, v[1] * l / n] : [0, 0];
+  };
+  function tuningEditPoints(gen) {
+    const info = tuningPatternInfo(gen);
+    const F = handleFrame(info);
+    const IU = 1e6;
+    let amp = info.st.maxAmp / IU + info.width / 2;
+    if (info.mode === "diff_pair") amp += info.width + info.gap;
+    if (info.st.initialSide === -1) amp = -amp;
+    const d = [F.B[0] - F.A[0], F.B[1] - F.A[1]];
+    const wOff = resize(perp(d), amp);
+    const sOff = resize(d, info.st.spacing / IU * 1.5);
+    return [
+      { key: "0", p: [F.origin[0] + F.off[0], F.origin[1] + F.off[1]] },
+      { key: "1", p: [F.end[0] + F.offEnd[0], F.end[1] + F.offEnd[1]] },
+      { key: "2", p: [F.A[0] + wOff[0], F.A[1] + wOff[1]], ignoreGrid: true },
+      { key: "3", p: [F.A[0] + wOff[0] + sOff[0], F.A[1] + wOff[1] + sOff[1]], ignoreGrid: true }
+    ];
+  }
+  var lineDistance = (a, b, p) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l = Math.hypot(dx, dy);
+    return l ? Math.abs(dx * (p[1] - a[1]) - dy * (p[0] - a[0])) / l : Math.hypot(p[0] - a[0], p[1] - a[1]);
+  };
+  var round001 = (mm) => Math.round(mm / 0.01) * 0.01;
+  var fmt2 = (v) => +(+v).toFixed(6);
+  function setKid(node, key, ...vals) {
+    const c = K.kid(node, key);
+    if (c) c.splice(1, c.length - 1, ...vals);
+    else node.splice(node.length - 1, 0, [key, ...vals]);
+  }
+  function tuningEditNode(orig, key, p) {
+    const node = clone(orig);
+    const info = tuningPatternInfo({ node: orig });
+    const F = handleFrame(info);
+    const hs = tuningEditPoints({ node: orig });
+    if (key === "0") setKid(node, "origin", ["xy", fmt2(p[0] - F.off[0]), fmt2(p[1] - F.off[1])]);
+    else if (key === "1") setKid(node, "end", ["xy", fmt2(p[0] - F.offEnd[0]), fmt2(p[1] - F.offEnd[1])]);
+    else if (key === "2") {
+      let v = lineDistance(F.A, F.B, p) - info.width / 2;
+      if (info.mode === "diff_pair") v -= info.width + info.gap;
+      setKid(node, "max_amplitude", fmt2(round001(v)));
+      const side = (F.B[0] - F.A[0]) * (p[1] - F.A[1]) - (F.B[1] - F.A[1]) * (p[0] - F.A[0]);
+      setKid(node, "initial_side", side < 0 ? "left" : "right");
+    } else if (key === "3") {
+      const w = hs[2].p;
+      setKid(node, "min_spacing", fmt2(round001(lineDistance(F.A, w, p) / 1.5)));
+    }
+    return node;
+  }
+  function genStartEdit(ctx, gen, label) {
+    const ge = { id: gen.id, orig: clone(gen.node), node: clone(gen.node), fin: null, hidden: /* @__PURE__ */ new Set(), label: label || TUNING_COMMIT_MESSAGE };
+    S.genEdit = ge;
+    return ge;
+  }
+  function genUpdateEdit(ctx, node, doc) {
+    const ge = S.genEdit;
+    if (!ge) return null;
+    ge.node = clone(node);
+    const fin = regenerateTuningBranch(ctx, { id: ge.id, kind: "generated", node: ge.node }, doc);
+    ge.fin = fin;
+    ge.hidden = /* @__PURE__ */ new Set();
+    const base = doc || ctx.doc;
+    if (fin) for (const [id, it] of base.items) {
+      const n = fin.items.get(id);
+      if ((it.kind === "segment" || it.kind === "arc") && (!n || n.node !== it.node)) ge.hidden.add(id);
+    }
+    ctx.requestRender();
+    return fin;
+  }
+  function genFinishEdit(ctx, extra) {
+    const ge = S.genEdit;
+    S.genEdit = null;
+    if (!ge) return false;
+    if (!ge.fin || K.serialize(ge.node) === K.serialize(ge.orig)) {
+      ctx.requestRender();
+      return false;
+    }
+    const changes = (extra || []).concat(branchChanges(ctx.doc, ge.fin));
+    if (changes.length) ctx.commit(changes, ge.label);
+    ctx.requestRender();
+    return true;
+  }
+  function genCancelEdit(ctx) {
+    const had = !!S.genEdit;
+    S.genEdit = null;
+    if (had) ctx.requestRender();
+    return had;
+  }
+  function genHiddenIds() {
+    const ge = S.genEdit;
+    return ge && ge.fin && ge.hidden.size ? ge.hidden : null;
+  }
+  function drawGenEditPreview(c, ctx) {
+    const ge = S.genEdit;
+    if (!ge || !ge.fin) return;
+    c.save();
+    c.globalAlpha = 1;
+    c.lineCap = "round";
+    for (const [id, it] of ge.fin.items) {
+      if (it.kind !== "segment" && it.kind !== "arc") continue;
+      const o = ctx.doc.items.get(id);
+      if (o && o.node === it.node && !ge.hidden.has(id)) continue;
+      const a = pt(it.node, "start"), b = pt(it.node, "end");
+      if (!a || !b) continue;
+      c.strokeStyle = color(K.str((K.kid(it.node, "layer") || [])[1]));
+      c.lineWidth = widthOf(it.node, 0.25);
+      if (it.kind === "arc") {
+        const m = pt(it.node, "mid");
+        const arc = m && K.arcFrom3(a, m, b);
+        if (arc) {
+          c.beginPath();
+          c.arc(arc.x, arc.y, arc.r, arc.a0, arc.a1, !!arc.anticlockwise);
+          c.stroke();
+          continue;
+        }
+      }
+      line(c, a, b);
+    }
+    c.restore();
+  }
+
+  // web/tools/pcb-tools/point-editor.ts
+  var PE_KINDS = /* @__PURE__ */ new Set(["zone", "gr_poly", "gr_line", "gr_rect", "gr_circle", "gr_arc", "dimension"]);
+  function pePtsNode(node) {
+    const host = node[0] === "zone" ? K.kid(node, "polygon") : node;
+    return host ? K.kid(host, "pts") : null;
+  }
+  function pePolyPts(node) {
+    const p = pePtsNode(node);
+    return p ? K.kids(p, "xy").map((x) => [K.num(x[1]), K.num(x[2])]) : [];
+  }
+  function editPoints(it) {
+    if (it && it.kind === "generated") return isTuningPattern(it) ? tuningEditPoints(it) : [];
+    if (!it || !PE_KINDS.has(it.kind)) return [];
+    const n = it.node, out = [];
+    if (it.kind === "dimension") return dimEditPoints(n);
+    if (it.kind === "zone" || it.kind === "gr_poly") {
+      const pts = pePolyPts(n);
+      pts.forEach((p, i) => out.push({ key: "c" + i, p }));
+      if (pts.length > 1) pts.forEach((p, i) => {
+        const q = pts[(i + 1) % pts.length];
+        out.push({ key: "m" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true });
+      });
+    } else if (it.kind === "gr_line") {
+      for (const k of ["start", "end"]) {
+        const p = pt(n, k);
+        if (p) out.push({ key: k, p });
+      }
+    } else if (it.kind === "gr_rect") {
+      const a = pt(n, "start"), b = pt(n, "end");
+      if (!a || !b) return out;
+      const c = [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
+      c.forEach((p, i) => out.push({ key: "r" + i, p }));
+      c.forEach((p, i) => {
+        const q = c[(i + 1) % 4];
+        out.push({ key: "e" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true });
+      });
+    } else if (it.kind === "gr_circle") {
+      const c = pt(n, "center"), e = pt(n, "end");
+      if (c) out.push({ key: "center", p: c });
+      if (e) out.push({ key: "end", p: e });
+    } else if (it.kind === "gr_arc") {
+      for (const k of ["start", "mid", "end"]) {
+        const p = pt(n, k);
+        if (p) out.push({ key: k, p });
+      }
+      const s = pt(n, "start"), m = pt(n, "mid"), e = pt(n, "end"), a = s && m && e ? K.arcFrom3(s, m, e) : null;
+      if (a) {
+        const c = [a.x, a.y];
+        out.push({ key: "center", p: c, lines: [s, e] });
+      }
+    }
+    return out;
+  }
+  var ARC_KEEP_CENTER = 0;
+  var ARC_KEEP_ENDPOINTS = 1;
+  var ARC_KEEP_RADIUS = 2;
+  var ARC_EDIT_KEY = "kc.pcb.arcEditMode";
+  var ARC_EDIT_ACTIONS = ["pointEditorArcKeepCenter", "pointEditorArcKeepEndpoint", "pointEditorArcKeepRadius"];
+  function arcEditMode() {
+    if (S.arcEditMode == null) {
+      const v = lsGet(ARC_EDIT_KEY);
+      S.arcEditMode = v !== null && /^[0-2]$/.test(v) ? +v : ARC_KEEP_CENTER;
+    }
+    return S.arcEditMode;
+  }
+  function setArcEditMode(m) {
+    S.arcEditMode = m;
+    lsSet(ARC_EDIT_KEY, String(m));
+  }
+  var nextArcEditMode = (m) => m === ARC_KEEP_CENTER ? ARC_KEEP_RADIUS : m === ARC_KEEP_RADIUS ? ARC_KEEP_ENDPOINTS : ARC_KEEP_CENTER;
+  var ARC_MIN_RADIUS = 0.0254;
+  var resized = (v, len) => {
+    const l = Math.hypot(v[0], v[1]);
+    return l ? [v[0] * len / l, v[1] * len / l] : [0, 0];
+  };
+  function arcFromCenter(c, s, e) {
+    const r = Math.hypot(s[0] - c[0], s[1] - c[1]);
+    const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]);
+    let sw = Math.atan2(e[1] - c[1], e[0] - c[0]) - a0;
+    while (sw <= 0) sw += 2 * Math.PI;
+    return { start: s, mid: [c[0] + r * Math.cos(a0 + sw / 2), c[1] + r * Math.sin(a0 + sw / 2)], end: e };
+  }
+  function arcEditGeometry(orig, key, p, raw, mode) {
+    let s = pt(orig, "start"), e = pt(orig, "end");
+    const m = pt(orig, "mid");
+    const a = s && m && e ? K.arcFrom3(s, m, e) : null;
+    if (!a) return null;
+    if (crossZ(m[0] - s[0], m[1] - s[1], e[0] - m[0], e[1] - m[1]) < 0) {
+      [s, e] = [e, s];
+      if (key === "start" || key === "end") key = key === "start" ? "end" : "start";
+    }
+    const c = [a.x, a.y];
+    if (key === "center") {
+      if (mode === ARC_KEEP_ENDPOINTS) {
+        const mid = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], n = resized([-(e[1] - s[1]), e[0] - s[0]], 1);
+        const t = (p[0] - mid[0]) * n[0] + (p[1] - mid[1]) * n[1];
+        const nc2 = [mid[0] + n[0] * t, mid[1] + n[1] * t];
+        return arcFromCenter(nc2, s, e);
+      }
+      const d = [p[0] - c[0], p[1] - c[1]];
+      return { start: vadd(s, d), mid: vadd(m, d), end: vadd(e, d) };
+    }
+    if (key === "mid") {
+      if (mode === ARC_KEEP_ENDPOINTS) {
+        const ch = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], v = vsub(m, ch), justOff = Math.hypot(s[0] - e[0], s[1] - e[1]) / 100;
+        const A = vadd(ch, resized(v, justOff)), u = resized(v, 1);
+        const t = Math.max(0, (raw[0] - A[0]) * u[0] + (raw[1] - A[1]) * u[1]);
+        const nm = vadd(A, vmul(u, t));
+        if (Math.abs(crossZ(nm[0] - s[0], nm[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
+        return { start: s, mid: nm, end: e };
+      }
+      const r = Math.max(ARC_MIN_RADIUS, Math.hypot(raw[0] - c[0], raw[1] - c[1]));
+      return arcFromCenter(c, vadd(c, resized(vsub(s, c), r)), vadd(c, resized(vsub(e, c), r)));
+    }
+    if (key !== "start" && key !== "end") return null;
+    const movingStart = key === "start";
+    if (mode === ARC_KEEP_CENTER) {
+      let p12 = vsub(p, c);
+      const p22 = vsub(movingStart ? e : s, c);
+      if (!p12[0] && !p12[1]) p12 = vsub(movingStart ? s : e, c);
+      const r = Math.max(ARC_MIN_RADIUS, Math.hypot(p12[0], p12[1]));
+      const n1 = vadd(c, resized(p12, r)), n2 = vadd(c, p22[0] || p22[1] ? resized(p22, r) : [r, 0]);
+      return movingStart ? arcFromCenter(c, n1, n2) : arcFromCenter(c, n2, n1);
+    }
+    if (mode === ARC_KEEP_RADIUS) {
+      const n1 = vadd(c, resized(vsub(p, c), a.r));
+      return movingStart ? arcFromCenter(c, n1, e) : arcFromCenter(c, s, n1);
+    }
+    const p1 = movingStart ? e : s, p2 = p, p3 = m;
+    let v1 = vsub(p1, c), v2 = vsub(p2, c);
+    const v3 = vsub(p3, c);
+    if (!Math.hypot(v1[0], v1[1]) || !Math.hypot(v2[0], v2[1])) return null;
+    const u1 = resized(v1, 1);
+    let u2 = vsub(v3, vmul(u1, u1[0] * v3[0] + u1[1] * v3[1]));
+    u2 = resized(u2, 1);
+    const det = u1[0] * u2[1] - u2[0] * u1[1];
+    if (!det) return null;
+    v1 = [(v1[0] * u2[1] - v1[1] * u2[0]) / det, (-v1[0] * u1[1] + v1[1] * u1[0]) / det];
+    v2 = [(v2[0] * u2[1] - v2[1] * u2[0]) / det, (-v2[0] * u1[1] + v2[1] * u1[0]) / det];
+    const R = Math.hypot(v1[0], v1[1]);
+    if (v2[0] === R) return null;
+    let flip = false;
+    if (v2[0] > R) {
+      flip = true;
+      v2[0] = 2 * R - v2[0];
+    }
+    const delta = (R * R - v2[0] * v2[0] - v2[1] * v2[1]) / (2 * v2[0] - 2 * R);
+    if (Math.abs(v2[1] / (R - v2[0])) > 50 || !isFinite(delta)) return null;
+    const v4 = flip ? [2 * R + delta, 0] : [-delta, 0];
+    const nc = vadd(c, [v4[0] * u1[0] + v4[1] * u2[0], v4[0] * u1[1] + v4[1] * u2[1]]);
+    return movingStart ? arcFromCenter(nc, p, e) : arcFromCenter(nc, s, p);
+  }
+  var setXY = (node, key, p) => {
+    const k = K.kid(node, key);
+    if (k) {
+      k[1] = r6(p[0]);
+      k[2] = r6(p[1]);
+    }
+  };
+  function editPointNode(orig, kind, key, p, raw, grid) {
+    if (kind === "dimension") return dimEditNode(orig, key, p, raw || p, grid || null);
+    if (kind === "gr_arc") {
+      const g = arcEditGeometry(orig, key, p, raw || p, arcEditMode());
+      if (!g) return clone(orig);
+      const node2 = clone(orig), cw = crossZ(g.mid[0] - g.start[0], g.mid[1] - g.start[1], g.end[0] - g.mid[0], g.end[1] - g.mid[1]) >= 0;
+      setXY(node2, "start", cw ? g.start : g.end);
+      setXY(node2, "mid", g.mid);
+      setXY(node2, "end", cw ? g.end : g.start);
+      return node2;
+    }
+    const node = clone(orig);
+    if (kind === "zone" || kind === "gr_poly") {
+      const pn = pePtsNode(node);
+      const xs = pn ? K.kids(pn, "xy") : [];
+      const nn = xs.length;
+      if (!nn) return node;
+      const i = +key.slice(1);
+      if (key[0] === "c") {
+        xs[i][1] = r6(p[0]);
+        xs[i][2] = r6(p[1]);
+      } else {
+        const j = (i + 1) % nn;
+        const a = [K.num(xs[i][1]), K.num(xs[i][2])], b = [K.num(xs[j][1]), K.num(xs[j][2])];
+        const d = [p[0] - (a[0] + b[0]) / 2, p[1] - (a[1] + b[1]) / 2];
+        xs[i][1] = r6(a[0] + d[0]);
+        xs[i][2] = r6(a[1] + d[1]);
+        xs[j][1] = r6(b[0] + d[0]);
+        xs[j][2] = r6(b[1] + d[1]);
+      }
+    } else if (kind === "gr_line") setXY(node, key, p);
+    else if (kind === "gr_rect") {
+      const a = pt(orig, "start"), b = pt(orig, "end");
+      let x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
+      const sx = (v) => {
+        x0 = v;
+      }, sy = (v) => {
+        y0 = v;
+      }, ex = (v) => {
+        x1 = v;
+      }, ey = (v) => {
+        y1 = v;
+      };
+      ({
+        r0: () => {
+          sx(p[0]);
+          sy(p[1]);
+        },
+        r1: () => {
+          ex(p[0]);
+          sy(p[1]);
+        },
+        r2: () => {
+          ex(p[0]);
+          ey(p[1]);
+        },
+        r3: () => {
+          sx(p[0]);
+          ey(p[1]);
+        },
+        e0: () => sy(p[1]),
+        e1: () => ex(p[0]),
+        e2: () => ey(p[1]),
+        e3: () => sx(p[0])
+      })[key]();
+      setXY(node, "start", [x0, y0]);
+      setXY(node, "end", [x1, y1]);
+    } else if (kind === "gr_circle") {
+      if (key === "center") {
+        const c = pt(orig, "center"), e = pt(orig, "end");
+        setXY(node, "center", p);
+        setXY(node, "end", [e[0] + p[0] - c[0], e[1] + p[1] - c[1]]);
+      } else setXY(node, "end", p);
+    }
+    return node;
+  }
+  function peSingleId(ctx) {
+    const c = ctx || lastCtx;
+    const ids = c && c.doc ? selectionIds(c) : S.sel;
+    if (c && c.doc && ids.size > 1) {
+      const gen = selectedTuningPattern(c, ids);
+      if (gen) return gen.id;
+    }
+    return ids.size === 1 ? ids.values().next().value : null;
+  }
+  function editHandleAt(doc, x, y, tol) {
+    const id = peSingleId();
+    const it = id ? doc.items.get(id) : null;
+    if (!it || isLocked(it.node)) return null;
+    let best = null, bd = tol;
+    for (const h of editPoints(it)) {
+      const d = Math.max(Math.abs(h.p[0] - x), Math.abs(h.p[1] - y));
+      if (d <= bd) {
+        bd = d;
+        best = h;
+      }
+    }
+    return best ? { it, h: best } : null;
+  }
+  function addCornerChanges(doc, id, at) {
+    const it = doc.items.get(id);
+    if (!it) return [];
+    if (it.kind === "zone" || it.kind === "gr_poly") {
+      const pts = pePolyPts(it.node);
+      if (pts.length < 2) return [];
+      let bi = -1, bd = Infinity, bp = null;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i], b = pts[(i + 1) % pts.length];
+        const q = closestOnSeg(at, a, b);
+        const d = Math.hypot(q[0] - at[0], q[1] - at[1]);
+        if (d < bd) {
+          bd = d;
+          bi = i;
+          bp = q;
+        }
+      }
+      const node = clone(it.node);
+      const pn = pePtsNode(node);
+      const xs = K.kids(pn, "xy");
+      const after = xs[bi];
+      pn.splice(pn.indexOf(after) + 1, 0, ["xy", r6(bp[0]), r6(bp[1])]);
+      return [replacedChange(it, node)];
+    }
+    if (it.kind === "gr_line") {
+      const a = pt(it.node, "start"), b = pt(it.node, "end");
+      const q = closestOnSeg(at, a, b);
+      if (samePt(q, a) || samePt(q, b)) return [];
+      const first = clone(it.node);
+      setXY(first, "end", q);
+      const second = clone(it.node);
+      setXY(second, "start", q);
+      const u = K.kid(second, "uuid");
+      if (u) u[1] = K.newUuid ? K.newUuid() : u[1] + "-1";
+      return [replacedChange(it, first), addedChange(doc, second)];
+    }
+    return [];
+  }
+  function canAddCorner(it) {
+    return !!it && (it.kind === "zone" || it.kind === "gr_poly" || it.kind === "gr_line");
+  }
+  function canRemoveCorner(doc, id, at) {
+    const it = doc.items.get(id);
+    if (!it || it.kind !== "zone" && it.kind !== "gr_poly" || pePolyPts(it.node).length <= 3) return false;
+    return !at || removeCornerChanges(doc, id, at, handleTol()).length > 0;
+  }
+  function closestOnSeg(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+    if (!L) return a.slice();
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L));
+    return [a[0] + t * dx, a[1] + t * dy];
+  }
+  function removeCornerChanges(doc, id, at, tol) {
+    const it = doc.items.get(id);
+    if (!it || it.kind !== "zone" && it.kind !== "gr_poly") return [];
+    const pts = pePolyPts(it.node);
+    if (pts.length <= 3) return [];
+    let bi = -1, bd = tol;
+    pts.forEach((p, i) => {
+      const d = Math.max(Math.abs(p[0] - at[0]), Math.abs(p[1] - at[1]));
+      if (d <= bd) {
+        bd = d;
+        bi = i;
+      }
+    });
+    if (bi < 0) return [];
+    const node = clone(it.node);
+    const pn = pePtsNode(node);
+    pn.splice(pn.indexOf(K.kids(pn, "xy")[bi]), 1);
+    return [replacedChange(it, node)];
+  }
+  var handleTol = () => 6 * (S.mmPerPx || 0.05);
+  function onHandlePointerDown(ev) {
+    const ctx = lastCtx;
+    if (!ctx || !isPcbDoc() || ev.button !== 0 || ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey || appTool() !== "select") return;
+    if (S.route || S.draw || S.drag || S.move || S.pedit || ctx.viewOnly) return;
+    const stage = ctx.stage;
+    if (!stage || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
+    const doc = liveDoc();
+    if (!doc) return;
+    const mm = ctx.worldMm(ev);
+    const hit = editHandleAt(doc, mm[0], mm[1], handleTol());
+    if (!hit) return;
+    ev.stopImmediatePropagation();
+    ev.preventDefault();
+    S.pedit = { id: hit.it.id, kind: hit.it.kind, key: hit.h.key, orig: clone(hit.it.node), start: mm, moved: false, ignoreGrid: !!hit.h.ignoreGrid };
+    if (isTuningPattern(hit.it)) genStartEdit(ctx, hit.it);
+    try {
+      stage.setPointerCapture(ev.pointerId);
+    } catch (e) {
+    }
+  }
+  function editHandleMove(ctx, mm) {
+    const pe = S.pedit;
+    if (!pe) return;
+    const it = ctx.doc.items.get(pe.id);
+    if (!it) {
+      S.pedit = null;
+      return;
+    }
+    if (!pe.moved && Math.hypot(mm[0] - pe.start[0], mm[1] - pe.start[1]) < 1e-3) return;
+    const p = pe.ignoreGrid ? mm : ctx.snapOn && ctx.snap ? ctx.snap([mm[0], mm[1]]) : mm;
+    if (pe.kind === "generated") {
+      pe.moved = true;
+      pe.node = tuningEditNode(pe.orig, pe.key, p);
+      genUpdateEdit(ctx, pe.node);
+      return;
+    }
+    pe.moved = true;
+    pe.node = editPointNode(pe.orig, pe.kind, pe.key, p, mm, ctx.snapOn && ctx.snap ? ctx.snap : null);
+    it.node.length = 0;
+    it.node.push(...clone(pe.node));
+    K.replaceChange(ctx.doc, it);
+    ctx.requestRender();
+  }
+  function editHandleUp(ctx, commit) {
+    const pe = S.pedit;
+    S.pedit = null;
+    if (!pe) return;
+    const it = ctx.doc.items.get(pe.id);
+    if (!it) {
+      genCancelEdit(ctx);
+      return;
+    }
+    if (pe.kind === "generated") {
+      if (commit && pe.moved) genFinishEdit(ctx);
+      else genCancelEdit(ctx);
+      return;
+    }
+    it.node.length = 0;
+    it.node.push(...clone(pe.orig));
+    K.replaceChange(ctx.doc, it);
+    if (commit && pe.moved && pe.node && K.serialize(pe.node) !== K.serialize(pe.orig)) ctx.commit([replacedChange(it, pe.node)], "edit points");
+    ctx.requestRender();
+  }
+  function drawEditPoints(c, ctx, px) {
+    if (S.route || S.draw || S.drag || S.move || S.modTool) return;
+    const id = peSingleId(ctx);
+    const ge = S.genEdit;
+    const it = id ? ge && ge.id === id && ge.fin && ge.fin.items.get(id) || ctx.doc.items.get(id) : null;
+    if (!it || isLocked(it.node)) return;
+    const hs = editPoints(it);
+    if (!hs.length) return;
+    const cur = ctx.cursor || null;
+    const size = 4 * px;
+    const hotKey = S.pedit ? S.pedit.key : cur ? ((editHandleAt(ctx.doc, cur[0], cur[1], handleTol()) || {}).h || {}).key : null;
+    c.save();
+    c.globalAlpha = 1;
+    c.setLineDash([]);
+    for (const h of hs) if (h.lines) {
+      c.lineWidth = 0.5 * px;
+      c.strokeStyle = "rgba(77,77,77,0.8)";
+      for (const q of h.lines) line(c, h.p, q);
+    }
+    for (const h of hs) {
+      const on = h.key === hotKey;
+      c.lineWidth = (on ? 5 : 2) * px;
+      c.strokeStyle = on ? "rgba(128,128,128,0.8)" : "rgba(77,77,77,0.8)";
+      c.fillStyle = "#FFFFFF";
+      c.beginPath();
+      if (h.circle) c.arc(h.p[0], h.p[1], size, 0, Math.PI * 2);
+      else c.rect(h.p[0] - size, h.p[1] - size, 2 * size, 2 * size);
+      c.fill();
+      c.stroke();
+    }
+    c.restore();
+  }
+
+  // web/tools/pcb-tools/clipboard.ts
+  function layersBlock(doc) {
+    const rows = [];
+    for (const [name, l] of doc.layers) if (/\./.test(name) || name === "Margin") rows.push([l.id, name, l.type || "user"].concat(l.userName ? [l.userName] : []));
+    if (!rows.length) rows.push([0, "F.Cu", "signal"], [2, "B.Cu", "signal"]);
+    const copper = copperOf(doc);
+    const rank = (r) => {
+      const i = copper.indexOf(r[1]);
+      return i >= 0 ? i : /\.Cu$/.test(r[1]) ? 500 + r[0] : 1e3 + r[0];
+    };
+    rows.sort((a, b) => rank(a) - rank(b));
+    return ["layers", ...rows];
+  }
+  var quote = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  function layersText(doc) {
+    return "(layers " + layersBlock(doc).slice(1).map((r) => `(${r[0]} ${quote(r[1])} ${r[2]}${r[3] !== void 0 ? " " + quote(r[3]) : ""})`).join(" ") + ")";
+  }
+  function referencePoint(doc, ids, cursor) {
+    const items = ids.map((id) => doc.items.get(id)).filter(Boolean);
+    let best = null, bd = Infinity;
+    if (cursor) for (const it of items) {
+      const pts = it.kind === "footprint" ? [anchorOf(it)].concat(padsOf(it).map((p) => [p.x, p.y])) : [anchorOf(it)].concat(conductorEnds(it));
+      for (const p of pts) {
+        const d = Math.hypot(p[0] - cursor[0], p[1] - cursor[1]);
+        if (d < bd) {
+          bd = d;
+          best = p;
+        }
+      }
+    }
+    return best || cursor || selectionCenter(items);
+  }
+  function clipboardText(doc, ids, ref) {
+    ref = ref || [0, 0];
+    const NT = netTable(doc);
+    const items = Array.from(expandGroups(doc, ids)).map((id) => doc.items.get(id)).filter(Boolean);
+    const refd = /* @__PURE__ */ new Map();
+    const take = (n) => {
+      const key = NT.key(n);
+      if (key && !refd.has(key)) refd.set(key, n.code > 0 ? n.code : 0);
+    };
+    for (const it of items) {
+      if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) take(netOf(p));
+      else if (K.kid(it.node, "net")) take(netOf(it.node));
+    }
+    let next = 1;
+    const used = new Set(refd.values());
+    for (const [k, v] of refd) if (!v) {
+      while (used.has(next)) next++;
+      refd.set(k, next);
+      used.add(next);
+    }
+    const parts = [`(kicad_pcb (version ${BOARD_VERSION}) (generator "kicad-collab-web") (generator_version "10.0")`, layersText(doc), '(net 0 "")'];
+    for (const [name, code] of Array.from(refd).sort((a, b) => a[1] - b[1])) parts.push(`(net ${code} ${quote(name)})`);
+    for (const it of items) {
+      const node = clone(it.node);
+      translateNode(node, -ref[0], -ref[1]);
+      setLocked(node, false);
+      parts.push(K.serialize(node));
+    }
+    return parts.join("\n") + "\n)";
+  }
+  function parseClipboard(text) {
+    let trees;
+    try {
+      trees = K.parseAll(text);
+    } catch (e) {
+      return null;
+    }
+    const nodes = [], codeToName = /* @__PURE__ */ new Map();
+    for (const t of trees || []) {
+      if (!isList(t)) continue;
+      if (t[0] === "kicad_pcb") {
+        for (const c of t.slice(1)) {
+          if (!isList(c)) continue;
+          if (c[0] === "net" && typeof c[1] === "number") codeToName.set(c[1], K.str(c[2]));
+          else if (PCB_KINDS.has(c[0])) nodes.push(c);
+        }
+      } else if (PCB_KINDS.has(t[0])) nodes.push(t);
+    }
+    return nodes.length ? { nodes, codeToName } : null;
+  }
+  function freshUuids(nodes) {
+    const map = /* @__PURE__ */ new Map();
+    const walk = (n) => {
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i];
+        if (!isList(c)) continue;
+        if ((c[0] === "uuid" || c[0] === "tstamp") && c.length > 1) {
+          const old = K.str(c[1]);
+          if (!map.has(old)) map.set(old, K.newUuid());
+          c[1] = map.get(old);
+        } else walk(c);
+      }
+    };
+    for (const n of nodes) walk(n);
+    for (const n of nodes) if (n[0] === "group") {
+      const m = K.kid(n, "members");
+      if (m) {
+        const ids = m.slice(1).map(K.str).filter((id) => map.has(id)).map((id) => map.get(id));
+        m.splice(1, m.length - 1, ...ids);
+      }
+    }
+    return map;
+  }
+  function rewriteNets(nodes, codeToName, doc) {
+    const NT = netTable(doc);
+    const style = netStyle(doc);
+    const walk = (n) => {
+      for (let i = 1; i < n.length; i++) {
+        const c = n[i];
+        if (!isList(c)) continue;
+        if (c[0] === "net" && c.length > 1 && n[0] !== "kicad_pcb") {
+          const name = typeof c[1] === "number" ? c.length > 2 ? K.str(c[2]) : codeToName.get(c[1]) || "" : K.str(c[1]);
+          if (style === "name") n[i] = ["net", name];
+          else {
+            const t = name ? NT.byName.get(name) : null;
+            const code = t && t.code > 0 ? t.code : 0;
+            n[i] = c.length > 2 || n[0] === "pad" ? ["net", code, code ? name : ""] : ["net", code];
+          }
+        } else walk(c);
+      }
+    };
+    for (const n of nodes) walk(n);
+  }
+  var refProp = (node) => K.kids(node, "property").find((p) => K.str(p[1]) === "Reference");
+  function annotate(nodes, doc, mode) {
+    if (mode === "keep") return;
+    const used = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) if (it.kind === "footprint" && it.ref) used.add(it.ref);
+    for (const n of nodes) {
+      if (!isFootprintNode(n)) continue;
+      const p = refProp(n);
+      if (!p) continue;
+      const ref = K.str(p[2]);
+      if (mode === "clear") {
+        p[2] = "REF**";
+        continue;
+      }
+      const m = /^(.*?)(\d+)$/.exec(ref);
+      if (!m) continue;
+      if (!used.has(ref)) {
+        used.add(ref);
+        continue;
+      }
+      let k = 1;
+      while (used.has(m[1] + k)) k++;
+      p[2] = m[1] + k;
+      used.add(p[2]);
+    }
+  }
+  function pasteChanges(doc, text, at, opts) {
+    opts = opts || {};
+    const parsed = parseClipboard(text);
+    if (!parsed) return { changes: [], ids: [] };
+    const nodes = parsed.nodes.map(clone);
+    freshUuids(nodes);
+    rewriteNets(nodes, parsed.codeToName, doc);
+    annotate(nodes, doc, opts.annotations || "keep");
+    if (opts.clearNets) clearNets(nodes, doc);
+    const changes = [], ids = [];
+    for (const n of nodes) {
+      if (at && (at[0] || at[1])) translateNode(n, at[0], at[1]);
+      const c = addedChange(doc, n);
+      changes.push(c);
+      ids.push(c.id);
+    }
+    return { changes, ids };
+  }
+  function clearNets(nodes, doc) {
+    const walk = (n) => {
+      for (let i = n.length - 1; i > 0; i--) {
+        const c = n[i];
+        if (!isList(c)) continue;
+        if (c[0] === "net" && n[0] !== "kicad_pcb") {
+          if (n[0] === "pad") n.splice(i, 1);
+          else n[i] = netNode(doc, null);
+        } else if (c[0] === "net_name") c[1] = "";
+        else walk(c);
+      }
+    };
+    for (const n of nodes) walk(n);
+  }
+  function duplicateChanges(doc, ids, offset, opts) {
+    const sel = new Set(ids);
+    const out = { changes: [], ids: [], restore: [] };
+    const joins = /* @__PURE__ */ new Map();
+    const coveredByGroup = (id) => {
+      for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true;
+      return false;
+    };
+    const subtree = (it, acc) => {
+      acc.push(it);
+      if (it.kind === "group") for (const m of groupMembers(it.node)) {
+        const c = doc.items.get(m);
+        if (c) subtree(c, acc);
+      }
+      return acc;
+    };
+    for (const id of ids) {
+      const it = doc.items.get(id);
+      if (!it || it.kind === "generated" || coveredByGroup(id)) continue;
+      const src = subtree(it, []);
+      const nodes = src.map((x) => clone(x.node));
+      freshUuids(nodes);
+      if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
+      if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);
+      const order = nodes.map((n, i) => i).sort((a, b) => (nodes[a][0] === "group") - (nodes[b][0] === "group") || b - a);
+      let topId = null;
+      for (const i of order) {
+        const n = nodes[i];
+        if (offset && (offset[0] || offset[1])) translateNode(n, offset[0], offset[1]);
+        const c = addedChange(doc, n);
+        out.changes.push(c);
+        out.ids.push(c.id);
+        if (i === 0) topId = c.id;
+      }
+      const g = groupOf(doc, id);
+      if (g && topId) {
+        if (!joins.has(g.id)) joins.set(g.id, []);
+        joins.get(g.id).push(topId);
+      }
+    }
+    for (const [gid, add] of joins) {
+      const g = doc.items.get(gid);
+      out.restore.push({ id: gid, node: clone(g.node) });
+      out.changes.push(...groupMembersChanges(doc, g, add, []));
+    }
+    return out;
+  }
+  var textOfItem = (it) => it.kind === "footprint" ? it.ref || "" : it.kind === "gr_text" || it.kind === "gr_text_box" ? K.str(it.node[1]) : it.kind === "dimension" ? K.str((K.kid(it.node, "gr_text") || [])[1]) : "";
+  var clipBuffer = "";
+  function clipSet(ctx, text) {
+    clipBuffer = text;
+    if (ctx.clipboard && ctx.clipboard.set) ctx.clipboard.set(text);
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).catch(() => {
+    });
+  }
+  function clipGet(ctx, done) {
+    if (ctx.clipboard && ctx.clipboard.get) {
+      const v = ctx.clipboard.get();
+      if (v && typeof v.then === "function") {
+        v.then((t) => done(t || clipBuffer), () => done(clipBuffer));
+        return;
+      }
+      done(v || clipBuffer);
+      return;
+    }
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then((t) => done(t && /\(kicad_pcb|\(footprint|\(segment|\(via|\(gr_|\(zone/.test(t) ? t : clipBuffer), () => done(clipBuffer));
+      return;
+    }
+    done(clipBuffer);
+  }
+  function cursorPoint(ctx) {
+    let p = ctx.cursor || (S.hover ? [S.hover.x, S.hover.y] : null);
+    if (!p && ctx.doc && ctx.doc.bbox) p = [(ctx.doc.bbox[0] + ctx.doc.bbox[2]) / 2, (ctx.doc.bbox[1] + ctx.doc.bbox[3]) / 2];
+    if (!p) return [0, 0];
+    return ctx.snapOn && ctx.snap ? ctx.snap(p) : p;
   }
 
   // web/tools/pcb-tools/shove.ts
@@ -3815,80 +5829,6 @@
       }
     }
     return best ? { p: [r6(best[0]), r6(best[1])], anchor: best } : { p: g, anchor: null };
-  }
-
-  // web/tools/pcb-tools/posture.ts
-  function cornerLeg(a, b, diagFirst, cm, free) {
-    if (free) return samePt(a, b) ? [a.slice()] : [a.slice(), b.slice()];
-    if (!is90(cm)) return legPts(a, b, diagFirst);
-    const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
-    if (w < 1e-9 || h < 1e-9) return samePt(a, b) ? [a.slice()] : [a.slice(), b.slice()];
-    const mid = diagFirst === h >= w ? [b[0], a[1]] : [a[0], b[1]];
-    return [a.slice(), rp(mid), b.slice()];
-  }
-  function roundCorners(pts) {
-    const n = pts.length;
-    if (n < 3) return pts.length > 1 ? [{ t: "seg", a: pts[0].slice(), b: pts[1].slice() }] : [];
-    const len = (i) => Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
-    const corners2 = [];
-    for (let i = 1; i < n - 1; i++) {
-      const lp = len(i - 1) * (i - 1 === 0 ? 1 : 0.5), ln = len(i) * (i + 1 === n - 1 ? 1 : 0.5);
-      const t = Math.min(lp, ln);
-      const u1 = vunit(vsub(pts[i - 1], pts[i])), u2 = vunit(vsub(pts[i + 1], pts[i]));
-      const cos = u1[0] * u2[0] + u1[1] * u2[1];
-      if (t < 1e-6 || cos < -1 + 1e-9) {
-        corners2.push(null);
-        continue;
-      }
-      const half = Math.acos(Math.max(-1, Math.min(1, cos))) / 2;
-      const bis = vunit(vadd(u1, u2));
-      const R = t * Math.tan(half), dc = t / Math.cos(half);
-      corners2.push({ a: rp(vadd(pts[i], vmul(u1, t))), b: rp(vadd(pts[i], vmul(u2, t))), m: rp(vadd(pts[i], vmul(bis, dc - R))) });
-    }
-    const out = [];
-    let cur = pts[0].slice();
-    for (let i = 1; i < n - 1; i++) {
-      const c = corners2[i - 1];
-      if (!c) continue;
-      if (!peq(cur, c.a)) out.push({ t: "seg", a: cur, b: c.a });
-      out.push({ t: "arc", a: c.a, m: c.m, b: c.b });
-      cur = c.b;
-    }
-    if (!peq(cur, pts[n - 1])) out.push({ t: "seg", a: cur, b: pts[n - 1].slice() });
-    return out;
-  }
-  function elemsPts(els) {
-    const out = [];
-    for (const e of els) {
-      if (e.t === "seg") {
-        chainAppend(out, [e.a, e.b]);
-        continue;
-      }
-      const arc = K.arcFrom3(e.a, e.m, e.b);
-      if (!arc) {
-        chainAppend(out, [e.a, e.b]);
-        continue;
-      }
-      let sweep = arc.anticlockwise ? arc.a0 - arc.a1 : arc.a1 - arc.a0;
-      sweep = (sweep % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-      const pts = [e.a];
-      for (let k = 1; k < 8; k++) {
-        const a = arc.a0 + (arc.anticlockwise ? -1 : 1) * sweep * k / 8;
-        pts.push([arc.x + arc.r * Math.cos(a), arc.y + arc.r * Math.sin(a)]);
-      }
-      pts.push(e.b);
-      chainAppend(out, pts);
-    }
-    return out;
-  }
-  function headElems(pts, cm, clear) {
-    const plain = () => pts.slice(0, -1).map((p, i) => ({ t: "seg", a: p.slice(), b: pts[i + 1].slice() }));
-    if (!isRounded(cm) || pts.length < 3) return plain();
-    const els = roundCorners(pts);
-    return !clear || clear(elemsPts(els)) ? els : plain();
-  }
-  function arcTrackNode(doc, a, m, b, width, layer, net) {
-    return ["arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], ["width", r6(width)], ["layer", layer], netNode(doc, net)];
   }
 
   // web/tools/pcb-tools/redundant.ts
@@ -5062,1585 +7002,6 @@
     c.restore();
   }
 
-  // web/tools/pcb-tools/meander.ts
-  var TUNE_IU = 1e6;
-  var LENGTH_UNCONSTRAINED = 1e6 * TUNE_IU;
-  var DEFAULT_LENGTH_TOLERANCE = 0.1 * TUNE_IU;
-  var LENGTH_TARGET_TOLERANCE = 20;
-  var DELAY_UNCONSTRAINED_MM = 1e6;
-  var MT_SINGLE = 1;
-  var MT_START = 2;
-  var MT_FINISH = 3;
-  var MT_TURN = 4;
-  var MT_CHECK_START = 5;
-  var MT_CHECK_FINISH = 6;
-  var MT_CORNER = 7;
-  var MT_ARC = 8;
-  var MT_EMPTY = 9;
-  var TUNED = "tuned";
-  var TOO_SHORT = "too_short";
-  var TOO_LONG = "too_long";
-  var TUNE_MSG_INSIDE = "Unable to tune segments inside other tuning patterns.";
-  var TUNE_MSG_SELECT = "Select a track to tune first.";
-  var TUNE_MSG_PICK = "Please select a track whose length you want to tune.";
-  var TUNE_STATUS_TEXT = { [TOO_LONG]: "too long", [TOO_SHORT]: "too short", [TUNED]: "tuned" };
-  function meanderDefaults() {
-    const st = {
-      minAmp: 2e5,
-      maxAmp: 1e6,
-      step: 5e4,
-      spacing: 6e5,
-      crPct: 80,
-      round: true,
-      singleSided: false,
-      initialSide: -1,
-      target: null,
-      overrideCustomRules: false,
-      keepEndpoints: false
-    };
-    setTargetLength(st, LENGTH_UNCONSTRAINED);
-    setTargetSkew(st, 0);
-    return st;
-  }
-  function setTargetSkew(st, opt) {
-    st.skew = { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE };
-  }
-  function setTargetLength(st, opt) {
-    st.target = opt === LENGTH_UNCONSTRAINED ? { min: 0, opt, max: opt } : { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE };
-  }
-  var tuneCopy = (st) => Object.assign({}, st, { target: Object.assign({}, st.target), skew: Object.assign({}, st.skew) });
-  var vsubI = vsub;
-  var vlen = (a) => Math.hypot(a[0], a[1]);
-  var vresize = (a, l) => {
-    const n = vlen(a);
-    return n ? [a[0] * l / n, a[1] * l / n] : [0, 0];
-  };
-  var vperp = (a) => [-a[1], a[0]];
-  var vrot = (a, cw) => cw ? [a[1], -a[0]] : [-a[1], a[0]];
-  var veq = (a, b) => Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[1] - b[1]) < 0.5;
-  var segSide = (s, p) => {
-    const d = (s.B[0] - s.A[0]) * (p[1] - s.A[1]) - (s.B[1] - s.A[1]) * (p[0] - s.A[0]);
-    return d < 0 ? -1 : d > 0 ? 1 : 0;
-  };
-  function lineProject(s, p) {
-    const d = vsubI(s.B, s.A), l2 = d[0] * d[0] + d[1] * d[1];
-    if (!l2) return s.A.slice();
-    const t = ((p[0] - s.A[0]) * d[0] + (p[1] - s.A[1]) * d[1]) / l2;
-    return [s.A[0] + d[0] * t, s.A[1] + d[1] * t];
-  }
-  function approxParallel(s, o) {
-    const p = s.A[1] - s.B[1], q = s.B[0] - s.A[0], r = -p * s.A[0] - q * s.A[1], n = Math.hypot(p, q);
-    if (!n) return true;
-    return Math.abs((p * o.A[0] + q * o.A[1] + r) / n - (p * o.B[0] + q * o.B[1] + r) / n) <= 1;
-  }
-  function chAppend(ch, p) {
-    if (ch.length && veq(ch[ch.length - 1].p, p)) return;
-    ch.push({ p: p.slice() });
-  }
-  function chAppendChain(ch, o) {
-    o.forEach((n, i) => {
-      if (!i || !n.m) chAppend(ch, n.p);
-      else ch.push({ p: n.p.slice(), m: n.m.slice() });
-    });
-  }
-  function chLength(ch) {
-    let L = 0;
-    for (let i = 1; i < ch.length; i++) {
-      const a = ch[i - 1].p, b = ch[i].p, m = ch[i].m;
-      if (m) {
-        const c = K.arcFrom3(a, m, b);
-        if (c) {
-          L += arcLength(c);
-          continue;
-        }
-      }
-      L += Math.hypot(b[0] - a[0], b[1] - a[1]);
-    }
-    return L;
-  }
-  function chPoints(ch) {
-    const out = [];
-    ch.forEach((n, i) => {
-      if (i && n.m) {
-        const a = ch[i - 1].p, c = K.arcFrom3(a, n.m, n.p);
-        if (c) {
-          let sw = c.anticlockwise ? c.a0 - c.a1 : c.a1 - c.a0;
-          sw = (sw % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
-          const k = Math.max(2, Math.ceil(sw / (Math.PI / 18)));
-          for (let j = 1; j < k; j++) {
-            const t = c.a0 + (c.anticlockwise ? -1 : 1) * sw * j / k;
-            out.push([c.x + c.r * Math.cos(t), c.y + c.r * Math.sin(t)]);
-          }
-        }
-      }
-      out.push(n.p);
-    });
-    return out;
-  }
-  function chMirror(ch, P, dir) {
-    const s = { A: P, B: vadd(P, dir) };
-    const m = (p) => {
-      const q = lineProject(s, p);
-      return [2 * q[0] - p[0], 2 * q[1] - p[1]];
-    };
-    return ch.map((n) => n.m ? { p: m(n.p), m: m(n.m) } : { p: m(n.p) });
-  }
-  function chSimplify(ch) {
-    const out = [];
-    for (const n of ch) {
-      if (out.length && !n.m && veq(out[out.length - 1].p, n.p)) continue;
-      if (out.length >= 2 && !n.m && !out[out.length - 1].m) {
-        const a = out[out.length - 2].p, b = out[out.length - 1].p, c = n.p;
-        const cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-        if (Math.abs(cr) / Math.max(1, Math.hypot(c[0] - a[0], c[1] - a[1])) < 1 && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) >= 0) {
-          out[out.length - 1] = { p: c.slice() };
-          continue;
-        }
-      }
-      out.push(n.m ? { p: n.p.slice(), m: n.m.slice() } : { p: n.p.slice() });
-    }
-    return out;
-  }
-  function newShape(pl, width) {
-    return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset: 0 };
-  }
-  var shapeCopy = (m) => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)) });
-  var isMeanderType = (t) => t === MT_SINGLE || t === MT_START || t === MT_FINISH || t === MT_TURN;
-  var shapeSpacing = (m) => Math.max(m.width + m.pl.clearance, m.pl.st.spacing);
-  function minAmplitude(m) {
-    const st = m.pl.st;
-    if (st.round) return Math.max(st.minAmp, Math.abs(m.offset) + m.width);
-    return Math.max(st.minAmp, Math.abs(m.offset) + Math.trunc(m.width * Math.tan(1 - Math.tan(Math.PI / 8))));
-  }
-  function cornerRadius(m) {
-    if (m.amp === 0) return 0;
-    const st = m.pl.st;
-    const minCr = st.round ? Math.abs(m.offset) + Math.trunc(m.width / 2) : Math.abs(m.offset) + Math.trunc(m.width / 2 * (1 - Math.tan(Math.PI / 8)));
-    const maxCr = Math.min(Math.trunc((m.amp + Math.abs(m.offset)) / 2), Math.trunc(shapeSpacing(m) / 2));
-    if (maxCr < minCr) return maxCr;
-    const optCr = Math.trunc(shapeSpacing(m) * st.crPct / 200);
-    return Math.min(Math.max(optCr, minCr), maxCr);
-  }
-  function genMeanderShape(m, P, dir, side, type, baseOffset) {
-    let cr = cornerRadius(m), offset = baseOffset;
-    const spc = shapeSpacing(m), amplitude = m.amp, tbl = m.targetBaseLen;
-    if (side) offset *= -1;
-    const dub = vresize(dir, offset), dvb = vperp(dub);
-    if (2 * cr > amplitude + Math.abs(offset)) cr = Math.trunc((amplitude + Math.abs(offset)) / 2);
-    if (2 * cr > spc) cr = Math.trunc(spc / 2);
-    if (cr - offset < 0) cr = offset;
-    m.meanCr = cr;
-    const sCorner = cr - offset, uCorner = cr + offset, startSide = amplitude - 2 * cr + Math.abs(offset), turnSide = amplitude - cr;
-    let top = spc - 2 * cr;
-    let lc = [], pos, cur;
-    const start = (w, d) => {
-      lc = [{ p: w.slice() }];
-      pos = w.slice();
-      cur = d.slice();
-    };
-    const forward = (len) => {
-      if (len < 5) return;
-      pos = vadd(pos, vresize(cur, len));
-      chAppend(lc, pos);
-    };
-    const turn = (cw) => {
-      cur = vrot(cur, cw);
-    };
-    const miter = (r, s) => {
-      if (r <= 0) {
-        turn(s);
-        return;
-      }
-      const u = vresize(cur, r), v = vperp(u), sv = s ? -1 : 1;
-      const end = vadd(vadd(pos, u), vmul(v, sv));
-      if (m.pl.st.round) {
-        const c = vadd(pos, vmul(v, sv));
-        const mid = vadd(c, vmul(vadd(vsubI(pos, c), vsubI(end, c)), Math.SQRT1_2));
-        chAppend(lc, pos);
-        lc.push({ p: end, m: mid });
-      } else {
-        chAppend(lc, pos);
-        chAppend(lc, end);
-      }
-      pos = end;
-      turn(s);
-    };
-    const uShape = (sides, corner, t) => {
-      forward(sides);
-      miter(corner, true);
-      forward(t);
-      miter(corner, true);
-      forward(sides);
-    };
-    start(vadd(P, dvb), dir);
-    switch (type) {
-      case MT_EMPTY:
-        chAppend(lc, vadd(vadd(P, dvb), dir));
-        break;
-      case MT_START:
-        if (tbl) top = Math.max(top, tbl - sCorner - uCorner * 2 + offset);
-        miter(sCorner, false);
-        uShape(startSide, uCorner, top);
-        forward(Math.min(sCorner, uCorner));
-        forward(Math.abs(offset));
-        break;
-      case MT_FINISH:
-        if (tbl) top = Math.max(top, tbl - cr - spc);
-        start(vsubI(P, dub), dir);
-        turn(false);
-        forward(Math.min(sCorner, uCorner));
-        forward(Math.abs(offset));
-        uShape(startSide, uCorner, top);
-        miter(sCorner, false);
-        chAppend(lc, vadd(vadd(P, dvb), vresize(dir, tbl >= spc + cr ? tbl : 2 * spc - cr)));
-        break;
-      case MT_TURN:
-        if (tbl) top = Math.max(top, tbl - uCorner * 2 + offset * 2);
-        start(vsubI(P, dub), dir);
-        turn(false);
-        forward(Math.abs(offset));
-        uShape(turnSide, uCorner, top);
-        forward(Math.abs(offset));
-        break;
-      case MT_SINGLE:
-        if (tbl) top = Math.max(top, Math.trunc((tbl - sCorner * 2 - uCorner * 2) / 2));
-        miter(sCorner, false);
-        uShape(startSide, uCorner, top);
-        miter(sCorner, false);
-        chAppend(lc, vadd(vadd(P, dvb), vresize(dir, 2 * spc)));
-        break;
-      default:
-        break;
-    }
-    return side ? chMirror(lc, P, dir) : lc;
-  }
-  function updateBaseSegment(m) {
-    m.clipped = { A: lineProject(m.baseSeg, m.line[0].p), B: lineProject(m.baseSeg, m.line[m.line.length - 1].p) };
-  }
-  var baselineLength = (m) => vlen(vsubI(m.clipped.B, m.clipped.A));
-  var currentLength = (m) => chLength(m.line);
-  function recalcShape(m) {
-    m.line = genMeanderShape(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type, 0);
-    updateBaseSegment(m);
-  }
-  function resizeShape(m, a) {
-    if (a < 0) return;
-    m.amp = Math.max(a, minAmplitude(m));
-    recalcShape(m);
-  }
-  function makeEmpty(m) {
-    updateBaseSegment(m);
-    const d = vsubI(m.clipped.B, m.clipped.A);
-    m.type = MT_EMPTY;
-    m.amp = 0;
-    m.line = genMeanderShape(m, m.p0, d, m.side, MT_EMPTY, 0);
-  }
-  function minTunableLength(m) {
-    const c = shapeCopy(m);
-    c.targetBaseLen = baselineLength(m);
-    resizeShape(c, minAmplitude(c));
-    return currentLength(c);
-  }
-  function fitShape(m, type, seg, P, side) {
-    const st = m.pl.st;
-    if (type === MT_CHECK_START || type === MT_CHECK_FINISH) {
-      const prim1 = type === MT_CHECK_START ? MT_START : MT_TURN, prim2 = type === MT_CHECK_START ? MT_TURN : MT_FINISH;
-      const m1 = newShape(m.pl, m.width), m2 = newShape(m.pl, m.width);
-      const c1 = fitShape(m1, prim1, seg, P, side);
-      const c2 = c1 && fitShape(m2, prim2, seg, m1.clipped.B, !side);
-      if (c1 && c2) {
-        Object.assign(m, shapeCopy(m1));
-        m.type = prim1;
-        m.p0 = P.slice();
-        m.side = side;
-        updateBaseSegment(m);
-        return true;
-      }
-      return false;
-    }
-    const minAmpl = minAmplitude(m), maxAmpl = Math.max(st.maxAmp, minAmpl), minCr = Math.trunc(m.width / 2);
-    for (let ampl = maxAmpl; ampl >= minAmpl; ampl -= st.step) {
-      m.amp = ampl;
-      m.line = genMeanderShape(m, P, vsubI(seg.B, seg.A), side, type, 0);
-      m.type = type;
-      m.baseSeg = { A: seg.A.slice(), B: seg.B.slice() };
-      m.p0 = P.slice();
-      m.side = side;
-      updateBaseSegment(m);
-      if (m.meanCr < minCr) continue;
-      if (m.pl.checkFit(m)) return true;
-    }
-    return false;
-  }
-  function newMLine(pl, width) {
-    return { pl, width, meanders: [], last: [0, 0] };
-  }
-  function mlAddCorner(L, a) {
-    const m = newShape(L.pl, L.width);
-    m.type = MT_CORNER;
-    m.line = [{ p: a.slice() }];
-    m.clipped = { A: a.slice(), B: a.slice() };
-    L.last = a.slice();
-    L.meanders.push(m);
-  }
-  function mlAddMeander(L, m) {
-    L.last = m.clipped.B.slice();
-    L.meanders.push(shapeCopy(m));
-  }
-  function checkSelfIntersections(L, shape, clearance) {
-    let pts = null;
-    for (let i = L.meanders.length - 1; i >= 0; i--) {
-      const m = L.meanders[i];
-      if (m.type === MT_EMPTY || m.type === MT_CORNER) continue;
-      if (approxParallel(shape.clipped, m.clipped)) continue;
-      pts = pts || chPoints(shape.line);
-      const mp = chPoints(m.line);
-      for (let j = mp.length - 2; j >= 0; j--) for (let k = 0; k + 1 < pts.length; k++) if (segSegDist(pts[k], pts[k + 1], mp[j], mp[j + 1]) < clearance) return false;
-    }
-    return true;
-  }
-  function meanderSegment(L, base, aSide) {
-    const st = L.pl.st, baseLen = vlen(vsubI(base.B, base.A)), singleSided = st.singleSided, dir = vsubI(base.B, base.A);
-    let side = aSide;
-    mlAddCorner(L, base.A);
-    let turning = false, started = false;
-    L.last = base.A.slice();
-    for (let guard = 0; guard < 1e5; guard++) {
-      const m = newShape(L.pl, L.width);
-      const thr = shapeSpacing(m);
-      let fail = false;
-      let remaining = baseLen - vlen(vsubI(L.last, base.A));
-      const flipInitialSide = () => {
-        L.pl.st.initialSide = -L.pl.st.initialSide;
-      };
-      const addSingleIfFits = () => {
-        fail = true;
-        if (fitShape(m, MT_SINGLE, base, L.last, side)) {
-          mlAddMeander(L, m);
-          fail = false;
-          started = false;
-        }
-        if (fail && !singleSided && fitShape(m, MT_SINGLE, base, L.last, !side)) {
-          if (!started) flipInitialSide();
-          mlAddMeander(L, m);
-          fail = false;
-          started = false;
-          side = !side;
-        }
-      };
-      if (remaining < st.step) break;
-      if (!singleSided && remaining > 3 * thr) {
-        if (!turning) {
-          for (let i = 0; i < 2; i++) {
-            const checkSide = i === 0 ? side : !side;
-            if (fitShape(m, MT_CHECK_START, base, L.last, checkSide)) {
-              if (!started && checkSide !== side) flipInitialSide();
-              turning = true;
-              mlAddMeander(L, m);
-              side = !checkSide;
-              started = true;
-              break;
-            }
-          }
-          if (!turning) addSingleIfFits();
-        } else {
-          if (fitShape(m, MT_CHECK_FINISH, base, L.last, side)) {
-            fitShape(m, MT_TURN, base, L.last, side);
-            mlAddMeander(L, m);
-            side = !side;
-            started = true;
-          } else {
-            fitShape(m, MT_FINISH, base, L.last, side);
-            started = false;
-            mlAddMeander(L, m);
-            turning = false;
-          }
-        }
-      } else if (!singleSided && started) {
-        if (fitShape(m, MT_FINISH, base, L.last, side)) mlAddMeander(L, m);
-        break;
-      } else if (!turning && remaining > thr * 2) addSingleIfFits();
-      else fail = true;
-      remaining = baseLen - vlen(vsubI(L.last, base.A));
-      if (remaining < st.step) break;
-      if (fail) {
-        const tmp = newShape(L.pl, L.width);
-        const nextP = shapeSpacing(tmp) - 2 * cornerRadius(tmp) + st.step;
-        const pn = vadd(L.last, vresize(dir, nextP));
-        const q = lineProject(base, pn), t = ((pn[0] - base.A[0]) * dir[0] + (pn[1] - base.A[1]) * dir[1]) / (baseLen * baseLen || 1);
-        if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8) mlAddCorner(L, pn);
-        else break;
-      }
-    }
-    mlAddCorner(L, base.B);
-  }
-  function findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp) {
-    if (minAmp === maxAmp) return maxAmp;
-    resizeShape(copy, minAmp);
-    const minLen = Math.trunc(currentLength(copy));
-    resizeShape(copy, maxAmp);
-    const maxLen = Math.trunc(currentLength(copy));
-    if (minLen > targetLength || maxLen < targetLength) return 0;
-    const minError = minLen - targetLength, maxError = maxLen - targetLength;
-    if (Math.abs(minError) < LENGTH_TARGET_TOLERANCE || Math.abs(maxError) < LENGTH_TARGET_TOLERANCE) return Math.abs(minError) < Math.abs(maxError) ? minAmp : maxAmp;
-    const mid = Math.trunc((minAmp + maxAmp) / 2);
-    return findAmplitudeBinarySearch(copy, targetLength, minAmp, mid) || findAmplitudeBinarySearch(copy, targetLength, mid, maxAmp) || 0;
-  }
-  function findAmplitudeForLength(m, targetLength, minAmp, maxAmp) {
-    const copy = shapeCopy(m);
-    copy.targetBaseLen = baselineLength(m);
-    const initialGuess = Math.trunc(m.amp - (currentLength(m) - targetLength) / 2);
-    if (initialGuess >= minAmp && initialGuess <= maxAmp) {
-      resizeShape(copy, minAmp);
-      if (Math.abs(currentLength(copy) - targetLength) < LENGTH_TARGET_TOLERANCE) return initialGuess;
-    }
-    return findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp);
-  }
-  function tuneLineLength(L, elongation) {
-    let maxElongation = 0, minElongation = 0, finished = false;
-    for (const m of L.meanders) {
-      if (m.type === MT_CORNER || m.type === MT_ARC) continue;
-      const end = shapeCopy(m);
-      const endType = m.type === MT_START || m.type === MT_SINGLE ? MT_SINGLE : MT_FINISH;
-      end.type = endType;
-      recalcShape(end);
-      const maxEndElongation = currentLength(end) - baselineLength(end);
-      if (maxElongation + maxEndElongation > elongation) {
-        if (!finished) {
-          m.type = endType;
-          recalcShape(m);
-          if (endType === MT_SINGLE) {
-            const endMin = minTunableLength(m) - baselineLength(m);
-            if (minElongation + endMin >= elongation) makeEmpty(m);
-          }
-          finished = true;
-        } else makeEmpty(m);
-      }
-      maxElongation += currentLength(m) - baselineLength(m);
-      minElongation += minTunableLength(m) - baselineLength(m);
-    }
-    let remaining = elongation, count = 0;
-    for (const m of L.meanders) if (m.type !== MT_CORNER && m.type !== MT_ARC && m.type !== MT_EMPTY) {
-      remaining -= currentLength(m) - baselineLength(m);
-      count++;
-    }
-    let reductionLeft = -remaining, left = count;
-    if (reductionLeft < 0 || !left) return;
-    for (const m of L.meanders) {
-      if (m.type === MT_CORNER || m.type === MT_ARC || m.type === MT_EMPTY) continue;
-      const here = reductionLeft / left, initialLen = currentLength(m), minAmpl = minAmplitude(m);
-      let amp = findAmplitudeForLength(m, Math.trunc(initialLen - here), minAmpl, m.amp);
-      if (amp < minAmpl) amp = minAmpl;
-      m.targetBaseLen = baselineLength(m);
-      resizeShape(m, amp);
-      reductionLeft -= initialLen - currentLength(m);
-      left--;
-      if (!left) break;
-    }
-  }
-  function splitLine(pts, a, b) {
-    const near = (p) => {
-      let best = null;
-      for (let i = 0; i + 1 < pts.length; i++) {
-        const q = closestOnSeg(p, pts[i], pts[i + 1]);
-        const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
-        if (!best || d < best.d - 1e-9) best = { d, i, q };
-      }
-      return best;
-    };
-    const at = (n) => {
-      const s = pts[n.i];
-      return n.i + Math.hypot(n.q[0] - s[0], n.q[1] - s[1]) / Math.max(1e-12, Math.hypot(pts[n.i + 1][0] - s[0], pts[n.i + 1][1] - s[1]));
-    };
-    let na = near(a), nb = near(b);
-    let P = pts;
-    if (at(na) > at(nb)) {
-      P = pts.slice().reverse();
-      const ra = { i: P.length - 2 - na.i, q: na.q }, rb = { i: P.length - 2 - nb.i, q: nb.q };
-      na = ra;
-      nb = rb;
-    }
-    const pre = P.slice(0, na.i + 1).map((p) => ({ p: p.slice() }));
-    chAppend(pre, na.q);
-    const mid = [{ p: na.q.slice() }];
-    for (let i = na.i + 1; i <= nb.i; i++) chAppend(mid, P[i]);
-    chAppend(mid, nb.q);
-    const post = [{ p: nb.q.slice() }];
-    for (let i = nb.i + 1; i < P.length; i++) chAppend(post, P[i]);
-    return { pre, mid, post, start: na.q, end: nb.q };
-  }
-  function meanderMove(P) {
-    const st = P.st;
-    const pl = {
-      st,
-      clearance: P.clearance,
-      width: P.width,
-      result: null,
-      checkFit(m) {
-        if (P.collides && P.collides(m.line)) return false;
-        return checkSelfIntersections(this.result, m, m.width + st.spacing);
-      }
-    };
-    const sp = splitLine(P.pts, P.origin, P.end);
-    const L = newMLine(pl, P.width);
-    pl.result = L;
-    for (let i = 0; i + 1 < sp.mid.length; i++) {
-      const s = { A: sp.mid[i].p, B: sp.mid[i + 1].p };
-      const side = st.initialSide === 0 ? segSide(s, P.cursor || P.end) < 0 : st.initialSide < 0;
-      mlAddCorner(L, s.A);
-      meanderSegment(L, s, side);
-      mlAddCorner(L, s.B);
-    }
-    const lineLen = P.lineLength;
-    let lastLength = lineLen, status = TUNED, hasMeanders = false;
-    let tuned = sp.mid;
-    if (lineLen > st.target.max) status = TOO_LONG;
-    else {
-      lastLength = lineLen - chLength(sp.mid);
-      tuneLineLength(L, st.target.opt - lineLen);
-    }
-    if (status !== TOO_LONG) {
-      tuned = [];
-      for (const m of L.meanders) if (m.type !== MT_EMPTY) {
-        chAppendChain(tuned, m.line);
-        hasMeanders = hasMeanders || isMeanderType(m.type);
-      }
-      lastLength += chLength(tuned);
-      status = lastLength > st.target.max ? TOO_LONG : lastLength < st.target.min ? TOO_SHORT : TUNED;
-    }
-    const fin = [];
-    if (st.keepEndpoints) {
-      chAppendChain(fin, chSimplify(sp.pre));
-      chAppendChain(fin, chSimplify(tuned));
-      chAppendChain(fin, chSimplify(sp.post));
-    } else {
-      chAppendChain(fin, sp.pre);
-      chAppendChain(fin, tuned);
-      chAppendChain(fin, sp.post);
-    }
-    return { final: st.keepEndpoints ? fin : chSimplify(fin), tuned: chSimplify(tuned), status, length: lastLength, hasMeanders, settings: st, start: sp.start, end: sp.end, baseline: sp.mid };
-  }
-
-  // web/tools/pcb-tools/msgpanel.ts
-  function msgValue(v, units) {
-    const u = units || "mm";
-    return u === "mil" ? (v / 0.0254).toFixed(2) + " mils" : u === "in" ? (v / 25.4).toFixed(4) + " in" : v.toFixed(4) + " mm";
-  }
-  function msgArea(a, units) {
-    const u = units || "mm";
-    return u === "mil" ? (a / 0.0254 / 0.0254).toFixed(0) + " mils\xB2" : u === "in" ? (a / 25.4 / 25.4).toFixed(3) + " in\xB2" : a.toFixed(3) + " mm\xB2";
-  }
-  var UNESC = { slash: "/", backslash: "\\", lt: "<", gt: ">", colon: ":", dblquote: '"', quote: "'", space: " ", tab: "	", return: "\n", brace: "{", bar: "|" };
-  var unescapeName = (t) => String(t || "").replace(/\{(slash|backslash|lt|gt|colon|dblquote|quote|space|tab|return|brace|bar)\}/g, (_, k) => UNESC[k]);
-  var msgAngle = (v) => String(+(+v).toPrecision(4));
-  function boardLayerName(doc, name) {
-    const l = doc && doc.layers && doc.layers.get ? doc.layers.get(name) : null;
-    return l && l.userName ? l.userName : name;
-  }
-  function padLayerDescribe(doc, p) {
-    const copper = copperOf(doc), cu = padCopperLayers(p, copper);
-    if (cu.size === copper.length) return "all copper layers";
-    const tech = p.layers.filter((l) => !/\.Cu$/.test(l) && l !== "*.Cu");
-    for (const set of [Array.from(cu), tech, p.layers]) if (set.length) return boardLayerName(doc, set[0].replace(/^\*\./, "F.")) + (set.length > 1 ? " and others" : "");
-    return "no layers";
-  }
-  function msgClearance(s, net) {
-    const nc = netClearance(s, net), min = s.minClearance || 0;
-    return nc >= min ? { v: nc, from: `netclass '${netclassName(s, net)}'` } : { v: min, from: "board setup constraints" };
-  }
-  function routedLength(doc, id) {
-    let len = 0;
-    for (const rid of connectedRun(doc, [id])) {
-      const it = doc.items.get(rid);
-      if (!it) continue;
-      if (it.kind === "segment") {
-        const a = pt(it.node, "start"), b = pt(it.node, "end");
-        if (a && b) len += Math.hypot(b[0] - a[0], b[1] - a[1]);
-      } else if (it.kind === "arc") {
-        const a = pt(it.node, "start"), m = pt(it.node, "mid"), b = pt(it.node, "end");
-        const arc = a && m && b && K.arcFrom3(a, m, b);
-        len += arc ? arcLength(arc) : a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
-      }
-    }
-    return len;
-  }
-  var SHAPE_NAMES = { line: "Segment", rect: "Rectangle", circle: "Circle", arc: "Arc", poly: "Polygon", curve: "Curve" };
-  var netnameMsg = (net) => net && net.name ? `[${unescapeName(net.name)}]` : "[<no net>]";
-  function itemDescription(doc, id, units) {
-    const V = (v) => msgValue(v, units), L = (l) => boardLayerName(doc, l);
-    const hash = String(id).indexOf("#"), it = doc.items.get(hash > 0 ? String(id).slice(0, hash) : id);
-    if (!it) return "";
-    const n = it.node;
-    if (hash > 0 && it.kind === "footprint") {
-      const p = padsOf(it)[+String(id).slice(hash + 1)];
-      if (!p) return "";
-      const ref = it.ref || "";
-      if (p.type === "np_thru_hole") return `NPTH pad of ${ref}`;
-      const num = p.number ? p.number + " " : "";
-      if (p.type === "smd" || p.type === "connect") return `Pad ${num}${netnameMsg(p.net)} of ${ref} on ${padLayerDescribe(doc, p)}`;
-      return `PTH pad ${num}${netnameMsg(p.net)} of ${ref}`;
-    }
-    if (it.kind === "segment" || it.kind === "arc") {
-      const a = pt(n, "start"), b = pt(n, "end");
-      let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
-      if (it.kind === "arc") {
-        const m2 = pt(n, "mid");
-        const arc = a && m2 && b && K.arcFrom3(a, m2, b);
-        if (arc) len = arcLength(arc);
-      }
-      return `${it.kind === "arc" ? "Track (arc)" : "Track"} ${netnameMsg(netOf(n))} on ${L(layerOf(n))}, length ${V(len)}`;
-    }
-    if (it.kind === "via") {
-      const ls = K.kid(n, "layers");
-      const pair = ls ? ls.slice(1).map(K.str) : ["F.Cu", "B.Cu"];
-      const kind = n.includes("micro") ? "Micro via" : n.includes("blind") ? "Blind via" : n.includes("buried") ? "Buried via" : "Via";
-      return `${kind} ${netnameMsg(netOf(n))} on ${L(pair[0] || "F.Cu")} - ${L(pair[pair.length - 1] || "B.Cu")}`;
-    }
-    if (it.kind === "footprint") return `Footprint ${it.ref || "<no reference designator>"}`;
-    if (it.kind === "zone") {
-      const names = zoneLayers(n).map(L);
-      const keep = K.kid(n, "keepout");
-      const nm = K.kid(n, "name");
-      const zn = nm ? K.str(nm[1]) : "";
-      const ld = names.length === 1 ? `on ${names[0]}` : names.length === 2 ? `on ${names[0]} and ${names[1]}` : names.length === 3 ? `on ${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `on ${names[0]}, ${names[1]} and ${names.length - 2} more` : "";
-      if (keep) return zn ? `Rule area '${zn}' ${ld}` : `Rule Area ${ld}`;
-      const pr = K.kid(n, "priority");
-      const prio = pr ? K.num(pr[1]) : 0;
-      return zn ? `Zone '${zn}' ${netnameMsg(netOf(n))} ${ld}, priority ${prio}` : `Zone ${netnameMsg(netOf(n))} ${ld}, priority ${prio}`;
-    }
-    if (it.kind === "gr_text") {
-      const t = K.str(n[1]);
-      return `PCB text '${t.length > 36 ? t.slice(0, 33) + "..." : t}' on ${L(layerOf(n))}`;
-    }
-    const m = /^gr_(line|rect|circle|arc|poly|curve)$/.exec(it.kind);
-    if (m) {
-      const layer = layerOf(n);
-      return /\.Cu$/.test(layer) ? `${SHAPE_NAMES[m[1]]} ${netnameMsg(netOf(n))} on ${L(layer)}` : `${SHAPE_NAMES[m[1]]} on ${L(layer)}`;
-    }
-    return "";
-  }
-  var PAD_ATTR = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
-  var PAD_SHAPE = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
-  function msgPanelInfo(doc, ids, opts) {
-    opts = opts || {};
-    const units = opts.units || "mm", s = opts.settings || designSettings(null), out = [];
-    const add = (title, value) => out.push({ title: String(title), value: String(value === void 0 || value === null ? "" : value) });
-    const V = (v) => msgValue(v, units), NN = (net) => netclassName(s, net);
-    const rt = opts.route;
-    if (rt) {
-      const net = rt.net && (rt.net.name || "");
-      const rs = opts.routerSettings || S.rs;
-      if (rt.dp) {
-        const netB = rt.netN && rt.netN.name || "";
-        const ncA = NN(net), ncB = NN(netB);
-        add(`Routing Diff Pair: ${unescapeName(net)}, ${unescapeName(netB)}`, `Resolved Netclass: ${ncA === ncB ? ncA : ncA + ", " + ncB}`);
-        add("Corner Style", cornerStyleName(rs));
-        add("Mode", MODE_NAMES[rs.mode]);
-        const d = rt.dpSizes;
-        add(`Track Width: ${V(d.width)}`, `(from ${d.widthSource})`);
-        const c2 = msgClearance(s, net);
-        add(`Min Clearance: ${V(c2.v)}`, `(from ${c2.from === "board setup constraints" ? "board minimum clearance" : c2.from})`);
-        add(`Diff Pair Gap: ${V(d.gap)}`, `(from ${d.gapSource})`);
-        return out;
-      }
-      if (net) add(`Routing Track: ${unescapeName(net)}`, `Resolved Netclass: ${NN(net)}`);
-      else add("Routing Track", "(no net)");
-      add("Corner Style", cornerStyleName(rs));
-      add("Mode", MODE_NAMES[rs.mode]);
-      const R = K.pcbSizes && K.pcbSizes.state;
-      const widthFrom = rt.connected && R && R.useConnectedWidth && !R.tempOverride ? "existing track" : R && !R.useNetclassTrack ? "user choice" : `netclass '${NN(net)}'`;
-      add(`Track Width: ${V(rt.width)}`, `(from ${widthFrom})`);
-      const c = msgClearance(s, net);
-      add(`Min Clearance: ${V(c.v)}`, `(from ${c.from === "board setup constraints" ? "board minimum clearance" : c.from})`);
-      return out;
-    }
-    const list = Array.from(ids || []);
-    if (list.length === 1) {
-      const id = String(list[0]), hash = id.indexOf("#");
-      const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
-      if (it && hash > 0 && it.kind === "footprint") {
-        const p = padsOf(it)[+id.slice(hash + 1)];
-        if (p) {
-          add("Footprint", it.ref || "");
-          add("Pad", p.number);
-          const pf = K.kid(p.node, "pinfunction"), ptp = K.kid(p.node, "pintype");
-          if (pf && K.str(pf[1])) add("Pin Name", K.str(pf[1]));
-          if (ptp && K.str(ptp[1])) add("Pin Type", K.str(ptp[1]));
-          add("Net", unescapeName(p.net.name));
-          add("Resolved Netclass", NN(p.net.name));
-          if (isLocked(it.node) || isLocked(p.node)) add("Status", "Locked");
-          if (p.type === "smd" || p.type === "connect") add("Layer", padLayerDescribe(doc, p));
-          const prop = K.kid(p.node, "property");
-          const PROP = { pad_prop_bga: "BGA", pad_prop_fiducial_glob: "Fiducial global", pad_prop_fiducial_loc: "Fiducial local", pad_prop_testpoint: "Test point", pad_prop_heatsink: "Heat sink", pad_prop_castellated: "Castellated", pad_prop_mechanical: "Mechanical", pad_prop_pressfit: "Press-fit" };
-          add(PAD_SHAPE[p.shape] || "???", (PAD_ATTR[p.type] || "???") + (prop && PROP[K.str(prop[1])] ? "," + PROP[K.str(prop[1])] : ""));
-          if (p.shape === "circle" || p.shape === "oval" && Math.abs(p.w - p.h) < 1e-9) add("Diameter", V(p.w));
-          else {
-            add("Width", V(p.w));
-            add("Height", V(p.h));
-          }
-          const frot = K.atOf(it.node)[2] || 0;
-          const prel = norm180(p.rot - frot);
-          add("Rotation", frot ? `${msgAngle(prel)}(+ ${msgAngle(frot)})` : msgAngle(p.rot));
-          const dr = K.kid(p.node, "drill");
-          if (dr) {
-            const oval = K.str(dr[1]) === "oval";
-            const nums = dr.slice(oval ? 2 : 1).filter((x) => typeof x === "number");
-            if (nums.length && nums[0] > 0) {
-              if (oval) add("Hole X / Y", `${V(nums[0])} / ${V(nums.length > 1 ? nums[1] : nums[0])}`);
-              else add("Hole", V(nums[0]));
-            }
-          }
-          const c = msgClearance(s, p.net.name);
-          add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
-          return out;
-        }
-      }
-      if (it && (it.kind === "segment" || it.kind === "arc")) {
-        const n = it.node, net = netOf(n).name || "", w = widthOf(n, 0.25), layer = layerOf(n);
-        add("Type", it.kind === "arc" ? "Track (arc)" : "Track");
-        add("Net", unescapeName(net));
-        add("Resolved Netclass", NN(net));
-        if (isLocked(n)) add("Status", "Locked");
-        add("Layer", boardLayerName(doc, layer));
-        add("Width", V(w));
-        const a = pt(n, "start"), b = pt(n, "end");
-        let len = a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0;
-        if (it.kind === "arc") {
-          const m = pt(n, "mid");
-          const arc = a && m && b && K.arcFrom3(a, m, b);
-          if (arc) {
-            len = arcLength(arc);
-            add("Radius", V(arc.r));
-            add("Angle", (len / arc.r * 180 / Math.PI * (arc.anticlockwise ? -1 : 1)).toFixed(2) + "deg");
-          }
-        }
-        add("Segment Length", V(len));
-        if (hasNet(netOf(n))) add("Routed Length", V(routedLength(doc, it.id)));
-        add("Copper Area", msgArea(len * w + Math.PI * w * w / 4, units));
-        const c = msgClearance(s, net);
-        add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
-        const nc = netclassOf(s, net);
-        const mn = s.minTrackWidth || 0;
-        const parts = [];
-        if (mn > 0) parts.push("min " + V(mn));
-        if (nc && nc.track_width !== void 0) parts.push("opt " + V(nc.track_width));
-        if (parts.length) add(`Width Constraints: ${parts.join("; ")}`, `(from netclass '${NN(net)}')`);
-        return out;
-      }
-      if (it && it.kind === "via") {
-        const n = it.node, net = netOf(n).name || "";
-        const v = viaNow(n);
-        add("Type", n.includes("micro") ? "Micro Via" : n.includes("blind") ? "Blind Via" : n.includes("buried") ? "Buried Via" : "Through Via");
-        add("Net", unescapeName(net));
-        add("Resolved Netclass", NN(net));
-        if (isLocked(n)) add("Status", "Locked");
-        const ls = K.kid(n, "layers");
-        const pair = ls ? ls.slice(1).map(K.str) : ["F.Cu", "B.Cu"];
-        add("Layer", `${boardLayerName(doc, pair[0] || "F.Cu")} - ${boardLayerName(doc, pair[pair.length - 1] || "B.Cu")}`);
-        add("Diameter", V(v.size));
-        add("Hole", V(v.drill));
-        const c = msgClearance(s, net);
-        add(`Min Clearance: ${V(c.v)}`, `(from ${c.from})`);
-        add(`Min Annular Width: ${V(s.minViaAnnular || 0)}`, "(from board setup constraints)");
-        return out;
-      }
-      if (it && it.kind === "footprint") {
-        const n = it.node;
-        const val = K.kids(n, "property").find((q) => K.str(q[1]) === "Value");
-        add(it.ref || "", it.value !== void 0 ? it.value : val ? K.str(val[2]) : "");
-        add("Board Side", it.layer === "B.Cu" ? "Back (Flipped)" : "Front");
-        add("Rotation", msgAngle(K.atOf(n)[2] || 0));
-        const status = [], attrs = [];
-        if (isLocked(n)) status.push("Locked");
-        if (n.includes("placed") || K.kid(n, "placed")) status.push("autoplaced");
-        const at = K.kid(n, "attr");
-        const toks = at ? at.slice(1).map(K.str) : [];
-        if (toks.includes("board_only")) attrs.push("not in schematic");
-        if (toks.includes("exclude_from_pos_files")) attrs.push("exclude from pos files");
-        if (toks.includes("exclude_from_bom")) attrs.push("exclude from BOM");
-        if (toks.includes("dnp")) attrs.push("DNP");
-        add("Status: " + status.join(", "), "Attributes: " + attrs.join(", "));
-        const m3 = K.kid(n, "model");
-        add(`Footprint: ${K.str(n[1])}`, `3D-Shape: ${m3 ? K.str(m3[1]) : "<none>"}`);
-        const descr = K.kid(n, "descr"), tags = K.kid(n, "tags");
-        add(`Doc: ${descr ? K.str(descr[1]) : ""}`, `Keywords: ${tags ? K.str(tags[1]) : ""}`);
-        return out;
-      }
-      if (it && it.kind === "zone") {
-        const n = it.node, keep = K.kid(n, "keepout"), net = netOf(n).name || "", zl = zoneLayers(n);
-        add("Type", keep ? "Rule Area" : "Zone");
-        if (keep) {
-          const r = [];
-          for (const [k, l] of [["vias", "No vias"], ["tracks", "No tracks"], ["pads", "No pads"], ["copperpour", "No zone fills"], ["footprints", "No footprints"]]) {
-            const x = K.kid(keep, k);
-            if (x && K.str(x[1]) === "not_allowed") r.push(l);
-          }
-          if (r.length) add("Restrictions", r.join(", "));
-        } else if (zl.some((l) => /\.Cu$/.test(l) || l === "*.Cu")) {
-          add("Net", unescapeName(net));
-          add("Resolved Netclass", NN(net));
-          const pr = K.kid(n, "priority");
-          add("Priority", pr ? K.num(pr[1]) : 0);
-        }
-        if (isLocked(n)) add("Status", "Locked");
-        const names = zl.map((l) => boardLayerName(doc, l));
-        add("Layer", names.length === 1 ? names[0] : names.length === 2 ? `${names[0]} and ${names[1]}` : names.length === 3 ? `${names[0]}, ${names[1]} and ${names[2]}` : names.length > 3 ? `${names[0]}, ${names[1]} and ${names.length - 2} more` : "");
-        const nm = K.kid(n, "name");
-        if (nm && K.str(nm[1])) add("Name", K.str(nm[1]));
-        if (!keep) {
-          const fill = K.kid(n, "fill");
-          const hatched = fill && K.kid(fill, "mode") && K.str(K.kid(fill, "mode")[1]) === "hatch";
-          add("Fill Mode", hatched ? "Hatched" : "Solid");
-          let area = 0;
-          for (const fp of K.kids(n, "filled_polygon")) {
-            const q = K.ptsOf(fp);
-            for (let i = 0; i < q.length; i++) {
-              const a = q[i], b = q[(i + 1) % q.length];
-              area += a[0] * b[1] - b[0] * a[1];
-            }
-          }
-          add("Filled Area", msgArea(Math.abs(area) / 2, units));
-          const cp = K.kid(n, "connect_pads");
-          const cc = cp && K.kid(cp, "clearance");
-          const c = msgClearance(s, net);
-          const zc = cc ? K.num(cc[1]) : 0;
-          const v = Math.max(zc, c.v);
-          add(`Min Clearance: ${V(v)}`, `(from ${zc >= c.v && cc ? "zone" : c.from})`);
-        }
-        return out;
-      }
-      if (it && /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) {
-        const n = it.node, kind = it.kind.slice(3);
-        const SHAPE = SHAPE_NAMES;
-        add("Type", "Drawing");
-        if (isLocked(n)) add("Status", "Locked");
-        add("Shape", SHAPE[kind]);
-        const a = pt(n, "start"), b = pt(n, "end"), c = pt(n, "center");
-        if (kind === "circle" && c && b) add("Radius", V(Math.hypot(b[0] - c[0], b[1] - c[1])));
-        else if (kind === "arc") {
-          const m = pt(n, "mid");
-          const arc = a && m && b && K.arcFrom3(a, m, b);
-          if (arc) {
-            const L = arcLength(arc);
-            add("Length", V(L));
-            add("Angle", (L / arc.r * 180 / Math.PI).toFixed(1) + "\xB0");
-            add("Radius", V(arc.r));
-          }
-        } else if (kind === "curve") {
-          const q = K.bezierPts(K.ptsOf(n));
-          let L = 0;
-          for (let i = 1; i < q.length; i++) L += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]);
-          add("Length", V(L));
-        } else if (kind === "poly") add("Points", K.ptsOf(n).length);
-        else if (kind === "rect" && a && b) {
-          add("Width", V(Math.abs(b[0] - a[0])));
-          add("Height", V(Math.abs(b[1] - a[1])));
-        } else if (kind === "line" && a && b) {
-          add("Length", V(Math.hypot(b[0] - a[0], b[1] - a[1])));
-          add("Angle", (Math.atan2(a[1] - b[1], b[0] - a[0]) * 180 / Math.PI).toFixed(1) + "\xB0");
-        }
-        const layer = layerOf(n);
-        add("Layer", boardLayerName(doc, layer));
-        if (/\.Cu$/.test(layer) && hasNet(netOf(n))) add("Net", unescapeName(netOf(n).name));
-        return out;
-      }
-    }
-    if (opts.net && !list.length) {
-      const NT = netTable(doc), name = opts.net;
-      let code = 0;
-      for (const [c, nm] of NT.byCode) if (nm === name) {
-        code = c;
-        break;
-      }
-      if (!code) {
-        let i = 0;
-        for (const nm of NT.byName.keys()) {
-          i++;
-          if (nm === name) {
-            code = i;
-            break;
-          }
-        }
-      }
-      let padCount = 0, viaCount = 0, first = null;
-      for (const it of doc.items.values()) {
-        if (it.kind === "footprint") {
-          for (const p of K.kids(it.node, "pad")) if (NT.key(netOf(p)) === name) padCount++;
-        } else if ((it.kind === "via" || it.kind === "segment" || it.kind === "arc") && NT.key(netOf(it.node)) === name) {
-          if (it.kind === "via") viaCount++;
-          else if (!first) first = it;
-        }
-      }
-      add("Net Name", unescapeName(name));
-      add("Net Code", code);
-      add("Pads", padCount);
-      add("Vias", viaCount);
-      if (first) {
-        const L = routedLength(doc, first.id);
-        add("Net Length", V(L));
-        add("On Board", V(L));
-        add("In Package", V(0));
-      }
-      return out;
-    }
-    let pads = 0, vias = 0, segs = 0;
-    const nets = /* @__PURE__ */ new Set();
-    for (const it of doc.items.values()) {
-      if (it.kind === "footprint") for (const p of K.kids(it.node, "pad")) {
-        pads++;
-        const nn = netOf(p);
-        if (hasNet(nn)) nets.add(nn.name || nn.code);
-      }
-      else if (it.kind === "via" || it.kind === "segment" || it.kind === "arc") {
-        if (it.kind === "via") vias++;
-        else segs++;
-        const nn = netOf(it.node);
-        if (hasNet(nn)) nets.add(nn.name || nn.code);
-      }
-    }
-    add("Pads", pads);
-    add("Vias", vias);
-    add("Track Segments", segs);
-    add("Nets", nets.size);
-    add("Unrouted", ratsnest(doc, opts.nl || netlist(doc)).length);
-    return out;
-  }
-  function bboxOfPts(pts) {
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (const [x, y] of pts) {
-      x0 = Math.min(x0, x);
-      y0 = Math.min(y0, y);
-      x1 = Math.max(x1, x);
-      y1 = Math.max(y1, y);
-    }
-    return [x0, y0, x1, y1];
-  }
-  function idsOnLayer(doc, layer) {
-    const out = /* @__PURE__ */ new Set();
-    for (const it of doc.items.values()) {
-      if (it.kind === "group") continue;
-      if (it.kind === "footprint" && it.layer === layer || it.geom.some((g) => g.layer === layer)) out.add(it.id);
-    }
-    return out;
-  }
-  var SELECTION_TYPES = { footprints: (it) => it.kind === "footprint", tracks: (it) => it.kind === "segment" || it.kind === "arc", vias: (it) => it.kind === "via", zones: (it) => it.kind === "zone", graphics: (it) => /^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind) || it.kind === "image", text: (it) => it.kind === "gr_text" || it.kind === "gr_text_box" || it.kind === "table", dimensions: (it) => it.kind === "dimension", other: (it) => it.kind === "group" || it.kind === "target" || it.kind === "generated" };
-  function filterIds(doc, ids, keep) {
-    return Array.from(ids).filter((id) => {
-      const it = doc.items.get(id);
-      if (!it) return false;
-      for (const [type, test] of Object.entries(SELECTION_TYPES)) if (test(it)) return keep[type] !== false;
-      return true;
-    });
-  }
-  function inspectClearance(doc, idA, idB, settings) {
-    const s = settings && settings.netclasses ? settings : designSettings(settings);
-    const conds = conductors(doc).filter((c) => c.kind !== "zone");
-    const A = conds.filter((c) => c.id === idA), B = conds.filter((c) => c.id === idB);
-    if (!A.length || !B.length) return null;
-    let gap = Infinity;
-    for (const a of A) for (const b of B) if (shareLayer(a.layers, b.layers)) gap = Math.min(gap, shapeGap(a.shape, b.shape));
-    const need = Math.max(netClearance(s, A[0].net), netClearance(s, B[0].net));
-    return { gap: gap === Infinity ? null : r6(gap), required: need, sameNet: !!(A[0].net && A[0].net === B[0].net), nets: [A[0].net, B[0].net] };
-  }
-
-  // web/tools/pcb-tools/tuning-tool.ts
-  S.tuneSettings = { single: meanderDefaults(), skew: meanderDefaults() };
-  var TUNE_TOOLS = /* @__PURE__ */ new Set(["tunesingle", "tuneskew"]);
-  var isTuneTool = (t) => TUNE_TOOLS.has(t);
-  var tuneMode = () => S.modTool === "tuneskew" ? "skew" : "single";
-  var TUNE_MSG_SKEW_PICK = "Please select a differential pair track you want to tune.";
-  var TUNE_MSG_SKEW_NETS = "Unable to find complementary differential pair net for skew tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
-  function coupledLength(doc, pair, mineKey, near) {
-    const NT = netTable(doc);
-    const kP = NT.key(pair.P), other = kP === mineKey ? NT.key(pair.N) : kP;
-    let best = null, bd = Infinity;
-    for (const it of doc.items.values()) {
-      if (it.kind !== "segment" && it.kind !== "arc" || NT.key(netOf(it.node)) !== other) continue;
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      if (!a || !b) continue;
-      const d = distSeg(near[0], near[1], a[0], a[1], b[0], b[1]);
-      if (d < bd) {
-        bd = d;
-        best = it;
-      }
-    }
-    return best ? routedLength(doc, best.id) : 0;
-  }
-  function tuneTarget(st, coupled) {
-    if (coupled == null) return st.target;
-    const c = coupled * TUNE_IU;
-    return { min: c + st.skew.min, opt: c + st.skew.opt, max: c + st.skew.max };
-  }
-  function tunePick(ctx, mm) {
-    const doc = ctx.doc;
-    const thr = 5 * (S.mmPerPx || 0.05);
-    const active = S.layer;
-    const hits = [];
-    for (const it of doc.items.values()) {
-      if (it.kind !== "segment" && it.kind !== "arc") continue;
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      if (!a || !b) continue;
-      const w = widthOf(it.node, 0.25);
-      let d, centre;
-      if (it.kind === "arc") {
-        const m = pt(it.node, "mid");
-        const c = m && K.arcFrom3(a, m, b);
-        centre = m || a;
-        d = c ? Math.abs(Math.hypot(mm[0] - c.x, mm[1] - c.y) - c.r) : distSeg(mm[0], mm[1], a[0], a[1], b[0], b[1]);
-      } else {
-        centre = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        d = distSeg(mm[0], mm[1], a[0], a[1], b[0], b[1]);
-      }
-      if (d > w / 2 + thr) continue;
-      hits.push({ it, d2: (mm[0] - centre[0]) ** 2 + (mm[1] - centre[1]) ** 2, onActive: layerOf(it.node) === active });
-    }
-    if (!hits.length) return null;
-    const pool = hits.some((h) => h.onActive) ? hits.filter((h) => h.onActive) : hits;
-    pool.sort((x, y) => x.d2 - y.d2);
-    return pool[0].it;
-  }
-  function tuningPatternOf(doc, id) {
-    for (const it of doc.items.values()) if (it.kind === "generated" && /^tuning_pattern$/.test(K.str((K.kid(it.node, "type") || [])[1])) && K.groupMemberIds(it.node).includes(id)) return it;
-    return null;
-  }
-  function tuneBegin(ctx, item, mm) {
-    const doc = ctx.doc;
-    const skew = tuneMode() === "skew";
-    if (tuningPatternOf(doc, item.id)) {
-      ctx.toast(TUNE_MSG_INSIDE);
-      return;
-    }
-    if (item.kind !== "segment") {
-      ctx.toast(skew ? TUNE_MSG_SKEW_PICK : TUNE_MSG_PICK);
-      return;
-    }
-    const line2 = assembleLine(doc, item);
-    if (!line2) {
-      ctx.toast(skew ? TUNE_MSG_SKEW_PICK : TUNE_MSG_PICK);
-      return;
-    }
-    const pair = skew ? dpNetPair(doc, line2.net) : null;
-    if (skew && !pair) {
-      ctx.toast(TUNE_MSG_SKEW_NETS);
-      return;
-    }
-    if (layerOf(item.node) !== S.layer) setLayer(ctx, layerOf(item.node));
-    const a = pt(item.node, "start"), b = pt(item.node, "end");
-    const at = closestOnSeg(mm, a, b);
-    const s = settingsOf(ctx);
-    const st = tuneCopy(S.tuneSettings[tuneMode()]);
-    S.tune.pattern = {
-      item: item.id,
-      line: line2,
-      layer: line2.layer,
-      net: line2.net,
-      netName: netNameOf(ctx, line2.net),
-      netKey: line2.netKey,
-      width: line2.width,
-      origin: at,
-      end: at,
-      cursor: mm.slice(),
-      st,
-      clearance: netClearance(s, line2.netKey),
-      lineLength: routedLength(doc, item.id),
-      res: null,
-      mode: tuneMode(),
-      coupled: pair ? coupledLength(doc, pair, line2.netKey, closestOnSeg(mm, a, b)) : null
-    };
-  }
-  function tuneUpdate(ctx) {
-    const T = S.tune.pattern;
-    if (!T) return;
-    const ln = T.line;
-    const pts = ln.pts;
-    let best = null;
-    for (let i = 0; i + 1 < pts.length; i++) {
-      const q = closestOnSeg(T.cursor, pts[i], pts[i + 1]);
-      const d = Math.hypot(q[0] - T.cursor[0], q[1] - T.cursor[1]);
-      if (!best || d < best.d) best = { d, q };
-    }
-    T.end = best.q;
-    if (peq(T.end, T.origin)) {
-      T.res = null;
-      return;
-    }
-    const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
-    const sp = splitLine(pts.map(I), I(T.origin), I(T.end));
-    const last = sp.mid.length >= 2 ? { A: sp.mid[sp.mid.length - 2].p, B: sp.mid[sp.mid.length - 1].p } : null;
-    if (last && !veq(last.A, last.B)) T.st.initialSide = segSide(last, I(T.cursor)) < 0 ? -1 : 1;
-    const st = tuneCopy(T.st);
-    st.keepEndpoints = true;
-    st.target = tuneTarget(T.st, T.coupled);
-    const doc = ctx.doc;
-    const O = routeObstacles(doc, settingsOf(ctx), T.netKey, T.layer);
-    const r = T.width / 2;
-    const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-    T.res = meanderMove({ pts: pts.map(I), origin: I(T.origin), end: I(T.end), cursor: I(T.cursor), st, width: Math.round(T.width * TUNE_IU), clearance: Math.round(T.clearance * TUNE_IU), lineLength: T.lineLength * TUNE_IU, collides });
-    T.st.initialSide = st.initialSide;
-  }
-  function tunePieces(ch) {
-    const out = [];
-    const M = (p) => [r6(p[0] / TUNE_IU), r6(p[1] / TUNE_IU)];
-    for (let i = 1; i < ch.length; i++) {
-      const a = M(ch[i - 1].p), b = M(ch[i].p);
-      if (peq(a, b)) continue;
-      out.push(ch[i].m ? { a, m: M(ch[i].m), b } : { a, b });
-    }
-    return out;
-  }
-  var sexprQ = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
-  var fmtG = (v) => {
-    const x = +(+v).toPrecision(10);
-    return String(x === 0 ? 0 : x);
-  };
-  function tuningPatternNode(T, res, members) {
-    const st = T.st ? Object.assign({}, res.settings, { target: T.st.target, skew: T.st.skew }) : res.settings;
-    const mm = (v) => fmtG(v / TUNE_IU);
-    const xy2 = (p) => `(xy ${fmtG(p[0])} ${fmtG(p[1])})`;
-    const base = res.baseline.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
-    const side = st.initialSide < 0 ? "left" : st.initialSide > 0 ? "right" : "default";
-    const yn = (b) => b ? "yes" : "no";
-    const props = [
-      `(base_line (pts ${base.map(xy2).join(" ")}))`,
-      `(corner_radius_percent ${st.crPct})`,
-      `(end ${xy2(base[base.length - 1])})`,
-      `(initial_side ${sexprQ(side)})`,
-      `(is_time_domain no)`,
-      `(last_diff_pair_gap ${fmtG(T.dpGap)})`,
-      `(last_netname ${sexprQ(T.netName || "")})`,
-      `(last_status ${sexprQ(res.status)})`,
-      `(last_track_width ${fmtG(T.width)})`,
-      `(last_tuning_length ${mm(res.length)})`,
-      `(max_amplitude ${mm(st.maxAmp)})`,
-      `(min_amplitude ${mm(st.minAmp)})`,
-      `(min_spacing ${mm(st.spacing)})`,
-      `(origin ${xy2(base[0])})`,
-      `(override_custom_rules ${yn(st.overrideCustomRules)})`,
-      `(rounded ${yn(st.round)})`,
-      `(single_sided ${yn(st.singleSided)})`,
-      `(target_delay ${fmtG(DELAY_UNCONSTRAINED_MM)})`,
-      `(target_delay_max ${fmtG(DELAY_UNCONSTRAINED_MM)})`,
-      `(target_delay_min 0)`,
-      `(target_length ${mm(st.target.opt)})`,
-      `(target_length_max ${mm(st.target.max)})`,
-      `(target_length_min ${mm(st.target.min)})`,
-      `(target_skew ${mm(st.skew.opt)})`,
-      `(target_skew_max ${mm(st.skew.max)})`,
-      `(target_skew_min ${mm(st.skew.min)})`,
-      `(tuning_mode ${sexprQ(T.mode === "skew" ? "diff_pair_skew" : "single")})`
-    ];
-    const text = `(generated (uuid ${sexprQ(K.newUuid())}) (type tuning_pattern) (name "Tuning Pattern") (layer ${sexprQ(T.layer)}) ${props.join(" ")} (members ${members.slice().sort().map(sexprQ).join(" ")}))`;
-    return K.parse(text);
-  }
-  function inTuneOutline(T, res, p) {
-    const st = res.settings;
-    const minA = st.round ? T.width : T.width * Math.tan(1 - Math.tan(Math.PI / 8));
-    const amp = Math.max(st.maxAmp / TUNE_IU, minA) + T.width / 2 + 5e-4;
-    const base = res.baseline.map((n) => [n.p[0] / TUNE_IU, n.p[1] / TUNE_IU]);
-    for (let i = 0; i + 1 < base.length; i++) if (distSeg(p[0], p[1], base[i][0], base[i][1], base[i + 1][0], base[i + 1][1]) <= amp) return true;
-    return false;
-  }
-  function tuneFinish(ctx) {
-    const T = S.tune.pattern;
-    if (!T) return;
-    tuneUpdate(ctx);
-    const res = T.res;
-    if (!res) return;
-    if (!res.hasMeanders) {
-      S.tune.pattern = null;
-      S.tune.picker = null;
-      ctx.toast(`No tuning pattern added: no meanders were needed or would fit (${TUNE_STATUS_TEXT[res.status]}).`);
-      ctx.requestRender();
-      return;
-    }
-    const doc = ctx.doc;
-    const changes = [], members = [];
-    const old = T.line.ids.map((id) => doc.items.get(id)).filter(Boolean);
-    const oldKey = /* @__PURE__ */ new Map();
-    for (const it of old) {
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      oldKey.set(ptKey(a) + "|" + ptKey(b), it);
-      oldKey.set(ptKey(b) + "|" + ptKey(a), it);
-    }
-    const kept = /* @__PURE__ */ new Set();
-    const scratch = Object.assign({}, doc, { items: new Map(doc.items) });
-    for (const pc of tunePieces(res.final)) {
-      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-      if (same && !kept.has(same.id)) {
-        kept.add(same.id);
-        continue;
-      }
-      const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, T.net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, T.net);
-      const it = K.createItem(scratch, node);
-      changes.push(upsertChange(it, "ADDED", T.net));
-      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(it.id);
-    }
-    for (const it of old) if (!kept.has(it.id)) changes.unshift(removedChange(it));
-    T.dpGap = sizesOf(ctx).routeDiffPair ? sizesOf(ctx).routeDiffPair(T.netName).gap : 0.25;
-    const gen = K.createItem(scratch, tuningPatternNode(T, res, members));
-    changes.push(upsertChange(gen, "ADDED"));
-    S.tuneSettings[tuneMode()].initialSide = T.st.initialSide;
-    S.tune.pattern = null;
-    S.tune.picker = null;
-    ctx.commit(changes, "Tune");
-    ctx.requestRender();
-  }
-
-  // web/tools/pcb-tools/tuning-patterns.ts
-  var isTuningPattern = (it) => !!it && it.kind === "generated" && K.str((K.kid(it.node, "type") || [])[1]) === "tuning_pattern";
-  function tuningPatternInfo(gen) {
-    const n = gen.node;
-    const kid = (k) => K.kid(n, k);
-    const num = ((k, d) => {
-      const c = kid(k);
-      return c ? K.num(c[1]) : d;
-    });
-    const bool = (k, d) => {
-      const c = kid(k);
-      return c ? c.length < 2 || K.str(c[1]) === "yes" : d;
-    };
-    const str = (k) => {
-      const c = kid(k);
-      return c ? K.str(c[1]) : "";
-    };
-    const ptsOf = (k) => {
-      const c = kid(k);
-      const p = c && K.kid(c, "pts");
-      return p ? p.slice(1).filter((xy2) => Array.isArray(xy2) && xy2[0] === "xy").map((xy2) => [K.num(xy2[1]), K.num(xy2[2])]) : null;
-    };
-    const st = meanderDefaults();
-    const I = (v) => Math.round(v * TUNE_IU);
-    st.minAmp = I(num("min_amplitude", 0.2));
-    st.maxAmp = I(num("max_amplitude", 1));
-    st.spacing = I(num("min_spacing", 0.6));
-    st.crPct = num("corner_radius_percent", 80);
-    st.round = bool("rounded", true);
-    st.singleSided = bool("single_sided", false);
-    st.overrideCustomRules = bool("override_custom_rules", false);
-    const side = str("initial_side");
-    st.initialSide = side === "left" ? -1 : side === "right" ? 1 : 0;
-    const opt = num("target_length", null);
-    if (opt != null) st.target = { min: I(num("target_length_min", opt - 0.1)), opt: I(opt), max: I(num("target_length_max", opt + 0.1)) };
-    const so = num("target_skew", null);
-    if (so != null) st.skew = { min: I(num("target_skew_min", so - 0.1)), opt: I(so), max: I(num("target_skew_max", so + 0.1)) };
-    const lay = kid("layer");
-    return {
-      st,
-      layer: lay ? K.str(lay[1]) : "F.Cu",
-      base: ptsOf("base_line"),
-      coupled: ptsOf("base_line_coupled"),
-      mode: str("tuning_mode") || "single",
-      width: num("last_track_width", 0.25),
-      gap: num("last_diff_pair_gap", 0),
-      members: K.groupMemberIds(n)
-    };
-  }
-  function baselineOps(doc, gen) {
-    const T = tuningPatternInfo(gen);
-    const ops = [];
-    const mem = T.members.map((id) => doc.items.get(id)).filter(Boolean);
-    for (const it of mem) ops.push({ del: it.id });
-    const lines = [T.base].concat(T.mode === "diff_pair" && T.coupled ? [T.coupled] : []);
-    const added = [];
-    lines.forEach((base, li) => {
-      if (!base || base.length < 2) return;
-      const near = (it) => {
-        const a = pt(it.node, "start");
-        return a && base.some((q, i) => i + 1 < base.length && distSeg(a[0], a[1], q[0], q[1], base[i + 1][0], base[i + 1][1]) < Math.max(T.width, 0.01) * 4 + 1.2);
-      };
-      const tmpl = mem.find((it) => (it.kind === "segment" || it.kind === "arc") && (li === 0 ? near(it) : near(it))) || mem[0];
-      const net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" }, width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
-      for (let i = 0; i + 1 < base.length; i++) {
-        if (peq(base[i], base[i + 1])) continue;
-        const node = segmentNode(doc, base[i], base[i + 1], width, T.layer, net);
-        node.push(["uuid", K.newUuid()]);
-        ops.push({ add: node });
-        added.push({ node, net, width });
-      }
-    });
-    return { ops, added, info: T };
-  }
-  function tuningRemoveChanges(doc, gens, deleting) {
-    const ops = [...deleting].map((id) => ({ del: id }));
-    const seeds = [];
-    for (const gen of gens) {
-      const r = baselineOps(doc, gen);
-      ops.push(...r.ops.filter((op) => !op.del || !deleting.has(op.del)));
-      for (const a of r.added) seeds.push(K.str(K.kid(a.node, "uuid")[1]));
-    }
-    let b = branchDoc(doc, ops);
-    for (const id of seeds) {
-      const it = b.items.get(id);
-      if (!it) continue;
-      const line2 = assembleLine(b, it);
-      if (!line2) continue;
-      const sp = simplifyPts(line2.pts);
-      if (sp.length >= line2.pts.length) continue;
-      const ops2 = line2.ids.map((x) => ({ del: x }));
-      for (let i = 0; i + 1 < sp.length; i++) {
-        const node = segmentNode(b, sp[i], sp[i + 1], line2.width, line2.layer, line2.net);
-        node.push(["uuid", K.newUuid()]);
-        ops2.push({ add: node });
-      }
-      b = branchDoc(b, ops2);
-    }
-    return branchChanges(doc, b);
-  }
-  function regenerateTuningChanges(ctx, gen) {
-    const doc = ctx.doc;
-    const { ops, added, info } = baselineOps(doc, gen);
-    if (!added.length || info.mode !== "single" && info.mode !== "diff_pair_skew") return [];
-    const scratch = branchDoc(doc, ops);
-    const seedId = K.str(K.kid(added[0].node, "uuid")[1]);
-    const seed = scratch.items.get(seedId);
-    if (!seed) return [];
-    const line2 = assembleLine(scratch, seed);
-    if (!line2) return [];
-    const st = tuneCopy(info.st);
-    st.keepEndpoints = true;
-    if (info.mode === "diff_pair_skew") {
-      const pair = dpNetPair(scratch, line2.net);
-      if (!pair) return [];
-      st.target = tuneTarget(info.st, coupledLength(scratch, pair, line2.netKey, info.base[0]));
-    }
-    const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
-    const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer);
-    const r = line2.width / 2;
-    const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-    const origin = info.base[0], end = info.base[info.base.length - 1];
-    const res = meanderMove({
-      pts: line2.pts.map(I),
-      origin: I(origin),
-      end: I(end),
-      cursor: I(end),
-      st,
-      width: Math.round(line2.width * TUNE_IU),
-      clearance: Math.round(netClearance(settingsOf(ctx), line2.netKey) * TUNE_IU),
-      lineLength: routedLength(scratch, seedId) * TUNE_IU,
-      collides
-    });
-    const oldKey = /* @__PURE__ */ new Map();
-    for (const id of line2.ids) {
-      const it = scratch.items.get(id);
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      oldKey.set(ptKey(a) + "|" + ptKey(b), it);
-      oldKey.set(ptKey(b) + "|" + ptKey(a), it);
-    }
-    const kept = /* @__PURE__ */ new Set(), ops2 = [], members = [];
-    const T = { width: line2.width, layer: line2.layer, net: line2.net };
-    for (const pc of tunePieces(res.final)) {
-      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-      if (same && !kept.has(same.id)) {
-        kept.add(same.id);
-        if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id);
-        continue;
-      }
-      const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, line2.width, line2.layer, line2.net) : segmentNode(scratch, pc.a, pc.b, line2.width, line2.layer, line2.net);
-      const u = K.newUuid();
-      node.push(["uuid", u]);
-      ops2.push({ add: node });
-      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
-    }
-    for (const id of line2.ids) if (!kept.has(id)) ops2.unshift({ del: id });
-    const g = clone(gen.node);
-    const setKid = (k, v) => {
-      const c = K.kid(g, k);
-      if (c) c.splice(1, c.length - 1, v);
-    };
-    setKid("last_status", res.status);
-    setKid("last_tuning_length", +fmtG(res.length / TUNE_IU));
-    const mk = K.kid(g, "members");
-    if (mk) mk.splice(1, mk.length - 1, ...members.slice().sort());
-    else g.push(["members", ...members.slice().sort()]);
-    ops2.push({ set: gen.id, node: g });
-    const fin = branchDoc(scratch, ops2);
-    return branchChanges(doc, fin);
-  }
-  function regenerateTuning(ctx, gens, label) {
-    if (!canEdit(ctx)) return true;
-    let changes = [];
-    for (const gen of gens) {
-      const ch = regenerateTuningChanges(ctx, gen);
-      if (!ch.length) continue;
-      changes = changes.concat(ch);
-    }
-    if (changes.length) ctx.commit(changes, label);
-    ctx.requestRender();
-    return true;
-  }
-  function tuneCancel(ctx) {
-    if (!S.tune.pattern) return false;
-    S.tune.pattern = null;
-    if (ctx) ctx.requestRender();
-    return true;
-  }
-  function tuneStep(ctx, what, sign) {
-    const T = S.tune.pattern;
-    if (!T) {
-      ctx.toast(TUNE_MSG_SELECT);
-      return true;
-    }
-    const st = T.st, keep = S.tuneSettings[tuneMode()];
-    if (what === "spacing") {
-      st.spacing = Math.max(st.spacing + sign * st.step, Math.round(T.width * TUNE_IU) + Math.round(T.clearance * TUNE_IU));
-      keep.spacing = st.spacing;
-    } else {
-      st.maxAmp = Math.max(st.maxAmp + sign * st.step, st.minAmp);
-      keep.maxAmp = st.maxAmp;
-    }
-    tuneUpdate(ctx);
-    ctx.requestRender();
-    return true;
-  }
-  function tuneMove(ctx, mm) {
-    const U = S.tune;
-    if (!U.pattern) {
-      const it = tunePick(ctx, mm);
-      U.picker = it ? it.id : null;
-      U.cursor = mm.slice();
-      return;
-    }
-    U.pattern.cursor = mm.slice();
-    U.cursor = mm.slice();
-    tuneUpdate(ctx);
-  }
-  function tuneClick(ctx, mm) {
-    const U = S.tune;
-    if (ctx.viewOnly) {
-      ctx.toast("View-only access");
-      return;
-    }
-    if (!U.pattern) {
-      const it = U.picker && ctx.doc.items.get(U.picker) || tunePick(ctx, mm);
-      if (it) tuneBegin(ctx, it, mm);
-      ctx.requestRender();
-      return;
-    }
-    U.pattern.cursor = mm.slice();
-    tuneFinish(ctx);
-  }
-  function tuneStatus(ctx) {
-    const U = S.tune;
-    const doc = ctx.doc;
-    const units = sizeUnits();
-    let net = null, len = null;
-    const skew = tuneMode() === "skew";
-    if (U.pattern) {
-      net = U.pattern.net;
-      len = U.pattern.res ? U.pattern.res.length / TUNE_IU : U.pattern.lineLength;
-      if (U.pattern.coupled != null) len -= U.pattern.coupled;
-    } else if (U.picker) {
-      const it = doc.items.get(U.picker);
-      if (!it) return null;
-      net = netOf(it.node);
-      len = routedLength(doc, it.id);
-      if (skew) {
-        const pair = dpNetPair(doc, net);
-        const [a, b] = trackEnds(it);
-        if (pair && a && b) len -= coupledLength(doc, pair, netTable(doc).key(net), [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
-      }
-    } else return null;
-    const name = netNameOf(ctx, net);
-    const mm = (v) => msgValue(v / TUNE_IU, units).replace(/ (mm|mils|in)$/, "");
-    const st = U.pattern ? U.pattern.st : S.tuneSettings[tuneMode()];
-    return {
-      scope: name ? unescapeName(name) : "",
-      label: skew ? "current skew" : "current length",
-      value: (skew ? "Skew: " : "Net: ") + msgValue(len, units),
-      min: skew ? mm(st.skew.min) : "---",
-      max: skew ? mm(st.skew.max) : "---"
-    };
-  }
-  function drawTuneStatus(c, at, px, info) {
-    const css = (name, dflt) => {
-      try {
-        const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-        return v || dflt;
-      } catch (e) {
-        return dflt;
-      }
-    };
-    const hs = 13 * px, fs = 12 * px, m = 6 * px, gw = 7 * px;
-    const rows = (info.scope ? 1 : 0) + 2, w = gw * 38 + 2 * m, h = rows * hs * 1.35 + m;
-    const x = at[0] + 2 * m, y = at[1] - h - 2 * m;
-    c.save();
-    c.globalAlpha = 1;
-    c.fillStyle = css("--color-panel", "#2b2b2b");
-    c.strokeStyle = css("--color-ink", "#e0e0e0");
-    c.lineWidth = px;
-    c.globalAlpha = 0.9;
-    c.fillRect(x - m, y - m, w + 2 * m, h + 2 * m);
-    c.globalAlpha = 1;
-    c.strokeRect(x - m, y - m, w + 2 * m, h + 2 * m);
-    c.fillStyle = css("--color-ink", "#e0e0e0");
-    c.textBaseline = "top";
-    let ty = y;
-    const cols = (a, b, d, size) => {
-      c.font = `${size}px sans-serif`;
-      c.fillText(a, x, ty);
-      c.fillText(b, x + gw * 18 + m, ty);
-      c.fillText(d, x + gw * 25 + 2 * m, ty);
-      ty += size * 1.35;
-    };
-    if (info.scope) {
-      c.font = `${hs}px sans-serif`;
-      c.fillText(info.scope, x, ty);
-      ty += hs * 1.35;
-    }
-    cols(info.label, "min", "max", hs);
-    cols(info.value, info.min, info.max, fs);
-    c.restore();
-  }
-  function drawTune(c, ctx, px) {
-    const U = S.tune;
-    const doc = ctx.doc;
-    if (U.pattern && U.pattern.res) {
-      const T = U.pattern;
-      c.globalAlpha = 0.8;
-      c.strokeStyle = saturated(color(T.layer));
-      c.lineWidth = T.width;
-      for (const pc of tunePieces(T.res.final)) {
-        if (pc.m) {
-          const a = K.arcFrom3(pc.a, pc.m, pc.b);
-          if (a) {
-            c.beginPath();
-            c.arc(a.x, a.y, a.r, a.a0, a.a1, !!a.anticlockwise);
-            c.stroke();
-            continue;
-          }
-        }
-        line(c, pc.a, pc.b);
-      }
-    } else if (!U.pattern && U.picker) {
-      c.globalAlpha = 0.9;
-      c.strokeStyle = HL;
-      for (const id of connectedRun(doc, [U.picker])) {
-        const it = doc.items.get(id);
-        if (!it || it.kind !== "segment" && it.kind !== "arc") continue;
-        const a = pt(it.node, "start"), b = pt(it.node, "end");
-        c.lineWidth = widthOf(it.node, 0.25);
-        if (it.kind === "arc") {
-          const m = pt(it.node, "mid");
-          const arc = m && K.arcFrom3(a, m, b);
-          if (arc) {
-            c.beginPath();
-            c.arc(arc.x, arc.y, arc.r, arc.a0, arc.a1, !!arc.anticlockwise);
-            c.stroke();
-            continue;
-          }
-        }
-        line(c, a, b);
-      }
-    }
-    const info = tuneStatus(ctx);
-    if (info && U.cursor) drawTuneStatus(c, U.cursor, px, info);
-    c.globalAlpha = 1;
-  }
-  function tuneHiddenIds() {
-    const T = S.tune && S.tune.pattern;
-    return T && T.res ? new Set(T.line.ids) : null;
-  }
-
   // web/tools/pcb-tools/overlay.ts
   function ratsnestLines(doc) {
     if (!S.rats || S.rats.doc !== doc || S.ratsDirty) {
@@ -6890,6 +7251,8 @@
       if (shown.length) K.drawMarkers(c, shown, "pcb", K.markerScale("pcb", view), K.PCB_BG);
     }
     drawDragPreview(c, ctx, view, px);
+    drawGenEditPreview(c, ctx);
+    if (!S.route && !S.draw && !S.drag && !S.modTool) drawTuningSelection(c, ctx, px);
     drawEditPoints(c, ctx, px);
     if (S.violations) for (const ob of S.violations.obs) {
       drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7);
@@ -7116,18 +7479,18 @@
     const aP = pair.P.p, aN = pair.N.p;
     const M = [(aP[0] + aN[0]) / 2, (aP[1] + aN[1]) / 2];
     const axis = vunit(vsub(aP, aN));
-    const perp2 = [-axis[1], axis[0]];
+    const perp3 = [-axis[1], axis[0]];
     let cands;
     if (pair.P.dir && pair.N.dir && Math.abs(pair.P.dir[0] * pair.N.dir[0] + pair.P.dir[1] * pair.N.dir[1] - 1) < 1e-3) cands = [DIRS8[dir8([0, 0], pair.P.dir)]];
     else cands = DIRS8;
-    const want = toward && !samePt(toward, M) ? vunit(vsub(toward, M)) : perp2;
+    const want = toward && !samePt(toward, M) ? vunit(vsub(toward, M)) : perp3;
     let best = null;
     for (const d2 of cands) {
       const n2 = [-d2[1], d2[0]];
       const tP2 = (aP[0] - M[0]) * n2[0] + (aP[1] - M[1]) * n2[1];
       if (Math.abs(tP2) < 1e-6) continue;
       const ang = Math.acos(Math.max(-1, Math.min(1, d2[0] * want[0] + d2[1] * want[1])));
-      const offPerp = Math.acos(Math.min(1, Math.abs(d2[0] * perp2[0] + d2[1] * perp2[1])));
+      const offPerp = Math.acos(Math.min(1, Math.abs(d2[0] * perp3[0] + d2[1] * perp3[1])));
       const score = ang + 1.2 * offPerp;
       if (!best || score < best.score - 1e-9) best = { d: d2, n: n2, tP: tP2, score };
     }
@@ -10531,7 +10894,7 @@
     const l = Math.hypot(v[0], v[1]);
     return l === 0 ? null : [v[0] / l, v[1] / l];
   };
-  var perp = (v) => [-v[1], v[0]];
+  var perp2 = (v) => [-v[1], v[0]];
   function nearestEnd(a, b, p, tol) {
     const da = Math.hypot(a[0] - p[0], a[1] - p[1]), db = Math.hypot(b[0] - p[0], b[1] - p[1]);
     const first = da <= db;
@@ -10566,7 +10929,7 @@
     if (sh.t !== "arc") return null;
     const turn = crossZ(sh.mid[0] - sh.start[0], sh.mid[1] - sh.start[1], sh.end[0] - sh.mid[0], sh.end[1] - sh.mid[1]);
     if (turn === 0) return null;
-    let t = perp(vsub(p, sh.center));
+    let t = perp2(vsub(p, sh.center));
     if (turn > 0 === atStart) t = [-t[0], -t[1]];
     return unitOf(t);
   }
@@ -10639,7 +11002,7 @@
       const c = sh.center, ang = Math.atan2(p[1] - c[1], p[0] - c[0]), r = a.r * NM;
       const q = [kiRound(c[0] + r * Math.cos(ang)), kiRound(c[1] + r * Math.sin(ang))];
       if (!arcContainsAngle(a, ang) || Math.hypot(q[0] - p[0], q[1] - p[1]) > tol) return null;
-      const ax = unitOf(perp(vsub(q, c)));
+      const ax = unitOf(perp2(vsub(q, c)));
       return ax ? { start: q, dir: ax, axis: true } : null;
     }
     if (sh.t === "poly") return polylineSeedAt(sh.pts, true, p, tol);
@@ -11013,7 +11376,7 @@
       const n = kid(p, k);
       return n && n.length > 1 ? n[1] : d;
     };
-    const fmt2 = kid(node, "format"), st = kid(node, "style"), gt = kid(node, "gr_text");
+    const fmt3 = kid(node, "format"), st = kid(node, "style"), gt = kid(node, "gr_text");
     const xs = K.kids(kid(node, "pts") || [], "xy").map((x) => toNm([K.num(x[1]), K.num(x[2])]));
     const ef = kid(gt, "effects"), font = kid(ef, "font"), sz = kid(font, "size"), th = kid(font, "thickness");
     const at = kid(gt, "at"), just = kid(ef, "justify");
@@ -11022,7 +11385,7 @@
       if (!n) return d;
       return n.length < 2 ? true : K.str(n[1]) !== "no";
     };
-    const ov = kid(fmt2, "override_value");
+    const ov = kid(fmt3, "override_value");
     return {
       type: K.str(val(node, "type", "aligned")),
       start: xs[0] || [0, 0],
@@ -11030,13 +11393,13 @@
       height: Math.round(K.num(val(node, "height", 0)) * NM),
       orientation: K.num(val(node, "orientation", 0)) ? 1 : 0,
       leaderLength: Math.round(K.num(val(node, "leader_length", 0)) * NM),
-      prefix: K.str(val(fmt2, "prefix", "")),
-      suffix: K.str(val(fmt2, "suffix", "")),
-      unitsMode: Math.max(0, Math.min(3, K.num(val(fmt2, "units", 3)))),
-      unitsFormat: Math.max(0, Math.min(2, K.num(val(fmt2, "units_format", 0)))),
-      precision: K.num(val(fmt2, "precision", 4)),
+      prefix: K.str(val(fmt3, "prefix", "")),
+      suffix: K.str(val(fmt3, "suffix", "")),
+      unitsMode: Math.max(0, Math.min(3, K.num(val(fmt3, "units", 3)))),
+      unitsFormat: Math.max(0, Math.min(2, K.num(val(fmt3, "units_format", 0)))),
+      precision: K.num(val(fmt3, "precision", 4)),
       override: ov ? K.str(ov[1] == null ? "" : ov[1]) : null,
-      suppressZeroes: yesno(fmt2, "suppress_zeroes", false),
+      suppressZeroes: yesno(fmt3, "suppress_zeroes", false),
       thickness: K.num(val(st, "thickness", 0.15)),
       arrowLength: Math.round(K.num(val(st, "arrow_length", 1.27)) * NM),
       posMode: Math.max(0, Math.min(2, K.num(val(st, "text_position_mode", 0)))),
@@ -11181,7 +11544,7 @@
   }
   var peqNm = (a, b) => a[0] === b[0] && a[1] === b[1];
   function dimWrite(orig, m) {
-    const node = clone(orig), mm = (v) => r6(v / NM), setKid = (p, k, v) => {
+    const node = clone(orig), mm = (v) => r6(v / NM), setKid2 = (p, k, v) => {
       const n = K.kid(p, k);
       if (n) n[1] = v;
       return !!n;
@@ -11196,11 +11559,11 @@
         }
       });
     }
-    if (m.type === "aligned" || m.type === "orthogonal") setKid(node, "height", mm(m.height));
-    if (m.type === "orthogonal") setKid(node, "orientation", m.orientation);
-    if (m.type === "radial") setKid(node, "leader_length", mm(m.leaderLength));
+    if (m.type === "aligned" || m.type === "orthogonal") setKid2(node, "height", mm(m.height));
+    if (m.type === "orthogonal") setKid2(node, "orientation", m.orientation);
+    if (m.type === "radial") setKid2(node, "leader_length", mm(m.leaderLength));
     const st = K.kid(node, "style");
-    if (st) setKid(st, "text_position_mode", m.posMode);
+    if (st) setKid2(st, "text_position_mode", m.posMode);
     const gt = K.kid(node, "gr_text");
     if (gt) {
       gt[1] = m.text;
@@ -11339,13 +11702,27 @@
     const out = [], gens = [], ids = /* @__PURE__ */ new Set();
     for (const x of items || []) {
       const it = typeof x === "string" ? doc.items.get(x) : x;
-      if (it && it.id && it.kind) {
+      if (it && it.id && it.kind && !ids.has(it.id)) {
         out.push(removedChange(it));
         ids.add(it.id);
         if (isTuningPattern(it)) gens.push(it);
       }
     }
-    return gens.length ? tuningRemoveChanges(doc, gens, ids) : out;
+    if (!gens.length) return out;
+    const owned = /* @__PURE__ */ new Set();
+    for (const g of gens) {
+      owned.add(g.id);
+      for (const m of K.groupMemberIds(g.node)) owned.add(m);
+    }
+    if (Array.from(ids).every((id) => owned.has(id))) return tuningRemoveChanges(doc, gens, ids);
+    for (const id of owned) {
+      const it = doc.items.get(id);
+      if (it && !ids.has(id)) {
+        out.push(removedChange(it));
+        ids.add(id);
+      }
+    }
+    return out;
   }
   function boardNets(doc) {
     const byName = /* @__PURE__ */ new Map();
@@ -12194,18 +12571,18 @@
     for (let id of ids) {
       const h = typeof id === "string" ? id.indexOf("#") : -1;
       if (h > 0) id = id.slice(0, h);
-      let g = groupOf(ctx.doc, id);
-      while (g) {
-        id = g.id;
-        g = groupOf(ctx.doc, id);
-      }
+      const top = topParentOf(ctx.doc, id);
+      if (top) id = top.id;
       if (ctx.doc.items.has(id) && !out.includes(id)) out.push(id);
     }
     return out;
   }
   function requestSelection(ctx, opts) {
     opts = opts || {};
-    const keep = (it) => it && it.kind !== "generated" && (!opts.filter || opts.filter(it));
+    const keep = (it) => !!it && (!opts.filter || (it.kind === "generated" ? groupMembers(it.node).some((id) => {
+      const m = ctx.doc.items.get(id);
+      return !!m && opts.filter(m);
+    }) : opts.filter(it)));
     let ids = Array.from(selectionIds(ctx)), hover = !!S.forceHover;
     if (!ids.length && S.padSel) {
       const i = S.padSel.lastIndexOf("#"), fp = S.padSel.slice(0, i);
@@ -12232,7 +12609,7 @@
     ids = Array.from(expandGroups(ctx.doc, ids)).filter((id) => keep(ctx.doc.items.get(id)) || ctx.doc.items.get(id).kind === "group");
     if (!ids.length) return null;
     if (opts.locks !== false && !unlockedIds(ctx, ids, opts.quiet).length) return null;
-    return { ids, items: ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group"), hover };
+    return { ids, items: ids.map((id) => ctx.doc.items.get(id)).filter((it) => it && it.kind !== "group" && it.kind !== "generated"), hover };
   }
   function endHover(ctx, sel) {
     if (sel && sel.hover) applySelection(ctx, []);
@@ -13233,7 +13610,7 @@
     },
     /** What the canvas leaves out while it is drawn elsewhere (the lines being dragged). */
     hiddenIds() {
-      return routeHiddenIds() || tuneHiddenIds() || dragHiddenIds();
+      return routeHiddenIds() || tuneHiddenIds() || genHiddenIds() || dragHiddenIds();
     },
     onActivate(t, ctx) {
       bind(ctx);
@@ -13354,8 +13731,11 @@
       S.downHandled = ev;
       const wasSelected = S.sel.has(it.id), mode = selMode(ev);
       S.padSel = null;
-      if (mode) applySelMode(S.sel, it.id, mode);
-      else if (!wasSelected) S.sel = /* @__PURE__ */ new Set([it.id]);
+      const pick = topParentOf(ctx.doc, it.id) ? Array.from(expandGroups(ctx.doc, [it.id])) : [it.id];
+      if (mode) {
+        const on = mode === "toggle" ? !S.sel.has(it.id) : mode === "add";
+        for (const id of pick) applySelMode(S.sel, id, mode === "toggle" ? on ? "add" : "remove" : mode);
+      } else if (!wasSelected) S.sel = new Set(pick);
       if (ctx.setSelection && !mode && !wasSelected) ctx.setSelection([]);
       S.pending = !ctx.viewOnly && ctx.live && !mode && wasSelected ? { ids: Array.from(S.sel), item: it, mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0] } : null;
       ctx.requestRender();
@@ -13760,7 +14140,7 @@
     diffPairMenu(ctx) {
       bind(ctx);
       const R = sizesOf(ctx);
-      const fmt2 = (v) => fmtSize(v);
+      const fmt3 = (v) => fmtSize(v);
       const pick = (i) => () => {
         R.setDiffPairIndex(i);
         if (S.route && S.route.dp && lastCtx) {
@@ -13778,7 +14158,7 @@
         } },
         { sep: true }
       ];
-      R.diffPairLabels(fmt2).forEach((label, k) => rows.push({ label, checked: !R.useCustomDiffPair && R.diffPairIndex === k + 1, run: pick(k + 1) }));
+      R.diffPairLabels(fmt3).forEach((label, k) => rows.push({ label, checked: !R.useCustomDiffPair && R.diffPairIndex === k + 1, run: pick(k + 1) }));
       return rows;
     },
     /** The net being routed (the first of a pair), "" with none: what the size dialogs resolve the netclass of. */
@@ -13984,6 +14364,15 @@
     isTuningPattern,
     tuningPatternInfo,
     regenerateTuningChanges,
+    selectedTuningPattern,
+    tuningEditNode,
+    tuningEditPoints,
+    tuningOutline,
+    genStartEdit,
+    genUpdateEdit,
+    genFinishEdit,
+    genCancelEdit,
+    topParentOf,
     tuningRemoveChanges,
     setTargetSkew,
     coupledLength,
