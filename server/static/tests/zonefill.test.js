@@ -111,6 +111,24 @@ test("islands: removed always (0), kept and flagged never (1), removed below the
   assert.ok(filledAt(lone.layer(zid(lone.doc, "z1"), "F.Cu"), 105, 105));
 });
 
+test("islands: a fragment linked to a pad only through a via and a track on another layer is kept (whole-board clusters)", async () => {
+  // the corner 100..110 x 100..110 on F.Cu is walled off by SIG tracks; a GND via in it reaches a GND pad over B.Cu
+  const walls = [seg(110, 99, 110, 111, "SIG", 0.4), seg(99, 110, 111, 110, "SIG", 0.4)];
+  const via = `(via (at 105 105) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "GND") (uuid "v1"))`;
+  const bottom = seg(105, 105, 130, 120, "GND", 0.25, "B.Cu");
+  const pad = `(footprint "T:SMD" (layer "B.Cu") (uuid "fp-R9") (at 130 120)
+  (property "Reference" "R9" (at 0 -3) (layer "B.SilkS") (uuid "r-R9") (effects (font (size 1 1) (thickness 0.15))))
+  (pad "1" smd rect (at 0 0) (size 2 2) (layers "B.Cu" "B.Mask") (net "GND") (uuid "p-R9")))`;
+  const items = [zone({ islands: 0 }), smdFp("R1", 130, 105, "GND"), ...walls, via, bottom, pad];
+  const linked = await fill(board(...items));
+  const lf = linked.layer(zid(linked.doc, "z1"), "F.Cu");
+  assert.ok(filledAt(lf, 102, 102), "the walled-off fragment reaches R9 through the via and the B.Cu track");
+  assert.equal(lf.islands.size, 0);
+  // without the B.Cu track the via leads nowhere: the fragment is an island again
+  const cut = await fill(board(...items.filter((x) => x !== bottom)));
+  assert.ok(!filledAt(cut.layer(zid(cut.doc, "z1"), "F.Cu"), 102, 102), "removed");
+});
+
 test("a higher-priority zone of another net is filled first and cleared around; a keepout keeps copper out", async () => {
   const hi = zone({ net: "SIG", uuid: "z2", priority: 1, pts: [[110, 105], [125, 105], [125, 120], [110, 120]] });
   const { doc, layer } = await fill(board(zone(), hi, smdFp("R1", 130, 125, "GND"), smdFp("R2", 117, 112, "SIG")));

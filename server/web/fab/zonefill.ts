@@ -950,12 +950,25 @@ export class ZoneFiller {
   }
 
   // ------------------------------------------------------------ connectivity (FillIsolatedIslandsMap)
-  /** For each zone and copper layer, the indices of fill outlines whose cluster holds no pad. */
+  /**
+   * For each zone and copper layer, the indices of fill outlines whose cluster holds no pad. The clusters are
+   * CN_CONNECTIVITY_ALGO::SearchClusters( CSM_CONNECTIVITY_CHECK ) over the whole board: a pad or via is one item on
+   * every layer it spans, so a fill fragment that reaches a pad only through a via and a track on another layer is
+   * not an island.
+   */
   private isolatedIslands(zones: ZoneModel[]): Map<ZoneModel, Map<string, Set<number>>> {
     const out = new Map<ZoneModel, Map<string, Set<number>>>();
+    // board-wide union-find over items; a pad or via keeps one id across its layers
+    const parent: number[] = []; const isPad: boolean[] = [];
+    const newId = (pad: boolean): number => { parent.push(parent.length); isPad.push(pad); return parent.length - 1; };
+    const find = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    const join = (a: number, b: number): void => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+    const ids = new Map<object, number>();
+    const idOf = (o: object, pad: boolean): number => { let g = ids.get(o); if (g === undefined) { g = newId(pad); ids.set(o, g); } return g; };
+    interface N { g: number; net: string; poly: Poly; anchors: Pt[]; bbox: Box; zone?: ZoneModel; idx?: number; index?: PathIndex }
+    const zoneNodes: { n: N; layer: string }[] = [];
     for (const layer of this.m.copper) {
-      // nodes: pads, vias, tracks on the layer, and every zone's fill outlines
-      interface N { net: string; pad: boolean; poly: Poly; anchors: Pt[]; bbox: Box; zone?: ZoneModel; idx?: number; index?: PathIndex }
+      // nodes on this layer: pads, vias, tracks, and every zone's fill outlines
       const nodes: N[] = [];
       for (const it of this.items) {
         if (!it.layers.has(layer) || !it.net) continue;
@@ -964,33 +977,30 @@ export class ZoneFiller {
           if (this.padFlash.get(p)?.get(layer) === false) continue;
           const sh = padShapeOn(p, layer, this.m.copper); const [ox, oy] = rot(sh.offset[0], sh.offset[1], p.rot);
           const poly = this.padShape(p, layer, 0); if (!poly.length) continue;
-          nodes.push({ net: p.net, pad: true, poly, anchors: [[p.x + ox, p.y + oy]], bbox: bboxOf(poly) });
+          nodes.push({ g: idOf(p, true), net: p.net, poly, anchors: [[p.x + ox, p.y + oy]], bbox: bboxOf(poly) });
         } else if (it.via) {
-          const v = it.via; if (this.padFlash.get(v)?.get(layer) === false) continue;
+          const v = it.via; const g = idOf(v, false);
+          if (this.padFlash.get(v)?.get(layer) === false) continue;
           const poly = this.viaShape(v, layer, 0);
-          nodes.push({ net: v.net, pad: false, poly, anchors: [[v.x, v.y]], bbox: bboxOf(poly) });
+          nodes.push({ g, net: v.net, poly, anchors: [[v.x, v.y]], bbox: bboxOf(poly) });
         } else if (it.track) {
           const t = it.track; const poly = this.trackShape(t, 0); if (!poly.length) continue;
-          nodes.push({ net: it.net, pad: false, poly, anchors: [[t.x1, t.y1], [t.x2, t.y2]], bbox: bboxOf(poly) });
+          nodes.push({ g: idOf(t, false), net: it.net, poly, anchors: [[t.x1, t.y1], [t.x2, t.y2]], bbox: bboxOf(poly) });
         }
       }
-      const zoneNodes: N[] = [];
       for (const z of this.zones) {
         if (z.ruleArea || !z.layers.includes(layer) || !z.net) continue;
         const outl = this.fillOutlines(z, layer);
-        outl.forEach((o, i) => { const p = [shape(o)]; const index = new PathIndex(p[0]); const n: N = { net: z.net, pad: false, poly: p, anchors: [], bbox: index.bbox, zone: z, idx: i, index }; nodes.push(n); zoneNodes.push(n); });
+        outl.forEach((o, i) => { const p = [shape(o)]; const index = new PathIndex(p[0]); const n: N = { g: newId(false), net: z.net, poly: p, anchors: [], bbox: index.bbox, zone: z, idx: i, index }; nodes.push(n); zoneNodes.push({ n, layer }); });
       }
-      // union-find over CN_VISITOR's tests: anchors in a zone, or the shapes colliding
-      const parent = nodes.map((_, i) => i);
-      const find = (i: number): number => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
-      const join = (a: number, b: number): void => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
-      const byNet = new Map<string, number[]>(); nodes.forEach((n, i) => { const l = byNet.get(n.net) || []; l.push(i); byNet.set(n.net, l); });
-      for (const idxs of byNet.values()) {
-        for (let a = 0; a < idxs.length; a++) for (let b = a + 1; b < idxs.length; b++) {
-          const A = nodes[idxs[a]], B = nodes[idxs[b]];
+      // CN_VISITOR's tests on this layer: anchors in a zone, or the shapes colliding
+      const byNet = new Map<string, N[]>(); for (const n of nodes) { const l = byNet.get(n.net) || []; l.push(n); byNet.set(n.net, l); }
+      for (const list of byNet.values()) {
+        for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) {
+          const A = list[a], B = list[b];
           if (!hits(A.bbox, B.bbox)) continue;
           if (A.zone && B.zone && A.zone === B.zone) continue;
-          if (find(idxs[a]) === find(idxs[b])) continue;
+          if (find(A.g) === find(B.g)) continue;
           let touch = false;
           if (A.zone && B.zone) touch = intersect(A.poly, B.poly).length > 0;
           else if (A.zone || B.zone) {
@@ -999,16 +1009,17 @@ export class ZoneFiller {
             touch = I.anchors.some((p) => Z.contains(p[0], p[1]));
             if (!touch) for (const path of I.poly) { if (touch) break; for (let k = 0, j = path.length - 1; k < path.length; j = k++) { if (Z.contains(path[k].x, path[k].y) || Z.crosses(path[j].x, path[j].y, path[k].x, path[k].y)) { touch = true; break; } } }
           } else touch = intersect(A.poly, B.poly).length > 0;
-          if (touch) join(idxs[a], idxs[b]);
+          if (touch) join(A.g, B.g);
         }
       }
-      const withPad = new Set<number>(); nodes.forEach((n, i) => { if (n.pad) withPad.add(find(i)); });
-      for (const n of zoneNodes) {
-        const z = n.zone as ZoneModel; if (!zones.includes(z)) continue;
-        let m = out.get(z); if (!m) { m = new Map(); out.set(z, m); }
-        let s = m.get(layer); if (!s) { s = new Set(); m.set(layer, s); }
-        if (!withPad.has(find(nodes.indexOf(n)))) s.add(n.idx as number);
-      }
+    }
+    // CN_CLUSTER::IsOrphaned: no pad in the cluster
+    const withPad = new Set<number>(); isPad.forEach((p, i) => { if (p) withPad.add(find(i)); });
+    for (const { n, layer } of zoneNodes) {
+      const z = n.zone as ZoneModel; if (!zones.includes(z)) continue;
+      let m = out.get(z); if (!m) { m = new Map(); out.set(z, m); }
+      let s = m.get(layer); if (!s) { s = new Set(); m.set(layer, s); }
+      if (!withPad.has(find(n.g))) s.add(n.idx as number);
     }
     return out;
   }
