@@ -35,6 +35,8 @@ interface KDoc {
   bbox: [number, number, number, number];
   /** (general (thickness …)) of a board, mm */
   thickness?: number;
+  /** set for a footprint opened in the footprint editor (canvas/footprint-doc.ts): its children are the items */
+  fpEditor?: boolean;
 }
 
 /** A collaboration op change (the item-level LWW protocol shared with the desktop). */

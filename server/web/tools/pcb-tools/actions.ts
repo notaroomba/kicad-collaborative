@@ -105,6 +105,12 @@ act("duplicate", "Duplicate", "Ctrl+D", (ctx: PcbCtx) => {
   const r = duplicateChanges(ctx.doc, sel.ids); if (!r.changes.length) return true;
   ctx.commit(r.changes, "duplicate", { tentative: true }); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover }); return true;
 });
+act("duplicateIncrement", "Duplicate and Increment", "Ctrl+Shift+D", (ctx: PcbCtx) => {
+  if (!canEdit(ctx)) return true;
+  const sel = requestSelection(ctx, { locks: false, rerun: (c: PcbCtx) => runAction("duplicateIncrement", c) }); if (!sel) return true;
+  const r = duplicateChanges(ctx.doc, sel.ids, null, { increment: true }); if (!r.changes.length) return true;
+  ctx.commit(r.changes, "duplicate", { tentative: true }); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover }); return true;
+});
 act("copyAsText", "Copy as Text", "", (ctx: PcbCtx) => { const ids = needSel(ctx); if (!ids) return true; const t = Array.from(ids, (id) => textOfItem(ctx.doc.items.get(id)!)).filter(Boolean).join("\n"); clipSet(ctx, t); ctx.toast(t ? "Text copied" : "Nothing textual selected"); return true; });
 // selection
 act("selectNet", "Select Net", "", (ctx: PcbCtx) => {

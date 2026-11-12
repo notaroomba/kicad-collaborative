@@ -13,6 +13,7 @@ import { netOf } from "./nets";
 import { tableGrid } from "./nodes";
 import { drawEditPoints } from "./point-editor";
 import { padsOf } from "./route-geom";
+import { PAD_TOOLS, masterPad } from "./pad-tool";
 import { drawDragPreview, drawRoute } from "./route-preview";
 import { DEL, HALO_COLOR, HL, K, RATSNEST, RATSNEST_BRIGHT, S, VIA, bind } from "./state";
 import { drawTune } from "./tuning-patterns";
@@ -136,6 +137,8 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
   drawGenEditPreview(c, ctx);   // a tuning pattern being edited: its re-tuned line over the hidden originals
   if (!S.route && !S.draw && !S.drag && !S.modTool) drawTuningSelection(c, ctx, px);   // PCB_TUNING_PATTERN::ViewDraw while selected
   drawEditPoints(c, ctx, px);   // PCB_POINT_EDITOR's EDIT_POINTS over the selected item
+  // PAD_PLACER: the pad that a click would put down follows the cursor (F.Cu, or the layer it lives on)
+  if (S.modTool && PAD_TOOLS[S.modTool] && S.hover) drawPadPreview(c, doc, PAD_TOOLS[S.modTool], [S.hover.x, S.hover.y], S.padPlace ? S.padPlace.angle : 0, px);
   // route in progress: fixed legs are already in the document, the current one lives here
   // ROUTER::markViolations: obstacles in violation (a refused start or via) in pure green over their clearance halo
   if (S.violations) for (const ob of S.violations.obs) { drawShape(c, ob.shape, ob.clr, HALO_COLOR, 0.7); drawShape(c, ob.shape, 0, "#00FF00", 1); }
@@ -198,4 +201,21 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
     if (hv.snap) { c.globalAlpha = 1; c.strokeStyle = HL; c.lineWidth = 1.5 * px; ring(c, [hv.x, hv.y], 5 * px); }
   }
   c.globalAlpha = 1;
+}
+
+/** The outline of the master pad at `at`, rotated `angle` degrees: rect / roundrect / trapezoid as a rectangle, the rest as an oval. */
+function drawPadPreview(c: CanvasRenderingContext2D, doc: BoardDoc, type: (typeof PAD_TOOLS)[string], at: Pt, angle: number, px: number) {
+  const pad = masterPad(doc, type, S.padTemplate || null);
+  const sz = K.kid(pad, "size"); const w = sz ? K.num(sz[1]) : 1, h = sz ? K.num(sz[2]) : 1;
+  const layers = (K.kid(pad, "layers") || []).slice(1).map(String);
+  c.save(); c.translate(at[0], at[1]); c.rotate(-angle * Math.PI / 180);
+  c.globalAlpha = 0.6; c.strokeStyle = layers.some((l) => l === "B.Cu") && !layers.some((l) => l === "F.Cu" || l === "*.Cu") ? "#4D7FC4" : "#C83434"; c.lineWidth = 1.5 * px;
+  const shape = String(pad[3]);
+  c.beginPath();
+  if (shape === "circle") c.arc(0, 0, w / 2, 0, Math.PI * 2);
+  else if (shape === "oval") { const r = Math.min(w, h) / 2; if (w >= h) { c.moveTo(-w / 2 + r, -r); c.lineTo(w / 2 - r, -r); c.arc(w / 2 - r, 0, r, -Math.PI / 2, Math.PI / 2); c.lineTo(-w / 2 + r, r); c.arc(-w / 2 + r, 0, r, Math.PI / 2, Math.PI * 1.5); } else { c.moveTo(r, -h / 2 + r); c.lineTo(r, h / 2 - r); c.arc(0, h / 2 - r, r, 0, Math.PI); c.lineTo(-r, -h / 2 + r); c.arc(0, -h / 2 + r, r, Math.PI, Math.PI * 2); } }
+  else c.rect(-w / 2, -h / 2, w, h);
+  c.stroke();
+  const drill = K.kid(pad, "drill"); if (drill) { const d = K.num(drill.find((x: unknown) => typeof x === "number" || /^[\d.]+$/.test(String(x)))); if (d > 0) { c.beginPath(); c.arc(0, 0, d / 2, 0, Math.PI * 2); c.stroke(); } }
+  c.restore();
 }

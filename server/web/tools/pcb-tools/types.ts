@@ -23,6 +23,8 @@ export interface BranchCache { rworld?: RouterWorld; joints?: Joints; nl?: Netli
 /** The context app.js hands every hook: its toolCtx(), with a board loaded, plus what some callers add. */
 export interface PcbCtx extends ToolCtx {
   doc: BoardDoc;
+  /** PCB_TOOL_BASE::m_isFootprintEditor: the document is one footprint (canvas/footprint-doc.ts) */
+  fpEditor?: boolean;
   /** grid snap of a point (any [x, y] the tools hold) */
   snap(mm: Pt): [number, number];
   /** the project's design settings (.kicad_pro as text or parsed, a legacy board's (setup …), or our shape) */
@@ -109,6 +111,8 @@ export type PcbState = {
   sel: Set<string>;
   /** a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T) */
   padSel: string | null;
+  /** the Footprint Editor's Add Pad tools: the pad type being placed and its turn (R), and the pad selected when the tool started */
+  padPlace?: { type: import("./pad-tool").PadType; angle: number } | null; padTemplate?: SNode | null;
   pedit: PointEdit | null; mmPerPx: number;
   route: Route | null; drag: TrackDrag | null; draw: DrawState | null; hover: Hover | null;
   text: { box: HTMLElement } | null; modTool: string | null; doc: BoardDoc | null;

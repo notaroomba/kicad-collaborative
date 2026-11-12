@@ -1,8 +1,9 @@
 // pcb-tools/clipboard.ts — the clipboard in KiCad's own format (a kicad_pcb document), paste and duplicate.
+import { canHaveNumber, nextPadNumber, padMemory } from "./pad-tool";
 import type { BoardDoc, NetRef, PcbChange, PcbCtx, Pt, SAtom } from "./types";
 
 /** A paste-special / duplicate option bag. */
-export interface PasteOpts { annotations?: string; clearNets?: boolean; xform?: (n: SNode, it: KItem) => void }
+export interface PasteOpts { annotations?: string; clearNets?: boolean; xform?: (n: SNode, it: KItem) => void; increment?: boolean }
 import { addedChange } from "./changes";
 import { conductorEnds } from "./connected";
 import { copperOf } from "./dialogs";
@@ -124,11 +125,17 @@ export function duplicateChanges(doc: BoardDoc, ids: Iterable<string>, offset?: 
   const coveredByGroup = (id: string) => { for (let g = parentOf(doc, id); g; g = parentOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
   const isParent = (n: SNode) => n[0] === "group" || n[0] === "generated";
   const subtree = (it: KItem, acc: KItem[]): KItem[] => { acc.push(it); if (it.kind === "group" || it.kind === "generated") for (const m of groupMembers(it.node)) { const c = doc.items.get(m); if (c) subtree(c, acc); } return acc; };
+  const incUsed = new Set<string>();   // numbers taken by copies made earlier in this pass
   for (const id of ids) {
     // a generator (a tuning pattern) is copied as PCB_GENERATOR::DeepDuplicate does: a new generator holding copies of its members
     const it = doc.items.get(id); if (!it || coveredByGroup(id)) continue;
+    if (doc.fpEditor && it.kind === "property") continue;   // EDIT_TOOL::Duplicate: a footprint's fields are not duplicated
     const src = subtree(it, []);
     const nodes = src.map((x) => clone(x.node)); freshUuids(nodes);
+    // Duplicate and Increment (footprint editor): the copy takes FOOTPRINT::GetNextPadNumber of PAD_TOOL's last number
+    if (doc.fpEditor && opts && opts.increment) for (const n of nodes) if (n[0] === "pad" && canHaveNumber(n)) {
+      n[1] = padMemory.lastNumber = nextPadNumber(doc, padMemory.lastNumber, incUsed); incUsed.add(String(n[1]));
+    }
     if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
     if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);   // the array tool's per-copy transform (about the top item)
     // members first, so a group's ADDED change finds them

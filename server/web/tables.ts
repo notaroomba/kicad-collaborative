@@ -162,7 +162,8 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     "clearAnnotation", "toggleAnnotateAuto",
     // the arc tool's modes: the Arc toolbar group and EE_GRAPHIC_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
     "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode"],
-  pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneFill", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",
+  pcb: ["duplicateIncrement",   // Duplicate and Increment: a hotkey (Ctrl+Shift+D) and the selection menu, in no menu bar
+    "highlightNetSelection", "cleanupTracks", "pack", "zoneFill", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",
     // the interactive router's own commands: KiCad offers them in the router's context menu and the route tool's toolbar menu only
     "routerHighlightMode", "routerShoveMode", "routerWalkaroundMode", "cycleRouterMode", "routerUndoLastSegment", "routerDiffPairDialog",
     // the length tuner's commands: the drawing tool's context menu while a tuning tool runs (drawing_tool.cpp tuningToolActive), hotkeys 1-4 and Ctrl+L

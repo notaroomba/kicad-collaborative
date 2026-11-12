@@ -4,7 +4,7 @@ import type { BoardDoc, Box, PcbChange, Pt } from "./types";
 /** A point map (x, y) → [x, y]. */
 export type PointFn = (x: number, y: number) => number[];
 import { replacedChange } from "./changes";
-import { flipFootprintNode, flipLayerKid, rotateFootprintNode, toggleMirror } from "./footprint";
+import { flipFootprintNode, flipLayerKid, mirrorShapeX, rotateFootprintNode, toggleMirror } from "./footprint";
 import { K } from "./state";
 import { clone, corners, isList, norm360, pt, r6, rotator, vadd, xy } from "./util";
 
@@ -56,7 +56,7 @@ export function rotateNode(node: SNode, cx: number, cy: number, deg: number) {
     const a = pt(node, "start"), b = pt(node, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); K.kid(node, "start")!.splice(1, 2, r6(x0), r6(y0)); K.kid(node, "end")!.splice(1, 2, r6(x1), r6(y1)); }
     if (k === "gr_text_box") setTextBoxAngle(node, textBoxAngle(node) + deg);
   }
-  if (k === "gr_text") setAngleKid(node, angleKid(node) + deg);
+  if (k === "gr_text" || k === "pad" || k === "property") setAngleKid(node, angleKid(node) + deg);   // PAD::Rotate, PCB_FIELD::Rotate (footprint editor)
   if (k === "image") {   // REFERENCE_IMAGE::Rotate: the centre turns about the point, the orientation is its own (rotate) after the layer
     const r = K.kid(node, "rotate"), a = norm360((r ? K.num(r[1]) : 0) + deg);
     if (r) { if (a) r[1] = r6(a); else node.splice(node.indexOf(r), 1); }
@@ -111,7 +111,8 @@ export function flipNode(node: SNode, cx: number, doc: BoardDoc) {
   mapNodePoints(node, mirror); flipLayerKid(node);
   if (k === "zone") reflectZoneOrientations(node, true);
   if (k === "via") { const ls = K.kid(node, "layers"); if (ls && doc) { const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]; const names = ls.slice(1).map(K.str).sort((a, b) => copper.indexOf(a) - copper.indexOf(b)); ls.splice(1, ls.length - 1, ...names); } }
-  if (k === "gr_text" || k === "gr_text_box") { toggleMirror(node); setAngleKid(node, -angleKid(node)); }
+  if (k === "gr_text" || k === "gr_text_box" || k === "property") { toggleMirror(node); setAngleKid(node, -angleKid(node)); }
+  if (k === "pad") padMirrorX(node);   // PAD::Flip: offset, trapezoid delta and primitives mirror, the relative angle negates
   if (k === "dimension") { const gt = K.kid(node, "gr_text"); if (gt) { flipLayerKid(gt); toggleMirror(gt); setAngleKid(gt, -angleKid(gt)); } }
   if (k === "table") { const cells = K.kid(node, "cells"); if (cells) for (const c of K.kids(cells, "table_cell")) { flipLayerKid(c); toggleMirror(c); } }
   return node;
@@ -121,7 +122,8 @@ export function mirrorNode(node: SNode, cx: number, cy: number, axis: string) {
   const k = node[0]; if (k === "footprint") return false;   // pcbnew refuses to mirror footprints outside the footprint editor
   mapNodePoints(node, axis === "v" ? (x: number, y: number) => [x, 2 * cy - y] : (x: number, y: number) => [2 * cx - x, y]);
   const text = (n: SNode) => { toggleMirror(n); setAngleKid(n, axis === "v" ? 180 - angleKid(n) : -angleKid(n)); };
-  if (k === "gr_text" || k === "gr_text_box") text(node);
+  if (k === "gr_text" || k === "gr_text_box" || k === "property") text(node);
+  if (k === "pad") { if (axis === "v") { padMirrorY(node); } else padMirrorX(node); }   // EDIT_TOOL::mirrorPad (footprint editor)
   if (k === "zone") reflectZoneOrientations(node, axis !== "v");
   if (k === "dimension") { const gt = K.kid(node, "gr_text"); if (gt) text(gt); }
   if (k === "gr_rect" || k === "gr_text_box") { const a = pt(node, "start"), b = pt(node, "end"); if (a && b) { const [x0, y0, x1, y1] = corners(a, b); K.kid(node, "start")!.splice(1, 2, r6(x0), r6(y0)); K.kid(node, "end")!.splice(1, 2, r6(x1), r6(y1)); } }
@@ -247,4 +249,17 @@ export function packChanges(doc: BoardDoc, ids: string[], gap?: number) {
     out.push(...moveChanges(doc, [f.id], x - f.bbox[0], y - f.bbox[1])); x += w + gap!; rowH = Math.max(rowH, h);
   }
   return out;
+}
+
+/** A pad's own geometry mirrored left / right: drill offset, trapezoid delta and custom primitives, the angle negated. */
+export function padMirrorX(node: SNode) {
+  const dr = K.kid(node, "drill"); const off = dr && K.kid(dr, "offset"); if (off) off[1] = r6(-K.num(off[1]));
+  const rd = K.kid(node, "rect_delta"); if (rd) rd[2] = r6(-K.num(rd[2]));
+  const prims = K.kid(node, "primitives"); if (prims) for (const p of prims.slice(1)) if (isList(p)) mirrorShapeX(p);
+  setAngleKid(node, -angleKid(node));
+}
+/** The same, top / bottom: a left / right mirror turned half a turn. */
+export function padMirrorY(node: SNode) {
+  padMirrorX(node);   // its local geometry turns with it
+  setAngleKid(node, angleKid(node) + 180);
 }
