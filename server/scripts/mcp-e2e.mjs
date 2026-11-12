@@ -110,6 +110,9 @@ let clientId, tokens;
 
   const denied = await authorize(clientId, adaJwt, { decision: 'deny' });
   check('the consent page names the app and the account', /MCP e2e client/.test(denied.html) && /mcp-ada/.test(denied.html) && denied.offersWrite);
+  // The tick must travel with Allow: the checkbox has to belong to the form the button submits.
+  const formId = (denied.html.match(/<form[^>]*action="\/oauth\/authorize"[^>]*id="([^"]+)"/) || [])[1];
+  check('the make-changes checkbox is part of the consent form', !!formId && new RegExp(`<input[^>]*name="write"[^>]*form="${formId}"`).test(denied.html));
   check('Cancel returns access_denied with the state', denied.location.searchParams.get('error') === 'access_denied' && denied.location.searchParams.get('state') === denied.state);
   const replay = await fetch(`${BASE}/oauth/authorize`, { ...form({ request: denied.request, decision: 'allow', write: '1' }), headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: `kc_session=${adaJwt}` }, redirect: 'manual' });
   check('an answered consent cannot be answered again', replay.status === 400);

@@ -424,7 +424,7 @@ pub async fn authorize(
         })
         .unwrap_or_default();
     let choice = if write_asked {
-        r#"<label class="choice"><input type="checkbox" name="write" value="1" checked>
+        r#"<label class="choice"><input type="checkbox" name="write" value="1" form="consent" checked>
       <span><b>Let it make changes</b><small>Edit schematics and boards (everyone in the project sees the edits live and each one can be undone), add comments, create projects and checkpoints. Without this it can only read.</small></span></label>"#
     } else {
         ""
@@ -443,7 +443,7 @@ pub async fn authorize(
     <p class="muted">Only continue if you just asked to connect this app. You can disconnect it at any time under
        <b>Connected apps</b>.</p>
   </div>
-  <form method="post" action="/oauth/authorize" class="actions">
+  <form method="post" action="/oauth/authorize" class="actions" id="consent">
     <input type="hidden" name="request" value="{request}">
     <button type="submit" name="decision" value="deny" class="btn">Cancel</button>
     <button type="submit" name="decision" value="allow" class="btn primary">Allow</button>
