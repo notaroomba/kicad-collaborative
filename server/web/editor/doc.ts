@@ -13,7 +13,7 @@ import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
 import { activeModule, bindUndoDoc, renderModuleTools, toolCtx } from "./tools";
 import { api, toast } from "./util";
-import { fpEntryFor, fpParam, isFpPrivate, onFootprintOpened, privateText } from "./fpedit";
+import { fpEntryFor, fpParam, isFpPrivate, isFpReadOnlyLib, onFootprintOpened, privateText } from "./fpedit";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ItemSummary, SheetEntry, SvgLayer, WireChange } from "./types";
 import { applyView, base, canvas, cmtG, cmtPanel, dragG, fitView, isSch, overlay, peersG, requestRender, selG, stage, world } from "./view";
@@ -372,6 +372,7 @@ export async function openDoc(doc: DocEntry) {
   }
   setTimeout(fitView, 0);   // not rAF: a background tab would defer it indefinitely
   if (isFpPrivate()) setConn("", "private copy of a board footprint");   // nothing goes over the socket until Save
+  else if (isFpReadOnlyLib()) setConn("", "read-only library footprint");   // a global library's footprint: Save As makes a project copy
   else if (E.canJoin) connect().catch(() => setConn("err", "connection failed"));
   else setConn("", "sign in to collaborate");
 }

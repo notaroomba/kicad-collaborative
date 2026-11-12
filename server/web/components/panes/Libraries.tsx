@@ -1,7 +1,8 @@
 // Libraries.tsx — the Footprint Editor's library tree (FOOTPRINT_EDIT_FRAME's LIB_TREE, common/widgets/lib_tree.cpp):
-// a "Filter" box over the project's footprint libraries (every .pretty folder and every ${KIPRJMOD} row of
-// fp-lib-table) with their footprints.  A click opens the footprint; the open one is highlighted, and its library
-// opens by itself.  The model is web/editor/fpedit.ts (store slice fpLibs).
+// a "Filter" box over every footprint library: the project's (every .pretty folder and every ${KIPRJMOD} row of
+// fp-lib-table) and the global ones (read-only; their footprints load when the library opens).  A click opens the
+// footprint; the open one is highlighted, and its library opens by itself.  The context menus are
+// FOOTPRINT_EDITOR_CONTROL::Init's.  The model is web/editor/fpedit.ts (store slice fpLibs).
 import { useMemo, useState } from "react";
 import { useApp, type FpLibRow } from "../../store";
 import { cx } from "../../util";
@@ -18,20 +19,29 @@ export function LibrariesPane() {
     .filter((l) => !q || l.footprints.length || l.name.toLowerCase().includes(q)), [libs, q]);
   // a library is open when it holds the open footprint or the filter matched inside it; a click on its twist flips that
   const isOpen = (name: string, hasCurrent: boolean) => ((hasCurrent || !!q) ? !flipped.has(name) : flipped.has(name));
-  const toggle = (name: string) => { const n = new Set(flipped); if (n.has(name)) n.delete(name); else n.add(name); setFlipped(n); };
+  const toggle = (name: string) => {
+    const n = new Set(flipped); if (n.has(name)) n.delete(name); else n.add(name); setFlipped(n);
+    const l = libs.find((x) => x.name === name); if (l && !l.loaded) cmd({ cmd: "loadLib", lib: name });
+  };
   const [menu, setMenu] = useState<MenuAt | null>(null);
   const cmd = (detail: Record<string, string>) => window.dispatchEvent(new CustomEvent("kc-fpedit-lib", { detail }));
   // LIB_TREE's context menu (FOOTPRINT_EDITOR_CONTROL::Init): a footprint's and a library's
-  const fpMenu = (ev: React.MouseEvent, docId: string) => { ev.preventDefault(); setMenu({ x: ev.clientX, y: ev.clientY, items: [
-    { label: "Edit Footprint", run: () => open(docId) }, { label: "Rename Footprint...", run: () => cmd({ cmd: "rename", docId }) },
-    { label: "Delete Footprint from Library", run: () => cmd({ cmd: "delete", docId }) }] }); };
-  const libMenu = (ev: React.MouseEvent) => { ev.preventDefault(); setMenu({ x: ev.clientX, y: ev.clientY, items: [
-    { label: "New Footprint", run: () => cmd({ cmd: "new" }) }, { label: "New Library...", run: () => cmd({ cmd: "newLibrary" }) }] }); };
+  const fpMenu = (ev: React.MouseEvent, docId: string, lib: string) => { ev.preventDefault(); setMenu({ x: ev.clientX, y: ev.clientY, items: [
+    { label: "Save", run: () => cmd({ cmd: "save" }) }, { label: "Save As...", run: () => cmd({ cmd: "saveAs", docId }) }, { label: "Revert", run: () => cmd({ cmd: "revert" }) }, "-",
+    { label: "Cut", run: () => cmd({ cmd: "cut", docId }) }, { label: "Copy", run: () => cmd({ cmd: "copy", docId }) }, { label: "Paste", run: () => cmd({ cmd: "paste", lib }) },
+    { label: "Duplicate Footprint", run: () => cmd({ cmd: "duplicate", docId }) }, { label: "Rename Footprint...", run: () => cmd({ cmd: "rename", docId }) },
+    { label: "Delete Footprint from Library", run: () => cmd({ cmd: "delete", docId }) }, { label: "Footprint Properties...", run: () => cmd({ cmd: "properties", docId }) }, "-",
+    { label: "Import Footprint...", run: () => cmd({ cmd: "import", lib }) }, { label: "Export Current Footprint...", run: () => cmd({ cmd: "export" }) }] }); };
+  const libMenu = (ev: React.MouseEvent, lib: string) => { ev.preventDefault(); setMenu({ x: ev.clientX, y: ev.clientY, items: [
+    { label: "New Footprint...", run: () => cmd({ cmd: "new", lib }) }, { label: "Create Footprint...", run: () => cmd({ cmd: "create", lib }) }, "-",
+    { label: "Save", run: () => cmd({ cmd: "save" }) }, { label: "Save As...", run: () => cmd({ cmd: "saveAs", lib }) }, { label: "Revert", run: () => cmd({ cmd: "revert" }) }, "-",
+    { label: "Paste", run: () => cmd({ cmd: "paste", lib }) }, "-",
+    { label: "Import Footprint...", run: () => cmd({ cmd: "import", lib }) }, { label: "Export Current Footprint...", run: () => cmd({ cmd: "export" }) }] }); };
   const open = (docId: string) => window.dispatchEvent(new CustomEvent("kc-fpedit-pick", { detail: { docId } }));
   return (
     <div className="kbody flex flex-col min-h-0 flex-auto bg-paper text-sm">
       <div className="flex-none p-0.5">
-        <input id="fpLibFilter" type="search" placeholder="Filter" value={filter} spellCheck={false} onChange={(ev) => setFilter(ev.target.value)}
+        <input id="fpLibFilter" type="search" placeholder="Filter" value={filter} spellCheck={false} onChange={(ev) => { setFilter(ev.target.value); setFlipped(new Set()); }}
           className="w-full min-w-0 bg-panel border border-line rounded-xs py-0.5 px-1.5 text-ink text-sm" />
       </div>
       <div className="ktree overflow-auto min-h-0 flex-auto py-1" id="fpLibTree">
@@ -40,13 +50,13 @@ export function LibrariesPane() {
           const has = l.footprints.some((f) => f.docId === current); const o = isOpen(l.name, has);
           return (
             <div key={l.name}>
-              <div className="node flex items-center h-[20px] pr-1.5 cursor-default whitespace-nowrap hover:bg-panel font-semibold" style={{ paddingLeft: 4 }} data-lib={l.name} onDoubleClick={() => toggle(l.name)} onContextMenu={libMenu}>
-                <Twist open={o} leaf={!l.footprints.length} onToggle={() => toggle(l.name)} />
+              <div className="node flex items-center h-[20px] pr-1.5 cursor-default whitespace-nowrap hover:bg-panel font-semibold" style={{ paddingLeft: 4 }} data-lib={l.name} onDoubleClick={() => toggle(l.name)} onContextMenu={(ev) => libMenu(ev, l.name)} title={l.descr || l.name}>
+                <Twist open={o} leaf={!!l.loaded && !l.footprints.length} onToggle={() => toggle(l.name)} />
                 <span>{l.name}</span>
               </div>
               {o ? l.footprints.map((f) => (
                 <div key={f.docId} className={cx("node flex items-center h-[20px] pr-1.5 cursor-default whitespace-nowrap hover:bg-panel cur:bg-sel", f.docId === current && "cur")} style={{ paddingLeft: 4 + 14 }}
-                  data-fp={f.docId} title={l.name + ":" + f.name} onClick={() => open(f.docId)} onContextMenu={(ev) => fpMenu(ev, f.docId)}>
+                  data-fp={f.docId} title={l.name + ":" + f.name} onClick={() => open(f.docId)} onContextMenu={(ev) => fpMenu(ev, f.docId, l.name)}>
                   <Twist open={false} leaf onToggle={() => undefined} />
                   <span>{f.name}</span>
                 </div>

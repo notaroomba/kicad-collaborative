@@ -487,5 +487,22 @@ export function footprintNode(doc: Doc): SNode {
 export function headerKids(doc: Doc, key: string): SNode[] { const d = doc as FpDoc; return d.fpState ? kids(d.fpState.fp, key) : []; }
 
 /** What KiCadCanvas.footprintDoc publishes to the editor and the tools (one sexpr module: the quoting marks live there). */
-export const footprintDocApi = { serializeFootprintDoc, footprintModified, markFootprintSaved, footprintHeaderSexpr, footprintName, footprintFields, footprintNode,
+/** FOOTPRINT::GetDatasheet-or-description URL (FOOTPRINT_EDITOR_CONTROL::ShowDatasheet): the Datasheet field unless empty
+ * or "~", else the first http(s) URL in the description (ExtractUrl's rules: stops at a control char, a quote or an
+ * unbalanced ")"; a trailing ".,:;" dropped). */
+export function footprintDocUrl(fields: Record<string, string>, descr: string): string | null {
+  const ds = (fields.Datasheet || "").trim(); if (ds && ds !== "~") return ds;
+  let idx = descr.indexOf("http:"); if (idx < 0) idx = descr.indexOf("https:"); if (idx < 0) return null;
+  let url = "", nesting = 0;
+  for (const ch of descr.slice(idx)) {
+    const c = ch.charCodeAt(0);
+    if (c <= 0x20 || c >= 0x7f || ch === '"') break;
+    if (ch === "(") nesting++; else if (ch === ")" && --nesting < 0) break;
+    url += ch;
+  }
+  if (".,:;".includes(url.slice(-1))) url = url.slice(0, -1);
+  return url || null;
+}
+
+export const footprintDocApi = { footprintDocUrl, serializeFootprintDoc, footprintModified, markFootprintSaved, footprintHeaderSexpr, footprintName, footprintFields, footprintNode,
   toFileNode, toBoardNode, fpItemKind, fieldName, fieldText, isMandatoryField, cmpPads, cmpDrawings, strNumCmp, layerOrdinal, isOwnedFileNode, headerKids, derivedUuid, applyFootprintHeader, prettify, FP_EDITOR_LAYERS, FP_TO_BOARD, BOARD_TO_FP };

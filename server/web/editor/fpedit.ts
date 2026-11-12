@@ -35,15 +35,20 @@ const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 const NEW_FILE_VERSION = 20260728;
 
 interface BoardCopy { boardDocId: string; fpUuid: string; uuidMap: Record<string, string>; link: string; reference: string; boardPath: string; text: string }
-export const FP: { board: BoardCopy | null; snapSeq: number; title: string; timer: number; padEdit: string | null; framed: boolean } = { board: null, snapSeq: 0, title: "", timer: 0, padEdit: null, framed: false };
+/** A footprint of a library outside the project (the official libraries): read-only, opened as a private copy. */
+interface LibCopy { lib: string; name: string; text: string }
+export const FP: { board: BoardCopy | null; lib: LibCopy | null; snapSeq: number; title: string; timer: number; padEdit: string | null; framed: boolean } = { board: null, lib: null, snapSeq: 0, title: "", timer: 0, padEdit: null, framed: false };
 
 export const isFpEdit = (): boolean => E.DOC_TYPE === "footprint";
 /** The open footprint is a private copy of a board footprint (nothing goes over the socket until Save). */
 export const isFpPrivate = (): boolean => isFpEdit() && !!state.docId && state.docId.startsWith("board:");
+/** The open footprint comes from a read-only library outside the project (nothing goes over the socket). */
+export const isFpReadOnlyLib = (): boolean => isFpEdit() && !!state.docId && state.docId.startsWith("lib:");
+export const libCopyId = (lib: string, name: string) => `lib:${lib}:${name}`;
 export const boardCopyId = (boardDocId: string, fpUuid: string) => `board:${boardDocId}:${fpUuid}`;
 
 // ---------------------------------------------------------------- libraries of the project
-export interface FpLib { name: string; uri: string; footprints: { name: string; docId: string; path: string }[] }
+export interface FpLib { name: string; uri: string; footprints: { name: string; docId: string; path: string }[]; descr?: string; readOnly?: boolean; loaded?: boolean }
 /** "Lib:Name" of a footprint document: its .pretty folder is the library, the file name the footprint. */
 export function fpLibIdOf(path: string): { lib: string; name: string } {
   const parts = path.split("/"); const file = parts.pop() || ""; const dir = parts.pop() || "";
@@ -78,7 +83,43 @@ export function projectFpLibs(): FpLib[] {
 /** The folder a library's footprints are written to (its fp-lib-table uri under ${KIPRJMOD}). */
 function libFolder(lib: FpLib): string { return lib.uri.replace(/^\$\{KIPRJMOD\}\/?/, "") || lib.name + ".pretty"; }
 /** Publish the library list to the chrome (the Libraries pane). */
-export function publishLibs(): void { store.set({ fpLibs: { libs: projectFpLibs(), current: state.docId || null, version: Date.now() } }); }
+export function publishLibs(): void { store.set({ fpLibs: { libs: treeLibs(), current: state.docId || null, version: Date.now() } }); }
+
+// ---------------------------------------------------------------- the libraries outside the project
+/** The global (official) footprint libraries: GET /api/libs/footprints, each library's footprints on demand. */
+const official: { list: { name: string; descr: string }[] | null; fps: Map<string, string[]>; loading: boolean } = { list: null, fps: new Map(), loading: false };
+async function loadOfficialLibs(): Promise<void> {
+  if (official.list || official.loading) return; official.loading = true;
+  try {
+    const r = await fetch("/api/libs/footprints", { credentials: "same-origin", headers: { accept: "application/json" } });
+    const j = r.ok && /json/.test(r.headers.get("content-type") || "") ? await r.json() as { libraries?: { name: string; description?: string }[] } : null;
+    official.list = j && Array.isArray(j.libraries) ? j.libraries.filter((l) => l && typeof l.name === "string").map((l) => ({ name: l.name, descr: l.description || "" })) : [];
+  } catch { official.list = []; }
+  official.loading = false; publishLibs();
+}
+async function loadOfficialLib(lib: string): Promise<void> {
+  if (official.fps.has(lib)) return;
+  official.fps.set(lib, []);
+  try {
+    const r = await fetch(`/api/libs/footprints/${encodeURIComponent(lib)}`, { credentials: "same-origin", headers: { accept: "application/json" } });
+    const j = r.ok ? await r.json() as { footprints?: { n: string }[] } : null;
+    official.fps.set(lib, j && Array.isArray(j.footprints) ? j.footprints.map((f) => f.n).filter(Boolean) : []);
+  } catch { official.fps.delete(lib); }
+  publishLibs();
+}
+/** FOOTPRINT_EDIT_FRAME's library tree: every library of the project and the global ones, by StrNumCmp. */
+export function treeLibs(): FpLib[] {
+  const out = projectFpLibs().map((l) => Object.assign({}, l, { descr: (libTableCache ? libTableCache.rows : []).find((r) => r.name === l.name)?.descr || "", loaded: true }));
+  const have = new Set(out.map((l) => l.name));
+  for (const g of official.list || []) {
+    if (have.has(g.name)) continue;
+    const names = official.fps.get(g.name);
+    out.push({ name: g.name, uri: "${KICAD10_FOOTPRINT_DIR}/" + g.name + ".pretty", descr: g.descr, readOnly: true, loaded: !!names,
+      footprints: (names || []).map((n) => ({ name: n, docId: libCopyId(g.name, n), path: g.name + ".pretty/" + n + ".kicad_mod" })) });
+  }
+  const cmp = PT() && PT().pad ? PT().pad.strNumCmp : (a: string, b: string) => a.localeCompare(b);
+  return out.sort((a, b) => cmp(a.name, b.name));
+}
 
 // ---------------------------------------------------------------- opening
 /** The ?fp= value of the address bar. */
@@ -112,11 +153,31 @@ export async function fpEntryFor(info: ProjectInfo, param: string): Promise<DocE
     return { docId: boardCopyId(b, u), path: copy.reference + " [" + copy.boardPath + "]", docType: "footprint" };
   }
   FP.board = null;
+  if (param.startsWith("lib:")) {
+    const rest = param.slice(4); const i = rest.indexOf(":"); const lib = rest.slice(0, i), name = rest.slice(i + 1);
+    const text = await fetchLibFootprint(lib, name);
+    if (!text) { toast(`Footprint '${name}' not found in library '${lib}'.`, 4000); return null; }
+    FP.lib = { lib, name, text };
+    return { docId: libCopyId(lib, name), path: lib + ".pretty/" + name + ".kicad_mod", docType: "footprint" };
+  }
+  FP.lib = null;
   return info.docs.find((d) => d.docId === param && d.docType === "footprint") || null;
+}
+/** A footprint of a global library, as KiCad's library writes it. */
+async function fetchLibFootprint(lib: string, name: string): Promise<string | null> {
+  try {
+    const r = await fetch(`/api/libs/footprints/${encodeURIComponent(lib)}/${encodeURIComponent(name)}`, { credentials: "same-origin", headers: { accept: "application/json" } });
+    if (!r.ok) return null; const j = await r.json() as { footprint?: string };
+    return j && typeof j.footprint === "string" ? j.footprint : null;
+  } catch { return null; }
 }
 
 /** openDoc: the text of a private board copy (null for a document the server holds). */
-export function privateText(doc: DocEntry): string | null { return doc.docType === "footprint" && doc.docId.startsWith("board:") && FP.board && boardCopyId(FP.board.boardDocId, FP.board.fpUuid) === doc.docId ? FP.board.text : null; }
+export function privateText(doc: DocEntry): string | null {
+  if (doc.docType !== "footprint") return null;
+  if (doc.docId.startsWith("lib:")) return FP.lib && libCopyId(FP.lib.lib, FP.lib.name) === doc.docId ? FP.lib.text : null;
+  return doc.docId.startsWith("board:") && FP.board && boardCopyId(FP.board.boardDocId, FP.board.fpUuid) === doc.docId ? FP.board.text : null;
+}
 
 /** After the text loaded: the snapshot seq it came from, the title, the pad dialog for pads, the libraries. */
 export function onFootprintOpened(snapSeq: number): void {
@@ -131,6 +192,9 @@ export function onFootprintOpened(snapSeq: number): void {
   }
   hookPadDialog();
   libTableRows().then(publishLibs).catch(() => publishLibs());
+  void loadOfficialLibs();
+  // FOOTPRINT_EDIT_FRAME::UpdateMsgPanel's infobar: a footprint of a library that cannot be written
+  if (isFpReadOnlyLib()) toast("Library is read-only.  Changes cannot be saved to this library.", 8000);
   refreshTitle();
   clearInterval(FP.timer);
   FP.timer = window.setInterval(() => { if (!isFpEdit()) { clearInterval(FP.timer); FP.timer = 0; document.title = FP.title = ""; return; } refreshTitle(); }, 700);
@@ -179,6 +243,11 @@ export async function saveFootprint(): Promise<boolean> {
   // PAD_TOOL::InPadEditMode: the pad is recombined first (PCB_ACTIONS::recombinePad), so the file holds the custom pad
   if (FP.padEdit && !E.viewOnly) exitPadEditMode();
   if (isFpPrivate()) return saveToBoard();
+  if (isFpReadOnlyLib() && FP.lib) {
+    // SaveFootprintInLibrary into a library that cannot be written
+    messageBox("Error", `Footprint '${FD().footprintName(E.kdoc)}' could not be saved to library '${FP.lib.lib}'.`, [{ label: "OK" }]);
+    return false;
+  }
   if (E.viewOnly) { toast("You can view this project but not change it"); return false; }
   const text = FD().serializeFootprintDoc(E.kdoc);
   await waitPending(4000);
@@ -232,6 +301,7 @@ export async function revertFootprint(): Promise<void> {
   if (!(await confirmBox("Confirmation", msg + "\n\nYour current changes will be permanently lost.", "Revert"))) return;
   let text: string | null = null;
   if (isFpPrivate() && FP.board) text = FP.board.text;
+  else if (isFpReadOnlyLib() && FP.lib) text = FP.lib.text;
   else { try { const r = await fetch(`/api/docs/${state.docId}/content?v=${Date.now()}`, { credentials: "same-origin" }); if (r.ok) text = await r.text(); } catch { /* below */ } }
   if (!text) { toast("The saved footprint could not be read"); return; }
   const ch = changesTo(text); if (!ch.length) return;
@@ -467,15 +537,22 @@ async function newLibrary(): Promise<string | null> {
   if (!nick || /[\\/:"*?<>|]/.test(nick)) { toast("Library name contains illegal characters", 4000); return null; }
   const rows = await libTableRows(true);
   if (rows.some((r) => r.name === nick) || projectFpLibs().some((l) => l.name === nick)) { toast(`Library '${nick}' already exists.`, 4000); return null; }
+  if (!(await newLibraryRow(nick, "${KIPRJMOD}/" + nick + ".pretty"))) return null;
+  setStatusBar({ message: `Library '${nick}' added to the project library table` });
+  return nick;
+}
+/** A (lib …) row appended to the project's fp-lib-table (the table made when there is none). */
+async function newLibraryRow(nick: string, uri: string): Promise<boolean> {
+  if (!state.project) return false;
   let d = libTableDoc(); let text = "";
   if (d) { try { const live = await liveDocument(d.docId); text = live.file; } catch { const r = await fetch(`/api/docs/${d.docId}/content?v=${Date.now()}`, { credentials: "same-origin" }); text = r.ok ? await r.text() : ""; } }
   else {
     const res = await api(`/api/projects/${state.project.projectId}/docs`, { method: "POST", body: JSON.stringify({ path: "fp-lib-table" }) }) as { docId?: string; path?: string; docType?: string };
-    if (!res.docId) { toast("The library table could not be created"); return null; }
+    if (!res.docId) { toast("The library table could not be created"); return false; }
     d = { docId: res.docId, path: res.path || "fp-lib-table", docType: res.docType || "lib_table" }; state.project.docs.push(d);
   }
   // FP_LIB_TABLE::Format through Prettify's library-table mode: one row per line, the existing rows untouched
-  const row = `(lib (name ${JSON.stringify(nick)}) (type "KiCad") (uri ${JSON.stringify("${KIPRJMOD}/" + nick + ".pretty")}) (options "") (descr ""))`;
+  const row = `(lib (name ${JSON.stringify(nick)}) (type "KiCad") (uri ${JSON.stringify(uri)}) (options "") (descr ""))`;
   let out: string;
   if (text.trim()) {
     const at = text.lastIndexOf(")"); const m = /\n([ \t]*)\(lib /.exec(text); const indent = m ? m[1] : "\t";
@@ -484,10 +561,9 @@ async function newLibrary(): Promise<string | null> {
   // a new table has no snapshot to join yet: its first content is snapshot 0
   const ok = text.trim() ? await saveTextDocument(d.docId, out, { id: "table", kind: "MODIFIED", typeName: "LIB_TABLE_FILE", properties: [{ name: "text", after: { type: "string", v: out } }] })
     : (await fetch(`/api/docs/${d.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: out })).ok;
-  if (!ok) { toast("The library table could not be saved", 4000); return null; }
+  if (!ok) { toast("The library table could not be saved", 4000); return false; }
   libTableCache = { docId: d.docId, rows: parseLibTable(out) }; publishLibs();
-  setStatusBar({ message: `Library '${nick}' added to the project library table` });
-  return nick;
+  return true;
 }
 
 /** FOOTPRINT_EDIT_FRAME::DeleteFootprintFromLibrary: the document goes (DELETE /api/docs/{id}) after a themed confirmation. */
@@ -528,14 +604,152 @@ async function renameFootprint(docId: string): Promise<void> {
   }
   publishLibs();
 }
-/** The Libraries pane's context menu. */
+// ---------------------------------------------------------------- the library tree's commands (FOOTPRINT_EDITOR_CONTROL)
+/** The text of a footprint the tree names: the open one as it is now, a project document, or a global library's. */
+async function footprintTextOf(docId: string): Promise<string | null> {
+  if (docId === state.docId && E.kdoc) return FD().serializeFootprintDoc(E.kdoc);
+  if (docId.startsWith("lib:")) { const rest = docId.slice(4); const i = rest.indexOf(":"); return fetchLibFootprint(rest.slice(0, i), rest.slice(i + 1)); }
+  try { const live = await liveDocument(docId); if (!live.ops.length) return live.file; const fd = KiCadCanvas.parseDoc(live.file, "footprint"); for (const op of live.ops) for (const c of op.changes || []) { try { KiCadCanvas.applyChange(fd, c, 1e6); } catch { /* skipped */ } } return FD().serializeFootprintDoc(fd); }
+  catch { const r = await fetch(`/api/docs/${docId}/content?v=${Date.now()}`, { credentials: "same-origin" }).catch(() => null); return r && r.ok ? r.text() : null; }
+}
+/** FOOTPRINT_EDITOR_CONTROL::m_copiedFootprint. */
+let copiedFootprint: { name: string; text: string } | null = null;
+const readOnlyError = (lib: string) => messageBox("Error", `Library '${lib}' is read only.`, [{ label: "OK" }]);
+/** CutCopyFootprint. */
+async function cutCopyFootprint(docId: string, cut: boolean): Promise<void> {
+  const text = await footprintTextOf(docId); if (!text) return;
+  const t = KiCadCanvas.parse(text); copiedFootprint = { name: t ? str(t[1]).split(":").pop() || "" : "", text };
+  if (cut) { if (docId.startsWith("lib:")) { readOnlyError(docId.slice(4).split(":")[0]); return; } await deleteFootprintDoc(docId, false); }
+}
+/** PasteFootprint: into the library the tree has selected, "_copy" appended until the name is free. */
+async function pasteFootprint(libName: string): Promise<void> {
+  if (!copiedFootprint || !libName) return;
+  const lib = projectFpLibs().find((l) => l.name === libName); if (!lib) { readOnlyError(libName); return; }
+  let name = copiedFootprint.name; while (lib.footprints.some((f) => f.name === name)) name += "_copy";
+  const t = KiCadCanvas.parse(copiedFootprint.text)!; t[1] = name;
+  const d = await createFootprintDoc(lib, name, FD().prettify(KiCadCanvas.serialize(t))); if (!d) return;
+  publishLibs(); openFootprintDoc(d.docId);
+}
+/** DuplicateFootprint: "<name>_<n>" in the same library. */
+async function duplicateFootprint(docId: string): Promise<void> {
+  const libName = docId.startsWith("lib:") ? docId.slice(4).split(":")[0] : fpLibIdOf((state.project && state.project.docs.find((d) => d.docId === docId) || { path: "" }).path).lib;
+  const lib = projectFpLibs().find((l) => l.name === libName); if (!lib) { readOnlyError(libName); return; }
+  const text = await footprintTextOf(docId); if (!text) return;
+  const t = KiCadCanvas.parse(text)!; const base = str(t[1]).split(":").pop() || "footprint";
+  let name = base, i = 1; while (lib.footprints.some((f) => f.name === name)) name = `${base}_${i++}`;
+  t[1] = name;
+  const d = await createFootprintDoc(lib, name, FD().prettify(KiCadCanvas.serialize(t))); if (!d) return;
+  publishLibs(); openFootprintDoc(d.docId);
+}
+/** A tree command on a footprint other than the open one first loads it (LoadFootprintFromLibrary), then runs. */
+async function onOpenFootprint(docId: string, then: () => void): Promise<void> {
+  if (docId === state.docId) { then(); return; }
+  openFootprintDoc(docId);
+  const t0 = Date.now(); while (Date.now() - t0 < 8000 && (state.docId !== docId || !E.kdoc || !E.kdoc.fpEditor)) await new Promise((r) => setTimeout(r, 100));
+  if (state.docId === docId) then();
+}
+/** The Libraries pane's context menu (FOOTPRINT_EDITOR_CONTROL::Init's ctxMenu) and the tree's lazy loading. */
 window.addEventListener("kc-fpedit-lib", ((ev: CustomEvent) => {
   const m = ev.detail || {}; if (!isFpEdit()) return;
-  if (m.cmd === "delete" && m.docId) deleteFootprint(m.docId);
-  else if (m.cmd === "rename" && m.docId) renameFootprint(m.docId);
-  else if (m.cmd === "new") newFootprint();
-  else if (m.cmd === "newLibrary") newLibrary();
+  const id = m.docId as string | undefined; const ro = !!(id && id.startsWith("lib:"));
+  switch (m.cmd) {
+  case "loadLib": if (m.lib) void loadOfficialLib(m.lib); break;
+  case "delete": if (id) { if (ro) readOnlyError(id.slice(4).split(":")[0]); else void deleteFootprint(id); } break;
+  case "rename": if (id) { if (ro) readOnlyError(id.slice(4).split(":")[0]); else void renameFootprint(id); } break;
+  case "new": if (m.lib && !projectFpLibs().some((l) => l.name === m.lib)) readOnlyError(m.lib); else void newFootprint(); break;
+  case "create": runHandler("createFootprint"); break;
+  case "newLibrary": void newLibrary(); break;
+  case "save": void saveFootprint(); break;
+  case "saveAs": if (id) void onOpenFootprint(id, () => void saveAs()); else void saveAs(m.lib); break;
+  case "revert": void revertFootprint(); break;
+  case "cut": if (id) void cutCopyFootprint(id, true); break;
+  case "copy": if (id) void cutCopyFootprint(id, false); break;
+  case "paste": if (m.lib) void pasteFootprint(m.lib); break;
+  case "duplicate": if (id) void duplicateFootprint(id); break;
+  case "properties": if (id) void onOpenFootprint(id, footprintProperties); break;
+  case "import": importFootprint(); break;
+  case "export": exportFootprint(); break;
+  default: break;
+  }
 }) as EventListener);
+function runHandler(id: string): void { const h = handlersRef && handlersRef[id]; if (h) h(null); }
+
+// ---------------------------------------------------------------- Inspect / Tools / File entries
+/** GetFootprintDocumentationURL: the Datasheet field, else the first http(s) link of the description. */
+export function footprintDocUrl(fields: Record<string, string>, descr: string): string | null { return FD().footprintDocUrl(fields, descr); }
+/** FOOTPRINT_EDITOR_CONTROL::ShowDatasheet. */
+function showDatasheet(): void {
+  if (!E.kdoc) return;
+  const d = KiCadCanvas.footprintDoc.headerKids(E.kdoc, "descr")[0]; const url = footprintDocUrl(FD().footprintFields(E.kdoc), d ? str(d[1]) : "");
+  if (!url) { toast("No datasheet found in the footprint.", 4000); return; }
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) { toast(`Unable to open '${url}': only absolute URLs open from the web editor.`, 4000); return; }
+  window.open(url, "_blank", "noopener");
+}
+/** BOARD_INSPECTION_TOOL's showDatasheet on the board: the selected footprint's. */
+function boardDatasheet(): void {
+  if (!E.kdoc || isFpEdit()) return;
+  let it: KItem | null = E.selected ? E.kdoc.items.get(E.selected.id) || null : null;
+  if (!it) for (const id of E.selection) { const x = E.kdoc.items.get(id); if (x && x.kind === "footprint") { it = x; break; } }
+  if (!it || it.kind !== "footprint") return;
+  const fields: Record<string, string> = {}; for (const p of KiCadCanvas.kids(it.node, "property")) fields[str(p[1])] = str(p[2]);
+  const d = KiCadCanvas.kid(it.node, "descr"); const url = footprintDocUrl(fields, d ? str(d[1]) : "");
+  if (!url) { toast("No datasheet defined.", 3500); return; }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) window.open(url, "_blank", "noopener"); else toast(`Unable to open '${url}'.`, 3500);
+}
+/** FOOTPRINT_EDITOR_CONTROL::EditLibraryFootprint: the board copy's library footprint (by its FPID). */
+async function editLibraryFootprint(): Promise<void> {
+  if (!isFpPrivate() || !FP.board || !E.kdoc) return;
+  const project = state.project; if (!project) return;
+  // the board footprint's library id ("Lib:Name")
+  let fpid = "";
+  try { const live = await liveDocument(FP.board.boardDocId); const bd = KiCadCanvas.parseDoc(live.file, "kicad_pcb"); for (const op of live.ops) for (const c of op.changes || []) { try { KiCadCanvas.applyChange(bd, c, 1e6); } catch { /* skip */ } } const it = bd.items.get(FP.board.fpUuid); fpid = it ? str(it.node[1]) : ""; } catch { /* below */ }
+  const i = fpid.indexOf(":"); const lib = i >= 0 ? fpid.slice(0, i) : "", name = i >= 0 ? fpid.slice(i + 1) : fpid;
+  await libTableRows(); await loadOfficialLibs();
+  const own = projectFpLibs().find((l) => l.name === lib); const f = own && own.footprints.find((x) => x.name === name);
+  if (f) { openFootprintDoc(f.docId); showPane("libtree"); return; }
+  if (lib && (official.list || []).some((l) => l.name === lib)) { openFootprintDoc(libCopyId(lib, name)); showPane("libtree"); return; }
+  toast(`Footprint '${fpid || name}' not found.`, 4000);
+}
+/** ACTIONS::addLibrary: an existing .pretty folder of the project into fp-lib-table. */
+async function addLibrary(): Promise<void> {
+  if (E.viewOnly || !state.project) { toast("You can view this project but not change it"); return; }
+  const rows = await libTableRows(true); const inTable = new Set(rows.map((r) => r.name));
+  const folders = new Map<string, string>();
+  for (const d of state.project.docs) { if (d.docType !== "footprint") continue; const dir = d.path.split("/").slice(0, -1).join("/"); const nick = (dir.split("/").pop() || "").replace(/\.pretty$/i, ""); if (nick && /\.pretty$/i.test(dir) && !inTable.has(nick)) folders.set(nick, dir); }
+  if (!folders.size) { toast("Every footprint library of the project is already in the library table.", 4000); return; }
+  listDialog("Add Library", ["Library", "Path"], Array.from(folders.entries()).map(([n, d]) => [n, "${KIPRJMOD}/" + d]), (row) => { void addLibraryRow(row[0], folders.get(row[0])!); }, { listLabel: "Libraries:", width: 520 });
+}
+async function addLibraryRow(nick: string, dir: string): Promise<void> {
+  const ok = await newLibraryRow(nick, "${KIPRJMOD}/" + dir);
+  if (ok) setStatusBar({ message: `Library '${nick}' added to the project library table` });
+}
+/** FOOTPRINT_EDITOR_CONTROL::RepairFootprint: duplicate ids replaced (the footprint's own first, then pads, fields, graphics, zones, groups). */
+export function repairChanges(doc: KDoc): { changes: KChange[]; duplicates: number } {
+  const ids = new Set<string>(); const out: KChange[] = []; let duplicates = 0;
+  const own = FD().headerKids(doc, "uuid")[0]; if (own) ids.add(str(own[1]));
+  const order = (k: string) => (k === "pad" ? 0 : k === "property" ? 1 : k === "zone" ? 3 : k === "group" ? 4 : 2);
+  const items = Array.from(doc.items.values()).sort((a, b) => order(a.kind) - order(b.kind));
+  for (const it of items) {
+    const u = KiCadCanvas.kid(it.node, "uuid") || KiCadCanvas.kid(it.node, "tstamp"); const cur = u ? str(u[1]) : it.id;
+    if (!ids.has(cur)) { ids.add(cur); continue; }
+    duplicates++;
+    // BOARD_ITEM::ResetUuid: a fresh id (the item's own key when that one is still free)
+    const fresh = ids.has(it.id) ? KiCadCanvas.newUuid() : it.id; ids.add(fresh);
+    const n = KiCadCanvas.cloneNode(it.node); const nu = KiCadCanvas.kid(n, "uuid") || KiCadCanvas.kid(n, "tstamp");
+    if (nu) { nu[0] = "uuid"; nu[1] = fresh; } else n.push(["uuid", fresh]);
+    if (fresh === it.id) out.push(PT().replacedChange(it, n));
+    else { out.push(PT().removedChange(it)); out.push({ id: fresh, kind: "ADDED", typeName: PT().typeNameOf(it), sexpr: PT().wrapBoard(n) }); }
+  }
+  return { changes: out, duplicates };
+}
+function repairFootprint(): void {
+  if (!E.kdoc) return;
+  const r = repairChanges(E.kdoc);
+  if (r.duplicates) {
+    if (!E.viewOnly && r.changes.length) toolCtx().commit(r.changes, "Repair Footprint");
+    messageBox("Info", `${r.duplicates} potential problems repaired.\n\n${r.duplicates} duplicate IDs replaced.`, [{ label: "OK" }]);
+  } else messageBox("Info", "No footprint problems found.", [{ label: "OK" }]);
+}
 
 // ---------------------------------------------------------------- properties, pads, anchor
 /** DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR (pcbdialogs/fp-editor.ts): every page; a rename onto an existing footprint asks to overwrite it. */
@@ -707,8 +921,9 @@ function editFpInFpEditor(): void {
 /** FOOTPRINT_EDIT_FRAME::OnCloseWindow: leaving a modified footprint asks first (themed, never the browser's). */
 export async function canLeaveFootprint(): Promise<boolean> {
   if (!isFpEdit() || !E.kdoc || !FD().footprintModified(E.kdoc)) return true;
-  if (!isFpPrivate()) return true;   // a library footprint's edits are already in its document for everyone; only Save makes the snapshot
-  return confirmBox("Footprint Editor", `Save changes to '${FP.board ? FP.board.reference : ""}' before closing?`, "Discard Changes");
+  if (!isFpPrivate() && !isFpReadOnlyLib()) return true;   // a library footprint's edits are already in its document for everyone; only Save makes the snapshot
+  const what = isFpReadOnlyLib() && FP.lib ? FP.lib.name : FP.board ? FP.board.reference : "";
+  return confirmBox("Footprint Editor", `Save changes to '${what}' before closing?`, "Discard Changes");
 }
 
 // ---------------------------------------------------------------- the handlers
@@ -718,7 +933,7 @@ let installed = false;
 let handlersRef: Record<string, ActionHandler> | null = null;
 export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): void {
   if (installed) return; installed = true; handlersRef = HANDLERS;
-  const prevSave = HANDLERS.save; const prevRevert = HANDLERS.revert;
+  const prevSave = HANDLERS.save; const prevRevert = HANDLERS.revert; const prevDatasheet = HANDLERS.showDatasheet;
   Object.assign(HANDLERS, {
   save: ((a) => { if (isFpEdit()) { saveFootprint(); return; } prevSave(a); }) as ActionHandler,
   revert: ((a) => { if (isFpEdit()) { revertFootprint(); return; } if (prevRevert) prevRevert(a); }) as ActionHandler,
@@ -729,6 +944,9 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   setAnchor: fpOnly(() => setTool("anchor")),
   showLibraryTree: fpOnly(() => showPane("libtree")),
   editFpInFpEditor: () => { if (!isFpEdit()) editFpInFpEditor(); },
+  showDatasheet: ((a) => { if (isFpEdit()) { showDatasheet(); return; } if (prevDatasheet) { prevDatasheet(a); return; } boardDatasheet(); }) as ActionHandler,
+  editLibFpInFpEditor: fpOnly(() => { if (isFpPrivate()) void editLibraryFootprint(); }),
+  addLibrary: fpOnly(addLibrary), repairFootprint: fpOnly(repairFootprint),
   deleteFootprint: fpOnly(() => { if (state.docId && !isFpPrivate()) deleteFootprint(state.docId); }),
   renameFootprint: fpOnly(() => { if (state.docId && !isFpPrivate()) renameFootprint(state.docId); }),
   } as Record<string, ActionHandler>);
@@ -738,11 +956,15 @@ window.addEventListener("kc-fpedit-pick", ((ev: CustomEvent) => { const id = ev.
 /** The Libraries pane's click (and New Footprint / Save As) opens a footprint in place. */
 window.addEventListener("kc-fpedit-open", ((ev: CustomEvent) => {
   const docId = ev.detail && ev.detail.docId; if (!docId || !state.project) return;
+  if (String(docId).startsWith("lib:")) {
+    void (async () => { if (!(await canLeaveFootprint())) return; const d = await fpEntryFor(state.project!, docId); if (d) { const m = await import("./doc"); await m.openDoc(d); publishLibs(); } })();
+    return;
+  }
   const d = state.project.docs.find((x) => x.docId === docId); if (!d) return;
   import("./doc").then((m) => m.openDoc(d)).catch((e) => console.warn(e));
 }) as EventListener);
 
-export const fpEditApi = { doc: () => E.kdoc, ctx: () => toolCtx(), commit: (changes: KChange[], label?: string) => toolCtx().commit(changes, label), isFpEdit, isFpPrivate, saveFootprint, revertFootprint, saveToBoard, newFootprintText, parseLibTable, projectFpLibs, fpLibIdOf, exchangeChange, refreshTitle, FP,
+export const fpEditApi = { footprintDocUrl, repairChanges, treeLibs, doc: () => E.kdoc, ctx: () => toolCtx(), commit: (changes: KChange[], label?: string) => toolCtx().commit(changes, label), isFpEdit, isFpPrivate, saveFootprint, revertFootprint, saveToBoard, newFootprintText, parseLibTable, projectFpLibs, fpLibIdOf, exchangeChange, refreshTitle, FP,
   /** Run an editor action by id (as a menu item does). */
   undoLabels: () => undoStack.map((e) => e.label),
   action: (id: string) => { const h = handlersRef && handlersRef[id]; if (h) h(null); return !!h; } };

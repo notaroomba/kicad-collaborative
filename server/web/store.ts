@@ -161,7 +161,11 @@ export interface CtxItem {
 export interface ContextMenuState { id: number; x: number; y: number; title?: string; items: CtxItem[] }
 
 /** A footprint library of the project as the Libraries pane lists it. */
-export interface FpLibRow { name: string; uri: string; footprints: { name: string; docId: string; path: string }[] }
+export interface FpLibRow {
+  name: string; uri: string; footprints: { name: string; docId: string; path: string }[];
+  /** fp-lib-table description; a library outside the project (the official ones) is read-only and its footprints load on expand */
+  descr?: string; readOnly?: boolean; loaded?: boolean;
+}
 export interface AppState {
   view: "home" | "editor";
   /** which page of the home view is showing, and a counter bumped on every visit (web/home) */

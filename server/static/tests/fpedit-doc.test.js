@@ -228,5 +228,13 @@ test("edited footprints are written in KiCad's order: drawings by cmp_drawings, 
   assert.ok(F.strNumCmp("10", "9") > 0 && F.strNumCmp("A2", "a10") < 0);
 });
 
+test("Show Datasheet: the Datasheet field, else the first URL of the description (ExtractUrl)", () => {
+  assert.strictEqual(F.footprintDocUrl({ Datasheet: "https://x.example/a.pdf" }, "see http://other"), "https://x.example/a.pdf");
+  assert.strictEqual(F.footprintDocUrl({ Datasheet: "~" }, "Resistor SMD 0603, (Body size source: http://www.tortai-tech.com/upload/download/2011102023233369053.pdf), generated"),
+    "http://www.tortai-tech.com/upload/download/2011102023233369053.pdf");
+  assert.strictEqual(F.footprintDocUrl({}, "QFN (see https://a.example/p(1).pdf)."), "https://a.example/p(1).pdf");
+  assert.strictEqual(F.footprintDocUrl({ Datasheet: "" }, "no link here"), null);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

@@ -267,7 +267,7 @@ export function noteRemoteOp(msg: { changes?: KChange[] }) {
  */
 export function sendOp(changes: KChange[], transient?: boolean) {
   if (historyActive()) { if (!transient) toast("This is an earlier version. Leave the timeline to edit."); return; }
-  if (state.docId && state.docId.startsWith("board:")) { E.editsSeen++; bumpEdits(); return; }   // a board footprint's private copy (editor/fpedit.ts)
+  if (state.docId && (state.docId.startsWith("board:") || state.docId.startsWith("lib:"))) { E.editsSeen++; bumpEdits(); return; }   // a board footprint's private copy (editor/fpedit.ts)
   const clientOpId = `web:${++E.opN}`;
   // Journal first, send second.  Anything still here when the socket comes back is replayed,
   // so an edit made during a blip (or before the join lands) survives instead of being wiped
