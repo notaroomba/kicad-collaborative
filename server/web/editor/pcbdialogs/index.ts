@@ -8,6 +8,8 @@ import { clearDrcMarkers, drcReport, openBoardStatistics, openClearance, openDrc
 import { newTextDialog, newZoneDialog, pcbItemDialog } from "./item-props";
 import { padPropertiesDialog } from "./pad-props";
 import { openUpdatePcb, projectNetlist } from "./update-pcb";
+import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
+import { commitObservers, toolCtx } from "../tools";
 
 type Run = (ctx: ToolCtx) => void | boolean;
 function action(id: string, label: string, key: string, run: Run): void {
@@ -32,5 +34,10 @@ export function installPcbDialogs(): void {
   action("showNetInspector", "Net Inspector", "", openNetInspector);
   action("boardStatistics", "Board Statistics", "", openBoardStatistics);
   action("inspectClearance", "Clearance Resolution", "", openClearance);
+  // ZONE_FILLER_TOOL: the browser's own filler (web/fab/zonefill.ts)
+  action("zoneFillAll", "Fill All Zones", "B", zoneFillAll);
+  action("zoneFill", "Draft Fill Selected Zone(s)", "", zoneFillSelected);
+  (window as unknown as { PcbZoneFill: unknown }).PcbZoneFill = { fillAll: zoneFillAll, fillSelected: zoneFillSelected, run: runZoneFill };
+  commitObservers.push((phase, changes, label) => noteCommit(phase, changes as KChange[], label, () => toolCtx({}) as ToolCtx));
 }
 installPcbDialogs();

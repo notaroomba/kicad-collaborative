@@ -205,6 +205,7 @@ export interface Track {
   arc: { cx: number; cy: number; r: number; a0: number; a1: number; acw: boolean } | null;
   /** the mask layer a track is opened on ((layers "F.Cu" "F.Mask")) and its margin */
   maskLayer: string | null; maskMargin: number | null;
+  net?: string;
 }
 export interface Via {
   x: number; y: number; size: number; drill: number;
@@ -231,14 +232,14 @@ function netName(node: Node, nets: Map<number, string>): string {
   return typeof nn[1] === "number" ? (nn.length > 2 ? str(nn[2]) : str(nets.get(nn[1]) || "")) : str(nn[1]);
 }
 
-function readTrack(n: Node, kind: string): Track | null {
+function readTrack(n: Node, kind: string, nets?: Map<number, string>): Track | null {
   const s = K(n, "start"), e = K(n, "end"); if (!s || !e) return null;
   const ls = K(n, "layers"); const l1 = K(n, "layer");
   const names = ls ? ls.slice(1).map(str) : [l1 ? str(l1[1]) : "F.Cu"];
   const layer = names.find(isCopper) || names[0];
   const maskLayer = names.find((x) => /\.Mask$/.test(x)) || null;
   const wN = K(n, "width");
-  const t: Track = { layer, w: wN ? num(wN[1], 0.25) : 0.25, x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), arc: null, maskLayer, maskMargin: optNum(n, "solder_mask_margin") };
+  const t: Track = { layer, w: wN ? num(wN[1], 0.25) : 0.25, x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), arc: null, maskLayer, maskMargin: optNum(n, "solder_mask_margin"), net: nets ? netName(n, nets) : undefined };
   if (kind === "arc") {
     const m = K(n, "mid");
     const a = m ? arcFrom3([t.x1, t.y1], [num(m[1]), num(m[2])], [t.x2, t.y2]) as { x: number; y: number; r: number; a0: number; a1: number; anticlockwise: boolean } | null : null;
@@ -298,7 +299,7 @@ export function boardModel(doc: FabDoc, setup: Node | null): BoardModel {
       m.footprints.push(fp);
       // a zone inside a footprint is kept in the footprint's frame
       for (const z of kids(n, "zone") as Node[]) readZone(z, copper, fp.tf, m);
-    } else if (item.kind === "segment" || item.kind === "arc") { const t = readTrack(n, item.kind); if (t) m.tracks.push(t); }
+    } else if (item.kind === "segment" || item.kind === "arc") { const t = readTrack(n, item.kind, doc.nets); if (t) m.tracks.push(t); }
     else if (item.kind === "via") m.vias.push(readVia(n, copper, doc.nets));
     else if (item.kind === "zone") readZone(n, copper, null, m);
   }

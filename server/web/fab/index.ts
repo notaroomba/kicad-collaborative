@@ -17,6 +17,7 @@ import { type FabPreset, PRESETS, presetById, jlcPlacement } from "./presets";
 import { primPolys } from "./poly";
 import { type Prim, type Pt } from "./prims";
 import { type ZipEntry, crc32, zip } from "./zip";
+import { type FillProgress, type FillRules, type ZoneFillResult, ZoneFiller, filledZoneNode, polyArea, storedFill } from "./zonefill";
 
 export const VERSION_SUFFIX = "-web";
 
@@ -205,7 +206,15 @@ export async function packageZip(pkg: FabPackage, when?: Date): Promise<{ name: 
   return { name: `${pkg.name}-${pkg.preset.id === "kicad" ? "fabrication" : pkg.preset.id}.zip`, data: await zip(entries, when) };
 }
 
-export const api = { PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+/**
+ * ZONE_FILLER::Fill for the zones `ids` (every board zone when null): per zone, the fill outlines and island
+ * flags per layer.  Null when the progress reporter cancelled it.
+ */
+export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | null, prog?: FillProgress): Promise<ZoneFillResult[] | null> {
+  return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
+}
+
+export const api = { fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

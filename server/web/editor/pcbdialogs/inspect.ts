@@ -6,6 +6,7 @@ import { fitBox } from "../view";
 import { DRC_ITEMS, drcItemTitle } from "../../canvas/drc-items";
 import { NL } from "./canvas";
 import { projectNetlist } from "./update-pcb";
+import { runZoneFill } from "./zonefill";
 import { checkField, download, fmtLenU, grid, h, notebook, openDialog, textField, type CellValue } from "./ui";
 
 export interface Marker { code: string; severity: string; x: number; y: number; text: string; ids: string[] }
@@ -49,7 +50,7 @@ const PARITY = new Set(DRC_ITEMS.slice(DRC_ITEMS.findIndex((i) => i[0] === "Sche
 
 // what the last run found, kept while the board stays open so the dialog reopens on it (KiCad keeps its markers too)
 const last: { doc: KDoc | null; markers: Marker[]; ran: boolean; elapsed: number } = { doc: null, markers: [], ran: false, elapsed: 0 };
-const prefs = { refill: false, parity: true, errors: true, warnings: true, exclusions: false };
+const prefs = { refill: true, parity: true, errors: true, warnings: true, exclusions: false };
 
 /** One DRC run as DIALOG_DRC lists it: the board checks, then schematic parity when asked and the schematic can be read. */
 async function collectMarkers(doc: KDoc, parity: boolean): Promise<{ markers: Marker[]; parityError: string }> {
@@ -120,7 +121,13 @@ export function openDrc(ctx: ToolCtx): void {
     badge.warnings.textContent = String(last.markers.filter((m) => m.severity !== "error").length);
   };
   const run = async (): Promise<void> => {
-    const t0 = Date.now(); status.textContent = "Tests Running...";
+    const t0 = Date.now();
+    // DRC_TOOL::RunTests: "Refilling all zones..." and ZONE_FILLER_TOOL::FillAllZones into the dialog's reporter
+    if (prefs.refill && !ctx.viewOnly && [...doc.items.values()].some((it) => it.kind === "zone")) {
+      status.textContent = "Refilling all zones...";
+      await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), status, label: "Fill Zone(s)" });
+    }
+    status.textContent = "Tests Running...";
     const markers = (await collectMarkers(doc, prefs.parity)).markers;
     last.markers = markers; last.ran = true; last.elapsed = (Date.now() - t0) / 1000; selected = null;
     status.textContent = `Done. Completed in ${last.elapsed.toFixed(2)} s`;
@@ -144,7 +151,7 @@ export function openDrc(ctx: ToolCtx): void {
   openDialog({ title: "Design Rules Checker", width: 760, okLabel: "Run DRC", cancelLabel: "Close", noEnter: true,
     extra: [{ label: "Delete Marker", fn: delMarker }, { label: "Delete All Markers", fn: delAll }],
     build(body) {
-      const refill = checkField(prefs.refill, "Refill all zones before performing DRC", { key: "refill", ro: true, tip: "Zone fills are computed by the desktop application; the web DRC checks the fills stored in the board.", onChange: (v) => { prefs.refill = v; } });
+      const refill = checkField(prefs.refill, "Refill all zones before performing DRC", { key: "refill", ro: ctx.viewOnly, onChange: (v) => { prefs.refill = v; } });
       const parity = checkField(prefs.parity, "Test for parity between PCB and schematic", { key: "parity", onChange: (v) => { prefs.parity = v; } });
       book = notebook([{ label: "Violations", build: (el) => el.append(lists[0]) }, { label: "Unconnected Items", build: (el) => el.append(lists[1]) }, { label: "Schematic Parity", build: (el) => el.append(lists[2]) }, { label: "Ignored Tests", build: (el) => el.append(lists[3]) }]);
       const all = checkField(prefs.errors && prefs.warnings, "All", { key: "showAll", onChange: (v) => { prefs.errors = prefs.warnings = v; errors.set(v); warnings.set(v); fill(); show(); } });

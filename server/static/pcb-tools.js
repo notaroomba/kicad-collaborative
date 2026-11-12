@@ -6559,9 +6559,6 @@ act("zoneDuplicate", "Duplicate Zone onto Layer…", "", (ctx) => {
   const ids = selectionOrToast(ctx, "Select a zone first"); if (!ids) return true; const zones = ids.map((id) => ctx.doc.items.get(id)).filter((it) => it.kind === "zone"); if (!zones.length) { ctx.toast("No zone selected"); return true; }
   return openForm({ title: "Duplicate Zone", fields: [{ k: "layer", label: "Layer", type: "select", value: zoneLayers(zones[0].node)[0] || "F.Cu", options: copperOf(ctx.doc) }], apply: (v) => { const out = []; for (const z of zones) { const node = clone(z.node); const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); for (const fp of K.kids(node, "filled_polygon")) node.splice(node.indexOf(fp), 1); const l = K.kid(node, "layer"), ls = K.kid(node, "layers"); if (l) l[1] = v.layer; else if (ls) ls.splice(1, ls.length - 1, v.layer); out.push(addedChange(ctx.doc, node, netOf(node))); } commitSel(ctx, out, "duplicate zone"); } });
 });
-// Filling is the desktop application's job: its filler is what the fabrication output comes from, so the
-// browser never approximates one.  It asks a desktop editor in the document to refill; the result arrives
-// as an ordinary edit.
 // PCB_POINT_EDITOR::addCorner / removeCorner on the single selected item, at the cursor
 act("pointEditorAddCorner", "Create Corner", "Ins", (ctx) => {
   const id = peSingleId(ctx); if (!id || !canAddCorner(ctx.doc.items.get(id))) return false;
@@ -6571,7 +6568,11 @@ act("pointEditorRemoveCorner", "Remove Corner", "", (ctx) => {
   const id = peSingleId(ctx); if (!id) return false;
   if (!canEdit(ctx)) return true; const ch = removeCornerChanges(ctx.doc, id, ctx.cursor || cursorPoint(ctx), handleTol()); if (ch.length) ctx.commit(ch, "remove corner"); return true;
 });
-act("zoneFillAll", "Fill All Zones", "B", (ctx) => { if (ctx.viewOnly) { ctx.toast("View only"); return true; } if (!ctx.requestDesktop || !ctx.requestDesktop("fill_zones")) { ctx.toast("Not connected"); return true; } ctx.toast("Asked the desktop app to refill zones"); return true; });
+// ZONE_FILLER_TOOL::ZoneFillAll / ZoneFill: the browser's ZONE_FILLER (web/fab/zonefill.ts, run by
+// web/editor/pcbdialogs/zonefill.ts with KiCad's progress reporter); the editor installs the same actions over these.
+const zoneFiller = () => root.PcbZoneFill || null;
+act("zoneFillAll", "Fill All Zones", "B", (ctx) => { const z = zoneFiller(); if (!z) { ctx.toast("The zone filler is not loaded"); return true; } return z.fillAll(ctx); });
+act("zoneFill", "Draft Fill Selected Zone(s)", "", (ctx) => { const z = zoneFiller(); if (!z) { ctx.toast("The zone filler is not loaded"); return true; } return z.fillSelected(ctx); });
 // ZONE::UnFill (ZONE_FILLER_TOOL::ZoneUnfill / ZoneUnfillAll): the filled areas go and the zone is no longer marked
 // filled — exactly what pcbnew writes after an unfill, so the browser can do it itself.
 function unfillChanges(doc, zones) {

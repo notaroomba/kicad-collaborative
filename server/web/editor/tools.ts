@@ -54,8 +54,11 @@ export function toolCtx(extra) {
  * pcbnew's commit); with opts.discard as well the step is dropped (the paste was cancelled and the amend took it out).
  * opts.tentative marks a step whose items still follow the cursor: a discard brings the redo list back.
  */
+/** Watchers of local edits (ZONE_FILLER_TOOL's dirty-zone refill): called before the edit applies and after. */
+export const commitObservers: ((phase: "before" | "after", changes: unknown[], label: string | undefined, opts: unknown) => void)[] = [];
 export function commitChanges(changes, label, opts) {
   if (!changes || !changes.length) return;
+  for (const f of commitObservers) { try { f("before", changes, label, opts); } catch (e) { console.error(e); } }
   const inverse = [];
   for (const c of changes) {
     const it = E.kdoc && E.kdoc.items.get(c.id);
@@ -79,6 +82,7 @@ export function commitChanges(changes, label, opts) {
   }
   redoStack.length = 0; publishUndo();
   if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project
+  for (const f of commitObservers) { try { f("after", changes, label, opts); } catch (e) { console.error(e); } }
 }
 
 // One undo list per document.  The stacks used to be global: Ctrl+Z after entering another sheet applied the

@@ -111,7 +111,7 @@ function cachedOutlines(oc: OutlineCache, size: number, sizeX: number): Pt[][] |
 }
 
 /** The box a knockout text is cut out of: the box of what the text draws, in the text's own frame, grown by the margin. */
-function knockoutBox(pts: Pt[], x: number, y: number, deg: number, margin: number): Pt[] {
+export function knockoutBox(pts: Pt[], x: number, y: number, deg: number, margin: number): Pt[] {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const q of pts) { const [lx, ly] = rot(q[0] - x, q[1] - y, -deg); if (lx < x0) x0 = lx; if (ly < y0) y0 = ly; if (lx > x1) x1 = lx; if (ly > y1) y1 = ly; }
   return ([[x0 - margin, y0 - margin], [x1 + margin, y0 - margin], [x1 + margin, y1 + margin], [x0 - margin, y1 + margin]] as Pt[]).map(([lx, ly]) => { const [rx, ry] = rot(lx, ly, deg); return [x + rx, y + ry] as Pt; });
@@ -155,8 +155,26 @@ function textPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
   for (const p of segs) dst.push(p);
 }
 
+/**
+ * PCB_TEXT::TransformShapeToPolygon (buildBoundingHull): the box of the drawn text in its own frame, grown by
+ * `gap` — what a zone fill knocks out around a copper text.  A knockout text instead leaves its glyphs alone as
+ * holes (ZONE_FILLER::addKnockout).
+ */
+export function textKnockout(g: KGeom, gap: number, log: PlotLog): Pt[][] {
+  const out: Prim[] = [], knock: Prim[] = [];
+  textPrims(Object.assign({}, g, { knockout: false }), out, knock, log);
+  if (!out.length) return [];
+  if (g.knockout) { const polys: Pt[][] = []; for (const p of out) for (const q of primPolys(p)) polys.push(q); return polys; }
+  const pts: Pt[] = []; let pen = 0;
+  for (const p of out) { if (p.k === "seg") { pts.push([p.x1, p.y1], [p.x2, p.y2]); pen = Math.max(pen, p.w); } else if (p.k === "region") for (const q of p.pts) pts.push(q); }
+  if (!pts.length) return [];
+  const oc = g.outline as OutlineCache | undefined;
+  const x = oc && g.face ? oc.x : N(g.x), y = oc && g.face ? oc.y : N(g.y), deg = oc && g.face ? oc.rot : N(g.rot);
+  return [knockoutBox(pts, x, y, deg, gap + pen / 2)];
+}
+
 /** A geometry record of the canvas as primitives; `grow` widens strokes and fills (a solder mask margin on a copper graphic). */
-function geomPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog, grow = 0): void {
+export function geomPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog, grow = 0): void {
   const w = N(g.w) + 2 * grow;
   if (g.t === "line") {
     const pts: Pt[] = [[N(g.x1), N(g.y1)], [N(g.x2), N(g.y2)]];
@@ -279,7 +297,7 @@ function customPolys(shape: PadShape): Pt[][] {
 }
 
 /** One pad on one layer (plotPadLayer in PlotStandardLayer, then BRDITEMS_PLOTTER::PlotPad). */
-function padPrims(pad: Pad, layer: string, m: BoardModel, out: Prim[]): void {
+export function padPrims(pad: Pad, layer: string, m: BoardModel, out: Prim[]): void {
   const shape = padShapeOn(pad, layer, m.copper);
   const onMask = /\.Mask$/.test(layer), onPaste = /\.Paste$/.test(layer);
   let mx = 0, my = 0;
@@ -370,7 +388,7 @@ function viaOnMask(v: Via, front: boolean, m: BoardModel, opt: PlotOptions): boo
   return !tented;
 }
 
-function footprintGeoms(fp: Footprint, layer: string, opt: PlotOptions): KGeom[] {
+export function footprintGeoms(fp: Footprint, layer: string, opt: PlotOptions): KGeom[] {
   if (fp.privateLayers.has(layer)) return [];
   const out: KGeom[] = [];
   for (const g of fp.item.geom) {

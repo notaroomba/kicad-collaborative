@@ -15,6 +15,8 @@ export interface Prefs {
   /** the schematic canvas colours (Preferences > Schematic Editor > Colors): a theme, and whether a dark UI swaps in the dark sheet */
   schColors: { theme: SchThemeId; followDark: boolean };
   pcbDisplay: { showPadNumbers: boolean; showNetNames: boolean; showPageLimits: boolean; highContrast: boolean };
+  /** PCB Editor > Editing Options (PCBNEW_SETTINGS): m_AutoRefillZones */
+  pcbEditing: { autoRefillZones: boolean };
   grids: Record<EditorId, GridPrefs>;
 }
 const MIL = 0.0254;
@@ -24,6 +26,7 @@ export const DEFAULT_PREFS: Prefs = {
   schEditing: { lineMode: "90", mouseDragIsDrag: true, autoAnnotate: true },
   schColors: { theme: "default", followDark: false },
   pcbDisplay: { showPadNumbers: true, showNetNames: true, showPageLimits: true, highContrast: false },
+  pcbEditing: { autoRefillZones: false },
   grids: {
     // EESCHEMA_SETTINGS::DefaultGridSizeList is 100 / 50 / 25 / 10 mil; the web editor has always opened on 50 mil
     sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES, axes: false },

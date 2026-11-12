@@ -114,6 +114,11 @@ export function openPreferences(page?: string): void {
               checkbox("High-contrast display mode", p.pcbDisplay.highContrast, (on) => { p.pcbDisplay.highContrast = on; }, { id: "kd-pref-contrast" }));
           } },
           { label: "Grids", build: gridsPage("pcb") },
+          { label: "Editing Options", build(pg) {
+            // panel_edit_options (PCB): the Miscellaneous box's zone refill
+            const misc = KD().staticBox(pg, "Miscellaneous");
+            misc.append(checkbox("Automatically refill zones", p.pcbEditing.autoRefillZones, (on) => { p.pcbEditing.autoRefillZones = on; }, { id: "kd-pref-autorefill", title: "If checked, zones will be re-filled after each edit operation" }));
+          } },
         ] },
       ], { selected: page || (here === "sch" ? "Mouse and Touchpad" : "Mouse and Touchpad") });
     },

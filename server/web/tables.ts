@@ -158,7 +158,7 @@ export const MODULE_ALIAS: Record<Editor, Record<string, string>> = {
 /** Module action ids that only repeat another one (the same command under a second name), or that KiCad offers only in a context menu: never listed on their own. */
 export const MODULE_DUPLICATES: Record<Editor, string[]> = {
   sch: ["highlightNet"],
-  pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",
+  pcb: ["highlightNetSelection", "cleanupTracks", "pack", "zoneFill", "zoneUnfill", "pointEditorAddCorner", "pointEditorRemoveCorner",
     // the interactive router's own commands: KiCad offers them in the router's context menu and the route tool's toolbar menu only
     "routerHighlightMode", "routerShoveMode", "routerWalkaroundMode", "cycleRouterMode", "routerUndoLastSegment", "routerDiffPairDialog",
     // the length tuner's commands: the drawing tool's context menu while a tuning tool runs (drawing_tool.cpp tuningToolActive), hotkeys 1-4 and Ctrl+L
