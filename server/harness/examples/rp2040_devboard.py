@@ -69,18 +69,18 @@ nets = {
     "RUN": "J3.10 R8.2 SW2.1 U1.26",
     "SWCLK": "J4.1 U1.24",
     "SWDIO": "J4.3 U1.25",
-    "USB_D-": "J1.A7 J1.B7 R3.1",
-    "USB_D+": "J1.A6 J1.B6 R4.1",
+    "USB_CONN_D-": "J1.A7 J1.B7 R3.1",
+    "USB_CONN_D+": "J1.A6 J1.B6 R4.1",
     "VBUS": "C1.1 J1.A4 J1.A9 J1.B4 J1.B9 J3.19 J3.20 U2.1 U2.3",
     "XIN": "C16.1 U1.20 Y1.1",
     "XOUT": "R7.2 U1.21",
-    "N1": "C17.1 R7.1 Y1.3",
-    "N2": "D1.2 R9.2",
-    "N3": "J1.A5 R1.1",
-    "N4": "J1.B5 R2.1",
-    "N5": "R6.2 SW1.1",
-    "N6": "R3.2 U1.46",
-    "N7": "R4.2 U1.47",
+    "XTAL_OUT": "C17.1 R7.1 Y1.3",
+    "LED_A": "D1.2 R9.2",
+    "CC1": "J1.A5 R1.1",
+    "CC2": "J1.B5 R2.1",
+    "BOOTSEL": "R6.2 SW1.1",
+    "USB_DM": "R3.2 U1.46",
+    "USB_DP": "R4.2 U1.47",
 }
 # One titled frame per functional block, and a note wherever a choice is not the textbook one.
 groups = {"USB-C connector": "J1 R1 R2 R3 R4", "3.3 V regulator": "U2 C1 C2", "RP2040 and decoupling": "U1 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14",
@@ -90,11 +90,11 @@ notes = {
                         "The shield is tied straight to ground; there is no RC filter because the board has no metal case."],
     "12 MHz crystal": "R7 (1k) in series with XOUT limits the drive level of the crystal, as in the Raspberry Pi hardware design guide.",
     "QSPI flash and BOOTSEL": "R6 is 1k so that BOOTSEL can pull QSPI_SS low without fighting the flash chip select.",
+    "Reset and LED": "D1 is on GPIO25 like the Pico, so Pico example code blinks it unchanged.",
 }
 sch = project.schematic()
 built = sch.build(parts, {k: v.split() for k, v in nets.items()}, {k: v.split() for k, v in groups.items()},
                   no_connect="J1.A8 J1.B8 U1.35 U1.36 U1.41 J3.17".split(), notes=notes)
-sch.note("D1 is on GPIO25 like the Pico, so Pico example code blinks it unchanged.", near="D1")
 assert sch.overlaps() == [], sch.overlaps()                                 # nothing drawn over anything else, nothing off the page
 print("schematic", built, sch.check())
 

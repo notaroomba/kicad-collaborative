@@ -51733,6 +51733,27 @@ function fieldShifts(doc, input = {}) {
   }
   return out;
 }
+function inlineFieldShifts(doc, refs) {
+  const s = SCH3();
+  const { list } = pieces2(doc);
+  const out = [];
+  const want = new Set(refs.map((r) => r.toLowerCase()));
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol" || !want.has(String(it.ref || "").toLowerCase())) continue;
+    const pins = s._.symbolPins(doc, it);
+    if (pins.length !== 2 || Math.abs(pins[0].y - pins[1].y) > 1e-3) continue;
+    const y = pins[0].y, xl = Math.min(pins[0].x, pins[1].x), xr = Math.max(pins[0].x, pins[1].x);
+    const body = list.find((p) => p.id === it.id && p.kind === "body");
+    if (!body) continue;
+    const bl = Math.max(body.box[0], xl), br = Math.min(body.box[2], xr);
+    for (const p of list) {
+      if (p.id !== it.id || !p.field) continue;
+      if (p.field === "Reference") out.push({ id: it.id, field: p.field, dx: r2(bl - 0.4 - p.box[2]), dy: r2(y - 0.35 - p.box[3]) });
+      else if (p.field === "Value") out.push({ id: it.id, field: p.field, dx: r2(br + 0.4 - p.box[0]), dy: r2(y - 0.35 - p.box[3]) });
+    }
+  }
+  return out;
+}
 function pageAreas(page) {
   const w = page[0] || 297, h = page[1] || 210;
   return { area: [12, 12, w - 12, h - 12], title: [w - 122, h - 46, w - 10, h - 10] };
@@ -53134,7 +53155,8 @@ function build(input) {
               allowVias: typeof o.allow_vias === "boolean" ? o.allow_vias : void 0,
               maxVias: typeof o.max_vias === "number" ? o.max_vias : void 0,
               avoid: Array.isArray(o.avoid) ? o.avoid : void 0,
-              kind: ["analog", "rf", "switching", "fast", "digital", "supply"].includes(o.kind) ? o.kind : void 0,
+              // named: what the schematic's author called a net that carries no label (it is wired inside its block), so its name still says what it carries
+              kind: ["analog", "rf", "switching", "fast", "digital", "supply"].includes(o.kind) ? o.kind : typeof o.named === "string" && o.named && R2.netKind ? R2.netKind(o.named) : void 0,
               impedance: typeof o.impedance === "number" && o.impedance > 0 ? o.impedance : void 0
             };
             if (o.kind !== void 0 && !netOpts[net].kind) throw new ToolError(`net_options.${name}.kind must be one of analog, rf, switching, fast, digital, supply`);
@@ -53296,7 +53318,7 @@ function build(input) {
           schOnly(e.op);
           const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v) => num4(v, "within")) : void 0;
           const by = /* @__PURE__ */ new Map();
-          for (const f of fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : void 0, within })) {
+          for (const f of e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : void 0, within })) {
             if (!by.has(f.id)) by.set(f.id, []);
             by.get(f.id).push(f);
           }

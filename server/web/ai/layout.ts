@@ -134,6 +134,27 @@ export function fieldShifts(doc: any, input: { refs?: string[]; within?: number[
   }
   return out;
 }
+/**
+ * Fields of a two pin part drawn in line with a wire, the way a person sets them: the reference just before the
+ * body and the value just after it, both sitting on the wire, so parts on neighbouring rows can stack.
+ */
+export function inlineFieldShifts(doc: any, refs: string[]): { id: string; field: string; dx: number; dy: number }[] {
+  const s = SCH(); const { list } = pieces(doc); const out: { id: string; field: string; dx: number; dy: number }[] = [];
+  const want = new Set(refs.map((r) => r.toLowerCase()));
+  for (const it of doc.items.values() as Iterable<any>) {
+    if (it.kind !== "symbol" || !want.has(String(it.ref || "").toLowerCase())) continue;
+    const pins = s._.symbolPins(doc, it); if (pins.length !== 2 || Math.abs(pins[0].y - pins[1].y) > 1e-3) continue;
+    const y = pins[0].y, xl = Math.min(pins[0].x, pins[1].x), xr = Math.max(pins[0].x, pins[1].x);
+    const body = list.find((p) => p.id === it.id && p.kind === "body"); if (!body) continue;
+    const bl = Math.max(body.box[0], xl), br = Math.min(body.box[2], xr);
+    for (const p of list) {
+      if (p.id !== it.id || !p.field) continue;
+      if (p.field === "Reference") out.push({ id: it.id, field: p.field, dx: r2(bl - 0.4 - p.box[2]), dy: r2(y - 0.35 - p.box[3]) });
+      else if (p.field === "Value") out.push({ id: it.id, field: p.field, dx: r2(br + 0.4 - p.box[0]), dy: r2(y - 0.35 - p.box[3]) });
+    }
+  }
+  return out;
+}
 export function pageAreas(page: number[]): { area: Box; title: Box } {
   const w = page[0] || 297, h = page[1] || 210;
   return { area: [12, 12, w - 12, h - 12], title: [w - 122, h - 46, w - 10, h - 10] };

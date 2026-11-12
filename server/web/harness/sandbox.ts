@@ -18,6 +18,7 @@
 import initPy from "../../harness/kicad_harness/__init__.py";
 import projectPy from "../../harness/kicad_harness/project.py";
 import transportPy from "../../harness/kicad_harness/transport.py";
+import sheetPy from "../../harness/kicad_harness/sheet.py";
 import partsInitPy from "../../harness/kicad_harness/parts/__init__.py";
 import datasheetPy from "../../harness/kicad_harness/parts/datasheet.py";
 import footprintPy from "../../harness/kicad_harness/parts/footprint.py";
@@ -61,7 +62,7 @@ function writeLine(msg: unknown): void {
 }
 
 const FILES: [string, string][] = [
-  ["kicad_harness/__init__.py", initPy], ["kicad_harness/project.py", projectPy], ["kicad_harness/transport.py", transportPy],
+  ["kicad_harness/__init__.py", initPy], ["kicad_harness/project.py", projectPy], ["kicad_harness/transport.py", transportPy], ["kicad_harness/sheet.py", sheetPy],
   ["kicad_harness/parts/__init__.py", partsInitPy], ["kicad_harness/parts/datasheet.py", datasheetPy], ["kicad_harness/parts/footprint.py", footprintPy],
   ["kicad_harness/parts/search.py", searchPy], ["kicad_harness/parts/symbol.py", symbolPy],
 ];

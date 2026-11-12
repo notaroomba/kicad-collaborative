@@ -97,6 +97,7 @@ class Project:
         self._open: dict = {}
         self.log: list = []
         self.footprints: dict = {}   # generated footprints by id, handed to the board when it syncs
+        self.net_pins: dict = {}     # net name given to build -> one of its pins, for nets that carry no label on the sheet
 
     # ---- documents
     def documents(self) -> list:
@@ -835,78 +836,9 @@ class Schematic(_Doc):
                     out[(ref, q[0])] = name
         return out
 
-    def _power_pins(self, ref: str, intent: dict) -> None:
-        """Power symbols for the supply pins of a part with many pins, drawn the way a person would: pins of one supply
-        on the same side share a rail and one symbol, and a symbol beside labelled pins stands clear of their text."""
-        self.flush()
-        sides: dict = {}
-        for p in self.pins(ref):
-            if not p["hidden"]:
-                sides.setdefault(p["side"], []).append(p)
-        want = lambda p: intent.get((ref, p["number"])) or ""
-        todo = lambda p: self._is_power(want(p)) and p["net"] != want(p)
-        for side, ps in sides.items():
-            d = _DIR[side]
-            horiz = side in ("top", "bottom")
-            pos = (lambda p: p["x"]) if horiz else (lambda p: p["y"])
-            ps.sort(key=pos)
-            power = [p for p in ps if todo(p)]
-            if not power:
-                continue
-            rot = lambda name: (_GND_ROT if _GROUND.search(name) else _SUPPLY_ROT)[side]
-            if horiz:
-                lo, hi = pos(power[0]), pos(power[-1])
-                if len(power) < 2 or any(want(q) and not self._is_power(want(q)) and lo - 1e-6 <= pos(q) <= hi + 1e-6 for q in ps):
-                    continue   # one pin, or a labelled pin in between: each pin gets its own symbol
-                order = list(dict.fromkeys(want(p) for p in power))
-                for k, name in enumerate(order):
-                    mine = [p for p in power if want(p) == name]
-                    rail = _r(mine[0]["y"] + d[1] * (STUB + k * STUB))
-                    sx = _r(lo - 7.62 * (k // 2 + 1)) if k % 2 == 0 else _r(hi + 7.62 * (k // 2 + 1))
-                    xs = sorted({p["x"] for p in mine} | {sx})
-                    for p in mine:
-                        self._edit({"op": "add_wire", "points": [[p["x"], p["y"]], [p["x"], rail]]})
-                    self._edit({"op": "add_wire", "points": [[x, rail] for x in xs]})
-                    for x in xs[1:-1]:
-                        self._edit({"op": "add_junction", "x": x, "y": rail})
-                    self._edit({"op": "add_symbol", "lib_id": "power:" + name, "x": sx, "y": rail, "rotation": rot(name)})
-                self.flush()
-                continue
-            # left and right: runs of neighbouring pins on one supply share a rail; the stub is long enough to clear the neighbours' text
-            runs, reach = [], None
-            for p in power:
-                if runs and want(runs[-1][-1]) == want(p) and abs(pos(p) - pos(runs[-1][-1])) <= STUB + 1e-3:
-                    runs[-1].append(p)
-                else:
-                    runs.append([p])
-            last = None
-            for run in runs:
-                name = want(run[0])
-                need = STUB
-                for q in ps:
-                    near = min(abs(pos(q) - pos(run[0])), abs(pos(q) - pos(run[-1])))
-                    if q in run or near > STUB + 1e-3:
-                        continue
-                    if want(q) and not self._is_power(want(q)):
-                        need = max(need, STUB + self._width(want(q)) + 2.2)
-                    elif last is not None and q in last[0]:
-                        need = max(need, last[1] + 1.27)
-                length = math.ceil(need / STUB - 1e-6) * STUB
-                ex = _r(run[0]["x"] + d[0] * length)
-                for p in run:
-                    self._edit({"op": "add_wire", "points": [[p["x"], p["y"]], [ex, p["y"]]]})
-                if len(run) > 1:
-                    self._edit({"op": "add_wire", "points": [[ex, p["y"]] for p in run]})
-                    for p in run[1:-1]:
-                        self._edit({"op": "add_junction", "x": ex, "y": p["y"]})
-                at = run[len(run) // 2] if len(run) > 2 else run[0]
-                self._edit({"op": "add_symbol", "lib_id": "power:" + name, "x": ex, "y": at["y"], "rotation": rot(name)})
-                last = (run, length + 5.5 + self._width(name) + 1.0)
-            self.flush()
-
     # ---- a whole sheet from a netlist
     def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None,
-              notes: dict | None = None, frames: bool = True) -> dict:
+              notes: dict | None = None, frames: bool = True, labels: list | None = None) -> dict:
         """Draw a schematic from a netlist in one call.
 
         parts: {ref: {"lib": "Device:R", "value": "10k", "footprint": "...", "fields": {...}}} (lib may be a
@@ -934,67 +866,23 @@ class Schematic(_Doc):
                     notes[g] = ([notes[g]] if isinstance(notes.get(g), str) else list(notes.get(g) or [])) + [f"{r}: {spec['note']}"]
         self.flush()
         before = self.layout(limit=1)
-        # ---- 1. every block off the page, one under the other: ICs in a column, their passives in rows beside them
+        # ---- 1. every block off the page, drawn the way a datasheet draws its application circuit: wires inside the
+        #         block, parts hanging on and in line with the wires of the IC pins, labels only where a net leaves it
+        from .sheet import Blocks
         intent = self._intent(parts, nets)
-        sx, sy = _STAGE
-        bands, placed, bigs, y = [], [], [], sy
-        for gname, refs in groups.items():
-            big, small = [], []
-            for r in refs:
-                if r not in parts:
-                    raise HarnessError(f"Group {gname} names {r}, which is not in parts.")
-                spec = parts[r] if isinstance(parts[r], dict) else {"lib": parts[r]}
-                lib = spec.get("lib")
-                n = len(self.lib(lib)["units"][0]["pins"]) if not isinstance(lib, dict) else 8
-                (big if n > 3 else small).append((r, spec, self._room(r, spec, intent)))
-            def put(r, spec, at):
-                self.place(spec.get("lib"), at=at, ref=r, value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=spec.get("rotation", 0))
-            yy, bw = y, 0.0
-            for r, spec, room in big:
-                at = (_snap(sx - room[0], 2.54), _snap(yy - room[1] + 1.27, 2.54))
-                put(r, spec, at)
-                yy = at[1] + room[3] + 5.08
-                bw = max(bw, at[0] + room[2] - sx)
-                bigs.append(r)
-            x0 = sx + (bw + 7.62 if big else 0)
-            total = sum(room[2] - room[0] + 2.54 for _, _, room in small)
-            limit = max(100.0, min(150.0, total / max(1, round(total / 125.0)) + 12.0)) if small else 0
-            cx, cy, row_h = x0, y, 0.0
-            for r, spec, room in small:
-                w, h = room[2] - room[0], room[3] - room[1]
-                if cx > x0 and cx + w - x0 > limit:
-                    cx, cy, row_h = x0, cy + row_h + 3.81, 0.0
-                at = (_snap(cx - room[0] + 1.27, 2.54), _snap(cy - room[1] + 1.27, 2.54))
-                put(r, spec, at)
-                cx = at[0] + room[2] + 1.27
-                row_h = max(row_h, at[1] + room[3] - cy)
-            h = max(yy - y, cy + row_h - y, 25.4)
-            bands.append((gname, [sx - 200.0, y - 45.0, sx + 1500.0, y + h + 45.0]))
-            placed += refs
-            y = _snap(y + h + 127.0, 2.54)
-        self.flush()
-        for r in placed:
-            spec = parts[r] if isinstance(parts[r], dict) else {"lib": parts[r]}
-            if isinstance(spec.get("lib"), dict) or len(self.lib(spec.get("lib"))["units"][0]["pins"]) > 2:
-                self._power_pins(r, intent)
-        # ---- 2. connections: a power symbol or a label on every pin
-        problems = []
-        for name, pins in nets.items():
-            for spec in pins:
-                try:
-                    self.net(name, spec)
-                except HarnessError as e:
-                    problems.append(str(e))
+        drawer = Blocks(self, parts, nets, groups, intent, _GROUND)
+        drawer.force |= set(labels or [])
+        for (ref, num), name in intent.items():      # a net wired inside its block has no label: remember it by one of its pins
+            self.project.net_pins.setdefault(name, f"{ref}.{num}")
+        bands, placed, problems = drawer.run()
+        # ---- 2. no-connect flags
         for spec in no_connect or []:
             try:
                 self.no_connect(spec)
             except HarnessError as e:
                 problems.append(str(e))
         self.flush()
-        self._edit({"op": "autoplace_fields", "within": [sx - 200.0, sy - 45.0, sx + 1500.0, y + 45.0]})
-        self.flush()
-        self._edit({"op": "clear_fields", "within": [sx - 200.0, sy - 45.0, sx + 1500.0, y + 45.0]})
-        self.flush()
+        self._repair(nets)
         # ---- 3. measure each block as drawn, and what its heading and notes need
         blocks = []
         for gname, band in bands:
@@ -1051,16 +939,7 @@ class Schematic(_Doc):
                 ny += _LINE
             self.flush()
         # ---- 6. what was asked for against what is there
-        got = self.nets()
-        wrong = []
-        for name, pins in nets.items():
-            have = set()
-            for n, ps in got.items():
-                if n == name or n.lstrip("/") == name:
-                    have |= set(ps)
-            want = {f"{q['ref']}.{q['number']}" for spec in pins for q in self._try_pins(spec)}
-            if want - have:
-                wrong.append(f"{name}: missing {', '.join(sorted(want - have))}")
+        wrong = self._miswired(nets)
         lay = self.layout(limit=8)
         out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
                "problems": problems + wrong, "unconnected": self.unconnected()[:40], "overlaps": lay.get("count", 0)}
@@ -1069,6 +948,36 @@ class Schematic(_Doc):
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
                           + (f", {len(out['problems'])} problems" if out["problems"] else "") + (f", {out['overlaps']} overlaps" if out["overlaps"] else ""))
         return out
+
+    def _miswired(self, nets: dict) -> list:
+        """Nets whose pins are not all joined to each other and to nothing else.  A net wired inside its block has no
+        label, so this compares who is connected to whom, not names."""
+        got = self.nets()
+        where = {pin: name for name, pins in got.items() for pin in pins}
+        mine = {f"{q['ref']}.{q['number']}": name for name, pins in nets.items() for spec in pins for q in self._try_pins(spec)}
+        out = []
+        for name, pins in nets.items():
+            want = {f"{q['ref']}.{q['number']}" for spec in pins for q in self._try_pins(spec)}
+            homes = {where.get(pin) for pin in want}
+            if len(homes) != 1 or None in homes:
+                out.append(f"{name}: not all joined ({', '.join(sorted(want))})")
+                continue
+            extra = {pin for pin in got[next(iter(homes))] if mine.get(pin, name) != name}
+            if extra:
+                out.append(f"{name}: also joined to {', '.join(sorted(extra))}")
+        return out
+
+    def _repair(self, nets: dict) -> None:
+        """Whatever the drawing left open gets its name on every pin, so the sheet is right even where it is not pretty."""
+        bad = {m.split(":", 1)[0] for m in self._miswired(nets) if "not all joined" in m}
+        for name in bad:
+            for spec in nets[name]:
+                try:
+                    self.net(name, spec)
+                except HarnessError:
+                    pass
+        if bad:
+            self.flush()
 
     def _pack(self, blocks, paper, top=None, force: bool = False):
         """Where each block goes on a page: in the order given, each as high and then as far left as it fits, clear of
@@ -1408,7 +1317,13 @@ class Board(_Doc):
         if names is None or name not in names and "/" + name.lstrip("/") not in names:
             names = self._names = set(self.nets())
         bare = name.lstrip("/")
-        return name if name in names else "/" + bare if "/" + bare in names else bare if bare in names else name
+        hit = name if name in names else "/" + bare if "/" + bare in names else bare if bare in names else None
+        if hit is None and bare in self.project.net_pins:     # a net wired inside its block: KiCad named it after a pin
+            try:
+                hit = self.pad(self.project.net_pins[bare])["net"] or None
+            except HarnessError:
+                hit = None
+        return hit or name
 
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
@@ -1446,6 +1361,17 @@ class Board(_Doc):
             opts.setdefault(fix(n), {})["width"] = w
         for n, kd in (kinds or {}).items():
             opts.setdefault(fix(n), {})["kind"] = kd
+        if self.project.net_pins:      # nets wired inside their block have KiCad's automatic names: tell the router what they were called
+            known = set(self.nets())
+            for name, pin in self.project.net_pins.items():
+                if name in known or "/" + name in known:
+                    continue
+                try:
+                    auto = self.pad(pin)["net"]
+                except HarnessError:
+                    continue
+                if auto and "kind" not in opts.get(auto, {}):
+                    opts.setdefault(auto, {})["named"] = name
         if opts:
             e["net_options"] = opts
         if layers:

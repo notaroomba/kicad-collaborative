@@ -184,6 +184,7 @@ class Project:
         self._open: dict = {}
         self.log: list = []
         self.footprints: dict = {}   # generated footprints by id, handed to the board when it syncs
+        self.net_pins: dict = {}     # net name given to build -> one of its pins, for nets that carry no label on the sheet
 
     # ---- documents
     def documents(self) -> list:
@@ -922,78 +923,9 @@ class Schematic(_Doc):
                     out[(ref, q[0])] = name
         return out
 
-    def _power_pins(self, ref: str, intent: dict) -> None:
-        """Power symbols for the supply pins of a part with many pins, drawn the way a person would: pins of one supply
-        on the same side share a rail and one symbol, and a symbol beside labelled pins stands clear of their text."""
-        self.flush()
-        sides: dict = {}
-        for p in self.pins(ref):
-            if not p["hidden"]:
-                sides.setdefault(p["side"], []).append(p)
-        want = lambda p: intent.get((ref, p["number"])) or ""
-        todo = lambda p: self._is_power(want(p)) and p["net"] != want(p)
-        for side, ps in sides.items():
-            d = _DIR[side]
-            horiz = side in ("top", "bottom")
-            pos = (lambda p: p["x"]) if horiz else (lambda p: p["y"])
-            ps.sort(key=pos)
-            power = [p for p in ps if todo(p)]
-            if not power:
-                continue
-            rot = lambda name: (_GND_ROT if _GROUND.search(name) else _SUPPLY_ROT)[side]
-            if horiz:
-                lo, hi = pos(power[0]), pos(power[-1])
-                if len(power) < 2 or any(want(q) and not self._is_power(want(q)) and lo - 1e-6 <= pos(q) <= hi + 1e-6 for q in ps):
-                    continue   # one pin, or a labelled pin in between: each pin gets its own symbol
-                order = list(dict.fromkeys(want(p) for p in power))
-                for k, name in enumerate(order):
-                    mine = [p for p in power if want(p) == name]
-                    rail = _r(mine[0]["y"] + d[1] * (STUB + k * STUB))
-                    sx = _r(lo - 7.62 * (k // 2 + 1)) if k % 2 == 0 else _r(hi + 7.62 * (k // 2 + 1))
-                    xs = sorted({p["x"] for p in mine} | {sx})
-                    for p in mine:
-                        self._edit({"op": "add_wire", "points": [[p["x"], p["y"]], [p["x"], rail]]})
-                    self._edit({"op": "add_wire", "points": [[x, rail] for x in xs]})
-                    for x in xs[1:-1]:
-                        self._edit({"op": "add_junction", "x": x, "y": rail})
-                    self._edit({"op": "add_symbol", "lib_id": "power:" + name, "x": sx, "y": rail, "rotation": rot(name)})
-                self.flush()
-                continue
-            # left and right: runs of neighbouring pins on one supply share a rail; the stub is long enough to clear the neighbours' text
-            runs, reach = [], None
-            for p in power:
-                if runs and want(runs[-1][-1]) == want(p) and abs(pos(p) - pos(runs[-1][-1])) <= STUB + 1e-3:
-                    runs[-1].append(p)
-                else:
-                    runs.append([p])
-            last = None
-            for run in runs:
-                name = want(run[0])
-                need = STUB
-                for q in ps:
-                    near = min(abs(pos(q) - pos(run[0])), abs(pos(q) - pos(run[-1])))
-                    if q in run or near > STUB + 1e-3:
-                        continue
-                    if want(q) and not self._is_power(want(q)):
-                        need = max(need, STUB + self._width(want(q)) + 2.2)
-                    elif last is not None and q in last[0]:
-                        need = max(need, last[1] + 1.27)
-                length = math.ceil(need / STUB - 1e-6) * STUB
-                ex = _r(run[0]["x"] + d[0] * length)
-                for p in run:
-                    self._edit({"op": "add_wire", "points": [[p["x"], p["y"]], [ex, p["y"]]]})
-                if len(run) > 1:
-                    self._edit({"op": "add_wire", "points": [[ex, p["y"]] for p in run]})
-                    for p in run[1:-1]:
-                        self._edit({"op": "add_junction", "x": ex, "y": p["y"]})
-                at = run[len(run) // 2] if len(run) > 2 else run[0]
-                self._edit({"op": "add_symbol", "lib_id": "power:" + name, "x": ex, "y": at["y"], "rotation": rot(name)})
-                last = (run, length + 5.5 + self._width(name) + 1.0)
-            self.flush()
-
     # ---- a whole sheet from a netlist
     def build(self, parts: dict, nets: dict, groups: dict | None = None, no_connect: list | None = None,
-              notes: dict | None = None, frames: bool = True) -> dict:
+              notes: dict | None = None, frames: bool = True, labels: list | None = None) -> dict:
         """Draw a schematic from a netlist in one call.
 
         parts: {ref: {"lib": "Device:R", "value": "10k", "footprint": "...", "fields": {...}}} (lib may be a
@@ -1021,67 +953,23 @@ class Schematic(_Doc):
                     notes[g] = ([notes[g]] if isinstance(notes.get(g), str) else list(notes.get(g) or [])) + [f"{r}: {spec['note']}"]
         self.flush()
         before = self.layout(limit=1)
-        # ---- 1. every block off the page, one under the other: ICs in a column, their passives in rows beside them
+        # ---- 1. every block off the page, drawn the way a datasheet draws its application circuit: wires inside the
+        #         block, parts hanging on and in line with the wires of the IC pins, labels only where a net leaves it
+        from .sheet import Blocks
         intent = self._intent(parts, nets)
-        sx, sy = _STAGE
-        bands, placed, bigs, y = [], [], [], sy
-        for gname, refs in groups.items():
-            big, small = [], []
-            for r in refs:
-                if r not in parts:
-                    raise HarnessError(f"Group {gname} names {r}, which is not in parts.")
-                spec = parts[r] if isinstance(parts[r], dict) else {"lib": parts[r]}
-                lib = spec.get("lib")
-                n = len(self.lib(lib)["units"][0]["pins"]) if not isinstance(lib, dict) else 8
-                (big if n > 3 else small).append((r, spec, self._room(r, spec, intent)))
-            def put(r, spec, at):
-                self.place(spec.get("lib"), at=at, ref=r, value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=spec.get("rotation", 0))
-            yy, bw = y, 0.0
-            for r, spec, room in big:
-                at = (_snap(sx - room[0], 2.54), _snap(yy - room[1] + 1.27, 2.54))
-                put(r, spec, at)
-                yy = at[1] + room[3] + 5.08
-                bw = max(bw, at[0] + room[2] - sx)
-                bigs.append(r)
-            x0 = sx + (bw + 7.62 if big else 0)
-            total = sum(room[2] - room[0] + 2.54 for _, _, room in small)
-            limit = max(100.0, min(150.0, total / max(1, round(total / 125.0)) + 12.0)) if small else 0
-            cx, cy, row_h = x0, y, 0.0
-            for r, spec, room in small:
-                w, h = room[2] - room[0], room[3] - room[1]
-                if cx > x0 and cx + w - x0 > limit:
-                    cx, cy, row_h = x0, cy + row_h + 3.81, 0.0
-                at = (_snap(cx - room[0] + 1.27, 2.54), _snap(cy - room[1] + 1.27, 2.54))
-                put(r, spec, at)
-                cx = at[0] + room[2] + 1.27
-                row_h = max(row_h, at[1] + room[3] - cy)
-            h = max(yy - y, cy + row_h - y, 25.4)
-            bands.append((gname, [sx - 200.0, y - 45.0, sx + 1500.0, y + h + 45.0]))
-            placed += refs
-            y = _snap(y + h + 127.0, 2.54)
-        self.flush()
-        for r in placed:
-            spec = parts[r] if isinstance(parts[r], dict) else {"lib": parts[r]}
-            if isinstance(spec.get("lib"), dict) or len(self.lib(spec.get("lib"))["units"][0]["pins"]) > 2:
-                self._power_pins(r, intent)
-        # ---- 2. connections: a power symbol or a label on every pin
-        problems = []
-        for name, pins in nets.items():
-            for spec in pins:
-                try:
-                    self.net(name, spec)
-                except HarnessError as e:
-                    problems.append(str(e))
+        drawer = Blocks(self, parts, nets, groups, intent, _GROUND)
+        drawer.force |= set(labels or [])
+        for (ref, num), name in intent.items():      # a net wired inside its block has no label: remember it by one of its pins
+            self.project.net_pins.setdefault(name, f"{ref}.{num}")
+        bands, placed, problems = drawer.run()
+        # ---- 2. no-connect flags
         for spec in no_connect or []:
             try:
                 self.no_connect(spec)
             except HarnessError as e:
                 problems.append(str(e))
         self.flush()
-        self._edit({"op": "autoplace_fields", "within": [sx - 200.0, sy - 45.0, sx + 1500.0, y + 45.0]})
-        self.flush()
-        self._edit({"op": "clear_fields", "within": [sx - 200.0, sy - 45.0, sx + 1500.0, y + 45.0]})
-        self.flush()
+        self._repair(nets)
         # ---- 3. measure each block as drawn, and what its heading and notes need
         blocks = []
         for gname, band in bands:
@@ -1138,16 +1026,7 @@ class Schematic(_Doc):
                 ny += _LINE
             self.flush()
         # ---- 6. what was asked for against what is there
-        got = self.nets()
-        wrong = []
-        for name, pins in nets.items():
-            have = set()
-            for n, ps in got.items():
-                if n == name or n.lstrip("/") == name:
-                    have |= set(ps)
-            want = {f"{q['ref']}.{q['number']}" for spec in pins for q in self._try_pins(spec)}
-            if want - have:
-                wrong.append(f"{name}: missing {', '.join(sorted(want - have))}")
+        wrong = self._miswired(nets)
         lay = self.layout(limit=8)
         out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
                "problems": problems + wrong, "unconnected": self.unconnected()[:40], "overlaps": lay.get("count", 0)}
@@ -1156,6 +1035,36 @@ class Schematic(_Doc):
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
                           + (f", {len(out['problems'])} problems" if out["problems"] else "") + (f", {out['overlaps']} overlaps" if out["overlaps"] else ""))
         return out
+
+    def _miswired(self, nets: dict) -> list:
+        """Nets whose pins are not all joined to each other and to nothing else.  A net wired inside its block has no
+        label, so this compares who is connected to whom, not names."""
+        got = self.nets()
+        where = {pin: name for name, pins in got.items() for pin in pins}
+        mine = {f"{q['ref']}.{q['number']}": name for name, pins in nets.items() for spec in pins for q in self._try_pins(spec)}
+        out = []
+        for name, pins in nets.items():
+            want = {f"{q['ref']}.{q['number']}" for spec in pins for q in self._try_pins(spec)}
+            homes = {where.get(pin) for pin in want}
+            if len(homes) != 1 or None in homes:
+                out.append(f"{name}: not all joined ({', '.join(sorted(want))})")
+                continue
+            extra = {pin for pin in got[next(iter(homes))] if mine.get(pin, name) != name}
+            if extra:
+                out.append(f"{name}: also joined to {', '.join(sorted(extra))}")
+        return out
+
+    def _repair(self, nets: dict) -> None:
+        """Whatever the drawing left open gets its name on every pin, so the sheet is right even where it is not pretty."""
+        bad = {m.split(":", 1)[0] for m in self._miswired(nets) if "not all joined" in m}
+        for name in bad:
+            for spec in nets[name]:
+                try:
+                    self.net(name, spec)
+                except HarnessError:
+                    pass
+        if bad:
+            self.flush()
 
     def _pack(self, blocks, paper, top=None, force: bool = False):
         """Where each block goes on a page: in the order given, each as high and then as far left as it fits, clear of
@@ -1495,7 +1404,13 @@ class Board(_Doc):
         if names is None or name not in names and "/" + name.lstrip("/") not in names:
             names = self._names = set(self.nets())
         bare = name.lstrip("/")
-        return name if name in names else "/" + bare if "/" + bare in names else bare if bare in names else name
+        hit = name if name in names else "/" + bare if "/" + bare in names else bare if bare in names else None
+        if hit is None and bare in self.project.net_pins:     # a net wired inside its block: KiCad named it after a pin
+            try:
+                hit = self.pad(self.project.net_pins[bare])["net"] or None
+            except HarnessError:
+                hit = None
+        return hit or name
 
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
               net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
@@ -1533,6 +1448,17 @@ class Board(_Doc):
             opts.setdefault(fix(n), {})["width"] = w
         for n, kd in (kinds or {}).items():
             opts.setdefault(fix(n), {})["kind"] = kd
+        if self.project.net_pins:      # nets wired inside their block have KiCad's automatic names: tell the router what they were called
+            known = set(self.nets())
+            for name, pin in self.project.net_pins.items():
+                if name in known or "/" + name in known:
+                    continue
+                try:
+                    auto = self.pad(pin)["net"]
+                except HarnessError:
+                    continue
+                if auto and "kind" not in opts.get(auto, {}):
+                    opts.setdefault(auto, {})["named"] = name
         if opts:
             e["net_options"] = opts
         if layers:
@@ -1829,7 +1755,630 @@ class HostTransport(Transport):
         if not out.get("ok"):
             raise HarnessError(out.get("error") or "The call failed.")
         return out.get("result")
-`;var h=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
+`;var h=`"""Drawing a functional block of a schematic the way a person does, from its netlist.
+
+The model is a datasheet's typical application circuit: the IC in the middle, a wire leaving each pin, capacitors
+and pull resistors hanging from that wire to ground or a supply, series parts (a resistor, an inductor, a switch)
+in line with it, a divider stacked under the node it measures.  Inside a block parts are joined by wires; a net
+label appears only where a net leaves the block.  Supply symbols point up and ground symbols point down, labels
+are horizontal, and decoupling capacitors of one supply stand in a row on shared rails with one symbol each.
+
+Every block is drawn as clusters (an IC with what hangs on its pins, a bank of capacitors, a chain of small parts),
+each at a scratch position off the page, measured as drawn and moved beside the previous one.
+"""
+from __future__ import annotations
+
+import math
+
+from .transport import HarnessError
+
+G = 2.54
+SCRATCH = (1524.0, 508.0)
+SCRATCH_BOX = [SCRATCH[0] - 600.0, SCRATCH[1] - 400.0, SCRATCH[0] + 600.0, SCRATCH[1] + 400.0]
+ASSEMBLY_X = 2794.0
+
+
+def _up(v: float, g: float = G) -> float:
+    return math.ceil(v / g - 1e-6) * g
+
+
+def _hit(a, b, eps: float = 0.05) -> bool:
+    return a[0] < b[2] - eps and a[2] > b[0] + eps and a[1] < b[3] - eps and a[3] > b[1] + eps
+
+
+def _rect(x0, y0, x1, y1):
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+class Blocks:
+    def __init__(self, sch, parts: dict, nets: dict, groups: dict, intent: dict, ground):
+        self.s = sch
+        self.parts = {r: (p if isinstance(p, dict) else {"lib": p}) for r, p in parts.items()}
+        self.groups = groups
+        self.intent = intent
+        self.ground = ground
+        self.gof = {r: g for g, rs in groups.items() for r in rs}
+        self.netpins: dict = {}
+        for (ref, num), net in intent.items():
+            self.netpins.setdefault(net, []).append((ref, num))
+        self.done: set = set()
+        self.force: set = set()     # nets that carry a label in their block after all
+        self.problems: list = []
+        self._offs: dict = {}
+        self._sides: dict = {}
+
+    # ---- facts
+    def lib(self, ref):
+        return self.parts[ref].get("lib")
+
+    def offs(self, ref, rot=0) -> dict:
+        key = (ref, rot)
+        if key not in self._offs:
+            pins = self.s._lib_pins(self.lib(ref), rot)[1]
+            self._offs[key] = {q[0]: (q[2], q[3]) for q in pins}
+            self._sides[key] = [q[4] for q in pins]
+        return self._offs[key]
+
+    def small(self, ref) -> bool:
+        lib = self.lib(ref)
+        if isinstance(lib, dict) or hasattr(lib, "symbol"):
+            return False
+        try:
+            o = self.offs(ref)
+        except HarnessError:
+            return False
+        if len(o) != 2:
+            return False
+        return set(self._sides[(ref, 0)]) in ({"left", "right"}, {"top", "bottom"})   # a part a wire passes through
+
+    def kind(self, net) -> str:
+        if not net or not self.s._is_power(net):
+            return "sig"
+        return "gnd" if self.ground.search(net) else "sup"
+
+    def other(self, ref, net):
+        """(pin on this net, the other pin, the other pin's net) of a two pin part."""
+        nums = list(self.offs(ref))
+        a = next((n for n in nums if self.intent.get((ref, n)) == net), nums[0])
+        b = next(n for n in nums if n != a)
+        return a, b, self.intent.get((ref, b))
+
+    def smalls_on(self, net, g, skip=()) -> list:
+        out = []
+        for ref, _ in self.netpins.get(net, []):
+            if self.gof.get(ref) == g and ref not in self.done and ref not in skip and ref not in out and self.small(ref):
+                out.append(ref)
+        return out
+
+    def need_label(self, net, g, wired=()) -> bool:
+        """Does this net leave the block, or reach a pin in it that no wire of ours goes to?"""
+        if net in self.force:
+            return True
+        for ref, num in self.netpins.get(net, []):
+            if (ref, num) in wired:
+                continue
+            if self.gof.get(ref) != g or not self.small(ref):
+                return True
+        return False
+
+    def width(self, *texts) -> float:
+        return self.s._width(*[str(t) for t in texts if t])
+
+    def span(self, ref) -> float:
+        (ax, ay), (bx, by) = self.offs(ref).values()
+        return abs(ax - bx) + abs(ay - by)
+
+    def plain(self, ref) -> bool:
+        return str(self.lib(ref)).startswith(("Device:R", "Device:C"))
+
+    def across(self, ref) -> float:
+        """How far a part drawn in line reaches above and below its wire."""
+        if str(self.lib(ref)).startswith("Device:"):
+            return 1.2
+        try:
+            b = self.s.lib(self.lib(ref))["units"][0].get("body_box") or [-2, -2, 2, 2]
+        except HarnessError:
+            return 2.0
+        (ax, ay), (bx, by) = self.offs(ref).values()
+        return max(abs(b[0]), abs(b[2])) if abs(ax - bx) < 1e-6 else max(abs(b[1]), abs(b[3]))
+
+    # ---- planning: ops are tuples, nothing touches the sheet until emit()
+    def put(self, ops, ref, point, num, face):
+        """Plan a two pin part with pin \`num\` on \`point\`, that pin lying on the \`face\` side of the body.  Returns the other pin's point."""
+        rot, o = 0, self.offs(ref, 0)
+        for rot in (0, 90, 180, 270):
+            o = self.offs(ref, rot)
+            ox, oy = o[num]
+            if (face[0] and ox * face[0] > 1e-6 and abs(oy) < 1e-6) or (face[1] and oy * face[1] > 1e-6 and abs(ox) < 1e-6):
+                break
+        ox, oy = o[num]
+        c = (point[0] - ox, point[1] - oy)
+        b = next(n for n in o if n != num)
+        ops.append(("part", ref, c, rot))
+        return (c[0] + o[b][0], c[1] + o[b][1])
+
+    def sym_rect(self, net, at):
+        w = max(self.width(net), 2.6) / 2 + 0.4
+        if self.kind(net) == "gnd":
+            return _rect(at[0] - w, at[1], at[0] + w, at[1] + 5.4)
+        return _rect(at[0] - w, at[1] - 6.4, at[0] + w, at[1])
+
+    def trunk(self, g, net, x, y, d, label, first=None, lead=G, used=(), wired=()):
+        """Plan what hangs on and follows a wire leaving (x, y) in direction d (+1 right, -1 left) on this net."""
+        k = self.kind(net)
+        ops, rects, refs, ends, inline = [], [], [], [], []
+        hung, series = [], []
+        for r in self.smalls_on(net, g, skip=used):
+            if r == first:
+                continue
+            m = self.other(r, net)[2]
+            if k != "sig":
+                if k == "sup" and self.kind(m) == "gnd" and first is None:
+                    hung.append((r,))
+                continue
+            (hung if self.kind(m) != "sig" else series).append((r,) if self.kind(m) != "sig" else r)
+        if k == "sup" and len(hung) > 3:
+            hung = []            # a row of decoupling capacitors is drawn as a bank, not on one pin
+        if first:
+            series = [first]
+        elif k == "sig":
+            for r in list(series):   # a divider: this part, then one more from its far side to a rail
+                a, b, m = self.other(r, net)
+                rest = [q for q in self.smalls_on(m, g, skip=tuple(used) + (r,))]
+                if len(rest) == 1 and self.kind(self.other(rest[0], m)[2]) != "sig" and self.plain(r) and self.plain(rest[0]):
+                    series.remove(r)
+                    hung.append((r, rest[0]))
+            if len(series) > 1:
+                label, series = True, []          # several branches: each starts from its own label
+            if not series and hung and not label:
+                singles = [h for h in hung if len(h) == 1]
+                pick = next((h for h in singles if not self.plain(h[0])), singles[-1] if singles else None)
+                if pick:
+                    hung.remove(pick)
+                    series = [pick[0]]
+        cx, pts, dots = x, [(x, y)], []
+        if label and series and k == "sig":      # the net's name sits on the wire before the part in line
+            w = self.width(net)
+            ax = cx + lead if d > 0 else cx - _up(lead + w + 0.5)
+            pts.append((ax, y))
+            ops.append(("label", net, (ax, y), 0))
+            rects.append(_rect(ax, y - 1.9, ax + w + 0.5, y + 0.3))
+            cx, lead = (ax + _up(w + 1.0) - G, G) if d > 0 else (ax, G)
+            label = False
+        last_px = None
+        for h in hung:
+            r = h[0]
+            a, b, m = self.other(r, net)
+            fw = max(self.width(q, self.parts[q].get("value")) for q in h) + 1.5
+            lw = 0.0
+            mid_label = None
+            if len(h) == 2:
+                a2, b2, m2 = self.other(h[1], m)
+                if self.need_label(m, g, wired=((r, b), (h[1], a2))):
+                    mid_label = m
+                    lw = self.width(m) + 3.5
+                rail = m2
+            else:
+                rail = m
+            v = -1 if self.kind(rail) == "sup" else 1
+            if d > 0:
+                px = cx + max(lead, 2 * G, _up(lw) if lw else 0)
+                nlead = _up(fw + 2.5)
+            else:
+                px = cx - max(lead, _up(fw + 2.5))
+                nlead = max(2 * G, _up(lw) if lw else 0)
+            far = self.put(ops, r, (px, y), a, (0, -v))
+            depth = self.span(r)
+            if len(h) == 2:
+                if mid_label:
+                    ops.append(("wire", [far, (far[0] - G, far[1])]))
+                    ops.append(("label", m, (far[0] - G, far[1]), 180))
+                    ops.append(("dot", far))
+                far = self.put(ops, h[1], far, a2, (0, -v))
+                depth += self.span(h[1])
+            ops.append(("sym", rail, far))
+            rects.append(_rect(px - 2.3 - lw, y, px + 1.2 + fw, y + v * (depth + (5.4 if v > 0 else 6.4))))
+            pts.append((px, y))
+            dots.append((px, y))
+            refs += list(h)
+            cx, lead, last_px = px, nlead, px
+        if k != "sig" and not first:
+            if last_px is None:
+                return None
+            ops.append(("sym", net, (last_px, y)))       # the supply's own symbol stands over the node its capacitors hang from
+            rects.append(self.sym_rect(net, (last_px, y)))
+        elif series:
+            r = series[0]
+            a, b, m = self.other(r, net)
+            wr, wv = self.width(r), self.width(self.parts[r].get("value"))
+            pre_w, post_w = (wr, wv) if d > 0 else (wv, wr)
+            pre = lead + max(0.0, _up(pre_w - 1.0))
+            A = (cx + d * pre, y)
+            B = self.put(ops, r, A, a, (-d, 0))
+            inline.append(r)
+            refs.append(r)
+            h = self.across(r)
+            lo, hi = min(A[0], B[0]), max(A[0], B[0])
+            inset = 1.0 if self.plain(r) else 0.0       # the pin stubs of a resistor or capacitor are wire, not body
+            rects.append(_rect(lo + inset, y - h, hi - inset, y + h))
+            rects.append(_rect(lo + 0.8 - wr, y - 1.9, lo + 0.8, y - 0.25))      # the reference, on the wire before the body
+            rects.append(_rect(hi - 0.8, y - 1.9, hi - 0.8 + wv, y - 0.25))      # the value, on the wire after it
+            pts.append(A)
+            cx, lead = B[0], max(G, _up(post_w - 0.2))
+            if m is not None and self.kind(m) != "sig":
+                E = (cx + d * lead, y)
+                ops.append(("wire", [B, E]))
+                ends.append((E, m, d))
+            elif m is not None:
+                sub = self.trunk(g, m, B[0], y, d, self.need_label(m, g, wired=((r, b),)), lead=lead, used=tuple(used) + tuple(refs), wired=((r, b),))
+                if sub:
+                    for key, mine in (("ops", ops), ("rects", rects), ("refs", refs), ("ends", ends), ("inline", inline)):
+                        mine += sub[key]
+        elif label:
+            w = self.width(net)
+            E = (cx + d * max(lead, G), y)
+            pts.append(E)
+            ops.append(("label", net, E, 0 if d > 0 else 180))
+            rects.append(_rect(E[0], y - 1.9, E[0] + d * (w + 1.2), y + 0.3))
+        if not ops:
+            return None
+        if len(pts) > 1:
+            ops.append(("wire", pts))
+            rects.append(_rect(pts[0][0], y - 0.2, pts[-1][0], y + 0.2))
+        for p in dots:
+            if p != pts[-1] or (k != "sig" and not first):
+                ops.append(("dot", p))
+        return {"ops": ops, "rects": rects, "refs": refs, "ends": ends, "inline": inline}
+
+    # ---- drawing
+    def emit(self, ops) -> None:
+        s = self.s
+        r = lambda v: round(v, 4)
+        for op in ops:
+            if op[0] == "wire":
+                pts = []
+                for p in op[1]:
+                    if not pts or abs(p[0] - pts[-1][0]) > 1e-6 or abs(p[1] - pts[-1][1]) > 1e-6:
+                        pts.append([r(p[0]), r(p[1])])
+                if len(pts) > 1:
+                    s._edit({"op": "add_wire", "points": pts})
+            elif op[0] == "dot":
+                s._edit({"op": "add_junction", "x": r(op[1][0]), "y": r(op[1][1])})
+            elif op[0] == "sym":
+                s._edit({"op": "add_symbol", "lib_id": "power:" + op[1], "x": r(op[2][0]), "y": r(op[2][1]), "rotation": 0})
+            elif op[0] == "label":
+                s._edit({"op": "add_label", "kind": "label", "text": op[1], "x": r(op[2][0]), "y": r(op[2][1]), "rotation": op[3]})
+            elif op[0] == "part":
+                spec = self.parts[op[1]]
+                s.place(spec.get("lib"), at=op[2], ref=op[1], value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=op[3])
+                self.done.add(op[1])
+
+    def power_ends(self, ends) -> list:
+        """Wires that end on a rail: neighbours on the same rail are joined and share one symbol."""
+        ops, i = [], 0
+        while i < len(ends):
+            j = i
+            while j + 1 < len(ends) and ends[j + 1][1] == ends[i][1] and ends[j + 1][2] == ends[i][2] and abs(ends[j + 1][0][1] - ends[j][0][1]) <= 2 * G + 1e-6:
+                j += 1
+            run, net, d = ends[i:j + 1], ends[i][1], ends[i][2]
+            if len(run) == 1:
+                ops.append(("sym", net, run[0][0]))
+            else:
+                X = max(e[0][0] * d for e in run) * d
+                ys = sorted(e[0][1] for e in run)
+                for e in run:
+                    ops.append(("wire", [e[0], (X, e[0][1])]))
+                ops.append(("wire", [(X, yy) for yy in ys]))
+                for yy in ys[1:-1]:
+                    ops.append(("dot", (X, yy)))
+                ops.append(("sym", net, (X, ys[-1] if self.kind(net) == "gnd" else ys[0])))
+            i = j + 1
+        return ops
+
+    def big(self, g, ref) -> list:
+        """An IC or connector at the scratch position with everything that hangs on its pins.  Returns the parts drawn in line."""
+        s, spec = self.s, self.parts[ref]
+        s.place(spec.get("lib"), at=SCRATCH, ref=ref, value=spec.get("value"), footprint=spec.get("footprint"), fields=spec.get("fields"), rotation=spec.get("rotation", 0))
+        self.done.add(ref)
+        s.flush()
+        sides: dict = {}
+        for p in s.pins(ref):
+            if not p["hidden"]:
+                sides.setdefault(p["side"], []).append(p)
+        want = lambda p: self.intent.get((ref, p["number"])) or ""
+        inline: list = []
+        for side in ("left", "right"):
+            ps = sorted(sides.get(side, []), key=lambda p: p["y"])
+            d = -1 if side == "left" else 1
+            runs = []
+            for p in ps:
+                if not want(p):
+                    continue
+                if runs and want(runs[-1][-1]) == want(p) and abs(p["y"] - runs[-1][-1]["y"]) <= G + 1e-3 and ps.index(p) == ps.index(runs[-1][-1]) + 1:
+                    runs[-1].append(p)
+                else:
+                    runs.append([p])
+            taken, later, ends = [], [], []
+            for run in runs:
+                net = want(run[0])
+                k = self.kind(net)
+                wired = tuple((ref, p["number"]) for p in run)
+                at = run[-1] if k == "gnd" else run[0] if k == "sup" else run[len(run) // 2]
+                ops = []
+                if len(run) > 1:
+                    bx = run[0]["x"] + d * G
+                    for p in run:
+                        ops.append(("wire", [(p["x"], p["y"]), (bx, p["y"])]))
+                    ops.append(("wire", [(bx, p["y"]) for p in run]))
+                    for p in run[1:-1]:
+                        ops.append(("dot", (bx, p["y"])))
+                    origin = (bx, at["y"])
+                    taken.append(_rect(run[0]["x"], run[0]["y"] - 0.2, bx, run[-1]["y"] + 0.2))
+                else:
+                    origin = (at["x"], at["y"])
+                self.emit(ops)
+                busy = bool(self.smalls_on(net, g)) if k == "sig" else k == "sup" and 0 < len([r for r in self.smalls_on(net, g) if self.kind(self.other(r, net)[2]) == "gnd"]) <= 3
+                if k == "sig" and not busy:
+                    if self.need_label(net, g, wired=wired):
+                        E = (origin[0] + d * G, origin[1])
+                        self.emit([("wire", [origin, E]), ("label", net, E, 0 if d > 0 else 180)] + ([("dot", origin)] if len(run) > 1 else []))
+                        taken.append(_rect(origin[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3))
+                    continue
+                later.append((run, net, k, origin, wired, busy, len(run) > 1))
+            lines: list = []
+            soft: list = []      # rail symbols at the ends of wires: a neighbour ending on the same rail joins them instead of avoiding them
+            clash = lambda rs: any(_hit(a, b) for a in rs for b in taken) or any(a[3] - a[1] > 0.5 and _hit(a, b) for a in rs for b in lines)
+
+            def fits(plan):
+                mine = {e[1] for e in plan["ends"]}
+                if clash(plan["rects"]) or clash([self.sym_rect(e[1], e[0]) for e in plan["ends"]]):
+                    return False
+                return not any(_hit(a, b) for a in plan["rects"] for b, net in soft if net not in mine)
+            # a supply or ground on several pins of one side: one bus beside the pins and one symbol, above for a supply, below for ground
+            rows = [p["y"] for p in ps]
+            for net in dict.fromkeys(e[1] for e in later if not e[5]):
+                mine = [e for e in later if e[1] == net and not e[5]]
+                if len(mine) < 2:
+                    continue
+                gnd = self.kind(net) == "gnd"
+                ys = sorted(e[3][1] for e in mine)
+                end = max(rows) + G if gnd else min(rows) - G
+                for i in range(2, 60):
+                    X = ps[0]["x"] + d * i * G
+                    rs = [_rect(X - 1.0, min(ys[0], end), X + 1.0, max(ys[-1], end)), self.sym_rect(net, (X, end))]
+                    if not clash(rs):
+                        break
+                ops = []
+                for e in mine:
+                    ops.append(("wire", [e[3], (X, e[3][1])]))
+                    if e[6]:
+                        ops.append(("dot", e[3]))
+                    taken.append(_rect(e[3][0], e[3][1] - 0.2, X, e[3][1] + 0.2))
+                ops.append(("wire", [(X, yy) for yy in (ys + [end] if gnd else [end] + ys)]))
+                ops += [("dot", (X, yy)) for yy in (ys[1:] if gnd else ys[:-1])]
+                ops.append(("sym", net, (X, end)))
+                self.emit(ops)
+                taken.append(self.sym_rect(net, (X, end)))
+                lines.append(_rect(X - 0.3, min(ys[0], end), X + 0.3, max(ys[-1], end)))
+                later = [e for e in later if e not in mine]
+            later.sort(key=lambda e: (0, -e[3][1]) if e[2] == "gnd" and not e[5] else (1, e[3][1]))
+            for run, net, k, origin, wired, busy, barred in later:
+                plan = None
+                if busy:
+                    for i in range(1, 28):
+                        plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, wired=wired)
+                        if not plan or fits(plan):
+                            break
+                        plan = None
+                if plan:
+                    if barred:
+                        plan["ops"].append(("dot", origin))
+                    self.emit(plan["ops"])
+                    taken += plan["rects"]
+                    soft += [(self.sym_rect(e[1], e[0]), e[1]) for e in plan["ends"]]
+                    ends += plan["ends"]
+                    inline += plan["inline"]
+                    continue
+                if k == "sig":      # no room on this pin: a label here, and its parts are drawn beside the IC from the same label
+                    self.force.add(net)
+                    for i in range(1, 30):
+                        E = (origin[0] + d * i * G, origin[1])
+                        if not clash([_rect(E[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3)]) or i == 29:
+                            break
+                    self.emit([("wire", [origin, E]), ("label", net, E, 0 if d > 0 else 180)] + ([("dot", origin)] if barred else []))
+                    taken.append(_rect(origin[0], origin[1] - 1.9, E[0] + d * (self.width(net) + 1.2), origin[1] + 0.3))
+                    continue
+                for i in range(1, 40):   # a supply or ground symbol, upright, clear of the neighbours' text
+                    E = (origin[0] + d * i * G, origin[1])
+                    rs = [self.sym_rect(net, E), _rect(origin[0], origin[1] - 0.2, E[0], origin[1] + 0.2)]
+                    if not clash(rs) and not any(_hit(a, b) for a in rs for b, _ in soft):
+                        break
+                else:
+                    E = (origin[0] + d * G, origin[1])
+                    rs = [self.sym_rect(net, E)]
+                self.emit([("wire", [origin, E]), ("sym", net, E)] + ([("dot", origin)] if barred else []))
+                taken += rs
+            self.emit(self.power_ends(sorted(ends, key=lambda e: e[0][1])))
+        for side in ("top", "bottom"):
+            ps = sorted(sides.get(side, []), key=lambda p: p["x"])
+            v = -1 if side == "top" else 1
+            power = [p for p in ps if want(p) and self.kind(want(p)) != "sig"]
+            signal = [p for p in ps if want(p) and self.kind(want(p)) == "sig"]
+            natural = lambda net: (self.kind(net) == "sup") == (side == "top")
+            railed: set = set()
+            if len(power) > 1 and not signal and min(b["x"] - a["x"] for a, b in zip(power, power[1:])) < 2 * G - 1e-3:
+                lo, hi = power[0]["x"], power[-1]["x"]
+                order = [n for n in dict.fromkeys(want(p) for p in power) if natural(n) and len([p for p in power if want(p) == n]) > 1]
+                for kk, net in enumerate(order):
+                    mine = [p for p in power if want(p) == net]
+                    rail = mine[0]["y"] + v * (G + kk * G)
+                    sx = lo - 3 * G * (kk // 2 + 1) if kk % 2 == 0 else hi + 3 * G * (kk // 2 + 1)
+                    xs = sorted({p["x"] for p in mine} | {sx})
+                    ops = [("wire", [(p["x"], p["y"]), (p["x"], rail)]) for p in mine]
+                    ops.append(("wire", [(xx, rail) for xx in xs]))
+                    ops += [("dot", (xx, rail)) for xx in xs[1:-1]]
+                    ops.append(("sym", net, (sx, rail)))
+                    self.emit(ops)
+                    railed |= {p["number"] for p in mine}
+            prev = None
+            for p in power:
+                if p["number"] in railed:
+                    continue
+                net = want(p)
+                near = prev is not None and p["x"] - prev[0] < 2 * G - 1e-3
+                n = 3 if near and prev[1] == 1 else 1
+                E = (p["x"], p["y"] + v * n * G)
+                if natural(net):
+                    self.emit([("wire", [(p["x"], p["y"]), E]), ("sym", net, E)])
+                else:                      # a ground pin on top or a supply pin underneath: out, aside, then upright
+                    F = (E[0] + (3 * G if p["x"] >= SCRATCH[0] else -3 * G), E[1])
+                    self.emit([("wire", [(p["x"], p["y"]), E, F]), ("sym", net, F)])
+                prev = (p["x"], n)
+            for i, p in enumerate(sorted(signal, key=lambda p: -p["x"])):   # labels stay horizontal: out, a step aside, then the name
+                net = want(p)
+                if not self.need_label(net, g, wired=((ref, p["number"]),)) and not self.smalls_on(net, g):
+                    continue
+                self.force.add(net)
+                E = (p["x"], p["y"] + v * (i + 1) * G)
+                F = (E[0] + G, E[1])
+                self.emit([("wire", [(p["x"], p["y"]), E, F]), ("label", net, F, 0)])
+        return inline
+
+    def bank(self, refs, sup, gnd) -> None:
+        """Parts between one supply and ground in a row on shared rails, with one supply symbol and one ground symbol."""
+        x, y = SCRATCH
+        pitch = max(4 * G, _up(max(self.width(r, self.parts[r].get("value")) for r in refs) + 5.0))
+        ops, tops, bots = [], [], []
+        for i, r in enumerate(refs):
+            a, b, _ = self.other(r, sup)
+            half = self.span(r) / 2
+            top = (x + i * pitch, y - half)
+            bot = self.put(ops, r, top, a, (0, -1))
+            tops.append(top)
+            bots.append(bot)
+        if len(refs) == 1:
+            ops += [("sym", sup, tops[0]), ("sym", gnd, bots[0])]
+        else:
+            ty, by = min(t[1] for t in tops) - G, max(b[1] for b in bots) + G
+            for t, b in zip(tops, bots):
+                ops.append(("wire", [t, (t[0], ty)]))
+                ops.append(("wire", [b, (b[0], by)]))
+            ops.append(("wire", [(t[0], ty) for t in tops]))
+            ops.append(("wire", [(b[0], by) for b in bots]))
+            ops += [("dot", (t[0], ty)) for t in tops[:-1]] + [("dot", (b[0], by)) for b in bots[:-1]]
+            ops += [("sym", sup, (tops[0][0], ty)), ("sym", gnd, (bots[0][0], by))]
+        self.emit(ops)
+
+    def chain(self, g, ref) -> list:
+        """Small parts that hang on no IC pin, drawn left to right from a label or a rail.  Returns the parts drawn in line."""
+        x, y = SCRATCH
+        nets = [self.intent.get((ref, n)) for n in self.offs(ref)]
+        start = next((n for n in nets if n and self.kind(n) == "sig" and self.need_label(n, g)), None)
+        plan, head = None, []
+        if start:
+            head = [("label", start, (x, y), 180)]
+            plan = self.trunk(g, start, x, y, 1, False)
+            if not plan or ref not in plan["refs"]:
+                plan = self.trunk(g, start, x, y, 1, False, first=ref)
+        else:
+            start = next((n for n in nets if n and self.kind(n) == "sup"), None) or next((n for n in nets if n and self.kind(n) == "gnd"), None)
+            if start:
+                head = [("sym", start, (x, y))]
+            else:
+                start = next((n for n in nets if n), None)
+            if start:
+                plan = self.trunk(g, start, x, y, 1, False, first=ref)
+        if plan and ref in plan["refs"]:
+            self.emit(head + plan["ops"] + self.power_ends(plan["ends"]))
+            return plan["inline"]
+        ops: list = []      # nothing to follow: the part alone, each pin with its symbol or its label
+        nums = list(self.offs(ref))
+        far = self.put(ops, ref, (x, y), nums[0], (-1, 0))
+        for at, num, rot in (((x, y), nums[0], 180), (far, nums[1], 0)):
+            net = self.intent.get((ref, num))
+            if net and self.kind(net) != "sig":
+                ops.append(("sym", net, at))
+            elif net:
+                ops.append(("label", net, at, rot))
+        self.emit(ops)
+        return [ref]
+
+    # ---- the clusters of one block, side by side
+    def settle(self, inline, at) -> list | None:
+        """Fields into place, then the cluster as drawn is measured and moved so its top left corner is at \`at\`."""
+        s = self.s
+        s.flush()
+        s._edit({"op": "autoplace_fields", "within": SCRATCH_BOX})
+        s.flush()
+        if inline:
+            s._edit({"op": "clear_fields", "refs": list(inline), "inline": True})
+            s.flush()
+        s._edit({"op": "clear_fields", "within": SCRATCH_BOX})
+        s.flush()
+        ext = s.layout(within=SCRATCH_BOX, limit=1).get("extent")
+        if not ext:
+            return None
+        dx, dy = _up(at[0] - ext[0]), _up(at[1] - ext[1])
+        s._edit({"op": "move_region", "x0": SCRATCH_BOX[0], "y0": SCRATCH_BOX[1], "x1": SCRATCH_BOX[2], "y1": SCRATCH_BOX[3], "dx": dx, "dy": dy})
+        s.flush()
+        return [ext[0] + dx, ext[1] + dy, ext[2] + dx, ext[3] + dy]
+
+    def run(self):
+        """Draw every block in the assembly area, one under the other.  Returns [(name, band)], the parts placed, problems."""
+        bands, placed, gy = [], [], 254.0
+        for g, refs in self.groups.items():
+            for r in refs:
+                if r not in self.parts:
+                    raise HarnessError(f"Group {g} names {r}, which is not in parts.")
+            bigs = [r for r in refs if not self.small(r)]
+            x0, y, w = ASSEMBLY_X, gy, 0.0
+            for r in bigs:
+                ext = self.settle(self.big(g, r), (x0, y))
+                if ext:
+                    y, w = ext[3] + 3 * G, max(w, ext[2] - x0)
+            height = y - gy
+            # beside the ICs: rows of capacitor banks and chains, wrapped
+            cx0 = x0 + (w + 4 * G if bigs else 0)
+            cx, cy, row = cx0, gy, 0.0
+            limit = max(150.0, w)
+
+            def beside(inline):
+                nonlocal cx, cy, row, height
+                ext = self.settle(inline, (cx, cy))
+                if not ext:
+                    return
+                if cx > cx0 and ext[2] - cx0 > limit:        # past the row's end: start the next row and put it there
+                    dx, dy = _up(cx0 - ext[0]), _up(cy + row + 2 * G - ext[1])
+                    self.s._edit({"op": "move_region", "x0": ext[0] - 0.5, "y0": ext[1] - 0.5, "x1": ext[2] + 0.5, "y1": ext[3] + 0.5, "dx": dx, "dy": dy})
+                    self.s.flush()
+                    ext = [ext[0] + dx, ext[1] + dy, ext[2] + dx, ext[3] + dy]
+                    cy, row = ext[1], 0.0
+                cx, row = ext[2] + 3 * G, max(row, ext[3] - cy)
+                height = max(height, ext[3] - gy)
+
+            banks: dict = {}
+            for r in refs:
+                if r in self.done or not self.small(r):
+                    continue
+                kinds = {self.kind(self.intent.get((r, n))): self.intent.get((r, n)) for n in self.offs(r)}
+                if "sup" in kinds and "gnd" in kinds:
+                    banks.setdefault((kinds["sup"], kinds["gnd"]), []).append(r)
+            for (sup, gnd), rs in banks.items():
+                for i in range(0, len(rs), 10):
+                    self.bank(rs[i:i + 10], sup, gnd)
+                    beside([])
+            for labelled in (True, False):      # chains that start from a net's label first, then what is left
+                for r in refs:
+                    if r in self.done:
+                        continue
+                    if labelled and not any(n and self.kind(n) == "sig" and self.need_label(n, g) for n in (self.intent.get((r, q)) for q in self.offs(r))):
+                        continue
+                    beside(self.chain(g, r))
+            placed += refs
+            bands.append((g, [ASSEMBLY_X - 25.4, gy - 25.4, ASSEMBLY_X + 1200.0, gy + max(height, 25.4) + 25.4]))
+            gy = _up(gy + max(height, 25.4) + 127.0)
+        return bands, placed, self.problems
+`;var g=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
 
     from kicad_harness import parts
     part = parts.from_datasheet("W25Q64JV.pdf", name="W25Q64JV", package="SOIC-8")
@@ -2571,7 +3120,7 @@ def dim_tables(pages: list) -> list:
                     out.append(t)
             i = max(j, i + 1)
     return out
-`;var g=`"""Footprints computed from package dimensions, after IPC-7351B.
+`;var b=`"""Footprints computed from package dimensions, after IPC-7351B.
 
 Every generator takes the package's own dimensions (the numbers a datasheet's mechanical drawing
 gives) and returns a \`Footprint\`: pads, courtyard, fabrication outline, silkscreen and the text of
@@ -2985,7 +3534,7 @@ def header(name: str, pins: int, rows: int = 1, pitch: float = 2.54, lead: float
         for r in range(rows):
             fp.pad(n, x0 + r * pitch, y0 + i * pitch, pad, pad, "rect", drill=hole); n += 1
     return fp.finish(rows * pitch, per * pitch, 0.5)
-`;var b=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
+`;var y=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
 
     from kicad_harness import parts
     rows = parts.find("3.3V LDO SOT-23-5 500mA")            # every vendor that is set up, merged
@@ -3270,7 +3819,7 @@ def lookup(mpn: str, project=None) -> dict:
         elif not out["datasheet"] and own.get("datasheet_candidates"):
             out["datasheet_candidates"] = own["datasheet_candidates"]
     return out
-`;var y=`"""Schematic symbols drawn from a pin list.
+`;var w=`"""Schematic symbols drawn from a pin list.
 
 A symbol is a rectangle with the pins sorted onto its sides the way KiCad's library convention
 (KLC) asks: supplies on top, grounds at the bottom, inputs on the left, outputs on the right,
@@ -3454,9 +4003,9 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var d=require("node:fs"),j=globalThis,O=d.constants;process.binding=e=>{if(e==="constants")return{fs:O};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete j[e]}catch{}var C=new(require("node:string_decoder")).StringDecoder("utf8"),x=new Int32Array(new SharedArrayBuffer(4)),a="";function w(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
-`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(x,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=C.write(e.subarray(0,n))}}function p(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=d.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(x,0,0,4);continue}throw t}}var F=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",m],["kicad_harness/transport.py",u],["kicad_harness/parts/__init__.py",h],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",g],["kicad_harness/parts/search.py",b],["kicad_harness/parts/symbol.py",y]],q=`
+`;var f=require("node:fs"),F=globalThis,O=f.constants;process.binding=e=>{if(e==="constants")return{fs:O};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete F[e]}catch{}var q=new(require("node:string_decoder")).StringDecoder("utf8"),k=new Int32Array(new SharedArrayBuffer(4)),a="";function x(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
+`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=f.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(k,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=q.write(e.subarray(0,n))}}function p(e){let s=Buffer.from(JSON.stringify(e)+`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=f.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(k,0,0,4);continue}throw t}}var R=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",m],["kicad_harness/transport.py",u],["kicad_harness/sheet.py",h],["kicad_harness/parts/__init__.py",g],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",b],["kicad_harness/parts/search.py",y],["kicad_harness/parts/symbol.py",w]],L=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -3487,6 +4036,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function R(){let e=JSON.parse(w()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:k}=require(s+"pyodide.js"),o=await k({indexURL:s,jsglobals:{},stdout:f,stderr:f});o.registerJsModule("_kc_host",{call:(r,l)=>(p({call:String(r),args:JSON.parse(String(l||"{}"))}),w())}),o.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of F)o.FS.writeFile("/kh/"+r,l);o.runPython(q);let N=o.globals.get("__kc_run"),i;try{i=JSON.parse(String(N(String(e.code||""))))}catch(r){i={ok:!1,error:String(r&&r.message||r).split(`
-`).filter(Boolean).slice(-1)[0]||"The script failed."}}i.done=!0,i.output=n.join(`
-`),p(i),process.exit(0)}R().catch(e=>{try{p({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`;async function z(){let e=JSON.parse(x()),s=String(process.argv[2]||""),n=[],t=0,d=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:d,stderr:d});i.registerJsModule("_kc_host",{call:(r,l)=>(p({call:String(r),args:JSON.parse(String(l||"{}"))}),x())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of R)i.FS.writeFile("/kh/"+r,l);i.runPython(L);let v=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(v(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
+`),p(o),process.exit(0)}z().catch(e=>{try{p({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

@@ -75,7 +75,7 @@ class Blinker(unittest.TestCase):
         sch.build({"R1": {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
                    "R2": {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
                    "C1": {"lib": "Device:C", "value": "1uF", "footprint": "Capacitor_SMD:C_0603_1608Metric"}},
-                  {"GND": ["R1.2", "R2.2", "C1.2"], "SIG": ["R1.1", "R2.1", "C1.1"]})
+                  {"GND": ["R1.2", "R2.2", "C1.2"], "SIG": ["R1.1", "R2.1", "C1.1"]}, labels=["SIG"])   # keep the name on the sheet for the board
         board = p.board()
         board.sync()
         board.outline(100, 100, 120, 112)
@@ -200,7 +200,8 @@ class Blinker(unittest.TestCase):
         sch = p.schematic()
         r = {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0603_1608Metric"}
         sch.build({"R1": r, "R2": r, "R3": r, "R4": r},
-                  {"GND": ["R1.2", "R2.2", "R3.2", "R4.2"], "ANT": ["R1.1", "R2.1"], "TEMP_OUT": ["R3.1", "R4.1"]})
+                  {"GND": ["R1.2", "R2.2", "R3.2", "R4.2"], "ANT": ["R1.1", "R2.1"], "TEMP_OUT": ["R3.1", "R4.1"]},
+                  labels=["TEMP_OUT"])     # ANT is wired inside its block and has no label: the router still learns its name
         board = p.board()
         board.sync()
         board.outline(100, 100, 130, 120)
@@ -211,8 +212,10 @@ class Blinker(unittest.TestCase):
         board.keepout([112, 114, 118, 119], name="no copper here")
         routed = board.route(kinds={"TEMP_OUT": "analog"}, fence={"spacing": 2.5}, time_s=15)
         self.assertEqual(routed["left"], {}, routed)
-        self.assertEqual(routed["domains"]["kept_apart"], {"/ANT": "rf", "/TEMP_OUT": "analog"})
-        fence = next(f for f in routed["ground_vias"] if f["net"] == "/ANT")
+        ant = board.pad("R1.1")["net"]
+        self.assertTrue(ant.startswith("Net-("), ant)
+        self.assertEqual(routed["domains"]["kept_apart"], {ant: "rf", "/TEMP_OUT": "analog"})
+        fence = next(f for f in routed["ground_vias"] if f["net"] == ant)
         self.assertGreaterEqual(fence["fence"], 8, routed)          # a 20 mm run, both sides, every 2.5 mm
         self.assertEqual(fence["ground"], "GND")
         self.assertEqual(board.check()["errors"], 0)

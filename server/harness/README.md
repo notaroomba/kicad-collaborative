@@ -64,6 +64,13 @@ and reports what is left, `autoplace_fields(refs)`, `page("A3")`, `layout()`, `s
 local files) are the tools around them. `build` draws every block off the page, measures it as drawn and
 packs the blocks onto the smallest page they fit on, so its result has `overlaps: 0`.
 
+`build` draws each block like a datasheet's application circuit (`kicad_harness/sheet.py`): a wire leaves each
+IC pin, capacitors and pull resistors hang from it, series parts sit in line with it, dividers stack under
+their node, same-net pins are tied together, decoupling capacitors of one supply stand in a row on shared
+rails. Supply symbols point up, ground symbols down, labels are horizontal, and a label appears only where
+a net leaves its block. A net wired inside its block has no label (KiCad names it after a pin); pass
+`labels=["NAME"]` to keep a name on the sheet.
+
 Board (`project.board()`): `sync`, `outline`, `rules`, `zone`, `autoplace`, `place`, `move`, `rotate`,
 `flip`, `group`, `layers`, `route`, `fill`, `fix_thermals`, `pad_connection`, `connect`, `track`, `via`,
 and to read: `refs`, `parts`, `pads`, `pad`, `nets`, `unrouted`, `info`, `check`. `layers(4, planes=["In1.Cu"])`

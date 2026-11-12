@@ -11,7 +11,7 @@
 import { ED, K, ToolError, centreOn, fieldsOf, findByRef, openEntry, schNets } from "./design";
 import { projectDocs, resolveDoc } from "./design";
 import { footprintNode, kicadFootprint, kicadSymbol, vendorPart, vendorSymbol } from "./library";
-import { fieldShifts, itemsWithin } from "./layout";
+import { fieldShifts, inlineFieldShifts, itemsWithin } from "./layout";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -507,7 +507,8 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
             const net = boardNet(doc, name).name; if (!o || typeof o !== "object") continue;
             netOpts[net] = { layers: Array.isArray(o.layers) && o.layers.length ? o.layers : undefined, width: typeof o.width === "number" ? o.width : undefined, allowVias: typeof o.allow_vias === "boolean" ? o.allow_vias : undefined,
               maxVias: typeof o.max_vias === "number" ? o.max_vias : undefined, avoid: Array.isArray(o.avoid) ? o.avoid : undefined,
-              kind: ["analog", "rf", "switching", "fast", "digital", "supply"].includes(o.kind) ? o.kind : undefined, impedance: typeof o.impedance === "number" && o.impedance > 0 ? o.impedance : undefined };
+              // named: what the schematic's author called a net that carries no label (it is wired inside its block), so its name still says what it carries
+              kind: ["analog", "rf", "switching", "fast", "digital", "supply"].includes(o.kind) ? o.kind : typeof o.named === "string" && o.named && R.netKind ? R.netKind(o.named) : undefined, impedance: typeof o.impedance === "number" && o.impedance > 0 ? o.impedance : undefined };
             if (o.kind !== undefined && !netOpts[net].kind) throw new ToolError(`net_options.${name}.kind must be one of analog, rf, switching, fast, digital, supply`);
           }
           const order = Array.isArray(e.order) ? e.order.map((n: unknown) => boardNet(doc, text(n, "net")).name) : undefined;
@@ -606,7 +607,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           // the look a person takes after Autoplace Fields: a reference or value still drawn over a label, a wire or a part moves to the nearest clear spot
           schOnly(e.op); const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v: unknown) => num(v, "within")) : undefined;
           const by = new Map<string, { field: string; dx: number; dy: number }[]>();
-          for (const f of fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
+          for (const f of e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
           const ids: string[] = [];
           for (const [id, moves] of by) {
             const it = doc.items.get(id); if (!it || touched.has(it.id)) continue; const node = k.cloneNode(it.node); let any = false;
