@@ -7516,10 +7516,47 @@ Link '${target}' to this file?`)) return null;
       ids.push(item.id);
     }
     if (!changes.length) return [];
+    if (what === "wire" && canFollow(ctx)) return wireStubsInFlight(ctx, ids);
     for (const id of ids) doc.items.delete(id);
     ctx.commit(changes, what === "noconnect" ? "No Connect Pins" : what === "wire" ? "Wire Pins" : "Label Pins");
     if (ctx.setSelection) ctx.setSelection(what === "noconnect" ? [] : ids.filter((id) => doc.items.has(id)));
     else if (what === "noconnect") ctx.setSelected(null);
+    ctx.requestRender();
+    return ids;
+  }
+  function wireStubsInFlight(ctx, ids) {
+    const doc = ctx.doc;
+    if (S.drag) endDrag(ctx, false);
+    const brk = { mode: "wirepins", label: "Wire Pins", orig: /* @__PURE__ */ new Map(), local: new Set(ids), clicks: 0 };
+    const anchors = [];
+    for (const id of ids) {
+      const it = doc.items.get(id);
+      if (!it) continue;
+      const q = ptsOf(it.node);
+      anchors.push({ p: q[1], ends: [{ item: it, index: 1, orig: q.map((v) => v.slice()) }], stub: null, followers: [] });
+    }
+    const p0 = anchors[0].p, c = cursorOf(ctx);
+    S.drag = {
+      items: [],
+      item: doc.items.get(ids[0]),
+      kind: "wire",
+      orig: null,
+      anchor0: p0,
+      grab: [r4(c[0] - p0[0]), r4(c[1] - p0[1])],
+      last: [0, 0],
+      applied: [0, 0],
+      moved: true,
+      byPointer: false,
+      riders: [],
+      anchors,
+      preview: [],
+      mode: "wirepins",
+      brk,
+      restoreMode: S.dragMode
+    };
+    S.dragMode = "drag";
+    announceModes(ctx);
+    setSelectionIds(ctx, ids);
     ctx.requestRender();
     return ids;
   }

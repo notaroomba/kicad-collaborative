@@ -6,7 +6,11 @@
 import type { SchCtx, Pt } from "./types";
 import { symbolPins, type SymPin } from "./autoplace";
 import { lineNode, labelNode, noConnectNode } from "./nodes";
-import { K, kid, kids, str } from "./state";
+import type { Anchor, BreakJob } from "./types";
+import { canFollow } from "./clipboard";
+import { cursorOf, setSelectionIds } from "./commands";
+import { announceModes, endDrag } from "./drag";
+import { K, S, kid, kids, ptsOf, str } from "./state";
 import { addNode, deep, modChange, r4 } from "./util";
 import { setSpinOfNode, type Spin } from "./autorotate";
 
@@ -132,11 +136,33 @@ export function pinHelper(ctx: SchCtx, pins: PinRef[], what: PinHelper, sheetRef
     const { item, change } = addNode(doc, node); changes.push(change); ids.push(item.id);
   }
   if (!changes.length) return [];
+  if (what === "wire" && canFollow(ctx)) return wireStubsInFlight(ctx, ids);
   for (const id of ids) doc.items.delete(id);           // commit adds them from the fragments
   ctx.commit(changes, what === "noconnect" ? "No Connect Pins" : what === "wire" ? "Wire Pins" : "Label Pins");
   // ID_POPUP_SCH_PIN_TRICKS_NO_CONNECT ends in ClearSelection(); the Wire and Label helpers select what they added
   if (ctx.setSelection) ctx.setSelection(what === "noconnect" ? [] : ids.filter((id) => doc.items.has(id)));
   else if (what === "noconnect") ctx.setSelected(null);
+  ctx.requestRender();
+  return ids;
+}
+
+/**
+ * ID_POPUP_SCH_PIN_TRICKS_WIRE with a pointer: the stubs exist on this client only with their far ends selected
+ * (ENDPOINT) and SCH_ACTIONS::drag running at once, so the ends follow the cursor; the click that ends the drag
+ * pushes one "Wire Pins" step, Esc (or Ctrl+Z) reverts the commit and leaves nothing behind.  The drag is the
+ * Break Wire session's (a BreakJob of local lines whose ends stretch), so a peer's edit puts it back the same way.
+ */
+function wireStubsInFlight(ctx: SchCtx, ids: string[]): string[] {
+  const doc = ctx.doc; if (S.drag) endDrag(ctx, false);
+  const brk: BreakJob = { mode: "wirepins", label: "Wire Pins", orig: new Map(), local: new Set(ids), clicks: 0 };
+  const anchors: Anchor[] = [];
+  for (const id of ids) { const it = doc.items.get(id); if (!it) continue; const q = ptsOf(it.node); anchors.push({ p: q[1], ends: [{ item: it, index: 1, orig: q.map((v) => v.slice() as Pt) }], stub: null, followers: [] }); }
+  const p0 = anchors[0].p, c = cursorOf(ctx);
+  // KiCad warps the pointer onto the first stub's end; here the ends move with the pointer from where it is
+  S.drag = { items: [], item: doc.items.get(ids[0])!, kind: "wire", orig: null, anchor0: p0, grab: [r4(c[0] - p0[0]), r4(c[1] - p0[1])], last: [0, 0], applied: [0, 0], moved: true, byPointer: false,
+    riders: [], anchors, preview: [], mode: "wirepins", brk, restoreMode: S.dragMode };
+  S.dragMode = "drag"; announceModes(ctx);
+  setSelectionIds(ctx, ids);
   ctx.requestRender();
   return ids;
 }

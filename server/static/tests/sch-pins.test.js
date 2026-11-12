@@ -73,6 +73,28 @@ test("Pin Helpers: No Connect on the pin, Wire stub one grid step out", () => {
   _.pinHelper(ctx, [{ id: "u1", number: "3" }], "wire");
   [n] = added(ctx); assert.strictEqual(ctx.log[1].label, "Wire Pins"); assert.deepStrictEqual(ptsOf(n.node), [[50.8, 43.18], [50.8, 41.91]]);
 });
+test("Pin Helpers > Wire with a pointer: the stub ends ride the cursor at once; the click pushes \"Wire Pins\", Esc leaves nothing", () => {
+  _.setFollow(true);
+  try {
+    const doc = K.parseDoc(SHEET), ctx = makeCtx(doc); ctx.cursor = [52, 40];
+    const ids = _.pinHelper(ctx, [{ id: "u1", number: "3" }, { id: "u1", number: "1" }], "wire");
+    assert.strictEqual(ids.length, 2); assert.strictEqual(ctx.log.length, 0, "nothing committed while dragging");
+    assert.deepStrictEqual([...ctx.selection].sort(), ids.slice().sort(), "the stubs are the selection");
+    assert.deepStrictEqual(ptsOf(doc.items.get(ids[0]).node), [[50.8, 43.18], [50.8, 41.91]], "one grid step out");
+    sch.moveDrag(ctx, [52 + 2.54, 40 - 1.27]);
+    assert.deepStrictEqual(ptsOf(doc.items.get(ids[0]).node), [[50.8, 43.18], [53.34, 40.64]], "the end follows, the pin end stays");
+    assert.deepStrictEqual(ptsOf(doc.items.get(ids[1]).node), [[43.18, 48.26], [44.45, 46.99]], "every stub end moves by the same step");
+    sch.endDrag(ctx, true);
+    assert.strictEqual(ctx.log.length, 1); assert.strictEqual(ctx.log[0].label, "Wire Pins");
+    const wires = ctx.log[0].changes.filter((c) => c.kind === "ADDED").map((c) => doc.items.get(c.id)).filter((it) => it && it.kind === "wire");
+    assert.strictEqual(wires.length, 2); assert.deepStrictEqual(ptsOf(wires[0].node), [[50.8, 43.18], [53.34, 40.64]]);
+    // Esc: the commit is reverted, the stubs go
+    const doc2 = K.parseDoc(SHEET), ctx2 = makeCtx(doc2); ctx2.cursor = [52, 40]; const n0 = doc2.items.size;
+    const ids2 = _.pinHelper(ctx2, [{ id: "u1", number: "2" }], "wire"); assert.ok(doc2.items.has(ids2[0]));
+    sch.endDrag(ctx2, false);
+    assert.strictEqual(ctx2.log.length, 0); assert.strictEqual(doc2.items.size, n0); assert.strictEqual(ctx2.selection.size, 0);
+  } finally { _.setFollow(false); }
+});
 test("Pin Function: alternates by name after the base; choosing one writes (alternate …), the base clears it", () => {
   const doc = K.parseDoc(SHEET), ctx = makeCtx(doc), r = { id: "u1", number: "4" };
   assert.strictEqual(_.pinAlternates(doc, { id: "u1", number: "1" }), null);
