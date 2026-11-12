@@ -223,6 +223,21 @@
       "depends": [
         "numpy"
       ]
+    },
+    {
+      "name": "bfieldtools",
+      "version": "0.11.4",
+      "file": "bfieldtools-0.11.4-py3-none-any.whl",
+      "sha256": "4183ab6aaa34d9d45c8cad08c342d4a072fefbe00ce14acc9177ff92c1faeca8",
+      "imports": [
+        "bfieldtools"
+      ],
+      "depends": [
+        "numpy",
+        "scipy",
+        "matplotlib",
+        "trimesh"
+      ]
     }
   ]
 }

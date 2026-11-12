@@ -167,6 +167,12 @@ async function one(dir, boardPath, boardGiven) {
     if (r.status !== 0) throw new Error("SVG drawing failed: " + String(r.stderr || r.error || "").slice(-400));
     return r.stdout;
   };
+  // ngspice: the browser's Python waits on the simulator in its page; here each request replays the session in a new one.
+  globalThis.__kcSpiceSync = (request) => {
+    const r = spawnSync(process.execPath, [path.join(here, "plugin-spice.mjs")], { input: String(request), encoding: "utf8", maxBuffer: 1 << 30, timeout: 120000 });
+    if (r.status !== 0) throw new Error("ngspice failed: " + String(r.stderr || r.error || "").slice(-400));
+    return r.stdout;
+  };
   py.globals.set("_kc_bridge", bridge);
   const loaded = [];
   if (built) {

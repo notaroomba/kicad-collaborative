@@ -65,8 +65,7 @@
   "status": "works"
  },
  "com.github.Steffen-W.KiCad-Parasitics": {
-  "status": "unsupported",
-  "note": "It runs the ngspice circuit simulator as a separate program."
+  "status": "works"
  },
  "com.github.Steffen-W.impartGUI": {
   "status": "works"
@@ -187,8 +186,7 @@
   "status": "works"
  },
  "com.github.kerstensrobin.kicad-breadboard": {
-  "status": "partly",
-  "note": "Its breadboard window opens, draws and takes parts. Simulating the circuit needs the ngspice program, which a browser does not have."
+  "status": "works"
  },
  "com.github.kicadlab.CopperFiller": {
   "status": "works"

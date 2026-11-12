@@ -111,6 +111,8 @@ export type PcbState = {
   sel: Set<string>;
   /** a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T) */
   padSel: string | null;
+  /** Pads picked with Shift before the one in padSel (KiCad adds to the selection); they count while `anchor` is still padSel. */
+  padAlso: { anchor: string; keys: string[] } | null;
   /** the Footprint Editor's Add Pad tools: the pad type being placed and its turn (R), and the pad selected when the tool started */
   padPlace?: { type: import("./pad-tool").PadType; angle: number } | null; padTemplate?: SNode | null;
   pedit: PointEdit | null; mmPerPx: number;

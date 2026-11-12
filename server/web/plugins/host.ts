@@ -406,6 +406,9 @@ function invoke(run: Run, kind: string, name: string, arg: unknown, timeout: num
     const id = ++run.seq;
     const timer = timeout ? window.setTimeout(() => { run.pending.delete(id); no(new Error(`${run.plugin.manifest.name} did not answer within ${Math.round(timeout / 1000)} seconds`)); }, timeout) : 0;
     run.pending.set(id, { ok, no, timer });
+    // A command reads the selection when it starts.  Picks of the board tools (a pad, a track) do not announce
+    // themselves the way the app's own selection does, so the plugin is told what is selected now.
+    if (has(run.plugin, "design:read")) { try { run.sandbox.send({ t: "event", name: "selection", data: selectionSummary() }); } catch { /* no document open */ } }
     run.sandbox.send({ t: "invoke", id, kind, name, arg });
   });
 }

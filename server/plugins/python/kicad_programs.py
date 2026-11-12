@@ -36,7 +36,9 @@ log = logging.getLogger("kicad_web")
 KICAD_CLI = "/usr/bin/kicad-cli"
 GIT = "/usr/bin/git"
 FFMPEG = "/usr/bin/ffmpeg"
-PROGRAMS = {"kicad-cli": KICAD_CLI, "kicad-cli.exe": KICAD_CLI, "git": GIT, "git.exe": GIT, "ffmpeg": FFMPEG, "ffmpeg.exe": FFMPEG}
+NGSPICE = "/usr/bin/ngspice"
+PROGRAMS = {"kicad-cli": KICAD_CLI, "kicad-cli.exe": KICAD_CLI, "git": GIT, "git.exe": GIT, "ffmpeg": FFMPEG, "ffmpeg.exe": FFMPEG,
+            "ngspice": NGSPICE, "ngspice.exe": NGSPICE, "ngspice_con.exe": NGSPICE}
 
 
 class Result:
@@ -1136,4 +1138,10 @@ def run(name, argv, cwd=None):
         return git(list(argv), cwd)
     if base in ("ffmpeg", "ffmpeg.exe"):
         return ffmpeg(list(argv), cwd)
+    if base in ("ngspice", "ngspice.exe", "ngspice_con.exe"):
+        import kicad_spice
+        try:
+            return Result(*kicad_spice.ngspice(list(argv), cwd))
+        except kicad_spice.Unavailable as e:
+            return Result(1, "", f"ngspice: {e}\n")
     return None

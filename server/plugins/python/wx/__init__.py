@@ -895,6 +895,9 @@ class Font:
         if isinstance(pointSize, Font):
             f = pointSize
             pointSize, family, style, weight, underline, faceName = f._size, f._family, f._wx_style, f._weight, f._underline, f._face
+        elif isinstance(getattr(pointSize, "_f", None), Font):          # wx.Font(wx.FontInfo(10).Family(…))
+            f = pointSize._f
+            pointSize, family, style, weight, underline, faceName = f._size, f._family, f._wx_style, f._weight, f._underline, f._face
         elif not isinstance(pointSize, (int, float)):
             pointSize = 10
         self._size, self._family, self._wx_style, self._weight, self._underline, self._face = pointSize, family, style, weight, underline, kw.get("faceName", faceName)
@@ -1564,6 +1567,14 @@ class BitmapBundle(Bitmap):
 
     FromSVGFile = staticmethod(lambda path, size=None: Bitmap(path))
 
+    @staticmethod
+    def FromSVG(data, sizeDef=None):
+        """A bundle from SVG text: drawn at the size asked for (wx.svg does the drawing)."""
+        from wx.svg import SVGimage
+        raw = data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8")
+        size = Size(*sizeDef) if isinstance(sizeDef, (tuple, list)) else (sizeDef or Size(24, 24))
+        return BitmapBundle(SVGimage.CreateFromBytes(bytes(raw)).ConvertToScaledBitmap(size))
+
     def GetBitmap(self, *_):
         return Bitmap(self)
 
@@ -1588,6 +1599,9 @@ class ArtProvider:
     GetBitmap = staticmethod(lambda *a, **k: Bitmap())
     GetIcon = staticmethod(lambda *a, **k: Icon())
     GetBitmapBundle = staticmethod(lambda *a, **k: BitmapBundle())
+    GetDIPSizeHint = staticmethod(lambda *a, **k: Size(24, 24))
+    GetNativeSizeHint = GetSizeHint = GetDIPSizeHint
+    GetNativeDIPSizeHint = GetDIPSizeHint
 
 
 # ----------------------------------------------------------------------------- events
@@ -1848,6 +1862,10 @@ _CSS = """
 .wx-tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:4px 10px}
 .wx-tabs button.on{border-bottom-color:var(--blue);color:var(--ink)}
 .wx-page[hidden]{display:none}
+.wx-book{display:flex;flex-direction:column;min-height:0}
+.wx-book>.wx-page{flex:1 1 auto;min-height:0}
+.wx-book>textarea.wx-page{resize:none}
+.wx-top>.wx-panel:only-child{flex:1 1 auto;min-height:0}
 .wx-list{min-height:60px;overflow:auto;border:1px solid var(--line);border-radius:3px;background:var(--panel)}
 .wx-list label{display:flex;gap:5px;align-items:center;padding:1px 6px}
 .wx-table{overflow:auto;border:1px solid var(--line);border-radius:3px;min-height:60px}
@@ -2669,6 +2687,8 @@ class TextCtrl(Window):
             self.el.type = "password" if self._wx_style & TE_PASSWORD else "text"
         else:
             self.el.rows = 6
+            if self._wx_style & HSCROLL:        # wxHSCROLL / wxTE_DONTWRAP: long lines scroll, they are not wrapped
+                self.el.wrap = "off"
         if self._wx_style & TE_READONLY:
             self.el.readOnly = True
         self._max = 0
@@ -3372,6 +3392,7 @@ class HyperlinkCtrl(_Labelled):
 
 class Notebook(Window):
     def _wx_build(self, kw):
+        self.el.classList.add("wx-book")
         self._tabs = _el("div", "wx-tabs")
         self.el.appendChild(self._tabs)
         self._pages = []
@@ -3896,6 +3917,11 @@ class SizerItem:
 
     GetFlag = lambda self: self._flag
     GetBorder = lambda self: self._border
+    Proportion = property(lambda self: self._prop, lambda self, p: self.SetProportion(p))
+    Flag = property(lambda self: self._flag)
+    Border = property(lambda self: self._border)
+    Window = property(lambda self: self.GetWindow())
+    Sizer = property(lambda self: self.GetSizer())
     SetFlag = SetBorder = SetMinSize = SetInitSize = SetUserData = AssignSpacer = lambda self, *a: None
     GetSize = GetMinSize = lambda self: Size(0, 0)
     GetRect = lambda self: Rect()
@@ -6114,6 +6140,7 @@ class _ToolItem:
         self._bar, self._tool = bar, tool
 
     GetId = lambda self: self._tool["id"]
+    Id = property(lambda self: self._tool["id"])
     IsToggled = lambda self: self._tool["on"]
     Enable = lambda self, enable=True: self._bar.EnableTool(self._tool["id"], enable)
     SetShortHelp = lambda self, text: self._bar.SetToolShortHelp(self._tool["id"], text)

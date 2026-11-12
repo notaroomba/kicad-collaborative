@@ -16,11 +16,17 @@ for (const f of ["pyodide.js", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_st
   const src = path.join(pkg, f), dst = path.join(out, f);
   if (!fs.existsSync(dst) || !fs.readFileSync(src).equals(fs.readFileSync(dst))) fs.copyFileSync(src, dst);
 }
+// ngspice compiled to WebAssembly (npm eecircuit-engine, MIT): the circuit simulator behind the `ngspice` program and
+// the libngspice stand-in (plugins/python/kicad_spice.py).  About 20 MB, so it is its own file, fetched on first use.
+{
+  const src = path.join(server, "node_modules", "eecircuit-engine", "dist", "eecircuit-engine.mjs"), dst = path.join(out, "ngspice.mjs");
+  if (!fs.existsSync(dst) || fs.statSync(dst).size !== fs.statSync(src).size) fs.copyFileSync(src, dst);
+}
 const shim = path.join(server, "plugins", "python"); const files = {};
 const walk = (dir, base) => { for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const rel = base ? base + "/" + e.name : e.name; if (e.isDirectory()) { if (e.name !== "__pycache__") walk(path.join(dir, e.name), rel); } else if (e.name.endsWith(".py")) files[rel] = fs.readFileSync(path.join(dir, e.name), "utf8"); } };
 walk(shim, "");
 // Browser-side helpers the shims load into the plugin's frame: the animation encoders (ffmpeg's stand-in) and the WebGL end of the OpenGL shim.
-for (const [name, entry] of [["kicad_media.js", "web/plugins/media.ts"], ["kicad_gl.js", "web/plugins/glfixed.ts"]]) {
+for (const [name, entry] of [["kicad_media.js", "web/plugins/media.ts"], ["kicad_gl.js", "web/plugins/glfixed.ts"], ["kicad_spice.js", "web/plugins/spice.ts"]]) {
   const r = esbuild.buildSync({ entryPoints: [path.join(server, entry)], bundle: true, format: "iife", target: "es2020", minify: true, write: false, legalComments: "none" });
   files[name] = Buffer.from(r.outputFiles[0].contents).toString("utf8");
 }

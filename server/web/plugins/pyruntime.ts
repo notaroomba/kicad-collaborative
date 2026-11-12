@@ -18,7 +18,7 @@
  * no imports, no references to anything outside its body.
  */
 export function pythonRuntime(): void {
-  const W: any = window; const kicad: any = W.kicad; const base: string = kicad.plugin.pyodide;
+  const W: any = window; const kicad: any = W.kicad; const base: string = kicad.plugin.pyodide; W.__kcPyBase = base;
   let py: any = null;
   const say = (e: any) => (e && e.message ? String(e.message) : String(e));
   const lastLine = (e: any) => { const lines = say(e).trim().split("\n"); return lines[lines.length - 1].slice(0, 400); };

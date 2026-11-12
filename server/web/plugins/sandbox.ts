@@ -149,6 +149,9 @@ export function buildSrcdoc(granted: string[], python?: string): string {
   // A Python plugin's frame may also load the interpreter: script and WebAssembly from our own
   // /static/pyodide/ and nowhere else.  That folder holds public runtime files only.
   if (python) hosts.push(python);
+  // With Python, data: too: the ngspice build carries its WebAssembly inside its own file and reads it with fetch.
+  // A data: address names no server, so nothing can be sent anywhere through it.
+  if (python) hosts.push("data:");
   const net = hosts.length ? hosts.join(" ") : "'none'";
   const csp = [
     "default-src 'none'", `script-src 'unsafe-inline' blob:${python ? ` 'wasm-unsafe-eval' ${python}` : ""}`, "style-src 'unsafe-inline'", "img-src data: blob:", "font-src data:",

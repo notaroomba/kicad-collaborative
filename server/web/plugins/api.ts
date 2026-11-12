@@ -96,7 +96,7 @@ export const reads: Record<string, (a: any) => Promise<unknown>> = {
     for (const [code, name] of doc.nets as Map<number, string>) out.push(`(net ${code} ${q(name)})`);
     for (const it of doc.items.values()) out.push(k.serialize(it.node));
     out.push(")");
-    const ids: string[] = Array.from(ed.selection || []); if (!ids.length && ed.selected) ids.push(ed.selected.id);
+    const ids: string[] = selectedIds();
     const st = ed.api.state || {};
     // The files a desktop plugin finds beside the board: the project file (net classes, design rules), the schematics and the project's other boards, as last saved.
     const files: { path: string; text: string }[] = []; let budget = 6 * 1024 * 1024;
@@ -541,8 +541,30 @@ export function editorState(withDesign: boolean): { scope: string | null; role: 
     document: withDesign && open && doc ? { path: open.path, type: doc.type === "sch" ? "schematic" : "board", project: st && st.project ? st.project.name : "" } : null };
 }
 
+/** What is selected, as a plugin sees it: the app's selection, the board tools' own picks (tracks, vias, zones,
+ *  graphics) and pads picked on their own, each pad by its own id as in KiCad's selection. */
+export function selectedIds(): string[] {
+  const ed = ED(); const doc = ed ? ed.kdoc : null; if (!doc) return [];
+  const ids = new Set<string>(Array.from(ed.selection || []) as string[]); if (!ids.size && ed.selected) ids.add(ed.selected.id);
+  const W = window as any; const pcb = W.CollabTools && W.CollabTools.pcb;
+  let board = false; try { const open = design.openEntry(); board = !!open && /\.kicad_pcb$/.test(open.path); } catch { board = false; }
+  if (pcb && board) {
+    const st = pcb.state as { sel?: Set<string> } | undefined;
+    if (st && st.sel) for (const id of st.sel) if (doc.items.has(id)) ids.add(id);
+    const keys: string[] = pcb.selectedPadKeys ? pcb.selectedPadKeys() : [];
+    const k = W.KiCadCanvas;
+    for (const key of keys) {
+      const i = key.lastIndexOf("#"); const fp = doc.items.get(key.slice(0, i)); if (!fp || !k || !k.kids) continue;
+      const pad = k.kids(fp.node, "pad")[Number(key.slice(i + 1))]; if (!pad) continue;
+      const u = k.kids(pad, "uuid")[0] || k.kids(pad, "tstamp")[0];
+      if (u && typeof u[1] === "string") ids.add(u[1]);
+    }
+  }
+  return Array.from(ids);
+}
+
 export function selectionSummary(): unknown {
   const ed = ED(); const doc = ed ? ed.kdoc : null; if (!doc) return { ids: [], items: [] };
-  const ids: string[] = Array.from(ed.selection || []); if (!ids.length && ed.selected) ids.push(ed.selected.id);
+  const ids: string[] = selectedIds();
   return { ids, items: ids.slice(0, 500).map((id) => { const it = doc.items.get(id); return it ? { id, kind: it.kind, ref: it.ref || undefined, value: it.value || undefined } : { id }; }) };
 }

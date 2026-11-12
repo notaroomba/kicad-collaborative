@@ -18390,6 +18390,7 @@ Link '${target2}' to this file?`)) return null;
     // graphics, text and dimensions are drawn on the active layer, as DRAWING_TOOL does
     sel: /* @__PURE__ */ new Set(),
     padSel: null,
+    padAlso: null,
     pedit: null,
     mmPerPx: 0,
     route: null,
@@ -38183,6 +38184,11 @@ Press <esc> to cancel all; double-click to finish`;
     if (code === "track_dangling" || code === "via_dangling") return { label: DRC_RUN_TEXT.cleanupTracksAndVias, action: "cleanupTracksAndVias" };
     return null;
   }
+  function selectedPadKeys() {
+    if (!S2.padSel) return [];
+    const also = S2.padAlso && S2.padAlso.anchor === S2.padSel ? S2.padAlso.keys : [];
+    return [S2.padSel, ...also.filter((k) => k !== S2.padSel)];
+  }
   var pcb = {
     id: "pcb",
     tools: TOOLS,
@@ -38328,11 +38334,21 @@ Press <esc> to cancel all; double-click to finish`;
       const allowed = root4.CollabEditor && root4.CollabEditor.pickAllowed;
       if (allowed && !allowed(pad.item)) return false;
       const key = pad.item.id + "#" + pad.index, was = S2.padSel === key;
-      S2.sel.clear();
+      if (selMode(ev) === "add") {
+        const before = selectedPadKeys().filter((k) => k !== key);
+        S2.padAlso = before.length ? { anchor: key, keys: before } : null;
+      } else {
+        S2.sel.clear();
+        S2.padAlso = null;
+      }
       S2.padSel = key;
       S2.downHandled = ev;
       ctx.requestRender();
       return was ? true : "box";
+    },
+    /** Every pad picked on its own, as "footprintId#padIndex": the last one picked first. */
+    selectedPadKeys() {
+      return selectedPadKeys();
     },
     /** The selected pad as { item, index }, or null. */
     selectedPad(doc) {
@@ -38357,7 +38373,7 @@ Press <esc> to cancel all; double-click to finish`;
       if (/^gr_/.test(it.kind) && it.kind !== "gr_text" && it.kind !== "gr_text_box" && f.graphics === false) return false;
       S2.downHandled = ev;
       const wasSelected = S2.sel.has(it.id), mode = selMode(ev);
-      S2.padSel = null;
+      if (mode !== "add") S2.padSel = null;
       const pick = topParentOf(ctx.doc, it.id) ? Array.from(expandGroups(ctx.doc, [it.id])) : [it.id];
       if (mode) {
         const on = mode === "toggle" ? !S2.sel.has(it.id) : mode === "add";

@@ -167,6 +167,7 @@ interface ToolModule {
   /** Board: a click on a pad selects the pad ("box" when it was not selected yet, true when it was, false off a pad). */
   selectPadAt?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): boolean | "box";
   selectedPad?(doc: KDoc): { item: KItem; index: number } | null;
+  selectedPadKeys?(): string[];
   padProperties?(ctx: ToolCtx, item: KItem, index: number): boolean;
   /** Board: with a length tuner active, PCB_ACTIONS::properties opens Tuning Pattern Properties (false otherwise). */
   tunerProperties?(ctx: ToolCtx): boolean;

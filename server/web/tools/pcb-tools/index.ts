@@ -99,6 +99,14 @@ import { TUNE_MSG_DP_NETS, TUNE_MSG_SKEW_NETS, TUNE_MSG_SKEW_PICK, assembleDiffP
 import { LINE_W, TEXT_STYLE, flipLayerName, layerClass, layerOf, norm180, norm360, pt, textStyle, useFootprintEditorDefaults, widthOf } from "./util";
 import { dir8, hullOf, isFreePad, legPts, pathClear, pathHits, routeClearance, routeObstacles, routerWorld, simplifyPts, walkHead, walkTo } from "./walkaround";
 
+/** Every pad picked on its own ("footprintId#padIndex"), the last one picked first; those picked before it with
+ *  Shift count while it is still the picked pad. */
+function selectedPadKeys(): string[] {
+  if (!S.padSel) return [];
+  const also = S.padAlso && S.padAlso.anchor === S.padSel ? S.padAlso.keys : [];
+  return [S.padSel, ...also.filter((k) => k !== S.padSel)];
+}
+
 export const pcb = {
   id: "pcb", tools: TOOLS, state: S, ghostSegs,
   /** Drag (D / G) of the selected footprints and vias with their tracks attached; false when nothing can be dragged. */
@@ -165,9 +173,16 @@ export const pcb = {
     if (!pad || !pad.item || pad.index === undefined) return false;
     const allowed = root.CollabEditor && root.CollabEditor.pickAllowed; if (allowed && !allowed(pad.item)) return false;
     const key = pad.item.id + "#" + pad.index, was = S.padSel === key;
-    S.sel.clear(); S.padSel = key; S.downHandled = ev; ctx.requestRender();
+    // Shift adds, as in KiCad: the pads picked before stay selected with this one, and so does what else is selected
+    if (selMode(ev) === "add") {
+      const before = selectedPadKeys().filter((k) => k !== key);
+      S.padAlso = before.length ? { anchor: key, keys: before } : null;
+    } else { S.sel.clear(); S.padAlso = null; }
+    S.padSel = key; S.downHandled = ev; ctx.requestRender();
     return was ? true : "box";
   },
+  /** Every pad picked on its own, as "footprintId#padIndex": the last one picked first. */
+  selectedPadKeys() { return selectedPadKeys(); },
   /** The selected pad as { item, index }, or null. */
   selectedPad(doc: BoardDoc) { const k = S.padSel; if (!k || !doc) return null; const i = k.lastIndexOf("#"); const it = doc.items.get(k.slice(0, i)); return it ? { item: it, index: +k.slice(i + 1) } : null; },
   onSelectDown(ev: PtrEvent, mm: Pt, ctx: PcbCtx) {
@@ -185,7 +200,7 @@ export const pcb = {
     // MOUSE_DRAG_ACTION::DRAG_SELECTED (KiCad's default left drag): a drag that starts on the selection drags it; on
     // anything not selected it draws a selection box.  The press still picks the item, as the click would.
     const wasSelected = S.sel.has(it.id), mode = selMode(ev);   // Shift adds, Ctrl toggles, Ctrl+Shift removes
-    S.padSel = null;
+    if (mode !== "add") S.padSel = null;                          // Shift adds to the pads picked, too
     // FilterCollectorForHierarchy: a member of a group or generator (a tuning pattern's meander) selects its parent,
     // which in this selection model is the parent's id with all its members
     const pick = topParentOf(ctx.doc, it.id) ? Array.from(expandGroups(ctx.doc, [it.id])) : [it.id];

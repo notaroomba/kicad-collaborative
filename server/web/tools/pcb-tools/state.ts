@@ -28,7 +28,7 @@ export const BOARD_VERSION = 20260728;
 
 export const S = {
   layer: "F.Cu", gfxLayer: "F.Cu",   // graphics, text and dimensions are drawn on the active layer, as DRAWING_TOOL does
-  sel: new Set(), padSel: null, pedit: null, mmPerPx: 0, route: null,   // padSel: a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T)
+  sel: new Set(), padSel: null, padAlso: null, pedit: null, mmPerPx: 0, route: null,   // padSel: a pad picked on its own, "footprintId#padIndex" (PCB_SELECTION_TOOL selects PCB_PAD_T)
   drag: null, draw: null, hover: null, text: null, modTool: null, doc: null,
   image: null,                            // the picked reference image riding the cursor: { base64, info, w, h, name }
   client: null,                           // last pointer position in client px, where prompts open

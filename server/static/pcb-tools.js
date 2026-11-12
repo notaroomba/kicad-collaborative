@@ -43,6 +43,7 @@
     // graphics, text and dimensions are drawn on the active layer, as DRAWING_TOOL does
     sel: /* @__PURE__ */ new Set(),
     padSel: null,
+    padAlso: null,
     pedit: null,
     mmPerPx: 0,
     route: null,
@@ -19994,6 +19995,11 @@ Press <esc> to cancel all; double-click to finish`;
   }
 
   // web/tools/pcb-tools/index.ts
+  function selectedPadKeys() {
+    if (!S.padSel) return [];
+    const also = S.padAlso && S.padAlso.anchor === S.padSel ? S.padAlso.keys : [];
+    return [S.padSel, ...also.filter((k) => k !== S.padSel)];
+  }
   var pcb = {
     id: "pcb",
     tools: TOOLS,
@@ -20139,11 +20145,21 @@ Press <esc> to cancel all; double-click to finish`;
       const allowed = root.CollabEditor && root.CollabEditor.pickAllowed;
       if (allowed && !allowed(pad.item)) return false;
       const key = pad.item.id + "#" + pad.index, was = S.padSel === key;
-      S.sel.clear();
+      if (selMode(ev) === "add") {
+        const before = selectedPadKeys().filter((k) => k !== key);
+        S.padAlso = before.length ? { anchor: key, keys: before } : null;
+      } else {
+        S.sel.clear();
+        S.padAlso = null;
+      }
       S.padSel = key;
       S.downHandled = ev;
       ctx.requestRender();
       return was ? true : "box";
+    },
+    /** Every pad picked on its own, as "footprintId#padIndex": the last one picked first. */
+    selectedPadKeys() {
+      return selectedPadKeys();
     },
     /** The selected pad as { item, index }, or null. */
     selectedPad(doc) {
@@ -20168,7 +20184,7 @@ Press <esc> to cancel all; double-click to finish`;
       if (/^gr_/.test(it.kind) && it.kind !== "gr_text" && it.kind !== "gr_text_box" && f.graphics === false) return false;
       S.downHandled = ev;
       const wasSelected = S.sel.has(it.id), mode = selMode(ev);
-      S.padSel = null;
+      if (mode !== "add") S.padSel = null;
       const pick = topParentOf(ctx.doc, it.id) ? Array.from(expandGroups(ctx.doc, [it.id])) : [it.id];
       if (mode) {
         const on = mode === "toggle" ? !S.sel.has(it.id) : mode === "add";

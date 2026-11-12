@@ -447,6 +447,8 @@ def _install_finders():
         sys.meta_path.append(_WxFinder())
     if not any(isinstance(f, _OwnNameFinder) for f in sys.meta_path):
         sys.meta_path.append(_OwnNameFinder())
+    import kicad_compat
+    kicad_compat.install()
 
 
 # ----------------------------------------------------------------------------- the environment a plugin expects
@@ -809,13 +811,23 @@ def _patch_desktop():
         beside = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(pcbnew.__file__))))
     except Exception:
         beside = "/usr/bin"
-    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/ffmpeg", "/usr/bin/python3", "/usr/bin/python", os.path.join(beside, "python3")):
+    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/ffmpeg", "/usr/bin/ngspice", "/usr/bin/python3", "/usr/bin/python", os.path.join(beside, "python3")):
         try:
             if not os.path.exists(stub):
                 _write(stub, b"#!/bin/sh\n")
                 os.chmod(stub, 0o755)
         except OSError:
             pass
+
+    # ngspice is the simulator in this page, as a program and as the library ctypes loads; a child process is the
+    # plugin's own function running beside the rest (kicad_spice, kicad_process).
+    try:
+        import kicad_spice
+        import kicad_process
+        kicad_spice.install()
+        kicad_process.install()
+    except Exception:
+        log.debug("ngspice and child processes are not set up", exc_info=True)
 
     # Nothing outside this interpreter can connect to it.  A plugin's own parts can (kicad_net: a listening socket and
     # a connection to it are two ends here); a server that serves files to another program or a browser page cannot.

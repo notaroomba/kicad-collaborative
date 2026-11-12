@@ -9,10 +9,6 @@
       "status": "partly",
       "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
     },
-    "com.github.kerstensrobin.kicad-breadboard": {
-      "status": "partly",
-      "note": "Its breadboard window opens, draws and takes parts. Simulating the circuit needs the ngspice program, which a browser does not have."
-    },
     "com.github.samuelcicuitstudio.traceforge-kicad": {
       "status": "partly",
       "note": "Its helper and its panel both run in the page and talk over a local port that stays inside the page. The first launch sets its net highlight shortcut and asks to be opened again, as on the desktop. Signal paths, export, rotation, via and trace tools, net colours and manufacturing checks work. Stitching, fences and rounded corners need the shapely package. Teardrops drive KiCad's own Windows dialog, on the desktop too, and are not available here."
@@ -36,10 +32,6 @@
     "com.github.f-blaze.velatrace": {
       "status": "partly",
       "note": "Its window opens and its own router routes the board and draws the preview. Its approval step checks the route with the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC, and its optional Freerouting engine needs Java on a computer."
-    },
-    "com.github.Steffen-W.KiCad-Parasitics": {
-      "status": "unsupported",
-      "note": "It runs the ngspice circuit simulator as a separate program."
     },
     "com.github.drewsum.kipi": {
       "status": "unsupported",

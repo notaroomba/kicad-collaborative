@@ -65,7 +65,9 @@ export function sizeCanvas() {
 function boardSelected(): Set<string> | null {
   const base = selectedSet(); const pcb = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string>; padSel?: string | null });
   if (isSch() || !pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) return base;
-  const out = new Set<string>(base || []); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel); return out;
+  const out = new Set<string>(base || []); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel);
+  const more = CollabTools.pcb && CollabTools.pcb.selectedPadKeys ? CollabTools.pcb.selectedPadKeys() : []; for (const k of more) out.add(k);
+  return out;
 }
 export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();

@@ -586,7 +586,7 @@ pub(crate) fn runtime_dir() -> Option<&'static std::path::PathBuf> {
 /// nothing that is not already public.
 pub async fn runtime(Path(file): Path<String>) -> Response {
     let kind = match file.as_str() {
-        "pyodide.js" | "pyodide.asm.mjs" => "application/javascript; charset=utf-8",
+        "pyodide.js" | "pyodide.asm.mjs" | "ngspice.mjs" => "application/javascript; charset=utf-8",
         "pyodide.asm.wasm" => "application/wasm",
         "python_stdlib.zip" => "application/zip",
         "pyodide-lock.json" | "kicad-python.json" => "application/json; charset=utf-8",

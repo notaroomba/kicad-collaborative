@@ -307,5 +307,51 @@ if (only('spinrender')) {
 
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
+// ---- KiCad-Parasitics: the resistance between two pads, from its own network of the copper, solved by ngspice
+// (the real simulator, as WebAssembly, behind the libngspice calls of its bundled ngspyce, in the child process it
+// starts for it); then the loop inductance by bfieldtools.  The two pads are joined by 16.57 mm of 0.8 mm track.
+if (only('Parasitics')) {
+  const ID = 'com.github.Steffen-W.KiCad-Parasitics';
+  try {
+    await page.goto(`${BASE}${ecc83}`); await editorReady();
+    const actions = await install(ID);
+    // the two pads are picked as a person does: a click on R2's pad 1, then Shift and a click on U1's pad 3
+    const picked = await page.evaluate(() => { const pcb = window.CollabTools.pcb, E = window.CollabEditor, ctx = E.api.toolCtx(); const ev = (shift) => ({ button: 0, shiftKey: shift, ctrlKey: false, metaKey: false }); pcb.selectPadAt(ev(false), [156.21, 95.885], ctx); pcb.selectPadAt(ev(true), [154.825, 111.885], ctx); return pcb.selectedPadKeys(); });
+    check('Parasitics: Shift picks a second pad in the board editor', picked.length === 2, JSON.stringify(picked));
+    if (process.env.SELDEBUG) console.log('      sel debug ' + JSON.stringify(await page.evaluate(() => { const k = window.KiCadCanvas, E = window.CollabEditor, doc = E.kdoc; return [typeof k.kids, E.api.state.document && E.api.state.document.editor, Object.keys(E.api.state.document || {}), window.CollabTools.pcb.selectedPadKeys().map((key) => { const i = key.lastIndexOf('#'); const fp = doc.items.get(key.slice(0, i)); const pad = fp && k.kids(fp.node, 'pad')[+key.slice(i + 1)]; return [key, !!fp, pad && JSON.stringify(k.kids(pad, 'uuid')).slice(0, 90)]; })]; })));
+    await runAction(ID, actions[0]);
+    const f = await frameOf(ID);
+    const text = () => f.evaluate(() => Array.from(document.querySelectorAll('textarea, input, .wx-text, pre')).map((e) => e.value || e.textContent || '').join('\n'));
+    let seen = ''; const t0 = Date.now();
+    while (Date.now() - t0 < 240000) { seen = await text().catch(() => ''); if (/Shortest path resistance|No connection|ngspice|ERROR|Select exactly/i.test(seen)) break; await page.waitForTimeout(500); }
+    await shot('real-parasitics');
+    const dist = /Shortest distance ≈ ([\d.]+) mm/.exec(seen), res = /Shortest path resistance ≈ ([\d.]+) mΩ/.exec(seen);
+    check('Parasitics: it finds the copper path between the two pads', !!dist && Math.abs(Number(dist[1]) - 16.57) < 1.5, seen.slice(0, 600) + ' ' + await logTail(ID, 12));
+    // 16.57 mm x 0.8 mm x 35 um of copper is 10 mOhm
+    check('Parasitics: the path resistance is the copper\'s', !!res && Number(res[1]) > 8 && Number(res[1]) < 12, seen.slice(0, 600));
+    const dc = /^\s*DC\s+(\S+ ?\S*Ω)/m.exec(seen);
+    check('Parasitics: ngspice solved the network (DC and AC rows)', !!dc && !/\[error\]/.test(seen) && /Hz/.test(seen) && !/could not be|unavailable/i.test(seen), seen.slice(0, 1200) + ' ' + await logTail(ID, 12));
+    console.log('      ' + seen.split('\n').filter((l) => /≈|DC|Hz/.test(l)).slice(0, 9).join('\n      '));
+    if (res) {
+      await f.click('text=/^Inductance$/'); await page.waitForTimeout(300);
+      await f.click('text=Calculate inductance');
+      let ind = ''; const t1 = Date.now();
+      while (Date.now() - t1 < 300000) { ind = await text().catch(() => ''); if (/Loop inductance|ERROR|could not/i.test(ind)) break; await page.waitForTimeout(1000); }
+      const nh = /Loop inductance: ([\d.]+) nH/.exec(ind);
+      // a 16.6 mm long, 0.8 mm wide strip closed by a straight return is of the order of 10 nH
+      check('Parasitics: bfieldtools gives the loop inductance', !!nh && Number(nh[1]) > 3 && Number(nh[1]) < 30 && /Mesh: \d+ triangles/.test(ind), ind.slice(ind.indexOf('Loop'), ind.indexOf('Loop') + 500) + ' ' + await logTail(ID, 12));
+      if (nh) console.log(`      (loop inductance ${nh[1]} nH)`);
+      await shot('real-parasitics-inductance');
+      await f.click('text=Debug plots');
+      // matplotlib's own wx window: the field map is painted, so count the coloured pixels of the largest canvas
+      const painted = () => f.evaluate(() => { let best = 0; for (const c of document.querySelectorAll('canvas')) { if (c.width < 300 || c.height < 300) continue; const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 16) { if (d[i + 3] > 0 && Math.abs(d[i] - d[i + 2]) > 40) n++; } best = Math.max(best, n); } return best; }).catch(() => 0);
+      let ink = 0; const t2 = Date.now();
+      while (Date.now() - t2 < 120000) { ink = await painted(); if (ink > 2000) break; await page.waitForTimeout(1000); }
+      await page.waitForTimeout(500); await shot('real-parasitics-plots');
+      check('Parasitics: the debug plot (field and current map) is drawn by matplotlib', ink > 2000, `coloured samples ${ink} ` + await logTail(ID, 12));
+    }
+  } catch (e) { check('Parasitics runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.Steffen-W.KiCad-Parasitics', 30)); await shot('real-parasitics-fail'); }
+}
+
 await browser.close(); await db.end(); fixture.server.close();
 process.exit(fail ? 1 : 0);
