@@ -27,6 +27,13 @@ declare global {
 }
 const go = (path: string) => { if (window.CollabNav) window.CollabNav.navigate(path); else location.href = path; };
 const editUrl = (id: string) => `/p/${id}/edit`;
+/** A project just made opens on its schematic, where a KiCad design starts (the editor would pick the board). */
+const newProjectUrl = (r: { projectId: string; docs?: unknown[] }) => {
+  const sch = ((r.docs || []) as { docId?: string; path?: string; docType?: string }[])
+    .filter((d) => d && d.docType === "kicad_sch" && d.docId && d.path)
+    .sort((x, y) => x.path!.split("/").length - y.path!.split("/").length || x.path!.length - y.path!.length)[0];
+  return editUrl(r.projectId) + (sch ? `?doc=${sch.docId}` : "");
+};
 
 function pref<T extends string>(key: string, fallback: T, allowed: readonly T[]): T {
   try { const v = localStorage.getItem(key) as T | null; return v && allowed.includes(v) ? v : fallback; } catch { return fallback; }
@@ -855,7 +862,7 @@ export function Home() {
 
       {share ? <ShareDialog target={share} onClose={() => setShare(null)} onChanged={() => setBump((n) => n + 1)} /> : null}
       {upload ? <UploadDialog initial={upload.files} start={upload.start} template={upload.template} onClose={() => setUpload(null)} onBusy={(b) => { uploading.current = b; }}
-        onBlank={(r) => { setUpload(null); cache.mine = null; freshId = r.projectId; toast(`Created “${r.name}”`); go(editUrl(r.projectId)); }}
+        onBlank={(r) => { setUpload(null); cache.mine = null; freshId = r.projectId; toast(`Created “${r.name}”`); go(newProjectUrl(r)); }}
         onDone={(r) => { setUpload(null); cache.mine = null; freshId = r.projectId; setBump((n) => n + 1); if (tab !== "projects") go("/");
           const left = r.skipped?.length || 0;
           toast(`“${r.name}” is online${left ? ` (${left} non-KiCad file${left === 1 ? "" : "s"} left out)` : ""}`, { action: { label: "Open", run: () => go(editUrl(r.projectId)) } }); }} /> : null}
