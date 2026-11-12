@@ -4,6 +4,7 @@
 // settings the renderer and the ERC honour, and the preferences applied when a document opens.
 import { E, isSch, requestRender, setToggle, store, toast, toolCtx } from "./editor";
 import { openAssignFootprints } from "./assign-footprints";
+import { openChangeSymbols } from "./change-symbols";
 import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
 import { openErc } from "./erc";
@@ -63,6 +64,9 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
     runERC: needDoc(openErc, true),
     annotate: needDoc(openAnnotate, true),
+    // DIALOG_CHANGE_SYMBOLS: Edit > Change Symbols…, Tools > Update Symbols from Library…, the symbol context menu
+    changeSymbols: needDoc(() => openChangeSymbols("change"), true), changeSymbol: needDoc(() => openChangeSymbols("change"), true),
+    updateSymbols: needDoc(() => openChangeSymbols("update"), true), updateSymbol: needDoc(() => openChangeSymbols("update"), true),
     toggleGridOverrides: (() => { const on = toggleGridOverrides(); toast(on ? "Grid overrides on" : "Grid overrides off"); }) as Handler,
     openPreferences: (() => openPreferences()) as Handler,
   });
