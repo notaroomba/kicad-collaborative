@@ -74,6 +74,8 @@ const REUSED: &[(&str, bool, &str, Option<&str>)] = &[
     ("get_items", true, "Get items", None),
     ("find_datasheets", true, "Find datasheets", Some(
         "For the parts of a schematic sheet or the board, grouped by part: the references that use it, value, footprint, the Datasheet field and any manufacturer, part number or distributor fields. Fetch the link to read the datasheet, or search the web for the part number when there is no usable link.")),
+    ("read_datasheet", false, "Read datasheet", Some(
+        "Read a PDF datasheet, application note or hardware design guide by its https address. The server downloads and indexes the file once and returns only the pages that answer the query, with page numbers, so a question costs a few thousand tokens instead of the whole document. Ask one focused question per call in the datasheet's own words (\"crystal load capacitance\", \"absolute maximum ratings\", a pin name), or give pages to read by number (up to 6). find_datasheets lists the datasheet links of a design's parts.")),
     ("find_parts", false, "Find parts", None),
     ("get_library_part", false, "Get library part", None),
 ];
@@ -102,7 +104,7 @@ fn build_catalog() -> Vec<Tool> {
     for (name, document, title, description) in REUSED {
         let src = find(name);
         let mut schema = src["input_schema"].clone();
-        let takes_project = !matches!(*name, "find_parts" | "get_library_part");
+        let takes_project = !matches!(*name, "find_parts" | "get_library_part" | "read_datasheet");
         {
             let props = schema["properties"].as_object_mut().expect("tool schema has properties");
             // The assistant reads "the open document" unless told otherwise; here every call names its own.
@@ -189,7 +191,7 @@ fn build_catalog() -> Vec<Tool> {
     // The order a model reads them in: find the project, read, look, change, then the rest.
     let order = [
         "list_projects", "get_project", "get_design_overview", "get_design_guide", "list_components", "get_component", "list_nets",
-        "get_items", "run_checks", "get_board_info", "render_view", "find_datasheets", "find_parts", "get_library_part", "apply_changes",
+        "get_items", "run_checks", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "apply_changes",
         "undo_changes", "redo_changes", "list_changes", "read_document", "list_comments", "add_comment", "resolve_comment", "list_checkpoints",
         "create_checkpoint", "create_project",
     ];

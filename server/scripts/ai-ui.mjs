@@ -159,6 +159,51 @@ await shot(a, '02-review-with-proposal');
   check('the instructions put the datasheet before web search', /Search results and their snippets are a way to find the document, never the source of a value/.test(JSON.stringify((await (await fetch(`${AI}/__ctl/requests`)).json()).pop().body.system)));
 }
 
+// ---- read_datasheet: the server reads a PDF once and hands back only the pages that answer
+// (needs the server started with AI_DATASHEET_ALLOW_LOCAL=1 so it may fetch from this machine)
+{
+  const http = await import('node:http');
+  const pg1 = await a.context().newPage();
+  const filler = (n) => Array.from({ length: 30 }, (_, i) => `<p>Section ${n}.${i} general description of the device and its operating modes.</p>`).join('');
+  await pg1.setContent(`<style>section{break-after:page;font:11pt sans-serif}</style>
+    <section><h1>XR2040 Datasheet</h1><p>A microcontroller.</p></section>
+    <section><h2>Pinout</h2>${filler(2)}</section>
+    <section><h2>2.9 Crystal oscillator</h2><p>The crystal load capacitance is 15 pF on each side, with a 1 kΩ series resistor on XOUT.</p></section>
+    <section><h2>4.1 Power</h2><p>Place a 100 nF decoupling capacitor on every IOVDD pin.</p>${filler(4)}</section>`);
+  const bytes = await pg1.pdf({ format: 'A4' }); await pg1.close();
+  let hits = 0;
+  const srv = http.createServer((req, res) => { if (req.url.startsWith('/xr2040.pdf')) { hits++; res.writeHead(200, { 'content-type': 'application/pdf' }); res.end(bytes); } else { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<p>not a pdf</p>'); } });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const pdf = `http://127.0.0.1:${srv.address().port}/xr2040.pdf?t=${Date.now()}`;
+  const read = (body) => a.evaluate((b) => fetch('/api/ai/datasheet', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => null) })), body);
+  const first = await read({ url: pdf, query: 'crystal load capacitance', max_pages: 1 });
+  if (first.status === 400 && /https/.test(JSON.stringify(first.body))) console.log('  (skipped: start the server with AI_DATASHEET_ALLOW_LOCAL=1 to test read_datasheet)');
+  else {
+    check('read_datasheet finds the page that answers', first.status === 200 && first.body.page_count === 4 && first.body.pages.length === 1 && first.body.pages[0].page === 3 && /15 pF/.test(first.body.pages[0].text) && first.body.cached === false, JSON.stringify(first).slice(0, 400));
+    const again = await read({ url: pdf + '#page=4', query: 'IOVDD decoupling', max_pages: 1 });
+    check('a second question is answered from the cache, without another download', again.status === 200 && again.body.cached === true && again.body.pages[0].page === 4 && hits === 1, JSON.stringify(again).slice(0, 300) + ' hits ' + hits);
+    check('a long page comes back as the lines around the match', again.body.pages[0].excerpt === true || again.body.pages[0].text.length < 3700, String(again.body.pages[0].text.length));
+    const byNo = await read({ url: pdf, pages: [1, 3, 99] });
+    check('pages can be read by number', byNo.status === 200 && byNo.body.pages.map((p) => p.page).join() === '1,3' && /XR2040 Datasheet/.test(byNo.body.pages[0].text), JSON.stringify(byNo).slice(0, 300));
+    const html = await read({ url: pdf.replace('/xr2040.pdf', '/page.html') });
+    check('a page that is not a PDF is refused with a reason', html.status === 422 && /not a PDF/.test(html.body.message), JSON.stringify(html));
+    const bad = await read({ url: 'ftp://example.com/x.pdf' });
+    check('only web addresses are fetched', bad.status === 400, JSON.stringify(bad));
+    await script([{ content: [{ type: 'tool_use', id: 'toolu_ds', name: 'read_datasheet', input: { url: pdf, query: 'crystal load capacitance' } }], stop_reason: 'tool_use' },
+      { content: [{ type: 'text', text: 'Use 15 pF on each side and 1 k in series with XOUT (page 3).' }] }]);
+    await ask(a, 'What load capacitors does the crystal need, from the datasheet?');
+    const last = a.locator('#aiBody .ai-msg.assistant').last();
+    check('the pane shows the datasheet search and the pages it found', /Searched the datasheet xr2040\.pdf for “crystal load capacitance”/.test(await last.innerText()) && /pages? [\d, ]+ of 4/.test(await last.innerText()), (await last.innerText()).slice(0, 300));
+    const src = last.locator('.ai-src a');
+    check('the answer links the datasheet pages that were read', (await src.count()) === 1 && /xr2040\.pdf · p\. /.test(await src.first().innerText()), await src.allInnerTexts().then((t) => t.join('|')));
+    const sent = (await (await fetch(`${AI}/__ctl/requests`)).json()).pop().body;
+    const res = sent.messages.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).find((b) => b.type === 'tool_result' && b.tool_use_id === 'toolu_ds');
+    check('the model is sent the matching pages, not the document', res && /15 pF/.test(res.content) && res.content.length < 12000, res ? String(res.content.length) : 'no result');
+    check('the model is offered read_datasheet and told to use it for PDFs', sent.tools.some((t) => t.name === 'read_datasheet') && /read it with `read_datasheet`/.test(JSON.stringify(sent.system)));
+  }
+  srv.close();
+}
+
 // ---- messages sent while a turn is running wait in a queue, can be taken back, and run in order
 {
   const before = await a.locator('#aiBody .ai-msg.user').count();

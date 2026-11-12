@@ -181,6 +181,9 @@ const TOOLS: Record<string, { run: ToolFn; label: (input: any) => string; summar
   get_selection: { run: () => design.getSelection(), label: () => "Looked at the selection", summary: (o) => (o.count ? `${o.count} selected` : "nothing selected") },
   get_items: { run: (i) => design.getItems(i), label: (i) => `Read ${i.kinds ? i.kinds.join(", ") + " items" : i.net ? `the items on ${i.net}` : "items"}${i.near ? " around a point" : ""}`, summary: (o) => `${o.count} found` },
   find_datasheets: { run: (i) => design.findDatasheets(i), label: () => "Looked up datasheet links", summary: (o) => `${o.with_datasheet_link} linked, ${o.without} without` },
+  read_datasheet: { run: async (i) => { const o = await library.readDatasheet(i); noteRead(o); return o; },
+    label: (i) => `${i.pages && i.pages.length ? `Read page${i.pages.length === 1 ? "" : "s"} ${i.pages.join(", ")} of` : "Searched"} the datasheet ${pdfName(i.url)}${i.query && !(i.pages && i.pages.length) ? ` for “${i.query}”` : ""}`,
+    summary: (o) => (o.pages && o.pages.length ? `page${o.pages.length === 1 ? "" : "s"} ${o.pages.map((p: any) => p.page).join(", ")} of ${o.page_count}` : "nothing found") },
   focus_view: { run: (i) => design.focusView(i), label: (i) => `Showed ${i.refs && i.refs.length ? i.refs.join(", ") : "a point"} on the canvas` },
   find_parts: { run: (i) => library.findParts(i), label: (i) => (i.library ? `Listed the ${i.library} library` : `Looked for ${i.kind === "footprint" ? "footprints" : "parts"} matching “${i.query || ""}”`) },
   get_library_part: { run: (i) => library.getLibraryPart(i), label: (i) => `Read ${i.vendor ? `${i.vendor} part ` : ""}${i.id}` },
@@ -192,6 +195,20 @@ const TOOLS: Record<string, { run: ToolFn; label: (input: any) => string; summar
   propose_changes: { run: () => { throw new Error("handled by the loop"); }, label: (i) => `Prepared a proposal: ${i.title || "changes"}` },
 };
 
+const pdfName = (url: string) => { const f = decodeURIComponent(String(url || "").split(/[?#]/)[0].split("/").pop() || ""); return f || hostOf(String(url || "")); };
+// Datasheet pages read during a turn, shown under the answer the way web citations are.
+const readPages = new Map<string, Set<number>>();
+function noteRead(o: any) { if (!o || !o.url || !Array.isArray(o.pages)) return; const set = readPages.get(o.url) || new Set<number>(); for (const p of o.pages) if (typeof p.page === "number") set.add(p.page); readPages.set(o.url, set); }
+function citeRead(ui: UiMessage) {
+  if (!readPages.size) return;
+  const last = [...ui.blocks].reverse().find((b) => b.t === "text") as Extract<UiBlock, { t: "text" }> | undefined;
+  if (last) for (const [url, pages] of readPages) {
+    const list = (last.sources = last.sources || []); let src = list.find((x) => x.url === url);
+    if (!src) { src = { url, title: pdfName(url) }; list.push(src); }
+    src.pages = [...new Set([...(src.pages || []), ...pages])].sort((x, y) => x - y);
+  }
+  readPages.clear();
+}
 const pluginTools = (): unknown[] => { const h = (window as any).KcPlugins; return h ? h.tools() : []; };
 async function callPluginTool(i: { plugin?: string; tool?: string; input?: unknown }): Promise<unknown> {
   const h = (window as any).KcPlugins; if (!h) throw new ToolError("No plugins are available.");
@@ -342,6 +359,7 @@ async function run(text: string): Promise<void> {
   const mark = history.length;
   history.push({ role: "user", content: [{ type: "text", text: preface ? `${preface}\n\n${say}` : say }] });
   set({ messages: [...S.messages, user, ui], busy: true, activity: "Thinking…" });
+  readPages.clear();
   const ctl = (abort = new AbortController());
   let completedTurns = 0;
   try {
@@ -366,6 +384,7 @@ async function run(text: string): Promise<void> {
         continue;
       }
       if (why === "pause_turn") continue;   // a long server-side tool run: the same conversation resumes it
+      citeRead(ui);
       if (why === "max_tokens") ui.blocks.push({ t: "notice", tone: "info", text: "The reply was cut off at its length limit. Ask it to continue." });
       if (why === "refusal") ui.blocks.push({ t: "notice", tone: "info", text: "The assistant declined to answer this." });
       break;

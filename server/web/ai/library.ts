@@ -17,6 +17,17 @@ async function getJson(url: string, what: string): Promise<any> {
   if (!resp.ok) throw new ToolError(`${what}: ${(body && body.message) || `the server answered ${resp.status}`}`);
   return body;
 }
+/** read_datasheet: the pages of a PDF that answer a query; the server fetches and indexes the file once for everybody. */
+export async function readDatasheet(i: { url?: string; query?: string; pages?: number[]; max_pages?: number }): Promise<any> {
+  const url = String((i && i.url) || "").trim();
+  if (!url) throw new ToolError("read_datasheet needs the url of the PDF.");
+  let resp: Response;
+  try { resp = await fetch("/api/ai/datasheet", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ url, query: i.query, pages: i.pages, max_pages: i.max_pages }) }); }
+  catch { throw new ToolError("The datasheet reader could not be reached."); }
+  let body: any = null; try { body = await resp.json(); } catch { /* not json */ }
+  if (!resp.ok) throw new ToolError((body && body.message) || `The datasheet could not be read (${resp.status}).`);
+  return body;
+}
 const cache = new Map<string, Promise<any>>();
 function once<T>(key: string, make: () => Promise<T>): Promise<T> {
   let p = cache.get(key);

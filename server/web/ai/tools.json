@@ -169,6 +169,37 @@
     }
   },
   {
+    "name": "read_datasheet",
+    "description": "Read a PDF datasheet (or application note, hardware design guide) by its address, quickly: the server downloads and indexes it once, then returns only the pages that answer the query, with their page numbers. Use this for every PDF instead of fetching the whole file. Ask one focused question per call in the datasheet's own words (\"crystal load capacitance\", \"IOVDD decoupling capacitor\", \"absolute maximum ratings\", a pin name, a parameter symbol); read more with pages: [n, ...] when a result names other matching pages or a table continues on the next page. Cite the page numbers you used.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The https address of the PDF, usually the part's Datasheet field."
+        },
+        "query": {
+          "type": "string",
+          "description": "What to find, in a few words."
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "Page numbers to read in full instead of searching (up to 6)."
+        },
+        "max_pages": {
+          "type": "integer",
+          "description": "How many matching pages to return (default 3, up to 6)."
+        }
+      },
+      "required": [
+        "url"
+      ]
+    }
+  },
+  {
     "name": "focus_view",
     "description": "Centre the editor's view on a component or a point and highlight it, so the person can see what you are talking about. This does not change the design.",
     "input_schema": {

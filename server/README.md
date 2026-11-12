@@ -331,6 +331,14 @@ with Claude that can read the open design and propose edits to it.
   `scripts/ai-rp2040.mjs` runs that whole flow for an RP2040 dev board through
   the same tool calls, with the plan written out by hand so it needs no key.
 
+- **Datasheets, cheaply.** Part values come from the part's datasheet. A PDF is
+  read with `read_datasheet` (`POST /api/ai/datasheet`, `src/datasheet.rs`): the
+  server downloads it once, keeps the text of every page in Postgres for
+  everybody, and answers a question with the one to three pages that match (or
+  pages by number), about two thousand tokens instead of the whole document.
+  Only public https addresses are fetched. Web pages that are not PDFs still go
+  through the model's own fetch tool, capped at 25,000 tokens a page.
+
 | Endpoint | |
 |---|---|
 | `GET /api/ai` | whether the assistant is available to the caller, the model, today's usage |
@@ -398,6 +406,7 @@ How it is built:
 | `run_checks` | ERC on a sheet, DRC on the board |
 | `render_view` | a PNG of a sheet, the board, an area or some components |
 | `find_parts`, `get_library_part`, `find_datasheets` | KiCad libraries, vendor parts, datasheet links |
+| `read_datasheet` | the pages of a PDF datasheet that answer a question (fetched and indexed once on the server) |
 | `apply_changes` | every edit the assistant can make: symbols, wires, labels, fields, moves, `update_from_schematic`, `auto_place`, `set_rules`, `autoroute`, raw items |
 | `undo_changes`, `redo_changes`, `list_changes` | the record of what was changed through MCP |
 | `list_comments`, `add_comment`, `resolve_comment` | review comments pinned on the design |

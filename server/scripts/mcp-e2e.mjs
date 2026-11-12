@@ -161,7 +161,7 @@ const T = () => tokens.access_token;
   check('a notification is accepted with 202', note.status === 202);
   check('ping', JSON.stringify((await rpc(T(), 'ping')).result) === '{}');
   const list = (await rpc(T(), 'tools/list')).result.tools;
-  check('tools/list: the catalog, each tool with a schema and annotations', list.length === 25 && list.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.annotations && t.description.length > 40), `${list.length} tools`);
+  check('tools/list: the catalog, each tool with a schema and annotations', list.length === 26 && list.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.annotations && t.description.length > 40), `${list.length} tools`);
   check('the assistant\'s editor-only tools are not offered', !list.some((t) => ['get_selection', 'focus_view', 'open_document', 'propose_changes'].includes(t.name)));
   const unknown = await rpc(T(), 'nope/nothing');
   check('an unknown method is a JSON-RPC error', unknown.error && unknown.error.code === -32601);
@@ -243,6 +243,18 @@ let firstChange;
   check('get_library_part: a library symbol with its pin positions', !part.isError && pins && pins.length === 2, part.text.slice(0, 300));
   const found = await call(T(), 'find_parts', { query: 'R_0603', kind: 'footprint', vendor: 'none' });
   check('find_parts searches the KiCad libraries', !found.isError && /R_0603_1608Metric/.test(found.text), found.text.slice(0, 200));
+  { // read_datasheet: a PDF served from this machine (the server needs AI_DATASHEET_ALLOW_LOCAL=1), read through MCP
+    const http = await import('node:http');
+    const pdfBrowser = await createRequire(import.meta.url)('playwright').chromium.launch(); const pdfPage = await pdfBrowser.newPage();
+    await pdfPage.setContent('<style>section{break-after:page}</style><section><h1>XR1 Datasheet</h1></section><section><h2>Crystal</h2><p>The crystal load capacitance is 15 pF.</p></section>');
+    const bytes = await pdfPage.pdf({ format: 'A4' }); await pdfBrowser.close();
+    const srv = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/pdf' }); res.end(bytes); });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const ds = await call(T(), 'read_datasheet', { url: `http://127.0.0.1:${srv.address().port}/xr1.pdf?t=${Date.now()}`, query: 'crystal load capacitance' });
+    if (ds.isError && /https link/.test(ds.text)) console.log('  (skipped: start the server with AI_DATASHEET_ALLOW_LOCAL=1 to test read_datasheet)');
+    else check('read_datasheet returns the page that answers', !ds.isError && ds.data && ds.data.page_count === 2 && ds.data.pages[0].page === 2 && /15 pF/.test(ds.data.pages[0].text), ds.text.slice(0, 300));
+    srv.close();
+  }
 
   // a two-resistor divider, drawn the way a model would: pin ends from get_library_part, wires between them
   const X = 100.33, Y1 = 80.01, Y2 = 95.25; const top = pins.find((p) => p.dy < 0) || pins[0], bot = pins.find((p) => p !== top);

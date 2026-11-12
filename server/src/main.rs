@@ -1,5 +1,6 @@
 mod access;
 mod ai;
+mod datasheet;
 mod kicadlib;
 mod auth;
 mod doc_actor;
@@ -362,6 +363,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/projects/{id}/github/pull", post(github::pull))
         // The design assistant (ai.rs)
         .route("/api/ai", get(ai::status))
+        .route("/api/ai/datasheet", post(datasheet::read))
         .route("/api/ai/key", axum::routing::put(ai::put_key).delete(ai::delete_key))
         .route("/api/projects/{id}/ai/chat", post(ai::chat))
         .route("/api/docs/{id}/ops", get(ai::doc_ops))

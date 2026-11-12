@@ -30,3 +30,9 @@ thiserror = "2"
 tower-http = { version = "0.6", features = ["trace", "limit", "compression-gzip", "compression-br", "cors"] }
 serde_urlencoded = "0.7"
 resvg = { version = "0.45", default-features = false, features = ["raster-images"] }
+pdf-extract = "0.12"
+
+[profile.dev.package.pdf-extract]
+opt-level = 3
+[profile.dev.package.lopdf]
+opt-level = 3

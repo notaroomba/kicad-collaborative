@@ -377,6 +377,7 @@ const TOOLS: Record<string, (req: Request) => Promise<Reply>> = {
   get_items: (req) => withDocument(req, req.args.document, async () => ({ result: await design.getItems(without(req.args)) })),
   find_datasheets: (req) => withDocument(req, req.args.document, async () => ({ result: await design.findDatasheets(without(req.args)) })),
   get_board_info: (req) => withDocument(req, "board", async () => ({ result: await design.boardInfo() })),
+  read_datasheet: async (req) => ({ result: await library.readDatasheet(req.args || {}) }),
   find_parts: async (req) => ({ result: await library.findParts(req.args || {}) }),
   get_library_part: async (req) => ({ result: await library.getLibraryPart(req.args || {}) }),
   apply_changes: applyChanges,
