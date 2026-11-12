@@ -44,7 +44,7 @@
     "name": "get_design_guide",
     "title": "Design guide",
     "write": false,
-    "description": "House rules for working on a design here, written for you: how to draw a schematic that reads like a careful engineer's, how to take a design from a prompt to a routed board in stages, how to plan placement and routing for the engines, and how to review a design. Read the relevant topic once before you draw or rearrange a schematic, lay out or route a board, or write a review.",
+    "description": "House rules for working on a design here, written for you: the owner's schematic drawing rules (wires inside a block, labels only between blocks, horizontal labels, supplies up and ground down, shared rails for decoupling), how to take a design from a prompt to a routed board in stages, how to plan placement and routing for the engines, and how to review a design. Read the relevant topic once before you draw or rearrange a schematic, lay out or route a board, or write a review.",
     "input_schema": {
       "type": "object",
       "properties": {

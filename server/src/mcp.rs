@@ -47,7 +47,7 @@ const INSTRUCTIONS: &str = "KiCad Collaborative: the person's online KiCad proje
 Start with list_projects, then get_design_overview for the project. Every design tool takes the project (id or exact name) and usually a document (a path from get_project, or \"board\"). \
 Read the design with the tools instead of guessing: coordinates are millimetres with Y down, schematic items sit on a 1.27 mm grid, and pins connect only when a wire end or label lands exactly on the pin's connection point. \
 render_view shows a sheet or the board as a picture. apply_changes edits the design at once and everyone in the project sees it live, so change only what the person asked for, use dry_run when unsure, check the result with run_checks and render_view, and take a wrong change back with undo_changes. \
-Before drawing or rearranging a schematic, laying out or routing a board, or reviewing a design, read get_design_guide once.";
+Before drawing or rearranging a schematic, laying out or routing a board, or reviewing a design, read get_design_guide once; its schematic drawing rules are the owner's and are not optional.";
 
 // ------------------------------------------------------------------ the catalog
 
@@ -80,7 +80,7 @@ const REUSED: &[(&str, bool, &str, Option<&str>)] = &[
     ("get_library_part", false, "Get library part", None),
 ];
 
-const APPLY_HEAD: &str = "Change a schematic sheet or the board. The edits are validated against the live document and applied together as one change, through the same collaboration pipeline as a person's own edits: everyone who has the project open sees them at once, marked as made by the person through this app. If any edit is invalid nothing is applied and each problem is reported with its reason, so correct it and call again. With dry_run nothing is applied and the result says what the edits would do. Returns what each edit did, for a schematic how pin connections changed (a tidy-up must leave them unchanged), the engines' reports for placement and routing, and a change_id that undo_changes takes to revert the whole call. Only make changes the person asked for. ";
+const APPLY_HEAD: &str = "Change a schematic sheet or the board. The edits are validated against the live document and applied together as one change, through the same collaboration pipeline as a person's own edits: everyone who has the project open sees them at once, marked as made by the person through this app. If any edit is invalid nothing is applied and each problem is reported with its reason, so correct it and call again. With dry_run nothing is applied and the result says what the edits would do. Returns what each edit did, for a schematic how pin connections changed (a tidy-up must leave them unchanged), the engines' reports for placement and routing, and a change_id that undo_changes takes to revert the whole call. Only make changes the person asked for. Before drawing on a schematic read get_design_guide (topic schematic): the site's owner has firm drawing rules (wires inside a block and labels only between blocks, horizontal labels, supplies up and ground down, decoupling capacitors in a row on shared rails). ";
 
 fn project_prop() -> Value {
     json!({ "type": "string", "description": "Project id or exact name, as listed by list_projects." })
