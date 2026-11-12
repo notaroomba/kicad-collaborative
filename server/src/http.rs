@@ -1989,6 +1989,72 @@ pub async fn create_doc(
         .into_response())
 }
 
+/// The document types a client may delete or move: library files (a footprint, a symbol library, a library table,
+/// a 3D model, a drawing sheet) and other loose files.  A project's own schematic, board and project file stay put.
+fn doc_is_movable(doc_type: &str) -> bool {
+    matches!(doc_type, "footprint" | "symbol_lib" | "lib_table" | "model3d" | "worksheet" | "other")
+}
+
+/// DELETE /api/docs/{id}: the Footprint Editor's Delete Footprint (and the same for other library files).
+pub async fn delete_doc(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(doc_id): Path<Uuid>,
+) -> AppResult<Response> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    let role = persist::effective_role(&state.pool, user.id, doc.project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if role != "editor" {
+        return Err(AppError::Forbidden);
+    }
+    if !doc_is_movable(&doc.doc_type) {
+        return Err(AppError::BadRequest(format!("a {} cannot be deleted here", doc.doc_type)));
+    }
+    let deleted = persist::delete_document(&state.pool, doc_id).await?;
+    Ok(Json(json!({ "ok": deleted, "docId": doc_id })).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct MoveDocRequest {
+    pub path: String,
+}
+
+/// PATCH /api/docs/{id} {path}: rename or move a library file inside its project (same file type).
+pub async fn move_doc(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(doc_id): Path<Uuid>,
+    LenientJson(req): LenientJson<MoveDocRequest>,
+) -> AppResult<Response> {
+    let doc = persist::get_document(&state.pool, doc_id).await?.ok_or(AppError::NotFound)?;
+    let role = persist::effective_role(&state.pool, user.id, doc.project_id)
+        .await?
+        .ok_or(AppError::Forbidden)?;
+    if role != "editor" {
+        return Err(AppError::Forbidden);
+    }
+    if !doc_is_movable(&doc.doc_type) {
+        return Err(AppError::BadRequest(format!("a {} cannot be moved here", doc.doc_type)));
+    }
+    let Some(path) = safe_zip_name(&req.path) else {
+        return Err(AppError::BadRequest("bad path".into()));
+    };
+    if !allowed_file(&path) || is_local_state_path(&path) {
+        return Err(AppError::BadRequest("file type not allowed".into()));
+    }
+    if doc_type_for(&path) != doc.doc_type {
+        return Err(AppError::BadRequest("a file keeps its type when it moves".into()));
+    }
+    for existing in persist::project_documents(&state.pool, doc.project_id).await? {
+        if existing.id != doc_id && existing.path.to_lowercase() == path.to_lowercase() {
+            return Err(AppError::BadRequest(format!("duplicate file: {}", existing.path)));
+        }
+    }
+    let moved = persist::rename_document(&state.pool, doc_id, &path).await?.ok_or(AppError::NotFound)?;
+    Ok(Json(json!({ "ok": true, "docId": moved.id, "path": moved.path, "docType": moved.doc_type })).into_response())
+}
+
 #[derive(Deserialize)]
 pub struct PreviewUploadQuery {
     pub seq: i64,

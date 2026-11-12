@@ -390,6 +390,50 @@ async function newLibrary(): Promise<void> {
   setStatusBar({ message: `Library '${nick}' added to the project library table` });
 }
 
+/** FOOTPRINT_EDIT_FRAME::DeleteFootprintFromLibrary: the document goes (DELETE /api/docs/{id}) after a themed confirmation. */
+async function deleteFootprint(docId: string): Promise<void> {
+  const project = state.project; if (!project || E.viewOnly) return;
+  const d = project.docs.find((x) => x.docId === docId); if (!d) return;
+  const { lib, name } = fpLibIdOf(d.path);
+  if (!(await confirmBox("Confirmation", `Delete footprint '${name}' from library '${lib}'?`, "Delete"))) return;
+  const r = await fetch(`/api/docs/${docId}`, { method: "DELETE", credentials: "same-origin" });
+  if (!r.ok) { toast(r.status === 404 || r.status === 405 ? "This server cannot delete files yet" : `Footprint '${name}' could not be deleted`, 4000); return; }
+  project.docs = project.docs.filter((x) => x.docId !== docId); store.set({ project: Object.assign({}, project) });
+  publishLibs(); setStatusBar({ message: `Footprint '${name}' deleted from library '${lib}'` });
+  if (state.docId === docId) { const next = projectFpLibs().flatMap((l) => l.footprints)[0]; if (next) openFootprintDoc(next.docId); else location.href = `/p/${project.projectId}/edit`; }
+}
+/** PCB_ACTIONS::renameFootprint: the file moves (PATCH /api/docs/{id} {path}) and the footprint takes the name. */
+async function renameFootprint(docId: string): Promise<void> {
+  const project = state.project; if (!project || E.viewOnly) return;
+  const d = project.docs.find((x) => x.docId === docId); if (!d) return;
+  const { lib, name } = fpLibIdOf(d.path);
+  const next = await promptText("Rename Footprint", "New name:", name); if (!next || next.trim() === name) return;
+  const clean = next.trim(); if (/[\\/:"*?<>|]/.test(clean)) { toast("Footprint name contains illegal characters", 4000); return; }
+  if (projectFpLibs().some((l) => l.name === lib && l.footprints.some((f) => f.name === clean))) { toast(`Footprint '${clean}' already exists in library '${lib}'.`, 4000); return; }
+  const path = d.path.split("/").slice(0, -1).concat(clean + ".kicad_mod").join("/");
+  const r = await fetch(`/api/docs/${docId}`, { method: "PATCH", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ path }) });
+  if (!r.ok) { toast(r.status === 404 || r.status === 405 ? "This server cannot rename files yet" : `Footprint '${name}' could not be renamed`, 4000); return; }
+  d.path = path; store.set({ project: Object.assign({}, project) });
+  // the name inside the file follows: a header op on the open footprint (one undo step), else on the document itself
+  if (state.docId === docId && E.kdoc) {
+    const h = KiCadCanvas.parse(FD().footprintHeaderSexpr(E.kdoc))!; h[1] = clean;
+    toolCtx().commit([{ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: KiCadCanvas.serialize(h) }], "Rename Footprint");
+    if (state.doc) state.doc.path = path; refreshTitle();
+  } else {
+    try { const live = await liveDocument(docId); const fd = KiCadCanvas.parseDoc(live.file, "footprint"); for (const op of live.ops) for (const c of op.changes || []) KiCadCanvas.applyChange(fd, c, 1e6);
+      const h = KiCadCanvas.parse(FD().footprintHeaderSexpr(fd))!; h[1] = clean; await sendDocOps(docId, [{ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: KiCadCanvas.serialize(h) }]); } catch (e) { console.warn(e); }
+  }
+  publishLibs();
+}
+/** The Libraries pane's context menu. */
+window.addEventListener("kc-fpedit-lib", ((ev: CustomEvent) => {
+  const m = ev.detail || {}; if (!isFpEdit()) return;
+  if (m.cmd === "delete" && m.docId) deleteFootprint(m.docId);
+  else if (m.cmd === "rename" && m.docId) renameFootprint(m.docId);
+  else if (m.cmd === "new") newFootprint();
+  else if (m.cmd === "newLibrary") newLibrary();
+}) as EventListener);
+
 // ---------------------------------------------------------------- properties, pads, anchor
 /** DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR, the part of it the header carries: name, description, keywords, attributes. */
 function footprintProperties(): void {
@@ -508,6 +552,8 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   setAnchor: fpOnly(() => setTool("anchor")),
   showLibraryTree: fpOnly(() => showPane("libtree")),
   editFpInFpEditor: () => { if (!isFpEdit()) editFpInFpEditor(); },
+  deleteFootprint: fpOnly(() => { if (state.docId && !isFpPrivate()) deleteFootprint(state.docId); }),
+  renameFootprint: fpOnly(() => { if (state.docId && !isFpPrivate()) renameFootprint(state.docId); }),
   } as Record<string, ActionHandler>);
 }
 
@@ -519,5 +565,5 @@ window.addEventListener("kc-fpedit-open", ((ev: CustomEvent) => {
   import("./doc").then((m) => m.openDoc(d)).catch((e) => console.warn(e));
 }) as EventListener);
 
-export const fpEditApi = { doc: () => E.kdoc, commit: (changes: KChange[], label?: string) => toolCtx().commit(changes, label), isFpEdit, isFpPrivate, saveFootprint, revertFootprint, saveToBoard, newFootprintText, parseLibTable, projectFpLibs, fpLibIdOf, exchangeChange, refreshTitle, FP };
+export const fpEditApi = { doc: () => E.kdoc, ctx: () => toolCtx(), commit: (changes: KChange[], label?: string) => toolCtx().commit(changes, label), isFpEdit, isFpPrivate, saveFootprint, revertFootprint, saveToBoard, newFootprintText, parseLibTable, projectFpLibs, fpLibIdOf, exchangeChange, refreshTitle, FP };
 (window as unknown as { KiCadFpEdit?: typeof fpEditApi }).KiCadFpEdit = fpEditApi;

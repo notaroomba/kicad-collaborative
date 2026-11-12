@@ -160,7 +160,7 @@ export const FPEDIT_MENUS: [string, MenuEntry[]][] = [
 export const FPEDIT_ONLY = new Set(["newLibrary", "addLibrary", "newFootprint", "createFootprint", "editLibFpInFpEditor", "saveAs", "footprintProperties", "importFootprint", "exportFootprint",
   "exportFootprintAsSVG", "exportFootprintAsPNG", "compareFpLibraryWithFile", "showLibFootprintFieldsTable", "padTable", "enumeratePads", "showLibraryTree", "nextFootprintTab", "prevFootprintTab", "closeFootprintTab",
   "placePad", "placeThtPad", "placeSmdPad", "placeNpthPad", "placePasteAperturePad", "setAnchor", "checkFootprint", "showFootprintUsers", "loadFpFromBoard", "saveFpToBoard", "repairFootprint",
-  "explodePad", "recombinePad", "pushPadSettings", "defaultPadProperties"]);
+  "explodePad", "recombinePad", "pushPadSettings", "defaultPadProperties", "deleteFootprint", "renameFootprint"]);
 /** Board-only actions the Footprint Editor does not have (its tools and menus leave them out; their hotkeys do nothing there). */
 export const FPEDIT_BLOCKED = new Set(["routeSingleTrack", "routeDiffPair", "tuneSingleTrack", "tuneDiffPair", "tuneSkew", "drawVia", "drawZone", "drawCopperThievingZone", "drillOrigin", "placeFootprint",
   "runDRC", "zoneFillAll", "zoneUnfillAll", "zoneFill", "zoneUnfill", "showRatsnest", "editFpInFpEditor", "editLibFpInFpEditor_board", "updateFootprint", "changeFootprint", "boardSetup", "selectLayerPair",

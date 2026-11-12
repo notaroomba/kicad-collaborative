@@ -519,6 +519,23 @@ pub async fn create_document(
     .await
 }
 
+/// Remove a document and everything hanging off it (snapshots, ops, comments, previews: ON DELETE CASCADE).
+pub async fn delete_document(pool: &PgPool, id: Uuid) -> DbResult<bool> {
+    let res = sqlx::query("DELETE FROM documents WHERE id = $1").bind(id).execute(pool).await?;
+    Ok(res.rows_affected() > 0)
+}
+
+/// Move a document to another path inside its project (a footprint renamed or moved to another library).
+pub async fn rename_document(pool: &PgPool, id: Uuid, path: &str) -> DbResult<Option<Document>> {
+    sqlx::query_as::<_, Document>(
+        "UPDATE documents SET path = $2 WHERE id = $1 RETURNING id, project_id, path, doc_type",
+    )
+    .bind(id)
+    .bind(path)
+    .fetch_optional(pool)
+    .await
+}
+
 pub async fn get_document(pool: &PgPool, id: Uuid) -> DbResult<Option<Document>> {
     sqlx::query_as::<_, Document>(
         "SELECT id, project_id, path, doc_type FROM documents WHERE id = $1",
