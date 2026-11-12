@@ -365,7 +365,13 @@ async fn handle(state: &AppState, caller: &Caller, site: &str, message: Value) -
             Ok(json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false }, "prompts": { "listChanged": false } },
-                "serverInfo": { "name": "kicad-collaborative", "title": "KiCad Collaborative", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "kicad-collaborative", "title": "KiCad Collaborative", "version": env!("CARGO_PKG_VERSION"),
+                    "websiteUrl": site,
+                    "icons": [
+                        { "src": format!("{site}/icon-192.png"), "mimeType": "image/png", "sizes": ["192x192"] },
+                        { "src": format!("{site}/icon-512.png"), "mimeType": "image/png", "sizes": ["512x512"] },
+                        { "src": format!("{site}/favicon.svg"), "mimeType": "image/svg+xml", "sizes": ["any"] },
+                    ] },
                 "instructions": INSTRUCTIONS,
             }))
         }
@@ -788,7 +794,7 @@ async fn store_change(state: &AppState, caller: &Caller, p: &ProjectCtx, record:
 
 /// SVG to PNG, the longest side `longest` pixels.  The picture carries its text as paths
 /// (web/mcp/picture.ts), so no fonts are needed.
-fn rasterize(svg: &str, longest: u32) -> Result<(Vec<u8>, u32, u32), String> {
+pub(crate) fn rasterize(svg: &str, longest: u32) -> Result<(Vec<u8>, u32, u32), String> {
     use resvg::{tiny_skia, usvg};
     let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).map_err(|e| format!("The picture could not be drawn ({e})."))?;
     let size = tree.size();

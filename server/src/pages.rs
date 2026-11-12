@@ -22,6 +22,7 @@ pub(crate) const THEME_CSS: &str = include_str!("../static/theme.css");
 /// the layout of a single centred dialog.
 pub(crate) const STYLE: &str = concat!(r#"
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"><link rel="alternate icon" href="/favicon.ico" sizes="any"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 "#, include_str!("../static/theme.css"), r#"
@@ -214,6 +215,53 @@ pub async fn landing_js_map() -> Response {
 /// The icon as a file, for browser tabs.
 pub async fn favicon() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "public, max-age=86400")], MARK)
+}
+
+/// The icon as PNG, drawn once per size from the same SVG.  Favicon services and the apps that
+/// list this site as a connector (Claude's connector list among them) do not read SVG icons, and
+/// with no `/favicon.ico` here they fall back to the parent domain's.
+fn icon_png(size: u32) -> &'static [u8] {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, &'static [u8]>>> = std::sync::OnceLock::new();
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    cache.entry(size).or_insert_with(|| {
+        let png = crate::mcp::rasterize(MARK, size).map(|p| p.0).unwrap_or_default();
+        Box::leak(png.into_boxed_slice())
+    })
+}
+
+/// `/favicon.ico`: 16, 32 and 48 pixel PNG images in an ICO container.
+fn icon_ico() -> &'static [u8] {
+    static ICO: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    ICO.get_or_init(|| {
+        let sizes = [16u32, 32, 48];
+        let images: Vec<&[u8]> = sizes.iter().map(|s| icon_png(*s)).collect();
+        let mut out = vec![0, 0, 1, 0, sizes.len() as u8, 0];
+        let mut offset = 6 + 16 * sizes.len() as u32;
+        for (size, image) in sizes.iter().zip(&images) {
+            out.extend_from_slice(&[*size as u8, *size as u8, 0, 0, 1, 0, 32, 0]);
+            out.extend_from_slice(&(image.len() as u32).to_le_bytes());
+            out.extend_from_slice(&offset.to_le_bytes());
+            offset += image.len() as u32;
+        }
+        for image in images { out.extend_from_slice(image); }
+        out
+    })
+}
+
+pub async fn favicon_ico() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/x-icon"), (header::CACHE_CONTROL, "public, max-age=86400")], icon_ico())
+}
+
+/// `/icon-{size}.png`, `/favicon.png` and the Apple touch icon names.
+pub async fn icon_file(uri: axum::http::Uri) -> Response {
+    let size = match uri.path() {
+        "/favicon.png" | "/icon-64.png" => 64,
+        "/apple-touch-icon.png" | "/apple-touch-icon-precomposed.png" => 180,
+        "/icon-192.png" => 192,
+        "/icon-512.png" => 512,
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    ([(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=86400")], icon_png(size)).into_response()
 }
 
 pub async fn landing_image(Path(name): Path<String>) -> Response {
