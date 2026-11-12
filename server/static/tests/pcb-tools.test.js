@@ -1935,3 +1935,72 @@ test("Draw Zone / Rule Area: the properties dialog opens on a template at the fi
   assert.ok(K.kid(seen, "keepout")); assert.equal(P.state.draw.template[0], "zone");
   pcb.setNewItemDialogs({ zone: null }); pcb.onActivate("select", ctx); P.state.highlightNet = null;
 });
+
+// ---- dimension point editors (pcb_point_editor.cpp *_DIMENSION_POINT_EDIT_BEHAVIOR) and PCB_DIM_*::Update
+const DIM = (type, body, text, at, extra) => `(dimension (type ${type}) (layer "F.SilkS") (uuid "d-${type}") ${body}
+    (format (prefix "${type === "radial" ? "R " : ""}") (suffix "") (units 2) (units_format ${type === "aligned" ? 1 : 0}) (precision 4)${type === "leader" ? ' (override_value "NOTE")' : " (suppress_zeroes yes)"})
+    (style (thickness 0.15) (arrow_length 1.27) (text_position_mode 0)${type === "aligned" || type === "orthogonal" ? " (arrow_direction outward) (extension_height 0.58642)" : ""}${type === "leader" ? " (text_frame 0)" : ""} (extension_offset 0.5)${type === "leader" ? "" : " (keep_text_aligned yes)"}${extra || ""})
+    ${type === "center" ? "" : `(gr_text "${text}" (at ${at}) (layer "F.SilkS") (uuid "d-${type}") (effects (font (size 1 1) (thickness 0.15))))`})`;
+const DIM_FIXTURE = FIXTURE.replace(/\)\s*$/, `
+  ${DIM("aligned", "(pts (xy 0 0) (xy 20 0)) (height 3)", "20.0000 mm", "10 1.7 0")}
+  ${DIM("orthogonal", "(pts (xy 0 10) (xy 10 14)) (height 5) (orientation 0)", "10", "5 13.7 0")}
+  ${DIM("radial", "(pts (xy 50 50) (xy 53 54)) (leader_length 3.81)", "R 5", "70 56 0")}
+  ${DIM("leader", "(pts (xy 80 80) (xy 85 75))", "NOTE", "95 75 0")}
+  ${DIM("center", "(pts (xy 60 60) (xy 61 61))")}
+)`);
+
+test("dimensions: Update() rebuilds the text and its place as pcbnew does, in nanometres", () => {
+  // qa/data/pcbnew/issue20249: inches, bare suffix, the default pen (size / 8) in the offset
+  const inch = K.parse(`(dimension (type aligned) (layer "F.SilkS") (uuid "x") (pts (xy 0 0) (xy 20 0)) (height 3)
+    (format (prefix "") (suffix "") (units 0) (units_format 1) (precision 4)) (style (thickness 0.15) (arrow_length 1.27) (text_position_mode 0) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0) (keep_text_aligned yes))
+    (gr_text "?" (at 0 0 0) (layer "F.SilkS") (uuid "x") (effects (font (size 1.27 1.27)))))`);
+  let m = P.dimUpdate(P.dimRead(inch)); assert.equal(m.text, "0.7874 in"); assert.deepEqual(m.textPos, [10e6, 1571250]);
+  // pns_regressions video-v10: a vertical aligned dimension with a negative height
+  const vert = K.parse(`(dimension (type aligned) (layer "Dwgs.User") (uuid "y") (pts (xy 224.028 134.366) (xy 224.028 154.94)) (height -3.175)
+    (format (prefix "") (suffix "") (units 2) (units_format 1) (precision 4)) (style (thickness 0.2) (arrow_length 1.27) (text_position_mode 0) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0) (keep_text_aligned yes))
+    (gr_text "?" (at 0 0 0) (layer "Dwgs.User") (uuid "y") (effects (font (size 1.524 1.524) (thickness 0.2)))))`);
+  m = P.dimUpdate(P.dimRead(vert)); assert.equal(m.text, "20.5740 mm"); assert.deepEqual([m.textPos, m.textAngle], [[225479000, 144653000], 90]);
+  // VECTOR2I / 2 rounds half away from zero (issue22475: an odd crossbar length)
+  const odd = K.parse(`(dimension (type aligned) (layer "F.SilkS") (uuid "z") (pts (xy 123.5 73.581281) (xy 123.5 96.045)) (height 0)
+    (format (prefix "") (suffix "") (units 2) (units_format 1) (precision 4)) (style (thickness 0.15) (arrow_length 1.27) (text_position_mode 0) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0.5) (keep_text_aligned yes))
+    (gr_text "?" (at 0 0 0) (layer "F.SilkS") (uuid "z") (effects (font (size 1 1) (thickness 0.15)))))`);
+  assert.equal(P.dimUpdate(P.dimRead(odd)).textPos[1], 84813141);
+  m = P.dimRead(inch); m.precision = 8; m.unitsMode = 1; m.unitsFormat = 2; m.prefix = "W="; assert.equal(P.dimUpdate(m).text, "W=787.4 (mils)", "V.VVV precisions drop places per unit; parenthesised units");
+});
+
+test("dimension point editor: handles per type, and each drag as UpdateItem does it", () => {
+  const doc = K.parseDoc(DIM_FIXTURE, "kicad_pcb"), node = (t) => doc.items.get("d-" + t).node;
+  const keys = (t) => P.editPoints(doc.items.get("d-" + t)).map((h) => h.key);
+  assert.deepEqual(keys("aligned"), ["start", "end", "text", "cbstart", "cbend"]);
+  assert.deepEqual(keys("orthogonal"), ["start", "end", "text", "cbstart", "cbend"]);
+  assert.deepEqual(keys("radial"), ["start", "end", "text", "knee"]);
+  assert.deepEqual(keys("leader"), ["start", "end", "text"]);
+  assert.deepEqual(keys("center"), ["start", "end"]);
+  const at = (n) => { const a = K.kid(K.kid(n, "gr_text"), "at"); return [K.num(a[1]), K.num(a[2]), K.num(a[3])]; };
+  const num = (n, k) => K.num(K.kid(n, k)[1]), text = (n) => K.str(K.kid(n, "gr_text")[1]), mode = (n) => K.num(K.kid(K.kid(n, "style"), "text_position_mode")[1]);
+  const xy = (n) => K.kids(K.kid(n, "pts"), "xy").map((x) => [K.num(x[1]), K.num(x[2])]);
+  // aligned: the crossbar handle slides along its feature line, the height is the signed distance; the text follows
+  let n = P.editPointNode(node("aligned"), "dimension", "cbstart", [2, 5]);
+  assert.equal(num(n, "height"), 5); assert.deepEqual(at(n), [10, 3.85, 0]); assert.equal(text(n), "20 mm");
+  n = P.editPointNode(node("aligned"), "dimension", "cbend", [20, -4]); assert.equal(num(n, "height"), -4, "the other side");
+  n = P.editPointNode(node("aligned"), "dimension", "end", [30, 0]); assert.deepEqual(xy(n), [[0, 0], [30, 0]]); assert.equal(text(n), "30 mm");
+  // the text handle switches to manual placement; a manual text then keeps its place relative to the crossbar
+  n = P.editPointNode(node("aligned"), "dimension", "text", [12, 6]); assert.equal(mode(n), 2); assert.deepEqual(at(n).slice(0, 2), [12, 6]);
+  const n2 = P.editPointNode(n, "dimension", "cbstart", [0, 4]); assert.equal(num(n2, "height"), 4); assert.deepEqual(at(n2).slice(0, 2), [12, 7], "the text keeps its distance from the crossbar");
+  const n3 = P.editPointNode(n, "dimension", "end", [40, 0]); assert.deepEqual(at(n3).slice(0, 2), [24, 6], "and its ratio along it");
+  // orthogonal: leaving the points' box beside them turns the measurement vertical
+  n = P.editPointNode(node("orthogonal"), "dimension", "cbstart", [-6, 12]); assert.equal(num(n, "orientation"), 1); assert.equal(num(n, "height"), -6); assert.equal(text(n), "4");
+  assert.deepEqual(at(n), [-7.15, 12, 90]);
+  n = P.editPointNode(node("orthogonal"), "dimension", "cbstart", [5, 12]); assert.equal(num(n, "orientation"), 0, "inside the box the axis stays"); assert.equal(num(n, "height"), 2);
+  // radial: the knee stays on the radius line, the leader length is its distance from the end, the text moves with it
+  n = P.editPointNode(node("radial"), "dimension", "knee", [56.4, 57.7], [56.4, 57.7]); assert.equal(num(n, "leader_length"), 5);
+  assert.deepEqual(at(n).slice(0, 2), [70.714, 56.952]);
+  n = P.editPointNode(node("radial"), "dimension", "end", [56, 50]); assert.equal(text(n), "R 6");
+  n = P.editPointNode(node("radial"), "dimension", "text", [70, 59.5], [70, 59.5]); assert.deepEqual(at(n), [70, 57.048, 0], "the text keeps to 45° steps from the knee");
+  // leader: moving the end carries the text; the text keeps to 45° steps from the end
+  n = P.editPointNode(node("leader"), "dimension", "end", [86, 76]); assert.deepEqual(at(n).slice(0, 2), [96, 76]); assert.equal(text(n), "NOTE");
+  n = P.editPointNode(node("leader"), "dimension", "text", [90, 79], [90, 79]); assert.deepEqual(at(n).slice(0, 2), [90, 80]);
+  // centre: the arm keeps to 45°
+  n = P.editPointNode(node("center"), "dimension", "end", [63, 60.4], [63, 60.4]); assert.deepEqual(xy(n), [[60, 60], [63, 60]]);
+  assert.equal(K.kid(n, "gr_text"), null, "a centre mark has no text");
+});
