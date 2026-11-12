@@ -375,6 +375,7 @@ function pcbDrawingToolMenu(): CondMenu {
   const tuning = tool(...PCB_TUNING_TOOLS);
   m.item("PCB_ACTIONS::spacingIncrease", tuning, 200).item("PCB_ACTIONS::spacingDecrease", tuning, 200).item("PCB_ACTIONS::amplIncrease", tuning, 200)
     .item("PCB_ACTIONS::amplDecrease", tuning, 200).item("PCB_ACTIONS::lengthTunerSettings", tuning, 200);
+  m.item("PCB_ACTIONS::changeDimensionArrows", tool("dimaligned", "dimortho", "dimcenter", "dimradial", "leader"), 200);
   m.sep(500); m.sep(500);
   standardSubMenus(m);
   // BOARD_EDITOR_CONTROL::Init (the drawing tool's menu)

@@ -79,8 +79,25 @@ const fmt = (v) => String(+v.toFixed(3));
 const layerClass = (l) => /^[FB]\.SilkS$/.test(l) ? "silk" : /\.Cu$/.test(l) ? "copper" : l === "Edge.Cuts" ? "edges" : /^[FB]\.CrtYd$/.test(l) ? "courtyard" : /^[FB]\.Fab$/.test(l) ? "fab" : "others";
 const LINE_W = { silk: 0.1, copper: 0.2, edges: 0.05, courtyard: 0.05, fab: 0.1, others: 0.1 };
 const TEXT_STYLE = { silk: [1, 0.1], copper: [1.5, 0.3], edges: [1, 0.15], courtyard: [1, 0.15], fab: [1, 0.15], others: [1, 0.15] };
+/**
+ * BOARD_DESIGN_SETTINGS' dimension defaults (Board Setup > Text & Graphics > Defaults: Dimension Properties), what
+ * DrawDimension gives a new measuring dimension: automatic units, four places, no suffix, zeroes suppressed, text
+ * outside and aligned; every dimension takes the arrow length and extension offset.
+ */
+const DIM_DEFAULTS = { units: 3, precision: 4, unitsFormat: 0, suppressZeroes: true, textPosition: 0, keepAligned: true, arrowLength: 1.27, extOffset: 0.5 };
+const DIM_DEFAULTS0 = Object.assign({}, DIM_DEFAULTS);
 /** Take the project's per-layer-class defaults (board.design_settings.defaults) for new graphics and text. */
 function layerDefaults(d) {
+  Object.assign(DIM_DEFAULTS, DIM_DEFAULTS0);
+  const dd = d.dimensions || {}, int = (v, lo, hi) => (typeof v === "number" && v >= lo && v <= hi ? Math.round(v) : null);
+  if (int(d.dimension_units, 0, 3) !== null) DIM_DEFAULTS.units = int(d.dimension_units, 0, 3);
+  if (int(d.dimension_precision, 0, 9) !== null) DIM_DEFAULTS.precision = int(d.dimension_precision, 0, 9);
+  if (int(dd.units_format, 0, 2) !== null) DIM_DEFAULTS.unitsFormat = int(dd.units_format, 0, 2);
+  if (int(dd.text_position, 0, 2) !== null) DIM_DEFAULTS.textPosition = int(dd.text_position, 0, 2);
+  if (typeof dd.suppress_zeroes === "boolean") DIM_DEFAULTS.suppressZeroes = dd.suppress_zeroes;
+  if (typeof dd.keep_text_aligned === "boolean") DIM_DEFAULTS.keepAligned = dd.keep_text_aligned;
+  if (typeof dd.arrow_length === "number" && dd.arrow_length > 0) DIM_DEFAULTS.arrowLength = dd.arrow_length / 1e6;   // stored in nm
+  if (typeof dd.extension_offset === "number" && dd.extension_offset >= 0) DIM_DEFAULTS.extOffset = dd.extension_offset / 1e6;
   for (const [cls, stem] of [["silk", "silk"], ["copper", "copper"], ["edges", "board_outline"], ["courtyard", "courtyard"], ["fab", "fab"], ["others", "other"]]) {
     const w = d[stem + "_line_width"]; if (typeof w === "number" && w > 0) LINE_W[cls] = w;
     const sz = d[stem + "_text_size_h"], th = d[stem + "_text_thickness"]; if (typeof sz === "number" && sz > 0) TEXT_STYLE[cls] = [sz, typeof th === "number" && th > 0 ? th : TEXT_STYLE[cls][1]];
@@ -277,29 +294,39 @@ function dimGeometry(type, d, layer) {
   }
   return { lines, arrows, text, tpos, tang, size, thick };
 }
-/** (dimension …) as PCB_IO_KICAD_SEXPR::format writes it: the type's children in the writer's order, the text last. */
+/**
+ * A new (dimension …) as DRAWING_TOOL::DrawDimension makes it and PCB_IO_KICAD_SEXPR::format writes it: the type's
+ * constructor defaults (a radial's "R " prefix and 3-arrow leader, a leader's "Leader" override in inches), the board's
+ * dimension defaults for the measuring types, the layer's text and line defaults (mirrored text on the back), then
+ * Update() places the text.  d = { start, end, height, orientation ("h" | "v"), textPos, text, arrowInward, thickness }.
+ */
 function dimensionNode(type, d, layer) {
-  const uuid = K.newUuid(); const g = dimGeometry(type, d, layer); const measuring = type !== "center" && type !== "leader";
+  const uuid = K.newUuid(), D = DIM_DEFAULTS, measuring = type !== "center" && type !== "leader";
   const node = ["dimension", ["type", type], ["layer", layer], ["uuid", uuid], ["pts", xy(d.start), xy(d.end)]];
   if (type === "aligned" || type === "orthogonal") node.push(["height", r6(d.height || 0)]);
-  if (type === "radial") node.push(["leader_length", r6(ARROW_LEN * 3)]);
+  if (type === "radial") node.push(["leader_length", r6(ARROW_LEN * 3)]);   // m_arrowLength * 3, before the board's arrow length is set
   if (type === "orthogonal") node.push(["orientation", d.orientation === "v" ? 1 : 0]);
   if (type !== "center") {
-    // measuring dimensions take the board defaults (automatic units, no suffix, four places, zeroes suppressed);
-    // a leader keeps its constructor's units and shows its override text
-    const format = ["format", ["prefix", type === "radial" ? "R " : ""], ["suffix", ""], ["units", measuring ? 3 : 0], ["units_format", 0], ["precision", 4]];
-    if (type === "leader") format.push(["override_value", d.text || ""]); else format.push(["suppress_zeroes", "yes"]);
+    const format = measuring
+      ? ["format", ["prefix", type === "radial" ? "R " : ""], ["suffix", ""], ["units", D.units], ["units_format", D.unitsFormat], ["precision", D.precision]]
+      : ["format", ["prefix", ""], ["suffix", ""], ["units", 0], ["units_format", 0], ["precision", 4], ["override_value", d.text == null ? "Leader" : d.text]];
+    if (measuring && D.suppressZeroes) format.push(["suppress_zeroes", "yes"]);
     node.push(format);
   }
-  const style = ["style", ["thickness", r6(gfxWidth(layer))], ["arrow_length", ARROW_LEN], ["text_position_mode", 0]];
-  if (type === "aligned" || type === "orthogonal") style.push(["arrow_direction", "outward"], ["extension_height", EXT_HEIGHT]);   // DIM_ARROW_DIRECTION::OUTWARD, always written
+  const style = ["style", ["thickness", r6(d.thickness != null ? d.thickness : gfxWidth(layer))], ["arrow_length", r6(D.arrowLength)], ["text_position_mode", measuring ? D.textPosition : 0]];
+  if (type === "aligned" || type === "orthogonal") style.push(["arrow_direction", d.arrowInward ? "inward" : "outward"], ["extension_height", EXT_HEIGHT]);   // always written
   if (type === "leader") style.push(["text_frame", 0]);
-  style.push(["extension_offset", EXT_OFFSET]);
-  if (type !== "leader") style.push(["keep_text_aligned", "yes"]);
+  style.push(["extension_offset", r6(D.extOffset)]);
+  if (measuring ? D.keepAligned : type === "center") style.push(["keep_text_aligned", "yes"]);
   node.push(style);
-  // the dimension is its own PCB_TEXT, so the gr_text repeats the item's uuid
-  if (type !== "center") node.push(["gr_text", g.text, ["at", r6(g.tpos[0]), r6(g.tpos[1]), r6(g.tang)], ["layer", layer], ["uuid", uuid], effectsNode(layer)]);
-  return node;
+  if (type === "center") return node;
+  // the dimension is its own PCB_TEXT, so the gr_text repeats the item's uuid; Update() fills in the text and its place
+  const tp = d.textPos || (type === "leader" ? vadd(d.end, [d.end[0] < d.start[0] ? -10 * D.arrowLength : 10 * D.arrowLength, 0]) : d.start);
+  node.push(["gr_text", "", ["at", r6(tp[0]), r6(tp[1]), 0], ["layer", layer], ["uuid", uuid], effectsNode(layer)]);
+  const m = dimRead(node);
+  if (type === "radial" && !d.textPos) { const k = dimKnee(m); m.textPos = kadd(k, [m.end[0] < m.start[0] ? -10 * m.arrowLength : 10 * m.arrowLength, 0]); }
+  dimUpdate(m);
+  return dimWrite(node, m);
 }
 
 // ---- PCB_DIMENSION_BASE::Update on an existing (dimension …), in internal units (nm) so positions round as pcbnew's:
@@ -4019,6 +4046,7 @@ function drawTrack(d, raw, ctrl) {
   d.cur = constrainDraw(d, raw, ctrl);
   if (POLY_TOOLS.has(d.shape)) { d.mode = drawSnapMode(d, ctrl); Object.assign(d, polyLeader(d, d.cur, d.mode)); }
   if (DIM_TYPE[d.shape] && d.end) dimTrack(d, d.cur);
+  else if (d.shape === "dimortho") d.orientation = Math.abs(d.cur[0] - d.start[0]) < Math.abs(d.cur[1] - d.start[1]) ? "v" : "h";   // measure the longer side
 }
 /** DRAWING_TOOL::WIDTH_STEP (0.1 mm): Ctrl++ / Ctrl+- while a shape is being drawn (incWidth / decWidth). */
 const WIDTH_STEP = 0.1;
@@ -4544,27 +4572,38 @@ function finishPoly(ctx) {
     ctx.commit([addedChange(ctx.doc, zoneNode(ctx.doc, d.pts, layer, net), net)], "zone");
   }, nets.map((n) => n.name));
 }
-// DRAWING_TOOL::DrawDimension: SET_ORIGIN, SET_END (a centre dimension is done; a leader wants its text), then
-// SET_HEIGHT where the cursor sets the aligned offset, the orthogonal axis and offset, or the radial text.
+// DRAWING_TOOL::DrawDimension: SET_ORIGIN, SET_END (centre, radial and leader are done there), then SET_HEIGHT where
+// the cursor sets the aligned offset or the orthogonal axis and offset.  A second click on the first point is ignored
+// (a dimension needs two); the new dimension is selected, and a leader opens Dimension Properties for its text.
 function dimClick(ctx, p, t) {
   const d = S.draw, type = DIM_TYPE[t];
   if (d.pts.length === 1) {
-    if (samePt(p, d.start)) { ctx.toast("Click a different point: a dimension needs two"); return; }
+    if (samePt(p, d.start)) return;
     d.end = type === "center" ? vadd(d.start, snap45(vsub(p, d.start))) : p;   // the centre cross always sits on 45°
     d.pts.push(d.end);
     if (type === "orthogonal") d.orientation = Math.abs(d.end[0] - d.start[0]) < Math.abs(d.end[1] - d.start[1]) ? "v" : "h";
-    if (type === "center") { commitDim(ctx, type, d); return; }
-    if (type === "leader") { S.draw = null; ctx.requestRender(); askText(ctx, "Leader text", "Leader", (text) => { if (text) commitDim(ctx, type, Object.assign(d, { text })); }); return; }
+    if (type === "center" || type === "radial" || type === "leader") { commitDim(ctx, type, d); return; }
     ctx.requestRender(); return;
   }
   dimTrack(d, p);
   commitDim(ctx, type, d);
 }
-function commitDim(ctx, type, d) { S.draw = null; ctx.commit([addedChange(ctx.doc, withStroke(dimensionNode(type, d, S.gfxLayer)))], "dimension"); ctx.requestRender(); }
+function commitDim(ctx, type, d) {
+  S.draw = null;
+  const add = addedChange(ctx.doc, dimensionNode(type, Object.assign({}, d, { textPos: type === "radial" || type === "leader" ? null : d.textPos, thickness: drawWidth(S.gfxLayer) }), S.gfxLayer));
+  ctx.commit([add], "Draw Dimension"); ctx.requestRender();
+  if (add.id) applySelection(ctx, [add.id]);   // ACTIONS::selectItem
+  // PCB_DIM_LEADER: "Run the edit immediately to set the leader text"
+  const it = type === "leader" && add.id && ctx.doc.items.get(add.id);
+  if (it && root.KDialogs && root.KDialogs.openItem) root.KDialogs.openItem(ctx, it);
+}
 /** The cursor after the second click (the tool's SET_HEIGHT motion). */
 function dimTrack(d, p) {
   const type = DIM_TYPE[d.shape], s = d.start, e = d.end; if (!e) return;
-  if (type === "aligned") { const a = Math.atan2(e[1] - s[1], e[0] - s[0]) + Math.PI / 2; d.height = (p[0] - e[0]) * Math.cos(a) + (p[1] - e[1]) * Math.sin(a); }
+  if (type === "aligned") {   // in nm, the height truncated as SetHeight( int ) takes it
+    const S0 = toNm(s), E0 = toNm(e), P0 = toNm(p), a = Math.atan2(E0[1] - S0[1], E0[0] - S0[0]) + Math.PI / 2;
+    d.height = Math.trunc((P0[0] - E0[0]) * Math.cos(a) + (P0[1] - E0[1]) * Math.sin(a)) / NM;
+  }
   else if (type === "orthogonal") {
     const x0 = Math.min(s[0], e[0]), x1 = Math.max(s[0], e[0]), y0 = Math.min(s[1], e[1]), y1 = Math.max(s[1], e[1]);
     if (p[0] < x0 || p[0] > x1 || p[1] < y0 || p[1] > y1) {   // the axis only changes outside the points' box
@@ -4576,7 +4615,7 @@ function dimTrack(d, p) {
       d.orientation = vert ? "v" : "h";
     }
     d.height = d.orientation === "v" ? p[0] - s[0] : p[1] - s[1];
-  } else if (type === "radial") d.textPos = p.slice();
+  }
 }
 // Reference images: the picker (a file dialog; tests swap it) hands back { base64, name }; the image then rides the
 // cursor and a click places its centre, as PlaceReferenceImage does.
@@ -7286,6 +7325,13 @@ act("arcPosture", "Switch Arc Posture", "/", (ctx) => {
 }, { tip: "Switch arc posture between clockwise and counter-clockwise" });
 act("cycleArcDrawMode", "Cycle Arc Drawing Mode", "Alt+/", (ctx) => { if (S.modTool !== "garc") return false; switchArcMode(ctx, (arcDrawMode() + 1) % 5); return true; },
   { tip: "Switch to the next method of drawing arcs" });
+// DRAWING_TOOL::DrawDimension's changeDimensionArrows (the drawing tool's menu while a dimension is drawn): inward <-> outward
+// on an aligned or orthogonal dimension; the others have no arrows to swap (wxBell).
+act("changeDimensionArrows", "Switch Dimension Arrows", "", (ctx) => {
+  const d = S.draw; if (!d || !DIM_TYPE[d.shape]) return false;
+  const type = DIM_TYPE[d.shape]; if (type === "aligned" || type === "orthogonal" || type === "radial") { d.arrowInward = !d.arrowInward; ctx.requestRender(); }
+  return true;
+}, { tip: "Switch between inward and outward dimension arrows" });
 // ZONE_FILLER_TOOL::ZoneFillAll / ZoneFill: the browser's ZONE_FILLER (web/fab/zonefill.ts, run by
 // web/editor/pcbdialogs/zonefill.ts with KiCad's progress reporter); the editor installs the same actions over these.
 const zoneFiller = () => root.PcbZoneFill || null;
@@ -7538,18 +7584,20 @@ function drawShape(c, sh, grow, colour, alpha) {
 function ring(c, p, r) { c.beginPath(); c.arc(p[0], p[1], r, 0, Math.PI * 2); c.stroke(); }
 function polyline(c, pts, close) { if (pts.length < 2) return; c.beginPath(); c.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]); if (close) c.closePath(); c.stroke(); }
 /** A dimension in progress, drawn from the same geometry the node gets. */
+/** The dimension being drawn, as the item it will be (the preview VIEW_GROUP shows the PCB_DIMENSION itself). */
 function drawDimPreview(c, d, px) {
   const type = DIM_TYPE[d.shape], layer = S.gfxLayer, s = d.start;
-  const dd = { start: s, end: d.end || d.cur, height: d.height || 0, orientation: d.orientation, textPos: d.textPos, text: d.shape === "leader" ? "Leader" : "" };
+  const dd = { start: s, end: d.end || d.cur, height: d.height || 0, orientation: d.orientation, arrowInward: !!d.arrowInward, thickness: drawWidth(layer) };
   if (type === "center" && !d.end) dd.end = vadd(s, snap45(vsub(d.cur, s)));
   if (samePt(dd.start, dd.end)) return;
-  const g = dimGeometry(type, dd, layer);
-  c.lineWidth = Math.max(gfxWidth(layer), 1.5 * px);
-  for (const [a, b] of g.lines) line(c, a, b);
-  for (const [p, ang] of g.arrows) for (const barb of [27.5, -27.5]) { const r = (ang + barb) * Math.PI / 180; line(c, p, [p[0] + ARROW_LEN * Math.cos(r), p[1] + ARROW_LEN * Math.sin(r)]); }
-  if (g.text) {
-    c.save(); c.translate(g.tpos[0], g.tpos[1]); c.rotate(-g.tang * Math.PI / 180); c.font = `${g.size * 1.3}px sans-serif`;
-    c.textAlign = "center"; c.textBaseline = "middle"; c.fillStyle = c.strokeStyle; c.fillText(g.text, 0, 0); c.restore();
+  const item = { id: "", kind: "dimension", node: dimensionNode(type, dd, layer) };
+  try { K.buildGeom({ type: "pcb", items: new Map(), layers: new Map(), copper: [] }, item); } catch (e) { return; }
+  const m = c.getTransform ? c.getTransform() : null, base = m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null;
+  for (const g of item.geom || []) {
+    if (g.t === "line") { c.lineWidth = Math.max(g.w || 0, px); line(c, [g.x1, g.y1], [g.x2, g.y2]); }
+    else if (g.t === "circle") { c.lineWidth = Math.max(g.w || 0, px); ring(c, [g.x, g.y], g.r); }
+    else if (g.t === "poly" && g.pts) { c.lineWidth = Math.max(g.w || 0, px); polyline(c, g.pts, !!g.close); }
+    else if (g.t === "text" && base && K.drawTextStroke) { c.save(); K.drawTextStroke(c, g, px, c.strokeStyle, base, false); c.restore(); }
   }
 }
 function drawOverlay(c, view, ctx) {
@@ -7698,8 +7746,8 @@ const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V vi
   dimaligned: "Aligned dimension — click the two points, then how far out the crossbar goes",
   dimortho: "Orthogonal dimension — click the two points, then where the crossbar goes (beside the points measures Y, above or below them X)",
   dimcenter: "Center dimension — click the centre, then the size of the cross",
-  dimradial: "Radial dimension — click the centre, a point on the circle, then the leader's end",
-  leader: "Leader — click the arrow point and the elbow, then type the text",
+  dimradial: "Radial dimension — click the centre, then a point on the circle",
+  leader: "Leader — click the arrow point and the elbow; Dimension Properties then takes the text",
   delete: "Delete — click an item to remove it; Esc to leave the tool",
   gridorigin: "Grid origin — click where the grid starts", drillorigin: "Drill/place file origin — click the origin point for drill and placement files" };
 

@@ -778,7 +778,7 @@ test("module: aligned dimension takes two points and the offset; the node carrie
   pcb.onPointerMove(ev(), [15, 7], ctx); assert.ok(near(P.state.draw.height, -3), "the cursor's signed distance from the line");
   pcb.onPointerDown(ev(), [15, 7], ctx);
   assert.equal(log.commits.length, n0 + 1);
-  const c = log.commits.at(-1); assert.equal(c.label, "dimension"); assert.equal(c.changes[0].typeName, "PCB_DIM_ALIGNED"); const id = c.changes[0].id;
+  const c = log.commits.at(-1); assert.equal(c.label, "Draw Dimension"); assert.equal(c.changes[0].typeName, "PCB_DIM_ALIGNED"); const id = c.changes[0].id;
   assert.deepEqual(withText(lastNode(log, "dimension")), ["dimension", ["type", "aligned"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 20, 10]], ["height", -3],
     ["format", ["prefix", ""], ["suffix", ""], ["units", 3], ["units_format", 0], ["precision", 4], ["suppress_zeroes", "yes"]],
     ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["arrow_direction", "outward"], ["extension_height", 0.58642], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]],
@@ -819,7 +819,7 @@ test("module: orthogonal dimension (Ctrl+Shift+H) measures X or Y by where the t
   assert.deepEqual([K.kid(n2, "height")[1], K.kid(n2, "orientation")[1], t2[1]], [10, 1, "20"]); assert.deepEqual(K.kid(t2, "at"), ["at", 38.9, 20, 90]);
 });
 
-test("module: centre, radial and leader dimensions — a 45° cross, an R-prefixed radius with turned text, leader text from the prompt", () => {
+test("module: centre, radial and leader dimensions — a 45° cross, an R-prefixed radius done at the second click, a leader that opens its properties", () => {
   const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
   ctx.setTool("dimcenter"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [13, 11], ctx);
   let c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_CENTER"); let id = c.changes[0].id;
@@ -827,26 +827,23 @@ test("module: centre, radial and leader dimensions — a 45° cross, an R-prefix
     ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]]]);
   assert.equal(doc.items.get(id).geom.length, 2, "two arms");
   ctx.setTool("dimradial"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [15, 10], ctx);
-  pcb.onPointerMove(ev(), [20, 8], ctx); assert.deepEqual(P.state.draw.textPos, [20, 8]);
-  pcb.onPointerDown(ev(), [20, 8], ctx);
-  c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_RADIAL"); id = c.changes[0].id;
+  c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_RADIAL", "SET_END finishes a radial dimension"); id = c.changes[0].id;
+  assert.equal(P.state.draw, null);
   assert.deepEqual(lastNode(log, "dimension"), ["dimension", ["type", "radial"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 15, 10]], ["leader_length", 3.81],
     ["format", ["prefix", "R "], ["suffix", ""], ["units", 3], ["units_format", 0], ["precision", 4], ["suppress_zeroes", "yes"]],
     ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["extension_offset", 0.5], ["keep_text_aligned", "yes"]],
-    ["gr_text", "R 5", ["at", 20, 8, 59], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
-  // without a third point the text sits ten arrow lengths past the knee, where the drawing tool first puts it
-  const g = P.dimGeometry("radial", { start: [10, 10], end: [5, 10] }, "Dwgs.User"); assert.deepEqual(g.tpos, [5 - 3.81 - 12.7, 10]); assert.equal(g.tang, 0); assert.equal(g.text, "R 5");
-  ctx.setTool("leader");
-  let asked = null; pcb.setPrompt((t, initial, client, done) => { asked = [t, initial]; done("Fiducial"); });
-  pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [20, 15], ctx);
-  assert.deepEqual(asked, ["Leader text", "Leader"]);
-  c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_LEADER"); id = c.changes[0].id;
+    ["gr_text", "R 5", ["at", 31.51, 10, 0], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]], "the text ten arrow lengths past the knee");
+  assert.deepEqual([...P.selectionIds(ctx)], [id], "the new dimension is selected");
+  // a leader: "Leader" as its text, then Dimension Properties opens on it (OnEditItemRequest)
+  const opened = []; globalThis.KDialogs = { openItem: (c2, it) => { opened.push(it.id); return true; } };
+  ctx.setTool("leader"); pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerDown(ev(), [20, 15], ctx);
+  c = log.commits.at(-1); assert.equal(c.changes[0].typeName, "PCB_DIM_LEADER"); assert.equal(c.label, "Draw Dimension"); id = c.changes[0].id;
   assert.deepEqual(lastNode(log, "dimension"), ["dimension", ["type", "leader"], ["layer", "F.SilkS"], ["uuid", id], ["pts", ["xy", 10, 10], ["xy", 20, 15]],
-    ["format", ["prefix", ""], ["suffix", ""], ["units", 0], ["units_format", 0], ["precision", 4], ["override_value", "Fiducial"]],
+    ["format", ["prefix", ""], ["suffix", ""], ["units", 0], ["units_format", 0], ["precision", 4], ["override_value", "Leader"]],
     ["style", ["thickness", 0.1], ["arrow_length", 1.27], ["text_position_mode", 0], ["text_frame", 0], ["extension_offset", 0.5]],
-    ["gr_text", "Fiducial", ["at", 32.7, 15, 0], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
-  const n = log.commits.length; pcb.setPrompt((t, i, cl, done) => done(null));
-  pcb.onPointerDown(ev(), [30, 30], ctx); pcb.onPointerDown(ev(), [40, 30], ctx); assert.equal(log.commits.length, n, "no text, no leader");
+    ["gr_text", "Leader", ["at", 32.7, 15, 0], ["layer", "F.SilkS"], ["uuid", id], ["effects", ["font", ["size", 1, 1], ["thickness", 0.1]]]]]);
+  assert.deepEqual(opened, [id], "the leader's properties open at once"); delete globalThis.KDialogs;
+  const n = log.commits.length;
   // Enter drops a dimension in progress; a back layer mirrors the value text
   ctx.setTool("dimaligned"); pcb.onPointerDown(ev(), [1, 1], ctx); pcb.onPointerDown(ev(), [5, 1], ctx);
   assert.equal(pcb.onKey("Enter", ev(), ctx), true); assert.equal(P.state.draw, null); assert.equal(log.commits.length, n);
@@ -2029,4 +2026,22 @@ test("Dimension Properties: the dialog's values round-trip, and OK re-derives th
   assert.equal(K.str(K.kid(n, "gr_text")[1]), "SEE NOTE 2"); assert.ok(K.serialize(n).includes("(text_frame 1)"));
   const cv = D.dimDialogValues(node("center")); n = D.applyDimDialog(node("center"), { ...cv, lineThickness: 0.3 });
   assert.ok(!K.kid(n, "format") && !K.kid(n, "gr_text") && K.serialize(K.kid(n, "style")).includes("(thickness 0.3)"), "a centre mark has style only");
+});
+
+test("Draw Dimension takes Board Setup's dimension defaults; Switch Dimension Arrows flips the arrows of the one being drawn", () => {
+  P.designSettings(JSON.stringify({ board: { design_settings: { defaults: { dimension_units: 2, dimension_precision: 2, dimensions: { units_format: 1, suppress_zeroes: false, text_position: 1, keep_text_aligned: false, arrow_length: 1000000, extension_offset: 250000 } } } } }));
+  try {
+    const n = P.dimensionNode("aligned", { start: [0, 0], end: [12.5, 0], height: 2 }, "F.SilkS"), s = K.serialize(n);
+    assert.ok(s.includes("(format (prefix \"\") (suffix \"\") (units 2) (units_format 1) (precision 2))"), s);
+    assert.ok(s.includes("(style (thickness 0.1) (arrow_length 1) (text_position_mode 1) (arrow_direction outward) (extension_height 0.58642) (extension_offset 0.25))"), s);
+    assert.equal(K.str(K.kid(n, "gr_text")[1]), "12.50 mm"); assert.deepEqual(K.kid(K.kid(n, "gr_text"), "at").slice(1, 3), [6.25, 2], "inline: on the crossbar");
+    const lead = K.serialize(P.dimensionNode("leader", { start: [0, 0], end: [5, 0] }, "F.SilkS"));
+    assert.ok(lead.includes("(units 0) (units_format 0) (precision 4) (override_value \"Leader\")") && lead.includes("(text_position_mode 0)"), "a leader keeps its own constructor's format");
+  } finally { P.designSettings(JSON.stringify({ board: { design_settings: { defaults: {} } } })); }
+  assert.ok(K.serialize(P.dimensionNode("aligned", { start: [0, 0], end: [1, 0], height: 1 }, "F.SilkS")).includes("(units 3) (units_format 0) (precision 4) (suppress_zeroes yes)"), "the board defaults come back");
+  const doc = fixture(); const { ctx, log } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  ctx.setTool("dimaligned"); pcb.onPointerDown(ev(), [0, 0], ctx);
+  assert.equal(P.runAction("changeDimensionArrows", ctx), true); pcb.onPointerDown(ev(), [10, 0], ctx); pcb.onPointerMove(ev(), [5, 3], ctx); pcb.onPointerDown(ev(), [5, 3], ctx);
+  assert.ok(K.serialize(lastNode(log, "dimension")).includes("(arrow_direction inward)"));
+  ctx.setTool("select"); assert.equal(P.runAction("changeDimensionArrows", ctx), false, "only while a dimension is drawn");
 });
