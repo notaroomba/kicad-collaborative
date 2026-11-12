@@ -140,7 +140,8 @@ test("DRC: disallow and assertion rules, segment length and angle, tracks crossi
   assert.deepEqual(by("items_not_allowed").map((x) => [x.ids[0], x.text]), [["v1", "Items not allowed (rule 'no uvia')"]]);
   assert.deepEqual(by("assertion_failure").map((x) => [x.ids[0], x.text]), [["t1", "Assertion failure (rule 'wide')"]]);
   assert.deepEqual(by("track_segment_length").map((x) => x.ids[0]), ["t1b"]); assert.match(by("track_segment_length")[0].text, /^Track segment length \(rule 'short' min length 5\.0000 mm; actual 2\.0100 mm\)$/);
-  const ang = by("track_angle"); assert.equal(ang.length, 1); assert.match(ang[0].text, /^Track angle \(rule 'angle' min angle 175\.0°; actual 174\.3°\)$/);
+  const ang = by("track_angle"); assert.deepEqual(ang.map((x) => x.ids.join(",")).sort(), ["t1,t1b", "t1b,t1"], "each order (item, other) is reported, as the provider's per-track loop does");
+  for (const x of ang) assert.match(x.text, /^Track angle \(rule 'angle' min angle 175\.0°; actual 174\.3°\)$/);
   const cross = by("tracks_crossing"); assert.ok(cross.some((x) => x.ids.includes("tx") && x.ids.includes("t1") && Math.abs(x.x - 15) < 1e-6 && Math.abs(x.y - 30) < 1e-6 && x.text === "Tracks crossing"));
   assert.ok(!by("clearance").some((x) => x.ids.includes("tx") && x.ids.includes("t1")), "a crossing is not also a clearance violation");
   const e = by("copper_edge_clearance"); assert.ok(e.some((x) => x.ids[0] === "v1" && /^Board edge clearance violation \(rule 'edge' clearance 30\.0000 mm; actual/.test(x.text)));

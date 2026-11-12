@@ -5,12 +5,12 @@
 // the fill are.  Works on the fill stored in the board (as KiCad's DRC does when it does not refill).
 import type { Conductor, DesignSettings, DrcMarker, PadInfo, Pt } from "./types";
 import { DRC_ITEMS } from "../../canvas/drc-items";
-import { coreDist, padShape, polyPolyDist, shapeBBox, shapeOffset } from "./distances";
+import { coreDist, padShape, shapeBBox, shapeOffset } from "./distances";
 import { zoneFillMode } from "./nodes";
 import { marker } from "./drc";
 import type { DruRule, RuleItem } from "./dru";
 import { evalRuleConstraint } from "./dru";
-import { conductors } from "./netlist";
+import { clusterRoots, conductors } from "./netlist";
 import { pointInPoly } from "./hit";
 import { padsOf } from "./route-geom";
 import { K } from "./state";
@@ -157,16 +157,17 @@ export function starvedThermalMarkers(doc: KDoc, s: DesignSettings, rules: DruRu
 export function isolatedCopperMarkers(doc: KDoc, conds?: Conductor[]): DrcMarker[] {
   const out: DrcMarker[] = []; const sev = defaultSeverity("isolated_copper");
   const all = conds || conductors(doc as never);
-  const zonesCs = all.filter((c) => c.kind === "zone"); if (!zonesCs.length) return out;
-  const others = all.filter((c) => c.kind !== "zone");
-  for (const c of zonesCs) {
-    if (!c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) continue;
-    const layer = [...c.layers][0]; const poly = c.shape as { t: "poly"; pts: Pt[] }; const b = c.bbox;
-    const touches = (o: Conductor) => o.net === c.net && o.layers.has(layer) && !(o.bbox[0] > b[2] || o.bbox[2] < b[0] || o.bbox[1] > b[3] || o.bbox[3] < b[1])
-      && (o.kind === "zone" ? polyPolyDist(poly.pts, (o.shape as { pts: Pt[] }).pts) <= 1e-6 : coreDist(o.shape, poly) - shapeOffset(o.shape) <= 1e-6);
-    if (others.some(touches) || zonesCs.some((o) => o !== c && o.id !== c.id && touches(o))) continue;
+  if (!all.some((c) => c.kind === "zone")) return out;
+  // CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap: an island is isolated when its connectivity cluster is orphaned
+  // (CN_CLUSTER::IsOrphaned, no pad of the net) — whatever tracks, vias or other fills it reaches
+  const roots = clusterRoots(all); const padded = new Set<string>();
+  all.forEach((c, i) => { if (c.kind === "pad" && c.net) padded.add(roots[i] + "\u0000" + c.net); });
+  all.forEach((c, i) => {
+    if (c.kind !== "zone" || !c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) return;
+    if (padded.has(roots[i] + "\u0000" + c.net)) return;
+    const layer = [...c.layers][0]; const poly = c.shape as { t: "poly"; pts: Pt[] };
     const m = marker("isolated_copper", sev, poly.pts[0][0], poly.pts[0][1], "Isolated copper fill", [c.id]) as DrcMarker & { layer?: string };
     m.layer = layer; out.push(m);
-  }
+  });
   return out;
 }

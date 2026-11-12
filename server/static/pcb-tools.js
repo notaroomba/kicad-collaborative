@@ -2404,6 +2404,7 @@
   var str = (v) => ({ t: "s", v, wild: false });
   var numv = (v) => ({ t: "n", v });
   var U = { t: "u" };
+  var NUL = { t: "null" };
   var bool = (b) => numv(b ? 1 : 0);
   var kidv = (n, k, i = 1) => {
     const c = K.kid(n, k);
@@ -2426,6 +2427,11 @@
     const p = ps.find((c) => K.str(c[1]) === name) || ps.find((c) => K.str(c[1]).toLowerCase() === name.toLowerCase());
     return p ? K.str(p[2]) : null;
   };
+  function parentRuleItem(it) {
+    if (!it || it.kind === "footprint" || !it.parent) return null;
+    const fp = it.parent;
+    return { kind: "footprint", node: fp.node, item: fp, id: fp.id, layer: layerOf(fp.node) || null };
+  }
   var fpOf = (it) => it.kind === "footprint" ? it.item || { id: kidStr(it.node, "uuid"), kind: "footprint", node: it.node } : it.parent || null;
   var PAD_TYPE = { thru_hole: "Through-hole", smd: "SMD", connect: "Edge connector", np_thru_hole: "NPTH, mechanical" };
   var PAD_SHAPE = { circle: "Circle", rect: "Rectangle", oval: "Oval", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", custom: "Custom" };
@@ -2550,8 +2556,12 @@
       }
       case "cornerradiusratio":
         return isPad ? kidNum(n, "roundrect_rratio") : U;
-      case "clearanceoverride":
-        return isPad || isFp ? kidNum(n, "clearance") : U;
+      case "clearanceoverride": {
+        if (!isPad && !isFp) return U;
+        const v = kidNum(n, "clearance");
+        return v.t === "u" ? NUL : v;
+      }
+      // std::optional<int>: unset is null
       case "padtodielength":
         return isPad ? kidNum(n, "die_length") : U;
       case "reference": {
@@ -3010,10 +3020,17 @@
       }
       const n = druValue(tok);
       if (n !== null) return { k: "lit", v: { t: "n", v: n } };
-      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
-      if (!m) throw new Error(`Unrecognized item '${tok}'`);
-      const who = m[1] || null;
+      if (tok.toLowerCase() === "null" && peek() !== "(") return { k: "lit", v: { t: "null" } };
+      const parts = tok.split("."), field = parts[parts.length - 1], base = parts.length > 1 ? parts[0] : "";
+      const bad = () => new Error(`Unrecognized item '${tok}'`);
+      if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(field) || parts.length > 1 && !["A", "B", "AB", "L"].includes(base)) throw bad();
+      const navs = parts.slice(1, -1);
+      if (navs.some((x) => x.toLowerCase() !== "parent") || navs.length && base !== "A" && base !== "B") throw bad();
+      const nav = navs.length;
+      const m = [tok, base, field];
+      const who = base === "AB" ? "A" : base === "L" ? null : base || null;
       if (peek() === "(") {
+        if (base === "L") throw bad();
         eat("(");
         const args = [];
         if (peek() !== ")") {
@@ -3033,11 +3050,15 @@
           if (empty(args[1])) throw new Error("Missing 'to' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo().");
         }
         void FUNCS;
-        return { k: "call", who, fn, args };
+        return { k: "call", who, nav, fn, args };
       }
-      if (!who) throw new Error(`Unrecognized item '${tok}'`);
+      if (base === "L") {
+        if (field.toLowerCase() !== "layer") throw bad();
+        return { k: "prop", who: "L", nav: 0, name: "Layer" };
+      }
+      if (!who || base === "AB") throw bad();
       if (!isKnownProp(m[2])) throw new Error(`Unrecognized property '${m[2]}'`);
-      return { k: "prop", who, name: m[2] };
+      return { k: "prop", who, nav, name: m[2] };
     };
     const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
     const and = bin(cmp, ["&&"]);
@@ -3101,8 +3122,13 @@
     switch (e.k) {
       case "lit":
         return e.v;
-      case "prop":
-        return propOf(doc, s, e.who === "A" ? A : B, e.name, typeName);
+      case "prop": {
+        if (e.who === "L") {
+          const L = curLayer || (A ? A.layer || layerOf(A.node) : null);
+          return L ? { t: "s", v: L, wild: false } : { t: "u" };
+        }
+        return propOf(doc, s, navigate(e.who === "A" ? A : B, e.nav), e.name, typeName);
+      }
       case "not":
         return num(!truth(evalExpr(e.e, doc, s, A, B)));
       case "bin": {
@@ -3111,15 +3137,17 @@
         const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
         if (e.op === "==" || e.op === "!=") {
           let eq = false;
-          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
+          if (a.t === "u" || b.t === "u") return num(false);
+          if (a.t === "null" && b.t === "null") eq = true;
+          else if (a.t === "n" && b.t === "n") eq = a.v === b.v;
           else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
-          return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
+          return num(e.op === "==" ? eq : !eq);
         }
         if (a.t !== "n" || b.t !== "n") return num(false);
         return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
       }
       case "call": {
-        const it = e.who === "B" ? B : A;
+        const it = navigate(e.who === "B" ? B : A, e.nav);
         const args = e.args.map((x) => {
           const v = evalExpr(x, doc, s, A, B);
           return v.t === "s" ? v.v : v.t === "n" ? String(v.v) : "";
@@ -3128,6 +3156,11 @@
       }
     }
   }
+  function navigate(it, nav) {
+    for (let i = 0; i < nav && it; i++) it = parentRuleItem(it);
+    return it;
+  }
+  var curLayer = null;
   var curConstraint = null;
   var ASSERT_CACHE = /* @__PURE__ */ new WeakMap();
   function evalAssertion(rule, c, doc, s, A) {
@@ -3438,6 +3471,7 @@
         if (ra && fa) out.push(marker("annular_width", sev(ra), a[0], a[1], `Annular width (${ra.name} ${fa.kind} annular width ${mm4(fa.v)}; actual ${mm4(ann)})`, [c.id]));
       }
     }
+    out.push(...padAnnularMarkers(doc, s, rules));
     for (const it of doc.items.values()) {
       if (it.kind !== "footprint") continue;
       for (const p of padsOf(it)) {
@@ -3446,48 +3480,132 @@
         const oval = K.str(d[1]) === "oval";
         const w = oval ? K.num(d[2]) : K.num(d[1]);
         const h = oval ? K.num(d[3], w) : w;
-        const hole = Math.min(w, h);
-        if (!(hole > 0)) continue;
+        const minor = Math.min(w, h), major = Math.max(w, h);
+        if (!(minor > 0)) continue;
         const A = { kind: "pad", node: p.node, parent: it, layer: null };
         const r = resolve(rules, "hole_size", doc, s, A, null, s.minViaDrill || 0);
-        const f = fails(r, hole);
-        if (r && f) out.push(marker("drill_out_of_range", sev(r), p.x, p.y, `Hole size out of range (${r.name} ${f.kind} hole ${mm4(f.v)}; actual ${mm4(hole)})`, [it.id]));
+        if (!r) continue;
+        const f = r.min != null && r.min > 0 && minor < r.min - 1e-6 ? { kind: "min", v: r.min, actual: minor } : r.max != null && major > r.max + 1e-6 ? { kind: "max", v: r.max, actual: major } : null;
+        if (f) out.push(marker("drill_out_of_range", sev(r), p.x, p.y, `Hole size out of range (${r.name} ${f.kind} hole ${mm4(f.v)}; actual ${mm4(f.actual)})`, [it.id]));
       }
     }
     return out;
+  }
+  function insetDepth(sh, q) {
+    if (sh.t === "circle") return sh.r - Math.hypot(q[0] - sh.x, q[1] - sh.y);
+    if (sh.t === "seg") return sh.r - dPS(q, sh.a, sh.b);
+    if (sh.t === "rect") {
+      const [lx, ly] = rotator(-(sh.rot || 0))(q[0] - sh.x, q[1] - sh.y);
+      const rr = sh.rr || 0;
+      const hw = Math.max(sh.w / 2 - rr, 0), hh = Math.max(sh.h / 2 - rr, 0);
+      const out = rectPointDist(sh, q);
+      return out > 0 ? rr - out : rr + Math.min(hw - Math.abs(lx), hh - Math.abs(ly));
+    }
+    return 0;
+  }
+  function padAnnulus(p, others = []) {
+    const d = K.kid(p.node, "drill");
+    if (!d) return null;
+    const oval = K.str(d[1]) === "oval";
+    const dx = oval ? K.num(d[2]) : K.num(d[1]), dy = oval ? K.num(d[3], dx) : dx;
+    const cr = K.kid(p.node, "chamfer_ratio"), chamfered = !!K.kid(p.node, "chamfer") && !!cr;
+    const offset = Math.abs(p.off[0]) > 1e-9 || Math.abs(p.off[1]) > 1e-9;
+    const handled = !offset && (["circle", "oval", "rect", "roundrect"].includes(p.shape) && (!chamfered || K.num(cr[1]) <= 0.3));
+    const fast = Math.abs(Math.min((p.w - dx) / 2, (p.h - dy) / 2));
+    if (others.length) return handled && p.shape === "circle" ? fast : null;
+    if (handled) return fast;
+    if (p.shape !== "circle" && p.shape !== "oval" && p.shape !== "rect" && p.shape !== "roundrect") return null;
+    const R = rotator(p.rot), [ox, oy] = R(p.off[0], p.off[1]);
+    const sh = padShape({ shape: p.shape, x: p.x + ox, y: p.y + oy, w: p.w, h: p.h, rot: p.rot, node: p.node });
+    if (insetDepth(sh, [p.x, p.y]) < 0) return 0;
+    const half = Math.abs(dx - dy) / 2, [hx, hy] = dx >= dy ? R(half, 0) : R(0, half), hr = Math.min(dx, dy) / 2;
+    return Math.max(0, Math.min(insetDepth(sh, [p.x - hx, p.y - hy]), insetDepth(sh, [p.x + hx, p.y + hy])) - hr);
+  }
+  function padAnnularMarkers(doc, s, rules) {
+    const out = [];
+    if (!((s.minViaAnnular || 0) > 0) && !rules.some((r) => r.constraints.some((c) => c.type === "annular_width"))) return out;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "footprint") continue;
+      const pads = padsOf(it);
+      for (const p of pads) {
+        if (p.type !== "thru_hole" || !K.kid(p.node, "drill")) continue;
+        const box = (q) => {
+          const r2 = Math.hypot(q.w, q.h) / 2 + Math.hypot(q.off[0], q.off[1]);
+          return [q.x - r2, q.y - r2, q.x + r2, q.y + r2];
+        };
+        const b = box(p);
+        const others = p.number ? pads.filter((q) => q !== p && q.number === p.number && (() => {
+          const c = box(q);
+          return c[0] <= b[2] && c[2] >= b[0] && c[1] <= b[3] && c[3] >= b[1];
+        })()) : [];
+        const A = { kind: "pad", node: p.node, parent: it, layer: "F.Cu" };
+        const r = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0);
+        if (!r) continue;
+        const w = padAnnulus(p, others);
+        if (w == null) continue;
+        const f = fails(r, w);
+        if (!f) continue;
+        out.push(marker("annular_width", sev(r), p.x, p.y, `Annular width (${r.name} ${f.kind} annular width ${mm4(f.v)}; actual ${mm4(w)})`, [it.id]));
+      }
+    }
+    return out;
+  }
+  function segIntersect(a0, a1, b0, b1) {
+    const e = 1e-9;
+    if (Math.max(a0[0], a1[0]) < Math.min(b0[0], b1[0]) - e || Math.max(b0[0], b1[0]) < Math.min(a0[0], a1[0]) - e || Math.max(a0[1], a1[1]) < Math.min(b0[1], b1[1]) - e || Math.max(b0[1], b1[1]) < Math.min(a0[1], a1[1]) - e) return null;
+    const d1 = [a1[0] - a0[0], a1[1] - a0[1]], d2 = [b1[0] - b0[0], b1[1] - b0[1]], off = [b0[0] - a0[0], b0[1] - a0[1]];
+    const det = d2[0] * d1[1] - d2[1] * d1[0];
+    if (Math.abs(det) < 1e-12) {
+      if (Math.abs(d1[0] * off[1] - d1[1] * off[0]) > 1e-9) return null;
+      const ax = Math.abs(d1[0]) >= Math.abs(d1[1]) ? 0 : 1, o = 1 - ax;
+      const s1 = [Math.min(a0[ax], a1[ax]), Math.max(a0[ax], a1[ax])], s2 = [Math.min(b0[ax], b1[ax]), Math.max(b0[ax], b1[ax])];
+      if (s1[1] < s2[0] - e || s2[1] < s1[0] - e) return null;
+      const proj = (Math.max(s1[0], s2[0]) + Math.min(s1[1], s2[1])) / 2;
+      const other = a1[ax] !== a0[ax] ? a0[o] + (proj - a0[ax]) * (a1[o] - a0[o]) / (a1[ax] - a0[ax]) : a0[o];
+      const r = [0, 0];
+      r[ax] = proj;
+      r[o] = other;
+      return r;
+    }
+    const t = (d2[0] * off[1] - d2[1] * off[0]) / det, u = (d1[0] * off[1] - d1[1] * off[0]) / det;
+    if (t < -e || t > 1 + e || u < -e || u > 1 + e) return null;
+    return [a0[0] + t * d1[0], a0[1] + t * d1[1]];
   }
   function trackAngleMarkers(doc, s, rules, conds) {
     const out = [];
     if (!rules.some((r) => r.constraints.some((c) => c.type === "track_angle"))) return out;
     const segs = conds.filter((c) => c.kind === "segment");
     const pads = conds.filter((c) => c.kind === "pad");
-    const eq = (p, q) => Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) < 1e-6;
-    const seen = /* @__PURE__ */ new Set();
-    for (const a of segs) for (const b of segs) {
-      if (a === b || a.net !== b.net) continue;
+    const same = (p, q) => Math.abs(p[0] - q[0]) < 5e-7 && Math.abs(p[1] - q[1]) < 5e-7;
+    const touches = (a, b) => a.anchors.some((p) => dPS(p, b.anchors[0], b.anchors[1]) <= b.width / 2 + 1e-9);
+    for (const a of segs) {
       const la = layerOf(a.item.node);
-      if (la !== layerOf(b.item.node)) continue;
-      const key = a.id < b.id ? a.id + "|" + b.id : b.id + "|" + a.id;
-      if (seen.has(key)) continue;
-      const [a0, a1] = a.anchors, [b0, b1] = b.anchors;
-      const p0 = [a0, a1].find((p) => eq(p, b0) || eq(p, b1));
-      if (!p0) continue;
-      seen.add(key);
-      if (pads.some((c) => c.layers.has(la) && c.kind === "pad" && Math.hypot(c.pad.x - p0[0], c.pad.y - p0[1]) < 1e-6)) continue;
-      const r = resolve(rules, "track_angle", doc, s, { kind: "segment", node: a.item.node, item: a.item, layer: la }, { kind: "segment", node: b.item.node, item: b.item, layer: la }, null);
-      if (!r) continue;
-      const dir = (u, v, at) => {
-        let d = [v[0] - u[0], v[1] - u[1]];
-        if (eq(v, at)) d = [-d[0], -d[1]];
-        const l = Math.hypot(d[0], d[1]) || 1;
-        return [d[0] / l, d[1] / l];
-      };
-      const da = dir(a0, a1, p0), db = dir(b0, b1, p0);
-      const actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
-      let f = null;
-      if (r.min != null && actual < r.min - 1e-9) f = { kind: "min", v: r.min };
-      if (r.max != null && actual > r.max + 1e-9) f = { kind: "max", v: r.max };
-      if (f) out.push(marker("track_angle", sev(r), p0[0], p0[1], `Track angle (${r.name} ${f.kind} angle ${deg(f.v)}; actual ${deg(actual)})`, [a.id, b.id]));
+      for (const b of segs) {
+        if (a === b || a.id === b.id || a.net && b.net && a.net !== b.net || la !== layerOf(b.item.node)) continue;
+        if (!touches(a, b) && !touches(b, a)) continue;
+        const [a0, a1] = a.anchors, [b0, b1] = b.anchors;
+        const p0 = segIntersect(a0, a1, b0, b1);
+        if (!p0) continue;
+        if (pads.some((c) => c.layers.has(la) && shapeGap(c.shape, { t: "circle", x: p0[0], y: p0[1], r: 0 }) <= 0)) continue;
+        const r = resolve(rules, "track_angle", doc, s, { kind: "segment", node: a.item.node, item: a.item, layer: la }, { kind: "segment", node: b.item.node, item: b.item, layer: la }, null);
+        if (!r) continue;
+        const unit2 = (u, v2) => {
+          const d = [v2[0] - u[0], v2[1] - u[1]];
+          const l = Math.hypot(d[0], d[1]) || 1;
+          return [d[0] / l, d[1] / l];
+        };
+        let da = unit2(a0, a1), db = unit2(b0, b1), below90 = false;
+        if (same(a1, p0)) da = [-da[0], -da[1]];
+        else if (!same(a0, p0)) below90 = true;
+        if (same(b1, p0)) db = [-db[0], -db[1]];
+        else if (!same(b0, p0)) below90 = true;
+        let actual = Math.acos(Math.max(-1, Math.min(1, da[0] * db[0] + da[1] * db[1]))) * 180 / Math.PI;
+        if (below90 && actual > 90) actual -= 90;
+        const fmin = r.min != null && actual < r.min, fmax = r.max != null && actual > r.max;
+        if (!fmin && !fmax) continue;
+        const v = fmax ? r.max : r.min;
+        out.push(marker("track_angle", sev(r), p0[0], p0[1], `Track angle (${r.name} ${fmin ? "min" : "max"} angle ${deg(v)}; actual ${deg(actual)})`, [a.id, b.id]));
+      }
     }
     return out;
   }
@@ -5385,20 +5503,21 @@
     const out = [];
     const sev2 = defaultSeverity3("isolated_copper");
     const all = conds || conductors(doc);
-    const zonesCs = all.filter((c) => c.kind === "zone");
-    if (!zonesCs.length) return out;
-    const others = all.filter((c) => c.kind !== "zone");
-    for (const c of zonesCs) {
-      if (!c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) continue;
+    if (!all.some((c) => c.kind === "zone")) return out;
+    const roots = clusterRoots(all);
+    const padded = /* @__PURE__ */ new Set();
+    all.forEach((c, i) => {
+      if (c.kind === "pad" && c.net) padded.add(roots[i] + "\0" + c.net);
+    });
+    all.forEach((c, i) => {
+      if (c.kind !== "zone" || !c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) return;
+      if (padded.has(roots[i] + "\0" + c.net)) return;
       const layer = [...c.layers][0];
       const poly = c.shape;
-      const b = c.bbox;
-      const touches = (o) => o.net === c.net && o.layers.has(layer) && !(o.bbox[0] > b[2] || o.bbox[2] < b[0] || o.bbox[1] > b[3] || o.bbox[3] < b[1]) && (o.kind === "zone" ? polyPolyDist(poly.pts, o.shape.pts) <= 1e-6 : coreDist(o.shape, poly) - shapeOffset(o.shape) <= 1e-6);
-      if (others.some(touches) || zonesCs.some((o) => o !== c && o.id !== c.id && touches(o))) continue;
       const m = marker("isolated_copper", sev2, poly.pts[0][0], poly.pts[0][1], "Isolated copper fill", [c.id]);
       m.layer = layer;
       out.push(m);
-    }
+    });
     return out;
   }
 
@@ -5722,7 +5841,7 @@
           const sa = a.shape, sb = b.shape;
           const X = segCross(sa.a, sa.b, sb.a, sb.b);
           if (X) {
-            out.push(marker("tracks_crossing", "error", X[0], X[1], `Tracks crossing${by ? ` (${by})` : ""}`, [a.id, b.id]));
+            out.push(marker("tracks_crossing", "error", X[0], X[1], "Tracks crossing", [a.id, b.id]));
             continue;
           }
         }
@@ -8765,7 +8884,7 @@
     }
     return true;
   }
-  function segIntersect(p1, p2, p3, p4) {
+  function segIntersect2(p1, p2, p3, p4) {
     const d1 = [p2[0] - p1[0], p2[1] - p1[1]], d2 = [p4[0] - p3[0], p4[1] - p3[1]];
     const den = d1[0] * d2[1] - d1[1] * d2[0];
     if (Math.abs(den) < 1e-12) return null;
@@ -8779,7 +8898,7 @@
     if (insideConvex(H, path[0]) || insideConvex(H, path[path.length - 1])) return null;
     const ips = [];
     for (let i = 0; i + 1 < path.length; i++) for (let j = 0; j < H.length; j++) {
-      const x = segIntersect(path[i], path[i + 1], H[j], H[(j + 1) % H.length]);
+      const x = segIntersect2(path[i], path[i + 1], H[j], H[(j + 1) % H.length]);
       if (x) ips.push({ i, t: x.t, j, u: x.u, p: x.p });
     }
     if (ips.length < 2) return path.map((p) => p.slice());
@@ -9287,7 +9406,7 @@
       const v = [c[0] + len * Math.cos(t), c[1] - len * Math.sin(t)];
       let hit = null;
       for (let i = 0; i < 4; i++) {
-        const q = segIntersect(c, v, poly[i], poly[(i + 1) % 4]);
+        const q = segIntersect2(c, v, poly[i], poly[(i + 1) % 4]);
         if (q) {
           hit = q;
           break;

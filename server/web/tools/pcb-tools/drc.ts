@@ -151,7 +151,7 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
       const gap = shapeGap(a.shape, b.shape); if (gap >= need - DRC_EPS) continue;
       if (a.kind === "segment" && b.kind === "segment") {   // DRC_TEST_PROVIDER_COPPER_CLEARANCE: crossing tracks are their own violation
         const sa = a.shape as { a: Pt; b: Pt }, sb = b.shape as { a: Pt; b: Pt }; const X = segCross(sa.a, sa.b, sb.a, sb.b);
-        if (X) { out.push(marker("tracks_crossing", "error", X[0], X[1], `Tracks crossing${by ? ` (${by})` : ""}`, [a.id, b.id])); continue; }
+        if (X) { out.push(marker("tracks_crossing", "error", X[0], X[1], "Tracks crossing", [a.id, b.id])); continue; }
       }
       const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);   // the stricter class of the pair names the rule
       const [x, y] = boxCenter(a.bbox, b.bbox);

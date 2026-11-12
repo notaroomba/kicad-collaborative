@@ -8,7 +8,7 @@ import { marker, mm4 } from "./drc";
 import { approxParallelT, commonParallelProjection } from "./meander";
 import { netOf } from "./nets";
 import { K, S } from "./state";
-import { FUNCS, FUNC_BY_LOWER, MISSING_ARG, callFunc, isKnownProp, netName, propOf } from "./dru-eval";
+import { FUNCS, FUNC_BY_LOWER, MISSING_ARG, callFunc, isKnownProp, netName, parentRuleItem, propOf } from "./dru-eval";
 import type { RuleItem, Val } from "./dru-eval";
 import { layerOf } from "./util";
 
@@ -19,7 +19,7 @@ export interface DruRule { name: string; condition: string; layer: string | null
 /** What a resolved constraint reports: the text as MessageTextFromMinOptMax writes it and the rule's name. */
 export interface RuleHit { text: string; name: string; min: number | null; opt: number | null; max: number | null; severity?: string | null }
 
-type Expr = { k: "lit"; v: Val } | { k: "prop"; who: "A" | "B"; name: string } | { k: "call"; who: "A" | "B" | null; fn: string; args: Expr[] }
+type Expr = { k: "lit"; v: Val } | { k: "prop"; who: "A" | "B" | "L"; nav: number; name: string } | { k: "call"; who: "A" | "B" | null; nav: number; fn: string; args: Expr[] }
   | { k: "not"; e: Expr } | { k: "bin"; op: string; a: Expr; b: Expr };
 
 const UNIT: Record<string, number> = { deg: 1, mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 0.001, nm: 1e-6, cm: 10, m: 1000 };
@@ -55,19 +55,29 @@ export function parseCondition(src: string): Expr {
     if (tok === "!") return { k: "not", e: primary() };
     if (tok[0] === "'") { const s = tok.slice(1); return { k: "lit", v: { t: "s", v: s, wild: /[*?]/.test(s) } }; }
     const n = druValue(tok); if (n !== null) return { k: "lit", v: { t: "n", v: n } };
-    const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok); if (!m) throw new Error(`Unrecognized item '${tok}'`);
-    const who = (m[1] || null) as "A" | "B" | null;
+    // PCBEXPR_UCODE::CreateVarRef: `null`, a receiver A / B / AB / L with an optional navigation chain (A.Parent.…,
+    // only Parent, only from A or B) and a field; L has only Layer, AB only functions
+    if (tok.toLowerCase() === "null" && peek() !== "(") return { k: "lit", v: { t: "null" } };
+    const parts = tok.split("."), field = parts[parts.length - 1], base = parts.length > 1 ? parts[0] : "";
+    const bad = () => new Error(`Unrecognized item '${tok}'`);
+    if (!/^[A-Za-z_][A-Za-z_0-9]*$/.test(field) || (parts.length > 1 && !["A", "B", "AB", "L"].includes(base))) throw bad();
+    const navs = parts.slice(1, -1); if (navs.some((x) => x.toLowerCase() !== "parent") || (navs.length && base !== "A" && base !== "B")) throw bad();
+    const nav = navs.length;
+    const m = [tok, base, field];
+    const who = (base === "AB" ? "A" : base === "L" ? null : base || null) as "A" | "B" | null;
     if (peek() === "(") {
+      if (base === "L") throw bad();
       eat("("); const args: Expr[] = []; if (peek() !== ")") { args.push(or()); while (peek() === ",") { eat(","); args.push(or()); } } eat(")");
       const fn = FUNC_BY_LOWER.get(m[2].toLowerCase()); if (!fn) throw new Error(`Unrecognized function '${m[2]}'`);   // LIBEVAL looks functions up without case
       const empty = (x: Expr | undefined) => !x || (x.k === "lit" && x.v.t === "s" && x.v.v === "");
       if (MISSING_ARG[fn] && empty(args[0])) throw new Error(MISSING_ARG[fn]);
       if (fn === "fromTo") { if (empty(args[0])) throw new Error("Missing 'from' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo()."); if (empty(args[1])) throw new Error("Missing 'to' pad argument (footprint reference designator followed by hyphen and pad number) to fromTo()."); }
-      void FUNCS; return { k: "call", who, fn, args };
+      void FUNCS; return { k: "call", who, nav, fn, args };
     }
-    if (!who) throw new Error(`Unrecognized item '${tok}'`);
+    if (base === "L") { if (field.toLowerCase() !== "layer") throw bad(); return { k: "prop", who: "L", nav: 0, name: "Layer" }; }
+    if (!who || base === "AB") throw bad();
     if (!isKnownProp(m[2])) throw new Error(`Unrecognized property '${m[2]}'`);
-    return { k: "prop", who, name: m[2] };
+    return { k: "prop", who, nav, name: m[2] };
   };
   const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
   const and = bin(cmp, ["&&"]); const or: () => Expr = bin(and, ["||"]);
@@ -99,7 +109,10 @@ const num = (b: boolean): Val => ({ t: "n", v: b ? 1 : 0 });
 function evalExpr(e: Expr, doc: BoardDoc, s: DesignSettings, A: RuleItem | null, B: RuleItem | null): Val {
   switch (e.k) {
   case "lit": return e.v;
-  case "prop": return propOf(doc, s, e.who === "A" ? A : B, e.name, typeName);
+  case "prop": {
+    if (e.who === "L") { const L = curLayer || (A ? A.layer || layerOf(A.node) : null); return L ? { t: "s", v: L, wild: false } : { t: "u" }; }   // PCBEXPR_LAYER_VALUE( context->GetLayer() )
+    return propOf(doc, s, navigate(e.who === "A" ? A : B, e.nav), e.name, typeName);
+  }
   case "not": return num(!truth(evalExpr(e.e, doc, s, A, B)));
   case "bin": {
     if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
@@ -107,20 +120,27 @@ function evalExpr(e: Expr, doc: BoardDoc, s: DesignSettings, A: RuleItem | null,
     const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
     if (e.op === "==" || e.op === "!=") {   // VALUE::EqualTo: the right side's wildcards match the left
       let eq = false;
-      if (a.t === "n" && b.t === "n") eq = a.v === b.v;
+      if (a.t === "u" || b.t === "u") return num(false);   // VALUE::EqualTo / NotEqualTo: undefined is never equal nor unequal
+      if (a.t === "null" && b.t === "null") eq = true;
+      else if (a.t === "n" && b.t === "n") eq = a.v === b.v;
       else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
-      return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
+      return num(e.op === "==" ? eq : !eq);
     }
     if (a.t !== "n" || b.t !== "n") return num(false);
     return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
   }
   case "call": {
-    const it = e.who === "B" ? B : A;
+    const it = navigate(e.who === "B" ? B : A, e.nav);
     const args = e.args.map((x) => { const v = evalExpr(x, doc, s, A, B); return v.t === "s" ? v.v : v.t === "n" ? String(v.v) : ""; });
     return callFunc(e.fn, it, args, { doc, s, A, B, constraint: curConstraint, ver: S.docVer }, wildMatch, wxMatches);
   }
   }
 }
+/** PCBEXPR_VAR_REF::GetObject: the receiver after its navigation steps (each Parent goes up one level). */
+function navigate(it: RuleItem | null, nav: number) { for (let i = 0; i < nav && it; i++) it = parentRuleItem(it); return it; }
+/** The layer EvalRules is resolving on, when the caller gives one (L.Layer); else the item's own. */
+let curLayer: string | null = null;
+export function setRuleLayer(l: string | null) { const was = curLayer; curLayer = l; return was; }
 /** The constraint EvalRules is resolving (isCoupledDiffPair answers differently for the pair constraints). */
 let curConstraint: string | null = null;
 

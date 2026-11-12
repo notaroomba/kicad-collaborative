@@ -13,7 +13,8 @@ import { K } from "./state";
 import { isList, layerOf, pt } from "./util";
 
 /** A value of the condition language: a number (mm for lengths), a string (with wildcards when a literal holds * or ?) or undefined. */
-export type Val = { t: "n"; v: number } | { t: "s"; v: string; wild: boolean } | { t: "u" };
+/** A LIBEVAL::VALUE: numeric, string, undefined (no such property on the item) or null (an unset optional, or `null`). */
+export type Val = { t: "n"; v: number } | { t: "s"; v: string; wild: boolean } | { t: "u" } | { t: "null" };
 /** The board item an expression's A / B stands for: its kind, node, the layer the rule is evaluated on and, for a pad or footprint child, its footprint. */
 export interface RuleItem { kind: string; node: SNode; layer?: string | null; parent?: KItem | null; item?: KItem | null; shape?: CopperShape | null; id?: string }
 
@@ -67,12 +68,19 @@ export const isKnownProp = (name: string) => KNOWN_PROPS.has(norm(name));
 const str = (v: string): Val => ({ t: "s", v, wild: false });
 const numv = (v: number): Val => ({ t: "n", v });
 const U: Val = { t: "u" };
+const NUL: Val = { t: "null" };
 const bool = (b: boolean): Val => numv(b ? 1 : 0);
 const kidv = (n: SNode, k: string, i = 1) => { const c = K.kid(n, k); return c && c[i] !== undefined ? c[i] : undefined; };
 const kidStr = (n: SNode, k: string) => { const v = kidv(n, k); return v === undefined ? "" : K.str(v); };
 const kidNum = (n: SNode, k: string, i = 1): Val => { const v = kidv(n, k, i); return v === undefined ? U : numv(K.num(v)); };
 const yes = (n: SNode, k: string) => { const c = K.kid(n, k); return !!c && (c.length === 1 || K.str(c[1]) === "yes"); };
 const fieldOf = (fp: SNode, name: string) => { const ps = (fp as SNode[]).filter((c) => isList(c) && c[0] === "property"); const p = ps.find((c) => K.str(c[1]) === name) || ps.find((c) => K.str(c[1]).toLowerCase() === name.toLowerCase()); return p ? K.str(p[2]) : null; };
+/** PCBEXPR_NAV_STEP::PARENT: the item's parent as a rule item (a footprint's children have the footprint; anything
+ *  on the board itself, and the footprint, have none). */
+export function parentRuleItem(it: RuleItem | null): RuleItem | null {
+  if (!it || it.kind === "footprint" || !it.parent) return null;
+  const fp = it.parent; return { kind: "footprint", node: fp.node, item: fp, id: fp.id, layer: layerOf(fp.node) || null };
+}
 const fpOf = (it: RuleItem): KItem | null => it.kind === "footprint" ? (it.item || { id: kidStr(it.node, "uuid"), kind: "footprint", node: it.node } as KItem) : it.parent || null;
 const PAD_TYPE: Record<string, string> = { thru_hole: "Through-hole", smd: "SMD", connect: "Edge connector", np_thru_hole: "NPTH, mechanical" };
 const PAD_SHAPE: Record<string, string> = { circle: "Circle", rect: "Rectangle", oval: "Oval", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", custom: "Custom" };
@@ -120,7 +128,7 @@ export function propOf(doc: BoardDoc, s: DesignSettings, it: RuleItem | null, na
   case "size": return isVia ? kidNum(n, "size") : U;
   case "orientation": { const a = K.kid(n, "at"); return a ? numv(a[3] !== undefined ? K.num(a[3]) : 0) : U; }
   case "cornerradiusratio": return isPad ? kidNum(n, "roundrect_rratio") : U;
-  case "clearanceoverride": return isPad || isFp ? kidNum(n, "clearance") : U;
+  case "clearanceoverride": { if (!isPad && !isFp) return U; const v = kidNum(n, "clearance"); return v.t === "u" ? NUL : v; }   // std::optional<int>: unset is null
   case "padtodielength": return isPad ? kidNum(n, "die_length") : U;
   case "reference": { const fp = isFp ? it : null; return fp ? str(fieldOf(n, "Reference") || "") : U; }
   case "value": { if (isFp) return str(fieldOf(n, "Value") || ""); return U; }
