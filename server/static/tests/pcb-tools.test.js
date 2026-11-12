@@ -1714,7 +1714,7 @@ test("Interactive Delete: a locked item stays and 'Item locked.' pops up; severa
   P.state.popup = null;
 });
 
-test("grid helper: BestDragOrigin takes the moved items' anchor nearest the mouse; the move snaps to other items' anchors (Shift: grid only, Alt: no grid)", () => {
+test("grid helper: BestDragOrigin takes the moved items' anchor nearest the mouse; the move snaps to other items' anchors (Shift: grid only, Ctrl: no grid)", () => {
   const doc = fixture(); const { ctx, log } = fullCtx(doc);
   // a footprint: the pad the mouse is in, else its position
   assert.deepEqual(P.bestDragOrigin(doc, ["fp-1"], [100.1, 49.2], 0.25), [100, 49.1], "pad 1's centre under the mouse");
@@ -1725,7 +1725,8 @@ test("grid helper: BestDragOrigin takes the moved items' anchor nearest the mous
   assert.deepEqual(P.snapCursor(ctx, [140.1, 40.05], null, {}).p, [140, 40], "Edge.Cuts line end");
   assert.deepEqual(P.snapCursor(ctx, [140.1, 40.05], null, { shiftKey: true }).p, [140, 40], "Shift: the grid point (here the same)");
   assert.deepEqual(P.snapCursor(ctx, [139.9, 40.12], null, { shiftKey: true }).p, [140, 40]);
-  assert.deepEqual(P.snapCursor(ctx, [139.93, 40.12], null, { shiftKey: true, altKey: true }).p, [139.93, 40.12], "Shift+Alt: free");
+  assert.deepEqual(P.snapCursor(ctx, [139.93, 40.12], null, { shiftKey: true, ctrlKey: true }).p, [139.93, 40.12], "Shift+Ctrl: free (DisableGridSnapping is MD_CTRL)");
+  assert.deepEqual(P.snapCursor(ctx, [139.93, 40.12], null, { shiftKey: true, altKey: true }).p, [140, 40], "Alt does nothing to the grid");
   assert.equal(P.snapCursor(ctx, [110.05, 50.05], null, {}).anchor, null, "a track end does not capture the cursor in a move");
   assert.deepEqual(P.snapCursor(ctx, [115.04, 40.02], null, {}).p, [115, 40], "the line's middle");
   // M on the footprint grabbed near its position: the position follows the snapped cursor
@@ -1768,8 +1769,11 @@ test("Line Modes: lines, polygons and zones follow the angle snap mode (Ctrl fre
   pcb.onActivate("gline", ctx); P.state.gfxLayer = "F.SilkS";
   pcb.onPointerDown(ev(), [10, 10], ctx); pcb.onPointerMove(ev(), [20, 13], ctx);
   assert.deepEqual(P.state.draw.cur, [20, 13], "free: the cursor as it is");
-  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "90"); assert.deepEqual(P.state.draw.cur, [20, 10], "the new mode applies to the line at once");
-  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "45"); pcb.onPointerMove(ev(), [20, 16], ctx); assert.deepEqual(P.state.draw.cur, [20, 20], "GetVectorSnapped45 keeps the longer axis");
+  // PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT
+  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "45"); assert.deepEqual(P.state.draw.cur, [20, 10], "the new mode applies to the line at once");
+  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "90"); pcb.onPointerMove(ev(), [20, 16], ctx); assert.deepEqual(P.state.draw.cur, [20, 10], "H / V only");
+  A.lineModeNext.run(ctx); assert.equal(P.angleSnapMode(), "free");
+  A.lineMode45.run(ctx); assert.equal(P.angleSnapMode(), "45"); pcb.onPointerMove(ev(), [20, 16], ctx); assert.deepEqual(P.state.draw.cur, [20, 20], "GetVectorSnapped45 keeps the longer axis");
   pcb.onPointerMove(ev({ ctrlKey: true }), [20, 16], ctx); assert.deepEqual(P.state.draw.cur, [20, 16], "Ctrl draws at any angle");
   // the click takes the constrained point, and the line goes on from there
   pcb.onPointerDown(ev(), [20, 17], ctx); const l1 = log.commits.at(-1).changes[0].id;

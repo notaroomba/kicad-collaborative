@@ -50,6 +50,7 @@ export function toolCtx(extra) {
 /**
  * opts.amend folds the changes into the last undo step (a paste and the move that places it are one step, as in
  * pcbnew's commit); with opts.discard as well the step is dropped (the paste was cancelled and the amend took it out).
+ * opts.tentative marks a step whose items still follow the cursor: a discard brings the redo list back.
  */
 export function commitChanges(changes, label, opts) {
   if (!changes || !changes.length) return;
@@ -63,9 +64,17 @@ export function commitChanges(changes, label, opts) {
   applyChanges(changes);
   sendOp(changes);   // journalled and replayed on reconnect even when the socket is down
   const top = opts && opts.amend ? undoStack[undoStack.length - 1] : null;
-  if (top && opts.discard) undoStack.pop();
+  const held = top && top.heldRedo ? top.heldRedo : null; if (top) delete top.heldRedo;
+  for (const e of undoStack) delete e.heldRedo;   // any other edit settles a tentative step
+  if (top && opts.discard) { undoStack.pop(); if (held) { redoStack.length = 0; redoStack.push(...held); publishUndo(); return; } }   // a cancelled paste: BOARD_COMMIT::Revert leaves the redo list alone
   else if (top) { top.changes = top.changes.concat(changes); top.inverse = inverse.concat(top.inverse); }
-  else { undoStack.push({ label: label || "edit", changes, inverse }); if (undoStack.length > 200) undoStack.shift(); }
+  else {
+    const entry: { label: string; changes: unknown[]; inverse: unknown[]; heldRedo?: unknown[] } = { label: label || "edit", changes, inverse };
+    // opts.tentative: items that still follow the cursor (a paste, a duplicate) — the redo list is kept aside until
+    // the step is placed (amend) or cancelled (amend + discard), when it comes back
+    if (opts && opts.tentative) entry.heldRedo = redoStack.slice();
+    undoStack.push(entry); if (undoStack.length > 200) undoStack.shift();
+  }
   redoStack.length = 0; publishUndo();
   if (isSch() && label === "sheet") publishDocs();   // a new sheet file joined the project
 }
@@ -91,7 +100,18 @@ export function pushUndoFor(docId, entry) {
 
 export function publishUndo() { store.set({ undo: { undo: undoStack.length, redo: redoStack.length } }); }
 
+/**
+ * Undo / Redo while a tool has an operation in flight (a route, a drag, a move, a shape being drawn) never reach the
+ * board's undo list: pcbnew holds an UndoRedoBlock there and the tool takes ACTIONS::undo itself (the router's Undo
+ * Last Segment, a move or a drawing cancelled).  The active module answers true when it took the action.
+ */
+function moduleTakesUndo(which) {
+  const m = activeModule(); if (!m || typeof m.undoRedo !== "function") return false;
+  try { return !!m.undoRedo(toolCtx(), which); } catch (e) { console.warn(e); return false; }
+}
+
 export function undoLast() {
+  if (moduleTakesUndo("undo")) return;
   const e = undoStack.pop(); if (!e) { toast("Nothing to undo"); return; }
   const redo = e.changes.map((c) => { const it = E.kdoc.items.get(c.id); return c.kind === "REMOVED" ? c : (it ? { id: c.id, kind: c.kind === "ADDED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: KiCadCanvas.serializeItem(E.kdoc, it) } : c); });
   applyChanges(e.inverse); sendOp(e.inverse);
@@ -99,6 +119,7 @@ export function undoLast() {
 }
 
 export function redoLast() {
+  if (moduleTakesUndo("redo")) return;
   const e = redoStack.pop(); if (!e) { toast("Nothing to redo"); return; }
   applyChanges(e.changes); sendOp(e.changes);
   undoStack.push(e); publishUndo();

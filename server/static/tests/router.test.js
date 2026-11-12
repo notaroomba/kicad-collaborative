@@ -176,6 +176,58 @@ test("Shove: the head pushes net B's track aside, it springs back when the curso
   for (const it of b) { const a = P.pt(it.node, "start"), c = P.pt(it.node, "end"); const dx = c[0] - a[0], dy = c[1] - a[1], l2 = dx * dx + dy * dy; const k = l2 ? Math.max(0, Math.min(1, ((end[0] - a[0]) * dx + (end[1] - a[1]) * dy) / l2)) : 0; assert.ok(Math.hypot(a[0] + k * dx - end[0], a[1] + k * dy - end[1]) >= 0.25 + 0.2 - 1e-3); }
 });
 
+// a collaborator's edit while the route is open (applied to the board, not through ctx.commit)
+const remote = (ctx, change) => { K.applyChange(ctx.doc, change, IU); pcb.onDocChanged(ctx); };
+
+test("Shove, collaboration: a track a peer deletes while the route is open stays deleted when the route is committed", () => {
+  const doc = board(); const { ctx, log } = fakeCtx(doc); P.setRouterSettings({ mode: 1 });
+  startRoute(ctx, [20, 10]);
+  pcb.onPointerMove(ev(), [20, 11.75], ctx); pcb.onPointerDown(ev(), [20, 11.75], ctx);
+  const ops = P.state.route.stages[0].ops; assert.ok(ops.some((o) => o.set === "sb" && typeof o.base === "string"), "the shove op records what it was computed from");
+  remote(ctx, P.removedChange(doc.items.get("sb")));
+  assert.equal(segsOf(doc, "B").length, 0);
+  pcb.onKey("End", ev(), ctx);
+  assert.equal(log.commits.length, 1); const ch = log.commits[0].changes;
+  assert.equal(segsOf(doc, "B").length, 0, "net B's track is not brought back");
+  assert.ok(!ch.some((c) => c.id === "sb"), "no change for the deleted track");
+  assert.ok(segsOf(doc, "A").length > 1, "the route itself is committed");
+});
+
+test("Shove, collaboration: a peer's change to a shoved track is not overwritten by the copy the router saw", () => {
+  const doc = board(); const { ctx, log } = fakeCtx(doc); P.setRouterSettings({ mode: 1 });
+  startRoute(ctx, [20, 10]);
+  pcb.onPointerMove(ev(), [20, 11.75], ctx); pcb.onPointerDown(ev(), [20, 11.75], ctx);
+  const node = K.clone ? K.clone(doc.items.get("sb").node) : JSON.parse(JSON.stringify(doc.items.get("sb").node)); K.kid(node, "width")[1] = 0.5;
+  remote(ctx, P.replacedChange(doc.items.get("sb"), node));
+  pcb.onKey("End", ev(), ctx);
+  assert.equal(log.commits.length, 1);
+  const sb = doc.items.get("sb"); assert.equal(K.num(K.kid(sb.node, "width")[1]), 0.5, "the peer's width stays");
+  assert.deepEqual([P.pt(sb.node, "start"), P.pt(sb.node, "end")], [[5, 12], [30, 12]], "and its geometry is the peer's, not the stale shoved copy");
+  assert.equal(segsOf(doc, "B").length, 1, "none of the stale shoved line's new pieces are added");
+});
+
+test("branchDoc: a stale edit drops its whole group (a split track's head and tail together)", () => {
+  const doc = board();
+  const ops = P.splitOps(doc, { id: "sa", point: [15, 10], node: doc.items.get("sa").node });
+  assert.equal(ops.length, 2); assert.equal(ops[0].grp, ops[1].grp);
+  assert.equal(P.branchChanges(doc, P.branchDoc(doc, ops)).length, 2, "fresh: the split applies");
+  const n = JSON.parse(JSON.stringify(doc.items.get("sa").node)); K.kid(n, "width")[1] = 0.3; K.applyChange(doc, P.replacedChange(doc.items.get("sa"), n), IU);
+  const b = P.branchDoc(doc, ops); assert.equal(b.__stale, 2); assert.equal(P.branchChanges(doc, b).length, 0, "the changed track is neither cut nor joined by a tail");
+});
+
+test("Edit > Undo / Redo while routing (menu, toolbar): Undo Last Segment, Redo blocked; the board's undo list is not reached", () => {
+  const doc = board(); const { ctx, log } = fakeCtx(doc); P.setRouterSettings({ mode: 2 });
+  assert.equal(pcb.undoRedo(ctx, "undo"), false, "nothing in flight: the global undo runs");
+  startRoute(ctx, [20, 10]);
+  pcb.onPointerMove(ev(), [25, 7], ctx); pcb.onPointerDown(ev(), [25, 7], ctx);
+  pcb.onPointerMove(ev(), [30, 7], ctx); pcb.onPointerDown(ev(), [30, 7], ctx);
+  assert.equal(P.state.route.stages.length, 2);
+  assert.equal(pcb.undoRedo(ctx, "redo"), true); assert.equal(P.state.route.stages.length, 2, "redo does nothing");
+  assert.equal(pcb.undoRedo(ctx, "undo"), true); assert.equal(P.state.route.stages.length, 1, "undo takes the last segment back");
+  assert.ok(P.state.route, "routing goes on"); assert.equal(log.commits.length, 0);
+  assert.equal(pcb.undoRedo(ctx, "undo"), true); assert.equal(pcb.undoRedo(ctx, "undo"), true, "silent with nothing fixed"); assert.ok(P.state.route);
+});
+
 test("Walk around: the head walks round net B instead of pushing it", () => {
   const doc = board(); const { ctx, log } = fakeCtx(doc); P.setRouterSettings({ mode: 2 });
   startRoute(ctx, [20, 10]);

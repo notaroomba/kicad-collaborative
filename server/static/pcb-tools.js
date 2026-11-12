@@ -1170,7 +1170,7 @@ function gfxLayers(doc) {
 
 // ---------------------------------------------------------------- interactions
 function hoverPoint(ctx, mm, magnetic, mods) {
-  // the drawing tools resolve the cursor through the grid helper too (DRAWING_TOOL: grid.SetSnap( !Shift ), Alt = no grid)
+  // the drawing tools resolve the cursor through the grid helper too (DRAWING_TOOL: grid.SetSnap( !Shift ), Ctrl = no grid: TOOL_EVENT::DisableGridSnapping)
   const sn = magnetic ? { p: ctx.snap(mm), anchor: null } : snapCursor(ctx, mm, null, mods);
   const g = sn.p; const out = { x: g[0], y: g[1], snap: sn.anchor ? { x: g[0], y: g[1], kind: "anchor" } : null };
   if (magnetic && ctx.doc) {
@@ -1303,10 +1303,27 @@ function arcTrackNode(doc, a, m, b, width, layer, net) {
 // branch of the board — a document with its own item map — and goes to the board as ONE commit when the route ends.
 // Escape drops the branch (LINE_PLACER::AbortPlacement), Backspace pops the last fixed stage (UnfixRoute).
 function branchDoc(doc, ops) {
-  const b = Object.assign({}, doc, { items: new Map(doc.items), __bc: {}, __base: doc });
-  for (const op of ops || []) applyBranchOp(b, op);
+  const b = Object.assign({}, doc, { items: new Map(doc.items), __bc: {}, __base: doc, __stale: 0 });
+  ops = ops || [];
+  // The branch is rebuilt on the live board, which collaborators edit while the route is open.  A { set } / { del }
+  // carries the text of the item it was computed from (op.base); when that item is gone or has changed since, the edit
+  // is stale and is left out — with the rest of its group (one shoved line, one split track) — so committing the route
+  // never brings back an item someone deleted or overwrites their change with the copy the router saw
+  // (CommitRouting writes the router's diff onto the live items; it never resurrects them).
+  for (let i = 0; i < ops.length;) {
+    let j = i + 1; const g = ops[i].grp; if (g) while (j < ops.length && ops[j].grp === g) j++;
+    const chunk = ops.slice(i, j); i = j;
+    if (chunk.every((op) => branchOpFresh(b, op))) for (const op of chunk) applyBranchOp(b, op); else b.__stale += chunk.length;
+  }
   return b;
 }
+/** Whether a branch edit still applies: its target item is there and unchanged since the edit was computed. */
+function branchOpFresh(b, op) {
+  const id = op.set || op.del; if (!id || op.base == null) return true;
+  const cur = b.items.get(id); return !!cur && K.serialize(cur.node) === op.base;
+}
+/** Stamp a { set } / { del } with the item it was computed from (see branchDoc). */
+function opOn(it, op, grp) { op.base = K.serialize(it.node); if (grp) op.grp = grp; return op; }
 /** One branch edit: { add: node } | { del: id } | { set: id, node } (the node keeps the item's uuid). */
 function applyBranchOp(b, op) {
   if (op.del) { b.items.delete(op.del); return; }
@@ -1471,7 +1488,7 @@ function splitOps(doc, split) {
   const head = clone(it.node); K.kid(head, "end").splice(1, 2, r6(p[0]), r6(p[1]));
   const tail = clone(it.node); const u = K.kid(tail, "uuid"); if (u) tail.splice(tail.indexOf(u), 1);
   K.kid(tail, "start").splice(1, 2, r6(p[0]), r6(p[1])); tail.push(["uuid", K.newUuid()]);
-  return [{ set: it.id, node: head }, { add: tail }];
+  const grp = {}; return [opOn(it, { set: it.id, node: head }, grp), { add: tail, grp }];
 }
 /** splitAdjacentSegments as board changes (exported for the tests and the autorouter). */
 function splitChanges(doc, split) {
@@ -1485,11 +1502,11 @@ function adoptNetOps(doc, rt, snap) {
     if (snap.kind === "pad" && snap.fp) {
       const fp = doc.items.get(snap.fp); if (!fp) return []; const node = clone(fp.node); const pad = K.kids(node, "pad")[snap.padIndex]; if (!pad) return [];
       const nk = K.kid(pad, "net"); const nn = netNode(doc, rt.net); if (nk) pad.splice(pad.indexOf(nk), 1, nn); else pad.splice(pad.length - 1, 0, nn);
-      return [{ set: fp.id, node }];
+      return [opOn(fp, { set: fp.id, node })];
     }
     const it = snap.id ? doc.items.get(snap.id) : null; if (!it) return [];
     const node = clone(it.node); const nk = K.kid(node, "net"); const nn = netNode(doc, rt.net); if (nk) node.splice(node.indexOf(nk), 1, nn); else node.push(nn);
-    return [{ set: it.id, node }];
+    return [opOn(it, { set: it.id, node })];
   }
   return [];
 }
@@ -2081,12 +2098,12 @@ function bestDragOrigin(doc, ids, mouse, gridPitch) {
 /**
  * PCB_GRID_HELPER::BestSnapAnchor / ResolveSnap: the cursor pulled onto an anchor of an item that is not moving
  * within SNAP_SCREEN_RADIUS pixels (no further than one grid step when the grid is on), else onto the grid.  Shift
- * held turns object snapping off (grid.SetSnap( !MD_SHIFT )), Alt the grid (DisableGridSnapping).  Returns
+ * held turns object snapping off (grid.SetSnap( !MD_SHIFT )), Ctrl the grid (TOOL_EVENT::DisableGridSnapping is MD_CTRL).  Returns
  * { p, anchor } where anchor is the snapped-to point or null.
  */
 function snapCursor(ctx, mm, skip, mods) {
   mods = mods || {};
-  const gridOn = !!(ctx.snapOn && ctx.snap) && !mods.altKey;
+  const gridOn = !!(ctx.snapOn && ctx.snap) && !(mods.ctrlKey || mods.metaKey);
   const g = gridOn ? ctx.snap(mm.slice()) : mm.slice();
   if (mods.shiftKey || !ctx.doc) return { p: g, anchor: null };
   const scale = SNAP_SCREEN_RADIUS / Math.max(1e-6, ctx.pxPerMm || 4); const range = gridOn && ctx.gridPitch ? Math.min(scale, ctx.gridPitch) : scale;
@@ -2145,7 +2162,7 @@ function moveTransform(ctx, how, arg) {
 function selectMoveTo(ctx, mm, mods) {
   const m = S.move; if (!m) return;
   // EDIT_TOOL::doMoveSelection: the cursor resolved through the grid helper (magnetic anchors of what is not moving,
-  // then the grid; Shift: grid only, Alt: no grid) less the drag origin
+  // then the grid; Shift: grid only, Ctrl: no grid) less the drag origin
   const sn = snapCursor(ctx, [mm[0], mm[1]], m.skip || new Set(m.orig.keys()), mods || m.mods); m.snapAt = sn.anchor;
   const sN = sn.p; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
   if (dx === m.last[0] && dy === m.last[1]) return;
@@ -2303,7 +2320,7 @@ function onStagePointerMove(ev) {
     S.pending = null; startPendingDrag(ctx, pd);
   }
   if (S.drag && S.drag.bySelect) { dragMove(ctx, ctx.worldMm(ev)); ctx.requestRender(); }
-  else if (S.move) { S.move.mods = { shiftKey: !!ev.shiftKey, altKey: !!ev.altKey }; selectMoveTo(ctx, ctx.worldMm(ev)); }
+  else if (S.move) { S.move.mods = { shiftKey: !!ev.shiftKey, ctrlKey: !!ev.ctrlKey, metaKey: !!ev.metaKey }; selectMoveTo(ctx, ctx.worldMm(ev)); }
 }
 function onStagePointerUp(ev) {
   const ctx = lastCtx; S.pending = null; if (!ctx) return;
@@ -2323,6 +2340,8 @@ const RULE_AREA_LAYERS = ["F.Cu", "B.Cu"];
 // ---- PCB_TOOL_BASE::GetAngleSnapMode (PCBNEW_SETTINGS m_AngleSnapMode, DIRECT by default in the board editor):
 // the Line Modes radio on the left toolbar and Shift+Space (lineModeNext) choose it; it is kept per viewer.
 const ANGLE_SNAP_KEY = "kc.pcbnew.angleSnapMode", ANGLE_SNAP_MODES = ["free", "90", "45"];
+/** PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT. */
+function nextLineMode(m) { return m === "free" ? "45" : m === "45" ? "90" : "free"; }
 const ANGLE_SNAP_MSG = { free: "", "90": "Constrain to H, V", "45": "Constrain to H, V, 45" };   // DRAWING_TOOL::UpdateStatusBar
 function angleSnapMode() {
   if (!S.angleSnap) { const v = lsGet(ANGLE_SNAP_KEY); S.angleSnap = ANGLE_SNAP_MODES.includes(v) ? v : "free"; }
@@ -2598,6 +2617,112 @@ function itemAt(ctx, mm) {
   const it = hitTestItem(doc, x, y, HIT_MM + 2 / Math.max(1, ctx.pxPerMm || 1)); if (it) return it;
   const id = K.hitTest(doc, x, y, Math.min(5 / Math.max(1, (ctx.zoom || 1) * 0.6), 0.5));
   return id ? doc.items.get(id) || null : null;
+}
+// ---------------------------------------------------------------- GuessSelectionCandidates
+const SILK_RE = /\.(SilkS|Silkscreen)$/, CRTYD_RE = /\.(CrtYd|Courtyard)$/;
+const TEXTISH = new Set(["gr_text", "gr_text_box", "text", "property", "fp_text"]);
+/** A candidate id ("fpId#padIndex" for a pad) as { id, item, pad, geoms }: the geometry KiCad would hit-test. */
+function candidateEntry(doc, id, hidden) {
+  const h = typeof id === "string" ? id.indexOf("#") : -1;
+  const item = doc.items.get(h > 0 ? id.slice(0, h) : id); if (!item) return null;
+  const padIndex = h > 0 ? Number(id.slice(h + 1)) : null;
+  const geoms = (item.geom || []).filter((g) => !(hidden && g.layer && hidden.has(g.layer)) && !g.padText && !g.padNum && !g.noBox && !g.hole
+    && (padIndex === null || g.padIndex === padIndex));
+  return { id, item, pad: padIndex !== null, geoms };
+}
+/** How far (mm) the cursor is from one geometry, up to maxSlop (Infinity beyond): SHAPE::Collide( loc, aMaxDistance, &distance ). */
+function geomDistance(g, x, y, maxSlop) {
+  if (K.geomHit(g, x, y, 0)) return 0;
+  if (!K.geomHit(g, x, y, maxSlop)) return Infinity;
+  let lo = 0, hi = maxSlop; for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (K.geomHit(g, x, y, m)) hi = m; else lo = m; }
+  return hi;
+}
+const isZoneFill = (e, g) => e.item.kind === "zone" && !!g.fill;
+/** PCB_SELECTION_TOOL::hitTestDistance (mm). */
+function hitTestDistance(e, x, y, maxSlop, viewport) {
+  const it = e.item; let d = Infinity;
+  if (it.kind === "zone") {   // zone borders are very specific
+    let edge = Infinity; for (const g of e.geoms) if (!g.fill) edge = Math.min(edge, geomDistance(g, x, y, maxSlop));
+    if (edge <= maxSlop / 2) return 0; if (edge <= maxSlop) return maxSlop / 2;
+    for (const g of e.geoms) if (g.fill && g.t === "poly" && g.pts && g.pts.length > 2 && pointInPolyMm(g.pts, x, y)) return 0;
+    return Infinity;
+  }
+  if (it.kind === "footprint" && !e.pad) {   // FOOTPRINT::GetBoundingHull: inside it is an exact hit
+    const hb = hullBox(e.geoms);
+    if (hb && x >= hb[0] && x <= hb[2] && y >= hb[1] && y <= hb[3]) d = 0;
+    else for (const g of e.geoms) if (g.t !== "text") d = Math.min(d, geomDistance(g, x, y, maxSlop));
+    const bb = it.bbox; if (viewport && bb && (bb[3] - bb[1] > viewport[1] || bb[2] - bb[0] > viewport[0])) d = 1e9;   // larger than the view: a last resort
+    return d;
+  }
+  for (const g of e.geoms) d = Math.min(d, geomDistance(g, x, y, maxSlop));
+  if (TEXTISH.has(it.kind) && d < Infinity) d = Math.max(0, d - maxSlop / 2);   // a bit of slop to text shapes
+  return d;
+}
+function pointInPolyMm(pts, x, y) { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const a = pts[i], b = pts[j]; if ((a[1] > y) !== (b[1] > y) && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) c = !c; } return c; }
+function polyAreaMm(pts) { let a = 0; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]; return Math.abs(a) / 2; }
+function hullBox(geoms) { let b = null; for (const g of geoms) { if (g.t === "text") continue; const gb = K.geomBox(g); if (!gb) continue; b = b ? [Math.min(b[0], gb[0]), Math.min(b[1], gb[1]), Math.max(b[2], gb[2]), Math.max(b[3], gb[3])] : gb.slice(); } return b; }
+/** BOARD_ITEM::GetCoverageArea (mm²), from the item's own geometry. */
+function geomArea(g) {
+  const w = g.w || 0;
+  switch (g.t) {
+  case "line": return Math.hypot(g.x2 - g.x1, g.y2 - g.y1) * w + Math.PI * w * w / 4;
+  case "circle": return g.fill ? Math.PI * g.r * g.r : 2 * Math.PI * g.r * w;
+  case "arc": { const sw = g.a0 !== undefined && g.a1 !== undefined ? Math.abs(g.a1 - g.a0) : 2 * Math.PI; return g.pie ? sw / 2 * g.r * g.r : sw * g.r * w; }
+  case "poly": { if (!g.pts || g.pts.length < 2) return 0; if (g.fill) return polyAreaMm(g.pts); let l = 0; for (let i = 1; i < g.pts.length; i++) l += Math.hypot(g.pts[i][0] - g.pts[i - 1][0], g.pts[i][1] - g.pts[i - 1][1]); return l * w; }
+  case "rect": return Math.abs(g.w * g.h);
+  case "pad": return g.shape === "circle" ? Math.PI * g.w * g.w / 4 : g.w * g.h;
+  default: { const b = K.geomBox(g); return b ? (b[2] - b[0]) * (b[3] - b[1]) : 0; }
+  }
+}
+function coverageArea(e, x, y, px, maxSlop) {
+  const it = e.item;
+  if (it.kind === "zone") { let edge = Infinity; for (const g of e.geoms) if (!g.fill) edge = Math.min(edge, geomDistance(g, x, y, maxSlop / 2)); if (edge <= maxSlop / 2) return px * px * 5; }   // zone borders are "small"
+  if (it.kind === "via") { const dr = K.kid(it.node, "drill"); const r = dr ? K.num(dr[1]) / 2 : 0.2; return r * r; }   // vias defer to nothing under them: r², not πr²
+  if (it.kind === "image") { const b = it.bbox; return b ? (b[2] - b[0]) * (b[3] - b[1]) : 0; }
+  if (it.kind === "footprint" && !e.pad) { const hb = hullBox(e.geoms); return hb ? (hb[2] - hb[0]) * (hb[3] - hb[1]) : 0; }
+  if (it.kind === "zone") { let a = 0; for (const g of e.geoms) if (g.t === "poly" && !g.fill && g.pts && g.pts.length > 2) a = Math.max(a, polyAreaMm(g.pts)); return a; }
+  let a = 0; for (const g of e.geoms) a += geomArea(g); return a;
+}
+function entryOnLayer(e, layer) {
+  if (!layer) return false;
+  const cu = /\.Cu$/.test(layer);
+  const hits = (l) => l === layer || (cu && (l === "*.Cu" || l === "F&B.Cu"));
+  if (!e.pad) { const l = K.kid(e.item.node, "layer"); if (l && hits(K.str(l[1]))) return true; const ls = K.kid(e.item.node, "layers"); if (ls && ls.slice(1).some((v) => hits(K.str(v)))) return true; }
+  for (const g of e.geoms) { if (g.layer && hits(g.layer)) return true; if (g.viaLayers && cu) return true; }
+  return false;
+}
+/**
+ * PCB_SELECTION_TOOL::GuessSelectionCandidates for the candidates `ids` under `where` (mm): silkscreen or
+ * courtyard preference on the active layer, then "prefer exact hits to sloppy ones" (every item further than the
+ * nearest one plus a pixel goes), then the much smaller of nested items (1.5x area steps; a footprint more than 70 %
+ * covered stays), then only the items on the active layer when there are any.  opts: { px (mm per pixel),
+ * activeLayer, hidden (Set of layer keys), viewport ([w, h] mm), highContrast }.
+ */
+function guessCandidates(doc, ids, where, opts) {
+  opts = opts || {}; if (!ids || ids.length < 2) return (ids || []).slice();
+  const px = opts.px || 0.01, maxSlop = 5 * px, [x, y] = where, active = opts.activeLayer || S.layer || "F.Cu";
+  let list = ids.map((id) => candidateEntry(doc, id, opts.hidden)).filter(Boolean); if (list.length < 2) return list.map((e) => e.id);
+  // a silk layer in front: single-layer silk texts and shapes; a courtyard in front (high contrast): footprints
+  let preferred = [];
+  if (SILK_RE.test(active)) preferred = list.filter((e) => !e.pad && e.item.kind !== "footprint" && e.item.kind !== "zone" && (TEXTISH.has(e.item.kind) || /^gr_|^table/.test(e.item.kind)) && SILK_RE.test(layerOf(e.item.node, "")));
+  else if (CRTYD_RE.test(active) && opts.highContrast) preferred = list.filter((e) => !e.pad && e.item.kind === "footprint");
+  if (preferred.length) { list = preferred; if (list.length === 1) return [list[0].id]; }
+  // prefer exact hits to sloppy ones
+  const slop = new Map(); let minSlop = Infinity;
+  for (const e of list) { const d = hitTestDistance(e, x, y, maxSlop, opts.viewport); slop.set(e, d); if (d < minSlop) minSlop = d; }
+  if (minSlop < Infinity) list = list.filter((e) => !(slop.get(e) > minSlop + px));
+  // a small item within a much larger one
+  const byArea = list.map((e) => [e, coverageArea(e, x, y, px, maxSlop)]).sort((a, b) => a[1] - b[1]);
+  const rejected = new Set(); let rejecting = false;
+  for (let i = 1; i < byArea.length; i++) { if (byArea[i][1] > byArea[i - 1][1] * 1.5) rejecting = true; if (rejecting) rejected.add(byArea[i][0]); }
+  for (const [e, a] of byArea) if (e.item.kind === "footprint" && !e.pad && a > 0) {   // FOOTPRINT::CoverageRatio: a covered footprint stays for the menu
+    let cov = 0; for (const [o, oa] of byArea) if (o !== e && !(o.pad && o.item === e.item) && o.item.kind !== "zone") cov += oa;
+    if (cov / a > 0.7) rejected.delete(e);
+  }
+  if (list.length > rejected.size) list = list.filter((e) => !rejected.has(e));
+  // what is left has similar areas: only those on the active layer, when there are any
+  if (list.length > 1) { const on = list.filter((e) => entryOnLayer(e, active)); if (on.length) list = on; }
+  return list.map((e) => e.id);
 }
 /**
  * PCB_CONTROL::InteractiveDelete's motion handler: the item under the cursor is brightened only when exactly one
@@ -3878,16 +4003,16 @@ function shoveOps(doc, st) {
   const ops = [];
   for (const L of st.lines.values()) {
     const pts = simplifyPts(L.pts); const olds = L.ids.map((id) => doc.items.get(id)).filter(Boolean); if (!olds.length) continue;
-    const n = pts.length - 1;
+    const n = pts.length - 1; const grp = {};
     for (let i = 0; i < n; i++) {
       const base = olds[Math.min(i, olds.length - 1)]; const node = clone(base.node);
       K.kid(node, "start").splice(1, 2, r6(pts[i][0]), r6(pts[i][1])); K.kid(node, "end").splice(1, 2, r6(pts[i + 1][0]), r6(pts[i + 1][1]));
-      if (i < olds.length) ops.push({ set: olds[i].id, node });
-      else { const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); }
+      if (i < olds.length) ops.push(opOn(olds[i], { set: olds[i].id, node }, grp));
+      else { const u = K.kid(node, "uuid"); if (u) node.splice(node.indexOf(u), 1); node.push(["uuid", K.newUuid()]); ops.push({ add: node, grp }); }
     }
-    for (let i = Math.max(n, 0); i < olds.length; i++) ops.push({ del: olds[i].id });
+    for (let i = Math.max(n, 0); i < olds.length; i++) ops.push(opOn(olds[i], { del: olds[i].id }, grp));
   }
-  for (const [id, at] of st.viaAt) { const it = doc.items.get(id); if (!it) continue; const node = clone(it.node); K.kid(node, "at").splice(1, 2, r6(at[0]), r6(at[1])); ops.push({ set: id, node }); }
+  for (const [id, at] of st.viaAt) { const it = doc.items.get(id); if (!it) continue; const node = clone(it.node); K.kid(node, "at").splice(1, 2, r6(at[0]), r6(at[1])); ops.push(opOn(it, { set: id, node })); }
   return ops;
 }
 /** What a shove shows: the pushed lines and vias, and the ids of the originals they hide. */
@@ -4607,12 +4732,13 @@ let formImpl = function (spec) {
           for (const o of f.options) {
             const l = document.createElement("label"); l.style.cssText = "display:flex;gap:6px;align-items:center;margin:3px 0";
             const r = document.createElement("input"); r.type = "radio"; r.name = name; r.value = o[0]; r.checked = o[0] === f.value; r.style.width = "auto"; r.style.margin = "0";
+            if (o[2]) l.title = o[2];   // wxRadioBox::SetItemToolTip
             l.appendChild(r); l.appendChild(document.createTextNode(o[1])); box.appendChild(l); radios.push(r);
           }
           inputs[f.k] = { type: "radio", get value() { const r = radios.find((x) => x.checked); return r ? r.value : f.value; } };
           body.appendChild(box); continue;
         }
-        const row = document.createElement("label"); row.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0";
+        const row = document.createElement("label"); row.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0"; if (f.tip) row.title = f.tip;
         const span = document.createElement("span"); span.textContent = f.label; row.appendChild(span);
         let inp;
         if (f.type === "select") { inp = document.createElement("select"); for (const o of f.options) { const op = document.createElement("option"); op.value = isList(o) ? o[0] : o; op.textContent = isList(o) ? o[1] : o; inp.appendChild(op); } inp.value = f.value; }
@@ -4682,7 +4808,7 @@ function highlightIds(ctx, ids) { if (ctx.setHighlight) ctx.setHighlight(ids && 
 act("lineModeFree", "Line Modes", "", (ctx) => { setAngleSnap(ctx, "free"); return true; });
 act("lineMode90", "Line Modes", "", (ctx) => { setAngleSnap(ctx, "90"); return true; });
 act("lineMode45", "Line Modes", "", (ctx) => { setAngleSnap(ctx, "45"); return true; });
-act("lineModeNext", "Line Modes", "Shift+Space", (ctx) => { const m = angleSnapMode(); setAngleSnap(ctx, ANGLE_SNAP_MODES[(ANGLE_SNAP_MODES.indexOf(m) + 1) % 3]); return true; });
+act("lineModeNext", "Line Modes", "Shift+Space", (ctx) => { setAngleSnap(ctx, nextLineMode(angleSnapMode())); return true; });
 act("incWidth", "Increase Line Width", "Ctrl++", (ctx) => stepDrawWidth(ctx, 1));
 act("decWidth", "Decrease Line Width", "Ctrl+-", (ctx) => stepDrawWidth(ctx, -1));
 // clipboard
@@ -4703,7 +4829,7 @@ function pasteAt(ctx, opts) {
     if (!text) return;
     const r = pasteChanges(ctx.doc, text, cursorPoint(ctx), opts); if (!r.changes.length) return;
     // EDIT_TOOL::Paste: the pasted items hang on the cursor by their reference point until a click places them
-    ctx.commit(r.changes, "paste"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice() });
+    ctx.commit(r.changes, "paste", { tentative: true }); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice() });
   });
   return true;
 }
@@ -4711,7 +4837,7 @@ function pasteAt(ctx, opts) {
 // (DIALOG_PASTE_SPECIAL: the three reference modes, KEEP preselected, and "Clear net assignments")
 act("paste", "Paste", "Ctrl+V", (ctx) => canEdit(ctx) && pasteAt(ctx, { annotations: "keep" }));
 act("pasteSpecial", "Paste Special…", "Ctrl+Shift+V", (ctx) => canEdit(ctx) && openForm({ title: "Paste Special", width: 460, fields: [
-  { k: "annotations", label: "Reference Designators", type: "radio", value: "keep", options: [["unique", "Assign unique reference designators to pasted symbols"], ["keep", "Keep existing reference designators, even if they are duplicated"], ["clear", "Clear reference designators on all pasted symbols"]] },
+  { k: "annotations", label: "Reference Designators", type: "radio", value: "keep", options: [["unique", "Assign unique reference designators to pasted symbols", "Finds the next available reference designator for any designators that already exist in the design."], ["keep", "Keep existing reference designators, even if they are duplicated"], ["clear", "Clear reference designators on all pasted symbols", "Replaces reference designators with 'REF**'."]] },
   { k: "clearNets", label: "Clear net assignments", type: "check", value: false, tip: "Remove the net information from all connected items before pasting" }],
   apply: (v) => { pasteAt(ctx, { annotations: v.annotations, clearNets: !!v.clearNets }); } }));
 act("duplicate", "Duplicate", "Ctrl+D", (ctx) => {
@@ -4720,7 +4846,7 @@ act("duplicate", "Duplicate", "Ctrl+D", (ctx) => {
   // EDIT_TOOL::Duplicate: the copies follow the cursor from where the originals are; a click places them (one
   // "Duplicate" step), Escape drops them; a hover selection is not kept afterwards
   const r = duplicateChanges(ctx.doc, sel.ids); if (!r.changes.length) return true;
-  ctx.commit(r.changes, "duplicate"); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover }); return true;
+  ctx.commit(r.changes, "duplicate", { tentative: true }); applySelection(ctx, r.ids); beginCarryMove(ctx, { placing: r.ids.slice(), restore: r.restore, hover: sel.hover }); return true;
 });
 act("copyAsText", "Copy as Text", "", (ctx) => { const ids = needSel(ctx); if (!ids) return true; const t = Array.from(ids, (id) => textOfItem(ctx.doc.items.get(id))).filter(Boolean).join("\n"); clipSet(ctx, t); ctx.toast(t ? "Text copied" : "Nothing textual selected"); return true; });
 // selection
@@ -5182,6 +5308,30 @@ const liveSelection = () => appGlobal(() => editorState().selection, null);
  * microvia, blind via, select layer and place a blind via), the corner modes (Ctrl+/, Ctrl+W, Ctrl+Shift+W,
  * Ctrl+Alt+W, Alt+W) whenever the Route tool is active.  The browser keeps Ctrl+W and Ctrl+Shift+W for itself.
  */
+/** The first Escape: the operation in flight is cancelled, KiCad style (the next one leaves the tool).  False with none. */
+function cancelInFlight(any) {
+  if (S.pedit && lastCtx) { editHandleUp(lastCtx, false); return true; }
+  if (S.route || S.draw || S.drag || S.text || S.image || (S.move && (any || S.move.sticky))) {
+    const dragTool = S.drag && S.drag.tool;
+    cancelOps();
+    if (dragTool && lastCtx) lastCtx.setTool("select");   // Escape ends InlineDrag: back to the selection tool
+    if (lastCtx) { refreshChip(lastCtx); lastCtx.requestRender(); }   // Esc cancels silently
+    return true;
+  }
+  return false;
+}
+/**
+ * ACTIONS::undo / ACTIONS::redo from the menu or the toolbar while an operation is in flight (tools.ts undoLast): the
+ * board's undo list is behind pcbnew's UndoRedoBlock.  Routing takes Undo as Undo Last Segment (router_tool.cpp
+ * performRouting); a drag, a move or a shape being drawn takes it as a cancel ("Perform undo locally",
+ * edit_tool_move_fct.cpp / drawing_tool.cpp); Redo does nothing.  True when the action was taken here.
+ */
+function undoRedoInFlight(ctx, which) {
+  if (S.route) { if (which === "undo" && !ctx.viewOnly) undoRouteLeg(ctx); return true; }
+  if (!(S.pedit || S.draw || S.drag || S.image || S.move)) return false;
+  if (which === "undo") cancelInFlight(true);
+  return true;
+}
 function routerKeyAction(ev) {
   const ctrl = !!(ev.ctrlKey || ev.metaKey), alt = !!ev.altKey, shift = !!ev.shiftKey, code = ev.code || "", k = ev.key;
   if (S.route) {
@@ -5217,13 +5367,8 @@ function onCaptureKey(ev) {
     return;
   }
   if (k === "Escape") {
-    if (S.pedit && lastCtx) { editHandleUp(lastCtx, false); ev.stopImmediatePropagation(); ev.preventDefault(); return; }
-    if (S.route || S.draw || S.drag || S.text || S.image || (S.move && S.move.sticky)) {   // first Escape only cancels the operation, KiCad style; the next one leaves the tool
-      const dragTool = S.drag && S.drag.tool;
-      cancelOps(); ev.stopImmediatePropagation(); ev.preventDefault();
-      if (dragTool && lastCtx) lastCtx.setTool("select");   // Escape ends InlineDrag: back to the selection tool
-      if (lastCtx) { refreshChip(lastCtx); lastCtx.requestRender(); }   // Esc cancels silently
-    } else if (S.sel.size || S.padSel) { S.sel.clear(); S.padSel = null; if (lastCtx) lastCtx.requestRender(); }
+    if (cancelInFlight()) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+    else if (S.sel.size || S.padSel) { S.sel.clear(); S.padSel = null; if (lastCtx) lastCtx.requestRender(); }
     return;
   }
   let remap = null;
@@ -5694,6 +5839,7 @@ const pcb = {
     }
   },
   drawOverlay,
+  undoRedo(ctx, which) { bind(ctx); return undoRedoInFlight(ctx, which); },
   // Called when a document loads and again after every applied change (our own commits included):
   // only a new document object resets the tool state; an update just prunes what vanished.
   onDocChanged(ctx) {
@@ -5755,7 +5901,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
-  octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction,
+  octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,

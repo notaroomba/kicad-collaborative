@@ -17,7 +17,7 @@ import { evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolv
 import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
-import { isSch, requestRender } from "./view";
+import { isSch, pxPerMm, requestRender } from "./view";
 
 type Mm = [number, number];
 type Run = () => void;
@@ -228,11 +228,18 @@ function selectCandidate(id: string): void {
   selectItemId(id);
 }
 /**
- * GuessSelectionCandidates, in short: a footprint gives way to a pad, track, via or drawing of its own under the
- * cursor, so only real overlaps (stacked tracks, a via on a track, two pads) stay ambiguous.
+ * PCB_SELECTION_TOOL::GuessSelectionCandidates (pcb-tools.js guessCandidates): exact hits beat sloppy ones, a small
+ * item beats a much larger one around it, the active layer beats the others — so only real overlaps (stacked tracks,
+ * a via on a track, two pads) stay ambiguous.
  */
+type Guess = (d: KDoc, ids: string[], where: Mm, o: { px: number; hidden: Set<string>; viewport: [number, number] }) => string[];
 function ambiguousAt(mm: Mm): string[] {
   const ids = candidatesAt(mm); if (isSch() || !E.kdoc) return ids;
+  const P = (window as unknown as { PcbTools?: { guessCandidates?: Guess } }).PcbTools;
+  if (P && P.guessCandidates) {
+    const ppm = Math.max(1e-6, pxPerMm()), r = stage.getBoundingClientRect();
+    try { return P.guessCandidates(E.kdoc as KDoc, ids, mm, { px: 1 / ppm, hidden: E.hiddenLayers as Set<string>, viewport: [r.width / ppm, r.height / ppm] }); } catch (e) { console.warn(e); }
+  }
   const others = ids.filter((id) => { const it = (E.kdoc as KDoc).items.get(id); return !(it && it.kind === "footprint"); });
   return others.length ? others : ids;
 }
