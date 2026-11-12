@@ -149,6 +149,28 @@ await test("Update Symbol Fields: SyncFieldsFromParent options, field list, unse
   assert.strictEqual(M.syncFieldsFromParent(lib, M.clone(lib.symbols.get("P")), o), false, "not derived");
 });
 
+await test("pin maps: read / write as savePinMapData, logical pins with stacked numbers, ExpandStackedPinNotation, harvest", () => {
+  const s = M.node(`(symbol "X" (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) (property "ki_keywords" "k" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+    (associated_footprints (footprint "Package_SO:SOIC-8" (map "STD-8")) (footprint "Lib:Other"))
+    (pin_maps (pin_map "STD-8" (entry "1" "2") (entry "4" "[4,9]")))
+    (symbol "X_1_1" (pin input line (at 0 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+      (pin input line (at 0 2.54 0) (length 2.54) (name "B" (effects (font (size 1.27 1.27)))) (number "[3-4]" (effects (font (size 1.27 1.27))))))
+    (symbol "X_2_1" (pin input line (at 0 0 0) (length 2.54) (name "C" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))))
+    (embedded_fonts no))`);
+  const d = M.pinMapData(s);
+  assert.deepStrictEqual(d.maps, [{ name: "STD-8", entries: [["1", "2"], ["4", "[4,9]"]] }]);
+  assert.deepStrictEqual(d.assocs, [{ fpid: "Package_SO:SOIC-8", map: "STD-8" }, { fpid: "Lib:Other", map: "" }]);
+  assert.deepStrictEqual(M.logicalPinRows(s), [{ number: "1", name: "A", unit: 1 }, { number: "3", name: "B", unit: 1 }, { number: "4", name: "B", unit: 1 }]);
+  assert.deepStrictEqual(M.expandStacked("[1,3-5,A1-A2]"), { pins: ["1", "3", "4", "5", "A1", "A2"], valid: true });
+  assert.strictEqual(M.expandStacked("[5-3]").valid, false); assert.strictEqual(M.expandStacked("4]").valid, false); assert.strictEqual(M.expandStacked("[A1-B2]").valid, false);
+  assert.deepStrictEqual(M.expandStacked("[a\\,b]"), { pins: ["a,b"], valid: true }); assert.strictEqual(M.expandStacked("[]").valid, false);
+  const c = M.clone(s); M.setPinMapData(c, d.maps, d.assocs); assert.strictEqual(M.text(c), M.text(s), "round trip in place");
+  const e = M.clone(s); M.setPinMapData(e, [], []); assert.ok(!/pin_maps|associated_footprints/.test(M.text(e)), "nothing written when empty");
+  M.setPinMapData(e, [{ name: "m", entries: [["1", "7"]] }], []);
+  const kinds = e.filter((x) => Array.isArray(x)).map((x) => x[0]); assert.deepStrictEqual(kinds.slice(0, 4), ["property", "property", "pin_maps", "symbol"], "after the fields");
+  assert.ok(M.text(e).includes('(pin_maps (pin_map "m" (entry "1" "7")))'));
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();

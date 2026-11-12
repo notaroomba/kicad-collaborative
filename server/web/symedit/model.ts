@@ -1031,3 +1031,58 @@ export function syncFieldsFromParent(lib: SymLib | null, sym: Node, o: FieldSync
   return true;
 }
 export { kid as kidOf, kids as kidsOf, str as strOf };
+
+// ---------------------------------------------------------------- pin maps (PANEL_SYMBOL_PIN_MAP)
+export interface PinMapDef { name: string; entries: [string, string][] }
+export interface AssocFootprint { fpid: string; map: string }
+/** (associated_footprints (footprint "<lib_id>" (map "<name>"))…) and (pin_maps (pin_map "<name>" (entry "<pin>" "<pad>")…)…). */
+export function pinMapData(sym: Node): { maps: PinMapDef[]; assocs: AssocFootprint[] } {
+  const maps: PinMapDef[] = []; const assocs: AssocFootprint[] = [];
+  const pm = kid(sym, "pin_maps");
+  if (pm) for (const m of kids(pm, "pin_map")) { const def: PinMapDef = { name: str(m[1]), entries: kids(m, "entry").map((e) => [str(e[1]), str(e[2])] as [string, string]) }; const i = maps.findIndex((x) => x.name === def.name); if (i >= 0) maps[i] = def; else maps.push(def); }
+  const af = kid(sym, "associated_footprints");
+  if (af) for (const f of kids(af, "footprint")) { const mp = kid(f, "map"); assocs.push({ fpid: str(f[1]), map: mp ? str(mp[1]) : "" }); }
+  return { maps, assocs };
+}
+/** SCH_IO_KICAD_SEXPR_LIB_CACHE::savePinMapData: after the fields, associations first; nothing when empty. */
+export function setPinMapData(sym: Node, maps: PinMapDef[], assocs: AssocFootprint[]): void {
+  for (let j = sym.length - 1; j > 1; j--) { const c = sym[j]; if (isList(c) && (c[0] === "pin_maps" || c[0] === "associated_footprints")) sym.splice(j, 1); }
+  let at = 1; for (let j = 2; j < sym.length; j++) { const c = sym[j]; if (isList(c) && c[0] === "property") at = j; }
+  if (at === 1) { const k = sym.findIndex((c, j) => j > 1 && isList(c) && (c[0] === "symbol" || c[0] === "embedded_fonts")); at = k < 0 ? sym.length - 1 : k - 1; }
+  const add: Node[] = [];
+  if (assocs.length) add.push(node(`(associated_footprints ${assocs.map((a) => `(footprint ${q(a.fpid)}${a.map ? ` (map ${q(a.map)})` : ""})`).join(" ")})`));
+  if (maps.length) add.push(node(`(pin_maps ${maps.map((m) => `(pin_map ${q(m.name)}${m.entries.map(([p, d]) => ` (entry ${q(p)} ${q(d)})`).join("")})`).join(" ")})`));
+  sym.splice(at + 1, 0, ...add);
+}
+/** LIB_SYMBOL::GetLogicalPins( 0, 0 ) reduced to unique numbers: stacked pins expand, the first pin of a number names it. */
+export function logicalPinRows(sym: Node): { number: string; name: string; unit: number }[] {
+  const out: { number: string; name: string; unit: number }[] = []; const seen = new Set<string>();
+  for (const d of allPins(sym)) {
+    const nb = kid(d.node, "number"), nm = kid(d.node, "name"); const num0 = nb ? str(nb[1]) : ""; const name = nm ? str(nm[1]) : "";
+    const ex = expandStacked(num0);
+    for (const n of ex.valid && ex.pins.length ? ex.pins : [num0]) if (!seen.has(n)) { seen.add(n); out.push({ number: n, name, unit: d.unit }); }
+  }
+  return out;
+}
+/** ExpandStackedPinNotation: "[1,3-5,A1-A3]" (\, and \- escaped) → its pads; `valid` false for broken brackets or ranges. */
+export function expandStacked(pad: string): { pins: string[]; valid: boolean } {
+  const open = pad.includes("["), close = pad.includes("]");
+  if ((open || close) && !(pad.startsWith("[") && pad.endsWith("]"))) return { pins: [pad], valid: false };
+  if (!(pad.startsWith("[") && pad.endsWith("]"))) return { pins: [pad], valid: true };
+  const inner = pad.slice(1, -1); const parts: string[] = []; let cur = "";
+  for (let i = 0; i < inner.length; i++) { const c = inner[i]; if (c === "\\" && i + 1 < inner.length) { cur += c + inner[++i]; continue; } if (c === ",") { parts.push(cur); cur = ""; } else cur += c; }
+  parts.push(cur);
+  const unesc = (s: string) => s.replace(/\\(.)/g, "$1");
+  const alnum = (s: string): [string, number] => { const m = /^(.*?)(\d+)$/.exec(s); return m ? [m[1], Number(m[2])] : [s, -1]; };
+  const out: string[] = [];
+  for (const raw of parts) {
+    const part = raw.trim(); if (!part) continue;
+    let dash = -1; for (let i = 0; i < part.length; i++) { if (part[i] === "\\") { i++; continue; } if (part[i] === "-") { dash = i; break; } }
+    if (dash >= 0) {
+      const [sp, sv] = alnum(unesc(part.slice(0, dash)).trim()), [ep, ev] = alnum(unesc(part.slice(dash + 1)).trim());
+      if (sp !== ep || sv === -1 || ev === -1 || sv > ev) return { pins: [pad], valid: false };
+      for (let v = sv; v <= ev; v++) out.push(sp + v);
+    } else out.push(unesc(part));
+  }
+  return out.length ? { pins: out, valid: true } : { pins: [pad], valid: false };
+}

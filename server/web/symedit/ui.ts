@@ -63,7 +63,7 @@ export const CSS = `
 .se-msg b{font-weight:400;color:var(--ink-2)}
 .se-status{flex:none;display:flex;gap:16px;align-items:center;padding:2px 10px;height:24px;background:var(--panel);border-top:1px solid var(--line);color:var(--ink-2);white-space:nowrap;overflow:hidden}
 .se-status select{height:20px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font:inherit}
-.se-menu{position:fixed;z-index:56;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:3px 0}
+.se-menu{position:fixed;z-index:56;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:3px 0}.kd-overlay~.se-menu{z-index:80}
 .se-mi{display:flex;align-items:center;gap:8px;padding:3px 12px 3px 6px;cursor:default;white-space:nowrap}
 .se-mi:hover{background:var(--accent);color:var(--on-accent)}
 .se-mi.dim{opacity:.45} .se-mi.dim:hover{background:none;color:inherit}

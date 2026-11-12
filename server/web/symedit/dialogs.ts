@@ -12,6 +12,7 @@ import { hotkeyRows } from "../menuspec";
 import type { SymbolEditor, Lib } from "./editor";
 import { nodeOf } from "./editor";
 import { icon } from "./ui";
+import { pinMapPage, pinMapState, harvestPinMaps } from "./pinmap";
 import { libDocFor } from "./libdoc";
 import type { Units } from "../store";
 
@@ -214,8 +215,9 @@ export function editShape(se: SymbolEditor, id: string): void {
 }
 
 // ---------------------------------------------------------------- Symbol Properties
-export function symbolProperties(se: SymbolEditor): void {
+export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } = {}): void {
   const t = se.tab; const sym = se.symbol(); if (!t || !sym) return;
+  const pinMaps = pinMapState(sym, M.flatten(se.libMap(se.libs.get(t.lib) || null), sym));
   const derived = M.isDerived(sym); const root = se.rootSym(sym);
   const hd = M.symHeader(root);
   interface FRow { name: string; value: string; show: boolean; showName: boolean; x: number; y: number; mandatory: boolean; node: M.Node | null }
@@ -283,13 +285,15 @@ export function symbolProperties(se: SymbolEditor): void {
           bodyGridHost = h("div", { id: "sp-bodynames", style: "margin-left:22px" }); bb.append(bodyGridHost);
           bodyGrid = KD().grid(bodyGridHost, [{ key: "name", label: "", width: 320 }], bodyRows, { readOnly: ro, height: 100, buttons: { add: () => ({ name: "" }), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true } });
           syncBody();
-        } }, { label: "Pin Connections", build(pg: HTMLElement) {
+        } }]),
+        { label: "Footprint Filters", build(pg: HTMLElement) { pg.append(h("div", { style: "margin-bottom:4px" }, "Footprint filters:"), filters); } },
+        ...(derived ? [] : [{ label: "Pin Connections", build(pg: HTMLElement) {
           const jgHost = h("div", { id: "sp-jumpergroups" });
           pg.append(jumpers, h("div", { style: "margin-top:8px" }, "Explicit jumper pin groups:"), jgHost);
           KD().grid(jgHost, [{ key: "group", label: "", width: 420 }], jumperRows, { readOnly: ro, height: 150, buttons: { add: () => ({ group: "" }), remove: true } });
         } }]),
-        { label: "Footprint Filters", build(pg) { pg.append(h("div", { style: "margin-bottom:4px" }, "Footprint filters:"), filters); } },
-      ]);
+        { label: "Pin Map", build(pg) { pinMapPage(pg, pinMaps, ro); } },
+      ], { selected: opts.pinMaps ? (derived ? 2 : 4) : 0 });
     },
     ok() {
       const newName = name.value.trim();
@@ -329,6 +333,8 @@ export function symbolProperties(se: SymbolEditor): void {
         s.splice(at, 0, ...fresh, ...keepMeta);
         M.setMetaField(s, "ki_keywords", keywords.value.trim());
         M.setMetaField(s, "ki_fp_filters", filters.value.split(/\s+/).filter(Boolean).join(" "));
+        // PANEL_SYMBOL_PIN_MAP::ApplyToSymbol (only when the page was edited, so an untouched symbol keeps its text)
+        if (pinMaps.dirty) M.setPinMapData(s, harvestPinMaps(pinMaps), pinMaps.assocs);
         if (!derived) {
           const pw = cb(power) ? (cb(local) ? "local" : "global") : "";
           M.setSymHeader(s, { power: pw as M.SymHeader["power"], showPinNumbers: cb(showNum), showPinNames: cb(showName), pinNameOffset: cb(inside) ? lenOf(offset, M.DEFAULT_PIN_NAME_OFFSET) || 0.0001 : 0,
