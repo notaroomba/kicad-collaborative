@@ -10,10 +10,10 @@ import type { Weights } from "./weights";
 export type Shape = any;                 // PcbTools' copper shapes: circle | seg | path | rect | poly
 export type Pt = [number, number];
 
-export interface Obstacle { net: string; layers: number[]; shape: Shape; clr: number; edge?: boolean; thru?: Pt }
+export interface Obstacle { net: string; layers: number[]; shape: Shape; clr: number; edge?: boolean; thru?: Pt; pad?: boolean }
 
 export interface RuleClass {
-  key: string; width: number; clr: number; viaD: number; viaDrill: number;
+  key: string; width: number; clr: number; viaD: number; viaDrill: number; kind?: string;
   full: Uint16Array[];                   // everything, including what this run has routed
   fixed: Uint16Array[];                  // only what was on the board before the run (rip-up looks through this one)
   vfull: Uint16Array[]; vfixed: Uint16Array[];   // the same two for a via centred on the cell (a wider disc)
@@ -30,6 +30,8 @@ export interface Grid {
   obstacles: Map<string, Obstacle[]>;    // board copper by net ("" = no net, holes, edges)
   classes: Map<string, RuleClass>;
   weights: Weights;
+  /** Signal domains: the extra gap a track of one kind keeps from another net's tracks and vias (not its pads). */
+  kinds?: Map<string, string>; sep?: (a: string, b: string) => number;
 }
 
 export const DX = [1, 1, 0, -1, -1, -1, 0, 1], DY = [0, 1, 1, 1, 0, -1, -1, -1];
@@ -137,8 +139,13 @@ export function pickGrid(pads: (Pt | number[])[], bounds: [number, number, numbe
   return { g: best.g, ox, oy };
 }
 
-export const growFor = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr : Math.max(c.clr, o.clr)) + c.width / 2 + G.margin;
-export const growVia = (G: Grid, c: RuleClass, o: Obstacle) => (o.edge ? G.edgeClr : Math.max(c.clr, o.clr)) + c.viaD / 2 + G.margin;
+const gapOf = (G: Grid, c: RuleClass, o: Obstacle): number => {
+  if (o.edge) return G.edgeClr; let g = Math.max(c.clr, o.clr);
+  if (c.kind && G.kinds && G.sep && !o.pad && o.net) { const k = G.kinds.get(o.net); if (k && k !== c.kind) g = Math.max(g, G.sep(c.kind, k)); }
+  return g;
+};
+export const growFor = (G: Grid, c: RuleClass, o: Obstacle) => gapOf(G, c, o) + c.width / 2 + G.margin;
+export const growVia = (G: Grid, c: RuleClass, o: Obstacle) => gapOf(G, c, o) + c.viaD / 2 + G.margin;
 /** Put an obstacle into (or take it out of) a class's maps: the run's maps, and the board's own too when `fixed`. */
 export function stampClass(G: Grid, c: RuleClass, o: Obstacle, sign: number, fixed: boolean): void {
   const gt = growFor(G, c, o), gv = growVia(G, c, o);
@@ -149,8 +156,8 @@ export function stampClass(G: Grid, c: RuleClass, o: Obstacle, sign: number, fix
 }
 
 /** Build the occupancy maps of a rule class from the board's obstacles. */
-export function buildClass(G: Grid, key: string, width: number, clr: number, viaD: number, viaDrill: number): RuleClass {
-  const n = G.W * G.H; const c: RuleClass = { key, width, clr, viaD, viaDrill, full: [], fixed: [], vfull: [], vfixed: [] };
+export function buildClass(G: Grid, key: string, width: number, clr: number, viaD: number, viaDrill: number, kind?: string): RuleClass {
+  const n = G.W * G.H; const c: RuleClass = { key, width, clr, viaD, viaDrill, kind, full: [], fixed: [], vfull: [], vfixed: [] };
   for (let l = 0; l < G.layers.length; l++) {
     const m = new Uint16Array(n);
     if (G.outside) for (let i = 0; i < n; i++) if (G.outside[i]) m[i] = 1;

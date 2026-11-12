@@ -9,7 +9,39 @@ import { stackupOf, traceOn, usualImpedance, widthFor, z0, zdiff } from "./imped
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** A supply net by its name: ground, a rail voltage, or one of the usual rail names. */
 export const isSupply = (net: string): boolean => /^\/?(.*\/)?(A|D|P)?(GND|VSS|VEE)\w*$|^\/?(.*\/)?[+-]?\d+(V\d*|\.\d+V)\w*$|^\/?(.*\/)?(VCC|VDD|VBUS|VBAT|VIN|VSYS|VPP|VAA|VREF|VOUT|V\d+V\d*|PWR|\+BATT|-BATT)\w*$/i.test(net) && !/(_|\b)(EN|SENSE|SNS|FB|PG|OK|DET|MON|ADC)\w*$/i.test(net);
+/** What a net carries, as far as its neighbours are concerned. */
+export type NetKind = "analog" | "rf" | "switching" | "fast" | "digital" | "supply";
+/** A net's kind from its name.  Analog: ADC and DAC inputs, references, audio, sense and feedback lines, crystals.
+ *  RF: antenna and RF feeds.  Switching: a converter's switch node, bootstrap and gate drives.  Fast: clocks and
+ *  differential pairs.  Supply: rails and ground.  Everything else is digital.  A net KiCad named after a pin
+ *  (Net-(U3-SW)) is judged by the pin's name. */
+export function netKind(net: string, paired = /(\+|-|_P|_N)\)?$/.test(net)): NetKind {
+  if (isSupply(net)) return "supply";
+  const m = /^Net-\((.+)-([^-]+)\)$/.exec(net); const n = m ? m[2] : net.replace(/^.*\//, ""); const auto = !!m;
+  if (auto && /^(Pad)?\d+$/i.test(n)) return "digital";
+  if (usualImpedance(net, false) || /^(ANT\d*|RF\w*|ANTENNA)$/i.test(n) || (m && /^(AE|ANT)\d+$/i.test(m[1]))) return "rf";
+  if (/(^|[_\-.])(SW|LX|PHASE|PH|BST|SWN|GATE|HG|LG|HDRV|LDRV|UGATE|LGATE)\d*([_\-.]|$)/i.test(n) && !/SW(D|O|CLK|DIO)/i.test(n) && (auto || !/^SW\d+$/i.test(n))) return "switching";
+  if (auto && /^(BOOT|CB|BS)$/i.test(n)) return "switching";
+  if (/(^|[_\-.])(AIN|ADC|DAC|VREF|AREF|REF|MIC|AUDIO|AUD|LINE_?IN|LINE_?OUT|HP_?[LR]|SENSE|SNS|ISENSE|ISNS|VSENSE|THERM|NTC|XTAL|XIN|XOUT|XI|XO|XC|XL|OSC_?IN|OSC_?OUT|OSCI|OSCO|COMP|FB|VFB|ANALOG|ANA)[A-Z]?\d*([_\-.+]|$)/i.test(n)) return "analog";
+  if ((paired && pairName(net)) || /(CLK|SCK|LRCK|CLOCK)\d*(_\w+)?$/i.test(n) || /(^|[_\-.])CK\d*$/i.test(n)) return "fast";
+  return "digital";
+}
+/** Which nets were kept apart, and where that had to give. */
+export interface DomainReport { kinds: Record<string, NetKind>; quiet: number; noisy: number; relaxed: string[] }
+/** Ground vias set beside a net's tracks (a fence) and beside its layer changes (return vias). */
+export interface FenceReport { net: string; ground: string; fence: number; returns: number; spacing: number; note?: string }
 export interface RouteOptions {
+  /** Ground vias for high-frequency nets.  A fence: vias down both sides of every track of an RF net (and of the
+   *  nets named in `nets`), `spacing` mm apart (default 2 mm, about a twentieth of a wavelength at 2.4 GHz on FR4),
+   *  wherever the ground pour lies on two layers and the rules leave room.  Return vias: one ground via beside each
+   *  layer change of an RF, clock or pair net, so the return current changes layer with the signal.  false turns
+   *  both off.  Reported in `result.fences`. */
+  fence?: boolean | { spacing?: number; nets?: string[]; returnVias?: boolean };
+  /** Keep sensitive nets (analog, RF) away from the rest: `quiet` mm from ordinary digital tracks and `noisy` mm
+   *  from switching nodes, clocks and pairs (defaults: twice and three times the board clearance, at least 0.3 and
+   *  0.5 mm).  Pads are exempt — parts sit where they sit.  false turns it off.  A connection that cannot be made
+   *  with the gap is made without it and named in `result.domains.relaxed`. */
+  separate?: boolean | { quiet?: number; noisy?: number };
   nets?: string[] | null;        // only these nets (names); default every net with a missing connection
   layers?: string[] | null;      // copper layers tracks may use; default the signal layers
   allowVias?: boolean;           // default true
@@ -47,6 +79,7 @@ export interface NetPlan {
   allowVias?: boolean; maxVias?: number;
   avoid?: Box[];                 // areas this net stays out of
   priority?: number;             // higher routes earlier (after `order`)
+  kind?: NetKind;                // what the net carries, when its name does not say (see netKind)
 }
 /** What became of one connection, in words a reviewer (a person or a model) can act on. */
 export interface ConnReport {
@@ -65,7 +98,7 @@ export interface RouteResult {
   items: RouteItem[]; total: number; routed: number; failed: { net: string; a: Pt; b: Pt }[];
   segments: number; vias: number; length: number; ms: number; passes: number; zoneEnds: number; zoneCovered: number; pairs?: PairReport[]; impedance?: ImpedanceReport[]; matched?: MatchReport[];
   grid: { pitch: number; w: number; h: number; layers: string[] }; nets: number;
-  connections: ConnReport[];
+  connections: ConnReport[]; domains?: DomainReport; fences?: FenceReport[];
 }
 export interface Progress { done: number; total: number; routed: number; pass: number; net: string }
 
@@ -103,7 +136,7 @@ export class Router {
     for (const c of nl.conductors) {
       if (c.kind === "zone") continue;
       const layers = Array.from(c.layers as Set<string>).map((l) => copper.indexOf(l)).filter((i) => i >= 0); if (!layers.length) continue;
-      push({ net: c.net || "", layers, shape: c.shape, clr: P.netClearance(s, c.net), thru: L > 1 && layers.length === L && (c.kind === "pad" || c.kind === "via") ? [c.anchors[0][0], c.anchors[0][1]] : undefined });
+      push({ net: c.net || "", layers, shape: c.shape, clr: P.netClearance(s, c.net), pad: c.kind === "pad", thru: L > 1 && layers.length === L && (c.kind === "pad" || c.kind === "via") ? [c.anchors[0][0], c.anchors[0][1]] : undefined });
     }
     for (const it of doc.items.values()) if (it.kind === "footprint") for (const p of P.padsOf(it)) if (p.type === "np_thru_hole") {
       const d = K.kid(p.node, "drill"); const nums: number[] = d ? d.slice(1).filter((v: any) => typeof v === "number") : [];
@@ -116,6 +149,7 @@ export class Router {
   /** The board may have changed under a long run (other people edit it too): check the routes against it as it is now. */
   revalidate(): number {
     const before = this.conns.filter((c) => c.nodes).length; this.G.obstacles = this.collectObstacles(this.P.netlist(this.doc)); this.oidx = null; this.validate();
+    if (this.fenceVias.length) { const g = this.fenceVias[0]; this.fenceVias = this.fenceVias.filter((v) => this.G.layers.every((_, l) => this.clearOf({ t: "circle", x: v.p[0], y: v.p[1], r: g.cls.viaD / 2 }, l, v.net, g.cls.clr))); }
     return before - this.conns.filter((c) => c.nodes).length;
   }
 
@@ -259,8 +293,33 @@ export class Router {
     // The smallest via Board Setup permits, for a connection the class's own via cannot serve (a ball in a grid
     // array has no room for it).  Only when the board states its minimums; the hole keeps its annular ring.
     if (smallVia && s.minViaDiameter > 0 && s.minViaDrill > 0 && s.minViaDiameter < viaD0 - 1e-6) { const d = Math.max(s.minViaDiameter, s.minViaDrill + 2 * (s.minViaAnnular || 0.05)); if (d < viaD0 - 1e-6) { viaD = d; viaDrill = Math.min(viaDrill, s.minViaDrill); } }
-    const key = `${width}/${clr}/${viaD}/${viaDrill}`; return G.classes.get(key) || buildClass(G, key, width, clr, viaD, viaDrill);
+    const kind = this.relax ? undefined : this.kindFor(netKey);
+    const key = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : ""); let c = G.classes.get(key);
+    if (!c) { c = buildClass(G, key, width, clr, viaD, viaDrill, kind); if (this.conns.length) for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, c, sh, 1, false); }
+    return c;
   }
+  relax = false; relaxed = new Set<string>(); pairNets = new Set<string>(); private kindMemo = new Map<string, NetKind>(); private domains: boolean | null = null;
+  /** The net's kind, as planned or by name. */
+  kindOf(netKey: string): NetKind { let k = this.kindMemo.get(netKey); if (!k) { const plan = (this.opts.netOpts || {})[netKey]; k = (plan && plan.kind) || netKind(netKey, this.pairNets.has(netKey) || undefined); this.kindMemo.set(netKey, k); } return k; }
+  /** The kind a net's rule class carries: none when the board has nothing sensitive on it (or separation is off),
+   *  and none for supply nets, which every domain shares. */
+  private kindFor(netKey: string): string | undefined {
+    const G = this.G;
+    if (this.domains === null) {
+      const names = new Set<string>([...G.obstacles.keys(), ...Object.keys(this.opts.netOpts || {})]); names.delete("");
+      { const by = new Map<string, string[]>(); for (const n of names) { const k = pairName(n); if (k) { const e = by.get(k.base) || []; by.set(k.base, e); e[k.pol > 0 ? 0 : 1] = n; } } for (const e of by.values()) if (e[0] && e[1]) { this.pairNets.add(e[0]); this.pairNets.add(e[1]); } this.kindMemo.clear(); }
+      this.domains = this.opts.separate !== false && Array.from(names).some((n) => { const k = this.kindOf(n); return k === "analog" || k === "rf"; });
+      if (this.domains) {
+        const o = typeof this.opts.separate === "object" ? this.opts.separate : {}; const base = Math.max(this.s.clearance || 0.2, this.s.minClearance || 0);
+        const quiet = o.quiet !== undefined ? o.quiet : Math.max(2 * base, 0.3), noisy = o.noisy !== undefined ? o.noisy : Math.max(3 * base, 0.5); this.sepGaps = { quiet, noisy };
+        const sens = (k: string) => k === "analog" || k === "rf", loud = (k: string) => k === "switching" || k === "fast";
+        G.kinds = new Proxy(new Map<string, string>(), { get: (_t, prop) => prop === "get" ? (n: string) => { const k = this.kindOf(n); return k === "supply" ? undefined : k; } : undefined }) as any;
+        G.sep = (a, b) => a === b || a === "supply" || b === "supply" ? 0 : sens(a) && sens(b) ? quiet : sens(a) ? (loud(b) ? noisy : quiet) : sens(b) ? (loud(a) ? noisy : quiet) : 0;
+      }
+    }
+    if (!this.domains) return undefined; const k = this.kindOf(netKey); return k === "supply" ? undefined : k;
+  }
+  sepGaps = { quiet: 0, noisy: 0 };
   /** Supply nets carry the board's current: where the net has no class or plan of its own, they run wider. */
   powerWidth(netKey: string): number {
     const { P, s } = this; const o = this.opts.powerWidth; if (o === 0 || !isSupply(netKey)) return 0;
@@ -467,7 +526,7 @@ export class Router {
     const layers = G.layers.map((_, l) => l).filter((l) => G.routable[l] && [Pa, Pb, Na, Nb].every((a) => a.layers.includes(l)));
     if (!layers.length) return "its pads are not all on one layer";
     const key = `pair/${w}/${gap}/${clr}`; let wide = G.classes.get(key);
-    if (!wide) { wide = buildClass(G, key, 2 * w + gap, clr, cp.cls.viaD, cp.cls.viaDrill); for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, wide, sh, 1, false); }
+    if (!wide) { wide = buildClass(G, key, 2 * w + gap, clr, cp.cls.viaD, cp.cls.viaDrill, cp.cls.kind); for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, wide, sh, 1, false); }
     const half = (a: Anchor) => { const sh = a.shape as any; return sh ? (sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0) : 0; };
     // Each end gathers the pair a little way off its pads, square to the line between them, on either side of it.
     const gather = (a: Anchor, b: Anchor, toward: Anchor): { g: Anchor; e: Pt; q: Pt; s: number }[] => {
@@ -880,6 +939,7 @@ export class Router {
     if (ripUp && this.opts.zones !== false && !this.stopped && conns.some((c) => !c.nodes && !c.moot && c.stitch)) { this.repair(timeUp); this.stitch(timeUp); }   // a cut-off pad still not joined: let it push others aside
     if (this.opts.matchLengths !== false && !this.stopped) this.tune();
     this.validate();
+    if (this.opts.fence !== false && !this.stopped) this.fence();
     if (this.opts.explain !== false) this.explain();
     this.ms = Date.now() - t0; this.passes = pass;
     return this.result();
@@ -917,10 +977,13 @@ export class Router {
     const floor = Math.max(this.s.minTrackWidth || 0, 0.1);
     for (const c of conns) {
       if (c.nodes || c.why === "budget" || timeUp() || c.pair) continue;
-      const known = new Set(this.G.classes.keys()); const wide = c.cls; const thin = this.classFor(c.net, Math.min(floor, wide.width), 0, this.opts.smallVias !== false); if (thin === wide) continue;
-      if (!known.has(thin.key)) for (const o of conns) if (o.nodes) for (const sh of o.shapes) stampClass(this.G, thin, sh, 1, false);
-      c.cls = thin; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
-      if (!(force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0)) { c.cls = wide; back(snap); }
+      const wide = c.cls;
+      for (const relax of wide.kind ? [false, true] : [false]) {   // last of all, without the gap its signal domain asks for
+        let thin: RuleClass; this.relax = relax; try { thin = this.classFor(c.net, Math.min(floor, wide.width), 0, this.opts.smallVias !== false); } finally { this.relax = false; } if (thin === wide) continue;
+        c.cls = thin; const snap = snapOf(); const n0 = snap.filter((x) => x.nodes).length;
+        if (force(c, 3, new Set()) && conns.filter((x) => x.nodes).length > n0) { if (relax) this.relaxed.add(c.net); break; }
+        c.cls = wide; back(snap);
+      }
     }
   }
   /** Once everything is laid there is often room that was not there (or not known to be free) when a route chose to
@@ -1073,6 +1136,54 @@ export class Router {
     for (const id of bad) kill(id);
   }
 
+  fenceVias: { p: Pt; net: string; cls: RuleClass; obj: any }[] = []; fenceReports: FenceReport[] = [];
+  /** Ground vias beside high-frequency tracks and their layer changes.  Each one sits in the ground pour on at least
+   *  two layers (else it would join nothing), keeps every clearance in the exact check, and stays a hole's width from
+   *  the other ground vias. */
+  fence(): void {
+    const G = this.G, W = G.W, o = this.opts.fence; const fo = typeof o === "object" && o ? o : {}; const spacing = Math.max(0.6, fo.spacing || 2);
+    const named = new Set(fo.nets || []); const wantFence = (n: string) => named.has(n) || this.kindOf(n) === "rf";
+    const wantRet = (n: string) => fo.returnVias !== false && (wantFence(n) || this.kindOf(n) === "fast");
+    const nets = new Map<string, Conn[]>(); for (const c of this.conns) if (c.nodes && (wantFence(c.net) || (wantRet(c.net) && c.viaCells.length))) { const l = nets.get(c.net) || []; nets.set(c.net, l); l.push(c); }
+    if (!nets.size) return;
+    const cover = (n: NetInfo) => n.pour!.mask.reduce((t, m) => t + (m ? 1 : 0), 0);
+    const gnd = this.nets.filter((n) => n.pour && /(^|\/)[ADP]?(GND|VSS)\w*$/i.test(n.key) && cover(n) >= 2).sort((a, b) => cover(b) - cover(a))[0];
+    if (!gnd) { for (const n of nets.keys()) this.fenceReports.push({ net: n, ground: "", fence: 0, returns: 0, spacing, note: "the board has no ground pour on two layers for the vias to join" }); return; }
+    const pour = gnd.pour!, cls = gnd.cls; const pkey = `pour/${pour.width}/${pour.clr}`; let pcls = G.classes.get(pkey);
+    if (!pcls) { pcls = buildClass(G, pkey, pour.width, pour.clr, cls.viaD, cls.viaDrill); for (const c of this.conns) if (c.nodes) for (const sh of c.shapes) stampClass(G, pcls, sh, 1, false); }
+    const holes: Pt[] = []; for (const ob of G.obstacles.get(gnd.key) || []) if (ob.thru) holes.push(ob.thru); for (const c of gnd.conns) if (c.nodes) for (const gi of c.viaCells) holes.push(this.mm({ ix: gi % W, iy: (gi / W) | 0 }));
+    const apart = cls.viaD + 0.25; const r = cls.viaD / 2; const all = G.layers.map((_, i) => i);
+    this.lift(gnd, 1, cls); this.lift(gnd, 1, pcls); this.cur = null as any; this.curSoft = false;
+    const tryAt = (x: number, y: number): boolean => {
+      const ix = Math.round((x - G.ox) / G.g), iy = Math.round((y - G.oy) / G.g); if (ix < 1 || iy < 1 || ix >= W - 1 || iy >= G.H - 1) return false; const gi = iy * W + ix;
+      if (!viaFits(G, cls.vfull, gi)) return false; let n = 0; for (let l = 0; l < pour.mask.length; l++) { const m = pour.mask[l]; if (m && m[gi] && !pcls!.full[l][gi]) n++; } if (n < 2) return false;
+      const p = this.mm({ ix, iy }); if (holes.some((h) => Math.hypot(h[0] - p[0], h[1] - p[1]) < apart)) return false;
+      const shape: Shape = { t: "circle", x: p[0], y: p[1], r }; for (const l of all) if (!this.clearOf(shape, l, gnd.key, cls.clr)) return false;
+      holes.push(p); this.fenceVias.push({ p, net: gnd.key, cls, obj: gnd.obj }); const ob: Obstacle = { net: gnd.key, layers: all, shape, clr: cls.clr }; this.fenceShapes.push(ob); return true;
+    };
+    try {
+      for (const [net, conns] of nets) {
+        const rep: FenceReport = { net, ground: gnd.key, fence: 0, returns: 0, spacing }; this.fenceReports.push(rep); let wanted = 0;
+        const clr = Math.max(conns[0].cls.clr, cls.clr, pour.clr);
+        if (wantFence(net)) for (const c of conns) {
+          let carry = spacing / 2;
+          for (const sh of c.shapes) { const g = sh.shape as any; if (g.t !== "seg") continue; const dx = g.b[0] - g.a[0], dy = g.b[1] - g.a[1], len = Math.hypot(dx, dy); if (len < 1e-6) continue;
+            const ux = dx / len, uy = dy / len; const off = g.r + clr + r + G.g;
+            for (let t = carry; t <= len; t += spacing) { for (const sgn of [1, -1]) { wanted++; const bx = g.a[0] + ux * t, by = g.a[1] + uy * t;
+              for (const [dt, extra] of [[0, 0], [0, G.g * 2], [spacing / 4, 0], [-spacing / 4, 0], [0, G.g * 4]] as Pt[]) if (tryAt(bx + ux * dt - uy * sgn * (off + extra), by + uy * dt + ux * sgn * (off + extra))) { rep.fence++; break; } } }
+            carry = (carry - len) % spacing; if (carry < 0) carry += spacing; }
+        }
+        if (wantRet(net)) for (const c of conns) for (const gi of c.viaCells) {
+          const v = this.mm({ ix: gi % W, iy: (gi / W) | 0 }); const d0 = c.cls.viaD / 2 + clr + r + G.g; let done = false;
+          for (const d of [d0, d0 + 2 * G.g, d0 + 0.4, d0 + 0.8]) { for (let k = 0; k < 8 && !done; k++) { const a = k * Math.PI / 4; if (tryAt(v[0] + Math.cos(a) * d, v[1] + Math.sin(a) * d)) done = true; } if (done) break; }
+          if (done) rep.returns++; else rep.note = "no room in the ground pour beside " + (rep.note ? "some layer changes" : "a layer change");
+        }
+        if (wantFence(net) && rep.fence < wanted) rep.note = (rep.note ? rep.note + "; " : "") + `${wanted - rep.fence} of ${wanted} fence positions had no room or no ground pour on two layers`;
+      }
+    } finally { this.lift(gnd, -1, pcls); this.lift(gnd, -1, cls); }
+    for (const c of G.classes.values()) for (const ob of this.fenceShapes) stampClass(G, c, ob, 1, false);
+  }
+  fenceShapes: Obstacle[] = [];
   ruleHit = new Map<number, string>(); reports = new Map<number, Partial<ConnReport>>();
   /** Why each connection that is still open failed: what is in its way, or that there is no way at all. */
   explain(): void {
@@ -1094,6 +1205,11 @@ export class Router {
     }
   }
   private padName(p: Pt): string { return this.padNames.get(p[0].toFixed(3) + "," + p[1].toFixed(3)) || `(${r6(p[0])}, ${r6(p[1])})`; }
+  private domainReport(): DomainReport | undefined {
+    if (!this.domains) return undefined; const kinds: Record<string, NetKind> = {};
+    for (const n of this.G.obstacles.keys()) if (n) { const k = this.kindOf(n); if (k !== "digital" && k !== "supply") kinds[n] = k; }
+    return { kinds, quiet: this.sepGaps.quiet, noisy: this.sepGaps.noisy, relaxed: Array.from(this.relaxed) };
+  }
   ms = 0; passes = 0;
   result(): RouteResult {
     const ms = this.ms, passes = this.passes;
@@ -1112,9 +1228,10 @@ export class Router {
       for (const o of c.shapes) { const sh = o.shape as any; if (sh.t === "seg") seg(sh.a, sh.b, o.layers[0], +(sh.r * 2).toFixed(4)); }   // stubs and runs, each at its own width
       for (const gi of c.viaCells) { const vk = c.net + "\n" + gi; if (viaSeen.has(vk)) continue; viaSeen.add(vk); const p = this.mm({ ix: gi % G.W, iy: (gi / G.W) | 0 }); items.push({ kind: "via", node: P.viaNode(doc, p[0], p[1], c.cls.viaD, c.cls.viaDrill, net, span), net, netName: c.net, conn: c.id }); vias++; }
     }
+    for (const v of this.fenceVias) { items.push({ kind: "via", node: P.viaNode(doc, v.p[0], v.p[1], v.cls.viaD, v.cls.viaDrill, v.obj, span), net: v.obj, netName: v.net, conn: -1 }); vias++; }
     const total = this.conns.filter((c) => c.nodes || !c.moot).length;
     return { items, total, routed: total - failed.length, failed, segments, vias, length, ms, passes, zoneEnds, zoneCovered: this.zoneCovered,
-      grid: { pitch: G.g, w: G.W, h: G.H, layers: G.layers.filter((_, i) => G.routable[i]) }, nets: this.nets.length, connections, pairs: Array.from(this.pairReports.values()), impedance: this.zReports, matched: this.matchReports };
+      grid: { pitch: G.g, w: G.W, h: G.H, layers: G.layers.filter((_, i) => G.routable[i]) }, nets: this.nets.length, connections, pairs: Array.from(this.pairReports.values()), impedance: this.zReports, matched: this.matchReports, domains: this.domainReport(), fences: this.fenceReports };
   }
 }
 

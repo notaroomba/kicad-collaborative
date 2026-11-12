@@ -35,6 +35,8 @@ const boards = {
     fp("C1", 102, 50, [{ n: 1, dx: -0.48, dy: 0, w: 0.56, h: 0.62, net: "RF_OUT" }, { n: 2, dx: 0.48, dy: 0, w: 0.56, h: 0.62, net: "ANT" }]),
     fp("L1", 104.5, 51.6, [{ n: 1, dx: 0, dy: -0.48, w: 0.62, h: 0.56, net: "ANT" }, { n: 2, dx: 0, dy: 0.48, w: 0.62, h: 0.56, net: "GND" }]),
     fp("AE1", 112, 47, [{ n: 1, dx: 0, dy: 0, w: 0.8, h: 1.0, net: "ANT" }]),
+    // ground poured on the outer layers too, as on a real radio board: the fence vias tie it to the plane
+    ...["F.Cu", "B.Cu"].map((l) => `(zone (net "GND") (layer "${l}") (uuid "pour-${l}") (connect_pads (clearance 0.2)) (min_thickness 0.2) (polygon (pts (xy 90 40) (xy 118 40) (xy 118 62) (xy 90 62))))`),
   ].join("\n") + "\n)",
   "bluetooth-2layer": () => boards.bluetooth(2),
 };
@@ -49,6 +51,9 @@ for (const [name, make] of Object.entries(boards)) {
   for (const z of res.impedance) console.log(`   impedance ${z.nets.join(" / ")}: ${z.target} Ω ${z.differential ? "differential" : "single-ended"} → ${z.applied ? `${z.width} mm${z.gap ? ` tracks, ${z.gap} mm gap` : ""} (${z.achieved} Ω by the model)` : z.note}`);
   for (const p of res.pairs) console.log(`   pair ${p.p} / ${p.n}: ${p.coupled ? `coupled on ${p.layer}, ${p.width}/${p.gap} mm, ${p.lengthP} and ${p.lengthN} mm (skew ${p.skew})` : "not coupled: " + p.reason}`);
   for (const g of res.matched) console.log(`   matched group ${g.group}: target ${g.target} mm ± ${g.tolerance}: ` + g.members.map((m) => `${m.nets[0]} ${m.before} → ${m.length}${m.matched ? "" : " (" + m.note + ")"}`).join("; "));
+  for (const f of res.fences || []) console.log(`   ground vias for ${f.net}: ${f.fence} in the fence (every ${f.spacing} mm), ${f.returns} beside layer changes${f.note ? " — " + f.note : ""}`);
+  if (res.domains) console.log(`   kept apart (${res.domains.quiet} mm from digital, ${res.domains.noisy} mm from noisy): ` + Object.entries(res.domains.kinds).map(([n, k]) => `${n} ${k}`).join(", ") + (res.domains.relaxed.length ? `; relaxed for ${res.domains.relaxed.join(", ")}` : ""));
+  s.fences = res.fences; s.domains = res.domains;
   for (const o of s.open) console.log("   open " + o);
   if (out) { const tree = K.parse(text); for (const i of res.items) tree.push(i.node); fs.mkdirSync(out, { recursive: true }); fs.writeFileSync(path.join(out, name + ".kicad_pcb"), K.serialize(tree)); }
 }

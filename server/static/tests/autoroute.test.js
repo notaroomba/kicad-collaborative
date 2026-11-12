@@ -325,3 +325,38 @@ test("tracks are sized for impedance from the board's stackup, and the router sa
   const r3 = R.route(K, P, four([smd(100, 50, "X"), smd(120, 50, "X")].join("\n")), null, { netOpts: { X: { impedance: 75 } } }); assert.equal(r3.impedance[0].target, 75); assert.ok(r3.items.every((i) => widthOf(i) < 0.2 || widthOf(i) === r3.impedance[0].width));
   const r4 = R.route(K, P, four([smd(100, 50, "ANT"), smd(120, 50, "ANT")].join("\n")), null, { impedance: false }); assert.equal(r4.impedance.length, 0); assert.ok(r4.items.every((i) => widthOf(i) === 0.2));
 });
+
+const gapBetween = (res, a, b) => { let g = Infinity; for (const x of segs(res, a)) for (const y of segs(res, b)) { if (layerOf(x) !== layerOf(y)) continue; const s = (i) => { const p = K.kid(i.node, "start"), q = K.kid(i.node, "end"); return { t: "seg", a: [p[1], p[2]], b: [q[1], q[2]], r: widthOf(i) / 2 }; }; g = Math.min(g, P.shapeGap(s(x), s(y))); } return g; };
+test("signal domains: nets are told apart by name, and a digital track keeps its distance from an analog one", () => {
+  const kinds = { "/ADC_IN": "analog", "Net-(U1-XIN)": "analog", "Net-(U2-FB)": "analog", "/ANT": "rf", "Net-(AE1-A)": "rf", "Net-(U3-SW)": "switching", "/SPI.SCK": "fast", "/USB_D+": "fast", "GND": "supply", "+3V3": "supply", "/GPIO4": "digital", "/SW1": "digital", "Net-(SW1-Pad1)": "digital", "/BOOTSEL": "digital", "/RUN": "digital" };
+  for (const [net, kind] of Object.entries(kinds)) assert.equal(R.netKind(net), kind, net);
+  // the digital net has to pass between the analog track and a pad: 0.3 mm from the track is within the rules,
+  // but not far enough from an analog signal, so it changes layer instead
+  const make = () => board(smd(100, 51, "ADC_IN"), smd(120, 51, "ADC_IN"), smd(100, 52.3, "GPIO1"), smd(120, 52.3, "GPIO1"), smd(110, 52.3, "W"),
+    `(segment (start 95 53.6) (end 125 53.6) (width 0.4) (layer "F.Cu") (net "W") (uuid "wall2"))`);
+  const off = make(); const r0 = R.route(K, P, off, null, { separate: false }); assert.equal(r0.routed, r0.total); assert.equal(r0.domains, undefined);
+  assert.ok(gapBetween(r0, "ADC_IN", "GPIO1") < 0.39, "without separation the short way is taken: " + gapBetween(r0, "ADC_IN", "GPIO1"));
+  const doc = make(); const res = R.route(K, P, doc, null, {}); assert.equal(res.routed, res.total);
+  assert.deepEqual(res.domains.kinds, { ADC_IN: "analog" }); assert.equal(res.domains.quiet, 0.4); assert.deepEqual(res.domains.relaxed, []);
+  assert.ok(gapBetween(res, "ADC_IN", "GPIO1") >= 0.4 - 1e-6, "the digital track stays 0.4 mm from the analog one, got " + gapBetween(res, "ADC_IN", "GPIO1"));
+  apply(doc, res); assert.deepEqual(errors(doc), []);
+  // a plan can say what a net is when its name does not
+  const r2 = R.route(K, P, make(), null, { netOpts: { ADC_IN: { kind: "digital" } } }); assert.equal(r2.domains, undefined);
+  // where the gap cannot be kept the connection is still made, and the report says so
+  const tight = make(); const r3 = R.route(K, P, tight, null, { separate: { quiet: 3 } }); assert.equal(r3.routed, r3.total); assert.equal(r3.domains.quiet, 3);
+  assert.ok(r3.domains.relaxed.length >= 1, "pads 1.3 mm apart cannot have tracks 3 mm apart");
+  apply(tight, r3); assert.deepEqual(errors(tight), []);
+});
+
+test("an RF track gets a fence of ground vias where the ground pour lies on both layers, within the rules", () => {
+  const pours = ["F.Cu", "B.Cu"].map((l) => `(zone (net "GND") (layer "${l}") (uuid "z-${l}") (connect_pads (clearance 0.2)) (min_thickness 0.2) (polygon (pts (xy 90 40) (xy 130 40) (xy 130 70) (xy 90 70))))`);
+  const make = (...more) => board(smd(100, 55, "ANT"), smd(120, 55, "ANT"), smd(95, 45, "GND"), ...more);
+  const doc = make(...pours); const res = R.route(K, P, doc, null, { impedance: false }); assert.equal(res.routed, res.total);
+  const f = res.fences.find((x) => x.net === "ANT"); assert.ok(f && f.fence >= 16, "about ten positions a side on a 20 mm run: " + JSON.stringify(f)); assert.equal(f.ground, "GND");
+  const vias = res.items.filter((i) => i.kind === "via"); assert.equal(vias.length, f.fence); assert.ok(vias.every((v) => v.netName === "GND"));
+  for (const v of vias) { const at = K.kid(v.node, "at"); assert.ok(Math.abs(Math.abs(at[2] - 55) - 0.7) < 0.25, "beside the track, a clearance away: " + at[2]); }
+  apply(doc, res); assert.deepEqual(errors(doc).filter((m) => m.code !== "unconnected_items"), []);
+  const none = R.route(K, P, make(...pours), null, { impedance: false, fence: false }); assert.equal(none.items.filter((i) => i.kind === "via").length, 0);
+  const bare = R.route(K, P, make(), null, { impedance: false }); assert.equal(bare.items.filter((i) => i.kind === "via").length, 0); assert.match(bare.fences[0].note, /no ground pour/);
+  const wide = R.route(K, P, make(...pours), null, { impedance: false, fence: { spacing: 5 } }); assert.ok(wide.fences[0].fence <= 8 && wide.fences[0].fence >= 6);
+});
