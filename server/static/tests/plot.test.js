@@ -133,6 +133,39 @@ test("page mapping: auto scale fits 80 % of the page centred on the board, mirro
   assert.ok(mb[0] > 297 - 141 && mb[2] < 297 - 99, mb.join(","));
 });
 
+test("DialogLayerSelection: the checked enabled layers plus every copper layer the board lacks; an untouched dialog changes nothing", () => {
+  const enabled = ["F.Cu", "B.Cu", "F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Edge.Cuts", "F.Fab", "B.Fab"];
+  const sel = P.dialogLayerSelection(["F.Cu", "F.SilkS", "In3.Cu"], enabled);
+  assert.ok(sel.includes("F.Cu") && sel.includes("F.SilkS") && !sel.includes("B.Cu") && !sel.includes("B.SilkS"));
+  for (let i = 1; i <= 30; i++) assert.ok(sel.includes(`In${i}.Cu`), `In${i}.Cu`);
+  assert.deepStrictEqual(P.dialogLayerSelection(["F.Cu", "In3.Cu"], enabled, true), ["F.Cu"]);   // a job keeps only what it shows
+  // PCB_PLOT_PARAMS' default on a two-layer board: the dialog checks (default & enabled); applying writes the same set back
+  const d = P.defaultPlotParams();
+  const t = Object.assign({}, d, { layerSelection: P.dialogLayerSelection(enabled.filter((l) => d.layerSelection.includes(l)), enabled) });
+  assert.strictEqual(P.lsetHex(t.layerSelection, 20241229), "0x00000000_00000000_55555555_5755f5ff");
+  assert.ok(P.samePlotParams(d, t));
+  // an inner layer kept for later (In17.Cu, bit 36) survives on a board that does not have it
+  const r = P.readPlotParams(K.parse("(pcbplotparams (layerselection 0x00000000_00000000_00000030_80000001))"), 20241229);
+  const back = P.dialogLayerSelection(enabled.filter((l) => r.layerSelection.includes(l)), enabled);
+  assert.ok(back.includes("In17.Cu") && back.includes("F.Cu") && !back.includes("B.Cu"));
+});
+
+test("pcbplotparams: (mode N) is HPGL's and is read and dropped, the DXF plot mode stays FILLED", () => {
+  assert.strictEqual(P.readPlotParams(K.parse("(pcbplotparams (mode 2) (outputformat 3))"), 20241229).dxfSketch, false);
+  assert.ok(/\(mode 1\)/.test(P.plotParamsText(P.readPlotParams(K.parse("(pcbplotparams (mode 2))"), 20241229), 20241229)));
+});
+
+test("File > Print without the drawing sheet centres the board on the page; Fit to page fills it (BOARD_PRINTOUT::DrawPage)", () => {
+  const req = (scale) => ({ params: Object.assign(P.defaultPlotParams(), { format: 4, scaleSelection: scale }), layer: "Edge.Cuts", common: [], layerName: "", colors: COLORS, sheetColor: "#000", pageNumber: 1, pageCount: 1, printBoard: true });
+  const one = K.plot.itemsBox(F.boardPage(F.model(ctx), req(1), { warn() {} }).items);
+  assert.ok(Math.abs((one[0] + one[2]) / 2 - 148.5) < 0.2 && Math.abs((one[1] + one[3]) / 2 - 105) < 0.2, one.join(","));
+  assert.ok(Math.abs(one[2] - one[0] - 40) < 0.5, one.join(","));
+  const fit = K.plot.itemsBox(F.boardPage(F.model(ctx), req(0), { warn() {} }).items);
+  // min(297 / 40.x, 210 / 30.x): the board's height fills the page
+  assert.ok(fit[3] - fit[1] > 205 && fit[3] - fit[1] < 211, fit.join(","));
+  assert.ok(Math.abs((fit[0] + fit[2]) / 2 - 148.5) < 0.5, fit.join(","));
+});
+
 test("PDF: vector pages, one per layer in a single document, outline of footprints, property popups, metadata", async () => {
   const r = await plot({ format: 4, pdfSingle: true, pdfMetadata: true }, ["F.Cu", "B.Cu"]);
   assert.deepStrictEqual(r.files.map((f) => f.name), ["t.pdf"]);

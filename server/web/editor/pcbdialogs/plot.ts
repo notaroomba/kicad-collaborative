@@ -21,12 +21,12 @@ import { applyChanges } from "../doc";
 import { sendOp } from "../net";
 import { E } from "../state";
 import { store } from "../appstore";
-import { commitObservers, toolCtx } from "../tools";
+import { toolCtx } from "../tools";
 import { fabContext, loadFab } from "../fab-outputs";
 import { loadBoardHeader, openBoardSetup } from "./board-setup";
 import { BS, PLOT } from "./canvas";
 import { openDrc } from "./inspect";
-import { runZoneFill } from "./zonefill";
+import { runZoneFill, zoneFillsDirty } from "./zonefill";
 import { openGendrill } from "./gendrill";
 import { deliver, docDir, loadPrefs, projectLastPlotPath, savePrefs, saveProjectLastPlotPath, whenDialogsClosed } from "./plot-out";
 import { box, checkField, ensureCss as kitCss, errorMessage, h, iconButton, numField, reportPanel, selectField, textField, type Field, type ReportLine } from "./ui";
@@ -43,10 +43,6 @@ interface UserPlot { checkZones: boolean; fineScaleX: number; fineScaleY: number
 const USER_KEY = "kicad.plot.board";
 const USER_DEFAULTS: UserPlot = { checkZones: true, fineScaleX: 1, fineScaleY: 1, widthAdjust: 0, pdfBackground: null, svgFitPage: false };
 
-/** PCB_EDIT_FRAME::m_ZoneFillsDirty: true when the frame opens and after every edit that is not a fill. */
-let zoneFillsDirty = true;
-const FILL_LABELS = new Set(["Fill Zone(s)", "Auto-fill Zone(s)", "Unfill Zone", "Unfill All Zones"]);
-commitObservers.push((phase, _changes, label) => { if (phase === "after") { if (label && FILL_LABELS.has(label)) zoneFillsDirty = false; else zoneFillsDirty = true; } });
 
 /** s_lastAllLayersOrder: the Plot on All Layers order the dialog had when it last closed (this session). */
 let lastAllLayersOrder: string[] = [];
@@ -271,7 +267,8 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     t.svgPrecision = Math.max(3, Math.min(6, Math.round(svgPrec.get()))); svgPrec.set(t.svgPrecision);
     t.pngDpi = Math.max(72, Math.min(2400, Math.round(pngDpi.get()))); pngDpi.set(t.pngDpi);
     t.pngAntialias = pngAa.get(); t.svgFitPageToBoard = svgFit.get();
-    t.layerSelection = enabled.filter((l) => layerChecks.get(l)!.checked);
+    // PCB_PLOTTER::DialogLayerSelection: the copper layers the board does not have stay selected
+    t.layerSelection = P.dialogLayerSelection(enabled.filter((l) => layerChecks.get(l)!.checked), enabled);
     t.plotOnAllLayers = allOrder.filter((l) => allChecked.has(l));
     t.negative = negative.get(); t.a4Output = a4.get();
     t.outputDirectory = outDir.get().replace(/\\/g, "/");
@@ -279,6 +276,8 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     return t;
   }
   let lastPlotPath = lastPath;
+  /** the BOARD_SETUP change applyPlotSettings sent last (KiCad's SetPlotSettings + OnModify is synchronous) */
+  let saving: Promise<boolean> = Promise.resolve(false);
   function applyPlotSettings(): PlotParams {
     const t = current();
     // the PostScript adjustments, constrained as setDouble does (PLOT_MIN_SCALE 0.01, PLOT_MAX_SCALE 100)
@@ -296,7 +295,7 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     savePrefs(USER_KEY, user);
     if (!ro && t.outputDirectory !== lastPlotPath) { lastPlotPath = t.outputDirectory; void saveProjectLastPlotPath(t.outputDirectory); }
     if (!ro && !P.samePlotParams(stored, t)) {
-      void saveToBoard(t, version).then((ok) => { if (ok) Object.assign(stored, t); });
+      saving = saveToBoard(t, version).then((ok) => { if (ok) Object.assign(stored, t); return ok; });
     }
     return t;
   }
@@ -306,20 +305,22 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
   async function plot(): Promise<void> {
     if (busy) return;
     const t = applyPlotSettings();
-    if (!t.layerSelection.length) { errorMessage("No layer selected, Nothing to plot"); return; }
+    if (!t.layerSelection.length) { errorMessage("No layer selected, Nothing to plot"); return; }   // !GetLayerSelection().any()
     busy = true;   // the messages panel keeps what earlier plots reported, as KiCad's does
     try {
-      // ZONE_FILLER_TOOL::CheckAllZones: only when the board changed since the last fill
-      if (user.checkZones && !ro && zoneFillsDirty && [...doc.items.values()].some((it) => it.kind === "zone")) {
+      await saving;   // applyPlotSettings' OnModify marks the fills dirty before CheckAllZones looks
+      // ZONE_FILLER_TOOL::CheckAllZones: only when the board changed (any edit, undo, redo or another user's change)
+      // since the last fill of every zone
+      if (user.checkZones && !ro && zoneFillsDirty() && [...doc.items.values()].some((it) => it.kind === "zone")) {
         status.textContent = "Check Zones";
-        if (await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), title: null, status, label: "Fill Zone(s)" })) zoneFillsDirty = false;
+        await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), title: null, status, label: "Fill Zone(s)", all: true });
         status.textContent = "";
       }
       const fctx = await fabContext(); if (!fctx) return;
       fctx.variant = selectedVariant();
       const colors: Record<string, string> = {}; for (const r of layerRows()) colors[r.key] = r.color;
       const vars = (E.proSettings ? ((): Record<string, string> => { try { return JSON.parse(E.proSettings).text_variables || {}; } catch (e) { return {}; } })() : {}) as Record<string, string>;
-      const res = await fab.plotBoard(fctx, { params: t, layers: t.layerSelection, common: t.plotOnAllLayers, colors, sheetColor: SHEET_COLOR, background: t.backgroundColor,
+      const res = await fab.plotBoard(fctx, { params: t, layers: [...enabled.filter((l) => t.layerSelection.includes(l)), ...t.layerSelection.filter((l) => !enabled.includes(l))], common: t.plotOnAllLayers, colors, sheetColor: SHEET_COLOR, background: t.backgroundColor,
         outputDir: t.outputDirectory, boardDir: docDir(), author: vars.AUTHOR, subject: vars.SUBJECT });
       for (const l of res.report) say(l.severity, l.text);
       await deliver(fab, res.files, `${fctx.projectName}-plot.zip`);

@@ -88,7 +88,8 @@ export async function plotBoard(ctx: FabContext, req: BoardPlotRequest): Promise
     });
     const title = (ctx.doc.titleBlock && ctx.doc.titleBlock.title) || "";
     const meta = p.pdfMetadata ? { author: req.author || "", subject: req.subject || "" } : {};
-    if (p.format === 4 && p.pdfSingle) add(`${board}.pdf`, writePdf(Object.assign({ pages: pages.map((x) => x.page), creator: "PCBNEW", title, date, fileName: `${board}.pdf` }, meta)));
+    if (!pages.length) { /* every selected layer was a copper layer the board does not have */ }
+    else if (p.format === 4 && p.pdfSingle) add(`${board}.pdf`, writePdf(Object.assign({ pages: pages.map((x) => x.page), creator: "PCBNEW", title, date, fileName: `${board}.pdf` }, meta)));
     else if (p.format === 3 && p.dxfSingle) {
       const pg = pages[0].page;
       add(`${board}.dxf`, writeDxf(pages.map((x) => ({ name: layerDisplayName(ctx.doc, x.layer), color: req.colors[x.layer] || "#000000", page: Object.assign({}, x.page, { h: pg.h }) })), { imperial: p.dxfImperial, polygonMode: p.dxfPolygonMode, nativeText: !p.dxfUsePcbnewFont }));

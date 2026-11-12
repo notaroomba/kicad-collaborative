@@ -33,6 +33,9 @@ export interface PagePlotRequest {
   interactive?: boolean;
   /** a scale of the user's own (File > Print's Custom), over the scale selection */
   customScale?: number;
+  /** File > Print without the drawing sheet: BOARD_PRINTOUT::DrawPage centres the board's bounding box on the page,
+   *  and Fit to page scales that box to the page */
+  printBoard?: boolean;
 }
 
 /** PCB_PLOT_PARAMS::GetScale for a scale selection (0 = auto). */
@@ -60,6 +63,17 @@ export function boardViewport(doc: FabDoc, o: { autoScale: boolean; scale: numbe
   if (autocenter) offset = [centre[0] - paper[0] / 2 / k, centre[1] - paper[1] / 2 / k];
   else if (o.useAuxOrigin) offset = o.auxOrigin;
   return { vp: { offset, scale: k, mirror: o.mirror, pageW: paper[0] }, page: paper };
+}
+
+/** BOARD_PRINTOUT::DrawPage with no drawing sheet: the look-at point is the board's bounding box centre and the zoom
+ *  the print scale, or min(page / box) for Fit to page (scale 0; 1 when the board is empty). */
+export function printViewport(doc: FabDoc, scale: number, mirror: boolean): { vp: Viewport; page: Pt } {
+  const page: Pt = [doc.page[0], doc.page[1]];
+  const bb = boardBox(doc);
+  let k = scale;
+  if (k <= 0) k = bb ? Math.min(page[0] / (bb[2] - bb[0]), page[1] / (bb[3] - bb[1])) : 1;
+  const centre: Pt = bb ? [(bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2] : [page[0] / 2, page[1] / 2];
+  return { vp: { offset: [centre[0] - page[0] / 2 / k, centre[1] - page[1] / 2 / k], scale: k, mirror, pageW: page[0] }, page };
 }
 
 /** Plot primitives as page items in one colour; a cleared primitive is drawn in `clearColor` (KiCad's white knockout). */
@@ -139,7 +153,8 @@ export function boardPage(m: BoardModel, r: PagePlotRequest, log: PlotLog): Plot
   const fit = p.format === 5 && !!p.svgFitPageToBoard;
   const mono = p.blackAndWhite;
   const a4 = p.format === 2 && p.a4Output;
-  let { vp, page } = boardViewport(doc, { autoScale, scale, mirror: p.mirror, useAuxOrigin: p.useAuxOrigin, a4, auxOrigin: m.settings.auxOrigin });
+  let { vp, page } = r.printBoard ? printViewport(doc, autoScale ? 0 : scale, p.mirror)
+    : boardViewport(doc, { autoScale, scale, mirror: p.mirror, useAuxOrigin: p.useAuxOrigin, a4, auxOrigin: m.settings.auxOrigin });
   let viewBox: [number, number, number, number] | null = null;
   if (fit) {
     const bb = outlineBox(m) || boardBox(doc) || [0, 0, doc.page[0], doc.page[1]];

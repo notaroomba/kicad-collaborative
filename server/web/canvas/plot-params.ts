@@ -107,6 +107,20 @@ export function lsetNames(hex: string, version: number): string[] {
   return parseHex(hex, modern ? 128 : 60).map((id) => (modern ? layerName(id) : legacyName(id))).filter((n) => !!n);
 }
 
+/** LSET::AllCuMask(): F.Cu, In1.Cu … In30.Cu, B.Cu. */
+export function allCuNames(): string[] { const cu = ["F.Cu"]; for (let i = 1; i <= 30; i++) cu.push(`In${i}.Cu`); cu.push("B.Cu"); return cu; }
+
+/** PCB_PLOTTER::DialogLayerSelection: (checked & enabled), plus every copper layer the board does not have unless
+ *  for a job, so a board that later gains inner layers still plots them (and an untouched dialog writes nothing). */
+export function dialogLayerSelection(checked: Iterable<string>, enabled: Iterable<string>, forJob = false): string[] {
+  const en = new Set(enabled);
+  const out: string[] = []; const seen = new Set<string>();
+  const add = (n: string): void => { if (!seen.has(n)) { seen.add(n); out.push(n); } };
+  for (const n of checked) if (en.has(n)) add(n);
+  if (!forJob) for (const n of allCuNames()) if (!en.has(n)) add(n);
+  return out;
+}
+
 /** LSEQ order of LSET::SeqStackupForPlotting: the board from top to bottom, then the rest in id order. */
 export function seqStackupForPlotting(names: Iterable<string>): string[] {
   const set = new Set(names);
@@ -167,7 +181,8 @@ export function readPlotParams(node: SNode | null | undefined, version: number):
       case "pngdpi": p.pngDpi = clampInt(v, 72, 4800, 300); break;
       case "pngantialias": p.pngAntialias = yes(v); break;
       case "plotframeref": p.plotFrameRef = yes(v); break;
-      case "mode": p.dxfSketch = num(v, 1) === 2; break;
+      // T_mode is an obsolete HPGL token to the parser: the integer is read and dropped, so the DXF plot mode stays FILLED
+      case "mode": break;
       case "useauxorigin": p.useAuxOrigin = yes(v); break;
       case "pdf_front_fp_property_popups": p.pdfFrontPopups = yes(v); break;
       case "pdf_back_fp_property_popups": p.pdfBackPopups = yes(v); break;
@@ -252,4 +267,4 @@ export function widthAdjustLimits(proText: string | null | undefined): [number, 
   const nm = 1e-6, r6 = (v: number): number => Math.round(v * 1e6) / 1e6;
   return [r6(-(minTrack - nm)), r6(clearance - nm)];
 }
-export const plotParams = { widthAdjustLimits, readPlotParams, plotParamsText, samePlotParams, defaultPlotParams, lsetHex, lsetNames, fmtHex, parseHex, layerId, layerName, seqStackupForPlotting, scaleOf, PLOT_FORMAT, DRILL_MARKS };
+export const plotParams = { widthAdjustLimits, readPlotParams, plotParamsText, samePlotParams, defaultPlotParams, lsetHex, lsetNames, fmtHex, parseHex, layerId, layerName, seqStackupForPlotting, allCuNames, dialogLayerSelection, scaleOf, PLOT_FORMAT, DRILL_MARKS };

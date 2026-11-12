@@ -20,6 +20,7 @@ import { loadFab } from "../fab-outputs";
 import { selectionIds } from "../gestures";
 import { prefs } from "../../dialogs/prefs";
 import { E } from "../state";
+import { store } from "../appstore";
 import { loadBoardHeader } from "./board-setup";
 import { h, openDialog, type DialogApi } from "./ui";
 import { type Damage, type ZoneInfo, itemLayers, staleZones } from "./zone-damage";
@@ -167,11 +168,26 @@ function fillChanges(doc: KDoc, results: ZoneFillResult[], F: KiCadFabApi): KCha
 let inProgress = false;
 export const fillInProgress = (): boolean => inProgress;
 
+/**
+ * PCB_EDIT_FRAME::m_ZoneFillsDirty.  OnModify sets it for every change to the board — a local commit (an unfill
+ * too), an undo or redo, a settings change, and here another user's edit — and only a fill of every zone
+ * (FillAllZones, CheckAllZones) clears it.  The document's change counter (bumped by applyChanges for all of
+ * those) is noted when such a fill ends; the fills are dirty once it moves on or the document is another one.
+ */
+let cleanAt: { doc: unknown; version: number } | null = null;
+const docVersion = (): number => store.get().document.version;
+export function zoneFillsDirty(): boolean { return !cleanAt || cleanAt.doc !== E.kdoc || cleanAt.version !== docVersion(); }
+export function markZoneFillsClean(): void { cleanAt = { doc: E.kdoc, version: docVersion() }; }
+/** the counter a fill that started at `before` leaves when nothing else changed the board meanwhile */
+export function fillOnlyVersion(before: number, committed: boolean): number { return before + (committed ? 1 : 0); }
+
 export interface FillOptions {
   ids: string[] | null;
   /** the progress reporter's title; none for a quiet refill */
   title?: string | null; phases?: number;
   label: string; amend?: boolean;
+  /** a fill of every zone (FillAllZones / CheckAllZones): the board's fills are clean afterwards */
+  all?: boolean;
   /** report into an existing status line instead of a dialog (the DRC dialog) */
   status?: HTMLElement | null;
 }
@@ -182,6 +198,7 @@ export async function runZoneFill(ctx: ToolCtx, o: FillOptions): Promise<boolean
   if (inProgress) return false;
   if (ctx.viewOnly) { ctx.toast("View only"); return false; }
   inProgress = true;
+  const v0 = docVersion();
   let rep: Reporter | null = null;
   try {
     const F = await loadFab();
@@ -191,6 +208,8 @@ export async function runZoneFill(ctx: ToolCtx, o: FillOptions): Promise<boolean
     if (!results || board() !== doc) return false;
     const changes = fillChanges(doc, results, F);
     if (changes.length) ctx.commit(changes, o.label, o.amend ? { amend: true } : undefined);
+    // an edit that landed while the filler ran (another user's) leaves the fills dirty
+    if (o.all && docVersion() === fillOnlyVersion(v0, changes.length > 0)) markZoneFillsClean();
     ctx.requestRender();
     return true;
   } catch (e) {
@@ -210,7 +229,7 @@ const allZoneIds = (doc: KDoc): string[] => [...doc.items.values()].filter((it) 
 export function zoneFillAll(ctx: ToolCtx): boolean {
   const doc = board(); if (!doc) return false;
   if (inProgress) return true;
-  void runZoneFill(ctx, { ids: allZoneIds(doc), title: "Fill All Zones", phases: 5, label: "Fill Zone(s)" });
+  void runZoneFill(ctx, { ids: allZoneIds(doc), title: "Fill All Zones", phases: 5, label: "Fill Zone(s)", all: true });
   return true;
 }
 /** ZONE_FILLER_TOOL::ZoneFill: the selected zones (wxBell when there are none or a fill is running). */

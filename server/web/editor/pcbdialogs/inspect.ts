@@ -259,7 +259,7 @@ export function openDrc(ctx: ToolCtx): void {
       // DRC_TOOL::RunTests: "Refilling all zones..." and ZONE_FILLER_TOOL::FillAllZones into the dialog's reporter
       if (prefs.refill && !ctx.viewOnly && [...doc.items.values()].some((it) => it.kind === "zone")) {
         status.textContent = "Refilling all zones...";
-        await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), status, label: "Fill Zone(s)" });
+        await runZoneFill(ctx, { ids: [...doc.items.values()].filter((it) => it.kind === "zone").map((it) => it.id), status, label: "Fill Zone(s)", all: true });
       }
       gauge.value = 40; status.textContent = "Elapsed: 0 s";
       await new Promise((r) => setTimeout(r, 0));

@@ -32,6 +32,7 @@ const PCB_KEY = "kicad.print.board", SCH_KEY = "kicad.print.schematic";
 const PCB_DEFAULTS: PcbPrint = { color: true, frame: true, background: false, drill: 1, mirror: false, perLayer: false, edges: true, scale: 0, custom: 1, layers: null };
 const SCH_DEFAULTS: SchPrint = { frame: true, color: true, background: true, otherTheme: false, theme: "default" };
 const SHEET_COLOR = "#C872AB";
+const FP_EDITOR_PAGE: [number, number] = [297, 210];   // PAGE_INFO( A4 ), landscape, mm
 
 export function printDialog(): void {
   if (!E.kdoc || !window.KDialogs) return;
@@ -43,6 +44,9 @@ async function pcbPrint(): Promise<void> {
   let fab: KiCadFabApi; try { fab = await loadFab(); } catch (e) { toast("The plot writers could not be loaded"); return; }
   const P = loadPrefs(PCB_KEY, PCB_DEFAULTS);
   const doc = E.kdoc as KDoc;
+  // PCB_CONTROL::Print in the Footprint Editor: ForcePrintBorder( false ) unchecks and hides "Print drawing sheet",
+  // and the editor's board has an A4 page (FOOTPRINT_EDIT_FRAME's SetPageSettings( PAGE_INFO( A4 ) ))
+  const fpEditor = !!(doc as unknown as { fpEditor?: boolean }).fpEditor;
   const layers = fab.plottableLayers(doc as never);
   const rows = ((store as unknown as { get(): { document: { layers?: LayerRow[] } } }).get().document.layers || []);
   const nameOf = (l: string): string => fab.layerDisplayName(doc as never, l);
@@ -79,6 +83,7 @@ async function pcbPrint(): Promise<void> {
     const sel = o.layers || [];
     if (!sel.length) { messageBox("Error", "No layer selected."); return null; }
     const fctx = await fabContext(); if (!fctx) return null;
+    if (fpEditor) { fctx.doc = footprintBoard(doc) as unknown as typeof fctx.doc; o = Object.assign({}, o, { frame: false }); }
     const header = await loadBoardHeader().catch(() => null);
     const params = Object.assign(PLOT().params.readPlotParams(header ? header.setup : null, header ? header.version : 0), {
       format: 4, blackAndWhite: !o.color, plotFrameRef: o.frame, drillMarks: o.drill, mirror: o.mirror, scaleSelection: o.scale === 1 ? 1 : o.scale === 2 ? 1 : 0, negative: false, a4Output: false, useAuxOrigin: false });
@@ -87,7 +92,7 @@ async function pcbPrint(): Promise<void> {
     const groups: [string, string[]][] = o.perLayer ? sel.map((l) => [l, o.edges && l !== "Edge.Cuts" ? ["Edge.Cuts"] : []]) : [[sel[0], sel.slice(1)]];
     const bgc = o.background && o.color ? ((KiCadCanvas as unknown as { PCB_BG?: string }).PCB_BG || "#001023") : null;
     return groups.map(([layer, common], i) => fab.boardPage(m, { params, layer, common, layerName: o.perLayer ? nameOf(layer) : "", colors, sheetColor: SHEET_COLOR, background: bgc,
-      pageNumber: i + 1, pageCount: groups.length, customScale: o.scale === 2 ? o.custom : undefined }, log as never));
+      pageNumber: i + 1, pageCount: groups.length, customScale: o.scale === 2 ? o.custom : undefined, printBoard: !o.frame }, log as never));
   };
   KDialogs!.open({ title: "Print", width: 640,
     buttons: [
@@ -103,11 +108,23 @@ async function pcbPrint(): Promise<void> {
       body.append(h("div", { class: "pr-cols" },
         h("div", { class: "pd-box" }, h("div", { class: "hd" }, "Include Layers"), list),
         h("div", null,
-          h("div", { class: "pd-box" }, h("div", { class: "hd" }, "Options"), h("div", { class: "pd-row" }, lbl("Output mode:"), mode.el), frame.el, bg.el,
+          h("div", { class: "pd-box" }, h("div", { class: "hd" }, "Options"), h("div", { class: "pd-row" }, lbl("Output mode:"), mode.el), ...(fpEditor ? [] : [frame.el]), bg.el,
             h("div", { class: "pd-row" }, lbl("Drill marks:"), drill.el), mirror.el, perLayer.el, h("div", { style: "padding-left:22px" }, edges.el)),
           h("div", { class: "pd-box" }, h("div", { class: "hd" }, "Scale"), r(r1, "1:1"), r(rFit, "Fit to page"), h("div", { class: "pd-row" }, r(rCustom, "Custom:"), custom.el)))));
       sync();
     } } as unknown as Parameters<NonNullable<typeof KDialogs>["open"]>[0]);
+}
+
+/** The Footprint Editor's board as the plotter reads a board: the footprint (the file the editor holds, at the
+ *  origin) in a board with the editor's layers, on an A4 page. */
+function footprintBoard(doc: KDoc): object {
+  const C = KiCadCanvas as unknown as { footprintDoc: { serializeFootprintDoc(d: unknown): string }; parseDoc(text: string, type: string): KDoc | null };
+  const q = (t: string): string => '"' + t.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  const rows = [...((doc as unknown as { layers: Map<string, { id: number; type: string; userName?: string }> }).layers || new Map()).entries()]
+    .map(([name, l]) => `(${l.id} ${q(name)} ${l.type}${l.userName ? " " + q(l.userName) : ""})`);
+  const text = `(kicad_pcb (version ${(doc as unknown as { version?: number }).version || 20241229}) (generator "pcbnew") (layers ${rows.join(" ")})\n${C.footprintDoc.serializeFootprintDoc(doc)})`;
+  const board = C.parseDoc(text, "kicad_pcb"); if (!board) throw new Error("the footprint does not parse as a board");
+  return Object.assign(board, { page: FP_EDITOR_PAGE });
 }
 
 // ---------------------------------------------------------------- the schematic
