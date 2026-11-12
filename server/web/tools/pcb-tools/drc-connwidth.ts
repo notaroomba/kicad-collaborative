@@ -6,11 +6,11 @@
 import type { BoardDoc, Conductor, DesignSettings, DrcMarker } from "./types";
 import type { Pt } from "../../fab/prims";
 import type { DruRule, RuleItem } from "./dru";
-import { fracture, union } from "../../fab/poly";
+import { fracture } from "../../fab/poly";
 import { shapeGap } from "./distances";
 import { resolve } from "./drc-rules";
 import { marker, mm4 } from "./drc";
-import { conductorPolys, copperCtx, layerName, type CopperCtx } from "./drc-sliver";
+import { copperCtx, layerName, netCopper, type CopperCtx } from "./drc-sliver";
 
 /** ADVANCED_CFG m_DRCEpsilon, m_ExtraClearance and the board's maximum error (mm). */
 const DRC_EPSILON = 0.0005, EXTRA_CLEARANCE = 0.0005, MAX_ERROR = 0.005;
@@ -145,12 +145,10 @@ export function connectionWidthMarkers(doc: BoardDoc, s: DesignSettings, rules: 
   const ctx = cc || copperCtx(doc);
   const ruleItem = (c: Conductor, layer: string): RuleItem => (c.kind === "pad" ? { kind: c.kind, node: c.pad.node, parent: c.item, layer, shape: c.shape } : { kind: c.kind, node: c.item.node, item: c.item, layer, shape: c.shape });
   for (const layer of doc.copper) {
-    const byNet = new Map<string, Conductor[]>();
-    for (const c of conductors) if (c.layers.has(layer)) { const k = c.net || ""; const l = byNet.get(k); if (l) l.push(c); else byNet.set(k, [c]); }
     const onLayer = conductors.filter((c) => c.layers.has(layer));
     const ordered = [...onLayer.filter((c) => c.kind !== "zone"), ...onLayer.filter((c) => c.kind === "zone")];
-    for (const items of byNet.values()) {
-      const polys = fracture(union(items.flatMap((c) => conductorPolys(c, layer, ctx)))).map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)] as Pt));
+    for (const merged of netCopper(layer, conductors, ctx).values()) {
+      const polys = fracture(merged).map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)] as Pt));
       for (const minW of widths) {
         const test = new PolygonTest(Math.round((minW - eps) * 1e6));
         for (const chain of polys) for (const [ia, ib] of test.findPairs(chain)) {

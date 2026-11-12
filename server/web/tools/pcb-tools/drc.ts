@@ -2,7 +2,7 @@
 import { copperCtx, sliverMarkers } from "./drc-sliver";
 import { connectionWidthMarkers } from "./drc-connwidth";
 import type { Box, Conductor, CopperShape, DesignSettings, DesignSource, DrcMarker, NetclassRules, BoardDoc, PolyShape, Pt } from "./types";
-import { arcPoints, boxesTouch, polysOverlap, shapeBBox, shapeGap, shareLayer } from "./distances";
+import { arcPoints, boxGrid, boxesTouch, polysOverlap, shapeBBox, shapeGap, shareLayer } from "./distances";
 import { pointInPoly } from "./hit";
 import { netlist, ratsnest } from "./netlist";
 import { K } from "./state";
@@ -190,8 +190,10 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
   if (opts.unconnected !== false) for (const l of ratsnest(doc, nl)) out.push(marker("unconnected_items", "error", l.a[0], l.a[1], `Missing connection between items (net '${l.name}')`, l.ids.slice()));
   for (const net of nl.nets.values()) for (const cl of net.shorts) { const p = cl.anchors[0] ? cl.anchors[0].p : [0, 0]; out.push(marker("shorting_items", "error", p[0], p[1], `Items shorting two nets (${Array.from(cl.nets).join(", ")})`, Array.from(new Set(cl.items.map((c) => c.id))))); }
   // tracks and vias
-  const touches = (p: Pt, layer: string, self: Conductor) => conds.some((c) => c !== self && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS)
-    || nl.conductors.some((c) => c.kind === "zone" && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && pointInPoly((c.shape as PolyShape).pts, p[0], p[1]));
+  const condGrid = boxGrid(conds, (c) => c.bbox), zoneGrid = boxGrid(nl.conductors.filter((c) => c.kind === "zone"), (c) => c.bbox);
+  const touches = (p: Pt, layer: string, self: Conductor) => { const pb = [p[0], p[1], p[0], p[1]];
+    return condGrid.query(pb, EPS).some((c) => c !== self && c.layers.has(layer) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS)
+      || zoneGrid.query(pb, EPS).some((c) => c.layers.has(layer) && pointInPoly((c.shape as PolyShape).pts, p[0], p[1])); };
   for (const c of conds) {
     if (c.kind === "segment" || c.kind === "arc") {
       const [a, b] = c.anchors; const layer = c.layers.values().next().value!;
@@ -199,7 +201,7 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
       const loose = [a, b].find((p) => !touches(p, layer, c)); if (loose) out.push(marker("track_dangling", "warning", loose[0], loose[1], "Track has unconnected end", [c.id]));   // one marker per track, like DRCE_DANGLING_TRACK
     } else if (c.kind === "via") {
       const [a] = c.anchors;
-      if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
+      if (!condGrid.query(c.bbox, EPS).some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && shapeGap(o.shape, c.shape) <= EPS) && !zoneGrid.query(c.bbox, EPS).some((o) => shareLayer(o.layers, c.layers) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
     }
   }
   // copper slivers and connection widths over the merged copper of each layer / net (drc-sliver.ts, drc-connwidth.ts)

@@ -28,11 +28,19 @@ export function shapePolys(s: CopperShape): Pt[][] {
 }
 
 /** The plotter's model of the board, its pads looked up by their node. */
-export interface CopperCtx { m: BoardModel; pads: Map<unknown, FabPad> }
+export interface CopperCtx { m: BoardModel; pads: Map<unknown, FabPad>; nets: Map<string, Map<string, Pt[][]>> }
 export function copperCtx(doc: BoardDoc): CopperCtx {
   const m = boardModel(doc as unknown as FabDoc, null); const pads = new Map<unknown, FabPad>();
   for (const fp of m.footprints) for (const p of fp.pads) pads.set(p.node, p);
-  return { m, pads };
+  return { m, pads, nets: new Map() };
+}
+/** The merged copper of each net on `layer` (outers and holes, mm), net-less copper under "": computed once a DRC run. */
+export function netCopper(layer: string, conds: Conductor[], cc: CopperCtx): Map<string, Pt[][]> {
+  let got = cc.nets.get(layer); if (got) return got;
+  const byNet = new Map<string, Pt[][]>();
+  for (const c of conds) if (c.layers.has(layer)) { const k = c.net || ""; let l = byNet.get(k); if (!l) byNet.set(k, l = []); for (const p of conductorPolys(c, layer, cc)) l.push(p); }
+  got = new Map(); for (const [k, polys] of byNet) got.set(k, union(polys));
+  cc.nets.set(layer, got); return got;
 }
 /** One conductor's copper on a layer (TransformShapeToPolygon): a pad's real outline, else its shape. */
 export function conductorPolys(c: Conductor, layer: string, cc: CopperCtx): Pt[][] {
@@ -49,11 +57,14 @@ export function clipperArea(pts: Pt[]): number {
   return a * 0.5;
 }
 
+/** Board items whose copper the conductors already give (forEachGeometryItem visits each item once). */
+const CONDUCTOR_KINDS = new Set(["segment", "arc", "via", "zone"]);
 /** Every copper item on `layer` merged (forEachGeometryItem + Simplify): the outer outlines, in nm. */
 export function layerCopperOutlines(doc: BoardDoc, layer: string, conds: Conductor[], cc: CopperCtx): Pt[][] {
+  // each net merged first (shared with the connection width check), then the nets and the graphics together
   const polys: Pt[][] = [];
-  for (const c of conds) if (c.layers.has(layer)) for (const p of conductorPolys(c, layer, cc)) polys.push(p);
-  for (const it of doc.items.values()) for (const s of geomShapes(it.geom as never, layer)) for (const p of shapePolys(s)) polys.push(p);
+  for (const merged of netCopper(layer, conds, cc).values()) for (const p of merged) polys.push(p);
+  for (const it of doc.items.values()) if (!CONDUCTOR_KINDS.has(it.kind)) for (const s of geomShapes(it.geom as never, layer)) for (const p of shapePolys(s)) polys.push(p);
   return union(polys).filter((p) => clipperArea(p) > 0).map((p) => p.map((q) => [Math.round(q[0] * 1e6), Math.round(q[1] * 1e6)] as Pt));
 }
 

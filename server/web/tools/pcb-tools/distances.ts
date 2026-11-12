@@ -97,3 +97,26 @@ export function viaLayers(node: SNode, copper: string[]) {
   const i0 = copper.indexOf(pair[0]), i1 = copper.indexOf(pair[1]); return new Set(i0 >= 0 && i1 >= 0 ? copper.slice(Math.min(i0, i1), Math.max(i0, i1) + 1) : pair);
 }
 export const shareLayer = (a: Set<string>, b: Set<string>) => { for (const l of a) if (b.has(l)) return true; return false; };
+
+/**
+ * A uniform grid over item boxes (a broad phase like KiCad's DRC_RTREE): query(box, slop) gives the items whose
+ * box may touch it, each once, in their original order.  Items spanning very many cells sit in one shared list.
+ */
+export function boxGrid<T>(items: T[], boxOf: (t: T) => Box, cell = 2): { query(b: Box, slop: number): T[] } {
+  const cells = new Map<number, number[]>(); const big: number[] = []; const boxes = items.map(boxOf);
+  const key = (cx: number, cy: number) => cx * 1048576 + cy;
+  boxes.forEach((b, i) => {
+    const x0 = Math.floor(b[0] / cell), x1 = Math.floor(b[2] / cell), y0 = Math.floor(b[1] / cell), y1 = Math.floor(b[3] / cell);
+    if (!isFinite(x0 + x1 + y0 + y1) || (x1 - x0 + 1) * (y1 - y0 + 1) > 256) { big.push(i); return; }
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) { const k = key(x, y); const l = cells.get(k); if (l) l.push(i); else cells.set(k, [i]); }
+  });
+  return {
+    query(b: Box, slop: number): T[] {
+      const hit = new Set<number>(big);
+      const x0 = Math.floor((b[0] - slop) / cell), x1 = Math.floor((b[2] + slop) / cell), y0 = Math.floor((b[1] - slop) / cell), y1 = Math.floor((b[3] + slop) / cell);
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) return items.slice();
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) { const l = cells.get(key(x, y)); if (l) for (const i of l) hit.add(i); }
+      return [...hit].sort((p, q) => p - q).filter((i) => boxesTouch(boxes[i], b, slop)).map((i) => items[i]);
+    },
+  };
+}

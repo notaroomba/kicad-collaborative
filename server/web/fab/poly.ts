@@ -50,42 +50,86 @@ function pointInPoly(pts: Pt[], x: number, y: number): boolean {
  */
 export function fracture(paths: Pt[][]): Pt[][] {
   if (paths.length < 2) return paths;
-  const sign = (p: Pt[]): number => Math.sign(area(p));
   // the outers are the contours of the larger total area's winding
-  let pos = 0, neg = 0; for (const p of paths) { const a = area(p); if (a > 0) pos += a; else neg -= a; }
+  const areas = paths.map(area);
+  let pos = 0, neg = 0; for (const a of areas) { if (a > 0) pos += a; else neg -= a; }
   const outerSign = pos >= neg ? 1 : -1;
-  const outers: { pts: Pt[]; holes: Pt[][]; a: number }[] = [];
+  const outers: { pts: Pt[]; holes: Pt[][]; a: number; box: number[] }[] = [];
   const holes: Pt[][] = [];
-  for (const p of paths) { if (sign(p) === outerSign) outers.push({ pts: p, holes: [], a: Math.abs(area(p)) }); else holes.push(p); }
+  paths.forEach((p, i) => { if (Math.sign(areas[i]) === outerSign) outers.push({ pts: p, holes: [], a: Math.abs(areas[i]), box: bbox(p) }); else holes.push(p); });
   if (!holes.length) return paths;
   outers.sort((a, b) => a.a - b.a);   // the smallest outer that contains a hole owns it
+  const inside = (c: { pts: Pt[]; box: number[] }, x: number, y: number): boolean => x >= c.box[0] && x <= c.box[2] && y >= c.box[1] && y <= c.box[3] && pointInPoly(c.pts, x, y);
   for (const h of holes) {
-    const o = outers.find((c) => pointInPoly(c.pts, h[0][0], h[0][1]) || pointInPoly(c.pts, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
+    const o = outers.find((c) => inside(c, h[0][0], h[0][1]) || inside(c, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2));
     if (o) o.holes.push(h);
   }
   const out: Pt[][] = [];
-  for (const o of outers) {
-    let poly = o.pts.slice();
-    const hs = o.holes.map((h) => { let mi = 0; for (let i = 1; i < h.length; i++) if (h[i][0] > h[mi][0]) mi = i; return { h, mi }; });
-    hs.sort((a, b) => b.h[b.mi][0] - a.h[a.mi][0]);
-    for (const { h, mi } of hs) {
-      const hx = h[mi][0], hy = h[mi][1];
-      let best = -1, bestX = Infinity;
-      for (let i = 0; i < poly.length; i++) {
-        const a = poly[i], b = poly[(i + 1) % poly.length];
-        if (a[1] === b[1]) continue;
-        if (Math.min(a[1], b[1]) > hy || Math.max(a[1], b[1]) < hy) continue;
-        const x = a[0] + (b[0] - a[0]) * (hy - a[1]) / (b[1] - a[1]);
-        if (x >= hx && x < bestX) { bestX = x; best = i; }
-      }
-      if (best < 0) continue;
-      const cut: Pt = [bestX, hy];
-      const ring: Pt[] = []; for (let k = 0; k <= h.length; k++) ring.push(h[(mi + k) % h.length]);
-      poly = poly.slice(0, best + 1).concat([cut], ring, [cut], poly.slice(best + 1));
-    }
-    out.push(poly);
-  }
+  for (const o of outers) out.push(o.holes.length ? joinHoles(o.pts, o.holes) : o.pts.slice());
   return out;
+}
+
+function bbox(p: Pt[]): number[] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const q of p) { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }
+  return [x0, y0, x1, y1];
+}
+
+/**
+ * The holes cut into one outer, taken from the right: each joins the outline edge nearest to the right of its
+ * rightmost vertex (an earlier hole's edges included), the first such edge along the outline on a tie.  The
+ * outline is a linked list and the non-horizontal edges sit in horizontal bands, so this stays near linear.
+ */
+function joinHoles(outer: Pt[], holeList: Pt[][]): Pt[] {
+  interface N { p: Pt; next: N | null; l: number }   // l: the node's place along the outline (order labels)
+  interface E { a: N; dead?: boolean }   // the edge from a to a.next (the outline's last vertex closes to the head)
+  const GAP = 1 << 20;
+  const head: N = { p: outer[0], next: null, l: 0 }; let tail = head;
+  for (let i = 1; i < outer.length; i++) { const n: N = { p: outer[i], next: null, l: i * GAP }; tail.next = n; tail = n; }
+  const nextOf = (n: N): N => n.next || head;
+  let y0 = Infinity, y1 = -Infinity;
+  for (const p of outer) { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+  let total = outer.length; for (const h of holeList) total += h.length;
+  const nb = Math.max(1, Math.min(4096, Math.ceil(Math.sqrt(total)))), bh = (y1 - y0) / nb || 1;
+  const bands: E[][] = Array.from({ length: nb }, () => []);
+  const band = (y: number): number => Math.min(nb - 1, Math.max(0, Math.floor((y - y0) / bh)));
+  const addEdge = (a: N): void => {
+    const b = nextOf(a); if (a.p[1] === b.p[1]) return;
+    const e: E = { a }; const lo = band(Math.min(a.p[1], b.p[1])), hi = band(Math.max(a.p[1], b.p[1]));
+    for (let k = lo; k <= hi; k++) bands[k].push(e);
+  };
+  for (let n: N | null = head; n; n = n.next) addEdge(n);
+  const hs = holeList.map((h) => { let mi = 0; for (let i = 1; i < h.length; i++) if (h[i][0] > h[mi][0]) mi = i; return { h, mi }; });
+  hs.sort((a, b) => b.h[b.mi][0] - a.h[a.mi][0]);
+  for (const { h, mi } of hs) {
+    const hx = h[mi][0], hy = h[mi][1];
+    if (hy < y0 || hy > y1) continue;
+    let best: E | null = null, bestX = Infinity;
+    for (const e of bands[band(hy)]) {
+      if (e.dead) continue;
+      const a = e.a.p, b = nextOf(e.a).p;
+      if (a[1] === b[1]) continue;
+      if (Math.min(a[1], b[1]) > hy || Math.max(a[1], b[1]) < hy) continue;
+      const x = a[0] + (b[0] - a[0]) * (hy - a[1]) / (b[1] - a[1]);
+      if (x >= hx && (x < bestX || (x === bestX && best && e.a.l < best.a.l))) { bestX = x; best = e; }
+    }
+    if (!best) continue;
+    // a → cut → ring … → cut → b: the edge a-b becomes a-cut and cut-b
+    const a = best.a, after = a.next; const cut: Pt = [bestX, hy];
+    best.dead = true;
+    const c1: N = { p: cut, next: null, l: 0 }; a.next = c1; let last = c1; const added: N[] = [a], fresh: N[] = [c1];
+    for (let k = 0; k <= h.length; k++) { const n: N = { p: h[(mi + k) % h.length], next: null, l: 0 }; last.next = n; added.push(last); fresh.push(n); last = n; }
+    const c2: N = { p: cut, next: after, l: 0 }; last.next = c2; added.push(last, c2); fresh.push(c2);
+    // labels between a and what followed it, all of them relabelled when the gap has run out
+    const hiL = after ? after.l : a.l + (fresh.length + 1) * GAP, step = (hiL - a.l) / (fresh.length + 1);
+    let ok = true, prev = a.l;
+    for (let k = 0; k < fresh.length; k++) { const l = a.l + (k + 1) * step; if (!(l > prev)) ok = false; fresh[k].l = prev = l; }
+    if (after && !(after.l > prev)) ok = false;
+    if (!ok) { let i = 0; for (let n: N | null = head; n; n = n.next) n.l = i++ * GAP; }
+    for (const n of added) addEdge(n);
+  }
+  const res: Pt[] = []; for (let n: N | null = head; n; n = n.next) res.push(n.p);
+  return res;
 }
 
 /**

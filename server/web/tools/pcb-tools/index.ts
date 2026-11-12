@@ -41,7 +41,7 @@ import { boardStatistics, convertChanges, footprintAttrChanges, justifyChanges, 
 import { formImpl, padProperties, setFormImpl } from "./dialogs";
 import { DP_MSG_GAP, DP_MSG_NETS, DP_MSG_NOWHERE, DP_MSG_START, dpGateway, dpNetPair, dpPrimitives, dpSizes, findDpPrimitivePair, matchDpSuffix, offsetPts } from "./diffpair";
 import { ARROW_LEN, DIM_CLASS, DIM_TYPE, EXT_HEIGHT, EXT_OFFSET, dimBaseText, dimEditNode, dimEditPoints, dimGeometry, dimRead, dimUpdate, dimValueText, dimWrite, dimensionNode, readableAngle, snap45, snap90, snapVec45 } from "./dimensions";
-import { arcLength, arcPoints, coreDist, padCopperLayers, padShape, polyPolyDist, segSegDist, segsIntersect, shapeGap, viaLayers } from "./distances";
+import { arcLength, arcPoints, boxGrid, boxesTouch, coreDist, padCopperLayers, padShape, polyPolyDist, segSegDist, segsIntersect, shapeGap, viaLayers } from "./distances";
 import { applySelMode, closeTextPrompt, pickClick, pickInteractively, refreshChip, setPickerImpl, setPromptImpl, routerKeyAction, selMode, undoRedoInFlight } from "./dom";
 import { changedArea, dragChanges, dragTo, optimizeDragged } from "./drag-optimize";
 import { assembleLine, dragCorner45, dragCornerFree, dragSegment45, dragSolution, dragStart, initialTrace } from "./dragger";
@@ -428,7 +428,7 @@ root.PcbTools = { useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad:
   selectionIds, applySelection, requestSelection, bestDragOrigin, snapCursor, itemAnchors, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,
   // netTable, editPoints and editPointNode are listed above (the script named them twice, to the same values)
   shapeGap, coreDist, segsIntersect, polyPolyDist, padShape, padCopperLayers, viaLayers, arcPoints, arcLength, conductors, clusterRoots, netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, itemDescription, dynamicRatsnest, selMode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner, connectedCopperIds,
-  sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers,
+  sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

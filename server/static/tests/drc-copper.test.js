@@ -68,5 +68,57 @@ test("annular width slow path: trapezoid, custom and offset pads measured to the
   assert.deepEqual(m.map((x) => x.text), ["Annular width (board setup constraints min annular width 0.1500 mm; actual 0.0953 mm)", "Annular width (board setup constraints min annular width 0.1500 mm; actual 0.0000 mm)"],
     "the custom pad's disc anchor (1.2 mm, 1 mm hole) is the narrowest part of its merged outline");
 });
+
+// fracture (web/fab/poly.ts) against the straightforward version it replaced: the same outlines, vertex for vertex
+const esbuild = require("esbuild");
+function loadTs(file) {
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", file)], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require); return mod.exports;
+}
+function fractureRef(paths) {
+  const area = (p) => { let a = 0; for (let i = 0, j = p.length - 1; i < p.length; j = i++) a += (p[j][0] + p[i][0]) * (p[j][1] - p[i][1]); return a / 2; };
+  const pip = (pts, x, y) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const [xi, yi] = pts[i], [xj, yj] = pts[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; };
+  if (paths.length < 2) return paths;
+  let pos = 0, neg = 0; for (const p of paths) { const a = area(p); if (a > 0) pos += a; else neg -= a; }
+  const outerSign = pos >= neg ? 1 : -1; const outers = [], holes = [];
+  for (const p of paths) { if (Math.sign(area(p)) === outerSign) outers.push({ pts: p, holes: [], a: Math.abs(area(p)) }); else holes.push(p); }
+  if (!holes.length) return paths;
+  outers.sort((a, b) => a.a - b.a);
+  for (const h of holes) { const o = outers.find((c) => pip(c.pts, h[0][0], h[0][1]) || pip(c.pts, (h[0][0] + h[1][0]) / 2, (h[0][1] + h[1][1]) / 2)); if (o) o.holes.push(h); }
+  return outers.map((o) => {
+    let poly = o.pts.slice();
+    const hs = o.holes.map((h) => { let mi = 0; for (let i = 1; i < h.length; i++) if (h[i][0] > h[mi][0]) mi = i; return { h, mi }; });
+    hs.sort((a, b) => b.h[b.mi][0] - a.h[a.mi][0]);
+    for (const { h, mi } of hs) {
+      const hx = h[mi][0], hy = h[mi][1]; let best = -1, bestX = Infinity;
+      for (let i = 0; i < poly.length; i++) { const a = poly[i], b = poly[(i + 1) % poly.length]; if (a[1] === b[1]) continue; if (Math.min(a[1], b[1]) > hy || Math.max(a[1], b[1]) < hy) continue; const x = a[0] + (b[0] - a[0]) * (hy - a[1]) / (b[1] - a[1]); if (x >= hx && x < bestX) { bestX = x; best = i; } }
+      if (best < 0) continue;
+      const cut = [bestX, hy]; const ring = []; for (let k = 0; k <= h.length; k++) ring.push(h[(mi + k) % h.length]);
+      poly = poly.slice(0, best + 1).concat([cut], ring, [cut], poly.slice(best + 1));
+    }
+    return poly;
+  });
+}
+test("fracture: the banded hole join gives the reference outlines exactly, ties on a shared cut line included", () => {
+  const PL = loadTs("fab/poly.ts");
+  let seed = 3; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const sq = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+  let holes = 0;
+  for (let t = 0; t < 200; t++) {
+    const polys = []; for (let i = 0, m = 1 + Math.floor(rnd() * 6); i < m; i++) polys.push(sq(rnd() * 50, rnd() * 50, 5 + rnd() * 40, 5 + rnd() * 40));
+    const cut = [];
+    for (let i = 0; i < 60; i++) { const x = Math.round(rnd() * 90), y = Math.round(rnd() * 90), r = 0.3 + rnd(), k = 3 + Math.floor(rnd() * 8); const c = []; for (let j = 0; j < k; j++) c.push([x + r * Math.cos(-j * 2 * Math.PI / k), y + r * Math.sin(-j * 2 * Math.PI / k)]); cut.push(c); }
+    const U = PL.subtract(PL.union(polys), cut); holes += U.length;
+    assert.deepEqual(PL.fracture(U), fractureRef(U), "case " + t);
+  }
+  assert.ok(holes > 1000, "the cases have holes to join");
+});
+test("boxGrid: the same candidates as a scan over every box, in their order", () => {
+  let seed = 11; const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const items = []; for (let i = 0; i < 400; i++) { const x = rnd() * 100, y = rnd() * 100, w = rnd() < 0.05 ? 80 : rnd() * 3; items.push({ i, b: [x, y, x + w, y + rnd() * 3] }); }
+  const g = P.boxGrid(items, (t) => t.b, 2);
+  for (let q = 0; q < 300; q++) { const x = rnd() * 100, y = rnd() * 100, b = [x, y, x + rnd() * 2, y + rnd() * 2];
+    assert.deepEqual(g.query(b, 0.01).map((t) => t.i), items.filter((t) => P.boxesTouch(t.b, b, 0.01)).map((t) => t.i)); }
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
