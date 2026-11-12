@@ -209,7 +209,8 @@ export function rotateNode(n: Node, cx: number, cy: number, ccw: boolean): void 
   if (k === "rectangle") { const s = kid(n, "start"), e = kid(n, "end"); if (s && e) { const x0 = Math.min(num(s[1]), num(e[1])), x1 = Math.max(num(s[1]), num(e[1])), y0 = Math.min(num(s[2]), num(e[2])), y1 = Math.max(num(s[2]), num(e[2])); s[1] = +fmt(x0); s[2] = +fmt(y1); e[1] = +fmt(x1); e[2] = +fmt(y0); } }
   const at = kid(n, "at");
   if (k === "pin" && at) at[3] = (((num(at[3]) + (ccw ? 90 : 270)) % 360) + 360) % 360;
-  else if ((k === "text" || k === "property" || k === "text_box") && at) at[3] = num(at[3]) === 0 ? 90 : 0;
+  else if (k === "text" && at) at[3] = num(at[3]) === 0 ? 900 : 0;   // tenths of a degree (saveText)
+  else if ((k === "property" || k === "text_box") && at) at[3] = num(at[3]) === 0 ? 90 : 0;
 }
 const rot = (x: number, y: number, cx: number, cy: number, ccw: boolean): [number, number] => { const dx = x - cx, dy = y - cy; return ccw ? [cx - dy, cy + dx] : [cx + dy, cy - dx]; };
 /** Mirror horizontally (left / right, mirrorH 'X') or vertically (mirrorV 'Y') about (cx, cy). */
@@ -715,5 +716,53 @@ export function shapeNode(kind: "rectangle" | "circle" | "arc" | "polyline" | "b
   return node(`(${kind} (pts ${pts.map((p) => `(xy ${fmt(p[0])} ${fmt(p[1])})`).join(" ")})${st})`);
 }
 export function textNode(s: string, x: number, y: number, size = 1.27, angle = 0): Node {
-  return node(`(text ${q(s)} (at ${fmt(x)} ${fmt(y)} ${angle * 10 === Math.round(angle * 10) ? angle : 0}) (effects (font (size ${fmt(size)} ${fmt(size)}))))`);
+  return node(`(text ${q(s)} (at ${fmt(x)} ${fmt(y)} ${Math.round(angle * 10)}) (effects (font (size ${fmt(size)} ${fmt(size)}))))`);   // angle in tenths (saveText)
+}
+/** saveTextBox: (at) is the top-left corner (library Y up), (size) its width and height. */
+export function textBoxNode(s: string, x: number, y: number, w: number, hgt: number, size = 1.27): Node {
+  return node(`(text_box ${q(s)} (at ${fmt(x)} ${fmt(y)} 0) (size ${fmt(w)} ${fmt(-hgt)}) (margins 0.9525 0.9525 0.9525 0.9525) (stroke (width 0) (type default)) (fill (type none)) (effects (font (size ${fmt(size)} ${fmt(size)})) (justify left top)))`);
+}
+
+// ---------------------------------------------------------------- symbol header (DIALOG_LIB_SYMBOL_PROPERTIES)
+export interface SymHeader { power: "" | "global" | "local"; showPinNumbers: boolean; showPinNames: boolean; pinNameOffset: number; excludeFromSim: boolean; inBom: boolean; onBoard: boolean; inPosFiles: boolean; jumpers: boolean }
+const yesTok = (n: Node | null, d: boolean): boolean => { if (!n) return d; const v = n[1]; return v === undefined ? true : str(v) !== "no"; };
+export function symHeader(sym: Node): SymHeader {
+  const pw = kid(sym, "power"); const pn = kid(sym, "pin_names"), pnum = kid(sym, "pin_numbers");
+  const off = pn ? kid(pn, "offset") : null;
+  const hidden = (n: Node | null) => !!n && (n.includes("hide") || yesTok(kid(n, "hide"), false));
+  return { power: pw ? (str(pw[1]) === "local" ? "local" : "global") : "", showPinNumbers: !hidden(pnum), showPinNames: !hidden(pn), pinNameOffset: off ? num(off[1]) : DEFAULT_PIN_NAME_OFFSET,
+    excludeFromSim: yesTok(kid(sym, "exclude_from_sim"), false), inBom: yesTok(kid(sym, "in_bom"), true), onBoard: yesTok(kid(sym, "on_board"), true), inPosFiles: yesTok(kid(sym, "in_pos_files"), true), jumpers: yesTok(kid(sym, "duplicate_pin_numbers_are_jumpers"), false) };
+}
+/** Write the header tokens the way SaveSymbol orders them (power, body_styles, pin_numbers, pin_names, the flags). */
+export function setSymHeader(sym: Node, hd: SymHeader): void {
+  const was = symHeader(sym);
+  if (JSON.stringify(was) === JSON.stringify(hd) || isDerived(sym)) return;   // nothing changed: the file's own tokens stay as written
+  const had = (k: string) => !!kid(sym, k);
+  const keep = { sim: had("exclude_from_sim"), bom: had("in_bom"), board: had("on_board"), pos: had("in_pos_files"), jump: had("duplicate_pin_numbers_are_jumpers") };
+  const body = kid(sym, "body_styles");
+  const drop = new Set(["power", "body_styles", "pin_numbers", "pin_names", "exclude_from_sim", "in_bom", "on_board", "in_pos_files", "duplicate_pin_numbers_are_jumpers"]);
+  for (let j = sym.length - 1; j >= 2; j--) { const c = sym[j]; if (isList(c) && drop.has(String(c[0]))) sym.splice(j, 1); }
+  const yn2 = (b: boolean) => (b ? "yes" : "no");
+  const offDefault = Math.abs(hd.pinNameOffset - DEFAULT_PIN_NAME_OFFSET) < 1e-9;
+  let s = "(x";
+  if (hd.power) s += ` (power ${hd.power})`;
+  if (body) s += " " + text(body);
+  if (!hd.showPinNumbers) s += " (pin_numbers (hide yes))";
+  if (!offDefault || !hd.showPinNames) s += " (pin_names" + (offDefault ? "" : ` (offset ${fmt(hd.pinNameOffset)})`) + (hd.showPinNames ? "" : " (hide yes)") + ")";
+  // a flag the file did not carry is written only when it differs from its default (an older file keeps its token set)
+  if (keep.sim || hd.excludeFromSim) s += ` (exclude_from_sim ${yn2(hd.excludeFromSim)})`;
+  if (keep.bom || !hd.inBom) s += ` (in_bom ${yn2(hd.inBom)})`;
+  if (keep.board || !hd.onBoard) s += ` (on_board ${yn2(hd.onBoard)})`;
+  if (keep.pos || !hd.inPosFiles) s += ` (in_pos_files ${yn2(hd.inPosFiles)})`;
+  if (keep.jump || hd.jumpers) s += ` (duplicate_pin_numbers_are_jumpers ${yn2(hd.jumpers)})`;
+  s += ")";
+  sym.splice(2, 0, ...(node(s).slice(1) as Node[]));
+}
+/** A metadata property (ki_keywords / ki_fp_filters) set, created after the last field, or removed when empty. */
+export function setMetaField(sym: Node, name: string, value: string): void {
+  const p = fieldOf(sym, name);
+  if (!value) { if (p) sym.splice(sym.indexOf(p), 1); return; }
+  if (p) { p[2] = value; return; }
+  let last = -1; for (let j = 1; j < sym.length; j++) if (isList(sym[j]) && (sym[j] as Node)[0] === "property") last = j;
+  sym.splice(last + 1, 0, node(`(property ${q(name)} ${q(value)} (at 0 0 0) (show_name no) (do_not_autoplace no) (hide yes) (effects (font (size 1.27 1.27))))`));
 }

@@ -72,7 +72,7 @@ interface KiCadCanvasApi {
   removeChange(item: KItem): KChange;
   typeNameOf(item: Pick<KItem, "kind"> & Partial<Pick<KItem, "docType">>): string;
   render(doc: KDoc, ctx: CanvasRenderingContext2D, view: KView, opts?: KRenderOpts): void;
-  setViewTransform(ctx: CanvasRenderingContext2D, view: KView): void;
+  setViewTransform(ctx: CanvasRenderingContext2D, view: KView): number;
   drawSelectionHalo(ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden?: Set<string>): void;
   movableItems(doc: KDoc): { id: string; kind: string; x: number; y: number; rot: number; ref: string; value: string; lib: string; layer: string; bbox: KItem["bbox"]; name?: string; file?: string; page?: string; w?: number; h?: number }[];
   hitTest(doc: KDoc, x: number, y: number, slopMm?: number): string | null;

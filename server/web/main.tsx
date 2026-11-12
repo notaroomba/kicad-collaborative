@@ -21,6 +21,16 @@ import { HistoryBar, VersionDialogs } from "./components/VersionHistory";
 import { CompareWindow } from "./review/Compare";
 import { installReview } from "./review/store";
 import { installToolbarTooltips } from "./tooltip";
+import { SPEC } from "./spec";
+import { loadIconPack, packIcon } from "./iconpack";
+
+// The Symbol Editor (web/symedit, in editor.js) draws its toolbars from the same spec and icons: published here so
+// the 670 KB spec is not bundled twice.
+Object.assign(window, {
+  KiCadUiToolbars: SPEC.toolbars,
+  KiCadIconFor: (name: string) => SPEC.icons[name] || packIcon(name),
+  KiCadIconsReady: loadIconPack(),
+});
 
 function mount(id: string, node: ReactNode) {
   const host = document.getElementById(id);

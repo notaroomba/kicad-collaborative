@@ -16,6 +16,7 @@ import "./history";
 import "./net";
 import "./actions";
 import "./panes";
+import { installSymbolEditor } from "../symedit";
 import "./pcbdialogs";
 import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
@@ -513,6 +514,7 @@ document.addEventListener("keydown", (ev) => {
 });
 
 installSchNets();   // the net highlight kept by name across the hierarchy (editor/schnets.ts)
+installSymbolEditor(HANDLERS as unknown as Record<string, (a?: unknown) => void>);   // the Symbol Editor (web/symedit): showSymbolEditor, editWithLibEdit, editLibSymbolWithLibEdit
 installDialogs(HANDLERS);   // Page Settings, Find and Replace, Symbol Fields Table / BOM, Assign Footprints, Schematic Setup, Preferences, groups
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();

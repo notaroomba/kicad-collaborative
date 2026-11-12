@@ -47,6 +47,7 @@ const NON_TEXT_INPUT = new Set(["checkbox", "radio", "button", "submit", "reset"
 
 /** True while keys belong to something else: a text field, a KiCad dialog, an open menu or a modal. */
 export function typingTarget(ev: KeyboardEvent): boolean {
+  if (typeof document !== "undefined" && document.documentElement.dataset.symedit === "open") return true;   // the Symbol Editor frame owns the keyboard
   const t = ev.target as HTMLElement | null;
   if (t && t.tagName) {
     // a ticked checkbox / radio / button (Selection Filter, panel toggles) keeps only Space and Enter for itself
