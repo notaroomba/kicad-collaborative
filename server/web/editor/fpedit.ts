@@ -16,10 +16,11 @@
 import { setStatusBar, state, store } from "./appstore";
 import { E } from "./state";
 import { showPane } from "./panes";
-import { commitObservers, setTool, toolCtx } from "./tools";
+import { commitObservers, setTool, toolCtx, undoStack } from "./tools";
 import { api, toast } from "./util";
 import { liveDocument, saveTextDocument, sendDocOps } from "./projectfile";
 import { confirmBox, promptText } from "../dialogs/dom";
+import { enumPadsDialog, footprintCheckerDialog, footprintPropertiesDialog, padTableDialog, pushPadDialog } from "./pcbdialogs/fp-editor";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ActionHandler } from "./types";
 
@@ -33,7 +34,7 @@ const str = (v: unknown) => (v === undefined || v === null ? "" : String(v));
 const NEW_FILE_VERSION = 20260728;
 
 interface BoardCopy { boardDocId: string; fpUuid: string; uuidMap: Record<string, string>; link: string; reference: string; boardPath: string; text: string }
-export const FP: { board: BoardCopy | null; snapSeq: number; title: string; timer: number } = { board: null, snapSeq: 0, title: "", timer: 0 };
+export const FP: { board: BoardCopy | null; snapSeq: number; title: string; timer: number; padEdit: string | null } = { board: null, snapSeq: 0, title: "", timer: 0, padEdit: null };
 
 export const isFpEdit = (): boolean => E.DOC_TYPE === "footprint";
 /** The open footprint is a private copy of a board footprint (nothing goes over the socket until Save). */
@@ -391,16 +392,19 @@ async function newLibrary(): Promise<void> {
 }
 
 /** FOOTPRINT_EDIT_FRAME::DeleteFootprintFromLibrary: the document goes (DELETE /api/docs/{id}) after a themed confirmation. */
-async function deleteFootprint(docId: string): Promise<void> {
-  const project = state.project; if (!project || E.viewOnly) return;
-  const d = project.docs.find((x) => x.docId === docId); if (!d) return;
+async function deleteFootprint(docId: string): Promise<void> { await deleteFootprintDoc(docId, false); }
+/** The document goes; `confirmed` skips the question (Footprint Properties' Overwrite already asked). */
+async function deleteFootprintDoc(docId: string, confirmed: boolean): Promise<boolean> {
+  const project = state.project; if (!project || E.viewOnly) return false;
+  const d = project.docs.find((x) => x.docId === docId); if (!d) return false;
   const { lib, name } = fpLibIdOf(d.path);
-  if (!(await confirmBox("Confirmation", `Delete footprint '${name}' from library '${lib}'?`, "Delete"))) return;
+  if (!confirmed && !(await confirmBox("Confirmation", `Delete footprint '${name}' from library '${lib}'?`, "Delete"))) return false;
   const r = await fetch(`/api/docs/${docId}`, { method: "DELETE", credentials: "same-origin" });
-  if (!r.ok) { toast(r.status === 404 || r.status === 405 ? "This server cannot delete files yet" : `Footprint '${name}' could not be deleted`, 4000); return; }
+  if (!r.ok) { toast(r.status === 404 || r.status === 405 ? "This server cannot delete files yet" : `Footprint '${name}' could not be deleted`, 4000); return false; }
   project.docs = project.docs.filter((x) => x.docId !== docId); store.set({ project: Object.assign({}, project) });
   publishLibs(); setStatusBar({ message: `Footprint '${name}' deleted from library '${lib}'` });
   if (state.docId === docId) { const next = projectFpLibs().flatMap((l) => l.footprints)[0]; if (next) openFootprintDoc(next.docId); else location.href = `/p/${project.projectId}/edit`; }
+  return true;
 }
 /** PCB_ACTIONS::renameFootprint: the file moves (PATCH /api/docs/{id} {path}) and the footprint takes the name. */
 async function renameFootprint(docId: string): Promise<void> {
@@ -435,74 +439,140 @@ window.addEventListener("kc-fpedit-lib", ((ev: CustomEvent) => {
 }) as EventListener);
 
 // ---------------------------------------------------------------- properties, pads, anchor
-/** DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR, the part of it the header carries: name, description, keywords, attributes. */
+/** DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR (pcbdialogs/fp-editor.ts): every page; a rename onto an existing footprint asks to overwrite it. */
 function footprintProperties(): void {
   const doc = E.kdoc as KDoc | null; if (!doc || !isFpEdit()) return;
-  const header = KiCadCanvas.parse(FD().footprintHeaderSexpr(doc))!;
-  const attrs = (KiCadCanvas.kid(header, "attr") || []).slice(1).map(str);
-  const type = attrs.includes("through_hole") ? "through_hole" : attrs.includes("smd") ? "smd" : "unspecified";
-  const fields = FD().footprintFields(doc);
-  PT().openForm({ title: "Footprint Properties", width: 520, readOnly: E.viewOnly, fields: [
-    { k: "name", label: "Footprint name:", type: "text", value: str(header[1]) },
-    { k: "ref", label: "Reference designator:", type: "text", value: fields.Reference || "" },
-    { k: "value", label: "Value:", type: "text", value: fields.Value || "" },
-    { k: "descr", label: "Description:", type: "text", value: str((KiCadCanvas.kid(header, "descr") || [])[1]) },
-    { k: "tags", label: "Keywords:", type: "text", value: str((KiCadCanvas.kid(header, "tags") || [])[1]) },
-    { k: "type", label: "Component type:", type: "select", value: type, options: [["through_hole", "Through hole"], ["smd", "SMD"], ["unspecified", "Unspecified"]] },
-    { k: "board_only", label: "Not in schematic", type: "check", value: attrs.includes("board_only") },
-    { k: "exclude_from_pos_files", label: "Exclude from position files", type: "check", value: attrs.includes("exclude_from_pos_files") },
-    { k: "exclude_from_bom", label: "Exclude from bill of materials", type: "check", value: attrs.includes("exclude_from_bom") },
-    { k: "dnp", label: "Do not populate", type: "check", value: attrs.includes("dnp") },
-  ], apply: (v: Any) => {
-    const name = str(v.name).trim(); if (!name) { toast("Footprint name may not be empty."); return false; }
-    const h = KiCadCanvas.cloneNode(header); h[1] = name;
-    const setKid = (key: string, val: string, after: string[]) => {
-      const c = KiCadCanvas.kid(h, key);
-      if (c) { if (val) c[1] = val; else h.splice(h.indexOf(c), 1); return; }
-      if (!val) return; let at = -1; for (const a of after) { const k = KiCadCanvas.kid(h, a); if (k) at = Math.max(at, h.indexOf(k)); }
-      h.splice(at >= 0 ? at + 1 : h.length, 0, [key, val]);
-    };
-    setKid("descr", str(v.descr), ["layer", "locked", "placed"]); setKid("tags", str(v.tags), ["descr", "layer"]);
-    const flags = [v.type !== "unspecified" ? v.type : "", ...["board_only", "exclude_from_pos_files", "exclude_from_bom", "dnp"].filter((k) => v[k])].filter(Boolean);
-    const ac = KiCadCanvas.kid(h, "attr");
-    if (ac) { if (flags.length) ac.splice(1, ac.length - 1, ...flags); else h.splice(h.indexOf(ac), 1); }
-    else if (flags.length) h.push(["attr", ...flags]);
-    const changes: KChange[] = [];
-    if (KiCadCanvas.serialize(h) !== KiCadCanvas.serialize(header)) changes.push({ id: "footprint", kind: "MODIFIED", typeName: "FOOTPRINT", sexpr: KiCadCanvas.serialize(h) });
-    for (const [fname, key] of [["Reference", "ref"], ["Value", "value"]] as const) {
-      const it = Array.from(doc.items.values()).find((x) => x.kind === "property" && FD().fieldName(x.node) === fname);
-      if (it && FD().fieldText(it.node) !== str(v[key])) { const n = KiCadCanvas.cloneNode(it.node); n[2] = str(v[key]); changes.push(PT().replacedChange(it, n)); }
-    }
-    if (changes.length) toolCtx().commit(changes, "Modify footprint properties");
-    return true;
-  } });
+  const lib = !isFpPrivate() && state.doc ? fpLibIdOf(state.doc.path).lib : "";
+  const libFps = projectFpLibs().find((l) => l.name === lib);
+  footprintPropertiesDialog(toolCtx() as unknown as ToolCtx, {
+    libHas: (name: string) => !!libFps && libFps.footprints.some((f) => f.name === name && f.docId !== state.docId),
+    overwrite: async (name: string) => { const f = libFps && libFps.footprints.find((x) => x.name === name); if (!f) return true; return deleteFootprintDoc(f.docId, true); },
+    activeLayer: E.activeLayer || "F.Fab",
+    textStyle: (layer: string) => { const st = (PT().TEXT_STYLE || {})[/^[FB]\.SilkS$/.test(layer) ? "silk" : /^[FB]\.Fab$/.test(layer) ? "fab" : "others"] || [1, 0.15]; return { w: st[0], h: st[0], thick: st[1], italic: false }; },
+    libName: lib,
+  } as unknown as Parameters<typeof footprintPropertiesDialog>[1]);
 }
 
-/** PAD_TOOL::EnumeratePads (DIALOG_ENUM_PADS): the selected pads, in the order picked, or every pad top to bottom, left to right. */
+/** PAD_TOOL::EnumeratePads: DIALOG_ENUM_PADS, then the click-each-pad tool (pcb-tools fp-enum-tool.ts). */
 function enumeratePads(): void {
-  const doc = E.kdoc as KDoc | null; if (!doc || !isFpEdit()) return;
-  const sel = (Array.from(E.selection) as string[]).filter((id) => { const it = doc.items.get(id); return it && it.kind === "pad"; });
-  const ids = sel.length ? sel : Array.from(doc.items.values()).filter((i) => i.kind === "pad").sort((a, b) => { const pa = KiCadCanvas.kid(a.node, "at")!, pb = KiCadCanvas.kid(b.node, "at")!; return (Number(pa[2]) - Number(pb[2])) || (Number(pa[1]) - Number(pb[1])); }).map((i) => i.id);
-  if (!ids.length) { toast("The footprint has no pads"); return; }
-  PT().openForm({ title: "Renumber Pads", width: 360, fields: [
-    { k: "start", label: "First pad number:", type: "number", value: 1 }, { k: "step", label: "Numbering step:", type: "number", value: 1 }, { k: "prefix", label: "Pad name prefix:", type: "text", value: "" }],
-  apply: (v: Any) => { const ch = PT().pad.enumerateChanges(doc, ids, str(v.prefix), Number(v.start) || 1, Number(v.step) || 1); if (ch.length) toolCtx().commit(ch, "Renumber pads"); } });
+  const doc = E.kdoc as KDoc | null; if (!doc || !isFpEdit() || FP.padEdit) return;
+  if (!Array.from(doc.items.values()).some((i) => i.kind === "pad")) return;
+  if (E.viewOnly) { toast("You can view this project but not change it"); return; }
+  enumPadsDialog((p) => { PT().setEnumParams(p); setTool("enumpads"); });
 }
 
-/** FOOTPRINT_EDITOR_CONTROL::CheckFootprint, the checks that need no board: pads without numbers, duplicate numbers, missing fields, courtyard. */
-function checkFootprint(): void {
-  const doc = E.kdoc as KDoc | null; if (!doc) return;
-  const rows: [string, string][] = []; const nums = new Map<string, number>();
-  for (const it of doc.items.values()) if (it.kind === "pad") {
-    const n = str(it.node[1]); const t = str(it.node[2]);
-    if (!n && t !== "np_thru_hole" && PT().pad.canHaveNumber(it.node)) rows.push(["Warning", "Pad has no number"]);
-    if (n) nums.set(n, (nums.get(n) || 0) + 1);
+/** FOOTPRINT_EDITOR_CONTROL::CheckFootprint: the modeless Footprint Checker. */
+function checkFootprint(): void { if (E.kdoc) footprintCheckerDialog(toolCtx() as unknown as ToolCtx); }
+
+/** PAD_TOOL::PadTable. */
+function padTable(): void { if (E.kdoc && !FP.padEdit) padTableDialog(toolCtx() as unknown as ToolCtx); }
+
+/** The one selected pad (a pad item of the footprint), else null. */
+function selectedPadId(): string | null {
+  const doc = E.kdoc as KDoc | null; if (!doc) return null;
+  const pcbSel = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string> }).sel;
+  const ids = new Set<string>([...(E.selection as Set<string>), ...(pcbSel ? Array.from(pcbSel) : [])]);
+  const pads = Array.from(ids).filter((id) => { const it = doc.items.get(id); return it && it.kind === "pad"; });
+  return pads.length === 1 && ids.size === 1 ? pads[0] : null;
+}
+/** PAD_TOOL::pushPadSettings. */
+function pushPadSettings(): void {
+  const id = selectedPadId(); if (!id) { toast("Select a pad first"); return; }
+  setStatusBar({ message: "" }); pushPadDialog(toolCtx() as unknown as ToolCtx, id);
+}
+
+/** PAD_TOOL::EditPad: Ctrl+E on a selected pad explodes it (pad edit mode); Ctrl+E again recombines it ("Edit Pad"). */
+function editPad(): void {
+  const doc = E.kdoc as KDoc | null; if (!doc || !isFpEdit() || E.viewOnly) return;
+  const ctx = toolCtx();
+  if (FP.padEdit) {
+    const id = FP.padEdit; FP.padEdit = null;
+    if (doc.items.has(id)) { const r = PT().fpPads.recombinePadChanges(doc, id); ctx.setSelection([]); if (r.changes.length) ctx.commit(r.changes, "Edit Pad"); }
+    toast("", 1); return;
   }
-  for (const [n, c] of nums) if (c > 1) rows.push(["Warning", `Duplicate pad number '${n}' (${c} pads)`]);
-  const layers = new Set(Array.from(doc.items.values()).map((i) => str((KiCadCanvas.kid(i.node, "layer") || [])[1])));
-  if (!layers.has("F.CrtYd") && !layers.has("B.CrtYd")) rows.push(["Warning", "Missing courtyard"]);
-  if (!Array.from(doc.items.values()).some((i) => i.kind === "pad")) rows.push(["Warning", "Footprint has no pads"]);
-  PT().openForm({ title: "Footprint Checker", width: 520, fields: [{ type: "table", columns: [{ label: "Severity", width: "90px" }, { label: "Violation" }], rows, empty: "No footprint problems found." }] });
+  const id = selectedPadId(); if (!id) return;
+  const it0 = doc.items.get(id);
+  const ch = (PT().fpPads.explodePadChanges(doc, id) as KChange[]).filter((c) => !(c.kind === "MODIFIED" && c.id === id && it0 && c.sexpr === PT().wrapBoard(it0.node)));   // an unchanged pad is no step (an empty BOARD_COMMIT)
+  if (ch.length) ctx.commit(ch, "Edit Pad");
+  ctx.setSelection([]); const pcbSel = CollabTools.pcb && (CollabTools.pcb.state as unknown as { sel?: Set<string> }).sel; if (pcbSel) pcbSel.clear();
+  FP.padEdit = id;
+  const it = doc.items.get(id); if (it) E.activeLayer = PT().fpPads.principalLayer(it.node);
+  toast("Pad Edit Mode.  Press Ctrl+E again to exit.", 24 * 3600 * 1000);
+}
+commitObservers.push((phase) => { if (phase === "after" && FP.padEdit && E.kdoc && !E.kdoc.items.has(FP.padEdit)) { FP.padEdit = null; toast("", 1); } });
+
+/** FOOTPRINT_EDIT_FRAME::ExportFootprint: the .kicad_mod as KiCad writes it (PCB_IO_KICAD_SEXPR, Prettify). */
+function exportFootprint(): void {
+  if (!E.kdoc) return;
+  const text = FD().serializeFootprintDoc(E.kdoc); const name = FD().footprintName(E.kdoc) || "footprint";
+  saveBlob(new Blob([text], { type: "text/plain" }), `${name}.kicad_mod`);
+  setStatusBar({ message: `Footprint exported to file '${name}.kicad_mod'.` });
+}
+/** FOOTPRINT_EDITOR_CONTROL::ExportFootprintAsSVG: every layer of the footprint, 1:1, in the editor's colours. */
+function exportFootprintAsSVG(): void {
+  if (!E.kdoc) return; const name = FD().footprintName(E.kdoc) || "footprint";
+  const svg = KiCadCanvas.renderSvg(E.kdoc, { hidden: new Set<string>(), background: false, margin: 1 } as unknown as Record<string, unknown>);
+  saveBlob(new Blob([svg], { type: "image/svg+xml" }), `${name}.svg`);
+}
+/** EDA_DRAW_FRAME's "View as PNG" (SaveCanvasImageToFile): the canvas as it is on screen. */
+function exportFootprintAsPNG(): void {
+  if (!E.kdoc) return; const name = FD().footprintName(E.kdoc) || "footprint";
+  const cv = document.querySelector("#stage canvas") as HTMLCanvasElement | null;
+  if (cv && cv.toBlob) { cv.toBlob((b) => { if (b) saveBlob(b, `${name}.png`); else toast("Can't save file"); }, "image/png"); return; }
+  KiCadCanvas.renderPng(E.kdoc, Object.assign({ hidden: E.hiddenLayers }, E.renderOpts) as unknown as Record<string, unknown>).then((b: Blob) => saveBlob(b, `${name}.png`)).catch(() => toast("Can't save file"));
+}
+function saveBlob(blob: Blob, filename: string): void {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+/** FOOTPRINT_EDIT_FRAME::ImportFootprint: a .kicad_mod file into a library of the project (then opened). */
+function importFootprint(): void {
+  if (E.viewOnly || !state.project) { toast("You can view this project but not change it"); return; }
+  const inp = document.createElement("input"); inp.type = "file"; inp.accept = ".kicad_mod,.mod";
+  inp.addEventListener("change", async () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    const text = await f.text(); const t = KiCadCanvas.parse(text);
+    if (!t || (t[0] !== "footprint" && t[0] !== "module")) { toast(`File '${f.name}' is not a KiCad footprint file.`, 4000); return; }
+    await libTableRows();
+    const lib = await pickLibrary("Import Footprint"); if (!lib) return;
+    const name = str(t[1]).split(":").pop() || f.name.replace(/\.kicad_mod$/i, "");
+    const d = await createFootprintDoc(lib, name, text); if (!d) return;
+    publishLibs(); openFootprintDoc(d.docId);
+  });
+  inp.click();
+}
+
+/** DIALOG_FOOTPRINT_USERS: the project's symbols whose Footprint field names this footprint, or whose filters match it. */
+async function showFootprintUsers(): Promise<void> {
+  if (!E.kdoc || !state.project) return;
+  const name = FD().footprintName(E.kdoc); const lib = !isFpPrivate() && state.doc ? fpLibIdOf(state.doc.path).lib : "";
+  const fpid = lib ? `${lib}:${name}` : name;
+  const pads = new Set<string>(); for (const it of E.kdoc.items.values()) if (it.kind === "pad" && str(it.node[1])) pads.add(str(it.node[1]));
+  const rows: { lib: string; sym: string; pins: number; filter: string; field: boolean; pinMap: string }[] = [];
+  const docs = state.project.docs.filter((d) => d.docType === "kicad_sym" || /\.kicad_sym$/.test(d.path) || d.docType === "kicad_sch");
+  for (const d of docs) {
+    let text = ""; try { const r = await fetch(`/api/docs/${d.docId}/content`, { credentials: "same-origin" }); if (r.ok) text = await r.text(); } catch { continue; }
+    const t = text ? KiCadCanvas.parse(text) : null; if (!t) continue;
+    const syms: SNode[] = t[0] === "kicad_sch" ? KiCadCanvas.kids(KiCadCanvas.kid(t, "lib_symbols") || [], "symbol") : KiCadCanvas.kids(t, "symbol");
+    const libName = t[0] === "kicad_sch" ? "" : d.path.split("/").pop()!.replace(/\.kicad_sym$/, "");
+    for (const s of syms) {
+      const props = KiCadCanvas.kids(s, "property"); const prop = (k: string) => { const p = props.find((x: SNode) => x[1] === k); return p ? str(p[2]) : ""; };
+      const fpField = prop("Footprint"); const filters = prop("ki_fp_filters").split(/\s+/).filter(Boolean);
+      const field = !!fpField && (fpField === fpid || fpField.split(":").pop() === name);
+      const glob = (g: string) => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+      const filt = filters.some((g) => glob(g).test(g.includes(":") ? fpid : name));
+      if (!field && !filt) continue;
+      const pinNums = new Set<string>(); const walk = (n: SNode) => { for (const c of n) if (Array.isArray(c)) { if (c[0] === "pin") { const nn = KiCadCanvas.kid(c, "number"); if (nn) pinNums.add(str(nn[1])); } else if (c[0] === "symbol") walk(c); } }; walk(s);
+      const sname = str(s[1]); const [l2, n2] = sname.includes(":") ? sname.split(":") : [libName, sname];
+      const missing = Array.from(pinNums).filter((n) => !pads.has(n));
+      rows.push({ lib: l2, sym: n2, pins: pinNums.size, filter: filters.join(" "), field, pinMap: missing.length ? `${missing.length} unmatched` : "OK" });
+    }
+  }
+  PT().openForm({ title: "Footprint Users", width: 780, fields: [
+    { type: "table", columns: [{ label: "Library", width: "150px" }, { label: "Symbol", width: "170px" }, { label: "Pins", width: "50px" }, { label: "Footprint filter" }, { label: "Footprint field match", width: "120px" }, { label: "Pin map match", width: "110px" }],
+      rows: rows.map((r) => [r.lib, r.sym, String(r.pins), r.filter, r.field ? "Yes" : "No", r.pinMap]), empty: "No symbols reference this footprint." },
+    { type: "note", text: `This footprint is referenced by ${rows.length} symbols` }] });
 }
 
 /** PCB_ACTIONS::loadFpFromBoard: a board footprint (by reference) into the editor. */
@@ -541,14 +611,17 @@ export async function canLeaveFootprint(): Promise<boolean> {
 const fpOnly = (fn: () => unknown): ActionHandler => () => { if (isFpEdit()) fn(); };
 let installed = false;
 /** Called once from editor/index.ts after every module has loaded (actions.ts and doc.ts import each other). */
+let handlersRef: Record<string, ActionHandler> | null = null;
 export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): void {
-  if (installed) return; installed = true;
+  if (installed) return; installed = true; handlersRef = HANDLERS;
   const prevSave = HANDLERS.save; const prevRevert = HANDLERS.revert;
   Object.assign(HANDLERS, {
   save: ((a) => { if (isFpEdit()) { saveFootprint(); return; } prevSave(a); }) as ActionHandler,
   revert: ((a) => { if (isFpEdit()) { revertFootprint(); return; } if (prevRevert) prevRevert(a); }) as ActionHandler,
   saveAs: fpOnly(saveAs), newFootprint: fpOnly(newFootprint), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
-  enumeratePads: fpOnly(enumeratePads), checkFootprint: fpOnly(checkFootprint), loadFpFromBoard: fpOnly(loadFromBoard), saveFpToBoard: fpOnly(insertIntoBoard),
+  enumeratePads: fpOnly(enumeratePads), checkFootprint: fpOnly(checkFootprint), padTable: fpOnly(padTable), pushPadSettings: fpOnly(pushPadSettings),
+  explodePad: fpOnly(editPad), recombinePad: fpOnly(editPad), exportFootprint: fpOnly(exportFootprint), exportFootprintAsSVG: fpOnly(exportFootprintAsSVG), exportFootprintAsPNG: fpOnly(exportFootprintAsPNG),
+  importFootprint: fpOnly(importFootprint), showFootprintUsers: fpOnly(() => { void showFootprintUsers(); }), loadFpFromBoard: fpOnly(loadFromBoard), saveFpToBoard: fpOnly(insertIntoBoard),
   setAnchor: fpOnly(() => setTool("anchor")),
   showLibraryTree: fpOnly(() => showPane("libtree")),
   editFpInFpEditor: () => { if (!isFpEdit()) editFpInFpEditor(); },
@@ -565,5 +638,8 @@ window.addEventListener("kc-fpedit-open", ((ev: CustomEvent) => {
   import("./doc").then((m) => m.openDoc(d)).catch((e) => console.warn(e));
 }) as EventListener);
 
-export const fpEditApi = { doc: () => E.kdoc, ctx: () => toolCtx(), commit: (changes: KChange[], label?: string) => toolCtx().commit(changes, label), isFpEdit, isFpPrivate, saveFootprint, revertFootprint, saveToBoard, newFootprintText, parseLibTable, projectFpLibs, fpLibIdOf, exchangeChange, refreshTitle, FP };
+export const fpEditApi = { doc: () => E.kdoc, ctx: () => toolCtx(), commit: (changes: KChange[], label?: string) => toolCtx().commit(changes, label), isFpEdit, isFpPrivate, saveFootprint, revertFootprint, saveToBoard, newFootprintText, parseLibTable, projectFpLibs, fpLibIdOf, exchangeChange, refreshTitle, FP,
+  /** Run an editor action by id (as a menu item does). */
+  undoLabels: () => undoStack.map((e) => e.label),
+  action: (id: string) => { const h = handlersRef && handlersRef[id]; if (h) h(null); return !!h; } };
 (window as unknown as { KiCadFpEdit?: typeof fpEditApi }).KiCadFpEdit = fpEditApi;

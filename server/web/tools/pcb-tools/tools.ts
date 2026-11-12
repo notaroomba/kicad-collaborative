@@ -39,6 +39,7 @@ export const TOOLS = [
   { id: "padsmd", label: "Add SMD Pad", key: "", cursor: "crosshair", hidden: true, icon: '<rect x="6" y="8" width="12" height="8" rx="2"/>' },
   { id: "padnpth", label: "Add NPTH", key: "", cursor: "crosshair", hidden: true, icon: '<circle cx="12" cy="12" r="5"/>' },
   { id: "padpaste", label: "Add Solder Paste Aperture", key: "", cursor: "crosshair", hidden: true, icon: '<rect x="7" y="7" width="10" height="10" rx="2" stroke-dasharray="2 2"/>' },
+  { id: "enumpads", label: "Renumber Pads", key: "", cursor: "crosshair", hidden: true, icon: '<path d="M6 18V6l6 12V6M15 9h4M15 15h4"/>' },
   { id: "anchor", label: "Place the Footprint Anchor", key: "", cursor: "crosshair", hidden: true, icon: '<path d="M12 4v16M4 12h16"/>' },
   { id: "delete", label: "Delete", key: "", cursor: DELETE_CURSOR, icon: '<path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13M10 11v6M14 11v6"/>' },
   // KiCad's one-shot pickers (ACTIONS::gridSetOrigin, PCB_ACTIONS::drillOrigin)

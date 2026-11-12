@@ -4,7 +4,7 @@
 // GetMsgPanelInfo, the board summary (BOARD::GetMsgPanelInfo) otherwise, and the router's net / width /
 // clearance while a track is being routed (ROUTER_TOOL::UpdateMessagePanel).  The columns are computed by the
 // board module (pcb-tools.js msgPanelInfo); this file only decides when to ask again and publishes the result.
-import { store } from "./appstore";
+import { state, store } from "./appstore";
 import { E } from "./state";
 import { isSch } from "./view";
 import { selectionIds } from "./gestures";
@@ -30,6 +30,24 @@ export function updateMsgPanel(): void {
   const src = E.proSettings;
   if (src !== settingsSrc) { settingsSrc = src; settings = P.designSettings ? P.designSettings(src || null) : null; }
   let items: MsgItem[] = [];
+  if (doc.fpEditor && !ids.length && !rt) { store.set({ msgPanel: { items: footprintMsgPanel(doc) } }); return; }
   try { items = P.msgPanelInfo(doc, ids, { settings, units: E.units, route: rt && rt.width ? rt : null, net: pcb && pcb.highlightNet && E.highlightIds ? pcb.highlightNet : null }); } catch (e) { console.warn(e); }
+  if (doc.fpEditor && !items.length) items = footprintMsgPanel(doc);
   store.set({ msgPanel: { items } });
+}
+
+/**
+ * FOOTPRINT::GetMsgPanelInfo in the Footprint Editor (nothing selected: the frame shows the footprint): reference /
+ * value, Library, Footprint Name, Pads (GetNumberedPadCount: distinct numbers of pads that can have one), Doc / Keywords.
+ */
+export function footprintMsgPanel(doc: KDoc): MsgItem[] {
+  const FD = KiCadCanvas.footprintDoc as unknown as { footprintFields(d: KDoc): Record<string, string>; footprintHeaderSexpr(d: KDoc): string }; const f = FD.footprintFields(doc);
+  const header = KiCadCanvas.parse(FD.footprintHeaderSexpr(doc)) || ["footprint", ""];
+  const kidText = (k: string) => { const c = KiCadCanvas.kid(header, k); return c ? String(c[1] ?? "") : ""; };
+  const path = state.doc && state.doc.docId && !state.doc.docId.startsWith("board:") ? state.doc.path : "";
+  const lib = path ? (path.split("/").slice(-2, -1)[0] || "").replace(/\.pretty$/i, "") : "";
+  const nums = new Set<string>();
+  for (const it of doc.items.values()) if (it.kind === "pad") { const t = String(it.node[2]); const n = String(it.node[1] ?? ""); const ls = (KiCadCanvas.kid(it.node, "layers") || []).slice(1).map(String); const aperture = t === "smd" && !ls.some((l) => /\.Cu$/.test(l)); if (n && t !== "np_thru_hole" && !aperture) nums.add(n); }
+  return [{ title: f.Reference || "", value: f.Value || "" }, { title: "Library", value: lib }, { title: "Footprint Name", value: String(header[1] ?? "") },
+    { title: "Pads", value: String(nums.size) }, { title: `Doc: ${kidText("descr")}`, value: `Keywords: ${kidText("tags")}` }];
 }

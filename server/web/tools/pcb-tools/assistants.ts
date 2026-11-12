@@ -55,9 +55,10 @@ export function drawStatusPopup(c: CanvasRenderingContext2D, px: number) {
   if (Date.now() > p.until) { S.popup = null; return; }
   const css = (name: string, dflt: string) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
   const fs = 12 * px, m = 5 * px; c.save(); c.globalAlpha = 1; c.font = `${fs}px sans-serif`;
-  const w = c.measureText(p.text).width + 2 * m, h = fs + 2 * m, x = p.at[0] + 20 * px, y = p.at[1] + 20 * px;
+  const lines = p.text.split("\n"), lh = fs * 1.3;   // STATUS_TEXT_POPUP takes several lines ("Click on pad 1\nPress <esc> …")
+  const w = Math.max(...lines.map((l) => c.measureText(l).width)) + 2 * m, h = fs + (lines.length - 1) * lh + 2 * m, x = p.at[0] + 20 * px, y = p.at[1] + 20 * px;
   c.fillStyle = css("--panel", "#2b2b2b"); c.strokeStyle = css("--line", "#555"); c.lineWidth = px; c.fillRect(x, y, w, h); c.strokeRect(x, y, w, h);
-  c.fillStyle = css("--ink", "#e0e0e0"); c.textBaseline = "top"; c.fillText(p.text, x + m, y + m); c.restore();
+  c.fillStyle = css("--ink", "#e0e0e0"); c.textBaseline = "top"; lines.forEach((l, i) => c.fillText(l, x + m, y + m + i * lh)); c.restore();
 }
 export function placeText(ctx: PcbCtx, mm: Pt, text: string) { ctx.commit([addedChange(ctx.doc, textNode(text, mm[0], mm[1], S.gfxLayer))], "text"); }
 // the editor's dialogs for a new item (pcbdialogs/item-props.ts): kind -> (ctx, node, done(node | null))

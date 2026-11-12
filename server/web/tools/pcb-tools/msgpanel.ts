@@ -180,10 +180,16 @@ export function msgPanelInfo(doc: BoardDoc, ids: Iterable<string>, opts?: MsgPan
   const gen = tuningPatternOfSelection(doc, list);
   if (gen) { tuningMsgPanel(doc, gen, s, units, add); return out; }
   if (list.length === 1) {
-    const id = String(list[0]), hash = id.indexOf("#");
-    const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
-    if (it && hash > 0 && it.kind === "footprint") {   // PAD::GetMsgPanelInfo
-      const p = padsOf(it)[+id.slice(hash + 1)];
+    const id = String(list[0]); let hash = id.indexOf("#");
+    let it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
+    // the Footprint Editor: a pad is an item of the document; its footprint is the one being edited, at the origin
+    if (it && it.kind === "pad" && (doc as unknown as { fpEditor?: boolean }).fpEditor) {
+      const fs = (doc as unknown as { fpState?: { fp?: SNode } }).fpState; const fp = fs && fs.fp;
+      const refProp = (Array.from(doc.items.values()) as KItem[]).find((x) => x.kind === "property" && K.str(x.node[1]) === "Reference");
+      it = { id: it.id, kind: "footprint", ref: refProp ? K.str(refProp.node[2]) : "", node: ["footprint", fp ? fp[1] : "", ["at", 0, 0], ...(fp ? fp.filter((k) => Array.isArray(k) && k[0] === "locked") : []), it.node] } as unknown as KItem; hash = 0;
+    }
+    if (it && hash >= 0 && it.kind === "footprint") {   // PAD::GetMsgPanelInfo
+      const p = padsOf(it)[hash > 0 ? +id.slice(hash + 1) : 0];
       if (p) {
         add("Footprint", it.ref || "");
         add("Pad", p.number);
@@ -293,6 +299,7 @@ export function msgPanelInfo(doc: BoardDoc, ids: Iterable<string>, opts?: MsgPan
     if (first) { const L = routedLength(doc, first.id); add("Net Length", V(L)); add("On Board", V(L)); add("In Package", V(0)); }
     return out;
   }
+  if ((doc as unknown as { fpEditor?: boolean }).fpEditor) return out;   // the Footprint Editor shows the footprint (the editor's own panel), never board statistics
   // BOARD::GetMsgPanelInfo
   let pads = 0, vias = 0, segs = 0; const nets = new Set();
   for (const it of doc.items.values()) {

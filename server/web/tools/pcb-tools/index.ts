@@ -78,6 +78,10 @@ import { BOARD_VERSION, DELETE_CURSOR, HIT_MM, K, S, WIDTHS, bind, lastCtx, satu
 import { TOOLS, ghostSegs } from "./tools";
 import { PAD_TOOLS, moveAnchorChanges, padToolApi, placePad } from "./pad-tool";
 import { exchangeApi } from "./exchange";
+import { fpPropsApi } from "./fp-props";
+import { fpPadsApi } from "./fp-pads";
+import { fpCheckApi } from "./fp-check";
+import { enumActivate, enumDown, enumLeave, enumMove, enumRunning, setEnumParams } from "./fp-enum-tool";
 import { newTracer, tracerFlip, tracerPosture, trailAdd } from "./tracer";
 import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges } from "./track-edit";
 import { DRCET, DRC_RUN_TEXT, fixDrcEntry, inspectDrcAction, violatingRuleName, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions } from "./drc-exclusions";
@@ -115,7 +119,9 @@ export const pcb = {
     if (!isTuneTool(t) || t !== S.modTool) { S.tune.pattern = null; S.tune.picker = null; }
     if (S.drag && t !== "drag") { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }
     S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
+    if (enumRunning() && t !== "enumpads") enumLeave(ctx, true);   // EnumeratePads: another tool pushes the step (Esc reverted it already)
     S.modTool = mine ? t : null;
+    if (t === "enumpads") enumActivate(ctx);
     // PAD_TOOL::PlacePad: the master pad type of the action, and the pad selected as the tool starts (Add Pad copies it)
     S.padPlace = PAD_TOOLS[t] ? { type: PAD_TOOLS[t], angle: 0 } : null;
     if (PAD_TOOLS[t]) { const selPad = [...S.sel].map((id) => ctx.doc && ctx.doc.items.get(id)).find((it) => it && it.kind === "pad"); S.padTemplate = selPad ? selPad.node : null; if (ctx.setStatus) ctx.setStatus("Place pad"); }
@@ -129,6 +135,7 @@ export const pcb = {
     bind(ctx); const t = S.modTool; if (!t || ev.button !== 0 || !ctx.doc) return false;
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY!];
     const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint" || t === "anchor" || !!PAD_TOOLS[t], ev); S.hover = hv;
+    if (t === "enumpads") { enumDown(ev, mm, ctx); return true; }
     if (t === "route" || t === "routediff") routeClick(ctx, hv, mm);
     else if (isTuneTool(t)) tuneClick(ctx, mm);
     else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
@@ -191,6 +198,7 @@ export const pcb = {
     bind(ctx); const t = S.modTool; if (!t || !ctx.doc) return;
     if (ev && typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY!];
     const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin" || t === "pickpoint" || t === "anchor" || !!PAD_TOOLS[t], ev); S.hover = hv;
+    if (t === "enumpads") enumMove(ev, mm, ctx);
     if (t === "delete") hv.del = ctx.viewOnly ? null : deleteCandidate(ctx, mm);
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
@@ -376,7 +384,7 @@ export const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, pad: padToolApi, exchange: exchangeApi, openForm: (spec: FormSpec) => formImpl(spec), arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, pad: padToolApi, exchange: exchangeApi, fpProps: fpPropsApi, fpPads: fpPadsApi, fpCheck: fpCheckApi, setEnumParams, openForm: (spec: FormSpec) => formImpl(spec), arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)
