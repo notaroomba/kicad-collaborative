@@ -1897,6 +1897,10 @@ async fn github_user_search(
 #[derive(Deserialize)]
 pub struct SnapshotQuery {
     pub seq: i64,
+    /// An explicit save (the Footprint Editor's Save): everyone with the project open is told,
+    /// so their "modified" marks and library caches follow.  Freshness snapshots leave it out.
+    #[serde(default)]
+    pub saved: Option<bool>,
 }
 
 /// Latest snapshot bytes for one document (members only) — the receiver-side
@@ -2119,6 +2123,17 @@ pub async fn upload_snapshot(
     // which an update would silently clobber — that corrupted a restore once).
     let written =
         persist::insert_snapshot_new(&state.pool, doc_id, q.seq, &body, Some(user.id)).await?;
+    if q.saved == Some(true) {
+        // Tell every open document of the project (each socket joins one document): the saved
+        // document's own editors clear their '*', the others drop what they cached of it.
+        if let Ok(docs) = persist::project_documents(&state.pool, doc.project_id).await {
+            for d in docs {
+                let payload = json!({ "type": "saved", "docId": d.id, "savedDocId": doc_id, "projectId": doc.project_id,
+                                      "seq": q.seq, "by": user.login });
+                state.doc_event(d.id, crate::doc_actor::DocMsg::Notice { payload }).await;
+            }
+        }
+    }
     Ok(Json(json!({ "ok": true, "docId": doc_id, "seq": q.seq, "written": written }))
         .into_response())
 }

@@ -173,7 +173,7 @@ export async function saveFootprint(): Promise<boolean> {
   await waitPending(4000);
   if (E.pendingOps.size) { toast("Not connected — the footprint is saved once the connection is back", 4000); return false; }
   const docId = state.docId!; const seq = Math.max(E.lastSeq, FP.snapSeq);
-  const r = await fetch(`/api/docs/${docId}/snapshots?seq=${seq}`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text });
+  const r = await fetch(`/api/docs/${docId}/snapshots?seq=${seq}&saved=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text });
   const { lib, name } = fpLibIdOf(state.doc!.path);
   if (!r.ok) { toast(`Footprint '${name}' could not be saved to library '${lib}'.`, 5000); return false; }
   FD().markFootprintSaved(E.kdoc, text); FP.snapSeq = seq; refreshTitle();
@@ -499,6 +499,18 @@ function editPad(): void {
   const it = doc.items.get(id); if (it) E.activeLayer = PT().fpPads.principalLayer(it.node);
   toast("Pad Edit Mode.  Press Ctrl+E again to exit.", 24 * 3600 * 1000);
 }
+/** Somebody saved this footprint (the server's "saved" notice): the saved file is what this copy compares against,
+ *  so the '*' goes when the copy here is that file (KiCad's library cache follows the file in the same way). */
+window.addEventListener("kc-doc-saved", ((ev: CustomEvent) => {
+  const m = ev.detail as { savedDocId?: string; seq?: number } | null;
+  if (!m || !m.savedDocId || m.savedDocId !== state.docId || !isFpEdit() || isFpPrivate() || typeof m.seq !== "number") return;
+  const seq = m.seq; if (seq < FP.snapSeq) return;
+  void (async () => {
+    let text = ""; try { const r = await fetch(`/api/docs/${m.savedDocId}/snapshots/${seq}`, { credentials: "same-origin" }); if (r.ok) text = await r.text(); } catch { return; }
+    if (!text || !E.kdoc || state.docId !== m.savedDocId) return;
+    FD().markFootprintSaved(E.kdoc, text); FP.snapSeq = Math.max(FP.snapSeq, seq); refreshTitle();
+  })();
+}) as EventListener);
 commitObservers.push((phase) => { if (phase === "after" && FP.padEdit && E.kdoc && !E.kdoc.items.has(FP.padEdit)) { FP.padEdit = null; toast("", 1); } });
 
 /** FOOTPRINT_EDIT_FRAME::ExportFootprint: the .kicad_mod as KiCad writes it (PCB_IO_KICAD_SEXPR, Prettify). */

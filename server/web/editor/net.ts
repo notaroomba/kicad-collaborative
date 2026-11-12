@@ -131,6 +131,8 @@ export async function connect() {
     }
     if (msg.type === "comment") noteCommentMsg(msg);
     if (msg.type === "versions") onVersionsNotice(msg);       // somebody saved, restored, branched or merged
+    // a document of the project was saved explicitly (the Footprint Editor's Save): fpedit.ts clears its '*', library caches drop the file
+    if (msg.type === "saved") window.dispatchEvent(new CustomEvent("kc-doc-saved", { detail: msg }));
     // An earlier version is on screen (editor/versions.ts): the live stream is not laid over it.  Leaving the
     // timeline asks for the document again, so nothing that arrives meanwhile is lost.
     if (historyActive() && (msg.type === "snapshot" || msg.type === "op" || msg.type === "ops" || msg.type === "reset")) {

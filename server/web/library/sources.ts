@@ -142,6 +142,8 @@ export function projectLibraries(kind: LibKind, docs: ProjectDoc[]): ProjectLib[
 }
 
 const docTexts = new Map<string, Promise<string>>();
+/** Another editor saved a document of the project: its cached text is stale. */
+if (typeof window !== "undefined") window.addEventListener("kc-doc-saved", ((ev: CustomEvent) => { const id = ev.detail && (ev.detail.savedDocId || ev.detail.docId); if (id) docTexts.delete(String(id)); }) as EventListener);
 function docText(docId: string): Promise<string> {
   let p = docTexts.get(docId);
   if (!p) {
