@@ -45,6 +45,10 @@ export interface PcbToolsLite {
   netItemIds(doc: KDoc, key: string): Set<string>;
   isLocked(node: SNode): boolean;
   setLocked(node: SNode, on: boolean): SNode;
+  /** the one tuning pattern a selection is (its generator with only its own members beside it) */
+  selectedTuningPattern?(ctx: unknown, ids?: Iterable<string>): KItem | null;
+  /** PCB_TUNING_PATTERN EditStart / Update / EditFinish with an edited generator node (and member edits): one commit */
+  editTuningPattern?(ctx: unknown, gen: KItem, node: SNode, memberEdit?: ((n: SNode) => boolean | void) | null): boolean;
 }
 export function pcbTools(): PcbToolsLite | null { return ((window as unknown as { PcbTools?: PcbToolsLite }).PcbTools) || null; }
 

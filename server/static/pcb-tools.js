@@ -4239,9 +4239,23 @@
     }
     return node;
   }
-  function editTuningPattern(ctx, gen, node) {
+  function editTuningPattern(ctx, gen, node, memberEdit) {
+    let doc;
+    if (memberEdit) {
+      const ops = [];
+      for (const id of K.groupMemberIds(gen.node)) {
+        const it = ctx.doc.items.get(id);
+        if (!it || it.kind !== "segment" && it.kind !== "arc") continue;
+        const n = clone(it.node);
+        if (memberEdit(n) === false) continue;
+        ops.push({ set: id, node: n });
+      }
+      doc = branchDoc(ctx.doc, ops);
+    }
     genStartEdit(ctx, gen);
-    genUpdateEdit(ctx, node);
+    genUpdateEdit(ctx, node, doc);
+    const ge = S.genEdit;
+    if (ge && !ge.fin && doc) ge.fin = doc;
     return genFinishEdit(ctx);
   }
 
@@ -14536,6 +14550,7 @@
     tuningPatternInfo,
     regenerateTuningChanges,
     selectedTuningPattern,
+    editTuningPattern,
     tuningEditNode,
     tuningEditPoints,
     tuningOutline,

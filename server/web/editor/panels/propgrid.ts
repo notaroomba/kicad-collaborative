@@ -20,6 +20,8 @@ interface PropDef {
   /** a view-only control (the pad picker): runs instead of a commit */
   local?(v: Raw, it: KItem): void;
   choices?: [string, string][];
+  /** a tuning pattern's property that lives on its member tracks: edit each member's (cloned) node */
+  member?(node: SNode, v: Raw): boolean | void;
 }
 
 /** props.js's node editors (static/props.js `helpers`). */
@@ -345,8 +347,68 @@ function boardTextProps(doc: KDoc): PropDef[] {
     { group: T, name: "Knockout", type: "bool", get: (x) => { const l = h.kid(x.node, "layer"); return !!l && l.indexOf("knockout") > 0; }, set: (n, v) => { const l = h.kid(n, "layer"); if (!l) return false; const i = l.indexOf("knockout"); if (i > 0) l.splice(i, 1); if (v) l.push("knockout"); } },
   ];
 }
+// PCB_TUNING_PATTERN_DESC (pcbnew/generators/pcb_tuning_pattern.cpp): BOARD_ITEM's rows with its own Layer, Width and
+// Net, the Technical Layers group, and "Pattern Properties"; the target rows follow the tuning mode
+const TUNING_MODES: [string, string][] = [["single", "Single track"], ["diff_pair", "Differential pair"], ["diff_pair_skew", "Diff pair skew"]];
+const MEANDER_SIDES: [string, string][] = [["left", "Left"], ["right", "Right"], ["default", "Default"]];
+function tuningPatternProps(it: KItem, doc: KDoc): PropDef[] {
+  const h = H(), PT = "Pattern Properties", TL = "Technical Layers";
+  const members = (x: KItem) => ((window.KiCadCanvas as unknown as { groupMemberIds(n: SNode): string[] }).groupMemberIds(x.node)).map((id) => doc.items.get(id)).filter((m): m is KItem => !!m && (m.kind === "segment" || m.kind === "arc"));
+  const firstTrack = (x: KItem) => members(x)[0] || null;
+  const numKid = (n: SNode, k: string, d: number | null = null) => { const c = h.kid(n, k); return c ? h.num(c[1]) : d; };
+  const setNum = (n: SNode, k: string, v: number) => { const c = h.kid(n, k); if (c) c.splice(1, c.length - 1, r6(v)); else h.setKid(n, k, [r6(v)], ["members"]); };
+  const strKid = (n: SNode, k: string) => h.str((h.kid(n, k) || [])[1] || "");
+  const yn = (n: SNode, k: string, d: boolean) => { const c = h.kid(n, k); return c ? h.str(c[1]) === "yes" : d; };
+  const setYn = (n: SNode, k: string, v: boolean) => { const c = h.kid(n, k); if (c) c.splice(1, c.length - 1, v ? "yes" : "no"); else h.setKid(n, k, [v ? "yes" : "no"], ["members"]); };
+  const xyOf = (n: SNode, k: string): [number, number] | null => { const c = h.kid(n, k), q = c && h.kid(c, "xy"); return q ? [h.num(q[1]), h.num(q[2])] : null; };
+  const setXy = (n: SNode, k: string, i: 1 | 2, v: number) => { const c = h.kid(n, k), q = c && h.kid(c, "xy"); if (!q) return false; q[i] = r6(v); };
+  const mode = (x: KItem) => strKid(x.node, "tuning_mode") || "single";
+  const timeDomain = (x: KItem) => yn(x.node, "is_time_domain", false);
+  const nets: [string, string][] = [["", "<no net>"], ...h.boardNetNames(doc).filter(Boolean).map((n): [string, string] => [n, n])];
+  const pos = (name: string, i: 1 | 2): PropDef => ({ group: BASIC, name, type: "coord", get: (x) => (xyOf(x.node, "origin") || [0, 0])[i - 1],
+    // PCB_GENERATOR::SetPosition moves the pattern: its origin and end shift, Update re-tunes it on the track there
+    set: (n, v) => { const o = xyOf(n, "origin"); if (!o) return false; const d = (v as number) - o[i - 1]; setXy(n, "origin", i, o[i - 1] + d); const e = xyOf(n, "end"); if (e) setXy(n, "end", i, e[i - 1] + d); } });
+  const layers = (n: SNode): string[] => { const l = h.kid(n, "layers"); if (l) return l.slice(1).map((x) => h.str(x)); const s = h.kid(n, "layer"); return s ? [h.str(s[1])] : []; };
+  const defs: PropDef[] = [
+    pos("Position X", 1), pos("Position Y", 2),
+    { group: BASIC, name: "Layer", type: "enum", choices: layerChoices(doc, true), get: (x) => strKid(x.node, "layer") || "F.Cu", set: (n, v) => { h.setLayer(n, String(v)); },
+      member: (n, v) => { const l = h.kid(n, "layers"); if (l) { const rest = l.slice(2); l.splice(1, l.length - 1, String(v), ...rest); return; } h.setLayer(n, String(v)); } },
+    lockedProp(),
+    { group: BASIC, name: "Width", type: "length", get: (x) => { const t = firstTrack(x); return t ? h.num((h.kid(t.node, "width") || [])[1], 0.25) : numKid(x.node, "last_track_width", 0.25); },
+      set: (n, v) => { if (!((v as number) > 0)) return false; setNum(n, "last_track_width", v as number); }, member: (n, v) => { if (!((v as number) > 0)) return false; h.setWidth(n, v as number); } },
+    { group: BASIC, name: "Net", type: "enum", choices: nets, get: (x) => { const t = firstTrack(x); return t ? h.netNameOf(doc, t.node) || "" : ""; },
+      set: (n, v) => { const c = h.kid(n, "last_netname"); if (c) c.splice(1, c.length - 1, String(v || "")); }, member: (n, v) => { if (h.netNameOf(doc, n) === String(v || "")) return false; setNet(doc, n, String(v || "")); } },
+    { group: TL, name: "Soldermask", type: "bool", get: (x) => { const t = firstTrack(x); return t ? layers(t.node).some((l) => /\.Mask$/.test(l)) : true; }, set: () => true,
+      member: (n, v) => { const ls = layers(n); const cu = ls.find((l) => /\.Cu$/.test(l)) || ls[0]; if (!cu) return false; const mask = cu === "F.Cu" ? "F.Mask" : cu === "B.Cu" ? "B.Mask" : ""; if (!mask) return false;
+        h.delKid(n, "layer"); h.delKid(n, "layers"); h.setKid(n, v ? "layers" : "layer", v ? [cu, mask] : [cu], ["solder_mask_margin", "net", "uuid", "tstamp"]); } },
+    { group: TL, name: "Soldermask Margin Override", type: "length", get: (x) => { const t = firstTrack(x), c = t && h.kid(t.node, "solder_mask_margin"); return c ? h.num(c[1]) : null; }, set: () => true,
+      member: (n, v) => { if (v === null || v === "" || Number.isNaN(v as number)) h.delKid(n, "solder_mask_margin"); else h.setKid(n, "solder_mask_margin", [r6(v as number)], ["net", "uuid", "tstamp"]); } },
+    { group: PT, name: "End X", type: "coord", get: (x) => (xyOf(x.node, "end") || [0, 0])[0], set: (n, v) => setXy(n, "end", 1, v as number) },
+    { group: PT, name: "End Y", type: "coord", get: (x) => (xyOf(x.node, "end") || [0, 0])[1], set: (n, v) => setXy(n, "end", 2, v as number) },
+    { group: PT, name: "Tuning Mode", type: "enum", choices: TUNING_MODES, get: (x) => mode(x) },   // NO_SETTER
+    { group: PT, name: "Min Amplitude", type: "length", get: (x) => numKid(x.node, "min_amplitude", 0.2), set: (n, v) => setNum(n, "min_amplitude", v as number) },
+    { group: PT, name: "Max Amplitude", type: "length", get: (x) => numKid(x.node, "max_amplitude", 1), set: (n, v) => setNum(n, "max_amplitude", v as number) },
+    { group: PT, name: "Initial Side", type: "enum", choices: MEANDER_SIDES, get: (x) => strKid(x.node, "initial_side") || "default", set: (n, v) => { const c = h.kid(n, "initial_side"); if (c) c.splice(1, c.length - 1, String(v)); else h.setKid(n, "initial_side", [String(v)], ["members"]); } },
+    { group: PT, name: "Min Spacing", type: "length", get: (x) => numKid(x.node, "min_spacing", 0.6), set: (n, v) => setNum(n, "min_spacing", v as number) },
+    { group: PT, name: "Corner Radius %", type: "int", get: (x) => numKid(x.node, "corner_radius_percent", 80), set: (n, v) => setNum(n, "corner_radius_percent", Math.round(v as number)) },
+  ];
+  // SetAvailableFunc: Target Length (length, space domain), Target Delay (time domain), Target Skew / Target Skew Delay (skew)
+  const skew = mode(it) === "diff_pair_skew", td = timeDomain(it);
+  const target = (name: string, key: string, type: PropType): PropDef => ({ group: PT, name, type, get: (x) => numKid(x.node, key, null),
+    set: (n, v) => { const o = v as number; setNum(n, key, o); setNum(n, key + "_min", o - 0.1); setNum(n, key + "_max", o + 0.1); } });   // DEFAULT_LENGTH_TOLERANCE
+  if (!skew && !td) defs.push(target("Target Length", "target_length", "length"));
+  if (!skew && td) defs.push(target("Target Delay", "target_delay", "number"));
+  if (skew && !td) defs.push(target("Target Skew", "target_skew", "coord"));
+  if (skew && td) defs.push(target("Target Skew Delay", "target_skew_delay", "number"));
+  defs.push(
+    { group: PT, name: "Override Custom Rules", type: "bool", get: (x) => yn(x.node, "override_custom_rules", false), set: (n, v) => setYn(n, "override_custom_rules", !!v) },
+    { group: PT, name: "Single-sided", type: "bool", get: (x) => yn(x.node, "single_sided", false), set: (n, v) => setYn(n, "single_sided", !!v) },
+    { group: PT, name: "Rounded", type: "bool", get: (x) => yn(x.node, "rounded", true), set: (n, v) => setYn(n, "rounded", !!v) });
+  return defs;
+}
 function pcbProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
   const h = H();
+  if (it.kind === "generated" && h.str((h.kid(it.node, "type") || [])[1]) === "tuning_pattern") return tuningPatternProps(it, doc);
   switch (it.kind) {
     case "footprint": return footprintProps(it, doc, single);
     case "segment": case "arc": return [xyProp(BASIC, "Start X", "start", 1), xyProp(BASIC, "Start Y", "start", 2), xyProp(BASIC, "End X", "end", 1), xyProp(BASIC, "End Y", "end", 2),
@@ -373,7 +435,7 @@ const FRIENDLY: Record<string, string> = { symbol: "Symbol", footprint: "Footpri
   hierarchical_label: "Hierarchical Label", netclass_flag: "Directive Label", directive_label: "Directive Label", text: "Text", gr_text: "Text", text_box: "Text Box", gr_text_box: "Text Box", junction: "Junction", zone: "Zone",
   no_connect: "No-Connect", bus_entry: "Bus Entry", sheet: "Sheet", gr_line: "Line", gr_rect: "Rectangle", gr_circle: "Circle", gr_arc: "Arc", gr_poly: "Polygon", gr_curve: "Bezier", rectangle: "Rectangle", circle: "Circle",
   bezier: "Bezier", rule_area: "Rule Area", dimension: "Dimension", group: "Group", image: "Image", table: "Table" };
-const friendly = (it: KItem) => (it.kind === "arc" && it.docType === "pcb" ? "Track" : FRIENDLY[it.kind] || it.kind);
+const friendly = (it: KItem) => (it.kind === "arc" && it.docType === "pcb" ? "Track" : it.kind === "generated" ? "Tuning Pattern" : FRIENDLY[it.kind] || it.kind);
 
 function trimNum(v: number, digits: number): string { let t = v.toFixed(digits); if (t.includes(".")) t = t.replace(/0+$/, "").replace(/\.$/, ""); return t === "-0" ? "0" : t; }
 function show(def: PropDef, raw: Raw): string {
@@ -391,8 +453,14 @@ function defsOf(it: KItem, doc: KDoc, single: boolean): PropDef[] { try { return
 const defId = (d: PropDef) => d.group + "/" + d.name;
 
 interface Resolved { items: KItem[]; defs: Map<string, PropDef>[]; shared: PropDef[] }
+/** A selected tuning pattern is its generator with its members: KiCad's selection holds the one PCB_GENERATOR. */
+function patternSelection(items: KItem[]): KItem | null {
+  const P = pcbTools(); if (isSchDoc() || !P || !P.selectedTuningPattern || items.length < 1) return null;
+  try { return P.selectedTuningPattern(tctx(), items.map((it) => it.id)); } catch (e) { return null; }
+}
 function resolve(): Resolved {
-  const doc = kdoc(), items = selectedItems(); if (!doc || !items.length) return { items: [], defs: [], shared: [] };
+  const doc = kdoc(); let items = selectedItems(); if (!doc || !items.length) return { items: [], defs: [], shared: [] };
+  const gen = patternSelection(items); if (gen) items = [gen];
   const defs = items.map((it) => new Map(defsOf(it, doc, items.length === 1).map((d): [string, PropDef] => [defId(d), d])));
   const shared: PropDef[] = [];
   for (const d of defs[0].values()) if (defs.every((m) => { const o = m.get(defId(d)); return !!o && o.type === d.type; })) shared.push(d);
@@ -444,6 +512,16 @@ export function setProp(id: string, text: string): string | null {
   const head = defs[0].get(id); if (!head) return "No such property";
   const parsed = parse(head, text); if (typeof parsed === "string") return parsed;
   if (head.local) { items.forEach((it, i) => { const d = defs[i].get(id); if (d && d.local) d.local(parsed.v, it); }); panelStore.set({ selVersion: panelStore.get().selVersion + 1 }); return null; }
+  const gen = items.length === 1 && items[0].kind === "generated" ? items[0] : null; const P = pcbTools();
+  if (gen && P && P.editTuningPattern) {   // PCB_TUNING_PATTERN: the property, then EditStart / Update / EditFinish in one commit
+    const d = defs[0].get(id); if (!d || !d.set) return null;
+    let cur: Raw = null; try { cur = d.get(gen); } catch (e) { cur = null; }
+    if (show(d, cur) === show(d, parsed.v) && d.type !== "bool") return null;
+    const node = K().cloneNode(gen.node); if (d.set(node, parsed.v, gen) === false) return null;
+    P.editTuningPattern(tctx(), gen, node, d.member ? (n: SNode) => d.member!(n, parsed.v) : null);
+    panelStore.set({ selVersion: panelStore.get().selVersion + 1 });
+    return null;
+  }
   const changes: KChange[] = [];
   items.forEach((it, i) => {
     const d = defs[i].get(id); if (!d || !d.set) return;

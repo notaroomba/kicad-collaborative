@@ -2,9 +2,9 @@
 // PCB_GROUP): its selection, the dashed base line and outline it draws while selected (ViewDraw), its four edit points
 // (MakeEditPoints / UpdateFromEditPoints) and the live re-tune while one of them, a property or a move changes it
 // (GENERATOR_TOOL genStartEdit / genUpdateEdit / genFinishEdit / genCancelEdit), committed as "Edit Tuning Pattern".
-import type { BoardDoc, PcbCtx, Pt, SAtom } from "./types";
+import type { BoardDoc, BranchOp, PcbCtx, Pt, SAtom } from "./types";
 import type { MeanderSettings } from "./meander";
-import { branchChanges } from "./branch";
+import { branchChanges, branchDoc } from "./branch";
 import { applySelection, expandGroups, selectionIds } from "./groups";
 import { line } from "./overlay";
 import { K, S } from "./state";
@@ -226,6 +226,15 @@ export function tuningNodeWithSettings(orig: SNode, st: MeanderSettings, mode: s
   return node;
 }
 /** genStartEdit / genUpdateEdit / genFinishEdit with an edited node, in one commit labelled "Edit Tuning Pattern". */
-export function editTuningPattern(ctx: PcbCtx, gen: KItem, node: SNode) {
-  genStartEdit(ctx, gen); genUpdateEdit(ctx, node); return genFinishEdit(ctx);
+export function editTuningPattern(ctx: PcbCtx, gen: KItem, node: SNode, memberEdit?: ((n: SNode) => boolean | void) | null) {
+  let doc: BoardDoc | undefined;
+  if (memberEdit) {   // a property that lives on the member tracks (Layer, Width, Net, Soldermask …): edited before the update
+    const ops: BranchOp[] = [];
+    for (const id of K.groupMemberIds(gen.node)) { const it = ctx.doc.items.get(id); if (!it || (it.kind !== "segment" && it.kind !== "arc")) continue; const n = clone(it.node); if (memberEdit(n) === false) continue; ops.push({ set: id, node: n }); }
+    doc = branchDoc(ctx.doc, ops);
+  }
+  genStartEdit(ctx, gen); genUpdateEdit(ctx, node, doc);
+  const ge = S.genEdit as GenEdit | null | undefined;
+  if (ge && !ge.fin && doc) ge.fin = doc;   // nothing to re-tune: the member edit alone
+  return genFinishEdit(ctx);
 }

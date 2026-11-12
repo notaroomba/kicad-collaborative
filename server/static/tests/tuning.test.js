@@ -395,5 +395,16 @@ test("moving a selected pattern slides it along its track and re-tunes it (genUp
   P.state.sel.clear();
 });
 
+test("a Properties-panel edit of a pattern: member edits (Width) and node edits (Max Amplitude) re-tune in one 'Edit Tuning Pattern'", () => {
+  const f = placeTuned(40); let g = f.gen(); const before = f.log.commits.length;
+  const node = JSON.parse(JSON.stringify(g.node)); K.kid(node, "max_amplitude")[1] = 0.8;
+  P.editTuningPattern(f.ctx, g, node, (n) => { K.kid(n, "width")[1] = 0.15; });
+  assert.equal(f.log.commits.length, before + 1); assert.equal(f.log.commits.at(-1).label, "Edit Tuning Pattern");
+  g = f.gen(); assert.equal(K.kid(g.node, "max_amplitude")[1], 0.8);
+  const mem = K.groupMemberIds(g.node).map((id) => f.doc.items.get(id));
+  assert.ok(mem.length && mem.every((it) => P.widthOf(it.node) === 0.15), "the members carry the new width");
+  assert.ok(Math.abs(f.len() - 40) < 0.1, "still tuned: " + f.len());
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

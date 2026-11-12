@@ -62,7 +62,7 @@ import { clusterRoots, conductors, connectedCopperIds, localRatsnest, netHighlig
 import { netNode, netOf, netStyle } from "./nets";
 import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority } from "./nodes";
 import { drawOverlay, dynamicRatsnest } from "./overlay";
-import { genHiddenIds, selectedTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit } from "./tuning-edit";
+import { genHiddenIds, selectedTuningPattern, editTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit } from "./tuning-edit";
 import { addCornerChanges, arcEditGeometry, arcEditMode, canAddCorner, canRemoveCorner, editPointNode, editPoints, removeCornerChanges, setArcEditMode } from "./point-editor";
 import { cornerLeg, elemsPts, headElems, roundCorners } from "./posture";
 import { antennaRemovals, loopRemovals, removeRedundant } from "./redundant";
@@ -365,7 +365,7 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, selectedTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit, topParentOf, tuningRemoveChanges, setTargetSkew, coupledLength, TUNE_MSG_SKEW_PICK, TUNE_MSG_SKEW_NETS, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, selectedTuningPattern, editTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit, topParentOf, tuningRemoveChanges, setTargetSkew, coupledLength, TUNE_MSG_SKEW_PICK, TUNE_MSG_SKEW_NETS, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableGrid, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
