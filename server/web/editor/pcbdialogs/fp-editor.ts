@@ -293,3 +293,41 @@ export function footprintCheckerDialog(ctx: ToolCtx): boolean {
     build(body) { body.append(list, h("div", { class: "pd-row", style: "margin-top:6px" }, h("span", { class: "pd-lbl" }, "Show:"), showErr.el, showWarn.el, counts)); },
     cancel() { ctx.setHighlight(null); } });
 }
+
+// ---------------------------------------------------------------- Footprint users
+/** DIALOG_FOOTPRINT_USERS: the symbols of the symbol libraries that use this footprint (pcb-tools fp-users.ts).
+ *  "Match type" switches each way of using it; Pins is bold when it equals the footprint's pad count, a derived
+ *  symbol is in italics.  `loadLibs` reads the libraries (the status line says so meanwhile). */
+export function footprintUsersDialog(fp: { lib: string; name: string; padCount: number }, loadLibs: () => Promise<{ nickname: string; tree: SNode }[]>): boolean {
+  const USERS = () => PT().fpUsers;
+  const showFilter = checkField(true, "Show footprint filter matches", { key: "showFilter", onChange: () => update() });
+  const showField = checkField(true, "Show footprint field matches", { key: "showField", onChange: () => update() });
+  const showMaps = checkField(true, "Show pin map matches", { key: "showPinMaps", onChange: () => update() });
+  const status = h("div", { class: "pd-lbl", "data-k": "status", style: "margin:6px 0" }, "");
+  const table = h("table"); const list = h("div", { class: "pd-grid", style: "height:260px;overflow:auto", "data-k": "users" }, table);
+  let libs: { nickname: string; tree: SNode }[] | null = null;
+  const update = (): void => {
+    table.replaceChildren();
+    const head = h("tr"); for (const [label, w] of [["Library", "180px"], ["Symbol", "200px"], ["Pins", "60px"], ["Footprint filter", "160px"], ["Footprint field match", "120px"], ["Pin map match", "160px"]]) head.append(h("th", { style: `width:${w}` }, label));
+    table.append(h("thead", null, head));
+    if (!libs) return;
+    const r = USERS().footprintUsers(libs, { lib: fp.lib, name: fp.name, filters: showFilter.get(), field: showField.get(), pinMaps: showMaps.get() });
+    const body = h("tbody");
+    for (const m of r.matches) {
+      const cb = h("input", { type: "checkbox", checked: !!m.field, disabled: true });
+      body.append(h("tr", null, h("td", { class: "ro" }, m.lib), h("td", { class: "ro", style: m.derived ? "font-style:italic" : null }, m.symbol),
+        h("td", { class: "ro", style: m.pins === fp.padCount ? "font-weight:bold" : null }, String(m.pins)), h("td", { class: "ro" }, m.filter),
+        h("td", { class: "chk" }, cb), h("td", { class: "ro" }, m.pinMaps.join(", "))));
+    }
+    table.append(body);
+    status.textContent = USERS().usersStatus(r.matches.length, r.limited);
+  };
+  const api = openDialog({ title: "Footprint users", width: 750,
+    build(body) {
+      body.append(box("Match type", showFilter.el, showField.el, showMaps.el), status, list);
+      update(); status.textContent = "Loading symbol libraries (0%)...";
+      loadLibs().then((l) => { libs = l; update(); }).catch(() => { libs = []; update(); });
+    },
+    ok() { return true; } });
+  return !!api;
+}

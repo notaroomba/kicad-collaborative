@@ -21,7 +21,7 @@ import { api, toast } from "./util";
 import { liveDocument, saveTextDocument, sendDocOps } from "./projectfile";
 import { confirmBox, promptText } from "../dialogs/dom";
 import { listDialog } from "./pcbdialogs/ui";
-import { enumPadsDialog, footprintCheckerDialog, footprintPropertiesDialog, padTableDialog, pushPadDialog } from "./pcbdialogs/fp-editor";
+import { enumPadsDialog, footprintCheckerDialog, footprintUsersDialog, footprintPropertiesDialog, padTableDialog, pushPadDialog } from "./pcbdialogs/fp-editor";
 import type { DocEntry, ProjectInfo } from "../store";
 import type { ActionHandler } from "./types";
 
@@ -556,36 +556,22 @@ function importFootprint(): void {
   inp.click();
 }
 
-/** DIALOG_FOOTPRINT_USERS: the project's symbols whose Footprint field names this footprint, or whose filters match it. */
-async function showFootprintUsers(): Promise<void> {
+/** DIALOG_FOOTPRINT_USERS: the symbols of the project's symbol libraries (its *.kicad_sym documents, nicknamed by
+ *  file name as the sym-lib-table rows of a project library are) that use this footprint. */
+function showFootprintUsers(): void {
   if (!E.kdoc || !state.project) return;
   const name = FD().footprintName(E.kdoc); const lib = !isFpPrivate() && state.doc ? fpLibIdOf(state.doc.path).lib : "";
-  const fpid = lib ? `${lib}:${name}` : name;
-  const pads = new Set<string>(); for (const it of E.kdoc.items.values()) if (it.kind === "pad" && str(it.node[1])) pads.add(str(it.node[1]));
-  const rows: { lib: string; sym: string; pins: number; filter: string; field: boolean; pinMap: string }[] = [];
-  const docs = state.project.docs.filter((d) => d.docType === "kicad_sym" || /\.kicad_sym$/.test(d.path) || d.docType === "kicad_sch");
-  for (const d of docs) {
-    let text = ""; try { const r = await fetch(`/api/docs/${d.docId}/content`, { credentials: "same-origin" }); if (r.ok) text = await r.text(); } catch { continue; }
-    const t = text ? KiCadCanvas.parse(text) : null; if (!t) continue;
-    const syms: SNode[] = t[0] === "kicad_sch" ? KiCadCanvas.kids(KiCadCanvas.kid(t, "lib_symbols") || [], "symbol") : KiCadCanvas.kids(t, "symbol");
-    const libName = t[0] === "kicad_sch" ? "" : d.path.split("/").pop()!.replace(/\.kicad_sym$/, "");
-    for (const s of syms) {
-      const props = KiCadCanvas.kids(s, "property"); const prop = (k: string) => { const p = props.find((x: SNode) => x[1] === k); return p ? str(p[2]) : ""; };
-      const fpField = prop("Footprint"); const filters = prop("ki_fp_filters").split(/\s+/).filter(Boolean);
-      const field = !!fpField && (fpField === fpid || fpField.split(":").pop() === name);
-      const glob = (g: string) => new RegExp("^" + g.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
-      const filt = filters.some((g) => glob(g).test(g.includes(":") ? fpid : name));
-      if (!field && !filt) continue;
-      const pinNums = new Set<string>(); const walk = (n: SNode) => { for (const c of n) if (Array.isArray(c)) { if (c[0] === "pin") { const nn = KiCadCanvas.kid(c, "number"); if (nn) pinNums.add(str(nn[1])); } else if (c[0] === "symbol") walk(c); } }; walk(s);
-      const sname = str(s[1]); const [l2, n2] = sname.includes(":") ? sname.split(":") : [libName, sname];
-      const missing = Array.from(pinNums).filter((n) => !pads.has(n));
-      rows.push({ lib: l2, sym: n2, pins: pinNums.size, filter: filters.join(" "), field, pinMap: missing.length ? `${missing.length} unmatched` : "OK" });
-    }
-  }
-  PT().openForm({ title: "Footprint Users", width: 780, fields: [
-    { type: "table", columns: [{ label: "Library", width: "150px" }, { label: "Symbol", width: "170px" }, { label: "Pins", width: "50px" }, { label: "Footprint filter" }, { label: "Footprint field match", width: "120px" }, { label: "Pin map match", width: "110px" }],
-      rows: rows.map((r) => [r.lib, r.sym, String(r.pins), r.filter, r.field ? "Yes" : "No", r.pinMap]), empty: "No symbols reference this footprint." },
-    { type: "note", text: `This footprint is referenced by ${rows.length} symbols` }] });
+  const pads = new Set<string>(); let padCount = 0;
+  for (const it of E.kdoc.items.values()) if (it.kind === "pad") { const n = str(it.node[1]); if (n && !pads.has(n)) { pads.add(n); padCount++; } }
+  const project = state.project;
+  footprintUsersDialog({ lib, name, padCount }, async () => {
+    const docs = project.docs.filter((d) => /\.kicad_sym$/i.test(d.path));
+    const out: { nickname: string; tree: SNode }[] = [];
+    await Promise.all(docs.map(async (d) => {
+      try { const r = await fetch(`/api/docs/${d.docId}/content`, { credentials: "same-origin" }); if (!r.ok) return; const t = KiCadCanvas.parse(await r.text()); if (t) out.push({ nickname: d.path.split("/").pop()!.replace(/\.kicad_sym$/i, ""), tree: t }); } catch { /* skipped */ }
+    }));
+    return out;
+  });
 }
 
 /** PCB_ACTIONS::loadFpFromBoard: a board footprint (by reference) into the editor. */
@@ -638,7 +624,7 @@ export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): 
   saveAs: fpOnly(saveAs), newFootprint: fpOnly(newFootprint), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),
   enumeratePads: fpOnly(enumeratePads), checkFootprint: fpOnly(checkFootprint), padTable: fpOnly(padTable), pushPadSettings: fpOnly(pushPadSettings),
   explodePad: fpOnly(editPad), recombinePad: fpOnly(editPad), exportFootprint: fpOnly(exportFootprint), exportFootprintAsSVG: fpOnly(exportFootprintAsSVG), exportFootprintAsPNG: fpOnly(exportFootprintAsPNG),
-  importFootprint: fpOnly(importFootprint), showFootprintUsers: fpOnly(() => { void showFootprintUsers(); }), loadFpFromBoard: fpOnly(loadFromBoard), saveFpToBoard: fpOnly(insertIntoBoard),
+  importFootprint: fpOnly(importFootprint), showFootprintUsers: fpOnly(showFootprintUsers), loadFpFromBoard: fpOnly(loadFromBoard), saveFpToBoard: fpOnly(insertIntoBoard),
   setAnchor: fpOnly(() => setTool("anchor")),
   showLibraryTree: fpOnly(() => showPane("libtree")),
   editFpInFpEditor: () => { if (!isFpEdit()) editFpInFpEditor(); },

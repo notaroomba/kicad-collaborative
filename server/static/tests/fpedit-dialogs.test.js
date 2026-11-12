@@ -168,3 +168,32 @@ test("Footprint Properties round trip on real library footprints: an unchanged d
     CHK.checkFootprint(doc);   // runs on every real footprint
   }
 });
+
+test("Footprint users: filters, the footprint field (inherited), pin maps, derived symbols, match types", () => {
+  const U = P.fpUsers;
+  const lib = K.parse(`(kicad_symbol_lib (version 20241209) (generator "kicad_symbol_editor")
+    (symbol "R" (property "Reference" "R") (property "Value" "R") (property "Footprint" "")
+      (property "ki_fp_filters" "R_*")
+      (symbol "R_0_1" (pin passive line (at 0 3.81 270) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line (at 0 -3.81 90) (length 1.27) (name "~" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))))
+    (symbol "R_Small" (extends "R") (property "Reference" "R") (property "Footprint" "Resistor_SMD:R_0603_1608Metric"))
+    (symbol "C" (property "Reference" "C") (property "Footprint" "Other:R_0603_1608Metric") (property "ki_fp_filters" "C_*"))
+    (symbol "U" (property "Reference" "U") (property "Footprint" "")
+      (associated_footprints (footprint "R_0603_1608Metric" (map "Two pin")))
+      (symbol "U_0_1" (pin input line (at 0 0 0) (length 1) (name "A") (number "1")))))`);
+  const libs = [{ nickname: "Device", tree: lib }];
+  const r = U.footprintUsers(libs, { lib: "Resistor_SMD", name: "R_0603_1608Metric" });
+  assert.deepEqual(r.matches.map((m) => [m.symbol, m.filter, m.field, m.pinMaps.join(","), m.derived, m.pins]),
+    [["R", "R_*", false, "", false, 2], ["R_Small", "R_*", true, "", true, 2], ["U", "", false, "Two pin", false, 1]]);
+  assert.equal(U.usersStatus(r.matches.length, r.limited), "This footprint is referenced by 3 symbols");
+  // the C symbol names another library: no match; with no nickname on the footprint it does
+  assert.ok(U.footprintUsers(libs, { lib: "", name: "R_0603_1608Metric" }).matches.some((m) => m.symbol === "C"));
+  // match types switch independently; a symbol listed for one way still says the others
+  const onlyField = U.footprintUsers(libs, { lib: "Resistor_SMD", name: "R_0603_1608Metric", filters: false, pinMaps: false });
+  assert.deepEqual(onlyField.matches.map((m) => [m.symbol, m.filter]), [["R_Small", "R_*"]]);
+  assert.equal(U.footprintUsers(libs, { lib: "Resistor_SMD", name: "R_0603_1608Metric", filters: false, field: false, pinMaps: false }).matches.length, 0);
+  // a filter with a ':' includes the nickname; wildcards are anchored and case-insensitive
+  assert.ok(U.filterMatches("resistor_smd:r_*", "Resistor_SMD", "R_0603")); assert.ok(!U.filterMatches("R_06", "X", "R_0603")); assert.ok(U.filterMatches("r_06??", "X", "R_0603"));
+  const lim = U.footprintUsers(libs, { lib: "Resistor_SMD", name: "R_0603_1608Metric", max: 1 });
+  assert.equal(lim.limited, true); assert.equal(U.usersStatus(lim.matches.length, lim.limited), "This footprint is referenced by more than 1 symbols");
+});
