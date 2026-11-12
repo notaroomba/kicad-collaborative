@@ -5,7 +5,8 @@
 // the fill are.  Works on the fill stored in the board (as KiCad's DRC does when it does not refill).
 import type { Conductor, DesignSettings, DrcMarker, PadInfo, Pt } from "./types";
 import { DRC_ITEMS } from "../../canvas/drc-items";
-import { coreDist, padShape, shapeBBox, shapeOffset } from "./distances";
+import { coreDist, padShape, polyPolyDist, shapeBBox, shapeOffset } from "./distances";
+import { zoneFillMode } from "./nodes";
 import { marker } from "./drc";
 import type { DruRule, RuleItem } from "./dru";
 import { evalRuleConstraint } from "./dru";
@@ -144,6 +145,28 @@ export function starvedThermalMarkers(doc: KDoc, s: DesignSettings, rules: DruRu
         m.layer = layer; out.push(m);
       }
     }
+  }
+  return out;
+}
+
+/**
+ * DRC_TEST_PROVIDER_CONNECTIVITY's isolated copper: a zone fill island (one outline of the stored fill) that no item
+ * of the zone's net touches — CN_CONNECTIVITY_ALGO::FillIsolatedIslandsMap's orphaned outlines.  Copper thieving is
+ * netless dummy copper and never reported; a zone without a net has nothing to connect to and is left alone.
+ */
+export function isolatedCopperMarkers(doc: KDoc, conds?: Conductor[]): DrcMarker[] {
+  const out: DrcMarker[] = []; const sev = defaultSeverity("isolated_copper");
+  const all = conds || conductors(doc as never);
+  const zonesCs = all.filter((c) => c.kind === "zone"); if (!zonesCs.length) return out;
+  const others = all.filter((c) => c.kind !== "zone");
+  for (const c of zonesCs) {
+    if (!c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) continue;
+    const layer = [...c.layers][0]; const poly = c.shape as { t: "poly"; pts: Pt[] }; const b = c.bbox;
+    const touches = (o: Conductor) => o.net === c.net && o.layers.has(layer) && !(o.bbox[0] > b[2] || o.bbox[2] < b[0] || o.bbox[1] > b[3] || o.bbox[3] < b[1])
+      && (o.kind === "zone" ? polyPolyDist(poly.pts, (o.shape as { pts: Pt[] }).pts) <= 1e-6 : coreDist(o.shape, poly) - shapeOffset(o.shape) <= 1e-6);
+    if (others.some(touches) || zonesCs.some((o) => o !== c && o.id !== c.id && touches(o))) continue;
+    const m = marker("isolated_copper", sev, poly.pts[0][0], poly.pts[0][1], "Isolated copper fill", [c.id]) as DrcMarker & { layer?: string };
+    m.layer = layer; out.push(m);
   }
   return out;
 }

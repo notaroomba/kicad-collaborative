@@ -5381,6 +5381,26 @@
     }
     return out;
   }
+  function isolatedCopperMarkers(doc, conds) {
+    const out = [];
+    const sev2 = defaultSeverity3("isolated_copper");
+    const all = conds || conductors(doc);
+    const zonesCs = all.filter((c) => c.kind === "zone");
+    if (!zonesCs.length) return out;
+    const others = all.filter((c) => c.kind !== "zone");
+    for (const c of zonesCs) {
+      if (!c.net || zoneFillMode(c.item.node) === "thieving" || isTeardrop(c.item.node)) continue;
+      const layer = [...c.layers][0];
+      const poly = c.shape;
+      const b = c.bbox;
+      const touches = (o) => o.net === c.net && o.layers.has(layer) && !(o.bbox[0] > b[2] || o.bbox[2] < b[0] || o.bbox[1] > b[3] || o.bbox[3] < b[1]) && (o.kind === "zone" ? polyPolyDist(poly.pts, o.shape.pts) <= 1e-6 : coreDist(o.shape, poly) - shapeOffset(o.shape) <= 1e-6);
+      if (others.some(touches) || zonesCs.some((o) => o !== c && o.id !== c.id && touches(o))) continue;
+      const m = marker("isolated_copper", sev2, poly.pts[0][0], poly.pts[0][1], "Isolated copper fill", [c.id]);
+      m.layer = layer;
+      out.push(m);
+    }
+    return out;
+  }
 
   // web/tools/pcb-tools/drc.ts
   var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
@@ -5792,7 +5812,7 @@
     }
     out.push(...moreDrcMarkers(doc, s, rules));
     out.push(...silkMaskMarkers(doc, s, rules));
-    out.push(...starvedThermalMarkers(doc, s, rules, nl.conductors));
+    out.push(...starvedThermalMarkers(doc, s, rules, nl.conductors), ...isolatedCopperMarkers(doc, nl.conductors));
     return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => {
       const sev2 = s.severities[m.code];
       if (sev2 === "warning" || sev2 === "error") m.severity = sev2;
@@ -18600,6 +18620,7 @@
     footprintSelector,
     // silkscreen and solder mask DRC (sweep 4)
     starvedThermalMarkers,
+    isolatedCopperMarkers,
     padZoneConnection,
     thermalGap,
     padOutline,

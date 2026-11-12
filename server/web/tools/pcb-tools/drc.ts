@@ -11,7 +11,7 @@ import { assertionMarkers, disallowMarkers, ruleItems, sizeMarkers, trackAngleMa
 import type { DruRule } from "./dru";
 import { moreDrcMarkers } from "./drc-more";
 import { silkMaskMarkers } from "./drc-silk";
-import { starvedThermalMarkers } from "./drc-zones";
+import { isolatedCopperMarkers, starvedThermalMarkers } from "./drc-zones";
 
 // ---------------------------------------------------------------- design settings and DRC
 // BOARD_DESIGN_SETTINGS / NETCLASS defaults (board_design_settings.h, netclass.cpp): what a board without a
@@ -218,7 +218,7 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
   // silkscreen overlaps, silk clipped by mask or by the board edge, solder mask bridges (drc-silk.ts)
   out.push(...silkMaskMarkers(doc, s, rules));
   // thermal reliefs short of spokes (drc-zones.ts)
-  out.push(...starvedThermalMarkers(doc, s, rules, nl.conductors));
+  out.push(...starvedThermalMarkers(doc, s, rules, nl.conductors), ...isolatedCopperMarkers(doc, nl.conductors));
   // the project's rule severities: ignored rules drop out, the rest take the severity the project gives them
   return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => { const sev = s.severities[m.code]; if (sev === "warning" || sev === "error") m.severity = sev; return m; });
 }

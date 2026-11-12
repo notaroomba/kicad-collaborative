@@ -1,6 +1,6 @@
 // pcb-thermal.test.js — DRC_TEST_PROVIDER_ZONE_CONNECTIONS (starved_thermal): spokes counted where the zone's fill
 // crosses the pad outline grown by half the thermal gap, the zone / footprint / pad connection overrides, islands
-// that touch only the pad, hand-drawn spokes, and min_resolved_spokes from Board Setup and from a rule.
+// that touch only the pad, hand-drawn spokes, and min_resolved_spokes from Board Setup and from a rule; and isolated copper fill islands.
 // Run: node server/static/tests/pcb-thermal.test.js
 "use strict";
 const path = require("path"), assert = require("assert/strict");
@@ -66,6 +66,17 @@ test("a track from inside the pad outline to the fill is a spoke", () => {
 test("drc() reports it", () => {
   const doc = K.parseDoc(board({ fills: [right] }), "kicad_pcb");
   assert.equal(P.drc(doc, null, { unconnected: false }).filter((m) => m.code === "starved_thermal").length, 1);
+});
+
+test("isolated copper: a fill island no item of the net touches (thieving and netless zones are not reported)", () => {
+  const island = "(xy 2 2) (xy 4 2) (xy 4 4) (xy 2 4)";
+  const doc = K.parseDoc(board({ fills: [right, left, island] }), "kicad_pcb");
+  const m = P.isolatedCopperMarkers(doc); assert.equal(m.length, 1);
+  assert.equal(m[0].code, "isolated_copper"); assert.equal(m[0].severity, "warning"); assert.equal(m[0].text, "Isolated copper fill"); assert.deepEqual(m[0].ids, ["z1"]); assert.equal(m[0].layer, "F.Cu"); assert.deepEqual([m[0].x, m[0].y], [2, 2]);
+  assert.equal(P.isolatedCopperMarkers(K.parseDoc(board({ fills: [right, left] }), "kicad_pcb")).length, 0);
+  const thief = board({ fills: [right, island] }).replace("(fill yes (thermal_gap 0.5)", "(fill yes (mode thieving) (thermal_gap 0.5)");
+  assert.equal(P.isolatedCopperMarkers(K.parseDoc(thief, "kicad_pcb")).length, 0);
+  assert.ok(P.drc(doc, null, { unconnected: false }).some((x) => x.code === "isolated_copper"));
 });
 
 console.log(`${passed} passed, ${failed} failed`);
