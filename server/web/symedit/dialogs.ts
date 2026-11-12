@@ -13,6 +13,8 @@ import type { SymbolEditor, Lib } from "./editor";
 import { nodeOf } from "./editor";
 import { icon } from "./ui";
 import { pinMapPage, pinMapState, harvestPinMaps } from "./pinmap";
+import { openSimModel } from "../dialogs/sim-model";
+import { embeddedModelFiles, projectModelFiles, refPrefix, simPinsOfLib } from "../dialogs/sim-files";
 import { libDocFor } from "./libdoc";
 import type { Units } from "../store";
 
@@ -253,7 +255,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
   const jumpers = checkbox("All pins with duplicate numbers are jumpers", hd.jumpers, undefined, { id: "sp-jumpers" });
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
   const ro = se.readOnly();
-  let confirmed = false; let api: { finish(apply: boolean): void } | null = null;
+  let confirmed = false; let api: { finish(apply: boolean): void } | null = null; let fieldGrid: { refresh(): void } | null = null;
   KD().open({
     title: `Library Symbol Properties`, width: 760, readOnly: ro,
     build(body, a) {
@@ -261,7 +263,7 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
       KD().notebook(body, [
         { label: "General", build(pg) {
           const box = KD().staticBox(pg, "Fields");
-          KD().grid(box, [
+          fieldGrid = KD().grid(box, [
             { key: "name", label: "Name", width: 110, ro: (r: FRow) => r.mandatory },
             { key: "value", label: "Value", width: 220 },
             { key: "show", label: "Show", type: "bool", width: 46 },
@@ -294,6 +296,18 @@ export function symbolProperties(se: SymbolEditor, opts: { pinMaps?: boolean } =
         } }]),
         { label: "Pin Map", build(pg) { pinMapPage(pg, pinMaps, ro); } },
       ], { selected: opts.pinMaps ? (derived ? 2 : 4) : 0 });
+      // DIALOG_LIB_SYMBOL_PROPERTIES::OnEditSpiceModel: the "Simulation Model..." button at the left of the bottom bar
+      const simBtn = h("button", { type: "button", class: "btn", id: "sp-sim", disabled: ro, style: "margin-right:auto" }, "Simulation Model...") as HTMLButtonElement;
+      simBtn.addEventListener("click", () => {
+        const flat = M.flatten(se.libMap(se.libs.get(t.lib) || null), sym);
+        openSimModel<FRow>(rows, {
+          prefix: refPrefix(M.fieldValue(sym, "Reference")), pins: simPinsOfLib(flat as unknown as SNode), unitCount: M.unitCount(root), readOnly: ro,
+          files: [...projectModelFiles((appState.project && appState.project.docs) || []), ...embeddedModelFiles([sym, root === sym ? null : root])],
+          newRow: (n, v, vis) => ({ name: n, value: v, show: vis, showName: false, x: 0, y: 0, mandatory: false, node: null }),
+          clone: (r) => ({ ...r }),
+        }, (next) => { rows.splice(0, rows.length, ...next); if (fieldGrid) fieldGrid.refresh(); });
+      });
+      a.foot.insertBefore(simBtn, a.foot.firstChild);
     },
     ok() {
       const newName = M.escapeLibId(name.value.trim());   // EscapeString( m_SymbolNameCtrl->GetValue(), CTX_LIBID )

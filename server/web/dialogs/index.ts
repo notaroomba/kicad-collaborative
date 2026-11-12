@@ -7,6 +7,7 @@ import { openAssignFootprints } from "./assign-footprints";
 import { openChangeSymbols } from "./change-symbols";
 import { openGlobalEdit } from "./global-edit";
 import { installSchItemDialogs } from "./sch-items";
+import { installSimModel } from "./sim-model";
 import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
 import { openErc } from "./erc";
@@ -72,7 +73,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     toggleGridOverrides: (() => { const on = toggleGridOverrides(); toast(on ? "Grid overrides on" : "Grid overrides off"); }) as Handler,
     openPreferences: (() => openPreferences()) as Handler,
   });
-  installGroups(); wrapErc(); installSchItemDialogs();
+  installGroups(); wrapErc(); installSchItemDialogs(); installSimModel();
   // the old one-sheet fields table action now opens the full dialog
   const sch = CollabTools.sch as (SchToolModule & { actions: Record<string, { run(ctx: ToolCtx): unknown }> }) | undefined;
   if (sch && sch.actions && sch.actions.fieldsTable) sch.actions.fieldsTable.run = () => { openFieldsTable(false); return true; };

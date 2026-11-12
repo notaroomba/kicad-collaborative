@@ -119,7 +119,7 @@ function fromG(r: GRow): L.FieldRow {
   return r;
 }
 /** The grid with its Add field / Delete field / Move up / Move down buttons.  -> rows() for TransferDataFromWindow */
-export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number; shown?: number[] }): { rows(): L.FieldRow[] } {
+export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readOnly?: boolean; doc: KDoc | null; newName(rows: L.FieldRow[]): string; height?: number; shown?: number[] }): { rows(): L.FieldRow[]; setRows(rows: L.FieldRow[]): void } {
   const rows: GRow[] = rows0.map(toG);
   const faces = fontFaces(opts.doc);
   const cols = [
@@ -154,7 +154,7 @@ export function fieldsGrid(host: HTMLElement, rows0: L.FieldRow[], opts: { readO
     ev.preventDefault();
     popupMenu(ev.clientX, ev.clientY, cols.map((c, i) => ({ label: c.label, check: true, checked: shown.has(i), disabled: i < 2, run: () => { if (shown.has(i)) shown.delete(i); else shown.add(i); g.columns = visible(); g.refresh(); } })));
   });
-  return { rows: () => rows.map(fromG) };
+  return { rows: () => rows.map(fromG), setRows(next: L.FieldRow[]) { rows.splice(0, rows.length, ...next.map(toG)); g.refresh(); } };
 }
 const nextFieldName = (rows: L.FieldRow[]): string => { let n = 1; const names = new Set(rows.map((r) => r.name)); while (names.has("Field" + n)) n++; return "Field" + n; };
 

@@ -76,7 +76,8 @@ fn asset_version() -> &'static str {
         let mut h: u64 = 0xcbf29ce484222325;
         let all = [include_str!("../static/dist/editor.js"), include_str!("../static/kicad-canvas.js"), include_str!("../static/sch-tools.js"), include_str!("../static/pcb-tools.js"), include_str!("../static/props.js"),
                    include_str!("../static/kicad-dialogs.js"), include_str!("../static/dist/ui.js"), include_str!("../static/dist/ui.css"), include_str!("../static/app.html"), THEME_CSS,
-                   include_str!("../static/dist/viewer3d.js"), include_str!("../static/dist/fab.js"), include_str!("../static/dist/kicad-icons.json")];
+                   include_str!("../static/dist/viewer3d.js"), include_str!("../static/dist/fab.js"), include_str!("../static/dist/kicad-icons.json"),
+                   include_str!("../static/dist/sim-ngspice.js")];
         for b in all.iter().flat_map(|s| s.bytes()) {
             h ^= b as u64;
             h = h.wrapping_mul(0x100000001b3);
@@ -159,6 +160,9 @@ pub async fn autoroute_js_map() -> Response {
 pub async fn viewer3d_js() -> Response { js_response(include_str!("../static/dist/viewer3d.js")) }
 // Fabrication outputs (server/web/fab: Gerber, drill, placement and BOM writers): fetched by the editor on
 // first use of File → Fabrication Outputs and by plugins that plot, with the same ?v= as the editor bundle.
+// The ngspice model parameter tables (web/dialogs/sim-model-ngspice.ts): fetched by the Simulation Model
+// Editor the first time it opens, with the same ?v= as the editor bundle.
+pub async fn sim_ngspice_js() -> Response { js_response(include_str!("../static/dist/sim-ngspice.js")) }
 pub async fn fab_js() -> Response { js_response(include_str!("../static/dist/fab.js")) }
 pub async fn fab_js_map() -> Response {
     ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")], include_str!("../static/dist/fab.js.map")).into_response()

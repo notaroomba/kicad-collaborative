@@ -32,6 +32,8 @@ pub(crate) fn allowed_file(name: &str) -> bool {
         ext.to_ascii_lowercase().as_str(),
         "kicad_pro" | "kicad_sch" | "kicad_pcb" | "kicad_prl" | "kicad_sym" | "kicad_mod"
             | "kicad_dru" | "kicad_wks" | "step" | "stp" | "wrl" | "wrz"
+            // SPICE / IBIS simulation model libraries (DIALOG_SIM_MODEL's "Browse Models" filter)
+            | "lib" | "sub" | "cir" | "mod" | "spice" | "ibs"
     )
 }
 
@@ -51,6 +53,7 @@ pub(crate) fn doc_type_for(path: &str) -> &'static str {
         "kicad_wks" => "worksheet",
         "kicad_dru" => "design_rules",
         "step" | "stp" | "wrl" | "wrz" => "model3d",
+        "lib" | "sub" | "cir" | "mod" | "spice" | "ibs" => "spice_model",
         _ => "other",
     }
 }
@@ -1996,7 +1999,7 @@ pub async fn create_doc(
 /// The document types a client may delete or move: library files (a footprint, a symbol library, a library table,
 /// a 3D model, a drawing sheet) and other loose files.  A project's own schematic, board and project file stay put.
 fn doc_is_movable(doc_type: &str) -> bool {
-    matches!(doc_type, "footprint" | "symbol_lib" | "lib_table" | "model3d" | "worksheet" | "other")
+    matches!(doc_type, "footprint" | "symbol_lib" | "lib_table" | "model3d" | "worksheet" | "spice_model" | "other")
 }
 
 /// DELETE /api/docs/{id}: the Footprint Editor's Delete Footprint (and the same for other library files).
@@ -2179,6 +2182,9 @@ mod tests {
         assert!(allowed_file("sym-lib-table"));
         assert!(!allowed_file("evil.exe"));
         assert!(!allowed_file("notes.txt"));
+        assert!(allowed_file("models/opamp.lib") && allowed_file("spice/q.SUB") && allowed_file("x.ibs"));
+        assert_eq!(doc_type_for("models/opamp.lib"), "spice_model");
+        assert_eq!(doc_type_for("sim/test.CIR"), "spice_model");
     }
 
     /// The extraction loop must bound the decoder, not trust the header's

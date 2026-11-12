@@ -8,13 +8,15 @@
 // Sheet Properties: the fields grid (Sheetname, Sheetfile and user fields), Border width / color, Background fill,
 // Page number:, Hierarchical path:, the Attributes box, and SCH_EDIT_FRAME::ChangeSheetFile's rules for a new file
 // name (link an existing file, or copy this sheet's contents to the new file).  Drawing a sheet opens it first.
-import { E, api, toast } from "./editor";
+import { E, api, appState, toast } from "./editor";
 import { KD, checkbox, confirmBox, h, popupMenu, promptText, select, textInput, type PopItem } from "./dom";
 import * as P from "./sym-props-logic";
 import { commitWithOtherUnits } from "./sync-units";
 import * as L from "./sch-items-logic";
 import { fieldsGrid, messageBox, swatch, type Swatch } from "./sch-items";
 import { openChangeSymbols } from "./change-symbols";
+import { openSimModel } from "./sim-model";
+import { embeddedModelFiles, projectModelFiles, refPrefix, simPinsOfLib } from "./sim-files";
 import { docBase, projectDocs, readDoc, submitDocOp } from "./project";
 import { currentInstance, loadSheets, netMap } from "../editor/schnets";
 import { fmtLen, parseLen, unitName } from "../editor/pcbdialogs/ui";
@@ -94,7 +96,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
   const alt0 = new Map<string, string>(); for (const p of L.kids(staged, "pin")) { const a = L.kid(p, "alternate"); if (a) alt0.set(L.str(p[1]), L.str(a[1])); }
   const pinRows: PinRow[] = pins.map((p) => ({ number: p.number, name: p.name, alt: alt0.get(p.number) || "", type: TYPE_NAMES[p.type] || p.type, style: STYLE_NAMES[p.style] || p.style, alts: p.alternates }));
   const els: Record<string, HTMLInputElement | HTMLSelectElement> = {};
-  let grid: { rows(): L.FieldRow[] } | null = null;
+  let grid: { rows(): L.FieldRow[]; setRows(rows: L.FieldRow[]): void } | null = null;
   const angle = ((Math.round(rot) % 360) + 360) % 360;
   const refOf = (): string => { const r = L.kids(staged, "property").find((p) => L.fieldName(p) === "Reference"); return r ? L.fieldValue(r) : ""; };
   const suffix = pathRefSuffix();
@@ -175,7 +177,7 @@ export function openSymbolProperties(ctx: Ctx, item: KItem, opts: SymPropsOpts =
       const foot = api.foot, first = foot.firstChild;
       const link = h("input", { type: "text", id: "kd-sym-lib", value: libId, readonly: true, style: "width:220px;font-size:11px;background:var(--bench);border:1px solid var(--line)" });
       foot.insertBefore(h("label", { style: "font-size:11px;color:var(--ink-2);margin-right:4px" }, "Library link:"), first); foot.insertBefore(link, first);
-      if (!isPower) { const sim = h("button", { type: "button", class: "btn", id: "kd-sym-sim", style: "margin-left:10px", disabled: ro }, "Simulation Model..."); sim.addEventListener("click", () => { const g = grid; if (!g) return; openSimModelFor(g, staged, lib); }); foot.insertBefore(sim, first); }
+      if (!isPower) { const sim = h("button", { type: "button", class: "btn", id: "kd-sym-sim", style: "margin-left:10px", disabled: ro }, "Simulation Model..."); sim.addEventListener("click", () => { const g = grid; if (!g) return; openSimModelFor(g, doc, staged, lib, nUnits, ro); }); foot.insertBefore(sim, first); }
     },
     ok() {
       if (ro || !grid) return;
@@ -301,11 +303,16 @@ function pinMapPanel(host: HTMLElement, st: P.PinMapState, pins: { number: strin
 }
 
 // ---------------------------------------------------------------- Simulation Model... (DIALOG_SYMBOL_PROPERTIES::OnEditSpiceModel)
-function openSimModelFor(grid: { rows(): L.FieldRow[]; setRows?(rows: L.FieldRow[]): void }, staged: SNode, lib: SNode | null): void {
-  const S = (window as unknown as { KiCadSimModel?: { open(rows: L.FieldRow[], pins: { number: string; name: string }[], done: (rows: L.FieldRow[]) => void): void } }).KiCadSimModel;
-  const rows = grid.rows(); const pins = logicalPins(lib).map((p) => ({ number: p.number, name: p.name }));
-  void staged;
-  if (S) S.open(rows, pins, (next) => { if (grid.setRows) grid.setRows(next); });
+function openSimModelFor(grid: { rows(): L.FieldRow[]; setRows?(rows: L.FieldRow[]): void }, doc: KDoc, staged: SNode, lib: SNode | null, nUnits: number, ro: boolean): void {
+  const S = (window as unknown as { KiCadSimModel?: { open: typeof openSimModel } }).KiCadSimModel || { open: openSimModel };
+  const refN = L.kids(staged, "property").find((p) => L.fieldName(p) === "Reference");
+  const ef = (doc as KDoc & { embeddedFiles?: SNode | null }).embeddedFiles, docRoot = ef ? (["kicad_sch", ef] as unknown as SNode) : null;
+  const files = [...projectModelFiles((appState.project && appState.project.docs) || []), ...embeddedModelFiles([docRoot, lib])];
+  S.open(grid.rows(), {
+    prefix: refPrefix(refN ? L.fieldValue(refN) : ""), pins: simPinsOfLib(lib), unitCount: nUnits, files, readOnly: ro,
+    newRow: (name, value, visible) => { const r = L.newRow(name, [0, 0]); r.value = value; r.show = visible; return r; },
+    clone: (r) => ({ ...r }),
+  }, (next) => { if (grid.setRows) grid.setRows(next); });
 }
 
 // ---------------------------------------------------------------- DIALOG_SHEET_PROPERTIES

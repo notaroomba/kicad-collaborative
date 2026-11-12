@@ -8,6 +8,8 @@ import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth, unescapeText 
 import { linebreakText } from "./stroke-font";
 import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
 import type { Box, Doc, GeomSink, Item, Pt, SheetContext, TextEffects, Tf } from "./types";
+/** SCH_SYMBOL::ResolveTextVar: the Sim.* fields a symbol may lack, which resolve to "" rather than staying ${…}. */
+const SIM_VARS = new Set(["SIM.DEVICE", "SIM.TYPE", "SIM.PINS", "SIM.PARAMS", "SIM.LIBRARY", "SIM.NAME"]);
 
 /** What buildPinGeom needs of the symbol around a pin. */
 /** `literalTilde`: the file is at version 20250318 or later, where a pin named "~" is literally "~" (older files meant no name). */
@@ -375,6 +377,8 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
       const up = tok.toUpperCase();
       if (up === "UNIT") return unitCount > 1 ? unitLetter(unit) : "";
       for (const q of kids(n, "property")) if (str(q[1]).toUpperCase() === up && q !== p) return str(q[2]);
+      // missing simulation fields read as empty, not unresolved (exact, upper-case token names)
+      if (SIM_VARS.has(tok)) return "";
       return null;
     });
     transformedText(item, Ti, px, py, shown, ef.size, color, pr, ef.just, isRef || isVal ? "Reference & value" : "Fields", { z: isRef ? SCH_Z.ref : isVal ? SCH_Z.value : SCH_Z.fields, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, alpha, field: name });

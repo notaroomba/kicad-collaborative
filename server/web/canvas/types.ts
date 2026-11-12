@@ -147,6 +147,8 @@ export interface Doc extends Omit<KDoc, "items" | "bbox" | "page">, SheetContext
   /** schematic settings the app reads from the project (junction size …) */
   schSettings?: { junctionDiameter?: number; [k: string]: unknown } | null;
   path?: string;
+  /** the file's top-level (embedded_files …), as read */
+  embeddedFiles?: SNode | null;
   /** a library footprint open in the Footprint Editor (footprint-doc.ts): its header and what it was read from */
   fpEditor?: boolean; fpState?: import("./footprint-doc").FpDocState;
 }
