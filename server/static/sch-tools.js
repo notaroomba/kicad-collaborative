@@ -4164,6 +4164,15 @@ Link '${target}' to this file?`)) return null;
     if (S.draw) syncSchArc(d);
     ctx.requestRender();
   }
+  function schArcUndo(ctx) {
+    const d = S.draw;
+    if (!d || !d.arc) return;
+    S.draw = newSchArc(null);
+    S.draw.cur = d.cur.slice();
+    S.sel = null;
+    ctx.setSelected(null);
+    ctx.requestRender();
+  }
   function schArcPosture(ctx) {
     const d = S.draw;
     if (!d || !d.arc) return false;
@@ -5459,7 +5468,7 @@ Link '${target}' to this file?`)) return null;
         finishSchArc(ctx);
         return true;
       }
-      if (key === "Backspace" || key === "Delete") {
+      if (key === "Backspace" || key === "Delete" && S.draw.started) {
         schArcBackup(ctx);
         return true;
       }
@@ -5593,7 +5602,8 @@ Link '${target}' to this file?`)) return null;
     } else if (S.carry) S.carry.item = ghost(ctx.doc, S.carry.node);
     if (S.drag) {
       const d = S.drag;
-      if (!(d.local && sameDoc)) {
+      const ours = d.local || d.brk && d.brk.mode === "wirepins" && d.brk.orig.size === 0 && [...d.brk.local].every((id) => ctx.doc.items.has(id));
+      if (!(ours && sameDoc)) {
         S.drag = null;
         if (d.restoreMode) S.dragMode = d.restoreMode;
         if (sameDoc && d.brk) restoreBreak(ctx.doc, d.brk);
@@ -5947,6 +5957,17 @@ Link '${target}' to this file?`)) return null;
       ev.stopImmediatePropagation();
       ev.preventDefault();
     };
+    if (S.draw && S.draw.arc && S.draw.started) {
+      if (combo === "Ctrl+Z") {
+        schArcUndo(ctx);
+        eat();
+        return;
+      }
+      if (combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z") {
+        eat();
+        return;
+      }
+    }
     if (S.drag && !S.pedit) {
       if (combo === "Ctrl+Z") {
         S.drag.cancel = "undo";

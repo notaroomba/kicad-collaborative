@@ -1,6 +1,7 @@
 import type { SchCtx, Pt, Mods, PtrEvent } from "./types";
 import { root } from "../root";
 import { cancelCarry, placeText, startCarry } from "./carry";
+import { schArcUndo } from "./arcs";
 import { AUTOSTART_CURSOR, AUTOSTART_TOOL, autostartKind } from "./dangling";
 import { beginDrag, endDrag, moveDrag } from "./drag";
 import { clearHighlight } from "./highlight";
@@ -199,6 +200,12 @@ export function onKeyCapture(ev: KeyboardEvent) {
     return;
   }
   const eat = () => { ev.stopImmediatePropagation(); ev.preventDefault(); };
+  // EE_GRAPHIC_TOOL::drawManagedShape: once an arc is started undo drops just that arc (cleanup(), the tool stays for
+  // the next one) and redo beeps; before that both reach the document
+  if (S.draw && S.draw.arc && S.draw.started) {
+    if (combo === "Ctrl+Z") { schArcUndo(ctx); eat(); return; }
+    if (combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z") { eat(); return; }
+  }
   // SCH_MOVE_TOOL (move, drag, paste, break): undo cancels, redo and duplicate beep, delete ends the move (a paste in
   // flight then has nothing left: it goes without a trace)
   if (S.drag && !S.pedit) {

@@ -132,6 +132,14 @@ export function schArcBackup(ctx: SchCtx) {
   if (S.draw) syncSchArc(d);
   ctx.requestRender();
 }
+/** ACTIONS::undo while an arc is started: cleanup() drops the arc being drawn (and any chain seed), the selection
+ *  is cleared and the tool waits for the next arc. */
+export function schArcUndo(ctx: SchCtx) {
+  const d = S.draw; if (!d || !d.arc) return;
+  S.draw = newSchArc(null); S.draw.cur = d.cur.slice();
+  S.sel = null; ctx.setSelected(null);
+  ctx.requestRender();
+}
 /** ACTIONS::arcPosture ('/'): ARC_GEOM_MANAGER::ToggleClockwise. */
 export function schArcPosture(ctx: SchCtx) { const d = S.draw; if (!d || !d.arc) return false; d.arc.toggleClockwise(); ctx.requestRender(); return true; }
 /** The preview: the arc (or the construction line to the cursor until there is one) and the center / radius guides. */

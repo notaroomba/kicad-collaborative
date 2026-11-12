@@ -168,7 +168,9 @@ export function onKey(key: string, ev: Mods | null | undefined, ctx: SchCtx) {
   if (S.wire && wireKey(ctx, key === "Backspace" ? "Backspace" : key === "Delete" ? "Del" : key)) return true;
   if (S.draw && S.draw.arc) {   // EE_GRAPHIC_TOOL::drawManagedShape with an ARC_MODE_SESSION
     if (key === "Enter" || key === "End") { finishSchArc(ctx); return true; }
-    if (key === "Backspace" || key === "Delete") { schArcBackup(ctx); return true; }
+    // deleteLastPoint (Backspace) always backs up; doDelete (Del) only once the arc is started, before that it is the
+    // selection's delete (the arc just committed is selected)
+    if (key === "Backspace" || (key === "Delete" && S.draw.started)) { schArcBackup(ctx); return true; }
     if (key === "/") { if (ev && ev.altKey) switchSchArcMode(ctx, (schArcDrawMode() + 1) % 5); else schArcPosture(ctx); return true; }
     if (key === "Escape") { cancelDraw(ctx); return true; }
   }
@@ -223,9 +225,10 @@ export function onDocChanged(ctx: SchCtx) {
   const sameDoc = S.docRef === ctx.doc;
   if (!sameDoc) { S.wire = null; S.carry = null; S.draw = null; }
   else if (S.carry) S.carry.item = ghost(ctx.doc, S.carry.node);
-  if (S.drag) {                                 // a paste in flight is ours alone and rides on; anything else in flight is dropped
+  if (S.drag) {                                 // a paste or Pin Helpers > Wire in flight is ours alone and rides on; anything else in flight is dropped
     const d = S.drag;
-    if (!(d.local && sameDoc)) {
+    const ours = d.local || (d.brk && d.brk.mode === "wirepins" && d.brk.orig.size === 0 && [...d.brk.local].every((id) => ctx.doc.items.has(id)));
+    if (!(ours && sameDoc)) {
       S.drag = null; if (d.restoreMode) S.dragMode = d.restoreMode;
       if (sameDoc && d.brk) restoreBreak(ctx.doc, d.brk);
     }
