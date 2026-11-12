@@ -106,5 +106,24 @@ test("cache naming reuses an identical copy and numbers a changed one", () => {
   assert.deepStrictEqual(M.cacheName(cache, "x:R", b), { name: "R_1", reused: false });
 });
 
+test("Symbol Properties header: unchanged values leave an older file's tokens alone; a change adds only what differs", () => {
+  const t = fs.readFileSync(path.join(QA, "libraries/test_project/Device.kicad_sym"), "utf8"); const lib = M.parseLibrary(t);
+  const r = lib.symbols.get("R"); const before = M.text(r);
+  M.setSymHeader(r, M.symHeader(r)); assert.strictEqual(M.text(r), before);
+  const hd = M.symHeader(r); hd.inBom = false; M.setSymHeader(r, hd);
+  const after = M.text(r); assert.ok(after.includes("(in_bom no)"), after); assert.ok(!after.includes("in_pos_files"), "a token the file did not carry is not added");
+  assert.strictEqual(M.symHeader(r).inBom, false);
+});
+test("texts: (at) angle in tenths of a degree, text boxes with the height negated (saveText / saveTextBox)", () => {
+  assert.ok(M.text(M.textNode("A", 1, 2, 1.27, 90)).includes("(at 1 2 900)"));
+  const b = M.textBoxNode("B", 0, 5, 10, 4); assert.ok(M.text(b).includes("(at 0 5 0) (size 10 -4)"), M.text(b));
+  const n = M.textNode("A", 0, 0); M.rotateNode(n, 0, 0, true); assert.ok(M.text(n).includes("(at 0 0 900)"), M.text(n));
+});
+test("metadata fields: set, created hidden after the last field, removed when empty", () => {
+  const s = M.createSymbol(Object.assign(M.defaultNewSymbolProps(), { name: "X" }));
+  M.setMetaField(s, "ki_keywords", "amp op"); assert.strictEqual(M.fieldValue(s, "ki_keywords"), "amp op");
+  M.setMetaField(s, "ki_keywords", ""); assert.strictEqual(M.fieldOf(s, "ki_keywords"), null);
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

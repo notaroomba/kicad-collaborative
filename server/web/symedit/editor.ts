@@ -83,7 +83,7 @@ export class SymbolEditor {
   // ---------------------------------------------------------------- open / close
   open(): void {
     ensureStyle();
-    if (!this.root) this.build();
+    if (!this.root) { this.build(); if (window.innerWidth < 900) { this.showTree = false; this.showProps = false; } }   // a narrow window starts with the canvas alone
     if (!this.root!.isConnected) document.body.append(this.root!);
     document.documentElement.dataset.symedit = "open";
     window.addEventListener("keydown", this.keyHook, true);
@@ -269,7 +269,7 @@ export class SymbolEditor {
     const i = this.tabs.findIndex((t) => !t.origin && t.lib === libNick && t.name === name);
     if (i >= 0) { this.cur = i; const t = this.tabs[i]; if (unit) t.unit = unit; t.body = body || t.body; }
     else { this.tabs.push({ lib: libNick, name, undo: [], redo: [], unit: unit || 1, body: body || 1, sel: new Set(), view: null }); this.cur = this.tabs.length - 1; }
-    this.afterTabChange(); this.treeSel = { lib: libNick, name }; lib.open = true;
+    this.treeSel = { lib: libNick, name }; lib.open = true; this.afterTabChange();
     try { const u = new URL(location.href); u.searchParams.set("symedit", `${libNick}:${name}`); history.replaceState(history.state, "", u.toString()); } catch (e) { /* no history */ }
     return true;
   }
@@ -316,12 +316,12 @@ export class SymbolEditor {
     const bb = doc && doc.bbox ? doc.bbox : [-10, -10, 10, 10];
     const w = Math.max(5, bb[2] - bb[0]), hh = Math.max(5, bb[3] - bb[1]);
     const s = Math.min(W / (w * 1.4), H / (hh * 1.4), 200);
-    t.view = { s, px: W / 2 - (bb[0] + bb[2]) / 2 * s, py: H / 2 - (bb[1] + bb[3]) / 2 * s }; t.fitted = true; this.paint();
+    t.view = { s, px: W / 2 - (bb[0] + bb[2]) / 2 * s, py: H / 2 - (bb[1] + bb[3]) / 2 * s }; t.fitted = true; this.paint(); this.renderStatus();
   }
   zoomAt(f: number, cx?: number, cy?: number): void {
     const v = this.view(); if (!this.cv) return;
     const r = this.cv.getBoundingClientRect(); const x = cx === undefined ? r.width / 2 : cx - r.left, y = cy === undefined ? r.height / 2 : cy - r.top;
-    const s = Math.min(2000, Math.max(0.5, v.s * f)); v.px = x - (x - v.px) * (s / v.s); v.py = y - (y - v.py) * (s / v.s); v.s = s; this.paint();
+    const s = Math.min(2000, Math.max(0.5, v.s * f)); v.px = x - (x - v.px) * (s / v.s); v.py = y - (y - v.py) * (s / v.s); v.s = s; this.paint(); this.renderStatus();
   }
   resize(): void {
     const c = this.cv; if (!c) return; const dpr = window.devicePixelRatio || 1;

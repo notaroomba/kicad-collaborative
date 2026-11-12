@@ -8,14 +8,14 @@ interface UiGlobals { KiCadIconFor?: (name: string) => IconSpec | undefined; KiC
 export const UI = (): UiGlobals => window as unknown as UiGlobals;
 
 export const CSS = `
-.se-root{position:fixed;inset:0;z-index:50;display:grid;grid-template-rows:auto auto auto 1fr auto auto;background:var(--bg);color:var(--ink);font:var(--fs-sm,12px)/1.35 var(--font);}
+.se-root{position:fixed;inset:0;z-index:50;display:flex;flex-direction:column;background:var(--bg);color:var(--ink);font:var(--fs-sm,12px)/1.35 var(--font);}
 .se-root *{box-sizing:border-box}
-.se-menubar{display:flex;align-items:center;gap:2px;padding:0 6px;height:28px;background:var(--panel);border-bottom:1px solid var(--line)}
-.se-menubar .se-title{margin-left:auto;color:var(--ink-2);padding-right:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.se-mb{padding:3px 8px;border-radius:var(--r-1,3px);cursor:default;user-select:none}
+.se-menubar{display:flex;align-items:center;gap:2px;padding:0 6px;height:28px;overflow-x:auto;overflow-y:hidden;background:var(--panel);border-bottom:1px solid var(--line)}
+.se-menubar .se-title{margin-left:auto;min-width:0;color:var(--ink-2);padding-right:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.se-mb{flex:none;padding:3px 8px;border-radius:var(--r-1,3px);cursor:default;user-select:none}
 .se-mb:hover,.se-mb.open{background:var(--sel-soft)}
-.se-close{margin-left:6px}
-.se-tb{display:flex;align-items:center;gap:1px;padding:2px 4px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;min-height:34px}
+.se-close{margin-left:6px;flex:none}
+.se-tb{flex:none;display:flex;align-items:center;gap:1px;padding:2px 4px;background:var(--panel);border-bottom:1px solid var(--line);overflow-x:auto;min-height:34px}
 .se-tbv{display:flex;flex-direction:column;align-items:center;gap:1px;padding:4px 2px;background:var(--panel);overflow-y:auto}
 .se-tbl{border-right:1px solid var(--line)} .se-tbr{border-left:1px solid var(--line)}
 .se-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:1px solid transparent;border-radius:var(--r-1,3px);background:none;color:var(--ink);padding:0;cursor:pointer;flex:none}
@@ -33,8 +33,8 @@ export const CSS = `
 .se-info.show{display:flex}
 .se-info a{color:var(--blue);cursor:pointer;text-decoration:underline}
 .se-info .se-x{margin-left:auto;cursor:pointer;color:var(--ink-2)}
-.se-main{display:grid;grid-template-columns:auto auto 1fr auto auto;min-height:0}
-.se-tree{width:240px;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line);min-height:0}
+.se-main{flex:1;display:flex;min-height:0;min-width:0}
+.se-tree{width:240px;flex:none;display:flex;flex-direction:column;background:var(--panel);border-right:1px solid var(--line);min-height:0}
 .se-tree.hide,.se-props.hide{display:none}
 .se-tree input{margin:6px;height:24px;padding:2px 6px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-1,3px);font:inherit}
 .se-list{flex:1;overflow:auto;padding-bottom:6px}
@@ -46,7 +46,7 @@ export const CSS = `
 .se-row.cur .ds{color:inherit;opacity:.8}
 .se-row.lib{font-weight:600}
 .se-row.ro .nm{font-style:italic}
-.se-centre{display:flex;flex-direction:column;min-width:0;min-height:0}
+.se-centre{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
 .se-tabs{display:flex;gap:1px;background:var(--panel-2,var(--panel));border-bottom:1px solid var(--line);overflow-x:auto;min-height:26px}
 .se-tab{display:flex;align-items:center;gap:6px;padding:3px 10px;cursor:default;white-space:nowrap;border-right:1px solid var(--line)}
 .se-tab.cur{background:var(--bg);font-weight:600}
@@ -54,14 +54,14 @@ export const CSS = `
 .se-canvas{position:relative;flex:1;min-height:0;overflow:hidden;outline:none}
 .se-canvas canvas{position:absolute;inset:0;width:100%;height:100%}
 .se-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink-3);pointer-events:none;text-align:center;padding:20px}
-.se-props{width:220px;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:8px}
+.se-props{width:220px;flex:none;background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:8px}
 .se-props h4{margin:0 0 6px;font-size:var(--fs-sm,12px)}
 .se-props .kv{display:grid;grid-template-columns:max-content 1fr;gap:3px 8px}
 .se-props .kv span:nth-child(odd){color:var(--ink-2)}
-.se-msg{display:flex;gap:18px;padding:4px 10px;min-height:40px;background:var(--panel);border-top:1px solid var(--line);overflow-x:auto}
+.se-msg{flex:none;display:flex;gap:18px;padding:4px 10px;min-height:40px;max-height:64px;background:var(--panel);border-top:1px solid var(--line);overflow-x:auto}
 .se-msg div{display:flex;flex-direction:column;white-space:nowrap}
 .se-msg b{font-weight:400;color:var(--ink-2)}
-.se-status{display:flex;gap:16px;align-items:center;padding:2px 10px;height:24px;background:var(--panel);border-top:1px solid var(--line);color:var(--ink-2);white-space:nowrap;overflow:hidden}
+.se-status{flex:none;display:flex;gap:16px;align-items:center;padding:2px 10px;height:24px;background:var(--panel);border-top:1px solid var(--line);color:var(--ink-2);white-space:nowrap;overflow:hidden}
 .se-status select{height:20px;background:var(--panel);color:var(--ink);border:1px solid var(--line);font:inherit}
 .se-menu{position:fixed;z-index:56;min-width:220px;background:var(--panel);border:1px solid var(--line);border-radius:4px;box-shadow:var(--shadow);padding:3px 0}
 .se-mi{display:flex;align-items:center;gap:8px;padding:3px 12px 3px 6px;cursor:default;white-space:nowrap}
