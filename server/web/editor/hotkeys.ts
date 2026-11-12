@@ -101,8 +101,11 @@ export function runSpecHotkey(ev: KeyboardEvent): boolean {
 }
 
 /** Capture-phase hook: KiCad's meaning for the keys the modules would otherwise take (tables.ts KICAD_KEY_WINS). */
+/** Capture hooks ahead of the table below (the table cell selection, editor/tablecells.ts): true takes the key. */
+export const keyHooks: ((ev: KeyboardEvent) => boolean)[] = [];
 export function preemptKey(ev: KeyboardEvent): void {
   if ((state as { view?: string }).view !== "editor" || !E.kdoc || typingTarget(ev)) return;
+  for (const hook of keyHooks) { let took = false; try { took = hook(ev); } catch (e) { console.warn(e); } if (took) { ev.stopImmediatePropagation(); return; } }
   const combo = comboOf(ev); if (!combo) return;
   if (E.tool === "measure" && combo === "Ctrl+C") return;   // the measure tool takes ACTIONS::copy itself (index.ts)
   const what = KICAD_KEY_WINS[editorKind()][combo]; if (!what) return;

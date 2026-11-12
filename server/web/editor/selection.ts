@@ -7,6 +7,9 @@ import { editorId } from "./panes";
 import { E } from "./state";
 import { activeModule, deleteSelected, moveOp, rotateSelected, toolCtx } from "./tools";
 import { esc } from "./util";
+
+/** Called by clearSelection: selections kept outside E (the table cell selection, editor/tablecells.ts). */
+export const clearHooks: (() => void)[] = [];
 import type { BoxSel, ItemSummary, SheetEntry } from "./types";
 import { dragG, isSch, pxPerMm, requestRender, requestRepaint, selG, svgText } from "./view";
 /** Board groups: a member drags/deletes with its whole group (KiCad's default). */
@@ -19,7 +22,7 @@ export function selectedSet() { const s = new Set<string>(E.selection); if (E.se
 
    // a selected symbol / footprint field {id, name} and its drag {id, name, startMm, orig, moved}
 export function clearSelection() {
-  E.selection.clear(); E.selected = null; E.selField = null; E.selPin = null;
+  E.selection.clear(); E.selected = null; E.selField = null; E.selPin = null; for (const f of clearHooks) f();   // a table cell selection too
   if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);
   const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear(); if (pcb) pcb.padSel = null;   // the board module's own picks (tracks, vias, graphics) clear with everything else
 }

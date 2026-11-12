@@ -11,7 +11,7 @@
 // Actions are named as in the C++ ("SCH_ACTIONS::rotateCCW"); the label, icon and hotkey come from
 // the generated spec (server/scripts/gen_kicad_context.py scans this file for the names).
 // Entries that only exist for features the web editor has no notion of at all (design blocks,
-// net chains, variants, table cells, the symbol / footprint editor frames) are left out.
+// net chains, variants, the symbol / footprint editor frames) are left out.
 import type { Editor } from "../store";
 
 /** What a condition can ask about: the selection and the state of the active tool. */
@@ -40,6 +40,8 @@ export interface MenuCtx {
   hasItems: boolean;
   /** check marks of the attribute entries, by action name */
   checks: Record<string, boolean>;
+  /** a table cell selection (kinds are all "table_cell"): EDIT_TABLE_TOOL_BASE::addMenus' conditions */
+  cells?: { block: boolean; merged: boolean; structure: boolean } | null;
 }
 export type Cond = (c: MenuCtx) => boolean;
 
@@ -130,6 +132,7 @@ const schOrient: Cond = (c) => !c.drawingLine && c.kinds.some((k) => SCH_ROTATAB
 /** SCH_EDIT_TOOL::Init propertiesCondition (the drawing-sheet case of an empty selection is not offered). */
 const schProperties: Cond = (c) => {
   const first = c.kinds[0]; if (!first) return false;
+  if (first === "table_cell") return c.kinds.every((k) => k === "table_cell");   // SCH_EDIT_TOOL::Properties: DIALOG_TABLECELL_PROPERTIES
   if (SCH_PROPS_SINGLE.has(first)) return c.kinds.length === 1;
   if (first === "gline" || first === "wire" || first === "bus" || first === "bus_entry" || first === "junction") {
     if (c.kinds.every((k) => k === "gline")) return true;
@@ -142,6 +145,30 @@ const convertTo = (except: string): Cond => (c) => c.kinds.length === 1 ? SCH_AL
 /** SCH_MOVE_TOOL::Init moveCondition. */
 const schMove: Cond = (c) => c.kinds.length > 0 && !c.drawingLine;
 const idleSelection = and(notEmpty, idle);
+// ---------------------------------------------------------------- tables (EDIT_TABLE_TOOL_BASE::addMenus, the selection tools' Init)
+const tableCellSelection: Cond = (c) => c.kinds.length > 0 && c.kinds.every((k) => k === "table_cell");
+const structureSelection: Cond = (c) => tableCellSelection(c) && !!c.cells && c.cells.structure;
+const cellBlockSelection: Cond = (c) => c.kinds.length >= 2 && !!c.cells && c.cells.block;
+const mergedCellsSelection: Cond = (c) => !!c.cells && c.cells.merged;
+/** The selection tool menu's Select Column(s) / Row(s) / Table (order 2). */
+function addTableSelectItems(m: CondMenu, cond: Cond): void {
+  m.item("ACTIONS::selectColumns", cond, 2).item("ACTIONS::selectRows", cond, 2).item("ACTIONS::selectTable", cond, 2);
+}
+/** EDIT_TABLE_TOOL_BASE::addMenus, order 100. */
+function addTableMenus(m: CondMenu): void {
+  const ss = and(structureSelection, idle);
+  m.sep(100);
+  m.item("ACTIONS::addRowAbove", ss, 100).item("ACTIONS::addRowBelow", ss, 100).item("ACTIONS::addColBefore", ss, 100).item("ACTIONS::addColAfter", ss, 100);
+  m.sep(100);
+  m.item("ACTIONS::deleteRows", ss, 100).item("ACTIONS::deleteColumns", ss, 100);
+  m.sep(100);
+  m.item("ACTIONS::mergeCells", and(structureSelection, cellBlockSelection), 100).item("ACTIONS::unmergeCells", and(structureSelection, mergedCellsSelection), 100);
+  m.sep(100);
+  m.item("ACTIONS::editTable", and(tableCellSelection, idle), 100);
+  m.sep(100);
+  m.item("ACTIONS::exportTableCSV", and(tableCellSelection, idle), 100);
+  m.sep(100);
+}
 
 const schTransformMenu = () => new CondMenu("Transform Selection")
   .item("SCH_ACTIONS::rotateCCW", schOrient).item("SCH_ACTIONS::rotateCW", schOrient).item("SCH_ACTIONS::mirrorV", schOrient).item("SCH_ACTIONS::mirrorH", schOrient);
@@ -172,6 +199,7 @@ function schSelectionMenu(): CondMenu {
   // SCH_SELECTION_TOOL::Init
   m.item("SCH_ACTIONS::clearHighlight", and(haveHighlight, idle), 1).sep(and(haveHighlight, idle), 1);
   m.item("SCH_ACTIONS::selectConnection", and(hasTypes(SCH_EXPANDABLE), idle), 2);
+  addTableSelectItems(m, and(tableCellSelection, idle));
   m.sep(100).item("SCH_ACTIONS::drawWire", empty, 100).item("SCH_ACTIONS::drawBus", empty, 100);
   m.sep(100).item("ACTIONS::finishInteractive", drawingLine, 100);
   m.item("SCH_ACTIONS::enterSheet", and(schSheetSel, idle), 150).item("SCH_ACTIONS::selectOnPCB", and(hasTypes(set("symbol", "sheet")), idle), 150).item("SCH_ACTIONS::leaveSheet", belowRoot, 150);
@@ -206,6 +234,8 @@ function schSelectionMenu(): CondMenu {
   m.sub(GROUP_MENU, notEmpty, 100);
   // SCH_INSPECTION_TOOL::Init
   m.item("ACTIONS::showDatasheet", and(schSingleSymbol, idle), 220);
+  // SCH_EDIT_TABLE_TOOL::Init
+  addTableMenus(m);
   return m;
 }
 
@@ -268,7 +298,7 @@ const pcbSingleFootprint = and(count(1), onlyTypes(PCB_FOOTPRINT));
 const pcbMultipleFootprints = and(moreThan(1), onlyTypes(PCB_FOOTPRINT));
 const pcbRoutable = and(hasTypes(PCB_ROUTABLE), idle);
 /** EDIT_TOOL::Init propertiesCondition: one item, or nothing but tracks. */
-const pcbProperties: Cond = (c) => c.kinds.length === 1 || (c.kinds.length > 1 && c.kinds.every((k) => PCB_TRACKS.has(k)));
+const pcbProperties: Cond = (c) => c.kinds.length === 1 || (c.kinds.length > 1 && (c.kinds.every((k) => PCB_TRACKS.has(k)) || c.kinds.every((k) => k === "table_cell")));
 const noActiveTool = tool("select");
 
 /** SELECT_MENU (pcb_selection_tool.cpp). */
@@ -320,6 +350,7 @@ function pcbSelectionMenu(): CondMenu {
   m.sub(pcbSelectMenu(), notEmpty); m.sep(1000);
   m.item("ACTIONS::cancelInteractive", not(noActiveTool), 1);
   m.item("PCB_ACTIONS::clearHighlight", haveHighlight, 1).sep(haveHighlight, 1);
+  addTableSelectItems(m, tableCellSelection);
   m.sep(1); standardSubMenus(m);
   // EDIT_TOOL::Init
   m.item("ACTIONS::selectAll", (c) => c.hasItems).item("ACTIONS::unselectAll", (c) => c.hasItems).sep();
@@ -350,6 +381,8 @@ function pcbSelectionMenu(): CondMenu {
   m.sub(GROUP_MENU, notEmpty, 100).sub(pcbConstraintMenu(), always, 100);
   // MATCH_PROPERTIES_TOOL::Init
   m.item("PCB_ACTIONS::matchProperties", count(1), 950);
+  // PCB_EDIT_TABLE_TOOL::Init
+  addTableMenus(m);
   return m;
 }
 

@@ -7,10 +7,14 @@ import { E } from "./state";
 import { appClipboard, moveOp, publishUndo, redoStack, toolCtx, undoStack, unlockedForEdit } from "./tools";
 import { rulerStrings, snapped45, type RulerUnits } from "./ruler";
 import type { ItemSummary } from "./types";
+
+/** Asked first by openSelectionProperties (Table Cell Properties on a cell selection, editor/tablecells.ts). */
+export const propertiesHooks: (() => boolean)[] = [];
 import { dragG, fitBox, isSch, pxPerMm, requestRender, requestRepaint, stage, svgText, worldMm, zoomBy } from "./view";
 /** E: KiCad's "Edit properties" for whatever is selected — a field, the app selection, or a tool module's own selection. */
 export function openSelectionProperties() {
   if (!E.kdoc || !window.KDialogs) return false;
+  for (const f of propertiesHooks) if (f()) return true;   // a table cell selection: Table Cell Properties
   const ctx = toolCtx();
   if (!isSch() && CollabTools.pcb && CollabTools.pcb.tunerProperties && CollabTools.pcb.tunerProperties(ctx)) return true;
   if (E.selField) { const it = E.kdoc.items.get(E.selField.id); if (it) { KDialogs!.openField(ctx, it, E.selField.name); return true; } }

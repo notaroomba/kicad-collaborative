@@ -46,6 +46,7 @@ import { installLibrary } from "./library";
 import { installFpEditHandlers } from "./fpedit";
 import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
+import { installTableCells } from "./tablecells";   // last: its imports must not reorder the modules above
 window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el), selectionCount };
 
 
@@ -96,6 +97,7 @@ function liveGhost(mod: GhostModule | null | undefined) {
 // wheel, middle / right button, hover and lost-release recovery: KiCad's mouse model (gestures.ts).
 // Installed before every other stage listener so it sees each event first.
 installGestures(openContextMenu);
+installTableCells();   // table cells as selectable items and the table edit tool (editor/tablecells.ts)
 
    // until the user pans/zooms, resizes just refit
 new ResizeObserver(() => {

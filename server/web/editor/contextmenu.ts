@@ -19,6 +19,8 @@ import { E } from "./state";
 import { nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
 import { isSch, pxPerMm, requestRender } from "./view";
+/** The table cell selection's view for the menu, filled in by editor/tablecells.ts at install. */
+export const tableMenu: { state(): { n: number; block: boolean; merged: boolean; structure: boolean } | null; pick(mm: Mm): boolean; actions: Record<string, () => boolean> } = { state: () => null, pick: () => false, actions: {} };
 
 type Mm = [number, number];
 type Run = () => void;
@@ -75,6 +77,7 @@ function attributeChecks(items: KItem[]): Record<string, boolean> {
 function menuCtx(): MenuCtx {
   const items = selectionItems(), s = schState(), p = pcbState(), sch = isSch();
   const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPin && !kinds.length) kinds.push("pin");
+  const cells = tableMenu.state(); if (cells) for (let i = 0; i < cells.n; i++) kinds.push("table_cell");   // PCB_TABLECELL_T / SCH_TABLECELL_T
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
   const outline = !!draw && (sch ? draw.shape === "polygon" || draw.shape === "rulearea" : ["gpoly", "zone", "thievingzone", "rulearea"].includes(draw.shape));
@@ -95,6 +98,7 @@ function menuCtx(): MenuCtx {
     highlight: !!E.highlightIds, belowRoot: !!root && (state as { doc?: unknown }).doc !== root,
     hasLocked: items.some((it) => isLocked(it.node)), hasUnlocked: items.some((it) => !isLocked(it.node)),
     hasItems: !!E.kdoc && E.kdoc.items.size > 0, checks: attributeChecks(items),
+    cells: cells ? { block: cells.block, merged: cells.merged, structure: cells.structure } : null,
   };
 }
 
@@ -161,11 +165,14 @@ const ALIAS: Record<Editor, Record<string, string>> = {
 const NO_HANDLER = new Set(["PCB_ACTIONS::mirrorH", "PCB_ACTIONS::mirrorV"]);
 /** What a view-only visitor may still run: looking, selecting, navigating, copying. */
 const READ_ONLY_OK = new Set(["cancelInteractive", "selectAll", "unselectAll", "properties", "enterSheet", "leaveSheet", "clearHighlight", "highlightNetSelection", "highlightNet",
-  "selectConnection", "selectNet", "selectNode", "selectSameSheet", "selectUnconnected", "filterSelection", "copy", "copyAsText", "showDatasheet", "inspectClearance", "showNetInRatsnest", "hideNetInRatsnest"]);
+  "selectConnection", "selectNet", "selectNode", "selectSameSheet", "selectUnconnected", "filterSelection", "copy", "copyAsText", "showDatasheet", "selectColumns", "selectRows", "selectTable", "exportTableCSV", "editTable", "inspectClearance", "showNetInRatsnest", "hideNetInRatsnest"]);
 
 function resolve(act: string, c: MenuCtx): { run?: Run; why?: string; key?: string } {
   const sid = act.split("::").pop() as string, ed = c.editor, m = activeModule();
   if (E.viewOnly && !READ_ONLY_OK.has(sid)) return { why: VIEW_ONLY };
+  // the table edit tool: its own actions, and Properties / clipboard / Delete on a cell selection
+  const ta = tableMenu.actions[act];
+  if (ta && (act.startsWith("ACTIONS::") && !["ACTIONS::copy", "ACTIONS::paste", "ACTIONS::cut", "ACTIONS::doDelete"].includes(act) || c.kinds.some((k) => k === "table_cell"))) return { run: () => { ta(); selectionChanged(); } };
   const special = SPECIAL[act];
   if (special) { const r = special(c); return typeof r === "string" ? { why: r } : { run: r }; }
   const mid = ALIAS[ed][sid] || sid, ma = m && m.actions ? m.actions[mid] : undefined;
@@ -409,7 +416,8 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
   if (window.KDialogs && window.KDialogs.isOpen()) return;
   const mm = worldMm(ev);
   E.lastCursorMm = mm;
-  if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy()) {
+  if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy() && tableMenu.pick(mm)) { /* a table cell under the cursor (selectPoint collects cells) */ }
+  else if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy()) {
     if (E.selPin) {
       const hit = pickAt(mm);
       if (!(hit && hit.pin && hit.pin.id === E.selPin.id && hit.pin.number === E.selPin.number)) selectAt(mm);

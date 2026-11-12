@@ -12,6 +12,7 @@
 //
 // kicad-dialogs.js asks KDialogs.schItemDialog / schFieldDialog first (openItem / openNew / openField), so the
 // double-click, E and the tools' creation paths all reach these.  The document edits are in sch-items-logic.ts.
+import { schTableDialog } from "../editor/tabledialogs";
 import { E, toast, toolCtx } from "./editor";
 import { KD, popupMenu, checkbox, confirmBox, h, select, textInput } from "./dom";
 import * as L from "./sch-items-logic";
@@ -656,6 +657,7 @@ export function schItemDialog(ctx: ToolCtx, item: KItem, opts: ItemOpts = {}): b
   if (k === "no_connect") return true;              // SCH_NO_CONNECT_T: nothing happens
   if (k === "sheet") { openSheetProperties(c, item, opts); return true; }
   if (k === "symbol") { openSymbolProperties(c, item); return true; }
+  if (k === "table") { schTableDialog(ctx, item); return true; }   // SCH_EDIT_TOOL::Properties, SCH_TABLE_T: DIALOG_TABLE_PROPERTIES
   return false;
 }
 export function schFieldDialog(ctx: ToolCtx, item: KItem, name: string): boolean {

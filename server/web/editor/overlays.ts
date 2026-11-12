@@ -7,6 +7,9 @@
 import { rulerOps, shadowColor, type RulerUnits } from "./ruler";
 import { E } from "./state";
 
+/** More app overlays, painted first (the table cell selection and its handles, editor/tablecells.ts). */
+export const overlayHooks: ((ctx: CanvasRenderingContext2D) => void)[] = [];
+
 type Pt = [number, number];
 interface OverlayView { ppm: number; zoom: number; panX: number; panY: number; x0: number; y0: number; dpr?: number }
 interface StrokeApi {
@@ -76,6 +79,7 @@ function drawRuler(ctx: CanvasRenderingContext2D, view: OverlayView, sch: boolea
 export function drawAppOverlays(ctx: CanvasRenderingContext2D, view: OverlayView, sch: boolean): void {
   const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
   const dark = !sch;
+  for (const f of overlayHooks) { try { f(ctx); } catch (e) { console.warn(e); } }   // the selected table cells and their COL_WIDTH / ROW_HEIGHT handles
   const ms = E.measure as { a: Pt; b?: Pt } | null;
   if (ms && ms.b) drawRuler(ctx, view, sch, ms.a, ms.b);
   const bs = E.boxSel as { start: Pt; cur: Pt; pts: Pt[]; lasso: boolean; mode?: string } | null;
