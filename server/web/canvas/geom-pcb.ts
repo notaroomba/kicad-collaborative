@@ -1,5 +1,4 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { HOLE_WALL as HOLE_WALL_COLOR, NPTH, PAD_TEXT, PAD_TEXT_DARK, PCB_BG, VIA_HOLE, Z_PAD, Z_TEXT, Z_VIA, Z_ZONE, padLayers, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
 import { expandDocVars } from "./geom-sch";
@@ -8,13 +7,17 @@ import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { parseMarkup, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
 import { code128, code39 } from "./barcode";
+import type { Doc, Geom, GeomSink, Item, Pt, PadGeom, PolyGeom, TextEffects, TextExtra, TextGeom, Tf } from "./types";
+
+/** A (render_cache …) node with the text state trackedRenderCache noted on it (non-enumerable). */
+type RenderCacheNode = SNode & { __state?: { sig: string; x: number; y: number } };
 // ---- board ----
 /**
  * Net code of a board item.  Files up to 2025 carry (net N) or (net N "name"); KiCad 10 names the net only —
  * (net "GND") — and has no net table, so those get a code from the document's own table, assigned on first
  * sight (doc.nets: code → name, doc.netCodes: name → code).  No net / the empty name is 0, a missing node -1.
  */
-export function netCode(doc, node) {
+export function netCode(doc: Pick<Doc, "nets" | "netCodes" | "netSeq"> | null | undefined, node: SNode | null | undefined): number {
   const nn = node && kid(node, "net"); if (!nn) return -1;
   const v = nn[1];
   if (typeof v === "number") { if (nn.length > 2 && doc && doc.nets && !doc.nets.has(v)) doc.nets.set(v, str(nn[2])); return v; }
@@ -29,9 +32,9 @@ export function netCode(doc, node) {
   return c;
 }
 
-const DISPLAY_NAMES = new Map();
+const DISPLAY_NAMES = new Map<string, string>();
 /** NETINFO_ITEM::GetDisplayNetname: the short net name (after the last sheet-path slash), unescaped ({slash} → /). */
-export function displayNetName(name) {
+export function displayNetName(name: string | null | undefined): string {
   if (!name) return "";
   let v = DISPLAY_NAMES.get(name);
   if (v === undefined) {
@@ -44,15 +47,15 @@ export function displayNetName(name) {
 }
 
 /** PrintableCharCount: the characters of a marked-up string that take room (markup braces and tabs do not). */
-export function printableCharCount(t) { return parseMarkup(t.replace(/\t/g, "")).text.length; }
+export function printableCharCount(t: string): number { return parseMarkup(t.replace(/\t/g, "")).text.length; }
 
-export function layerOf(node, def) {
+export function layerOf(node: SNode, def: string): string {
   const l = kid(node, "layer"); if (l) return str(l[1]);
   // a copper shape that also opens the solder mask is written (layers "F.Cu" "F.Mask"): its own layer comes first
   const ls = kid(node, "layers"); return ls && ls.length > 1 ? str(ls[1]) : def;
 }
 
-export function padCopperLayer(pad) {
+export function padCopperLayer(pad: SNode): string | null {
   const ls = kid(pad, "layers"); const names = ls ? ls.slice(1).map(str) : [];
   if (names.some((x) => x === "F.Cu" || x === "*.Cu" || x === "F&B.Cu")) return "F.Cu";
   if (names.some((x) => x === "B.Cu")) return "B.Cu";
@@ -72,8 +75,8 @@ export function padCopperLayer(pad) {
  * that finds anything else changed drops them — EDA_TEXT::ClearRenderCache — so a stale shape is never plotted
  * or saved.  KiCad draws them again the next time it opens the board.
  */
-function trackedRenderCache(n, x, y, sig) {
-  const rc = kid(n, "render_cache"); if (!rc) return null;
+function trackedRenderCache(n: SNode, x: number, y: number, sig: string): SNode | null {
+  const rc = kid(n, "render_cache") as RenderCacheNode | null; if (!rc) return null;
   const st = rc.__state;
   if (!st) { Object.defineProperty(rc, "__state", { value: { sig, x, y }, enumerable: false }); return rc; }
   if (st.sig !== sig) { n.splice(n.indexOf(rc), 1); return null; }
@@ -86,7 +89,7 @@ function trackedRenderCache(n, x, y, sig) {
   return rc;
 }
 
-export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
+export function pcbTextGeom(item: Item, n: SNode, x: number, y: number, text: string, rot: number, layer: string, extra?: TextExtra | null): TextGeom | null {
   const ef = effectsOf(n); if (!text) return null;
   const color = pcbColor(layer); const z = pcbZ(layer) + Z_TEXT;
   // EDA_TEXT::GetEffectiveTextPenWidth.  A bold stroke text draws 1.6 × its stored width (BOLD_STROKE_MULTIPLIER);
@@ -96,12 +99,12 @@ export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
   const thick = ef.thick > 0 ? (boldStroke ? attrW * 1.6 : ef.thick) : (ef.bold ? ef.sizeX / 5 : ef.sizeX / 8);
   const ln = kid(n, "layer"); const knockout = (ln && has(ln, "knockout")) || yesNo(n, "knockout");
   // a knockout text is laid out with the stored width and drawn with the effective one (PCB_TEXT::TransformTextToPolySet)
-  const ex = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX }, knockout ? { knockout: true, layoutW: attrW } : null, extra || {});
+  const ex: TextExtra = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX }, knockout ? { knockout: true, layoutW: attrW } : null, extra || {});
   // (render_cache "text" angle (polygon …) …): the outlines KiCad drew this text with in an outline font, in board
   // coordinates.  A plot uses them as pcbnew does (the font itself cannot be read here); the screen draws the face.
   const rc = ef.face ? trackedRenderCache(n, x, y, JSON.stringify([text, rot || 0, ef.size, ef.sizeX, ef.just, ef.bold, ef.italic, ef.face, layer])) : null;
   if (ef.hide) {
-    const shadow = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
+    const shadow: GeomSink = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
     for (const g of shadow.geom) g.hiddenText = true;
     if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
     return null;
@@ -115,7 +118,7 @@ export function pcbTextGeom(item, n, x, y, text, rot, layer, extra) {
 /** The file version of the board being built (0 when unknown): some rules changed with the format. */
 let boardVersion = 0;
 
-export function buildPcbGeom(doc, item) {
+export function buildPcbGeom(doc: Doc, item: Item): void {
   boardVersion = (doc && doc.version) || 0;
   const n = item.node, k = item.kind;
   if (k === "segment") {
@@ -124,22 +127,22 @@ export function buildPcbGeom(doc, item) {
   } else if (k === "arc") {
     const s = kid(n, "start"), m = kid(n, "mid"), e = kid(n, "end"); if (!s || !m || !e) return; const layer = layerOf(n, "F.Cu"); const net = netCode(doc, n); item.net = net;
     const a = arcFrom3([num(s[1]), num(s[2])], [num(m[1]), num(m[2])], [num(e[1]), num(e[2])]);
-    if (a) G(item, Object.assign({ t: "arc", w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net }, a));
+    if (a) G(item, Object.assign({ t: "arc" as const, w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net }, a));
     else G(item, { t: "line", x1: num(s[1]), y1: num(s[2]), x2: num(e[1]), y2: num(e[2]), w: widthOf(n, 0.25), color: pcbColor(layer), layer, z: pcbZ(layer), cap: "round", track: true, net });
   } else if (k === "via") {
     buildViaGeom(doc, item, n);
   } else if (k === "zone") {
     buildZoneGeom(doc, item, n);
   } else if (k === "gr_line" || k === "gr_rect" || k === "gr_circle" || k === "gr_arc" || k === "gr_poly" || k === "gr_curve" || k === "gr_ellipse" || k === "gr_ellipse_arc") {
-    graphicGeom(item, n, k.replace("gr_", ""), (x, y) => [x, y], layerOf(n, "Dwgs.User"));
+    graphicGeom(item, n, k.replace("gr_", ""), (x: number, y: number) => [x, y], layerOf(n, "Dwgs.User"));
   } else if (k === "point") {
-    pointGeom(item, n, (x, y) => [x, y]);
+    pointGeom(item, n, (x: number, y: number) => [x, y]);
   } else if (k === "barcode") {
-    barcodeGeom(item, n, (x, y) => [x, y], 0);
+    barcodeGeom(item, n, (x: number, y: number) => [x, y], 0);
   } else if (k === "gr_text") {
     const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
   } else if (k === "gr_text_box") {
-    buildTextBoxGeom(item, n, (x, y) => [x, y], layerOf(n, "Dwgs.User"), 0);
+    buildTextBoxGeom(item, n, (x: number, y: number) => [x, y], layerOf(n, "Dwgs.User"), 0);
   } else if (k === "dimension") {
     buildDimensionGeom(item, n);
   } else if (k === "target") {
@@ -163,13 +166,13 @@ export function buildPcbGeom(doc, item) {
 export const HOLE_WALL = 0.020 * 1.5;
 
 /** Pad label colour on a copper layer: the netname layer colour, inverted on bright copper (PCB_RENDER_SETTINGS::LoadColors). */
-export function padNameColor(layer) {
+export function padNameColor(layer: string): string {
   const m = /^#([0-9a-f]{6})$/i.exec(pcbColor(layer)); if (!m) return PAD_TEXT;
   const v = parseInt(m[1], 16); const br = (0.299 * (v >> 16) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255;
   return br > 0.5 ? PAD_TEXT_DARK : PAD_TEXT;
 }
 
-export function buildViaGeom(doc, item, n) {
+export function buildViaGeom(doc: Doc, item: Item, n: SNode): void {
   const [x, y] = atOf(n); const sz = kid(n, "size"), dr = kid(n, "drill"); const size = sz ? num(sz[1]) : 0.8, drill = dr ? num(dr[1]) : 0.4;
   const vtype = has(n, "blind") ? "blind" : has(n, "micro") ? "micro" : "through";
   const ls = kid(n, "layers"); const pair = ls ? [str(ls[1]), str(ls[2])] : ["F.Cu", "B.Cu"];
@@ -182,16 +185,16 @@ export function buildViaGeom(doc, item, n) {
   // LAYER_VIA_HOLEWALLS: the plating, a ring just outside the drill clamped to the via's copper.  It rides on
   // the hole geometry (wallR / wallColor) and is painted right under it, so a via stays rings + hole.
   const wallR = Math.min(drill / 2 + HOLE_WALL, size / 2); const wall = wallR > drill / 2 ? { wallR, wallColor: HOLE_WALL_COLOR } : null;
-  if (vtype === "through") G(item, Object.assign({ t: "circle", x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true, hole: true, net }, wall));
+  if (vtype === "through") G(item, Object.assign({ t: "circle" as const, x, y, r: drill / 2, w: 0, color: VIA_HOLE, fill: VIA_HOLE, layer: "holes", z: zh, via: true, hole: true, net }, wall));
   else {
     // blind/buried and micro vias show their layer pair in the hole: top-colour upper half, bottom-colour lower half
-    G(item, Object.assign({ t: "arc", x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true, hole: true, net }, wall));
+    G(item, Object.assign({ t: "arc" as const, x, y, r: drill / 2, a0: Math.PI, a1: 2 * Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[0]), fill: pcbColor(pair[0]), layer: "holes", z: zh, pie: true, via: true, hole: true, net }, wall));
     G(item, { t: "arc", x, y, r: drill / 2, a0: 0, a1: Math.PI, anticlockwise: false, w: 0, color: pcbColor(pair[1]), fill: pcbColor(pair[1]), layer: "holes", z: zh, pie: true, via: true, hole: true, net });
   }
   item.viaType = vtype;
 }
 
-export function buildZoneGeom(doc, item, n) {
+export function buildZoneGeom(doc: Doc, item: Item, n: SNode): void {
   const single = kid(n, "layer"); const multi = kid(n, "layers");
   let layersZ = single ? [str(single[1])] : multi ? multi.slice(1).map(str) : ["F.Cu"];
   layersZ = padLayers(doc, layersZ);
@@ -205,7 +208,7 @@ export function buildZoneGeom(doc, item, n) {
     const p = polyPtsOf(poly); if (p.length < 2) continue;
     for (const layer of layersZ) {
       const color = pcbColor(layer); const z = pcbZ(layer) + (keepout ? Z_TEXT : 0.5);
-      G(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled });
+      G<PolyGeom>(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled });
       if (hatchStyle !== "none" && pitch > 0) {
         // ZONE::HatchBorder: short diagonal ticks along the border (edge) or full diagonals (full); slope by layer parity
         const info = doc.layers.get(layer); const slope = info && (info.id & 1) ? 1 : -1;
@@ -222,14 +225,14 @@ export function buildZoneGeom(doc, item, n) {
 }
 
 /** SHAPE_POLY_SET::GenerateHatchLines for one outline: lines y = slope·x + a every `spacing`, clipped to the polygon. */
-export function hatchLines(pts, slope, spacing, lineLen) {
-  const out = []; if (pts.length < 3) return out;
+export function hatchLines(pts: Pt[], slope: number, spacing: number, lineLen: number): number[][] {
+  const out: number[][] = []; if (pts.length < 3) return out;
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const [x, y] of pts) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
   const maxA = slope > 0 ? maxY - slope * minX : maxY - slope * maxX, minA0 = slope > 0 ? minY - slope * maxX : minY - slope * minX;
   const minA = Math.floor(minA0 / spacing) * spacing;
   if ((maxA - minA) / spacing > 4000) return out;   // pathological: skip rather than stall
-  const buf = [];
+  const buf: Pt[] = [];
   for (let a = minA; a < maxA; a += spacing) {
     buf.length = 0;
     for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -257,7 +260,7 @@ export function hatchLines(pts, slope, spacing, lineLen) {
 }
 
 /** PCB_PAINTER::draw(PCB_POINT): an X of the point's size in LAYER_POINTS and a ring of half that in the layer colour. */
-export function pointGeom(item, n, tf) {
+export function pointGeom(item: Item, n: SNode, tf: Tf): void {
   const at = kid(n, "at"); if (!at) return; const [x, y] = tf(num(at[1]), num(at[2]));
   const sz = kid(n, "size"), size = (sz ? num(sz[1]) : 1) / 2, layer = layerOf(n, "F.SilkS"), z = pcbZ(layer) + 0.9, w = 0.01;
   for (const [dx, dy] of [[1, 1], [1, -1]]) G(item, { t: "line", x1: x - size * dx, y1: y - size * dy, x2: x + size * dx, y2: y + size * dy, w, color: POINT_COLOR, layer, z, cap: "butt", point: true });
@@ -271,7 +274,7 @@ export const POINT_COLOR = "#FF26E2";   // LAYER_POINTS (builtin_color_themes.h)
  * position.  Code 39 / Code 128 bars are encoded as Zint encodes them (barcode.ts); the 2D symbologies draw their
  * finder patterns only.
  */
-export function barcodeGeom(item, n, tf, frot) {
+export function barcodeGeom(item: Item, n: SNode, tf: Tf, frot: number): void {
   const at = kid(n, "at"); if (!at) return;
   const [px, py] = tf(num(at[1]), num(at[2])); const rot = num(at[3]) + (frot || 0);
   const sz = kid(n, "size"), W = sz ? num(sz[1]) : 5, H = sz ? num(sz[2], W) : 5; if (!(W > 0) || !(H > 0)) return;
@@ -279,8 +282,8 @@ export function barcodeGeom(item, n, tf, frot) {
   const text = str((kid(n, "text") || [])[1] || ""), th = num((kid(n, "text_height") || [])[1], 1.5);
   const type = str((kid(n, "type") || [])[1] || "code39"), showText = !yesNo(n, "hide"), knockout = yesNo(n, "knockout");
   const back = /^B\./.test(layer), mx = back ? -1 : 1;   // side-specific: mirrored on the back
-  const R = rotator(rot); const P = (x, y) => { const [dx, dy] = R(mx * x, y); return [px + dx, py + dy]; };
-  const rects = [];   // symbol modules, in the barcode's frame (centred)
+  const R = rotator(rot); const P = (x: number, y: number): Pt => { const [dx, dy] = R(mx * x, y); return [px + dx, py + dy]; };
+  const rects: number[][] = [];   // symbol modules, in the barcode's frame (centred)
   if (type === "code39" || type === "code128") {
     const bc = type === "code39" ? code39(text) : code128(text);
     if (bc) for (const [a, b] of bc.bars) rects.push([-W / 2 + W * a / bc.modules, -H / 2, -W / 2 + W * b / bc.modules, H / 2]);
@@ -293,7 +296,7 @@ export function barcodeGeom(item, n, tf, frot) {
       for (let y = H / 2 - m; y > -H / 2 + m / 2; y -= 2 * m) rects.push([W / 2 - m, y - m, W / 2, y]);
     } else {
       const k = type === "microqr" ? 11 : 21, mw = W / k, mh = H / k;
-      const finder = (x0, y0) => {
+      const finder = (x0: number, y0: number) => {
         rects.push([x0, y0, x0 + 7 * mw, y0 + mh], [x0, y0 + 6 * mh, x0 + 7 * mw, y0 + 7 * mh], [x0, y0 + mh, x0 + mw, y0 + 6 * mh], [x0 + 6 * mw, y0 + mh, x0 + 7 * mw, y0 + 6 * mh]);
         rects.push([x0 + 2 * mw, y0 + 2 * mh, x0 + 5 * mw, y0 + 5 * mh]);
       };
@@ -317,7 +320,7 @@ export function barcodeGeom(item, n, tf, frot) {
   }
 }
 
-export function graphicGeom(item, g, shape, tf, layer, z) {
+export function graphicGeom(item: Item, g: SNode, shape: string, tf: Tf, layer: string, z?: number): void {
   const first = item.geom ? item.geom.length : 0;
   graphicShapeGeom(item, g, shape, tf, layer, z);
   // (layers "F.Cu" "F.Mask") (solder_mask_margin m): the shape also opens the mask, grown by the margin (plotting)
@@ -326,48 +329,48 @@ export function graphicGeom(item, g, shape, tf, layer, z) {
   const mm = kid(g, "solder_mask_margin");
   for (let i = first; i < item.geom.length; i++) { item.geom[i].maskLayer = mask; if (mm) item.geom[i].maskMargin = num(mm[1]); }
 }
-function graphicShapeGeom(item, g, shape, tf, layer, z) {
+function graphicShapeGeom(item: Item, g: SNode, shape: string, tf: Tf, layer: string, z: number | undefined): void {
   const w = widthOf(g, 0); const color = pcbColor(layer); z = z === undefined ? pcbZ(layer) : z;
   if (layer === "Edge.Cuts") item.edge = true;   // board outline: what "fit" and the board box mean
   const f = fillOf(g); const fillColor = f.type === "solid" ? color : null; const ds = dashOf(g);
   if (shape === "line") {
     const s = kid(g, "start"), e = kid(g, "end"); if (!s || !e) return; const a = tf(num(s[1]), num(s[2])), b = tf(num(e[1]), num(e[2]));
-    G(item, Object.assign({ t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" }, ds));
+    G(item, Object.assign({ t: "line" as const, x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" }, ds));
   } else if (shape === "rect") {
     const s = kid(g, "start"), e = kid(g, "end"); if (!s || !e) return;
     const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]);
-    G(item, Object.assign({ t: "poly", pts: [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)], close: true, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
+    G(item, Object.assign({ t: "poly" as const, pts: [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)], close: true, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "circle") {
     const c = kid(g, "center"), e = kid(g, "end"); if (!c) return; const [cx, cy] = tf(num(c[1]), num(c[2]));
     const r = e ? Math.hypot(num(e[1]) - num(c[1]), num(e[2]) - num(c[2])) : num((kid(g, "radius") || [])[1], 1);
-    G(item, Object.assign({ t: "circle", x: cx, y: cy, r, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
+    G(item, Object.assign({ t: "circle" as const, x: cx, y: cy, r, w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "arc") {
     const s = kid(g, "start"), m = kid(g, "mid"), e = kid(g, "end"); if (!s || !m || !e) return;
     const a = arcFrom3(tf(num(s[1]), num(s[2])), tf(num(m[1]), num(m[2])), tf(num(e[1]), num(e[2])));
-    if (a) G(item, Object.assign({ t: "arc", w, color, layer, z, cap: "round" }, a, ds));
-    else { const p0 = tf(num(s[1]), num(s[2])), p1 = tf(num(e[1]), num(e[2])); G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color, layer, z, cap: "round" }, ds)); }
+    if (a) G(item, Object.assign({ t: "arc" as const, w, color, layer, z, cap: "round" }, a, ds));
+    else { const p0 = tf(num(s[1]), num(s[2])), p1 = tf(num(e[1]), num(e[2])); G(item, Object.assign({ t: "line" as const, x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color, layer, z, cap: "round" }, ds)); }
   } else if (shape === "ellipse" || shape === "ellipse_arc") {
     const e = ellipsePts(g, false); if (!e) return; const p = e.pts.map(([x, y]) => tf(x, y));
-    G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color, fill: e.closed ? fillColor : null, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
+    G(item, Object.assign({ t: "poly" as const, pts: p, close: e.closed, w, color, fill: e.closed ? fillColor : null, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   } else if (shape === "poly" || shape === "curve") {
     let p = polyPtsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
     if (shape === "curve") p = bezierPts(p);
-    G(item, Object.assign({ t: "poly", pts: p, close: shape === "poly", w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
+    G(item, Object.assign({ t: "poly" as const, pts: p, close: shape === "poly", w, color, fill: fillColor, layer, z, noStroke: !!fillColor && w <= 0 }, ds));
   }
 }
 
-export function buildTextBoxGeom(item, n, tf, layer, rotBase) {
+export function buildTextBoxGeom(item: Item, n: SNode, tf: Tf, layer: string, rotBase: number): void {
   const ef = effectsOf(n); if (ef.hide) return;
   let pts = polyPtsOf(n).map(([x, y]) => tf(x, y));
   if (pts.length < 4) { const s = kid(n, "start"), e = kid(n, "end"); if (!s || !e) return; const x0 = num(s[1]), y0 = num(s[2]), x1 = num(e[1]), y1 = num(e[2]); pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)]; }
   const w = widthOf(n, 0); const color = pcbColor(layer); const z = pcbZ(layer);
-  if (yesNo(n, "border") || w > 0) G(item, Object.assign({ t: "poly", pts, close: true, w, color, layer, z }, dashOf(n)));
+  if (yesNo(n, "border") || w > 0) G(item, Object.assign({ t: "poly" as const, pts, close: true, w, color, layer, z }, dashOf(n)));
   const angN = kid(n, "angle"); const ang = angN ? num(angN[1]) : rotBase;
   const mg = kid(n, "margins"); const dm = w / 2 + ef.size * 0.75;
   const lm = mg ? num(mg[1]) : dm, tm = mg ? num(mg[2], lm) : dm, rm = mg ? num(mg[3], lm) : dm, bm = mg ? num(mg[4], tm) : dm;
   // PCB_TEXTBOX::GetDrawPos: the corner / edge mid-point matching the justification (file default centre / centre),
   // moved in by the margins along the box's own axes
-  const j = justOf(ef.just); const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+  const j = justOf(ef.just); const mid = (p: Pt, q: Pt): Pt => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
   const anchor = j.v === "top" ? (j.h === "left" ? pts[0] : j.h === "right" ? pts[1] : mid(pts[0], pts[1]))
     : j.v === "bottom" ? (j.h === "left" ? pts[3] : j.h === "right" ? pts[2] : mid(pts[3], pts[2]))
     : (j.h === "left" ? mid(pts[0], pts[3]) : j.h === "right" ? mid(pts[1], pts[2]) : mid(pts[0], pts[2]));
@@ -380,23 +383,23 @@ export function buildTextBoxGeom(item, n, tf, layer, rotBase) {
   pcbTextGeom(item, n, anchor[0] + ex[0] / el * ox + ey[0] / yl * oy, anchor[1] + ex[1] / el * ox + ey[1] / yl * oy, linebreakText(unescapeText(str(n[1])), col, ef.sizeX, pen, ef.italic), ang, layer);
 }
 
-export function buildDimensionGeom(item, n) {
+export function buildDimensionGeom(item: Item, n: SNode): void {
   const typeN = kid(n, "type"); const type = typeN ? str(typeN[1]) : "aligned";
   const layer = layerOf(n, "Dwgs.User"); const color = pcbColor(layer); const z = pcbZ(layer);
   const pts = polyPtsOf(n); if (pts.length < 2) return;
   const style = kid(n, "style") || []; const thick = num((kid(style, "thickness") || [])[1], 0.15); const arrowLen = num((kid(style, "arrow_length") || [])[1], 1.27);
   const extH = num((kid(style, "extension_height") || [])[1], 0.58586), extOff = num((kid(style, "extension_offset") || [])[1], 0);
   const inward = str((kid(style, "arrow_direction") || [])[1]) === "inward";
-  const gt = kid(n, "gr_text"); const ef = gt ? effectsOf(gt) : { size: 1, thick: 0.15, just: [] };
+  const gt = kid(n, "gr_text"); const ef: Pick<TextEffects, "size" | "thick" | "just"> = gt ? effectsOf(gt) : { size: 1, thick: 0.15, just: [] };
   const [tx, ty, tr] = gt ? atOf(gt) : [0, 0, 0]; const text = gt ? str(gt[1]) : "";
   const tw = textWidth(parseMarkup(text).text, ef.size, ef.thick), th = ef.size;
-  const line = (a, b) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: thick, color, layer, z, cap: "round" });
-  const arrow = (p, ang, tail) => {   // PCB_DIMENSION_BASE::drawAnArrow: two 27.5° barbs (and an optional tail)
+  const line = (a: Pt, b: Pt) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: thick, color, layer, z, cap: "round" });
+  const arrow = (p: Pt, ang: number, tail: number) => {   // PCB_DIMENSION_BASE::drawAnArrow: two 27.5° barbs (and an optional tail)
     if (tail) { const [dx, dy] = rotPt(tail, 0, -ang); line(p, [p[0] + dx, p[1] + dy]); }
     for (const s of [27.5, -27.5]) { const [dx, dy] = rotPt(arrowLen, 0, -ang + s); line(p, [p[0] + dx, p[1] + dy]); }
   };
   // knock the text box (inflated by size/2 along, pen across) out of a segment
-  const knock = (a, b, inflY) => {
+  const knock = (a: Pt, b: Pt, inflY: number) => {
     if (!text) { line(a, b); return; }
     const hw = tw / 2 + ef.size / 2, hh = th / 2 + inflY; const R = rotator(-tr);
     const la = R(a[0] - tx, a[1] - ty), lb = R(b[0] - tx, b[1] - ty);
@@ -409,12 +412,12 @@ export function buildDimensionGeom(item, n) {
     if (t0 > 0) line(a, [a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0]);
     if (t1 < 1) line([a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1], b);
   };
-  const deg = (v) => Math.atan2(v[1], v[0]) * 180 / Math.PI;   // EDA_ANGLE( vector ): atan2( y, x ) in the file's frame, which drawAnArrow turns back by
+  const deg = (v: Pt) => Math.atan2(v[1], v[0]) * 180 / Math.PI;   // EDA_ANGLE( vector ): atan2( y, x ) in the file's frame, which drawAnArrow turns back by
   const [s, e] = pts;
   if (type === "aligned" || type === "orthogonal") {
     const height = num((kid(n, "height") || [])[1], 0); const orientN = kid(n, "orientation"); const ortho = type === "orthogonal";
     const horiz = ortho && num(orientN ? orientN[1] : 0) === 0;
-    let ext; if (ortho) ext = horiz ? [0, 1] : [1, 0]; else { const d = [e[0] - s[0], e[1] - s[1]]; ext = [-d[1], d[0]]; }   // sgn below carries the height's sign (KiCad's Resize(negative))
+    let ext: Pt; if (ortho) ext = horiz ? [0, 1] : [1, 0]; else { const d = [e[0] - s[0], e[1] - s[1]]; ext = [-d[1], d[0]]; }   // sgn below carries the height's sign (KiCad's Resize(negative))
     const el = Math.hypot(ext[0], ext[1]) || 1; const en = [ext[0] / el, ext[1] / el];
     const extLen = Math.abs(height) - extOff + extH;
     const sgn = height >= 0 ? 1 : -1;
@@ -446,19 +449,19 @@ export function buildDimensionGeom(item, n) {
   if (gt) pcbTextGeom(item, gt, tx, ty, text, tr, layer);
 }
 
-export function buildFootprintGeom(doc, item) {
+export function buildFootprintGeom(doc: Doc, item: Item): void {
   const n = item.node;
   const [fx, fy, frot] = atOf(n); const side = layerOf(n, "F.Cu"); const R = rotator(frot);
   const trN = kid(n, "transform"); const scN = trN && kid(trN, "scale"); const sx = scN ? num(scN[1], 1) || 1 : 1, sy = scN ? num(scN[2], 1) || 1 : 1;
-  const tf = (lx, ly) => { const [x, y] = R(lx * sx, ly * sy); return [fx + x, fy + y]; };   // TRANSFORM_TRS: scale, rotate, translate
+  const tf = (lx: number, ly: number): Pt => { const [x, y] = R(lx * sx, ly * sy); return [fx + x, fy + y]; };   // TRANSFORM_TRS: scale, rotate, translate
   item.movable = true; item.x = fx; item.y = fy; item.rot = frot; item.layer = side; item.lib = str(n[1]);
-  const props = {};
+  const props: Record<string, string> = {};
   for (const p of kids(n, "property")) { props[str(p[1])] = str(p[2]); }
   item.ref = props.Reference || ""; item.value = props.Value || "";
-  const expand = (t) => t.replace(/\$\{(REFERENCE|VALUE|FOOTPRINT_NAME|LAYER)\}/g, (m, v) => v === "REFERENCE" ? item.ref : v === "VALUE" ? item.value : v === "LAYER" ? side : item.lib);
-  const textAt = (p, text) => {
+  const expand = (t: string) => t.replace(/\$\{(REFERENCE|VALUE|FOOTPRINT_NAME|LAYER)\}/g, (m: string, v: string) => (v === "REFERENCE" ? item.ref : v === "VALUE" ? item.value : v === "LAYER" ? side : item.lib) as string);   // all four set just above
+  const textAt = (p: SNode, text: string) => {
     if (!isList(kid(p, "at"))) return;
-    const at = kid(p, "at"); const [px, py, pr] = atOf(p); const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS"); const [x, y] = tf(px, py);
+    const at = kid(p, "at")!; const [px, py, pr] = atOf(p); const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS"); const [x, y] = tf(px, py);
     const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
     const field = p[0] === "property" ? str(p[1]) : p[0] === "fp_text" ? (str(p[1]) === "reference" ? "Reference" : str(p[1]) === "value" ? "Value" : null) : null;
     pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field } : { upright: !unlocked });
@@ -471,7 +474,7 @@ export function buildFootprintGeom(doc, item) {
       graphicGeom(item, g, gk.replace("fp_", ""), tf, layerOf(g, "F.SilkS"));
     } else if (gk === "point") {
       // files before FIRST_FP_AFFINE_TRANSFORM (20260616) kept a footprint's points in the board frame
-      pointGeom(item, g, doc && doc.version > 0 && doc.version < 20260616 ? (x, y) => [x, y] : tf);
+      pointGeom(item, g, doc && doc.version > 0 && doc.version < 20260616 ? (x: number, y: number) => [x, y] : tf);
     } else if (gk === "barcode") {
       barcodeGeom(item, g, tf, frot);
     } else if (gk === "fp_text") {
@@ -484,14 +487,14 @@ export function buildFootprintGeom(doc, item) {
       buildDimensionGeom(item, g);   // a footprint's dimension is stored in board coordinates, like its zones
     } else if (gk === "zone") {
       const before = item.geom.length; buildZoneGeom(doc, item, g);
-      for (let i = before; i < item.geom.length; i++) { const z = item.geom[i]; if (z.pts) z.pts = z.pts.map(([x, y]) => tf(x, y)); else if (z.t === "line") { const a = tf(z.x1, z.y1), b = tf(z.x2, z.y2); z.x1 = a[0]; z.y1 = a[1]; z.x2 = b[0]; z.y2 = b[1]; } }
+      for (let i = before; i < item.geom.length; i++) { const z: Geom = item.geom[i]; if (z.pts) z.pts = z.pts.map(([x, y]) => tf(x, y)); else if (z.t === "line") { const a = tf(z.x1, z.y1), b = tf(z.x2, z.y2); z.x1 = a[0]; z.y1 = a[1]; z.x2 = b[0]; z.y2 = b[1]; } }
     }
   }
   if (!item.bbox) bboxAdd(item, fx, fy, 1);
 }
 
 /** Outline polygon (local, unrotated) for chamfered / trapezoid pads. */
-export function padPolygon(pad, shape, w, h) {
+export function padPolygon(pad: SNode, shape: string, w: number, h: number): Pt[] {
   const hw = w / 2, hh = h / 2;
   if (shape === "trapezoid") {
     const d = kid(pad, "rect_delta"); const dx = d ? num(d[1]) : 0, dy = d ? num(d[2]) : 0;
@@ -501,8 +504,8 @@ export function padPolygon(pad, shape, w, h) {
   // chamfered rect: TransformRoundChamferedRectToPolygon (round corners of the other corners are ignored)
   const ch = kid(pad, "chamfer"); const corners = ch ? ch.slice(1).map(str) : [];
   const ratioN = kid(pad, "chamfer_ratio"); const c = Math.max(0, (ratioN ? num(ratioN[1]) : 0.25) * Math.min(w, h));
-  const has_ = (s) => corners.includes(s);
-  const pts = [];
+  const has_ = (s: string) => corners.includes(s);
+  const pts: Pt[] = [];
   if (has_("top_left") && c > 0) pts.push([-hw, -hh + c], [-hw + c, -hh]); else pts.push([-hw, -hh]);
   if (has_("top_right") && c > 0) pts.push([hw - c, -hh], [hw, -hh + c]); else pts.push([hw, -hh]);
   if (has_("bottom_right") && c > 0) pts.push([hw, hh - c], [hw - c, hh]); else pts.push([hw, hh]);
@@ -510,7 +513,7 @@ export function padPolygon(pad, shape, w, h) {
   return pts;
 }
 
-export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
+export function buildPadGeom(item: Item, pad: SNode, tf: Tf, side: string, doc: Doc, padIndex: number): void {
   const number = str(pad[1]), type = str(pad[2]); let shape = str(pad[3]);
   const netN = kid(pad, "net"); const net = netCode(doc, pad);
   const netname = netN ? (typeof netN[1] === "number" ? (netN.length > 2 ? str(netN[2]) : str((doc && doc.nets && doc.nets.get(netN[1])) || "")) : str(netN[1])) : "";
@@ -525,16 +528,16 @@ export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
   if (dr) { const off = kid(dr, "offset"); if (off) { const [ox, oy] = rotator(prot)(num(off[1]), num(off[2])); hx += ox; hy += oy; } }
   const npth = type === "np_thru_hole";
   // one geometry per layer the pad is on (copper, mask, paste): whichever is drawn last wins, like KiCad
-  const shapes = [];
-  const pushShape = (layer, z, color, fill) => {
+  const shapes: (PadGeom | PolyGeom)[] = [];
+  const pushShape = (layer: string, z: number, color: string, fill: string) => {
     const from = item.geom.length;
     pushPadShape(layer, z, color, fill);
     for (let i = from; i < item.geom.length; i++) { const pg = item.geom[i]; pg.pad = true; pg.padIndex = padIndex; pg.padNumber = number; pg.padType = type; pg.net = net; pg.netName = netname; }   // tagged for outlinePads / padAt / net colours
   };
-  const pushPadShape = (layer, z, color, fill) => {
+  const pushPadShape = (layer: string, z: number, color: string, fill: string) => {
     if (shape === "custom") {
-      const prims = kid(pad, "primitives"); const anchor = str((kid(pad, "options") && kid(kid(pad, "options"), "anchor") || [])[1]);
-      if (prims) { const Rp = rotator(prot); const ptf = (lx, ly) => { const [x, y] = Rp(lx, ly); return [cx + x, cy + y]; }; for (const pr of prims.slice(1)) if (isList(pr)) { const before = item.geom.length; graphicGeom(item, pr, pr[0].replace("gr_", ""), ptf, layer, z); for (let i = before; i < item.geom.length; i++) { const gg = item.geom[i]; gg.color = color; if (gg.fill) gg.fill = fill; if (!gg.fill && gg.w <= 0) { gg.fill = fill; gg.noStroke = true; } } } }
+      const prims = kid(pad, "primitives"); const anchor = str((kid(pad, "options") && kid(kid(pad, "options")!, "anchor") || [])[1]);
+      if (prims) { const Rp = rotator(prot); const ptf = (lx: number, ly: number): Pt => { const [x, y] = Rp(lx, ly); return [cx + x, cy + y]; }; for (const pr of prims.slice(1)) if (isList(pr)) { const before = item.geom.length; graphicGeom(item, pr, (pr[0] as string).replace("gr_", ""), ptf, layer, z); for (let i = before; i < item.geom.length; i++) { const gg = item.geom[i]; gg.color = color; if (gg.fill) gg.fill = fill; if (!gg.fill && gg.w <= 0) { gg.fill = fill; gg.noStroke = true; } } } }
       shapes.push(G(item, { t: "pad", x: cx, y: cy, w, h, rot: prot, shape: anchor === "circle" ? "circle" : "rect", rr: 0, color, fill, layer, z }));
     } else if (shape === "trapezoid" || (shape === "rect" && kid(pad, "rect_delta")) || (shape === "custom" ? false : (kid(pad, "chamfer") && shape !== "circle" && shape !== "oval"))) {
       const Rp = rotator(prot); const pts = padPolygon(pad, shape === "trapezoid" || kid(pad, "rect_delta") ? "trapezoid" : "chamfer", w, h).map(([lx, ly]) => { const [x, y] = Rp(lx, ly); return [cx + x, cy + y]; });
@@ -567,7 +570,7 @@ export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
   if (number || shownNet) {
     // the pad's bounding box on the board decides the room and the reading direction
     let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
-    const grow = (x, y, r) => { if (x - r < bx0) bx0 = x - r; if (y - r < by0) by0 = y - r; if (x + r > bx1) bx1 = x + r; if (y + r > by1) by1 = y + r; };
+    const grow = (x: number, y: number, r: number) => { if (x - r < bx0) bx0 = x - r; if (y - r < by0) by0 = y - r; if (x + r > bx1) bx1 = x + r; if (y + r > by1) by1 = y + r; };
     const firstLayer = shapes.length ? shapes[0].layer : null;
     if (shape === "custom" && firstLayer) {
       for (const sg of item.geom) {
@@ -580,7 +583,7 @@ export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
     }
     if (!isFinite(bx0)) {
       const ca = Math.abs(Math.cos(prot * Math.PI / 180)), sa = Math.abs(Math.sin(prot * Math.PI / 180));
-      let ex, ey;
+      let ex: number, ey: number;
       if (shape === "circle") ex = ey = w / 2;
       else if (shape === "oval") { const r = Math.min(w, h) / 2, hx = w > h ? (w - h) / 2 : 0, hy = h > w ? (h - w) / 2 : 0; ex = hx * ca + hy * sa + r; ey = hx * sa + hy * ca + r; }
       else { ex = (w * ca + h * sa) / 2; ey = (w * sa + h * ca) / 2; }
@@ -599,9 +602,9 @@ export function buildPadGeom(item, pad, tf, side, doc, padIndex) {
     const textLayer = copper || layers[0] || side; const z = pth ? pcbZ("holes") + 1 : pcbZ(textLayer) + 3.6;
     const color = pth ? PAD_TEXT : padNameColor(textLayer);
     const padCu = layers.filter((l) => /\.Cu$/.test(l));
-    const label = (text, ts, dyLocal, tag) => {
+    const label = (text: string, ts: number, dyLocal: number, tag: "padNet" | "padNum") => {
       const [dx, dy] = rotPt(0, dyLocal, rot);
-      const g = { t: "text", x: tcx + dx, y: tcy + dy, text, size: ts, sizeX: ts * 0.9, w: ts * 0.9 / 6, color, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padMin, padLayers: padCu.length ? padCu : [textLayer], noBox: true, minPx: 3.5 };   // below 3.5 px the label is a smudge: skipped (KiCad would still paint it)
+      const g: TextGeom = { t: "text", x: tcx + dx, y: tcy + dy, text, size: ts, sizeX: ts * 0.9, w: ts * 0.9 / 6, color, rot, h: "center", v: "middle", layer: textLayer, z, padText: true, padMin, padLayers: padCu.length ? padCu : [textLayer], noBox: true, minPx: 3.5 };   // below 3.5 px the label is a smudge: skipped (KiCad would still paint it)
       g[tag] = true; G(item, g);
     };
     if (shownNet) {

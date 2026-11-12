@@ -21,7 +21,6 @@
 // render (the canvas painter), export (SVG / PNG).  `npm run build:canvas` bundles this entry into
 // static/kicad-canvas.js, which the server serves and the node test suites load.
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
 import { PCB_BG, PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, SCH_DEFAULT, SCH_THEMES, pcbColor, pcbZ, schTheme, schThemeColors, setSchTheme, withSchTheme } from "./colors";
 import { PAPER_SIZES, addItem, applyDocProps, computeBBox, mm2mils, paperSize, parseDoc, titleBlockOf } from "./doc";
@@ -77,7 +76,13 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
   pcbSizes };
 
-api.itemTouchesRect = itemTouchesRect; api.itemVisible = itemVisible; api.geomTouchesRect = geomTouchesRect;
-api.boardItemBox = boardItemBox; api.presenceSelection = presenceSelection;   // BOARD_ITEM::GetBoundingBox for the presence payload (web/canvas/kicad-bbox.ts)
-api.pcbNetlist = pcbNetlist; api.schNets = schNets; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile; api.padModel = padModel;   // the board dialogs' pure halves (web/editor/pcbdialogs)
+/** The api with the members assigned below, after the literal (the literal's own type does not have them). */
+type Api = typeof api & {
+  itemTouchesRect: typeof itemTouchesRect; itemVisible: typeof itemVisible; geomTouchesRect: typeof geomTouchesRect;
+  boardItemBox: typeof boardItemBox; presenceSelection: typeof presenceSelection;
+  pcbNetlist: typeof pcbNetlist; schNets: typeof schNets; boardSetup: typeof boardSetup; DRC_ITEMS: typeof DRC_ITEMS; projectFile: typeof projectFile; padModel: typeof padModel;
+};
+(api as Api).itemTouchesRect = itemTouchesRect; (api as Api).itemVisible = itemVisible; (api as Api).geomTouchesRect = geomTouchesRect;
+(api as Api).boardItemBox = boardItemBox; (api as Api).presenceSelection = presenceSelection;   // BOARD_ITEM::GetBoundingBox for the presence payload (web/canvas/kicad-bbox.ts)
+(api as Api).pcbNetlist = pcbNetlist; (api as Api).schNets = schNets; (api as Api).boardSetup = boardSetup; (api as Api).DRC_ITEMS = DRC_ITEMS; (api as Api).projectFile = projectFile; (api as Api).padModel = padModel;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 root.KiCadCanvas = api;

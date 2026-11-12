@@ -1,5 +1,4 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { root } from "./env";
 import { SCH, SCH_Z, Z_BITMAP, pcbColor, pcbZ } from "./colors";
 import { G, bboxAdd, textLines } from "./geom";
@@ -8,6 +7,10 @@ import { atOf, boolOf, boxOf, colorOf, cornersInSequence, effectsOf, fillOf, jus
 import { SCH_PEN, textPen } from "./text";
 import { linebreakText } from "./stroke-font";
 import { unescapeText } from "./text";
+import type { BoxRot, Doc, ImageEntry, Item, Pt, StrokeInfo } from "./types";
+
+/** node's Buffer, when the module runs under node (tests, the MCP host); absent in a browser. */
+declare const Buffer: { from(s: string, encoding: string): ArrayLike<number> } | undefined;
 // ---------------------------------------------------------------- tables and images
 /**
  * (table (column_count N) (border (external yes) (header yes) (stroke …)) (separators (rows yes) (cols yes) (stroke …))
@@ -17,7 +20,7 @@ import { unescapeText } from "./text";
  * SCH_TABLE/PCB_TABLE::DrawBorders; cell text is anchored per SCH_TEXTBOX/PCB_TEXTBOX::GetDrawPos.
  * Cells covered by a span carry (span 0 0) and draw nothing.  The table's anchor is its first cell's position.
  */
-export function buildTableGeom(doc, item, n) {
+export function buildTableGeom(doc: Doc, item: Item, n: SNode): void {
   const isPcb = doc.type === "pcb";
   const cols = Math.max(1, Math.round(num((kid(n, "column_count") || [])[1], 1)) || 1);
   const cellsN = kid(n, "cells"); const cellNodes = cellsN ? kids(cellsN, "table_cell") : [];
@@ -28,9 +31,9 @@ export function buildTableGeom(doc, item, n) {
   const external = boolOf(borderN, "external", true), header = boolOf(borderN, "header", true);
   const rowsOn = boolOf(sepN, "rows", true), colsOn = boolOf(sepN, "cols", true);
   const bs = strokeOf(borderN, isPcb ? 0 : SCH_PEN), ss = strokeOf(sepN, isPcb ? 0 : SCH_PEN);
-  const lineColor = (st) => isPcb ? pcbColor(layer) : (st.color || SCH.notes);
-  const lineWidth = (st) => isPcb ? Math.max(st.w, 0) : (st.w > 0 ? st.w : SCH_PEN);   // SCH_PAINTER: width 0 → default pen
-  const cells = cellNodes.map((c, i) => {
+  const lineColor = (st: StrokeInfo) => isPcb ? pcbColor(layer) : (st.color || SCH.notes);
+  const lineWidth = (st: StrokeInfo) => isPcb ? Math.max(st.w, 0) : (st.w > 0 ? st.w : SCH_PEN);   // SCH_PAINTER: width 0 → default pen
+  const cells = cellNodes.map((c, i): { node: SNode; box: BoxRot; cs: number; rs: number } | null => {
     const b = boxOf(c); if (!b) return null;
     const sp = kid(c, "span"); const cs = sp ? num(sp[1], 1) : 1, rs = sp ? num(sp[2], 1) : 1;
     return { node: c, box: b, cs, rs };
@@ -38,7 +41,7 @@ export function buildTableGeom(doc, item, n) {
   const first = cells.find((c) => c);
   item.movable = true; item.rot = 0; if (isPcb) item.layer = layer;
   if (!first) { const [x, y] = atOf(n); item.x = x; item.y = y; bboxAdd(item, x, y, 1); return; }
-  const a0 = kid(first.node, "at") || kid(first.node, "start"); item.x = num(a0[1]); item.y = num(a0[2]);
+  const a0 = (kid(first.node, "at") || kid(first.node, "start"))!; item.x = num(a0[1]); item.y = num(a0[2]);   // boxOf found one of them
   const drawAngle = first.box.rot;
   // cells: fill + text
   for (const c of cells) {
@@ -60,7 +63,7 @@ export function buildTableGeom(doc, item, n) {
     if (isPcb) {
       // PCB_TEXTBOX::GetDrawPos: the corner / mid-point matching the justification, offset by the margins in the text frame
       const cr = cornersInSequence(b, b.rot);
-      const mid = (p, q) => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+      const mid = (p: Pt, q: Pt): Pt => [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
       const anchor = j.v === "top" ? (j.h === "left" ? cr[0] : j.h === "right" ? cr[1] : mid(cr[0], cr[1]))
         : j.v === "bottom" ? (j.h === "left" ? cr[3] : j.h === "right" ? cr[2] : mid(cr[3], cr[2]))
         : (j.h === "left" ? mid(cr[0], cr[3]) : j.h === "right" ? mid(cr[1], cr[2]) : mid(mid(cr[0], cr[2]), mid(cr[1], cr[3])));
@@ -69,15 +72,15 @@ export function buildTableGeom(doc, item, n) {
       pcbTextGeom(item, cn, anchor[0] + dx, anchor[1] + dy, text, b.rot, layer, { defH: "center", defV: "middle" });
     } else {
       // SCH_TEXTBOX::GetDrawPos
-      const vert = ((Math.round(b.rot) % 180) + 180) % 180 === 90; let tx, ty;
+      const vert = ((Math.round(b.rot) % 180) + 180) % 180 === 90; let tx: number, ty: number;
       if (vert) { ty = j.h === "left" ? b.y1 - bm : j.h === "right" ? b.y0 + tm : (b.y0 + b.y1) / 2; tx = j.v === "top" ? b.x0 + lm : j.v === "bottom" ? b.x1 - rm : (b.x0 + b.x1) / 2; }
       else { tx = j.h === "left" ? b.x0 + lm : j.h === "right" ? b.x1 - rm : (b.x0 + b.x1) / 2; ty = j.v === "top" ? b.y0 + tm : j.v === "bottom" ? b.y1 - bm : (b.y0 + b.y1) / 2; }
       textLines(item, tx, ty, text, ef.size, colorOf(cn) || SCH.notes, b.rot, [j.h, j.v], layer, { z, w: textPen(ef, ef.size) });
     }
   }
   // borders: SCH_TABLE::DrawBorders / PCB_TABLE::DrawBorders
-  const cellAt = (r, c) => cells[r * cols + c] || null;
-  const line = (p, q, st) => G(item, { t: "line", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: lineWidth(st), color: lineColor(st), layer, z, cap: "butt", dash: st.dash || undefined, dashType: st.type || undefined });
+  const cellAt = (r: number, c: number) => cells[r * cols + c] || null;
+  const line = (p: Pt, q: Pt, st: StrokeInfo) => G(item, { t: "line", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: lineWidth(st), color: lineColor(st), layer, z, cap: "butt", dash: st.dash || undefined, dashType: st.type || undefined });
   for (let col = 0; col < cols - 1; col++) for (let row = 0; row < rows; row++) {
     const st = row === 0 && header ? bs : colsOn ? ss : null; if (!st) continue;
     const c = cellAt(row, col); if (!c || c.cs <= 0 || col + c.cs === cols) continue;
@@ -101,7 +104,7 @@ export function buildTableGeom(doc, item, n) {
 }
 
 /** Shift every cell of a table node by (dx, dy) — tables have no (at) of their own. */
-export function shiftTable(node, dx, dy) {
+export function shiftTable(node: SNode, dx: number, dy: number): void {
   const cellsN = kid(node, "cells"); if (!cellsN) return;
   for (const c of kids(cellsN, "table_cell")) for (const key of ["at", "start", "end"]) { const p = kid(c, key); if (p) { p[1] = +(num(p[1]) + dx).toFixed(4); p[2] = +(num(p[2]) + dy).toFixed(4); } }
 }
@@ -115,14 +118,14 @@ export function shiftTable(node, dx, dy) {
  * finishes loading (or fails) KiCadCanvas.onAssetLoaded({ id, kind: "image", ok }) is called, if set, so the
  * app can request a repaint.
  */
-export const IMAGE_CACHE = new Map(), IMAGE_CACHE_MAX = 64;
+export const IMAGE_CACHE = new Map<string, ImageEntry>(), IMAGE_CACHE_MAX = 64;
 
-export const DATA_CACHE = new WeakMap();
+export const DATA_CACHE = new WeakMap<SNode, { b64: string; hash: string }>();
    // (data …) node → { b64, hash }: geometry rebuilds (drags) must not re-join / re-hash megabytes
-export function strHash(s) { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16) + "-" + s.length; }
+export function strHash(s: string): string { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(16) + "-" + s.length; }
 
 /** Decode base64 to bytes (only the first `limit` characters when given — headers live at the front). */
-export function base64Bytes(b64, limit) {
+export function base64Bytes(b64: unknown, limit?: number): Uint8Array {
   let s = String(b64 || "").replace(/[^A-Za-z0-9+/=]/g, ""); if (limit && s.length > limit) s = s.slice(0, limit - (limit % 4));
   if (typeof Buffer !== "undefined" && Buffer.from) return new Uint8Array(Buffer.from(s, "base64"));
   if (typeof atob === "function") { const bin = atob(s); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
@@ -130,9 +133,9 @@ export function base64Bytes(b64, limit) {
 }
 
 /** Pixel size, MIME type and PPI from a PNG (IHDR / pHYs) or JPEG (SOFn / JFIF density) header: BITMAP_BASE::updatePPI rules, 300 PPI default. */
-export function imageInfo(bytes) {
+export function imageInfo(bytes: ArrayLike<number>): { mime: string; w: number; h: number; ppi: number } {
   const info = { mime: "image/png", w: 0, h: 0, ppi: 300 };
-  const be32 = (i) => ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0, be16 = (i) => (bytes[i] << 8) | bytes[i + 1];
+  const be32 = (i: number) => ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0, be16 = (i: number) => (bytes[i] << 8) | bytes[i + 1];
   if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
     info.w = be32(16); info.h = be32(20);
     for (let p = 8; p + 8 <= bytes.length;) {
@@ -162,22 +165,22 @@ export function imageInfo(bytes) {
   return info;
 }
 
-export function notifyAsset(id, ok) {
+export function notifyAsset(id: string, ok: boolean): void {
   const cb = root.KiCadCanvas && root.KiCadCanvas.onAssetLoaded;
   if (typeof cb === "function") { try { cb({ id, kind: "image", ok }); } catch (e) { /* a repaint hook must not break the loader */ } }
 }
 
 /** Cached decoded image per item id + data hash: {url, mime, w, h (px), ppi, img, loaded, failed}. */
-export function imageEntry(id, b64, hash) {
+export function imageEntry(id: string, b64: string, hash?: string): ImageEntry {
   const key = id + ":" + (hash || strHash(b64));
   let e = IMAGE_CACHE.get(key); if (e) return e;
   const info = imageInfo(base64Bytes(b64, 1 << 17));
   e = { key, id, url: b64 ? "data:" + info.mime + ";base64," + b64 : "", mime: info.mime, w: info.w, h: info.h, ppi: info.ppi, img: null, loaded: false, failed: false };
-  if (IMAGE_CACHE.size >= IMAGE_CACHE_MAX) IMAGE_CACHE.delete(IMAGE_CACHE.keys().next().value);
+  if (IMAGE_CACHE.size >= IMAGE_CACHE_MAX) IMAGE_CACHE.delete(IMAGE_CACHE.keys().next().value as string);
   IMAGE_CACHE.set(key, e);
   const Img = root.Image;
   if (b64 && typeof Img === "function") {
-    const img = new Img(); e.img = img;
+    const img: HTMLImageElement = new Img(); e.img = img;
     img.onload = () => { e.loaded = true; if (img.naturalWidth > 0) { e.w = img.naturalWidth; e.h = img.naturalHeight; } notifyAsset(id, true); };
     img.onerror = () => { e.failed = true; notifyAsset(id, false); };
     img.src = e.url;
@@ -185,7 +188,7 @@ export function imageEntry(id, b64, hash) {
   return e;
 }
 
-export function buildImageGeom(doc, item, n) {
+export function buildImageGeom(doc: Doc, item: Item, n: SNode): void {
   const isPcb = doc.type === "pcb"; const [x, y] = atOf(n);
   const scN = kid(n, "scale"); let scale = scN ? num(scN[1], 1) : 1; if (!(scale > 0) || !isFinite(scale)) scale = 1;
   const dataN = kid(n, "data"); let d = dataN ? DATA_CACHE.get(dataN) : null;

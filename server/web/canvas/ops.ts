@@ -1,12 +1,12 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { PCB_KINDS, SCH_KINDS, addItem } from "./doc";
 import { buildGeom } from "./geom";
 import { atOf, isList, kid, kids, num, parseAll, ptsOf, str, uuidOf } from "./sexpr";
 import { shiftTable } from "./tables-images";
+import type { Doc, WireChange } from "./types";
 // ---------------------------------------------------------------- ops
-export function fragmentItems(doc, sexpr) {
-  const out = [];
+export function fragmentItems(doc: Doc, sexpr: string): SNode[] {
+  const out: SNode[] = [];
   for (const tree of parseAll(sexpr)) {
     if (tree[0] === "kicad_sch" || tree[0] === "kicad_pcb") {
       const ls = kid(tree, "lib_symbols"); if (ls) for (const s of kids(ls, "symbol")) doc.lib.set(str(s[1]), s);
@@ -17,7 +17,7 @@ export function fragmentItems(doc, sexpr) {
   return out;
 }
 
-export function setAt(node, x, y, rot) {
+export function setAt(node: SNode, x: number | undefined, y: number | undefined, rot?: number): void {
   const t = kid(node, "transform");
   if (t) {
     let tr = kid(t, "translate"); if (!tr) { tr = ["translate", 0, 0]; t.push(tr); }
@@ -33,7 +33,7 @@ export function setAt(node, x, y, rot) {
 
 /** Apply one wire-format change {id, kind, sexpr?, itemSexpr?, properties?} (IU per mm given). */
 /** The schematic-only library copy a symbol names with (lib_name …), or null. */
-function libNameOf(doc, id) {
+function libNameOf(doc: Doc, id: string): string | null {
   const it = doc.type === "sch" ? doc.items.get(id) : null; if (!it || it.kind !== "symbol") return null;
   const n = kid(it.node, "lib_name"); return n ? str(n[1]) : null;
 }
@@ -42,12 +42,12 @@ function libNameOf(doc, id) {
  * symbol on the sheet names it any more, it leaves (lib_symbols).  Copies named by their lib_id stay, as other
  * edits in flight (a symbol being placed) rely on them.
  */
-function pruneLibName(doc, name) {
+function pruneLibName(doc: Doc, name: string | null): void {
   if (!name || !doc.lib || !doc.lib.has(name)) return;
   for (const it of doc.items.values()) if (it.kind === "symbol") { const n = kid(it.node, "lib_name") || kid(it.node, "lib_id"); if (n && str(n[1]) === name) return; }
   doc.lib.delete(name);
 }
-export function applyChange(doc, change, IU) {
+export function applyChange(doc: Doc, change: WireChange, IU: number): boolean {
   const id = str(change.id), kind = str(change.kind).toUpperCase();
   const oldLib = libNameOf(doc, id);
   if (kind === "REMOVED") { const r = doc.items.delete(id); pruneLibName(doc, oldLib); return r; }
@@ -67,7 +67,7 @@ export function applyChange(doc, change, IU) {
   const item = doc.items.get(id);
   if (!item) return false;
   if (kind === "MODIFIED" && Array.isArray(change.properties) && change.properties.length) {
-    let nx, ny, nrot, changed = false;
+    let nx: number | undefined, ny: number | undefined, nrot: number | undefined, changed = false;
     const p2 = ptsOf(item.node);
     for (const p of change.properties) {
       const after = p.after && p.after.v;
@@ -101,7 +101,7 @@ export function applyChange(doc, change, IU) {
   return false;
 }
 
-export function setPts(node, pts) {
+export function setPts(node: SNode, pts: readonly (readonly number[])[]): void {
   let p = kid(node, "pts"); if (!p) { p = ["pts"]; node.splice(1, 0, p); }
   p.length = 1; for (const [x, y] of pts) p.push(["xy", +x.toFixed(4), +y.toFixed(4)]);
 }

@@ -1,5 +1,4 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — matches the rest of the canvas package; typing is being tightened module by module
 //
 // ---------------------------------------------------------------- the drawing sheet
 //
@@ -35,6 +34,28 @@
 // (canvas) and renderSvg() (export) can paint the same geometry.
 import { num, parse, str } from "./sexpr";
 import { textWidth } from "./text";
+import type { Pt, SheetContext } from "./types";
+
+/** A point of a wks item: an offset from one corner of the framed area (lt / lb / rt / rb). */
+export interface WksCoord { x: number; y: number; anchor: string }
+/** One (rect …) / (line …) / (tbtext …) of a drawing-sheet description. */
+export interface WksItem {
+  kind: string; repeat: number; incr: [number, number]; incrLabel: number; lineWidth: number; option: string; rot: number;
+  bold: boolean; italic: boolean; sizeX: number; sizeY: number; color: string | null; hjust: string; vjust: string;
+  maxlen: number; maxheight: number; text: string; start?: WksCoord; end?: WksCoord;
+}
+/** A parsed (kicad_wks …): the page setup and the items. */
+export interface DrawingSheet { setup: typeof WKS_DEFAULTS; items: WksItem[] }
+/** One draw record of the sheet for a page (buildDrawingSheet). */
+export type SheetDraw =
+  | { t: "line"; x1: number; y1: number; x2: number; y2: number; w: number }
+  | { t: "rect"; x: number; y: number; w: number; h: number; lw: number }
+  | { t: "text"; x: number; y: number; text: string; size: number; w: number; bold: boolean; italic: boolean; h: string; v: string; rot: number; color: string | null; multiline: boolean };
+/** The text-variable map the title block resolves (sheetTextVars). */
+export type SheetVars = Record<string, string>;
+/** What a resolver answers: the value, null for an untouched miss, or { ref } for a token it rewrote and then refused. */
+export type VarValue = string | null | undefined | { ref: string };
+export type VarResolver = (token: string) => VarValue;
 
 /** common/drawing_sheet/drawing_sheet_default_description.cpp:117-151, verbatim. */
 export const DEFAULT_DRAWING_SHEET = `(kicad_wks (version 20210606) (generator pl_editor)
@@ -78,9 +99,9 @@ export const WKS_DEFAULTS = { textSizeX: 1.5, textSizeY: 1.5, lineWidth: 0.15, t
 /** DS_MAX_REPEAT_COUNT (include/drawing_sheet/ds_data_item.h:63). */
 export const DS_MAX_REPEAT_COUNT = 100;
 
-const CORNERS = { ltcorner: "lt", lbcorner: "lb", rbcorner: "rb", rtcorner: "rt" };
+const CORNERS: Record<string, string> = { ltcorner: "lt", lbcorner: "lb", rbcorner: "rb", rtcorner: "rt" };
 
-function coordOf(node, from) {
+function coordOf(node: SNode, from: number): WksCoord {
   // (start x y [corner]) / (end …) / (pos …); the anchor defaults to rbcorner (drawing_sheet_parser.cpp:866-882)
   const c = { x: num(node[from], 0), y: num(node[from + 1], 0), anchor: "rb" };
   for (let j = from + 2; j < node.length; j++) { const a = CORNERS[str(node[j])]; if (a) c.anchor = a; }
@@ -92,10 +113,10 @@ function coordOf(node, from) {
  * common custom sheets use are honoured (rect / line / tbtext with repeat, incrx/incry, incrlabel,
  * linewidth, font, justify, rotate, maxlen, maxheight, option); bitmaps and polygons are skipped.
  */
-export function parseDrawingSheet(text) {
+export function parseDrawingSheet(text: string | SNode | null): DrawingSheet {
   const tree = typeof text === "string" ? parse(text) : text;
   const setup = Object.assign({}, WKS_DEFAULTS);
-  const items = [];
+  const items: WksItem[] = [];
   if (!tree || tree[0] !== "kicad_wks") return { setup, items };
   for (let j = 1; j < tree.length; j++) {
     const node = tree[j]; if (!Array.isArray(node)) continue;
@@ -114,7 +135,7 @@ export function parseDrawingSheet(text) {
     }
     const kind = node[0];
     if (kind !== "rect" && kind !== "line" && kind !== "tbtext") continue;
-    const it = { kind, repeat: 1, incr: [0, 0], incrLabel: 1, lineWidth: 0, option: "", rot: 0,
+    const it: WksItem = { kind, repeat: 1, incr: [0, 0], incrLabel: 1, lineWidth: 0, option: "", rot: 0,
       bold: false, italic: false, sizeX: 0, sizeY: 0, color: null, hjust: "left", vjust: "middle",
       maxlen: 0, maxheight: 0, text: kind === "tbtext" ? str(node[1]) : "" };
     for (const c of node.slice(1)) {
@@ -163,14 +184,14 @@ export function parseDrawingSheet(text) {
 }
 
 /** The built-in sheet, parsed once. */
-let DEFAULT_SHEET = null;
-export function defaultDrawingSheet() { if (!DEFAULT_SHEET) DEFAULT_SHEET = parseDrawingSheet(DEFAULT_DRAWING_SHEET); return DEFAULT_SHEET; }
+let DEFAULT_SHEET: DrawingSheet | null = null;
+export function defaultDrawingSheet(): DrawingSheet { if (!DEFAULT_SHEET) DEFAULT_SHEET = parseDrawingSheet(DEFAULT_DRAWING_SHEET); return DEFAULT_SHEET; }
 
 // ---------------------------------------------------------------- label increment
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /** IndexFromAlphabetic (common/increment.cpp:249-268): A→0 … Z→25, AA→26, BA→52. */
-export function indexFromAlphabetic(s, alphabet) {
+export function indexFromAlphabetic(s: string, alphabet?: string): number {
   const alpha = alphabet || ALPHABET, radix = alpha.length; let index = 0;
   for (let i = 0; i < s.length; i++) {
     let k = alpha.indexOf(s[i]); if (k < 0) return -1;
@@ -181,7 +202,7 @@ export function indexFromAlphabetic(s, alphabet) {
 }
 
 /** AlphabeticFromIndex(n, alpha, zeroBasedNonUnitCols = true) (common/increment.cpp:270-291). */
-export function alphabeticFromIndex(n, alphabet) {
+export function alphabeticFromIndex(n: number, alphabet?: string): string {
   const alpha = alphabet || ALPHABET, radix = alpha.length;
   let out = "", first = true;
   do {
@@ -200,9 +221,9 @@ export function alphabeticFromIndex(n, alphabet) {
  * from the right, chunking \d+$ (integer), ([a-z]+|[A-Z]+)$ (single-case run) and [^a-zA-Z0-9]+$
  * (skipped), and steps the first incrementable chunk in place.  null when there is none.
  */
-export function incrementString(s, delta) {
+export function incrementString(s: string, delta: number): string | null {
   if (!s) return null;
-  let remaining = s; const parts = []; let good = 0;
+  let remaining = s; const parts: { s: string; type: string }[] = []; let good = 0;
   while (good <= 0 && remaining) {
     let m = /\d+$/.exec(remaining);
     if (m) { parts.push({ s: m[0], type: "int" }); good++; }
@@ -213,7 +234,7 @@ export function incrementString(s, delta) {
   }
   if (good <= 0) return null;
   const last = parts[parts.length - 1];
-  let stepped;
+  let stepped: string;
   if (last.type === "int") {
     const oldLen = last.s.length, padded = last.s[0] === "0";
     const n = parseInt(last.s, 10) + delta;
@@ -236,14 +257,14 @@ export function incrementString(s, delta) {
 }
 
 /** DS_DATA_ITEM_TEXT::IncrementLabel: always steps the BASE text by an absolute delta. */
-export function incrementLabel(base, delta) { const s = incrementString(base, delta); return s === null ? base : s; }
+export function incrementLabel(base: string, delta: number): string { const s = incrementString(base, delta); return s === null ? base : s; }
 
 // ---------------------------------------------------------------- text variables
 /**
  * ExpandTextVars (common/common.cpp:240-325): ${TOKEN} through the resolver, innermost first,
  * and an unresolved reference is left in the text verbatim.
  */
-export function expandTextVars(text, resolve, depth) {
+export function expandTextVars(text: unknown, resolve: VarResolver, depth?: number): string {
   const src = str(text); if (src.indexOf("${") < 0) return src;
   const d = depth || 0; let out = "";
   for (let i = 0; i < src.length; i++) {
@@ -266,8 +287,8 @@ export function expandTextVars(text, resolve, depth) {
   return out;
 }
 
-const TWO = (n) => (n < 10 ? "0" : "") + n;
-const joinPath = (dir, name) => (dir ? dir.replace(/\/+$/, "") + "/" + name.replace(/^\/+/, "") : name);
+const TWO = (n: number) => (n < 10 ? "0" : "") + n;
+const joinPath = (dir: string, name: string) => (dir ? dir.replace(/\/+$/, "") + "/" + name.replace(/^\/+/, "") : name);
 
 /** ds_painter.cpp:40 — `static const wxString productName = wxT( "KiCad E.D.A." )`. */
 export const PRODUCT_NAME = "KiCad E.D.A.";
@@ -294,10 +315,10 @@ export const TB_TOKENS = new Set(["ISSUE_DATE", "CURRENT_DATE", "CURRENT_TIME_HH
  * version is the KiCad this tree builds, baked in by scripts/gen-version.js (canvas/version.ts) and
  * carried on doc.kicadVersion, so the web's title block reads the same string the desktop's does.
  */
-export function sheetTextVars(doc) {
-  const tb = (doc && doc.titleBlock) || {};
+export function sheetTextVars(doc: Partial<SheetContext> | null | undefined): SheetVars {
+  const tb: Record<string, string> = (doc && doc.titleBlock) || {};
   const now = new Date();
-  const vars = {
+  const vars: SheetVars = {
     KICAD_VERSION: PRODUCT_NAME + " " + str(doc && doc.kicadVersion),
     "#": str(doc && doc.pageNumber) || "1",
     "##": String((doc && doc.sheetCount) || 1),
@@ -346,13 +367,13 @@ export function sheetTextVars(doc) {
  * opts: { titleBlock: false } is the inner pass with the title block switched off; { project } is
  * the .kicad_pro's text_variables map.
  */
-export function varResolver(vars, opts) {
+export function varResolver(vars: SheetVars, opts?: { titleBlock?: boolean; project?: Record<string, unknown> | null }): VarResolver {
   const o = opts || {};
   const withTb = o.titleBlock !== false;
   const project = o.project || null;
-  const fromProject = (token) => { const v = project ? project[token] : undefined; return v === undefined || v === null ? null : String(v); };
-  const expandProject = (text) => (project ? expandTextVars(text, fromProject) : text);
-  return (token) => {
+  const fromProject = (token: string): string | null => { const v = project ? project[token] : undefined; return v === undefined || v === null ? null : String(v); };
+  const expandProject = (text: string): string => (project ? expandTextVars(text, fromProject) : text);
+  return (token: string): VarValue => {
     if (WS_TOKENS.has(token)) {
       const v = vars[token];
       if (v === undefined || v === null) return null;
@@ -371,7 +392,7 @@ export function varResolver(vars, opts) {
 }
 
 /** DS_DATA_ITEM_TEXT::ReplaceAntiSlashSequence (ds_data_item.cpp:639-671): \\ → \, \n → newline. */
-export function replaceAntiSlash(s) {
+export function replaceAntiSlash(s: string): { text: string; multiline: boolean } {
   let out = "", multiline = false;
   for (let i = 0; i < s.length; i++) {
     if (s[i] === "\\" && s[i + 1] === "\\") { out += "\\"; i++; continue; }
@@ -387,7 +408,7 @@ export function replaceAntiSlash(s) {
  * common/gr_text.cpp:33-74): bold text is fed pen 0 so it picks up the auto-bold width size/5;
  * everything is clamped to a quarter of the glyph size.
  */
-export function sheetTextPen(pen, size, bold) {
+export function sheetTextPen(pen: number, size: number, bold: boolean): number {
   let t = bold ? 0 : pen;
   if (t <= 0) t = bold ? size / 5 : size / 8;
   return Math.min(t, size * 0.25);
@@ -402,33 +423,33 @@ export function sheetTextPen(pen, size, bold) {
  * description (the built-in sheet by default); `firstPage` filters (option page1only|notonpage1);
  * `project` is the project's text_variables map (the .kicad_pro's), KiCad's last resolver.
  */
-export function buildDrawingSheet(page, vars, wks, firstPage, project) {
+export function buildDrawingSheet(page: readonly number[], vars: SheetVars | null | undefined, wks: DrawingSheet | null | undefined, firstPage?: boolean, project?: Record<string, unknown> | null): SheetDraw[] {
   const sheet = wks || defaultDrawingSheet();
   const setup = sheet.setup;
   const LT = [setup.left, setup.top];
   const RB = [page[0] - setup.right, page[1] - setup.bottom];
   const resolve = varResolver(vars || {}, { project: project || null });
   const isFirst = firstPage !== false;
-  const at = (c, i, incr) => {
+  const at = (c: WksCoord, i: number, incr: readonly number[]): Pt => {
     const px = c.x + incr[0] * i, py = c.y + incr[1] * i;
     if (c.anchor === "lt") return [LT[0] + px, LT[1] + py];
     if (c.anchor === "lb") return [LT[0] + px, RB[1] - py];
     if (c.anchor === "rt") return [RB[0] - px, LT[1] + py];
     return [RB[0] - px, RB[1] - py];                            // rbcorner, the default
   };
-  const out = [];
+  const out: SheetDraw[] = [];
   for (const it of sheet.items) {
     if (it.option === "page1only" && !isFirst) continue;
     if (it.option === "notonpage1" && isFirst) continue;
     const isText = it.kind === "tbtext";
     // DS_DATA_ITEM::IsInsidePage: the framed area, grown to take in the run's own seed positions
-    const s0 = at(it.start, 0, it.incr), e0 = at(it.end, 0, it.incr);
+    const s0 = at(it.start!, 0, it.incr), e0 = at(it.end!, 0, it.incr);   // parseDrawingSheet fills both
     let bx0 = Math.min(LT[0], s0[0]), by0 = Math.min(LT[1], s0[1]);
     let bx1 = Math.max(RB[0], s0[0]), by1 = Math.max(RB[1], s0[1]);
     if (!isText) { bx0 = Math.min(bx0, e0[0]); by0 = Math.min(by0, e0[1]); bx1 = Math.max(bx1, e0[0]); by1 = Math.max(by1, e0[1]); }
-    const inside = (p) => p[0] >= bx0 - 1e-9 && p[0] <= bx1 + 1e-9 && p[1] >= by0 - 1e-9 && p[1] <= by1 + 1e-9;
+    const inside = (p: Pt) => p[0] >= bx0 - 1e-9 && p[0] <= bx1 + 1e-9 && p[1] >= by0 - 1e-9 && p[1] <= by1 + 1e-9;
 
-    let full = null, multiline = false, escaped = false, size = 0, pen = 0;
+    let full: string | null = null, multiline = false, escaped = false, size = 0, pen = 0;
     if (isText) {
       const expanded = expandTextVars(it.text, resolve);
       const r = replaceAntiSlash(expanded);
@@ -450,17 +471,17 @@ export function buildDrawingSheet(page, vars, wks, firstPage, project) {
     let label = full;
     for (let j = 0; j < it.repeat; j++) {
       if (j > 0) {
-        const sp = at(it.start, j, it.incr);
-        if (!isText && !inside(at(it.end, j, it.incr))) continue;
+        const sp = at(it.start!, j, it.incr);
+        if (!isText && !inside(at(it.end!, j, it.incr))) continue;
         if (!inside(sp)) continue;
       }
-      const [sx, sy] = at(it.start, j, it.incr);
+      const [sx, sy] = at(it.start!, j, it.incr);
       if (isText) {
         if (label) out.push({ t: "text", x: sx, y: sy, text: label, size, w: pen, bold: it.bold, italic: it.italic,
           h: it.hjust, v: it.vjust, rot: it.rot, color: it.color, multiline });
         if (it.repeat > 1 && !escaped) label = incrementLabel(it.text, (j + 1) * it.incrLabel);
       } else {
-        const [ex, ey] = at(it.end, j, it.incr);
+        const [ex, ey] = at(it.end!, j, it.incr);
         if (it.kind === "line") out.push({ t: "line", x1: sx, y1: sy, x2: ex, y2: ey, w: lw });
         else out.push({ t: "rect", x: Math.min(sx, ex), y: Math.min(sy, ey), w: Math.abs(ex - sx), h: Math.abs(ey - sy), lw });
       }
@@ -474,8 +495,8 @@ export function buildDrawingSheet(page, vars, wks, firstPage, project) {
  * this every frame, so the result is cached per document and rebuilt only when something it depends
  * on changes (the page, the title block, the sheet identity or the description itself).
  */
-const SHEET_CACHE = new WeakMap();
-export function documentDrawingSheet(doc) {
+const SHEET_CACHE = new WeakMap<object, { key: string; wks: DrawingSheet | null; items: SheetDraw[] }>();
+export function documentDrawingSheet(doc: SheetContext): SheetDraw[] {
   const wks = doc.drawingSheet || null;
   // Keyed on the document's own inputs rather than on the resolved variables, so the wall clock
   // (${CURRENT_TIME_*}, which the built-in sheet never shows) does not invalidate it every frame.

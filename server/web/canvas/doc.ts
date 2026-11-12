@@ -1,12 +1,12 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { schTheme } from "./colors";
 import { buildGeom } from "./geom";
 import { setupOrigins } from "./pcb-sizes";
 import { has, isList, kid, kids, num, parse, str, uuidOf } from "./sexpr";
 import { KICAD_BASE_VERSION } from "./version";
+import type { Box, Doc, Item, Pt, SAtom } from "./types";
 // ---------------------------------------------------------------- documents
-export function newDoc(type) {
+export function newDoc(type: "sch" | "pcb"): Doc {
   return { type, schTheme: schTheme(), items: new Map(), lib: new Map(), page: PAPER_SIZES.A4.slice(), layers: new Map(), copper: [], bbox: null, nets: new Map(), version: 0,
     // drawing-sheet context (web/canvas/sheet.ts): the paper's KiCad name (${PAPER}), the (title_block …)
     // fields, and the sheet identity the app fills in — fileName / filePath / sheetName / sheetPath /
@@ -26,15 +26,15 @@ export function newDoc(type) {
 // nominal value displaces every frame, tick, rule and title-block coordinate on the page and, on
 // A3/A2, keeps a tick that KiCad's IsInsidePage drops (410 > 419.989 - 10).
 export const MM_PER_MIL = 25.4 / 1000;
-export const mm2mils = (mm) => Math.round(mm * 1000 / 25.4);          // EDA_UNIT_UTILS::Mm2mils
-export const milsPage = (w, h) => [w * MM_PER_MIL, h * MM_PER_MIL];   // whole mils -> mm
-const mmPage = (w, h) => milsPage(mm2mils(w), mm2mils(h));            // MMsize()
-const userMm = (mm) => Math.max(mm, 10 * MM_PER_MIL);                 // clampWidth/clampHeight
-export const PAPER_SIZES = { A5: mmPage(210, 148), A4: mmPage(297, 210), A3: mmPage(420, 297), A2: mmPage(594, 420), A1: mmPage(841, 594), A0: mmPage(1189, 841),
+export const mm2mils = (mm: number): number => Math.round(mm * 1000 / 25.4);          // EDA_UNIT_UTILS::Mm2mils
+export const milsPage = (w: number, h: number): Pt => [w * MM_PER_MIL, h * MM_PER_MIL];   // whole mils -> mm
+const mmPage = (w: number, h: number): Pt => milsPage(mm2mils(w), mm2mils(h));            // MMsize()
+const userMm = (mm: number): number => Math.max(mm, 10 * MM_PER_MIL);                 // clampWidth/clampHeight
+export const PAPER_SIZES: Record<string, Pt> & { A4: Pt } = { A5: mmPage(210, 148), A4: mmPage(297, 210), A3: mmPage(420, 297), A2: mmPage(594, 420), A1: mmPage(841, 594), A0: mmPage(1189, 841),
   A: milsPage(11000, 8500), B: milsPage(17000, 11000), C: milsPage(22000, 17000), D: milsPage(34000, 22000), E: milsPage(44000, 34000),
   GERBER: milsPage(32000, 32000), USLetter: milsPage(11000, 8500), USLegal: milsPage(14000, 8500), USLedger: milsPage(17000, 11000) };
 
-export function paperSize(node) {
+export function paperSize(node: SNode): Pt {
   const name = str(node[1]);
   const sizes = PAPER_SIZES;
   // A custom page keeps its mm exactly: SetWidthMM feeds SetWidthMils a *double* (include/page_info.h:136),
@@ -50,8 +50,8 @@ export function paperSize(node) {
  * (title_block (title …) (date …) (rev …) (company …) (comment N "…")) — the fields
  * TITLE_BLOCK::TextVarResolver answers (common/title_block.cpp:122-190).
  */
-export function titleBlockOf(node) {
-  const tb = {};
+export function titleBlockOf(node: SNode): Record<string, string> {
+  const tb: Record<string, string> = {};
   for (const c of node.slice(1)) {
     if (!isList(c)) continue;
     if (c[0] === "comment") tb["comment" + num(c[1], 0)] = str(c[2]);
@@ -61,7 +61,7 @@ export function titleBlockOf(node) {
 }
 
 
-export function parseDoc(text, docType) {
+export function parseDoc(text: string, docType?: string): Doc {
   const tree = parse(text);
   if (!tree) throw new Error("not an s-expression document");
   const type = tree[0] === "kicad_sch" ? "sch" : tree[0] === "kicad_pcb" ? "pcb" : (docType === "kicad_sch" ? "sch" : "pcb");
@@ -98,7 +98,7 @@ export function parseDoc(text, docType) {
  * Document-level settings carried by a collab change ({ docProps: { paper: "(paper …)", titleBlock: "(title_block …)" } },
  * the Page Settings dialog): the same fields parseDoc reads from the file header.  An empty titleBlock clears it.
  */
-export function applyDocProps(doc, props) {
+export function applyDocProps(doc: Doc | null | undefined, props: { paper?: unknown; titleBlock?: unknown } | null | undefined): boolean {
   if (!doc || !props) return false;
   let any = false;
   if (typeof props.paper === "string" && props.paper) { const node = parse(props.paper); if (node && node[0] === "paper") { doc.page = paperSize(node); doc.paper = str(node[1]) || "A4"; doc.portrait = doc.page[1] > doc.page[0]; any = true; } }
@@ -106,28 +106,28 @@ export function applyDocProps(doc, props) {
   return any;
 }
 
-export const SCH_KINDS = new Set(["symbol", "wire", "bus", "junction", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "no_connect", "sheet", "text", "text_box", "polyline", "rectangle", "circle", "arc", "bezier", "bus_entry", "image", "table", "rule_area",
+export const SCH_KINDS = new Set<SAtom>(["symbol", "wire", "bus", "junction", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label", "no_connect", "sheet", "text", "text_box", "polyline", "rectangle", "circle", "arc", "bezier", "bus_entry", "image", "table", "rule_area",
   "ellipse", "ellipse_arc", "net_chain", "group"]);
 
-export const PCB_KINDS = new Set(["footprint", "segment", "arc", "via", "zone", "gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_text", "gr_text_box", "gr_curve", "gr_bbox", "dimension", "target", "image", "group", "table", "generated",
+export const PCB_KINDS = new Set<SAtom>(["footprint", "segment", "arc", "via", "zone", "gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_text", "gr_text_box", "gr_curve", "gr_bbox", "dimension", "target", "image", "group", "table", "generated",
   "gr_ellipse", "gr_ellipse_arc", "barcode", "point", "grid_item"]);
 
 
-export function addItem(doc, node) {
+export function addItem(doc: Doc, node: SNode): Item | null {
   const k = node[0];
   if (doc.type === "sch" ? !SCH_KINDS.has(k) : !PCB_KINDS.has(k)) return null;
   let id = uuidOf(node);
   if (!id) id = "anon-" + (doc.items.size + 1) + "-" + Math.random().toString(36).slice(2, 8);
-  const item = { id, kind: k, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
+  const item: Item = { id, kind: k as string, node, geom: [], bbox: null, movable: false, hiddenGeom: null, docType: doc.type };
   buildGeom(doc, item);
   doc.items.set(id, item);
   return item;
 }
 
 
-export function computeBBox(doc) {
+export function computeBBox(doc: Doc): void {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const take = (b) => { if (!b) return; x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); };
+  const take = (b: Box | null) => { if (!b) return; x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]); };
   if (doc.type === "pcb") {
     // What a person means by "the board": the outline together with the copper.
     for (const it of doc.items.values()) if (it.edge || it.kind === "segment" || it.kind === "via" || it.kind === "footprint" || it.kind === "zone" || it.kind === "arc") take(it.bbox);

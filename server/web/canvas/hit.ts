@@ -1,12 +1,19 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { SCH, SCH_LAYERS, pcbColor, pcbZ } from "./colors";
 import { boxUnion } from "./geom";
 import { kids, pointInPoly, rotator } from "./sexpr";
 import { textWidth } from "./text";
+import type { Box, CircleGeom, Doc, Geom, Item, PadGeom, PolyGeom, Pt } from "./types";
+
+/** A movable item as the chrome lists it (movableItems). */
+export interface MovableInfo { id: string; kind: string; x?: number; y?: number; rot: number; ref: string; value: string; lib: string; layer: string; bbox: Box | null; name?: string; file?: string; page?: string; w?: number; h?: number }
+/** hitTestDetail's answer: the item, whether its own geometry was hit, the rank class, the layer hit and the visible box. */
+export interface HitDetail { id: string; onGeom: boolean; cls: number; layer: string | null; box: Box; score: number }
+/** padAt's answer. */
+export interface PadHit { item: Item; index: number; pad: SNode | null; number?: string; net?: number; netName?: string; x: number; y: number }
 // ---------------------------------------------------------------- queries
-export function movableItems(doc) {
-  const out = [];
+export function movableItems(doc: Doc): MovableInfo[] {
+  const out: MovableInfo[] = [];
   for (const it of doc.items.values()) {
     if (!it.movable) continue;
     out.push({ id: it.id, kind: it.kind, x: it.x, y: it.y, rot: it.rot || 0, ref: it.ref || "", value: it.value || "", lib: it.lib || "", layer: it.layer || "", bbox: it.bbox, name: it.name, file: it.file, page: it.page, w: it.w, h: it.h });
@@ -15,7 +22,7 @@ export function movableItems(doc) {
 }
 
 /** Extent of one geometry record (mm), or null for records without a footprint on the page. */
-export function geomBox(g) {
+export function geomBox(g: Geom): Box | null {
   const w = (g.w || 0) / 2;
   switch (g.t) {
   case "line": return [Math.min(g.x1, g.x2) - w, Math.min(g.y1, g.y2) - w, Math.max(g.x1, g.x2) + w, Math.max(g.y1, g.y2) + w];
@@ -29,10 +36,10 @@ export function geomBox(g) {
   }
 }
 
-export function segDistance(x, y, x1, y1, x2, y2) { const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy; let t = l2 ? ((x - x1) * dx + (y - y1) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy)); }
+export function segDistance(x: number, y: number, x1: number, y1: number, x2: number, y2: number): number { const dx = x2 - x1, dy = y2 - y1, l2 = dx * dx + dy * dy; let t = l2 ? ((x - x1) * dx + (y - y1) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy)); }
 
 /** Does (x, y) touch this geometry record within tol mm?  Text counts by its box, like KiCad's text hit tests. */
-export function geomHit(g, x, y, tol) {
+export function geomHit(g: Geom, x: number, y: number, tol: number): boolean {
   const w = (g.w || 0) / 2 + tol;
   switch (g.t) {
   case "line": return segDistance(x, y, g.x1, g.y1, g.x2, g.y2) <= w;
@@ -41,7 +48,7 @@ export function geomHit(g, x, y, tol) {
   case "arc": {   // on the stroke and inside the sweep (or within reach of one of its ends) — not anywhere on the full circle
     const d = Math.hypot(x - g.x, y - g.y); if (Math.abs(d - g.r) > w) return false;
     if (g.pie || g.a0 === undefined || g.a1 === undefined) return true;
-    const TWO = Math.PI * 2, nrm = (v) => ((v % TWO) + TWO) % TWO;
+    const TWO = Math.PI * 2, nrm = (v: number) => ((v % TWO) + TWO) % TWO;
     const from = g.anticlockwise ? g.a1 : g.a0, sweep = nrm((g.anticlockwise ? g.a0 : g.a1) - from) || TWO;
     if (nrm(Math.atan2(y - g.y, x - g.x) - from) <= sweep) return true;
     return Math.hypot(x - (g.x + g.r * Math.cos(g.a0)), y - (g.y + g.r * Math.sin(g.a0))) <= w || Math.hypot(x - (g.x + g.r * Math.cos(g.a1)), y - (g.y + g.r * Math.sin(g.a1))) <= w;
@@ -66,7 +73,7 @@ export function geomHit(g, x, y, tol) {
 }
 
 /** Does the segment a-b pass through (or lie inside) the rectangle?  Liang-Barsky. */
-export function segTouchesRect(ax, ay, bx, by, x0, y0, x1, y1) {
+export function segTouchesRect(ax: number, ay: number, bx: number, by: number, x0: number, y0: number, x1: number, y1: number): boolean {
   let t0 = 0, t1 = 1; const dx = bx - ax, dy = by - ay;
   for (const [p, q] of [[-dx, ax - x0], [dx, x1 - ax], [-dy, ay - y0], [dy, y1 - ay]]) {
     if (p === 0) { if (q < 0) return false; continue; }
@@ -77,7 +84,7 @@ export function segTouchesRect(ax, ay, bx, by, x0, y0, x1, y1) {
 }
 
 /** Does this geometry record reach into the rectangle — its stroke or filled area, not merely its bounding box? */
-export function geomTouchesRect(g, x0, y0, x1, y1) {
+export function geomTouchesRect(g: Geom, x0: number, y0: number, x1: number, y1: number): boolean {
   const b = geomBox(g); if (!b || b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) return false;
   const w = (g.w || 0) / 2;
   switch (g.t) {
@@ -96,7 +103,7 @@ export function geomTouchesRect(g, x0, y0, x1, y1) {
   }
   case "arc": {
     if (g.a0 === undefined || g.a1 === undefined) return true;
-    const TWO = Math.PI * 2, nrm = (v) => ((v % TWO) + TWO) % TWO;
+    const TWO = Math.PI * 2, nrm = (v: number) => ((v % TWO) + TWO) % TWO;
     const from = g.anticlockwise ? g.a1 : g.a0, sweep = nrm((g.anticlockwise ? g.a0 : g.a1) - from) || TWO, steps = Math.max(4, Math.ceil(sweep / (Math.PI / 16)));
     let px = g.x + g.r * Math.cos(from), py = g.y + g.r * Math.sin(from);
     for (let i = 1; i <= steps; i++) { const a = from + sweep * i / steps, qx = g.x + g.r * Math.cos(a), qy = g.y + g.r * Math.sin(a); if (segTouchesRect(px, py, qx, qy, x0 - w, y0 - w, x1 + w, y1 + w)) return true; px = qx; py = qy; }
@@ -111,7 +118,7 @@ export function geomTouchesRect(g, x0, y0, x1, y1) {
  * reach into it?  A zone counts by its outline only, as in ZONE::HitTest — a box inside a pour does not take
  * the pour — and a diagonal track by its copper, not by the rectangle around it.
  */
-export function itemTouchesRect(it, x0, y0, x1, y1, hidden) {
+export function itemTouchesRect(it: Pick<Item, "geom">, x0: number, y0: number, x1: number, y1: number, hidden?: Set<string> | null): boolean {
   for (const g of it.geom || []) {
     if (g.zoneFill || g.padText || g.padNum || g.noBox) continue;
     if (hidden && g.layer && hidden.has(g.layer)) continue;
@@ -121,7 +128,7 @@ export function itemTouchesRect(it, x0, y0, x1, y1, hidden) {
 }
 
 /** Is anything of the item on a layer that is shown?  (What cannot be seen cannot be selected.) */
-export function itemVisible(it, hidden) {
+export function itemVisible(it: Pick<Item, "geom">, hidden?: Set<string> | null): boolean {
   if (!hidden || !hidden.size) return true;
   let drawn = false;
   for (const g of it.geom || []) { if (!g.layer) continue; drawn = true; if (!hidden.has(g.layer)) return true; }
@@ -135,15 +142,15 @@ export function itemVisible(it, hidden) {
  * active layer's side) beats the other, and the smaller visible extent wins ties.
  * Returns {id, onGeom, layer, box} or null; hitTest() is the id-only form.
  */
-export function hitTestDetail(doc, x, y, slopMm, opts) {
+export function hitTestDetail(doc: Doc, x: number, y: number, slopMm?: number, opts?: { hidden?: Set<string> | null; side?: string | null } | null): HitDetail | null {
   slopMm = slopMm || 0; opts = opts || {}; const hidden = opts.hidden || null, side = opts.side || null;
-  let best = null;
+  let best: HitDetail | null = null;
   for (const it of doc.items.values()) {
     if (!it.movable || !it.bbox) continue;
     const b = it.bbox;
     if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
-    let onGeom = false, exact = false, hitLayer = null, vis = null, hull = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
-    const grow = (b, gb) => { if (!b) return gb.slice(); if (gb[0] < b[0]) b[0] = gb[0]; if (gb[1] < b[1]) b[1] = gb[1]; if (gb[2] > b[2]) b[2] = gb[2]; if (gb[3] > b[3]) b[3] = gb[3]; return b; };
+    let onGeom = false, exact = false, hitLayer: string | null = null, vis: Box | null = null, hull: Box | null = null, hitClass = 2;   // 0 = pad / copper, 1 = other geometry, 2 = box only
+    const grow = (b: Box | null, gb: Box): Box => { if (!b) return gb.slice(); if (gb[0] < b[0]) b[0] = gb[0]; if (gb[1] < b[1]) b[1] = gb[1]; if (gb[2] > b[2]) b[2] = gb[2]; if (gb[3] > b[3]) b[3] = gb[3]; return b; };
     for (const g of it.geom) {
       if (hidden && g.layer && hidden.has(g.layer)) continue;
       const gb = geomBox(g); if (!gb) continue;
@@ -173,31 +180,32 @@ export function hitTestDetail(doc, x, y, slopMm, opts) {
   return best;
 }
 
-export function hitTest(doc, x, y, slopMm, opts) { const h = hitTestDetail(doc, x, y, slopMm, opts); return h ? h.id : null; }
+export function hitTest(doc: Doc, x: number, y: number, slopMm?: number, opts?: { hidden?: Set<string> | null; side?: string | null } | null): string | null { const h = hitTestDetail(doc, x, y, slopMm, opts); return h ? h.id : null; }
 
-export function layerList(doc) {
-  const counts = new Map();
+export function layerList(doc: Doc): { key: string; name: string; color: string; count: number; z?: number }[] {
+  const counts = new Map<string, number>();
   for (const it of doc.items.values()) for (const g of it.geom) counts.set(g.layer, (counts.get(g.layer) || 0) + 1);
   if (doc.type === "sch") return SCH_LAYERS.map(([name, key]) => ({ key: name, name, color: SCH[key], count: counts.get(name) || 0 })).filter((l) => l.count);
-  const out = [];
+  const out: { key: string; name: string; color: string; count: number; z: number }[] = [];
   for (const [layer, count] of counts) if (layer !== "holes") out.push({ key: layer, name: layer, color: pcbColor(layer), count, z: pcbZ(layer) });
   out.sort((a, b) => b.z - a.z);
   return out;
 }
 
-export function snap(v, pitch) { return pitch > 0 ? Math.round(v / pitch) * pitch : v; }
+export function snap(v: number, pitch: number): number { return pitch > 0 ? Math.round(v / pitch) * pitch : v; }
 
 
 // ---------------------------------------------------------------- queries for the tools layer
 /** Union bbox [x0, y0, x1, y1] of the given item ids (Set or array), or null when none has a box — "zoom to selection". */
-export function bboxOf(doc, ids) {
-  let b = null;
+export function bboxOf(doc: Doc, ids: Iterable<string> | null | undefined): Box | null {
+  let b: Box | null = null;
   for (const id of ids || []) { const it = doc.items.get(id); if (it && it.bbox) b = boxUnion(b, it.bbox[0], it.bbox[1], it.bbox[2], it.bbox[3]); }
   return b;
 }
 
 /** Does a pad geometry (world space) cover (x, y)?  Pad records use their rotated frame; polygon pads and custom primitives their outline. */
-export function padGeomHit(g, x, y) {
+/** (A type guard: only pad, polygon and circle records can cover a point; the others answer false.) */
+export function padGeomHit(g: Geom, x: number, y: number): g is PadGeom | PolyGeom | CircleGeom {
   if (g.t === "pad") {
     const a = -g.rot * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a); const dx = x - g.x, dy = y - g.y;
     const lx = dx * c + dy * sn, ly = -dx * sn + dy * c; const w = g.w, h = g.h;
@@ -218,8 +226,8 @@ export function padGeomHit(g, x, y) {
  * { item, index (among the footprint's pad nodes), pad (the node), number, net, netName, x, y } or null; the
  * smallest covering pad wins.
  */
-export function padAt(doc, x, y) {
-  let best = null, bestArea = Infinity;
+export function padAt(doc: Doc, x: number, y: number): PadHit | null {
+  let best: PadHit | null = null, bestArea = Infinity;
   for (const it of doc.items.values()) {
     if (it.kind !== "footprint") continue;
     const b = it.bbox; if (b && (x < b[0] || x > b[2] || y < b[1] || y > b[3])) continue;
@@ -235,4 +243,4 @@ export function padAt(doc, x, y) {
   return best;
 }
 
-export function polyArea(pts) { let a = 0; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]; return Math.abs(a) / 2; }
+export function polyArea(pts: readonly (readonly number[])[]): number { let a = 0; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) a += pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1]; return Math.abs(a) / 2; }

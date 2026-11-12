@@ -1,6 +1,6 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { strokeAdvance } from "./stroke-font";
+import type { TextEffects } from "./types";
 // ---------------------------------------------------------------- text metrics
 // Newstroke advance widths (units of 1/21 of the text size) for ASCII 32..126, read
 // from common/newstroke_font.cpp; KiCad's string width = Σadvance·size − 0.2·size + 3·thickness.
@@ -19,13 +19,13 @@ export const TEXT_INTERLINE = 1.68 * 0.9583;
  * up by (n-1)·interline/2 when the text is vertically centred and by (n-1)·interline when it is
  * bottom-aligned, so a one-line run never moves.
  */
-export function lineOffsets(n, vjust) {
+export function lineOffsets(n: number, vjust: string): number[] {
   const k = vjust === "top" ? 0 : vjust === "bottom" ? n - 1 : (n - 1) / 2;
-  const out = []; for (let i = 0; i < n; i++) out.push(i - k);
+  const out: number[] = []; for (let i = 0; i < n; i++) out.push(i - k);
   return out;
 }
 
-export function textWidth(text, size, thick) {
+export function textWidth(text: string, size: number, thick?: number): number {
   // Σ glyph advances from KiCad's own font table (web/canvas/stroke-font.ts), so non-ASCII text measures right too
   let w = 0;
   for (const ch of text) w += strokeAdvance(ch);
@@ -33,13 +33,13 @@ export function textWidth(text, size, thick) {
 }
 
 /** Strip KiCad text markup; overbar spans (~{...}) are kept as [start, end) indices of the shown text. */
-export function parseMarkup(s) {
+export function parseMarkup(s: string): { text: string; bars: [number, number][] | null } {
   if (s.indexOf("{") < 0) return { text: s, bars: null };
-  let out = "", bars = null; const stack = [];
+  let out = "", bars: [number, number][] | null = null; const stack: { kind: string; start: number }[] = [];
   for (let i = 0; i < s.length; i++) {
     const c = s[i], d = s[i + 1];
     if ((c === "~" || c === "_" || c === "^") && d === "{") { stack.push({ kind: c, start: out.length }); i++; continue; }
-    if (c === "}" && stack.length) { const o = stack.pop(); if (o.kind === "~") (bars = bars || []).push([o.start, out.length]); continue; }
+    if (c === "}" && stack.length) { const o = stack.pop()!; if (o.kind === "~") (bars = bars || []).push([o.start, out.length]); continue; }
     out += c;
   }
   return { text: out, bars };
@@ -51,7 +51,7 @@ export const SCH_PEN = 0.1524;
              // DEFAULT_LINE_WIDTH_MILS (6 mil)
 export const MIL = 0.0254;
 
-export function textPen(ef, size) {
+export function textPen(ef: Pick<TextEffects, "sizeX" | "thick" | "bold">, size: number): number {
   // EDA_TEXT::GetEffectiveTextPenWidth( default pen ): SCH_PAINTER::getTextThickness passes the schematic's
   // default line width (6 mil), so plain text is drawn with that pen whatever its size; bold text is
   // size/5 (GetPenSizeForBold of the smaller glyph dimension), an explicit thickness is kept (×1.6 when
@@ -62,12 +62,12 @@ export function textPen(ef, size) {
 }
 
 /** GetEffectiveTextPenWidth() with no default pen — what the label shapes and offsets are computed with (SCH_LABEL_BASE::GetPenWidth): size/8, bold size/5, clamped to size/4. */
-export function layoutPen(ef, size) {
+export function layoutPen(ef: Pick<TextEffects, "thick" | "bold">, size: number): number {
   const pen = ef.thick > 0.001 ? ef.thick : (ef.bold ? size / 5 : size / 8);
   return Math.min(pen, size * 0.25);
 }
 
-const UNESCAPE = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "\t", return: "\n", brace: "{" };
+const UNESCAPE: Record<string, string> = { dblquote: '"', quote: "'", lt: "<", gt: ">", backslash: "\\", slash: "/", bar: "|", comma: ",", colon: ":", space: " ", dollar: "$", tab: "\t", return: "\n", brace: "{" };
 const UNESCAPE_RE = /\{(dblquote|quote|lt|gt|backslash|slash|bar|comma|colon|space|dollar|tab|return|brace)\}/g;
 /** UnescapeString (common/string_utils.cpp): {slash} → /, {colon} → :, … as every GetShownText does before drawing. */
-export function unescapeText(s) { return s && s.indexOf("{") >= 0 ? s.replace(UNESCAPE_RE, (m, k) => UNESCAPE[k]) : s; }
+export function unescapeText(s: string): string { return s && s.indexOf("{") >= 0 ? s.replace(UNESCAPE_RE, (m: string, k: string) => UNESCAPE[k]) : s; }

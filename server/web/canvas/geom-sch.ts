@@ -1,5 +1,4 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { SCH, SCH_Z, dimColor } from "./colors";
 import { G, bboxAdd, boxUnion, textGeom, textLines, transformedText } from "./geom";
 import { arcFrom3, atOf, bezierPts, colorOf, dashOf, effectsOf, faceOf, ellipsePts, fillOf, has, isList, justOf, kid, kids, num, ptsOf, rotPt, str, strokeColorOf, widthOf, yesNo } from "./sexpr";
@@ -7,16 +6,20 @@ import { buildImageGeom, buildTableGeom } from "./tables-images";
 import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
 import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
+import type { Box, Doc, GeomSink, Item, Pt, SheetContext, TextEffects, Tf } from "./types";
+
+/** What buildPinGeom needs of the symbol around a pin. */
+export interface PinSym { nameOff: number; hideNames: boolean; hideNums: boolean; maxNameHalf: number; col: (c: string) => string; alpha?: number; showHidden?: boolean }
 /** ${VAR} in free text: the title-block / sheet / project variables GetShownText resolves; unknown ones stay as written. */
-export function expandDocVars(doc, text) {
+export function expandDocVars(doc: SheetContext | null | undefined, text: string): string {
   if (!text || text.indexOf("${") < 0) return text;
   try { return expandTextVars(text, varResolver(sheetTextVars(doc), { project: (doc && doc.projectVars) || null })); } catch (e) { return text; }
 }
 // ---- schematic ----
 // KiCad TRANSFORM matrices on library (Y up) coordinates: screen = T·lib + origin (x' = T0·x + T1·y, y' = T2·x + T3·y)
-export const ORIENT = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
+export const ORIENT: Record<number, number[]> = { 0: [1, 0, 0, -1], 90: [0, -1, -1, 0], 180: [-1, 0, 0, 1], 270: [0, 1, 1, 0] };
 
-export function symbolTransform(rot, mirror) {
+export function symbolTransform(rot: number, mirror: string): number[] {
   let T = ORIENT[((Math.round(rot) % 360) + 360) % 360] || ORIENT[0];
   if (mirror === "y") T = [-T[0], -T[1], T[2], T[3]];   // mirror y negates the X row
   if (mirror === "x") T = [T[0], T[1], -T[2], -T[3]];   // mirror x negates the Y row
@@ -24,9 +27,9 @@ export function symbolTransform(rot, mirror) {
 }
 
 // KiCad's own (internal, Y-down lib coordinates) matrix, used for field/text justification: T·diag(1,-1)
-export const internalT = (T) => [T[0], -T[1], T[2], -T[3]];
+export const internalT = (T: readonly number[]): number[] => [T[0], -T[1], T[2], -T[3]];
 
-export function resolveLib(doc, name, depth) {
+export function resolveLib(doc: Pick<KDoc, "lib">, name: string, depth?: number): SNode | null {
   const s = doc.lib.get(name); if (!s) return null;
   const ext = kid(s, "extends");
   if (ext && (depth || 0) < 4) {
@@ -43,13 +46,13 @@ export function resolveLib(doc, name, depth) {
 
 
 // label flag shapes (eeschema/sch_label.cpp)
-export const SPIN = { 0: "R", 90: "U", 180: "L", 270: "B" };
+export const SPIN: Record<number, string> = { 0: "R", 90: "U", 180: "L", 270: "B" };
    // file angle → spin style
-export const SPIN_ROT = { L: 0, U: -90, R: 180, B: 90 };
+export const SPIN_ROT: Record<string, number> = { L: 0, U: -90, R: 180, B: 90 };
         // template rotation per spin (RotatePoint sign)
-export const SPIN_IDX = { L: 0, U: 1, R: 2, B: 3 };
+export const SPIN_IDX: Record<string, number> = { L: 0, U: 1, R: 2, B: 3 };
 
-export const HIER_TPL = {
+export const HIER_TPL: Record<string, number[][]> = {
   input: [[0, 0, -1, -1, -2, -1, -2, 1, -1, 1, 0, 0], [0, 0, 1, -1, 1, -2, -1, -2, -1, -1, 0, 0], [0, 0, 1, 1, 2, 1, 2, -1, 1, -1, 0, 0], [0, 0, 1, 1, 1, 2, -1, 2, -1, 1, 0, 0]],
   output: [[-2, 0, -1, 1, 0, 1, 0, -1, -1, -1, -2, 0], [0, -2, 1, -1, 1, 0, -1, 0, -1, -1, 0, -2], [2, 0, 1, -1, 0, -1, 0, 1, 1, 1, 2, 0], [0, 2, 1, 1, 1, 0, -1, 0, -1, 1, 0, 2]],
   bidirectional: [[0, 0, -1, -1, -2, 0, -1, 1, 0, 0], [0, 0, -1, -1, 0, -2, 1, -1, 0, 0], [0, 0, 1, -1, 2, 0, 1, 1, 0, 0], [0, 0, -1, 1, 0, 2, 1, 1, 0, 0]],
@@ -57,15 +60,15 @@ export const HIER_TPL = {
   passive: [[0, -1, -2, -1, -2, 1, 0, 1, 0, -1], [1, 0, 1, -2, -1, -2, -1, 0, 1, 0], [0, -1, 2, -1, 2, 1, 0, 1, 0, -1], [1, 0, 1, 2, -1, 2, -1, 0, 1, 0]],
 };
 
-export function hierShape(x, y, size, shape, spin) {
-  const t = (HIER_TPL[shape] || HIER_TPL.input)[SPIN_IDX[spin]]; const hs = size / 2; const pts = [];
+export function hierShape(x: number, y: number, size: number, shape: string, spin: string): Pt[] {
+  const t = (HIER_TPL[shape] || HIER_TPL.input)[SPIN_IDX[spin]]; const hs = size / 2; const pts: Pt[] = [];
   for (let i = 0; i < t.length; i += 2) pts.push([x + hs * t[i], y + hs * t[i + 1]]);
   return pts;
 }
 
-export function spinText(spin) { return { rot: spin === "U" || spin === "B" ? 90 : 0, h: spin === "R" || spin === "U" ? "left" : "right" }; }
+export function spinText(spin: string): { rot: number; h: string } { return { rot: spin === "U" || spin === "B" ? 90 : 0, h: spin === "R" || spin === "U" ? "left" : "right" }; }
 
-export function labelFields(item, n, color, layer, z) {
+export function labelFields(item: Item, n: SNode, color: string, layer: string, z: number): void {
   for (const p of kids(n, "property")) {
     const ef = effectsOf(p); const val = str(p[2]); if (ef.hide || !val || /^\$\{.*\}$/.test(val)) continue;
     const [px, py, pr] = atOf(p);
@@ -74,7 +77,7 @@ export function labelFields(item, n, color, layer, z) {
 }
 
 
-export function buildSchGeom(doc, item) {
+export function buildSchGeom(doc: Doc, item: Item): void {
   const n = item.node, k = item.kind;
   if (k === "wire" || k === "bus" || k === "polyline") {
     const p = ptsOf(n); const isBus = k === "bus";
@@ -86,11 +89,11 @@ export function buildSchGeom(doc, item) {
       const fill = f.type === "background" ? SCH.body : f.type === "outline" || f.type === "solid" ? color : f.type === "color" ? f.color : null;
       if (fill) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer: "Notes", z: f.type === "outline" || f.type === "solid" ? SCH_Z.notes : SCH_Z.notesBg, noStroke: true });
     }
-    G(item, Object.assign({ t: "poly", pts: p, close: false, w, color, layer: isBus ? "Buses" : k === "polyline" ? "Notes" : "Wires", z: isBus ? SCH_Z.bus : k === "polyline" ? SCH_Z.notes : SCH_Z.wire, cap: "round" }, dashOf(n)));
+    G(item, Object.assign({ t: "poly" as const, pts: p, close: false, w, color, layer: isBus ? "Buses" : k === "polyline" ? "Notes" : "Wires", z: isBus ? SCH_Z.bus : k === "polyline" ? SCH_Z.notes : SCH_Z.wire, cap: "round" }, dashOf(n)));
   } else if (k === "bus_entry") {
     // wire-to-bus entries take the wire colour and width
     const [x, y] = atOf(n); const s = kid(n, "size"); const dx = s ? num(s[1]) : 2.54, dy = s ? num(s[2]) : 2.54;
-    G(item, Object.assign({ t: "line", x1: x, y1: y, x2: x + dx, y2: y + dy, w: widthOf(n, 0) || 0.1524, color: strokeColorOf(n) || SCH.busEntry, layer: "Wires", z: SCH_Z.wire, cap: "round" }, dashOf(n)));
+    G(item, Object.assign({ t: "line" as const, x1: x, y1: y, x2: x + dx, y2: y + dy, w: widthOf(n, 0) || 0.1524, color: strokeColorOf(n) || SCH.busEntry, layer: "Wires", z: SCH_Z.wire, cap: "round" }, dashOf(n)));
   } else if (k === "junction") {
     const [x, y] = atOf(n); const d = kid(n, "diameter"); const dflt = doc && doc.schSettings && typeof doc.schSettings.junctionDiameter === "number" ? doc.schSettings.junctionDiameter : 0.9144;   // Schematic Setup > Formatting > Junction dot size
     const r = (d && num(d[1]) > 0 ? num(d[1]) : dflt) / 2;
@@ -111,23 +114,23 @@ export function buildSchGeom(doc, item) {
     const bw = widthOf(n, 0); const border = bw < 0 ? 0 : (bw || SCH_PEN); const f = fillOf(n);
     const fill = f.type === "color" ? f.color : f.type === "background" ? SCH.body : f.type === "solid" ? SCH.notes : null;
     if (fill) G(item, { t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: 0, color: fill, fill, layer: "Notes", z: SCH_Z.notesBg, noStroke: true });
-    if (border > 0) G(item, Object.assign({ t: "rect", x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: border, color: strokeColorOf(n) || SCH.notes, fill: null, layer: "Notes", z: SCH_Z.notes }, dashOf(n)));
+    if (border > 0) G(item, Object.assign({ t: "rect" as const, x: x0, y: y0, w: x1 - x0, h: y1 - y0, wd: border, color: strokeColorOf(n) || SCH.notes, fill: null, layer: "Notes", z: SCH_Z.notes }, dashOf(n)));
     const mg = kid(n, "margins"); const lm = mg ? num(mg[1]) : border / 2 + ef.size * 0.75, tm = mg ? num(mg[2]) : lm, rm = mg ? num(mg[3]) : lm, bm = mg ? num(mg[4]) : lm;
     const j = justOf(ef.just);   // the file default is centre / centre (parseEDA_TEXT)
     const vert = ((rot % 180) + 180) % 180 === 90;
     // SCH_TEXTBOX::GetDrawPos: anchor on the box edge matching the justification
-    let tx, ty;
+    let tx: number, ty: number;
     if (vert) { ty = j.h === "left" ? y1 - bm : j.h === "right" ? y0 + tm : (y0 + y1) / 2; tx = j.v === "top" ? x0 + lm : j.v === "bottom" ? x1 - rm : (x0 + x1) / 2; }
     else { tx = j.h === "left" ? x0 + lm : j.h === "right" ? x1 - rm : (x0 + x1) / 2; ty = j.v === "top" ? y0 + tm : j.v === "bottom" ? y1 - bm : (y0 + y1) / 2; }
     // SCH_TEXTBOX::GetShownText: wrapped to the box's inner width (its height when the text runs vertically)
     const col = vert ? (y1 - y0) - tm - bm : (x1 - x0) - lm - rm;
     textLines(item, tx, ty, linebreakText(unescapeText(expandDocVars(doc, str(n[1]))), col, ef.sizeX, ef.thick, ef.italic), ef.size, colorOf(n) || SCH.notes, rot, [j.h, j.v], "Notes", { z: SCH_Z.notes, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
   } else if (k === "rectangle" || k === "circle" || k === "arc" || k === "bezier" || k === "ellipse" || k === "ellipse_arc") {
-    shapeGeom(item, n, k, (x, y) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n, 0) || SCH_PEN);
+    shapeGeom(item, n, k, (x: number, y: number) => [x, y], SCH.notes, "Notes", SCH_Z.notes, SCH_Z.notesBg, widthOf(n, 0) || SCH_PEN);
   } else if (k === "rule_area") {
     for (const pl of kids(n, "polyline")) {
       const p = ptsOf(pl); if (p.length < 2) continue;
-      G(item, Object.assign({ t: "poly", pts: p, close: true, w: widthOf(pl, 0) || SCH_PEN, color: strokeColorOf(pl) || SCH.ruleArea, layer: "Rule areas", z: SCH_Z.ruleArea }, dashOf(pl)));
+      G(item, Object.assign({ t: "poly" as const, pts: p, close: true, w: widthOf(pl, 0) || SCH_PEN, color: strokeColorOf(pl) || SCH.ruleArea, layer: "Rule areas", z: SCH_Z.ruleArea }, dashOf(pl)));
     }
   } else if (k === "table") {
     buildTableGeom(doc, item, n);
@@ -141,7 +144,7 @@ export function buildSchGeom(doc, item) {
 }
 
 /** Graphic shape shared by sheet-level notes and library bodies (tf maps node coords to screen). */
-export function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill, invertY) {
+export function shapeGeom(item: GeomSink, g: SNode, gk: string, tf: Tf, color: string, layer: string, z: number, zBg: number, w: number, bodyFill?: unknown, invertY?: boolean): void {
   const f = fillOf(g); const sc = strokeColorOf(g) || color;
   const fill = f.type === "background" ? SCH.body : f.type === "outline" ? sc : f.type === "color" ? f.color : f.type === "solid" ? sc : null;
   const fz = f.type === "outline" || f.type === "solid" ? z : zBg;   // KiCad fills device-coloured shapes in the foreground
@@ -151,30 +154,30 @@ export function shapeGeom(item, g, gk, tf, color, layer, z, zBg, w, bodyFill, in
     const x0 = num(s0[1]), y0 = num(s0[2]), x1 = num(e0[1]), y1 = num(e0[2]);
     const pts = [tf(x0, y0), tf(x1, y0), tf(x1, y1), tf(x0, y1)];
     if (fill) G(item, { t: "poly", pts, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, Object.assign({ t: "poly", pts, close: true, w, color: sc, layer, z }, ds));
+    G(item, Object.assign({ t: "poly" as const, pts, close: true, w, color: sc, layer, z }, ds));
   } else if (gk === "polyline" || gk === "bezier") {
     let p = ptsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
     if (gk === "bezier") p = bezierPts(p);
     if (fill && p.length > 2) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, Object.assign({ t: "poly", pts: p, close: false, w, color: sc, layer, z }, ds));
+    G(item, Object.assign({ t: "poly" as const, pts: p, close: false, w, color: sc, layer, z }, ds));
   } else if (gk === "circle") {
     const c = kid(g, "center"), r = kid(g, "radius"); if (!c) return; const [cx, cy] = tf(num(c[1]), num(c[2]));
     const rad = r ? num(r[1]) : 1;
     if (fill) G(item, { t: "circle", x: cx, y: cy, r: rad, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, Object.assign({ t: "circle", x: cx, y: cy, r: rad, w, color: sc, layer, z }, ds));
+    G(item, Object.assign({ t: "circle" as const, x: cx, y: cy, r: rad, w, color: sc, layer, z }, ds));
   } else if (gk === "ellipse" || gk === "ellipse_arc") {
     const e = ellipsePts(g, invertY); if (!e) return; const p = e.pts.map(([x, y]) => tf(x, y));
     if (fill && p.length > 2) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
-    G(item, Object.assign({ t: "poly", pts: p, close: e.closed, w, color: sc, layer, z }, ds));
+    G(item, Object.assign({ t: "poly" as const, pts: p, close: e.closed, w, color: sc, layer, z }, ds));
   } else if (gk === "arc") {
     const s0 = kid(g, "start"), m0 = kid(g, "mid"), e0 = kid(g, "end"); if (!s0 || !m0 || !e0) return;
     const a = arcFrom3(tf(num(s0[1]), num(s0[2])), tf(num(m0[1]), num(m0[2])), tf(num(e0[1]), num(e0[2])));
-    if (a) G(item, Object.assign({ t: "arc", w, color: sc, layer, z, fill: closed ? fill : null }, a, ds));
-    else { const p0 = tf(num(s0[1]), num(s0[2])), p1 = tf(num(e0[1]), num(e0[2])); G(item, Object.assign({ t: "line", x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color: sc, layer, z }, ds)); }
+    if (a) G(item, Object.assign({ t: "arc" as const, w, color: sc, layer, z, fill: closed ? fill : null }, a, ds));
+    else { const p0 = tf(num(s0[1]), num(s0[2])), p1 = tf(num(e0[1]), num(e0[2])); G(item, Object.assign({ t: "line" as const, x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color: sc, layer, z }, ds)); }
   }
 }
 
-export function buildLabelGeom(item, n, k) {
+export function buildLabelGeom(item: Item, n: SNode, k: string): void {
   const [x, y, rot] = atOf(n); const ef = effectsOf(n); const text = str(n[1]); const size = ef.size;
   const spin = SPIN[((Math.round(rot) % 360) + 360) % 360] || "R"; const st = spinText(spin);
   const pen = textPen(ef, size), lpen = layoutPen(ef, size); const off = 0.15 * size;   // DEFAULT_TEXT_OFFSET_RATIO
@@ -192,7 +195,7 @@ export function buildLabelGeom(item, n, k) {
     // outline: SCH_GLOBALLABEL::CreateGraphicShape
     const halfSize = size / 2 + margin; const symbLen = textWidth(parseMarkup(text).text, size, lpen) + 2 * margin;
     const bx = symbLen + lpen, by = halfSize + lpen;
-    let pts = [[0, 0], [0, -by], [-bx, -by], [-bx, 0], [-bx, by], [0, by]]; let xo = 0;
+    let pts: Pt[] = [[0, 0], [0, -by], [-bx, -by], [-bx, 0], [-bx, by], [0, by]]; let xo = 0;
     if (shape === "input") { xo = -halfSize; pts[0][0] += halfSize; }
     else if (shape === "output") pts[3][0] -= halfSize;
     else if (shape === "bidirectional" || shape === "tri_state") { xo = -halfSize; pts[0][0] += halfSize; pts[3][0] -= halfSize; }
@@ -208,7 +211,7 @@ export function buildLabelGeom(item, n, k) {
   } else {
     // directive label / netclass flag: SCH_DIRECTIVE_LABEL::CreateGraphicShape
     const color = colorOf(n) || SCH.netclass; const lenN = kid(n, "length"); const pinLen = lenN ? num(lenN[1]) : 2.54;
-    const symSize = 0.508; let s = symSize; let pts, kind = shape || "round";
+    const symSize = 0.508; let s = symSize; let pts: Pt[], kind = shape || "round";
     if (kind === "dot") { s = symSize * 0.7; pts = [[0, 0], [0, pinLen - s], [0, pinLen]]; }
     else if (kind === "round") pts = [[0, 0], [0, pinLen - s], [0, pinLen]];
     else if (kind === "diamond") pts = [[0, 0], [0, pinLen - s], [-2 * symSize, pinLen], [0, pinLen + s], [2 * symSize, pinLen], [0, pinLen - s]];
@@ -224,11 +227,11 @@ export function buildLabelGeom(item, n, k) {
   }
 }
 
-export function buildSheetGeom(item, n) {
+export function buildSheetGeom(item: Item, n: SNode): void {
   const [x, y] = atOf(n); const s = kid(n, "size"); const w = s ? num(s[1]) : 20, h = s ? num(s[2]) : 20;
   const f = fillOf(n); const bw = widthOf(n, 0) || SCH_PEN;
   if (f.color) G(item, { t: "rect", x, y, w, h, wd: 0, color: f.color, fill: f.color, layer: "Sheets", z: SCH_Z.sheetBg, noStroke: true });
-  G(item, Object.assign({ t: "rect", x, y, w, h, wd: bw, color: strokeColorOf(n) || SCH.sheet, fill: null, layer: "Sheets", z: SCH_Z.sheet }, dashOf(n)));
+  G(item, Object.assign({ t: "rect" as const, x, y, w, h, wd: bw, color: strokeColorOf(n) || SCH.sheet, fill: null, layer: "Sheets", z: SCH_Z.sheet }, dashOf(n)));
   item.movable = true; item.x = x; item.y = y; item.w = w; item.h = h; item.rot = 0;
   // A subsheet's page number lives HERE, in the parent's instance data — the child's own file has no
   // (sheet_instances …) at all.  SCH_SCREEN::GetPageNumber() is what feeds the child's ${#}
@@ -258,43 +261,43 @@ export function buildSheetGeom(item, n) {
 }
 
 /** LIB_SYMBOL::LetterSubReference( unit, 'A' ): A..Z, then AA.. */
-export function unitLetter(unit) {
-  let u, suffix = "";
+export function unitLetter(unit: number): string {
+  let u: number, suffix = "";
   do { u = (unit - 1) % 26; suffix = String.fromCharCode(65 + u) + suffix; unit = (unit - u) / 26 | 0; } while (unit > 0);
   return suffix;
 }
 
 export const PIN_TEXT_OFFSET = Math.round(24 * 0.15) * MIL, PIN_TEXT_MARGIN = 4 * MIL, TARGET_PIN_RADIUS = 15 * MIL;
 
-export const pinHidden = (g) => has(g, "hide") || !!(kid(g, "hide") && str(kid(g, "hide")[1]) === "yes");
+export const pinHidden = (g: SNode): boolean => has(g, "hide") || !!(kid(g, "hide") && str(kid(g, "hide")![1]) === "yes");
 
-export function buildSymbolGeom(doc, item) {
+export function buildSymbolGeom(doc: Doc, item: Item): void {
   const n = item.node;
   const libId = str((kid(n, "lib_name") || kid(n, "lib_id") || [])[1]);
   const [ax, ay, rot] = atOf(n);
   const mirrorN = kid(n, "mirror"); const mirror = mirrorN ? str(mirrorN[1]) : "";
-  const unit = kid(n, "unit") ? num(kid(n, "unit")[1], 1) : 1;
+  const unit = kid(n, "unit") ? num(kid(n, "unit")![1], 1) : 1;
   const styleN = kid(n, "body_style") || kid(n, "convert"); const style = styleN ? num(styleN[1], 1) : 1;
   const dnp = yesNo(n, "dnp"); const noSim = yesNo(n, "exclude_from_sim");
   const T = symbolTransform(rot, mirror); const Ti = internalT(T);
-  const tf = (lx, ly) => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
+  const tf = (lx: number, ly: number): Pt => [ax + T[0] * lx + T[1] * ly, ay + T[2] * lx + T[3] * ly];
   item.movable = true; item.x = ax; item.y = ay; item.rot = rot; item.lib = str((kid(n, "lib_id") || [])[1]) || libId; item.unit = unit;
   const lib = resolveLib(doc, libId) || (libId !== str((kid(n, "lib_id") || [])[1]) ? resolveLib(doc, str((kid(n, "lib_id") || [])[1])) : null);
-  const col = dnp ? (c) => dimColor(c, SCH.bg) : (c) => c;
+  const col = dnp ? (c: string) => dimColor(c, SCH.bg) : (c: string) => c;
   const alpha = noSim ? 0.5 : undefined;
   const bodyLayer = "Symbols";
-  let bodyBox = null, pinBox = null, unitCount = 1;
+  let bodyBox: Box | null = null, pinBox: Box | null = null, unitCount = 1;
   if (lib) for (const sub of kids(lib, "symbol")) { const m = str(sub[1]).match(/_(\d+)_(\d+)$/); if (m && +m[1] > unitCount) unitCount = +m[1]; }
-  const take = (g0) => { const b = item.bbox; if (!b) return; if (g0 === "pin") pinBox = boxUnion(pinBox, b[0], b[1], b[2], b[3]); else bodyBox = boxUnion(bodyBox, b[0], b[1], b[2], b[3]); };
+  const take = (g0: string) => { const b = item.bbox; if (!b) return; if (g0 === "pin") pinBox = boxUnion(pinBox, b[0], b[1], b[2], b[3]); else bodyBox = boxUnion(bodyBox, b[0], b[1], b[2], b[3]); };
   if (lib) {
-    const pn = kid(lib, "pin_names"); const nameOff = pn && kid(pn, "offset") ? num(kid(pn, "offset")[1]) : 0.508;
-    const hideNames = !!(pn && (has(pn, "hide") || (kid(pn, "hide") && str(kid(pn, "hide")[1]) === "yes")));
-    const pnu = kid(lib, "pin_numbers"); const hideNums = !!(pnu && (has(pnu, "hide") || (kid(pnu, "hide") && str(kid(pnu, "hide")[1]) === "yes")));
+    const pn = kid(lib, "pin_names"); const nameOff = pn && kid(pn, "offset") ? num(kid(pn, "offset")![1]) : 0.508;
+    const hideNames = !!(pn && (has(pn, "hide") || (kid(pn, "hide") && str(kid(pn, "hide")![1]) === "yes")));
+    const pnu = kid(lib, "pin_numbers"); const hideNums = !!(pnu && (has(pnu, "hide") || (kid(pnu, "hide") && str(kid(pnu, "hide")![1]) === "yes")));
     const subs = kids(lib, "symbol");
     // tallest visible pin name of the whole symbol positions names above horizontal pins
     let maxNameHalf = 0;
     for (const sub of subs) for (const p of kids(sub, "pin")) { const nm = kid(p, "name"); if (nm && str(nm[1]) && str(nm[1]) !== "~") maxNameHalf = Math.max(maxNameHalf, effectsOf(nm).size / 2); }
-    const sym = { nameOff, hideNames, hideNums, maxNameHalf, col, alpha };
+    const sym: PinSym = { nameOff, hideNames, hideNums, maxNameHalf, col, alpha };
     const geomStart = item.geom.length;
     for (const sub of subs) {
       const m = str(sub[1]).match(/_(\d+)_(\d+)$/); const u = m ? +m[1] : 0, s = m ? +m[2] : 1;
@@ -316,7 +319,7 @@ export function buildSymbolGeom(doc, item) {
         } else if (gk === "pin") {
           if (pinHidden(g)) {
             // kept aside, untouched bbox: drawn only under the showHiddenPins render option, in KiCad's hidden-item colour
-            const shadow = { geom: [], bbox: null };
+            const shadow: GeomSink = { geom: [], bbox: null };
             buildPinGeom(shadow, g, tf, Object.assign({}, sym, { col: () => SCH.hidden, showHidden: true }));
             if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
           } else { buildPinGeom(item, g, tf, sym); take("pin"); }
@@ -328,7 +331,7 @@ export function buildSymbolGeom(doc, item) {
     if (alpha !== undefined && item.hiddenGeom) for (const hg of item.hiddenGeom) if (hg.alpha === undefined) hg.alpha = alpha;
   } else {
     G(item, { t: "rect", x: ax - 2.54, y: ay - 2.54, w: 5.08, h: 5.08, wd: SCH_PEN, color: SCH.outline, fill: null, layer: bodyLayer, z: SCH_Z.device });
-    bodyBox = item.bbox.slice();
+    bodyBox = item.bbox!.slice();   // G just grew it
   }
   if (!bodyBox) bodyBox = [ax, ay, ax, ay]; if (!pinBox) pinBox = bodyBox.slice();
   const union = boxUnion(bodyBox, pinBox[0], pinBox[1], pinBox[2], pinBox[3]);
@@ -370,7 +373,7 @@ export function buildSymbolGeom(doc, item) {
 }
 
 /** One library pin mapped to the sheet: line, shape decoration, name and number (PIN_LAYOUT_CACHE rules). */
-export function buildPinGeom(item, g, tf, sym) {
+export function buildPinGeom(item: GeomSink, g: SNode, tf: Tf, sym: PinSym): void {
   const type = str(g[1]), shape = str(g[2]);
   const [px, py, pr] = atOf(g); const lenN = kid(g, "length"); const len = lenN ? num(lenN[1]) : 2.54;
   if (pinHidden(g) && !sym.showHidden) return;   // hidden (e.g. power) pins draw nothing unless asked for
@@ -378,7 +381,7 @@ export function buildPinGeom(item, g, tf, sym) {
   const g0 = item.geom.length, numTag = kid(g, "number"); const tag = numTag ? str(numTag[1]) : "";
   try { buildPinGeomInner(item, g, tf, sym, type, shape, px, py, pr, len); } finally { for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = tag; }
 }
-function buildPinGeomInner(item, g, tf, sym, type, shape, px, py, pr, len) {
+function buildPinGeomInner(item: GeomSink, g: SNode, tf: Tf, sym: PinSym, type: string, shape: string, px: number, py: number, pr: number, len: number): void {
   const dir = ((Math.round(pr) % 360) + 360) % 360;
   const d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];   // file angle points into the body
   const pos = tf(px, py), rootPt = tf(px + d[0] * len, py + d[1] * len);
@@ -388,11 +391,11 @@ function buildPinGeomInner(item, g, tf, sym, type, shape, px, py, pr, len) {
   const orient = ox < 0 ? "R" : ox > 0 ? "L" : oy > 0 ? "U" : "D"; const vertical = orient === "U" || orient === "D";
   const color = sym.col(SCH.pin); const w = SCH_PEN; const z = SCH_Z.pin, layer = "Pins";
   const nameN = kid(g, "name"), numN = kid(g, "number");
-  const nameEf = nameN ? effectsOf(nameN) : { size: 1.27, hide: false }, numEf = numN ? effectsOf(numN) : { size: 1.27, hide: false };
+  const nameEf: Pick<TextEffects, "size" | "hide"> = nameN ? effectsOf(nameN) : { size: 1.27, hide: false }, numEf: Pick<TextEffects, "size" | "hide"> = numN ? effectsOf(numN) : { size: 1.27, hide: false };
   const radius = numEf.size / 2, diam = radius * 2, clock = (nameEf.size || numEf.size) / 2;
-  const p0 = rootPt; const line = (a, b) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" });
-  const tri = (a, b, c) => G(item, { t: "poly", pts: [a, b, c], close: false, w, color, layer, z });
-  const P = (dx, dy) => [p0[0] + dx, p0[1] + dy];
+  const p0 = rootPt; const line = (a: Pt, b: Pt) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" });
+  const tri = (a: Pt, b: Pt, c: Pt) => G(item, { t: "poly", pts: [a, b, c], close: false, w, color, layer, z });
+  const P = (dx: number, dy: number): Pt => [p0[0] + dx, p0[1] + dy];
   if (len > 0 || shape !== "line") {
     if (type === "no_connect") {
       line(p0, pos); const r = TARGET_PIN_RADIUS;

@@ -1,16 +1,15 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 // ---------------------------------------------------------------- colours
-export function rgba(r, g, b, a) { return a === undefined || a >= 1 ? "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("") : `rgba(${r},${g},${b},${+a.toFixed(3)})`; }
+export function rgba(r: number, g: number, b: number, a?: number): string { return a === undefined || a >= 1 ? "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("") : `rgba(${r},${g},${b},${+a.toFixed(3)})`; }
 
-export function parseColor(c) {
+export function parseColor(c: string): [number, number, number, number] {
   const m = /^#([0-9a-f]{6})$/i.exec(c); if (m) { const v = parseInt(m[1], 16); return [v >> 16, (v >> 8) & 255, v & 255, 1]; }
   const n = /^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/.exec(c); if (n) return [+n[1], +n[2], +n[3], n[4] === undefined ? 1 : +n[4]];
   return [0, 0, 0, 1];
 }
 
 /** KiCad's "dimmed" item colour: desaturate then mix 50/50 with the sheet background. */
-export function dimColor(c, bg) {
+export function dimColor(c: string, bg: string): string {
   const [r, g, b, a] = parseColor(c), [br, bgc, bb] = parseColor(bg);
   const l = (Math.max(r, g, b) + Math.min(r, g, b)) / 2;   // HSL lightness = desaturated grey
   return rgba(Math.round((l + br) / 2), Math.round((l + bgc) / 2), Math.round((l + bb) / 2), a);
@@ -35,7 +34,10 @@ export const SCH_DEFAULT = Object.freeze({
 // KiCad's two built-in themes (common/settings/builtin_color_themes.h; COLOR4D names resolved through
 // common/gal/color4d.cpp, whose table is B, G, R) plus a dark sheet.  A key a theme leaves out keeps KiCad
 // Default's colour, as COLOR_SETTINGS falls back to s_defaultTheme.
-export const SCH_THEMES = {
+/** A schematic colour theme: its name, whether the sheet is dark, and the palette keys it overrides. */
+export interface SchThemeDef { name: string; dark: boolean; colors: Partial<Record<keyof typeof SCH_DEFAULT, string>> }
+
+export const SCH_THEMES: Record<string, SchThemeDef> & { default: SchThemeDef } = {
   default: { name: "KiCad Default", dark: false, colors: {} },
   classic: { name: "KiCad Classic", dark: false, colors: {
     bg: "#FFFFFF", grid: "#848484", wire: "#008400", bus: "#000084", junction: "#008400", outline: "#840000", body: "#FFFFC2", pin: "#840000",
@@ -56,20 +58,20 @@ export const SCH_THEMES = {
 };
 
 /** The live palette every painter reads (geometry takes its colours from here when it is built). */
-export const SCH = Object.assign({}, SCH_DEFAULT);
+export const SCH: Record<keyof typeof SCH_DEFAULT, string> = Object.assign({}, SCH_DEFAULT);
 let schThemeId = "default";
 
 /** The schematic theme the palette holds now. */
-export function schTheme() { return schThemeId; }
+export function schTheme(): string { return schThemeId; }
 
 /** The palette of a theme (KiCad Default for an unknown id). */
-export function schThemeColors(id) { const t = SCH_THEMES[id] || SCH_THEMES.default; return Object.assign({}, SCH_DEFAULT, t.colors); }
+export function schThemeColors(id: string): Record<keyof typeof SCH_DEFAULT, string> { const t = SCH_THEMES[id] || SCH_THEMES.default; return Object.assign({}, SCH_DEFAULT, t.colors); }
 
 /**
  * Switch the live palette.  Geometry built under another theme is rebuilt lazily by the painters (geom.ts
  * ensureSchTheme), so a switch costs nothing until the next paint.  Returns whether anything changed.
  */
-export function setSchTheme(id) {
+export function setSchTheme(id: string): boolean {
   if (!SCH_THEMES[id]) id = "default";
   if (id === schThemeId) return false;
   Object.assign(SCH, schThemeColors(id)); schThemeId = id;
@@ -77,24 +79,24 @@ export function setSchTheme(id) {
 }
 
 /** Run fn with the palette switched to theme `id` (an export in KiCad Default while the screen shows another). */
-export function withSchTheme(id, fn) {
+export function withSchTheme<T>(id: string, fn: () => T): T {
   const was = schThemeId; setSchTheme(id);
   try { return fn(); } finally { setSchTheme(was); }
 }
 
 // draw order (eeschema SCH_VIEW layer order, bottom first)
-export const SCH_Z = { bitmap: -7, sheetBg: -6, sheetFields: -5, sheet: -4, notesBg: -3, deviceBg: -2, notes: -1, device: 0, pinName: 1, pinNum: 2, pin: 3,
+export const SCH_Z: Record<string, number> = { bitmap: -7, sheetBg: -6, sheetFields: -5, sheet: -4, notesBg: -3, deviceBg: -2, notes: -1, device: 0, pinName: 1, pinNum: 2, pin: 3,
   wire: 4, bus: 5, junction: 6, noconnect: 7, loclabel: 8, globlabel: 9, hierlabel: 10, ruleArea: 11, netclass: 12, fields: 13, value: 14, ref: 15, marker: 16 };
 
 // [layer name, palette key]: the colour is read from the live palette, so it follows the theme
-export const SCH_LAYERS = [
+export const SCH_LAYERS: [string, keyof typeof SCH_DEFAULT][] = [
   ["Wires", "wire"], ["Buses", "bus"], ["Junctions", "junction"], ["Symbols", "outline"], ["Pins", "pin"],
   ["Pin names", "pinName"], ["Pin numbers", "pinNum"], ["Reference & value", "ref"], ["Fields", "field"],
   ["Labels", "label"], ["Sheets", "sheet"], ["Notes", "notes"], ["No-connects", "noconnect"], ["Rule areas", "ruleArea"],
   ["Images", "hidden"],
 ];
 
-export const PCB_COLORS = {
+export const PCB_COLORS: Record<string, string> = {
   "F.Cu": "#C83434", "B.Cu": "#4D7FC4", "In1.Cu": "#7FC87F", "In2.Cu": "#CE7D2C", "In3.Cu": "#4FCBCB", "In4.Cu": "#DB628B",
   "In5.Cu": "#A7A5C6", "In6.Cu": "#28CCD9", "In7.Cu": "#E8B2A7", "In8.Cu": "#F2EDA1", "In9.Cu": "#8DCB81", "In10.Cu": "#ED7C33",
   "In11.Cu": "#5BC3EB", "In12.Cu": "#F76F8E", "In13.Cu": "#A7A5C6", "In14.Cu": "#28CCD9", "In15.Cu": "#E8B2A7", "In16.Cu": "#F2EDA1",
@@ -119,7 +121,7 @@ export const PCB_SHEET = "#C872AB", PCB_PAGE_LIMITS = "#848484";
 
 export const PCB_HIDDEN_DEFAULT = new Set(["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.Adhes", "B.Adhes", "F.Fab", "B.Fab", "F.CrtYd", "B.CrtYd", "Margin", "Eco1.User", "Eco2.User"]);
 
-export function pcbColor(layer) {
+export function pcbColor(layer: string): string {
   if (PCB_COLORS[layer]) return PCB_COLORS[layer];
   const u = /^User\.(\d+)$/.exec(layer); if (u) return +u[1] === 9 ? "#E8B2A7" : USER_COLORS[(+u[1] - 1) % 4];
   if (/\.Cu$/.test(layer)) return "#7FC87F"; return "#C2C2C2";
@@ -138,14 +140,14 @@ PCB_ORDER.push("Margin", "Edge.Cuts", "Eco2.User", "Eco1.User", "Cmts.User", "Dw
 
 export const PCB_ZMAP = new Map(PCB_ORDER.map((l, i) => [l, i * 10]));
 
-export function pcbZ(layer) { const z = PCB_ZMAP.get(layer); return z === undefined ? 5 : z; }
+export function pcbZ(layer: string): number { const z = PCB_ZMAP.get(layer); return z === undefined ? 5 : z; }
 
 export const Z_PAD = 2, Z_VIA = 1, Z_TEXT = 4, Z_ZONE = -1, Z_BITMAP = -20;
    // BITMAP_LAYER_FOR(…) sits below every board layer
-export function padLayers(doc, names) {
+export function padLayers(doc: Pick<KDoc, "copper">, names: Iterable<string>): string[] {
   // expand *.Cu / F&B.Cu etc. against the board's copper layers (front→back order)
   const copper = doc.copper && doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
-  const out = [];
+  const out: string[] = [];
   for (const n of names) {
     if (n === "*.Cu") out.push(...copper);
     else if (n === "F&B.Cu") out.push("F.Cu", "B.Cu");
