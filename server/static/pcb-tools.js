@@ -1414,6 +1414,12 @@ function updateHead(ctx) {
     const res = walkHead(O, rt.last, rt.cursor, r, rt.diagFirst, rt.tracer.lastSegDir, leg);
     rt.head = res.pts; rt.reached = res.reached;
   }
+  // rhWalkOnly / rhShoveOnly: OPTIMIZER::SMART_PADS with "Optimize pad connections" in the 45° corner modes, unless
+  // the posture was forced by hand
+  if (rs.smart_pads && rs.mode !== RM_MARK && (cm === CM_M45 || cm === CM_R45) && !rt.tracer.manuallyForced && rt.head.length >= 3) {
+    const sp = runSmartPads(rc.doc, rt.head, rt.width, rt.layer, rt.netKey, (pts) => pathClear(O, pts, r));
+    if (sp) rt.head = sp;
+  }
   rt.target = rt.head[rt.head.length - 1].slice();
   if (via && rs.mode === RM_WALK) { const vh = viaHits(ctx, rt, Object.assign({}, via, { at: rt.target })); rt.viaBad = vh.length ? vh : null; }
   rt.els = headElems(rt.head, cm, rs.mode === RM_MARK ? null : (p) => pathClear(O, p, r));
@@ -1429,6 +1435,104 @@ function previewLoops(ctx, rt, rc) {
   const doc = rc.doc; if (!jointAt(doc, rt.layer, rt.target, rt.netKey).count) return null;
   const b = branchDoc(doc, trackOps(doc, rt.els, rt.width, rt.layer, rt.net));
   const ids = loopRemovals(ctx.doc, b); return ids.size ? ids : null;
+}
+// ---- OPTIMIZER::SMART_PADS (pns_optimizer.cpp computeBreakouts / smartPadsSingle / runSmartPads)
+const ANG_OBTUSE = 1, ANG_RIGHT = 2, ANG_ACUTE = 4, ANG_STRAIGHT = 8, ANG_HALF_FULL = 16, ANG_UNDEFINED = 32;
+/** DIRECTION_45::Angle as KiCad's AngleType flags. */
+function angleType(d1, d2) {
+  if (d1 < 0 || d2 < 0) return ANG_UNDEFINED;
+  const d = Math.abs(d1 - d2);
+  return d === 1 || d === 7 ? ANG_OBTUSE : d === 2 || d === 6 ? ANG_RIGHT : d === 3 || d === 5 ? ANG_ACUTE : d === 4 ? ANG_HALF_FULL : ANG_STRAIGHT;
+}
+/** COST_ESTIMATOR::CornerCost of a point chain. */
+function cornerCost(pts) {
+  const C = { [ANG_OBTUSE]: 10, [ANG_STRAIGHT]: 5, [ANG_ACUTE]: 50, [ANG_RIGHT]: 30, [ANG_HALF_FULL]: 60 };
+  let t = 0; for (let i = 0; i + 2 < pts.length; i++) t += C[angleType(dir8(pts[i], pts[i + 1]), dir8(pts[i + 1], pts[i + 2]))] || 100; return t;
+}
+/** LINE::CountCorners( aAngles ) */
+function countCorners(pts, mask) { let n = 0; for (let i = 0; i + 2 < pts.length; i++) if (angleType(dir8(pts[i], pts[i + 1]), dir8(pts[i + 1], pts[i + 2])) & mask) n++; return n; }
+/**
+ * OPTIMIZER::computeBreakouts for a pad: rectBreakouts (rect, rounded rect, chamfered, an oval as its segment's
+ * rectangle) on axis-aligned pads, circleBreakouts on round ones, customBreakouts (the 8 rays to the outline) on the rest.
+ */
+function padBreakouts(pad, width) {
+  const c = [pad.x, pad.y]; const rot = ((pad.rot % 360) + 360) % 360; const out = [];
+  if (pad.shape === "circle") {
+    const r = pad.w / 2; for (let a = 0; a < 360; a += 45) { const t = -a * Math.PI / 180; out.push([c, [c[0] + r * Math.SQRT2 * Math.cos(t), c[1] - r * Math.SQRT2 * Math.sin(t)]]); }
+    return out;
+  }
+  if (rot % 90 === 0 && /^(rect|roundrect|oval|chamfered_rect)$/.test(pad.shape)) {
+    const swap = rot % 180 === 90; const sx = swap ? pad.h : pad.w, sy = swap ? pad.w : pad.h;
+    const off = [sx > sy ? (sx - sy) / 2 : 0, sx < sy ? (sy - sx) / 2 : 0];
+    const add = (...v) => v.reduce((a, b) => [a[0] + b[0], a[1] + b[1]]); const neg = (v) => [-v[0], -v[1]];
+    const dv = [0, sy / 2 + width], dh = [sx / 2 + width, 0];
+    out.push([c, add(c, dh)], [c, add(c, neg(dh))], [c, add(c, dv)], [c, add(c, neg(dv))]);
+    const l = width + Math.min(sx, sy) / 2;
+    if (sx >= sy) {
+      out.push([c, add(c, off), add(c, off, [l, l])], [c, add(c, off), add(c, off, neg([-l, l]))], [c, add(c, neg(off)), add(c, neg(off), [-l, l])], [c, add(c, neg(off)), add(c, neg(off), neg([l, l]))]);
+    } else {
+      out.push([c, add(c, off), add(c, off, [l, l])], [c, add(c, neg(off)), add(c, neg(off), neg([-l, l]))], [c, add(c, off), add(c, off, [-l, l])], [c, add(c, neg(off)), add(c, neg(off), neg([l, l]))]);
+    }
+    return out.map((b) => b.map(rp));
+  }
+  // customBreakouts: from the centre to where each 45° ray leaves the pad's outline
+  const R = rotator(pad.rot); const hw = pad.w / 2, hh = pad.h / 2;
+  const poly = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([x, y]) => { const [rx, ry] = R(x, y); return [c[0] + rx, c[1] + ry]; });
+  const len = Math.max(pad.w, pad.h) / 2 + 5e-6;
+  for (let a = 0; a < 360; a += 45) {
+    const t = -a * Math.PI / 180; const v = [c[0] + len * Math.cos(t), c[1] - len * Math.sin(t)];
+    let hit = null; for (let i = 0; i < 4; i++) { const q = segIntersect(c, v, poly[i], poly[(i + 1) % 4]); if (q) { hit = q; break; } }
+    if (hit) out.push([c, rp(hit)]);
+  }
+  return out;
+}
+function segIntersect(a, b, c, d) {
+  const r = [b[0] - a[0], b[1] - a[1]], s = [d[0] - c[0], d[1] - c[1]]; const den = r[0] * s[1] - r[1] * s[0]; if (Math.abs(den) < 1e-15) return null;
+  const t = ((c[0] - a[0]) * s[1] - (c[1] - a[1]) * s[0]) / den, u = ((c[0] - a[0]) * r[1] - (c[1] - a[1]) * r[0]) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1 ? [a[0] + t * r[0], a[1] + t * r[1]] : null;
+}
+/** OPTIMIZER::findPadOrVia: the pad (or via) of the net centred on the point on the layer. */
+function padOrViaAt(doc, layer, netKey, p) {
+  const J = jointIndex(doc); const k = ptKey(p);
+  if ((J.vias.get(k) || []).some((v) => v.layers.has(layer) && v.net === netKey)) return { via: true };
+  const x = (J.pads.get(k) || []).find((x) => x.layers.has(layer) && samePt([x.pad.x, x.pad.y], p) && J.NT.key(x.pad.net) === netKey);
+  return x ? { pad: x.pad } : null;
+}
+/** OPTIMIZER::smartPadsSingle: the cheapest collision-free breakout from the pad replacing the line's first vertices. */
+function smartPadsSingle(line, pad, width, atEnd, endVertex, clear) {
+  const forbidden = ANG_ACUTE | ANG_RIGHT | ANG_HALF_FULL | ANG_UNDEFINED;
+  const L = atEnd ? line.slice().reverse() : line; const pEnd = Math.min(endVertex, Math.min(3, L.length - 1));
+  const breakouts = padBreakouts(pad, width); const variants = []; const lineLen = chainLen(L);
+  for (let p = 1; p <= pEnd; p++) {
+    for (const br of breakouts) {
+      for (let diag = 0; diag < 2; diag++) {
+        const last = br[br.length - 1]; const connect = legPts(last, L[p], diag === 0);
+        if (connect.length < 2 || samePt(connect[0], connect[connect.length - 1])) continue;
+        const ang1 = angleType(dir8(br[br.length - 2], last), dir8(connect[0], connect[1]));
+        if (ang1 & forbidden) continue;
+        const bl = chainLen(br); if (bl > lineLen) continue;
+        const v = br.concat(connect.slice(1)); for (let i = p + 1; i < L.length; i++) v.push(L[i]);
+        if (countCorners(simplifyPts(v), forbidden) === 0) variants.push({ p, len: bl, pts: simplifyPts(atEnd ? v.slice().reverse() : v) });
+      }
+    }
+  }
+  let minCost = cornerCost(line), maxLen = 0, best = null;
+  for (const vp of variants) {
+    const cost = cornerCost(vp.pts);
+    if (!clear(vp.pts)) continue;
+    if (cost < minCost || (cost === minCost && vp.len > maxLen)) { best = vp; if (cost <= minCost) maxLen = Math.max(vp.len, maxLen); minCost = Math.min(cost, minCost); }
+  }
+  return best;
+}
+/** OPTIMIZER::runSmartPads on the head: the start and end pads' breakouts.  The new points, or null when nothing changed. */
+function runSmartPads(doc, pts, width, layer, netKey, clear) {
+  if (!netKey || pts.length < 3) return null;
+  let line = pts.map((q) => q.slice()), changed = false, vtx = -1;
+  const sp = padOrViaAt(doc, layer, netKey, line[0]);
+  if (sp && sp.pad) { const r = smartPadsSingle(line, sp.pad, width, false, 3, clear); if (r) { line = r.pts; vtx = r.p; changed = true; } }
+  const ep = padOrViaAt(doc, layer, netKey, line[line.length - 1]);
+  if (ep && ep.pad) { const r = smartPadsSingle(line, ep.pad, width, true, vtx < 0 ? line.length - 1 : line.length - 1 - vtx, clear); if (r) { line = r.pts; changed = true; } }
+  return changed ? simplifyPts(line) : null;
 }
 /** NODE::NearestObstacle: the obstacle met first along the line. */
 function firstHit(O, pts, r) {
@@ -7137,7 +7241,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  padBreakouts, smartPadsSingle, runSmartPads, cornerCost, dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,

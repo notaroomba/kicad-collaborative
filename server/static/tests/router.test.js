@@ -284,5 +284,32 @@ test("Interactive Router Settings: KiCad's rows and tooltips, onModeChange enabl
 });
 
 reset();
+const SP_BOARD = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (footprint "T:P" (layer "F.Cu") (uuid "fa") (at 10 10) (pad "1" smd rect (at 0 0) (size 1 3) (layers "F.Cu") (net "S") (uuid "pa"))))`;
+function spHead(on, extra) {
+  const doc = K.parseDoc(SP_BOARD, "kicad_pcb"); const { ctx } = fakeCtx(doc); pcb.onDocChanged(ctx); pcb.setLayer(ctx, "F.Cu");
+  P.setRouterSettings(Object.assign({}, P.RS_DEFAULTS, { smart_pads: on }, extra || {}));
+  startRoute(ctx, [10, 10]);
+  for (const q of [[10.5, 10.5], [11, 11], [11.5, 11.5], [12, 12], [13, 12], [14, 12], [15, 12]]) pcb.onPointerMove(ev(), q, ctx);
+  const h = P.state.route.head.map((p) => p.slice()); pcb.cancel(); return h;
+}
+
+test("SMART_PADS: Optimize pad connections replaces the pad exit with the cheapest clean breakout (ties: the longer exit)", () => {
+  assert.deepEqual(spHead(false), [[10, 10], [12, 12], [15, 12]], "the head as walked");
+  assert.deepEqual(spHead(true), [[10, 10], [13, 10], [15, 12]], "straight out of the pad's side, then 45°");
+  assert.deepEqual(spHead(true, { corner_mode: 2 }), spHead(false, { corner_mode: 2 }), "90° modes are left alone");
+  assert.deepEqual(spHead(true, { mode: 0 }), [[10, 10], [12, 12], [15, 12]], "not in Highlight collisions");
+});
+
+test("computeBreakouts: four straight and four diagonal exits of a rectangle, eight rays from a circle", () => {
+  const rect = P.padBreakouts({ x: 0, y: 0, w: 1, h: 3, rot: 0, shape: "rect" }, 0.25);
+  assert.equal(rect.length, 8); assert.deepEqual(rect[0], [[0, 0], [0.75, 0]]); assert.deepEqual(rect[2], [[0, 0], [0, 1.75]]);
+  assert.deepEqual(rect[4], [[0, 0], [0, 1], [0.75, 1.75]], "a diagonal exit from the end of the long side");
+  const circ = P.padBreakouts({ x: 0, y: 0, w: 1, h: 1, rot: 0, shape: "circle" }, 0.25); assert.equal(circ.length, 8);
+  assert.ok(Math.abs(Math.hypot(...circ[1][1]) - 0.5 * Math.SQRT2) < 1e-9);
+  assert.equal(P.cornerCost([[0, 0], [1, 0], [2, 1]]), 10); assert.equal(P.cornerCost([[0, 0], [1, 0], [1, 1]]), 30);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
