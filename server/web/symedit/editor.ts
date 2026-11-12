@@ -474,7 +474,7 @@ export class SymbolEditor {
     if (name === "unitSelector") {
       const n = sym ? M.unitCount(this.rootSym(sym)) : 1;
       const s = h("select", { id: "se-unit", "aria-label": "Unit", disabled: !sym || n < 2 }) as HTMLSelectElement;
-      const names = sym ? M.unitChoices(this.rootSym(sym)) : ["Unit A"];
+      const names = sym && n > 1 ? M.unitChoices(this.rootSym(sym)) : [""];   // one unit: an empty entry, as KiCad
       names.forEach((label, i) => s.append(h("option", { value: String(i + 1) }, label)));
       if (t) s.value = String(t.unit); s.addEventListener("change", () => this.setUnit(Number(s.value)));
       return s;
@@ -482,7 +482,7 @@ export class SymbolEditor {
     if (name === "bodyStyleSelector") {
       const b = sym ? M.bodyStyles(this.rootSym(sym)) : { count: 1, demorgan: false, names: [] as string[] };
       const s = h("select", { id: "se-body", "aria-label": "Body style", disabled: !sym || b.count < 2 }) as HTMLSelectElement;
-      for (let i = 1; i <= Math.max(1, b.count); i++) s.append(h("option", { value: String(i) }, sym && b.count > 1 ? M.bodyStyleDescription(this.rootSym(sym), i) : "Standard"));
+      for (let i = 1; i <= Math.max(1, b.count); i++) s.append(h("option", { value: String(i) }, sym && b.count > 1 ? M.bodyStyleDescription(this.rootSym(sym), i) : ""));
       if (t) s.value = String(t.body); s.addEventListener("change", () => this.setBody(Number(s.value)));
       return s;
     }

@@ -247,7 +247,21 @@ export function symbolProperties(se: SymbolEditor): void {
   const unitsIn = textInput(String(M.unitCount(root)), undefined, { id: "sp-units", type: "number", min: "1", max: "64", style: "width:70px" });
   const interchange = checkbox("All units are interchangeable", !M.unitsLocked(root), undefined, { id: "sp-interchangeable" });
   const bs = M.bodyStyles(root);
-  const bodyMode = select([["single", "Single body style"], ["demorgan", "‘Standard’ and ‘Alternate’ De Morgan body styles"]], bs.demorgan ? "demorgan" : "single", undefined, { id: "sp-bodystyles", disabled: bs.count > 1 && !bs.demorgan });
+  // Units & Body Styles: the unit names grid follows the unit count; body styles are single, De Morgan or custom names
+  const unitRows: { letter: string; name: string }[] = [];
+  const uNames = M.unitNames(root);
+  const syncUnitRows = () => { const n = Math.max(1, Math.min(64, Math.round(Number(unitsIn.value) || 1))); while (unitRows.length > n) unitRows.pop(); while (unitRows.length < n) { const u = unitRows.length + 1; unitRows.push({ letter: M.unitLetter(u), name: uNames.get(u) || "" }); } unitGrid && unitGrid.refresh(); };
+  let unitGrid: { refresh(): void } | null = null;
+  let mode: M.BodyMode = M.bodyMode(root);
+  const bodyRows: { name: string }[] = mode === "custom" ? bs.names.map((name) => ({ name })) : [];
+  let bodyGridHost: HTMLElement | null = null; let bodyGrid: { refresh(): void } | null = null;
+  const radio = (v: M.BodyMode, label: string) => { const i = h("input", { type: "radio", name: "sp-bodystyle", value: v, id: "sp-bs-" + v, style: "width:auto;margin:0" }) as HTMLInputElement; i.checked = mode === v; i.disabled = derived;
+    i.addEventListener("change", () => { if (!i.checked) return;
+      if (v !== "single") { const alts = M.allPins(root).filter((d) => M.pinInfo(d.node).alternates.length).map((d) => M.pinInfo(d.node).number); if (alts.length) { void messageBox(`Multiple body styles are not supported on symbols with alternate pin functions.\n\n(Pins ${M.pinNumberSummary(alts.map((number) => ({ number }) as M.PinRow)).numbers}.)`); (document.getElementById("sp-bs-single") as HTMLInputElement).checked = true; mode = "single"; syncBody(); return; } }
+      mode = v; syncBody(); });
+    return h("label", { style: "display:flex;gap:6px;align-items:center" }, i, label); };
+  const syncBody = () => { if (bodyGridHost) { bodyGridHost.style.opacity = mode === "custom" ? "1" : ".5"; bodyGridHost.style.pointerEvents = mode === "custom" ? "" : "none"; } };
+  const jumperRows: { group: string }[] = M.jumperGroups(root).map((g) => ({ group: g.join(", ") }));
   const power = checkbox("Define as power symbol", !!hd.power, undefined, { id: "sp-power" }), local = checkbox("Define as local power symbol", hd.power === "local", undefined, { id: "sp-local" });
   const exSim = checkbox("Exclude from simulation", hd.excludeFromSim, undefined, { id: "sp-exsim" }), exBom = checkbox("Exclude from bill of materials", !hd.inBom, undefined, { id: "sp-exbom" }), exBoard = checkbox("Exclude from board", !hd.onBoard, undefined, { id: "sp-exboard" }), exPos = checkbox("Exclude from position files", !hd.inPosFiles, undefined, { id: "sp-expos" });
   const showNum = checkbox("Show pin number", hd.showPinNumbers, undefined, { id: "sp-pinnum" }), showName = checkbox("Show pin name", hd.showPinNames, undefined, { id: "sp-pinname" }), inside = checkbox("Place pin names inside", hd.pinNameOffset > 0, undefined, { id: "sp-inside" });
@@ -255,9 +269,11 @@ export function symbolProperties(se: SymbolEditor): void {
   const jumpers = checkbox("All pins with duplicate numbers are jumpers", hd.jumpers, undefined, { id: "sp-jumpers" });
   const cb = (l: HTMLLabelElement) => (l.querySelector("input") as HTMLInputElement).checked;
   const ro = se.readOnly();
+  let confirmed = false; let api: { finish(apply: boolean): void } | null = null;
   KD().open({
     title: `Library Symbol Properties`, width: 760, readOnly: ro,
-    build(body) {
+    build(body, a) {
+      api = a;
       KD().notebook(body, [
         { label: "General", build(pg) {
           const box = KD().staticBox(pg, "Fields");
@@ -275,7 +291,20 @@ export function symbolProperties(se: SymbolEditor): void {
             h("div", { style: "display:flex;flex-direction:column;gap:3px" }, h("b", null, "Pin Text Options"), showNum, showName, inside, form([["Position offset:", offset, unitName(units())]], 3))));
         } },
         ...(derived ? [] : [{ label: "Units & Body Styles", build(pg: HTMLElement) {
-          pg.append(form([["Number of units:", unitsIn]]), h("div", { style: "display:flex;flex-direction:column;gap:4px;margin-top:6px" }, interchange, form([["Body Styles", bodyMode]]), jumpers));
+          const ub = KD().staticBox(pg, "Symbol Units");
+          ub.append(form([["Number of units:", unitsIn]]), h("div", { style: "margin:4px 0" }, interchange), h("div", { style: "margin-top:4px" }, "Unit display names (optional):"));
+          unitsIn.addEventListener("input", syncUnitRows); syncUnitRows();
+          const ugHost = h("div", { id: "sp-unitnames" }); ub.append(ugHost);
+          unitGrid = KD().grid(ugHost, [{ key: "letter", label: "", type: "ro", width: 36 }, { key: "name", label: "", width: 300 }], unitRows, { readOnly: ro, height: 130 });
+          const bb = KD().staticBox(pg, "Body Styles");
+          bb.append(radio("single", "Single body style"), radio("demorgan", "‘Standard’ and ‘Alternate’ De Morgan body styles"), radio("custom", "Custom body styles:"));
+          bodyGridHost = h("div", { id: "sp-bodynames", style: "margin-left:22px" }); bb.append(bodyGridHost);
+          bodyGrid = KD().grid(bodyGridHost, [{ key: "name", label: "", width: 320 }], bodyRows, { readOnly: ro, height: 100, buttons: { add: () => ({ name: "" }), addTitle: "Add field", remove: true, removeTitle: "Delete field", move: true } });
+          syncBody();
+        } }, { label: "Pin Connections", build(pg: HTMLElement) {
+          const jgHost = h("div", { id: "sp-jumpergroups" });
+          pg.append(jumpers, h("div", { style: "margin-top:8px" }, "Explicit jumper pin groups:"), jgHost);
+          KD().grid(jgHost, [{ key: "group", label: "", width: 420 }], jumperRows, { readOnly: ro, height: 150, buttons: { add: () => ({ group: "" }), remove: true } });
         } }]),
         { label: "Footprint Filters", build(pg) { pg.append(h("div", { style: "margin-bottom:4px" }, "Footprint filters:"), filters); } },
       ]);
@@ -287,6 +316,24 @@ export function symbolProperties(se: SymbolEditor): void {
       const oldName = M.symName(sym);
       if (newName !== oldName && !t.origin && lib && lib.doc && lib.doc.lib.symbols.has(newName)) { void messageBox(`Symbol '${newName}' already exists in library '${lib.nick}'.`); return false; }
       const nu = Math.max(1, Math.min(64, Math.round(Number(unitsIn.value) || 1)));
+      void bodyGrid;
+      if (!derived) {
+        // DIALOG_LIB_SYMBOL_PROPERTIES::Validate
+        const seen = new Set<string>();
+        for (let r = 0; r < unitRows.length && r < nu; r++) { const sub = unitRows[r].name || M.unitLetter(r + 1); if (seen.has(sub.toUpperCase())) { void messageBox(`The unit name '${sub}' is already in use.`); return false; } seen.add(sub.toUpperCase()); }
+        const names = bodyRows.map((r) => r.name).filter(Boolean);
+        if (mode === "custom" && names.length < 2) { void messageBox("Custom body styles must have at least 2 entries"); return false; }
+        const jg = M.parseJumperGroups(jumperRows.map((r) => r.group), (n) => M.hasPinNumber(root, n));
+        if ("error" in jg) { void messageBox(jg.error); return false; }
+        const newBodies = mode === "single" ? 1 : mode === "demorgan" ? 2 : names.length;
+        const asks: string[] = [];
+        if (nu < M.unitCount(root)) asks.push("Delete extra units from symbol?");
+        if (newBodies < bs.count) asks.push("Delete extra body styles from symbol?");
+        if (asks.length && !confirmed) {
+          void (async () => { for (const q of asks) if (!(await confirmBox("Confirmation", q, "OK"))) return; confirmed = true; api && api.finish(true); })();
+          return false;
+        }
+      }
       const apply = (s: M.Node) => {
         // fields: the grid's order, existing nodes keep their effects
         const keepMeta = (s.filter((c, j) => j > 0 && Array.isArray(c) && c[0] === "property" && String(c[1]).startsWith("ki_")) as M.Node[]);
@@ -304,8 +351,10 @@ export function symbolProperties(se: SymbolEditor): void {
           const pw = cb(power) ? (cb(local) ? "local" : "global") : "";
           M.setSymHeader(s, { power: pw as M.SymHeader["power"], showPinNumbers: cb(showNum), showPinNames: cb(showName), pinNameOffset: cb(inside) ? lenOf(offset, M.DEFAULT_PIN_NAME_OFFSET) || 0.0001 : 0,
             excludeFromSim: cb(exSim), inBom: !cb(exBom), onBoard: !cb(exBoard), inPosFiles: !cb(exPos), jumpers: cb(jumpers) });
-          if (bodyMode.value === "demorgan" !== bs.demorgan) M.setDeMorgan(s, bodyMode.value === "demorgan");
           if (nu !== M.unitCount(s)) M.setUnitCount(s, nu);
+          M.setBodyStyles(s, mode, bodyRows.map((r) => r.name).filter(Boolean));
+          const un = new Map<number, string>(); unitRows.forEach((r, i) => { if (r.name && i < nu) un.set(i + 1, r.name); }); M.setUnitNames(s, un);
+          const jg = M.parseJumperGroups(jumperRows.map((r) => r.group), (n) => M.hasPinNumber(s, n)); if (!("error" in jg)) M.setJumperGroups(s, jg.groups);
           const locked = !cb(interchange) && nu > 1;
           if (locked !== M.unitsLocked(s)) { if (locked) M.setMetaField(s, "ki_locked", " "); else { const l = M.fieldOf(s, "ki_locked"); if (l) s.splice(s.indexOf(l), 1); } const l2 = M.fieldOf(s, "ki_locked"); if (l2) l2[2] = ""; }
         }

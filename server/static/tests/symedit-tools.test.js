@@ -70,6 +70,36 @@ await test("SYMBOL_IMPORT_MANAGER on 4xxx.kicad_sym: ancestors auto-included, de
   m.deselectAll(); m.selectAll((n) => M.SymbolImportManager.matches(n, "453")); assert.deepStrictEqual(m.toImport(), ["14538", "4538"]); assert.strictEqual(m.status(), "2 symbols selected");
   m.selectAll(); assert.strictEqual(m.toImport().length, 51); assert.strictEqual(m.autoCount(), 0);
 });
+const SYM = '(symbol "X" (exclude_from_sim no) (in_bom yes) (on_board yes) (in_pos_files yes) (duplicate_pin_numbers_are_jumpers no) (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27)))) ' +
+  '(symbol "X_0_1" (rectangle (start -2.54 2.54) (end 2.54 -2.54) (stroke (width 0) (type default)) (fill (type none)))) ' +
+  '(symbol "X_1_1" (pin input line (at -5.08 0 0) (length 2.54) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))) ' +
+  '(pin output line (at 5.08 0 180) (length 2.54) (name "B" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27)))))) (embedded_fonts no))';
+await test("body styles: De Morgan copies body 1's pins, custom copies drawings too, fewer styles prune (SetBodyStyleCount)", () => {
+  const s = M.node(SYM);
+  M.setBodyStyles(s, "single"); assert.strictEqual(M.text(s), M.text(M.node(SYM)), "unchanged mode leaves the symbol alone");
+  M.setBodyStyles(s, "demorgan"); let t = M.text(s);
+  assert.ok(t.includes('(power') === false && /\(symbol "X" \(body_styles demorgan\) \(exclude_from_sim/.test(t), t.slice(0, 80));
+  assert.ok(t.includes('(symbol "X_1_2" (pin input line (at -5.08 0 0)'), "pins copied to the alternate body");
+  assert.ok(!t.includes('"X_0_2"'), "body-1 drawings are not copied for De Morgan");
+  M.setBodyStyles(s, "custom", ["Narrow", "Wide", "Tall"]); t = M.text(s);
+  assert.ok(t.includes('(body_styles "Narrow" "Wide" "Tall")'), t.slice(0, 120));
+  assert.ok(t.includes('(symbol "X_0_3" (rectangle') && t.includes('(symbol "X_1_3" (pin input'), "custom styles copy drawings and pins");
+  M.setBodyStyles(s, "single"); t = M.text(s);
+  assert.ok(!t.includes("body_styles") && !/_\d_[23]"/.test(t), "back to one style: the others pruned");
+  assert.deepStrictEqual(M.bodyStyles(s), { count: 1, demorgan: false, names: ["Standard"] });
+});
+await test("unit display names go into every sub-symbol of the unit; jumper groups parsed and written as KiCad does", () => {
+  const s = M.node(SYM); M.setUnitCount(s, 2);
+  M.setUnitNames(s, new Map([[1, "Amp"], [2, "Power"]]));
+  assert.ok(M.text(s).includes('(symbol "X_1_1" (unit_name "Amp") (pin'), M.text(s)); assert.deepStrictEqual([...M.unitNames(s)], [[1, "Amp"], [2, "Power"]]);
+  M.setUnitNames(s, new Map([[2, "Power"]])); assert.ok(!M.text(s).includes('"Amp"'));
+  const bad = M.parseJumperGroups(["1, 7"], (n) => M.hasPinNumber(s, n)); assert.strictEqual(bad.error, "Pin '7' in jumper pin group 1 does not exist in this symbol.");
+  const ok = M.parseJumperGroups(["2,1", "", "  "], (n) => M.hasPinNumber(s, n)); assert.deepStrictEqual(ok.groups, [["1", "2"]]);
+  M.setJumperGroups(s, ok.groups);
+  assert.ok(M.text(s).includes('(duplicate_pin_numbers_are_jumpers no) (jumper_pin_groups ("1" "2")) (property "Reference"'), M.text(s).slice(0, 260));
+  assert.deepStrictEqual(M.jumperGroups(s), [["1", "2"]]);
+  M.setJumperGroups(s, []); assert.ok(!M.text(s).includes("jumper_pin_groups"));
+});
 
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

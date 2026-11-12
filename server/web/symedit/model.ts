@@ -148,8 +148,8 @@ export function bodyStyleDescription(sym: Node, n: number): string { const b = b
 export function unitLetter(unit: number): string { let s = ""; let u = unit; do { const r = (u - 1) % 26; s = String.fromCharCode(65 + r) + s; u = (u - r - 1) / 26; } while (u > 0); return s; }
 /** (unit_name …) of a sub-symbol, by unit. */
 export function unitNames(sym: Node): Map<number, string> { const m = new Map<number, string>(); for (const s of kids(sym, "symbol")) { const [u] = subUnitBody(str(s[1])); const un = kid(s, "unit_name"); if (un && u > 0) m.set(u, str(un[1])); } return m; }
-/** The unit selector's entries: "Unit A" or the display name (SYMBOL_EDIT_FRAME::RebuildSymbolUnitAndBodyStyleLists). */
-export function unitChoices(sym: Node): string[] { const n = unitCount(sym), names = unitNames(sym); const out: string[] = []; for (let u = 1; u <= n; u++) out.push(names.get(u) ? `Unit ${unitLetter(u)} ${names.get(u)}` : `Unit ${unitLetter(u)}`); return out; }
+/** The unit selector's entries, GetUnitDisplayName( u, true ): the display name, else "Unit A" (RebuildSymbolUnitAndBodyStyleLists). */
+export function unitChoices(sym: Node): string[] { const n = unitCount(sym), names = unitNames(sym); const out: string[] = []; for (let u = 1; u <= n; u++) out.push(names.get(u) || `Unit ${unitLetter(u)}`); return out; }
 export const unitsLocked = (sym: Node): boolean => kids(sym, "property").some((p) => str(p[1]) === "ki_locked");
 export const isPower = (sym: Node): boolean => !!kid(sym, "power");
 
@@ -476,6 +476,79 @@ export function setDeMorgan(sym: Node, on: boolean): void {
   if (on) { if (i < 0) { const at = sym.findIndex((c, j) => j > 0 && isList(c) && c[0] !== "power"); sym.splice(at > 0 ? at : sym.length, 0, node("(body_styles demorgan)")); } }
   else { if (i > 0) sym.splice(i, 1); for (let j = sym.length - 1; j >= 1; j--) { const c = sym[j]; if (isList(c) && c[0] === "symbol" && subUnitBody(str(c[1]))[1] > 1) sym.splice(j, 1); } }
 }
+/** The body style mode the Units & Body Styles page shows: single, De Morgan, or custom names. */
+export type BodyMode = "single" | "demorgan" | "custom";
+export function bodyMode(sym: Node): BodyMode { const b = bodyStyles(sym); return b.demorgan ? "demorgan" : b.count > 1 ? "custom" : "single"; }
+/**
+ * DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow's body style branch: LIB_SYMBOL::SetBodyStyleCount (body 1's
+ * pins, and for custom styles its drawings too, copied into each new style; styles past the count pruned), then the
+ * De Morgan flag and the names, written as SaveSymbol does ((body_styles demorgan) / (body_styles "A" "B")).
+ */
+export function setBodyStyles(sym: Node, mode: BodyMode, names: string[] = []): void {
+  const cur = bodyStyles(sym), curMode = bodyMode(sym);
+  if (mode === curMode && (mode !== "custom" || JSON.stringify(cur.names) === JSON.stringify(names))) return;
+  const prev = curMode === "single" ? 1 : cur.count;
+  const count = mode === "single" ? 1 : mode === "demorgan" ? 2 : Math.max(1, names.length);
+  const dupDraw = mode === "custom", dupPins = mode !== "single";
+  if (prev < count && (dupDraw || dupPins)) {
+    const adds: [number, number, Node][] = [];
+    for (const sub of kids(sym, "symbol")) {
+      const [u, b] = subUnitBody(str(sub[1])); if (b !== 1) continue;
+      for (const c of sub.slice(2)) {
+        if (!isList(c) || c[0] === "unit_name") continue;
+        if (c[0] === "pin" ? !dupPins : !dupDraw) continue;
+        for (let j = prev + 1; j <= count; j++) adds.push([u, j, clone(c)]);
+      }
+    }
+    for (const [u, b, n] of adds) addDrawItem(sym, u, b, n);
+  }
+  for (let j = sym.length - 1; j >= 1; j--) { const c = sym[j]; if (isList(c) && c[0] === "symbol" && subUnitBody(str(c[1]))[1] > count) sym.splice(j, 1); }   // PruneBodyStyleDrawItems
+  const i = sym.findIndex((c, j) => j > 0 && isList(c) && c[0] === "body_styles");
+  if (i > 0) sym.splice(i, 1);
+  if (mode !== "single") {
+    const tok = node(mode === "demorgan" ? "(body_styles demorgan)" : `(body_styles ${names.map(q).join(" ")})`);
+    const pw = sym.findIndex((c, j) => j > 0 && isList(c) && c[0] === "power");
+    const at = pw > 0 ? pw + 1 : sym.findIndex((c, j) => j > 1 && isList(c));
+    sym.splice(at > 0 ? at : sym.length, 0, tok);
+  }
+}
+/** LIB_SYMBOL::GetUnitDisplayNames written back: (unit_name …) first in every "Name_u_b" sub-symbol of a named unit. */
+export function setUnitNames(sym: Node, names: Map<number, string>): void {
+  const was = unitNames(sym);
+  if (was.size === names.size && [...names].every(([u, n]) => was.get(u) === n)) return;
+  for (const sub of kids(sym, "symbol")) {
+    const [u] = subUnitBody(str(sub[1])); const i = sub.findIndex((c, j) => j > 1 && isList(c) && c[0] === "unit_name");
+    const n = u > 0 ? names.get(u) : undefined;
+    if (i > 0) { if (n) (sub[i] as Node)[1] = n; else sub.splice(i, 1); }
+    else if (n) sub.splice(2, 0, node(`(unit_name ${q(n)})`));
+  }
+}
+/** (jumper_pin_groups ("1" "2") …): each group's pin numbers, as LIB_SYMBOL::JumperPinGroups. */
+export function jumperGroups(sym: Node): string[][] { const g = kid(sym, "jumper_pin_groups"); return g ? (g.slice(1).filter(isList) as Node[]).map((grp) => grp.map((x) => str(x))) : []; }
+const cmpStr = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** Parse the Pin Connections grid rows (", \t\r\n" separated) into groups, std::set order; an error names the missing pin. */
+export function parseJumperGroups(rows: string[], hasPin: (n: string) => boolean): { groups: string[][] } | { error: string } {
+  const groups: string[][] = [];
+  for (let ii = 0; ii < rows.length; ii++) {
+    const names = new Set<string>();
+    for (const tok of rows[ii].split(/[, \t\r\n]+/)) { if (!tok) continue; if (!hasPin(tok)) return { error: `Pin '${tok}' in jumper pin group ${ii + 1} does not exist in this symbol.` }; names.add(tok); }
+    if (names.size) groups.push([...names].sort(cmpStr));
+  }
+  return { groups };
+}
+/** Write (jumper_pin_groups …) after the attribute flags, or drop it when there are none; untouched when unchanged. */
+export function setJumperGroups(sym: Node, groups: string[][]): void {
+  if (JSON.stringify(jumperGroups(sym)) === JSON.stringify(groups)) return;
+  const i = sym.findIndex((c, j) => j > 0 && isList(c) && c[0] === "jumper_pin_groups");
+  if (i > 0) sym.splice(i, 1);
+  if (!groups.length) return;
+  const tok = node(`(jumper_pin_groups ${groups.map((g) => "(" + g.map(q).join(" ") + ")").join(" ")})`);
+  let at = -1; for (let j = 1; j < sym.length; j++) { const c = sym[j]; if (isList(c) && ["power", "body_styles", "pin_numbers", "pin_names", "exclude_from_sim", "in_bom", "on_board", "in_pos_files", "duplicate_pin_numbers_are_jumpers"].includes(String(c[0]))) at = j; }
+  if (at < 0) at = sym.findIndex((c, j) => j > 1 && isList(c)) - 1;
+  sym.splice(at < 0 ? sym.length : at + 1, 0, tok);
+}
+/** LIB_SYMBOL::HasPinNumber over every unit and body style. */
+export function hasPinNumber(sym: Node, n: string): boolean { for (const sub of kids(sym, "symbol")) for (const p of kids(sub, "pin")) { const num2 = kid(p, "number"); if (num2 && str(num2[1]) === n) return true; } return false; }
 
 // ---------------------------------------------------------------- Symbol Checker
 export type Fmt = (mm: number) => string;
