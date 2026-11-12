@@ -255,7 +255,7 @@ export async function saveFootprint(): Promise<boolean> {
   await waitPending(4000);
   if (E.pendingOps.size) { toast("Not connected — the footprint is saved once the connection is back", 4000); return false; }
   const docId = state.docId!; const seq = Math.max(E.lastSeq, FP.snapSeq);
-  const r = await fetch(`/api/docs/${docId}/snapshots?seq=${seq}&saved=1`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text });
+  const r = await fetch(`/api/docs/${docId}/snapshots?seq=${seq}&saved=true`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: text });
   const { lib, name } = fpLibIdOf(state.doc!.path);
   if (!r.ok) { toast(`Footprint '${name}' could not be saved to library '${lib}'.`, 5000); return false; }
   FD().markFootprintSaved(E.kdoc, text); FP.snapSeq = seq;
@@ -281,8 +281,10 @@ export async function saveFootprint(): Promise<boolean> {
 }
 
 /** Changes that take the open footprint to `text` (a saved version): one step, so Undo brings the edits back. */
-function changesTo(text: string): KChange[] {
-  const doc = E.kdoc!; const target = KiCadCanvas.parseDoc(text, "footprint");
+function changesTo(text: string): KChange[] { return changesBetween(E.kdoc!, text); }
+/** Changes that take footprint document `doc` to the footprint `text`. */
+function changesBetween(doc: KDoc, text: string): KChange[] {
+  const target = KiCadCanvas.parseDoc(text, "footprint");
   const out: KChange[] = [];
   const wrap = (n: SNode) => PT().wrapBoard(n);
   for (const [id, it] of target.items) {
@@ -449,6 +451,33 @@ async function createFootprintDoc(lib: FpLib, name: string, text: string): Promi
   project.docs.push(entry); store.set({ project: Object.assign({}, project) });
   return entry;
 }
+/**
+ * SaveFootprintInLibrary over an existing footprint file: the document's items become `text`'s (one op, so the other
+ * clients follow and Undo restores the old footprint) and the result is its saved snapshot; then it is opened.
+ */
+async function overwriteFootprintDoc(docId: string, text: string, label: string): Promise<boolean> {
+  if (docId === state.docId && E.kdoc) {
+    if (FP.padEdit) exitPadEditMode();
+    const ch = changesTo(text); if (ch.length) toolCtx().commit(ch, label);
+    return saveFootprint();
+  }
+  try {
+    const live = await liveDocument(docId);
+    const fd = KiCadCanvas.parseDoc(live.file, "footprint");
+    let seq = live.seq;
+    for (const op of live.ops) { seq = Math.max(seq, op.seq || 0); for (const c of op.changes || []) { try { KiCadCanvas.applyChange(fd, c, 1e6); } catch { /* skipped */ } } }
+    const ch = changesBetween(fd, text);
+    if (ch.length) { seq = await sendDocOps(docId, ch); for (const c of ch) KiCadCanvas.applyChange(fd, c, 1e6); }
+    const out = FD().serializeFootprintDoc(fd);
+    const r = await fetch(`/api/docs/${docId}/snapshots?seq=${seq}&saved=true`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: out });
+    if (!r.ok) throw new Error(String(r.status));
+  } catch (e) {
+    const d = state.project && state.project.docs.find((x) => x.docId === docId); const id = d ? fpLibIdOf(d.path) : { lib: "", name: "" };
+    toast(`Footprint '${id.name}' could not be saved to library '${id.lib}'.`, 5000); console.warn(e); return false;
+  }
+  openFootprintDoc(docId);
+  return true;
+}
 function openFootprintDoc(docId: string): void {
   const url = `/p/${state.project!.projectId}/edit?fp=${encodeURIComponent(docId)}`;
   if (location.pathname + location.search === url) return;
@@ -508,12 +537,16 @@ async function createFootprint(targetLib?: string): Promise<void> {
   if (want && !lib) await messageBoxAsync(`The footprint could not be added to the selected library ('${want}'). This library is read-only.`);
   if (!lib) lib = await pickLibrary("Create Footprint"); if (!lib) return;
   const name = str(t2[1]).split("").filter((c) => !FP_NAME_INVALID.includes(c)).join("") || "Untitled"; t2[1] = name;
+  const text2 = FD().prettify(KiCadCanvas.serialize(t2));
+  // tryToSaveFootprintInLibrary -> SaveFootprintInLibrary: an existing file of that name is written over (the same
+  // document, so every client on it follows and Undo brings the old footprint back), nothing is deleted
   const existing = lib.footprints.find((f) => f.name === name);
   if (existing) {
     if (!(await confirmBox("Confirmation", `Footprint ${name} already exists in ${lib.name}.`, "Overwrite"))) return;
-    if (!(await deleteFootprintDoc(existing.docId, true))) return;
+    if (await overwriteFootprintDoc(existing.docId, text2, "Create Footprint")) { setStatusBar({ message: `Footprint '${name}' saved in library '${lib.name}'.` }); publishLibs(); }
+    return;
   }
-  const d = await createFootprintDoc(lib, name, FD().prettify(KiCadCanvas.serialize(t2))); if (!d) return;
+  const d = await createFootprintDoc(lib, name, text2); if (!d) return;
   publishLibs(); openFootprintDoc(d.docId);
 }
 /** FOOTPRINT_EDIT_FRAME::SaveFootprintAs: SAVE_AS_DIALOG (Name, "Save in library:", New Library..., Save). */
@@ -535,8 +568,7 @@ async function saveAs(preselect?: string): Promise<void> {
       const existing = lib.footprints.find((f) => f.name === name);
       if (existing) {
         if (!(await confirmBox("Confirmation", `Footprint ${name} already exists in ${lib.name}.`, "Overwrite"))) return false;
-        if (existing.docId === state.docId) return true;
-        return deleteFootprintDoc(existing.docId, true);
+        return true;
       }
       return true;
     },
@@ -553,6 +585,12 @@ async function saveAsTo(libName: string, name: string, oldName: string): Promise
   const same = lib.footprints.find((f) => f.name === name && f.docId === state.docId);
   if (same) { await saveFootprint(); return; }
   // uuids stay the footprint's own: KiCad's Save As writes the same footprint under the new name
+  const other = lib.footprints.find((f) => f.name === name);
+  if (other) {
+    // SaveFootprintInLibrary over the existing file (already confirmed): that document takes the footprint
+    if (await overwriteFootprintDoc(other.docId, FD().prettify(KiCadCanvas.serialize(tree)), "Save Footprint As")) { setStatusBar({ message: `Footprint '${name}' saved in library '${lib.name}'.` }); publishLibs(); }
+    return;
+  }
   const d = await createFootprintDoc(lib, name, FD().prettify(KiCadCanvas.serialize(tree))); if (!d) return;
   setStatusBar({ message: `Footprint '${name}' saved in library '${lib.name}'.` });
   publishLibs(); openFootprintDoc(d.docId);
