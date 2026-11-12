@@ -50,10 +50,15 @@ export const clone = (n: Node): Node => cloneNode(n);
 export const text = (n: Node): string => serialize(n);
 
 // ---------------------------------------------------------------- Prettify
-/** KICAD_FORMAT::Prettify (common/io/kicad/kicad_io_utils.cpp:117), FORMAT_MODE::NORMAL, character for character. */
-export function prettify(src: string): string {
+/**
+ * KICAD_FORMAT::Prettify (common/io/kicad/kicad_io_utils.cpp:117), character for character: FORMAT_MODE::NORMAL, or
+ * FORMAT_MODE::LIBRARY_TABLE (`libTable`), where each (lib …) row stays on one line with its tokens space-separated.
+ */
+export function prettify(src: string, libTable = false): string {
   const xyLimit = 99, wrapAt = 72;
   let out = "", depth = 0, last = "", inQuote = false, spaced = false, multi = false, inXY = false, column = 0, bs = 0;
+  let inLib = false, libDepth = 0;
+  const isLib = (i: number) => { let j = i + 1, tok = ""; while (j < n && /[A-Za-z]/.test(src[j])) tok += src[j++]; return tok === "lib"; };
   const n = src.length; const ws = (c: string) => c === " " || c === "\t" || c === "\n" || c === "\r";
   const nextNonWs = (i: number): string => { while (i < n && ws(src[i])) i++; return i < n ? src[i] : ""; };
   const isXY = (i: number) => src[i + 1] === "x" && src[i + 2] === "y" && src[i + 3] === " ";
@@ -66,6 +71,7 @@ export function prettify(src: string): string {
     if (ws(c) && !inQuote) {
       if (!spaced && depth > 0 && last !== "(" && next !== ")" && next !== "(") {
         if (inXY || column < wrapAt) { out += " "; column++; }
+        else if (inLib) out += " ";
         else { out += "\n" + "\t".repeat(depth); column = depth; multi = true; }
         spaced = true;
       }
@@ -73,14 +79,18 @@ export function prettify(src: string): string {
     }
     spaced = false;
     if (c === "(" && !inQuote) {
-      const curXY = isXY(i);
+      const curXY = isXY(i); const curLib = libTable && isLib(i);
       if (out === "" || out[out.length - 1] === "\n") { out += "("; column++; }
       else if (inXY && curXY && column < xyLimit) { out += " ("; column += 2; }
+      else if (inLib) { out += " ("; column += 2; }
       else { out += "\n" + "\t".repeat(depth) + "("; column = depth + 1; }
-      inXY = curXY; depth++;
+      inXY = curXY;
+      if (curLib && !inLib) { inLib = true; libDepth = depth; }
+      depth++;
     } else if (c === ")" && !inQuote) {
       if (depth > 0) depth--;
-      if (last === ")" || multi) { out += "\n" + "\t".repeat(depth) + ")"; column = depth + 1; multi = false; }
+      if (inLib && depth === libDepth) { out += ")"; inLib = false; }
+      else if (last === ")" || multi) { out += "\n" + "\t".repeat(depth) + ")"; column = depth + 1; multi = false; }
       else { out += ")"; column++; }
     } else {
       if (c === "\\") bs++;
@@ -1115,10 +1125,13 @@ export function parseLibTable(text: string): LibTableRow[] {
   return kids(t, "lib").map((l) => ({ nickname: str((kid(l, "name") || [])[1]), uri: str((kid(l, "uri") || [])[1]), type: str((kid(l, "type") || [])[1]) || "KiCad",
     options: str((kid(l, "options") || [])[1]), descr: str((kid(l, "descr") || [])[1]), enabled: !kid(l, "disabled"), visible: !kid(l, "hidden") }));
 }
-/** LIBRARY_TABLE::Format: version 7, each row's name / type / uri / options / descr, then (disabled) and (hidden). */
+/**
+ * LIBRARY_TABLE::Format (version 7, each row's name / type / uri / options / descr, then (disabled) and (hidden))
+ * through PRETTIFIED_FILE_OUTPUTFORMATTER in FORMAT_MODE::LIBRARY_TABLE: tab indent, one row per line.
+ */
 export function formatLibTable(rows: LibTableRow[], root = "sym_lib_table"): string {
-  const lines = rows.map((r) => `  (lib (name ${q(r.nickname)})(type ${q(r.type)})(uri ${q(r.uri.replace(/\\/g, "/"))})(options ${q(r.options)})(descr ${q(r.descr)})${r.enabled ? "" : "(disabled)"}${r.visible ? "" : "(hidden)"})`);
-  return `(${root}\n  (version 7)\n${lines.map((l) => l + "\n").join("")})\n`;
+  const lines = rows.map((r) => `(lib (name ${q(r.nickname)})(type ${q(r.type)})(uri ${q(r.uri.replace(/\\/g, "/"))})(options ${q(r.options)})(descr ${q(r.descr)})${r.enabled ? "" : "(disabled)"}${r.visible ? "" : "(hidden)"})`);
+  return prettify(`(${root} (version 7)${lines.join("")})`, true);
 }
 /** LIB_TABLE_GRID_TRICKS::VerifyTable: rows without a path go silently; a nickname must be legal and unique. */
 export function verifyLibTable(rows: LibTableRow[]): { rows: LibTableRow[]; error?: string; row?: number } {

@@ -502,6 +502,7 @@ async function createProjectLibrary(se: SymbolEditor, nick: string, seed?: strin
   if (!(await firstSnapshot(doc.docId, text))) { await messageBox(`Could not write '${path}'.`); return null; }
   if (!proj.docs.some((d) => d.docId === doc.docId)) proj.docs.push({ docId: doc.docId, path: doc.path, docType: doc.docType || "symbol_lib" });
   await addToLibTable(nick, path);
+  se.noteTableRow(doc.path, nick);
   const ld = libDocFor(doc.docId, doc.path, nick);
   const lib: Lib = { nick, kind: "project", doc: ld, rows: null, syms: new Map(), open: true, loading: true };
   se.libs.set(nick, lib); ld.on((why, names) => (se as unknown as { onLibEvent(l: Lib, w: string, n?: string[]): void }).onLibEvent(lib, why, names)); ld.connect();
@@ -515,17 +516,18 @@ async function firstSnapshot(docId: string, text: string): Promise<boolean> {
 }
 async function addToLibTable(nick: string, path: string): Promise<void> {
   const proj = appState.project; if (!proj) return;
-  const row = `(lib (name ${M.q(nick)}) (type "KiCad") (uri ${M.q("${KIPRJMOD}/" + path)}) (options "") (descr ""))`;
   const table = proj.docs.find((d) => d.path === "sym-lib-table");
   let text: string;
   try {
     if (table) {
       const r = await fetch(`/api/docs/${table.docId}/content`, { credentials: "same-origin" }); const old = r.ok ? await r.text() : "(sym_lib_table\n\t(version 7)\n)\n";
-      const tree = M.node(old); tree.push(M.node(row)); text = M.prettify(M.text(tree));
+      // the table as LIBRARY_TABLE::Save writes it (FORMAT_MODE::LIBRARY_TABLE), with the new row last
+      const rows = M.parseLibTable(old); rows.push({ nickname: nick, type: "KiCad", uri: "${KIPRJMOD}/" + path, options: "", descr: "", enabled: true, visible: true });
+      text = M.formatLibTable(rows, "sym_lib_table");
       await saveTextDocument(table.docId, text, { id: "table", kind: "MODIFIED", typeName: "LIB_TABLE", properties: [] } as unknown as KChange);
     } else {
       const d = await api(`/api/projects/${proj.projectId}/docs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: "sym-lib-table" }) }) as { docId: string; path: string; docType: string };
-      text = M.prettify(`(sym_lib_table (version 7) ${row})`);
+      text = M.formatLibTable([{ nickname: nick, type: "KiCad", uri: "${KIPRJMOD}/" + path, options: "", descr: "", enabled: true, visible: true }], "sym_lib_table");
       await firstSnapshot(d.docId, text);
       proj.docs.push({ docId: d.docId, path: d.path, docType: d.docType || "lib_table" });
     }

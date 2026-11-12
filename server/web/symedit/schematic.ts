@@ -63,7 +63,7 @@ function changesFor(doc: KDoc, items: KItem[], flat: M.Node, libId: string, prin
 export async function saveToSchematic(se: SymbolEditor, t: Tab): Promise<boolean> {
   const o = t.origin; const s = se.symbol(t); if (!o || !s) return false;
   if (E.viewOnly) { await messageBox("You have view-only access to this project."); return false; }
-  if (appState.docId !== o.docId || !E.kdoc) { await messageBox(`Open the sheet '${o.sheet}' to update the symbol in the schematic.`); return false; }
+  if (appState.docId !== o.docId || !E.kdoc) return saveToOtherSheet(se, t, o, s);
   const doc = E.kdoc; const it = doc.items.get(o.itemId);
   if (!it) { await messageBox("The symbol is no longer in the schematic."); return false; }
   const flat = M.node(M.text(s)); flat[1] = o.libId.includes(":") ? o.libId.slice(o.libId.indexOf(":") + 1) : o.libId;
@@ -92,6 +92,52 @@ export async function saveToSchematic(se: SymbolEditor, t: Tab): Promise<boolean
     }
     if (failed.length) await messageBox(`Could not update ${failed.map((f) => `'${f}'`).join(", ")}.`);
   }
+  t.modified = false; se.renderAll();
+  toast(`Symbol '${o.ref || flat[1]}' updated in the schematic.`);
+  return true;
+}
+
+const refOf = (n: SNode): string => { const p = K().kids(n, "property").find((x) => K().str(x[1]) === "Reference"); return p ? K().str(p[2]) : ""; };
+/**
+ * SaveSymbolToSchematic when the symbol's sheet is not the open one: SCH_SHEET_LIST::ResolveItem finds the symbol by
+ * its UUID wherever it lives, and every unit with its reference on any sheet is updated, as one undo step of the open
+ * sheet (the other documents' changes are replayed by its undo and redo).
+ */
+async function saveToOtherSheet(se: SymbolEditor, t: Tab, o: Origin, s: M.Node): Promise<boolean> {
+  const flat = M.node(M.text(s)); flat[1] = o.libId.includes(":") ? o.libId.slice(o.libId.indexOf(":") + 1) : o.libId;
+  const sheets = projectDocs().filter((d) => d.docType === "kicad_sch" || /\.kicad_sch$/i.test(d.path));
+  const read = new Map<string, KDoc>();
+  const docOf = async (docId: string): Promise<KDoc | null> => {
+    if (docId === appState.docId && E.kdoc) return E.kdoc;
+    if (!read.has(docId)) { try { read.set(docId, await readDoc(docId, "kicad_sch")); } catch (e) { return null; } }
+    return read.get(docId) || null;
+  };
+  const home = await docOf(o.docId); const principal = home ? home.items.get(o.itemId) : null;
+  if (!principal || principal.kind !== "symbol") { await messageBox("The symbol is no longer in the schematic."); return false; }
+  const ref = refOf(principal.node); const annotated = !!ref && !ref.endsWith("?");
+  const label = "Save Symbol to Schematic";
+  const done: { docId: string; file: string; changes: KChange[]; inverse: KChange[] }[] = [], failed: string[] = [];
+  let local: KItem[] = [];
+  for (const d of sheets) {
+    const doc = await docOf(d.docId); if (!doc) { failed.push(d.path); continue; }
+    const items = [...doc.items.values()].filter((x) => x.kind === "symbol" && (x === principal || (annotated && refOf(x.node) === ref && libIdOf(x.node) === libIdOf(principal.node))));
+    if (!items.length) continue;
+    if (doc === E.kdoc) { local = items; continue; }
+    try {
+      const inv = items.map((x) => K().replaceChange(doc, x));
+      const ch = changesFor(doc, items, flat, o.libId, d.docId === o.docId ? o.itemId : "");
+      await submitDocOp(d.docId, ch); done.push({ docId: d.docId, file: d.path, changes: ch, inverse: inv });
+    } catch (e) { failed.push(d.path); }
+  }
+  let entry: unknown = null;
+  if (local.length && E.kdoc) { toolCtx().commit(changesFor(E.kdoc, local, flat, o.libId, ""), label); entry = undoStack[undoStack.length - 1]; }
+  if (done.length) {
+    const replay = (which: "changes" | "inverse") => () => { for (const d of done) submitDocOp(d.docId, d[which]).catch(() => { void messageBox(`Could not update '${d.file}'.`); }); };
+    if (entry && undoStack.includes(entry as never)) Object.assign(entry as object, { undoOthers: replay("inverse"), redoOthers: replay("changes") });
+    else pushUndoFor(String(appState.docId || ""), { label, changes: [], inverse: [], undoOthers: replay("inverse"), redoOthers: replay("changes") });
+  }
+  if (failed.length) await messageBox(`Could not update ${failed.map((f) => `'${f}'`).join(", ")}.`);
+  if (!done.length && !local.length) return false;
   t.modified = false; se.renderAll();
   toast(`Symbol '${o.ref || flat[1]}' updated in the schematic.`);
   return true;

@@ -172,10 +172,14 @@ await test("pin maps: read / write as savePinMapData, logical pins with stacked 
 });
 
 await test("sym-lib-table: parse, LIBRARY_TABLE::Format with (disabled) / (hidden), VerifyTable messages", () => {
-  const src = '(sym_lib_table\n  (version 7)\n  (lib (name "A")(type "KiCad")(uri "${KIPRJMOD}/A.kicad_sym")(options "")(descr "first"))\n  (lib (name "B")(type "KiCad")(uri "${KIPRJMOD}/B.kicad_sym")(options "")(descr "")(disabled)(hidden))\n)\n';
+  // PRETTIFIED_FILE_OUTPUTFORMATTER( FORMAT_MODE::LIBRARY_TABLE ): tab indent, one row per line, tokens space-separated
+  const src = '(sym_lib_table\n\t(version 7)\n\t(lib (name "A") (type "KiCad") (uri "${KIPRJMOD}/A.kicad_sym") (options "") (descr "first"))\n\t(lib (name "B") (type "KiCad") (uri "${KIPRJMOD}/B.kicad_sym") (options "") (descr "") (disabled) (hidden))\n)\n';
   const rows = M.parseLibTable(src);
   assert.deepStrictEqual(rows.map((r) => [r.nickname, r.enabled, r.visible, r.descr]), [["A", true, true, "first"], ["B", false, false, ""]]);
   assert.strictEqual(M.formatLibTable(rows), src, "written as KiCad writes it");
+  // a KiCad-written table (long rows past column 72 stay on one line) round-trips byte for byte
+  const qa = require("fs").readFileSync(require("path").join(__dirname, "..", "..", "..", "qa", "data", "libraries", "sym-lib-table"), "utf8");
+  assert.strictEqual(M.formatLibTable(M.parseLibTable(qa)), qa);
   const blank = { enabled: true, visible: true, nickname: "", uri: "", type: "KiCad", options: "", descr: "" };
   assert.deepStrictEqual(M.verifyLibTable([...rows, blank]).rows.length, 2, "a row without a path goes silently");
   assert.strictEqual(M.verifyLibTable([{ ...blank, uri: "x" }]).error, "Library must have a nickname.");

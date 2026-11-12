@@ -8,10 +8,11 @@
 // the text it was made against; a tab's undo list holds the symbol before and after each of this user's edits, and
 // undo carries back only that change (symedit/merge.ts), leaving what other users changed since in place.
 import * as M from "./model";
-import { LibDoc, libDocFor } from "./libdoc";
+import { libDocFor } from "./libdoc";
+import { SymDirDoc, symdirOf, type LibBuffer, type DirFile } from "./symdir";
 import { h, confirmBox, download } from "../dialogs/dom";
 import { messageBox } from "../dialogs/sch-items";
-import { E, appState } from "../dialogs/editor";
+import { E, appState, api } from "../dialogs/editor";
 import { comboOf } from "../editor/hotkeys";
 import { fmtCoord, unitName } from "../units";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
@@ -24,7 +25,7 @@ import { openPreferences } from "../dialogs/preferences";
 
 export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
-export interface Lib { nick: string; kind: "project" | "official"; doc: LibDoc | null; rows: Row[] | null; syms: Map<string, M.Node>; open: boolean; loading: boolean; error?: string }
+export interface Lib { nick: string; kind: "project" | "official"; doc: LibBuffer | null; rows: Row[] | null; syms: Map<string, M.Node>; open: boolean; loading: boolean; error?: string }
 export interface Origin { docId: string; itemId: string; libId: string; ref: string; sheet: string }
 /** One undo step: the symbol before and after the edit (the undo lays after → before over the current symbol). */
 export interface Step { label: string; before: string; after: string }
@@ -118,25 +119,33 @@ export class SymbolEditor {
   }
 
   // ---------------------------------------------------------------- libraries
-  /** The project's .kicad_sym documents, by sym-lib-table nickname when the table names them. */
+  /**
+   * The project's libraries as the project sym-lib-table lists them (SYMBOL_LIBRARY_ADAPTER over the table rows): a
+   * .kicad_sym document joins the tree under its row's nickname only, and a file no row names (a stray copy, a legacy
+   * <project>-cache.kicad_sym) stays out.  Nothing is listed until the table has been read, so a library never shows
+   * under its file name first.  A project with no table at all lists its .kicad_sym documents by file name (except
+   * the legacy cache), since the web has no other way to reach them.
+   */
   refreshLibs(): void {
     const docs = (appState.project && appState.project.docs) || appState.docs || [];
-    const nickFor = new Map<string, string>();
     const table = docs.find((d) => /(^|\/)sym-lib-table$/.test(d.path));
-    if (table) void this.readTable(table.docId);
-    for (const [path, nick] of this.tableNicks) nickFor.set(path, nick);
-    for (const d of docs) {
+    if (table && !this.tableLoaded) { void this.readTable(table.docId); }
+    else for (const d of docs) {
       if (d.docType !== "symbol_lib" && !/\.kicad_sym$/i.test(d.path)) continue;
+      if (symdirOf(d.path)) continue;   // a directory library's file: below
       if (this.disabledPaths.has(d.path)) continue;
       const file = d.path.split("/").pop() || d.path;
-      const nick = nickFor.get(d.path) || file.replace(/\.kicad_sym$/i, "");
-      if (this.libs.has(nick)) continue;
+      let nick: string | undefined;
+      if (table) { nick = this.tableNicks.get(d.path); if (!nick) continue; }
+      else { if (/-cache\.kicad_sym$/i.test(file)) continue; nick = file.replace(/\.kicad_sym$/i, ""); }
+      if (this.libs.has(nick) && this.libs.get(nick)!.kind === "project") continue;
       const doc = libDocFor(d.docId, d.path, nick);
       const lib: Lib = { nick, kind: "project", doc, rows: null, syms: new Map(), open: false, loading: true };
-      this.libs.set(nick, lib);
+      this.libs.set(nick, lib);   // a project row shadows an official library of the same nickname, as the project table does
       doc.on((why, names) => this.onLibEvent(lib, why, names));
       doc.connect();
     }
+    if (!table || this.tableLoaded) this.refreshDirLibs(docs, !!table);
     if (!this.officialList && !this.officialFailed) {
       fetch("/api/libs/symbols", { credentials: "same-origin" }).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status === 401 ? "Sign in to browse the KiCad libraries" : `HTTP ${r.status}`))))
         .then((j: { libraries: { name: string; description: string }[] }) => {
@@ -146,35 +155,73 @@ export class SymbolEditor {
         }).catch((e: Error) => { this.officialFailed = e.message; });
     }
   }
+  /** KiCad 10 directory libraries (X.kicad_symdir, one symbol per file): one buffer over the directory's files. */
+  private refreshDirLibs(docs: { docId: string; path: string; docType?: string }[], byTable: boolean): void {
+    const dirs = new Map<string, DirFile[]>();
+    for (const d of docs) { const dir = symdirOf(d.path); if (!dir) continue; const l = dirs.get(dir) || []; l.push({ docId: d.docId, path: d.path }); dirs.set(dir, l); }
+    if (byTable) for (const path of this.tableNicks.keys()) if (/\.kicad_symdir$/i.test(path) && !dirs.has(path)) dirs.set(path, []);   // a row whose directory has no file yet
+    for (const [dir, files] of dirs) {
+      if (this.disabledPaths.has(dir)) continue;
+      const nick = byTable ? this.tableNicks.get(dir) : (dir.split("/").pop() || dir).replace(/\.kicad_symdir$/i, "");
+      if (!nick) continue;
+      const have = this.libs.get(nick);
+      if (have && have.kind === "project" && have.doc instanceof SymDirDoc) { for (const f of files) have.doc.adopt(f); continue; }
+      const doc = new SymDirDoc(dir, nick, files, (path, first) => this.makeProjectFile(path, first));
+      const lib: Lib = { nick, kind: "project", doc, rows: null, syms: new Map(), open: false, loading: files.length > 0 };
+      this.libs.set(nick, lib);
+      doc.on((why, names) => this.onLibEvent(lib, why, names));
+      doc.connect();
+    }
+  }
+  /** A new .kicad_sym document in the project (a directory library's new symbol file) with its first content. */
+  private async makeProjectFile(path: string, first: string): Promise<DirFile | null> {
+    const proj = appState.project; if (!proj) return null;
+    try {
+      const d = await api(`/api/projects/${proj.projectId}/docs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, docType: "symbol_lib" }) }) as { docId: string; path: string; docType: string };
+      const r = await fetch(`/api/docs/${d.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: first });
+      if (!r.ok) return null;
+      if (!proj.docs.some((x) => x.docId === d.docId)) proj.docs.push({ docId: d.docId, path: d.path, docType: d.docType || "symbol_lib" });
+      return { docId: d.docId, path: d.path };
+    } catch (e) { return null; }
+  }
+  /** project table rows: document path → nickname (enabled and disabled rows) */
   private tableNicks = new Map<string, string>();
   /** Project libraries whose sym-lib-table row is disabled: not loaded, not in the tree (LIBRARY_TABLE_ROW::Disabled). */
   private disabledPaths = new Set<string>();
-  private tableRead = false;
+  private tableRead = false; private tableLoaded = false;
   private async readTable(docId: string): Promise<void> {
     if (this.tableRead) return; this.tableRead = true;
-    try {
-      const r = await fetch(`/api/docs/${docId}/content`, { credentials: "same-origin" }); if (!r.ok) return;
-      this.reloadLibTable(M.parseLibTable(await r.text()));
-    } catch (e) { /* the file names stay */ }
+    let rows: M.LibTableRow[] = [];
+    try { const r = await fetch(`/api/docs/${docId}/content`, { credentials: "same-origin" }); if (r.ok) rows = M.parseLibTable(await r.text()); } catch (e) { /* an unreadable table lists nothing */ }
+    this.tableLoaded = true;
+    this.reloadLibTable(rows);
   }
-  /** The project table changed (or was read): nicknames follow it, disabled rows leave the tree, enabled ones come back. */
+  /** An official library a project library of the same nickname was shadowing comes back. */
+  private restoreOfficial(nick: string): void {
+    if (this.libs.has(nick) || !this.officialList || !this.officialList.some((l) => l.name === nick)) return;
+    this.libs.set(nick, { nick, kind: "official", doc: null, rows: null, syms: new Map(), open: false, loading: false });
+  }
+  /** A row this client just added (New Library / Add Library). */
+  noteTableRow(path: string, nick: string): void { this.tableNicks.set(path, nick); }
+  /** The project table changed (or was read): nicknames follow it, rows that went or are disabled leave the tree, new and re-enabled ones come in. */
   reloadLibTable(rows: M.LibTableRow[]): void {
     let changed = false;
-    const disabled = new Set<string>();
+    const disabled = new Set<string>(); const nicks = new Map<string, string>();
     for (const row of rows) {
       const m = /^\$\{KIPRJMOD\}\/(.+)$/.exec(row.uri); if (!row.nickname || !m) continue;
-      const path = m[1]; this.tableNicks.set(path, row.nickname);
+      const path = m[1]; nicks.set(path, row.nickname);
       if (!row.enabled) disabled.add(path);
       for (const lib of [...this.libs.values()]) if (lib.doc && lib.doc.path === path && lib.nick !== row.nickname) {
         const old = lib.nick; this.libs.delete(old); lib.nick = row.nickname; lib.doc.nickname = row.nickname; this.libs.set(row.nickname, lib);
         for (const t2 of this.tabs) if (t2.lib === old) t2.lib = row.nickname;
+        this.restoreOfficial(old);
         changed = true;
       }
     }
-    for (const lib of [...this.libs.values()]) if (lib.doc && disabled.has(lib.doc.path) && !this.tabs.some((t) => t.lib === lib.nick)) { this.libs.delete(lib.nick); changed = true; }
-    const reenabled = [...this.disabledPaths].some((p) => !disabled.has(p));
+    this.tableNicks = nicks; this.tableLoaded = true;
+    for (const lib of [...this.libs.values()]) if (lib.doc && (disabled.has(lib.doc.path) || !nicks.has(lib.doc.path)) && !this.tabs.some((t) => t.lib === lib.nick)) { this.libs.delete(lib.nick); this.restoreOfficial(lib.nick); changed = true; }
     this.disabledPaths = disabled;
-    if (reenabled) { this.refreshLibs(); changed = true; }
+    const before = this.libs.size; this.refreshLibs(); if (this.libs.size !== before) changed = true;
     if (changed) this.renderAll();
   }
   private onLibEvent(lib: Lib, why: string, names?: string[]): void {
