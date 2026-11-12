@@ -373,18 +373,55 @@ const overlaysRoot = document.getElementById("ui-overlays"); if (overlaysRoot) r
 
 
 // KiCad's edit actions run SCH_SELECTION_TOOL::RequestSelection: with nothing selected the item under the cursor
-// becomes a hover selection for the one action (and a rotate / mirror lets go of it afterwards).
+// becomes a hover selection for the one action, filtered by the types the action takes, and the action lets go
+// of a hover selection when it is done.
 const HOVER_KEYS = new Set(["E", "V", "U", "F", "M", "G", "R", "Shift+R", "X", "Y", "D", "Del", "Backspace", "Ctrl+D", "Ctrl+C", "Ctrl+X", "Ctrl+E", "Alt+3", "Ctrl+4"]);
-const HOVER_RELEASE = new Set(["R", "Shift+R", "X", "Y"]);
+// editValue / editReference / editFootprint: RequestSelection( { SCH_FIELD_T, SCH_SYMBOL_T, SCH_PIN_T } )
+const HOVER_SYMBOL_ONLY = new Set(["V", "U", "F"]);
+// rotate / mirror and Copy (sch_editor_control.cpp doCopy) clear a hover selection as they return
+const HOVER_RELEASE = new Set(["R", "Shift+R", "X", "Y", "Ctrl+C"]);
+// EditField and Properties (clearSelection = selection.IsHover() once the dialog closes), Move / Drag
+// (finalizeMoveOperation with aUnselect = selection.IsHover()): released when the dialog or the move ends
+const HOVER_HOLD = new Set(["E", "V", "U", "F", "M", "G"]);
+type SchHoverState = { sel?: string | null; wire?: unknown; carry?: unknown; drag?: unknown; draw?: unknown; pedit?: unknown };
+const schToolState = (): SchHoverState | null => CollabTools.sch ? (CollabTools.sch.state as unknown as SchHoverState) : null;
+function hoverHeldOnly(id: string): boolean {
+  const S = schToolState();
+  if (E.selection.size > 1 || (E.selection.size === 1 && !E.selection.has(id))) return false;
+  if (S && S.sel && S.sel !== id) return false;
+  return E.selection.has(id) || !!(S && S.sel === id) || !!(E.selected && E.selected.id === id);
+}
+function releaseHover(id: string): void {
+  if (!hoverHeldOnly(id)) return;
+  clearAllSelection(); const S = schToolState(); if (S && S.sel === id && CollabTools.sch) CollabTools.sch.select(null);
+  requestRender();
+}
+function hoverBusy(): boolean {
+  const S = schToolState();
+  return !!document.querySelector(".kd-overlay, .klib-overlay, [role='dialog']") || !!E.drag || !!(S && (S.drag || S.carry || S.pedit));
+}
+// Waits for the action's dialog or move to end; a dialog that is still loading gets a moment to show up.
+function releaseHoverWhenDone(id: string, combo: string): void {
+  const opened = Date.now(); let seenBusy = false;
+  const tick = (): void => {
+    if (!hoverHeldOnly(id) && !hoverBusy()) return;                   // something else took the selection
+    if (hoverBusy()) { seenBusy = true; setTimeout(tick, 100); return; }
+    if (!seenBusy && (combo === "E" || combo === "V" || combo === "U" || combo === "F") && Date.now() - opened < 1500) { setTimeout(tick, 100); return; }
+    releaseHover(id);
+  };
+  setTimeout(tick, 0);
+}
 function hoverSelect(ev: KeyboardEvent): void {
   if (!isSch() || !E.kdoc || E.tool !== "select" || !E.lastCursorMm) return;
   const combo = comboOf(ev); if (!HOVER_KEYS.has(combo)) return;
-  const S = CollabTools.sch ? (CollabTools.sch.state as unknown as { sel?: string | null; wire?: unknown; carry?: unknown; drag?: unknown; draw?: unknown }) : null;
+  const S = schToolState();
   if (E.selected || E.selection.size || E.selField || (S && (S.sel || S.wire || S.carry || S.drag || S.draw))) return;
   const hit = hitAny(E.lastCursorMm); if (!hit) return;
+  if (HOVER_SYMBOL_ONLY.has(combo) && hit.kind !== "symbol") return;
   if (hit.fp || !CollabTools.sch) toolCtx().setSelection([hit.id]);
   else { CollabTools.sch.select(hit.id); requestRender(); }                    // wires, labels and the rest live in the module's own selection
-  if (HOVER_RELEASE.has(combo)) setTimeout(() => { if (E.selection.size === 1 && E.selection.has(hit.id)) clearAllSelection(); if (S && S.sel === hit.id && CollabTools.sch) CollabTools.sch.select(null); requestRender(); }, 0);
+  if (HOVER_RELEASE.has(combo)) setTimeout(() => releaseHover(hit.id), 0);
+  else if (HOVER_HOLD.has(combo)) releaseHoverWhenDone(hit.id, combo);
 }
 
 document.addEventListener("keydown", (ev) => {

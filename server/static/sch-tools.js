@@ -552,7 +552,9 @@ function computeBreakPoint(doc, seg, next, pos, mode, posture, grid) {
 }
 // The live segments follow the cursor (doDrawSegments' motion handler).
 function wireFollow(ctx, p) {
-  const w = S.wire; if (!w) return; const n = w.segs.length, seg = w.segs[n - 1];
+  const w = S.wire; if (!w) return;
+  if (S.unfold && !S.unfold.placed) unfoldFollow(ctx, w, p);
+  const n = w.segs.length, seg = w.segs[n - 1];
   if (twoSegments() && n >= 2) computeBreakPoint(ctx.doc, w.segs[n - 2], seg, p, S.lineMode, S.posture, ctx.gridPitch);
   else seg[1] = p.slice();
   w.cur = p.slice();
@@ -567,8 +569,26 @@ function wirePoints(w) {
 // select tool once the wire is finished (a wire auto-started from a pin by the selection tool).
 function startWire(ctx, kind, p, opts) {
   const segs = [[p.slice(), p.slice()]]; if (twoSegments()) segs.push([p.slice(), p.slice()]);
-  S.wire = { kind, segs, cur: p.slice(), quitOnDraw: !!(opts && opts.quitOnDraw) };
+  const src = (opts && opts.source) || sourceLine(ctx.doc, kind, p), st = src && kid(src.node, "stroke");
+  S.wire = { kind, segs, cur: p.slice(), quitOnDraw: !!(opts && opts.quitOnDraw), stroke: st ? deep(st) : null };
   ctx.requestRender();
+}
+// startSegments' SCH_SCREEN::GetLine( aPos, 0, aType ): the line of the same layer under the start point, whose
+// Duplicate() the new segments are, so they inherit its stroke (width, style, colour).  A graphic line is a
+// two-point polyline in the file.
+function sourceLine(doc, kind, p) {
+  for (const it of doc.items.values()) {
+    if (it.kind !== kind) continue;
+    const q = ptsOf(it.node); if (kind === "polyline" && q.length !== 2) continue;
+    if (segs(it).some(([a, b]) => segDist(p, a, b) <= 1e-3)) return it;
+  }
+  return null;
+}
+// The drawn line's node: a fresh segment with the source line's stroke when there is one.
+function wireNode(w, a, b) {
+  const n = lineNode(w.kind, a, b);
+  if (w.stroke) replaceKid(n, deep(w.stroke));
+  return n;
 }
 // SCH_SCREEN::IsTerminalPoint: where a click ends the wire by itself.
 function isTerminalPoint(doc, p, kind) {
@@ -580,8 +600,8 @@ function isTerminalPoint(doc, p, kind) {
 }
 function wireClick(ctx, p, dbl) {
   const w = S.wire; if (!w) return;
-  if (S.unfold && !S.unfold.placed) S.unfold.placed = true;        // the first click of an unfold places the label
   wireFollow(ctx, p);
+  if (S.unfold && !S.unfold.placed) S.unfold.placed = true;        // the first click of an unfold places the label
   const n = w.segs.length, seg = w.segs[n - 1];
   if (!segNull(seg) || (twoSegments() && n >= 2 && !segNull(w.segs[n - 2]))) {
     if (isTerminalPoint(ctx.doc, p, w.kind)) { finishWire(ctx); return; }   // KiCad ends a wire on a pin, junction, label or line
@@ -845,12 +865,15 @@ function finishWire(ctx) {
   const w = S.wire; S.wire = null; if (!w) return;
   const list = simplifyWireList(w.segs);
   const unfold = S.unfold; S.unfold = null;
+  const doc = ctx.doc, held = unfold ? dropUnfold(doc, unfold) : null;
   if (!list.length) { ctx.requestRender(); if (w.quitOnDraw) switchTool(ctx, "select"); return; }
-  const doc = ctx.doc, t = editTxn(doc, ctx.IU), conns = w.kind === "polyline" ? [] : screenConnections(doc), newEnds = [], added = [];
+  const t = editTxn(doc, ctx.IU), unfoldIds = [];
+  if (held && unfold.placed) for (const n of held) unfoldIds.push(t.add(n).id);   // finishSegments: entry and label join the wires' commit
+  const conns = w.kind === "polyline" ? [] : screenConnections(doc), newEnds = [], added = [];
   for (const s of list) {
     newEnds.push(s[0], s[1]);
     for (const c of conns) if (segDist(c, s[0], s[1]) <= 1e-3) newEnds.push(c);
-    added.push(t.add(lineNode(w.kind, s[0], s[1])).id);
+    added.push(t.add(wireNode(w, s[0], s[1])).id);
   }
   try {
     if (w.kind !== "polyline") {
@@ -868,20 +891,38 @@ function finishWire(ctx) {
     }
   } finally { t.restore(); }
   const changes = t.changes();
-  ctx.commit(changes, w.kind === "bus" ? "Draw Buses" : w.kind === "polyline" ? "Draw Lines" : "Draw Wires");
+  ctx.commit(changes, "Draw Wires");                         // doDrawSegments pushes "Draw Wires" for wires, buses and lines
   // SaveCopyForRepeatItem( m_wires[0] ) + AddCopyForRepeatItem for the rest: Insert repeats the whole wire
-  S.lastPlaced = list.map((s) => ({ kind: w.kind, node: lineNode(w.kind, s[0], s[1]) }));
-  if (unfold) {                              // the unfolded member label rides to the end of the wire (KiCad moves it with the cursor)
-    const lb = doc.items.get(unfold.labelId), last = list[list.length - 1][1];
-    if (lb && !same(atOf(lb.node), last)) { const n = deep(lb.node); setAt(n, last[0], last[1]); ctx.commit([modChange(doc, lb, n)], "unfold bus", { amend: true }); }
-    const en = doc.items.get(unfold.entryId), lb2 = doc.items.get(unfold.labelId);
-    S.lastPlaced = [en, lb2].filter(Boolean).map((it) => ({ kind: it.kind, node: deep(it.node) })).concat(S.lastPlaced);
-  }
+  S.lastPlaced = list.map((s) => ({ kind: w.kind, node: wireNode(w, s[0], s[1]) }));
+  if (held && unfold.placed) S.lastPlaced = held.map((n) => ({ kind: n[0], node: deep(n) })).concat(S.lastPlaced);
   ctx.requestRender();
   if (w.quitOnDraw) switchTool(ctx, "select");
 }
 // Esc while drawing: the segments go; a wire started from a pin by the selection tool also ends its tool.
-function cancelWire(ctx) { const w = S.wire; S.wire = null; S.unfold = null; ctx.requestRender(); if (w && w.quitOnDraw) switchTool(ctx, "select"); }
+function cancelWire(ctx) {
+  const w = S.wire; S.wire = null;
+  if (S.unfold) dropUnfold(ctx.doc, S.unfold); S.unfold = null;            // doDrawSegments' cleanup(): the entry and label go too
+  ctx.requestRender(); if (w && w.quitOnDraw) switchTool(ctx, "select");
+}
+// The bus unfold's entry and label live on this client only until the wire is finished; take them out of the
+// document and hand back their nodes.
+function dropUnfold(doc, u) {
+  const out = [];
+  for (const id of [u.entryId, u.labelId]) { const it = doc.items.get(id); if (it) { out.push(deep(it.node)); doc.items.delete(id); } }
+  return out;
+}
+// doDrawSegments' motion handling before the first click: the entry flips towards the cursor (the wire starts
+// from its new end) and the label ghost sits on the cursor.
+function unfoldFollow(ctx, w, p) {
+  const u = S.unfold, doc = ctx.doc, en = doc.items.get(u.entryId), lb = doc.items.get(u.labelId); if (!en || !lb) return;
+  const sz = kid(en.node, "size"), sx = p[0] - u.origin[0] < 0 ? -1 : 1, sy = p[1] - u.origin[1] < 0 ? -1 : 1;
+  if (sz && (Math.sign(num(sz[1])) !== sx || Math.sign(num(sz[2])) !== sy)) {
+    sz[1] = r4(Math.abs(num(sz[1])) * sx); sz[2] = r4(Math.abs(num(sz[2])) * sy); K.replaceChange(doc, en);
+    const end = [r4(u.origin[0] + num(sz[1])), r4(u.origin[1] + num(sz[2]))];
+    w.segs[0][0] = end.slice(); if (twoSegments() && w.segs.length >= 2 && segNull(w.segs[0])) w.segs[1][0] = end.slice();
+  }
+  setAt(lb.node, r4(p[0]), r4(p[1])); K.replaceChange(doc, lb);
+}
 // Tool changes made by this module itself (a carried duplicate rides into the place tool, a wire auto-started
 // from a pin goes back to select) are not the user activating another tool mid-operation.
 function switchTool(ctx, id) { S.internalSwitch = true; try { ctx.setTool(id); } finally { S.internalSwitch = false; } }
@@ -1100,6 +1141,22 @@ function sheetMin(node, box, fromRight, fromBottom) {
   }
   return [w, h];
 }
+// SCH_TEXTBOX::GetMinSize: the text's own box height (EDA_TEXT::GetTextBox: the stroke glyph extent inflated by
+// 1.5 x pen width each side, + 17 %, + an interline pitch per further line, + an overbar's sixth) plus the top
+// and bottom margins — or, for vertical text, that plus the left and right margins as a minimum width.  Empty
+// text: no minimum.
+function textBoxMinSize(node) {
+  const text = str(node[1]); if (!text) return [0, 0];
+  const ef = kid(node, "effects"), f = ef && kid(ef, "font"), sz = f && kid(f, "size"), th = f && kid(f, "thickness"), ls = f && kid(f, "line_spacing");
+  const size = sz ? num(sz[2], num(sz[1], 1.27)) : 1.27, bold = !!(f && (f.includes("bold") || (kid(f, "bold") && str(kid(f, "bold")[1]) !== "no")));
+  const pen = th && num(th[1]) > 0.001 ? num(th[1]) : Math.min(bold ? size / 5 : size / 8, size / 4);
+  const lines = text.split("\n").length, ext = size + 2 * 1.5 * pen;
+  let h = ext + 0.17 * ext + (lines - 1) * size * 1.68 * 0.9583 * (ls ? num(ls[1], 1) : 1);
+  if (text.includes("~{")) h += ext / 6;
+  const mg = kid(node, "margins"), m = mg ? [num(mg[1]), num(mg[2]), num(mg[3]), num(mg[4])] : [TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN, TEXTBOX_MARGIN];
+  const rot = Math.round(num((kid(node, "at") || [])[3], 0)) % 180;
+  return rot === 90 ? [r4(h + m[0] + m[2]), 0] : [0, r4(h + m[1] + m[3])];
+}
 // Apply a dragged edit point: mutates the item's node (and its followers') in place, from the originals in pe.
 function applyPointEdit(doc, pe, p) {
   const item = pe.item, n = item.node, k = item.kind, ep = pe.ep, idx = pe.idx;
@@ -1129,7 +1186,8 @@ function applyPointEdit(doc, pe, p) {
     const nm = arcMid(cc, ns, ne, ccw);
     for (const [key, q] of [["start", ns], ["mid", nm], ["end", ne]]) { const kk = kid(n, key); kk[1] = r4(q[0]); kk[2] = r4(q[1]); }
   } else if (k === "rectangle" || k === "text_box") {
-    const b = editBox(boxOf({ kind: k, node: pe.orig }), ep, idx, p, PE_MIN, PE_MIN).map(r4);
+    const mn = k === "text_box" ? textBoxMinSize(pe.orig) : [0, 0];
+    const b = editBox(boxOf({ kind: k, node: pe.orig }), ep, idx, p, Math.max(PE_MIN, mn[0]), Math.max(PE_MIN, mn[1])).map(r4);
     if (k === "rectangle") { const s = kid(n, "start"), e = kid(n, "end"); s[1] = b[0]; s[2] = b[1]; e[1] = b[2]; e[2] = b[3]; }
     else { const at = kid(n, "at"), sz = kid(n, "size"); at[1] = b[0]; at[2] = b[1]; sz[1] = r4(b[2] - b[0]); sz[2] = r4(b[3] - b[1]); }
   } else if (k === "sheet") {
@@ -1373,7 +1431,7 @@ function lineCovers(doc, kind, a, b) {                   // an existing collinea
 // One item or a list of them (a multi-selection): every connection point of every moved item is an
 // anchor, riders of every moved net line come along, and a line whose ends all sit on moved items
 // (a wire between two dragged symbols) is promoted into the moved set so it just moves.
-function beginDrag(ctx, items, mm, byPointer) {
+function beginDrag(ctx, items, mm, byPointer, opts) {
   const doc = ctx.doc, seen = new Set(), list = [];
   for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id)) { seen.add(it.id); list.push(it); }
   if (!list.length) return null;
@@ -1382,7 +1440,7 @@ function beginDrag(ctx, items, mm, byPointer) {
   const d = { items: list.map((it) => ({ item: it, kind: it.kind, orig: deep(it.node) })), item, kind: item.kind, orig: null, anchor0, grab: [mm[0] - anchor0[0], mm[1] - anchor0[1]],
     last: [0, 0], applied: [0, 0], moved: false, byPointer: !!byPointer, riders: [], anchors: [], preview: [] };
   d.orig = d.items[0].orig;
-  for (let pass = 0; pass < 8; pass++) {                   // re-resolve after each promotion, the moved set grew
+  for (let pass = 0; pass < 8 && !(opts && opts.plain); pass++) {   // plain: new items (a paste) carry nothing along                   // re-resolve after each promotion, the moved set grew
     const moving = new Set(d.items.map((e) => e.item.id));
     d.riders = [];
     for (const e of d.items) for (const r of ridersOf(doc, e.item)) if (!moving.has(r.item.id)) { moving.add(r.item.id); d.riders.push(r); }
@@ -1435,14 +1493,29 @@ function moveDrag(ctx, mm) {
 }
 function endDrag(ctx, commit) {
   const d = S.drag; S.drag = null; if (!d) return;
+  S.dragEndedAt = Date.now();
   const [dx, dy] = d.last, doc = ctx.doc;
   applyDrag(doc, d, 0, 0);                      // originals back first, so commit() records a true inverse
   const done = () => { if (d.restoreMode) { S.dragMode = d.restoreMode; announceModes(ctx); } ctx.requestRender(); };
-  if (!commit && d.pasted) { done(); ctx.undo(); return; }                    // Esc on a paste in flight: the pasted items go
+  if (d.brk) { endBreak(ctx, d, commit); done(); return; }
+  if (d.local) {                                // a paste / duplicate in flight: never committed yet
+    if (!commit) { dropLocal(ctx, d); done(); return; }
+    const changes = dragChanges(ctx, d, dx, dy);
+    for (const id of d.local) ctx.doc.items.delete(id);
+    if (changes.length) ctx.commit(changes, d.label || "paste");
+    setSelectionIds(ctx, Array.from(d.local).filter((id) => ctx.doc.items.has(id)));
+    done(); return;
+  }
   if (!commit || !d.moved || (!dx && !dy)) { done(); return; }
   const changes = dragChanges(ctx, d, dx, dy);
-  if (changes.length) ctx.commit(changes, S.dragMode === "drag" ? "drag" : "move", d.pasted ? { amend: true } : undefined);
+  if (changes.length) ctx.commit(changes, S.dragMode === "drag" ? "drag" : "move");
   done();
+}
+// The local items of a paste in flight go, with the library symbols the paste brought in.
+function dropLocal(ctx, d) {
+  for (const id of d.local) ctx.doc.items.delete(id);
+  for (const name of d.libs || []) if (!Array.from(ctx.doc.items.values()).some((it) => it.kind === "symbol" && symbolLibId(it.node) === name)) ctx.doc.lib.delete(name);
+  setSelectionIds(ctx, []);
 }
 function cancelDrag(ctx) { if (S.drag) endDrag(ctx, false); }
 
@@ -1456,9 +1529,9 @@ function dragChanges(ctx, d, dx, dy) {
     out.set(c.id, c);
   };
   const touched = [];
-  for (const e of d.items) { const n = deep(e.item.node); shiftNode(e.kind, n, dx, dy); put(modChange(doc, e.item, n)); }
+  for (const e of d.items) { const n = deep(e.item.node); shiftNode(e.kind, n, dx, dy); const c = modChange(doc, e.item, n); put(d.local && d.local.has(e.item.id) ? Object.assign(c, { kind: "ADDED" }) : c); }
   for (const r of d.riders) { const n = deep(r.item.node); shiftNode(r.item.kind, n, dx, dy); put(modChange(doc, r.item, n)); }
-  for (const e of d.items) for (const p of connPoints(doc, e.item)) touched.push(p, [r4(p[0] + dx), r4(p[1] + dy)]);
+  for (const e of d.items) for (const p of (d.local && isNetLine(e.kind) ? ptsOf(e.item.node) : connPoints(doc, e.item))) { if (!d.local) touched.push(p); touched.push([r4(p[0] + dx), r4(p[1] + dy)]); }
   if (connected) for (const a of d.anchors) {
     const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)]; touched.push(a.p, Pn);
     for (const e of a.ends) {
@@ -1663,7 +1736,14 @@ function installDom(ctx) {
   stage.addEventListener("pointerdown", onDownCapture, true);
   stage.addEventListener("pointermove", onMoveCapture, true);
   stage.addEventListener("pointerup", onUpCapture, true);
-  stage.addEventListener("dblclick", (ev) => { if (schActive() && toolOf(curTool())) { ev.stopImmediatePropagation(); ev.preventDefault(); } }, true);
+  stage.addEventListener("dblclick", (ev) => {
+    if (!schActive()) return;
+    const ctx = S.ctx;
+    // a double click always finishes a move, even breaks (pointerdown carries no click count, the dblclick does);
+    // the double click that ended one opens no properties dialog either
+    if (S.drag && ctx) { endDrag(ctx, true); ev.stopImmediatePropagation(); ev.preventDefault(); return; }
+    if (toolOf(curTool()) || Date.now() - (S.dragEndedAt || 0) < 600) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+  }, true);
   document.addEventListener("keydown", onKeyCapture, true);
 }
 function onDownCapture(ev) {
@@ -1674,9 +1754,14 @@ function onDownCapture(ev) {
   if (toolOf(tool)) return;                                  // app.js forwards these to onPointerDown
   if (tool !== "select" || ev.button !== 0) return;
   const mm = ctx.worldMm(ev);
-  if (S.drag) { endDrag(ctx, true); ev.stopImmediatePropagation(); ev.preventDefault(); return; }   // a key-started drag is dropped by the click
+  if (S.drag) {                                              // a key-started drag is dropped by the click (BREAK: a single click breaks again)
+    if (!(S.drag.brk && breakAgain(ctx))) endDrag(ctx, true);
+    ev.stopImmediatePropagation(); ev.preventDefault(); return;
+  }
   if (!ev.shiftKey && pointEditStart(ctx, mm, ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); return; }   // SCH_POINT_EDITOR runs ahead of the selection tool
-  if (autostartAt(ctx, mm, ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); return; }
+  // SCH_SELECTION_TOOL runs autostartEvent only for IsClick( BUT_LEFT ): remember the press, and start the line on
+  // the release if the pointer has not travelled (a press-drag from the same place box-selects or moves instead)
+  S.autoPress = autostartAt(ctx, mm, ev, true) ? { mm, client: [ev.clientX, ev.clientY], mods: ev } : null;
   const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm);
   if (!hit) { if (S.sel) { S.sel = null; ctx.requestRender(); } return; }
   ev.stopImmediatePropagation(); ev.preventDefault();
@@ -1687,10 +1772,11 @@ function onDownCapture(ev) {
 }
 // A plain click with the selection tool on a dangling anchor starts the wire (bus, line) there; finishing it
 // returns to the selection tool (quitOnDraw).
-function autostartAt(ctx, mm, ev) {
+function autostartAt(ctx, mm, ev, probe) {
   if (!S.autoStartWires || ctx.viewOnly || (ev && (ev.shiftKey || ev.ctrlKey || ev.metaKey || ev.altKey))) return false;
   const p = snapConn(ctx, mm, "wire"), kind = autostartKind(ctx.doc, p); if (!kind) return false;
   if (Math.hypot(p[0] - mm[0], p[1] - mm[1]) > Math.max((ctx.gridPitch || 1.27) * 0.5, 6 * mmPerPx(ctx))) return false;
+  if (probe) return true;
   S.sel = null; S.hover = null; S.pending = null; if (ctx.setSelection) ctx.setSelection([]); else ctx.setSelected(null);
   switchTool(ctx, AUTOSTART_TOOL[kind]);
   startWire(ctx, kind, p, { quitOnDraw: true }); S.cursor = p;
@@ -1719,12 +1805,18 @@ function onMoveCapture(ev) {
   if (id !== S.hover) { S.hover = id; ctx.requestRender(); }
   if (!ev.buttons) autostartCursor(ctx, mm);
 }
-function onUpCapture() {
+function onUpCapture(ev) {
   const ctx = S.ctx; if (!ctx) return;
+  const press = S.autoPress; S.autoPress = null;
   S.pending = null;
   if (S.pedit) pointEditEnd(ctx, true);
-  if (S.drag && S.drag.byPointer) endDrag(ctx, true);
+  if (S.drag && S.drag.byPointer) { endDrag(ctx, true); return; }
+  if (press && ev && Math.hypot(ev.clientX - press.client[0], ev.clientY - press.client[1]) < CLICK_PX && curTool() === "select" && !S.drag && !S.wire) {
+    // after the release has run its course (the press may have selected the symbol under the pin): start the line
+    setTimeout(() => { if (curTool() === "select" && !S.drag && !S.wire && !S.carry) { autostartAt(ctx, press.mm, press.mods); ctx.requestRender(); } }, 0);
+  }
 }
+const CLICK_PX = 4;                                          // a press that travels less than this is a click (the box-select threshold)
 function onKeyCapture(ev) {
   const ctx = S.ctx; if (!ctx || !schActive()) return;
   const tag = ev.target && ev.target.tagName; if (tag === "TEXTAREA" || (tag === "INPUT" && !/^(checkbox|radio|button|submit|reset|range|color)$/.test(ev.target.type))) return;
@@ -1736,8 +1828,19 @@ function onKeyCapture(ev) {
     if (wireKey(ctx, combo)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
     return;
   }
-  // TwoClickPlace / PlaceSymbol: undo with an item on the cursor cancels it
-  if (combo === "Ctrl+Z" && S.carry && busyMessage()) { cancelCarry(ctx); ev.stopImmediatePropagation(); ev.preventDefault(); return; }
+  const eat = () => { ev.stopImmediatePropagation(); ev.preventDefault(); };
+  // SCH_MOVE_TOOL (move, drag, paste, break): undo cancels, redo and duplicate beep, delete ends the move (a paste in
+  // flight then has nothing left: it goes without a trace)
+  if (S.drag && !S.pedit) {
+    if (combo === "Ctrl+Z") { S.drag.cancel = "undo"; endDrag(ctx, false); eat(); return; }
+    if (combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z" || combo === "Ctrl+D") { eat(); return; }
+    if (combo === "Del" || combo === "Backspace") { if (S.drag.local) { endDrag(ctx, false); eat(); return; } endDrag(ctx, true); return; }
+  }
+  // TwoClickPlace / PlaceSymbol: undo with an item on the cursor cancels it, delete too, redo beeps
+  if (S.carry && busyMessage()) {
+    if (combo === "Ctrl+Z" || combo === "Del" || combo === "Backspace") { cancelCarry(ctx); eat(); return; }
+    if (combo === "Ctrl+Y" || combo === "Ctrl+Shift+Z") { eat(); return; }
+  }
   if (ctrl) return;
   if (tag === "INPUT" && (ev.key === " " || ev.key === "Enter")) return;   // a ticked filter box keeps Space / Enter
   if (ev.key === "Escape") {
@@ -2107,7 +2210,7 @@ function danglingEnds(doc) {
   }
   const PIN_OK = new Set(["PIN_END", "LABEL_END", "SHEET_LABEL_END", "WIRE_END", "NO_CONNECT_END", "JUNCTION_END"]);
   for (const { q, item } of pins) {
-    if (q.hidden) continue;
+    if (q.hidden && !globalPowerPin(doc, item, q)) continue;            // SCH_PAINTER: a hidden pin shows it only when it is global power
     const l = at.get(key([q.x, q.y])) || [];
     if (!l.some((x) => x.item !== item && PIN_OK.has(x.type))) out.push({ p: [q.x, q.y], what: "pin", item, color: "pin" });
   }
@@ -2444,7 +2547,14 @@ function onDocChanged(ctx) {
   const sameDoc = S.docRef === ctx.doc;
   if (!sameDoc) { S.wire = null; S.carry = null; S.draw = null; }
   else if (S.carry) S.carry.item = ghost(ctx.doc, S.carry.node);
-  S.drag = null; S.pending = null; S.hover = null; S.sheetJob = sameDoc ? S.sheetJob : null; S.imageWait = false;
+  if (S.drag) {                                 // a paste in flight is ours alone and rides on; anything else in flight is dropped
+    const d = S.drag;
+    if (!(d.local && sameDoc)) {
+      S.drag = null; if (d.restoreMode) S.dragMode = d.restoreMode;
+      if (sameDoc && d.brk) restoreBreak(ctx.doc, d.brk);
+    }
+  }
+  S.pending = null; S.hover = null; S.sheetJob = sameDoc ? S.sheetJob : null; S.imageWait = false;
   if (!sameDoc || !(S.sel && ctx.doc.items.has(S.sel))) S.sel = null;
   if (S.docRef !== ctx.doc) {                   // a different sheet (app.js also calls this after every commit, same doc): repeat memory, ERC markers and an unfold in progress belong to the old one
     S.docRef = ctx.doc; S.lastPlaced = null; S.unfold = null;
@@ -2583,7 +2693,8 @@ function junctionsForNew(doc, items) {
 // Fresh copies of clipboard nodes landed at `at` (mm): the first symbol's anchor (else the first
 // item's) goes to the point, like the desktop's paste-then-move.  Returns { changes, ids }.
 function pasteChanges(doc, parsed, at, opts) {
-  for (const lib of parsed.libs) { const name = str(lib[1]); if (!doc.lib.has(name)) doc.lib.set(name, lib); }   // the sheet's own copy wins (ChoosePasteLibSymbol)
+  const libs = [];
+  for (const lib of parsed.libs) { const name = str(lib[1]); if (!doc.lib.has(name)) { doc.lib.set(name, lib); libs.push(name); } }   // the sheet's own copy wins (ChoosePasteLibSymbol)
   const fresh = parsed.nodes.map((n) => cloneNode({ kind: n[0], node: deep(n) }));
   const used = usedReferences(doc);
   // PASTE_MODE: "keep" (keepAnnotations), "remove" (every reference becomes R?), "unique" (the next free number for a
@@ -2601,8 +2712,8 @@ function pasteChanges(doc, parsed, at, opts) {
   for (const n of fresh) shiftNode(n[0], n, dx, dy);
   const changes = [], items = [];
   for (const n of fresh) { const { item, change } = addNode(doc, n); changes.push(change); items.push(item); }
-  changes.push(...junctionsForNew(doc, items));
-  return { changes, ids: items.map((it) => it.id) };
+  if (!(opts && opts.noJunctions)) changes.push(...junctionsForNew(doc, items));
+  return { changes, ids: items.map((it) => it.id), libs };
 }
 function copySelection(ctx) {
   const items = selectedItems(ctx); if (!items.length) return false;
@@ -2619,22 +2730,28 @@ function cutSelection(ctx) {
 function pasteText(ctx, text, opts) {
   const parsed = parseClipboard(text);
   if (!parsed) { if (str(text).trim()) ctx.toast("Clipboard has no schematic items"); return false; }
-  const { changes, ids } = pasteChanges(ctx.doc, parsed, (opts && opts.at) || snapCursor(ctx), opts);
+  const label = (opts && opts.label) || "paste", live = canFollow(ctx);
+  const { changes, ids, libs } = pasteChanges(ctx.doc, parsed, (opts && opts.at) || snapCursor(ctx), Object.assign({}, opts, { noJunctions: live }));
   if (!changes.length) return false;
-  ctx.commit(changes, (opts && opts.label) || "paste");
+  if (live && followPaste(ctx, ids, libs, (opts && opts.at) || cursorOf(ctx), label)) return true;
+  if (live) changes.push(...junctionsForNew(ctx.doc, ids.map((id) => ctx.doc.items.get(id)).filter(Boolean)));
+  ctx.commit(changes, label);
   setSelectionIds(ctx, ids);
-  followPaste(ctx, ids, (opts && opts.at) || cursorOf(ctx));
   return true;
 }
-// KiCad's Paste / Duplicate: the new items ride the cursor until a click places them, Esc discards them.  They are
-// committed where they appear (so peers see them at once) and the placing move is folded into the same undo step.
-function followPaste(ctx, ids, at) {
-  if (typeof ctx.undo !== "function" || typeof document === "undefined" || !S.dom) return;   // headless: the paste stays where it landed
-  const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean); if (!items.length) return;
+// Whether a paste / break can ride the cursor (a live stage with a pointer; tests switch it on with _.setFollow).
+function canFollow(ctx) { return S.forceFollow || (typeof document !== "undefined" && !!S.dom && !!ctx.stage); }
+// KiCad's Paste / Duplicate (SCH_EDITOR_CONTROL::Paste -> SCH_MOVE_TOOL): the new items are IS_NEW, only on this
+// client, and ride the cursor; the click commits them where they land, with the junctions they need there, as one
+// undo step.  Esc, Ctrl+Z or Delete discards them without leaving anything behind (localCommit.Revert()).
+function followPaste(ctx, ids, libs, at, label) {
+  const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean); if (!items.length) return false;
   const mode = S.dragMode; S.dragMode = "move";
-  const d = beginDrag(ctx, items, at, false);
-  if (!d) { S.dragMode = mode; return; }
-  d.pasted = true; d.restoreMode = mode; d.moved = true;
+  const d = beginDrag(ctx, items, at, false, { plain: true });
+  if (!d) { S.dragMode = mode; return false; }
+  d.pasted = true; d.local = new Set(ids); d.libs = libs || []; d.label = label; d.restoreMode = mode; d.moved = true;
+  setSelectionIds(ctx, ids);
+  return true;
 }
 function pasteSelection(ctx, opts) {
   if (!editable(ctx)) return false;
@@ -2766,7 +2883,11 @@ function repeatLast(ctx) {
   const now = added.map((id) => doc.items.get(id)).filter(Boolean);
   S.lastPlaced = now.map((it) => ({ kind: it.kind, node: deep(it.node) }));
   setSelectionIds(ctx, now.map((it) => it.id));
-  if (symbolId) followPaste(ctx, [symbolId], cursorOf(ctx));            // the repeated symbol follows the cursor until the click
+  if (symbolId && canFollow(ctx)) {                                      // then SCH_ACTIONS::move: the repeated symbol follows the cursor until the click
+    const it = doc.items.get(symbolId), mode = S.dragMode; S.dragMode = "move";
+    const d = it ? beginDrag(ctx, [it], cursorOf(ctx), false) : null;
+    if (d) { d.restoreMode = mode; d.moved = true; } else S.dragMode = mode;
+  }
   return true;
 }
 function incrementSelection(ctx, delta) {
@@ -2865,6 +2986,15 @@ function symbolPins(doc, item) {
 }
 function symbolLibId(node) { return str((kid(node, "lib_id") || [])[1]); }
 function symbolIsPower(doc, item) { return isPowerSymbol(doc, symbolLibId(item.node)); }
+// SCH_PIN::IsGlobalPower: a power input of a global power symbol, or (legacy) a hidden power input of any symbol
+// that is not a local power symbol ((power local) in KiCad 10).
+function globalPowerPin(doc, item, pin) {
+  if (pin.type !== "power_in") return false;
+  const lib = K.resolveLib(doc, symbolLibId(item.node)) || doc.lib.get(symbolLibId(item.node)), pw = lib && kid(lib, "power");
+  if (pw && pw.includes("local")) return false;
+  if (pw) return true;
+  return !!pin.hidden;
+}
 
 // ---------------------------------------------------------------- autoplace fields (eeschema/autoplace_fields.cpp)
 const AP_HPADDING = 0.635, AP_VPADDING = 0.381, AP_GRID = 1.27, AP_WIRE_V = 2.54, AP_FIELD_PADDING = 0.381;
@@ -3548,10 +3678,14 @@ function breakWireChanges(doc, item, p) {
 function closestOnSeg(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy; let t = l2 ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2 : 0; t = Math.max(0, Math.min(1, t)); return [r4(a[0] + t * dx), r4(a[1] + t * dy)]; }
 /**
  * SCH_MOVE_TOOL in BREAK / SLICE mode (KiCad 10).  preprocessBreakOrSliceSelection breaks the selected line at
- * the cursor (several selected lines each at their midpoint), commits "Break Wire" / "Slice Wire", and the move
- * loop then carries the cut: for BREAK the new corner (both halves' shared end) follows the cursor, for SLICE the
- * first half's end alone, opening the gap.  A click places it (folded into the same undo step), Esc takes the
- * whole operation back.  Outside a session with a pointer (tests, headless) the break stays where it was made.
+ * the cursor (several selected lines each at their midpoint) inside the move's local commit, and the move loop
+ * carries the cut: for BREAK the new corner (both halves' shared end) follows the cursor, for SLICE the first
+ * half's end alone, opening the gap.  Nothing reaches the document (or a peer) until the operation ends.
+ * SLICE: a click finishes.  BREAK: each click breaks the dragged tail again at the corner and keeps going; a
+ * double click finishes, and so does Esc once at least one click has broken (the corner in flight stays where the
+ * cursor left it).  Esc before that, Ctrl+Z or a peer's edit of the sheet put everything back, with no redo entry
+ * (localCommit.Revert()).  The commit is one "Break Wire" / "Slice Wire" step with the junctions the new corners
+ * need.  Outside a session with a pointer (tests, headless) the break is committed where it was made.
  */
 function breakWire(ctx, mode) {
   if (!editable(ctx)) return false;
@@ -3559,29 +3693,101 @@ function breakWire(ctx, mode) {
   const c = cursorOf(ctx); let lines = selectedItems(ctx).filter((x) => isNetLine(x.kind) && ptsOf(x.node).length === 2);
   if (!lines.length) { const hit = hitNonSymbol(ctx.doc, c[0], c[1], Math.max(0.3, 5 * mmPerPx(ctx))); if (hit && isNetLine(hit.kind)) lines = [hit]; }
   if (!lines.length) return false;
-  const doc = ctx.doc, changes = [], cuts = [];
-  for (const it of lines) {
-    const q = ptsOf(it.node), at = lines.length === 1 ? snapCursor(ctx) : [r4((q[0][0] + q[1][0]) / 2), r4((q[0][1] + q[1][1]) / 2)];
-    const ch = breakWireChanges(doc, it, at); if (!ch.length) continue;
-    changes.push(...ch); cuts.push({ head: it.id, tail: ch[1].id, p: ptsOf(fragOf(ch[0]))[1] });
-  }
-  if (!changes.length) return false;
-  ctx.commit(changes, mode === "slice" ? "Slice Wire" : "Break Wire");
-  setSelectionIds(ctx, mode === "break" ? cuts.flatMap((x) => [x.head, x.tail]) : cuts.map((x) => x.head));
-  if (typeof ctx.undo !== "function" || typeof document === "undefined" || !S.dom) return true;
-  const anchors = [];
-  for (const cut of cuts) {
-    const head = doc.items.get(cut.head), tail = doc.items.get(cut.tail); if (!head) continue;
-    const ends = [{ item: head, index: 1, orig: ptsOf(head.node).map((v) => v.slice()) }];
-    if (mode === "break" && tail) ends.push({ item: tail, index: 0, orig: ptsOf(tail.node).map((v) => v.slice()) });
-    anchors.push({ p: cut.p, ends, stub: null, followers: [] });
+  const doc = ctx.doc, label = mode === "slice" ? "Slice Wire" : "Break Wire";
+  const atFor = (it) => { const q = ptsOf(it.node); return lines.length === 1 ? snapCursor(ctx) : [r4((q[0][0] + q[1][0]) / 2), r4((q[0][1] + q[1][1]) / 2)]; };
+  if (!canFollow(ctx)) {
+    const changes = [], cuts = [];
+    for (const it of lines) { const ch = breakWireChanges(doc, it, atFor(it)); if (!ch.length) continue; changes.push(...ch); cuts.push({ head: it.id, tail: ch[1].id }); }
+    if (!changes.length) return false;
+    ctx.commit(changes, label);
+    setSelectionIds(ctx, mode === "break" ? cuts.flatMap((x) => [x.head, x.tail]) : cuts.map((x) => x.head));
+    return true;
   }
   if (S.drag) endDrag(ctx, false);
+  const brk = { mode, label, orig: new Map(), local: new Set(), clicks: 0 }, cuts = [];
+  for (const it of lines) { const cut = splitLocal(doc, brk, it, atFor(it)); if (cut) cuts.push(cut); }
+  if (!cuts.length) return false;
   const p0 = cuts[0].p;
-  S.drag = { items: [], item: doc.items.get(cuts[0].head), kind: "wire", orig: null, anchor0: p0, grab: [0, 0], last: [0, 0], applied: [0, 0], moved: true, byPointer: false,
-    riders: [], anchors, preview: [], mode, pasted: true, restoreMode: S.dragMode };
+  S.drag = { items: [], item: cuts[0].head, kind: "wire", orig: null, anchor0: p0, grab: [0, 0], last: [0, 0], applied: [0, 0], moved: true, byPointer: false,
+    riders: [], anchors: breakAnchors(cuts, mode), preview: [], mode, brk, restoreMode: S.dragMode };
   S.dragMode = "drag"; announceModes(ctx);
+  setSelectionIds(ctx, mode === "break" ? cuts.flatMap((x) => [x.head.id, x.tail.id]) : cuts.map((x) => x.head.id));
   return true;
+}
+// SCH_LINE::BreakAt on this client only: the line keeps its start and ends at q, a copy (same stroke) runs on from q.
+function splitLocal(doc, brk, item, at, force) {
+  const pts = ptsOf(item.node); if (pts.length !== 2) return null;
+  const q = force ? [r4(at[0]), r4(at[1])] : closestOnSeg(at, pts[0], pts[1]);
+  if (!force && (same(q, pts[0]) || same(q, pts[1]))) return null;
+  if (!brk.orig.has(item.id) && !brk.local.has(item.id)) brk.orig.set(item.id, deep(item.node));
+  const tailNode = deep(item.node); dropKid(tailNode, "uuid"); setPts(tailNode, [q, pts[1]]);
+  setPts(item.node, [pts[0], q]); K.replaceChange(doc, item);
+  const tail = addNode(doc, tailNode).item; brk.local.add(tail.id);
+  return { head: item, tail, p: q };
+}
+function breakAnchors(cuts, mode) {
+  return cuts.map((cut) => {
+    const ends = [{ item: cut.head, index: 1, orig: ptsOf(cut.head.node).map((v) => v.slice()) }];
+    if (mode === "break") ends.push({ item: cut.tail, index: 0, orig: ptsOf(cut.tail.node).map((v) => v.slice()) });
+    return { p: cut.p, ends, stub: null, followers: [] };
+  });
+}
+// A click in BREAK mode: the corner stays where it is and the dragged tail breaks again there, so the next
+// corner follows the cursor (preprocessBreakOrSliceSelection on the IS_NEW tail only).
+function breakAgain(ctx) {
+  const d = S.drag; if (!d || !d.brk || d.brk.mode !== "break") return false;
+  const doc = ctx.doc, cuts = [];
+  for (const a of d.anchors) {
+    const tailEnd = a.ends.find((e) => e.index === 0); if (!tailEnd) continue;
+    const tail = tailEnd.item, pts = ptsOf(tail.node);
+    const cut = splitLocal(doc, d.brk, tail, pts[0], true); if (cut) cuts.push(cut);
+  }
+  if (!cuts.length) return false;
+  d.brk.clicks++;
+  d.anchors = breakAnchors(cuts, "break"); d.anchor0 = cuts[0].p; d.last = [0, 0]; d.applied = [0, 0];
+  setSelectionIds(ctx, cuts.flatMap((x) => [x.head.id, x.tail.id]));
+  ctx.requestRender();
+  return true;
+}
+// Lines broken locally go back to what they were, the local pieces go.
+function restoreBreak(doc, brk) {
+  for (const id of brk.local) doc.items.delete(id);
+  for (const [id, orig] of brk.orig) { const it = doc.items.get(id); if (it) { restoreNode(it.node, orig); K.replaceChange(doc, it); } }
+}
+function endBreak(ctx, d, commit) {
+  const doc = ctx.doc, brk = d.brk;
+  if (!commit && d.cancel !== "undo" && brk.mode === "break" && brk.clicks > 0) commit = true;   // Esc after a break keeps the breaks
+  if (commit) applyDrag(doc, d, d.last[0], d.last[1]);
+  const finals = new Map();
+  for (const id of [...brk.orig.keys(), ...brk.local]) { const it = doc.items.get(id); if (it) finals.set(id, { kind: it.kind, node: deep(it.node) }); }
+  restoreBreak(doc, brk);
+  if (!commit) { setSelectionIds(ctx, []); return; }
+  const zero = (n) => { const q = ptsOf(n); return q.length === 2 && same(q[0], q[1]); };
+  const changes = [], added = [], touched = [];
+  for (const [id] of brk.orig) {
+    const it = doc.items.get(id), f = finals.get(id); if (!it || !f) continue;
+    if (zero(f.node)) { changes.push(removeChange(it)); continue; }
+    changes.push(modChange(doc, it, f.node)); touched.push(...ptsOf(f.node));
+  }
+  for (const id of brk.local) {
+    const f = finals.get(id); if (!f || zero(f.node)) continue;
+    const r = addNode(doc, f.node); changes.push(r.change); added.push(r.item.id); touched.push(...ptsOf(f.node));
+  }
+  // the junctions the moved corners need (finalizeMoveOperation's AddJunctionsIfNeeded), on a dry run
+  const saved = new Map(); for (const c of changes) if (!saved.has(c.id)) saved.set(c.id, doc.items.get(c.id) || null);
+  const extra = [];
+  try {
+    for (const c of changes) K.applyChange(doc, c, ctx.IU || 1e4);
+    const seen = new Set();
+    for (const p of touched) {
+      const k = r4(p[0]) + "," + r4(p[1]); if (seen.has(k)) continue; seen.add(k);
+      if (!junctionAt(doc, p[0], p[1]) && (needsJunction(doc, p[0], p[1], "wire") || needsJunction(doc, p[0], p[1], "bus"))) extra.push(addNode(doc, junctionNode(p)).change);
+    }
+  } finally { for (const [id, obj] of saved) { if (obj) doc.items.set(id, obj); else doc.items.delete(id); } for (const c of extra) doc.items.delete(c.id); }
+  for (const id of added) doc.items.delete(id);
+  const keepSel = d.anchors.flatMap((a) => a.ends.map((e) => e.item.id));
+  ctx.commit(changes.concat(extra), brk.label);
+  setSelectionIds(ctx, keepSel.filter((id) => doc.items.has(id)));
 }
 const fragOf = (change) => { const t = K.parseAll(change.sexpr); return t.find((n) => Array.isArray(n) && n[0] !== "lib_symbols") || t[0]; };
 
@@ -3672,11 +3878,11 @@ function unfoldBus(ctx, bus, member, at) {
   const sx = c[0] < p[0] ? -1 : 1, sy = c[1] < p[1] ? -1 : 1;
   const dx = 2.54 * sx, dy = 2.54 * sy, end = [r4(p[0] + dx), r4(p[1] + dy)];
   let rot = 0; if (vertical) rot = end[0] < p[0] ? 180 : 0; else if (horizontal) rot = end[1] < p[1] ? 90 : 270;
-  const entry = addNode(doc, busEntryNode(p, r4(dx), r4(dy))), label = addNode(doc, labelNode("label", member, end, rot));
-  ctx.commit([entry.change, label.change], "unfold bus");
+  const entry = addNode(doc, busEntryNode(p, r4(dx), r4(dy))), label = addNode(doc, labelNode("label", member, end, rot));   // IS_NEW: not committed yet
   switchTool(ctx, "wire");
   startWire(ctx, "wire", end);
-  S.unfold = { labelId: label.item.id, entryId: entry.item.id };
+  S.unfold = { labelId: label.item.id, entryId: entry.item.id, origin: p, placed: false };
+  ctx.requestRender();
   return { entry: entry.item, label: label.item, start: end };
 }
 function unfoldAction(ctx, opts) {
@@ -3776,7 +3982,7 @@ root.CollabTools.sch = {
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
   clipboardText, parseClipboard, ercCheck, annotateChanges, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
-  _: { selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
+  _: { setFollow(on) { S.forceFollow = !!on; }, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
     convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
     ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,

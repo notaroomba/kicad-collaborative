@@ -447,7 +447,7 @@ test("lines (I): KiCad's drawLines — one SCH_LINE per segment on the notes lay
   assert.strictEqual(sch.state.wire.kind, "polyline");
   sch.onPointerDown(ev(), [50.8, 38.1], ctx); assert.ok(sch.state.wire, "a second click on the last point does not end it (KiCad needs a double click)");
   sch.onPointerDown(Object.assign(ev(), { detail: 2 }), [50.8, 38.1], ctx);
-  let c = lastCommit(ctx); assert.strictEqual(c.label, "Draw Lines");
+  let c = lastCommit(ctx); assert.strictEqual(c.label, "Draw Wires", "doDrawSegments pushes Draw Wires for lines too");
   assert.deepStrictEqual(c.changes.map((x) => x.typeName), ["SCH_LINE", "SCH_LINE", "SCH_LINE"]);
   assert.deepStrictEqual(c.changes.map((x) => ptsOf(fragItem(x))), [[[25.4, 25.4], [38.1, 25.4]], [[38.1, 25.4], [38.1, 38.1]], [[38.1, 38.1], [50.8, 38.1]]]);
   let n = fragItem(c.changes[0]); assert.deepStrictEqual(n.slice(0, 3), ["polyline", ["pts", ["xy", 25.4, 25.4], ["xy", 38.1, 25.4]], STROKE0]);
@@ -1313,35 +1313,166 @@ test("symbol fields table: every symbol's fields as rows; edits (including a new
   assert.strictEqual(sch.runAction("fieldsTable", c), false, "the dialog needs KDialogs (browser only)");
 });
 
-test("bus unfolding: member names from bus vectors and groups; an entry and the member label leave the bus where clicked, then the wire tool carries the label to the wire's end", () => {
+test("bus unfolding: member names from bus vectors and groups; an entry and the member label leave the bus where clicked, ride with the wire tool and join its one Draw Wires commit", () => {
   assert.deepStrictEqual(sch.busMembers("DATA[0..3]").members, ["DATA0", "DATA1", "DATA2", "DATA3"]);
   assert.deepStrictEqual(sch.busMembers("A[3..1]-").members, ["A1-", "A2-", "A3-"], "reversed ranges and a +-PN suffix");
   assert.deepStrictEqual(sch.busMembers("{A B C}").members, ["A", "B", "C"]); assert.deepStrictEqual(sch.busMembers("BUS{A B}").members, ["BUS.A", "BUS.B"]);
   assert.deepStrictEqual(sch.busMembers("{D[0..1] E}").members, ["D0", "D1", "E"]); assert.strictEqual(sch.busMembers("PLAIN"), null); assert.strictEqual(sch.busMembers("X[2..2]"), null);
   const { d, c } = fresh();
-  const bus = K.createItem(d, _.lineNode("bus", [101.6, 127], [152.4, 127])); K.createItem(d, _.labelNode("label", "DATA[0..3]", [110, 127], 0));
+  const bus = K.createItem(d, _.lineNode("bus", [101.6, 127], [152.4, 127])); K.createItem(d, _.labelNode("global_label", "DATA[0..3]", [110, 127], 0));
   assert.deepStrictEqual(_.unfoldMembers(d, bus), ["DATA0", "DATA1", "DATA2", "DATA3"]);
+  const before = d.items.size, commits = c.log.length;
   c.selection = new Set([bus.id]); c.cursor = [127.3, 120];
   assert.ok(sch.runAction("unfoldBus", c, { member: "DATA1" }));
-  const cm = lastCommit(c); assert.strictEqual(cm.label, "unfold bus"); assert.deepStrictEqual(cm.changes.map((x) => [x.kind, x.typeName]), [["ADDED", "SCH_BUS_WIRE_ENTRY"], ["ADDED", "SCH_LABEL"]]);
-  const en = fragItem(cm.changes[0]), ln = fragItem(cm.changes[1]);
+  assert.strictEqual(c.log.length, commits, "nothing is committed while the unfold is in flight (IS_NEW)");
+  const u = sch.state.unfold, en = d.items.get(u.entryId).node, ln = d.items.get(u.labelId).node;
   assert.deepStrictEqual(en.slice(1, 3), [["at", 127, 127], ["size", 2.54, -2.54]], "the entry leaves the bus toward the cursor's side");
   assert.deepStrictEqual([ln[1], atOf(ln)], ["DATA1", [129.54, 124.46, 90]], "member label at the entry's end, standing away from a horizontal bus");
   assert.strictEqual(sch.state.tool, "wire"); assert.deepStrictEqual(sch.state.wire && sch.state.wire.segs[0][0], [129.54, 124.46], "the wire starts at the entry end");
-  sch.onPointerDown(ev(), [129.54, 111.76], c); sch.onPointerDown(Object.assign(ev(), { detail: 2 }), [129.54, 111.76], c);   // one leg up, then a double click finishes
-  assert.strictEqual(sch.state.wire, null);
-  const wm = c.log[c.log.length - 2], lm = lastCommit(c);
-  assert.strictEqual(wm.label, "Draw Wires"); assert.deepStrictEqual(ptsOf(fragItem(wm.changes[0])), [[129.54, 124.46], [129.54, 111.76]]);
-  assert.deepStrictEqual([lm.label, lm.changes[0].kind, atOf(fragItem(lm.changes[0]))], ["unfold bus", "MODIFIED", [129.54, 111.76, 90]], "the label rode to the end of the wire");
+  // Esc: doDrawSegments' cleanup() takes the entry and the label away again
+  _.cancelWire(c);
+  assert.strictEqual(sch.state.unfold, null); assert.strictEqual(d.items.size, before, "Esc leaves nothing behind"); assert.strictEqual(c.log.length, commits);
+  // again: motion to the left flips the entry, the label rides the cursor, the first click places it and (a label is a terminal point) ends the wire
+  sch.onActivate("select", c); c.selection = new Set([bus.id]); c.cursor = [127.3, 120];
+  assert.ok(sch.runAction("unfoldBus", c, { member: "DATA1" }));
+  sch.onPointerMove(ev(), [121.92, 111.76], c);
+  const u2 = sch.state.unfold;
+  assert.deepStrictEqual(kid(d.items.get(u2.entryId).node, "size").slice(1), [-2.54, -2.54], "the entry flipped toward the cursor");
+  assert.deepStrictEqual(atOf(d.items.get(u2.labelId).node).slice(0, 2), [121.92, 111.76], "the label ghost sits on the cursor");
+  assert.deepStrictEqual(sch.state.wire.segs[0][0], [124.46, 124.46], "the wire starts from the flipped entry's end");
+  sch.onPointerDown(ev(), [121.92, 111.76], c);
+  assert.strictEqual(sch.state.wire, null); assert.strictEqual(c.log.length, commits + 1, "one undo step");
+  const wm = lastCommit(c); assert.strictEqual(wm.label, "Draw Wires");
+  const added = wm.changes.filter((x) => x.kind === "ADDED").map((x) => x.typeName);
+  assert.ok(added.includes("SCH_BUS_WIRE_ENTRY") && added.includes("SCH_LABEL") && added.includes("SCH_LINE"), added.join());
+  const lc = wm.changes.find((x) => x.typeName === "SCH_LABEL"); assert.deepStrictEqual(atOf(fragItem(lc)).slice(0, 2), [121.92, 111.76], "the label stays where the click placed it");
+  const wc = wm.changes.find((x) => x.typeName === "SCH_LINE");
   assert.strictEqual(sch.state.unfold, null);
-  assert.deepStrictEqual(Array.from(sch.netItems(d, d.items.get(wm.changes[0].id))).sort(), [wm.changes[0].id, cm.changes[0].id, cm.changes[1].id, bus.id, ...[...d.items.values()].filter((it) => it.kind === "label" && it.node[1] === "DATA[0..3]").map((it) => it.id)].sort(), "wire, entry, label and bus are one net");
+  assert.ok(sch.netItems(d, d.items.get(wc.id)).has(bus.id), "wire, entry, label and bus are one net");
   // a vertical bus, a group bus label, no member option -> the first member; nothing to unfold without a bus label
   const vb = K.createItem(d, _.lineNode("bus", [190.5, 25.4], [190.5, 76.2])); K.createItem(d, _.labelNode("global_label", "CTRL{EN RST}", [190.5, 30], 90));
   sch.onActivate("select", c); c.selection = new Set([vb.id]); c.cursor = [180, 50.8]; assert.ok(sch.runAction("unfoldBus", c));
-  const vn = fragItem(lastCommit(c).changes[1]); assert.deepStrictEqual([vn[1], atOf(vn)], ["CTRL.EN", [187.96, 53.34, 180]], "reads away from a vertical bus");
-  sch.onActivate("select", c);
+  const vn = d.items.get(sch.state.unfold.labelId).node; assert.deepStrictEqual([vn[1], atOf(vn)], ["CTRL.EN", [187.96, 53.34, 180]], "reads away from a vertical bus");
+  _.cancelWire(c); sch.onActivate("select", c);
   const nb = K.createItem(d, _.lineNode("bus", [10, 10], [30, 10])); c.selection = new Set([nb.id]); c.toasts.length = 0; assert.strictEqual(sch.runAction("unfoldBus", c), false); assert.ok(c.toasts.some((m) => /No bus label/.test(m)));
   c.selection = new Set(); c.selected = null; sch.select(null); c.cursor = [200, 200]; assert.strictEqual(sch.runAction("unfoldBus", c), false);
+});
+
+test("duplicate / paste in flight (SCH_MOVE_TOOL on IS_NEW items): nothing reaches the document until the click; Esc, Ctrl+Z and Del leave no trace and no redo", () => {
+  const { d, c } = fresh(); _.setFollow(true);
+  const key = (k, mods) => _.onKeyCapture(Object.assign({ key: k, target: null, stopImmediatePropagation() {}, preventDefault() {} }, mods || {}));
+  try {
+    const before = d.items.size, n0 = c.log.length;
+    // a wire on R1's pin 1 (25.4, 96.52): a copy stacked on the original would want a junction there
+    K.createItem(d, _.lineNode("wire", [25.4, 96.52], [25.4, 88.9])); const base = d.items.size;
+    c.selection = new Set(["s1"]); c.selected = { id: "s1" }; c.cursor = [25.4, 100.33];
+    assert.ok(sch.runAction("duplicate", c));
+    assert.strictEqual(c.log.length, n0, "no commit while the copy follows the cursor");
+    const dr = sch.state.drag; assert.ok(dr && dr.local && dr.local.size === 1);
+    assert.strictEqual(d.items.size, base + 1, "the copy only, no junction");
+    // Del: KiCad's doDelete ends the move with nothing committed
+    key("Delete"); assert.strictEqual(sch.state.drag, null); assert.strictEqual(d.items.size, base, "the copy went"); assert.strictEqual(c.log.length, n0);
+    // Esc and Ctrl+Z: the same, and no undo is run (so no redo entry)
+    let undos = 0; c.undo = () => { undos++; };
+    for (const k of [["Escape"], ["z", { ctrlKey: true }]]) {
+      c.selection = new Set(["s1"]); c.selected = { id: "s1" }; assert.ok(sch.runAction("duplicate", c));
+      key(k[0], k[1]); assert.strictEqual(sch.state.drag, null, k[0]); assert.strictEqual(d.items.size, base); assert.strictEqual(c.log.length, n0);
+    }
+    assert.strictEqual(undos, 0, "nothing to undo");
+    // Ctrl+Y and Ctrl+D mid-move beep
+    c.selection = new Set(["s1"]); c.selected = { id: "s1" }; assert.ok(sch.runAction("duplicate", c));
+    key("y", { ctrlKey: true }); key("d", { ctrlKey: true }); assert.ok(sch.state.drag && sch.state.drag.local, "still in flight"); assert.strictEqual(c.log.length, n0);
+    // the click: one "duplicate" step, the copy where it landed with a fresh reference, junctions only where it landed
+    sch.moveDrag(c, [50.8, 100.33]); sch.endDrag(c, true);
+    assert.strictEqual(c.log.length, n0 + 1); const cm = lastCommit(c); assert.strictEqual(cm.label, "duplicate");
+    assert.deepStrictEqual(cm.changes.map((x) => [x.kind, x.typeName]), [["ADDED", "SCH_SYMBOL"]], "no junction at the original pin");
+    const sy = fragItem(cm.changes[0]); assert.deepStrictEqual(atOf(sy).slice(0, 2), [50.8, 100.33]);
+    assert.strictEqual(str(kids(sy, "property")[0][2]), "R2");
+    assert.strictEqual(d.items.size, base + 1); assert.deepStrictEqual(c.lastSelection, [cm.changes[0].id], "the copy stays selected");
+    void before;
+  } finally { _.setFollow(false); }
+});
+
+test("break / slice in flight: Esc before a click restores with no commit; each BREAK click breaks the tail again; Esc after one keeps them; one Break Wire step", () => {
+  const { d, c } = fresh(); _.setFollow(true);
+  try {
+    const w5 = () => ptsOf(d.items.get("w5").node), n0 = c.log.length, size0 = d.items.size;
+    c.cursor = [130.5, 48]; sch.select("w5");
+    assert.ok(sch.runAction("breakWire", c)); assert.strictEqual(c.log.length, n0, "the break is local");
+    assert.deepStrictEqual(w5(), [[127, 50.8], [130.81, 50.8]]); assert.strictEqual(d.items.size, size0 + 1);
+    sch.moveDrag(c, [130.81, 45.72]); assert.deepStrictEqual(w5(), [[127, 50.8], [130.81, 45.72]], "the corner follows the cursor");
+    sch.endDrag(c, false);
+    assert.deepStrictEqual(w5(), [[127, 50.8], [139.7, 50.8]], "Esc puts the wire back"); assert.strictEqual(d.items.size, size0); assert.strictEqual(c.log.length, n0, "no commit, so no redo either");
+    // break, click (breaks again), move, Esc: both corners kept
+    sch.select("w5"); assert.ok(sch.runAction("breakWire", c));
+    sch.moveDrag(c, [130.81, 45.72]); assert.ok(_.breakAgain(c)); assert.ok(sch.state.drag, "BREAK keeps going after a click");
+    sch.moveDrag(c, [134.62, 45.72]); sch.endDrag(c, false);
+    assert.strictEqual(c.log.length, n0 + 1); let cm = lastCommit(c); assert.strictEqual(cm.label, "Break Wire");
+    const after = (cm2) => cm2.changes.filter((x) => x.typeName === "SCH_LINE").map((x) => ptsOf(fragItem(x)));
+    assert.deepStrictEqual(after(cm), [[[127, 50.8], [130.81, 45.72]], [[130.81, 45.72], [134.62, 45.72]], [[134.62, 45.72], [139.7, 50.8]]]);
+    assert.deepStrictEqual(cm.changes.map((x) => x.kind), ["MODIFIED", "ADDED", "ADDED"]);
+    // Ctrl+Z mid-break after a click still reverts everything
+    const n1 = c.log.length; sch.select("w4"); c.cursor = [101.6, 60];
+    assert.ok(sch.runAction("breakWire", c)); sch.moveDrag(c, [95.25, 60.96]); assert.ok(_.breakAgain(c));
+    _.onKeyCapture({ key: "z", ctrlKey: true, target: null, stopImmediatePropagation() {}, preventDefault() {} });
+    assert.strictEqual(sch.state.drag, null); assert.strictEqual(c.log.length, n1); assert.deepStrictEqual(ptsOf(d.items.get("w4").node), [[101.6, 50.8], [101.6, 76.2]]);
+    // SLICE: the click finishes
+    sch.select("w4"); c.cursor = [101.6, 60]; assert.ok(sch.runAction("slice", c)); assert.strictEqual(_.breakAgain(c), false, "only BREAK breaks again");
+    sch.moveDrag(c, [101.6, 58.42]); sch.endDrag(c, true);
+    cm = lastCommit(c); assert.strictEqual(cm.label, "Slice Wire"); assert.deepStrictEqual(after(cm), [[[101.6, 50.8], [101.6, 58.42]], [[101.6, 59.69], [101.6, 76.2]]]);
+  } finally { _.setFollow(false); }
+});
+
+test("with an item on the cursor Ctrl+Y beeps and Del cancels it (TwoClickPlace / PlaceSymbol)", () => {
+  const { d, c } = fresh();
+  const key = (k, mods) => { let eaten = false; _.onKeyCapture(Object.assign({ key: k, target: null, stopImmediatePropagation() { eaten = true; }, preventDefault() {} }, mods || {})); return eaten; };
+  sch.onActivate("label", c); sch.state.carry = { kind: "label", node: _.labelNode("label", "FOO", [10, 10], 0), item: null, pos: [10, 10] };
+  assert.ok(key("y", { ctrlKey: true }), "redo is swallowed"); assert.ok(sch.state.carry, "the label stays on the cursor");
+  assert.ok(key("Delete")); assert.strictEqual(sch.state.carry, null, "Del drops it"); void d;
+  sch.onActivate("select", c);
+});
+
+test("a new wire, bus or graphic line inherits the stroke of the line it starts on (startSegments duplicates GetLine) and merges with it", () => {
+  const { d, c } = fresh();
+  const w = K.createItem(d, ["wire", ["pts", ["xy", 50.8, 30.48], ["xy", 63.5, 30.48]], ["stroke", ["width", 0], ["type", "solid"]], ["uuid", "ws"]]);
+  sch.onActivate("wire", c); sch.onPointerDown(ev(), [50.8, 30.48], c); sch.onPointerDown(ev(), [45.72, 30.48], c); sch.onKey("Enter", {}, c);
+  const cm = lastCommit(c); assert.strictEqual(cm.label, "Draw Wires");
+  assert.strictEqual(cm.changes.filter((x) => x.kind === "ADDED").length, 0, "the continuation merged into the solid wire");
+  assert.deepStrictEqual(ptsOf(d.items.get("ws").node).map((p) => p[0]).sort((a, b) => a - b), [45.72, 63.5]); void w;
+  const g = K.createItem(d, ["polyline", ["pts", ["xy", 50.8, 20.32], ["xy", 63.5, 20.32]], ["stroke", ["width", 0.254], ["type", "dash"], ["color", 255, 0, 0, 1]], ["uuid", "gl"]]);
+  sch.onActivate("lines", c); sch.onPointerDown(ev(), [63.5, 20.32], c); sch.onPointerDown(ev(), [63.5, 12.7], c); sch.onKey("Enter", {}, c);
+  const add = lastCommit(c).changes.find((x) => x.kind === "ADDED"); assert.ok(add);
+  assert.deepStrictEqual(kid(fragItem(add), "stroke"), ["stroke", ["width", 0.254], ["type", "dash"], ["color", 255, 0, 0, 1]], "dashed red line continued as such"); void g;
+  assert.strictEqual(_.sourceLine(d, "wire", [10, 10]), null);
+  sch.onActivate("select", c);
+});
+
+test("a hidden global power pin shows the dangling indicator; a local power symbol's does not (SCH_PAINTER / SCH_PIN::IsGlobalPower)", () => {
+  const sheet = SHEET.replace("  )\n  (junction", `    (symbol "power:GND" (power) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (property "Reference" "#PWR" (at 0 -6.35 0) (hide yes) (effects (font (size 1.27 1.27))))
+      (property "Value" "GND" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+      (symbol "GND_1_1" (pin power_in line (at 0 0 270) (length 0) (hide yes) (name "GND" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))
+    (symbol "power:LGND" (power local) (pin_names (offset 0)) (exclude_from_sim no) (in_bom yes) (on_board yes)
+      (property "Reference" "#PWR" (at 0 -6.35 0) (hide yes) (effects (font (size 1.27 1.27))))
+      (property "Value" "LGND" (at 0 -3.81 0) (effects (font (size 1.27 1.27))))
+      (symbol "LGND_1_1" (pin power_in line (at 0 0 270) (length 0) (hide yes) (name "LGND" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))))
+  )
+  (symbol (lib_id "power:GND") (at 250 170 0) (unit 1) (uuid "pg") (property "Reference" "#PWR01" (at 250 176 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "GND" (at 250 174 0) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "pg1")))
+  (symbol (lib_id "power:LGND") (at 270 170 0) (unit 1) (uuid "pl") (property "Reference" "#PWR02" (at 270 176 0) (hide yes) (effects (font (size 1.27 1.27)))) (property "Value" "LGND" (at 270 174 0) (effects (font (size 1.27 1.27)))) (pin "1" (uuid "pl1")))
+  (junction`);
+  const d = K.parseDoc(sheet); assert.ok(d.items.get("pg") && d.items.get("pl"), "fixture parsed");
+  const list = _.danglingEnds(d);
+  assert.strictEqual(list.filter((x) => x.item.id === "pg").length, 1, "the GND pin dangles");
+  assert.strictEqual(list.filter((x) => x.item.id === "pl").length, 0, "a local power pin is not global");
+  assert.strictEqual(list.filter((x) => x.item.id === "s1").length, 2, "R1's visible pins still dangle");
+});
+
+test("text box point editor: the box cannot shrink below its text (SCH_TEXTBOX::GetMinSize)", () => {
+  const tb = ["text_box", "Hello", ["at", 10, 10, 0], ["size", 20, 10], ["margins", 0.9525, 0.9525, 0.9525, 0.9525], ["effects", ["font", ["size", 1.27, 1.27]], ["justify", "left", "top"]], ["uuid", "tb"]];
+  const [w, h] = _.textBoxMinSize(tb); assert.strictEqual(w, 0); assert.ok(h > 3.8 && h < 4.1, "one 1.27 mm line plus the margins: " + h);
+  const two = JSON.parse(JSON.stringify(tb)); two[1] = "a\nb"; assert.ok(_.textBoxMinSize(two)[1] > h + 1.9, "a second line adds an interline pitch");
+  const vert = JSON.parse(JSON.stringify(tb)); kid(vert, "at")[3] = 90; assert.ok(_.textBoxMinSize(vert)[0] > 3.8 && _.textBoxMinSize(vert)[1] === 0, "vertical text sets a minimum width");
+  const empty = JSON.parse(JSON.stringify(tb)); empty[1] = ""; assert.deepStrictEqual(_.textBoxMinSize(empty), [0, 0]);
 });
 
 test("smaller commands: break wire, symbol flags, units and body styles, reference / value prompts, datasheet", () => {
