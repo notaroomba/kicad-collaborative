@@ -197,14 +197,15 @@ export function lenField(mm: number, opts?: { ro?: boolean; key?: string; min?: 
   let cur = mm;
   const input = h("input", { type: "text", value: opts && opts.allowEmpty && !isFinite(mm) ? "" : fmtLen(mm), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
   input.addEventListener("change", () => { const v = parseLen(input.value); if (isNaN(v)) { if (opts && opts.allowEmpty && !input.value.trim()) { cur = NaN; return; } input.value = isFinite(cur) ? fmtLen(cur) : ""; return; } cur = opts && opts.min !== undefined ? Math.max(opts.min, v) : v; input.value = fmtLen(cur); });
-  return { el: input, input, get: () => { const v = parseLen(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmtLen(v) : ""; } };
+  // an untouched field gives back the value it was given, not its display rounding (0.58642 shown as 0.5864)
+  return { el: input, input, get: () => { if (isFinite(cur) && input.value === fmtLen(cur)) return cur; const v = parseLen(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmtLen(v) : ""; } };
 }
 export const unitLabel = (text?: string): HTMLElement => h("span", { class: "unit" }, text === undefined ? unitName() : text);
 export function numField(v: number, opts?: { ro?: boolean; key?: string; digits?: number }): Field<number> {
   let cur = v; const fmt = (x: number): string => trim(x.toFixed(opts && opts.digits !== undefined ? opts.digits : 6)) || "0";
   const input = h("input", { type: "text", value: fmt(v), disabled: !!(opts && opts.ro), "data-k": opts && opts.key });
   input.addEventListener("change", () => { const x = Number(input.value.replace(",", ".")); if (isNaN(x) || !input.value.trim()) input.value = fmt(cur); else { cur = x; input.value = fmt(x); } });
-  return { el: input, input, get: () => { const x = Number(input.value.replace(",", ".")); return isNaN(x) || !input.value.trim() ? cur : x; }, set(x) { cur = x; input.value = fmt(x); } };
+  return { el: input, input, get: () => { if (input.value === fmt(cur)) return cur; const x = Number(input.value.replace(",", ".")); return isNaN(x) || !input.value.trim() ? cur : x; }, set(x) { cur = x; input.value = fmt(x); } };
 }
 export function textField(v: string, opts?: { ro?: boolean; key?: string; placeholder?: string }): Field<string> {
   const input = h("input", { type: "text", value: v, disabled: !!(opts && opts.ro), "data-k": opts && opts.key, placeholder: opts && opts.placeholder });

@@ -1938,12 +1938,12 @@ test("Draw Zone / Rule Area: the properties dialog opens on a template at the fi
 
 // ---- dimension point editors (pcb_point_editor.cpp *_DIMENSION_POINT_EDIT_BEHAVIOR) and PCB_DIM_*::Update
 const DIM = (type, body, text, at, extra) => `(dimension (type ${type}) (layer "F.SilkS") (uuid "d-${type}") ${body}
-    (format (prefix "${type === "radial" ? "R " : ""}") (suffix "") (units 2) (units_format ${type === "aligned" ? 1 : 0}) (precision 4)${type === "leader" ? ' (override_value "NOTE")' : " (suppress_zeroes yes)"})
+    ${type === "center" ? "" : `(format (prefix "${type === "radial" ? "R " : ""}") (suffix "") (units 2) (units_format ${type === "aligned" ? 1 : 0}) (precision 4)${type === "leader" ? ' (override_value "NOTE")' : " (suppress_zeroes yes)"})`}
     (style (thickness 0.15) (arrow_length 1.27) (text_position_mode 0)${type === "aligned" || type === "orthogonal" ? " (arrow_direction outward) (extension_height 0.58642)" : ""}${type === "leader" ? " (text_frame 0)" : ""} (extension_offset 0.5)${type === "leader" ? "" : " (keep_text_aligned yes)"}${extra || ""})
     ${type === "center" ? "" : `(gr_text "${text}" (at ${at}) (layer "F.SilkS") (uuid "d-${type}") (effects (font (size 1 1) (thickness 0.15))))`})`;
 const DIM_FIXTURE = FIXTURE.replace(/\)\s*$/, `
-  ${DIM("aligned", "(pts (xy 0 0) (xy 20 0)) (height 3)", "20.0000 mm", "10 1.7 0")}
-  ${DIM("orthogonal", "(pts (xy 0 10) (xy 10 14)) (height 5) (orientation 0)", "10", "5 13.7 0")}
+  ${DIM("aligned", "(pts (xy 0 0) (xy 20 0)) (height 3)", "20 mm", "10 1.85 0")}
+  ${DIM("orthogonal", "(pts (xy 0 10) (xy 10 14)) (height 5) (orientation 0)", "10", "5 13.85 0")}
   ${DIM("radial", "(pts (xy 50 50) (xy 53 54)) (leader_length 3.81)", "R 5", "70 56 0")}
   ${DIM("leader", "(pts (xy 80 80) (xy 85 75))", "NOTE", "95 75 0")}
   ${DIM("center", "(pts (xy 60 60) (xy 61 61))")}
@@ -2003,4 +2003,30 @@ test("dimension point editor: handles per type, and each drag as UpdateItem does
   // centre: the arm keeps to 45°
   n = P.editPointNode(node("center"), "dimension", "end", [63, 60.4], [63, 60.4]); assert.deepEqual(xy(n), [[60, 60], [63, 60]]);
   assert.equal(K.kid(n, "gr_text"), null, "a centre mark has no text");
+});
+
+test("Dimension Properties: the dialog's values round-trip, and OK re-derives the text as updateDimensionFromDialog + Update()", () => {
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "dimension.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; globalThis.window = globalThis.window || globalThis; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require);
+  const D = mod.exports, doc = K.parseDoc(DIM_FIXTURE, "kicad_pcb"), node = (t) => doc.items.get("d-" + t).node;
+  const v = D.dimDialogValues(node("aligned"));
+  assert.equal(v.value, "20"); assert.equal(v.arbitrary, false); assert.equal(v.unitsFormat, 1); assert.equal(v.autoThickness, false); assert.equal(v.textThick, 0.15);
+  assert.equal(K.serialize(D.applyDimDialog(node("aligned"), v)), K.serialize(node("aligned")), "OK without changes writes the same node");
+  let n = D.applyDimDialog(node("aligned"), { ...v, unitsMode: 1, unitsFormat: 2, precision: 1, prefix: "L=" });
+  assert.equal(K.str(K.kid(n, "gr_text")[1]), "L=787.4 (mils)");
+  assert.ok(K.serialize(K.kid(n, "format")).includes('(prefix "L=") (suffix "") (units 1) (units_format 2) (precision 1) (suppress_zeroes yes)'));
+  n = D.applyDimDialog(node("aligned"), { ...v, arbitrary: true, value: "TBD" });
+  assert.equal(K.str(K.kid(n, "gr_text")[1]), "TBD mm"); assert.ok(K.serialize(n).includes('(override_value "TBD")'), "Arbitrary keeps its text as the override");
+  n = D.applyDimDialog(node("aligned"), { ...v, posMode: 2, textX: 3, textY: 9, keepAligned: false, angle: -90, autoThickness: true, bold: true, hJustify: "left", arrowInward: true, layer: "F.Fab" });
+  const at = K.kid(K.kid(n, "gr_text"), "at"); assert.deepEqual([K.num(at[1]), K.num(at[2]), K.num(at[3])], [3, 9, 270], "manual position, the angle normalised");
+  const s = K.serialize(n);
+  assert.ok(s.includes("(text_position_mode 2)") && s.includes("(arrow_direction inward)") && !s.includes("keep_text_aligned"), s);
+  assert.ok(/\(font \(size 1 1\) \(bold yes\)\)/.test(s) && s.includes("(justify left)"), "auto thickness drops (thickness); bold and the justification");
+  assert.equal((s.match(/\(layer "F\.Fab"\)/g) || []).length, 2, "the item and its text move layer together");
+  const lv = D.dimDialogValues(node("leader")); assert.equal(lv.value, "NOTE");
+  n = D.applyDimDialog(node("leader"), { ...lv, value: "SEE NOTE 2", textFrame: 1 });
+  assert.equal(K.str(K.kid(n, "gr_text")[1]), "SEE NOTE 2"); assert.ok(K.serialize(n).includes("(text_frame 1)"));
+  const cv = D.dimDialogValues(node("center")); n = D.applyDimDialog(node("center"), { ...cv, lineThickness: 0.3 });
+  assert.ok(!K.kid(n, "format") && !K.kid(n, "gr_text") && K.serialize(K.kid(n, "style")).includes("(thickness 0.3)"), "a centre mark has style only");
 });

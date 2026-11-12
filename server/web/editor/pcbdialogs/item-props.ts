@@ -4,8 +4,9 @@
 //   (DIALOG_SHAPE_PROPERTIES) and Footprint Properties (DIALOG_FOOTPRINT_PROPERTIES).
 // Each edits a copy of the item's node and stores it as one MODIFIED change on OK.  KDialogs.openItem asks
 // pcbItemDialog first and falls back to the generic property sheet for the kinds not handled here (pads
-// keep pcb-tools' Pad Properties, dimensions and rule areas the property sheet).
+// keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
 import { box, checkField, form, grid, h, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { dimensionDialog } from "./dimension";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -526,6 +527,7 @@ export function pcbItemDialog(ctx: ToolCtx, item: KItem): boolean {
     case "gr_text": return textDialog(ctx, item);
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return shapeDialog(ctx, item);
     case "footprint": return footprintDialog(ctx, item);
+    case "dimension": return dimensionDialog(ctx, item);
     default: return false;
   }
 }
