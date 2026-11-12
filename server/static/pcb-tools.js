@@ -54,6 +54,7 @@ const S = {
   showRatsnest: true, localRatsnest: false, hiddenNets: new Set(), rats: null, ratsDirty: true,   // ratsnest display (KiCad shows it by default)
   settings: null, settingsSrc: null, settingsCache: null, highlightNet: null,
   docVer: 0, rworld: null, nlc: null, violations: null,   // the router's caches (per document change) and the obstacles shown in violation
+  tune: { pattern: null, picker: null, cursor: null },   // the length tuner: the pattern being placed, the track under the cursor
 };
 let lastCtx = null, domReady = false;
 
@@ -2113,6 +2114,536 @@ function drawDpRoute(c, ctx, px) {
   }
   if (rt.ratline && S.showRatsnest) { c.globalAlpha = 1; c.strokeStyle = RATSNEST_LEAD; c.lineWidth = 1 * px; for (const r of rt.ratline) line(c, r[0], r[1]); }
 }
+// ---------------------------------------------------------------- length tuning (PNS::MEANDER_PLACER, MEANDER_SHAPE, PCB_TUNING_PATTERN)
+// Tune Length of a Single Track (7): the router's meander placer, ported from pns_meander.cpp /
+// pns_meander_placer.cpp / pns_meander_placer_base.cpp in KiCad's internal units (nm) so the amplitude steps, the
+// corner radii and the length tolerances land where pcbnew's do.  The first click anchors the pattern on a track,
+// the cursor drags its end along the track (the side it is on picks the side the meanders go), the second click
+// commits "Tune": the line rebuilt with its meanders and a (generated (type tuning_pattern) …) holding them.
+const TUNE_IU = 1e6;
+const LENGTH_UNCONSTRAINED = 1e6 * TUNE_IU, DEFAULT_LENGTH_TOLERANCE = 0.1 * TUNE_IU, LENGTH_TARGET_TOLERANCE = 20;
+const DELAY_UNCONSTRAINED_MM = 1e6;   // DELAY_UNCONSTRAINED (1e6 ps · IU_PER_PS) as set_iu writes it (÷ IU_PER_MM)
+const MT_SINGLE = 1, MT_START = 2, MT_FINISH = 3, MT_TURN = 4, MT_CHECK_START = 5, MT_CHECK_FINISH = 6, MT_CORNER = 7, MT_ARC = 8, MT_EMPTY = 9;
+const TUNED = "tuned", TOO_SHORT = "too_short", TOO_LONG = "too_long";
+const TUNE_MSG_INSIDE = "Unable to tune segments inside other tuning patterns.";
+const TUNE_MSG_SELECT = "Select a track to tune first.";
+const TUNE_MSG_PICK = "Please select a track whose length you want to tune.";
+const TUNE_STATUS_TEXT = { [TOO_LONG]: "too long", [TOO_SHORT]: "too short", [TUNED]: "tuned" };
+/** MEANDER_SETTINGS() */
+function meanderDefaults() {
+  const st = { minAmp: 200000, maxAmp: 1000000, step: 50000, spacing: 600000, crPct: 80, round: true, singleSided: false, initialSide: -1,
+    target: null, overrideCustomRules: false, keepEndpoints: false };
+  setTargetLength(st, LENGTH_UNCONSTRAINED); return st;
+}
+/** MEANDER_SETTINGS::SetTargetLength */
+function setTargetLength(st, opt) {
+  st.target = opt === LENGTH_UNCONSTRAINED ? { min: 0, opt, max: opt } : { min: opt - DEFAULT_LENGTH_TOLERANCE, opt, max: opt + DEFAULT_LENGTH_TOLERANCE };
+}
+const tuneCopy = (st) => Object.assign({}, st, { target: Object.assign({}, st.target) });
+// vectors in IU (doubles; KiCad's VECTOR2D turtle) — the y axis points down as on the board
+const vsubI = vsub;
+const vlen = (a) => Math.hypot(a[0], a[1]);
+const vresize = (a, l) => { const n = vlen(a); return n ? [a[0] * l / n, a[1] * l / n] : [0, 0]; };
+const vperp = (a) => [-a[1], a[0]];                         // VECTOR2::Perpendicular
+const vrot = (a, cw) => cw ? [a[1], -a[0]] : [-a[1], a[0]];   // RotatePoint by ANGLE_90 (cw) / -ANGLE_90
+const veq = (a, b) => Math.abs(a[0] - b[0]) < 0.5 && Math.abs(a[1] - b[1]) < 0.5;
+/** SEG::Side: the sign of (B - A) × (P - A). */
+const segSide = (s, p) => { const d = (s.B[0] - s.A[0]) * (p[1] - s.A[1]) - (s.B[1] - s.A[1]) * (p[0] - s.A[0]); return d < 0 ? -1 : d > 0 ? 1 : 0; };
+/** SEG::LineProject: the point's projection onto the segment's line. */
+function lineProject(s, p) { const d = vsubI(s.B, s.A), l2 = d[0] * d[0] + d[1] * d[1]; if (!l2) return s.A.slice(); const t = ((p[0] - s.A[0]) * d[0] + (p[1] - s.A[1]) * d[1]) / l2; return [s.A[0] + d[0] * t, s.A[1] + d[1] * t]; }
+/** SEG::ApproxParallel( aSeg, 1 ) */
+function approxParallel(s, o) {
+  const p = s.A[1] - s.B[1], q = s.B[0] - s.A[0], r = -p * s.A[0] - q * s.A[1], n = Math.hypot(p, q); if (!n) return true;
+  return Math.abs((p * o.A[0] + q * o.A[1] + r) / n - (p * o.B[0] + q * o.B[1] + r) / n) <= 1;
+}
+// SHAPE_LINE_CHAIN with arcs: [{ p }, { p, m }] — a node with m is reached from the one before along an arc through m
+function chAppend(ch, p) { if (ch.length && veq(ch[ch.length - 1].p, p)) return; ch.push({ p: p.slice() }); }
+function chAppendChain(ch, o) { o.forEach((n, i) => { if (!i || !n.m) chAppend(ch, n.p); else ch.push({ p: n.p.slice(), m: n.m.slice() }); }); }
+function chLength(ch) {
+  let L = 0;
+  for (let i = 1; i < ch.length; i++) {
+    const a = ch[i - 1].p, b = ch[i].p, m = ch[i].m;
+    if (m) { const c = K.arcFrom3(a, m, b); if (c) { L += arcLength(c); continue; } }
+    L += Math.hypot(b[0] - a[0], b[1] - a[1]);
+  }
+  return L;
+}
+/** The chain as points (arcs flattened to 10° steps): what collision checks walk. */
+function chPoints(ch) {
+  const out = [];
+  ch.forEach((n, i) => {
+    if (i && n.m) {
+      const a = ch[i - 1].p, c = K.arcFrom3(a, n.m, n.p);
+      if (c) { let sw = c.anticlockwise ? c.a0 - c.a1 : c.a1 - c.a0; sw = ((sw % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI); const k = Math.max(2, Math.ceil(sw / (Math.PI / 18)));
+        for (let j = 1; j < k; j++) { const t = c.a0 + (c.anticlockwise ? -1 : 1) * sw * j / k; out.push([c.x + c.r * Math.cos(t), c.y + c.r * Math.sin(t)]); } }
+    }
+    out.push(n.p);
+  });
+  return out;
+}
+function chMirror(ch, P, dir) {
+  const s = { A: P, B: vadd(P, dir) };
+  const m = (p) => { const q = lineProject(s, p); return [2 * q[0] - p[0], 2 * q[1] - p[1]]; };
+  return ch.map((n) => n.m ? { p: m(n.p), m: m(n.m) } : { p: m(n.p) });
+}
+/** SHAPE_LINE_CHAIN::Simplify: duplicate and collinear points out, arcs kept. */
+function chSimplify(ch) {
+  const out = [];
+  for (const n of ch) {
+    if (out.length && !n.m && veq(out[out.length - 1].p, n.p)) continue;
+    if (out.length >= 2 && !n.m && !out[out.length - 1].m) {
+      const a = out[out.length - 2].p, b = out[out.length - 1].p, c = n.p;
+      const cr = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+      if (Math.abs(cr) / Math.max(1, Math.hypot(c[0] - a[0], c[1] - a[1])) < 1 && (b[0] - a[0]) * (c[0] - b[0]) + (b[1] - a[1]) * (c[1] - b[1]) >= 0) { out[out.length - 1] = { p: c.slice() }; continue; }
+    }
+    out.push(n.m ? { p: n.p.slice(), m: n.m.slice() } : { p: n.p.slice() });
+  }
+  return out;
+}
+
+/** MEANDER_SHAPE */
+function newShape(pl, width) { return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset: 0 }; }
+const shapeCopy = (m) => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)) });
+const isMeanderType = (t) => t === MT_SINGLE || t === MT_START || t === MT_FINISH || t === MT_TURN;
+/** MEANDER_SHAPE::spacing */
+const shapeSpacing = (m) => Math.max(m.width + m.pl.clearance, m.pl.st.spacing);
+/** MEANDER_SHAPE::MinAmplitude */
+function minAmplitude(m) {
+  const st = m.pl.st;
+  if (st.round) return Math.max(st.minAmp, Math.abs(m.offset) + m.width);
+  return Math.max(st.minAmp, Math.abs(m.offset) + Math.trunc(m.width * Math.tan(1 - Math.tan(Math.PI / 8))));
+}
+/** MEANDER_SHAPE::cornerRadius */
+function cornerRadius(m) {
+  if (m.amp === 0) return 0;
+  const st = m.pl.st;
+  const minCr = st.round ? Math.abs(m.offset) + Math.trunc(m.width / 2) : Math.abs(m.offset) + Math.trunc(m.width / 2 * (1 - Math.tan(Math.PI / 8)));
+  const maxCr = Math.min(Math.trunc((m.amp + Math.abs(m.offset)) / 2), Math.trunc(shapeSpacing(m) / 2));
+  if (maxCr < minCr) return maxCr;
+  const optCr = Math.trunc(shapeSpacing(m) * st.crPct / 200);
+  return Math.min(Math.max(optCr, minCr), maxCr);
+}
+/** MEANDER_SHAPE::genMeanderShape (with start / forward / turn / miter / uShape / makeMiterShape) */
+function genMeanderShape(m, P, dir, side, type, baseOffset) {
+  let cr = cornerRadius(m), offset = baseOffset; const spc = shapeSpacing(m), amplitude = m.amp, tbl = m.targetBaseLen;
+  if (side) offset *= -1;
+  const dub = vresize(dir, offset), dvb = vperp(dub);
+  if (2 * cr > amplitude + Math.abs(offset)) cr = Math.trunc((amplitude + Math.abs(offset)) / 2);
+  if (2 * cr > spc) cr = Math.trunc(spc / 2);
+  if (cr - offset < 0) cr = offset;
+  m.meanCr = cr;
+  const sCorner = cr - offset, uCorner = cr + offset, startSide = amplitude - 2 * cr + Math.abs(offset), turnSide = amplitude - cr;
+  let top = spc - 2 * cr;
+  let lc = [], pos, cur;
+  const start = (w, d) => { lc = [{ p: w.slice() }]; pos = w.slice(); cur = d.slice(); };
+  const forward = (len) => { if (len < 5) return; pos = vadd(pos, vresize(cur, len)); chAppend(lc, pos); };
+  const turn = (cw) => { cur = vrot(cur, cw); };
+  const miter = (r, s) => {
+    if (r <= 0) { turn(s); return; }
+    const u = vresize(cur, r), v = vperp(u), sv = s ? -1 : 1;
+    const end = vadd(vadd(pos, u), vmul(v, sv));
+    if (m.pl.st.round) {
+      const c = vadd(pos, vmul(v, sv)); const mid = vadd(c, vmul(vadd(vsubI(pos, c), vsubI(end, c)), Math.SQRT1_2));
+      chAppend(lc, pos); lc.push({ p: end, m: mid });
+    } else { chAppend(lc, pos); chAppend(lc, end); }
+    pos = end; turn(s);
+  };
+  const uShape = (sides, corner, t) => { forward(sides); miter(corner, true); forward(t); miter(corner, true); forward(sides); };
+  start(vadd(P, dvb), dir);
+  switch (type) {
+  case MT_EMPTY: chAppend(lc, vadd(vadd(P, dvb), dir)); break;
+  case MT_START:
+    if (tbl) top = Math.max(top, tbl - sCorner - uCorner * 2 + offset);
+    miter(sCorner, false); uShape(startSide, uCorner, top); forward(Math.min(sCorner, uCorner)); forward(Math.abs(offset)); break;
+  case MT_FINISH:
+    if (tbl) top = Math.max(top, tbl - cr - spc);
+    start(vsubI(P, dub), dir); turn(false); forward(Math.min(sCorner, uCorner)); forward(Math.abs(offset));
+    uShape(startSide, uCorner, top); miter(sCorner, false);
+    chAppend(lc, vadd(vadd(P, dvb), vresize(dir, tbl >= spc + cr ? tbl : 2 * spc - cr))); break;
+  case MT_TURN:
+    if (tbl) top = Math.max(top, tbl - uCorner * 2 + offset * 2);
+    start(vsubI(P, dub), dir); turn(false); forward(Math.abs(offset)); uShape(turnSide, uCorner, top); forward(Math.abs(offset)); break;
+  case MT_SINGLE:
+    if (tbl) top = Math.max(top, Math.trunc((tbl - sCorner * 2 - uCorner * 2) / 2));
+    miter(sCorner, false); uShape(startSide, uCorner, top); miter(sCorner, false);
+    chAppend(lc, vadd(vadd(P, dvb), vresize(dir, 2 * spc))); break;
+  default: break;
+  }
+  return side ? chMirror(lc, P, dir) : lc;
+}
+/** MEANDER_SHAPE::updateBaseSegment */
+function updateBaseSegment(m) { m.clipped = { A: lineProject(m.baseSeg, m.line[0].p), B: lineProject(m.baseSeg, m.line[m.line.length - 1].p) }; }
+const baselineLength = (m) => vlen(vsubI(m.clipped.B, m.clipped.A));
+const currentLength = (m) => chLength(m.line);
+/** MEANDER_SHAPE::Recalculate / Resize / MakeEmpty / MinTunableLength */
+function recalcShape(m) { m.line = genMeanderShape(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type, 0); updateBaseSegment(m); }
+function resizeShape(m, a) { if (a < 0) return; m.amp = Math.max(a, minAmplitude(m)); recalcShape(m); }
+function makeEmpty(m) { updateBaseSegment(m); const d = vsubI(m.clipped.B, m.clipped.A); m.type = MT_EMPTY; m.amp = 0; m.line = genMeanderShape(m, m.p0, d, m.side, MT_EMPTY, 0); }
+function minTunableLength(m) { const c = shapeCopy(m); c.targetBaseLen = baselineLength(m); resizeShape(c, minAmplitude(c)); return currentLength(c); }
+/** MEANDER_SHAPE::Fit */
+function fitShape(m, type, seg, P, side) {
+  const st = m.pl.st;
+  if (type === MT_CHECK_START || type === MT_CHECK_FINISH) {
+    const prim1 = type === MT_CHECK_START ? MT_START : MT_TURN, prim2 = type === MT_CHECK_START ? MT_TURN : MT_FINISH;
+    const m1 = newShape(m.pl, m.width), m2 = newShape(m.pl, m.width);
+    const c1 = fitShape(m1, prim1, seg, P, side); const c2 = c1 && fitShape(m2, prim2, seg, m1.clipped.B, !side);
+    if (c1 && c2) { Object.assign(m, shapeCopy(m1)); m.type = prim1; m.p0 = P.slice(); m.side = side; updateBaseSegment(m); return true; }
+    return false;
+  }
+  const minAmpl = minAmplitude(m), maxAmpl = Math.max(st.maxAmp, minAmpl), minCr = Math.trunc(m.width / 2);
+  for (let ampl = maxAmpl; ampl >= minAmpl; ampl -= st.step) {
+    m.amp = ampl;
+    m.line = genMeanderShape(m, P, vsubI(seg.B, seg.A), side, type, 0);
+    m.type = type; m.baseSeg = { A: seg.A.slice(), B: seg.B.slice() }; m.p0 = P.slice(); m.side = side;
+    updateBaseSegment(m);
+    if (m.meanCr < minCr) continue;   // nearly square corners (issue #8629)
+    if (m.pl.checkFit(m)) return true;
+  }
+  return false;
+}
+/** MEANDERED_LINE */
+function newMLine(pl, width) { return { pl, width, meanders: [], last: [0, 0] }; }
+function mlAddCorner(L, a) { const m = newShape(L.pl, L.width); m.type = MT_CORNER; m.line = [{ p: a.slice() }]; m.clipped = { A: a.slice(), B: a.slice() }; L.last = a.slice(); L.meanders.push(m); }
+function mlAddMeander(L, m) { L.last = m.clipped.B.slice(); L.meanders.push(shapeCopy(m)); }
+/** MEANDERED_LINE::CheckSelfIntersections */
+function checkSelfIntersections(L, shape, clearance) {
+  let pts = null;
+  for (let i = L.meanders.length - 1; i >= 0; i--) {
+    const m = L.meanders[i]; if (m.type === MT_EMPTY || m.type === MT_CORNER) continue;
+    if (approxParallel(shape.clipped, m.clipped)) continue;
+    pts = pts || chPoints(shape.line); const mp = chPoints(m.line);
+    for (let j = mp.length - 2; j >= 0; j--) for (let k = 0; k + 1 < pts.length; k++) if (segSegDist(pts[k], pts[k + 1], mp[j], mp[j + 1]) < clearance) return false;
+  }
+  return true;
+}
+/** MEANDERED_LINE::MeanderSegment */
+function meanderSegment(L, base, aSide) {
+  const st = L.pl.st, baseLen = vlen(vsubI(base.B, base.A)), singleSided = st.singleSided, dir = vsubI(base.B, base.A);
+  let side = aSide;
+  mlAddCorner(L, base.A);
+  let turning = false, started = false;
+  L.last = base.A.slice();
+  for (let guard = 0; guard < 100000; guard++) {
+    const m = newShape(L.pl, L.width);
+    const thr = shapeSpacing(m); let fail = false;
+    let remaining = baseLen - vlen(vsubI(L.last, base.A));
+    const flipInitialSide = () => { L.pl.st.initialSide = -L.pl.st.initialSide; };
+    const addSingleIfFits = () => {
+      fail = true;
+      if (fitShape(m, MT_SINGLE, base, L.last, side)) { mlAddMeander(L, m); fail = false; started = false; }
+      if (fail && !singleSided && fitShape(m, MT_SINGLE, base, L.last, !side)) { if (!started) flipInitialSide(); mlAddMeander(L, m); fail = false; started = false; side = !side; }
+    };
+    if (remaining < st.step) break;
+    if (!singleSided && remaining > 3.0 * thr) {
+      if (!turning) {
+        for (let i = 0; i < 2; i++) {
+          const checkSide = i === 0 ? side : !side;
+          if (fitShape(m, MT_CHECK_START, base, L.last, checkSide)) {
+            if (!started && checkSide !== side) flipInitialSide();
+            turning = true; mlAddMeander(L, m); side = !checkSide; started = true; break;
+          }
+        }
+        if (!turning) addSingleIfFits();
+      } else {
+        if (fitShape(m, MT_CHECK_FINISH, base, L.last, side)) { fitShape(m, MT_TURN, base, L.last, side); mlAddMeander(L, m); side = !side; started = true; }
+        else { fitShape(m, MT_FINISH, base, L.last, side); started = false; mlAddMeander(L, m); turning = false; }
+      }
+    } else if (!singleSided && started) {
+      if (fitShape(m, MT_FINISH, base, L.last, side)) mlAddMeander(L, m);
+      break;
+    } else if (!turning && remaining > thr * 2.0) addSingleIfFits();
+    else fail = true;
+    remaining = baseLen - vlen(vsubI(L.last, base.A));
+    if (remaining < st.step) break;
+    if (fail) {
+      const tmp = newShape(L.pl, L.width);
+      const nextP = shapeSpacing(tmp) - 2 * cornerRadius(tmp) + st.step;
+      const pn = vadd(L.last, vresize(dir, nextP));
+      // SEG::Contains: on the segment within √3 IU
+      const q = lineProject(base, pn), t = ((pn[0] - base.A[0]) * dir[0] + (pn[1] - base.A[1]) * dir[1]) / (baseLen * baseLen || 1);
+      if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8) mlAddCorner(L, pn); else break;
+    }
+  }
+  mlAddCorner(L, base.B);
+}
+/** findAmplitudeBinarySearch / findAmplitudeForLength (pns_meander_placer_base.cpp) */
+function findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp) {
+  if (minAmp === maxAmp) return maxAmp;
+  resizeShape(copy, minAmp); const minLen = Math.trunc(currentLength(copy));
+  resizeShape(copy, maxAmp); const maxLen = Math.trunc(currentLength(copy));
+  if (minLen > targetLength || maxLen < targetLength) return 0;
+  const minError = minLen - targetLength, maxError = maxLen - targetLength;
+  if (Math.abs(minError) < LENGTH_TARGET_TOLERANCE || Math.abs(maxError) < LENGTH_TARGET_TOLERANCE) return Math.abs(minError) < Math.abs(maxError) ? minAmp : maxAmp;
+  const mid = Math.trunc((minAmp + maxAmp) / 2);
+  return findAmplitudeBinarySearch(copy, targetLength, minAmp, mid) || findAmplitudeBinarySearch(copy, targetLength, mid, maxAmp) || 0;
+}
+function findAmplitudeForLength(m, targetLength, minAmp, maxAmp) {
+  const copy = shapeCopy(m); copy.targetBaseLen = baselineLength(m);
+  const initialGuess = Math.trunc(m.amp - (currentLength(m) - targetLength) / 2);
+  if (initialGuess >= minAmp && initialGuess <= maxAmp) { resizeShape(copy, minAmp); if (Math.abs(currentLength(copy) - targetLength) < LENGTH_TARGET_TOLERANCE) return initialGuess; }
+  return findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp);
+}
+/** MEANDER_PLACER_BASE::tuneLineLength */
+function tuneLineLength(L, elongation) {
+  let maxElongation = 0, minElongation = 0, finished = false;
+  for (const m of L.meanders) {
+    if (m.type === MT_CORNER || m.type === MT_ARC) continue;
+    const end = shapeCopy(m); const endType = m.type === MT_START || m.type === MT_SINGLE ? MT_SINGLE : MT_FINISH;
+    end.type = endType; recalcShape(end);
+    const maxEndElongation = currentLength(end) - baselineLength(end);
+    if (maxElongation + maxEndElongation > elongation) {
+      if (!finished) {
+        m.type = endType; recalcShape(m);
+        if (endType === MT_SINGLE) { const endMin = minTunableLength(m) - baselineLength(m); if (minElongation + endMin >= elongation) makeEmpty(m); }
+        finished = true;
+      } else makeEmpty(m);
+    }
+    maxElongation += currentLength(m) - baselineLength(m);
+    minElongation += minTunableLength(m) - baselineLength(m);
+  }
+  let remaining = elongation, count = 0;
+  for (const m of L.meanders) if (m.type !== MT_CORNER && m.type !== MT_ARC && m.type !== MT_EMPTY) { remaining -= currentLength(m) - baselineLength(m); count++; }
+  let reductionLeft = -remaining, left = count;
+  if (reductionLeft < 0 || !left) return;
+  for (const m of L.meanders) {
+    if (m.type === MT_CORNER || m.type === MT_ARC || m.type === MT_EMPTY) continue;
+    const here = reductionLeft / left, initialLen = currentLength(m), minAmpl = minAmplitude(m);
+    let amp = findAmplitudeForLength(m, Math.trunc(initialLen - here), minAmpl, m.amp);
+    if (amp < minAmpl) amp = minAmpl;
+    m.targetBaseLen = baselineLength(m); resizeShape(m, amp);
+    reductionLeft -= initialLen - currentLength(m); left--;
+    if (!left) break;
+  }
+}
+/** SHAPE_LINE_CHAIN::Split( start, end ): the line cut at the two points nearest them, reversed when the end comes first. */
+function splitLine(pts, a, b) {
+  const near = (p) => { let best = null; for (let i = 0; i + 1 < pts.length; i++) { const q = closestOnSeg(p, pts[i], pts[i + 1]); const d = Math.hypot(q[0] - p[0], q[1] - p[1]); if (!best || d < best.d - 1e-9) best = { d, i, q }; } return best; };
+  const at = (n) => { const s = pts[n.i]; return n.i + Math.hypot(n.q[0] - s[0], n.q[1] - s[1]) / Math.max(1e-12, Math.hypot(pts[n.i + 1][0] - s[0], pts[n.i + 1][1] - s[1])); };
+  let na = near(a), nb = near(b); let P = pts;
+  if (at(na) > at(nb)) { P = pts.slice().reverse(); const ra = { i: P.length - 2 - na.i, q: na.q }, rb = { i: P.length - 2 - nb.i, q: nb.q }; na = ra; nb = rb; }
+  const pre = P.slice(0, na.i + 1).map((p) => ({ p: p.slice() })); chAppend(pre, na.q);
+  const mid = [{ p: na.q.slice() }]; for (let i = na.i + 1; i <= nb.i; i++) chAppend(mid, P[i]); chAppend(mid, nb.q);
+  const post = [{ p: nb.q.slice() }]; for (let i = nb.i + 1; i < P.length; i++) chAppend(post, P[i]);
+  return { pre, mid, post, start: na.q, end: nb.q };
+}
+/**
+ * MEANDER_PLACER::doMove: the tuned stretch from P.origin to P.end meandered toward the side the settings (or the
+ * cursor) pick, trimmed by tuneLineLength to the target.  Everything in IU.  Returns { final, tuned, status, length,
+ * hasMeanders, settings }.
+ */
+function meanderMove(P) {
+  const st = P.st;
+  const pl = { st, clearance: P.clearance, width: P.width, result: null,
+    checkFit(m) { if (P.collides && P.collides(m.line)) return false; return checkSelfIntersections(this.result, m, m.width + st.spacing); } };
+  const sp = splitLine(P.pts, P.origin, P.end);
+  const L = newMLine(pl, P.width); pl.result = L;
+  for (let i = 0; i + 1 < sp.mid.length; i++) {
+    const s = { A: sp.mid[i].p, B: sp.mid[i + 1].p };
+    const side = st.initialSide === 0 ? segSide(s, P.cursor || P.end) < 0 : st.initialSide < 0;
+    mlAddCorner(L, s.A); meanderSegment(L, s, side); mlAddCorner(L, s.B);
+  }
+  const lineLen = P.lineLength; let lastLength = lineLen, status = TUNED, hasMeanders = false;
+  let tuned = sp.mid;
+  if (lineLen > st.target.max) status = TOO_LONG;
+  else { lastLength = lineLen - chLength(sp.mid); tuneLineLength(L, st.target.opt - lineLen); }
+  if (status !== TOO_LONG) {
+    tuned = [];
+    for (const m of L.meanders) if (m.type !== MT_EMPTY) { chAppendChain(tuned, m.line); hasMeanders = hasMeanders || isMeanderType(m.type); }
+    lastLength += chLength(tuned);
+    status = lastLength > st.target.max ? TOO_LONG : lastLength < st.target.min ? TOO_SHORT : TUNED;
+  }
+  const fin = [];
+  if (st.keepEndpoints) { chAppendChain(fin, chSimplify(sp.pre)); chAppendChain(fin, chSimplify(tuned)); chAppendChain(fin, chSimplify(sp.post)); }
+  else { chAppendChain(fin, sp.pre); chAppendChain(fin, tuned); chAppendChain(fin, sp.post); }
+  return { final: st.keepEndpoints ? fin : chSimplify(fin), tuned: chSimplify(tuned), status, length: lastLength, hasMeanders, settings: st, start: sp.start, end: sp.end, baseline: sp.mid };
+}
+
+// ---- the tool (DRAWING_TOOL::PlaceTuningPattern, PCB_TUNING_PATTERN::Update / EditFinish)
+S.tuneSettings = { single: meanderDefaults() };   // BOARD_DESIGN_SETTINGS::m_SingleTrackMeanderSettings
+const tuneMode = () => "single";
+/** The track the tuner picks under the cursor: GENERAL_COLLECTOR on tracks and arcs, 5 px, the nearest centre wins. */
+function tunePick(ctx, mm) {
+  const doc = ctx.doc; const thr = 5 * (S.mmPerPx || 0.05); const active = S.layer; const hits = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "segment" && it.kind !== "arc") continue;
+    const a = pt(it.node, "start"), b = pt(it.node, "end"); if (!a || !b) continue;
+    const w = widthOf(it.node, 0.25);
+    let d, centre;
+    if (it.kind === "arc") { const m = pt(it.node, "mid"); const c = m && K.arcFrom3(a, m, b); centre = m || a; d = c ? Math.abs(Math.hypot(mm[0] - c.x, mm[1] - c.y) - c.r) : distSeg(mm[0], mm[1], a[0], a[1], b[0], b[1]); }
+    else { centre = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]; d = distSeg(mm[0], mm[1], a[0], a[1], b[0], b[1]); }
+    if (d > w / 2 + thr) continue;
+    hits.push({ it, d2: (mm[0] - centre[0]) ** 2 + (mm[1] - centre[1]) ** 2, onActive: layerOf(it.node) === active });
+  }
+  if (!hits.length) return null;
+  const pool = hits.some((h) => h.onActive) ? hits.filter((h) => h.onActive) : hits;   // GuessSelectionCandidates: the active layer first
+  pool.sort((x, y) => x.d2 - y.d2); return pool[0].it;
+}
+/** The tuning pattern a track belongs to (its parent group is a PCB_TUNING_PATTERN), or null. */
+function tuningPatternOf(doc, id) {
+  for (const it of doc.items.values()) if (it.kind === "generated" && /^tuning_pattern$/.test(K.str((K.kid(it.node, "type") || [])[1])) && K.groupMemberIds(it.node).includes(id)) return it;
+  return null;
+}
+/** PCB_TUNING_PATTERN::CreateNew + the first click: anchored on the track's nearest point. */
+function tuneBegin(ctx, item, mm) {
+  const doc = ctx.doc;
+  if (tuningPatternOf(doc, item.id)) { ctx.toast(TUNE_MSG_INSIDE); return; }
+  if (item.kind !== "segment") { ctx.toast(TUNE_MSG_PICK); return; }
+  const line = assembleLine(doc, item); if (!line) { ctx.toast(TUNE_MSG_PICK); return; }
+  if (layerOf(item.node) !== S.layer) setLayer(ctx, layerOf(item.node));   // m_frame->SetActiveLayer( pickerItem layer )
+  const a = pt(item.node, "start"), b = pt(item.node, "end"); const at = closestOnSeg(mm, a, b);
+  const s = settingsOf(ctx);
+  const st = tuneCopy(S.tuneSettings[tuneMode()]);
+  S.tune.pattern = { item: item.id, line, layer: line.layer, net: line.net, netName: netNameOf(ctx, line.net), netKey: line.netKey, width: line.width, origin: at, end: at, cursor: mm.slice(), st,
+    clearance: netClearance(s, line.netKey), lineLength: routedLength(doc, item.id), res: null };
+}
+/** PCB_TUNING_PATTERN::EditStart + Update for the pattern as it is: the side from the end, then MEANDER_PLACER::Move. */
+function tuneUpdate(ctx) {
+  const T = S.tune.pattern; if (!T) return;
+  const ln = T.line; const pts = ln.pts;
+  // the end snaps onto the line (SnapToNearestTrack on the net); the side is the cursor's against the baseline's last leg
+  let best = null; for (let i = 0; i + 1 < pts.length; i++) { const q = closestOnSeg(T.cursor, pts[i], pts[i + 1]); const d = Math.hypot(q[0] - T.cursor[0], q[1] - T.cursor[1]); if (!best || d < best.d) best = { d, q }; }
+  T.end = best.q;
+  if (peq(T.end, T.origin)) { T.res = null; return; }
+  const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
+  const sp = splitLine(pts.map(I), I(T.origin), I(T.end));
+  const last = sp.mid.length >= 2 ? { A: sp.mid[sp.mid.length - 2].p, B: sp.mid[sp.mid.length - 1].p } : null;
+  if (last && !veq(last.A, last.B)) T.st.initialSide = segSide(last, I(T.cursor)) < 0 ? -1 : 1;   // UpdateSideFromEnd
+  const st = tuneCopy(T.st); st.keepEndpoints = true;
+  const doc = ctx.doc; const O = routeObstacles(doc, settingsOf(ctx), T.netKey, T.layer);
+  const r = T.width / 2;
+  const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+  T.res = meanderMove({ pts: pts.map(I), origin: I(T.origin), end: I(T.end), cursor: I(T.cursor), st, width: Math.round(T.width * TUNE_IU), clearance: Math.round(T.clearance * TUNE_IU), lineLength: T.lineLength * TUNE_IU, collides });
+  T.st.initialSide = st.initialSide;   // flipInitialSide reaches the pattern's settings (m_settings = placer->MeanderSettings())
+}
+/** The rebuilt line's pieces in mm: [{ a, b }] and [{ a, m, b }] for arcs. */
+function tunePieces(ch) {
+  const out = []; const M = (p) => [r6(p[0] / TUNE_IU), r6(p[1] / TUNE_IU)];
+  for (let i = 1; i < ch.length; i++) { const a = M(ch[i - 1].p), b = M(ch[i].p); if (peq(a, b)) continue; out.push(ch[i].m ? { a, m: M(ch[i].m), b } : { a, b }); }
+  return out;
+}
+const sexprQ = (s) => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+const fmtG = (v) => { const x = +(+v).toPrecision(10); return String(x === 0 ? 0 : x); };
+/** PCB_TUNING_PATTERN's (generated …) node, its properties in STRING_ANY_MAP (alphabetical) order as PCB_IO_KICAD_SEXPR writes them. */
+function tuningPatternNode(T, res, members) {
+  const st = res.settings; const mm = (v) => fmtG(v / TUNE_IU); const xy = (p) => `(xy ${fmtG(p[0])} ${fmtG(p[1])})`;
+  const base = res.baseline.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
+  const side = st.initialSide < 0 ? "left" : st.initialSide > 0 ? "right" : "default";
+  const yn = (b) => b ? "yes" : "no";
+  const props = [
+    `(base_line (pts ${base.map(xy).join(" ")}))`, `(corner_radius_percent ${st.crPct})`, `(end ${xy(base[base.length - 1])})`,
+    `(initial_side ${sexprQ(side)})`, `(is_time_domain no)`, `(last_diff_pair_gap ${fmtG(T.dpGap)})`, `(last_netname ${sexprQ(T.netName || "")})`,
+    `(last_status ${sexprQ(res.status)})`, `(last_track_width ${fmtG(T.width)})`, `(last_tuning_length ${mm(res.length)})`,
+    `(max_amplitude ${mm(st.maxAmp)})`, `(min_amplitude ${mm(st.minAmp)})`, `(min_spacing ${mm(st.spacing)})`, `(origin ${xy(base[0])})`,
+    `(override_custom_rules ${yn(st.overrideCustomRules)})`, `(rounded ${yn(st.round)})`, `(single_sided ${yn(st.singleSided)})`,
+    `(target_delay ${fmtG(DELAY_UNCONSTRAINED_MM)})`, `(target_delay_max ${fmtG(DELAY_UNCONSTRAINED_MM)})`, `(target_delay_min 0)`,
+    `(target_length ${mm(st.target.opt)})`, `(target_length_max ${mm(st.target.max)})`, `(target_length_min ${mm(st.target.min)})`,
+    `(target_skew 0)`, `(target_skew_max ${mm(DEFAULT_LENGTH_TOLERANCE)})`, `(target_skew_min ${mm(-DEFAULT_LENGTH_TOLERANCE)})`,
+    `(tuning_mode ${sexprQ("single")})`,
+  ];
+  const text = `(generated (uuid ${sexprQ(K.newUuid())}) (type tuning_pattern) (name "Tuning Pattern") (layer ${sexprQ(T.layer)}) ${props.join(" ")} (members ${members.slice().sort().map(sexprQ).join(" ")}))`;
+  return K.parse(text);
+}
+/** Is a point inside the pattern's outline (getOutline: the baseline grown by the clamped max amplitude + half the width)? */
+function inTuneOutline(T, res, p) {
+  const st = res.settings; const minA = st.round ? T.width : T.width * Math.tan(1 - Math.tan(Math.PI / 8));
+  const amp = Math.max(st.maxAmp / TUNE_IU, minA) + T.width / 2 + 0.0005;   // + the DRC epsilon
+  const base = res.baseline.map((n) => [n.p[0] / TUNE_IU, n.p[1] / TUNE_IU]);
+  for (let i = 0; i + 1 < base.length; i++) if (distSeg(p[0], p[1], base[i][0], base[i][1], base[i + 1][0], base[i + 1][1]) <= amp) return true;
+  return false;
+}
+/** The second click: EditStart / Update / EditFinish in one commit ("Tune"), or KiCad's warning when nothing meanders. */
+function tuneFinish(ctx) {
+  const T = S.tune.pattern; if (!T) return; tuneUpdate(ctx); const res = T.res;
+  if (!res) return;
+  if (!res.hasMeanders) {
+    S.tune.pattern = null; S.tune.picker = null;
+    ctx.toast(`No tuning pattern added: no meanders were needed or would fit (${TUNE_STATUS_TEXT[res.status]}).`); ctx.requestRender(); return;
+  }
+  const doc = ctx.doc; const changes = [], members = [];
+  const old = T.line.ids.map((id) => doc.items.get(id)).filter(Boolean);
+  const oldKey = new Map(); for (const it of old) { const a = pt(it.node, "start"), b = pt(it.node, "end"); oldKey.set(ptKey(a) + "|" + ptKey(b), it); oldKey.set(ptKey(b) + "|" + ptKey(a), it); }
+  const kept = new Set();
+  const scratch = Object.assign({}, doc, { items: new Map(doc.items) });
+  for (const pc of tunePieces(res.final)) {
+    const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+    if (same && !kept.has(same.id)) { kept.add(same.id); continue; }   // the line's own segments outside the meanders stay as they are
+    const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, T.net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, T.net);
+    const it = K.createItem(scratch, node); changes.push(upsertChange(it, "ADDED", T.net));
+    if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(it.id);
+  }
+  for (const it of old) if (!kept.has(it.id)) changes.unshift(removedChange(it));
+  T.dpGap = sizesOf(ctx).routeDiffPair ? sizesOf(ctx).routeDiffPair(T.netName).gap : 0.25;
+  const gen = K.createItem(scratch, tuningPatternNode(T, res, members)); changes.push(upsertChange(gen, "ADDED"));
+  S.tuneSettings[tuneMode()].initialSide = T.st.initialSide;
+  S.tune.pattern = null; S.tune.picker = null;
+  ctx.commit(changes, "Tune"); ctx.requestRender();
+}
+/** Escape / Undo / another tool with a pattern pending: EditCancel, the board untouched. */
+function tuneCancel(ctx) { if (!S.tune.pattern) return false; S.tune.pattern = null; if (ctx) ctx.requestRender(); return true; }
+/** Increase / Decrease Spacing (1 / 2), Increase / Decrease Amplitude (3 / 4): MEANDER_PLACER_BASE::SpacingStep / AmplitudeStep. */
+function tuneStep(ctx, what, sign) {
+  const T = S.tune.pattern; if (!T) { ctx.toast(TUNE_MSG_SELECT); return true; }
+  const st = T.st, keep = S.tuneSettings[tuneMode()];
+  if (what === "spacing") { st.spacing = Math.max(st.spacing + sign * st.step, Math.round(T.width * TUNE_IU) + Math.round(T.clearance * TUNE_IU)); keep.spacing = st.spacing; }
+  else { st.maxAmp = Math.max(st.maxAmp + sign * st.step, st.minAmp); keep.maxAmp = st.maxAmp; }
+  tuneUpdate(ctx); ctx.requestRender(); return true;
+}
+function tuneMove(ctx, mm) {
+  const U = S.tune;
+  if (!U.pattern) { const it = tunePick(ctx, mm); U.picker = it ? it.id : null; U.cursor = mm.slice(); return; }
+  U.pattern.cursor = mm.slice(); U.cursor = mm.slice(); tuneUpdate(ctx);
+}
+function tuneClick(ctx, mm) {
+  const U = S.tune; if (ctx.viewOnly) { ctx.toast("View-only access"); return; }
+  if (!U.pattern) { const it = U.picker && ctx.doc.items.get(U.picker) || tunePick(ctx, mm); if (it) tuneBegin(ctx, it, mm); ctx.requestRender(); return; }
+  U.pattern.cursor = mm.slice(); tuneFinish(ctx);
+}
+/** The tuner's status (TUNING_STATUS_VIEW_ITEM): the net, "current length  min  max", "Net: <length>  ---  ---". */
+function tuneStatus(ctx) {
+  const U = S.tune; const doc = ctx.doc; const units = sizeUnits();
+  let net = null, len = null;
+  if (U.pattern) { net = U.pattern.net; len = U.pattern.res ? U.pattern.res.length / TUNE_IU : U.pattern.lineLength; }
+  else if (U.picker) { const it = doc.items.get(U.picker); if (!it) return null; net = netOf(it.node); len = routedLength(doc, it.id); }
+  else return null;
+  return { scope: net && net.name ? unescapeName(net.name) : "", label: "current length", value: "Net: " + msgValue(len, units), min: "---", max: "---" };
+}
+function drawTuneStatus(c, at, px, info) {
+  const css = (name, dflt) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
+  const hs = 13 * px, fs = 12 * px, m = 6 * px, gw = 7 * px;
+  const rows = (info.scope ? 1 : 0) + 2, w = gw * 38 + 2 * m, h = rows * hs * 1.35 + m;
+  const x = at[0] + 2 * m, y = at[1] - h - 2 * m;
+  c.save(); c.globalAlpha = 1; c.fillStyle = css("--color-panel", "#2b2b2b"); c.strokeStyle = css("--color-ink", "#e0e0e0"); c.lineWidth = px;
+  c.globalAlpha = 0.9; c.fillRect(x - m, y - m, w + 2 * m, h + 2 * m); c.globalAlpha = 1; c.strokeRect(x - m, y - m, w + 2 * m, h + 2 * m);
+  c.fillStyle = css("--color-ink", "#e0e0e0"); c.textBaseline = "top"; let ty = y;
+  const cols = (a, b, d, size) => { c.font = `${size}px sans-serif`; c.fillText(a, x, ty); c.fillText(b, x + gw * 18 + m, ty); c.fillText(d, x + gw * 25 + 2 * m, ty); ty += size * 1.35; };
+  if (info.scope) { c.font = `${hs}px sans-serif`; c.fillText(info.scope, x, ty); ty += hs * 1.35; }
+  cols(info.label, "min", "max", hs); cols(info.value, info.min, info.max, fs);
+  c.restore();
+}
+/** The tuner over the board: the picked track's run highlighted, or the pattern's line with its meanders, and the status. */
+function drawTune(c, ctx, px) {
+  const U = S.tune; const doc = ctx.doc;
+  if (U.pattern && U.pattern.res) {
+    const T = U.pattern;
+    c.globalAlpha = 0.8; c.strokeStyle = saturated(color(T.layer)); c.lineWidth = T.width;
+    for (const pc of tunePieces(T.res.final)) {
+      if (pc.m) { const a = K.arcFrom3(pc.a, pc.m, pc.b); if (a) { c.beginPath(); c.arc(a.x, a.y, a.r, a.a0, a.a1, !!a.anticlockwise); c.stroke(); continue; } }
+      line(c, pc.a, pc.b);
+    }
+  } else if (!U.pattern && U.picker) {
+    c.globalAlpha = 0.9; c.strokeStyle = HL;
+    for (const id of connectedRun(doc, [U.picker])) {
+      const it = doc.items.get(id); if (!it || (it.kind !== "segment" && it.kind !== "arc")) continue;
+      const a = pt(it.node, "start"), b = pt(it.node, "end"); c.lineWidth = widthOf(it.node, 0.25);
+      if (it.kind === "arc") { const m = pt(it.node, "mid"); const arc = m && K.arcFrom3(a, m, b); if (arc) { c.beginPath(); c.arc(arc.x, arc.y, arc.r, arc.a0, arc.a1, !!arc.anticlockwise); c.stroke(); continue; } }
+      line(c, a, b);
+    }
+  }
+  const info = tuneStatus(ctx); if (info && U.cursor) drawTuneStatus(c, U.cursor, px, info);
+  c.globalAlpha = 1;
+}
+/** What the board render leaves out while the tuner shows the rebuilt line. */
+function tuneHiddenIds() { const T = S.tune && S.tune.pattern; return T && T.res ? new Set(T.line.ids) : null; }
 /** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
 function stepLayer(ctx, forward) {
   const R = sizesOf(ctx); const hidden = appGlobal(() => editorState().hiddenLayers, null);
@@ -3165,7 +3696,7 @@ function placeTextAt(ctx, at) {
     ctx.requestRender();
   });
 }
-function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); }
+function cancelOps() { if (S.drag && lastCtx && lastCtx.doc) { const D = S.drag; S.drag = null; routeUnhighlight(lastCtx, D.subs[0]); } if (S.route) { K.pcbSizes.state.endRoute(); const rt = S.route; S.route = null; if (lastCtx && lastCtx.doc) routeUnhighlight(lastCtx, rt); } S.violations = null; S.draw = null; S.drag = null; S.image = null; S.pending = null; if (S.move && lastCtx) finishSelectMove(lastCtx, false); S.move = null; if (S.pedit && lastCtx) editHandleUp(lastCtx, false); closeTextPrompt(); if (S.tune) S.tune.pattern = null; }
 
 // ================================================================ parity pass: the non-tool commands of pcbnew
 // Everything below is DOM-free geometry and node editing (the dialogs at the end are swappable) so the node
@@ -5483,6 +6014,34 @@ act("routerShoveMode", "Router Shove Mode", "", () => { setRouterSettings({ mode
 act("routerWalkaroundMode", "Router Walkaround Mode", "", () => { setRouterSettings({ mode: RM_WALK }); return true; }, Object.assign({ tip: "Switch router to walkaround mode", check: () => S.rs.mode === RM_WALK }, ROUTER_ACTION));
 act("cycleRouterMode", "Cycle Router Mode", "", () => { setRouterSettings({ mode: S.rs.mode === RM_MARK ? RM_SHOVE : S.rs.mode === RM_SHOVE ? RM_WALK : RM_MARK }); return true; }, Object.assign({ tip: "Cycle router to the next mode" }, ROUTER_ACTION));
 act("routerSettingsDialog", "Interactive Router Settings...", "", (ctx) => { if (routingDialogs.routerSettings) routingDialogs.routerSettings(ctx); else ctx.toast("Interactive Router Settings: dialogs are unavailable here"); return true; }, { menu: "Route", tip: "Open Interactive Router settings" });
+// the length tuner's settings and steps (PCB_ACTIONS::lengthTunerSettings, spacingIncrease / spacingDecrease, amplIncrease / amplDecrease)
+/** The tuner's settings in mm as the Tuning Pattern Properties dialog shows them. */
+function tuneSettingsView(st) {
+  return { targetLength: st.target.opt === LENGTH_UNCONSTRAINED ? null : st.target.opt / TUNE_IU, minAmp: st.minAmp / TUNE_IU, maxAmp: st.maxAmp / TUNE_IU, spacing: st.spacing / TUNE_IU,
+    round: st.round, crPct: st.crPct, singleSided: st.singleSided, overrideCustomRules: st.overrideCustomRules };
+}
+/** DIALOG_TUNING_PATTERN_PROPERTIES::TransferDataFromWindow onto MEANDER_SETTINGS. */
+function applyTuneSettings(st, v) {
+  setTargetLength(st, v.targetLength == null ? LENGTH_UNCONSTRAINED : Math.round(v.targetLength * TUNE_IU));
+  st.overrideCustomRules = !!v.overrideCustomRules;
+  st.minAmp = Math.round(v.minAmp * TUNE_IU); st.maxAmp = Math.round(v.maxAmp * TUNE_IU); st.spacing = Math.round(v.spacing * TUNE_IU);
+  st.round = !!v.round; st.crPct = Math.round(v.crPct); st.singleSided = !!v.singleSided;
+}
+function openTuneSettings(ctx) {
+  const mode = tuneMode(); const T = S.tune.pattern; const cur = T ? T.st : S.tuneSettings[mode];
+  if (!routingDialogs.tuning) { ctx.toast("Length Tuning Settings: dialogs are unavailable here"); return true; }
+  routingDialogs.tuning({ mode, settings: tuneSettingsView(cur) }, (v) => {
+    applyTuneSettings(S.tuneSettings[mode], v);   // StoreDefaults
+    if (S.tune.pattern) { const side = S.tune.pattern.st.initialSide; S.tune.pattern.st = tuneCopy(S.tuneSettings[mode]); S.tune.pattern.st.initialSide = side; tuneUpdate(lastCtx || ctx); }   // ApplyToolSettings, updateTuningPattern
+    (lastCtx || ctx).requestRender();
+  });
+  return true;
+}
+act("lengthTunerSettings", "Length Tuning Settings...", "Ctrl+L", (ctx) => openTuneSettings(ctx), { menu: false, tip: "Displays tuning pattern properties dialog" });
+act("spacingIncrease", "Increase Spacing", "1", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "spacing", 1) : false, { menu: false, tip: "Increase tuning pattern spacing by one step." });
+act("spacingDecrease", "Decrease Spacing", "2", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
+act("amplIncrease", "Increase Amplitude", "3", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "ampl", 1) : false, { menu: false, tip: "Increase tuning pattern amplitude by one step." });
+act("amplDecrease", "Decrease Amplitude", "4", (ctx) => S.modTool === "tunesingle" ? tuneStep(ctx, "ampl", -1) : false, { menu: false, tip: "Decrease tuning pattern amplitude by one step." });
 // handlePnSCornerModeChange: Ctrl+/ steps MITERED_45 → ROUNDED_45 → MITERED_90 → ROUNDED_90
 act("ACT_SwitchCornerModeToNext", "Track Corner Mode Switch", "", () => { setRouterSettings({ corner_mode: (S.rs.corner_mode + 1) % 4 }); return true; }, Object.assign({ tip: "Switches between sharp/rounded and 45°/90° corners when routing tracks." }, ROUTER_ACTION));
 act("ACT_SwitchCornerMode45", "Track Corner Mode 45", "", () => { setRouterSettings({ corner_mode: CM_M45 }); return true; }, Object.assign({ tip: "Switch to 45° corner when routing tracks.", check: () => S.rs.corner_mode === CM_M45 }, ROUTER_ACTION));
@@ -5681,6 +6240,7 @@ const liveSelection = () => appGlobal(() => editorState().selection, null);
 /** The first Escape: the operation in flight is cancelled, KiCad style (the next one leaves the tool).  False with none. */
 function cancelInFlight(any) {
   if (S.pedit && lastCtx) { editHandleUp(lastCtx, false); return true; }
+  if (S.tune.pattern) return tuneCancel(lastCtx);   // the first Escape drops the pattern, the next leaves the tool
   if (S.route || S.draw || S.drag || S.text || S.image || (S.move && (any || S.move.sticky))) {
     const dragTool = S.drag && S.drag.tool;
     cancelOps();
@@ -5697,6 +6257,7 @@ function cancelInFlight(any) {
  * edit_tool_move_fct.cpp / drawing_tool.cpp); Redo does nothing.  True when the action was taken here.
  */
 function undoRedoInFlight(ctx, which) {
+  if (S.tune.pattern) { if (which === "undo") tuneCancel(ctx); return true; }   // Undo drops the pattern being placed
   if (S.route) { if (which === "undo" && !ctx.viewOnly) undoRouteLeg(ctx); return true; }
   if (!(S.pedit || S.draw || S.drag || S.image || S.move)) return false;
   if (which === "undo") cancelInFlight(true);
@@ -5905,6 +6466,7 @@ function drawOverlay(c, view, ctx) {
   // route in progress (ROUTER::movePlacing): what is fixed on the route's branch, what the shove pushed, the head since
   // the last click (and the via it carries) over its clearance halo, the collisions it marks, then the leading ratsnest line
   if (S.route) drawRoute(c, ctx, px);
+  if (S.modTool === "tunesingle") drawTune(c, ctx, px);
   // drawing preview
   if (S.draw) {
     const d = S.draw; const layer = d.layer || (d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
@@ -5966,6 +6528,7 @@ function drawOverlay(c, view, ctx) {
 const TOOLS = [
   { id: "route", label: "Route track", key: "X", cursor: "crosshair", icon: '<path d="M4 18h6l4-4h6"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="14" r="1.5"/>' },
   { id: "routediff", label: "Route differential pair", key: "6", cursor: "crosshair", icon: '<path d="M3 9h7l3-3h8M3 15h7l3 3h8"/>' },
+  { id: "tunesingle", label: "Tune length of a single track", key: "7", cursor: "crosshair", icon: '<path d="M3 16h4v-6h3v6h3v-6h3v6h5"/>' },
   { id: "via", label: "Add via", key: "V", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>' },
   { id: "drag", label: "Drag track segment", key: "D", cursor: "move", icon: '<path d="M5 7h14"/><path d="M5 17h14" stroke-dasharray="2 2"/><path d="M12 9v5M9 12l3 3 3-3"/>' },
   { id: "gline", label: "Draw line", key: "Shift+L", cursor: "crosshair", icon: '<path d="M5 19L19 5"/>' },
@@ -5993,6 +6556,7 @@ const TOOLS = [
 ];
 const TOOL_HINT = { route: "Route — click to start and to fix, / posture, V via, Ctrl+/ corner mode, Backspace undo segment, End or double-click to finish, Esc to discard",
   routediff: "Route differential pair — click a pad, via or track end of a pair's net to start, click to fix, / posture, V via pair, Backspace undo segment, End or double-click to finish, Esc to discard",
+  tunesingle: "Tune length — click a track to start, move along it and click to finish; 1/2 spacing, 3/4 amplitude, Ctrl+L settings, Esc to cancel",
   via: "Via — click to place", drag: "Drag — move the mouse, click to fix", gline: "Line — click start and end; click the start point or press Enter to stop",
   grect: "Rectangle — click two corners", gcircle: "Circle — click the centre, then the radius", gtext: "Text — click where it goes",
   garc: "Arc — click the start, the end, then a point on the arc", gpoly: "Polygon — click the corners; click the first corner or press Enter to close",
@@ -6043,12 +6607,13 @@ const pcb = {
     S.pending = { ids: Array.from(ids), item: ctx.doc.items.get(ids[0]), mm: mm.slice(), client: [ev.clientX || 0, ev.clientY || 0], app: true }; return true;
   },
   /** What the canvas leaves out while it is drawn elsewhere (the lines being dragged). */
-  hiddenIds() { return routeHiddenIds() || dragHiddenIds(); },
+  hiddenIds() { return routeHiddenIds() || tuneHiddenIds() || dragHiddenIds(); },
   onActivate(t, ctx) {
     bind(ctx);
     const mine = TOOLS.some((x) => x.id === t);
     if (S.route && t !== (S.route.dp ? "routediff" : "route")) { const rt = S.route; S.route = null; routeUnhighlight(ctx, rt); }   // leaving the tool drops the unfixed leg
     S.violations = null;
+    if (t !== "tunesingle") { S.tune.pattern = null; S.tune.picker = null; }
     if (S.drag && t !== "drag") { const D = S.drag; S.drag = null; routeUnhighlight(ctx, D.subs[0]); }
     S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     S.modTool = mine ? t : null;
@@ -6061,6 +6626,7 @@ const pcb = {
     if (typeof ev.clientX === "number") S.client = [ev.clientX, ev.clientY];
     const hv = hoverPoint(ctx, mm, t === "route" || t === "routediff" || t === "via" || t === "gridorigin" || t === "drillorigin", ev); S.hover = hv;
     if (t === "route" || t === "routediff") routeClick(ctx, hv, mm);
+    else if (t === "tunesingle") tuneClick(ctx, mm);
     else if (t === "gridorigin") { sizesOf(ctx).setGridOrigin([hv.x, hv.y]); ctx.toast(`Grid origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); ctx.setTool("select"); }
     else if (t === "drillorigin") { if (!ctx.viewOnly) { sizesOf(ctx).setAuxOrigin([hv.x, hv.y]); ctx.toast(`Drill/place file origin set to ${fmtSize(hv.x, true)}, ${fmtSize(hv.y)}`); } ctx.setTool("select"); }
     else if (t === "via") placeVia(ctx, hv);
@@ -6119,6 +6685,7 @@ const pcb = {
     if (S.violations && Math.hypot(hv.x - S.violations.at[0], hv.y - S.violations.at[1]) > 0.5) S.violations = null;
     if (S.route) { S.route.cursor = [hv.x, hv.y]; updateHead(ctx); }
     if (S.drag) dragMove(ctx, mm);
+    if (t === "tunesingle") tuneMove(ctx, mm);
     if (S.draw) { S.drawRaw = [hv.x, hv.y]; S.drawCtrl = !!(ev && (ev.ctrlKey || ev.metaKey)); drawTrack(S.draw, S.drawRaw, S.drawCtrl); }
     ctx.requestRender();
   },
@@ -6166,6 +6733,9 @@ const pcb = {
     case "PageDown": return runAction("layerBottom", ctx);
     case "+": return runAction("layerNext", ctx);
     case "-": return runAction("layerPrev", ctx);
+    case "1": case "2": case "3": case "4":
+      if (S.modTool !== "tunesingle" || ev.ctrlKey || ev.metaKey || ev.altKey) return false;
+      return runAction({ 1: "spacingIncrease", 2: "spacingDecrease", 3: "amplIncrease", 4: "amplDecrease" }[k], ctx);
     case "End": if (S.route) { if (editing()) endRoute(ctx, true); return true; } return false;
     case "u": case "U": return expandSelection(ctx) || (selectionIds(ctx).size ? runAction("selectConnection", ctx) : false);   // app.js's selection goes through the action
     case "w": case "W": if (editing()) cycleWidth(ctx, shift ? -1 : 1); return true;
@@ -6296,6 +6866,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
+  meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,

@@ -359,12 +359,16 @@ function pcbRouterMenu(): CondMenu {
 }
 
 const PCB_ARC_TOOLS = ["garc"];
+const PCB_TUNING_TOOLS = ["tunesingle", "tunediff", "tuneskew"];
 /** DRAWING_TOOL's menu (pcbnew/tools/drawing_tool.cpp): the board's graphic, zone, dimension, text and via tools. */
 function pcbDrawingToolMenu(): CondMenu {
   const m = new CondMenu();
   m.item("ACTIONS::cancelInteractive", always, 1).sep(1);
   m.item("PCB_ACTIONS::clearHighlight", haveHighlight, 2).sep(haveHighlight, 2);
   m.item("PCB_ACTIONS::closeOutline", (c) => c.canClose, 200).item("ACTIONS::deleteLastPoint", (c) => c.canUndoPoint, 200).item("ACTIONS::arcPosture", tool(...PCB_ARC_TOOLS), 200);
+  const tuning = tool(...PCB_TUNING_TOOLS);
+  m.item("PCB_ACTIONS::spacingIncrease", tuning, 200).item("PCB_ACTIONS::spacingDecrease", tuning, 200).item("PCB_ACTIONS::amplIncrease", tuning, 200)
+    .item("PCB_ACTIONS::amplDecrease", tuning, 200).item("PCB_ACTIONS::lengthTunerSettings", tuning, 200);
   m.sep(500); m.sep(500);
   standardSubMenus(m);
   // BOARD_EDITOR_CONTROL::Init (the drawing tool's menu)

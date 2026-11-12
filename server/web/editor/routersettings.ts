@@ -179,6 +179,80 @@ export function openDiffPairDimensions(): void {
     } });
 }
 
+// ---------------------------------------------------------------- DIALOG_TUNING_PATTERN_PROPERTIES
+/** pcb-tools.js's MEANDER_SETTINGS as the dialog shows them (lengths in mm; targetLength null = unconstrained). */
+export interface TuneView { targetLength: number | null; minAmp: number; maxAmp: number; spacing: number; round: boolean; crPct: number; singleSided: boolean; overrideCustomRules: boolean; constraint?: string | null }
+export type TuneMode = "single" | "diff_pair" | "diff_pair_skew";
+/**
+ * The dialog's logic without the page: TransferDataToWindow (an unconstrained target shows empty, the skew tuner
+ * relabels the target, the target is editable only without a rule or with "Override custom rules") and
+ * TransferDataFromWindow (an empty target is unconstrained).
+ */
+export function tuneForm(mode: TuneMode, cur: TuneView) {
+  const v = Object.assign({}, cur);
+  return {
+    values: v,
+    targetLabel: mode === "diff_pair_skew" ? "Target Skew: " : "Target Length:",
+    delayLabel: mode === "diff_pair_skew" ? "Target Skew Delay: " : "Target Delay:",
+    targetEnabled(): boolean { return !v.constraint || v.overrideCustomRules; },
+    sourceInfo(): string | null { return v.constraint && !v.overrideCustomRules ? `(from ${v.constraint})` : null; },
+    targetText(u: string): string { return v.targetLength == null ? "" : lengthText(v.targetLength, u); },
+    setTarget(text: string, u: string): boolean {
+      if (!text.trim()) { v.targetLength = null; return true; }
+      const n = parseLength(text, u); if (isNaN(n)) return false; v.targetLength = n; return true;
+    },
+    result(): TuneView { const r = Object.assign({}, v); delete r.constraint; return r; },
+  };
+}
+/** PCB_ACTIONS::lengthTunerSettings (Ctrl+L) — "Tuning Pattern Properties". */
+export function openTuningSettings(req: { mode: TuneMode; settings: TuneView }, done: (v: TuneView) => void): void {
+  const form = tuneForm(req.mode, req.settings);
+  const u = String(E.units || "mm");
+  const unitName = u === "mil" ? "mils" : u === "in" ? "in" : "mm";
+  styles();
+  const inputs: Record<string, HTMLInputElement> = {};
+  let target: HTMLInputElement | null = null, src: HTMLElement | null = null, corner: HTMLSelectElement | null = null;
+  KD().open({ title: "Tuning Pattern Properties", width: 400,
+    build(body) {
+      const grid = h("div", { class: "dpd-grid" }); body.appendChild(grid);
+      const tl = h("span", null, form.targetLabel); target = h("input", { type: "text", value: form.targetText(u), "data-k": "target" });
+      grid.append(tl, target, h("span", null, unitName));
+      const dl = h("span", { class: "off" }, form.delayLabel), di = h("input", { type: "text", value: "", disabled: true, "data-k": "delay", title: "Time-domain tuning needs a tuning profile in Board Setup" });
+      grid.append(dl, di, h("span", { class: "off" }, "ps"));
+      const ov = checkbox("Override custom rules", form.values.overrideCustomRules, (on) => { form.values.overrideCustomRules = on; sync(); });
+      src = h("span", { class: "dpd-src" }, "");
+      body.appendChild(h("div", { style: "display:flex;gap:8px;align-items:center;margin-bottom:10px" }, ov, src));
+      const g2 = h("div", { class: "dpd-grid" }); body.appendChild(g2);
+      const row = (k: "minAmp" | "maxAmp" | "spacing", label: string, tip?: string) => {
+        const inp = h("input", { type: "text", value: lengthText(form.values[k], u), "data-k": k, title: tip }); inputs[k] = inp;
+        g2.append(h("span", { title: tip }, label), inp, h("span", null, unitName));
+      };
+      row("minAmp", "Minimum amplitude (A):"); row("maxAmp", "Maximum amplitude (A):");
+      row("spacing", "Spacing (s):", "Minimum spacing between adjacent tuning segments. The resulting spacing may be greater based on design rules.");
+      corner = h("select", { "data-k": "corner" }, h("option", { value: "0" }, "Chamfer"), h("option", { value: "1" }, "Fillet"));
+      corner.value = form.values.round ? "1" : "0";
+      g2.append(h("span", null, "Corner style:"), corner, h("span", null, ""));
+      const r = h("input", { type: "text", value: String(form.values.crPct), "data-k": "crPct" }); inputs.crPct = r;
+      g2.append(h("span", null, "Radius (r):"), r, h("span", null, "%"));
+      body.appendChild(checkbox("Single-sided", form.values.singleSided, (on) => { form.values.singleSided = on; }));
+      const sync = () => { const on = form.targetEnabled(); if (target) target.disabled = !on; tl.classList.toggle("off", !on); const s = form.sourceInfo(); if (src) { src.textContent = s || ""; src.style.display = s ? "" : "none"; } };
+      sync();
+      setTimeout(() => { if (target && !target.disabled) target.focus(); }, 0);
+    },
+    ok() {
+      if (target && !target.disabled && !form.setTarget(target.value, u)) { toast("Please enter a valid value."); target.focus(); return false; }
+      for (const k of ["minAmp", "maxAmp", "spacing"] as const) {
+        const v = parseLength(inputs[k].value, u); if (isNaN(v) || v < 0) { toast("Please enter a valid value."); inputs[k].focus(); return false; }
+        form.values[k] = v;
+      }
+      const pct = parseFloat(inputs.crPct.value); if (isNaN(pct) || pct < 0 || pct > 100) { toast("Please enter a valid value."); inputs.crPct.focus(); return false; }
+      form.values.crPct = Math.round(pct);
+      form.values.round = !!corner && corner.value === "1";
+      done(form.result());
+      return true;
+    } });
+}
+
 /** PCB_ONE_LAYER_SELECTOR — "Select Layer": the copper layers, the current one marked, the disallowed ones greyed. */
 export const pickLayer: LayerPicker = (opts, done) => {
   styles();
@@ -205,6 +279,6 @@ export const pickLayer: LayerPicker = (opts, done) => {
 /** Registers both with pcb-tools.js. */
 export function installRouterDialogs(): void {
   const api = pcbApi(); if (!api) return;
-  if (api.setRoutingDialogs) api.setRoutingDialogs({ routerSettings: openRouterSettings, diffPair: openDiffPairDimensions });
+  if (api.setRoutingDialogs) api.setRoutingDialogs({ routerSettings: openRouterSettings, diffPair: openDiffPairDimensions, tuning: openTuningSettings });
   if (api.setLayerPicker) api.setLayerPicker(pickLayer);
 }
