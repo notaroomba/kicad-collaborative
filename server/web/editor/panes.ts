@@ -1,8 +1,8 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setToggles, store } from "./appstore";
 import { refreshCrosshair } from "./crosshair";
 import { getThemeMode, initTheme, setThemeMode, subscribeTheme, toggleTheme } from "../theme";
+import type { ThemeMode } from "../theme";
 import { $ } from "./dom";
 import { filters } from "./selection";
 import { E } from "./state";
@@ -13,24 +13,24 @@ import { isSch, requestRender } from "./view";
 // Docked panes: which are open, per editor, remembered in localStorage (kui.panes.<editor>).
 export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav"];
 
-export const PANE_EDITOR_ONLY = { hier: "sch", netnav: "sch" };
+export const PANE_EDITOR_ONLY: Record<string, "sch" | "pcb" | undefined> = { hier: "sch", netnav: "sch" };
 
-export const PANE_DEFAULT_HIDDEN = { sch: ["peers", "comments", "appearance", "search", "netnav"], pcb: ["peers", "comments", "search"] };
+export const PANE_DEFAULT_HIDDEN: Record<"sch" | "pcb", string[]> = { sch: ["peers", "comments", "appearance", "search", "netnav"], pcb: ["peers", "comments", "search"] };
 
 
 export const editorId = () => (isSch() ? "sch" : "pcb");
 
-export const paneKey = (ed) => "kui.panes." + (ed || "x");
+export const paneKey = (ed: string | null | undefined) => "kui.panes." + (ed || "x");
 
-export function savedPanes(ed) { try { return JSON.parse(localStorage.getItem(paneKey(ed)) || "{}"); } catch (e) { return {}; } }
+export function savedPanes(ed: string): Record<string, boolean> { try { return JSON.parse(localStorage.getItem(paneKey(ed)) || "{}"); } catch (e) { return {}; } }
 
-export function loadPanes(ed) {
-  const saved = savedPanes(ed), out = {};
+export function loadPanes(ed: "sch" | "pcb") {
+  const saved = savedPanes(ed), out: Record<string, boolean> = {};
   for (const n of PANE_NAMES) { const allowed = !PANE_EDITOR_ONLY[n] || PANE_EDITOR_ONLY[n] === ed; out[n] = allowed && (saved[n] !== undefined ? !!saved[n] : !PANE_DEFAULT_HIDDEN[ed].includes(n)); }
   return out;
 }
 
-export function showPane(name, show) {
+export function showPane(name: string, show?: unknown) {
   const ed = editorId();
   if (!PANE_NAMES.includes(name) || (PANE_EDITOR_ONLY[name] && PANE_EDITOR_ONLY[name] !== ed)) return;
   const next = show === undefined ? !E.panes[name] : !!show;
@@ -50,7 +50,7 @@ export function applyTheme() {
 
 export { toggleTheme };
 
-export function setTheme(mode) { setThemeMode(mode); }
+export function setTheme(mode: ThemeMode) { setThemeMode(mode); }
 
 
 export function setupEditorChrome() {
@@ -60,7 +60,7 @@ export function setupEditorChrome() {
   E.panes = loadPanes(ed);
   renderModuleTools();
   store.set({ document: Object.assign({}, store.get().document, { editor: ed, docType: E.DOC_TYPE }), panes: Object.assign({}, E.panes), filter: Object.assign({}, filters[ed]) });
-  setRadio("Units", { mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" }[E.units]);
+  setRadio("Units", ({ mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" } as Record<string, string>)[E.units]);
   setRadio("Selection modes", E.selMode === "lasso" ? "selectSetLasso" : "selectSetRect");
   setRadio("Crosshair modes", E.crosshairMode === "full" ? "cursorFullCrosshairs" : E.crosshairMode === "45" ? "cursor45Crosshairs" : "cursorSmallCrosshairs");
   $("#crosshair").classList.toggle("on", E.crosshairMode !== "small");
@@ -83,11 +83,11 @@ export function syncSchModes() {
   if (!CollabTools.sch || !CollabTools.sch.state) { store.slice("viewport", { lineMode: null, dragMode: null }); return; }
   const lm = CollabTools.sch.state.lineMode;
   setRadio("Line modes", lm === "free" ? "lineModeFree" : lm === "45" ? "lineMode45" : "lineMode90");
-  store.slice("viewport", { lineMode: lm === "free" ? "free" : lm === "45" ? "45" : "90", dragMode: CollabTools.sch.state.dragMode || null });
+  store.slice("viewport", { lineMode: lm === "free" ? "free" : lm === "45" ? "45" : "90", dragMode: (CollabTools.sch.state.dragMode || null) as "move" | "drag" | null });
 }
 
 if (typeof window !== "undefined") window.addEventListener("kc:pcb-linemode", () => syncSchModes());
 
-export function setUnitsAction(u, id) { if (UNITS[u]) E.units = u; setRadio("Units", id); store.slice("viewport", { units: E.units }); }
+export function setUnitsAction(u: string, id: string) { if (UNITS[u]) E.units = u; setRadio("Units", id); store.slice("viewport", { units: E.units }); }
 
-export function setCrosshair(mode, id) { E.crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); refreshCrosshair(); }
+export function setCrosshair(mode: "small" | "full" | "45", id: string) { E.crosshairMode = mode; setRadio("Crosshair modes", id); $("#crosshair").classList.toggle("on", mode !== "small"); store.slice("viewport", { crosshair: mode }); refreshCrosshair(); }

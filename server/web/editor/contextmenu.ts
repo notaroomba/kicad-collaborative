@@ -386,7 +386,7 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
  * The "Track routing tools" toolbar group's context menu (toolbars_pcb_editor.cpp): the three router modes as check
  * items, then Interactive Router Settings, opened under the button.
  */
-export function openRouterModeMenu(at: { left: number; bottom: number } | null): void {
+export function openRouterModeMenu(at?: { left: number; bottom: number } | null): void {
   if (!E.kdoc || state.view !== "editor" || isSch()) return;
   const c = menuCtx();
   const items: CtxItem[] = [row("PCB_ACTIONS::routerHighlightMode", true, c), row("PCB_ACTIONS::routerShoveMode", true, c), row("PCB_ACTIONS::routerWalkaroundMode", true, c),
@@ -398,7 +398,7 @@ export function openRouterModeMenu(at: { left: number; bottom: number } | null):
 }
 
 /** The Arc toolbar group's menu (toolbars_pcb_editor.cpp): the three arc editing modes as check items. */
-export function openArcEditModeMenu(at: { left: number; bottom: number } | null): void {
+export function openArcEditModeMenu(at?: { left: number; bottom: number } | null): void {
   if (!E.kdoc || state.view !== "editor" || isSch()) return;
   const c = menuCtx();
   const items: CtxItem[] = ARC_EDIT_MODE_MENU.map((act) => row(act, true, c));

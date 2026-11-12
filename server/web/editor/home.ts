@@ -1,11 +1,10 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { state, store } from "./appstore";
 import { leaveEditor, openEditor } from "./doc";
 import { $$ } from "./dom";
 import { api } from "./util";
 // ---------- routing ----------
-export function navigate(path, replace) {
+export function navigate(path: string, replace?: boolean): void {
   if (replace) history.replaceState(null, "", path); else history.pushState(null, "", path);
   route();
 }
@@ -26,7 +25,7 @@ export async function loadMe() {
 
 
 // ================================================================ HOME
-export function showView(name) {
+export function showView(name: "home" | "editor"): void {
   state.view = name;
   $$(".view").forEach((v) => v.classList.toggle("active", v.id === name));
   if (name === "home") {

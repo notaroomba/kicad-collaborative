@@ -1,5 +1,4 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { state, store } from "./appstore";
 import { noteCommentMsg } from "./comments";
 import { applyChanges, renderObjects, setDocFromText } from "./doc";
@@ -9,13 +8,14 @@ import { E } from "./state";
 import { setTool } from "./tools";
 import { api, toast } from "./util";
 import { historyActive, holdViewOnly, noteEdit, onVersionsNotice } from "./versions";
+import type { ItemSummary, PendingOp, ServerError } from "./types";
 import { dragG, drawPeers, peersG, scheduleRenderRefresh } from "./view";
 // ---- websocket / presence / ops ----
-export function setConn(cls, text) { store.slice("connection", { status: cls === "live" ? "live" : cls === "err" ? "error" : "offline", text: text || (cls === "live" ? "live" : "offline") }); }
+export function setConn(cls: string, text?: string) { store.slice("connection", { status: cls === "live" ? "live" : cls === "err" ? "error" : "offline", text: text || (cls === "live" ? "live" : "offline") }); }
 
-export function setViewOnly(v) { if (holdViewOnly(v)) return; E.viewOnly = !!v; store.set({ viewOnly: E.viewOnly }); }
+export function setViewOnly(v: boolean) { if (holdViewOnly(v)) return; E.viewOnly = !!v; store.set({ viewOnly: E.viewOnly }); }
 /** The role the server says we hold on the open document: what the tools and the comment box follow. */
-export function setRole(role) {
+export function setRole(role: string | null) {
   const was = state.role;
   state.role = role;
   // While an earlier version is on screen (editor/versions.ts) the canvas stays read-only; the role is put back on leaving.
@@ -36,7 +36,7 @@ export async function connect() {
   // A cookie riding the WS upgrade is unreliable (SameSite / tracking
   // protection / proxies), so authenticate the socket with a token fetched
   // over a normal request and sent in the hello frame, like the desktop.
-  let ticket;
+  let ticket: string;
   try {
     // A guest (not signed in) has no ticket to fetch: the server lets them watch what a public
     // project or an opened share link shows.
@@ -46,7 +46,7 @@ export async function connect() {
     // Only a refused ticket means the sign-in is gone (a bad ticket would just loop; wait for a
     // reload).  A server that is down or redeploying (network error, 5xx) comes back, so retry
     // with the same backoff as a dropped socket — the desktop reconnects on its own too.
-    if (/^40[13] /.test(String(e && e.message))) { setConn("err", "sign-in expired — reload to reconnect"); return; }
+    if (/^40[13] /.test(String(e && (e as Error).message))) { setConn("err", "sign-in expired — reload to reconnect"); return; }
     const delay = Math.min(15000, 1000 * Math.pow(2, E.retries++));
     setConn("err", `reconnecting in ${Math.round(delay / 1000)}s`);
     setTimeout(() => { if (state.view === "editor" && gen === E.connectGen) connect().catch(() => {}); }, delay);
@@ -55,7 +55,7 @@ export async function connect() {
   if (gen !== E.connectGen || state.view !== "editor") return;   // the document changed while we waited
   E.wsToken = ticket;
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  let sock;
+  let sock: WebSocket;
   try { sock = new WebSocket(`${proto}://${location.host}/ws`); }
   catch (e) { setConn("err", "connection blocked (VPN or proxy?)"); return; }
   E.ws = sock;
@@ -164,7 +164,7 @@ export async function connect() {
  * and would keep applying ops on top of a document that had silently diverged.  Returns false
  * when the caller should not apply this op.
  */
-export function noteSeq(seq, sock) {
+export function noteSeq(seq: unknown, sock?: WebSocket) {
   const n = Number(seq);
   if (!n) return "apply";                            // no sequence on the wire: nothing to check
   if (E.lastSeq && n <= E.lastSeq) return "skip";     // already applied (a replayed op re-acked)
@@ -173,7 +173,7 @@ export function noteSeq(seq, sock) {
   return "apply";
 }
 
-export function requestResync(sock, force) {
+export function requestResync(sock?: WebSocket | null, force?: boolean) {
   const ws = sock || E.ws;
   if (!ws || ws.readyState !== 1 || !state.docId) return;
   if (!force && Date.now() - E.resyncAt < 3000) return;   // one request per burst, not one per dropped op
@@ -186,7 +186,7 @@ export function requestResync(sock, force) {
  * replayed forever) and ask for a fresh base, which is what puts the local document back.  A
  * refusal with no clientOpId is about the *join* — that is the one that means "view-only".
  */
-export function onOpRejected(sock, msg) {
+export function onOpRejected(sock: WebSocket, msg: ServerError) {
   if (msg.clientOpId) {
     E.pendingOps.delete(msg.clientOpId);
     if (msg.code === "permission_denied" && typeof msg.role === "string") { setRole(msg.role); setConn("live", liveLabel()); renderProps(); }
@@ -213,10 +213,10 @@ export function onOpRejected(sock, msg) {
  * The server dedups on (docId, clientId, clientOpId), so replaying an op it already has is a
  * no-op re-ack rather than a second copy.
  */
-export function replayPending(sock) {
+export function replayPending(sock?: WebSocket | null) {
   const ws = sock || E.ws;
   if (!ws || ws.readyState !== 1) return;
-  for (const [clientOpId, op] of E.pendingOps) {
+  for (const [clientOpId, op] of E.pendingOps as Map<string, PendingOp>) {
     if (op.docId !== state.docId) continue;   // kept: switching back to that sheet replays it
     ws.send(JSON.stringify({ type: "op", docId: op.docId, clientOpId, baseSeq: null, changes: op.changes }));
   }
@@ -229,11 +229,11 @@ export function replayPending(sock) {
  * (Changes are whole-item replacements, so re-applying one is idempotent.)  Without this, two people
  * editing the same item at the same moment each ended up showing the other's version.
  */
-export function reapplyPending(remote) {
+export function reapplyPending(remote: KChange[] | null | undefined) {
   if (!E.pendingOps.size || !remote || !remote.length) return;
-  const touched = new Set(); let docLevel = false;
+  const touched = new Set<string>(); let docLevel = false;
   for (const c of remote) { if (c && c.id) touched.add(String(c.id)); else docLevel = true; }
-  for (const op of E.pendingOps.values()) {
+  for (const op of (E.pendingOps as Map<string, PendingOp>).values()) {
     if (op.docId !== state.docId) continue;
     const again = (op.changes || []).filter((c) => (c && c.id ? touched.has(String(c.id)) : docLevel));
     if (again.length) applyChanges(again);
@@ -242,16 +242,16 @@ export function reapplyPending(remote) {
 
 export function bumpEdits() { store.slice("connection", { edits: E.editsSeen }); noteEdit(); }
 
-export function noteRemoteOp(msg) {
+export function noteRemoteOp(msg: { changes?: KChange[] }) {
   for (const c of msg.changes || []) {
     if (c.typeName !== E.ITEM_TYPE) continue;
-    if (c.kind === "REMOVED") { E.items = E.items.filter((f) => f.id !== c.id); E.selection.delete(c.id); if (E.selected && E.selected.id === c.id) { E.selected = null; renderProps(); } continue; }
-    const fp = E.items.find((f) => f.id === c.id);
+    if (c.kind === "REMOVED") { E.items = E.items.filter((f: ItemSummary) => f.id !== c.id); E.selection.delete(c.id); if (E.selected && E.selected.id === c.id) { E.selected = null; renderProps(); } continue; }
+    const fp: ItemSummary | undefined = E.items.find((f: ItemSummary) => f.id === c.id);
     if (!fp || c.kind !== "MODIFIED") continue;
     for (const p of c.properties || []) {
-      if (p.name === "Position X" && p.after) fp.x = p.after.v;
-      if (p.name === "Position Y" && p.after) fp.y = p.after.v;
-      if (p.name === "Orientation" && p.after) fp.rot = p.after.v;
+      if (p.name === "Position X" && p.after) fp.x = p.after.v as number;
+      if (p.name === "Position Y" && p.after) fp.y = p.after.v as number;
+      if (p.name === "Orientation" && p.after) fp.rot = p.after.v as number;
     }
     if (E.selected && E.selected.id === fp.id) renderProps();
   }
@@ -263,7 +263,7 @@ export function noteRemoteOp(msg) {
  * @param transient true for the previews streamed while a drag is in flight — the drop sends the
  *                  authoritative change, so these must not pile up in the journal or be replayed.
  */
-export function sendOp(changes, transient) {
+export function sendOp(changes: KChange[], transient?: boolean) {
   if (historyActive()) { if (!transient) toast("This is an earlier version. Leave the timeline to edit."); return; }
   const clientOpId = `web:${++E.opN}`;
   // Journal first, send second.  Anything still here when the socket comes back is replayed,

@@ -1,5 +1,4 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { updateMsgPanel } from "./msgpanel";
 import { state, store } from "./appstore";
 import { refreshCrosshair } from "./crosshair";
@@ -14,10 +13,11 @@ import { paintDocument, stats as paintStats } from "./paint";
 import { activeModule, toolCtx } from "./tools";
 import { drawAppOverlays } from "./overlays";
 import { toast } from "./util";
+import type { PeerEntry, PeerGhost } from "./types";
 // ================================================================ EDITOR
 export const stage = $("#stage"), world = $("#world"), base = $("#base"), overlay = $("#overlay");
 
-export const peersG = $("#peersG"), selG = $("#selG"), dragG = $("#dragG"), cmtG = $("#cmtG");
+export const peersG = $<SVGGElement>("#peersG"), selG = $<SVGGElement>("#selG"), dragG = $<SVGGElement>("#dragG"), cmtG = $<SVGGElement>("#cmtG");
 
 export const cmtPanel = $("#cmtPanel");
 
@@ -44,7 +44,7 @@ export const isSch = () => E.DOC_TYPE === "kicad_sch";
 
 
 // ---- canvas renderer (the document itself, mirrored from the collaboration stream) ----
-export const canvas = $("#canvas"), cctx = canvas.getContext("2d");
+export const canvas = $<HTMLCanvasElement>("#canvas"), cctx = canvas.getContext("2d")!;
 
 /** Repaint everything on the next frame (the document pass included). */
 export function requestRender() { E.renderFull = true; requestRepaint(); }
@@ -71,7 +71,7 @@ export function drawCanvas() {
   if (!E.kdoc) return; sizeCanvas();
   const ppm = stage.clientWidth / mmW();
   const view = { ppm, zoom: E.zoom, panX: E.panX, panY: E.panY, x0: mmX0(), y0: mmY0(), dpr: window.devicePixelRatio || 1 };
-  const ghosts = E.peerGhosts || [];
+  const ghosts: PeerGhost[] = E.peerGhosts || [];
   const m0 = activeModule() as { hiddenIds?: () => Set<string> | null } | null;
   const own = m0 && m0.hiddenIds ? m0.hiddenIds() : null;   // the board module's items drawn elsewhere (a router drag's lines)
   const skip = ghosts.length || own ? new Set([...ghosts.flatMap((g) => [...g.ids]), ...(own || [])]) : null;
@@ -83,9 +83,9 @@ export function drawCanvas() {
   paintDocument(E.kdoc, cctx, view, Object.assign({ hidden: E.hiddenLayers, grid: E.gridOn ? E.gridPitch : 0, selected: boardSelected(), highlight: E.highlightIds, skip: skip || undefined }, E.renderOpts), force, !!E.zoomAnim, requestRender);
   // A peer's items mid-drag: drawn where the peer has them (presence `at`), translucent, over everything else.
   if (ghosts.length) {
-    const off = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));
+    const off: HTMLCanvasElement = E.ghostCanvas || (E.ghostCanvas = document.createElement("canvas"));
     if (off.width !== canvas.width || off.height !== canvas.height) { off.width = canvas.width; off.height = canvas.height; }
-    const octx = off.getContext("2d"); const sc = view.ppm * view.zoom;
+    const octx = off.getContext("2d")!; const sc = view.ppm * view.zoom;
     for (const g of ghosts) {
       if (g.hideOnly) continue;   // a wire whose stretched shape the overlay draws instead
       octx.setTransform(1, 0, 0, 1, 0, 0); octx.clearRect(0, 0, off.width, off.height);
@@ -139,7 +139,7 @@ export function contentBoxMm() {
 
 export function fitView() { fitBox(contentBoxMm(), isSch() ? 0.97 : 0.85); }
 
-export function fitBox(box, margin) {
+export function fitBox(box: number[], margin?: number) {
   if (E.zoomAnim) { cancelAnimationFrame(E.zoomAnim.raf); E.zoomAnim = null; }
   const sw = stage.clientWidth, sh = stage.clientHeight;
   if (!sw || !sh) { setTimeout(fitView, 100); return; }
@@ -162,13 +162,13 @@ export function zoomLimits() {
   return [(lo * z1) / ppm, (hi * z1) / ppm];
 }
 
-export function zoomBy(factor, cx, cy) {
+export function zoomBy(factor: number, cx?: number, cy?: number) {
   E.viewTouched = true;
   if (cx === undefined) { cx = stage.clientWidth / 2; cy = stage.clientHeight / 2; }
   const [lo, hi] = zoomLimits();
   const next = Math.min(Math.max(hi, E.zoom), Math.max(Math.min(lo, E.zoom), E.zoom * factor));   // a view outside the range (a fit) can still zoom back in
-  E.panX = cx - (cx - E.panX) * (next / E.zoom);
-  E.panY = cy - (cy - E.panY) * (next / E.zoom);
+  E.panX = cx! - (cx! - E.panX) * (next / E.zoom);
+  E.panY = cy! - (cy! - E.panY) * (next / E.zoom);
   E.zoom = next; breakFollow(); applyView();
   // A peer following us reads `viewport` out of presence; without a send here a wheel zoom
   // (or a pan, below) never reaches them and "follow" sits a screen behind.
@@ -176,7 +176,7 @@ export function zoomBy(factor, cx, cy) {
 }
 
 
-export function worldMm(ev) {
+export function worldMm(ev: { clientX: number; clientY: number }): [number, number] {
   const r = world.getBoundingClientRect();
   return [mmX0() + ((ev.clientX - r.left) / r.width) * mmW(), mmY0() + ((ev.clientY - r.top) / r.height) * mmH()];
 }
@@ -193,7 +193,7 @@ export function visibleRectNm() {
 
 
 // ---- overlay drawing ----
-export function svgText(x, y, size, color, text) {
+export function svgText(x: number, y: number, size: number, color: string, text: string) {
   const t = document.createElementNS(NS, "text");
   t.setAttribute("x", x); t.setAttribute("y", y); t.setAttribute("fill", color); t.setAttribute("font-size", size);
   t.setAttribute("font-family", "system-ui, sans-serif"); t.setAttribute("paint-order", "stroke");
@@ -202,8 +202,8 @@ export function svgText(x, y, size, color, text) {
 }
 
 /** Our own boxes [x, y, w, h] (internal units) of the items a peer selected by id. */
-function peerBoxesOf(ids) {
-  const out = [], board = !isSch();
+function peerBoxesOf(ids: Iterable<string>) {
+  const out: number[][] = [], board = !isSch();
   for (const id of ids) {
     const it = E.kdoc.items.get(id); if (!it) continue;
     const b = it.bbox, box = board ? KiCadCanvas.boardItemBox(it, E.IU) : b ? [b[0] * E.IU, b[1] * E.IU, (b[2] - b[0]) * E.IU, (b[3] - b[1]) * E.IU] : null;
@@ -212,22 +212,22 @@ function peerBoxesOf(ids) {
   return out;
 }
 
-export function drawPeers(peers) {
+export function drawPeers(peers: Record<string, PeerEntry>) {
   peersG.replaceChildren();
-  const s = pxPerMm(), mm = (nm) => nm / E.IU;
-  const ghosts = [];
+  const s = pxPerMm(), mm = (nm: number) => nm / E.IU;
+  const ghosts: PeerGhost[] = [];
   for (const [cid, p] of Object.entries(peers)) {
     const st = p.state || {}, color = (p.user && p.user.color) || "#4477ee", name = peerName(p);
     // Items the peer is dragging: `at[i]` is where they hold selection[i]; a displacement from our copy's own
     // anchor is a live drag, drawn by drawCanvas as a ghost (one render per distinct offset).
     if (E.kdoc && Array.isArray(st.at) && Array.isArray(st.selection)) {
-      const byOff = new Map();
+      const byOff = new Map<string, PeerGhost>();
       for (let i = 0; i < st.selection.length && i < st.at.length; i++) {
         const a = st.at[i], it = E.kdoc.items.get(st.selection[i]); if (!a || !it) continue;
         const mine = anchorMm(it); if (!mine) continue;
         const dx = a[0] / E.IU - mine[0], dy = a[1] / E.IU - mine[1];
         if (Math.abs(dx) < 1e-4 && Math.abs(dy) < 1e-4) continue;
-        const key = dx.toFixed(4) + "," + dy.toFixed(4); let g = byOff.get(key); if (!g) byOff.set(key, g = { ids: new Set(), dx, dy });
+        const key = dx.toFixed(4) + "," + dy.toFixed(4); let g = byOff.get(key); if (!g) byOff.set(key, g = { ids: new Set<string>(), dx, dy });
         g.ids.add(it.id);
       }
       for (const g of byOff.values()) ghosts.push(g);
@@ -252,7 +252,7 @@ export function drawPeers(peers) {
     // fill, one union box for a multi-selection, and nothing around the items a drag pulled
     // along (attached wires, riders -- listed in `dragAdded`), only what the peer picked.
     const dragAdded = new Set(st.dragAdded || []), sel = st.selection || [];
-    let own = (st.boxes || []).filter((b, i) => !(dragAdded.size && dragAdded.has(sel[i])));
+    let own = (st.boxes || []).filter((b, i: number) => !(dragAdded.size && dragAdded.has(sel[i])));
     // a peer that names what it selected without boxes (the web at rest): outline our own copy of those items
     if (!st.boxes && sel.length && E.kdoc) own = peerBoxesOf(sel);
     if (own.length) {

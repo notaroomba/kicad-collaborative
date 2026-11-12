@@ -1,5 +1,4 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck
 /** The editor's mutable state — every former top-level `let` of the original script, referenced as E.<name>. */
 export const E: any = {
   toastN: 0,
@@ -80,4 +79,4 @@ export const E: any = {
   panes: {},
   units: "mm",
 };
-(typeof window !== "undefined" ? window : globalThis)["CollabEditor"] = E;
+((typeof window !== "undefined" ? window : globalThis) as unknown as { CollabEditor: unknown })["CollabEditor"] = E;

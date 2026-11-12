@@ -1,5 +1,4 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { installDialogs } from "../dialogs/index";
 import { installSchNets } from "./schnets";
 import "./dom";
@@ -39,6 +38,9 @@ import "./panels/index";
 import { activeModule, commitChanges, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack, unlockedForEdit } from "./tools";
 import { closePopover, toast } from "./util";
 import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
+import type { ItemSummary, SheetEntry } from "./types";
+/** The schematic module's drag in flight (sch-tools S.drag), as far as the app reads it. */
+type SchDrag = { moved?: boolean; last: number[]; kind?: string };
 import { installLibrary } from "./library";
 import { comboOf, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
@@ -47,7 +49,7 @@ window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: 
 
 // ---------- home navigation (the home view is still rendered here) ----------
 document.addEventListener("click", (ev) => {
-  const nav = ev.target.closest("#home [data-nav]");
+  const nav = (ev.target as Element).closest<HTMLElement>("#home [data-nav]");
   if (nav) { ev.preventDefault(); navigate(nav.dataset.nav === "explore" ? "/gallery" : "/"); }
 });
 
@@ -68,9 +70,11 @@ window.CollabTools = window.CollabTools || {};
  * width] per segment.  The desktop ghosts its own in-flight wires and router legs to us; without
  * this the web direction showed peers a bare cursor until the item was committed.
  */
-function moduleGhost(mod) {
+/** A tool module that streams its in-flight geometry (mm: x1, y1, x2, y2, width per segment). */
+type GhostModule = ToolModule & { ghostSegs?: (ctx: ToolCtx) => number[][] | null };
+function moduleGhost(mod: GhostModule | null | undefined) {
   if (!mod || typeof mod.ghostSegs !== "function") return null;
-  let segs = [];
+  let segs: number[][] = [];
   try { segs = mod.ghostSegs(toolCtx()) || []; } catch (e) { console.warn(e); return null; }
   return segs.map((g) => [Math.round(g[0] * E.IU), Math.round(g[1] * E.IU), Math.round(g[2] * E.IU), Math.round(g[3] * E.IU), Math.round((g[4] || 0.1) * E.IU)]);
 }
@@ -80,7 +84,7 @@ function moduleGhost(mod) {
  * list when it ends (the "stopped" signal, which bypasses the rate limit) and nothing after that.
  */
 let ghostLive = false;
-function liveGhost(mod) {
+function liveGhost(mod: GhostModule | null | undefined) {
   const g = moduleGhost(mod);
   if (g && g.length) { ghostLive = true; return g; }
   if (ghostLive) { ghostLive = false; return []; }
@@ -111,10 +115,10 @@ stage.addEventListener("contextmenu", (ev) => ev.preventDefault());
 
 stage.addEventListener("dblclick", (ev) => {
   if (!E.kdoc || !window.KDialogs || (E.tool !== "select" && E.tool !== "highlight")) return;
-  if (ev.target.closest("#cmtPanel") || ev.target.closest("[data-schtools]")) return;
+  if ((ev.target as Element).closest("#cmtPanel") || (ev.target as Element).closest("[data-schtools]")) return;
   const [x, y] = worldMm(ev); const ctx = toolCtx();
   if (!isSch() && CollabTools.pcb && CollabTools.pcb.padProperties) {       // a pad first: KiCad opens Pad Properties on a pad
-    let pad = null;
+    let pad: { item: KItem; index: number } | null = null;
     try { pad = KiCadCanvas.padAt ? KiCadCanvas.padAt(E.kdoc, x, y) : null; if (!pad && CollabTools.pcb.padAt) pad = CollabTools.pcb.padAt(E.kdoc, x, y); } catch (e) { pad = null; }
     if (pad && pad.item && pad.index !== undefined) { CollabTools.pcb.padProperties(ctx, pad.item, pad.index); return; }
     // the first click picked a track, via, graphic or zone (the board module's selection): its dialog, as pcbnew's double-click
@@ -125,13 +129,13 @@ stage.addEventListener("dblclick", (ev) => {
     const g = hitAny([x, y]); try { if (g && CollabTools.sch.enterGroupAt(ctx, g.id)) return; } catch (e) { console.warn(e); }
   }
   const f = KiCadCanvas.fieldAt(E.kdoc, x, y, E.hiddenLayers);
-  if (f) { KDialogs.openField(ctx, f.item, f.name); return; }
+  if (f) { KDialogs!.openField(ctx, f.item, f.name); return; }
   const best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
-  if (best) { const it = E.kdoc.items.get(best.id); if (it && it.kind === "sheet" && it.file) { enterSheet(it.file); return; } if (it) KDialogs.openItem(ctx, it); return; }   // nearestFootprint() picks sheets too
+  if (best) { const it = E.kdoc.items.get(best.id); if (it && it.kind === "sheet" && it.file) { enterSheet(it.file); return; } if (it) KDialogs!.openItem(ctx, it); return; }   // nearestFootprint() picks sheets too
   // KiCad: a double-click on a hierarchical sheet enters it (E opens its properties)
-  if (isSch()) { const sh = E.sheets.find((r) => x >= r.x / E.IU && x <= (r.x + r.w) / E.IU && y >= r.y / E.IU && y <= (r.y + r.h) / E.IU); if (sh) { const it = E.kdoc.items.get(sh.id); if (it && it.file) { enterSheet(it.file); return; } if (it) { KDialogs.openItem(ctx, it); return; } } }
+  if (isSch()) { const sh = E.sheets.find((r: SheetEntry) => x >= r.x / E.IU && x <= (r.x + r.w) / E.IU && y >= r.y / E.IU && y <= (r.y + r.h) / E.IU); if (sh) { const it = E.kdoc.items.get(sh.id); if (it && it.file) { enterSheet(it.file); return; } if (it) { KDialogs!.openItem(ctx, it); return; } } }
   const other = hitAny([x, y]); const it = other && E.kdoc.items.get(other.id);
-  if (it) KDialogs.openItem(ctx, it);
+  if (it) KDialogs!.openItem(ctx, it);
 });
 
 // a press held still over overlapping items opens Clarify Selection (m_disambiguateTimer)
@@ -160,7 +164,7 @@ stage.addEventListener("pointerdown", (ev) => {
 }, true);
 
 stage.addEventListener("pointerdown", (ev) => {
-  if (ev.target.closest("#cmtPanel") || ev.target.closest("#signinOverlay")) return;
+  if ((ev.target as Element).closest("#cmtPanel") || (ev.target as Element).closest("#signinOverlay")) return;
   if ((ev.button === 2 && E.rightDragPan !== false) || (ev.button === 1 && E.middleDragPan !== false) || (ev.button === 0 && E.tool === "pan")) {
     E.pan = { x: ev.clientX - E.panX, y: ev.clientY - E.panY };
     stage.setPointerCapture(ev.pointerId); ev.preventDefault(); return;
@@ -211,7 +215,7 @@ stage.addEventListener("pointerdown", (ev) => {
     if (E.selected) E.selection.add(E.selected.id);   // the single selection joins the set it is being extended to
     if (smode === "add") E.selection.add(best.id); else if (smode === "remove") E.selection.delete(best.id); else if (E.selection.has(best.id)) E.selection.delete(best.id); else E.selection.add(best.id);
     E.selected = E.selection.has(best.id) ? best : (E.selected && E.selected.id === best.id ? null : E.selected);
-    if (!E.selected) for (const id of E.selection) { const f = E.items.find((q) => q.id === id); if (f) { E.selected = f; break; } }
+    if (!E.selected) for (const id of E.selection) { const f = E.items.find((q: ItemSummary) => q.id === id); if (f) { E.selected = f; break; } }
     drawSelection(); renderProps(); renderObjects(); requestRender(); return;
   }
   // KiCad's default left drag (MOUSE_DRAG_ACTION::DRAG_SELECTED): with nothing selected a drag draws a selection
@@ -272,9 +276,9 @@ stage.addEventListener("pointermove", (ev) => {
   if (!E.drag) { sendPresence(mm, liveGhost(modM)); return; }   // a Move / Drag (M / G) or a paste following the cursor ghosts to peers too
   if (E.drag.group) { moveGroupDrag(mm); sendPresence(mm); return; }
   if (E.drag.engine) {
-    const d = CollabTools.sch.state.drag;
+    const d = CollabTools.sch!.state.drag as SchDrag | null;
     if (!d) { E.drag = null; sendPresence(mm); return; }           // cancelled (Escape) or already dropped
-    CollabTools.sch.moveDrag(toolCtx(), mm);
+    CollabTools.sch!.moveDrag(toolCtx(), mm);
     if (!d.moved) { sendPresence(mm, liveGhost(modM)); return; }
     E.drag.moved = true; E.drag.curMm = [E.drag.fp.x / E.IU + d.last[0], E.drag.fp.y / E.IU + d.last[1]];
     const nowE = Date.now();
@@ -301,7 +305,7 @@ stage.addEventListener("pointermove", (ev) => {
   sendPresence(mm);
 });
 
-const onPointerUp = (ev) => {
+const onPointerUp = (ev: PointerEvent) => {
   if (E.pan) { E.pan = null; return; }
   if (E.fdrag) {
     const fd = E.fdrag; E.fdrag = null;
@@ -310,7 +314,7 @@ const onPointerUp = (ev) => {
       const nx = at[1], ny = at[2];
       at[1] = fd.orig[0]; at[2] = fd.orig[1]; KiCadCanvas.replaceChange(E.kdoc, it);          // original back so commit records the inverse
       if (nx !== fd.orig[0] || ny !== fd.orig[1]) {
-        const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2, "at"); a2[1] = nx; a2[2] = ny;
+        const node = JSON.parse(JSON.stringify(it.node)); const p2 = fieldOf({ node }, fd.name); const a2 = KiCadCanvas.kid(p2!, "at")!; a2[1] = nx; a2[2] = ny;
         commitChanges([KiCadCanvas.replaceChange(E.kdoc, Object.assign({}, it, { node, geom: [], bbox: null }))], "move " + fd.name.toLowerCase());
       }
       requestRender();
@@ -326,10 +330,10 @@ const onPointerUp = (ev) => {
   if (E.drag.group) { finishGroupDrag(); return; }
   if (E.drag.engine) {
     const fpE = E.drag.fp, cur = E.drag.curMm, clickId = E.drag.moved ? null : E.drag.clickId; E.drag = null; dragG.replaceChildren();
-    if (CollabTools.sch.state.drag) { try { CollabTools.sch.endDrag(toolCtx(), true); } catch (e) { console.warn(e); } }
+    if (CollabTools.sch!.state.drag) { try { CollabTools.sch!.endDrag(toolCtx(), true); } catch (e) { console.warn(e); } }
     sendPresence(cur, []);
     if (clickId) { collapseSelectionTo(clickId); return; }
-    if (E.kdoc) syncItemsFromDoc(); E.selected = E.items.find((f) => f.id === fpE.id) || E.selected; drawSelection(); renderProps(); requestRender();
+    if (E.kdoc) syncItemsFromDoc(); E.selected = E.items.find((f: ItemSummary) => f.id === fpE.id) || E.selected; drawSelection(); renderProps(); requestRender();
     return;
   }
   const fp = E.drag.fp, wasMoved = E.drag.moved, wires = E.drag.wires || [];
@@ -337,7 +341,7 @@ const onPointerUp = (ev) => {
   E.drag = null; dragG.replaceChildren();
   sendPresence([nx / E.IU, ny / E.IU], []);
   if (!wasMoved) return;
-  const changes = [];
+  const changes: KChange[] = [];
   if (nx !== fp.x || ny !== fp.y) changes.push(moveOp(fp, nx, ny));
   for (const w of wires) changes.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, w.item) });
   if (changes.length) {
@@ -346,7 +350,7 @@ const onPointerUp = (ev) => {
     if (E.kdoc && (nx !== fp.x || ny !== fp.y)) KiCadCanvas.applyChange(E.kdoc, moveOp(fp, nx, ny), E.IU);
     sendOp(changes);
     // inverse: put the symbol and the wire ends back
-    const inverse = [moveOp({ id: fp.id, x: nx, y: ny }, fp.x, fp.y)];
+    const inverse: KChange[] = [moveOp({ id: fp.id, x: nx, y: ny }, fp.x, fp.y)];
     for (const w of wires) {   // the undo step: the same wire with this end back where it was
       const node = KiCadCanvas.cloneNode(w.item.node); const p = KiCadCanvas.ptsOf(node).map((q) => q.slice()); p[w.index] = w.orig; KiCadCanvas.setPts(node, p);
       inverse.push({ id: w.item.id, kind: "MODIFIED", typeName: "SCH_LINE", sexpr: KiCadCanvas.serializeItem(E.kdoc, Object.assign({}, w.item, { node })) });

@@ -1,5 +1,4 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { setGroupCurrent, setToggle, setToggles, state, store } from "./appstore";
 import { centerOn, commentOnAction, openThreadAction, openThreadOnDoc } from "./comments";
 import { saveVersionDialog, versionsCommand } from "./versions";
@@ -17,8 +16,12 @@ import { api, esc, setRadio, showPopover, toast } from "./util";
 import { applyView, fitView, isSch, requestRender, zoomBy } from "./view";
 import { show3DViewer } from "./viewer3d-loader";
 import { openFabOutputs } from "./fab-outputs";
+import type { AppAction } from "../store";
+import type { ActionAnchor, ActionHandler, ItemSummary } from "./types";
+/** File > Print's remembered choices (E.printOpts). */
+interface PrintOpts { mono?: boolean; frame?: boolean; background?: boolean; scale?: string; custom?: number; layers?: string[] | null; layersDoc?: KDoc }
 // ---- actions (the home menu's entries and the collab items of the editor menus) ----
-export async function runAction(act, el) {
+export async function runAction(act: string, el?: ActionAnchor) {
   const id = state.project && state.project.projectId;
   window.dispatchEvent(new CustomEvent("kc:action", { detail: { id: act } }));
   switch (act) {
@@ -44,15 +47,15 @@ export async function runAction(act, el) {
     case "about": showPopover("about", null, el); break;
     case "archive": if (!id) break;
       if (!state.me) { toast("Sign in to download the project"); break; }
-      if (store.get().can && !store.get().can.copy) { toast("The owner does not let viewers download this project", 4000); break; }
+      if (store.get().can && !store.get().can!.copy) { toast("The owner does not let viewers download this project", 4000); break; }
       location.href = `/api/projects/${id}/archive`; break;
     case "github": location.href = id ? `/p/${id}/github` : "/github"; break;
     case "clone": if (!id) break; if (!state.me) { toast("Sign in to clone"); break; }
-      try { const j = await api(`/api/projects/${id}/clone`, { method: "POST" }); toast("Cloned"); navigate(`/p/${j.projectId}/edit`); } catch (e) { toast("Clone failed: " + e.message, 4000); } break;
+      try { const j = await api(`/api/projects/${id}/clone`, { method: "POST" }); toast("Cloned"); navigate(`/p/${j.projectId}/edit`); } catch (e) { toast("Clone failed: " + (e as Error).message, 4000); } break;
     // The share dialog (people, roles, links) is the home's React dialog; anyone in the project can open it
     // to see who has access, and only the owner can change anything.
     case "share": if (!id) break; if (!state.me) { toast("Sign in to share"); break; }
-      if (window.CollabHome) window.CollabHome.openShare(id, state.project.name); break;
+      if (window.CollabHome) window.CollabHome.openShare(id, state.project!.name); break;
     case "checkpoint": if (!id) break; saveVersionDialog(); showPane("history", true); break;   // the Save Version dialog (components/VersionHistory.tsx)
     case "kicad": showPopover("kicad", null, el); break;
   }
@@ -61,10 +64,10 @@ export async function runAction(act, el) {
 /** File → Plot: SVG or PNG of the current document (KiCad's plot dialog, the web's subset). */
 export function plotDialog() {
   if (!E.kdoc || !window.KDialogs) return;
-  const name = (state.docs.find((d) => d.docId === state.docId) || {}).path || (isSch() ? "sheet.kicad_sch" : "board.kicad_pcb");
-  const stem = name.split("/").pop().replace(/\.kicad_(sch|pcb)$/, "");
-  KDialogs.open({ title: "Plot", width: 460,
-    build(body) {
+  const name = (state.docs!.find((d) => d.docId === state.docId) || {} as { path?: string }).path || (isSch() ? "sheet.kicad_sch" : "board.kicad_pcb");
+  const stem = name.split("/").pop()!.replace(/\.kicad_(sch|pcb)$/, "");
+  KDialogs!.open({ title: "Plot", width: 460,
+    build(body: HTMLElement) {
       body.innerHTML = `<div class="kv"><label>Format</label><select id="kd-fmt"><option value="svg">SVG</option><option value="png">PNG</option></select>
         <label>Resolution (PNG)</label><input id="kd-dpi" type="number" value="300" min="72" max="1200" step="1">
         <label>Content</label><select id="kd-scope"><option value="all">Whole ${isSch() ? "sheet" : "board"}</option><option value="sel"${E.selection.size ? "" : " disabled"}>Selection only</option></select>
@@ -74,15 +77,15 @@ export function plotDialog() {
     },
     okLabel: "Plot",
     ok() {
-      const g = (id) => document.querySelector("#" + id);
+      const g = (id: string) => document.querySelector("#" + id) as HTMLInputElement;
       const fmt = g("kd-fmt").value, dpi = Math.max(72, Math.min(1200, +g("kd-dpi").value || 300));
-      const opts = { hidden: E.hiddenLayers, background: g("kd-bg").checked ? undefined : false, showHiddenPins: !!g("kd-hid").checked, zoneOutline: !!E.renderOpts.zoneOutline };
+      const opts: { hidden: Set<string>; background?: false; showHiddenPins: boolean; zoneOutline: boolean; ids?: string[] } = { hidden: E.hiddenLayers, background: g("kd-bg").checked ? undefined : false, showHiddenPins: !!g("kd-hid").checked, zoneOutline: !!E.renderOpts.zoneOutline };
       if (g("kd-scope").value === "sel" && E.selection.size) opts.ids = [...E.selection];
-      const download = (blob, ext) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${stem}.${ext}`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
+      const download = (blob: Blob, ext: string) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${stem}.${ext}`; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); };
       try {
         if (fmt === "svg") { download(new Blob([KiCadCanvas.renderSvg(E.kdoc, opts)], { type: "image/svg+xml" }), "svg"); toast("Plotted " + stem + ".svg"); }
         else { toast("Rendering PNG…"); KiCadCanvas.renderPng(E.kdoc, Object.assign({ dpi }, opts, E.renderOpts)).then((blob) => { download(blob, "png"); toast("Plotted " + stem + ".png"); }).catch((e) => { console.warn(e); toast("PNG export failed"); }); }
-      } catch (e) { console.warn(e); toast("Plot failed: " + (e.message || e)); }
+      } catch (e) { console.warn(e); toast("Plot failed: " + ((e as Error).message || e)); }
     } });
 }
 
@@ -95,24 +98,24 @@ export function printDialog() {
   if (!E.kdoc) return;
   if (!window.KDialogs) { printDocument({}); return; }
   const sch = isSch();
-  const P = E.printOpts || (E.printOpts = { mono: false, frame: true, background: false, scale: "fit", custom: 1, layers: null });
-  const layerNames = sch || !E.kdoc.layers ? [] : [...E.kdoc.layers.keys()];
+  const P: PrintOpts = E.printOpts || (E.printOpts = { mono: false, frame: true, background: false, scale: "fit", custom: 1, layers: null });
+  const layerNames: string[] = sch || !E.kdoc.layers ? [] : [...E.kdoc.layers.keys()];
   if (P.layersDoc !== E.kdoc) { P.layers = null; P.layersDoc = E.kdoc; }   // another board: its own layers, not the last one's
   const included = new Set(P.layers || layerNames.filter((l) => !(E.hiddenLayers && E.hiddenLayers.has(l))));
-  const cb = (id, on, label, dis) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
-  const radio = (name, value, on, label) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="radio" name="${name}" value="${value}" style="width:auto;margin:0"${on ? " checked" : ""}> ${esc(label)}</label>`;
+  const cb = (id: string, on: unknown, label: string, dis?: unknown) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input id="${id}" type="checkbox" style="width:auto;margin:0"${on ? " checked" : ""}${dis ? " disabled" : ""}> ${esc(label)}</label>`;
+  const radio = (name: string, value: string, on: boolean, label: string) => `<label style="display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="radio" name="${name}" value="${value}" style="width:auto;margin:0"${on ? " checked" : ""}> ${esc(label)}</label>`;
   const read = () => {
-    const g = (id) => document.querySelector("#" + id);
+    const g = (id: string) => document.querySelector("#" + id) as HTMLInputElement;
     P.mono = g("kd-pr-mode").value === "bw"; P.frame = !!g("kd-pr-frame").checked;
     if (sch) P.background = !!g("kd-pr-bg").checked;
     else {
-      const r = document.querySelector('input[name="kd-pr-scale"]:checked'); P.scale = r ? r.value : "fit";
+      const r = document.querySelector<HTMLInputElement>('input[name="kd-pr-scale"]:checked'); P.scale = r ? r.value : "fit";
       P.custom = Math.max(0.01, Math.min(100, +g("kd-pr-custom").value || 1));
-      P.layers = [...document.querySelectorAll(".kd-pr-layer")].filter((c) => c.checked).map((c) => c.dataset.layer);
+      P.layers = [...document.querySelectorAll<HTMLInputElement>(".kd-pr-layer")].filter((c) => c.checked).map((c) => c.dataset.layer!);
     }
   };
-  KDialogs.open({ title: "Print", width: sch ? 420 : 560,
-    build(body) {
+  KDialogs!.open({ title: "Print", width: sch ? 420 : 560,
+    build(body: HTMLElement) {
       const options = `<h3>Options</h3>
         <div class="kv"><label>Output mode:</label><select id="kd-pr-mode"><option value="color"${P.mono ? "" : " selected"}>Color</option><option value="bw"${P.mono ? " selected" : ""}>Black and White</option></select></div>
         <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">${cb("kd-pr-frame", P.frame, "Print drawing sheet")}${sch ? cb("kd-pr-bg", P.background, "Print background color") : ""}</div>`;
@@ -135,29 +138,29 @@ export function printDialog() {
  * body, a sheet background) stays paper white; strokes and text are always black.  Translucent colours (mask
  * layers) keep their alpha, so a print does not turn into one black slab.
  */
-function monochrome(svg, sch) {
-  const lum = (r, g, b) => (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-  const map = (k, c) => {
-    let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c), r, g, b, a = 1;
+function monochrome(svg: string, sch: boolean) {
+  const lum = (r: number, g: number, b: number) => (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const map = (k: string, c: string) => {
+    let m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c), r: number, g: number, b: number, a = 1;
     if (m) { let h = m[1]; if (h.length === 3) h = h.replace(/./g, "$&$&"); r = parseInt(h.slice(0, 2), 16); g = parseInt(h.slice(2, 4), 16); b = parseInt(h.slice(4, 6), 16); }
     else if ((m = /^rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+))?/i.exec(c))) { r = +m[1]; g = +m[2]; b = +m[3]; if (m[4] !== undefined) a = +m[4]; }
     else return c;
     if (sch && k === "fill" && lum(r, g, b) > 0.85) return "#ffffff";
     return a < 1 ? `rgba(0,0,0,${a})` : "#000000";
   };
-  return svg.replace(/\b(fill|stroke)="([^"]+)"/g, (all, k, c) => (c === "none" ? all : `${k}="${map(k, c)}"`));
+  return svg.replace(/\b(fill|stroke)="([^"]+)"/g, (all: string, k: string, c: string) => (c === "none" ? all : `${k}="${map(k, c)}"`));
 }
 
 /** Render the document for printing and open it in a print window (preview: shown, not printed). */
-export function printDocument(P, preview) {
+export function printDocument(P: PrintOpts | null | undefined, preview?: boolean) {
   if (!E.kdoc) return;
   P = P || {}; const sch = isSch();
-  const hidden = new Set(E.hiddenLayers || []);
+  const hidden = new Set<string>(E.hiddenLayers || []);
   if (!sch && P.layers) for (const l of E.kdoc.layers ? E.kdoc.layers.keys() : []) { if (P.layers.includes(l)) hidden.delete(l); else hidden.add(l); }
   const frame = P.frame !== false;
-  const opts = { hidden, background: sch && P.background ? undefined : false, zoneOutline: !!E.renderOpts.zoneOutline, frame };
+  const opts: { hidden: Set<string>; background?: false; zoneOutline: boolean; frame: boolean; bbox?: number[] } = { hidden, background: sch && P.background ? undefined : false, zoneOutline: !!E.renderOpts.zoneOutline, frame };
   if (!sch && frame && E.kdoc.page) opts.bbox = [0, 0, E.kdoc.page[0], E.kdoc.page[1]];
-  let svg; try { svg = KiCadCanvas.renderSvg(E.kdoc, opts); } catch (e) { toast("Print failed: " + (e.message || e)); return; }
+  let svg: string; try { svg = KiCadCanvas.renderSvg(E.kdoc, opts); } catch (e) { toast("Print failed: " + ((e as Error).message || e)); return; }
   if (P.mono) svg = monochrome(svg, sch);
   // 1:1 keeps the SVG's own millimetre size; Custom scales it; Fit to page (and a schematic page) fills the paper
   const m = /width="([\d.]+)mm" height="([\d.]+)mm"/.exec(svg);
@@ -170,24 +173,25 @@ export function printDocument(P, preview) {
   w.addEventListener("load", () => setTimeout(go, 200)); setTimeout(go, 800);
 }
 
-export function toggleRenderOpt(key, id) { E.renderOpts[key] = !E.renderOpts[key]; setToggle(id, !!E.renderOpts[key]); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); }
+export function toggleRenderOpt(key: string, id: string) { E.renderOpts[key] = !E.renderOpts[key]; setToggle(id, !!E.renderOpts[key]); store.slice("viewport", { renderOpts: Object.assign({}, E.renderOpts) }); requestRender(); }
 
-export function findPopover(el) { showPopover("find", { hits: null, query: "" }, el); }
+export function findPopover(el: ActionAnchor) { showPopover("find", { hits: null, query: "" }, el); }
 
 /** The Find popover's query: select and centre the best match, report the count. */
-export function findAction(query) {
+export function findAction(query: string) {
   const v = String(query || "").trim().toLowerCase();
-  const m = v ? E.items.filter((fp) => fpName(fp).toLowerCase().includes(v)).sort((x, y) => (fpName(y).toLowerCase() === v) - (fpName(x).toLowerCase() === v) || (fpName(y).toLowerCase().startsWith(v)) - (fpName(x).toLowerCase().startsWith(v))) : [];
+  // booleans subtract as 0 / 1: exact matches first, then prefix matches
+  const m: ItemSummary[] = v ? E.items.filter((fp: ItemSummary) => fpName(fp).toLowerCase().includes(v)).sort((x: ItemSummary, y: ItemSummary) => ((fpName(y).toLowerCase() === v) as unknown as number) - ((fpName(x).toLowerCase() === v) as unknown as number) || ((fpName(y).toLowerCase().startsWith(v)) as unknown as number) - ((fpName(x).toLowerCase().startsWith(v)) as unknown as number)) : [];
   if (m.length) { E.selected = m[0]; drawSelection(); renderProps(); centerOn(m[0].x / E.IU, m[0].y / E.IU); }
   const p = store.get().popover; if (p && p.kind === "find") store.set({ popover: Object.assign({}, p, { hits: v ? m.length : null, query: String(query || "") }) });
 }
 
-export function gridMenu(el) { showPopover("grid", null, el); }
+export function gridMenu(el: ActionAnchor) { showPopover("grid", null, el); }
 
 // Every chrome action the web editor handles, by KiCad action id (or one of ours).  An id missing here
 // that maps to a tool (server/web/tables.ts TOOL_MAP) activates the tool; anything else is dimmed and
 // explained as desktop-only by the chrome itself.  Handlers get the anchor rect of the clicked control.
-export const HANDLERS = {
+export const HANDLERS: Record<string, ActionHandler> = {
   selectSetRect: () => { E.selMode = "rect"; setRadio("Selection modes", "selectSetRect"); store.slice("viewport", { selMode: E.selMode }); setTool("select"); },
   selectSetLasso: () => { E.selMode = "lasso"; setRadio("Selection modes", "selectSetLasso"); store.slice("viewport", { selMode: E.selMode }); setTool("select"); },
   selectAll: () => selectAll(),
@@ -223,9 +227,9 @@ export const HANDLERS = {
   generateGerbers: () => openFabOutputs("gerber"), generateDrillFiles: () => openFabOutputs("drill"), generatePosFile: () => openFabOutputs("placement"),
   print: () => printDialog(),
   // the Line Modes radio: the schematic's wire modes, or the board's angle snap (PCB_ACTIONS::lineModeFree / 90 / 45)
-  lineModeFree: () => { if (isSch()) CollabTools.sch.setLineMode(toolCtx(), "free"); else runModuleAction("lineModeFree"); syncSchModes(); },
-  lineMode90: () => { if (isSch()) CollabTools.sch.setLineMode(toolCtx(), "90"); else runModuleAction("lineMode90"); syncSchModes(); },
-  lineMode45: () => { if (isSch()) CollabTools.sch.setLineMode(toolCtx(), "45"); else runModuleAction("lineMode45"); syncSchModes(); },
+  lineModeFree: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "free"); else runModuleAction("lineModeFree"); syncSchModes(); },
+  lineMode90: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "90"); else runModuleAction("lineMode90"); syncSchModes(); },
+  lineMode45: () => { if (isSch()) CollabTools.sch!.setLineMode(toolCtx(), "45"); else runModuleAction("lineMode45"); syncSchModes(); },
   showHierarchy: () => showPane("hier"), showProperties: () => showPane("props"), showLayersManager: () => showPane("appearance"), showAppearance: () => showPane("appearance"),
   showSearch: () => showPane("search"), showNetNavigator: () => showPane("netnav"),
   showSelectionFilter: () => showPane("filter"), showHistory: () => showPane("history"), showPeers: () => showPane("peers"), showComments: () => showPane("comments"),
@@ -250,10 +254,10 @@ export const HANDLERS = {
 
 
 /** The Compare window lives in the chrome bundle; it listens for this event (web/review/store.ts). */
-function openCompare(detail = {}) { window.dispatchEvent(new CustomEvent("kc-compare", { detail })); }
+function openCompare(detail: Record<string, unknown> = {}) { window.dispatchEvent(new CustomEvent("kc-compare", { detail })); }
 
 /** window.CollabApp.dispatch: the chrome's intents (typed as AppAction in server/web/store.ts). */
-export function dispatchAction(a) {
+export function dispatchAction(a: AppAction) {
   if (!a || typeof a !== "object") return;
   try {
     switch (a.type) {

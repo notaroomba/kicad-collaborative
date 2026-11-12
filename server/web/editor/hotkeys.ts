@@ -21,7 +21,7 @@ import { E } from "./state";
 import { activeModule, moduleTool, runModuleAction, setTool, toolCtx } from "./tools";
 import { isSch } from "./view";
 
-type Handler = (anchor?: unknown) => unknown;
+type Handler = import("./types").ActionHandler;
 interface ToolModule { actions?: Record<string, unknown>; onKey?: (key: string, ev: unknown, ctx: unknown) => unknown }
 
 const NAMED: Record<string, string> = { Delete: "Del", Escape: "Esc", " ": "Space", Insert: "Ins", PageUp: "PgUp", PageDown: "PgDn", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" };

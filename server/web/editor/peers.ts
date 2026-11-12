@@ -1,8 +1,8 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
-// @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { state, store } from "./appstore";
 import { E } from "./state";
 import { toast } from "./util";
+import type { PeerEntry, PresenceState } from "./types";
 import { applyView, mmH, mmW, mmX0, mmY0, stage, visibleRectNm, world } from "./view";
 export function cycleFollow() {
   const ids = Object.keys(E.peerState);
@@ -14,11 +14,11 @@ export function cycleFollow() {
   applyFollowWeb(E.peerState); renderPeers();
 }
 
-export function peerName(p) { return (p && p.user && (p.user.name || p.user.login)) || "peer"; }
+export function peerName(p: PeerEntry | null | undefined) { return (p && p.user && (p.user.name || p.user.login)) || "peer"; }
 
 
 // ---- follow ----
-export function applyFollowWeb(peers) {
+export function applyFollowWeb(peers: Record<string, PeerEntry>) {
   if (!E.followPeer) return;
   const entry = peers[E.followPeer];
   if (!entry) { E.followPeer = null; toast("Stopped following (they left)"); renderPeers(); return; }
@@ -41,10 +41,10 @@ export function renderPeers() {
   store.set({ peers: { list: Object.keys(E.peerState).map((cid) => { const p = E.peerState[cid]; return { cid, name: peerName(p), color: (p.user && p.user.color) || "#4477ee" }; }), follow: E.followPeer } });
 }
 
-export function followAction(cid) { E.followPeer = cid && E.peerState[cid] ? cid : null; applyFollowWeb(E.peerState); renderPeers(); }
+export function followAction(cid: string | null) { E.followPeer = cid && E.peerState[cid] ? cid : null; applyFollowWeb(E.peerState); renderPeers(); }
 
 /** The last cursor position we told anyone about, so the keepalive can re-send it. */
-export function sendPresence(mmPos, ghostSegs) {
+export function sendPresence(mmPos: number[] | null, ghostSegs?: number[][] | null) {
   const now = Date.now();
   if (mmPos) E.lastPresenceMm = mmPos;
   // A peer who has joined but not yet moved the pointer must still appear: fall back to the
@@ -56,13 +56,13 @@ export function sendPresence(mmPos, ghostSegs) {
   const clearing = Array.isArray(ghostSegs) && ghostSegs.length === 0;
   if (now - E.lastPresence < 80 && !clearing) return;
   E.lastPresence = now;
-  const st = { cursor: [Math.round(at[0] * E.IU), Math.round(at[1] * E.IU)] };
+  const st: PresenceState = { cursor: [Math.round(at[0] * E.IU), Math.round(at[1] * E.IU)] };
   const vp = visibleRectNm(); if (vp) st.viewport = vp;
   if (ghostSegs) st.ghost = ghostSegs;
   // What the peer has selected (desktop rebuildOverlay pairs selection[i] with boxes[i] and at[i]; boxes are
   // BOX2I(origin, size) in IU).  Everything this client has picked: the multi-selection, the single symbol /
   // footprint (E.selected), and the schematic or board module's own pick (wires, labels, tracks, vias, graphics).
-  const picked = new Set(E.selection || []);
+  const picked = new Set<string>(E.selection || []);
   if (E.selected && E.selected.id) picked.add(E.selected.id);
   const T = typeof CollabTools !== "undefined" ? CollabTools : null;
   if (E.DOC_TYPE === "kicad_sch") {
@@ -92,7 +92,7 @@ export function sendPresence(mmPos, ghostSegs) {
 }
 
 /** Where an item is placed by (mm): its (at) / transform for symbols, footprints, vias and texts, else its first point. */
-export function anchorMm(it) {
+export function anchorMm(it: KItem): number[] | null {
   const n = it.node, K = KiCadCanvas;
   if (!n) return null;
   if (n[0] === "arc" || n[0] === "gr_arc") return null;   // the desktop anchors arcs on their centre (EDA_SHAPE::getPosition), which the file's three points do not carry
@@ -119,7 +119,7 @@ export function anchorMm(it) {
  *     so the difference the desktop sees is the move itself.
  * A schematic keeps sending its boxes always (the renderer's extents), as before.
  */
-export const presenceSelection = (doc, selection, IU, moving) => KiCadCanvas.presenceSelection(doc, selection, IU, moving, MAX_PRESENCE_ITEMS);
+export const presenceSelection = (doc: KDoc | null, selection: Iterable<string> | null, IU: number, moving: boolean) => KiCadCanvas.presenceSelection(doc, selection, IU, moving, MAX_PRESENCE_ITEMS);
 
 /** Is a move in flight — the app's own drag, or one of the board / schematic modules' — so that live boxes matter? */
 function presenceMoving() {

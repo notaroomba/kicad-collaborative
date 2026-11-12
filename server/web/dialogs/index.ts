@@ -23,7 +23,7 @@ import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { openSyncSheetPins } from "./sync-pins";
 import { openFabOutputs } from "../editor/fab-outputs";
 
-type Handler = (anchor?: unknown) => void;
+type Handler = import("../editor/types").ActionHandler;
 interface Marker { code: string; severity: string }
 
 /** Push the project's schematic settings into the open document and the renderer. */
@@ -56,7 +56,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   const find = HANDLERS.find;
   Object.assign(HANDLERS, {
     pageSettings: needDoc(openPageSettings),
-    find: ((a?: unknown) => { if (E.kdoc && isSch()) openFind(false); else if (find) find(a); }) as Handler,
+    find: ((a?: Parameters<Handler>[0]) => { if (E.kdoc && isSch()) openFind(false); else if (find) find(a); }) as Handler,
     findAndReplace: needDoc(() => openFind(true), true),
     editSymbolFields: needDoc(() => openFieldsTable(false), true),
     // the board editor's File > Fabrication Outputs > Bill of Materials is the fabrication package; the schematic's is the fields table

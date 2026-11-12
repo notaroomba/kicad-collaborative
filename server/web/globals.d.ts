@@ -74,13 +74,23 @@ interface KiCadCanvasApi {
   render(doc: KDoc, ctx: CanvasRenderingContext2D, view: KView, opts?: KRenderOpts): void;
   setViewTransform(ctx: CanvasRenderingContext2D, view: KView): void;
   drawSelectionHalo(ctx: CanvasRenderingContext2D, doc: KDoc, ids: Set<string>, s: number, dpr: number, hidden?: Set<string>): void;
-  movableItems(doc: KDoc): { id: string; kind: string; x: number; y: number; rot: number; ref: string; value: string; lib: string; layer: string; bbox: KItem["bbox"]; name?: string; file?: string; w?: number; h?: number }[];
+  movableItems(doc: KDoc): { id: string; kind: string; x: number; y: number; rot: number; ref: string; value: string; lib: string; layer: string; bbox: KItem["bbox"]; name?: string; file?: string; page?: string; w?: number; h?: number }[];
   hitTest(doc: KDoc, x: number, y: number, slopMm?: number): string | null;
   layerList(doc: KDoc): { key: string; name: string; color: string; count: number; z?: number }[];
   snap(v: number, pitch: number): number;
   computeBBox(doc: KDoc): void;
-  fieldBoxes(item: KItem): { name: string; pts: [number, number][] }[];
-  fieldAt(doc: KDoc, x: number, y: number): { item: KItem; name: string } | null;
+  fieldBoxes(item: KItem, hidden?: Set<string> | null): { name: string; pts: [number, number][] }[];
+  /** the item under (x, y) mm with what was hit on it (web/canvas/hit.ts) */
+  hitTestDetail(doc: KDoc, x: number, y: number, slopMm?: number, opts?: { hidden?: Set<string> | null; side?: string | null } | null): { id: string; onGeom?: boolean; [k: string]: unknown } | null;
+  itemVisible(item: KItem, hidden?: Set<string> | null): boolean;
+  itemTouchesRect(item: KItem, x0: number, y0: number, x1: number, y1: number, hidden?: Set<string> | null): boolean;
+  renderSvg(doc: KDoc, opts?: Record<string, unknown> | null): string;
+  renderPng(doc: KDoc, opts?: Record<string, unknown> | null): Promise<Blob>;
+  applyDocProps(doc: KDoc | null | undefined, props: { paper?: unknown; titleBlock?: unknown } | null | undefined): boolean;
+  cloneNode(node: SNode): SNode;
+  fieldAt(doc: KDoc, x: number, y: number, hidden?: Set<string> | null): { item: KItem; name: string } | null;
+  /** the pad under (x, y) mm (web/canvas/hit.ts) */
+  padAt?(doc: KDoc, x: number, y: number): { item: KItem; index: number } | null;
   /** a symbol's pins on the sheet (mm), with their number and name */
   pinPoints(doc: KDoc, item: Pick<KItem, "kind" | "node">): { x: number; y: number; number: string; name: string }[];
   /** the wire / bus ends at a point: the line and the index of the end point */
@@ -111,6 +121,8 @@ interface KiCadCanvasApi {
   onAssetLoaded: ((info: { id: string; kind: string; ok: boolean }) => void) | null;
   /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */
   pcbSizes: typeof import("./canvas/pcb-sizes").pcbSizes;
+  /** the board's own settings sections (web/canvas/board-setup.ts) */
+  boardSetup?: { applyBoardSetup(doc: KDoc, change: KChange): boolean };
   [extra: string]: unknown;
 }
 
@@ -131,7 +143,8 @@ interface ToolCtx {
 }
 
 interface ToolModuleTool { id: string; label: string; key?: string; icon?: string; cursor?: string }
-interface ToolModuleAction { label: string; key?: string | null; menu?: string | null; run(ctx: ToolCtx): void }
+/** run() answering false declines the action (the chrome then tries its own); anything else counts as handled */
+interface ToolModuleAction { label: string; key?: string | null; menu?: string | null; run(ctx: ToolCtx): unknown }
 
 interface ToolModule {
   id: string;
@@ -150,12 +163,19 @@ interface ToolModule {
   padProperties?(ctx: ToolCtx, item: KItem, index: number): boolean;
   /** Board: with a length tuner active, PCB_ACTIONS::properties opens Tuning Pattern Properties (false otherwise). */
   tunerProperties?(ctx: ToolCtx): boolean;
-  onKey?(key: string, ev: KeyboardEvent | Record<string, never>, ctx: ToolCtx): boolean;
+  /** `ev` is the key event, or a stand-in for a key the chrome synthesises (a menu's Delete) */
+  onKey?(key: string, ev: KeyboardEvent | Pick<KeyboardEvent, "shiftKey" | "preventDefault"> | Record<string, never>, ctx: ToolCtx): boolean;
   drawOverlay?(ctx2d: CanvasRenderingContext2D, view: KView, ctx: ToolCtx): void;
   onDocChanged?(ctx: ToolCtx): void;
   deleteChanges?(doc: KDoc, items: KItem[]): KChange[] | null;
   setPrompt?(fn: unknown): void;
   setImagePicker?(fn: unknown): void;
+  /** the module's internals (the schematic module's helpers; the board module's are on window.PcbTools) */
+  _?: Record<string, unknown>;
+  /** board groups: the ids with every member of their groups */
+  expandGroups?(doc: KDoc, ids: string[]): Iterable<string>;
+  /** undo / redo of a step still in flight in the module (a route); falsy when it has none */
+  undoRedo?(ctx: ToolCtx, which: string): unknown;
 }
 
 interface SchToolModule extends ToolModule {
@@ -177,6 +197,14 @@ interface SchToolModule extends ToolModule {
 
 interface PcbToolModule extends ToolModule {
   setLayer?(ctx: ToolCtx, layer: string): void;
+  state: ToolModule["state"] & { sel?: Set<string>; padSel?: string | null; move?: { moved?: boolean } | null; carry?: unknown };
+  unlockedIds(ctx: ToolCtx, ids: string[], quiet?: boolean): string[];
+  /** RequestSelection for an app-side action: the picked ids and items, or null (nothing picked, or all locked) */
+  requestSelection(ctx: ToolCtx, opts?: { filter?(it: KItem): boolean; locks?: boolean; quiet?: boolean; rerun?(ctx: ToolCtx): unknown }): { ids: string[]; items: KItem[]; hover?: unknown } | null;
+  beginMove(ctx: ToolCtx, at: [number, number], sticky: boolean): boolean;
+  setDesignSettings(src: string | null): void;
+  /** the pad under (x, y) mm (pcb-tools convert.ts); `layer` undefined takes any side */
+  padAt?(doc: KDoc, x: number, y: number, layer?: string | null): { item: KItem; index: number; pad: unknown } | null;
 }
 
 interface PropsModule {
@@ -211,3 +239,7 @@ interface Window {
   CollabTools: CollabToolsApi;
   KDialogs?: KDialogsApi;
 }
+
+// The DOM converts an attribute value with ToString (WebIDL DOMString), and the editor passes
+// numbers for SVG coordinates throughout; this overload says so instead of wrapping each in String().
+interface Element { setAttribute(qualifiedName: string, value: string | number): void }
