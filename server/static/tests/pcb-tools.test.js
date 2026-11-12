@@ -2156,7 +2156,9 @@ test("Create Array: ARRAY_OPTIONS transforms, ARRAY_TOOL's copies, and DIALOG_CR
   const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "array.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
   const mod = { exports: {} }; globalThis.window = globalThis.window || globalThis; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require);
   const A = mod.exports, D = A.ARRAY_DEFAULTS;
-  let o = A.arrayOptions(D); assert.deepEqual(o.errors, []); assert.deepEqual([o.opts.type, o.opts.nx, o.opts.ny, o.opts.dx, o.opts.dy, o.opts.stagger, o.opts.centred, o.opts.keepRefs, o.opts.arrange], ["grid", 5, 5, 2.54, 2.54, 1, false, false, false]);
+  let o = A.arrayOptions(D); assert.deepEqual(o.errors, []); assert.deepEqual([o.opts.type, o.opts.nx, o.opts.ny, o.opts.dx, o.opts.dy, o.opts.stagger, o.opts.centred, o.opts.keepRefs, o.opts.arrange], ["grid", 5, 5, 2.54, 2.54, 1, true, false, false]);
+  // the persister restores Items-in-place then Centre-on-source, both true: the second radio wins (dialog_create_array.cpp:180-181)
+  assert.equal(D.gridCentred, true);
   o = A.arrayOptions({ ...D, gridNx: "5x", gridStagger: "" });
   assert.equal(o.opts, null); assert.deepEqual(o.errors, ["Bad numeric value for horizontal count: 5x", "Bad numeric value for stagger: "]);
   o = A.arrayOptions({ ...D, tab: 1, circCount: "six" }); assert.deepEqual(o.errors, ["Bad numeric value for point count: six"]);

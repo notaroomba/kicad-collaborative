@@ -17,7 +17,7 @@ export interface ArrayEntries {
 
 /** CREATE_ARRAY_DIALOG_ENTRIES' defaults. */
 export const ARRAY_DEFAULTS: ArrayEntries = {
-  gridNx: "5", gridNy: "5", gridDx: 2.54, gridDy: 2.54, gridOffsetX: 0, gridOffsetY: 0, gridStagger: "1", gridStaggerRows: true, gridCentred: false,
+  gridNx: "5", gridNy: "5", gridDx: 2.54, gridDy: 2.54, gridOffsetX: 0, gridOffsetY: 0, gridStagger: "1", gridStaggerRows: true, gridCentred: true,
   circCentreX: 0, circCentreY: 0, circAngle: 90, circClockwise: true, circOffsetAngle: 0, circCount: "4", circFullCircle: false, circRotate: false,
   tab: 0, arrange: false, reannotate: true,
 };
