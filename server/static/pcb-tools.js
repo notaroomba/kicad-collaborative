@@ -7274,7 +7274,11 @@ function openTuneSettings(ctx) {
   });
   return true;
 }
-act("lengthTunerSettings", "Length Tuning Settings...", "Ctrl+L", (ctx) => openTuneSettings(ctx), { menu: false, tip: "Displays tuning pattern properties dialog" });
+// handled only inside the tuner's event loop (PCB_TUNING_PATTERN's tool, pcb_tuning_pattern.cpp): elsewhere Ctrl+L does
+// nothing (the key is still taken, so the browser does not move focus to its address bar)
+act("lengthTunerSettings", "Length Tuning Settings...", "Ctrl+L", (ctx) => (isTuneTool(S.modTool) ? openTuneSettings(ctx) : true), { menu: false, tip: "Displays tuning pattern properties dialog" });
+/** The tuner's loop takes PCB_ACTIONS::properties like lengthTunerSettings: E opens Tuning Pattern Properties. */
+function tunerProperties(ctx) { if (!isTuneTool(S.modTool)) return false; bind(ctx); return openTuneSettings(ctx); }
 act("spacingIncrease", "Increase Spacing", "1", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", 1) : false, { menu: false, tip: "Increase tuning pattern spacing by one step." });
 act("spacingDecrease", "Decrease Spacing", "2", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
 act("amplIncrease", "Increase Amplitude", "3", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "ampl", 1) : false, { menu: false, tip: "Increase tuning pattern amplitude by one step." });
@@ -8151,7 +8155,7 @@ const pcb = {
   /** The layer picker the Select Layer and Place Via commands open (PCB_EDIT_FRAME::SelectOneLayer). */
   setLayerPicker(fn) { layerPickerImpl = fn || ((o, done) => done(null)); },
   netlist, ratsnest, localRatsnest, netInspector, netItemIds, netHighlightIds, msgPanelInfo, boardLayerName, drc, designSettings, inspectClearance, boardStatistics,
-  padAt, padProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
+  padAt, padProperties, tunerProperties, groupOf, expandGroups, groupMembers: (doc, id) => { const it = doc.items.get(id); return it && it.kind === "group" ? groupMembers(it.node) : []; },
   clipboardText, pasteChanges, cursorPoint, selectionIds, selMode, editPoints, editPointNode, addCornerChanges, removeCornerChanges, canAddCorner, canRemoveCorner,
   get markers() { return S.markers; },
   runDRC(ctx) { return runAction("runDRC", ctx); },

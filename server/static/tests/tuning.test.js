@@ -202,6 +202,19 @@ test("the drawing tool menu offers the tuner's steps and settings while tuning",
   for (const a of ["PCB_ACTIONS::spacingIncrease", "PCB_ACTIONS::spacingDecrease", "PCB_ACTIONS::amplIncrease", "PCB_ACTIONS::amplDecrease", "PCB_ACTIONS::lengthTunerSettings"]) assert.ok(acts.includes(a), a);
 });
 
+test("Ctrl+L and E open Tuning Pattern Properties only inside the tuner (pcb_tuning_pattern.cpp's loop)", () => {
+  const { ctx } = fakeCtx(); const opened = [];
+  pcb.setRoutingDialogs({ tuning: (o) => opened.push(o.mode) });
+  ctx.setTool("select");
+  assert.equal(pcb.runAction("lengthTunerSettings", ctx), true, "the key is taken"); assert.equal(opened.length, 0, "but nothing opens");
+  assert.equal(pcb.tunerProperties(ctx), false, "E falls to the selection's properties");
+  ctx.setTool("tunesingle");
+  pcb.runAction("lengthTunerSettings", ctx); assert.deepEqual(opened, ["single"]);
+  assert.equal(pcb.tunerProperties(ctx), true); assert.deepEqual(opened, ["single", "single"]);
+  ctx.setTool("tuneskew"); pcb.tunerProperties(ctx); assert.equal(opened[2], "diff_pair_skew");
+  ctx.setTool("select");
+});
+
 function placeTuned(target) {
   const f = fakeCtx(); P.setTargetLength(P.state.tuneSettings.single, target * IU);
   f.ctx.setTool("tunesingle");

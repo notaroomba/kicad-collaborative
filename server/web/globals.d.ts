@@ -142,6 +142,8 @@ interface ToolModule {
   selectPadAt?(ev: PointerEvent, mm: [number, number], ctx: ToolCtx): boolean | "box";
   selectedPad?(doc: KDoc): { item: KItem; index: number } | null;
   padProperties?(ctx: ToolCtx, item: KItem, index: number): boolean;
+  /** Board: with a length tuner active, PCB_ACTIONS::properties opens Tuning Pattern Properties (false otherwise). */
+  tunerProperties?(ctx: ToolCtx): boolean;
   onKey?(key: string, ev: KeyboardEvent | Record<string, never>, ctx: ToolCtx): boolean;
   drawOverlay?(ctx2d: CanvasRenderingContext2D, view: KView, ctx: ToolCtx): void;
   onDocChanged?(ctx: ToolCtx): void;
