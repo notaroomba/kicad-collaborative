@@ -46,6 +46,11 @@ const isLocked = (node: SNode): boolean => { const l = KiCadCanvas.kid(node, "lo
 const flag = (node: SNode, key: string): string => { const k = KiCadCanvas.kid(node, key); return k ? KiCadCanvas.str(k[1]) : ""; };
 const attrHas = (node: SNode, word: string): boolean => { const a = KiCadCanvas.kid(node, "attr"); return !!a && a.includes(word); };
 
+const SCH_ARC_MODES = ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd"];
+function schArcChecks(): Record<string, boolean> {
+  const m = CollabTools.sch as unknown as { _?: { schArcDrawMode?: () => number } } | undefined; const f = m && m._ && m._.schArcDrawMode; if (!f) return {};
+  const cur = f(); return Object.fromEntries(SCH_ARC_MODES.map((id, i) => ["SCH_ACTIONS::" + id, cur === i]));
+}
 function attributeChecks(items: KItem[]): Record<string, boolean> {
   const some = (f: (n: SNode) => boolean) => items.length > 0 && items.every((it) => f(it.node));
   if (isSch()) return {
@@ -54,6 +59,8 @@ function attributeChecks(items: KItem[]): Record<string, boolean> {
     "SCH_ACTIONS::setExcludeFromBoard": some((n) => flag(n, "on_board") === "no"),
     "SCH_ACTIONS::setExcludeFromSim": some((n) => flag(n, "exclude_from_sim") === "yes"),
     "SCH_ACTIONS::setExcludeFromPosFiles": some((n) => flag(n, "in_pos_files") === "no"),
+    // EE_GRAPHIC_TOOL's arc mode check items: the mode ARC_MODE_SESSION draws in
+    ...schArcChecks(),
   };
   // ROUTER_TOOL's check items (router mode, corner mode) as pcb-tools.js's router settings stand
   const router = (CollabTools.pcb as unknown as { routerChecks?: () => Record<string, boolean> } | undefined);
@@ -114,7 +121,7 @@ function deleteAll(): void {
 /** Entries with behaviour of their own.  A function returns the runner, or a string saying why the row is dimmed. */
 const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "ACTIONS::cancelInteractive": () => escape,
-  "ACTIONS::finishInteractive": (c) => (c.drawingLine || c.routing || c.canUndoPoint ? moduleKey("Enter") : "nothing is being drawn"),
+  "ACTIONS::finishInteractive": (c) => (c.drawingLine || c.routing || c.canUndoPoint || (c.editor === "sch" && (c.tool === "arc" || c.tool === "bezier")) ? moduleKey("Enter") : "nothing is being drawn"),
   "SCH_ACTIONS::undoLastSegment": (c) => (schState()?.wire ? moduleKey("Backspace") : c.canUndoPoint ? moduleKey("Backspace") : "no segment to take back"),
   "ACTIONS::deleteLastPoint": () => moduleKey("Backspace"),
   "SCH_ACTIONS::switchSegmentPosture": () => (schState()?.wire ? moduleKey("/") : "no wire is being drawn"),

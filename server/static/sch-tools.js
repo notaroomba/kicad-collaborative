@@ -7671,6 +7671,7 @@ Link '${target}' to this file?`)) return null;
       setFollow(on) {
         S.forceFollow = !!on;
       },
+      schArcDrawMode,
       pinAt,
       pinBox,
       pinAltFunction,

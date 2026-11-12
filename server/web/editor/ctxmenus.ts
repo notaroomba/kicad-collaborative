@@ -234,6 +234,12 @@ function schDrawingToolMenu(): CondMenu {
   standardSubMenus(m);
   // SCH_DRAWING_TOOLS::Init
   m.item("SCH_ACTIONS::leaveSheet", belowRoot, 150).item("SCH_ACTIONS::closeOutline", (c) => c.canClose, 200).item("ACTIONS::deleteLastPoint", (c) => c.canUndoPoint, 200);
+  // EE_GRAPHIC_TOOL::Init: while Draw Arcs runs, its posture, the five modes, Cycle Arc Drawing Mode, then Delete Last
+  // Point and Finish for the managed shapes (an arc, a bezier)
+  const inDrawingArc = tool("arc"), inManagedShape = tool("arc", "bezier");
+  m.item("ACTIONS::arcPosture", inDrawingArc, 200);
+  for (const a of ["drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd"]) m.check("SCH_ACTIONS::" + a, inDrawingArc, 200);
+  m.item("ACTIONS::cycleArcDrawMode", inDrawingArc, 200).item("ACTIONS::deleteLastPoint", and(inManagedShape, (c) => !c.canUndoPoint), 200).item("ACTIONS::finishInteractive", inManagedShape, 200);
   // SCH_EDIT_TOOL::Init (the drawing tools' menu)
   m.item("SCH_ACTIONS::clearHighlight", and(haveHighlight, idle), 1).sep(and(haveHighlight, idle), 1);
   m.item("SCH_ACTIONS::enterSheet", and(schSheetSel, idle), 1).sep(and(schSheetSel, idle), 1);
