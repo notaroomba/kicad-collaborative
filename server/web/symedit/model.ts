@@ -1086,3 +1086,27 @@ export function expandStacked(pad: string): { pins: string[]; valid: boolean } {
   }
   return out.length ? { pins: out, valid: true } : { pins: [pad], valid: false };
 }
+
+// ---------------------------------------------------------------- sym-lib-table (LIBRARY_TABLE::Format / PANEL_SYM_LIB_TABLE)
+export interface LibTableRow { enabled: boolean; visible: boolean; nickname: string; uri: string; type: string; options: string; descr: string }
+export function parseLibTable(text: string): LibTableRow[] {
+  const t = parse(text); if (!t) return [];
+  return kids(t, "lib").map((l) => ({ nickname: str((kid(l, "name") || [])[1]), uri: str((kid(l, "uri") || [])[1]), type: str((kid(l, "type") || [])[1]) || "KiCad",
+    options: str((kid(l, "options") || [])[1]), descr: str((kid(l, "descr") || [])[1]), enabled: !kid(l, "disabled"), visible: !kid(l, "hidden") }));
+}
+/** LIBRARY_TABLE::Format: version 7, each row's name / type / uri / options / descr, then (disabled) and (hidden). */
+export function formatLibTable(rows: LibTableRow[], root = "sym_lib_table"): string {
+  const lines = rows.map((r) => `  (lib (name ${q(r.nickname)})(type ${q(r.type)})(uri ${q(r.uri.replace(/\\/g, "/"))})(options ${q(r.options)})(descr ${q(r.descr)})${r.enabled ? "" : "(disabled)"}${r.visible ? "" : "(hidden)"})`);
+  return `(${root}\n  (version 7)\n${lines.map((l) => l + "\n").join("")})\n`;
+}
+/** LIB_TABLE_GRID_TRICKS::VerifyTable: rows without a path go silently; a nickname must be legal and unique. */
+export function verifyLibTable(rows: LibTableRow[]): { rows: LibTableRow[]; error?: string; row?: number } {
+  const out = rows.filter((r) => r.uri.trim()).map((r) => ({ ...r, nickname: r.nickname.trim(), uri: r.uri.trim() }));
+  for (let i = 0; i < out.length; i++) {
+    const nick = out[i].nickname;
+    if (!nick) return { rows: out, error: "Library must have a nickname.", row: i };
+    const bad = [...nick].find((c) => c < " " || c === "\\" || c === ":"); if (bad) return { rows: out, error: `Illegal character '${bad}' in nickname '${nick}'.`, row: i };
+  }
+  for (let a = 0; a < out.length - 1; a++) for (let b = a + 1; b < out.length; b++) if (out[a].nickname === out[b].nickname) return { rows: out, error: `Multiple libraries cannot share the same nickname ('${out[a].nickname}').`, row: b };
+  return { rows: out };
+}

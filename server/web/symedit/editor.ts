@@ -118,6 +118,7 @@ export class SymbolEditor {
     for (const [path, nick] of this.tableNicks) nickFor.set(path, nick);
     for (const d of docs) {
       if (d.docType !== "symbol_lib" && !/\.kicad_sym$/i.test(d.path)) continue;
+      if (this.disabledPaths.has(d.path)) continue;
       const file = d.path.split("/").pop() || d.path;
       const nick = nickFor.get(d.path) || file.replace(/\.kicad_sym$/i, "");
       if (this.libs.has(nick)) continue;
@@ -137,25 +138,35 @@ export class SymbolEditor {
     }
   }
   private tableNicks = new Map<string, string>();
+  /** Project libraries whose sym-lib-table row is disabled: not loaded, not in the tree (LIBRARY_TABLE_ROW::Disabled). */
+  private disabledPaths = new Set<string>();
   private tableRead = false;
   private async readTable(docId: string): Promise<void> {
     if (this.tableRead) return; this.tableRead = true;
     try {
       const r = await fetch(`/api/docs/${docId}/content`, { credentials: "same-origin" }); if (!r.ok) return;
-      const t = await r.text(); const tree = K().parse(t); if (!tree) return;
-      let changed = false;
-      for (const l of K().kids(tree, "lib")) {
-        const name = K().str((K().kid(l, "name") || [])[1]), uri = K().str((K().kid(l, "uri") || [])[1]);
-        const m = /^\$\{KIPRJMOD\}\/(.+)$/.exec(uri); if (!name || !m) continue;
-        this.tableNicks.set(m[1], name);
-        for (const lib of this.libs.values()) if (lib.doc && lib.doc.path === m[1] && lib.nick !== name) {
-          this.libs.delete(lib.nick); lib.nick = name; lib.doc.nickname = name; this.libs.set(name, lib);
-          for (const t2 of this.tabs) if (t2.lib === (lib.doc.path.split("/").pop() || "").replace(/\.kicad_sym$/i, "")) t2.lib = name;
-          changed = true;
-        }
-      }
-      if (changed) this.renderAll();
+      this.reloadLibTable(M.parseLibTable(await r.text()));
     } catch (e) { /* the file names stay */ }
+  }
+  /** The project table changed (or was read): nicknames follow it, disabled rows leave the tree, enabled ones come back. */
+  reloadLibTable(rows: M.LibTableRow[]): void {
+    let changed = false;
+    const disabled = new Set<string>();
+    for (const row of rows) {
+      const m = /^\$\{KIPRJMOD\}\/(.+)$/.exec(row.uri); if (!row.nickname || !m) continue;
+      const path = m[1]; this.tableNicks.set(path, row.nickname);
+      if (!row.enabled) disabled.add(path);
+      for (const lib of [...this.libs.values()]) if (lib.doc && lib.doc.path === path && lib.nick !== row.nickname) {
+        const old = lib.nick; this.libs.delete(old); lib.nick = row.nickname; lib.doc.nickname = row.nickname; this.libs.set(row.nickname, lib);
+        for (const t2 of this.tabs) if (t2.lib === old) t2.lib = row.nickname;
+        changed = true;
+      }
+    }
+    for (const lib of [...this.libs.values()]) if (lib.doc && disabled.has(lib.doc.path) && !this.tabs.some((t) => t.lib === lib.nick)) { this.libs.delete(lib.nick); changed = true; }
+    const reenabled = [...this.disabledPaths].some((p) => !disabled.has(p));
+    this.disabledPaths = disabled;
+    if (reenabled) { this.refreshLibs(); changed = true; }
+    if (changed) this.renderAll();
   }
   private onLibEvent(lib: Lib, why: string, names?: string[]): void {
     if (why === "load" || why === "error") lib.loading = false;
@@ -433,7 +444,7 @@ export class SymbolEditor {
         a("nextSymbolTab", () => this.tabs.length > 1), a("prevSymbolTab", () => this.tabs.length > 1), a("closeSymbolTab", () => this.tabs.length > 0)]],
       ["Place", ["placeSymbolPin", "placeSymbolText", "drawSymbolTextBox", "drawRectangle", "drawCircle", "drawEllipse", "drawEllipseArc", "drawArc", "drawBezier", "drawSymbolLines", "drawSymbolPolygon"].map((id) => a(id, can, () => TOOL_ACTIONS[id] === this.tool))],
       ["Inspect", [a("showDatasheet", () => has() && !!M.fieldValue(this.symbol()!, "Datasheet")), S, a("checkSymbol", has)]],
-      ["Preferences", [a("configurePaths"), a("showSymbolLibTable"), a("openPreferences"), S, { label: "Set Language" }]],
+      ["Preferences", [a("configurePaths"), a("showSymbolLibTable", () => !!appState.project), a("openPreferences"), S, { label: "Set Language" }]],
       ["Help", [{ label: "Getting Started with KiCad", run: () => window.open("https://docs.kicad.org/", "_blank", "noopener") }, a("listHotKeys")]],
     ];
   }
@@ -673,7 +684,7 @@ export class SymbolEditor {
     const tool = (t: ToolId) => () => this.setTool(t);
     const A: Record<string, (() => void) | undefined> = {
       newLibrary: () => void D.newLibrary(this), addLibrary: () => void D.addLibrary(this),
-      openPreferences: () => openPreferences(),
+      openPreferences: () => openPreferences(), showSymbolLibTable: () => void D.manageSymbolLibraries(this),
       showSymbolBrowser: () => void this.symbolBrowser(), saveLibraryAs: () => { const l = this.currentLib(); if (l) void D.saveLibraryAs(this, l); },
       newSymbol: () => void D.newSymbol(this), editLibSymbolWithLibEdit: () => { const t = this.tab; if (t && t.origin) void this.editLibrarySymbol(t.origin.libId); },
       save: () => void this.save(), saveSymbolAs: () => void D.saveSymbolAs(this, false), saveSymbolCopyAs: () => void D.saveSymbolAs(this, true), saveAll: () => void this.saveAll(),
