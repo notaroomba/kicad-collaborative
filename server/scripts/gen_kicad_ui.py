@@ -17,7 +17,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 OUT = os.path.join(ROOT, "server", "web", "generated", "kicad-ui-spec.json")
 
 ACTION_SOURCES = ["common/tool/actions.cpp", "eeschema/tools/sch_actions.cpp", "pcbnew/tools/pcb_actions.cpp"]
-TOOLBAR_SOURCES = {"sch": "eeschema/toolbars_sch_editor.cpp", "pcb": "pcbnew/toolbars_pcb_editor.cpp"}
+TOOLBAR_SOURCES = {"sch": "eeschema/toolbars_sch_editor.cpp", "pcb": "pcbnew/toolbars_pcb_editor.cpp", "symedit": "eeschema/symbol_editor/toolbars_symbol_editor.cpp"}
 LOCS = {"TOP_MAIN": "top", "TOP_AUX": "aux", "LEFT": "left", "RIGHT": "right"}
 # Standalone-only or debug-only entries the desktop hides in project mode.
 SKIP = {"ACTIONS::doNew", "ACTIONS::open", "PCB_ACTIONS::importNetlist", "ACTIONS::toggleBoundingBoxes",
@@ -88,7 +88,7 @@ TOKEN = re.compile(r"case\s+TOOLBAR_LOC::(\w+)\s*:"
 
 def parse_toolbars(path, actions):
     s = read(path)
-    body = s[s.index("DefaultToolbarConfig"):]
+    body = re.sub(r"//[^\n]*", "", s[s.index("DefaultToolbarConfig"):])   # a commented-out entry is not on the toolbar
     bars, cur, group = {}, None, None
     for m in TOKEN.finditer(body):
         loc, act, grp, gact, ctl = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)

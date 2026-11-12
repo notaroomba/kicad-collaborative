@@ -121,6 +121,9 @@ interface KiCadCanvasApi {
   onAssetLoaded: ((info: { id: string; kind: string; ok: boolean }) => void) | null;
   /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */
   pcbSizes: typeof import("./canvas/pcb-sizes").pcbSizes;
+  /** a library symbol (lib_symbols / .kicad_sym entry) as a drawable document in library space (web/canvas/libsym.ts) */
+  parseLibSymbol(sym: SNode, opts?: import("./canvas/libsym").LibSymbolOpts): KDoc;
+  PIN_TYPE_NAMES: Record<string, string>;
   /** the board's own settings sections (web/canvas/board-setup.ts) */
   boardSetup?: { applyBoardSetup(doc: KDoc, change: KChange): boolean };
   [extra: string]: unknown;

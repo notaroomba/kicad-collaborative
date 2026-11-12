@@ -48,6 +48,7 @@ import { GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX, drawTextStroke, textMode } fr
 import { pcbSizes } from "./pcb-sizes";
 import { boardItemBox, presenceSelection } from "./kicad-bbox";
 import { padModel } from "./pad-model";
+import { parseLibSymbol, subUnitBody, PIN_TYPE_NAMES, libGraphicGeom } from "./libsym";
 export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyDocProps, paperSize, titleBlockOf, DASH_RATIOS, setViewTransform, drawSelectionHalo, selectedColor, moveItem, replaceChange, addChange, removeChange, typeNameOf, boardChangeExtras, netNameOf, groupMemberIds, wrapFragment, pinPoints, wireEndsAt, newUuid, createItem, setPts, setAt, atOf, ptsOf, kid, kids, num, str, uuidOf, cloneNode, quotedMask, resolveLib, ORIENT, addItem, applyChange, render, movableItems, hitTest, layerList, snap, computeBBox, PCB_HIDDEN_DEFAULT, SCH, PCB_COLORS, PCB_BG,
   // schematic colour themes (colors.ts): KiCad Default / KiCad Classic / Dark; the painters rebuild stale geometry,
   // renderSvg / renderPng use opts.colorTheme (KiCad Default unless given)
@@ -74,7 +75,9 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
   textMode: undefined, currentTextMode: textMode, strokeGlyph, strokeLine, strokeLineWidth, strokeOrigin, parseStrokeMarkup, linebreakText, drawStrokeText, drawTextStroke,
   unescapeText, displayNetName, netCode, unitLetter, GRID_MIN_SPACING, GRID_TICK, MIN_TEXT_PX,
   // the board editor's track / via sizes, netclass resolution and routing layer pair (web/canvas/pcb-sizes.ts)
-  pcbSizes };
+  pcbSizes,
+  // the Symbol Editor's render mode (web/canvas/libsym.ts): one library symbol as an editable document
+  parseLibSymbol, subUnitBody, PIN_TYPE_NAMES, libGraphicGeom };
 
 /** The api with the members assigned below, after the literal (the literal's own type does not have them). */
 type Api = typeof api & {

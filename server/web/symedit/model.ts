@@ -1,0 +1,719 @@
+// symedit/model.ts — the Symbol Editor's library-symbol model, over s-expression nodes and free of the DOM so the
+// node tests run it.  The C++ it ports:
+//   - SCH_IO_KICAD_SEXPR_LIB_CACHE::Save / formatLibrary / SaveSymbol (ordering by inheritance depth then name) and
+//     KICAD_FORMAT::Prettify (common/io/kicad/kicad_io_utils.cpp) — a saved library diffs cleanly against a desktop save;
+//   - LIB_SYMBOL's units and body styles ("Name_u_b" sub-symbols, (unit_name …), (body_styles demorgan | names));
+//   - LIB_SYMBOL_LIBRARY_MANAGER::CreateSymbol (New Symbol / Derive from Existing Symbol), LIB_SYMBOL::Flatten,
+//     rename with the derived symbols' (extends …) rewritten;
+//   - SYMBOL_EDITOR_PIN_TOOL: CreatePin defaults (g_Last*), PlacePin's occupied-position test, CreateImagePins,
+//     SynchronizeOtherUnits, RepeatPin with IncrementString (common/increment.cpp), PushPinProperties;
+//   - CheckLibSymbol (eeschema/symbol_checker.cpp) message for message;
+//   - SYMBOL_EDIT_FRAME::LoadSymbolFromSchematic's field back-transform and SCH_EDIT_FRAME::SaveSymbolToSchematic's
+//     SCH_SYMBOL::UpdateFields( update style, ref, other fields; no reset ) and alternate-pin cleanup;
+//   - the Pin Table's CSV export / import columns (DIALOG_LIB_EDIT_PIN_TABLE).
+// Coordinates are the file's: millimetres, library Y up.
+import { cloneNode, isList, kid, kids, num, parse, str } from "../canvas/sexpr";
+import { serialize } from "../canvas/export";
+
+export type Node = SNode;
+
+// ---------------------------------------------------------------- constants
+/** SEXPR_SYMBOL_LIB_FILE_VERSION of this tree (eeschema/sch_file_versions.h): only for a brand-new library. */
+export const SYMBOL_LIB_FILE_VERSION = 20261106;
+export const NEW_LIBRARY_TEXT = '(kicad_symbol_lib\n\t(version 20261106)\n\t(generator "kicad_symbol_editor")\n\t(generator_version "10.0")\n)\n';
+export const MIL = 0.0254;
+/** SYMBOL_EDITOR_SETTINGS defaults (symbol_editor_settings.cpp): pin length 100, name / number size 50 mil, repeat step 100 mil, label delta 1. */
+export const DEFAULTS = { pinLength: 100 * MIL, pinNameSize: 50 * MIL, pinNumSize: 50 * MIL, pinStep: 100 * MIL, labelDelta: 1, lineWidth: 0, textSize: 50 * MIL, gridMils: 50 };
+export const DEFAULT_PIN_NAME_OFFSET = 20 * MIL;   // DEFAULT_PIN_NAME_OFFSET 20 mil
+export const MANDATORY_FIELDS = ["Reference", "Value", "Footprint", "Datasheet", "Description"];
+
+/** The electrical types in DIALOG_PIN_PROPERTIES / the pin table order, with ElectricalPinTypeGetText. */
+export const PIN_TYPES: [string, string][] = [
+  ["input", "Input"], ["output", "Output"], ["bidirectional", "Bidirectional"], ["tri_state", "Tri-state"], ["passive", "Passive"],
+  ["free", "Free"], ["unspecified", "Unspecified"], ["power_in", "Power input"], ["power_out", "Power output"],
+  ["open_collector", "Open collector"], ["open_emitter", "Open emitter"], ["no_connect", "Unconnected"],
+];
+/** PinShapeGetText order. */
+export const PIN_SHAPES: [string, string][] = [
+  ["line", "Line"], ["inverted", "Inverted"], ["clock", "Clock"], ["inverted_clock", "Inverted clock"], ["input_low", "Input low"],
+  ["clock_low", "Clock low"], ["output_low", "Output low"], ["edge_clock_high", "Falling edge clock"], ["non_logic", "NonLogic"],
+];
+/** PinOrientationName: file angle -> name. */
+export const PIN_ORIENTATIONS: [number, string][] = [[0, "Right"], [180, "Left"], [90, "Up"], [270, "Down"]];
+
+// ---------------------------------------------------------------- text helpers
+export const q = (s: string): string => '"' + String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n") + '"';
+/** FormatInternalUnits for the schematic: 100 nm resolution, no trailing zeros, never "-0". */
+export function fmt(v: number): string { const s = (Math.round(v * 1e4) / 1e4).toFixed(4).replace(/0+$/, "").replace(/\.$/, ""); return s === "-0" ? "0" : s; }
+export const node = (text: string): Node => { const n = parse(text); if (!n) throw new Error("bad s-expression: " + text.slice(0, 60)); return n; };
+export const clone = (n: Node): Node => cloneNode(n);
+export const text = (n: Node): string => serialize(n);
+
+// ---------------------------------------------------------------- Prettify
+/** KICAD_FORMAT::Prettify (common/io/kicad/kicad_io_utils.cpp:117), FORMAT_MODE::NORMAL, character for character. */
+export function prettify(src: string): string {
+  const xyLimit = 99, wrapAt = 72;
+  let out = "", depth = 0, last = "", inQuote = false, spaced = false, multi = false, inXY = false, column = 0, bs = 0;
+  const n = src.length; const ws = (c: string) => c === " " || c === "\t" || c === "\n" || c === "\r";
+  const nextNonWs = (i: number): string => { while (i < n && ws(src[i])) i++; return i < n ? src[i] : ""; };
+  const isXY = (i: number) => src[i + 1] === "x" && src[i + 2] === "y" && src[i + 3] === " ";
+  for (let i = 0; i < n; i++) {
+    const c = src[i];
+    if (depth === 0 && c === "#" && (out === "" || out[out.length - 1] === "\n")) {
+      let e = src.indexOf("\n", i); if (e < 0) e = n; out += src.slice(i, e) + "\n"; i = e; continue;
+    }
+    const next = nextNonWs(i);
+    if (ws(c) && !inQuote) {
+      if (!spaced && depth > 0 && last !== "(" && next !== ")" && next !== "(") {
+        if (inXY || column < wrapAt) { out += " "; column++; }
+        else { out += "\n" + "\t".repeat(depth); column = depth; multi = true; }
+        spaced = true;
+      }
+      continue;
+    }
+    spaced = false;
+    if (c === "(" && !inQuote) {
+      const curXY = isXY(i);
+      if (out === "" || out[out.length - 1] === "\n") { out += "("; column++; }
+      else if (inXY && curXY && column < xyLimit) { out += " ("; column += 2; }
+      else { out += "\n" + "\t".repeat(depth) + "("; column = depth + 1; }
+      inXY = curXY; depth++;
+    } else if (c === ")" && !inQuote) {
+      if (depth > 0) depth--;
+      if (last === ")" || multi) { out += "\n" + "\t".repeat(depth) + ")"; column = depth + 1; multi = false; }
+      else { out += ")"; column++; }
+    } else {
+      if (c === "\\") bs++;
+      else if (c === '"' && (bs & 1) === 0) inQuote = !inQuote;
+      if (c !== "\\") bs = 0;
+      out += c; column++;
+    }
+    last = c;
+  }
+  return out + "\n";
+}
+
+// ---------------------------------------------------------------- the library file
+export interface SymLib {
+  /** (kicad_symbol_lib (version …) (generator …) (generator_version …) …) without its (symbol …) children */
+  head: Node;
+  version: number;
+  /** top-level symbols by name, in file order */
+  symbols: Map<string, Node>;
+}
+export function parseLibrary(src: string): SymLib {
+  const t = parse(src);
+  if (!t || t[0] !== "kicad_symbol_lib") throw new Error("not a symbol library");
+  const head: Node = [t[0]]; const symbols = new Map<string, Node>();
+  for (let j = 1; j < t.length; j++) { const c = t[j]; if (isList(c) && c[0] === "symbol") symbols.set(str(c[1]), c); else head.push(c); }
+  const v = kid(t, "version");
+  return { head, version: v ? num(v[1]) : 0, symbols };
+}
+export function emptyLibrary(): SymLib { return parseLibrary(NEW_LIBRARY_TEXT); }
+/** The library's symbol names in the order SCH_IO_KICAD_SEXPR_LIB_CACHE::Save writes them. */
+export function saveOrder(lib: SymLib): string[] {
+  const names = Array.from(lib.symbols.keys());
+  const depth = (name: string): number => { let d = 0, cur = lib.symbols.get(name); const seen = new Set<string>(); while (cur && d < 32) { const e = kid(cur, "extends"); if (!e) break; const p = str(e[1]); if (seen.has(p)) break; seen.add(p); d++; cur = lib.symbols.get(p); } return d; };
+  const dep = new Map(names.map((n) => [n, depth(n)]));
+  // wxString::operator< : a code-unit comparison
+  return names.sort((a, b) => (dep.get(a)! - dep.get(b)!) || (a < b ? -1 : a > b ? 1 : 0));
+}
+/** The whole file, as the desktop writes it: header, symbols by inheritance depth then name, prettified. */
+export function serializeLibrary(lib: SymLib): string {
+  let s = "(" + lib.head.slice(1).reduce((acc: string, c) => acc + " " + serialize(c), String(lib.head[0]));
+  for (const name of saveOrder(lib)) s += " " + serialize(lib.symbols.get(name)!);
+  return prettify(s + ")");
+}
+
+// ---------------------------------------------------------------- one symbol
+export const symName = (sym: Node): string => str(sym[1]);
+export const parentNameOf = (sym: Node): string | null => { const e = kid(sym, "extends"); return e ? str(e[1]) : null; };
+export const isDerived = (sym: Node): boolean => !!kid(sym, "extends");
+export function subUnitBody(name: string): [number, number] { const m = /_(\d+)_(\d+)$/.exec(name); return m ? [+m[1], +m[2]] : [0, 0]; }
+/** The root a derived symbol resolves to in its library (or itself). */
+export function rootOf(lib: SymLib | null, sym: Node): Node { let cur = sym; const seen = new Set<string>(); while (lib && isDerived(cur)) { const p = parentNameOf(cur)!; if (seen.has(p)) break; seen.add(p); const n = lib.symbols.get(p); if (!n) break; cur = n; } return cur; }
+
+/** LIB_SYMBOL::GetUnitCount: the highest unit any sub-symbol names (at least 1). */
+export function unitCount(sym: Node): number { let n = 1; for (const s of kids(sym, "symbol")) { const [u] = subUnitBody(str(s[1])); if (u > n) n = u; } const uc = kid(sym, "unit_count"); return uc ? Math.max(n, num(uc[1], 1)) : n; }
+/** The body styles: De Morgan (Standard / Alternate), custom names, or one. */
+export function bodyStyles(sym: Node): { count: number; demorgan: boolean; names: string[] } {
+  const bs = kid(sym, "body_styles");
+  if (bs) { if (str(bs[1]) === "demorgan") return { count: 2, demorgan: true, names: ["Standard", "Alternate"] }; const names = bs.slice(1).map((x) => str(x)); return { count: Math.max(1, names.length), demorgan: false, names }; }
+  let max = 1; for (const s of kids(sym, "symbol")) { const [, b] = subUnitBody(str(s[1])); if (b > max) max = b; }
+  return max >= 2 ? { count: max, demorgan: true, names: ["Standard", "Alternate"] } : { count: 1, demorgan: false, names: ["Standard"] };
+}
+/** LIB_SYMBOL::GetBodyStyleDescription( n, true ). */
+export function bodyStyleDescription(sym: Node, n: number): string { const b = bodyStyles(sym); if (b.demorgan) return n === 2 ? "Alternate" : "Standard"; return b.names[n - 1] || String(n); }
+/** LIB_SYMBOL::LetterSubReference: 1 -> A, 27 -> AA. */
+export function unitLetter(unit: number): string { let s = ""; let u = unit; do { const r = (u - 1) % 26; s = String.fromCharCode(65 + r) + s; u = (u - r - 1) / 26; } while (u > 0); return s; }
+/** (unit_name …) of a sub-symbol, by unit. */
+export function unitNames(sym: Node): Map<number, string> { const m = new Map<number, string>(); for (const s of kids(sym, "symbol")) { const [u] = subUnitBody(str(s[1])); const un = kid(s, "unit_name"); if (un && u > 0) m.set(u, str(un[1])); } return m; }
+/** The unit selector's entries: "Unit A" or the display name (SYMBOL_EDIT_FRAME::RebuildSymbolUnitAndBodyStyleLists). */
+export function unitChoices(sym: Node): string[] { const n = unitCount(sym), names = unitNames(sym); const out: string[] = []; for (let u = 1; u <= n; u++) out.push(names.get(u) ? `Unit ${unitLetter(u)} ${names.get(u)}` : `Unit ${unitLetter(u)}`); return out; }
+export const unitsLocked = (sym: Node): boolean => kids(sym, "property").some((p) => str(p[1]) === "ki_locked");
+export const isPower = (sym: Node): boolean => !!kid(sym, "power");
+
+/** The sub-symbol "Name_u_b", created (in unit / body order) when missing. */
+export function ensureSub(sym: Node, unit: number, body: number): Node {
+  const name = baseName(sym) + "_" + unit + "_" + body;
+  for (const s of kids(sym, "symbol")) if (str(s[1]) === name) return s;
+  const sub = node("(symbol " + q(name) + ")");
+  let at = -1;
+  for (let j = 1; j < sym.length; j++) { const c = sym[j]; if (!isList(c) || c[0] !== "symbol") continue; const [u, b] = subUnitBody(str(c[1])); if (u < unit || (u === unit && b < body)) at = j; }
+  if (at < 0) { for (let j = 1; j < sym.length; j++) { const c = sym[j]; if (isList(c) && (c[0] === "property" || c[0] === "duplicate_pin_numbers_are_jumpers" || c[0] === "in_pos_files" || c[0] === "on_board" || c[0] === "in_bom" || c[0] === "exclude_from_sim" || c[0] === "jumper_pin_groups" || c[0] === "pin_map" || c[0] === "pin_maps")) at = j; } }
+  if (at < 0) { const ef = sym.findIndex((c, j) => j > 0 && isList(c) && (c[0] === "embedded_fonts" || c[0] === "embedded_files")); sym.splice(ef > 0 ? ef : sym.length, 0, sub); }
+  else sym.splice(at + 1, 0, sub);
+  return sub;
+}
+/** The sub-symbols' base: the symbol's own name (SaveSymbol writes "<unitName>_u_b" from the LIB_ID item name). */
+export function baseName(sym: Node): string { const n = symName(sym); const i = n.indexOf(":"); return i >= 0 ? n.slice(i + 1) : n; }
+
+// draw items -----------------------------------------------------------
+export interface ItemRef { sub: string; j: number; unit: number; body: number }
+export const GRAPHIC_KINDS = new Set(["rectangle", "polyline", "bezier", "circle", "arc", "ellipse", "ellipse_arc", "text", "text_box"]);
+export function subByName(sym: Node, name: string): Node | null { for (const s of kids(sym, "symbol")) if (str(s[1]) === name) return s; return null; }
+export function itemAt(sym: Node, ref: Pick<ItemRef, "sub" | "j">): Node | null { const s = subByName(sym, ref.sub); const c = s ? s[ref.j] : null; return isList(c) ? c : null; }
+/** Every draw item (shapes, texts, pins) with where it lives. */
+export function drawItems(sym: Node): (ItemRef & { node: Node })[] {
+  const out: (ItemRef & { node: Node })[] = [];
+  for (const s of kids(sym, "symbol")) { const name = str(s[1]); const [u, b] = subUnitBody(name); for (let j = 2; j < s.length; j++) { const c = s[j]; if (isList(c) && (c[0] === "pin" || GRAPHIC_KINDS.has(String(c[0])))) out.push({ sub: name, j, unit: u, body: b, node: c }); } }
+  return out;
+}
+export const allPins = (sym: Node) => drawItems(sym).filter((d) => d.node[0] === "pin");
+/** SCH_ITEM type order for the sub-symbol's saved order: shapes, text boxes, texts, pins (KICAD_T). */
+const typeRank = (k: string): number => (k === "text_box" ? 1 : k === "text" ? 2 : k === "pin" ? 3 : 0);
+/** Add a draw item to unit / body style (0 = common), after the last item of its type; returns its ref. */
+export function addDrawItem(sym: Node, unit: number, body: number, item: Node): ItemRef {
+  const sub = ensureSub(sym, unit, body); const r = typeRank(String(item[0]));
+  let at = sub.length;
+  for (let j = 2; j < sub.length; j++) { const c = sub[j]; if (isList(c) && c[0] !== "unit_name" && typeRank(String(c[0])) > r) { at = j; break; } }
+  sub.splice(at, 0, item);
+  return { sub: str(sub[1]), j: at, unit, body };
+}
+/** Remove one draw item; an emptied sub-symbol stays (KiCad keeps the unit). */
+export function removeDrawItem(sym: Node, ref: Pick<ItemRef, "sub" | "j">): Node | null { const s = subByName(sym, ref.sub); if (!s || !isList(s[ref.j])) return null; return s.splice(ref.j, 1)[0] as Node; }
+
+// geometry edits on a node, library coordinates --------------------------------
+const setXY = (n: Node | null, f: (x: number, y: number) => [number, number]): void => { if (!n) return; const [x, y] = f(num(n[1]), num(n[2])); n[1] = +fmt(x); n[2] = +fmt(y); };
+/** Every point a node carries, transformed (at / start / mid / end / center / pts). */
+export function mapPoints(n: Node, f: (x: number, y: number) => [number, number]): void {
+  for (const k of ["at", "start", "mid", "end", "center"]) setXY(kid(n, k), f);
+  const p = kid(n, "pts"); if (p) for (const xy of kids(p, "xy")) setXY(xy, f);
+}
+export function moveNode(n: Node, dx: number, dy: number): void { mapPoints(n, (x, y) => [x + dx, y + dy]); }
+/** Rotate 90° counter-clockwise (SCH_ACTIONS::rotateCCW, R) or clockwise about (cx, cy). */
+export function rotateNode(n: Node, cx: number, cy: number, ccw: boolean): void {
+  const k = String(n[0]);
+  if (k === "circle") { setXY(kid(n, "center"), (x, y) => rot(x, y, cx, cy, ccw)); return; }
+  mapPoints(n, (x, y) => rot(x, y, cx, cy, ccw));
+  if (k === "rectangle") { const s = kid(n, "start"), e = kid(n, "end"); if (s && e) { const x0 = Math.min(num(s[1]), num(e[1])), x1 = Math.max(num(s[1]), num(e[1])), y0 = Math.min(num(s[2]), num(e[2])), y1 = Math.max(num(s[2]), num(e[2])); s[1] = +fmt(x0); s[2] = +fmt(y1); e[1] = +fmt(x1); e[2] = +fmt(y0); } }
+  const at = kid(n, "at");
+  if (k === "pin" && at) at[3] = (((num(at[3]) + (ccw ? 90 : 270)) % 360) + 360) % 360;
+  else if ((k === "text" || k === "property" || k === "text_box") && at) at[3] = num(at[3]) === 0 ? 90 : 0;
+}
+const rot = (x: number, y: number, cx: number, cy: number, ccw: boolean): [number, number] => { const dx = x - cx, dy = y - cy; return ccw ? [cx - dy, cy + dx] : [cx + dy, cy - dx]; };
+/** Mirror horizontally (left / right, mirrorH 'X') or vertically (mirrorV 'Y') about (cx, cy). */
+export function mirrorNode(n: Node, cx: number, cy: number, horizontal: boolean): void {
+  const k = String(n[0]);
+  mapPoints(n, (x, y) => horizontal ? [2 * cx - x, y] : [x, 2 * cy - y]);
+  if (k === "arc") { const s = kid(n, "start"), e = kid(n, "end"); if (s && e) { const t1 = s[1], t2 = s[2]; s[1] = e[1]; s[2] = e[2]; e[1] = t1; e[2] = t2; } }
+  const at = kid(n, "at");
+  if (k === "pin" && at) { const a = num(at[3]); at[3] = horizontal ? (a === 0 ? 180 : a === 180 ? 0 : a) : (a === 90 ? 270 : a === 270 ? 90 : a); }
+  else if ((k === "text" || k === "property") && at) {
+    const e = kid(n, "effects"); const j = e ? kid(e, "justify") : null; const vert = num(at[3]) === 90;
+    if (j && ((horizontal && !vert) || (!horizontal && vert))) for (let i = 1; i < j.length; i++) { if (j[i] === "left") j[i] = "right"; else if (j[i] === "right") j[i] = "left"; }
+    if (j && ((horizontal && vert) || (!horizontal && !vert))) for (let i = 1; i < j.length; i++) { if (j[i] === "top") j[i] = "bottom"; else if (j[i] === "bottom") j[i] = "top"; }
+  }
+}
+/** The anchor moved to (x, y): every item and field shifts by the opposite (SYMBOL_EDITOR_MOVE_TOOL "Move Symbol Anchor"). */
+export function moveAnchor(sym: Node, x: number, y: number): void {
+  for (const d of drawItems(sym)) moveNode(d.node, -x, -y);
+  for (const p of kids(sym, "property")) setXY(kid(p, "at"), (a, b) => [a - x, b - y]);
+}
+
+// ---------------------------------------------------------------- pins
+export interface PinInfo {
+  type: string; shape: string; x: number; y: number; orient: number; length: number; visible: boolean;
+  name: string; number: string; nameSize: number; numSize: number; unit: number; body: number;
+  alternates: { name: string; type: string; shape: string }[];
+}
+export function pinInfo(p: Node, unit = 0, body = 0): PinInfo {
+  const at = kid(p, "at"), len = kid(p, "length"), nm = kid(p, "name"), nb = kid(p, "number");
+  const sizeOf = (t: Node | null) => { const e = t && kid(t, "effects"); const f = e && kid(e, "font"); const s = f && kid(f, "size"); return s ? num(s[1]) : 1.27; };
+  const h = kid(p, "hide"); const hidden = h ? str(h[1]) !== "no" : p.includes("hide");
+  return { type: str(p[1]) || "unspecified", shape: str(p[2]) || "line", x: at ? num(at[1]) : 0, y: at ? num(at[2]) : 0, orient: at ? num(at[3]) : 0, length: len ? num(len[1]) : 2.54,
+    visible: !hidden, name: nm ? str(nm[1]) : "", number: nb ? str(nb[1]) : "", nameSize: sizeOf(nm), numSize: sizeOf(nb), unit, body,
+    alternates: kids(p, "alternate").map((a) => ({ name: str(a[1]), type: str(a[2]), shape: str(a[3]) })) };
+}
+/** SCH_IO_KICAD_SEXPR_LIB_CACHE::savePin. */
+export function pinNode(i: PinInfo): Node {
+  let s = `(pin ${i.type} ${i.shape} (at ${fmt(i.x)} ${fmt(i.y)} ${i.orient}) (length ${fmt(i.length)})`;
+  if (!i.visible) s += " (hide yes)";
+  s += ` (name ${q(i.name)} (effects (font (size ${fmt(i.nameSize)} ${fmt(i.nameSize)}))))`;
+  s += ` (number ${q(i.number)} (effects (font (size ${fmt(i.numSize)} ${fmt(i.numSize)}))))`;
+  for (const a of i.alternates) s += ` (alternate ${q(a.name)} ${a.type} ${a.shape})`;
+  return node(s + ")");
+}
+/** Rewrite a pin node from an info record, keeping anything else it carries (custom properties, uuid). */
+export function setPin(p: Node, i: PinInfo): void {
+  const fresh = pinNode(i);
+  const keep = p.filter((c, j) => j > 2 && isList(c) && !["at", "length", "hide", "name", "number", "alternate"].includes(String(c[0])));
+  p.length = 0; for (const c of fresh) p.push(c); for (const c of keep) p.push(c);
+}
+/** SCH_PIN::ChangeLength: the connection point moves so the body end stays put. */
+export function changeLength(i: PinInfo, len: number): void {
+  const d = len - i.length; const a = i.orient;
+  if (a === 0) i.x -= d; else if (a === 180) i.x += d; else if (a === 90) i.y -= d; else i.y += d;
+  i.length = len;
+}
+
+/** The session's last-used pin settings (g_LastPin*), as CreatePin starts from them. */
+export interface PinDefaults { orient: number; type: string; shape: string; visible: boolean; commonUnit: boolean; commonBody: boolean; length: number; nameSize: number; numSize: number }
+export function initialPinDefaults(): PinDefaults { return { orient: 0, type: "input", shape: "line", visible: true, commonUnit: false, commonBody: false, length: DEFAULTS.pinLength, nameSize: DEFAULTS.pinNameSize, numSize: DEFAULTS.pinNumSize }; }
+/** SYMBOL_EDITOR_PIN_TOOL::CreatePin before the dialog. */
+export function newPinInfo(x: number, y: number, last: PinDefaults, unit: number, body: number): PinInfo {
+  return { type: last.type, shape: last.shape, x, y, orient: last.orient, length: last.length, visible: last.visible, name: "~", number: "", nameSize: last.nameSize, numSize: last.numSize,
+    unit: last.commonUnit ? 0 : unit, body: last.commonBody ? 0 : body, alternates: [] };
+}
+/** EditPinProperties' tail: what the next new pin starts from. */
+export function rememberPin(last: PinDefaults, i: PinInfo): void { Object.assign(last, { nameSize: i.nameSize, numSize: i.numSize, orient: i.orient, length: i.length, shape: i.shape, type: i.type, commonBody: i.body === 0, commonUnit: i.unit === 0, visible: i.visible }); }
+
+const samePos = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.abs(a.x - b.x) < 1e-6 && Math.abs(a.y - b.y) < 1e-6;
+/** PlacePin's test: another pin at the same position (any unit, same or common body style); its unit, or null. */
+export function occupiedBy(sym: Node, p: PinInfo, skip?: Node | null): number | null {
+  for (const d of allPins(sym)) {
+    if (d.node === skip) continue; const o = pinInfo(d.node, d.unit, d.body);
+    if (!samePos(o, p)) continue;
+    if (d.body !== 0 && d.body !== p.body) continue;
+    return d.unit;
+  }
+  return null;
+}
+/** The occupied-position question PlacePin asks in sync mode (verbatim). */
+export const OCCUPIED_MSG = (unit: number) => `This position is already occupied by another pin, in unit ${unit}.`;
+export const OCCUPIED_EXT = "Disable the 'Synchronized Pins Mode' option to avoid this message.";
+
+/** CreateImagePins: in sync mode a new unit-specific pin gets a copy in every other unit, numbered "<num>-U<letter>". */
+export function imagePins(sym: Node, p: PinInfo): PinInfo[] {
+  if (p.unit === 0) return [];
+  const out: PinInfo[] = []; const n = unitCount(sym);
+  for (let u = 1; u <= n; u++) { if (u === p.unit) continue; out.push(Object.assign({}, p, { unit: u, number: `${p.number}-U${String.fromCharCode(65 + u - 1)}`, alternates: p.alternates.map((a) => ({ ...a })) })); }
+  return out;
+}
+/** Place a pin: the pin plus (sync) its images, added to the symbol.  Returns the main pin's ref. */
+export function placePin(sym: Node, p: PinInfo, sync: boolean): ItemRef {
+  const ref = addDrawItem(sym, p.unit, p.body, pinNode(p));
+  if (sync) for (const im of imagePins(sym, p)) addDrawItem(sym, im.unit, im.body, pinNode(im));
+  return findRef(sym, itemAt(sym, ref)) || ref;
+}
+/** Where a node lives now (indices move as items are added before it). */
+export function findRef(sym: Node, n: Node | null): ItemRef | null { if (!n) return null; for (const d of drawItems(sym)) if (d.node === n) return { sub: d.sub, j: d.j, unit: d.unit, body: d.body }; return null; }
+
+/**
+ * SYMBOL_EDITOR_PIN_TOOL::SynchronizeOtherUnits: after a pin edit, the first matching pin of every other unit (same
+ * position, orientation, type, visibility and name as the pin before the edit) takes the edit; one made redundant by
+ * unit 0 / body style 0 is removed.  `pin` is the edited node (already rewritten), `before` the original.  Returns
+ * the number of pins removed.
+ */
+export function synchronizeOtherUnits(sym: Node, pin: Node, before: PinInfo): number {
+  const now = findRef(sym, pin); if (!now) return 0;
+  const a = pinInfo(pin, now.unit, now.body);
+  const n = unitCount(sym); const got = new Array<boolean>(n + 1).fill(false);
+  const mark = (u: number) => { if (u >= 0 && u <= n) got[u] = true; }; const done = (u: number) => u >= 0 && u <= n && got[u];
+  mark(a.unit);
+  const doomed: Node[] = [];
+  for (const d of allPins(sym)) {
+    if (d.node === pin || done(d.unit)) continue;
+    const o = pinInfo(d.node, d.unit, d.body);
+    if (!samePos(o, before) || o.orient !== before.orient || o.type !== before.type || o.visible !== before.visible || o.name !== before.name) continue;
+    if (d.body === a.body) { changeLength(o, a.length); o.x = a.x; o.y = a.y; o.shape = a.shape; }
+    o.orient = a.orient; o.type = a.type; o.visible = a.visible; o.name = a.name; o.nameSize = a.nameSize; o.numSize = a.numSize;
+    setPin(d.node, o); mark(d.unit);
+    const coversBody = a.body === 0 && (a.unit === 0 || d.unit === a.unit);
+    const coversUnits = a.unit === 0 && (a.body === 0 || d.body === a.body);
+    if (coversBody || coversUnits) doomed.push(d.node);
+  }
+  for (const dn of doomed) { const r = findRef(sym, dn); if (r) removeDrawItem(sym, r); }
+  return doomed.length;
+}
+/** Move a pin to another unit / body style (the dialog's "Common to all units / body styles"). */
+export function relocatePin(sym: Node, pin: Node, unit: number, body: number): Node {
+  const r = findRef(sym, pin); if (!r || (r.unit === unit && r.body === body)) return pin;
+  removeDrawItem(sym, r); addDrawItem(sym, unit, body, pin); return pin;
+}
+
+/** IncrementString (common/increment.cpp): the last run of digits steps, leading zeros kept; false below zero. */
+export function incrementString(name: string, delta: number): string {
+  if (!name) return name;
+  let i = name.length - 1; while (i >= 0 && !/[0-9]/.test(name[i])) i--;
+  const sufStart = i + 1; let j = i; while (j >= 0 && /[0-9]/.test(name[j])) j--;
+  const digits = name.slice(j + 1, sufStart); if (!digits) return name;
+  const v = parseInt(digits, 10) + delta; if (v <= -1) return name;
+  return name.slice(0, j + 1) + String(v).padStart(digits.length, "0") + name.slice(sufStart);
+}
+/** RepeatPin: a copy one pin_step along (Y for left / right pins, X for up / down), name and number incremented. */
+export function repeatPin(src: PinInfo, step = DEFAULTS.pinStep, delta = DEFAULTS.labelDelta): PinInfo {
+  const p: PinInfo = Object.assign({}, src, { alternates: src.alternates.map((a) => ({ ...a })) });
+  // internal (Y down) step.y = +pin_step is file y - pin_step
+  if (p.orient === 0 || p.orient === 180) p.y = +fmt(p.y - step); else p.x = +fmt(p.x + step);
+  p.name = incrementString(p.name, delta); p.number = incrementString(p.number, delta);
+  return p;
+}
+/** PushPinProperties: one value of a pin copied to every other pin. */
+export function pushPinProperty(sym: Node, src: Node, what: "length" | "nameSize" | "numSize", curBody: number): number {
+  const s = pinInfo(src); let n = 0;
+  for (const d of allPins(sym)) {
+    if (d.node === src) continue; const o = pinInfo(d.node, d.unit, d.body);
+    if (what === "length") { if (d.body === 0 || d.body === curBody) changeLength(o, s.length); else continue; }
+    else if (what === "nameSize") o.nameSize = s.nameSize; else o.numSize = s.numSize;
+    setPin(d.node, o); n++;
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------- fields
+export function fieldNode(name: string, value: string, x: number, y: number, hidden: boolean, extra = ""): Node {
+  return node(`(property ${q(name)} ${q(value)} (at ${fmt(x)} ${fmt(y)} 0) (show_name no) (do_not_autoplace no)${hidden ? " (hide yes)" : ""} (effects (font (size 1.27 1.27))${extra}))`);
+}
+export function fieldOf(sym: Node, name: string): Node | null { for (const p of kids(sym, "property")) if (str(p[1]) === name) return p; return null; }
+export function fieldValue(sym: Node, name: string): string { const p = fieldOf(sym, name); return p ? str(p[2]) : ""; }
+export function setFieldValue(sym: Node, name: string, value: string): void { const p = fieldOf(sym, name); if (p) p[2] = value; }
+
+// ---------------------------------------------------------------- whole symbols
+export interface NewSymbolProps {
+  name: string; parent?: string | null; reference: string; unitCount: number; unitsInterchangeable: boolean; alternateBodyStyle: boolean;
+  power: boolean; pinNameInside: boolean; pinTextPosition: number; showPinNumber: boolean; showPinName: boolean; includeInBom: boolean; includeOnBoard: boolean;
+  keepFootprint?: boolean; keepDatasheet?: boolean; transferUserFields?: boolean; keepContentUserFields?: boolean;
+}
+export function defaultNewSymbolProps(): NewSymbolProps {
+  return { name: "", parent: null, reference: "U", unitCount: 1, unitsInterchangeable: false, alternateBodyStyle: false, power: false, pinNameInside: true, pinTextPosition: DEFAULT_PIN_NAME_OFFSET,
+    showPinNumber: true, showPinName: true, includeInBom: true, includeOnBoard: true, keepFootprint: true, keepDatasheet: true, transferUserFields: true, keepContentUserFields: false };
+}
+const yn = (b: boolean) => (b ? "yes" : "no");
+/** LIB_SYMBOL_LIBRARY_MANAGER::CreateSymbol, written the way SaveSymbol writes the result. */
+export function createSymbol(p: NewSymbolProps, parent?: Node | null): Node {
+  const name = p.name;
+  if (parent) {
+    let s = `(symbol ${q(name)} (extends ${q(symName(parent))})`;
+    const powerParent = isPower(parent);
+    for (const f of MANDATORY_FIELDS) {
+      const pf = fieldOf(parent, f); if (!pf) continue; const c = clone(pf);
+      if (f === "Value" && powerParent) c[2] = name;
+      if (f === "Footprint" && !p.keepFootprint) c[2] = "";
+      if (f === "Datasheet" && !p.keepDatasheet) c[2] = "";
+      s += " " + text(c);
+    }
+    if (p.transferUserFields) for (const pf of kids(parent, "property")) { const f = str(pf[1]); if (MANDATORY_FIELDS.includes(f) || f.startsWith("ki_")) continue; const c = clone(pf); if (!p.keepContentUserFields) c[2] = ""; s += " " + text(c); }
+    return node(s + " (embedded_fonts no))");
+  }
+  const units = Math.max(1, p.unitCount | 0);
+  let offset = DEFAULT_PIN_NAME_OFFSET;
+  if (p.pinNameInside) { offset = p.pinTextPosition; if (!offset) offset = 0.0001; } else offset = 0;
+  const locked = units >= 2 && !p.unitsInterchangeable;
+  let s = `(symbol ${q(name)}`;
+  if (p.power) s += " (power global)";
+  if (p.alternateBodyStyle) s += " (body_styles demorgan)";
+  if (!p.showPinNumber) s += " (pin_numbers (hide yes))";
+  if (Math.abs(offset - DEFAULT_PIN_NAME_OFFSET) > 1e-9 || !p.showPinName) s += " (pin_names" + (Math.abs(offset - DEFAULT_PIN_NAME_OFFSET) > 1e-9 ? ` (offset ${fmt(offset)})` : "") + (p.showPinName ? "" : " (hide yes)") + ")";
+  s += ` (exclude_from_sim no) (in_bom ${yn(p.includeInBom)}) (on_board ${yn(p.includeOnBoard)}) (in_pos_files yes) (duplicate_pin_numbers_are_jumpers no)`;
+  s += " " + text(fieldNode("Reference", p.reference, 0, 0, false)) + " " + text(fieldNode("Value", p.power ? name : name, 0, 0, false));
+  s += " " + text(fieldNode("Footprint", "", 0, 0, true)) + " " + text(fieldNode("Datasheet", "", 0, 0, true)) + " " + text(fieldNode("Description", "", 0, 0, true));
+  if (locked) s += " " + text(fieldNode("ki_locked", "", 0, 0, false));
+  const base = name.includes(":") ? name.slice(name.indexOf(":") + 1) : name;
+  // KiCad's LIB_SYMBOL keeps a (possibly empty) unit for every unit / body style it was given
+  for (let u = 1; u <= units; u++) for (let b = 1; b <= (p.alternateBodyStyle ? 2 : 1); b++) s += ` (symbol ${q(base + "_" + u + "_" + b)})`;
+  return node(s + " (embedded_fonts no))");
+}
+/** LIB_SYMBOL::Flatten: a derived symbol with its parent's drawing, pin settings and attributes, its own fields. */
+export function flatten(lib: SymLib | null, sym: Node): Node {
+  if (!isDerived(sym)) return clone(sym);
+  const parent = lib ? lib.symbols.get(parentNameOf(sym)!) : null; if (!parent) return clone(sym);
+  const root = flatten(lib, parent);
+  const out: Node = ["symbol", sym[1]];
+  const mine = new Map<string, Node>(); for (const p of kids(sym, "property")) mine.set(str(p[1]), p);
+  for (let j = 2; j < root.length; j++) {
+    const c = root[j]; if (!isList(c)) { out.push(c); continue; }
+    if (c[0] === "property") { const own = mine.get(str(c[1])); if (own) { out.push(clone(own)); mine.delete(str(c[1])); } else out.push(clone(c)); continue; }
+    if (c[0] === "symbol") { const sub = clone(c); sub[1] = baseName(sym) + str(c[1]).slice(baseName(root).length); out.push(sub); continue; }
+    if (c[0] === "embedded_fonts" || c[0] === "embedded_files") continue;
+    out.push(clone(c));
+  }
+  // the derived symbol's own extra fields go after the last field
+  let at = -1; for (let j = 1; j < out.length; j++) if (isList(out[j]) && (out[j] as Node)[0] === "property") at = j;
+  out.splice(at + 1, 0, ...Array.from(mine.values()).map(clone));
+  const ef = kid(sym, "embedded_fonts"); out.push(ef ? clone(ef) : node("(embedded_fonts no)"));
+  return node(text(out));
+}
+/** Rename a symbol (SYMBOL_EDIT_FRAME::UpdateSymbolMsgPanelInfo / RenameSymbol): its sub-symbols follow, a Value equal to the old name follows, and every derived symbol's (extends …) is rewritten. */
+export function renameSymbol(lib: SymLib, oldName: string, newName: string): string[] {
+  const sym = lib.symbols.get(oldName); if (!sym) return [];
+  const touched = [oldName, newName];
+  const ob = oldName.includes(":") ? oldName.slice(oldName.indexOf(":") + 1) : oldName, nb = newName.includes(":") ? newName.slice(newName.indexOf(":") + 1) : newName;
+  sym[1] = newName;
+  for (const s of kids(sym, "symbol")) { const n = str(s[1]); if (n.startsWith(ob + "_")) s[1] = nb + n.slice(ob.length); }
+  const v = fieldOf(sym, "Value"); if (v && str(v[2]) === oldName) v[2] = newName;
+  const order = Array.from(lib.symbols.entries()); lib.symbols.clear();
+  for (const [k, s] of order) lib.symbols.set(k === oldName ? newName : k, s);
+  for (const [k, s] of lib.symbols) { const e = kid(s, "extends"); if (e && str(e[1]) === oldName) { e[1] = newName; touched.push(k); } }
+  return touched;
+}
+/** The derived symbols of `name` in a library, all generations. */
+export function derivedOf(lib: SymLib, name: string): string[] {
+  const out: string[] = []; const walk = (p: string) => { for (const [k, s] of lib.symbols) if (parentNameOf(s) === p && !out.includes(k)) { out.push(k); walk(k); } };
+  walk(name); return out;
+}
+/** SetUnitCount( n, true ): units above n lose their items; new units get an (empty) sub-symbol. */
+export function setUnitCount(sym: Node, n: number): void {
+  for (let j = sym.length - 1; j >= 1; j--) { const c = sym[j]; if (isList(c) && c[0] === "symbol") { const [u] = subUnitBody(str(c[1])); if (u > n) sym.splice(j, 1); } }
+  const bs = bodyStyles(sym).count; for (let u = 1; u <= n; u++) for (let b = 1; b <= bs; b++) ensureSub(sym, u, b);
+}
+/** De Morgan on / off (DIALOG_LIB_SYMBOL_PROPERTIES Units & Body Styles). */
+export function setDeMorgan(sym: Node, on: boolean): void {
+  const i = sym.findIndex((c, j) => j > 0 && isList(c) && c[0] === "body_styles");
+  if (on) { if (i < 0) { const at = sym.findIndex((c, j) => j > 0 && isList(c) && c[0] !== "power"); sym.splice(at > 0 ? at : sym.length, 0, node("(body_styles demorgan)")); } }
+  else { if (i > 0) sym.splice(i, 1); for (let j = sym.length - 1; j >= 1; j--) { const c = sym[j]; if (isList(c) && c[0] === "symbol" && subUnitBody(str(c[1]))[1] > 1) sym.splice(j, 1); } }
+}
+
+// ---------------------------------------------------------------- Symbol Checker
+export type Fmt = (mm: number) => string;
+const defaultFmt: Fmt = (mm) => fmt(mm) + " mm";
+/** CheckLibSymbol: the HTML messages HTML_MESSAGE_BOX lists, in KiCad's words. `gridMm` is the pin grid (25 mil minimum). */
+export function checkSymbol(sym: Node, gridMm = 50 * MIL, f: Fmt = defaultFmt): string[] {
+  const msgs: string[] = [];
+  const ref = fieldValue(sym, "Reference");
+  if (!ref) msgs.push("<b>Warning: reference is empty</b><br><br>");
+  else if ("0123456789?".includes(ref[ref.length - 1])) msgs.push("<b>Warning: reference prefix</b><br>prefix ending by '0123456789?' can create issues if saved in a symbol library<br><br>");
+  const bs = bodyStyles(sym); const multiBody = bs.count > 1; const units = unitCount(sym);
+  const pins = allPins(sym).map((d) => ({ ...pinInfo(d.node, d.unit, d.body), node: d.node }));
+  // CheckDuplicatePins
+  const logical: { p: typeof pins[number]; number: string }[] = [];
+  for (const p of pins) { const st = stackedNumbers(p.number); if (!st) logical.push({ p, number: p.number }); else for (const n of st) logical.push({ p, number: n }); }
+  logical.sort((a, b) => (a.number < b.number ? -1 : a.number > b.number ? 1 : 0) || (a.p.body - b.p.body) || (a.p.unit - b.p.unit) || (pins.indexOf(a.p) - pins.indexOf(b.p)));
+  const unitName = (u: number) => { const nm = unitNames(sym).get(u); return nm || unitLetter(u); };
+  for (let i = 1; i < logical.length; i++) {
+    const prev = logical[i - 1], next = logical[i];
+    if (prev.number !== next.number || prev.p === next.p) continue;
+    if (prev.p.body !== 0 && next.p.body !== 0 && prev.p.body !== next.p.body) continue;
+    const pinName = prev.p.name ? " '" + prev.p.name + "'" : "", nextName = next.p.name ? " '" + next.p.name + "'" : "";
+    const shown = (p: typeof pins[number], n: string) => (p.number === n ? n : `${n} (${p.number})`);
+    const pn = shown(prev.p, prev.number), nn = shown(next.p, next.number);
+    const at = (p: PinInfo) => `<b>(${f(p.x)}, ${f(p.y)})</b>`;
+    let m: string;
+    if (multiBody && next.p.body) {
+      if (prev.p.unit === 0 || next.p.unit === 0) m = `<b>Duplicate pin ${nn}</b> ${nextName} at location ${at(next.p)} conflicts with pin ${pn}${prev.p.name} at location ${at(prev.p)} in ${bodyStyleDescription(sym, prev.p.body).toLowerCase()} body style.`;
+      else m = `<b>Duplicate pin ${nn}</b> ${nextName} at location ${at(next.p)} conflicts with pin ${pn}${pinName} at location ${at(prev.p)} in units ${unitName(next.p.unit)} and ${unitName(prev.p.unit)} of ${bodyStyleDescription(sym, prev.p.body).toLowerCase()} body style.`;
+    } else if (prev.p.unit === 0 || next.p.unit === 0) m = `<b>Duplicate pin ${nn}</b> ${nextName} at location ${at(next.p)} conflicts with pin ${pn}${pinName} at location ${at(prev.p)}.`;
+    else m = `<b>Duplicate pin ${nn}</b> ${nextName} at location ${at(next.p)} conflicts with pin ${pn}${pinName} at location ${at(prev.p)} in units ${unitName(next.p.unit)} and ${unitName(prev.p.unit)}.`;
+    msgs.push(m + "<br><br>");
+  }
+  const sorted = pins.slice().sort((a, b) => numCompare(a.number, b.number));
+  const grid = Math.max(gridMm, 25 * MIL);
+  if (isPower(sym)) {
+    if (units !== 1) msgs.push("<b>A Power Symbol should have only one unit</b><br><br>");
+    if (!sorted.length) msgs.push("<b>A Power Symbol should have exactly one pin</b><br><br>");
+    else {
+      if (sorted.length > 1) msgs.push("<b>A Power Symbol should have only one pin</b><br><br>");
+      const p = sorted[0];
+      if (p.type !== "power_in" && p.type !== "power_out") msgs.push("<b>Suspicious Power Symbol</b><br>Only an input or output power pin has meaning<br><br>");
+      if (p.type === "power_in" && !p.visible) msgs.push("<b>Suspicious Power Symbol</b><br>Invisible input power pins are no longer required<br><br>");
+    }
+  }
+  const globalPower = (() => { const pw = kid(sym, "power"); return !!pw && str(pw[1]) !== "local"; })();
+  for (const p of sorted) {
+    const pinName = !p.name || p.name === "~" ? "" : "'" + p.name + "'";
+    const at = `<b>(${f(p.x)}, ${f(p.y)})</b>`; const letter = String.fromCharCode(65 + p.unit - 1);
+    const where = (lead: string): string => {
+      if (multiBody && p.body) return units <= 1 ? `${lead} ${p.number}</b> ${pinName} at location ${at} in ${bodyStyleDescription(sym, p.body).toLowerCase()} body style.` : `${lead} ${p.number}</b> ${pinName} at location ${at} in unit ${letter} of ${bodyStyleDescription(sym, p.body).toLowerCase()} body style.`;
+      return units <= 1 ? `${lead} ${p.number}</b> ${pinName} at location ${at}.` : `${lead} ${p.number}</b> ${pinName} at location ${at} in unit ${letter}.`;
+    };
+    if (!globalPower && p.type === "power_in" && !p.visible) msgs.push("Info: " + where("<b>Hidden power pin") + "<br>(Hidden power pins will drive their pin names on to any connected nets.)<br><br>");
+    const iu = (v: number) => Math.round(v * 1e4), g = Math.round(grid * 1e4);
+    if (iu(p.x) % g !== 0 || iu(p.y) % g !== 0) {
+      // " of %s body style" for the single-unit case, " in unit %c of %s body style" otherwise (symbol_checker.cpp:364-385)
+      let m = where("<b>Off grid pin"); if (multiBody && p.body && units <= 1) m = m.replace(" in " + bodyStyleDescription(sym, p.body).toLowerCase(), " of " + bodyStyleDescription(sym, p.body).toLowerCase());
+      msgs.push(m + "<br><br>");
+    }
+  }
+  // CheckLibSymbolGraphics
+  for (const d of drawItems(sym)) {
+    const g = d.node, k = String(g[0]);
+    if (k === "circle") { const r = kid(g, "radius"), c = kid(g, "center"); if (!r || num(r[1]) <= 0) msgs.push(`<b>Graphic circle has radius = 0</b> at location <b>(${f(c ? num(c[1]) : 0)}, ${f(c ? num(c[2]) : 0)})</b>.<br>`); }
+    else if (k === "rectangle") { const s = kid(g, "start"), e = kid(g, "end"); if (s && e && num(s[1]) === num(e[1]) && num(s[2]) === num(e[2])) msgs.push(`<b>Graphic rectangle has size 0</b> at location <b>(${f(num(s[1]))}, ${f(num(s[2]))})</b>.<br>`); }
+    else if (k === "ellipse" || k === "ellipse_arc") { const a = kid(g, "major_radius") || kid(g, "radius_x"), b = kid(g, "minor_radius") || kid(g, "radius_y"); const c = kid(g, "center"); if ((a && num(a[1]) <= 0) || (b && num(b[1]) <= 0)) msgs.push(`<b>Graphic ellipse has null or negative radii</b> at location <b>(${f(c ? num(c[1]) : 0)}, ${f(c ? num(c[2]) : 0)})</b>.<br>`); }
+  }
+  return msgs;
+}
+/** SCH_PIN::GetStackedPinNumbers: "[1,2,5-7]" -> its numbers; null when not a valid stacked list. */
+export function stackedNumbers(n: string): string[] | null {
+  const m = /^\[(.*)\]$/.exec(n); if (!m) return null;
+  const out: string[] = [];
+  for (const part of m[1].split(",")) { const t = part.trim(); const r = /^(\d+)-(\d+)$/.exec(t); if (r) { for (let i = +r[1]; i <= +r[2]; i++) out.push(String(i)); } else if (t) out.push(t); else return null; }
+  return out.length ? out : null;
+}
+/** StrNumCmp-style pin number order (sort_by_pin_number). */
+export function numCompare(a: string, b: string): number { return a.localeCompare(b, undefined, { numeric: true }); }
+
+// ---------------------------------------------------------------- schematic instance <-> library
+/**
+ * LoadSymbolFromSchematic: the instance's fields moved back into library space — mirror undone first, then the
+ * rotation (90 swaps x,y and negates x; 270 swaps and negates y; 180 negates both), in internal (Y down) units;
+ * the library file stores the negated Y.  `lib` is the flattened library copy (changed in place and returned).
+ */
+export function instanceToLibrary(instance: Node, lib: Node): Node {
+  const at = kid(instance, "at"); const sx = at ? num(at[1]) : 0, sy = at ? num(at[2]) : 0, srot = at ? ((Math.round(num(at[3])) % 360) + 360) % 360 : 0;
+  const m = kid(instance, "mirror"); const mirror = m ? str(m[1]) : "";
+  const fields: Node[] = [];
+  for (const p of kids(instance, "property")) {
+    const f = clone(p); const a = kid(f, "at");
+    if (a) {
+      let x = num(a[1]) - sx, y = num(a[2]) - sy;   // internal units: Y down
+      if (mirror === "x") y = -y; else if (mirror === "y") x = -x;
+      if (srot === 90) { const t = x; x = y; y = t; x = -x; }
+      else if (srot === 270) { const t = x; x = y; y = t; y = -y; }
+      else if (srot === 180) { x = -x; y = -y; }
+      a[1] = +fmt(x); a[2] = +fmt(-y);
+    }
+    // a placed field may carry (uuid …) and instance-only tokens the library format lacks
+    for (let j = f.length - 1; j >= 1; j--) if (isList(f[j]) && (f[j] as Node)[0] === "uuid") f.splice(j, 1);
+    fields.push(f);
+  }
+  // SetFields( fullSetOfFields ): the library's own fields are replaced, ki_ metadata kept
+  const meta = kids(lib, "property").filter((p) => str(p[1]).startsWith("ki_"));
+  for (let j = lib.length - 1; j >= 1; j--) if (isList(lib[j]) && (lib[j] as Node)[0] === "property") lib.splice(j, 1);
+  let ins = -1; for (let j = 1; j < lib.length; j++) { const c = lib[j]; if (isList(c) && ["exclude_from_sim", "in_bom", "on_board", "in_pos_files", "duplicate_pin_numbers_are_jumpers", "jumper_pin_groups", "pin_names", "pin_numbers", "power", "body_styles"].includes(String(c[0]))) ins = j; }
+  lib.splice(ins + 1, 0, ...fields, ...meta);
+  return lib;
+}
+/**
+ * SCH_SYMBOL::UpdateFields( path, update style, update ref, update other fields, no reset ) on a placed symbol from
+ * the edited library symbol: every library field (by name) is imported — text, effects, visibility — at the symbol
+ * position plus the library offset (internal units), the Reference through the instance data.  Instance-only fields
+ * stay.  Returns the new node.
+ */
+export function updateInstanceFields(instance: Node, lib: Node): Node {
+  const n = clone(instance); const at = kid(n, "at"); const sx = at ? num(at[1]) : 0, sy = at ? num(at[2]) : 0;
+  for (const lf of kids(lib, "property")) {
+    const name = str(lf[1]); if (name.startsWith("ki_")) continue;
+    const la = kid(lf, "at"); const lx = la ? num(la[1]) : 0, ly = la ? num(la[2]) : 0, lr = la ? num(la[3]) : 0;
+    let f = n.find((c, j) => j > 0 && isList(c) && c[0] === "property" && str((c as Node)[1]) === name) as Node | undefined;
+    const fresh = clone(lf); const fa = kid(fresh, "at"); if (fa) { fa[1] = +fmt(sx + lx); fa[2] = +fmt(sy - ly); fa[3] = lr; }
+    if (f) { const u = kid(f, "uuid"); const i = n.indexOf(f); n[i] = fresh; if (u) fresh.push(u); f = fresh; }
+    else { let last = -1; for (let j = 1; j < n.length; j++) if (isList(n[j]) && (n[j] as Node)[0] === "property") last = j; n.splice(last + 1, 0, fresh); }
+    if (name === "Reference") {
+      const inst = kid(n, "instances");
+      if (inst) for (const pr of kids(inst, "project")) for (const path of kids(pr, "path")) { const r = kid(path, "reference"); if (r) r[1] = str(lf[2]); }
+    }
+  }
+  return n;
+}
+/** The library pins a placed symbol carries (pin "number" (uuid …)), one per number, alternates no longer offered cleared. */
+export function updateInstancePins(n: Node, lib: Node, newUuid: () => string, clearOrphanAlts: boolean): void {
+  const old = new Map<string, Node>(); for (const p of kids(n, "pin")) old.set(str(p[1]), p);
+  const out: Node[] = []; const seen = new Set<string>();
+  for (const sub of kids(lib, "symbol")) {
+    const [, b] = subUnitBody(str(sub[1])); if (b > 1) continue;
+    for (const lp of kids(sub, "pin")) {
+      const nb = kid(lp, "number"); const number = nb ? str(nb[1]) : ""; if (seen.has(number)) continue; seen.add(number);
+      const mine = old.get(number); const p = mine ? clone(mine) : node(`(pin ${q(number)} (uuid ${q(newUuid())}))`);
+      const ai = p.findIndex((c, j) => j > 0 && isList(c) && c[0] === "alternate");
+      if (ai > 0 && clearOrphanAlts) { const alt = str((p[ai] as Node)[1]); if (!kids(lp, "alternate").some((a) => str(a[1]) === alt)) p.splice(ai, 1); }
+      out.push(p);
+    }
+  }
+  for (let j = n.length - 1; j >= 1; j--) if (isList(n[j]) && (n[j] as Node)[0] === "pin") n.splice(j, 1);
+  let at = -1; for (let j = 1; j < n.length; j++) if (isList(n[j]) && ((n[j] as Node)[0] === "property" || (n[j] as Node)[0] === "uuid")) at = j;
+  n.splice(at + 1, 0, ...out);
+}
+/** SCH_SCREEN::Append's cache naming: an existing "<lib id>" or "<name>_<n>" copy equal to `copy` is reused, else the next free "<name>_<n>". */
+export function cacheName(cache: Map<string, Node>, libId: string, copy: Node): { name: string; reused: boolean } {
+  const item = libId.split(":").pop() || libId;
+  const body = (n: Node): string => JSON.stringify(n.slice(2));   // structural: both sides parsed by the same reader
+  const want = body(copy);
+  const cands: string[] = []; if (cache.has(libId)) cands.push(libId);
+  for (const k of cache.keys()) if (k.startsWith(item + "_") && /^\d+$/.test(k.slice(item.length + 1))) cands.push(k);
+  for (const k of cands) { const c = cache.get(k)!; if (body(c) === want) return { name: k, reused: true }; }
+  if (!cache.has(libId)) return { name: libId, reused: false };
+  let i = 1; while (cache.has(`${item}_${i}`)) i++;
+  return { name: `${item}_${i}`, reused: false };
+}
+/** The flattened library symbol as a schematic's (lib_symbols) entry named `name` (sub-symbols keep the item name). */
+export function asCacheEntry(flat: Node, name: string): Node { const c = clone(flat); c[1] = name; const ef = c.findIndex((x, j) => j > 0 && isList(x) && x[0] === "embedded_fonts"); if (ef > 0 && kid(c, "embedded_files") === null) { /* keep */ } return c; }
+
+// ---------------------------------------------------------------- pin table
+export interface PinRow { count: number; number: string; name: string; type: string; shape: string; orient: number; numSize: number; nameSize: number; length: number; x: number; y: number; visible: boolean; unit: number; body: number; node?: Node | null }
+export const PIN_TABLE_COLUMNS = ["Count", "Number", "Name", "Electrical Type", "Graphic Style", "Orientation", "Number Text Size", "Name Text Size", "Length", "X Position", "Y Position", "Visible", "Unit", "Body Style"];
+export function pinRows(sym: Node): PinRow[] {
+  return allPins(sym).map((d) => { const i = pinInfo(d.node, d.unit, d.body); return { count: 1, number: i.number, name: i.name, type: i.type, shape: i.shape, orient: i.orient, numSize: i.numSize, nameSize: i.nameSize, length: i.length, x: i.x, y: i.y, visible: i.visible, unit: i.unit, body: i.body, node: d.node }; });
+}
+const typeName = (t: string) => (PIN_TYPES.find((p) => p[0] === t) || [t, t])[1];
+const shapeName = (t: string) => (PIN_SHAPES.find((p) => p[0] === t) || [t, t])[1];
+const orientName = (a: number) => (PIN_ORIENTATIONS.find((p) => p[0] === a) || [a, "Right"])[1];
+const csvCell = (v: string) => (/[",\n\t]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v);
+/** The table as CSV (Export … To File / To Clipboard), every column but Count, sizes and positions in `f`'s units. */
+export function pinsToCsv(rows: PinRow[], sym: Node, f: Fmt = (mm) => fmt(mm), sep = ","): string {
+  const unitLabel = (u: number) => (u === 0 ? "ALL" : unitLetter(u)); const bodyLabel = (b: number) => (b === 0 ? "ALL" : bodyStyleDescription(sym, b));
+  const lines = [PIN_TABLE_COLUMNS.slice(1).join(sep)];
+  for (const r of rows) lines.push([r.number, r.name, typeName(r.type), shapeName(r.shape), orientName(r.orient), f(r.numSize), f(r.nameSize), f(r.length), f(r.x), f(r.y), r.visible ? "1" : "0", unitLabel(r.unit), bodyLabel(r.body)].map((v) => sep === "," ? csvCell(String(v)) : String(v)).join(sep));
+  return lines.join("\n") + "\n";
+}
+function splitCsv(line: string, sep: string): string[] {
+  const out: string[] = []; let cur = "", inQ = false;
+  for (let i = 0; i < line.length; i++) { const c = line[i]; if (inQ) { if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') inQ = false; else cur += c; } else if (c === '"') inQ = true; else if (c === sep) { out.push(cur); cur = ""; } else cur += c; }
+  out.push(cur); return out;
+}
+/** Import (From File / From Clipboard): CSV or TSV with the export's header; `parseLen` reads a length in the user's units. */
+export function pinsFromCsv(src: string, sym: Node, parseLen: (s: string) => number = (s) => Number(s)): PinRow[] {
+  const lines = src.split(/\r?\n/).filter((l) => l.trim()); if (!lines.length) return [];
+  const sep = lines[0].includes("\t") ? "\t" : ",";
+  const head = splitCsv(lines[0], sep).map((h) => h.trim());
+  const col = (name: string) => head.indexOf(name);
+  const back = <T>(list: [T, string][], v: string, d: T): T => { const hit = list.find((p) => p[1].toLowerCase() === v.trim().toLowerCase() || String(p[0]) === v.trim()); return hit ? hit[0] : d; };
+  const bodyNames = bodyStyles(sym).names;
+  const rows: PinRow[] = [];
+  for (const line of lines.slice(1)) {
+    const c = splitCsv(line, sep); const g = (n: string) => { const i = col(n); return i >= 0 ? (c[i] || "").trim() : ""; };
+    const unitS = g("Unit"), bodyS = g("Body Style");
+    const unit = !unitS || unitS.toUpperCase() === "ALL" ? 0 : /^\d+$/.test(unitS) ? +unitS : unitS.toUpperCase().split("").reduce((a, ch) => a * 26 + (ch.charCodeAt(0) - 64), 0);
+    const body = !bodyS || bodyS.toUpperCase() === "ALL" ? 0 : /^\d+$/.test(bodyS) ? +bodyS : Math.max(1, bodyNames.findIndex((n) => n.toLowerCase() === bodyS.toLowerCase()) + 1);
+    rows.push({ count: 1, number: g("Number"), name: g("Name"), type: back(PIN_TYPES, g("Electrical Type"), "unspecified"), shape: back(PIN_SHAPES, g("Graphic Style"), "line"),
+      orient: back(PIN_ORIENTATIONS, g("Orientation"), 0), numSize: parseLen(g("Number Text Size")) || 1.27, nameSize: parseLen(g("Name Text Size")) || 1.27,
+      length: parseLen(g("Length")) || 2.54, x: parseLen(g("X Position")) || 0, y: parseLen(g("Y Position")) || 0, visible: !/^(0|false|no)$/i.test(g("Visible")), unit, body, node: null });
+  }
+  return rows;
+}
+/** The summary line of the pin table: a range summary of the numbers, the count and the duplicates. */
+export function pinNumberSummary(rows: PinRow[]): { numbers: string; count: number; duplicates: string } {
+  const nums = rows.map((r) => r.number).filter((n) => n !== "");
+  const counts = new Map<string, number>(); for (const n of nums) counts.set(n, (counts.get(n) || 0) + 1);
+  const dups = Array.from(counts.entries()).filter(([, c]) => c > 1).map(([n]) => n).sort(numCompare);
+  const uniq = Array.from(counts.keys()).sort(numCompare);
+  // PIN_NUMBERS::GetSummary: runs of consecutive numbers with the same prefix collapse to "a-b"
+  const parts: string[] = []; let i = 0;
+  while (i < uniq.length) {
+    const m0 = /^(.*?)(\d+)$/.exec(uniq[i]); if (!m0) { parts.push(uniq[i]); i++; continue; }
+    let j = i; while (j + 1 < uniq.length) { const m1 = /^(.*?)(\d+)$/.exec(uniq[j + 1]), mj = /^(.*?)(\d+)$/.exec(uniq[j])!; if (!m1 || m1[1] !== m0[1] || +m1[2] !== +mj[2] + 1) break; j++; }
+    parts.push(j > i ? `${uniq[i]}-${uniq[j]}` : uniq[i]); i = j + 1;
+  }
+  return { numbers: parts.join(", "), count: nums.length, duplicates: dups.join(", ") };
+}
+/** Write a pin table back: every pin of the symbol replaced by the rows, in one whole-symbol change. */
+export function applyPinRows(sym: Node, rows: PinRow[]): void {
+  for (const d of allPins(sym).reverse()) removeDrawItem(sym, d);
+  for (const r of rows) {
+    const keepAlts = r.node ? kids(r.node, "alternate").map((a) => ({ name: str(a[1]), type: str(a[2]), shape: str(a[3]) })) : [];
+    addDrawItem(sym, r.unit, r.body, pinNode({ type: r.type, shape: r.shape, x: r.x, y: r.y, orient: r.orient, length: r.length, visible: r.visible, name: r.name, number: r.number, nameSize: r.nameSize, numSize: r.numSize, unit: r.unit, body: r.body, alternates: keepAlts }));
+  }
+}
+
+// ---------------------------------------------------------------- shapes
+/** A new graphic as SaveSymbol writes it (stroke width 0 = default, type default; fill none). */
+export function shapeNode(kind: "rectangle" | "circle" | "arc" | "polyline" | "bezier", pts: number[][], fill = "none", width = 0): Node {
+  const st = ` (stroke (width ${fmt(width)}) (type default)) (fill (type ${fill}))`;
+  if (kind === "rectangle") return node(`(rectangle (start ${fmt(pts[0][0])} ${fmt(pts[0][1])}) (end ${fmt(pts[1][0])} ${fmt(pts[1][1])})${st})`);
+  if (kind === "circle") { const r = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]); return node(`(circle (center ${fmt(pts[0][0])} ${fmt(pts[0][1])}) (radius ${fmt(r)})${st})`); }
+  if (kind === "arc") return node(`(arc (start ${fmt(pts[0][0])} ${fmt(pts[0][1])}) (mid ${fmt(pts[1][0])} ${fmt(pts[1][1])}) (end ${fmt(pts[2][0])} ${fmt(pts[2][1])})${st})`);
+  return node(`(${kind} (pts ${pts.map((p) => `(xy ${fmt(p[0])} ${fmt(p[1])})`).join(" ")})${st})`);
+}
+export function textNode(s: string, x: number, y: number, size = 1.27, angle = 0): Node {
+  return node(`(text ${q(s)} (at ${fmt(x)} ${fmt(y)} ${angle * 10 === Math.round(angle * 10) ? angle : 0}) (effects (font (size ${fmt(size)} ${fmt(size)}))))`);
+}
