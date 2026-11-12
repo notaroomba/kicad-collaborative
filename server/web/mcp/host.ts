@@ -305,7 +305,9 @@ async function runPython(req: Request): Promise<Reply> {
     sub.tool = name; return (await TOOLS[name](sub)).result;
   };
 
-  const flags = ["--permission", `--allow-fs-read=${runtime}`, `--allow-fs-read=${program}`, "--disallow-code-generation-from-strings", "--max-old-space-size=768", "--no-warnings"];
+  // Node 22.13 and later call the permission model --permission; before that it was --experimental-permission
+  const permission = process.allowedNodeEnvironmentFlags && process.allowedNodeEnvironmentFlags.has("--permission") ? "--permission" : "--experimental-permission";
+  const flags = [permission, `--allow-fs-read=${runtime}`, `--allow-fs-read=${program}`, "--disallow-code-generation-from-strings", "--max-old-space-size=768", "--no-warnings"];
   const child = require("node:child_process").spawn(process.execPath, [...flags, program, runtime.replace(/\/*$/, "/")], { env: {}, stdio: ["pipe", "pipe", "pipe"] });
   let errText = "";
   child.stderr.on("data", (d: any) => { if (errText.length < 4000) errText += String(d); });
