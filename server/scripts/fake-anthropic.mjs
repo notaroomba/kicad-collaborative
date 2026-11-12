@@ -28,7 +28,7 @@ function events(turn, model) {
   (turn.content || []).forEach((b, index) => {
     const start = (content_block) => ev.push(['content_block_start', { type: 'content_block_start', index, content_block }]);
     const delta = (d) => ev.push(['content_block_delta', { type: 'content_block_delta', index, delta: d }]);
-    if (b.type === 'text') { start({ type: 'text', text: '' }); for (const p of pieces(b.text, 23)) delta({ type: 'text_delta', text: p }); }
+    if (b.type === 'text') { start({ type: 'text', text: '' }); for (const p of pieces(b.text, 23)) delta({ type: 'text_delta', text: p }); for (const c of b.citations || []) delta({ type: 'citations_delta', citation: c }); }
     else if (b.type === 'thinking') {
       start({ type: 'thinking', thinking: '', signature: '' });
       for (const p of pieces(b.thinking, 31)) delta({ type: 'thinking_delta', thinking: p });

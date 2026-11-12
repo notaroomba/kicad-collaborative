@@ -41,7 +41,7 @@
 .ai-table th { background: var(--bench); font-weight: 600; }
 
 .ai-src { display: flex; flex-wrap: wrap; gap: 4px; margin-top: -1px; }
-.ai-src a { max-width: 100%; padding: 1px 6px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--ink-2); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-src a, .ai-src .doc { max-width: 100%; padding: 1px 6px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--ink-2); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ai-src a:hover { border-color: var(--blue); color: var(--blue); text-decoration: none; }
 
 .ai-tool { display: flex; align-items: baseline; gap: 6px; color: var(--ink-2); font-size: 11px; line-height: 1.35; }

@@ -76,7 +76,8 @@ function Message({ m }: { m: UiMessage }) {
   if (m.role === "user") return <div className="ai-msg user">{m.blocks.map((b) => (b.t === "text" ? b.text : "")).join("")}</div>;
   const out: ReactNode[] = [];
   m.blocks.forEach((b, i) => {
-    if (b.t === "text") { if (!b.text.trim()) return; out.push(<div className="ai-md" key={i}><Markdown text={b.text} /></div>); if (b.sources && b.sources.length) out.push(<div className="ai-src" key={i + "s"}>{b.sources.map((s) => <a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer" title={s.url}>{s.title}</a>)}</div>); }
+    if (b.t === "text") { if (!b.text.trim()) return; out.push(<div className="ai-md" key={i}><Markdown text={b.text} /></div>); if (b.sources && b.sources.length) out.push(<div className="ai-src" key={i + "s"}>{b.sources.map((s) => { const label = s.title + (s.pages && s.pages.length ? ` · p. ${s.pages.join(", ")}` : "");
+        return s.url ? <a key={s.url} href={s.url + (s.pages && s.pages.length && /\.pdf($|\?)/i.test(s.url) ? `#page=${s.pages[0]}` : "")} target="_blank" rel="noopener noreferrer" title={s.url}>{label}</a> : <span className="doc" key={s.title} title="Cited document">{label}</span>; })}</div>); }
     else if (b.t === "thinking") { if (b.text.trim()) out.push(<details className="ai-think" key={i}><summary>{b.done ? "Thought it through" : "Thinking…"}</summary><div>{b.text}</div></details>); }
     else if (b.t === "tool") out.push(<Tool b={b} key={i} />);
     else if (b.t === "proposal") out.push(<ProposalCard id={b.proposalId} key={i} />);

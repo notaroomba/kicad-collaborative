@@ -150,7 +150,7 @@
   },
   {
     "name": "find_datasheets",
-    "description": "For the parts of a schematic sheet or the board, grouped by part: the references that use it, value, footprint, the Datasheet field and any manufacturer, part number or distributor fields. Use the URL with web_fetch, or search for the part number with web_search when there is no usable link.",
+    "description": "For the parts of a schematic sheet or the board, grouped by part: the references that use it, value, footprint, the Datasheet field and any manufacturer, part number or distributor fields. Read the URL with web_fetch: the datasheet is the source for part values and reference circuits. Search for the part number with web_search only to find the manufacturer's datasheet when there is no usable link.",
     "input_schema": {
       "type": "object",
       "properties": {

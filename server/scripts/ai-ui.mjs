@@ -145,6 +145,20 @@ check('proposal card is shown', (await a.locator('[data-proposal]').count()) ===
 check('nothing changed before accepting', (await valueOf(a, 'R1')) === '1.5K', String(await valueOf(a, 'R1')));
 await shot(a, '02-review-with-proposal');
 
+// ---- a value read from a datasheet shows the document and the pages it came from
+{
+  const pdf = 'https://datasheets.example.com/rp2040/rp2040-datasheet.pdf';
+  await script([{ content: [{ type: 'server_tool_use', id: 'srv_ds', name: 'web_fetch', input: { url: pdf } }, { type: 'text', text: 'Use 15 pF load capacitors and 1 k in series with XOUT.',
+    citations: [{ type: 'page_location', cited_text: '15pF', document_index: 0, document_title: 'RP2040 Datasheet', start_page_number: 26, end_page_number: 27, url: pdf },
+      { type: 'page_location', cited_text: '1k', document_index: 0, document_title: 'RP2040 Datasheet', start_page_number: 12, end_page_number: 13, url: pdf }] }] }]);
+  await ask(a, 'What load capacitors does the crystal need?');
+  const last = a.locator('#aiBody .ai-msg.assistant').last();
+  check('reading a PDF is shown as reading the datasheet', /Read the datasheet rp2040-datasheet\.pdf/.test(await last.innerText()), (await last.innerText()).slice(0, 200));
+  const src = last.locator('.ai-src a');
+  check('the answer cites the datasheet once, with its pages', (await src.count()) === 1 && /RP2040 Datasheet · p\. 12, 26/.test(await src.first().innerText()) && (await src.first().getAttribute('href')) === pdf + '#page=12', await src.allInnerTexts().then((t) => t.join('|')));
+  check('the instructions put the datasheet before web search', /Search results and their snippets are a way to find the document, never the source of a value/.test(JSON.stringify((await (await fetch(`${AI}/__ctl/requests`)).json()).pop().body.system)));
+}
+
 // ---- messages sent while a turn is running wait in a queue, can be taken back, and run in order
 {
   const before = await a.locator('#aiBody .ai-msg.user').count();

@@ -17,7 +17,7 @@ import { ToolError } from "./design";
 import { applyProposal, buildProposal, clearPreview, previewing, showPreview, staleReason, type Proposal } from "./proposals";
 
 export type UiBlock =
-  | { t: "text"; text: string; sources?: { url: string; title: string }[] }
+  | { t: "text"; text: string; sources?: { url: string; title: string; pages?: number[] }[] }
   | { t: "thinking"; text: string; done: boolean }
   | { t: "tool"; id: string; name: string; label: string; detail?: string; status: "running" | "done" | "error"; server: boolean }
   | { t: "proposal"; proposalId: string }
@@ -202,7 +202,8 @@ async function callPluginTool(i: { plugin?: string; tool?: string; input?: unkno
 const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
 function serverToolLabel(name: string, input: any): string | null {
   if (name === "web_search") return `Searched the web for “${input && input.query ? input.query : "…"}”`;
-  if (name === "web_fetch") return `Read ${input && input.url ? hostOf(input.url) : "a page"}`;
+  if (name === "web_fetch") { const url: string = (input && input.url) || ""; const file = /\.pdf(\?|#|$)/i.test(url) ? decodeURIComponent(url.split(/[?#]/)[0].split("/").pop() || "") : "";
+    return file ? `Read the datasheet ${file} (${hostOf(url)})` : `Read ${url ? hostOf(url) : "a page"}`; }
   return null;   // the code the web tools run to filter their results is plumbing, not something to show
 }
 
@@ -266,8 +267,15 @@ async function streamTurn(ui: UiMessage, signal: AbortSignal): Promise<{ content
         else if (d.type === "input_json_delta") partial[ev.index] = (partial[ev.index] || "") + d.partial_json;
         else if (d.type === "citations_delta" && d.citation) {
           (b.citations = b.citations || []).push(d.citation);
-          const url = d.citation.url || (d.citation.source && d.citation.source.url);
-          if (u && u.t === "text" && url && !(u.sources || []).some((s) => s.url === url)) (u.sources = u.sources || []).push({ url, title: d.citation.title || d.citation.document_title || hostOf(url) });
+          // a web page cites by url; a PDF (a datasheet) cites by document and page: keep the pages, they are what the person checks
+          const c = d.citation; const url: string = c.url || (c.source && c.source.url) || "";
+          const title: string = c.title || c.document_title || (url ? hostOf(url) : "");
+          const page: number | undefined = typeof c.start_page_number === "number" ? c.start_page_number : undefined;
+          if (u && u.t === "text" && (url || title)) {
+            const list = (u.sources = u.sources || []); let src = list.find((x) => (url ? x.url === url : !x.url && x.title === title));
+            if (!src) { src = { url, title }; list.push(src); }
+            if (page !== undefined && !(src.pages || []).includes(page)) src.pages = [...(src.pages || []), page].sort((x, y) => x - y);
+          }
         }
         touch();
         break;
