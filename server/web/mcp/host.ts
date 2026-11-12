@@ -491,7 +491,7 @@ async function createProject(req: Request): Promise<Reply> {
   if (typeof req.args.name !== "string" || !req.args.name.trim()) throw new ToolError("name is required.");
   const r = await post("/api/projects/blank", { name: req.args.name.trim() });
   return { result: { project_id: r.projectId, name: r.name || req.args.name.trim(), documents: (r.docs || []).map((d: any) => d.path), url: `${req.args.__site || conn.base}/p/${r.projectId}/edit`,
-    note: "An empty project: one schematic sheet and one board. Draw the schematic with apply_changes, then update_from_schematic on the board." } };
+    note: "An empty project: one schematic sheet and one board. Design it with run_python (sch.build for the schematic, then board.sync, autoplace and route), or edit by edit with apply_changes." } };
 }
 
 // ---------------------------------------------------------------- dispatch

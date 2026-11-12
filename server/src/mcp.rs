@@ -14,8 +14,9 @@
 //! Sign-in is OAuth (oauth.rs).  The endpoint keeps no session of its own: every request
 //! carries a bearer token and stands alone, so any replica can answer it.
 
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
@@ -179,7 +180,7 @@ fn build_catalog() -> Vec<Tool> {
         let title = t["title"].as_str().unwrap_or(&name).to_string();
         let write = t["write"].as_bool().unwrap_or(false);
         let project = t["input_schema"]["properties"].get("project").is_some();
-        let host = !matches!(name.as_str(), "list_projects" | "get_project" | "list_changes" | "get_design_guide");
+        let host = !matches!(name.as_str(), "list_projects" | "get_project" | "list_changes" | "get_design_guide" | "get_run");
         out.push(Tool {
             def: json!({ "name": name, "title": title, "description": t["description"], "inputSchema": t["input_schema"],
                          "annotations": annotations(&title, write, name == "undo_changes" || name == "redo_changes") }),
@@ -192,7 +193,7 @@ fn build_catalog() -> Vec<Tool> {
     // The order a model reads them in: find the project, read, look, change, then the rest.
     let order = [
         "list_projects", "get_project", "get_design_overview", "get_design_guide", "list_components", "get_component", "list_nets",
-        "get_items", "run_checks", "check_layout", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "run_python", "apply_changes",
+        "get_items", "run_checks", "check_layout", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "run_python", "get_run", "apply_changes",
         "undo_changes", "redo_changes", "list_changes", "read_document", "list_comments", "add_comment", "resolve_comment", "list_checkpoints",
         "create_checkpoint", "create_project", "get_geometry",
     ];
@@ -354,7 +355,7 @@ pub async fn post(State(state): State<AppState>, headers: HeaderMap, body: Bytes
 }
 
 /// Answer one JSON-RPC message.  `None` for a notification or a response, which get no reply.
-async fn handle(state: &AppState, caller: &Caller, site: &str, message: Value) -> Option<Value> {
+async fn handle(state: &AppState, caller: &Arc<Caller>, site: &str, message: Value) -> Option<Value> {
     let method = message.get("method").and_then(Value::as_str)?.to_string();
     let id = message.get("id").cloned()?;
     let params = message.get("params").cloned().unwrap_or(Value::Null);
@@ -389,7 +390,7 @@ async fn handle(state: &AppState, caller: &Caller, site: &str, message: Value) -
             };
             match catalog().iter().find(|t| t.def["name"] == name.as_str()) {
                 None => Err((-32602, format!("unknown tool {name}"))),
-                Some(tool) => Ok(match call_tool(state, caller, site, tool, &name, args).await {
+                Some(tool) => Ok(match run_tool(state, caller, site, tool, &name, args).await {
                     Ok(content) => json!({ "content": content, "isError": false }),
                     Err(message) => json!({ "content": [{ "type": "text", "text": message }], "isError": true }),
                 }),
@@ -404,6 +405,71 @@ async fn handle(state: &AppState, caller: &Caller, site: &str, message: Value) -
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
         Err((code, message)) => rpc_error(id, code, &message),
     })
+}
+
+// ------------------------------------------------------------------ long calls
+
+/// A tool call that outlived the wait its caller was given: it goes on here and get_run collects it.
+struct Run {
+    user: i64,
+    started: Instant,
+    task: tokio::task::JoinHandle<Result<Value, String>>,
+}
+
+/// How long a call may take before it is answered with a run to collect.  Claude's connectors give
+/// up on a tool call after a minute, and a script that lays out and routes a board takes several.
+const RUN_WAIT: Duration = Duration::from_secs(45);
+/// A run nobody collected is forgotten after this long (its edits stay; only the report is lost).
+const RUN_KEPT: Duration = Duration::from_secs(3600);
+
+fn runs() -> &'static Mutex<HashMap<String, Run>> {
+    static RUNS: OnceLock<Mutex<HashMap<String, Run>>> = OnceLock::new();
+    RUNS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The tools that can take minutes run as a task of their own, so that a caller who stops waiting
+/// (or is cut off) does not stop the work, and the change records are stored whatever happens.
+async fn run_tool(state: &AppState, caller: &Arc<Caller>, site: &str, tool: &'static Tool, name: &str, args: Value) -> Result<Value, String> {
+    if name == "get_run" {
+        let id = args["run_id"].as_str().unwrap_or("").to_string();
+        let run = runs().lock().unwrap().remove(&id).filter(|r| r.user == caller.user.id);
+        let Some(run) = run else {
+            return Err("There is no run with that id still waiting to be collected: its result was already returned, or it is more than an hour old. list_changes shows what it changed.".into());
+        };
+        let wait = Duration::from_secs(args["wait_s"].as_u64().unwrap_or(45).clamp(1, 50));
+        return settle(Some(id), run, wait).await;
+    }
+    if !matches!(name, "run_python" | "apply_changes") {
+        return call_tool(state, caller, site, tool, name, args).await;
+    }
+    let (state, caller, site, name) = (state.clone(), caller.clone(), site.to_string(), name.to_string());
+    let user = caller.user.id;
+    let task = tokio::spawn(async move { call_tool(&state, &caller, &site, tool, &name, args).await });
+    // KC_MCP_RUN_WAIT (seconds) shortens the wait, for tests of the hand-over
+    let wait = std::env::var("KC_MCP_RUN_WAIT").ok().and_then(|v| v.parse().ok()).map(Duration::from_secs).unwrap_or(RUN_WAIT);
+    settle(None, Run { user, started: Instant::now(), task }, wait).await
+}
+
+/// The run's result when it comes within `wait`; otherwise the run is kept and the answer says how to collect it.
+async fn settle(id: Option<String>, mut run: Run, wait: Duration) -> Result<Value, String> {
+    match tokio::time::timeout(wait, &mut run.task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(e)) => {
+            tracing::error!("mcp: a run stopped: {e}");
+            Err("The run stopped unexpectedly. list_changes shows what it changed before that.".into())
+        }
+        Err(_) => {
+            let id = id.unwrap_or_else(|| Uuid::new_v4().simple().to_string()[..12].to_string());
+            let seconds = run.started.elapsed().as_secs();
+            let mut all = runs().lock().unwrap();
+            all.retain(|_, r| r.started.elapsed() < RUN_KEPT);
+            all.insert(id.clone(), run);
+            Ok(json!([text_content(&json!({
+                "running": true, "run_id": id, "seconds": seconds,
+                "note": "Still working: the edits keep arriving in the document. Call get_run with this run_id to wait for the result; do not start the same call again.",
+            }))]))
+        }
+    }
 }
 
 // ------------------------------------------------------------------ projects

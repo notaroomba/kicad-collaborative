@@ -164,7 +164,7 @@ const T = () => tokens.access_token;
   check('a notification is accepted with 202', note.status === 202);
   check('ping', JSON.stringify((await rpc(T(), 'ping')).result) === '{}');
   const list = (await rpc(T(), 'tools/list')).result.tools;
-  check('tools/list: the catalog, each tool with a schema and annotations', list.length === 29 && list.some((t) => t.name === 'check_layout') && list.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.annotations && t.description.length > 40), `${list.length} tools`);
+  check('tools/list: the catalog, each tool with a schema and annotations', list.length === 30 && list.some((t) => t.name === 'check_layout') && list.some((t) => t.name === 'get_run') && list.every((t) => t.inputSchema && t.inputSchema.type === 'object' && t.annotations && t.description.length > 40), `${list.length} tools`);
   check('the assistant\'s editor-only tools are not offered', !list.some((t) => ['get_selection', 'focus_view', 'open_document', 'propose_changes'].includes(t.name)));
   const unknown = await rpc(T(), 'nope/nothing');
   check('an unknown method is a JSON-RPC error', unknown.error && unknown.error.code === -32601);
@@ -218,6 +218,8 @@ let projectId, schPath, pcbPath, schDocId, pcbDocId;
 {
   const empty = await call(T(), 'list_projects', {});
   check('list_projects: none yet', !empty.isError && empty.data.count === 0 && empty.data.account === 'mcp-ada', empty.text);
+  const noRun = await call(T(), 'get_run', { run_id: 'nosuchrun' });
+  check('get_run: an unknown run says so', noRun.isError && /no run with that id/.test(noRun.text), noRun.text);
   const missing = await call(T(), 'get_design_overview', { project: 'no-such-project' });
   check('a project that does not exist is an error the model can read', missing.isError && /There is no project/.test(missing.text), missing.text);
   const made = await call(T(), 'create_project', { name: NAME });
