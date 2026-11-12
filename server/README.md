@@ -297,53 +297,68 @@ File → GitHub Sync… in the web editor).
 `GITHUB_API_URL` / `GITHUB_WEB_URL` point the server at another GitHub
 (Enterprise, or the test stand-in).
 
-## Design assistant
+## Designing with Claude
 
-The web editor's Assistant pane (menu bar button, or View > Panels) is a chat
-with Claude that can read the open design and propose edits to it.
+There is no chat inside the editor and the server holds no model API key. Claude works on a project
+from outside, through the MCP endpoint (next section), from Claude Code, the Claude desktop app or
+claude.ai, so the work runs on the person's own Claude plan instead of on API tokens the server pays
+for. The menu bar's **Claude** button opens the page that connects one.
 
-- The browser runs the conversation and the design tools (components, nets,
-  ERC/DRC, board statistics, selection, raw items) against the live document, so
-  the model always sees what is on screen, unsaved edits included.
-- The server is an authenticated proxy to the Anthropic Messages API. It owns
-  the API key, the system prompt (`web/ai/system.md`) and the tool list
-  (`web/ai/tools.json`); the browser sends only the messages. Web search and web
-  fetch run on Anthropic's side and are how datasheets get read.
-- The assistant never edits the design. `propose_changes` puts a card in the
-  pane with a canvas preview; **Accept** sends the edits through the normal op
-  pipeline as one undo step, so everyone in the session sees them and they are
-  checkpointed like any other edit. A proposal whose items changed since it was
-  made is refused.
-- Schematic proposals are checked for pins that would end up on a different
-  net, and the card says so. On a board, an `autoroute` edit runs the board
-  autorouter and proposes its tracks and vias like any other change.
+The design tools (`web/ai/`: `design.ts`, `proposals.ts`, `library.ts`, with `tools.json` as their
+catalog) read components, nets, ERC/DRC and board statistics from the live document and turn
+structured edits into ordinary collaboration ops. They run in the browser for plugins and in the
+headless editor behind the MCP endpoint.
 
-- **A board from a description.** The assistant can take a design from a prompt
-  to a routed board, each stage a proposal: it finds parts in KiCad's symbol and
-  footprint libraries (`find_parts`, `get_library_part`, served and cached by
-  this server from the KiCad library repositories) and at the parts vendors,
-  draws the schematic one functional block at a time (`add_symbol`, `add_wire`,
-  `add_label`, power symbols, no-connects), runs ERC, brings the parts to the
-  board (`update_from_schematic`), places them (`auto_place`, or explicit
-  positions), and routes in stages it orders itself (`autoroute` with a net
-  order, per-net widths and layers), judging each stage from the engine's
-  report of what was left unrouted and why.
-  `scripts/ai-rp2040.mjs` runs that whole flow for an RP2040 dev board through
-  the same tool calls, with the plan written out by hand so it needs no key.
+### The Python harness
 
-- **Datasheets, cheaply.** Part values come from the part's datasheet. A PDF is
-  read with `read_datasheet` (`POST /api/ai/datasheet`, `src/datasheet.rs`): the
-  server downloads it once, keeps the text of every page in Postgres for
-  everybody, and answers a question with the one to three pages that match (or
-  pages by number), about two thousand tokens instead of the whole document.
-  Only public https addresses are fetched. Web pages that are not PDFs still go
-  through the model's own fetch tool, capped at 25,000 tokens a page.
+`server/harness` is `kicad_harness`, a Python package that drives a design with plain calls
+(`sch.place`, `sch.connect`, `sch.build(netlist)`, `board.autoplace`, `board.route`, `parts.from_datasheet`),
+so a model writes one short script instead of making a tool call per edit and reading coordinates
+back. It is a thin layer: every call becomes edits for the same tool modules, so there is one
+implementation of placement, connectivity, checks, the placement engine and the autorouter. Its own
+README has the API. It reaches a design three ways, with the same calls:
+
+- **Local files**: `kh.open(folder)` runs the engine with Node (`web/harness/cli.ts` and
+  `workspace.ts`, bundled to `static/dist/harness-engine.js`) on KiCad files, no server involved.
+- **An online project from outside**: `kh.connect(url, token, project)` goes through `/mcp`.
+- **`run_python`**, an MCP tool: Claude sends a script, the server runs it and returns only what
+  the script printed. The script runs in a process of its own (`web/harness/sandbox.ts`): Pyodide
+  under Node's permission model with no file, network, child process or environment access and
+  JavaScript code generation disabled; its only way out is a blocking call to the headless editor,
+  which runs it as the tool of that name. A script that fails is rolled back as a whole; a script
+  that succeeds is one undo record per document.
+
+**Live mode.** Edits made through `run_python` (and `apply_changes` with `live`) are sent a few
+items at a time, each step its own op with the peer's cursor and selection on what it just drew
+(`DocSession.commit` in `web/mcp/session.ts`), so people in the document watch the design being
+drawn. A change takes about two seconds however large it is; `live: false` applies it at once.
+
+**Parts.** `parts.from_datasheet` reads a datasheet's pin table and package dimension table and
+makes a KiCad symbol and an IPC-7351B footprint (KiCad's own library footprint when it has the
+package; JEDEC standard dimensions, with a warning, when the datasheet has no table). `parts.find`
+and `parts.lookup` search LCSC, Mouser and DigiKey and resolve Texas Instruments and Analog Devices
+part numbers to their datasheets.
+
+**What it saves.** Measured on the same RP2040 dev board (37 parts, 51 nets, placed and fully
+routed on two layers) built both ways against a local server:
+
+| | tool calls | written by the model | read by the model |
+|---|---|---|---|
+| one tool call per step (`get_library_part`, `apply_changes` with coordinates, ...) | 32 | 37,400 characters | 73,900 characters |
+| `run_python` (`harness/examples/rp2040_devboard.py`, schematic then board) | 3 | 7,300 characters | 2,700 characters |
+
+That is about a fifth of the output and a twenty-seventh of the input, before counting that every
+earlier result is read again on each later call. A part from a datasheet is one call and a
+500-character report instead of about 6,000 characters of symbol and footprint text plus the
+datasheet pages.
+
+- **Datasheets, cheaply.** A PDF is read with `read_datasheet` (`POST /api/ai/datasheet`,
+  `src/datasheet.rs`): the server downloads it once, keeps the text of every page in Postgres for
+  everybody, and answers a question with the one to three pages that match (or pages by number),
+  about two thousand tokens instead of the whole document. Only public https addresses are fetched.
 
 | Endpoint | |
 |---|---|
-| `GET /api/ai` | whether the assistant is available to the caller, the model, today's usage |
-| `PUT/DELETE /api/ai/key` | store / remove the caller's own API key (AES-GCM encrypted at rest) |
-| `POST /api/projects/{id}/ai/chat` | `{messages}` in, the Messages API event stream out; project members only |
 | `GET /api/kicad-lib/search?kind=symbol\|footprint&q=` | search KiCad's libraries by name (index built on first use, cached a day) |
 | `GET /api/kicad-lib/list?kind=&lib=` | libraries, or the items of one |
 | `GET /api/kicad-lib/item?kind=&lib=&name=` | one symbol (`.kicad_sym`) or footprint (`.kicad_mod`) |
@@ -351,11 +366,6 @@ with Claude that can read the open design and propose edits to it.
 
 | Variable | |
 |---|---|
-| `ANTHROPIC_API_KEY` | the server's key. Without it the assistant works only for people who add their own key in its settings |
-| `AI_MODEL`, `AI_EFFORT` | model id and effort level (defaults: the current Opus model, `medium`) |
-| `AI_DAILY_REQUESTS` | model calls per person per day on the server's key (default 300) |
-| `AI_WEB_TOOLS=0` | turn off web search and fetch |
-| `ANTHROPIC_API_URL` | another endpoint (a gateway, or the test stand-in) |
 | `KICAD_LIBS_URL`, `KICAD_LIBS_REF` | where KiCad's libraries are read from (default `https://gitlab.com`, `master`); `scripts/kicad-libs-mirror.mjs` is a caching mirror for machines whose outbound traffic goes through a proxy |
 
 ## MCP server (Claude and other MCP clients)
@@ -384,16 +394,15 @@ How it is built:
   consent page naming the app; **Let it make changes** can be unticked for a read-only connection. Tokens are
   opaque, stored only as SHA-256 hashes, access tokens last an hour. `/connect` lists a person's connected apps
   and disconnects them. Cookies are never accepted on `/mcp`.
-- **Tools** (`src/mcp.rs`, `web/mcp/`): the design tools are the in-app assistant's own (`web/ai/tools.json`,
+- **Tools** (`src/mcp.rs`, `web/mcp/`): the design tools are the shared ones (`web/ai/tools.json`,
   `design.ts`, `proposals.ts`, `library.ts`), not a second implementation. They are written against the web
   editor's document model, so the server runs them in a **headless editor**: a Node process per signed-in
   person (`web/mcp/host.ts`, bundled to `static/dist/mcp-host.js` and embedded in the binary) that joins the
   document over the ordinary collaboration WebSocket as a peer named "Name (App)", keeps it in step with
   everyone's edits, and sends its own as ordinary ops. Nothing about a change made this way is special to the
   desktop app or the web editor.
-- **The one deliberate difference from the assistant**: in the editor the assistant proposes and a person
-  accepts a card. Over MCP the person's own Claude app already asks before a tool runs, so `apply_changes`
-  applies at once (with `dry_run` to look first). Every call is recorded (`mcp_changes`) with what it takes to
+- **Changes apply at once.** The person's own Claude app already asks before a tool runs, so `apply_changes`
+  applies immediately (with `dry_run` to look first). Every call is recorded (`mcp_changes`) with what it takes to
   reverse it, so `undo_changes` and `redo_changes` take a whole call back or put it back; both are refused when
   somebody has edited the same items since, so nobody's newer work is overwritten.
 - **Pictures**: `render_view` draws the sheet or board from the editor's own geometry as SVG with stroke-font
@@ -407,17 +416,19 @@ How it is built:
 | `render_view` | a PNG of a sheet, the board, an area or some components |
 | `find_parts`, `get_library_part`, `find_datasheets` | KiCad libraries, vendor parts, datasheet links |
 | `read_datasheet` | the pages of a PDF datasheet that answer a question (fetched and indexed once on the server) |
-| `apply_changes` | every edit the assistant can make: symbols, wires, labels, fields, moves, `update_from_schematic`, `auto_place`, `set_rules`, `autoroute`, raw items |
+| `run_python` | a Python script on the design with `kicad_harness`: the cheap way to do anything beyond a couple of edits (see above) |
+| `apply_changes` | every structured edit: symbols, wires, labels, fields, moves, `update_from_schematic`, `auto_place`, `set_rules`, `autoroute`, raw items |
 | `undo_changes`, `redo_changes`, `list_changes` | the record of what was changed through MCP |
 | `list_comments`, `add_comment`, `resolve_comment` | review comments pinned on the design |
 | `list_checkpoints`, `create_checkpoint` | named versions |
-| `get_design_guide` | the assistant's drawing, layout, routing and review standards, for the model to read |
+| `get_geometry` | every part with its pins' positions and nets, and the wires or outline: what scripts plan from |
+| `get_design_guide` | the drawing, layout, routing and review standards and the Python API, for the model to read |
 
 Prompts `review_design`, `tidy_schematic` and `design_board` appear as slash commands in clients that show them.
 
 | Variable | |
 |---|---|
-| `KC_NODE` | the `node` to run the headless editor with (default `node` on the PATH; Node 20 or newer). The Docker image includes it. Without Node the endpoint still answers, the project and change-list tools work, and the design tools say the editor is unavailable |
+| `KC_NODE` | the `node` to run the headless editor with (default `node` on the PATH; Node 20 or newer). The Docker image includes it. Without Node the endpoint still answers, the project and change-list tools work, and the design tools say the editor is unavailable. `run_python` also needs the Python runtime (`static/dist/pyodide`, built by `npm run build`, in the image at `/usr/local/share/kicad-collab/pyodide`; `KC_PYODIDE_DIR` overrides) |
 | `MCP_MAX_HOSTS` | how many people's headless editors may run at once (default 24; the least recently used is stopped; each exits by itself after 15 idle minutes) |
 
 ## Running
@@ -497,10 +508,11 @@ against real github.com (push, pull, item merge, pull request, push on
 checkpoint, import, new branch) on a repository you can throw away, with a
 token from `gh auth token`. Its bridge refuses writes to any other repository.
 
-`server/scripts/ai-ui.mjs` drives the assistant in Chromium against
-`fake-anthropic.mjs`, a scripted stand-in for the Messages API: streaming, every
-design tool on a schematic and a board, proposal preview / accept / reject /
-stale, a second client seeing an accepted edit, undo, errors, own keys, access.
+`server/scripts/harness-e2e.mjs` is `run_python` end to end against a running server: a schematic
+and a routed board made by scripts while a second collaboration client checks that the edits arrive
+step by step with the cursor moving, a failing script rolled back, undo, and the sandbox (no files,
+network, environment, JavaScript or processes; a script that never ends is stopped).
+`python -m unittest discover -s tests` in `server/harness` tests the package on local files.
 `server/scripts/mcp-e2e.mjs` is the MCP endpoint end to end against a running
 server (with `node` on its PATH): discovery, client registration, the consent
 page, PKCE, refresh rotation and revocation; the protocol; a design drawn,
@@ -644,10 +656,10 @@ Once every connection has been tried, a few passes work on the finished board (a
   and N, Ethernet pairs to through-hole pins, a Bluetooth antenna feed on four and on two layers) and prints
   completion, rule errors, pairs, widths and lengths.
 
-### Planning and judging from outside (the assistant)
+### Planning and judging from outside
 
 The engine does the geometry and keeps the rules; what to route first, on which layers and how wide can come from a
-plan — the assistant's model, or a person. Everything here is pure (nothing is written to the board):
+plan — a model, or a person. Everything here is pure (nothing is written to the board):
 
 - `PcbAutoRouter.route(K, P, doc, settings, opts)` also takes `order` (net names routed first, in that order),
   `netOpts[net] = { layers, width, allowVias, maxVias, avoid: [[x0,y0,x1,y1]…], priority }` and

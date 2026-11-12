@@ -724,6 +724,6 @@ export function initPlugins(): void {
     for (const a of actionsFor(S, S.editor)) if (a.action.key && hotkeyMatches(ev, a.action.key)) { ev.preventDefault(); ev.stopPropagation(); void runAction(a.plugin, a.id); return; }
   }, true);
 
-  // The assistant (web/ai/client.ts) reaches plugin tools through this object; tests use it too.
+  // Other parts of the editor (and the tests) reach plugins and their declared tools through this object.
   W.KcPlugins = { store: pluginStore, tools: assistantTools, callTool: callAssistantTool, openManager, runUi: runPluginUi, runAction, refresh, loadProject };
 }

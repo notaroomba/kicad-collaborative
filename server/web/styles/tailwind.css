@@ -135,8 +135,12 @@
    auto-fill columns + 14px gap) shares that name and, loading after ui.css, would win. */
 @utility d-grid { display: grid; }
 
-/* The Assistant dock keeps its rules in one plain stylesheet (web/ai/assistant.css). */
-@import "../ai/assistant.css" layer(components);
+/* The menu bar's link to the page that connects Claude Code or the Claude apps to the project. */
+@layer components {
+  .claude-connect { display: inline-flex; align-items: center; gap: 5px; height: 22px; margin-right: 10px; padding: 0 8px 0 6px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-2); color: var(--ink); font: inherit; font-size: 12px; text-decoration: none; cursor: pointer; flex: none; }
+  .claude-connect:hover { border-color: var(--ink-3); }
+  .claude-connect svg { width: 13px; height: 13px; fill: none; stroke: var(--blue); stroke-width: 1.8; stroke-linejoin: round; }
+}
 /* Plugins: the dock, toolbar buttons, host dialogs and the manager (web/plugins/plugins.css). */
 @import "../plugins/plugins.css" layer(components);
 /* Design review: the Compare window and the comment threads (web/review/review.css).  Unlayered on purpose:

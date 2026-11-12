@@ -16,7 +16,7 @@ export const PERMISSIONS: Record<string, { title: string; detail: string; risk: 
   view: { title: "Control the view", detail: "Select and highlight items, move the view, place check markers and open another document of the project.", risk: "low" },
   "files:import": { title: "Read files you choose", detail: "Read a file from your computer when you pick it in a file dialog.", risk: "low" },
   "files:export": { title: "Save files", detail: "Offer files for download to your computer.", risk: "low" },
-  assistant: { title: "Give the assistant tools", detail: "Add tools the design assistant can call. What they return is read by the assistant.", risk: "medium" },
+  assistant: { title: "Offer tools to an AI assistant", detail: "Declare tools an AI assistant working on the design may call. What they return is read by that assistant.", risk: "medium" },
   network: { title: "Talk to the internet", detail: "Send and receive data from the hosts it names. Combined with reading your designs, it could send them there.", risk: "high" },
 };
 

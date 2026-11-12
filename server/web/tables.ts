@@ -69,7 +69,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       ["Symbol Unit", ["previousUnit", "nextUnit", "placeNextSymbolUnit", "-", "cycleBodyStyle"]],
       ["Change To", ["toLabel", "toDLabel", "toHLabel", "toGLabel", "toText", "toTextBox"]],
       "-", "breakWire", "slice", "unfoldBus", "syncSheetPins", "cleanupSheetPins"]],
-    ["&View", [["Panels", ["showProperties", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel|Design Blocks", "showRemoteSymbolPanel|Remote Symbols", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance", "showAssistant"]],
+    ["&View", [["Panels", ["showProperties", "showSearch", "showHierarchy", "showNetNavigator", "showDesignBlockPanel|Design Blocks", "showRemoteSymbolPanel|Remote Symbols", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAppearance"]],
       "-", "showSymbolBrowser", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw",
       "-", "navigateBack", "navigateUp", "navigateForward", "navigatePrevious", "navigateNext",
       "-", "toggleHiddenPins", "toggleHiddenFields", "toggleDirectiveLabels", "toggleERCErrors", "toggleERCWarnings", "toggleERCExclusions", "markSimExclusions", "toggleOPVoltages", "toggleOPCurrents", "togglePinAltIcons",
@@ -109,7 +109,7 @@ export const MENUS: Record<Editor, [string, MenuEntry[]][]> = {
       ["Zones", ["zoneDuplicate", "-", ["Zone Priority", ["zonePriorityMoveToTop", "zonePriorityRaise", "zonePriorityLower", "zonePriorityMoveToBottom"]]]],
       ["Attributes", ["toggleExcludeFromBOM", "toggleExcludeFromPosFiles", "module:toggleDNP"]],
       ["Text Justification", ["leftJustify", "centerJustify", "rightJustify"]]]],
-    ["&View", [["Panels", ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments", "showAssistant"]],
+    ["&View", [["Panels", ["showProperties", "showSearch", "showLayersManager", "showNetInspector", "showConstraintsPanel", "-", "showSelectionFilter", "showHistory", "showPeers", "showComments"]],
       "-", "showFootprintBrowser", "show3DViewer", "-", "zoomInCenter", "zoomOutCenter", "zoomFitScreen", "zoomFitObjects", "zoomFitSelection", "zoomTool", "zoomRedraw", "-",
       ["&Drawing Mode", ["zoneDisplayFilled", "zoneDisplayOutline", "-", "padDisplayMode", "viaDisplayMode", "trackDisplayMode", "-", "graphicsOutlines", "textOutlines"]],
       ["&Contrast Mode", ["highContrastMode", "layerAlphaDec", "layerAlphaInc"]],
@@ -230,7 +230,7 @@ export const HOME_MENUS: [string, MenuEntry[]][] = [];
 
 /** Labels for entries that are ours rather than KiCad TOOL_ACTIONs. */
 export const LOCAL_LABELS: Record<string, string> = {
-  github: "GitHub Sync...", showAssistant: "Assistant", drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
+  github: "GitHub Sync...", drillResetOrigin: "Reset Drill Origin", gridResetOrigin: "Reset Grid Origin",
   collabCopyLink: "Copy Share Link", collabComments: "Comments...", collabFollow: "Follow Next Peer", collabHistory: "History",
   collabLeave: "Leave Session", archive: "Download Project (.zip)", clone: "Clone to My Account", openInKicad: "Open in KiCad Collaborative...", home: "Back to Projects",
   showSelectionFilter: "Selection Filter", showHistory: "History", showPeers: "Collaborators", showComments: "Comments", showAppearance: "Appearance",

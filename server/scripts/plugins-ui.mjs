@@ -5,8 +5,7 @@
 // second person and is one undo step), and the sandbox: a plugin without a permission is
 // refused, and one that tries to reach the page, the network or the session gets nowhere.
 //
-// Server: KC_DEV_LOGIN=1 KC_ADMINS=plug-out ANTHROPIC_API_KEY=sk-ant-test ANTHROPIC_API_URL=http://127.0.0.1:8097
-//   (with fake-anthropic.mjs on 8097)
+// Server: KC_DEV_LOGIN=1 KC_ADMINS=plug-out
 //   E2E_PG_URL=… E2E_JWT_SECRET=… [SHOTS=/some/dir] node plugins-ui.mjs
 //
 import crypto from 'node:crypto';
@@ -20,7 +19,6 @@ import pg from 'pg';
 const { chromium } = createRequire(import.meta.url)('playwright');
 
 const BASE = (process.env.E2E_BASE || 'http://127.0.0.1:8099').replace(/\/$/, '');
-const AI = (process.env.E2E_FAKE_AI || 'http://127.0.0.1:8097').replace(/\/$/, '');
 const SECRET = process.env.E2E_JWT_SECRET, PG_URL = process.env.E2E_PG_URL;
 const SHOTS = process.env.SHOTS || '';
 if (!SECRET || !PG_URL) { console.error('E2E_JWT_SECRET and E2E_PG_URL are required.'); process.exit(2); }
@@ -59,7 +57,6 @@ for (const [file, type] of [['ecc83-pp.kicad_sch', 'kicad_sch'], ['ecc83-pp.kica
   await db.query('INSERT INTO snapshots (doc_id, seq, content) VALUES ($1, 0, $2)', [id, fs.readFileSync(path.join(demo, file))]);
   docs[file] = id;
 }
-await post(`${AI}/__ctl/reset`).catch(() => {});
 
 // Plugins written for this test, loaded through the manager's "Choose files…" like a developer would.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kc-plugins-'));
@@ -334,25 +331,6 @@ await a.waitForFunction(() => (window.CollabEditor.markers || []).length > 0, nu
 const markers = await a.evaluate(() => window.CollabEditor.markers.map((m) => m.text));
 check('the check places markers on the canvas', markers.length > 0 && markers.every((t) => /: no /.test(t)), markers.slice(0, 3).join(' | '));
 await shot(a, '10-markers');
-await post(`${AI}/__ctl/reset`);
-await post(`${AI}/__ctl/script`, { turns: [
-  { content: [{ type: 'tool_use', id: 'toolu_p1', name: 'list_plugin_tools', input: {} }] },
-  { content: [{ type: 'tool_use', id: 'toolu_p2', name: 'call_plugin_tool', input: { plugin: ID('field-lint'), tool: 'check_component_fields', input: { require_datasheet: true } } },
-              { type: 'tool_use', id: 'toolu_p3', name: 'call_plugin_tool', input: { plugin: ID('bom-export'), tool: 'nope', input: {} } }] },
-  { content: [{ type: 'text', text: 'Several parts have no datasheet link.' }] },
-] });
-await a.click('#aiToggle'); await a.waitForSelector('#dockAI:not([hidden])');
-await a.fill('#aiInput', 'Which parts are missing fields?'); await a.press('#aiInput', 'Enter');
-await a.waitForFunction(() => /no datasheet link/.test(document.querySelector('#aiBody')?.innerText || ''), null, { timeout: 20000 }).catch(() => {});
-const reqs = await fetch(`${AI}/__ctl/requests`).then((r) => r.json());
-const results = (reqs[reqs.length - 1]?.body.messages || []).filter((m) => m.role === 'user').flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((x) => x.type === 'tool_result');
-const resultOf = (id) => { const r = results.find((x) => x.tool_use_id === id); return r ? (typeof r.content === 'string' ? r.content : JSON.stringify(r.content)) : ''; };
-check('the model is offered the two plugin bridge tools', (reqs[0]?.body.tools || []).some((t) => t.name === 'list_plugin_tools') && (reqs[0]?.body.tools || []).some((t) => t.name === 'call_plugin_tool'));
-check('the assistant can list plugin tools', /check_component_fields/.test(resultOf('toolu_p1')) && !/bom-export/.test(resultOf('toolu_p1')), resultOf('toolu_p1').slice(0, 200));
-check('the assistant can call a plugin tool', /components_with_problems/.test(resultOf('toolu_p2')) && /datasheet/.test(resultOf('toolu_p2')), resultOf('toolu_p2').slice(0, 200));
-check('a tool no plugin declared is refused', !!results.find((x) => x.tool_use_id === 'toolu_p3')?.is_error);
-await shot(a, '11-assistant-tool');
-await a.click('#aiToggle');
 
 // ---- the board: export positions, edit them, import them back
 await menu(a, 'tools', 'External Plugins', 'pluginManager'); await a.waitForSelector('#pluginManager');

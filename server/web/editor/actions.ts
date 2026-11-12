@@ -238,8 +238,6 @@ export const HANDLERS: Record<string, ActionHandler> = {
   compareSchematicWithHistory: () => openCompare(), compareBoardWithHistory: () => openCompare(), collabCompare: () => openCompare(),
   compareSchematicWithFile: () => openCompare({ pickFile: true }), compareBoardWithFile: () => openCompare({ pickFile: true }),
   collabLeave: () => navigate("/"), archive: (a) => runAction("archive", a), github: (a) => runAction("github", a), clone: (a) => runAction("clone", a), openInKicad: (a) => runAction("kicad", a), home: () => navigate("/"),
-  // the Assistant dock (web/ai) owns its own state; the menu entry just asks it to toggle
-  showAssistant: () => window.dispatchEvent(new Event("kc-assistant-toggle")),
   theme: () => toggleTheme(), themeLight: () => setTheme("light"), themeDark: () => setTheme("dark"), themeSystem: () => setTheme("system"), about: (a) => runAction("about", a),
   // the app menu (the "KiCad Collaborative" title in the menu bar): places outside the current editor
   explore: () => navigate("/gallery"), connectClaude: () => { location.href = "/connect"; },

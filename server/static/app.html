@@ -30,14 +30,14 @@
   #editor.active { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); min-width: 0; }
   /* explicit rows: with the aux toolbar hidden the body must still take the stretching row, not the auto one */
   #tbTop { grid-row: 1; } #tbAux { grid-row: 2; } #editorBody { grid-row: 3; } #msgpanel { grid-row: 4; }
-  #ui-tbTop, #ui-tbAux, #ui-menubar, #ui-msgpanel, #ui-statusbar, #ui-dockL, #ui-dockR, #ui-dockB, #ui-dockAI, #ui-dockPlugins, #ui-tbLeft, #ui-tbRight { display: contents; }
+  #ui-tbTop, #ui-tbAux, #ui-menubar, #ui-msgpanel, #ui-statusbar, #ui-dockL, #ui-dockR, #ui-dockB, #ui-dockPlugins, #ui-tbLeft, #ui-tbRight { display: contents; }
   #editorBody { position: relative; display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto; grid-template-rows: minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
   #dockL { grid-column: 1; grid-row: 1 / 3; } #tbLeft { grid-column: 2; grid-row: 1; } #stage { grid-column: 3; grid-row: 1; } #tbRight { grid-column: 4; grid-row: 1; } #dockR { grid-column: 5; grid-row: 1 / 3; }
-  #dockB { grid-column: 2 / 5; grid-row: 2; } #dockAI, #dockPlugins { grid-row: 1 / 3; }
-  /* narrow windows: the side docks (and the assistant / plugin docks) float over the stage as drawers
+  #dockB { grid-column: 2 / 5; grid-row: 2; } #dockPlugins { grid-row: 1 / 3; }
+  /* narrow windows: the side docks (and the plugin dock) float over the stage as drawers
      instead of squeezing the canvas to nothing (web/components/Dock.tsx toggles the side drawers) */
   @media (max-width: 900px) {
-    #dockAI, #dockPlugins { position: absolute; top: 0; bottom: 0; right: 0; z-index: 30; max-width: calc(100% - 40px); box-shadow: var(--shadow); }
+    #dockPlugins { position: absolute; top: 0; bottom: 0; right: 0; z-index: 30; max-width: calc(100% - 40px); box-shadow: var(--shadow); }
   }
   #stage { position: relative; background: var(--canvas); overflow: hidden; touch-action: none; cursor: default; min-width: 0; }
   #stage:focus { outline: none; }
@@ -93,7 +93,6 @@
       </div>
       <div id="ui-tbRight"></div>
       <div id="ui-dockR"></div>
-      <div id="ui-dockAI"></div>
       <div id="ui-dockPlugins"></div>
       <div id="ui-dockB"></div>
     </div>
