@@ -185,6 +185,20 @@ test("Drill files: Excellon and Gerber X2 sets, drill maps and the report (DIALO
   assert.ok(F.drillReport(ctx, { merge: true, gerber: false }).includes("Not plated through holes are merged with plated holes\n"));
 });
 
+test("DXF without the KiCad font: single-line ASCII board text as TEXT entities (DXF_PLOTTER::plotOneLineOfText)", async () => {
+  const stroke = String((await plot({ format: 3, dxfImperial: false, dxfPolygonMode: false }, ["F.SilkS"])).files[0].data);
+  assert.ok(!/\nTEXT\n/.test(stroke) && /\nLINE\n/.test(stroke));
+  const nat = String((await plot({ format: 3, dxfImperial: false, dxfPolygonMode: false, dxfUsePcbnewFont: false }, ["F.SilkS"])).files[0].data);
+  assert.ok(/\nSTYLE\n2\nKICADBI\n/.test(nat));
+  const texts = nat.split("\n0\nTEXT\n").slice(1);
+  const rev = texts.find((t) => /\n1\nREV B\n/.test(t));
+  assert.ok(rev, "REV B written as text");
+  assert.ok(/\n40\n1\.5\n/.test(rev) && /\n50\n0\.00000000\n/.test(rev) && /\n7\nKICAD\n/.test(rev) && /\n72\n1\n/.test(rev) && /\n73\n2(\n|$)/.test(rev));
+  assert.ok(/\n10\n120\n/.test(rev) && /\n11\n120\n/.test(rev));
+  assert.ok(nat.split("\n").length < stroke.split("\n").length, "the text's strokes are left out");
+  assert.strictEqual(F.dxfTextString("~{RESET}/CS \u4e2d"), "%%oRESET%%O/CS ?");
+});
+
 test("Gerber X2 drill: IPC-4761 protection files, tenting only when asked (GERBER_WRITER::createProtectionFile)", () => {
   const base = { format: "gerber", metric: true, zeros: "decimal", merge: false, minimalHeader: false, mirrorY: false, ovalMode: "route", useAuxOrigin: false, genDrill: true, genMap: false, mapFormat: 4, gerberPrecision: 6, outputDir: "fab" };
   const off = F.drillJob(ctx, base);

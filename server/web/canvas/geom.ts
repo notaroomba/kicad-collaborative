@@ -90,6 +90,7 @@ export function textGeom(item: GeomSink, x: number, y: number, text: SAtom | nul
 /** Multi-line text: one geom per line, the block anchored per the vertical justification. */
 export function textLines(item: GeomSink, x: number, y: number, text: SAtom | null | undefined, size: number, color: string | null | undefined, rot: number | null | undefined, just: readonly string[] | null | undefined, layer: string, extra?: TextExtra | null): TextGeom {
   const lines = splitLines(str(text)); if (lines.length === 1) return textGeom(item, x, y, lines[0], size, color, rot, just, layer, extra);
+  if (extra && extra.dxfText) extra = Object.assign({}, extra, { dxfText: undefined });   // DXF_PLOTTER::PlotText draws a multiline text as graphics
   const j = justOf(just || [], extra && extra.defH, extra && extra.defV); const il = size * INTERLINE;
   const off0 = j.v === "top" ? 0 : j.v === "bottom" ? -(lines.length - 1) * il : -(lines.length - 1) * il / 2;
   const R = rotator(rot || 0); const out: TextGeom[] = [];

@@ -23,7 +23,7 @@ import { plotBoard, plotFileName, outputPath } from "./plotjob";
 import { writeSvg } from "./svg";
 import { writePdf } from "./pdf";
 import { writePs } from "./ps";
-import { writeDxf } from "./dxf";
+import { dxfTextString, writeDxf } from "./dxf";
 import { paintPage, writePng } from "./raster";
 import { gerberJobFile } from "./gbrjob";
 import { boardPage } from "./pageplot";
@@ -228,7 +228,7 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
   return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
 }
 
-export const api = { plotBoard, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+export const api = { plotBoard, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, dxfTextString, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

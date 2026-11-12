@@ -91,7 +91,7 @@ export async function plotBoard(ctx: FabContext, req: BoardPlotRequest): Promise
     if (p.format === 4 && p.pdfSingle) add(`${board}.pdf`, writePdf(Object.assign({ pages: pages.map((x) => x.page), creator: "PCBNEW", title, date, fileName: `${board}.pdf` }, meta)));
     else if (p.format === 3 && p.dxfSingle) {
       const pg = pages[0].page;
-      add(`${board}.dxf`, writeDxf(pages.map((x) => ({ name: layerDisplayName(ctx.doc, x.layer), color: req.colors[x.layer] || "#000000", page: Object.assign({}, x.page, { h: pg.h }) })), { imperial: p.dxfImperial, polygonMode: p.dxfPolygonMode }));
+      add(`${board}.dxf`, writeDxf(pages.map((x) => ({ name: layerDisplayName(ctx.doc, x.layer), color: req.colors[x.layer] || "#000000", page: Object.assign({}, x.page, { h: pg.h }) })), { imperial: p.dxfImperial, polygonMode: p.dxfPolygonMode, nativeText: !p.dxfUsePcbnewFont }));
     } else {
       for (const { page, layer } of pages) {
         const n = plotFileName(board, layerDisplayName(ctx.doc, layer), EXT[p.format] || "plt");
@@ -99,7 +99,7 @@ export async function plotBoard(ctx: FabContext, req: BoardPlotRequest): Promise
         if (p.format === 5) data = writeSvg(page, { precision: p.svgPrecision, creator: "PCBNEW", fileName: n, date });
         else if (p.format === 4) data = writePdf(Object.assign({ pages: [page], creator: "PCBNEW", title, date, fileName: n }, meta));
         else if (p.format === 2) data = writePs({ pages: [page], creator: "PCBNEW", title, date }, { scaleX: p.fineScaleX || 1, scaleY: p.fineScaleY || 1, fileName: n, date });
-        else if (p.format === 3) data = writeDxf([{ name: layerDisplayName(ctx.doc, layer), color: req.colors[layer] || "#000000", page }], { imperial: p.dxfImperial, polygonMode: p.dxfPolygonMode });
+        else if (p.format === 3) data = writeDxf([{ name: layerDisplayName(ctx.doc, layer), color: req.colors[layer] || "#000000", page }], { imperial: p.dxfImperial, polygonMode: p.dxfPolygonMode, nativeText: !p.dxfUsePcbnewFont });
         else data = await writePng(page, p.pngDpi, p.pngAntialias);
         add(n, data, layer);
       }

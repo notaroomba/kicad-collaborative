@@ -15,13 +15,20 @@ import { root } from "./env";
 import type { documentDrawingSheet } from "./sheet";
 import type { Ctx2D, Doc, Pt } from "./types";
 
-export type PlotItem =
+export type PlotItem = (
   /** a stroked polyline, round caps and joins (PLOTTER::ThickSegment / PlotPoly with a width) */
   | { k: "line"; pts: Pt[]; w: number; color: string; alpha?: number; closed?: boolean; cap?: string }
   /** filled polygons, one fill (nonzero winding; holes run the other way) */
   | { k: "fill"; polys: Pt[][]; color: string; alpha?: number; evenOdd?: boolean }
   /** a circle: filled (w = 0) or stroked */
-  | { k: "circle"; x: number; y: number; r: number; w: number; fill: boolean; color: string; alpha?: number };
+  | { k: "circle"; x: number; y: number; r: number; w: number; fill: boolean; color: string; alpha?: number }
+) & {
+  /** the board text this item draws (page frame, page units; one object shared by all of the text's items):
+   *  the DXF writer may put it out as a TEXT entity instead (DXF_PLOTTER::plotOneLineOfText) */
+  text?: PageText;
+};
+
+export interface PageText { text: string; x: number; y: number; size: number; sizeX: number; rot: number; h: string; v: string; italic: boolean; bold: boolean; mirror: boolean }
 
 /** An affine matrix [a, b, c, d, e, f] (canvas order). */
 export type Mat = [number, number, number, number, number, number];

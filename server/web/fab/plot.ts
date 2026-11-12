@@ -16,7 +16,7 @@
 import { isList, kid, num, polyPtsOf, str } from "../canvas/sexpr";
 import { type BoardModel, type Footprint, type Node, type Pad, type PadShape, type Via, isBack, isCopper, isFront, padShapeOn } from "./model";
 import { MAX_ERROR, clockwise, fracture, inflate, primPolys, stadium, union } from "./poly";
-import { type GbrMeta, type Prim, type Pt, arcPoints, circlePoints, rot } from "./prims";
+import { type GbrMeta, type PlotText, type Prim, type Pt, arcPoints, circlePoints, rot } from "./prims";
 
 export interface PlotOptions {
   plotReference: boolean; plotValue: boolean;
@@ -124,6 +124,18 @@ export function knockoutBox(pts: Pt[], x: number, y: number, deg: number, margin
 
 /** One text record: the outlines KiCad cached for an outline font, else stroke-font segments (the transform drawStrokeText composes for the screen). */
 function textPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
+  const at = out.length;
+  textPrimsOf(g, out, knock, log);
+  // a PCB_TEXT / PCB_FIELD that is not knocked out goes through PLOTTER::PlotText: a DXF plot without the KiCad font writes it as text
+  const dt = g.dxfText as { bold: boolean } | undefined;
+  if (!dt || g.knockout || out.length === at) return;
+  const size = N(g.size, 1);
+  const info: PlotText = { text: S(g.raw) || S(g.text), x: N(g.x), y: N(g.y), size, sizeX: N(g.sizeX) > 0 ? N(g.sizeX) : size, rot: N(g.rot), h: S(g.h) || "center", v: S(g.v) || "middle",
+    italic: !!g.italic, bold: !!dt.bold, mirror: !!g.mirror };
+  for (let i = at; i < out.length; i++) out[i].text = info;
+}
+
+function textPrimsOf(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
   const text = S(g.raw) || S(g.text); if (!text) return;
   const size = N(g.size, 1), sizeX = N(g.sizeX) > 0 ? N(g.sizeX) : size;
   const pen = clampPen(N(g.w) > 0 ? N(g.w) : size / 8, size, sizeX);

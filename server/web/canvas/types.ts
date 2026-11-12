@@ -96,6 +96,8 @@ export type TextGeom = GeomFlags & {
   outline?: { node: SNode; x: number; y: number; rot: number; shown: string };
   /** the first line of a text that carries `outline` */
   outlineFirst?: boolean;
+  /** a board text (PCB_TEXT / PCB_FIELD) a DXF plot may write as a TEXT entity (DXF_PLOTTER::plotOneLineOfText): its bold flag */
+  dxfText?: { bold: boolean };
 };
 export type ImageGeom = GeomFlags & { t: "image"; x: number; y: number; h: number; rot?: number;
   entry: ImageEntry; pxMm: number; scale: number; opacity?: number };

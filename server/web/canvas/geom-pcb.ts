@@ -140,7 +140,7 @@ export function buildPcbGeom(doc: Doc, item: Item): void {
   } else if (k === "barcode") {
     barcodeGeom(item, n, (x: number, y: number) => [x, y], 0);
   } else if (k === "gr_text") {
-    const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, doc && doc.fpEditor ? fpEditorVars(doc, str(n[1]), tl) : expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl);
+    const [x, y, rot] = atOf(n); const tl = layerOf(n, "Dwgs.User"); pcbTextGeom(item, n, x, y, doc && doc.fpEditor ? fpEditorVars(doc, str(n[1]), tl) : expandDocVars(doc, str(n[1]).replace(/\$\{LAYER\}/g, tl)), rot, tl, { dxfText: { bold: !!effectsOf(n).bold } });
   } else if (k === "gr_text_box") {
     buildTextBoxGeom(item, n, (x: number, y: number) => [x, y], layerOf(n, "Dwgs.User"), 0);
   } else if (k === "dimension") {
@@ -478,7 +478,8 @@ export function buildFootprintGeom(doc: Doc, item: Item): void {
     const at = kid(p, "at")!; const [px, py, pr] = atOf(p); const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS"); const [x, y] = tf(px, py);
     const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
     const field = p[0] === "property" ? str(p[1]) : p[0] === "fp_text" ? (str(p[1]) === "reference" ? "Reference" : str(p[1]) === "value" ? "Value" : null) : null;
-    pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field } : { upright: !unlocked });
+    const dxfText = { bold: !!effectsOf(p).bold };
+    pcbTextGeom(item, p, x, y, expand(text), pr, layer, field ? { upright: !unlocked, field, dxfText } : { upright: !unlocked, dxfText });
   };
   for (const p of kids(n, "property")) textAt(p, str(p[2]));
   let padIndex = 0;   // index among the footprint's (pad …) children: padAt() reports it and pcb-tools can map it back
@@ -523,7 +524,7 @@ export function buildFieldGeom(doc: Doc, item: Item): void {
   const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
   const field = p[0] === "property" ? str(p[1]) : str(p[1]) === "reference" ? "Reference" : "Value";
   item.x = px; item.y = py; item.rot = pr; item.layer = layer;
-  pcbTextGeom(item, p, px, py, fpEditorVars(doc, str(p[2]), layer), pr, layer, { upright: !unlocked, field });
+  pcbTextGeom(item, p, px, py, fpEditorVars(doc, str(p[2]), layer), pr, layer, { upright: !unlocked, field, dxfText: { bold: !!effectsOf(p).bold } });
 }
 
 /** Outline polygon (local, unrotated) for chamfered / trapezoid pads. */

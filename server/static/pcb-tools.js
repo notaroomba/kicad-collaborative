@@ -4652,6 +4652,27 @@
     });
   }
   function textPrims(g, out, knock, log) {
+    const at = out.length;
+    textPrimsOf(g, out, knock, log);
+    const dt = g.dxfText;
+    if (!dt || g.knockout || out.length === at) return;
+    const size = N(g.size, 1);
+    const info = {
+      text: S2(g.raw) || S2(g.text),
+      x: N(g.x),
+      y: N(g.y),
+      size,
+      sizeX: N(g.sizeX) > 0 ? N(g.sizeX) : size,
+      rot: N(g.rot),
+      h: S2(g.h) || "center",
+      v: S2(g.v) || "middle",
+      italic: !!g.italic,
+      bold: !!dt.bold,
+      mirror: !!g.mirror
+    };
+    for (let i = at; i < out.length; i++) out[i].text = info;
+  }
+  function textPrimsOf(g, out, knock, log) {
     const text = S2(g.raw) || S2(g.text);
     if (!text) return;
     const size = N(g.size, 1), sizeX = N(g.sizeX) > 0 ? N(g.sizeX) : size;

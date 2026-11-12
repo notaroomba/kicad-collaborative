@@ -5,11 +5,11 @@
 // with the layer name as sheet name, drill marks knocked out in white, a negative plot over a black field
 // 5 mm larger than the board, and the PDF footprint popups and "Footprints" bookmarks.
 import type { PlotParams } from "../canvas/plot-params";
-import type { PlotItem } from "../canvas/plot-rec";
+import type { PageText, PlotItem } from "../canvas/plot-rec";
 import { type BoardModel, type FabDoc, type Footprint } from "./model";
 import { PlotLog, type PlotOptions, plotFile } from "./plot";
 import { primPolys } from "./poly";
-import { type Prim, type Pt, arcPoints } from "./prims";
+import { type PlotText, type Prim, type Pt, arcPoints } from "./prims";
 import { type PlotLink, type PlotPage, type Viewport, toPage } from "./plotter";
 
 interface CanvasPlotApi { sheetPlotItems(doc: unknown, color: string): PlotItem[] }
@@ -65,8 +65,19 @@ export function boardViewport(doc: FabDoc, o: { autoScale: boolean; scale: numbe
 /** Plot primitives as page items in one colour; a cleared primitive is drawn in `clearColor` (KiCad's white knockout). */
 export function primItems(prims: Prim[], vp: Viewport, color: string, clearColor: string, out: PlotItem[]): void {
   const P = (x: number, y: number): Pt => toPage(vp, x, y);
+  const texts = new Map<PlotText, PageText>();
+  const pageText = (t: PlotText): PageText => {
+    let r = texts.get(t);
+    if (!r) { const q = P(t.x, t.y); r = Object.assign({}, t, { x: q[0], y: q[1], size: t.size * vp.scale, sizeX: t.sizeX * vp.scale }); texts.set(t, r); }
+    return r;
+  };
   for (const p of prims) {
     const c = p.clear ? clearColor : color;
+    const n0 = out.length;
+    primItem(p, c);
+    if (p.text) for (let i = n0; i < out.length; i++) out[i].text = pageText(p.text);
+  }
+  function primItem(p: Prim, c: string): void {
     if (p.k === "seg") out.push({ k: "line", pts: [P(p.x1, p.y1), P(p.x2, p.y2)], w: p.w * vp.scale, color: c });
     else if (p.k === "arc") out.push({ k: "line", pts: arcPoints(p.cx, p.cy, p.r, p.a0, p.a1, p.acw, 0.002 / Math.max(vp.scale, 1e-6)).map((q) => P(q[0], q[1])), w: p.w * vp.scale, color: c });
     else if (p.k === "circle") { const q = P(p.x, p.y); out.push({ k: "circle", x: q[0], y: q[1], r: p.d / 2 * vp.scale, w: 0, fill: true, color: c }); }

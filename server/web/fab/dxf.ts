@@ -3,6 +3,7 @@
 // millimetres ($INSUNITS 1 / 4), Y up.  Strokes are LINE entities (polygon mode off: centre lines) or
 // closed POLYLINEs around the stroke outline ("Plot graphic items using their contours"); fills are closed
 // POLYLINEs (R12 has no hatch); circles are CIRCLE entities.
+import type { PageText } from "../canvas/plot-rec";
 import type { PlotItem, PlotPage } from "./plotter";
 import { rgbOf } from "./plotter";
 type Pt = number[];
@@ -17,7 +18,34 @@ export function aciOf(c: string): number {
 }
 
 export interface DxfLayer { name: string; color: string; page: PlotPage }
-export interface DxfOptions { imperial?: boolean; polygonMode?: boolean }
+export interface DxfOptions {
+  imperial?: boolean; polygonMode?: boolean;
+  /** "Use KiCad font to plot text" off (PLOT_TEXT_MODE::NATIVE): single-line ASCII board text as TEXT entities */
+  nativeText?: boolean;
+}
+
+/** DXF_PLOTTER::PlotText: what still goes out as strokes in native mode (code points above 255, several lines, super/subscript). */
+export const dxfTextAsLines = (s: string): boolean => /[^\x00-\xff]/.test(s) || s.includes("\n") || s.includes("^{") || s.includes("_{");
+
+/** The group 1 string of plotOneLineOfText: ~{…} overbars as %%o … %%O, code points above 255 as '?'. */
+export function dxfTextString(s: string): string {
+  let out = "", brace = 0, bar = -1;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch.charCodeAt(0) > 255) { out += "?"; continue; }
+    if (ch === "~" && s[i + 1] === "{") { out += "%%o"; bar = brace; i++; continue; }
+    if (ch === "{") brace++;
+    else if (ch === "}") {
+      if (brace > 0) brace--;
+      if (brace === bar) { out += "%%O"; bar = -1; continue; }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+const DXF_OBLIQUE_ANGLE = 15;
+const STYLES = ["KICAD", "KICADB", "KICADI", "KICADBI"];
 
 const layerName = (s: string): string => s.replace(/[<>/\\":;?*|=`,\s]/g, "_");
 
@@ -32,6 +60,10 @@ export function writeDxf(layers: DxfLayer[], o: DxfOptions = {}): string {
   g(9, "$ANGBASE"); g(50, "0.0"); g(9, "$ANGDIR"); g(70, 1); g(9, "$MEASUREMENT"); g(70, o.imperial ? 0 : 1); g(9, "$INSUNITS"); g(70, o.imperial ? 1 : 4);
   g(0, "ENDSEC"); g(0, "SECTION"); g(2, "TABLES"); g(0, "TABLE"); g(2, "LTYPE"); g(70, 1);
   g(0, "LTYPE"); g(2, "CONTINUOUS"); g(70, 0); g(3, "Solid line"); g(72, 65); g(73, 0); g(40, "0.0"); g(0, "ENDTAB");
+  // STYLE table: one entry per bold / italic combination, isocp.shx
+  g(0, "TABLE"); g(2, "STYLE"); g(70, 4);
+  STYLES.forEach((name, i) => { g(0, "STYLE"); g(2, name); g(70, 0); g(40, 0); g(41, 1); g(42, 1); g(50, i < 2 ? 0 : DXF_OBLIQUE_ANGLE); g(71, 0); g(3, "isocp.shx"); });
+  g(0, "ENDTAB");
   g(0, "TABLE"); g(2, "LAYER"); g(70, layers.length);
   for (const l of layers) { g(0, "LAYER"); g(2, layerName(l.name)); g(70, 0); g(62, aciOf(l.color)); g(6, "CONTINUOUS"); }
   g(0, "ENDTAB"); g(0, "ENDSEC"); g(0, "SECTION"); g(2, "ENTITIES");
@@ -40,9 +72,24 @@ export function writeDxf(layers: DxfLayer[], o: DxfOptions = {}): string {
     for (const p of pts) { g(0, "VERTEX"); g(8, lname); g(10, X(p[0])); g(20, Y(p[1])); }
     g(0, "SEQEND"); g(8, lname);
   };
+  const f8 = (v: number): string => v.toFixed(8);
+  const text = (t: PageText, lname: string): void => {
+    // plotOneLineOfText: origin and alignment point both at the text position, height, style, mirror and justification codes
+    g(0, "TEXT"); g(8, lname); g(100, "AcDbText");
+    g(10, X(t.x)); g(20, Y(t.y)); g(30, 0); g(40, f(t.size * k));
+    g(1, dxfTextString(t.text));
+    g(50, f8(t.rot)); g(41, f(Math.abs(t.sizeX / t.size))); g(51, f8(t.italic ? DXF_OBLIQUE_ANGLE : 0));
+    g(7, STYLES[(t.bold ? 1 : 0) + (t.italic ? 2 : 0)]); g(71, t.mirror ? 2 : 0); g(72, t.h === "left" ? 0 : t.h === "right" ? 2 : 1);
+    g(11, X(t.x)); g(21, Y(t.y)); g(31, 0); g(100, "AcDbText"); g(73, t.v === "top" ? 3 : t.v === "bottom" ? 1 : 2);
+  };
   for (const l of layers) {
     const lname = layerName(l.name);
+    const done = new Set<PageText>();
     for (const it of l.page.items as PlotItem[]) {
+      if (o.nativeText && it.text && !dxfTextAsLines(it.text.text)) {
+        if (!done.has(it.text)) { done.add(it.text); text(it.text, lname); }
+        continue;
+      }
       if (it.k === "circle") {
         if (it.fill) { poly(circlePts(it.x, it.y, it.r), lname, true); continue; }
         g(0, "CIRCLE"); g(8, lname); g(10, X(it.x)); g(20, Y(it.y)); g(40, f(it.r * k));

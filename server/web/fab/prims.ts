@@ -22,7 +22,13 @@ export type Prim = (
   | { k: "rpoly"; x: number; y: number; d: number; n: number; rot: number }
   /** ClearAllAttributes: %TD*% and an empty object attribute dictionary. */
   | { k: "td" }
-) & { clear?: boolean; meta?: GbrMeta };
+) & { clear?: boolean; meta?: GbrMeta; text?: PlotText };
+
+/**
+ * The text a primitive was drawn for, shared by every primitive of that text: what DXF_PLOTTER::PlotText needs
+ * to write it as one TEXT entity when the plot does not use the KiCad font.  Board frame, mm, degrees.
+ */
+export interface PlotText { text: string; x: number; y: number; size: number; sizeX: number; rot: number; h: string; v: string; italic: boolean; bold: boolean; mirror: boolean }
 
 /**
  * GBR_METADATA of a plotted item: the aperture function (%TA.AperFunction) and the object attributes
