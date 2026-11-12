@@ -322,7 +322,9 @@ test("tracks are sized for impedance from the board's stackup, and the router sa
   const two = board(smd(100, 50, "ANT"), smd(120, 50, "ANT")); assert.equal(Z.stackupOf(K, two).assumed, true); const r2 = R.route(K, P, two, null);
   assert.equal(r2.impedance[0].applied, false); assert.match(r2.impedance[0].note, /needs a 2\.\d+ mm track/); assert.ok(r2.items.every((i) => widthOf(i) === 0.2));
   // a plan can ask for an impedance by net, and switching the feature off leaves widths alone
-  const r3 = R.route(K, P, four([smd(100, 50, "X"), smd(120, 50, "X")].join("\n")), null, { netOpts: { X: { impedance: 75 } } }); assert.equal(r3.impedance[0].target, 75); assert.ok(r3.items.every((i) => widthOf(i) < 0.2 || widthOf(i) === r3.impedance[0].width));
+  // (the board setup's minimum track width, 0.2 mm when the project gives none, is a floor: 75 Ω asks for less)
+  const r3d = R.route(K, P, four([smd(100, 50, "X"), smd(120, 50, "X")].join("\n")), null, { netOpts: { X: { impedance: 75 } } }); assert.equal(r3d.impedance[0].applied, false); assert.match(r3d.impedance[0].note, /under the board's minimum track width \(0\.2 mm\)/);
+  const r3 = R.route(K, P, four([smd(100, 50, "X"), smd(120, 50, "X")].join("\n")), { board: { design_settings: { rules: { min_track_width: 0.1 } } } }, { netOpts: { X: { impedance: 75 } } }); assert.equal(r3.impedance[0].target, 75); assert.ok(r3.items.every((i) => widthOf(i) < 0.2 || widthOf(i) === r3.impedance[0].width));
   const r4 = R.route(K, P, four([smd(100, 50, "ANT"), smd(120, 50, "ANT")].join("\n")), null, { impedance: false }); assert.equal(r4.impedance.length, 0); assert.ok(r4.items.every((i) => widthOf(i) === 0.2));
 });
 

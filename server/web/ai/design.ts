@@ -273,7 +273,7 @@ export async function boardInfo(): Promise<unknown> {
   return { document: path, size_mm: outlined ? { width: st.width, height: st.height, area_mm2: st.area } : null, outline: outlined ? undefined : "No board outline is drawn on Edge.Cuts yet, so the board has no size.", copper_layers: doc.copper.slice(), statistics: st, layout,
     track_widths_in_use_mm: Object.fromEntries(Array.from(widths.entries()).sort((a, b) => a[0] - b[0]).map(([w, n]) => [String(w), n])),
     via_sizes_in_use_mm: Object.fromEntries(vias), nets: nl.nets.size, unrouted_connections: unrouted,
-    design_rules: { clearance: s.clearance, edge_clearance: s.edgeClearance, min_track_width: s.minTrackWidth, min_via_diameter: s.minViaDiameter, min_via_drill: s.minViaDrill, net_classes: s.netclasses } };
+    design_rules: { clearance: s.clearance, edge_clearance: s.edgeClearance, min_track_width: s.minTrackWidth, min_via_diameter: s.minViaDiameter, min_via_drill: s.minThroughDrill, net_classes: s.netclasses } };
 }
 
 export function getSelection(): unknown {

@@ -188,8 +188,8 @@ export type RatsnestLine = ReturnType<typeof import("./netlist").ratsnest>[numbe
 export interface NetclassRules { clearance: number; track_width: number; via_diameter: number; via_drill: number; [k: string]: number }
 /** BOARD_DESIGN_SETTINGS / NETCLASS: what the DRC and the router check against (designSettings). */
 export interface DesignSettings {
-  clearance: number; edgeClearance: number; trackWidth: number; viaDiameter: number; viaDrill: number; minTrackWidth: number; minViaDiameter: number; minViaDrill: number;
-  minClearance?: number; minViaAnnular?: number; minMicroViaDrill?: number; holeClearance?: number; minHoleToHole?: number; minTextHeight?: number; minTextThickness?: number;
+  clearance: number; edgeClearance: number; trackWidth: number; viaDiameter: number; viaDrill: number; minTrackWidth: number; minViaDiameter: number; minThroughDrill: number;
+  minClearance?: number; minConn?: number; minViaAnnular?: number; minMicroViaDiameter?: number; minMicroViaDrill?: number; holeClearance?: number; minHoleToHole?: number; minTextHeight?: number; minTextThickness?: number;
   netclasses: Record<string, NetclassRules>; netclassOf: Record<string, string>; patterns: { re: RegExp; netclass: string }[]; severities: Record<string, string>;
   [k: string]: unknown;
 }
@@ -200,7 +200,7 @@ export interface DesignSource {
   net_settings?: { classes?: unknown; netclass_assignments?: Record<string, string>; netclass_patterns?: unknown };
 }
 /** A DRC finding (drc): where, how bad, the message, the items, the rule. */
-export interface DrcMarker { code: string; severity: string; x: number; y: number; text: string; ids: string[] }
+export interface DrcMarker { code: string; severity: string; x: number; y: number; text: string; ids: string[]; layer?: string; rule?: string }
 
 /** A routing obstacle that is not copper: an NPTH hole, a rule area keeping tracks out, a board edge. */
 export interface WorldItem { id: string | null; kind: string; shape: CopperShape; bbox: Box; layers?: Set<string>; pad?: PadInfo }

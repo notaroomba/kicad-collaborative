@@ -1,4 +1,6 @@
 // pcb-tools/drc.ts — design settings and the DRC subset.
+import { copperCtx, sliverMarkers } from "./drc-sliver";
+import { connectionWidthMarkers } from "./drc-connwidth";
 import type { Box, Conductor, CopperShape, DesignSettings, DesignSource, DrcMarker, NetclassRules, BoardDoc, PolyShape, Pt } from "./types";
 import { arcPoints, boxesTouch, polysOverlap, shapeBBox, shapeGap, shareLayer } from "./distances";
 import { pointInPoly } from "./hit";
@@ -16,13 +18,17 @@ import { isolatedCopperMarkers, starvedThermalMarkers } from "./drc-zones";
 // ---------------------------------------------------------------- design settings and DRC
 // BOARD_DESIGN_SETTINGS / NETCLASS defaults (board_design_settings.h, netclass.cpp): what a board without a
 // project file is checked against.  Rules can come from the .kicad_pro (parsed JSON) or a legacy board's (setup).
-export const DEFAULT_SETTINGS = (): DesignSettings => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
+// The Board Setup > Constraints minimums are the implicit "board setup constraints" rules (DRC_ENGINE::loadImplicitRules),
+// so a project that leaves one out is checked against BOARD_DESIGN_SETTINGS' default (board_design_settings_defaults.h).
+export const DEFAULT_SETTINGS = (): DesignSettings => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3,
+  minClearance: 0, minConn: 0, minTrackWidth: 0.2, minViaDiameter: 0.5, minThroughDrill: 0.3, minMicroViaDiameter: 0.2, minMicroViaDrill: 0.1, minViaAnnular: (0.5 - 0.3) / 2,
+  minHoleToHole: 0.25, holeClearance: 0.25, minSilkClearance: 0, minTextHeight: 1.0 * 0.8, minTextThickness: 0.1 * 0.8, minResolvedSpokes: 2, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
 export function designSettings(src: string | DesignSource | DesignSettings | null | undefined): DesignSettings {
   const s = DEFAULT_SETTINGS(); if (!src) return s;
   if (typeof src === "string" && /^\s*\{/.test(src)) { try { src = JSON.parse(src) as DesignSource; } catch (e) { return s; } }   // the .kicad_pro as text (the editor's ctx.designSettings)
   if (typeof src === "string") {   // a legacy board's (setup … (net_class …)) block
     let tree: SNode | null = null; try { tree = K.parse(src); } catch (e) { return s; }
-    const setup = tree && K.kid(tree, "setup"); if (setup) { for (const [key, prop] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) { const c = K.kid(setup, key); if (c) s[prop] = K.num(c[1], s[prop] as number); } }
+    const setup = tree && K.kid(tree, "setup"); if (setup) { for (const [key, prop] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minThroughDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) { const c = K.kid(setup, key); if (c) s[prop] = K.num(c[1], s[prop] as number); } }
     for (const nc of (tree ? K.kids(tree, "net_class") : [])) { const name = K.str(nc[1]); const e = s.netclasses[name] = Object.assign({}, s.netclasses.Default); for (const [key, prop] of [["clearance", "clearance"], ["trace_width", "track_width"], ["via_dia", "via_diameter"], ["via_drill", "via_drill"]]) { const c = K.kid(nc, key); if (c) e[prop] = K.num(c[1]); } for (const a of K.kids(nc, "add_net")) s.netclassOf[K.str(a[1])] = name; }
     if (s.netclasses.Default) { s.clearance = s.netclasses.Default.clearance; s.trackWidth = s.netclasses.Default.track_width; }
     return s;
@@ -31,7 +37,13 @@ export function designSettings(src: string | DesignSource | DesignSettings | nul
   src = src as DesignSource;
   const rules = src.board && src.board.design_settings && src.board.design_settings.rules;   // a .kicad_pro
   const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities; if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-  if (rules) { s.minClearance = rules.min_clearance || 0; s.minTrackWidth = rules.min_track_width || 0; s.minViaDiameter = rules.min_via_diameter || 0; s.minViaDrill = rules.min_through_hole_diameter || 0; s.minViaAnnular = rules.min_via_annular_width || 0; s.minMicroViaDrill = rules.min_microvia_drill || 0; if (rules.min_hole_clearance !== undefined) s.holeClearance = rules.min_hole_clearance; if (rules.min_copper_edge_clearance !== undefined) s.edgeClearance = rules.min_copper_edge_clearance; if (rules.min_hole_to_hole !== undefined) s.minHoleToHole = rules.min_hole_to_hole; if (rules.min_text_height !== undefined) s.minTextHeight = rules.min_text_height; if (rules.min_text_thickness !== undefined) s.minTextThickness = rules.min_text_thickness; if (rules.min_silk_clearance !== undefined) s.minSilkClearance = rules.min_silk_clearance; if (rules.solder_mask_to_copper_clearance !== undefined) s.maskToCopperClearance = rules.solder_mask_to_copper_clearance; if (rules.min_resolved_spokes !== undefined) s.minResolvedSpokes = rules.min_resolved_spokes; }
+  if (rules) {
+    const take = (key: string, prop: string) => { const v = rules[key]; if (typeof v === "number") s[prop] = v; };   // absent: the default stays (?? default)
+    for (const [key, prop] of [["min_clearance", "minClearance"], ["min_connection", "minConn"], ["min_track_width", "minTrackWidth"], ["min_via_diameter", "minViaDiameter"],
+      ["min_through_hole_diameter", "minThroughDrill"], ["min_microvia_diameter", "minMicroViaDiameter"], ["min_microvia_drill", "minMicroViaDrill"], ["min_via_annular_width", "minViaAnnular"],
+      ["min_hole_clearance", "holeClearance"], ["min_copper_edge_clearance", "edgeClearance"], ["min_hole_to_hole", "minHoleToHole"], ["min_text_height", "minTextHeight"],
+      ["min_text_thickness", "minTextThickness"], ["min_silk_clearance", "minSilkClearance"], ["solder_mask_to_copper_clearance", "maskToCopperClearance"], ["min_resolved_spokes", "minResolvedSpokes"]]) take(key, prop);
+  }
   const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults; if (dflt) layerDefaults(dflt);   // Board Setup > Text & Graphics > Defaults: what a new item gets
   const ns = src.net_settings;
   if (ns && isList(ns.classes)) {
@@ -189,6 +201,12 @@ export function drc(doc: BoardDoc, settings: DesignSettings | DesignSource | str
       const [a] = c.anchors;
       if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
     }
+  }
+  // copper slivers and connection widths over the merged copper of each layer / net (drc-sliver.ts, drc-connwidth.ts)
+  if (s.severities.copper_sliver !== "ignore" || s.severities.connection_width !== "ignore") {
+    const cc = copperCtx(doc);
+    if (s.severities.copper_sliver !== "ignore") out.push(...sliverMarkers(doc, nl.conductors, cc));
+    if (s.severities.connection_width !== "ignore") out.push(...connectionWidthMarkers(doc, s, rules, nl.conductors, cc));
   }
   // track width, via diameter, hole size, annular width, segment length and angle through the rules (drc-rules.ts)
   out.push(...sizeMarkers(doc, s, rules, conds), ...trackAngleMarkers(doc, s, rules, conds));

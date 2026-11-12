@@ -3,7 +3,7 @@
 // DRC_TEST_PROVIDER_TRACK_WIDTH, _VIA_DIAMETER, _HOLE_SIZE, _ANNULAR_WIDTH, _TRACK_ANGLE, _TRACK_SEGMENT_LENGTH,
 // _DISALLOW (rule disallow constraints) and _MISC::testAssertions, with KiCad's messages.
 import type { BoardDoc, Conductor, CopperShape, DesignSettings, DrcMarker, PadInfo, Pt, SAtom } from "./types";
-import { dPS, padShape, rectPointDist, shapeGap } from "./distances";
+import { dPS, shapeGap } from "./distances";
 import type { DruRule, RuleItem } from "./dru";
 import { evalAssertion, evalRuleConstraint, ruleMatches } from "./dru";
 import { viaTypeOf } from "./dru-eval";
@@ -11,6 +11,12 @@ import { marker, mm4 } from "./drc";
 import { padsOf } from "./route-geom";
 import { K } from "./state";
 import { layerOf, pt, rotator } from "./util";
+import { padShapePolygon } from "./pad-outline";
+import { pointInPoly } from "./hit";
+import { clipperArea, copperCtx, type CopperCtx } from "./drc-sliver";
+import { padPrims } from "../../fab/plot";
+import { type Prim, type Pt as FPt } from "../../fab/prims";
+import { primPolys, stadium, subtract as subtractPolys, union as unionPolys } from "../../fab/poly";
 
 /** A resolved constraint: min / max and the name the message gives it; null when the rule says ignore. */
 export interface Resolved { min: number | null; max: number | null; name: string; severity: string | null }
@@ -48,7 +54,7 @@ export function sizeMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[], 
       const rd = resolve(rules, "via_diameter", doc, s, A, null, s.minViaDiameter || 0); const fd = fails(rd, c.size);
       if (rd && fd) out.push(marker("via_diameter", sev(rd), a[0], a[1], `Via diameter (${rd.name} ${fd.kind} diameter ${mm4(fd.v)}; actual ${mm4(c.size)})`, [c.id]));
       const micro = viaTypeOf(c.item.node) === "micro";
-      const rh = resolve(rules, "hole_size", doc, s, A, null, micro ? (s.minMicroViaDrill || 0) : (s.minViaDrill || 0), micro ? "board setup constraints micro-via" : "board setup constraints"); const fh = fails(rh, c.drill);
+      const rh = resolve(rules, "hole_size", doc, s, A, null, micro ? (s.minMicroViaDrill || 0) : (s.minThroughDrill || 0), micro ? "board setup constraints micro-via" : "board setup constraints"); const fh = fails(rh, c.drill);
       if (rh && fh) out.push(marker(micro ? "microvia_drill_out_of_range" : "drill_out_of_range", sev(rh), a[0], a[1], `${micro ? "Micro via hole size out of range" : "Hole size out of range"} (${rh.name} ${fh.kind} hole ${mm4(fh.v)}; actual ${mm4(c.drill)})`, [c.id]));
       const ann = (c.size - c.drill) / 2; const ra = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0); const fa = fails(ra, ann);
       if (ra && fa) out.push(marker("annular_width", sev(ra), a[0], a[1], `Annular width (${ra.name} ${fa.kind} annular width ${mm4(fa.v)}; actual ${mm4(ann)})`, [c.id]));
@@ -63,7 +69,7 @@ export function sizeMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[], 
       const w = oval ? K.num(d[2]) : K.num(d[1]); const h = oval ? K.num(d[3], w) : w;
       const minor = Math.min(w, h), major = Math.max(w, h); if (!(minor > 0)) continue;   // checkPadHole: holeMinor / holeMajor
       const A: RuleItem = { kind: "pad", node: p.node, parent: it, layer: null };
-      const r = resolve(rules, "hole_size", doc, s, A, null, s.minViaDrill || 0); if (!r) continue;
+      const r = resolve(rules, "hole_size", doc, s, A, null, s.minThroughDrill || 0); if (!r) continue;
       // max is tested against the major axis, min against the minor one; when both fail the min message is reported
       const f = r.min != null && r.min > 0 && minor < r.min - 1e-6 ? { kind: "min", v: r.min, actual: minor }
         : r.max != null && major > r.max + 1e-6 ? { kind: "max", v: r.max, actual: major } : null;
@@ -73,52 +79,96 @@ export function sizeMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[], 
   return out;
 }
 
-/** How deep a point lies inside a pad's copper (negative outside): the distance to the outline. */
-function insetDepth(sh: CopperShape, q: Pt): number {
-  if (sh.t === "circle") return sh.r - Math.hypot(q[0] - sh.x, q[1] - sh.y);
-  if (sh.t === "seg") return sh.r - dPS(q, sh.a, sh.b);
-  if (sh.t === "rect") {
-    const [lx, ly] = rotator(-(sh.rot || 0))(q[0] - sh.x, q[1] - sh.y); const rr = sh.rr || 0;
-    const hw = Math.max(sh.w / 2 - rr, 0), hh = Math.max(sh.h / 2 - rr, 0);
-    const out = rectPointDist(sh, q); return out > 0 ? rr - out : rr + Math.min(hw - Math.abs(lx), hh - Math.abs(ly));
-  }
-  return 0;
+/** The copper outline of a pad (PAD::TransformShapeToPolygon), board frame: pad-outline.ts' exact port for the
+ *  built-in shapes; a custom pad's comes from `custom` (the plotter's merged primitives), else null. */
+export type PadOutlineFn = (q: PadInfo) => Pt[][] | null;
+function builtinOutline(q: PadInfo): Pt[][] | null {
+  if (q.shape === "custom") return null;
+  const [ox, oy] = rotator(q.rot)(q.off[0], q.off[1]);
+  return [padShapePolygon(q.node, [q.x + ox, q.y + oy])];
+}
+/** GetEffectiveHoleShape: the hole's centre line (a point for a round hole) and its radius. */
+function holeSlot(q: PadInfo): { a: Pt; b: Pt; r: number } | null {
+  const d = K.kid(q.node, "drill"); if (!d) return null; const oval = K.str(d[1] as SAtom) === "oval";
+  const dx = oval ? K.num(d[2]) : K.num(d[1]), dy = oval ? K.num(d[3], dx) : dx; if (!(Math.min(dx, dy) > 0)) return null;
+  const half = Math.abs(dx - dy) / 2, [hx, hy] = dx >= dy ? rotator(q.rot)(half, 0) : rotator(q.rot)(0, half);
+  return { a: [q.x - hx, q.y - hy], b: [q.x + hx, q.y + hy], r: Math.min(dx, dy) / 2 };
+}
+function bboxOfPolys(polys: Pt[][]): [number, number, number, number] {
+  let b: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const p of polys) for (const q of p) b = [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.max(b[2], q[2]), Math.max(b[3], q[3])];
+  return b;
+}
+const boxHit = (a: number[], b: number[]) => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
+const boxIn = (outer: number[], inner: number[]) => outer[0] <= inner[0] && outer[1] <= inner[1] && outer[2] >= inner[2] && outer[3] >= inner[3];
+/** Segment-to-segment distance (SEG::NearestPoints). */
+function segSegDist(a: Pt, b: Pt, c: Pt, d: Pt): number {
+  const cross = (o: Pt, p: Pt, q: Pt) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+  const d1 = cross(c, d, a), d2 = cross(c, d, b), d3 = cross(a, b, c), d4 = cross(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return 0;
+  return Math.min(dPS(a, c, d), dPS(b, c, d), dPS(c, a, b), dPS(d, a, b));
+}
+/** SHAPE_POLY_SET::NearestPoints( slot ): the outline edge nearest the hole's centre line, moved out by the hole's
+ *  radius toward it — |distance - radius|, 0 when the centre line touches an edge. */
+function slotToOutline(polys: Pt[][], slot: { a: Pt; b: Pt; r: number }): number {
+  let d = Infinity;
+  for (const p of polys) for (let i = 0, j = p.length - 1; i < p.length; j = i++) d = Math.min(d, segSegDist(slot.a, slot.b, p[j], p[i]));
+  return !isFinite(d) || d === 0 ? 0 : Math.abs(d - slot.r);
 }
 /**
  * The annulus of a plated pad (DRC_TEST_PROVIDER_ANNULAR_WIDTH getPadAnnulusPts): with no shape offset a circle, oval,
  * rectangle, rounded or lightly chamfered rectangle takes the narrower of (size - drill) / 2 on each axis; otherwise
- * the copper between the hole (a slot) and the outline, 0 when the hole is outside the pad.  null when it is not measured
- * (custom and trapezoid outlines, or other same-number pads overlapping it).
+ * (custom, trapezoid, heavily chamfered, offset shapes, or same-number pads overlapping it) the slow path: the
+ * distance from the hole to the pad's outline — or to the outline of it and every same-number pad merged, their own
+ * holes cut out — and 0 when the hole is outside the copper.  null when an outline cannot be had.
  */
-export function padAnnulus(p: PadInfo, others: PadInfo[] = []): number | null {
+export function padAnnulus(p: PadInfo, sameNum: PadInfo[] = [], c: { min: number | null; max: number | null } | null = { min: 1, max: null }, custom?: PadOutlineFn): number | null {
   const d = K.kid(p.node, "drill"); if (!d) return null; const oval = K.str(d[1] as SAtom) === "oval";
   const dx = oval ? K.num(d[2]) : K.num(d[1]), dy = oval ? K.num(d[3], dx) : dx;
   const cr = K.kid(p.node, "chamfer_ratio"), chamfered = !!K.kid(p.node, "chamfer") && !!cr;
   const offset = Math.abs(p.off[0]) > 1e-9 || Math.abs(p.off[1]) > 1e-9;
   const handled = !offset && (["circle", "oval", "rect", "roundrect"].includes(p.shape) && (!chamfered || K.num(cr![1]) <= 0.30));
-  const fast = Math.abs(Math.min((p.w - dx) / 2, (p.h - dy) / 2));   // |ptA - ptB|: the distance, never negative
-  if (others.length) return handled && p.shape === "circle" ? fast : null;   // the aggregate outline is not modelled
-  if (handled) return fast;
-  if (p.shape !== "circle" && p.shape !== "oval" && p.shape !== "rect" && p.shape !== "roundrect") return null;
-  const R = rotator(p.rot), [ox, oy] = R(p.off[0], p.off[1]);
-  const sh = padShape({ shape: p.shape, x: p.x + ox, y: p.y + oy, w: p.w, h: p.h, rot: p.rot, node: p.node });
-  if (insetDepth(sh, [p.x, p.y]) < 0) return 0;   // hole outside pad
-  const half = Math.abs(dx - dy) / 2, [hx, hy] = dx >= dy ? R(half, 0) : R(0, half), hr = Math.min(dx, dy) / 2;
-  return Math.max(0, Math.min(insetDepth(sh, [p.x - hx, p.y - hy]), insetDepth(sh, [p.x + hx, p.y + hy])) - hr);
+  const fast = offset ? null : Math.abs(Math.min((p.w - dx) / 2, (p.h - dy) / 2));   // |ptA - ptB|: the distance, never negative
+  const outline = (q: PadInfo) => builtinOutline(q) || (custom ? custom(q) : null);
+  const mine = outline(p); if (!mine) return handled ? fast : null;
+  const box = bboxOfPolys(mine);
+  const overlapping = sameNum.filter((q) => { const o = outline(q); return !!o && boxHit(bboxOfPolys(o), box); });
+  let covers = false, holeCuts = false;
+  for (const q of overlapping) {
+    if (boxIn(bboxOfPolys(outline(q)!), box)) covers = true;
+    const h = holeSlot(q); if (h) { const hb = [Math.min(h.a[0], h.b[0]) - h.r, Math.min(h.a[1], h.b[1]) - h.r, Math.max(h.a[0], h.b[0]) + h.r, Math.max(h.a[1], h.b[1]) + h.r]; if (boxHit(hb, box)) holeCuts = true; }
+  }
+  const hasMin = !!c && c.min != null && c.min > 0, hasMax = !!c && c.max != null;
+  if (handled && overlapping.length && !holeCuts && !covers && hasMin && !hasMax) {
+    if (p.shape === "circle") return fast;
+    if (fast! >= c!.min! - 1e-9) return fast;
+  }
+  if (handled && !overlapping.length) return fast;
+  const slot = holeSlot(p); if (!slot) return fast;
+  if (!sameNum.length) return pointInPoly(mine[0], p.x, p.y) || mine.some((q) => pointInPoly(q, p.x, p.y)) ? slotToOutline(mine, slot) : 0;
+  if (!hasMin) return fast;
+  let agg: Pt[][] = mine.slice(); const holes: Pt[][] = [];
+  for (const q of sameNum) { const o = outline(q); if (o) agg.push(...o); const h = holeSlot(q); if (h) holes.push(stadiumPts(h.a, h.b, h.r)); }
+  agg = subtractPolys(unionPolys(agg as FPt[][]), holes as FPt[][]);
+  if (!agg.some((q) => clipperArea(q as FPt[]) > 0 && pointInPoly(q, p.x, p.y)) || agg.some((q) => clipperArea(q as FPt[]) < 0 && pointInPoly(q, p.x, p.y))) return 0;
+  return slotToOutline(agg, slot);
 }
+/** A slot (or round hole) as a polygon, ERROR_INSIDE. */
+function stadiumPts(a: Pt, b: Pt, r: number): Pt[] { return stadium(a[0], a[1], b[0], b[1], 2 * r) as Pt[]; }
 /** DRC_TEST_PROVIDER_ANNULAR_WIDTH for the pads: every plated through-hole pad against annular_width on its layer. */
 export function padAnnularMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[]): DrcMarker[] {
   const out: DrcMarker[] = [];
   if (!((s.minViaAnnular || 0) > 0) && !rules.some((r) => r.constraints.some((c) => c.type === "annular_width"))) return out;   // HasRulesForConstraintType
+  let cc: CopperCtx | null = null;
+  const custom: PadOutlineFn = (q) => { const fp = (cc = cc || copperCtx(doc)).pads.get(q.node); if (!fp) return null; const prims: Prim[] = []; padPrims(fp, "F.Cu", cc.m, prims); const polys = unionPolys(prims.flatMap(primPolys)); return polys.length ? polys : null; };
   for (const it of doc.items.values()) {
     if (it.kind !== "footprint") continue; const pads = padsOf(it);
     for (const p of pads) {
       if (p.type !== "thru_hole" || !K.kid(p.node, "drill")) continue;
-      const box = (q: PadInfo) => { const r = Math.hypot(q.w, q.h) / 2 + Math.hypot(q.off[0], q.off[1]); return [q.x - r, q.y - r, q.x + r, q.y + r]; };
-      const b = box(p); const others = p.number ? pads.filter((q) => q !== p && q.number === p.number && (() => { const c = box(q); return c[0] <= b[2] && c[2] >= b[0] && c[1] <= b[3] && c[3] >= b[1]; })()) : [];
+      const sameNum = p.number ? pads.filter((q) => q !== p && q.number === p.number) : [];
       const A: RuleItem = { kind: "pad", node: p.node, parent: it, layer: "F.Cu" };   // a normal padstack: one unique layer
       const r = resolve(rules, "annular_width", doc, s, A, null, s.minViaAnnular || 0); if (!r) continue;
-      const w = padAnnulus(p, others); if (w == null) continue;
+      const w = padAnnulus(p, sameNum, r, custom); if (w == null) continue;
       const f = fails(r, w); if (!f) continue;
       out.push(marker("annular_width", sev(r), p.x, p.y, `Annular width (${r.name} ${f.kind} annular width ${mm4(f.v)}; actual ${mm4(w)})`, [it.id]));
     }

@@ -148,7 +148,7 @@ export function uploadProject(name: string, files: UploadFile[], onProgress: (fr
 export function isProjectFile(path: string): boolean {
   const base = path.split("/").pop() || path;
   if (base === "sym-lib-table" || base === "fp-lib-table" || base === "design-block-lib-table") return true;
-  return /\.(kicad_pro|kicad_sch|kicad_pcb|kicad_prl|kicad_sym|kicad_mod|kicad_dru|kicad_wks|step|stp|wrl|wrz)$/i.test(base);
+  return /\.(kicad_pro|kicad_sch|kicad_pcb|kicad_prl|kicad_sym|kicad_mod|kicad_dru|kicad_wks|step|stp|wrl|wrz|lib|sub|cir|mod|spice|ibs)$/i.test(base);
 }
 export function isLocalState(path: string): boolean {
   return path.split("/").some((d) => d.endsWith(".collab") || d.endsWith("-backups") || d === ".history" || d === ".git");

@@ -292,10 +292,10 @@ export class Router {
     // runs as wide as that room allows, as people neck tracks down at such pads.
     if (cap < width) width = Math.max(s.minTrackWidth || 0.1, 0.1, Math.floor(cap * 100 + 1e-6) / 100);
     const clr = Math.max(P.netClearance(s, netKey), s.minClearance || 0); const viaD0 = Math.max(nc.via_diameter !== undefined ? nc.via_diameter : s.viaDiameter, s.minViaDiameter || 0);
-    let viaD = viaD0, viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minViaDrill || 0);
+    let viaD = viaD0, viaDrill = Math.max(nc.via_drill !== undefined ? nc.via_drill : s.viaDrill, s.minThroughDrill || 0);
     // The smallest via Board Setup permits, for a connection the class's own via cannot serve (a ball in a grid
     // array has no room for it).  Only when the board states its minimums; the hole keeps its annular ring.
-    if (smallVia && s.minViaDiameter > 0 && s.minViaDrill > 0 && s.minViaDiameter < viaD0 - 1e-6) { const d = Math.max(s.minViaDiameter, s.minViaDrill + 2 * (s.minViaAnnular || 0.05)); if (d < viaD0 - 1e-6) { viaD = d; viaDrill = Math.min(viaDrill, s.minViaDrill); } }
+    if (smallVia && s.minViaDiameter > 0 && s.minThroughDrill > 0 && s.minViaDiameter < viaD0 - 1e-6) { const d = Math.max(s.minViaDiameter, s.minThroughDrill + 2 * (s.minViaAnnular || 0.05)); if (d < viaD0 - 1e-6) { viaD = d; viaDrill = Math.min(viaDrill, s.minThroughDrill); } }
     const kind = this.relax ? undefined : this.kindFor(netKey);
     const key = `${width}/${clr}/${viaD}/${viaDrill}` + (kind ? "/" + kind : ""); let c = G.classes.get(key);
     if (!c) { c = buildClass(G, key, width, clr, viaD, viaDrill, kind); if (this.conns.length) for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, c, sh, 1, false); }
@@ -450,7 +450,8 @@ export class Router {
       const ok = w !== null && w >= minW && w <= Math.max(1.2, cw * 5);
       const rep: ImpedanceReport = { nets: [net.key], target, differential: false, layer: tr.layer, model, width: w !== null ? r2(w) : null, applied: ok };
       if (ok) { this.zWidth.set(net.key, r2(w!)); rep.achieved = Math.round(z0(tr, r2(w!))); }
-      else rep.note = w !== null ? `${target} Ω needs a ${r2(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} Ω). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target} Ω on this stackup`;
+      else rep.note = w !== null && w < minW ? `${target} Ω needs a ${r2(w)} mm track on this stackup, under the board's minimum track width (${r2(minW)} mm): routed at the class width (${Math.round(z0(tr, cw))} Ω).`
+        : w !== null ? `${target} Ω needs a ${r2(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} Ω). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target} Ω on this stackup`;
       this.zReports.push(rep);
     }
   }

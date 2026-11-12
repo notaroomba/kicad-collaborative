@@ -53,10 +53,12 @@ test("annular_width covers plated pads: the board setup minimum and custom rules
   const doc = board(FP);
   const s = P.designSettings({ board: { design_settings: { rules: { min_via_annular_width: 0.1 } } } });
   const m = P.drc(doc, s, { unconnected: false }).filter((x) => x.code === "annular_width");
-  assert.deepEqual(m.map((x) => x.text), ["Annular width (board setup constraints min annular width 0.1000 mm; actual 0.0500 mm)"]);
+  // pad 3's offset hole takes the slow path: the distance to PAD::TransformShapeToPolygon's ERROR_INSIDE outline
+  // (a chord of the 2 mm disc, 0.0048 mm inside the circle) less the hole radius
+  assert.deepEqual(m.map((x) => x.text), ["Annular width (board setup constraints min annular width 0.1000 mm; actual 0.0500 mm)", "Annular width (board setup constraints min annular width 0.1000 mm; actual 0.0952 mm)"]);
   const r = P.drc(doc, plain, { unconnected: false, rules: `(version 1) (rule "ring" (condition "A.Type == 'Pad'") (constraint annular_width (min 0.2mm)))` }).filter((x) => x.code === "annular_width");
-  assert.deepEqual(r.map((x) => x.text).sort(), ["Annular width (rule 'ring' min annular width 0.2000 mm; actual 0.0500 mm)", "Annular width (rule 'ring' min annular width 0.2000 mm; actual 0.1000 mm)"].sort(),
-    "pad 2 (0.05) and pad 3, whose 0.8 hole sits 0.5 off a 2 mm disc's centre (1 - 0.5 - 0.4 = 0.1)");
+  assert.deepEqual(r.map((x) => x.text).sort(), ["Annular width (rule 'ring' min annular width 0.2000 mm; actual 0.0500 mm)", "Annular width (rule 'ring' min annular width 0.2000 mm; actual 0.0952 mm)"].sort(),
+    "pad 2 (0.05) and pad 3, whose 0.8 hole sits 0.5 off a 2 mm disc's centre (1 - 0.5 - 0.4 = 0.1, less the chord error)");
 });
 test("isolated copper: an island reached only by a track (no pad in its cluster) is isolated; through a track to a pad it is not", () => {
   const zone = (extra) => board(`(footprint "X:Y" (layer "F.Cu") (uuid "fp1") (at 10 10)
