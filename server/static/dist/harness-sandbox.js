@@ -1456,6 +1456,24 @@ class Board(_Doc):
             e["drill"] = drill
         self._edit(e)
 
+    def unroute(self, *nets: str, keep: tuple = ("GND",)) -> int:
+        """Take the tracks and vias of these nets off the board (of every net but \`keep\` when none is named), so that
+        a crowded area can be laid again together.  Returns how many were removed."""
+        names = [self._net(n) for n in nets] if nets else [n for n in self.nets() if n not in keep]
+        count = 0
+        for net in names:
+            for _ in range(40):   # get_items answers in pages: take a page off the board, ask again
+                got = self._call("get_items", net=net, kinds=["segment", "arc", "via"])
+                for it in got.get("items", []):
+                    self._edit({"op": "remove", "id": it["id"]})
+                    count += 1
+                self.flush()
+                if not got.get("truncated") or not got.get("items"):
+                    break
+        if count:
+            self.project.note(f"board: took up {count} tracks and vias of {len(names)} nets")
+        return count
+
     def _net(self, name: str) -> str:
         """A net by the name the schematic gave it: the board calls a sheet's local net "/NAME"."""
         names = self.__dict__.get("_names")

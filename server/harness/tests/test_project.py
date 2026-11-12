@@ -91,6 +91,9 @@ class Blinker(unittest.TestCase):
         self.assertEqual(routed["zones_filled"], 1)
         self.assertEqual(board.unrouted(), {})
         self.assertEqual(board.check()["errors"], 0)
+        self.assertGreater(board.unroute("SIG"), 0)               # taken up again, and only that net
+        self.assertEqual(board.unrouted(), {"/SIG": 2})
+        self.assertEqual(board.route(nets=["SIG"], time_s=10, max_vias=2)["left"], {})
 
     def test_a_netlist_becomes_a_sheet_and_a_generated_part_reaches_the_board(self):
         p = self.project
