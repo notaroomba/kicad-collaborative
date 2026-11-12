@@ -66,7 +66,7 @@ function attributeChecks(items: KItem[]): Record<string, boolean> {
 
 function menuCtx(): MenuCtx {
   const items = selectionItems(), s = schState(), p = pcbState(), sch = isSch();
-  const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field");
+  const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPin && !kinds.length) kinds.push("pin");
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
   const outline = !!draw && (sch ? draw.shape === "polygon" || draw.shape === "rulearea" : ["gpoly", "zone", "thievingzone", "rulearea"].includes(draw.shape));
@@ -83,6 +83,7 @@ function menuCtx(): MenuCtx {
     busy: interactionBusy() || drawingLine || routing || !!draw || (sch && !!s && !!s.carry),
     canAddCorner, canRemoveCorner,
     canClose: outline && n >= 3, canUndoPoint: (outline || (!!draw && (draw.shape === "lines" || draw.shape === "gcurve"))) && n >= 1,
+    pinAlts: !!(E.selPin && E.kdoc && schPins() && schPins()!.pinAlternates(E.kdoc as KDoc, E.selPin)),
     highlight: !!E.highlightIds, belowRoot: !!root && (state as { doc?: unknown }).doc !== root,
     hasLocked: items.some((it) => isLocked(it.node)), hasUnlocked: items.some((it) => !isLocked(it.node)),
     hasItems: !!E.kdoc && E.kdoc.items.size > 0, checks: attributeChecks(items),
@@ -96,7 +97,13 @@ const escape: Run = () => { document.dispatchEvent(new KeyboardEvent("keydown", 
 function openProperties(): void {
   const d = E.kdoc as KDoc | null, K = window.KDialogs; if (!d || !K) return;
   if (E.selField) { const it = d.items.get(E.selField.id); if (it) K.openField(toolCtx(), it, E.selField.name); return; }
+  if (E.selPin) { const it = d.items.get(E.selPin.id); if (it) K.openItem(toolCtx(), it); return; }   // Properties promotes a single pin to its symbol
   const it = selectionItems()[0]; if (it) K.openItem(toolCtx(), it);
+}
+/** SCH_MOVE_TOOL: a lone selected pin moves as its parent symbol. */
+function promotePin(): void {
+  if (!E.selPin) return; const id = E.selPin.id; E.selPin = null;
+  const fp = (E.items as { id: string }[]).find((f) => f.id === id); if (fp) E.selected = fp;
 }
 function deleteAll(): void {
   const ids = selectionIds(); if (!ids.length) return;
@@ -119,9 +126,9 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "PCB_ACTIONS::properties": () => (window.KDialogs ? openProperties : NOT_YET),
   "ACTIONS::selectAll": () => () => { clearAllSelection(false); selectAll(); requestRender(); },
   "ACTIONS::unselectAll": () => () => clearAllSelection(),
-  "ACTIONS::doDelete": () => (E.selField ? DESKTOP : deleteAll),
-  "SCH_ACTIONS::move": () => (selectionItems().length ? () => { startMove("move"); } : NOT_YET),
-  "SCH_ACTIONS::drag": () => (selectionItems().length ? () => { startMove("drag"); } : NOT_YET),
+  "ACTIONS::doDelete": () => (E.selField ? DESKTOP : E.selPin ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
+  "SCH_ACTIONS::move": () => (selectionItems().length || E.selPin ? () => { promotePin(); startMove("move"); } : NOT_YET),
+  "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPin ? () => { promotePin(); startMove("drag"); } : NOT_YET),
   "PCB_ACTIONS::move": () => (selectionItems().length ? () => { startMove("move"); } : NOT_YET),
   "PCB_ACTIONS::drag45Degree": () => dragTrack(false), "PCB_ACTIONS::dragFreeAngle": () => dragTrack(true),
   "SCH_ACTIONS::enterSheet": () => { const it = selectionItems()[0]; const file = it && it.file; return file ? () => enterSheet(file) : NOT_YET; },
@@ -202,7 +209,36 @@ function diffPairRows(): CtxItem[] {
   if (!pcb || !pcb.diffPairMenu) return [];
   return pcb.diffPairMenu(toolCtx()).map((r): CtxItem => (r.sep ? { sep: true } : { label: r.label, check: true, checked: !!r.checked, run: runRow(() => { if (r.run) r.run(); }) }));
 }
-function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : rows(items, c); }
+/** The schematic module's pin helpers (sch-tools pins.ts). */
+interface PinRef { id: string; number: string }
+interface SchPins {
+  pinAlternates(d: KDoc, r: PinRef): { base: string; alts: string[]; current: string } | null;
+  setAltPinFunction(ctx: unknown, r: PinRef, alt: string): boolean;
+  pinHelper(ctx: unknown, pins: PinRef[], what: string, ref?: (it: KItem) => string): string[];
+  PIN_HELPERS: { id: string; label: string; icon: string }[];
+}
+function schPins(): SchPins | null { const m = CollabTools.sch; const u = m && (m._ as unknown as SchPins | undefined); return u && typeof u.pinHelper === "function" ? u : null; }
+/** ALT_PIN_FUNCTION_MENU::update: the base function, then the alternates (a std::map, so by name), as check items. */
+function pinFunctionRows(): CtxItem[] {
+  const P = schPins(), pin = E.selPin as PinRef | null; if (!P || !pin || !E.kdoc) return [];
+  const info = P.pinAlternates(E.kdoc as KDoc, pin); if (!info) return [];
+  const ro = !!E.viewOnly;
+  const one = (name: string, on: boolean): CtxItem => { const it: CtxItem = { label: name, check: true, checked: on }; if (ro) it.why = VIEW_ONLY; else it.run = runRow(() => { P.setAltPinFunction(toolCtx(), pin, name); requestRender(); }); return it; };
+  const out = [one(info.base, !info.current || info.current === info.base)];
+  for (const a of info.alts.slice().sort()) if (a !== info.base) out.push(one(a, a === info.current));
+  return out;
+}
+/** PIN_TRICKS_MENU::update: Wire, No Connect, Net Label, Hierarchical Label, Global Label on the selected pins. */
+function pinHelperRows(): CtxItem[] {
+  const P = schPins(), pin = E.selPin as PinRef | null; if (!P || !pin) return [];
+  return P.PIN_HELPERS.map((h): CtxItem => {
+    const it: CtxItem = { label: h.label, icon: h.icon };
+    if (E.viewOnly) it.why = VIEW_ONLY;
+    else it.run = runRow(() => { E.selPin = null; P.pinHelper(toolCtx(), [pin], h.id); selectionChanged(); requestRender(); });
+    return it;
+  });
+}
+function subRows(menu: MenuDef, items: Resolved[], c: MenuCtx): CtxItem[] { return menu.dynamic === "zoom" ? zoomRows() : menu.dynamic === "grid" ? gridRows(c) : menu.dynamic === "diffpair" ? diffPairRows() : menu.dynamic === "pinfunction" ? pinFunctionRows() : menu.dynamic === "pinhelpers" ? pinHelperRows() : rows(items, c); }
 
 /** "Symbol R1 (10k)", "Wire", "Track [VCC] on B.Cu, length 0.6400 mm": how KiCad names an item in a disambiguation menu. */
 function describe(it: KItem | string): string {
@@ -362,7 +398,10 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
   const mm = worldMm(ev);
   E.lastCursorMm = mm;
   if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy()) {
-    if (E.selField) {
+    if (E.selPin) {
+      const hit = pickAt(mm);
+      if (!(hit && hit.pin && hit.pin.id === E.selPin.id && hit.pin.number === E.selPin.number)) selectAt(mm);
+    } else if (E.selField) {
       const hit = pickAt(mm);
       if (!(hit && hit.field && hit.field.id === E.selField.id && hit.field.name === E.selField.name)) selectAt(mm);
     } else if (!selectionIds().length && !(pcbState() as unknown as { padSel?: string | null } | null)?.padSel) {

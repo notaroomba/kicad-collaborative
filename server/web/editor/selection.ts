@@ -19,7 +19,7 @@ export function selectedSet() { const s = new Set<string>(E.selection); if (E.se
 
    // a selected symbol / footprint field {id, name} and its drag {id, name, startMm, orig, moved}
 export function clearSelection() {
-  E.selection.clear(); E.selected = null; E.selField = null;
+  E.selection.clear(); E.selected = null; E.selField = null; E.selPin = null;
   if (CollabTools.sch && CollabTools.sch.select) CollabTools.sch.select(null);
   const pcb = CollabTools.pcb && CollabTools.pcb.state; if (pcb && pcb.sel) pcb.sel.clear(); if (pcb) pcb.padSel = null;   // the board module's own picks (tracks, vias, graphics) clear with everything else
 }
@@ -180,7 +180,7 @@ export function finishBoxSel(ev: { clientX: number; clientY: number }) {
       if (enclose ? inside : touches) picked.push(it); }
   }
   const pcbSel = CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel;
-  if (!b.add) { E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too
+  if (!b.add) { E.selPin = null; E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too
   // SelectMultiple(area, subtractive, exclusive_or): Ctrl+Shift takes the boxed items out, Ctrl toggles them, Shift adds
   if (b.mode === "remove" || b.mode === "toggle") {
     if (E.selected) E.selection.add(E.selected.id);

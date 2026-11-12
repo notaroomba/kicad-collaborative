@@ -19,7 +19,7 @@ import { placeCrosshair } from "./crosshair";
 import { renderObjects, snapMm, syncItemsFromDoc } from "./doc";
 import { sendOp } from "./net";
 import { breakFollow, sendPresence } from "./peers";
-import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps } from "./selection";
+import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps, selFilter } from "./selection";
 import { E } from "./state";
 import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
 import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
@@ -94,8 +94,23 @@ function schPick(mm: Mm): KItem | null {
   try { const it = pick(toolCtx(), mm); return it && filterAllows(it.kind, it) ? it : null; } catch { return null; }
 }
 
+/**
+ * SCH_PIN::HitTest under the cursor (KiCad's 5 px selection threshold): the pin a click selects on its own, ahead of
+ * its symbol's body, while the selection filter takes pins.  Hidden pins only while they are shown.
+ */
+export function pinUnder(mm: Mm): { id: string; number: string } | null {
+  const m = CollabTools.sch, d = doc(); if (!isSch() || !m || !d || !m._) return null;
+  const f = selFilter() as Record<string, boolean>; if (f.pins === false) return null;
+  const pinAt = (m._ as unknown as { pinAt?: (d: KDoc, p: Mm, tol: number, hidden?: boolean) => { item: KItem; pin: { number: string } } | null }).pinAt;
+  if (!pinAt) return null;
+  try {
+    const h = pinAt(d, mm, 5 / Math.max(1e-6, pxPerMm()), !!(E.renderOpts && E.renderOpts.showHiddenPins));
+    if (!h || (f.lockedItems === false && h.item.node && KiCadCanvas.kid(h.item.node, "locked"))) return null;
+    return { id: h.item.id, number: h.pin.number };
+  } catch { return null; }
+}
 /** What a plain left click at `mm` selects, without touching the selection: the field, movable item or module item. */
-export function pickAt(mm: Mm): { field?: { id: string; name: string }; movable?: { id: string }; item?: KItem } | null {
+export function pickAt(mm: Mm): { field?: { id: string; name: string }; pin?: { id: string; number: string }; movable?: { id: string }; item?: KItem } | null {
   const d = doc(); if (!d) return null;
   const [x, y] = mm;
   // schematic: the tool module's capture handler sees a click first, so a wire, label or junction under the cursor wins
@@ -104,6 +119,7 @@ export function pickAt(mm: Mm): { field?: { id: string; name: string }; movable?
     const f = (KiCadCanvas.fieldAt as (d: KDoc, x: number, y: number, hidden: Set<string>) => { item: KItem; name: string } | null)(d, x, y, E.hiddenLayers);
     if (f) return { field: { id: f.item.id, name: f.name } };
   }
+  if (isSch()) { const pin = pinUnder(mm); if (pin) return { pin }; }
   const best = nearestFootprint(x, y, clickSlop()) as { id: string } | null;
   if (isSch()) return best ? { movable: best } : null;
   // board: a track / via / graphic under the cursor beats a footprint whose only claim is its bounding box
@@ -123,6 +139,7 @@ export function selectAt(mm: Mm): boolean {
 }
 export function selectPick(hit: NonNullable<ReturnType<typeof pickAt>>): void {
   if (hit.field) E.selField = hit.field;
+  else if (hit.pin) E.selPin = hit.pin;
   else if (hit.movable) E.selected = hit.movable;
   else if (hit.item) selectItemId(hit.item.id);
 }
@@ -469,12 +486,12 @@ const KEEPS_SELECTION = new Set(["select", "pan", "zoomtool", "measure", "commen
 export function toolChanging(next: string): void {
   if (interactionBusy() || E.pan || E.rdown) cancelInteraction();
   if (E.hoverId) { E.hoverId = null; stage.classList.remove("over-sel"); }
-  if (!KEEPS_SELECTION.has(next) && (selectionIds().length || E.selField)) clearAllSelection();
+  if (!KEEPS_SELECTION.has(next) && (selectionIds().length || E.selField || E.selPin)) clearAllSelection();
 }
 
 /** The document is going away: nothing in flight, selected, hovered or armed survives into the next one. */
 export function resetInteraction(): void {
-  E.selField = null; E.fdrag = null; E.pan = null; E.rdown = null; E.zoomRect = null; E.boxSel = null; E.hoverId = null; E.hoverPinned = false;
+  E.selField = null; E.selPin = null; E.fdrag = null; E.pan = null; E.rdown = null; E.zoomRect = null; E.boxSel = null; E.hoverId = null; E.hoverPinned = false;
   stage.classList.remove("panning", "over-sel");
   const p = pcbState(); if (p && p.sel) p.sel.clear();
   const s = schState(); if (s) { s.sel = null; s.hover = null; s.pending = null; }
@@ -489,6 +506,7 @@ export function pruneSelection(): void {
   for (const id of [...sel]) if (!d.items.has(id)) sel.delete(id);
   if (E.selected && !d.items.has(E.selected.id)) E.selected = null;
   if (E.selField && !d.items.has(E.selField.id)) E.selField = null;
+  if (E.selPin && !d.items.has(E.selPin.id)) E.selPin = null;
   if (E.fdrag && !d.items.has(E.fdrag.id)) E.fdrag = null;
   if (E.hoverId && !d.items.has(E.hoverId)) E.hoverId = null;
   const g = E.drag;

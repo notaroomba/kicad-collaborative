@@ -98,6 +98,21 @@ export function drawCanvas() {
   if (m && m.drawOverlay) { try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); m.drawOverlay(cctx, view, toolCtx()); } catch (e) { console.warn(e); } finally { cctx.restore(); } }
   try { cctx.save(); KiCadCanvas.setViewTransform(cctx, view); drawAppOverlays(cctx, view, isSch()); } catch (e) { console.warn(e); } finally { cctx.restore(); }
   drawHover(cctx, view);
+  if (E.selPin && CollabTools.sch && CollabTools.sch._) {
+    // the selected pin drawn in the selection colour over its symbol
+    const of = (CollabTools.sch._ as unknown as { pinOf?: (d: KDoc, r: unknown) => { pin: { x: number; y: number; root: [number, number] } } | null }).pinOf;
+    const h = of ? of(E.kdoc, E.selPin) : null;
+    if (!h) E.selPin = null;
+    else {
+      cctx.save(); KiCadCanvas.setViewTransform(cctx, view);
+      const px = 1 / (view.ppm * view.zoom * (view.dpr || 1));
+      // the selection halo drawSelectionHalo puts around a selected item (#66B2FF at 0.55)
+      cctx.strokeStyle = "#66B2FF"; cctx.globalAlpha = 0.55; cctx.lineCap = "round";
+      cctx.lineWidth = 0.1524 + 5 * px;
+      cctx.beginPath(); cctx.moveTo(h.pin.x, h.pin.y); cctx.lineTo(h.pin.root[0], h.pin.root[1]); cctx.stroke();
+            cctx.restore();
+    }
+  }
   if (E.selField) {
     const it = E.kdoc.items.get(E.selField.id); if (!it) { E.selField = null; return; }
     cctx.save(); KiCadCanvas.setViewTransform(cctx, view);

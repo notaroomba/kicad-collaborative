@@ -23,7 +23,7 @@ import { closeThread, placeComment } from "./comments";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
-import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
+import { cancelInteraction, clearAllSelection, copperUnderBeatsFootprint, installGestures, pinUnder, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -187,6 +187,20 @@ stage.addEventListener("pointerdown", (ev) => {
       ev.preventDefault(); return;
     }
   }
+  if (E.tool === "select" && E.kdoc && isSch() && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    // SCH_SELECTION_TOOL: a pin under the cursor is selected on its own, ahead of its symbol's body
+    const pin = pinUnder([x, y]);
+    if (pin) {
+      const was = !!(E.selPin && E.selPin.id === pin.id && E.selPin.number === pin.number);
+      if (!was) {
+        clearSelection(); E.selPin = pin; drawSelection(); renderProps(); renderObjects(); requestRender();
+        E.boxSel = { start: [x, y], cur: [x, y], pts: [[x, y]], lasso: E.selMode === "lasso", add: false, startClient: [ev.clientX, ev.clientY] }; stage.setPointerCapture(ev.pointerId);
+        ev.preventDefault(); return;
+      }
+      // a press on the selected pin moves its symbol: SCH_MOVE_TOOL promotes a lone pin to its parent
+      E.selPin = null; const fp = (E.items as ItemSummary[]).find((f) => f.id === pin.id); if (fp) E.selected = fp;
+    }
+  }
   let best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
   // Board: a click on a pad selects the pad, not its footprint (PCB_SELECTION_TOOL; the footprint is picked by its body)
   let padWasSelected = false;
@@ -194,7 +208,7 @@ stage.addEventListener("pointerdown", (ev) => {
     const ps = CollabTools.pcb && CollabTools.pcb.state;
     let r: unknown = false;
     if (!smodeOf(ev)) { try { r = mod.selectPadAt(ev, [x, y], toolCtx()); } catch (e) { console.warn(e); } }
-    if (r === "box") { E.selection.clear(); E.selected = null; E.selField = null; drawSelection(); renderProps(); renderObjects(); requestRender(); startModuleBox(ev, x, y); return; }
+    if (r === "box") { E.selection.clear(); E.selected = null; E.selField = null; E.selPin = null; drawSelection(); renderProps(); renderObjects(); requestRender(); startModuleBox(ev, x, y); return; }
     // a press on the selected pad: a move promotes it to its footprint (FilterCollectorForFreePads, allow free pads off)
     padWasSelected = r === true;
     if (ps) ps.padSel = null;
@@ -202,7 +216,7 @@ stage.addEventListener("pointerdown", (ev) => {
   // Board: a track / via / graphic under the cursor beats a footprint whose only claim is its empty bounding box
   // (KiCad picks the item whose geometry is under the cursor; the footprint wins on its own pads and outline).
   if (!isSch() && best && E.lastFpHit && (!E.lastFpHit.onGeom || copperUnderBeatsFootprint([x, y])) && mod && mod.onSelectDown && E.tool === "select") {
-    try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { E.selection.clear(); E.selected = null; E.selField = null; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); }
+    try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { E.selection.clear(); E.selected = null; E.selField = null; E.selPin = null; drawSelection();   /* the footprint the box reached is dropped, the module's own pick stays (clearSelection would clear it too) */ renderProps(); renderObjects(); if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); }
   }
   if (!best && mod && mod.onSelectDown) { try { const r = mod.onSelectDown(ev, [x, y], toolCtx()); if (r) { if (r === "box") startModuleBox(ev, x, y); else { stage.setPointerCapture(ev.pointerId); ev.preventDefault(); } return; } } catch (e) { console.warn(e); } }
   const smode = selModifier(ev);
@@ -421,7 +435,7 @@ function hoverSelect(ev: KeyboardEvent): void {
   if (!isSch() || !E.kdoc || E.tool !== "select" || !E.lastCursorMm) return;
   const combo = comboOf(ev); if (!HOVER_KEYS.has(combo)) return;
   const S = schToolState();
-  if (E.selected || E.selection.size || E.selField || (S && (S.sel || S.wire || S.carry || S.drag || S.draw))) return;
+  if (E.selected || E.selection.size || E.selField || E.selPin || (S && (S.sel || S.wire || S.carry || S.drag || S.draw))) return;
   const hit = hitAny(E.lastCursorMm); if (!hit) return;
   if (HOVER_SYMBOL_ONLY.has(combo) && hit.kind !== "symbol") return;
   if (hit.fp || !CollabTools.sch) toolCtx().setSelection([hit.id]);
@@ -430,6 +444,17 @@ function hoverSelect(ev: KeyboardEvent): void {
   else if (HOVER_HOLD.has(combo)) releaseHoverWhenDone(hit.id, combo);
 }
 
+// A lone selected pin: Properties and Edit Main Fields act on its parent symbol (SCH_EDIT_TOOL::Properties, EditField),
+// which stays the pin's afterwards; Move and Drag take the parent symbol as the selection (SCH_MOVE_TOOL).
+const PIN_PROMOTE = new Set(["E", "U", "V", "F", "M", "G"]);
+function promotePin(ev: KeyboardEvent): void {
+  if (!isSch() || !E.selPin || !E.kdoc || E.tool !== "select") return;
+  const combo = comboOf(ev); if (!PIN_PROMOTE.has(combo)) return;
+  const pin = E.selPin as { id: string; number: string }, fp = (E.items as ItemSummary[]).find((f) => f.id === pin.id); if (!fp) return;
+  E.selPin = null; E.selected = fp;
+  if (combo === "M" || combo === "G") { drawSelection(); renderProps(); return; }
+  setTimeout(() => { if (E.selected && E.selected.id === pin.id && !E.selection.size && !E.selPin) { E.selected = null; E.selPin = pin; renderProps(); requestRender(); } }, 0);
+}
 document.addEventListener("keydown", (ev) => {
   if (state.view !== "editor" || typingTarget(ev)) return;              // a field, a dialog or an open menu owns the keyboard
   // A dialog or menu of the project UI (Share…) is open over the editor: it owns the keyboard.
@@ -442,9 +467,10 @@ document.addEventListener("keydown", (ev) => {
     if (cmtPanel.classList.contains("open")) { closeThread(); return; }
     if (E.tool !== "select") { setTool("select"); return; }
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
-    if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField) CollabTools.sch.exitGroup();
+    if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField && !E.selPin) CollabTools.sch.exitGroup();
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
+  promotePin(ev);
   hoverSelect(ev);                                                      // SCH_SELECTION_TOOL::RequestSelection: nothing selected -> the item under the cursor
   if ((k === "Delete" || k === "Backspace") && E.selection.size > 1 && !E.viewOnly) { ev.preventDefault(); deleteSelection(); return; }
   if ((ev.metaKey || ev.ctrlKey) && (k === "a" || k === "A")) { ev.preventDefault(); selectAll(); return; }

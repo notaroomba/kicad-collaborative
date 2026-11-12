@@ -6696,6 +6696,132 @@ Link '${target}' to this file?`)) return null;
     }
   }
 
+  // web/tools/sch-tools/pins.ts
+  function segDist2(p, a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+    return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+  }
+  function pinAt(doc, p, tol, showHidden) {
+    let best = null, bestD = Infinity;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "symbol") continue;
+      for (const pin of symbolPins(doc, it)) {
+        if (pin.hidden && !showHidden) continue;
+        const d = segDist2(p, [pin.x, pin.y], pin.root);
+        if (d <= tol && d < bestD) {
+          best = { item: it, pin };
+          bestD = d;
+        }
+      }
+    }
+    return best;
+  }
+  function pinOf(doc, ref) {
+    if (!ref) return null;
+    const it = doc.items.get(ref.id);
+    if (!it || it.kind !== "symbol") return null;
+    const pin = symbolPins(doc, it).find((q) => q.number === ref.number);
+    return pin ? { item: it, pin } : null;
+  }
+  var SIDE_SPIN = { right: 0, top: 1, left: 2, bottom: 3 };
+  var SIDE_DIR = { right: [1, 0], top: [0, -1], left: [-1, 0], bottom: [0, 1] };
+  function labelShapeForPin(type) {
+    switch (type) {
+      case "bidirectional":
+        return "bidirectional";
+      case "input":
+        return "input";
+      case "output":
+        return "output";
+      case "tri_state":
+        return "tri_state";
+      case "unspecified":
+        return "passive";
+      // L_UNSPECIFIED is written as (shape passive)
+      default:
+        return "input";
+    }
+  }
+  var shownName = (pin) => pin.name === "~" ? "" : pin.name;
+  var PIN_HELPERS = [
+    { id: "wire", label: "Wire", icon: "add_line" },
+    { id: "noconnect", label: "No Connect", icon: "noconn" },
+    { id: "label", label: "Net Label", icon: "add_label" },
+    { id: "hierarchical_label", label: "Hierarchical Label", icon: "add_hierarchical_label" },
+    { id: "global_label", label: "Global Label", icon: "add_glabel" }
+  ];
+  function pinHelper(ctx, pins, what, sheetRef) {
+    const doc = ctx.doc, changes = [], ids = [];
+    const grid = ctx.gridPitch > 0 ? ctx.gridPitch : 1.27;
+    for (const r of pins) {
+      const h = pinOf(doc, r);
+      if (!h) continue;
+      const p = [h.pin.x, h.pin.y], side = h.pin.side;
+      let node;
+      if (what === "noconnect") node = noConnectNode(p);
+      else if (what === "wire") {
+        const d = SIDE_DIR[side] || [1, 0];
+        node = lineNode("wire", p, [r4(p[0] + d[0] * grid), r4(p[1] + d[1] * grid)]);
+      } else {
+        let text = shownName(h.pin);
+        if (!text) text = `${sheetRef ? sheetRef(h.item) : h.item.ref || ""}_${h.pin.number}`;
+        node = labelNode(what, text, p, 0);
+        setSpinOfNode(what, node, SIDE_SPIN[side] === void 0 ? 0 : SIDE_SPIN[side]);
+        if (what !== "label") {
+          const sh = kid(node, "shape");
+          if (sh) sh[1] = labelShapeForPin(h.pin.type);
+        }
+      }
+      if (!K.uuidOf(node)) node.push(["uuid", K.newUuid()]);
+      const { item, change } = addNode(doc, node);
+      changes.push(change);
+      ids.push(item.id);
+    }
+    if (!changes.length) return [];
+    for (const id of ids) doc.items.delete(id);
+    ctx.commit(changes, what === "noconnect" ? "No Connect Pins" : what === "wire" ? "Wire Pins" : "Label Pins");
+    if (ctx.setSelection) ctx.setSelection(ids.filter((id) => doc.items.has(id)));
+    ctx.requestRender();
+    return ids;
+  }
+  function pinAlternates(doc, ref) {
+    const it = doc.items.get(ref.id);
+    if (!it || it.kind !== "symbol") return null;
+    const libId = str((kid(it.node, "lib_name") || kid(it.node, "lib_id") || [])[1]);
+    const lib = K.resolveLib(doc, libId) || K.resolveLib(doc, str((kid(it.node, "lib_id") || [])[1]));
+    if (!lib) return null;
+    for (const sub of kids(lib, "symbol")) for (const g of kids(sub, "pin")) {
+      if (str((kid(g, "number") || [])[1]) !== ref.number) continue;
+      const alts = kids(g, "alternate").map((a2) => str(a2[1]));
+      if (!alts.length) return null;
+      const ip = kids(it.node, "pin").find((x) => str(x[1]) === ref.number), a = ip && kid(ip, "alternate");
+      return { base: str((kid(g, "name") || [])[1]), alts, current: a ? str(a[1]) : "" };
+    }
+    return null;
+  }
+  function setAltPinFunction(ctx, ref, alt) {
+    const doc = ctx.doc, it = doc.items.get(ref.id);
+    const info = pinAlternates(doc, ref);
+    if (!it || !info) return false;
+    const want = alt === info.base ? "" : alt;
+    if (want === info.current) return false;
+    const n = deep(it.node);
+    let p = kids(n, "pin").find((x) => str(x[1]) === ref.number);
+    if (!p) {
+      if (!want) return false;
+      p = K.parse(`(pin ${JSON.stringify(ref.number)} (uuid ${JSON.stringify(K.newUuid())}))`);
+      const at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "instances");
+      if (at > 0) n.splice(at, 0, p);
+      else n.push(p);
+    }
+    const ai = p.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "alternate");
+    if (ai > 0) p.splice(ai, 1);
+    if (want) p.push(K.parse(`(alternate ${JSON.stringify(want)})`));
+    ctx.commit([modChange(doc, it, n)], "Set Pin Function");
+    return true;
+  }
+
   // web/tools/sch-tools/index.ts
   root.CollabTools = root.CollabTools || {};
   var sch = {
@@ -6755,6 +6881,13 @@ Link '${target}' to this file?`)) return null;
       setFollow(on) {
         S.forceFollow = !!on;
       },
+      pinAt,
+      pinOf,
+      pinHelper,
+      PIN_HELPERS,
+      labelShapeForPin,
+      pinAlternates,
+      setAltPinFunction,
       labelOrientationForPoint,
       autoRotateNode,
       autoRotateChanges,

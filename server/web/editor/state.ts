@@ -71,6 +71,7 @@ export const E: any = {
   boxSel: null,
   highlightIds: null,
   selField: null,
+  selPin: null,   // a bare symbol pin {id, number} (SCH_PIN_T selected on its own)
   fdrag: null,
   renderReq: 0,
   lastStageW: 0,

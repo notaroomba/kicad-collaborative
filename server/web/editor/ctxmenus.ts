@@ -32,6 +32,8 @@ export interface MenuCtx {
   /** PCB_POINT_EDITOR::addCornerCondition / removeCornerCondition for the single selected item at the cursor */
   canAddCorner?: boolean; canRemoveCorner?: boolean;
   highlight: boolean;
+  /** the one selected pin has alternate functions (SCH_CONDITIONS::SingleMultiFunctionPin) */
+  pinAlts?: boolean;
   belowRoot: boolean;
   hasLocked: boolean; hasUnlocked: boolean;
   /** board is not empty (EDIT_TOOL's noItemsCondition) */
@@ -47,7 +49,7 @@ export interface MenuDef {
   icon?: string;
   entries: Entry[];
   /** filled in by the editor: the zoom presets, the grid list */
-  dynamic?: "zoom" | "grid" | "diffpair";
+  dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers";
 }
 export type Entry =
   | { order: number; cond: Cond; act: string; check?: boolean }
@@ -57,7 +59,7 @@ export type Entry =
 const always: Cond = () => true;
 
 export class CondMenu implements MenuDef {
-  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair";
+  title: string; icon?: string; entries: Entry[] = []; dynamic?: "zoom" | "grid" | "diffpair" | "pinfunction" | "pinhelpers";
   constructor(title = "", icon?: string) { this.title = title; this.icon = icon; }
   private add(e: Entry, order: number | undefined): this {
     e.order = order === undefined || order < 0 ? this.entries.length : order;
@@ -159,6 +161,11 @@ const schAlignMenu = () => new CondMenu("Align", "align_items")
 /** BUS_UNFOLD_MENU (sch_line_wire_bus_tool.cpp): the members are filled in by the desktop from the bus's labels. */
 const schUnfoldMenu = () => new CondMenu("Unfold from Bus", "add_line2bus").item("SCH_ACTIONS::unfoldBus");
 
+/** ALT_PIN_FUNCTION_MENU and PIN_TRICKS_MENU (sch_edit_tool.cpp): filled in by the editor from the selected pin. */
+const PIN_FUNCTION_MENU: MenuDef = { title: "Pin Function", icon: "component_select_unit", entries: [], dynamic: "pinfunction" };
+const PIN_TRICKS_MENU: MenuDef = { title: "Pin Helpers", icon: "pin", entries: [], dynamic: "pinhelpers" };
+/** SCH_CONDITIONS::AllPinsOrSheetPins */
+const allPins: Cond = (c) => c.kinds.length > 0 && c.kinds.every((k) => k === "pin" || k === "sheet_pin");
 /** The schematic selection tool's menu (m_selectionTool->GetToolMenu()). */
 function schSelectionMenu(): CondMenu {
   const m = new CondMenu();
@@ -183,6 +190,7 @@ function schSelectionMenu(): CondMenu {
   // SCH_ALIGN_TOOL::Init
   m.sub(schAlignMenu(), moreThan(1), 100);
   // SCH_EDIT_TOOL::Init
+  m.sub(PIN_FUNCTION_MENU, (c) => c.kinds.length === 1 && c.kinds[0] === "pin" && !!c.pinAlts, 1).sub(PIN_TRICKS_MENU, allPins, 1);
   m.sub(schTransformMenu(), schOrient, 200).sub(schAttributesMenu(), hasTypes(SCH_ATTRIB), 200);
   m.item("SCH_ACTIONS::swap", and(onlyTypes(SCH_SWAPPABLE), moreThan(1)), 200).item("SCH_ACTIONS::properties", schProperties, 200);
   m.sub(schEditFieldsMenu(), schSingleSymbol, 200).item("SCH_ACTIONS::autoplaceFields", hasTypes(SCH_FIELD_OWNERS), 200);
