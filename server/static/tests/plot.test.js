@@ -207,6 +207,30 @@ test("Gerber X2 drill: IPC-4761 protection files, tenting only when asked (GERBE
   assert.strictEqual((String(r.files[3].data).match(/D03\*/g) || []).length, 2, "both vias plugged from the board's back setting");
 });
 
+test("Gerber X3 placement files (PLACEFILE_GERBER_WRITER): P&P records, courtyard or pad box, pin markers", () => {
+  assert.strictEqual(F.pnpFileName("t", "F.Cu"), "t-pnp_top.gbr");
+  assert.strictEqual(F.pnpFileName("t", "B.Cu"), "t-pnp_bottom.gbr");
+  const top = F.pnpGerber(ctx, { side: "F.Cu", includeBoardEdge: false, excludeDnp: false, excludeBom: false, useAuxOrigin: false });
+  assert.strictEqual(top.count, 4);
+  const t = top.text;
+  assert.ok(t.includes("%TF.FileFunction,Component,L1,Top*%\n%TF.FilePolarity,Positive*%\n%FSLAX46Y46*%"));
+  assert.ok(t.includes("%TA.AperFunction,ComponentMain*%\n%ADD10C,0.300000*%\n%TD*%"));
+  assert.ok(/%TA.AperFunction,ComponentPin\*%\n%ADD\d+P,0.360000X4X0.000000\*%/.test(t), "pad 1 diamond");
+  // the position flash: aperture, %TO.C, the P&P records, then the flash
+  assert.ok(t.includes("D10*\n%TO.C,R1*%\n%TO.CFtp,R_0603_1608Metric*%\n%TO.CVal,10k*%\n%TO.CLbN,Resistor_SMD*%\n%TO.CMnt,SMD*%\n%TO.CRot,0*%\nX110000000Y-60000000D03*\n"), t);
+  // R1's courtyard rectangle, closed
+  assert.ok(t.includes("X108500000Y-59250000D02*\nX111500000Y-59250000D01*\nX111500000Y-60750000D01*\nX108500000Y-60750000D01*\nX108500000Y-59250000D01*\n"));
+  assert.ok(/ComponentOutline,Footprint/.test(t), "R2 and J1 have no courtyard: the pads' box");
+  assert.ok(/%TO.P,R1,1\*%\nX109175000Y-60000000D03\*\nD\d+\*\n%TO.P,R1,2\*%\nX110825000Y-60000000D03\*\n%TD\*%/.test(t), "pin markers then %TD");
+  assert.ok(t.includes("%TO.CMnt,TH*%") && t.includes("%TO.P,J1,*%"), "the through-hole connector and its unnamed NPTH pad");
+  assert.ok(!/Profile/.test(t));
+  const noDnp = F.pnpGerber(ctx, { side: "F.Cu", includeBoardEdge: true, excludeDnp: true, excludeBom: false, useAuxOrigin: false });
+  assert.strictEqual(noDnp.count, 3);
+  assert.ok(/%TA.AperFunction,Profile\*%/.test(noDnp.text) && !noDnp.text.includes("TO.C,C1*"));
+  const bot = F.pnpGerber(ctx, { side: "B.Cu", includeBoardEdge: false, excludeDnp: false, excludeBom: false, useAuxOrigin: true }).text;
+  assert.ok(bot.includes("%TF.FileFunction,Component,L2,Bot*%") && bot.includes("%TO.CRot,0*%\nX30000000Y20000000D03*"), "180° on the back is 0, relative to the place origin");
+});
+
 test("Placement files: the plain-text file in inches and the CSV (DIALOG_GEN_FOOTPRINT_POSITION)", () => {
   const rows = F.positions(ctx, { side: "both" });
   const mm = F.placementAscii(rows, "both", "2026-01-01 00:00:00", "Pcbnew test");

@@ -18,6 +18,10 @@ export type Prim = (
   /** A flashed polygon: points relative to (x, y), board frame, already rotated. */
   | { k: "poly"; x: number; y: number; pts: Pt[] }
   | { k: "region"; pts: Pt[] }
+  /** FlashRegularPolygon: an n-cornered regular polygon of circumscribed diameter d (Gerber's P aperture). */
+  | { k: "rpoly"; x: number; y: number; d: number; n: number; rot: number }
+  /** ClearAllAttributes: %TD*% and an empty object attribute dictionary. */
+  | { k: "td" }
 ) & { clear?: boolean; meta?: GbrMeta };
 
 /**
@@ -25,7 +29,15 @@ export type Prim = (
  * (%TO.P / %TO.N / %TO.C) a Gerber with netlist attributes carries.  `info` is GBR_NETLIST_METADATA's
  * attribute mask: 1 pad (.P), 2 net (.N), 4 component (.C).
  */
-export interface GbrMeta { af?: string; info?: number; net?: string; ref?: string; pad?: string; pinFn?: string; notInNet?: boolean }
+export interface GbrMeta {
+  af?: string; info?: number; net?: string; ref?: string; pad?: string; pinFn?: string; notInNet?: boolean;
+  /** pad and pin function already in their Gerber form (GBR_DATA_FIELD with UTF-8 allowed): not escaped again */
+  rawPad?: boolean;
+  /** m_TryKeepPreviousAttributes: a dropped attribute is cleared alone (%TO.C*%) instead of the whole dictionary */
+  keep?: boolean;
+  /** m_ExtraData: lines written after the object attributes of this item (the P&P %TO.CRot … records) */
+  extra?: string[];
+}
 
 export const rad = (deg: number): number => deg * Math.PI / 180;
 

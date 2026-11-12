@@ -18,6 +18,7 @@ import { primPolys } from "./poly";
 import { type Prim, type Pt } from "./prims";
 import { type ZipEntry, crc32, zip } from "./zip";
 import { drillJob, drillReport } from "./drilljob";
+import { pnpFileName, pnpGerber } from "./pnp";
 import { plotBoard, plotFileName, outputPath } from "./plotjob";
 import { writeSvg } from "./svg";
 import { writePdf } from "./pdf";
@@ -225,7 +226,7 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
   return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
 }
 
-export const api = { plotBoard, drillJob, drillReport, writeSvg, writePdf, writePs, writeDxf, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+export const api = { plotBoard, drillJob, drillReport, pnpGerber, pnpFileName, writeSvg, writePdf, writePs, writeDxf, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

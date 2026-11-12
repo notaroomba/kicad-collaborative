@@ -416,7 +416,7 @@ export function centrePoints(prims: Prim[]): Pt[] {
     else if (p.k === "arc") for (const q of arcPoints(p.cx, p.cy, p.r, p.a0, p.a1, p.acw, 0.005)) out.push(q);
     else if (p.k === "region") for (const q of p.pts) out.push(q);
     else if (p.k === "poly") for (const q of p.pts) out.push([p.x + q[0], p.y + q[1]]);
-    else out.push([p.x, p.y]);
+    else if (p.k !== "td") out.push([p.x, p.y]);
   }
   return out;
 }

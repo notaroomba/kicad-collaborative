@@ -129,5 +129,12 @@ export function primPolys(p: Prim): Pt[][] {
     case "roundrect": return p.w > 0 && p.h > 0 ? [roundRectPoints(p.x, p.y, p.w, p.h, p.r, p.rot)] : [];
     case "poly": return p.pts.length >= 3 ? [clockwise(p.pts.map((q) => [p.x + q[0], p.y + q[1]] as Pt))] : [];
     case "region": return p.pts.length >= 3 ? [clockwise(p.pts)] : [];
+    case "rpoly": {
+      if (!(p.d > 0) || p.n < 3) return [];
+      const pts: Pt[] = [];
+      for (let i = 0; i < p.n; i++) { const a = (p.rot + i * 360 / p.n) * Math.PI / 180; pts.push([p.x + p.d / 2 * Math.cos(a), p.y - p.d / 2 * Math.sin(a)]); }
+      return [clockwise(pts)];
+    }
+    case "td": return [];
   }
 }

@@ -114,8 +114,8 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
   let curAf = "";
   const ta = (af: string): string => (opt.x2 ? `%TA.AperFunction,${af}*%` : `G04 #@! TA.AperFunction,${af}*`);
   const td = (what = ""): string => (opt.x2 ? `%TD${what}*%` : `G04 #@! TD${what}*`);
-  const aperture = (def: string): number => {
-    const key = def + "\u0000" + curAf;
+  const aperture = (def: string, plotting = false): number => {
+    const key = def + "\u0000" + curAf + (plotting ? "\u0000pen" : "");
     let d = apertures.get(key);
     if (d === undefined) {
       d = 10 + apertures.size; apertures.set(key, d);
@@ -169,17 +169,27 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
   const objectAttrs = (m: GbrMeta | undefined): void => {
     if (!opt.netAttributes) return;
     const info = m && m.info ? m.info : 0;
+    // an item without net information: what came before it no longer applies (the board plotter's EndBlock)
     if (!info) { if (dict) { body.push(td()); dict = ""; } return; }
-    const padS = info & 1 ? `${pre}TO.P,${gerberString(m!.ref || "")},${m!.pad ? gerberString(m!.pad) + (m!.pinFn ? "," + gerberString(m!.pinFn) : "") : ""}${eol}` : "";
+    const padTxt = (v: string): string => (m!.rawPad ? v : gerberString(v));
+    const padS = info & 1 ? `${pre}TO.P,${gerberString(m!.ref || "")},${m!.pad ? padTxt(m!.pad) + (m!.pinFn ? "," + padTxt(m!.pinFn) : "") : ""}${eol}` : "";
     const netS = info & 2 ? `${pre}TO.N,${m!.net ? gerberString(m!.net) : m!.notInNet ? "" : "N/C"}${eol}` : "";
     const cmpS = info & 4 && !(info & 1) ? `${pre}TO.C,${gerberString(m!.ref || "")}${eol}` : "";
     const full = padS + "\n" + netS + "\n" + cmpS;
-    if (full === dict) return;
-    const had = (k: string): boolean => dict.includes(k);
-    const dropped = (had("TO.P,") && !padS) || (had("TO.N,") && !netS) || (had("TO.C,") && !cmpS);
-    if (dropped) { body.push(td()); dict = ""; }
-    for (const a of [padS, netS, cmpS]) if (a && !dict.includes(a)) body.push(a);
-    dict = full;
+    if (full !== dict) {
+      const had = (k: string): boolean => dict.includes(k);
+      const lead: string[] = [], add: string[] = [];
+      let clear = false;
+      // FormatNetAttribute: each attribute new, changed or dropped; a dropped one clears the dictionary, or only
+      // itself when the item asks to keep the others
+      if (had("TO.P,")) { if (!padS) { if (m!.keep) lead.unshift(`${pre}TO.P${eol}`); else clear = true; } else if (!dict.includes(padS)) add.push(padS); } else if (padS) add.push(padS);
+      if (had("TO.N,")) { if (!netS) { if (m!.keep) lead.unshift(`${pre}TO.N${eol}`); else clear = true; } else if (!dict.includes(netS)) add.push(netS); } else if (netS) add.push(netS);
+      if (had("TO.C,")) { if (!cmpS) { if (m!.keep) { if (!padS) lead.unshift(`${pre}TO.C${eol}`); } else clear = true; } else if (!dict.includes(cmpS)) add.push(cmpS); } else if (cmpS) add.push(cmpS);
+      if (clear) { body.push(td()); for (const a of [padS, netS, cmpS]) if (a) body.push(a); }
+      else body.push(...lead, ...add);
+      dict = full;
+    }
+    if (opt.x2 && m!.extra) body.push(...m!.extra);
   };
   const select = (d: number): void => { if (d !== current) { body.push(`D${d}*`); current = d; } };
   const polarity = (clear: boolean | undefined): void => { if (dark === !clear) return; dark = !clear; body.push(dark ? "%LPD*%" : "%LPC*%"); };
@@ -201,17 +211,18 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
   };
 
   for (const p of prims) {
+    if (p.k === "td") { body.push(td()); dict = ""; continue; }   // ClearAllAttributes
     polarity(p.clear);
     curAf = p.meta && p.meta.af ? p.meta.af : "";
     if (p.k === "seg") {
       if (!(p.w > 0)) continue;
       objectAttrs(p.meta);
-      select(aperture(`C,${f6(p.w)}`));
+      select(aperture(`C,${f6(p.w)}`, true));
       moveTo(p.x1, p.y1); lineTo(p.x2, p.y2);
     } else if (p.k === "arc") {
       if (!(p.w > 0)) continue;
       objectAttrs(p.meta);
-      select(aperture(`C,${f6(p.w)}`));
+      select(aperture(`C,${f6(p.w)}`, true));
       const sx = p.cx + p.r * Math.cos(p.a0), sy = p.cy + p.r * Math.sin(p.a0);
       const ex = p.cx + p.r * Math.cos(p.a1), ey = p.cy + p.r * Math.sin(p.a1);
       const TAU = 2 * Math.PI; let sweep = p.acw ? p.a0 - p.a1 : p.a1 - p.a0; sweep = ((sweep % TAU) + TAU) % TAU;
@@ -238,9 +249,16 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
       regionOf(pts);
       if (curAf) body.push(td(".AperFunction"));
     } else {
+      if (p.k === "rpoly") {
+        select(aperture(`P,${f6(p.d)}X${p.n}X${f6(p.rot)}`));
+        objectAttrs(p.meta);
+        body.push(`${co(p.x, p.y)}D03*`); lastX = X(p.x); lastY = Y(p.y);
+        continue;
+      }
       if (p.k === "circle" ? !(p.d > 0) : p.k === "poly" ? p.pts.length < 3 : !(p.w > 0 && p.h > 0)) continue;
-      objectAttrs(p.meta);
+      // selectApertureWithAttributes: the aperture, then the object attributes, then the flash
       select(flashAperture(p));
+      objectAttrs(p.meta);
       body.push(`${co(p.x, p.y)}D03*`);
       lastX = X(p.x); lastY = Y(p.y);
     }

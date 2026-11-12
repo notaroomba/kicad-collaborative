@@ -21,15 +21,16 @@ const DEFAULTS: PosPrefs = { format: 0, mm: true, smdOnly: false, excludeTH: fal
 export async function openPosFile(): Promise<void> {
   const ctx = toolCtx() as ToolCtx;
   if (!E.kdoc || E.kdoc.type !== "pcb") { ctx.toast("Component placement files are made from a board: open the PCB editor first"); return; }
-  let fab: KiCadFabApi; let outDir = "";
+  let fab: KiCadFabApi; let outDir = ""; let plotAux = false;
   try {
     const [f, header] = await Promise.all([loadFab(), loadBoardHeader()]); fab = f;
-    outDir = PLOT().params.readPlotParams(header ? header.setup : null, header ? header.version : 0).outputDirectory;
+    const pp = PLOT().params.readPlotParams(header ? header.setup : null, header ? header.version : 0);
+    outDir = pp.outputDirectory; plotAux = pp.useAuxOrigin;
   } catch (e) { console.warn(e); ctx.toast("The placement writers could not be loaded"); return; }
-  show(fab, outDir);
+  show(fab, outDir, plotAux);
 }
 
-function show(fab: KiCadFabApi, boardOutDir: string): void {
+function show(fab: KiCadFabApi, boardOutDir: string, plotAux: boolean): void {
   const pref = loadPrefs(KEY, DEFAULTS);
   const outDir = textField(pref.outputDir !== null ? pref.outputDir : boardOutDir, { key: "outputDir" });
   outDir.input.title = "Target directory for plot files. Can be absolute or relative to the board file location.";
@@ -49,7 +50,9 @@ function show(fab: KiCadFabApi, boardOutDir: string): void {
   function update(): void {
     const gerber = format.get() === 2;
     const en = (f: { input: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement; el: HTMLElement }, on: boolean, clear = true): void => { f.input.disabled = !on; f.el.classList.toggle("disabled", !on); if (!on && clear && f.input instanceof HTMLInputElement) f.input.checked = false; };
-    en(units, !gerber, false); en(single, !gerber, false); en(negateX, !gerber); en(boardEdge, gerber);
+    // FormatSupportsFilter: Gerber X3 records the mount type, so the pad technology filters are off (and cleared)
+    en(units, !gerber, false); en(single, !gerber, false); en(negateX, !gerber); en(boardEdge, gerber, false);
+    en(smdOnly, !gerber); en(excludeTH, !gerber);
   }
   const remember = (): void => savePrefs(KEY, { format: format.get(), mm: units.get() === 1, smdOnly: smdOnly.get(), excludeTH: excludeTH.get(), excludeDnp: excludeDnp.get(), excludeBom: excludeBom.get(), boardEdge: boardEdge.get(), auxOrigin: auxOrigin.get(), negateX: negateX.get(), single: single.get(), outputDir: outDir.get() });
 
@@ -57,7 +60,7 @@ function show(fab: KiCadFabApi, boardOutDir: string): void {
     remember();
     const fctx = await fabContext(); if (!fctx) return;
     const lines: ReportLine[] = []; const say = (severity: string, text: string): void => { lines.push({ severity, text }); report.set(lines.slice()); };
-    if (format.get() === 2) { say("error", "Gerber X3 placement files are not available in the web editor; choose Plain text or CSV."); return; }
+    if (format.get() === 2) { await createGerberFiles(fctx, say); return; }
     const csv = format.get() === 1, inch = units.get() === 0;
     const rows = (side: "both" | "front" | "back"): Placement[] => fab.positions(fctx, { side, smdOnly: smdOnly.get(), excludeThroughHole: excludeTH.get(), excludeDnp: excludeDnp.get(), useAuxOrigin: auxOrigin.get(), negateBottomX: negateX.get() })
       .filter((r) => !(excludeBom.get() && r.fp.excludeFromBom));
@@ -82,6 +85,23 @@ function show(fab: KiCadFabApi, boardOutDir: string): void {
     }
     say("info", "Done.");
     await deliver(fab, files, `${board}-pos.zip`);
+  }
+
+  /** CreateGerberFiles: the front and the back file, always separate, every footprint of the side. */
+  async function createGerberFiles(fctx: NonNullable<Awaited<ReturnType<typeof fabContext>>>, say: (severity: string, text: string) => void): Promise<void> {
+    const dir = outDir.get().replace(/\\/g, "/"), board = fctx.projectName || "board";
+    const files: { name: string; path: string; data: string }[] = [];
+    let full = 0;
+    for (const [side, label] of [["F.Cu", "Front (top side) placement file"], ["B.Cu", "Back (bottom side) placement file"]] as const) {
+      const name = fab.pnpFileName(board, side), path = fab.outputPath(dir, docDir(), name);
+      const r = fab.pnpGerber(fctx, { side, includeBoardEdge: boardEdge.get(), excludeDnp: excludeDnp.get(), excludeBom: excludeBom.get(), useAuxOrigin: plotAux });
+      files.push({ name, path, data: r.text });
+      say("action", `${label}: '${path}'.`); say("info", `Component count: ${r.count}.`);
+      full += r.count;
+    }
+    say("info", `Full component count: ${full}.`);
+    say("info", "Done.");
+    await deliver(fab, files, `${board}-pnp.zip`);
   }
 
   const lbl = (t: string): HTMLElement => h("span", { class: "pd-lbl" }, t);
