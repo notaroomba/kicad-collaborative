@@ -280,6 +280,23 @@ test("PostScript track width correction: tracks, pads and vias grow on copper, l
   assert.deepStrictEqual(L(JSON.stringify({ board: { design_settings: { rules: { min_track_width: 0.15 } } }, net_settings: { classes: [{ name: "Default", clearance: 0.3 }, { name: "HV", clearance: 0.5 }, { name: "Fine", clearance: 0.1 }, { name: "Inherit" }] } })), [-0.149999, 0.099999]);
 });
 
+test("Drill map: KiCad's 58 marker patterns, the page layout and the legend (genDrillMapFile)", () => {
+  const kinds = (id) => F.markerParts(0, 0, 1, id).map((p) => p.k === "circle" ? "O" : p.pts.length === 2 ? "seg" : "poly");
+  assert.deepStrictEqual(kinds(0), ["seg", "seg"], "X");
+  assert.deepStrictEqual(kinds(1), ["O"]);
+  assert.deepStrictEqual(kinds(29), ["seg", "seg", "seg", "seg", "poly", "poly", "O"], "everything");
+  assert.deepStrictEqual(kinds(57), ["seg", "poly", "poly", "O"], "the last pattern: \\ O Sq Lz");
+  assert.deepStrictEqual(kinds(58), ["O"], "past the table: a circle");
+  const sq = F.markerParts(0, 0, 1, 3)[0].pts; assert.ok(Math.abs(sq[0][0] - 0.707114) < 1e-5, "the square is inscribed");
+  const base = { format: "excellon", metric: true, zeros: "decimal", merge: false, minimalHeader: false, mirrorY: false, ovalMode: "route", useAuxOrigin: false, genDrill: false, genMap: true, gerberPrecision: 6, outputDir: "" };
+  const svg = String(F.drillJob(ctx, Object.assign({}, base, { mapFormat: 5 })).files[0].data);
+  assert.ok(/width="297(\.\d+)?mm" height="210(\.\d+)?mm"/.test(svg), "the board's A4 page");
+  // 40 × 30 mm board on A4: min((297 - 20) / 40, (126 - 10) / 30, 3) = 3 → the 0.1 mm outline is drawn 0.3 mm wide
+  assert.ok(/stroke-width:0\.3000;"\nd="M88\.5011 18\.0022\nL208\.5011 18\.0022"/.test(svg), "scaled 3:1, centred in the top 60 % of the page");
+  const gbr = String(F.drillJob(ctx, Object.assign({}, base, { mapFormat: 1 })).files[0].data);
+  assert.ok(gbr.includes("%TF.FileFunction,Drillmap*%"));
+});
+
 test("Placement files: the plain-text file in inches and the CSV (DIALOG_GEN_FOOTPRINT_POSITION)", () => {
   const rows = F.positions(ctx, { side: "both" });
   const mm = F.placementAscii(rows, "both", "2026-01-01 00:00:00", "Pcbnew test");

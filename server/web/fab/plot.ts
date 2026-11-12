@@ -160,6 +160,13 @@ function textPrims(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
   for (const p of segs) dst.push(p);
 }
 
+/** PLOTTER::PlotText with the stroke font: one line of text as pen strokes (board frame, mm). */
+export function strokeTextPrims(text: string, x: number, y: number, size: number, pen: number, h: "left" | "center" | "right", v: "top" | "middle" | "bottom"): Prim[] {
+  const out: Prim[] = [], knock: Prim[] = [];
+  textPrims({ t: "text", raw: text, x, y, size, w: pen, h, v, rot: 0 } as unknown as KGeom, out, knock, new PlotLog());
+  return out;
+}
+
 /**
  * PCB_TEXT::TransformShapeToPolygon (buildBoundingHull): the box of the drawn text in its own frame, grown by
  * `gap` — what a zone fill knocks out around a copper text.  A knockout text instead leaves its glyphs alone as

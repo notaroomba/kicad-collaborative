@@ -14,11 +14,12 @@ import { projectGuid, writeGerber } from "./gerber";
 import { type FabContext, VERSION_SUFFIX, layerDisplayName, modelOf, projectNameOf } from "./index";
 import type { BoardModel } from "./model";
 import { primItems } from "./pageplot";
-import { PlotLog, plotFile } from "./plot";
+import { primPolys } from "./poly";
+import { PlotLog, plotFile, strokeTextPrims } from "./plot";
 import { writePdf } from "./pdf";
 import type { PlotItem, PlotPage } from "./plotter";
-import { isoDateTime } from "./plotter";
-import type { Prim } from "./prims";
+import { isoDateTime, toPage } from "./plotter";
+import type { Prim, Pt } from "./prims";
 import { writePs } from "./ps";
 import { outputPath, type PlotFile, type ReportLine } from "./plotjob";
 import { writeSvg } from "./svg";
@@ -150,53 +151,94 @@ function protectionFile(holes: Hole[], f: Feature, m: BoardModel, ctx: FabContex
 }
 
 // ---------------------------------------------------------------- the drill map
-/** PLOTTER::Marker's patterns: bits / \ | - lozenge square circle (plotter.cpp marker_patterns). */
-const MARKERS = [0o003, 0o100, 0o014, 0o040, 0o020, 0o103, 0o017, 0o043, 0o023, 0o114, 0o140, 0o120, 0o054, 0o034, 0o060, 0o117, 0o143, 0o123, 0o057, 0o037, 0o063, 0o154, 0o134, 0o160, 0o074, 0o157, 0o137, 0o163, 0o077, 0o174, 0o177];
-function marker(x: number, y: number, d: number, idx: number, color: string, out: PlotItem[]): void {
-  const r = d / 2, w = Math.max(0.05, d / 10), bits = MARKERS[idx % MARKERS.length];
-  const line = (pts: number[][]): void => { out.push({ k: "line", pts, w, color, cap: "round" } as PlotItem); };
-  if (bits & 0o001) line([[x - r, y + r], [x + r, y - r]]);
-  if (bits & 0o002) line([[x - r, y - r], [x + r, y + r]]);
-  if (bits & 0o004) line([[x, y - r], [x, y + r]]);
-  if (bits & 0o010) line([[x - r, y], [x + r, y]]);
-  if (bits & 0o020) line([[x, y - r], [x + r, y], [x, y + r], [x - r, y], [x, y - r]]);
-  if (bits & 0o040) line([[x - r, y - r], [x + r, y - r], [x + r, y + r], [x - r, y + r], [x - r, y - r]]);
-  if (bits & 0o100) out.push({ k: "circle", x, y, r, w, fill: false, color } as PlotItem);
+/** DRILL_MARKERS::marker_patterns (common/plotters/drill_markers.cpp): bits / \\ | - lozenge square circle. */
+export const MARKER_PATTERNS = [0o003, 0o100, 0o014, 0o040, 0o020, 0o103, 0o017, 0o043, 0o023, 0o114, 0o140, 0o120, 0o054, 0o034, 0o060,
+  0o117, 0o143, 0o123, 0o057, 0o037, 0o063, 0o154, 0o134, 0o074, 0o174, 0o163, 0o157, 0o137, 0o077, 0o177,
+  0o110, 0o104, 0o101, 0o050, 0o044, 0o041, 0o030, 0o024, 0o021, 0o150, 0o144, 0o141, 0o130, 0o124, 0o121, 0o070, 0o064, 0o061, 0o170, 0o164, 0o161,
+  0o102, 0o042, 0o022, 0o142, 0o122, 0o062, 0o162];
+/** DRILL_MARKERS::BuildMarker: the parts of marker `id` of radius r at (x, y), board frame; past the table a plain circle. */
+export function markerParts(x: number, y: number, r: number, id: number): ({ k: "line"; pts: Pt[] } | { k: "circle"; r: number })[] {
+  if (id >= MARKER_PATTERNS.length) return [{ k: "circle", r }];
+  const pat = MARKER_PATTERNS[id], out: ({ k: "line"; pts: Pt[] } | { k: "circle"; r: number })[] = [];
+  if (pat & 0o001) out.push({ k: "line", pts: [[x - r, y - r], [x + r, y + r]] });
+  if (pat & 0o002) out.push({ k: "line", pts: [[x + r, y - r], [x - r, y + r]] });
+  if (pat & 0o004) out.push({ k: "line", pts: [[x, y - r], [x, y + r]] });
+  if (pat & 0o010) out.push({ k: "line", pts: [[x - r, y], [x + r, y]] });
+  if (pat & 0o020) out.push({ k: "line", pts: [[x, y + r], [x + r, y], [x, y - r], [x - r, y], [x, y + r]] });
+  if (pat & 0o040) { const q = Math.round(r / 1.4142 * 1e6) / 1e6; out.push({ k: "line", pts: [[x + q, y + q], [x + q, y - q], [x - q, y - q], [x - q, y + q], [x + q, y + q]] }); }
+  if (pat & 0o100) out.push({ k: "circle", r });
+  return out;
 }
-interface RecLike { items: PlotItem[]; font: string; fillStyle: string; fillText(t: string, x: number, y: number): void }
-const recorder = (w: number, hgt: number): RecLike | null => {
-  const K = (globalThis as unknown as { KiCadCanvas?: { plot?: { PlotRecorder: new (w: number, h: number, m: number[]) => RecLike } } }).KiCadCanvas;
-  return K && K.plot ? new K.plot.PlotRecorder(w, hgt, [1, 0, 0, 1, 0, 0]) : null;
-};
-/** genDrillMapFile: the page at 1:1 (centred when the board is off the page), outline, markers and the tool legend. */
-function mapPage(m: BoardModel, s: Span, ctx: FabContext, log: PlotLog): PlotPage {
+/** getMarkerBestPenSize: a tenth of the marker, at least 0.1 mm. */
+const markerPen = (d: number): number => Math.max(d / 10, 0.1);
+const nmRound = (v: number): number => Math.round(v * 1e6) / 1e6;
+
+/** GENDRILL_WRITER_BASE::genDrillMapFile: the board outline, a marker per hole (and the outline of each slot) and
+ *  the legend of tools under the board.  PS / PDF / SVG fit the board in the top 60 % of the page (10 mm margins,
+ *  at most 3:1) and wrap the legend into columns above the bottom margin; Gerber and DXF are 1:1 from the drill origin. */
+export function mapPage(m: BoardModel, s: Span, ctx: FabContext, log: PlotLog, format: number, offset: Pt): PlotPage {
   const doc = ctx.doc as unknown as { page: number[]; bbox?: number[] };
   const W = doc.page[0], H = doc.page[1];
   const edge = plotFile(m, "Edge.Cuts", { plotReference: false, plotValue: false, subtractMaskFromSilk: false }, log);
+  // GetBoardEdgesBoundingBox
+  let bb: number[] | null = null;
+  for (const p of edge) for (const poly of primPolys(p)) for (const q of poly) bb = bb ? [Math.min(bb[0], q[0]), Math.min(bb[1], q[1]), Math.max(bb[2], q[0]), Math.max(bb[3], q[1])] : [q[0], q[1], q[0], q[1]];
+  if (!bb) bb = doc.bbox && doc.bbox.length === 4 ? doc.bbox : [0, 0, W, H];
+  const bw = Math.max(bb[2] - bb[0], 1e-6), bh = Math.max(bb[3] - bb[1], 1e-6), cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2;
+  let scale = 1, off: Pt = offset, bottomLimit = 0;
+  if (format === 2 || format === 4 || format === 5) {
+    const margin = 10, ypage = Math.round(H * 0.6 * 1e6) / 1e6;
+    scale = Math.min((W - 2 * margin) / bw, (ypage - margin) / bh, 3);
+    off = [nmRound(cx - W / 2 / scale), nmRound(cy - ypage / 2 / scale)];
+    bottomLimit = (H - margin) / Math.min(scale, 1);
+  }
+  const vp = { offset: off, scale, mirror: false, pageW: W };
   const items: PlotItem[] = [];
-  primItems(edge, { offset: [0, 0], scale: 1, mirror: false, pageW: W }, "#000000", "#FFFFFF", items);
+  const P = (q: Pt): Pt => toPage(vp, q[0], q[1]);
+  const black = "#000000";
+  const marker = (x: number, y: number, d: number, id: number, pen: number): void => {
+    for (const part of markerParts(x, y, d / 2, id)) {
+      if (part.k === "line") items.push({ k: "line", pts: part.pts.map(P), w: pen * scale, color: black, cap: "round" } as PlotItem);
+      else { const c = P([x, y]); items.push({ k: "circle", x: c[0], y: c[1], r: part.r * scale, w: pen * scale, fill: false, color: black } as PlotItem); }
+    }
+  };
+  // the outline, drawn as Dwgs.User items with their own widths
+  primItems(edge.map((p) => Object.assign({}, p, { clear: undefined })), vp, black, "#FFFFFF", items);
+  // plotDrillMarks
   const { tools, toolOf, sorted } = toolsOf(s.holes);
   sorted.forEach((h, i) => {
-    marker(h.x, h.y, h.d, toolOf[i], "#000000", items);
+    marker(h.x, h.y, h.d, toolOf[i], markerPen(h.d));
     if (h.slot) {
-      const half = Math.abs(h.slot.w - h.slot.h) / 2, r = h.slot.rot * Math.PI / 180, along = h.slot.w >= h.slot.h ? 0 : Math.PI / 2;
-      const c = Math.cos(along - r) * half, sn = Math.sin(along - r) * half;
-      items.push({ k: "line", pts: [[h.x - c, h.y - sn], [h.x + c, h.y + sn]], w: 0.1, color: "#000000", cap: "round" } as PlotItem);
+      const ring = primPolys({ k: "oval", x: h.x, y: h.y, w: h.slot.w, h: h.slot.h, rot: h.slot.rot } as Prim)[0];
+      if (ring) items.push({ k: "line", pts: ring.concat([ring[0]]).map(P), w: 0.1 * scale, color: black, cap: "round" } as PlotItem);
     }
   });
-  // the legend under the board's outline: one line per tool, its marker then "<d>mm <d>" <n> holes"
-  const bb = doc.bbox && doc.bbox.length === 4 ? doc.bbox : [0, 0, W, H];
-  const rec = recorder(W, H);
-  let y = bb[3] + 5;
-  const text = (t: string, x: number, yy: number): void => { if (rec) { rec.font = "2.5px sans-serif"; rec.fillStyle = "#000000"; rec.fillText(t, x, yy); } };
-  text("Drill Map:", bb[0], y); y += 4;
+  // the list of symbols used
+  const charSize = 2, charScale = Math.min(1, 1 / scale), textMargin = 2;
+  const csz = nmRound(charSize * charScale), textW = nmRound(csz / 10);
+  let interval = csz + textW;
+  let plotX = nmRound(bb[0] + textMargin * charScale), plotY = bb[3] + interval;
+  const text = (t: string, x: number, y: number): void => primItems(strokeTextPrims(t, x, y, csz, textW, "left", "middle"), vp, black, "#FFFFFF", items);
+  text("Drill Map:", plotX, plotY);
+  let maxLineLen = 0;
   tools.forEach((t, i) => {
-    marker(bb[0] + 2, y - 1, 2, i, "#000000", items);
-    const holes = t.count === 1 ? "1 hole" : `${t.count} holes`;
-    text(`${t.d.toFixed(3)}mm  ${(t.d / 25.4).toFixed(4)}"  (${holes}${t.slots ? `, with ${t.slots} slot${t.slots > 1 ? "s" : ""}` : ""})${t.plated ? "" : " (not plated)"}`, bb[0] + 5, y);
-    y += 4;
+    if (!t.count) return;
+    plotY += interval;
+    if (bottomLimit && plotY + interval > bottomLimit) { plotY = bb![3] + interval; plotX += maxLineLen + 10; maxLineLen = 0; }
+    const plotDiam = Math.min(t.d, csz);
+    const x = plotX - textMargin * charScale - plotDiam / 2, y = plotY + csz;
+    marker(x, y, plotDiam, i, markerPen(plotDiam));
+    let msg = `${t.d.toFixed(3)}mm / ${(t.d / 25.4).toFixed(4)}" `;
+    const extra = t.attr === 5 ? ", castellated" : t.attr === 6 ? ", press-fit" : "";
+    const holes = t.count - t.slots;
+    msg += t.count === 1 && !t.slots ? `(1 hole${extra})` : t.count === 1 ? `(1 slot${extra})` : !t.slots ? `(${t.count} holes${extra})`
+      : t.slots === 1 ? `(${holes} holes + 1 slot${extra})` : `(${holes} holes + ${t.slots} slots${extra})`;
+    if (!t.plated) msg += " (not plated)";
+    text(msg, plotX, y);
+    interval = nmRound((csz + textW) * 1.2);
+    if (interval < plotDiam + 1 / scale + textW) interval = plotDiam + 1 / scale + textW;
+    maxLineLen = Math.max(maxLineLen, msg.length * (csz + textW) + plotDiam);
   });
-  if (rec) items.push(...rec.items);
   return { w: W, h: H, name: s.name, items };
 }
 
@@ -248,7 +290,7 @@ export function drillJob(ctx: FabContext, req: DrillJobRequest): DrillJobResult 
       if (!s.holes.length && !s.npth && !(s.from === m.copper[0] && s.to === m.copper[m.copper.length - 1])) continue;
       const ext = MAP_EXT[req.mapFormat] || "pdf";
       const n = s.name.replace(/(-drl)?\.(drl|gbr)$/, "") + "-drl_map." + ext;
-      const page = mapPage(m, s, ctx, log);
+      const page = mapPage(m, s, ctx, log, req.mapFormat, req.useAuxOrigin ? m.settings.auxOrigin : [0, 0]);
       let data: string | Uint8Array;
       if (req.mapFormat === 1) {
         const prims: Prim[] = [];
