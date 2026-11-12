@@ -375,11 +375,16 @@ async function newLibrary(): Promise<void> {
     if (!res.docId) { toast("The library table could not be created"); return; }
     d = { docId: res.docId, path: res.path || "fp-lib-table", docType: res.docType || "lib_table" }; state.project.docs.push(d);
   }
-  const row = `(lib (name ${JSON.stringify(nick)})(type "KiCad")(uri ${JSON.stringify("${KIPRJMOD}/" + nick + ".pretty")})(options "")(descr ""))`;
+  // FP_LIB_TABLE::Format through Prettify's library-table mode: one row per line, the existing rows untouched
+  const row = `(lib (name ${JSON.stringify(nick)}) (type "KiCad") (uri ${JSON.stringify("${KIPRJMOD}/" + nick + ".pretty")}) (options "") (descr ""))`;
   let out: string;
-  if (text.trim()) { const at = text.lastIndexOf(")"); out = text.slice(0, at).replace(/\s*$/, "") + "\n  " + row + "\n)\n"; }
-  else out = `(fp_lib_table\n  (version 7)\n  ${row}\n)\n`;
-  const ok = await saveTextDocument(d.docId, out, { id: "table", kind: "MODIFIED", typeName: "LIB_TABLE_FILE", properties: [{ name: "text", after: { type: "string", v: out } }] });
+  if (text.trim()) {
+    const at = text.lastIndexOf(")"); const m = /\n([ \t]*)\(lib /.exec(text); const indent = m ? m[1] : "\t";
+    out = text.slice(0, at).replace(/\s*$/, "") + "\n" + indent + row + "\n)\n";
+  } else out = FD().prettify(`(fp_lib_table (version 7) ${row})`, "libraryTable");
+  // a new table has no snapshot to join yet: its first content is snapshot 0
+  const ok = text.trim() ? await saveTextDocument(d.docId, out, { id: "table", kind: "MODIFIED", typeName: "LIB_TABLE_FILE", properties: [{ name: "text", after: { type: "string", v: out } }] })
+    : (await fetch(`/api/docs/${d.docId}/snapshots?seq=0`, { method: "POST", credentials: "same-origin", headers: { "content-type": "application/octet-stream" }, body: out })).ok;
   if (!ok) { toast("The library table could not be saved", 4000); return; }
   libTableCache = { docId: d.docId, rows: parseLibTable(out) }; publishLibs();
   setStatusBar({ message: `Library '${nick}' added to the project library table` });
