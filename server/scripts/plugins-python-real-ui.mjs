@@ -305,8 +305,6 @@ if (only('spinrender')) {
   } catch (e) { check('SpinRender runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.alsoknownasfoo.spinrender', 40)); await shot('real-spinrender-fail'); }
 }
 
-check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
-console.log(`\n${pass} passed, ${fail} failed`);
 // ---- KiCad-Parasitics: the resistance between two pads, from its own network of the copper, solved by ngspice
 // (the real simulator, as WebAssembly, behind the libngspice calls of its bundled ngspyce, in the child process it
 // starts for it); then the loop inductance by bfieldtools.  The two pads are joined by 16.57 mm of 0.8 mm track.
@@ -352,6 +350,9 @@ if (only('Parasitics')) {
     }
   } catch (e) { check('Parasitics runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.Steffen-W.KiCad-Parasitics', 30)); await shot('real-parasitics-fail'); }
 }
+
+check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
+console.log(`\n${pass} passed, ${fail} failed`);
 
 await browser.close(); await db.end(); fixture.server.close();
 process.exit(fail ? 1 : 0);
