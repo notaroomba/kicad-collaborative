@@ -169,4 +169,38 @@ test("filledZoneNode writes (fill yes …) and the filled polygons after the out
   assert.ok(!/filled_areas_thickness/.test(ser));
 });
 
+// ---------------------------------------------------------------- automatic refill: BOARD_COMMIT::propagateDamage
+{
+  const esbuild = require(path.join(__dirname, "..", "..", "node_modules", "esbuild"));
+  const b = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "editor", "pcbdialogs", "zone-damage.ts")], bundle: true, format: "cjs", write: false, logLevel: "silent", platform: "node" });
+  const m = { exports: {} }; new Function("module", "exports", "require", b.outputFiles[0].text)(m, m.exports, require);
+  const D = m.exports, cu = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"];
+  const zoneOn = (id, layer, extra = []) => ({ id, node: ["zone", ["layer", layer], ["fill", "yes"], ...extra], bbox: [0, 0, 50, 50] });
+  const box = [10, 10, 20, 20];
+  test("propagateDamage: a change dirties only zones on its copper layers", () => {
+    const zones = [zoneOn("zb", "B.Cu"), zoneOn("zf", "F.Cu"), zoneOn("zi", "In1.Cu")];
+    const seg = D.itemLayers(["segment", ["start", 1, 1], ["layer", "F.Cu"]], cu);
+    assert.deepEqual(D.staleZones(zones, [{ box, layers: seg }], new Set(["s"]), cu), ["zf"], "an F.Cu track leaves the B.Cu zone alone");
+    const silk = D.itemLayers(["gr_line", ["layer", "F.SilkS"]], cu);
+    assert.deepEqual(D.staleZones(zones, [{ box, layers: silk }], new Set(["g"]), cu), [], "silkscreen dirties nothing");
+    const edge = D.itemLayers(["gr_line", ["layer", "Edge.Cuts"]], cu);
+    assert.deepEqual(D.staleZones(zones, [{ box, layers: edge }], new Set(["e"]), cu), ["zb", "zf", "zi"], "Edge.Cuts dirties every layer");
+    const via = D.itemLayers(["via", ["at", 1, 1], ["layers", "F.Cu", "In1.Cu"]], cu);
+    assert.deepEqual([...via].sort(), ["F.Cu", "In1.Cu"]);
+    assert.deepEqual([...D.itemLayers(["via", ["layers", "F.Cu", "B.Cu"]], cu)], cu, "a through via spans every layer");
+    const fp = D.itemLayers(["footprint", ["layer", "F.Cu"], ["fp_line", ["layer", "F.SilkS"]], ["pad", "1", "thru_hole", ["layers", "*.Cu", "*.Mask"]]], cu);
+    assert.ok(cu.every((l) => fp.has(l)), "footprint children: a through pad on every copper layer");
+    assert.deepEqual(D.staleZones(zones, [{ box: [60, 60, 70, 70], layers: seg }], new Set(["s"]), cu), [], "outside the zone's box");
+  });
+  test("propagateDamage: rule areas are never refilled; unfilled and changed zones always are", () => {
+    const zones = [zoneOn("ka", "F.Cu", [["keepout", ["tracks", "not_allowed"]]]), { id: "zu", node: ["zone", ["layer", "B.Cu"]], bbox: [0, 0, 1, 1] }, zoneOn("zc", "In2.Cu")];
+    zones[0].bbox = [0, 0, 50, 50];
+    const seg = D.itemLayers(["segment", ["layer", "F.Cu"]], cu);
+    assert.deepEqual(D.staleZones(zones, [{ box, layers: seg }], new Set(["zc"]), cu), ["zu", "zc"]);
+    const multi = { id: "zm", node: ["zone", ["layers", "F.Cu", "B.Cu"], ["fill", "yes"], ["filled_polygon", ["layer", "In1.Cu"]]], bbox: [0, 0, 50, 50] };
+    assert.deepEqual(D.staleZones([multi], [{ box, layers: D.itemLayers(["segment", ["layer", "In1.Cu"]], cu) }], new Set(), cu), [], "the zone's layers, not its fill's");
+    assert.deepEqual(D.staleZones([multi], [{ box, layers: seg }], new Set(), cu), ["zm"]);
+  });
+}
+
 Promise.all(pending).then(() => { console.log(`zonefill: ${passed} passed, ${failed} failed`); if (failed) process.exit(1); });

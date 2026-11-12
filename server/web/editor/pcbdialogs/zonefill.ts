@@ -22,6 +22,7 @@ import { prefs } from "../../dialogs/prefs";
 import { E } from "../state";
 import { loadBoardHeader } from "./board-setup";
 import { h, openDialog, type DialogApi } from "./ui";
+import { type Damage, type ZoneInfo, itemLayers, staleZones } from "./zone-damage";
 
 interface Settings { clearance: number; minClearance?: number; holeClearance?: number; edgeClearance: number; netclasses: Record<string, { clearance?: number }> }
 interface PcbToolsApi {
@@ -227,35 +228,30 @@ function bell(): void {
 // ---------------------------------------------------------------- ZoneFillDirty
 const autoRefillOn = (): boolean => !!prefs().pcbEditing.autoRefillZones;
 const FILL_LABELS = new Set(["Fill Zone(s)", "Auto-fill Zone(s)", "Unfill Zone", "Unfill All Zones"]);
-const boxOf = (it: KItem): [number, number, number, number] | null => it.bbox || null;
-const overlaps = (a: [number, number, number, number], b: [number, number, number, number]): boolean => a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3];
+const damageOf = (doc: KDoc, it: KItem | undefined): Damage | null => (it && it.bbox ? { box: it.bbox, layers: itemLayers(it.node, doc.copper) } : null);
 
-/** The zones an edit dirtied (BOARD_COMMIT::Push → ZONE_FILLER_TOOL::DirtyZone): those under a changed copper item. */
-export function dirtyZones(doc: KDoc, before: Map<string, [number, number, number, number] | null>, changes: KChange[]): string[] {
-  const boxes: [number, number, number, number][] = [];
+/** The zones an edit dirtied (BOARD_COMMIT::propagateDamage → ZONE_FILLER_TOOL::ZoneFillDirty). */
+export function dirtyZones(doc: KDoc, before: Map<string, Damage | null>, changes: KChange[]): string[] {
+  const damage: Damage[] = []; const changed = new Set<string>();
   for (const c of changes) {
-    const b0 = before.get(c.id); if (b0) boxes.push(b0);
-    const it = doc.items.get(c.id); const b1 = it ? boxOf(it) : null; if (b1) boxes.push(b1);
+    changed.add(c.id);
+    const d0 = before.get(c.id); if (d0) damage.push(d0);
+    const d1 = damageOf(doc, doc.items.get(c.id)); if (d1) damage.push(d1);
   }
-  const out: string[] = [];
-  for (const it of doc.items.values()) {
-    if (it.kind !== "zone" || KiCadCanvas.kid(it.node, "keepout")) continue;
-    const filled = (() => { const f = KiCadCanvas.kid(it.node, "fill") as SNode | null; return !!f && f[1] === "yes"; })();
-    const zb = boxOf(it);
-    if (!filled || (zb && boxes.some((b) => overlaps(b, zb)))) out.push(it.id);
-  }
-  return out;
+  const zones: ZoneInfo[] = [];
+  for (const it of doc.items.values()) if (it.kind === "zone") zones.push({ id: it.id, node: it.node, bbox: it.bbox });
+  return staleZones(zones, damage, changed, doc.copper);
 }
 
-let pending: { before: Map<string, [number, number, number, number] | null>; changes: KChange[] } | null = null;
+let pending: { before: Map<string, Damage | null>; changes: KChange[] } | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 /** Called by commitChanges before and after every local edit. */
 export function noteCommit(phase: "before" | "after", changes: KChange[], label: string | undefined, ctx: () => ToolCtx): void {
   const doc = board(); if (!doc || !autoRefillOn() || inProgress) return;
   if (label && FILL_LABELS.has(label)) return;
   if (phase === "before") {
-    const before = pending ? pending.before : new Map<string, [number, number, number, number] | null>();
-    for (const c of changes) if (!before.has(c.id)) { const it = doc.items.get(c.id); before.set(c.id, it ? boxOf(it) : null); }
+    const before = pending ? pending.before : new Map<string, Damage | null>();
+    for (const c of changes) if (!before.has(c.id)) before.set(c.id, damageOf(doc, doc.items.get(c.id)));
     pending = { before, changes: pending ? pending.changes : [] };
     return;
   }
