@@ -36,6 +36,8 @@ export function findDoc(name: string): { docId: string; path: string; docType: s
 }
 
 const cache = new Map<string, { at: number; doc: any }>();
+/** Forget the parsed copies of the project's other documents (the harness changes them between two reads). */
+export function forgetDocs(): void { cache.clear(); }
 
 /**
  * The document a tool should read.  The open one is the live in-memory document; any other is
@@ -207,6 +209,40 @@ export async function listNets(input: { doc?: string; filter?: string }): Promis
   }
   const out = rows.filter((n) => !q || n.name.toLowerCase().includes(q) || n.pads.some((p: string) => p.toLowerCase().includes(q))).sort((a, b) => a.name.localeCompare(b.name));
   return { document: path, count: out.length, nets: out.slice(0, cap), truncated: out.length > cap ? `showing ${cap} of ${out.length}; narrow with filter` : undefined };
+}
+
+/**
+ * Where everything is, in one compact answer, for code that computes wires and positions itself (the Python
+ * harness): each part with its pins or pads as rows, and on a sheet the wire segments, labels and junctions.
+ * Rows are arrays to keep the answer small: pins [number, name, type, x, y, side, net], pads [number, x, y, net].
+ */
+export async function geometry(input: { doc?: string }): Promise<unknown> {
+  const { doc, path } = await resolveDoc(input.doc); const k = K();
+  if (doc.type === "sch") {
+    const s = SCH(); if (!s) throw new ToolError("The schematic tools are not loaded.");
+    const netOf = new Map<string, string>(); for (const n of schNets(doc)) for (const p of n.pins) netOf.set(`${p.ref}\u0000${p.number}`, n.name);
+    const parts: any[] = [], wires: number[][] = [], labels: any[] = [], junctions: number[][] = [], noConnects: number[][] = [];
+    for (const it of doc.items.values() as Iterable<any>) {
+      if (it.kind === "symbol") {
+        const power = isPower(doc, it);
+        parts.push({ ref: it.ref || "", id: it.id, lib_id: it.lib || "", value: it.value || "", unit: it.unit || 1, x: r3(it.x), y: r3(it.y), rotation: it.rot || 0, power: power || undefined, box: it.bbox ? it.bbox.map(r3) : undefined,
+          pins: s._.symbolPins(doc, it).map((p: any) => [p.number, p.name === "~" ? "" : p.name, p.type, r3(p.x), r3(p.y), p.side, power ? it.value || "" : netOf.get(`${it.ref}\u0000${p.number}`) || "", p.hidden ? 1 : 0]) });
+      } else if (it.kind === "wire" || it.kind === "bus") { const pts = k.ptsOf(it.node); for (let i = 1; i < pts.length; i++) wires.push([r3(pts[i - 1][0]), r3(pts[i - 1][1]), r3(pts[i][0]), r3(pts[i][1])]); }
+      else if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") { const [x, y] = k.atOf(it.node); labels.push([k.str(it.node[1]), r3(x), r3(y), it.kind]); }
+      else if (it.kind === "junction") { const [x, y] = k.atOf(it.node); junctions.push([r3(x), r3(y)]); }
+      else if (it.kind === "no_connect") { const [x, y] = k.atOf(it.node); noConnects.push([r3(x), r3(y)]); }
+    }
+    return { document: path, type: "schematic", page: (doc.page || []).map(r3), parts, wires, labels, junctions, no_connects: noConnects };
+  }
+  const P = PCB(); if (!P) throw new ToolError("The board tools are not loaded."); const NT = P.netTable(doc);
+  const parts: any[] = []; let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const it of doc.items.values() as Iterable<any>) {
+    if (it.edge && it.bbox) { x0 = Math.min(x0, it.bbox[0]); y0 = Math.min(y0, it.bbox[1]); x1 = Math.max(x1, it.bbox[2]); y1 = Math.max(y1, it.bbox[3]); }
+    if (it.kind !== "footprint") continue;
+    parts.push({ ref: it.ref || "", id: it.id, value: it.value || "", footprint: it.lib || "", x: r3(it.x), y: r3(it.y), rotation: it.rot || 0, side: it.layer === "B.Cu" ? "back" : "front", box: it.bbox ? it.bbox.map(r3) : undefined,
+      pads: P.padsOf(it).map((p: any) => [p.number, r3(p.x), r3(p.y), NT.key(p.net) || ""]) });
+  }
+  return { document: path, type: "board", outline: isFinite(x0) ? [r3(x0), r3(y0), r3(x1), r3(y1)] : null, copper_layers: doc.copper.slice(), parts };
 }
 
 export async function runChecks(input: { doc?: string }): Promise<unknown> {

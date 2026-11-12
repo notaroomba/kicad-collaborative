@@ -16,6 +16,9 @@ export interface Conn { base: string; token: string; agent: string }
 export interface UndoRecord { inverse: any[]; after: Record<string, string | null> }
 
 const JOIN_TIMEOUT_MS = 20000, ACK_TIMEOUT_MS = 30000;
+// Live drawing: at most this many steps per change, this long between them, and about this long for a whole change.
+const LIVE_STEPS = 24, LIVE_PAUSE_MS = 110, LIVE_TOTAL_MS = 2200;
+const pause = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 let opN = 0;
 
 export class DocSession {
@@ -155,19 +158,41 @@ export class DocSession {
   /**
    * The editor's commit: apply here, send the op, wait for the server to accept it.  Returns what an undo needs.
    * When the server refuses the op the local copy is thrown away and reloaded, so nothing is left half applied.
+   *
+   * With `live`, the change is drawn the way a person would draw it: a few items at a time, each step its own op
+   * with this peer's cursor on what it just drew, so the people in the document can follow the work.  The whole
+   * of it takes a couple of seconds at most, however large the change is.
    */
-  async commit(changes: any[]): Promise<UndoRecord> {
+  async commit(changes: any[], live = false): Promise<UndoRecord> {
     const k = K(), doc = this.kdoc; const inverse: any[] = [];
     for (const c of changes) {
       const it = doc.items.get(c.id);
       if (c.kind === "ADDED") inverse.push({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] });
       else if (it) inverse.push({ id: c.id, kind: c.kind === "REMOVED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: k.serializeItem(doc, it) });
     }
-    this.apply(changes);
-    await this.send(changes);
+    const steps = live && changes.length > 1 ? Math.min(changes.length, LIVE_STEPS) : 1;
+    if (steps === 1) {
+      this.apply(changes);
+      await this.send(changes);
+      this.show(changes.map((c) => c.id));
+      if (live) await pause(LIVE_PAUSE_MS);
+    } else {
+      const per = Math.ceil(changes.length / steps); const wait = Math.max(25, Math.min(LIVE_PAUSE_MS, Math.round(LIVE_TOTAL_MS / steps)));
+      for (let i = 0; i < changes.length; i += per) {
+        const part = changes.slice(i, i + per);
+        try { this.apply(part); await this.send(part); }
+        catch (e) {
+          // what was already drawn is taken back, so a refused change leaves nothing behind
+          const done = new Set(changes.slice(0, i).map((c) => c.id)); const back = inverse.filter((c) => done.has(c.id)).reverse();
+          if (back.length) { try { await this.current(); this.apply(back); await this.send(back); } catch (e2) { console.warn("mcp host: partial change not taken back", e2); } }
+          throw e;
+        }
+        this.show(part.map((c) => c.id));
+        await pause(wait);
+      }
+    }
     const after: Record<string, string | null> = {};
     for (const c of changes) { const it = doc.items.get(c.id); after[c.id] = it ? k.serialize(it.node) : null; }
-    this.show(changes.map((c) => c.id));
     return { inverse: inverse.reverse(), after };
   }
 

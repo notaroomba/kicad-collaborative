@@ -161,6 +161,7 @@ fn build_catalog() -> Vec<Tool> {
             ordered.insert("rationale".into(), json!({ "type": "string", "description": "One or two sentences on why, for someone who has not read the conversation." }));
             ordered.insert("edits".into(), props["edits"].clone());
             ordered.insert("dry_run".into(), json!({ "type": "boolean", "description": "Validate and describe the edits without applying them." }));
+            ordered.insert("live".into(), json!({ "type": "boolean", "description": "Draw the change a few items at a time with your cursor on them, so people in the document can follow (default false: applied at once)." }));
             *props = ordered;
         }
         schema["required"] = json!(["project", "document", "title", "edits"]);
@@ -191,9 +192,9 @@ fn build_catalog() -> Vec<Tool> {
     // The order a model reads them in: find the project, read, look, change, then the rest.
     let order = [
         "list_projects", "get_project", "get_design_overview", "get_design_guide", "list_components", "get_component", "list_nets",
-        "get_items", "run_checks", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "apply_changes",
+        "get_items", "run_checks", "get_board_info", "render_view", "find_datasheets", "read_datasheet", "find_parts", "get_library_part", "run_python", "apply_changes",
         "undo_changes", "redo_changes", "list_changes", "read_document", "list_comments", "add_comment", "resolve_comment", "list_checkpoints",
-        "create_checkpoint", "create_project",
+        "create_checkpoint", "create_project", "get_geometry",
     ];
     out.sort_by_key(|t| order.iter().position(|n| t.def["name"] == *n).unwrap_or(order.len()));
     out
@@ -556,7 +557,8 @@ fn guide(topic: &str) -> Result<String, String> {
         "board" => "## Designing a board from a prompt",
         "routing" => "## Routing a board",
         "review" => "## Reviewing a design",
-        other => return Err(format!("There is no topic \"{other}\". Topics: all, schematic, board, routing, review.")),
+        "python" => "## Scripting with Python",
+        other => return Err(format!("There is no topic \"{other}\". Topics: all, python, schematic, board, routing, review.")),
     };
     // Every topic comes with the opening section: how changes work here applies to all of them.
     let section = |h: &str| -> &str {
@@ -705,7 +707,7 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
         "args": args,
     });
     // The autorouter may be given up to five minutes by the call itself.
-    let limit = Duration::from_secs(if name == "apply_changes" { 420 } else { 150 });
+    let limit = Duration::from_secs(if name == "apply_changes" { 420 } else if name == "run_python" { 480 } else { 150 });
     let reply = hosts().call(caller.user.id, request, limit).await.map_err(|e| e.to_string())?;
     if reply["ok"] != true {
         return Err(reply["error"].as_str().unwrap_or("The tool failed.").to_string());
@@ -722,6 +724,22 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
                 tracing::error!("mcp: change record not stored: {e}");
                 result["undo"] = json!("The change was applied, but no undo record could be stored for it.");
             }
+        }
+    }
+    // run_python: one record per document the script changed
+    if let (Some(records), Some(p)) = (reply.get("records").and_then(Value::as_array), project.as_ref()) {
+        let mut ids = Vec::new();
+        for record in records {
+            match store_change(state, caller, p, record).await {
+                Ok(id) => ids.push(id),
+                Err(e) => tracing::error!("mcp: change record not stored: {e}"),
+            }
+        }
+        if ids.len() == records.len() && !ids.is_empty() {
+            result["change_ids"] = json!(ids);
+            result["undo"] = json!("undo_changes takes the script's edits back, one document per call, newest first.");
+        } else if !records.is_empty() {
+            result["undo"] = json!("The edits were applied, but no undo record could be stored for all of them.");
         }
     }
     if let Some((id, redo)) = undoing {

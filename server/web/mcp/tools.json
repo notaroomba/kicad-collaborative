@@ -48,7 +48,7 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "topic": { "type": "string", "enum": ["all", "schematic", "board", "routing", "review"], "description": "Which part to read; all when omitted." }
+        "topic": { "type": "string", "enum": ["all", "python", "schematic", "board", "routing", "review"], "description": "Which part to read; all when omitted." }
       },
       "additionalProperties": false
     }
@@ -213,6 +213,40 @@
         "name": { "type": "string", "description": "A short name, for example \"Before rerouting the USB pair\"." }
       },
       "required": ["project", "name"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "run_python",
+    "title": "Run a Python script on the design",
+    "write": true,
+    "description": "Run a Python script that works on the design with the kicad_harness package. This is the cheapest way to do anything that takes more than a couple of edits: one call places parts, wires them, generates parts from datasheets, lays out and routes the board, and returns only what the script prints. The script never sees or writes KiCad file text and you do not compute coordinates: the harness reads pin positions, finds free space, draws the wires and keeps everything on the grid.\n\nAlready defined in the script: `project` (the project named in this call), `kh` (the package) and `parts`. Print what you want to read back, or set a variable named `result` (returned as data). Read get_design_guide with topic \"python\" once for the whole API; the core of it:\n\nsch = project.schematic()            # or project.schematic(\"power\")\nsch.place(\"Device:R\", ref=\"R1\", value=\"10k\", near=\"U1\")   # returns the reference; position is chosen when not given\nsch.connect(\"U1.3\", \"R1.1\")         # wire (or matching labels when there is no clear path); pins by number or name: \"U1.VDD\"\nsch.net(\"GND\", \"U1.GND\", \"C1.2\")    # power symbol or label on each pin\nsch.decouple(\"U1.VDD\", \"100n\")       # capacitor at a supply pin, to ground\nsch.build(parts=[...], nets={...})   # a whole block from a netlist\nsch.check()                           # ERC summary\nboard = project.board(); board.sync(); board.outline(100, 100, 150, 130)\nboard.autoplace(groups={...}); board.route(); board.check()\npart = parts.from_datasheet(url_or_part_number)   # symbol and IPC-7351 footprint from the datasheet's tables\nsch.place(part, ref=\"U2\")\nparts.find(\"3.3V LDO SOT-23-5\")     # LCSC, Mouser, DigiKey, TI, Analog Devices\n\nEdits appear in the document as they are made, with your cursor on them, so the people in it can follow (set live to false to apply without the pauses). If the script fails, the edits it had made are taken back and the error names the script line, so fix the script and run it again. There is no network or file access inside the script other than through the harness.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string", "description": "Project id or exact name."},
+        "code": {"type": "string", "description": "The Python script."},
+        "title": {"type": "string", "description": "A few words naming what the script does. It is what the person sees in the list of changes."},
+        "live": {"type": "boolean", "description": "Draw the edits step by step with a moving cursor (default true)."},
+        "keep_on_error": {"type": "boolean", "description": "Keep the edits made before a failure instead of taking them back (default false)."},
+        "timeout_s": {"type": "number", "description": "Time limit in seconds (default 180, at most 400)."}
+      },
+      "required": ["project", "code"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "get_geometry",
+    "title": "Get geometry",
+    "write": false,
+    "description": "Every part of a schematic sheet or of the board with its position, rotation, box and the position, side and net of each pin or pad, plus the sheet's wires, labels and junctions or the board's outline, in one compact answer. It is what the Python harness (run_python, or kicad_harness on the person's own computer) plans placement and wiring from; for a question about one part, get_component is smaller.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "project": {"type": "string", "description": "Project id or exact name."},
+        "document": {"type": "string", "description": "Which document: its path, or \"board\" for the board."}
+      },
+      "required": ["project", "document"],
       "additionalProperties": false
     }
   }

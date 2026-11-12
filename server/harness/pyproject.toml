@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kicad-harness"
+version = "0.1.0"
+description = "Drive KiCad schematics and boards with plain Python calls: place, wire, generate parts from datasheets, place and route."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "GPL-3.0-or-later" }
+dependencies = []
+
+[project.optional-dependencies]
+# reading PDF datasheets on your own computer (an online project reads them on the server)
+pdf = ["pypdf>=4"]
+
+[tool.setuptools.packages.find]
+include = ["kicad_harness*"]

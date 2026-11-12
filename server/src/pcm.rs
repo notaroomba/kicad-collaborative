@@ -518,7 +518,7 @@ pub async fn net_fetch(AuthUser(user): AuthUser, Path(identifier): Path<String>,
 /// Where the built runtime lives: `npm run build` writes it to static/dist/pyodide, and the
 /// image carries it beside the binary.  It is read from disk rather than compiled in: it is
 /// 14 MB that the server never looks inside, and a `cargo build` without node still works.
-fn runtime_dir() -> Option<&'static std::path::PathBuf> {
+pub(crate) fn runtime_dir() -> Option<&'static std::path::PathBuf> {
     static DIR: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         let mut tries: Vec<std::path::PathBuf> = Vec::new();

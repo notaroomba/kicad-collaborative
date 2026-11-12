@@ -10,6 +10,8 @@ COPY scripts ./scripts
 COPY static/sch-tools.js static/pcb-tools.js ./static/
 # the Python runtime for KiCad's own plugins packs its pcbnew and wx modules (plugins/python) beside the interpreter
 COPY plugins/python ./plugins/python
+# the Python harness (harness/kicad_harness) is bundled into the program that runs run_python scripts
+COPY harness/kicad_harness ./harness/kicad_harness
 RUN npm run check && npm run build
 
 FROM rust:1-slim-bookworm AS build

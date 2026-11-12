@@ -25,6 +25,8 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::oneshot;
 
 const HOST_JS: &str = include_str!("../static/dist/mcp-host.js");
+/// The process a run_python script runs in (web/harness/sandbox.ts); the host starts it from beside itself.
+const SANDBOX_JS: &str = include_str!("../static/dist/harness-sandbox.js");
 
 #[derive(Debug)]
 pub enum HostError {
@@ -95,6 +97,7 @@ fn script_path() -> Result<&'static PathBuf, String> {
         std::fs::create_dir_all(&dir).map_err(|e| format!("no temporary directory ({e})"))?;
         let path = dir.join("mcp-host.js");
         std::fs::write(&path, HOST_JS).map_err(|e| format!("the tool program could not be written ({e})"))?;
+        std::fs::write(dir.join("harness-sandbox.js"), SANDBOX_JS).map_err(|e| format!("the tool program could not be written ({e})"))?;
         Ok(path)
     })
     .as_ref()
@@ -113,6 +116,8 @@ impl HostPool {
             // An autoroute of a dense board allocates a lot; the default heap of a small container is not enough.
             .arg("--max-old-space-size=1024")
             .arg(script)
+            // run_python needs the Python runtime; without it that one tool says so and the rest work
+            .env("KC_PYODIDE_DIR", crate::pcm::runtime_dir().and_then(|d| d.canonicalize().ok()).map(|d| d.into_os_string()).unwrap_or_default())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

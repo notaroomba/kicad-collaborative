@@ -34,7 +34,7 @@ const K = (): any => W.KiCadCanvas;
 
 interface Project { projectId: string; name: string; role: string; docs: DocEntry[] }
 interface Request { id: number; base: string; token: string; agent: string; canWrite: boolean; user: { id: number; login: string; name: string }; tool: string; project: Project | null; args: any }
-interface Reply { result: unknown; record?: unknown; swap?: unknown; svg?: string }
+interface Reply { result: unknown; record?: unknown; records?: unknown[]; swap?: unknown; svg?: string }
 
 const SESSION_IDLE_MS = 5 * 60 * 1000, PROCESS_IDLE_MS = 15 * 60 * 1000;
 
@@ -165,7 +165,7 @@ function restoreRules(pro: any, was: { classes: unknown; rules: Record<string, u
   for (const [k, v] of Object.entries(was.rules)) if (v !== undefined) rules[k] = v;
 }
 
-async function applyChanges(req: Request): Promise<Reply> {
+async function applyChanges(req: Request, live = false): Promise<Reply> {
   const p = needProject(req); const args = req.args || {};
   return withDocument(req, args.document, async (sess, _doc, ed) => {
     const prop = await buildProposal({ title: args.title, rationale: args.rationale, edits: args.edits });
@@ -189,7 +189,7 @@ async function applyChanges(req: Request): Promise<Reply> {
     }
     let undo: UndoRecord = { inverse: [], after: {} };
     if (prop.changes.length) {
-      try { undo = await sess.commit(prop.changes); }
+      try { undo = await sess.commit(prop.changes, live); }
       catch (e) { if (rules) throw new ToolError(`${e instanceof Error ? e.message : String(e)} The board rules of this change were saved; the other edits were not applied.`); throw e; }
     }
     return { result: Object.assign({ applied: true, changes: prop.changes.length, board_rules: rules ? "written to the project file" : undefined }, summary),
@@ -227,6 +227,134 @@ async function undoChanges(req: Request): Promise<Reply> {
         note: redo ? "undo_changes takes it back again." : "redo_changes puts it back." },
       swap: Object.assign({}, back, rulesNow ? { rules: rulesNow } : {}) };
   });
+}
+
+// ---------------------------------------------------------------- run_python
+
+declare const __dirname: string;
+const PY_OUTPUT_MAX = 6000, PY_DEFAULT_S = 180, PY_MAX_S = 400;
+/** The calls a script's kicad_harness makes, by the names the harness uses, and the tools that answer them. */
+const HARNESS_CALLS: Record<string, string> = {
+  overview: "get_design_overview", list_components: "list_components", get_component: "get_component", list_nets: "list_nets", get_geometry: "get_geometry",
+  run_checks: "run_checks", get_board_info: "get_board_info", get_items: "get_items", find_datasheets: "find_datasheets", find_parts: "find_parts",
+  get_library_part: "get_library_part", read_datasheet: "read_datasheet",
+};
+
+interface ChangeRecord { docId: string; title: string; edits: string[]; undo: UndoRecord & { rules?: unknown } }
+
+/** Several changes to one document as one: undone together, each item back to how it was before the first of them. */
+function mergeRecords(title: string, recs: ChangeRecord[]): ChangeRecord[] {
+  const byDoc = new Map<string, ChangeRecord[]>();
+  for (const r of recs) { const l = byDoc.get(r.docId); if (l) l.push(r); else byDoc.set(r.docId, [r]); }
+  const out: ChangeRecord[] = [];
+  for (const [docId, list] of byDoc) {
+    const after: Record<string, string | null> = {}; const first = new Map<string, any>(); let rules: unknown; const edits: string[] = [];
+    for (const r of list) {
+      // a record's inverse is in undo order; an item's state before the run is in the earliest record that touched it
+      for (const c of r.undo.inverse) if (!first.has(c.id)) first.set(c.id, c);
+      Object.assign(after, r.undo.after);
+      if (rules === undefined && r.undo.rules) rules = r.undo.rules;
+      for (const e of r.edits) if (edits.length < 200) edits.push(e);
+    }
+    const inverse: any[] = [];
+    for (const [id, c] of first) {
+      const here = after[id] !== null && after[id] !== undefined;
+      if (c.kind === "REMOVED") { if (here) inverse.push(c); }                                   // made by the run: taken away again
+      else inverse.push(Object.assign({}, c, { kind: here ? "MODIFIED" : "ADDED" }));              // there before: back as it was
+    }
+    for (const id of Object.keys(after)) if (!first.has(id)) delete after[id];
+    out.push({ docId, title, edits, undo: Object.assign({ inverse, after }, rules ? { rules } : {}) });
+  }
+  return out;
+}
+
+function clip(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = Math.floor(max * 0.6), tail = max - head;
+  return `${text.slice(0, head)}\n... (${text.length - max} characters left out) ...\n${text.slice(text.length - tail)}`;
+}
+
+/**
+ * Run a Python script that drives the design through kicad_harness.  The script runs in a locked-down process of
+ * its own (web/harness/sandbox.ts); each of its design calls comes back here and is run as the tool of that name,
+ * so it reads the live document and its edits leave as ordinary ops, drawn step by step when `live`.
+ */
+async function runPython(req: Request): Promise<Reply> {
+  const p = needProject(req); const a = req.args || {};
+  if (typeof a.code !== "string" || !a.code.trim()) throw new ToolError("Give the script as `code`.");
+  if (a.code.length > 200000) throw new ToolError("The script is too long (200,000 characters at most).");
+  const runtime = String(process.env.KC_PYODIDE_DIR || ""); const fs = require("node:fs"), path = require("node:path");
+  const program = path.join(__dirname, "harness-sandbox.js");
+  if (!runtime || !fs.existsSync(path.join(runtime, "pyodide.asm.wasm")) || !fs.existsSync(program)) throw new ToolError("Python is not available on this server (its runtime is not built). The other tools work; use apply_changes instead.");
+  const live = a.live !== false; const title = typeof a.title === "string" && a.title.trim() ? a.title.trim().slice(0, 120) : "Python script";
+  const limit = Math.max(5, Math.min(PY_MAX_S, Number(a.timeout_s) || PY_DEFAULT_S)) * 1000;
+  const records: ChangeRecord[] = []; let calls = 0;
+
+  const answer = async (tool: string, args: any): Promise<unknown> => {
+    calls++; args = args || {};
+    if (tool === "documents") return { project: p.name, documents: p.docs.filter(drawable).map((d) => ({ path: d.path, type: d.docType === "kicad_pcb" ? "board" : "schematic" })) };
+    if (tool === "text") return withDocument(req, args.document, (sess, doc) => ({ document: sess.entry.path, text: sourceText(sess, doc) }));
+    const sub: Request = Object.assign({}, req, { args });
+    if (tool === "apply") {
+      const r = await applyChanges(Object.assign(sub, { tool: "apply_changes", args: Object.assign({}, args, { title: args.title || title, dry_run: false }) }), live);
+      if (r.record) records.push(r.record as ChangeRecord);
+      const res: any = r.result; const c = res && res.connectivity;
+      return Object.assign({}, res, { connectivity: c && typeof c === "object" ? c.changed : undefined });
+    }
+    const name = HARNESS_CALLS[tool]; if (!name) throw new ToolError(`Unknown harness call ${tool}.`);
+    sub.tool = name; return (await TOOLS[name](sub)).result;
+  };
+
+  const flags = ["--permission", `--allow-fs-read=${runtime}`, `--allow-fs-read=${program}`, "--disallow-code-generation-from-strings", "--max-old-space-size=768", "--no-warnings"];
+  const child = require("node:child_process").spawn(process.execPath, [...flags, program, runtime.replace(/\/*$/, "/")], { env: {}, stdio: ["pipe", "pipe", "pipe"] });
+  let errText = "";
+  child.stderr.on("data", (d: any) => { if (errText.length < 4000) errText += String(d); });
+  const started = Date.now();
+  const done: any = await new Promise((resolve) => {
+    let settled = false; let chain: Promise<void> = Promise.resolve();
+    const finish = (v: any) => { if (settled) return; settled = true; clearTimeout(timer); try { child.kill("SIGKILL"); } catch { /* gone */ } resolve(v); };
+    const timer = setTimeout(() => finish({ ok: false, error: `The script ran past its time limit of ${Math.round(limit / 1000)} s and was stopped.`, output: "" }), limit);
+    const rl2 = require("node:readline").createInterface({ input: child.stdout, crlfDelay: Infinity });
+    rl2.on("line", (line: string) => {
+      let msg: any; try { msg = JSON.parse(line); } catch { return; }
+      if (msg && msg.done) { chain.then(() => finish(msg)); return; }
+      if (!msg || typeof msg.call !== "string") return;
+      chain = chain.then(async () => {
+        if (settled) return; let out: any;
+        try { out = { ok: true, result: await answer(msg.call, msg.args) }; }
+        catch (e) { if (!(e instanceof ToolError)) console.error("mcp host: harness call failed", msg.call, e); out = { ok: false, error: e instanceof ToolError ? plain(e.message) : `The call failed: ${e instanceof Error ? e.message : String(e)}` }; }
+        if (!settled) { try { child.stdin.write(JSON.stringify(out) + "\n"); } catch { /* the script is gone */ } }
+      });
+    });
+    child.on("error", (e: any) => finish({ ok: false, error: `Python could not be started (${e && e.message}).`, output: "" }));
+    child.on("exit", () => chain.then(() => finish({ ok: false, error: "The Python runtime stopped before the script finished" + (errText.trim() ? `: ${errText.trim().split("\n").slice(-2).join(" ")}` : "."), output: "" })));
+    child.stdin.on("error", () => undefined);
+    child.stdin.write(JSON.stringify({ code: a.code }) + "\n");
+  });
+
+  const seconds = Math.round((Date.now() - started) / 100) / 10;
+  const output = clip(String(done.output || "").trim(), PY_OUTPUT_MAX) || undefined;
+  const notes = Array.isArray(done.notes) && done.notes.length ? done.notes : undefined;
+  if (!done.ok) {
+    // a script that failed part way leaves nothing behind unless it was told to keep what it had done
+    let kept = records.length > 0; let rolled: string | undefined;
+    if (records.length && a.keep_on_error !== true) {
+      try {
+        for (const rec of mergeRecords(title, records).reverse()) {
+          const entry = p.docs.find((d) => d.docId === rec.docId); if (!entry) continue;
+          if (rec.undo.rules) { const pro = p.docs.find((d) => d.docType === "kicad_pro"); if (pro) { const saved = await editProjectFile(conn, pro.docId, (j) => restoreRules(j, rec.undo.rules as any), "board rules"); proCache.set(pro.docId, { at: Date.now(), text: saved.text }); } }
+          if (rec.undo.inverse.length) await withDocument(req, entry.path, (sess) => sess.commit(rec.undo.inverse));
+        }
+        kept = false; rolled = "The edits the script had made before it failed were taken back: the design is as it was.";
+      } catch (e) { console.error("mcp host: script edits not taken back", e); rolled = "The edits the script had made before it failed could not all be taken back; read the design before going on."; }
+    }
+    const where = typeof done.line === "number" ? ` (line ${done.line} of the script)` : "";
+    const res = { ok: false, error: `${done.error || "The script failed."}${where}`, output, notes, design: rolled || (kept ? "The edits made before the failure were kept (keep_on_error)." : "Nothing was changed."), seconds };
+    return kept ? { result: res, records: mergeRecords(title, records) } : { result: res };
+  }
+  const merged = mergeRecords(title, records);
+  const result = { ok: true, output, result: done.result, notes, changed: merged.map((r) => ({ document: (p.docs.find((d) => d.docId === r.docId) || { path: r.docId }).path, items: r.undo.inverse.length })), calls, seconds };
+  return merged.length ? { result, records: merged } : { result };
 }
 
 // ---------------------------------------------------------------- reading as text and as a picture
@@ -375,12 +503,14 @@ const TOOLS: Record<string, (req: Request) => Promise<Reply>> = {
   list_nets: (req) => withDocument(req, req.args.document, async () => ({ result: await design.listNets(without(req.args)) })),
   run_checks: (req) => withDocument(req, req.args.document, async () => ({ result: await design.runChecks({}) })),
   get_items: (req) => withDocument(req, req.args.document, async () => ({ result: await design.getItems(without(req.args)) })),
+  get_geometry: (req) => withDocument(req, req.args.document, async () => ({ result: await design.geometry({}) })),
   find_datasheets: (req) => withDocument(req, req.args.document, async () => ({ result: await design.findDatasheets(without(req.args)) })),
   get_board_info: (req) => withDocument(req, "board", async () => ({ result: await design.boardInfo() })),
   read_datasheet: async (req) => ({ result: await library.readDatasheet(req.args || {}) }),
   find_parts: async (req) => ({ result: await library.findParts(req.args || {}) }),
   get_library_part: async (req) => ({ result: await library.getLibraryPart(req.args || {}) }),
-  apply_changes: applyChanges,
+  apply_changes: (req) => applyChanges(req, req.args && req.args.live === true),
+  run_python: runPython,
   undo_changes: undoChanges,
   redo_changes: undoChanges,
   read_document: readDocument,

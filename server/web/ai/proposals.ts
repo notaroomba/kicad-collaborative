@@ -283,7 +283,9 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
     try {
       let fpid = part.fpid, sexpr = "";
       const vend = VENDOR_FIELDS.find(([f]) => part.fields[f]);
-      if (fpid) { try { sexpr = await kicadFootprint(fpid); } catch (err) { if (!vend) throw err; } }
+      const given = e.footprints && typeof e.footprints === "object" ? e.footprints[fpid] : undefined;   // footprint text that comes with the edit (the harness's generated parts)
+      if (typeof given === "string" && given) sexpr = given;
+      else if (fpid) { try { sexpr = await kicadFootprint(fpid); } catch (err) { if (!vend) throw err; } }
       if (!sexpr && vend) { const vp = await vendorPart(vend[1], part.fields[vend[0]]); const fp = vp.cad && vp.cad.footprint; if (fp) { sexpr = fp.sexpr; fpid = fpid || fp.fpid; } }
       if (!sexpr) throw new ToolError(fpid ? `footprint ${fpid} was not found` : "no Footprint field");
       const extra: Record<string, string> = {}; for (const [name, v] of Object.entries(part.fields)) if (!["Reference", "Value", "Footprint"].includes(name) && !name.startsWith("ki_") && v && v !== "~") extra[name] = v;
@@ -324,11 +326,26 @@ async function fetchSources(edits: Edit[] | undefined): Promise<void> {
     if (!e || typeof e !== "object") return;
     try {
       if (e.op === "add_symbol" && doc.type === "sch") {
-        if (e.part && typeof e.part === "object") e.__lib = await vendorSymbol(String(e.part.vendor || "lcsc"), String(e.part.id || ""));
+        if (typeof e.symbol === "string" && e.symbol) e.__lib = inlineSymbol(e);   // a definition that comes with the edit (the harness's generated parts)
+        else if (e.part && typeof e.part === "object") e.__lib = await vendorSymbol(String(e.part.vendor || "lcsc"), String(e.part.id || ""));
         else if (typeof e.lib_id === "string" && !K().resolveLib(doc, e.lib_id)) e.__lib = { libId: e.lib_id, node: await kicadSymbol(e.lib_id) };
       } else if (e.op === "update_from_schematic" && doc.type === "pcb") e.__sync = await planSync(doc, e);
     } catch (err) { e.__error = err instanceof Error ? err.message : String(err); }
   }));
+}
+
+/** A symbol definition given with the edit itself, as library text: one (symbol "Name" ...) node, or a whole (kicad_symbol_lib ...). */
+function inlineSymbol(e: Edit): { libId: string; node: any } {
+  const k = K(); const trees = k.parseAll(String(e.symbol));
+  let node = trees.find((t: any) => Array.isArray(t) && t[0] === "symbol");
+  if (!node) { const lib = trees.find((t: any) => Array.isArray(t) && t[0] === "kicad_symbol_lib"); const want = typeof e.lib_id === "string" ? e.lib_id.split(":").pop() : "";
+    const all = lib ? k.kids(lib, "symbol") : []; node = all.find((s: any) => k.str(s[1]) === want) || all[0]; }
+  if (!node) throw new ToolError("symbol must be one (symbol ...) definition in KiCad's library format");
+  node = k.cloneNode(node); const name = k.str(node[1]).split(":").pop() as string;
+  const libId = typeof e.lib_id === "string" && e.lib_id.includes(":") ? e.lib_id : `Generated:${name}`; const own = libId.split(":").pop() as string;
+  for (const c of node) if (Array.isArray(c) && c[0] === "symbol" && typeof c[1] === "string" && c[1].startsWith(name + "_")) c[1] = own + c[1].slice(name.length);
+  node[1] = libId; e.lib_id = libId;
+  return { libId, node };
 }
 
 function build(input: { title?: string; rationale?: string; edits?: Edit[] }): Proposal {
