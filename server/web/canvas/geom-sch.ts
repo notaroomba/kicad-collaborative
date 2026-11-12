@@ -3,6 +3,7 @@ import { SCH, SCH_Z, dimColor } from "./colors";
 import { G, bboxAdd, boxUnion, textGeom, textLines, transformedText } from "./geom";
 import { arcFrom3, atOf, bezierPts, colorOf, dashOf, effectsOf, faceOf, ellipsePts, fillOf, has, isList, justOf, kid, kids, num, ptsOf, rotPt, str, strokeColorOf, widthOf, yesNo } from "./sexpr";
 import { buildImageGeom, buildTableGeom } from "./tables-images";
+import { arcEnds, arcTangents, bezierEndings, emitEnding, hasEndings, polyTangents, readEndings, shortenArc, shortenPoly, shortenSegment } from "./line-ending";
 import { MIL, SCH_PEN, layoutPen, parseMarkup, textPen, textWidth, unescapeText } from "./text";
 import { linebreakText } from "./stroke-font";
 import { expandTextVars, sheetTextVars, varResolver } from "./sheet";
@@ -89,6 +90,15 @@ export function buildSchGeom(doc: Doc, item: Item): void {
       const fill = f.type === "background" ? SCH.body : f.type === "outline" || f.type === "solid" ? color : f.type === "color" ? f.color : null;
       if (fill) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer: "Notes", z: f.type === "outline" || f.type === "solid" ? SCH_Z.notes : SCH_Z.notesBg, noStroke: true });
     }
+    if (k === "polyline" && hasEndings(n)) {
+      // KiCad 10 line endings: the body is shortened (ShortenSegmentForEndings / ShortenPolyForEndings), the
+      // endings drawn along the outward tangent at each end
+      const e = readEndings(n), tan = polyTangents(p);
+      const seg = p.length === 2 ? shortenSegment(p[0], p[1], e.start, e.end, w) : null;
+      const body = p.length === 2 ? (seg ? [seg[0], seg[1]] : null) : shortenPoly(p, e.start, e.end, w);
+      if (body) G(item, Object.assign({ t: "poly" as const, pts: body, close: false, w, color, layer: "Notes", z: SCH_Z.notes, cap: "round" }, dashOf(n)));
+      emitEnding(item, e.start, p[0], tan[0], w, color, "Notes", SCH_Z.notes); emitEnding(item, e.end, p[p.length - 1], tan[1], w, color, "Notes", SCH_Z.notes);
+    } else
     G(item, Object.assign({ t: "poly" as const, pts: p, close: false, w, color, layer: isBus ? "Buses" : k === "polyline" ? "Notes" : "Wires", z: isBus ? SCH_Z.bus : k === "polyline" ? SCH_Z.notes : SCH_Z.wire, cap: "round" }, dashOf(n)));
   } else if (k === "bus_entry") {
     // wire-to-bus entries take the wire colour and width
@@ -156,9 +166,18 @@ export function shapeGeom(item: GeomSink, g: SNode, gk: string, tf: Tf, color: s
     if (fill) G(item, { t: "poly", pts, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
     G(item, Object.assign({ t: "poly" as const, pts, close: true, w, color: sc, layer, z }, ds));
   } else if (gk === "polyline" || gk === "bezier") {
-    let p = ptsOf(g).map(([x, y]) => tf(x, y)); if (p.length < 2) return;
+    const ctrl = ptsOf(g).map(([x, y]) => tf(x, y)); let p = ctrl; if (p.length < 2) return;
     if (gk === "bezier") p = bezierPts(p);
     if (fill && p.length > 2) G(item, { t: "poly", pts: p, close: true, w: 0, color: fill, fill, layer, z: fz, noStroke: true });
+    if (hasEndings(g)) {
+      const e = readEndings(g);
+      let body: Pt[] | null, tan: [Pt | null, Pt | null];
+      if (gk === "bezier") { const r = bezierEndings(p, ctrl, e.start, e.end, w); body = r.body; tan = r.tan; }
+      else { body = shortenPoly(p, e.start, e.end, w); tan = polyTangents(p); }
+      if (body) G(item, Object.assign({ t: "poly" as const, pts: body, close: false, w, color: sc, layer, z }, ds));
+      emitEnding(item, e.start, p[0], tan[0], w, sc, layer, z); emitEnding(item, e.end, p[p.length - 1], tan[1], w, sc, layer, z);
+      return;
+    }
     G(item, Object.assign({ t: "poly" as const, pts: p, close: false, w, color: sc, layer, z }, ds));
   } else if (gk === "circle") {
     const c = kid(g, "center"), r = kid(g, "radius"); if (!c) return; const [cx, cy] = tf(num(c[1]), num(c[2]));
@@ -172,7 +191,11 @@ export function shapeGeom(item: GeomSink, g: SNode, gk: string, tf: Tf, color: s
   } else if (gk === "arc") {
     const s0 = kid(g, "start"), m0 = kid(g, "mid"), e0 = kid(g, "end"); if (!s0 || !m0 || !e0) return;
     const a = arcFrom3(tf(num(s0[1]), num(s0[2])), tf(num(m0[1]), num(m0[2])), tf(num(e0[1]), num(e0[2])));
-    if (a) G(item, Object.assign({ t: "arc" as const, w, color: sc, layer, z, fill: closed ? fill : null }, a, ds));
+    if (a && hasEndings(g)) {
+      const e = readEndings(g), body = shortenArc(a, e.start, e.end, w), tan = arcTangents(a), [ps, pe] = arcEnds(a);
+      if (body) G(item, Object.assign({ t: "arc" as const, w, color: sc, layer, z, fill: closed ? fill : null }, body, ds));
+      emitEnding(item, e.start, ps, tan[0], w, sc, layer, z); emitEnding(item, e.end, pe, tan[1], w, sc, layer, z);
+    } else if (a) G(item, Object.assign({ t: "arc" as const, w, color: sc, layer, z, fill: closed ? fill : null }, a, ds));
     else { const p0 = tf(num(s0[1]), num(s0[2])), p1 = tf(num(e0[1]), num(e0[2])); G(item, Object.assign({ t: "line" as const, x1: p0[0], y1: p0[1], x2: p1[0], y2: p1[1], w, color: sc, layer, z }, ds)); }
   }
 }

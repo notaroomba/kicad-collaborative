@@ -451,3 +451,44 @@ export function libVariantName(lib: Map<string, SNode>, libId: string, copy: SNo
   let k = 1; while (lib.has(`${item}_${k}`)) k++;
   return { name: `${item}_${k}`, reused: false };
 }
+
+// ---------------------------------------------------------------- KiCad 10 line endings (DIALOG_LINE_PROPERTIES / DIALOG_SHAPE_PROPERTIES)
+export type EndingStyle = "none" | "arrow" | "arrow_open" | "circle" | "square";
+/** LINE_ENDING::s_defaultChoiceOrder with the dialogs' names. */
+export const ENDING_CHOICES: [EndingStyle, string][] = [["none", "None"], ["arrow", "Arrow"], ["arrow_open", "Open Arrow"], ["circle", "Circle"], ["square", "Square"]];
+export const ENDINGS_HELP = "Set line ending sizes to 0 for automatic (5× line width).";
+/** The schematic file version that introduced line endings: older sheets keep the controls off (no format bump). */
+export const LINE_ENDING_VERSION = 20260818;
+export interface EndingState { style: EndingStyle; length: number; width: number; thickness: number; strokeType: string }
+export function readEndingState(n: SNode, key: "start_shape" | "end_shape"): EndingState {
+  const e = kid(n, key); const st: EndingState = { style: "none", length: 0, width: 0, thickness: 0, strokeType: "default" }; if (!e) return st;
+  const s = str(e[1]); st.style = (ENDING_CHOICES.some(([v]) => v === s) ? s : "none") as EndingStyle;
+  const l = kid(e, "length"), w = kid(e, "width"), sk = kid(e, "stroke"); if (l) st.length = num(l[1]); if (w) st.width = num(w[1]);
+  if (sk) { const sw = kid(sk, "width"), ty = kid(sk, "type"); if (sw) st.thickness = num(sw[1]); if (ty) st.strokeType = str(ty[1]); }
+  return st;
+}
+/** LINE_ENDING::Format: nothing for None; (length)/(width)/(stroke) only when > 0; placed after (stroke), start before end. */
+export function writeEndingState(n: SNode, key: "start_shape" | "end_shape", st: EndingState): void {
+  drop(n, key);
+  if (st.style === "none") return;
+  const f = (v: number): string => String(r4(v));
+  let s = "(" + key + " " + st.style;
+  if (st.length > 0) s += " (length " + f(st.length) + ")";
+  if (st.width > 0) s += " (width " + f(st.width) + ")";
+  if (st.thickness > 0) s += " (stroke (width " + f(st.thickness) + ") (type " + (st.strokeType || "default") + "))";
+  const node = K().parse(s + ")") as SNode;
+  let at = idx(n, key === "start_shape" ? "end_shape" : "");
+  if (at < 0) { const sk = idx(n, "stroke"); at = sk > 0 ? sk + 1 : -1; if (key === "end_shape") { const ss = idx(n, "start_shape"); if (ss > 0) at = ss + 1; } }
+  if (at < 0) { for (const b of ["fill", "uuid", "locked"]) { const j = idx(n, b); if (j > 0) { at = j; break; } } }
+  if (at < 0) at = n.length;
+  n.splice(at, 0, node);
+}
+/** Do the line ending controls apply?  Graphic lines and open shapes (DIALOG_SHAPE_PROPERTIES hides them on closed ones). */
+export function supportsEndings(kind: string, n: SNode): boolean {
+  if (kind === "arc" || kind === "bezier") return true;
+  if (kind !== "polyline") return false;
+  const p = kid(n, "pts"); const pts = p ? kids(p, "xy") : [];
+  if (pts.length < 2) return false;
+  const a = pts[0], b = pts[pts.length - 1]; const f = kid(n, "fill"); const filled = !!f && !!kid(f, "type") && str((kid(f, "type") as SNode)[1]) !== "none";
+  return pts.length === 2 || (!filled && !(num(a[1]) === num(b[1]) && num(a[2]) === num(b[2])));
+}

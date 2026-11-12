@@ -431,13 +431,64 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
   return true;
 }
 
+
+// ---------------------------------------------------------------- line endings (createLineEndingControls)
+/** MakeLineEndingBitmap as a small canvas glyph: a short line ending in the chosen shape (pointing left for the start). */
+function endingGlyph(style: L.EndingStyle, atEnd: boolean): HTMLCanvasElement {
+  const c = h("canvas", { width: 36, height: 14, class: "kd-ending-glyph", style: "width:36px;height:14px;vertical-align:middle" }) as HTMLCanvasElement;
+  const g = c.getContext && c.getContext("2d"); if (!g) return c;
+  const fg = getComputedStyle(document.body).getPropertyValue("--ink").trim() || "#222"; g.strokeStyle = fg; g.fillStyle = fg; g.lineWidth = 1.5;
+  const y = 7, tip = atEnd ? 33 : 3, back = atEnd ? -1 : 1, L0 = 9, W = 8;
+  const body0 = atEnd ? 3 : 33, body1 = style === "arrow" ? tip + back * L0 : style === "circle" || style === "square" ? tip + back * L0 / 2 : tip;
+  g.beginPath(); g.moveTo(body0, y); g.lineTo(body1, y); g.stroke();
+  g.beginPath();
+  if (style === "arrow") { g.moveTo(tip, y); g.lineTo(tip + back * L0, y - W / 2); g.lineTo(tip + back * L0, y + W / 2); g.closePath(); g.fill(); }
+  else if (style === "arrow_open") { g.moveTo(tip + back * L0, y - W / 2); g.lineTo(tip, y); g.lineTo(tip + back * L0, y + W / 2); g.stroke(); }
+  else if (style === "circle") { g.ellipse(tip + back * L0 / 2, y, L0 / 2, W / 2, 0, 0, Math.PI * 2); g.fill(); }
+  else if (style === "square") { g.rect(tip + back * L0 - (atEnd ? 0 : L0), y - W / 2, L0, W); g.fill(); }
+  return c;
+}
+interface EndingsBlock { el: HTMLElement; apply(n: SNode): void }
+/** The Start Shape / End Shape columns with Length / Width / Thickness and the help line, over one or more nodes. */
+function endingsBlock(nodes: SNode[], ro: boolean, version: number): EndingsBlock {
+  const off = ro || version < L.LINE_ENDING_VERSION;
+  const side = (key: "start_shape" | "end_shape", label: string) => {
+    const sts = nodes.map((n) => L.readEndingState(n, key));
+    const sty = L.common(sts.map((x) => x.style)), len = L.common(sts.map((x) => x.length)), wid = L.common(sts.map((x) => x.width)), thk = L.common(sts.map((x) => x.thickness));
+    const opts: [string, string][] = L.ENDING_CHOICES.map(([v, t]) => [v, t]); if (sty === undefined) opts.push(["", "Leave unchanged"]);
+    const glyphHost = h("span", { style: "display:inline-flex;align-items:center;min-width:38px" });
+    const showGlyph = (v: string): void => { glyphHost.innerHTML = ""; if (v) glyphHost.append(endingGlyph(v as L.EndingStyle, key === "end_shape")); };
+    const sel = select(opts, sty === undefined ? "" : sty, (v) => showGlyph(v), { id: "kd-ln-" + key, disabled: off }); showGlyph(sel.value);
+    const box = (v: number | undefined, id: string): HTMLInputElement => { const i = lenBox(v, id); if (v === undefined) i.placeholder = "INDETERMINATE"; i.disabled = off; return i; };
+    const l = box(len, `kd-ln-${key}-length`), w = box(wid, `kd-ln-${key}-width`), t = box(thk, `kd-ln-${key}-thickness`);
+    const col = h("div", { class: "kd-fmt", style: "display:grid;grid-template-columns:max-content auto max-content;gap:3px 6px;align-items:center" },
+      h("label", null, label), h("span", { style: "display:flex;gap:4px;align-items:center" }, glyphHost, sel), h("span"),
+      h("label", { style: "padding-left:15px" }, "Length:"), l, units(), h("label", { style: "padding-left:15px" }, "Width:"), w, units(), h("label", { style: "padding-left:15px" }, "Thickness:"), t, units());
+    const apply = (n: SNode): void => {
+      const cur = L.readEndingState(n, key);
+      if (sel.value) cur.style = sel.value as L.EndingStyle;
+      const lv = lenValue(l), wv = lenValue(w), tv = lenValue(t);
+      if (lv !== undefined) cur.length = Math.max(0, lv); if (wv !== undefined) cur.width = Math.max(0, wv); if (tv !== undefined) cur.thickness = Math.max(0, tv);
+      if (cur.style === "none") { if (L.kid(n, key)) L.writeEndingState(n, key, cur); return; }
+      const before = L.kid(n, key) ? KiCadCanvas.serialize(L.kid(n, key) as SNode) : "";
+      const probe = L.clone(n); L.writeEndingState(probe, key, cur);
+      if (KiCadCanvas.serialize(L.kid(probe, key) as SNode) !== before) L.writeEndingState(n, key, cur);
+    };
+    return { col, apply };
+  };
+  const a = side("start_shape", "Start Shape:"), b = side("end_shape", "End Shape:");
+  const el = h("div", { id: "kd-ln-endings", style: "margin-top:10px" }, h("div", { style: "display:flex;gap:20px" }, a.col, b.col), h("p", { class: "kd-note", style: "font-style:italic;margin:8px 0 0" }, L.ENDINGS_HELP));
+  if (version < L.LINE_ENDING_VERSION) el.title = "Line endings need a schematic saved by KiCad 10 or later";
+  return { el, apply: (n) => { if (off) return; a.apply(n); b.apply(n); } };
+}
+
 // ---------------------------------------------------------------- lines, wires & buses, junctions (several at once)
 function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
   ensureCss();
   const ro = !!ctx.viewOnly, strokes = items.filter((i) => i.kind !== "junction").map((i) => L.readStroke(i.node)), juncs = items.filter((i) => i.kind === "junction");
   const w = L.common(strokes.map((s) => s.width)), sty = L.common(strokes.map((s) => s.style)), c = L.common(strokes.map((s) => s.color));
   const jd = L.common(juncs.map((j) => L.readJunction(j.node).diameter));
-  let width: HTMLInputElement, style: HTMLSelectElement, jsize: HTMLInputElement | null = null, col: Swatch | null = null, colTouched = false;
+  let width: HTMLInputElement, style: HTMLSelectElement, jsize: HTMLInputElement | null = null, col: Swatch | null = null, colTouched = false, ends: EndingsBlock | null = null;
   // lineTypeNames (Solid … Dash-Dot-Dot); the wire & bus list ends with DEFAULT_WIRE_STYLE_LABEL, the line list has no
   // Default entry (a default-styled line shows DEFAULT_LINE_STYLE_LABEL, "Solid"); mixed styles add INDETERMINATE_STYLE
   const named = L.LINE_STYLES.filter(([v]) => v !== "default");
@@ -445,7 +496,7 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
   if (sty === undefined) styles.push(["", "Leave unchanged"]);
   const sty0 = sty === undefined ? "" : kind === "lines" && sty === "default" ? "solid" : sty;
   KD().open({
-    title: kind === "lines" ? "Line Properties" : "Wire & Bus Properties", width: 420, readOnly: ro,
+    title: kind === "lines" ? "Line Properties" : "Wire & Bus Properties", width: kind === "lines" ? 620 : 420, readOnly: ro,
     // DIALOG_WIRE_BUS_PROPERTIES::resetDefaults
     extra: kind === "wires" && !ro ? [{ label: "Default", fn: () => { width.value = fmtLen(0); if (col) { col.set(null); colTouched = true; } style.value = "default"; if (jsize && !jsize.disabled) jsize.value = fmtLen(0); } }] : [],
     build(b) {
@@ -461,6 +512,7 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
         g.append(h("label", null, "Junction size:"), h("span", { style: "display:flex;gap:6px;align-items:center" }, jsize, units()), h("span"));
       }
       b.append(g);
+      if (kind === "lines") { ends = endingsBlock(items.map((i) => i.node), ro, Number((ctx.doc as KDoc & { version?: number }).version) || 0); b.append(ends.el); }
     },
     ok() {
       if (ro) return;
@@ -469,7 +521,7 @@ function strokeDialog(ctx: Ctx, items: KItem[], kind: "lines" | "wires"): void {
       for (const it of items) {
         const n = L.clone(it.node);
         if (it.kind === "junction") { if (nj !== undefined) L.writeJunction(n, { diameter: nj }); if (colTouched && col) L.writeJunction(n, { color: col.get() }); }
-        else L.writeStroke(n, { width: nw, style: ns, color: colTouched && col ? col.get() : undefined });
+        else { L.writeStroke(n, { width: nw, style: ns, color: colTouched && col ? col.get() : undefined }); if (ends) ends.apply(n); }
         if (JSON.stringify(n) !== JSON.stringify(it.node)) changes.push(KiCadCanvas.replaceChange(ctx.doc, Object.assign({}, it, { node: n, geom: [], bbox: null }) as KItem));
       }
       if (changes.length) ctx.commit(changes, kind === "lines" ? "Edit Line Properties" : "Edit Wire/Bus Properties");
@@ -512,8 +564,9 @@ function shapeDialog(ctx: Ctx, item: KItem): void {
   ensureCss();
   const ro = !!ctx.viewOnly, st = L.readStroke(item.node), fl = L.readFill(item.node), name = SHAPE_NAMES[item.kind] || "Shape", rule = item.kind === "rule_area";
   const els: Record<string, HTMLInputElement | HTMLSelectElement> = {}; let bc: Swatch | null = null, fc: Swatch | null = null;
+  const withEnds = L.supportsEndings(item.kind, item.node); let ends: EndingsBlock | null = null;
   KD().open({
-    title: `${name} Properties`, width: 440, readOnly: ro,
+    title: `${name} Properties`, width: withEnds ? 620 : 440, readOnly: ro,
     build(b) {
       const g = h("div", { class: "kd-fmt" });
       const bw = lenBox(st.width >= 0 ? st.width : 0, "kd-sh-width"); els.width = bw;
@@ -527,6 +580,7 @@ function shapeDialog(ctx: Ctx, item: KItem): void {
       fc = swatch(fl.color, "kd-sh-fcolor", undefined, ro || fl.mode === "none");
       g.append(h("label", null, "Fill:"), fill, h("span"), h("label", null, "Fill color:"), fc.el, h("span"));
       b.append(g);
+      if (withEnds) { ends = endingsBlock([item.node], ro, Number((ctx.doc as KDoc & { version?: number }).version) || 0); b.append(ends.el); }
       if (rule) {
         const a = h("div", { style: "margin-top:6px" });
         for (const [k, label] of [["exclude_from_sim", "Exclude from simulation"], ["in_bom", "Exclude from bill of materials"], ["on_board", "Exclude from board"], ["dnp", "Do not populate"]] as [string, string][]) {
@@ -542,6 +596,7 @@ function shapeDialog(ctx: Ctx, item: KItem): void {
       L.writeStroke(n, { width: on ? Math.max(0, lenValue(els.width as HTMLInputElement) ?? 0) : undefined, style: els.style.value, color: bc ? bc.get() : st.color });
       if (!on) { const s = L.kid(n, "stroke"); const wd = s && L.kid(s, "width"); if (wd) wd[1] = -1 as unknown as SNode; }
       L.writeFill(n, els.fill.value, fc ? fc.get() : fl.color);
+      if (ends) ends.apply(n);
       if (rule) for (const k of ["exclude_from_sim", "in_bom", "on_board", "dnp"]) { const e = els[k] as HTMLInputElement | undefined; if (!e) continue; const inv = k === "in_bom" || k === "on_board"; if (L.kid(n, k) || e.checked) L.setYes(n, k, inv ? !e.checked : e.checked, ["stroke"], true); }
       commitItem(ctx, item, n, `Edit ${name}`);
       return undefined;
