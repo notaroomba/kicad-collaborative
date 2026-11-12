@@ -15,17 +15,27 @@ const SOIC8 = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", USBC = "Connector_USB:USB_C
 const HDR = (n) => `Connector_PinHeader_2.54mm:PinHeader_1x${String(n).padStart(2, "0")}_P2.54mm_Vertical`;
 const LEFT = [-2.54, -1.27, "right"], LEFTV = [-2.54, 1.27, "right"];
 
+// How the sheets are drawn (the person's rules, 2026-11-12): each block is a titled section; inside one, parts
+// are joined by wires, and a net label or power symbol appears only where a net leaves the section.  Supplies
+// point up and grounds down, each ground straight under its pin; labels are horizontal; a series resistor lies
+// in line with the pin it serves; a regulator's capacitors hang under its input and output wires.
+
+/** Power on a connector pin: the wire from the pin runs out to `x` and turns to the power symbol.  With `flag`, the
+ *  wire carries on to a PWR_FLAG clear of the pins: the supply comes in here, and ERC has to be told. */
+function supplyPin(s, pin, id, x, flag) {
+  const [, py] = s.pin(pin), ground = /GND/.test(id), d = ground ? 2.54 : -2.54;
+  s.wire(pin, [x, py], [x, py + d]); s.power(id, x, py + d);
+  if (flag) { s.wire([x, py], [x - 10.16, py]); s.flag(x - 10.16, py); }
+}
+
 /** The USB-C power inlet every USB template starts with: 5k1 on each CC line, shield to ground. */
 function usbInlet(s, x, y) {
   s.sym("J1", "Connector:USB_C_Receptacle_PowerOnly_6P", "USB-C", USBC, x, y, 0, [-10.16, -17.78, "left"], [-10.16, -15.24, "left"]);
-  const cc1 = s.pin("J1.A5"), cc2 = s.pin("J1.B5"), g = s.pin("J1.A12"), sh = s.pin("J1.SH");
-  s.sym("R1", "Device:R", "5k1", R06, cc1[0] + 15.24, cc1[1] + 8.89);
-  s.sym("R2", "Device:R", "5k1", R06, cc2[0] + 5.08, cc2[1] + 6.35);
-  s.wire("J1.A5", "R1.1"); s.wire("J1.B5", "R2.1");
-  s.gnd("R1.2"); s.gnd("R2.2", 2.54);
-  const bus = g[1] + 2.54;
-  s.wire([sh[0] - 7.62, bus], [g[0], bus]); s.wire(sh, [sh[0], bus]); s.wire(g, [g[0], bus]); s.gnd([g[0], bus], 2.54);
-  s.flag(sh[0] - 7.62, bus);
+  // the CC resistors in line with their pins, tied together to one ground
+  const e1 = s.inline("R1", "5k1", R06, "J1.A5"), e2 = s.inline("R2", "5k1", R06, "J1.B5");
+  s.wire(e1, [e1[0] + 7.62, e1[1]], [e1[0] + 7.62, e2[1]]); s.wire(e2, [e2[0] + 7.62, e2[1]]); s.gnd([e2[0] + 7.62, e2[1]], 2.54);
+  // shield and ground, each straight down to its own symbol
+  s.gnd("J1.SH", 2.54); s.gnd("J1.A12", 2.54);
 }
 
 const TEMPLATES = {};
@@ -35,27 +45,38 @@ TEMPLATES["usb-c-3v3-regulator"] = {
   title: "USB-C 3.3 V regulator",
   summary: "A USB-C power inlet, an AMS1117-3.3 linear regulator and a power LED, broken out to a three-pin header.",
   detail: "The supply most small boards start from: 5 V from any USB-C charger, regulated down to 3.3 V at up to 800 mA. Copy the regulator block into your own design, or swap the header for whatever you are powering.",
-  level: "Beginner", tags: ["Power", "USB-C"], paper: '"A5"',
+  level: "Beginner", tags: ["Power", "USB-C"], paper: '"A4"',
   sch(s) {
-    usbInlet(s, 50.8, 58.42);
-    const RAIL = s.pin("J1.A9")[1];
-    s.sym("C1", "Device:C", "10u", C08, 96.52, RAIL + 3.81);
-    s.sym("U1", "Regulator_Linear:AMS1117-3.3", "AMS1117-3.3", "Package_TO_SOT_SMD:SOT-223-3_TabPin2", 114.3, RAIL, 0, [-3.81, -6.35, "left"], [0, -3.81, "left"]);
-    s.sym("C2", "Device:C", "22u", C08, 132.08, RAIL + 3.81);
-    s.sym("R3", "Device:R", "1k", R06, 147.32, RAIL + 3.81);
-    s.sym("D1", "Device:LED", "PWR", LED08, 147.32, RAIL + 12.7, 90, [5.08, -1.27, "left", 90], [5.08, 1.27, "left", 90]);
-    s.sym("J2", "Connector_Generic:Conn_01x03", "OUT", HDR(3), 185.42, RAIL + 12.7, 0, [0, -6.35, ""], [0, 6.35, ""]);
-    s.wire("J1.A9", "C1.1", "U1.VI"); s.wire("U1.VO", "C2.1", "R3.1");
-    s.rail("power:+5V", [86.36, RAIL], 2.54); s.flag(76.2, RAIL);
-    s.rail("power:+3V3", [139.7, RAIL], 2.54);
-    s.gnd("C1.2", 2.54); s.gnd("U1.GND", 2.54); s.gnd("C2.2", 2.54);
-    s.wire("R3.2", "D1.A"); s.gnd("D1.K", 2.54);
-    const [jx, j1] = s.pin("J2.1"), j2 = s.pin("J2.2")[1], j3 = s.pin("J2.3")[1];
-    s.wire("J2.1", [jx - 7.62, j1], [jx - 7.62, j1 - 2.54]); s.power("power:+5V", jx - 7.62, j1 - 2.54);
-    s.wire("J2.2", [jx - 15.24, j2], [jx - 15.24, j1 - 2.54]); s.power("power:+3V3", jx - 15.24, j1 - 2.54);
-    s.wire("J2.3", [jx - 7.62, j3], [jx - 7.62, j3 + 2.54]); s.power("power:GND", jx - 7.62, j3 + 2.54);
-    s.text("5k1 on each CC line asks the charger for 5 V", 35.56, 96.52);
-    s.text("AMS1117-3.3: up to 800 mA, input at least 4.4 V", 96.52, 81.28);
+    // ---- USB-C input
+    s.frame("USB-C input", 30.48, 40.64, 109.22, 111.76);
+    usbInlet(s, 50.8, 71.12);
+    const [vx, vy] = s.pin("J1.A9");
+    s.wire("J1.A9", [vx + 30.48, vy], [vx + 30.48, vy - 2.54]); s.power("power:+5V", vx + 30.48, vy - 2.54);
+    s.flag(vx + 20.32, vy);
+    // the ground flag: ERC wants to know the ground net is driven from outside
+    s.flag(vx + 30.48, vy + 22.86); s.gnd([vx + 30.48, vy + 22.86], 2.54);
+    s.text("5k1 on each CC line asks the charger for 5 V", 33.02, 107.95);
+    // ---- regulator: the capacitors hang under the input and output wires
+    s.frame("3.3 V regulator", 114.3, 40.64, 190.5, 111.76);
+    const RAIL = 66.04;
+    s.sym("U1", "Regulator_Linear:AMS1117-3.3", "AMS1117-3.3", "Package_TO_SOT_SMD:SOT-223-3_TabPin2", 142.24, RAIL, 0, [0, -8.89, ""], [0, -6.35, ""]);
+    s.sym("C1", "Device:C", "10u", C08, 124.46, RAIL + 6.35, 0, LEFT, LEFTV);
+    s.sym("C2", "Device:C", "22u", C08, 160.02, RAIL + 6.35);
+    s.sym("R3", "Device:R", "1k", R06, 177.8, RAIL + 6.35);
+    s.sym("D1", "Device:LED", "PWR", LED08, 177.8, RAIL + 16.51, 90, [6.35, -1.27, "left", 90], [6.35, 1.27, "left", 90]);
+    s.wire([124.46, RAIL], "U1.VI"); s.wire([124.46, RAIL], "C1.1"); s.rail("power:+5V", [124.46, RAIL], 5.08);
+    s.wire("U1.VO", [177.8, RAIL], "R3.1"); s.wire([160.02, RAIL], "C2.1"); s.rail("power:+3V3", [160.02, RAIL], 5.08);
+    const G = RAIL + 26.67;
+    for (const p of ["C1.2", "U1.GND", "C2.2", "D1.K"]) s.gnd(p, G - s.pin(p)[1]);
+    s.wire("R3.2", "D1.A");
+    s.text("AMS1117-3.3: up to 800 mA, input at least 4.4 V", 116.84, 107.95);
+    // ---- output
+    s.frame("Output", 195.58, 40.64, 241.3, 111.76);
+    s.sym("J2", "Connector_Generic:Conn_01x03", "OUT", HDR(3), 228.6, 71.12, 0, [0, -6.35, ""], [0, 6.35, ""]);
+    const jx = s.pin("J2.1")[0];
+    supplyPin(s, "J2.1", "power:+5V", jx - 7.62);
+    s.wire("J2.2", [jx - 17.78, s.pin("J2.2")[1]], [jx - 17.78, s.pin("J2.1")[1] - 2.54]); s.power("power:+3V3", jx - 17.78, s.pin("J2.1")[1] - 2.54);
+    supplyPin(s, "J2.3", "power:GND", jx - 7.62);
   },
   size: [34, 22, 2], holes: [[3, 3], [31, 3], [3, 19], [31, 19]],
   place: {
@@ -71,29 +92,38 @@ TEMPLATES["i2c-sensor-breakout"] = {
   title: "I2C temperature sensor breakout",
   summary: "An LM75B temperature sensor with its decoupling capacitor and bus pull-ups on a five-pin header.",
   detail: "The shape of nearly every sensor breakout: one chip, one capacitor, pull-ups on the bus, and a header. Replace the LM75B with the part you need and keep the rest. The address pins are tied low, so the sensor answers at 0x48.",
-  level: "Beginner", tags: ["Sensor", "I2C"], paper: '"A5"',
+  level: "Beginner", tags: ["Sensor", "I2C"], paper: '"A4"',
   sch(s) {
-    const RAIL = 50.8;
-    s.sym("U1", "Sensor_Temperature:LM75B", "LM75B", SOIC8, 101.6, 68.58, 0, [2.54, -11.43, "left"], [2.54, -8.89, "left"]);
-    s.sym("C1", "Device:C", "100n", C06, 73.66, 60.96);
-    s.sym("R1", "Device:R", "4k7", R06, 121.92, RAIL + 3.81); s.sym("R2", "Device:R", "4k7", R06, 132.08, RAIL + 3.81); s.sym("R3", "Device:R", "10k", R06, 142.24, RAIL + 3.81);
-    s.sym("J1", "Connector_Generic:Conn_01x05", "I2C", HDR(5), 167.64, 68.58, 0, [0, -8.89, ""], [0, 8.89, ""]);
-    const sda = s.pin("U1.SDA")[1], scl = s.pin("U1.SCL")[1], os = s.pin("U1.3")[1], jx = s.pin("J1.1")[0];
-    // supply
-    s.wire([66.04, RAIL], [152.4, RAIL], "J1.1"); s.flag(66.04, RAIL); s.rail("power:+3V3", [86.36, RAIL], 2.54);
-    s.wire("C1.1", [73.66, RAIL]); s.wire("U1.8", [101.6, RAIL]); s.gnd("C1.2", 2.54); s.gnd("U1.4", 2.54);
+    // ---- the sensor: one supply rail for the chip, its capacitor and the pull-ups
+    s.frame("Temperature sensor", 60.96, 38.1, 172.72, 114.3);
+    const RAIL = 55.88;
+    s.sym("U1", "Sensor_Temperature:LM75B", "LM75B", SOIC8, 101.6, 78.74, 0, [2.54, -11.43, "left"], [2.54, -8.89, "left"]);
+    s.sym("C1", "Device:C", "100n", C06, 73.66, RAIL + 8.89);
+    s.sym("R1", "Device:R", "4k7", R06, 127, RAIL + 6.35); s.sym("R2", "Device:R", "4k7", R06, 137.16, RAIL + 6.35); s.sym("R3", "Device:R", "10k", R06, 147.32, RAIL + 6.35);
+    const sda = s.pin("U1.SDA")[1], scl = s.pin("U1.SCL")[1], os = s.pin("U1.3")[1];
+    s.wire([73.66, RAIL], [147.32, RAIL]); s.rail("power:+3V3", [114.3, RAIL], 2.54);
+    s.wire("C1.1", [73.66, RAIL]); s.wire("U1.8", [101.6, RAIL]);
+    for (const r of ["R1", "R2", "R3"]) s.wire(r + ".1", [s.pin(r + ".1")[0], RAIL]);
+    const G = s.pin("U1.4")[1] + 5.08;
+    s.gnd("C1.2", G - s.pin("C1.2")[1]); s.gnd("U1.4", G - s.pin("U1.4")[1]);
     // the address pins, all low: 0x48
     const ax = s.pin("U1.A0")[0] - 5.08;
-    s.wire("U1.A0", [ax, s.pin("U1.A0")[1]], [ax, s.pin("U1.A2")[1] + 5.08]); s.wire("U1.A1", [ax, s.pin("U1.A1")[1]]); s.wire("U1.A2", [ax, s.pin("U1.A2")[1]]);
-    s.power("power:GND", ax, s.pin("U1.A2")[1] + 5.08);
-    // the bus, pulled up
-    s.wire("U1.SDA", [jx, sda]); s.wire("U1.SCL", [jx, scl]); s.wire("U1.3", [jx, os]);
-    s.wire("R1.2", [121.92, sda]); s.wire("R2.2", [132.08, scl]); s.wire("R3.2", [142.24, os]);
-    s.label("SDA", [147.32, sda]); s.label("SCL", [147.32, scl]); s.label("ALERT", [147.32, os]);
-    s.wire("J1.5", [jx - 5.08, s.pin("J1.5")[1]]); s.gnd([jx - 5.08, s.pin("J1.5")[1]], 2.54);
-    s.wire([66.04, s.pin("C1.2")[1] + 2.54], [73.66, s.pin("C1.2")[1] + 2.54]); s.flag(66.04, s.pin("C1.2")[1] + 2.54);
-    s.text("A0, A1 and A2 low: the sensor answers at address 0x48", 66.04, 93.98);
-    s.text("O.S. is open drain and pulls low above the set temperature", 66.04, 97.79);
+    s.wire("U1.A0", [ax, s.pin("U1.A0")[1]], [ax, G]); s.wire("U1.A1", [ax, s.pin("U1.A1")[1]]); s.wire("U1.A2", [ax, s.pin("U1.A2")[1]]);
+    s.power("power:GND", ax, G);
+    // the bus, pulled up; it leaves the section by name
+    const out = 157.48;
+    s.wire("U1.SDA", [out, sda]); s.wire("U1.SCL", [out, scl]); s.wire("U1.3", [out, os]);
+    s.wire("R1.2", [127, sda]); s.wire("R2.2", [137.16, scl]); s.wire("R3.2", [147.32, os]);
+    s.label("SDA", [out, sda]); s.label("SCL", [out, scl]); s.label("ALERT", [out, os]);
+    s.text("A0, A1 and A2 low: the sensor answers at address 0x48", 63.5, 106.68);
+    s.text("O.S. is open drain and pulls low above the set temperature", 63.5, 110.49);
+    // ---- the header: power comes in here
+    s.frame("I2C header", 177.8, 38.1, 231.14, 114.3);
+    s.sym("J1", "Connector_Generic:Conn_01x05", "I2C", HDR(5), 218.44, 78.74, 0, [0, -8.89, ""], [0, 8.89, ""]);
+    const jx = s.pin("J1.1")[0];
+    supplyPin(s, "J1.1", "power:+3V3", jx - 17.78, true);
+    for (const [n, name] of [[2, "SDA"], [3, "SCL"], [4, "ALERT"]]) { const y = s.pin("J1." + n)[1]; s.wire("J1." + n, [jx - 10.16, y]); s.label(name, [jx - 10.16, y]); }
+    supplyPin(s, "J1.5", "power:GND", jx - 17.78, true);
   },
   size: [26, 18, 1.5], holes: [[2.8, 2.8], [23.2, 2.8]],
   place: {
@@ -111,36 +141,40 @@ TEMPLATES["attiny85-dev-board"] = {
   detail: "A complete small microcontroller board: decoupling, reset with a pull-up and a button, the six-pin ISP header every AVR programmer plugs into, an LED on PB3 and a header for PB3, PB4 and power. A good first board to build and to grow.",
   level: "Intermediate", tags: ["Microcontroller", "AVR"], paper: '"A4"',
   sch(s) {
-    s.sym("U1", "MCU_Microchip_ATtiny:ATtiny85-20S", "ATtiny85-20S", "Package_SO:SOIC-8_5.3x5.3mm_P1.27mm", 101.6, 76.2, 0, [1.27, -16.51, "left"], [1.27, -13.97, "left"]);
-    s.sym("C1", "Device:C", "100n", C06, 76.2, 76.2);
+    // ---- the microcontroller, its capacitor, and the LED wired to PB3
+    s.frame("Microcontroller", 55.88, 38.1, 162.56, 119.38);
+    s.sym("U1", "MCU_Microchip_ATtiny:ATtiny85-20S", "ATtiny85-20S", "Package_SO:SOIC-8_5.3x5.3mm_P1.27mm", 96.52, 81.28, 0, [1.27, -16.51, "left"], [1.27, -13.97, "left"]);
     const pb = (n) => s.pin("U1." + ({ 0: 5, 1: 6, 2: 7, 3: 2, 4: 3, 5: 1 })[n]), px = pb(0)[0];
-    // supply
-    s.wire([68.58, 58.42], [101.6, 58.42], "U1.8"); s.wire("C1.1", [76.2, 58.42]); s.rail("power:VCC", [88.9, 58.42], 2.54); s.flag(68.58, 58.42);
-    s.wire([68.58, 93.98], [101.6, 93.98], "U1.4"); s.wire("C1.2", [76.2, 93.98]); s.gnd([88.9, 93.98], 2.54); s.flag(68.58, 93.98);
-    // programming pins
-    for (const [n, name] of [[0, "MOSI"], [1, "MISO"], [2, "SCK"], [4, "PB4"], [5, "~{RESET}"]]) { s.wire(pb(n), [px + 2.54, pb(n)[1]]); s.label(name, [px + 2.54, pb(n)[1]]); }
-    // LED on PB3
-    s.sym("R2", "Device:R", "330", R06, px + 19.05, pb(3)[1], 90, [0, -2.54, "", 90], [0, 2.54, "", 90]);
-    s.sym("D1", "Device:LED", "LED", LED08, px + 30.48, pb(3)[1], 180, [0, -3.81, ""], [0, 3.81, ""]);
-    s.wire(pb(3), "R2.1"); s.wire("R2.2", "D1.A"); s.wire("D1.K", [px + 38.1, pb(3)[1]]); s.gnd([px + 38.1, pb(3)[1]], 2.54); s.label("PB3", [px + 2.54, pb(3)[1]]);
-    // ISP header
-    s.sym("J1", "Connector:AVR-ISP-6", "AVR-ISP-6", "Connector_PinHeader_2.54mm:PinHeader_2x03_P2.54mm_Vertical", 180.34, 73.66, 0, [-8.89, -11.43, "left"], [1.27, -11.43, "left"]);
-    for (const [pin, name] of [["MISO", "MISO"], ["MOSI", "MOSI"], ["SCK", "SCK"], ["5", "~{RESET}"]]) { const p = s.pin("J1." + pin); s.wire(p, [p[0] + 2.54, p[1]]); s.label(name, [p[0] + 2.54, p[1]]); }
-    s.rail("power:VCC", "J1.2"); s.gnd("J1.6");
-    // reset: pulled up, button to ground
-    s.sym("R1", "Device:R", "10k", R06, 142.24, 104.14);
-    s.sym("SW1", "Switch:SW_Push", "RESET", "Button_Switch_SMD:SW_SPST_B3U-1000P", 152.4, 113.03, 0, [0, -6.35, ""], [0, 3.81, ""]);
-    s.rail("power:VCC", "R1.1"); s.wire("R1.2", [142.24, 113.03]); s.wire([129.54, 113.03], "SW1.1"); s.label("~{RESET}", [129.54, 113.03]);
-    s.wire("SW1.2", [162.56, 113.03]); s.gnd([162.56, 113.03], 2.54);
-    // spare pins
-    s.sym("J2", "Connector_Generic:Conn_01x04", "IO", HDR(4), 200.66, 107.95, 0, [0, -7.62, ""], [0, 7.62, ""]);
+    const top = s.pin("U1.8")[1] - 5.08;
+    s.sym("C1", "Device:C", "100n", C06, 73.66, top + 6.35);
+    s.wire("U1.8", [96.52, top], [73.66, top], "C1.1"); s.rail("power:VCC", [86.36, top], 2.54);
+    s.gnd("U1.4", 2.54); s.gnd("C1.2", 2.54);
+    // the pins that leave the section, by name
+    for (const [n, name] of [[0, "MOSI"], [1, "MISO"], [2, "SCK"], [4, "PB4"], [5, "~{RESET}"]]) { s.wire(pb(n), [px + 5.08, pb(n)[1]]); s.label(name, [px + 5.08, pb(n)[1]]); }
+    // LED on PB3: resistor in line with the pin
+    const r = s.inline("R2", "330", R06, pb(3), 17.78);
+    s.sym("D1", "Device:LED", "LED", LED08, r[0] + 10.16, pb(3)[1], 180, [0, -3.81, ""], [0, 3.81, ""]);
+    s.wire(r, "D1.A"); s.wire("D1.K", [r[0] + 17.78, pb(3)[1]]); s.gnd([r[0] + 17.78, pb(3)[1]], 5.08); s.label("PB3", [px + 5.08, pb(3)[1]]);
+    s.text("PB0 to PB2 are shared with the programmer; PB3 drives the LED and is also on the header", 58.42, 115.57);
+    // ---- ISP header
+    s.frame("Programming header", 167.64, 38.1, 241.3, 119.38);
+    s.sym("J1", "Connector:AVR-ISP-6", "AVR-ISP-6", "Connector_PinHeader_2.54mm:PinHeader_2x03_P2.54mm_Vertical", 190.5, 78.74, 0, [-8.89, -11.43, "left"], [1.27, -11.43, "left"]);
+    for (const [pin, name] of [["MISO", "MISO"], ["MOSI", "MOSI"], ["SCK", "SCK"], ["5", "~{RESET}"]]) { const p = s.pin("J1." + pin); s.wire(p, [p[0] + 5.08, p[1]]); s.label(name, [p[0] + 5.08, p[1]]); }
+    s.rail("power:VCC", "J1.2", 2.54); s.gnd("J1.6", 2.54);
+    s.text("Any AVR programmer: USBasp, Atmel-ICE,", 170.18, 111.76); s.text("or an Arduino as ISP", 170.18, 115.57);
+    // ---- reset: pulled up, button to ground
+    s.frame("Reset", 55.88, 124.46, 162.56, 172.72);
+    s.sym("R1", "Device:R", "10k", R06, 99.06, 143.51);
+    s.sym("SW1", "Switch:SW_Push", "RESET", "Button_Switch_SMD:SW_SPST_B3U-1000P", 114.3, 152.4, 0, [0, -6.35, ""], [0, 3.81, ""]);
+    s.rail("power:VCC", "R1.1", 2.54); s.wire("R1.2", [99.06, 152.4]); s.wire([83.82, 152.4], "SW1.1"); s.label("~{RESET}", [83.82, 152.4]);
+    s.wire("SW1.2", [127, 152.4]); s.gnd([127, 152.4], 5.08);
+    // ---- spare pins and power
+    s.frame("I/O header", 167.64, 124.46, 241.3, 172.72);
+    s.sym("J2", "Connector_Generic:Conn_01x04", "IO", HDR(4), 223.52, 147.32, 0, [0, -7.62, ""], [0, 7.62, ""]);
     const jx = s.pin("J2.1")[0];
-    s.wire("J2.1", [jx - 5.08, s.pin("J2.1")[1]], [jx - 5.08, s.pin("J2.1")[1] - 2.54]); s.power("power:VCC", jx - 5.08, s.pin("J2.1")[1] - 2.54);
-    s.wire("J2.2", [jx - 12.7, s.pin("J2.2")[1]]); s.label("PB3", [jx - 12.7, s.pin("J2.2")[1]]);
-    s.wire("J2.3", [jx - 12.7, s.pin("J2.3")[1]]); s.label("PB4", [jx - 12.7, s.pin("J2.3")[1]]);
-    s.wire("J2.4", [jx - 5.08, s.pin("J2.4")[1]], [jx - 5.08, s.pin("J2.4")[1] + 2.54]); s.power("power:GND", jx - 5.08, s.pin("J2.4")[1] + 2.54);
-    s.text("Program over the ISP header with any AVR programmer (USBasp, Atmel-ICE, an Arduino as ISP)", 68.58, 129.54);
-    s.text("PB0 to PB2 are shared with the programmer; PB3 drives the LED and is also on the header", 68.58, 133.35);
+    supplyPin(s, "J2.1", "power:VCC", jx - 17.78, true);
+    for (const [n, name] of [[2, "PB3"], [3, "PB4"]]) { const y = s.pin("J2." + n)[1]; s.wire("J2." + n, [jx - 10.16, y]); s.label(name, [jx - 10.16, y]); }
+    supplyPin(s, "J2.4", "power:GND", jx - 17.78, true);
   },
   size: [32, 24, 2], holes: [[3, 3], [29, 3], [3, 21], [29, 21]],
   place: {

@@ -165,6 +165,19 @@ export class Schematic {
     this.items.push(`(label ${q(name)} (at ${x} ${y} ${rot}) (effects (font (size 1.27 1.27)) (justify ${justify})) (uuid ${q(this.uuid("label/" + (++this.n)))}))`);
     this.ends = this.ends || []; this.ends.push([x, y]);
   }
+  /** A titled section: a dashed frame with its name in bold at the top left.  Parts inside are wired; only labels and power symbols leave it. */
+  frame(title, x0, y0, x1, y1) {
+    this.items.push(`(rectangle (start ${x0} ${y0}) (end ${x1} ${y1}) (stroke (width 0) (type dash)) (fill (type none)) (uuid ${q(this.uuid("frame/" + title))}))`);
+    this.items.push(`(text ${q(title)} (exclude_from_sim no) (at ${x0 + 2.54} ${y0 + 6.35} 0) (effects (font (size 2.54 2.54) (thickness 0.508) (bold yes)) (justify left bottom)) (uuid ${q(this.uuid("title/" + title))}))`);
+  }
+  /** A resistor lying in line with a pin, `gap` to its right (or left when negative).  Returns the far end. */
+  inline(ref, value, fp, from, gap = 5.08) {
+    const [x, y] = this.at(from), dir = gap < 0 ? -1 : 1, cx = x + gap + dir * 3.81;
+    this.sym(ref, "Device:R", value, fp, cx, y, 90, [-dir * 5.08, -1.016, "", 90], [dir * 5.588, -1.016, "", 90]);
+    const a = this.pin(ref + ".1"), b = this.pin(ref + ".2"), near = Math.abs(a[0] - x) < Math.abs(b[0] - x) ? a : b;
+    this.wire([x, y], near);
+    return near === a ? b : a;
+  }
   nc(p) { const [x, y] = this.at(p); this.items.push(`(no_connect (at ${x} ${y}) (uuid ${q(this.uuid("nc/" + (++this.n)))}))`); }
   text(s, x, y, size = 1.27) { this.items.push(`(text ${q(s)} (exclude_from_sim no) (at ${x} ${y} 0) (effects (font (size ${size} ${size})) (justify left bottom)) (uuid ${q(this.uuid("text/" + (++this.n)))}))`); }
   /** KiCad only joins things at wire ends, so a wire is cut wherever a pin, a label or another wire's end lands on it. */
