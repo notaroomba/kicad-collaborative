@@ -63,6 +63,8 @@ export class SymbolEditor {
   private mouse = { x: 0, y: 0, in: false };           // doc mm (Y down)
   private drag: { mode: "pan" | "band" | "move"; sx: number; sy: number; x0: number; y0: number; px?: number; py?: number; moved?: boolean; ids?: string[] } | null = null;
   private carry: { ids: string[]; sx: number; sy: number; label: string; amend: boolean; base: string } | null = null;
+  /** SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace: a new pin or text follows the cursor (IS_NEW | IS_MOVING) until the second click. */
+  private floating: { kind: "pin"; pin: M.PinInfo } | { kind: "text"; node: M.Node; body: number } | null = null;
   private draw: { kind: ToolId; pts: number[][] } | null = null;
   private officialList: { name: string; description: string }[] | null = null;
   private officialFailed = "";
@@ -700,7 +702,7 @@ export class SymbolEditor {
   }
   cancelInteraction(): void {
     if (this.carry) { const c = this.carry; this.carry = null; this.preview = null; if (c.amend) { const t = this.tab; if (t && t.undo.length) { const step = t.undo.pop()!; this.store(t, M.node(step.text)); } } }
-    this.drag = null; this.draw = null; this.preview = null; this.kcache = null; this.paint();
+    this.drag = null; this.draw = null; this.floating = null; this.preview = null; this.kcache = null; this.paint();
   }
   selChanged(): void { this.renderMsg(); this.renderMenus(); this.paint(); }
   selectAll(): void { const t = this.tab; const doc = this.kdoc(); if (!t || !doc) return; t.sel = new Set([...doc.items.values()].filter((i) => i.movable).map((i) => i.id)); this.selChanged(); }
@@ -781,14 +783,32 @@ export class SymbolEditor {
     if (occ !== null) void confirmBox("Confirmation", M.OCCUPIED_MSG(occ) + "\n\n" + M.OCCUPIED_EXT, "Place Pin Anyway").then((ok) => { if (ok) go(); });
     else go();
   }
+  /** First click of the pin tool: CreatePin's dialog, then the pin follows the cursor (TwoClickPlace). */
   async placePinAt(fx: number, fy: number): Promise<void> {
     const t = this.tab; const sym = this.symbol(); if (!t || !sym) return;
     const p = M.newPinInfo(fx, fy, this.lastPin, t.unit, t.body);
     const res = await D.pinDialog(this, p, null); if (!res) return;
+    M.rememberPin(this.lastPin, res);   // EditPinProperties keeps the g_LastPin* settings on OK
+    this.startFloating({ kind: "pin", pin: res });
+  }
+  /** A new text (or pin) attached to the cursor; Esc drops it, a click places it. */
+  startFloating(f: NonNullable<SymbolEditor["floating"]>): void { this.floating = f; this.floatPreview(); this.paint(); }
+  private floatPreview(): void {
+    const f = this.floating; const sym = this.symbol(); if (!f || !sym) return;
+    const [x, y] = this.snapFile(this.mouse.x, this.mouse.y); const s = M.node(M.text(sym));
+    if (f.kind === "pin") { const n = M.pinNode({ ...f.pin, x, y }); M.addDrawItem(s, f.pin.unit, f.pin.body, n); }
+    else { const n = M.clone(f.node); M.mapPoints(n, () => [x, y]); M.addDrawItem(s, 0, f.body, n); }
+    this.preview = s; this.kcache = null;
+  }
+  /** Second click: PlacePin (occupied-position check in sync mode, image pins) or the text added, as one undo step. */
+  private async placeFloating(fx: number, fy: number): Promise<void> {
+    const f = this.floating; if (!f) return;
+    this.floating = null; this.preview = null; this.kcache = null; this.paint();
+    if (f.kind === "text") { const n = M.clone(f.node); M.mapPoints(n, () => [fx, fy]); this.edit("Draw Text", (s) => { M.addDrawItem(s, 0, f.body, n); return [n]; }); return; }
+    const res: M.PinInfo = { ...f.pin, x: fx, y: fy };
     const cur = this.symbol(); if (!cur) return;
     const occ = this.syncPins ? M.occupiedBy(cur, res) : null;
     if (occ !== null && !(await confirmBox("Confirmation", M.OCCUPIED_MSG(occ) + "\n\n" + M.OCCUPIED_EXT, "Place Pin Anyway"))) return;
-    M.rememberPin(this.lastPin, res);
     if (this.edit("Place Pin", (s) => { const r = M.placePin(s, res, this.syncPins && res.unit !== 0); const n = M.itemAt(s, r); return n ? [n] : []; })) { this.lastRepeat = res; }
   }
 
@@ -900,6 +920,7 @@ export class SymbolEditor {
     const t = this.tab; if (!t || !this.symbol()) return;
     const [fx, fy] = this.snapFile(x, y);
     if (this.carry) { this.finishCarry(); return; }
+    if (this.floating) { void this.placeFloating(fx, fy); return; }
     switch (this.tool) {
       case "select": {
         const hit = this.hitAt(x, y);
@@ -925,6 +946,7 @@ export class SymbolEditor {
       if (!d.moved && Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < 4) return;
       d.moved = true; this.movePreview(d.ids || [], d.x0, d.y0, x, y);
     } else if (this.carry) this.carryPreview();
+    else if (this.floating) this.floatPreview();
     else if (this.draw) this.drawPreview();
     this.renderStatus(); this.paint();
   }
@@ -1052,7 +1074,7 @@ export class SymbolEditor {
     ev.stopImmediatePropagation();
     if (document.querySelector(".se-menu")) { if (combo === "Esc") { ev.preventDefault(); closeMenus(); } return; }
     const run = (fn: () => void) => { ev.preventDefault(); fn(); };
-    if (combo === "Esc") return run(() => { if (this.carry || this.draw) this.cancelInteraction(); else if (this.tool !== "select") this.setTool("select"); else if (this.tab) { this.tab.sel.clear(); this.selChanged(); } });
+    if (combo === "Esc") return run(() => { if (this.carry || this.draw || this.floating) this.cancelInteraction(); else if (this.tool !== "select") this.setTool("select"); else if (this.tab) { this.tab.sel.clear(); this.selChanged(); } });
     if (combo === "Enter" && this.draw) return run(() => this.finishDraw());
     if (combo === "Ctrl+W") return run(() => void this.close());
     if (combo === "Ctrl+Shift+Z") return run(() => this.redo());

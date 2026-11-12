@@ -186,7 +186,8 @@ export async function newText(se: SymbolEditor, x: number, y: number): Promise<v
   const t = se.tab; if (!t) return;
   const r = await textDialog("Text Properties", "", M.DEFAULTS.textSize, se.lastTextAngle, false); if (!r) return;
   se.lastTextAngle = r.angle;
-  se.edit("Draw Text", (s) => { const n = M.textNode(r.text, x, y, r.size, r.angle); M.addDrawItem(s, 0, t.body, n); return [n]; });
+  if (!r.text.trim()) return;   // NoPrintableChars: nothing is placed
+  se.startFloating({ kind: "text", node: M.textNode(r.text, x, y, r.size, r.angle), body: t.body });   // TwoClickPlace: the text follows the cursor until a click
 }
 export async function newTextBox(se: SymbolEditor, a: number[], b: number[]): Promise<void> {
   const t = se.tab; if (!t) return;
