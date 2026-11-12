@@ -1789,10 +1789,44 @@ test("Line Modes: lines, polygons and zones follow the angle snap mode (Ctrl fre
   pcb.onPointerMove(ev({ ctrlKey: true }), [10, 4], ctx); assert.deepEqual(P.state.draw.cur, [10, 10]);
   // the polygon tool constrains from its last corner
   pcb.onActivate("gpoly", ctx); pcb.onPointerDown(ev(), [0, 0], ctx); pcb.onPointerDown(ev(), [10, 1], ctx); assert.deepEqual(P.state.draw.pts.at(-1), [10, 0]);
-  pcb.onPointerMove(ev(), [12, 9], ctx); assert.deepEqual(P.state.draw.cur, [10, 9]);
+  // POLYGON_GEOM_MANAGER: the cursor is reached through a leader with one 45° bend, and a loop line of the same kind closes
+  pcb.onPointerMove(ev(), [12, 9], ctx); assert.deepEqual(P.state.draw.cur, [12, 9]);
+  assert.deepEqual(P.state.draw.leader, [[10, 0], [12, 2], [12, 9]]); assert.deepEqual(P.state.draw.loop, [[12, 9], [9, 9], [0, 0]]);
+  pcb.onKey("Enter", ev(), ctx);
+  const poly = log.commits.at(-1).changes[0].id; assert.equal(log.commits.at(-1).label, "polygon");
+  assert.deepEqual(K.kid(doc.items.get(poly).node, "pts").slice(1).map((x) => x.slice(1)), [[0, 0], [10, 0], [12, 2], [12, 9], [9, 9]], "the leader's and the loop's bends are corners too");
+  // H/V: one bend on the horizontal first
+  A.lineMode90.run(ctx); pcb.onActivate("gpoly", ctx); pcb.onPointerDown(ev(), [0, 0], ctx); pcb.onPointerMove(ev(), [5, 3], ctx);
+  assert.deepEqual(P.state.draw.leader, [[0, 0], [5, 0], [5, 3]]);
+  pcb.onPointerDown(ev(), [5, 3], ctx); assert.deepEqual(P.state.draw.pts, [[0, 0], [5, 0], [5, 3]]);
+  pcb.onKey("Backspace", ev(), ctx); assert.deepEqual(P.state.draw.pts, [[0, 0], [5, 0]], "Backspace drops the last corner");
+  A.lineMode45.run(ctx);
   // the tool's width resets with the next tool; the mode stays
   pcb.onActivate("select", ctx); assert.equal(P.state.strokeW, null); assert.equal(P.angleSnapMode(), "45");
   A.lineModeFree.run(ctx); assert.equal(P.angleSnapMode(), "free");
   assert.equal(P.dimensionLabel("l", 12.3456), "l: 12.346 mm"); assert.equal(P.dimensionLabel("θ", 45, true), "θ: 45.0°");
   void cfg;
+});
+
+test("Draw Zone / Rule Area: the properties dialog opens on a template at the first click (active layer, highlighted net, a unique priority); OK draws with its settings, Cancel ends it", () => {
+  const doc = fixture(); const { ctx, log } = fullCtx(doc); let seen = null, reply = null;
+  pcb.setNewItemDialogs({ zone: (c, node, done) => { seen = node; reply(node, done); return true; } });
+  P.setAngleSnap(ctx, "free");
+  P.state.highlightNet = P.netTable(doc).key({ code: -1, name: "GND" });
+  pcb.onActivate("zone", ctx); pcb.setLayer(ctx, "B.Cu");
+  reply = (node, done) => { K.kid(node, "min_thickness")[1] = 0.3; done(node); };
+  pcb.onPointerDown(ev(), [0, 0], ctx);
+  assert.equal(seen[0], "zone"); assert.equal(P.netOf(seen).name, "GND", "the highlighted net"); assert.ok(!K.kid(seen, "name"));
+  for (const p of [[10, 0], [10, 10]]) pcb.onPointerDown(ev(), p, ctx);
+  pcb.onPointerDown(ev(), [0, 0], ctx);   // the first corner again closes it
+  const z = doc.items.get(log.commits.at(-1).changes[0].id); assert.equal(log.commits.at(-1).label, "zone");
+  assert.equal(K.kid(z.node, "min_thickness")[1], 0.3, "the dialog's settings"); assert.equal(P.netOf(z.node).name, "GND");
+  assert.deepEqual(K.kid(K.kid(z.node, "polygon"), "pts").slice(1).map((x) => x.slice(1)), [[0, 0], [10, 0], [10, 10]]);
+  // Cancel: nothing is drawn and the next click asks again
+  const n = log.commits.length; reply = (node, done) => done(null);
+  pcb.onPointerDown(ev(), [20, 20], ctx); assert.equal(P.state.draw, null); assert.equal(log.commits.length, n);
+  // a rule area gets the keepout template
+  pcb.onActivate("rulearea", ctx); reply = (node, done) => done(node); pcb.onPointerDown(ev(), [0, 0], ctx);
+  assert.ok(K.kid(seen, "keepout")); assert.equal(P.state.draw.template[0], "zone");
+  pcb.setNewItemDialogs({ zone: null }); pcb.onActivate("select", ctx); P.state.highlightNet = null;
 });

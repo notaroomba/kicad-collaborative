@@ -130,7 +130,7 @@ function trackViaDialog(ctx: ToolCtx, item: KItem): boolean {
 }
 
 // ---------------------------------------------------------------- Copper Zone Properties
-function zoneDialog(ctx: ToolCtx, item: KItem): boolean {
+function zoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc;
   return itemDialog(ctx, item, "Copper Zone Properties", 760, (node, body, ro) => {
     const l1 = kid(node, "layer"), ln = kid(node, "layers");
@@ -192,7 +192,164 @@ function zoneDialog(ctx: ToolCtx, item: KItem): boolean {
       if (im === 2) put(f, "island_area_min", `(island_area_min ${f6(area.get())})`, ["hatch_thickness"]); else put(f, "island_area_min", null);
       return undefined;
     };
-  });
+  }, create);
+}
+
+/** The layers a zone names, its wildcards ("*.Cu", "F&B.Cu", "*.Mask" …) spelled out over the board's layers. */
+function zoneLayerSet(doc: KDoc, node: SNode): Set<string> {
+  const l1 = kid(node, "layer"), ln = kid(node, "layers");
+  const raw = l1 ? [sval(l1)] : ln ? ln.slice(1).map(String) : [];
+  const out = new Set<string>(); const all = Array.from(doc.layers.keys());
+  for (const r of raw) {
+    if (r === "*.Cu") doc.copper.forEach((c) => out.add(c));
+    else if (r === "F&B.Cu") { out.add("F.Cu"); out.add("B.Cu"); }
+    else if (r.startsWith("*.")) { const suf = r.slice(1); all.filter((n) => n.endsWith(suf)).forEach((n) => out.add(n)); }
+    else if (r.startsWith("F&B.")) { out.add("F." + r.slice(4)); out.add("B." + r.slice(4)); }
+    else out.add(r);
+  }
+  return out;
+}
+/** The layers list on the left of the zone dialogs; apply writes (layer …) or (layers …) when the ticks changed. */
+function zoneLayerList(doc: KDoc, node: SNode, opts: [string, string][], ro: boolean): { el: HTMLElement; checked(): string[]; apply(n: SNode): string | void } {
+  const cur = zoneLayerSet(doc, node);
+  const checks = opts.map(([name, label]) => ({ name, f: checkField(cur.has(name), label, { ro, key: "layer-" + name }) }));
+  const el = h("div", { class: "pd-zonelayers" }, h("div", { class: "pd-colhead" }, "Layers:"), h("div", { class: "pd-list", style: "padding:4px 8px;max-height:330px" }, ...checks.map((l) => l.f.el)));
+  const checked = (): string[] => checks.filter((l) => l.f.get()).map((l) => l.name);
+  return { el, checked, apply(n) {
+    const on = checked(); if (!on.length) return "No layer selected.";
+    const was = opts.map((o) => o[0]).filter((x) => cur.has(x));
+    if (on.join(" ") === was.join(" ")) return undefined;   // untouched: a wildcard stays as written
+    put(n, "layer", null); put(n, "layers", null);
+    put(n, on.length === 1 ? "layer" : "layers", on.length === 1 ? `(layer ${quote(on[0])})` : `(layers ${on.map(quote).join(" ")})`, ["uuid", "tstamp", "name", "hatch"]);
+    return undefined;
+  } };
+}
+function outlineFields(node: SNode, ro: boolean): { outline: Field<string>; pitch: Field<number>; apply(n: SNode): void } {
+  const hatch = kid(node, "hatch");
+  const outline = selectField<string>(sval(hatch) || "edge", [["none", "Line"], ["edge", "Hatched"], ["full", "Fully hatched"]], { ro, key: "outline" });
+  const pitch = lenField(nval(hatch, 2, 0.5), { ro, key: "hatchPitch" });
+  pitch.input.title = "Distance between parallel lines used for hatching the area";
+  return { outline, pitch, apply(n) {
+    if (outline.get() !== (sval(hatch) || "edge") || Math.abs(pitch.get() - nval(hatch, 2, 0.5)) > 1e-9 || !hatch) put(n, "hatch", `(hatch ${outline.get()} ${f6(pitch.get())})`, ["priority", "connect_pads", "min_thickness"]);
+  } };
+}
+
+// ---------------------------------------------------------------- Rule Area Properties (DIALOG_RULE_AREA_PROPERTIES)
+type PlacementKind = "none" | "sheetname" | "component_class" | "group";
+function ruleAreaDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
+  const doc = ctx.doc as KDoc;
+  return itemDialog(ctx, item, "Rule Area Properties", 708, (node, body, ro) => {
+    const layers = zoneLayerList(doc, node, withCurrent(copperLayers(doc), ""), ro);
+    const name = textField(sval(kid(node, "name")), { ro, key: "name" }); name.input.title = "A unique name for this rule area for use in DRC rules";
+    const ko = kid(node, "keepout") || ["keepout"];
+    const notAllowed = (k: string, dflt: boolean): boolean => { const c = kid(ko, k); return c ? sval(c) === "not_allowed" : dflt; };
+    const tracks = checkField(notAllowed("tracks", true), "Keep out tracks", { ro, key: "koTracks", tip: "Prevent tracks from routing into this area" });
+    const vias = checkField(notAllowed("vias", true), "Keep out vias", { ro, key: "koVias", tip: "Prevent vias from being placed in this area" });
+    const pads = checkField(notAllowed("pads", true), "Keep out pads", { ro, key: "koPads", tip: "Raise a DRC error if a pad overlaps this area" });
+    const pour = checkField(notAllowed("copperpour", false), "Keep out zone fills", { ro, key: "koPour", tip: "Zones will not fill copper into this area" });
+    const fps = checkField(notAllowed("footprints", false), "Keep out footprints", { ro, key: "koFootprints", tip: "Raise a DRC error if a footprint courtyard overlaps this area" });
+    // Placement: the multichannel tool's source, a sheet, a component class or a group (PANEL_RULE_AREA_PROPERTIES_PLACEMENT)
+    const pl = kid(node, "placement"), plOn = !!pl && sval(kid(pl, "enabled")) === "yes";
+    const plKind0: PlacementKind = !plOn ? "none" : kid(pl as SNode, "component_class") ? "component_class" : kid(pl as SNode, "group") ? "group" : "sheetname";
+    const plSrc0 = plOn ? sval(kid(pl as SNode, plKind0)) : "";
+    const sheets = new Set<string>(), classes = new Set<string>(), groups = new Set<string>();
+    for (const it of doc.items.values()) {
+      if (it.kind === "footprint") {
+        const sn = kid(it.node, "sheetname"); if (sn && sval(sn)) sheets.add(sval(sn));
+        const cc = kid(it.node, "component_classes"); if (cc) for (const c of cc.slice(1)) if (isList(c) && c[0] === "class") classes.add(String(c[1]));
+      } else if (it.kind === "group" && typeof it.node[1] === "string" && it.node[1]) groups.add(String(it.node[1]));
+    }
+    let plKind: PlacementKind = plKind0;
+    const radios: HTMLInputElement[] = [];
+    const radio = (k: PlacementKind, label: string, control?: Field<string>): HTMLElement => {
+      const r = h("input", { type: "radio", name: "pd-placement", checked: plKind0 === k, disabled: ro, "data-k": "placement-" + k }) as HTMLInputElement;
+      r.addEventListener("change", () => { if (r.checked) plKind = k; });
+      radios.push(r);
+      return h("div", { class: "kd-row" }, h("label", { class: "pd-check" }, r, label), control ? control.el : null);
+    };
+    const pick = (set: Set<string>, kind: PlacementKind, key: string): Field<string> => selectField<string>(plKind0 === kind ? plSrc0 : "", withCurrent([["", ""], ...Array.from(set).sort().map((x): [string, string] => [x, x])], plKind0 === kind ? plSrc0 : ""), { ro, key });
+    const sheet = pick(sheets, "sheetname", "placementSheet"), cls = pick(classes, "component_class", "placementClass"), grp = pick(groups, "group", "placementGroup");
+    const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
+    const out = outlineFields(node, ro);
+    const keepPage = h("div", { style: "padding:6px 8px;display:grid;gap:4px" }, tracks.el, vias.el, pads.el, pour.el, fps.el);
+    const placePage = h("div", { style: "padding:6px 8px;display:grid;gap:4px" }, radio("none", "No placement"), radio("sheetname", "Place items from sheet:", sheet),
+      radio("component_class", "Place items matching component class:", cls), radio("group", "Place items in group:", grp));
+    body.append(h("div", { class: "pd-zone" }, layers.el,
+      h("div", null,
+        form([["Area name:", name.el]], true),
+        notebook([
+          { label: "Keepouts", build(el) { el.append(keepPage); } },
+          { label: "Placement", build(el) { el.append(placePage); } },
+        ]).el,
+        h("div", { style: "padding:6px 0" }, form([["Outline display:", out.outline.el], ["Outline hatch pitch:", out.pitch.el, unitLabel()]]), locked.el))));
+    return (n) => {
+      const err = layers.apply(n); if (err) return err;
+      if (name.get().trim()) put(n, "name", `(name ${quote(name.get().trim())})`, ["hatch", "priority", "connect_pads"]); else put(n, "name", null);
+      if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
+      out.apply(n);
+      const v = (f: Field<boolean>): string => (f.get() ? "not_allowed" : "allowed");
+      put(n, "keepout", `(keepout (tracks ${v(tracks)}) (vias ${v(vias)}) (pads ${v(pads)}) (copperpour ${v(pour)}) (footprints ${v(fps)}))`, ["placement", "fill", "polygon"]);
+      const src = plKind === "sheetname" ? sheet.get() : plKind === "component_class" ? cls.get() : plKind === "group" ? grp.get() : "";
+      if (plKind !== plKind0 || src !== plSrc0) {
+        const kindTok = plKind === "none" ? (plKind0 === "none" ? "sheetname" : plKind0) : plKind;
+        put(n, "placement", `(placement (enabled ${plKind === "none" ? "no" : "yes"}) (${kindTok} ${quote(plKind === "none" ? "" : src)}))`, ["fill", "polygon"]);
+      }
+      void radios;
+      return undefined;
+    };
+  }, create);
+}
+
+// ---------------------------------------------------------------- Non Copper Zone Properties (DIALOG_NONCOPPER_ZONES_EDITOR)
+function nonCopperZoneDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
+  const doc = ctx.doc as KDoc;
+  return itemDialog(ctx, item, "Non Copper Zone Properties", 640, (node, body, ro) => {
+    const layers = zoneLayerList(doc, node, allLayers(doc).filter(([n]) => !/\.Cu$/.test(n)), ro);
+    const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
+    const out = outlineFields(node, ro);
+    const fill = kid(node, "fill") || ["fill"];
+    const minW = lenField(nval(kid(node, "min_thickness"), 1, 0.25), { ro, key: "minWidth" });
+    const smooth = selectField<string>(sval(kid(fill, "smoothing")) || "none", [["none", "None"], ["chamfer", "Chamfer"], ["fillet", "Fillet"]], { ro, key: "smoothing" });
+    const radius = lenField(nval(kid(fill, "radius")), { ro, key: "radius" });
+    const hatchMode = sval(kid(fill, "mode")) === "hatch";
+    const ftype = selectField<string>(hatchMode ? "hatch" : "solid", [["solid", "Solid fill"], ["hatch", "Hatch pattern"]], { ro, key: "fillType" });
+    const orient = numField(nval(kid(fill, "hatch_orientation")), { ro, key: "hatchOrientation", digits: 1 });
+    const hw = lenField(nval(kid(fill, "hatch_thickness"), 1, 1), { ro, key: "hatchWidth" }), hg = lenField(nval(kid(fill, "hatch_gap"), 1, 1.5), { ro, key: "hatchGap" });
+    const effort = numField(nval(kid(fill, "hatch_smoothing_level")), { ro, key: "smoothingEffort", digits: 0 });
+    effort.input.title = "Value of smoothing effort\n0 = no smoothing\n1 = chamfer\n2 = round corners\n3 = round corners (finer shape)";
+    const amount = numField(nval(kid(fill, "hatch_smoothing_value"), 1, 0.1), { ro, key: "smoothingAmount", digits: 2 });
+    amount.input.title = "Ratio between smoothed corners size and the gap between lines\n0 = no smoothing\n1.0 = max radius/chamfer size (half gap value)";
+    body.append(h("div", { class: "pd-zone" }, layers.el,
+      h("div", null,
+        box("Shape", form([["Outline style:", out.outline.el], ["Outline hatch pitch:", out.pitch.el, unitLabel()], ["Minimum width:", minW.el, unitLabel()],
+          ["Corner smoothing:", smooth.el], ["Chamfer distance:", radius.el, unitLabel()]]), locked.el),
+        box("Fill", form([["Fill type:", ftype.el], ["Orientation:", orient.el, unitLabel("degree")], ["Hatch width:", hw.el, unitLabel()], ["Hatch gap:", hg.el, unitLabel()],
+          ["Smoothing effort:", effort.el], ["Smoothing amount:", amount.el]])))));
+    return (n) => {
+      const err = layers.apply(n); if (err) return err;
+      if (minW.get() < 0.001) return "Minimum width must be at least 0.001 mm.";
+      if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
+      out.apply(n);
+      put(n, "min_thickness", `(min_thickness ${f6(minW.get())})`, ["filled_areas_thickness", "fill", "polygon"]);
+      let f = kid(n, "fill"); if (!f) { put(n, "fill", "(fill)", ["polygon", "filled_polygon"]); f = kid(n, "fill") as SNode; }
+      if (smooth.get() === "none") { put(f, "smoothing", null); put(f, "radius", null); }
+      else { put(f, "smoothing", `(smoothing ${smooth.get()})`, ["radius", "hatch_thickness"]); put(f, "radius", `(radius ${f6(radius.get())})`, ["hatch_thickness"]); }
+      if (ftype.get() === "hatch") {
+        put(f, "mode", "(mode hatch)", ["thermal_gap", "thermal_bridge_width", "smoothing", "radius", "island_removal_mode", "hatch_thickness"]);
+        put(f, "hatch_thickness", `(hatch_thickness ${f6(hw.get())})`); put(f, "hatch_gap", `(hatch_gap ${f6(hg.get())})`); put(f, "hatch_orientation", `(hatch_orientation ${f6(orient.get())})`);
+        put(f, "hatch_smoothing_level", `(hatch_smoothing_level ${Math.max(0, Math.min(3, Math.round(effort.get())))})`); put(f, "hatch_smoothing_value", `(hatch_smoothing_value ${f6(amount.get())})`);
+      } else if (hatchMode) { put(f, "mode", null); }
+      return undefined;
+    };
+  }, create);
+}
+/** InvokeCopperZonesEditor / InvokeRuleAreaEditor / InvokeNonCopperZonesEditor on the template of a zone about to be drawn. */
+export function newZoneDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | null) => void): boolean {
+  const item = { id: "", kind: "zone", node, geom: [], bbox: null } as unknown as KItem;
+  const keepout = !!kid(node, "keepout"), copper = Array.from(zoneLayerSet(ctx.doc as KDoc, node)).some((l) => /\.Cu$/.test(l));
+  const ok = keepout ? ruleAreaDialog(ctx, item, done) : copper ? zoneDialog(ctx, item, done) : nonCopperZoneDialog(ctx, item, done);
+  if (!ok) done(null);
+  return ok;
 }
 
 // ---------------------------------------------------------------- Text Properties
@@ -365,7 +522,7 @@ export function pcbItemDialog(ctx: ToolCtx, item: KItem): boolean {
   switch (item.kind) {
     case "segment": case "arc": return item.docType === "pcb" && !!kid(item.node, "width") ? trackViaDialog(ctx, item) : false;
     case "via": return trackViaDialog(ctx, item);
-    case "zone": return kid(item.node, "keepout") ? false : zoneDialog(ctx, item);
+    case "zone": return kid(item.node, "keepout") ? ruleAreaDialog(ctx, item) : Array.from(zoneLayerSet(ctx.doc, item.node)).some((l) => /\.Cu$/.test(l)) ? zoneDialog(ctx, item) : nonCopperZoneDialog(ctx, item);
     case "gr_text": return textDialog(ctx, item);
     case "gr_line": case "gr_rect": case "gr_circle": case "gr_arc": case "gr_poly": case "gr_curve": return shapeDialog(ctx, item);
     case "footprint": return footprintDialog(ctx, item);

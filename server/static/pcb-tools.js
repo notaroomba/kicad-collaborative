@@ -2353,13 +2353,49 @@ function drawSnapMode(d, ctrl) {
   return "free";
 }
 function constrainDraw(d, p, ctrl) {
-  const mode = drawSnapMode(d, ctrl); if (mode === "free") return p;
-  const o = POLY_TOOLS.has(d.shape) ? d.pts[d.pts.length - 1] : d.start, v = vsub(p, o);
-  return vadd(o, mode === "90" ? snap90(v) : snapVec45(v, d.shape === "grect"));
+  const mode = drawSnapMode(d, ctrl); if (mode === "free" || POLY_TOOLS.has(d.shape)) return p;   // polygons bend a leader instead
+  const v = vsub(p, d.start);
+  return vadd(d.start, mode === "90" ? snap90(v) : snapVec45(v, d.shape === "grect"));
 }
+// ---- POLYGON_GEOM_MANAGER: in the 45 and 90 modes a polygon, zone or rule area reaches the cursor through a leader
+// that bends once (build45DegLeader / build90DegLeader), and a loop line of the same kind runs back to the first corner.
+const normDeg180 = (a) => { while (a <= -180) a += 360; while (a > 180) a -= 360; return a; };
+const normDeg90 = (a) => { while (a < -90) a += 180; while (a > 90) a -= 180; return a; };
+const vecDeg = (v) => Math.atan2(v[1], v[0]) * 180 / Math.PI;
+function build45Leader(end, pts) {
+  const last = pts[pts.length - 1], v = vsub(end, last);
+  if (pts.length < 2) return [last, vadd(last, snap45(v))];
+  const lineA = vecDeg(v), prevA = vecDeg(snap45(vsub(last, pts[pts.length - 2])));
+  const vertical = Math.abs(v[1]) > Math.abs(v[0]), horizontal = Math.abs(v[1]) < Math.abs(v[0]);
+  const angDiff = Math.abs(normDeg180(lineA - prevA));
+  let bendEnd = angDiff < 45 || (angDiff > 90 && angDiff < 135);
+  if (Math.abs(Math.abs(normDeg90(prevA)) - 45) < 1e-9) bendEnd = !bendEnd;
+  let mid = end;
+  if (bendEnd) {
+    if (vertical) mid = [last[0], v[1] > 0 ? end[1] - Math.abs(v[0]) : end[1] + Math.abs(v[0])];
+    else if (horizontal) mid = [v[0] > 0 ? end[0] - Math.abs(v[1]) : end[0] + Math.abs(v[1]), last[1]];
+  } else {
+    if (vertical) mid = [end[0], v[1] > 0 ? last[1] + Math.abs(v[0]) : last[1] - Math.abs(v[0])];
+    else if (horizontal) mid = [v[0] > 0 ? last[0] + Math.abs(v[1]) : last[0] - Math.abs(v[1]), end[1]];
+  }
+  return [last, mid, end];
+}
+function build90Leader(end, pts) {
+  const last = pts[pts.length - 1];
+  if (last[0] === end[0] || last[1] === end[1]) return [last, end];
+  return [last, [end[0], last[1]], end];
+}
+/** updateTemporaryLines: { leader, loop } for the cursor at `end`. */
+function polyLeader(d, end, mode) {
+  if (mode === "45") return { leader: build45Leader(end, d.pts), loop: build45Leader(end, d.pts.slice().reverse()).reverse() };
+  if (mode === "90") return { leader: build90Leader(end, d.pts), loop: build90Leader(end, d.pts.slice().reverse()).reverse() };
+  return { leader: [d.pts[d.pts.length - 1], end], loop: [] };
+}
+const pushPt = (arr, p) => { if (!arr.length || !samePt(arr[arr.length - 1], p)) arr.push(p); };
 /** The cursor of the shape being drawn: the grid-resolved point, constrained. */
 function drawTrack(d, raw, ctrl) {
   d.cur = constrainDraw(d, raw, ctrl);
+  if (POLY_TOOLS.has(d.shape)) { d.mode = drawSnapMode(d, ctrl); Object.assign(d, polyLeader(d, d.cur, d.mode)); }
   if (DIM_TYPE[d.shape] && d.end) dimTrack(d, d.cur);
 }
 /** DRAWING_TOOL::WIDTH_STEP (0.1 mm): Ctrl++ / Ctrl+- while a shape is being drawn (incWidth / decWidth). */
@@ -2397,6 +2433,17 @@ function undoChainSegment(ctx) {
 function drawClick(ctx, hv, t, ev) {
   if (S.draw) { const c = constrainDraw(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey))); hv = Object.assign({}, hv, { x: c[0], y: c[1] }); }
   const p = [hv.x, hv.y], layer = S.gfxLayer;
+  if (!S.draw && (t === "zone" || t === "rulearea") && newItemDialogs.zone) {
+    // ZONE_CREATE_HELPER::OnFirstPoint → createNewZone: the properties dialog on a template first; Cancel ends it
+    const tpl = zoneTemplate(ctx, t === "rulearea"), d = { shape: t, start: p, cur: p.slice(), pts: [p], pending: true, template: null, layer: zoneLayers(tpl)[0] };
+    S.draw = d; ctx.requestRender();
+    newItemDialogs.zone(ctx, tpl, (node) => {
+      if (S.draw !== d) return;
+      if (!node) { S.draw = null; ctx.requestRender(); return; }
+      d.template = node; d.pending = false; d.layer = zoneLayers(node)[0] || d.layer; ctx.requestRender();
+    });
+    return;
+  }
   if (!S.draw) { S.draw = { shape: t, start: p, cur: p.slice(), pts: [p] }; if (t === "dimortho") S.draw.orientation = "h"; ctx.requestRender(); return; }
   const d = S.draw;
   if (t === "garc") {
@@ -2407,8 +2454,16 @@ function drawClick(ctx, hv, t, ev) {
     S.draw = null; ctx.requestRender(); return;
   }
   if (POLY_TOOLS.has(t)) {
+    if (d.pending) return;   // the properties dialog is still open
+    drawTrack(d, p, !!(ev && (ev.ctrlKey || ev.metaKey)));
+    // NewPointClosesOutline (or the last corner clicked again, the double-click): done
     if (samePt(p, d.pts[0]) || samePt(p, d.pts[d.pts.length - 1])) finishPoly(ctx);
-    else { d.pts.push(p); ctx.requestRender(); }
+    else {   // AddPoint: the leader's bend and its end are locked in
+      const L = d.leader || [d.pts[d.pts.length - 1], p];
+      if (L.length > 1) { pushPt(d.pts, L[L.length - 2]); pushPt(d.pts, L[L.length - 1]); } else pushPt(d.pts, p);
+      drawTrack(d, d.cur, !!(ev && (ev.ctrlKey || ev.metaKey)));
+      ctx.requestRender();
+    }
     return;
   }
   if (t === "gcurve") {
@@ -2438,9 +2493,44 @@ function drawClick(ctx, hv, t, ev) {
   S.draw = t === "gline" ? { shape: t, start: p, cur: p.slice(), pts: [p], chain: (d.chain || []).concat([{ id: add.id, start: d.start, end: p }]) } : null;
   ctx.requestRender();
 }
+/**
+ * ZONE_CREATE_HELPER::createNewZone: the board's default zone settings on the active layer, no name, the highlighted
+ * net (else the first selected connected item's), a unique priority on copper; a rule area keeps out tracks, vias and pads.
+ */
+function zoneTemplate(ctx, keepout) {
+  const doc = ctx.doc, layer = sizesOf(ctx).activeLayer || S.layer;
+  if (keepout) return ruleAreaNode([], [layer]);
+  let net = { code: 0, name: "" };
+  if (S.highlightNet) { const t = netTable(doc); const n = boardNets(doc).find((x) => t.key(x) === S.highlightNet); if (n) net = n; }
+  if (!net.name) {
+    const first = Array.from(selectionIds(ctx))[0], it = first && doc.items.get(first);
+    if (it && it.kind !== "footprint" && K.kid(it.node, "net")) net = netOf(it.node);
+  }
+  const node = zoneNode(doc, [], layer, net);
+  if (!/\.Cu$/.test(layer)) { const pr = K.kid(node, "priority"); if (pr) node.splice(node.indexOf(pr), 1); }
+  return node;
+}
+/** POLYGON_GEOM_MANAGER's locked points, then (45 / 90 modes) the leader's and the loop's bends: ZONE_CREATE_HELPER::OnComplete. */
+function polyOutline(d) {
+  const out = []; for (const p of d.pts) pushPt(out, p);
+  if (d.mode === "45" || d.mode === "90") {
+    for (const p of (d.leader || []).slice(1)) pushPt(out, p);
+    for (const p of (d.loop || []).slice(1, -1)) pushPt(out, p);
+  }
+  while (out.length > 1 && samePt(out[out.length - 1], out[0])) out.pop();
+  return out;
+}
 function finishPoly(ctx) {
-  const d = S.draw; if (!d || !POLY_TOOLS.has(d.shape)) return;
+  const d = S.draw; if (!d || !POLY_TOOLS.has(d.shape) || d.pending) return;
   S.draw = null; ctx.requestRender();
+  d.pts = polyOutline(d);
+  if (d.template) {   // the zone the dialog set up, with the outline drawn
+    if (d.pts.length < 3) return;   // OnComplete: fewer than three corners scrap the zone
+    const node = JSON.parse(JSON.stringify(d.template)), poly = K.kid(node, "polygon");
+    const pts = ["pts", ...d.pts.map(xy)];
+    if (poly) poly.splice(1, poly.length - 1, pts); else node.push(["polygon", pts]);
+    ctx.commit([addedChange(ctx.doc, node, netOf(node))], d.shape === "rulearea" ? "rule area" : "zone"); return;
+  }
   if (d.pts.length < 3) { ctx.toast("A polygon needs at least three corners"); return; }
   if (d.shape === "gpoly") { ctx.commit([addedChange(ctx.doc, withStroke(polyNode(d.pts, S.gfxLayer)))], "polygon"); return; }
   if (d.shape === "rulearea") { ctx.commit([addedChange(ctx.doc, ruleAreaNode(d.pts, RULE_AREA_LAYERS))], "rule area"); return; }
@@ -5300,7 +5390,7 @@ function drawOverlay(c, view, ctx) {
   if (S.route) drawRoute(c, ctx, px);
   // drawing preview
   if (S.draw) {
-    const d = S.draw; const layer = d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer;
+    const d = S.draw; const layer = d.layer || (d.shape === "zone" ? S.layer : d.shape === "rulearea" ? RULE_AREA_LAYERS[0] : S.gfxLayer);
     c.globalAlpha = 0.85; c.strokeStyle = color(layer); c.lineWidth = Math.max(drawWidth(layer), 1.5 * px);
     const box = () => [Math.min(d.start[0], d.cur[0]), Math.min(d.start[1], d.cur[1]), Math.abs(d.cur[0] - d.start[0]), Math.abs(d.cur[1] - d.start[1])];
     if (d.shape === "gline") line(c, d.start, d.cur);
@@ -5319,8 +5409,12 @@ function drawOverlay(c, view, ctx) {
       const pts = d.pts.concat([d.cur]); polyline(c, K.bezierPts(pts), false);
       c.setLineDash([2 * px, 2 * px]); polyline(c, pts, false); c.setLineDash([]);   // the control polygon
     } else if (POLY_TOOLS.has(d.shape)) {
-      polyline(c, d.pts.concat([d.cur]), false);
-      if (d.pts.length > 1) { c.setLineDash([2 * px, 2 * px]); line(c, d.cur, d.pts[0]); c.setLineDash([]); }
+      if (d.pending) { /* the properties dialog is open: nothing drawn yet */ }
+      else {
+        polyline(c, d.pts.concat((d.leader || [null, d.cur]).slice(1)), false);
+        const loop = d.loop && d.loop.length > 1 ? d.loop : [d.cur, d.pts[0]];
+        if (d.pts.length > 1) { c.setLineDash([2 * px, 2 * px]); polyline(c, loop, false); c.setLineDash([]); }
+      }
     } else if (DIM_TYPE[d.shape]) drawDimPreview(c, d, px);
     else ring(c, d.start, Math.hypot(d.cur[0] - d.start[0], d.cur[1] - d.start[1]));
     if (d.pts) { c.fillStyle = HL; const h = 3 * px; for (const p of d.pts) c.fillRect(p[0] - h, p[1] - h, 2 * h, 2 * h); }
@@ -5580,9 +5674,14 @@ const pcb = {
       return false;
     case "Backspace":
       if (S.route) { if (editing()) undoRouteLeg(ctx); return true; }   // routerUndoLastSegment: silent with nothing fixed
-      if (S.draw && (POLY_TOOLS.has(S.draw.shape) || S.draw.shape === "gcurve")) { if (S.draw.pts.length > 1) S.draw.pts.pop(); else S.draw = null; ctx.requestRender(); return true; }
-      // fall through: with nothing being drawn Backspace deletes like Delete
+      // fall through: deleteLastPoint and doDelete are the same while drawing; with nothing drawn Backspace deletes like Delete
     case "Delete":
+      // DeleteLastCorner: the last corner goes and the leader is drawn again from the one before; the first ends the shape
+      if (S.draw && (POLY_TOOLS.has(S.draw.shape) || S.draw.shape === "gcurve")) {
+        const d = S.draw; if (d.pending) return true;
+        if (d.pts.length > 1) { d.pts.pop(); if (POLY_TOOLS.has(d.shape)) drawTrack(d, d.cur, !!S.drawCtrl); } else S.draw = null;
+        ctx.requestRender(); return true;
+      }
       // deleteLastPoint / doDelete in a line chain: take the last committed segment back; with none, end the line
       if (S.draw && S.draw.shape === "gline") { if (editing() && !undoChainSegment(ctx)) { S.draw = null; ctx.requestRender(); } return true; }
       if (S.route) { if (editing()) undoRouteLeg(ctx); return true; }   // ACTIONS::doDelete while routing: undo the last segment
@@ -5651,7 +5750,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, snapVec45, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)
