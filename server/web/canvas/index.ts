@@ -36,6 +36,7 @@ import { DASH_RATIOS, HIDDEN_TEXT_ALPHA, HL_DIM, MARKER_COLORS, MARKER_CORNERS, 
 import { boardSetup } from "./board-setup";
 import { DRC_ITEMS } from "./drc-items";
 import { pcbNetlist } from "./pcb-netlist";
+import { schNets } from "./sch-nets";
 import { projectFile } from "./project-file";
 import { arcFrom3, atOf, bezierPts, boxOf, cloneNode, cornersInSequence, effectsOf, fillOf, kid, kids, num, parse, parseAll, pointInPoly, ptsOf, quotedMask, str, strokeOf, uuidOf } from "./sexpr";
 import { DEFAULT_DRAWING_SHEET, PRODUCT_NAME, TB_TOKENS, WS_TOKENS, alphabeticFromIndex, buildDrawingSheet, defaultDrawingSheet, documentDrawingSheet, expandTextVars, incrementLabel, indexFromAlphabetic, parseDrawingSheet, sheetTextPen, sheetTextVars, varResolver } from "./sheet";
@@ -78,5 +79,5 @@ export const api = { parse, parseAll, serialize, serializeItem, parseDoc, applyD
 
 api.itemTouchesRect = itemTouchesRect; api.itemVisible = itemVisible; api.geomTouchesRect = geomTouchesRect;
 api.boardItemBox = boardItemBox; api.presenceSelection = presenceSelection;   // BOARD_ITEM::GetBoundingBox for the presence payload (web/canvas/kicad-bbox.ts)
-api.pcbNetlist = pcbNetlist; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile; api.padModel = padModel;   // the board dialogs' pure halves (web/editor/pcbdialogs)
+api.pcbNetlist = pcbNetlist; api.schNets = schNets; api.boardSetup = boardSetup; api.DRC_ITEMS = DRC_ITEMS; api.projectFile = projectFile; api.padModel = padModel;   // the board dialogs' pure halves (web/editor/pcbdialogs)
 root.KiCadCanvas = api;

@@ -1,6 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 // @ts-nocheck — moved verbatim from the original module; typing is being tightened module by module
 import { installDialogs } from "../dialogs/index";
+import { installSchNets } from "./schnets";
 import "./dom";
 import "./appstore";
 import "./util";
@@ -468,6 +469,7 @@ document.addEventListener("keydown", (ev) => {
   if (k === "Delete" || k === "Backspace") deleteSelected();
 });
 
+installSchNets();   // the net highlight kept by name across the hierarchy (editor/schnets.ts)
 installDialogs(HANDLERS);   // Page Settings, Find and Replace, Symbol Fields Table / BOM, Assign Footprints, Schematic Setup, Preferences, groups
 store.slice("tool", { handled: Object.keys(HANDLERS) });
 installPcbRouting();

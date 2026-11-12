@@ -33,7 +33,21 @@ export interface NetComponent {
   /** pad number -> net / pin name / electrical type */
   pins: Map<string, NetPin>;
 }
-export interface Netlist { components: NetComponent[]; nets: Map<string, { ref: string; pin: string }[]>; warnings: string[] }
+export interface Netlist {
+  components: NetComponent[]; nets: Map<string, { ref: string; pin: string }[]>; warnings: string[];
+  /** every named net (and bus) of the hierarchy with the items on it, sheet instance by sheet instance (CONNECTION_GRAPH's net map) */
+  netMap?: Map<string, NetEntry>;
+  /** the sheet instances the hierarchy walk found, root first ("/" then "/Sub/") */
+  instances?: SheetInstance[];
+}
+/** An item of a net on one sheet instance: a wire, label, junction, no-connect, bus entry, a symbol pin or a sheet pin. */
+export interface NetMember {
+  inst: number; id: string; kind: string;
+  /** symbol pin number / sheet pin name (kind "pin" / "sheet_pin") */
+  pin?: string; pinName?: string; ref?: string; power?: boolean; text?: string;
+}
+export interface NetEntry { name: string; bus: boolean; members: NetMember[]; busMembers: string[] }
+export interface SheetInstance { index: number; human: string; file: string; uuidPath: string[]; sheetName: string }
 
 // ---------------------------------------------------------------- small s-expression helpers
 const isList = Array.isArray;
@@ -85,7 +99,7 @@ const isBusText = (t: string): boolean => /\[\d+\.\.\d+\]/.test(t) || /\{[^}]*\s
 const P_PIN = 1, P_SHEET_PIN = 2, P_HIER = 3, P_LOCAL = 4, P_BUS_MEMBER = 5, P_POWER = 6, P_GLOBAL = 7;
 interface Driver { prio: number; name: string; depth: number }
 interface PinRef { comp: string | null; ref: string; unitRef: string; pin: SymPin; pins: SymPin[]; uuid: string; power: boolean; inNetlist: boolean }
-interface Instance { sheet: SheetFile; uuidPath: string[]; human: string; depth: number; index: number; sheetUuids: string[] }
+interface Instance { sheet: SheetFile; uuidPath: string[]; human: string; depth: number; index: number; sheetUuids: string[]; name: string }
 
 class UnionFind {
   parent: number[] = [];
@@ -166,7 +180,9 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
   const compPins = new Map<string, PinRef[]>();
 
   // ---- the sheet instances, breadth first
-  const instances: Instance[] = [{ sheet: root, uuidPath: [root.uuid], human: "/", depth: 0, index: 0, sheetUuids: [] }];
+  const instances: Instance[] = [{ sheet: root, uuidPath: [root.uuid], human: "/", depth: 0, index: 0, sheetUuids: [], name: "" }];
+  const mem = new Map<number, NetMember[]>();           // node -> the items attached to it (the net map's members)
+  const addMem = (n: number, m: NetMember): void => { const l = mem.get(n); if (l) l.push(m); else mem.set(n, [m]); };
   const childOf = new Map<string, number>();            // "<instance index>|<sheet item id>" -> child instance index
   for (let q = 0; q < instances.length && instances.length < 2000; q++) {
     const inst = instances[q];
@@ -177,7 +193,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
       const sub = file ? loadSheet(file, inst.sheet) : null;
       if (!sub) { warnings.push(`Sheet file '${file}' of sheet '${name}' is not in the project.`); continue; }
       childOf.set(inst.index + "|" + it.id, instances.length);
-      instances.push({ sheet: sub, uuidPath: [...inst.uuidPath, it.id], human: inst.human + name + "/", depth: inst.depth + 1, index: instances.length, sheetUuids: [...inst.sheetUuids, it.id] });
+      instances.push({ sheet: sub, uuidPath: [...inst.uuidPath, it.id], human: inst.human + name + "/", depth: inst.depth + 1, index: instances.length, sheetUuids: [...inst.sheetUuids, it.id], name });
     }
   }
 
@@ -191,6 +207,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
       if (it.kind !== "wire" && it.kind !== "bus") continue;
       const pts = ptsOf(it.node) as Pt[]; if (pts.length < 2) continue;
       const node = uf.add();
+      addMem(node, { inst: I, id: it.id, kind: it.kind });
       for (let k = 1; k < pts.length; k++) {
         const li = lines.length; lines.push({ a: pts[k - 1], b: pts[k], node, bus: it.kind === "bus" });
         for (const p of [pts[k - 1], pts[k]]) { const key = pkey(p); const l = ends.get(key); if (l) l.push(li); else ends.set(key, [li]); }
@@ -205,10 +222,12 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
     };
     // line ends meet line ends, and a line end resting on the middle of another line joins it
     for (const l of lines) for (const p of [l.a, l.b]) for (const n of linesAt(p, l.bus)) uf.union(l.node, n);
+    const junctions: { id: string; p: Pt }[] = [];
     for (const it of doc.items.values()) {
       if (it.kind !== "junction") continue;
       const p = (atOf(it.node) as number[]).slice(0, 2) as Pt;
       for (const bus of [false, true]) { const ns = linesAt(p, bus); for (let k = 1; k < ns.length; k++) uf.union(ns[0], ns[k]); }
+      junctions.push({ id: it.id, p });
     }
     // point terminals: a node each, joined to the line under them and to one another
     const points = new Map<string, number[]>();
@@ -224,6 +243,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
       if (k === "label" || k === "global_label" || k === "hierarchical_label") {
         const text = str(n[1]), p = (atOf(n) as number[]).slice(0, 2) as Pt, bus = isBusText(text);
         const t = terminal(p, bus);
+        addMem(t, { inst: I, id: it.id, kind: k, text });
         if (bus) {
           const l = busLabels.get(t) || []; busLabels.set(t, l);
           l.push({ text, prio: k === "label" ? P_LOCAL : k === "global_label" ? P_GLOBAL : P_HIER, inst });
@@ -232,11 +252,15 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
         else if (k === "global_label") { uf.union(t, keyNode("global:" + text)); addDriver(t, { prio: P_GLOBAL, name: escapeNetName(text), depth: inst.depth }); }
         // a hierarchical label also names the net on its own sheet: it joins the local labels of that name
         else { uf.union(t, keyNode(`${I}|hier:${text}`)); uf.union(t, keyNode(`${I}|local:${text}`)); addDriver(t, { prio: P_HIER, name: inst.human + escapeNetName(text), depth: inst.depth }); }
+      } else if (k === "netclass_flag" || k === "directive_label") {
+        // a directive label sits on a net without naming it
+        addMem(terminal((atOf(n) as number[]).slice(0, 2) as Pt, false), { inst: I, id: it.id, kind: k, text: str(n[1]) });
       } else if (k === "sheet") {
         const child = childOf.get(I + "|" + it.id);
         for (const pin of kids(n, "pin") as SNode[]) {
           const text = str(pin[1]), p = (atOf(pin) as number[]).slice(0, 2) as Pt, bus = isBusText(text);
           const t = terminal(p, bus);
+          addMem(t, { inst: I, id: it.id, kind: "sheet_pin", pin: text, text: propVal(n, "Sheetname") || propVal(n, "Sheet name") });
           if (bus) {
             const l = busLabels.get(t) || []; busLabels.set(t, l); l.push({ text, prio: P_SHEET_PIN, inst });
             if (child !== undefined) uf.union(t, keyNode(`${child}|hbus:${text}`));
@@ -265,6 +289,7 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
         }
         for (const pin of pins) {
           const t = terminal([pin.x, pin.y], false);
+          addMem(t, { inst: I, id: it.id, kind: "pin", pin: pin.number, pinName: pin.name, ref: unitRef, power });
           if (power && value && pin.type === "power_in") { uf.union(t, keyNode("global:" + value)); addDriver(t, { prio: P_POWER, name: escapeNetName(value), depth: inst.depth }); continue; }
           if (power) continue;                                   // a PWR_FLAG's pin drives nothing by name
           if (pin.hidden && pin.type === "power_in") { uf.union(t, keyNode("global:" + pin.name)); addDriver(t, { prio: P_POWER, name: escapeNetName(pin.name), depth: inst.depth }); }
@@ -279,6 +304,16 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
       if (it.kind !== "no_connect") continue;
       const p = (atOf(it.node) as number[]).slice(0, 2) as Pt;
       const l = points.get("w" + pkey(p)); if (l) ncNodes.add(l[0]); else for (const ln of linesAt(p, false)) ncNodes.add(ln);
+      const on = l ? l[0] : linesAt(p, false)[0]; addMem(on !== undefined ? on : terminal(p, false), { inst: I, id: it.id, kind: "no_connect" });
+    }
+    // a junction belongs to the net of the lines it joins (wires first); a bus-wire entry to the wire at its free end
+    for (const j of junctions) { const w = linesAt(j.p, false), b = linesAt(j.p, true); addMem(w.length ? w[0] : b.length ? b[0] : terminal(j.p, false), { inst: I, id: j.id, kind: "junction" }); }
+    for (const it of doc.items.values()) {
+      if (it.kind !== "bus_entry") continue;
+      const [x, y] = atOf(it.node) as number[], sz = kid(it.node, "size") as SNode | null;
+      const p1: Pt = [x, y], p2: Pt = [x + (sz ? num(sz[1]) : 0), y + (sz ? num(sz[2]) : 0)];
+      const wireEnd = linesAt(p1, true).length ? p2 : linesAt(p2, true).length ? p1 : p2;
+      addMem(terminal(wireEnd, false), { inst: I, id: it.id, kind: "bus_entry" });
     }
   }
 
@@ -295,11 +330,15 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
     return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
   };
   let groupN = 0;
-  for (const labels of busGroups.values()) {
+  const busInfo: { rep: number; name: string; members: number[] }[] = [];
+  for (const [rep, labels] of busGroups) {
     const best = labels.slice().sort((a, b) => better({ prio: a.prio, depth: a.inst.depth, name: a.text }, { prio: b.prio, depth: b.inst.depth, name: b.text }))[0];
+    const busPrefix = best.prio === P_GLOBAL ? "" : best.inst.human;
+    const info = { rep, name: busPrefix + escapeNetName(best.text), members: [] as number[] }; busInfo.push(info);
     const members = busVector(best.text); if (!members) continue;
-    const prefix = best.prio === P_GLOBAL ? "" : best.inst.human;
+    const prefix = busPrefix;
     const g = groupN++;
+    for (let k = 0; k < members.length; k++) info.members.push(keyNode(`busmember:${g}:${k}`));
     for (const l of labels) {
       const local = busVector(l.text); if (!local) continue;
       for (let k = 0; k < local.length && k < members.length; k++) {
@@ -319,18 +358,18 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
   for (const n of ncNodes) groupOf(n).nc = true;
   for (const n of sheetPinNodes) groupOf(n).sheetPin = true;
   const nets = new Map<string, { ref: string; pin: string }[]>();
+  const nameOf = (g: Group): string => {
+    const strong = g.drivers.filter((d) => d.prio >= P_HIER);
+    if (strong.length) return strong.sort(better)[0].name;
+    if (g.drivers.length) return g.drivers.sort(better)[0].name;        // a sheet pin with nothing behind it
+    const cands = g.pins.filter((p) => p.inNetlist);
+    const force = g.nc || cands.length === 1;
+    return cands.map((p) => defaultPinNet(p, force)).sort((a, b) => better({ prio: P_PIN, depth: 0, name: a }, { prio: P_PIN, depth: 0, name: b }))[0] || "";
+  };
   for (const g of groups.values()) {
     const netPins = g.pins.filter((p) => p.comp);
     if (!netPins.length) continue;
-    let name: string;
-    const strong = g.drivers.filter((d) => d.prio >= P_HIER);
-    if (strong.length) name = strong.sort(better)[0].name;
-    else if (g.drivers.length) name = g.drivers.sort(better)[0].name;        // a sheet pin with nothing behind it
-    else {
-      const cands = g.pins.filter((p) => p.inNetlist);
-      const force = g.nc || cands.length === 1;
-      name = cands.map((p) => defaultPinNet(p, force)).sort((a, b) => better({ prio: P_PIN, depth: 0, name: a }, { prio: P_PIN, depth: 0, name: b }))[0];
-    }
+    const name = nameOf(g);
     for (const p of netPins) {
       const comp = components.get(p.comp as string) as NetComponent;
       if (!p.pin.number) continue;
@@ -341,7 +380,23 @@ export function buildNetlist(root: SheetFile, loadSheet: (file: string, parent: 
       const l = nets.get(name); if (l) l.push({ ref: comp.ref, pin: p.pin.number }); else nets.set(name, [{ ref: comp.ref, pin: p.pin.number }]);
     }
   }
-  return { components: Array.from(components.values()), nets, warnings };
+  // ---- the net map: every named net and bus with its items (a net with no name, a lone wire, is left out as KiCad does)
+  const netMap = new Map<string, NetEntry>();
+  const busRoots = new Map<number, { name: string; members: number[] }>();
+  for (const b of busInfo) busRoots.set(uf.find(b.rep), b);
+  const memberRoots = new Map<number, NetMember[]>();
+  for (const [n, l] of mem) { const r = uf.find(n); const x = memberRoots.get(r); if (x) x.push(...l); else memberRoots.set(r, l.slice()); }
+  const groupName = (r: number): string => { const g = groups.get(r); return g ? nameOf(g) : ""; };
+  for (const [r, members] of memberRoots) {
+    const bus = busRoots.get(r);
+    const name = bus ? bus.name : groupName(r); if (!name) continue;
+    let e = netMap.get(name);
+    if (!e) { e = { name, bus: !!bus, members: [], busMembers: [] }; netMap.set(name, e); }
+    e.members.push(...members);
+    if (bus) for (const m of bus.members) { const mn = groupName(uf.find(m)); if (mn && !e.busMembers.includes(mn)) e.busMembers.push(mn); }
+  }
+  const instOut: SheetInstance[] = instances.map((i) => ({ index: i.index, human: i.human, file: i.sheet.file, uuidPath: i.uuidPath, sheetName: i.name }));
+  return { components: Array.from(components.values()), nets, warnings, netMap, instances: instOut };
 }
 
 // ---------------------------------------------------------------- the board update

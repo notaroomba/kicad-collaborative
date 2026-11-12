@@ -280,7 +280,10 @@ export function render(doc, ctx, view, opts) {
   // a net highlight names single pads as "footprintId#padIndex" (PCB_PAINTER brightens by netcode, so the
   // footprint's other pads, its mask / paste openings of other pads and its silk stay dark)
   let hlPadFps = null;
-  if (hl && isPcb) for (const k of hl) { const i = typeof k === "string" ? k.indexOf("#") : -1; if (i > 0) (hlPadFps || (hlPadFps = new Set())).add(k.slice(0, i)); }
+  if (hl) for (const k of hl) { const i = typeof k === "string" ? k.indexOf("#") : -1; if (i > 0) (hlPadFps || (hlPadFps = new Set())).add(k.slice(0, i)); }
+  // the schematic names single pins ("symbolId#pin:<number>", a sheet's "sheetId#pin:<name>") and the fields a
+  // highlighted power symbol brightens ("symbolId#field:Value")
+  const subHl = (it, g) => hl.has(isPcb ? it.id + "#" + g.padIndex : g.pinNo !== undefined ? it.id + "#pin:" + g.pinNo : g.field ? it.id + "#field:" + g.field : "");
   const selPcb = isPcb && opts.selected && opts.selected.size ? opts.selected : null;   // board selection: repainted, not haloed
   const selGeoms = selPcb ? new Set() : null;
   let selPadFps = null;   // a pad selected on its own ("footprintId#padIndex"): only that pad is repainted
@@ -439,7 +442,7 @@ export function render(doc, ctx, view, opts) {
       const z = zOf(g);
       bucket(BUCKETS, z).push(g);
       if (itemTint && !g.hole && (g.track || g.via || g.zoneFill || (g.pad && g.t !== "text"))) { const tc = typeof itemTint === "string" ? itemTint : itemTint[g.padIndex]; if (tc) tint.set(g, tc); }
-      if (isHl || (padHl && g.padIndex !== undefined && hl.has(padHl + g.padIndex))) hlGeoms.add(g);
+      if (isHl || (padHl && (isPcb ? g.padIndex !== undefined : true) && subHl(it, g))) hlGeoms.add(g);
       if (isSel || (padSel && g.padIndex !== undefined && selPcb.has(padSel + g.padIndex))) selGeoms.add(g);
       if (netNames && g.net > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
@@ -454,7 +457,7 @@ export function render(doc, ctx, view, opts) {
       if (hidden.has(g.layer) || (g.hiddenText ? !showHiddenText : !showHiddenPins)) continue;
       const z = zOf(g);
       bucket(BUCKETS, z).push(g);
-      if (isHl) hlGeoms.add(g);
+      if (isHl || (padHl && !isPcb && subHl(it, g))) hlGeoms.add(g);
     }
   }
   ZS.length = 0;
@@ -765,10 +768,13 @@ export function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
   const colorFn = typeof style.color === "function" ? style.color : () => style.color;
   ctx.save();
   ctx.globalAlpha = style.alpha; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.setLineDash([]);
-  for (const id of ids) {
-    const it = doc.items.get(id); if (!it) continue;
+  for (const key of ids) {
+    // "itemId#pin:N" / "itemId#field:Name" (schematic) and "footprintId#padIndex" (board) halo that part alone
+    const cut = typeof key === "string" ? key.indexOf("#") : -1, id = cut > 0 ? key.slice(0, cut) : key, sub = cut > 0 ? key.slice(cut + 1) : null;
+    const it = doc.items.get(id); if (!it || (sub !== null && doc.type === "pcb")) continue;   // a board pad brightens without a halo
     for (const g of it.geom) {
       if (hidden && hidden.has(g.layer)) continue;
+      if (sub !== null && (sub !== (g.pinNo !== undefined ? "pin:" + g.pinNo : g.field ? "field:" + g.field : ""))) continue;
       const halo = colorFn(g.color); ctx.strokeStyle = halo; ctx.fillStyle = halo;
       if (g.t === "text") {
         const w = typeof textWidth === "function" ? textWidth(g.text || "", g.size, g.w || 0.1524) : (g.text || "").length * g.size * 0.75;

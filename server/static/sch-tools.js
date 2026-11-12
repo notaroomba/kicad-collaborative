@@ -457,6 +457,11 @@ function pickNet(ctx, mm) {
   if (hit && NET_PICK.has(hit.kind)) return { item: hit, at: mm };
   const pins = pinsAt(doc, mm[0], mm[1], pinTol); if (pins.length) return { item: pins[0].item, at: [pins[0].x, pins[0].y] };
   for (const it of doc.items.values()) if (it.kind === "sheet") for (const pin of kids(it.node, "pin")) { const [x, y] = atOf(pin); if (Math.hypot(x - mm[0], y - mm[1]) <= pinTol) return { item: it, at: [x, y] }; }
+  // a power symbol (its body or one of its fields) stands for the net of its single pin (highlightNet: pins.size() == 1)
+  const symId = K.hitTest(doc, mm[0], mm[1], tol), sym = symId ? doc.items.get(symId) : null;
+  if (sym && sym.kind === "symbol" && isPowerSymbol(doc, str((kid(sym.node, "lib_id") || [])[1]))) {
+    const sp = symbolPins(doc, sym); if (sp.length === 1) return { item: sym, at: [sp[0].x, sp[0].y], pin: sp[0].number };
+  }
   return null;
 }
 function setHighlight(ctx, ids) {
@@ -469,8 +474,12 @@ function highlightNetNow(ctx) {
   const c = cursorOf(ctx); if (!c) return false;
   highlightClick(ctx, c); return true;
 }
+// The editor installs the hierarchy-wide highlighter (web/editor/schnets.ts): the highlight is kept as a net NAME
+// (SCH_EDIT_FRAME::SetHighlightedConnection) and follows the net through every sheet; without it, this sheet's ids.
+function clearHighlight(ctx) { if (S.netHL) S.netHL.clear(ctx); else setHighlight(ctx, null); }
 function highlightClick(ctx, mm) {
   const pick = pickNet(ctx, mm);
+  if (S.netHL) { S.netHL.highlightPick(ctx, pick); return S.highlight; }
   if (!pick) { setHighlight(ctx, null); return null; }
   const ids = netItems(ctx.doc, pick.item, pick.at); setHighlight(ctx, ids); return ids;
 }
@@ -1846,7 +1855,7 @@ function onKeyCapture(ev) {
   if (ev.key === "Escape") {
     let took = true;
     if (S.pedit) pointEditEnd(ctx, false); else if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
-    else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) setHighlight(ctx, null); else took = false;
+    else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) clearHighlight(ctx); else took = false;
     if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
   } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {
@@ -2528,7 +2537,7 @@ function onKey(key, ev, ctx) {
   case "o": case "O": return autoplaceSelection(ctx);
   case "u": case "U": return editFieldPrompt(ctx, "Reference", "Reference", true);
   case "v": case "V": return editFieldPrompt(ctx, "Value", "Value", true);
-  case "~": if (!S.highlight) return false; setHighlight(ctx, null); return true;
+  case "~": if (!S.highlight && !(S.netHL && S.netHL.active())) return false; clearHighlight(ctx); return true;
   case "g": case "G": case "m": case "M": {
     setDragMode(ctx, lower === "m" ? "move" : "drag");
     if (S.drag) return true;                                // switched mid-drag: the preview re-resolved
@@ -2560,7 +2569,8 @@ function onDocChanged(ctx) {
     S.docRef = ctx.doc; S.lastPlaced = null; S.unfold = null;
     if (S.markersDoc !== ctx.doc) { S.markers = []; S.markersDoc = null; }
   }
-  if (S.highlight && !sameDoc) setHighlight(ctx, null);   // an edit of the same sheet keeps the net highlighted
+  if (S.netHL) S.netHL.docChanged(ctx, sameDoc);          // UpdateNetHighlighting: the named net is collected again on this sheet
+  else if (S.highlight && !sameDoc) setHighlight(ctx, null);   // an edit of the same sheet keeps the net highlighted
   if (!sameDoc) { closePrompt(); closePicker(); }
   announceModes(ctx);
   S.tool = curTool();
@@ -3963,7 +3973,7 @@ const ACTION_LIST = [
   act("syncSheetPins", "Sync Sheet Pins...", "", (ctx) => syncSheetPins(ctx)),
   act("cleanupSheetPins", "Cleanup Sheet Pins", "", (ctx) => cleanupSheetPins(ctx)),
   act("highlightNet", "Highlight Net", "`", (ctx) => highlightNetNow(ctx)),
-  act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => { setHighlight(ctx, null); return true; }),
+  act("clearHighlight", "Clear Net Highlighting", "~", (ctx) => { clearHighlight(ctx); return true; }),
 ];
 const actions = {}; for (const a of ACTION_LIST) actions[a.id] = a;
 function runAction(id, ctx, opts) { const a = actions[id]; if (!a) return false; S.ctx = ctx; installDom(ctx); try { return !!a.run(ctx, opts); } catch (e) { console.warn(e); if (ctx && ctx.toast) ctx.toast(a.label + " failed: " + (e && e.message)); return false; } }
@@ -3973,7 +3983,7 @@ root.CollabTools.sch = {
   id: "sch", tools: TOOLS.map((t) => ({ id: t.id, label: t.label, key: t.key, icon: t.icon, cursor: t.cursor })),
   onActivate, onPointerDown, onPointerMove, onPointerUp, onKey, drawOverlay, onDocChanged, ghostSegs, vetoTool,
   // for tests and the props panel
-  state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; }, setImagePicker(fn) { imagePickerImpl = fn; },
+  state: S, select(id) { S.sel = id || null; }, setPrompt(fn) { promptImpl = fn; }, setNetHighlighter(h) { S.netHL = h || null; }, setImagePicker(fn) { imagePickerImpl = fn; },
   // connected drag engine, shared with app.js's select tool (symbols and sheets; an array drags a multi-selection)
   beginDrag, moveDrag, endDrag, cancelDrag, setDragMode, setLineMode, cycleLineMode, modeText,
   // REMOVED changes (plus junction cleanup) for one item or a multi-selection; the net of an item on this sheet

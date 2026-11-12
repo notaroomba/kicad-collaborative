@@ -248,10 +248,12 @@ export function buildSheetGeom(item, n) {
     // side → spin: right edge reads leftwards into the sheet, etc. (SCH_SHEET_PIN::SetSide)
     const side = ((Math.round(pr) % 360) + 360) % 360; const spin = side === 0 ? "L" : side === 90 ? "B" : side === 180 ? "R" : "U";
     let shape = str(pin[2]) || "input"; if (shape === "input") shape = "output"; else if (shape === "output") shape = "input";
+    const g0 = item.geom.length;
     G(item, { t: "poly", pts: hierShape(px, py, size, shape, spin), close: false, w: SCH_PEN, color: SCH.sheetLabel, layer: "Sheets", z: SCH_Z.sheet });
     const d = 0.15 * size + ef.sizeX; const st = spinText(spin);
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];
     textGeom(item, px + to[0], py + to[1], str(pin[1]), size, SCH.sheetLabel, st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
+    for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = str(pin[1]);   // "sheetId#pin:<name>" in a net highlight
   }
 }
 
@@ -372,6 +374,11 @@ export function buildPinGeom(item, g, tf, sym) {
   const type = str(g[1]), shape = str(g[2]);
   const [px, py, pr] = atOf(g); const lenN = kid(g, "length"); const len = lenN ? num(lenN[1]) : 2.54;
   if (pinHidden(g) && !sym.showHidden) return;   // hidden (e.g. power) pins draw nothing unless asked for
+  // every geometry of the pin carries its number: a net highlight brightens single pins ("symbolId#pin:<number>")
+  const g0 = item.geom.length, numTag = kid(g, "number"); const tag = numTag ? str(numTag[1]) : "";
+  try { buildPinGeomInner(item, g, tf, sym, type, shape, px, py, pr, len); } finally { for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = tag; }
+}
+function buildPinGeomInner(item, g, tf, sym, type, shape, px, py, pr, len) {
   const dir = ((Math.round(pr) % 360) + 360) % 360;
   const d = dir === 0 ? [1, 0] : dir === 90 ? [0, 1] : dir === 180 ? [-1, 0] : [0, -1];   // file angle points into the body
   const pos = tf(px, py), rootPt = tf(px + d[0] * len, py + d[1] * len);

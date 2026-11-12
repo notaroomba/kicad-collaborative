@@ -1,85 +1,89 @@
-// panels/netnav.ts — the schematic Net Navigator (eeschema/net_navigator.cpp): the highlighted net — or the
-// net of the selected item — as a tree of the sheet and the items on it, each described the way KiCad words
-// them ("Wire from (x, y) to (x, y)", "Label 'NAME' at (x, y)", …).  With nothing highlighted it lists the
-// sheet's named nets; picking one highlights it.  Connectivity is the schematic tool module's (this sheet).
+// panels/netnav.ts — the schematic Net Navigator (eeschema/net_navigator.cpp, SCH_EDIT_FRAME::RefreshNetNavigator).
+//
+// With nothing highlighted the root is "Nets" and lists every net of the schematic (unnamed Net-(…) nets too),
+// narrowed by the filter box (wildcard by default: a pattern without * or ? matches as a substring).  With a net
+// highlighted the root is that net's name and the box is disabled.  Under a net, one node per sheet path that holds
+// it ("project/Sub"), and under that the net's pins, sheet pins, labels and no-connects in KiCad's wording ("Symbol
+// 'U1' pin '3' (VCC)", "Sheet 'X' pin 'Y'", "Label 'NAME' at (x, y)").  Picking an item changes to its sheet and
+// centres on it (onNetNavigatorSelection); a sheet node only changes sheet; a net name does nothing.  A canvas
+// highlight selects its item here (SelectNetNavigatorItem).  The nets come from editor/schnets.ts: the whole
+// hierarchy, kept as names.
 import type { NetNavNode, PanelAction } from "../../panels-api";
-import { centerOn } from "../comments";
+import type { schNets } from "../../canvas/sch-nets";
+import { HL, currentInstance, docOfInstance, goTo, netMap, onNetsChanged } from "../schnets";
+import { store } from "../appstore";
 import { E } from "../state";
-import { KC, isSchDoc, kdoc, panelStore, tctx } from "./core";
-import { selectedItems } from "./propgrid";
+import { isSchDoc, kdoc, loadJson, panelStore, saveJson } from "./core";
 
 interface PropsHelpers { formatLength(mm: number, unit: string): string }
-const fmt = (v: number) => (window.CollabTools.props as unknown as { helpers: PropsHelpers }).helpers.formatLength(v, String(E.units || "mm"));
-const pt = (p: [number, number] | number[]) => `(${fmt(p[0])}, ${fmt(p[1])})`;
-const CONNECTABLE = new Set(["wire", "bus", "junction", "label", "global_label", "hierarchical_label", "bus_entry", "no_connect", "symbol", "sheet"]);
+const SN = (): typeof schNets => (KiCadCanvas as unknown as { schNets: typeof schNets }).schNets;
+const fmt = (v: number): string => (window.CollabTools.props as unknown as { helpers: PropsHelpers }).helpers.formatLength(v, String(E.units || "mm"));
+const unescape = (s: string): string => (KiCadCanvas as unknown as { pcbNetlist: { unescapeNetName(s: string): string } }).pcbNetlist.unescapeNetName(s);
 
-function describe(it: KItem): string {
-  const K = KC(), n = it.node;
-  switch (it.kind) {
-    case "wire": { const p = K.ptsOf(n); return `Wire from ${pt(p[0])} to ${pt(p[p.length - 1])}`; }
-    case "bus": { const p = K.ptsOf(n); return `Bus from ${pt(p[0])} to ${pt(p[p.length - 1])}`; }
-    case "polyline": return "Graphic line not connectable";
-    case "symbol": return `Symbol '${it.ref || "?"}'`;
-    case "sheet": return `Sheet '${it.name || ""}'`;
-    case "label": return `Label '${K.str(n[1])}' at ${pt(K.atOf(n))}`;
-    case "global_label": return `Global label '${K.str(n[1])}' at ${pt(K.atOf(n))}`;
-    case "hierarchical_label": return `Hierarchical label '${K.str(n[1])}' at ${pt(K.atOf(n))}`;
-    case "junction": return `Junction at ${pt(K.atOf(n))}`;
-    case "no_connect": return `No-Connect at ${pt(K.atOf(n))}`;
-    case "bus_entry": { const [x, y] = K.atOf(n), s = K.kid(n, "size"); return `Bus to wire entry from ${pt([x, y])} to ${pt([x + K.num(s ? s[1] : 0), y + K.num(s ? s[2] : 0)])}`; }
-    case "netclass_flag": case "directive_label": return `Netclass label '${K.str(n[1])}' at ${pt(K.atOf(n))}`;
-    default: return it.kind;
+/** The filter text and mode (eeschema settings: net_nav_search_mode_wildcard). */
+const filterState = loadJson<{ text: string; wildcard: boolean }>("kc.netnav.filter", { text: "", wildcard: true });
+interface NavTarget { inst: number; at: [number, number] | null; item: boolean }
+const targets = new Map<string, NavTarget>();
+
+function netNode(name: string, collapsed: boolean): NetNavNode {
+  const c = netMap(); if (!c) return { key: "net:" + name, label: unescape(name) };
+  const sheets = SN().navSheets(c.map, name, c.instances, c.rootName, (inst) => docOfInstance(c, inst), fmt);
+  const sel = HL.nav ? `item:${name}|${HL.nav.inst}|${HL.nav.id}|${HL.nav.pin || ""}` : null;
+  return {
+    key: "net:" + name, label: unescape(name), collapsed,
+    children: sheets.map((s) => {
+      const sk = `sheet:${name}|${s.inst}`; targets.set(sk, { inst: s.inst, at: null, item: false });
+      const items = s.items.map((it) => { const k = `item:${name}|${it.inst}|${it.id}|${it.pin || ""}`; targets.set(k, { inst: it.inst, at: it.at, item: true }); return { key: k, label: it.label, ids: [it.id] }; });
+      return { key: sk, label: s.label, children: items, collapsed: !(sel && items.some((i) => i.key === sel)) };
+    }),
+  };
+}
+
+function build(): { root: NetNavNode | null; selected: string | null } {
+  targets.clear();
+  const doc = kdoc(); if (!doc || !isSchDoc()) return { root: null, selected: null };
+  const c = netMap(); if (!c) return { root: null, selected: null };
+  if (HL.name) {
+    const root = netNode(HL.name, false); root.bold = true;
+    const sel = HL.nav ? `item:${HL.name}|${HL.nav.inst}|${HL.nav.id}|${HL.nav.pin || ""}` : null;
+    return { root, selected: sel && targets.has(sel) ? sel : null };
   }
-}
-const RANK: Record<string, number> = { symbol: 0, sheet: 1, global_label: 2, hierarchical_label: 3, label: 4, junction: 5, wire: 6, bus: 7, bus_entry: 8, no_connect: 9 };
-/** A net's name as KiCad derives it, as far as one sheet tells: a global label, then a hierarchical one, then a local one. */
-function netName(items: KItem[]): string {
-  const K = KC();
-  for (const kind of ["global_label", "hierarchical_label", "label"]) { const l = items.find((it) => it.kind === kind); if (l) return (kind === "global_label" ? "" : "/") + K.str(l.node[1]); }
-  const sym = items.find((it) => it.kind === "symbol" && it.ref && !it.ref.startsWith("#")) || items.find((it) => it.kind === "symbol");
-  return sym ? `Net-(${sym.ref || "?"})` : "<unnamed>";
-}
-function netOf(item: KItem): Set<string> {
-  const doc = kdoc(), m = window.CollabTools.sch; if (!doc || !m) return new Set([item.id]);
-  try { return new Set(m.netItems(doc, item) as unknown as Iterable<string>); } catch (e) { return new Set([item.id]); }
+  const match = SN().netFilter(filterState.text, filterState.wildcard);
+  const names = SN().netNames(c.map).filter((n) => match(unescape(n)));
+  return { root: { key: "nets", label: "Nets", bold: true, children: names.map((n) => netNode(n, true)) }, selected: null };
 }
 
-function build(): NetNavNode | null {
-  const doc = kdoc(); if (!doc || !isSchDoc()) return null;
-  let ids: Set<string> | null = E.highlightIds && (E.highlightIds as Set<string>).size ? (E.highlightIds as Set<string>) : null;
-  if (!ids) { const sel = selectedItems().find((it) => CONNECTABLE.has(it.kind) && it.kind !== "symbol" && it.kind !== "sheet"); if (sel) ids = netOf(sel); }
-  if (ids) {
-    const items = Array.from(ids).map((id) => doc.items.get(id)).filter((x): x is KItem => !!x).sort((a, b) => (RANK[a.kind] ?? 20) - (RANK[b.kind] ?? 20) || describe(a).localeCompare(b ? describe(b) : "", undefined, { numeric: true }));
-    const sheet = String((doc as unknown as { sheetPath?: string }).sheetPath || "/");
-    return { key: "net", label: netName(items), bold: true, ids: items.map((x) => x.id), children: [{ key: "sheet", label: sheet, ids: items.map((x) => x.id), children: items.map((it) => ({ key: it.id, label: describe(it), ids: [it.id] })) }] };
-  }
-  // nothing highlighted: the named nets of this sheet (one node per label text; picking it highlights that net)
-  const K = KC(), byName = new Map<string, string[]>();
-  for (const it of doc.items.values()) if (it.kind === "label" || it.kind === "global_label" || it.kind === "hierarchical_label") { const name = (it.kind === "global_label" ? "" : "/") + K.str(it.node[1]); const l = byName.get(name); if (l) l.push(it.id); else byName.set(name, [it.id]); }
-  const names = Array.from(byName.keys()).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  return { key: "nets", label: "Nets", bold: true, children: names.map((name) => ({ key: "name:" + name, label: name, ids: byName.get(name) })) };
-}
-
+const shown = (): boolean => !!((store.get() as { panes?: Record<string, boolean> }).panes || {}).netnav;
+// wxEVT_SHOW: a navigator that went stale while hidden rebuilds when it is shown again
+let wasShown = false;
+store.subscribe(() => { const on = shown(); if (on && !wasShown && stale) setTimeout(publishNetNav, 0); wasShown = on; });
+let stale = true, userSel: string | null = null, lastNav: unknown = null;
+/** RefreshNetNavigator: rebuilt when shown (a hidden navigator is only marked stale, as KiCad does). */
 export function publishNetNav(): void {
-  let root: NetNavNode | null = null;
-  try { root = build(); } catch (e) { console.warn(e); }
-  panelStore.set({ netNav: { root, version: panelStore.get().netNav.version + 1 } });
+  if (!shown()) { stale = true; return; }
+  stale = false;
+  let r: { root: NetNavNode | null; selected: string | null } = { root: null, selected: null };
+  try { r = build(); } catch (e) { console.warn(e); }
+  if (HL.nav !== lastNav) { lastNav = HL.nav; userSel = null; }   // a canvas highlight selects its own node
+  const selected = userSel && targets.has(userSel) ? userSel : r.selected;
+  const cur = panelStore.get().netNav;
+  panelStore.set({ netNav: { root: r.root, version: cur.version + 1, selected, filter: filterState.text, filterEnabled: !HL.name, wildcard: filterState.wildcard } });
 }
-export function netNavSignature(): string { const h = E.highlightIds as Set<string> | null; return h && h.size ? "h" + h.size + ":" + h.values().next().value : "-"; }
+onNetsChanged(() => publishNetNav());
+export function netNavSignature(): string { return (HL.name || "-") + (HL.busMembers ? "+" : "") + (HL.nav ? HL.nav.id + (HL.nav.pin || "") : ""); }
 
 export function netNavDispatch(a: PanelAction): boolean {
   if (a.t === "netNavRefresh") { publishNetNav(); return true; }
-  if (a.t !== "netNavSelect") return false;
-  const doc = kdoc(); if (!doc || !a.ids.length) return true;
-  const root = panelStore.get().netNav.root;
-  if (root && root.key === "nets") {   // a net name: highlight the whole net
-    const first = doc.items.get(a.ids[0]); if (!first) return true;
-    const ids = netOf(first); for (const id of a.ids) for (const x of netOf(doc.items.get(id) || first)) ids.add(x);
-    tctx().setHighlight(ids); publishNetNav();
-    return true;
+  if (a.t === "netNavFilter") {
+    if (a.text !== undefined) filterState.text = a.text;
+    if (a.wildcard !== undefined) filterState.wildcard = a.wildcard;
+    saveJson("kc.netnav.filter", filterState); publishNetNav(); return true;
   }
-  if (window.CollabTools.sch) window.CollabTools.sch.select(null);
-  tctx().setSelection(a.ids);
-  const b = KC().bboxOf(doc, a.ids); if (b) centerOn((b[0] + b[2]) / 2, (b[1] + b[3]) / 2);
+  if (a.t !== "netNavSelect") return false;
+  const key = a.key || "", t = targets.get(key);
+  userSel = key || null;
+  const cur = panelStore.get().netNav; panelStore.set({ netNav: Object.assign({}, cur, { selected: key || null }) });
+  if (!t) return true;                       // the root, or a net name while every net is listed: nothing happens
+  void goTo(t.inst, t.item ? t.at : null).then(() => { const now = currentInstance(); if (now && now.index === t.inst) publishNetNav(); });
   return true;
 }

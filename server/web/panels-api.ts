@@ -61,13 +61,14 @@ export interface HierNode {
 }
 
 // ---------------------------------------------------------------- Net navigator (eeschema/net_navigator.cpp)
-export interface NetNavNode { key: string; label: string; ids?: string[]; children?: NetNavNode[]; bold?: boolean }
+export interface NetNavNode { key: string; label: string; ids?: string[]; children?: NetNavNode[]; bold?: boolean; /** starts folded (wxTreeCtrl nodes are collapsed until expanded) */ collapsed?: boolean }
+export interface NetNavState { root: NetNavNode | null; version: number; selected?: string | null; filter?: string; filterEnabled?: boolean; wildcard?: boolean }
 
 // ---------------------------------------------------------------- the store
 export interface PanelsState {
   appearance: AppearanceState;
   hierarchy: { root: HierNode | null; version: number };
-  netNav: { root: NetNavNode | null; version: number };
+  netNav: NetNavState;
   /** bumped when the selection (the app's or a tool module's) or the units change: the Properties pane re-reads */
   selVersion: number;
 }
@@ -97,7 +98,8 @@ export type PanelAction =
   | { t: "hierRename"; path: string }
   | { t: "hierPage"; path: string }
   | { t: "searchSelect"; row: SearchRow; zoom: boolean }
-  | { t: "netNavSelect"; ids: string[] }
+  | { t: "netNavSelect"; ids: string[]; key?: string }
+  | { t: "netNavFilter"; text?: string; wildcard?: boolean }
   | { t: "netNavRefresh" };
 
 export interface PanelsApi {
