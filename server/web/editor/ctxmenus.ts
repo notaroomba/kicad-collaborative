@@ -314,7 +314,8 @@ function pcbSelectionMenu(): CondMenu {
   m.item("PCB_ACTIONS::flip", notEmpty).item("PCB_ACTIONS::swap", moreThan(1)).sep();
   m.item("PCB_ACTIONS::breakTrack", and(count(1), onlyTypes(PCB_TRACKS))).item("PCB_ACTIONS::filletTracks", onlyTypes(PCB_TRACKS)).sep();
   // PCB_POINT_EDITOR::Init
-  m.item("PCB_ACTIONS::pointEditorAddCorner", and(count(1), (c) => !!c.canAddCorner)).item("PCB_ACTIONS::pointEditorRemoveCorner", and(count(1), (c) => !!c.canRemoveCorner)).sep();
+  m.item("PCB_ACTIONS::pointEditorAddCorner", and(count(1), (c) => !!c.canAddCorner)).item("PCB_ACTIONS::pointEditorRemoveCorner", and(count(1), (c) => !!c.canRemoveCorner));
+  m.item("ACTIONS::cycleArcEditMode", and(count(1), onlyTypes(set("gr_arc")))).sep();
   m.item("PCB_ACTIONS::packAndMoveFootprints", and(moreThan(1), hasTypes(PCB_FOOTPRINT))).item("PCB_ACTIONS::assignNetClass", onlyTypes(PCB_CONNECTED)).item("PCB_ACTIONS::inspectClearance", count(2));
   m.sep();
   m.item("PCB_ACTIONS::editFpInFpEditor", pcbSingleFootprint).item("PCB_ACTIONS::updateFootprint", pcbSingleFootprint).item("PCB_ACTIONS::updateFootprints", pcbMultipleFootprints);
@@ -358,6 +359,8 @@ function pcbRouterMenu(): CondMenu {
   return m;
 }
 
+/** The Arc toolbar group's own menu (toolbars_pcb_editor.cpp): the arc editing modes, as check items. */
+export const ARC_EDIT_MODE_MENU = ["ACTIONS::pointEditorArcKeepCenter", "ACTIONS::pointEditorArcKeepEndpoint", "ACTIONS::pointEditorArcKeepRadius"];
 const PCB_ARC_TOOLS = ["garc"];
 const PCB_TUNING_TOOLS = ["tunesingle", "tunediff", "tuneskew"];
 /** DRAWING_TOOL's menu (pcbnew/tools/drawing_tool.cpp): the board's graphic, zone, dimension, text and via tools. */

@@ -131,7 +131,9 @@ function lineNode(a, b, layer) { return ["gr_line", ["start", r6(a[0]), r6(a[1])
 function rectNode(a, b, layer) { return ["gr_rect", ["start", r6(a[0]), r6(a[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
 function circleNode(c, e, layer) { return ["gr_circle", ["center", r6(c[0]), r6(c[1])], ["end", r6(e[0]), r6(e[1])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
 // PCB_IO_KICAD_SEXPR::format(PCB_SHAPE): start/mid/end, stroke, (fill only for closed shapes), layer, then the uuid
-function arcNode(a, m, b, layer) { return ["gr_arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["layer", layer]]; }
+// EDA_SHAPE::SetArcGeometry keeps one winding: from start to end the polar angle grows (clockwise on the board), so an
+// arc given the other way round is stored with its ends swapped, as pcbnew writes it.
+function arcNode(a, m, b, layer) { if ((m[0] - a[0]) * (b[1] - m[1]) - (m[1] - a[1]) * (b[0] - m[0]) < 0) [a, b] = [b, a]; return ["gr_arc", ["start", r6(a[0]), r6(a[1])], ["mid", r6(m[0]), r6(m[1])], ["end", r6(b[0]), r6(b[1])], strokeNode(gfxWidth(layer)), ["layer", layer]]; }
 function polyNode(pts, layer) { return ["gr_poly", ["pts", ...pts.map((p) => ["xy", r6(p[0]), r6(p[1])])], strokeNode(gfxWidth(layer)), ["fill", "no"], ["layer", layer]]; }
 // DRAWING_TOOL::PlaceText: the layer class's size and thickness, left / bottom justified, mirrored on the back;
 // PCB_IO_KICAD_SEXPR::format(PCB_TEXT) writes the text, (at), (layer), (uuid) and then the effects.
@@ -540,12 +542,99 @@ function editPoints(it) {
     c.forEach((p, i) => out.push({ key: "r" + i, p }));
     c.forEach((p, i) => { const q = c[(i + 1) % 4]; out.push({ key: "e" + i, p: [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2], circle: true }); });
   } else if (it.kind === "gr_circle") { const c = pt(n, "center"), e = pt(n, "end"); if (c) out.push({ key: "center", p: c }); if (e) out.push({ key: "end", p: e }); }
-  else if (it.kind === "gr_arc") { for (const k of ["start", "mid", "end"]) { const p = pt(n, k); if (p) out.push({ key: k, p }); } }
+  else if (it.kind === "gr_arc") {   // ARC_START, ARC_MID, ARC_END, ARC_CENTER, with indicator lines from the centre to the ends
+    for (const k of ["start", "mid", "end"]) { const p = pt(n, k); if (p) out.push({ key: k, p }); }
+    const s = pt(n, "start"), m = pt(n, "mid"), e = pt(n, "end"), a = s && m && e ? K.arcFrom3(s, m, e) : null;
+    if (a) { const c = [a.x, a.y]; out.push({ key: "center", p: c, lines: [s, e] }); }
+  }
   return out;
+}
+// ---- EDA_ARC_POINT_EDIT_BEHAVIOR (common/tool/point_editor_behavior.cpp): an arc's start, mid, end and centre handles,
+// and what dragging one does in each ARC_EDIT_MODE (Preferences > PCB Editor > Editing Options > Arc editing mode,
+// the Arc toolbar group's menu, Cycle Arc Editing Mode Ctrl+Space).  0 keeps the centre and adjusts the radius, 1 keeps
+// the endpoints (or the direction at the other end), 2 keeps the centre and the radius.
+const ARC_KEEP_CENTER = 0, ARC_KEEP_ENDPOINTS = 1, ARC_KEEP_RADIUS = 2;
+const ARC_EDIT_KEY = "kc.pcb.arcEditMode";
+const ARC_EDIT_ACTIONS = ["pointEditorArcKeepCenter", "pointEditorArcKeepEndpoint", "pointEditorArcKeepRadius"];
+function arcEditMode() {
+  if (S.arcEditMode == null) { const v = lsGet(ARC_EDIT_KEY); S.arcEditMode = v !== null && /^[0-2]$/.test(v) ? +v : ARC_KEEP_CENTER; }
+  return S.arcEditMode;
+}
+function setArcEditMode(m) { S.arcEditMode = m; lsSet(ARC_EDIT_KEY, String(m)); }
+/** IncrementArcEditMode: keep center -> keep center and radius -> keep endpoints -> keep center. */
+const nextArcEditMode = (m) => (m === ARC_KEEP_CENTER ? ARC_KEEP_RADIUS : m === ARC_KEEP_RADIUS ? ARC_KEEP_ENDPOINTS : ARC_KEEP_CENTER);
+const ARC_MIN_RADIUS = 0.0254;   // EDA_UNIT_UTILS::Mils2IU( 1 )
+const resized = (v, len) => { const l = Math.hypot(v[0], v[1]); return l ? [v[0] * len / l, v[1] * len / l] : [0, 0]; };
+/** EDA_SHAPE with the board's winding: from start to end the polar angle grows; the mid is halfway (GetArcMid). */
+function arcFromCenter(c, s, e) {
+  const r = Math.hypot(s[0] - c[0], s[1] - c[1]); const a0 = Math.atan2(s[1] - c[1], s[0] - c[0]);
+  let sw = Math.atan2(e[1] - c[1], e[0] - c[0]) - a0; while (sw <= 0) sw += 2 * Math.PI;
+  return { start: s, mid: [c[0] + r * Math.cos(a0 + sw / 2), c[1] + r * Math.sin(a0 + sw / 2)], end: e };
+}
+/** The arc of `orig` with handle `key` dragged: `p` is the snapped cursor, `raw` the cursor itself (the mid handle uses it). */
+function arcEditGeometry(orig, key, p, raw, mode) {
+  let s = pt(orig, "start"), e = pt(orig, "end"); const m = pt(orig, "mid"); const a = s && m && e ? K.arcFrom3(s, m, e) : null; if (!a) return null;
+  // the arc as pcbnew holds it (start to end with the polar angle growing); the handle stays the one under the cursor
+  if (crossZ(m[0] - s[0], m[1] - s[1], e[0] - m[0], e[1] - m[1]) < 0) { [s, e] = [e, s]; if (key === "start" || key === "end") key = key === "start" ? "end" : "start"; }
+  const c = [a.x, a.y];
+  if (key === "center") {
+    if (mode === ARC_KEEP_ENDPOINTS) {   // editArcCenterKeepEndpoints: the centre slides along the chord's bisector
+      const mid = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], n = resized([-(e[1] - s[1]), e[0] - s[0]], 1);
+      const t = (p[0] - mid[0]) * n[0] + (p[1] - mid[1]) * n[1]; const nc = [mid[0] + n[0] * t, mid[1] + n[1] * t];
+      return arcFromCenter(nc, s, e);
+    }
+    const d = [p[0] - c[0], p[1] - c[1]];   // both other modes move the arc
+    return { start: vadd(s, d), mid: vadd(m, d), end: vadd(e, d) };
+  }
+  if (key === "mid") {
+    if (mode === ARC_KEEP_ENDPOINTS) {   // editArcMidKeepEndpoints: on a ray from just off the chord's middle, out past the mid
+      const ch = [(s[0] + e[0]) / 2, (s[1] + e[1]) / 2], v = vsub(m, ch), justOff = Math.hypot(s[0] - e[0], s[1] - e[1]) / 100;
+      const A = vadd(ch, resized(v, justOff)), u = resized(v, 1); const t = Math.max(0, (raw[0] - A[0]) * u[0] + (raw[1] - A[1]) * u[1]);
+      const nm = vadd(A, vmul(u, t)); if (Math.abs(crossZ(nm[0] - s[0], nm[1] - s[1], e[0] - s[0], e[1] - s[1])) < 1e-12) return null;
+      return { start: s, mid: nm, end: e };
+    }
+    // KI_ARC_EDIT::EditArcMidKeepCenter: the radius follows the cursor, the ends stay on their rays
+    const r = Math.max(ARC_MIN_RADIUS, Math.hypot(raw[0] - c[0], raw[1] - c[1]));
+    return arcFromCenter(c, vadd(c, resized(vsub(s, c), r)), vadd(c, resized(vsub(e, c), r)));
+  }
+  if (key !== "start" && key !== "end") return null;
+  const movingStart = key === "start";
+  if (mode === ARC_KEEP_CENTER) {   // KI_ARC_EDIT::EditArcEndpointKeepCenter: the other end follows onto the new radius
+    let p1 = vsub(p, c); const p2 = vsub(movingStart ? e : s, c);
+    if (!p1[0] && !p1[1]) p1 = vsub(movingStart ? s : e, c);
+    const r = Math.max(ARC_MIN_RADIUS, Math.hypot(p1[0], p1[1]));
+    const n1 = vadd(c, resized(p1, r)), n2 = vadd(c, (p2[0] || p2[1]) ? resized(p2, r) : [r, 0]);
+    return movingStart ? arcFromCenter(c, n1, n2) : arcFromCenter(c, n2, n1);
+  }
+  if (mode === ARC_KEEP_RADIUS) {   // editArcEndpointKeepCenterAndRadius: the end slides round the circle
+    const n1 = vadd(c, resized(vsub(p, c), a.r));
+    return movingStart ? arcFromCenter(c, n1, e) : arcFromCenter(c, s, n1);
+  }
+  // editArcEndpointKeepTangent: the other end and the tangent there stay; the centre moves along that end's radius
+  const p1 = movingStart ? e : s, p2 = p, p3 = m;
+  let v1 = vsub(p1, c), v2 = vsub(p2, c); const v3 = vsub(p3, c);
+  if (!Math.hypot(v1[0], v1[1]) || !Math.hypot(v2[0], v2[1])) return null;
+  const u1 = resized(v1, 1); let u2 = vsub(v3, vmul(u1, u1[0] * v3[0] + u1[1] * v3[1])); u2 = resized(u2, 1);
+  const det = u1[0] * u2[1] - u2[0] * u1[1]; if (!det) return null;
+  v1 = [(v1[0] * u2[1] - v1[1] * u2[0]) / det, (-v1[0] * u1[1] + v1[1] * u1[0]) / det];
+  v2 = [(v2[0] * u2[1] - v2[1] * u2[0]) / det, (-v2[0] * u1[1] + v2[1] * u1[0]) / det];
+  const R = Math.hypot(v1[0], v1[1]); if (v2[0] === R) return null;   // a straight line: nothing changes
+  let flip = false; if (v2[0] > R) { flip = true; v2[0] = 2 * R - v2[0]; }
+  const delta = (R * R - v2[0] * v2[0] - v2[1] * v2[1]) / (2 * v2[0] - 2 * R);
+  if (Math.abs(v2[1] / (R - v2[0])) > 50 || !isFinite(delta)) return null;   // ADVANCED_CFG m_DrawArcCenterMaxAngle
+  const v4 = flip ? [2 * R + delta, 0] : [-delta, 0];
+  const nc = vadd(c, [v4[0] * u1[0] + v4[1] * u2[0], v4[0] * u1[1] + v4[1] * u2[1]]);
+  return movingStart ? arcFromCenter(nc, p, e) : arcFromCenter(nc, s, p);
 }
 const setXY = (node, key, p) => { const k = K.kid(node, key); if (k) { k[1] = r6(p[0]); k[2] = r6(p[1]); } };
 /** The node with handle `key` moved to `p` (from the original node `orig`). */
-function editPointNode(orig, kind, key, p) {
+function editPointNode(orig, kind, key, p, raw) {
+  if (kind === "gr_arc") {
+    const g = arcEditGeometry(orig, key, p, raw || p, arcEditMode()); if (!g) return clone(orig);
+    const node = clone(orig), cw = crossZ(g.mid[0] - g.start[0], g.mid[1] - g.start[1], g.end[0] - g.mid[0], g.end[1] - g.mid[1]) >= 0;
+    setXY(node, "start", cw ? g.start : g.end); setXY(node, "mid", g.mid); setXY(node, "end", cw ? g.end : g.start);
+    return node;
+  }
   const node = clone(orig);
   if (kind === "zone" || kind === "gr_poly") {
     const pn = pePtsNode(node); const xs = pn ? K.kids(pn, "xy") : []; const nn = xs.length; if (!nn) return node;
@@ -556,7 +645,7 @@ function editPointNode(orig, kind, key, p) {
       const d = [p[0] - (a[0] + b[0]) / 2, p[1] - (a[1] + b[1]) / 2];
       xs[i][1] = r6(a[0] + d[0]); xs[i][2] = r6(a[1] + d[1]); xs[j][1] = r6(b[0] + d[0]); xs[j][2] = r6(b[1] + d[1]);
     }
-  } else if (kind === "gr_line" || kind === "gr_arc") setXY(node, key, p);
+  } else if (kind === "gr_line") setXY(node, key, p);
   else if (kind === "gr_rect") {
     const a = pt(orig, "start"), b = pt(orig, "end"); let x0 = a[0], y0 = a[1], x1 = b[0], y1 = b[1];
     // corners TL TR BR BL as start / end coordinates; an edge moves one coordinate
@@ -627,7 +716,7 @@ function editHandleMove(ctx, mm) {
   const pe = S.pedit; if (!pe) return; const it = ctx.doc.items.get(pe.id); if (!it) { S.pedit = null; return; }
   if (!pe.moved && Math.hypot(mm[0] - pe.start[0], mm[1] - pe.start[1]) < 1e-3) return;
   const p = ctx.snapOn && ctx.snap ? ctx.snap([mm[0], mm[1]]) : mm;
-  pe.moved = true; pe.node = editPointNode(pe.orig, pe.kind, pe.key, p);
+  pe.moved = true; pe.node = editPointNode(pe.orig, pe.kind, pe.key, p, mm);
   it.node.length = 0; it.node.push(...clone(pe.node)); K.replaceChange(ctx.doc, it); ctx.requestRender();
 }
 function editHandleUp(ctx, commit) {
@@ -642,6 +731,7 @@ function drawEditPoints(c, ctx, px) {
   const cur = ctx.cursor || null; const size = 4 * px;   // POINT_SIZE 8 px
   const hotKey = S.pedit ? S.pedit.key : (cur ? ((editHandleAt(ctx.doc, cur[0], cur[1], handleTol()) || {}).h || {}).key : null);
   c.save(); c.globalAlpha = 1; c.setLineDash([]);
+  for (const h of hs) if (h.lines) { c.lineWidth = 0.5 * px; c.strokeStyle = "rgba(77,77,77,0.8)"; for (const q of h.lines) line(c, h.p, q); }   // EDIT_POINTS' indicator lines
   for (const h of hs) {
     const on = h.key === hotKey;
     c.lineWidth = (on ? 5 : 2) * px; c.strokeStyle = on ? "rgba(128,128,128,0.8)" : "rgba(77,77,77,0.8)"; c.fillStyle = "#FFFFFF";   // LAYER_AUX_ITEMS, border Darkened(0.7) / hover Darkened(0.5)
@@ -1233,6 +1323,7 @@ function routerChecks() {
     "PCB_ACTIONS::routerHighlightMode": rs.mode === RM_MARK, "PCB_ACTIONS::routerShoveMode": rs.mode === RM_SHOVE, "PCB_ACTIONS::routerWalkaroundMode": rs.mode === RM_WALK,
     routerHighlightMode: rs.mode === RM_MARK, routerShoveMode: rs.mode === RM_SHOVE, routerWalkaroundMode: rs.mode === RM_WALK,
     ...Object.fromEntries(ARC_MODE_ACTIONS.map((id, m) => ["PCB_ACTIONS::" + id, arcDrawMode() === m])),
+    ...Object.fromEntries(ARC_EDIT_ACTIONS.map((id, m) => ["ACTIONS::" + id, arcEditMode() === m])),
     ACT_SwitchCornerMode45: rs.corner_mode === CM_M45, ACT_SwitchCornerModeArc45: rs.corner_mode === CM_R45, ACT_SwitchCornerMode90: rs.corner_mode === CM_M90, ACT_SwitchCornerModeArc90: rs.corner_mode === CM_R90,
   };
 }
@@ -6952,6 +7043,13 @@ act("pointEditorRemoveCorner", "Remove Corner", "", (ctx) => {
   const id = peSingleId(ctx); if (!id) return false;
   if (!canEdit(ctx)) return true; const ch = removeCornerChanges(ctx.doc, id, ctx.cursor || cursorPoint(ctx), handleTol()); if (ch.length) ctx.commit(ch, "remove corner"); return true;
 });
+// PCB_POINT_EDITOR::changeArcEditMode: the three arc editing modes (check items of the Arc toolbar group's menu) and
+// Cycle Arc Editing Mode (Ctrl+Space, also in the selection menu for one selected arc)
+ARC_EDIT_ACTIONS.forEach((id, m) => {
+  act(id, ["Keep Arc Center, Adjust Radius", "Keep Arc Endpoints or Direction of Starting Point", "Keep Arc Radius and Center, adjust angle"][m], "", () => { setArcEditMode(m); return true; },
+    { tip: ["Switch arc editing mode to keep center, adjust radius and endpoints", "Switch arc editing mode to keep endpoints, or to keep direction of the other point", "Switch arc editing mode to maintaining radius when endpoint are moved"][m], check: () => arcEditMode() === m });
+});
+act("cycleArcEditMode", "Cycle Arc Editing Mode", "Ctrl+Space", () => { setArcEditMode(nextArcEditMode(arcEditMode())); return true; }, { tip: "Switch to a different method of editing arcs" });
 // DRAWING_TOOL::DrawArc's modes (PCB_ACTIONS::drawArcCenter …): each starts Draw Arcs in its mode, or switches the arc
 // being drawn to it (ARC_MODE_SESSION::HandleModeEvent); Switch Arc Posture and Cycle Arc Drawing Mode act on the arc in progress.
 ARC_MODE_ACTIONS.forEach((id, m) => {
@@ -7106,6 +7204,7 @@ function onCaptureKey(ev) {
   if (ev.altKey && !ev.metaKey) { if (!ev.ctrlKey && !ev.shiftKey && ev.code === "KeyZ") repost(ev, "Zone"); else if (!ev.ctrlKey && !ev.shiftKey && ev.code === "KeyS") repost(ev, "Swap"); return; }
   if (ev.ctrlKey || ev.metaKey) {
     if (ev.altKey) return;
+    if (k === " " && !ev.shiftKey && lastCtx) { ev.stopImmediatePropagation(); ev.preventDefault(); runAction("cycleArcEditMode", lastCtx); return; }   // ACTIONS::cycleArcEditMode
     const ctrlRemap = typeof k === "string" ? (ev.shiftKey ? CTRL_SHIFT_KEYS[k.toLowerCase()] : CTRL_KEYS[k.toLowerCase()]) : null;
     if (ctrlRemap && !(ev.metaKey && ctrlRemap === "Circle")) repost(ev, ctrlRemap);
     return;
@@ -7672,7 +7771,7 @@ const pcb = {
 };
 root.CollabTools = root.CollabTools || {};
 root.CollabTools.pcb = pcb;
-root.PcbTools = { state: S, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
+root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPoints, editPointNode, ArcGeom, arcDrawMode, setArcDrawMode, arcFromStartEndMidDrag, arcFromStartEndCenterDrag, arcFromStartTangentEnd, arcTangentSeedAt, arcTangentSeedNear, snapVec45, netTable, zoneTemplate, build45Leader, polyOutline, angleSnapMode, setAngleSnap, constrainDraw, snap90, undoChainSegment, stepDrawWidth, withStroke, dimensionLabel, unfillChanges, alignBox, splitChanges, WIDTHS, BOARD_VERSION, routeLeg, segmentNode, viaNode, lineNode, rectNode, circleNode, arcNode, polyNode, textNode, netOf, netNode, netStyle,
   wrapBoard, addedChange, replacedChange, removedChange, padsOf, snapTarget, netUnder, hitTestItem, itemAt, deleteAt, connectedRun, rotateFootprintNode, flipFootprintNode,
   flipLayerName, pt, selectMoveTo, finishSelectMove, assembleLine, dragStart, startPendingDrag, finishDrag, dragMove, dragTo, dragSolution, dragChanges, dragSegment45, optimizeDragged, changedArea, componentDragHits, isFreePad, dragCorner45, dragCornerFree, initialTrace, routableItems, nextWidth, norm180, norm360, DELETE_CURSOR,
   // the interactive router (Highlight collisions, Shove, Walk around)

@@ -17,9 +17,14 @@ export function parseGrid(text: string): number | null {
   return mm > 0 ? +mm.toFixed(6) : null;
 }
 
+/** pcb-tools.js's arc editing mode (APP_SETTINGS m_ArcEditMode, also switched from the Arc toolbar group and Ctrl+Space). */
+type ArcEditTools = { arcEditMode(): number; setArcEditMode(m: number): void };
+const pcbTools = (): ArcEditTools | null => { const t = (window as unknown as { PcbTools?: Partial<ArcEditTools> }).PcbTools; return t && t.arcEditMode && t.setArcEditMode ? (t as ArcEditTools) : null; };
+
 export function openPreferences(page?: string): void {
   const p: Prefs = clonePrefs();
   let uiMode: ThemeMode = getThemeMode();
+  let arcEdit = pcbTools() ? pcbTools()!.arcEditMode() : 0;
   const here: EditorId = E.DOC_TYPE === "kicad_sch" ? "sch" : "pcb";
   const gridsPage = (ed: EditorId) => (pg: HTMLElement) => {
     const g = p.grids[ed], o = g.overrides, pre = `kd-pref-${ed}`;
@@ -115,12 +120,15 @@ export function openPreferences(page?: string): void {
           } },
           { label: "Grids", build: gridsPage("pcb") },
           { label: "Editing Options", build(pg) {
-            // panel_edit_options (PCB): the Miscellaneous box's zone refill
+            // panel_edit_options (PCB): the arc editing mode, and the Miscellaneous box's zone refill
+            const ed = KD().staticBox(pg, "Editing Options");
+            ed.append(h("div", { class: "kd-row", style: "margin-bottom:6px" }, h("label", { style: "color:var(--ink-2)" }, "Arc editing mode:"),
+              select([["0", "Keep center, adjust radius"], ["1", "Keep endpoints or direction of starting point"], ["2", "Keep center and radius, adjust endpoints"]], String(arcEdit), (v) => { arcEdit = +v; }, { id: "kd-pref-arcedit", style: "width:300px" })));
             const misc = KD().staticBox(pg, "Miscellaneous");
             misc.append(checkbox("Automatically refill zones", p.pcbEditing.autoRefillZones, (on) => { p.pcbEditing.autoRefillZones = on; }, { id: "kd-pref-autorefill", title: "If checked, zones will be re-filled after each edit operation" }));
           } },
         ] },
       ], { selected: page || (here === "sch" ? "Mouse and Touchpad" : "Mouse and Touchpad") });
     },
-    ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); toast("Preferences saved"); } });
+    ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
 }

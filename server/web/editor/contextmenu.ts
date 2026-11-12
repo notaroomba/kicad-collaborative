@@ -13,7 +13,7 @@ import { HANDLERS } from "./actions";
 import { canComment, commentOnItem, commentOnNet, netOfItem, showThread, startThread, threadsOnItem } from "./comments";
 import { APP_TOOLS, state, store } from "./appstore";
 import { enterSheet, rootSchematic, setGridPitch } from "./doc";
-import { evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
+import { ARC_EDIT_MODE_MENU, evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
 import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
@@ -391,6 +391,17 @@ export function openRouterModeMenu(at: { left: number; bottom: number } | null):
   const c = menuCtx();
   const items: CtxItem[] = [row("PCB_ACTIONS::routerHighlightMode", true, c), row("PCB_ACTIONS::routerShoveMode", true, c), row("PCB_ACTIONS::routerWalkaroundMode", true, c),
     { sep: true }, row("PCB_ACTIONS::routerSettingsDialog", false, c)];
+  const x = at ? at.left : stage.getBoundingClientRect().left + 40, y = at ? at.bottom : stage.getBoundingClientRect().top + 40;
+  E.contextMenuOpen = true; anchor = null;
+  store.set({ contextMenu: { id: ++menuId, x, y, items } });
+  requestRender();
+}
+
+/** The Arc toolbar group's menu (toolbars_pcb_editor.cpp): the three arc editing modes as check items. */
+export function openArcEditModeMenu(at: { left: number; bottom: number } | null): void {
+  if (!E.kdoc || state.view !== "editor" || isSch()) return;
+  const c = menuCtx();
+  const items: CtxItem[] = ARC_EDIT_MODE_MENU.map((act) => row(act, true, c));
   const x = at ? at.left : stage.getBoundingClientRect().left + 40, y = at ? at.bottom : stage.getBoundingClientRect().top + 40;
   E.contextMenuOpen = true; anchor = null;
   store.set({ contextMenu: { id: ++menuId, x, y, items } });

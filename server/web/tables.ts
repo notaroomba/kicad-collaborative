@@ -170,7 +170,9 @@ export const MODULE_DUPLICATES: Record<Editor, string[]> = {
     // Line Modes live on the left toolbar's radio group and Shift+Space; Ctrl++ / Ctrl+- (incWidth / decWidth) are the drawing tools' context menu
     "lineModeFree", "lineModeNext", "incWidth", "decWidth",
     // the arc tool's modes: the Arc toolbar group and DRAWING_TOOL's context menu while Draw Arcs runs; / and Alt+/ act on the arc in progress
-    "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode"],
+    "drawArcCenter", "drawArcStartEndMid", "drawArcStartEndCenter", "drawArcTangent", "drawArcStartDirEnd", "arcPosture", "cycleArcDrawMode",
+    // the arc editing modes: the Arc toolbar group's own menu, Ctrl+Space and the selection menu of one arc
+    "pointEditorArcKeepCenter", "pointEditorArcKeepEndpoint", "pointEditorArcKeepRadius", "cycleArcEditMode"],
 };
 /** What an entry needs before it can run (KiCad's SELECTION_CONDITIONS / the read-only frame): greyed out otherwise. */
 export const NEEDS_SELECTION = new Set(["cut", "copy", "copyAsText", "doDelete", "duplicate", "increment", "decrement", "move", "drag", "drag45Degree", "dragFreeAngle", "rotateCCW", "rotateCW", "rotateCcw", "rotateCw",

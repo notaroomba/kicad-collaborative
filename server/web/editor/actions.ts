@@ -8,7 +8,7 @@ import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
 import { chooseTrackWidth, chooseViaSize } from "./pcbrouting";
 import { setCrosshair, setTheme, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
-import { contextMenuAction, openRouterModeMenu } from "./contextmenu";
+import { contextMenuAction, openArcEditModeMenu, openRouterModeMenu } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
 import { drawSelection, renderProps, setFilter } from "./selection";
 import { E } from "./state";
@@ -200,6 +200,9 @@ export const HANDLERS = {
   showPcbNew: () => switchEditor(), showEeschema: () => switchEditor(),
   toggleGrid: () => { E.gridOn = !E.gridOn; updateGridStatus(); requestRender(); }, "toggleGrid:menu": (a) => gridMenu(a),
   "routeSingleTrack:menu": (a) => openRouterModeMenu(a), "routeDiffPair:menu": (a) => openRouterModeMenu(a),
+  // the Arc group's menu, whichever drawing mode its button shows
+  "drawArcCenter:menu": (a) => openArcEditModeMenu(a), "drawArcStartEndMid:menu": (a) => openArcEditModeMenu(a), "drawArcStartEndCenter:menu": (a) => openArcEditModeMenu(a),
+  "drawArcTangent:menu": (a) => openArcEditModeMenu(a), "drawArcStartDirEnd:menu": (a) => openArcEditModeMenu(a),
   millimetersUnits: () => setUnitsAction("mm", "millimetersUnits"), inchesUnits: () => setUnitsAction("in", "inchesUnits"), milsUnits: () => setUnitsAction("mil", "milsUnits"),
   cursorSmallCrosshairs: () => setCrosshair("small", "cursorSmallCrosshairs"), cursorFullCrosshairs: () => setCrosshair("full", "cursorFullCrosshairs"), cursor45Crosshairs: () => setCrosshair("45", "cursor45Crosshairs"),
   togglePolarCoords: () => { E.polarCoords = !E.polarCoords; setToggle("togglePolarCoords", E.polarCoords); store.slice("viewport", { polar: E.polarCoords }); },

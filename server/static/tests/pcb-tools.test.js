@@ -406,14 +406,15 @@ test("module: arc modes: Start, End, Midpoint / Start, End, Center (/ = major ar
   clickAt(ctx, [10, 10]); clickAt(ctx, [20, 10]);
   clickAt(ctx, [15, 10]); assert.equal(P.state.draw.arc.getStep(), 2, "a midpoint on the chord is no arc: nothing locks in");
   clickAt(ctx, [17, 15]);                                                  // the cursor is projected onto the chord's bisector
-  let a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.mid, a.end], [[10, 10], [15, 15], [20, 10]]);
+  // stored with the board's one winding (EDA_SHAPE::SetArcGeometry swaps the ends of an arc drawn the other way)
+  let a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.mid, a.end], [[20, 10], [15, 15], [10, 10]]);
   // Start, End, Center: the minor arc bulges away from the centre; / gives the major arc
   pcb.actions.drawArcStartEndCenter.run(ctx);
   clickAt(ctx, [10, 30]); clickAt(ctx, [20, 30]); clickAt(ctx, [15, 32]);
   a = arcOf(log.commits.at(-1)); assert.deepEqual([a.start, a.end], [[10, 30], [20, 30]]); const r = Math.hypot(5, 2);
   assert.ok(nearPt(a.mid, [15, 32 - r]), "minor: " + a.mid);
   clickAt(ctx, [10, 30]); clickAt(ctx, [20, 30]); pcb.onPointerMove(ev(), [15, 32], ctx); pcb.onKey("/", ev(), ctx); clickAt(ctx, [15, 32]);
-  a = arcOf(log.commits.at(-1)); assert.ok(nearPt(a.mid, [15, 32 + r]), "major: " + a.mid);
+  a = arcOf(log.commits.at(-1)); assert.ok(nearPt(a.mid, [15, 32 + r]), "major: " + a.mid); assert.deepEqual([a.start, a.end], [[20, 30], [10, 30]]);
   // Start, Direction, End
   pcb.actions.drawArcStartDirEnd.run(ctx);
   clickAt(ctx, [0, 50]); clickAt(ctx, [5, 50]); clickAt(ctx, [5, 55]);
@@ -1455,7 +1456,8 @@ test("point editor: KiCad's edit points per shape, and dragging one reshapes onl
   assert.deepEqual(keys("g-1"), ["start", "end"]);
   assert.deepEqual(keys("r-1"), ["r0", "r1", "r2", "r3", "e0", "e1", "e2", "e3"], "rectangle: corners, then edge midpoints");
   assert.deepEqual(keys("c-1"), ["center", "end"]);
-  assert.deepEqual(keys("ar-1"), ["start", "mid", "end"]);
+  assert.deepEqual(keys("ar-1"), ["start", "mid", "end", "center"], "an arc: ends, mid and the centre handle");
+  assert.deepEqual(P.editPoints(doc.items.get("ar-1")).at(-1).p, [41, 40]);
   assert.deepEqual(keys("z-1"), ["c0", "c1", "c2", "c3", "m0", "m1", "m2", "m3"]);
   assert.ok(P.editPoints(doc.items.get("z-1")).filter((h) => h.key[0] === "m").every((h) => h.circle), "midpoints are drawn as circles");
   assert.deepEqual(P.editPoints(doc.items.get("s-1")), [], "tracks have no point editor (the router drags them)");
@@ -1469,6 +1471,36 @@ test("point editor: KiCad's edit points per shape, and dragging one reshapes onl
   assert.deepEqual(K.kids(K.kid(K.kid(n, "polygon"), "pts"), "xy").map((x) => [K.num(x[1]), K.num(x[2])]), [[50, 50], [62, 50], [62, 60], [50, 60]], "a midpoint drags the whole edge");
   assert.equal(K.serialize(n).replace(/\(pts[^]*$/, ""), K.serialize(doc.items.get("z-1").node).replace(/\(pts[^]*$/, ""), "everything but the outline is untouched");
   assert.ok(roundTrips(n));
+});
+
+test("point editor: an arc's handles in the three arc editing modes (EDA_ARC_POINT_EDIT_BEHAVIOR) and Cycle Arc Editing Mode", () => {
+  const r2 = 10 * Math.SQRT1_2;
+  const arc = ["gr_arc", ["start", 10, 0], ["mid", r2, r2], ["end", 0, 10], ["stroke", ["width", 0.1], ["type", "default"]], ["layer", "F.SilkS"], ["uuid", "a"]];
+  const geo = (n) => ["start", "mid", "end"].map((k) => { const x = K.kid(n, k); return [K.num(x[1]), K.num(x[2])]; });
+  const close = (a, b) => a.every((p, i) => Math.abs(p[0] - b[i][0]) < 1e-5 && Math.abs(p[1] - b[i][1]) < 1e-5);
+  const edit = (mode, key, p, raw) => { P.setArcEditMode(mode); return geo(P.editPointNode(arc, "gr_arc", key, p, raw || p)); };
+  // keep centre, adjust radius: an end sets the radius and the other end follows; the mid sets it too; the centre moves the arc
+  assert.ok(close(edit(0, "start", [20, 0]), [[20, 0], [20 * Math.SQRT1_2, 20 * Math.SQRT1_2], [0, 20]]));
+  assert.ok(close(edit(0, "mid", [9, 9], [3, 4]), [[5, 0], [5 * Math.SQRT1_2, 5 * Math.SQRT1_2], [0, 5]]), "the mid follows the cursor itself, not the grid");
+  assert.ok(close(edit(0, "center", [1, 2]), [[11, 2], [r2 + 1, r2 + 2], [1, 12]]));
+  // keep centre and radius: an end slides round the circle
+  assert.ok(close(edit(2, "end", [-30, 0]), [[10, 0], [0, 10], [-10, 0]]));
+  assert.ok(close(edit(2, "center", [1, 2]), [[11, 2], [r2 + 1, r2 + 2], [1, 12]]));
+  // keep endpoints: the centre slides along the chord's bisector; the mid along its ray; an end keeps the other end's tangent
+  let g = edit(1, "center", [3, 1]); assert.ok(close([g[0], g[2]], [[10, 0], [0, 10]])); const c = K.arcFrom3(...g); assert.ok(Math.abs(c.x - 2) < 1e-6 && Math.abs(c.y - 2) < 1e-6);
+  g = edit(1, "mid", [20, 20], [20, 20]); assert.ok(close([g[0], g[2]], [[10, 0], [0, 10]])); assert.ok(Math.abs(g[1][0] - 20) < 1e-6 && Math.abs(g[1][1] - 20) < 1e-6);
+  g = edit(1, "end", [0, 12]); const t = K.arcFrom3(...g);
+  assert.ok(close([g[0], g[2]], [[10, 0], [0, 12]]) && Math.abs(t.x + 2.2) < 1e-4 && Math.abs(t.y) < 1e-4, "the centre stays on the start's radius: " + JSON.stringify(t));
+  // an arc saved the other way round keeps the handle under the cursor
+  P.setArcEditMode(0);
+  const rev = ["gr_arc", ["start", 0, 10], ["mid", r2, r2], ["end", 10, 0], ["layer", "F.SilkS"]];
+  assert.ok(close(geo(P.editPointNode(rev, "gr_arc", "end", [20, 0], [20, 0])), [[20, 0], [20 * Math.SQRT1_2, 20 * Math.SQRT1_2], [0, 20]]));
+  // Cycle Arc Editing Mode: keep centre -> keep centre and radius -> keep endpoints -> keep centre; the modes are check items
+  const doc = K.parseDoc(PE_FIXTURE, "kicad_pcb"); const { ctx } = fakeCtx(doc); pcb.onDocChanged(ctx);
+  const seq = []; for (let i = 0; i < 3; i++) { pcb.runAction("cycleArcEditMode", ctx); seq.push(P.arcEditMode()); } assert.deepEqual(seq, [2, 1, 0]);
+  assert.equal(pcb.actions.cycleArcEditMode.key, "Ctrl+Space");
+  pcb.runAction("pointEditorArcKeepEndpoint", ctx); assert.equal(P.arcEditMode(), 1); assert.equal(pcb.routerChecks()["ACTIONS::pointEditorArcKeepEndpoint"], true);
+  P.setArcEditMode(0);
 });
 
 test("point editor: Create Corner and Remove Corner (PCB_POINT_EDITOR::addCorner / removeCorner)", () => {
