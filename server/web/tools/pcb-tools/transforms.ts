@@ -133,6 +133,7 @@ export function anchorOf(item: KItem): Pt {
   if (k === "footprint" || k === "via" || k === "gr_text" || k === "image" || k === "target") { const [x, y] = K.atOf(n); return [x, y]; }
   if (k === "segment" || k === "arc" || k === "gr_line" || k === "gr_arc") { const p = pt(n, "start"); if (p) return p; }
   if (k === "gr_circle") { const p = pt(n, "center"); if (p) return p; }
+  if (k === "generated") { const c = K.kid(n, "origin"); const xy = c && K.kid(c, "xy"); if (xy) return [K.num(xy[1]), K.num(xy[2])]; }   // PCB_GENERATOR::GetPosition
   const b = item.bbox; return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
 }
 export function bboxUnion(items: KItem[]) { let b: Box | null = null; for (const it of items) { if (!it.bbox) continue; b = b ? [Math.min(b[0], it.bbox[0]), Math.min(b[1], it.bbox[1]), Math.max(b[2], it.bbox[2]), Math.max(b[3], it.bbox[3])] : it.bbox.slice(); } return b; }

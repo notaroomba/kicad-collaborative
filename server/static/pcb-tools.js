@@ -518,6 +518,11 @@
       const p = pt(n, "center");
       if (p) return p;
     }
+    if (k === "generated") {
+      const c = K.kid(n, "origin");
+      const xy2 = c && K.kid(c, "xy");
+      if (xy2) return [K.num(xy2[1]), K.num(xy2[2])];
+    }
     const b = item.bbox;
     return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
   }
@@ -1329,19 +1334,23 @@
       }
       const ls = K.kid(node, "layers");
       if (ls && ls.length > 2) node.splice(node.indexOf(ls), 1, ["layer", K.str(ls[1])]);
-      let cp = K.kid(node, "connect_pads");
-      if (!cp) {
-        cp = ["connect_pads", ["clearance", 0.5]];
-        node.splice(node.indexOf(K.kid(node, "min_thickness") || f), 0, cp);
-      }
-      if (typeof cp[1] === "string") cp[1] = "no";
-      else cp.splice(1, 0, "no");
     }
     return node;
   }
   function thievingZoneNode(doc, pts, layer) {
-    return setZoneFillMode(zoneNode(doc, pts, layer, null), "thieving");
+    const node = setZoneFillMode(zoneNode(doc, pts, layer, null), "thieving");
+    let cp = K.kid(node, "connect_pads");
+    if (!cp) {
+      cp = ["connect_pads", ["clearance", 0.5]];
+      node.splice(node.indexOf(K.kid(node, "min_thickness") || K.kid(node, "fill")), 0, cp);
+    }
+    if (typeof cp[1] === "string") cp[1] = "no";
+    else cp.splice(1, 0, "no");
+    return node;
   }
+  var THIEVING_FILE_VERSION = 20260513;
+  var thievingAllowed = (doc) => !doc || !(Number(doc.version) > 0) || Number(doc.version) >= THIEVING_FILE_VERSION;
+  var THIEVING_NEEDS_VERSION_MSG = "Copper thieving needs a board in the KiCad 11 file format (version 20260513 or later); this board is saved in an older format, which cannot store it.";
   function zoneNode(doc, pts, layer, net) {
     const node = ["zone"];
     const nn = netNode(doc, net);
@@ -2310,7 +2319,51 @@
     const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
     return re.test(s);
   }
-  var TYPE_NAME = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
+  function wxMatches(pat, s) {
+    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+    return re.test(s);
+  }
+  var TYPE_NAME = {
+    segment: "Track",
+    arc: "Track",
+    via: "Via",
+    pad: "Pad",
+    zone: "Zone",
+    footprint: "Footprint",
+    gr_line: "Graphic",
+    gr_rect: "Graphic",
+    gr_circle: "Graphic",
+    gr_arc: "Graphic",
+    gr_poly: "Graphic",
+    gr_curve: "Graphic",
+    gr_bbox: "Graphic",
+    gr_text: "Text",
+    fp_text: "Text",
+    property: "Text",
+    gr_text_box: "Text Box",
+    fp_text_box: "Text Box",
+    table: "Table",
+    table_cell: "Table Cell",
+    image: "Reference Image",
+    generated: "Generator",
+    group: "Group",
+    target: "Target",
+    point: "Point",
+    barcode: "Barcode",
+    fp_line: "Graphic",
+    fp_rect: "Graphic",
+    fp_circle: "Graphic",
+    fp_arc: "Graphic",
+    fp_poly: "Graphic",
+    fp_curve: "Graphic"
+  };
+  function typeName(it) {
+    if (it.kind === "dimension") {
+      const t = K.kid(it.node, "type");
+      return t && K.str(t[1]) === "leader" ? "Leader" : "Dimension";
+    }
+    return TYPE_NAME[it.kind] || it.kind;
+  }
   function propOf(doc, s, it, name) {
     if (!it) return { t: "u" };
     const key = name.replace(/_/g, "").toLowerCase();
@@ -2318,7 +2371,7 @@
     const str = (v) => ({ t: "s", v, wild: false });
     switch (key) {
       case "type":
-        return str(TYPE_NAME[it.kind] || it.kind);
+        return str(typeName(it));
       case "net":
       case "netname":
         return str(net());
@@ -2373,10 +2426,8 @@
             const name = netOf(it.node).name || "";
             const m = matchDpSuffix(name);
             if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
-            let i = name.length - 1;
-            while (i >= 0 && /[0-9_]/.test(name[i])) i--;
-            const base = name.slice(0, i) + name.slice(i + 1);
-            return num(wildMatch(as, base) || base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_"))));
+            const base = m.base;
+            return num(wxMatches(as, base) || base.endsWith("_") && wxMatches(as, base.slice(0, base.lastIndexOf("_"))));
           }
           case "hasNetclass":
             return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
@@ -6235,7 +6286,7 @@
       }
     };
     for (const n of nodes) walk(n);
-    for (const n of nodes) if (n[0] === "group") {
+    for (const n of nodes) if (n[0] === "group" || n[0] === "generated") {
       const m = K.kid(n, "members");
       if (m) {
         const ids = m.slice(1).map(K.str).filter((id) => map.has(id)).map((id) => map.get(id));
@@ -6327,12 +6378,13 @@
     const out = { changes: [], ids: [], restore: [] };
     const joins = /* @__PURE__ */ new Map();
     const coveredByGroup = (id) => {
-      for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true;
+      for (let g = parentOf(doc, id); g; g = parentOf(doc, g.id)) if (sel.has(g.id)) return true;
       return false;
     };
+    const isParent = (n) => n[0] === "group" || n[0] === "generated";
     const subtree = (it, acc) => {
       acc.push(it);
-      if (it.kind === "group") for (const m of groupMembers(it.node)) {
+      if (it.kind === "group" || it.kind === "generated") for (const m of groupMembers(it.node)) {
         const c = doc.items.get(m);
         if (c) subtree(c, acc);
       }
@@ -6340,13 +6392,13 @@
     };
     for (const id of ids) {
       const it = doc.items.get(id);
-      if (!it || it.kind === "generated" || coveredByGroup(id)) continue;
+      if (!it || coveredByGroup(id)) continue;
       const src = subtree(it, []);
       const nodes = src.map((x) => clone(x.node));
       freshUuids(nodes);
       if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
       if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);
-      const order = nodes.map((n, i) => i).sort((a, b) => (nodes[a][0] === "group") - (nodes[b][0] === "group") || b - a);
+      const order = nodes.map((n, i) => i).sort((a, b) => isParent(nodes[a]) - isParent(nodes[b]) || b - a);
       let topId = null;
       for (const i of order) {
         const n = nodes[i];
@@ -8994,8 +9046,12 @@
         rv = 1;
       } else break;
     }
-    if (rv !== 0 && count >= 1) comp = name.slice(0, name.length - count) + comp + name.slice(name.length - count + 1);
-    return { rv, complement: rv ? comp : "" };
+    let base = "";
+    if (rv !== 0 && count >= 1) {
+      base = name.slice(0, name.length - count);
+      comp = base + comp + name.slice(name.length - count + 1);
+    }
+    return { rv, complement: rv ? comp : "", base };
   }
   function dpNetPair(doc, net) {
     const name = net && net.name ? net.name : net && net.code > 0 ? netTable(doc).byCode.get(net.code) || "" : "";
@@ -11120,6 +11176,10 @@
     }
     if (t === "garc" && S.draw && S.draw.shape === "garc") arcMove(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey)));
     const p = [hv.x, hv.y], layer = S.gfxLayer;
+    if (!S.draw && t === "thievingzone" && !thievingAllowed(ctx.doc)) {
+      ctx.toast(THIEVING_NEEDS_VERSION_MSG);
+      return;
+    }
     if (!S.draw && t === "thievingzone") {
       const tpl = zoneTemplate(ctx, false, true);
       S.draw = { shape: t, start: p, cur: p.slice(), pts: [p], template: tpl, layer: zoneLayers(tpl)[0] };
@@ -13686,10 +13746,10 @@
     const sel = new Set(ids);
     const out = { changes: [], ids: [], label: o.arrange ? "Arrange selection" : "Create Array" };
     const coveredByGroup = (id) => {
-      for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true;
+      for (let g = parentOf(doc, id); g; g = parentOf(doc, g.id)) if (sel.has(g.id)) return true;
       return false;
     };
-    const roots = ids.map((id) => doc.items.get(id)).filter((it) => it && it.kind !== "generated" && !coveredByGroup(it.id));
+    const roots = ids.map((id) => doc.items.get(id)).filter((it) => it && !coveredByGroup(it.id));
     const moveRoot = (it, fn) => {
       const members = Array.from(expandGroups(doc, [it.id]));
       out.changes.push(...transformChanges(doc, members, fn));
@@ -15320,6 +15380,38 @@
   function withoutExclusions(entries, keys) {
     return entries.filter((e) => !keys.has(exclusionKey(readExclusion(e))));
   }
+  function violatingRuleName(m) {
+    if (m.rule) return m.rule;
+    const r = /\(rule '((?:[^'\\]|\\.)*)'/.exec(m.text || "") || /\brule '((?:[^'\\]|\\.)*)'/.exec(m.text || "");
+    return r ? r[1] : null;
+  }
+  var DRC_RUN_TEXT = {
+    inspectClearance: "Run: Inspect > Clearance Resolution",
+    inspectConstraints: "Run: Inspect > Constraints Resolution",
+    diffFootprint: "Run: Inspect > Compare Footprint with Library",
+    updatePcbFromSchematic: "Run: Tools > Update PCB from Schematic...",
+    cleanupTracksAndVias: "Run: Tools > Cleanup Tracks & Vias...",
+    showFootprintLibTable: "Run: Preferences > Manage Footprint Libraries...",
+    updateFootprint: "Run: Update Footprint...",
+    changeFootprint: "Run: Change Footprint..."
+  };
+  var INSPECT_CLEARANCE = /* @__PURE__ */ new Set(["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"]);
+  var INSPECT_CONSTRAINTS = /* @__PURE__ */ new Set(["text_height", "text_thickness", "diff_pair_uncoupled_length_too_long", "track_width", "track_angle", "track_segment_length", "via_diameter", "annular_width", "drill_out_of_range", "microvia_drill_out_of_range", "connection_width", "assertion_failure"]);
+  function inspectDrcAction(code) {
+    return INSPECT_CLEARANCE.has(code) ? "inspectClearance" : INSPECT_CONSTRAINTS.has(code) ? "inspectConstraints" : code === "lib_footprint_mismatch" ? "diffFootprint" : null;
+  }
+  function fixDrcEntry(code, mainKind) {
+    if (code === "lib_footprint_issues") return { label: DRC_RUN_TEXT.showFootprintLibTable, action: "showFootprintLibTable" };
+    if (code === "lib_footprint_mismatch") return { label: DRC_RUN_TEXT.updateFootprint, action: "updateFootprint" };
+    if (code === "footprint_filters_mismatch") return { label: DRC_RUN_TEXT.changeFootprint, action: "changeFootprint" };
+    if (["footprint_symbol_mismatch", "footprint_symbol_field_mismatch", "missing_footprint", "duplicate_footprints", "extra_footprint"].includes(code)) return { label: DRC_RUN_TEXT.updatePcbFromSchematic, action: "updatePcbFromSchematic" };
+    if (code === "footprint_type_mismatch" || code === "footprint") return { label: "Edit Footprint Properties...", action: "edit" };
+    if (code === "padstack" || code === "padstack_invalid") return { label: "Edit Pad Properties...", action: "edit" };
+    if (["text_height", "text_thickness", "mirrored_text_on_front_layer", "nonmirrored_text_on_back_layer"].includes(code))
+      return { label: mainKind === "dimension" ? "Edit Dimension Properties..." : mainKind === "property" || mainKind === "field" ? "Edit Field Properties..." : "Edit Text Properties...", action: "edit" };
+    if (code === "track_dangling" || code === "via_dangling") return { label: DRC_RUN_TEXT.cleanupTracksAndVias, action: "cleanupTracksAndVias" };
+    return null;
+  }
 
   // web/tools/pcb-tools/index.ts
   var pcb = {
@@ -15377,6 +15469,12 @@
       if (t !== "image") S.image = null;
       S.modTool = mine ? t : null;
       if (t === "garc") showArcMode(ctx);
+      if (t === "thievingzone" && !ctx.viewOnly && !thievingAllowed(ctx.doc)) {
+        S.modTool = null;
+        ctx.toast(THIEVING_NEEDS_VERSION_MSG);
+        ctx.setTool("select");
+        return;
+      }
       if (t === "drag" && !beginToolDrag(ctx, !!S.dragFree)) {
         S.modTool = null;
         ctx.toast("Select a track or a via first, or point at one, then press D to drag it");
@@ -16192,6 +16290,9 @@
     zoneFillMode,
     thievingZoneNode,
     thievingDefaults,
+    thievingAllowed,
+    THIEVING_FILE_VERSION,
+    THIEVING_NEEDS_VERSION_MSG,
     boardNets,
     dimensionNode,
     dimGeometry,
@@ -16226,6 +16327,10 @@
     textMirroringMarkers,
     textOnEdgeCutsMarkers,
     DRCET,
+    DRC_RUN_TEXT,
+    fixDrcEntry,
+    inspectDrcAction,
+    violatingRuleName,
     applyExclusions,
     exclusionKey,
     exclusionOf,

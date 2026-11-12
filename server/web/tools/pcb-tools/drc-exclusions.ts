@@ -81,3 +81,44 @@ export function withExclusion(entries: unknown[], ex: DrcExclusionJson): unknown
 export function withoutExclusions(entries: unknown[], keys: Set<string>): unknown[] {
   return entries.filter((e) => !keys.has(exclusionKey(readExclusion(e))));
 }
+
+// ---------------------------------------------------------------- DIALOG_DRC::OnDRCItemRClick's rule, inspect and fix entries
+/**
+ * The custom rule (.kicad_dru) a marker was raised by: DRC_ITEM::GetViolatingRule when it is not implicit.  The
+ * checks write the constraint's name, DRC_RULE's "rule '<name>'", into the message, where an implicit rule writes
+ * "netclass '<name>'" or "board setup constraints" instead; null for those.
+ */
+export function violatingRuleName(m: { text: string; rule?: string | null }): string | null {
+  if (m.rule) return m.rule;
+  const r = /\(rule '((?:[^'\\]|\\.)*)'/.exec(m.text || "") || /\brule '((?:[^'\\]|\\.)*)'/.exec(m.text || "");
+  return r ? r[1] : null;
+}
+/** "Run: <menu> > <label>" (EDA_BASE_FRAME::GetRunMenuCommandDescription), "Run: <friendly name>" when the menu bar lacks it. */
+export const DRC_RUN_TEXT: Record<string, string> = {
+  inspectClearance: "Run: Inspect > Clearance Resolution", inspectConstraints: "Run: Inspect > Constraints Resolution", diffFootprint: "Run: Inspect > Compare Footprint with Library",
+  updatePcbFromSchematic: "Run: Tools > Update PCB from Schematic...", cleanupTracksAndVias: "Run: Tools > Cleanup Tracks & Vias...", showFootprintLibTable: "Run: Preferences > Manage Footprint Libraries...",
+  updateFootprint: "Run: Update Footprint...", changeFootprint: "Run: Change Footprint...",
+};
+const INSPECT_CLEARANCE = new Set(["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"]);
+const INSPECT_CONSTRAINTS = new Set(["text_height", "text_thickness", "diff_pair_uncoupled_length_too_long", "track_width", "track_angle", "track_segment_length", "via_diameter", "annular_width", "drill_out_of_range", "microvia_drill_out_of_range", "connection_width", "assertion_failure"]);
+/** BOARD_INSPECTION_TOOL::InspectDRCErrorMenuText: the action an Inspect entry runs for the code, or null. */
+export function inspectDrcAction(code: string): string | null {
+  return INSPECT_CLEARANCE.has(code) ? "inspectClearance" : INSPECT_CONSTRAINTS.has(code) ? "inspectConstraints" : code === "lib_footprint_mismatch" ? "diffFootprint" : null;
+}
+/**
+ * DRC_TOOL::FixDRCErrorMenuText / FixDRCError: { label, action } — the action to run, or "edit" (OnEditItemRequest on the
+ * main item: footprint, pad, text, field or dimension properties); null when the code has no fix.  mainKind is the
+ * main item's kind (a dimension's text edits as the dimension, a footprint's field as a field).
+ */
+export function fixDrcEntry(code: string, mainKind?: string | null): { label: string; action: string } | null {
+  if (code === "lib_footprint_issues") return { label: DRC_RUN_TEXT.showFootprintLibTable, action: "showFootprintLibTable" };
+  if (code === "lib_footprint_mismatch") return { label: DRC_RUN_TEXT.updateFootprint, action: "updateFootprint" };
+  if (code === "footprint_filters_mismatch") return { label: DRC_RUN_TEXT.changeFootprint, action: "changeFootprint" };
+  if (["footprint_symbol_mismatch", "footprint_symbol_field_mismatch", "missing_footprint", "duplicate_footprints", "extra_footprint"].includes(code)) return { label: DRC_RUN_TEXT.updatePcbFromSchematic, action: "updatePcbFromSchematic" };
+  if (code === "footprint_type_mismatch" || code === "footprint") return { label: "Edit Footprint Properties...", action: "edit" };
+  if (code === "padstack" || code === "padstack_invalid") return { label: "Edit Pad Properties...", action: "edit" };
+  if (["text_height", "text_thickness", "mirrored_text_on_front_layer", "nonmirrored_text_on_back_layer"].includes(code))
+    return { label: mainKind === "dimension" ? "Edit Dimension Properties..." : mainKind === "property" || mainKind === "field" ? "Edit Field Properties..." : "Edit Text Properties...", action: "edit" };
+  if (code === "track_dangling" || code === "via_dangling") return { label: DRC_RUN_TEXT.cleanupTracksAndVias, action: "cleanupTracksAndVias" };
+  return null;
+}

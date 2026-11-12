@@ -131,15 +131,25 @@ export function setZoneFillMode(node: SNode, mode: ZoneFillMode) {
     f.push(thievingNode(thievingDefaults(minT)));
     for (const k of ["net", "net_name"]) { const c = K.kid(node, k); if (c) node.splice(node.indexOf(c), 1); }
     const ls = K.kid(node, "layers"); if (ls && ls.length > 2) node.splice(node.indexOf(ls), 1, ["layer", K.str(ls[1])]);
-    let cp = K.kid(node, "connect_pads"); if (!cp) { cp = ["connect_pads", ["clearance", 0.5]]; node.splice(node.indexOf(K.kid(node, "min_thickness") || f), 0, cp); }
-    if (typeof cp[1] === "string") cp[1] = "no"; else cp.splice(1, 0, "no");
   }
   return node;
 }
-/** ZONE_CREATE_HELPER::createNewZone with m_thieving (zone_create_helper.cpp): fill mode COPPER_THIEVING, net 0, no pad connections. */
+/** ZONE_CREATE_HELPER::createNewZone with m_thieving (zone_create_helper.cpp): fill mode COPPER_THIEVING, net 0, no pad connections (ZONE_CONNECTION::NONE, only here — ZONE::SetFillMode leaves the pad connection alone). */
 export function thievingZoneNode(doc: BoardDoc, pts: Pt[], layer: string): SNode {
-  return setZoneFillMode(zoneNode(doc, pts, layer, null), "thieving");
+  const node = setZoneFillMode(zoneNode(doc, pts, layer, null), "thieving");
+  let cp = K.kid(node, "connect_pads"); if (!cp) { cp = ["connect_pads", ["clearance", 0.5]]; node.splice(node.indexOf(K.kid(node, "min_thickness") || K.kid(node, "fill")!), 0, cp); }
+  if (typeof cp[1] === "string") cp[1] = "no"; else cp.splice(1, 0, "no");
+  return node;
 }
+/**
+ * The board file version that first knows copper thieving ((fill (mode thieving)) and (thieving …), SEXPR_BOARD_FILE_VERSION
+ * 20260513, pcb_io_kicad_sexpr.h).  The parser refuses those tokens in an older file and the writer would raise the
+ * board's version to it, so a board in an older format (a KiCad 10 project) is never given a thieving fill: the
+ * format version of a user's board is not bumped.
+ */
+export const THIEVING_FILE_VERSION = 20260513;
+export const thievingAllowed = (doc: BoardDoc | null | undefined) => !doc || !(Number((doc as { version?: unknown }).version) > 0) || Number((doc as { version?: unknown }).version) >= THIEVING_FILE_VERSION;
+export const THIEVING_NEEDS_VERSION_MSG = "Copper thieving needs a board in the KiCad 11 file format (version 20260513 or later); this board is saved in an older format, which cannot store it.";
 export function zoneNode(doc: BoardDoc, pts: Pt[], layer: string, net: NetRef | null): SNode {
   const node: SNode = ["zone"]; const nn = netNode(doc, net); if (nn[1]) node.push(nn);   // (net …) only for a real net
   node.push(["layer", layer], ["uuid", K.newUuid()], ["hatch", "edge", 0.5]);

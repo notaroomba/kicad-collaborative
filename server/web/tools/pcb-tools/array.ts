@@ -11,7 +11,7 @@ export interface ArrayOpts {
 /** One copy's move: the offset in mm and the rotation in degrees. */
 export interface ArrayStep { offset: Pt; rot: number }
 import { duplicateChanges } from "./clipboard";
-import { expandGroups, groupOf } from "./groups";
+import { expandGroups, parentOf } from "./groups";
 import { anchorOf, rotateNode, selectionCenter, transformChanges, translateNode } from "./transforms";
 import { r6, rotator } from "./util";
 
@@ -73,8 +73,9 @@ export function arrayApply(node: SNode, t: ArrayStep, pos: Pt) { if (t.offset[0]
  */
 export function arrayChanges(doc: BoardDoc, ids: string[], o: ArrayOpts) {
   const N = arraySize(o); const sel = new Set(ids); const out: { changes: PcbChange[]; ids: string[]; label: string } = { changes: [], ids: [], label: o.arrange ? "Arrange selection" : "Create Array" };
-  const coveredByGroup = (id: string) => { for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
-  const roots = ids.map((id: string) => doc.items.get(id)).filter((it: KItem | undefined) => it && it.kind !== "generated" && !coveredByGroup(it.id)) as KItem[];
+  // a generator (a tuning pattern) is a root like a group: PCB_GROUP::DeepDuplicate copies it with its members
+  const coveredByGroup = (id: string) => { for (let g = parentOf(doc, id); g; g = parentOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
+  const roots = ids.map((id: string) => doc.items.get(id)).filter((it: KItem | undefined) => it && !coveredByGroup(it.id)) as KItem[];
   const moveRoot = (it: KItem, fn: (n: SNode, it: KItem) => unknown) => { const members = Array.from(expandGroups(doc, [it.id])); out.changes.push(...transformChanges(doc, members, fn)); };
   if (o.arrange) {
     const first = roots[0]; if (!first) return out; const p0 = anchorOf(first);

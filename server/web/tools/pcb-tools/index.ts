@@ -60,7 +60,7 @@ import { LENGTH_UNCONSTRAINED, TUNE_IU, TUNE_MSG_INSIDE, TUNE_MSG_PICK, TUNE_MSG
 import { SELECTION_TYPES, boardLayerName, filterIds, idsOnLayer, inspectClearance, itemDescription, msgPanelInfo } from "./msgpanel";
 import { clusterRoots, conductors, connectedCopperIds, localRatsnest, netHighlightIds, netInspector, netItemIds, netTable, netlist, ratsnest } from "./netlist";
 import { netNode, netOf, netStyle } from "./nets";
-import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults } from "./nodes";
+import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, thievingAllowed, THIEVING_FILE_VERSION, THIEVING_NEEDS_VERSION_MSG } from "./nodes";
 import { drawOverlay, dynamicRatsnest } from "./overlay";
 import { genHiddenIds, selectedTuningPattern, editTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit } from "./tuning-edit";
 import { addCornerChanges, arcEditGeometry, arcEditMode, canAddCorner, canRemoveCorner, editPointNode, editPoints, removeCornerChanges, setArcEditMode } from "./point-editor";
@@ -78,7 +78,7 @@ import { BOARD_VERSION, DELETE_CURSOR, HIT_MM, K, S, WIDTHS, bind, lastCtx, satu
 import { TOOLS, ghostSegs } from "./tools";
 import { newTracer, tracerFlip, tracerPosture, trailAdd } from "./tracer";
 import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges } from "./track-edit";
-import { DRCET, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions } from "./drc-exclusions";
+import { DRCET, DRC_RUN_TEXT, fixDrcEntry, inspectDrcAction, violatingRuleName, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions } from "./drc-exclusions";
 import { courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeClearanceMarkers, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers } from "./drc-more";
 import { PCB_KINDS, rotateTextBoxNode, setTextBoxAngleSliding, textBoxAngle, alignBox, alignChanges, anchorOf, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, flipChanges, flipNode, mapNodePoints, mirrorChanges, mirrorNode, moveChanges, moveExactChanges, packChanges, positionRelativeChanges, rotateChanges, rotateNode, selectionCenter, swapChanges, topLeftAnchor, transformChanges, translateNode } from "./transforms";
 import { diffPairMarkers, evalRuleConstraint, matchedLengthMarkers, parseCondition, parseDru, wildMatch } from "./dru";
@@ -110,6 +110,7 @@ export const pcb = {
     S.draw = null; S.strokeW = null; closeTextPrompt(); S.hover = null; if (t !== "image") S.image = null;
     S.modTool = mine ? t : null;
     if (t === "garc") showArcMode(ctx);
+    if (t === "thievingzone" && !ctx.viewOnly && !thievingAllowed(ctx.doc)) { S.modTool = null; ctx.toast(THIEVING_NEEDS_VERSION_MSG); ctx.setTool("select"); return; }
     if (t === "drag" && !beginToolDrag(ctx, !!S.dragFree)) { S.modTool = null; ctx.toast("Select a track or a via first, or point at one, then press D to drag it"); ctx.setTool("select"); return; }
     refreshChip(ctx); ctx.requestRender();
     if (t === "image" && !S.image && !ctx.viewOnly) openImagePicker();   // KiCad opens the file dialog as the tool starts
@@ -373,11 +374,11 @@ root.PcbTools = { state: S, arcEditMode, setArcEditMode, arcEditGeometry, editPo
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableGrid, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
-  zoneNode, ruleAreaNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, boardNets, dimensionNode, dimGeometry, dimRead, dimUpdate, dimWrite, dimEditPoints, dimEditNode, dimBaseText, dimValueText, readableAngle, snap45, typeNameOf, deleteChanges,
+  zoneNode, ruleAreaNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, thievingAllowed, THIEVING_FILE_VERSION, THIEVING_NEEDS_VERSION_MSG, boardNets, dimensionNode, dimGeometry, dimRead, dimUpdate, dimWrite, dimEditPoints, dimEditNode, dimBaseText, dimValueText, readableAngle, snap45, typeNameOf, deleteChanges,
   DIM_TYPE, DIM_CLASS, TEXTBOX_MARGIN, EXT_HEIGHT, ARROW_LEN, EXT_OFFSET, RULE_AREA_LAYERS,
   // the parity pass
   courtyardMarkers, courtyardOutlines, disabledLayerMarkers, effectivePenWidth, holeClearanceMarkers, holeToHoleMarkers, keepoutMarkers, moreDrcMarkers, textDimsMarkers, textMirroringMarkers, textOnEdgeCutsMarkers,
-  DRCET, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions,
+  DRCET, DRC_RUN_TEXT, fixDrcEntry, inspectDrcAction, violatingRuleName, applyExclusions, exclusionKey, exclusionOf, legacyExclusion, projectExclusions, readExclusion, withExclusion, withoutExclusions,
   ACTIONS, runAction, mapNodePoints, translateNode, rotateNode, rotateTextBoxNode, setTextBoxAngleSliding, textBoxAngle, flipNode, mirrorNode, anchorOf, selectionCenter, transformChanges, moveChanges, rotateChanges, flipChanges, mirrorChanges,
   moveExactChanges, positionRelativeChanges, topLeftAnchor, alignChanges, distributeChanges, distributeDeltasGaps, distributeDeltasPoints, swapChanges, packChanges,
   selectionIds, applySelection, requestSelection, bestDragOrigin, snapCursor, itemAnchors, unlockedIds, moveTransform, modificationPoint, clearNets, LOCKED_WARNING, groupNode, groupOf, groupMembers, expandGroups, groupChanges, ungroupChanges, groupMembersChanges, isLocked, setLocked, lockChanges,

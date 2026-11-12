@@ -71,13 +71,28 @@ export function parseCondition(src: string): Expr {
 export interface RuleItem { kind: string; node: SNode; layer?: string | null }
 /** WildCompareString( pattern, string, false ): * and ? wildcards, case-insensitive. */
 export function wildMatch(pat: string, s: string) { const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i"); return re.test(s); }
-const TYPE_NAME: Record<string, string> = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
+/** wxString::Matches: * and ? wildcards, case-sensitive. */
+export function wxMatches(pat: string, s: string) { const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"); return re.test(s); }
+/**
+ * A.Type: PCBEXPR_TYPE_REF::GetValue returns ENUM_MAP<KICAD_T>'s name of the item's type (EDA_ITEM_DESC,
+ * common/eda_item.cpp) — an arc track is a "Track" like a straight one, every dimension but the leader a "Dimension".
+ */
+export const TYPE_NAME: Record<string, string> = { segment: "Track", arc: "Track", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint",
+  gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_curve: "Graphic", gr_bbox: "Graphic",
+  gr_text: "Text", fp_text: "Text", property: "Text", gr_text_box: "Text Box", fp_text_box: "Text Box", table: "Table", table_cell: "Table Cell",
+  image: "Reference Image", generated: "Generator", group: "Group", target: "Target", point: "Point", barcode: "Barcode",
+  fp_line: "Graphic", fp_rect: "Graphic", fp_circle: "Graphic", fp_arc: "Graphic", fp_poly: "Graphic", fp_curve: "Graphic" };
+/** A dimension's type name: PCB_DIM_LEADER_T is "Leader", the aligned, orthogonal, centre and radial ones "Dimension". */
+export function typeName(it: RuleItem) {
+  if (it.kind === "dimension") { const t = K.kid(it.node, "type"); return t && K.str(t[1]) === "leader" ? "Leader" : "Dimension"; }
+  return TYPE_NAME[it.kind] || it.kind;
+}
 function propOf(doc: BoardDoc, s: DesignSettings, it: RuleItem | null, name: string): Val {
   if (!it) return { t: "u" };
   const key = name.replace(/_/g, "").toLowerCase(); const net = () => netOf(it.node).name || "";
   const str = (v: string): Val => ({ t: "s", v, wild: false });
   switch (key) {
-  case "type": return str(TYPE_NAME[it.kind] || it.kind);
+  case "type": return str(typeName(it));
   case "net": case "netname": return str(net());
   case "netcode": return { t: "n", v: netOf(it.node).code || 0 };
   case "netclass": return str(netclassName(s, net()));
@@ -113,8 +128,8 @@ function evalExpr(e: Expr, doc: BoardDoc, s: DesignSettings, A: RuleItem | null,
     case "inDiffPair": {   // the net's base name (suffix character out) matches, with or without a trailing '_'
       if (!it || !as) return num(false); const name = netOf(it.node).name || ""; const m = matchDpSuffix(name);
       if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
-      let i = name.length - 1; while (i >= 0 && (/[0-9_]/.test(name[i]))) i--; const base = name.slice(0, i) + name.slice(i + 1);
-      return num(wildMatch(as, base) || (base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_")))));
+      const base = m.base;   // MatchDpSuffix's aBaseDpName; wxString::Matches is case-sensitive
+      return num(wxMatches(as, base) || (base.endsWith("_") && wxMatches(as, base.slice(0, base.lastIndexOf("_")))));
     }
     case "hasNetclass": return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
     case "existsOnLayer": { if (!it) return num(false); const L = K.kid(it.node, "layers"); const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)]; return num(ls.some((l) => wildMatch(as, l) || (l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)))); }

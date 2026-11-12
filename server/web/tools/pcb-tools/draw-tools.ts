@@ -15,7 +15,7 @@ import { applySelection, selectionIds } from "./groups";
 import { base64Bytes, imageInfo, imageMm } from "./images";
 import { netTable } from "./netlist";
 import { netOf } from "./nets";
-import { circleNode, curveNode, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, tableNode, textBoxNode, thievingZoneNode, zoneLayers, zoneNode } from "./nodes";
+import { circleNode, curveNode, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, tableNode, textBoxNode, thievingAllowed, thievingZoneNode, THIEVING_NEEDS_VERSION_MSG, zoneLayers, zoneNode } from "./nodes";
 import { netUnder } from "./route-geom";
 import { K, S, lastCtx } from "./state";
 import { samePt, vadd, vsub, xy } from "./util";
@@ -24,6 +24,7 @@ export function drawClick(ctx: PcbCtx, hv: Hover, t: string, ev: PtrEvent) {
   if (S.draw && S.draw.shape !== "garc") { const c = constrainDraw(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey))); hv = Object.assign({}, hv, { x: c[0], y: c[1] }); }
   if (t === "garc" && S.draw && S.draw.shape === "garc") arcMove(S.draw, [hv.x, hv.y], !!(ev && (ev.ctrlKey || ev.metaKey)));
   const p = [hv.x, hv.y], layer = S.gfxLayer;
+  if (!S.draw && t === "thievingzone" && !thievingAllowed(ctx.doc)) { ctx.toast(THIEVING_NEEDS_VERSION_MSG); return; }
   if (!S.draw && t === "thievingzone") {
     // ZONE_CREATE_HELPER::createNewZone with m_thieving: no pre-draw dialog, COPPER_THIEVING on the active layer, net 0
     const tpl = zoneTemplate(ctx, false, true);

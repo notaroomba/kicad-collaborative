@@ -93,6 +93,7 @@ interface ExclusionApi {
   exclusionOf(doc: KDoc, m: Marker, comment?: string): unknown; exclusionKey(ex: unknown): string; readExclusion(e: unknown): unknown;
   projectExclusions(text: string | null): unknown[]; applyExclusions(doc: KDoc, markers: Marker[], entries: unknown[]): Marker[];
   withExclusion(entries: unknown[], ex: unknown): unknown[]; withoutExclusions(entries: unknown[], keys: Set<string>): unknown[];
+  violatingRuleName(m: Marker): string | null; inspectDrcAction(code: string): string | null; fixDrcEntry(code: string, mainKind?: string | null): { label: string; action: string } | null; DRC_RUN_TEXT: Record<string, string>;
 }
 const XA = (): ExclusionApi => (window as unknown as { PcbTools: ExclusionApi }).PcbTools;
 /** The exclusions in force: the project's, or this session's when the project file cannot be written. */
@@ -204,16 +205,38 @@ export function openDrc(ctx: ToolCtx): void {
     else for (const m of last.markers) if (m.code === code) m.severity = sev;
     refresh();
   };
-  const CLEARANCE_CODES = new Set(["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"]);
+  // DIALOG_DRC::OnDRCItemRClick: ID_ADD_EXCLUSION_ALL / ID_REMOVE_EXCLUSION_ALL for a custom rule's markers
+  const excludeAll = (rule: string, on: boolean): void => {
+    let list = exclusions(); const drop = new Set<string>();
+    for (const o of last.markers) {
+      if (XA().violatingRuleName(o) !== rule) continue;
+      if (on) { if (!o.excluded) { o.excluded = true; o.comment = ""; list = XA().withExclusion(list, XA().exclusionOf(doc, o, "")); } }
+      else if (o.excluded) { o.excluded = false; o.comment = ""; drop.add(XA().exclusionKey(XA().exclusionOf(doc, o))); }
+    }
+    if (!on) list = XA().withoutExclusions(list, drop);
+    storeExclusions(ctx, list); refresh();
+  };
+  const pcbAction = (id: string): ((c: ToolCtx) => unknown) | null => { const a = ((CollabTools.pcb as ToolModule | undefined)?.actions || {})[id] as { run?: (c: ToolCtx) => unknown } | undefined; return a && a.run ? a.run : null; };
+  const selectIds = (ids: string[]): void => { const P = PT() as unknown as { applySelection?(c: ToolCtx, ids: string[]): void }; if (P.applySelection) P.applySelection(ctx, ids.filter((id) => doc.items.has(id))); };
   const rowMenu = (m: Marker, x: number, y: number): void => {
-    const ln = listName(m.code), et = errorText(m.code), sev = severityOf(m.code);
+    const ln = listName(m.code), et = errorText(m.code), sev = severityOf(m.code), rule = XA().violatingRuleName(m);
     const entries: PopupEntry[] = m.excluded
       ? [{ label: "Remove exclusion for this violation", tip: `It will be placed back in the ${ln} list`, run: () => unexclude(m) },
          { label: "Edit exclusion comment...", run: () => textEntryBox("Exclusion Comment", "", m.comment || "", true, (t) => exclude(m, t)) }]
       : [{ label: "Exclude this violation", tip: `It will be excluded from the ${ln} list`, run: () => exclude(m, "") },
          { label: "Exclude with comment...", tip: `It will be excluded from the ${ln} list`, run: () => textEntryBox("Exclusion Comment", "", "", true, (t) => exclude(m, t)) }];
+    if (rule !== null) entries.push(m.excluded
+      ? { label: `Remove all exclusions for violations of rule '${rule}'`, tip: `They will be placed back in the ${ln} list`, run: () => excludeAll(rule, false) }
+      : { label: `Exclude all violations of rule '${rule}'...`, tip: `They will be excluded from the ${ln} list`, run: () => excludeAll(rule, true) });
     entries.push({ sep: true });
-    if (CLEARANCE_CODES.has(m.code) && m.ids.length === 2) entries.push({ label: "Run: Inspect > Clearance Resolution", run: () => { const P = PT() as unknown as { applySelection?(c: ToolCtx, ids: string[]): void }; if (P.applySelection) P.applySelection(ctx, m.ids); openClearance(ctx); } }, { sep: true });
+    // BOARD_INSPECTION_TOOL::InspectDRCErrorMenuText / DRC_TOOL::FixDRCErrorMenuText (offered where the board editor has the command)
+    const main = doc.items.get(m.ids[0] || "");
+    const insp = XA().inspectDrcAction(m.code), inspRun = insp ? pcbAction(insp) : null;
+    const fix = XA().fixDrcEntry(m.code, main ? main.kind : null);
+    const fixRun = !fix ? null : fix.action === "edit" ? (main && typeof KDialogs !== "undefined" && KDialogs ? () => KDialogs!.openItem(ctx, main) : null) : pcbAction(fix.action);
+    if (insp && inspRun) entries.push({ label: XA().DRC_RUN_TEXT[insp], run: () => { selectIds(m.ids); inspRun(ctx); } });
+    if (fix && fixRun) entries.push({ label: fix.label, run: () => { if (fix.action !== "edit") selectIds(m.ids.slice(0, 1)); fixRun(ctx); } });
+    if ((insp && inspRun) || (fix && fixRun)) entries.push({ sep: true });
     if (sev === "warning") entries.push({ label: `Change severity to Error for all '${et}' violations`, tip: "Violation severities can also be edited in Board Setup", run: () => setSeverity(m.code, "error") });
     else entries.push({ label: `Change severity to Warning for all '${et}' violations`, tip: "Violation severities can also be edited in Board Setup", run: () => setSeverity(m.code, "warning") });
     entries.push({ label: `Ignore all '${et}' violations`, tip: "Violations will not be checked or reported", run: () => setSeverity(m.code, "ignore") },

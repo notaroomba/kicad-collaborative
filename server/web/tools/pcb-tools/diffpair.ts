@@ -58,8 +58,9 @@ export function matchDpSuffix(name: string) {
     if ((ch >= "0" && ch <= "9") || ch === "_") continue;
     if (ch === "+") { comp = "-"; rv = 1; } else if (ch === "-") { comp = "+"; rv = -1; } else if (ch === "N") { comp = "P"; rv = -1; } else if (ch === "P") { comp = "N"; rv = 1; } else break;
   }
-  if (rv !== 0 && count >= 1) comp = name.slice(0, name.length - count) + comp + name.slice(name.length - count + 1);
-  return { rv, complement: rv ? comp : "" };
+  let base = "";   // aBaseDpName: the polarity character and everything after it dropped (LVDS_P1 -> "LVDS_")
+  if (rv !== 0 && count >= 1) { base = name.slice(0, name.length - count); comp = base + comp + name.slice(name.length - count + 1); }
+  return { rv, complement: rv ? comp : "", base };
 }
 /** RULE_RESOLVER::DpNetPair: { P, N } (net objects) when the net and its complement both exist on the board. */
 export function dpNetPair(doc: BoardDoc, net: NetRef) {

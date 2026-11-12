@@ -6,7 +6,7 @@ export interface PasteOpts { annotations?: string; clearNets?: boolean; xform?: 
 import { addedChange } from "./changes";
 import { conductorEnds } from "./connected";
 import { copperOf } from "./dialogs";
-import { expandGroups, groupMembers, groupMembersChanges, groupOf, setLocked } from "./groups";
+import { expandGroups, groupMembers, groupMembersChanges, groupOf, parentOf, setLocked } from "./groups";
 import { netTable } from "./netlist";
 import { netNode, netOf, netStyle } from "./nets";
 import { padsOf } from "./route-geom";
@@ -57,7 +57,7 @@ export function freshUuids(nodes: SNode[]) {
   const map = new Map<string, string>();
   const walk = (n: SNode) => { for (let i = 1; i < n.length; i++) { const c = n[i]; if (!isList(c)) continue; if ((c[0] === "uuid" || c[0] === "tstamp") && c.length > 1) { const old = K.str(c[1]); if (!map.has(old)) map.set(old, K.newUuid()); c[1] = map.get(old)!; } else walk(c); } };
   for (const n of nodes) walk(n);
-  for (const n of nodes) if (n[0] === "group") { const m = K.kid(n, "members"); if (m) { const ids = m.slice(1).map(K.str).filter((id) => map.has(id)).map((id) => map.get(id)!); m.splice(1, m.length - 1, ...ids); } }
+  for (const n of nodes) if (n[0] === "group" || n[0] === "generated") { const m = K.kid(n, "members"); if (m) { const ids = m.slice(1).map(K.str).filter((id) => map.has(id)).map((id) => map.get(id)!); m.splice(1, m.length - 1, ...ids); } }
   return map;
 }
 /** Nets are kept by name and rewritten in the target document's style; names the board lacks become unconnected in a code-style board. */
@@ -121,16 +121,18 @@ export function clearNets(nodes: SNode[], doc: BoardDoc) {
  */
 export function duplicateChanges(doc: BoardDoc, ids: Iterable<string>, offset?: Pt | null, opts?: PasteOpts | null) {
   const sel = new Set(ids); const out: { changes: PcbChange[]; ids: string[]; restore: { id: string; node: SNode }[] } = { changes: [], ids: [], restore: [] }; const joins = new Map<string, string[]>();
-  const coveredByGroup = (id: string) => { for (let g = groupOf(doc, id); g; g = groupOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
-  const subtree = (it: KItem, acc: KItem[]): KItem[] => { acc.push(it); if (it.kind === "group") for (const m of groupMembers(it.node)) { const c = doc.items.get(m); if (c) subtree(c, acc); } return acc; };
+  const coveredByGroup = (id: string) => { for (let g = parentOf(doc, id); g; g = parentOf(doc, g.id)) if (sel.has(g.id)) return true; return false; };
+  const isParent = (n: SNode) => n[0] === "group" || n[0] === "generated";
+  const subtree = (it: KItem, acc: KItem[]): KItem[] => { acc.push(it); if (it.kind === "group" || it.kind === "generated") for (const m of groupMembers(it.node)) { const c = doc.items.get(m); if (c) subtree(c, acc); } return acc; };
   for (const id of ids) {
-    const it = doc.items.get(id); if (!it || it.kind === "generated" || coveredByGroup(id)) continue;
+    // a generator (a tuning pattern) is copied as PCB_GENERATOR::DeepDuplicate does: a new generator holding copies of its members
+    const it = doc.items.get(id); if (!it || coveredByGroup(id)) continue;
     const src = subtree(it, []);
     const nodes = src.map((x) => clone(x.node)); freshUuids(nodes);
     if (opts && opts.annotations) annotate(nodes, doc, opts.annotations);
     if (opts && opts.xform) for (const n of nodes) opts.xform(n, it);   // the array tool's per-copy transform (about the top item)
     // members first, so a group's ADDED change finds them
-    const order = nodes.map((n, i: number) => i).sort((a, b) => ((nodes[a][0] === "group") as unknown as number) - ((nodes[b][0] === "group") as unknown as number) || b - a);   // booleans subtract as 0/1
+    const order = nodes.map((n, i: number) => i).sort((a, b) => (isParent(nodes[a]) as unknown as number) - (isParent(nodes[b]) as unknown as number) || b - a);   // booleans subtract as 0/1
     let topId: string | null = null;
     for (const i of order) {
       const n = nodes[i]; if (offset && (offset[0] || offset[1])) translateNode(n, offset[0], offset[1]);

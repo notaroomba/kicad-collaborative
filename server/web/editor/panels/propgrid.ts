@@ -310,7 +310,7 @@ function zoneProps(it: KItem, doc: KDoc): PropDef[] {
   if (h.kid(it.node, "keepout")) return out;
   // ZONE_DESC: Fill Mode on copper zones; a copper-thieving zone hides its net, pad connections and thermal rows
   // and shows its THIEVING_SETTINGS (Element Size writable for dots and squares, Line Width for hatch)
-  type ZT = { zoneFillMode(n: SNode): string; setZoneFillMode(n: SNode, m: string): SNode; thievingOf(n: SNode): Record<string, number | string | boolean>; setThieving(n: SNode, p: Record<string, unknown>): SNode };
+  type ZT = { zoneFillMode(n: SNode): string; setZoneFillMode(n: SNode, m: string): SNode; thievingOf(n: SNode): Record<string, number | string | boolean>; setThieving(n: SNode, p: Record<string, unknown>): SNode; thievingAllowed?(d: KDoc): boolean };
   const Z = pcbTools() as unknown as ZT | null;
   const copper = (x: KItem) => { const s = h.kid(x.node, "layer"), m = h.kid(x.node, "layers"); const l = s ? h.str(s[1]) : m ? h.str(m[1]) : ""; return /\.Cu$/.test(l) || /^\*\.Cu$|^F&B\.Cu$/.test(l); };
   if (!Z || !copper(it)) return out;
@@ -321,7 +321,11 @@ function zoneProps(it: KItem, doc: KDoc): PropDef[] {
     set: (n, v, x) => { if (writable && !writable(x)) return false; if ((type === "length") && !((v as number) > 0)) return false; Z.setThieving(n, { [key]: type === "bool" ? !!v : type === "enum" ? String(v) : +(v as number) }); } });
   const named = (d: PropDef, name: string): PropDef => Object.assign(d, { name });
   const isHatch = (x: KItem) => Z.thievingOf(x.node).type === "hatch";
-  out.push({ group: FS, name: "Fill Mode", type: "enum", choices: FILL_MODES, get: (x) => Z.zoneFillMode(x.node), set: (n, v) => { if (Z.zoneFillMode(n) === String(v)) return false; Z.setZoneFillMode(n, String(v)); } });
+  // copper thieving needs the KiCad 11 board format (20260513): a board in an older format is not offered it, so its
+  // file format version is never raised by a fill mode edit
+  const canThieve = thieving || !Z.thievingAllowed || Z.thievingAllowed(doc);
+  const modes = canThieve ? FILL_MODES : FILL_MODES.filter((m) => m[0] !== "thieving");
+  out.push({ group: FS, name: "Fill Mode", type: "enum", choices: modes, get: (x) => Z.zoneFillMode(x.node), set: (n, v) => { if (Z.zoneFillMode(n) === String(v)) return false; if (String(v) === "thieving" && !canThieve) return false; Z.setZoneFillMode(n, String(v)); } });
   if (thieving) {
     out.push(named(Object.assign(tv("type", "enum"), { choices: THIEVING_PATTERNS }), "Thieving Pattern"),
       named(tv("size", "length", (x) => !isHatch(x)), "Thieving Element Size"), named(tv("gap", "length"), "Thieving Gap"),
