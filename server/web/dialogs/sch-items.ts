@@ -67,7 +67,7 @@ function toggle(label: string, title: string, on: boolean, id: string, style = "
 /** SetInitialFocus: a dialog opened by a click keeps its first control focused once the click's pointerup lands. */
 function initialFocus(el: HTMLInputElement | HTMLTextAreaElement | null): void {
   if (!el) return;
-  const f = (): void => { if (document.contains(el)) { el.focus(); el.select(); } };
+  const f = (): void => { const act = document.activeElement as HTMLElement | null; if (document.contains(el) && act !== el && !(act && act.closest && act.closest(".kd-dialog") && act.closest(".kd-dialog") !== el.closest(".kd-dialog"))) { el.focus(); el.select(); } };
   setTimeout(f, 0);
   const up = (): void => { setTimeout(f, 0); };
   window.addEventListener("pointerup", up, { once: true, capture: true });
@@ -398,6 +398,8 @@ export function openFieldDialog(ctx: Ctx, item: KItem, name: string): boolean {
       const moved = L.rowMoved(row, [0, 0]);
       const np = L.fieldFromRow(row, [0, 0]);
       for (let j = 1; j < staged.length; j++) if (staged[j] === p) staged[j] = np;
+      // a symbol's reference also lives in its instance data (SCH_SYMBOL::SetRef)
+      if (name === "Reference" && item.kind === "symbol") for (const inst of L.kids(staged, "instances")) for (const pr of L.kids(inst, "project")) for (const pa of L.kids(pr, "path")) { const r = L.kid(pa, "reference"); if (r) r[1] = row.value as unknown as SNode; }
       let out = staged;
       if (moved) L.drop(out, "fields_autoplaced");
       else if (L.yes(out, "fields_autoplaced") && item.kind === "symbol") {   // the parent is autoplaced again (editFieldText)
