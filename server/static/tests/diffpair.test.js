@@ -209,5 +209,46 @@ test("message panel while routing a pair: KiCad's rows", () => {
   assert.equal(rows[0].value, "Resolved Netclass: Default"); assert.equal(rows[5].value, "(from netclass 'Default')");
 });
 
+// a coupled CLK pair (0.45 mm apart) between two kinks, plus a lone SIG track
+const DRAG = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (segment (start 5 5) (end 10 10) (width 0.2) (layer "F.Cu") (net "CLK_P") (uuid "pa"))
+  (segment (start 10 10) (end 30 10) (width 0.2) (layer "F.Cu") (net "CLK_P") (uuid "pb"))
+  (segment (start 30 10) (end 35 5) (width 0.2) (layer "F.Cu") (net "CLK_P") (uuid "pc"))
+  (segment (start 4.6818 5.3182) (end 9.8136 10.45) (width 0.2) (layer "F.Cu") (net "CLK_N") (uuid "na"))
+  (segment (start 9.8136 10.45) (end 30.1864 10.45) (width 0.2) (layer "F.Cu") (net "CLK_N") (uuid "nb"))
+  (segment (start 30.1864 10.45) (end 35.3182 5.3182) (width 0.2) (layer "F.Cu") (net "CLK_N") (uuid "nc"))
+)`;
+function dragPair(keep) {
+  const f = fakeCtx(DRAG); const { ctx, log, doc } = f;
+  P.setRouterSettings({ keep_diff_pair_coupling_when_dragging: keep });
+  ctx.snapOn = false; ctx.snap = (m) => m;
+  P.state.sel = new Set(["pb"]); ctx.cursor = [20, 10];
+  pcb.onKey("d", ev(), ctx);
+  const subs = P.state.drag ? P.state.drag.subs.length : 0;
+  pcb.onPointerMove(ev(), [20, 12], ctx); pcb.onPointerDown(ev(), [20, 12], ctx);
+  const ys = (net) => segs(doc, net).filter((it) => { const [a, b] = ends(it); return Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[0] - b[0]) > 5; }).map((it) => ends(it)[0][1]);
+  return { subs, log, P_y: ys("CLK_P"), N_y: ys("CLK_N") };
+}
+
+test("MULTI_DRAGGER: dragging one segment of a pair takes its coupled partner along, the gap kept", () => {
+  const { subs, log, P_y, N_y } = dragPair(true);
+  assert.equal(subs, 2, "the partner segment joins the drag");
+  assert.equal(log.commits.length, 1);
+  assert.deepEqual(P_y, [12]); assert.ok(N_y.length === 1 && Math.abs(N_y[0] - 12.45) < 1e-6, "N moved by the same amount: " + N_y);
+});
+
+test("Keep coupling off: only the grabbed line moves", () => {
+  const { subs, P_y, N_y } = dragPair(false);
+  assert.equal(subs, 1); assert.deepEqual(P_y, [12]); assert.deepEqual(N_y, [10.45]);
+});
+
+test("dpCoupledSegment: the parallel partner at the pair's gap; nothing for a net without a partner", () => {
+  const { ctx, doc } = fakeCtx(DRAG);
+  const c = P.dpCoupledSegment(ctx, doc.items.get("pb")); assert.equal(c.item.id, "nb"); assert.deepEqual(c.grab, [20, 10.45]);
+  assert.equal(P.dpCoupledSegment(ctx, doc.items.get("pa")).item.id, "na");
+  const { ctx: c2, doc: d2 } = fakeCtx(); assert.equal(P.dpCoupledSegment(c2, d2.items.get("sp")).item.id, "sn");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

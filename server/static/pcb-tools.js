@@ -2968,11 +2968,47 @@ function beginInlineDrag(ctx, its, mm, free, how, lockOk) {
     if (d.mode !== "segment" && !free) d.mode = "segment";
     d.ids.forEach((id) => taken.add(id)); subs.push(d);
   }
+  // ROUTER::StartDragging: one segment of a differential pair with "Keep coupling between differential pairs" on
+  // goes to the MULTI_DRAGGER with its coupled partner segment (reconstructOriginalDpCoupling), both moving together
+  if (subs.length === 1 && lead.mode === "segment" && !free && S.rs.keep_diff_pair_coupling_when_dragging) {
+    const c = dpCoupledSegment(ctx, sorted[0]);
+    if (c && !taken.has(c.item.id)) { const d = dragStart(ctx, c.item, c.grab, false); if (d) { d.mode = "segment"; d.dpPartner = true; subs.push(d); } }
+  }
   if (subs.length > 1) { const excl = new Set(); for (const d of subs) d.ids.forEach((id) => excl.add(id)); for (const d of subs) { d.excl = excl; d.obs = new Map(); } }   // the other dragged lines are not where they were
   cancelOps(); S.violations = null;
   S.drag = { subs, tool: how === "tool", bySelect: how !== "tool", moved: false, cursor: lead.start.slice(), appSel: how === "app" };   // a left-drag commits on release, D / G on the next click
   dragHighlight(ctx, lead);
   ctx.requestRender(); return true;
+}
+/**
+ * DIFF_PAIR::CoupledSegmentPairs for one segment: the segment of the complementary net (BOARD::MatchDpSuffix) on the
+ * same layer that runs parallel to it (within DP_PARALLELITY_THRESHOLD), overlaps it along its length and sits at a
+ * pair's gap from it — the nearest such.  { item, grab: the point facing the segment's middle } or null.
+ */
+const DP_PARALLELITY_THRESHOLD = 10e-6;   // 10 IU, in mm
+function dpCoupledSegment(ctx, seg) {
+  const doc = ctx.doc; if (!seg || seg.kind !== "segment") return null;
+  const pair = dpNetPair(doc, netOf(seg.node)); if (!pair) return null;
+  const NT = netTable(doc); const mine = NT.key(netOf(seg.node)); const kP = NT.key(pair.P), kN = NT.key(pair.N), other = kP === mine ? kN : kP;
+  if (!other || other === mine) return null;
+  const L = layerOf(seg.node), w = widthOf(seg.node, 0.25); const [a, b] = trackEnds(seg); if (!a || !b) return null;
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]); if (len < 1e-6) return null; const u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+  const sz = sizesOf(ctx); const dpGap = sz && sz.routeDiffPair ? sz.routeDiffPair(netNameOf(ctx, netOf(seg.node))).gap : 0.25;
+  const maxGap = Math.max(dpGap * 2, dpGap + 2 * w);   // the gap constraint's max, generously: a coupled pair, not a neighbour
+  let best = null;
+  for (const it of doc.items.values()) {
+    if (it.kind !== "segment" || layerOf(it.node) !== L || NT.key(netOf(it.node)) !== other) continue;
+    const [c, d] = trackEnds(it); if (!c || !d) continue;
+    const l2 = Math.hypot(d[0] - c[0], d[1] - c[1]); if (l2 < 1e-6) continue;
+    const v = [(d[0] - c[0]) / l2, (d[1] - c[1]) / l2];
+    if (Math.abs(u[0] * v[1] - u[1] * v[0]) * Math.min(len, l2) > DP_PARALLELITY_THRESHOLD * 1000) continue;   // ApproxParallel over the length
+    const dist = Math.abs((c[0] - a[0]) * u[1] - (c[1] - a[1]) * u[0]);
+    const gap = dist - (w + widthOf(it.node, 0.25)) / 2; if (gap <= 0 || gap > maxGap) continue;
+    const t0 = (c[0] - a[0]) * u[0] + (c[1] - a[1]) * u[1], t1 = (d[0] - a[0]) * u[0] + (d[1] - a[1]) * u[1];
+    const lo = Math.max(0, Math.min(t0, t1)), hi = Math.min(len, Math.max(t0, t1)); if (hi - lo <= 1e-6) continue;   // the two face each other
+    if (!best || dist < best.dist) { const tm = (lo + hi) / 2; const m = [a[0] + u[0] * tm, a[1] + u[1] * tm]; best = { item: it, dist, grab: closestOnSeg(m, c, d) }; }
+  }
+  return best;
 }
 /**
  * ROUTER_TOOL::performDragging: a drag that starts on a locked item asks first (KIDIALOG "The selected item is locked.",
@@ -7101,7 +7137,7 @@ root.PcbTools = { state: S, snapVec45, netTable, zoneTemplate, build45Leader, po
   RS_DEFAULTS, parseRouterSettings, setRouterSettings, routerChecks, foldMicro, cornerStyleName, cornerLeg, roundCorners, elemsPts, headElems, branchDoc, branchChanges, viaPlan,
   octagon, walkAroundHull, selfIntersecting, shoveWorld, shoveRun, shoveLine, shoveOps, insideConvex, routerKeyAction, splitOps, adoptNetOps, branchOpFresh, undoRedoInFlight, nextLineMode, guessCandidates, hitTestDistance,
   matchDpSuffix, dpNetPair, dpPrimitives, findDpPrimitivePair, dpGateway, offsetPts, DP_MSG_NETS, DP_MSG_START, DP_MSG_NOWHERE, DP_MSG_GAP,
-  loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
+  dpCoupledSegment, loopRemovals, antennaRemovals, removeRedundant, isTuningPattern, tuningPatternInfo, regenerateTuningChanges, tuningRemoveChanges, meanderDefaults, setTargetLength, meanderMove, segSegDist, layerOf, widthOf, splitLine, tunePieces, tuningPatternNode, tuneSettingsView, applyTuneSettings, chLength, TUNE_IU, LENGTH_UNCONSTRAINED, TUNE_MSG_INSIDE, TUNE_MSG_SELECT, TUNE_MSG_PICK,
   routerWorld, routeObstacles, routeClearance, walkHead, walkTo, pathClear, pathHits, hullOf, legPts, simplifyPts, dir8, newTracer, trailAdd, tracerPosture, tracerFlip, saturated,
   // the new board tools
   layerClass, gfxWidth, textStyle, effectsNode, curveNode, textBoxNode, tableCounts, tableLayout, tableNode, imageNode, imageInfo, base64Bytes, imageMm,
