@@ -547,5 +547,17 @@ test("DRC with custom rules: a clearance rule overrides the netclass clearance, 
 (rule "relax" (condition "A.NetName == 'HV'") (constraint clearance (min 0.1mm)))`).length, 0, "the later rule wins");
 });
 
+test("DRC with custom rules: 'Differential pair gap out of range' and 'Differential uncoupled length too long'", () => {
+  const doc = K.parseDoc(DP, "kicad_pcb"); const s = P.designSettings(null);
+  const run = (txt) => P.diffPairMarkers(doc, s, P.parseDru(txt).rules);
+  assert.equal(run(`(rule "g" (condition "A.inDiffPair('USB')") (constraint diff_pair_gap (min 0.05mm) (max 0.2mm)))`).length, 0, "0.1 mm is inside");
+  let m = run(`(rule "g" (condition "A.inDiffPair('USB')") (constraint diff_pair_gap (min 0.15mm)))`);
+  assert.equal(m.length, 1); assert.equal(m[0].text, "Differential pair gap out of range (rule 'g' minimum gap 0.1500 mm; actual 0.1000 mm)"); assert.deepEqual(m[0].ids, ["p1", "n1"]);
+  m = run(`(rule "g" (condition "A.inDiffPair('USB')") (constraint diff_pair_gap (min 0.15mm)) (constraint diff_pair_uncoupled (max 1mm)))`);
+  assert.deepEqual(m.map((x) => x.code), ["diff_pair_uncoupled_length_too_long", "diff_pair_gap_out_of_range"]);
+  assert.equal(m[0].text, "Differential uncoupled length too long (rule 'g' maximum uncoupled length 1.0000 mm; actual 20.0000 mm)");
+  assert.equal(run(`(rule "u" (condition "A.inDiffPair('USB')") (constraint diff_pair_gap (min 0.05mm)) (constraint diff_pair_uncoupled (max 1mm)))`).length, 0, "fully coupled");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

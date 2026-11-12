@@ -1397,729 +1397,6 @@
     };
   }
 
-  // web/tools/pcb-tools/dru.ts
-  var UNIT = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
-  function druValue(s) {
-    const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s));
-    if (!m) return null;
-    const u = m[2].toLowerCase();
-    if (u && !(u in UNIT)) return null;
-    return +m[1] * (u ? UNIT[u] : 1);
-  }
-  function tokenize(src) {
-    const out = [];
-    let i = 0;
-    while (i < src.length) {
-      const c = src[i];
-      if (/\s/.test(c)) {
-        i++;
-        continue;
-      }
-      if (c === "'" || c === '"') {
-        let j = i + 1, s = "";
-        while (j < src.length && src[j] !== c) {
-          if (src[j] === "\\" && j + 1 < src.length) j++;
-          s += src[j++];
-        }
-        if (j >= src.length) throw new Error("Missing closing quote");
-        out.push("'" + s);
-        i = j + 1;
-        continue;
-      }
-      const two = src.slice(i, i + 2);
-      if (["||", "&&", "==", "!=", "<=", ">="].includes(two)) {
-        out.push(two);
-        i += 2;
-        continue;
-      }
-      if ("()<>!,".includes(c)) {
-        out.push(c);
-        i++;
-        continue;
-      }
-      const m = /^[A-Za-z_0-9.]+/.exec(src.slice(i));
-      if (!m) throw new Error(`Unexpected '${c}'`);
-      out.push(m[0]);
-      i += m[0].length;
-    }
-    return out;
-  }
-  function parseCondition(src) {
-    const t = tokenize(src);
-    let p = 0;
-    const peek = () => t[p], eat = (x) => {
-      const v = t[p++];
-      if (x && v !== x) throw new Error(`Expected '${x}'`);
-      return v;
-    };
-    const bin = (next, ops) => () => {
-      let a = next();
-      while (ops.includes(peek())) {
-        const op = eat();
-        a = { k: "bin", op, a, b: next() };
-      }
-      return a;
-    };
-    const primary = () => {
-      const tok = eat();
-      if (tok === void 0) throw new Error("Unexpected end of expression");
-      if (tok === "(") {
-        const e2 = or();
-        eat(")");
-        return e2;
-      }
-      if (tok === "!") return { k: "not", e: primary() };
-      if (tok[0] === "'") {
-        const s = tok.slice(1);
-        return { k: "lit", v: { t: "s", v: s, wild: /[*?]/.test(s) } };
-      }
-      const n = druValue(tok);
-      if (n !== null) return { k: "lit", v: { t: "n", v: n } };
-      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
-      if (!m) throw new Error(`Unrecognized item '${tok}'`);
-      const who = m[1] || null;
-      if (peek() === "(") {
-        eat("(");
-        const args = [];
-        if (peek() !== ")") {
-          args.push(or());
-          while (peek() === ",") {
-            eat(",");
-            args.push(or());
-          }
-        }
-        eat(")");
-        return { k: "call", who, fn: m[2], args };
-      }
-      if (!who) throw new Error(`Unrecognized item '${tok}'`);
-      return { k: "prop", who, name: m[2] };
-    };
-    const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
-    const and = bin(cmp, ["&&"]);
-    const or = bin(and, ["||"]);
-    const e = or();
-    if (p < t.length) throw new Error(`Unexpected '${t[p]}'`);
-    return e;
-  }
-  function wildMatch(pat, s) {
-    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
-    return re.test(s);
-  }
-  var TYPE_NAME = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
-  function propOf(doc, s, it, name) {
-    if (!it) return { t: "u" };
-    const key = name.replace(/_/g, "").toLowerCase();
-    const net = () => netOf(it.node).name || "";
-    const str = (v) => ({ t: "s", v, wild: false });
-    switch (key) {
-      case "type":
-        return str(TYPE_NAME[it.kind] || it.kind);
-      case "net":
-      case "netname":
-        return str(net());
-      case "netcode":
-        return { t: "n", v: netOf(it.node).code || 0 };
-      case "netclass":
-        return str(netclassName(s, net()));
-      case "layer":
-        return str(it.layer || layerOf(it.node) || "");
-      case "width": {
-        const w = K.kid(it.node, "width");
-        return w ? { t: "n", v: K.num(w[1]) } : { t: "u" };
-      }
-      case "reference": {
-        const p = it.node.find((c) => Array.isArray(c) && c[0] === "property" && K.str(c[1]) === "Reference");
-        return p ? str(K.str(p[2])) : { t: "u" };
-      }
-      default:
-        return { t: "u" };
-    }
-  }
-  var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
-  var num = (b) => ({ t: "n", v: b ? 1 : 0 });
-  function evalExpr(e, doc, s, A, B) {
-    switch (e.k) {
-      case "lit":
-        return e.v;
-      case "prop":
-        return propOf(doc, s, e.who === "A" ? A : B, e.name);
-      case "not":
-        return num(!truth(evalExpr(e.e, doc, s, A, B)));
-      case "bin": {
-        if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
-        if (e.op === "||") return num(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
-        const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
-        if (e.op === "==" || e.op === "!=") {
-          let eq = false;
-          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
-          else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
-          return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
-        }
-        if (a.t !== "n" || b.t !== "n") return num(false);
-        return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
-      }
-      case "call": {
-        const it = e.who === "B" ? B : A;
-        const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" };
-        const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
-        switch (e.fn) {
-          case "inDiffPair": {
-            if (!it || !as) return num(false);
-            const name = netOf(it.node).name || "";
-            const m = matchDpSuffix(name);
-            if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
-            let i = name.length - 1;
-            while (i >= 0 && /[0-9_]/.test(name[i])) i--;
-            const base = name.slice(0, i) + name.slice(i + 1);
-            return num(wildMatch(as, base) || base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_"))));
-          }
-          case "hasNetclass":
-            return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
-          case "existsOnLayer": {
-            if (!it) return num(false);
-            const L = K.kid(it.node, "layers");
-            const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)];
-            return num(ls.some((l) => wildMatch(as, l) || l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)));
-          }
-          case "isPlated":
-            return num(!!it && (it.kind === "via" || it.kind === "pad" && K.str(it.node[2]) === "thru_hole"));
-          default:
-            return { t: "u" };
-        }
-      }
-    }
-  }
-  function parseDru(text) {
-    const rules = [], errors = [];
-    let root2;
-    try {
-      root2 = K.parse("(dru " + (text || "") + "\n)");
-    } catch (e) {
-      return { rules, errors: [String(e.message || e)] };
-    }
-    for (const r of root2.slice(1)) {
-      if (!Array.isArray(r) || r[0] !== "rule") continue;
-      const rule = { name: K.str(r[1]), condition: "", layer: null, severity: null, constraints: [], expr: null, error: null };
-      for (const c of r.slice(2)) {
-        if (!Array.isArray(c)) continue;
-        if (c[0] === "condition") rule.condition = K.str(c[1]);
-        else if (c[0] === "layer") rule.layer = K.str(c[1]);
-        else if (c[0] === "severity") rule.severity = K.str(c[1]);
-        else if (c[0] === "constraint") {
-          const k = { type: K.str(c[1]), min: null, opt: null, max: null };
-          for (const v of c.slice(2)) {
-            if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
-            else if (Array.isArray(v) && v.length === 1) (k.options = k.options || []).push(K.str(v[0]));
-            else if (!Array.isArray(v)) (k.options = k.options || []).push(K.str(v));
-          }
-          rule.constraints.push(k);
-        }
-      }
-      if (rule.condition) {
-        try {
-          rule.expr = parseCondition(rule.condition);
-        } catch (e) {
-          rule.error = e.message;
-          errors.push(`rule '${rule.name}': ${rule.error}`);
-        }
-      }
-      rules.push(rule);
-    }
-    return { rules, errors };
-  }
-  var layerOk = (rule, layer) => {
-    if (!rule.layer || !layer) return true;
-    if (rule.layer === "outer") return /^(F|B)\.Cu$/.test(layer);
-    if (rule.layer === "inner") return /^In\d+\.Cu$/.test(layer);
-    return wildMatch(rule.layer, layer);
-  };
-  function ruleMatches(rule, doc, s, A, B) {
-    if (rule.error) return false;
-    if (!layerOk(rule, A ? A.layer || layerOf(A.node) : null)) return false;
-    return !rule.expr || truth(evalExpr(rule.expr, doc, s, A, B));
-  }
-  function evalRuleConstraint(rules, type, doc, s, A, B, fmt3) {
-    for (let i = rules.length - 1; i >= 0; i--) {
-      const r = rules[i];
-      const c = r.constraints.find((k) => k.type === type);
-      if (!c) continue;
-      if (!ruleMatches(r, doc, s, A, B)) continue;
-      const f = fmt3 || ((v) => v.toFixed(4) + " mm");
-      const parts = [];
-      if (c.min != null && c.min > 0) parts.push("min " + f(c.min));
-      if (c.opt != null) parts.push("opt " + f(c.opt));
-      if (c.max != null) parts.push("max " + f(c.max));
-      return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
-    }
-    return null;
-  }
-  function ruleClearance(rules, doc, s, A, B) {
-    for (let i = rules.length - 1; i >= 0; i--) {
-      const r = rules[i], c = r.constraints.find((k) => k.type === "clearance");
-      if (!c || c.min == null) continue;
-      if (!ruleMatches(r, doc, s, A, B) && !ruleMatches(r, doc, s, B, A)) continue;
-      return { min: r.severity === "ignore" ? 0 : c.min, name: `rule '${r.name}'` };
-    }
-    return null;
-  }
-  function matchedLengthMarkers(doc, s, rules) {
-    const out = [];
-    if (!rules.some((r) => r.constraints.some((c) => c.type === "length" || c.type === "skew"))) return out;
-    const nets = /* @__PURE__ */ new Map();
-    for (const it of doc.items.values()) {
-      if (it.kind !== "segment" && it.kind !== "arc") continue;
-      const name = netOf(it.node).name || "";
-      if (!name) continue;
-      const a = K.kid(it.node, "start"), b = K.kid(it.node, "end");
-      if (!a || !b) continue;
-      const A = [K.num(a[1]), K.num(a[2])], B = [K.num(b[1]), K.num(b[2])];
-      let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
-      if (it.kind === "arc") {
-        const m = K.kid(it.node, "mid");
-        const c = m && K.arcFrom3(A, [K.num(m[1]), K.num(m[2])], B);
-        if (c) L = arcLength(c);
-      }
-      let n = nets.get(name);
-      if (!n) nets.set(name, n = { name, ids: [], total: 0, first: it });
-      n.ids.push(it.id);
-      n.total += L;
-    }
-    const at = (it) => {
-      const a = K.kid(it.node, "start");
-      return [K.num(a[1]), K.num(a[2])];
-    };
-    const groups = /* @__PURE__ */ new Map();
-    for (const n of nets.values()) {
-      for (let i = rules.length - 1; i >= 0; i--) {
-        const r = rules[i], c = r.constraints.find((k) => k.type === "length");
-        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
-        if (r.severity === "ignore") break;
-        const name = `rule '${r.name}'`, [x, y] = at(n.first);
-        if (c.min != null && n.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n.total)})`, n.ids.slice())));
-        else if (c.max != null && n.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n.total)})`, n.ids.slice()));
-        break;
-      }
-      for (let i = rules.length - 1; i >= 0; i--) {
-        const r = rules[i], c = r.constraints.find((k) => k.type === "skew");
-        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
-        if (r.severity === "ignore") break;
-        let g = groups.get(r.name + "\0" + i);
-        if (!g) groups.set(r.name + "\0" + i, g = { c, rule: r, nets: [] });
-        g.nets.push(n);
-        break;
-      }
-    }
-    for (const g of groups.values()) {
-      let sets = [g.nets];
-      if (g.c.options && g.c.options.includes("within_diff_pairs")) {
-        sets = [];
-        const left = new Map(g.nets.map((n) => [n.name, n]));
-        for (const n of g.nets) {
-          if (!left.has(n.name)) continue;
-          const m = matchDpSuffix(n.name);
-          const o = m.rv ? left.get(m.complement) : null;
-          if (o) {
-            sets.push([n, o]);
-            left.delete(n.name);
-            left.delete(o.name);
-          }
-        }
-      }
-      for (const set of sets) {
-        let ref = set[0];
-        for (const n of set) if (n.total > ref.total) ref = n;
-        for (const n of set) {
-          const skew = Math.abs(n.total - ref.total), name = `rule '${g.rule.name}'`;
-          let kind = "";
-          if (g.c.max != null && skew > g.c.max + 1e-6) kind = "max";
-          else if (g.c.min != null && n !== ref && skew < g.c.min - 1e-6) kind = "min";
-          if (!kind) continue;
-          const [x, y] = at(n.first);
-          out.push(marker("skew_out_of_range", g.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g.c.max : g.c.min)}; actual ${mm4(n.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n.total)})`, n.ids.slice()));
-        }
-      }
-    }
-    return out.filter((m) => s.severities[m.code] !== "ignore");
-  }
-
-  // web/tools/pcb-tools/drc.ts
-  var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
-  function designSettings(src) {
-    const s = DEFAULT_SETTINGS();
-    if (!src) return s;
-    if (typeof src === "string" && /^\s*\{/.test(src)) {
-      try {
-        src = JSON.parse(src);
-      } catch (e) {
-        return s;
-      }
-    }
-    if (typeof src === "string") {
-      let tree = null;
-      try {
-        tree = K.parse(src);
-      } catch (e) {
-        return s;
-      }
-      const setup = tree && K.kid(tree, "setup");
-      if (setup) {
-        for (const [key, prop] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) {
-          const c = K.kid(setup, key);
-          if (c) s[prop] = K.num(c[1], s[prop]);
-        }
-      }
-      for (const nc of tree ? K.kids(tree, "net_class") : []) {
-        const name = K.str(nc[1]);
-        const e = s.netclasses[name] = Object.assign({}, s.netclasses.Default);
-        for (const [key, prop] of [["clearance", "clearance"], ["trace_width", "track_width"], ["via_dia", "via_diameter"], ["via_drill", "via_drill"]]) {
-          const c = K.kid(nc, key);
-          if (c) e[prop] = K.num(c[1]);
-        }
-        for (const a of K.kids(nc, "add_net")) s.netclassOf[K.str(a[1])] = name;
-      }
-      if (s.netclasses.Default) {
-        s.clearance = s.netclasses.Default.clearance;
-        s.trackWidth = s.netclasses.Default.track_width;
-      }
-      return s;
-    }
-    if (src.netclasses || src.clearance !== void 0) return Object.assign(s, src);
-    src = src;
-    const rules = src.board && src.board.design_settings && src.board.design_settings.rules;
-    const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities;
-    if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
-    if (rules) {
-      s.minClearance = rules.min_clearance || 0;
-      s.minTrackWidth = rules.min_track_width || 0;
-      s.minViaDiameter = rules.min_via_diameter || 0;
-      s.minViaDrill = rules.min_through_hole_diameter || 0;
-      s.minViaAnnular = rules.min_via_annular_width || 0;
-      if (rules.min_hole_clearance !== void 0) s.holeClearance = rules.min_hole_clearance;
-      if (rules.min_copper_edge_clearance !== void 0) s.edgeClearance = rules.min_copper_edge_clearance;
-    }
-    const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults;
-    if (dflt) layerDefaults(dflt);
-    const ns = src.net_settings;
-    if (ns && isList(ns.classes)) {
-      for (const c of ns.classes) if (c && c.name) s.netclasses[c.name] = { clearance: c.clearance !== void 0 ? c.clearance : s.clearance, track_width: c.track_width !== void 0 ? c.track_width : s.trackWidth, via_diameter: c.via_diameter !== void 0 ? c.via_diameter : s.viaDiameter, via_drill: c.via_drill !== void 0 ? c.via_drill : s.viaDrill };
-      if (s.netclasses.Default) {
-        s.clearance = s.netclasses.Default.clearance;
-        s.trackWidth = s.netclasses.Default.track_width;
-        s.viaDiameter = s.netclasses.Default.via_diameter;
-        s.viaDrill = s.netclasses.Default.via_drill;
-      }
-      if (ns.netclass_assignments) for (const [net, cls] of Object.entries(ns.netclass_assignments)) s.netclassOf[net] = cls;
-      if (isList(ns.netclass_patterns)) {
-        for (const p of ns.netclass_patterns) if (p && p.pattern) s.patterns.push({ re: new RegExp("^" + String(p.pattern).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"), netclass: p.netclass });
-      }
-    }
-    return s;
-  }
-  function netclassName(s, net) {
-    const name = net ? s.netclassOf[net] || (s.patterns.find((p) => p.re.test(net)) || { netclass: void 0 }).netclass : null;
-    return name && s.netclasses[name] ? name : "Default";
-  }
-  function netclassOf(s, net) {
-    return s.netclasses[netclassName(s, net)] || s.netclasses.Default || { clearance: s.clearance, track_width: s.trackWidth, via_diameter: s.viaDiameter, via_drill: s.viaDrill };
-  }
-  var netClearance = (s, net) => {
-    const nc = netclassOf(s, net);
-    return nc && nc.clearance !== void 0 ? nc.clearance : s.clearance;
-  };
-  var mm4 = (v) => v.toFixed(4) + " mm";
-  function edgeShapes(doc) {
-    const shapes = [], chains = [];
-    const take = (kind, node, tf, layer) => {
-      if (layer !== "Edge.Cuts") return;
-      const w = K.kid(node, "stroke") ? K.num((K.kid(K.kid(node, "stroke"), "width") || [0, 0])[1]) : widthOf(node, 0);
-      const P = (key) => {
-        const p = pt(node, key);
-        return p ? tf(p[0], p[1]) : null;
-      };
-      if (kind === "line") {
-        const a = P("start"), b = P("end");
-        if (a && b) {
-          shapes.push({ t: "seg", a, b, r: w / 2 });
-          chains.push([a, b]);
-        }
-      } else if (kind === "rect") {
-        const a = P("start"), b = P("end");
-        if (a && b) {
-          const c = tf(pt(node, "start")[0], pt(node, "end")[1]), d = tf(pt(node, "end")[0], pt(node, "start")[1]);
-          const pts = [a, d, b, c];
-          shapes.push({ t: "path", pts: pts.concat([a]), r: w / 2 });
-          chains.push(pts.concat([a]));
-        }
-      } else if (kind === "circle") {
-        const c = P("center"), e = P("end");
-        if (c && e) {
-          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
-          const pts = [];
-          for (let i = 0; i < 48; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 24), c[1] + r * Math.sin(i * Math.PI / 24)]);
-          pts.push(pts[0].slice());
-          shapes.push({ t: "path", pts, r: w / 2 });
-          chains.push(pts);
-        }
-      } else if (kind === "arc") {
-        const a = P("start"), m = P("mid"), b = P("end");
-        if (a && m && b) {
-          const arc = K.arcFrom3(a, m, b);
-          const pts = arc ? arcPoints(arc, a, b) : [a, b];
-          shapes.push({ t: "path", pts, r: w / 2 });
-          chains.push(pts);
-        }
-      } else if (kind === "poly") {
-        const pts = K.ptsOf(node).map(([x, y]) => tf(x, y));
-        if (pts.length > 2) {
-          shapes.push({ t: "path", pts: pts.concat([pts[0]]), r: w / 2 });
-          chains.push(pts.concat([pts[0]]));
-        }
-      } else if (kind === "curve") {
-        const pts = K.bezierPts(K.ptsOf(node).map(([x, y]) => tf(x, y)));
-        if (pts.length > 1) {
-          shapes.push({ t: "path", pts, r: w / 2 });
-          chains.push(pts);
-        }
-      }
-    };
-    const id = (x, y) => [x, y];
-    for (const it of doc.items.values()) {
-      const n = it.node;
-      if (/^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) take(it.kind.slice(3), n, id, layerOf(n, "Dwgs.User"));
-      else if (it.kind === "footprint") {
-        const [fx, fy, frot] = K.atOf(n);
-        const R = rotator(frot);
-        const tf = (x, y) => {
-          const [dx, dy] = R(x, y);
-          return [fx + dx, fy + dy];
-        };
-        for (const g of n) if (isList(g) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g[0])) take(g[0].slice(3), g, tf, layerOf(g, "F.SilkS"));
-      }
-    }
-    return { shapes, chains };
-  }
-  function chainLoops(chains, tol) {
-    tol = tol || 0.01;
-    const loops = [], open = chains.map((c) => c.slice());
-    let dangling = false;
-    const same = (a, b) => Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
-    while (open.length) {
-      let cur = open.pop();
-      if (cur.length > 2 && same(cur[0], cur[cur.length - 1])) {
-        loops.push(cur.slice(0, -1));
-        continue;
-      }
-      let grew = true;
-      while (grew && !same(cur[0], cur[cur.length - 1])) {
-        grew = false;
-        const tail = cur[cur.length - 1];
-        for (let i = 0; i < open.length; i++) {
-          const c = open[i];
-          if (same(c[0], tail)) {
-            cur = cur.concat(c.slice(1));
-            open.splice(i, 1);
-            grew = true;
-            break;
-          }
-          if (same(c[c.length - 1], tail)) {
-            cur = cur.concat(c.slice(0, -1).reverse());
-            open.splice(i, 1);
-            grew = true;
-            break;
-          }
-        }
-      }
-      if (cur.length > 2 && same(cur[0], cur[cur.length - 1])) loops.push(cur.slice(0, -1));
-      else dangling = true;
-    }
-    return { loops, dangling };
-  }
-  var polyArea = (pts) => {
-    let a = 0;
-    for (let i = 0; i < pts.length; i++) {
-      const p = pts[i], q = pts[(i + 1) % pts.length];
-      a += p[0] * q[1] - q[0] * p[1];
-    }
-    return a / 2;
-  };
-  function boardOutline(doc) {
-    const { chains } = edgeShapes(doc);
-    if (!chains.length) return { outline: null, dangling: false, hasEdges: false };
-    const { loops, dangling } = chainLoops(chains);
-    let best = null, bestA = 0;
-    for (const l of loops) {
-      const a = Math.abs(polyArea(l));
-      if (a > bestA) {
-        bestA = a;
-        best = l;
-      }
-    }
-    return { outline: best, dangling, hasEdges: true, area: bestA };
-  }
-  function courtyards(fp) {
-    const n = fp.node;
-    const [fx, fy, frot] = K.atOf(n);
-    const R = rotator(frot);
-    const tf = (x, y) => {
-      const [dx, dy] = R(x, y);
-      return [fx + dx, fy + dy];
-    };
-    const out = { "F.CrtYd": [], "B.CrtYd": [] };
-    for (const g of n) {
-      if (!isList(g) || !/^fp_(line|rect|circle|arc|poly)$/.test(g[0])) continue;
-      const layer = layerOf(g, "");
-      if (!out[layer]) continue;
-      const kind = g[0].slice(3);
-      const P = (key) => {
-        const p = pt(g, key);
-        return p ? tf(p[0], p[1]) : null;
-      };
-      if (kind === "line") {
-        const a = P("start"), b = P("end");
-        if (a && b) out[layer].push([a, b]);
-      } else if (kind === "rect") {
-        const s = pt(g, "start"), e = pt(g, "end");
-        if (s && e) {
-          const pts = [tf(s[0], s[1]), tf(e[0], s[1]), tf(e[0], e[1]), tf(s[0], e[1])];
-          out[layer].push(pts.concat([pts[0]]));
-        }
-      } else if (kind === "circle") {
-        const c = P("center"), e = P("end");
-        if (c && e) {
-          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
-          const pts = [];
-          for (let i = 0; i < 32; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
-          out[layer].push(pts.concat([pts[0]]));
-        }
-      } else if (kind === "arc") {
-        const a = P("start"), m = P("mid"), b = P("end");
-        if (a && m && b) {
-          const arc = K.arcFrom3(a, m, b);
-          out[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
-        }
-      } else if (kind === "poly") {
-        const pts = K.ptsOf(g).map(([x, y]) => tf(x, y));
-        if (pts.length > 2) out[layer].push(pts.concat([pts[0]]));
-      }
-    }
-    const res = {};
-    for (const layer of Object.keys(out)) res[layer] = out[layer].length ? chainLoops(out[layer]).loops : [];
-    return res;
-  }
-  var marker = (code, severity, x, y, text, ids) => ({ code, severity, x: r6(x), y: r6(y), text, ids });
-  var boxCenter = (a, b) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, (Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2];
-  function drc(doc, settings, opts) {
-    const s = settings && settings.netclasses ? settings : designSettings(settings);
-    opts = opts || {};
-    const out = [];
-    const nl = netlist(doc);
-    const conds = nl.conductors.filter((c) => c.kind !== "zone");
-    const clr = (c) => netClearance(s, c.net);
-    const rules = typeof opts.rules === "string" ? parseDru(opts.rules).rules : opts.rules || [];
-    const clrRules = rules.filter((r) => r.constraints.some((k) => k.type === "clearance" && k.min != null));
-    const ruleMax = Math.max(0, ...clrRules.map((r) => r.constraints.find((k) => k.type === "clearance").min || 0));
-    const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance, ruleMax);
-    const ruleItem = (c, layer) => ({ kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer });
-    const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
-    for (let i = 0; i < order.length; i++) {
-      const a = order[i];
-      for (let j = i + 1; j < order.length; j++) {
-        const b = order[j];
-        if (b.bbox[0] > a.bbox[2] + maxClr) break;
-        if (a.net && a.net === b.net) continue;
-        if (!shareLayer(a.layers, b.layers)) continue;
-        let need = Math.max(clr(a), clr(b), s.minClearance || 0), by = "";
-        if (clrRules.length && boxesTouch(a.bbox, b.bbox, maxClr)) {
-          const layer = [...a.layers].find((l) => b.layers.has(l)) || "";
-          const hit = ruleClearance(clrRules, doc, s, ruleItem(a, layer), ruleItem(b, layer));
-          if (hit) {
-            need = hit.min > 0 ? Math.max(hit.min, s.minClearance || 0) : 0;
-            by = hit.name;
-          }
-        }
-        if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
-        const gap = shapeGap(a.shape, b.shape);
-        if (gap >= need - DRC_EPS) continue;
-        const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);
-        const [x, y] = boxCenter(a.bbox, b.bbox);
-        out.push(marker("clearance", "error", x, y, `Clearance violation (${by || `netclass '${cls}'`} clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
-      }
-    }
-    const edges = edgeShapes(doc);
-    if (edges.shapes.length && s.edgeClearance > 0) {
-      const eb = edges.shapes.map((e) => shapeBBox(e));
-      for (const c of conds) for (let i = 0; i < edges.shapes.length; i++) {
-        if (!boxesTouch(c.bbox, eb[i], s.edgeClearance)) continue;
-        const gap = shapeGap(c.shape, edges.shapes[i]);
-        if (gap >= s.edgeClearance - DRC_EPS) continue;
-        const [x, y] = boxCenter(c.bbox, eb[i]);
-        out.push(marker("copper_edge_clearance", "error", x, y, `Board edge clearance violation (board setup constraints edge clearance ${mm4(s.edgeClearance)}; actual ${mm4(gap)})`, [c.id]));
-        break;
-      }
-    }
-    if (opts.unconnected !== false) for (const l of ratsnest(doc, nl)) out.push(marker("unconnected_items", "error", l.a[0], l.a[1], `Missing connection between items (net '${l.name}')`, l.ids.slice()));
-    for (const net of nl.nets.values()) for (const cl of net.shorts) {
-      const p = cl.anchors[0] ? cl.anchors[0].p : [0, 0];
-      out.push(marker("shorting_items", "error", p[0], p[1], `Items shorting two nets (${Array.from(cl.nets).join(", ")})`, Array.from(new Set(cl.items.map((c) => c.id)))));
-    }
-    const touches = (p, layer, self) => conds.some((c) => c !== self && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS) || nl.conductors.some((c) => c.kind === "zone" && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && pointInPoly(c.shape.pts, p[0], p[1]));
-    for (const c of conds) {
-      if (c.kind === "segment" || c.kind === "arc") {
-        const [a, b] = c.anchors;
-        const layer = c.layers.values().next().value;
-        if (c.length < EPS) {
-          out.push(marker("zero_length", "warning", a[0], a[1], "Zero-length track", [c.id]));
-          continue;
-        }
-        const loose = [a, b].find((p) => !touches(p, layer, c));
-        if (loose) out.push(marker("track_dangling", "warning", loose[0], loose[1], "Track has unconnected end", [c.id]));
-        if (s.minTrackWidth > 0 && c.width < s.minTrackWidth - 1e-6) out.push(marker("track_width", "error", (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (board setup constraints min width ${mm4(s.minTrackWidth)}; actual ${mm4(c.width)})`, [c.id]));
-      } else if (c.kind === "via") {
-        const [a] = c.anchors;
-        if (c.drill >= c.size - 1e-6) out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
-        else {
-          if (s.minViaDiameter > 0 && c.size < s.minViaDiameter - 1e-6) out.push(marker("via_diameter", "error", a[0], a[1], `Via diameter (board setup constraints min diameter ${mm4(s.minViaDiameter)}; actual ${mm4(c.size)})`, [c.id]));
-          if (s.minViaDrill > 0 && c.drill < s.minViaDrill - 1e-6) out.push(marker("drill_out_of_range", "error", a[0], a[1], `Hole size out of range (board setup constraints min ${mm4(s.minViaDrill)}; actual ${mm4(c.drill)})`, [c.id]));
-        }
-        if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
-      }
-    }
-    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
-    const cy = fps.map((fp) => courtyards(fp));
-    for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
-      if (!fps[i].bbox || !fps[j].bbox || !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
-      for (const layer of ["F.CrtYd", "B.CrtYd"]) {
-        let hit = false;
-        for (const P of cy[i][layer]) for (const Q of cy[j][layer]) if (polysOverlap(P, Q)) hit = true;
-        if (hit) {
-          const [x, y] = boxCenter(fps[i].bbox, fps[j].bbox);
-          out.push(marker("courtyards_overlap", "error", x, y, `Courtyards overlap (${fps[i].ref || "footprint"} and ${fps[j].ref || "footprint"} on ${layer})`, [fps[i].id, fps[j].id]));
-        }
-      }
-    }
-    const ol = boardOutline(doc);
-    if (ol.hasEdges && !ol.outline) {
-      const e = edges.shapes[0];
-      const p = e.a || e.pts[0];
-      out.push(marker("invalid_outline", "error", p[0], p[1], "Board has malformed outline (Edge.Cuts does not close)", []));
-    } else if (ol.outline && opts.outline !== false) {
-      const seen = /* @__PURE__ */ new Set();
-      for (const c of nl.conductors) {
-        if (seen.has(c.id) || c.kind === "zone") continue;
-        const p = c.kind === "pad" ? [c.pad.x, c.pad.y] : c.anchors[0];
-        if (p && !pointInPoly(ol.outline, p[0], p[1])) {
-          seen.add(c.id);
-          out.push(marker("outside_outline", "warning", p[0], p[1], `Item outside board outline (${c.kind === "pad" ? c.item.ref || "footprint" : c.kind})`, [c.id]));
-        }
-      }
-    }
-    return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => {
-      const sev = s.severities[m.code];
-      if (sev === "warning" || sev === "error") m.severity = sev;
-      return m;
-    });
-  }
-
   // web/tools/pcb-tools/meander.ts
   var TUNE_IU = 1e6;
   var LENGTH_UNCONSTRAINED = 1e6 * TUNE_IU;
@@ -2801,6 +2078,817 @@
       return chSimplify(fin);
     };
     return Object.assign({}, base, { finalP: join(spP, tunedP), finalN: join(spN, tunedN), tunedP: chSimplify(tunedP), tunedN: chSimplify(tunedN), status, length: lastLength, hasMeanders });
+  }
+
+  // web/tools/pcb-tools/dru.ts
+  var UNIT = { mm: 1, mil: 0.0254, mils: 0.0254, th: 0.0254, in: 25.4, um: 1e-3, nm: 1e-6, cm: 10, m: 1e3 };
+  function druValue(s) {
+    const m = /^\s*([-+]?\d*\.?\d+(?:e[-+]?\d+)?)\s*([a-z]*)\s*$/i.exec(String(s));
+    if (!m) return null;
+    const u = m[2].toLowerCase();
+    if (u && !(u in UNIT)) return null;
+    return +m[1] * (u ? UNIT[u] : 1);
+  }
+  function tokenize(src) {
+    const out = [];
+    let i = 0;
+    while (i < src.length) {
+      const c = src[i];
+      if (/\s/.test(c)) {
+        i++;
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        let j = i + 1, s = "";
+        while (j < src.length && src[j] !== c) {
+          if (src[j] === "\\" && j + 1 < src.length) j++;
+          s += src[j++];
+        }
+        if (j >= src.length) throw new Error("Missing closing quote");
+        out.push("'" + s);
+        i = j + 1;
+        continue;
+      }
+      const two = src.slice(i, i + 2);
+      if (["||", "&&", "==", "!=", "<=", ">="].includes(two)) {
+        out.push(two);
+        i += 2;
+        continue;
+      }
+      if ("()<>!,".includes(c)) {
+        out.push(c);
+        i++;
+        continue;
+      }
+      const m = /^[A-Za-z_0-9.]+/.exec(src.slice(i));
+      if (!m) throw new Error(`Unexpected '${c}'`);
+      out.push(m[0]);
+      i += m[0].length;
+    }
+    return out;
+  }
+  function parseCondition(src) {
+    const t = tokenize(src);
+    let p = 0;
+    const peek = () => t[p], eat = (x) => {
+      const v = t[p++];
+      if (x && v !== x) throw new Error(`Expected '${x}'`);
+      return v;
+    };
+    const bin = (next, ops) => () => {
+      let a = next();
+      while (ops.includes(peek())) {
+        const op = eat();
+        a = { k: "bin", op, a, b: next() };
+      }
+      return a;
+    };
+    const primary = () => {
+      const tok = eat();
+      if (tok === void 0) throw new Error("Unexpected end of expression");
+      if (tok === "(") {
+        const e2 = or();
+        eat(")");
+        return e2;
+      }
+      if (tok === "!") return { k: "not", e: primary() };
+      if (tok[0] === "'") {
+        const s = tok.slice(1);
+        return { k: "lit", v: { t: "s", v: s, wild: /[*?]/.test(s) } };
+      }
+      const n = druValue(tok);
+      if (n !== null) return { k: "lit", v: { t: "n", v: n } };
+      const m = /^(?:([AB])\.)?([A-Za-z_][A-Za-z_0-9]*)$/.exec(tok);
+      if (!m) throw new Error(`Unrecognized item '${tok}'`);
+      const who = m[1] || null;
+      if (peek() === "(") {
+        eat("(");
+        const args = [];
+        if (peek() !== ")") {
+          args.push(or());
+          while (peek() === ",") {
+            eat(",");
+            args.push(or());
+          }
+        }
+        eat(")");
+        return { k: "call", who, fn: m[2], args };
+      }
+      if (!who) throw new Error(`Unrecognized item '${tok}'`);
+      return { k: "prop", who, name: m[2] };
+    };
+    const cmp = bin(primary, ["==", "!=", "<", ">", "<=", ">="]);
+    const and = bin(cmp, ["&&"]);
+    const or = bin(and, ["||"]);
+    const e = or();
+    if (p < t.length) throw new Error(`Unexpected '${t[p]}'`);
+    return e;
+  }
+  function wildMatch(pat, s) {
+    const re = new RegExp("^" + pat.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$", "i");
+    return re.test(s);
+  }
+  var TYPE_NAME = { segment: "Track", arc: "Arc", via: "Via", pad: "Pad", zone: "Zone", footprint: "Footprint", gr_line: "Graphic", gr_rect: "Graphic", gr_circle: "Graphic", gr_arc: "Graphic", gr_poly: "Graphic", gr_text: "Text", generated: "Generator" };
+  function propOf(doc, s, it, name) {
+    if (!it) return { t: "u" };
+    const key = name.replace(/_/g, "").toLowerCase();
+    const net = () => netOf(it.node).name || "";
+    const str = (v) => ({ t: "s", v, wild: false });
+    switch (key) {
+      case "type":
+        return str(TYPE_NAME[it.kind] || it.kind);
+      case "net":
+      case "netname":
+        return str(net());
+      case "netcode":
+        return { t: "n", v: netOf(it.node).code || 0 };
+      case "netclass":
+        return str(netclassName(s, net()));
+      case "layer":
+        return str(it.layer || layerOf(it.node) || "");
+      case "width": {
+        const w = K.kid(it.node, "width");
+        return w ? { t: "n", v: K.num(w[1]) } : { t: "u" };
+      }
+      case "reference": {
+        const p = it.node.find((c) => Array.isArray(c) && c[0] === "property" && K.str(c[1]) === "Reference");
+        return p ? str(K.str(p[2])) : { t: "u" };
+      }
+      default:
+        return { t: "u" };
+    }
+  }
+  var truth = (v) => v.t === "n" ? v.v !== 0 : v.t === "s" ? v.v !== "" : false;
+  var num = (b) => ({ t: "n", v: b ? 1 : 0 });
+  function evalExpr(e, doc, s, A, B) {
+    switch (e.k) {
+      case "lit":
+        return e.v;
+      case "prop":
+        return propOf(doc, s, e.who === "A" ? A : B, e.name);
+      case "not":
+        return num(!truth(evalExpr(e.e, doc, s, A, B)));
+      case "bin": {
+        if (e.op === "&&") return num(truth(evalExpr(e.a, doc, s, A, B)) && truth(evalExpr(e.b, doc, s, A, B)));
+        if (e.op === "||") return num(truth(evalExpr(e.a, doc, s, A, B)) || truth(evalExpr(e.b, doc, s, A, B)));
+        const a = evalExpr(e.a, doc, s, A, B), b = evalExpr(e.b, doc, s, A, B);
+        if (e.op === "==" || e.op === "!=") {
+          let eq = false;
+          if (a.t === "n" && b.t === "n") eq = a.v === b.v;
+          else if (a.t === "s" && b.t === "s") eq = b.wild ? wildMatch(b.v, a.v) : a.v.toLowerCase() === b.v.toLowerCase();
+          return num(e.op === "==" ? eq : !eq && a.t !== "u" && b.t !== "u");
+        }
+        if (a.t !== "n" || b.t !== "n") return num(false);
+        return num(e.op === "<" ? a.v < b.v : e.op === ">" ? a.v > b.v : e.op === "<=" ? a.v <= b.v : a.v >= b.v);
+      }
+      case "call": {
+        const it = e.who === "B" ? B : A;
+        const arg = e.args[0] ? evalExpr(e.args[0], doc, s, A, B) : { t: "u" };
+        const as = arg.t === "s" ? arg.v : arg.t === "n" ? String(arg.v) : "";
+        switch (e.fn) {
+          case "inDiffPair": {
+            if (!it || !as) return num(false);
+            const name = netOf(it.node).name || "";
+            const m = matchDpSuffix(name);
+            if (!m.rv || !boardNets(doc).some((n) => n.name === m.complement)) return num(false);
+            let i = name.length - 1;
+            while (i >= 0 && /[0-9_]/.test(name[i])) i--;
+            const base = name.slice(0, i) + name.slice(i + 1);
+            return num(wildMatch(as, base) || base.endsWith("_") && wildMatch(as, base.slice(0, base.lastIndexOf("_"))));
+          }
+          case "hasNetclass":
+            return num(!!it && wildMatch(as, netclassName(s, netOf(it.node).name || "")));
+          case "existsOnLayer": {
+            if (!it) return num(false);
+            const L = K.kid(it.node, "layers");
+            const ls = L ? L.slice(1).map((x) => K.str(x)) : [layerOf(it.node)];
+            return num(ls.some((l) => wildMatch(as, l) || l.startsWith("*") && wildMatch(as.replace(/^[^.]*/, "*"), l)));
+          }
+          case "isPlated":
+            return num(!!it && (it.kind === "via" || it.kind === "pad" && K.str(it.node[2]) === "thru_hole"));
+          default:
+            return { t: "u" };
+        }
+      }
+    }
+  }
+  function parseDru(text) {
+    const rules = [], errors = [];
+    let root2;
+    try {
+      root2 = K.parse("(dru " + (text || "") + "\n)");
+    } catch (e) {
+      return { rules, errors: [String(e.message || e)] };
+    }
+    for (const r of root2.slice(1)) {
+      if (!Array.isArray(r) || r[0] !== "rule") continue;
+      const rule = { name: K.str(r[1]), condition: "", layer: null, severity: null, constraints: [], expr: null, error: null };
+      for (const c of r.slice(2)) {
+        if (!Array.isArray(c)) continue;
+        if (c[0] === "condition") rule.condition = K.str(c[1]);
+        else if (c[0] === "layer") rule.layer = K.str(c[1]);
+        else if (c[0] === "severity") rule.severity = K.str(c[1]);
+        else if (c[0] === "constraint") {
+          const k = { type: K.str(c[1]), min: null, opt: null, max: null };
+          for (const v of c.slice(2)) {
+            if (Array.isArray(v) && (v[0] === "min" || v[0] === "opt" || v[0] === "max")) k[v[0]] = druValue(K.str(v[1]));
+            else if (Array.isArray(v) && v.length === 1) (k.options = k.options || []).push(K.str(v[0]));
+            else if (!Array.isArray(v)) (k.options = k.options || []).push(K.str(v));
+          }
+          rule.constraints.push(k);
+        }
+      }
+      if (rule.condition) {
+        try {
+          rule.expr = parseCondition(rule.condition);
+        } catch (e) {
+          rule.error = e.message;
+          errors.push(`rule '${rule.name}': ${rule.error}`);
+        }
+      }
+      rules.push(rule);
+    }
+    return { rules, errors };
+  }
+  var layerOk = (rule, layer) => {
+    if (!rule.layer || !layer) return true;
+    if (rule.layer === "outer") return /^(F|B)\.Cu$/.test(layer);
+    if (rule.layer === "inner") return /^In\d+\.Cu$/.test(layer);
+    return wildMatch(rule.layer, layer);
+  };
+  function ruleMatches(rule, doc, s, A, B) {
+    if (rule.error) return false;
+    if (!layerOk(rule, A ? A.layer || layerOf(A.node) : null)) return false;
+    return !rule.expr || truth(evalExpr(rule.expr, doc, s, A, B));
+  }
+  function evalRuleConstraint(rules, type, doc, s, A, B, fmt3) {
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i];
+      const c = r.constraints.find((k) => k.type === type);
+      if (!c) continue;
+      if (!ruleMatches(r, doc, s, A, B)) continue;
+      const f = fmt3 || ((v) => v.toFixed(4) + " mm");
+      const parts = [];
+      if (c.min != null && c.min > 0) parts.push("min " + f(c.min));
+      if (c.opt != null) parts.push("opt " + f(c.opt));
+      if (c.max != null) parts.push("max " + f(c.max));
+      return { text: parts.join("; "), name: `rule '${r.name}'`, min: c.min, opt: c.opt, max: c.max, severity: r.severity };
+    }
+    return null;
+  }
+  function ruleClearance(rules, doc, s, A, B) {
+    for (let i = rules.length - 1; i >= 0; i--) {
+      const r = rules[i], c = r.constraints.find((k) => k.type === "clearance");
+      if (!c || c.min == null) continue;
+      if (!ruleMatches(r, doc, s, A, B) && !ruleMatches(r, doc, s, B, A)) continue;
+      return { min: r.severity === "ignore" ? 0 : c.min, name: `rule '${r.name}'` };
+    }
+    return null;
+  }
+  function matchedLengthMarkers(doc, s, rules) {
+    const out = [];
+    if (!rules.some((r) => r.constraints.some((c) => c.type === "length" || c.type === "skew"))) return out;
+    const nets = /* @__PURE__ */ new Map();
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" && it.kind !== "arc") continue;
+      const name = netOf(it.node).name || "";
+      if (!name) continue;
+      const a = K.kid(it.node, "start"), b = K.kid(it.node, "end");
+      if (!a || !b) continue;
+      const A = [K.num(a[1]), K.num(a[2])], B = [K.num(b[1]), K.num(b[2])];
+      let L = Math.hypot(B[0] - A[0], B[1] - A[1]);
+      if (it.kind === "arc") {
+        const m = K.kid(it.node, "mid");
+        const c = m && K.arcFrom3(A, [K.num(m[1]), K.num(m[2])], B);
+        if (c) L = arcLength(c);
+      }
+      let n = nets.get(name);
+      if (!n) nets.set(name, n = { name, ids: [], total: 0, first: it });
+      n.ids.push(it.id);
+      n.total += L;
+    }
+    const at = (it) => {
+      const a = K.kid(it.node, "start");
+      return [K.num(a[1]), K.num(a[2])];
+    };
+    const groups = /* @__PURE__ */ new Map();
+    for (const n of nets.values()) {
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "length");
+        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+        if (r.severity === "ignore") break;
+        const name = `rule '${r.name}'`, [x, y] = at(n.first);
+        if (c.min != null && n.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n.total)})`, n.ids.slice())));
+        else if (c.max != null && n.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n.total)})`, n.ids.slice()));
+        break;
+      }
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === "skew");
+        if (!c || !ruleMatches(r, doc, s, n.first, null)) continue;
+        if (r.severity === "ignore") break;
+        let g = groups.get(r.name + "\0" + i);
+        if (!g) groups.set(r.name + "\0" + i, g = { c, rule: r, nets: [] });
+        g.nets.push(n);
+        break;
+      }
+    }
+    for (const g of groups.values()) {
+      let sets = [g.nets];
+      if (g.c.options && g.c.options.includes("within_diff_pairs")) {
+        sets = [];
+        const left = new Map(g.nets.map((n) => [n.name, n]));
+        for (const n of g.nets) {
+          if (!left.has(n.name)) continue;
+          const m = matchDpSuffix(n.name);
+          const o = m.rv ? left.get(m.complement) : null;
+          if (o) {
+            sets.push([n, o]);
+            left.delete(n.name);
+            left.delete(o.name);
+          }
+        }
+      }
+      for (const set of sets) {
+        let ref = set[0];
+        for (const n of set) if (n.total > ref.total) ref = n;
+        for (const n of set) {
+          const skew = Math.abs(n.total - ref.total), name = `rule '${g.rule.name}'`;
+          let kind = "";
+          if (g.c.max != null && skew > g.c.max + 1e-6) kind = "max";
+          else if (g.c.min != null && n !== ref && skew < g.c.min - 1e-6) kind = "min";
+          if (!kind) continue;
+          const [x, y] = at(n.first);
+          out.push(marker("skew_out_of_range", g.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g.c.max : g.c.min)}; actual ${mm4(n.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n.total)})`, n.ids.slice()));
+        }
+      }
+    }
+    return out.filter((m) => s.severities[m.code] !== "ignore");
+  }
+  function diffPairMarkers(doc, s, rules) {
+    const out = [];
+    if (!rules.some((r) => r.constraints.some((c) => c.type === "diff_pair_gap" || c.type === "diff_pair_uncoupled"))) return out;
+    const inPattern = /* @__PURE__ */ new Set();
+    for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K.groupMemberIds(it.node)) inPattern.add(id);
+    const byNet = /* @__PURE__ */ new Map();
+    for (const it of doc.items.values()) if (it.kind === "segment" || it.kind === "arc") {
+      const n = netOf(it.node).name || "";
+      if (n) {
+        let l = byNet.get(n);
+        if (!l) byNet.set(n, l = []);
+        l.push(it);
+      }
+    }
+    const xy2 = (it, k) => {
+      const v = K.kid(it.node, k);
+      return [K.num(v[1]), K.num(v[2])];
+    };
+    const len = (it) => {
+      const a = xy2(it, "start"), b = xy2(it, "end");
+      if (it.kind === "arc") {
+        const m = xy2(it, "mid");
+        const c = K.arcFrom3(a, m, b);
+        if (c) return arcLength(c);
+      }
+      return Math.hypot(b[0] - a[0], b[1] - a[1]);
+    };
+    const width = (it) => {
+      const w = K.kid(it.node, "width");
+      return w ? K.num(w[1]) : 0;
+    };
+    const find = (type, A, B) => {
+      for (let i = rules.length - 1; i >= 0; i--) {
+        const r = rules[i], c = r.constraints.find((k) => k.type === type);
+        if (c && ruleMatches(r, doc, s, A, B)) return r.severity === "ignore" ? null : { c, r };
+      }
+      return null;
+    };
+    const at = (it) => xy2(it, "start");
+    for (const [name, P] of byNet) {
+      const m = matchDpSuffix(name);
+      if (m.rv <= 0) continue;
+      const N = byNet.get(m.complement);
+      if (!N) continue;
+      const gapR = find("diff_pair_gap", P[0], N[0]), uncR = find("diff_pair_uncoupled", P[0], N[0]);
+      if (!gapR && !uncR) continue;
+      const I = (p) => [p[0] * 1e6, p[1] * 1e6];
+      const coupled = [];
+      for (const sp of P) {
+        if (sp.kind !== "segment" || inPattern.has(sp.id)) continue;
+        let best = null;
+        for (const sn of N) {
+          if (sn.kind !== "segment" || inPattern.has(sn.id) || layerOf(sn.node) !== layerOf(sp.node)) continue;
+          const a = { A: I(xy2(sp, "start")), B: I(xy2(sp, "end")) }, b = { A: I(xy2(sn, "start")), B: I(xy2(sn, "end")) };
+          if (!approxParallelT(a, b, 10)) continue;
+          const cp = commonParallelProjection(a, b);
+          if (!cp) continue;
+          const gap = (Math.hypot(cp.pClip.A[0] - cp.nClip.A[0], cp.pClip.A[1] - cp.nClip.A[1]) - (width(sp) + width(sn)) / 2 * 1e6) / 1e6;
+          const L = Math.hypot(cp.nClip.B[0] - cp.nClip.A[0], cp.nClip.B[1] - cp.nClip.A[1]) / 1e6;
+          if (!best || gap < best.gap) best = { p: sp, n: sn, gap, len: L, failMin: false, failMax: false };
+        }
+        if (best) coupled.push(best);
+      }
+      let totalCoupled = 0;
+      for (const d of coupled) {
+        const g = gapR && gapR.c;
+        if (g) {
+          d.failMin = g.min != null && g.min >= 0 && d.gap < g.min - 5e-4;
+          d.failMax = g.max != null && g.max >= 0 && d.gap > g.max + 5e-4;
+        }
+        if (!d.failMin && !d.failMax) totalCoupled += d.len;
+      }
+      const sum = (l) => l.filter((it) => !inPattern.has(it.id)).reduce((t, it) => t + len(it), 0);
+      const total = Math.max(sum(P), sum(N)), uncoupled = total - totalCoupled;
+      let uncFail = false;
+      if (uncR && uncR.c.max != null && uncR.c.max >= 0 && uncoupled > uncR.c.max + 1e-6) {
+        uncFail = true;
+        const [x, y] = at(N[0]);
+        out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P.concat(N).map((it) => it.id)));
+      }
+      if (gapR && (uncFail || !uncR)) for (const d of coupled) {
+        if (!d.failMin && !d.failMax) continue;
+        const [x, y] = at(d.n);
+        out.push(marker("diff_pair_gap_out_of_range", gapR.r.severity || "error", x, y, `Differential pair gap out of range (rule '${gapR.r.name}' ${d.failMin ? "minimum" : "maximum"} gap ${mm4(d.failMin ? gapR.c.min : gapR.c.max)}; actual ${mm4(d.gap)})`, [d.p.id, d.n.id]));
+      }
+    }
+    return out.filter((mk) => s.severities[mk.code] !== "ignore");
+  }
+
+  // web/tools/pcb-tools/drc.ts
+  var DEFAULT_SETTINGS = () => ({ clearance: 0.2, edgeClearance: 0.5, trackWidth: 0.2, viaDiameter: 0.6, viaDrill: 0.3, minTrackWidth: 0, minViaDiameter: 0, minViaDrill: 0, netclasses: { Default: { clearance: 0.2, track_width: 0.2, via_diameter: 0.6, via_drill: 0.3 } }, netclassOf: {}, patterns: [], severities: {} });
+  function designSettings(src) {
+    const s = DEFAULT_SETTINGS();
+    if (!src) return s;
+    if (typeof src === "string" && /^\s*\{/.test(src)) {
+      try {
+        src = JSON.parse(src);
+      } catch (e) {
+        return s;
+      }
+    }
+    if (typeof src === "string") {
+      let tree = null;
+      try {
+        tree = K.parse(src);
+      } catch (e) {
+        return s;
+      }
+      const setup = tree && K.kid(tree, "setup");
+      if (setup) {
+        for (const [key, prop] of [["clearance", "clearance"], ["trace_clearance", "clearance"], ["edge_clearance", "edgeClearance"], ["copper_edge_clearance", "edgeClearance"], ["trace_min", "minTrackWidth"], ["via_min_size", "minViaDiameter"], ["via_min_drill", "minViaDrill"], ["trace_width", "trackWidth"], ["via_size", "viaDiameter"], ["via_drill", "viaDrill"]]) {
+          const c = K.kid(setup, key);
+          if (c) s[prop] = K.num(c[1], s[prop]);
+        }
+      }
+      for (const nc of tree ? K.kids(tree, "net_class") : []) {
+        const name = K.str(nc[1]);
+        const e = s.netclasses[name] = Object.assign({}, s.netclasses.Default);
+        for (const [key, prop] of [["clearance", "clearance"], ["trace_width", "track_width"], ["via_dia", "via_diameter"], ["via_drill", "via_drill"]]) {
+          const c = K.kid(nc, key);
+          if (c) e[prop] = K.num(c[1]);
+        }
+        for (const a of K.kids(nc, "add_net")) s.netclassOf[K.str(a[1])] = name;
+      }
+      if (s.netclasses.Default) {
+        s.clearance = s.netclasses.Default.clearance;
+        s.trackWidth = s.netclasses.Default.track_width;
+      }
+      return s;
+    }
+    if (src.netclasses || src.clearance !== void 0) return Object.assign(s, src);
+    src = src;
+    const rules = src.board && src.board.design_settings && src.board.design_settings.rules;
+    const sev = src.board && src.board.design_settings && src.board.design_settings.rule_severities;
+    if (sev) for (const [k, v] of Object.entries(sev)) s.severities[k] = String(v);
+    if (rules) {
+      s.minClearance = rules.min_clearance || 0;
+      s.minTrackWidth = rules.min_track_width || 0;
+      s.minViaDiameter = rules.min_via_diameter || 0;
+      s.minViaDrill = rules.min_through_hole_diameter || 0;
+      s.minViaAnnular = rules.min_via_annular_width || 0;
+      if (rules.min_hole_clearance !== void 0) s.holeClearance = rules.min_hole_clearance;
+      if (rules.min_copper_edge_clearance !== void 0) s.edgeClearance = rules.min_copper_edge_clearance;
+    }
+    const dflt = src.board && src.board.design_settings && src.board.design_settings.defaults;
+    if (dflt) layerDefaults(dflt);
+    const ns = src.net_settings;
+    if (ns && isList(ns.classes)) {
+      for (const c of ns.classes) if (c && c.name) s.netclasses[c.name] = { clearance: c.clearance !== void 0 ? c.clearance : s.clearance, track_width: c.track_width !== void 0 ? c.track_width : s.trackWidth, via_diameter: c.via_diameter !== void 0 ? c.via_diameter : s.viaDiameter, via_drill: c.via_drill !== void 0 ? c.via_drill : s.viaDrill };
+      if (s.netclasses.Default) {
+        s.clearance = s.netclasses.Default.clearance;
+        s.trackWidth = s.netclasses.Default.track_width;
+        s.viaDiameter = s.netclasses.Default.via_diameter;
+        s.viaDrill = s.netclasses.Default.via_drill;
+      }
+      if (ns.netclass_assignments) for (const [net, cls] of Object.entries(ns.netclass_assignments)) s.netclassOf[net] = cls;
+      if (isList(ns.netclass_patterns)) {
+        for (const p of ns.netclass_patterns) if (p && p.pattern) s.patterns.push({ re: new RegExp("^" + String(p.pattern).replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$"), netclass: p.netclass });
+      }
+    }
+    return s;
+  }
+  function netclassName(s, net) {
+    const name = net ? s.netclassOf[net] || (s.patterns.find((p) => p.re.test(net)) || { netclass: void 0 }).netclass : null;
+    return name && s.netclasses[name] ? name : "Default";
+  }
+  function netclassOf(s, net) {
+    return s.netclasses[netclassName(s, net)] || s.netclasses.Default || { clearance: s.clearance, track_width: s.trackWidth, via_diameter: s.viaDiameter, via_drill: s.viaDrill };
+  }
+  var netClearance = (s, net) => {
+    const nc = netclassOf(s, net);
+    return nc && nc.clearance !== void 0 ? nc.clearance : s.clearance;
+  };
+  var mm4 = (v) => v.toFixed(4) + " mm";
+  function edgeShapes(doc) {
+    const shapes = [], chains = [];
+    const take = (kind, node, tf, layer) => {
+      if (layer !== "Edge.Cuts") return;
+      const w = K.kid(node, "stroke") ? K.num((K.kid(K.kid(node, "stroke"), "width") || [0, 0])[1]) : widthOf(node, 0);
+      const P = (key) => {
+        const p = pt(node, key);
+        return p ? tf(p[0], p[1]) : null;
+      };
+      if (kind === "line") {
+        const a = P("start"), b = P("end");
+        if (a && b) {
+          shapes.push({ t: "seg", a, b, r: w / 2 });
+          chains.push([a, b]);
+        }
+      } else if (kind === "rect") {
+        const a = P("start"), b = P("end");
+        if (a && b) {
+          const c = tf(pt(node, "start")[0], pt(node, "end")[1]), d = tf(pt(node, "end")[0], pt(node, "start")[1]);
+          const pts = [a, d, b, c];
+          shapes.push({ t: "path", pts: pts.concat([a]), r: w / 2 });
+          chains.push(pts.concat([a]));
+        }
+      } else if (kind === "circle") {
+        const c = P("center"), e = P("end");
+        if (c && e) {
+          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+          const pts = [];
+          for (let i = 0; i < 48; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 24), c[1] + r * Math.sin(i * Math.PI / 24)]);
+          pts.push(pts[0].slice());
+          shapes.push({ t: "path", pts, r: w / 2 });
+          chains.push(pts);
+        }
+      } else if (kind === "arc") {
+        const a = P("start"), m = P("mid"), b = P("end");
+        if (a && m && b) {
+          const arc = K.arcFrom3(a, m, b);
+          const pts = arc ? arcPoints(arc, a, b) : [a, b];
+          shapes.push({ t: "path", pts, r: w / 2 });
+          chains.push(pts);
+        }
+      } else if (kind === "poly") {
+        const pts = K.ptsOf(node).map(([x, y]) => tf(x, y));
+        if (pts.length > 2) {
+          shapes.push({ t: "path", pts: pts.concat([pts[0]]), r: w / 2 });
+          chains.push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "curve") {
+        const pts = K.bezierPts(K.ptsOf(node).map(([x, y]) => tf(x, y)));
+        if (pts.length > 1) {
+          shapes.push({ t: "path", pts, r: w / 2 });
+          chains.push(pts);
+        }
+      }
+    };
+    const id = (x, y) => [x, y];
+    for (const it of doc.items.values()) {
+      const n = it.node;
+      if (/^gr_(line|rect|circle|arc|poly|curve)$/.test(it.kind)) take(it.kind.slice(3), n, id, layerOf(n, "Dwgs.User"));
+      else if (it.kind === "footprint") {
+        const [fx, fy, frot] = K.atOf(n);
+        const R = rotator(frot);
+        const tf = (x, y) => {
+          const [dx, dy] = R(x, y);
+          return [fx + dx, fy + dy];
+        };
+        for (const g of n) if (isList(g) && /^fp_(line|rect|circle|arc|poly|curve)$/.test(g[0])) take(g[0].slice(3), g, tf, layerOf(g, "F.SilkS"));
+      }
+    }
+    return { shapes, chains };
+  }
+  function chainLoops(chains, tol) {
+    tol = tol || 0.01;
+    const loops = [], open = chains.map((c) => c.slice());
+    let dangling = false;
+    const same = (a, b) => Math.abs(a[0] - b[0]) <= tol && Math.abs(a[1] - b[1]) <= tol;
+    while (open.length) {
+      let cur = open.pop();
+      if (cur.length > 2 && same(cur[0], cur[cur.length - 1])) {
+        loops.push(cur.slice(0, -1));
+        continue;
+      }
+      let grew = true;
+      while (grew && !same(cur[0], cur[cur.length - 1])) {
+        grew = false;
+        const tail = cur[cur.length - 1];
+        for (let i = 0; i < open.length; i++) {
+          const c = open[i];
+          if (same(c[0], tail)) {
+            cur = cur.concat(c.slice(1));
+            open.splice(i, 1);
+            grew = true;
+            break;
+          }
+          if (same(c[c.length - 1], tail)) {
+            cur = cur.concat(c.slice(0, -1).reverse());
+            open.splice(i, 1);
+            grew = true;
+            break;
+          }
+        }
+      }
+      if (cur.length > 2 && same(cur[0], cur[cur.length - 1])) loops.push(cur.slice(0, -1));
+      else dangling = true;
+    }
+    return { loops, dangling };
+  }
+  var polyArea = (pts) => {
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    return a / 2;
+  };
+  function boardOutline(doc) {
+    const { chains } = edgeShapes(doc);
+    if (!chains.length) return { outline: null, dangling: false, hasEdges: false };
+    const { loops, dangling } = chainLoops(chains);
+    let best = null, bestA = 0;
+    for (const l of loops) {
+      const a = Math.abs(polyArea(l));
+      if (a > bestA) {
+        bestA = a;
+        best = l;
+      }
+    }
+    return { outline: best, dangling, hasEdges: true, area: bestA };
+  }
+  function courtyards(fp) {
+    const n = fp.node;
+    const [fx, fy, frot] = K.atOf(n);
+    const R = rotator(frot);
+    const tf = (x, y) => {
+      const [dx, dy] = R(x, y);
+      return [fx + dx, fy + dy];
+    };
+    const out = { "F.CrtYd": [], "B.CrtYd": [] };
+    for (const g of n) {
+      if (!isList(g) || !/^fp_(line|rect|circle|arc|poly)$/.test(g[0])) continue;
+      const layer = layerOf(g, "");
+      if (!out[layer]) continue;
+      const kind = g[0].slice(3);
+      const P = (key) => {
+        const p = pt(g, key);
+        return p ? tf(p[0], p[1]) : null;
+      };
+      if (kind === "line") {
+        const a = P("start"), b = P("end");
+        if (a && b) out[layer].push([a, b]);
+      } else if (kind === "rect") {
+        const s = pt(g, "start"), e = pt(g, "end");
+        if (s && e) {
+          const pts = [tf(s[0], s[1]), tf(e[0], s[1]), tf(e[0], e[1]), tf(s[0], e[1])];
+          out[layer].push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "circle") {
+        const c = P("center"), e = P("end");
+        if (c && e) {
+          const r = Math.hypot(e[0] - c[0], e[1] - c[1]);
+          const pts = [];
+          for (let i = 0; i < 32; i++) pts.push([c[0] + r * Math.cos(i * Math.PI / 16), c[1] + r * Math.sin(i * Math.PI / 16)]);
+          out[layer].push(pts.concat([pts[0]]));
+        }
+      } else if (kind === "arc") {
+        const a = P("start"), m = P("mid"), b = P("end");
+        if (a && m && b) {
+          const arc = K.arcFrom3(a, m, b);
+          out[layer].push(arc ? arcPoints(arc, a, b) : [a, b]);
+        }
+      } else if (kind === "poly") {
+        const pts = K.ptsOf(g).map(([x, y]) => tf(x, y));
+        if (pts.length > 2) out[layer].push(pts.concat([pts[0]]));
+      }
+    }
+    const res = {};
+    for (const layer of Object.keys(out)) res[layer] = out[layer].length ? chainLoops(out[layer]).loops : [];
+    return res;
+  }
+  var marker = (code, severity, x, y, text, ids) => ({ code, severity, x: r6(x), y: r6(y), text, ids });
+  var boxCenter = (a, b) => [(Math.max(a[0], b[0]) + Math.min(a[2], b[2])) / 2, (Math.max(a[1], b[1]) + Math.min(a[3], b[3])) / 2];
+  function drc(doc, settings, opts) {
+    const s = settings && settings.netclasses ? settings : designSettings(settings);
+    opts = opts || {};
+    const out = [];
+    const nl = netlist(doc);
+    const conds = nl.conductors.filter((c) => c.kind !== "zone");
+    const clr = (c) => netClearance(s, c.net);
+    const rules = typeof opts.rules === "string" ? parseDru(opts.rules).rules : opts.rules || [];
+    const clrRules = rules.filter((r) => r.constraints.some((k) => k.type === "clearance" && k.min != null));
+    const ruleMax = Math.max(0, ...clrRules.map((r) => r.constraints.find((k) => k.type === "clearance").min || 0));
+    const maxClr = Math.max(s.clearance, s.minClearance || 0, ...Object.values(s.netclasses).map((n) => n.clearance || 0), s.edgeClearance, ruleMax);
+    const ruleItem = (c, layer) => ({ kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer });
+    const order = conds.slice().sort((a, b) => a.bbox[0] - b.bbox[0]);
+    for (let i = 0; i < order.length; i++) {
+      const a = order[i];
+      for (let j = i + 1; j < order.length; j++) {
+        const b = order[j];
+        if (b.bbox[0] > a.bbox[2] + maxClr) break;
+        if (a.net && a.net === b.net) continue;
+        if (!shareLayer(a.layers, b.layers)) continue;
+        let need = Math.max(clr(a), clr(b), s.minClearance || 0), by = "";
+        if (clrRules.length && boxesTouch(a.bbox, b.bbox, maxClr)) {
+          const layer = [...a.layers].find((l) => b.layers.has(l)) || "";
+          const hit = ruleClearance(clrRules, doc, s, ruleItem(a, layer), ruleItem(b, layer));
+          if (hit) {
+            need = hit.min > 0 ? Math.max(hit.min, s.minClearance || 0) : 0;
+            by = hit.name;
+          }
+        }
+        if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
+        const gap = shapeGap(a.shape, b.shape);
+        if (gap >= need - DRC_EPS) continue;
+        const cls = clr(a) >= clr(b) ? netclassName(s, a.net) : netclassName(s, b.net);
+        const [x, y] = boxCenter(a.bbox, b.bbox);
+        out.push(marker("clearance", "error", x, y, `Clearance violation (${by || `netclass '${cls}'`} clearance ${mm4(need)}; actual ${mm4(gap)})`, Array.from(/* @__PURE__ */ new Set([a.id, b.id]))));
+      }
+    }
+    const edges = edgeShapes(doc);
+    if (edges.shapes.length && s.edgeClearance > 0) {
+      const eb = edges.shapes.map((e) => shapeBBox(e));
+      for (const c of conds) for (let i = 0; i < edges.shapes.length; i++) {
+        if (!boxesTouch(c.bbox, eb[i], s.edgeClearance)) continue;
+        const gap = shapeGap(c.shape, edges.shapes[i]);
+        if (gap >= s.edgeClearance - DRC_EPS) continue;
+        const [x, y] = boxCenter(c.bbox, eb[i]);
+        out.push(marker("copper_edge_clearance", "error", x, y, `Board edge clearance violation (board setup constraints edge clearance ${mm4(s.edgeClearance)}; actual ${mm4(gap)})`, [c.id]));
+        break;
+      }
+    }
+    if (opts.unconnected !== false) for (const l of ratsnest(doc, nl)) out.push(marker("unconnected_items", "error", l.a[0], l.a[1], `Missing connection between items (net '${l.name}')`, l.ids.slice()));
+    for (const net of nl.nets.values()) for (const cl of net.shorts) {
+      const p = cl.anchors[0] ? cl.anchors[0].p : [0, 0];
+      out.push(marker("shorting_items", "error", p[0], p[1], `Items shorting two nets (${Array.from(cl.nets).join(", ")})`, Array.from(new Set(cl.items.map((c) => c.id)))));
+    }
+    const touches = (p, layer, self) => conds.some((c) => c !== self && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && shapeGap(c.shape, { t: "circle", x: p[0], y: p[1], r: 0 }) <= EPS) || nl.conductors.some((c) => c.kind === "zone" && c.layers.has(layer) && boxesTouch(c.bbox, [p[0], p[1], p[0], p[1]], EPS) && pointInPoly(c.shape.pts, p[0], p[1]));
+    for (const c of conds) {
+      if (c.kind === "segment" || c.kind === "arc") {
+        const [a, b] = c.anchors;
+        const layer = c.layers.values().next().value;
+        if (c.length < EPS) {
+          out.push(marker("zero_length", "warning", a[0], a[1], "Zero-length track", [c.id]));
+          continue;
+        }
+        const loose = [a, b].find((p) => !touches(p, layer, c));
+        if (loose) out.push(marker("track_dangling", "warning", loose[0], loose[1], "Track has unconnected end", [c.id]));
+        if (s.minTrackWidth > 0 && c.width < s.minTrackWidth - 1e-6) out.push(marker("track_width", "error", (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, `Track width (board setup constraints min width ${mm4(s.minTrackWidth)}; actual ${mm4(c.width)})`, [c.id]));
+      } else if (c.kind === "via") {
+        const [a] = c.anchors;
+        if (c.drill >= c.size - 1e-6) out.push(marker("annular_width", "error", a[0], a[1], `Annular width (drill ${mm4(c.drill)} is not smaller than the via diameter ${mm4(c.size)})`, [c.id]));
+        else {
+          if (s.minViaDiameter > 0 && c.size < s.minViaDiameter - 1e-6) out.push(marker("via_diameter", "error", a[0], a[1], `Via diameter (board setup constraints min diameter ${mm4(s.minViaDiameter)}; actual ${mm4(c.size)})`, [c.id]));
+          if (s.minViaDrill > 0 && c.drill < s.minViaDrill - 1e-6) out.push(marker("drill_out_of_range", "error", a[0], a[1], `Hole size out of range (board setup constraints min ${mm4(s.minViaDrill)}; actual ${mm4(c.drill)})`, [c.id]));
+        }
+        if (!conds.some((o) => o !== c && o.id !== c.id && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS) && !nl.conductors.some((o) => o.kind === "zone" && shareLayer(o.layers, c.layers) && boxesTouch(o.bbox, c.bbox, EPS) && shapeGap(o.shape, c.shape) <= EPS)) out.push(marker("via_dangling", "warning", a[0], a[1], "Via is not connected or connected on only one layer", [c.id]));
+      }
+    }
+    const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
+    const cy = fps.map((fp) => courtyards(fp));
+    for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
+      if (!fps[i].bbox || !fps[j].bbox || !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
+      for (const layer of ["F.CrtYd", "B.CrtYd"]) {
+        let hit = false;
+        for (const P of cy[i][layer]) for (const Q of cy[j][layer]) if (polysOverlap(P, Q)) hit = true;
+        if (hit) {
+          const [x, y] = boxCenter(fps[i].bbox, fps[j].bbox);
+          out.push(marker("courtyards_overlap", "error", x, y, `Courtyards overlap (${fps[i].ref || "footprint"} and ${fps[j].ref || "footprint"} on ${layer})`, [fps[i].id, fps[j].id]));
+        }
+      }
+    }
+    const ol = boardOutline(doc);
+    if (ol.hasEdges && !ol.outline) {
+      const e = edges.shapes[0];
+      const p = e.a || e.pts[0];
+      out.push(marker("invalid_outline", "error", p[0], p[1], "Board has malformed outline (Edge.Cuts does not close)", []));
+    } else if (ol.outline && opts.outline !== false) {
+      const seen = /* @__PURE__ */ new Set();
+      for (const c of nl.conductors) {
+        if (seen.has(c.id) || c.kind === "zone") continue;
+        const p = c.kind === "pad" ? [c.pad.x, c.pad.y] : c.anchors[0];
+        if (p && !pointInPoly(ol.outline, p[0], p[1])) {
+          seen.add(c.id);
+          out.push(marker("outside_outline", "warning", p[0], p[1], `Item outside board outline (${c.kind === "pad" ? c.item.ref || "footprint" : c.kind})`, [c.id]));
+        }
+      }
+    }
+    return out.filter((m) => s.severities[m.code] !== "ignore").map((m) => {
+      const sev = s.severities[m.code];
+      if (sev === "warning" || sev === "error") m.severity = sev;
+      return m;
+    });
   }
 
   // web/tools/pcb-tools/msgpanel.ts
@@ -13987,7 +14075,7 @@
   act("runDRC", "Design Rules Checker\u2026", "", (ctx) => {
     bind(ctx);
     const s = settingsOf(ctx);
-    S.markers = drc(ctx.doc, s, { rules: S.dru ? S.dru.rules : null }).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules) : []);
+    S.markers = drc(ctx.doc, s, { rules: S.dru ? S.dru.rules : null }).concat(S.dru ? matchedLengthMarkers(ctx.doc, s, S.dru.rules).concat(diffPairMarkers(ctx.doc, s, S.dru.rules)) : []);
     ctx.requestRender();
     const errors = S.markers.filter((m) => m.severity === "error").length, warnings = S.markers.length - errors;
     openForm({ title: "DRC Control", width: 620, fields: [{ type: "note", value: `${plural(errors, "error")}, ${plural(warnings, "warning")} \u2014 click a row to highlight it.` }, { k: "list", type: "table", columns: [{ label: "Severity", width: "70px" }, { label: "Violation", width: "1fr" }], rows: S.markers.map((m) => [m.severity, m.text]), empty: "No violations found.", onRow: (i) => {
@@ -15251,7 +15339,8 @@
     wildMatch,
     tuneStatus,
     matchedLengthMarkers,
-    customRuleMarkers: (doc, s, text) => text ? matchedLengthMarkers(doc, s, parseDru(text).rules) : [],
+    customRuleMarkers: (doc, s, text) => text ? ((r) => matchedLengthMarkers(doc, s, r).concat(diffPairMarkers(doc, s, r)))(parseDru(text).rules) : [],
+    diffPairMarkers,
     meanderDefaults,
     setTargetLength,
     meanderMove,

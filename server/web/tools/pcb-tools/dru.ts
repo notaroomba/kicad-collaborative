@@ -5,6 +5,7 @@ import type { BoardDoc, DesignSettings, DrcMarker, SAtom } from "./types";
 import { arcLength } from "./distances";
 import { matchDpSuffix } from "./diffpair";
 import { marker, mm4, netclassName } from "./drc";
+import { approxParallelT, commonParallelProjection } from "./meander";
 import { boardNets } from "./changes";
 import { netOf } from "./nets";
 import { K } from "./state";
@@ -247,4 +248,59 @@ export function matchedLengthMarkers(doc: BoardDoc, s: DesignSettings, rules: Dr
     }
   }
   return out.filter((m) => s.severities[m.code] !== "ignore");
+}
+/**
+ * DRC_TEST_PROVIDER_DIFF_PAIR_COUPLING for the custom rules: each differential pair a diff_pair_gap or
+ * diff_pair_uncoupled rule covers has its P / N track segments (outside tuning patterns) paired where they run
+ * side by side over a common stretch (commonParallelProjection, the gap measured between them less the half widths).
+ * The web pairs each P segment with its nearest parallel N segment where KiCad discards pairs another item sits
+ * between.  "Differential uncoupled length too long" when the stretch not coupled within the gap exceeds the rule's
+ * max; "Differential pair gap out of range" for each pair outside the gap (only when the uncoupled length fails too,
+ * or no uncoupled rule applies).
+ */
+export function diffPairMarkers(doc: BoardDoc, s: DesignSettings, rules: DruRule[]): DrcMarker[] {
+  const out: DrcMarker[] = []; if (!rules.some((r) => r.constraints.some((c) => c.type === "diff_pair_gap" || c.type === "diff_pair_uncoupled"))) return out;
+  const inPattern = new Set<string>(); for (const it of doc.items.values()) if (it.kind === "generated") for (const id of K.groupMemberIds(it.node)) inPattern.add(id);
+  const byNet = new Map<string, KItem[]>();
+  for (const it of doc.items.values()) if (it.kind === "segment" || it.kind === "arc") { const n = netOf(it.node).name || ""; if (n) { let l = byNet.get(n); if (!l) byNet.set(n, l = []); l.push(it); } }
+  const xy = (it: KItem, k: string): [number, number] => { const v = K.kid(it.node, k)!; return [K.num(v[1]), K.num(v[2])]; };
+  const len = (it: KItem) => { const a = xy(it, "start"), b = xy(it, "end"); if (it.kind === "arc") { const m = xy(it, "mid"); const c = K.arcFrom3(a, m, b); if (c) return arcLength(c); } return Math.hypot(b[0] - a[0], b[1] - a[1]); };
+  const width = (it: KItem) => { const w = K.kid(it.node, "width"); return w ? K.num(w[1]) : 0; };
+  const find = (type: string, A: KItem, B: KItem) => { for (let i = rules.length - 1; i >= 0; i--) { const r = rules[i], c = r.constraints.find((k) => k.type === type); if (c && ruleMatches(r, doc, s, A, B)) return r.severity === "ignore" ? null : { c, r }; } return null; };
+  const at = (it: KItem) => xy(it, "start");
+  for (const [name, P] of byNet) {
+    const m = matchDpSuffix(name); if (m.rv <= 0) continue; const N = byNet.get(m.complement); if (!N) continue;
+    const gapR = find("diff_pair_gap", P[0], N[0]), uncR = find("diff_pair_uncoupled", P[0], N[0]); if (!gapR && !uncR) continue;
+    const I = (p: [number, number]) => [p[0] * 1e6, p[1] * 1e6];
+    const coupled: { p: KItem; n: KItem; gap: number; len: number; failMin: boolean; failMax: boolean }[] = [];
+    for (const sp of P) {
+      if (sp.kind !== "segment" || inPattern.has(sp.id)) continue; let best: (typeof coupled)[number] | null = null;
+      for (const sn of N) {
+        if (sn.kind !== "segment" || inPattern.has(sn.id) || layerOf(sn.node) !== layerOf(sp.node)) continue;
+        const a = { A: I(xy(sp, "start")), B: I(xy(sp, "end")) }, b = { A: I(xy(sn, "start")), B: I(xy(sn, "end")) };
+        if (!approxParallelT(a, b, 10)) continue;
+        const cp = commonParallelProjection(a, b); if (!cp) continue;
+        const gap = (Math.hypot(cp.pClip.A[0] - cp.nClip.A[0], cp.pClip.A[1] - cp.nClip.A[1]) - (width(sp) + width(sn)) / 2 * 1e6) / 1e6;
+        const L = Math.hypot(cp.nClip.B[0] - cp.nClip.A[0], cp.nClip.B[1] - cp.nClip.A[1]) / 1e6;
+        if (!best || gap < best.gap) best = { p: sp, n: sn, gap, len: L, failMin: false, failMax: false };
+      }
+      if (best) coupled.push(best);
+    }
+    let totalCoupled = 0;
+    for (const d of coupled) {
+      const g = gapR && gapR.c; if (g) { d.failMin = g.min != null && g.min >= 0 && d.gap < g.min - 0.0005; d.failMax = g.max != null && g.max >= 0 && d.gap > g.max + 0.0005; }
+      if (!d.failMin && !d.failMax) totalCoupled += d.len;
+    }
+    const sum = (l: KItem[]) => l.filter((it) => !inPattern.has(it.id)).reduce((t, it) => t + len(it), 0);
+    const total = Math.max(sum(P), sum(N)), uncoupled = total - totalCoupled; let uncFail = false;
+    if (uncR && uncR.c.max != null && uncR.c.max >= 0 && uncoupled > uncR.c.max + 1e-6) {
+      uncFail = true; const [x, y] = at(N[0]);
+      out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P.concat(N).map((it) => it.id)));
+    }
+    if (gapR && (uncFail || !uncR)) for (const d of coupled) {
+      if (!d.failMin && !d.failMax) continue; const [x, y] = at(d.n);
+      out.push(marker("diff_pair_gap_out_of_range", gapR.r.severity || "error", x, y, `Differential pair gap out of range (rule '${gapR.r.name}' ${d.failMin ? "minimum" : "maximum"} gap ${mm4(d.failMin ? gapR.c.min! : gapR.c.max!)}; actual ${mm4(d.gap)})`, [d.p.id, d.n.id]));
+    }
+  }
+  return out.filter((mk) => s.severities[mk.code] !== "ignore");
 }

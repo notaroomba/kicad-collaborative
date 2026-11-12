@@ -364,7 +364,7 @@ export async function openBoardSetup(ctx: ToolCtx, startPage?: string): Promise<
     const check = h("button", { type: "button" }, "Check rule syntax");
     check.addEventListener("click", () => { const err = ruleSyntaxError(ta.value); status.textContent = err || "No errors found."; status.className = "pd-status " + (err ? "err" : "ok"); });
     put(el, h("div", { class: "pd-row" }, h("label", null, "DRC Rules"), h("span", { style: "flex:1" }), check, status), ta,
-      note(dru ? "Custom rules are stored in the project's .kicad_dru file. The web editor resolves their length, skew and diff pair constraints for length tuning and the message panel; the desktop DRC evaluates every rule." : "This project has no custom rules file (.kicad_dru)."));
+      note(dru ? "Custom rules are stored in the project's .kicad_dru file. The web editor evaluates their clearance, length, skew and diff pair constraints (DRC, length tuning, message panel); the desktop DRC evaluates every rule." : "This project has no custom rules file (.kicad_dru)."));
   };
 
   const severityPage = (el: HTMLElement): void => {
