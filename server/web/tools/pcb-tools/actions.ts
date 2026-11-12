@@ -390,7 +390,7 @@ export function applyTuneSettings(st: MeanderSettings, v: TuneView, mode: string
 export function openTuneSettings(ctx: PcbCtx) {
   const mode = tuneMode(); const T = S.tune.pattern; const cur = T ? T.st : S.tuneSettings[mode];
   if (!routingDialogs.tuning) { ctx.toast("Length Tuning Settings: dialogs are unavailable here"); return true; }
-  routingDialogs.tuning({ mode: mode === "skew" ? "diff_pair_skew" : "single", settings: tuneSettingsView(cur, mode) }, (v) => {
+  routingDialogs.tuning({ mode: mode === "skew" ? "diff_pair_skew" : mode === "diffpair" ? "diff_pair" : "single", settings: tuneSettingsView(cur, mode) }, (v) => {
     applyTuneSettings(S.tuneSettings[mode], v, mode);   // StoreDefaults
     if (S.tune.pattern) { const side = S.tune.pattern.st.initialSide; S.tune.pattern.st = tuneCopy(S.tuneSettings[mode]); S.tune.pattern.st.initialSide = side; tuneUpdate(lastCtx || ctx); }   // ApplyToolSettings, updateTuningPattern
     (lastCtx || ctx).requestRender();

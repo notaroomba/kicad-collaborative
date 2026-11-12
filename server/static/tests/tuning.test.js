@@ -406,5 +406,80 @@ test("a Properties-panel edit of a pattern: member edits (Width) and node edits 
   assert.ok(Math.abs(f.len() - 40) < 0.1, "still tuned: " + f.len());
 });
 
+
+// ---- Tune Length of a Differential Pair (8): PNS::DP_MEANDER_PLACER
+const DP = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (segment (start 10 10) (end 30 10) (width 0.2) (layer "F.Cu") (net "USB_P") (uuid "p1"))
+  (segment (start 10 10.3) (end 30 10.3) (width 0.2) (layer "F.Cu") (net "USB_N") (uuid "n1"))
+  (segment (start 10 20) (end 30 20) (width 0.2) (layer "F.Cu") (net "LONE") (uuid "l1"))
+)`;
+const pairGap = (doc) => {
+  const seg = (n) => [...doc.items.values()].filter((it) => it.kind === "segment" && P.netOf(it.node).name === n);
+  let m = Infinity; for (const a of seg("USB_P")) for (const b of seg("USB_N")) m = Math.min(m, P.segSegDist(P.pt(a.node, "start"), P.pt(a.node, "end"), P.pt(b.node, "start"), P.pt(b.node, "end")));
+  return m;
+};
+const netLenN = (doc, name) => [...doc.items.values()].filter((it) => (it.kind === "segment" || it.kind === "arc") && P.netOf(it.node).name === name).reduce((t, it) => t + trackLen(it), 0);
+
+test("DIFF_PAIR::CoupledSegmentPairs: parallel P / N segments at the pair's gap, clipped to their common stretch", () => {
+  const c = P.coupledSegmentPairs([[0, 0], [20 * IU, 0]], [[5 * IU, 0.3 * IU], [30 * IU, 0.3 * IU]], 0.2 * IU, 0.1 * IU);
+  assert.equal(c.length, 1); assert.deepEqual(c[0].coupledP.A.map((v) => v / IU), [5, 0]); assert.deepEqual(c[0].coupledP.B.map((v) => v / IU), [20, 0]);
+  assert.deepEqual(c[0].coupledN.A.map((v) => v / IU), [5, 0.3]);
+  assert.equal(P.coupledSegmentPairs([[0, 0], [20 * IU, 0]], [[0, 1 * IU], [20 * IU, 1 * IU]], 0.2 * IU, 0.1 * IU).length, 0, "another gap is not coupled");
+  assert.equal(P.coupledSegmentPairs([[0, 0], [20 * IU, 0]], [[0, 0.3 * IU], [20 * IU, 2 * IU]], 0.2 * IU, 0.1 * IU).length, 0, "not parallel");
+});
+
+test("DP_MEANDER_PLACER: both lines meander together around the centre line, the longer one reaches the target, the gap is kept", () => {
+  const st = P.meanderDefaults(); P.setTargetLength(st, 32 * IU); st.keepEndpoints = true; st.initialSide = -1;
+  const r = P.dpMeanderMove({ ptsP: [[10 * IU, 10 * IU], [40 * IU, 10 * IU]], ptsN: [[10 * IU, 10.3 * IU], [40 * IU, 10.3 * IU]], origin: [12 * IU, 10 * IU], end: [38 * IU, 10 * IU],
+    st, width: 0.2 * IU, gap: 0.1 * IU, clearance: 0.2 * IU, lengthP: 30 * IU, lengthN: 30 * IU });
+  assert.equal(r.status, "tuned"); assert.ok(r.hasMeanders);
+  const lp = P.chLength(r.finalP) / IU, ln = P.chLength(r.finalN) / IU;
+  assert.ok(Math.abs(Math.max(lp, ln) - 32) < 0.1, "max(P, N) is the target: " + lp + " " + ln);
+  assert.ok(Math.abs(r.length / IU - Math.max(lp, ln)) < 1e-3);
+  const ptsP = P.chPoints(r.finalP), ptsN = P.chPoints(r.finalN);
+  let m = Infinity; for (let i = 0; i + 1 < ptsP.length; i++) for (let j = 0; j + 1 < ptsN.length; j++) m = Math.min(m, P.segSegDist(ptsP[i], ptsP[i + 1], ptsN[j], ptsN[j + 1]));
+  assert.ok(m / IU > 0.1 + 0.2 - 0.06, "the lines stay a gap apart: " + m / IU);
+  assert.deepEqual(r.finalP[0].p, [10 * IU, 10 * IU]); assert.deepEqual(r.finalN.at(-1).p, [40 * IU, 10.3 * IU], "the ends stay");
+});
+
+test("Tune DP length (8): click, move, click commits 'Tune' with a diff_pair pattern over both lines; Delete brings both base lines back", () => {
+  const { ctx, log, doc } = fakeCtx(DP);
+  P.state.tuneSettings.diffpair = P.meanderDefaults(); P.setTargetLength(P.state.tuneSettings.diffpair, 24 * IU);
+  ctx.setTool("tunediff");
+  pcb.onPointerMove(ev(), [20, 10], ctx); assert.equal(P.state.tune.picker, "p1");
+  pcb.onPointerDown(ev(), [13, 10], ctx); const T = P.state.tune.pattern; assert.ok(T && T.dp, "the pair is assembled");
+  assert.ok(Math.abs(T.dp.gap - 0.1) < 1e-6, "the gap is measured: " + T.dp.gap); assert.equal(T.dp.mineIsP, true);
+  pcb.onPointerMove(ev(), [27, 9], ctx);
+  assert.equal(T.res.status, "tuned"); assert.ok(T.res.finalCoupled, "the coupled line is rebuilt too");
+  assert.ok(P.tuneHiddenIds().has("n1"), "the preview hides both old lines");
+  pcb.onPointerDown(ev(), [27, 9], ctx);
+  assert.equal(log.commits.at(-1).label, "Tune");
+  assert.ok(!doc.items.has("p1") && !doc.items.has("n1"), "both lines are replaced");
+  const gen = [...doc.items.values()].find((it) => it.kind === "generated");
+  assert.equal(K.str(K.kid(gen.node, "tuning_mode")[1]), "diff_pair");
+  assert.ok(K.kid(gen.node, "base_line_coupled"), "base_line_coupled is written");
+  assert.equal(K.kid(gen.node, "last_diff_pair_gap")[1], 0.1);
+  const lp = netLenN(doc, "USB_P"), ln = netLenN(doc, "USB_N");
+  assert.ok(Math.abs(Math.max(lp, ln) - 24) < 0.1, "tuned to 24 mm: " + lp + " / " + ln);
+  assert.ok(pairGap(doc) > 0.3 - 0.06, "the pair keeps its spacing: " + pairGap(doc));
+  const members = K.groupMemberIds(gen.node).map((id) => doc.items.get(id));
+  assert.ok(members.some((it) => P.netOf(it.node).name === "USB_P") && members.some((it) => P.netOf(it.node).name === "USB_N"), "both nets' meanders are members");
+  // regenerate keeps it tuned, then Delete restores both straight lines
+  const ch = P.regenerateTuningChanges(ctx, gen); assert.ok(ch.length, "the pair pattern regenerates"); ctx.commit(ch, "Update");
+  const g2 = [...doc.items.values()].find((it) => it.kind === "generated");
+  assert.ok(Math.abs(Math.max(netLenN(doc, "USB_P"), netLenN(doc, "USB_N")) - 24) < 0.1, "still 24 mm after a regenerate");
+  ctx.commit(P.tuningRemoveChanges(doc, [g2], new Set([g2.id])), "Delete");
+  assert.ok(Math.abs(netLenN(doc, "USB_P") - 20) < 1e-6 && Math.abs(netLenN(doc, "USB_N") - 20) < 1e-6, "both base lines are back: " + netLenN(doc, "USB_P") + " " + netLenN(doc, "USB_N"));
+  assert.ok(![...doc.items.values()].some((it) => it.kind === "generated"));
+});
+
+test("Tune DP length refusals: a net without a partner; the dialog runs in diff_pair mode", () => {
+  const { ctx, log } = fakeCtx(DP);
+  ctx.setTool("tunediff");
+  pcb.onPointerDown(ev(), [15, 20], ctx); assert.equal(log.toasts.pop(), P.TUNE_MSG_DP_NETS); assert.equal(P.state.tune.pattern, null);
+  assert.ok(P.TUNE_MSG_DP_NETS.startsWith("Unable to find complementary differential pair net for length tuning."));
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -1902,12 +1902,12 @@
     }
     return out;
   }
-  function newShape(pl, width) {
-    return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset: 0 };
+  function newShape(pl, width, dual = false, offset = 0) {
+    return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset, dual, line2: [] };
   }
-  var shapeCopy = (m) => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)) });
+  var shapeCopy = (m) => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)), line2: m.line2.map((n) => Object.assign({}, n)) });
   var isMeanderType = (t) => t === MT_SINGLE || t === MT_START || t === MT_FINISH || t === MT_TURN;
-  var shapeSpacing = (m) => Math.max(m.width + m.pl.clearance, m.pl.st.spacing);
+  var shapeSpacing = (m) => Math.max(m.width + m.pl.clearance + (m.dual ? 2 * Math.abs(m.offset) : 0), m.pl.st.spacing);
   function minAmplitude(m) {
     const st = m.pl.st;
     if (st.round) return Math.max(st.minAmp, Math.abs(m.offset) + m.width);
@@ -1959,11 +1959,14 @@
         const mid = vadd(c, vmul(vadd(vsubI(pos, c), vsubI(end, c)), Math.SQRT1_2));
         chAppend(lc, pos);
         lc.push({ p: end, m: mid });
+        pos = end;
       } else {
+        const corr = m.dual && r > m.meanCr ? -2 * Math.abs(m.offset) * Math.tan(Math.PI / 8) : 0;
         chAppend(lc, pos);
-        chAppend(lc, end);
+        chAppend(lc, vsubI(pos, vresize(u, corr)));
+        pos = corr ? vadd(vadd(pos, u), vmul(vadd(v, vresize(v, corr)), sv)) : end;
+        chAppend(lc, pos);
       }
-      pos = end;
       turn(s);
     };
     const uShape = (sides, corner, t) => {
@@ -2016,12 +2019,19 @@
     return side ? chMirror(lc, P, dir) : lc;
   }
   function updateBaseSegment(m) {
-    m.clipped = { A: lineProject(m.baseSeg, m.line[0].p), B: lineProject(m.baseSeg, m.line[m.line.length - 1].p) };
+    const l1 = m.line, l2 = m.line2;
+    const mid = (a2, b2) => [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+    const a = m.dual && l2.length ? mid(l1[0].p, l2[0].p) : l1[0].p, b = m.dual && l2.length ? mid(l1[l1.length - 1].p, l2[l2.length - 1].p) : l1[l1.length - 1].p;
+    m.clipped = { A: lineProject(m.baseSeg, a), B: lineProject(m.baseSeg, b) };
+  }
+  function genLines(m, P, dir, side, type) {
+    m.line = genMeanderShape(m, P, dir, side, type, m.dual ? m.offset : 0);
+    m.line2 = m.dual ? genMeanderShape(m, P, dir, side, type, -m.offset) : [];
   }
   var baselineLength = (m) => vlen(vsubI(m.clipped.B, m.clipped.A));
   var currentLength = (m) => chLength(m.line);
   function recalcShape(m) {
-    m.line = genMeanderShape(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type, 0);
+    genLines(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type);
     updateBaseSegment(m);
   }
   function resizeShape(m, a) {
@@ -2034,7 +2044,7 @@
     const d = vsubI(m.clipped.B, m.clipped.A);
     m.type = MT_EMPTY;
     m.amp = 0;
-    m.line = genMeanderShape(m, m.p0, d, m.side, MT_EMPTY, 0);
+    genLines(m, m.p0, d, m.side, MT_EMPTY);
   }
   function minTunableLength(m) {
     const c = shapeCopy(m);
@@ -2046,7 +2056,7 @@
     const st = m.pl.st;
     if (type === MT_CHECK_START || type === MT_CHECK_FINISH) {
       const prim1 = type === MT_CHECK_START ? MT_START : MT_TURN, prim2 = type === MT_CHECK_START ? MT_TURN : MT_FINISH;
-      const m1 = newShape(m.pl, m.width), m2 = newShape(m.pl, m.width);
+      const m1 = newShape(m.pl, m.width, m.dual, m.offset), m2 = newShape(m.pl, m.width, m.dual, m.offset);
       const c1 = fitShape(m1, prim1, seg, P, side);
       const c2 = c1 && fitShape(m2, prim2, seg, m1.clipped.B, !side);
       if (c1 && c2) {
@@ -2062,7 +2072,7 @@
     const minAmpl = minAmplitude(m), maxAmpl = Math.max(st.maxAmp, minAmpl), minCr = Math.trunc(m.width / 2);
     for (let ampl = maxAmpl; ampl >= minAmpl; ampl -= st.step) {
       m.amp = ampl;
-      m.line = genMeanderShape(m, P, vsubI(seg.B, seg.A), side, type, 0);
+      genLines(m, P, vsubI(seg.B, seg.A), side, type);
       m.type = type;
       m.baseSeg = { A: seg.A.slice(), B: seg.B.slice() };
       m.p0 = P.slice();
@@ -2073,13 +2083,14 @@
     }
     return false;
   }
-  function newMLine(pl, width) {
-    return { pl, width, meanders: [], last: [0, 0] };
+  function newMLine(pl, width, dual = false, offset = 0) {
+    return { pl, width, meanders: [], last: [0, 0], dual, offset };
   }
-  function mlAddCorner(L, a) {
-    const m = newShape(L.pl, L.width);
+  function mlAddCorner(L, a, b) {
+    const m = newShape(L.pl, L.width, L.dual, L.offset);
     m.type = MT_CORNER;
     m.line = [{ p: a.slice() }];
+    m.line2 = b ? [{ p: b.slice() }] : [];
     m.clipped = { A: a.slice(), B: a.slice() };
     L.last = a.slice();
     L.meanders.push(m);
@@ -2103,11 +2114,11 @@
   function meanderSegment(L, base, aSide) {
     const st = L.pl.st, baseLen = vlen(vsubI(base.B, base.A)), singleSided = st.singleSided, dir = vsubI(base.B, base.A);
     let side = aSide;
-    mlAddCorner(L, base.A);
+    if (!L.dual) mlAddCorner(L, base.A);
     let turning = false, started = false;
     L.last = base.A.slice();
     for (let guard = 0; guard < 1e5; guard++) {
-      const m = newShape(L.pl, L.width);
+      const m = newShape(L.pl, L.width, L.dual, L.offset);
       const thr = shapeSpacing(m);
       let fail = false;
       let remaining = baseLen - vlen(vsubI(L.last, base.A));
@@ -2165,15 +2176,15 @@
       remaining = baseLen - vlen(vsubI(L.last, base.A));
       if (remaining < st.step) break;
       if (fail) {
-        const tmp = newShape(L.pl, L.width);
+        const tmp = newShape(L.pl, L.width, L.dual, L.offset);
         const nextP = shapeSpacing(tmp) - 2 * cornerRadius(tmp) + st.step;
         const pn = vadd(L.last, vresize(dir, nextP));
         const q = lineProject(base, pn), t = ((pn[0] - base.A[0]) * dir[0] + (pn[1] - base.A[1]) * dir[1]) / (baseLen * baseLen || 1);
-        if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8) mlAddCorner(L, pn);
+        if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8 && !L.dual) mlAddCorner(L, pn);
         else break;
       }
     }
-    mlAddCorner(L, base.B);
+    if (!L.dual) mlAddCorner(L, base.B);
   }
   function findAmplitudeBinarySearch(copy, targetLength, minAmp, maxAmp) {
     if (minAmp === maxAmp) return maxAmp;
@@ -2320,6 +2331,119 @@
       chAppendChain(fin, sp.post);
     }
     return { final: st.keepEndpoints ? fin : chSimplify(fin), tuned: chSimplify(tuned), status, length: lastLength, hasMeanders, settings: st, start: sp.start, end: sp.end, baseline: sp.mid };
+  }
+  function approxParallelT(s, o, thr) {
+    const l2 = (x) => (x.B[0] - x.A[0]) ** 2 + (x.B[1] - x.A[1]) ** 2;
+    const [a, b] = l2(s) < l2(o) ? [o, s] : [s, o];
+    const p = a.A[1] - a.B[1], q = a.B[0] - a.A[0], l = p * p + q * q;
+    if (!l) return false;
+    const d1 = p * (b.A[0] - a.A[0]) + q * (b.A[1] - a.A[1]), d2 = p * (b.B[0] - a.A[0]) + q * (b.B[1] - a.A[1]);
+    return Math.abs(Math.sign(d1) * d1 * d1 / l - Math.sign(d2) * d2 * d2 / l) <= thr * thr;
+  }
+  function commonParallelProjection(p, n) {
+    const d = vsubI(p.B, p.A), tc = (x) => (x[0] - p.A[0]) * d[0] + (x[1] - p.A[1]) * d[1];
+    const na = lineProject(p, n.A), nb = lineProject(p, n.B);
+    let ta = 0, tb = tc(p.B), tpa = tc(na), tpb = tc(nb);
+    if (tb < ta) [ta, tb] = [tb, ta];
+    if (tpb < tpa) [tpa, tpb] = [tpb, tpa];
+    if (tb <= tpa || ta >= tpb) return null;
+    const tv = [0, tc(p.B), tc(na), tc(nb)].sort((x, y) => x - y), L2 = d[0] * d[0] + d[1] * d[1];
+    const at = (t) => [p.A[0] + d[0] * t / L2, p.A[1] + d[1] * t / L2];
+    const pClip = { A: at(tv[1]), B: at(tv[2]) };
+    return { pClip, nClip: { A: lineProject(n, pClip.A), B: lineProject(n, pClip.B) } };
+  }
+  var DP_PARALLELITY_THRESHOLD = 10;
+  function coupledSegmentPairs(P, N, width, gap) {
+    const out = [];
+    for (let i = 0; i + 1 < P.length; i++) for (let j = 0; j + 1 < N.length; j++) {
+      const sp = { A: P[i], B: P[i + 1] }, sn = { A: N[j], B: N[j + 1] };
+      const dist = segSegDist(sp.A, sp.B, sn.A, sn.B) - width;
+      if (!approxParallelT(sp, sn, DP_PARALLELITY_THRESHOLD) || dist < gap - 1e4 || dist > gap + 1e4) continue;
+      const c = commonParallelProjection(sp, sn);
+      if (!c) continue;
+      out.push({ coupledP: c.pClip, coupledN: c.nClip, indexP: i, indexN: j });
+    }
+    return out;
+  }
+  function dpMeanderMove(P) {
+    const st = P.st, w = P.width;
+    const spP = splitLine(P.ptsP, P.origin, P.end), spN = splitLine(P.ptsN, P.origin, P.end);
+    const tunedP0 = chSimplify(spP.mid), tunedN0 = chSimplify(spN.mid);
+    const dpLen = Math.max(P.lengthP, P.lengthN);
+    const statusOf = (len) => len > st.target.max ? TOO_LONG : len < st.target.min ? TOO_SHORT : TUNED;
+    const asChain = (pts) => pts.map((p) => ({ p: p.slice() }));
+    const base = { settings: st, start: spP.start, end: spP.end, baselineP: spP.mid, baselineN: spN.mid, hasMeanders: false };
+    const original = (status2) => Object.assign({}, base, { finalP: asChain(P.ptsP), finalN: asChain(P.ptsN), tunedP: tunedP0, tunedN: tunedN0, status: status2, length: dpLen });
+    if (tunedP0.length < 2 || tunedN0.length < 2) return original(TOO_SHORT);
+    const pp = tunedP0.map((n) => n.p), np = tunedN0.map((n) => n.p);
+    const pairs = coupledSegmentPairs(pp, np, w, P.gap);
+    if (!pairs.length) return original(statusOf(dpLen));
+    let offset = Math.trunc((P.gap + w) / 2);
+    const c0 = pairs[0];
+    if (segSide(c0.coupledP, [(c0.coupledP.A[0] + c0.coupledN.A[0]) / 2, (c0.coupledP.A[1] + c0.coupledN.A[1]) / 2]) > 0) offset = -offset;
+    const pl = {
+      st,
+      clearance: P.clearance,
+      width: w,
+      result: null,
+      checkFit(m) {
+        if (P.collides && (P.collides(m.line) || P.collides(m.line2))) return false;
+        return checkSelfIntersections(this.result, m, w + w * 3);
+      }
+    };
+    const L = newMLine(pl, w, true, offset);
+    pl.result = L;
+    const segCount = (pts) => pts.length - 1, next = (pts, i) => i + 1 < segCount(pts) ? i + 1 : -1;
+    const startPt = (pts, i) => pts[Math.max(0, Math.min(i, pts.length - 1))];
+    let ciP = 0, ciN = 0;
+    const addCornersUntil = (lp, ln) => {
+      for (; ; ) {
+        const pOk = ciP <= lp && ciP !== -1, nOk = ciN <= ln && ciN !== -1;
+        if (!pOk && !nOk) break;
+        mlAddCorner(L, startPt(pp, ciP), startPt(np, ciN));
+        if (pOk) ciP = next(pp, ciP);
+        if (nOk) ciN = next(np, ciN);
+      }
+    };
+    for (const sp of pairs) {
+      const b = { A: [(sp.coupledP.A[0] + sp.coupledN.A[0]) / 2, (sp.coupledP.A[1] + sp.coupledN.A[1]) / 2], B: [(sp.coupledP.B[0] + sp.coupledN.B[0]) / 2, (sp.coupledP.B[1] + sp.coupledN.B[1]) / 2] };
+      const side = st.initialSide === 0 ? segSide(b, P.cursor || P.end) < 0 : st.initialSide < 0;
+      addCornersUntil(sp.indexP, sp.indexN);
+      meanderSegment(L, b, side);
+    }
+    addCornersUntil(pp.length - 1, np.length - 1);
+    mlAddCorner(L, pp[pp.length - 1], np[np.length - 1]);
+    let status = TUNED, lastLength = dpLen, hasMeanders = false, tunedP = tunedP0, tunedN = tunedN0;
+    if (dpLen > st.target.max) status = TOO_LONG;
+    else {
+      lastLength = dpLen - Math.max(chLength(tunedP0), chLength(tunedN0));
+      tuneLineLength(L, st.target.opt - dpLen);
+    }
+    if (status !== TOO_LONG) {
+      tunedP = [];
+      tunedN = [];
+      for (const m of L.meanders) if (m.type !== MT_EMPTY) {
+        chAppendChain(tunedP, m.line);
+        chAppendChain(tunedN, m.line2);
+        hasMeanders = hasMeanders || isMeanderType(m.type);
+      }
+      lastLength += Math.max(chLength(tunedP), chLength(tunedN));
+      status = statusOf(lastLength);
+    }
+    const join = (sp, tuned) => {
+      const fin = [];
+      if (st.keepEndpoints) {
+        chAppendChain(fin, chSimplify(sp.pre));
+        chAppendChain(fin, chSimplify(tuned));
+        chAppendChain(fin, chSimplify(sp.post));
+        return fin;
+      }
+      chAppendChain(fin, sp.pre);
+      chAppendChain(fin, tuned);
+      chAppendChain(fin, sp.post);
+      return chSimplify(fin);
+    };
+    return Object.assign({}, base, { finalP: join(spP, tunedP), finalN: join(spN, tunedN), tunedP: chSimplify(tunedP), tunedN: chSimplify(tunedN), status, length: lastLength, hasMeanders });
   }
 
   // web/tools/pcb-tools/msgpanel.ts
@@ -3291,10 +3415,36 @@
   }
 
   // web/tools/pcb-tools/tuning-tool.ts
-  S.tuneSettings = { single: meanderDefaults(), skew: meanderDefaults() };
-  var TUNE_TOOLS = /* @__PURE__ */ new Set(["tunesingle", "tuneskew"]);
+  S.tuneSettings = { single: meanderDefaults(), diffpair: meanderDefaults(), skew: meanderDefaults() };
+  var TUNE_TOOLS = /* @__PURE__ */ new Set(["tunesingle", "tunediff", "tuneskew"]);
   var isTuneTool = (t) => TUNE_TOOLS.has(t);
-  var tuneMode = () => S.modTool === "tuneskew" ? "skew" : "single";
+  var tuneMode = () => S.modTool === "tuneskew" ? "skew" : S.modTool === "tunediff" ? "diffpair" : "single";
+  var TUNE_MSG_DP_NETS = "Unable to find complementary differential pair net for length tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
+  var tuningModeName = (mode) => mode === "skew" ? "diff_pair_skew" : mode === "diffpair" ? "diff_pair" : "single";
+  function assembleDiffPair(doc, item, line2) {
+    const pair = dpNetPair(doc, line2.net);
+    if (!pair) return null;
+    const NT = netTable(doc);
+    const kP = NT.key(pair.P), other = kP === line2.netKey ? pair.N : pair.P, otherKey = NT.key(other);
+    const a = pt(item.node, "start"), b = pt(item.node, "end"), mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    let best = null, bd = Infinity;
+    for (const it of doc.items.values()) {
+      if (it.kind !== "segment" || layerOf(it.node) !== line2.layer || NT.key(netOf(it.node)) !== otherKey) continue;
+      const c2 = pt(it.node, "start"), d = pt(it.node, "end");
+      if (!c2 || !d) continue;
+      const dd = distSeg(mid[0], mid[1], c2[0], c2[1], d[0], d[1]);
+      if (dd < bd) {
+        bd = dd;
+        best = it;
+      }
+    }
+    if (!best) return null;
+    const ln = assembleLine(doc, best);
+    if (!ln) return null;
+    const c = pt(best.node, "start"), dir = [b[0] - a[0], b[1] - a[1]], n = Math.hypot(dir[0], dir[1]) || 1;
+    const gap = Math.abs(dir[0] * (c[1] - a[1]) - dir[1] * (c[0] - a[0])) / n - line2.width;
+    return { line: ln, net: other, netKey: otherKey, mineIsP: kP === line2.netKey, gap: r6(gap), item: best };
+  }
   var TUNE_MSG_SKEW_PICK = "Please select a differential pair track you want to tune.";
   var TUNE_MSG_SKEW_NETS = "Unable to find complementary differential pair net for skew tuning. Make sure the names of the nets belonging to a differential pair end with either _N/_P or +/-.";
   function coupledLength(doc, pair, mineKey, near) {
@@ -3352,7 +3502,7 @@
   }
   function tuneBegin(ctx, item, mm) {
     const doc = ctx.doc;
-    const skew = tuneMode() === "skew";
+    const skew = tuneMode() === "skew", dual = tuneMode() === "diffpair";
     if (tuningPatternOf(doc, item.id)) {
       ctx.toast(TUNE_MSG_INSIDE);
       return;
@@ -3369,6 +3519,11 @@
     const pair = skew ? dpNetPair(doc, line2.net) : null;
     if (skew && !pair) {
       ctx.toast(TUNE_MSG_SKEW_NETS);
+      return;
+    }
+    const dpa = dual ? assembleDiffPair(doc, item, line2) : null;
+    if (dual && (!dpa || tuningPatternOf(doc, dpa.item.id))) {
+      ctx.toast(dpa ? TUNE_MSG_INSIDE : TUNE_MSG_DP_NETS);
       return;
     }
     if (layerOf(item.node) !== S.layer) setLayer(ctx, layerOf(item.node));
@@ -3394,6 +3549,12 @@
       mode: tuneMode(),
       coupled: pair ? coupledLength(doc, pair, line2.netKey, closestOnSeg(mm, a, b)) : null
     };
+    if (dpa) {
+      const lenMine = S.tune.pattern.lineLength, lenOther = routedLength(doc, dpa.item.id);
+      S.tune.pattern.dp = { line: dpa.line, net: dpa.net, netKey: dpa.netKey, mineIsP: dpa.mineIsP, gap: dpa.gap, lenMine, lenOther };
+      S.tune.pattern.lineLength = Math.max(lenMine, lenOther);
+      S.tune.pattern.dpGap = dpa.gap;
+    }
   }
   function tuneUpdate(ctx) {
     const T = S.tune.pattern;
@@ -3413,7 +3574,12 @@
     }
     const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
     const sp = splitLine(pts.map(I), I(T.origin), I(T.end));
-    const last = sp.mid.length >= 2 ? { A: sp.mid[sp.mid.length - 2].p, B: sp.mid[sp.mid.length - 1].p } : null;
+    let last = sp.mid.length >= 2 ? { A: sp.mid[sp.mid.length - 2].p, B: sp.mid[sp.mid.length - 1].p } : null;
+    if (last && T.dp) {
+      const spc = splitLine(T.dp.line.pts.map(I), I(T.origin), I(T.end));
+      const off = [(spc.end[0] - sp.end[0]) / 2, (spc.end[1] - sp.end[1]) / 2];
+      last = { A: [last.A[0] + off[0], last.A[1] + off[1]], B: [last.B[0] + off[0], last.B[1] + off[1]] };
+    }
     if (last && !veq(last.A, last.B)) T.st.initialSide = segSide(last, I(T.cursor)) < 0 ? -1 : 1;
     const st = tuneCopy(T.st);
     st.keepEndpoints = true;
@@ -3421,9 +3587,49 @@
     const doc = ctx.doc;
     const O = routeObstacles(doc, settingsOf(ctx), T.netKey, T.layer);
     const r = T.width / 2;
+    if (T.dp) {
+      const dp = T.dp, skip = new Set(dp.line.ids);
+      const Od = routeObstacles(doc, settingsOf(ctx), T.netKey, T.layer, null, skip);
+      const hits = (ch) => pathHits(Od, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+      T.res = tuneDp(T, st, I, hits);
+      T.st.initialSide = st.initialSide;
+      return;
+    }
     const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
     T.res = meanderMove({ pts: pts.map(I), origin: I(T.origin), end: I(T.end), cursor: I(T.cursor), st, width: Math.round(T.width * TUNE_IU), clearance: Math.round(T.clearance * TUNE_IU), lineLength: T.lineLength * TUNE_IU, collides });
     T.st.initialSide = st.initialSide;
+  }
+  function tuneDp(T, st, I, collides) {
+    const dp = T.dp;
+    const mine = T.line.pts.map(I), other = dp.line.pts.map(I);
+    const r = dpMeanderMove({
+      ptsP: dp.mineIsP ? mine : other,
+      ptsN: dp.mineIsP ? other : mine,
+      origin: I(T.origin),
+      end: I(T.end),
+      cursor: I(T.cursor),
+      st,
+      width: Math.round(T.width * TUNE_IU),
+      gap: Math.round(dp.gap * TUNE_IU),
+      clearance: Math.round(T.clearance * TUNE_IU),
+      lengthP: (dp.mineIsP ? dp.lenMine : dp.lenOther) * TUNE_IU,
+      lengthN: (dp.mineIsP ? dp.lenOther : dp.lenMine) * TUNE_IU,
+      collides
+    });
+    const P = dp.mineIsP;
+    return {
+      final: P ? r.finalP : r.finalN,
+      finalCoupled: P ? r.finalN : r.finalP,
+      tuned: P ? r.tunedP : r.tunedN,
+      status: r.status,
+      length: r.length,
+      hasMeanders: r.hasMeanders,
+      settings: r.settings,
+      start: r.start,
+      end: r.end,
+      baseline: P ? r.baselineP : r.baselineN,
+      baselineCoupled: P ? r.baselineN : r.baselineP
+    };
   }
   function tunePieces(ch) {
     const out = [];
@@ -3441,6 +3647,7 @@
     return String(x === 0 ? 0 : x);
   };
   function tuningPatternNode(T, res, members) {
+    const coupled = res.baselineCoupled ? res.baselineCoupled.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]) : null;
     const st = T.st ? Object.assign({}, res.settings, { target: T.st.target, skew: T.st.skew }) : res.settings;
     const mm = (v) => fmtG(v / TUNE_IU);
     const xy2 = (p) => `(xy ${fmtG(p[0])} ${fmtG(p[1])})`;
@@ -3449,6 +3656,7 @@
     const yn = (b) => b ? "yes" : "no";
     const props = [
       `(base_line (pts ${base.map(xy2).join(" ")}))`,
+      ...coupled && coupled.length >= 2 ? [`(base_line_coupled (pts ${coupled.map(xy2).join(" ")}))`] : [],
       `(corner_radius_percent ${st.crPct})`,
       `(end ${xy2(base[base.length - 1])})`,
       `(initial_side ${sexprQ(side)})`,
@@ -3474,7 +3682,7 @@
       `(target_skew ${mm(st.skew.opt)})`,
       `(target_skew_max ${mm(st.skew.max)})`,
       `(target_skew_min ${mm(st.skew.min)})`,
-      `(tuning_mode ${sexprQ(T.mode === "skew" ? "diff_pair_skew" : "single")})`
+      `(tuning_mode ${sexprQ(tuningModeName(T.mode))})`
     ];
     const text = `(generated (uuid ${sexprQ(K.newUuid())}) (type tuning_pattern) (name "Tuning Pattern") (layer ${sexprQ(T.layer)}) ${props.join(" ")} (members ${members.slice().sort().map(sexprQ).join(" ")}))`;
     return K.parse(text);
@@ -3483,8 +3691,11 @@
     const st = res.settings;
     const minA = st.round ? T.width : T.width * Math.tan(1 - Math.tan(Math.PI / 8));
     const amp = Math.max(st.maxAmp / TUNE_IU, minA) + T.width / 2 + 5e-4;
-    const base = res.baseline.map((n) => [n.p[0] / TUNE_IU, n.p[1] / TUNE_IU]);
-    for (let i = 0; i + 1 < base.length; i++) if (distSeg(p[0], p[1], base[i][0], base[i][1], base[i + 1][0], base[i + 1][1]) <= amp) return true;
+    for (const bl of [res.baseline, res.baselineCoupled]) {
+      if (!bl) continue;
+      const base = bl.map((n) => [n.p[0] / TUNE_IU, n.p[1] / TUNE_IU]);
+      for (let i = 0; i + 1 < base.length; i++) if (distSeg(p[0], p[1], base[i][0], base[i][1], base[i + 1][0], base[i + 1][1]) <= amp) return true;
+    }
     return false;
   }
   function tuneFinish(ctx) {
@@ -3502,28 +3713,32 @@
     }
     const doc = ctx.doc;
     const changes = [], members = [];
-    const old = T.line.ids.map((id) => doc.items.get(id)).filter(Boolean);
-    const oldKey = /* @__PURE__ */ new Map();
-    for (const it of old) {
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      oldKey.set(ptKey(a) + "|" + ptKey(b), it);
-      oldKey.set(ptKey(b) + "|" + ptKey(a), it);
-    }
-    const kept = /* @__PURE__ */ new Set();
     const scratch = Object.assign({}, doc, { items: new Map(doc.items) });
-    for (const pc of tunePieces(res.final)) {
-      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-      if (same && !kept.has(same.id)) {
-        kept.add(same.id);
-        continue;
+    const rebuild = (ln, fin, net) => {
+      const old = ln.ids.map((id) => doc.items.get(id)).filter(Boolean);
+      const oldKey = /* @__PURE__ */ new Map();
+      for (const it of old) {
+        const a = pt(it.node, "start"), b = pt(it.node, "end");
+        oldKey.set(ptKey(a) + "|" + ptKey(b), it);
+        oldKey.set(ptKey(b) + "|" + ptKey(a), it);
       }
-      const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, T.net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, T.net);
-      const it = K.createItem(scratch, node);
-      changes.push(upsertChange(it, "ADDED", T.net));
-      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(it.id);
-    }
-    for (const it of old) if (!kept.has(it.id)) changes.unshift(removedChange(it));
-    T.dpGap = sizesOf(ctx).routeDiffPair ? sizesOf(ctx).routeDiffPair(T.netName).gap : 0.25;
+      const kept = /* @__PURE__ */ new Set();
+      for (const pc of tunePieces(fin)) {
+        const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+        if (same && !kept.has(same.id)) {
+          kept.add(same.id);
+          continue;
+        }
+        const node = pc.m ? arcTrackNode(doc, pc.a, pc.m, pc.b, T.width, T.layer, net) : segmentNode(doc, pc.a, pc.b, T.width, T.layer, net);
+        const it = K.createItem(scratch, node);
+        changes.push(upsertChange(it, "ADDED", net));
+        if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(it.id);
+      }
+      for (const it of old) if (!kept.has(it.id)) changes.unshift(removedChange(it));
+    };
+    rebuild(T.line, res.final, T.net);
+    if (T.dp && res.finalCoupled) rebuild(T.dp.line, res.finalCoupled, T.dp.net);
+    if (!T.dp) T.dpGap = sizesOf(ctx).routeDiffPair ? sizesOf(ctx).routeDiffPair(T.netName).gap : 0.25;
     const gen = K.createItem(scratch, tuningPatternNode(T, res, members));
     changes.push(upsertChange(gen, "ADDED"));
     S.tuneSettings[tuneMode()].initialSide = T.st.initialSide;
@@ -3599,20 +3814,32 @@
     for (const it of mem) ops.push({ del: it.id });
     const lines = [T.base].concat(T.mode === "diff_pair" && T.coupled ? [T.coupled] : []);
     const added = [];
+    const tracks = mem.filter((it) => it.kind === "segment" || it.kind === "arc");
+    const NT = netTable(doc);
+    const named = T.netName ? tracks.find((it) => netOf(it.node).name === T.netName) : null;
+    let mainNet = named ? netOf(named.node) : null;
     lines.forEach((base, li) => {
       if (!base || base.length < 2) return;
       const near = (it) => {
         const a = pt(it.node, "start");
         return a && base.some((q, i) => i + 1 < base.length && distSeg(a[0], a[1], q[0], q[1], base[i + 1][0], base[i + 1][1]) < Math.max(T.width, 0.01) * 4 + 1.2);
       };
-      const tmpl = mem.find((it) => (it.kind === "segment" || it.kind === "arc") && (li === 0 ? near(it) : near(it))) || mem[0];
-      const net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" }, width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
+      let net = null;
+      if (li === 0) net = mainNet;
+      else if (mainNet) {
+        const pair = dpNetPair(doc, mainNet);
+        if (pair) net = NT.key(pair.P) === NT.key(mainNet) ? pair.N : pair.P;
+      }
+      const tmpl = (net ? tracks.find((it) => NT.key(netOf(it.node)) === NT.key(net)) : null) || tracks.find((it) => near(it)) || mem[0];
+      if (!net) net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" };
+      if (li === 0) mainNet = net;
+      const width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
       for (let i = 0; i + 1 < base.length; i++) {
         if (peq(base[i], base[i + 1])) continue;
         const node = segmentNode(doc, base[i], base[i + 1], width, T.layer, net);
         node.push(["uuid", K.newUuid()]);
         ops.push({ add: node });
-        added.push({ node, net, width });
+        added.push({ node, net, width, coupled: li > 0 });
       }
     });
     return { ops, added, info: T };
@@ -3646,7 +3873,8 @@
   function regenerateTuningBranch(ctx, gen, doc0) {
     const doc = doc0 || ctx.doc;
     const { ops, added, info } = baselineOps(doc, gen);
-    if (!added.length || info.mode !== "single" && info.mode !== "diff_pair_skew") return null;
+    if (!added.length || info.mode !== "single" && info.mode !== "diff_pair_skew" && info.mode !== "diff_pair") return null;
+    const dual = info.mode === "diff_pair";
     const scratch = branchDoc(doc, ops);
     const seedId = K.str(K.kid(added[0].node, "uuid")[1]);
     const seed = scratch.items.get(seedId);
@@ -3678,43 +3906,64 @@
       st.target = tuneTarget(info.st, coupledLength(scratch, pair, line2.netKey, origin));
     }
     const I = (p) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
-    const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer);
-    const r = line2.width / 2;
-    const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-    const res = meanderMove({
-      pts: line2.pts.map(I),
-      origin: I(origin),
-      end: I(end),
-      cursor: I(end),
-      st,
-      width: Math.round(line2.width * TUNE_IU),
-      clearance: Math.round(netClearance(settingsOf(ctx), line2.netKey) * TUNE_IU),
-      lineLength: routedLength(scratch, seedId) * TUNE_IU,
-      collides
-    });
-    const oldKey = /* @__PURE__ */ new Map();
-    for (const id of line2.ids) {
-      const it = scratch.items.get(id);
-      const a = pt(it.node, "start"), b = pt(it.node, "end");
-      oldKey.set(ptKey(a) + "|" + ptKey(b), it);
-      oldKey.set(ptKey(b) + "|" + ptKey(a), it);
+    const r = line2.width / 2, clearance = netClearance(settingsOf(ctx), line2.netKey);
+    let res, lineC = null;
+    if (dual) {
+      const cSeed = added.find((a) => a.coupled);
+      const cIt = cSeed && scratch.items.get(K.str(K.kid(cSeed.node, "uuid")[1]));
+      lineC = cIt ? assembleLine(scratch, cIt) : null;
+      if (!lineC || !cIt) return null;
+      const NT = netTable(scratch), pair = dpNetPair(scratch, line2.net);
+      if (!pair) return null;
+      const lenMine = routedLength(scratch, seedId), lenOther = routedLength(scratch, cIt.id);
+      const gap = info.gap > 0 ? info.gap : 0.1;
+      const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer, null, new Set(lineC.ids));
+      const hits = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+      st.target = info.st.target;
+      res = tuneDp({ line: line2, origin, end, cursor: end, width: line2.width, clearance, dp: { line: lineC, net: lineC.net, netKey: lineC.netKey, mineIsP: NT.key(pair.P) === line2.netKey, gap, lenMine, lenOther } }, st, I, hits);
+    } else {
+      const O = routeObstacles(scratch, settingsOf(ctx), line2.netKey, line2.layer);
+      const collides = (ch) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+      res = meanderMove({
+        pts: line2.pts.map(I),
+        origin: I(origin),
+        end: I(end),
+        cursor: I(end),
+        st,
+        width: Math.round(line2.width * TUNE_IU),
+        clearance: Math.round(clearance * TUNE_IU),
+        lineLength: routedLength(scratch, seedId) * TUNE_IU,
+        collides
+      });
     }
-    const kept = /* @__PURE__ */ new Set(), ops2 = [], members = [];
+    const ops2 = [], members = [];
     const T = { width: line2.width, layer: line2.layer, net: line2.net };
-    for (const pc of tunePieces(res.final)) {
-      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-      if (same && !kept.has(same.id)) {
-        kept.add(same.id);
-        if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id);
-        continue;
+    const rebuild = (ln, fin) => {
+      const oldKey = /* @__PURE__ */ new Map();
+      for (const id of ln.ids) {
+        const it = scratch.items.get(id);
+        const a = pt(it.node, "start"), b = pt(it.node, "end");
+        oldKey.set(ptKey(a) + "|" + ptKey(b), it);
+        oldKey.set(ptKey(b) + "|" + ptKey(a), it);
       }
-      const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, line2.width, line2.layer, line2.net) : segmentNode(scratch, pc.a, pc.b, line2.width, line2.layer, line2.net);
-      const u = K.newUuid();
-      node.push(["uuid", u]);
-      ops2.push({ add: node });
-      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
-    }
-    for (const id of line2.ids) if (!kept.has(id)) ops2.unshift({ del: id });
+      const kept = /* @__PURE__ */ new Set();
+      for (const pc of tunePieces(fin)) {
+        const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+        if (same && !kept.has(same.id)) {
+          kept.add(same.id);
+          if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id);
+          continue;
+        }
+        const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, ln.width, ln.layer, ln.net) : segmentNode(scratch, pc.a, pc.b, ln.width, ln.layer, ln.net);
+        const u = K.newUuid();
+        node.push(["uuid", u]);
+        ops2.push({ add: node });
+        if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
+      }
+      for (const id of ln.ids) if (!kept.has(id)) ops2.unshift({ del: id });
+    };
+    rebuild(line2, res.final);
+    if (lineC && res.finalCoupled) rebuild(lineC, res.finalCoupled);
     const g = clone(gen.node);
     const setKid2 = (k, ...v) => {
       const c = K.kid(g, k);
@@ -3724,6 +3973,9 @@
     const base = res.baseline.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
     const bl = K.kid(g, "base_line");
     if (bl && base.length >= 2) bl.splice(1, bl.length - 1, ["pts", ...base.map(xy2)]);
+    const cbase = res.baselineCoupled ? res.baselineCoupled.map((n) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]) : null;
+    const blc = K.kid(g, "base_line_coupled");
+    if (blc && cbase && cbase.length >= 2) blc.splice(1, blc.length - 1, ["pts", ...cbase.map(xy2)]);
     if (base.length >= 2) {
       const o = K.kid(g, "origin");
       if (o) o.splice(1, o.length - 1, xy2(base[0]));
@@ -3887,7 +4139,8 @@
       c.globalAlpha = 0.8;
       c.strokeStyle = saturated(color(T.layer));
       c.lineWidth = T.width;
-      for (const pc of tunePieces(T.res.final)) {
+      const res = T.res;
+      for (const pc of tunePieces(res.final).concat(res.finalCoupled ? tunePieces(res.finalCoupled) : [])) {
         if (pc.m) {
           const a = K.arcFrom3(pc.a, pc.m, pc.b);
           if (a) {
@@ -3926,7 +4179,7 @@
   }
   function tuneHiddenIds() {
     const T = S.tune && S.tune.pattern;
-    return T && T.res ? new Set(T.line.ids) : null;
+    return T && T.res ? new Set(T.line.ids.concat(T.dp ? T.dp.line.ids : [])) : null;
   }
 
   // web/tools/pcb-tools/tuning-edit.ts
@@ -6419,7 +6672,7 @@
     ctx.requestRender();
     return true;
   }
-  var DP_PARALLELITY_THRESHOLD = 1e-5;
+  var DP_PARALLELITY_THRESHOLD2 = 1e-5;
   function dpCoupledSegment(ctx, seg) {
     const doc = ctx.doc;
     if (!seg || seg.kind !== "segment") return null;
@@ -6446,7 +6699,7 @@
       const l2 = Math.hypot(d[0] - c[0], d[1] - c[1]);
       if (l2 < 1e-6) continue;
       const v = [(d[0] - c[0]) / l2, (d[1] - c[1]) / l2];
-      if (Math.abs(u[0] * v[1] - u[1] * v[0]) * Math.min(len, l2) > DP_PARALLELITY_THRESHOLD * 1e3) continue;
+      if (Math.abs(u[0] * v[1] - u[1] * v[0]) * Math.min(len, l2) > DP_PARALLELITY_THRESHOLD2 * 1e3) continue;
       const dist = Math.abs((c[0] - a[0]) * u[1] - (c[1] - a[1]) * u[0]);
       const gap = dist - (w + widthOf(it.node, 0.25)) / 2;
       if (gap <= 0 || gap > maxGap) continue;
@@ -13134,7 +13387,7 @@
       ctx.toast("Length Tuning Settings: dialogs are unavailable here");
       return true;
     }
-    routingDialogs.tuning({ mode: mode === "skew" ? "diff_pair_skew" : "single", settings: tuneSettingsView(cur, mode) }, (v) => {
+    routingDialogs.tuning({ mode: mode === "skew" ? "diff_pair_skew" : mode === "diffpair" ? "diff_pair" : "single", settings: tuneSettingsView(cur, mode) }, (v) => {
       applyTuneSettings(S.tuneSettings[mode], v, mode);
       if (S.tune.pattern) {
         const side = S.tune.pattern.st.initialSide;
@@ -13710,6 +13963,7 @@
     { id: "route", label: "Route track", key: "X", cursor: "crosshair", icon: '<path d="M4 18h6l4-4h6"/><circle cx="4" cy="18" r="1.5"/><circle cx="20" cy="14" r="1.5"/>' },
     { id: "routediff", label: "Route differential pair", key: "6", cursor: "crosshair", icon: '<path d="M3 9h7l3-3h8M3 15h7l3 3h8"/>' },
     { id: "tunesingle", label: "Tune length of a single track", key: "7", cursor: "crosshair", icon: '<path d="M3 16h4v-6h3v6h3v-6h3v6h5"/>' },
+    { id: "tunediff", label: "Tune length of a differential pair", key: "8", cursor: "crosshair", icon: '<path d="M3 9h4v-4h3v4h3v-4h3v4h5M3 15h4v4h3v-4h3v4h3v-4h5"/>' },
     { id: "tuneskew", label: "Tune skew of a differential pair", key: "9", cursor: "crosshair", icon: '<path d="M3 9h4v-4h3v4h11M3 15h18"/>' },
     { id: "via", label: "Add via", key: "V", cursor: "crosshair", icon: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>' },
     { id: "drag", label: "Drag track segment", key: "D", cursor: "move", icon: '<path d="M5 7h14"/><path d="M5 17h14" stroke-dasharray="2 2"/><path d="M12 9v5M9 12l3 3 3-3"/>' },
@@ -14564,6 +14818,12 @@
     coupledLength,
     TUNE_MSG_SKEW_PICK,
     TUNE_MSG_SKEW_NETS,
+    TUNE_MSG_DP_NETS,
+    dpMeanderMove,
+    coupledSegmentPairs,
+    assembleDiffPair,
+    tuneHiddenIds,
+    chPoints,
     meanderDefaults,
     setTargetLength,
     meanderMove,

@@ -123,7 +123,7 @@ export type PcbState = {
   /** the length tuner: the pattern being placed, the track under the cursor */
   tune: { pattern: TunePattern | null; picker: TunePicker | null; cursor: Pt | null };
   // set by the later sections
-  rs: import("./router-settings").RouterSettings; tuneSettings: { single: MeanderSettings; skew: MeanderSettings };
+  rs: import("./router-settings").RouterSettings; tuneSettings: { single: MeanderSettings; diffpair: MeanderSettings; skew: MeanderSettings };
   genEdit?: import("./tuning-edit").GenEdit | null;
   /** the board's custom rules for the tuner: a length / skew constraint on the pattern's tracks ({ text, name, min, opt, max } in mm) */
   ruleConstraint?: ((doc: BoardDoc, what: "length" | "skew" | "chain", a: KItem | null, b: KItem | null) => { text: string; name: string; min: number | null; opt: number | null; max: number | null } | null) | null;

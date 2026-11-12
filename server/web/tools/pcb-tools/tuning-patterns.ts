@@ -1,5 +1,5 @@
 // pcb-tools/tuning-patterns.ts — tuning patterns on the board (PCB_TUNING_PATTERN as a PCB_GENERATOR) and the tuner's status.
-import type { BoardDoc, BranchOp, NetRef, PcbChange, PcbCtx, Pt, SAtom } from "./types";
+import type { BoardDoc, BranchOp, NetRef, PcbChange, PcbCtx, Pt, SAtom, TrackLine } from "./types";
 import type { Chain } from "./meander";
 import type { TuneResult } from "./tuning-tool";
 import { canEdit } from "./actions";
@@ -20,7 +20,7 @@ import { segmentNode } from "./nodes";
 import { line } from "./overlay";
 import { arcTrackNode } from "./posture";
 import { HL, K, S, saturated } from "./state";
-import { coupledLength, fmtG, inTuneOutline, tuneBegin, tuneFinish, tuneMode, tunePick, tunePieces, tuneTarget, tuneUpdate } from "./tuning-tool";
+import { coupledLength, fmtG, inTuneOutline, tuneBegin, tuneDp, tuneFinish, tuneMode, tunePick, tunePieces, tuneTarget, tuneUpdate } from "./tuning-tool";
 import { clone, color, pt, r6, widthOf } from "./util";
 import { closestOnSeg } from "./point-editor";
 import { pathHits, routeObstacles, simplifyPts } from "./walkaround";
@@ -54,16 +54,24 @@ export function baselineOps(doc: BoardDoc, gen: Pick<KItem, "node">) {
   const T = tuningPatternInfo(gen); const ops: BranchOp[] = []; const mem = T.members.map((id: string) => doc.items.get(id)).filter(Boolean) as KItem[];
   for (const it of mem) ops.push({ del: it!.id });
   const lines = [T.base].concat(T.mode === "diff_pair" && T.coupled ? [T.coupled] : []);
-  const added: { node: SNode; net: NetRef; width: number }[] = [];
+  const added: { node: SNode; net: NetRef; width: number; coupled: boolean }[] = [];
+  const tracks = mem.filter((it: KItem) => it.kind === "segment" || it.kind === "arc");
+  // the base line is last_netname's (the members on it otherwise); the coupled one is its partner net's
+  const NT = netTable(doc); const named = T.netName ? tracks.find((it) => netOf(it.node).name === T.netName) : null;
+  let mainNet: NetRef | null = named ? netOf(named.node) : null;
   lines.forEach((base, li) => {
     if (!base || base.length < 2) return;
-    // the members on this base line give its net and width (the coupled line is the partner net's)
     const near = (it: KItem) => { const a = pt(it.node, "start"); return a && base.some((q, i) => i + 1 < base.length && distSeg(a[0], a[1], q[0], q[1], base[i + 1][0], base[i + 1][1]) < Math.max(T.width, 0.01) * 4 + 1.2); };
-    const tmpl = mem.find((it: KItem) => (it.kind === "segment" || it.kind === "arc") && (li === 0 ? near(it) : near(it))) || mem[0];
-    const net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" }, width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
+    let net: NetRef | null = null;
+    if (li === 0) net = mainNet;
+    else if (mainNet) { const pair = dpNetPair(doc, mainNet); if (pair) net = NT.key(pair.P) === NT.key(mainNet) ? pair.N : pair.P; }
+    const tmpl = (net ? tracks.find((it) => NT.key(netOf(it.node)) === NT.key(net!)) : null) || tracks.find((it: KItem) => near(it)) || mem[0];
+    if (!net) net = tmpl ? netOf(tmpl.node) : { code: 0, name: "" };
+    if (li === 0) mainNet = net;
+    const width = tmpl ? widthOf(tmpl.node, T.width) : T.width;
     for (let i = 0; i + 1 < base.length; i++) {
       if (peq(base[i], base[i + 1])) continue;
-      const node = segmentNode(doc, base[i], base[i + 1], width, T.layer, net); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); added.push({ node, net, width });
+      const node = segmentNode(doc, base[i], base[i + 1], width, T.layer, net); node.push(["uuid", K.newUuid()]); ops.push({ add: node }); added.push({ node, net: net!, width, coupled: li > 0 });
     }
   });
   return { ops, added, info: T };
@@ -97,7 +105,8 @@ export function tuningRemoveChanges(doc: BoardDoc, gens: Iterable<KItem>, deleti
  */
 export function regenerateTuningBranch(ctx: PcbCtx, gen: Pick<KItem, "id" | "kind" | "node">, doc0?: BoardDoc) {
   const doc = doc0 || ctx.doc; const { ops, added, info } = baselineOps(doc, gen);
-  if (!added.length || (info.mode !== "single" && info.mode !== "diff_pair_skew")) return null;
+  if (!added.length || (info.mode !== "single" && info.mode !== "diff_pair_skew" && info.mode !== "diff_pair")) return null;
+  const dual = info.mode === "diff_pair";
   const scratch = branchDoc(doc, ops);
   const seedId = K.str(K.kid(added[0].node, "uuid")![1]); const seed = scratch.items.get(seedId); if (!seed) return null;
   const line = assembleLine(scratch, seed); if (!line) return null;
@@ -107,27 +116,49 @@ export function regenerateTuningBranch(ctx: PcbCtx, gen: Pick<KItem, "id" | "kin
   if (Math.hypot(end[0] - origin[0], end[1] - origin[1]) < 0.1) { origin = info.base![0]; end = info.base![info.base!.length - 1]; }   // "Don't allow points too close"
   if (info.mode === "diff_pair_skew") { const pair = dpNetPair(scratch, line.net); if (!pair) return null; st.target = tuneTarget(info.st, coupledLength(scratch, pair, line.netKey, origin)); }
   const I = (p: Pt) => [p[0] * TUNE_IU, p[1] * TUNE_IU];
-  const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer); const r = line.width / 2;
-  const collides = (ch: Chain) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
-  const res = meanderMove({ pts: line.pts.map(I), origin: I(origin), end: I(end), cursor: I(end), st, width: Math.round(line.width * TUNE_IU),
-    clearance: Math.round(netClearance(settingsOf(ctx), line.netKey) * TUNE_IU), lineLength: routedLength(scratch, seedId) * TUNE_IU, collides });
-  // the rebuilt line onto the scratch board: kept segments stay, the rest of the line is replaced
-  const oldKey = new Map<string, KItem>(); for (const id of line.ids) { const it = scratch.items.get(id)!; const a = pt(it.node, "start")!, b = pt(it.node, "end")!; oldKey.set(ptKey(a) + "|" + ptKey(b), it); oldKey.set(ptKey(b) + "|" + ptKey(a), it); }
-  const kept = new Set<string>(), ops2: BranchOp[] = [], members: string[] = [];
-  const T = { width: line.width, layer: line.layer, net: line.net };
-  for (const pc of tunePieces(res.final)) {
-    const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
-    if (same && !kept.has(same.id)) { kept.add(same.id); if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id); continue; }
-    const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, line.width, line.layer, line.net) : segmentNode(scratch, pc.a, pc.b, line.width, line.layer, line.net);
-    const u = K.newUuid(); node.push(["uuid", u]); ops2.push({ add: node });
-    if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
+  const r = line.width / 2, clearance = netClearance(settingsOf(ctx), line.netKey);
+  let res: TuneResult, lineC: TrackLine | null = null;
+  if (dual) {
+    // DP_MEANDER_PLACER on both base lines: the coupled one is the partner net's line through its restored base line
+    const cSeed = added.find((a) => a.coupled); const cIt = cSeed && scratch.items.get(K.str(K.kid(cSeed.node, "uuid")![1]));
+    lineC = cIt ? assembleLine(scratch, cIt) : null; if (!lineC || !cIt) return null;
+    const NT = netTable(scratch), pair = dpNetPair(scratch, line.net); if (!pair) return null;
+    const lenMine = routedLength(scratch, seedId), lenOther = routedLength(scratch, cIt.id);
+    const gap = info.gap > 0 ? info.gap : 0.1;
+    const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer, null, new Set(lineC.ids));
+    const hits = (ch: Chain) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+    st.target = info.st.target;
+    res = tuneDp({ line, origin, end, cursor: end, width: line.width, clearance, dp: { line: lineC, net: lineC.net, netKey: lineC.netKey, mineIsP: NT.key(pair.P) === line.netKey, gap, lenMine, lenOther } }, st, I, hits);
+  } else {
+    const O = routeObstacles(scratch, settingsOf(ctx), line.netKey, line.layer);
+    const collides = (ch: Chain) => pathHits(O, chPoints(ch).map((p) => [p[0] / TUNE_IU, p[1] / TUNE_IU]), r).length > 0;
+    res = meanderMove({ pts: line.pts.map(I), origin: I(origin), end: I(end), cursor: I(end), st, width: Math.round(line.width * TUNE_IU),
+      clearance: Math.round(clearance * TUNE_IU), lineLength: routedLength(scratch, seedId) * TUNE_IU, collides });
   }
-  for (const id of line.ids) if (!kept.has(id)) ops2.unshift({ del: id });
+  // the rebuilt line(s) onto the scratch board: kept segments stay, the rest of each line is replaced
+  const ops2: BranchOp[] = [], members: string[] = [];
+  const T = { width: line.width, layer: line.layer, net: line.net };
+  const rebuild = (ln: TrackLine, fin: Chain) => {
+    const oldKey = new Map<string, KItem>(); for (const id of ln.ids) { const it = scratch.items.get(id)!; const a = pt(it.node, "start")!, b = pt(it.node, "end")!; oldKey.set(ptKey(a) + "|" + ptKey(b), it); oldKey.set(ptKey(b) + "|" + ptKey(a), it); }
+    const kept = new Set<string>();
+    for (const pc of tunePieces(fin)) {
+      const same = !pc.m && oldKey.get(ptKey(pc.a) + "|" + ptKey(pc.b));
+      if (same && !kept.has(same.id)) { kept.add(same.id); if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(same.id); continue; }
+      const node = pc.m ? arcTrackNode(scratch, pc.a, pc.m, pc.b, ln.width, ln.layer, ln.net) : segmentNode(scratch, pc.a, pc.b, ln.width, ln.layer, ln.net);
+      const u = K.newUuid(); node.push(["uuid", u]); ops2.push({ add: node });
+      if (inTuneOutline(T, res, pc.a) && inTuneOutline(T, res, pc.b)) members.push(u);
+    }
+    for (const id of ln.ids) if (!kept.has(id)) ops2.unshift({ del: id });
+  };
+  rebuild(line, res.final);
+  if (lineC && res.finalCoupled) rebuild(lineC, res.finalCoupled);
   const g = clone(gen.node);
   const setKid = (k: string, ...v: SAtom[]) => { const c = K.kid(g, k); if (c) c.splice(1, c.length - 1, ...v); };
   const xy = (p: Pt): SNode => ["xy", +fmtG(p[0]), +fmtG(p[1])];
   const base = res.baseline.map((n: { p: Pt }) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]);
   const bl = K.kid(g, "base_line"); if (bl && base.length >= 2) bl.splice(1, bl.length - 1, ["pts", ...base.map(xy)]);
+  const cbase = res.baselineCoupled ? res.baselineCoupled.map((n: { p: Pt }) => [r6(n.p[0] / TUNE_IU), r6(n.p[1] / TUNE_IU)]) : null;
+  const blc = K.kid(g, "base_line_coupled"); if (blc && cbase && cbase.length >= 2) blc.splice(1, blc.length - 1, ["pts", ...cbase.map(xy)]);
   if (base.length >= 2) { const o = K.kid(g, "origin"); if (o) o.splice(1, o.length - 1, xy(base[0])); const e = K.kid(g, "end"); if (e) e.splice(1, e.length - 1, xy(base[base.length - 1])); }
   const side = res.settings.initialSide < 0 ? "left" : res.settings.initialSide > 0 ? "right" : "default"; setKid("initial_side", side);
   setKid("last_status", res.status); setKid("last_tuning_length", +fmtG(res.length / TUNE_IU));
@@ -207,7 +238,8 @@ export function drawTune(c: CanvasRenderingContext2D, ctx: PcbCtx, px: number) {
   if (U.pattern && U.pattern.res) {
     const T = U.pattern;
     c.globalAlpha = 0.8; c.strokeStyle = saturated(color(T.layer)); c.lineWidth = T.width;
-    for (const pc of tunePieces((T.res as TuneResult).final)) {
+    const res = T.res as TuneResult;
+    for (const pc of tunePieces(res.final).concat(res.finalCoupled ? tunePieces(res.finalCoupled) : [])) {
       if (pc.m) { const a = K.arcFrom3(pc.a, pc.m, pc.b); if (a) { c.beginPath(); c.arc(a.x, a.y, a.r, a.a0, a.a1, !!a.anticlockwise); c.stroke(); continue; } }
       line(c, pc.a, pc.b);
     }
@@ -224,4 +256,4 @@ export function drawTune(c: CanvasRenderingContext2D, ctx: PcbCtx, px: number) {
   c.globalAlpha = 1;
 }
 /** What the board render leaves out while the tuner shows the rebuilt line. */
-export function tuneHiddenIds() { const T = S.tune && S.tune.pattern; return T && T.res ? new Set(T.line.ids) : null; }
+export function tuneHiddenIds() { const T = S.tune && S.tune.pattern; return T && T.res ? new Set(T.line.ids.concat(T.dp ? T.dp.line.ids : [])) : null; }

@@ -19,9 +19,11 @@ export interface MeanderPlacer { st: MeanderSettings; clearance: number; width: 
 export interface MeanderShape {
   pl: MeanderPlacer; width: number; type: number; amp: number; side: boolean; p0: Pt; baseSeg: Seg; clipped: Seg; line: Chain;
   meanCr: number; targetBaseLen: number; offset: number;
+  /** a differential pair's shape (m_dual): line is the +offset line, line2 the -offset one */
+  dual: boolean; line2: Chain;
 }
 /** MEANDERED_LINE */
-export interface MLine { pl: MeanderPlacer; width: number; meanders: MeanderShape[]; last: Pt }
+export interface MLine { pl: MeanderPlacer; width: number; meanders: MeanderShape[]; last: Pt; dual: boolean; offset: number }
 /** What meanderMove tunes: the line and the stretch of it (IU), the settings, and the collision check. */
 export interface MeanderParams {
   pts: Pt[]; origin: Pt; end: Pt; cursor?: Pt | null; st: MeanderSettings; width: number; clearance: number; lineLength: number;
@@ -122,11 +124,11 @@ export function chSimplify(ch: Chain) {
 }
 
 /** MEANDER_SHAPE */
-export function newShape(pl: MeanderPlacer, width: number): MeanderShape { return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset: 0 }; }
-export const shapeCopy = (m: MeanderShape): MeanderShape => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)) });
+export function newShape(pl: MeanderPlacer, width: number, dual = false, offset = 0): MeanderShape { return { pl, width, type: MT_EMPTY, amp: 0, side: false, p0: [0, 0], baseSeg: { A: [0, 0], B: [0, 0] }, clipped: { A: [0, 0], B: [0, 0] }, line: [], meanCr: 0, targetBaseLen: 0, offset, dual, line2: [] }; }
+export const shapeCopy = (m: MeanderShape): MeanderShape => Object.assign({}, m, { baseSeg: { A: m.baseSeg.A.slice(), B: m.baseSeg.B.slice() }, clipped: { A: m.clipped.A.slice(), B: m.clipped.B.slice() }, line: m.line.map((n) => Object.assign({}, n)), line2: m.line2.map((n) => Object.assign({}, n)) });
 export const isMeanderType = (t: number) => t === MT_SINGLE || t === MT_START || t === MT_FINISH || t === MT_TURN;
 /** MEANDER_SHAPE::spacing */
-export const shapeSpacing = (m: MeanderShape) => Math.max(m.width + m.pl.clearance, m.pl.st.spacing);
+export const shapeSpacing = (m: MeanderShape) => Math.max(m.width + m.pl.clearance + (m.dual ? 2 * Math.abs(m.offset) : 0), m.pl.st.spacing);
 /** MEANDER_SHAPE::MinAmplitude */
 export function minAmplitude(m: MeanderShape) {
   const st = m.pl.st;
@@ -165,8 +167,14 @@ export function genMeanderShape(m: MeanderShape, P: Pt, dir: Pt, side: boolean, 
     if (m.pl.st.round) {
       const c = vadd(pos, vmul(v, sv)); const mid = vadd(c, vmul(vadd(vsubI(pos, c), vsubI(end, c)), Math.SQRT1_2));
       chAppend(lc, pos); lc.push({ p: end, m: mid });
-    } else { chAppend(lc, pos); chAppend(lc, end); }
-    pos = end; turn(s);
+      pos = end;
+    } else {
+      // MEANDER_STYLE_CHAMFER: a dual shape's outer chamfers are pulled in so both lines keep the gap
+      const corr = m.dual && r > m.meanCr ? -2 * Math.abs(m.offset) * Math.tan(Math.PI / 8) : 0;
+      chAppend(lc, pos); chAppend(lc, vsubI(pos, vresize(u, corr)));
+      pos = corr ? vadd(vadd(pos, u), vmul(vadd(v, vresize(v, corr)), sv)) : end; chAppend(lc, pos);
+    }
+    turn(s);
   };
   const uShape = (sides: number, corner: number, t: number) => { forward(sides); miter(corner, true); forward(t); miter(corner, true); forward(sides); };
   start(vadd(P, dvb), dir);
@@ -192,20 +200,29 @@ export function genMeanderShape(m: MeanderShape, P: Pt, dir: Pt, side: boolean, 
   return side ? chMirror(lc, P, dir) : lc;
 }
 /** MEANDER_SHAPE::updateBaseSegment */
-export function updateBaseSegment(m: MeanderShape) { m.clipped = { A: lineProject(m.baseSeg, m.line[0].p), B: lineProject(m.baseSeg, m.line[m.line.length - 1].p) }; }
+export function updateBaseSegment(m: MeanderShape) {
+  const l1 = m.line, l2 = m.line2; const mid = (a: Pt, b: Pt): Pt => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const a = m.dual && l2.length ? mid(l1[0].p, l2[0].p) : l1[0].p, b = m.dual && l2.length ? mid(l1[l1.length - 1].p, l2[l2.length - 1].p) : l1[l1.length - 1].p;
+  m.clipped = { A: lineProject(m.baseSeg, a), B: lineProject(m.baseSeg, b) };
+}
+/** Both lines of a shape (one unless m_dual) from P along dir with the type and side it has. */
+function genLines(m: MeanderShape, P: Pt, dir: Pt, side: boolean, type: number) {
+  m.line = genMeanderShape(m, P, dir, side, type, m.dual ? m.offset : 0);
+  m.line2 = m.dual ? genMeanderShape(m, P, dir, side, type, -m.offset) : [];
+}
 export const baselineLength = (m: MeanderShape) => vlen(vsubI(m.clipped.B, m.clipped.A));
 export const currentLength = (m: MeanderShape) => chLength(m.line);
 /** MEANDER_SHAPE::Recalculate / Resize / MakeEmpty / MinTunableLength */
-export function recalcShape(m: MeanderShape) { m.line = genMeanderShape(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type, 0); updateBaseSegment(m); }
+export function recalcShape(m: MeanderShape) { genLines(m, m.p0, vsubI(m.baseSeg.B, m.baseSeg.A), m.side, m.type); updateBaseSegment(m); }
 export function resizeShape(m: MeanderShape, a: number) { if (a < 0) return; m.amp = Math.max(a, minAmplitude(m)); recalcShape(m); }
-export function makeEmpty(m: MeanderShape) { updateBaseSegment(m); const d = vsubI(m.clipped.B, m.clipped.A); m.type = MT_EMPTY; m.amp = 0; m.line = genMeanderShape(m, m.p0, d, m.side, MT_EMPTY, 0); }
+export function makeEmpty(m: MeanderShape) { updateBaseSegment(m); const d = vsubI(m.clipped.B, m.clipped.A); m.type = MT_EMPTY; m.amp = 0; genLines(m, m.p0, d, m.side, MT_EMPTY); }
 export function minTunableLength(m: MeanderShape) { const c = shapeCopy(m); c.targetBaseLen = baselineLength(m); resizeShape(c, minAmplitude(c)); return currentLength(c); }
 /** MEANDER_SHAPE::Fit */
 export function fitShape(m: MeanderShape, type: number, seg: Seg, P: Pt, side: boolean): boolean {
   const st = m.pl.st;
   if (type === MT_CHECK_START || type === MT_CHECK_FINISH) {
     const prim1 = type === MT_CHECK_START ? MT_START : MT_TURN, prim2 = type === MT_CHECK_START ? MT_TURN : MT_FINISH;
-    const m1 = newShape(m.pl, m.width), m2 = newShape(m.pl, m.width);
+    const m1 = newShape(m.pl, m.width, m.dual, m.offset), m2 = newShape(m.pl, m.width, m.dual, m.offset);
     const c1 = fitShape(m1, prim1, seg, P, side); const c2 = c1 && fitShape(m2, prim2, seg, m1.clipped.B, !side);
     if (c1 && c2) { Object.assign(m, shapeCopy(m1)); m.type = prim1; m.p0 = P.slice(); m.side = side; updateBaseSegment(m); return true; }
     return false;
@@ -213,7 +230,7 @@ export function fitShape(m: MeanderShape, type: number, seg: Seg, P: Pt, side: b
   const minAmpl = minAmplitude(m), maxAmpl = Math.max(st.maxAmp, minAmpl), minCr = Math.trunc(m.width / 2);
   for (let ampl = maxAmpl; ampl >= minAmpl; ampl -= st.step) {
     m.amp = ampl;
-    m.line = genMeanderShape(m, P, vsubI(seg.B, seg.A), side, type, 0);
+    genLines(m, P, vsubI(seg.B, seg.A), side, type);
     m.type = type; m.baseSeg = { A: seg.A.slice(), B: seg.B.slice() }; m.p0 = P.slice(); m.side = side;
     updateBaseSegment(m);
     if (m.meanCr < minCr) continue;   // nearly square corners (issue #8629)
@@ -222,8 +239,9 @@ export function fitShape(m: MeanderShape, type: number, seg: Seg, P: Pt, side: b
   return false;
 }
 /** MEANDERED_LINE */
-export function newMLine(pl: MeanderPlacer, width: number): MLine { return { pl, width, meanders: [], last: [0, 0] }; }
-export function mlAddCorner(L: MLine, a: Pt) { const m = newShape(L.pl, L.width); m.type = MT_CORNER; m.line = [{ p: a.slice() }]; m.clipped = { A: a.slice(), B: a.slice() }; L.last = a.slice(); L.meanders.push(m); }
+export function newMLine(pl: MeanderPlacer, width: number, dual = false, offset = 0): MLine { return { pl, width, meanders: [], last: [0, 0], dual, offset }; }
+/** MEANDERED_LINE::AddCorner( aA, aB ): b is the second line's corner of a pair. */
+export function mlAddCorner(L: MLine, a: Pt, b?: Pt) { const m = newShape(L.pl, L.width, L.dual, L.offset); m.type = MT_CORNER; m.line = [{ p: a.slice() }]; m.line2 = b ? [{ p: b.slice() }] : []; m.clipped = { A: a.slice(), B: a.slice() }; L.last = a.slice(); L.meanders.push(m); }
 export function mlAddMeander(L: MLine, m: MeanderShape) { L.last = m.clipped.B.slice(); L.meanders.push(shapeCopy(m)); }
 /** MEANDERED_LINE::CheckSelfIntersections */
 export function checkSelfIntersections(L: MLine, shape: MeanderShape, clearance: number) {
@@ -240,11 +258,11 @@ export function checkSelfIntersections(L: MLine, shape: MeanderShape, clearance:
 export function meanderSegment(L: MLine, base: Seg, aSide: boolean) {
   const st = L.pl.st, baseLen = vlen(vsubI(base.B, base.A)), singleSided = st.singleSided, dir = vsubI(base.B, base.A);
   let side = aSide;
-  mlAddCorner(L, base.A);
+  if (!L.dual) mlAddCorner(L, base.A);
   let turning = false, started = false;
   L.last = base.A.slice();
   for (let guard = 0; guard < 100000; guard++) {
-    const m = newShape(L.pl, L.width);
+    const m = newShape(L.pl, L.width, L.dual, L.offset);
     const thr = shapeSpacing(m); let fail = false;
     let remaining = baseLen - vlen(vsubI(L.last, base.A));
     const flipInitialSide = () => { L.pl.st.initialSide = -L.pl.st.initialSide; };
@@ -276,15 +294,15 @@ export function meanderSegment(L: MLine, base: Seg, aSide: boolean) {
     remaining = baseLen - vlen(vsubI(L.last, base.A));
     if (remaining < st.step) break;
     if (fail) {
-      const tmp = newShape(L.pl, L.width);
+      const tmp = newShape(L.pl, L.width, L.dual, L.offset);
       const nextP = shapeSpacing(tmp) - 2 * cornerRadius(tmp) + st.step;
       const pn = vadd(L.last, vresize(dir, nextP));
       // SEG::Contains: on the segment within √3 IU
       const q = lineProject(base, pn), t = ((pn[0] - base.A[0]) * dir[0] + (pn[1] - base.A[1]) * dir[1]) / (baseLen * baseLen || 1);
-      if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8) mlAddCorner(L, pn); else break;
+      if (t >= 0 && t <= 1 && vlen(vsubI(q, pn)) <= 1.8 && !L.dual) mlAddCorner(L, pn); else break;
     }
   }
-  mlAddCorner(L, base.B);
+  if (!L.dual) mlAddCorner(L, base.B);
 }
 /** findAmplitudeBinarySearch / findAmplitudeForLength (pns_meander_placer_base.cpp) */
 export function findAmplitudeBinarySearch(copy: MeanderShape, targetLength: number, minAmp: number, maxAmp: number): number {
@@ -377,3 +395,106 @@ export function meanderMove(P: MeanderParams) {
   else { chAppendChain(fin, sp.pre); chAppendChain(fin, tuned); chAppendChain(fin, sp.post); }
   return { final: st.keepEndpoints ? fin : chSimplify(fin), tuned: chSimplify(tuned), status, length: lastLength, hasMeanders, settings: st, start: sp.start, end: sp.end, baseline: sp.mid };
 }
+
+// ---------------------------------------------------------------- Tune Length of a Differential Pair (PNS::DP_MEANDER_PLACER)
+/** SEG::ApproxParallel( aSeg, aThreshold ): the signed squared distances of the shorter one's ends from the longer one's line. */
+export function approxParallelT(s: Seg, o: Seg, thr: number) {
+  const l2 = (x: Seg) => (x.B[0] - x.A[0]) ** 2 + (x.B[1] - x.A[1]) ** 2;
+  const [a, b] = l2(s) < l2(o) ? [o, s] : [s, o];
+  const p = a.A[1] - a.B[1], q = a.B[0] - a.A[0], l = p * p + q * q; if (!l) return false;
+  const d1 = p * (b.A[0] - a.A[0]) + q * (b.A[1] - a.A[1]), d2 = p * (b.B[0] - a.A[0]) + q * (b.B[1] - a.A[1]);
+  return Math.abs(Math.sign(d1) * d1 * d1 / l - Math.sign(d2) * d2 * d2 / l) <= thr * thr;
+}
+/** commonParallelProjection (pns_diff_pair.cpp): the stretch of p that n overlaps, and n's matching stretch, or null. */
+export function commonParallelProjection(p: Seg, n: Seg): { pClip: Seg; nClip: Seg } | null {
+  const d = vsubI(p.B, p.A), tc = (x: Pt) => (x[0] - p.A[0]) * d[0] + (x[1] - p.A[1]) * d[1];
+  const na = lineProject(p, n.A), nb = lineProject(p, n.B);
+  let ta = 0, tb = tc(p.B), tpa = tc(na), tpb = tc(nb);
+  if (tb < ta) [ta, tb] = [tb, ta];
+  if (tpb < tpa) [tpa, tpb] = [tpb, tpa];
+  if (tb <= tpa || ta >= tpb) return null;
+  const tv = [0, tc(p.B), tc(na), tc(nb)].sort((x, y) => x - y), L2 = d[0] * d[0] + d[1] * d[1];
+  const at = (t: number): Pt => [p.A[0] + d[0] * t / L2, p.A[1] + d[1] * t / L2];
+  const pClip = { A: at(tv[1]), B: at(tv[2]) };
+  return { pClip, nClip: { A: lineProject(n, pClip.A), B: lineProject(n, pClip.B) } };
+}
+/** DIFF_PAIR::COUPLED_SEGMENTS */
+export interface CoupledSegs { coupledP: Seg; coupledN: Seg; indexP: number; indexN: number }
+export const DP_PARALLELITY_THRESHOLD = 10;
+/**
+ * DIFF_PAIR::CoupledSegmentPairs: every parallel P / N segment pair that overlaps and sits at the pair's gap.  The
+ * placer's pair carries no gap constraint, so KiCad's window is opt ± 10 µm around MINOPTMAX's opt; the web takes that
+ * opt as the pair's measured gap (TOPOLOGY::AssembleDiffPair) so coupled stretches are found on real boards.
+ */
+export function coupledSegmentPairs(P: Pt[], N: Pt[], width: number, gap: number) {
+  const out: CoupledSegs[] = [];
+  for (let i = 0; i + 1 < P.length; i++) for (let j = 0; j + 1 < N.length; j++) {
+    const sp = { A: P[i], B: P[i + 1] }, sn = { A: N[j], B: N[j + 1] };
+    const dist = segSegDist(sp.A, sp.B, sn.A, sn.B) - width;
+    if (!approxParallelT(sp, sn, DP_PARALLELITY_THRESHOLD) || dist < gap - 10000 || dist > gap + 10000) continue;
+    const c = commonParallelProjection(sp, sn); if (!c) continue;
+    out.push({ coupledP: c.pClip, coupledN: c.nClip, indexP: i, indexN: j });
+  }
+  return out;
+}
+/** What dpMeanderMove tunes: both lines of the pair (P first) and their routed lengths, in IU. */
+export interface DpMeanderParams {
+  ptsP: Pt[]; ptsN: Pt[]; origin: Pt; end: Pt; cursor?: Pt | null; st: MeanderSettings; width: number; gap: number; clearance: number;
+  lengthP: number; lengthN: number; collides?: ((line: Chain) => boolean) | null;
+}
+/** DP_MEANDER_PLACER::Move: both lines meandered together around their centre line, trimmed to the target. */
+export function dpMeanderMove(P: DpMeanderParams) {
+  const st = P.st, w = P.width;
+  const spP = splitLine(P.ptsP, P.origin, P.end), spN = splitLine(P.ptsN, P.origin, P.end);
+  const tunedP0 = chSimplify(spP.mid), tunedN0 = chSimplify(spN.mid);
+  const dpLen = Math.max(P.lengthP, P.lengthN);
+  const statusOf = (len: number) => len > st.target.max ? TOO_LONG : len < st.target.min ? TOO_SHORT : TUNED;
+  const asChain = (pts: Pt[]): Chain => pts.map((p) => ({ p: p.slice() }));
+  const base = { settings: st, start: spP.start, end: spP.end, baselineP: spP.mid, baselineN: spN.mid, hasMeanders: false };
+  const original = (status: string) => Object.assign({}, base, { finalP: asChain(P.ptsP), finalN: asChain(P.ptsN), tunedP: tunedP0, tunedN: tunedN0, status, length: dpLen });
+  if (tunedP0.length < 2 || tunedN0.length < 2) return original(TOO_SHORT);   // issue #22041
+  const pp = tunedP0.map((n) => n.p), np = tunedN0.map((n) => n.p);
+  const pairs = coupledSegmentPairs(pp, np, w, P.gap);
+  if (!pairs.length) return original(statusOf(dpLen));   // started on an uncoupled stretch
+  let offset = Math.trunc((P.gap + w) / 2);
+  const c0 = pairs[0]; if (segSide(c0.coupledP, [(c0.coupledP.A[0] + c0.coupledN.A[0]) / 2, (c0.coupledP.A[1] + c0.coupledN.A[1]) / 2]) > 0) offset = -offset;   // pairOrientation
+  const pl: MeanderPlacer = { st, clearance: P.clearance, width: w, result: null,
+    checkFit(m: MeanderShape) { if (P.collides && (P.collides(m.line) || P.collides(m.line2))) return false; return checkSelfIntersections(this.result!, m, w + w * 3); } };
+  const L = newMLine(pl, w, true, offset); pl.result = L;
+  const segCount = (pts: Pt[]) => pts.length - 1, next = (pts: Pt[], i: number) => i + 1 < segCount(pts) ? i + 1 : -1;
+  const startPt = (pts: Pt[], i: number) => pts[Math.max(0, Math.min(i, pts.length - 1))];
+  let ciP = 0, ciN = 0;
+  const addCornersUntil = (lp: number, ln: number) => {
+    for (;;) {
+      const pOk = ciP <= lp && ciP !== -1, nOk = ciN <= ln && ciN !== -1;
+      if (!pOk && !nOk) break;
+      mlAddCorner(L, startPt(pp, ciP), startPt(np, ciN));
+      if (pOk) ciP = next(pp, ciP);
+      if (nOk) ciN = next(np, ciN);
+    }
+  };
+  for (const sp of pairs) {
+    const b = { A: [(sp.coupledP.A[0] + sp.coupledN.A[0]) / 2, (sp.coupledP.A[1] + sp.coupledN.A[1]) / 2], B: [(sp.coupledP.B[0] + sp.coupledN.B[0]) / 2, (sp.coupledP.B[1] + sp.coupledN.B[1]) / 2] };
+    const side = st.initialSide === 0 ? segSide(b, P.cursor || P.end) < 0 : st.initialSide < 0;
+    addCornersUntil(sp.indexP, sp.indexN);
+    meanderSegment(L, b, side);
+  }
+  addCornersUntil(pp.length - 1, np.length - 1);
+  mlAddCorner(L, pp[pp.length - 1], np[np.length - 1]);
+  let status = TUNED, lastLength = dpLen, hasMeanders = false, tunedP = tunedP0, tunedN = tunedN0;
+  if (dpLen > st.target.max) status = TOO_LONG;
+  else { lastLength = dpLen - Math.max(chLength(tunedP0), chLength(tunedN0)); tuneLineLength(L, st.target.opt - dpLen); }
+  if (status !== TOO_LONG) {
+    tunedP = []; tunedN = [];
+    for (const m of L.meanders) if (m.type !== MT_EMPTY) { chAppendChain(tunedP, m.line); chAppendChain(tunedN, m.line2); hasMeanders = hasMeanders || isMeanderType(m.type); }
+    lastLength += Math.max(chLength(tunedP), chLength(tunedN));
+    status = statusOf(lastLength);
+  }
+  const join = (sp: ReturnType<typeof splitLine>, tuned: Chain) => {
+    const fin: Chain = [];
+    if (st.keepEndpoints) { chAppendChain(fin, chSimplify(sp.pre)); chAppendChain(fin, chSimplify(tuned)); chAppendChain(fin, chSimplify(sp.post)); return fin; }
+    chAppendChain(fin, sp.pre); chAppendChain(fin, tuned); chAppendChain(fin, sp.post); return chSimplify(fin);
+  };
+  return Object.assign({}, base, { finalP: join(spP, tunedP), finalN: join(spN, tunedN), tunedP: chSimplify(tunedP), tunedN: chSimplify(tunedN), status, length: lastLength, hasMeanders });
+}
+export type DpTuneResult = ReturnType<typeof dpMeanderMove>;
