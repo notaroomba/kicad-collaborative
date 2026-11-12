@@ -478,8 +478,9 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const setWidth = (w: number) => { if (w !== curWidth) { ctx.lineWidth = w; curWidth = w; } };
   const setAlpha = (a: number) => { if (a !== curAlpha) { ctx.globalAlpha = a; curAlpha = a; } };
   const setCap = (c: string) => { if (c !== curCap) { ctx.lineCap = c as CanvasLineCap; curCap = c; } };
-  const strokeG = (g: Geom) => { const p = pathOf(g); if (p) ctx.stroke(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.stroke(); } };
-  const fillG = (g: Geom) => { const p = pathOf(g); if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } };
+  const rec = !!(ctx as unknown as { __plot?: boolean }).__plot;   // a plot recorder (plot-rec.ts) reads paths, not Path2D objects
+  const strokeG = (g: Geom) => { const p = rec ? null : pathOf(g); if (p) ctx.stroke(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.stroke(); } };
+  const fillG = (g: Geom) => { const p = rec ? null : pathOf(g); if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } };
   const base = [A, 0, 0, s, E, ty]; const viewRect = [fx0, fy0, fx1, fy1];
   const dirty = () => { curStroke = curFill = null; curWidth = -1; curCap = "round"; curAlpha = -1; };
   let ratsDone = !rats, previewIdx = 0;
@@ -800,7 +801,7 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
       if (g.t === "rect" || g.t === "image") { ctx.lineWidth = Math.max((g as RectGeom).wd || 0, minW) + extra; ctx.strokeRect(g.x, g.y, g.w, g.h); continue; }
       if (g.t === "poly" && (!g.pts || g.pts.length < 2)) continue;
       ctx.lineWidth = Math.max(g.w || 0, minW) + extra;
-      const p = pathOf(g);
+      const p = (ctx as unknown as { __plot?: boolean }).__plot ? null : pathOf(g);
       if (g.fill || g.t === "pad" || g.t === "circle") { if (p) ctx.fill(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.fill(); } }
       if (p) ctx.stroke(p); else { ctx.beginPath(); tracePath(ctx, g); ctx.stroke(); }
     }
@@ -980,7 +981,8 @@ export function drawDrawingSheet(ctx: Ctx2D, doc: Doc, s: number, minW: number):
     drawText(ctx, { t: "text", x: it.x, y: it.y, text: it.text, size: it.size, w: it.w, color: it.color || ink,
       rot: it.rot, h: it.h, v: it.v, bold: it.bold, italic: it.italic, multiline: it.multiline, minPx: 3 }, s, doc.type, minW, null, null, false, null);
   }
-  // DS_PAINTER::DrawBorder (ds_painter.cpp:383-396): the paper outline, last, in the page-limits colour
+  // DS_PAINTER::DrawBorder (ds_painter.cpp:383-396): the paper outline, last, in the page-limits colour (not plotted)
+  if ((ctx as unknown as { __plot?: boolean }).__plot) return;
   ctx.strokeStyle = isPcb ? PCB_PAGE_LIMITS : SCH.pageLimits;
   ctx.lineWidth = minW;
   ctx.strokeRect(0, 0, doc.page[0], doc.page[1]);

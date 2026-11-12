@@ -218,7 +218,7 @@ export interface Via {
   net: string; removeUnused: boolean; keepEnds: boolean; zoneLayers: Set<string>;
   tentFront: boolean | null; tentBack: boolean | null;
 }
-export interface ZoneFill { layer: string; pts: Pt[] }
+export interface ZoneFill { layer: string; pts: Pt[]; net?: string }
 
 export interface BoardModel {
   doc: FabDoc; settings: BoardSettings; copper: string[];
@@ -276,7 +276,7 @@ function readVia(n: Node, copper: string[], nets: Map<number, string>): Via {
     zoneLayers: new Set(zl ? zl.slice(1).map(str) : []), tentFront: tf, tentBack: tb };
 }
 
-function readZone(n: Node, copper: string[], tf: ((x: number, y: number) => Pt) | null, out: BoardModel): void {
+function readZone(n: Node, copper: string[], tf: ((x: number, y: number) => Pt) | null, out: BoardModel, nets?: Map<number, string>): void {
   if (K(n, "keepout")) return;   // a rule area has no fill
   const single = K(n, "layer"), multi = K(n, "layers");
   const layers = expandLayers(single ? [str(single[1])] : multi ? multi.slice(1).map(str) : ["F.Cu"], copper);
@@ -284,7 +284,7 @@ function readZone(n: Node, copper: string[], tf: ((x: number, y: number) => Pt) 
   if (!fills.length) { if (layers.some(isCopper)) out.unfilledZones++; return; }
   for (const f of fills) {
     const l = K(f, "layer"); const pts = (polyPtsOf(f) as Pt[]); if (pts.length < 3) continue;
-    out.fills.push({ layer: l ? str(l[1]) : layers[0], pts: tf ? pts.map((p) => tf(p[0], p[1])) : pts });
+    out.fills.push({ layer: l ? str(l[1]) : layers[0], pts: tf ? pts.map((p) => tf(p[0], p[1])) : pts, net: nets ? netName(n, nets) : undefined });
   }
 }
 
@@ -298,10 +298,10 @@ export function boardModel(doc: FabDoc, setup: Node | null): BoardModel {
       const fp = readFootprint(item, copper, doc.nets);
       m.footprints.push(fp);
       // a zone inside a footprint is kept in the footprint's frame
-      for (const z of kids(n, "zone") as Node[]) readZone(z, copper, fp.tf, m);
+      for (const z of kids(n, "zone") as Node[]) readZone(z, copper, fp.tf, m, doc.nets);
     } else if (item.kind === "segment" || item.kind === "arc") { const t = readTrack(n, item.kind, doc.nets); if (t) m.tracks.push(t); }
     else if (item.kind === "via") m.vias.push(readVia(n, copper, doc.nets));
-    else if (item.kind === "zone") readZone(n, copper, null, m);
+    else if (item.kind === "zone") readZone(n, copper, null, m, doc.nets);
   }
   return m;
 }

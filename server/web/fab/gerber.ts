@@ -6,7 +6,8 @@
 // axis aligned, an aperture macro otherwise (RoundRect, RotRect, HorizOval, FreePoly — KiCad's own macro
 // names and bodies, so a CAM tool shows the same aperture table).  Tracks are draws with a round aperture,
 // zone fills and filled graphics are G36 / G37 regions.
-import { type Prim, type Pt, norm360, rot } from "./prims";
+import { type GbrMeta, type Prim, type Pt, norm360, rot } from "./prims";
+import { primPolys } from "./poly";
 
 export interface GerberAttrs {
   /** %TF.FileFunction: "Copper,L1,Top", "Soldermask,Top", "Profile,NP" … */
@@ -27,6 +28,21 @@ export interface GerberOptions {
   project: { name: string; guid: string; rev: string };
   /** Decimal places of the coordinates in mm: 6 (KiCad's default) or 5. */
   precision?: 5 | 6;
+  /** "Include netlist attributes": %TO.P / %TO.N / %TO.C on flashes, draws and regions (UseX2NetAttributes). */
+  netAttributes?: boolean;
+  /** "Disable aperture macros": rounded and rotated rectangles, rotated ovals and custom pads become regions. */
+  disableMacros?: boolean;
+}
+
+/** FormatStringToGerber: the characters a Gerber field cannot hold, escaped as \\uXXXX (a backslash itself too). */
+export function gerberString(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i), ch = s[i];
+    if (c > 0x7f || ch === "%" || ch === "*" || ch === "," || ch === "\\") out += "\\u" + c.toString(16).toUpperCase().padStart(4, "0");
+    else out += ch;
+  }
+  return out;
 }
 
 /** A length in mm as a macro / aperture parameter: at most six decimals, no trailing zeros. */
@@ -86,9 +102,17 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
   const apertures = new Map<string, number>(); const apDefs: string[] = [];
   const macros = new Map<string, string>(); const macroDefs: string[] = [];
   let usesRoundRect = false, usesRotRect = false, usesOval = false;
+  // the aperture function is part of an aperture's identity (GERBER_PLOTTER::GetOrCreateAperture)
+  let curAf = "";
+  const ta = (af: string): string => (opt.x2 ? `%TA.AperFunction,${af}*%` : `G04 #@! TA.AperFunction,${af}*`);
+  const td = (what = ""): string => (opt.x2 ? `%TD${what}*%` : `G04 #@! TD${what}*`);
   const aperture = (def: string): number => {
-    let d = apertures.get(def);
-    if (d === undefined) { d = 10 + apertures.size; apertures.set(def, d); apDefs.push(`%ADD${d}${def}*%`); }
+    const key = def + "\u0000" + curAf;
+    let d = apertures.get(key);
+    if (d === undefined) {
+      d = 10 + apertures.size; apertures.set(key, d);
+      if (curAf) apDefs.push(ta(curAf), `%ADD${d}${def}*%`, td()); else apDefs.push(`%ADD${d}${def}*%`);
+    }
     return d;
   };
   const freePoly = (pts: Pt[]): string => {
@@ -130,19 +154,55 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
   // ---- body
   const body: string[] = [];
   let current = -1, dark = true, lastX = NaN, lastY = NaN;
+  // the object attribute dictionary (FormatNetAttribute): only new or changed attributes are written; a
+  // dropped one clears the whole dictionary first
+  let dict = "";
+  const pre = opt.x2 ? "%" : "G04 #@! ", eol = opt.x2 ? "*%" : "*";
+  const objectAttrs = (m: GbrMeta | undefined): void => {
+    if (!opt.netAttributes) return;
+    const info = m && m.info ? m.info : 0;
+    if (!info) { if (dict) { body.push(td()); dict = ""; } return; }
+    const padS = info & 1 ? `${pre}TO.P,${gerberString(m!.ref || "")},${m!.pad ? gerberString(m!.pad) + (m!.pinFn ? "," + gerberString(m!.pinFn) : "") : ""}${eol}` : "";
+    const netS = info & 2 ? `${pre}TO.N,${m!.net ? gerberString(m!.net) : m!.notInNet ? "" : "N/C"}${eol}` : "";
+    const cmpS = info & 4 && !(info & 1) ? `${pre}TO.C,${gerberString(m!.ref || "")}${eol}` : "";
+    const full = padS + "\n" + netS + "\n" + cmpS;
+    if (full === dict) return;
+    const had = (k: string): boolean => dict.includes(k);
+    const dropped = (had("TO.P,") && !padS) || (had("TO.N,") && !netS) || (had("TO.C,") && !cmpS);
+    if (dropped) { body.push(td()); dict = ""; }
+    for (const a of [padS, netS, cmpS]) if (a && !dict.includes(a)) body.push(a);
+    dict = full;
+  };
   const select = (d: number): void => { if (d !== current) { body.push(`D${d}*`); current = d; } };
   const polarity = (clear: boolean | undefined): void => { if (dark === !clear) return; dark = !clear; body.push(dark ? "%LPD*%" : "%LPC*%"); };
   const moveTo = (x: number, y: number): void => { const gx = X(x), gy = Y(y); if (gx === lastX && gy === lastY) return; body.push(`X${gx}Y${gy}D02*`); lastX = gx; lastY = gy; };
   const lineTo = (x: number, y: number): void => { const gx = X(x), gy = Y(y); body.push(`X${gx}Y${gy}D01*`); lastX = gx; lastY = gy; };
+  const regionOf = (pts: Pt[]): void => {
+    body.push("G36*");
+    lastX = NaN;
+    moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) { const q = pts[i]; if (X(q[0]) === lastX && Y(q[1]) === lastY) continue; lineTo(q[0], q[1]); }
+    if (X(pts[0][0]) !== lastX || Y(pts[0][1]) !== lastY) lineTo(pts[0][0], pts[0][1]);
+    body.push("G37*");
+  };
+  /** a flash that needs an aperture macro: plotted as a region when macros are disabled */
+  const macroShape = (p: Prim): boolean => {
+    if (p.k === "roundrect" || p.k === "poly") return true;
+    if (p.k === "rect" || p.k === "oval") { const a = norm360(p.rot); return Math.abs(a - Math.round(a / 90) * 90) >= 1e-6; }
+    return false;
+  };
 
   for (const p of prims) {
     polarity(p.clear);
+    curAf = p.meta && p.meta.af ? p.meta.af : "";
     if (p.k === "seg") {
       if (!(p.w > 0)) continue;
+      objectAttrs(p.meta);
       select(aperture(`C,${mm(p.w)}`));
       moveTo(p.x1, p.y1); lineTo(p.x2, p.y2);
     } else if (p.k === "arc") {
       if (!(p.w > 0)) continue;
+      objectAttrs(p.meta);
       select(aperture(`C,${mm(p.w)}`));
       const sx = p.cx + p.r * Math.cos(p.a0), sy = p.cy + p.r * Math.sin(p.a0);
       const ex = p.cx + p.r * Math.cos(p.a1), ey = p.cy + p.r * Math.sin(p.a1);
@@ -162,22 +222,23 @@ export function writeGerber(prims: Prim[], attrs: GerberAttrs, opt: GerberOption
       // a clockwise turn on screen stays clockwise once Y is flipped (the picture is the same, only the axis is)
       body.push("G75*", `${p.acw ? "G03" : "G02"}*`, `${co(ex, ey)}I${X(p.cx) - X(sx)}J${Y(p.cy) - Y(sy)}D01*`, "G01*");
       lastX = X(ex); lastY = Y(ey);
-    } else if (p.k === "region") {
-      if (p.pts.length < 3) continue;
-      body.push("G36*");
-      lastX = NaN;
-      moveTo(p.pts[0][0], p.pts[0][1]);
-      for (let i = 1; i < p.pts.length; i++) { const q = p.pts[i]; if (X(q[0]) === lastX && Y(q[1]) === lastY) continue; lineTo(q[0], q[1]); }
-      if (X(p.pts[0][0]) !== lastX || Y(p.pts[0][1]) !== lastY) lineTo(p.pts[0][0], p.pts[0][1]);
-      body.push("G37*");
+    } else if (p.k === "region" || (opt.disableMacros && macroShape(p))) {
+      const pts = p.k === "region" ? p.pts : (primPolys(p)[0] || []);
+      if (pts.length < 3) continue;
+      if (curAf) body.push(ta(curAf));
+      objectAttrs(p.meta);
+      regionOf(pts);
+      if (curAf) body.push(td(".AperFunction"));
     } else {
       if (p.k === "circle" ? !(p.d > 0) : p.k === "poly" ? p.pts.length < 3 : !(p.w > 0 && p.h > 0)) continue;
+      objectAttrs(p.meta);
       select(flashAperture(p));
       body.push(`${co(p.x, p.y)}D03*`);
       lastX = X(p.x); lastY = Y(p.y);
     }
   }
   if (!dark) body.push("%LPD*%");
+  if (opt.netAttributes && dict) body.push(td());
 
   // ---- header
   const tf = (s: string): string => opt.x2 ? `%TF.${s}*%` : `G04 #@! TF.${s}*`;

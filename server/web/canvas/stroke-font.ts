@@ -216,7 +216,7 @@ export function drawStrokeText(ctx: StrokeCtx, base: number[], t: StrokeTextSpec
   if (Math.abs(sx - sy) < 1e-9) {
     ctx.setTransform(m0, m1, m2, m3, e + m0 * ox + m2 * oy, f + m1 * ox + m3 * oy);
     ctx.lineWidth = pen / sy;
-    if (HAS_PATH2D) {
+    if (HAS_PATH2D && !(ctx as unknown as { __plot?: boolean }).__plot) {
       if (!line.path) { const p = new Path2D(); for (const st of line.strokes) { p.moveTo(st[0], st[1]); for (let i = 2; i < st.length; i += 2) p.lineTo(st[i], st[i + 1]); } line.path = p; }
       ctx.stroke(line.path);
     } else {

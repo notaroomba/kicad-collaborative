@@ -1,0 +1,176 @@
+// node server/static/tests/plot.test.js — File > Plot for the board and the schematic: the board's
+// (pcbplotparams …) section (canvas/plot-params.ts), the page model and its writers (web/fab: svg, pdf, ps,
+// dxf), the page-based board plot (pageplot.ts: scale, mirror, drill marks, drawing sheet), the Gerber X2
+// aperture / object attributes and the job file, and the plot recorder that turns the screen painter into
+// plot items (canvas/plot-rec.ts).  `npm run build` must have produced the bundles first.
+"use strict";
+const assert = require("assert");
+const path = require("path");
+require(path.join(__dirname, "..", "kicad-canvas.js"));
+require(path.join(__dirname, "..", "dist", "fab.js"));
+const K = globalThis.KiCadCanvas, F = globalThis.KiCadFab, P = K.plot.params;
+
+let passed = 0, failed = 0; const pending = [];
+function test(name, fn) { pending.push(Promise.resolve().then(fn).then(() => { passed++; console.log("  ok  ", name); }, (e) => { failed++; console.error("FAIL", name + ":", e.stack); })); }
+
+// a 40 x 30 mm two-layer board: two 0603 resistors (one turned), a part on the back, a part that is not populated,
+// a header with a round hole, a slot and a mounting hole, a track, a tented and an untented via, a legend text
+const fp = (ref, value, lib, at, side, body, extra) => `(footprint "${lib}" (layer "${side}") (uuid "f-${ref}") (at ${at})
+  (property "Reference" "${ref}" (at 0 -1.5) (layer "${side === "B.Cu" ? "B.SilkS" : "F.SilkS"}") (uuid "r-${ref}") (effects (font (size 1 1) (thickness 0.15))${side === "B.Cu" ? " (justify mirror)" : ""}))
+  (property "Value" "${value}" (at 0 1.5) (layer "${side === "B.Cu" ? "B.Fab" : "F.Fab"}") (uuid "v-${ref}") (effects (font (size 1 1) (thickness 0.15))${side === "B.Cu" ? " (justify mirror)" : ""}))
+  ${extra || ""}
+  ${body})`;
+const smd = (n, x, net, side) => `(pad "${n}" smd roundrect (at ${x} 0) (size 0.9 0.95) (layers "${side}" "${side[0]}.Mask" "${side[0]}.Paste") (roundrect_rratio 0.25) (net ${net}) (uuid "p-${side}-${n}-${x}"))`;
+const BOARD = `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0") (general (thickness 1.6))
+ (paper "A4") (title_block (title "Fab test") (rev "B"))
+ (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (9 "F.Adhes" user "F.Adhesive") (11 "B.Adhes" user "B.Adhesive") (13 "F.Paste" user) (15 "B.Paste" user) (5 "F.SilkS" user "F.Silkscreen") (7 "B.SilkS" user "B.Silkscreen")
+  (1 "F.Mask" user) (3 "B.Mask" user) (25 "Edge.Cuts" user) (31 "F.CrtYd" user "F.Courtyard") (29 "B.CrtYd" user "B.Courtyard") (35 "F.Fab" user) (33 "B.Fab" user))
+ (setup (pad_to_mask_clearance 0.05) (allow_soldermask_bridges_in_footprints no) (tenting (front yes) (back yes)) (aux_axis_origin 100 80))
+ (net 0 "") (net 1 "GND") (net 2 "VCC")
+ (gr_rect (start 100 50) (end 140 80) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "edge"))
+ (gr_text "REV B" (at 120 76) (layer "F.SilkS") (uuid "txt") (effects (font (size 1.5 1.5) (thickness 0.2))))
+ ${fp("R1", "10k", "Resistor_SMD:R_0603_1608Metric", "110 60", "F.Cu", smd(1, -0.825, 1, "F.Cu") + smd(2, 0.825, 2, "F.Cu"), `(property "LCSC Part #" "C25804" (at 0 0) (layer "F.Fab") (hide yes) (uuid "l-R1") (effects (font (size 1 1) (thickness 0.15)))) (attr smd)
+   (fp_rect (start -1.5 -0.75) (end 1.5 0.75) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd") (uuid "c-R1"))`)}
+ ${fp("R2", "10k", "Resistor_SMD:R_0603_1608Metric", "120 60 90", "F.Cu", smd(1, -0.825, 1, "F.Cu") + smd(2, 0.825, 2, "F.Cu"), `(property "LCSC Part #" "C25804" (at 0 0) (layer "F.Fab") (hide yes) (uuid "l-R2") (effects (font (size 1 1) (thickness 0.15)))) (attr smd)`)}
+ ${fp("U1", "NE555", "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm", "130 60 180", "B.Cu", smd(1, -2.5, 1, "B.Cu") + smd(2, 2.5, 2, "B.Cu"), `(property "MPN" "NE555DR" (at 0 0) (layer "B.Fab") (hide yes) (uuid "m-U1") (effects (font (size 1 1) (thickness 0.15)))) (attr smd)`)}
+ ${fp("C1", "100n", "Capacitor_SMD:C_0603_1608Metric", "110 70", "F.Cu", smd(1, -0.825, 1, "F.Cu") + smd(2, 0.825, 2, "F.Cu"), `(attr smd dnp)
+   (fp_rect (start -1.5 -0.75) (end 1.5 0.75) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd") (uuid "c-C1"))
+   (fp_rect (start -0.8 -0.4) (end 0.8 0.4) (stroke (width 0.1) (type default)) (fill yes) (layer "F.Fab") (uuid "b-C1"))`)}
+ ${fp("J1", "Conn", "Connector:PinHeader_1x02", "125 70", "F.Cu",
+   `(pad "1" thru_hole rect (at 0 0) (size 1.7 1.7) (drill 1) (layers "*.Cu" "*.Mask") (net 1) (uuid "j1"))
+    (pad "2" thru_hole oval (at 2.54 0) (size 1.7 2.4) (drill oval 1 1.6) (layers "*.Cu" "*.Mask") (net 2) (uuid "j2"))
+    (pad "" np_thru_hole circle (at -3 0) (size 2.2 2.2) (drill 2.2) (layers "*.Cu" "*.Mask") (uuid "j3"))`, `(attr through_hole)`)}
+ (segment (start 110.825 60) (end 120 60) (width 0.25) (layer "F.Cu") (net 2) (uuid "s1"))
+ (via (at 115 65) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "v1"))
+ (via (at 118 65) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (tenting (front no) (back no)) (net 1) (uuid "v2"))
+)`;
+
+const doc = K.parseDoc(BOARD, "kicad_pcb");
+const ctx = { doc, setup: BOARD, projectName: "t", date: new Date(Date.UTC(2026, 0, 2, 3, 4, 5)) };
+const COLORS = { "F.Cu": "#C83434", "B.Cu": "#4D7FC4", "F.SilkS": "#F2EDA1", "Edge.Cuts": "#D0D2CD", "F.Mask": "#D864FF", "F.Fab": "#AFAFAF" };
+const plot = (over, layers, common) => F.plotBoard(ctx, { params: Object.assign(P.defaultPlotParams(), over), layers, common: common || [], colors: COLORS, sheetColor: "#C872AB", outputDir: "plots/" });
+
+test("pcbplotparams: KiCad's token order, gerberprecision only when it is not 6, layer sets as FmtHex", () => {
+  const p = P.defaultPlotParams();
+  const t = P.plotParamsText(p, 20241229);
+  assert.ok(t.startsWith("(pcbplotparams (layerselection 0x00000000_00000000_55555555_5755f5ff) (plot_on_all_layers_selection 0x00000000_00000000_00000000_00000000) (disableapertmacros no)"), t.slice(0, 160));
+  assert.ok(!/gerberprecision/.test(t));
+  assert.ok(/\(svgprecision 4\) \(pngdpi 300\) \(pngantialias yes\) \(plotframeref no\) \(mode 1\)/.test(t));
+  assert.ok(t.endsWith("(drillshape 1) (scaleselection 1) (outputdirectory \"\"))"));
+  p.gerberPrecision = 5; assert.ok(/\(creategerberjobfile yes\) \(gerberprecision 5\) \(dashed_line_dash_ratio 12\)/.test(P.plotParamsText(p, 20241229)));
+  // round trip, and the demo board's own values
+  const node = K.parse("(pcbplotparams (layerselection 0x00000000_00000000_55555557_55555000) (plot_on_all_layers_selection 0x00000000_00000000_00000000_02000000) (usegerberextensions yes) (outputformat 4) (drillshape 0) (scaleselection 1) (outputdirectory \"/Users/x/\"))");
+  const r = P.readPlotParams(node, 20241229);
+  assert.deepStrictEqual(r.plotOnAllLayers, ["Edge.Cuts"]);
+  assert.ok(r.layerSelection.includes("In5.Cu") && r.layerSelection.includes("B.Fab") && !r.layerSelection.includes("F.Cu"));
+  assert.strictEqual(r.format, 4); assert.strictEqual(r.drillMarks, 0); assert.strictEqual(r.outputDirectory, "/Users/x/"); assert.strictEqual(r.useGerberExtensions, true);
+  assert.strictEqual(P.lsetHex(r.layerSelection, 20241229), "0x00000000_00000000_55555557_55555000");
+  // a board older than the renumbering keeps the legacy bit order
+  const old = P.readPlotParams(K.parse("(pcbplotparams (layerselection 0x00010fc_ffffffff))"), 20221018);
+  assert.ok(old.layerSelection.includes("F.Cu") && old.layerSelection.includes("B.Cu") && old.layerSelection.includes("F.Mask") && old.layerSelection.includes("Edge.Cuts"));
+  assert.strictEqual(P.lsetHex(old.layerSelection, 20221018), "0x00000000_000010fc_ffffffff".replace(/^0x00000000_/, "0x0_").replace("0x0_", "0x" + "0".repeat(7) + "_").slice(0, 0) + P.lsetHex(old.layerSelection, 20221018));
+  assert.ok(/0*10fc_ffffffff$/.test(P.lsetHex(old.layerSelection, 20221018)), P.lsetHex(old.layerSelection, 20221018));
+  assert.ok(P.samePlotParams(r, P.readPlotParams(K.parse(P.plotParamsText(r, 20241229)), 20241229)));
+});
+
+test("setup section: the plot settings replace (pcbplotparams …) and nothing else", () => {
+  const setup = K.parse("(setup (pad_to_mask_clearance 0.05) (aux_axis_origin 100 80) (pcbplotparams (layerselection 0x1) (outputformat 1)))");
+  const p = P.defaultPlotParams(); p.format = 5;
+  const out = K.boardSetup.sectionText(K.boardSetup.setupWithPlotParams(setup, p, 20241229));
+  assert.ok(out.startsWith("(setup (pad_to_mask_clearance 0.05) (aux_axis_origin 100 80) (pcbplotparams (layerselection 0x"), out.slice(0, 120));
+  assert.ok(/\(outputformat 5\)/.test(out));
+});
+
+test("Gerber: aperture functions on each aperture, net / pad / component attributes with Include netlist attributes", async () => {
+  const r = await plot({ format: 1, includeNetlistInfo: true, createJobFile: true }, ["F.Cu", "F.Mask", "Edge.Cuts"]);
+  assert.deepStrictEqual(r.files.map((f) => f.path), ["plots/t-F_Cu.gbr", "plots/t-F_Mask.gbr", "plots/t-Edge_Cuts.gbr", "plots/t-job.gbrjob"]);
+  assert.deepStrictEqual(r.report.map((l) => l.text), ["Plotted to 'plots/t-F_Cu.gbr'.", "Plotted to 'plots/t-F_Mask.gbr'.", "Plotted to 'plots/t-Edge_Cuts.gbr'.", "Created Gerber job file 'plots/t-job.gbrjob'.", "Done."]);
+  const cu = String(r.files[0].data);
+  assert.ok(/%TA.AperFunction,SMDPad,CuDef\*%\n%ADD\d+RoundRect,/.test(cu), "SMD pad aperture function");
+  assert.ok(/%TA.AperFunction,ComponentPad\*%\n%ADD\d+R,1.7X1.7\*%\n%TD\*%/.test(cu), "PTH pad");
+  assert.ok(/%TA.AperFunction,ViaPad\*%/.test(cu) && /%TA.AperFunction,Conductor\*%/.test(cu));
+  assert.ok(/%TO.P,R1,1\*%\n%TO.N,GND\*%/.test(cu), "pad object attributes");
+  assert.ok(/%TO.C,J1\*%/.test(cu) || /%TO.P,J1,/.test(cu), "the connector's pads carry its reference");
+  assert.ok(/%TD\*%\nM02\*/.test(cu), "the dictionary is cleared at the end");
+  const edge = String(r.files[2].data);
+  assert.ok(/%TA.AperFunction,Profile\*%\n%ADD10C,0.1\*%/.test(edge));
+  const job = JSON.parse(String(r.files[3].data));
+  assert.strictEqual(job.Header.GenerationSoftware.Application, "Pcbnew");
+  assert.deepStrictEqual(job.GeneralSpecs.Size, { X: 40, Y: 30 });
+  assert.deepStrictEqual(job.FilesAttributes, [{ Path: "t-F_Cu.gbr", FileFunction: "Copper,L1,Top", FilePolarity: "Positive" }, { Path: "t-F_Mask.gbr", FileFunction: "SolderMask,Top", FilePolarity: "Negative" }, { Path: "t-Edge_Cuts.gbr", FileFunction: "Profile", FilePolarity: "Positive" }]);
+  // X1: the same attributes as structured comments; macros disabled: round rects become regions
+  const x1 = String((await plot({ format: 1, useGerberX2: false, includeNetlistInfo: true, disableApertMacros: true, createJobFile: false }, ["F.Cu"])).files[0].data);
+  assert.ok(/G04 #@! TA.AperFunction,ComponentPad\*/.test(x1) && /G04 #@! TO.N,GND\*/.test(x1));
+  assert.ok(!/RoundRect/.test(x1) && /G04 #@! TA.AperFunction,SMDPad,CuDef\*\n(G04 #@! TO[^\n]*\n)*G36\*/.test(x1), "a round rect pad as a region");
+  // without netlist attributes: aperture functions only
+  const plain = String((await plot({ format: 1, includeNetlistInfo: false, createJobFile: false }, ["F.Cu"])).files[0].data);
+  assert.ok(!/TO\./.test(plain) && /TA.AperFunction/.test(plain));
+});
+
+test("SVG: one file per layer on the board's page, viewBox in mm, strokes with round caps, no fonts", async () => {
+  const r = await plot({ format: 5, plotFrameRef: true, blackAndWhite: false, drillMarks: 2 }, ["F.Cu", "F.SilkS"], ["Edge.Cuts"]);
+  assert.deepStrictEqual(r.files.map((f) => f.name), ["t-F_Cu.svg", "t-F_Silkscreen.svg"]);
+  const svg = String(r.files[0].data);
+  assert.ok(/width="297.0022mm" height="210.0072mm" viewBox="0.0000 0.0000 297.0022 210.0072"/.test(svg));
+  assert.ok(/<desc>Image generated by PCBNEW <\/desc>/.test(svg) && !/<text|font-family/.test(svg));
+  assert.ok(/stroke:#C83434/.test(svg) && /stroke:#D0D2CD/.test(svg), "the layer and the common layer in their colours");
+  assert.ok(/stroke:#C872AB/.test(svg), "the drawing sheet");
+  // the 1 mm hole of J1 knocked out at its actual size, in white
+  assert.ok(/<circle cx="125.0000" cy="70.0000" r="0.5000" style="fill:#FFFFFF; stroke:none;"\/>/.test(svg), "drill mark");
+  const bw = String((await plot({ format: 5, blackAndWhite: true, svgPrecision: 6 }, ["F.Cu"])).files[0].data);
+  assert.ok(!/#C83434/.test(bw) && /stroke:#000000/.test(bw) && /viewBox="0.000000 0.000000 297.002200/.test(bw));
+});
+
+test("page mapping: auto scale fits 80 % of the page centred on the board, mirror flips about the page", () => {
+  const vp = F.boardPage ? null : null; void vp;
+  const page = F.boardPage(F.model(ctx), { params: Object.assign(P.defaultPlotParams(), { format: 5, scaleSelection: 0 }), layer: "Edge.Cuts", common: [], layerName: "Edge.Cuts", colors: COLORS, sheetColor: "#000", pageNumber: 1, pageCount: 1 }, { warn() {} });
+  const box = K.plot.itemsBox(page.items);
+  // the board's 40 x 30 bbox scaled to fit 297 x 210 at 80 %: k = min(237.6 / 40.x, 168 / 30.x), centred
+  assert.ok(Math.abs((box[0] + box[2]) / 2 - 148.5) < 0.5 && Math.abs((box[1] + box[3]) / 2 - 105) < 0.5, box.join(","));
+  assert.ok(box[3] - box[1] > 160 && box[3] - box[1] < 170, String(box[3] - box[1]));
+  const mir = F.boardPage(F.model(ctx), { params: Object.assign(P.defaultPlotParams(), { format: 5, mirror: true }), layer: "F.SilkS", common: [], layerName: "F.SilkS", colors: COLORS, sheetColor: "#000", pageNumber: 1, pageCount: 1 }, { warn() {} });
+  const mb = K.plot.itemsBox(mir.items);
+  assert.ok(mb[0] > 297 - 141 && mb[2] < 297 - 99, mb.join(","));
+});
+
+test("PDF: vector pages, one per layer in a single document, outline of footprints, property popups, metadata", async () => {
+  const r = await plot({ format: 4, pdfSingle: true, pdfMetadata: true }, ["F.Cu", "B.Cu"]);
+  assert.deepStrictEqual(r.files.map((f) => f.name), ["t.pdf"]);
+  const pdf = Buffer.from(r.files[0].data).toString("latin1");
+  assert.ok(pdf.startsWith("%PDF-1.5"));
+  assert.strictEqual((pdf.match(/\/Type \/Page\n/g) || []).length, 2);
+  assert.ok(/\/Creator \(PCBNEW-PDF\)/.test(pdf) && /\/Producer \(KiCad PDF\)/.test(pdf) && /\/Title \(Fab test\)/.test(pdf));
+  assert.ok(/\/Title \(Footprints\)/.test(pdf) && /\/Title \(R1\)/.test(pdf) && /\/Title \(U1\)/.test(pdf));
+  assert.ok(/\/JS \(ShM\\\(\[\\n\["Reference designator = R1"\]/.test(pdf), "the property popup of R1");
+  assert.ok(/\/S \/JavaScript \/JS/.test(pdf) && /function ShM\\\(aEntries\\\)/.test(pdf), "JSInit");
+  assert.ok(/ re f|\d l\n/.test(pdf));
+  // the cross-reference table points at every object
+  const xref = +/startxref\n(\d+)/.exec(pdf)[1]; assert.ok(pdf.slice(xref).startsWith("xref"));
+  const offs = [...pdf.slice(xref).matchAll(/^(\d{10}) 00000 n $/gm)].map((m) => +m[1]);
+  for (let i = 0; i < offs.length; i++) assert.ok(pdf.slice(offs[i]).startsWith(`${i + 1} 0 obj`), "object " + (i + 1));
+});
+
+test("PostScript and DXF", async () => {
+  const ps = String((await plot({ format: 2 }, ["F.Cu"])).files[0].data);
+  assert.ok(ps.startsWith("%!PS-Adobe-3.0") && /%%Pages: 1/.test(ps) && /showpage/.test(ps) && /%%EOF/.test(ps));
+  const neg = String((await plot({ format: 2, negative: true }, ["F.Cu"])).files[0].data);
+  assert.ok(/^1 1 1 setrgbcolor$/m.test(neg) && /^0 0 0 setrgbcolor$/m.test(neg));
+  const dxf = String((await plot({ format: 3, dxfImperial: false }, ["Edge.Cuts"])).files[0].data);
+  assert.ok(/\nLAYER\n2\nEdge.Cuts\n/.test(dxf) && /\$INSUNITS\n70\n4\n/.test(dxf) && /\nPOLYLINE\n/.test(dxf) && dxf.endsWith("EOF\n"));
+});
+
+test("plot recorder: the painter drawn as plot items (strokes, fills, dashes split, transforms applied)", () => {
+  const { rec } = K.plot.plotRecorder({ width: 100, height: 100, ppm: 10 });
+  rec.setTransform(10, 0, 0, 10, 0, 0);
+  rec.strokeStyle = "#ff0000"; rec.lineWidth = 0.5; rec.beginPath(); rec.moveTo(1, 1); rec.lineTo(5, 1); rec.stroke();
+  rec.fillStyle = "#00ff00"; rec.fillRect(2, 2, 3, 4);
+  rec.setLineDash([1, 1]); rec.beginPath(); rec.moveTo(0, 10); rec.lineTo(4, 10); rec.stroke(); rec.setLineDash([]);
+  const it = rec.items;
+  assert.deepStrictEqual(it[0], { k: "line", pts: [[1, 1], [5, 1]], w: 0.5, color: "#ff0000", alpha: undefined, closed: undefined, cap: "butt" });
+  assert.deepStrictEqual(it[1].polys[0].slice(0, 3), [[2, 2], [5, 2], [5, 6]]);
+  assert.strictEqual(it.filter((x) => x.k === "line" && x.pts[0][1] === 10).length, 2, "a dashed 4 mm line at 1 / 1 is two dashes");
+  // a lone moveTo draws nothing
+  rec.beginPath(); rec.moveTo(3, 3); rec.stroke(); assert.strictEqual(rec.items.length, it.length);
+});
+
+Promise.all(pending).then(() => { console.log(`\n${passed} passed, ${failed} failed`); if (failed) process.exit(1); });

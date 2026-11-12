@@ -16,7 +16,7 @@
 import { isList, kid, num, polyPtsOf, str } from "../canvas/sexpr";
 import { type BoardModel, type Footprint, type Node, type Pad, type PadShape, type Via, isBack, isCopper, isFront, padShapeOn } from "./model";
 import { MAX_ERROR, clockwise, fracture, inflate, primPolys, stadium, union } from "./poly";
-import { type Prim, type Pt, arcPoints, circlePoints, rot } from "./prims";
+import { type GbrMeta, type Prim, type Pt, arcPoints, circlePoints, rot } from "./prims";
 
 export interface PlotOptions {
   plotReference: boolean; plotValue: boolean;
@@ -28,6 +28,8 @@ export interface PlotOptions {
   commonLayers?: string[];
   /** "Do not populate" footprints on the Fab layers: left out, drawn as outlines, crossed out (KiCad draws outlines and a cross). */
   hideDnpOnFab?: boolean; sketchDnpOnFab?: boolean; crossoutDnpOnFab?: boolean;
+  /** "Sketch pads on fabrication layers" and its "Include pad numbers" */
+  sketchPadsOnFab?: boolean; plotPadNumbers?: boolean;
 }
 /** PCB_PLOT_PARAMS::m_sketchPadLineWidth and the Fab layers' default line thickness, mm. */
 const SKETCH_WIDTH = 0.1, FAB_LINE_WIDTH = 0.1;
@@ -442,10 +444,62 @@ function dnpCross(fp: Footprint, m: BoardModel, log: PlotLog, out: Prim[]): void
   out.push({ k: "seg", x1: a[0], y1: a[1], x2: c[0], y2: c[1], w: FAB_LINE_WIDTH }, { k: "seg", x1: b[0], y1: b[1], x2: d[0], y2: d[1], w: FAB_LINE_WIDTH });
 }
 
+/** The net name of a board item node ((net N) or (net "name")). */
+function netOf(n: Node, m: BoardModel): string {
+  const nn = kid(n, "net") as Node | null; if (!nn) return "";
+  return typeof nn[1] === "number" ? (nn.length > 2 ? str(nn[2]) : str(m.doc.nets.get(nn[1]) || "")) : str(nn[1]);
+}
+
+/** BRDITEMS_PLOTTER::PlotPad's GBR_METADATA (plot_brditems_plotter.cpp:162-287). */
+export function padMeta(pad: Pad, layer: string, m: BoardModel): GbrMeta {
+  const ref = pad.fp.ref;
+  if (!isCopper(layer)) return { info: 4, ref };
+  const external = layer === m.copper[0] || layer === m.copper[m.copper.length - 1] || layer === "F.Cu" || layer === "B.Cu";
+  const fnNode = kid(pad.node, "pinfunction") as Node | null;
+  const meta: GbrMeta = { info: external ? 7 : 6, ref, pad: pad.number, pinFn: pad.number && fnNode ? str(fnNode[1]) : "", net: pad.net, af: "Conductor",
+    notInNet: pad.type === "np_thru_hole" || !pad.number };
+  if (pad.type === "np_thru_hole") meta.af = "WasherPad";
+  else if (pad.type === "thru_hole") meta.af = "ComponentPad";
+  else if (pad.type === "connect") { if (external) meta.af = "ConnectorPad"; }
+  else if (pad.type === "smd") { if (external) meta.af = "SMDPad,CuDef"; }
+  switch (pad.property) {
+    case "pad_prop_bga": if (external) meta.af = "BGAPad,CuDef"; break;
+    case "pad_prop_fiducial_glob": meta.af = "FiducialPad,Global"; break;
+    case "pad_prop_fiducial_loc": meta.af = "FiducialPad,Local"; break;
+    case "pad_prop_testpoint": if (external) meta.af = "TestPad"; break;
+    case "pad_prop_heatsink": meta.af = "HeatsinkPad"; break;
+    case "pad_prop_castellated": meta.af = "CastellatedPad"; break;
+    default: break;
+  }
+  if (pad.type === "np_thru_hole") meta.af = "WasherPad";
+  return meta;
+}
+
+/** BRDITEMS_PLOTTER::PlotPadNumber: the number centred on the pad, sized for three characters, turned when the pad is tall. */
+function padNumber(pad: Pad, shape: Prim[], out: Prim[]): void {
+  const text = pad.number; if (!text || !shape.length) return;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of shape) for (const poly of primPolys(p)) for (const q of poly) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); }
+  if (!(x1 > x0)) return;
+  let w = x1 - x0, h = y1 - y0; const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const base = pad.base; const limit = Math.min(base.w, base.h) * 1.1;
+  if (base.shape !== "custom" && w > limit && h > limit) { w = limit; h = limit; }
+  let rotDeg = 0;
+  if (w < h * 0.95) { rotDeg = 90; const t = w; w = h; h = t; }
+  let size = w / Math.max(text.length, 3); size = Math.min(size, h, 5);
+  const pen = size / 12;
+  const C = canvas(); const line = C.strokeLine(text, false);
+  const [ox, oy] = C.strokeOrigin(line.advance, "center", "middle", pen / size, pen / size);
+  const a = -rotDeg * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a);
+  const P = (u: number, v: number): Pt => { const lx = (u + ox) * size, ly = (v + oy) * size; return [cx + lx * c - ly * sn, cy + lx * sn + ly * c]; };
+  for (const st of line.strokes) for (let i = 0; i + 3 < st.length; i += 2) { const p = P(st[i], st[i + 1]), q = P(st[i + 2], st[i + 3]); out.push({ k: "seg", x1: p[0], y1: p[1], x2: q[0], y2: q[1], w: pen }); }
+}
+
 /** The primitives of one layer, in plot order. */
 export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: PlotLog, conn?: Connections): Prim[] {
   const out: Prim[] = [], knock: Prim[] = [];
   const cu = isCopper(layer), mask = /\.Mask$/.test(layer);
+  const tag = (at: number, k0: number, meta: GbrMeta): void => { for (let i = at; i < out.length; i++) if (!out[i].meta) out[i].meta = meta; for (let i = k0; i < knock.length; i++) if (!knock[i].meta) knock[i].meta = meta; };
   const first = m.copper[0], last = m.copper[m.copper.length - 1];
   const connections = conn || new Connections(m);
   const growOf = (g: KGeom): number => (g.layer !== layer && g.maskLayer === layer ? (typeof g.maskMargin === "number" ? g.maskMargin : m.settings.maskExpansion) : 0);
@@ -459,17 +513,25 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
   for (const item of m.doc.items.values()) {
     const k = item.kind;
     if (k === "footprint" || k === "segment" || k === "arc" || k === "via" || k === "zone" || k === "image" || k === "group" || k === "point" || k === "generated" || k === "gr_bbox" || k === "grid_item") continue;
+    const at = out.length, k0 = knock.length;
     for (const g of item.geom) {
       if (g.layer !== layer && g.maskLayer !== layer) continue;
       if (g.hiddenText || g.point) continue;
       useGeom(g);
     }
+    if (out.length > at || knock.length > k0) {
+      const net = item.node ? netOf(item.node, m) : "";
+      const text = /text|dimension|table|barcode/.test(k);
+      tag(at, k0, layer === "Edge.Cuts" ? { af: "Profile" } : !cu ? {} : text || !net ? { af: "NonConductor" } : { af: "Conductor", info: 2, net });
+    }
   }
   // footprint text, then footprint graphics
   const hidden = (fp: Footprint): boolean => fp.dnp && isFab(layer) && !!opt.hideDnpOnFab;
   const fpGeoms = m.footprints.map((fp) => (hidden(fp) ? [] : footprintGeoms(fp, layer, opt)));
-  for (const gs of fpGeoms) for (const g of gs) if (g.t === "text") useGeom(g);
-  for (const gs of fpGeoms) for (const g of gs) if (g.t !== "text") useGeom(g);
+  // GBR_METADATA of footprint items: the component (.C), etched copper on a copper layer, the board profile on Edge.Cuts
+  const fpMeta = (fp: Footprint): GbrMeta => ({ info: 4, ref: fp.ref, af: layer === "Edge.Cuts" ? "Profile" : cu ? "EtchedComponent" : undefined });
+  fpGeoms.forEach((gs, i) => { const at = out.length, k0 = knock.length; for (const g of gs) if (g.t === "text") useGeom(g); tag(at, k0, { info: 4, ref: m.footprints[i].ref, af: cu ? "NonConductor" : undefined }); });
+  fpGeoms.forEach((gs, i) => { const at = out.length, k0 = knock.length; for (const g of gs) if (g.t !== "text") useGeom(g); tag(at, k0, fpMeta(m.footprints[i])); });
 
   // pads
   for (const fp of m.footprints) for (const pad of fp.pads) {
@@ -483,7 +545,22 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       }
       if (pad.type === "thru_hole" && !flashed(pad.removeUnused, pad.keepEnds, pad.zoneLayers, layer, first, last, pad.x, pad.y, Math.max(shape.w, shape.h) / 2, connections)) continue;
     }
+    const at = out.length;
     padPrims(pad, layer, m, out);
+    tag(at, knock.length, padMeta(pad, layer, m));
+  }
+  // "Sketch pads on fabrication layers": the copper outline of the side's pads at the sketch width, with their numbers
+  if (isFab(layer) && opt.sketchPadsOnFab) {
+    const side = layer === "F.Fab" ? "F.Cu" : "B.Cu";
+    for (const fp of m.footprints) {
+      if (hidden(fp)) continue;
+      for (const pad of fp.pads) {
+        if (pad.layers.has(layer) || !pad.layers.has(side)) continue;
+        const shape: Prim[] = []; padPrims(pad, side, m, shape);
+        for (const p of shape) for (const poly of primPolys(p)) polyline(poly, true, SKETCH_WIDTH, {} as KGeom, out);
+        if (opt.plotPadNumbers) padNumber(pad, shape, out);
+      }
+    }
   }
   if (isFab(layer) && !opt.hideDnpOnFab && opt.crossoutDnpOnFab !== false)
     for (const fp of m.footprints) if (fp.dnp && (layer === "F.Fab") === (fp.side !== "B.Cu")) dnpCross(fp, m, log, out);
@@ -501,7 +578,7 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       const cuLayer = front ? "F.Cu" : "B.Cu";
       d = (v.sizes ? v.sizes.get(cuLayer) ?? v.size : v.size) + 2 * m.settings.maskExpansion;
     } else continue;
-    if (d > 0) out.push({ k: "circle", x: v.x, y: v.y, d });
+    if (d > 0) out.push({ k: "circle", x: v.x, y: v.y, d, meta: cu ? { af: "ViaPad", info: 2, net: v.net } : undefined });
   }
 
   // tracks
@@ -512,12 +589,13 @@ export function plotLayer(m: BoardModel, layer: string, opt: PlotOptions, log: P
       w += 2 * (t.maskMargin ?? m.settings.maskExpansion);
     }
     if (!(w > 0)) continue;
-    if (t.arc && Math.hypot(t.x2 - t.x1, t.y2 - t.y1) > 1e-5) out.push({ k: "arc", cx: t.arc.cx, cy: t.arc.cy, r: t.arc.r, a0: t.arc.a0, a1: t.arc.a1, acw: t.arc.acw, w });
-    else out.push({ k: "seg", x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, w });
+    const meta: GbrMeta | undefined = cu ? { af: "Conductor", info: 2, net: t.net || "" } : undefined;
+    if (t.arc && Math.hypot(t.x2 - t.x1, t.y2 - t.y1) > 1e-5) out.push({ k: "arc", cx: t.arc.cx, cy: t.arc.cy, r: t.arc.r, a0: t.arc.a0, a1: t.arc.a1, acw: t.arc.acw, w, meta });
+    else out.push({ k: "seg", x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, w, meta });
   }
 
   // zone fills
-  for (const f of m.fills) if (f.layer === layer) out.push({ k: "region", pts: f.pts });
+  for (const f of m.fills) if (f.layer === layer) out.push({ k: "region", pts: f.pts, meta: cu ? (f.net ? { af: "Conductor", info: 2, net: f.net } : { af: "NonConductor" }) : undefined });
 
   // knockout text goes first: its cleared glyphs must not erase anything plotted before them
   return knock.concat(out);

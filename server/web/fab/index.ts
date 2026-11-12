@@ -17,6 +17,14 @@ import { type FabPreset, PRESETS, presetById, jlcPlacement } from "./presets";
 import { primPolys } from "./poly";
 import { type Prim, type Pt } from "./prims";
 import { type ZipEntry, crc32, zip } from "./zip";
+import { plotBoard, plotFileName, outputPath } from "./plotjob";
+import { writeSvg } from "./svg";
+import { writePdf } from "./pdf";
+import { writePs } from "./ps";
+import { writeDxf } from "./dxf";
+import { paintPage, writePng } from "./raster";
+import { gerberJobFile } from "./gbrjob";
+import { boardPage } from "./pageplot";
 import { type FillProgress, type FillRules, type ZoneFillResult, ZoneFiller, filledZoneNode, polyArea, storedFill } from "./zonefill";
 
 export const VERSION_SUFFIX = "-web";
@@ -83,6 +91,8 @@ function setupNode(setup: Node | string | null | undefined): Node | null {
   if (typeof setup === "string") return (boardHeader(setup).setup as Node | null) || null;
   return setup;
 }
+/** The (setup …) node of a context. */
+export function setupOf(ctx: FabContext): Node | null { return setupNode(ctx.setup); }
 /** The board model for a context (read afresh: the document may have changed since the last call). */
 export function modelOf(ctx: FabContext): BoardModel { return boardModel(ctx.doc, setupNode(ctx.setup)); }
 function isoDate(d: Date): string {
@@ -214,7 +224,7 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
   return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
 }
 
-export const api = { fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+export const api = { plotBoard, writeSvg, writePdf, writePs, writeDxf, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

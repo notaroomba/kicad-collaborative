@@ -18,7 +18,14 @@ export type Prim = (
   /** A flashed polygon: points relative to (x, y), board frame, already rotated. */
   | { k: "poly"; x: number; y: number; pts: Pt[] }
   | { k: "region"; pts: Pt[] }
-) & { clear?: boolean };
+) & { clear?: boolean; meta?: GbrMeta };
+
+/**
+ * GBR_METADATA of a plotted item: the aperture function (%TA.AperFunction) and the object attributes
+ * (%TO.P / %TO.N / %TO.C) a Gerber with netlist attributes carries.  `info` is GBR_NETLIST_METADATA's
+ * attribute mask: 1 pad (.P), 2 net (.N), 4 component (.C).
+ */
+export interface GbrMeta { af?: string; info?: number; net?: string; ref?: string; pad?: string; pinFn?: string; notInNet?: boolean }
 
 export const rad = (deg: number): number => deg * Math.PI / 180;
 

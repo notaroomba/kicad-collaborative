@@ -10,6 +10,7 @@
 // applies (applyBoardSetup) and the desktop skips as an unknown item.
 // Pure functions; KiCadCanvas.boardSetup for the node tests.
 import { kid, kids, num, parse, quotedMask, str } from "./sexpr";
+import { type PlotParams, plotParamsText, readPlotParams } from "./plot-params";
 
 const isList = Array.isArray;
 const quote = (s: string): string => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
@@ -213,7 +214,7 @@ export function dashRatios(setup: SNode | null): DashRatios {
 // ---------------------------------------------------------------- writing the (setup …) section
 /** Serialize a header node the way the reader marked it (strings quoted where the file had them quoted). */
 function ser(node: SNode | string | number, quotedSlot = false): string {
-  if (!isList(node)) return typeof node === "number" ? fmt(node) : quotedSlot || !/^[A-Za-z_][\w.:*+-]*$/.test(node) ? quote(node) : node;
+  if (!isList(node)) return typeof node === "number" ? fmt(node) : quotedSlot || !(/^[A-Za-z_][\w.:*+-]*$/.test(node) || /^0x[0-9a-fA-F_]+$/.test(node)) ? quote(node) : node;
   const q = quotedMask(node) as number;
   return "(" + node.map((c, j) => ser(c as SNode | string | number, j > 0 && j < 30 && ((q >> j) & 1) === 1)).join(" ") + ")";
 }
@@ -282,6 +283,15 @@ export function editSetup(setup: SNode | null, e: SetupEdit): SNode {
 }
 export const sectionText = (node: SNode): string => ser(node);
 
+/** A copy of the (setup …) node with its (pcbplotparams …) replaced (appended when it has none: it is the section's last token). */
+export function setupWithPlotParams(setup: SNode | null, p: PlotParams, version: number): SNode {
+  const out = (setup ? parse(ser(setup)) : parse("(setup)")) as SNode;
+  const node = parse(plotParamsText(p, version)) as SNode;
+  for (let j = 1; j < out.length; j++) { const c = out[j]; if (isList(c) && c[0] === "pcbplotparams") { out[j] = node; return out; } }
+  out.push(node);
+  return out;
+}
+
 // ---------------------------------------------------------------- the BOARD_SETUP change
 export const BOARD_SETUP_TYPE = "BOARD_SETUP";
 export function boardSetupChange(sections: { layers?: string; setup?: string; general?: string }): KChange {
@@ -319,4 +329,4 @@ export function applyBoardSetup(doc: KDoc, change: KChange): boolean {
 }
 
 export const boardSetup = { boardHeader, layerRows, layersText, setCopperCount, copperNames, layerNameError, defaultLayerName, modernLayerIds, stackupRows, stackupThickness, boardFinish, maskPaste, dashRatios,
-  editSetup, sectionText, boardSetupChange, applyHeaderChange, applyBoardSetup, COPPER_FINISHES, COPPER_TYPES, USER_TYPES, BOARD_SETUP_TYPE };
+  editSetup, sectionText, setupWithPlotParams, readPlotParams, plotParamsText, boardSetupChange, applyHeaderChange, applyBoardSetup, COPPER_FINISHES, COPPER_TYPES, USER_TYPES, BOARD_SETUP_TYPE };
