@@ -89,7 +89,43 @@ fn host_of(url: &str) -> &str {
     url.split("//").nth(1).and_then(|r| r.split('/').next()).unwrap_or(url)
 }
 
-type Index = Arc<Vec<Value>>;
+/// The repository's plugin packages and the icons from its resources archive.
+pub struct Repo {
+    packages: Vec<Value>,
+    icons: HashMap<String, Arc<Vec<u8>>>,
+}
+type Index = Arc<Repo>;
+
+const MAX_ICON_BYTES: usize = 256 * 1024;
+const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+/// The icons KiCad's Plugin and Content Manager shows: `<identifier>/icon.png` in the repository's resources archive.
+/// An archive that is missing or broken leaves the list without icons rather than failing it.
+async fn icons_of(repo: &Value) -> HashMap<String, Arc<Vec<u8>>> {
+    let mut out = HashMap::new();
+    let Some(url) = repo.pointer("/resources/url").and_then(Value::as_str) else { return out };
+    let Ok(raw) = fetch(url, MAX_ZIP_BYTES * 2).await else { return out };
+    if let Some(want) = repo.pointer("/resources/sha256").and_then(Value::as_str) {
+        if !want.eq_ignore_ascii_case(&hex(&Sha256::digest(&raw))) {
+            return out;
+        }
+    }
+    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(raw)) else { return out };
+    for i in 0..archive.len() {
+        let Ok(mut entry) = archive.by_index(i) else { continue };
+        let name = entry.name().replace('\\', "/");
+        let Some(identifier) = name.strip_suffix("/icon.png") else { continue };
+        if identifier.is_empty() || identifier.contains('/') || entry.size() as usize > MAX_ICON_BYTES {
+            continue;
+        }
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        if (&mut entry).take(MAX_ICON_BYTES as u64 + 1).read_to_end(&mut bytes).is_err() || bytes.len() > MAX_ICON_BYTES || !bytes.starts_with(PNG_MAGIC) {
+            continue;
+        }
+        out.insert(identifier.to_string(), Arc::new(bytes));
+    }
+    out
+}
 
 /// The repository's plugin packages, cached for an hour.
 async fn index() -> AppResult<Index> {
@@ -113,7 +149,8 @@ async fn index() -> AppResult<Index> {
         }
         let list: Value = serde_json::from_slice(&raw).map_err(|_| bad("KiCad's package list is not JSON"))?;
         let packages = list.get("packages").and_then(Value::as_array).cloned().unwrap_or_default();
-        Ok(Arc::new(packages.into_iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("plugin")).collect()))
+        let packages = packages.into_iter().filter(|p| p.get("type").and_then(Value::as_str) == Some("plugin")).collect();
+        Ok(Arc::new(Repo { packages, icons: icons_of(&repo).await }))
     }
     .await;
     match loaded {
@@ -179,8 +216,8 @@ fn manifest_of(pkg: &Value, version: &Value) -> Value {
 /// `GET /api/plugins/pcm` — KiCad's official plugins, with how each fares in the web editor.
 pub async fn list() -> AppResult<Json<Value>> {
     let idx = index().await?;
-    let mut out = Vec::with_capacity(idx.len());
-    for pkg in idx.iter() {
+    let mut out = Vec::with_capacity(idx.packages.len());
+    for pkg in idx.packages.iter() {
         let Some(version) = pick_version(pkg) else { continue };
         let identifier = pkg.get("identifier").and_then(Value::as_str).unwrap_or("");
         if identifier.is_empty() {
@@ -192,6 +229,7 @@ pub async fn list() -> AppResult<Json<Value>> {
             "details": clip(pkg.get("description_full").and_then(Value::as_str).unwrap_or(""), 1500),
             "size": version.get("download_size").and_then(Value::as_u64).unwrap_or(0),
             "compat": compat_of(identifier),
+            "icon": idx.icons.contains_key(identifier),
         }));
     }
     out.sort_by(|a, b| {
@@ -199,6 +237,19 @@ pub async fn list() -> AppResult<Json<Value>> {
         name(a).cmp(&name(b))
     });
     Ok(Json(json!({ "plugins": out })))
+}
+
+/// `GET /api/plugins/pcm/{identifier}/icon` — the plugin's icon from KiCad's repository, a PNG.
+pub async fn icon(Path(identifier): Path<String>) -> Response {
+    let Ok(idx) = index().await else { return StatusCode::NOT_FOUND.into_response() };
+    match idx.icons.get(&identifier) {
+        Some(bytes) => (
+            [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=3600"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")],
+            bytes.as_ref().clone(),
+        )
+            .into_response(),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 fn is_text(path: &str, body: &[u8]) -> bool {
@@ -254,7 +305,7 @@ fn unpack(zip_bytes: Vec<u8>) -> AppResult<Map<String, Value>> {
 /// Download and unpack one official package: its repository entry, the version picked, its files.
 async fn load(identifier: &str) -> AppResult<(Value, Value, Map<String, Value>)> {
     let idx = index().await?;
-    let pkg = idx.iter().find(|p| p.get("identifier").and_then(Value::as_str) == Some(identifier)).ok_or(AppError::NotFound)?;
+    let pkg = idx.packages.iter().find(|p| p.get("identifier").and_then(Value::as_str) == Some(identifier)).ok_or(AppError::NotFound)?;
     let version = pick_version(pkg).ok_or_else(|| bad("that plugin has no downloadable version"))?;
     let url = version.get("download_url").and_then(Value::as_str).unwrap_or("");
     let zip_bytes = fetch(url, MAX_ZIP_BYTES).await?;

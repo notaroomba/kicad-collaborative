@@ -679,11 +679,21 @@ if (process.env.PCM_META && process.env.PCM_ZIPS) {
   }
 }
 const list = Buffer.from(JSON.stringify({ packages }));
-const repository = JSON.stringify({ name: 'test repository', packages: { url: `${pcmBase}/packages.json`, sha256: crypto.createHash('sha256').update(list).digest('hex'), update_timestamp: 1767225600 } });
+// the repository's resources archive: <identifier>/icon.png, as KiCad's Plugin and Content Manager reads it.  One plugin
+// has an icon, one has a file that is not a PNG (ignored), the rest have none.
+function png(size, rgb) {
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const body = Buffer.concat([Buffer.from(type), data]); const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(body) >>> 0); return Buffer.concat([len, body, crc]); };
+  const head = Buffer.alloc(13); head.writeUInt32BE(size, 0); head.writeUInt32BE(size, 4); head[8] = 8; head[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.concat(Array.from({ length: size }, () => Buffer.from(rgb)))]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', head), chunk('IDAT', zlib.deflateSync(Buffer.concat(Array.from({ length: size }, () => row)))), chunk('IEND', Buffer.alloc(0))]);
+}
+const resourcesZip = zip({ [`${ID}/icon.png`]: png(64, [40, 160, 90]), [`${IPC_ID}/icon.png`]: Buffer.from('<svg onload="alert(1)"/>') });
+const repository = JSON.stringify({ name: 'test repository', resources: { url: `${pcmBase}/resources.zip`, sha256: crypto.createHash('sha256').update(resourcesZip).digest('hex'), update_timestamp: 1767225600 }, packages: { url: `${pcmBase}/packages.json`, sha256: crypto.createHash('sha256').update(list).digest('hex'), update_timestamp: 1767225600 } });
 const pcm = http.createServer((req, res) => {
   const url = decodeURIComponent((req.url || '/').split('?')[0]);
   if (url === '/repository.json') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(repository); return; }
   if (url === '/packages.json') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(list); return; }
+  if (url === '/resources.zip') { res.writeHead(200, { 'content-type': 'application/zip' }); res.end(resourcesZip); return; }
   const z = url.startsWith('/zips/') ? zips[url.slice(6)] : null;
   if (z) { res.writeHead(200, { 'content-type': 'application/zip' }); res.end(z); return; }
   // the "web service" the test plugin talks to: it answers with what reached it
@@ -765,6 +775,12 @@ await a.waitForSelector('#pluginManager');
 await a.click('#pluginManager [data-tab="kicad"]');
 await a.waitForSelector(`#pluginKicad [data-plugin="${ID}"]`, { timeout: 30000 });
 check("KiCad's repository is listed in the manager", (await a.locator('#pluginKicad .plg-card').count()) === packages.length, `${await a.locator('#pluginKicad .plg-card').count()} of ${packages.length}`);
+const iconOf = (id) => a.locator(`#pluginKicad [data-plugin="${id}"] .plg-icon`);
+await a.waitForFunction((id) => { const i = document.querySelector(`#pluginKicad [data-plugin="${id}"] img.plg-icon`); return i && i.complete && i.naturalWidth > 0; }, ID, { timeout: 10000 }).catch(() => {});
+check("a plugin shows its icon from KiCad's repository", (await iconOf(ID).evaluate((i) => i.tagName === 'IMG' && i.naturalWidth === 64 && i.getBoundingClientRect().width === 48).catch(() => false)) === true);
+check('a plugin without an icon, or with one that is not a PNG, shows the plain mark', (await iconOf(IPC_ID).evaluate((i) => i.tagName).catch(() => '')) === 'SPAN' && (await iconOf(DESK_ID).evaluate((i) => i.tagName).catch(() => '')) === 'SPAN');
+const iconHead = await a.evaluate(async (ids) => Promise.all(ids.map(async (id) => { const r = await fetch(`/api/plugins/pcm/${id}/icon`); return [r.status, r.headers.get('content-type')]; })), [ID, IPC_ID]);
+check('the icon is served as a PNG and nothing else', iconHead[0][0] === 200 && iconHead[0][1] === 'image/png' && iconHead[1][0] === 404, JSON.stringify(iconHead));
 await a.fill('#pluginKicadSearch', 'py tool');
 await a.waitForTimeout(150);
 check('the list can be searched', (await a.locator('#pluginKicad .plg-card').count()) === 1);

@@ -265,6 +265,7 @@ function InstalledTab() {
         {s.installed.map((p) => { const run = s.running[p.identifier]; return (
           <li key={p.identifier} className={cx(sel && sel.identifier === p.identifier && "on")} data-plugin={p.identifier} onClick={() => setManager({ selected: p.identifier })}>
             <span className={cx("state", p.withdrawn ? "bad" : !p.enabled ? "off" : run ? (run.failed ? "bad" : run.ready ? "run" : "wait") : "idle")} title={p.withdrawn ? "Taken out of the registry by the administrators" : !p.enabled ? "Disabled" : run ? (run.failed ? "Failed to start" : "Running") : "Starts when you open a project"} />
+            {p.source.startsWith("kicad") ? <PcmIcon identifier={p.identifier} has small /> : null}
             <span className="nm">{p.manifest.name}</span><span className="ver">{p.manifest.version || ""}</span>
           </li>
         ); })}
@@ -286,6 +287,7 @@ function Detail({ p }: { p: InstalledPlugin }) {
   return (
     <div className="plg-detail" id="pluginDetail">
       <div className="plg-row">
+        {p.source.startsWith("kicad") ? <PcmIcon identifier={p.identifier} has /> : null}
         <h2>{m.name}</h2><span className="plg-muted">{m.version || ""}</span><span className="grow" />
         <label className="plg-switch"><input type="checkbox" id="pluginEnabled" checked={p.enabled} onChange={(e) => { if (e.target.checked && p.withdrawn && !confirm(`The administrators took ${m.name} out of the registry:\n\n${p.withdrawn}\n\nSwitch it on anyway?`)) return; void setEnabled(p.identifier, e.target.checked); }} /> Enabled</label>
       </div>
@@ -332,6 +334,14 @@ function Detail({ p }: { p: InstalledPlugin }) {
 
 const COMPAT_LABEL: Record<Compat["status"], string> = { works: "Runs here", partly: "Partly runs", limited: "Limited here", unsupported: "Does not run here yet", untested: "Not tested yet" };
 /** KiCad's own repository: the plugins the desktop's Plugin and Content Manager lists, runnable here through the Python runtime. */
+/** A KiCad repository plugin's own icon, as KiCad's Plugin and Content Manager shows it; a plain plug mark when it has none. */
+function PcmIcon({ identifier, has, small }: { identifier: string; has: boolean; small?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  return has && !failed
+    ? <img className={cx("plg-icon", small && "sm")} src={`/api/plugins/pcm/${encodeURIComponent(identifier)}/icon`} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
+    : <span className={cx("plg-icon none", small && "sm")} aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v5M15 3v5M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v3" /></svg></span>;
+}
+
 function KicadTab() {
   const s = usePlugins((x) => x); const [q, setQ] = useState(""); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState<string | null>(null); const [all, setAll] = useState(false);
   useEffect(() => { void loadOfficial(); }, []);
@@ -352,13 +362,16 @@ function KicadTab() {
       {err ? <p className="plg-err" id="pluginKicadInstallErr">{err}</p> : null}
       {!list.length && !s.officialError ? <div className="plg-empty">Nothing matches.</div> : null}
       {list.map((e) => { const m = e.manifest; const cur = have(m.identifier); const newer = cur && (cur.manifest.version || "") !== (m.version || ""); const c = e.compat; return (
-        <div className="plg-card" key={e.identifier} data-plugin={e.identifier}>
+        <div className="plg-card with-icon" key={e.identifier} data-plugin={e.identifier}>
+          <PcmIcon identifier={e.identifier} has={!!e.icon} />
+          <div className="plg-card-body">
           <div className="plg-row"><b>{m.name}</b><span className="plg-muted">{m.version || ""}</span>{m.author ? <span className="plg-muted">by {m.author}</span> : null}<span className="grow" />
             {c ? <span className={cx("plg-compat", c.status)} title={c.note || ""}>{COMPAT_LABEL[c.status] || c.status}</span> : <span className="plg-compat" title="Newer than this editor's test run">Not tested yet</span>}</div>
           <p>{m.description}</p>
           {c && c.note && c.status !== "works" ? <p className="plg-muted">{c.note}</p> : null}
           <div className="plg-row"><span className="plg-muted perms">{e.identifier}{e.size ? ` · ${e.size >= 1048576 ? `${(e.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(e.size / 1024))} kB`}` : ""}{m.homepage && /^https:\/\//.test(m.homepage) ? <> · <a href={m.homepage} target="_blank" rel="noreferrer noopener">homepage ↗</a></> : null}</span><span className="grow" />
             {cur && !newer ? <span className="plg-muted">Installed</span> : <button type="button" className="btn sm primary" data-install={e.identifier} disabled={busy !== null} onClick={() => void install(e)}>{busy === e.identifier ? "Downloading…" : newer ? "Update…" : "Install…"}</button>}</div>
+          </div>
         </div>
       ); })}
     </div>
