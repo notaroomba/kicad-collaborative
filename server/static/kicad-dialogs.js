@@ -116,7 +116,7 @@ function open(spec) {
   ov.addEventListener("keydown", (ev) => {
     ev.stopPropagation();
     if (ev.key === "Escape") { ev.preventDefault(); finish(false); }
-    else if (ev.key === "Enter" && ev.target && ev.target.closest && ev.target.closest(".kd-grid")) { ev.preventDefault(); ev.target.blur(); }   // Enter in a grid cell commits the cell, as in a wxGrid
+    else if (ev.key === "Enter" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey && ev.target && ev.target.closest && ev.target.closest(".kd-grid")) { ev.preventDefault(); ev.target.blur(); }   // Enter in a grid cell commits the cell, as in a wxGrid
     // multi-line text: Enter is a new line, Shift/Ctrl+Enter is OK (SCINTILLA_TRICKS, DIALOG_SHIM)
     else if (ev.key === "Enter" && !(ev.target && ev.target.tagName === "TEXTAREA" && !ev.ctrlKey && !ev.metaKey && !ev.shiftKey) && !(ev.target && ev.target.tagName === "BUTTON")) { ev.preventDefault(); if (spec.buttons) { if (defaultBtn && !defaultBtn.disabled) defaultBtn.click(); } else finish(true); }
   });

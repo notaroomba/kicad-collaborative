@@ -64,6 +64,15 @@ function toggle(label: string, title: string, on: boolean, id: string, style = "
   b.addEventListener("click", () => { if (b.dataset.group) { for (const s of Array.from(b.parentElement ? b.parentElement.querySelectorAll(`[data-group="${b.dataset.group}"]`) : [])) { s.classList.remove("on"); s.setAttribute("aria-pressed", "false"); } b.classList.add("on"); b.setAttribute("aria-pressed", "true"); } else { const now = !b.classList.contains("on"); b.classList.toggle("on", now); b.setAttribute("aria-pressed", now ? "true" : "false"); } });
   return b;
 }
+/** SetInitialFocus: a dialog opened by a click keeps its first control focused once the click's pointerup lands. */
+function initialFocus(el: HTMLInputElement | HTMLTextAreaElement | null): void {
+  if (!el) return;
+  const f = (): void => { if (document.contains(el)) { el.focus(); el.select(); } };
+  setTimeout(f, 0);
+  const up = (): void => { setTimeout(f, 0); };
+  window.addEventListener("pointerup", up, { once: true, capture: true });
+  setTimeout(() => window.removeEventListener("pointerup", up, { capture: true }), 1500);
+}
 const isOn = (b: HTMLElement): boolean => b.classList.contains("on");
 function radioGroup(name: string, opts: [string, string][], value: string, onPick?: (v: string) => void): HTMLElement {
   const box = h("div", { style: "display:grid;grid-template-columns:repeat(2,max-content);gap:3px 18px" });
@@ -225,7 +234,7 @@ export function openLabelDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       }
       bottom.append(fm); b.append(bottom);
       // a directive label starts in the first field's value (SetInitialFocus( m_grid ), m_delayedFocusRow 0)
-      if (dir) setTimeout(() => { const v = b.querySelector(".kd-grid tbody tr input[data-col=value]") as HTMLInputElement | null; if (v) { v.focus(); v.select(); } }, 0);
+      initialFocus(dir ? b.querySelector(".kd-grid tbody tr input[data-col=value]") as HTMLInputElement | null : textEl);
     },
     ok() {
       if (ro || !body || !grid) return;
@@ -312,6 +321,7 @@ export function openTextDialog(ctx: Ctx, item: KItem, opts: ItemOpts): void {
       const ex = checkbox("Exclude from simulation", exclude, undefined, { id: "kd-txt-exsim" }); els.exsim = ex.querySelector("input") as HTMLInputElement;
       g.append(h("span"), ex, h("span"));
       b.append(g);
+      initialFocus(ta);
     },
     ok() {
       if (ro || !body) return;
