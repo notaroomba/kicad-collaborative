@@ -953,7 +953,7 @@ function placeCarry(ctx, mm, ev) {
   c.pos = p; c.item = ghost(ctx.doc, c.node); ctx.requestRender();
 }
 function refreshCarry(ctx) { const c = S.carry; if (c) { c.item = ghost(ctx.doc, c.node); ctx.requestRender(); } }
-function cancelCarry(ctx) { S.carry = null; ctx.requestRender(); }
+function cancelCarry(ctx) { S.carry = null; S.labelQueue = null; ctx.requestRender(); }
 function dropCarry(ctx) {
   const c = S.carry; if (!c) return null; S.carry = null;
   const doc = ctx.doc, p = anchorOf(c.kind, c.node);
@@ -965,6 +965,8 @@ function dropCarry(ctx) {
   ctx.commit(changes, c.kind === "symbol" ? "place " + (item.ref || "symbol") : c.kind.replace("_", " "));
   rememberPlaced(item.kind, item.node);
   if (c.kind === "symbol" || c.kind === "sheet") ctx.setSelected({ id: item.id }); else { S.sel = item.id; ctx.setSelected(null); }
+  // the dialog's multiple-label list: the next label rides on the cursor (itemsToPlace)
+  if (S.labelQueue && S.labelQueue.length && (TEXT_KINDS.has(c.kind) || c.kind === "netclass_flag")) { const next = S.labelQueue.shift(); startCarry(ctx, c.kind, next, p); }
   ctx.requestRender();
   return item;
 }
@@ -1866,17 +1868,56 @@ function onKeyCapture(ev) {
   }
 }
 // KiCad's label and text tools (SCH_DRAWING_TOOLS::createNewLabel / createNewText) open the properties dialog
-// of the new item first; OK puts it on the cursor and the next click places it.  The shape picked for a
-// global / hierarchical label is remembered for the next one (m_lastGlobalLabelShape).
+// of the new item first; OK puts it on the cursor and the next click places it.  A local or global label clicked
+// onto a wire whose net is driven by a label takes that name with no dialog (findWireLabelDriverName).  New labels
+// take the schematic's default text size and the bold / italic / orientation / shape last used
+// (m_lastTextBold, m_lastTextItalic, m_lastTextOrientation, m_lastGlobalLabelShape, m_lastNetClassFlagShape); the
+// dialog's "Multiple label input" list is placed one label per click.
+function wireAtPoint(doc, p) {
+  for (const it of doc.items.values()) if (it.kind === "wire") for (const [a, b] of segs(it)) if (segDist(p, a, b) < 1e-6) return it;
+  return null;
+}
+function labelDefaults() { const d = S.netHL && S.netHL.labelDefaults ? S.netHL.labelDefaults() : null; return { textSize: d && d.textSize > 0 ? d.textSize : 1.27, intersheetRefsShow: !!(d && d.intersheetRefsShow) }; }
+const SPIN_ROT = [0, 90, 180, 270];
+function newLabelNode(ctx, kind, p) {
+  const d = labelDefaults(), spin = S.lastTextSpin || 0, rot = SPIN_ROT[spin] || 0;
+  let node;
+  if (kind === "netclass_flag") {
+    node = classLabelNode("", p, rot);
+    const sh = kid(node, "shape"); if (sh && S.lastFlagShape) sh[1] = S.lastFlagShape;
+    // createNewLabel: a Netclass field and an italic, visible Component Class field
+    const nc = kids(node, "property").find((q) => str(q[1]) === "Netclass");
+    const cc = ["property", "Component Class", "", deep(kid(nc, "at")), ["effects", ["font", ["size", d.textSize, d.textSize], ["italic", "yes"]], ["justify", "left", "bottom"]]];
+    node.splice(node.indexOf(nc) + 1, 0, cc);
+    return node;
+  }
+  if (kind === "text") {
+    node = labelNode("text", "", p, S.lastTextVertical ? 90 : 0);
+    const e = kid(node, "effects"), f = kid(e, "font"); replaceKid(f, ["size", d.textSize, d.textSize]);
+    if (S.lastTextBold) f.push(["bold", "yes"]); if (S.lastTextItalic) f.push(["italic", "yes"]);
+    if (S.lastTextH || S.lastTextV) { const jv = []; if (S.lastTextH && S.lastTextH !== "center") jv.push(S.lastTextH); if (S.lastTextV && S.lastTextV !== "center") jv.push(S.lastTextV); replaceKid(e, ["justify", ...jv]); if (!jv.length) e.splice(e.indexOf(kid(e, "justify")), 1); }
+    return node;
+  }
+  node = labelNode(kind, "", p, rot);
+  const e = kid(node, "effects"), f = kid(e, "font"); replaceKid(f, ["size", d.textSize, d.textSize]);
+  if (S.lastTextBold) f.push(["bold", "yes"]); if (S.lastTextItalic) f.push(["italic", "yes"]);
+  if ((kind === "global_label" || kind === "hierarchical_label") && S.lastLabelShape) { const sh = kid(node, "shape"); if (sh) sh[1] = S.lastLabelShape; }
+  if (kind === "global_label") { const isr = kids(node, "property").find((q) => str(q[1]) === "Intersheetrefs"); if (isr) { const hd = kid(isr, "hide"); if (d.intersheetRefsShow && hd) isr.splice(isr.indexOf(hd), 1); } }
+  return node;
+}
 function promptFor(ctx, kind, mm, client) {
   const p = ctx.snap([mm[0], mm[1]]).map(r4);
   const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
   if (KD && KD.openNew && !ctx.viewOnly) {
-    const node = labelNode(kind, "", p, 0);
-    if ((kind === "global_label" || kind === "hierarchical_label") && S.lastLabelShape) { const sh = kid(node, "shape"); if (sh) sh[1] = S.lastLabelShape; }
-    KD.openNew(ctx, kind, node, (staged) => {
-      if (!str(staged[1]).trim()) { ctx.toast(kind === "text" ? "Text can not be empty." : "Label can not be empty."); return false; }
+    const node = newLabelNode(ctx, kind, p);
+    if ((kind === "label" || kind === "global_label") && S.netHL && S.netHL.wireDriverName) {
+      const w = wireAtPoint(ctx.doc, p), name = w ? S.netHL.wireDriverName(w.id) : "";
+      if (name) { node[1] = name; startCarry(ctx, kind, node, S.cursor || p); return; }   // Auto-create from attached wire
+    }
+    KD.openNew(ctx, kind, node, (staged, more) => {
+      if (kind !== "netclass_flag" && !str(staged[1]).trim()) { ctx.toast(kind === "text" ? "Text can not be empty." : "Label can not be empty."); return false; }
       const sh = kid(staged, "shape"); if (sh && (kind === "global_label" || kind === "hierarchical_label")) S.lastLabelShape = str(sh[1]);
+      S.labelQueue = Array.isArray(more) ? more.slice() : [];
       startCarry(ctx, kind, staged, S.cursor || p);
     });
     return;
@@ -1884,8 +1925,10 @@ function promptFor(ctx, kind, mm, client) {
   const title = kind === "text" ? "Text" : kind === "label" ? "Net label" : kind === "global_label" ? "Global label" : "Hierarchical label";
   promptImpl(title, "", client, (text) => { if (text) placeText(ctx, kind, text, p, 0); });
 }
-// Directive label: the netclass name comes from the inline prompt, the flag lands on the grid point clicked.
+// Directive label: the label dialog first (Netclass and Component Class fields), then the flag rides on the cursor.
 function promptClassLabel(ctx, mm, client) {
+  const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+  if (KD && KD.openNew && !ctx.viewOnly) { promptFor(ctx, "netclass_flag", mm, client); return; }
   const p = ctx.snap([mm[0], mm[1]]).map(r4);
   promptImpl("Netclass", "", client, (name) => { if (name) placeClassLabel(ctx, name, p, 0); });
 }
@@ -1971,6 +2014,29 @@ function placeSheet(ctx, a, b, name, file) {
       if (S.sheetJob !== job || ctx.doc !== doc) return null;
       const node = sheetNode(a, b, name, ref.file);
       const inst = sheetInstance(ctx, doc, nextPage(ctx, doc)); if (inst) node.push(inst);
+      const { item, change } = addNode(doc, node);
+      ctx.commit([change], "sheet");
+      rememberPlaced(item.kind, item.node);
+      ctx.setSelected({ id: item.id });
+      return item;
+    } catch (e) { ctx.toast("Could not create the sheet: " + ((e && e.message) || e), 4000); return null; }
+    finally { if (S.sheetJob === job) S.sheetJob = null; ctx.requestRender(); }
+  })();
+  return job.promise;
+}
+// The sheet from DIALOG_SHEET_PROPERTIES: its file is linked (after asking, when it exists) or created, then the sheet is added.
+function placeSheetNode(ctx, node, file) {
+  if (S.sheetJob) { ctx.toast("Still creating the previous sheet…"); return S.sheetJob.promise; }
+  const doc = ctx.doc, job = { doc, promise: null }; S.sheetJob = job;
+  job.promise = (async () => {
+    try {
+      file = normSheetFile(file);
+      const cur = currentDoc(ctx), dir = cur ? dirName(cur.path) : "", target = joinPath(dir, file);
+      const exists = schDocs(ctx).find((x) => x.path === target || x.path === file);
+      if (exists && root.KDialogs && root.KDialogs.confirm && !(await root.KDialogs.confirm("Confirmation", `'${baseName(file)}' already exists.\n\nLink '${target}' to this file?`))) return null;
+      const ref = await ensureSheetDoc(ctx, file);
+      if (S.sheetJob !== job || ctx.doc !== doc) return null;
+      const fp = kids(node, "property").find((q) => /^Sheet ?file$/i.test(str(q[1]))); if (fp) fp[2] = ref.file;
       const { item, change } = addNode(doc, node);
       ctx.commit([change], "sheet");
       rememberPlaced(item.kind, item.node);
@@ -2099,8 +2165,20 @@ function finishDraw(ctx) {
     return;
   }
   else if (d.shape === "sheet") {
-    // the rectangle is fixed; the name and file name come from two prompts, then the file is created
+    // the rectangle is fixed; DIALOG_SHEET_PROPERTIES opens on "Untitled Sheet" / "untitled.kicad_sch", then the file is made
     d.await = true; ctx.requestRender();
+    const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+    if (KD && KD.schItemDialog && !ctx.viewOnly) {
+      const sn = sheetNode(pts[0], pts[1], "Untitled Sheet", "untitled" + SHEET_EXT);
+      const inst = sheetInstance(ctx, ctx.doc, nextPage(ctx, ctx.doc)); if (inst) sn.push(inst);
+      const it = { id: "", kind: "sheet", node: sn, geom: [], bbox: null };
+      KD.schItemDialog(ctx, it, { cancel() { if (S.draw === d) { S.draw = null; ctx.requestRender(); } }, onCreate(staged) {
+        if (S.draw !== d) return; S.draw = null;
+        const fp = kids(staged, "property").find((q) => /^Sheet ?file$/i.test(str(q[1])));
+        placeSheetNode(ctx, staged, fp ? str(fp[2]) : "untitled" + SHEET_EXT);
+      } });
+      return;
+    }
     promptImpl("Sheet name", "", S.cursorClient, (name) => {
       if (S.draw !== d) return;
       if (!name) { S.draw = null; ctx.requestRender(); return; }
@@ -2112,8 +2190,15 @@ function finishDraw(ctx) {
     return;
   }
   else if (d.shape === "textbox") {
-    // the box is fixed, the text comes from the inline prompt; Escape there drops the box
+    // the box is fixed; DIALOG_TEXT_PROPERTIES opens for its text, Cancel drops the box
     d.await = true; ctx.requestRender();
+    const KD = typeof root.KDialogs !== "undefined" ? root.KDialogs : null;
+    if (KD && KD.openNew && !ctx.viewOnly) {
+      const tb = textBoxNode("", pts[0], pts[1]);
+      KD.openItem(ctx, { id: "", kind: "text_box", node: tb, geom: [], bbox: null }, { generic: true, cancel() { if (S.draw === d) { S.draw = null; ctx.requestRender(); } },
+        onCreate(staged) { if (S.draw !== d) return; S.draw = null; commitShape(ctx, staged, "text box"); ctx.requestRender(); } });
+      return;
+    }
     promptImpl("Text box", "", S.cursorClient, (text) => { if (S.draw !== d) return; S.draw = null; if (text) commitShape(ctx, textBoxNode(text, pts[0], pts[1]), "text box"); ctx.requestRender(); });
     return;
   }
@@ -2448,7 +2533,7 @@ function onPointerDown(ev, mm, ctx) {
     else openPowerPicker(ctx, S.cursorClient);
     return true;
   }
-  if (t.id === "classlabel") { promptClassLabel(ctx, mm, S.cursorClient); return true; }
+  if (t.id === "classlabel") { if (S.carry) { placeCarry(ctx, mm); dropCarry(ctx); } else promptClassLabel(ctx, mm, S.cursorClient); return true; }
   if (t.id === "image") { if (S.carry) { placeCarry(ctx, mm); dropCarry(ctx); } else openImagePicker(ctx); return true; }
   if (t.id === "sheetpin") { sheetPinClick(ctx, mm); return true; }
   if (t.id === "highlight") { highlightClick(ctx, mm); return true; }   // empty space clears it
@@ -3212,6 +3297,8 @@ function editFieldPrompt(ctx, name, title, quiet) {
   if (!editable(ctx)) return false;
   const it = selectedItems(ctx).find((x) => x.kind === "symbol"); if (!it) return false;
   const p = kids(it.node, "property").find((q) => str(q[1]) === name); const cur = p ? str(p[2]) : "";
+  // SCH_EDIT_TOOL::editFieldText: DIALOG_FIELD_PROPERTIES ("Edit Reference Designator Field", …)
+  if (p && root.KDialogs && root.KDialogs.schFieldDialog && root.KDialogs.schFieldDialog(ctx, it, name)) return true;
   promptImpl(title, cur, S.cursorClient, (text) => {
     if (text === null || text === undefined || text === cur) return;
     const node = deep(it.node);

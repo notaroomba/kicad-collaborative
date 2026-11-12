@@ -192,6 +192,7 @@ interface KDialogsApi {
   isOpen(): boolean;
   TITLES: Record<string, string>;
   _: Record<string, unknown>;
+  schProperties?(): boolean;
 }
 
 declare const KiCadCanvas: KiCadCanvasApi;

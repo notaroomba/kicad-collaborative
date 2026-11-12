@@ -185,8 +185,28 @@ export async function goTo(instIndex: number, at: [number, number] | null): Prom
 }
 export function preferInstance(human: string | null): void { preferHuman = human; }
 
+/**
+ * SCH_DRAWING_TOOLS::findWireLabelDriverName: the name of the wire's net when its driver on this sheet is a local or
+ * global label (CONNECTION_SUBGRAPH priority: global label, then power pin, then local label), else "".
+ */
+export function wireDriverName(wireId: string): string {
+  const c = netMap(), inst = currentInstance(c); if (!c || !inst) return "";
+  const name = c.index.get(inst.index + "|" + wireId); const e = name ? c.map.get(name) : null; if (!e || e.bus) return "";
+  const here = e.members.filter((m) => m.inst === inst.index);
+  const g = here.find((m) => m.kind === "global_label"); if (g) return g.text || "";
+  if (here.some((m) => m.kind === "pin" && m.power)) return "";
+  const l = here.find((m) => m.kind === "label"); return l ? l.text || "" : "";
+}
+/** The schematic's default text size (Schematic Setup > Formatting, mils) and the intersheet-refs visibility. */
+export function labelDefaults(): { textSize: number; intersheetRefsShow: boolean } {
+  let d: Record<string, unknown> = {};
+  try { const j = E.proSettings ? JSON.parse(E.proSettings as string) : null; d = (j && j.schematic && j.schematic.drawing) || {}; } catch (e) { d = {}; }
+  const mils = Number(d.default_text_size);
+  return { textSize: Number.isFinite(mils) && mils > 0 ? Math.round(mils * 0.0254 * 10000) / 10000 : 1.27, intersheetRefsShow: !!d.intersheets_ref_show };
+}
+
 /** Hook the module into the schematic tools (called once from editor/index.ts). */
 export function installSchNets(): void {
   const m = schMod(); if (!m || !m.setNetHighlighter) return;
-  m.setNetHighlighter({ highlightPick, clear: (ctx: ToolCtx) => clearHighlight(ctx), active: () => !!HL.name, docChanged });
+  m.setNetHighlighter({ highlightPick, clear: (ctx: ToolCtx) => clearHighlight(ctx), active: () => !!HL.name, docChanged, wireDriverName, labelDefaults });
 }

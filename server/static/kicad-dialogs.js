@@ -138,6 +138,8 @@ function open(spec) {
 function openItem(ctx, item, opts) {
   // board items with a KiCad dialog of their own (web/editor/pcbdialogs/item-props.ts); opts.generic asks for this sheet
   if (item && root.KDialogs.pcbItemDialog && !(opts && opts.generic) && root.KDialogs.pcbItemDialog(ctx, item)) return null;
+  // eeschema's own dialogs (web/dialogs/sch-items.ts): labels, text, lines, junctions, shapes, images, sheets, symbols
+  if (item && root.KDialogs.schItemDialog && ctx.doc && ctx.doc.type === "sch" && root.KDialogs.schItemDialog(ctx, item, opts || {})) return null;
   const P = PROPS(); if (!P || !P.renderInto || !item) return null;
   const doc = ctx.doc, Kc = K();
   const staged = clone(item.node); let dirty = false;
@@ -179,6 +181,7 @@ function openNew(ctx, kind, node, onCreate) {
 // ---------------------------------------------------------------- field properties ("Edit Text and Field Properties")
 const H_OPTS = [["left", "Left"], ["center", "Center"], ["right", "Right"]], V_OPTS = [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]];
 function openField(ctx, item, name) {
+  if (root.KDialogs.schFieldDialog && ctx.doc && ctx.doc.type === "sch" && root.KDialogs.schFieldDialog(ctx, item, name)) return null;   // DIALOG_FIELD_PROPERTIES
   const p0 = fieldNode(item.node, name); if (!p0) { if (ctx.toast) ctx.toast("No field named " + name); return null; }
   const isPcb = !ctx.isSch, Kc = K(), doc = ctx.doc;
   const fx = fieldEffects(p0), [x, y, rot] = fieldAt(p0), hidden = fieldHidden(p0), text = fieldText(p0);

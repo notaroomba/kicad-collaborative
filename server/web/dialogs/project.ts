@@ -110,3 +110,5 @@ export function adoptProject(text: string): void {
 export function currentDocEntry(): DocEntry | null { return S.docs.find((d) => d.docId === S.docId) || null; }
 export function projectDocs(): DocEntry[] { return S.docs; }
 export function projectName(): string { const p = proDoc(); return p ? p.path.split("/").pop()!.replace(/\.kicad_pro$/, "") : (S.project ? S.project.name : ""); }
+/** A document's base as the server holds it: the snapshot text and every op after it (for a copy of the file). */
+export function docBase(docId: string): Promise<{ file: string | null; ops: { changes: unknown[] }[] }> { return sideSession(docId).then((r) => ({ file: r.file, ops: r.thenOps })); }
