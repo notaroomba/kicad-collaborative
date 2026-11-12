@@ -809,7 +809,7 @@ def _patch_desktop():
         beside = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(pcbnew.__file__))))
     except Exception:
         beside = "/usr/bin"
-    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/python3", "/usr/bin/python", os.path.join(beside, "python3")):
+    for stub in ("/usr/bin/kicad-cli", "/usr/bin/git", "/usr/bin/ffmpeg", "/usr/bin/python3", "/usr/bin/python", os.path.join(beside, "python3")):
         try:
             if not os.path.exists(stub):
                 _write(stub, b"#!/bin/sh\n")

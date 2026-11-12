@@ -1,14 +1,228 @@
 {
-  "about": "Python packages the runtime for KiCad's own plugins can load when a plugin imports them. scripts/build-python.mjs downloads them into static/dist/pyodide and checks every file's SHA-256: 'pyodide' names packages of the Pyodide distribution (compiled for WebAssembly; their dependencies come along), 'pypi' names pure Python wheels taken from PyPI at a pinned version and hash.",
+  "about": "Python packages the runtime for KiCad's own plugins can load when a plugin imports them. scripts/build-python.mjs downloads them into static/dist/pyodide and checks every file's SHA-256: 'pyodide' names packages of the Pyodide distribution (compiled for WebAssembly; their dependencies come along), 'pypi' names pure Python wheels taken from PyPI at a pinned version and hash. An entry with 'source' is a package PyPI has only as a source archive: its listed modules are taken from the archive (checked against 'sha256') and packed as a wheel by the build.",
   "pyodide": [
-    "numpy", "pillow", "shapely", "scipy", "matplotlib", "pandas", "pyyaml",
-    "requests", "certifi", "beautifulsoup4", "typing-extensions", "jsonschema", "svgwrite", "networkx", "packaging", "six"
+    "numpy",
+    "pillow",
+    "shapely",
+    "scipy",
+    "matplotlib",
+    "pandas",
+    "pyyaml",
+    "requests",
+    "certifi",
+    "beautifulsoup4",
+    "typing-extensions",
+    "jsonschema",
+    "svgwrite",
+    "networkx",
+    "packaging",
+    "six",
+    "click",
+    "ply"
   ],
   "pypi": [
-    { "name": "protobuf", "version": "5.29.6", "file": "protobuf-5.29.6-py3-none-any.whl", "sha256": "6b9edb641441b2da9fa8f428760fc136a49cf97a52076010cf22a2ff73438a86", "imports": ["google"], "depends": [] },
-    { "name": "kicad-python", "version": "0.8.0", "file": "kicad_python-0.8.0-py3-none-any.whl", "sha256": "3d43af4aa2515e88829a9d30e408b8ce89537431a802104ee2a50392f0deaa16", "imports": ["kipy"], "depends": ["protobuf"] },
-    { "name": "openpyxl", "version": "3.1.5", "file": "openpyxl-3.1.5-py2.py3-none-any.whl", "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", "imports": ["openpyxl"], "depends": ["et-xmlfile"] },
-    { "name": "et-xmlfile", "version": "2.0.0", "file": "et_xmlfile-2.0.0-py3-none-any.whl", "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", "imports": ["et_xmlfile"], "depends": [] },
-    { "name": "singledispatch", "version": "4.1.2", "file": "singledispatch-4.1.2-py3-none-any.whl", "sha256": "24802c4e743a252645c461e71abcaa95c3f678a96688e72bb0bf63e663018c7a", "imports": ["singledispatch"], "depends": [] }
+    {
+      "name": "protobuf",
+      "version": "5.29.6",
+      "file": "protobuf-5.29.6-py3-none-any.whl",
+      "sha256": "6b9edb641441b2da9fa8f428760fc136a49cf97a52076010cf22a2ff73438a86",
+      "imports": [
+        "google"
+      ],
+      "depends": []
+    },
+    {
+      "name": "kicad-python",
+      "version": "0.8.0",
+      "file": "kicad_python-0.8.0-py3-none-any.whl",
+      "sha256": "3d43af4aa2515e88829a9d30e408b8ce89537431a802104ee2a50392f0deaa16",
+      "imports": [
+        "kipy"
+      ],
+      "depends": [
+        "protobuf"
+      ]
+    },
+    {
+      "name": "openpyxl",
+      "version": "3.1.5",
+      "file": "openpyxl-3.1.5-py2.py3-none-any.whl",
+      "sha256": "5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2",
+      "imports": [
+        "openpyxl"
+      ],
+      "depends": [
+        "et-xmlfile"
+      ]
+    },
+    {
+      "name": "et-xmlfile",
+      "version": "2.0.0",
+      "file": "et_xmlfile-2.0.0-py3-none-any.whl",
+      "sha256": "7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa",
+      "imports": [
+        "et_xmlfile"
+      ],
+      "depends": []
+    },
+    {
+      "name": "singledispatch",
+      "version": "4.1.2",
+      "file": "singledispatch-4.1.2-py3-none-any.whl",
+      "sha256": "24802c4e743a252645c461e71abcaa95c3f678a96688e72bb0bf63e663018c7a",
+      "imports": [
+        "singledispatch"
+      ],
+      "depends": []
+    },
+    {
+      "name": "kikit",
+      "version": "1.8.1",
+      "file": "kikit-1.8.1-py3-none-any.whl",
+      "sha256": "d7903ae8b65915237ff94ada112f8943c02ac28e894f440835839a5ad5debf20",
+      "imports": [
+        "kikit"
+      ],
+      "depends": [
+        "click",
+        "commentjson",
+        "markdown2",
+        "numpy",
+        "pybars3",
+        "shapely",
+        "solidpython"
+      ]
+    },
+    {
+      "name": "commentjson",
+      "version": "0.9.0",
+      "file": "commentjson-0.9.0-py3-none-any.whl",
+      "source": "commentjson-0.9.0.tar.gz",
+      "modules": [
+        "commentjson"
+      ],
+      "sha256": "42f9f231d97d93aff3286a4dc0de39bfd91ae823d1d9eba9fa901fe0c7113dd4",
+      "imports": [
+        "commentjson"
+      ],
+      "depends": [
+        "lark-parser"
+      ]
+    },
+    {
+      "name": "lark-parser",
+      "version": "0.12.0",
+      "file": "lark_parser-0.12.0-py2.py3-none-any.whl",
+      "sha256": "0eaf30cb5ba787fe404d73a7d6e61df97b21d5a63ac26c5008c78a494373c675",
+      "imports": [
+        "lark"
+      ],
+      "depends": []
+    },
+    {
+      "name": "markdown2",
+      "version": "2.5.5",
+      "file": "markdown2-2.5.5-py3-none-any.whl",
+      "sha256": "be798587e09d1f52d2e4d96a649c4b82a778c75f9929aad52a2c95747fa26941",
+      "imports": [
+        "markdown2"
+      ],
+      "depends": []
+    },
+    {
+      "name": "pybars3",
+      "version": "0.9.7",
+      "file": "pybars3-0.9.7-py3-none-any.whl",
+      "source": "pybars3-0.9.7.tar.gz",
+      "modules": [
+        "pybars"
+      ],
+      "sha256": "6ac847e905e53b9c5b936af112c910475e27bf767f79f4528c16f9af1ec0e252",
+      "imports": [
+        "pybars"
+      ],
+      "depends": [
+        "pymeta3"
+      ]
+    },
+    {
+      "name": "pymeta3",
+      "version": "0.5.1",
+      "file": "PyMeta3-0.5.1-py3-none-any.whl",
+      "source": "PyMeta3-0.5.1.tar.gz",
+      "modules": [
+        "pymeta"
+      ],
+      "sha256": "18bda326d9a9bbf587bfc0ee0bc96864964d78b067288bcf55d4d98681d05bcb",
+      "imports": [
+        "pymeta"
+      ],
+      "depends": []
+    },
+    {
+      "name": "solidpython",
+      "version": "1.1.3",
+      "file": "solidpython-1.1.3-py3-none-any.whl",
+      "sha256": "062899ba8aef3e3e69376d4cd106de6cfc759002a97b78b9a72d7ee92b7d8b96",
+      "imports": [
+        "solid"
+      ],
+      "depends": [
+        "euclid3",
+        "pypng",
+        "prettytable",
+        "ply"
+      ]
+    },
+    {
+      "name": "euclid3",
+      "version": "0.01",
+      "file": "euclid3-0.01-py3-none-any.whl",
+      "source": "euclid3-0.01.tar.gz",
+      "modules": [
+        "euclid3.py"
+      ],
+      "sha256": "25b827a57adbfd9a3fa8625e43abc3e907f61de622343e7e538482ef9b46fd0b",
+      "imports": [
+        "euclid3"
+      ],
+      "depends": []
+    },
+    {
+      "name": "pypng",
+      "version": "0.20220715.0",
+      "file": "pypng-0.20220715.0-py3-none-any.whl",
+      "sha256": "4a43e969b8f5aaafb2a415536c1a8ec7e341cd6a3f957fd5b5f32a4cfeed902c",
+      "imports": [
+        "png"
+      ],
+      "depends": []
+    },
+    {
+      "name": "prettytable",
+      "version": "0.7.2",
+      "file": "prettytable-0.7.2-py3-none-any.whl",
+      "source": "prettytable-0.7.2.tar.gz",
+      "modules": [
+        "prettytable.py"
+      ],
+      "sha256": "2d5460dc9db74a32bcc8f9f67de68b2c4f4d2f01fa3bd518764c69156d9cacd9",
+      "imports": [
+        "prettytable"
+      ],
+      "depends": []
+    },
+    {
+      "name": "trimesh",
+      "version": "5.2.0",
+      "file": "trimesh-5.2.0-py3-none-any.whl",
+      "sha256": "04db2c7ec62afdd7763fb04c82bb5f257ddd984993a19ee83697f475fc58fd29",
+      "imports": [
+        "trimesh"
+      ],
+      "depends": [
+        "numpy"
+      ]
+    }
   ]
 }

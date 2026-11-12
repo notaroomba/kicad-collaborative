@@ -124,6 +124,8 @@ async function install(id) {
   return st.py[id] || [];
 }
 const runAction = (id, action) => page.evaluate(([i, a]) => { window.KcPlugins.runUi(`plugin:${i}:${a}`); }, [id, action.identifier]);
+/** Where SpinRender's own painted controls are in its window (pixels from its top left). */
+const SPIN = { format: [127, 463], gif: [52, 528], mp4: [127, 496], resolution: [422, 463], square: [285, 654], render: [335, 626] };
 const only = (id) => !process.env.ONLY || id.includes(process.env.ONLY);
 
 await page.goto(`${BASE}/auth/dev?jwt=${mintJwt(dana, 'real-dana')}&next=${encodeURIComponent(ecc83)}`);
@@ -162,7 +164,7 @@ if (only('KiPNG')) {
   await page.evaluate(() => window.KcPlugins.store.get().window && window.KcPlugins.closeWindow && window.KcPlugins.closeWindow()).catch(() => {});
 }
 
-// ---- Pinout image generator: kicad-cli render is refused, so it takes its SVG export path; pillow composes the picture
+// ---- Pinout image generator: kicad-cli renders the board with the 3D viewer; pillow composes the picture
 if (only('pinout')) {
   const ID = 'com.github.lou270.pinout-image-generator';
   try {
@@ -241,6 +243,66 @@ if (only('velatrace')) {
     await page.waitForTimeout(1500);
     await shot('real-velatrace-routed');
   } catch (e) { check('VelaTrace runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.f-blaze.velatrace', 60)); await shot('real-velatrace-fail'); }
+}
+
+// ---- SpinRender: kicad-cli pcb render drawn by the editor's 3D viewer, an OpenGL preview on WebGL, ffmpeg's GIF by the browser
+if (only('spinrender')) {
+  const ID = 'com.alsoknownasfoo.spinrender';
+  try {
+    await page.goto(`${BASE}${ecc83}`); await editorReady();
+    const actions = await install(ID);
+    await runAction(ID, actions[0]);
+    const f = await frameOf(ID);
+    await f.waitForSelector('canvas', { timeout: 180000 });
+    await page.waitForTimeout(Number(process.env.SPIN_WAIT || 15000));
+    await shot('real-spinrender-window');
+    const box = await (await page.locator(`#pluginFrames iframe[data-plugin="${ID}"]`).elementHandle()).boundingBox();
+    if (process.env.VERBOSE) console.log('      frame at', JSON.stringify(box));
+    // its controls are painted by the plugin itself, so they are worked by where they are in its window
+    const click = async (x, y, wait = 1200) => { await page.mouse.click(box.x + x, box.y + y); await page.waitForTimeout(wait); };
+    const preview = () => f.evaluate(() => { const c = document.querySelector('canvas.wx-gl'); if (!c) return null; const o = document.createElement('canvas'); o.width = c.width; o.height = c.height; const g = o.getContext('2d'); g.drawImage(c, 0, 0);
+      const d = g.getImageData(0, 0, o.width, o.height).data; let lit = 0; for (let i = 0; i < d.length; i += 16) if (d[i] + d[i + 1] + d[i + 2] > 60) lit++; return { w: c.width, h: c.height, lit, hash: Array.from(d.filter((_, i) => i % 4001 === 0)).join('') }; });
+    const p1 = await preview(); await page.waitForTimeout(1500); const p2 = await preview();
+    check('SpinRender: its OpenGL preview draws the board model', !!p1 && p1.lit > 500, JSON.stringify(p1 && { w: p1.w, h: p1.h, lit: p1.lit }));
+    check('SpinRender: the preview turns', !!p1 && !!p2 && p1.hash !== p2.hash);
+    const runs = [['GIF', 0, 0, 'gif'], ['MP4', 0, 0, 'mp4']].filter((r) => !process.env.SPIN_ONLY || r[3] === process.env.SPIN_ONLY);
+    for (const [label, , , ext] of runs) {
+      const n0 = downloads.length;
+      await click(...SPIN.format); await click(...SPIN[ext]);
+      await click(...SPIN.resolution); await click(...SPIN.square);
+      if (label === runs[0][0]) await shot('real-spinrender-settings');
+      await click(...SPIN.render, 6000);
+      await shot('real-spinrender-rendering-' + ext);
+      const got = await download(n0, 600000);
+      check(`SpinRender: a ${label} is handed over`, !!got, await logTail(ID, 12));
+      if (!got) continue;
+      const files = /\.zip$/.test(got.name) ? unzip(got.bytes) : { [got.name]: got.bytes };
+      const name = Object.keys(files).find((k) => k.endsWith('.' + ext));
+      check(`SpinRender: the ${label} is among what it wrote`, !!name, Object.keys(files).join());
+      if (!name) continue;
+      if (SHOTS) fs.writeFileSync(path.join(SHOTS, 'real-spinrender-output.' + ext), files[name]);
+      const m = await page.evaluate(async ([b, kind]) => {
+        const bytes = Uint8Array.from(atob(b), (c) => c.charCodeAt(0));
+        const lit = (src, w, h) => { const c = new OffscreenCanvas(w, h); const g = c.getContext('2d'); g.drawImage(src, 0, 0); const d = g.getImageData(0, 0, w, h).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 90) n++; return n / (w * h); };
+        if (kind === 'gif') {
+          const dec = new ImageDecoder({ data: bytes, type: 'image/gif' }); await dec.tracks.ready; await dec.completed; const t = dec.tracks.selectedTrack;
+          const a = (await dec.decode({ frameIndex: 0 })).image, z = (await dec.decode({ frameIndex: Math.floor(t.frameCount / 4) })).image;
+          return { frames: t.frameCount, w: a.displayWidth, h: a.displayHeight, first: lit(a, a.displayWidth, a.displayHeight), later: lit(z, z.displayWidth, z.displayHeight) };
+        }
+        const v = document.createElement('video'); v.muted = true; v.src = URL.createObjectURL(new Blob([bytes], { type: 'video/mp4' }));
+        await new Promise((ok, no) => { v.onloadeddata = ok; v.onerror = () => no(new Error('the browser could not play the MP4')); });
+        const at = async (t) => { v.currentTime = t; await new Promise((ok) => { v.onseeked = ok; }); return lit(v, v.videoWidth, v.videoHeight); };
+        return { seconds: v.duration, w: v.videoWidth, h: v.videoHeight, first: await at(0.05), later: await at(v.duration / 4) };
+      }, [Buffer.from(files[name]).toString('base64'), ext]);
+      check(`SpinRender: the ${label} is 800 x 800`, m.w === 800 && m.h === 800, JSON.stringify(m));
+      if (ext === 'gif') check('SpinRender: the GIF holds every frame of the loop (10 s at 30 fps)', m.frames === 300, JSON.stringify(m));
+      else check('SpinRender: the MP4 is 10 s long', Math.abs(m.seconds - 10) < 0.2, JSON.stringify(m));
+      check(`SpinRender: the board is on the ${label}'s frames`, m.first > 0.05 && m.later > 0.05, JSON.stringify(m));
+      console.log(`      (${name}: ${files[name].length} bytes, ${JSON.stringify(m)})`);
+      await page.waitForTimeout(1500);
+      await shot('real-spinrender-done-' + ext);
+    }
+  } catch (e) { check('SpinRender runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.alsoknownasfoo.spinrender', 40)); await shot('real-spinrender-fail'); }
 }
 
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));

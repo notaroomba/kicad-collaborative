@@ -119,6 +119,8 @@ async function one(dir, boardPath, boardGiven) {
   // the project file and schematics beside the board, as the editor hands them over
   const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro)$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
   const calls = []; const said = []; let edited = false;
+  // "# sibling: <path from the repository root>": another file of the project, beside the board (a board to panelize, …)
+  if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");

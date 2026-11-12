@@ -104,6 +104,19 @@ export function pythonRuntime(): void {
   const play = (ctx: CanvasRenderingContext2D, ops: any[], w: number, h: number) => {
     let stroke: string | null = "#000", fill: string | CanvasGradient | null = null, textColor = "#000", depth = 0;
     const stack: Array<[string | null, string | CanvasGradient | null, string]> = [];
+    // A canvas can only drop a clip by going back to a saved state, so each clip saves one first.  `clips` counts
+    // those per save level; dropping the clip goes back and puts the rest of the state (transform, font, pen) as it was.
+    const clips: number[] = [0];
+    const unclip = (keep: boolean) => {
+      while (clips[clips.length - 1] > 0) {
+        clips[clips.length - 1]--;
+        if (!keep) { ctx.restore(); continue; }
+        const t = ctx.getTransform(), font = ctx.font, alpha = ctx.globalAlpha, lw = ctx.lineWidth, dash = ctx.getLineDash();
+        ctx.restore();
+        ctx.setTransform(t); ctx.font = font; ctx.globalAlpha = alpha; ctx.lineWidth = lw; ctx.setLineDash(dash);
+      }
+    };
+    ctx.save();
     ctx.lineWidth = 1; ctx.textBaseline = "top"; ctx.font = "400 13.33px system-ui, sans-serif"; ctx.lineJoin = "round"; ctx.lineCap = "butt";
     const paintPath = (mode: number) => { if (fill && mode !== 0) { ctx.fillStyle = fill; ctx.fill(); } if (stroke && mode !== 1) { ctx.strokeStyle = stroke; ctx.stroke(); } };
     // a one pixel line on whole coordinates lies between two pixel rows: it is moved half a pixel, as wx draws it
@@ -147,17 +160,20 @@ export function pythonRuntime(): void {
           }
           paintPath(o[2]); break;
         }
-        case "save": ctx.save(); stack.push([stroke, fill, textColor]); depth++; break;
-        case "restore": if (depth > 0) { ctx.restore(); const st = stack.pop(); if (st) { stroke = st[0]; fill = st[1]; textColor = st[2]; } depth--; } break;
+        case "save": ctx.save(); stack.push([stroke, fill, textColor]); depth++; clips.push(0); break;
+        case "restore": if (depth > 0) { unclip(false); clips.pop(); ctx.restore(); const st = stack.pop(); if (st) { stroke = st[0]; fill = st[1]; textColor = st[2]; } depth--; } break;
         case "translate": ctx.translate(o[1], o[2]); break;
         case "scale": ctx.scale(o[1], o[2]); break;
         case "rotate": ctx.rotate(o[1]); break;
-        case "clip": ctx.beginPath(); ctx.rect(o[1], o[2], o[3], o[4]); ctx.clip(); break;
+        case "clip": ctx.save(); clips[clips.length - 1]++; ctx.beginPath(); ctx.rect(o[1], o[2], o[3], o[4]); ctx.clip(); break;
+        case "unclip": unclip(true); break;
         case "alpha": ctx.globalAlpha = o[1]; break;
-        default: break;          // "unclip" has no canvas form outside save/restore
+        default: break;
       }
     }
-    while (depth-- > 0) ctx.restore();
+    while (depth-- > 0) { unclip(false); clips.pop(); ctx.restore(); }
+    unclip(false);
+    ctx.restore();
   };
   // The person closed the floating dialog (its ×, or Escape): the topmost wx window gets its close event.
   // What happens in the editor while a plugin's window is open: the person's selection (plugins that ask to "pick an item
@@ -183,6 +199,8 @@ export function pythonRuntime(): void {
       case "fab.svg": out = await kicad.fab.svg(a); break;
       case "fab.drc": out = await kicad.fab.drc(a); break;
       case "fab.netlist": out = await kicad.fab.netlist(); break;
+      case "fab.render": out = await kicad.fab.render(a); break;
+      case "fab.model": out = await kicad.fab.model(a); break;
       case "project.versions": out = await kicad.project.versions(); break;
       case "libs.libraries": out = await kicad.libs.libraries(); break;
       case "libs.footprints": out = await kicad.libs.footprints(a); break;

@@ -7,15 +7,23 @@ answered here, in this interpreter, from the editor itself:
   kicad-cli   version · pcb drc · pcb export gerbers / gerber / drill / pos / svg · sch export netlist / bom
               The Design Rules Checker and the fabrication writers of the editor do the work, on the design as it is
               open (not on a file on disk), and the files land where the plugin asked.
+              pcb render · pcb export glb
+              The editor's 3D viewer draws the board at the pose, size and lights asked for (KiCad's command line
+              ray-traces; this is the viewer's own picture) and writes its model as binary glTF.
   git         version · rev-parse · status · add · commit · log · gui / citool
               The project's version history stands in for the repository: a commit is a saved version, the commit
               window is the Save Version dialog.
+  ffmpeg      -version · PNG or JPEG frames (-i frame%04d.png) to .gif, .mp4, a palette (.png) or one picture
+              The browser decodes and composes the frames; the GIF writer and the MP4 writer are the editor's
+              (web/plugins/media.ts), the H.264 stream is the browser's own video encoder.
 
 Everything else a real kicad-cli or git can do is refused with its own error text and a non-zero exit code, as the
 program itself would for a command it does not know.
 """
 
 import datetime
+import glob as _glob
+import hashlib
 import io
 import json
 import logging
@@ -27,7 +35,8 @@ log = logging.getLogger("kicad_web")
 
 KICAD_CLI = "/usr/bin/kicad-cli"
 GIT = "/usr/bin/git"
-PROGRAMS = {"kicad-cli": KICAD_CLI, "kicad-cli.exe": KICAD_CLI, "git": GIT, "git.exe": GIT}
+FFMPEG = "/usr/bin/ffmpeg"
+PROGRAMS = {"kicad-cli": KICAD_CLI, "kicad-cli.exe": KICAD_CLI, "git": GIT, "git.exe": GIT, "ffmpeg": FFMPEG, "ffmpeg.exe": FFMPEG}
 
 
 class Result:
@@ -395,6 +404,122 @@ def _pcb_svg(argv, cwd):
     return Result(0, "\n".join(said) + "\n", "\n".join(err) + ("\n" if err else ""))
 
 
+# ----------------------------------------------------------------------------- kicad-cli pcb render / export glb
+
+_RENDER_VALUES = {"--output", "--width", "--height", "--side", "--background", "--quality", "--preset", "--appearance-preset", "--zoom", "--pan", "--pivot", "--rotate",
+                  "--light-top", "--light-bottom", "--light-side", "--light-camera", "--light-side-elevation", "--define-var", "--variant"}
+_RENDER_SWITCHES = {"--perspective", "--floor", "--use-board-stackup-colors"}
+_GLB_VALUES = {"--output", "--define-var", "--min-distance", "--net-filter", "--user-origin", "--component-filter", "--variant"}
+_GLB_SWITCHES = {"--force", "--grid-origin", "--drill-origin", "--no-unspecified", "--no-dnp", "--subst-models", "--board-only", "--cut-vias-in-body", "--no-board-body",
+                 "--no-components", "--include-tracks", "--include-pads", "--include-zones", "--include-inner-copper", "--include-silkscreen", "--include-soldermask",
+                 "--fuse-shapes", "--fill-all-vias", "--no-optimize-step", "--no-extra-pad-thickness"}
+
+
+def _numbers(text, count, what):
+    """'1,2,3' (or one number for all of them) as a list of floats; None when it is not that."""
+    try:
+        vals = [float(x) for x in str(text).replace("'", "").replace('"', "").split(",") if x.strip() != ""]
+    except ValueError:
+        return None
+    if len(vals) == 1 and what == "light":
+        vals = vals * count
+    return vals if len(vals) == count else None
+
+
+def _viewer3d(method, args, board):
+    """Ask the editor's 3D viewer for a picture or a model of the board in `board` (a file in this interpreter).  The
+    editor keeps the board set up between calls, so the file crosses once however many frames follow."""
+    with open(board, "rb") as fh:
+        data = fh.read()
+    key = hashlib.sha1(data).hexdigest()
+    web = _web()
+    res = web._call(method, dict(args, key=key))
+    if isinstance(res, dict) and res.get("needText"):
+        res = web._call(method, dict(args, key=key, text=data.decode("utf-8", "replace")))
+    return res
+
+
+def _pcb_render(argv, cwd):
+    a = _Args(argv, _RENDER_VALUES, _RENDER_SWITCHES, {"-w": "--width", "-h": "--height"})
+    if a.unknown:
+        return Result(1, "", f"Unknown argument: {a.unknown[0]}\n" + _usage("kicad-cli pcb render", _RENDER_VALUES, _RENDER_SWITCHES, "INPUT_FILE"))
+    board, bad = _input(a, cwd, (".kicad_pcb",), "Board")
+    if bad:
+        return bad
+    out = a.get("--output")
+    if not out:
+        return Result(1, "", "Output file is required (--output)\n")
+    out = _abs(out, cwd)
+    ext = os.path.splitext(out)[1].lower()
+    if ext not in (".png", ".jpg", ".jpeg"):
+        return Result(1, "", "Invalid image format: the output file must end in .png or .jpg\n")
+    side = a.get("--side", "top").lower()
+    if side not in ("top", "bottom", "left", "right", "front", "back"):
+        return Result(1, "", "Invalid side specified\n")
+    background = a.get("--background", "default").lower()
+    if background not in ("default", "transparent", "opaque"):
+        return Result(1, "", "Invalid background specified\n")
+    args = {"side": side, "perspective": a.has("--perspective"), "format": "png" if ext == ".png" else "jpeg",
+            "background": ("transparent" if ext == ".png" else "opaque") if background == "default" else background}
+    try:
+        args["width"], args["height"] = int(a.get("--width", "1600")), int(a.get("--height", "900"))
+        args["zoom"] = float(a.get("--zoom", "1"))
+    except ValueError:
+        return Result(1, "", "Invalid size or zoom\n")
+    for name, key in (("--rotate", "rotate"), ("--pan", "pan")):
+        if name in a.opt:
+            v = _numbers(a.get(name), 3, "vector")
+            if v is None:
+                return Result(1, "", f"Invalid {key} format: three numbers are needed, as in '-45,0,45'\n")
+            args[key] = v
+    lights = {}
+    for name, key in (("--light-top", "top"), ("--light-bottom", "bottom"), ("--light-side", "side"), ("--light-camera", "camera")):
+        if name in a.opt:
+            v = _numbers(a.get(name), 3, "light")
+            if v is None:
+                return Result(1, "", f"Invalid light {key} format: one intensity or 'R,G,B'\n")
+            lights[key] = v
+    if "--light-side-elevation" in a.opt:
+        try:
+            lights["sideElevation"] = float(a.get("--light-side-elevation"))
+        except ValueError:
+            return Result(1, "", "Invalid light side elevation\n")
+    if lights:
+        args["lights"] = lights
+    try:
+        res = _viewer3d("fab.render", args, board)
+    except Exception as e:      # no WebGL in this browser, or the board could not be read
+        return Result(1, "", f"Failed to render the board: {str(e).splitlines()[-1] if str(e) else type(e).__name__}\n")
+    if not isinstance(res, dict) or not res.get("base64"):
+        return Result(1, "", "Failed to render the board: the editor's 3D viewer gave no picture\n")
+    import base64
+    _write(out, base64.b64decode(res["base64"]))
+    log.info("kicad-cli pcb render: %sx%s drawn by the editor's 3D viewer (not ray-traced)", res.get("width"), res.get("height"))
+    return Result(0, f"Successfully created 3D render image '{out}'\n", "")
+
+
+def _pcb_glb(argv, cwd):
+    a = _Args(argv, _GLB_VALUES, _GLB_SWITCHES, {"-f": "--force"})
+    if a.unknown:
+        return Result(1, "", f"Unknown argument: {a.unknown[0]}\n" + _usage("kicad-cli pcb export glb", _GLB_VALUES, _GLB_SWITCHES, "INPUT_FILE"))
+    board, bad = _input(a, cwd, (".kicad_pcb",), "Board")
+    if bad:
+        return bad
+    out = _abs(a.get("--output") or os.path.splitext(board)[0] + ".glb", cwd)
+    if os.path.exists(out) and not a.has("--force") and os.path.getsize(out) > 0:
+        return Result(2, "", f"File '{out}' already exists. Use --force to overwrite.\n")
+    try:
+        res = _viewer3d("fab.model", {}, board)
+    except Exception as e:
+        return Result(1, "", f"Failed to export the model: {str(e).splitlines()[-1] if str(e) else type(e).__name__}\n")
+    if not isinstance(res, dict) or not res.get("base64"):
+        return Result(1, "", "Failed to export the model: the editor's 3D viewer gave none\n")
+    import base64
+    _write(out, base64.b64decode(res["base64"]))
+    log.info("kicad-cli pcb export glb: the editor's 3D model (board, copper and silkscreen pictures, component bodies), %s bytes", res.get("bytes"))
+    return Result(0, f"Info: GLB file '{out}' created.\n", "")
+
+
 # ----------------------------------------------------------------------------- kicad-cli sch
 
 def _q(v):
@@ -636,9 +761,10 @@ This is the KiCad Collaborative web editor answering for kicad-cli; other subcom
 
 _PCB = {("drc",): (_pcb_drc, _DRC_VALUES, _DRC_SWITCHES), ("export", "gerbers"): (_pcb_gerbers, _GBR_VALUES, _GBR_SWITCHES),
         ("export", "gerber"): (lambda argv, cwd: _pcb_gerbers(argv, cwd, True), _GBR_VALUES, _GBR_SWITCHES), ("export", "drill"): (_pcb_drill, _DRL_VALUES, _DRL_SWITCHES),
-        ("export", "pos"): (_pcb_pos, _POS_VALUES, _POS_SWITCHES), ("export", "svg"): (_pcb_svg, _SVG_VALUES, _SVG_SWITCHES)}
+        ("export", "pos"): (_pcb_pos, _POS_VALUES, _POS_SWITCHES), ("export", "svg"): (_pcb_svg, _SVG_VALUES, _SVG_SWITCHES),
+        ("render",): (_pcb_render, _RENDER_VALUES, _RENDER_SWITCHES), ("export", "glb"): (_pcb_glb, _GLB_VALUES, _GLB_SWITCHES)}
 _SCH = {("export", "netlist"): (_sch_netlist, _NET_VALUES, set()), ("export", "bom"): (_sch_bom, _BOM_VALUES, _BOM_SWITCHES)}
-_DESKTOP_ONLY = {("pcb", "render"): "rendering the board in 3D", ("pcb", "export", "step"): "exporting a STEP model", ("pcb", "export", "glb"): "exporting a 3D model",
+_DESKTOP_ONLY = {("pcb", "export", "step"): "exporting a STEP model",
                  ("pcb", "export", "vrml"): "exporting a 3D model", ("pcb", "export", "pdf"): "plotting to PDF (File > Plot does that in the editor)",
                  ("pcb", "export", "dxf"): "plotting to DXF", ("sch", "erc"): "the electrical rules check from the command line (Inspect > Electrical Rules Checker runs it in the editor)",
                  ("sch", "export", "pdf"): "plotting the schematic to PDF (File > Plot does that in the editor)", ("sch", "export", "svg"): "plotting the schematic to SVG"}
@@ -664,7 +790,7 @@ def kicad_cli(argv, cwd=None):
         for key, (fn, values, switches) in table.items():
             if tuple(argv[1:1 + len(key)]) == key:
                 rest = argv[1 + len(key):]
-                if "-h" in rest or "--help" in rest:
+                if "--help" in rest or ("-h" in rest and key != ("render",)):       # render's -h is the picture's height
                     return Result(0, _usage("kicad-cli " + argv[0] + " " + " ".join(key), values, switches, "INPUT_FILE"), "")
                 return fn(rest, cwd)
     for key, what in _DESKTOP_ONLY.items():
@@ -675,7 +801,7 @@ def kicad_cli(argv, cwd=None):
             log.warning("%s", why)
             return Result(1, "", why + "\n")
     words = " ".join(x for x in argv[:3] if not x.startswith("-"))
-    raise pcbnew.WebUnsupported(f"kicad-cli {words}: the web editor answers kicad-cli's version, pcb drc, pcb export gerbers, drill, pos and svg, and sch export netlist and bom")
+    raise pcbnew.WebUnsupported(f"kicad-cli {words}: the web editor answers kicad-cli's version, pcb drc, pcb render, pcb export gerbers, drill, pos, svg and glb, and sch export netlist and bom")
 
 
 # ----------------------------------------------------------------------------- git
@@ -794,6 +920,208 @@ def git(argv, cwd=None):
     raise pcbnew.WebUnsupported(f"git {cmd}: the project's version history stands in for git in the web editor (Save Version, Branches, and GitHub sync from the project page)")
 
 
+# ----------------------------------------------------------------------------- ffmpeg
+
+_FF_VERSION = "ffmpeg version 7.1-web Copyright (c) 2000-2024 the FFmpeg developers\nbuilt for the KiCad Collaborative web editor: image sequences to GIF, MP4 and PNG, encoded by the browser\n"
+_FF_FLAGS = {"-y", "-n", "-hide_banner", "-nostdin", "-stats", "-nostats", "-an", "-sn", "-dn", "-shortest", "-report"}
+_FF_FILTERS = {"color", "overlay", "scale", "palettegen", "paletteuse", "fps", "format", "split", "null", "copy", "setsar", "pad"}
+
+
+def _media():
+    """The encoders (web/plugins/media.ts) in the page this interpreter runs in; None where there is no browser."""
+    try:
+        import js
+    except ImportError:
+        return None
+    m = getattr(js, "__kcMedia", None)
+    if m is None and hasattr(js, "document"):
+        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kicad_media.js")
+        if os.path.isfile(src):
+            el = js.document.createElement("script")
+            with open(src, encoding="utf-8") as fh:
+                el.textContent = fh.read()
+            js.document.head.appendChild(el)
+            m = getattr(js, "__kcMedia", None)
+    return m
+
+
+def _ff_inputs(pattern, start, cwd, globbed):
+    path = _abs(pattern, cwd)
+    if globbed:
+        return sorted(_glob.glob(path))
+    if "%" not in path:
+        return [path] if os.path.isfile(path) else []
+    out, i = [], start
+    while True:
+        try:
+            name = path % i
+        except (TypeError, ValueError):
+            return []
+        if not os.path.isfile(name):
+            if out or i > start + 4:        # ffmpeg looks a few numbers ahead for the first frame
+                break
+            i += 1
+            continue
+        out.append(name)
+        i += 1
+    return out
+
+
+def ffmpeg(argv, cwd=None):
+    if not argv:
+        return Result(1, "", _FF_VERSION + "Use -h to get full help or, even better, run 'man ffmpeg'\n")
+    if argv[0] in ("-version", "--version"):
+        return Result(0, _FF_VERSION, "")
+    if argv[0] in ("-h", "-help", "--help", "-?"):
+        return Result(0, "usage: ffmpeg [options] [[infile options] -i infile]... {[outfile options] outfile}...\n", _FF_VERSION)
+    if argv[0] in ("-encoders", "-codecs", "-formats", "-muxers"):
+        return Result(0, " V..... libx264              H.264 (the browser's encoder)\n V..... gif                  GIF (Graphics Interchange Format)\n V..... png                  PNG (Portable Network Graphics) image\n", _FF_VERSION)
+    # options before an -i belong to that input; the ones after the last -i to the output
+    inputs, pending, outputs = [], {}, []
+    i = 0
+    while i < len(argv):
+        a = str(argv[i])
+        i += 1
+        if a in _FF_FLAGS:
+            continue
+        if a == "-i":
+            if i >= len(argv):
+                return Result(1, "", "Missing argument for option 'i'.\n")
+            inputs.append((str(argv[i]), pending))
+            pending = {}
+            i += 1
+        elif a.startswith("-") and len(a) > 1:
+            if i >= len(argv):
+                return Result(1, "", f"Missing argument for option '{a[1:]}'.\n")
+            pending[a] = str(argv[i])
+            i += 1
+        else:
+            outputs.append(a)
+    opts = pending
+    if not inputs:
+        return Result(1, "", "At least one input file must be specified\n")
+    if len(outputs) != 1:
+        return Result(1, "", "At least one output file must be specified\n" if not outputs else "The web editor's ffmpeg writes one output file at a time\n")
+    out = _abs(outputs[0], cwd)
+    ext = os.path.splitext(out)[1].lower()
+    graph = opts.get("-filter_complex") or opts.get("-lavfi") or opts.get("-vf") or opts.get("-filter:v") or ""
+    import re
+    names = set(re.findall(r"(?:^|[;,\]])\s*([a-z_0-9]+)\s*(?==|[;,\[]|$)", graph))
+    odd = sorted(n for n in names if n not in _FF_FILTERS)
+    if odd:
+        return Result(1, "", f"No such filter: '{odd[0]}' (the web editor's ffmpeg has: {', '.join(sorted(_FF_FILTERS))})\n")
+    pattern, first = inputs[0]
+    frames = _ff_inputs(pattern, int(first.get("-start_number", "0") or 0), cwd, first.get("-pattern_type") == "glob")
+    if not frames:
+        return Result(1, "", f"{pattern}: No such file or directory\n")
+    if not frames[0].lower().endswith((".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif")):
+        return Result(1, "", f"{pattern}: the web editor's ffmpeg reads pictures (PNG or JPEG frames), not video or audio files\n")
+    def rate(text, default):
+        try:
+            if "/" in str(text):
+                n, d = str(text).split("/", 1)
+                return float(n) / float(d)
+            return float(text)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return default
+    fps = rate(first.get("-framerate") or first.get("-r"), 25.0)
+    m = re.search(r"(?:^|[;,\]])\s*fps=(?:fps=)?([0-9./]+)", graph)
+    out_fps = rate(opts.get("-r") or (m.group(1) if m else None), fps)
+    if out_fps != fps and out_fps > 0:      # frames are dropped or repeated to the output rate, the clip keeps its length
+        count = max(1, int(round(len(frames) * out_fps / fps)))
+        frames = [frames[min(len(frames) - 1, int(k * fps / out_fps))] for k in range(count)]
+    if "-frames:v" in opts or "-vframes" in opts:
+        try:
+            frames = frames[:max(1, int(opts.get("-frames:v") or opts.get("-vframes")))]
+        except ValueError:
+            pass
+    job = {"fps": out_fps or fps}
+    m = re.search(r"color=(?:c(?:olor)?=)?([#0-9A-Za-z]+)", graph)
+    if m:
+        c = m.group(1)
+        named = {"black": "#000000", "white": "#ffffff", "red": "#ff0000", "green": "#008000", "blue": "#0000ff", "gray": "#808080", "grey": "#808080"}
+        c = named.get(c.lower(), c)
+        if c.lower().startswith("0x"):
+            c = "#" + c[2:]
+        if re.fullmatch(r"#[0-9A-Fa-f]{6}", c[:7]):
+            job["background"] = c[:7]
+    m = re.search(r"color=[^;\[]*?s=(\d+)x(\d+)", graph) or re.search(r"(?:^|[;,\]])\s*scale=(\d+):(\d+)", graph) or re.fullmatch(r"(\d+)x(\d+)", opts.get("-s", ""))
+    if m:
+        job["width"], job["height"] = int(m.group(1)), int(m.group(2))
+    if "trunc(iw/2)*2" in graph or opts.get("-pix_fmt") == "yuv420p":
+        job["even"] = True
+    palette = None
+    if ext == ".gif":
+        job["format"] = "gif"
+        if "-loop" in opts:
+            try:
+                job["loop"] = int(opts["-loop"])
+            except ValueError:
+                pass
+        if "paletteuse" in names and len(inputs) > 1:
+            pal = _abs(inputs[1][0], cwd)
+            if not os.path.isfile(pal):
+                return Result(1, "", f"{inputs[1][0]}: No such file or directory\n")
+            with open(pal, "rb") as fh:
+                palette = fh.read()
+        if "dither=none" in graph:
+            job["dither"] = False
+    elif ext in (".mp4", ".m4v", ".mov"):
+        codec = opts.get("-c:v") or opts.get("-vcodec") or opts.get("-codec:v") or "libx264"
+        if codec not in ("libx264", "h264", "libopenh264", "h264_videotoolbox", "h264_nvenc", "libvpx-vp9", "libaom-av1", "libsvtav1"):
+            return Result(1, "", f"Unknown encoder '{codec}'\n")
+        job["format"] = "mp4"
+        job["even"] = True
+        try:
+            job["crf"] = float(opts.get("-crf", "23"))
+        except ValueError:
+            pass
+    elif ext == ".png":
+        job["format"] = "palette" if "palettegen" in names else "png"
+        m = re.search(r"max_colors=(\d+)", graph)
+        if m:
+            job["maxColors"] = int(m.group(1))
+    else:
+        return Result(1, "", f"Unable to choose an output format for '{outputs[0]}'; the web editor's ffmpeg writes .gif, .mp4 and .png\n")
+    if os.path.exists(out) and "-n" in argv:
+        return Result(1, "", f"File '{out}' already exists. Exiting.\n")
+    media = _media()
+    if media is None:
+        return Result(1, "", "ffmpeg: the pictures are encoded by the browser the editor runs in, and there is none here\n")
+    try:
+        data, codec = _encode(media, job, frames, palette)
+    except Exception as e:
+        return Result(1, "", f"Conversion failed! {str(e).splitlines()[-1] if str(e) else type(e).__name__}\n")
+    _write(out, data)
+    note = ""
+    if job["format"] == "mp4" and not str(codec).startswith("avc1"):
+        note = f"This browser has no H.264 encoder: the MP4 holds {'VP9' if str(codec).startswith('vp09') else 'AV1'} video ({codec}), which browsers and VLC play.\n"
+    return Result(0, "", _FF_VERSION + f"Output #0, {job['format']}, to '{out}': {len(frames)} frames at {job['fps']:g} fps, {len(data)} bytes ({codec})\n" + note)
+
+
+def _encode(media, job, frames, palette):
+    """Hand the frames to the page's encoders and wait for the file."""
+    import js
+    from pyodide.ffi import run_sync, to_js
+    sync = getattr(media, "runSync", None)
+    if sync is not None:        # the test harness: a browser is started for the job, which reads the frames from disk
+        res = json.loads(str(sync(json.dumps(dict(job, frames=frames, palette=None if palette is None else list(palette))))))
+        import base64
+        return base64.b64decode(res["base64"]), res.get("codec", "")
+    opt = js.Object.fromEntries(to_js([[k, v] for k, v in job.items()]))
+    if palette is not None:
+        opt.palette = to_js(palette)
+    handle = media.open(opt)
+    web = _web()
+    for n, path in enumerate(frames):
+        with open(path, "rb") as fh:
+            handle.add(to_js(fh.read()))
+        if n % 20 == 0:
+            web._yield() if hasattr(web, "_yield") else None
+    res = run_sync(handle.finish())
+    return bytes(res.bytes.to_py()), str(res.codec)
+
+
 def which(name):
     """shutil.which for the programs answered here."""
     return PROGRAMS.get(os.path.basename(str(name)).lower())
@@ -806,4 +1134,6 @@ def run(name, argv, cwd=None):
         return kicad_cli(list(argv), cwd)
     if base in ("git", "git.exe"):
         return git(list(argv), cwd)
+    if base in ("ffmpeg", "ffmpeg.exe"):
+        return ffmpeg(list(argv), cwd)
     return None

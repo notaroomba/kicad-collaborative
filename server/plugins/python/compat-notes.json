@@ -1,10 +1,6 @@
 {
   "about": "What the test run cannot see for itself. scripts/plugins-python.mjs runs every official plugin and labels it from what happened; a plugin that runs without an error but cannot do its job here (it needs a program on the computer, a local server, …) is labelled by hand below, and these entries win over the run.",
   "plugins": {
-    "com.alsoknownasfoo.spinrender": {
-      "status": "unsupported",
-      "note": "It renders the board with a 3D renderer on the computer (OpenGL), which a browser tab does not have."
-    },
     "com.github.adamws.kicad-git": {
       "status": "works",
       "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
@@ -36,10 +32,6 @@
     "com.github.fablabkerala.gerber2png-plugin-for-kicad": {
       "status": "partly",
       "note": "It makes the Gerber archive and hands it over as a download. Passing it straight to the Gerber2Png page needs a local network port: open that page and load the archive there."
-    },
-    "com.github.yaqwsx.kikit": {
-      "status": "unsupported",
-      "note": "It is only a pointer to KiKit, a command line program that is installed separately on a computer."
     },
     "com.github.f-blaze.velatrace": {
       "status": "partly",

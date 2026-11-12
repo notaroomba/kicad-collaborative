@@ -157,9 +157,16 @@ def font_css(font):
     f = font if isinstance(font, _wx.Font) else _wx.NORMAL_FONT
     size = float(f._size or 10)
     px = size * 96.0 / 72.0
-    family = "ui-monospace, Menlo, Consolas, monospace" if f._family in (_wx.FONTFAMILY_MODERN, _wx.FONTFAMILY_TELETYPE) else (
-        '"%s", system-ui, sans-serif' % str(f._face).replace('"', "") if f._face else "system-ui, -apple-system, Segoe UI, sans-serif")
-    weight = "700" if f._weight >= _wx.FONTWEIGHT_BOLD else "400"
+    mono = f._family in (_wx.FONTFAMILY_MODERN, _wx.FONTFAMILY_TELETYPE)
+    private = bool(_wx._private_fonts.get(str(f._face or "").lower()))
+    if private:
+        family = '"%s", %s' % (str(f._face).replace('"', ""), "ui-monospace, monospace" if mono else "system-ui, sans-serif")
+    elif mono:
+        family = "ui-monospace, Menlo, Consolas, monospace"
+    else:
+        family = '"%s", system-ui, sans-serif' % str(f._face).replace('"', "") if f._face else "system-ui, -apple-system, Segoe UI, sans-serif"
+    w = f._weight if isinstance(f._weight, (int, float)) else 400
+    weight = str(int(w)) if private and 100 <= w <= 1000 else ("700" if w >= _wx.FONTWEIGHT_BOLD else "400")
     style = "italic " if f._wx_style in (_wx.FONTSTYLE_ITALIC, _wx.FONTSTYLE_SLANT) else ""
     return "%s%s %.2fpx %s" % (style, weight, px, family)
 
@@ -1171,7 +1178,7 @@ def schedule_paint(win):
     _best_size(win)
     if _wx._DOM:
         d["_wx_paint_due"] = True
-        _wx._kc().later(_wx._once(lambda: _wx._call(paint_now, win)), 0)
+        _wx._kc().later(_wx._once(lambda: _wx._call(paint_now, win) if d.get("_wx_paint_due") else None), 0)
     else:
         paint_now(win)
 

@@ -5,6 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import zlib from "node:zlib";
+import * as esbuild from "esbuild";
 
 const server = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const out = path.join(server, "static", "dist", "pyodide");
@@ -17,6 +19,11 @@ for (const f of ["pyodide.js", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_st
 const shim = path.join(server, "plugins", "python"); const files = {};
 const walk = (dir, base) => { for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const rel = base ? base + "/" + e.name : e.name; if (e.isDirectory()) { if (e.name !== "__pycache__") walk(path.join(dir, e.name), rel); } else if (e.name.endsWith(".py")) files[rel] = fs.readFileSync(path.join(dir, e.name), "utf8"); } };
 walk(shim, "");
+// Browser-side helpers the shims load into the plugin's frame: the animation encoders (ffmpeg's stand-in) and the WebGL end of the OpenGL shim.
+for (const [name, entry] of [["kicad_media.js", "web/plugins/media.ts"], ["kicad_gl.js", "web/plugins/glfixed.ts"]]) {
+  const r = esbuild.buildSync({ entryPoints: [path.join(server, entry)], bundle: true, format: "iife", target: "es2020", minify: true, write: false, legalComments: "none" });
+  files[name] = Buffer.from(r.outputFiles[0].contents).toString("utf8");
+}
 fs.writeFileSync(path.join(out, "kicad-python.json"), JSON.stringify({ version: JSON.parse(fs.readFileSync(path.join(pkg, "package.json"), "utf8")).version, files }));
 
 // ---- packages a plugin may import (plugins/python/packages.json)
@@ -35,6 +42,52 @@ const pypiWheel = async (name, ver, file) => {
   if (!hit) throw new Error(`PyPI has no ${file}`);
   const buf = await get(hit.url); if (sha(buf) !== hit.digests.sha256) throw new Error(`${file} does not match PyPI's SHA-256`);
   return buf;
+};
+// A package PyPI has only as source (no wheel) and that is plain Python: its modules are taken out of the checked
+// source archive and packed as a wheel here, byte for byte the same on every build (stored, sorted, fixed dates).
+const untar = (gz) => {
+  const buf = zlib.gunzipSync(gz); const files = {}; let long = null;
+  for (let at = 0; at + 512 <= buf.length;) {
+    const head = buf.subarray(at, at + 512); if (head.every((b) => b === 0)) break;
+    const str = (a, n) => { const s = head.subarray(a, a + n); const z = s.indexOf(0); return s.subarray(0, z < 0 ? n : z).toString("utf8"); };
+    const size = parseInt(str(124, 12).trim() || "0", 8); const type = String.fromCharCode(head[156] || 48);
+    let name = long || ((str(345, 155) ? str(345, 155) + "/" : "") + str(0, 100)); long = null;
+    const body = buf.subarray(at + 512, at + 512 + size);
+    if (type === "L") long = body.toString("utf8").replace(/\0+$/, ""); else if (type === "0" || type === "\0") files[name] = Buffer.from(body);
+    at += 512 + Math.ceil(size / 512) * 512;
+  }
+  return files;
+};
+const zipStored = (entries) => {
+  const parts = [], central = []; let at = 0;
+  for (const [name, data] of entries) {
+    const n = Buffer.from(name, "utf8"); const crc = zlib.crc32(data) >>> 0;
+    const local = Buffer.alloc(30); local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6); local.writeUInt16LE(0, 8); local.writeUInt16LE(0, 10); local.writeUInt16LE(0x21, 12);
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22); local.writeUInt16LE(n.length, 26); local.writeUInt16LE(0, 28);
+    const cen = Buffer.alloc(46); cen.writeUInt32LE(0x02014b50, 0); cen.writeUInt16LE(20, 4); cen.writeUInt16LE(20, 6); cen.writeUInt16LE(0x0800, 8); cen.writeUInt16LE(0, 10); cen.writeUInt16LE(0, 12); cen.writeUInt16LE(0x21, 14);
+    cen.writeUInt32LE(crc, 16); cen.writeUInt32LE(data.length, 20); cen.writeUInt32LE(data.length, 24); cen.writeUInt16LE(n.length, 28); cen.writeUInt32LE(at, 42);
+    parts.push(local, n, data); central.push(cen, n); at += 30 + n.length + data.length;
+  }
+  const cd = Buffer.concat(central); const end = Buffer.alloc(22); end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10); end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(at, 16);
+  return Buffer.concat([...parts, cd, end]);
+};
+/** {name, version, source: "x.tar.gz", sha256 (of the source), file: wheel name, modules: ["pkg", "mod.py"]} */
+const wheelFromSource = async (p) => {
+  const meta = JSON.parse((await get(`https://pypi.org/pypi/${p.name}/${p.version}/json`)).toString("utf8"));
+  const hit = (meta.urls || []).find((u) => u.filename === p.source); if (!hit) throw new Error(`PyPI has no ${p.source}`);
+  const gz = await get(hit.url); if (sha(gz) !== p.sha256) throw new Error(`${p.source} does not match the pinned SHA-256`);
+  const all = untar(gz); const entries = [];
+  for (const [full, data] of Object.entries(all)) {
+    const rel = full.split("/").slice(1).join("/").replace(/^src\//, "");
+    if (p.modules.some((m) => rel === m || rel.startsWith(m + "/")) && !/(^|\/)(tests?|__pycache__)\//.test(rel)) entries.push([rel, data]);
+  }
+  if (!entries.length) throw new Error(`${p.source} holds none of ${p.modules.join(", ")}`);
+  const info = `${p.name.replace(/[-.]+/g, "_")}-${p.version}.dist-info`;
+  entries.push([`${info}/METADATA`, Buffer.from(`Metadata-Version: 2.1\nName: ${p.name}\nVersion: ${p.version}\n`)]);
+  entries.push([`${info}/WHEEL`, Buffer.from("Wheel-Version: 1.0\nGenerator: kicad-collab build-python\nRoot-Is-Purelib: true\nTag: py3-none-any\n")]);
+  entries.sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  entries.push([`${info}/RECORD`, Buffer.from(entries.map(([n, d]) => `${n},sha256=${crypto.createHash("sha256").update(d).digest("base64url")},${d.length}`).join("\n") + `\n${info}/RECORD,,\n`)]);
+  return zipStored(entries);
 };
 const packages = {}; const missing = [];
 // The lock file is not consistent about a name's spelling (jsonschema depends on "jsonschema_specifications",
@@ -69,11 +122,20 @@ function readPin(file) { return pins[file] || null; }
 function pin(file, hash) { pins[file] = hash; fs.writeFileSync(pinFile, JSON.stringify(pins)); }
 for (const p of want.pypi) {
   for (const d of p.depends) if (!want.pypi.some((q) => q.name === d)) await fromLock(d);
-  if (!have(p.file, p.sha256)) {
+  let hash = p.sha256;
+  if (p.source) {
+    // built from source: the pinned hash is the source archive's; the wheel's own hash is remembered beside it
+    const key = `${p.file}<${p.sha256}`;
+    if (!have(p.file, readPin(key))) {
+      try { const buf = await wheelFromSource(p); fs.writeFileSync(path.join(out, p.file), buf); pin(key, sha(buf)); }
+      catch (err) { console.warn(`python runtime: ${p.name} is not available (${String(err && err.message || err).slice(0, 120)})`); missing.push(p.name); continue; }
+    }
+    hash = readPin(key);
+  } else if (!have(p.file, p.sha256)) {
     try { const buf = await pypiWheel(p.name, p.version, p.file); if (sha(buf) !== p.sha256) throw new Error(`${p.file} does not match the pinned SHA-256`); fs.writeFileSync(path.join(out, p.file), buf); }
     catch (err) { console.warn(`python runtime: ${p.name} is not available (${String(err && err.message || err).slice(0, 120)})`); missing.push(p.name); continue; }
   }
-  packages[p.name] = { depends: p.depends, file_name: p.file, imports: p.imports, install_dir: "site", name: p.name, package_type: "package", sha256: p.sha256, tool: {}, unvendored_tests: false, version: p.version };
+  packages[p.name] = { depends: p.depends, file_name: p.file, imports: p.imports, install_dir: "site", name: p.name, package_type: "package", sha256: hash, tool: {}, unvendored_tests: false, version: p.version };
 }
 for (const name of want.pyodide) if (!want.pypi.some((q) => q.name === name)) await fromLock(name);
 for (const name of Object.keys(packages)) packages[name] = { ...packages[name], depends: packages[name].depends.map((d) => lockName.get(norm(d)) || d).filter((d) => packages[d]) };

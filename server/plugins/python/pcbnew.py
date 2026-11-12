@@ -13,6 +13,8 @@
 # that only touches such a thing in one of its commands still loads and runs the others.
 
 import math as _math
+import copy as _copy
+import logging as _logging
 import re as _re
 import sys as _sys
 import uuid as _uuid
@@ -422,6 +424,11 @@ class EDA_ANGLE:
 
     def __mul__(self, k):
         return EDA_ANGLE(self._deg * k)
+
+    __rmul__ = __mul__
+
+    def __rsub__(self, o):
+        return EDA_ANGLE(_deg(o) - self._deg)
 
     def __truediv__(self, k):
         return EDA_ANGLE(self._deg / k)
@@ -999,6 +1006,9 @@ PLOT_TEXT_MODE_STROKE, PLOT_TEXT_MODE_NATIVE, PLOT_TEXT_MODE_PHANTOM, PLOT_TEXT_
 EDA_UNITS_INCHES, EDA_UNITS_MILLIMETRES, EDA_UNITS_UNSCALED, EDA_UNITS_DEGREES, EDA_UNITS_PERCENT, EDA_UNITS_MILS = 0, 1, 2, 3, 4, 5
 EDA_UNITS_INCH, EDA_UNITS_MM = EDA_UNITS_INCHES, EDA_UNITS_MILLIMETRES
 DIM_UNITS_MODE_INCHES, DIM_UNITS_MODE_MILS, DIM_UNITS_MODE_MILLIMETRES, DIM_UNITS_MODE_AUTOMATIC = 0, 1, 2, 3
+DIM_UNITS_MODE_INCH, DIM_UNITS_MODE_MM = DIM_UNITS_MODE_INCHES, DIM_UNITS_MODE_MILLIMETRES
+DXF_UNITS_INCHES, DXF_UNITS_MILLIMETERS = 0, 1
+DXF_UNITS_INCH, DXF_UNITS_MM = DXF_UNITS_INCHES, DXF_UNITS_MILLIMETERS
 NETINFO_LIST_UNCONNECTED, NETINFO_LIST_ORPHANED = 0, -1
 RECURSE, NO_RECURSE = 0, 1
 ADD_MODE_INSERT, ADD_MODE_APPEND, ADD_MODE_BULK_APPEND, ADD_MODE_BULK_INSERT = 0, 1, 2, 3
@@ -1916,6 +1926,19 @@ class EDA_TEXT:
 
     def GetTextAngleDegrees(self):
         return self.GetTextAngle().AsDegrees()
+
+    def GetDrawRotation(self):
+        """KiCad's: the angle the text is drawn at; footprint text kept upright stays within -90..90."""
+        d = self.GetTextAngle().AsDegrees()
+        fp = getattr(self, "GetParentFootprint", lambda: None)()
+        if fp is not None and getattr(self, "IsKeepUpright", lambda: False)():
+            while d > 90:
+                d -= 180
+            while d <= -90:
+                d += 180
+        else:
+            d %= 360
+        return EDA_ANGLE(d)
 
     def SetTextAngle(self, angle):
         a = self._at()
@@ -2854,6 +2877,29 @@ class PCB_SHAPE(BOARD_CONNECTED_ITEM):
     def GetCorners(self):
         return self.GetRectCorners() if self._kind() == "rect" else self._poly_points()
 
+    def CalcArcAngles(self, start_angle, end_angle):
+        """KiCad's: the angles of the arc's two ends seen from its centre, the end one never below the start one."""
+        c = self.GetCenter()
+        if self._kind() == "circle":
+            a = b = 0.0
+        else:
+            s, e = self.GetStart(), self.GetEnd()
+            if self.GetArcAngle().AsDegrees() < 0:
+                s, e = e, s
+            a = _math.degrees(_math.atan2(s.y - c.y, s.x - c.x))
+            b = _math.degrees(_math.atan2(e.y - c.y, e.x - c.x))
+        if b == a:
+            b = a + 360.0
+        while b < a:
+            b += 360.0
+        start_angle._deg, end_angle._deg = a, b
+
+    def GetBezControl1(self):
+        return self.GetBezierC1()
+
+    def GetBezControl2(self):
+        return self.GetBezierC2()
+
     def GetBezierC1(self):
         pts = self._poly_points()
         return pts[1] if len(pts) > 1 else VECTOR2I(0, 0)
@@ -3205,6 +3251,19 @@ class PAD(BOARD_CONNECTED_ITEM):
     def GetLocalSolderPasteMargin(self):
         k = _kid(self._node, "solder_paste_margin")
         return FromMM(_f(k[1])) if k is not None and len(k) > 1 else 0
+
+    def _set_margin(self, name, v):
+        if v:
+            _set_kid(self._node, name, ToMM(v))
+        else:
+            _drop_kid(self._node, name)
+        self._touch()
+
+    def SetLocalSolderMaskMargin(self, v):
+        self._set_margin("solder_mask_margin", v)
+
+    def SetLocalSolderPasteMargin(self, v):
+        self._set_margin("solder_paste_margin", v)
 
     def GetZoneConnection(self):
         k = _kid(self._node, "zone_connect")
@@ -3712,6 +3771,9 @@ class FOOTPRINT(BOARD_ITEM):
     def IsBoardOnly(self):
         return bool(self.GetAttributes() & FP_BOARD_ONLY)
 
+    def SetBoardOnly(self, on=True):
+        self._set_attr(FP_BOARD_ONLY, on)
+
     def GetTypeName(self):
         a = self.GetAttributes()
         return "SMD" if a & FP_SMD else ("Through hole" if a & FP_THROUGH_HOLE else "Other")
@@ -3835,6 +3897,20 @@ class FOOTPRINT(BOARD_ITEM):
     def GetLocalSolderMaskMargin(self):
         k = _kid(self._node, "solder_mask_margin")
         return FromMM(_f(k[1])) if k is not None and len(k) > 1 else 0
+
+    def SetLocalSolderMaskMargin(self, v):
+        if v:
+            _set_kid(self._node, "solder_mask_margin", ToMM(v))
+        else:
+            _drop_kid(self._node, "solder_mask_margin")
+        self._touch()
+
+    def SetLocalSolderPasteMargin(self, v):
+        if v:
+            _set_kid(self._node, "solder_paste_margin", ToMM(v))
+        else:
+            _drop_kid(self._node, "solder_paste_margin")
+        self._touch()
 
     def GetLocalSolderPasteMargin(self):
         k = _kid(self._node, "solder_paste_margin")
@@ -4348,34 +4424,337 @@ class PCB_GROUP(BOARD_ITEM):
 
 
 class PCB_DIMENSION_BASE(BOARD_ITEM):
+    """A dimension, in the board file's own form: two measured points, a height, format and style blocks,
+    and the text KiCad shows (kept up to date here the way KiCad updates it)."""
     _TYPE, _CLASS, _TOKEN = PCB_DIMENSION_T, "PCB_DIMENSION", "dimension"
+    _KIND = "aligned"
+    DIR_HORIZONTAL, DIR_VERTICAL = 0, 1
+
+    def _init_new(self):
+        n = self._node
+        n.extend([[Sym("type"), Sym(self._KIND)], [Sym("layer"), "Dwgs.User"]])
+        BOARD_ITEM._init_new(self)
+        n.extend([
+            [Sym("pts"), [Sym("xy"), _n(0), _n(0)], [Sym("xy"), _n(0), _n(0)]],
+            [Sym("height"), _n(0)],
+            [Sym("format"), [Sym("prefix"), ""], [Sym("suffix"), ""], [Sym("units"), _n(3)], [Sym("units_format"), _n(1)], [Sym("precision"), _n(4)]],
+            [Sym("style"), [Sym("thickness"), _n(0.1)], [Sym("arrow_length"), _n(1.27)], [Sym("text_position_mode"), _n(0)],
+             [Sym("extension_height"), _n(0.58642)], [Sym("extension_offset"), _n(0.5)], Sym("keep_text_aligned")],
+            [Sym("gr_text", ), "0", [Sym("at"), _n(0), _n(0)], [Sym("layer"), "Dwgs.User"], [Sym("uuid"), str(_uuid.uuid4())],
+             [Sym("effects"), [Sym("font"), [Sym("size"), _n(1), _n(1)], [Sym("thickness"), _n(0.15)]]]],
+        ])
+        if self._KIND == "orthogonal":
+            n.insert(n.index(_kid(n, "format")), [Sym("orientation"), _n(0)])
+
+    # ---- the two measured points
+    def _points(self):
+        return _pts_of(self._node, self._to_board)
+
+    def _set_point(self, i, a):
+        p = VECTOR2I(*a)
+        pts = _kid(self._node, "pts")
+        if pts is None:
+            pts = _set_kid(self._node, "pts")
+        while len(pts) < 3:
+            pts.append([Sym("xy"), _n(0), _n(0)])
+        pts[1 + i] = [Sym("xy"), _n(ToMM(p.x)), _n(ToMM(p.y))]
+        self._update()
 
     def GetBoundingBox(self, *_):
         b = BOX2I()
-        for p in _pts_of(self._node, self._to_board):
+        for p in self._points() + [self._crossbar(0), self._crossbar(1)]:
             b.Merge(p)
         return b
 
     def GetPosition(self):
-        pts = _pts_of(self._node, self._to_board)
+        pts = self._points()
         return pts[0] if pts else VECTOR2I(0, 0)
 
     def GetStart(self):
         return self.GetPosition()
 
     def GetEnd(self):
-        pts = _pts_of(self._node, self._to_board)
+        pts = self._points()
         return pts[1] if len(pts) > 1 else VECTOR2I(0, 0)
 
+    def SetStart(self, *a):
+        self._set_point(0, a)
+
+    def SetEnd(self, *a):
+        self._set_point(1, a)
+
+    def SetPosition(self, *a):
+        p = VECTOR2I(*a)
+        o = self.GetPosition()
+        self.Move(VECTOR2I(p.x - o.x, p.y - o.y))
+
+    def Move(self, *a):
+        d = VECTOR2I(*a)
+        s, e = self.GetStart(), self.GetEnd()
+        self._set_point(0, (s.x + d.x, s.y + d.y))
+        self._set_point(1, (e.x + d.x, e.y + d.y))
+
+    def SetLayer(self, layer):
+        _set_kid(self._node, "layer", _layer_name(layer))
+        t = _kid(self._node, "gr_text")
+        if t is not None:
+            _set_kid(t, "layer", _layer_name(layer))
+        self._touch()
+
+    # ---- height and orientation
+    def _num(self, name, default=0.0, block=None):
+        k = _kid(_kid(self._node, block) if block else self._node, name)
+        return _f(k[1]) if k is not None and len(k) > 1 else default
+
+    def _put(self, name, value, block=None):
+        host = self._node
+        if block:
+            host = _kid(self._node, block)
+            if host is None:
+                host = _set_kid(self._node, block)
+        _set_kid(host, name, value)
+        self._update()
+
+    def _flag(self, name, on, block):
+        host = _kid(self._node, block)
+        if host is None:
+            host = _set_kid(self._node, block)
+        host[:] = [c for c in host if not (isinstance(c, Sym) and str(c) == name) and not (isinstance(c, list) and c and c[0] == name)]
+        if on:
+            host.append([Sym(name), Sym("yes")] if self._board is not None and getattr(self._board, "_version", 0) >= 20240108 else Sym(name))
+        self._update()
+
+    def _has(self, name, block):
+        host = _kid(self._node, block) or []
+        for c in host:
+            if isinstance(c, Sym) and str(c) == name:
+                return True
+            if isinstance(c, list) and c and c[0] == name:
+                return len(c) < 2 or str(c[1]) != "no"
+        return False
+
+    def GetHeight(self):
+        return FromMM(self._num("height"))
+
+    def SetHeight(self, v):
+        self._put("height", ToMM(v))
+
+    def GetOrientation(self):
+        return int(self._num("orientation"))
+
+    def SetOrientation(self, v):
+        self._put("orientation", int(v))
+
+    def GetAngle(self):
+        s, e = self.GetStart(), self.GetEnd()
+        return _math.degrees(_math.atan2(e.y - s.y, e.x - s.x))
+
+    def _crossbar(self, i):
+        """Where the dimension line's ends are: the measured points moved out by the height."""
+        s, e = self.GetStart(), self.GetEnd()
+        h = self.GetHeight()
+        k = _kid(self._node, "type")
+        if (str(k[1]) if k is not None and len(k) > 1 else self._KIND) == "orthogonal":
+            if self.GetOrientation() == self.DIR_HORIZONTAL:
+                y = s.y + h
+                return VECTOR2I(s.x if i == 0 else e.x, y)
+            x = s.x + h
+            return VECTOR2I(x, s.y if i == 0 else e.y)
+        d = _math.hypot(e.x - s.x, e.y - s.y) or 1.0
+        nx, ny = -(e.y - s.y) / d, (e.x - s.x) / d
+        p = s if i == 0 else e
+        return VECTOR2I(int(p.x + nx * h), int(p.y + ny * h))
+
+    def GetCrossbarStart(self):
+        return self._crossbar(0)
+
+    def GetCrossbarEnd(self):
+        return self._crossbar(1)
+
     def GetMeasuredValue(self):
-        return int(self.GetStart().Distance(self.GetEnd()))
+        a, b = self._crossbar(0), self._crossbar(1)
+        return int(round(_math.hypot(b.x - a.x, b.y - a.y)))
+
+    # ---- format
+    def GetUnitsMode(self):
+        return int(self._num("units", 3, "format"))
+
+    def SetUnitsMode(self, mode):
+        self._put("units", int(mode), "format")
+
+    def GetUnits(self):
+        return {DIM_UNITS_MODE_INCHES: EDA_UNITS_INCHES, DIM_UNITS_MODE_MILS: EDA_UNITS_MILS}.get(self.GetUnitsMode(), EDA_UNITS_MILLIMETRES)
+
+    def SetUnits(self, units):
+        self.SetUnitsMode({EDA_UNITS_INCHES: DIM_UNITS_MODE_INCHES, EDA_UNITS_MILS: DIM_UNITS_MODE_MILS}.get(units, DIM_UNITS_MODE_MILLIMETRES))
+
+    def GetUnitsFormat(self):
+        return int(self._num("units_format", 1, "format"))
+
+    def SetUnitsFormat(self, v):
+        self._put("units_format", int(v), "format")
+
+    def GetPrecision(self):
+        return int(self._num("precision", 4, "format"))
+
+    def SetPrecision(self, v):
+        self._put("precision", int(v), "format")
+
+    def GetSuppressZeroes(self):
+        return self._has("suppress_zeroes", "format")
+
+    def SetSuppressZeroes(self, on=True):
+        self._flag("suppress_zeroes", on, "format")
+
+    def _affix(self, name):
+        k = _kid(_kid(self._node, "format") or [], name)
+        return str(k[1]) if k is not None and len(k) > 1 else ""
+
+    def GetPrefix(self):
+        return self._affix("prefix")
+
+    def SetPrefix(self, text):
+        self._put("prefix", str(text), "format")
+
+    def GetSuffix(self):
+        return self._affix("suffix")
+
+    def SetSuffix(self, text):
+        self._put("suffix", str(text), "format")
+
+    def GetOverrideTextEnabled(self):
+        return _kid(_kid(self._node, "format") or [], "override_value") is not None
+
+    def GetOverrideText(self):
+        return self._affix("override_value")
+
+    def SetOverrideText(self, text):
+        self._put("override_value", str(text), "format")
+
+    def SetOverrideTextEnabled(self, on=True):
+        if not on:
+            f = _kid(self._node, "format")
+            if f is not None:
+                _drop_kid(f, "override_value")
+            self._update()
+
+    # ---- style
+    def GetLineThickness(self):
+        return FromMM(self._num("thickness", 0.1, "style"))
+
+    def SetLineThickness(self, v):
+        self._put("thickness", ToMM(v), "style")
+
+    def GetArrowLength(self):
+        return FromMM(self._num("arrow_length", 1.27, "style"))
+
+    def SetArrowLength(self, v):
+        self._put("arrow_length", ToMM(v), "style")
+
+    def GetExtensionOffset(self):
+        return FromMM(self._num("extension_offset", 0.5, "style"))
+
+    def SetExtensionOffset(self, v):
+        self._put("extension_offset", ToMM(v), "style")
+
+    def GetExtensionHeight(self):
+        return FromMM(self._num("extension_height", 0.58642, "style"))
+
+    def SetExtensionHeight(self, v):
+        self._put("extension_height", ToMM(v), "style")
+
+    def GetTextPositionMode(self):
+        return int(self._num("text_position_mode", 0, "style"))
+
+    def SetTextPositionMode(self, v):
+        self._put("text_position_mode", int(v), "style")
+
+    def GetKeepTextAligned(self):
+        return self._has("keep_text_aligned", "style")
+
+    def SetKeepTextAligned(self, on=True):
+        self._flag("keep_text_aligned", on, "style")
+
+    # ---- the text
+    def GetValueText(self):
+        if self.GetOverrideTextEnabled():
+            return self.GetOverrideText()
+        mode = self.GetUnitsMode()
+        mm = ToMM(self.GetMeasuredValue())
+        v, unit = {DIM_UNITS_MODE_INCHES: (mm / 25.4, "in"), DIM_UNITS_MODE_MILS: (mm / 0.0254, "mils")}.get(mode, (mm, "mm"))
+        t = "%.*f" % (max(0, min(self.GetPrecision(), 9)), v)
+        if self.GetSuppressZeroes() and "." in t:
+            t = t.rstrip("0").rstrip(".")
+        fmt = self.GetUnitsFormat()
+        if fmt == 1:
+            t += " " + unit
+        elif fmt == 2:
+            t += " (" + unit + ")"
+        return self.GetPrefix() + t + self.GetSuffix()
 
     def GetText(self):
         t = _kid(self._node, "gr_text")
         return str(t[1]) if t is not None and len(t) > 1 else ""
 
+    def _text_size(self):
+        t = _kid(self._node, "gr_text")
+        f = _kid(_kid(t, "effects") or [], "font") if t is not None else None
+        k = _kid(f, "size") if f is not None else None
+        return _f(k[1]) if k is not None and len(k) > 1 else 1.0
 
-PCB_DIM_ALIGNED = PCB_DIM_ORTHOGONAL = PCB_DIM_LEADER = PCB_DIM_CENTER = PCB_DIM_RADIAL = PCB_DIMENSION_BASE
+    def Update(self):
+        self._update()
+
+    def _update(self):
+        """Refresh the shown value and, unless it was placed by hand, where it sits: centred just outside the dimension line."""
+        t = _kid(self._node, "gr_text")
+        if t is not None and len(t) > 1:
+            t[1] = self.GetValueText()
+            if self.GetTextPositionMode() != 3:
+                a, b = self._crossbar(0), self._crossbar(1)
+                d = _math.hypot(b.x - a.x, b.y - a.y) or 1.0
+                ux, uy = (b.x - a.x) / d, (b.y - a.y) / d
+                nx, ny = uy, -ux
+                h = self.GetHeight()
+                s, e = self.GetStart(), self.GetEnd()
+                side = (a.x - s.x) * nx + (a.y - s.y) * ny
+                sign = -1.0 if side < 0 or (side == 0 and h < 0) else 1.0
+                off = 0.0 if self.GetTextPositionMode() == 1 else FromMM(self._text_size() / 2 + 0.15 + self._num("thickness", 0.1, "style")) * sign
+                x, y = (a.x + b.x) / 2 + nx * off, (a.y + b.y) / 2 + ny * off
+                ang = -_math.degrees(_math.atan2(uy, ux)) if self.GetKeepTextAligned() else 0.0
+                while ang > 90:
+                    ang -= 180
+                while ang <= -90:
+                    ang += 180
+                at = [Sym("at"), _n(ToMM(x)), _n(ToMM(y))] + ([_n(ang)] if abs(ang) > 1e-9 else [])
+                old = _kid(t, "at")
+                if old is None:
+                    t.insert(2, at)
+                else:
+                    old[:] = at
+        self._touch()
+
+
+class PCB_DIM_ALIGNED(PCB_DIMENSION_BASE):
+    _TYPE, _CLASS, _KIND = PCB_DIM_ALIGNED_T, "PCB_DIM_ALIGNED", "aligned"
+
+
+class PCB_DIM_ORTHOGONAL(PCB_DIM_ALIGNED):
+    _TYPE, _CLASS, _KIND = PCB_DIM_ORTHOGONAL_T, "PCB_DIM_ORTHOGONAL", "orthogonal"
+
+
+class PCB_DIM_LEADER(PCB_DIMENSION_BASE):
+    _TYPE, _CLASS, _KIND = PCB_DIM_LEADER_T, "PCB_DIM_LEADER", "leader"
+
+
+class PCB_DIM_CENTER(PCB_DIMENSION_BASE):
+    _TYPE, _CLASS, _KIND = PCB_DIM_CENTER_T, "PCB_DIM_CENTER", "center"
+
+
+class PCB_DIM_RADIAL(PCB_DIMENSION_BASE):
+    _TYPE, _CLASS, _KIND = PCB_DIM_RADIAL_T, "PCB_DIM_RADIAL", "radial"
+
+
 DIMENSION = PCB_DIMENSION_BASE
 
 
@@ -4666,6 +5045,13 @@ class BOARD_DESIGN_SETTINGS:
         self.m_TextThickness = [FromMM(0.15)] * LAYER_CLASS_COUNT
         self.m_LineThickness = [FromMM(0.1)] * LAYER_CLASS_COUNT
 
+    def CloneFrom(self, other):
+        """Take another board's settings (the setup block of its file: stack-up, mask and paste margins, plot settings)."""
+        src = getattr(getattr(other, "_board", None), "_setup", None)
+        if src is not None:
+            self._board._section("setup")[:] = _copy.deepcopy(src)
+        self.__init__(self._board)
+
     def _origin(self, name):
         s = self._board._setup
         k = _kid(s, name) if s is not None else None
@@ -4677,10 +5063,18 @@ class BOARD_DESIGN_SETTINGS:
     def GetGridOrigin(self):
         return self._origin("grid_origin")
 
-    def SetAuxOrigin(self, *_):
-        _unsupported("Changing the drill/place origin from a plugin")
+    def _set_origin(self, name, a):
+        p = VECTOR2I(*a)
+        _set_kid(self._board._section("setup"), name, ToMM(p.x), ToMM(p.y))
 
-    SetGridOrigin = SetAuxOrigin
+    def SetAuxOrigin(self, *a):
+        self._set_origin("aux_axis_origin", a)
+
+    def SetGridOrigin(self, *a):
+        self._set_origin("grid_origin", a)
+
+    def SetBoardThickness(self, v):
+        _set_kid(self._board._section("general"), "thickness", ToMM(v))
 
     def GetBoardThickness(self):
         g = self._board._general
@@ -5230,6 +5624,14 @@ class BOARD(EDA_ITEM):
     AddNative = Add
 
     def Remove(self, item, *_):
+        if item is None:
+            return
+        if isinstance(item, NETINFO_ITEM):
+            code = self._net_codes.pop(item.GetNetname(), None)
+            if code:
+                self._net_names.pop(code, None)
+                self._modified = True
+            return
         if isinstance(item, FOOTPRINT) or item._parent is None:
             uid = item.m_Uuid.AsString()
             if self._by_id.get(uid) is None:
@@ -5278,8 +5680,36 @@ class BOARD(EDA_ITEM):
     def GetCopperLayerCount(self):
         return len(self._copper_layers())
 
-    def SetCopperLayerCount(self, *_):
-        _unsupported("Changing the layer stack from a plugin")
+    def SetCopperLayerCount(self, count):
+        """This board's own copper layers: front, back and the inner ones between (see SetEnabledLayers)."""
+        count = max(1, int(count))
+        want = [F_Cu] + _CU_ORDER[1:max(1, count - 1)] + ([B_Cu] if count > 1 else [])
+        have = {i: row for i, *row in self._layers}
+        if not self._layers:
+            if count == 2:
+                return
+            have = {i: (_layer_name(i), "user", "") for i in LSET.AllLayersMask()._s if not IsCopperLayer(i)}
+        rows = [(i,) + tuple(have.get(i, (_layer_name(i), "signal", ""))) for i in want]
+        self._layers = rows + [(i,) + tuple(r) for i, r in have.items() if not IsCopperLayer(i)]
+        self._sync_layers()
+
+    def _sync_layers(self):
+        """Write the layer list back into the file's `layers` block."""
+        if not getattr(self, "_head", None):
+            self._head = [[Sym("version"), 20241229], [Sym("generator"), "pcbnew"], [Sym("generator_version"), "10.0"]]
+        node = [Sym("layers")] + [[_n(i), name, Sym(t or "user")] + ([user] if user else []) for i, name, t, user in self._layers]
+        for h in self._head:
+            if h and h[0] == "layers":
+                h[:] = node
+                break
+        else:
+            at = 0
+            for i, h in enumerate(self._head):
+                if h and h[0] in ("version", "generator", "generator_version", "general", "paper", "title_block"):
+                    at = i + 1
+            self._head.insert(at, node)
+        if _Host.board is self:
+            _logging.getLogger("kicad_web").warning("The layers changed in the plugin's copy of the board; change them in Board Setup for the editor to follow.")
 
     def GetEnabledLayers(self):
         if not self._layers:
@@ -5333,10 +5763,32 @@ class BOARD(EDA_ITEM):
         # kept for this run only: the layer table is part of the board setup, which plugins do not change on the web
         std = _layer_name(layer)
         self._layers = [(i, n, t, str(name) if n == std else u) for i, n, t, u in self._layers]
+        self._sync_layers()
         return True
 
-    def SetEnabledLayers(self, *_):
-        _unsupported("Changing the enabled layers from a plugin")
+    def SetEnabledLayers(self, layers, *_):
+        """This board's own list of layers follows; the editor's layer setup (Board Setup) is the person's to change."""
+        want = set(LSET(layers)._s)
+        have = {i for i, *_r in self._layers}
+        if want == have:
+            return
+        self._layers = [row for row in self._layers if row[0] in want] + \
+            [(i, _layer_name(i), "signal" if IsCopperLayer(i) else "user", None) for i in sorted(want - have)]
+        self._sync_layers()
+
+    def ClearProject(self, *_):
+        pass
+
+    def SetProperties(self, props):
+        self._props = dict(props or {})
+
+    def SetPageSettings(self, *_):
+        pass
+
+    def SetTitleBlock(self, tb):
+        node = getattr(tb, "_node", None)
+        if node is not None and self._title is not None:
+            self._title[:] = _copy.deepcopy(node)
 
     SetVisibleLayers = lambda self, *_: None
     SetElementVisibility = lambda self, *_: None
@@ -5374,6 +5826,21 @@ class BOARD(EDA_ITEM):
     # -- settings and file
     def GetDesignSettings(self):
         return BOARD_DESIGN_SETTINGS(self)
+
+    def _section(self, name):
+        """The board file's `general` or `setup` block, made when the file has none yet."""
+        n = getattr(self, "_" + name)
+        if n is None:
+            n = [Sym(name)]
+            at = 0
+            if not getattr(self, "_head", None):
+                self._head = [[Sym("version"), 20241229], [Sym("generator"), "pcbnew"], [Sym("generator_version"), "10.0"]]
+            for i, h in enumerate(self._head):
+                if h and h[0] in ("version", "generator", "generator_version", "general", "paper", "title_block", "layers"):
+                    at = i + 1
+            self._head.insert(at, n)
+            setattr(self, "_" + name, n)
+        return n
 
     def GetTitleBlock(self):
         return TITLE_BLOCK(self._title)
@@ -5414,6 +5881,11 @@ class BOARD(EDA_ITEM):
     def _text(self):
         """The board as a .kicad_pcb file: the header as it arrived, the items as they are now."""
         head = getattr(self, "_head", None) or [[Sym("version"), 20241229], [Sym("generator"), "pcbnew"], [Sym("generator_version"), "10.0"]]
+        if not self._nets_by_name_only and any(h and h[0] == "net" for h in head):
+            # a file that numbers its nets declares each one: the list follows the nets as they are now
+            nets = [[Sym("net"), _n(c), n] for c, n in sorted(self._net_names.items())]
+            first = next(i for i, h in enumerate(head) if h and h[0] == "net")
+            head = [h for h in head[:first] if not (h and h[0] == "net")] + nets + [h for h in head[first:] if not (h and h[0] == "net")]
         return "(kicad_pcb\n" + "\n".join("  " + _dump(n) for n in list(head) + [it._node for it in self._items if getattr(it, "_node", None) is not None]) + "\n)\n"
 
     def Save(self, path=None, *_):
@@ -5766,6 +6238,44 @@ def GetWizardsSearchPaths():
     return []
 
 
+def Cast_to_BOARD_ITEM(item):
+    return item
+
+
+Cast_to_FOOTPRINT = Cast_to_PCB_TEXT = Cast_to_PCB_SHAPE = Cast_to_PAD = Cast_to_ZONE = Cast_to_PCB_TRACK = Cast_to_PCB_VIA = Cast_to_BOARD_ITEM
+Cast_to_PCB_ARC = Cast_to_PCB_GROUP = Cast_to_PCB_DIM_ALIGNED = Cast_to_PCB_DIM_ORTHOGONAL = Cast_to_PCB_TEXTBOX = Cast_to_BOARD_ITEM
+
+
+class UNITS_PROVIDER:
+    def __init__(self, scale=None, units=None):
+        self._scale, self._units = scale, EDA_UNITS_MILLIMETRES if units is None else units
+
+    def GetUserUnits(self):
+        return self._units
+
+    def SetUserUnits(self, units):
+        self._units = units
+
+    def GetIuScale(self):
+        return self._scale
+
+    def StringFromValue(self, value, add_units=False, *_):
+        inch = self._units in (EDA_UNITS_INCHES, EDA_UNITS_MILS)
+        v = ToMM(value) / 25.4 * (1000 if self._units == EDA_UNITS_MILS else 1) if inch else ToMM(value)
+        t = ("%.4f" % v).rstrip("0").rstrip(".")
+        return t + ((" mils" if self._units == EDA_UNITS_MILS else " in") if inch else " mm") if add_units else t
+
+    MessageTextFromValue = StringFromValue
+
+    def ValueFromString(self, text, *_):
+        m = _re.match(r"\s*(-?[0-9.]+)\s*(\w*)", str(text))
+        if not m:
+            return 0
+        v, u = float(m.group(1)), m.group(2).lower()
+        u = u or {EDA_UNITS_INCHES: "in", EDA_UNITS_MILS: "mils"}.get(self._units, "mm")
+        return FromMM(v * 25.4) if u in ("in", "inch", '"') else FromMM(v * 0.0254) if u in ("mil", "mils", "thou") else FromMM(v)
+
+
 def GetSettingsManager():
     return SETTINGS_MANAGER()
 
@@ -5801,6 +6311,16 @@ class SETTINGS_MANAGER:
 
     def GetProject(self, *_):
         return PROJECT(GetBoard())
+
+    def LoadProject(self, *_):
+        """Projects are the editor's: the one open is the one loaded."""
+        return True
+
+    def UnloadProject(self, *_):
+        return True
+
+    def SaveProject(self, *_):
+        return True
 
     def Prj(self):
         return PROJECT(GetBoard())
@@ -5840,11 +6360,22 @@ def _library(what, **args):
 
 def FootprintLoad(lib, name, *_):
     """The footprint `name` of a library, as a FOOTPRINT that is not on a board yet; None when there is none."""
-    r = _library("footprint", lib=_lib_nick(lib), name=str(name))
-    text = (r or {}).get("footprint")
+    import os
+    path = os.path.join(str(lib), str(name) + ".kicad_mod")
+    if os.path.isfile(path):                # a library folder the plugin brought with it
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    else:
+        r = _library("footprint", lib=_lib_nick(lib), name=str(name))
+        text = (r or {}).get("footprint")
     if not text:
         return None
     node = _parse(text)[0]
+    if node and node[0] == "module":        # a library file from before KiCad 6: the same footprint under its old name
+        node[0] = Sym("footprint")
+        node[:] = [k for k in node if not (isinstance(k, list) and k and k[0] in ("tedit", "tstamp"))]
+        if len(node) > 1 and not isinstance(node[1], list):
+            node[1] = str(node[1])
     if _kid(node, "at") is None:
         node.insert(2, [Sym("at"), _n(0), _n(0)])
     if len(node) > 1 and not isinstance(node[1], list):
@@ -5866,6 +6397,9 @@ def FootprintLoad(lib, name, *_):
 
 
 def FootprintEnumerate(lib, *_):
+    import os
+    if os.path.isdir(str(lib)):
+        return sorted(f[:-10] for f in os.listdir(str(lib)) if f.endswith(".kicad_mod"))
     r = _library("footprints", lib=_lib_nick(lib))
     return [str(n) for n in (r or {}).get("footprints", [])]
 

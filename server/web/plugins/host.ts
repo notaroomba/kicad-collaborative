@@ -428,7 +428,7 @@ const NEEDS: Record<string, string | null> = {
   "view.select": "view", "view.highlight": "view", "view.focus": "view", "view.appearance": "view", "view.setMarkers": "view", "view.clearMarkers": "view", "view.openDocument": "view",
   "files.save": "files:export", "files.pick": "files:import",
   "fab.layers": "design:read", "fab.gerbers": "design:read", "fab.drill": "design:read", "fab.positions": "design:read", "fab.bom": "design:read",
-  "fab.svg": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write",
+  "fab.svg": "design:read", "fab.drc": "design:read", "fab.netlist": "design:read", "fab.render": "design:read", "fab.model": "design:read", "project.versions": "design:read", "project.saveVersion": "design:write",
   "libs.libraries": null, "libs.footprints": null, "libs.footprint": null,
   "net.fetch": "network",
   "ui.toast": null, "ui.status": null, "ui.prompt": null, "ui.confirm": null, "ui.showPanel": null, "ui.hidePanel": null, "ui.showWindow": null, "ui.hideWindow": null, "ui.openLink": null,

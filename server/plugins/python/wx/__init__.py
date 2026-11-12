@@ -353,12 +353,16 @@ NB_TOP, NB_LEFT, NB_RIGHT, NB_BOTTOM, NB_FIXEDWIDTH, NB_MULTILINE = 0, 0x0020, 0
 FD_OPEN, FD_SAVE, FD_OVERWRITE_PROMPT, FD_FILE_MUST_EXIST, FD_MULTIPLE, FD_CHANGE_DIR, FD_PREVIEW = 0x0001, 0x0002, 0x0004, 0x0010, 0x0020, 0x0080, 0x0100
 FD_DEFAULT_STYLE = FD_OPEN
 DD_DEFAULT_STYLE, DD_DIR_MUST_EXIST, DD_NEW_DIR_BUTTON, DD_CHANGE_DIR = 0, 0x0200, 0, 0x0100
+FLP_FILE_MUST_EXIST, FLP_OVERWRITE_PROMPT, FLP_CHANGE_DIR, FLP_SMALL, DIRP_DIR_MUST_EXIST, DIRP_CHANGE_DIR, DIRP_SMALL = 0x2000, 0x0100, 0x4000, 0x8000, 0x0008, 0x0010, 0x8000
+HL_CONTEXTMENU, HL_ALIGN_LEFT, HL_ALIGN_RIGHT, HL_ALIGN_CENTRE, HL_DEFAULT_STYLE = 0x0001, 0x0002, 0x0004, 0x0008, 0x0009
+CP_DEFAULT_STYLE, CP_NO_TLW_RESIZE = 0x0001, 0x0002
 FLP_OPEN, FLP_SAVE, FLP_USE_TEXTCTRL, FLP_DEFAULT_STYLE, DIRP_DEFAULT_STYLE, DIRP_USE_TEXTCTRL = 0x0400, 0x0800, 0x0002, 0x2402, 0x000a, 0x0002
 PD_APP_MODAL, PD_AUTO_HIDE, PD_CAN_ABORT, PD_ELAPSED_TIME, PD_ESTIMATED_TIME, PD_REMAINING_TIME, PD_SMOOTH, PD_CAN_SKIP = 0x0001, 0x0004, 0x0002, 0x0008, 0x0010, 0x0040, 0x0020, 0x0080
 TEXT_ALIGNMENT_LEFT = 1
 BITMAP_TYPE_ANY, BITMAP_TYPE_BMP, BITMAP_TYPE_ICO, BITMAP_TYPE_PNG, BITMAP_TYPE_JPEG, BITMAP_TYPE_XPM, BITMAP_TYPE_GIF = 50, 1, 3, 15, 17, 9, 13
 FONTFAMILY_DEFAULT, FONTFAMILY_DECORATIVE, FONTFAMILY_ROMAN, FONTFAMILY_SCRIPT, FONTFAMILY_SWISS, FONTFAMILY_MODERN, FONTFAMILY_TELETYPE = 70, 71, 72, 73, 74, 75, 76
 FONTSTYLE_NORMAL, FONTSTYLE_ITALIC, FONTSTYLE_SLANT, FONTWEIGHT_NORMAL, FONTWEIGHT_LIGHT, FONTWEIGHT_BOLD = 90, 93, 94, 400, 300, 700
+FONTWEIGHT_THIN, FONTWEIGHT_EXTRALIGHT, FONTWEIGHT_MEDIUM, FONTWEIGHT_SEMIBOLD, FONTWEIGHT_EXTRABOLD, FONTWEIGHT_HEAVY, FONTWEIGHT_EXTRAHEAVY, FONTWEIGHT_MAX = 100, 200, 500, 600, 800, 900, 1000, 1000
 DEFAULT, DECORATIVE, ROMAN, SCRIPT, SWISS, MODERN, TELETYPE, NORMAL, ITALIC, SLANT, LIGHT, BOLD = 70, 71, 72, 73, 74, 75, 76, 90, 93, 94, 300, 700
 (SYS_COLOUR_WINDOW, SYS_COLOUR_WINDOWTEXT, SYS_COLOUR_BTNFACE, SYS_COLOUR_BTNTEXT, SYS_COLOUR_HIGHLIGHT, SYS_COLOUR_HIGHLIGHTTEXT,
  SYS_COLOUR_GRAYTEXT, SYS_COLOUR_BACKGROUND, SYS_COLOUR_3DFACE, SYS_COLOUR_MENU, SYS_COLOUR_INFOBK, SYS_COLOUR_INFOTEXT, SYS_COLOUR_LISTBOX,
@@ -798,7 +802,95 @@ NullColour = Colour(0, 0, 0, 0)
 TransparentColour = Colour(0, 0, 0, 0)
 
 
+# ---- fonts a plugin brings with it (wx.Font.AddPrivateFont; on the desktop the person installs them)
+
+_private_fonts = {}        # family name, lower case -> the file it was loaded from
+_font_files = None         # family name, lower case -> font files in the plugin's own folder
+
+
+def _font_names(path):
+    """(family names, is a variable font) read from a TrueType / OpenType file's own tables."""
+    import struct
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+        count = struct.unpack(">H", data[4:6])[0]
+        tables = {data[12 + i * 16:16 + i * 16]: struct.unpack(">II", data[20 + i * 16:28 + i * 16]) for i in range(count)}
+        at = tables[b"name"][0]
+        n, strings = struct.unpack(">HH", data[at + 2:at + 6])
+        names = []
+        for i in range(n):
+            platform, _enc, _lang, name_id, length, offset = struct.unpack(">HHHHHH", data[at + 6 + i * 12:at + 18 + i * 12])
+            if name_id not in (1, 16):
+                continue
+            raw = data[at + strings + offset:at + strings + offset + length]
+            text = raw.decode("utf-16-be" if platform in (0, 3) else "latin-1", "replace").strip()
+            if text and text not in names:
+                names.append(text)
+        return names, b"fvar" in tables
+    except Exception:
+        return [], False
+
+
+def _add_private_font(path):
+    """Make a font file's family usable by name in this frame.  True when it is (or already was)."""
+    path = str(path)
+    names, variable = _font_names(path)
+    if not names:
+        return False
+    fresh = [n for n in names if n.lower() not in _private_fonts]
+    if not fresh:
+        return True
+    if _DOM:
+        try:
+            from pyodide.ffi import to_js
+            with open(path, "rb") as fh:
+                data = to_js(fh.read())
+            for n in fresh:
+                face = _js.FontFace.new(n, data.buffer, _js.Object.fromEntries(to_js([["weight", "100 900"]])) if variable else _js.Object.new())
+                _wait(face.load())
+                _js.document.fonts.add(face)
+        except Exception as e:
+            import logging
+            logging.getLogger("kicad_web").warning("The font %s could not be loaded: %s", path.rsplit("/", 1)[-1], str(e).splitlines()[-1] if str(e) else e)
+            return False
+        from . import _paint
+        _paint._measured.clear()
+    for n in fresh:
+        _private_fonts[n.lower()] = path
+    return True
+
+
+def _ensure_face(name):
+    """A face a plugin asks for by name that is among the font files in its own folder is loaded from there."""
+    global _font_files
+    key = str(name or "").strip().lower()
+    if not key or key in _private_fonts:
+        return
+    if _font_files is None:
+        _font_files = {}
+        try:
+            import os
+            import kicad_web
+            root = kicad_web.PLUGIN_DIR + "/" + kicad_web._plugin.get("package", "")
+            for folder, _dirs, files in os.walk(root):
+                for f in files:
+                    if f.lower().endswith((".ttf", ".otf")):
+                        for n in _font_names(os.path.join(folder, f))[0]:
+                            _font_files.setdefault(n.lower(), os.path.join(folder, f))
+        except Exception:
+            pass
+    path = _font_files.get(key)
+    if path:
+        _add_private_font(path)
+    else:
+        _private_fonts.setdefault(key, "")       # not one of the plugin's: the browser's own fonts answer
+
+
 class Font:
+    AddPrivateFont = staticmethod(_add_private_font)
+    CanUsePrivateFont = staticmethod(lambda: True)
+
     def __init__(self, pointSize=10, family=FONTFAMILY_DEFAULT, style=FONTSTYLE_NORMAL, weight=FONTWEIGHT_NORMAL, underline=False, faceName="", *_, **kw):
         if isinstance(pointSize, Font):
             f = pointSize
@@ -806,6 +898,8 @@ class Font:
         elif not isinstance(pointSize, (int, float)):
             pointSize = 10
         self._size, self._family, self._wx_style, self._weight, self._underline, self._face = pointSize, family, style, weight, underline, kw.get("faceName", faceName)
+        if self._face:
+            _ensure_face(self._face)
 
     def GetPointSize(self):
         return self._size
@@ -833,6 +927,7 @@ class Font:
 
     def SetFaceName(self, n):
         self._face = n
+        _ensure_face(n)
         return True
 
     def GetFaceName(self):
@@ -877,7 +972,11 @@ class Font:
         return Size(0, int(self._size * 1.33))
 
     def _apply(self, el):
-        if self._weight >= FONTWEIGHT_BOLD:
+        if _private_fonts.get(str(self._face or "").lower()):       # a font the plugin brought: by name, at the weight asked for
+            el.style.fontFamily = '"%s", system-ui, sans-serif' % str(self._face).replace('"', "")
+            if isinstance(self._weight, (int, float)) and 100 <= self._weight <= 1000:
+                el.style.fontWeight = str(int(self._weight))
+        elif self._weight >= FONTWEIGHT_BOLD:
             el.style.fontWeight = "600"
         if self._wx_style in (FONTSTYLE_ITALIC, FONTSTYLE_SLANT):
             el.style.fontStyle = "italic"
@@ -912,7 +1011,7 @@ class FontInfo:
         return self
 
     def FaceName(self, n):
-        self._f._face = n
+        self._f.SetFaceName(n)
         return self
 
     def Underlined(self, on=True):
@@ -1480,6 +1579,8 @@ ImageFromBitmap = lambda bmp: Image(bmp)
 InitAllImageHandlers = lambda: None
 ART_INFORMATION, ART_WARNING, ART_ERROR, ART_QUESTION, ART_FILE_OPEN, ART_FOLDER, ART_FOLDER_OPEN, ART_TIP, ART_GO_UP, ART_GO_DOWN, ART_DELETE, ART_PLUS, ART_MINUS = (
     "info", "warning", "error", "question", "open", "folder", "folder", "tip", "up", "down", "delete", "plus", "minus")
+ART_FILE_SAVE, ART_FILE_SAVE_AS, ART_NEW, ART_COPY, ART_CUT, ART_PASTE, ART_UNDO, ART_REDO, ART_FIND, ART_CLOSE, ART_QUIT, ART_HELP = (
+    "save", "save", "new", "copy", "cut", "paste", "undo", "redo", "find", "close", "close", "help")
 ART_OTHER, ART_BUTTON, ART_MESSAGE_BOX, ART_TOOLBAR, ART_MENU, ART_CMN_DIALOG, ART_FRAME_ICON = "other", "button", "msgbox", "toolbar", "menu", "dialog", "frame"
 
 
@@ -2133,6 +2234,14 @@ class Window(EvtHandler):
     def Layout(self):
         return True
 
+    def SendSizeEvent(self, *_):
+        self.Layout()
+
+    SendSizeEventToParent = PostSizeEvent = PostSizeEventToParent = SendSizeEvent
+
+    def FitInside(self):
+        return None
+
     def Fit(self):
         t = self._wx_top()
         if t is not None and t is not self:
@@ -2202,7 +2311,7 @@ class Window(EvtHandler):
     RefreshRect = Refresh
 
     def Update(self):
-        if self.__dict__.get("_wx_paint_due") and not _DOM:
+        if self.__dict__.get("_wx_paint_due"):
             _paint.paint_now(self)
 
     def SetBackgroundStyle(self, style):
@@ -4193,6 +4302,26 @@ FLEX_GROWMODE_NONE, FLEX_GROWMODE_SPECIFIED, FLEX_GROWMODE_ALL = 0, 1, 2
 
 
 class FlexGridSizer(GridSizer):
+    def _wx_tracks(self, cols):
+        """Measured column widths (or row heights) of the laid-out grid, in pixels."""
+        n = (self.GetCols() if cols else self.GetRows()) or 1
+        if _DOM:
+            try:
+                st = _js.getComputedStyle(self.el)
+                parts = str(st.gridTemplateColumns if cols else st.gridTemplateRows).split()
+                vals = [int(round(float(x[:-2]))) for x in parts if x.endswith("px")]
+                if vals:
+                    return vals
+            except Exception:
+                pass
+        return [120] * int(n)
+
+    def GetColWidths(self):
+        return self._wx_tracks(True)
+
+    def GetRowHeights(self):
+        return self._wx_tracks(False)
+
     def AddGrowableCol(self, idx, proportion=0):
         self._grow_cols[idx] = proportion
         self._wx_template()
@@ -4883,7 +5012,7 @@ class ProgressDialog:
         return True
 
     Close = Hide = lambda self, *a: (_bridge.status("") if _bridge is not None else None, True)[1]
-    Show = Resume = Raise = Fit = SetSize = Centre = Center = lambda self, *a: True
+    Show = Resume = Raise = Fit = SetSize = Centre = Center = Refresh = Update_ = Layout = SetFocus = SetTitle = lambda self, *a, **k: True
     WasCancelled = WasSkipped = lambda self: False
     SetRange = lambda self, m: setattr(self, "_max", m)
     GetRange = lambda self: self._max
@@ -5222,6 +5351,8 @@ Window.FindFocus = staticmethod(lambda: None)
 
 
 class App(EvtHandler):
+    InitLocale = ResetLocale = lambda self, *a: None          # the page's own language settings apply
+
     def __init__(self, redirect=False, filename=None, useBestVisual=False, clearSigInt=True):
         EvtHandler.__init__(self)
         global _app

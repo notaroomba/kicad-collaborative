@@ -300,7 +300,7 @@ class Programs(pcbnew.ActionPlugin):
             text = fh.read()
         out["netlist"] = [r.returncode, text.startswith("(export"), "(comp (ref" in text, "(net (code" in text]
         try:
-            subprocess.run(["kicad-cli", "pcb", "render", "-o", "x.png", board], check=True)
+            subprocess.run(["kicad-cli", "pcb", "export", "step", "-o", "x.step", board], check=True)
             out["render"] = "ran"
         except Exception as e:
             out["render"] = type(e).__name__

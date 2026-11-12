@@ -6,11 +6,14 @@
 // eda_3d_viewer_settings.cpp "camera.rotation_increment") and the view commands use the angles of
 // CAMERA::ViewCommand_T1.  Frames are drawn on demand only.
 import * as THREE from "three";
+import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { BACKGROUND_BOTTOM, BACKGROUND_TOP, RGBA, css } from "./colors";
 import { BoardScene, BoardStats, DEFAULT_VISIBILITY, Visibility } from "./scene";
 
 export type ViewName = "top" | "bottom" | "front" | "back" | "left" | "right";
 export type Axis = "x" | "y" | "z";
+export type RGB = [number, number, number];
+export interface RenderLights { top?: RGB; bottom?: RGB; side?: RGB; camera?: RGB; sideElevation?: number }
 
 const FOV = 45;                          // CAMERA: m_frustum.angle
 const ZOOM_STEP = 1.26;                  // EDA_3D_CANVAS::SetView3D: three steps per doubling
@@ -52,6 +55,7 @@ export class Viewer {
   private persp = new THREE.PerspectiveCamera(FOV, 1, 0.1, 5000);
   private orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
   private board: BoardScene | null = null;
+  private lights: THREE.Object3D[] = [];
   /** the camera's position; it always looks down −Z */
   private cam = new THREE.Vector3(0, 0, 300);
   private width = 1; private height = 1;
@@ -82,9 +86,7 @@ export class Viewer {
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.setPixelRatio(this.software ? 1 : Math.min(window.devicePixelRatio || 1, 2));
     // KiCad lights the board from the camera's side: a key light over the left shoulder, a fill from the right
-    this.scene.add(new THREE.AmbientLight(0xffffff, 1.5));
-    const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(-0.45, 0.6, 1); this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(0.7, -0.4, 0.6); this.scene.add(fill);
+    this.setLights(null);
     this.scene.add(this.pivot);
     this.applyBackground();
     this.bind();
@@ -110,6 +112,39 @@ export class Viewer {
   }
 
   get stats(): BoardStats | null { return this.board ? this.board.stats : null; }
+
+  // ---------------------------------------------------------------- lights
+
+  /**
+   * The lights of a render (kicad-cli pcb render --light-top / --light-bottom / --light-side / --light-camera /
+   * --light-side-elevation): one from above the board, one from below, eight around it at an elevation, and one at
+   * the camera.  All but the camera's turn with the board, as KiCad's do.  `null` puts the viewer's own lights back.
+   */
+  setLights(l: RenderLights | null): void {
+    for (const o of this.lights) { if (o.parent) o.parent.remove(o); (o as THREE.Light).dispose?.(); }
+    this.lights = [];
+    const add = (parent: THREE.Object3D, light: THREE.Light): void => { parent.add(light); this.lights.push(light); };
+    if (!l) {
+      add(this.scene, new THREE.AmbientLight(0xffffff, 1.5));
+      const key = new THREE.DirectionalLight(0xffffff, 1.7); key.position.set(-0.45, 0.6, 1); add(this.scene, key);
+      const fill = new THREE.DirectionalLight(0xffffff, 0.5); fill.position.set(0.7, -0.4, 0.6); add(this.scene, fill);
+      this.requestRender(); return;
+    }
+    const K = 1.6;      // KiCad's light values against this renderer's: its default set lights a board as the viewer's own lights do
+    const dir = (parent: THREE.Object3D, c: RGB | undefined, x: number, y: number, z: number): void => {
+      if (!c || !(c[0] > 0 || c[1] > 0 || c[2] > 0)) return;
+      const peak = Math.max(c[0], c[1], c[2]);
+      const light = new THREE.DirectionalLight(new THREE.Color(c[0] / peak, c[1] / peak, c[2] / peak), peak * K * Math.PI / 2);
+      light.position.set(x, y, z); add(parent, light);
+    };
+    add(this.scene, new THREE.AmbientLight(0xffffff, 0.35));
+    dir(this.pivot, l.top, 0, 0, 1);
+    dir(this.pivot, l.bottom, 0, 0, -1);
+    const el = rad(typeof l.sideElevation === "number" ? l.sideElevation : 60);
+    for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; dir(this.pivot, l.side, Math.cos(a) * Math.cos(el), Math.sin(a) * Math.cos(el), Math.sin(el)); }
+    dir(this.scene, l.camera, 0, 0, 1);
+    this.requestRender();
+  }
 
   setVisibility(patch: Partial<Visibility>): void {
     Object.assign(this.visibility, patch);
@@ -342,17 +377,48 @@ export class Viewer {
     if (this.onFrame) this.onFrame();
   }
 
-  /** The current view with its background gradient, as a PNG (File → Export Image…). */
-  snapshot(type = "image/png"): Promise<Blob> {
+  /** The current view with its background gradient (or none: `transparent`), as a PNG (File → Export Image…). */
+  snapshot(type = "image/png", transparent = false): Promise<Blob> {
     this.renderNow();   // the drawing buffer is only valid until the browser composites: draw and copy in one task
     const src = this.canvas; const out = document.createElement("canvas"); out.width = src.width; out.height = src.height;
     const ctx = out.getContext("2d");
     if (!ctx) return Promise.reject(new Error("no 2D context"));
-    const g = ctx.createLinearGradient(0, 0, 0, out.height);
-    g.addColorStop(0, css(this.background.top, 1)); g.addColorStop(1, css(this.background.bottom, 1));
-    ctx.fillStyle = g; ctx.fillRect(0, 0, out.width, out.height);
+    if (!transparent) {
+      const g = ctx.createLinearGradient(0, 0, 0, out.height);
+      g.addColorStop(0, css(this.background.top, 1)); g.addColorStop(1, css(this.background.bottom, 1));
+      ctx.fillStyle = g; ctx.fillRect(0, 0, out.width, out.height);
+    }
     ctx.drawImage(src, 0, 0);
-    return new Promise((res, rej) => out.toBlob((b) => (b ? res(b) : rej(new Error("could not encode the image"))), type));
+    return new Promise((res, rej) => out.toBlob((b) => (b ? res(b) : rej(new Error("could not encode the image"))), type, 0.92));
+  }
+
+  /** A still of exactly width x height pixels (kicad-cli pcb render -w -h): the host is sized to it and drawn at one pixel per pixel. */
+  renderImage(o: { width: number; height: number; transparent?: boolean; type?: string }): Promise<Blob> {
+    const w = Math.max(1, Math.min(8192, Math.round(o.width))), h = Math.max(1, Math.min(8192, Math.round(o.height)));
+    const keep = this.fitted; const before = this.fitDistance();
+    this.host.style.width = w + "px"; this.host.style.height = h + "px";
+    this.renderer.setPixelRatio(1);
+    this.width = w; this.height = h; this.renderer.setSize(w, h, false);
+    // the zoom is against the fitted distance, which follows the picture's shape
+    if (keep) this.cam.set(0, 0, this.fitDistance()); else this.cam.multiplyScalar(this.fitDistance() / before);
+    return this.snapshot(o.type || "image/png", !!o.transparent);
+  }
+
+  /** Move the view across the picture (kicad-cli pcb render --pan X,Y,Z), in KiCad's camera units of the fitted view. */
+  pan(x: number, y: number, z: number): void {
+    const unit = this.fitDistance() * TAN;
+    this.cam.x -= x * unit; this.cam.y -= y * unit; this.cam.z -= z * unit; this.fitted = false;
+    this.requestRender();
+  }
+
+  /** The board as a binary glTF model (kicad-cli pcb export glb): metres, Y up, as KiCad writes it. */
+  exportGLB(): Promise<ArrayBuffer> {
+    if (!this.board) return Promise.reject(new Error("no board"));
+    const root = new THREE.Group(); const copy = this.board.group.clone(true);
+    copy.position.set(0, 0, 0); root.add(copy);
+    root.rotation.set(-Math.PI / 2, 0, 0); root.scale.setScalar(0.001); root.updateMatrixWorld(true);
+    return new Promise<ArrayBuffer>((ok, no) => new GLTFExporter().parse(root, (out) => (out instanceof ArrayBuffer ? ok(out) : no(new Error("the model was not written as binary glTF"))),
+      (e) => no(e instanceof Error ? e : new Error(String((e as ErrorEvent).message || e))), { binary: true, onlyVisible: true }));
   }
 
   dispose(): void {

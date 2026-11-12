@@ -98,11 +98,11 @@ export const reads: Record<string, (a: any) => Promise<unknown>> = {
     out.push(")");
     const ids: string[] = Array.from(ed.selection || []); if (!ids.length && ed.selected) ids.push(ed.selected.id);
     const st = ed.api.state || {};
-    // The files a desktop plugin finds beside the board: the project file (net classes, design rules) and the schematics, as last saved.
+    // The files a desktop plugin finds beside the board: the project file (net classes, design rules), the schematics and the project's other boards, as last saved.
     const files: { path: string; text: string }[] = []; let budget = 6 * 1024 * 1024;
     if (typeof ed.proSettings === "string" && ed.proSettings) files.push({ path: open.path.replace(/\.kicad_pcb$/, "") + ".kicad_pro", text: ed.proSettings });
     for (const d of design.projectDocs().slice(0, 60)) {
-      if (d.docId === open.docId || !/^kicad_(sch|pro)$/.test(d.docType) || files.some((f) => f.path === d.path) || budget <= 0) continue;
+      if (d.docId === open.docId || !/^kicad_(sch|pro|pcb)$/.test(d.docType) || files.some((f) => f.path === d.path) || budget <= 0) continue;
       try { const r = await fetch(`/api/docs/${encodeURIComponent(d.docId)}/content`); if (!r.ok) continue; const text = await r.text(); if (text.length > budget) continue; budget -= text.length; files.push({ path: d.path, text }); } catch { /* the plugin runs without it */ }
     }
     let grid = 0; try { grid = Number(appState().viewport.gridPitch) || 0; } catch { /* the grid is a convenience for plugins that snap to it */ }
@@ -355,6 +355,78 @@ export const fab: Record<string, (a: any) => Promise<unknown>> = {
       nets: Array.from(n.nets as Map<string, any[]>).map(([name, nodes]) => ({ name, nodes: nodes.map((x) => ({ ref: x.ref, pin: x.pin })) })) };
   },
 };
+
+// ---------------------------------------------------------------- 3D pictures and models
+
+let viewerLoading: Promise<any> | null = null;
+/** The editor's 3D viewer (web/viewer3d), fetched on first use. */
+function loadViewer3d(): Promise<any> {
+  const W = window as any; if (W.KiCadViewer3D && typeof W.KiCadViewer3D.embed === "function") return Promise.resolve(W.KiCadViewer3D);
+  if (viewerLoading) return viewerLoading;
+  viewerLoading = new Promise<any>((ok, no) => {
+    const own = document.querySelector<HTMLScriptElement>('script[src*="/static/dist/editor.js"]'); const query = own ? (own.getAttribute("src") || "").split("?")[1] : "";
+    const el = document.createElement("script"); el.src = "/static/dist/viewer3d.js" + (query ? "?" + query : "");
+    el.onload = () => (W.KiCadViewer3D && typeof W.KiCadViewer3D.embed === "function" ? ok(W.KiCadViewer3D) : no(new ApiError("The 3D viewer did not load.", "not_ready")));
+    el.onerror = () => no(new ApiError("The 3D viewer could not be downloaded.", "not_ready"));
+    document.head.appendChild(el);
+  });
+  viewerLoading.catch(() => { viewerLoading = null; });
+  return viewerLoading;
+}
+
+/** The board a render is made of, set up once and kept while frames of the same board keep coming (an animation is hundreds of them). */
+let stage: { key: string; viewer: any; host: HTMLElement; idle: number } | null = null;
+function dropStage(): void { if (!stage) return; clearTimeout(stage.idle); try { stage.viewer.dispose(); } catch { /* the context is gone already */ } stage.host.remove(); stage = null; }
+async function stageFor(a: any): Promise<{ viewer: any } | { needText: true }> {
+  const key = typeof a.key === "string" && a.key.length <= 80 ? a.key : "";
+  const text = typeof a.text === "string" && a.text.length <= 64 * 1024 * 1024 ? a.text : undefined;
+  if (stage && key && stage.key === key) { clearTimeout(stage.idle); stage.idle = window.setTimeout(dropStage, 120000); return { viewer: stage.viewer }; }
+  if (key && text === undefined) return { needText: true };
+  const V = await loadViewer3d();
+  let doc: any;
+  if (text !== undefined) doc = (K().parseDoc as (t: string, k: string) => any)(text, "kicad_pcb");
+  else { doc = liveDoc().doc; if (doc.type !== "pcb") throw new ApiError("A 3D picture is made of a board; the open document is a schematic.", "not_board"); }
+  dropStage();
+  const host = document.createElement("div"); host.setAttribute("aria-hidden", "true");
+  host.style.cssText = "position:fixed;left:-20000px;top:0;width:640px;height:480px;pointer-events:none;opacity:0";
+  document.body.appendChild(host);
+  let viewer: any;
+  try { viewer = V.embed(host, { wheel: false }); viewer.setDoc(doc, true); }
+  catch (e) { host.remove(); throw new ApiError("This browser could not start WebGL for the 3D picture: " + String((e as Error).message || e), "not_ready"); }
+  stage = { key: key || "live", viewer, host, idle: window.setTimeout(dropStage, key ? 120000 : 0) };
+  return { viewer };
+}
+const SIDES: Record<string, [number, number, number]> = { top: [0, 0, 0], bottom: [0, 180, 0], front: [-90, 0, 0], back: [-90, 0, 180], left: [-90, 0, 90], right: [-90, 0, -90] };
+const num3 = (v: unknown): [number, number, number] | null => (Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === "number" && isFinite(x)) ? [v[0], v[1], v[2]] : null);
+function bytesBase64(bytes: Uint8Array): string { let t = ""; for (let i = 0; i < bytes.length; i += 0x8000) t += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000) as unknown as number[]); return btoa(t); }
+
+/**
+ * `kicad-cli pcb render` and `pcb export glb`: the board as the editor's 3D viewer shows it, at the pose, size and
+ * lights asked for.  KiCad's command line ray-traces; this is the viewer's own drawing (the same one View > 3D Viewer
+ * shows), so the picture is the web editor's, lit to match.
+ */
+Object.assign(fab, {
+  render: async (a: any) => {
+    const st = await stageFor(a); if ("needText" in st) return { needText: true };
+    const v = st.viewer; const side = SIDES[String(a.side || "top")] || SIDES.top; const rot = num3(a.rotate) || [0, 0, 0];
+    const width = Math.max(16, Math.min(8192, Math.round(Number(a.width) || 1600))), height = Math.max(16, Math.min(8192, Math.round(Number(a.height) || 900)));
+    v.setOrtho(!a.perspective);
+    const L = a.lights && typeof a.lights === "object" ? a.lights : null;
+    v.setLights(L ? { top: num3(L.top) || undefined, bottom: num3(L.bottom) || undefined, side: num3(L.side) || undefined, camera: num3(L.camera) || undefined,
+      sideElevation: typeof L.sideElevation === "number" ? L.sideElevation : undefined } : null);
+    v.host.style.width = width + "px"; v.host.style.height = height + "px"; v.resize();
+    v.pose(side[0] + rot[0], side[1] + rot[1], side[2] + rot[2], Math.max(0.05, Math.min(80, Number(a.zoom) || 1)));
+    const pan = num3(a.pan); if (pan) v.pan(pan[0], pan[1], pan[2]);
+    const jpeg = a.format === "jpeg";
+    const blob: Blob = await v.renderImage({ width, height, transparent: !jpeg && a.background !== "opaque", type: jpeg ? "image/jpeg" : "image/png" });
+    return { base64: bytesBase64(new Uint8Array(await blob.arrayBuffer())), width, height, renderer: "web" };
+  },
+  model: async (a: any) => {
+    const st = await stageFor(a); if ("needText" in st) return { needText: true };
+    const glb: ArrayBuffer = await st.viewer.exportGLB();
+    return { base64: bytesBase64(new Uint8Array(glb)), bytes: glb.byteLength };
+  },
+});
 
 // ---------------------------------------------------------------- the project's versions
 //

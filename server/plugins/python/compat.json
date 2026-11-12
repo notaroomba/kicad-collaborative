@@ -6,8 +6,7 @@
   "status": "works"
  },
  "com.alsoknownasfoo.spinrender": {
-  "status": "unsupported",
-  "note": "It renders the board with a 3D renderer on the computer (OpenGL), which a browser tab does not have."
+  "status": "works"
  },
  "com.github.30350n.pcb2blender": {
   "status": "works"
@@ -274,8 +273,7 @@
   "status": "works"
  },
  "com.github.yaqwsx.kikit": {
-  "status": "unsupported",
-  "note": "It is only a pointer to KiKit, a command line program that is installed separately on a computer."
+  "status": "works"
  },
  "com.github.yuri-ncs.t-junction-teardrops": {
   "status": "works"
