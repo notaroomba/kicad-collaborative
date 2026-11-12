@@ -115,7 +115,9 @@ export function beginCarryMove(ctx: PcbCtx, opts?: { placing?: string[]; ids?: s
   const mouse = opts.at ? opts.at.slice() : (ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
   // which already sits under the cursor.  A browser cannot warp the mouse onto the origin (GetMoveWarpsCursor), so a
   // drag made with the button held keeps KiCad's no-warp behaviour: the reference is the cursor where the drag began.
-  const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
+  // D/G on one footprint (ROUTER_TOOL::InlineDrag) takes the same no-warp branch: the reference is the grid-snapped
+  // cursor where D was pressed, so the footprint moves by whole grid steps and never jumps on the first motion.
+  const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || (opts.drag && free.length === 1 && doc.items.get(free[0]!)?.kind === "footprint") ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
   const m: SelectMove = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id)!.node));
   if (opts.drag) dragEnds(doc, m);

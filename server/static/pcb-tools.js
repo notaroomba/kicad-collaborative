@@ -4678,7 +4678,7 @@
     if (!free.length) return true;
     cancelOps();
     const mouse = opts.at ? opts.at.slice() : ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
-    const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
+    const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || opts.drag && free.length === 1 && doc.items.get(free[0])?.kind === "footprint" ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
     const m = { ids: free, start: at.slice(), orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
     for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
     if (opts.drag) dragEnds(doc, m);
