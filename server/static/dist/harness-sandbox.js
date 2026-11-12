@@ -880,14 +880,36 @@ class Board(_Doc):
         self._edit(dict({"op": "set_rules"}, **rules))
         self.flush()
 
-    def zone(self, net: str, layer: str = "B.Cu", box=None, clearance: float = 0.3) -> None:
-        """A copper pour on a net over a rectangle (the board outline by default)."""
+    def zone(self, net: str, layer: str = "B.Cu", box=None, clearance: float = 0.3, connect: str = "thermal") -> None:
+        """A copper pour on a net over a rectangle (the board outline by default).
+
+        connect: how pads of the net join it: "thermal" (reliefs, KiCad's default) or "solid"."""
         b = box or self.geometry().get("outline")
         if not b:
             raise HarnessError("The board has no outline yet; draw one or give the zone a box.")
         pts = " ".join(f"(xy {_r(x)} {_r(y)})" for x, y in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])))
-        self.add_item(f'(zone (net "{net}") (layer "{layer}") (uuid "{_uuid.uuid4()}") (hatch edge 0.5) (connect_pads (clearance {clearance})) (min_thickness 0.25) '
+        self.add_item(f'(zone (net "{net}") (layer "{layer}") (uuid "{_uuid.uuid4()}") (hatch edge 0.5) (connect_pads{' yes' if connect == 'solid' else ''} (clearance {clearance})) (min_thickness 0.25) '
                       f'(fill (thermal_gap 0.3) (thermal_bridge_width 0.4)) (polygon (pts {pts})))')
+
+    def fill(self) -> dict:
+        """Fill every copper zone (KiCad's Fill All Zones) and report the connections still open.
+
+        A pour connects nothing until it is filled, and the design rule check reads the stored fills."""
+        self.flush()
+        self._edit({"op": "fill_zones"})
+        try:
+            res = self.flush() or {}
+        except HarnessError as err:
+            if "already filled" in str(err) or "no copper zone" in str(err):
+                return {"zones": 0, "refilled": 0}
+            raise
+        return next((x["fill_zones"] for x in res.get("details") or [] if "fill_zones" in x), {})
+
+    def check(self, limit: int = 6, refill: bool = True) -> dict:
+        """DRC: counts by kind and the first few violations.  Zones are refilled first, as KiCad's DRC dialog does."""
+        if refill:
+            self.fill()
+        return super().check(limit)
 
     # ---- placing
     def place(self, ref: str, at, rotation: float | None = None, side: str | None = None) -> None:
@@ -986,11 +1008,16 @@ class Board(_Doc):
         self._edit(e)
 
     def route(self, nets: list | None = None, order: list | None = None, widths: dict | None = None, layers: list | None = None,
-              net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None) -> dict:
+              net_options: dict | None = None, keepouts: list | None = None, allow_vias: bool = True, time_s: float | None = None,
+              fill: bool = True) -> dict:
         """Autoroute the missing connections (every unrouted net by default) and report what was done.
 
         order: the few nets to lay first (USB pair, crystal); widths: {net: mm} for supply nets; net_options and
         keepouts are passed to the engine as they are.  Route a whole board in one call.
+
+        On a board with copper zones the zones are then filled, what the real fill leaves open is routed again
+        (twice at most) and the zones are filled once more, so the result counts a pour the way KiCad does.
+        \`left\` is the connections still open at the end, by net.
         """
         e: dict = {"op": "autoroute"}
         if nets:
@@ -1010,19 +1037,45 @@ class Board(_Doc):
             e["allow_vias"] = False
         if time_s:
             e["time_s"] = time_s
-        self._edit(e)
+        out = self._autoroute(e)
+        if fill:
+            f = self.fill()
+            if f.get("zones"):
+                again = {k: v for k, v in e.items() if k != "order"}
+                again["time_s"] = min(60, time_s or 60)
+                for _ in range(2):
+                    if not f.get("unconnected"):
+                        break
+                    more = self._autoroute(again)
+                    if not more["routed"]:
+                        break
+                    for k in ("routed", "connections", "segments", "vias"):
+                        out[k] = (out[k] or 0) + (more[k] or 0)
+                    out["length_mm"] = round((out["length_mm"] or 0) + (more["length_mm"] or 0), 3)
+                    out["unrouted"] = more["unrouted"]
+                    f = self.fill()
+                out["zones_filled"] = f.get("zones")
+                out["left"] = f.get("unconnected_by_net") or {}
+        self.project.note(f"board: routed {out['routed']} of {out['connections']} connections, {out['vias']} vias, {out['length_mm']} mm" + (f", {len(out['unrouted'])} left" if out["unrouted"] else ""))
+        return out
+
+    def _autoroute(self, e: dict) -> dict:
+        """One autoroute edit.  Nothing to route, or nothing that could be routed, is a result and not an error."""
+        self.flush()
+        self._edit(dict(e))
         try:
             res = self.flush() or {}
         except HarnessError as err:
             if "nothing to route" in str(err):
-                return {"routed": 0, "connections": 0, "unrouted": []}
+                return {"routed": 0, "connections": 0, "segments": 0, "vias": 0, "length_mm": 0, "unrouted": []}
+            if "could not make any" in str(err):
+                return {"routed": 0, "connections": None, "segments": 0, "vias": 0, "length_mm": 0, "unrouted": [str(err).split("(autoroute): ")[-1][:400]]}
             raise
         d = next((x["autoroute"] for x in res.get("details") or [] if "autoroute" in x), {})
         un = [f"{u.get('net')}: {u.get('from')} to {u.get('to')} ({u.get('reason') or 'no path'})" for u in d.get("unrouted", [])]
         out = {"routed": d.get("routed"), "connections": d.get("connections"), "segments": d.get("segments"), "vias": d.get("vias"), "length_mm": d.get("length_mm"), "unrouted": un[:25]}
         if len(un) > 25:
             out["more_unrouted"] = len(un) - 25
-        self.project.note(f"board: routed {out['routed']} of {out['connections']} connections, {out['vias']} vias, {out['length_mm']} mm" + (f", {len(un)} left" if un else ""))
         return out
 
     def connect(self, *pads, width: float | None = None, time_s: float | None = None) -> dict:
@@ -2864,8 +2917,8 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var d=require("node:fs"),I=globalThis,A=d.constants;process.binding=e=>{if(e==="constants")return{fs:A};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete I[e]}catch{}var C=new(require("node:string_decoder")).StringDecoder("utf8"),x=new Int32Array(new SharedArrayBuffer(4)),a="";function w(){let e=Buffer.alloc(65536);for(;;){let r=a.indexOf(`
-`);if(r>=0){let t=a.slice(0,r);return a=a.slice(r+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(x,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=C.write(e.subarray(0,n))}}function l(e){let r=Buffer.from(JSON.stringify(e)+`
+`;var d=require("node:fs"),I=globalThis,C=d.constants;process.binding=e=>{if(e==="constants")return{fs:C};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete I[e]}catch{}var A=new(require("node:string_decoder")).StringDecoder("utf8"),x=new Int32Array(new SharedArrayBuffer(4)),a="";function w(){let e=Buffer.alloc(65536);for(;;){let r=a.indexOf(`
+`);if(r>=0){let t=a.slice(0,r);return a=a.slice(r+1),t}let n=0;try{n=d.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(x,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=A.write(e.subarray(0,n))}}function l(e){let r=Buffer.from(JSON.stringify(e)+`
 `,"utf8"),n=0;for(;n<r.length;)try{n+=d.writeSync(1,r,n,r.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(x,0,0,4);continue}throw t}}var F=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",m],["kicad_harness/transport.py",u],["kicad_harness/parts/__init__.py",h],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",g],["kicad_harness/parts/search.py",b],["kicad_harness/parts/symbol.py",y]],q=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")

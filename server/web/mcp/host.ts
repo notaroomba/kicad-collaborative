@@ -19,6 +19,7 @@ import "../canvas/index";
 import "../../static/sch-tools.js";
 import "../../static/pcb-tools.js";
 import "../router/index";
+import "../fab/index";
 import * as design from "../ai/design";
 import { ToolError } from "../ai/design";
 import * as library from "../ai/library";

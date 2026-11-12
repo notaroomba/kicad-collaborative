@@ -20,6 +20,7 @@ import "../canvas/index";
 import "../../static/sch-tools.js";
 import "../../static/pcb-tools.js";
 import "../router/index";
+import "../fab/index";
 import { Workspace, ToolError, type Fetched } from "./workspace";
 
 declare const process: any;

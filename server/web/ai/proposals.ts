@@ -206,7 +206,7 @@ function points(e: Edit): number[][] {
 }
 
 function boardNet(doc: any, name: string): any {
-  const n = PCB().boardNets(doc).find((x: any) => x.name === name);
+  const all = PCB().boardNets(doc); const n = all.find((x: any) => x.name === name) || all.find((x: any) => x.name === "/" + name);   // a schematic label "SDA" is the board net "/SDA"
   if (!n) throw new ToolError(`there is no net "${name}" on the board`);
   return n;
 }
@@ -330,8 +330,24 @@ async function fetchSources(edits: Edit[] | undefined): Promise<void> {
         else if (e.part && typeof e.part === "object") e.__lib = await vendorSymbol(String(e.part.vendor || "lcsc"), String(e.part.id || ""));
         else if (typeof e.lib_id === "string" && !K().resolveLib(doc, e.lib_id)) e.__lib = { libId: e.lib_id, node: await kicadSymbol(e.lib_id) };
       } else if (e.op === "update_from_schematic" && doc.type === "pcb") e.__sync = await planSync(doc, e);
+      else if (e.op === "fill_zones" && doc.type === "pcb") e.__fill = await planFill(doc, edits.length);
     } catch (err) { e.__error = err instanceof Error ? err.message : String(err); }
   }));
+}
+
+/**
+ * KiCad's "Fill All Zones" for the board as it stands: every zone's fill outlines per layer, worked out by the
+ * same filler the editor uses.  A fill depends on all the copper around it, so the edit stands alone in its call.
+ */
+async function planFill(doc: any, count: number): Promise<any[]> {
+  if (count !== 1) throw new ToolError("fill_zones must be the only edit of its call: a fill is worked out from the board as it stands, so apply the tracks, vias and zones first");
+  const F = (globalThis as any).KiCadFab; if (!F || !F.fillZones) throw new ToolError("the zone filler is not loaded in this editor");
+  const k = K(); const P = PCB(); const s = P.designSettings(ED().proSettings || null);
+  if (![...doc.items.values()].some((it: any) => it.kind === "zone" && !k.kid(it.node, "keepout"))) throw new ToolError("the board has no copper zone to fill; add one first");
+  const rules = { netClearance: (n: string) => { const nc = P.netclassOf(s, n); return nc && nc.clearance !== undefined ? nc.clearance : s.clearance; },
+    minClearance: s.minClearance || 0, holeClearance: s.holeClearance || 0, edgeClearance: s.edgeClearance };
+  const quiet = { phase() { /* no dialog here */ }, advance() { /* no dialog here */ }, cancelled: () => false, yield: () => Promise.resolve() };
+  return (await F.fillZones({ doc, setup: null }, rules, null, quiet)) || [];
 }
 
 /** A symbol definition given with the edit itself, as library text: one (symbol "Name" ...) node, or a whole (kicad_symbol_lib ...). */
@@ -496,6 +512,26 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
             longest_detours: conns.filter((c) => c.routed && c.detourRatio > 1.6).sort((a, b) => b.detourRatio - a.detourRatio).slice(0, 12).map((c) => ({ net: c.net, from: c.from && c.from.pad, to: c.to && c.to.pad, length_mm: r4(c.length), detour_ratio: r4(c.detourRatio), vias: c.vias, layers: c.layers })),
             note: "Judge this before the person does: a net left unrouted, a power net with a long detour or many vias, or a sensitive net crossing the board is a reason to change the placement or the net order and options and propose again instead." } });
           lines.push({ kind: "add", text: `Autoroute ${nets ? nets.join(", ") : "all unrouted nets"}: ${res.routed} of ${res.total} connection${res.total === 1 ? "" : "s"}, ${res.segments} track segment${res.segments === 1 ? "" : "s"}, ${res.vias} via${res.vias === 1 ? "" : "s"}, ${Math.round(res.length * 10) / 10} mm${failed.length ? ` (${failed.length} left unrouted)` : ""}`, ids });
+          break;
+        }
+        case "fill_zones": {
+          pcbOnly(e.op); const F = (globalThis as any).KiCadFab; const P = PCB(); const res: any[] = e.__fill || [];
+          const copper = doc.copper && doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"]; const ids: string[] = []; let outlines = 0, islands = 0;
+          const scratch = Object.assign({}, doc, { items: new Map(doc.items) });
+          for (const r of res) {
+            const it = doc.items.get(r.id); if (!it) continue;
+            for (const l of r.layers) { outlines += l.outlines.length; islands += l.islands ? l.islands.size : 0; }
+            const node = F.filledZoneNode(it.node, r, copper, (n: any) => k.cloneNode(n));
+            scratch.items.set(it.id, Object.assign({}, it, { node }));
+            if (k.serialize(node) === k.serialize(it.node)) continue;
+            touch(it, e.op); changes.push(modified(doc, it, node)); ids.push(it.id);
+          }
+          // what the fills leave open, counted on the board as it will be: the connections a pour was expected to make
+          const open: Record<string, number> = {}; let left = 0;
+          try { for (const l of P.ratsnest(scratch)) { open[l.name] = (open[l.name] || 0) + 1; left++; } } catch { /* the count is a courtesy */ }
+          details.push({ fill_zones: { zones: res.length, refilled: ids.length, outlines, islands, unconnected: left, unconnected_by_net: left ? open : undefined } });
+          if (!ids.length) throw new ToolError("the zones are already filled for the board as it stands");
+          lines.push({ kind: "modify", text: `Fill ${res.length} zone${res.length === 1 ? "" : "s"}: ${outlines} filled area${outlines === 1 ? "" : "s"}${islands ? `, ${islands} isolated` : ""}${left ? `, ${left} connection${left === 1 ? "" : "s"} still open` : ""}`, ids });
           break;
         }
         case "set_rules": {

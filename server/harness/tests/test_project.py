@@ -69,6 +69,29 @@ class Blinker(unittest.TestCase):
         finally:
             again.close()
 
+    def test_a_pour_connects_only_once_it_is_filled(self):
+        p = self.project
+        sch = p.schematic()
+        sch.build({"R1": {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
+                   "R2": {"lib": "Device:R", "value": "1k", "footprint": "Resistor_SMD:R_0603_1608Metric"},
+                   "C1": {"lib": "Device:C", "value": "1uF", "footprint": "Capacitor_SMD:C_0603_1608Metric"}},
+                  {"GND": ["R1.2", "R2.2", "C1.2"], "SIG": ["R1.1", "R2.1", "C1.1"]})
+        board = p.board()
+        board.sync()
+        board.outline(100, 100, 120, 112)
+        board.autoplace(outline=(100, 100, 120, 112))
+        board.zone("GND", layer="F.Cu", connect="solid")
+        self.assertEqual(board.unrouted().get("GND"), 2)          # an unfilled zone joins nothing, as in KiCad
+        filled = board.fill()
+        self.assertEqual(filled["zones"], 1)
+        self.assertNotIn("GND", filled.get("unconnected_by_net") or {})
+        self.assertEqual(board.fill()["refilled"], 0)             # nothing moved: nothing to refill
+        routed = board.route(widths={"SIG": 0.3}, time_s=10)      # the schematic's name for the board net "/SIG"
+        self.assertEqual(routed["left"], {})
+        self.assertEqual(routed["zones_filled"], 1)
+        self.assertEqual(board.unrouted(), {})
+        self.assertEqual(board.check()["errors"], 0)
+
     def test_a_netlist_becomes_a_sheet_and_a_generated_part_reaches_the_board(self):
         p = self.project
         reg = kh.parts.make("MYREG", package="SOT-23-5", pins=[(1, "VIN"), (2, "GND"), (3, "EN"), (4, "NC"), (5, "VOUT")])

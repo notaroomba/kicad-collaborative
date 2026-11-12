@@ -57,7 +57,7 @@ Schematic (`project.schematic()`): `place`, `attach`, `decouple`, `connect`, `ne
 read: `refs`, `parts`, `pins`, `pin`, `nets`, `net_of`, `unconnected`, `check`.
 
 Board (`project.board()`): `sync`, `outline`, `rules`, `zone`, `autoplace`, `place`, `move`, `rotate`,
-`flip`, `group`, `route`, `connect`, `track`, `via`, and to read: `refs`, `parts`, `pads`, `pad`,
+`flip`, `group`, `route`, `fill`, `connect`, `track`, `via`, and to read: `refs`, `parts`, `pads`, `pad`,
 `nets`, `unrouted`, `info`, `check`.
 
 Pins are `"U1.3"` or `"U1.VDD"`. Positions are millimetres and are optional almost everywhere: parts
