@@ -19,8 +19,6 @@ export interface PnpOptions {
   includeBoardEdge: boolean; excludeDnp: boolean; excludeBom: boolean;
   /** the board plot settings' Use drill/place file origin (CreatePlaceFile reads GetPlotOptions) */
   useAuxOrigin: boolean;
-  /** the design variant whose DNP / exclusion flags count (empty: the default) */
-  variant?: string;
 }
 
 /** ConvertNotAllowedCharsInGerber with UTF-8 allowed and no quotes: , * % \ as \uXXXX. */

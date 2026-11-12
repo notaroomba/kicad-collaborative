@@ -180,6 +180,34 @@ function readPad(node: Node, fp: Footprint, copper: string[], nets: Map<number, 
     zoneLayers: new Set(zl ? zl.slice(1).map(str) : []), base, stackMode, stack, tentFront: tf, tentBack: tb };
 }
 
+/** The default variant's name in the UI (GetDefaultVariantName); an empty name means it too. */
+export const DEFAULT_VARIANT = "< Default >";
+const isDefaultVariant = (v: string | undefined): boolean => !v || v.toLowerCase() === DEFAULT_VARIANT.toLowerCase();
+
+/** A footprint's (variant (name …) (dnp yes) (exclude_from_bom yes) (exclude_from_pos_files yes) (field (name …) (value …)))
+ *  applied to its flags and fields, as GetDNPForVariant / GetFieldValueForVariant read them.  A flag the variant does
+ *  not name keeps the footprint's own (FOOTPRINT::AddVariant copies them). */
+export function applyFootprintVariant(fp: Footprint, variant: string | undefined): void {
+  if (isDefaultVariant(variant)) return;
+  const v = (kids(fp.node, "variant") as Node[]).find((x) => { const nm = K(x, "name"); return !!nm && str(nm[1]) === variant; });
+  if (!v) return;
+  const flag = (key: string, own: boolean): boolean => { const k = K(v, key); return k ? (k.length < 2 || /^(yes|true)$/.test(str(k[1]))) : own; };
+  fp.dnp = flag("dnp", fp.dnp);
+  fp.excludeFromBom = flag("exclude_from_bom", fp.excludeFromBom);
+  fp.excludeFromPos = flag("exclude_from_pos_files", fp.excludeFromPos);
+  const props = new Map(fp.props);
+  for (const f of kids(v, "field") as Node[]) { const nm = K(f, "name"), val = K(f, "value"); if (nm && str(nm[1])) props.set(str(nm[1]), val ? str(val[1]) : ""); }
+  fp.props = props;
+  fp.value = props.get("Value") || "";
+}
+
+/** BOARD::GetVariantNamesForUI: the default first, then the board's (variants (variant (name …))) by StrNumCmp. */
+export function boardVariantNames(variants: Node | null, cmp: (a: string, b: string) => number): string[] {
+  const names: string[] = [];
+  for (const v of (variants ? kids(variants, "variant") : []) as Node[]) { const nm = K(v, "name"); const s = nm ? str(nm[1]) : ""; if (s && !names.includes(s)) names.push(s); }
+  return [DEFAULT_VARIANT, ...names.sort(cmp)];
+}
+
 function readFootprint(item: KItem, copper: string[], nets: Map<number, string>): Footprint {
   const n = item.node;
   const [fx, fy, frot] = atOf(n) as [number, number, number];
@@ -299,13 +327,14 @@ function readZone(n: Node, copper: string[], tf: ((x: number, y: number) => Pt) 
 }
 
 /** Read the board once; every writer works from this. */
-export function boardModel(doc: FabDoc, setup: Node | null): BoardModel {
+export function boardModel(doc: FabDoc, setup: Node | null, variant?: string): BoardModel {
   const copper = copperStack(doc);
   const m: BoardModel = { doc, settings: boardSettings(setup, doc), copper, footprints: [], tracks: [], vias: [], fills: [], unfilledZones: 0 };
   for (const item of doc.items.values()) {
     const n = item.node;
     if (item.kind === "footprint") {
       const fp = readFootprint(item, copper, doc.nets);
+      applyFootprintVariant(fp, variant);
       m.footprints.push(fp);
       // a zone inside a footprint is kept in the footprint's frame
       for (const z of kids(n, "zone") as Node[]) readZone(z, copper, fp.tf, m, doc.nets);

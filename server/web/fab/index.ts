@@ -10,8 +10,8 @@
 import { boardHeader } from "../canvas/board-setup";
 import { type DrillFile, type DrillOptions, boardHoles, drillFiles } from "./drill";
 import { type GerberAttrs, projectGuid, writeGerber } from "./gerber";
-import { type BoardModel, type FabDoc, type Node, boardModel, isCopper } from "./model";
-import { type BomLine, type BomOptions, type Placement, type PlacementOptions, bom, bomCsv, placementAscii, placementCsv, placements } from "./parts";
+import { type BoardModel, type FabDoc, type Node, DEFAULT_VARIANT, boardModel, boardVariantNames, isCopper } from "./model";
+import { type BomLine, type BomOptions, type Placement, type PlacementOptions, bom, bomCsv, placementAscii, placementCsv, placements, refCompare } from "./parts";
 import { PlotLog, type PlotOptions, centrePoints, plotFile } from "./plot";
 import { type FabPreset, PRESETS, presetById, jlcPlacement } from "./presets";
 import { primPolys } from "./poly";
@@ -85,6 +85,8 @@ export interface FabContext {
   projectName?: string;
   /** Creation date; defaults to now. */
   date?: Date;
+  /** The design variant the outputs are made for (the dialogs' Design variant); empty or "< Default >" for none. */
+  variant?: string;
 }
 export interface OutFile { name: string; text: string; layer?: string }
 
@@ -96,7 +98,7 @@ function setupNode(setup: Node | string | null | undefined): Node | null {
 /** The (setup …) node of a context. */
 export function setupOf(ctx: FabContext): Node | null { return setupNode(ctx.setup); }
 /** The board model for a context (read afresh: the document may have changed since the last call). */
-export function modelOf(ctx: FabContext): BoardModel { return boardModel(ctx.doc, setupNode(ctx.setup)); }
+export function modelOf(ctx: FabContext): BoardModel { return boardModel(ctx.doc, setupNode(ctx.setup), ctx.variant); }
 function isoDate(d: Date): string {
   const p = (n: number): string => String(Math.abs(n)).padStart(2, "0"); const off = -d.getTimezoneOffset();
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}${off >= 0 ? "+" : "-"}${p(Math.floor(Math.abs(off) / 60))}:${p(Math.abs(off) % 60)}`;
@@ -226,7 +228,7 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
   return new ZoneFiller(modelOf(ctx), rules).fill(ids, prog);
 }
 
-export const api = { plotBoard, drillJob, drillReport, pnpGerber, pnpFileName, writeSvg, writePdf, writePs, writeDxf, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
+export const api = { plotBoard, drillJob, drillReport, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

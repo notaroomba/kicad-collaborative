@@ -231,6 +231,44 @@ test("Gerber X3 placement files (PLACEFILE_GERBER_WRITER): P&P records, courtyar
   assert.ok(bot.includes("%TF.FileFunction,Component,L2,Bot*%") && bot.includes("%TO.CRot,0*%\nX30000000Y20000000D03*"), "180° on the back is 0, relative to the place origin");
 });
 
+test("Design variants: the variant's DNP, exclusions and field values reach the fabrication outputs", () => {
+  const B3 = BOARD.replace("(aux_axis_origin 100 80))", "(aux_axis_origin 100 80))\n (variants (variant (name \"Lite\") (description \"no R1\")) (variant (name \"B10\")) (variant (name \"B9\")))")
+    .replace('(uuid "f-R1")', '(uuid "f-R1") (variant (name "Lite") (dnp yes) (exclude_from_pos_files yes) (field (name "Value") (value "22k")))')
+    .replace('(uuid "f-R2")', '(uuid "f-R2") (variant (name "Lite") (field (name "Value") (value "47k")))');
+  const header = K.boardSetup.boardHeader(B3);
+  assert.deepStrictEqual(F.variantNames(header.variants), ["< Default >", "B9", "B10", "Lite"]);
+  assert.deepStrictEqual(F.variantNames(null), ["< Default >"]);
+  const base = { doc: K.parseDoc(B3, "kicad_pcb"), setup: B3, projectName: "t", date: ctx.date };
+  const opt = { side: "front", smdOnly: false, excludeThroughHole: false, excludeDnp: true, useAuxOrigin: false, negateBottomX: false };
+  const refs = (c) => F.positions(c, opt).map((r) => r.ref + "=" + r.value).sort();
+  assert.deepStrictEqual(refs(base), ["J1=Conn", "R1=10k", "R2=10k"]);
+  assert.deepStrictEqual(refs(Object.assign({}, base, { variant: "< Default >" })), ["J1=Conn", "R1=10k", "R2=10k"]);
+  assert.deepStrictEqual(refs(Object.assign({}, base, { variant: "Lite" })), ["J1=Conn", "R2=47k"]);
+  const pnp = F.pnpGerber(Object.assign({}, base, { variant: "Lite" }), { side: "F.Cu", includeBoardEdge: false, excludeDnp: false, excludeBom: false, useAuxOrigin: false }).text;
+  assert.ok(!pnp.includes("%TO.C,R1*%") && pnp.includes("%TO.CVal,47k*%"), "R1 is out of the Lite position files");
+});
+
+test("Schematic design variants: names in GetVariantNamesForUI order, a symbol as the variant shows it on its sheet", () => {
+  const esbuild = require("esbuild");
+  const out = esbuild.buildSync({ entryPoints: [path.join(__dirname, "..", "..", "web", "dialogs", "sch-variants.ts")], bundle: true, format: "cjs", write: false, platform: "node", logLevel: "silent" });
+  const mod = { exports: {} }; new Function("module", "exports", "require", out.outputFiles[0].text)(mod, mod.exports, require); const V = mod.exports;
+  const SYM = `(symbol (lib_id "Device:R") (at 10 10 0) (unit 1) (in_bom yes) (on_board yes) (dnp no) (uuid "s1")
+    (property "Reference" "R1" (at 0 0 0)) (property "Value" "10k" (at 0 0 0))
+    (instances (project "p" (path "/root" (reference "R1") (unit 1) (variant (name "Lite") (dnp yes) (field (name "Value") (value "22k"))))
+      (path "/root/sub" (reference "R5") (unit 1) (variant (name "B2") (in_bom no))))))`;
+  const node = K.parse(SYM);
+  const doc = { items: new Map([["s1", { kind: "symbol", node }]]) };
+  assert.deepStrictEqual(V.schVariantNames([doc], { schematic: { variants: [{ name: "B10" }, { name: "Lite", description: "x" }] } }), ["< Default >", "B2", "B10", "Lite"]);
+  assert.deepStrictEqual(V.schVariantNames([doc], {}), ["< Default >", "B2", "Lite"]);
+  const lite = V.symbolNodeForVariant(node, [], "Lite");
+  assert.deepStrictEqual(K.kid(lite, "dnp"), ["dnp", "yes"]);
+  assert.strictEqual(K.str(K.kids(lite, "property").find((p) => K.str(p[1]) === "Value")[2]), "22k");
+  assert.deepStrictEqual(K.kid(node, "dnp"), ["dnp", "no"], "the document's node is not touched");
+  assert.strictEqual(V.symbolNodeForVariant(node, ["sub"], "Lite"), null, "the variant is per sheet instance");
+  assert.deepStrictEqual(K.kid(V.symbolNodeForVariant(node, ["sub"], "B2"), "in_bom"), ["in_bom", "no"]);
+  assert.strictEqual(V.symbolNodeForVariant(node, [], ""), null);
+});
+
 test("Placement files: the plain-text file in inches and the CSV (DIALOG_GEN_FOOTPRINT_POSITION)", () => {
   const rows = F.positions(ctx, { side: "both" });
   const mm = F.placementAscii(rows, "both", "2026-01-01 00:00:00", "Pcbnew test");

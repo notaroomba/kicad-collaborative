@@ -21,8 +21,8 @@ const yes = (node: SNode | null, key: string, def: boolean): boolean => { const 
 const fmt = (v: number): string => String(+(+v).toFixed(6));
 
 // ---------------------------------------------------------------- the sections in a file
-export interface BoardHeader { general: SNode | null; layers: SNode | null; setup: SNode | null; version: number }
-const HEADER_KEYS = new Set(["general", "layers", "setup", "version"]);
+export interface BoardHeader { general: SNode | null; layers: SNode | null; setup: SNode | null; version: number; variants?: SNode | null }
+const HEADER_KEYS = new Set(["general", "layers", "setup", "version", "variants"]);
 /**
  * The header sections of a board file, without parsing the whole board: the top level is walked by
  * parentheses and only the wanted lists go through the reader.
@@ -33,7 +33,7 @@ export function boardHeader(text: string): BoardHeader {
   let i = text.indexOf("(kicad_pcb"); if (i < 0) return out;
   i += 10;
   let found = 0;
-  while (i < n && found < 4) {
+  while (i < n && found < 5) {
     const c = text[i];
     if (c === "(") {
       // the keyword
@@ -49,7 +49,7 @@ export function boardHeader(text: string): BoardHeader {
       }
       if (HEADER_KEYS.has(key)) {
         const node = parse(text.slice(i, k + 1)) as SNode | null;
-        if (node) { if (key === "version") out.version = num(node[1], 0); else if (key === "general") out.general = node; else if (key === "layers") out.layers = node; else out.setup = node; found++; }
+        if (node) { if (key === "version") out.version = num(node[1], 0); else if (key === "general") out.general = node; else if (key === "layers") out.layers = node; else if (key === "variants") out.variants = node; else out.setup = node; found++; }
       } else if (key === "footprint" || key === "segment" || key === "via" || key === "zone" || key === "gr_line") break;   // the header is over
       i = k + 1;
     } else if (c === ")") break;

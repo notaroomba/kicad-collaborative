@@ -56,7 +56,7 @@ let lastReport: ReportLine[] = [];
 const isCu = (l: string): boolean => /\.Cu$/.test(l);
 const FAB_TECH = new Set(["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "F.Fab", "B.Fab"]);
 
-export interface PlotDialogOptions { gerber?: boolean; params?: PlotParams; outputDir?: string; allOrder?: string[]; allChecked?: string[] }
+export interface PlotDialogOptions { gerber?: boolean; params?: PlotParams; outputDir?: string; allOrder?: string[]; allChecked?: string[]; variant?: string }
 
 /** BOARD_EDITOR_CONTROL::Plot (and Fabrication Outputs > Gerbers…, which opens the dialog set to Gerber). */
 export async function openPlotDialog(opts: PlotDialogOptions = {}): Promise<void> {
@@ -72,10 +72,10 @@ export async function openPlotDialog(opts: PlotDialogOptions = {}): Promise<void
   if (opts.gerber) p.format = 1;
   const user = loadPrefs(USER_KEY, USER_DEFAULTS);
   const mask = BS().maskPaste(header ? header.setup : null);
-  show(fab, ctx, p, stored, version, user, !!(mask.maskExpansion || mask.maskMinWidth), opts);
+  show(fab, ctx, p, stored, version, user, !!(mask.maskExpansion || mask.maskMinWidth), opts, fab.variantNames(header ? header.variants : null));
 }
 
-function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams, version: number, user: UserPlot, maskAlert: boolean, opts: PlotDialogOptions): void {
+function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams, version: number, user: UserPlot, maskAlert: boolean, opts: PlotDialogOptions, variants: string[]): void {
   const P = PLOT().params;
   const doc = E.kdoc as KDoc;
   const enabled = fab.plottableLayers(doc as never);          // UIOrder
@@ -85,6 +85,10 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
   // ---------------------------------------------------------------- the controls
   const fmtSel = selectField<number>(FORMATS.some(([f]) => f === p.format) ? p.format : 1, FORMATS, { key: "format", onChange: () => setPlotFormat() });
   const outDir = textField(opts.outputDir !== undefined ? opts.outputDir : p.outputDirectory, { key: "outputDir" });
+  // Design variant: GetVariantNamesForUI, the default first (the board has no current variant in the web editor)
+  const variantSel = selectField<string>(opts.variant && variants.includes(opts.variant) ? opts.variant : variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
+  /** getSelectedVariant: empty for the default */
+  const selectedVariant = (): string => (variantSel.get() !== variants[0] ? variantSel.get() : "");
   outDir.input.title = "Target directory for plot files. Can be absolute or relative to the board file location.";
 
   // Include Layers
@@ -296,6 +300,7 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
         status.textContent = "";
       }
       const fctx = await fabContext(); if (!fctx) return;
+      fctx.variant = selectedVariant();
       const colors: Record<string, string> = {}; for (const r of layerRows()) colors[r.key] = r.color;
       const vars = (E.proSettings ? ((): Record<string, string> => { try { return JSON.parse(E.proSettings).text_variables || {}; } catch (e) { return {}; } })() : {}) as Record<string, string>;
       const res = await fab.plotBoard(fctx, { params: t, layers: t.layerSelection, common: t.plotOnAllLayers, colors, sheetColor: SHEET_COLOR, background: t.backgroundColor,
@@ -307,7 +312,7 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
     } finally { busy = false; status.textContent = ""; }
   }
 
-  const keep = (): PlotDialogOptions => ({ params: current(), outputDir: outDir.get(), allOrder: allOrder.slice(), allChecked: [...allChecked] });
+  const keep = (): PlotDialogOptions => ({ params: current(), outputDir: outDir.get(), allOrder: allOrder.slice(), allChecked: [...allChecked], variant: variantSel.get() });
   const reopen = (o: PlotDialogOptions): void => { void openPlotDialog(o); };
 
   // ---------------------------------------------------------------- the dialog
@@ -323,7 +328,7 @@ function show(fab: KiCadFabApi, ctx: ToolCtx, p: PlotParams, stored: PlotParams,
       kitCss(); ensureCss();
       body.classList.add("pl-body");
       body.append(
-        h("div", { class: "pl-top" }, h("span", { class: "pd-lbl" }, "Plot format:"), fmtSel.el, h("span", { class: "pd-lbl" }, "Output directory:"), outDir.el),
+        h("div", { class: "pl-top" }, h("span", { class: "pd-lbl" }, "Plot format:"), fmtSel.el, h("span", { class: "pd-lbl" }, "Design variant:"), variantSel.el, h("span", { class: "pd-lbl" }, "Output directory:"), outDir.el),
         h("div", { class: "pl-mid" },
           box("Include Layers", layerList),
           box("Plot on All Layers", allList, h("div", { class: "pd-row" }, upBtn, downBtn)),

@@ -21,17 +21,19 @@ const DEFAULTS: PosPrefs = { format: 0, mm: true, smdOnly: false, excludeTH: fal
 export async function openPosFile(): Promise<void> {
   const ctx = toolCtx() as ToolCtx;
   if (!E.kdoc || E.kdoc.type !== "pcb") { ctx.toast("Component placement files are made from a board: open the PCB editor first"); return; }
-  let fab: KiCadFabApi; let outDir = ""; let plotAux = false;
+  let fab: KiCadFabApi; let outDir = ""; let plotAux = false; let variants: string[] = [];
   try {
     const [f, header] = await Promise.all([loadFab(), loadBoardHeader()]); fab = f;
     const pp = PLOT().params.readPlotParams(header ? header.setup : null, header ? header.version : 0);
-    outDir = pp.outputDirectory; plotAux = pp.useAuxOrigin;
+    outDir = pp.outputDirectory; plotAux = pp.useAuxOrigin; variants = fab.variantNames(header ? header.variants : null);
   } catch (e) { console.warn(e); ctx.toast("The placement writers could not be loaded"); return; }
-  show(fab, outDir, plotAux);
+  show(fab, outDir, plotAux, variants);
 }
 
-function show(fab: KiCadFabApi, boardOutDir: string, plotAux: boolean): void {
+function show(fab: KiCadFabApi, boardOutDir: string, plotAux: boolean, variants: string[]): void {
   const pref = loadPrefs(KEY, DEFAULTS);
+  const variant = selectField<string>(variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
+  const selectedVariant = (): string => (variant.get() !== variants[0] ? variant.get() : "");
   const outDir = textField(pref.outputDir !== null ? pref.outputDir : boardOutDir, { key: "outputDir" });
   outDir.input.title = "Target directory for plot files. Can be absolute or relative to the board file location.";
   const format = selectField<number>(pref.format, [[0, "Plain text"], [1, "CSV"], [2, "Gerber X3"]], { key: "format", onChange: () => update() });
@@ -59,6 +61,7 @@ function show(fab: KiCadFabApi, boardOutDir: string, plotAux: boolean): void {
   async function generate(): Promise<void> {
     remember();
     const fctx = await fabContext(); if (!fctx) return;
+    fctx.variant = selectedVariant();
     const lines: ReportLine[] = []; const say = (severity: string, text: string): void => { lines.push({ severity, text }); report.set(lines.slice()); };
     if (format.get() === 2) { await createGerberFiles(fctx, say); return; }
     const csv = format.get() === 1, inch = units.get() === 0;
@@ -114,6 +117,7 @@ function show(fab: KiCadFabApi, boardOutDir: string, plotAux: boolean): void {
     build(body: HTMLElement) {
       ensureCss();
       body.append(
+        h("div", { class: "pd-row", style: "margin-bottom:8px" }, lbl("Design variant:"), variant.el),
         h("div", { class: "pd-row", style: "margin-bottom:8px" }, lbl("Output directory:"), outDir.el),
         h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:6px 8px;align-items:center;margin-bottom:8px" }, lbl("Format:"), format.el, lbl("Units:"), units.el),
         smdOnly.el, excludeTH.el, excludeDnp.el, excludeBom.el, boardEdge.el, h("div", { style: "height:8px" }), auxOrigin.el, negateX.el, single.el,

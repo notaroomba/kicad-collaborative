@@ -22,6 +22,7 @@ import { deliver, loadPrefs, savePrefs } from "../editor/pcbdialogs/plot-out";
 import { box, checkField, ensureCss, h, numField, reportPanel, selectField, textField, type ReportLine } from "../editor/pcbdialogs/ui";
 import { obj, projectJson } from "./project";
 import { sheetList, withSheetContext, type SheetInstance } from "./sch-hierarchy";
+import { schVariantNames, symbolNodeForVariant } from "./sch-variants";
 
 export interface SchPlotPrefs { format: number; pageSize: number; frame: boolean; color: boolean; theme: string; background: boolean; minWidth: number; popups: boolean; links: boolean; metadata: boolean; dxfInch: boolean; dpi: number; antialias: boolean; openAfter: boolean }
 const KEY = "kicad.plot.schematic";
@@ -37,12 +38,31 @@ export async function openPlotSchematic(): Promise<void> {
   if (!E.kdoc || E.kdoc.type !== "sch") { ctx.toast("Plot needs a schematic"); return; }
   let fab: KiCadFabApi;
   try { fab = await loadFab(); } catch (e) { console.warn(e); toast("The plot writers could not be loaded"); return; }
-  show(fab);
+  let sheets: SheetInstance[] = [];
+  try { sheets = await sheetList(); } catch (e) { sheets = []; }
+  show(fab, schVariantNames(sheets.length ? sheets.map((s) => s.doc) : [E.kdoc as KDoc], projectJson()));
 }
 
-function show(fab: KiCadFabApi): void {
+/** The page's document with the variant applied: symbols rebuilt from their variant nodes, nothing else touched. */
+function docForVariant(doc: KDoc, uuidPath: string[], variant: string): KDoc {
+  if (!variant) return doc;
+  let copy: (KDoc & { items: Map<string, KItem> }) | null = null;
+  for (const [k, it] of doc.items) {
+    if (it.kind !== "symbol") continue;
+    const node = symbolNodeForVariant(it.node as unknown as unknown[], uuidPath, variant); if (!node) continue;
+    if (!copy) { copy = Object.create(doc) as KDoc & { items: Map<string, KItem> }; copy.items = new Map(doc.items); }
+    const c = Object.assign({}, it, { node }) as KItem;
+    try { (KiCadCanvas.buildGeom as (d: KDoc, i: KItem) => void)(copy, c); copy.items.set(k, c); } catch (e) { /* keep the default look */ }
+  }
+  return copy || doc;
+}
+
+function show(fab: KiCadFabApi, variants: string[]): void {
   const pref = loadPrefs(KEY, SCH_PLOT_DEFAULTS);
   const pro = projectJson();
+  const variantSel = selectField<string>(variants[0], variants.map((v) => [v, v] as [string, string]), { key: "variant" });
+  /** getSelectedVariant: empty for the default */
+  const selectedVariant = (): string => (variantSel.get() !== variants[0] ? variantSel.get() : "");
   const storedDir = String(obj(pro.schematic).plot_directory || "");
   const outDir = textField(storedDir, { key: "outputDir" });
   outDir.input.title = "Target directory for plot files. Can be absolute or relative to the schematic main file location.";
@@ -103,7 +123,8 @@ function show(fab: KiCadFabApi): void {
     const projectDir = (sheets[0] ? sheets[0].path : list[0].path).split("/").slice(0, -1).join("/");
     const fileStem = (s: SheetInstance): string => [rootStem, ...s.sheetPath.split("/").filter(Boolean)].join("-").replace(/[/\\]/g, "_");
     const pageIndex = new Map<string, number>(); list.forEach((s, i) => pageIndex.set(s.page, i + 1));
-    const pages: PlotPage[] = list.map((s) => sheetPage(s, sheets.length || 1, o, pageIndex));
+    const variant = selectedVariant();
+    const pages: PlotPage[] = list.map((s) => sheetPage(s, sheets.length || 1, o, pageIndex, variant));
     const f = o.format;
     const files: { name: string; path: string; data: string | Uint8Array }[] = [];
     const add = (name: string, data: string | Uint8Array): void => { const path = fab.outputPath(dir, projectDir, name); files.push({ name, path, data }); say("action", `Plotted to '${path}'.`); };
@@ -143,6 +164,7 @@ function show(fab: KiCadFabApi): void {
       ensureCss();
       body.append(
         h("div", { class: "pd-row", style: "margin-bottom:8px" }, lbl("Output directory:"), outDir.el),
+        h("div", { class: "pd-row", style: "margin-bottom:8px" }, lbl("Design variant:"), variantSel.el),
         h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:0 16px" },
           box("Output Format", ...fmtRadios.map((r) => r.el)),
           h("div", null,
@@ -159,8 +181,8 @@ function show(fab: KiCadFabApi): void {
 }
 
 /** One page: the sheet recorded through the painter, scaled to the paper, with its links, popups and bookmarks. */
-export function sheetPage(s: SheetInstance, count: number, o: SchPlotPrefs, pageIndex: Map<string, number>): PlotPage {
-  const doc = withSheetContext(s, count);
+export function sheetPage(s: SheetInstance, count: number, o: SchPlotPrefs, pageIndex: Map<string, number>, variant = ""): PlotPage {
+  const doc = docForVariant(withSheetContext(s, count), s.uuidPath, variant);
   const W = doc.page[0], H = doc.page[1];
   let paper: [number, number] = [W, H];
   if (o.pageSize === 1) paper = [297, 210]; else if (o.pageSize === 2) paper = [279.4, 215.9];
