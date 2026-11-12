@@ -3,6 +3,7 @@
 // (MakeEditPoints / UpdateFromEditPoints) and the live re-tune while one of them, a property or a move changes it
 // (GENERATOR_TOOL genStartEdit / genUpdateEdit / genFinishEdit / genCancelEdit), committed as "Edit Tuning Pattern".
 import type { BoardDoc, PcbCtx, Pt, SAtom } from "./types";
+import type { MeanderSettings } from "./meander";
 import { branchChanges } from "./branch";
 import { selectionIds } from "./groups";
 import { line } from "./overlay";
@@ -209,4 +210,19 @@ export function drawGenEditPreview(c: CanvasRenderingContext2D, ctx: PcbCtx) {
     line(c, a, b);
   }
   c.restore();
+}
+
+/** The pattern's node with its settings replaced (PCB_TUNING_PATTERN's m_settings as SetProperties reads them back). */
+export function tuningNodeWithSettings(orig: SNode, st: MeanderSettings, mode: string) {
+  const node = clone(orig); const mm = (v: number) => fmt(v / 1e6); const yn = (b: boolean) => (b ? "yes" : "no");
+  setKid(node, "min_amplitude", mm(st.minAmp)); setKid(node, "max_amplitude", mm(st.maxAmp)); setKid(node, "min_spacing", mm(st.spacing));
+  setKid(node, "corner_radius_percent", st.crPct); setKid(node, "rounded", yn(st.round)); setKid(node, "single_sided", yn(st.singleSided));
+  setKid(node, "override_custom_rules", yn(st.overrideCustomRules));
+  if (mode === "diff_pair_skew") { setKid(node, "target_skew", mm(st.skew.opt)); setKid(node, "target_skew_min", mm(st.skew.min)); setKid(node, "target_skew_max", mm(st.skew.max)); }
+  else { setKid(node, "target_length", mm(st.target.opt)); setKid(node, "target_length_min", mm(st.target.min)); setKid(node, "target_length_max", mm(st.target.max)); }
+  return node;
+}
+/** genStartEdit / genUpdateEdit / genFinishEdit with an edited node, in one commit labelled "Edit Tuning Pattern". */
+export function editTuningPattern(ctx: PcbCtx, gen: KItem, node: SNode) {
+  genStartEdit(ctx, gen); genUpdateEdit(ctx, node); return genFinishEdit(ctx);
 }

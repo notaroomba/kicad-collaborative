@@ -360,5 +360,40 @@ test("getOutline: the base line grown by the clamped max amplitude + width/2 (ro
   assert.ok(Math.max(...s1.map((p) => p[1])) > 1 && Math.min(...s1.map((p) => p[1])) > -1e-9, "right side (+y) only");
 });
 
+test("E on a selected pattern: Tuning Pattern Properties from its own settings; OK re-tunes it as 'Edit Tuning Pattern'", () => {
+  const f = placeTuned(40); const g = f.gen(); let req = null, done = null;
+  pcb.setRoutingDialogs({ tuning: (o, cb) => { req = o; done = cb; } });
+  for (const id of P.expandGroups(f.doc, [g.id])) P.state.sel.add(id);
+  assert.equal(pcb.tunerProperties(f.ctx), true); assert.equal(req.mode, "single"); assert.equal(req.settings.targetLength, 40);
+  const before = f.log.commits.length;
+  done(Object.assign({}, req.settings, { targetLength: 36 }));
+  assert.equal(f.log.commits.length, before + 1); assert.equal(f.log.commits.at(-1).label, "Edit Tuning Pattern");
+  assert.equal(K.kid(f.gen().node, "target_length")[1], 36); assert.ok(Math.abs(f.len() - 36) < 0.1, "re-tuned to 36: " + f.len());
+  P.state.sel.clear();
+});
+
+test("message panel of a selected pattern: Type, Net, Resolved Netclass, Layer, Width, Routed Length, Target Length", () => {
+  const f = placeTuned(40); const g = f.gen();
+  const rows = P.msgPanelInfo(f.doc, [...P.expandGroups(f.doc, [g.id])], { units: "mm" });
+  const t = (k) => (rows.find((r) => r.title === k) || {}).value;
+  assert.equal(t("Type"), "Tuning Pattern"); assert.equal(t("Net"), "SIG"); assert.equal(t("Resolved Netclass"), "Default"); assert.equal(t("Layer"), "F.Cu");
+  assert.equal(t("Width"), "0.2000 mm"); assert.ok(/^\d+\.\d{4} mm$/.test(t("Routed Length")));
+  assert.equal(t("Target Length: 40.0000 mm"), "(from tuning pattern properties)");
+});
+
+test("moving a selected pattern slides it along its track and re-tunes it (genUpdateEdit); Escape leaves the board as it was", () => {
+  const f = placeTuned(40); const g = f.gen(); const o0 = P.tuningPatternInfo(g).origin;
+  for (const id of P.expandGroups(f.doc, [g.id])) P.state.sel.add(id);
+  const before = f.log.commits.length; const snap = K.serialize(f.gen().node);
+  assert.ok(pcb.beginMove(f.ctx, [15, 10], false)); assert.ok(P.state.move.gen);
+  P.selectMoveTo(f.ctx, [17, 10]); assert.ok(P.state.genEdit && P.state.genEdit.fin, "previewed");
+  P.finishSelectMove(f.ctx, false); assert.equal(f.log.commits.length, before); assert.equal(K.serialize(f.gen().node), snap, "Escape: untouched");
+  assert.ok(pcb.beginMove(f.ctx, [15, 10], false)); P.selectMoveTo(f.ctx, [17, 11]); P.finishSelectMove(f.ctx, true);
+  assert.equal(f.log.commits.length, before + 1); assert.equal(f.log.commits.at(-1).label, "Move");
+  const info = P.tuningPatternInfo(f.gen()); assert.ok(Math.abs(info.origin[0] - (o0[0] + 2)) < 1e-6 && Math.abs(info.origin[1] - 10) < 1e-6, "origin slid along the track: " + info.origin);
+  assert.ok(Math.abs(f.len() - 40) < 0.1, "still tuned: " + f.len());
+  P.state.sel.clear();
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

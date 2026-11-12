@@ -125,6 +125,8 @@ export type PcbState = {
   // set by the later sections
   rs: import("./router-settings").RouterSettings; tuneSettings: { single: MeanderSettings; skew: MeanderSettings };
   genEdit?: import("./tuning-edit").GenEdit | null;
+  /** the board's custom rules for the tuner: a length / skew constraint on the pattern's tracks ({ text, name, min, opt, max } in mm) */
+  ruleConstraint?: ((doc: BoardDoc, what: "length" | "skew" | "chain", a: KItem | null, b: KItem | null) => { text: string; name: string; min: number | null; opt: number | null; max: number | null } | null) | null;
   move?: SelectMove | null; pending?: PendingDrag | null; sworld?: { doc: BoardDoc; ver: number; key: string; w: ShoveWorld } | null;
   joints?: Joints; strokeW?: number | null; pick?: { done: (res: Pt | KItem | null) => void; prompt: string } | null; popup?: { text: string; at: Pt; until: number } | null;
   drawRaw?: Pt; drawCtrl?: boolean; cursorBefore?: string; ratsnestColors?: Map<string, string> | null; hiddenSeverities?: Set<string> | null;
@@ -273,6 +275,8 @@ export interface SelectMove {
   /** the nodes as they were before a turn / flip / mirror during the move, and whether one happened */
   base?: Map<string, SNode>; xformed?: boolean;
   mods?: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }; snapAt?: Pt | null;
+  /** a lone tuning pattern being moved: its generator's id (the move re-tunes it rather than carrying its copper) */
+  gen?: string;
   [extra: string]: unknown;
 }
 /** S.pending: a press on a selected item that becomes a move once the pointer travels. */

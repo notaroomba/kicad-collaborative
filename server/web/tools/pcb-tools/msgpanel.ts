@@ -99,6 +99,51 @@ export function itemDescription(doc: BoardDoc, id: string, units: string) {
   if (m) { const layer = layerOf(n); return /\.Cu$/.test(layer) ? `${SHAPE_NAMES[m[1]]} ${netnameMsg(netOf(n))} on ${L(layer)}` : `${SHAPE_NAMES[m[1]]} on ${L(layer)}`; }
   return "";
 }
+/** The tuning pattern a selection is: its generator with nothing beside it but its own members. */
+export function tuningPatternOfSelection(doc: BoardDoc, ids: string[]) {
+  let gen: KItem | null = null;
+  for (const id of ids) { const it = doc.items.get(id); if (it && it.kind === "generated" && K.str((K.kid(it.node, "type") || [])[1]) === "tuning_pattern") { if (gen) return null; gen = it; } }
+  if (!gen) return null; const mem = new Set(K.groupMemberIds(gen.node));
+  return ids.every((id) => id === gen!.id || mem.has(id)) ? gen : null;
+}
+/** PCB_TUNING_PATTERN::GetMsgPanelInfo. */
+export function tuningMsgPanel(doc: BoardDoc, gen: KItem, s: DesignSettings, units: string, add: (title: string, value: unknown) => void) {
+  const V = (v: number) => msgValue(v, units); const n = gen.node;
+  const numOf = (k: string) => { const c = K.kid(n, k); return c ? K.num(c[1]) : null; };
+  const mode = K.str((K.kid(n, "tuning_mode") || [])[1]) || "single"; const override = (() => { const c = K.kid(n, "override_custom_rules"); return !!c && K.str(c[1]) === "yes"; })();
+  const timeDomain = (() => { const c = K.kid(n, "is_time_domain"); return !!c && K.str(c[1]) === "yes"; })();
+  add("Type", "Tuning Pattern");
+  let primary: KItem | null = null, coupled: KItem | null = null, width = 0, mixed = false;
+  const NT = netTable(doc);
+  for (const id of K.groupMemberIds(n)) {
+    const it = doc.items.get(id); if (!it || (it.kind !== "segment" && it.kind !== "arc")) continue;
+    if (!primary) primary = it; else if (!coupled && NT.key(netOf(it.node)) !== NT.key(netOf(primary.node))) coupled = it;
+    const w = widthOf(it.node, 0); if (!width) width = w; else if (Math.abs(width - w) > 1e-9) mixed = true;
+  }
+  // the net's name from the board's table; a pattern also remembers it (last_netname)
+  const nameOf = (it: KItem | null) => { if (!it) return ""; const k = NT.key(netOf(it.node)); return k && k[0] !== "#" ? k : ""; };
+  const lastName = K.str((K.kid(n, "last_netname") || [])[1]) || "";
+  const pName = nameOf(primary) || (primary ? lastName : ""), cName = nameOf(coupled);
+  const pNet = primary ? { code: netOf(primary.node).code, name: pName } : null, cNet = coupled ? { code: netOf(coupled.node).code, name: cName } : null;
+  if (cNet && pNet) add("Nets", unescapeName(pNet.name) + ", " + unescapeName(cNet.name));
+  else if (pNet) add("Net", unescapeName(pNet.name));
+  if (pNet) add("Resolved Netclass", unescapeName(netclassName(s, pNet.name || "")));
+  add("Layer", boardLayerName(doc, K.str((K.kid(n, "layer") || [])[1]) || "F.Cu"));
+  if (width && !mixed) add("Width", V(width));
+  if (primary && pNet && pNet.name) {
+    const len = routedLength(doc, primary.id);
+    if (coupled && cNet && cNet.name) add("Routed Lengths", V(len) + ", " + V(routedLength(doc, coupled.id)));
+    else add("Routed Length", V(len));
+  }
+  const rule = S.ruleConstraint ? S.ruleConstraint(doc, mode === "diff_pair_skew" ? "skew" : "length", primary, coupled) : null;
+  if (mode === "diff_pair_skew") {
+    if (!rule || override) add(`Target Skew: ${V(numOf("target_skew") || 0)}`, "(from tuning pattern properties)");
+    else if (rule.text) add(`Skew Constraints: ${rule.text}`, `(from ${rule.name})`);
+  } else if (!rule || override) {
+    if (timeDomain) add(`Target Delay: ${(numOf("target_delay") || 0).toFixed(4)} ps`, "(from tuning pattern properties)");
+    else add(`Target Length: ${V(numOf("target_length") || 0)}`, "(from tuning pattern properties)");
+  } else if (rule.text) add(`${timeDomain ? "Delay" : "Length"} Constraints: ${rule.text}`, `(from ${rule.name})`);
+}
 export const PAD_ATTR: Record<string, string> = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
 export const PAD_SHAPE: Record<string, string> = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
 /**
@@ -132,6 +177,8 @@ export function msgPanelInfo(doc: BoardDoc, ids: Iterable<string>, opts?: MsgPan
     return out;
   }
   const list = Array.from(ids || []);
+  const gen = tuningPatternOfSelection(doc, list);
+  if (gen) { tuningMsgPanel(doc, gen, s, units, add); return out; }
   if (list.length === 1) {
     const id = String(list[0]), hash = id.indexOf("#");
     const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);

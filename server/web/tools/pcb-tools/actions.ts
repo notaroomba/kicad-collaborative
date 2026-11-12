@@ -44,7 +44,8 @@ import { beginCarryMove, moveTransform } from "./select-move";
 import { K, S, bind, lastCtx } from "./state";
 import { breakTrackChanges, cleanupChanges, cleanupPlan, trackEditChanges, trackLayerChanges } from "./track-edit";
 import { alignChanges, anchorOf, bboxUnion, distributeChanges, flipChanges, mirrorChanges, moveExactChanges, packChanges, positionRelativeChanges, rotateChanges, swapChanges, topLeftAnchor, transformChanges } from "./transforms";
-import { isTuningPattern, regenerateTuning, tuneStep } from "./tuning-patterns";
+import { isTuningPattern, regenerateTuning, tuneStep, tuningPatternInfo } from "./tuning-patterns";
+import { editTuningPattern, selectedTuningPattern, tuningNodeWithSettings } from "./tuning-edit";
 import { isTuneTool, tuneMode, tuneUpdate } from "./tuning-tool";
 import { clone, fmt, layerOf, r6, widthOf } from "./util";
 
@@ -400,7 +401,33 @@ export function openTuneSettings(ctx: PcbCtx) {
 // nothing (the key is still taken, so the browser does not move focus to its address bar)
 act("lengthTunerSettings", "Length Tuning Settings...", "Ctrl+L", (ctx: PcbCtx) => (isTuneTool(S.modTool) ? openTuneSettings(ctx) : true), { menu: false, tip: "Displays tuning pattern properties dialog" });
 /** The tuner's loop takes PCB_ACTIONS::properties like lengthTunerSettings: E opens Tuning Pattern Properties. */
-export function tunerProperties(ctx: PcbCtx) { if (!isTuneTool(S.modTool)) return false; bind(ctx); return openTuneSettings(ctx); }
+export function tunerProperties(ctx: PcbCtx) {
+  bind(ctx);
+  if (isTuneTool(S.modTool)) return openTuneSettings(ctx);
+  // EDIT_TOOL::Properties on a selected pattern: PCB_TUNING_PATTERN::ShowPropertiesDialog
+  const gen = selectedTuningPattern(ctx); if (!gen) return false;
+  return openPatternProperties(ctx, gen);
+}
+/**
+ * PCB_TUNING_PATTERN::ShowPropertiesDialog: Tuning Pattern Properties prefilled from the pattern (a custom rule's
+ * length / skew prefills the target unless the pattern overrides custom rules); OK re-tunes it in one commit,
+ * "Edit Tuning Pattern".
+ */
+export function openPatternProperties(ctx: PcbCtx, gen: KItem) {
+  if (!routingDialogs.tuning) { ctx.toast("Tuning Pattern Properties: dialogs are unavailable here"); return true; }
+  const info = tuningPatternInfo(gen); const mode = info.mode === "diff_pair_skew" ? "skew" : "single"; const st = tuneCopy(info.st);
+  if (!st.overrideCustomRules && S.ruleConstraint) {
+    const mem = K.groupMemberIds(gen.node).map((id) => ctx.doc.items.get(id)).filter((it) => it && (it.kind === "segment" || it.kind === "arc")) as KItem[];
+    const c = S.ruleConstraint(ctx.doc, mode === "skew" ? "skew" : "length", mem[0] || null, null);
+    if (c && c.opt != null) { if (mode === "skew") setTargetSkew(st, Math.round(c.opt * TUNE_IU)); else setTargetLength(st, Math.round(c.opt * TUNE_IU)); if (mode !== "skew" && c.min != null && c.max != null) st.target = { min: Math.round(c.min * TUNE_IU), opt: Math.round(c.opt * TUNE_IU), max: Math.round(c.max * TUNE_IU) }; }
+  }
+  routingDialogs.tuning({ mode: info.mode === "diff_pair_skew" ? "diff_pair_skew" : info.mode === "diff_pair" ? "diff_pair" : "single", settings: tuneSettingsView(st, mode) }, (v) => {
+    const c = lastCtx || ctx; const cur = c.doc.items.get(gen.id); if (!cur || !canEdit(c)) return;
+    const next = tuneCopy(st); applyTuneSettings(next, v, mode); next.initialSide = st.initialSide;
+    editTuningPattern(c, cur, tuningNodeWithSettings(cur.node, next, info.mode)); c.requestRender();
+  });
+  return true;
+}
 act("spacingIncrease", "Increase Spacing", "1", (ctx: PcbCtx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", 1) : false, { menu: false, tip: "Increase tuning pattern spacing by one step." });
 act("spacingDecrease", "Decrease Spacing", "2", (ctx: PcbCtx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
 act("amplIncrease", "Increase Amplitude", "3", (ctx: PcbCtx) => isTuneTool(S.modTool) ? tuneStep(ctx, "ampl", 1) : false, { menu: false, tip: "Increase tuning pattern amplitude by one step." });

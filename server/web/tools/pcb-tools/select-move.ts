@@ -23,8 +23,16 @@ import { showViolations } from "./route-tool";
 import { K, S, lastCtx } from "./state";
 import { bboxUnion, flipNode, mirrorNode, rotateNode, translateNode } from "./transforms";
 import { clone, layerOf, pt, r6, samePt } from "./util";
+import { genCancelEdit, genFinishEdit, genStartEdit, genUpdateEdit, selectedTuningPattern } from "./tuning-edit";
 import { ROUTE_EPS, isFreePad, obstaclesNear, pathHits, routeObstacles, routerWorld } from "./walkaround";
 
+/** A step of a pattern's move (PCB_TUNING_PATTERN::Move while IN_EDIT): only its origin and end shift; genUpdateEdit re-tunes. */
+export function genMoveStep(ctx: PcbCtx, dx: number, dy: number) {
+  const ge = S.genEdit; if (!ge) return;
+  const node = clone(ge.orig);
+  for (const k of ["origin", "end"]) { const c = K.kid(node, k); const xy = c && K.kid(c, "xy"); if (xy) { xy[1] = r6(K.num(xy[1]) + dx); xy[2] = r6(K.num(xy[2]) + dy); } }
+  genUpdateEdit(ctx, node);
+}
 export function moveNodesAt(m: SelectMove, dx: number, dy: number) {
   const out: { id: string; node: SNode }[] = [];
   for (const [id, orig] of m.orig) {
@@ -54,6 +62,7 @@ export function moveRestore(ctx: PcbCtx, m: SelectMove) {
  */
 export function moveTransform(ctx: PcbCtx, how: string, arg?: number | string) {
   const m = S.move; if (!m) return false;
+  if (m.gen) return true;   // PCB_TUNING_PATTERN::Rotate / Flip do nothing while IN_EDIT
   if ((m.conns && m.conns.length) || m.ends.length) return true;   // a drag keeps its tracks attached: they cannot follow a turn
   if (!m.base) m.base = new Map(Array.from(m.orig, ([id, n]) => [id, clone(n)]));
   let cx = m.start[0], cy = m.start[1];
@@ -76,10 +85,16 @@ export function selectMoveTo(ctx: PcbCtx, mm: Pt, mods?: SelectMove["mods"]) {
   const sn = snapCursor(ctx, [mm[0], mm[1]], m.skip || new Set(m.orig.keys()), mods || m.mods); m.snapAt = sn.anchor;
   const sN = sn.p; const dx = r6(sN[0] - m.start[0]), dy = r6(sN[1] - m.start[1]);
   if (dx === m.last[0] && dy === m.last[1]) return;
-  m.last = [dx, dy]; m.moved = true; moveApply(ctx, m, dx, dy); ctx.requestRender();
+  m.last = [dx, dy]; m.moved = true;
+  if (m.gen) { genMoveStep(ctx, dx, dy); return; }
+  moveApply(ctx, m, dx, dy); ctx.requestRender();
 }
 export function finishSelectMove(ctx: PcbCtx, commit: boolean, force?: boolean) {
   const m = S.move; S.move = null; if (!m) return; moveCursor(ctx, false);
+  if (m.gen) {   // genFinishEdit with the move's commit, genCancelEdit on Escape
+    if (commit && m.moved && (m.last[0] || m.last[1])) genFinishEdit(ctx); else genCancelEdit(ctx);
+    if (m.hover) applySelection(ctx, []); ctx.requestRender(); return;
+  }
   const [dx, dy] = m.last; moveRestore(ctx, m);            // originals back first, so commit() records a true inverse
   const unhover = () => { if (m.hover) applySelection(ctx, []); };   // a hover selection does not outlive the move
   if (!commit && m.placing) {   // Escape on a paste / duplicate that still follows the cursor takes the new items out again
@@ -120,6 +135,11 @@ export function beginCarryMove(ctx: PcbCtx, opts?: { placing?: string[]; ids?: s
   const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || (opts.drag && free.length === 1 && doc.items.get(free[0]!)?.kind === "footprint") ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
   const m: SelectMove = { ids: free, start: at.slice(), orig: new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
   for (const id of free) m.orig.set(id, clone(doc.items.get(id)!.node));
+  const gen = !opts.placing && !opts.drag ? selectedTuningPattern(ctx, free) : null;
+  if (gen) {   // doMoveSelection with one PCB_GENERATOR: genStartEdit, then each step moves its origin and end and re-tunes
+    m.skip = new Set(m.orig.keys()); m.gen = gen.id; m.orig = new Map(); m.ids = [];
+    genStartEdit(ctx, gen, "Move"); S.move = m; moveCursor(ctx, true); ctx.requestRender(); return true;
+  }
   if (opts.drag) dragEnds(doc, m);
   m.skip = new Set(m.orig.keys()); S.move = m; moveCursor(ctx, true); ctx.requestRender(); return true;
 }

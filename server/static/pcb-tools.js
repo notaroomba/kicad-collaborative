@@ -2420,6 +2420,74 @@
     }
     return "";
   }
+  function tuningPatternOfSelection(doc, ids) {
+    let gen = null;
+    for (const id of ids) {
+      const it = doc.items.get(id);
+      if (it && it.kind === "generated" && K.str((K.kid(it.node, "type") || [])[1]) === "tuning_pattern") {
+        if (gen) return null;
+        gen = it;
+      }
+    }
+    if (!gen) return null;
+    const mem = new Set(K.groupMemberIds(gen.node));
+    return ids.every((id) => id === gen.id || mem.has(id)) ? gen : null;
+  }
+  function tuningMsgPanel(doc, gen, s, units, add) {
+    const V = (v) => msgValue(v, units);
+    const n = gen.node;
+    const numOf = (k) => {
+      const c = K.kid(n, k);
+      return c ? K.num(c[1]) : null;
+    };
+    const mode = K.str((K.kid(n, "tuning_mode") || [])[1]) || "single";
+    const override = (() => {
+      const c = K.kid(n, "override_custom_rules");
+      return !!c && K.str(c[1]) === "yes";
+    })();
+    const timeDomain = (() => {
+      const c = K.kid(n, "is_time_domain");
+      return !!c && K.str(c[1]) === "yes";
+    })();
+    add("Type", "Tuning Pattern");
+    let primary = null, coupled = null, width = 0, mixed = false;
+    const NT = netTable(doc);
+    for (const id of K.groupMemberIds(n)) {
+      const it = doc.items.get(id);
+      if (!it || it.kind !== "segment" && it.kind !== "arc") continue;
+      if (!primary) primary = it;
+      else if (!coupled && NT.key(netOf(it.node)) !== NT.key(netOf(primary.node))) coupled = it;
+      const w = widthOf(it.node, 0);
+      if (!width) width = w;
+      else if (Math.abs(width - w) > 1e-9) mixed = true;
+    }
+    const nameOf = (it) => {
+      if (!it) return "";
+      const k = NT.key(netOf(it.node));
+      return k && k[0] !== "#" ? k : "";
+    };
+    const lastName = K.str((K.kid(n, "last_netname") || [])[1]) || "";
+    const pName = nameOf(primary) || (primary ? lastName : ""), cName = nameOf(coupled);
+    const pNet = primary ? { code: netOf(primary.node).code, name: pName } : null, cNet = coupled ? { code: netOf(coupled.node).code, name: cName } : null;
+    if (cNet && pNet) add("Nets", unescapeName(pNet.name) + ", " + unescapeName(cNet.name));
+    else if (pNet) add("Net", unescapeName(pNet.name));
+    if (pNet) add("Resolved Netclass", unescapeName(netclassName(s, pNet.name || "")));
+    add("Layer", boardLayerName(doc, K.str((K.kid(n, "layer") || [])[1]) || "F.Cu"));
+    if (width && !mixed) add("Width", V(width));
+    if (primary && pNet && pNet.name) {
+      const len = routedLength(doc, primary.id);
+      if (coupled && cNet && cNet.name) add("Routed Lengths", V(len) + ", " + V(routedLength(doc, coupled.id)));
+      else add("Routed Length", V(len));
+    }
+    const rule = S.ruleConstraint ? S.ruleConstraint(doc, mode === "diff_pair_skew" ? "skew" : "length", primary, coupled) : null;
+    if (mode === "diff_pair_skew") {
+      if (!rule || override) add(`Target Skew: ${V(numOf("target_skew") || 0)}`, "(from tuning pattern properties)");
+      else if (rule.text) add(`Skew Constraints: ${rule.text}`, `(from ${rule.name})`);
+    } else if (!rule || override) {
+      if (timeDomain) add(`Target Delay: ${(numOf("target_delay") || 0).toFixed(4)} ps`, "(from tuning pattern properties)");
+      else add(`Target Length: ${V(numOf("target_length") || 0)}`, "(from tuning pattern properties)");
+    } else if (rule.text) add(`${timeDomain ? "Delay" : "Length"} Constraints: ${rule.text}`, `(from ${rule.name})`);
+  }
   var PAD_ATTR = { thru_hole: "PTH", smd: "SMD", connect: "Conn", np_thru_hole: "NPTH" };
   var PAD_SHAPE = { circle: "Circle", oval: "Oval", rect: "Rectangle", trapezoid: "Trapezoid", roundrect: "Rounded rectangle", chamfered_rect: "Chamfered rectangle", custom: "Custom shape" };
   function msgPanelInfo(doc, ids, opts) {
@@ -2456,6 +2524,11 @@
       return out;
     }
     const list = Array.from(ids || []);
+    const gen = tuningPatternOfSelection(doc, list);
+    if (gen) {
+      tuningMsgPanel(doc, gen, s, units, add);
+      return out;
+    }
     if (list.length === 1) {
       const id = String(list[0]), hash = id.indexOf("#");
       const it = doc.items.get(hash > 0 ? id.slice(0, hash) : id);
@@ -4141,6 +4214,33 @@
       line(c, a, b);
     }
     c.restore();
+  }
+  function tuningNodeWithSettings(orig, st, mode) {
+    const node = clone(orig);
+    const mm = (v) => fmt2(v / 1e6);
+    const yn = (b) => b ? "yes" : "no";
+    setKid(node, "min_amplitude", mm(st.minAmp));
+    setKid(node, "max_amplitude", mm(st.maxAmp));
+    setKid(node, "min_spacing", mm(st.spacing));
+    setKid(node, "corner_radius_percent", st.crPct);
+    setKid(node, "rounded", yn(st.round));
+    setKid(node, "single_sided", yn(st.singleSided));
+    setKid(node, "override_custom_rules", yn(st.overrideCustomRules));
+    if (mode === "diff_pair_skew") {
+      setKid(node, "target_skew", mm(st.skew.opt));
+      setKid(node, "target_skew_min", mm(st.skew.min));
+      setKid(node, "target_skew_max", mm(st.skew.max));
+    } else {
+      setKid(node, "target_length", mm(st.target.opt));
+      setKid(node, "target_length_min", mm(st.target.min));
+      setKid(node, "target_length_max", mm(st.target.max));
+    }
+    return node;
+  }
+  function editTuningPattern(ctx, gen, node) {
+    genStartEdit(ctx, gen);
+    genUpdateEdit(ctx, node);
+    return genFinishEdit(ctx);
   }
 
   // web/tools/pcb-tools/point-editor.ts
@@ -6487,6 +6587,20 @@
   }
 
   // web/tools/pcb-tools/select-move.ts
+  function genMoveStep(ctx, dx, dy) {
+    const ge = S.genEdit;
+    if (!ge) return;
+    const node = clone(ge.orig);
+    for (const k of ["origin", "end"]) {
+      const c = K.kid(node, k);
+      const xy2 = c && K.kid(c, "xy");
+      if (xy2) {
+        xy2[1] = r6(K.num(xy2[1]) + dx);
+        xy2[2] = r6(K.num(xy2[2]) + dy);
+      }
+    }
+    genUpdateEdit(ctx, node);
+  }
   function moveNodesAt(m, dx, dy) {
     const out = [];
     for (const [id, orig] of m.orig) {
@@ -6528,6 +6642,7 @@
   function moveTransform(ctx, how, arg) {
     const m = S.move;
     if (!m) return false;
+    if (m.gen) return true;
     if (m.conns && m.conns.length || m.ends.length) return true;
     if (!m.base) m.base = new Map(Array.from(m.orig, ([id, n]) => [id, clone(n)]));
     let cx = m.start[0], cy = m.start[1];
@@ -6560,6 +6675,10 @@
     if (dx === m.last[0] && dy === m.last[1]) return;
     m.last = [dx, dy];
     m.moved = true;
+    if (m.gen) {
+      genMoveStep(ctx, dx, dy);
+      return;
+    }
     moveApply(ctx, m, dx, dy);
     ctx.requestRender();
   }
@@ -6568,6 +6687,13 @@
     S.move = null;
     if (!m) return;
     moveCursor(ctx, false);
+    if (m.gen) {
+      if (commit && m.moved && (m.last[0] || m.last[1])) genFinishEdit(ctx);
+      else genCancelEdit(ctx);
+      if (m.hover) applySelection(ctx, []);
+      ctx.requestRender();
+      return;
+    }
     const [dx, dy] = m.last;
     moveRestore(ctx, m);
     const unhover = () => {
@@ -6621,6 +6747,18 @@
     const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || opts.drag && free.length === 1 && doc.items.get(free[0])?.kind === "footprint" ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
     const m = { ids: free, start: at.slice(), orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
     for (const id of free) m.orig.set(id, clone(doc.items.get(id).node));
+    const gen = !opts.placing && !opts.drag ? selectedTuningPattern(ctx, free) : null;
+    if (gen) {
+      m.skip = new Set(m.orig.keys());
+      m.gen = gen.id;
+      m.orig = /* @__PURE__ */ new Map();
+      m.ids = [];
+      genStartEdit(ctx, gen, "Move");
+      S.move = m;
+      moveCursor(ctx, true);
+      ctx.requestRender();
+      return true;
+    }
     if (opts.drag) dragEnds(doc, m);
     m.skip = new Set(m.orig.keys());
     S.move = m;
@@ -12994,9 +13132,40 @@
   }
   act("lengthTunerSettings", "Length Tuning Settings...", "Ctrl+L", (ctx) => isTuneTool(S.modTool) ? openTuneSettings(ctx) : true, { menu: false, tip: "Displays tuning pattern properties dialog" });
   function tunerProperties(ctx) {
-    if (!isTuneTool(S.modTool)) return false;
     bind(ctx);
-    return openTuneSettings(ctx);
+    if (isTuneTool(S.modTool)) return openTuneSettings(ctx);
+    const gen = selectedTuningPattern(ctx);
+    if (!gen) return false;
+    return openPatternProperties(ctx, gen);
+  }
+  function openPatternProperties(ctx, gen) {
+    if (!routingDialogs.tuning) {
+      ctx.toast("Tuning Pattern Properties: dialogs are unavailable here");
+      return true;
+    }
+    const info = tuningPatternInfo(gen);
+    const mode = info.mode === "diff_pair_skew" ? "skew" : "single";
+    const st = tuneCopy(info.st);
+    if (!st.overrideCustomRules && S.ruleConstraint) {
+      const mem = K.groupMemberIds(gen.node).map((id) => ctx.doc.items.get(id)).filter((it) => it && (it.kind === "segment" || it.kind === "arc"));
+      const c = S.ruleConstraint(ctx.doc, mode === "skew" ? "skew" : "length", mem[0] || null, null);
+      if (c && c.opt != null) {
+        if (mode === "skew") setTargetSkew(st, Math.round(c.opt * TUNE_IU));
+        else setTargetLength(st, Math.round(c.opt * TUNE_IU));
+        if (mode !== "skew" && c.min != null && c.max != null) st.target = { min: Math.round(c.min * TUNE_IU), opt: Math.round(c.opt * TUNE_IU), max: Math.round(c.max * TUNE_IU) };
+      }
+    }
+    routingDialogs.tuning({ mode: info.mode === "diff_pair_skew" ? "diff_pair_skew" : info.mode === "diff_pair" ? "diff_pair" : "single", settings: tuneSettingsView(st, mode) }, (v) => {
+      const c = lastCtx || ctx;
+      const cur = c.doc.items.get(gen.id);
+      if (!cur || !canEdit(c)) return;
+      const next = tuneCopy(st);
+      applyTuneSettings(next, v, mode);
+      next.initialSide = st.initialSide;
+      editTuningPattern(c, cur, tuningNodeWithSettings(cur.node, next, info.mode));
+      c.requestRender();
+    });
+    return true;
   }
   act("spacingIncrease", "Increase Spacing", "1", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", 1) : false, { menu: false, tip: "Increase tuning pattern spacing by one step." });
   act("spacingDecrease", "Decrease Spacing", "2", (ctx) => isTuneTool(S.modTool) ? tuneStep(ctx, "spacing", -1) : false, { menu: false, tip: "Decrease tuning pattern spacing by one step." });
