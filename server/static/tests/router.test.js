@@ -311,5 +311,19 @@ test("computeBreakouts: four straight and four diagonal exits of a rectangle, ei
   assert.equal(P.cornerCost([[0, 0], [1, 0], [2, 1]]), 10); assert.equal(P.cornerCost([[0, 0], [1, 0], [1, 1]]), 30);
 });
 
+test("smartPadsSingle: no breakouts for an offset pad; a vertex p whose leg misses the pad shape is skipped", () => {
+  const pad = { x: 10, y: 10, w: 1, h: 3, rot: 0, shape: "rect", off: [0, 0] };
+  const line = [[10, 10], [12, 12], [15, 12]]; const clear = () => true;
+  const r = P.smartPadsSingle(line, pad, 0.25, false, 3, clear);
+  assert.ok(r, "a centred pad gets its breakout"); assert.deepEqual(r.pts, [[10, 10], [13, 10], [15, 12]]);
+  assert.equal(P.smartPadsSingle(line, Object.assign({}, pad, { off: [0.5, 0] }), 0.25, false, 3, clear), null, "solid->Offset() != 0: -1");
+  // the first vertex is off the pad (a line that does not start in it): SEG(line[0], line[p]) never meets the pad
+  assert.equal(P.smartPadsSingle([[20, 10], [22, 12], [25, 12]], pad, 0.25, false, 3, clear), null);
+  const sizes = K.parseDoc(`(kicad_pcb (version 20260206) (layers (0 "F.Cu" signal)) (net 0 "") (footprint "T:X" (layer "F.Cu") (uuid "f") (at 0 0)
+    (pad "1" thru_hole oval (at 1 2) (size 2 3) (drill 1 (offset 0.3 -0.2)) (layers "*.Cu") (uuid "p"))))`, "kicad_pcb");
+  const fp = [...sizes.items.values()].find((i) => i.kind === "footprint");
+  assert.deepEqual(P.padsOf(fp)[0].off, [0.3, -0.2], "padsOf reads (drill … (offset x y))");
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

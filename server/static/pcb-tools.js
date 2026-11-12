@@ -644,7 +644,9 @@ function padsOf(fp) {
   const n = fp.node; const [fx, fy, frot] = K.atOf(n); const R = rotator(frot); const out = [];
   K.kids(n, "pad").forEach((pad, index) => {
     const [px, py, prot] = K.atOf(pad); const [rx, ry] = R(px, py); const sz = K.kid(pad, "size"); const ls = K.kid(pad, "layers");
-    out.push({ x: fx + rx, y: fy + ry, rot: prot, w: sz ? K.num(sz[1]) : 1, h: sz ? K.num(sz[2], K.num(sz[1])) : 1,
+    // the shape's offset from the anchor ((drill … (offset x y)), PAD::GetOffset), in the pad's own frame
+    const dr = K.kid(pad, "drill"), of = dr && K.kid(dr, "offset"); const off = of ? [K.num(of[1], 0), K.num(of[2], 0)] : [0, 0];
+    out.push({ x: fx + rx, y: fy + ry, rot: prot, w: sz ? K.num(sz[1]) : 1, h: sz ? K.num(sz[2], K.num(sz[1])) : 1, off,
       net: netOf(pad), layers: ls ? ls.slice(1).map(K.str) : [], number: K.str(pad[1]), type: K.str(pad[2]), shape: K.str(pad[3]), node: pad, index });
   });
   return out;
@@ -1842,9 +1844,14 @@ function padOrViaAt(doc, layer, netKey, p) {
 /** OPTIMIZER::smartPadsSingle: the cheapest collision-free breakout from the pad replacing the line's first vertices. */
 function smartPadsSingle(line, pad, width, atEnd, endVertex, clear) {
   const forbidden = ANG_ACUTE | ANG_RIGHT | ANG_HALF_FULL | ANG_UNDEFINED;
+  // don't do optimized connections for offset pads (solid->Offset() != 0)
+  if (pad.off && (pad.off[0] !== 0 || pad.off[1] !== 0)) return null;
   const L = atEnd ? line.slice().reverse() : line; const pEnd = Math.min(endVertex, Math.min(3, L.length - 1));
-  const breakouts = padBreakouts(pad, width); const variants = []; const lineLen = chainLen(L);
+  const breakouts = padBreakouts(pad, width); const variants = []; const lineLen = chainLen(L); const shape = padShape(pad);
   for (let p = 1; p <= pEnd; p++) {
+    // "If the line is contained inside the pad, don't optimize": solid->Shape( -1 )->Collide( SEG( line[0], line[p] ), width / 2 ) false → skip p
+    const gap = shapeGap(shape, { t: "seg", a: L[0], b: L[p], r: 0 });
+    if (!(gap === 0 || gap < width / 2)) continue;
     for (const br of breakouts) {
       for (let diag = 0; diag < 2; diag++) {
         const last = br[br.length - 1]; const connect = legPts(last, L[p], diag === 0);
