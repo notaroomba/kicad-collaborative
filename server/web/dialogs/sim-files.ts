@@ -1,7 +1,8 @@
 // dialogs/sim-files.ts — the files the Simulation Model dialog can read a SPICE library from: the project's
 // spice_model documents (fetched through /api/docs/{id}/content) and the embedded files of the symbol and of the
-// schematic (kicad-embed://<name>; their data is base64 of a zstd stream, decoded where the browser can).
+// schematic (kicad-embed://<name>; their data is base64 of a zstd frame, decoded by zstd.ts).
 import type { SimFile } from "./sim-model";
+import { zstdDecompress } from "./zstd";
 
 interface DocEntry { docId: string; path: string; docType: string }
 type Node = unknown;
@@ -21,7 +22,10 @@ export function projectModelFiles(docs: DocEntry[]): SimFile[] {
   }));
 }
 
-async function unzstd(bytes: Uint8Array): Promise<string | null> {
+/** The text of an embedded file's zstd frame: decoded here (zstd.ts), the browser's DecompressionStream('zstd')
+ *  only as a fallback for a frame the decoder refuses (a dictionary). */
+export async function unzstd(bytes: Uint8Array): Promise<string | null> {
+  try { return new TextDecoder().decode(zstdDecompress(bytes)); } catch (e) { /* try the browser's decoder */ }
   const DS = (globalThis as unknown as { DecompressionStream?: new (f: string) => TransformStream<Uint8Array, Uint8Array> }).DecompressionStream;
   if (!DS) return null;
   try { const s = new Blob([bytes.buffer as ArrayBuffer]).stream().pipeThrough(new DS("zstd")); return await new Response(s).text(); } catch (e) { return null; }
