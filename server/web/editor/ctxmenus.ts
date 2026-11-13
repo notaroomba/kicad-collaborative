@@ -36,6 +36,8 @@ export interface MenuCtx {
   pinAlts?: boolean;
   belowRoot: boolean;
   hasLocked: boolean; hasUnlocked: boolean;
+  /** board: the selection is one group (groupEnterCondition) / a group is entered (inGroupCondition) */
+  groupSelected?: boolean; inGroup?: boolean;
   /** board is not empty (EDIT_TOOL's noItemsCondition) */
   hasItems: boolean;
   /** check marks of the attribute entries, by action name */
@@ -353,6 +355,7 @@ function pcbSelectionMenu(): CondMenu {
   m.sub(pcbSelectMenu(), notEmpty); m.sep(1000);
   m.item("ACTIONS::cancelInteractive", not(noActiveTool), 1);
   m.item("PCB_ACTIONS::clearHighlight", haveHighlight, 1).sep(haveHighlight, 1);
+  m.item("ACTIONS::groupEnter", (c) => !!c.groupSelected, 1).item("ACTIONS::groupLeave", (c) => !!c.inGroup, 1);
   addTableSelectItems(m, tableCellSelection);
   m.sep(1); standardSubMenus(m);
   // EDIT_TOOL::Init

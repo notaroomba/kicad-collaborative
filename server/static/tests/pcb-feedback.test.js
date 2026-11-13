@@ -69,3 +69,75 @@ test("ROUTER_TOOL::getStartLayer: a track on another copper layer starts the rou
   assert.equal(P.startLayerOf(ctx, { x: 5, y: 3, snap: null }, [5, 3]), null);
   assert.equal(P.startLayerOf(ctx, { x: 5, y: 0, snap: { kind: "track", onLayer: "B.Cu" } }, [5, 0]), "B.Cu");
 });
+
+// a recording 2D context: strokes and fills with their colours, and the transform the stroke font reads
+function recCtx() {
+  const ops = []; const st = { strokeStyle: "", fillStyle: "", lineWidth: 1, globalAlpha: 1 };
+  const c = new Proxy({}, { get(_t, k) {
+    if (k === "ops") return ops;
+    if (k === "getTransform") return () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
+    if (k === "measureText") return (s) => ({ width: s.length });
+    if (k in st) return st[k];
+    if (k === "stroke" || k === "fill" || k === "strokeRect" || k === "fillRect" || k === "fillText") return (...a) => ops.push({ op: k, stroke: st.strokeStyle, fill: st.fillStyle, lw: st.lineWidth, alpha: st.globalAlpha, a });
+    if (k === "moveTo" || k === "lineTo" || k === "arc") return (...a) => ops.push({ op: k, a });
+    return () => {};
+  }, set(_t, k, v) { st[k] = v; return true; } });
+  return c;
+}
+const GROUPED = '(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal) (31 "B.Cu" signal)) (net 0 "") (net 1 "A")'
+  + ' (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1) (uuid "s1"))'
+  + ' (segment (start 0 5) (end 10 5) (width 0.25) (layer "F.Cu") (net 1) (uuid "s2"))'
+  + ' (segment (start 0 9) (end 10 9) (width 0.25) (layer "F.Cu") (net 1) (uuid "s3"))'
+  + ' (group "INNER" (uuid "g2") (members "s2"))'
+  + ' (group "OUTER" (uuid "g1") (members "g2" "s1")))';
+
+test("Enter Group: picking a member stays inside the entered group; its box and members", () => {
+  const doc = K.parseDoc(GROUPED);
+  P.state.enteredGroup = null;
+  assert.deepEqual([...P.expandGroups(doc, ["s1"])].sort(), ["g1", "g2", "s1", "s2"], "outside: a member selects the whole group");
+  P.state.enteredGroup = "g1";
+  assert.deepEqual([...P.expandGroups(doc, ["s1"])].sort(), ["s1"], "entered: the member alone");
+  assert.deepEqual([...P.expandGroups(doc, ["s2"])].sort(), ["g2", "s2"], "entered: a sub-group is still picked whole");
+  assert.deepEqual([...P.enteredGroupIds(doc)].sort(), ["g1", "g2", "s1", "s2"]);
+  const b = P.groupBox(doc, "g1"); assert(b && b[1] < 0 && b[3] > 5 && b[3] < 9, "the box spans s1 and s2 only: " + b);
+  P.state.enteredGroup = null;
+});
+
+test("outside an entered group items fade to the Outside Group opacity, selected ones do not", () => {
+  const doc = K.parseDoc(GROUPED);
+  const run = (opts) => { const c = recCtx(); c.canvas = { width: 400, height: 300 }; K.render(doc, c, { ppm: 20, zoom: 1, panX: 0, panY: 0, x0: -2, y0: -2, dpr: 1 }, Object.assign({ frame: false, netNames: false }, opts)); return c.ops.filter((o) => o.op === "stroke" && o.lw > 0.2); };
+  const plain = run({}); assert(plain.every((o) => o.alpha === 1));
+  const ent = run({ enteredGroup: new Set(["g1", "g2", "s1", "s2"]), outsideGroupOpacity: 0.2 });
+  assert.equal(ent.filter((o) => Math.abs(o.alpha - 0.2) < 1e-6).length, 1, "s3 faded");
+  assert.equal(ent.filter((o) => o.alpha === 1).length, 2, "the members at full opacity");
+  const sel = run({ enteredGroup: new Set(["g1", "g2", "s1", "s2"]), outsideGroupOpacity: 0.2, selected: new Set(["s3"]) });
+  assert(sel.every((o) => o.alpha === 1), "a selected item outside the group keeps its opacity");
+});
+
+test("PCB_PAINTER::draw( PCB_GROUP ): a selected group's box at 2 px with its name tab, nothing for a group not selected", () => {
+  const doc = K.parseDoc(GROUPED);
+  const ctx = (sel) => ({ doc, selection: new Set(sel), isSch: false });
+  let c = recCtx(); P.drawGroupFrames(c, ctx([]), 0.05); assert.equal(c.ops.length, 0);
+  c = recCtx(); P.drawGroupFrames(c, ctx(["g1", "g2", "s1", "s2"]), 0.05);
+  const rects = c.ops.filter((o) => o.op === "strokeRect"); assert.equal(rects.length, 1, "only the outer group (its parent is not selected)");
+  assert.equal(rects[0].lw, 0.1);
+  assert.equal(rects[0].stroke.toLowerCase().replace(/\s/g, ""), K.selectedColor("#FF26E2").toLowerCase().replace(/\s/g, ""));
+  assert(c.ops.filter((o) => o.op === "stroke").length > 1, "the title tab and the stroke-font name");
+});
+
+test("clearance outlines (Always show): one px outline at width + 2 × clearance in the layer colour", () => {
+  const doc = K.parseDoc('(kicad_pcb (version 20240108) (generator "t") (layers (0 "F.Cu" signal)) (net 0 "") (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 0) (uuid "s1")) (via (at 20 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 0) (uuid "v1")))');
+  const c = recCtx(); P.drawClearanceOutlines(c, { doc, isSch: false }, 0.05);
+  const strokes = c.ops.filter((o) => o.op === "stroke"); assert.equal(strokes.length, 2);
+  assert(strokes.every((o) => o.lw === 0.05 && o.stroke === K.pcbColor("F.Cu")));
+  const ring = c.ops.find((o) => o.op === "arc" && o.a[0] === 20); assert(ring && ring.a[2] > 0.3 + 0.1, "via ring past its radius: " + (ring && ring.a[2]));
+});
+
+test("ROUTER_STATUS_VIEW_ITEM: the note in the stroke font (no fillText), framed 2 px, 0.9 fill", () => {
+  const c = recCtx(); P.drawStatusNote(c, [0, 0], 0.1, "Track violates DRC.", "(Ctrl+click to commit anyway.)");
+  assert.equal(c.ops.filter((o) => o.op === "fillText").length, 0);
+  const box = c.ops.find((o) => o.op === "fillRect"); assert(box && box.alpha === 0.9);
+  const frame = c.ops.find((o) => o.op === "strokeRect"); assert(frame && Math.abs(frame.lw - 0.2) < 1e-9);
+  assert(c.ops.filter((o) => o.op === "stroke").length >= 2, "two stroked text lines");
+  assert(box.a[0] > 0 && box.a[1] < 0, "above and right of the cursor");
+});

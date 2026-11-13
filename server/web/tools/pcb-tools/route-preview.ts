@@ -102,16 +102,27 @@ export function routeHiddenIds() {
   if (rt.loopHidden) for (const id of rt.loopHidden) out.add(id);
   return out.size ? out : null;
 }
-/** ROUTER_STATUS_VIEW_ITEM: a boxed message and hint above and to the right of the cursor, in the UI's colours. */
+/**
+ * ROUTER_STATUS_VIEW_ITEM::ViewDraw: the message in the stroke font, its glyphs 12 px high (the hint 10 px,
+ * PREVIEW::GetConstantGlyphHeight, pen 0.2 of the height). They sit in a box that fills at 0.9 and has a 2 px frame,
+ * above and right of the cursor. The box takes the UI's button face and text colours.
+ */
 export function drawStatusNote(c: CanvasRenderingContext2D, at: Pt, cpx: number, msg: string, hint?: string | null) {
   const css = (name: string, dflt: string) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim(); return v || dflt; } catch (e) { return dflt; } };
-  const fs = 13 * cpx, hs = 11 * cpx, m = 6 * cpx;
-  c.save(); c.globalAlpha = 1;
-  c.font = `${fs}px sans-serif`; const w1 = c.measureText(msg).width; c.font = `${hs}px sans-serif`; const w2 = c.measureText(hint!).width;
-  const w = Math.max(w1, w2) + 2 * m, h = fs + hs + 3 * m; const x = at[0] + 5 * m, y = at[1] - h - 5 * m;
-  c.fillStyle = css("--color-panel", "#2b2b2b"); c.strokeStyle = css("--color-ink", "#e0e0e0"); c.lineWidth = cpx;
-  c.fillRect(x, y, w, h); c.strokeRect(x, y, w, h);
-  c.fillStyle = css("--color-ink", "#e0e0e0"); c.textBaseline = "top";
-  c.font = `${fs}px sans-serif`; c.fillText(msg, x + m, y + m); c.font = `${hs}px sans-serif`; c.fillText(hint!, x + m, y + 2 * m + fs);
+  const g = 12 * cpx, gh = 10 * cpx;
+  const width = (s: string, size: number) => s ? (K.strokeLineWidth as (t: string, italic: boolean) => number)(s, false) * size + size * 0.2 : 0;
+  const tw = Math.max(width(msg, g), width(hint || "", gh));
+  const mx = g * 0.4, my = g * 0.6;
+  const sx = tw + mx; let sy = g * 1.7; if (hint) sy += gh * 1.2;
+  const ox = at[0] + mx * 5, oy = at[1] - (sy + my * 5);
+  const face = css("--color-panel", "#2b2b2b"), ink = css("--color-ink", "#e0e0e0");
+  c.save(); c.setLineDash([]);
+  c.globalAlpha = 0.9; c.fillStyle = face; c.fillRect(ox - mx, oy - my, sx + 2 * mx, sy + 2 * my);
+  c.globalAlpha = 1; c.strokeStyle = ink; c.lineWidth = 2 * cpx; c.strokeRect(ox - mx, oy - my, sx + 2 * mx, sy + 2 * my);
+  const m = c.getTransform(), base = [m.a, m.b, m.c, m.d, m.e, m.f];
+  const stroke = K.drawStrokeText as (ctx: CanvasRenderingContext2D, base: number[], t: Record<string, unknown>, color: string, minPen: number) => void;
+  const tx = ox + mx, ty = oy + my;
+  stroke(c, base, { x: tx, y: ty, text: msg, size: g, rot: 0, mirror: false, h: "left", v: "center", pen: g * 0.2, italic: false, dy: 0 }, ink, cpx);
+  if (hint) stroke(c, base, { x: tx, y: ty + g * 1.6, text: hint, size: gh, rot: 0, mirror: false, h: "left", v: "center", pen: gh * 0.2, italic: false, dy: 0 }, ink, cpx);
   c.restore();
 }

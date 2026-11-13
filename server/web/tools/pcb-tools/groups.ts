@@ -30,15 +30,17 @@ export const groupMembers = (node: SNode) => { const m = K.kid(node, "members");
  */
 export function parentOf(doc: BoardDoc, id: string) { for (const it of doc.items.values()) if ((it.kind === "group" || it.kind === "generated") && groupMembers(it.node).includes(id)) return it; return null; }
 /** The outermost group or generator above an item, or null. */
-export function topParentOf(doc: BoardDoc, id: string) { let g = parentOf(doc, id), top: KItem | null = null, guard = 0; while (g && guard++ < 32) { top = g; g = parentOf(doc, g.id); } return top; }
+export function topParentOf(doc: BoardDoc, id: string) { const scope = scopeOf(doc); let g = parentOf(doc, id), top: KItem | null = null, guard = 0; while (g && !scope.has(g.id) && guard++ < 32) { top = g; g = parentOf(doc, g.id); } return top; }
+/** The entered group (PCB_SELECTION_TOOL::m_enteredGroup) and its ancestors: picking a member does not climb into them. */
+function scopeOf(doc: BoardDoc): Set<string> { const out = new Set<string>(); let g = S.enteredGroup && doc.items.has(S.enteredGroup) ? S.enteredGroup : null, guard = 0; while (g && guard++ < 32) { out.add(g); const p = parentOf(doc, g); g = p ? p.id : null; } return out; }
 export function groupOf(doc: BoardDoc, id: string) { for (const it of doc.items.values()) if (it.kind === "group" && groupMembers(it.node).includes(id)) return it; return null; }
 /** The ids plus every member of any group they belong to (and the groups themselves), to any depth. */
 export function expandGroups(doc: BoardDoc, ids: Iterable<string>) {
-  const out = new Set<string>(ids); let grew = true;
+  const out = new Set<string>(ids); let grew = true; const scope = scopeOf(doc);
   while (grew) {
     grew = false;
     for (const it of doc.items.values()) {
-      if (it.kind !== "group" && it.kind !== "generated") continue; const m = groupMembers(it.node);   // a generator holds its members as a group does
+      if ((it.kind !== "group" && it.kind !== "generated") || scope.has(it.id)) continue; const m = groupMembers(it.node);   // a generator holds its members as a group does
       if (!out.has(it.id) && !m.some((id) => out.has(id))) continue;
       for (const id of m.concat([it.id])) if (!out.has(id) && doc.items.has(id)) { out.add(id); grew = true; }
     }

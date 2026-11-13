@@ -94,6 +94,7 @@ function menuCtx(): MenuCtx {
     pinAlts: !!(E.selPins.length === 1 && E.kdoc && schPins() && schPins()!.pinAlternates(E.kdoc as KDoc, E.selPins[0])),   // ALT_PIN_FUNCTION_MENU: one pin only
     highlight: !!E.highlightIds, belowRoot: !!root && (state as { doc?: unknown }).doc !== root,
     hasLocked: items.some((it) => isLocked(it.node)), hasUnlocked: items.some((it) => !isLocked(it.node)),
+    groupSelected: boardGroupSelected(), inGroup: !sch && !!(CollabTools.pcb && (CollabTools.pcb.state as { enteredGroup?: string | null }).enteredGroup),
     hasItems: !!E.kdoc && E.kdoc.items.size > 0, checks: attributeChecks(items),
     cells: cells ? { block: cells.block, merged: cells.merged, structure: cells.structure } : null,
   };
@@ -159,7 +160,7 @@ function dragTrack(free: boolean): Run | string {
 /** KiCad action → module action id, where the web's id differs. */
 const ALIAS: Record<Editor, Record<string, string>> = {
   sch: { rotateCCW: "rotateSelection", rotateCW: "rotateSelectionCW", mirrorH: "mirrorSelectionX", mirrorV: "mirrorSelectionY", autoplaceFields: "autoplace" },
-  pcb: { flip: "flipSelection", moveExact: "moveExactly", packAndMoveFootprints: "pack", rotateCcw: "rotateSelection", rotateCw: "rotateSelectionCw", highlightNetSelection: "highlightNet" },
+  pcb: { flip: "flipSelection", moveExact: "moveExactly", packAndMoveFootprints: "pack", rotateCcw: "rotateSelection", rotateCw: "rotateSelectionCw", highlightNetSelection: "highlightNet", groupEnter: "enterGroup", groupLeave: "leaveGroup" },
 };
 /** Board entries whose short id collides with a handler that means something else here. */
 const NO_HANDLER = new Set(["PCB_ACTIONS::mirrorH", "PCB_ACTIONS::mirrorV"]);
@@ -167,6 +168,11 @@ const NO_HANDLER = new Set(["PCB_ACTIONS::mirrorH", "PCB_ACTIONS::mirrorV"]);
 const READ_ONLY_OK = new Set(["cancelInteractive", "selectAll", "unselectAll", "properties", "enterSheet", "leaveSheet", "clearHighlight", "highlightNetSelection", "highlightNet",
   "selectConnection", "selectNet", "selectNode", "selectSameSheet", "selectUnconnected", "filterSelection", "copy", "copyAsText", "showDatasheet", "selectColumns", "selectRows", "selectTable", "exportTableCSV", "editTable", "inspectClearance", "showNetInRatsnest", "hideNetInRatsnest"]);
 
+/** PCB_SELECTION_TOOL's groupEnterCondition: the selection is one group. */
+function boardGroupSelected(): boolean {
+  if (isSch() || !CollabTools.pcb || !CollabTools.pcb.selectedTopGroup) return false;
+  try { return !!CollabTools.pcb.selectedTopGroup(toolCtx()); } catch (e) { return false; }
+}
 function resolve(act: string, c: MenuCtx): { run?: Run; why?: string; key?: string } {
   const sid = act.split("::").pop() as string, ed = c.editor, m = activeModule();
   if (E.viewOnly && !READ_ONLY_OK.has(sid)) return { why: VIEW_ONLY };

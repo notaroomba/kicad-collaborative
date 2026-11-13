@@ -6,9 +6,11 @@ import { drawStatusPopup, drawTwoPointAssistant } from "./assistants";
 import { DIM_TYPE, dimensionNode, snap45 } from "./dimensions";
 import type { DimSpec } from "./dimensions";
 import { polysOverlap, rectCore, shapeOffset } from "./distances";
-import { courtyards } from "./drc";
+import { courtyards, netClearance } from "./drc";
+import { settingsOf } from "./dialogs";
 import { POLY_TOOLS, RULE_AREA_LAYERS, drawWidth } from "./draw-modes";
 import { selectionIds } from "./groups";
+import { drawGroupFrames } from "./group-edit";
 import { netTable, ratsnest } from "./netlist";
 import { netOf } from "./nets";
 import { tableGrid } from "./nodes";
@@ -16,7 +18,7 @@ import { drawEditPoints } from "./point-editor";
 import { padsOf } from "./route-geom";
 import { PAD_TOOLS, masterPad } from "./pad-tool";
 import { drawDragPreview, drawRoute } from "./route-preview";
-import { HALO_COLOR, HL, K, RATSNEST, S, VIA, bind } from "./state";
+import { CLEARANCE_MODE, HALO_COLOR, HL, K, RATSNEST, S, VIA, bind } from "./state";
 import { drawTune } from "./tuning-patterns";
 import { drawGenEditPreview, drawTuningSelection } from "./tuning-edit";
 import { isTuneTool } from "./tuning-tool";
@@ -45,6 +47,41 @@ export function courtyardConflicts(doc: BoardDoc, moving: Set<string>): Map<stri
     }
   }
   return out;
+}
+/**
+ * PCB_PAINTER's clearance lines (LAYER_CLEARANCE_*), drawn only with track_clearance_mode "Always show": every track
+ * as the outline of its width + 2 × its own clearance, and every via as a circle of its radius + clearance. They are
+ * one pixel wide in the layer colour, on the visible copper layers.
+ */
+export function drawClearanceOutlines(c: CanvasRenderingContext2D, ctx: PcbCtx, cpx: number) {
+  const doc = ctx.doc, s = settingsOf(ctx);
+  const hidden = appGlobal(() => editorState()!.hiddenLayers as Set<string> | null, null);
+  const nameOf = (code: number | undefined) => code && code > 0 ? netNameOf(ctx, { code } as never) : "";
+  c.save(); c.globalAlpha = 1; c.setLineDash([]); c.lineWidth = cpx; c.lineCap = "round"; c.lineJoin = "round";
+  const capsule = (a: Pt, b: Pt, r: number) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy), ang = Math.atan2(dy, dx);
+    if (L < 1e-9) { c.moveTo(a[0] + r, a[1]); c.arc(a[0], a[1], r, 0, 2 * Math.PI); return; }
+    const nx = -dy / L * r, ny = dx / L * r;
+    c.moveTo(a[0] + nx, a[1] + ny); c.lineTo(b[0] + nx, b[1] + ny); c.arc(b[0], b[1], r, ang + Math.PI / 2, ang - Math.PI / 2, true);
+    c.lineTo(a[0] - nx, a[1] - ny); c.arc(a[0], a[1], r, ang - Math.PI / 2, ang + Math.PI / 2, true); c.closePath();
+  };
+  for (const it of doc.items.values()) {
+    if (it.kind !== "segment" && it.kind !== "via" && it.kind !== "arc") continue;
+    const n = it.node, clr = netClearance(s, nameOf((it as unknown as { net?: number }).net));
+    if (it.kind === "via") {
+      const at = K.atOf(n), sz = K.kid(n, "size"), r = (sz ? K.num(sz[1]) : 0.8) / 2;
+      const ls = K.kid(n, "layers"); const layer = ls ? K.str(ls[1]) : "F.Cu"; if (hidden && hidden.has(layer)) continue;
+      c.strokeStyle = color(layer); c.beginPath(); c.arc(at[0], at[1], r + clr, 0, 2 * Math.PI); c.stroke(); continue;
+    }
+    const layer = K.str((K.kid(n, "layer") || [])[1]); if (!layer || (hidden && hidden.has(layer))) continue;
+    const w = K.kid(n, "width"), r = (w ? K.num(w[1]) : 0.25) / 2 + clr;
+    const a = pt(n, "start"), b = pt(n, "end"); if (!a || !b) continue;
+    c.strokeStyle = color(layer); c.beginPath();
+    if (it.kind === "arc") { const m = pt(n, "mid"); const arc = m ? K.arcFrom3(a, m, b) : null; if (arc) { c.arc(arc.x, arc.y, arc.r + r, arc.a0, arc.a1, !!arc.anticlockwise); c.arc(arc.x, arc.y, Math.max(arc.r - r, 0), arc.a1, arc.a0, !arc.anticlockwise); c.closePath(); } else capsule(a, b, r); }
+    else capsule(a, b, r);
+    c.stroke();
+  }
+  c.restore();
 }
 /** The tools whose cursor the router snaps (no snap indicator). */
 export const ROUTER_TOOLS = new Set(["route", "routediff", "tunesingle", "tunediff", "tuneskew", "drag"]);
@@ -293,6 +330,8 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: PcbCt
     line(c, [S.hover.x + img.w / 2, S.hover.y - img.h / 2], [S.hover.x - img.w / 2, S.hover.y + img.h / 2]);
     }
   }
+  if (S.trackClearance === CLEARANCE_MODE.ALWAYS) drawClearanceOutlines(c, ctx, px * (view.dpr || 1));
+  drawGroupFrames(c, ctx, px * (view.dpr || 1));   // PCB_PAINTER::draw( PCB_GROUP ): a selected or entered group's box
   drawStatusPopup(c, px * (view.dpr || 1));
   // delete tool: what the click would remove is brightened by the document pass (brightenedIds), as KiCad does
   // a move's magnetic snap (the anchor the cursor was pulled onto): GRID_HELPER's SNAP_INDICATOR

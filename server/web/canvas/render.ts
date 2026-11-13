@@ -357,6 +357,11 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const hcEdgeF = Math.max(hcF, HC_EDGE_MIN);
   const brightIds = isPcb && opts.brightened && opts.brightened.size ? opts.brightened : null;
   const brightGeoms = brightIds ? new Set<Geom>() : null;
+  // PCB_RENDER_SETTINGS::GetColor in group edit mode: what is outside the entered group (and not selected) fades to
+  // the Outside Group opacity
+  const entered = isPcb && opts.enteredGroup && opts.enteredGroup.size ? opts.enteredGroup : null;
+  const outsideOp = entered ? (typeof opts.outsideGroupOpacity === "number" ? opts.outsideGroupOpacity : obj && obj.opacity && typeof obj.opacity.outsideGroup === "number" ? obj.opacity.outsideGroup : 0.2) : 1;
+  const outsideGeoms = entered && outsideOp < 1 ? new Set<Geom>() : null;
   // PCB_RENDER_SETTINGS::GetColor: a zone's colour alpha times m_zoneOpacity ("board.opacity.zones", 0.6 by default);
   // the Appearance ▸ Objects ▸ Zones slider sets it outright
   const zoneA = objAlpha && typeof objAlpha.zones === "number" ? Math.max(0, Math.min(1, objAlpha.zones)) : ZONE_OPACITY;
@@ -544,6 +549,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       if (isHl || (padHl && (isPcb ? g.padIndex !== undefined : true) && subHl(it, g))) hlGeoms!.add(g);
       if (isSel || (padSel && g.padIndex !== undefined && selPcb!.has(padSel + g.padIndex))) selGeoms!.add(g);
       if (brightIds && brightIds.has(it.id)) brightGeoms!.add(g);
+      if (outsideGeoms && !isSel && !entered!.has(it.id)) outsideGeoms.add(g);
       if (netNames && g.net! > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
@@ -601,6 +607,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     if (hcDim && g.t === "image") alpha *= hcF;
     if (g.zoneFill) alpha *= g.teardrop ? trackA : zoneA;   // PCB_RENDER_SETTINGS::GetColor: color.a *= m_zoneOpacity (m_trackOpacity for a teardrop)
     if (g.hiddenText && isPcb) alpha *= HIDDEN_TEXT_ALPHA;
+    if (outsideGeoms && outsideGeoms.has(g) && !gSel) alpha *= outsideOp;
     let color = g.color, fill = g.fill;
     if (objAlpha && !g.zoneFill) { const oc = g.teardrop ? "tracks" : objectClass(g) || (fill && g.t !== "text" && !g.hole ? "filledShapes" : null); const oa = oc ? objAlpha[oc] : undefined; if (oa !== undefined && oa < 1) alpha *= oa; }
     if (layerDraw && !g.hole) { const lc = layerDraw.get(g.layer); if (lc) { const def = pcbColor(g.layer); if (color === def) color = lc; if (fill === def) fill = lc; } }

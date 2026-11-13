@@ -63,14 +63,15 @@ import { SELECTION_TYPES, boardLayerName, filterIds, idsOnLayer, inspectClearanc
 import { clusterRoots, conductors, connectedCopperIds, localRatsnest, netHighlightIds, netInspector, netItemIds, netTable, netlist, ratsnest } from "./netlist";
 import { netNode, netOf, netStyle } from "./nets";
 import { TEXTBOX_MARGIN, arcNode, circleNode, curveNode, effectsNode, gfxWidth, imageNode, lineNode, polyNode, rectNode, ruleAreaNode, segmentNode, tableGrid, tableNode, textBoxNode, textNode, viaNode, zoneNode, zonePriority, setZoneFillMode, setThieving, thievingOf, zoneFillMode, thievingZoneNode, thievingDefaults, thievingAllowed, THIEVING_FILE_VERSION, THIEVING_NEEDS_VERSION_MSG } from "./nodes";
-import { adjustColor, courtyardConflicts, drawOverlay, drawSnapIndicator, dynamicRatsnest, gridOriginColor, snapTypeOf } from "./overlay";
+import { drawGroupFrames, enterGroup, enteredGroupIds, exitGroup, groupBox, selectedTopGroup } from "./group-edit";
+import { adjustColor, courtyardConflicts, drawClearanceOutlines, drawOverlay, drawSnapIndicator, dynamicRatsnest, gridOriginColor, snapTypeOf } from "./overlay";
 import { genHiddenIds, selectedTuningPattern, editTuningPattern, tuningEditNode, tuningEditPoints, tuningOutline, genStartEdit, genUpdateEdit, genFinishEdit, genCancelEdit } from "./tuning-edit";
 import { addCornerChanges, arcEditGeometry, arcEditMode, canAddCorner, canRemoveCorner, editPointNode, editPoints, removeCornerChanges, setArcEditMode } from "./point-editor";
 import { cornerLeg, elemsPts, headElems, roundCorners } from "./posture";
 import { antennaRemovals, loopRemovals, removeRedundant } from "./redundant";
 import { adoptNetOps, foldMicro, routeHighlight, routeUnhighlight, splitChanges, splitOps } from "./route-fix";
 import { netUnder, padsOf, routeLeg, snapTarget } from "./route-geom";
-import { routeHiddenIds } from "./route-preview";
+import { drawStatusNote, routeHiddenIds } from "./route-preview";
 import { endRoute, placeVia, setLayerPickerImpl, routeClick, setLayer, startLayerOf, undoRouteLeg, viaPlan } from "./route-tool";
 import { RS_DEFAULTS, cornerStyleName, parseRouterSettings, routerChecks, setRouterSettings } from "./router-settings";
 import { beginCarryMove, componentDragHits, finishSelectMove, moveTransform, selectMoveTo, startPendingDrag } from "./select-move";
@@ -188,6 +189,26 @@ export const pcb = {
   // PCB_CONTROL::InteractiveDelete brightens the item a click would remove
   // VIEW_CONTROLS::ForceCursorPosition: the cursor sits where the tool snapped (a move's anchor, a tool's hover point)
   toolCursorPoint() { if (S.move && S.move.snapAt) return [S.move.snapAt[0], S.move.snapAt[1]]; if ((S.modTool || S.route || S.drag) && S.hover) return [S.hover.x, S.hover.y]; return null; },
+  /** RENDER_SETTINGS::isInEnteredGroup: the entered group's members (the rest is drawn at the Outside Group opacity), or null. */
+  enteredGroupIds(doc: BoardDoc) { return enteredGroupIds(doc); },
+  selectedTopGroup(ctx: PcbCtx) { bind(ctx); return ctx.doc ? selectedTopGroup(ctx) : null; },
+  /** A double-click on a group member (PCB_SELECTION_TOOL: a lone selected PCB_GROUP -> EnterGroup, then selectPoint). */
+  enterGroupAt(ctx: PcbCtx, id: string) {
+    bind(ctx); if (!ctx.doc) return false; const it = ctx.doc.items.get(id); if (!it) return false;
+    const top = it.kind === "group" ? it : topParentOf(ctx.doc, id); if (!top || top.kind !== "group") return false;
+    enterGroup(ctx, top.id);
+    // selectPoint inside the group: the item itself, or the sub-group it belongs to
+    const pick = topParentOf(ctx.doc, id) ? Array.from(expandGroups(ctx.doc, [id])) : [id];
+    applySelection(ctx, pick); return true;
+  },
+  /** PCB_SELECTION_TOOL::selectPoint: a click outside the entered group's box leaves the group. */
+  leaveGroupOutside(mm: Pt, ctx: PcbCtx) {
+    bind(ctx); if (!S.enteredGroup || !ctx.doc) return false; const b = groupBox(ctx.doc, S.enteredGroup);
+    if (b && mm[0] >= b[0] && mm[0] <= b[2] && mm[1] >= b[1] && mm[1] <= b[3]) return false;
+    return exitGroup(ctx, false);
+  },
+  /** Esc with nothing selected leaves the entered group (PCB_SELECTION_TOOL::Main). */
+  exitGroup(ctx?: PcbCtx) { return exitGroup(ctx || null, false); },
   brightenedIds() { return S.modTool === "delete" && S.hover && S.hover.del && S.hover.del.id ? [S.hover.del.id] : []; },
   /** The selected pad as { item, index }, or null. */
   selectedPad(doc: BoardDoc) { const k = S.padSel; if (!k || !doc) return null; const i = k.lastIndexOf("#"); const it = doc.items.get(k.slice(0, i)); return it ? { item: it, index: +k.slice(i + 1) } : null; },
@@ -435,5 +456,5 @@ root.PcbTools = { useFootprintEditorDefaults, LINE_W, TEXT_STYLE, state: S, pad:
   sliverMarkers, sliverPoints, clipperArea, PolygonTest, padAnnulus, connectionWidthMarkers, boxGrid, boxesTouch, circleOutside, ovalOutside, circleApprox, ovalApprox, splitCollinearOutlines,
   designSettings, netclassOf, netClearance, DEFAULT_SETTINGS, edgeShapes, chainLoops, boardOutline, courtyards, drc, trackEditChanges, trackLayerChanges, breakTrackChanges, cleanupPlan, cleanupChanges,
   layersBlock, referencePoint, clipboardText, parseClipboard, freshUuids, rewriteNets, annotate, pasteChanges, duplicateChanges, arrayChanges, arraySize, arrayTransform, arrayStacked, arrayOrigin, pickInteractively, cursorPoint,
-  adjustColor, courtyardConflicts, drawSnapIndicator, gridOriginColor, snapTypeOf, startLayerOf,
+  adjustColor, courtyardConflicts, drawSnapIndicator, gridOriginColor, snapTypeOf, startLayerOf, groupBox, enteredGroupIds, drawGroupFrames, drawClearanceOutlines, drawStatusNote,
   padAt, padProperties, convertChanges, selectionLoops, justifyChanges, zonePriorityChanges, footprintAttrChanges, boardStatistics, idsOnLayer, filterIds, SELECTION_TYPES, inspectClearance, VIA_SIZES, PCB_KINDS };

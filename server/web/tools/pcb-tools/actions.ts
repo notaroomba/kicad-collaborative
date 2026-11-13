@@ -28,6 +28,7 @@ import { angleSnapMode, nextLineMode, setAngleSnap, stepDrawWidth } from "./draw
 import { askText } from "./draw-tools";
 import { drc, mm4 } from "./drc";
 import { cycleVia, cycleWidth, stepLayer } from "./edit-commands";
+import { enterGroup, exitGroup, selectedTopGroup } from "./group-edit";
 import { applySelection, expandGroups, groupChanges, groupMembers, groupMembersChanges, groupOf, isLocked, lockChanges, selectedItems, selectionIds, topParentOf, ungroupChanges } from "./groups";
 import { itemAt } from "./guess";
 import { hitTestItem } from "./hit";
@@ -520,6 +521,9 @@ act("group", "Group Items", "", (ctx: PcbCtx) => { const ids = needSel(ctx, "Sel
 act("ungroup", "Ungroup Items", "", (ctx: PcbCtx) => { const ids = needSel(ctx, "Select a group or a member"); if (!ids || !canEdit(ctx)) return true; return commitSel(ctx, ungroupChanges(ctx.doc, ids), "ungroup"); });
 act("addToGroup", "Add Items to Group", "", (ctx: PcbCtx) => { const ids = needSel(ctx); if (!ids || !canEdit(ctx)) return true; const g = Array.from(ids).map((id) => groupOf(ctx.doc, id) || (ctx.doc.items.get(id)!.kind === "group" ? ctx.doc.items.get(id) : null)).find(Boolean); if (!g) { ctx.toast("The selection touches no group"); return true; } return commitSel(ctx, groupMembersChanges(ctx.doc, g, Array.from(ids).filter((id) => id !== g.id), []), "add to group"); });
 act("removeFromGroup", "Remove Items from Group", "", (ctx: PcbCtx) => { const ids = needSel(ctx); if (!ids || !canEdit(ctx)) return true; const out = []; const seen = new Map(); for (const id of ids) { const g = groupOf(ctx.doc, id); if (g) { if (!seen.has(g.id)) seen.set(g.id, { g, ids: [] }); seen.get(g.id).ids.push(id); } } for (const { g, ids: rm } of seen.values()) out.push(...groupMembersChanges(ctx.doc, g, [], rm)); return commitSel(ctx, out, "remove from group"); });
+// PCB_SELECTION_TOOL::EnterGroup / ExitGroup
+act("enterGroup", "Enter Group", "", (ctx: PcbCtx) => { const g = selectedTopGroup(ctx); if (!g) { ctx.toast("Select a group to enter"); return true; } enterGroup(ctx, g); return true; }, { tip: "Enter the group to edit items" });
+act("leaveGroup", "Leave Group", "", (ctx: PcbCtx) => { if (!exitGroup(ctx, true)) ctx.toast("No group is entered"); return true; }, { tip: "Leave the current group" });
 // BOARD_EDITOR_CONTROL::ToggleLockSelected: the selection or the item under the cursor; locked if anything was not
 act("toggleLock", "Toggle Lock", "L", (ctx: PcbCtx) => {
   if (!canEdit(ctx)) return true;

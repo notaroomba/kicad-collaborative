@@ -126,6 +126,10 @@ stage.addEventListener("dblclick", (ev) => {
   if (!E.kdoc || !window.KDialogs || (E.tool !== "select" && E.tool !== "highlight")) return;
   if ((ev.target as Element).closest("#cmtPanel") || (ev.target as Element).closest("[data-schtools]")) return;
   const [x, y] = worldMm(ev); const ctx = toolCtx();
+  // PCB_SELECTION_TOOL: a double-click when the selection is a lone group enters it (and picks the item under the cursor)
+  if (!isSch() && CollabTools.pcb && CollabTools.pcb.enterGroupAt && CollabTools.pcb.selectedTopGroup) {
+    try { const gid = CollabTools.pcb.selectedTopGroup(ctx); const h = gid ? hitAny([x, y]) : null; if (h && CollabTools.pcb.enterGroupAt(ctx, h.id)) { selectionChanged(); return; } } catch (e) { console.warn(e); }
+  }
   if (!isSch() && CollabTools.pcb && CollabTools.pcb.padProperties) {       // a pad first: KiCad opens Pad Properties on a pad
     let pad: { item: KItem; index: number } | null = null;
     try { pad = KiCadCanvas.padAt ? KiCadCanvas.padAt(E.kdoc, x, y) : null; if (!pad && CollabTools.pcb.padAt) pad = CollabTools.pcb.padAt(E.kdoc, x, y); } catch (e) { pad = null; }
@@ -244,6 +248,7 @@ stage.addEventListener("pointerdown", (ev) => {
   if (pinPromote) { const fp = (E.items as ItemSummary[]).find((f) => f.id === pinPromote!.id); if (fp) best = fp; }
   // Board: a click on a pad selects the pad, not its footprint (PCB_SELECTION_TOOL; the footprint is picked by its body)
   let padWasSelected = false;
+  if (!isSch() && E.tool === "select" && CollabTools.pcb && CollabTools.pcb.leaveGroupOutside) { try { CollabTools.pcb.leaveGroupOutside([x, y], toolCtx()); } catch (e) { console.warn(e); } }
   if (!isSch() && E.tool === "select" && mod && mod.selectPadAt) {
     const ps = CollabTools.pcb && CollabTools.pcb.state;
     let r: unknown = false;
@@ -522,6 +527,7 @@ document.addEventListener("keydown", (ev) => {
     if (E.tool !== "select") { setTool("select"); return; }
     // an entered group is left by the Esc that finds nothing selected: the first Esc clears the selection (SCH_SELECTION_TOOL)
     if (isSch() && CollabTools.sch && CollabTools.sch.exitGroup && !selectionIds().length && !E.selField && !E.selPins.length) CollabTools.sch.exitGroup();
+    if (!isSch() && CollabTools.pcb && CollabTools.pcb.exitGroup && !selectionIds().length) CollabTools.pcb.exitGroup(toolCtx());
     clearAllSelection(false); if (E.highlightIds) { E.highlightIds = null; } dragG.replaceChildren(); selectionChanged(); return; }
   if (E.tool === "measure" && (comboOf(ev) === "Ctrl+C" || k === "Copy")) { ev.preventDefault(); measureCopy(); return; }   // MeasureTool takes ACTIONS::copy (the board module re-posts Ctrl+C as "Copy"): the readout of a live ruler
   promotePin(ev);

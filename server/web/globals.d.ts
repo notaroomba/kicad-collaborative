@@ -196,6 +196,12 @@ interface ToolModule {
   brightenedIds?(): string[];
   /** Board: where the GAL cursor is drawn, the point the active tool snapped to (null: the grid point under the mouse). */
   toolCursorPoint?(): number[] | null;
+  /** board groups: the entered group's members, entering one at a double-clicked item, leaving it */
+  enteredGroupIds?(doc: KDoc): Set<string> | null;
+  selectedTopGroup?(ctx: ToolCtx): string | null;
+  enterGroupAt?(ctx: ToolCtx, id: string): boolean;
+  leaveGroupOutside?(mm: [number, number], ctx: ToolCtx): boolean;
+  exitGroup?(ctx?: ToolCtx): boolean;
   padProperties?(ctx: ToolCtx, item: KItem, index: number): boolean;
   /** Board: with a length tuner active, PCB_ACTIONS::properties opens Tuning Pattern Properties (false otherwise). */
   tunerProperties?(ctx: ToolCtx): boolean;
