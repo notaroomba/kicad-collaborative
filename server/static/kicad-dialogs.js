@@ -1126,6 +1126,80 @@
     ev.stopPropagation();
     current.finish(false);
   }, true);
+  function dialogKeyFromTitle(title) {
+    let t = String(title);
+    const dash = t.indexOf(" \u2014 ");
+    if (dash > 0) t = t.slice(0, dash);
+    const paren = t.lastIndexOf("(");
+    if (paren > 0) t = t.slice(0, paren).replace(/ +$/, "");
+    return t;
+  }
+  var GEOM_KEY = (key) => "kd.geom." + key;
+  function detach(dlg) {
+    if (dlg.style.position === "fixed") return;
+    const r = dlg.getBoundingClientRect();
+    dlg.style.position = "fixed";
+    dlg.style.margin = "0";
+    dlg.style.left = r.left + "px";
+    dlg.style.top = r.top + "px";
+  }
+  function saveGeometry(key, dlg, sized) {
+    const r = dlg.getBoundingClientRect();
+    let prev = null;
+    try {
+      prev = JSON.parse(localStorage.getItem(GEOM_KEY(key)) || "null");
+    } catch (e) {
+      prev = null;
+    }
+    const g = { left: Math.round(r.left), top: Math.round(r.top) };
+    if (sized) {
+      g.width = Math.round(r.width);
+      g.height = Math.round(r.height);
+    } else if (prev && prev.width) {
+      g.width = prev.width;
+      g.height = prev.height;
+    }
+    try {
+      localStorage.setItem(GEOM_KEY(key), JSON.stringify(g));
+    } catch (e) {
+    }
+  }
+  function clampGeometry(g, vw, vh) {
+    const width = g.width ? Math.min(g.width, vw) : void 0, height = g.height ? Math.min(g.height, vh) : void 0;
+    const w = width || 240, h = height || 120;
+    return { left: Math.max(0, Math.min(g.left, vw - Math.min(w, vw))), top: Math.max(0, Math.min(g.top, vh - Math.min(h, vh))), width, height };
+  }
+  function restoredGeometry(saved, natural, resizable) {
+    const out = { left: saved.left, top: saved.top };
+    if (resizable && saved.width && saved.height) {
+      out.width = Math.max(natural.width, saved.width);
+      out.height = Math.max(natural.height, saved.height);
+    }
+    return out;
+  }
+  function restoreGeometry(key, dlg, resizable) {
+    let g = null;
+    try {
+      g = JSON.parse(localStorage.getItem(GEOM_KEY(key)) || "null");
+    } catch (e) {
+      g = null;
+    }
+    if (!g || typeof g.left !== "number" || typeof g.top !== "number") return;
+    const r = dlg.getBoundingClientRect();
+    const c = clampGeometry(restoredGeometry(g, { width: Math.ceil(r.width), height: Math.ceil(r.height) }, resizable), window.innerWidth, window.innerHeight);
+    dlg.style.position = "fixed";
+    dlg.style.margin = "0";
+    dlg.style.left = c.left + "px";
+    dlg.style.top = c.top + "px";
+    if (c.width) {
+      dlg.style.width = c.width + "px";
+      dlg.style.maxWidth = "none";
+    }
+    if (c.height) {
+      dlg.style.height = c.height + "px";
+      dlg.style.maxHeight = "none";
+    }
+  }
   function open(spec) {
     close();
     const ov = el("div", "kd-overlay"), dlg = el("div", "kd-dialog");
@@ -1171,9 +1245,6 @@
     cancel.addEventListener("click", () => finish(false));
     ok.addEventListener("click", () => finish(true));
     tt.querySelector(".kd-x").addEventListener("click", () => finish(false));
-    ov.addEventListener("pointerdown", (ev) => {
-      if (ev.target === ov && !spec.modeless) finish(false);
-    });
     ov.addEventListener("keydown", (ev) => {
       ev.stopPropagation();
       if (ev.key === "Escape") {
@@ -1194,10 +1265,7 @@
       if (ev.target.classList.contains("kd-x")) return;
       const r = dlg.getBoundingClientRect();
       dragFrom = [ev.clientX - r.left, ev.clientY - r.top];
-      dlg.style.position = "fixed";
-      dlg.style.margin = "0";
-      dlg.style.left = r.left + "px";
-      dlg.style.top = r.top + "px";
+      detach(dlg);
       tt.setPointerCapture(ev.pointerId);
     });
     tt.addEventListener("pointermove", (ev) => {
@@ -1205,8 +1273,33 @@
       dlg.style.left = Math.max(0, ev.clientX - dragFrom[0]) + "px";
       dlg.style.top = Math.max(0, ev.clientY - dragFrom[1]) + "px";
     });
+    const geomKey = spec.geomKey || dialogKeyFromTitle(spec.title), resizable = !spec.fixedSize;
     tt.addEventListener("pointerup", () => {
+      if (dragFrom) saveGeometry(geomKey, dlg, false);
       dragFrom = null;
+    });
+    const grip = el("div", "kd-grip");
+    grip.title = "Resize";
+    if (resizable) dlg.appendChild(grip);
+    let sizeFrom = null;
+    grip.addEventListener("pointerdown", (ev) => {
+      ev.preventDefault();
+      const r = dlg.getBoundingClientRect();
+      detach(dlg);
+      sizeFrom = [ev.clientX, ev.clientY, r.width, r.height];
+      grip.setPointerCapture(ev.pointerId);
+    });
+    grip.addEventListener("pointermove", (ev) => {
+      if (!sizeFrom) return;
+      const r = dlg.getBoundingClientRect();
+      dlg.style.width = Math.max(240, Math.min(window.innerWidth - r.left, sizeFrom[2] + ev.clientX - sizeFrom[0])) + "px";
+      dlg.style.height = Math.max(120, Math.min(window.innerHeight - r.top, sizeFrom[3] + ev.clientY - sizeFrom[1])) + "px";
+      dlg.style.maxWidth = "none";
+      dlg.style.maxHeight = "none";
+    });
+    grip.addEventListener("pointerup", () => {
+      if (sizeFrom) saveGeometry(geomKey, dlg, true);
+      sizeFrom = null;
     });
     current = { ov, dlg, body, spec, finish };
     ensureCss();
@@ -1218,6 +1311,7 @@
       }
     } };
     spec.build(body, api);
+    restoreGeometry(geomKey, dlg, resizable);
     const first = body.querySelector("input:not([type=checkbox]), k-select, textarea, input");
     if (first && !spec.readOnly && !first.disabled) {
       first.focus();
