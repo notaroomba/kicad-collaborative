@@ -66,6 +66,10 @@ the sheet for a rebuild (`board.clear()` does the same on the board and keeps th
 local files) are the tools around them. `build` draws every block off the page, measures it as drawn and
 packs the blocks onto the smallest page they fit on, so its result has `overlaps: 0`.
 
+3D models: a footprint from KiCad's library or from a vendor names its model, and the web 3D view loads it by
+itself (KiCad's 3D library first, the vendor's STEP file for a vendor part). `board.models()` says how many
+parts show as their real model and lists under `without_model` the ones drawn as a stand-in shape, with the reason.
+
 `build` draws each block like a datasheet's application circuit (`kicad_harness/sheet.py`): a wire leaves each
 IC pin, capacitors and pull resistors hang from it, series parts sit in line with it, dividers stack under
 their node, same-net pins are tied together, decoupling capacitors of one supply stand in a row on shared

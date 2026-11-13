@@ -9,6 +9,7 @@
 // viewer of the front side; the board is centred on the origin with its front face at z = 0.
 import * as THREE from "three";
 import { Body, BodyClass, boardBodies } from "./bodies";
+import { ModelRef, ModelStore, placeMesh } from "./models";
 import { BOARD_BODY, RGBA, SURFACE_FINISH } from "./colors";
 import { BoardShape, Hole, Pt, assignHoles, boardHoles, boardShape, polyArea } from "./outline";
 import { FaceComposer, FaceLayers, Side, TextureExtent, textureExtent } from "./textures";
@@ -26,7 +27,7 @@ export const DEFAULT_VISIBILITY: Visibility = {
   tht: true, smd: true, virtual: true,
 };
 
-export interface BoardStats { outlines: number; cutouts: number; holes: number; holesPainted: number; bodies: number; fallbackOutline: boolean; texture: [number, number]; thickness: number }
+export interface BoardStats { outlines: number; cutouts: number; holes: number; holesPainted: number; bodies: number; models: number; missingModels: string[]; fallbackOutline: boolean; texture: [number, number]; thickness: number }
 
 /** Accumulates indexed triangles with per-vertex normals, colours and (optionally) texture coordinates. */
 class MeshData {
@@ -229,11 +230,16 @@ export class BoardScene {
   private faceKey: Record<Side, string> = { F: "", B: "" };
   private signature = "";
   private released = false;
+  private bodyList: Body[] = [];
+  private toModel: (p: Pt) => Pt = (p) => p;
+  private thickness = 1.6;
+  private models: ModelStore | null = null;
+  private vis: Visibility;
   /** true when this scene took its board meshes from the one it replaced (tests) */
   readonly reusedGeometry: boolean;
 
   /** `prev` is the scene being replaced: its board meshes are taken over when outline and holes are unchanged. */
-  constructor(doc: KDoc, maxTextureSize: number, anisotropy: number, vis: Visibility, prev?: BoardScene | null) {
+  constructor(doc: KDoc, maxTextureSize: number, anisotropy: number, vis: Visibility, prev?: BoardScene | null, models?: ModelStore | null) {
     const thickness = Math.max(0.1, Number((doc as KDoc & { thickness?: number }).thickness) || 1.6);
     const shape: BoardShape = boardShape(doc);
     const holes = boardHoles(doc);
@@ -288,19 +294,60 @@ export class BoardScene {
     if (edgeGeo) { this.edge = new THREE.Mesh(edgeGeo, material({ vertexColors: true })); this.edge.name = "board-edge"; this.group.add(this.edge); }
     if (barrelGeo) { this.barrels = new THREE.Mesh(barrelGeo, material({ vertexColors: true, shininess: 60, specular: new THREE.Color(0x554422) })); this.barrels.name = "barrels"; this.group.add(this.barrels); }
 
-    const bodies = boardBodies(doc);
+    this.bodyList = boardBodies(doc); this.toModel = toModel; this.thickness = thickness; this.models = models || null; this.vis = vis;
+    this.stats = { outlines: shape.outlines.length, cutouts, holes: drilled, holesPainted: rest.length, bodies: this.bodyList.length, models: 0, missingModels: [],
+      fallbackOutline: shape.fallback, texture: [e.width, e.height], thickness };
+    this.reusedGeometry = !!reuse;
+    this.buildBodies();
+    this.applyVisibility(vis, false);
+  }
+
+  /** Every model the board's footprints name (for ModelStore.want). */
+  modelRefs(): ModelRef[] { const out: ModelRef[] = []; for (const b of this.bodyList) out.push(...b.models); return out; }
+
+  /** Change where models come from (null: stand-ins only) and draw the parts again. */
+  useStore(models: ModelStore | null): void { this.models = models; this.refreshBodies(); }
+
+  /** Draw the parts again: with the real model where one has loaded, the stand-in solids otherwise. Called when models arrive. */
+  refreshBodies(): void { this.buildBodies(); this.applyVisibility(this.vis, false); }
+
+  private buildBodies(): void {
+    for (const cls of ["tht", "smd", "virtual"] as BodyClass[]) {
+      const old = this.bodies[cls]; if (!old) continue;
+      this.group.remove(old); old.geometry.dispose(); (old.material as THREE.Material).dispose(); this.bodies[cls] = null;
+    }
     const data: Record<BodyClass, MeshData> = { tht: new MeshData(), smd: new MeshData(), virtual: new MeshData() };
     const lift = 0.04;   // parts sit on the pads, a copper-and-mask thickness above the laminate
-    for (const body of bodies) this.addBody(data[body.cls], body, toModel, thickness, lift);
+    let real = 0; const missing: string[] = [];
+    for (const body of this.bodyList) {
+      if (this.addModels(data[body.cls], body, lift)) { real++; continue; }
+      // no model named, or none of those named can be had (still on their way does not count as missing)
+      if (!body.models.length || (this.models && body.models.every((r) => this.models!.get(r.url) === "missing"))) missing.push(body.ref);
+      this.addBody(data[body.cls], body, this.toModel, this.thickness, lift);
+    }
     for (const cls of ["tht", "smd", "virtual"] as BodyClass[]) {
       if (data[cls].empty) continue;
       const mesh = new THREE.Mesh(data[cls].geometry(), material({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x333333) }));
       mesh.name = "bodies-" + cls; this.bodies[cls] = mesh; this.group.add(mesh);
     }
-    this.stats = { outlines: shape.outlines.length, cutouts, holes: drilled, holesPainted: rest.length, bodies: bodies.length, fallbackOutline: shape.fallback,
-      texture: [e.width, e.height], thickness };
-    this.reusedGeometry = !!reuse;
-    this.applyVisibility(vis, false);
+    this.stats.models = real; this.stats.missingModels = missing;
+  }
+
+  /** The footprint's loaded models, placed as KiCad's viewer places them; false when none has loaded. */
+  private addModels(m: MeshData, body: Body, lift: number): boolean {
+    if (!this.models) return false;
+    let drawn = false; const [px, py] = this.toModel([body.x, body.y]);
+    const at = { x: px, y: py, z: body.back ? -this.thickness - lift : lift, rot: body.rot, back: body.back };
+    for (const ref of body.models) {
+      const mesh = this.models.get(ref.url); if (!mesh || mesh === "missing") continue;
+      const base = m.pos.length / 3; const c: RGBA = [0, 0, 0, 1];
+      placeMesh(mesh, ref, at, (x, y, z, nx, ny, nz, i) => { c[0] = mesh.col[i * 3]; c[1] = mesh.col[i * 3 + 1]; c[2] = mesh.col[i * 3 + 2]; m.vertex(x, y, z, nx, ny, nz, c); });
+      // a mirror in the model's scale turns its triangles inside out
+      const flip = ref.scale[0] * ref.scale[1] * ref.scale[2] < 0;
+      for (let i = 0; i < mesh.idx.length; i += 3) m.idx.push(base + mesh.idx[i], base + mesh.idx[i + (flip ? 2 : 1)], base + mesh.idx[i + (flip ? 1 : 2)]);
+      drawn = true;
+    }
+    return drawn;
   }
 
   /** Hand the board's geometries to the scene that replaces this one; dispose() then leaves them alone. */
@@ -337,6 +384,7 @@ export class BoardScene {
 
   /** Show / hide per the Appearance panel; the face images are recomposed only when their layers changed. */
   applyVisibility(v: Visibility, recompose = true): void {
+    this.vis = v;
     for (const side of ["F", "B"] as Side[]) {
       const mesh = this.faces[side], canvas = this.faceCanvas[side], tex = this.texture[side]; if (!mesh || !canvas || !tex) continue;
       const layers = this.faceLayers(side, v); const key = JSON.stringify(layers);

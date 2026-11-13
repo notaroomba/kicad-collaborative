@@ -712,8 +712,9 @@ pub(crate) fn runtime_dir() -> Option<&'static std::path::PathBuf> {
 /// nothing that is not already public.
 pub async fn runtime(Path(file): Path<String>) -> Response {
     let kind = match file.as_str() {
-        "pyodide.js" | "pyodide.asm.mjs" | "ngspice.mjs" => "application/javascript; charset=utf-8",
-        "pyodide.asm.wasm" => "application/wasm",
+        // occt-import-js: the STEP reader behind the 3D viewer's real part models (web/viewer3d/models.ts)
+        "pyodide.js" | "pyodide.asm.mjs" | "ngspice.mjs" | "occt-import-js.js" => "application/javascript; charset=utf-8",
+        "pyodide.asm.wasm" | "occt-import-js.wasm" => "application/wasm",
         "python_stdlib.zip" => "application/zip",
         "pyodide-lock.json" | "kicad-python.json" => "application/json; charset=utf-8",
         // a package a plugin imports (numpy, requests, …): a wheel or archive the build put beside the interpreter

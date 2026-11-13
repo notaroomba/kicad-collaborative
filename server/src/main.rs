@@ -376,6 +376,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/kicad-lib/list", get(kicadlib::list))
         .route("/api/kicad-lib/item", get(kicadlib::item))
         .route("/api/kicad-lib/search", get(kicadlib::search))
+        .route("/api/kicad-lib/model", get(kicadlib::model))
         // vendor parts and saved part libraries (src/parts)
         .route("/static/dist/parts.js", get(pages::parts_js))
         .route("/static/dist/parts.js.map", get(pages::parts_js_map))

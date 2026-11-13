@@ -7,6 +7,8 @@
 //! - `GET /api/kicad-lib/list?kind=symbol|footprint[&lib=NAME]` — the libraries, or one
 //!   library's items.
 //! - `GET /api/kicad-lib/item?kind=…&lib=NAME&name=ITEM` — the item's file text.
+//! - `GET /api/kicad-lib/model?lib=NAME&name=ITEM` — the STEP file of KiCad's 3D model library
+//!   (`kind=model` in `list` names a library's models).
 //! - `GET /api/kicad-lib/search?kind=…&q=WORDS` — items whose name holds every word, across
 //!   all libraries.  The first search of a kind reads the whole listing (a few hundred small
 //!   requests, about half a minute) and keeps it for a day.
@@ -18,7 +20,9 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use axum::extract::Query;
+use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use axum::http::StatusCode;
 use axum::Json;
@@ -27,6 +31,7 @@ use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
+use crate::AppState;
 
 const LIST_TTL: Duration = Duration::from_secs(6 * 3600);
 const ITEM_TTL: Duration = Duration::from_secs(24 * 3600);
@@ -66,15 +71,15 @@ fn remember(key: String, v: &Value) {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Kind { Symbol, Footprint }
+enum Kind { Symbol, Footprint, Model }
 impl Kind {
     fn parse(s: &str) -> AppResult<Kind> {
-        match s { "symbol" => Ok(Kind::Symbol), "footprint" => Ok(Kind::Footprint), _ => Err(AppError::BadRequest("kind is symbol or footprint".into())) }
+        match s { "symbol" => Ok(Kind::Symbol), "footprint" => Ok(Kind::Footprint), "model" => Ok(Kind::Model), _ => Err(AppError::BadRequest("kind is symbol, footprint or model".into())) }
     }
-    fn repo(self) -> &'static str { if self == Kind::Symbol { "kicad-symbols" } else { "kicad-footprints" } }
-    fn dir_ext(self) -> &'static str { if self == Kind::Symbol { ".kicad_symdir" } else { ".pretty" } }
-    fn file_ext(self) -> &'static str { if self == Kind::Symbol { ".kicad_sym" } else { ".kicad_mod" } }
-    fn word(self) -> &'static str { if self == Kind::Symbol { "symbol" } else { "footprint" } }
+    fn repo(self) -> &'static str { match self { Kind::Symbol => "kicad-symbols", Kind::Footprint => "kicad-footprints", Kind::Model => "kicad-packages3D" } }
+    fn dir_ext(self) -> &'static str { match self { Kind::Symbol => ".kicad_symdir", Kind::Footprint => ".pretty", Kind::Model => ".3dshapes" } }
+    fn file_ext(self) -> &'static str { match self { Kind::Symbol => ".kicad_sym", Kind::Footprint => ".kicad_mod", Kind::Model => ".step" } }
+    fn word(self) -> &'static str { match self { Kind::Symbol => "symbol", Kind::Footprint => "footprint", Kind::Model => "model" } }
 }
 
 /// A library or item name as it may appear in a path: no separators, nothing that climbs.
@@ -193,6 +198,7 @@ pub struct ItemQuery { kind: String, lib: String, name: String }
 
 pub async fn item(AuthUser(_user): AuthUser, Query(q): Query<ItemQuery>) -> AppResult<Json<Value>> {
     let kind = Kind::parse(&q.kind)?;
+    if kind == Kind::Model { return Err(AppError::BadRequest("a 3D model is read from /api/kicad-lib/model".into())); }
     let (lib, name) = (safe(q.lib.trim())?, safe(q.name.trim())?);
     let key = format!("item:{}:{lib}:{name}", kind.word());
     if let Some(v) = cached(&key, ITEM_TTL) { return Ok(Json(v)); }
@@ -208,6 +214,37 @@ pub async fn item(AuthUser(_user): AuthUser, Query(q): Query<ItemQuery>) -> AppR
     let out = json!({ "kind": kind.word(), "library": lib, "name": name, "id": format!("{lib}:{name}"), "sexpr": text });
     remember(key, &out);
     Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+pub struct ModelQuery { lib: String, name: String }
+
+const MAX_MODEL_BYTES: usize = 24 * 1024 * 1024;
+
+/// `GET /api/kicad-lib/model?lib=NAME&name=ITEM` — the STEP model of KiCad's 3D library
+/// (`NAME.3dshapes/ITEM.step`), for the 3D viewer.  Fetched once and kept beside the vendor
+/// models, since a model never changes under its name and a board asks for the same few
+/// dozen again and again; a model the library does not have is remembered for a while too.
+pub async fn model(State(state): State<AppState>, AuthUser(_user): AuthUser, Query(q): Query<ModelQuery>) -> AppResult<Response> {
+    let (lib, name) = (safe(q.lib.trim())?, safe(q.name.trim())?);
+    let key = format!("kicad:{}:{lib}/{name}", git_ref());
+    let reply = |bytes: Vec<u8>| ([(header::CONTENT_TYPE, "model/step"), (header::CACHE_CONTROL, "private, max-age=604800")], bytes).into_response();
+    if let Some(bytes) = sqlx::query_scalar::<_, Vec<u8>>("SELECT step FROM part_models WHERE uuid = $1").bind(&key).fetch_optional(&state.pool).await? {
+        return Ok(reply(bytes));
+    }
+    let miss = format!("model-miss:{key}");
+    if cached(&miss, ITEM_TTL).is_some() { return Err(AppError::NotFound); }
+    let url = format!("{}/kicad/libraries/{}/-/raw/{}/{}{}/{}{}", base(), Kind::Model.repo(), enc(git_ref()), enc(lib), Kind::Model.dir_ext(), enc(name), Kind::Model.file_ext());
+    let resp = http().get(&url).send().await.map_err(|_| unreachable("a 3D model"))?;
+    if resp.status() == StatusCode::NOT_FOUND { remember(miss, &Value::Bool(true)); return Err(AppError::NotFound); }
+    if !resp.status().is_success() { return Err(unreachable("a 3D model")); }
+    let bytes = resp.bytes().await.map_err(|_| unreachable("a 3D model"))?.to_vec();
+    if bytes.len() > MAX_MODEL_BYTES || !bytes.starts_with(b"ISO-10303-21") {
+        remember(miss, &Value::Bool(true));
+        return Err(AppError::NotFound);   // a sign-in page or an error page, not a STEP file
+    }
+    sqlx::query("INSERT INTO part_models (uuid, step) VALUES ($1, $2) ON CONFLICT (uuid) DO NOTHING").bind(&key).bind(&bytes).execute(&state.pool).await?;
+    Ok(reply(bytes))
 }
 
 #[cfg(test)]

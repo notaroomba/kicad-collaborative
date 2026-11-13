@@ -5,6 +5,7 @@
 // cursor.  The toolbar's rotations turn the board about its own axes by the rotation increment (10°,
 // eda_3d_viewer_settings.cpp "camera.rotation_increment") and the view commands use the angles of
 // CAMERA::ViewCommand_T1.  Frames are drawn on demand only.
+import { ModelStore, modelStore } from "./models";
 import * as THREE from "three";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { BACKGROUND_BOTTOM, BACKGROUND_TOP, RGBA, css } from "./colors";
@@ -64,6 +65,11 @@ export class Viewer {
   private resizeObs: ResizeObserver | null = null;
   private disposed = false;
   private software = false;
+  private models: ModelStore | null = null;
+  private stopModels: (() => void) | null = null;
+  private modelTimer = 0;
+  /** called after parts were redrawn with models that arrived */
+  onModels: ((st: BoardStats) => void) | null = null;
   /** the camera is where Zoom to Fit left it (so a resized window refits) */
   private fitted = true;
   // a view change in flight (KiCad's 3D viewer animates them: "Enable animation", eda_3d_viewer_settings);
@@ -100,7 +106,7 @@ export class Viewer {
   setDoc(doc: KDoc, fit: boolean): BoardStats {
     const gl = this.renderer.getContext();
     const maxTex = Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096;
-    const next = new BoardScene(doc, maxTex, this.software ? 1 : this.renderer.capabilities.getMaxAnisotropy(), this.visibility, this.board);
+    const next = new BoardScene(doc, maxTex, this.software ? 1 : this.renderer.capabilities.getMaxAnisotropy(), this.visibility, this.board, this.models);
     if (this.board) { this.pivot.remove(this.board.group); this.board.dispose(); }
     this.board = next;
     // turn about the middle of the laminate, not its front face
@@ -108,7 +114,33 @@ export class Viewer {
     this.pivot.add(next.group);
     if (fit || this.fitted) { this.cam.set(0, 0, this.fitDistance()); this.fitted = true; }
     this.requestRender();
+    // the parts' real models: those already here were drawn just now, the rest are fetched and drawn as they arrive
+    if (this.models) this.models.want(next.modelRefs());
     return next.stats;
+  }
+
+  /** Real 3D models (models.ts) replace the stand-in solids as they load; `false` keeps the stand-ins (tests, a page with no server). */
+  useModels(on: boolean): void {
+    if (on === !!this.models) return;
+    if (this.stopModels) { this.stopModels(); this.stopModels = null; }
+    this.models = on ? modelStore() : null;
+    if (this.models) this.stopModels = this.models.listen(() => this.modelsArrived());
+    if (this.models && this.board) { this.models.want(this.board.modelRefs()); this.board.useStore(this.models); }
+    else if (this.board) this.board.useStore(null);
+  }
+
+  /** Resolves when every model the board asks for has loaded or failed, and the parts are drawn with them. */
+  async modelsSettled(): Promise<void> {
+    if (!this.models) return;
+    await this.models.settled();
+    if (this.modelTimer) { clearTimeout(this.modelTimer); this.modelTimer = 0; }
+    if (this.board && !this.disposed) { this.board.refreshBodies(); this.requestRender(); }
+  }
+
+  // several models usually land together (one fetch each, one tessellation after another): redraw once for the lot
+  private modelsArrived(): void {
+    if (this.modelTimer || this.disposed) return;
+    this.modelTimer = window.setTimeout(() => { this.modelTimer = 0; if (this.board && !this.disposed) { this.board.refreshBodies(); this.requestRender(); if (this.onModels) this.onModels(this.board.stats); } }, 120);
   }
 
   get stats(): BoardStats | null { return this.board ? this.board.stats : null; }
@@ -422,6 +454,8 @@ export class Viewer {
   }
 
   dispose(): void {
+    if (this.stopModels) { this.stopModels(); this.stopModels = null; }
+    if (this.modelTimer) { clearTimeout(this.modelTimer); this.modelTimer = 0; }
     this.disposed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.anim.raf) cancelAnimationFrame(this.anim.raf);

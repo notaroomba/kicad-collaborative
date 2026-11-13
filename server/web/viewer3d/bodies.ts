@@ -1,6 +1,7 @@
 // viewer3d/bodies.ts — placeholder component bodies.  The web has no 3D models (.step / .wrl), so each
 // footprint gets a simple solid drawn from its courtyard (or, failing that, its fabrication outline),
 // extruded to a plausible height for the kind of part.  Pure geometry: no DOM, no three.js.
+import { ModelRef, footprintModels } from "./models";
 import type { RGBA } from "./colors";
 import type { Pt } from "./outline";
 import { type Solid, localPads, partSolids } from "./parts";
@@ -20,6 +21,9 @@ export interface Body {
   /** the part drawn as solids (board millimetres, heights from the face it sits on) when its library name is one
    *  parts.ts models; otherwise the body is the plain prism over `pts` */
   solids?: Solid[];
+  /** the footprint's own 3D models (models.ts) and where it stands; a model that has loaded is drawn instead of the stand-in */
+  models: ModelRef[];
+  x: number; y: number; rot: number;
 }
 
 const num = (v: unknown, d = 0): number => (typeof v === "number" && isFinite(v) ? v : d);
@@ -96,12 +100,13 @@ export function footprintBody(item: KItem): Body | null {
   if (ext.pts.length < 2) { ext = layerExtent(item, back ? "B.Fab" : "F.Fab"); inset = 0; }
   if (ext.pts.length < 2) return null;
   const ref = item.ref || "";
+  const stand = { models: footprintModels(item.node), x: num(item.x), y: num(item.y), rot: num(item.rot) };
   const solids = modelSolids(item, cls === "smd" || (cls === "virtual" && !hasDrill(item)), back);
   if (ext.circle) {
     const r = Math.max(0.15, ext.circle.r - inset); const n = 32; const pts: Pt[] = [];
     for (let i = 0; i < n; i++) { const a = 2 * Math.PI * i / n; pts.push([ext.circle.x + r * Math.cos(a), ext.circle.y + r * Math.sin(a)]); }
     const st = bodyStyle(cls === "virtual" ? "tht" : cls, ref, 2 * r, 2 * r, true);
-    return { cls, back, pts, height: st.height, color: st.color, ref, solids };
+    return { cls, back, pts, height: st.height, color: st.color, ref, solids, ...stand };
   }
   // the bounding box in the footprint's own frame, so a rotated part gets a rotated box (sexpr.ts rotator's convention)
   const fx = num(item.x), fy = num(item.y); const a = num(item.rot) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
@@ -115,7 +120,7 @@ export function footprintBody(item: KItem): Body | null {
   if (!(x1 - x0 > 0.05) || !(y1 - y0 > 0.05)) return null;
   const world = (lx: number, ly: number): Pt => [fx + lx * c + ly * s, fy - lx * s + ly * c];
   const st = bodyStyle(cls === "virtual" ? (hasDrill(item) ? "tht" : "smd") : cls, ref, x1 - x0, y1 - y0, false);
-  return { cls, back, pts: [world(x0, y0), world(x1, y0), world(x1, y1), world(x0, y1)], height: st.height, color: st.color, ref, solids };
+  return { cls, back, pts: [world(x0, y0), world(x1, y0), world(x1, y1), world(x0, y1)], height: st.height, color: st.color, ref, solids, ...stand };
 }
 
 /** parts.ts's solids for a footprint, mapped from its own frame to the board's; undefined when it models nothing. */

@@ -5,6 +5,9 @@
 // geometry, sch-tools for pins, connectivity and ERC, pcb-tools for the board netlist, ratsnest
 // and DRC — so what the assistant is told agrees with what the person sees on the canvas.
 
+import { footprintModels } from "../viewer3d/models";
+import { modelNames } from "./library";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const W = window as any;
 export const K = (): any => W.KiCadCanvas;
@@ -273,7 +276,36 @@ export async function boardInfo(): Promise<unknown> {
   return { document: path, size_mm: outlined ? { width: st.width, height: st.height, area_mm2: st.area } : null, outline: outlined ? undefined : "No board outline is drawn on Edge.Cuts yet, so the board has no size.", copper_layers: doc.copper.slice(), statistics: st, layout,
     track_widths_in_use_mm: Object.fromEntries(Array.from(widths.entries()).sort((a, b) => a[0] - b[0]).map(([w, n]) => [String(w), n])),
     via_sizes_in_use_mm: Object.fromEntries(vias), nets: nl.nets.size, unrouted_connections: unrouted,
+    models_3d: await boardModels(doc),
     design_rules: { clearance: s.clearance, edge_clearance: s.edgeClearance, min_track_width: s.minTrackWidth, min_via_diameter: s.minViaDiameter, min_via_drill: s.minThroughDrill, net_classes: s.netclasses } };
+}
+
+/**
+ * Which parts the 3D view can show as their real model: the footprint names one (KiCad's 3D library, or the vendor's
+ * for a vendor part) and that library has it.  The rest are drawn as a plain stand-in shape and are listed with the reason.
+ */
+async function boardModels(doc: any): Promise<unknown> {
+  let parts = 0, kicad = 0, vendor = 0, unchecked = 0; const missing: { ref: string; footprint: string; reason: string }[] = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "footprint") continue;
+    let pads = 0; for (const c of it.node) if (Array.isArray(c) && c[0] === "pad") pads++;
+    const attr = (it.node as any[]).find((c) => Array.isArray(c) && c[0] === "attr") as any[] | undefined;
+    if (pads < 2 || (attr && (attr.includes("board_only") || attr.includes("dnp")))) continue;   // no component: a mounting hole, a test point, a logo
+    parts++;
+    const refs = footprintModels(it.node); const named = (it.node as any[]).some((c) => Array.isArray(c) && c[0] === "model");
+    if (!refs.length) { missing.push({ ref: it.ref || "?", footprint: it.lib || "", reason: named ? "its model path names no library file, or is hidden" : "the footprint names no 3D model" }); continue; }
+    let found = false, unknown = false, why = "";
+    for (const r of refs) {
+      if (r.source === "vendor") { found = true; vendor++; break; }
+      const [lib, name] = r.name.split("/"); const names = await modelNames(lib);
+      if (!names) unknown = true; else if (names.has(name)) { found = true; kicad++; break; } else why = `KiCad's 3D library has no ${lib}.3dshapes/${name}`;
+    }
+    if (found) continue;
+    if (unknown) unchecked++; else missing.push({ ref: it.ref || "?", footprint: it.lib || "", reason: why });
+  }
+  missing.sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
+  return { parts, from_kicad_library: kicad, from_vendor: vendor, not_checked: unchecked || undefined, without_model: missing,
+    note: unchecked ? "KiCad's 3D library could not be listed from here, so those parts were not checked." : missing.length ? "Parts without a model are drawn as a plain stand-in shape in the 3D view." : undefined };
 }
 
 export function getSelection(): unknown {

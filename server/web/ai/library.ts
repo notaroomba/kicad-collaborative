@@ -48,6 +48,14 @@ const libList = (kind: "symbol" | "footprint", lib?: string) =>
 const libItem = (kind: "symbol" | "footprint", lib: string, name: string) =>
   once(`item:${kind}:${lib}:${name}`, () => getJson(`/api/kicad-lib/item?kind=${kind}&lib=${encodeURIComponent(lib)}&name=${encodeURIComponent(name)}`, `${kind} ${lib}:${name}`));
 
+/** The names in one of KiCad's 3D model libraries (Button_Switch_SMD → SW_Push_…), or null when the library cannot be listed here. */
+export async function modelNames(lib: string): Promise<Set<string> | null> {
+  try {
+    const r: any = await once(`list:model:${lib}`, () => getJson(`/api/kicad-lib/list?kind=model&lib=${encodeURIComponent(lib)}`, `KiCad 3D model library ${lib}`));
+    return Array.isArray(r && r.items) ? new Set<string>(r.items) : null;
+  } catch { return null; }
+}
+
 /** One library symbol as its own node, with a derived symbol ("extends") folded into its parent's drawing. */
 async function rawSymbol(lib: string, name: string, depth = 0): Promise<any> {
   const k = K(); const it = await libItem("symbol", lib, name);

@@ -417,6 +417,8 @@ Object.assign(fab, {
     v.host.style.width = width + "px"; v.host.style.height = height + "px"; v.resize();
     v.pose(side[0] + rot[0], side[1] + rot[1], side[2] + rot[2], Math.max(0.05, Math.min(80, Number(a.zoom) || 1)));
     const pan = num3(a.pan); if (pan) v.pan(pan[0], pan[1], pan[2]);
+    // the parts' real 3D models, as KiCad's render shows them; a model that takes too long keeps its stand-in
+    if (typeof v.useModels === "function") { v.useModels(true); await Promise.race([v.modelsSettled(), new Promise((r) => setTimeout(r, 30000))]); }
     const jpeg = a.format === "jpeg";
     const blob: Blob = await v.renderImage({ width, height, transparent: !jpeg && a.background !== "opaque", type: jpeg ? "image/jpeg" : "image/png" });
     return { base64: bytesBase64(new Uint8Array(await blob.arrayBuffer())), width, height, renderer: "web" };

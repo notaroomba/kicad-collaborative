@@ -82,7 +82,7 @@
   },
   {
     "name": "get_board_info",
-    "description": "Board-level facts: outline size, copper layers, design rules and net classes from the project file, counts of footprints, pads, vias and tracks, total track length, track widths and via sizes in use, and how many connections are still unrouted.",
+    "description": "Board-level facts: outline size, copper layers, design rules and net classes from the project file, counts of footprints, pads, vias and tracks, total track length, track widths and via sizes in use, how many connections are still unrouted, and under models_3d which parts show as their real 3D model and which have none.",
     "input_schema": {
       "type": "object",
       "properties": {},

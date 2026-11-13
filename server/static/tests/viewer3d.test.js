@@ -193,5 +193,47 @@ test("part models: axial along the leads, DIP with a notch, SOIC with leads, chi
   assert.strictEqual(G.partSolids("Lib:Mystery", "X1", [pad(1, 0, 0, true), pad(2, 5, 0, true)], null, null, false), null);
 });
 
+test("a footprint's 3D models: KiCad's library by library and name, a vendor part's from its vendor", () => {
+  const fp = (model, extra) => K.parseDoc(`${HEAD}\n(footprint "Button_Switch_SMD:SW_Push" (layer "F.Cu") (uuid "00000000-0000-0000-0000-00000000aa01") (at 10 10 90)
+    (property "Reference" "SW1" (at 0 -2) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15)))) ${extra || ""} (attr smd)
+    (fp_rect (start -2 -1) (end 2 1) (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd")) ${SMD_PADS} ${model})\n)`, "kicad_pcb");
+  const first = (d) => Array.from(d.items.values()).find((it) => it.kind === "footprint");
+  const k = G.footprintModels(first(fp(`(model "\${KICAD10_3DMODEL_DIR}/Button_Switch_SMD.3dshapes/SW_Push_SPST_NO_Alps_SKRK.step" (offset (xyz 0 0.5 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 -90)))`)).node);
+  assert.strictEqual(k.length, 1); assert.strictEqual(k[0].source, "kicad");
+  assert.strictEqual(k[0].url, "/api/kicad-lib/model?lib=Button_Switch_SMD&name=SW_Push_SPST_NO_Alps_SKRK");
+  assert.deepStrictEqual(k[0].offset, [0, 0.5, 0]); assert.deepStrictEqual(k[0].rotate, [0, 0, -90]); assert.deepStrictEqual(k[0].scale, [1, 1, 1]);
+  const old = G.footprintModels(first(fp(`(model "\${KISYS3DMOD}/Crystal.3dshapes/Crystal_SMD_3225-4Pin_3.2x2.5mm.wrl" (at (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))`)).node);
+  assert.strictEqual(old[0].url, "/api/kicad-lib/model?lib=Crystal&name=Crystal_SMD_3225-4Pin_3.2x2.5mm", "an old .wrl path names the same library model");
+  const v = G.footprintModels(first(fp(`(model "\${KICAD_COLLAB_3DMODELS}/Parts.3dshapes/TS-1187A.step" (offset (xyz 0 0 0)) (scale (xyz 1 1 1)) (rotate (xyz 0 0 0)))`, `(property "LCSC" "C318884" (at 0 0) (layer "F.Fab") (hide yes))`)).node);
+  assert.strictEqual(v[0].source, "vendor"); assert.strictEqual(v[0].url, "/api/parts/model.step?vendor=lcsc&id=C318884");
+  assert.strictEqual(G.footprintModels(first(fp(`(model "\${KICAD10_3DMODEL_DIR}/A.3dshapes/B.step" (hide yes))`)).node).length, 0, "a hidden model is not drawn");
+  assert.strictEqual(G.footprintModels(first(fp("")).node).length, 0);
+  const body = G.boardBodies(fp(`(model "\${KICAD10_3DMODEL_DIR}/A.3dshapes/B.step")`))[0];
+  assert.strictEqual(body.models.length, 1); near(body.x, 10); near(body.rot, 90);
+});
+
+test("a model is placed as KiCad's viewer places it", () => {
+  const mesh = { pos: new Float32Array([1, 0, 0.5]), nrm: new Float32Array([1, 0, 0]), col: new Float32Array(3), idx: new Uint32Array(0) };
+  const ref = (o) => Object.assign({ url: "", source: "kicad", name: "", offset: [0, 0, 0], scale: [1, 1, 1], rotate: [0, 0, 0] }, o);
+  const place = (r, at) => { let out; G.placeMesh(mesh, ref(r), Object.assign({ x: 10, y: 20, z: 0, rot: 0, back: false }, at), (x, y, z, nx, ny, nz) => { out = [x, y, z, nx, ny, nz]; }); return out; };
+  const eq = (a, b, msg) => a.forEach((v, i) => near(v, b[i], 1e-6, msg + ` [${i}]`));
+  eq(place({}, {}), [11, 20, 0.5, 1, 0, 0], "as is");
+  eq(place({}, { rot: 90 }), [10, 21, 0.5, 0, 1, 0], "the footprint's rotation turns it anticlockwise");
+  eq(place({}, { back: true, z: -1.6 }), [11, 20, -2.1, 1, 0, 0], "on the back it hangs below the board");
+  eq(place({}, { back: true, rot: 90, z: -1.6 }), [10, 21, -2.1, 0, 1, 0], "back and turned");
+  eq(place({ rotate: [0, 0, 90] }, {}), [10, 19, 0.5, 0, -1, 0], "the model's own rotation is clockwise, as in the footprint editor");
+  eq(place({ offset: [0, 2, 0], scale: [2, 1, 1] }, {}), [12, 22, 0.5, 1, 0, 0], "scale, then offset");
+});
+
+test("a tessellated STEP file becomes one mesh with each face's colour", () => {
+  const m = G.flattenOcct({ success: true, meshes: [
+    { color: [0.1, 0.2, 0.3], attributes: { position: { array: [0, 0, 0, 1, 0, 0, 0, 1, 0] }, normal: { array: [0, 0, 1, 0, 0, 1, 0, 0, 1] } }, index: { array: [0, 1, 2] }, brep_faces: [] },
+    { attributes: { position: { array: [0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1] }, normal: { array: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1] } }, index: { array: [0, 1, 2, 1, 3, 2] }, brep_faces: [{ first: 1, last: 1, color: [1, 0, 0] }] },
+  ] });
+  assert.strictEqual(m.pos.length, 21); assert.deepStrictEqual(Array.from(m.idx), [0, 1, 2, 3, 4, 5, 4, 6, 5]);
+  near(m.col[0], 0.1, 1e-6); near(m.col[6 * 3], 1, 1e-6, "the coloured face's corner"); near(m.col[3 * 3], 0.6, 1e-6, "no colour: grey");
+  assert.strictEqual(G.flattenOcct({ success: false }), null); assert.strictEqual(G.flattenOcct({ success: true, meshes: [] }), null);
+});
+
 console.log(`viewer3d: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -4,7 +4,7 @@
 // the right-hand panel the rows of dialogs/appearance_controls_3D.cpp that the web viewer can draw.
 import { BACKGROUND_BOTTOM, BACKGROUND_TOP, BOARD_BODY, RGBA, SILKSCREEN, SOLDER_MASK, SOLDER_PASTE, SURFACE_FINISH, css, fromHex, hex } from "./colors";
 import ICONS from "./icons.json";
-import { DEFAULT_VISIBILITY, Visibility } from "./scene";
+import { BoardStats, DEFAULT_VISIBILITY, Visibility } from "./scene";
 import { Viewer } from "./viewer";
 
 export interface OpenOptions {
@@ -102,6 +102,12 @@ function keyMatches(ev: KeyboardEvent, key: string): boolean {
   return ev.key.toUpperCase() === k.toUpperCase();
 }
 
+/** The status bar's line about the parts' 3D models. */
+function modelStatus(st: BoardStats): string {
+  const n = st.missingModels.length;
+  return `3D models: ${st.models} of ${st.bodies} parts` + (n ? `  —  no model for ${st.missingModels.slice(0, 8).join(", ")}${n > 8 ? ` and ${n - 8} more` : ""}` : "");
+}
+
 export class ViewerWindow {
   readonly root: HTMLDivElement;
   readonly viewer: Viewer | null = null;
@@ -140,7 +146,11 @@ export class ViewerWindow {
     this.bindDrag(title);
 
     this.stage = el("div", "v3d-stage"); this.side = el("div", "v3d-side");
-    try { this.viewer = new Viewer(this.stage); }
+    try {
+      this.viewer = new Viewer(this.stage);
+      this.viewer.useModels(true);
+      this.viewer.onModels = (st) => this.setStatus(modelStatus(st));
+    }
     catch (e) { console.warn("3D viewer: WebGL is not available", e); const m = el("div", "v3d-msg", "The 3D viewer needs WebGL, which this browser could not start."); this.stage.appendChild(m); }
     this.defineActions();
 

@@ -16,6 +16,12 @@ for (const f of ["pyodide.js", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_st
   const src = path.join(pkg, f), dst = path.join(out, f);
   if (!fs.existsSync(dst) || !fs.readFileSync(src).equals(fs.readFileSync(dst))) fs.copyFileSync(src, dst);
 }
+// OpenCascade's STEP reader compiled to WebAssembly (npm occt-import-js, LGPL-2.1): turns the STEP models of KiCad's
+// 3D library and of vendor parts into triangles for the 3D viewer.  About 7.6 MB, fetched when the viewer first needs it.
+for (const f of ["occt-import-js.js", "occt-import-js.wasm"]) {
+  const src = path.join(server, "node_modules", "occt-import-js", "dist", f), dst = path.join(out, f);
+  if (!fs.existsSync(dst) || fs.statSync(dst).size !== fs.statSync(src).size) fs.copyFileSync(src, dst);
+}
 // ngspice compiled to WebAssembly (npm eecircuit-engine, MIT): the circuit simulator behind the `ngspice` program and
 // the libngspice stand-in (plugins/python/kicad_spice.py).  About 20 MB, so it is its own file, fetched on first use.
 {

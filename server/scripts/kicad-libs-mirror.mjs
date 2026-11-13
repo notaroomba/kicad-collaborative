@@ -21,7 +21,7 @@ const fetchUp = (url) => new Promise((ok) => execFile('curl', ['-sS', '-m', '40'
 }));
 
 http.createServer(async (req, res) => {
-  if (!/^\/(api\/v4\/projects\/kicad%2Flibraries%2Fkicad-(symbols|footprints)\/repository\/tree\?|kicad\/libraries\/kicad-(symbols|footprints)\/-\/raw\/)/.test(req.url)) { res.writeHead(404); return res.end('not mirrored'); }
+  if (!/^\/(api\/v4\/projects\/kicad%2Flibraries%2Fkicad-(symbols|footprints|packages3D)\/repository\/tree\?|kicad\/libraries\/kicad-(symbols|footprints|packages3D)\/-\/raw\/)/.test(req.url)) { res.writeHead(404); return res.end('not mirrored'); }
   const file = path.join(CACHE, crypto.createHash('sha1').update(req.url).digest('hex'));
   let hit = null;
   try { hit = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* miss */ }

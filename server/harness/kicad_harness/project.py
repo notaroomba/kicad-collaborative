@@ -1137,6 +1137,13 @@ class Board(_Doc):
                 "nets": r.get("nets"), "unrouted_connections": r.get("unrouted_connections"), "ratsnest_mm": lay.get("ratsnest_mm"), "vias": lay.get("vias"),
                 "track_length_mm": lay.get("track_length_mm"), "clearance": rules.get("clearance"), "min_track_width": rules.get("min_track_width")}
 
+    def models(self) -> dict:
+        """Which parts show as their real 3D model: {"parts", "from_kicad_library", "from_vendor", "without_model": [{"ref", "footprint", "reason"}]}.
+        A footprint from KiCad's library or from a vendor brings its model with it; the 3D view loads it by itself.
+        Parts listed under without_model are drawn as a plain stand-in shape."""
+        self.flush()
+        return self.project.transport.call("get_board_info", {}).get("models_3d") or {}
+
     # ---- setting up
     def sync(self, placements: dict | None = None) -> dict:
         """Update the board from the schematic: missing footprints are added, pad nets and values brought into line."""

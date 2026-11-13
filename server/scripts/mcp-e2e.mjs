@@ -373,6 +373,7 @@ const pcbWatch = await watch(pcbDocId, adaJwt);
   const cls = (i) => (i.data.design_rules.net_classes || {}).Default || {};
   check('set_rules writes the project file and the board reads them back', !rules.isError && rules.data.applied && info1.data.design_rules.min_track_width === 0.15 && cls(info1).track_width === 0.3, JSON.stringify(info1.data.design_rules).slice(0, 400));
   check('get_board_info: outline, footprints, what is unrouted', info1.data.size_mm.width > 19 && info1.data.statistics && info1.data.unrouted_connections >= 1, JSON.stringify(info1.data.size_mm) + ' unrouted ' + info1.data.unrouted_connections);
+  check('get_board_info: which parts have a 3D model', info1.data.models_3d && info1.data.models_3d.parts >= 1 && Array.isArray(info1.data.models_3d.without_model) && info1.data.models_3d.from_kicad_library + info1.data.models_3d.without_model.length + (info1.data.models_3d.not_checked || 0) >= info1.data.models_3d.parts, JSON.stringify(info1.data.models_3d) + ' keys ' + Object.keys(info1.data).join());
 
   const before = pcbWatch.ops.length;
   const route = await call(T(), 'apply_changes', { project: NAME, document: pcbPath, title: 'Route the divider', edits: [{ op: 'autoroute', time_s: 10 }] }, { sse: true });
