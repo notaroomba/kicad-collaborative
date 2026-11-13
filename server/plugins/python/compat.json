@@ -9,19 +9,22 @@
   "status": "works"
  },
  "com.github.30350n.pcb2blender": {
-  "status": "works"
+  "status": "unsupported",
+  "note": "It loads, but fails when run: VRML export is not available in the web editor"
  },
  "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": {
   "status": "works"
  },
  "com.github.DIaLOGIKa-GmbH.kicad-coil-creator": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.HaydenHu.Space-Filling-Curve": {
   "status": "works"
  },
  "com.github.HaydenHu.kicad-text-postion-size": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.Huaqiu-Electronics.kicad-hqdfm-plugin": {
   "status": "works"
@@ -62,22 +65,27 @@
   "status": "works"
  },
  "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Error: Please enter a valid Block name.\"). Nobody has checked its result here yet."
  },
  "com.github.Steffen-W.KiCad-Parasitics": {
   "status": "works"
  },
  "com.github.Steffen-W.impartGUI": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"WARNING: KICAD_3RD_PARTY is not defined in Environment Variables. Please add the entry manually: Preferences -> Configure Paths -> Environment Variables -> Add \"). Nobody has checked its result here yet."
  },
  "com.github.SteveMayze.pcb2fritzing": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Open Directory Failed: Unable to open directory: /project\"). Nobody has checked its result here yet."
  },
  "com.github.TheJigsApp.kicad-parts-placer-pcm": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.TheJigsApp.kicadtestpoints-pcm": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.adamws.kicad-git": {
   "status": "works",
@@ -87,7 +95,8 @@
   "status": "works"
  },
  "com.github.adamws.kicad-via-patterns": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.adrianwest.bakery": {
   "status": "works"
@@ -103,7 +112,8 @@
   "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.andresarmento.kicad2gcode": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.github.asukiaaa.gerber-to-order": {
   "status": "works"
@@ -116,10 +126,12 @@
   "status": "works"
  },
  "com.github.black-ghost-off.autoled": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.cgrassin.kicad-pinout-generator": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Message: Select at least one component!\"). Nobody has checked its result here yet."
  },
  "com.github.cooked.kimotor": {
   "status": "works"
@@ -129,20 +141,23 @@
   "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
  },
  "com.github.drandyhaas.kicadroutingtools": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.github.drewsum.kipi": {
   "status": "unsupported",
   "note": "Its Qt window and its numpy, scipy and matplotlib parts load. Its solver meshes the copper with the Triangle library, which is compiled code that has no build for the browser."
  },
  "com.github.ducky64.SubLayout": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Error: Must select exactly one anchor footprint.\"). Nobody has checked its result here yet."
  },
  "com.github.easyw.kicad-action-tools": {
   "status": "works"
  },
  "com.github.easyw.kicad-rf-tools": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.github.f-blaze.velatrace": {
   "status": "partly",
@@ -153,7 +168,8 @@
   "note": "It makes the Gerber archive and hands it over as a download. Passing it straight to the Gerber2Png page needs a local network port: open that page and load the archive there."
  },
  "com.github.g200kg.kicad-gerberzipper2": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.gauravmm.hierarchicalpcb": {
   "status": "works"
@@ -162,19 +178,24 @@
   "status": "works"
  },
  "com.github.gregdavill.KiBuzzard": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.heronitec-solutions.kicomlib": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.jOaSbA.localize-dependencies": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.jOaSbA.via-stitching": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.github.jacmie.PosOrient": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.jarrettr.stretch": {
   "status": "works"
@@ -183,7 +204,8 @@
   "status": "works"
  },
  "com.github.jsreynaud.kicad-action-scripts": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.github.kerstensrobin.kicad-breadboard": {
   "status": "works"
@@ -195,7 +217,8 @@
   "status": "works"
  },
  "com.github.mey-26.kicad-layout-clone": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.mey-26.pcb-heatmap": {
   "status": "works"
@@ -213,10 +236,12 @@
   "status": "works"
  },
  "com.github.ozzysv.holefinder": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.ozzysv.viafence": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"ViaFence: No tracks or pads selected. Select one or more tracks/arcs and optionally pads to surround.\"). Nobody has checked its result here yet."
  },
  "com.github.pcbway.PCBWay-Fabrication-Toolkit-for-KiCad": {
   "status": "works"
@@ -226,7 +251,8 @@
   "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
  },
  "com.github.riehlies.kisi": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.github.sagarHackeD.PlaceBySchKiCad": {
   "status": "works"
@@ -255,7 +281,8 @@
   "note": "It adds no board editor command."
  },
  "com.github.tnaegele.kicad-cut-tracks-at-line": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Cutting line error: Please select exactly one cutting line!\"). Nobody has checked its result here yet."
  },
  "com.github.tobiglaser.KiPNG": {
   "status": "works"
@@ -268,7 +295,8 @@
   "note": "It is a client for the traces server (traces-serve), which is installed separately from its own source and is not part of this package. A plugin here cannot reach a server on your own computer."
  },
  "com.github.weirdgyn.viastitcher": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Message: Please select a valid area\"). Nobody has checked its result here yet."
  },
  "com.github.yaqwsx.kikit": {
   "status": "works"
@@ -277,7 +305,8 @@
   "status": "works"
  },
  "com.github.z2labs.eagle-exhumer": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work (it said: \"Eagle Exhumer: Open the PCB Editor from the KiCad project manager window (the Eagle import is a project-manager function).\"). Nobody has checked its result here yet."
  },
  "com.github.z2labs.z2ems": {
   "status": "limited",
@@ -287,26 +316,31 @@
   "status": "works"
  },
  "com.gitlab.dennevi.Board2Pdf": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.gitlab.egloff-studio.z0-field-solver": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.gitlab.egloff-studio.z0-wavelab": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.gitlab.mgyger.oktizer": {
   "status": "works"
  },
  "com.gitlab.open-hardware-designs.kicad-ec-registration": {
-  "status": "works"
+  "status": "opens",
+  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
  },
  "com.infernoembedded.vulcans-trials": {
   "status": "unsupported",
   "note": "The package holds only a launcher for the vulcans-trials program, a compiled desktop application that is installed separately. Without it the plugin reports that it cannot find the program, on the desktop too."
  },
  "com.pcbtools.kinotes": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  },
  "com.stenchill.kicad": {
   "status": "partly",
@@ -326,6 +360,7 @@
   "status": "works"
  },
  "vn.thanhduongvs.fanout-tool": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
  }
 }

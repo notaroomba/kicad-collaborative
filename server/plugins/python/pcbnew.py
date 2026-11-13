@@ -6774,6 +6774,8 @@ FootprintWizard = FootprintWizardPlugin
 
 
 class PCB_PLOT_PARAMS:
+    # the drill mark names of KiCad 6, which older plugins still use
+    NO_DRILL_SHAPE, SMALL_DRILL_SHAPE, FULL_DRILL_SHAPE = 0, 1, 2
     """Plot settings a plugin fills in.  They are kept and handed to the editor's fabrication output."""
 
     def __init__(self):

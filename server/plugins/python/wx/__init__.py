@@ -334,6 +334,7 @@ FRAME_TOOL_WINDOW, FRAME_FLOAT_ON_PARENT, FRAME_NO_TASKBAR, FRAME_SHAPED, DIALOG
 BORDER_DEFAULT, BORDER_NONE, BORDER_STATIC, BORDER_SIMPLE, BORDER_RAISED, BORDER_SUNKEN, BORDER_THEME = 0, 0x00200000, 0x01000000, 0x02000000, 0x04000000, 0x08000000, 0x10000000
 NO_BORDER, SIMPLE_BORDER, SUNKEN_BORDER, RAISED_BORDER, STATIC_BORDER = BORDER_NONE, BORDER_SIMPLE, BORDER_SUNKEN, BORDER_RAISED, BORDER_STATIC
 VSCROLL, HSCROLL, ALWAYS_SHOW_SB, FULL_REPAINT_ON_RESIZE, NO_FULL_REPAINT_ON_RESIZE = 0x80000000, 0x40000000, 0x00800000, 0x00010000, 0
+TextEntryDialogStyle = 0x20000000 | 0x0004 | 0x0010 | 0x0001          # CAPTION | OK | CANCEL | CENTRE
 TE_MULTILINE, TE_READONLY, TE_PASSWORD, TE_PROCESS_ENTER, TE_PROCESS_TAB, TE_RICH, TE_RICH2, TE_NO_VSCROLL, TE_AUTO_URL = 0x0020, 0x0010, 0x0800, 0x0400, 0x0040, 0x0080, 0x8000, 0x0002, 0x1000
 TE_LEFT, TE_CENTER, TE_CENTRE, TE_RIGHT, TE_DONTWRAP, TE_WORDWRAP, TE_BESTWRAP, TE_CHARWRAP = 0, 0x0100, 0x0100, 0x0200, HSCROLL, 0x0001, 0, 0x4000
 ST_NO_AUTORESIZE, ST_ELLIPSIZE_START, ST_ELLIPSIZE_MIDDLE, ST_ELLIPSIZE_END = 0x0001, 0x0004, 0x0008, 0x0010
@@ -1922,6 +1923,14 @@ def _px(v):
     return f"{int(v)}px"
 
 
+_PROBED = frozenset((
+    "GetValue", "SetValue", "Value", "GetSelection", "SetSelection", "Selection", "GetStringSelection", "SetStringSelection",
+    "StringSelection", "GetSelections", "GetPath", "Path", "GetColour", "Colour", "GetItems", "Items",
+    "GetCount", "GetString", "GetStrings", "IsChecked", "GetCheckedItems", "GetCheckedStrings", "Get3StateValue", "GetTextValue",
+    "GetToggleValue", "GetSelectedFont", "GetFilename", "GetMin", "GetMax", "GetRange", "GetInsertionPoint", "GetLineText",
+    "GetNumberOfLines", "GetPageCount", "GetCurrentPage", "GetItemCount", "GetFirstSelected", "GetCellValue", "GetNumberRows", "GetURL"))
+
+
 class Window(EvtHandler):
     _TAG = "div"
     _CLS = "wx-panel"
@@ -2368,6 +2377,10 @@ class Window(EvtHandler):
             if getter is not None:
                 return getter(self)
             _missing.add(f"{type(self).__name__}.{name}")
+            # Plugins ask a control what kind it is with hasattr(control, "GetValue") and the like; a control that
+            # does not hold a value, a selection or a path must say so, as wxPython's does.
+            if name in _PROBED:
+                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
             return _NULL
         raise AttributeError(name)
 

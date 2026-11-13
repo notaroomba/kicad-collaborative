@@ -332,7 +332,7 @@ function Detail({ p }: { p: InstalledPlugin }) {
   );
 }
 
-const COMPAT_LABEL: Record<Compat["status"], string> = { works: "Runs here", partly: "Partly runs", limited: "Limited here", unsupported: "Does not run here yet", untested: "Not tested yet" };
+const COMPAT_LABEL: Record<Compat["status"], string> = { works: "Runs here", partly: "Partly runs", opens: "Opens, unverified", limited: "Limited here", unsupported: "Does not run here yet", untested: "Not tested yet" };
 /** KiCad's own repository: the plugins the desktop's Plugin and Content Manager lists, runnable here through the Python runtime. */
 /** A KiCad repository plugin's own icon, as KiCad's Plugin and Content Manager shows it; a plain plug mark when it has none. */
 function PcmIcon({ identifier, has, small }: { identifier: string; has: boolean; small?: boolean }) {

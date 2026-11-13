@@ -311,8 +311,10 @@ stood in for here (ngspice, FreeCAD, a 3D renderer, a compiled desktop applicati
 on the person's own computer, and Python packages with native code that Pyodide does not ship.
 A plugin that needs one of these says so in its log.
 
-The label beside each plugin in the manager is one of *works*, *partly works*, *limited*,
-*not supported* and *not tested yet* (it needs something this check could not load or reach).
+The label beside each plugin in the manager is one of *runs here* (it was seen doing its work:
+it changed the board, wrote a file, made a fabrication output, or its drive checked the result),
+*opens, unverified* (its window opens, but no run has seen it do its work), *partly works*,
+*limited*, *not supported* and *not tested yet* (it needs something this check could not load or reach).
 `plugins/python/compat-notes.json` holds the labels set by hand, for plugins whose commands run
 here but whose purpose needs a desktop program.
 

@@ -6,6 +6,8 @@
 // dialog answered "OK".  What comes back is a table: loads / registers / runs / what it lacks.
 //
 //   PCM_SRC=<folder of unpacked PCM packages> node plugins-python.mjs            # all of them
+//   BOARD=<a .kicad_pcb> runs the sweep on that board instead of each plugin's usual one (a bare board with a few
+//   tracks and no nets finds what a demo board hides).
 //   node plugins-python.mjs --one <package folder> [--board file.kicad_pcb]      # one, as JSON
 //   OUT=compat.json  writes the table as JSON too.  ONLY=substring narrows the run.
 //
@@ -93,6 +95,25 @@ function kindsOf(create) {
   return n;
 }
 
+/** The ids of a board file's top-level items of the wanted kinds (all, tracks, footprints). */
+function topLevelIds(text, what) {
+  const kinds = what === "tracks" ? ["segment", "arc", "via"] : what === "footprints" ? ["footprint"] : ["segment", "arc", "via", "footprint", "zone", "gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_text"];
+  const ids = []; let depth = 0, inStr = false, item = null, i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (inStr) { if (c === "\\") i++; else if (c === '"') inStr = false; i++; continue; }
+    if (c === '"') { inStr = true; i++; continue; }
+    if (c === "(") {
+      depth++;
+      const m = /^\(([A-Za-z_0-9.]+)/.exec(text.slice(i, i + 40)); const name = m ? m[1] : "";
+      if (depth === 2) item = kinds.includes(name) ? { id: null } : null;
+      else if (depth === 3 && item && !item.id && (name === "uuid" || name === "tstamp")) { const u = /^\((?:uuid|tstamp)\s+"?([0-9a-fA-F-]{8,})"?\)/.exec(text.slice(i, i + 80)); if (u) item.id = u[1]; }
+    } else if (c === ")") { if (depth === 2 && item && item.id) ids.push(item.id); if (depth === 2) item = null; depth--; }
+    i++;
+  }
+  return ids;
+}
+
 async function one(dir, boardPath, boardGiven) {
   const require = createRequire(path.join(server, "package.json"));
   let driveSrc = null;
@@ -116,6 +137,9 @@ async function one(dir, boardPath, boardGiven) {
     for (const m of driveSrc.matchAll(/^# insert: (.+)$/gm)) board = board.slice(0, board.lastIndexOf(")")) + "\t" + m[1].trim() + "\n)\n";
     for (const m of driveSrc.matchAll(/^# select: (.+)$/gm)) startSelection.push(...m[1].split(",").map((x) => x.trim()).filter(Boolean));
   }
+  // SELECT=all|tracks|footprints: start with those items selected, as a person who selects before running a plugin
+  // (many plugins only say "select something first" otherwise).  A drive's own "# select:" wins.
+  if (process.env.SELECT && !startSelection.length) startSelection.push(...topLevelIds(board, process.env.SELECT));
   // the project file and schematics beside the board, as the editor hands them over
   const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro)$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
   const calls = []; const said = []; let edited = false;
@@ -274,7 +298,7 @@ async function all() {
   const dirs = fs.readdirSync(src).filter((d) => fs.existsSync(path.join(src, d, "plugins")) && (!process.env.ONLY || d.includes(process.env.ONLY))).sort();
   const results = {}; let next = 0;
   const runOne = (d) => new Promise((resolve) => {
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--one", path.join(src, d)], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "--one", path.join(src, d), ...(process.env.BOARD ? ["--board", path.resolve(process.env.BOARD)] : [])], { stdio: ["ignore", "pipe", "pipe"] });
     let out = "", err = ""; child.stdout.on("data", (b) => { out += b; }); child.stderr.on("data", (b) => { err += b; });
     const timer = setTimeout(() => { child.kill("SIGKILL"); results[d] = { identifier: d, timeout: true, actions: [] }; }, Number(process.env.TIMEOUT || 120000));
     child.on("close", () => { clearTimeout(timer); if (!results[d]) { try { results[d] = JSON.parse(out.slice(out.indexOf("\n{\"identifier\"") + 1)); } catch { results[d] = null; if (process.env.VERBOSE) console.error(d, err.slice(-600), out.slice(-300)); } } resolve(); });
@@ -293,6 +317,13 @@ async function all() {
     const compiled = new Map(); for (const name of want.pyodide) { const walk1 = (n) => { const e = lockAll[n]; if (!e) return; for (const imp of e.imports || []) compiled.set(imp.split(".")[0], n); for (const dep of e.depends || []) walk1(dep); }; walk1(name); }
     const needsCompiled = (text) => { const m = /Python module “([^”]+)”/.exec(String(text || "")); const top = m ? m[1].split(".")[0] : ""; return top && compiled.has(top) ? compiled.get(top) : ""; };
     const untested = (pkg) => ({ status: "untested", note: `It needs the ${pkg} package, which is compiled code the test machine could not download. A server that can reach the Pyodide package CDN when it is built has it.` });
+    // "Runs here" is only said of a plugin that was seen doing its work: it changed the board, wrote a file, made a
+    // fabrication output, or its drive (scripts/plugin-drives) checked the result.  EVIDENCE=<OUT files, comma
+    // separated> adds earlier runs of the same sweep on other boards or with other selections.
+    const did = (x) => !!x && x.verdict !== "run-error" && (x.actions || []).some((a) => a.ok && ((a.commits || []).length || (a.saved || []).length || a.fab || a.drive !== undefined));
+    const earlier = (process.env.EVIDENCE || "").split(",").filter(Boolean).map((f) => JSON.parse(fs.readFileSync(f, "utf8")));
+    const worked = (d, r) => did(r) || earlier.some((e) => did(e[d]));
+    const lastSaid = (r) => clean(((r && r.said) || []).slice(-1)[0] || "").slice(0, 160);
     const notes = JSON.parse(fs.readFileSync(path.join(shimDir, "compat-notes.json"), "utf8")).plugins || {};
     const table = {};
     for (const d of dirs) {
@@ -302,6 +333,7 @@ async function all() {
       const net = r && r.net > 0;
       if (notes[d]) table[d] = notes[d];
       else if (pkg) table[d] = untested(pkg);
+      else if (v === "runs" && !net && !worked(d, r)) table[d] = { status: "opens", note: `It opens, but the test run did not see it do its work${lastSaid(r) ? ` (it said: "${lastSaid(r)}")` : ""}. Nobody has checked its result here yet.` };
       else if (v === "runs") table[d] = net ? { status: "partly", note: "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested." } : { status: "works" };
       else if (v === "partly") table[d] = { status: "partly", note: `${r.actions.filter((x) => x.ok).length} of its ${r.actions.length} commands run. ${r.actions.filter((x) => !x.ok).map((x) => `${x.name.replace(/\s+/g, " ").trim()}: ${clean(x.error)}`).join("; ")}`.slice(0, 600) };
       else if (v === "no-actions") table[d] = { status: "unsupported", note: r.loadError ? `It does not load: ${clean(r.loadError)}` : "It adds no board editor command." };

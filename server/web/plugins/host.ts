@@ -22,7 +22,7 @@ const APP = (): any => W.CollabApp;
 export interface LogLine { at: number; level: "log" | "warn" | "error" | "host"; text: string }
 export interface RunState { ready: boolean; failed: boolean; busy: string | null; registered: Record<string, string[]>; error?: string | null }
 /** How one of KiCad's official plugins fared against the web runtime (scripts/plugins-python.mjs). */
-export interface Compat { status: "works" | "partly" | "limited" | "unsupported" | "untested"; note?: string }
+export interface Compat { status: "works" | "partly" | "opens" | "limited" | "unsupported" | "untested"; note?: string }
 /** A plugin in KiCad's own repository. */
 export interface OfficialEntry { identifier: string; manifest: PluginManifest; details: string; size: number; compat: Compat | null; icon?: boolean | null }
 /** A plugin window the editor floats around the plugin's frame (a wx dialog of a Python plugin). */
