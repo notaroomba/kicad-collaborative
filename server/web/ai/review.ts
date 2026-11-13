@@ -342,7 +342,8 @@ export async function reviewSchematic(doc: any, path: string): Promise<any> {
   // ---- UART, pull-ups, default states
   {
     const swapped: string[] = [], bare: string[] = [], open: string[] = [], floating: string[] = [];
-    const pulled = (net: string): boolean => (netPins.get(net) || []).some((q) => { if (!/^(R|RN)\d/i.test(q.ref)) return false; const r = byRef.get(q.ref); return r && r.pins.some((z: SPin) => z !== q && supplyNets.has(pinNet(z))); });
+    // a resistor to a supply, also through an LED in series with it (a status output that sinks an indicator is pulled up by it)
+    const pulled = (net: string, hops = 0): boolean => (netPins.get(net) || []).some((q) => { if (!/^(R|RN|D|LED)\d/i.test(q.ref)) return false; const r = byRef.get(q.ref); return r && r.pins.some((z: SPin) => { if (z === q) return false; const far = pinNet(z); return !!far && far !== net && (supplyNets.has(far) ? !isGround(far) && (hops > 0 || /^(R|RN)\d/i.test(q.ref)) : hops < 1 && pulled(far, hops + 1)); }); });
     for (const n of nets) {
       if (supplyNets.has(n.name) || (n.pins.length < 2 && !n.named)) continue;      // a pin on nothing is the ERC's business
       const ic = n.pins.filter((q) => { const p = byRef.get(q.ref); return p && (isIc(p) || isConn(p)); });
@@ -366,14 +367,16 @@ export async function reviewSchematic(doc: any, path: string): Promise<any> {
   {
     const tpNets = new Set<string>(); for (const p of parts) if (isTp(p) || isConn(p)) for (const q of p.pins) { const n = pinNet(q); if (n) tpNets.add(n); }
     const want = Array.from(supplyNets).concat(nets.filter((n) => /(^|_|~|\{)(N?RST|N?RESET|RUN)\}?$/i.test(n.name) || n.pins.some((q) => /^~?\{?(N?RST|N?RESET|RUN)\}?$/i.test(q.name))).map((n) => n.name));
-    const untested = Array.from(new Set(want)).filter((n) => !tpNets.has(n));
+    // a rail a chip makes for itself and that leaves it only to its own capacitors (VDD_SPI, a core supply) has nothing to probe for
+    const own = (n: string) => { const l = netPins.get(n) || []; return l.length > 1 && l.filter((q) => !/^C\d/i.test(q.ref)).length === 1; };
+    const untested = Array.from(new Set(want)).filter((n) => !tpNets.has(n) && !own(n));
     if (parts.some(isIc) && untested.length) add("test.points", "warning", "No test point or connector pin on these nets. Put test points on every supply, on ground and on reset (sch.test_point(net)), and say in a note what to expect there.", untested);
     const prog = nets.filter((n) => n.pins.some((q) => /^(SWDIO|SWCLK|SWD|TCK|TMS|TDI|TDO|UPDI|PDI|ICSP\w*|PGC|PGD)$/i.test(q.name) && isIc(byRef.get(q.ref) || { pins: [], ref: "" })));
     const unreachable = prog.filter((n) => !tpNets.has(n.name)).map((n) => `${n.name} (${n.pins.filter((q) => isIc(byRef.get(q.ref) || { pins: [], ref: "" })).map((q) => `${q.ref}.${q.name}`).join(", ")})`);
     if (unreachable.length) add("test.points", "error", "These programming and debug pins reach no connector or pad, so the IC cannot be programmed on the board.", unreachable);
     if (parts.some(isIc) && !parts.some((p) => /led/i.test(p.lib + " " + p.value)) && !parts.some(isTp)) add("test.points", "note", "The board has no LED and no test point. Add something to debug with: a status LED, a UART header, a scope probe point.");
     const feeds = (p: any) => p && isConn(p) && /usb|barrel|jack|batt|terminal|screw|jst|dc|power|pwr/i.test(p.lib + " " + p.value);
-    const entry = rails.filter((n) => (netPins.get(n) || []).some((q) => feeds(byRef.get(q.ref))) && !(netPins.get(n) || []).some((q) => /^(F|D|Q|TVS|FB)\d/i.test(q.ref) || q.type === "power_out"));
+    const entry = rails.filter((n) => (netPins.get(n) || []).some((q) => feeds(byRef.get(q.ref))) && !(netPins.get(n) || []).some((q) => /^(F|D|Q|TVS|FB)\d/i.test(q.ref) || q.type === "power_out" || /^(Battery_Management|Power_Protection):|(^|:)(BQ2\d|TPS2\d|TPD\d|LTC4\d|MCP73|TP40|STBC|MAX1[45]\d\d)/i.test(((byRef.get(q.ref) || { lib: "" }).lib || "") + ":" + ((byRef.get(q.ref) || { value: "" }).value || ""))));      // a charger or a protection IC on the rail is its protection
     if (entry.length) add("fail.safe", "warning", "These supplies come in through a connector with no fuse, diode, TVS or MOSFET on them. Add over-voltage and reverse polarity protection where a user can get it wrong.", entry);
     const regs = parts.filter((p) => isIc(p) && p.pins.some((q: SPin) => q.type === "power_out"));
     if (regs.length && !parts.some((p) => /^(JP|SB)\d/i.test(p.ref) || (/^R\d/i.test(p.ref) && ohms(p.value) === 0))) add("fail.safe", "note", `${regs.length} regulator${regs.length > 1 ? "s" : ""} and no 0 ohm link or cuttable jumper. One in series with each regulator output lets a faulty supply be cut off from the rest of the board.`, regs.map((p) => p.ref));
@@ -383,7 +386,7 @@ export async function reviewSchematic(doc: any, path: string): Promise<any> {
 
   // ---- ERC and the bill of materials
   {
-    try { const marks: any[] = s.ercCheck(doc, {}); const e = marks.filter((m) => m.severity === "error"), w = marks.filter((m) => m.severity !== "error");
+    try { const marks: any[] = s.ercCheck(doc, {}); const e = marks.filter((m) => m.severity === "error"), w = marks.filter((m) => m.severity !== "error" && !(/^pin_to_pin/.test(String(m.code)) && /#FLG\d/.test(JSON.stringify([m.message, m.text, m.items, m.refs]))));      // a strap pin on a rail that carries a PWR_FLAG: the flag's doing, not the design's
       if (e.length) add("erc", "error", `The ERC reports ${e.length} error${e.length > 1 ? "s" : ""} (sch.check() lists them).`, Array.from(new Set(e.map((m) => m.code))));
       if (w.length) add("erc", "warning", `The ERC reports ${w.length} warning${w.length > 1 ? "s" : ""}. Fix each, or write beside it why it is accepted.`, Array.from(new Set(w.map((m) => m.code))));
     } catch { /* no ERC here */ }

@@ -1365,6 +1365,11 @@ class Schematic(_Doc):
             except HarnessError as e:
                 problems.append(str(e))
         self._remember_names(nets)
+        if hasattr(self, "power_flags"):      # a supply fed through a connector gets its PWR_FLAG, so the ERC stays quiet about it
+            try:
+                self.power_flags()
+            except HarnessError as e:
+                problems.append(str(e))
         # ---- 6. the page fits the drawing: the smallest paper it sits on (a sheet that had something on it was packed
         #         onto the page it had), and the drawing in the middle of it instead of up in a corner
         fit = self.fit_page()
@@ -3186,6 +3191,9 @@ class Blocks:
                             ops += [("dot", (q[0], by)) for q in bots[1:-1]]
                             ops.append(("sym", gnet, (bots[0][0], by)))
                     pinx = {p["x"] for p in mine}
+                    ends = sorted(pinx | set(capx))
+                    if any(abs(sx - xx) < 1e-6 for xx in ends[1:-1]):      # over a pin with the rail going on both ways, four ends would meet in one point: stand between two pins
+                        sx = next((c for c in (sx + G / 2, sx - G / 2) if all(abs(c - xx) > 1e-6 for xx in ends)), sx)
                     xs = sorted(pinx | {sx} | set(capx))
                     ops += [("wire", [(p["x"], p["y"]), (p["x"], rail)]) for p in mine]
                     if len(xs) > 1:
@@ -3502,6 +3510,33 @@ def _supplies(self, table: dict, at=None, title: str = "Power supplies (min, typ
         self.text(line, (at[0] + 0.5, y))
     self.flush()
     return [_r(at[0]), _r(at[1])]
+
+
+def _power_flags(self) -> list:
+    """Give every supply that comes in through a connector (no pin on it is a power output, so KiCad's ERC reports
+    "power pin not driven") a PWR_FLAG: the supply's symbol and the flag side by side on a short wire, in free space on the
+    sheet.  \`build\` does this by itself.  Returns the names flagged."""
+    self.flush()
+    d = self.check(kind="power_pin_not_driven", limit=40, warnings=True)
+    refs = {m for t in d.get("first") or [] for m in re.findall(r"\\[(#PWR\\w+)\\]", t)}
+    if not refs:
+        return []
+    names = sorted({p.get("value") for p in self.geometry()["parts"] if p.get("ref") in refs and p.get("value")})
+    if not names:
+        return []
+    step = 20.32
+    w, h = step * len(names) + 5.08, 15.24
+    spot = self._call("check_layout", limit=1, free={"w": _r(w), "h": _r(h)}).get("free")
+    if not spot:
+        return []
+    y = round((spot["y"] + 7.62) / 2.54) * 2.54
+    for i, name in enumerate(names):
+        x = round((spot["x"] + 5.08 + i * step) / 2.54) * 2.54
+        self._edit(self._power_edit(name, x, y))
+        self._edit({"op": "add_symbol", "lib_id": "power:PWR_FLAG", "x": x + 10.16, "y": y, "rotation": 0})
+        self._edit({"op": "add_wire", "points": [[x, y], [x + 10.16, y]]})
+    self.flush()
+    return names
 
 
 def _test_point(self, net: str, ref: str | None = None, expect: str | None = None,
@@ -4019,6 +4054,7 @@ def install(Project, Schematic, Board) -> None:
     Project.review = _project_review
     Schematic.globalize = _globalize
     Schematic.supplies = _supplies
+    Schematic.power_flags = _power_flags
     Schematic.test_point = _test_point
     Schematic.bom = _bom
     Schematic.fiducials = _fiducials
@@ -5561,7 +5597,7 @@ def dim_tables(pages: list) -> list:
                     out.append(t)
             i = max(j, i + 1)
     return out
-`;var k=`"""Footprints computed from package dimensions, after IPC-7351B.
+`;var x=`"""Footprints computed from package dimensions, after IPC-7351B.
 
 Every generator takes the package's own dimensions (the numbers a datasheet's mechanical drawing
 gives) and returns a \`Footprint\`: pads, courtyard, fabrication outline, silkscreen and the text of
@@ -5975,7 +6011,7 @@ def header(name: str, pins: int, rows: int = 1, pitch: float = 2.54, lead: float
         for r in range(rows):
             fp.pad(n, x0 + r * pitch, y0 + i * pitch, pad, pad, "rect", drill=hole); n += 1
     return fp.finish(rows * pitch, per * pitch, 0.5)
-`;var x=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
+`;var k=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
 
     from kicad_harness import parts
     rows = parts.find("3.3V LDO SOT-23-5 500mA")            # every vendor that is set up, merged
@@ -6451,7 +6487,7 @@ def library(symbols: list) -> str:
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
 `;var p=require("node:fs"),H=globalThis,L=p.constants;process.binding=e=>{if(e==="constants")return{fs:L};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete H[e]}catch{}var G=new(require("node:string_decoder")).StringDecoder("utf8"),T=new Int32Array(new SharedArrayBuffer(4)),i="";function N(){let e=Buffer.alloc(65536);for(;;){let s=i.indexOf(`
 `);if(s>=0){let t=i.slice(0,s);return i=i.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),i+=G.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}throw t}}var M=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/physics.py",b],["kicad_harness/stackups.py",_],["kicad_harness/parts/__init__.py",y],["kicad_harness/parts/datasheet.py",w],["kicad_harness/parts/footprint.py",k],["kicad_harness/parts/search.py",x],["kicad_harness/parts/symbol.py",v]],U=`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}throw t}}var M=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/physics.py",b],["kicad_harness/stackups.py",_],["kicad_harness/parts/__init__.py",y],["kicad_harness/parts/datasheet.py",w],["kicad_harness/parts/footprint.py",x],["kicad_harness/parts/search.py",k],["kicad_harness/parts/symbol.py",v]],U=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -6482,6 +6518,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),a=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});a.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),a.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of M)a.FS.writeFile("/kh/"+r,l);a.runPython(U);let E=a.globals.get("__kc_run"),o;try{o=JSON.parse(String(E(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
-`).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
-`),d(o),process.exit(0)}V().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),o=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});o.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),o.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of M)o.FS.writeFile("/kh/"+r,l);o.runPython(U);let E=o.globals.get("__kc_run"),a;try{a=JSON.parse(String(E(String(e.code||""))))}catch(r){a={ok:!1,error:String(r&&r.message||r).split(`
+`).filter(Boolean).slice(-1)[0]||"The script failed."}}a.done=!0,a.output=n.join(`
+`),d(a),process.exit(0)}V().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

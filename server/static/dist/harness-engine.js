@@ -93252,10 +93252,14 @@ async function reviewSchematic(doc, path2) {
   }
   {
     const swapped = [], bare2 = [], open2 = [], floating = [];
-    const pulled = (net) => (netPins.get(net) || []).some((q) => {
-      if (!/^(R|RN)\d/i.test(q.ref)) return false;
+    const pulled = (net, hops = 0) => (netPins.get(net) || []).some((q) => {
+      if (!/^(R|RN|D|LED)\d/i.test(q.ref)) return false;
       const r = byRef2.get(q.ref);
-      return r && r.pins.some((z) => z !== q && supplyNets.has(pinNet(z)));
+      return r && r.pins.some((z) => {
+        if (z === q) return false;
+        const far = pinNet(z);
+        return !!far && far !== net && (supplyNets.has(far) ? !isGround(far) && (hops > 0 || /^(R|RN)\d/i.test(q.ref)) : hops < 1 && pulled(far, hops + 1));
+      });
     });
     for (const n2 of nets) {
       if (supplyNets.has(n2.name) || n2.pins.length < 2 && !n2.named) continue;
@@ -93285,14 +93289,18 @@ async function reviewSchematic(doc, path2) {
       if (n2) tpNets.add(n2);
     }
     const want = Array.from(supplyNets).concat(nets.filter((n2) => /(^|_|~|\{)(N?RST|N?RESET|RUN)\}?$/i.test(n2.name) || n2.pins.some((q) => /^~?\{?(N?RST|N?RESET|RUN)\}?$/i.test(q.name))).map((n2) => n2.name));
-    const untested = Array.from(new Set(want)).filter((n2) => !tpNets.has(n2));
+    const own = (n2) => {
+      const l = netPins.get(n2) || [];
+      return l.length > 1 && l.filter((q) => !/^C\d/i.test(q.ref)).length === 1;
+    };
+    const untested = Array.from(new Set(want)).filter((n2) => !tpNets.has(n2) && !own(n2));
     if (parts.some(isIc) && untested.length) add("test.points", "warning", "No test point or connector pin on these nets. Put test points on every supply, on ground and on reset (sch.test_point(net)), and say in a note what to expect there.", untested);
     const prog = nets.filter((n2) => n2.pins.some((q) => /^(SWDIO|SWCLK|SWD|TCK|TMS|TDI|TDO|UPDI|PDI|ICSP\w*|PGC|PGD)$/i.test(q.name) && isIc(byRef2.get(q.ref) || { pins: [], ref: "" })));
     const unreachable = prog.filter((n2) => !tpNets.has(n2.name)).map((n2) => `${n2.name} (${n2.pins.filter((q) => isIc(byRef2.get(q.ref) || { pins: [], ref: "" })).map((q) => `${q.ref}.${q.name}`).join(", ")})`);
     if (unreachable.length) add("test.points", "error", "These programming and debug pins reach no connector or pad, so the IC cannot be programmed on the board.", unreachable);
     if (parts.some(isIc) && !parts.some((p) => /led/i.test(p.lib + " " + p.value)) && !parts.some(isTp)) add("test.points", "note", "The board has no LED and no test point. Add something to debug with: a status LED, a UART header, a scope probe point.");
     const feeds = (p) => p && isConn(p) && /usb|barrel|jack|batt|terminal|screw|jst|dc|power|pwr/i.test(p.lib + " " + p.value);
-    const entry = rails.filter((n2) => (netPins.get(n2) || []).some((q) => feeds(byRef2.get(q.ref))) && !(netPins.get(n2) || []).some((q) => /^(F|D|Q|TVS|FB)\d/i.test(q.ref) || q.type === "power_out"));
+    const entry = rails.filter((n2) => (netPins.get(n2) || []).some((q) => feeds(byRef2.get(q.ref))) && !(netPins.get(n2) || []).some((q) => /^(F|D|Q|TVS|FB)\d/i.test(q.ref) || q.type === "power_out" || /^(Battery_Management|Power_Protection):|(^|:)(BQ2\d|TPS2\d|TPD\d|LTC4\d|MCP73|TP40|STBC|MAX1[45]\d\d)/i.test(((byRef2.get(q.ref) || { lib: "" }).lib || "") + ":" + ((byRef2.get(q.ref) || { value: "" }).value || ""))));
     if (entry.length) add("fail.safe", "warning", "These supplies come in through a connector with no fuse, diode, TVS or MOSFET on them. Add over-voltage and reverse polarity protection where a user can get it wrong.", entry);
     const regs = parts.filter((p) => isIc(p) && p.pins.some((q) => q.type === "power_out"));
     if (regs.length && !parts.some((p) => /^(JP|SB)\d/i.test(p.ref) || /^R\d/i.test(p.ref) && ohms(p.value) === 0)) add("fail.safe", "note", `${regs.length} regulator${regs.length > 1 ? "s" : ""} and no 0 ohm link or cuttable jumper. One in series with each regulator output lets a faulty supply be cut off from the rest of the board.`, regs.map((p) => p.ref));
@@ -93306,7 +93314,7 @@ async function reviewSchematic(doc, path2) {
   {
     try {
       const marks = s.ercCheck(doc, {});
-      const e = marks.filter((m) => m.severity === "error"), w = marks.filter((m) => m.severity !== "error");
+      const e = marks.filter((m) => m.severity === "error"), w = marks.filter((m) => m.severity !== "error" && !(/^pin_to_pin/.test(String(m.code)) && /#FLG\d/.test(JSON.stringify([m.message, m.text, m.items, m.refs]))));
       if (e.length) add("erc", "error", `The ERC reports ${e.length} error${e.length > 1 ? "s" : ""} (sch.check() lists them).`, Array.from(new Set(e.map((m) => m.code))));
       if (w.length) add("erc", "warning", `The ERC reports ${w.length} warning${w.length > 1 ? "s" : ""}. Fix each, or write beside it why it is accepted.`, Array.from(new Set(w.map((m) => m.code))));
     } catch {

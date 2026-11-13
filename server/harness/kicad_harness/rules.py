@@ -131,6 +131,33 @@ def _supplies(self, table: dict, at=None, title: str = "Power supplies (min, typ
     return [_r(at[0]), _r(at[1])]
 
 
+def _power_flags(self) -> list:
+    """Give every supply that comes in through a connector (no pin on it is a power output, so KiCad's ERC reports
+    "power pin not driven") a PWR_FLAG: the supply's symbol and the flag side by side on a short wire, in free space on the
+    sheet.  `build` does this by itself.  Returns the names flagged."""
+    self.flush()
+    d = self.check(kind="power_pin_not_driven", limit=40, warnings=True)
+    refs = {m for t in d.get("first") or [] for m in re.findall(r"\[(#PWR\w+)\]", t)}
+    if not refs:
+        return []
+    names = sorted({p.get("value") for p in self.geometry()["parts"] if p.get("ref") in refs and p.get("value")})
+    if not names:
+        return []
+    step = 20.32
+    w, h = step * len(names) + 5.08, 15.24
+    spot = self._call("check_layout", limit=1, free={"w": _r(w), "h": _r(h)}).get("free")
+    if not spot:
+        return []
+    y = round((spot["y"] + 7.62) / 2.54) * 2.54
+    for i, name in enumerate(names):
+        x = round((spot["x"] + 5.08 + i * step) / 2.54) * 2.54
+        self._edit(self._power_edit(name, x, y))
+        self._edit({"op": "add_symbol", "lib_id": "power:PWR_FLAG", "x": x + 10.16, "y": y, "rotation": 0})
+        self._edit({"op": "add_wire", "points": [[x, y], [x + 10.16, y]]})
+    self.flush()
+    return names
+
+
 def _test_point(self, net: str, ref: str | None = None, expect: str | None = None,
                 footprint: str = "TestPoint:TestPoint_Pad_D1.0mm") -> str:
     """A test point on a net ("+3V3", "GND", "~{RESET}" or a pin like "U1.RUN").  `expect` is written beside it
@@ -646,6 +673,7 @@ def install(Project, Schematic, Board) -> None:
     Project.review = _project_review
     Schematic.globalize = _globalize
     Schematic.supplies = _supplies
+    Schematic.power_flags = _power_flags
     Schematic.test_point = _test_point
     Schematic.bom = _bom
     Schematic.fiducials = _fiducials

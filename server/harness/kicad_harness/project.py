@@ -1268,6 +1268,11 @@ class Schematic(_Doc):
             except HarnessError as e:
                 problems.append(str(e))
         self._remember_names(nets)
+        if hasattr(self, "power_flags"):      # a supply fed through a connector gets its PWR_FLAG, so the ERC stays quiet about it
+            try:
+                self.power_flags()
+            except HarnessError as e:
+                problems.append(str(e))
         # ---- 6. the page fits the drawing: the smallest paper it sits on (a sheet that had something on it was packed
         #         onto the page it had), and the drawing in the middle of it instead of up in a corner
         fit = self.fit_page()

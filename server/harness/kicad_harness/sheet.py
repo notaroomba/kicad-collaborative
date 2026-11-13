@@ -878,6 +878,9 @@ class Blocks:
                             ops += [("dot", (q[0], by)) for q in bots[1:-1]]
                             ops.append(("sym", gnet, (bots[0][0], by)))
                     pinx = {p["x"] for p in mine}
+                    ends = sorted(pinx | set(capx))
+                    if any(abs(sx - xx) < 1e-6 for xx in ends[1:-1]):      # over a pin with the rail going on both ways, four ends would meet in one point: stand between two pins
+                        sx = next((c for c in (sx + G / 2, sx - G / 2) if all(abs(c - xx) > 1e-6 for xx in ends)), sx)
                     xs = sorted(pinx | {sx} | set(capx))
                     ops += [("wire", [(p["x"], p["y"]), (p["x"], rail)]) for p in mine]
                     if len(xs) > 1:
