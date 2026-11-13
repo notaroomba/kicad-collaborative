@@ -211,6 +211,27 @@ export function dashRatios(setup: SNode | null): DashRatios {
   return { dash: kidNum(pp, "dashed_line_dash_ratio", 12), gap: kidNum(pp, "dashed_line_gap_ratio", 3) };
 }
 
+// ---------------------------------------------------------------- the drill chart (PANEL_SETUP_DRILL_CHART, DRILL_SYMBOL_PROFILE)
+export const DRILL_GROUP_KEYS = ["size", "slot", "plating", "span", "operation", "hole_function", "protection", "post_machining"];
+export const DRILL_MARK_POLICIES = ["shapes", "letters", "shapes_then_letters", "size_text"];
+export interface DrillProfile { groupBy: string[]; markPolicy: string; size: number; width: number; freeze: boolean }
+export const DRILL_PROFILE_DEFAULT: DrillProfile = { groupBy: ["size", "slot", "plating", "span", "operation", "post_machining"], markPolicy: "shapes_then_letters", size: 1.5, width: 0.15, freeze: true };
+export function drillProfile(setup: SNode | null): DrillProfile {
+  const p = setup ? (kid(setup, "drill_symbol_profile") as SNode | null) : null;
+  if (!p) return { ...DRILL_PROFILE_DEFAULT, groupBy: DRILL_PROFILE_DEFAULT.groupBy.slice() };
+  const g = kid(p, "group_by") as SNode | null;
+  return { groupBy: g ? g.slice(1).map((x) => str(x)) : [], markPolicy: kidStr(p, "default_marks") || "shapes_then_letters", size: kidNum(p, "size", 1.5), width: kidNum(p, "width", 0.15), freeze: yes(p, "freeze_assignments", true) };
+}
+/** formatDrillSymbolProfile; null for the default profile (nothing is written).  The old node's name and assignments stay. */
+function drillProfileText(d: DrillProfile, old: SNode | null): string | null {
+  const keys = DRILL_GROUP_KEYS.filter((k) => d.groupBy.includes(k));
+  const def = DRILL_PROFILE_DEFAULT;
+  const rest = old ? old.slice(1).filter((c) => isList(c) && (c[0] === "name" || c[0] === "assignment")) as SNode[] : [];
+  if (!rest.length && keys.join() === def.groupBy.join() && d.markPolicy === def.markPolicy && Math.abs(d.size - def.size) < 1e-9 && Math.abs(d.width - def.width) < 1e-9 && d.freeze === def.freeze) return null;
+  const name = rest.filter((c) => c[0] === "name").map((c) => ser(c)).join("");
+  return `(drill_symbol_profile${name}(group_by${keys.map((k) => " " + k).join("")})(default_marks ${d.markPolicy})(size ${fmt(d.size)})(width ${fmt(d.width)})(freeze_assignments ${d.freeze ? "yes" : "no"})${rest.filter((c) => c[0] === "assignment").map((c) => ser(c)).join("")})`;
+}
+
 // ---------------------------------------------------------------- writing the (setup …) section
 /** Serialize a header node the way the reader marked it (strings quoted where the file had them quoted). */
 function ser(node: SNode | string | number, quotedSlot = false): string {
@@ -228,7 +249,7 @@ function replaceOrInsert(setup: SNode, key: string, text: string | null, before:
   setup.splice(at, 0, node);
 }
 const AFTER_MASK = ["solder_mask_min_width", "pad_to_paste_clearance", "pad_to_paste_clearance_ratio", "allow_soldermask_bridges_in_footprints", "tenting", "covering", "plugging", "capping", "filling", "zone_defaults", "aux_axis_origin", "grid_origin", "pcbplotparams"];
-export interface SetupEdit { maskPaste?: MaskPaste; finish?: BoardFinish; dash?: DashRatios; copper?: string[]; boardThickness?: number }
+export interface SetupEdit { maskPaste?: MaskPaste; finish?: BoardFinish; dash?: DashRatios; copper?: string[]; boardThickness?: number; drillProfile?: DrillProfile; stackup?: string }
 /**
  * A copy of the (setup …) node with the edits laid in, in formatSetup's order and omission rules (a zero
  * minimum web width, paste clearance or ratio is not written).  `copper` re-syncs the stackup's copper and
@@ -246,6 +267,12 @@ export function editSetup(setup: SNode | null, e: SetupEdit): SNode {
     replaceOrInsert(out, "allow_soldermask_bridges_in_footprints", `(allow_soldermask_bridges_in_footprints ${m.allowBridges ? "yes" : "no"})`, AFTER_MASK.slice(4));
     replaceOrInsert(out, "tenting", `(tenting (front ${m.tentFront ? "yes" : "no"}) (back ${m.tentBack ? "yes" : "no"}))`, AFTER_MASK.slice(5));
   }
+  if (e.drillProfile) {
+    // formatDrillSymbolProfile: written after grid_origin, before the plot parameters; a default profile writes nothing
+    const old = kid(out, "drill_symbol_profile") as SNode | null;
+    replaceOrInsert(out, "drill_symbol_profile", drillProfileText(e.drillProfile, old), ["pcbplotparams"]);
+  }
+  if (e.stackup) { const node = parse(e.stackup) as SNode, i = idxOf(out, "stackup"); if (i > 0) out[i] = node; else out.splice(1, 0, node); }
   if (e.dash) {
     const pp = kid(out, "pcbplotparams") as SNode | null;
     if (pp) { replaceOrInsert(pp, "dashed_line_dash_ratio", `(dashed_line_dash_ratio ${fmt(e.dash.dash)})`, ["dashed_line_gap_ratio", "svgprecision"]); replaceOrInsert(pp, "dashed_line_gap_ratio", `(dashed_line_gap_ratio ${fmt(e.dash.gap)})`, ["svgprecision"]); }
@@ -333,5 +360,131 @@ export function applyBoardSetup(doc: KDoc, change: KChange): boolean {
   return true;
 }
 
+
+// ---------------------------------------------------------------- design rule validation (BOARD_DESIGN_SETTINGS)
+export interface RuleIssue { setting: string; message: string }
+/** A millimetre value as StringFromValue( units, aAddUnitsText = true ) writes it in an error message. */
+export function unitText(mm: number, units: "mm" | "in" | "mil"): string {
+  const per = units === "in" ? 25.4 : units === "mil" ? 0.0254 : 1, digits = units === "in" ? 4 : units === "mil" ? 2 : 4;
+  let t = (mm / per).toFixed(digits); if (t.includes(".")) t = t.replace(/0+$/, "").replace(/\.$/, "");
+  if (t === "-0") t = "0";
+  return t + " " + (units === "mil" ? "mils" : units);
+}
+const RANGES: [string, number, number][] = [
+  ["min_clearance", 0, 25], ["min_connection", 0, 100], ["min_track_width", 0, 25], ["min_via_annular_width", 0, 25], ["min_via_diameter", 0, 25],
+  ["min_through_hole_diameter", 0, 25], ["min_microvia_diameter", 0, 10], ["min_microvia_drill", 0, 10], ["min_hole_to_hole", 0, 10], ["min_hole_clearance", 0, 100],
+  ["min_silk_clearance", -10, 100], ["min_groove_width", 0, 25], ["min_text_height", 0, 100], ["min_text_thickness", 0, 25], ["min_copper_edge_clearance", -0.01, 25]];
+/** BOARD_DESIGN_SETTINGS::ValidateDesignRules over the project's (board.design_settings.rules) values (millimetres). */
+export function validateDesignRules(rules: Record<string, number>, units: "mm" | "in" | "mil" = "mm", extra?: { maskExpansion?: number; maskMinWidth?: number; maskToCopper?: number; pasteMargin?: number; pasteRatio?: number }): RuleIssue[] {
+  const out: RuleIssue[] = [];
+  const range = (k: string, v: number | undefined, lo: number, hi: number): void => { if (v === undefined || !isFinite(v)) return; const iu = Math.round(v * 1e6); if (iu < Math.round(lo * 1e6) || iu > Math.round(hi * 1e6)) out.push({ setting: k, message: `Value must be between ${unitText(lo, units)} and ${unitText(hi, units)}.` }); };
+  for (const [k, lo, hi] of RANGES) range(k, rules[k], lo, hi);
+  const spokes = rules.min_resolved_spokes; if (spokes !== undefined && (spokes < 0 || spokes > 99)) out.push({ setting: "min_resolved_spokes", message: "Value must be between 0 and 99." });
+  range("max_error", rules.max_error, 0.001, 0.1);
+  if (extra) {
+    range("solder_mask_expansion", extra.maskExpansion, -25, 25); range("solder_mask_min_width", extra.maskMinWidth, 0, 25); range("solder_mask_to_copper_clearance", extra.maskToCopper, 0, 25); range("solder_paste_margin", extra.pasteMargin, -25, 25);
+    if (extra.pasteRatio !== undefined && (!isFinite(extra.pasteRatio) || extra.pasteRatio < -1 || extra.pasteRatio > 1)) out.push({ setting: "solder_paste_margin_ratio", message: "Value must be between -1.000 and 1.000." });
+  }
+  return out;
+}
+/** BOARD_DESIGN_SETTINGS::GetDesignRuleWarnings: the minimum via diameter below drill + 2 × annulus has no effect. */
+export function designRuleWarnings(rules: Record<string, number>, units: "mm" | "in" | "mil" = "mm"): RuleIssue[] {
+  const via = rules.min_via_diameter, drill = rules.min_through_hole_diameter, ring = rules.min_via_annular_width;
+  if ([via, drill, ring].some((x) => x === undefined || !isFinite(x))) return [];
+  const implied = +(drill + 2 * ring).toFixed(6);
+  if (Math.round(via * 1e6) >= Math.round(implied * 1e6)) return [];
+  return [{ setting: "min_via_diameter", message: `Minimum via diameter (${unitText(via, units)}) is smaller than the minimum drill size (${unitText(drill, units)}) plus twice the minimum annular width (${unitText(ring, units)}), so it has no effect. The effective minimum via diameter is ${unitText(implied, units)}.` }];
+}
+/** PCB_VIA::ValidateViaParameters for a Pre-defined Sizes row (NaN = the cell is empty). */
+export function validateViaParameters(diameter: number, drill: number): { message: string; field: "diameter" | "drill" } | null {
+  const has = (v: number): boolean => typeof v === "number" && isFinite(v);
+  if (has(diameter) && diameter < 0.001) return { message: "Via diameter is too small.", field: "diameter" };
+  if (has(drill) && drill < 0.001) return { message: "Via drill is too small.", field: "drill" };
+  if (has(diameter) && !has(drill)) return { message: "No via hole size defined.", field: "drill" };
+  if (has(drill) && !has(diameter)) return { message: "No via diameter defined.", field: "diameter" };
+  if (has(diameter) && has(drill) && Math.round(diameter * 1e6) <= Math.round(drill * 1e6)) return { message: "Via hole size must be smaller than via diameter", field: "drill" };
+  return null;
+}
+
+// ---------------------------------------------------------------- the physical stackup, edited (PANEL_SETUP_BOARD_STACKUP)
+/** One stackup item as PANEL_SETUP_BOARD_STACKUP edits it: a board layer, or a dielectric with its sub-layers. */
+export interface StackupLayer { name: string; type: string; color?: string; thickness?: number; locked?: boolean; material?: string; epsilonR?: number; lossTangent?: number; subs?: StackupSub[] }
+export interface StackupSub { thickness: number; locked?: boolean; material: string; epsilonR: number; lossTangent: number; color?: string }
+/** The (stackup …) node's layers as editable items. */
+export function stackupLayers(setup: SNode | null): StackupLayer[] {
+  const st = setup ? (kid(setup, "stackup") as SNode | null) : null; if (!st) return [];
+  const out: StackupLayer[] = [];
+  for (const l of kids(st, "layer") as SNode[]) {
+    const name = str(l[1]);
+    const groups: SNode[] = [["layer", name]];
+    for (let j = 2; j < l.length; j++) { const c = l[j]; if (c === "addsublayer") groups.push(["layer", name]); else if (isList(c)) (groups[groups.length - 1] as SNode).push(c); }
+    const g0 = groups[0], th = kid(g0, "thickness") as SNode | null;
+    const item: StackupLayer = { name, type: kidStr(g0, "type"), color: kidStr(g0, "color") || undefined, thickness: th ? num(th[1], 0) : undefined, locked: !!th && th.includes("locked"),
+      material: kidStr(g0, "material") || undefined, epsilonR: kid(g0, "epsilon_r") ? kidNum(g0, "epsilon_r") : undefined, lossTangent: kid(g0, "loss_tangent") ? kidNum(g0, "loss_tangent") : undefined };
+    if (/^dielectric \d+$/.test(name)) item.subs = groups.slice(1).map((g) => { const t = kid(g, "thickness") as SNode | null; return { thickness: t ? num(t[1], 0) : 0, locked: !!t && t.includes("locked"), material: kidStr(g, "material"), epsilonR: kidNum(g, "epsilon_r", 1), lossTangent: kidNum(g, "loss_tangent", 0), color: kidStr(g, "color") || undefined }; });
+    out.push(item);
+  }
+  return out;
+}
+/** BOARD_STACKUP::FormatBoardStackup: the (stackup …) text for edited layers, with the finish and impedance flags. */
+export function stackupText(layers: StackupLayer[], finish: BoardFinish, impedanceControlled: boolean, castellated = false): string {
+  const parts: string[] = ["(stackup"];
+  const f = (v: number): string => fmt(v);
+  for (const l of layers) {
+    let t = `(layer ${quote(l.name)} (type ${quote(l.type)})`;
+    if (l.color) t += ` (color ${quote(l.color)})`;
+    if (l.thickness !== undefined) t += ` (thickness ${f(l.thickness)}${l.locked ? " locked" : ""})`;
+    if (l.material) t += ` (material ${quote(l.material)})`;
+    if (l.epsilonR !== undefined) t += ` (epsilon_r ${f(l.epsilonR)})`;
+    if (l.lossTangent !== undefined) t += ` (loss_tangent ${f(l.lossTangent)})`;
+    for (const s of l.subs || []) t += ` addsublayer${s.color ? ` (color ${quote(s.color)})` : ""} (thickness ${f(s.thickness)}${s.locked ? " locked" : ""}) (material ${quote(s.material)}) (epsilon_r ${f(s.epsilonR)}) (loss_tangent ${f(s.lossTangent)})`;
+    parts.push(t + ")");
+  }
+  if (finish.copperFinish && finish.copperFinish !== "None") parts.push(`(copper_finish ${quote(finish.copperFinish)})`);
+  parts.push(`(dielectric_constraints ${impedanceControlled ? "yes" : "no"})`);
+  if (finish.edgeConnector !== "no") parts.push(`(edge_connector ${finish.edgeConnector})`);
+  if (castellated) parts.push("(castellated_pads yes)");
+  if (finish.edgePlating) parts.push("(edge_plating yes)");
+  return parts.join(" ") + ")";
+}
+/** A copy of (setup …) whose (stackup …) is replaced by `text` (inserted first when the board had none). */
+export function setupWithStackup(setup: SNode | null, text: string): SNode {
+  const out = (setup ? parse(ser(setup)) : parse("(setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no))")) as SNode;
+  const node = parse(text) as SNode, i = idxOf(out, "stackup");
+  if (i > 0) out[i] = node; else out.splice(1, 0, node);
+  return out;
+}
+/** Board thickness of edited stackup items: every thickness (dielectric sub-layers included). */
+export function stackupLayersThickness(layers: StackupLayer[]): number {
+  let t = 0; for (const l of layers) { if (l.thickness !== undefined && !/Silk|Paste/.test(l.type)) t += l.thickness; for (const s of l.subs || []) t += s.thickness; }
+  return +t.toFixed(6);
+}
+/** onAdjustDielectricThickness's minimum: the thickness of everything that will not be adjusted (copper, masks, locked and secondary dielectrics). */
+export function stackupFixedThickness(layers: StackupLayer[]): number {
+  let t = 0;
+  for (const l of layers) {
+    if (/Silk|Paste/.test(l.type)) continue;
+    if (!((l.type === "core" || l.type === "prepreg") && !l.locked)) t += l.thickness || 0;
+    for (const s of l.subs || []) t += s.thickness;
+  }
+  return +t.toFixed(6);
+}
+/**
+ * PANEL_SETUP_BOARD_STACKUP::setDefaultLayerWidths: the unlocked main dielectrics take what is left of `target`;
+ * prepregs get 0.1 mm and the cores share the rest, unless a core would be thinner than a prepreg, when all of
+ * them share it equally.  KiCad's message when nothing can be adjusted ("All dielectric  thickness layers are locked").
+ */
+export function adjustDielectrics(layers: StackupLayer[], target: number): string | null {
+  const free = layers.filter((l) => (l.type === "core" || l.type === "prepreg") && !l.locked);
+  if (!free.length) return "All dielectric  thickness layers are locked";
+  const left = target - stackupFixedThickness(layers), PREPREG = 0.1;
+  const cores = free.filter((l) => l.type === "core"), pre = free.filter((l) => l.type !== "core");
+  let core = cores.length ? (left - PREPREG * pre.length) / cores.length : 0;
+  if (!cores.length || core < PREPREG) { const each = left / free.length; for (const l of free) l.thickness = +Math.max(0, each).toFixed(6); return null; }
+  for (const l of pre) l.thickness = PREPREG;
+  for (const l of cores) l.thickness = +core.toFixed(6);
+  return null;
+}
+
 export const boardSetup = { boardHeader, layerRows, layersText, setCopperCount, copperNames, layerNameError, defaultLayerName, modernLayerIds, stackupRows, stackupThickness, boardFinish, maskPaste, dashRatios,
-  editSetup, sectionText, setupWithPlotParams, readPlotParams, plotParamsText, boardSetupChange, applyHeaderChange, applyBoardSetup, COPPER_FINISHES, COPPER_TYPES, USER_TYPES, BOARD_SETUP_TYPE };
+  editSetup, sectionText, setupWithPlotParams, validateDesignRules, designRuleWarnings, validateViaParameters, unitText, stackupLayers, stackupText, setupWithStackup, stackupLayersThickness, stackupFixedThickness, adjustDielectrics, drillProfile, DRILL_GROUP_KEYS, DRILL_MARK_POLICIES, DRILL_PROFILE_DEFAULT, readPlotParams, plotParamsText, boardSetupChange, applyHeaderChange, applyBoardSetup, COPPER_FINISHES, COPPER_TYPES, USER_TYPES, BOARD_SETUP_TYPE };

@@ -234,5 +234,69 @@ test("DRC item table: KiCad's order, headings and default severities", () => {
   assert.strictEqual(new Set(D.filter((i) => i[1]).map((i) => i[1])).size, D.filter((i) => i[1]).length, "codes are unique");
 });
 
+// ---------------------------------------------------------------- Board Setup validation (ValidateDesignRules, ValidateViaParameters)
+test("validateDesignRules: KiCad's ranges and message, in the editor's units", () => {
+  assert.deepStrictEqual(B.validateDesignRules({ min_clearance: 0.2, max_error: 0.005, min_resolved_spokes: 2 }), []);
+  const e = B.validateDesignRules({ min_clearance: -5 });
+  assert.strictEqual(e.length, 1); assert.strictEqual(e[0].setting, "min_clearance");
+  assert.strictEqual(e[0].message, "Value must be between 0 mm and 25 mm.");
+  assert.strictEqual(B.validateDesignRules({ min_copper_edge_clearance: -0.02 })[0].message, "Value must be between -0.01 mm and 25 mm.");
+  assert.strictEqual(B.validateDesignRules({ max_error: 0.5 }, "mil")[0].message, "Value must be between 0.04 mils and 3.94 mils.");
+  assert.strictEqual(B.validateDesignRules({ min_resolved_spokes: 100 })[0].message, "Value must be between 0 and 99.");
+  assert.strictEqual(B.validateDesignRules({}, "mm", { pasteRatio: 1.5 })[0].setting, "solder_paste_margin_ratio");
+  assert.strictEqual(B.validateDesignRules({}, "mm", { maskExpansion: 30 })[0].setting, "solder_mask_expansion");
+});
+test("designRuleWarnings: a minimum via diameter under drill + 2 x annulus has no effect", () => {
+  assert.deepStrictEqual(B.designRuleWarnings({ min_via_diameter: 0.5, min_through_hole_diameter: 0.3, min_via_annular_width: 0.1 }), []);
+  const w = B.designRuleWarnings({ min_via_diameter: 0.4, min_through_hole_diameter: 0.3, min_via_annular_width: 0.1 });
+  assert.strictEqual(w.length, 1); assert.match(w[0].message, /effective minimum via diameter is 0.5 mm/);
+});
+test("validateViaParameters: KiCad's messages for a Pre-defined Sizes via row", () => {
+  assert.strictEqual(B.validateViaParameters(0.6, 0.3), null);
+  assert.strictEqual(B.validateViaParameters(0.6, NaN).message, "No via hole size defined.");
+  assert.strictEqual(B.validateViaParameters(NaN, 0.3).message, "No via diameter defined.");
+  assert.strictEqual(B.validateViaParameters(0, 0.3).message, "Via diameter is too small.");
+  assert.deepStrictEqual(B.validateViaParameters(0.3, 0.3), { message: "Via hole size must be smaller than via diameter", field: "drill" });
+});
+
+// ---------------------------------------------------------------- Physical Stackup, edited
+const STACK_SETUP = `(setup (stackup (layer "F.SilkS" (type "Top Silk Screen")) (layer "F.Mask" (type "Top Solder Mask") (thickness 0.01))
+  (layer "F.Cu" (type "copper") (thickness 0.035)) (layer "dielectric 1" (type "core") (thickness 1.51) (material "FR4") (epsilon_r 4.5) (loss_tangent 0.02))
+  (layer "B.Cu" (type "copper") (thickness 0.035)) (layer "B.Mask" (type "Bottom Solder Mask") (thickness 0.01)) (layer "B.SilkS" (type "Bottom Silk Screen"))
+  (copper_finish "None") (dielectric_constraints no)) (pad_to_mask_clearance 0))`;
+test("stackup: read, a dielectric sub-layer added, written back with addsublayer", () => {
+  const setup = B.boardHeader(`(kicad_pcb (version 20240108) (generator "t") ${STACK_SETUP})`).setup;
+  const L = B.stackupLayers(setup);
+  assert.strictEqual(L.length, 7); assert.strictEqual(B.stackupLayersThickness(L), 1.6);
+  const d = L.find((l) => l.name === "dielectric 1");
+  d.subs.push({ thickness: 0.1, material: "FR4", epsilonR: 4.5, lossTangent: 0.02 });
+  const text = B.stackupText(L, B.boardFinish(setup), true);
+  assert.match(text, /\(layer "dielectric 1" \(type "core"\) \(thickness 1\.51\) \(material "FR4"\) \(epsilon_r 4\.5\) \(loss_tangent 0\.02\) addsublayer \(thickness 0\.1\)/);
+  assert.match(text, /\(dielectric_constraints yes\)/);
+  const back = B.stackupLayers(B.setupWithStackup(setup, text));
+  assert.strictEqual(back.find((l) => l.name === "dielectric 1").subs.length, 1);
+  assert.strictEqual(B.stackupLayersThickness(back), 1.7);
+});
+test("adjustDielectrics: unlocked dielectrics take the rest; all locked is KiCad's message", () => {
+  const setup = B.boardHeader(`(kicad_pcb (version 20240108) (generator "t") ${STACK_SETUP})`).setup;
+  const L = B.stackupLayers(setup);
+  assert.strictEqual(B.stackupFixedThickness(L), 0.09);
+  assert.strictEqual(B.adjustDielectrics(L, 1.0), null);
+  assert.strictEqual(L.find((l) => l.name === "dielectric 1").thickness, 0.91);
+  L.find((l) => l.name === "dielectric 1").locked = true;
+  assert.strictEqual(B.adjustDielectrics(L, 1.6), "All dielectric  thickness layers are locked");
+});
+
+// ---------------------------------------------------------------- Drill Chart (drill_symbol_profile)
+test("drill profile: the default writes nothing; a change writes formatDrillSymbolProfile", () => {
+  const setup = B.boardHeader(`(kicad_pcb (version 20240108) (generator "t") (setup (pad_to_mask_clearance 0)))`).setup;
+  const p = B.drillProfile(setup);
+  assert.deepStrictEqual(p, B.DRILL_PROFILE_DEFAULT);
+  assert.ok(!/drill_symbol_profile/.test(B.sectionText(B.editSetup(setup, { drillProfile: p }))));
+  const edited = B.sectionText(B.editSetup(setup, { drillProfile: { ...p, groupBy: ["size", "plating"], size: 2 } }));
+  assert.match(edited, /\(drill_symbol_profile \(group_by size plating\) \(default_marks shapes_then_letters\) \(size 2\) \(width 0\.15\) \(freeze_assignments yes\)\)/);
+  assert.deepStrictEqual(B.drillProfile(B.boardHeader(`(kicad_pcb (version 1) ${edited})`).setup).groupBy, ["size", "plating"]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
