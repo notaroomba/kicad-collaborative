@@ -60,7 +60,7 @@ function walk(dir, base = "") {
   const out = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const rel = base ? `${base}/${e.name}` : e.name;
-    if (e.isDirectory()) { if (e.name !== "__pycache__" && e.name !== ".git") out.push(...walk(path.join(dir, e.name), rel)); }
+    if (e.isDirectory()) { if (e.name !== "__pycache__" && e.name !== ".git" && !(base === "" && e.name === "wheels" && dir === shimDir)) out.push(...walk(path.join(dir, e.name), rel)); }
     else if (e.isFile()) out.push(rel);
   }
   return out;

@@ -239,5 +239,20 @@
         "trimesh"
       ]
     }
+  ],
+  "built": [
+    {
+      "name": "grid-router",
+      "version": "0.23.7",
+      "file": "grid_router-0.23.7-cp39-abi3-pyemscripten_2026_0_wasm32.whl",
+      "sha256": "d4298e3e54098f8ab4a24ba29c0daf6c5df2677db59d335a2b48e32603de025f",
+      "imports": [
+        "grid_router"
+      ],
+      "depends": [
+        "numpy"
+      ],
+      "about": "The Rust router of KiCadRoutingTools (com.github.drandyhaas.kicadroutingtools, its rust_router folder, unchanged) built for the browser: pyodide build with Pyodide 314.0.7's cross-build environment, emscripten 5.0.3 and Rust 1.93.0 (RUSTUP_TOOLCHAIN=1.93.0), with a three-line maturin pyproject.toml beside its Cargo.toml. The plugin ships this core only for Windows, macOS and Linux."
+    }
   ]
 }

@@ -117,6 +117,31 @@ class Finder(importlib.abc.MetaPathFinder):
         return importlib.machinery.ModuleSpec(fullname, _Loader())
 
 
+def numpy_wide_counts():
+    """numpy on a 32-bit machine (WebAssembly is one) refuses 64-bit counts where the desktop takes them.
+
+    Plugins are written on 64-bit computers, where an integer array is 64-bit by default; here numpy's own index type
+    is 32-bit, and `np.repeat(values, counts)` with 64-bit counts stops with "Cannot cast array data from int64 to
+    int32".  The counts are narrowed when every one of them fits, which is the same result the desktop gives."""
+    import numpy as np
+    if np.dtype(np.intp).itemsize >= 8 or getattr(np.repeat, "_kc_wide", False):
+        return
+    from numpy._core import fromnumeric
+    plain = np.repeat
+
+    def repeat(a, repeats, axis=None):
+        r = np.asarray(repeats)
+        if r.dtype.kind in "iu" and r.dtype.itemsize > np.dtype(np.intp).itemsize:
+            if r.size and int(r.max()) > np.iinfo(np.intp).max:
+                raise ValueError("repeat counts do not fit this machine's index type")
+            repeats = r.astype(np.intp)
+        return plain(a, repeats, axis)
+
+    repeat._kc_wide = True
+    repeat.__doc__ = plain.__doc__
+    np.repeat = fromnumeric.repeat = repeat
+
+
 def install():
     if not any(isinstance(f, Finder) for f in sys.meta_path):
         sys.meta_path.insert(0, Finder())

@@ -44,7 +44,7 @@ const MAX_INDEX_BYTES: usize = 24 * 1024 * 1024;
 const MAX_ZIP_BYTES: usize = 24 * 1024 * 1024;
 /// What one Python plugin may hold once unpacked (plugins.rs enforces the same on install).
 pub const MAX_PY_FILES: usize = 1500;
-pub const MAX_PY_BYTES: usize = 12 * 1024 * 1024;
+pub const MAX_PY_BYTES: usize = 40 * 1024 * 1024;
 const MAX_ONE_FILE: usize = 4 * 1024 * 1024;
 
 /// The permissions every KiCad Python plugin is given: what `pcbnew` and `wx` need.  One that talks to
@@ -387,6 +387,12 @@ fn is_text(path: &str, body: &[u8]) -> bool {
     TEXT.contains(&ext.as_str()) && !body.contains(&0) && std::str::from_utf8(body).is_ok()
 }
 
+/// A compiled library or program for a desktop operating system.
+fn is_native(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "so" | "pyd" | "dylib" | "dll" | "exe")
+}
+
 /// A file name the Python runtime can be handed (it only ever names a file in the sandbox's own memory).
 pub fn valid_py_path(p: &str) -> bool {
     !p.is_empty() && p.len() <= 240 && !p.starts_with('/') && !p.contains("..") && !p.contains("//") && !p.contains('\\') && p.chars().all(|c| !c.is_control())
@@ -407,6 +413,12 @@ fn unpack(zip_bytes: Vec<u8>) -> AppResult<Map<String, Value>> {
         if !wanted || !valid_py_path(&name) || name.contains("/__pycache__/") || name.ends_with(".pyc") || name.contains("/.git/") {
             continue;
         }
+        // Machine code for Windows, macOS or Linux cannot load in a browser.  Its name is kept, empty, so a plugin that
+        // looks for the file still finds one and the runtime can tell which compiled module the plugin expects.
+        if is_native(&name) {
+            files.insert(name, Value::String(String::new()));
+            continue;
+        }
         if entry.size() as usize > MAX_ONE_FILE {
             continue;
         }
@@ -418,7 +430,7 @@ fn unpack(zip_bytes: Vec<u8>) -> AppResult<Map<String, Value>> {
         let stored = if is_text(&name, &body) { String::from_utf8(body).unwrap_or_default() } else { format!("base64:{}", base64::engine::general_purpose::STANDARD.encode(&body)) };
         total += stored.len();
         if total > MAX_PY_BYTES || files.len() >= MAX_PY_FILES {
-            return Err(bad("this plugin is larger than the web editor can hold (12 MB unpacked)"));
+            return Err(bad("this plugin is larger than the web editor can hold (40 MB unpacked)"));
         }
         files.insert(name, Value::String(stored));
     }

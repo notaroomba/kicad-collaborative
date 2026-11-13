@@ -29,7 +29,7 @@ for (const f of ["occt-import-js.js", "occt-import-js.wasm"]) {
   if (!fs.existsSync(dst) || fs.statSync(dst).size !== fs.statSync(src).size) fs.copyFileSync(src, dst);
 }
 const shim = path.join(server, "plugins", "python"); const files = {};
-const walk = (dir, base) => { for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const rel = base ? base + "/" + e.name : e.name; if (e.isDirectory()) { if (e.name !== "__pycache__") walk(path.join(dir, e.name), rel); } else if (e.name.endsWith(".py")) files[rel] = fs.readFileSync(path.join(dir, e.name), "utf8"); } };
+const walk = (dir, base) => { for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) { const rel = base ? base + "/" + e.name : e.name; if (e.isDirectory()) { if (e.name !== "__pycache__" && e.name !== "wheels") walk(path.join(dir, e.name), rel); } else if (e.name.endsWith(".py")) files[rel] = fs.readFileSync(path.join(dir, e.name), "utf8"); } };
 walk(shim, "");
 // Browser-side helpers the shims load into the plugin's frame: the animation encoders (ffmpeg's stand-in) and the WebGL end of the OpenGL shim.
 for (const [name, entry] of [["kicad_media.js", "web/plugins/media.ts"], ["kicad_gl.js", "web/plugins/glfixed.ts"], ["kicad_spice.js", "web/plugins/spice.ts"]]) {
@@ -148,6 +148,15 @@ for (const p of want.pypi) {
     catch (err) { console.warn(`python runtime: ${p.name} is not available (${String(err && err.message || err).slice(0, 120)})`); missing.push(p.name); continue; }
   }
   packages[p.name] = { depends: p.depends, file_name: p.file, imports: p.imports, install_dir: "site", name: p.name, package_type: "package", sha256: hash, tool: {}, unvendored_tests: false, version: p.version };
+}
+// Compiled packages built for this interpreter and kept in the repository (plugins/python/wheels): a plugin's own native
+// core that no package index has for the browser.  packages.json says how each was built; the file's hash is checked.
+for (const p of want.built || []) {
+  const buf = fs.readFileSync(path.join(shim, "wheels", p.file));
+  if (sha(buf) !== p.sha256) throw new Error(`${p.file} does not match the pinned SHA-256`);
+  for (const d of p.depends) await fromLock(d);
+  if (!have(p.file, p.sha256)) fs.writeFileSync(path.join(out, p.file), buf);
+  packages[p.name] = { depends: p.depends, file_name: p.file, imports: p.imports, install_dir: "site", name: p.name, package_type: "package", sha256: p.sha256, tool: {}, unvendored_tests: false, version: p.version };
 }
 for (const name of want.pyodide) if (!want.pypi.some((q) => q.name === name)) await fromLock(name);
 for (const name of Object.keys(packages)) packages[name] = { ...packages[name], depends: packages[name].depends.map((d) => lockName.get(norm(d)) || d).filter((d) => packages[d]) };

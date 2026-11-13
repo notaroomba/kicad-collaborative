@@ -391,6 +391,41 @@ if (only('orthoroute')) {
   } catch (e) { check('OrthoRoute runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.bbenchoff.orthoroute', 30)); await shot('real-orthoroute-fail'); }
 }
 
+// ---- KiCad Routing Tools: a wx window; its Rust router (grid_router, built for the browser) routes the nets ticked on
+// its Route tab and the tracks go on the board
+if (only('kicadroutingtools')) {
+  const ID = 'com.github.drandyhaas.kicadroutingtools';
+  try {
+    const six = await project('six-layer-unrouted', 'server/scripts/plugin-drives/boards', 'six-layer-unrouted');
+    await page.goto(`${BASE}${six}`); await editorReady();
+    const count = () => page.evaluate(() => { const its = Array.from(window.CollabEditor.kdoc.items.values()); return { tracks: its.filter((it) => it.kind === 'segment').length, vias: its.filter((it) => it.kind === 'via').length }; });
+    const c0 = await count();
+    check('Routing Tools: the test board starts unrouted', c0.tracks === 0 && c0.vias === 0, JSON.stringify(c0));
+    const actions = await install(ID);
+    await runAction(ID, actions[0]);
+    const f = await frameOf(ID);
+    await f.waitForSelector('text=/^Route$/', { timeout: 240000 });
+    await page.waitForTimeout(1500);
+    await shot('real-routingtools-window');
+    if (process.env.KRT_DUMP) console.log('DUMP ' + JSON.stringify(await f.evaluate(() => Array.from(document.querySelectorAll('button, [role=tab]')).map((b) => { const r = b.getBoundingClientRect(); return [b.tagName, b.className, (b.textContent || '').trim().slice(0, 30), Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height), b.disabled]; }))) + ' WIN ' + JSON.stringify(await f.evaluate(() => [innerWidth, innerHeight, document.documentElement.scrollHeight])));
+    for (const net of ['SIG_A', 'SIG_B', 'SIG_C', 'SIG_D']) await f.locator('label, .wx-check-item, li', { hasText: new RegExp(`^\\s*${net}\\s*$`) }).first().locator('input[type=checkbox]').check();
+    await shot('real-routingtools-picked');
+    await f.locator('button', { hasText: /^Route$/ }).nth(1).click();          // the first is the tab of that name
+    await page.waitForSelector('#pluginPrompt', { timeout: +(process.env.KRT_WAIT || 420000) });
+    const said = await page.locator('#pluginPrompt').innerText();
+    check('Routing Tools: its router reports all four nets routed', /Successfully routed: 4 nets/.test(said) && /Failed: 0/.test(said), said.slice(0, 300) + ' ' + await logTail(ID, 8));
+    await shot('real-routingtools-routed');
+    await page.click('#pluginPrompt .btn.primary');
+    await page.waitForTimeout(1500);
+    const c1 = await count();
+    const added = /Added to board:\s*(\d+) segments,?\s*(\d+) vias/.exec(said) || [];
+    check('Routing Tools: the tracks it reports are on the board', c1.tracks === +added[1] && c1.vias === +added[2] && c1.tracks >= 8, `${said.slice(0, 200)} board: ${JSON.stringify(c1)}`);
+    console.log(`      (${c1.tracks} tracks, ${c1.vias} vias)`);
+    await page.keyboard.press('Escape').catch(() => {});
+    await shot('real-routingtools-applied');
+  } catch (e) { check('Routing Tools runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.drandyhaas.kicadroutingtools', 30)); await shot('real-routingtools-fail'); }
+}
+
 // ---- Board2Pdf: PLOT_CONTROLLER plots each layer of each template to a PDF with the editor's File → Plot writer; the plugin's
 // own PyPDF4 recolours and merges them into one assembly document
 if (only('Board2Pdf')) {

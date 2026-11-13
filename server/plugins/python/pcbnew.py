@@ -2322,6 +2322,29 @@ class SHAPE_LINE_CHAIN:
                 inside = not inside
         return inside
 
+    def SquaredDistance(self, point, outline_only=False):
+        """As KiCad's: nothing for a point inside a closed chain (unless only the outline counts), else the square of
+        the distance to the nearest segment."""
+        p = VECTOR2I(point)
+        if self._closed and not outline_only and self.PointInside(p):
+            return 0
+        best = None
+        n = len(self._pts)
+        for i in range(n if self._closed else n - 1):
+            a, b = self._pts[i], self._pts[(i + 1) % n]
+            vx, vy = b.x - a.x, b.y - a.y
+            ll = vx * vx + vy * vy
+            t = 0.0 if ll == 0 else max(0.0, min(1.0, ((p.x - a.x) * vx + (p.y - a.y) * vy) / ll))
+            dx, dy = p.x - a.x - t * vx, p.y - a.y - t * vy
+            d = dx * dx + dy * dy
+            best = d if best is None or d < best else best
+        if best is None:
+            best = float((p.x - self._pts[0].x) ** 2 + (p.y - self._pts[0].y) ** 2) if self._pts else 0.0
+        return int(round(best))
+
+    def Distance(self, point, outline_only=False):
+        return int(round(_math.sqrt(self.SquaredDistance(point, outline_only))))
+
     def Move(self, d):
         self._pts = [p + d for p in self._pts]
 
@@ -3417,7 +3440,12 @@ class PAD(BOARD_CONNECTED_ITEM):
     def IsNoConnectPad(self):
         return self.GetPinType().endswith("no_connect")
 
-    def GetEffectivePolygon(self, *_):
+    def BuildEffectivePolygon(self, *_a, **_k):
+        """KiCad caches the pad's polygon here; this one is worked out each time it is asked for."""
+
+    BuildEffectiveShapes = BuildEffectivePolygon
+
+    def GetEffectivePolygon(self, *_a, **_k):
         """The pad's outline as a polygon: exact for rectangles, 24 sides for round ends."""
         p, s = self.GetPosition(), self.GetSize()
         rot = self.GetOrientation().AsDegrees()

@@ -142,8 +142,8 @@
   "note": "Its check runs on the web editor's Design Rules Checker, which covers fewer rules than KiCad's desktop DRC. Zones are refilled first by the web editor's own filler. Read a pass as a first check, not as KiCad's verdict."
  },
  "com.github.drandyhaas.kicadroutingtools": {
-  "status": "unsupported",
-  "note": "Its window opens, but routing is done by its own compiled Rust core (grid_router), which the package ships only for Windows, macOS and Linux. Its source is in the package; it has not been built for the browser yet."
+  "status": "works",
+  "note": "Routes the nets you tick on its Route tab with its own Rust router, built here for the browser, and puts the tracks on the board. Checked on a six-layer test board: four crossing nets routed, each joining its pads without touching another net."
  },
  "com.github.drewsum.kipi": {
   "status": "unsupported",
@@ -347,8 +347,8 @@
   "status": "works"
  },
  "sierra.kicad.order": {
-  "status": "partly",
-  "note": "It runs. What it sends to a web service goes through this server once you grant it network access; the test machine has no network, so that part is untested."
+  "status": "works",
+  "note": "Runs here. What it sends was checked against a stand-in for Sierra Circuits' service built from the plugin's own code, not against the live service: as a guest it fills the quote from the board (size, layers, hole count), uploads the board file, shows the prices answered and opens the order page for the price chosen. Needs network access granted."
  },
  "vn.thanhduongvs.component-position": {
   "status": "works"

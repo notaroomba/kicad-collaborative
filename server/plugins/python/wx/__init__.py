@@ -2121,6 +2121,19 @@ class Window(EvtHandler):
                 return r
         return None
 
+    def Create(self, parent=None, id=ID_ANY, pos=DefaultPosition, size=DefaultSize, style=0, *more, **kw):
+        """The second step of wxWidgets' two-step creation: a window made with no arguments is given its parent here."""
+        if isinstance(parent, Window) and parent is not self._wx_parent:
+            self.Reparent(parent)
+        if isinstance(style, int) and style:
+            self._wx_style = style
+        try:
+            if size is not DefaultSize and tuple(size)[:2] != (-1, -1):
+                self.SetMinSize(size)
+        except Exception:
+            pass
+        return True
+
     def Reparent(self, parent):
         if self._wx_parent is not None and self in self._wx_parent._wx_children:
             self._wx_parent._wx_children.remove(self)
@@ -2725,9 +2738,16 @@ class Button(_Labelled):
         return self
 
     def SetBitmap(self, bmp, *_):
+        self._wx_bitmap = bmp
         _set_img(self.el, bmp, self._wx_label)
 
     SetBitmapLabel = SetBitmap
+
+    def GetBitmap(self):
+        b = getattr(self, "_wx_bitmap", None)
+        return b if b is not None else NullBitmap
+
+    GetBitmapLabel = GetBitmap
     SetBitmapMargins = SetBitmapPosition = lambda self, *a: None
 
     def SetAuthNeeded(self, *_):
@@ -4726,7 +4746,7 @@ class TopLevelWindow(Window):
             _top_windows.remove(self)
         return Window.Destroy(self)
 
-    def Centre(self, *_):
+    def Centre(self, *_, **_k):
         pass
 
     Center = CentreOnParent = CenterOnParent = CentreOnScreen = CenterOnScreen = Centre

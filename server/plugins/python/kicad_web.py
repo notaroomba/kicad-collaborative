@@ -943,6 +943,32 @@ def install_files(identifier, files):
     return pkg
 
 
+def _prefer_runtime_binaries(base):
+    """A plugin's compiled core that the runtime carries built for the browser is imported before the plugin starts.
+
+    Such a plugin ships the core as machine code for Windows, macOS and Linux and puts its folder on the path; none of
+    those files can load here, and one of them would hide the module that can.  Importing the runtime's own build first
+    keeps it: Python then hands that module to every later `import` of the name."""
+    import importlib
+    import importlib.util
+    import re
+    names = set()
+    for _root, _dirs, files in os.walk(base):
+        for f in files:
+            m = re.match(r"^([A-Za-z_]\w*)[-.].*\.(?:so|pyd|dylib)$", f)
+            if m:
+                names.add(m.group(1))
+    for name in sorted(names):
+        if name in sys.modules:
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+            if spec is not None and "site-packages" in str(spec.origin or ""):
+                importlib.import_module(name)
+        except Exception as e:
+            log.warning("the runtime's build of %s did not load: %s", name, e)
+
+
 _IMPORT = __import__("re").compile(r"^[ \t]*(?:import[ \t]+([\w.]+(?:[ \t]*,[ \t]*[\w.]+)*)|from[ \t]+([\w.]+)[ \t]+import)", __import__("re").M)
 
 
@@ -1082,6 +1108,14 @@ def boot(identifier, files, bridge=None, name=""):
     logging.basicConfig(level=logging.DEBUG if os.environ.get("KICAD_WEB_DEBUG") else logging.WARNING, format="%(levelname)s %(name)s: %(message)s", force=True)
     base = f"{PLUGIN_DIR}/{pkg}"
     ipc = _ipc_manifest(base)
+    _prefer_runtime_binaries(base)
+    try:
+        import importlib.util
+        if importlib.util.find_spec("numpy") is not None:        # loaded for this plugin: it imports numpy
+            import kicad_compat
+            kicad_compat.numpy_wide_counts()
+    except Exception as e:
+        log.warning("numpy could not be prepared: %s", e)
     try:
         if os.path.exists(f"{base}/__init__.py"):
             pcbnew.LoadPluginModule(PLUGIN_DIR, pkg, pkg)

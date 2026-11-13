@@ -69,7 +69,7 @@ export const MAX_FILES = 40, MAX_BYTES = 2 * 1024 * 1024;
 
 /** One of KiCad's own Python plugins (installed from KiCad's repository, run by the Python runtime in the sandbox). */
 export const isPython = (m: { runtime?: { type?: string } } | null | undefined): boolean => !!m && !!m.runtime && m.runtime.type === "kicad-python";
-export const PY_MAX_FILES = 1500, PY_MAX_BYTES = 12 * 1024 * 1024;
+export const PY_MAX_FILES = 1500, PY_MAX_BYTES = 40 * 1024 * 1024;
 const pyPath = (p: unknown): p is string => typeof p === "string" && p.length > 0 && p.length <= 240 && !p.startsWith("/") && !p.includes("..") && !p.includes("//") && !p.includes("\\") && !/[\u0000-\u001f]/.test(p);
 
 export const isNetwork = (p: string) => p.startsWith("network:");
@@ -159,7 +159,7 @@ export function validateFiles(m: PluginManifest, files: Record<string, string>):
   if (isPython(m)) {
     if (names.length > PY_MAX_FILES) bad.push(`a plugin holds at most ${PY_MAX_FILES} files`);
     let size = 0; for (const n of names) { if (!pyPath(n)) bad.push(`"${n}" is not an acceptable file name`); size += files[n].length; }
-    if (size > PY_MAX_BYTES) bad.push("the plugin is larger than 12 MB");
+    if (size > PY_MAX_BYTES) bad.push("the plugin is larger than 40 MB");
     if (!names.some((n) => n.startsWith("plugins/"))) bad.push("a KiCad Python plugin keeps its code under plugins/");
     return bad;
   }
