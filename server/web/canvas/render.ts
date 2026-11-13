@@ -751,7 +751,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     if (anchors) drawFieldAnchors(ctx, anchors, s, dpr, false);   // LAYER_SCHEMATIC_ANCHOR, over the items
   }
   // DRC / ERC markers: above everything but the selection (GAL_LAYER_ORDER: LAYER_SELECT_OVERLAY, then LAYER_DRC_*)
-  if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
+  if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg), isPcb ? 0 : SCH_SELECTION_THICKNESS * Math.max(1, dpr) / s + SCH_SELECTION_THICKNESS * MIL);
   if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -1103,7 +1103,11 @@ export function drawRatsnest(ctx: Ctx2D, lines: RatsLine[], nets: Set<number> | 
 /** MARKER_BASE::ShapeToPolygon at a position: the corners × scale (mm), closed. */
 export function markerPolygon(m: { x: number; y: number }, scale: number): number[][] { return MARKER_CORNERS.map(([px, py]) => [m.x + px * scale, m.y + py * scale]); }
 
-export function drawMarkers(ctx: Ctx2D, markers: (Marker | null)[], docType: string, scale: number, bg: string): void {
+/**
+ * `selShadowW`: a schematic marker that is selected also gets SCH_PAINTER::draw( SCH_MARKER )'s LAYER_SELECTION_SHADOWS
+ * pass first, its polygon stroked in the selection colour at the shadow width (mm).
+ */
+export function drawMarkers(ctx: Ctx2D, markers: (Marker | null)[], docType: string, scale: number, bg: string, selShadowW = 0): void {
   const colors = MARKER_COLORS[docType === "sch" ? "sch" : "pcb"];
   const [br, bgc, bb] = parseColor(bg); const shadow = rgba(br, bgc, bb, 0.5);   // LAYER_MARKER_SHADOWS = background @ 0.5
   ctx.save(); ctx.globalAlpha = 1; ctx.setLineDash([]); ctx.lineJoin = "round";
@@ -1113,6 +1117,7 @@ export function drawMarkers(ctx: Ctx2D, markers: (Marker | null)[], docType: str
     for (let i = 0; i < MARKER_CORNERS.length; i++) { const px = m.x + MARKER_CORNERS[i][0] * scale, py = m.y + MARKER_CORNERS[i][1] * scale; if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }
     ctx.closePath();
     if (docType !== "sch") { ctx.strokeStyle = shadow; ctx.lineWidth = scale; ctx.stroke(); }
+    else if (m.selected && selShadowW > 0) { ctx.strokeStyle = SCH.selection; ctx.lineWidth = selShadowW; ctx.stroke(); }
     // a selected or brightened board marker takes LAYER_DRC_HIGHLIGHTED (PCB_RENDER_SETTINGS::GetColor)
     ctx.fillStyle = docType !== "sch" && (m.selected || m.brightened) ? DRC_HIGHLIGHTED : colors[m.severity as string] || colors.error; ctx.fill();
   }

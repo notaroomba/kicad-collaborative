@@ -28,7 +28,7 @@ import { dragKeeps, dragModifier, selModifier } from "./selmodes";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
-import { DRAG_THRESHOLD_PX, cancelInteraction, clearAllSelection, rotateFieldMove, startFieldMove, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
+import { DRAG_THRESHOLD_PX, cancelInteraction, clearAllSelection, markerUnder, rotateFieldMove, startFieldMove, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
 import { sendOp } from "./net";
 import { applyTheme, syncSchModes } from "./panes";
@@ -131,6 +131,8 @@ stage.addEventListener("dblclick", (ev) => {
   if (!E.kdoc || !window.KDialogs || (E.tool !== "select" && E.tool !== "highlight")) return;
   if ((ev.target as Element).closest("#cmtPanel") || (ev.target as Element).closest("[data-schtools]")) return;
   const [x, y] = worldMm(ev); const ctx = toolCtx();
+  // SCH_EDIT_TOOL::Properties on a SCH_MARKER_T: SCH_INSPECTION_TOOL::CrossProbe brings the ERC dialog up on its row
+  if (isSch()) { const mk = markerUnder([x, y]); const hk = E.hooks as { ercOpenMarker?: (m: unknown) => void }; if (mk && hk.ercOpenMarker) { hk.ercOpenMarker(mk); return; } }
   // PCB_SELECTION_TOOL: a double-click when the selection is a lone group enters it (and picks the item under the cursor)
   if (!isSch() && CollabTools.pcb && CollabTools.pcb.enterGroupAt && CollabTools.pcb.selectedTopGroup) {
     try { const gid = CollabTools.pcb.selectedTopGroup(ctx); const h = gid ? hitAny([x, y]) : null; if (h && CollabTools.pcb.enterGroupAt(ctx, h.id)) { selectionChanged(); return; } } catch (e) { console.warn(e); }

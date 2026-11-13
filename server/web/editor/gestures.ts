@@ -64,9 +64,19 @@ export function selectionItems(): KItem[] { const d = doc(); return d ? selectio
 /** Publish a changed selection: halo, Properties pane, Objects tab. */
 export function selectionChanged(): void { drawSelection(); renderProps(); renderObjects(); requestRender(); }
 
+/** The ERC marker drawn under a point (the markers the View options show), or null. */
+export function markerUnder(mm: Mm): Marker | null {
+  if (!isSch()) return null;
+  const ro = (E.renderOpts || {}) as { showErcExclusions?: boolean; showErcWarnings?: boolean; showErcErrors?: boolean };
+  const list = ((E.markers || []) as Marker[]).filter((m) => m && (m.severity === "exclusion" ? ro.showErcExclusions === true : m.severity === "warning" ? ro.showErcWarnings !== false : ro.showErcErrors !== false));
+  const scale = (KiCadCanvas.MARKER_SCALE as { sch: number }).sch;
+  return (KiCadCanvas.markerAt as (l: Marker[], x: number, y: number, tol: number, s: number) => Marker | null)(list, mm[0], mm[1], 0, scale);
+}
+type Marker = { x: number; y: number; severity?: string; selected?: boolean };
 /** KiCad's ClearSelection(): nothing stays selected anywhere. */
 export function clearAllSelection(publish = true): void {
   clearSelection();
+  if (isSch() && ((E.markers || []) as Marker[]).some((m) => m && m.selected)) { for (const m of E.markers as Marker[]) if (m) delete m.selected; requestRender(); }
   const p = pcbState(); if (p && p.sel && p.sel.size) p.sel.clear();
   const s = schState(); if (s) { s.sel = null; s.hover = null; s.selEnds = null; }
   E.hoverId = null;
@@ -484,6 +494,16 @@ function onDownCapture(ev: PointerEvent): void {
     E.rdown = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
     try { stage.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
     return;
+  }
+  // SCH_SELECTION_TOOL: an ERC marker under the cursor is selected (SCH_MARKER_T is always selectable) and the ERC
+  // dialog, when open, picks its row (SCH_INSPECTION_TOOL::CrossProbe)
+  if (ev.button === 0 && isSch() && E.tool === "select" && !interactionBusy() && !ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    const m = markerUnder(worldMm(ev));
+    if (m) {
+      ev.preventDefault(); ev.stopImmediatePropagation();
+      clearAllSelection(false); const hk = E.hooks as { ercSelectMarker?: (m: unknown) => void }; if (hk.ercSelectMarker) hk.ercSelectMarker(m);
+      selectionChanged(); return;
+    }
   }
   // a click drops an item that is following the cursor after Move / M
   if (ev.button === 0 && E.drag && E.drag.sticky && finishDrag) {

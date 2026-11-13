@@ -238,6 +238,7 @@ function schSelectionMenu(): CondMenu {
   // SCH_GROUP_TOOL::Init (GROUP_TOOL)
   m.sub(GROUP_MENU, notEmpty, 100);
   // SCH_INSPECTION_TOOL::Init
+  m.item("ACTIONS::excludeMarker", (c) => c.kinds.length === 1 && c.kinds[0] === "marker", 100);   // SCH_CONDITIONS::SingleNonExcludedMarker
   m.item("ACTIONS::showDatasheet", and(schSingleSymbol, idle), 220);
   // SCH_EDIT_TABLE_TOOL::Init
   addTableMenus(m);

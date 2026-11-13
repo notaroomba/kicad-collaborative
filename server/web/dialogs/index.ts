@@ -10,10 +10,11 @@ import { installSchItemDialogs } from "./sch-items";
 import { installSimModel } from "./sim-model";
 import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
-import { ercNextMarker, ercPrevMarker, openErc } from "./erc";
+import { applyExclusions, ercCrossProbe, ercExcludeMarker, ercNextMarker, ercPrevMarker, findNextMarker, openErc, selectMarker, type ErcViolation } from "./erc";
+import { syntaxHelp } from "../editor/syntax-help";
 import { applySeverities } from "./erc-rules";
 import { openFieldsTable } from "./fields-table";
-import { openFind } from "./find";
+import { findNext as schFindNext, openFind } from "./find";
 import { installGroups } from "./groups";
 import * as logic from "./logic";
 import { commitPageSettings, openPageSettings } from "./page-settings";
@@ -44,7 +45,7 @@ function wrapErc(): void {
   const run = a.run;
   a.run = (ctx, opts) => {
     const erc = obj(projectJson().erc), sev = obj(erc.rule_severities) as Record<string, unknown>;
-    const wrapped = Object.assign({}, ctx, { setMarkers(list: Marker[]) { const kept = applySeverities(list, sev); sch.state.markers = kept; (ctx as ToolCtx & { setMarkers(l: Marker[]): void }).setMarkers(kept); },
+    const wrapped = Object.assign({}, ctx, { setMarkers(list: Marker[]) { const kept = applyExclusions(applySeverities(list, sev) as unknown as ErcViolation[]) as unknown as Marker[]; sch.state.markers = kept; (ctx as ToolCtx & { setMarkers(l: Marker[]): void }).setMarkers(kept); },
       toast(msg: string, ms?: number) { const m = (sch.state.markers as Marker[] | undefined) || []; if (/^ERC: /.test(msg)) { const e = m.filter((x) => x.severity === "error").length, w = m.length - e; ctx.toast(m.length ? `ERC: ${e} error${e === 1 ? "" : "s"}, ${w} warning${w === 1 ? "" : "s"}` : "ERC: no problems found", ms); } else ctx.toast(msg, ms); } });
     return run(wrapped as ToolCtx, Object.assign({ pinMap: Array.isArray(erc.pin_map) ? erc.pin_map : undefined }, opts || {}));
   };
@@ -65,8 +66,12 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     pageSettings: needDoc(openPageSettings),
     find: ((a?: Parameters<Handler>[0]) => { if (E.kdoc && isSch()) openFind(false); else if (E.kdoc && !(E.kdoc as KDoc).fpEditor) openBoardFind(); else if (find) find(a); }) as Handler,   // the footprint editor has no Find (FOOTPRINT_EDIT_FRAME)
     // ACTIONS::findNext / findPrevious (F3 / Shift+F3)
-    findNext: (() => { if (E.kdoc && !isSch() && !(E.kdoc as KDoc).fpEditor) boardFindNext(false); }) as Handler,
-    findPrevious: (() => { if (E.kdoc && !isSch() && !(E.kdoc as KDoc).fpEditor) boardFindNext(true); }) as Handler,
+    findNext: (() => { if (E.kdoc && isSch()) void schFindNext(false); else if (E.kdoc && !(E.kdoc as KDoc).fpEditor) boardFindNext(false); }) as Handler,
+    findPrevious: (() => { if (E.kdoc && isSch()) void schFindNext(true); else if (E.kdoc && !(E.kdoc as KDoc).fpEditor) boardFindNext(true); }) as Handler,
+    // ACTIONS::findNextMarker (Ctrl+Shift+F3): SCH_FIND_REPLACE_TOOL::FindNext with markersOnly
+    findNextMarker: (() => { if (E.kdoc && isSch()) findNextMarker(); }) as Handler,
+    // SCH_INSPECTION_TOOL::ShowBusSyntaxHelp: SCH_TEXT::ShowSyntaxHelp's HTML box
+    showBusSyntaxHelp: (() => syntaxHelp(false)) as Handler,
     findAndReplace: needDoc(() => openFind(true), true),
     editSymbolFields: needDoc(() => openFieldsTable(false), true),
     // the board editor's File > Fabrication Outputs > Bill of Materials is the fabrication package; the schematic's is the fields table
@@ -76,6 +81,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
     runERC: needDoc(openErc, true),
     prevMarker: ercPrevMarker as Handler, nextMarker: ercNextMarker as Handler,   // the schematic's; the board's are the module's (EDITOR_ONLY)
+    excludeMarker: (() => { if (E.kdoc && isSch()) ercExcludeMarker(); }) as Handler,
     annotate: needDoc(openAnnotate, true),
     // DIALOG_CHANGE_SYMBOLS: Edit > Change Symbols…, Tools > Update Symbols from Library…, the symbol context menu
     changeSymbols: needDoc(() => openChangeSymbols("change"), true), changeSymbol: needDoc(() => openChangeSymbols("change"), true),
@@ -86,6 +92,11 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     gridProperties: (() => openPreferences(GRID_PAGE[editorId()])) as Handler,
   });
   installGroups(); wrapErc(); installSchItemDialogs(); installSimModel();
+  // the canvas side of a selected ERC marker (SCH_INSPECTION_TOOL::CrossProbe): gestures.ts / index.ts ask here
+  Object.assign((E as unknown as { hooks: Record<string, unknown> }).hooks, {
+    ercSelectMarker: (m: ErcViolation | null) => { selectMarker(m); if (m) ercCrossProbe(m, false); },
+    ercOpenMarker: (m: ErcViolation) => { selectMarker(m); ercCrossProbe(m, true); },
+  });
   // the old one-sheet fields table action now opens the full dialog
   const sch = CollabTools.sch as (SchToolModule & { actions: Record<string, { run(ctx: ToolCtx): unknown }> }) | undefined;
   if (sch && sch.actions && sch.actions.fieldsTable) sch.actions.fieldsTable.run = () => { openFieldsTable(false); return true; };
@@ -100,6 +111,9 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     if (mod && !ev.shiftKey && k === "f" && isSch()) run = () => openFind(ev.altKey);
     else if (mod && !ev.shiftKey && !ev.altKey && k === "f" && !(E.kdoc as KDoc).fpEditor) run = () => openBoardFind();
     else if (ev.key === "F3" && !mod && !ev.altKey && !isSch() && !(E.kdoc as KDoc).fpEditor) run = () => boardFindNext(ev.shiftKey);
+    // ACTIONS::findNext (F3), findPrevious (Shift+F3), findNextMarker (Ctrl+Shift+F3): SCH_FIND_REPLACE_TOOL::FindNext
+    else if (ev.key === "F3" && !mod && !ev.altKey && isSch()) run = () => { void schFindNext(ev.shiftKey); };
+    else if (ev.key === "F3" && mod && ev.shiftKey && !ev.altKey && isSch()) run = () => { findNextMarker(); };
     else if (mod && !ev.altKey && !ev.shiftKey && ev.key === ",") run = () => openPreferences();
     else if (mod && ev.shiftKey && !ev.altKey && k === "g") run = () => HANDLERS.toggleGridOverrides();
     else if (ev.altKey && !mod && !ev.shiftKey && (ev.key === "1" || ev.key === "2")) run = () => { const mm = fastGrid(ev.key === "1" ? 1 : 2); if (mm) toast("Grid: " + gridLabel(mm)); };

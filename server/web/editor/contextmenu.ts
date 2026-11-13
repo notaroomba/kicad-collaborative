@@ -16,7 +16,7 @@ import { canComment, commentOnItem, commentOnNet, netOfItem, showThread, startTh
 import { APP_TOOLS, state, store } from "./appstore";
 import { enterSheet, rootSchematic, setGridPitch } from "./doc";
 import { ARC_EDIT_MODE_MENU, evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
-import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startFieldMove, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
+import { activeModuleTool, clearAllSelection, hitsAt, markerUnder, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startFieldMove, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
 import { HIT_PX, nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
@@ -76,6 +76,7 @@ function menuCtx(): MenuCtx {
   const items = selectionItems(), s = schState(), p = pcbState(), sch = isSch();
   const kinds = items.map(kindOf); if (E.selField && !kinds.length) kinds.push("field"); if (E.selPins.length && !kinds.length) for (let i = 0; i < E.selPins.length; i++) kinds.push("pin");
   const cells = tableMenu.state(); if (cells) for (let i = 0; i < cells.n; i++) kinds.push("table_cell");   // PCB_TABLECELL_T / SCH_TABLECELL_T
+  if (sch && !kinds.length) { const mk = ((E.markers || []) as { selected?: boolean; excluded?: boolean }[]).find((m) => m && m.selected); if (mk) kinds.push(mk.excluded ? "marker_excluded" : "marker"); }   // SCH_MARKER_T
   const draw = sch ? (s && s.draw) : (p && p.draw);
   const n = draw && Array.isArray(draw.pts) ? draw.pts.length : 0;
   const outline = !!draw && (sch ? draw.shape === "polygon" || draw.shape === "rulearea" : ["gpoly", "zone", "thievingzone", "rulearea"].includes(draw.shape));
@@ -454,6 +455,11 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
   const mm = worldMm(ev);
   E.lastCursorMm = mm;
   if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy() && tableMenu.pick(mm)) { /* a table cell under the cursor (selectPoint collects cells) */ }
+  else if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy() && isSch() && markerUnder(mm)) {
+    // an ERC marker under the cursor is the selection (SCH_SELECTION_TOOL collects SCH_MARKER_T)
+    const mk = markerUnder(mm)!;
+    if (!mk.selected) { clearAllSelection(false); const hk = E.hooks as { ercSelectMarker?: (m: unknown) => void }; if (hk.ercSelectMarker) hk.ercSelectMarker(mk); selectionChanged(); }
+  }
   else if ((E.tool === "select" || E.tool === "highlight") && !interactionBusy()) {
     if (E.selPins.length) {
       const hit = pickAt(mm);
