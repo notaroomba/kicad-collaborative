@@ -3158,7 +3158,7 @@ function buildDimensionGeom(item, n2) {
   const text2 = gt ? str(gt[1]) : "";
   const tw = textWidth(parseMarkup(text2).text, ef.size, ef.thick), th = ef.size;
   const line = (a, b) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w: thick, color: color2, layer, z, cap: "round" });
-  const arrow = (p, ang, tail) => {
+  const arrow2 = (p, ang, tail) => {
     if (tail) {
       const [dx, dy] = rotPt(tail, 0, -ang);
       line(p, [p[0] + dx, p[1] + dy]);
@@ -3228,18 +3228,18 @@ function buildDimensionGeom(item, n2) {
     knock(cs, ce, ortho ? ef.thick : -ef.thick);
     const ang = deg([ce[0] - cs[0], ce[1] - cs[1]]);
     if (inward) {
-      arrow(cs, ang + 180, arrowLen * 2);
-      arrow(ce, ang, arrowLen * 2);
+      arrow2(cs, ang + 180, arrowLen * 2);
+      arrow2(ce, ang, arrowLen * 2);
     } else {
-      arrow(cs, ang, 0);
-      arrow(ce, ang + 180, 0);
+      arrow2(cs, ang, 0);
+      arrow2(ce, ang + 180, 0);
     }
   } else if (type === "leader") {
     const d = [e[0] - s[0], e[1] - s[1]];
     const dl = Math.hypot(d[0], d[1]) || 1;
     const st = [s[0] + d[0] / dl * extOff, s[1] + d[1] / dl * extOff];
     knock(st, e, 2 * ef.thick);
-    arrow(st, deg(d), 0);
+    arrow2(st, deg(d), 0);
     if (text2) knock(e, [tx, ty], 2 * ef.thick);
     const frame = str((kid(style, "text_frame") || [])[1]);
     if (text2 && frame === "1") {
@@ -3260,7 +3260,7 @@ function buildDimensionGeom(item, n2) {
     const b = [e[0] + r[0] / rl2 * ll, e[1] + r[1] / rl2 * ll];
     knock(e, b, ef.thick);
     if (text2) knock(b, [tx, ty], ef.thick);
-    arrow(e, deg(r), 0);
+    arrow2(e, deg(r), 0);
   } else if (type === "center") {
     const a = [e[0] - s[0], e[1] - s[1]];
     line([s[0] - a[0], s[1] - a[1]], [s[0] + a[0], s[1] + a[1]]);
@@ -13670,6 +13670,100 @@ ${body}
     clipWrite(ctx, lines.join("\n"));
     return true;
   }
+  function detectMac2() {
+    if (typeof navigator === "undefined") return false;
+    const nav = navigator;
+    if (nav.platform) return /Mac|iPhone|iPad|iPod/i.test(nav.platform);
+    const uad = nav.userAgentData && nav.userAgentData.platform;
+    if (uad) return /mac|ios/i.test(uad);
+    return /Macintosh|Mac OS X|iPhone|iPad/.test(nav.userAgent || "");
+  }
+  var IS_MAC2 = detectMac2();
+  var ARROW2 = 16;
+  var SPEED2 = 0.5;
+  var SCROLLERS2 = /* @__PURE__ */ new WeakMap();
+  function arrow2(dir) {
+    const d = document.createElement("div");
+    d.className = "kmenu-arrow " + dir;
+    d.setAttribute("aria-hidden", "true");
+    d.dataset.menuArrow = dir;
+    d.innerHTML = dir === "up" ? '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 5.5L5 1.5l4 4" fill="currentColor"/></svg>' : '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 .5l4 4 4-4" fill="currentColor"/></svg>';
+    return d;
+  }
+  function menuScroller2(el2, opts = {}) {
+    if (typeof document === "undefined") return;
+    if (opts.combo && !IS_MAC2) return;
+    el2.classList.toggle("kmenu-cut", el2.scrollHeight > el2.clientHeight + 1);
+    if (SCROLLERS2.has(el2)) return;
+    el2.classList.add("kmenu-scrolls");
+    const s = { up: arrow2("up"), down: arrow2("down"), dir: 0, last: 0, raf: 0 };
+    SCROLLERS2.set(el2, s);
+    document.body.append(s.up, s.down);
+    const z = () => {
+      let n2 = el2, best = 0;
+      while (n2 && n2 !== document.body) {
+        const v = parseInt(getComputedStyle(n2).zIndex, 10);
+        if (v > best) best = v;
+        n2 = n2.parentElement;
+      }
+      return best + 1;
+    };
+    const zi = String(Math.max(z(), 50));
+    s.up.style.zIndex = zi;
+    s.down.style.zIndex = zi;
+    const onMove = (ev) => {
+      const r = el2.getBoundingClientRect();
+      s.dir = s.up.classList.contains("on") && ev.clientY < r.top + ARROW2 + 1 ? -1 : s.down.classList.contains("on") && ev.clientY > r.bottom - ARROW2 - 1 ? 1 : 0;
+    };
+    const onLeave = () => {
+      s.dir = 0;
+    };
+    const onClick = (ev) => {
+      onMove(ev);
+      if (s.dir) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    };
+    el2.addEventListener("pointermove", onMove);
+    el2.addEventListener("pointerleave", onLeave);
+    el2.addEventListener("click", onClick, true);
+    const tick = (t) => {
+      if (!el2.isConnected) {
+        s.up.remove();
+        s.down.remove();
+        el2.removeEventListener("pointermove", onMove);
+        el2.removeEventListener("pointerleave", onLeave);
+        el2.removeEventListener("click", onClick, true);
+        SCROLLERS2.delete(el2);
+        return;
+      }
+      const dt = s.last ? Math.min(50, t - s.last) : 16;
+      s.last = t;
+      if (s.dir) el2.scrollTop += s.dir * SPEED2 * dt;
+      const r = el2.getBoundingClientRect(), cut = el2.scrollHeight > el2.clientHeight + 1, shown = r.width > 0 && getComputedStyle(el2).visibility !== "hidden";
+      const above = shown && cut && el2.scrollTop > 0.5, below = shown && cut && el2.scrollTop + el2.clientHeight < el2.scrollHeight - 0.5;
+      if (!above && s.dir < 0) s.dir = 0;
+      if (!below && s.dir > 0) s.dir = 0;
+      s.up.classList.toggle("on", above);
+      s.down.classList.toggle("on", below);
+      el2.classList.toggle("kmenu-cut", cut);
+      if (shown) {
+        const bl = el2.clientLeft, inner = el2.clientWidth;
+        for (const [a, y] of [[s.up, r.top + el2.clientTop], [s.down, r.top + el2.clientTop + el2.clientHeight - ARROW2]]) {
+          a.style.left = r.left + bl + "px";
+          a.style.top = y + "px";
+          a.style.width = inner + "px";
+          a.style.height = ARROW2 + "px";
+        }
+      }
+      s.raf = requestAnimationFrame(tick);
+    };
+    s.raf = requestAnimationFrame(tick);
+  }
+  function menuArrowPad2(el2) {
+    return SCROLLERS2.has(el2) && el2.scrollHeight > el2.clientHeight + 1 ? ARROW2 + 2 : 0;
+  }
   var KSELECT_TAG2 = "k-select";
   var SHADOW_CSS2 = `
 :host { contain: layout style; }
@@ -13967,9 +14061,11 @@ ${body}
         r.textContent = g2.label;
         return r;
       }
+      /** Scrolls the row into the visible part of the list: clear of the arrow strips of a list cut on a Mac (menufit.ts). */
       scrollRow(box, row2) {
-        if (row2.offsetTop < box.scrollTop) box.scrollTop = row2.offsetTop;
-        else if (row2.offsetTop + row2.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight - box.clientHeight;
+        const pad = menuArrowPad2(box);
+        if (row2.offsetTop - pad < box.scrollTop) box.scrollTop = Math.max(0, row2.offsetTop - pad);
+        else if (row2.offsetTop + row2.offsetHeight + pad > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight + pad - box.clientHeight;
       }
       // ------------------------------------------------------------ the popup list
       open() {
@@ -14102,6 +14198,7 @@ ${body}
         pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
         const w = pop.offsetWidth;
         pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+        menuScroller2(pop, { combo: true });
         const row2 = pop.querySelector(".hi, .on");
         if (row2) this.scrollRow(pop, row2);
       }
@@ -35352,6 +35449,39 @@ Link '${target2}' to this file?`)) return null;
     return out;
   }
   var padToolApi = { nextPadNumber, masterPad, defaultPad, typeFromPad, newPadNode, placePad, moveAnchorChanges, enumerateChanges, padMemory, strNumCmp: strNumCmp2, ipcRoundingRatio, refDesPrefix, trailingInt, canHaveNumber };
+  function detectMac2() {
+    if (typeof navigator === "undefined") return false;
+    const nav = navigator;
+    if (nav.platform) return /Mac|iPhone|iPad|iPod/i.test(nav.platform);
+    const uad = nav.userAgentData && nav.userAgentData.platform;
+    if (uad) return /mac|ios/i.test(uad);
+    return /Macintosh|Mac OS X|iPhone|iPad/.test(nav.userAgent || "");
+  }
+  var IS_MAC2 = detectMac2();
+  function splitKey(key2) {
+    const parts = key2.split("+");
+    let k = parts.pop() ?? "";
+    if (k === "" && key2.endsWith("+")) {
+      k = "+";
+      parts.pop();
+    }
+    return { ctrl: parts.includes("Ctrl") || parts.includes("Cmd"), alt: parts.includes("Alt") || parts.includes("Option"), shift: parts.includes("Shift"), rawCtrl: parts.includes("RawCtrl"), key: k };
+  }
+  function keyName(key2) {
+    if (!key2) return "";
+    const s = splitKey(key2);
+    if (!IS_MAC2) return s.rawCtrl ? key2.replace("RawCtrl", "Ctrl") : key2;
+    const mods = [];
+    if (s.rawCtrl) mods.push("Ctrl");
+    if (s.ctrl) mods.push("Cmd");
+    if (s.alt) mods.push("Option");
+    if (s.shift) mods.push("Shift");
+    return [...mods, s.key].join("+");
+  }
+  function keysInText(text2) {
+    if (!IS_MAC2) return text2;
+    return text2.replace(/\b((?:(?:Ctrl|Alt|Shift)\+)+)(?=\S)/g, (mods) => /Ctrl|Alt/.test(mods) ? keyName(mods + "x").slice(0, -1) : mods);
+  }
   function layersBlock(doc) {
     const rows = [];
     for (const [name, l] of doc.layers) if (/\./.test(name) || name === "Margin") rows.push([l.id, name, l.type || "user"].concat(l.userName ? [l.userName] : []));
@@ -37675,7 +37805,7 @@ Link '${target2}' to this file?`)) return null;
         ring(c, at2, (v.size + v.drill) / 4);
       }
     }
-    if (D.subs.some((d) => d.forceMark && !d.status) && D.cursor) drawStatusNote(c, D.cursor, px * (view.dpr || 1), "Track violates DRC.", "(Ctrl+click to commit anyway.)");
+    if (D.subs.some((d) => d.forceMark && !d.status) && D.cursor) drawStatusNote(c, D.cursor, px * (view.dpr || 1), "Track violates DRC.", keysInText("(Ctrl+click to commit anyway.)"));
   }
   function strokeElem(c, e) {
     if (e.t === "arc") {
@@ -42610,6 +42740,91 @@ Link '${target2}' to this file?`)) return null;
     }
     return Array.from(byName.values()).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   }
+  var ARROW2 = 16;
+  var SPEED2 = 0.5;
+  var SCROLLERS2 = /* @__PURE__ */ new WeakMap();
+  function arrow2(dir) {
+    const d = document.createElement("div");
+    d.className = "kmenu-arrow " + dir;
+    d.setAttribute("aria-hidden", "true");
+    d.dataset.menuArrow = dir;
+    d.innerHTML = dir === "up" ? '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 5.5L5 1.5l4 4" fill="currentColor"/></svg>' : '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 .5l4 4 4-4" fill="currentColor"/></svg>';
+    return d;
+  }
+  function menuScroller2(el, opts = {}) {
+    if (typeof document === "undefined") return;
+    if (opts.combo && !IS_MAC2) return;
+    el.classList.toggle("kmenu-cut", el.scrollHeight > el.clientHeight + 1);
+    if (SCROLLERS2.has(el)) return;
+    el.classList.add("kmenu-scrolls");
+    const s = { up: arrow2("up"), down: arrow2("down"), dir: 0, last: 0, raf: 0 };
+    SCROLLERS2.set(el, s);
+    document.body.append(s.up, s.down);
+    const z = () => {
+      let n2 = el, best = 0;
+      while (n2 && n2 !== document.body) {
+        const v = parseInt(getComputedStyle(n2).zIndex, 10);
+        if (v > best) best = v;
+        n2 = n2.parentElement;
+      }
+      return best + 1;
+    };
+    const zi = String(Math.max(z(), 50));
+    s.up.style.zIndex = zi;
+    s.down.style.zIndex = zi;
+    const onMove = (ev) => {
+      const r = el.getBoundingClientRect();
+      s.dir = s.up.classList.contains("on") && ev.clientY < r.top + ARROW2 + 1 ? -1 : s.down.classList.contains("on") && ev.clientY > r.bottom - ARROW2 - 1 ? 1 : 0;
+    };
+    const onLeave = () => {
+      s.dir = 0;
+    };
+    const onClick = (ev) => {
+      onMove(ev);
+      if (s.dir) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    };
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", onLeave);
+    el.addEventListener("click", onClick, true);
+    const tick = (t) => {
+      if (!el.isConnected) {
+        s.up.remove();
+        s.down.remove();
+        el.removeEventListener("pointermove", onMove);
+        el.removeEventListener("pointerleave", onLeave);
+        el.removeEventListener("click", onClick, true);
+        SCROLLERS2.delete(el);
+        return;
+      }
+      const dt = s.last ? Math.min(50, t - s.last) : 16;
+      s.last = t;
+      if (s.dir) el.scrollTop += s.dir * SPEED2 * dt;
+      const r = el.getBoundingClientRect(), cut = el.scrollHeight > el.clientHeight + 1, shown = r.width > 0 && getComputedStyle(el).visibility !== "hidden";
+      const above = shown && cut && el.scrollTop > 0.5, below = shown && cut && el.scrollTop + el.clientHeight < el.scrollHeight - 0.5;
+      if (!above && s.dir < 0) s.dir = 0;
+      if (!below && s.dir > 0) s.dir = 0;
+      s.up.classList.toggle("on", above);
+      s.down.classList.toggle("on", below);
+      el.classList.toggle("kmenu-cut", cut);
+      if (shown) {
+        const bl = el.clientLeft, inner = el.clientWidth;
+        for (const [a, y] of [[s.up, r.top + el.clientTop], [s.down, r.top + el.clientTop + el.clientHeight - ARROW2]]) {
+          a.style.left = r.left + bl + "px";
+          a.style.top = y + "px";
+          a.style.width = inner + "px";
+          a.style.height = ARROW2 + "px";
+        }
+      }
+      s.raf = requestAnimationFrame(tick);
+    };
+    s.raf = requestAnimationFrame(tick);
+  }
+  function menuArrowPad2(el) {
+    return SCROLLERS2.has(el) && el.scrollHeight > el.clientHeight + 1 ? ARROW2 + 2 : 0;
+  }
   var KSELECT_TAG2 = "k-select";
   var SHADOW_CSS2 = `
 :host { contain: layout style; }
@@ -42907,9 +43122,11 @@ Link '${target2}' to this file?`)) return null;
         r.textContent = g2.label;
         return r;
       }
+      /** Scrolls the row into the visible part of the list: clear of the arrow strips of a list cut on a Mac (menufit.ts). */
       scrollRow(box, row2) {
-        if (row2.offsetTop < box.scrollTop) box.scrollTop = row2.offsetTop;
-        else if (row2.offsetTop + row2.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight - box.clientHeight;
+        const pad = menuArrowPad2(box);
+        if (row2.offsetTop - pad < box.scrollTop) box.scrollTop = Math.max(0, row2.offsetTop - pad);
+        else if (row2.offsetTop + row2.offsetHeight + pad > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight + pad - box.clientHeight;
       }
       // ------------------------------------------------------------ the popup list
       open() {
@@ -43042,6 +43259,7 @@ Link '${target2}' to this file?`)) return null;
         pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
         const w = pop.offsetWidth;
         pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+        menuScroller2(pop, { combo: true });
         const row2 = pop.querySelector(".hi, .on");
         if (row2) this.scrollRow(pop, row2);
       }
@@ -50963,6 +51181,104 @@ function route(K7, P, doc, settings, opts) {
   return s.value;
 }
 
+// web/keys.ts
+function detectMac() {
+  if (typeof navigator === "undefined") return false;
+  const nav = navigator;
+  if (nav.platform) return /Mac|iPhone|iPad|iPod/i.test(nav.platform);
+  const uad = nav.userAgentData && nav.userAgentData.platform;
+  if (uad) return /mac|ios/i.test(uad);
+  return /Macintosh|Mac OS X|iPhone|iPad/.test(nav.userAgent || "");
+}
+var IS_MAC = detectMac();
+
+// web/menufit.ts
+var ARROW = 16;
+var SPEED = 0.5;
+var SCROLLERS = /* @__PURE__ */ new WeakMap();
+function arrow(dir) {
+  const d = document.createElement("div");
+  d.className = "kmenu-arrow " + dir;
+  d.setAttribute("aria-hidden", "true");
+  d.dataset.menuArrow = dir;
+  d.innerHTML = dir === "up" ? '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 5.5L5 1.5l4 4" fill="currentColor"/></svg>' : '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 .5l4 4 4-4" fill="currentColor"/></svg>';
+  return d;
+}
+function menuScroller(el, opts = {}) {
+  if (typeof document === "undefined") return;
+  if (opts.combo && !IS_MAC) return;
+  el.classList.toggle("kmenu-cut", el.scrollHeight > el.clientHeight + 1);
+  if (SCROLLERS.has(el)) return;
+  el.classList.add("kmenu-scrolls");
+  const s = { up: arrow("up"), down: arrow("down"), dir: 0, last: 0, raf: 0 };
+  SCROLLERS.set(el, s);
+  document.body.append(s.up, s.down);
+  const z = () => {
+    let n2 = el, best = 0;
+    while (n2 && n2 !== document.body) {
+      const v = parseInt(getComputedStyle(n2).zIndex, 10);
+      if (v > best) best = v;
+      n2 = n2.parentElement;
+    }
+    return best + 1;
+  };
+  const zi = String(Math.max(z(), 50));
+  s.up.style.zIndex = zi;
+  s.down.style.zIndex = zi;
+  const onMove = (ev) => {
+    const r = el.getBoundingClientRect();
+    s.dir = s.up.classList.contains("on") && ev.clientY < r.top + ARROW + 1 ? -1 : s.down.classList.contains("on") && ev.clientY > r.bottom - ARROW - 1 ? 1 : 0;
+  };
+  const onLeave = () => {
+    s.dir = 0;
+  };
+  const onClick = (ev) => {
+    onMove(ev);
+    if (s.dir) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+  };
+  el.addEventListener("pointermove", onMove);
+  el.addEventListener("pointerleave", onLeave);
+  el.addEventListener("click", onClick, true);
+  const tick = (t) => {
+    if (!el.isConnected) {
+      s.up.remove();
+      s.down.remove();
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", onLeave);
+      el.removeEventListener("click", onClick, true);
+      SCROLLERS.delete(el);
+      return;
+    }
+    const dt = s.last ? Math.min(50, t - s.last) : 16;
+    s.last = t;
+    if (s.dir) el.scrollTop += s.dir * SPEED * dt;
+    const r = el.getBoundingClientRect(), cut = el.scrollHeight > el.clientHeight + 1, shown = r.width > 0 && getComputedStyle(el).visibility !== "hidden";
+    const above = shown && cut && el.scrollTop > 0.5, below = shown && cut && el.scrollTop + el.clientHeight < el.scrollHeight - 0.5;
+    if (!above && s.dir < 0) s.dir = 0;
+    if (!below && s.dir > 0) s.dir = 0;
+    s.up.classList.toggle("on", above);
+    s.down.classList.toggle("on", below);
+    el.classList.toggle("kmenu-cut", cut);
+    if (shown) {
+      const bl = el.clientLeft, inner = el.clientWidth;
+      for (const [a, y] of [[s.up, r.top + el.clientTop], [s.down, r.top + el.clientTop + el.clientHeight - ARROW]]) {
+        a.style.left = r.left + bl + "px";
+        a.style.top = y + "px";
+        a.style.width = inner + "px";
+        a.style.height = ARROW + "px";
+      }
+    }
+    s.raf = requestAnimationFrame(tick);
+  };
+  s.raf = requestAnimationFrame(tick);
+}
+function menuArrowPad(el) {
+  return SCROLLERS.has(el) && el.scrollHeight > el.clientHeight + 1 ? ARROW + 2 : 0;
+}
+
 // web/components/kselect.ts
 var KSELECT_TAG = "k-select";
 var SHADOW_CSS = `
@@ -51263,9 +51579,11 @@ function defineKSelect() {
       r.textContent = g2.label;
       return r;
     }
+    /** Scrolls the row into the visible part of the list: clear of the arrow strips of a list cut on a Mac (menufit.ts). */
     scrollRow(box, row2) {
-      if (row2.offsetTop < box.scrollTop) box.scrollTop = row2.offsetTop;
-      else if (row2.offsetTop + row2.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight - box.clientHeight;
+      const pad = menuArrowPad(box);
+      if (row2.offsetTop - pad < box.scrollTop) box.scrollTop = Math.max(0, row2.offsetTop - pad);
+      else if (row2.offsetTop + row2.offsetHeight + pad > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight + pad - box.clientHeight;
     }
     // ------------------------------------------------------------ the popup list
     open() {
@@ -51398,6 +51716,7 @@ function defineKSelect() {
       pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
       const w = pop.offsetWidth;
       pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+      menuScroller(pop, { combo: true });
       const row2 = pop.querySelector(".hi, .on");
       if (row2) this.scrollRow(pop, row2);
     }
@@ -52806,7 +53125,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -53465,7 +53784,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -56330,7 +56649,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -56946,7 +57265,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function intersectD(subject, clip2, fillRule, precision = 2) {
   return booleanOpD(ClipType.Intersection, subject, clip2, fillRule, precision);
@@ -62395,7 +62714,7 @@ function storedFill(node) {
   return m;
 }
 
-// node_modules/three/src/extras/lib/earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/lib/earcut.js
 function earcut(data, holeIndices, dim = 2) {
   const hasHoles = holeIndices && holeIndices.length;
   const outerLen = hasHoles ? holeIndices[0] * dim : data.length;
@@ -62816,7 +63135,7 @@ function signedArea2(data, start, end, dim) {
   return sum;
 }
 
-// node_modules/three/src/extras/Earcut.js
+// ../../../kicad-collaborative/server/node_modules/three/src/extras/Earcut.js
 var Earcut = class {
   /**
    * Triangulates the given shape definition by returning an array of triangles.

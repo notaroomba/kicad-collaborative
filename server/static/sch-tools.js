@@ -1358,6 +1358,104 @@ ${body}
     return true;
   }
 
+  // web/keys.ts
+  function detectMac() {
+    if (typeof navigator === "undefined") return false;
+    const nav = navigator;
+    if (nav.platform) return /Mac|iPhone|iPad|iPod/i.test(nav.platform);
+    const uad = nav.userAgentData && nav.userAgentData.platform;
+    if (uad) return /mac|ios/i.test(uad);
+    return /Macintosh|Mac OS X|iPhone|iPad/.test(nav.userAgent || "");
+  }
+  var IS_MAC = detectMac();
+
+  // web/menufit.ts
+  var ARROW = 16;
+  var SPEED = 0.5;
+  var SCROLLERS = /* @__PURE__ */ new WeakMap();
+  function arrow(dir) {
+    const d = document.createElement("div");
+    d.className = "kmenu-arrow " + dir;
+    d.setAttribute("aria-hidden", "true");
+    d.dataset.menuArrow = dir;
+    d.innerHTML = dir === "up" ? '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 5.5L5 1.5l4 4" fill="currentColor"/></svg>' : '<svg viewBox="0 0 10 6" width="10" height="6"><path d="M1 .5l4 4 4-4" fill="currentColor"/></svg>';
+    return d;
+  }
+  function menuScroller(el2, opts = {}) {
+    if (typeof document === "undefined") return;
+    if (opts.combo && !IS_MAC) return;
+    el2.classList.toggle("kmenu-cut", el2.scrollHeight > el2.clientHeight + 1);
+    if (SCROLLERS.has(el2)) return;
+    el2.classList.add("kmenu-scrolls");
+    const s = { up: arrow("up"), down: arrow("down"), dir: 0, last: 0, raf: 0 };
+    SCROLLERS.set(el2, s);
+    document.body.append(s.up, s.down);
+    const z = () => {
+      let n = el2, best = 0;
+      while (n && n !== document.body) {
+        const v = parseInt(getComputedStyle(n).zIndex, 10);
+        if (v > best) best = v;
+        n = n.parentElement;
+      }
+      return best + 1;
+    };
+    const zi = String(Math.max(z(), 50));
+    s.up.style.zIndex = zi;
+    s.down.style.zIndex = zi;
+    const onMove = (ev) => {
+      const r = el2.getBoundingClientRect();
+      s.dir = s.up.classList.contains("on") && ev.clientY < r.top + ARROW + 1 ? -1 : s.down.classList.contains("on") && ev.clientY > r.bottom - ARROW - 1 ? 1 : 0;
+    };
+    const onLeave = () => {
+      s.dir = 0;
+    };
+    const onClick = (ev) => {
+      onMove(ev);
+      if (s.dir) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+    };
+    el2.addEventListener("pointermove", onMove);
+    el2.addEventListener("pointerleave", onLeave);
+    el2.addEventListener("click", onClick, true);
+    const tick = (t) => {
+      if (!el2.isConnected) {
+        s.up.remove();
+        s.down.remove();
+        el2.removeEventListener("pointermove", onMove);
+        el2.removeEventListener("pointerleave", onLeave);
+        el2.removeEventListener("click", onClick, true);
+        SCROLLERS.delete(el2);
+        return;
+      }
+      const dt = s.last ? Math.min(50, t - s.last) : 16;
+      s.last = t;
+      if (s.dir) el2.scrollTop += s.dir * SPEED * dt;
+      const r = el2.getBoundingClientRect(), cut = el2.scrollHeight > el2.clientHeight + 1, shown = r.width > 0 && getComputedStyle(el2).visibility !== "hidden";
+      const above = shown && cut && el2.scrollTop > 0.5, below = shown && cut && el2.scrollTop + el2.clientHeight < el2.scrollHeight - 0.5;
+      if (!above && s.dir < 0) s.dir = 0;
+      if (!below && s.dir > 0) s.dir = 0;
+      s.up.classList.toggle("on", above);
+      s.down.classList.toggle("on", below);
+      el2.classList.toggle("kmenu-cut", cut);
+      if (shown) {
+        const bl = el2.clientLeft, inner = el2.clientWidth;
+        for (const [a, y] of [[s.up, r.top + el2.clientTop], [s.down, r.top + el2.clientTop + el2.clientHeight - ARROW]]) {
+          a.style.left = r.left + bl + "px";
+          a.style.top = y + "px";
+          a.style.width = inner + "px";
+          a.style.height = ARROW + "px";
+        }
+      }
+      s.raf = requestAnimationFrame(tick);
+    };
+    s.raf = requestAnimationFrame(tick);
+  }
+  function menuArrowPad(el2) {
+    return SCROLLERS.has(el2) && el2.scrollHeight > el2.clientHeight + 1 ? ARROW + 2 : 0;
+  }
+
   // web/components/kselect.ts
   var KSELECT_TAG = "k-select";
   var SHADOW_CSS = `
@@ -1658,9 +1756,11 @@ ${body}
         r.textContent = g.label;
         return r;
       }
+      /** Scrolls the row into the visible part of the list: clear of the arrow strips of a list cut on a Mac (menufit.ts). */
       scrollRow(box, row) {
-        if (row.offsetTop < box.scrollTop) box.scrollTop = row.offsetTop;
-        else if (row.offsetTop + row.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop + row.offsetHeight - box.clientHeight;
+        const pad = menuArrowPad(box);
+        if (row.offsetTop - pad < box.scrollTop) box.scrollTop = Math.max(0, row.offsetTop - pad);
+        else if (row.offsetTop + row.offsetHeight + pad > box.scrollTop + box.clientHeight) box.scrollTop = row.offsetTop + row.offsetHeight + pad - box.clientHeight;
       }
       // ------------------------------------------------------------ the popup list
       open() {
@@ -1793,6 +1893,7 @@ ${body}
         pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
         const w = pop.offsetWidth;
         pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+        menuScroller(pop, { combo: true });
         const row = pop.querySelector(".hi, .on");
         if (row) this.scrollRow(pop, row);
       }
