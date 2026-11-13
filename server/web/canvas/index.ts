@@ -53,17 +53,22 @@ import { boardItemBox, presenceSelection } from "./kicad-bbox";
 import { padModel } from "./pad-model";
 import { parseLibSymbol, subUnitBody, PIN_TYPE_NAMES, libGraphicGeom } from "./libsym";
 import { footprintDocApi } from "./footprint-doc";
+import { HOPOVER_MULT, hopOver, hopShapes, wireHopShape } from "./hop-over";
 import { tableModel } from "./table-model";
 import { autoPanDirection, autoPanStep, AUTOPAN_TICK_MS } from "./autopan";
 export const api = {
   // the schematic View options that change geometry (show_pin_alt_icons): set, then the symbols of `doc` are rebuilt
   // Schematic Setup > Formatting: the painter's text offset / label size ratios, pin symbol size, DNP markers and
   // default line width; the document's items are rebuilt with them
-  setSchFormatting(o: { textOffsetRatio?: number; labelSizeRatio?: number; pinSymbolSize?: number; showDnpMarkers?: boolean; lineWidth?: number }, doc?: Doc | null) {
+  setSchFormatting(o: { textOffsetRatio?: number; labelSizeRatio?: number; pinSymbolSize?: number; showDnpMarkers?: boolean; lineWidth?: number; overbarHeight?: number; hopOverChoice?: number }, doc?: Doc | null) {
     let changed = false;
+    // overbar_offset_ratio (KIFONT::METRICS::m_OverbarHeight) and hop_over_size_choice are applied at paint time
+    if (typeof o.overbarHeight === "number" && isFinite(o.overbarHeight) && o.overbarHeight > 0) schFormat.overbarHeight = o.overbarHeight;
+    if (typeof o.hopOverChoice === "number" && o.hopOverChoice >= 0) schFormat.hopOverChoice = Math.min(5, Math.round(o.hopOverChoice));
+    hopOver.radius = SCH_PEN * HOPOVER_MULT[schFormat.hopOverChoice];
     for (const k of ["textOffsetRatio", "labelSizeRatio", "pinSymbolSize"] as const) { const v = o[k]; if (typeof v === "number" && isFinite(v) && v >= 0 && Math.abs(v - schFormat[k]) > 1e-9) { schFormat[k] = v; changed = true; } }
     if (typeof o.showDnpMarkers === "boolean" && o.showDnpMarkers !== schFormat.showDnpMarkers) { schFormat.showDnpMarkers = o.showDnpMarkers; changed = true; }
-    if (typeof o.lineWidth === "number" && o.lineWidth > 0 && Math.abs(o.lineWidth - SCH_PEN) > 1e-9) { setSchPen(o.lineWidth); changed = true; }
+    if (typeof o.lineWidth === "number" && o.lineWidth > 0 && Math.abs(o.lineWidth - SCH_PEN) > 1e-9) { setSchPen(o.lineWidth); changed = true; hopOver.radius = SCH_PEN * HOPOVER_MULT[schFormat.hopOverChoice]; }
     if (changed && doc && doc.type === "sch") for (const it of doc.items.values()) { try { buildGeom(doc, it); } catch (e) { /* no geometry */ } }
     return changed;
   }, schFormat,
@@ -78,7 +83,7 @@ export const api = {
   // font hook: set to a function (face, bold, italic) => void; called the first time text in an outline font is
   // drawn, so the app can fetch the font (web/editor/fonts.ts) and call fontChanged(face) once it is on the page
   onFontWanted: null, fontChanged, wantFace, faceAvailable, setFontData, fontData, allFontData, loadFontsFor: null,
-  drawHalo, SCH_SELECTION_SHADOW, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable, tableCellShownText, cellAddr, parseCellAddress, autoPanDirection, autoPanStep, AUTOPAN_TICK_MS,
+  hopShapes, wireHopShape, hopOver, drawHalo, SCH_SELECTION_SHADOW, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable, tableCellShownText, cellAddr, parseCellAddress, autoPanDirection, autoPanStep, AUTOPAN_TICK_MS,
   // the drawing sheet (web/canvas/sheet.ts): KiCad's built-in (kicad_wks …) description, its interpreter
   // and the text-variable resolution the title block uses; render()/renderSvg() paint what it returns
   DEFAULT_DRAWING_SHEET, parseDrawingSheet, defaultDrawingSheet, buildDrawingSheet, documentDrawingSheet,

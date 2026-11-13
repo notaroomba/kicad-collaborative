@@ -466,7 +466,7 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
  * text_offset_ratio (0.15), label_size_ratio (0.375), pin_symbol_size (25 mil; 0 = from the pin's text sizes),
  * show_dnp_markers.  default_line_thickness is text.ts's SCH_PEN.  setSchFormatting (index.ts) rebuilds the sheet.
  */
-export const schFormat = { textOffsetRatio: 0.15, labelSizeRatio: 0.375, pinSymbolSize: 25 * MIL, showDnpMarkers: true };
+export const schFormat = { textOffsetRatio: 0.15, labelSizeRatio: 0.375, pinSymbolSize: 25 * MIL, showDnpMarkers: true, overbarHeight: 1.23, hopOverChoice: 0 };
 export const schDisplay = { pinAltIcons: true };
 /**
  * SCH_PAINTER's excluded-from-simulation marker (mark_sim_exclusions): the body box framed at

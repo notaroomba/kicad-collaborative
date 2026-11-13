@@ -14,6 +14,10 @@ const INTER_CHAR = 0.2;
 const SUPER_SUB_SIZE_MULTIPLIER = 0.8, SUPER_HEIGHT_OFFSET = 0.35, SUB_HEIGHT_OFFSET = 0.15;
 const TAB_WIDTH = 4;
 export const OVERBAR_HEIGHT = 1.23;    // font_metrics.h m_OverbarHeight
+/** KIFONT::METRICS in use: a schematic takes m_OverbarHeight from Schematic Setup > Formatting (overbar_offset_ratio). */
+export const fontMetrics = { overbarHeight: OVERBAR_HEIGHT };
+/** Use these metrics for the next layouts (render() sets the document's own before painting). */
+export function setOverbarHeight(h: number): void { if (h > 0 && isFinite(h) && h !== fontMetrics.overbarHeight) fontMetrics.overbarHeight = h; }
 const R = "R".charCodeAt(0);
 
 export interface StrokeGlyph {
@@ -143,7 +147,7 @@ function layout(text: string, italic: boolean): StrokeLine {
     const s2 = sub || n.kind === "_", p2 = sup || n.kind === "^";
     if (n.text) run(n.text, s2, p2);
     for (const c of n.children) node(c, s2, p2);
-    if (n.kind === "~") strokes.push([start + 0.1, -OVERBAR_HEIGHT, cursor - 0.1, -OVERBAR_HEIGHT]);   // bar trimmed by 0.1 × size each end
+    if (n.kind === "~") strokes.push([start + 0.1, -fontMetrics.overbarHeight, cursor - 0.1, -fontMetrics.overbarHeight]);   // bar trimmed by 0.1 × size each end
   };
   node(parseStrokeMarkup(text), false, false);
   return { strokes, width: Math.max(0, cursor - INTER_CHAR), advance: cursor, path: null };
@@ -151,7 +155,7 @@ function layout(text: string, italic: boolean): StrokeLine {
 
 /** One line of text laid out in unit space (cached). */
 export function strokeLine(text: string, italic?: boolean): StrokeLine {
-  const key = italic ? "i" + text : "n" + text;
+  const key = (italic ? "i" : "n") + (fontMetrics.overbarHeight === OVERBAR_HEIGHT ? "" : fontMetrics.overbarHeight + "|") + text;
   let l = LINES.get(key);
   if (!l) { if (LINES.size >= LINE_CACHE_MAX) LINES.clear(); l = layout(text, !!italic); LINES.set(key, l); }
   return l;

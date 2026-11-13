@@ -34,7 +34,7 @@ function applyProjectSettings(): void {
   const ratios = KiCadCanvas.DASH_RATIOS as { dash: number; gap: number }; ratios.dash = s.dash; ratios.gap = s.gap;
   const before = doc.schSettings ? doc.schSettings.junctionDiameter : 0.9144; doc.schSettings = { junctionDiameter: s.junctionDiameter };
   if (Math.abs(before - s.junctionDiameter) > 1e-6) for (const it of doc.items.values()) if (it.kind === "junction") KiCadCanvas.replaceChange(doc, it);   // rebuilds the dot at its new size
-  KiCadCanvas.setSchFormatting({ textOffsetRatio: s.textOffsetRatio, labelSizeRatio: s.labelSizeRatio, pinSymbolSize: s.pinSymbolSize, showDnpMarkers: s.showDnpMarkers, lineWidth: s.lineWidth }, doc);   // Formatting page
+  KiCadCanvas.setSchFormatting({ textOffsetRatio: s.textOffsetRatio, labelSizeRatio: s.labelSizeRatio, pinSymbolSize: s.pinSymbolSize, showDnpMarkers: s.showDnpMarkers, lineWidth: s.lineWidth, overbarHeight: s.overbarHeight, hopOverChoice: s.hopOverChoice }, doc);   // Formatting page
   requestRender();
 }
 /** The ERC takes the project's rule severities and pin conflicts map (Schematic Setup > Electrical Rules). */

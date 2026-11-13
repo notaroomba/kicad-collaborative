@@ -26,7 +26,7 @@ const numOf = (v: Json | undefined, d: number): number => (typeof v === "number"
  * The values the renderer takes from the project (SCHEMATIC_SETTINGS): junction diameter in mm, dash / gap ratios,
  * and the Formatting page's text offset / label size ratios, pin symbol size and default line width (mm), DNP markers.
  */
-export interface SchRenderSettings { junctionDiameter: number; dash: number; gap: number; textOffsetRatio: number; labelSizeRatio: number; pinSymbolSize: number; lineWidth: number; showDnpMarkers: boolean }
+export interface SchRenderSettings { junctionDiameter: number; dash: number; gap: number; textOffsetRatio: number; labelSizeRatio: number; pinSymbolSize: number; lineWidth: number; showDnpMarkers: boolean; overbarHeight: number; hopOverChoice: number }
 export function schRenderSettings(pro: JsonObj): SchRenderSettings {
   const s = obj(pro.schematic), d = obj(s.drawing), classes = obj(pro.net_settings).classes;
   const dflt = Array.isArray(classes) ? (classes as JsonObj[]).find((c) => c && c.name === "Default") : undefined;
@@ -36,7 +36,8 @@ export function schRenderSettings(pro: JsonObj): SchRenderSettings {
   return { junctionDiameter: +(wire * JUNCTION_MULT[choice] * MIL).toFixed(4), dash: numOf(d.dashed_lines_dash_length_ratio, 12), gap: numOf(d.dashed_lines_gap_length_ratio, 3),
     textOffsetRatio: clamp(numOf(d.text_offset_ratio, 0.15), 0, 2), labelSizeRatio: clamp(numOf(d.label_size_ratio, 0.375), 0, 2),
     pinSymbolSize: +(clamp(numOf(d.pin_symbol_size, 25), 0, 1000) * MIL).toFixed(6), lineWidth: +(clamp(numOf(d.default_line_thickness, 6), 5, 1000) * MIL).toFixed(6),
-    showDnpMarkers: d.show_dnp_markers !== false };
+    showDnpMarkers: d.show_dnp_markers !== false, overbarHeight: numOf(d.overbar_offset_ratio, 1.23) > 0 ? numOf(d.overbar_offset_ratio, 1.23) : 1.23,
+    hopOverChoice: Math.max(0, Math.min(5, Math.round(numOf(d.hop_over_size_choice, 0)))) };
 }
 
 interface FieldTpl { name: string; visible: boolean; url: boolean }

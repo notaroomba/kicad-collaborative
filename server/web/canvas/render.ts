@@ -7,7 +7,9 @@ import { displayNetName } from "./geom-pcb";
 import { geomBox } from "./hit";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
-import { drawStrokeText, strokeLine, strokeOrigin } from "./stroke-font";
+import { drawStrokeText, setOverbarHeight, strokeLine, strokeOrigin } from "./stroke-font";
+import { hopShapes, strokeHopShape } from "./hop-over";
+import { schFormat } from "./geom-sch";
 import type { AnyCanvas, Box, CircleGeom, Ctx2D, Doc, DrawTextG, Geom, Item, Marker, Mat, ObjectsOpt, PadGeom, PathSink, RatsLine, RectGeom, RenderOpts, TextGeom, View, ViaRingGeom } from "./types";
 
 /** drawHalo's style: the halo colour (or a function of the geometry's colour), its alpha and the extra stroke width in device px. */
@@ -278,6 +280,8 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   ensureSchTheme(doc);   // geometry built under another schematic colour theme is rebuilt first
   opts = opts || {}; const hidden = opts.hidden || new Set();
   const isPcb = doc.type === "pcb";
+  setOverbarHeight(isPcb ? 1.23 : schFormat.overbarHeight);   // the board's KIFONT::METRICS are the defaults
+  const hops = isPcb ? null : hopShapes(doc);                  // Formatting > Hop-over size
   const showHiddenPins = !!opts.showHiddenPins && doc.type === "sch", zoneOutline = isPcb && !!opts.zoneOutline;
   // hidden fields: pcbnew's hidden texts, eeschema's show_hidden_fields (LAYER_HIDDEN)
   const showHiddenText = !!opts.showHiddenText, padNumbers = opts.padNumbers !== false;
@@ -595,6 +599,8 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     if (g.noStroke) return;
     if (t === "line" || t === "arc" || (t === "poly" && (g.w > 0 || !fill)) || (t === "circle" && (g.w > 0 || !fill)) || (t === "pad" && !fill)) {
       setStroke(color); const lw = Math.max(g.w, minW); setWidth(lw); setCap(g.cap || (t === "poly" || t === "line" ? "round" : "butt"));
+      const hop = hops && t === "poly" ? hops.get(g) : undefined;
+      if (hop) { strokeHopShape(ctx, hop, g.dash ? dashPattern(g.dashType, lw) : null); return; }   // the runs dashed, the hop arcs solid
       if (g.dash) ctx.setLineDash(dashPattern(g.dashType, lw));
       strokeG(g);
       if (g.dash) ctx.setLineDash([]);
@@ -1207,7 +1213,7 @@ export function drawText(ctx: Ctx2D, g: DrawTextG, s: number, docType: string, m
   if (g.bars && ctx.measureText) {
     // overbar: KiCad draws it 1.23·size above the baseline with the text pen
     const total = ctx.measureText(g.text).width; const shift = h === "center" ? -total / 2 : h === "right" ? -total : 0;
-    const y = base0 - g.size * 1.23; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.strokeStyle = color; ctx.beginPath();
+    const y = base0 - g.size * (docType === "pcb" ? 1.23 : schFormat.overbarHeight); ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.strokeStyle = color; ctx.beginPath();
     for (const [i0, i1] of g.bars) { const x0 = shift + ctx.measureText(g.text.slice(0, i0)).width, x1 = shift + ctx.measureText(g.text.slice(0, i1)).width; ctx.moveTo(x0, y); ctx.lineTo(x1, y); }
     ctx.stroke();
   }
