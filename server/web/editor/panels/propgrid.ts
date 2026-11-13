@@ -7,6 +7,7 @@
 // Multi-selection shows the properties the items share; values that differ show as mixed.
 import type { PropGrid, PropGroup, PropRow, PropType } from "../../panels-api";
 import { E } from "../state";
+import { fromDisplayAbsAxis, toDisplayAbsAxis } from "../userorigin";
 import { setNet } from "../pcbdialogs/item-props";
 import { layerDisplayName, netClassOf } from "./appearance";
 import { KC, isSchDoc, kdoc, panelStore, pcbTools, tctx } from "./core";
@@ -526,8 +527,12 @@ const FRIENDLY: Record<string, string> = { symbol: "Symbol", footprint: "Footpri
 const friendly = (it: KItem) => (it.kind === "arc" && it.docType === "pcb" ? "Track" : it.kind === "generated" ? "Tuning Pattern" : FRIENDLY[it.kind] || it.kind);
 
 function trimNum(v: number, digits: number): string { let t = v.toFixed(digits); if (t.includes(".")) t = t.replace(/0+$/, "").replace(/\.$/, ""); return t === "-0" ? "0" : t; }
+/** A coordinate row's axis (PROPERTY::SetCoordType ABS_X_COORD / ABS_Y_COORD): "Position X", "Start Y", "End X" … */
+function coordAxis(def: PropDef): "x" | "y" | null { return def.type !== "coord" ? null : / X$/.test(def.name) ? "x" : / Y$/.test(def.name) ? "y" : null; }
 function show(def: PropDef, raw: Raw): string {
   if (raw === null || raw === undefined) return "";
+  const ax = coordAxis(def);   // PGPropertyFactory: board coordinates through the frame's ORIGIN_TRANSFORMS
+  if (ax) return H().formatLength(toDisplayAbsAxis(raw as number, ax), String(E.units || "mm"));
   switch (def.type) {
     case "length": case "coord": return H().formatLength(raw as number, String(E.units || "mm"));
     case "angle": return trimNum(raw as number, 4) + "°";
@@ -608,7 +613,7 @@ function pinGrid(doc: KDoc): PropGrid | null {
 function parse(def: PropDef, text: string): { v: Raw } | string {
   const t = String(text);
   switch (def.type) {
-    case "length": case "coord": { const v = H().evalExpr(t, String(E.units || "mm")); if (Number.isNaN(v)) return "Not a valid length"; if (def.type === "length" && v < 0) return "Must not be negative"; return { v }; }
+    case "length": case "coord": { const v = H().evalExpr(t, String(E.units || "mm")); if (Number.isNaN(v)) return "Not a valid length"; if (def.type === "length" && v < 0) return "Must not be negative"; const ax = coordAxis(def); return { v: ax ? r6(fromDisplayAbsAxis(v, ax)) : v }; }
     case "angle": { const v = H().evalExpr(t.replace(/°|deg/gi, ""), ""); if (Number.isNaN(v)) return "Not a valid angle"; return { v }; }
     case "number": { const v = H().evalExpr(t, ""); if (Number.isNaN(v)) return "Not a valid number"; return { v }; }
     case "int": { const v = H().evalExpr(t, ""); if (Number.isNaN(v)) return "Not a valid number"; return { v: Math.round(v) }; }

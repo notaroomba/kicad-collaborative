@@ -152,6 +152,8 @@ export function PropertiesPane() {
   const docV = useApp((s) => s.document.version);
   const docId = useApp((s) => s.document.docId);
   const units = useApp((s) => s.viewport.units);
+  // ORIGIN_TRANSFORMS: the coordinate rows follow Preferences > PCB Editor > Origins & Axes
+  const originKey = useApp((s) => `${(s.viewport.userOrigin || [0, 0]).join(",")}|${s.viewport.invertX ? 1 : 0}|${s.viewport.invertY ? 1 : 0}`);
   const viewOnly = useApp((s) => s.viewOnly);
   const [tick, setTick] = useState(0);
   const [collapsed, setCollapsed] = useState(loadCollapsed);
@@ -170,7 +172,7 @@ export function PropertiesPane() {
     try { return p ? p.propGrid() : { title: "No objects selected", count: 0, groups: [], readOnly: true }; }
     catch (e) { console.warn(e); return { title: "No objects selected", count: 0, groups: [], readOnly: true }; }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selV, appSel, docV, docId, units, viewOnly, tick]);
+  }, [selV, appSel, docV, docId, units, originKey, viewOnly, tick]);
   // the label being edited: a row id, and whether that row was just added (addBlankField / addBlankCustomProperty)
   const [labelEdit, setLabelEdit] = useState<{ id: string; pending: boolean } | null>(null);
   const menu = useContextMenu();

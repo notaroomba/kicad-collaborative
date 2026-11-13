@@ -4,6 +4,7 @@
 // grids with KiCad's add / delete row buttons (WX_GRID), and a report list (WX_HTML_REPORT_PANEL).
 import { E } from "../state";
 import "../../components/kselect";   // <k-select>, the themed drop-down these use in place of <select>
+import { fromDisplayAbsAxis, toDisplayAbsAxis } from "../userorigin";
 
 // ---------------------------------------------------------------- elements
 type Child = Node | string | null | undefined | false;
@@ -254,6 +255,17 @@ export function lenField(mm: number, opts?: { ro?: boolean; key?: string; min?: 
   input.addEventListener("change", () => { const v = parseLen(input.value); if (isNaN(v)) { if (opts && opts.allowEmpty && !input.value.trim()) { cur = NaN; return; } input.value = isFinite(cur) ? fmtLen(cur) : ""; return; } cur = opts && opts.min !== undefined ? Math.max(opts.min, v) : v; input.value = fmtLen(cur); });
   // an untouched field gives back the value it was given, not its display rounding (0.58642 shown as 0.5864)
   return { el: input, input, get: () => { if (isFinite(cur) && input.value === fmtLen(cur)) return cur; const v = parseLen(input.value); return isNaN(v) ? cur : (opts && opts.min !== undefined ? Math.max(opts.min, v) : v); }, set(v) { cur = v; input.value = isFinite(v) ? fmtLen(v) : ""; } };
+}
+/**
+ * A board position (UNIT_BINDER with SetCoordType( ABS_X_COORD / ABS_Y_COORD )): shown from the user origin with the
+ * axis senses of Preferences > PCB Editor > Origins & Axes, and given back in board coordinates.
+ */
+export function coordField(mm: number, axis: "x" | "y", opts?: { ro?: boolean; key?: string }): Field<number> {
+  // the board value comes back untouched while the shown value is the one it gave (no float drift from the round trip)
+  let raw = mm, shown = toDisplayAbsAxis(mm, axis);
+  const f = lenField(shown, opts);
+  const back = (d: number): number => (d === shown ? raw : +fromDisplayAbsAxis(d, axis).toFixed(6));
+  return { el: f.el, input: f.input, get: () => back(f.get()), set: (v) => { raw = v; shown = toDisplayAbsAxis(v, axis); f.set(shown); } };
 }
 export const unitLabel = (text?: string): HTMLElement => h("span", { class: "unit" }, text === undefined ? unitName() : text);
 export function numField(v: number, opts?: { ro?: boolean; key?: string; digits?: number }): Field<number> {

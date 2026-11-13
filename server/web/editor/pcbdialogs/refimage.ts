@@ -6,7 +6,7 @@
 // item as PCB_IO_KICAD_SEXPR::format( PCB_REFERENCE_IMAGE ) does: (at) (layer) (rotate) (scale) (opacity) (locked)
 // (data) (uuid), the optional ones only off their defaults.  An edited bitmap is written back as PNG (a JPEG as JPEG),
 // as BITMAP_BASE::SaveImageData does once m_imageData is cleared.
-import { checkField, errorMessage, form, h, lenField, messageBox, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
+import { checkField, errorMessage, form, h, coordField, lenField, messageBox, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -171,7 +171,7 @@ export function refImageDialog(ctx: ToolCtx, item: KItem): boolean {
   let api: { close(): void } | null = null;
   api = openDialog({ title: "Reference Image Properties", width: 680, readOnly: ro,
     build(body) {
-      const x = reg("x", lenField(v0.x, { ro, key: "x" })), y = reg("y", lenField(v0.y, { ro, key: "y" }));
+      const x = reg("x", coordField(v0.x, "x", { ro, key: "x" })), y = reg("y", coordField(v0.y, "y", { ro, key: "y" }));
       const rot = reg("rotation", numField(v0.rotation, { ro, key: "rotation", digits: 3 }));
       const [w0, h0] = refImageSize(v0, v0.scale);
       const wd = reg("width", lenField(w0, { ro, key: "width" })), ht = reg("height", lenField(h0, { ro, key: "height" }));

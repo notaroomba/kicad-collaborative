@@ -6,7 +6,7 @@
 // Driving value mode needs a length constraint bound to both ends (DimensionCanDrive), which the web editor has no
 // way to make, so the Value choice offers Driven and Arbitrary as KiCad does for an unbound dimension.
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
-import { box, checkField, form, h, lenField, numField, openDialog, selectField, textField, unitLabel, type Field } from "./ui";
+import { box, checkField, form, h, coordField, lenField, numField, openDialog, selectField, textField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -175,7 +175,7 @@ export function dimensionDialog(ctx: ToolCtx, item: KItem): boolean {
           onChange: (on) => { thick.input.disabled = ro || on; if (on) thick.set(Math.round(tw.get() * NM / 8) / NM); } }));
         tw.input.addEventListener("input", () => { if (auto.get()) thick.set(Math.round(tw.get() * NM / 8) / NM); });   // onTextSize
         const manual = v0.posMode === 2;
-        const tx = reg("textX", lenField(v0.textX, { ro: ro || !manual, key: "textX" })), ty = reg("textY", lenField(v0.textY, { ro: ro || !manual, key: "textY" }));
+        const tx = reg("textX", coordField(v0.textX, "x", { ro: ro || !manual, key: "textX" })), ty = reg("textY", coordField(v0.textY, "y", { ro: ro || !manual, key: "textY" }));
         const angle = reg("angle", numField(v0.angle, { ro: ro || v0.keepAligned, key: "angle", digits: 3 }));
         const presets = h("datalist", { id: "kd-dim-rot" }); for (const r of ["0.0", "90.0", "-90.0", "180.0"]) presets.append(h("option", { value: r })); angle.input.setAttribute("list", "kd-dim-rot");
         const posMode = reg("posMode", selectField<number>(v0.posMode, [[0, "Outside"], [1, "Inline"], [2, "Manual"]], { ro, key: "posMode",

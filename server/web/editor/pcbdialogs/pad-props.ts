@@ -7,7 +7,7 @@
 // written itself.  Pads with a front/inner/back or custom padstack show their front-layer values (the mode is shown,
 // not editable here); the Backdrill page, teardrop overrides, custom primitives and pad-to-die delay are kept as
 // stored.
-import { box, checkField, form, h, lenField, notebook, openDialog, selectField, textField, unitLabel, unitName, fmtLen, parseLen, type Field } from "./ui";
+import { box, checkField, form, h, coordField, lenField, notebook, openDialog, selectField, textField, unitLabel, unitName, fmtLen, parseLen, type Field } from "./ui";
 import type { DlgShape, DlgType, PadModel, padModel as PadModelApi } from "../../canvas/pad-model";
 
 const PM = (): typeof PadModelApi => (KiCadCanvas as unknown as { padModel: typeof PadModelApi }).padModel;
@@ -91,7 +91,7 @@ export function padPropertiesDialog(ctx: ToolCtx, fpItem: KItem, index: number):
       const number = textField(m.number, { ro, key: "padNumber" });
       const netNames = PH().boardNetNames(doc).filter(Boolean); if (m.net && !netNames.includes(m.net)) netNames.unshift(m.net);
       const net = selectField<string>(m.net, [["", "<no net>"], ...netNames.map((n): [string, string] => [n, n])], { ro, key: "padNet", onChange: (v) => { m.net = v; } });
-      const px = lenField(m.x, { ro, key: "posX" }), py = lenField(m.y, { ro, key: "posY" });
+      const px = coordField(m.x, "x", { ro, key: "posX" }), py = coordField(m.y, "y", { ro, key: "posY" });
       const psModeSel = selectField<string>(psMode === "front_inner_back" ? "fib" : psMode === "custom" ? "custom" : "normal", [["normal", "Normal"], ["fib", "Front/Inner/Back"], ["custom", "Custom"]], { ro: true, key: "padstackMode" });
       psModeSel.input.title = padstack ? "This pad's padstack has per-layer shapes; the front layer is edited here" : "";
       const shape = selectField<DlgShape>(m.shape, [["circle", "Circular"], ["oval", "Oval"], ["rect", "Rectangular"], ["trapezoid", "Trapezoidal"], ["roundrect", "Rounded rectangle"], ["chamfer", "Chamfered rectangle"],

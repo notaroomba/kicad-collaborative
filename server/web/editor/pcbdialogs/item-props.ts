@@ -6,7 +6,7 @@
 // pcbItemDialog first and falls back to the generic property sheet for the kinds not handled here (pads
 // keep pcb-tools' Pad Properties; dimensions open Dimension Properties from ./dimension).
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
-import { box, checkField, form, grid, h, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
+import { box, checkField, form, grid, h, coordField, lenField, notebook, numField, openDialog, selectField, textField, unitLabel, type CellValue, type Field } from "./ui";
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
 import { tableDialog } from "./table";
@@ -98,7 +98,7 @@ function trackViaDialog(ctx: ToolCtx, item: KItem): boolean {
     if (item.kind === "via") {
       const at = K().atOf(node), type = typeof node[1] === "string" ? String(node[1]) : "through";
       const ls = kid(node, "layers"), top = doc.copper[0] || "F.Cu", bottom = doc.copper[doc.copper.length - 1] || "B.Cu";
-      const x = lenField(at[0], { ro, key: "x" }), y = lenField(at[1], { ro, key: "y" });
+      const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" });
       const size = lenField(nval(kid(node, "size")), { ro, key: "size" }), drill = lenField(nval(kid(node, "drill")), { ro, key: "drill" });
       const vtype = selectField<string>(type, [["through", "Through"], ["micro", "Micro"], ["blind", "Blind"], ["buried", "Buried"]], { ro, key: "viaType", onChange: (v) => { const thru = v === "through"; l0.input.disabled = l1.input.disabled = ro || thru; if (thru) { l0.set(top); l1.set(bottom); } } });
       const l0 = selectField<string>(sval(ls, 1) || top, withCurrent(copperLayers(doc), sval(ls, 1)), { ro: ro || type === "through", key: "startLayer" });
@@ -119,7 +119,7 @@ function trackViaDialog(ctx: ToolCtx, item: KItem): boolean {
     }
     const arc = item.kind === "arc";
     const s = kid(node, "start"), e = kid(node, "end");
-    const sx = lenField(nval(s, 1), { ro: ro || arc, key: "sx" }), sy = lenField(nval(s, 2), { ro: ro || arc, key: "sy" }), ex = lenField(nval(e, 1), { ro: ro || arc, key: "ex" }), ey = lenField(nval(e, 2), { ro: ro || arc, key: "ey" });
+    const sx = coordField(nval(s, 1), "x", { ro: ro || arc, key: "sx" }), sy = coordField(nval(s, 2), "y", { ro: ro || arc, key: "sy" }), ex = coordField(nval(e, 1), "x", { ro: ro || arc, key: "ex" }), ey = coordField(nval(e, 2), "y", { ro: ro || arc, key: "ey" });
     const width = lenField(nval(kid(node, "width")), { ro, key: "width" });
     const cur = sval(kid(node, "layer")), layer = selectField<string>(cur, withCurrent(copperLayers(doc), cur), { ro, key: "layer" });
     body.append(box("Tracks", form([xyRow("Start X:", sx, sy), xyRow("End X:", ex, ey), ["Track width:", width.el, unitLabel()], ["Layer:", layer.el]], true)));
@@ -378,7 +378,7 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
     const bold = checkField(fx.bold, "Bold", { ro, key: "bold" }), italic = checkField(fx.italic, "Italic", { ro, key: "italic" }), mirror = checkField(fx.mirror, "Mirrored", { ro, key: "mirror" });
     const face0 = faceOfFont(font), face = fontField(doc, face0, { ro, key: "face" });
     const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" }), th = lenField(fx.thick || 0.15, { ro, key: "thickness" });
-    const x = lenField(at[0], { ro, key: "x" }), y = lenField(at[1], { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
+    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
     const hj = selectField<string>(fx.h, [["left", "Left"], ["center", "Center"], ["right", "Right"]], { ro, key: "hjustify" }), vj = selectField<string>(fx.v, [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]], { ro, key: "vjustify" });
     body.append(h("label", { class: "pd-lbl" }, "Text:"), text, h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
       h("div", { class: "pd-cols2" },
@@ -420,7 +420,7 @@ function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
     const rows: ([string, HTMLElement, HTMLElement?] | HTMLElement)[] = [];
     const pt = (key: string, label: string, fixed: boolean): { x: Field<number>; y: Field<number>; key: string } | null => {
       const p = kid(node, key); if (!p) return null;
-      const x = lenField(nval(p, 1), { ro: ro || fixed, key: key + "X" }), y = lenField(nval(p, 2), { ro: ro || fixed, key: key + "Y" });
+      const x = coordField(nval(p, 1), "x", { ro: ro || fixed, key: key + "X" }), y = coordField(nval(p, 2), "y", { ro: ro || fixed, key: key + "Y" });
       rows.push(xyRow(label, x, y)); return { x, y, key };
     };
     const pts: ({ x: Field<number>; y: Field<number>; key: string } | null)[] = [];
@@ -472,7 +472,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const g = grid([{ label: "Name", key: "label", type: "ro", width: "130px" }, { label: "Value", key: "value" }, { label: "Show", key: "show", type: "check" }, { label: "Width", key: "w", type: "len" }, { label: "Height", key: "ht", type: "len" }, { label: "Thickness", key: "th", type: "len" },
       { label: "Italic", key: "italic", type: "check" }, { label: "Layer", key: "layer", type: "select", options: allLayers(doc), width: "120px" }, { label: "Orientation", key: "rot", type: "num" }, { label: "X Offset", key: "x", type: "len" }, { label: "Y Offset", key: "y", type: "len" }], rows, { ro, height: "170px" });
     const at = K().atOf(node), side0 = sval(kid(node, "layer")) || "F.Cu";
-    const x = lenField(at[0], { ro, key: "x" }), y = lenField(at[1], { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
+    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
     const side = selectField<string>(side0, [["F.Cu", "Front"], ["B.Cu", "Back"]], { ro, key: "side" });
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const attrs = PH().footprintAttrs(node);

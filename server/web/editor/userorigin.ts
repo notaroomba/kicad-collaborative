@@ -4,6 +4,7 @@
 // origins are E.pcbOrigins, as pcbrouting.ts has them for the open board.
 import { store } from "./appstore";
 import { E } from "./state";
+import { isSch } from "./view";
 export { toDisplayAbs, toDisplayRel } from "../units";
 
 export type DisplayOrigin = "page" | "aux" | "grid";
@@ -21,4 +22,22 @@ export function publishUserOrigin(): void {
   const cur = store.get().viewport;
   if (cur.userOrigin && cur.userOrigin[0] === userOrigin[0] && cur.userOrigin[1] === userOrigin[1] && !!cur.invertX === o.invertX && !!cur.invertY === o.invertY) return;
   store.slice("viewport", { userOrigin, invertX: o.invertX, invertY: o.invertY });
+}
+
+/**
+ * ORIGIN_TRANSFORMS::ToDisplay( aValue, ABS_X_COORD / ABS_Y_COORD ) for one board coordinate, as the dialogs'
+ * position fields (UNIT_BINDER::SetCoordType) and the Properties panel's coordinate rows show it; the schematic has
+ * no transform.  fromDisplayAbs is FromDisplay, the value typed back in board coordinates.
+ */
+export function toDisplayAbsAxis(v: number, axis: "x" | "y"): number {
+  if (isSch()) return v;
+  const vp = store.get().viewport; const o = vp.userOrigin || [0, 0];
+  const inv = axis === "x" ? !!vp.invertX : !!vp.invertY; const d = v - o[axis === "x" ? 0 : 1];
+  return inv ? (d === 0 ? 0 : -d) : d;
+}
+export function fromDisplayAbsAxis(v: number, axis: "x" | "y"): number {
+  if (isSch()) return v;
+  const vp = store.get().viewport; const o = vp.userOrigin || [0, 0];
+  const inv = axis === "x" ? !!vp.invertX : !!vp.invertY;
+  return (inv ? -v : v) + o[axis === "x" ? 0 : 1];
 }
