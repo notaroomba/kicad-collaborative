@@ -5138,6 +5138,13 @@ function render(doc, ctx, view, opts) {
     curAlpha = -1;
   };
   let ratsDone = !rats, previewIdx = 0;
+  const schSel = !isPcb && opts.selected && opts.selected.size ? skip ? [...opts.selected].filter((id) => !skip.has(id)) : [...opts.selected] : null;
+  const anchors = schSel ? fieldAnchors(doc, schSel, hidden) : null;
+  if (schSel) {
+    drawSelectionHalo(ctx, doc, schSel, s, dpr, hidden);
+    if (anchors) drawFieldAnchors(ctx, anchors, s, dpr, true);
+    dirty();
+  }
   for (const z of ZS) {
     if (!ratsDone && zRats <= z) {
       drawRatsnest(ctx, rats, ratsNets, netColors, s, dpr, viewRect);
@@ -5325,9 +5332,9 @@ function render(doc, ctx, view, opts) {
     ctx.stroke();
     ctx.restore();
   }
-  if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: 3 });
+  if (hl) drawHalo(ctx, doc, skip ? new Set([...hl].filter((id) => !skip.has(id))) : hl, s, dpr, hidden, { color: hlColor, alpha: isPcb ? 0.35 : 0.15, extraPx: isPcb ? 3 : SCH_HIGHLIGHT_THICKNESS, strokesOnly: !isPcb });
+  if (anchors) drawFieldAnchors(ctx, anchors, s, dpr, false);
   if (markers) drawMarkers(ctx, markers, doc.type, markerScale(doc.type, view), bg || (isPcb ? PCB_BG : SCH.bg));
-  if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
@@ -5617,12 +5624,57 @@ function traceTrackOutline(ctx, g2) {
     ctx.closePath();
   } else tracePath(ctx, g2);
 }
-function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden) {
-  drawHalo(ctx, doc, ids, s, dpr, hidden, { color: "#66B2FF", alpha: 0.55, extraPx: 5 });
+var SCH_SELECTION_SHADOW = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "") ? "rgba(199,235,255,0.8)" : "rgba(102,179,255,0.8)";
+var SCH_SELECTION_THICKNESS = 3;
+var SCH_HIGHLIGHT_THICKNESS = 2;
+var MIL2 = 0.0254;
+function drawSelectionHalo(ctx, doc, ids, s, dpr, hidden, thickness = SCH_SELECTION_THICKNESS) {
+  drawHalo(ctx, doc, ids, s, dpr, hidden, { color: SCH_SELECTION_SHADOW, alpha: 1, extraPx: thickness, extraMm: thickness * MIL2, strokesOnly: true });
 }
+function fieldAnchors(doc, keys, hidden) {
+  const out = [];
+  for (const key of keys) {
+    const cut = typeof key === "string" ? key.indexOf("#") : -1, id = cut > 0 ? key.slice(0, cut) : key, sub = cut > 0 ? key.slice(cut + 1) : null;
+    const it = doc.items.get(id);
+    if (!it) continue;
+    const only = sub && sub.startsWith("field:") ? sub.slice(6) : null;
+    if (sub && !only) continue;
+    if (!only && it.kind !== "symbol") continue;
+    const seen = /* @__PURE__ */ new Set();
+    for (const g2 of it.geom) {
+      if (g2.t !== "text" || !g2.field || seen.has(g2.field) || only && g2.field !== only) continue;
+      if (hidden && hidden.has(g2.layer)) continue;
+      seen.add(g2.field);
+      out.push([g2.x, g2.y]);
+    }
+  }
+  return out.length ? out : null;
+}
+function drawFieldAnchors(ctx, pts, s, dpr, shadow) {
+  const px = dpr / s, r = 8 * MIL2 + 8 / 25 * px;
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = shadow ? SCH_SELECTION_SHADOW : SCH_ANCHOR_COLOR;
+  ctx.lineWidth = shadow ? SCH_SELECTION_THICKNESS * px + SCH_SELECTION_THICKNESS * MIL2 : Math.max(0.1524 / 3, px);
+  ctx.beginPath();
+  for (const [x, y] of pts) {
+    ctx.moveTo(x - r, y);
+    ctx.lineTo(x + r, y);
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x, y + r);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+var SCH_ANCHOR_COLOR = "#0000FF";
 function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
-  const minW = Math.max(1, dpr) / s, extra = style.extraPx * dpr / s;
+  const minW = Math.max(1, dpr) / s, extra = style.extraPx * dpr / s + (style.extraMm || 0);
   const colorFn = typeof style.color === "function" ? style.color : () => style.color;
+  const strokesOnly = !!style.strokesOnly;
+  const m = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
+  const base = m ? [m.a, m.b, m.c, m.d, m.e, m.f] : null;
   ctx.save();
   ctx.globalAlpha = style.alpha;
   ctx.lineJoin = "round";
@@ -5635,10 +5687,19 @@ function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
     for (const g2 of it.geom) {
       if (hidden && hidden.has(g2.layer)) continue;
       if (sub !== null && sub !== (g2.pinNo !== void 0 ? "pin:" + g2.pinNo : g2.field ? "field:" + g2.field : "")) continue;
+      if (strokesOnly && g2.noStroke) continue;
       const halo = colorFn(g2.color);
       ctx.strokeStyle = halo;
       ctx.fillStyle = halo;
       if (g2.t === "text") {
+        if (strokesOnly && base && HAS_PATH2D2) {
+          const tg = g2;
+          const pen = tg.w > 0 ? tg.w : tg.size / 8;
+          ctx.save();
+          drawTextStroke(ctx, Object.assign({}, tg, { w: pen + extra, knockout: false }), minW + extra, halo, base, false);
+          ctx.restore();
+          continue;
+        }
         const w = typeof textWidth === "function" ? textWidth(g2.text || "", g2.size, g2.w || 0.1524) : (g2.text || "").length * g2.size * 0.75;
         const h = g2.size * 1.35;
         ctx.save();
@@ -5668,7 +5729,8 @@ function drawHalo(ctx, doc, ids, s, dpr, hidden, style) {
       if (g2.t === "poly" && (!g2.pts || g2.pts.length < 2)) continue;
       ctx.lineWidth = Math.max(g2.w || 0, minW) + extra;
       const p = ctx.__plot ? null : pathOf(g2);
-      if (g2.fill || g2.t === "pad" || g2.t === "circle") {
+      const fillIt = strokesOnly ? !!g2.fill && g2.fill === g2.color : g2.fill || g2.t === "pad" || g2.t === "circle";
+      if (fillIt) {
         if (p) ctx.fill(p);
         else {
           ctx.beginPath();
@@ -12082,6 +12144,7 @@ var api = {
   // decoded (ok) or failed (!ok) after render() drew its placeholder, so the app can request a repaint
   onAssetLoaded: null,
   drawHalo,
+  SCH_SELECTION_SHADOW,
   HL_DIM,
   brightened,
   highlightColor,
@@ -17077,10 +17140,10 @@ Link '${target2}' to this file?`)) return null;
     const c = [v >> 16 & 255, v >> 8 & 255, v & 255].map((x) => Math.round(x * (1 - f) + 255 * f));
     return `rgb(${c[0]},${c[1]},${c[2]})`;
   };
-  var MIL2 = 0.0254;
-  var DANGLING_SYMBOL_SIZE = 12 * MIL2;
-  var TARGET_PIN_RADIUS2 = 15 * MIL2;
-  var DEFAULT_PEN = 6 * MIL2;
+  var MIL3 = 0.0254;
+  var DANGLING_SYMBOL_SIZE = 12 * MIL3;
+  var TARGET_PIN_RADIUS2 = 15 * MIL3;
+  var DEFAULT_PEN = 6 * MIL3;
   var danglingCache = { doc: null, gen: -1, list: [] };
   S2.docGen = 0;
   function danglingList(doc) {
@@ -17123,13 +17186,9 @@ Link '${target2}' to this file?`)) return null;
     installDom(ctx);
     const px = 1 / (view.ppm * view.zoom * (view.dpr || 1)), doc = ctx.doc;
     if (S2.showDangling !== false) drawDangling(c, doc, px);
-    if (S2.hover && S2.hover !== S2.sel && !S2.drag) {
+    if (S2.hover && S2.hover !== S2.sel && !S2.drag && curTool() !== "select") {
       const it = doc.items.get(S2.hover);
       if (it) outline(c, it, CLR.hover, px, 1.5);
-    }
-    if (S2.sel) {
-      const it = doc.items.get(S2.sel);
-      if (it) outline(c, it, CLR.sel, px, 2);
     }
     if (curTool() === "select" && !S2.drag) drawEditPoints(c, ctx, px);
     if (S2.highlight && typeof ctx.setHighlight !== "function") {
@@ -17157,7 +17216,6 @@ Link '${target2}' to this file?`)) return null;
       }
     }
     if (S2.drag) {
-      for (const e of S2.drag.items) outline(c, e.item, CLR.sel, px, 2);
       for (const s of S2.drag.preview || []) {
         c.save();
         c.strokeStyle = s.kind === "bus" ? CLR.bus : CLR.wire;
