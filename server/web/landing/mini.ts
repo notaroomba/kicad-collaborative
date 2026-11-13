@@ -89,6 +89,12 @@ export function startMini(root: HTMLElement): void {
   /** What a press with the arrow tool takes hold of: the item under it, and a text anywhere in its box. */
   function pick(at: Pt): string | null {
     const hit: string | null = K.hitTest(doc, at[0], at[1], 0.3, { hidden: HIDDEN });
+    // A track or via under the pointer beats a part that is only hit by its outline, as in
+    // PCB_SELECTION_TOOL::GuessSelectionCandidates: on a pad the part still wins.
+    if (hit && PARTS.has(hit)) {
+      const tr = trackAt(doc, at[0], at[1], 0), it = tr ? doc.items.get(tr) : null;
+      if (it) { const on = it.kind === "via" ? layer : (it.geom as any[])[0].layer, c = copperAt(doc, at[0], at[1], on); if (!c || c.kind !== "pad") return tr; }
+    }
     if (hit && (PARTS.has(hit) || doc.items.get(hit)?.kind === "gr_text")) return hit;
     for (const it of doc.items.values()) if (it.kind === "gr_text" && it.bbox && at[0] >= it.bbox[0] && at[0] <= it.bbox[2] && at[1] >= it.bbox[1] && at[1] <= it.bbox[3]) return it.id;
     return hit;
