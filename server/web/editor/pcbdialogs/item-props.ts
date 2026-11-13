@@ -49,7 +49,9 @@ interface FieldHelpers { fieldNode(node: SNode, name: string): SNode | null; fie
   fieldHidden(p: SNode): boolean; setFieldHidden(node: SNode, p: SNode, hidden: boolean): void; fieldLayer(p: SNode): string; setFieldLayer(p: SNode, layer: string): void }
 const PH = (): PropsHelpers => (CollabTools as unknown as { props: { helpers: PropsHelpers } }).props.helpers;
 const FH = (): FieldHelpers => (KDialogs as unknown as { _: FieldHelpers })._;
-const PT = (): { isLocked(n: SNode): boolean; setLocked(n: SNode, on: boolean): SNode } => (window as unknown as { PcbTools: { isLocked(n: SNode): boolean; setLocked(n: SNode, on: boolean): SNode } }).PcbTools;
+interface LayerStyle { line: number; w: number; h: number; thick: number; italic: boolean; upright: boolean }
+type PcbToolsLite = { isLocked(n: SNode): boolean; setLocked(n: SNode, on: boolean): SNode; layerStyle(layer: string): LayerStyle };
+const PT = (): PcbToolsLite => (window as unknown as { PcbTools: PcbToolsLite }).PcbTools;
 
 const layerLabel = (doc: KDoc, name: string): string => { const l = doc.layers.get(name); return l && l.userName ? l.userName : name; };
 const allLayers = (doc: KDoc): [string, string][] => Array.from(doc.layers.keys()).map((n): [string, string] => [n, layerLabel(doc, n)]);
@@ -441,10 +443,11 @@ function sizeError(label: string, v: number): string | null {
 /** EDA_ANGLE::Normalize180 / Normalize, to the angle binder's three decimals. */
 const norm180 = (a: number): number => { let r = a % 360; if (r > 180) r -= 360; if (r <= -180) r += 360; return +r.toFixed(3); };
 const norm360 = (a: number): number => { let r = a % 360; if (r < 0) r += 360; return +r.toFixed(3); };
-/** The orientation combo: a degrees field with the 0.0 / 90.0 / -90.0 / 180.0 presets. */
-function orientationField(deg: number, ro: boolean, key: string): Field<number> {
+/** The orientation combo: a degrees field with the text dialogs' 0.0 / 90.0 / -90.0 / 180.0 presets, or the ones
+ *  given (dialog_footprint_properties_base.cpp m_orientationCtrl: 0 / 90 / -90 / 180). */
+function orientationField(deg: number, ro: boolean, key: string, presets = ["0.0", "90.0", "-90.0", "180.0"]): Field<number> {
   const f = numField(norm180(deg), { ro, key, digits: 3 });
-  comboInput(f.input as HTMLInputElement, () => ["0.0", "90.0", "-90.0", "180.0"]);
+  comboInput(f.input as HTMLInputElement, () => presets);
   return f;
 }
 /** DIALOG_TEXT_PROPERTIES' shared controls over one text node (gr_text, fp_text or a footprint property):
@@ -588,7 +591,8 @@ export function newTextDialog(ctx: ToolCtx, node: SNode, done: (node: SNode | nu
 
 // ---------------------------------------------------------------- <Shape> Properties
 const SHAPE_NAMES: Record<string, string> = { gr_line: "Line", gr_rect: "Rectangle", gr_circle: "Circle", gr_arc: "Arc", gr_poly: "Polygon", gr_curve: "Bezier" };
-const LINE_STYLES: [string, string][] = [["default", "Default"], ["solid", "Solid"], ["dash", "Dashed"], ["dot", "Dotted"], ["dash_dot", "Dash-Dot"], ["dash_dot_dot", "Dash-Dot-Dot"]];
+// lineTypeNames (stroke_params.cpp): no "Default" entry, a default stroke (LINE_STYLE::DEFAULT, -1) shows as Solid
+const LINE_STYLES: [string, string][] = [["solid", "Solid"], ["dash", "Dashed"], ["dot", "Dotted"], ["dash_dot", "Dash-Dot"], ["dash_dot_dot", "Dash-Dot-Dot"]];
 // SEXPR_BOARD_FILE_VERSION: what an older board can't hold without a format bump
 const SHAPE_HATCH_VERSION = 20250222, ROUNDRECT_VERSION = 20250829, SHAPE_MASK_VERSION = 20241010;
 type Geom = { kind: string } & Record<string, unknown>;
@@ -642,7 +646,8 @@ function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
     if (!rrOk) roundRect.el.title = cornerR.input.title = "This board's file format has no rounded rectangles.";
     const stroke = kid(node, "stroke"), legacyW = kid(node, "width");
     const width = lenField(stroke ? nval(kid(stroke, "width")) : nval(legacyW), { ro, key: "lineWidth" });
-    const style = selectField<string>(sval(stroke ? kid(stroke, "type") : null) || "default", LINE_STYLES, { ro: ro || !stroke, key: "lineStyle" });
+    const style0 = ((t: string) => (LINE_STYLES.some(([k]) => k === t) ? t : "solid"))(sval(stroke ? kid(stroke, "type") : null));
+    const style = selectField<string>(style0, LINE_STYLES, { ro: ro || !stroke, key: "lineStyle" });
     const closed = kind === "gr_rect" || kind === "gr_circle" || kind === "gr_poly";
     const fk = kid(node, "fill"), fv = sval(fk);
     const fill0 = fv === "solid" || fv === "yes" ? "solid" : fv === "hatch" || fv === "reverse_hatch" || fv === "cross_hatch" ? fv : "none";
@@ -700,7 +705,7 @@ function shapeDialog(ctx: ToolCtx, item: KItem): boolean {
       }
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       const s = kid(n, "stroke");
-      if (s) { put(s, "width", `(width ${f6(w)})`, ["type"]); if (style.get() !== (sval(kid(s, "type")) || "default")) put(s, "type", `(type ${style.get()})`); }
+      if (s) { put(s, "width", `(width ${f6(w)})`, ["type"]); if (style.get() !== style0) put(s, "type", `(type ${style.get()})`); }
       else put(n, "width", `(width ${f6(w)})`, ["layer"]);
       if (closed && fill.get() !== fill0) {
         const yn = fv === "yes" || fv === "no" || (!fk && version >= 20240000);
@@ -754,24 +759,32 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
   return itemDialog(ctx, item, "Footprint Properties", 900, (node, body, ro) => {
     const props = (n: SNode): SNode[] => (K().kids(n, "property") as SNode[]).filter((p) => p.some((c) => isList(c)) && !String(p[1]).startsWith("ki_"));
     const MAND = ["Reference", "Value", "Datasheet", "Description"];
+    // MANDATORY_FIELDS (template_fieldnames.h): the parser folds these names case-insensitively, so FieldNamesAreDuplicates
+    // takes any case of one of them for that field (Footprint is read and dropped: a field by that name would be lost)
+    const RESERVED = ["Reference", "Value", "Footprint", "Datasheet", "Description"].map((m) => m.toLowerCase());
+    const duplicates = (a: string, b: string): boolean => a === b || (a.toLowerCase() === b.toLowerCase() && RESERVED.includes(a.toLowerCase()));
     const label = (n: string): string => (n === "Reference" ? "Reference designator" : n);
     const xref = boardXref(doc);   // field text shows cross-references as ${REF:FIELD} (dialog_footprint_properties.cpp:272, 603)
     // the board's current variant (the toolbar's): fields and the DNP / BOM / position-file / simulation flags show
     // and write the footprint's (variant …) (dialog_footprint_properties.cpp:263-312, 586-715)
     const variant = String((E as { currentVariant?: string }).currentVariant || "");
     const fieldText = (p: SNode): string => (variant ? VM.footprintFieldForVariant(node, variant, String(p[1])) : sval(p, 2));
+    const fpRot0 = K().atOf(node)[2] || 0;
+    const relRot = (abs: number): number => +(abs - fpRot0).toFixed(3);
     const rows: Record<string, CellValue>[] = props(node).map((p) => {
       const fx = FH().fieldEffects(p), a = FH().fieldAt(p), e = kid(p, "effects"), f = e ? kid(e, "font") : null, sz = f ? kid(f, "size") : null;
-      return { name: String(p[1]), label: MAND.includes(String(p[1])) ? label(String(p[1])) : String(p[1]), value: xref.toRefs(fieldText(p)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
+      return { name: String(p[1]), label: MAND.includes(String(p[1])) ? label(String(p[1])) : String(p[1]), value: xref.toRefs(fieldText(p)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: relRot(a[2] || 0), x: a[0], y: a[1] };
     });
     const mandRow = (r: Record<string, CellValue>): boolean => MAND.includes(String(r.name));
     const g = grid([{ label: "Name", key: "label", width: "130px", readOnly: (r) => mandRow(r) }, { label: "Value", key: "value" }, { label: "Show", key: "show", type: "check" }, { label: "Width", key: "w", type: "len" }, { label: "Height", key: "ht", type: "len" }, { label: "Thickness", key: "th", type: "len" },
       { label: "Italic", key: "italic", type: "check" }, { label: "Layer", key: "layer", type: "select", options: allLayers(doc), width: "120px" }, { label: "Orientation", key: "rot", type: "num" }, { label: "X Offset", key: "x", type: "len" }, { label: "Y Offset", key: "y", type: "len" }], rows, { ro, height: "170px" });
     const at = K().atOf(node), side0 = sval(kid(node, "layer")) || "F.Cu";
-    // OnAddField: "Field<n>", hidden, on the side's Fab layer at the footprint origin; OnDeleteField keeps the mandatory four
-    const gbar = gridButtons(g, () => ({ name: "", label: "Field" + (g.rows().length + MAND.filter((m) => !g.rows().some((r) => r.name === m)).length), value: "", show: false, w: 1, ht: 1, th: 0.15, italic: false, layer: side0 === "B.Cu" ? "B.Fab" : "F.Fab", rot: 0, x: 0, y: 0 }),
+    // OnAddField: "Field<n>", hidden, on the side's Fab layer at the footprint origin, styled by StyleFromSettings (the
+    // board's Fab text size, thickness, italic, keep upright; mirrored on the back); OnDeleteField keeps the mandatory four
+    const fab = side0 === "B.Cu" ? "B.Fab" : "F.Fab", fabStyle = PT().layerStyle(fab);
+    const gbar = gridButtons(g, () => ({ name: "", label: "Field" + (g.rows().length + MAND.filter((m) => !g.rows().some((r) => r.name === m)).length), value: "", show: false, w: fabStyle.w, ht: fabStyle.h, th: fabStyle.thick, italic: fabStyle.italic, layer: fab, rot: 0, x: 0, y: 0 }),
       { ro, addTip: "Add field", delTip: "Delete field", canDelete: (r) => { if (!mandRow(r)) return true; messageBox("Error", `The first ${MAND.length} fields are mandatory.`); return false; } });
-    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = orientationField(at[2] || 0, ro, "orientation");
+    const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = orientationField(at[2] || 0, ro, "orientation", ["0", "90", "-90", "180"]);
     const side = selectField<string>(side0, [["F.Cu", "Front"], ["B.Cu", "Back"]], { ro, key: "side" });
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const attrs = PH().footprintAttrs(node);
@@ -796,12 +809,12 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     return (n) => {
       const variantFields: Record<string, string> = {};
       // field names: none empty, none twice (TransferDataFromWindow / OnGridCellChanging)
-      const names = new Set<string>();
+      const names: string[] = [];
       for (const r of g.rows()) {
         const nm = mandRow(r) ? String(r.name) : String(r.label).trim();
         if (!nm) return "Fields must have a name.";
-        if (names.has(nm)) return `Field name '${nm}' already in use.`;
-        names.add(nm);
+        if (names.some((o) => duplicates(nm, o)) || (!mandRow(r) && RESERVED.includes(nm.toLowerCase()))) return `Field name '${nm}' already in use.`;
+        names.push(nm);
       }
       // deleted user fields go, renamed ones take their new name, added ones are written after the last field
       for (const p of props(n)) if (!MAND.includes(String(p[1])) && !g.rows().some((r) => r.name === String(p[1]))) n.splice(n.indexOf(p), 1);
@@ -810,7 +823,11 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
         const nm = String(r.label).trim();
         if (!r.name) {
           const all = K().kids(n, "property") as SNode[], last = all[all.length - 1];
-          const fresh = K().parse(`(property ${quote(nm)} "" (at 0 0 0) (layer ${quote(String(r.layer))}) (hide yes) (uuid ${quote(K().newUuid())}) (effects (font (size 1 1) (thickness 0.15))))`) as SNode;
+          // PCB_FIELD( m_footprint, USER ): its text angle is the footprint's orientation (GetTextAngle, normalised), keep
+          // upright unless the Fab class says otherwise ((unlocked yes)), the Fab text style (italic below, with the row),
+          // mirrored on a back layer
+          const ly = String(r.layer), st = PT().layerStyle(ly), back = /^B\./.test(ly);
+          const fresh = K().parse(`(property ${quote(nm)} "" (at 0 0 ${f6(norm360(fpRot0))})${st.upright ? "" : " (unlocked yes)"} (layer ${quote(ly)}) (hide yes) (uuid ${quote(K().newUuid())}) (effects (font (size ${f6(st.h)} ${f6(st.w)}) (thickness ${f6(st.thick)}))${back ? " (justify mirror)" : ""}))`) as SNode;
           n.splice(last ? n.indexOf(last) + 1 : 1, 0, fresh); r.name = nm;
         } else if (nm !== r.name) { const p = props(n).find((q) => String(q[1]) === r.name); if (p) p[1] = nm; r.name = nm; }
       }
@@ -827,7 +844,8 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
         if (isFinite(th) && f && th !== (fx.thick || 0.15)) put(f, "thickness", `(thickness ${f6(th)})`, ["bold", "italic", "color"]);
         if (f && !!r.italic !== fx.italic) fontFlags(doc, f, "italic", !!r.italic);
         if (String(r.layer) && String(r.layer) !== FH().fieldLayer(p)) put(p, "layer", `(layer ${quote(String(r.layer))})`, ["hide", "uuid", "effects"]);
-        if (Number(r.x) !== a[0] || Number(r.y) !== a[1] || Number(r.rot) !== (a[2] || 0)) FH().setFieldAt(p, Number(r.x) || 0, Number(r.y) || 0, Number(r.rot) || 0);
+        // PFC_ORIENTATION: SetTextAngle( value + the footprint's orientation ), written normalised
+        if (Number(r.x) !== a[0] || Number(r.y) !== a[1] || Number(r.rot) !== relRot(a[2] || 0)) FH().setFieldAt(p, Number(r.x) || 0, Number(r.y) || 0, norm360((Number(r.rot) || 0) + fpRot0));
       }
       if (side.get() !== side0) PH().setFootprintSide(n, side.get());
       const now = K().atOf(n);

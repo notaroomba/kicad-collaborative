@@ -39,6 +39,8 @@ interface KDoc {
   fpEditor?: boolean;
   /** the file's (version …) */
   version?: number;
+  /** board-level items read after another one with the same uuid (canvas/doc.ts parseDoc), in file order */
+  dupItems?: { id: string; node: SNode }[];
 }
 
 /** A collaboration op change (the item-level LWW protocol shared with the desktop). */

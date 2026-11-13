@@ -709,6 +709,7 @@ export function reportPanel(height?: string, opts?: { fileName?: string; empty?:
     if (!list.childElementCount) list.append(h("div", { class: "ln info" }, lines.length ? "" : opts && opts.empty !== undefined ? opts.empty : "No changes to be made."));
     const count = (s: string): number => lines.filter((l) => l.severity === s).length;
     (filters.Errors.el.lastChild as Text).textContent = `Errors (${count("error")})`; (filters.Warnings.el.lastChild as Text).textContent = `Warnings (${count("warning")})`;
+    list.scrollTop = list.scrollHeight;   // WX_HTML_REPORT_PANEL::Flush -> scrollToBottom
   };
   const bar = h("div", { class: "pd-row", style: "margin-top:6px" }, h("span", { class: "pd-lbl" }, "Show:"));
   for (const [name, on] of [["All", true], ["Errors", true], ["Warnings", true], ["Actions", true], ["Infos", true]] as [string, boolean][]) {

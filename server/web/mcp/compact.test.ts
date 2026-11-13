@@ -93,6 +93,15 @@ function run(demo: string, name: string, docType: string): void {
     const s = foldOps(k, docType, file, [{ seq: 1, changes: [{ id: "board-setup", kind: "MODIFIED", typeName: "BOARD_SETUP", properties: [{ name: "layers", after: { type: "sexpr", v: layers.replace('"F.Cu"', '"F.Cu"').replace(/\)$/, ' (39 "User.9" user "Notes"))') } }] }] }]);
     ok(s.ok && /\(39 "?User\.9"? user "Notes"\)/.test((s as any).text), tag + ": a board setup edit lands" + (s.ok ? "" : " (" + (s as any).reason + ")"));
     if (s.ok) ok(linesLost(file, s.text) < 80, tag + ": and only the layer table changed");
+    // Repair Board: an item given a new id (REMOVED + ADDED with replaces) stays where it was in the file
+    const mid = items[Math.floor(items.length / 2)], reId = "0e0e0e0e-1111-4222-8333-555555555555";
+    const r = foldOps(k, docType, file, [{ seq: 1, changes: [{ id: mid.id, kind: "REMOVED" }, { id: reId, kind: "ADDED", replaces: mid.id, sexpr: frag(serialize(mid.node).replace(mid.id, reId)) }] }]);
+    ok(r.ok, tag + ": a re-id folds" + (r.ok ? "" : " (" + (r as any).reason + ")"));
+    if (r.ok) {
+      const ord = (t: string): string[] => [...(parseDoc(t, docType) as any).items.keys()].filter((x: string) => !x.startsWith("anon-"));
+      const was = ord(file), now = ord(r.text);
+      ok(now.indexOf(reId) === was.indexOf(mid.id) && !now.includes(mid.id), tag + ": the re-id'd item keeps its place");
+    }
   } else {
     // a symbol placed from a library the sheet did not have brings its library copy
     const sym = items.find((i: any) => i.kind === "symbol"); const libId = str(kid(sym.node, "lib_id")[1]); const libNode = doc.lib.get(libId);

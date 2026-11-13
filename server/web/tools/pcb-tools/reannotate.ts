@@ -71,6 +71,7 @@ function refField(n: SNode): SNode | null {
   for (const c of n) if (Array.isArray(c) && ((c[0] === "property" && K.str(c[1]) === "Reference") || (c[0] === "fp_text" && K.str(c[1]) === "reference"))) return c as SNode;
   return null;
 }
+function scaleOf(n: SNode): [number, number] { const t = K.kid(n, "transform"), sc = t && K.kid(t, "scale"); return sc ? [K.num(sc[1], 1) || 1, K.num(sc[2], 1) || 1] : [1, 1]; }
 const isLocked = (n: SNode): boolean => n.includes("locked") || (() => { const l = K.kid(n, "locked"); return !!l && K.str(l[1]) !== "no"; })();
 
 export function geographicalReannotate(doc: BoardDoc, o: ReannotateOpts): ReannotatePlan {
@@ -83,11 +84,13 @@ export function geographicalReannotate(doc: BoardDoc, o: ReannotateOpts): Reanno
   const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
   // BuildFootprintList
   for (const fp of fps) {
-    const n = fp.node, at = K.kid(n, "at"), fx = at ? K.num(at[1]) : 0, fy = at ? K.num(at[2]) : 0, rot = at && at.length > 3 ? K.num(at[3]) : 0;
+    // GetPosition(): (at x y a), or the (transform (translate x y) (rotate a) (scale sx sy)) KiCad 10 writes
+    const n = fp.node, [fx, fy, rot] = K.atOf(n), [sx, sy] = scaleOf(n);
     const rf = refField(n), ref = rf && !Array.isArray(rf[2]) ? K.str(rf[2]) : "";
     let x = fx, y = fy;
     if (!o.useFootprintLocation && rf) {
-      const ra = K.kid(rf, "at"); if (ra) { const r = rot * Math.PI / 180, lx = K.num(ra[1]), ly = K.num(ra[2]); x = fx + lx * Math.cos(r) + ly * Math.sin(r); y = fy - lx * Math.sin(r) + ly * Math.cos(r); }
+      // Reference().GetPosition(): the field's footprint-relative (at …) through the footprint's scale and rotation
+      const ra = K.kid(rf, "at"); if (ra) { const r = rot * Math.PI / 180, lx = K.num(ra[1]) * sx, ly = K.num(ra[2]) * sy; x = fx + lx * Math.cos(r) + ly * Math.sin(r); y = fy - lx * Math.sin(r) + ly * Math.cos(r); }
     }
     const layer = K.kid(n, "layer"), isFront = !layer || K.str(layer[1]) === "F.Cu";
     const info: Info = { id: fp.id, ref, fpid: K.str(n[1]), x: nm(x), y: nm(y), rx: roundToGrid(nm(x), grid), ry: roundToGrid(nm(y), grid), front: isFront, action: Action.UPDATE, prefix: "" };

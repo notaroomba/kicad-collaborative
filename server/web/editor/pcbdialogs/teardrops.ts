@@ -6,9 +6,11 @@
 // project's teardrop_options.
 import { E } from "../state";
 import { pcbState } from "../gestures";
-import { editProject, parseProject, toPlain } from "../../canvas/project-file";
+import { editProject, parseProject, toPlain, type ProjectEdit } from "../../canvas/project-file";
 import { adoptProjectFile, canWriteProject, saveProjectFile } from "../projectfile";
 import { openBoardSetup } from "./board-setup";
+import { effectiveTheme } from "../../theme";
+import { TEARDROP_SIZES } from "./teardrop-bitmap";
 import { box, checkField, form, h, openDialog, parseLen, selectField, unitLabel, type Field } from "./ui";
 
 type Obj = Record<string, unknown>;
@@ -103,6 +105,7 @@ export function openEditTeardrops(ctx: ToolCtx): void {
   const useNext = tri("Allow teardrops to span two track segments", "useNextTrack", "Allows a teardrop to extend over the first 2 connected track segments if the first track segment is too short to accommodate the best length.");
   const hd = leaveField("hdRatio", false); hd.el.title = "Tracks which are similar in size to the pad or via do not need teardrops.";
   const lenPct = leaveField("lenPercent", false), maxLen = leaveField("maxLen", true), widthPct = leaveField("widthPercent", false), maxWidth = leaveField("maxWidth", true);
+  for (const f of [lenPct, maxLen, widthPct, maxWidth]) f.el.style.width = "120px";
   const curved = tri("Curved edges", "curvedEdges");
 
   // OnExistingFilterSelect: no "add" when only existing teardrops are touched
@@ -111,28 +114,34 @@ export function openEditTeardrops(ctx: ToolCtx): void {
     (addSpec.el.lastChild as Text).textContent = existing.get() ? "Set teardrops to specified values:" : "Add teardrops with specified values:";
   };
   existing.input.addEventListener("change", relabel);
-  // onTrackToTrack: track-to-track teardrops follow the board settings only
+  // onTrackToTrack: track-to-track teardrops follow the board settings only, so checking it moves "specified values"
+  // to "default values" (the radio itself stays enabled)
   t2t.input.addEventListener("change", () => { if (t2t.get() && addSpec.get()) addDef.set(true); sync(); });
+  const bitmap = h("img", { src: TEARDROP_SIZES[effectiveTheme() === "dark" ? 1 : 0], width: "275", height: "130", alt: "", "data-bitmap": "teardrop_sizes", style: "display:block;margin:0 auto" }) as HTMLImageElement;
   const specCtrls: (HTMLInputElement)[] = [preferZone.input, useNext.input, hd.el, lenPct.el, maxLen.el, widthPct.el, maxWidth.el, curved.input];
   const filterCtrls: Field<boolean>[] = [netOpt, ncOpt, layerOpt, roundOnly, existing, selOnly];
   const sync = (): void => {
-    // onSpecifiedValuesUpdateUi, onFilterUpdateUi
-    const spec = addSpec.get() && !t2t.get();
+    // onSpecifiedValuesUpdateUi (the value controls and the picture), onFilterUpdateUi (the filters only)
+    const spec = addSpec.get();
     for (const c of specCtrls) { c.disabled = !spec; const l = c.closest("label"); if (l) l.classList.toggle("dim", !spec); }
-    (addSpec.input as HTMLInputElement).disabled = t2t.get();
+    bitmap.style.opacity = spec ? "" : "0.5";
     for (const f of filterCtrls) { (f.input as HTMLInputElement).disabled = t2t.get(); f.el.classList.toggle("dim", t2t.get()); }
     for (const s of [net, nc, layer]) (s.input as HTMLElement & { disabled: boolean }).disabled = t2t.get();
   };
 
-  openDialog({ title: "Set Teardrops", width: 760, okLabel: "Apply and Close", cancelLabel: "Close", persist: true,
+  openDialog({ title: "Set Teardrops", width: 1000, okLabel: "Apply and Close", cancelLabel: "Close", persist: true,
     build(body) {
       const filters = h("div", { class: "pd-form" });
       filters.append(netOpt.el, net.el, h("span"), ncOpt.el, nc.el, h("span"), layerOpt.el, layer.el, h("span"));
-      const spec = form([preferZone.el, useNext.el,
-        ["Track width limit:", hd.el, unitLabel("%"), "Max pad/via size to track width ratio to create a teardrop.\n100 always creates a teardrop."],
-        h("div", { class: "pd-note", style: "font-style:italic;margin:0" }, "(as a percentage of pad/via minor dimension)"),
-        ["Best length (L):", lenPct.el, unitLabel("%( d )")], ["Maximum length (L):", maxLen.el, unitLabel()],
-        ["Best width (W):", widthPct.el, unitLabel("%( d )")], ["Maximum width (W):", maxWidth.el, unitLabel()], curved.el]);
+      // bSizerSpecifiedValues: the two checkboxes beside the width limit, then m_bitmapTeardrop beside the sizes
+      const spec = h("div", null,
+        h("div", { style: "display:grid;grid-template-columns:auto auto;gap:0 25px;align-items:start" },
+          h("div", { style: "display:flex;flex-direction:column;gap:2px" }, preferZone.el, useNext.el),
+          h("div", null, form([["Track width limit:", hd.el, unitLabel("%"), "Max pad/via size to track width ratio to create a teardrop.\n100 always creates a teardrop."]]),
+            h("div", { class: "pd-note", style: "font-style:italic;margin:0" }, "(as a percentage of pad/via minor dimension)"))),
+        h("div", { style: "display:grid;grid-template-columns:275px max-content;gap:0 25px;align-items:center;margin-top:5px" }, bitmap,
+          h("div", null, form([["Best length (L):", lenPct.el, unitLabel("%( d )")], ["Maximum length (L):", maxLen.el, unitLabel()],
+            ["Best width (W):", widthPct.el, unitLabel("%( d )")], ["Maximum width (W):", maxWidth.el, unitLabel()]]), h("div", { style: "height:8px" }), curved.el)));
       const action = box("Action", rmSome.el, rmAll.el, h("div", { style: "height:6px" }), addDef.el, h("div", { style: "margin:0 0 6px 24px" }, setupLink), addSpec.el, h("div", { style: "margin-left:24px" }, spec));
       body.append(h("div", { style: "display:grid;grid-template-columns:auto 1fr;gap:0 16px;align-items:start" },
         h("div", null, box("Scope", pth.el, smd.el, vias.el, t2t.el), box("Filter Items", filters, roundOnly.el, existing.el, selOnly.el)), action));
@@ -142,7 +151,7 @@ export function openEditTeardrops(ctx: ToolCtx): void {
     restored() { relabel(); sync(); },
     ok() {
       for (const f of [hd, lenPct, maxLen, widthPct, maxWidth]) if (f.bad()) { ctx.toast("Value must be a number."); f.el.focus(); return false; }
-      const action: Opts["action"] = rmSome.get() ? "remove" : rmAll.get() ? "removeAll" : addSpec.get() && !t2t.get() ? "specified" : "default";
+      const action: Opts["action"] = rmSome.get() ? "remove" : rmAll.get() ? "removeAll" : addSpec.get() ? "specified" : "default";
       const specified: Partial<Td> = {};
       const pz = preferZone.get(), un = useNext.get(), cv = curved.get();
       if (pz !== undefined) specified.preferZone = pz;
@@ -161,8 +170,17 @@ export function openEditTeardrops(ctx: ToolCtx): void {
       ctx.requestRender();
       // bds.m_TeardropParamsList's targets go to the project file
       const next = { ...topts, td_onvia: o.vias, td_onpthpad: o.pthPads, td_onsmdpad: o.smdPads, td_ontrackend: o.trackToTrack, td_onroundshapesonly: !!o.roundOnly };
-      if (E.proSettings && canWriteProject() && JSON.stringify(next) !== JSON.stringify(topts)) {
-        const edits = [{ path: [...DS, "teardrop_options"], value: [next] }];
+      const edits: ProjectEdit[] = [];
+      if (JSON.stringify(next) !== JSON.stringify(topts)) edits.push({ path: [...DS, "teardrop_options"], value: [next] as ProjectEdit["value"] });
+      // Track to track: TARGET_TRACK's m_Enabled (td_enabled of the td_track_end entry) is cleared by a removal and set
+      // by "default values"; "specified values" leaves it
+      const tdEnable = o.trackToTrack || action === "removeAll" ? (action === "remove" || action === "removeAll" ? false : action === "default" ? true : null) : null;
+      if (tdEnable !== null) {
+        const list = (Array.isArray(ds.teardrop_parameters) ? ds.teardrop_parameters as unknown[] : []).map(obj);
+        const i = list.findIndex((x) => x.td_target_name === "td_track_end");
+        if (i >= 0 && list[i].td_enabled !== tdEnable) edits.push({ path: [...DS, "teardrop_parameters"], value: list.map((x, j) => (j === i ? { ...x, td_enabled: tdEnable } : x)) as ProjectEdit["value"] });
+      }
+      if (E.proSettings && canWriteProject() && edits.length) {
         try { const res = editProject(E.proSettings, edits); void saveProjectFile(res.text, res.changed).then((ok) => { if (ok) adoptProjectFile(res.text); }); } catch (e) { /* the project file stays as it was */ }
       }
       return true;

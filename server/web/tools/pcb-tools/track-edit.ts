@@ -144,7 +144,9 @@ export function unusedPadLayerChanges(doc: BoardDoc, ids: Iterable<string> | nul
   const depth = (a: string, b: string): number => Math.abs(copper.indexOf(a) - copper.indexOf(b));
   const setFlags = (n: SNode, keepTag: string, pad: boolean): boolean => {
     const before = JSON.stringify(n);
-    for (const k of ["remove_unused_layers", "keep_end_layers"]) { const i = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === k); if (i > 0) n.splice(i, 1); }
+    // SetRemoveUnconnected / SetKeepTopBottom set the padstack's UNCONNECTED_LAYER_MODE outright: REMOVE_ALL,
+    // REMOVE_EXCEPT_START_AND_END or KEEP_ALL, never START_END_ONLY, so (start_end_only …) goes as well
+    for (const k of ["remove_unused_layers", "keep_end_layers", "start_end_only"]) { const i = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === k); if (i > 0) n.splice(i, 1); }
     let at = n.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "layers"); at = at > 0 ? at + 1 : n.length;
     // PCB_IO_KICAD_SEXPR: a plated pad always says whether it removes them, a via only when it does
     const add: SNode[] = [];

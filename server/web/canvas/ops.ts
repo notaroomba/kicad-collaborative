@@ -53,7 +53,13 @@ export function applyChange(doc: Doc, change: WireChange, IU: number): boolean {
   // the Footprint Editor's footprint itself (its name, attributes, description, models …): the header node
   if (doc.fpEditor && id === "footprint") { const frag = change.sexpr || change.itemSexpr; return kind !== "REMOVED" && !!frag && applyFootprintHeader(doc, frag); }
   const oldLib = libNameOf(doc, id);
-  if (kind === "REMOVED") { const r = doc.items.delete(id); pruneLibName(doc, oldLib); return r; }
+  if (kind === "REMOVED") {
+    const r = doc.items.delete(id); pruneLibName(doc, oldLib);
+    // the file had another board item with this id (parseDoc dupItems): it is the one the id names now
+    const d = doc.dupItems ? doc.dupItems.findIndex((x) => x.id === id) : -1;
+    if (r && d >= 0) { const [next] = doc.dupItems!.splice(d, 1); addItem(doc, next.node); }
+    return r;
+  }
   const frag = change.sexpr || change.itemSexpr;
   if (frag) {
     const nodes = fragmentItems(doc, frag);

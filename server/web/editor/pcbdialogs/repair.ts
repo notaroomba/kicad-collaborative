@@ -3,7 +3,7 @@
 import { E } from "../state";
 import { messageBox } from "./ui";
 
-interface PcbToolsApi { repairBoard(doc: KDoc): { changes: KChange[]; duplicates: number; details: string[] } }
+interface PcbToolsApi { repairBoard(doc: KDoc): { changes: KChange[]; steps: KChange[][]; duplicates: number; details: string[] } }
 const PT = (): PcbToolsApi => (window as unknown as { PcbTools: PcbToolsApi }).PcbTools;
 
 export function repairBoard(ctx: ToolCtx): void {
@@ -11,7 +11,8 @@ export function repairBoard(ctx: ToolCtx): void {
   if (!doc || doc.type !== "pcb") { ctx.toast("Repair Board needs a board"); return; }
   if (E.viewOnly) { ctx.toast("This board is read-only"); return; }
   const r = PT().repairBoard(doc);
-  if (r.changes.length) { ctx.commit(r.changes, "Repair Board"); ctx.requestRender(); }
+  // one undo step, sent as the ops RepairResult.steps says (the removals of duplicated board items go first, alone)
+  if (r.steps.length) { r.steps.forEach((s, i) => ctx.commit(s, "Repair Board", i ? { amend: true } : undefined)); ctx.requestRender(); }
   if (r.duplicates) messageBox("Information", `${r.duplicates} potential problems repaired.\n\n${r.details.join("\n")}`);
   else messageBox("Information", "No board problems found.");
 }

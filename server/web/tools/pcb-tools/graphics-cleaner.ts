@@ -15,7 +15,7 @@ export interface GraphicsCleanupPlan { items: CleanupItem[]; changes: PcbChange[
 
 // ADVANCED_CFG::m_DRCEpsilon (0.5 um) for GRAPHICS_CLEANER::equivalent; WELD_GAP_TOLERANCE for ConnectBoardShapes
 const EPSILON = 0.0005, WELD_GAP = 0.01;
-const SHAPE_KINDS = /^gr_(line|rect|circle|arc|poly|curve)$/;
+const SHAPE_KINDS = /^gr_(line|rect|circle|arc|poly|curve|ellipse|ellipse_arc)$/;
 
 type Shape = { id: string; item: KItem; node: SNode; kind: string; dirty: boolean };
 const P = (n: SNode, key: string): Pt | null => { const k = K.kid(n, key); return k ? [K.num(k[1]), K.num(k[2])] : null; };
@@ -27,9 +27,36 @@ const widthOf = (n: SNode): number => { const s = K.kid(n, "stroke"); const w = 
 const equivalent = (a: Pt | null, b: Pt | null, eps = EPSILON): boolean => !!a && !!b && Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps;
 const d2 = (a: Pt, b: Pt): number => (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
 
-/** EDA_SHAPE GetStart / GetEnd: a circle's centre and rim point, a curve's ends. */
-function startOf(s: Shape): Pt | null { return s.kind === "circle" ? P(s.node, "center") : s.kind === "curve" ? ptsOf(s.node)[0] || null : P(s.node, "start"); }
-function endOf(s: Shape): Pt | null { if (s.kind === "curve") { const p = ptsOf(s.node); return p[3] || null; } return P(s.node, "end"); }
+/** An ellipse's (center …) (major_radius …) (minor_radius …) (rotation_angle …) [(start_angle …) (end_angle …)]. */
+const nv = (n: SNode, key: string): number => { const k = K.kid(n, key); return k ? K.num(k[1]) : 0; };
+function ellipseOf(n: SNode): { c: Pt; a: number; b: number; rot: number; t0: number; t1: number } {
+  return { c: P(n, "center") || [0, 0], a: nv(n, "major_radius"), b: nv(n, "minor_radius"), rot: nv(n, "rotation_angle"), t0: nv(n, "start_angle"), t1: nv(n, "end_angle") };
+}
+/** EDA_SHAPE::recalcEllipseArcEndpoints: an ellipse's start is its centre and its end the major axis' tip; an arc's are where it starts and ends. */
+function ellipseEnds(n: SNode, arc: boolean): [Pt, Pt] {
+  const e = ellipseOf(n), phi = e.rot * Math.PI / 180, cp = Math.cos(phi), sp = Math.sin(phi);
+  if (!arc) return [e.c, [e.c[0] + e.a * cp, e.c[1] + e.a * sp]];
+  const at = (deg: number): Pt => { const t = deg * Math.PI / 180, lx = e.a * Math.cos(t), ly = e.b * Math.sin(t); return [e.c[0] + lx * cp - ly * sp, e.c[1] + lx * sp + ly * cp]; };
+  return [at(e.t0), at(e.t1)];
+}
+/** EDA_SHAPE GetStart / GetEnd: a circle's centre and rim point, a curve's ends, a polygon's unused (0, 0). */
+function startOf(s: Shape): Pt | null {
+  switch (s.kind) {
+    case "circle": return P(s.node, "center");
+    case "curve": return ptsOf(s.node)[0] || null;
+    case "poly": return [0, 0];
+    case "ellipse": case "ellipse_arc": return ellipseEnds(s.node, s.kind === "ellipse_arc")[0];
+  }
+  return P(s.node, "start");
+}
+function endOf(s: Shape): Pt | null {
+  switch (s.kind) {
+    case "curve": return ptsOf(s.node)[3] || null;
+    case "poly": return [0, 0];
+    case "ellipse": case "ellipse_arc": return ellipseEnds(s.node, s.kind === "ellipse_arc")[1];
+  }
+  return P(s.node, "end");
+}
 function setStart(s: Shape, p: Pt): void { if (s.kind === "curve") setPts(s.node, 0, p); else setP(s.node, "start", p); s.dirty = true; }
 function setEnd(s: Shape, p: Pt): void { if (s.kind === "curve") setPts(s.node, 3, p); else setP(s.node, "end", p); s.dirty = true; }
 
@@ -40,6 +67,7 @@ function isNullShape(s: Shape): boolean {
     case "circle": { const c = startOf(s), e = endOf(s); return !c || !e || Math.hypot(e[0] - c[0], e[1] - c[1]) === 0; }
     case "poly": return ptsOf(s.node).length === 0;
     case "curve": { const p = ptsOf(s.node); if (p.length < 4) return true; return K.bezierPts(p).length < 2 || (K.bezierPts(p).length === 2 && equivalent(p[0], p[3])); }
+    case "ellipse": case "ellipse_arc": { const e = ellipseOf(s.node); return Math.round(e.a * 1e6) === 0 || Math.round(e.b * 1e6) === 0; }
   }
   return false;
 }
@@ -50,17 +78,24 @@ function areEquivalent(a: Shape, b: Shape): boolean {
     case "line": case "rect": case "circle": return equivalent(startOf(a), startOf(b)) && equivalent(endOf(a), endOf(b));
     case "arc": return equivalent(P(a.node, "mid"), P(b.node, "mid")) && equivalent(startOf(a), startOf(b)) && equivalent(endOf(a), endOf(b));
     case "curve": { const p = ptsOf(a.node), q = ptsOf(b.node); return p.length === 4 && q.length === 4 && p.every((x, i) => equivalent(x, q[i])); }
+    case "ellipse": case "ellipse_arc": {
+      const e = ellipseOf(a.node), f = ellipseOf(b.node), iu = (v: number): number => Math.round(v * 1e6);
+      return equivalent(e.c, f.c) && iu(e.a) === iu(f.a) && iu(e.b) === iu(f.b) && e.rot === f.rot && (a.kind !== "ellipse_arc" || (e.t0 === f.t0 && e.t1 === f.t1));
+    }
   }
   return false;   // POLY: TODO in KiCad too
 }
 
-/** ConnectBoardShapes: walk the chains of lines, arcs and curves and make their ends meet. */
+/**
+ * ConnectBoardShapes: walk the chains of lines, arcs and curves and make their ends meet.  The k-d tree holds the
+ * GetStart / GetEnd of every Edge.Cuts shape (rectangles, circles, polygons and ellipses as well), built once from
+ * the ends as they were; only lines, arcs and curves start a walk or are joined.
+ */
 export function connectBoardShapes(shapes: Shape[], eps: number): void {
+  if (!shapes.length) return;
   const chainable = shapes.filter((s) => s.kind === "line" || s.kind === "arc" || s.kind === "curve");
-  if (!chainable.length) return;
-  // the k-d tree is built once, from the ends as they were
   const ends: [Pt, Shape][] = [];
-  for (const s of chainable) { const a = startOf(s), b = endOf(s); if (a && b) ends.push([a.slice() as Pt, s], [b.slice() as Pt, s]); }
+  for (const s of shapes) { const a = startOf(s), b = endOf(s); if (a && b) ends.push([a.slice() as Pt, s], [b.slice() as Pt, s]); }
   const skip = new Set<Shape>();
   const findNext = (shape: Shape, p: Pt): Shape | null => {
     // knnSearch( 2 ): the two nearest ends, the shape's own included
@@ -80,8 +115,11 @@ export function connectBoardShapes(shapes: Shape[], eps: number): void {
     if (a.kind === "line" && b.kind === "line") {
       const idx = pick4(pa, pb), i0 = idx >> 1, i1 = idx & 1;
       const ux = pa[1][0] - pa[0][0], uy = pa[1][1] - pa[0][1], vx = pb[1][0] - pb[0][0], vy = pb[1][1] - pb[0][1];
-      const cross = ux * vy - uy * vx, la = Math.hypot(ux, uy), lb = Math.hypot(vx, vy);
-      const angle = la && lb ? Math.acos(Math.min(1, Math.abs(ux * vx + uy * vy) / (la * lb))) : 0;   // SEG::Angle: the acute angle between the lines
+      const cross = ux * vy - uy * vx;
+      // SEG::Angle: |Normalize180( angle( A - B ) - angle( A' - B' ) )|, 0..180 degrees, so the drawing directions count
+      const n180 = (d: number): number => { while (d <= -180) d += 360; while (d > 180) d -= 360; return d; };
+      const dirOf = (x: number, y: number): number => n180(Math.atan2(y, x) * 180 / Math.PI);
+      const angle = Math.abs(n180(dirOf(-ux, -uy) - dirOf(-vx, -vy))) * Math.PI / 180;
       const segsCross = (): boolean => { const o = (p: Pt, q: Pt, r: Pt): number => Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])); return o(pa[0], pa[1], pb[0]) * o(pa[0], pa[1], pb[1]) <= 0 && o(pb[0], pb[1], pa[0]) * o(pb[0], pb[1], pa[1]) <= 0; };
       let ok = false;
       if ((segsCross() || angle > Math.PI / 4) && Math.abs(cross) > 1e-12) {
@@ -92,6 +130,8 @@ export function connectBoardShapes(shapes: Shape[], eps: number): void {
       if (!ok && d2(pa[i0], pb[i1]) <= WELD_GAP * WELD_GAP) { const m: Pt = [(pa[i0][0] + pb[i1][0]) / 2, (pa[i0][1] + pb[i1][1]) / 2]; setEndAt(a, i0, m); setEndAt(b, i1, m); }
       return;
     }
+    const joins = (s: Shape): boolean => s.kind === "line" || s.kind === "arc" || s.kind === "curve";
+    if (!joins(a) || !joins(b)) return;   // a rectangle, circle, polygon or ellipse: none of connectPair's cases
     if (a.kind === b.kind) {   // arc-arc, curve-curve: both ends to their middle
       const idx = pick4(pa, pb), i0 = idx >> 1, i1 = idx & 1, m: Pt = [(pa[i0][0] + pb[i1][0]) / 2, (pa[i0][1] + pb[i1][1]) / 2];
       setEndAt(a, i0, m); setEndAt(b, i1, m); return;
@@ -177,7 +217,7 @@ export function graphicsCleanup(doc: BoardDoc, o: GraphicsCleanupOpts, dryRun: b
   if (!dryRun) {
     for (const s of shapes) {
       if (removed.has(s)) changes.push(removedChange(s.item));
-      else if (s.dirty) changes.push(replacedChange(s.item, s.node));
+      else if (s.dirty && K.serialize(s.node) !== K.serialize(s.item.node)) changes.push(replacedChange(s.item, s.node));   // an end already where it goes is no edit
     }
     for (const n of added) changes.push(addedChange(doc, n));
   }

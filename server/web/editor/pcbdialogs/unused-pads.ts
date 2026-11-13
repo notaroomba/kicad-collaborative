@@ -42,11 +42,10 @@ export function openUnusedPads(ctx: ToolCtx): void {
   const vias = checkField(false, "Vias", { key: "vias" }), pads = checkField(false, "Pads", { key: "pads" });
   const selOnly = checkField(false, "Selected only", { key: "selectedOnly" });
   const keep = checkField(true, "Keep outside layers", { key: "keepOutside", onChange: () => sync() });
-  if (!selection.length) { (selOnly.input as HTMLInputElement).disabled = true; selOnly.el.classList.add("disabled"); selOnly.input.setAttribute("data-nopersist", ""); }
   const cv = h("canvas", { "data-k": "preview", "data-nopersist": "" }) as HTMLCanvasElement;
   const sync = (): void => drawPreview(cv, keep.get());
   const run = (remove: boolean): void => {
-    const ids = selOnly.get() && selection.length ? selection : null;
+    const ids = selOnly.get() ? selection : null;   // "Selected only" with nothing selected touches nothing (KiCad never disables it)
     const changes = PT().unusedPadLayerChanges(doc, ids, { vias: vias.get(), pads: pads.get(), remove, keepOutside: keep.get() });
     if (changes.length) ctx.commit(changes, "Remove Unused Pads");
     ctx.requestRender();

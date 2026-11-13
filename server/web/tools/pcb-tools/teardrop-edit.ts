@@ -88,7 +88,7 @@ export function teardropEditChanges(doc: BoardDoc, o: TeardropEditOpts): PcbChan
         const type = K.str(p[2]);
         if (removeAll) { if (visit(p, false, picked, true)) changed = true; continue; }
         if (o.pthPads && type === "thru_hole") { if (visit(p, false, picked, false)) changed = true; }
-        else if (o.smdPads && (type === "smd" || type === "connect")) { if (visit(p, false, picked, false)) changed = true; }
+        else if (o.smdPads && (type === "smd" || type === "connect" || type === "non_component")) { if (visit(p, false, picked, false)) changed = true; }
       }
       if (changed) { out.push(replacedChange(it, n)); edited.set(it.id, n); }
     }
@@ -100,11 +100,13 @@ export function teardropEditChanges(doc: BoardDoc, o: TeardropEditOpts): PcbChan
       const n = edited.get(it.id) || it.node;
       if (it.kind === "via") { const a = K.kid(n, "at"), s = K.kid(n, "size"); if (a && !PM().readTeardrops(n).enabled) disabled.push({ at: [K.num(a[1]), K.num(a[2])], r: (s ? K.num(s[1]) : 0.8) / 2, net: netOf(n).name }); }
       else if (it.kind === "footprint") {
-        const fa = K.kid(n, "at"), fx = fa ? K.num(fa[1]) : 0, fy = fa ? K.num(fa[2]) : 0, rot = fa && fa.length > 3 ? K.num(fa[3]) * Math.PI / 180 : 0;
+        // the footprint's (at …) or KiCad 10's (transform (translate …) (rotate …) (scale …)): TRANSFORM_TRS
+        const [fx, fy, deg] = K.atOf(n), rot = deg * Math.PI / 180, tr = K.kid(n, "transform"), sc = tr && K.kid(tr, "scale");
+        const sx = sc ? K.num(sc[1], 1) || 1 : 1, sy = sc ? K.num(sc[2], 1) || 1 : 1;
         for (const p of K.kids(n, "pad")) {
           if (PM().readTeardrops(p).enabled) continue;
           const a = K.kid(p, "at"), s = K.kid(p, "size"); if (!a) continue;
-          const x = K.num(a[1]), y = K.num(a[2]), c = Math.cos(rot), sn = Math.sin(rot);
+          const x = K.num(a[1]) * sx, y = K.num(a[2]) * sy, c = Math.cos(rot), sn = Math.sin(rot);
           disabled.push({ at: [fx + x * c + y * sn, fy - x * sn + y * c], r: s ? Math.max(K.num(s[1]), K.num(s[2])) / 2 : 1, net: netOf(p).name });
         }
       }

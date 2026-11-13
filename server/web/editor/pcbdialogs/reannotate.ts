@@ -7,7 +7,7 @@ import { store } from "../appstore";
 import { pcbState } from "../gestures";
 import { gridChoiceText, messageText, type GridDef } from "../../units";
 type Units = Parameters<typeof messageText>[1];
-import { checkField, h, messageBox, openDialog, selectField, type Field } from "./ui";
+import { checkField, h, messageBox, openDialog, reportPanel, selectField, type Field, type ReportLine } from "./ui";
 
 type Severity = "info" | "action" | "warning" | "error";
 interface Plan { ok: boolean; bad: unknown[]; report: { severity: Severity; text: string }[]; changes: KChange[]; renames: { from: string; to: string }[] }
@@ -91,19 +91,11 @@ export function openReannotate(ctx: ToolCtx): void {
   const rmFront = checkField(false, "Remove front prefix", { key: "removeFrontPrefix", tip: "If checked will remove the front side prefix\nin the front prefix box if present" });
   const rmBack = checkField(false, "Remove back prefix", { key: "removeBackPrefix", tip: "If checked will remove the Back side prefix\nin the back prefix box if present" });
 
-  // WX_HTML_REPORT_PANEL: the messages with the severity filters
-  let lines: { severity: Severity; text: string }[] = [];
-  const shows: Record<Severity | "all", Field<boolean>> = {
-    all: checkField(true, "All", { key: "showAll" }), error: checkField(true, "Errors", { key: "showErrors" }), warning: checkField(true, "Warnings", { key: "showWarnings" }),
-    action: checkField(true, "Actions", { key: "showActions" }), info: checkField(true, "Infos", { key: "showInfos" }) };
-  const report = h("div", { class: "pd-report", style: "height:300px;min-height:0", "data-k": "report" });
-  const render = (): void => {
-    report.replaceChildren(...lines.filter((l) => shows.all.get() || shows[l.severity].get()).map((l) => h("div", { class: "ln " + l.severity }, l.text)));
-    report.scrollTop = report.scrollHeight;
-  };
-  shows.all.input.addEventListener("change", () => { for (const k of ["error", "warning", "action", "info"] as Severity[]) shows[k].set(shows.all.get()); render(); });
-  for (const k of ["error", "warning", "action", "info"] as Severity[]) shows[k].input.addEventListener("change", () => { shows.all.set((["error", "warning", "action", "info"] as Severity[]).every((s) => shows[s].get())); render(); });
-  for (const f of Object.values(shows)) f.input.setAttribute("data-nopersist", "");
+  // WX_HTML_REPORT_PANEL (m_MessageWindow, report.txt): never cleared, so every run's messages follow the last one's
+  const lines: ReportLine[] = [];
+  const report = reportPanel("300px", { fileName: "report.txt", empty: "" });
+  report.el.setAttribute("data-k", "report");
+  const render = (): void => report.set(lines.slice());
 
   const opts = (): Record<string, unknown> => ({
     sortCode: Math.max(0, radios.findIndex((r) => r.checked)), useFootprintLocation: location.get() === "0", grid: (grids[Number(grid.get())] || { mm: 0.001 }).mm,
@@ -130,12 +122,10 @@ export function openReannotate(ctx: ToolCtx): void {
         row(all.el, fr.el, bk.el, sel.el, h("span", { style: "width:24px" }), locked.el),
         row(h("label", { title: exTip }, "Exclude references:"), h("div", { style: "flex:1;min-width:160px" }, exclude)),
         hd("Reference Designators"), h("hr", { class: "pd-sep" }), grid4,
-        h("div", { style: "height:8px" }), report,
-        row(h("span", null, "Show:"), shows.all.el, shows.error.el, shows.warning.el, shows.action.el, shows.info.el));
+        h("div", { style: "height:8px" }), report.el);
     },
     ok() {
       // OnApplyClick: the dialog stays open with the report
-      lines = [];
       const plan = PT().geographicalReannotate(doc, opts());
       lines.push(...plan.report); render();
       if (!plan.ok) return false;

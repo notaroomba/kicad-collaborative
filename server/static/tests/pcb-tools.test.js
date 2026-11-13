@@ -2343,6 +2343,73 @@ test("geographical reannotate: sort by rounded location, renumber per prefix, ex
   assert.equal(K.str(K.kid(node(r.changes.find((c) => c.id === "u-R2-10")), "property")[2]), "R1", "the Reference field is rewritten");
 });
 
+test("sweep9 board tools: duplicate board items, transform footprints, outline directions, ellipses, start_end_only, non-component pads", () => {
+  // Repair Board: two board-level items with one uuid (the file keeps both; the second waits in dupItems)
+  const txt = `(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (37 "F.SilkS" user))
+  (segment (start 0 0) (end 1 0) (width 0.25) (layer "F.Cu") (uuid "dup"))
+  (segment (start 0 1) (end 1 1) (width 0.25) (layer "F.Cu") (uuid "dup"))
+  (gr_line (start 0 2) (end 1 2) (stroke (width 0.1) (type default)) (layer "F.SilkS") (uuid "dup2"))
+  (gr_line (start 0 3) (end 1 3) (stroke (width 0.1) (type default)) (layer "F.SilkS") (uuid "dup2")))`;
+  const dd = K.parseDoc(txt, "kicad_pcb");
+  assert.equal(dd.dupItems.length, 2, "the second copies are kept aside");
+  assert.equal(K.kid(dd.items.get("dup").node, "start")[2], 0, "the first item keeps the id");
+  const rr = P.repairBoard(dd);
+  assert.equal(rr.duplicates, 2);
+  assert.deepEqual(rr.steps.map((s) => s.map((c) => c.kind)), [["REMOVED", "REMOVED"], ["ADDED", "ADDED", "ADDED", "ADDED"]], "the copies go in an op of their own, then come back");
+  const fresh = K.parseDoc(txt, "kicad_pcb");
+  for (const st of rr.steps) for (const c of st) K.applyChange(fresh, c, IU);
+  assert.equal(fresh.items.size, 4); assert.equal(fresh.dupItems.length, 0);
+  assert.equal(K.kid(fresh.items.get("dup").node, "start")[2], 0, "the first segment keeps dup");
+  assert.equal(P.repairBoard(fresh).duplicates, 0, "nothing left to repair");
+  const rmOne = K.parseDoc(txt, "kicad_pcb"); K.applyChange(rmOne, { id: "dup", kind: "REMOVED" }, IU);
+  assert.equal(K.kid(rmOne.items.get("dup").node, "start")[2], 1, "removing one of two leaves the other");
+
+  // Geographical Reannotate: footprints in KiCad 10's (transform …)
+  const tf = (ref, x, y, u, rot = 0) => `(footprint "T:R" (layer "F.Cu") (uuid "${u}") (transform (translate ${x} ${y}) (rotate ${rot}) (scale 1 1))
+    (property "Reference" "${ref}" (at 0 -1.5 ${rot}) (layer "F.SilkS") (uuid "p${u}") (effects (font (size 1 1) (thickness 0.15)))))`;
+  const td = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  ${tf("R1", 50, 10, "a")} ${tf("R2", 10, 10, "b")} ${tf("R3", 30, 10, "c")})`, "kicad_pcb");
+  const gbase = { sortCode: 0, useFootprintLocation: true, grid: 1.27, scope: "all", excludeLocked: false, exclude: "", frontStart: "1", backStart: "", frontPrefix: "", backPrefix: "", removeFrontPrefix: false, removeBackPrefix: false };
+  const g1 = P.geographicalReannotate(td, gbase);
+  assert.deepEqual(Object.fromEntries(g1.renames.map((x) => [x.from, x.to])), { R2: "R1", R3: "R2", R1: "R3" });
+  assert.ok(g1.report.some((l) => l.text === "1 R2 at 10.0000 mm, 10.0000 mm (rounded to 10.1600 mm, 10.1600 mm)"));
+  // Reference location through the transform's rotation: R1's reference sits 1.5 mm to the left of its origin (rotated 90)
+  const tr = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  ${tf("R1", 10, 10, "a", 90)})`, "kicad_pcb");
+  const g2 = P.geographicalReannotate(tr, { ...gbase, useFootprintLocation: false, grid: 0.001 });
+  assert.ok(g2.report.some((l) => l.text.startsWith("1 R1 at 8.5000 mm, 10.0000 mm")), "the field offset is rotated with the footprint");
+
+  // Cleanup Graphics: SEG::Angle counts the drawing direction (0..180)
+  const gl = (a, b, u) => `(gr_line (start ${a}) (end ${b}) (stroke (width 0.1) (type default)) (layer "Edge.Cuts") (uuid "${u}"))`;
+  const edge = (more) => K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user) (37 "F.SilkS" user)) ${gl("0 0", "10 0", "a")} ${more})`, "kicad_pcb");
+  const rev = P.graphicsCleanup(edge(gl("20 5", "10.5 0", "b")), { fixBoardOutlines: true, tolerance: 2 }, false);
+  assert.equal(rev.changes.length, 1, "only the first line moves; the second already ends at the intersection");
+  assert.deepEqual(K.kid(node(rev.changes[0]), "end").slice(1), [10.5, 0]);
+  assert.equal(P.graphicsCleanup(edge(gl("10.5 0", "20 5", "b")), { fixBoardOutlines: true, tolerance: 2 }, false).changes.length, 0, "the same lines drawn onward meet at under 45 degrees: the gap stays");
+  // ellipses: zero radius, duplicates
+  const el = (u, a, b) => `(gr_ellipse (center 5 5) (major_radius ${a}) (minor_radius ${b}) (rotation_angle 0) (stroke (width 0.1) (type default)) (fill no) (layer "F.SilkS") (uuid "${u}"))`;
+  const ec = P.graphicsCleanup(edge(`${el("e1", 2, 0)} ${el("e2", 3, 1)} ${el("e3", 3, 1)}`), { deleteRedundant: true }, true);
+  assert.deepEqual(ec.items.map((i) => [i.text, i.ids[0]]), [["Remove zero-size graphic", "e1"], ["Remove duplicated graphic", "e3"]]);
+
+  // Remove Unused Pads: the padstack mode replaces start_end_only
+  const sv = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal))
+  (via (at 1 1) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (start_end_only yes) (uuid "v1")))`, "kicad_pcb");
+  const rmv = node(P.unusedPadLayerChanges(sv, null, { vias: true, pads: false, remove: true, keepOutside: true })[0]);
+  assert.ok(!K.kid(rmv, "start_end_only")); assert.equal(K.kid(rmv, "keep_end_layers")[1], "yes");
+  const keep = P.unusedPadLayerChanges(sv, null, { vias: true, pads: false, remove: false, keepOutside: true });
+  assert.equal(keep.length, 1); assert.ok(!K.kid(node(keep[0]), "start_end_only"), "Restore All Layers is KEEP_ALL");
+
+  // Edit Teardrops: a non-component pad is an SMD pad; a transform footprint's pads find their teardrop zones
+  const tdd = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew") (layers (0 "F.Cu" signal) (2 "B.Cu" signal))
+  (footprint "T:J" (layer "F.Cu") (uuid "fp-1") (transform (translate 10 10) (rotate 90) (scale 1 1))
+    (pad "1" non_component rect (at 2 0 90) (size 1 1) (layers "F.Cu") (net 1 "A") (uuid "pad-1") (teardrops (best_length_ratio 0.5) (max_length 1) (best_width_ratio 1) (max_width 2) (curved_edges no) (filter_ratio 0.9) (enabled yes) (allow_two_segments yes) (prefer_zone_connections yes))))
+  (zone (net 1) (net_name "A") (layer "F.Cu") (uuid "td-1") (attr (teardrop (type padvia))) (hatch full 0.1) (connect_pads yes (clearance 0)) (min_thickness 0.0254) (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy 10 8.2) (xy 10.3 7) (xy 9.7 7)))))`, "kicad_pcb");
+  const tdr = P.teardropEditChanges(tdd, { vias: false, pthPads: false, smdPads: true, trackToTrack: false, action: "remove", defaults: { round: K.padModel.TD_DEFAULTS, rect: K.padModel.TD_DEFAULTS } });
+  assert.deepEqual(tdr.map((c) => c.id).sort(), ["fp-1", "td-1"], "the pad is in the SMD scope and its zone at (10, 8) goes");
+});
+
 test("shape geometry pages: each page reads the shape and writes it back (DIALOG_SHAPE_PROPERTIES GEOM_SYNCERs)", () => {
   const near6 = (a, b) => assert.ok(Math.abs(a - b) < 1e-6, `${a} ≈ ${b}`);
   const rect = { kind: "rect", start: [10, 20], end: [30, 25] };

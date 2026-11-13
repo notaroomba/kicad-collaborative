@@ -168,6 +168,7 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
   // ---- the edits
   let paper: string | null = null, title: string | null = null; const sections: Record<string, string> = {};
   const fragText = new Map<string, string>();   // the text an edit carried for an item or a library symbol
+  const replacedBy = new Map<string, string>();   // an item given a new id (an ADDED with replaces): it takes the old one's place
   const noteFragment = (frag: string): void => fragmentParts(frag, kinds, (id, t) => fragText.set(id, t), (name, t) => fragText.set("lib:" + name, t));
   for (const op of ops) for (const c of op.changes || []) {
     if (!c || typeof c !== "object") continue;
@@ -188,6 +189,7 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
       continue;
     }
     const frag = c.sexpr || c.itemSexpr, kind = String(c.kind || "").toUpperCase();
+    if (kind === "ADDED" && typeof c.replaces === "string" && c.id !== undefined) replacedBy.set(c.replaces, String(c.id));
     let ok = false;
     try { ok = k.applyChange(doc, c, IU); } catch (e) { refuse("an edit could not be applied: " + (e instanceof Error ? e.message : String(e))); }
     // the editors' own rule (editor/doc.ts mutateDoc): a removal or a value edit of an item that is not there is
@@ -206,8 +208,12 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
   let changed = 0;
   const out: string[] = [top.open];
   const live = new Set<string>(); for (const id of doc.items.keys()) live.add(id);
-  const fresh: string[] = []; for (const [id, it] of doc.items) if (!where.has(id) && !before.has(id)) fresh.push(textOf(id, it.node, 1));
-  changed += fresh.length;
+  const freshById = new Map<string, string>(); for (const [id, it] of doc.items) if (!where.has(id) && !before.has(id)) freshById.set(id, textOf(id, it.node, 1));
+  changed += freshById.size;
+  // an item that only changed its id (Repair Board) is written where the old one was, not with the additions
+  const inPlace = new Map<string, string>();
+  for (const [old, now] of replacedBy) if (where.has(old) && !live.has(old) && freshById.has(now)) { inPlace.set(old, freshById.get(now)!); freshById.delete(now); }
+  const fresh = Array.from(freshById.values());
 
   // where additions go: after the last item of the stored file, else before the sections that close it, else at the end
   let lastItem = -1, firstTrailer = -1, paperAt = -1, titleAt = -1, libAt = -1; const sectionAt: Record<string, number> = {};
@@ -260,7 +266,7 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
     else if (kinds.has(c.head)) {
       const id = ids[i];
       if (!id || !inDoc(i)) out.push(c.lead + c.text);                          // not named by any edit: as stored
-      else if (!live.has(id)) changed++;                                        // removed
+      else if (!live.has(id)) { changed++; const t = inPlace.get(id); if (t !== undefined) out.push(c.lead + t); }   // removed (or re-id'd in place)
       else {
         const node = doc.items.get(id).node;
         if (ser(node) === before.get(id)) out.push(c.lead + c.text);

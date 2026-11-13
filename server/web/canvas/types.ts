@@ -171,6 +171,12 @@ export interface Doc extends Omit<KDoc, "items" | "bbox" | "page">, SheetContext
   embeddedFiles?: SNode | null;
   /** a library footprint open in the Footprint Editor (footprint-doc.ts): its header and what it was read from */
   fpEditor?: boolean; fpState?: import("./footprint-doc").FpDocState;
+  /**
+   * Board-level items the file holds after another item with the same uuid (a board that needs Tools > Repair
+   * Board).  The first one keeps the id in `items`, as the desktop resolves it; a removal of that id takes the
+   * next one in its place (applyChange), as removing one of two items with an id on the desktop leaves the other.
+   */
+  dupItems?: { id: string; node: SNode }[];
 }
 
 /** Where the builders put geometry: an item, or a scratch record whose primitives go elsewhere (hidden pins …). */

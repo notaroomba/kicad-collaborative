@@ -87,7 +87,11 @@ export interface DesignDefaults {
 }
 
 /** A change as the board tools send it: the canvas' item change plus what the desktop needs to re-resolve nets and groups. */
-export interface PcbChange extends KChange { netName?: string; groupMembers?: string[]; padNets?: Record<string, string> }
+export interface PcbChange extends KChange {
+  netName?: string; groupMembers?: string[]; padNets?: Record<string, string>;
+  /** an ADDED that is the item `replaces` under a new id (Repair Board): the stored file keeps it in that item's place (mcp/compact.ts) */
+  replaces?: string;
+}
 
 /** A footprint's pad with its absolute centre (padsOf). */
 export interface PadInfo { x: number; y: number; rot: number; w: number; h: number; off: number[]; net: NetRef; layers: string[]; number: string; type: string; shape: string; node: SNode; index: number }
