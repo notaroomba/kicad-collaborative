@@ -43,7 +43,7 @@ import "./panels/index";
 import { activeModule, commitChanges, commitObservers, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack, unlockedForEdit } from "./tools";
 import { api, closePopover, toast } from "./util";
 import { saveTextDocument } from "./projectfile";
-import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
+import { applyView, cmtPanel, dragG, fitView, isSch, pxPerMm, requestRender, stage, world, worldMm, zoomBy } from "./view";
 import type { ItemSummary, SheetEntry } from "./types";
 /** The schematic module's drag in flight (sch-tools S.drag), as far as the app reads it. */
 type SchDrag = { moved?: boolean; last: number[]; kind?: string };
@@ -282,6 +282,17 @@ stage.addEventListener("pointerdown", (ev) => {
   }
   let best = nearestFootprint(x, y, 5 / Math.max(1, E.zoom * 0.6));
   if (pinPromote) { const fp = (E.items as ItemSummary[]).find((f) => f.id === pinPromote!.id); if (fp) best = fp; }
+  // DRAG_SELECTED on a board: PCB_SELECTION_TOOL::SelectionContains( DragOrigin ) comes before any new pick.  For a
+  // footprint it is FOOTPRINT::HitTest( point, margin ): its bounding box grown by the 20 px grip margin, so a press up
+  // to 20 px outside a selected footprint (even on another item) drags the selection
+  let gripSelected = false;
+  if (!isSch() && E.tool === "select" && E.kdoc && !smodeOf(ev) && !(best && selectedSet()?.has(best.id))) {
+    const sel = selectedSet(), m = 20 / Math.max(1e-9, pxPerMm());
+    if (sel) for (const id of sel) {
+      const it = E.kdoc.items.get(id); const b = it && it.kind === "footprint" ? it.bbox : null; if (!b) continue;
+      if (x >= b[0] - m && x <= b[2] + m && y >= b[1] - m && y <= b[3] + m) { const fp = (E.items as ItemSummary[]).find((f) => f.id === id); if (fp) { best = fp; gripSelected = true; break; } }
+    }
+  }
   // Board: a click on a pad selects the pad, not its footprint (PCB_SELECTION_TOOL; the footprint is picked by its body)
   let padWasSelected = false;
   if (!isSch() && E.tool === "select" && CollabTools.pcb && CollabTools.pcb.leaveGroupOutside) { try { CollabTools.pcb.leaveGroupOutside([x, y], toolCtx()); } catch (e) { console.warn(e); } }
@@ -295,7 +306,7 @@ stage.addEventListener("pointerdown", (ev) => {
     const f = store.get().filter as Record<string, boolean>;
     if (pad && pad.item && pad.index !== undefined && f.pads !== false && selectedSet()!.has(pad.item.id)) padClick = `${pad.item.id}#${pad.index}`;
   }
-  if (!isSch() && E.tool === "select" && mod && mod.selectPadAt && !padClick) {
+  if (!isSch() && E.tool === "select" && mod && mod.selectPadAt && !padClick && !gripSelected) {
     const ps = CollabTools.pcb && CollabTools.pcb.state;
     let r: unknown = false;
     const padMode = smodeOf(ev);
