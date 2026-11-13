@@ -535,8 +535,11 @@ export function parseDecomposition(s: string): { repeat: boolean; shared: string
 export const formatDecomposition = (repeat: boolean, shared: string[]): string => (!repeat ? "" : "mode=repeat" + (shared.length ? " shared=" + shared.join(",") : ""));
 
 // ---------------------------------------------------------------- SPICE_GENERATOR::Preview
-export interface SpiceItem { refName: string; modelName: string; baseModelName: string }
-function modelLine(m: SimModel, item: SpiceItem): string {
+export interface SpiceItem { refName: string; modelName: string; baseModelName: string;
+  /** the netlist exporter's symbol pin numbers and their net names (SPICE_ITEM::pinNumbers / pinNetNames); the
+   *  dialog's preview has none */
+  pinNumbers?: string[]; pinNetNames?: string[] }
+export function modelLine(m: SimModel, item: SpiceItem): string {
   const c = m.cls;
   if (!m.fallback && (c === "ideal" || c === "source" || c === "behavioral" || c === "rawspice" || c === "subckt" || c === "ibis")) return "";
   if (!m.fallback && c === "tline") {
@@ -575,14 +578,18 @@ function modelLine(m: SimModel, item: SpiceItem): string {
   if (out.length === indent + 1) return "";
   return out;
 }
-function itemName(m: SimModel, item: SpiceItem): string {
+export function itemName(m: SimModel, item: SpiceItem): string {
   const t = m.cls === "rawspice" ? m.getParam(0).value : spiceInfo(m.type).itemType;
   return item.refName !== "" && item.refName.startsWith(t) ? item.refName : t + item.refName;
 }
 function itemPins(m: SimModel, item: SpiceItem): string {
-  // the dialog's SPICE_ITEM carries no pin numbers, so every model pin is printed as NC-<ref>-<n>
-  let out = "", nc = 0;
-  for (let i = 0; i < m.pins.length; i++) out += ` NC-${item.refName}-${nc++}`;
+  // SPICE_GENERATOR::ItemPins: each model pin's symbol pin, looked up in the item's pin numbers; the dialog's
+  // SPICE_ITEM carries no pin numbers, so there every model pin is printed as NC-<ref>-<n>
+  let out = "", nc = 0; const nums = item.pinNumbers || [], nets = item.pinNetNames || [];
+  for (let i = 0; i < m.pins.length; i++) {
+    const k = nums.indexOf(m.pins[i].symbolPinNumber);
+    out += k < 0 ? ` NC-${item.refName}-${nc++}` : ` ${nets[k]}`;
+  }
   return out;
 }
 function itemParams(m: SimModel): string {
@@ -599,7 +606,7 @@ function itemParams(m: SimModel): string {
 }
 function baseItemLine(m: SimModel, item: SpiceItem): string { return itemName(m, item) + itemPins(m, item) + (m.cls === "rawspice" ? "" : ` ${item.modelName}`) + itemParams(m) + "\n"; }
 function sourceParamString(m: SimModel, n: string, d: string): string { const p = m.findParam(n); const r = p ? toSpice(p.value) : ""; return r === "" ? d : r; }
-function itemLine(m: SimModel, item: SpiceItem): string {
+export function itemLine(m: SimModel, item: SpiceItem): string {
   const c = m.fallback ? "spice" : m.cls;
   if (c === "ideal") { const mn = toSpice(m.getParam(0).value); return mn !== "" ? baseItemLine(m, { ...item, modelName: mn }) : ""; }
   if (c === "behavioral") {

@@ -25,7 +25,7 @@ function rootSchematicOf(docs: ProjectDocInfo[]): ProjectDocInfo | null {
 }
 
 /** Every schematic sheet of the project as it is now, and the netlist of the hierarchy under the root sheet. */
-export async function projectNetlist(): Promise<{ netlist: Netlist; root: string } | { error: string }> {
+export async function projectNetlist(): Promise<{ netlist: Netlist; root: string; files: Map<string, SheetFile> } | { error: string }> {
   const docs = projectDocs(), root = rootSchematicOf(docs);
   if (!root) return { error: "This project has no schematic." };
   const sch = (CollabTools.sch as (SchToolModule & SchModuleInternals) | undefined);
@@ -50,7 +50,7 @@ export async function projectNetlist(): Promise<{ netlist: Netlist; root: string
     return files.get(out.join("/")) || files.get(file) || null;
   };
   const netlist = NL().buildNetlist(rootFile, resolve, { symbolPins: helpers.symbolPins, isPower: (d, it) => helpers.isPowerSymbol(d, String(((KiCadCanvas.kid(it.node, "lib_id") as SNode | null) || [])[1])) }, root.path.split("/").pop()!.replace(/\.kicad_sch$/, ""));
-  return { netlist, root: root.path };
+  return { netlist, root: root.path, files };
 }
 
 // ---------------------------------------------------------------- the footprint library (optional service)

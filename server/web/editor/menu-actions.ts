@@ -18,6 +18,7 @@ import { setCrosshair, setUnitsAction } from "./panes";
 import { cycleInactiveMode, layerAlphaStep, toggleInactiveMode } from "./panels/appearance";
 import { openSelectionProperties } from "./pointer";
 import { E } from "./state";
+import { openExportNetlist } from "./export-netlist";
 import { startMove } from "./gestures";
 import { schKey } from "./tools";
 import { esc, toast } from "./util";
@@ -122,15 +123,6 @@ export function netlistText(doc: { items: Map<string, Item> }, source: string): 
   return out.join("\n");
 }
 
-function exportNetlist(): void {
-  if (!E.kdoc || !isSch()) return;
-  const { name, stem } = fileStem();
-  let text: string | null = null;
-  try { text = netlistText(E.kdoc, name); } catch (e) { console.warn(e); }
-  if (!text) { toast("Netlist export failed"); return; }
-  download(text, stem + ".net"); toast("Exported " + stem + ".net (this sheet)");
-}
-
 /** File > Export > Drawing to Clipboard: the sheet as a PNG image on the system clipboard. */
 async function drawingToClipboard(): Promise<void> {
   if (!E.kdoc) return;
@@ -197,7 +189,7 @@ const leaveSheet = () => { const r = rootSchematic(); if (r && (state as unknown
 
 export const MENU_HANDLERS: Record<string, ActionHandler> = {
   saveCopy: () => saveDocCopy(), saveCurrSheetCopyAs: () => saveDocCopy(),
-  exportNetlist: () => exportNetlist(), drawSheetOnClipboard: () => drawingToClipboard(),
+  exportNetlist: () => openExportNetlist(), drawSheetOnClipboard: () => drawingToClipboard(),
   properties: () => { openSelectionProperties(); },
   zoomFitSelection, zoomIn: () => zoomAtCursor(true), zoomOut: () => zoomAtCursor(false), zoomCenter: centreOnCursor,
   panUp: () => panStep(0, 1), panDown: () => panStep(0, -1), panLeft: () => panStep(1, 0), panRight: () => panStep(-1, 0),
