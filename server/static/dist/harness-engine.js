@@ -2899,13 +2899,14 @@ function buildZoneGeom(doc, item, n2) {
   const clN = cp2 && kid(cp2, "clearance");
   const clearance = clN ? num(clN[1], 0.5) : 0.5;
   const unfilled = !keepout && !kids(n2, "filled_polygon").length;
+  const attr = kid(n2, "attr"), td = attr && kid(attr, "teardrop") ? { teardrop: true } : null;
   for (const poly of kids(n2, "polygon")) {
     const p = polyPtsOf(poly);
     if (p.length < 2) continue;
     for (const layer of layersZ) {
       const color = pcbColor(layer);
       const z = pcbZ(layer) + (keepout ? Z_TEXT : 0.5);
-      G(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled });
+      G(item, keepout ? { t: "poly", pts: p, close: true, w: 0, color, layer, z } : { t: "poly", pts: p, close: true, w: 0, color, layer, z, zoneOutline: true, net, zoneClearance: clearance, zoneUnfilled: unfilled, ...td });
       if (hatchStyle !== "none" && pitch > 0) {
         const info = doc.layers.get(layer);
         const slope = info && info.id & 1 ? 1 : -1;
@@ -2919,7 +2920,7 @@ function buildZoneGeom(doc, item, n2) {
     const layer = layerOf(fp, layersZ[0]);
     const p = polyPtsOf(fp);
     if (p.length < 3) continue;
-    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true, net });
+    G(item, { t: "poly", pts: p, close: true, w: 0, color: pcbColor(layer), fill: pcbColor(layer), layer, z: pcbZ(layer) + Z_ZONE, noStroke: true, zoneFill: true, net, ...td });
   }
 }
 function hatchLines(pts, slope, spacing, lineLen) {
@@ -4864,6 +4865,10 @@ function render(doc, ctx, view, opts) {
   const layerColors = isPcb && opts.layerColors && opts.layerColors.size ? opts.layerColors : null;
   const obj2 = isPcb && opts.objects ? opts.objects : null, objHide = obj2 && obj2.hide && obj2.hide.size ? obj2.hide : null, objAlpha = obj2 && obj2.opacity ? obj2.opacity : null;
   const hcHide = !!opts.inactiveHide;
+  const zoneA = objAlpha && typeof objAlpha.zones === "number" ? Math.max(0, Math.min(1, objAlpha.zones)) : ZONE_OPACITY;
+  const trackA = objAlpha && typeof objAlpha.tracks === "number" ? Math.max(0, Math.min(1, objAlpha.tracks)) : 1;
+  const layerDraw = layerColors ? /* @__PURE__ */ new Map() : null;
+  if (layerColors) for (const [k, c] of layerColors) layerDraw.set(k, minLayerAlpha(c));
   const itemColors = isPcb && opts.itemColors && opts.itemColors.size ? opts.itemColors : null, tint = itemColors ? /* @__PURE__ */ new Map() : null;
   const W7 = ctx.canvas.width, H = ctx.canvas.height, dpr = view.dpr || 1;
   const s = view.ppm * view.zoom * dpr;
@@ -5141,23 +5146,23 @@ function render(doc, ctx, view, opts) {
     }
     if (previews) while (previewIdx < previews.length && zOf(previews[previewIdx]) - 1.5 - 0.01 <= z) {
       const pg = previews[previewIdx++];
-      drawZonePreview(ctx, pg, obstacles, base, W7, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1));
+      drawZonePreview(ctx, pg, obstacles, base, W7, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1));
       dirty();
     }
     const arr2 = BUCKETS.get(z);
     if (arr2) for (const g2 of arr2) {
       let alpha = g2.alpha === void 0 ? 1 : g2.alpha;
       if (hcLayer && g2.layer !== hcLayer && g2.layer !== "holes" && !g2.padText) alpha *= HC_DIM;
-      if (g2.zoneFill) alpha *= ZONE_OPACITY;
+      if (g2.zoneFill) alpha *= g2.teardrop ? trackA : zoneA;
       if (g2.hiddenText) alpha *= HIDDEN_TEXT_ALPHA;
       let color = g2.color, fill = g2.fill;
-      if (objAlpha) {
-        const oc = objectClass(g2) || (fill && g2.t !== "text" && !g2.hole ? "filledShapes" : null);
+      if (objAlpha && !g2.zoneFill) {
+        const oc = g2.teardrop ? "tracks" : objectClass(g2) || (fill && g2.t !== "text" && !g2.hole ? "filledShapes" : null);
         const oa = oc ? objAlpha[oc] : void 0;
         if (oa !== void 0 && oa < 1) alpha *= oa;
       }
-      if (layerColors && !g2.hole) {
-        const lc = layerColors.get(g2.layer);
+      if (layerDraw && !g2.hole) {
+        const lc = layerDraw.get(g2.layer);
         if (lc) {
           const def = pcbColor(g2.layer);
           if (color === def) color = lc;
@@ -5300,7 +5305,7 @@ function render(doc, ctx, view, opts) {
   }
   if (previews) while (previewIdx < previews.length) {
     const pg = previews[previewIdx++];
-    drawZonePreview(ctx, pg, obstacles, base, W7, H, minW, netColors, (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1));
+    drawZonePreview(ctx, pg, obstacles, base, W7, H, minW, netColors, (pg.teardrop ? trackA : zoneA) / ZONE_OPACITY * (hcLayer && pg.layer !== hcLayer ? HC_DIM : 1) * (hl && !hlGeoms.has(pg) ? HL_DIM : 1));
   }
   ctx.globalAlpha = 1;
   if (obj2 && obj2.show) drawObjectOverlays(ctx, doc, obj2, opts, s, dpr, hidden, [vx0, vy0, vx1, vy1]);
@@ -5325,6 +5330,12 @@ function render(doc, ctx, view, opts) {
   if (!isPcb && opts.selected && opts.selected.size) drawSelectionHalo(ctx, doc, opts.selected, s, dpr, hidden);
   if (region) ctx.restore();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+function minLayerAlpha(c) {
+  const m = /^rgba\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)$/i.exec(c);
+  if (m) return +m[4] < 0.2 ? `rgba(${m[1]},${m[2]},${m[3]},0.2)` : c;
+  const h = /^#([0-9a-f]{6})([0-9a-f]{2})$/i.exec(c);
+  return h && parseInt(h[2], 16) < 51 ? "#" + h[1] + "33" : c;
 }
 function objectClass(g2) {
   return g2.track ? "tracks" : g2.via ? "vias" : g2.pad ? "pads" : g2.zoneFill || g2.zoneOutline || g2.zoneUnfilled ? "zones" : g2.t === "image" ? "images" : null;
