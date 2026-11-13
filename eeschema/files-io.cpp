@@ -675,23 +675,9 @@ bool SCH_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
         }
         else  // S-expression schematic.
         {
-            SCH_SCREEN* first_screen = schematic.GetFirst();
-
-            // Skip the first screen as it is a virtual root with no version info.
-            if( first_screen && first_screen->GetFileFormatVersionAtLoad() == 0 )
-                first_screen = schematic.GetNext();
-
-            if( first_screen && first_screen->GetFileFormatVersionAtLoad() < SEXPR_SCHEMATIC_FILE_VERSION )
-            {
-                m_infoBar->RemoveAllButtons();
-                m_infoBar->AddCloseButton();
-                m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
-                                           "It will be saved in that same format, so it stays "
-                                           "readable by that version, unless an edit needs "
-                                           "something only a newer format can store." ),
-                                        wxICON_INFORMATION,
-                                        WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
-            }
+            // A schematic from an older KiCad needs no notice when it opens: saving writes each
+            // sheet back at the version it was loaded with, so that KiCad keeps reading it.  Only
+            // a save whose content needs a newer format raises the version, and that save says so.
 
             for( SCH_SCREEN* screen = schematic.GetFirst(); screen; screen = schematic.GetNext() )
                 screen->UpdateLocalLibSymbolLinks();

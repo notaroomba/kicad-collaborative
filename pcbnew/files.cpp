@@ -904,22 +904,10 @@ bool PCB_EDIT_FRAME::OpenProjectFiles( const std::vector<wxString>& aFileSet, in
                                        "It will be converted to the new format when saved." ),
                                     wxICON_WARNING, WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
         }
-        else if( pluginType == PCB_IO_MGR::KICAD_SEXP
-                    && loadedBoard->GetFileFormatVersionAtLoad() < SEXPR_BOARD_FILE_VERSION
-                    && loadedBoard->GetGenerator().Lower() != wxT( "gerbview" ) )
-        {
-            // An s-expression board is written back at the version it was loaded with, so it
-            // is not converted on save.  Say so rather than promising a conversion that will
-            // not happen; a save that does have to raise the version says so at that point.
-            m_infoBar->RemoveAllButtons();
-            m_infoBar->AddCloseButton();
-            m_infoBar->ShowMessage( _( "This file was created by an older version of KiCad. "
-                                       "It will be saved in that same format, so it stays "
-                                       "readable by that version, unless an edit needs "
-                                       "something only a newer format can store." ),
-                                    wxICON_INFORMATION,
-                                    WX_INFOBAR::MESSAGE_TYPE::OUTDATED_SAVE );
-        }
+
+        // An s-expression board from an older KiCad needs no notice when it opens: saving writes
+        // it back at the version it was loaded with, so that KiCad keeps reading it.  Only a save
+        // whose content needs a newer format raises the version, and that save says so.
 
         // extract a project fp library and re-link board FPIDs so update-from-schematic works
         if( aCtl & KICTL_IMPORT_LIB )
