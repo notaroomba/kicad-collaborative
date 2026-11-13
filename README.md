@@ -10,7 +10,11 @@ multiplayer editing, a full editor in the browser, and a server any AI model can
 
 <!-- The demo video. GitHub plays a video inline only from a github.com/user-attachments URL: to update it, drag
      docs/media/junction-demo.mp4 into this file in GitHub's editor and let the URL it inserts replace the line below. -->
-[![Junction demo: Ada and Ben draw a Raspberry Pi Pico board together, an AI adds the crystal, they route it](docs/media/junction-demo-poster.jpg)](docs/media/junction-demo.mp4)
+
+
+https://github.com/user-attachments/assets/048096a4-82aa-4844-ad54-ccb67b8257e7
+
+
 
 ## Install
 
