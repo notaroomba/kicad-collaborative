@@ -122,7 +122,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   // its signals can fan out between its decoupling: crowd the ring and the pins boxed in by the capacitors cannot be routed.
   const fineMemo = new Map<Part, boolean>();
   const fine = (p: Part) => { let f = fineMemo.get(p); if (f === undefined) { f = false; if (p.pads.length >= 20 && !p.thru) { let m = Infinity; for (let i = 0; i < p.pads.length; i++) for (let j = i + 1; j < p.pads.length; j++) m = Math.min(m, Math.hypot(p.pads[i].x - p.pads[j].x, p.pads[i].y - p.pads[j].y)); f = m <= 0.65 + 1e-6; } fineMemo.set(p, f); } return f; };
-  const ESCAPE = 0.8;
+  const ESCAPE = 1.5;
   const clash = (a: Geo, b: Geo, g0: number) => {
     const g = g0 > 0 && a.p.back === b.p.back && (fine(a.p) || fine(b.p)) ? g0 + ESCAPE : g0;
     if (!hit(a.b, b.b, g)) return false; if (a.p.back === b.p.back) return true; if (!a.p.thru && !b.p.thru) return false;
@@ -308,7 +308,8 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   }
   score.area = r3((O[2] - O[0]) * (O[3] - O[1]));
   const groups = blocks.filter((b) => !b.name.startsWith("~") ? blocks.find((o) => o.name === b.name) === b : true).map((b0) => { const b = { name: b0.name, anchor: b0.anchor, parts: b0.name.startsWith("~") ? b0.parts : blocks.filter((o) => o.name === b0.name).flatMap((o) => o.parts) }; let box: Box = [Infinity, Infinity, -Infinity, -Infinity]; for (const p of b.parts) { const q = finalBox.get(p)!; box = [Math.min(box[0], q[0]), Math.min(box[1], q[1]), Math.max(box[2], q[2]), Math.max(box[3], q[3])]; } return { name: b.name.startsWith("~") ? b.anchor.ref : b.name, anchor: b.anchor.ref, refs: b.parts.map((p) => p.ref), box: box.map(r3) as Box }; });
-  let fill = 0; for (const p of finalBox.keys()) if (p.movable) { const q = finalBox.get(p)!; fill += (q[2] - q[0]) * (q[3] - q[1]); } fill /= (O[2] - O[0]) * (O[3] - O[1]);
+  // what lies on the board: a connector's overhang past the edge is not board taken
+  let fill = 0; for (const p of finalBox.keys()) if (p.movable) { const q = finalBox.get(p)!; fill += Math.max(0, Math.min(q[2], O[2]) - Math.max(q[0], O[0])) * Math.max(0, Math.min(q[3], O[3]) - Math.max(q[1], O[1])); } fill /= (O[2] - O[0]) * (O[3] - O[1]);
   return { placements, score, groups, squeezed, O, fill };
   };
   // A board sized to its parts (opts.fit): the smallest outline of the same proportions, in whole millimetres, on
@@ -329,7 +330,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     for (const side of [2, 3]) { let a = side === 2 ? O2[0] + 5 : O2[1] + 5, b = O2[side]; while (b - a > 1) { const m = Math.round((a + b) / 2); const t = O2.slice() as Box; t[side] = m; const r = arrange(t, 2); if (good(r, true)) { best = r; b = m; O2 = t; } else a = m; } }
     // the size found on a coarse search grid, placed for real; when the fine grid does not make it, a millimetre more each way
     res = arrange(O2); for (let i = 0; i < 6 && !good(res); i++) { O2 = [O2[0], O2[1], O2[2] + 1, O2[3] + 1]; res = arrange(O2); }
-    if (!good(res)) res = arrange(O0);
+    if (!good(res)) res = best;    // the coarse grid's placement is legal too: better a few tenths off the fine grid than the board size thrown away
   }
   const { placements, score, groups } = res; const O = res.O;
   return { placements, score, outline: O.map(r3) as Box, outlineFromBoard: fromBoard, groups, unknown };

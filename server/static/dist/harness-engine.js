@@ -83840,7 +83840,7 @@ function place(K7, P, doc, settings, opts = {}) {
     }
     return f2;
   };
-  const ESCAPE = 0.8;
+  const ESCAPE = 1.5;
   const clash = (a, b, g0) => {
     const g2 = g0 > 0 && a.p.back === b.p.back && (fine(a.p) || fine(b.p)) ? g0 + ESCAPE : g0;
     if (!hit(a.b, b.b, g2)) return false;
@@ -84274,7 +84274,7 @@ function place(K7, P, doc, settings, opts = {}) {
     let fill = 0;
     for (const p of finalBox.keys()) if (p.movable) {
       const q = finalBox.get(p);
-      fill += (q[2] - q[0]) * (q[3] - q[1]);
+      fill += Math.max(0, Math.min(q[2], O2[2]) - Math.max(q[0], O2[0])) * Math.max(0, Math.min(q[3], O2[3]) - Math.max(q[1], O2[1]));
     }
     fill /= (O2[2] - O2[0]) * (O2[3] - O2[1]);
     return { placements: placements3, score: score2, groups: groups2, squeezed, O: O2, fill };
@@ -84320,7 +84320,7 @@ function place(K7, P, doc, settings, opts = {}) {
       O2 = [O2[0], O2[1], O2[2] + 1, O2[3] + 1];
       res = arrange(O2);
     }
-    if (!good(res)) res = arrange(O0);
+    if (!good(res)) res = best;
   }
   const { placements: placements2, score, groups } = res;
   const O = res.O;
@@ -103443,7 +103443,7 @@ function build(input) {
             };
           });
           const outline = Array.isArray(e.outline) && e.outline.length === 4 && e.outline.every((v) => typeof v === "number") ? e.outline : void 0;
-          const res = R2.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : void 0, outline, spacing: typeof e.spacing === "number" ? e.spacing : void 0, fit: e.fit === true });
+          const res = R2.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : void 0, outline, spacing: typeof e.spacing === "number" ? e.spacing : void 0, fit: e.fit === true, maxFill: typeof e.max_fill === "number" ? e.max_fill : void 0 });
           const cs = R2.placementChanges(k, P, doc, res.placements);
           if (!cs.length) throw new ToolError("the placement engine moved nothing");
           for (const c of cs) {

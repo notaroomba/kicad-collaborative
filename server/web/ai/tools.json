@@ -629,6 +629,9 @@
               "fit": {
                 "type": "boolean"
               },
+              "max_fill": {
+                "type": "number"
+              },
               "spacing": {
                 "type": "number"
               },

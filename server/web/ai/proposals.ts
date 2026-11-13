@@ -521,7 +521,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
             return { ref: q.ref, group: q.group, near: q.near, anchor: q.anchor === true ? true : undefined, side: q.side, edge: q.edge, rot: typeof q.rotation === "number" ? q.rotation : undefined,
               fixed: q.fixed && typeof q.fixed.x === "number" && typeof q.fixed.y === "number" ? { x: q.fixed.x, y: q.fixed.y, rot: q.fixed.rotation || 0 } : undefined }; });
           const outline = Array.isArray(e.outline) && e.outline.length === 4 && e.outline.every((v: any) => typeof v === "number") ? e.outline : undefined;
-          const res = R.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : undefined, outline, spacing: typeof e.spacing === "number" ? e.spacing : undefined, fit: e.fit === true });
+          const res = R.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : undefined, outline, spacing: typeof e.spacing === "number" ? e.spacing : undefined, fit: e.fit === true, maxFill: typeof e.max_fill === "number" ? e.max_fill : undefined });
           const cs: any[] = R.placementChanges(k, P, doc, res.placements); if (!cs.length) throw new ToolError("the placement engine moved nothing");
           for (const c of cs) { const it = doc.items.get(c.id); if (it) touch(it, e.op); changes.push(c); }
           if (e.fit === true) {

@@ -1775,14 +1775,15 @@ class Board(_Doc):
         self._groups[name] = {"refs": list(refs), "anchor": anchor or refs[0]}
 
     def autoplace(self, groups: dict | None = None, near: dict | None = None, edges: dict | None = None, fixed: dict | None = None,
-                  outline=None, spacing: float | None = None, only: list | None = None, fit: bool = False) -> dict:
+                  outline=None, spacing: float | None = None, only: list | None = None, fit: bool = False, max_fill: float | None = None) -> dict:
         """Place footprints with the placement engine: blocks packed around their anchors, blocks arranged inside the outline.
 
         groups: {block: [refs]} (first ref is the anchor) in addition to those declared with group(); near: {ref: ref}
         for parts that must sit beside another (decoupling, crystal); edges: {ref: "left"|"right"|"top"|"bottom"};
         fixed: {ref: (x, y[, rotation])}.  With nothing given the engine groups the parts itself.  fit=True pulls the
         board outline in round the parts (the smallest rectangle in whole millimetres every block fits in, connectors
-        still on their edges) and redraws Edge.Cuts to it; give the outline first as the largest the board may be.
+        still on their edges) and redraws Edge.Cuts to it; give the outline first as the largest the board may be.  max_fill
+        is how much of the board the courtyards may cover (0.45 by default; the person's densest boards reach 0.46).
         """
         specs: dict = {}
         allg = dict(self._groups)
@@ -1810,6 +1811,8 @@ class Board(_Doc):
             e["spacing"] = spacing
         if fit:
             e["fit"] = True
+        if max_fill:
+            e["max_fill"] = max_fill
         self._edit(e)
         res = self.flush() or {}
         d = next((x["auto_place"] for x in res.get("details") or [] if "auto_place" in x), {})
