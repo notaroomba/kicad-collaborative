@@ -12194,7 +12194,7 @@
     add("Vias", vias);
     add("Track Segments", segs);
     add("Nets", nets.size);
-    add("Unrouted", ratsnest(doc, opts.nl || netlist(doc)).length);
+    add("Unrouted", ratsnest(doc, opts.nl || netlistCached(doc)).length);
     return out;
   }
   function bboxOfPts(pts) {
@@ -17046,7 +17046,7 @@
   // web/tools/pcb-tools/overlay.ts
   function ratsnestLines(doc) {
     if (!S.rats || S.rats.doc !== doc || S.ratsDirty) {
-      S.rats = { doc, lines: ratsnest(doc) };
+      S.rats = { doc, lines: ratsnest(doc, netlistCached(doc)) };
       S.ratsDirty = false;
     }
     return S.rats.lines;

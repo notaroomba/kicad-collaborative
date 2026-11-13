@@ -12,6 +12,7 @@ import { arcLength, padCopperLayers, shapeGap, shareLayer } from "./distances";
 import { designSettings, netClearance, netclassName, netclassOf } from "./drc";
 import { viaNow } from "./edit-commands";
 import { isLocked } from "./groups";
+import { netlistCached } from "./app-state";
 import { conductors, netTable, netlist, ratsnest } from "./netlist";
 import { hasNet, netOf } from "./nets";
 import { zoneLayers } from "./nodes";
@@ -307,7 +308,7 @@ export function msgPanelInfo(doc: BoardDoc, ids: Iterable<string>, opts?: MsgPan
     else if (it.kind === "via" || it.kind === "segment" || it.kind === "arc") { if (it.kind === "via") vias++; else segs++; const nn = netOf(it.node); if (hasNet(nn)) nets.add(nn.name || nn.code); }
   }
   add("Pads", pads); add("Vias", vias); add("Track Segments", segs); add("Nets", nets.size);
-  add("Unrouted", ratsnest(doc, opts.nl || netlist(doc)).length);
+  add("Unrouted", ratsnest(doc, opts.nl || netlistCached(doc)).length);
   return out;
 }
 export function bboxOfPts(pts: Pt[]) { let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity; for (const [x, y] of pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; }

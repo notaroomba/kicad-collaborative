@@ -1,7 +1,7 @@
 // editor — GENERATED SOURCE MODULE (split from the former static/app.js; static/dist/editor.js is the esbuild output of web/editor/index.ts — edit these modules, not the bundle).
 import { state, store } from "./appstore";
 import { noteCommentMsg } from "./comments";
-import { applyChanges, renderObjects, setDocFromText } from "./doc";
+import { applyChanges, applyRemoteChanges, renderObjects, setDocFromText } from "./doc";
 import { applyFollowWeb, renderPeers, startPresenceKeepalive } from "./peers";
 import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
@@ -155,15 +155,15 @@ export async function connect() {
         replayPending(sock);
       }
     }
-    if (msg.type === "op") { if (noteSeq(msg.seq, sock) !== "apply") return; E.editsSeen++; if (E.kdoc) { applyChanges(msg.changes); reapplyPending(msg.changes); } else noteRemoteOp(msg); bumpEdits(); if (!E.kdoc) scheduleRenderRefresh(); }
+    if (msg.type === "op") { if (noteSeq(msg.seq, sock) !== "apply") return; E.editsSeen++; if (E.kdoc) { applyRemoteChanges(msg.changes); reapplyPending(msg.changes); } else noteRemoteOp(msg); bumpEditsSoon(); if (!E.kdoc) scheduleRenderRefresh(); }
     if (msg.type === "ops") {
       for (const op of msg.ops || []) {
         const step = noteSeq(op.seq, sock);
         if (step === "gap") break;                     // a resync is on its way; the rest is moot
         if (step === "skip") continue;                 // already applied
-        E.editsSeen++; if (E.kdoc) { applyChanges(op.changes); reapplyPending(op.changes); } else noteRemoteOp(op);
+        E.editsSeen++; if (E.kdoc) { applyRemoteChanges(op.changes); reapplyPending(op.changes); } else noteRemoteOp(op);
       }
-      bumpEdits(); if (!E.kdoc) scheduleRenderRefresh();
+      bumpEditsSoon(); if (!E.kdoc) scheduleRenderRefresh();
     }
     if (msg.type === "reset" && msg.docId === state.docId) requestResync(sock, true);
   };
@@ -250,6 +250,10 @@ export function reapplyPending(remote: KChange[] | null | undefined) {
     if (again.length) applyChanges(again);
   }
 }
+
+/** The edit counter after somebody else's edits: once for all that arrive within a tenth of a second, not once each. */
+let editsTimer = 0;
+function bumpEditsSoon() { if (!editsTimer) editsTimer = window.setTimeout(() => { editsTimer = 0; bumpEdits(); }, 100); }
 
 export function bumpEdits() { store.slice("connection", { edits: E.editsSeen }); noteEdit(); }
 

@@ -33001,7 +33001,7 @@ Link '${target2}' to this file?`)) return null;
     add("Vias", vias);
     add("Track Segments", segs);
     add("Nets", nets.size);
-    add("Unrouted", ratsnest(doc, opts.nl || netlist(doc)).length);
+    add("Unrouted", ratsnest(doc, opts.nl || netlistCached(doc)).length);
     return out;
   }
   function bboxOfPts(pts) {
@@ -37813,7 +37813,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function ratsnestLines(doc) {
     if (!S2.rats || S2.rats.doc !== doc || S2.ratsDirty) {
-      S2.rats = { doc, lines: ratsnest(doc) };
+      S2.rats = { doc, lines: ratsnest(doc, netlistCached(doc)) };
       S2.ratsDirty = false;
     }
     return S2.rats.lines;

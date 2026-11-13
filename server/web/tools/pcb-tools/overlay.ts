@@ -1,6 +1,6 @@
 // pcb-tools/overlay.ts — the overlay: what the tools draw over the board.
 import type { BoardDoc, CopperShape, DrawState, GeomPrim, PcbCtx, Pt, RatsnestLine } from "./types";
-import { editorState, netNameOf, sizesOf } from "./app-state";
+import { editorState, netNameOf, netlistCached, sizesOf } from "./app-state";
 import { drawArcPreview } from "./arcs";
 import { drawStatusPopup, drawTwoPointAssistant } from "./assistants";
 import { DIM_TYPE, dimensionNode, snap45 } from "./dimensions";
@@ -24,7 +24,7 @@ import { color, pt, samePt, vadd, vsub } from "./util";
 // ---------------------------------------------------------------- overlay
 /** The board's ratsnest, rebuilt after a document change and kept until the next one. */
 export function ratsnestLines(doc: BoardDoc) {
-  if (!S.rats || S.rats.doc !== doc || S.ratsDirty) { S.rats = { doc, lines: ratsnest(doc) }; S.ratsDirty = false; }
+  if (!S.rats || S.rats.doc !== doc || S.ratsDirty) { S.rats = { doc, lines: ratsnest(doc, netlistCached(doc)) }; S.ratsDirty = false; }
   return S.rats.lines;
 }
 /**

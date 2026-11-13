@@ -173,8 +173,9 @@ export function setLayerVisible(key: string, visible: boolean) {
 /** Every applied change bumps the document version (the Properties island re-reads on it). */
 export function bumpDoc() { notePreviewDirty(); store.slice("document", { version: store.get().document.version + 1 }); if (E.comments.length) drawComments(); }   // pins follow the items they are on
 
-export function applyChanges(changes: WireChange[] | null | undefined) {
-  if (!E.kdoc) return;
+/** Put the changes into the document.  True when it changed; what follows from that is afterDocChange(). */
+function mutateDoc(changes: WireChange[] | null | undefined): boolean {
+  if (!E.kdoc) return false;
   let any = false, dropped: WireChange | null = null;
   for (const c of changes || []) {
     // a document-level change (Page Settings: paper and title block) addresses no item — web/dialogs/project.ts
@@ -189,7 +190,52 @@ export function applyChanges(changes: WireChange[] | null | undefined) {
     if (c.sexpr || c.itemSexpr || String(c.kind).toUpperCase() === "ADDED") dropped = c;
   }
   if (dropped) noteDroppedChange(dropped);
-  if (any) { if (!isSch()) KiCadCanvas.computeBBox(E.kdoc); syncItemsFromDoc(); pruneSelection(); drawSelection(); renderProps(); bumpDoc(); requestRender(); const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } } }
+  return any;
+}
+
+
+/** Everything that follows a changed document: the item lists, the selection, the panels, the tools' caches, a repaint. */
+function afterDocChange() {
+  if (!E.kdoc) return;
+  if (!isSch()) KiCadCanvas.computeBBox(E.kdoc);
+  syncItemsFromDoc(); pruneSelection(); drawSelection(); renderProps(); bumpDoc(); requestRender();
+  const m = activeModule(); if (m && m.onDocChanged) { try { m.onDocChanged(toolCtx()); } catch (e) { console.warn(e); } }
+}
+
+export function applyChanges(changes: WireChange[] | null | undefined) {
+  const any = mutateDoc(changes);
+  // edits of others that were waiting for their turn (applyRemoteChanges) are in the document too: one pass covers both
+  if (any || remote.dirty) { cancelRemoteFlush(); afterDocChange(); }
+}
+
+/**
+ * Somebody else's edits, off the live session.  A script run through the assistant, a paste or an autorouter
+ * sends hundreds of them in a row, and following each with the full pass above (and a repaint, and on a board
+ * the connectivity the ratsnest is drawn from) froze the editor for as long as they kept coming.  The document
+ * takes each edit at once; the pass that follows is shared by all that arrive close together, and is paced by
+ * what it costs: after a pass and its frame took t ms, the next waits 3 t (at most a second), so three quarters
+ * of the time stay free for the person at this screen however heavy the board is.  A pass that costs a few
+ * milliseconds still runs every frame.
+ */
+const remote = { dirty: false, timer: 0, nextAt: 0 };
+export function applyRemoteChanges(changes: WireChange[] | null | undefined) {
+  if (!mutateDoc(changes)) return;
+  remote.dirty = true;
+  if (!remote.timer) remote.timer = window.setTimeout(flushRemoteChanges, Math.max(0, remote.nextAt - performance.now()));
+}
+function cancelRemoteFlush() { if (remote.timer) { clearTimeout(remote.timer); remote.timer = 0; } remote.dirty = false; }
+/** Run the pass for the remote edits that are waiting, now (a caller that is about to read the item lists). */
+export function flushRemoteChanges() {
+  if (!remote.dirty) { cancelRemoteFlush(); return; }
+  cancelRemoteFlush();
+  const t0 = performance.now();
+  afterDocChange();
+  remote.nextAt = performance.now() + 16;
+  // the frame this pass asked for is part of its cost: this runs after it, in the same frame (not in a hidden tab, where nothing is drawn)
+  requestAnimationFrame(() => {
+    const now = performance.now(), cost = now - t0; remote.nextAt = now + Math.min(1000, 3 * cost);
+    if (remote.timer) { clearTimeout(remote.timer); remote.timer = window.setTimeout(flushRemoteChanges, remote.nextAt - now); }   // edits that arrived before the frame wait their turn too
+  });
 }
 
 /**
@@ -332,6 +378,7 @@ export function leaveDoc() {
   E.joinedDocId = null; E.lastSeq = 0; E.resyncAt = 0; E.lastPresenceMm = null; E.applyFailed = false;
   clearInterval(E.renderTimer); E.renderTimer = 0;
   E.items = []; E.sheets = []; E.selected = null; E.drag = null; E.boxSel = null; E.measure = null; E.selection = new Set(); E.highlightIds = null; E.peerState = {}; E.comments = []; E.followPeer = null; E.layers = {};
+  cancelRemoteFlush(); remote.nextAt = 0;
   E.kdoc = null; E.loadedText = null; E.layersSeeded = false; canvas.style.display = "none"; if (E.renderReq) { cancelAnimationFrame(E.renderReq); E.renderReq = 0; }
   releaseLayers();   // the cached pass and the zoom levels of the document left
   peersG.replaceChildren(); selG.replaceChildren(); dragG.replaceChildren(); cmtG.replaceChildren();
