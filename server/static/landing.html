@@ -243,7 +243,10 @@
   :root[data-theme="dark"] { --page: var(--panel); }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --page: var(--panel); } }
   /* the page lies on KiCad's schematic canvas: its sheet colour and its grid of dots */
-  body { background-color: var(--page);
+  /* The dots hold still, as the canvas does: the pinned story and AI panels stand still while the page
+     scrolls past them, so a grid that slid behind them would look like it was coming loose. */
+  body { background-color: var(--page); background-image: none; }
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
          background-image: radial-gradient(circle, color-mix(in srgb, var(--line-2) 70%, transparent) 0.9px, transparent 1.2px);
          background-size: 20px 20px; background-position: 10px 10px; }
   /* Loose text sits on the dotted sheet: a halo of the sheet's colour keeps the dots out of the letters. */
