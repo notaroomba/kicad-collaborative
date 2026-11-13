@@ -22,6 +22,7 @@ import { E } from "./state";
 import { HIT_PX, nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
 import { isSch, kicadZoom, pxPerMm, requestRender } from "./view";
+import { openSelectionProperties } from "./pointer";
 /** The table cell selection's view for the menu, filled in by editor/tablecells.ts at install. */
 export const tableMenu: { state(): { n: number; block: boolean; merged: boolean; structure: boolean } | null; pick(mm: Mm): boolean; actions: Record<string, () => boolean> } = { state: () => null, pick: () => false, actions: {} };
 import { toast } from "./util";
@@ -114,15 +115,9 @@ function overDrawingSheet(): boolean {
   const K = window.KDialogs as unknown as { overDrawingSheet?: (p: [number, number]) => boolean } | undefined, c = E.lastCursorMm as [number, number] | null;
   return !!(K && K.overDrawingSheet && c && K.overDrawingSheet(c));
 }
-function openProperties(): void {
-  const d = E.kdoc as KDoc | null, K = window.KDialogs; if (!d || !K) return;
-  if (E.selField) { const it = d.items.get(E.selField.id); if (it) K.openField(toolCtx(), it, E.selField.name); return; }
-  if (E.selPins.length) { if (E.selPins.length === 1) { const it = d.items.get(E.selPins[0].id); if (it) K.openItem(toolCtx(), it); } return; }   // Properties promotes a lone pin to its symbol; several pins open nothing
-  const items = selectionItems();
-  if (!isSch() && items.length > 1 && K.pcbSelectionDialog && K.pcbSelectionDialog(toolCtx(), items)) return;   // EDIT_TOOL::Properties over tracks and vias
-  const it = items[0]; if (it) { K.openItem(toolCtx(), it); return; }
-  const sp = (K as unknown as { schProperties?: () => boolean }).schProperties; if (isSch() && sp) sp();   // nothing selected, over the drawing sheet: Page Settings
-}
+/** The same action as E (SCH_EDIT_TOOL / EDIT_TOOL::Properties): one item's dialog, Track & Via Properties over tracks
+ *  and vias, or the infobar's "Use Properties panel" for any other multiple selection. */
+function openProperties(): void { openSelectionProperties(); }
 /** SCH_MOVE_TOOL: selected pins move as their parent symbols. */
 function promotePin(): void {
   if (!E.selPins.length) return; const ids = Array.from(new Set((E.selPins as { id: string }[]).map((p) => p.id))); E.selPins = [];

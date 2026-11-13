@@ -236,7 +236,7 @@ export interface AppState {
   status: { message: string; mode: string; constraint: string };
   /** EDA_MSG_PANEL: the columns (title over value) of the selection's GetMsgPanelInfo, the board summary or the router */
   msgPanel: { items: { title: string; value: string }[] };
-  toast: { id: number; text: string; ms: number } | null;
+  toast: { id: number; text: string; ms: number; link?: { text: string; run: () => void } } | null;
   popover: PopoverState | null;
   contextMenu: ContextMenuState | null;
   routing: RoutingState;

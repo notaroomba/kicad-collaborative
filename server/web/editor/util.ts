@@ -9,7 +9,8 @@ export function setRadio(group: string, id: string): void { const m: Record<stri
 export function esc(t: unknown): string { const d = document.createElement("span"); d.textContent = (t ?? "") as string; return d.innerHTML; }
 
 
-export function toast(msg: unknown, ms = 2200): void { store.set({ toast: { id: ++E.toastN, text: String(msg), ms } }); }
+/** The infobar (WX_INFOBAR::ShowMessageFor); `link` is a hyperlink added with WX_INFOBAR::AddLink. */
+export function toast(msg: unknown, ms = 2200, link?: { text: string; run: () => void }): void { store.set({ toast: { id: ++E.toastN, text: String(msg), ms, link } }); }
 
 export function ago(iso: string): string {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;

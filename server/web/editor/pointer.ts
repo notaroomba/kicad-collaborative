@@ -7,6 +7,8 @@ import { E } from "./state";
 import { appClipboard, moveOp, publishUndo, redoStack, toolCtx, undoStack, unlockedForEdit } from "./tools";
 import { rulerStrings, snapped45, type RulerUnits } from "./ruler";
 import type { ItemSummary } from "./types";
+import { toast } from "./util";
+import { showPane } from "./panes";
 
 /** Asked first by openSelectionProperties (Table Cell Properties on a cell selection, editor/tablecells.ts). */
 export const propertiesHooks: (() => boolean)[] = [];
@@ -33,6 +35,11 @@ export function openSelectionProperties() {
     const ids = new Set<string>([...(E.selected ? [E.selected.id] : []), ...((modSel && typeof modSel === "object" ? Array.from(modSel as Set<string>) : [])), ...(E.selection ? Array.from(E.selection as Set<string>) : [])]);
     const items = Array.from(ids).map((i) => E.kdoc!.items.get(i)).filter((x): x is KItem => !!x);
     if (items.length > 1 && KDialogs!.pcbSelectionDialog(ctx, items)) return true;
+    // EDIT_TOOL::Properties, selection.Size() > 1 and not only tracks / vias: no dialog, the infobar points at the Properties panel
+    if (items.length > 1) {
+      toast("Use Properties panel to edit properties common to selected items.", 8000, E.panes.props ? undefined : { text: "Show Properties panel", run: () => showPane("props", true) });
+      return true;
+    }
   }
   const it = id && E.kdoc.items.get(id);
   if (!it && !isSch() && CollabTools.pcb && CollabTools.pcb.requestSelection) {

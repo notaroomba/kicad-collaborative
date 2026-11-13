@@ -53,6 +53,8 @@
   .kinfobar::before { content: "i"; position: absolute; left: 8px; top: 50%; width: 15px; height: 15px; margin-top: -8px; border-radius: 50%; background: var(--blue); color: var(--panel); font: 700 11px/15px Georgia, serif; text-align: center; }
   .kinfobar.show { transform: none; opacity: 1; visibility: visible; pointer-events: auto; transition: transform .16s ease-out, opacity .16s ease-out; }
   .kinfobar-x { margin-left: auto; flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--ink-2); }
+  .kinfobar-link { margin-left: auto; flex: none; color: var(--blue); text-decoration: underline; }
+  .kinfobar-link + .kinfobar-x { margin-left: 0; }
   .kinfobar-x:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--ink); }
   @media (prefers-reduced-motion: reduce) { .kinfobar, .kinfobar.show { transition: none; } }
   .ktip { position: fixed; left: 0; top: 0; z-index: 1000; max-width: 360px; padding: 4px 7px; border: 1px solid var(--line-2, var(--line)); border-radius: 3px; background: var(--panel); color: var(--ink); font-size: 12px; line-height: 1.35; white-space: pre-line; pointer-events: none; box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 18%, transparent); opacity: 0; visibility: hidden; transition: opacity .08s linear, visibility 0s linear .08s; }
