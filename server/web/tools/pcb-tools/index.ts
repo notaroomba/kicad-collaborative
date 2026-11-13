@@ -21,7 +21,7 @@
 //
 // Built by 'npm run build:pcb-tools' into static/pcb-tools.js, a classic script (IIFE) that registers
 // window.CollabTools.pcb and window.PcbTools; the modules follow the sections of the original file.
-import type { BoardDoc, FormSpec, PcbCtx, Pt, PtrEvent } from "./types";
+import type { BoardDoc, FormSpec, PcbChange, PcbCtx, Pt, PtrEvent } from "./types";
 import type { RequestOpts, RoutingDialogs } from "./actions";
 import type { NewItemDialog } from "./assistants";
 import type { PickerFn, PromptFn } from "./dom";
@@ -399,6 +399,22 @@ export const pcb = {
   deleteChanges,
   // the app's drag of a mixed selection, and Move: everything selected goes along (sticky = follows the cursor until a click)
   beginMove(ctx: PcbCtx, at: Pt, sticky: boolean) { bind(ctx); return beginCarryMove(ctx, { at, sticky }); },
+  /**
+   * DRAWING_TOOL::PlaceImportedGraphics after the dialog: the shapes (in a new group when asked and there are two or
+   * more) committed where they are, or, with interactive placement, hung on the cursor by the file's origin until a
+   * click places them as one "Import Graphics" step.
+   */
+  placeImported(ctx: PcbCtx, nodes: SNode[], opts: { interactive: boolean; group: boolean; label?: string }) {
+    bind(ctx); const doc = ctx.doc; if (!doc || ctx.viewOnly || !nodes.length) return false;
+    const label = opts.label || "Import Graphics", at = opts.interactive ? cursorPoint(ctx) : null;
+    const changes: PcbChange[] = [], ids: string[] = [];
+    for (const n of nodes) { if (at) translateNode(n, at[0], at[1]); const c = addedChange(doc, n); changes.push(c); ids.push(c.id); }
+    let sel = ids.slice();
+    if (opts.group && ids.length >= 2) { const g = addedChange(doc, groupNode("", ids)); changes.push(g); sel = [g.id]; }
+    if (!at) { ctx.commit(changes, label); applySelection(ctx, sel); return true; }
+    ctx.commit(changes, label, { tentative: true }); applySelection(ctx, sel); beginCarryMove(ctx, { placing: ids.slice(), at });
+    return true;
+  },
   unlockedIds(ctx: PcbCtx, ids: string[], quiet: boolean) { bind(ctx); return unlockedIds(ctx, ids, quiet); },
   /** RequestSelection for an app-side action (Properties): { ids, items, hover } or null; opts as requestSelection. */
   requestSelection(ctx: PcbCtx, opts?: RequestOpts) { bind(ctx); return requestSelection(ctx, opts); },

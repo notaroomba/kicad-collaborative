@@ -12,6 +12,7 @@ import { KD } from "./dom";
 import { openAnnotate, refreshOtherRefs } from "./annotate";
 import { ercCrossProbe, ercExcludeMarker, ercNextMarker, ercPrevMarker, findNextMarker, openErc, selectMarker, type ErcViolation, withExclusions } from "./erc";
 import { syntaxHelp } from "../editor/syntax-help";
+import { openImportGraphics } from "../importgfx/dialog";
 import { applySeverities } from "./erc-rules";
 import { openFieldsTable } from "./fields-table";
 import { findNext as schFindNext, openFind } from "./find";
@@ -85,6 +86,9 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
     autoplaceAllSheetPins: needDoc(() => { void autoplaceAllSheetPins(); }, true),
     runERC: needDoc(openErc, true),
+    // File > Import > Graphics... (EE_GRAPHIC_TOOL::ImportGraphics, DRAWING_TOOL::PlaceImportedGraphics)
+    importGraphics: needDoc(() => openImportGraphics("sch"), true),
+    placeImportedGraphics: needDoc(() => { if (!isSch() && !(E.kdoc as KDoc).fpEditor) openImportGraphics("pcb"); }),
     prevMarker: ercPrevMarker as Handler, nextMarker: ercNextMarker as Handler,   // the schematic's; the board's are the module's (EDITOR_ONLY)
     excludeMarker: (() => { if (E.kdoc && isSch()) ercExcludeMarker(); }) as Handler,
     editPageNumber: needDoc(() => { editPageNumber(); }, true),   // SCH_EDIT_TOOL::EditPageNumber

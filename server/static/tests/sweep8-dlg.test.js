@@ -152,5 +152,44 @@ test("ERC exclusions: an excluded marker shows as an exclusion and keeps its sev
   X.dropRule(erc, "isolated_pin_label"); assert.deepEqual(erc.erc_exclusions, []);
 });
 
+const G = load(["importgfx", "model.ts"]);
+test("SVG import: nanosvg's millimetres from width / height and the viewBox, rect and circle as closed polygons", () => {
+  const r = G.importSvg(`<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="10mm" viewBox="0 0 200 100"><rect x="10" y="10" width="50" height="30" fill="none" stroke="#000" stroke-width="2"/><circle cx="150" cy="50" r="20"/><path d="M10 90 L190 90" stroke="#000" fill="none"/></svg>`);
+  assert.equal(r.width, 20); assert.equal(r.height, 10);
+  assert.deepEqual(r.shapes.map((s) => s.t), ["poly", "poly", "spline"]);
+  const p = G.toPrims(r.shapes, { scale: [1, 1], offset: [0, 0], lineWidth: 0, iu: 1e-6, noStroke: 0 });
+  assert.deepEqual(p[0].pts, [[1, 1], [6, 1], [6, 4], [1, 4], [1, 1]]); assert.equal(p[0].width, 0.2); assert.equal(p[0].filled, false);
+  assert.equal(p[1].filled, true); assert.equal(p[1].width, 0);                 // fill without stroke: pcbnew's width 0
+  assert.equal(p[2].t, "segment"); assert.deepEqual([p[2].a, p[2].b], [[1, 9], [19, 9]]);   // a straight Bézier is a segment
+});
+test("SVG paths: relative commands, arcs and smooth curves become cubics", () => {
+  const sp = G.pathToCubics("m0 0 h10 v10 a5 5 0 0 1 -10 0 s 2 -5 0 -10 z");
+  assert.equal(sp.length, 1); assert.equal(sp[0].closed, true);
+  const last = sp[0].pts[sp[0].pts.length - 1]; assert.deepEqual(last, [0, 0]);
+  assert.ok(sp[0].pts.some((p) => Math.abs(p[1] - 15) < 1e-9));   // the arc's bottom
+});
+test("DXF import: Y up turned down, bulges and arcs as three points, $INSUNITS, layers, KiCad's image limits", () => {
+  const dxf = ["0", "SECTION", "2", "HEADER", "9", "$INSUNITS", "70", "1", "0", "ENDSEC", "0", "SECTION", "2", "TABLES", "0", "LAYER", "2", "Outline", "370", "25", "0", "ENDSEC",
+    "0", "SECTION", "2", "ENTITIES", "0", "LINE", "8", "Outline", "10", "0", "20", "0", "11", "1", "21", "0", "0", "ARC", "8", "0", "10", "0", "20", "0", "40", "0.5", "50", "0", "51", "90",
+    "0", "LWPOLYLINE", "8", "0", "90", "2", "70", "0", "10", "0", "20", "0", "42", "1", "10", "2", "20", "0", "0", "ENDSEC", "0", "EOF"].join("\n");
+  const r = G.importDxf(dxf, 2, 0.2);
+  assert.deepEqual(r.layers, ["Outline"]);
+  const [line, arc, bulge] = r.shapes;
+  assert.deepEqual([line.a, line.b], [[0, 0], [25.4, 0]]); assert.equal(line.stroke.width, 0.25);   // inches, lineweight 25 by layer
+  assert.equal(arc.stroke.width, 0.2);                                                             // the default width
+  assert.ok(Math.abs(arc.b[1] + 12.7) < 1e-9);                                                     // 90 degrees is up in the DXF, -Y here
+  assert.deepEqual(bulge.m.map((v) => +v.toFixed(6)), [25.4, 25.4]);                              // a bulge of 1 is a half circle below the chord
+  assert.ok(Math.abs(r.width - 63.5) < 1e-9);   // the arc counts as its centre ± radius
+});
+test("B-spline to Béziers: a clamped cubic with interior knots splits per span", () => {
+  assert.deepEqual(G.bsplineToBeziers(3, [[0, 0], [1, 1], [2, 1], [3, 0]], [0, 0, 0, 0, 1, 1, 1, 1]), [[[0, 0], [1, 1], [2, 1], [3, 0]]]);
+  const segs = G.bsplineToBeziers(3, [[0, 0], [1, 1], [2, 1], [3, 0], [4, -1]], [0, 0, 0, 0, 0.5, 1, 1, 1, 1]);
+  assert.equal(segs.length, 2); assert.deepEqual(segs[0][0], [0, 0]); assert.deepEqual(segs[1][3], [4, -1]); assert.deepEqual(segs[0][3], segs[1][0]);
+});
+test("ImportTo: scale, offset, the mean scale on widths, rounding to the editor's unit", () => {
+  const p = G.toPrims([{ t: "line", a: [0, 0], b: [1.23456789, 0], stroke: { width: 0.1, dash: "dash" }, layer: "" }], { scale: [2, 2], offset: [10, 5], lineWidth: 0, iu: 1e-4, noStroke: -0.0001 });
+  assert.deepEqual(p[0].a, [10, 5]); assert.deepEqual(p[0].b, [12.4691, 5]); assert.equal(p[0].width, 0.2); assert.equal(p[0].dash, "dash");
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

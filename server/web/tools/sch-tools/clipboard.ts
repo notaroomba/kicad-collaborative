@@ -182,3 +182,23 @@ export function copyAsText(ctx: SchCtx) {
   }
   clipWrite(ctx, lines.join("\n")); return true;
 }
+/**
+ * EE_GRAPHIC_TOOL::ImportGraphics once the dialog closed: the imported shapes (and the group holding them) are
+ * committed where they are, or, with interactive placement, ride the cursor by the file's origin until a click
+ * places them as one "Import Graphic" step (Esc drops them).
+ */
+export function placeImported(ctx: SchCtx, nodes: SNode[], opts: { interactive: boolean; group: boolean; label?: string }) {
+  if (!editable(ctx) || !nodes.length) return false;
+  const label = opts.label || "Import Graphic";
+  for (const n of nodes) if (!kid(n, "uuid")) n.push(["uuid", K.newUuid()]);
+  const live = opts.interactive && canFollow(ctx), at = live ? snapCursor(ctx) : null;
+  if (at) for (const n of nodes) shiftNode(n[0] as string, n, at[0], at[1]);
+  const all = nodes.slice();
+  if (opts.group && nodes.length >= 2) all.push(["group", "", ["uuid", K.newUuid()], ["members", ...nodes.map((n) => str((kid(n, "uuid") || [])[1]))]]);
+  const changes: KChange[] = [], ids: string[] = [];
+  for (const n of all) { const { item, change } = addNode(ctx.doc, n); changes.push(change); ids.push(item.id); }
+  const sel = opts.group && nodes.length >= 2 ? [ids[ids.length - 1]] : ids.slice();
+  if (live && at && followPaste(ctx, ids, [], at, label)) { setSelectionIds(ctx, sel); return true; }
+  ctx.commit(changes, label); setSelectionIds(ctx, sel); ctx.requestRender();
+  return true;
+}
