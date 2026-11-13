@@ -187,7 +187,22 @@ export function applyView() {
   requestRepaint();
 }
 
+/**
+ * FOOTPRINT_EDIT_FRAME::GetDocumentExtents: the footprint's GetBoundingBox( false ), its pads, zones and graphics
+ * without texts or fields; a footprint with none of those is a 24 mm box about the origin.
+ */
+export function footprintExtentsMm(d: KDoc): number[] {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const it of d.items.values()) {
+    const k = String((it as { kind?: string }).kind || ""), b = (it as { bbox?: number[] | null }).bbox;
+    if (!b || k === "property" || k === "gr_text" || k === "fp_text" || k === "text") continue;
+    x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); x1 = Math.max(x1, b[2]); y1 = Math.max(y1, b[3]);
+  }
+  if (x0 === Infinity) return [-12, -12, 24, 24];
+  return [x0, y0, Math.max(x1 - x0, 1e-3), Math.max(y1 - y0, 1e-3)];
+}
 export function contentBoxMm() {
+  if (E.kdoc && (E.kdoc as { fpEditor?: boolean }).fpEditor) return footprintExtentsMm(E.kdoc as KDoc);
   if (E.kdoc && !isSch()) { const b = E.kdoc.bbox; return [b[0], b[1], Math.max(1, b[2] - b[0]), Math.max(1, b[3] - b[1])]; }
   if (isSch()) return [mmX0(), mmY0(), mmW(), mmH()];
   // Union of the board outline and copper: what a person means by "the board".
