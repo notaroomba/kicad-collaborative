@@ -2341,10 +2341,12 @@ class Blocks:
                         caps = []
             if order:
                 lo, hi = power[0]["x"], power[-1]["x"]
+                spans = sorted((min(p["x"] for p in power if want(p) == n), max(p["x"] for p in power if want(p) == n)) for n in order)
+                apart = all(b[0] > a[1] + 1e-6 for a, b in zip(spans, spans[1:]))     # each supply's pins side by side, none between another's
                 for kk, net in enumerate(order):
                     mine = [p for p in power if want(p) == net]
-                    rail = mine[0]["y"] + v * (G + kk * G)
-                    if len(order) == 1:      # one rail: its symbol stands centred over (or under) its pins
+                    rail = mine[0]["y"] + v * (G + (0 if apart else kk * G))
+                    if len(order) == 1 or apart:      # its symbol stands centred over (or under) its own pins, every rail at one height
                         sx = round((mine[0]["x"] + mine[-1]["x"]) / 2 / 1.27) * 1.27
                     else:
                         sx = lo - 3 * G * (kk // 2 + 1) if kk % 2 == 0 else hi + 3 * G * (kk // 2 + 1)
