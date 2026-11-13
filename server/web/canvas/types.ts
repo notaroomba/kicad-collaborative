@@ -94,8 +94,10 @@ export type TextGeom = GeomFlags & {
   padMin?: number; padLayers?: string[]; minPx?: number;
   /** an outline-font text's stored render cache (board coordinates) and where the text was when it was noted */
   outline?: { node: SNode; x: number; y: number; rot: number; shown: string };
-  /** the first line of a text that carries `outline` */
+  /** the first line of a text set in an outline font: the one its outlines (stored, or drawn from the font file) go out with */
   outlineFirst?: boolean;
+  /** an outline-font text as a whole (every line, its anchor): what a plot lays out from the font file */
+  block?: { x: number; y: number; rot: number; text: string };
   /** a board text (PCB_TEXT / PCB_FIELD) a DXF plot may write as a TEXT entity (DXF_PLOTTER::plotOneLineOfText): its bold flag */
   dxfText?: { bold: boolean };
 };

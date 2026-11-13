@@ -22,6 +22,7 @@ import "../router/index";
 import "../fab/index";
 import * as design from "../ai/design";
 import { ToolError } from "../ai/design";
+import { textFaces } from "../fonts-used";
 import { checkLayout } from "../ai/layout";
 import { reviewDesign } from "../ai/review";
 import * as library from "../ai/library";
@@ -62,6 +63,23 @@ async function api(path: string, init?: any): Promise<any> {
   return body;
 }
 const post = (path: string, body: unknown, method = "POST") => api(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+// ---------------------------------------------------------------- fonts
+
+let fontProject = "";
+/** The font files of a document's text, from the project, for the zone filler (web/fab/outline-font.ts). */
+K().loadFontsFor = async (doc: unknown): Promise<void> => {
+  const pid = fontProject; if (!pid) return;
+  await Promise.all(textFaces(doc).filter(([face, bold, italic]) => !K().fontData(face, bold, italic)).map(async ([face, bold, italic]) => {
+    try {
+      const r = await W.fetch(`/api/projects/${pid}/fonts/file?family=${encodeURIComponent(face)}&bold=${bold ? 1 : 0}&italic=${italic ? 1 : 0}`);
+      if (!r.ok || fontProject !== pid) return;
+      K().setFontData(face, bold, italic, { data: await r.arrayBuffer(), bold: r.headers.get("x-font-bold") === "1", italic: r.headers.get("x-font-italic") === "1" });
+    } catch { /* the text is then treated as stroke-font text */ }
+  }));
+};
+/** Another project's uploaded fonts must not answer for this one's under the same names. */
+function useFontProject(id: string): void { if (id !== fontProject) { fontProject = id; K().fontChanged(); } }
 
 // ---------------------------------------------------------------- documents
 
@@ -534,6 +552,7 @@ const TOOLS: Record<string, (req: Request) => Promise<Reply>> = {
 };
 
 async function handle(req: Request): Promise<any> {
+  useFontProject(req.project ? req.project.projectId : "");
   conn = { base: req.base, token: req.token, agent: req.agent || "" };
   const tool = TOOLS[req.tool];
   if (!tool) return { id: req.id, ok: false, error: `Unknown tool ${req.tool}.` };

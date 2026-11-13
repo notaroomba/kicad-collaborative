@@ -369,6 +369,8 @@ async function planFill(doc: any, count: number): Promise<any[]> {
   const rules = { netClearance: (n: string) => { const nc = P.netclassOf(s, n); return nc && nc.clearance !== undefined ? nc.clearance : s.clearance; },
     minClearance: s.minClearance || 0, holeClearance: s.holeClearance || 0, edgeClearance: s.edgeClearance };
   const quiet = { phase() { /* no dialog here */ }, advance() { /* no dialog here */ }, cancelled: () => false, yield: () => Promise.resolve() };
+  // text set in an outline font is cleared around its real outlines: the font files first
+  if (typeof k.loadFontsFor === "function") { try { await k.loadFontsFor(doc); } catch { /* the fill then clears around the stroke font's box */ } }
   return (await F.fillZones({ doc, setup: null }, rules, null, quiet)) || [];
 }
 

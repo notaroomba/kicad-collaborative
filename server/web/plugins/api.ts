@@ -267,7 +267,7 @@ function loadFab(): Promise<any> {
 async function fabContext(): Promise<{ F: any; ctx: any }> {
   const { doc, open } = liveDoc();
   if (doc.type !== "pcb") throw new ApiError("Fabrication outputs are made from a board; the open document is a schematic.", "not_board");
-  const [F, file] = await Promise.all([loadFab(), savedBoardFile(open.docId)]);
+  const [F, file] = await Promise.all([loadFab(), savedBoardFile(open.docId), (KiCadCanvas.loadFontsFor ? KiCadCanvas.loadFontsFor(doc).catch(() => undefined) : Promise.resolve())]);
   return { F, ctx: { doc, setup: file || null, projectName: String(open.path).replace(/^.*\//, "").replace(/\.kicad_pcb$/, "") } };
 }
 const strs = (v: unknown): string[] | undefined => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 80) : undefined);

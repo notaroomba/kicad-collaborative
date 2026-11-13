@@ -205,6 +205,44 @@ test("text in an outline font is plotted from the outlines KiCad stored, which f
   assert(!/G36/.test(r.text) && r.warnings.some((w) => /Some Face/.test(w) && /stroke font/.test(w)), "then the stroke font, with a warning: " + r.warnings.join(" | "));
 });
 
+test("text in an outline font with no stored outlines is plotted from the font file the project holds", () => {
+  const fs = require("fs"), file = path.join(__dirname, "..", "..", "..", "qa", "resources", "fonts", "NotoSans-Regular.ttf");
+  if (!fs.existsSync(file)) { console.log("  skip (no font file beside the server)"); return; }
+  const raw = fs.readFileSync(file), data = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.length);
+  const txt = (extra, just) => `(gr_text "Hot" (at 10 10) (layer "F.SilkS"${extra || ""}) (uuid "o") (effects (font (face "Noto Sans") (size 2 2) (thickness 0.3)) (justify ${just || "left bottom"})))`;
+  const plot = (t) => { const d = K.parseDoc(mini(20261031, t), "kicad_pcb"); const g = F.plotGerbers({ doc: d, setup: mini(20261031, ""), projectName: "o" }, { layers: ["F.SilkS"] }); return { text: g.files[0].text, warnings: g.warnings }; };
+  const box = (text) => { const xs = [], ys = []; for (const m of text.matchAll(/X(-?\d+)Y(-?\d+)D0[12]\*/g)) { xs.push(+m[1] / 1e6); ys.push(-m[2] / 1e6); } return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]; };
+  K.fontChanged();
+  let r = plot(txt());
+  assert(!/G36/.test(r.text) && r.warnings.some((w) => /Noto Sans/.test(w)), "without the file: the stroke font and a warning");
+  K.setFontData("Noto Sans", false, false, { data, bold: false, italic: false });
+  r = plot(txt());
+  assert(/G36/.test(r.text) && !r.warnings.some((w) => /Noto Sans/.test(w)), "with it: filled outlines and no warning: " + r.warnings.join(" | "));
+  // KiCad's layout: an em of 1.4 text heights, the baseline one height below the top of the block, the block 1.17 heights
+  // tall and sitting on the anchor (justify bottom): baseline at 10 + 2 - 2.34 = 9.66; "H" is 0.714 em tall in Noto Sans
+  let b = box(r.text);
+  assert(Math.abs(b[3] - 9.66) < 0.06, `the baseline: ${b[3]}`);
+  assert(Math.abs((b[3] - b[1]) - 0.714 * 2.8) < 0.08, `the cap height: ${b[3] - b[1]}`);
+  assert(b[0] > 10 && b[0] < 10.5 && b[2] - b[0] > 4.4 && b[2] - b[0] < 5.4, `starts at the anchor and is as wide as the glyphs: ${b}`);
+  const regions = (r.text.match(/G36\*/g) || []).length;
+  assert.strictEqual(regions, 3, "one region per letter, the hole of the o cut in (no hole is filled): " + regions);
+  // right justified: the same shape ending at the anchor; turned a quarter: the box turned with it
+  const br = box(plot(txt("", "right bottom")).text);
+  assert(Math.abs(br[2] - 10) < 0.25 && Math.abs((br[2] - br[0]) - (b[2] - b[0])) < 1e-3, `right justified: ${br}`);
+  const bq = box(plot(txt().replace("(at 10 10)", "(at 10 10 90)")).text);
+  assert(Math.abs((bq[3] - bq[1]) - (b[2] - b[0])) < 1e-3 && Math.abs((bq[2] - bq[0]) - (b[3] - b[1])) < 1e-3, `rotated: ${bq}`);
+  // a knockout text: its box as a region, the glyphs cleared out of it
+  const k = plot(txt(" knockout"));
+  assert(/%LPC\*%/.test(k.text) && /G36/.test(k.text), "knockout: the letters are cleared out of the box");
+  // two lines are 1.68 heights apart; an overbar is a stroke above the letters
+  const two = box(plot(txt().replace('"Hot"', '"Hot\\nHot"')).text);
+  assert(Math.abs((two[3] - two[1]) - (b[3] - b[1]) - 3.36) < 0.02, `two lines: ${two}`);
+  const over = plot(txt().replace('"Hot"', '"~{Hot}"'));
+  assert(/G36/.test(over.text) && /D01\*/.test(over.text.split("G37*").pop()), "the overbar is drawn after the letters");
+  assert(F.outlineText({ face: "No Such Face", bold: false, italic: false, text: "x", x: 0, y: 0, rot: 0, size: 1, sizeX: 1, h: "left", v: "bottom", mirror: false }) === null, "a font that is not held answers null");
+  K.fontChanged();
+});
+
 Promise.all(pending).then(() => { console.log(`\n${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0); });
 
 /** The entries of a zip archive (stored or deflated). */

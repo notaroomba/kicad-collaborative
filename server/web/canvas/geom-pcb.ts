@@ -110,8 +110,9 @@ export function pcbTextGeom(item: Item, n: SNode, x: number, y: number, text: st
     return null;
   }
   if (rc) ex.outline = { node: rc, x, y, rot: rot || 0, shown: text };
+  if (ef.face) ex.block = { x, y, rot: rot || 0, text };
   const first = textLines(item, x, y, text, ef.size, color, rot, ef.just, layer, ex);
-  if (first && rc) first.outlineFirst = true;
+  if (first && ef.face) first.outlineFirst = true;
   return first;
 }
 

@@ -11,6 +11,7 @@
 import { state } from "./appstore";
 import { requestRender } from "./view";
 import { setFontProject } from "../dialogs/font-picker";
+import { textFaces } from "../fonts-used";
 
 const RETRY_MS = [4000, 15000, 60000, 180000];
 let project: string | null = null;
@@ -48,9 +49,13 @@ async function load(face: string, bold: boolean, italic: boolean, attempt: numbe
   // then thickens or slants it, as KiCad does
   const b = r.headers.get("x-font-bold") === "1", i = r.headers.get("x-font-italic") === "1";
   const key = `${face}|${b ? "b" : ""}|${i ? "i" : ""}`;
+  let bytes: ArrayBuffer; try { bytes = await r.arrayBuffer(); } catch (e) { again(); return; }
+  if (project !== pid) return;
+  // the file itself is kept too: a plot draws the text's outlines from it (web/fab/outline-font.ts)
+  KiCadCanvas.setFontData(face, bold, italic, { data: bytes, bold: b, italic: i });
   if (!registered.has(key)) {
     try {
-      const ff = new FontFace(face, await r.arrayBuffer(), { weight: b ? "700" : "400", style: i ? "italic" : "normal" });
+      const ff = new FontFace(face, bytes.slice(0), { weight: b ? "700" : "400", style: i ? "italic" : "normal" });
       await ff.load();
       if (project !== pid) return;
       document.fonts.add(ff); registered.set(key, ff);
@@ -59,8 +64,19 @@ async function load(face: string, bold: boolean, italic: boolean, attempt: numbe
   KiCadCanvas.fontChanged(face); requestRender();
 }
 
+/**
+ * Before a plot: the font files of every text in the document, so that text on a layer that was never drawn
+ * (hidden, or off screen since the board opened) is plotted in its own font as well.  One attempt each; a font
+ * the project does not have is reported by the plot itself.
+ */
+export async function fontsForPlot(doc: unknown): Promise<void> {
+  const want = textFaces(doc).filter(([face, bold, italic]) => !KiCadCanvas.fontData(face, bold, italic));
+  await Promise.all(want.map(([face, bold, italic]) => load(face, bold, italic, RETRY_MS.length).catch(() => undefined)));
+}
+
 export function initFonts(): void {
   KiCadCanvas.onFontWanted = (face, bold, italic) => { void load(face, bold, italic, 0); };
+  KiCadCanvas.loadFontsFor = fontsForPlot;
 }
 /** Called when a project opens or closes. */
 export function fontsForProject(id: string | null): void { useProject(id); }

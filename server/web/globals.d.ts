@@ -127,6 +127,12 @@ interface KiCadCanvasApi {
   fontChanged(face?: string): void;
   wantFace(face: string, bold: boolean, italic: boolean): void;
   faceAvailable(face: string): boolean;
+  /** the file of a face, kept for plots (web/fab draws the text's outlines from it); null forgets it */
+  setFontData(face: string, bold: boolean, italic: boolean, font: import("./canvas/render").FontBytes | null): void;
+  fontData(face: string, bold: boolean, italic: boolean): import("./canvas/render").FontBytes | null;
+  allFontData(): [string, boolean, boolean, import("./canvas/render").FontBytes][];
+  /** set by the editor: fetch the font files of every text of a document before it is plotted */
+  loadFontsFor: ((doc: unknown) => Promise<void>) | null;
   /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */
   pcbSizes: typeof import("./canvas/pcb-sizes").pcbSizes;
   /** a library symbol (lib_symbols / .kicad_sym entry) as a drawable document in library space (web/canvas/libsym.ts) */

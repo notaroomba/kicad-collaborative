@@ -89,6 +89,7 @@ function fillWorkerUrl(): Promise<string> {
     const [canvas, fab] = await Promise.all([fetch(scriptUrl("/static/kicad-canvas.js")).then((r) => r.text()), fetch(scriptUrl("/static/dist/fab.js")).then((r) => r.text())]);
     if (!/fillZones/.test(fab)) throw new Error("this fab bundle has no zone filler");
     const main = `;(function(){var F=self.KiCadFab;self.onmessage=function(e){var d=e.data;var R=d.rules;
+(d.fonts||[]).forEach(function(f){self.KiCadCanvas.setFontData(f[0],f[1],f[2],f[3])});
 var rules={netClearance:function(n){return Object.prototype.hasOwnProperty.call(R.nets,n)?R.nets[n]:R.dflt},minClearance:R.minClearance,holeClearance:R.holeClearance,edgeClearance:R.edgeClearance};
 var prog={phase:function(n,t){self.postMessage({t:"phase",n:n,text:t})},advance:function(a,b){self.postMessage({t:"adv",a:a,b:b})},cancelled:function(){return false},yield:function(){return Promise.resolve()}};
 F.fillZones({doc:d.doc,setup:d.setup},rules,d.ids,prog).then(function(r){self.postMessage({t:"done",r:r})},function(err){self.postMessage({t:"error",m:String(err&&err.stack||err)})});};})();`;
@@ -127,7 +128,7 @@ async function computeFill(doc: KDoc, ids: string[] | null, rep: Reporter | null
   let url: string | null = null; try { url = await fillWorkerUrl(); } catch (e) { url = null; }
   if (url && typeof Worker !== "undefined") {
     let payload: unknown = null;
-    try { payload = { doc: transferable(doc), setup, ids, rules: rd }; structuredClone(payload); } catch (e) { console.warn("zone fill: board not transferable", e); payload = null; }
+    try { payload = { doc: transferable(doc), setup, ids, rules: rd, fonts: KiCadCanvas.allFontData() }; structuredClone(payload); } catch (e) { console.warn("zone fill: board not transferable", e); payload = null; }
     if (payload) {
       const res = await new Promise<ZoneFillResult[] | null | "fallback">((resolve) => {
         let w: Worker; try { w = new Worker(url as string); } catch (e) { resolve("fallback"); return; }

@@ -250,6 +250,33 @@ await step('board text', a, async () => {
   await shot(a, '08-board-alice'); await shot(b, '09-board-bob');
 });
 
+await step('a plot made in the browser', b, async () => {
+  // Bob, who has never had the font on his computer and whose board no desktop has saved since: File > Plot's own
+  // path (the writers load, the fonts of the board's text are fetched, the Gerber is written)
+  const plot = () => b.evaluate(async () => {
+    const own = document.querySelector('script[src*="/static/dist/editor.js"]'), q = own ? (own.getAttribute('src') || '').split('?')[1] : '';
+    if (!window.KiCadFab || !window.KiCadFab.plotGerbers) await new Promise((ok, no) => { const el = document.createElement('script'); el.src = '/static/dist/fab.js' + (q ? '?' + q : ''); el.onload = ok; el.onerror = no; document.head.appendChild(el); });
+    await window.KiCadCanvas.loadFontsFor(window.CollabEditor.kdoc);
+    const ctx = { doc: window.CollabEditor.kdoc, setup: null, projectName: 'fonts' };
+    const g = window.KiCadFab.plotGerbers(ctx, { layers: ['F.SilkS'] });
+    const svg = window.KiCadFab.pluginPlot(ctx, { format: 5, layers: ['F.SilkS', 'Edge.Cuts'], svgFitPageToBoard: true, blackAndWhite: true }, () => '#000000');
+    return { text: g.files[0].text, warnings: g.warnings.concat(svg.warnings), svg: atob(svg.base64) };
+  });
+  const r = await plot();
+  check('the silkscreen text is plotted as filled outlines of Roboto Mono', /G36\*/.test(r.text) && (r.text.match(/G36\*/g) || []).length >= 4, String((r.text.match(/G36\*/g) || []).length));
+  check('with no warning about a missing font or a stroke-font fallback', !r.warnings.some((w) => /font/i.test(w)), r.warnings.join(' | '));
+  const xs = [...r.text.matchAll(/X(-?\d+)Y(-?\d+)D0[12]\*/g)].map((m) => [+m[1] / 1e6, -m[2] / 1e6]);
+  const x0 = Math.min(...xs.map((p) => p[0])), x1 = Math.max(...xs.map((p) => p[0])), y0 = Math.min(...xs.map((p) => p[1])), y1 = Math.max(...xs.map((p) => p[1]));
+  // "REV A", 5 mm, centred on (130, 100): a monospace face, five cells of 0.6 em (4.2 mm) each
+  check('centred where the text is, as wide as five cells of the monospace face', Math.abs((x0 + x1) / 2 - 130) < 1.2 && x1 - x0 > 17 && x1 - x0 < 21.5 && y0 > 95 && y1 < 105, `${x0} ${y0} ${x1} ${y1}`);
+  if (SHOTS) {
+    fs.writeFileSync(path.join(SHOTS, '10-web-plot.svg'), r.svg);
+    const v = await browser.newPage({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 2 });
+    await v.setContent(`<body style="margin:0;background:#fff">${r.svg.replace(/<\?xml[^>]*>/, '').replace(/<!DOCTYPE[^>]*>/, '').replace(/<svg /, '<svg style="width:1200px;height:auto;display:block" ')}</body>`);
+    await v.locator('svg').first().screenshot({ path: path.join(SHOTS, '10-web-plot-of-the-board.png') }); await v.close();
+  }
+});
+
 check('no page errors', errors.length === 0, errors.slice(0, 5).join(' || '));
 await browser.close(); await db.end();
 console.log(`\n${pass} passed, ${fail} failed`);

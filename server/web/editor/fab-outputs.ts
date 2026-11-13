@@ -24,6 +24,10 @@ function fabGlobal(): KiCadFabApi | undefined { return (window as unknown as { K
 
 /** Fetch the writers once; the URL carries the same cache-busting version as the editor's own script. */
 export function loadFab(): Promise<KiCadFabApi> {
+  // every plot starts here: the fonts of the open document's text are fetched first, so it is plotted in them
+  return Promise.all([loadFabScript(), (KiCadCanvas.loadFontsFor ? KiCadCanvas.loadFontsFor(E.kdoc).catch(() => undefined) : Promise.resolve())]).then(([fab]) => fab);
+}
+function loadFabScript(): Promise<KiCadFabApi> {
   const ready = fabGlobal(); if (ready && typeof ready.buildPackage === "function") return Promise.resolve(ready);
   if (loading) return loading;
   loading = new Promise<KiCadFabApi>((resolve, reject) => {

@@ -16,6 +16,7 @@
 import { isList, kid, num, polyPtsOf, str } from "../canvas/sexpr";
 import { type BoardModel, type Footprint, type Node, type Pad, type PadShape, type Via, isBack, isCopper, isFront, padShapeOn } from "./model";
 import { MAX_ERROR, clockwise, fracture, inflate, primPolys, stadium, union } from "./poly";
+import { outlineFontHeld, outlineText } from "./outline-font";
 import { type GbrMeta, type PlotText, type Prim, type Pt, arcPoints, circlePoints, rot } from "./prims";
 
 export interface PlotOptions {
@@ -149,8 +150,22 @@ function textPrimsOf(g: KGeom, out: Prim[], knock: Prim[], log: PlotLog): void {
       for (const pts of polys) dst.push({ k: "region", pts, clear });
       return;
     }
-    log.warn(oc ? `Text set in the font "${S(g.face)}" was changed after KiCad last drew it, so its stored outlines no longer fit. It is plotted with the KiCad stroke font; open and save the board in KiCad to refresh them.`
-      : `Text set in the font "${S(g.face)}" has no outlines stored in the board (KiCad stores them when it saves). It is plotted with the KiCad stroke font.`);
+    // no outlines KiCad stored (or they no longer fit): draw them from the font file, as pcbnew does
+    const blk = g.block as { x: number; y: number; text: string } | undefined;
+    if (blk && !g.outlineFirst && outlineFontHeld(S(g.face), !!g.bold, !!g.italic)) return;   // every line goes out with the first
+    const drawn = outlineText({ face: S(g.face), bold: !!g.bold, italic: !!g.italic, text: blk ? blk.text : text, x: blk ? blk.x : N(g.x), y: blk ? blk.y : N(g.y),
+      rot: N(g.rot), size, sizeX, h: S(g.h) || "center", v: S(g.v) || "middle", mirror: !!g.mirror });
+    if (drawn) {
+      const bars: Prim[] = drawn.bars.map(([x1, y1, x2, y2]) => ({ k: "seg", x1, y1, x2, y2, w: pen, clear }));
+      if (g.knockout) {
+        const pts = drawn.polys.flat(); for (const [x1, y1, x2, y2] of drawn.bars) pts.push([x1, y1], [x2, y2]);
+        if (pts.length) knock.push({ k: "region", pts: knockoutBox(pts, blk ? blk.x : N(g.x), blk ? blk.y : N(g.y), N(g.rot), margin) });
+      }
+      for (const pts of drawn.polys) dst.push({ k: "region", pts, clear });
+      for (const b of bars) dst.push(b);
+      return;
+    }
+    log.warn(`The font "${S(g.face)}" could not be loaded${typeof document === "undefined" ? "" : " from the project"}, so text set in it is plotted with the KiCad stroke font.`);
   }
   const C = canvas(); const line = C.strokeLine(text, !!g.italic);
   const lay = g.knockout && g.layoutW !== undefined ? N(g.layoutW) : pen;
@@ -192,8 +207,8 @@ export function textKnockout(g: KGeom, gap: number, log: PlotLog): Pt[][] {
   const pts: Pt[] = []; let pen = 0;
   for (const p of out) { if (p.k === "seg") { pts.push([p.x1, p.y1], [p.x2, p.y2]); pen = Math.max(pen, p.w); } else if (p.k === "region") for (const q of p.pts) pts.push(q); }
   if (!pts.length) return [];
-  const oc = g.outline as OutlineCache | undefined;
-  const x = oc && g.face ? oc.x : N(g.x), y = oc && g.face ? oc.y : N(g.y), deg = oc && g.face ? oc.rot : N(g.rot);
+  const oc = (g.face ? g.outline || g.block : undefined) as { x: number; y: number; rot: number } | undefined;
+  const x = oc ? oc.x : N(g.x), y = oc ? oc.y : N(g.y), deg = oc ? oc.rot : N(g.rot);
   return [knockoutBox(pts, x, y, deg, gap + pen / 2)];
 }
 

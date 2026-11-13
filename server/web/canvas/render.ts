@@ -939,8 +939,25 @@ export function wantFace(face: string, bold: boolean, italic: boolean): void {
 }
 /** A font arrived on (or left) the page: look again whether the face can be drawn.  No face: every face. */
 export function fontChanged(face?: string): void {
-  if (face === undefined) { FACES.clear(); WANTED.clear(); return; }
+  if (face === undefined) { FACES.clear(); WANTED.clear(); FONT_DATA.clear(); return; }
   FACES.delete(face);
+}
+
+/** A font file held for plotting: the bytes, and the style the file really is (a family without a bold answers with its regular). */
+export interface FontBytes { data: ArrayBuffer; bold: boolean; italic: boolean }
+const FONT_DATA = new Map<string, FontBytes>();
+const fontKey = (face: string, bold: boolean, italic: boolean): string => face.toLowerCase() + "|" + (bold ? "b" : "") + "|" + (italic ? "i" : "");
+/**
+ * The file of a face in the style asked for, kept so that a plot can draw the text's real outlines (web/fab
+ * reads the glyphs out of it); the screen needs only the browser's own copy.  null forgets it.
+ */
+export function setFontData(face: string, bold: boolean, italic: boolean, font: FontBytes | null): void {
+  if (font) FONT_DATA.set(fontKey(face, bold, italic), font); else FONT_DATA.delete(fontKey(face, bold, italic));
+}
+export function fontData(face: string, bold: boolean, italic: boolean): FontBytes | null { return FONT_DATA.get(fontKey(face, bold, italic)) || null; }
+/** Every file held, as [face, bold, italic, font] of the style it was asked in (to hand them to a worker). */
+export function allFontData(): [string, boolean, boolean, FontBytes][] {
+  return [...FONT_DATA].map(([k, f]) => { const [face, b, i] = k.split("|"); return [face, b === "b", i === "i", f] as [string, boolean, boolean, FontBytes]; });
 }
 
 /** Text shorter than this on screen (device px of glyph height) is not drawn. */
