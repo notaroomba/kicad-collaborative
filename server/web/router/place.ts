@@ -118,7 +118,13 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   interface Geo { p: Part; b: Box; rot: number; x: number; y: number }
   const geo = (p: Part, rot: number, x: number, y: number): Geo => ({ p, b: shift(turnBox(p.box, rot), x, y), rot, x, y });
   const holesAt = (a: Geo) => a.p.holes.map((h) => shift(turnBox(h, a.rot), a.x, a.y));
-  const clash = (a: Geo, b: Geo, g: number) => {
+  // A fine-pitch chip (QFN, QFP: 20 pads or more at 0.65 mm or less) keeps a ring of board round it free of other parts, so
+  // its signals can fan out between its decoupling: crowd the ring and the pins boxed in by the capacitors cannot be routed.
+  const fineMemo = new Map<Part, boolean>();
+  const fine = (p: Part) => { let f = fineMemo.get(p); if (f === undefined) { f = false; if (p.pads.length >= 20 && !p.thru) { let m = Infinity; for (let i = 0; i < p.pads.length; i++) for (let j = i + 1; j < p.pads.length; j++) m = Math.min(m, Math.hypot(p.pads[i].x - p.pads[j].x, p.pads[i].y - p.pads[j].y)); f = m <= 0.65 + 1e-6; } fineMemo.set(p, f); } return f; };
+  const ESCAPE = 0.8;
+  const clash = (a: Geo, b: Geo, g0: number) => {
+    const g = g0 > 0 && a.p.back === b.p.back && (fine(a.p) || fine(b.p)) ? g0 + ESCAPE : g0;
     if (!hit(a.b, b.b, g)) return false; if (a.p.back === b.p.back) return true; if (!a.p.thru && !b.p.thru) return false;
     for (const h of holesAt(a)) if (hit(h, b.b, g)) return true; for (const h of holesAt(b)) if (hit(h, a.b, g)) return true;
     if (a.p.thru && b.p.thru) return false; return false;
@@ -205,8 +211,8 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   const edgeOk = (b: Block, bb: Box) => bb[0] >= O[0] - 1e-6 - (b.edge === "left" ? 1e3 : 0) && bb[1] >= O[1] - 1e-6 - (b.edge === "top" ? 1e3 : 0) && bb[2] <= O[2] + 1e-6 + (b.edge === "right" ? 1e3 : 0) && bb[3] <= O[3] + 1e-6 + (b.edge === "bottom" ? 1e3 : 0);
   const free = (b: Block, rot: number, x: number, y: number, bb: Box) => {
     let mine: Geo[] | null = null;
-    for (const o of blocks) { if (o === b || !o.placed) continue; const ob = shift(turnBox(o.box, o.rot), o.x, o.y); if (!hit(bb, ob, gap)) continue; mine = mine || partBoxes(b, rot, x, y); const theirs = partBoxes(o, o.rot, o.x, o.y); for (const a of mine) for (const t of theirs) if (clash(a, t, gap)) return false; }
-    for (const t of stillBoxes) { if (!hit(bb, t.b, gap)) continue; mine = mine || partBoxes(b, rot, x, y); for (const a of mine) if (clash(a, t, gap)) return false; }
+    for (const o of blocks) { if (o === b || !o.placed) continue; const ob = shift(turnBox(o.box, o.rot), o.x, o.y); if (!hit(bb, ob, gap + ESCAPE)) continue; mine = mine || partBoxes(b, rot, x, y); const theirs = partBoxes(o, o.rot, o.x, o.y); for (const a of mine) for (const t of theirs) if (clash(a, t, gap)) return false; }
+    for (const t of stillBoxes) { if (!hit(bb, t.b, gap + ESCAPE)) continue; mine = mine || partBoxes(b, rot, x, y); for (const a of mine) if (clash(a, t, gap)) return false; }
     return true;
   };
   const cx = (O[0] + O[2]) / 2, cy = (O[1] + O[3]) / 2;

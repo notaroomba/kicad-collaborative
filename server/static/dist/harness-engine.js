@@ -83797,7 +83797,23 @@ function place(K7, P, doc, settings, opts = {}) {
   const boxAt = (p) => shift(turnBox(p.box, p.rot), p.x, p.y);
   const geo = (p, rot3, x, y) => ({ p, b: shift(turnBox(p.box, rot3), x, y), rot: rot3, x, y });
   const holesAt = (a) => a.p.holes.map((h) => shift(turnBox(h, a.rot), a.x, a.y));
-  const clash = (a, b, g2) => {
+  const fineMemo = /* @__PURE__ */ new Map();
+  const fine = (p) => {
+    let f2 = fineMemo.get(p);
+    if (f2 === void 0) {
+      f2 = false;
+      if (p.pads.length >= 20 && !p.thru) {
+        let m = Infinity;
+        for (let i = 0; i < p.pads.length; i++) for (let j = i + 1; j < p.pads.length; j++) m = Math.min(m, Math.hypot(p.pads[i].x - p.pads[j].x, p.pads[i].y - p.pads[j].y));
+        f2 = m <= 0.65 + 1e-6;
+      }
+      fineMemo.set(p, f2);
+    }
+    return f2;
+  };
+  const ESCAPE = 0.8;
+  const clash = (a, b, g0) => {
+    const g2 = g0 > 0 && a.p.back === b.p.back && (fine(a.p) || fine(b.p)) ? g0 + ESCAPE : g0;
     if (!hit(a.b, b.b, g2)) return false;
     if (a.p.back === b.p.back) return true;
     if (!a.p.thru && !b.p.thru) return false;
@@ -83999,13 +84015,13 @@ function place(K7, P, doc, settings, opts = {}) {
       for (const o of blocks) {
         if (o === b || !o.placed) continue;
         const ob = shift(turnBox(o.box, o.rot), o.x, o.y);
-        if (!hit(bb, ob, gap)) continue;
+        if (!hit(bb, ob, gap + ESCAPE)) continue;
         mine = mine || partBoxes(b, rot3, x, y);
         const theirs = partBoxes(o, o.rot, o.x, o.y);
         for (const a of mine) for (const t of theirs) if (clash(a, t, gap)) return false;
       }
       for (const t of stillBoxes) {
-        if (!hit(bb, t.b, gap)) continue;
+        if (!hit(bb, t.b, gap + ESCAPE)) continue;
         mine = mine || partBoxes(b, rot3, x, y);
         for (const a of mine) if (clash(a, t, gap)) return false;
       }
