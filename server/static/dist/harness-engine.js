@@ -13611,6 +13611,567 @@ ${body}
     clipWrite(ctx, lines.join("\n"));
     return true;
   }
+  var KSELECT_TAG2 = "k-select";
+  var SHADOW_CSS2 = `
+:host { contain: layout style; }
+.b { display: flex; align-items: center; gap: 4px; width: 100%; height: 100%; min-width: 0; outline: 0; cursor: default; }
+.t { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: minmax(0, max-content); text-align: left; }
+.t > * { grid-area: 1 / 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sz { visibility: hidden; height: 0; display: flex; flex-direction: column; }
+.sz > span { white-space: nowrap; }
+.c { flex: none; width: 8px; height: 8px; color: var(--ink-2); }
+.lb { flex: 1; min-height: 0; overflow-y: auto; outline: 0; padding: 1px 0; }
+.r { padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.r.on { background: var(--sel); }
+.lb:focus .r.on { background: var(--accent); color: var(--on-accent); }
+.r.dis { color: var(--ink-3); }
+.r.sep { height: 1px; padding: 0; margin: 3px 4px; background: var(--line); }
+.r.hd { color: var(--ink-2); font-weight: 600; }
+`;
+  var CARET2 = '<svg class="c" viewBox="0 0 8 8" aria-hidden="true"><path d="M1 2.5h6L4 6z" fill="currentColor"/></svg>';
+  var popSeq2 = 0;
+  var openOne2 = null;
+  function defineKSelect2() {
+    if (typeof window === "undefined" || typeof customElements === "undefined" || typeof HTMLElement === "undefined") return;
+    if (customElements.get(KSELECT_TAG2)) return;
+    class KSelect extends HTMLElement {
+      constructor() {
+        super();
+        this.btn = null;
+        this.label = null;
+        this.sizer = null;
+        this.sizedFor = "";
+        this.lb = null;
+        this.pop = null;
+        this.hi = -1;
+        this.none = -1;
+        this.typed = "";
+        this.typedAt = 0;
+        this.undo = [];
+        this.press = null;
+        this.root = this.attachShadow({ mode: "open", delegatesFocus: true });
+        this.mo = new MutationObserver(() => this.sync());
+      }
+      static get observedAttributes() {
+        return ["disabled", "size", "aria-label", "aria-labelledby", "title", "id"];
+      }
+      connectedCallback() {
+        for (const k of ["value", "selectedIndex", "disabled"]) {
+          if (Object.prototype.hasOwnProperty.call(this, k)) {
+            const v = this[k];
+            delete this[k];
+            this[k] = v;
+          }
+        }
+        if (!this.btn && !this.lb) this.build();
+        requestAnimationFrame(() => this.name_());
+        this.mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["selected", "disabled", "label", "value", "data-sep"] });
+        this.sync();
+      }
+      disconnectedCallback() {
+        this.mo.disconnect();
+        this.close();
+      }
+      attributeChangedCallback(name) {
+        if (name === "size") {
+          if (this.btn || this.lb) this.build();
+        } else if (name === "disabled") this.sync();
+        else this.name_();
+      }
+      /**
+       * The accessible name of the inner combobox / listbox: an id reference cannot cross the shadow boundary, so the
+       * name is copied as text from aria-label, aria-labelledby's elements, a <label for=id>, or the title.
+       */
+      name_() {
+        const inner = this.btn || this.lb;
+        if (!inner) return;
+        let name = this.getAttribute("aria-label") || "";
+        if (!name) {
+          const ids = (this.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+          name = ids.map((i) => {
+            const e = document.getElementById(i);
+            return e ? (e.textContent || "").trim() : "";
+          }).filter(Boolean).join(" ");
+        }
+        if (!name && this.id) {
+          const l = this.ownerDocument.querySelector(`label[for="${CSS.escape(this.id)}"]`);
+          if (l) name = (l.textContent || "").trim().replace(/:$/, "");
+        }
+        if (!name) name = this.getAttribute("title") || "";
+        if (name) inner.setAttribute("aria-label", name);
+        else inner.removeAttribute("aria-label");
+        const t = this.getAttribute("title");
+        if (t) inner.setAttribute("title", t);
+        else inner.removeAttribute("title");
+      }
+      // ------------------------------------------------------------ the <select> API
+      get options() {
+        const a = Array.from(this.querySelectorAll("option"));
+        a.item = (i) => a[i] || null;
+        a.namedItem = (n2) => a.find((o) => o.id === n2 || o.getAttribute("name") === n2) || null;
+        return a;
+      }
+      get length() {
+        return this.querySelectorAll("option").length;
+      }
+      get type() {
+        return "select-one";
+      }
+      get selectedOptions() {
+        const s = this.current();
+        return s ? [s] : [];
+      }
+      get selectedIndex() {
+        const s = this.current();
+        return s ? this.options.indexOf(s) : -1;
+      }
+      set selectedIndex(i) {
+        const os2 = this.options;
+        os2.forEach((o, k) => {
+          o.selected = k === i;
+        });
+        this.none = i >= 0 && i < os2.length ? -1 : os2.length;
+        this.sync();
+      }
+      get value() {
+        const s = this.current();
+        return s ? s.value : "";
+      }
+      set value(v) {
+        const os2 = this.options, want = String(v);
+        const hit4 = os2.find((o) => o.value === want) || null;
+        for (const o of os2) o.selected = o === hit4;
+        this.none = hit4 ? -1 : os2.length;
+        this.sync();
+      }
+      get disabled() {
+        return this.hasAttribute("disabled");
+      }
+      set disabled(on) {
+        this.toggleAttribute("disabled", !!on);
+      }
+      get size() {
+        return Math.max(0, parseInt(this.getAttribute("size") || "0", 10) || 0);
+      }
+      set size(n2) {
+        this.setAttribute("size", String(n2));
+      }
+      get name() {
+        return this.getAttribute("name") || "";
+      }
+      set name(n2) {
+        this.setAttribute("name", n2);
+      }
+      item(i) {
+        return this.options[i] || null;
+      }
+      add(o, before) {
+        const ref = typeof before === "number" ? this.options[before] || null : before || null;
+        if (ref && ref.parentNode) ref.parentNode.insertBefore(o, ref);
+        else this.appendChild(o);
+      }
+      remove(index) {
+        if (typeof index === "number") {
+          const o = this.options[index];
+          if (o) o.remove();
+          return;
+        }
+        super.remove();
+      }
+      blur() {
+        const a = this.root.activeElement;
+        if (a) a.blur();
+        super.blur();
+      }
+      checkValidity() {
+        return true;
+      }
+      // ------------------------------------------------------------ drawing
+      listMode() {
+        return this.size > 1;
+      }
+      isSep(o) {
+        return o.hasAttribute("data-sep") || o.disabled && (o.textContent || "").trim() === "---";
+      }
+      pickable(o) {
+        return !!o && !o.disabled && !(o.parentElement && o.parentElement.tagName === "OPTGROUP" && o.parentElement.disabled);
+      }
+      current() {
+        const os2 = this.options;
+        let s = null;
+        for (const o of os2) if (o.selected) s = o;
+        if (!s && this.none !== os2.length && !this.listMode()) s = os2.find((o) => this.pickable(o)) || null;
+        return s;
+      }
+      build() {
+        this.close();
+        this.root.innerHTML = "";
+        const st = document.createElement("style");
+        st.textContent = SHADOW_CSS2;
+        this.root.append(st);
+        if (this.listMode()) {
+          this.btn = this.label = null;
+          const lb = document.createElement("div");
+          lb.className = "lb";
+          lb.setAttribute("role", "listbox");
+          lb.tabIndex = 0;
+          this.lb = lb;
+          lb.addEventListener("pointerdown", (ev) => {
+            const r = ev.target.closest(".r");
+            if (r && !this.disabled) {
+              const i = +r.dataset.i;
+              if (this.pickable(this.options[i])) this.choose(i);
+            }
+          });
+          lb.addEventListener("keydown", (ev) => this.listKey(ev));
+          this.root.append(lb);
+        } else {
+          this.lb = null;
+          const b = document.createElement("div");
+          b.className = "b";
+          b.setAttribute("role", "combobox");
+          b.setAttribute("aria-haspopup", "listbox");
+          b.setAttribute("aria-expanded", "false");
+          b.tabIndex = 0;
+          b.innerHTML = `<span class="t"><span class="v"></span><span class="sz" aria-hidden="true"></span></span>${CARET2}`;
+          this.btn = b;
+          this.label = b.querySelector(".v");
+          this.sizer = b.querySelector(".sz");
+          this.sizedFor = "";
+          b.addEventListener("pointerdown", (ev) => {
+            if (ev.button !== 0 || this.disabled) return;
+            ev.preventDefault();
+            b.focus();
+            if (this.pop) {
+              this.close();
+              return;
+            }
+            this.open();
+            this.press = { x: ev.clientX, y: ev.clientY, moved: false };
+          });
+          b.addEventListener("keydown", (ev) => this.buttonKey(ev));
+          b.addEventListener("blur", () => {
+            if (this.pop) this.close();
+          });
+          this.root.append(b);
+        }
+        this.name_();
+        this.sync();
+      }
+      /** Bring the closed control (or the in-place list) up to date with the options and the selection. */
+      sync() {
+        const dis = this.disabled;
+        if (this.btn) {
+          this.btn.tabIndex = dis ? -1 : 0;
+          this.btn.setAttribute("aria-disabled", dis ? "true" : "false");
+          const os2 = this.options, s = this.current();
+          if (this.label) this.label.textContent = s ? s.label || s.text : "";
+          const all2 = os2.filter((o) => !this.isSep(o)).map((o) => o.label || o.text), key2 = all2.join("");
+          if (this.sizer && key2 !== this.sizedFor) {
+            this.sizedFor = key2;
+            this.sizer.replaceChildren(...all2.map((t) => {
+              const e = document.createElement("span");
+              e.textContent = t;
+              return e;
+            }));
+          }
+          if (this.pop) this.fillPop();
+        } else if (this.lb) {
+          this.lb.tabIndex = dis ? -1 : 0;
+          const os2 = this.options, s = this.current();
+          this.lb.replaceChildren(...os2.flatMap((o, i) => {
+            const r = document.createElement("div");
+            r.dataset.i = String(i);
+            r.setAttribute("role", "option");
+            const hd = this.head(o, os2[i - 1], "r hd");
+            if (this.isSep(o)) {
+              r.className = "r sep";
+              return hd ? [hd, r] : [r];
+            }
+            r.className = "r" + (o === s ? " on" : "") + (this.pickable(o) ? "" : " dis");
+            r.textContent = o.label || o.text;
+            r.setAttribute("aria-selected", o === s ? "true" : "false");
+            return hd ? [hd, r] : [r];
+          }));
+          if (!this.style.height) this.lb.style.minHeight = `calc(${this.size} * 1.45em + 2px)`;
+          const on = this.lb.querySelector(".on");
+          if (on) this.scrollRow(this.lb, on);
+        }
+      }
+      /** An <optgroup> caption row before the first option of each group, as the browser draws them. */
+      head(o, prev, cls) {
+        const g2 = o.parentElement;
+        if (!g2 || g2.tagName !== "OPTGROUP" || prev && prev.parentElement === g2) return null;
+        const r = document.createElement("div");
+        r.className = cls;
+        r.setAttribute("role", "presentation");
+        r.textContent = g2.label;
+        return r;
+      }
+      scrollRow(box, row2) {
+        if (row2.offsetTop < box.scrollTop) box.scrollTop = row2.offsetTop;
+        else if (row2.offsetTop + row2.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight - box.clientHeight;
+      }
+      // ------------------------------------------------------------ the popup list
+      open() {
+        if (this.pop || this.disabled || !this.btn) return;
+        if (openOne2) openOne2.close();
+        const pop = document.createElement("div");
+        pop.className = "ksel-pop";
+        pop.setAttribute("role", "listbox");
+        pop.id = "ksel-pop-" + ++popSeq2;
+        const cs = getComputedStyle(this);
+        pop.style.font = cs.font;
+        pop.style.fontSize = cs.fontSize;
+        this.pop = pop;
+        this.hi = this.selectedIndex;
+        pop.addEventListener("pointerdown", (ev) => ev.preventDefault());
+        pop.addEventListener("pointermove", (ev) => {
+          const r = ev.target.closest(".ksel-opt");
+          if (r && !r.classList.contains("dis")) this.highlight(+r.dataset.i, false);
+        });
+        pop.addEventListener("click", (ev) => {
+          const r = ev.target.closest(".ksel-opt");
+          if (!r || r.classList.contains("dis")) return;
+          this.close();
+          this.choose(+r.dataset.i);
+        });
+        document.body.append(pop);
+        this.fillPop();
+        this.place();
+        this.btn.setAttribute("aria-expanded", "true");
+        this.btn.setAttribute("aria-controls", pop.id);
+        const away = (ev) => {
+          const t = ev.target;
+          if (t !== this && !this.contains(t) && !pop.contains(t)) this.close();
+        };
+        const scroll = (ev) => {
+          if (!pop.contains(ev.target)) this.close();
+        };
+        const shut = () => this.close();
+        const rowAt = (ev) => {
+          const e = document.elementFromPoint(ev.clientX, ev.clientY);
+          const r = e && pop.contains(e) ? e.closest(".ksel-opt") : null;
+          return r && !r.classList.contains("dis") ? r : null;
+        };
+        const drag = (ev) => {
+          const p = this.press;
+          if (!p) return;
+          if (!p.moved && Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 4) p.moved = true;
+          const r = p.moved ? rowAt(ev) : null;
+          if (r) this.highlight(+r.dataset.i, false);
+        };
+        const release = (ev) => {
+          const p = this.press;
+          this.press = null;
+          if (!p || !p.moved) return;
+          const r = rowAt(ev);
+          if (r) {
+            ev.preventDefault();
+            const i = +r.dataset.i;
+            this.close();
+            this.choose(i);
+          }
+        };
+        document.addEventListener("pointerdown", away, true);
+        window.addEventListener("scroll", scroll, true);
+        window.addEventListener("resize", shut);
+        window.addEventListener("blur", shut);
+        document.addEventListener("pointermove", drag, true);
+        document.addEventListener("pointerup", release, true);
+        this.undo = [
+          () => document.removeEventListener("pointerdown", away, true),
+          () => window.removeEventListener("scroll", scroll, true),
+          () => window.removeEventListener("resize", shut),
+          () => window.removeEventListener("blur", shut),
+          () => document.removeEventListener("pointermove", drag, true),
+          () => document.removeEventListener("pointerup", release, true)
+        ];
+        this.setAttribute("data-popup-open", "");
+        openOne2 = this;
+      }
+      close() {
+        if (!this.pop) return;
+        this.pop.remove();
+        this.pop = null;
+        this.undo.forEach((f) => f());
+        this.undo = [];
+        this.press = null;
+        this.removeAttribute("data-popup-open");
+        if (this.btn) {
+          this.btn.setAttribute("aria-expanded", "false");
+          this.btn.removeAttribute("aria-activedescendant");
+        }
+        if (openOne2 === this) openOne2 = null;
+      }
+      fillPop() {
+        const pop = this.pop;
+        if (!pop) return;
+        const os2 = this.options, s = this.current();
+        pop.replaceChildren(...os2.flatMap((o, i) => {
+          const hd = this.head(o, os2[i - 1], "ksel-head");
+          if (this.isSep(o)) {
+            const r23 = document.createElement("div");
+            r23.className = "ksel-sep";
+            r23.setAttribute("role", "separator");
+            return hd ? [hd, r23] : [r23];
+          }
+          const r = document.createElement("div");
+          r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
+          r.dataset.i = String(i);
+          r.id = pop.id + "-" + i;
+          r.setAttribute("role", "option");
+          r.setAttribute("aria-selected", o === s ? "true" : "false");
+          r.textContent = o.label || o.text;
+          if (o.title) r.title = o.title;
+          if (o.parentElement && o.parentElement.tagName === "OPTGROUP") r.classList.add("ind");
+          return hd ? [hd, r] : [r];
+        }));
+      }
+      place() {
+        const pop = this.pop;
+        if (!pop) return;
+        const r = this.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight, M = 4;
+        pop.style.minWidth = r.width + "px";
+        pop.style.maxWidth = Math.max(160, vw - 2 * M) + "px";
+        pop.style.maxHeight = "";
+        const want = pop.scrollHeight + 2;
+        const below = vh - r.bottom - M - 2, above = r.top - M - 2;
+        const up = want > below && above > below;
+        const room = Math.max(80, up ? above : below), h = Math.min(want, room, Math.round(vh * 0.7));
+        pop.style.maxHeight = h + "px";
+        pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
+        const w = pop.offsetWidth;
+        pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+        const row2 = pop.querySelector(".hi, .on");
+        if (row2) this.scrollRow(pop, row2);
+      }
+      highlight(i, scroll = true) {
+        this.hi = i;
+        const pop = this.pop;
+        if (!pop) return;
+        pop.querySelectorAll(".hi").forEach((e) => e.classList.remove("hi"));
+        const row2 = pop.querySelector(`[data-i="${i}"]`);
+        if (row2) {
+          row2.classList.add("hi");
+          if (scroll) this.scrollRow(pop, row2);
+          if (this.btn) this.btn.setAttribute("aria-activedescendant", row2.id);
+        }
+      }
+      /** The next pickable entry from `from` going `dir` (±1), `count` steps at most; the last one reached when the end is hit. */
+      step(from, dir, count = 1) {
+        const os2 = this.options;
+        let i = from, got = from, n2 = 0;
+        while (n2 < count) {
+          i += dir;
+          if (i < 0 || i >= os2.length) break;
+          if (this.pickable(os2[i]) && !this.isSep(os2[i])) {
+            got = i;
+            n2++;
+          }
+        }
+        return got;
+      }
+      edge(first) {
+        const os2 = this.options;
+        return first ? this.step(-1, 1) : this.step(os2.length, -1);
+      }
+      typeAhead(ch, from) {
+        const now = Date.now();
+        this.typed = now - this.typedAt > 800 ? ch : this.typed + ch;
+        this.typedAt = now;
+        const os2 = this.options, q = this.typed.toLowerCase(), repeat = this.typed.length > 1 && [...this.typed].every((c) => c === this.typed[0]);
+        const needle = repeat ? q[0] : q, start = this.typed.length === 1 || repeat ? from + 1 : from;
+        for (let k = 0; k < os2.length; k++) {
+          const i = (Math.max(0, start) + k) % os2.length, o = os2[i];
+          if (this.pickable(o) && !this.isSep(o) && (o.label || o.text).trim().toLowerCase().startsWith(needle)) return i;
+        }
+        return -1;
+      }
+      choose(i) {
+        const os2 = this.options, o = os2[i];
+        if (!o || !this.pickable(o)) return;
+        const before = this.current();
+        for (const x of os2) x.selected = x === o;
+        this.none = -1;
+        this.sync();
+        if (before !== o) {
+          this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          this.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+      buttonKey(ev) {
+        if (this.disabled) return;
+        const k = ev.key, eat = () => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        };
+        if (!this.pop) {
+          if (k === " " || k === "ArrowDown" || k === "ArrowUp" || k === "F4" || k === "ArrowDown" && ev.altKey) {
+            eat();
+            this.open();
+            return;
+          }
+          if (k.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+            eat();
+            this.open();
+            const i = this.typeAhead(k, this.selectedIndex);
+            if (i >= 0) this.highlight(i);
+            return;
+          }
+          return;
+        }
+        if (k === "Tab") {
+          this.close();
+          return;
+        }
+        eat();
+        const os2 = this.options, cur2 = this.hi >= 0 ? this.hi : this.selectedIndex;
+        if (k === "Escape" || k === "ArrowUp" && ev.altKey) this.close();
+        else if (k === "Enter" || k === " " && Date.now() - this.typedAt > 800) {
+          const i = this.hi;
+          this.close();
+          if (i >= 0) this.choose(i);
+        } else if (k === "ArrowDown") this.highlight(cur2 < 0 ? this.edge(true) : this.step(cur2, 1));
+        else if (k === "ArrowUp") this.highlight(cur2 < 0 ? this.edge(false) : this.step(cur2, -1));
+        else if (k === "Home") this.highlight(this.edge(true));
+        else if (k === "End") this.highlight(this.edge(false));
+        else if (k === "PageDown") this.highlight(this.step(Math.max(cur2, -1), 1, 10));
+        else if (k === "PageUp") this.highlight(this.step(cur2 < 0 ? os2.length : cur2, -1, 10));
+        else if (k.length === 1 && !ev.ctrlKey && !ev.metaKey) {
+          const i = this.typeAhead(k, cur2);
+          if (i >= 0) this.highlight(i);
+        }
+      }
+      listKey(ev) {
+        if (this.disabled || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        const k = ev.key, cur2 = this.selectedIndex, os2 = this.options;
+        let to = -2;
+        if (k === "ArrowDown") to = cur2 < 0 ? this.edge(true) : this.step(cur2, 1);
+        else if (k === "ArrowUp") to = cur2 < 0 ? this.edge(false) : this.step(cur2, -1);
+        else if (k === "Home") to = this.edge(true);
+        else if (k === "End") to = this.edge(false);
+        else if (k === "PageDown") to = this.step(Math.max(cur2, -1), 1, 10);
+        else if (k === "PageUp") to = this.step(cur2 < 0 ? os2.length : cur2, -1, 10);
+        else if (k.length === 1 && k !== " ") to = this.typeAhead(k, cur2);
+        if (to === -2) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (to >= 0) this.choose(to);
+      }
+    }
+    customElements.define(KSELECT_TAG2, KSelect);
+    document.addEventListener("click", (ev) => {
+      const l = ev.target instanceof Element ? ev.target.closest("label") : null;
+      if (!l || !l.htmlFor) return;
+      const t = l.getRootNode().getElementById?.(l.htmlFor) || document.getElementById(l.htmlFor);
+      if (t && t.tagName === "K-SELECT" && !t.disabled) {
+        ev.preventDefault();
+        t.focus();
+      }
+    });
+  }
+  defineKSelect2();
   var HALF_GRID = 0.635;
   var halfGrid = (v) => r45(Math.round(v / HALF_GRID) * HALF_GRID);
   function itemsBox2(items) {
@@ -13891,7 +14452,7 @@ ${body}
       title: "Move Exactly",
       width: 360,
       build(body) {
-        body.innerHTML = '<div class="kv"><label>Move X (mm)</label><input id="kd-mx" type="number" step="0.01" value="0"><label>Move Y (mm)</label><input id="kd-my" type="number" step="0.01" value="0"><label>Rotate (\xB0)</label><select id="kd-mr"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></select></div><p class="kd-note">Rotation is about the centre of the selection, counterclockwise.</p>';
+        body.innerHTML = '<div class="kv"><label>Move X (mm)</label><input id="kd-mx" type="number" step="0.01" value="0"><label>Move Y (mm)</label><input id="kd-my" type="number" step="0.01" value="0"><label>Rotate (\xB0)</label><k-select id="kd-mr"><option value="0">0</option><option value="90">90</option><option value="180">180</option><option value="270">270</option></k-select></div><p class="kd-note">Rotation is about the centre of the selection, counterclockwise.</p>';
       },
       ok() {
         const g2 = (id) => document.getElementById(id);
@@ -19572,7 +20133,7 @@ Link '${target2}' to this file?`)) return null;
       title: "Unfold from Bus",
       width: 320,
       build(body) {
-        body.innerHTML = `<div class="kv"><label>Net</label><select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</select></div>`;
+        body.innerHTML = `<div class="kv"><label>Net</label><k-select id="kd-member">${members.map((m) => `<option value="${m.replace(/"/g, "&quot;")}">${m.replace(/</g, "&lt;")}</option>`).join("")}</k-select></div>`;
       },
       ok() {
         go(document.getElementById("kd-member").value);
@@ -40501,7 +41062,7 @@ Link '${target2}' to this file?`)) return null;
   function onCaptureKey(ev) {
     if (!isPcbDoc()) return;
     const tag = ev.target && ev.target.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "K-SELECT") return;
     if (root4.KDialogs && root4.KDialogs.isOpen && root4.KDialogs.isOpen()) return;
     if (typeof document !== "undefined" && document.body && document.body.dataset.menuOpen === "1" || appGlobal(() => !!root4.CollabApp.getState().contextMenu, false)) return;
     const k = ev.key;
@@ -41990,6 +42551,567 @@ Link '${target2}' to this file?`)) return null;
     }
     return Array.from(byName.values()).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   }
+  var KSELECT_TAG2 = "k-select";
+  var SHADOW_CSS2 = `
+:host { contain: layout style; }
+.b { display: flex; align-items: center; gap: 4px; width: 100%; height: 100%; min-width: 0; outline: 0; cursor: default; }
+.t { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: minmax(0, max-content); text-align: left; }
+.t > * { grid-area: 1 / 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sz { visibility: hidden; height: 0; display: flex; flex-direction: column; }
+.sz > span { white-space: nowrap; }
+.c { flex: none; width: 8px; height: 8px; color: var(--ink-2); }
+.lb { flex: 1; min-height: 0; overflow-y: auto; outline: 0; padding: 1px 0; }
+.r { padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.r.on { background: var(--sel); }
+.lb:focus .r.on { background: var(--accent); color: var(--on-accent); }
+.r.dis { color: var(--ink-3); }
+.r.sep { height: 1px; padding: 0; margin: 3px 4px; background: var(--line); }
+.r.hd { color: var(--ink-2); font-weight: 600; }
+`;
+  var CARET2 = '<svg class="c" viewBox="0 0 8 8" aria-hidden="true"><path d="M1 2.5h6L4 6z" fill="currentColor"/></svg>';
+  var popSeq2 = 0;
+  var openOne2 = null;
+  function defineKSelect2() {
+    if (typeof window === "undefined" || typeof customElements === "undefined" || typeof HTMLElement === "undefined") return;
+    if (customElements.get(KSELECT_TAG2)) return;
+    class KSelect extends HTMLElement {
+      constructor() {
+        super();
+        this.btn = null;
+        this.label = null;
+        this.sizer = null;
+        this.sizedFor = "";
+        this.lb = null;
+        this.pop = null;
+        this.hi = -1;
+        this.none = -1;
+        this.typed = "";
+        this.typedAt = 0;
+        this.undo = [];
+        this.press = null;
+        this.root = this.attachShadow({ mode: "open", delegatesFocus: true });
+        this.mo = new MutationObserver(() => this.sync());
+      }
+      static get observedAttributes() {
+        return ["disabled", "size", "aria-label", "aria-labelledby", "title", "id"];
+      }
+      connectedCallback() {
+        for (const k of ["value", "selectedIndex", "disabled"]) {
+          if (Object.prototype.hasOwnProperty.call(this, k)) {
+            const v = this[k];
+            delete this[k];
+            this[k] = v;
+          }
+        }
+        if (!this.btn && !this.lb) this.build();
+        requestAnimationFrame(() => this.name_());
+        this.mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["selected", "disabled", "label", "value", "data-sep"] });
+        this.sync();
+      }
+      disconnectedCallback() {
+        this.mo.disconnect();
+        this.close();
+      }
+      attributeChangedCallback(name) {
+        if (name === "size") {
+          if (this.btn || this.lb) this.build();
+        } else if (name === "disabled") this.sync();
+        else this.name_();
+      }
+      /**
+       * The accessible name of the inner combobox / listbox: an id reference cannot cross the shadow boundary, so the
+       * name is copied as text from aria-label, aria-labelledby's elements, a <label for=id>, or the title.
+       */
+      name_() {
+        const inner = this.btn || this.lb;
+        if (!inner) return;
+        let name = this.getAttribute("aria-label") || "";
+        if (!name) {
+          const ids = (this.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+          name = ids.map((i) => {
+            const e = document.getElementById(i);
+            return e ? (e.textContent || "").trim() : "";
+          }).filter(Boolean).join(" ");
+        }
+        if (!name && this.id) {
+          const l = this.ownerDocument.querySelector(`label[for="${CSS.escape(this.id)}"]`);
+          if (l) name = (l.textContent || "").trim().replace(/:$/, "");
+        }
+        if (!name) name = this.getAttribute("title") || "";
+        if (name) inner.setAttribute("aria-label", name);
+        else inner.removeAttribute("aria-label");
+        const t = this.getAttribute("title");
+        if (t) inner.setAttribute("title", t);
+        else inner.removeAttribute("title");
+      }
+      // ------------------------------------------------------------ the <select> API
+      get options() {
+        const a = Array.from(this.querySelectorAll("option"));
+        a.item = (i) => a[i] || null;
+        a.namedItem = (n2) => a.find((o) => o.id === n2 || o.getAttribute("name") === n2) || null;
+        return a;
+      }
+      get length() {
+        return this.querySelectorAll("option").length;
+      }
+      get type() {
+        return "select-one";
+      }
+      get selectedOptions() {
+        const s = this.current();
+        return s ? [s] : [];
+      }
+      get selectedIndex() {
+        const s = this.current();
+        return s ? this.options.indexOf(s) : -1;
+      }
+      set selectedIndex(i) {
+        const os2 = this.options;
+        os2.forEach((o, k) => {
+          o.selected = k === i;
+        });
+        this.none = i >= 0 && i < os2.length ? -1 : os2.length;
+        this.sync();
+      }
+      get value() {
+        const s = this.current();
+        return s ? s.value : "";
+      }
+      set value(v) {
+        const os2 = this.options, want = String(v);
+        const hit4 = os2.find((o) => o.value === want) || null;
+        for (const o of os2) o.selected = o === hit4;
+        this.none = hit4 ? -1 : os2.length;
+        this.sync();
+      }
+      get disabled() {
+        return this.hasAttribute("disabled");
+      }
+      set disabled(on) {
+        this.toggleAttribute("disabled", !!on);
+      }
+      get size() {
+        return Math.max(0, parseInt(this.getAttribute("size") || "0", 10) || 0);
+      }
+      set size(n2) {
+        this.setAttribute("size", String(n2));
+      }
+      get name() {
+        return this.getAttribute("name") || "";
+      }
+      set name(n2) {
+        this.setAttribute("name", n2);
+      }
+      item(i) {
+        return this.options[i] || null;
+      }
+      add(o, before) {
+        const ref = typeof before === "number" ? this.options[before] || null : before || null;
+        if (ref && ref.parentNode) ref.parentNode.insertBefore(o, ref);
+        else this.appendChild(o);
+      }
+      remove(index) {
+        if (typeof index === "number") {
+          const o = this.options[index];
+          if (o) o.remove();
+          return;
+        }
+        super.remove();
+      }
+      blur() {
+        const a = this.root.activeElement;
+        if (a) a.blur();
+        super.blur();
+      }
+      checkValidity() {
+        return true;
+      }
+      // ------------------------------------------------------------ drawing
+      listMode() {
+        return this.size > 1;
+      }
+      isSep(o) {
+        return o.hasAttribute("data-sep") || o.disabled && (o.textContent || "").trim() === "---";
+      }
+      pickable(o) {
+        return !!o && !o.disabled && !(o.parentElement && o.parentElement.tagName === "OPTGROUP" && o.parentElement.disabled);
+      }
+      current() {
+        const os2 = this.options;
+        let s = null;
+        for (const o of os2) if (o.selected) s = o;
+        if (!s && this.none !== os2.length && !this.listMode()) s = os2.find((o) => this.pickable(o)) || null;
+        return s;
+      }
+      build() {
+        this.close();
+        this.root.innerHTML = "";
+        const st = document.createElement("style");
+        st.textContent = SHADOW_CSS2;
+        this.root.append(st);
+        if (this.listMode()) {
+          this.btn = this.label = null;
+          const lb = document.createElement("div");
+          lb.className = "lb";
+          lb.setAttribute("role", "listbox");
+          lb.tabIndex = 0;
+          this.lb = lb;
+          lb.addEventListener("pointerdown", (ev) => {
+            const r = ev.target.closest(".r");
+            if (r && !this.disabled) {
+              const i = +r.dataset.i;
+              if (this.pickable(this.options[i])) this.choose(i);
+            }
+          });
+          lb.addEventListener("keydown", (ev) => this.listKey(ev));
+          this.root.append(lb);
+        } else {
+          this.lb = null;
+          const b = document.createElement("div");
+          b.className = "b";
+          b.setAttribute("role", "combobox");
+          b.setAttribute("aria-haspopup", "listbox");
+          b.setAttribute("aria-expanded", "false");
+          b.tabIndex = 0;
+          b.innerHTML = `<span class="t"><span class="v"></span><span class="sz" aria-hidden="true"></span></span>${CARET2}`;
+          this.btn = b;
+          this.label = b.querySelector(".v");
+          this.sizer = b.querySelector(".sz");
+          this.sizedFor = "";
+          b.addEventListener("pointerdown", (ev) => {
+            if (ev.button !== 0 || this.disabled) return;
+            ev.preventDefault();
+            b.focus();
+            if (this.pop) {
+              this.close();
+              return;
+            }
+            this.open();
+            this.press = { x: ev.clientX, y: ev.clientY, moved: false };
+          });
+          b.addEventListener("keydown", (ev) => this.buttonKey(ev));
+          b.addEventListener("blur", () => {
+            if (this.pop) this.close();
+          });
+          this.root.append(b);
+        }
+        this.name_();
+        this.sync();
+      }
+      /** Bring the closed control (or the in-place list) up to date with the options and the selection. */
+      sync() {
+        const dis = this.disabled;
+        if (this.btn) {
+          this.btn.tabIndex = dis ? -1 : 0;
+          this.btn.setAttribute("aria-disabled", dis ? "true" : "false");
+          const os2 = this.options, s = this.current();
+          if (this.label) this.label.textContent = s ? s.label || s.text : "";
+          const all2 = os2.filter((o) => !this.isSep(o)).map((o) => o.label || o.text), key2 = all2.join("");
+          if (this.sizer && key2 !== this.sizedFor) {
+            this.sizedFor = key2;
+            this.sizer.replaceChildren(...all2.map((t) => {
+              const e = document.createElement("span");
+              e.textContent = t;
+              return e;
+            }));
+          }
+          if (this.pop) this.fillPop();
+        } else if (this.lb) {
+          this.lb.tabIndex = dis ? -1 : 0;
+          const os2 = this.options, s = this.current();
+          this.lb.replaceChildren(...os2.flatMap((o, i) => {
+            const r = document.createElement("div");
+            r.dataset.i = String(i);
+            r.setAttribute("role", "option");
+            const hd = this.head(o, os2[i - 1], "r hd");
+            if (this.isSep(o)) {
+              r.className = "r sep";
+              return hd ? [hd, r] : [r];
+            }
+            r.className = "r" + (o === s ? " on" : "") + (this.pickable(o) ? "" : " dis");
+            r.textContent = o.label || o.text;
+            r.setAttribute("aria-selected", o === s ? "true" : "false");
+            return hd ? [hd, r] : [r];
+          }));
+          if (!this.style.height) this.lb.style.minHeight = `calc(${this.size} * 1.45em + 2px)`;
+          const on = this.lb.querySelector(".on");
+          if (on) this.scrollRow(this.lb, on);
+        }
+      }
+      /** An <optgroup> caption row before the first option of each group, as the browser draws them. */
+      head(o, prev, cls) {
+        const g2 = o.parentElement;
+        if (!g2 || g2.tagName !== "OPTGROUP" || prev && prev.parentElement === g2) return null;
+        const r = document.createElement("div");
+        r.className = cls;
+        r.setAttribute("role", "presentation");
+        r.textContent = g2.label;
+        return r;
+      }
+      scrollRow(box, row2) {
+        if (row2.offsetTop < box.scrollTop) box.scrollTop = row2.offsetTop;
+        else if (row2.offsetTop + row2.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight - box.clientHeight;
+      }
+      // ------------------------------------------------------------ the popup list
+      open() {
+        if (this.pop || this.disabled || !this.btn) return;
+        if (openOne2) openOne2.close();
+        const pop = document.createElement("div");
+        pop.className = "ksel-pop";
+        pop.setAttribute("role", "listbox");
+        pop.id = "ksel-pop-" + ++popSeq2;
+        const cs = getComputedStyle(this);
+        pop.style.font = cs.font;
+        pop.style.fontSize = cs.fontSize;
+        this.pop = pop;
+        this.hi = this.selectedIndex;
+        pop.addEventListener("pointerdown", (ev) => ev.preventDefault());
+        pop.addEventListener("pointermove", (ev) => {
+          const r = ev.target.closest(".ksel-opt");
+          if (r && !r.classList.contains("dis")) this.highlight(+r.dataset.i, false);
+        });
+        pop.addEventListener("click", (ev) => {
+          const r = ev.target.closest(".ksel-opt");
+          if (!r || r.classList.contains("dis")) return;
+          this.close();
+          this.choose(+r.dataset.i);
+        });
+        document.body.append(pop);
+        this.fillPop();
+        this.place();
+        this.btn.setAttribute("aria-expanded", "true");
+        this.btn.setAttribute("aria-controls", pop.id);
+        const away = (ev) => {
+          const t = ev.target;
+          if (t !== this && !this.contains(t) && !pop.contains(t)) this.close();
+        };
+        const scroll = (ev) => {
+          if (!pop.contains(ev.target)) this.close();
+        };
+        const shut = () => this.close();
+        const rowAt = (ev) => {
+          const e = document.elementFromPoint(ev.clientX, ev.clientY);
+          const r = e && pop.contains(e) ? e.closest(".ksel-opt") : null;
+          return r && !r.classList.contains("dis") ? r : null;
+        };
+        const drag = (ev) => {
+          const p = this.press;
+          if (!p) return;
+          if (!p.moved && Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 4) p.moved = true;
+          const r = p.moved ? rowAt(ev) : null;
+          if (r) this.highlight(+r.dataset.i, false);
+        };
+        const release = (ev) => {
+          const p = this.press;
+          this.press = null;
+          if (!p || !p.moved) return;
+          const r = rowAt(ev);
+          if (r) {
+            ev.preventDefault();
+            const i = +r.dataset.i;
+            this.close();
+            this.choose(i);
+          }
+        };
+        document.addEventListener("pointerdown", away, true);
+        window.addEventListener("scroll", scroll, true);
+        window.addEventListener("resize", shut);
+        window.addEventListener("blur", shut);
+        document.addEventListener("pointermove", drag, true);
+        document.addEventListener("pointerup", release, true);
+        this.undo = [
+          () => document.removeEventListener("pointerdown", away, true),
+          () => window.removeEventListener("scroll", scroll, true),
+          () => window.removeEventListener("resize", shut),
+          () => window.removeEventListener("blur", shut),
+          () => document.removeEventListener("pointermove", drag, true),
+          () => document.removeEventListener("pointerup", release, true)
+        ];
+        this.setAttribute("data-popup-open", "");
+        openOne2 = this;
+      }
+      close() {
+        if (!this.pop) return;
+        this.pop.remove();
+        this.pop = null;
+        this.undo.forEach((f) => f());
+        this.undo = [];
+        this.press = null;
+        this.removeAttribute("data-popup-open");
+        if (this.btn) {
+          this.btn.setAttribute("aria-expanded", "false");
+          this.btn.removeAttribute("aria-activedescendant");
+        }
+        if (openOne2 === this) openOne2 = null;
+      }
+      fillPop() {
+        const pop = this.pop;
+        if (!pop) return;
+        const os2 = this.options, s = this.current();
+        pop.replaceChildren(...os2.flatMap((o, i) => {
+          const hd = this.head(o, os2[i - 1], "ksel-head");
+          if (this.isSep(o)) {
+            const r23 = document.createElement("div");
+            r23.className = "ksel-sep";
+            r23.setAttribute("role", "separator");
+            return hd ? [hd, r23] : [r23];
+          }
+          const r = document.createElement("div");
+          r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
+          r.dataset.i = String(i);
+          r.id = pop.id + "-" + i;
+          r.setAttribute("role", "option");
+          r.setAttribute("aria-selected", o === s ? "true" : "false");
+          r.textContent = o.label || o.text;
+          if (o.title) r.title = o.title;
+          if (o.parentElement && o.parentElement.tagName === "OPTGROUP") r.classList.add("ind");
+          return hd ? [hd, r] : [r];
+        }));
+      }
+      place() {
+        const pop = this.pop;
+        if (!pop) return;
+        const r = this.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight, M = 4;
+        pop.style.minWidth = r.width + "px";
+        pop.style.maxWidth = Math.max(160, vw - 2 * M) + "px";
+        pop.style.maxHeight = "";
+        const want = pop.scrollHeight + 2;
+        const below = vh - r.bottom - M - 2, above = r.top - M - 2;
+        const up = want > below && above > below;
+        const room = Math.max(80, up ? above : below), h = Math.min(want, room, Math.round(vh * 0.7));
+        pop.style.maxHeight = h + "px";
+        pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
+        const w = pop.offsetWidth;
+        pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+        const row2 = pop.querySelector(".hi, .on");
+        if (row2) this.scrollRow(pop, row2);
+      }
+      highlight(i, scroll = true) {
+        this.hi = i;
+        const pop = this.pop;
+        if (!pop) return;
+        pop.querySelectorAll(".hi").forEach((e) => e.classList.remove("hi"));
+        const row2 = pop.querySelector(`[data-i="${i}"]`);
+        if (row2) {
+          row2.classList.add("hi");
+          if (scroll) this.scrollRow(pop, row2);
+          if (this.btn) this.btn.setAttribute("aria-activedescendant", row2.id);
+        }
+      }
+      /** The next pickable entry from `from` going `dir` (±1), `count` steps at most; the last one reached when the end is hit. */
+      step(from, dir, count = 1) {
+        const os2 = this.options;
+        let i = from, got = from, n2 = 0;
+        while (n2 < count) {
+          i += dir;
+          if (i < 0 || i >= os2.length) break;
+          if (this.pickable(os2[i]) && !this.isSep(os2[i])) {
+            got = i;
+            n2++;
+          }
+        }
+        return got;
+      }
+      edge(first) {
+        const os2 = this.options;
+        return first ? this.step(-1, 1) : this.step(os2.length, -1);
+      }
+      typeAhead(ch, from) {
+        const now2 = Date.now();
+        this.typed = now2 - this.typedAt > 800 ? ch : this.typed + ch;
+        this.typedAt = now2;
+        const os2 = this.options, q = this.typed.toLowerCase(), repeat = this.typed.length > 1 && [...this.typed].every((c) => c === this.typed[0]);
+        const needle = repeat ? q[0] : q, start = this.typed.length === 1 || repeat ? from + 1 : from;
+        for (let k = 0; k < os2.length; k++) {
+          const i = (Math.max(0, start) + k) % os2.length, o = os2[i];
+          if (this.pickable(o) && !this.isSep(o) && (o.label || o.text).trim().toLowerCase().startsWith(needle)) return i;
+        }
+        return -1;
+      }
+      choose(i) {
+        const os2 = this.options, o = os2[i];
+        if (!o || !this.pickable(o)) return;
+        const before = this.current();
+        for (const x of os2) x.selected = x === o;
+        this.none = -1;
+        this.sync();
+        if (before !== o) {
+          this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+          this.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+      buttonKey(ev) {
+        if (this.disabled) return;
+        const k = ev.key, eat = () => {
+          ev.preventDefault();
+          ev.stopPropagation();
+        };
+        if (!this.pop) {
+          if (k === " " || k === "ArrowDown" || k === "ArrowUp" || k === "F4" || k === "ArrowDown" && ev.altKey) {
+            eat();
+            this.open();
+            return;
+          }
+          if (k.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+            eat();
+            this.open();
+            const i = this.typeAhead(k, this.selectedIndex);
+            if (i >= 0) this.highlight(i);
+            return;
+          }
+          return;
+        }
+        if (k === "Tab") {
+          this.close();
+          return;
+        }
+        eat();
+        const os2 = this.options, cur2 = this.hi >= 0 ? this.hi : this.selectedIndex;
+        if (k === "Escape" || k === "ArrowUp" && ev.altKey) this.close();
+        else if (k === "Enter" || k === " " && Date.now() - this.typedAt > 800) {
+          const i = this.hi;
+          this.close();
+          if (i >= 0) this.choose(i);
+        } else if (k === "ArrowDown") this.highlight(cur2 < 0 ? this.edge(true) : this.step(cur2, 1));
+        else if (k === "ArrowUp") this.highlight(cur2 < 0 ? this.edge(false) : this.step(cur2, -1));
+        else if (k === "Home") this.highlight(this.edge(true));
+        else if (k === "End") this.highlight(this.edge(false));
+        else if (k === "PageDown") this.highlight(this.step(Math.max(cur2, -1), 1, 10));
+        else if (k === "PageUp") this.highlight(this.step(cur2 < 0 ? os2.length : cur2, -1, 10));
+        else if (k.length === 1 && !ev.ctrlKey && !ev.metaKey) {
+          const i = this.typeAhead(k, cur2);
+          if (i >= 0) this.highlight(i);
+        }
+      }
+      listKey(ev) {
+        if (this.disabled || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+        const k = ev.key, cur2 = this.selectedIndex, os2 = this.options;
+        let to = -2;
+        if (k === "ArrowDown") to = cur2 < 0 ? this.edge(true) : this.step(cur2, 1);
+        else if (k === "ArrowUp") to = cur2 < 0 ? this.edge(false) : this.step(cur2, -1);
+        else if (k === "Home") to = this.edge(true);
+        else if (k === "End") to = this.edge(false);
+        else if (k === "PageDown") to = this.step(Math.max(cur2, -1), 1, 10);
+        else if (k === "PageUp") to = this.step(cur2 < 0 ? os2.length : cur2, -1, 10);
+        else if (k.length === 1 && k !== " ") to = this.typeAhead(k, cur2);
+        if (to === -2) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (to >= 0) this.choose(to);
+      }
+    }
+    customElements.define(KSELECT_TAG2, KSelect);
+    document.addEventListener("click", (ev) => {
+      const l = ev.target instanceof Element ? ev.target.closest("label") : null;
+      if (!l || !l.htmlFor) return;
+      const t = l.getRootNode().getElementById?.(l.htmlFor) || document.getElementById(l.htmlFor);
+      if (t && t.tagName === "K-SELECT" && !t.disabled) {
+        ev.preventDefault();
+        t.focus();
+      }
+    });
+  }
+  defineKSelect2();
   var KD = () => root4.KDialogs;
   var PROPS2 = () => root4.CollabTools && root4.CollabTools.props && root4.CollabTools.props.helpers;
   var formImpl = function(spec) {
@@ -42077,7 +43199,7 @@ Link '${target2}' to this file?`)) return null;
           row2.appendChild(span);
           let inp;
           if (f.type === "select") {
-            inp = document.createElement("select");
+            inp = document.createElement("k-select");
             for (const o of f.options) {
               const op = document.createElement("option");
               op.value = isList5(o) ? o[0] : o;
@@ -49782,6 +50904,571 @@ function route(K7, P, doc, settings, opts) {
   return s.value;
 }
 
+// web/components/kselect.ts
+var KSELECT_TAG = "k-select";
+var SHADOW_CSS = `
+:host { contain: layout style; }
+.b { display: flex; align-items: center; gap: 4px; width: 100%; height: 100%; min-width: 0; outline: 0; cursor: default; }
+.t { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: minmax(0, max-content); text-align: left; }
+.t > * { grid-area: 1 / 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sz { visibility: hidden; height: 0; display: flex; flex-direction: column; }
+.sz > span { white-space: nowrap; }
+.c { flex: none; width: 8px; height: 8px; color: var(--ink-2); }
+.lb { flex: 1; min-height: 0; overflow-y: auto; outline: 0; padding: 1px 0; }
+.r { padding: 1px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+.r.on { background: var(--sel); }
+.lb:focus .r.on { background: var(--accent); color: var(--on-accent); }
+.r.dis { color: var(--ink-3); }
+.r.sep { height: 1px; padding: 0; margin: 3px 4px; background: var(--line); }
+.r.hd { color: var(--ink-2); font-weight: 600; }
+`;
+var CARET = '<svg class="c" viewBox="0 0 8 8" aria-hidden="true"><path d="M1 2.5h6L4 6z" fill="currentColor"/></svg>';
+var popSeq = 0;
+var openOne = null;
+function defineKSelect() {
+  if (typeof window === "undefined" || typeof customElements === "undefined" || typeof HTMLElement === "undefined") return;
+  if (customElements.get(KSELECT_TAG)) return;
+  class KSelect extends HTMLElement {
+    constructor() {
+      super();
+      this.btn = null;
+      this.label = null;
+      this.sizer = null;
+      this.sizedFor = "";
+      this.lb = null;
+      this.pop = null;
+      this.hi = -1;
+      this.none = -1;
+      // value set to something no option has: nothing selected (until the options change: the option count then)
+      this.typed = "";
+      this.typedAt = 0;
+      this.undo = [];
+      /** where a press on the closed control opened the list: a release over an entry after a drag picks it */
+      this.press = null;
+      this.root = this.attachShadow({ mode: "open", delegatesFocus: true });
+      this.mo = new MutationObserver(() => this.sync());
+    }
+    static get observedAttributes() {
+      return ["disabled", "size", "aria-label", "aria-labelledby", "title", "id"];
+    }
+    connectedCallback() {
+      for (const k of ["value", "selectedIndex", "disabled"]) {
+        if (Object.prototype.hasOwnProperty.call(this, k)) {
+          const v = this[k];
+          delete this[k];
+          this[k] = v;
+        }
+      }
+      if (!this.btn && !this.lb) this.build();
+      requestAnimationFrame(() => this.name_());
+      this.mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["selected", "disabled", "label", "value", "data-sep"] });
+      this.sync();
+    }
+    disconnectedCallback() {
+      this.mo.disconnect();
+      this.close();
+    }
+    attributeChangedCallback(name) {
+      if (name === "size") {
+        if (this.btn || this.lb) this.build();
+      } else if (name === "disabled") this.sync();
+      else this.name_();
+    }
+    /**
+     * The accessible name of the inner combobox / listbox: an id reference cannot cross the shadow boundary, so the
+     * name is copied as text from aria-label, aria-labelledby's elements, a <label for=id>, or the title.
+     */
+    name_() {
+      const inner = this.btn || this.lb;
+      if (!inner) return;
+      let name = this.getAttribute("aria-label") || "";
+      if (!name) {
+        const ids = (this.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean);
+        name = ids.map((i) => {
+          const e = document.getElementById(i);
+          return e ? (e.textContent || "").trim() : "";
+        }).filter(Boolean).join(" ");
+      }
+      if (!name && this.id) {
+        const l = this.ownerDocument.querySelector(`label[for="${CSS.escape(this.id)}"]`);
+        if (l) name = (l.textContent || "").trim().replace(/:$/, "");
+      }
+      if (!name) name = this.getAttribute("title") || "";
+      if (name) inner.setAttribute("aria-label", name);
+      else inner.removeAttribute("aria-label");
+      const t = this.getAttribute("title");
+      if (t) inner.setAttribute("title", t);
+      else inner.removeAttribute("title");
+    }
+    // ------------------------------------------------------------ the <select> API
+    get options() {
+      const a = Array.from(this.querySelectorAll("option"));
+      a.item = (i) => a[i] || null;
+      a.namedItem = (n2) => a.find((o) => o.id === n2 || o.getAttribute("name") === n2) || null;
+      return a;
+    }
+    get length() {
+      return this.querySelectorAll("option").length;
+    }
+    get type() {
+      return "select-one";
+    }
+    get selectedOptions() {
+      const s = this.current();
+      return s ? [s] : [];
+    }
+    get selectedIndex() {
+      const s = this.current();
+      return s ? this.options.indexOf(s) : -1;
+    }
+    set selectedIndex(i) {
+      const os2 = this.options;
+      os2.forEach((o, k) => {
+        o.selected = k === i;
+      });
+      this.none = i >= 0 && i < os2.length ? -1 : os2.length;
+      this.sync();
+    }
+    get value() {
+      const s = this.current();
+      return s ? s.value : "";
+    }
+    set value(v) {
+      const os2 = this.options, want = String(v);
+      const hit4 = os2.find((o) => o.value === want) || null;
+      for (const o of os2) o.selected = o === hit4;
+      this.none = hit4 ? -1 : os2.length;
+      this.sync();
+    }
+    get disabled() {
+      return this.hasAttribute("disabled");
+    }
+    set disabled(on) {
+      this.toggleAttribute("disabled", !!on);
+    }
+    get size() {
+      return Math.max(0, parseInt(this.getAttribute("size") || "0", 10) || 0);
+    }
+    set size(n2) {
+      this.setAttribute("size", String(n2));
+    }
+    get name() {
+      return this.getAttribute("name") || "";
+    }
+    set name(n2) {
+      this.setAttribute("name", n2);
+    }
+    item(i) {
+      return this.options[i] || null;
+    }
+    add(o, before) {
+      const ref = typeof before === "number" ? this.options[before] || null : before || null;
+      if (ref && ref.parentNode) ref.parentNode.insertBefore(o, ref);
+      else this.appendChild(o);
+    }
+    remove(index) {
+      if (typeof index === "number") {
+        const o = this.options[index];
+        if (o) o.remove();
+        return;
+      }
+      super.remove();
+    }
+    blur() {
+      const a = this.root.activeElement;
+      if (a) a.blur();
+      super.blur();
+    }
+    checkValidity() {
+      return true;
+    }
+    // ------------------------------------------------------------ drawing
+    listMode() {
+      return this.size > 1;
+    }
+    isSep(o) {
+      return o.hasAttribute("data-sep") || o.disabled && (o.textContent || "").trim() === "---";
+    }
+    pickable(o) {
+      return !!o && !o.disabled && !(o.parentElement && o.parentElement.tagName === "OPTGROUP" && o.parentElement.disabled);
+    }
+    current() {
+      const os2 = this.options;
+      let s = null;
+      for (const o of os2) if (o.selected) s = o;
+      if (!s && this.none !== os2.length && !this.listMode()) s = os2.find((o) => this.pickable(o)) || null;
+      return s;
+    }
+    build() {
+      this.close();
+      this.root.innerHTML = "";
+      const st = document.createElement("style");
+      st.textContent = SHADOW_CSS;
+      this.root.append(st);
+      if (this.listMode()) {
+        this.btn = this.label = null;
+        const lb = document.createElement("div");
+        lb.className = "lb";
+        lb.setAttribute("role", "listbox");
+        lb.tabIndex = 0;
+        this.lb = lb;
+        lb.addEventListener("pointerdown", (ev) => {
+          const r = ev.target.closest(".r");
+          if (r && !this.disabled) {
+            const i = +r.dataset.i;
+            if (this.pickable(this.options[i])) this.choose(i);
+          }
+        });
+        lb.addEventListener("keydown", (ev) => this.listKey(ev));
+        this.root.append(lb);
+      } else {
+        this.lb = null;
+        const b = document.createElement("div");
+        b.className = "b";
+        b.setAttribute("role", "combobox");
+        b.setAttribute("aria-haspopup", "listbox");
+        b.setAttribute("aria-expanded", "false");
+        b.tabIndex = 0;
+        b.innerHTML = `<span class="t"><span class="v"></span><span class="sz" aria-hidden="true"></span></span>${CARET}`;
+        this.btn = b;
+        this.label = b.querySelector(".v");
+        this.sizer = b.querySelector(".sz");
+        this.sizedFor = "";
+        b.addEventListener("pointerdown", (ev) => {
+          if (ev.button !== 0 || this.disabled) return;
+          ev.preventDefault();
+          b.focus();
+          if (this.pop) {
+            this.close();
+            return;
+          }
+          this.open();
+          this.press = { x: ev.clientX, y: ev.clientY, moved: false };
+        });
+        b.addEventListener("keydown", (ev) => this.buttonKey(ev));
+        b.addEventListener("blur", () => {
+          if (this.pop) this.close();
+        });
+        this.root.append(b);
+      }
+      this.name_();
+      this.sync();
+    }
+    /** Bring the closed control (or the in-place list) up to date with the options and the selection. */
+    sync() {
+      const dis = this.disabled;
+      if (this.btn) {
+        this.btn.tabIndex = dis ? -1 : 0;
+        this.btn.setAttribute("aria-disabled", dis ? "true" : "false");
+        const os2 = this.options, s = this.current();
+        if (this.label) this.label.textContent = s ? s.label || s.text : "";
+        const all2 = os2.filter((o) => !this.isSep(o)).map((o) => o.label || o.text), key2 = all2.join("");
+        if (this.sizer && key2 !== this.sizedFor) {
+          this.sizedFor = key2;
+          this.sizer.replaceChildren(...all2.map((t) => {
+            const e = document.createElement("span");
+            e.textContent = t;
+            return e;
+          }));
+        }
+        if (this.pop) this.fillPop();
+      } else if (this.lb) {
+        this.lb.tabIndex = dis ? -1 : 0;
+        const os2 = this.options, s = this.current();
+        this.lb.replaceChildren(...os2.flatMap((o, i) => {
+          const r = document.createElement("div");
+          r.dataset.i = String(i);
+          r.setAttribute("role", "option");
+          const hd = this.head(o, os2[i - 1], "r hd");
+          if (this.isSep(o)) {
+            r.className = "r sep";
+            return hd ? [hd, r] : [r];
+          }
+          r.className = "r" + (o === s ? " on" : "") + (this.pickable(o) ? "" : " dis");
+          r.textContent = o.label || o.text;
+          r.setAttribute("aria-selected", o === s ? "true" : "false");
+          return hd ? [hd, r] : [r];
+        }));
+        if (!this.style.height) this.lb.style.minHeight = `calc(${this.size} * 1.45em + 2px)`;
+        const on = this.lb.querySelector(".on");
+        if (on) this.scrollRow(this.lb, on);
+      }
+    }
+    /** An <optgroup> caption row before the first option of each group, as the browser draws them. */
+    head(o, prev, cls) {
+      const g2 = o.parentElement;
+      if (!g2 || g2.tagName !== "OPTGROUP" || prev && prev.parentElement === g2) return null;
+      const r = document.createElement("div");
+      r.className = cls;
+      r.setAttribute("role", "presentation");
+      r.textContent = g2.label;
+      return r;
+    }
+    scrollRow(box, row2) {
+      if (row2.offsetTop < box.scrollTop) box.scrollTop = row2.offsetTop;
+      else if (row2.offsetTop + row2.offsetHeight > box.scrollTop + box.clientHeight) box.scrollTop = row2.offsetTop + row2.offsetHeight - box.clientHeight;
+    }
+    // ------------------------------------------------------------ the popup list
+    open() {
+      if (this.pop || this.disabled || !this.btn) return;
+      if (openOne) openOne.close();
+      const pop = document.createElement("div");
+      pop.className = "ksel-pop";
+      pop.setAttribute("role", "listbox");
+      pop.id = "ksel-pop-" + ++popSeq;
+      const cs = getComputedStyle(this);
+      pop.style.font = cs.font;
+      pop.style.fontSize = cs.fontSize;
+      this.pop = pop;
+      this.hi = this.selectedIndex;
+      pop.addEventListener("pointerdown", (ev) => ev.preventDefault());
+      pop.addEventListener("pointermove", (ev) => {
+        const r = ev.target.closest(".ksel-opt");
+        if (r && !r.classList.contains("dis")) this.highlight(+r.dataset.i, false);
+      });
+      pop.addEventListener("click", (ev) => {
+        const r = ev.target.closest(".ksel-opt");
+        if (!r || r.classList.contains("dis")) return;
+        this.close();
+        this.choose(+r.dataset.i);
+      });
+      document.body.append(pop);
+      this.fillPop();
+      this.place();
+      this.btn.setAttribute("aria-expanded", "true");
+      this.btn.setAttribute("aria-controls", pop.id);
+      const away = (ev) => {
+        const t = ev.target;
+        if (t !== this && !this.contains(t) && !pop.contains(t)) this.close();
+      };
+      const scroll = (ev) => {
+        if (!pop.contains(ev.target)) this.close();
+      };
+      const shut = () => this.close();
+      const rowAt = (ev) => {
+        const e = document.elementFromPoint(ev.clientX, ev.clientY);
+        const r = e && pop.contains(e) ? e.closest(".ksel-opt") : null;
+        return r && !r.classList.contains("dis") ? r : null;
+      };
+      const drag = (ev) => {
+        const p = this.press;
+        if (!p) return;
+        if (!p.moved && Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 4) p.moved = true;
+        const r = p.moved ? rowAt(ev) : null;
+        if (r) this.highlight(+r.dataset.i, false);
+      };
+      const release = (ev) => {
+        const p = this.press;
+        this.press = null;
+        if (!p || !p.moved) return;
+        const r = rowAt(ev);
+        if (r) {
+          ev.preventDefault();
+          const i = +r.dataset.i;
+          this.close();
+          this.choose(i);
+        }
+      };
+      document.addEventListener("pointerdown", away, true);
+      window.addEventListener("scroll", scroll, true);
+      window.addEventListener("resize", shut);
+      window.addEventListener("blur", shut);
+      document.addEventListener("pointermove", drag, true);
+      document.addEventListener("pointerup", release, true);
+      this.undo = [
+        () => document.removeEventListener("pointerdown", away, true),
+        () => window.removeEventListener("scroll", scroll, true),
+        () => window.removeEventListener("resize", shut),
+        () => window.removeEventListener("blur", shut),
+        () => document.removeEventListener("pointermove", drag, true),
+        () => document.removeEventListener("pointerup", release, true)
+      ];
+      this.setAttribute("data-popup-open", "");
+      openOne = this;
+    }
+    close() {
+      if (!this.pop) return;
+      this.pop.remove();
+      this.pop = null;
+      this.undo.forEach((f) => f());
+      this.undo = [];
+      this.press = null;
+      this.removeAttribute("data-popup-open");
+      if (this.btn) {
+        this.btn.setAttribute("aria-expanded", "false");
+        this.btn.removeAttribute("aria-activedescendant");
+      }
+      if (openOne === this) openOne = null;
+    }
+    fillPop() {
+      const pop = this.pop;
+      if (!pop) return;
+      const os2 = this.options, s = this.current();
+      pop.replaceChildren(...os2.flatMap((o, i) => {
+        const hd = this.head(o, os2[i - 1], "ksel-head");
+        if (this.isSep(o)) {
+          const r5 = document.createElement("div");
+          r5.className = "ksel-sep";
+          r5.setAttribute("role", "separator");
+          return hd ? [hd, r5] : [r5];
+        }
+        const r = document.createElement("div");
+        r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
+        r.dataset.i = String(i);
+        r.id = pop.id + "-" + i;
+        r.setAttribute("role", "option");
+        r.setAttribute("aria-selected", o === s ? "true" : "false");
+        r.textContent = o.label || o.text;
+        if (o.title) r.title = o.title;
+        if (o.parentElement && o.parentElement.tagName === "OPTGROUP") r.classList.add("ind");
+        return hd ? [hd, r] : [r];
+      }));
+    }
+    place() {
+      const pop = this.pop;
+      if (!pop) return;
+      const r = this.getBoundingClientRect(), vw = window.innerWidth, vh = window.innerHeight, M = 4;
+      pop.style.minWidth = r.width + "px";
+      pop.style.maxWidth = Math.max(160, vw - 2 * M) + "px";
+      pop.style.maxHeight = "";
+      const want = pop.scrollHeight + 2;
+      const below = vh - r.bottom - M - 2, above = r.top - M - 2;
+      const up = want > below && above > below;
+      const room = Math.max(80, up ? above : below), h = Math.min(want, room, Math.round(vh * 0.7));
+      pop.style.maxHeight = h + "px";
+      pop.style.top = (up ? Math.max(M, r.top - 2 - h) : Math.min(r.bottom + 2, vh - M - h)) + "px";
+      const w = pop.offsetWidth;
+      pop.style.left = Math.max(M, Math.min(r.left, vw - M - w)) + "px";
+      const row2 = pop.querySelector(".hi, .on");
+      if (row2) this.scrollRow(pop, row2);
+    }
+    highlight(i, scroll = true) {
+      this.hi = i;
+      const pop = this.pop;
+      if (!pop) return;
+      pop.querySelectorAll(".hi").forEach((e) => e.classList.remove("hi"));
+      const row2 = pop.querySelector(`[data-i="${i}"]`);
+      if (row2) {
+        row2.classList.add("hi");
+        if (scroll) this.scrollRow(pop, row2);
+        if (this.btn) this.btn.setAttribute("aria-activedescendant", row2.id);
+      }
+    }
+    /** The next pickable entry from `from` going `dir` (±1), `count` steps at most; the last one reached when the end is hit. */
+    step(from, dir, count = 1) {
+      const os2 = this.options;
+      let i = from, got = from, n2 = 0;
+      while (n2 < count) {
+        i += dir;
+        if (i < 0 || i >= os2.length) break;
+        if (this.pickable(os2[i]) && !this.isSep(os2[i])) {
+          got = i;
+          n2++;
+        }
+      }
+      return got;
+    }
+    edge(first) {
+      const os2 = this.options;
+      return first ? this.step(-1, 1) : this.step(os2.length, -1);
+    }
+    typeAhead(ch, from) {
+      const now = Date.now();
+      this.typed = now - this.typedAt > 800 ? ch : this.typed + ch;
+      this.typedAt = now;
+      const os2 = this.options, q = this.typed.toLowerCase(), repeat = this.typed.length > 1 && [...this.typed].every((c) => c === this.typed[0]);
+      const needle = repeat ? q[0] : q, start = this.typed.length === 1 || repeat ? from + 1 : from;
+      for (let k = 0; k < os2.length; k++) {
+        const i = (Math.max(0, start) + k) % os2.length, o = os2[i];
+        if (this.pickable(o) && !this.isSep(o) && (o.label || o.text).trim().toLowerCase().startsWith(needle)) return i;
+      }
+      return -1;
+    }
+    choose(i) {
+      const os2 = this.options, o = os2[i];
+      if (!o || !this.pickable(o)) return;
+      const before = this.current();
+      for (const x of os2) x.selected = x === o;
+      this.none = -1;
+      this.sync();
+      if (before !== o) {
+        this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        this.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+    buttonKey(ev) {
+      if (this.disabled) return;
+      const k = ev.key, eat = () => {
+        ev.preventDefault();
+        ev.stopPropagation();
+      };
+      if (!this.pop) {
+        if (k === " " || k === "ArrowDown" || k === "ArrowUp" || k === "F4" || k === "ArrowDown" && ev.altKey) {
+          eat();
+          this.open();
+          return;
+        }
+        if (k.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+          eat();
+          this.open();
+          const i = this.typeAhead(k, this.selectedIndex);
+          if (i >= 0) this.highlight(i);
+          return;
+        }
+        return;
+      }
+      if (k === "Tab") {
+        this.close();
+        return;
+      }
+      eat();
+      const os2 = this.options, cur2 = this.hi >= 0 ? this.hi : this.selectedIndex;
+      if (k === "Escape" || k === "ArrowUp" && ev.altKey) this.close();
+      else if (k === "Enter" || k === " " && Date.now() - this.typedAt > 800) {
+        const i = this.hi;
+        this.close();
+        if (i >= 0) this.choose(i);
+      } else if (k === "ArrowDown") this.highlight(cur2 < 0 ? this.edge(true) : this.step(cur2, 1));
+      else if (k === "ArrowUp") this.highlight(cur2 < 0 ? this.edge(false) : this.step(cur2, -1));
+      else if (k === "Home") this.highlight(this.edge(true));
+      else if (k === "End") this.highlight(this.edge(false));
+      else if (k === "PageDown") this.highlight(this.step(Math.max(cur2, -1), 1, 10));
+      else if (k === "PageUp") this.highlight(this.step(cur2 < 0 ? os2.length : cur2, -1, 10));
+      else if (k.length === 1 && !ev.ctrlKey && !ev.metaKey) {
+        const i = this.typeAhead(k, cur2);
+        if (i >= 0) this.highlight(i);
+      }
+    }
+    listKey(ev) {
+      if (this.disabled || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      const k = ev.key, cur2 = this.selectedIndex, os2 = this.options;
+      let to = -2;
+      if (k === "ArrowDown") to = cur2 < 0 ? this.edge(true) : this.step(cur2, 1);
+      else if (k === "ArrowUp") to = cur2 < 0 ? this.edge(false) : this.step(cur2, -1);
+      else if (k === "Home") to = this.edge(true);
+      else if (k === "End") to = this.edge(false);
+      else if (k === "PageDown") to = this.step(Math.max(cur2, -1), 1, 10);
+      else if (k === "PageUp") to = this.step(cur2 < 0 ? os2.length : cur2, -1, 10);
+      else if (k.length === 1 && k !== " ") to = this.typeAhead(k, cur2);
+      if (to === -2) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (to >= 0) this.choose(to);
+    }
+  }
+  customElements.define(KSELECT_TAG, KSelect);
+  document.addEventListener("click", (ev) => {
+    const l = ev.target instanceof Element ? ev.target.closest("label") : null;
+    if (!l || !l.htmlFor) return;
+    const t = l.getRootNode().getElementById?.(l.htmlFor) || document.getElementById(l.htmlFor);
+    if (t && t.tagName === "K-SELECT" && !t.disabled) {
+      ev.preventDefault();
+      t.focus();
+    }
+  });
+}
+defineKSelect();
+
 // web/router/ui.ts
 var root2 = globalThis;
 var plural = (n2, w) => `${n2} ${w}${n2 === 1 ? "" : "s"}`;
@@ -49936,7 +51623,7 @@ function openDialog(ctx) {
     width: 470,
     okLabel: "Route",
     build(body) {
-      scope = document.createElement("select");
+      scope = document.createElement("k-select");
       scope.dataset.k = "scope";
       scope.style.cssText = FIELD;
       scope.add(new Option(`All unrouted nets (${plural(rats.length, "connection")})`, "all"));
@@ -49963,7 +51650,7 @@ function openDialog(ctx) {
       row(body, "Rip up and retry", rip);
       zones = check(true, "zones");
       row(body, "Connect to zones", zones);
-      effort = document.createElement("select");
+      effort = document.createElement("k-select");
       effort.dataset.k = "effort";
       effort.style.cssText = FIELD;
       for (const [k, e] of Object.entries(EFFORT)) effort.add(new Option(e.label, k));
@@ -50841,7 +52528,7 @@ function openPlace(ctx) {
     width: 470,
     okLabel: "Place",
     build(body) {
-      scope = document.createElement("select");
+      scope = document.createElement("k-select");
       scope.dataset.k = "scope";
       scope.style.cssText = FIELD2;
       scope.add(new Option(`All unlocked footprints (${all2.length})`, "all"));
@@ -51060,7 +52747,7 @@ function drillFiles(m, baseName3, opt, ext = "drl") {
   return out;
 }
 
-// node_modules/clipper2-ts/dist/Core.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
 var ClipType;
 (function(ClipType2) {
   ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -51719,7 +53406,7 @@ var RectDUtils = {
 var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
 var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-// node_modules/clipper2-ts/dist/Engine.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
 var B02 = BigInt(0);
 var B22 = BigInt(2);
 var B42 = BigInt(4);
@@ -54584,7 +56271,7 @@ var Clipper = {
   }
 };
 
-// node_modules/clipper2-ts/dist/Offset.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
 var JoinType;
 (function(JoinType2) {
   JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -55200,7 +56887,7 @@ var ClipperOffset = class _ClipperOffset {
   }
 };
 
-// node_modules/clipper2-ts/dist/Clipper.js
+// ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
 var B23 = BigInt(2);
 function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
   if (typeof clipOrFillRule === "number") {
