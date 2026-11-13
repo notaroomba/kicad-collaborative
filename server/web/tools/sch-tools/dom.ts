@@ -222,7 +222,7 @@ export function onKeyCapture(ev: KeyboardEvent) {
   const ctx = S.ctx; if (!ctx || !schActive()) return;
   const tgt = ev.target as (Partial<HTMLInputElement> & { closest?: Element["closest"] }) | null;
   const tag = tgt && tgt.tagName; if (tag === "TEXTAREA" || (tag === "INPUT" && !/^(checkbox|radio|button|submit|reset|range|color)$/.test(tgt!.type!))) return;
-  if (tgt && tgt.closest && tgt.closest(".kd-overlay, [role='dialog'], [role='menu']")) return;
+  if (tgt && tgt.closest && tgt.closest(".kd-overlay, [role='dialog'], [role='menu'], [data-prop-label]")) return;
   // keys that would otherwise reach the document's undo / redo or the selection's delete mid-operation
   const ctrl = ev.ctrlKey || ev.metaKey, k = ev.key && ev.key.length === 1 ? ev.key.toUpperCase() : ev.key;
   const combo = ctrl ? "Ctrl+" + (ev.shiftKey ? "Shift+" : "") + k : k === "Delete" ? "Del" : k;

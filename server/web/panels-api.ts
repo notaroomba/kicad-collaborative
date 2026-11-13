@@ -39,8 +39,11 @@ export interface PropRow {
   /** display text in the current units ("" when mixed); booleans are "1" / "0" */
   value: string; mixed: boolean; readOnly: boolean;
   choices?: [string, string][];
+  /** the name may be edited in the label column (a footprint's own field, a custom property) */
+  keyEditable?: boolean;
 }
-export interface PropGroup { name: string; rows: PropRow[] }
+/** add: the category's "+" button and context-menu entry ("Add Field", "Add Custom Property") */
+export interface PropGroup { name: string; rows: PropRow[]; add?: "Add Field" | "Add Custom Property" }
 export interface PropGrid {
   /** the caption line: "Footprint R1", "3 items selected", "No objects selected" */
   title: string; count: number; groups: PropGroup[]; readOnly: boolean; note?: string;
@@ -110,6 +113,12 @@ export interface PanelsApi {
   propGrid(): PropGrid;
   /** Commit one property for every selected item; returns an error text (shown under the row) or null. */
   setProp(id: string, text: string): string | null;
+  /** Rename a row's property (label column edit); `pending`: the row was just added and goes again if left blank. */
+  renamePropKey(id: string, name: string, pending: boolean): boolean;
+  /** Add a blank field / custom property to the selection; the new row's id. */
+  addPropKey(kind: "field" | "custom"): string | null;
+  /** Remove a footprint field or a custom property from the selection. */
+  removePropKey(id: string): boolean;
   searchTabs(): SearchTab[];
   search(tab: string, query: string): SearchResult;
 }

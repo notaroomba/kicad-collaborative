@@ -146,5 +146,16 @@ test("angle snap lines in a board move (GetNearestSnapLinePoint) and the constra
   assert.equal(D.ANGLE_SNAP_MSG["45"], "Constrain to H, V, 45"); assert.ok(D.DRAWING_TOOL_IDS.has("gline") && !D.DRAWING_TOOL_IDS.has("route"));
 });
 
+test("Properties grid: Ctrl+C text (GetValueAsString) and custom properties written as KiCad does", () => {
+  const T = load(["components", "panes", "prop-text.ts"]);
+  assert.equal(T.rowValueText({ type: "bool", value: "1", mixed: false }), "True");
+  assert.equal(T.rowValueText({ type: "bool", value: "0", mixed: false }), "False");
+  assert.equal(T.rowValueText({ type: "enum", value: "smd", mixed: false, choices: [["smd", "SMD"], ["through_hole", "Through hole"]] }), "SMD");
+  assert.equal(T.rowValueText({ type: "length", value: "1.27 mm", mixed: false }), "1.27 mm");
+  assert.equal(T.rowValueText({ type: "text", value: "x", mixed: true }), "");
+  assert.equal(K.serialize(["custom_property", "Manufacturer PN", "RC0603"]), '(custom_property "Manufacturer PN" "RC0603")');
+  assert.equal(K.serialize(["custom_property", "k", ""]), '(custom_property "k" "")');
+});
+
 console.log(`\nui-chrome: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

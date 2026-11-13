@@ -290,6 +290,7 @@ const PCB_STRING_SLOTS: Record<string, readonly number[] | 0> = {
   title: 0, date: 0, rev: 0, company: 0, comment: 0, members: 0, face: 0, lib_id: 0, lib_name: 0, reference: 0, page: 0,
   property: [1, 2], group: [1], gr_text: [1], gr_text_box: [1], fp_text_box: [1], fp_text: [2], footprint: [1], pad: [1],
   label: [1], global_label: [1], hierarchical_label: [1], text: [1], text_box: [1], component_class: 0, class: 0,
+  custom_property: [1, 2],   // KICAD_FORMAT::FormatCustomProperties: Quotew( key ), Quotew( value )
 };
 /** Boards older than the quoted-names format (KiCad 5) keep bare layer names: see serializeItem. */
 let legacyBare = false;

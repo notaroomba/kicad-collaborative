@@ -23,6 +23,8 @@ interface PropDef {
   choices?: [string, string][];
   /** a tuning pattern's property that lives on its member tracks: edit each member's (cloned) node */
   member?(node: SNode, v: Raw): boolean | void;
+  /** a name the user may rename in the grid's label column (PCB_PROPERTIES_PANEL::isKeyEditable) */
+  key?: "field" | "custom";
 }
 
 /** props.js's node editors (static/props.js `helpers`). */
@@ -225,6 +227,37 @@ const PAD_TYPES: [string, string][] = [["thru_hole", "Through-hole"], ["smd", "S
 const PAD_SHAPES: [string, string][] = [["circle", "Circle"], ["rect", "Rectangle"], ["oval", "Oval"], ["trapezoid", "Trapezoid"], ["roundrect", "Rounded rectangle"], ["custom", "Custom"]];
 const padIndexOf = new Map<string, number>();   // footprint id -> the pad the Pad Properties rows show
 
+/** FIELD_T's mandatory footprint fields (PCB_FIELD::IsMandatory): never renamed or removed from the panel. */
+const FP_MANDATORY = ["Reference", "Value", "Footprint", "Datasheet", "Description"];
+/** A field written (property private "Name" …) (PCB_FIELD::IsPrivate). */
+function privateField(n: SNode, name: string): boolean { const h = H(); return h.kids(n, "property").some((p) => p[1] === "private" && h.str(p[2]) === name); }
+
+// ---------------------------------------------------------------- custom properties (EDA_ITEM::m_customProperties)
+// (custom_property "key" "value") children, last in the item (KICAD_FORMAT::FormatCustomProperties), in key order
+// (std::map); EDA_CUSTOM_PROPERTY puts each in the "Custom Properties" group.
+export const CUSTOM_GROUP = "Custom Properties";
+export function customProps(n: SNode): [string, string][] { const h = H(); return h.kids(n, "custom_property").map((p): [string, string] => [h.str(p[1]), h.str(p[2])]); }
+/** EDA_ITEM::SetCustomProperty: replace the value of `key`, or insert it in key order after the item's other children. */
+export function setCustomProp(n: SNode, key: string, value: string): void {
+  const h = H(); const all = h.kids(n, "custom_property");
+  const at = all.find((p) => h.str(p[1]) === key); if (at) { at[2] = value; return; }
+  const next = all.find((p) => h.str(p[1]) > key);
+  const node: SNode = ["custom_property", key, value];
+  if (next) n.splice(n.indexOf(next), 0, node);
+  else if (all.length) n.splice(n.indexOf(all[all.length - 1]!) + 1, 0, node);
+  else n.push(node);
+}
+/** EDA_ITEM::RemoveCustomProperty. */
+export function removeCustomProp(n: SNode, key: string): boolean {
+  const h = H(); const i = n.findIndex((c) => Array.isArray(c) && c[0] === "custom_property" && h.str(c[1]) === key);
+  if (i < 0) return false; n.splice(i, 1); return true;
+}
+function customPropDefs(it: KItem): PropDef[] {
+  return customProps(it.node).map(([key]): PropDef => ({ group: CUSTOM_GROUP, name: key, type: "text", key: "custom",
+    get: (x) => { const kv = customProps(x.node).find((q) => q[0] === key); return kv ? kv[1] : null; },
+    set: (n, v) => { setCustomProp(n, key, String(v)); } }));
+}
+
 function footprintProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
   const h = H();
   const attr = (name: string, key: string): PropDef => ({ group: "Attributes", name, type: "bool", get: (x) => !!h.footprintAttrs(x.node)[key], set: (n, v) => { h.setFootprintAttrs(n, { [key]: !!v }); } });
@@ -236,7 +269,7 @@ function footprintProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
     { group: BASIC, name: "Orientation", type: "angle", get: (x) => K().atOf(x.node)[2], set: (n, v) => h.setFootprintRotation(n, v as number) },
     { group: BASIC, name: "Layer", type: "enum", choices: [["F.Cu", layerDisplayName(doc, "F.Cu")], ["B.Cu", layerDisplayName(doc, "B.Cu")]], get: (x) => h.str((h.kid(x.node, "layer") || [])[1] || "F.Cu"), set: (n, v) => h.setFootprintSide(n, String(v)) },
     lockedProp(),
-    ...fieldProps(it),
+    ...fieldProps(it).map((d) => (FP_MANDATORY.includes(d.name) || privateField(it.node, d.name) ? d : Object.assign(d, { key: "field" as const }))),
     { group: "Footprint Properties", name: "Library Link", type: "text", get: (x) => h.str(x.node[1]) },
     { group: "Footprint Properties", name: "Library Description", type: "text", get: (x) => h.str((h.kid(x.node, "descr") || [])[1]) },
     { group: "Footprint Properties", name: "Keywords", type: "text", get: (x) => h.str((h.kid(x.node, "tags") || [])[1]) },
@@ -504,7 +537,7 @@ function show(def: PropDef, raw: Raw): string {
     default: return String(raw);
   }
 }
-function defsOf(it: KItem, doc: KDoc, single: boolean): PropDef[] { try { return isSchDoc() ? schProps(it, doc) : pcbProps(it, doc, single); } catch (e) { console.warn(e); return []; } }
+function defsOf(it: KItem, doc: KDoc, single: boolean): PropDef[] { try { return isSchDoc() ? schProps(it, doc) : pcbProps(it, doc, single).concat(it.kind === "generated" ? [] : customPropDefs(it)); } catch (e) { console.warn(e); return []; } }
 const defId = (d: PropDef) => d.group + "/" + d.name;
 
 interface Resolved { items: KItem[]; defs: Map<string, PropDef>[]; shared: PropDef[] }
@@ -538,8 +571,19 @@ export function propGrid(): PropGrid {
       if (first) { value = text; first = false; } else if (text !== value) mixed = true;
     });
     const row: PropRow = { id, name: d.name, type: d.type, value: mixed ? "" : value, mixed, readOnly: ro || !writable, choices: d.choices };
+    if (d.key && !ro && items.length === 1) row.keyEditable = true;   // isKeyEditable looks at the front item
     let g = groups.find((x) => x.name === d.group); if (!g) { g = { name: d.group, rows: [] }; groups.push(g); }
     g.rows.push(row);
+  }
+  // PROPERTIES_PANEL::rebuildProperties: the Custom Properties group always shows on the board (its "+" button is
+  // the way to add one); the category buttons are PCB_PROPERTIES_PANEL's "Add Custom Property" and "Add Field"
+  if (!isSchDoc() && !(items.length === 1 && items[0]!.kind === "generated")) {
+    if (!groups.some((g) => g.name === CUSTOM_GROUP)) groups.push({ name: CUSTOM_GROUP, rows: [] });
+    for (const g of groups) {
+      if (ro) break;
+      if (g.name === CUSTOM_GROUP) g.add = "Add Custom Property";
+      else if (g.name === "Fields" && items.some((it) => it.kind === "footprint")) g.add = "Add Field";
+    }
   }
   const kinds = new Set(items.map(friendly));
   const title = items.length === 1 ? friendly(items[0]) : `${items.length} objects selected`;
@@ -614,4 +658,80 @@ export function setProp(id: string, text: string): string | null {
   tctx().commit(changes, head.name.toLowerCase());
   panelStore.set({ selVersion: panelStore.get().selVersion + 1 });
   return null;
+}
+
+
+// ---------------------------------------------------------------- the label column (PCB_PROPERTIES_PANEL key editing)
+/** isKeyNameInUse: the front item already has a property of that name (a built-in one, a field or a custom one). */
+function keyNameInUse(name: string): boolean {
+  const doc = kdoc(); const { items } = resolve(); if (!doc || !items.length) return false;
+  return defsOf(items[0]!, doc, items.length === 1).some((d) => d.name === name);
+}
+/** The commit of an edit that applies `fn` to a clone of every selected item it changes. */
+function commitEach(label: string, fn: (node: SNode, it: KItem) => boolean): boolean {
+  const doc = kdoc(); if (!doc || E.viewOnly) return false;
+  const { items } = resolve(); const changes: KChange[] = [];
+  for (const it of items) { const node = K().cloneNode(it.node); if (!fn(node, it)) continue; changes.push(K().replaceChange(doc, Object.assign({}, it, { node, geom: [], bbox: null }))); }
+  if (!changes.length) return false;
+  tctx().commit(changes, label);
+  panelStore.set({ selVersion: panelStore.get().selVersion + 1 });
+  return true;
+}
+/**
+ * onLabelEditEnding / onKeyRenamed: rename a footprint field or a custom property on every selected item ("Rename
+ * Property").  An empty name, or one the item already uses, is refused (the label goes back); a property that was
+ * just added and is left so is removed again (onNewItemLeftBlank).  Returns whether the rename happened.
+ */
+export function renamePropKey(id: string, newName: string, pending: boolean): boolean {
+  const slash = id.indexOf("/"); const group = id.slice(0, slash), oldName = id.slice(slash + 1);
+  const name = newName.trim() === "" ? "" : newName;
+  if (name === oldName && !pending) return false;
+  if (!name || (name !== oldName && keyNameInUse(name))) { if (pending) removePropKey(id); return false; }
+  if (name === oldName) return false;
+  const h = H();
+  return commitEach("Rename Property", (n) => {
+    if (group === "Fields") {
+      if (n[0] !== "footprint" || FP_MANDATORY.includes(oldName)) return false;
+      const f = h.kids(n, "property").find((p) => h.str(p[1]) === oldName); if (!f) return false; f[1] = name; return true;
+    }
+    const kv = customProps(n).find((q) => q[0] === oldName); if (!kv) return false;
+    removeCustomProp(n, oldName); setCustomProp(n, name, kv[1]); return true;
+  });
+}
+/** removeField / removeCustomProperty ("Remove Field" deletes the field outright, not just hides it). */
+export function removePropKey(id: string): boolean {
+  const slash = id.indexOf("/"); const group = id.slice(0, slash), name = id.slice(slash + 1); const h = H();
+  if (group === "Fields") return commitEach("Remove Field", (n) => {
+    if (n[0] !== "footprint" || FP_MANDATORY.includes(name)) return false;
+    const i = n.findIndex((c) => Array.isArray(c) && c[0] === "property" && h.str(c[1]) === name); if (i < 0) return false; n.splice(i, 1); return true;
+  });
+  return commitEach("Remove Custom Property", (n) => removeCustomProp(n, name));
+}
+/** The first free placeholder: GetUserFieldName( n ) = "Field<n>" for a field, "Property<n>" for a custom property. */
+export function freeKeyName(taken: (name: string) => boolean, kind: "field" | "custom"): string {
+  for (let n = 0; ; n++) { const name = (kind === "field" ? "Field" : "Property") + n; if (!taken(name)) return name; }
+}
+/**
+ * addBlankField / addBlankCustomProperty: a hidden empty field on every selected footprint (PCB_FIELD( footprint,
+ * USER, name ): on the silkscreen of the footprint's side at its anchor), or an empty custom property on every
+ * selected item; returns the new row's id, whose label the panel then edits from blank.
+ */
+export function addPropKey(kind: "field" | "custom"): string | null {
+  const { items } = resolve(); if (!items.length || E.viewOnly) return null; const h = H();
+  if (kind === "field") {
+    const fps = items.filter((it) => it.kind === "footprint"); if (!fps.length) return null;
+    const name = freeKeyName((nm) => fps.some((it) => h.kids(it.node, "property").some((p) => h.str(p[1]) === nm)), "field");
+    const ok = commitEach("Add Field", (n) => {
+      if (n[0] !== "footprint") return false;
+      const back = h.str((h.kid(n, "layer") || [])[1]) === "B.Cu";
+      const font: SNode = ["font", ["size", 1.27, 1.27]];
+      const eff: SNode = back ? ["effects", font, ["justify", "mirror"]] : ["effects", font];
+      const f: SNode = ["property", name, "", ["at", 0, 0, 0], ["layer", back ? "B.SilkS" : "F.SilkS"], ["hide", "yes"], ["uuid", K().newUuid()], eff];
+      const last = h.kids(n, "property").pop(); n.splice(last ? n.indexOf(last) + 1 : n.length, 0, f); return true;
+    });
+    return ok ? "Fields/" + name : null;
+  }
+  const name = freeKeyName((nm) => items.some((it) => customProps(it.node).some((q) => q[0] === nm)), "custom");
+  const ok = commitEach("Add Custom Property", (n) => { setCustomProp(n, name, ""); return true; });
+  return ok ? CUSTOM_GROUP + "/" + name : null;
 }

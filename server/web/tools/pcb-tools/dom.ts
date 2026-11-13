@@ -137,6 +137,7 @@ export function routerKeyAction(ev: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | 
 export function onCaptureKey(ev: KeyboardEvent) {
   if (!isPcbDoc()) return;
   const tag = ev.target && (ev.target as Element).tagName; if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || tag === "K-SELECT") return;
+  if (ev.target && typeof (ev.target as Element).closest === "function" && (ev.target as Element).closest("[data-prop-label]")) return;   // a Properties row (its Ctrl+C copies the value)
   if (root.KDialogs && root.KDialogs.isOpen && root.KDialogs.isOpen()) return;
   // a context menu or the menu bar owns the keys while it is open (Escape closes the menu, not the route under it)
   if ((typeof document !== "undefined" && document.body && document.body.dataset.menuOpen === "1") || appGlobal(() => !!root.CollabApp!.getState().contextMenu, false)) return;

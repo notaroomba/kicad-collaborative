@@ -11,7 +11,7 @@ import { appearanceDispatch, appearanceDocOpened, applyAppearance, itemObjectHid
 import { panelStore } from "./core";
 import { hierarchyDispatch, loadSheets, publishHierarchy } from "./hierarchy";
 import { netNavDispatch, netNavSignature, publishNetNav } from "./netnav";
-import { propGrid, selectionSignature, setProp } from "./propgrid";
+import { addPropKey, propGrid, removePropKey, renamePropKey, selectionSignature, setProp } from "./propgrid";
 import { search, searchDispatch, searchTabs } from "./search";
 
 function dispatch(a: PanelAction): void {
@@ -19,7 +19,7 @@ function dispatch(a: PanelAction): void {
   catch (e) { console.warn("panel action failed", a, e); }
 }
 
-const api: PanelsApi = { getState: panelStore.get, subscribe: panelStore.subscribe, dispatch, propGrid, setProp, searchTabs, search };
+const api: PanelsApi = { getState: panelStore.get, subscribe: panelStore.subscribe, dispatch, propGrid, setProp, renamePropKey, addPropKey, removePropKey, searchTabs, search };
 window.CollabPanels = api;
 
 /** The select tool's gate for the tool modules' own picks (the app's picks go through filterAllows directly). */

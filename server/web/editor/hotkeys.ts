@@ -55,6 +55,8 @@ export function typingTarget(ev: KeyboardEvent): boolean {
     if (t.tagName === "INPUT" && NON_TEXT_INPUT.has((t as HTMLInputElement).type)) { if (ev.key === " " || ev.key === "Enter") return true; }
     else if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.tagName === "K-SELECT" || t.isContentEditable) return true;
     if (typeof t.closest === "function" && t.closest(".kd-overlay, [role='dialog'], [role='menu'], #popover")) return true;
+    // a selected row of the Properties grid keeps Ctrl+C (copy its value) and F2 (rename) for itself
+    if (typeof t.closest === "function" && t.closest("[data-prop-label]") && (ev.key === "F2" || ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "c"))) return true;
   }
   const w = window as unknown as { KDialogs?: { isOpen?: () => boolean } };
   if (w.KDialogs && w.KDialogs.isOpen && w.KDialogs.isOpen()) return true;
