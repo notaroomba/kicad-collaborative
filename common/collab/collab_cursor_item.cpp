@@ -66,10 +66,10 @@ void COLLAB_CURSOR_ITEM::ViewDraw( int aLayer, KIGFX::VIEW* aView ) const
     // World units per screen pixel, so everything holds a constant on-screen size.
     const double w = 1.0 / scale;
 
-    const double cursorPx = 16.0;    // pointer triangle height
-    const double textPx = 12.0;      // name tag glyph height
+    const double cursorPx = 24.0;    // pointer triangle height (the web editor uses the same sizes)
+    const double textPx = 16.0;      // name tag glyph height
     const double selLinePx = 1.5;    // selection outline width
-    const double padPx = 3.0;        // name tag padding
+    const double padPx = 5.0;        // name tag padding
 
     for( const REMOTE_PEER_DRAW& peer : m_peers )
     {

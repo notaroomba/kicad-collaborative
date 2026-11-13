@@ -317,6 +317,15 @@ function peerBoxesOf(ids: Iterable<string>) {
   return out;
 }
 
+// A peer's pointer and name tag, in screen pixels (the desktop's COLLAB_CURSOR_ITEM uses the same sizes).
+const PEER_CURSOR_PX = 24, PEER_TAG_TEXT_PX = 16, PEER_TAG_PAD_PX = 5;
+/** Brightness 0..1 of a #rgb / #rrggbb colour, as COLOR4D::GetBrightness (its weighted W3C formula). */
+function brightness(c: string): number {
+  const h = c.replace("#", ""), f = h.length === 3 ? h.split("").map((d) => d + d).join("") : h.slice(0, 6);
+  const n = parseInt(f, 16); if (!Number.isFinite(n)) return 0;
+  return (((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.117) / 255;
+}
+
 export function drawPeers(peers: Record<string, PeerEntry>) {
   peersG.replaceChildren();
   const s = pxPerMm(), mm = (nm: number) => nm / E.IU;
@@ -369,15 +378,30 @@ export function drawPeers(peers: Record<string, PeerEntry>) {
       peersG.appendChild(rect);
     }
     if (Array.isArray(st.cursor)) {
-      const x = mm(st.cursor[0]), y = mm(st.cursor[1]), t = 14 / s;
+      // COLLAB_CURSOR_ITEM's pointer and name tag: a triangle in the peer colour with its tip on the
+      // cursor, and below-right of it a chip filled with that colour, the name in black or white on it.
+      const x = mm(st.cursor[0]), y = mm(st.cursor[1]), t = PEER_CURSOR_PX / s, th = PEER_TAG_TEXT_PX / s, pad = PEER_TAG_PAD_PX / s;
       const tri = document.createElementNS(NS, "path");
       tri.setAttribute("d", `M ${x} ${y} L ${x + 0.38 * t} ${y + t} L ${x + t} ${y + 0.38 * t} Z`);
-      tri.setAttribute("fill", color); tri.setAttribute("stroke", "white"); tri.setAttribute("stroke-width", 1 / s);
+      tri.setAttribute("fill", color); tri.setAttribute("stroke", "white"); tri.setAttribute("stroke-opacity", "0.9"); tri.setAttribute("stroke-width", 1.5 / s);
+      tri.setAttribute("stroke-linejoin", "round");
       peersG.appendChild(tri);
-      const label = svgText(x + 1.1 * t, y + 1.7 * t, 12 / s, color, E.followPeer === cid ? name + " ✔" : name);
-      label.style.pointerEvents = "auto"; label.style.cursor = "pointer";
-      label.addEventListener("click", (ev) => { ev.stopPropagation(); E.followPeer = E.followPeer === cid ? null : cid; toast(E.followPeer ? `Following ${name}` : "Stopped following"); renderPeers(); });
-      peersG.appendChild(label);
+      const tag = document.createElementNS(NS, "g");
+      tag.style.pointerEvents = "auto"; tag.style.cursor = "pointer";
+      const cx = x + 0.8 * t, cy = y + 1.2 * t;
+      const chip = document.createElementNS(NS, "rect");
+      chip.setAttribute("x", cx); chip.setAttribute("y", cy); chip.setAttribute("height", th + 2 * pad); chip.setAttribute("rx", 2 / s);
+      chip.setAttribute("fill", color);
+      const label = document.createElementNS(NS, "text");
+      label.setAttribute("x", cx + pad); label.setAttribute("y", cy + pad + th / 2); label.setAttribute("dominant-baseline", "central");
+      label.setAttribute("font-size", th); label.setAttribute("font-weight", "600"); label.setAttribute("font-family", "system-ui, sans-serif");
+      label.setAttribute("fill", brightness(color) > 0.5 ? "#000" : "#fff");
+      label.textContent = E.followPeer === cid ? name + " ✔" : name;
+      tag.appendChild(chip); tag.appendChild(label); peersG.appendChild(tag);
+      let tw = 0; try { tw = label.getComputedTextLength(); } catch { /* not laid out */ }
+      if (!(tw > 0)) tw = label.textContent.length * 0.6 * th;
+      chip.setAttribute("width", tw + 2 * pad);
+      tag.addEventListener("click", (ev) => { ev.stopPropagation(); E.followPeer = E.followPeer === cid ? null : cid; toast(E.followPeer ? `Following ${name}` : "Stopped following"); renderPeers(); });
     }
   }
   const had = (E.peerGhosts || []).length; E.peerGhosts = ghosts;

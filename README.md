@@ -39,7 +39,7 @@ Projects are ordinary KiCad files. Everyone in a project should be on 2.0: it is
 
 <table>
 <tr>
-<td width="50%"><img src="docs/media/together.jpg" alt="Ada and Ben drawing one Raspberry Pi Pico schematic from two browsers, each showing the other person's named cursor" width="100%"><br><b>Live editing.</b> Two people in one schematic or board, on the desktop or in the browser, each with their own view. Cursors, selections, drags in progress and edits arrive as they happen.</td>
+<td width="50%"><img src="docs/media/together.jpg" alt="Ada and Ben in one Raspberry Pi Pico schematic from two browsers, each showing the other person's cursor and name tag" width="100%"><br><b>Live editing.</b> Two people in one schematic or board, on the desktop or in the browser, each with their own view. Cursors, selections, drags in progress and edits arrive as they happen.</td>
 <td width="50%"><img src="docs/media/ai-board.jpg" alt="The routed four-layer Raspberry Pi Pico board from the video in the browser editor, laid out by harness scripts through MCP" width="100%"><br><b>Design with any AI.</b> An MCP server lets Claude, ChatGPT, Gemini, Cursor or a local model read and edit your projects. Its edits appear in everyone's editor, with a cursor on them.</td>
 </tr>
 <tr>
