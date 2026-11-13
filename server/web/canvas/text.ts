@@ -47,7 +47,9 @@ export function parseMarkup(s: string): { text: string; bars: [number, number][]
 
 export const INTERLINE = 1.68 * 0.9583;
    // stroke font line pitch (font_metrics.h × STROKE_FONT legacy factor)
-export const SCH_PEN = 0.1524;
+/** The schematic's default line width (Schematic Setup > Formatting: default_line_thickness, 6 mil unless set). */
+export let SCH_PEN = 0.1524;
+export function setSchPen(w: number): void { if (w > 0) SCH_PEN = w; }
              // DEFAULT_LINE_WIDTH_MILS (6 mil)
 export const MIL = 0.0254;
 

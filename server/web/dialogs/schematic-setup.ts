@@ -22,13 +22,21 @@ const DRAWING_DEFAULTS: Record<string, Json> = { default_text_size: 50, overbar_
   dashed_lines_dash_length_ratio: 12, dashed_lines_gap_length_ratio: 3, operating_point_overlay_v_precision: 3, operating_point_overlay_v_range: "~V", operating_point_overlay_i_precision: 3, operating_point_overlay_i_range: "~A" };
 const numOf = (v: Json | undefined, d: number): number => (typeof v === "number" ? v : d);
 
-/** The values the renderer takes from the project (SCHEMATIC_SETTINGS): junction diameter in mm, dash / gap ratios. */
-export function schRenderSettings(pro: JsonObj): { junctionDiameter: number; dash: number; gap: number } {
+/**
+ * The values the renderer takes from the project (SCHEMATIC_SETTINGS): junction diameter in mm, dash / gap ratios,
+ * and the Formatting page's text offset / label size ratios, pin symbol size and default line width (mm), DNP markers.
+ */
+export interface SchRenderSettings { junctionDiameter: number; dash: number; gap: number; textOffsetRatio: number; labelSizeRatio: number; pinSymbolSize: number; lineWidth: number; showDnpMarkers: boolean }
+export function schRenderSettings(pro: JsonObj): SchRenderSettings {
   const s = obj(pro.schematic), d = obj(s.drawing), classes = obj(pro.net_settings).classes;
   const dflt = Array.isArray(classes) ? (classes as JsonObj[]).find((c) => c && c.name === "Default") : undefined;
   const wire = numOf(dflt ? dflt.wire_width : undefined, numOf(d.default_wire_thickness, 6));
   const choice = Math.max(0, Math.min(5, Math.round(numOf(d.junction_size_choice, 3))));
-  return { junctionDiameter: +(wire * JUNCTION_MULT[choice] * MIL).toFixed(4), dash: numOf(d.dashed_lines_dash_length_ratio, 12), gap: numOf(d.dashed_lines_gap_length_ratio, 3) };
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));   // the PARAM ranges
+  return { junctionDiameter: +(wire * JUNCTION_MULT[choice] * MIL).toFixed(4), dash: numOf(d.dashed_lines_dash_length_ratio, 12), gap: numOf(d.dashed_lines_gap_length_ratio, 3),
+    textOffsetRatio: clamp(numOf(d.text_offset_ratio, 0.15), 0, 2), labelSizeRatio: clamp(numOf(d.label_size_ratio, 0.375), 0, 2),
+    pinSymbolSize: +(clamp(numOf(d.pin_symbol_size, 25), 0, 1000) * MIL).toFixed(6), lineWidth: +(clamp(numOf(d.default_line_thickness, 6), 5, 1000) * MIL).toFixed(6),
+    showDnpMarkers: d.show_dnp_markers !== false };
 }
 
 interface FieldTpl { name: string; visible: boolean; url: boolean }

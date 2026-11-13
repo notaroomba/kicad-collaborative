@@ -244,14 +244,14 @@ export function shapeGeom(item: GeomSink, g: SNode, gk: string, tf: Tf, color: s
 export function buildLabelGeom(item: Item, n: SNode, k: string): void {
   const [x, y, rot] = atOf(n); const ef = effectsOf(n); const text = str(n[1]); const size = ef.size;
   const spin = SPIN[((Math.round(rot) % 360) + 360) % 360] || "R"; const st = spinText(spin);
-  const pen = textPen(ef, size), lpen = layoutPen(ef, size); const off = 0.15 * size;   // DEFAULT_TEXT_OFFSET_RATIO
+  const pen = textPen(ef, size), lpen = layoutPen(ef, size); const off = schFormat.textOffsetRatio * size;   // SCHEMATIC_SETTINGS::m_TextOffsetRatio
   const shapeN = kid(n, "shape"); const shape = shapeN ? str(shapeN[1]) : "";
   if (k === "label") {
     const d = off + lpen; const tx = st.rot ? x - d : x, ty = st.rot ? y : y - d;
     textGeom(item, tx, ty, text, size, colorOf(n) || SCH.label, st.rot, [st.h, "bottom"], "Labels", { z: SCH_Z.loclabel, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     labelFields(item, n, SCH.field, "Fields", SCH_Z.fields);
   } else if (k === "global_label") {
-    const color = colorOf(n) || SCH.glabel; const margin = 0.375 * size;   // DEFAULT_LABEL_SIZE_RATIO
+    const color = colorOf(n) || SCH.glabel; const margin = schFormat.labelSizeRatio * size;   // SCHEMATIC_SETTINGS::m_LabelSizeRatio
     let horiz = margin; if (shape === "input" || shape === "bidirectional" || shape === "tri_state") horiz += size * 0.75;
     const vert = size * 0.0715;
     const to = spin === "L" ? [-horiz, vert] : spin === "U" ? [vert, -horiz] : spin === "R" ? [horiz, vert] : [vert, horiz];
@@ -325,7 +325,7 @@ export function buildSheetGeom(item: Item, n: SNode): void {
     textGeom(item, px + to[0], py + to[1], str(pin[1]), size, col(SCH.sheetLabel), st.rot, [st.h, "middle"], "Sheets", { z: SCH_Z.sheet, w: pen, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX });
     for (let i = g0; i < item.geom.length; i++) item.geom[i].pinNo = str(pin[1]);   // "sheetId#pin:<name>" in a net highlight
   }
-  if (dnp) {
+  if (dnp && schFormat.showDnpMarkers) {   // m_ShowDNPMarkers
     // the symbol's DNP cross: the body box grown toward the pins (GetBoundingBox), 3 x the default line width
     const all = item.bbox || [x, y, x + w, y + h];
     const mx0 = Math.max(x - all[0], all[2] - (x + w)), my0 = Math.max(y - all[1], all[3] - (y + h));
@@ -441,7 +441,7 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
     if (isVal && localPower) localPowerIcon(sink, tg, shown, textPen(ef, ef.size), color, name);
     if (ef.hide) { for (const hg of sink.geom) { hg.hiddenText = true; hg.noBox = true; } if (sink.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...sink.geom); }
   }
-  if (dnp) {
+  if (dnp && schFormat.showDnpMarkers) {   // m_ShowDNPMarkers
     // SCH_PAINTER: body box grown toward the pins, crossed at 3× the default line width
     const mx0 = Math.max(bodyBox[0] - union[0], union[2] - bodyBox[2]), my0 = Math.max(bodyBox[1] - union[1], union[3] - bodyBox[3]);
     const mx = Math.max(mx0 * 0.6, my0 * 0.3), my = Math.max(my0 * 0.6, mx0 * 0.3);
@@ -461,6 +461,12 @@ export function buildSymbolGeom(doc: Doc, item: Item): void {
  * The schematic View-menu options that change geometry (EESCHEMA_SETTINGS appearance): the pin alternate icons.  The
  * host sets them and rebuilds the sheet's symbols (KiCadCanvas.setSchDisplay).
  */
+/**
+ * Schematic Setup > Formatting values the painter reads (SCHEMATIC_SETTINGS, the project's schematic.drawing):
+ * text_offset_ratio (0.15), label_size_ratio (0.375), pin_symbol_size (25 mil; 0 = from the pin's text sizes),
+ * show_dnp_markers.  default_line_thickness is text.ts's SCH_PEN.  setSchFormatting (index.ts) rebuilds the sheet.
+ */
+export const schFormat = { textOffsetRatio: 0.15, labelSizeRatio: 0.375, pinSymbolSize: 25 * MIL, showDnpMarkers: true };
 export const schDisplay = { pinAltIcons: true };
 /**
  * SCH_PAINTER's excluded-from-simulation marker (mark_sim_exclusions): the body box framed at
@@ -533,7 +539,8 @@ function buildPinGeomInner(item: GeomSink, g: SNode, tf: Tf, sym: PinSym, type: 
   const color = sym.col(SCH.pin); const w = SCH_PEN; const z = SCH_Z.pin, layer = "Pins";
   const nameN = kid(g, "name"), numN = kid(g, "number");
   const nameEf: Pick<TextEffects, "size" | "hide"> = nameN ? effectsOf(nameN) : { size: 1.27, hide: false }, numEf: Pick<TextEffects, "size" | "hide"> = numN ? effectsOf(numN) : { size: 1.27, hide: false };
-  const radius = numEf.size / 2, diam = radius * 2, clock = (nameEf.size || numEf.size) / 2;
+  const ps = schFormat.pinSymbolSize;   // SCH_PAINTER::externalPinDecoSize / internalPinDecoSize: m_PinSymbolSize when set
+  const radius = ps > 0 ? ps : numEf.size / 2, diam = radius * 2, clock = ps > 0 ? ps : (nameEf.size || numEf.size) / 2;
   const p0 = rootPt; const line = (a: Pt, b: Pt) => G(item, { t: "line", x1: a[0], y1: a[1], x2: b[0], y2: b[1], w, color, layer, z, cap: "round" });
   const tri = (a: Pt, b: Pt, c: Pt) => G(item, { t: "poly", pts: [a, b, c], close: false, w, color, layer, z });
   const P = (dx: number, dy: number): Pt => [p0[0] + dx, p0[1] + dy];

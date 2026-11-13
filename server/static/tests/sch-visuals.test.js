@@ -165,3 +165,29 @@ test("edit points: KiCad's EDIT_POINTS colours (aux-items fill, 0.8-alpha border
   assert.deepStrictEqual(_.editPointColors("#000000", "#F5F4EF"), { fill: "rgb(0,0,0)", border: "rgba(179,179,179,0.8)" });
   assert.deepStrictEqual(_.editPointColors("#000000", "#101010"), { fill: "rgb(255,255,255)", border: "rgba(77,77,77,0.8)" });
 });
+
+test("Schematic Setup > Formatting: label size and text offset ratios, DNP markers and the default line width rebuild the sheet", () => {
+  const doc = K.parseDoc(HEAD + '(label "A" (at 20 5 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid "l1")) (global_label "G" (shape passive) (at 40 5 0) (effects (font (size 1.27 1.27)) (justify left)) (uuid "g1")) (sheet (at 10 10) (size 20 15) (dnp yes) (stroke (width 0) (type solid)) (fill (color 0 0 0 0)) (uuid "s1") (property "Sheetname" "Sub" (at 10 9 0) (effects (font (size 1.27 1.27)) (justify left bottom))) (property "Sheetfile" "sub.kicad_sch" (at 10 26 0) (effects (font (size 1.27 1.27)) (justify left top)))))');
+  const span = (id) => { const xs = doc.items.get(id).geom.filter((g) => g.t === "poly").flatMap((g) => g.pts.map((p) => p[0])); return Math.max(...xs) - Math.min(...xs); };
+  const textY = (id) => doc.items.get(id).geom.find((g) => g.t === "text").y;
+  const g0 = span("g1"), y0 = textY("l1"), w0 = doc.items.get("s1").geom.find((g) => g.color === K.SCH.dnp).w;
+  try {
+    assert.ok(K.setSchFormatting({ labelSizeRatio: 0.75, textOffsetRatio: 0.5, lineWidth: 0.254 }, doc));
+    assert.ok(Math.abs(span("g1") - g0 - 2 * 0.375 * 1.27) < 1e-6, "the global label outline grows by the margin each side");
+    assert.ok(textY("l1") < y0 - 0.3 * 1.27, "a local label's text sits text_offset_ratio x size above its anchor");
+    assert.ok(Math.abs(doc.items.get("s1").geom.find((g) => g.color === K.SCH.dnp).w - 3 * 0.254) < 1e-9 && Math.abs(w0 - 3 * 0.1524) < 1e-9, "the DNP cross: 3 x the default line width");
+    assert.ok(K.setSchFormatting({ showDnpMarkers: false }, doc));
+    assert.strictEqual(doc.items.get("s1").geom.filter((g) => g.color === K.SCH.dnp).length, 0, "show_dnp_markers off: no cross");
+    assert.strictEqual(K.setSchFormatting({ showDnpMarkers: false }, doc), false, "nothing changed: nothing rebuilt");
+  } finally { K.setSchFormatting({ labelSizeRatio: 0.375, textOffsetRatio: 0.15, lineWidth: 0.1524, showDnpMarkers: true }, doc); }
+  assert.ok(Math.abs(span("g1") - g0) < 1e-9 && Math.abs(textY("l1") - y0) < 1e-9);
+});
+
+test("pin_symbol_size: an inverted pin's circle takes the setup's size, not the pin number's (externalPinDecoSize)", () => {
+  const lib = '(lib_symbols (symbol "L:INV" (in_bom yes) (on_board yes) (symbol "INV_1_1" (pin input inverted (at 0 0 0) (length 5.08) (name "A" (effects (font (size 2 2)))) (number "1" (effects (font (size 2 2))))))))';
+  const doc = K.parseDoc(HEAD + lib + '(symbol (lib_id "L:INV") (at 50 50 0) (unit 1) (in_bom yes) (on_board yes) (uuid "u1") (property "Reference" "U1" (at 50 45 0) (effects (font (size 1.27 1.27)))) (property "Value" "INV" (at 50 55 0) (effects (font (size 1.27 1.27))))))');
+  const r = () => { const c = doc.items.get("u1").geom.find((g) => g.t === "circle"); return c && c.r; };
+  assert.ok(Math.abs(r() - 0.635) < 1e-9, "25 mil by default, whatever the number's size: " + r());
+  try { K.setSchFormatting({ pinSymbolSize: 0 }, doc); assert.ok(Math.abs(r() - 1) < 1e-9, "0: half the number's size"); }
+  finally { K.setSchFormatting({ pinSymbolSize: 0.635 }, doc); }
+});
