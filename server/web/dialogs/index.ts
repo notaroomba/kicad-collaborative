@@ -25,6 +25,9 @@ import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { autoplaceAllSheetPins, openSyncSheetPins } from "./sync-pins";
 import { openFabOutputs } from "../editor/fab-outputs";
 import { editPageNumber } from "../editor/panels/hierarchy";
+import { findNetInNavigator } from "../editor/panels/netnav";
+import { assignNetclass } from "./assign-netclass";
+import { selectionIds } from "../editor/gestures";
 
 type Handler = import("../editor/types").ActionHandler;
 interface Marker { code: string; severity: string }
@@ -85,6 +88,9 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     prevMarker: ercPrevMarker as Handler, nextMarker: ercNextMarker as Handler,   // the schematic's; the board's are the module's (EDITOR_ONLY)
     excludeMarker: (() => { if (E.kdoc && isSch()) ercExcludeMarker(); }) as Handler,
     editPageNumber: needDoc(() => { editPageNumber(); }, true),   // SCH_EDIT_TOOL::EditPageNumber
+    assignNetclass: needDoc(assignNetclass, true),   // SCH_EDITOR_CONTROL::AssignNetclass
+    // SCH_EDITOR_CONTROL::FindNetInInspector
+    findNetInInspector: (() => { if (!E.kdoc || !isSch()) return; if (!findNetInNavigator(selectionIds())) toast("No connected net selected."); }) as Handler,
     annotate: needDoc(openAnnotate, true),
     // DIALOG_CHANGE_SYMBOLS: Edit > Change Symbols…, Tools > Update Symbols from Library…, the symbol context menu
     changeSymbols: needDoc(() => openChangeSymbols("change"), true), changeSymbol: needDoc(() => openChangeSymbols("change"), true),

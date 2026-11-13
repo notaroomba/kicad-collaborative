@@ -6,6 +6,7 @@ import { E, appState, pushUndoFor, toast, toolCtx, cloneNode } from "./editor";
 import { KD, h } from "./dom";
 import { kids, str } from "./logic";
 import { projectDocs, readDoc, submitDocOp } from "./project";
+import { selectionIds } from "../editor/gestures";
 
 interface SchInternals { sheetPinNode(name: string, p: [number, number], side: string): SNode; labelNode(kind: string, text: string, p: [number, number], rot: number): SNode; modChange(doc: KDoc, item: KItem, node: SNode): KChange; itemSexpr(doc: KDoc, kind: string, node: SNode): string; typeNameFor(item: { kind: string }): string; autoPlaceSheetPinsNode(sheet: SNode, sub: KDoc, textSize?: number): SNode | null }
 const S = appState;
@@ -84,7 +85,7 @@ function sheetFileEntry(it: KItem) {
  */
 export async function autoplaceAllSheetPins(): Promise<void> {
   const doc = E.kdoc as KDoc | null; if (!doc || E.viewOnly) return;
-  const ids = [...(E.selection as Set<string>)]; if (E.selected && !ids.includes(E.selected.id)) ids.unshift(E.selected.id);
+  const ids = selectionIds();
   const sheet = ids.map((id) => doc.items.get(id)).find((it) => it && it.kind === "sheet"); if (!sheet) return;
   const entry = sheetFileEntry(sheet); let sub: KDoc | null = null;
   if (entry) { try { sub = await readDoc(entry.docId, "kicad_sch"); } catch (e) { sub = null; } }

@@ -10,7 +10,7 @@
 // hierarchy, kept as names.
 import type { NetNavNode, PanelAction } from "../../panels-api";
 import type { schNets } from "../../canvas/sch-nets";
-import { HL, currentInstance, docOfInstance, goTo, netMap, onNetsChanged } from "../schnets";
+import { HL, clearHighlight, currentInstance, docOfInstance, goTo, netMap, onNetsChanged } from "../schnets";
 import { store } from "../appstore";
 import { E } from "../state";
 import { isSchDoc, kdoc, loadJson, panelStore, saveJson } from "./core";
@@ -85,5 +85,24 @@ export function netNavDispatch(a: PanelAction): boolean {
   const cur = panelStore.get().netNav; panelStore.set({ netNav: Object.assign({}, cur, { selected: key || null }) });
   if (!t) return true;                       // the root, or a net name while every net is listed: nothing happens
   void goTo(t.inst, t.item ? t.at : null).then(() => { const now = currentInstance(); if (now && now.index === t.inst) publishNetNav(); });
+  return true;
+}
+
+/**
+ * SCH_EDITOR_CONTROL::FindNetInInspector (Find in Net Navigator): the net of the first selected item that is on one,
+ * else the highlighted net; SCH_EDIT_FRAME::FindNetInInspector then shows the navigator, clears the highlight and
+ * puts the net's name in the filter box.  False when there is no connected net ("No connected net selected.").
+ */
+export function findNetInNavigator(ids: string[]): boolean {
+  const c = netMap(), inst = currentInstance(c); let name = "";
+  if (c && inst) for (const id of ids) { const n = c.index.get(inst.index + "|" + id) || ""; if (n && !/^unconnected-/.test(n)) { name = n; break; } }
+  if (!name) name = HL.name || "";
+  if (!name) return false;
+  const hk = E.hooks as { showPane?: (name: string, show?: unknown) => void };
+  if (!shown() && hk.showPane) hk.showPane("netnav", true);
+  filterState.text = unescape(name); saveJson("kc.netnav.filter", filterState);
+  userSel = null;
+  clearHighlight();
+  publishNetNav();
   return true;
 }

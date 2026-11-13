@@ -210,3 +210,18 @@ export function installSchNets(): void {
   const m = schMod(); if (!m || !m.setNetHighlighter) return;
   m.setNetHighlighter({ highlightPick, clear: (ctx: ToolCtx) => clearHighlight(ctx), active: () => !!HL.name, docChanged, wireDriverName, labelDefaults });
 }
+
+/** DIALOG_ASSIGN_NETCLASS's previewer: the items of these nets on the sheet on screen brightened (the highlight stays its own). */
+export function previewNets(names: string[], ctx: ToolCtx = (toolCtx as unknown as () => ToolCtx)()): void {
+  const h = helpers(); if (!h) return;
+  const c = netMap(), inst = currentInstance(c), keys = new Set<string>();
+  if (c && inst) for (const n of names) for (const k of SN().collectKeys(c.map, n, inst.index, false)) keys.add(k);
+  h.setHighlight(ctx, keys.size ? keys : null);
+}
+/** The net entries of items on the sheet on screen, by id (SCH_CONNECTION of each), in the order given. */
+export function netsOfItems(ids: string[]): (NetEntry | null)[] {
+  const c = netMap(), inst = currentInstance(c); if (!c || !inst) return ids.map(() => null);
+  return ids.map((id) => { const n = c.index.get(inst.index + "|" + id); return n ? c.map.get(n) || null : null; });
+}
+/** Every net name of the schematic (GetNetClassAssignmentCandidates). */
+export function allNetNames(): string[] { const c = netMap(); return c ? SN().netNames(c.map) : []; }

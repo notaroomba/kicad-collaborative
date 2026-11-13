@@ -8,6 +8,7 @@ import { store } from "../appstore";
 import { openDoc, rootSchematic } from "../doc";
 import { E } from "../state";
 import { toast } from "../util";
+import { selectionIds } from "../gestures";
 import { KC, currentDocId, isSchDoc, kdoc, openDocs, panelStore, projectId, projectName, textEntry, type DocEntryLite, tctx } from "./core";
 
 interface SheetRef { id: string; name: string; file: string; page: string }
@@ -147,7 +148,7 @@ async function editPage(path: string): Promise<void> {
  */
 export function editPageNumber(): boolean {
   const doc = kdoc(); if (!doc || !isSchDoc()) return false;
-  const ids = new Set<string>(E.selection as Set<string>); if (E.selected) ids.add(E.selected.id);
+  const ids = new Set<string>(selectionIds());
   if (ids.size > 1) return true;
   const cur = currentDocId(), sel = [...ids].map((id) => doc.items.get(id)).find((it) => it && it.kind === "sheet");
   if (ids.size === 1 && !sel) return true;

@@ -241,7 +241,7 @@ export const READ_ONLY_OK = new Set(["compareSchematicWithFile", "compareSchemat
   "openInKicad", "print", "plot", "home", "copy", "copyAsText", "selectAll", "unselectAll", "selectConnection", "selectNode", "nextNetItem", "previousNetItem", "find", "showDatasheet",
   "selectNet", "deselectNet", "selectSameSheet", "module:selectAllOnLayer", "selectUnconnected", "filterSelection", "runERC", "runDRC", "clearMarkers", "boardStatistics", "measureTool", "inspectClearance",
   "highlightNetTool", "highlightNet", "clearHighlight", "toggleNetHighlight", "localRatsnestTool", "hideNetInRatsnest", "showNetInRatsnest", "showPcbNew", "showEeschema", "theme", "themeLight", "themeDark", "themeSystem", "languageEnglish",
-  "layerTop", "layerBottom", "layerNext", "layerPrev", "showNetInspector", "showBusSyntaxHelp"]);
+  "layerTop", "layerBottom", "layerNext", "layerPrev", "showNetInspector", "showBusSyntaxHelp", "findNetInInspector"]);
 /**
  * Keys a tool module binds to something other than KiCad's default, taken before the module sees them
  * (editor/hotkeys.ts preemptKey): "spec" runs KiCad's action for the key — and swallows the key when the web has
@@ -269,7 +269,7 @@ export const KICAD_KEY_WINS: Record<Editor, Record<string, string>> = {
 export const EDITOR_ONLY: Record<string, Editor> = { move: "sch", drag: "sch", exportNetlist: "sch", saveCurrSheetCopyAs: "sch", drawSheetOnClipboard: "sch", saveCopy: "pcb",
   navigatePrevious: "sch", navigateNext: "sch", navigateBack: "sch", navigateForward: "sch", navigateUp: "sch", leaveSheet: "sch", toggleHiddenPins: "sch", toggleHiddenFields: "sch", toggleERCErrors: "sch", toggleERCWarnings: "sch", toggleERCExclusions: "sch", prevMarker: "sch", nextMarker: "sch",
   layerNext: "pcb", layerPrev: "pcb", layerTop: "pcb", layerBottom: "pcb", highContrastModeCycle: "pcb", highContrastMode: "pcb", showPcbNew: "sch", showEeschema: "pcb",
-  showSymbolEditor: "sch", editPageNumber: "sch", autoplaceAllSheetPins: "sch", editWithLibEdit: "sch", editLibSymbolWithLibEdit: "sch" };
+  showSymbolEditor: "sch", editPageNumber: "sch", autoplaceAllSheetPins: "sch", findNetInInspector: "sch", assignNetclass: "sch", editWithLibEdit: "sch", editLibSymbolWithLibEdit: "sch" };
 /** The menus that take a module action no entry above places (kept reachable in a trailing "Other Commands" sub-menu). */
 export const MODULE_ACTION_MENUS = ["Edit", "Tools", "Inspect"];
 
