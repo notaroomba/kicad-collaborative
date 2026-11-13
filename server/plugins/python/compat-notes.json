@@ -52,6 +52,14 @@
     "com.github.riehlies.kisi": {
       "status": "works",
       "note": "It builds its viewer page for the open board and hands it over as a download; open the downloaded page in your browser."
+    },
+    "com.github.SteveMayze.pcb2fritzing": {
+      "status": "works",
+      "note": "Give it an output folder name; the Fritzing part comes as a download. Its optional 3D picture is drawn by the editor's 3D viewer."
+    },
+    "com.pcbtools.kinotes": {
+      "status": "works",
+      "note": "Notes and tasks are kept per project in this browser, for you only; collaborators do not see them."
     }
   }
 }

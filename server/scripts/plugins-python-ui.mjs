@@ -64,6 +64,12 @@ class Move(pcbnew.ActionPlugin):
         board = pcbnew.GetBoard()
         fp = footprint(board, "R2")
         pos = fp.GetPosition()
+        # a settings file in the home folder and a hidden one beside the board, as desktop plugins keep them
+        for path in (os.path.expanduser("~/.config/pytool/runs"), os.path.join(os.path.dirname(board.GetFileName()), ".pytool", "runs")):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            runs = int(open(path).read()) if os.path.exists(path) else 0
+            with open(path, "w") as f:
+                f.write(str(runs + 1))
         fp.SetPosition(pcbnew.VECTOR2I(pos.x + pcbnew.FromMM(5), pos.y))
         fp.SetOrientationDegrees(fp.GetOrientationDegrees() + 90)
         fp.Flip(fp.GetPosition(), False)
@@ -1093,6 +1099,18 @@ check('the repository shows it as installed', /Installed/.test(await a.locator(`
 await a.click('#pluginManager .kd-x');
 
 // ---- next visit: nothing starts until a command is used
+const kept = (page) => page.evaluate((id) => {
+  const out = {};
+  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('kc.plugin.') && k.endsWith('.' + id)) Object.assign(out, JSON.parse(localStorage.getItem(k) || '{}')); }
+  return out;
+}, ID);
+const runsIn = (store) => {
+  const read = (body) => (body ? Number(zlib.inflateSync(Buffer.from(body, 'base64')).toString()) : 0);
+  const own = store['py.state'] || {}; const projectKey = Object.keys(store).find((k) => k.startsWith('py.project.'));
+  return { home: read((own.home || {})['.config/pytool/runs']), project: read(projectKey ? (store[projectKey].files || {})['.pytool/runs'] : null), projectKey };
+};
+const runsBefore = runsIn(await kept(a));
+check('the plugin\'s settings file and its hidden file beside the board are kept in its storage', runsBefore.home >= 1 && runsBefore.project === runsBefore.home && runsBefore.projectKey === 'py.project.' + projectId, JSON.stringify(runsBefore));
 await a.reload();
 await editorReady(a);
 await a.waitForTimeout(1500);
@@ -1104,6 +1122,8 @@ await a.waitForFunction((x) => { for (const it of window.CollabEditor.kdoc.items
 check('the first click starts it and runs the command', (await frames(a)) === 1 && Math.abs((await fp(a, 'R2')).x - (before.x + 5)) < 1e-3);
 console.log(`      (cold start to finished edit: ${Date.now() - t1} ms)`);
 await idle(a, ID);
+const runsAfter = runsIn(await kept(a));
+check('and on the next visit the plugin finds them again', runsAfter.home === runsBefore.home + 1 && runsAfter.project === runsBefore.project + 1, JSON.stringify([runsBefore, runsAfter]));
 
 // ---- a viewer cannot change the board through a plugin
 await db.query(`UPDATE permissions SET role = 'viewer' WHERE project_id = $1 AND user_id = $2`, [projectId, lee]);

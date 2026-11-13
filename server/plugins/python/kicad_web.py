@@ -1064,6 +1064,7 @@ def boot(identifier, files, bridge=None, name=""):
                       title=lambda: os.path.splitext(os.path.basename(pcbnew._Host.board.GetFileName()))[0] if pcbnew._Host.board is not None else "")
     pkg = install_files(identifier, files)
     _plugin.update(identifier=identifier, package=pkg, name=name or identifier)
+    _restore_state()
     if PLUGIN_DIR not in sys.path:
         sys.path.insert(0, PLUGIN_DIR)
     os.chdir(PROJECT_DIR)
@@ -1271,6 +1272,8 @@ def load_board():
             except ValueError:
                 pass
     pcbnew._Host.project = project if isinstance(project, dict) else {}
+    if _state["project"] is None:
+        _restore_project_state(info.get("projectId") or info.get("project") or os.path.basename(path))
     board = pcbnew.BOARD(text, path)
     for uid in info.get("selection") or []:
         it = board.GetItem(uid)
@@ -1654,7 +1657,12 @@ _seen_files = {}
 
 
 def _export_outputs():
-    """Whatever the plugin wrote into the project folder is offered to the person as a download."""
+    """Whatever the plugin wrote into the project folder is offered to the person as a download; its settings are kept."""
+    _save_state()
+    return _hand_over_outputs()
+
+
+def _hand_over_outputs():
     global _seen_files
     now = _tree(PROJECT_DIR)
     board = pcbnew._Host.board
@@ -1681,6 +1689,128 @@ def _export_outputs():
     except Exception as e:
         print(f"Could not hand over {name}: {e}", file=sys.stderr)
     return fresh
+
+
+# ----------------------------------------------------------------------------- what a plugin keeps between runs
+#
+# On the desktop a plugin's settings file, its window positions and its hidden notes folder beside the board are still
+# there the next day.  This interpreter's file system is gone when the page closes, so those small files are kept in the
+# plugin's own storage in the editor (per person, per plugin) and put back when the plugin starts: the files it changed
+# in KiCad's settings folder, in the home folder and in its own folder, and its hidden files beside the board (those
+# per project).  Output files are not kept: they are handed over as downloads.
+
+_STATE_ONE, _STATE_ALL = 128 * 1024, 200 * 1024       # one file, and all files of one kind, as stored
+_state = {"shipped": None, "saved": {}, "project": None, "warned": False}
+
+
+def _state_roots():
+    return (("config", CONFIG_DIR), ("home", os.environ.get("HOME", ROOT + "/home")), ("plugin", PLUGIN_DIR))
+
+
+def _state_walk(root, hidden_only=False):
+    out = {}
+    for base, dirs, names in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if d != "__pycache__" and not os.path.islink(os.path.join(base, d))]
+        for n in names:
+            p = os.path.join(base, n)
+            rel = os.path.relpath(p, root).replace(os.sep, "/")
+            if n.endswith(".pyc") or os.path.islink(p) or (hidden_only and not any(part.startswith(".") for part in rel.split("/"))):
+                continue
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            out[rel] = (st.st_mtime_ns, st.st_size)
+    return out
+
+
+def _state_pack(root, rels):
+    """The files, newest and shallowest first, as far as the storage holds them."""
+    import zlib
+    files, used, dropped = {}, 0, []
+    for rel in rels:
+        try:
+            with open(os.path.join(root, rel), "rb") as fh:
+                data = fh.read(_STATE_ONE * 8 + 1)
+        except OSError:
+            continue
+        body = base64.b64encode(zlib.compress(data, 6)).decode("ascii") if len(data) <= _STATE_ONE * 8 else None
+        if body is None or len(body) > _STATE_ONE or used + len(body) > _STATE_ALL:
+            dropped.append(rel)
+            continue
+        files[rel] = body
+        used += len(body)
+    return files, dropped
+
+
+def _state_unpack(root, files):
+    import zlib
+    for rel, body in (files or {}).items():
+        rel = os.path.normpath(str(rel)).replace("\\", "/")
+        if rel.startswith("..") or rel.startswith("/"):
+            continue
+        try:
+            _write(os.path.join(root, rel), zlib.decompress(base64.b64decode(body)))
+        except Exception:
+            pass                        # a damaged entry is one setting lost, not a reason to stop the plugin
+
+
+def _restore_state():
+    """At start: note what the plugin ships with, then put back what it changed the last time."""
+    _state["shipped"] = {tag: _state_walk(root) for tag, root in _state_roots()}
+    if _bridge is None:
+        return
+    try:
+        kept = _call("storage.get", {"key": "py.state"}) or {}
+    except Exception:
+        return
+    for tag, root in _state_roots():
+        _state_unpack(root, (kept.get(tag) if isinstance(kept, dict) else None) or {})
+
+
+def _restore_project_state(project_id):
+    """When the board arrives: the plugin's hidden files beside it, kept for this project."""
+    _state["project"] = "py.project." + str(project_id or "")[:120]
+    if _bridge is None:
+        return
+    try:
+        kept = _call("storage.get", {"key": _state["project"]}) or {}
+    except Exception:
+        return
+    if isinstance(kept, dict):
+        _state_unpack(PROJECT_DIR, kept.get("files") or {})
+
+
+def _save_state():
+    """After the plugin worked: keep what it changed, if anything changed since the last time this ran."""
+    if _bridge is None or _state["shipped"] is None:
+        return
+    order = lambda sigs: sorted(sigs, key=lambda rel: (rel.count("/"), -sigs[rel][0], rel))
+    try:
+        now = {tag: _state_walk(root) for tag, root in _state_roots()}
+        changed = {tag: {rel: sig for rel, sig in now[tag].items() if _state["shipped"][tag].get(rel) != sig} for tag in now}
+        dropped = []
+        if changed != _state["saved"].get("own"):
+            kept = {}
+            for tag, root in _state_roots():
+                kept[tag], lost = _state_pack(root, order(changed[tag]))
+                dropped += lost
+            _call("storage.set", {"key": "py.state", "value": kept})
+            _state["saved"]["own"] = changed
+        if _state["project"]:
+            hidden = _state_walk(PROJECT_DIR, hidden_only=True)
+            if hidden != _state["saved"].get("project"):
+                files, lost = _state_pack(PROJECT_DIR, order(hidden))
+                dropped += lost
+                _call("storage.set", {"key": _state["project"], "value": {"files": files}})
+                _state["saved"]["project"] = hidden
+        if dropped and not _state["warned"]:
+            _state["warned"] = True
+            log.warning("These files of the plugin are too large to keep between runs: %s", ", ".join(dropped[:6]))
+    except Exception as e:
+        if not _state["warned"]:
+            _state["warned"] = True
+            log.warning("The plugin's settings could not be kept for the next run: %s", e)
 
 
 # ----------------------------------------------------------------------------- running an action

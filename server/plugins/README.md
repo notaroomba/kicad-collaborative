@@ -238,6 +238,11 @@ How it works:
   the editor's fabrication writers (`kicad.fab.*`), so a manufacturer's plugin produces the files
   File → Fabrication Outputs makes.  Files a plugin writes beside the board are handed to the
   person as a download (a zip when there are several).
+- **Settings a plugin keeps.** The interpreter's file system is gone when the page closes, so the small files a
+  plugin changes in KiCad's settings folder, in its home folder and in its own folder are kept in its storage
+  (per person, per plugin) and put back when it starts. Its hidden files beside the board (`.kinotes/` and the
+  like) are kept the same way, per project. One file may be 128 KB, all of a kind 200 KB as stored; what does not
+  fit is named in the plugin's log. Uninstalling the plugin clears them.
 - The project file and the schematics are beside the board, so net classes, design rules and
   plugins that read the schematic work.
 - The interpreter starts the first time one of the plugin's commands is used in a project

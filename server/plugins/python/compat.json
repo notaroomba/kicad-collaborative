@@ -74,8 +74,8 @@
   "note": "It opens, but the test run did not see it do its work (it said: \"WARNING: KICAD_3RD_PARTY is not defined in Environment Variables. Please add the entry manually: Preferences -> Configure Paths -> Environment Variables -> Add \"). Nobody has checked its result here yet."
  },
  "com.github.SteveMayze.pcb2fritzing": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Open Directory Failed: Unable to open directory: /project\"). Nobody has checked its result here yet."
+  "status": "works",
+  "note": "Give it an output folder name; the Fritzing part comes as a download. Its optional 3D picture is drawn by the editor's 3D viewer."
  },
  "com.github.TheJigsApp.kicad-parts-placer-pcm": {
   "status": "works"
@@ -327,8 +327,8 @@
   "note": "The package holds only a launcher for the vulcans-trials program, a compiled desktop application that is installed separately. Without it the plugin reports that it cannot find the program, on the desktop too."
  },
  "com.pcbtools.kinotes": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works",
+  "note": "Notes and tasks are kept per project in this browser, for you only; collaborators do not see them."
  },
  "com.stenchill.kicad": {
   "status": "partly",

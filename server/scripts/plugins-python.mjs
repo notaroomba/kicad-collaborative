@@ -23,6 +23,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -143,6 +144,11 @@ async function one(dir, boardPath, boardGiven) {
   // the project file and schematics beside the board, as the editor hands them over
   const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro)$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
   const calls = []; const said = []; let edited = false;
+  // "# again": the drive is run a second time in a fresh interpreter that has only the plugin's storage from the first
+  // run, as when the person comes back the next day (kc_run.RUN says which run it is).
+  const again = !!driveSrc && /^# again$/m.test(driveSrc);
+  if (again && !process.env.KC_AGAIN) { process.env.STATE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "kc-state-")), "state.json"); }
+  const store = process.env.STATE && fs.existsSync(process.env.STATE) ? JSON.parse(fs.readFileSync(process.env.STATE, "utf8")) : {};
   // "# sibling: <path from the repository root>": another file of the project, beside the board (a board to panelize, …)
   if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
@@ -159,6 +165,11 @@ async function one(dir, boardPath, boardGiven) {
     if (method === "ui.confirm") { said.push(`${a.title || ""}: ${String(a.message || "").slice(0, 300)}`); return "true"; }
     if (method === "ui.prompt") { const v = {}; for (const f of a.fields || []) v[f.name] = f.default ?? ""; return JSON.stringify(v); }
     if (method === "files.pick") return "null";
+    // A plugin's storage in the editor.  STATE=<json file> keeps it between runs of this script, as the browser does.
+    if (method === "storage.get") return JSON.stringify(store[a.key] ?? null);
+    if (method === "storage.set") { store[a.key] = a.value ?? null; if (process.env.STATE) fs.writeFileSync(process.env.STATE, JSON.stringify(store)); return "null"; }
+    if (method === "storage.remove") { delete store[a.key]; if (process.env.STATE) fs.writeFileSync(process.env.STATE, JSON.stringify(store)); return "null"; }
+    if (method === "storage.keys") return JSON.stringify(Object.keys(store));
     // the network: there is none here, except one made-up host that answers with what it was sent (the runtime's own tests use it)
     if (method === "net.fetch") {
       let host = ""; try { host = new URL(a.url).hostname; } catch { /* not an address */ }
@@ -183,7 +194,7 @@ async function one(dir, boardPath, boardGiven) {
     if (method === "project.saveVersion") return JSON.stringify({ saved: !!a.name, dialog: !a.name });
     return "null";
   };
-  if (driveSrc) { py.FS.mkdirTree("/kicad/drive"); py.FS.writeFile("/kicad/drive/kc_drive.py", driveSrc); py.FS.writeFile("/kicad/drive/drive_util.py", fs.readFileSync(path.join(here, "plugin-drives", "drive_util.py"))); }
+  if (driveSrc) { py.FS.mkdirTree("/kicad/drive"); py.FS.writeFile("/kicad/drive/kc_drive.py", driveSrc); py.FS.writeFile("/kicad/drive/kc_run.py", `RUN = ${process.env.KC_AGAIN ? 2 : 1}\n`); py.FS.writeFile("/kicad/drive/drive_util.py", fs.readFileSync(path.join(here, "plugin-drives", "drive_util.py"))); }
   py.globals.set("_kc_files", py.toPy(readPackage(dir)));
   // cairosvg.svg2png is drawn by the browser the plugin runs in; without one, a real browser is started for the picture.
   globalThis.__kcSvgPng = (svg, w, h, background, negate) => {
@@ -280,6 +291,16 @@ json.dumps(_kc_r, default=str)`)); if (d.error) out = { ok: false, error: "drive
   const after = JSON.parse(py.runPython("import json, kicad_web; json.dumps(kicad_web.describe()['missing'])"));
   result.missing = after; result.messages = py.runPython("import json, wx; json.dumps(wx._messages[-6:])");
   result.log = logs.slice(-40); result.said = said.slice(-12); result.net = calls.filter((c) => c.method === "net.fetch").length;
+  if (again && !process.env.KC_AGAIN && result.actions.every((x) => x.ok)) {
+    const r = spawnSync(process.execPath, process.argv.slice(1), { env: { ...process.env, KC_AGAIN: "1" }, encoding: "utf8", maxBuffer: 1 << 28, timeout: 600000 });
+    let second = null; try { second = JSON.parse(String(r.stdout || "").trim().split("\n").pop()); } catch { /* reported below */ }
+    result.actions.forEach((x, i) => {
+      const y = second && second.actions[i];
+      if (!y) { x.ok = false; x.error = "the second run did not finish: " + String(r.stderr || "").slice(-300); }
+      else if (!y.ok) { x.ok = false; x.error = "on the second run: " + y.error; }
+      else x.again = y.drive;
+    });
+  }
   return result;
 }
 

@@ -219,6 +219,10 @@ export function pythonRuntime(): void {
       case "ui.status": kicad.ui.status(a.text || "").catch(() => undefined); break;
       case "files.save": out = await kicad.files.save({ filename: a.filename, bytes: unb64(a.base64 || ""), mime: a.mime }); break;
       case "files.pick": { const f = await kicad.files.pick({ title: a.title, accept: a.accept, as: "bytes" }); out = f ? { name: f.name, base64: b64(new Uint8Array(f.bytes)) } : null; break; }
+      // the plugin's own settings files, kept between runs (kicad_web._save_state)
+      case "storage.get": out = await kicad.storage.get(String(a.key || "")); break;
+      case "storage.set": out = await kicad.storage.set(String(a.key || ""), a.value); break;
+      case "storage.remove": out = await kicad.storage.remove(String(a.key || "")); break;
       default: throw new Error("the Python runtime has no call named " + method);
     }
     return JSON.stringify(out === undefined ? null : out);

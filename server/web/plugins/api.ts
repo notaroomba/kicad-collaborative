@@ -106,7 +106,7 @@ export const reads: Record<string, (a: any) => Promise<unknown>> = {
       try { const r = await fetch(`/api/docs/${encodeURIComponent(d.docId)}/content`); if (!r.ok) continue; const text = await r.text(); if (text.length > budget) continue; budget -= text.length; files.push({ path: d.path, text }); } catch { /* the plugin runs without it */ }
     }
     let grid = 0; try { grid = Number(appState().viewport.gridPitch) || 0; } catch { /* the grid is a convenience for plugins that snap to it */ }
-    return { path: open.path, project: st.project ? st.project.name : "", text: out.join("\n"), selection: ids, version: "10.0.0", files, grid };
+    return { path: open.path, project: st.project ? st.project.name : "", projectId: (() => { const pr = appState().project; return pr && pr.projectId ? String(pr.projectId) : ""; })(), text: out.join("\n"), selection: ids, version: "10.0.0", files, grid };
   }),
   /** Items in full: unlike the assistant's get_items nothing is clipped, because a program reads this, not a model. */
   items: (a) => read(async () => {

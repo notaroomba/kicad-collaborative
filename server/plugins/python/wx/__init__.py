@@ -896,9 +896,11 @@ class Font:
         if isinstance(pointSize, Font):
             f = pointSize
             pointSize, family, style, weight, underline, faceName = f._size, f._family, f._wx_style, f._weight, f._underline, f._face
+            self._strike = f.__dict__.get("_strike", False)
         elif isinstance(getattr(pointSize, "_f", None), Font):          # wx.Font(wx.FontInfo(10).Family(…))
             f = pointSize._f
             pointSize, family, style, weight, underline, faceName = f._size, f._family, f._wx_style, f._weight, f._underline, f._face
+            self._strike = f.__dict__.get("_strike", False)
         elif not isinstance(pointSize, (int, float)):
             pointSize = 10
         self._size, self._family, self._wx_style, self._weight, self._underline, self._face = pointSize, family, style, weight, underline, kw.get("faceName", faceName)
@@ -928,6 +930,26 @@ class Font:
 
     def SetUnderlined(self, u):
         self._underline = bool(u)
+
+    def SetStrikethrough(self, on):
+        self._strike = bool(on)
+
+    GetStrikethrough = lambda self: bool(self.__dict__.get("_strike", False))
+
+    def Strikethrough(self):
+        f = Font(self)
+        f._strike = True
+        return f
+
+    MakeStrikethrough = lambda self: (setattr(self, "_strike", True), self)[1]
+    GetUnderlined = lambda self: bool(self._underline)
+
+    def Underlined(self):
+        f = Font(self)
+        f._underline = True
+        return f
+
+    MakeUnderlined = lambda self: (setattr(self, "_underline", True), self)[1]
 
     def SetFaceName(self, n):
         self._face = n
@@ -988,8 +1010,11 @@ class Font:
             el.style.fontFamily = "var(--mono)"
         if self._size and abs(self._size - 10) >= 1:
             el.style.fontSize = f"{max(8, min(28, self._size * 1.2)):.0f}px"
-        if self._underline:
-            el.style.textDecoration = "underline"
+        lines = " ".join(w for w, on in (("underline", self._underline), ("line-through", self.__dict__.get("_strike"))) if on)
+        if lines:
+            el.style.textDecoration = lines
+        elif el.style.textDecoration:
+            el.style.textDecoration = ""          # a font without lines takes them off again (a task unticked)
 
 
 NORMAL_FONT = Font(10)
@@ -1016,6 +1041,10 @@ class FontInfo:
 
     def FaceName(self, n):
         self._f.SetFaceName(n)
+        return self
+
+    def Strikethrough(self, on=True):
+        self._f._strike = bool(on)
         return self
 
     def Underlined(self, on=True):
