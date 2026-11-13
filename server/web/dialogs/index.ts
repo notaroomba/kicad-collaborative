@@ -9,7 +9,7 @@ import { openGlobalEdit } from "./global-edit";
 import { installSchItemDialogs } from "./sch-items";
 import { installSimModel } from "./sim-model";
 import { KD } from "./dom";
-import { openAnnotate, refreshOtherRefs } from "./annotate";
+import { openAnnotate, openIncrementAnnotations, refreshOtherRefs } from "./annotate";
 import { ercCrossProbe, ercExcludeMarker, ercNextMarker, ercPrevMarker, findNextMarker, openErc, selectMarker, type ErcViolation, withExclusions } from "./erc";
 import { syntaxHelp } from "../editor/syntax-help";
 import { openImportGraphics } from "../importgfx/dialog";
@@ -100,6 +100,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     // SCH_EDITOR_CONTROL::FindNetInInspector
     findNetInInspector: (() => { if (!E.kdoc || !isSch()) return; if (!findNetInNavigator(selectionIds())) toast("No connected net selected."); }) as Handler,
     annotate: needDoc(openAnnotate, true),
+    incrementAnnotations: needDoc(openIncrementAnnotations, true),
     // DIALOG_CHANGE_SYMBOLS: Edit > Change Symbols…, Tools > Update Symbols from Library…, the symbol context menu
     changeSymbols: needDoc(() => openChangeSymbols("change"), true), changeSymbol: needDoc(() => openChangeSymbols("change"), true),
     updateSymbols: needDoc(() => openChangeSymbols("update"), true), updateSymbol: needDoc(() => openChangeSymbols("update"), true),

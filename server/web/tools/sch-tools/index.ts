@@ -19,7 +19,7 @@ import type { NetHighlighter } from "./types";
 import { root } from "../root";
 import { actions, runAction } from "./actions";
 import { isLockedItem, isLockedNode, modifyLock, setLockedNode } from "./lock";
-import { annotate, annotateChanges, annotateMessages, clearAnnotation, clearAnnotationChanges, cycleBodyStyle, editFieldPrompt, libUnits, placeNextUnit, showDatasheet, splitRef, stepUnit, toggleSymbolFlag } from "./annotate";
+import { annotate, annotateChanges, annotateMessages, clearAnnotation, clearAnnotationChanges, cycleBodyStyle, incrementAnnotationChanges, editFieldPrompt, libUnits, placeNextUnit, showDatasheet, splitRef, stepUnit, toggleSymbolFlag } from "./annotate";
 import { autoplaceNode, autoplaceSelection, bodyBox, fieldExtent, globalPowerPin, symbolPins } from "./autoplace";
 import { dropCarry, placeCarry, placeText, singleClickPlace, startCarry } from "./carry";
 import { assignPastedRef, clipboardText, copyAsText, copySelection, cutSelection, duplicateSelection, parseClipboard, pasteChanges, pasteText, placeImported, setReference } from "./clipboard";
@@ -75,7 +75,7 @@ const sch = {
   // KiCad's non-tool commands: { id: { id, label, key, run(ctx, opts) -> handled } }; app.js binds menus and keys to them
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
-  clipboardText, parseClipboard, placeImported, ercCheck, ercHierarchy: (docs: { doc: KDoc; key: string }[]) => hierarchyTests(docs.map((d) => ({ doc: d.doc, key: d.key, nets: ercNets(d.doc).nets })), itemRef, pinItemRef), annotateChanges, annotateMessages, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
+  clipboardText, parseClipboard, placeImported, ercCheck, incrementAnnotationChanges, ercHierarchy: (docs: { doc: KDoc; key: string }[]) => hierarchyTests(docs.map((d) => ({ doc: d.doc, key: d.key, nets: ercNets(d.doc).nets })), itemRef, pinItemRef), annotateChanges, annotateMessages, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
   _: { setFollow(on: boolean) { S.forceFollow = !!on; }, isGroundName, stackedPinNotationValid, normalizeSimilar, letterSubReference, pinErrorAt, pinErrorSeverity, stackedPins, strNumCmp, isLockedNode, isLockedItem, setLockedNode, modifyLock, lineEndAt, lineEndDangling, selectThreshold, danglingLabelIds, dragJunctions, schArcDrawMode, pinAt, pinBox, pinAltFunction, pinOf, pinProperties, pinHelper, PIN_HELPERS, swapPinLabels, singleNetLabelForPin, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, incrementLabelNode, repeatLast, rememberPlaced,
     convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
     ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, autoPlaceSheetPinsNode, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,

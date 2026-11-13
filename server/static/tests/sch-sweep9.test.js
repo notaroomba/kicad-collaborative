@@ -270,5 +270,17 @@ test("repeat: a directive label steps its Netclass and Component Class fields (S
   assert.deepStrictEqual(flags.sort(), ["HS1", "HS2"]);
 });
 
+test("Increment Annotations From: references of the start's prefix numbered at least the start's move up", () => {
+  const { d, c } = fresh();
+  d.lib.set("T:R", K.parse(LIB("T:R", "R", PIN("passive", "~", "1", 0, 0))));
+  const refs = ["R1", "R5", "R7", "R12", "RV3", "C7"]; refs.forEach((r, i) => place(c, "T:R", [25.4 + i * 12.7, 25.4], r));
+  const ch = sch.incrementAnnotationChanges(d, "R5", 10);
+  assert.strictEqual(ch.length, 3);
+  for (const x of ch) assert.ok(K.applyChange(d, x, IU));
+  const now = Array.from(d.items.values()).filter((x) => x.kind === "symbol").map((x) => K.str(K.kids(x.node, "property").find((q) => K.str(q[1]) === "Reference")[2]));
+  assert.deepStrictEqual(now.sort(), ["C7", "R1", "R15", "R17", "R22", "RV3"]);
+  assert.strictEqual(sch.incrementAnnotationChanges(d, "R", 1).length, 0, "no number: nothing to split");
+});
+
 console.log(`sch-sweep9: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

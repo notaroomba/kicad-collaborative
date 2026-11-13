@@ -5,7 +5,7 @@
 // "Clear Annotation" resets them to "R?".  Recurse into subsheets takes in the sheets below the current one, Regroup
 // symbol units (with Reset) drops the locked unit sets, and the message panel lists AnnotateSymbols' report lines.  Other sheets are edited through their own documents, each step on
 // that sheet's undo list, as Find and Replace's Replace All does.
-import { E, appState, pushUndoFor, toolCtx } from "./editor";
+import { E, appState, pushUndoFor, toast, toolCtx } from "./editor";
 import { KD, checkbox, h, textInput, type DlgApi } from "./dom";
 import { obj, projectDocs, projectJson, readDoc, saveProject, sub, submitDocOp } from "./project";
 import { effectiveTheme } from "../theme";
@@ -25,6 +25,7 @@ interface SchAnnotate {
   annotateChanges(doc: KDoc, opts: AnnotateOpts): KChange[];
   annotateMessages(doc: KDoc, changes: KChange[], clear?: boolean): string[];
   clearAnnotationChanges(doc: KDoc, only?: Set<string> | null): KChange[];
+  incrementAnnotationChanges?(doc: KDoc, start: string, by: number): KChange[];
 }
 const sch = (): SchAnnotate | null => ((window as unknown as { CollabTools?: { sch?: SchAnnotate } }).CollabTools || {}).sch || null;
 
@@ -200,4 +201,44 @@ export function openAnnotate(): void {
       { label: "Annotate", primary: true, isDefault: true, fn: () => { void runAnnotate(); }, id: "kd-ann-run" },
     ],
   });
+}
+
+/**
+ * Tools > Increment Annotations From... (SCH_EDITOR_CONTROL::IncrementAnnotations, DIALOG_INCREMENT_ANNOTATIONS_BASE):
+ * a start reference, an increment (1 to 64) and Current sheet only / All sheets; OK moves every reference of that prefix
+ * numbered at least the start's up by the increment, as one "Increment Annotations" change per sheet.
+ */
+export function openIncrementAnnotations(): void {
+  let ref: HTMLInputElement | null = null, by: HTMLInputElement | null = null, all: HTMLInputElement | null = null;
+  KD().open({ title: "Increment Annotations From", width: 360,
+    build(body) {
+      ref = h("input", { type: "text", id: "kd-inc-ref", style: "width:100%", title: "The symbol name in library and also the default\nsymbol value when loaded in the schematic." }) as HTMLInputElement;
+      by = h("input", { type: "number", id: "kd-inc-by", min: "1", max: "64", step: "1", value: "1", style: "width:80px" }) as HTMLInputElement;
+      by.addEventListener("change", () => { const v = Math.round(+by!.value); by!.value = String(Math.max(1, Math.min(64, isFinite(v) ? v : 1))); });
+      const radio = (value: string, label: string, on: boolean): [HTMLInputElement, HTMLElement] => { const r = h("input", { type: "radio", name: "kd-inc-scope", value, checked: on, id: "kd-inc-" + value }) as HTMLInputElement; return [r, h("label", { class: "kd-chk", style: "display:flex;gap:6px;align-items:center;margin-top:6px" }, r, label)]; };
+      const [, cur] = radio("sheet", "Current sheet only", true), [a, allRow] = radio("all", "All sheets", false); all = a;
+      body.append(h("div", { style: "display:grid;grid-template-columns:max-content 1fr;gap:6px 10px;align-items:center" },
+        h("label", { for: "kd-inc-ref" }, "Start reference designator:"), ref, h("label", { for: "kd-inc-by" }, "Increment by:"), by), cur, allRow);
+      setTimeout(() => ref && ref.focus(), 0);
+    },
+    ok() {
+      const start = ref ? ref.value : "", step = by ? Math.max(1, Math.min(64, Math.round(+by.value) || 1)) : 1;
+      if (!start) { toast("A start reference designator is required."); return false; }
+      void runIncrement(start, step, !!(all && all.checked));
+    } });
+}
+async function runIncrement(start: string, by: number, allSheets: boolean): Promise<void> {
+  const S = sch(); if (!S || !S.incrementAnnotationChanges || !E.kdoc || E.viewOnly) return;
+  const here = S.incrementAnnotationChanges(E.kdoc, start, by);
+  if (here.length) toolCtx().commit(here, "Increment Annotations");
+  if (allSheets) {
+    for (const o of await otherSheets()) {
+      const ch = S.incrementAnnotationChanges(o.doc, start, by); if (!ch.length) continue;
+      const inverse = inverseOf(o.doc, ch);
+      try { await submitDocOp(o.docId, ch); } catch (e) { toast(`Could not update ${o.path}: ${(e as Error).message}`); continue; }
+      pushUndoFor(o.docId, { label: "Increment Annotations", changes: ch, inverse });
+      for (const c of ch) KiCadCanvas.applyChange(o.doc, c, 1e4);
+    }
+  }
+  void refreshOtherRefs();
 }

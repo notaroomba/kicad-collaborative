@@ -85,6 +85,23 @@ const unitLetter = (unit: number): string => { let n = unit, s = ""; while (n > 
  * "Annotated %s as %s." / "Updated %s from %s to %s." (with " (unit %s)" for a multi-unit symbol) and
  * "Cleared annotation for %s." — the symbol named by its value.
  */
+/**
+ * SCH_EDITOR_CONTROL::IncrementAnnotations on one sheet: every symbol (power symbols too, SYMBOL_FILTER_ALL) whose
+ * reference has the start reference's prefix and a number at least the start's moves up by `by`.  A start reference
+ * without a number (SCH_REFERENCE::IsSplitNeeded false) changes nothing.
+ */
+export function incrementAnnotationChanges(doc: KDoc, start: string, by: number): KChange[] {
+  const m = str(start).match(/^(.*?)(\d+)$/); if (!m) return [];
+  const prefix = m[1], from = parseInt(m[2], 10), changes: KChange[] = [];
+  for (const it of doc.items.values()) {
+    if (it.kind !== "symbol") continue;
+    const rf = refField(it.node); if (!rf) continue;
+    const r = str(rf[2]).match(/^(.*?)(\d+)$/); if (!r || r[1] !== prefix) continue;
+    const num = parseInt(r[2], 10); if (num < from) continue;
+    const node = deep(it.node); setReference(node, prefix + String(num + by)); changes.push(modChange(doc, it, node));
+  }
+  return changes;
+}
 export function annotateMessages(doc: KDoc, changes: KChange[], clear = false): string[] {
   const out: string[] = [];
   for (const c of changes) {
