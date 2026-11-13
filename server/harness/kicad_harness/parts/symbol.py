@@ -157,7 +157,8 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
         n = len(sides[side])
         x0 = -math.floor((n - 1) / 2) * g
         for i, stack in enumerate(sides[side]):
-            emit(stack, x0 + i * g, y, angle)
+            if stack:           # None: a free column between groups of pins
+                emit(stack, x0 + i * g, y, angle)
     props = [("Reference", reference, f"(at {_n(-half_w)} {_n(half_h + 1.27)} 0)", '(effects (font (size 1.27 1.27)) (justify left bottom))'),
              ("Value", name, f"(at {_n(half_w)} {_n(half_h + 1.27)} 0)", '(effects (font (size 1.27 1.27)) (justify right bottom))'),
              ("Footprint", footprint, "(at 0 0 0)", '(effects (font (size 1.27 1.27)) (hide yes))'),
