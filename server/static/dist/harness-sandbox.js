@@ -1747,6 +1747,36 @@ class Board(_Doc):
             e["width"] = width
         self._edit(e)
 
+    def fence(self, net: str, path, spacing: float = 1.5, keep: float = 1.0, gaps=()) -> dict:
+        """A row of stitching vias on \`net\` (ground) along a path of points [(x, y), ...], one every \`spacing\` mm: the via
+        fence beside an RF feed, around an antenna's keep-out or between two areas of a board.  A position closer than
+        \`keep\` mm to a pad of another net, or closer than 0.9 mm to a via that is there, is left out, and so is anything
+        inside a box in \`gaps\` ([x0, y0, x1, y1], for the corridor a feed line crosses).  Place it before \`route()\`, which
+        then goes round the vias.  Returns {"placed": n, "skipped": n, "at": [...]}."""
+        self.flush()
+        self._geom = None
+        g = self.geometry()
+        want = self._net(net)
+        pads = [(q[1], q[2]) for part in g["parts"] for q in part["pads"] if q[3] != want]
+        there = self.__dict__.setdefault("_fenced", [])      # the vias earlier fences of this script put down
+        placed, skipped = [], 0
+        pts = [tuple(p) for p in path]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            length = math.hypot(x1 - x0, y1 - y0)
+            n = max(1, int(round(length / spacing)))
+            for i in range(n + 1):
+                x, y = _r(x0 + (x1 - x0) * i / n), _r(y0 + (y1 - y0) * i / n)
+                if any(b[0] <= x <= b[2] and b[1] <= y <= b[3] for b in gaps) or \\
+                        any(math.hypot(x - px, y - py) < keep for px, py in pads) or \\
+                        any(math.hypot(x - vx, y - vy) < 0.9 for vx, vy in there + placed):
+                    skipped += 1
+                    continue
+                self.via(net, (x, y))
+                placed.append((x, y))
+        there += placed
+        self.flush()
+        return {"placed": len(placed), "skipped": skipped, "at": placed}
+
     def via(self, net: str, at, size: float | None = None, drill: float | None = None) -> None:
         e = {"op": "add_via", "net": net, "x": _r(at[0]), "y": _r(at[1])}
         if size:
