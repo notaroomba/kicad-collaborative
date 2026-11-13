@@ -124,9 +124,16 @@ placed = board.autoplace(fixed=fixed, outline=(X0, Y0, X0 + W, Y0 + H))
 print("placed", placed["score"])
 board.zone("GND", layer="B.Cu")
 board.via("GND", (X0 + 13, Y0 + 31))                                       # the RP2040's exposed pad is its only ground
-critical = [n for n in board.nets() if any(k in n for k in ("USB_D", "XIN", "XOUT", "QSPI"))]
+# The crystal first, in a call of its own: its three short nets are then copper the rest of the board routes around,
+# instead of connections a later pass may take up again to make room for something else.
+crystal = [n for n in board.nets() if any(k in n for k in ("XIN", "XOUT", "XTAL"))]
+print("crystal", {k: v for k, v in board.route(nets=crystal, fill=False, time_s=20).items() if k in ("routed", "connections", "left")})
+critical = [n for n in board.nets() if any(k in n for k in ("USB_D", "QSPI"))]
 print("routed", board.route(order=critical, widths={"VBUS": 0.4}, time_s=120))
+print("cleanup", board.cleanup())
+print("silkscreen", {k: v for k, v in board.silkscreen(rev="V1").items() if k != "pin_labels_skipped"})
 print("drc", board.check())
+print("score", board.score())
 if len(sys.argv) > 2:
     sch.svg(sys.argv[2])
 print("board", board.info())

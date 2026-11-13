@@ -64744,6 +64744,34 @@ function build(input) {
           lines.push({ kind: "modify", text: `Move the fields of ${ids.length} symbol${ids.length === 1 ? "" : "s"} clear of what they were drawn over`, ids });
           break;
         }
+        case "cleanup": {
+          pcbOnly(e.op);
+          const P = PCB5();
+          if (!P.cleanupPlan) throw new ToolError("the track clean-up is not loaded in this editor");
+          const plan = P.cleanupPlan(doc, { shorts: e.shorts === true, vias: e.vias !== false, merge: e.merge !== false, dangling: e.dangling === true, danglingVias: e.dangling === true, inPads: e.in_pads === true });
+          const ids = [];
+          const by = {};
+          for (const { item, node } of plan.replace) {
+            if (touched.has(item.id) || plan.remove.has(item.id)) continue;
+            touch(item, e.op);
+            changes.push(modified(doc, item, node));
+            ids.push(item.id);
+          }
+          let gone = 0;
+          for (const id of plan.remove) {
+            const it = doc.items.get(id);
+            if (!it || touched.has(id)) continue;
+            touch(it, e.op);
+            changes.push(removed(doc, it));
+            ids.push(id);
+            gone++;
+          }
+          for (const it of plan.items) by[it.code] = (by[it.code] || 0) + 1;
+          if (!ids.length) throw new ToolError("the tracks and vias are clean already: nothing to merge or remove");
+          lines.push({ kind: "modify", text: `Clean up tracks and vias: ${gone} removed, ${plan.replace.length} merged or shortened`, ids });
+          details.push({ cleanup: { removed: gone, changed: plan.replace.length, by_kind: by } });
+          break;
+        }
         case "silkscreen": {
           pcbOnly(e.op);
           const plan = planSilk(doc, {

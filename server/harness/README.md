@@ -73,7 +73,10 @@ by the name `build` was given (kept in a hidden "Net names" field of one of its 
 gives a library part's pins as {number: name}. `board.silkscreen(rev="V1")` is the
 last pass of a layout: every reference beside its own part and on nothing (made smaller, turned or moved where it
 does not fit, hidden only as a last resort), each connector pin's net name beside it, and the board's name, version
-and date in free room; `board.rules(min_text_height=0.6)` first lets it print smaller on a crowded board. On the site, `run_python` keeps scripts with the project: `script:
+and date in free room; `board.rules(min_text_height=0.6)` first lets it print smaller on a crowded board. `board.cleanup()` is KiCad's Cleanup Tracks & Vias
+(segments in one line merged, doubled tracks and vias removed); `board.score()` rates the layout from 0 to 100 with
+its parts and a `worst` list that names the call fixing each; `with sch.unchanged():` / `with board.unchanged():`
+guards a change of looks and raises, saying what differs, if the circuit is not what it was. On the site, `run_python` keeps scripts with the project: `script:
 "name"` with `code` stores one, the name alone runs it again, `edits: [{old, new}]` changes it.
 
 3D models: a footprint from KiCad's library or from a vendor names its model, and the web 3D view loads it by

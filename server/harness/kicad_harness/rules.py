@@ -366,6 +366,165 @@ def _silkscreen(self, name: str | bool | None = None, rev: str | None = None, da
     return out
 
 
+def _cleanup(self, merge: bool = True, vias: bool = True, in_pads: bool = False, dangling: bool = False, shorts: bool = False) -> dict:
+    """Tidy the copper after routing, as KiCad's Cleanup Tracks & Vias does: segments in one line or lying on each
+    other become one and a via on top of another goes.  `in_pads=True` also removes tracks wholly inside a pad (the
+    router's short runs to the pad centre, which are kept by default), `dangling=True` track ends and vias that
+    lead nowhere, `shorts=True` tracks that short two nets.  A connection the clean-up
+    opened (it should open none) is routed again.  Returns {"removed", "changed", "by_kind", "reopened"}."""
+    self.flush()
+    before = self.unrouted()
+    self._edit({"op": "cleanup", "merge": merge, "vias": vias, "in_pads": in_pads, "dangling": dangling, "shorts": shorts})
+    try:
+        res = self.flush() or {}
+    except HarnessError as e:
+        if "clean already" in str(e):
+            return {"removed": 0, "changed": 0, "by_kind": {}, "reopened": {}}
+        raise
+    out = dict(next((x["cleanup"] for x in res.get("details") or [] if "cleanup" in x), {}))
+    after = self.unrouted()
+    opened = {n: c - before.get(n, 0) for n, c in after.items() if c > before.get(n, 0)}
+    if opened:
+        self.route(nets=list(opened), time_s=20)
+        left = self.unrouted()
+        opened = {n: left.get(n, 0) - before.get(n, 0) for n in opened if left.get(n, 0) > before.get(n, 0)}
+    out["reopened"] = opened
+    return out
+
+
+_SUPPLY = re.compile(r"^/?(\+?\d+V\d*|\+?\d*V?\d+V\d*|VCC\w*|VDD\w*|VBUS\w*|VBAT\w*|VIN\w*|VSYS\w*|AVDD\w*|DVDD\w*|IOVDD\w*|\+\d.*)$", re.I)
+_GROUND = re.compile(r"^/?(A|D|P)?(GND|VSS)\w*$", re.I)
+
+
+def _ramp(v: float, good: float, bad: float) -> int:
+    """100 at `good` or better, 0 at `bad` or worse, a straight line between."""
+    if good == bad:
+        return 100 if v == good else 0
+    t = (v - bad) / (good - bad)
+    return int(round(100 * min(1.0, max(0.0, t))))
+
+
+def _tree_length(pts: list) -> float:
+    """The shortest set of straight lines that joins the points (a minimum spanning tree): what a net needs at least."""
+    if len(pts) < 2:
+        return 0.0
+    left, best, total = list(range(1, len(pts))), {i: math.hypot(pts[i][0] - pts[0][0], pts[i][1] - pts[0][1]) for i in range(1, len(pts))}, 0.0
+    while left:
+        i = min(left, key=lambda k: best[k])
+        total += best[i]
+        left.remove(i)
+        for k in left:
+            best[k] = min(best[k], math.hypot(pts[k][0] - pts[i][0], pts[k][1] - pts[i][1]))
+    return total
+
+
+def _score(self) -> dict:
+    """How good the layout is, as one number from 0 to 100 with the reasons: a quick way to compare two placements
+    or to see what to fix next without looking at a picture.
+
+    Parts of the score (each 0 to 100): `space` (courtyards fill 30 to 65 percent of the board), `connectors`
+    (connectors sit at a board edge), `rotation` (parts stand at 0, 90, 180 or 270 degrees), `decoupling` (each small
+    capacitor on a supply is within 3 mm of a pin it serves; 8 mm scores nothing), `tracks` (routed length against the
+    least each net needs), `vias` (vias per routed net), `silkscreen` (no silkscreen warning in the rules check).
+    Gates: an open connection, a rules error or a part off the board caps the score at 49.
+    Returns {"score", "parts": {...}, "gates": [...], "worst": ["what is poor and the call that fixes it", ...]}."""
+    self.flush()
+    g = self.geometry()
+    o = g.get("outline")
+    parts = [p for p in g["parts"] if not re.match(r"(FID|REF\*\*|#|G|LOGO|H|MH)\d*", p["ref"])]
+    nets = self.nets()
+    chk = self.check(warnings=True)
+    info = self.info()
+    sub, worst, gates = {}, [], []
+    pad_at = {f"{p['ref']}.{q[0]}": (q[1], q[2]) for p in g["parts"] for q in p.get("pads", [])}
+    pad_net = {f"{p['ref']}.{q[0]}": q[3] for p in g["parts"] for q in p.get("pads", [])}
+    # ---- gates
+    left = sum(v["unrouted"] for v in nets.values())
+    if left:
+        gates.append(f"{left} connection{'s' if left > 1 else ''} not routed: board.route(), then board.unrouted()")
+    if chk["errors"]:
+        gates.append(f"{chk['errors']} rules error{'s' if chk['errors'] > 1 else ''}: board.check() lists them")
+    if o:
+        out = [p["ref"] for p in parts if (p.get("courtyard") or p.get("box")) and not (o[0] - 0.05 <= p["x"] <= o[2] + 0.05 and o[1] - 0.05 <= p["y"] <= o[3] + 0.05)]
+        if out:
+            gates.append(f"off the board: {', '.join(out[:8])}: board.place(ref, (x, y)) or board.autoplace()")
+    # ---- space
+    if o and parts:
+        area = max(1e-6, (o[2] - o[0]) * (o[3] - o[1]))
+        used = sum((b[2] - b[0]) * (b[3] - b[1]) for b in (p.get("courtyard") or p.get("box") for p in parts) if b) / area
+        sub["space"] = _ramp(used, 0.30, 0.08) if used < 0.30 else _ramp(used, 0.65, 0.90)
+        if sub["space"] < 70:
+            worst.append((sub["space"], f"space: the parts cover {round(used * 100)}% of the board ({'make the outline smaller: board.outline(...)' if used < 0.30 else 'the board is crowded: a larger outline or parts on the back'})"))
+    # ---- connectors at an edge
+    conns = [p for p in parts if re.match(r"(J|P|CN|USB|X)\d", p["ref"]) and (p.get("courtyard") or p.get("box"))]
+    if o and conns:
+        far = []
+        for p in conns:
+            b = p.get("courtyard") or p["box"]
+            d = min(b[0] - o[0], o[2] - b[2], b[1] - o[1], o[3] - b[3])
+            if d > 1.5:
+                far.append((d, p["ref"]))
+        sub["connectors"] = int(round(100 * (1 - len(far) / len(conns))))
+        if far:
+            worst.append((sub["connectors"], "connectors: " + ", ".join(f"{r} is {round(d, 1)} mm from the nearest edge" for d, r in sorted(far, reverse=True)[:5]) + ": put connectors at an edge (board.autoplace(edge={ref: side}) or board.place)"))
+    # ---- rotation
+    if parts:
+        odd = [p["ref"] for p in parts if abs((p.get("rotation") or 0) % 90) > 0.01]
+        sub["rotation"] = int(round(100 * (1 - len(odd) / len(parts))))
+        if odd:
+            worst.append((sub["rotation"], f"rotation: {', '.join(odd[:8])} {'stand' if len(odd) > 1 else 'stands'} at an odd angle: board.place(ref, (x, y), rotation=0 or 90)"))
+    # ---- decoupling
+    caps, poor = [], []
+    for p in parts:
+        if not re.match(r"C\d", p["ref"]) or len(p.get("pads", [])) != 2:
+            continue
+        a, b = p["pads"]
+        sup = a if _SUPPLY.match(a[3] or "") and _GROUND.match(b[3] or "") else b if _SUPPLY.match(b[3] or "") and _GROUND.match(a[3] or "") else None
+        if sup is None:
+            continue
+        ics = [(math.hypot(q[1] - sup[1], q[2] - sup[2]), f"{ip['ref']}.{q[0]}") for ip in parts if re.match(r"(U|IC)\d", ip["ref"]) for q in ip.get("pads", []) if q[3] == sup[3]]
+        if not ics:
+            continue
+        d, pin = min(ics)
+        caps.append(_ramp(d, 3.0, 8.0))
+        if d > 3.0:
+            poor.append((d, f"{p['ref']} is {round(d, 1)} mm from {pin}"))
+    if caps:
+        sub["decoupling"] = int(round(sum(caps) / len(caps)))
+        if poor:
+            worst.append((sub["decoupling"], "decoupling: " + ", ".join(t for _, t in sorted(poor, reverse=True)[:5]) + ": move each capacitor to within 3 mm of the supply pin it serves (board.place)"))
+    # ---- tracks and vias
+    ratios, long = [], []
+    for n, v in nets.items():
+        pts = [pad_at[x] for x in v["pads"] if x in pad_at]
+        need = _tree_length(pts)
+        if v["unrouted"] or need < 1.0 or v["length_mm"] < need * 0.7:      # not routed, trivial, or carried by a pour
+            continue
+        r = v["length_mm"] / need
+        ratios.append(r)
+        if r > 1.8:
+            long.append((r, f"{n} is {round(v['length_mm'], 1)} mm for {round(need, 1)} mm needed"))
+    if ratios:
+        sub["tracks"] = _ramp(sum(ratios) / len(ratios), 1.25, 2.5)
+        if long:
+            worst.append((sub["tracks"], "tracks: " + ", ".join(t for _, t in sorted(long, reverse=True)[:5]) + ": move the parts of these nets closer, or route them first (board.route(order=[...]))"))
+        per = (info.get("vias") or 0) / len(ratios)
+        sub["vias"] = _ramp(per, 0.6, 3.0)
+        if sub["vias"] < 70:
+            worst.append((sub["vias"], f"vias: {info.get('vias')} vias for {len(ratios)} routed nets: board.route(max_vias=2), or place parts so nets need not change sides"))
+    # ---- silkscreen
+    silk = sum(c for k, c in (chk.get("warnings_by_kind") or {}).items() if k.startswith("silk") or k.startswith("text"))
+    sub["silkscreen"] = _ramp(silk, 0, 20)
+    if silk:
+        worst.append((sub["silkscreen"], f"silkscreen: {silk} silkscreen warning{'s' if silk > 1 else ''} in the rules check: board.silkscreen() clears every reference; what is left after it is a part's own outline at the board edge or over a pad"))
+    weights = {"space": 1, "connectors": 1, "rotation": 1, "decoupling": 2, "tracks": 2, "vias": 1, "silkscreen": 1}
+    total = sum(sub[k] * w for k, w in weights.items() if k in sub) / max(1, sum(w for k, w in weights.items() if k in sub))
+    score = int(round(total))
+    if gates:
+        score = min(score, 49)
+    return {"score": score, "parts": sub, "gates": gates, "worst": [t for _, t in sorted(worst)]}
+
+
 def _stitch(self, spacing: float = 10.0, net: str = "GND", margin: float = 1.5, size: float | None = None, drill: float | None = None) -> dict:
     """Tie the ground planes together with a grid of vias, about every `spacing` mm, wherever one fits: clear of
     parts, and taken back out wherever the rules check says it is too close to other copper.  Call it after routing,
@@ -490,3 +649,5 @@ def install(Project, Schematic, Board) -> None:
     Board.stitch = _stitch
     Board.fence = _fence
     Board.silkscreen = _silkscreen
+    Board.cleanup = _cleanup
+    Board.score = _score

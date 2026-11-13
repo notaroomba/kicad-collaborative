@@ -7,6 +7,7 @@ went wrong, never file contents.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import random
 import re
@@ -231,6 +232,46 @@ class _Doc:
         if self._geom is None:
             self._geom = self._call("get_geometry")
         return self._geom
+
+    @contextlib.contextmanager
+    def unchanged(self):
+        """A guard around a change of looks: `with sch.unchanged(): ...` (moving parts, redrawing wires, tidying) or
+        `with board.unchanged(): ...` (clean-up, silkscreen, moving tracks).  When the block ends, the circuit must be
+        what it was: on a sheet every net joins the same pins under the same name (nets KiCad names after a pin may
+        be renamed) and the ERC has no more errors; on a board every pad is on the same net, no connection that was
+        made is open, and the DRC has no more errors.  Anything else raises HarnessError saying exactly what
+        differs, which ends a run before its changes are kept."""
+        self.flush()
+        board = hasattr(self, "unrouted")
+        auto = lambda n: n.startswith("Net-(") or n.startswith("unconnected-(")
+        def state():
+            nets = self.nets()
+            pins = {n: sorted(v["pads"] if board else v) for n, v in nets.items()}
+            return pins, ({n: v["unrouted"] for n, v in nets.items() if v["unrouted"]} if board else {}), self.check()["errors"]
+        pins0, open0, err0 = state()
+        yield self
+        self.flush()
+        pins1, open1, err1 = state()
+        diffs = []
+        groups0 = {frozenset(v): n for n, v in pins0.items()}
+        groups1 = {frozenset(v): n for n, v in pins1.items()}
+        for g, n in groups0.items():
+            if g not in groups1:
+                now = sorted({m for m, v in pins1.items() if set(v) & g})
+                diffs.append(f"net {n} ({', '.join(sorted(g)[:6])}{'...' if len(g) > 6 else ''}) is now {'split or joined into ' + ', '.join(now) if now else 'gone'}")
+            elif groups1[g] != n and not (auto(n) and auto(groups1[g])):
+                diffs.append(f"net {n} is now called {groups1[g]}")
+        for g, n in groups1.items():
+            if g not in groups0 and not any(set(v) & g for v in pins0.values()):
+                diffs.append(f"net {n} ({', '.join(sorted(g)[:6])}) is new")
+        for n, c in open1.items():
+            if c > open0.get(n, 0):
+                diffs.append(f"net {n} has {c - open0.get(n, 0)} connection{'s' if c - open0.get(n, 0) > 1 else ''} open that {'were' if c - open0.get(n, 0) > 1 else 'was'} made before")
+        if err1 > err0:
+            first = self.check(limit=3)["first"]
+            diffs.append(f"the rules check has {err1 - err0} more error{'s' if err1 - err0 > 1 else ''} ({'; '.join(first)})")
+        if diffs:
+            raise HarnessError("The circuit changed inside a block that must leave it as it was: " + "; ".join(diffs[:8]) + (f"; and {len(diffs) - 8} more" if len(diffs) > 8 else "") + ".")
 
     def check(self, limit: int = 6, kind: str | None = None, warnings: bool = False) -> dict:
         """Run the rules check (ERC on a sheet, DRC on the board): counts by kind and the first few violations, errors first.

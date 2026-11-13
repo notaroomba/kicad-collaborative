@@ -261,6 +261,39 @@ class Blinker(unittest.TestCase):
         self.assertTrue(small.get("resized"), small)
         self.assertEqual(silk(), {})
 
+    def test_a_guarded_block_passes_when_only_looks_change_and_says_what_changed_when_the_circuit_does(self):
+        sch, built = self._sheet()
+        with sch.unchanged():                                        # looks only: the page and where the drawing sits on it
+            sch.fit_page()
+            sch.tidy()
+        with self.assertRaises(kh.HarnessError) as bad:
+            with sch.unchanged():
+                sch.net("OUT", "R3.1")                               # joins LED_K to OUT: R3 now bypasses the LED
+        self.assertIn("OUT", str(bad.exception))
+        board = self.project.board()
+        board.outline(100, 100, 130, 124)
+        board.sync()
+        board.autoplace(outline=(100, 100, 130, 124))
+        board.route(time_s=15)
+        with board.unchanged():
+            tidy = board.cleanup()
+            board.silkscreen(name=False)
+        self.assertEqual(tidy["reopened"], {})
+        self.assertEqual(board.cleanup()["removed"], 0)              # clean already: a result, not an error
+        score = board.score()                                        # a routed, clean board is not capped; each part of the score is 0 to 100
+        self.assertEqual(score["gates"], [])
+        self.assertGreater(score["score"], 49)
+        self.assertTrue(all(0 <= v <= 100 for v in score["parts"].values()), score)
+        self.assertTrue({"space", "rotation", "tracks", "silkscreen"} <= set(score["parts"]), score)
+        track = next(it for it in board._call("get_items", kinds=["segment"])["items"])
+        with self.assertRaises(kh.HarnessError) as cut:
+            with board.unchanged():
+                board._edit({"op": "remove", "id": track["id"]})
+        self.assertIn("open", str(cut.exception))
+        capped = board.score()                                       # an open connection caps the score and says how to fix it
+        self.assertLessEqual(capped["score"], 49)
+        self.assertIn("board.route()", capped["gates"][0])
+
     def test_fit_page_picks_the_smallest_paper_and_moves_the_drawing_onto_it(self):
         sch, built = self._sheet()
         nets = sch.nets()
