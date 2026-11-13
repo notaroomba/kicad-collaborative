@@ -254,12 +254,11 @@ export async function openEditor(id: string) {
     if (entry) { await openDoc(entry); return; }
   }
   const wanted = new URLSearchParams(location.search).get("doc");
-  // Open what has something to show: a rendered board first, else the root
-  // schematic (a schematic-only project has an empty placeholder board).
+  // A project opens on its root schematic, where a design starts and where KiCad's own project
+  // manager leads first; the board is one click away (and ?doc= still opens exactly what a link names).
+  // Only a project with no schematic at all opens on the board.
   const doc = state.docs!.find((d) => d.docId === wanted)
-    || state.docs!.find((d) => d.docType === "kicad_pcb" && d.hasPreview)
-    || (rootSchematic() && rootSchematic()!.hasPreview ? rootSchematic() : null)
-    || state.docs!.find((d) => d.docType === "kicad_pcb") || rootSchematic() || null;
+    || rootSchematic() || state.docs!.find((d) => d.docType === "kicad_pcb") || null;
   if (!doc) {
     base.replaceChildren(); setDocNotice("This project has no board or schematic yet. Open it in the desktop app.");
     setConn("err", "nothing to show"); return;
