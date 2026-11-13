@@ -42,6 +42,9 @@ export function noteModifiers(ev: { shiftKey: boolean; ctrlKey: boolean; metaKey
 }
 
 /** SELECTION_TOOL::setModifiersState → ADD / SUBTRACT / XOR (null without a modifier). */
+/** The modifier state as the cursor logic last saw it. */
+export function heldModifiers(): { shift: boolean; ctrl: boolean; alt: boolean } { return { shift: mods.shift, ctrl: mods.ctrl, alt: mods.alt }; }
+
 export function modifierCursor(shift: boolean, ctrl: boolean): string | null {
   return ctrl && shift ? "SUBTRACT" : shift ? "ADD" : ctrl ? "XOR" : null;
 }
@@ -67,7 +70,7 @@ export function currentCursor(): string {
     const mc = modifierCursor(mods.shift, mods.ctrl); if (mc) return mc;
     const st = m && m.state;
     if (st && st.autoCursor) return st.autoCursor;
-    if (st && st.hyperHover) return "HAND";
+    if ((st && st.hyperHover) || E.hyperHover) return "HAND";   // SCH_ITEM::HasHoveredHypertext (editor/hypertext.ts)
     if (stage.classList.contains("over-sel")) return "MOVING";
     if (E.selMode === "lasso") return "SELECT_LASSO";
     return "ARROW";

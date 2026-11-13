@@ -332,6 +332,8 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
   const subHl = (it: { id: string }, g: Geom) => hl!.has(isPcb ? it.id + "#" + g.padIndex : g.pinNo !== undefined ? it.id + "#pin:" + g.pinNo : g.field ? it.id + "#field:" + g.field : "");
   const selPcb = isPcb && opts.selected && opts.selected.size ? opts.selected : null;   // board selection: repainted, not haloed
   const selGeoms = selPcb ? new Set<Geom>() : null;
+  const rollId = !isPcb && opts.rollover ? opts.rollover : null;
+  const rollGeoms = rollId ? new Set<Geom>() : null;
   let selPadFps: Set<string> | null = null;   // a pad selected on its own ("footprintId#padIndex"): only that pad is repainted
   if (selPcb) for (const k of selPcb) { const i = typeof k === "string" ? k.indexOf("#") : -1; if (i > 0) (selPadFps || (selPadFps = new Set())).add(k.slice(0, i)); }
   const hlColor = (c: string) => highlightColor(c, isPcb);
@@ -557,6 +559,7 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
       if (isSel || (padSel && (g.padIndex !== undefined ? selPcb!.has(padSel + g.padIndex) : g.field !== undefined && g.t === "text" && selPcb!.has(padSel + "field:" + g.field)))) selGeoms!.add(g);
       if (brightIds && brightIds.has(it.id)) brightGeoms!.add(g);
       if (outsideGeoms && !isSel && !entered!.has(it.id)) outsideGeoms.add(g);
+      if (rollId === it.id && g.t === "text") rollGeoms!.add(g);
       if (netNames && g.net! > 0) {
         if (g.track && !sketchTracks) bucket(NAME_BUCKETS, pcbZ(g.layer) + 3.5 + topOf(g.layer)).push(g);
         else if (g.viaLabel) bucket(NAME_BUCKETS, zViaName).push(g);
@@ -638,7 +641,14 @@ export function render(doc: Doc, ctx: Ctx2D, view: View, opts?: RenderOpts | nul
     }
     setAlpha(alpha);
     const t = g.t;
-    if (t === "text") { drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG); curStroke = curFill = null; curWidth = -1; curCap = "round"; return; }
+    if (t === "text") {
+      // SCH_PAINTER: a rolled-over text with a link definition is drawn whole in LAYER_HOVERED, underlined
+      const roll = rollGeoms !== null && rollGeoms.has(g);
+      if (roll) color = SCH.hovered;
+      drawText(ctx, g, s, doc.type, minW, color, base, flip, bg || PCB_BG);
+      if (roll) drawUnderline(ctx, g, color!, minW, base);
+      curStroke = curFill = null; curWidth = -1; curCap = "round"; return;
+    }
     if (t === "image") {
       const e = g.entry;
       // PCB_PAINTER: translate to the centre, rotate by -orientation, the opacity as the alpha
@@ -1507,6 +1517,26 @@ export function drawTextStroke(ctx: Ctx2D, g: DrawTextG, minW: number, color: st
     return;
   }
   drawStrokeText(ctx, base, spec, color, minW);
+}
+
+/**
+ * FONT::drawSingleLineText's underline: a bar 0.16·size under the baseline (METRICS::m_UnderlineOffset), trimmed
+ * 0.1·size at each end so its round caps do not overhang, in the text's own pen.
+ */
+export function drawUnderline(ctx: Ctx2D, g: DrawTextG, color: string, minW: number, base: Mat): void {
+  const lines = g.multiline && g.text.indexOf("\n") >= 0 ? splitLines(g.text) : [g.text];
+  const a = -(g.rot || 0) * Math.PI / 180, c = Math.cos(a), sn = Math.sin(a), mx = g.mirror ? -1 : 1;
+  ctx.setTransform(base[0] * c * mx, base[3] * sn * mx, -base[0] * sn, base[3] * c, base[0] * g.x + base[4], base[3] * g.y + base[5]);
+  const base0 = g.v === "top" ? g.size : g.v === "bottom" ? 0 : g.size / 2;
+  const step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
+  ctx.strokeStyle = color; ctx.lineWidth = Math.max(g.w || g.size / 8, minW); ctx.lineCap = "round"; ctx.beginPath();
+  for (let i = 0; i < lines.length; i++) {
+    const w = textWidth(lines[i], g.size, g.w || 0); if (!w) continue;
+    const x0 = g.h === "left" ? 0 : g.h === "right" ? -w : -w / 2, y = base0 + offs[i] * step + 0.16 * g.size, trim = 0.1 * g.size;
+    ctx.moveTo(x0 + trim, y); ctx.lineTo(x0 + w - trim, y);
+  }
+  ctx.stroke();
+  ctx.setTransform(base[0], base[1], base[2], base[3], base[4], base[5]);
 }
 
 /**

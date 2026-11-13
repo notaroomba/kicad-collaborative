@@ -14,7 +14,8 @@
 // The selection lives in three places for historical reasons: E.selected (the primary symbol /
 // footprint), E.selection (box / multi selection) and the tool module's own pick (a wire, a track).
 // selectionItems() / clearAllSelection() / selectAt() treat them as the one selection KiCad has.
-import { refreshCursor } from "./cursors";
+import { heldModifiers, refreshCursor } from "./cursors";
+import { setRollover } from "./hypertext";
 import { state, store } from "./appstore";
 import { placeCrosshair } from "./crosshair";
 import { renderObjects, snapMm, syncItemsFromDoc } from "./doc";
@@ -374,15 +375,17 @@ let hoverRaf = 0, hoverEv: { clientX: number; clientY: number } | null = null;
 function computeHover(): void {
   hoverRaf = 0; const ev = hoverEv; hoverEv = null;
   const d = doc(); if (!d || !ev) return;
-  let id: string | null = null, over = false;
+  let id: string | null = null, over = false, roll: KItem | null = null;
   if (E.tool === "select" && !interactionBusy() && !E.pan && !E.contextMenuOpen) {
     const hit = pickAt(worldMm(ev));
+    if (isSch() && hit && hit.item) roll = hit.item;
     // the schematic module outlines its own items (wires, labels …) on hover; fields have their own selection box
     if (hit && hit.movable) id = hit.movable.id; else if (hit && hit.item && !isSch()) id = hit.item.id;
     const under = hit && (hit.movable ? hit.movable.id : hit.item ? hit.item.id : null);
     over = !!under && !E.viewOnly && selectionIds().includes(under);
   }
   if (id !== E.hoverId) { E.hoverId = id; requestRepaint(); }
+  if (setRollover(roll, heldModifiers())) requestRender();
   // over something already selected a drag moves it: say so with the cursor (KiCad's "moving" arrow)
   stage.classList.toggle("over-sel", over);
   refreshCursor();
@@ -511,7 +514,7 @@ export function installGestures(open: OpenMenu): void {
   stage.addEventListener("pointermove", onMoveCapture, true);
   stage.addEventListener("pointerup", onUpCapture, true);
   stage.addEventListener("pointercancel", () => { cancelInteraction(); }, true);
-  stage.addEventListener("pointerleave", () => { placeCrosshair(null); if (E.hoverId) { E.hoverId = null; requestRepaint(); } stage.classList.remove("over-sel"); });
+  stage.addEventListener("pointerleave", () => { placeCrosshair(null); if (setRollover(null, heldModifiers())) requestRender(); if (E.hoverId) { E.hoverId = null; requestRepaint(); } stage.classList.remove("over-sel"); });
   stage.addEventListener("auxclick", (ev) => ev.preventDefault());           // no autoscroll / paste on a middle click
   stage.addEventListener("mousedown", (ev) => { if (ev.button === 1) ev.preventDefault(); });
   window.addEventListener("blur", () => { ctrlHeld = false; cancelInteraction(); });

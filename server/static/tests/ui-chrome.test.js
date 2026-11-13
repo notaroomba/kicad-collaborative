@@ -104,5 +104,22 @@ test("KICURSOR bitmaps: every cursors_defs entry, 32 px PNGs, cursors.cpp hotspo
   }
 });
 
+test("hypertext: EDA_TEXT link definition (text and text box only), goto-page hrefs", () => {
+  const H = load(["editor", "hypertext.ts"]);
+  const it = { id: "t1", kind: "text", node: K.parse('(text "Site" (at 1 2 0) (effects (font (size 1.27 1.27)) (href "https://kicad.org")) (uuid "t1"))') };
+  assert.equal(H.hrefOf(it), "https://kicad.org");
+  assert.equal(H.hrefOf({ id: "t2", kind: "text", node: K.parse('(text "x" (at 1 2 0) (effects (font (size 1.27 1.27))))') }), "");
+  assert.equal(H.hrefOf({ id: "l", kind: "label", node: K.parse('(label "x" (at 1 2 0) (effects (font (size 1.27 1.27)) (href "#2")))') }), "");
+  assert.equal(H.gotoPageOf("#12"), "12");
+  assert.equal(H.gotoPageOf("https://x"), null);
+});
+
+test("dialog geometry: a remembered place and size come back clamped to the window", () => {
+  const S = load(["tools", "kicad-dialogs", "shell.ts"]);
+  assert.deepEqual(S.clampGeometry({ left: 100, top: 50, width: 500, height: 300 }, 1440, 900), { left: 100, top: 50, width: 500, height: 300 });
+  assert.deepEqual(S.clampGeometry({ left: 1300, top: 800, width: 500, height: 300 }, 1440, 900), { left: 940, top: 600, width: 500, height: 300 });
+  assert.deepEqual(S.clampGeometry({ left: -20, top: -5, width: 2000, height: 1200 }, 1440, 900), { left: 0, top: 0, width: 1440, height: 900 });
+});
+
 console.log(`\nui-chrome: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

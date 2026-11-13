@@ -23,6 +23,7 @@ import { HANDLERS, dispatchAction } from "./actions";
 import { state, store } from "./appstore";
 import { closeThread, placeComment } from "./comments";
 import { noteModifiers, refreshCursor } from "./cursors";
+import { followHypertext } from "./hypertext-follow";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
@@ -163,6 +164,15 @@ window.addEventListener("pointercancel", () => cancelLongPress(), true);
 window.addEventListener("pointerdown", (ev) => {
   if (ev.button !== 0 || !ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
   if (openClarifyMenu(ev)) { ev.stopImmediatePropagation(); ev.preventDefault(); }
+}, true);
+
+// SCH_SELECTION_TOOL: a click on hypertext under the cursor (HasHoveredHypertext) follows it instead of selecting
+window.addEventListener("pointerdown", (ev) => {
+  const hh = E.hyperHover as { id: string; href: string } | null;
+  if (!hh || ev.button !== 0 || ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || E.tool !== "select" || !isSch() || !(ev.target instanceof Element) || !stage.contains(ev.target) || ev.target.closest("#cmtPanel")) return;
+  const sch = CollabTools.sch; if (sch && (sch.state.drag || sch.state.carry || sch.state.wire)) return;
+  ev.stopImmediatePropagation(); ev.preventDefault(); cancelLongPress();
+  followHypertext(hh.href, ev);
 }, true);
 
 stage.addEventListener("pointerdown", (ev) => {

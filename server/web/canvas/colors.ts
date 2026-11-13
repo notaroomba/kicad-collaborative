@@ -33,6 +33,7 @@ export const SCH_DEFAULT = Object.freeze({
   // LAYER_SELECTION_SHADOWS: KiCad Default is (.3, .7, 1.0, .6) on macOS, which "looks better with a lighter
   // shadow", (.4, .7, 1.0, .8) elsewhere (builtin_color_themes.h)
   selection: IS_MAC_PLATFORM ? "rgba(77,179,255,0.6)" : "rgba(102,179,255,0.8)",
+  hovered: "#0000FF",      // LAYER_HOVERED: hypertext under the cursor (builtin_color_themes.h:33)
 });
 
 // ---------------------------------------------------------------- schematic colour themes

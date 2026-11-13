@@ -233,6 +233,8 @@ export interface RenderOpts {
   ratsnest?: RatsLine[] | null; ratsnestNets?: Set<number> | null; markers?: Marker[] | null;
   layerColors?: Map<string, string> | null; objects?: ObjectsOpt | null;
   itemColors?: Map<string, string | string[]> | null;
+  /** the schematic item with a hyperlink under the cursor (SCH_ITEM::SetIsRollover): its text in LAYER_HOVERED, underlined */
+  rollover?: string | null;
   /** [x0, y0, x1, y1] device px: repaint only that part */
   region?: number[] | null;
   /** css colour under the drawing, or false for none */
