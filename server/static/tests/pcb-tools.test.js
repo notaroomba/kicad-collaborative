@@ -2240,3 +2240,33 @@ test("remove unused pads: PTH pads and multi-layer vias get remove_unused_layers
   assert.equal(K.kid(K.kids(fpBack, "pad")[0], "remove_unused_layers")[1], "no", "a plated pad always says so");
   assert.ok(!K.kid(K.kids(fpBack, "pad")[0], "keep_end_layers"));
 });
+
+test("cleanup graphics: zero-size and duplicated shapes, lines into rectangles, board outline gaps (GRAPHICS_CLEANER)", () => {
+  const S = (w = 0.1) => `(stroke (width ${w}) (type default))`;
+  const doc = K.parseDoc(`(kicad_pcb (version 20260728) (generator "pcbnew")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (44 "Edge.Cuts" user) (37 "F.SilkS" user))
+  (gr_line (start 0 0) (end 0 0) ${S()} (layer "F.SilkS") (uuid "z-1"))
+  (gr_circle (center 5 5) (end 6 5) ${S()} (fill no) (layer "F.SilkS") (uuid "c-1"))
+  (gr_circle (center 5 5) (end 6 5) ${S()} (fill no) (layer "F.SilkS") (uuid "c-2"))
+  (gr_line (start 10 10) (end 10 20) ${S()} (layer "F.SilkS") (uuid "r-l"))
+  (gr_line (start 10 10) (end 30 10) ${S()} (layer "F.SilkS") (uuid "r-t"))
+  (gr_line (start 30 20) (end 30 10) ${S()} (layer "F.SilkS") (uuid "r-r"))
+  (gr_line (start 10 20) (end 30 20) ${S()} (layer "F.SilkS") (uuid "r-b"))
+  (gr_line (start 50 0) (end 80 0) ${S()} (layer "Edge.Cuts") (uuid "e-1"))
+  (gr_line (start 80.5 0.3) (end 80 30) ${S()} (layer "Edge.Cuts") (uuid "e-2")))`, "kicad_pcb");
+  const dry = P.graphicsCleanup(doc, { mergeRects: true, deleteRedundant: true, fixBoardOutlines: true, tolerance: 2 }, true);
+  assert.deepEqual(dry.items.map((i) => i.text), ["Remove zero-size graphic", "Remove duplicated graphic", "Convert lines to rectangle"]);
+  assert.deepEqual(dry.items[1].ids, ["c-2"], "the second of two equal shapes goes");
+  assert.equal(dry.changes.length, 0, "a dry run changes nothing");
+  const run = P.graphicsCleanup(doc, { mergeRects: true, deleteRedundant: true, fixBoardOutlines: true, tolerance: 2 }, false);
+  const rect = run.changes.filter((c) => c.sexpr).map(node).find((n) => n && n[0] === "gr_rect");
+  assert.equal(run.changes.filter((c) => c.op === "REMOVED" || c.type === "REMOVED" || !c.sexpr).length, 6, "the zero-size line, the duplicate circle and the four sides go");
+  assert.deepEqual([K.kid(rect, "start").slice(1), K.kid(rect, "end").slice(1)], [[10, 10], [30, 20]]);
+  const e1 = node(run.changes.find((c) => c.id === "e-1")), e2 = node(run.changes.find((c) => c.id === "e-2"));
+  assert.ok(e1 && e2, "both outline lines moved");
+  const end1 = K.kid(e1, "end").slice(1), start2 = K.kid(e2, "start").slice(1);
+  assert.deepEqual(end1, start2, "the outline ends meet at the lines' intersection");
+  assert.ok(Math.abs(end1[1]) < 1e-6 && end1[0] > 80 && end1[0] < 81);
+  const only = P.graphicsCleanup(doc, { mergeRects: false, deleteRedundant: false, fixBoardOutlines: true, tolerance: 0.1 }, false);
+  assert.equal(only.changes.length, 0, "a gap wider than the tolerance stays");
+});

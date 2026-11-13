@@ -18,6 +18,7 @@ import { openExchangeFootprints } from "./exchange";
 import { openGlobalDeletions } from "./global-delete";
 import { openTextAndGraphics } from "./text-graphics";
 import { openUnusedPads } from "./unused-pads";
+import { openCleanupGraphics } from "./cleanup-graphics";
 import { openUpdatePcb, projectNetlist, updatePcbFromSchematicEditor } from "./update-pcb";
 import { noteCommit, runZoneFill, zoneFillAll, zoneFillSelected } from "./zonefill";
 import { commitObservers, toolCtx } from "../tools";
@@ -45,6 +46,7 @@ export function installPcbDialogs(): void {
   action("boardSetup", "Board Setup...", "", (ctx) => { void openBoardSetup(ctx); });
   action("zonesManager", "Zone Manager...", "", (ctx) => { openZoneManager(ctx); });   // GLOBAL_EDIT_TOOL::ZonesManager (Tools > Zone Manager...)
   action("zoneManager", "Zone Manager...", "", (ctx) => { openZoneManager(ctx); });
+  action("cleanupGraphics", "Cleanup Graphics...", "", openCleanupGraphics);   // GLOBAL_EDIT_TOOL::CleanupGraphics
   action("removeUnusedPads", "Remove Unused Pads...", "", openUnusedPads);   // GLOBAL_EDIT_TOOL::RemoveUnusedPads
   action("updatePcbFromSchematic", "Update PCB from Schematic...", "F8", (ctx) => { void openUpdatePcb(ctx); });
   // GLOBAL_EDIT_TOOL::ExchangeFootprints (DIALOG_EXCHANGE_FOOTPRINTS)
