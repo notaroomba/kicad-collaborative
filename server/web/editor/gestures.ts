@@ -467,7 +467,7 @@ export function installGestures(open: OpenMenu): void {
   stage.addEventListener("pointerdown", () => {
     const ae = document.activeElement as HTMLElement | null;
     if (!ae || ae === document.body || stage.contains(ae) || ae.closest(".kd-overlay, [role='dialog']")) return;
-    if (/^(SELECT|BUTTON|INPUT|TEXTAREA)$/.test(ae.tagName) || ae.isContentEditable) ae.blur();
+    if (/^(SELECT|K-SELECT|BUTTON|INPUT|TEXTAREA)$/.test(ae.tagName) || ae.isContentEditable) ae.blur();
   }, true);
   stage.addEventListener("pointerdown", onDownCapture, true);
   stage.addEventListener("pointermove", onMoveCapture, true);

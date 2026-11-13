@@ -5,7 +5,7 @@ import { saveVersionDialog, versionsCommand } from "./versions";
 import { enterSheet, fpName, navigateDocs, openDoc, openDocId, rootSchematic, selectItemAction, setActiveLayer, setGridPitch, setLayerVisible, switchEditor, updateGridStatus } from "./doc";
 import { loadHistory, restoreCheckpoint } from "./history";
 import { navigate } from "./home";
-import { chooseTrackWidth, chooseViaSize } from "./pcbrouting";
+import { chooseTrackWidth, chooseViaSize, chooseViaStack } from "./pcbrouting";
 import { setCrosshair, setTheme, setUnitsAction, showPane, syncSchModes, toggleTheme } from "./panes";
 import { contextMenuAction, openArcEditModeMenu, openGridButtonMenu, openRouterModeMenu } from "./contextmenu";
 import { cycleFollow, followAction } from "./peers";
@@ -175,6 +175,7 @@ export function dispatchAction(a: AppAction) {
       case "setActiveLayer": setActiveLayer(a.layer); return;
       case "setTrackWidth": chooseTrackWidth(a.index); return;
       case "setViaSize": chooseViaSize(a.index); return;
+      case "setViaStack": chooseViaStack(a.index); return;
       case "setGrid": setGridPitch(a.pitch); return;
       // EDA_DRAW_FRAME::OnSelectZoom: Zoom Auto is ACTIONS::zoomFitScreen, a preset is ACTIONS::zoomPreset (a KiCad zoom factor)
       case "setZoom": if (a.zoom === "auto") fitView(); else { const cur = kicadZoom(); if (cur > 0 && Number(a.zoom) > 0) zoomBy(Number(a.zoom) / cur); } return;

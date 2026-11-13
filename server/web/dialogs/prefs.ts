@@ -1,13 +1,16 @@
 // dialogs/prefs.ts — the web editor's preferences (Preferences… dialog): stored in localStorage under "kui.prefs",
 // applied live.  Defaults are KiCad's (common/settings/app_settings.cpp, eeschema/eeschema_settings.cpp).
-import { E, GRID_CHOICES, isSch, requestRender, setToggle, setToggles, store, toolCtx, updateGridStatus } from "./editor";
+import { E, GRID_CHOICES, gridListKey, isSch, requestRender, setToggle, setToggles, store, toolCtx, updateGridStatus } from "./editor";
 import { syncSchModes } from "../editor/panes";
 import { effectiveTheme, subscribeTheme } from "../theme";
 import { PCB_GRID_OVERRIDES, SCH_GRID_OVERRIDES, gridPitchFor, schGridClassOfKind, schGridClassOfTool, type GridOverrides } from "./logic";
-import { gridChoiceText, type GridDef } from "../units";
+import { gridChoiceText, type GridDef, type IuScale } from "../units";
 import type { Units } from "../store";
 
-export type EditorId = "sch" | "pcb";
+/** The KiCad frame whose window settings keep a grid list: eeschema, pcbnew, the symbol editor and the footprint editor each have their own. */
+export type EditorId = "sch" | "pcb" | "sym" | "fp";
+/** The internal-unit scale an editor formats with: the schematic and symbol editors use eeschema's, the board editors pcbnew's. */
+export const scaleOf = (ed: EditorId): IuScale => (ed === "sch" || ed === "sym" ? "sch" : "pcb");
 export type SchThemeId = "default" | "classic" | "dark";
 /**
  * WINDOW_SETTINGS::grid: the grid list in KiCad's order (sizes in mm, square grids; names[i] is GRID::name, "" when
@@ -27,6 +30,10 @@ export interface Prefs {
   grids: Record<EditorId, GridPrefs>;
 }
 const MIL = 0.0254;
+function schGrids(): GridPrefs { return { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], names: ["", "", "", ""], last: 1, fast1: 1, fast2: 2, overrides: { ...SCH_GRID_OVERRIDES }, axes: false }; }
+function pcbGrids(): GridPrefs { return { sizes: PCB_GRID_SIZES.slice(), names: Array(22).fill(""), last: 15, fast1: 15, fast2: 16, overrides: { ...PCB_GRID_OVERRIDES }, axes: false }; }
+/** APP_SETTINGS_BASE::DefaultGridSizeList for pcbnew and the footprint editor: 1000 mil down to 1 mil, then 5 mm down to 0.01 mm. */
+const PCB_GRID_SIZES = [1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 2, 1].map((m) => m * MIL).concat([5, 2.5, 1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.025, 0.01]);
 export const DEFAULT_PREFS: Prefs = {
   mouse: { autoZoomSpeed: true, zoomSpeed: 5, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true },
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
@@ -38,8 +45,10 @@ export const DEFAULT_PREFS: Prefs = {
     // APP_SETTINGS_BASE::DefaultGridSizeList and addParamsForWindow's defaultGridIdx (common/settings/app_settings.cpp):
     // eeschema / symbol_editor 100, 50, 25, 10 mil on 50 mil (index 1); pcbnew / footprint editor the 22 grids from
     // 1000 mil down to 0.01 mm on index 15 (0.5 mm), fast grids on that index and the next
-    sch: { sizes: [100 * MIL, 50 * MIL, 25 * MIL, 10 * MIL], names: ["", "", "", ""], last: 1, fast1: 1, fast2: 2, overrides: SCH_GRID_OVERRIDES, axes: false },
-    pcb: { sizes: [1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 2, 1].map((m) => m * MIL).concat([5, 2.5, 1, 0.5, 0.25, 0.2, 0.1, 0.05, 0.025, 0.01]), names: Array(22).fill(""), last: 15, fast1: 15, fast2: 16, overrides: PCB_GRID_OVERRIDES, axes: false },
+    sch: schGrids(),
+    pcb: pcbGrids(),
+    sym: schGrids(),
+    fp: pcbGrids(),
   },
 };
 const KEY = "kui.prefs";
@@ -49,18 +58,45 @@ function merge<T>(def: T, got: unknown): T {
   return (typeof got === typeof def ? got : def) as T;
 }
 let cache: Prefs | null = null;
+const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-6;
+/** The board grid list and overrides the web editor kept before it took KiCad's list (no grid.last_size then). */
+const LEGACY_PCB_SIZES = [0.25, 0.5, 1, 0.1, 0.05, 1.27, 0.635];
+const OV_KEYS = ["connected", "wires", "vias", "text", "graphics"] as const;
+/**
+ * Settings saved before the grids kept grid.last_size: the editor opened the schematic on its second grid and the
+ * board on its first.  An untouched old board list becomes KiCad's 22 grids with the same grid, fast grids and
+ * override sizes picked again by value; a list the user changed is kept and opens on its first grid as before.
+ */
+function migrate(raw: unknown): unknown {
+  const grids = raw && typeof raw === "object" ? (raw as { grids?: Record<string, Record<string, unknown>> }).grids : undefined;
+  if (!grids || typeof grids !== "object") return raw;
+  const sch = grids.sch; if (sch && typeof sch === "object" && typeof sch.last !== "number") sch.last = 1;
+  const pcb = grids.pcb; if (!pcb || typeof pcb !== "object" || typeof pcb.last === "number") return raw;
+  const sizes = Array.isArray(pcb.sizes) ? (pcb.sizes as unknown[]).map(Number) : [];
+  if (sizes.length === LEGACY_PCB_SIZES.length && sizes.every((mm, i) => near(mm, LEGACY_PCB_SIZES[i]))) {
+    const at = (i: unknown, fallback: number): number => { const mm = sizes[Number(i)]; const k = mm === undefined ? -1 : PCB_GRID_SIZES.findIndex((x) => near(x, mm)); return k >= 0 ? k : fallback; };
+    pcb.sizes = PCB_GRID_SIZES.slice(); pcb.names = Array(PCB_GRID_SIZES.length).fill("");
+    pcb.last = at(0, 15); pcb.fast1 = at(pcb.fast1, 15); pcb.fast2 = at(pcb.fast2, 16);
+    const o = pcb.overrides as Record<string, unknown> | undefined;
+    // the old overrides were all 0.25 mm: they take KiCad's sizes, keeping which ones are on
+    if (o && typeof o === "object" && OV_KEYS.every((k) => near(Number(o[k + "Mm"]), 0.25))) for (const k of OV_KEYS) o[k + "Mm"] = (PCB_GRID_OVERRIDES as unknown as Record<string, number>)[k + "Mm"];
+  } else pcb.last = 0;
+  return raw;
+}
 /** names[] runs beside sizes[] (settings saved before grids had names have none) */
 function normalize(p: Prefs): Prefs { for (const g of Object.values(p.grids)) { const n = g.names || []; g.names = g.sizes.map((_, i) => (typeof n[i] === "string" ? n[i] : "")); } return p; }
 export function prefs(): Prefs {
   if (cache) return cache;
   let raw: unknown = null; try { raw = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) { raw = null; }
-  cache = normalize(merge(DEFAULT_PREFS, raw)); return cache;
+  cache = normalize(merge(DEFAULT_PREFS, migrate(raw))); return cache;
 }
 export function savePrefs(p: Prefs): void {
   cache = normalize(merge(DEFAULT_PREFS, p)); try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch (e) { /* no storage */ }
   applyPrefs(true);
   // the Grids page's list selection is the current grid (PANEL_GRID_SETTINGS::TransferDataFromWindow sets grid.last_size)
   if (E.kdoc) { const mm = defaultGrid(); if (Math.abs(mm - E.gridPitch) > 1e-9) { E.gridPitch = mm; updateGridStatus(); requestRender(); } }
+  // the Symbol Editor frame re-reads its own grids
+  try { window.dispatchEvent(new Event("kc:prefs")); } catch (e) { /* no window */ }
 }
 export function clonePrefs(): Prefs { return JSON.parse(JSON.stringify(prefs())) as Prefs; }
 
@@ -69,9 +105,12 @@ export function gridDefs(g: GridPrefs): GridDef[] { return g.sizes.map((mm, i) =
 /** GRID_MENU::BuildChoiceList's text for one grid, in the editor's current units ("1.2700 mm (50.00 mils)"). */
 export function gridLabel(g: GridDef | number, ed: EditorId = editorId()): string {
   const units = (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units;
-  return gridChoiceText(typeof g === "number" ? { mm: g } : g, units, (E.lastImperial === "in" ? "in" : "mil") as Units, ed);
+  return gridChoiceText(typeof g === "number" ? { mm: g } : g, units, (E.lastImperial === "in" ? "in" : "mil") as Units, scaleOf(ed));
 }
-export function editorId(): EditorId { return isSch() ? "sch" : "pcb"; }
+/** COMMON_TOOLS::GridProperties: the Preferences page of each frame's grids. */
+export const GRID_PAGE: Record<EditorId, string> = { sch: "Schematic Editor/Grids", pcb: "PCB Editor/Grids", sym: "Symbol Editor/Grids", fp: "Footprint Editor/Grids" };
+/** The document's editor: the schematic, the board, or the Footprint Editor for a footprint (the Symbol Editor frame passes "sym" itself). */
+export function editorId(): EditorId { return isSch() ? "sch" : E.DOC_TYPE === "footprint" ? "fp" : "pcb"; }
 /** The grid the editor opens on (grid.last_size). */
 export function defaultGrid(ed: EditorId = editorId()): number { const g = prefs().grids[ed]; return g.sizes[Math.max(0, Math.min(g.sizes.length - 1, g.last ?? 0))]; }
 /** Remember the grid picked (KiCad saves grid.last_size with the window settings); nothing else is re-applied. */
@@ -123,7 +162,7 @@ export function applyPrefs(full = true): void {
   const ed = editorId(), g = p.grids[ed];
   if (E.kdoc) {
     const choices = gridDefs(g);
-    GRID_CHOICES[isSch() ? "kicad_sch" : "kicad_pcb"] = choices;
+    GRID_CHOICES[gridListKey()] = choices;
     store.slice("viewport", { gridChoices: choices.map((c) => ({ ...c })) });
     E.renderOpts.gridAxes = !!g.axes;
     if (!full) { /* grids and colours only */ }

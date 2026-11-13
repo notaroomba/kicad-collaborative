@@ -127,6 +127,8 @@ export interface RoutingState {
   /** "Track: use netclass width", then one entry per pre-defined width — index = BOARD_DESIGN_SETTINGS::m_trackWidthIndex */
   trackLabels: string[]; trackIndex: number;
   viaLabels: string[]; viaIndex: number;
+  /** BOARD_DESIGN_SETTINGS::m_ViaStackPresets' names (.kicad_pro board.design_settings.via_stack_presets) and the one in use */
+  viaStacks: string[]; viaStackIndex: number;
   layers: RoutingLayer[]; layerPair: [string, string];
 }
 
@@ -245,6 +247,7 @@ export type AppAction =
   | { type: "setActiveLayer"; layer: string }
   | { type: "setTrackWidth"; index: number | "edit" }
   | { type: "setViaSize"; index: number | "edit" }
+  | { type: "setViaStack"; index: number | "edit" }
   | { type: "setGrid"; pitch: number }
   /** the aux toolbar's zoom choice: "auto" fits the screen, a number is a KiCad zoom factor (zoom_defines.h) */
   | { type: "setZoom"; zoom: number | "auto" }
@@ -290,7 +293,7 @@ const EMPTY: AppState = {
   versions: { loading: false, error: null, busy: false, list: [], runs: [], docs: [], branches: [], main: null, parentId: null, branchName: null, view: null, dialog: null },
   tool: { current: "select", appTools: [], moduleTools: [], moduleActions: [], handled: [] },
   toggles: {}, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, msgPanel: { items: [] }, toast: null, popover: null, contextMenu: null,
-  routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },
+  routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, viaStacks: [], viaStackIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },
 };
 
 function app(): CollabAppApi | undefined { return window.CollabApp; }

@@ -56,7 +56,7 @@ export const store = (() => {
     tool: { current: "select", appTools: APP_TOOLS, moduleTools: [], moduleActions: [], handled: [] },
     // the board's net names and pad numbers are on by default (pcbnew "pcb_display.net_names_mode" 3), so their checks start on
     toggles: { showNetNames: true, showPadNumbers: true }, groupCurrent: {}, filter: {}, panes: {}, undo: { undo: 0, redo: 0 }, status: { message: "", mode: "" }, msgPanel: { items: [] }, toast: null, popover: null, contextMenu: null,
-    routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },   // the board's size selectors (editor/pcbrouting.ts)
+    routing: { trackLabels: [], trackIndex: 0, viaLabels: [], viaIndex: 0, viaStacks: [], viaStackIndex: 0, layers: [], layerPair: ["F.Cu", "B.Cu"] },   // the board's size selectors (editor/pcbrouting.ts)
   };
   const subs = new Set<(s: AppState) => void>();
   const notify = () => { for (const fn of Array.from(subs)) { try { fn(S); } catch (e) { console.warn(e); } } };

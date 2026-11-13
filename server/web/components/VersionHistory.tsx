@@ -129,12 +129,19 @@ function Modal({ title, children, foot, onSubmit, width }: { title: string; chil
   const box = useRef<HTMLFormElement>(null);
   useEffect(() => {
     const el = box.current; if (!el) return;
-    const first = el.querySelector<HTMLElement>("[data-autofocus]") || el.querySelector<HTMLElement>("input, textarea, select") || el.querySelector<HTMLElement>(".kd-foot .primary, .kd-foot .solid");
+    const first = el.querySelector<HTMLElement>("[data-autofocus]") || el.querySelector<HTMLElement>("input, textarea, select, k-select") || el.querySelector<HTMLElement>(".kd-foot .primary, .kd-foot .solid");
     if (first) { first.focus(); if (first instanceof HTMLInputElement) first.select(); }
-    const key = (ev: KeyboardEvent): void => { if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); } else ev.stopPropagation(); };
+    // a drop-down in the dialog gets its keys first, and its open list the first Escape (stopped at the window it would never see them); the dialog then
+    // keeps them from the editor's hotkeys as they bubble out of it
+    const own = (ev: KeyboardEvent): boolean => { const t = ev.target as HTMLElement | null; return !!t && t.tagName === "K-SELECT" && el.contains(t); };
+    const key = (ev: KeyboardEvent): void => {
+      if (ev.key === "Escape" && !(own(ev) && (ev.target as HTMLElement).hasAttribute("data-popup-open"))) { ev.preventDefault(); ev.stopPropagation(); close(); }
+      else if (!own(ev)) ev.stopPropagation();
+    };
+    const out = (ev: KeyboardEvent): void => ev.stopPropagation();
     // the editor's own hotkeys must not fire while a dialog has the keyboard
-    window.addEventListener("keydown", key, true);
-    return () => window.removeEventListener("keydown", key, true);
+    window.addEventListener("keydown", key, true); el.addEventListener("keydown", out);
+    return () => { window.removeEventListener("keydown", key, true); el.removeEventListener("keydown", out); };
   }, []);
   const submit = (ev: FormEvent): void => { ev.preventDefault(); if (onSubmit) onSubmit(); };
   return (

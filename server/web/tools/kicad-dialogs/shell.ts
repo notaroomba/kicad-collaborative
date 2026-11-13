@@ -16,7 +16,7 @@ export function close(): void { if (current) { current.ov.remove(); current = nu
 if (typeof document !== "undefined") document.addEventListener("keydown", (ev) => {
   if (!current || ev.key !== "Escape" || ev.defaultPrevented) return;
   const t = ev.target as Element | null;
-  if (t && t.closest && t.closest(".kd-overlay, #ctxMenu, [role='menu']")) return;   // the overlay's own handler, a prompt on top, or an open menu
+  if (t && t.closest && t.closest(".kd-overlay, #ctxMenu, [role='menu'], [data-popup-open]")) return;   // the overlay's own handler, a prompt on top, or an open menu
   ev.preventDefault(); ev.stopPropagation(); current.finish(false);
 }, true);
 /** open({title, width, build(body, api), ok() -> false keeps it open, extra:[{label, fn}], readOnly}) */

@@ -237,8 +237,10 @@ function CompareDialog({ request }: { request: CompareRequest }) {
   useEffect(() => {
     const key = (ev: KeyboardEvent) => {
       const tag = (ev.target as HTMLElement | null)?.tagName || "";
+      // a drop-down's open list takes its own Escape and arrows (the k-select is the event target: its list is in its shadow root)
+      if (tag === "K-SELECT" && (ev.target as HTMLElement).hasAttribute("data-popup-open")) return;
       if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); if (layersOpen) setLayersOpen(false); else closeCompare(); return; }
-      if (/^(INPUT|SELECT|TEXTAREA)$/.test(tag)) return;
+      if (/^(INPUT|SELECT|K-SELECT|TEXTAREA)$/.test(tag)) return;
       if ((ev.key === "ArrowDown" || ev.key === "ArrowUp") && shown.length) {
         ev.preventDefault(); ev.stopPropagation();
         const i = selected ? shown.indexOf(selected) : -1, n = shown.length;

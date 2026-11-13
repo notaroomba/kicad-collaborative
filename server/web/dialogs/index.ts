@@ -18,7 +18,7 @@ import { installGroups } from "./groups";
 import * as logic from "./logic";
 import { openPageSettings } from "./page-settings";
 import { openPreferences } from "./preferences";
-import { applyPrefs, defaultGrid, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
+import { GRID_PAGE, applyPrefs, defaultGrid, editorId, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
 import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp } from "./project";
 import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
 import { openSyncSheetPins } from "./sync-pins";
@@ -73,7 +73,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     toggleGridOverrides: (() => { const on = toggleGridOverrides(); toast(on ? "Grid overrides on" : "Grid overrides off"); }) as Handler,
     openPreferences: (() => openPreferences()) as Handler,
     // ACTIONS::gridProperties ("Edit Grids..."): COMMON_TOOLS::GridProperties opens Preferences on the editor's Grids page
-    gridProperties: (() => openPreferences(isSch() ? "Schematic Editor/Grids" : "PCB Editor/Grids")) as Handler,
+    gridProperties: (() => openPreferences(GRID_PAGE[editorId()])) as Handler,
   });
   installGroups(); wrapErc(); installSchItemDialogs(); installSimModel();
   // the old one-sheet fields table action now opens the full dialog
@@ -107,7 +107,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   E.gridDefault = () => defaultGrid();
   E.gridPicked = (mm: number) => rememberGrid(mm);
   applyPrefs(true);
-  setToggle("toggleGridOverrides", prefs().grids[isSch() ? "sch" : "pcb"].overrides.enabled);
+  setToggle("toggleGridOverrides", prefs().grids[editorId()].overrides.enabled);
   // for tests and other modules
   E.dialogs = { logic, openPageSettings, openFind, openFieldsTable, openAssignFootprints, openSchematicSetup, openSyncSheetPins, openPreferences, prefs, readDoc, submitDocOp, saveProject, applyProjectSettings, toolCtx };
 }

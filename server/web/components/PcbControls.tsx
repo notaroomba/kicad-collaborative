@@ -24,6 +24,18 @@ export function TrackWidthSelect() {
   const index = useApp((s) => s.routing.trackIndex);
   return <SizeSelect id="trackWidthSel" title="Select the track width" labels={labels} index={index} onPick={(v) => dispatch({ type: "setTrackWidth", index: v })} />;
 }
+/**
+ * PCB_EDIT_FRAME::UpdateViaStackSelectBox: "Microvia stack: none defined" or "Microvia stack: %s" for each preset,
+ * then "---" and "Edit Pre-defined Microvia Stacks...".
+ */
+export function ViaStackSelect() {
+  const names = useApp((s) => s.routing.viaStacks);
+  const index = useApp((s) => s.routing.viaStackIndex);
+  const options: SelectOption[] = names.length ? names.map((n, i) => ({ value: String(i), label: `Microvia stack: ${n}` })) : [{ value: "none", label: "Microvia stack: none defined" }];
+  options.push({ value: "sep", label: "---", sep: true }, { value: "edit", label: "Edit Pre-defined Microvia Stacks..." });
+  return <Select id="viaStackSel" className={SEL} title="Select the microvia stack preset placed by the microvia stack tool." options={options} value={names.length ? String(Math.min(index, names.length - 1)) : "none"} blurOnPick
+    onChange={(v) => { if (v === "edit") dispatch({ type: "setViaStack", index: "edit" }); else if (v !== "sep" && v !== "none") dispatch({ type: "setViaStack", index: Number(v) }); }} />;
+}
 export function ViaSizeSelect() {
   const labels = useApp((s) => s.routing.viaLabels);
   const index = useApp((s) => s.routing.viaIndex);

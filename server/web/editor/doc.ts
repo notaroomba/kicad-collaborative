@@ -23,9 +23,11 @@ export const docNav = { list: [] as string[], idx: -1, lock: false };
 
 
 /** Each editor's grids in KiCad's list order (Preferences > Grids, dialogs/prefs.ts fills them in from the saved settings). */
-export const GRID_CHOICES: Record<string, GridDef[]> = { kicad_sch: [2.54, 1.27, 0.635, 0.254].map((mm) => ({ mm, name: "" })), kicad_pcb: [1.27, 0.635, 0.5, 0.25, 0.1].map((mm) => ({ mm, name: "" })) };
+export const GRID_CHOICES: Record<string, GridDef[]> = { kicad_sch: [2.54, 1.27, 0.635, 0.254].map((mm) => ({ mm, name: "" })), kicad_pcb: [1.27, 0.635, 0.5, 0.25, 0.1].map((mm) => ({ mm, name: "" })), footprint: [1.27, 0.635, 0.5, 0.25, 0.1].map((mm) => ({ mm, name: "" })) };
+/** Which grid list the open document uses: the schematic's, the board's, or the Footprint Editor's own window settings. */
+export function gridListKey(): string { return isSch() ? "kicad_sch" : E.DOC_TYPE === "footprint" ? "footprint" : "kicad_pcb"; }
 /** The grids of the open document (the board's for the Footprint Editor too). */
-export function gridList(): GridDef[] { return GRID_CHOICES[isSch() ? "kicad_sch" : "kicad_pcb"] || []; }
+export function gridList(): GridDef[] { return GRID_CHOICES[gridListKey()] || []; }
 
 export function syncItemsFromDoc() {
   if (!E.kdoc) return;

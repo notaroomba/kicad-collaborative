@@ -359,7 +359,7 @@ export class ViewerWindow {
     const t = ev.target as HTMLElement;
     // the window owns the keyboard while it has the focus: nothing reaches the board editor's shortcuts
     ev.stopPropagation();
-    if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName) && (t as HTMLInputElement).type !== "checkbox") return;
+    if (t && /^(INPUT|SELECT|K-SELECT|TEXTAREA)$/.test(t.tagName) && (t as HTMLInputElement).type !== "checkbox") return;
     if (ev.key === "Escape") { if (this.menu.length) { this.closeMenu(); ev.preventDefault(); } return; }
     if ((ev.key === "=" || ev.key === "+") && !ev.ctrlKey && !ev.metaKey) { this.run("zoomInCenter"); ev.preventDefault(); return; }
     if ((ev.key === "-" || ev.key === "_") && !ev.ctrlKey && !ev.metaKey) { this.run("zoomOutCenter"); ev.preventDefault(); return; }

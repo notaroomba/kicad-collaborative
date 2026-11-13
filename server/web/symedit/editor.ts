@@ -14,7 +14,7 @@ import { h, confirmBox, download } from "../dialogs/dom";
 import { messageBox } from "../dialogs/sch-items";
 import { E, appState, api } from "../dialogs/editor";
 import { comboOf } from "../editor/hotkeys";
-import { fmtCoord, unitName, messageText, unitsMsg } from "../units";
+import { fmtCoord, unitName, messageText, unitsMsg, gridChoiceText, loadUnits, saveUnits } from "../units";
 import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from "./ui";
 import * as D from "./dialogs";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
@@ -22,6 +22,7 @@ import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
 import { mergeSymbolText } from "./merge";
 import { openPreferences } from "../dialogs/preferences";
+import { GRID_PAGE, defaultGrid, gridDefs, prefs, rememberGrid } from "../dialogs/prefs";
 
 export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
@@ -32,7 +33,8 @@ export interface Step { label: string; before: string; after: string }
 export interface Tab { lib: string; name: string; origin?: Origin; scratch?: M.Node; modified?: boolean; undo: Step[]; redo: Step[]; unit: number; body: number; sel: Set<string>; view: { s: number; px: number; py: number } | null; fitted?: boolean }
 
 const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
-const GRIDS_MIL = [100, 50, 25, 10, 5, 2, 1];
+/** The Symbol Editor's grid list: its own window settings (Preferences > Symbol Editor > Grids), 100/50/25/10 mil by default. */
+const symGrids = (): number[] => prefs().grids.sym.sizes;
 const ANCHOR = "#0000FF";   // LAYER_SCHEMATIC_ANCHOR
 
 const K = (): KiCadCanvasApi => window.KiCadCanvas;
@@ -55,7 +57,10 @@ export class SymbolEditor {
   cur = -1;
   tool: ToolId = "select";
   showHiddenPins = true; showHiddenFields = true; showETypes = true; showAltIcons = true; syncPins = true; showTree = true; showProps = true;
-  gridMil = 50;
+  /** grid.last_size of the symbol editor's window settings, in mm */
+  gridMm = 50 * M.MIL;
+  /** the schematic editor's units while this frame is up: the symbol editor keeps its own (symbol_editor system.units) */
+  private hostUnits: { units: string; lastImperial: string } | null = null;
   /** BASE_SCREEN::m_LocalOrigin (file coordinates) */
   localOrigin: [number, number] = [0, 0];
   lastPin = M.initialPinDefaults();
@@ -91,7 +96,6 @@ export class SymbolEditor {
   get isOpen(): boolean { return !!this.root && this.root.isConnected; }
   get tab(): Tab | null { return this.tabs[this.cur] || null; }
   get units(): Units { return (E.units === "in" || E.units === "mil" ? E.units : "mm") as Units; }
-  get gridMm(): number { return this.gridMil * M.MIL; }
   fmt(mm: number): string { return fmtCoord(mm, this.units).replace(/\.?0+$/, (m) => (m.includes(".") ? "" : m)) + " " + unitName(this.units); }
 
   // ---------------------------------------------------------------- open / close
@@ -100,6 +104,12 @@ export class SymbolEditor {
     if (!this.root) { this.build(); if (window.innerWidth < 900) { this.showTree = false; this.showProps = false; } }   // a narrow window starts with the canvas alone
     if (!this.root!.isConnected) document.body.append(this.root!);
     document.documentElement.dataset.symedit = "open";
+    if (!this.hostUnits) {
+      this.hostUnits = { units: E.units, lastImperial: String(E.lastImperial || "mil") };
+      const us = loadUnits("symbol_editor"); E.units = us.units; E.lastImperial = us.lastImperial;
+      this.gridMm = defaultGrid("sym");
+      window.addEventListener("kc:prefs", this.prefsHook);
+    }
     window.addEventListener("keydown", this.keyHook, true);
     document.addEventListener("focusin", this.focusHook, true);
     this.refreshLibs();
@@ -114,6 +124,7 @@ export class SymbolEditor {
     window.removeEventListener("keydown", this.keyHook, true);
     document.removeEventListener("focusin", this.focusHook, true);
     delete document.documentElement.dataset.symedit;
+    if (this.hostUnits) { E.units = this.hostUnits.units; E.lastImperial = this.hostUnits.lastImperial; this.hostUnits = null; window.removeEventListener("kc:prefs", this.prefsHook); }
     if (this.root) this.root.remove();
     try { const u = new URL(location.href); if (u.searchParams.has("symedit")) { u.searchParams.delete("symedit"); history.replaceState(history.state, "", u.toString()); } } catch (e) { /* no history */ }
   }
@@ -554,6 +565,8 @@ export class SymbolEditor {
     const b = h("button", { class: "se-btn" + (on ? " on" : "") + (run ? "" : " dim"), "data-act": id, title: m.tip + (m.key ? ` (${m.key})` : "") + (run ? "" : " — runs in the KiCad desktop app"), "aria-label": m.label, "aria-pressed": onTool || on ? String(!!on) : undefined }, icon(m.icon));
     if (run) b.addEventListener("click", () => { run(); }); else (b as HTMLButtonElement).disabled = true;
     if (run && !this.tbEnabled(id)) { (b as HTMLButtonElement).disabled = true; b.classList.add("dim"); }
+    // the grid button's menu (toolbars_symbol_editor.cpp): Edit Grids...
+    if (id === "toggleGrid") b.addEventListener("contextmenu", (ev) => { ev.preventDefault(); const r = b.getBoundingClientRect(); showMenu(r.left, r.bottom, [this.act("gridProperties", this.actions().gridProperties, { enabled: () => true })]); });
     return b;
   }
   /** ACTION_CONDITIONS::Enable of the toolbar buttons that have one. */
@@ -813,9 +826,11 @@ export class SymbolEditor {
       listHotKeys: () => void D.hotkeys(),
       cancelInteractive: () => this.cancelInteraction(),
       // COMMON_TOOLS: grids (GRID_SETTINGS last_size_idx; fast_grid_1 / fast_grid_2 default to indexes 1 and 2), pan, local origin
-      gridNext: () => this.setGridIdx(GRIDS_MIL.indexOf(this.gridMil) + 1), gridPrev: () => this.setGridIdx(GRIDS_MIL.indexOf(this.gridMil) - 1),
-      gridFast1: () => this.setGridIdx(1), gridFast2: () => this.setGridIdx(2),
-      gridFastCycle: () => this.setGridIdx(GRIDS_MIL.indexOf(this.gridMil) === 1 ? 2 : 1),
+      gridNext: () => this.setGridIdx(this.gridIdx() + 1), gridPrev: () => this.setGridIdx(this.gridIdx() - 1),
+      gridFast1: () => this.setGridIdx(prefs().grids.sym.fast1), gridFast2: () => this.setGridIdx(prefs().grids.sym.fast2),
+      gridFastCycle: () => { const g = prefs().grids.sym; this.setGridIdx(this.gridIdx() === g.fast1 ? g.fast2 : g.fast1); },
+      // COMMON_TOOLS::GridProperties: Preferences on the Symbol Editor's Grids page
+      gridProperties: () => openPreferences(GRID_PAGE.sym),
       panUp: () => this.pan(0, -1), panDown: () => this.pan(0, 1), panLeft: () => this.pan(-1, 0), panRight: () => this.pan(1, 0),
       resetLocalCoords: () => { this.localOrigin = this.snapFile(this.mouse.x, this.mouse.y); this.renderStatus(); },
       libraryTreeSearch: () => { if (!this.showTree) { this.showTree = true; this.renderToolbars(); this.paint(); } const f = this.el.filter as HTMLInputElement | undefined; if (f) { f.focus(); f.select(); } },
@@ -827,8 +842,18 @@ export class SymbolEditor {
   }
   /** COMMON_TOOLS::GridNext / GridPrev / GridPreset: the index wraps around the grid list. */
   setGridIdx(i: number): void {
-    const n = GRIDS_MIL.length; const k = ((i % n) + n) % n;
-    this.gridMil = GRIDS_MIL[k]; this.renderStatus(); this.paint();
+    const l = symGrids(), n = l.length; if (!n) return; const k = ((i % n) + n) % n;
+    this.setGrid(l[k]);
+  }
+  /** COMMON_TOOLS::GridPreset: the grid picked from the Grid menu, remembered as the window's grid.last_size. */
+  setGrid(mm: number): void { this.gridMm = mm; rememberGrid(mm, "sym"); this.renderStatus(); this.paint(); }
+  gridIdx(): number { return symGrids().findIndex((mm) => Math.abs(mm - this.gridMm) < 1e-9); }
+  /** Preferences saved: the grid list may have changed; the window's grid.last_size is the grid in use. */
+  private prefsHook = (): void => { if (!this.isOpen) return; const mm = defaultGrid("sym"); if (Math.abs(mm - this.gridMm) > 1e-9) { this.gridMm = mm; this.renderStatus(); this.paint(); } };
+  /** GRID_MENU (EDA_DRAW_FRAME::AddStandardSubMenus): every grid as GRID_MENU::BuildChoiceList writes it, the one in use checked. */
+  private gridMenu(): MenuEntry {
+    const u = this.units, li = (E.lastImperial === "in" ? "in" : "mil") as Units;
+    return { label: "Grid", icon: "grid_select", sub: gridDefs(prefs().grids.sym).map((g) => ({ label: gridChoiceText(g, u, li, "sch"), check: () => Math.abs(g.mm - this.gridMm) < 1e-9, enabled: () => true, run: () => this.setGrid(g.mm) })) };
   }
   /** COMMON_TOOLS::PanControl: the view centre moves by ten grid steps. */
   pan(dx: number, dy: number): void {
@@ -856,7 +881,8 @@ export class SymbolEditor {
     await this.close(); if (this.isOpen) return;
     await L.placeSymbol({ libId: r.libId || r.item.id, symbol: r.symbol || "", fields: r.fields, unit: r.unit, keep: r.keep, allUnits: r.allUnits }).catch((e: Error) => messageBox(e.message));
   }
-  setUnits(u: Units): void { E.units = u; if (u !== "mm") E.lastImperial = u; try { localStorage.setItem("kui.units", u); } catch (e) { /* no storage */ } this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
+  /** EDA_DRAW_FRAME::ChangeUserUnits: kept as symbol_editor's system.units and system.last_imperial_units. */
+  setUnits(u: Units): void { E.units = u; if (u !== "mm") E.lastImperial = u; saveUnits("symbol_editor", { units: u, lastImperial: (E.lastImperial === "in" ? "in" : "mil") as Units }); this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
   setTool(t: ToolId): void {
     if ((t !== "select") && this.readOnly()) { this.readOnlyNotice(); return; }
     const sym = this.symbol();
@@ -1245,7 +1271,7 @@ export class SymbolEditor {
       a("cut", has && can), a("copy", has), a("paste", can && !!this.clip), a("doDelete", has && can), a("duplicate", has && can), { sep: true },
     ];
     if (pin) items.push(a("pushPinLength", can), a("pushPinNameSize", can), a("pushPinNumSize", can), { sep: true });
-    items.push(a("selectAll", true), a("zoomFitScreen", true));
+    items.push(a("selectAll", true), a("zoomFitScreen", true), { sep: true }, this.gridMenu());
     showMenu(ev.clientX, ev.clientY, items);
   }
 

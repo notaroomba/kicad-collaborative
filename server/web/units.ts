@@ -51,3 +51,28 @@ export function gridChoiceText(g: GridDef, units: Units, lastImperial: Units, sc
 }
 /** EDA_DRAW_FRAME::DisplayUnitsMsg: the status bar's units field. */
 export function unitsMsg(units: Units): string { return units === "in" ? "inches" : units === "mil" ? "mils" : "mm"; }
+
+// ---------------------------------------------------------------- where the units are kept (APP_SETTINGS_BASE)
+/**
+ * The KiCad application whose settings file keeps the units: each has its own "system.units" and
+ * "system.last_imperial_units" (common/settings/app_settings.cpp), so switching units in one editor leaves the others.
+ */
+export type UnitsApp = "eeschema" | "pcbnew" | "footprint_editor" | "symbol_editor";
+export interface UnitsSettings { units: Units; lastImperial: Units }
+const unitsKey = (app: UnitsApp): string => "kui.units." + app;
+/** The application of a document type: the schematic is eeschema, a board pcbnew, a footprint the footprint editor. */
+export function unitsAppFor(docType: string): UnitsApp { return docType === "kicad_sch" ? "eeschema" : docType === "footprint" ? "footprint_editor" : "pcbnew"; }
+/** system.units and system.last_imperial_units: eeschema and the symbol editor start in mils, the board editors in mm. */
+export function loadUnits(app: UnitsApp): UnitsSettings {
+  const def: UnitsSettings = { units: app === "eeschema" || app === "symbol_editor" ? "mil" : "mm", lastImperial: "mil" };
+  try {
+    const raw = JSON.parse(localStorage.getItem(unitsKey(app)) || "null") as { units?: unknown; last_imperial_units?: unknown } | null;
+    if (!raw || typeof raw !== "object") return def;
+    const u = raw.units, li = raw.last_imperial_units;
+    return { units: u === "mm" || u === "mil" || u === "in" ? u : def.units, lastImperial: li === "in" || li === "mil" ? li : u === "in" ? "in" : "mil" };
+  } catch (e) { return def; }
+}
+/** Save both, as KiCad writes system.units and system.last_imperial_units when the frame's units change. */
+export function saveUnits(app: UnitsApp, s: UnitsSettings): void {
+  try { localStorage.setItem(unitsKey(app), JSON.stringify({ units: s.units, last_imperial_units: s.lastImperial === "in" ? "in" : "mil" })); } catch (e) { /* no storage */ }
+}

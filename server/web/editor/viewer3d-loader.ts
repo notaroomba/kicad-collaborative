@@ -80,6 +80,6 @@ export function show3DViewer(): void {
 document.addEventListener("keydown", (ev) => {
   if (!ev.altKey || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.code !== "Digit3") return;
   const t = ev.target as HTMLElement | null;
-  if ((t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) || app.get().view !== "editor" || !boardDoc()) return;
+  if ((t && /^(INPUT|TEXTAREA|SELECT|K-SELECT)$/.test(t.tagName)) || app.get().view !== "editor" || !boardDoc()) return;
   ev.preventDefault(); show3DViewer();
 });

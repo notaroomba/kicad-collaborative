@@ -176,7 +176,6 @@ const UNIT_ACTION: Record<string, string> = { mm: "millimetersUnits", in: "inche
 function setUnits(u: "mm" | "in" | "mil"): void { setUnitsAction(u, UNIT_ACTION[u]); }
 /** Ctrl+U (ACTIONS::toggleUnits, COMMON_TOOLS::ToggleUnits): between millimetres and the imperial unit last used. */
 function toggleUnits(): void { setUnits(E.units === "mm" ? (E.lastImperial || "mil") : "mm"); }
-try { const u = localStorage.getItem("kui.units"); if (u === "in" || u === "mil" || u === "mm") { E.units = u; if (u !== "mm") E.lastImperial = u; } } catch (e) { /* no storage */ }
 
 function resetLocalCoords(): void { E.localOrigin = (E.lastCursorMm as number[]).slice(); store.slice("viewport", { origin: E.localOrigin.slice() }); }
 

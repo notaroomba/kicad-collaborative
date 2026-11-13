@@ -14,7 +14,7 @@ import { appState, dispatch, useApp, type Editor } from "../store";
 import { isOn, keyFor, runUiAction, titleFor, unavailable, useAvail, type Avail } from "../actions";
 import { cx } from "../util";
 import { Glyph, KIcon } from "./Icon";
-import { LayerSelect, TrackWidthSelect, ViaSizeSelect } from "./PcbControls";
+import { LayerSelect, TrackWidthSelect, ViaSizeSelect, ViaStackSelect } from "./PcbControls";
 
 function useEditor(): Editor | null { return useApp((s) => s.document.editor); }
 
@@ -179,7 +179,7 @@ function Control({ item }: { item: ControlItem }) {
   else if (c === "overrideLocks") inner = <label className="kcheck inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Allow editing locked items"><input type="checkbox" onChange={(ev) => { const ed = (window as unknown as { CollabEditor?: { overrideLocks?: boolean } }).CollabEditor; if (ed) ed.overrideLocks = ev.currentTarget.checked; }} /> Override locks</label>;
   else if (c === "trackWidth") inner = <TrackWidthSelect />;
   else if (c === "viaDiameter") inner = <ViaSizeSelect />;
-  else if (c === "viaStack") inner = <Select className={KSEL} title="Select the microvia stack preset placed by the microvia stack tool." options={[{ value: "none", label: "Microvia stack: none defined" }]} value="none" blurOnPick />;
+  else if (c === "viaStack") inner = <ViaStackSelect />;
   else if (c === "layerSelector") inner = <LayerSelect />;
   else if (c === "gridSelect") inner = <GridSelect />;
   else if (c === "zoomSelect") inner = <ZoomSelect />;

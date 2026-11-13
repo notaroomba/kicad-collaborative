@@ -167,17 +167,17 @@ export function Modal({ title, onClose, children, footer, width = 480, busy }: {
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
     const el = ref.current!;
-    const first = el.querySelector<HTMLElement>("[data-autofocus]") || el.querySelector<HTMLElement>("input, textarea, select, button:not(.hp-x)");
+    const first = el.querySelector<HTMLElement>("[data-autofocus]") || el.querySelector<HTMLElement>("input, textarea, select, k-select, button:not(.hp-x)");
     (first || el).focus();
     const onKey = (ev: KeyboardEvent) => {
       if (!top()) return;
       if (ev.key === "Escape") {
-        // An open suggestion list takes the first Escape.
+        // An open suggestion list or drop-down list takes the first Escape.
         if ((ev.target as HTMLElement | null)?.closest?.("[data-popup-open]")) return;
         ev.stopPropagation(); if (!busyRef.current) close.current(); return;
       }
       if (ev.key !== "Tab") return;
-      const f = Array.from(el.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")).filter((n) => n.offsetParent !== null);
+      const f = Array.from(el.querySelectorAll<HTMLElement>("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), k-select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")).filter((n) => n.offsetParent !== null);
       if (!f.length) return;
       const a = f[0], z = f[f.length - 1];
       if (ev.shiftKey && document.activeElement === a) { ev.preventDefault(); z.focus(); }

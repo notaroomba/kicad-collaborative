@@ -69,7 +69,7 @@ export function StatusBar() {
       {inEditor ? (
         <>
           <span className={cx(cell, "max-[900px]:hidden")} id="sbWhere" title={editor === "sch" ? "Sheet path" : "Active layer"}>{where}</span>
-          <span className={cx(cell, "min-w-[calc(9ch+20px)] max-[560px]:hidden")} id="sbZoom">Z {vp.zoom.toFixed(2)}</span>
+          <span className={cx(cell, "min-w-[calc(9ch+20px)] max-[560px]:hidden")} id="sbZoom">Z {vp.kzoom.toFixed(2)}</span>
           <span className={cx(cell, "min-w-[calc(26ch+20px)]")} id="sbCursor">X {fmtCoord(vp.cursor[0], u)}  Y {fmtCoord(vp.cursor[1], u)}</span>
           <span className={cx(cell, "min-w-[calc(42ch+20px)] max-[1180px]:hidden")} id="sbDelta">{delta}</span>
           {/* EDA_DRAW_FRAME::DisplayGridMsg and DisplayUnitsMsg: plain text; the units change from the left toolbar or Ctrl+U */}

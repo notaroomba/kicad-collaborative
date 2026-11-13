@@ -9,6 +9,7 @@ import { E } from "./state";
 import { renderModuleTools } from "./tools";
 import { UNITS, setRadio } from "./util";
 import { isSch, requestRender } from "./view";
+import { loadUnits, saveUnits, unitsAppFor } from "../units";
 // ================================================================ KiCad frame (the React chrome reads the store)
 // Docked panes: which are open, per editor, remembered in localStorage (kui.panes.<editor>).
 export const PANE_NAMES = ["props", "hier", "filter", "history", "peers", "comments", "appearance", "search", "netnav", "libtree"];
@@ -58,6 +59,8 @@ export function setupEditorChrome() {
   document.body.dataset.editor = ed;
   filters[ed] = filters[ed] || {};
   E.panes = loadPanes(ed);
+  // each KiCad application keeps its own system.units and system.last_imperial_units
+  const us = loadUnits(unitsAppFor(E.DOC_TYPE)); E.units = us.units; E.lastImperial = us.lastImperial;
   renderModuleTools();
   store.set({ document: Object.assign({}, store.get().document, { editor: ed, docType: E.DOC_TYPE }), panes: Object.assign({}, E.panes), filter: Object.assign({}, filters[ed]) });
   setRadio("Units", ({ mm: "millimetersUnits", in: "inchesUnits", mil: "milsUnits" } as Record<string, string>)[E.units]);
@@ -96,7 +99,7 @@ if (typeof window !== "undefined") window.addEventListener("kc:pcb-linemode", ()
 export function setUnitsAction(u: string, id: string) {
   if (UNITS[u]) E.units = u;
   if (E.units === "in" || E.units === "mil") E.lastImperial = E.units;
-  try { localStorage.setItem("kui.units", E.units); } catch (e) { /* no storage */ }
+  saveUnits(unitsAppFor(E.DOC_TYPE), { units: E.units as "mm", lastImperial: (E.lastImperial || "mil") as "mil" });
   setRadio("Units", id); store.slice("viewport", { units: E.units, lastImperial: E.lastImperial || "mil" });
 }
 

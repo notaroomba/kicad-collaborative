@@ -6,7 +6,11 @@
 // with the same code, but it draws its own closed control (in a shadow root) and its own list (a fixed popup on
 // <body>, so no pane or dialog clips it).  The colours come from theme.css (`k-select`, `.ksel-pop`).
 //
-//   mouse      click opens, click an entry picks it, click outside or scroll closes
+//   mouse      click opens, click an entry picks it, click outside or scroll closes; press on the control, drag onto
+//              an entry and release picks it (as a native select does)
+//   labels     the host's aria-label / title / aria-labelledby and any <label for=id> name the inner combobox or
+//              listbox, and a click on such a label focuses the control
+//   open       while the list is up the host carries data-popup-open, so dialogs leave the first Escape to it
 //   keyboard   Space / Alt+Down / Up / Down open; in the list Up, Down, Home, End, PageUp, PageDown move, Enter picks,
 //              Escape and Tab close; typing jumps to the first entry that starts with the typed text
 //   separator  a disabled option whose text is "---" (how wxChoice lists are filled) or that has data-sep is a rule
@@ -50,7 +54,7 @@ export function defineKSelect(): void {
   if (customElements.get(KSELECT_TAG)) return;
 
   class KSelect extends HTMLElement {
-    static get observedAttributes(): string[] { return ["disabled", "size"]; }
+    static get observedAttributes(): string[] { return ["disabled", "size", "aria-label", "aria-labelledby", "title", "id"]; }
     private root: ShadowRoot;
     private btn: HTMLElement | null = null;
     private label: HTMLElement | null = null;
@@ -63,6 +67,8 @@ export function defineKSelect(): void {
     private typed = ""; private typedAt = 0;
     private mo: MutationObserver;
     private undo: (() => void)[] = [];
+    /** where a press on the closed control opened the list: a release over an entry after a drag picks it */
+    private press: { x: number; y: number; moved: boolean } | null = null;
 
     constructor() {
       super();
@@ -75,11 +81,26 @@ export function defineKSelect(): void {
         if (Object.prototype.hasOwnProperty.call(this, k)) { const v = (this as unknown as Record<string, unknown>)[k]; delete (this as unknown as Record<string, unknown>)[k]; (this as unknown as Record<string, unknown>)[k] = v; }
       }
       if (!this.btn && !this.lb) this.build();
+      // a <label for> in the same tree may be added after the control: name it once the frame has settled too
+      requestAnimationFrame(() => this.name_());
       this.mo.observe(this, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["selected", "disabled", "label", "value", "data-sep"] });
       this.sync();
     }
     disconnectedCallback(): void { this.mo.disconnect(); this.close(); }
-    attributeChangedCallback(name: string): void { if (name === "size") { if (this.btn || this.lb) this.build(); } else this.sync(); }
+    attributeChangedCallback(name: string): void { if (name === "size") { if (this.btn || this.lb) this.build(); } else if (name === "disabled") this.sync(); else this.name_(); }
+    /**
+     * The accessible name of the inner combobox / listbox: an id reference cannot cross the shadow boundary, so the
+     * name is copied as text from aria-label, aria-labelledby's elements, a <label for=id>, or the title.
+     */
+    private name_(): void {
+      const inner = this.btn || this.lb; if (!inner) return;
+      let name = this.getAttribute("aria-label") || "";
+      if (!name) { const ids = (this.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean); name = ids.map((i) => { const e = document.getElementById(i); return e ? (e.textContent || "").trim() : ""; }).filter(Boolean).join(" "); }
+      if (!name && this.id) { const l = this.ownerDocument.querySelector(`label[for="${CSS.escape(this.id)}"]`); if (l) name = (l.textContent || "").trim().replace(/:$/, ""); }
+      if (!name) name = this.getAttribute("title") || "";
+      if (name) inner.setAttribute("aria-label", name); else inner.removeAttribute("aria-label");
+      const t = this.getAttribute("title"); if (t) inner.setAttribute("title", t); else inner.removeAttribute("title");
+    }
 
     // ------------------------------------------------------------ the <select> API
     get options(): OptionList {
@@ -141,11 +162,16 @@ export function defineKSelect(): void {
         const b = document.createElement("div"); b.className = "b"; b.setAttribute("role", "combobox"); b.setAttribute("aria-haspopup", "listbox"); b.setAttribute("aria-expanded", "false"); b.tabIndex = 0;
         // like a native select (and a wxChoice) the control is as wide as its longest entry: the hidden .sz column sizes it
         b.innerHTML = `<span class="t"><span class="v"></span><span class="sz" aria-hidden="true"></span></span>${CARET}`; this.btn = b; this.label = b.querySelector(".v"); this.sizer = b.querySelector(".sz"); this.sizedFor = "\u0002";
-        b.addEventListener("pointerdown", (ev) => { if (ev.button !== 0 || this.disabled) return; ev.preventDefault(); b.focus(); if (this.pop) this.close(); else this.open(); });
+        b.addEventListener("pointerdown", (ev) => {
+          if (ev.button !== 0 || this.disabled) return; ev.preventDefault(); b.focus();
+          if (this.pop) { this.close(); return; }
+          this.open(); this.press = { x: ev.clientX, y: ev.clientY, moved: false };
+        });
         b.addEventListener("keydown", (ev) => this.buttonKey(ev));
         b.addEventListener("blur", () => { if (this.pop) this.close(); });
         this.root.append(b);
       }
+      this.name_();
       this.sync();
     }
     /** Bring the closed control (or the in-place list) up to date with the options and the selection. */
@@ -196,13 +222,28 @@ export function defineKSelect(): void {
       const away = (ev: Event): void => { const t = ev.target as Node; if (t !== this && !this.contains(t) && !pop.contains(t)) this.close(); };
       const scroll = (ev: Event): void => { if (!pop.contains(ev.target as Node)) this.close(); };
       const shut = (): void => this.close();
+      // press, drag onto an entry, release: the entry is picked (a press and release in place leaves the list open)
+      const rowAt = (ev: PointerEvent): HTMLElement | null => { const e = document.elementFromPoint(ev.clientX, ev.clientY); const r = e && pop.contains(e) ? (e.closest(".ksel-opt") as HTMLElement | null) : null; return r && !r.classList.contains("dis") ? r : null; };
+      const drag = (ev: PointerEvent): void => {
+        const p = this.press; if (!p) return;
+        if (!p.moved && Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 4) p.moved = true;
+        const r = p.moved ? rowAt(ev) : null; if (r) this.highlight(+r.dataset.i!, false);
+      };
+      const release = (ev: PointerEvent): void => {
+        const p = this.press; this.press = null; if (!p || !p.moved) return;
+        const r = rowAt(ev); if (r) { ev.preventDefault(); const i = +r.dataset.i!; this.close(); this.choose(i); }
+      };
       document.addEventListener("pointerdown", away, true); window.addEventListener("scroll", scroll, true); window.addEventListener("resize", shut); window.addEventListener("blur", shut);
-      this.undo = [() => document.removeEventListener("pointerdown", away, true), () => window.removeEventListener("scroll", scroll, true), () => window.removeEventListener("resize", shut), () => window.removeEventListener("blur", shut)];
+      document.addEventListener("pointermove", drag, true); document.addEventListener("pointerup", release, true);
+      this.undo = [() => document.removeEventListener("pointerdown", away, true), () => window.removeEventListener("scroll", scroll, true), () => window.removeEventListener("resize", shut), () => window.removeEventListener("blur", shut),
+        () => document.removeEventListener("pointermove", drag, true), () => document.removeEventListener("pointerup", release, true)];
+      this.setAttribute("data-popup-open", "");
       openOne = this;
     }
     close(): void {
       if (!this.pop) return;
-      this.pop.remove(); this.pop = null; this.undo.forEach((f) => f()); this.undo = [];
+      this.pop.remove(); this.pop = null; this.undo.forEach((f) => f()); this.undo = []; this.press = null;
+      this.removeAttribute("data-popup-open");
       if (this.btn) { this.btn.setAttribute("aria-expanded", "false"); this.btn.removeAttribute("aria-activedescendant"); }
       if (openOne === this) openOne = null;
     }
@@ -297,6 +338,13 @@ export function defineKSelect(): void {
     }
   }
   customElements.define(KSELECT_TAG, KSelect);
+  // <label for=id> focuses (and does not otherwise act on) the control it names, as it does a native <select>: a
+  // custom element is not labelable, so the browser would do nothing
+  document.addEventListener("click", (ev) => {
+    const l = ev.target instanceof Element ? (ev.target.closest("label") as HTMLLabelElement | null) : null; if (!l || !l.htmlFor) return;
+    const t = (l.getRootNode() as Document | ShadowRoot).getElementById?.(l.htmlFor) || document.getElementById(l.htmlFor);
+    if (t && t.tagName === "K-SELECT" && !(t as HTMLSelectElement).disabled) { ev.preventDefault(); (t as HTMLElement).focus(); }
+  });
 }
 
 defineKSelect();

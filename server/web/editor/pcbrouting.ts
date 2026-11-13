@@ -48,6 +48,7 @@ function publish(): void {
   const slice: RoutingState = {
     trackLabels: board ? PS().trackWidthLabels(st.sizes, u, lastImperial) : [], trackIndex: st.trackIndex,
     viaLabels: board ? PS().viaSizeLabels(st.sizes, u, lastImperial) : [], viaIndex: st.viaIndex,
+    viaStacks: board ? viaStackNames(E.proSettings) : [], viaStackIndex,
     layers: board ? PS().enabledLayers(E.kdoc, layerColor).map((l) => ({ name: l.name, label: l.label, color: l.color, copper: l.copper })) : [],
     layerPair: [st.layerPair[0], st.layerPair[1]],
   };
@@ -135,12 +136,24 @@ export function adoptRoutingProject(text: string): void {
 }
 
 let seenInputs = "";
+let seenPro: string | null | undefined;
+/** BOARD_DESIGN_SETTINGS::GetViaStackIndex: the microvia stack preset the stack tool places (not saved, as in KiCad). */
+let viaStackIndex = 0;
+/** The names of the project's microvia stack presets (board.design_settings.via_stack_presets[].name). */
+export function viaStackNames(pro: string | null | undefined): string[] {
+  if (!pro) return [];
+  try {
+    const j = JSON.parse(pro) as { board?: { design_settings?: { via_stack_presets?: unknown } } };
+    const list = j && j.board && j.board.design_settings ? j.board.design_settings.via_stack_presets : null;
+    return Array.isArray(list) ? list.map((p) => (p && typeof p === "object" && typeof (p as { name?: unknown }).name === "string" ? (p as { name: string }).name : "")) : [];
+  } catch (e) { return []; }
+}
 /** Every store update lands here (pointer moves included), so only a new project, document, view or unit does any work. */
 function onStore(): void {
   ensureProject();
   if (E.kdoc !== seenDoc) { seenDoc = E.kdoc; seenInputs = ""; onDocument(); }
   const inputs = `${E.units}|${state.view}|${E.DOC_TYPE}|${E.kdoc ? 1 : 0}`;
-  if (inputs !== seenInputs) { seenInputs = inputs; publish(); }   // the labels follow the units
+  if (inputs !== seenInputs || E.proSettings !== seenPro) { seenInputs = inputs; seenPro = E.proSettings; publish(); }   // the labels follow the units, the stacks the project file
 }
 
 // ---------------------------------------------------------------- the chrome's intents
@@ -154,6 +167,14 @@ export function chooseTrackWidth(index: number | "edit"): void {
 export function chooseViaSize(index: number | "edit"): void {
   if (index === "edit") { openPredefinedSizes(); return; }
   R().setViaIndex(Number(index));
+}
+/**
+ * PCB_EDIT_FRAME::SelectViaStack_Event: a preset becomes the one in use; "Edit Pre-defined Microvia Stacks..." is
+ * Board Setup's Microvia Stacks page, which the web's Board Setup does not have yet.
+ */
+export function chooseViaStack(index: number | "edit"): void {
+  if (index === "edit") { toast("Microvia stacks are edited in Board Setup > Microvia Stacks in the KiCad desktop app", 4000); return; }
+  if (index >= 0 && index < viaStackNames(E.proSettings).length) { viaStackIndex = index; publish(); }
 }
 /** + / - in the board editor (PCB_ACTIONS::layerNext / layerPrev); anything else, or a schematic, is not ours. */
 export function pcbLayerKey(ev: KeyboardEvent): boolean {

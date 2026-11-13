@@ -7,7 +7,7 @@ import { actions as SPEC_ACTIONS } from "../generated/kicad-ui-spec.json";
 import { KD, checkbox, h, select, textInput } from "./dom";
 import { messageBox } from "../editor/pcbdialogs/ui";
 import { messageText } from "../units";
-import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, gridLabel, savePrefs, type EditorId, type Prefs, type SchThemeId } from "./prefs";
+import { COLOR_THEMES, DEFAULT_PREFS, clonePrefs, editorId, gridLabel, savePrefs, scaleOf, type EditorId, type Prefs, type SchThemeId } from "./prefs";
 import type { Units } from "../store";
 import { getThemeMode, setThemeMode, type ThemeMode } from "../theme";
 import { getInactiveMode, setInactiveMode } from "../editor/panels/appearance";
@@ -28,7 +28,7 @@ function parseUserLen(text: string): number | null {
  */
 export function gridSettingsDialog(grid: { mm: number; name: string } | null, ed: EditorId): Promise<{ mm: number; name: string } | null> {
   return new Promise((resolve) => {
-    const u = units(), show = (mm: number): string => messageText(mm, u, ed, false).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+    const u = units(), show = (mm: number): string => messageText(mm, u, scaleOf(ed), false).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
     const name = h("input", { type: "text", id: "kd-grid-name", value: grid ? grid.name : "" });
     const x = h("input", { type: "text", id: "kd-grid-x", value: grid ? show(grid.mm) : "" }), y = h("input", { type: "text", id: "kd-grid-y", value: grid ? show(grid.mm) : "", disabled: true });
     const linked = h("input", { type: "checkbox", id: "kd-grid-linked", checked: true, disabled: true });
@@ -64,7 +64,8 @@ export function openPreferences(page?: string): void {
   let arcEdit = pcbTools() ? pcbTools()!.arcEditMode() : 0;
   // the inactive layer mode is the open board's project setting (.kicad_prl "board.high_contrast_mode"), not a user preference
   let contrast = getInactiveMode();
-  const here: EditorId = E.DOC_TYPE === "kicad_sch" ? "sch" : "pcb";
+  // the frame it was opened from: its grid list's selection is the grid in use (the Symbol Editor keeps its own)
+  const here: EditorId | null = document.getElementById("symedit") ? null : E.kdoc ? editorId() : null;
   // PANEL_GRID_SETTINGS: the grid list (its selection is the current grid, grid.last_size), Add / Edit / Move / Remove
   // through DIALOG_GRID_SETTINGS, the fast grids, the overrides and the axes.  Every list shows the grids as
   // GRID_MENU::BuildChoiceList does, in the user units with the other system in brackets.
@@ -86,7 +87,7 @@ export function openPreferences(page?: string): void {
     };
     list.addEventListener("change", () => { g.last = list.selectedIndex; });
     const exists = (mm: number, skip: number): boolean => g.sizes.some((x, i) => i !== skip && Math.abs(x - mm) < 1e-6);
-    const dup = (mm: number): void => { messageBox("Error", `Grid size '${messageText(mm, units(), ed)}' already exists.`); };
+    const dup = (mm: number): void => { messageBox("Error", `Grid size '${messageText(mm, units(), scaleOf(ed))}' already exists.`); };
     const add = (): void => { void gridSettingsDialog(null, ed).then((r) => { if (!r) return; if (exists(r.mm, -1)) { dup(r.mm); return; }
       const row = list.selectedIndex < 0 ? g.sizes.length : list.selectedIndex; g.sizes.splice(row, 0, r.mm); g.names!.splice(row, 0, r.name);
       if (g.fast1 >= row) g.fast1++; if (g.fast2 >= row) g.fast2++; fill(row); }); };
@@ -107,8 +108,11 @@ export function openPreferences(page?: string): void {
     const ob = KD().staticBox(R, "Grid Overrides"), og = h("div", { style: "display:grid;grid-template-columns:max-content minmax(0,240px);gap:6px 10px;align-items:center" });
     const ov = (key: "connected" | "wires" | "vias" | "text" | "graphics", label: string) => { const s2 = select([], "", (v) => { (o as unknown as Record<string, number>)[key + "Mm"] = +v; }, { id: `${pre}-ov-${key}` }); ovSel[key] = s2;
       og.append(checkbox(label, o[key], (on) => { o[key] = on; }, { id: `${pre}-ovon-${key}` }), s2); };
-    // PANEL_GRID_SETTINGS relabels the first two overrides for the board editor
-    ov("connected", ed === "pcb" ? "Footprints/pads:" : "Connected items:"); ov("wires", ed === "pcb" ? "Tracks:" : "Wires:"); if (ed === "pcb") ov("vias", "Vias:"); ov("text", "Text:"); ov("graphics", "Graphics:");
+    // PANEL_GRID_SETTINGS relabels the overrides for the board editor, and the footprint editor has no wires or vias
+    if (ed === "fp") ov("connected", "Pads:");
+    else { ov("connected", ed === "pcb" ? "Footprints/pads:" : "Connected items:"); ov("wires", ed === "pcb" ? "Tracks:" : "Wires:"); }
+    if (ed === "pcb") ov("vias", "Vias:");
+    ov("text", "Text:"); ov("graphics", "Graphics:");
     ob.append(og); KD().staticBox(R, "Grid Display").append(checkbox("Show grid axes", !!g.axes, (on) => { g.axes = on; }, { id: `${pre}-gridaxes` })); fill();
   };
   KD().open({ title: "Preferences", width: 900, cls: "kd-wide kd-flush",
@@ -148,6 +152,10 @@ export function openPreferences(page?: string): void {
             fill("");
           } },
         ] },
+        // PANEL_SYM_EDIT_GRIDS: the Symbol Editor's own window settings
+        { label: "Symbol Editor", pages: [
+          { label: "Grids", build: gridsPage("sym") },
+        ] },
         { label: "Schematic Editor", pages: [
           { label: "Display Options", build(pg) {
             const ap = KD().staticBox(pg, "Appearance");
@@ -171,6 +179,10 @@ export function openPreferences(page?: string): void {
             paint();
           } },
         ] },
+        // PANEL_FP_GRIDS: the Footprint Editor's own window settings
+        { label: "Footprint Editor", pages: [
+          { label: "Grids", build: gridsPage("fp") },
+        ] },
         { label: "PCB Editor", pages: [
           { label: "Display Options", build(pg) {
             const ap = KD().staticBox(pg, "Annotations");
@@ -187,7 +199,7 @@ export function openPreferences(page?: string): void {
             misc.append(checkbox("Automatically refill zones", p.pcbEditing.autoRefillZones, (on) => { p.pcbEditing.autoRefillZones = on; }, { id: "kd-pref-autorefill", title: "If checked, zones will be re-filled after each edit operation" }));
           } },
         ] },
-      ], { selected: page || (here === "sch" ? "Mouse and Touchpad" : "Mouse and Touchpad") });
+      ], { selected: page || "Mouse and Touchpad" });
     },
     ok() { if (uiMode !== getThemeMode()) setThemeMode(uiMode); savePrefs(p); if (contrast !== getInactiveMode()) setInactiveMode(contrast); if (pcbTools() && arcEdit !== pcbTools()!.arcEditMode()) pcbTools()!.setArcEditMode(arcEdit); toast("Preferences saved"); } });
 }

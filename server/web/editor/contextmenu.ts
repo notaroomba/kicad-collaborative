@@ -457,11 +457,15 @@ export function openRouterModeMenu(at?: { left: number; bottom: number } | null)
   requestRender();
 }
 
-/** The left toolbar's grid button menu (toolbars_pcb_editor.cpp, toolbars_sch_editor.cpp): Edit Grids... and Grid Origin... */
+/**
+ * The left toolbar's grid button menu: eeschema's holds Edit Grids... alone (toolbars_sch_editor.cpp), pcbnew's adds
+ * Grid Origin... (toolbars_pcb_editor.cpp).
+ */
 export function openGridButtonMenu(at?: { left: number; bottom: number } | null): void {
   if (!E.kdoc || state.view !== "editor") return;
   const c = menuCtx();
-  const items: CtxItem[] = [row("ACTIONS::gridProperties", false, c), row(GRID_ORIGIN, false, c)];
+  const items: CtxItem[] = [row("ACTIONS::gridProperties", false, c)];
+  if (!isSch()) items.push(row(GRID_ORIGIN, false, c));
   const x = at ? at.left : stage.getBoundingClientRect().left + 40, y = at ? at.bottom : stage.getBoundingClientRect().top + 40;
   E.contextMenuOpen = true; anchor = null;
   store.set({ contextMenu: { id: ++menuId, x, y, items } });

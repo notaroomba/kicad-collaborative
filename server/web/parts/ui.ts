@@ -146,7 +146,8 @@ class PartsDialog {
   private lib: Library | null = null; private libBusy = ""; private libNote = "";
   // the bill of materials of the open document, and the line a search is looking for a part for
   private bom: BomLine[] | null = null; private boards = 1; private bomSheets = 1; private assign: { ids: string[]; refs: string[] } | null = null;
-  private onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape" && !ev.defaultPrevented && !document.querySelector(".kp-ask")) { ev.stopPropagation(); this.close(); } };
+  // an open drop-down list takes the first Escape
+  private onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape" && !ev.defaultPrevented && !document.querySelector(".kp-ask") && !(ev.target as HTMLElement | null)?.closest?.("[data-popup-open]")) { ev.stopPropagation(); this.close(); } };
 
   constructor(opts: Opts) {
     this.ctx = opts.ctx || null; this.tab = opts.tab || "search"; this.q = opts.query || "";
