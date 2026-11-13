@@ -1254,13 +1254,13 @@ test("ERC pin conflicts: KiCad's pin matrix (two outputs, output to power output
   d.lib.set("power:PWR_FLAG", K.parse(LIB_PIN("power:PWR_FLAG", "#FLG", "power_out", "(power)"))); d.lib.set("power:VCC", K.parse(LIB_SYM("power:VCC", "#PWR", "(power)")));
   // two outputs wired together
   const o1 = place(c, "T:OUT", [50.8, 152.4], "U1"), o2 = place(c, "T:OUT", [76.2, 152.4], "U2"); K.createItem(d, _.lineNode("wire", [50.8, 152.4], [76.2, 152.4]));
-  let ms = sch.ercCheck(d), m = ms.find((x) => x.code === "pin_to_pin_error");
+  let ms = sch.ercCheck(d), m = ms.find((x) => x.code === "pin_to_pin");
   assert.ok(m && m.severity === "error" && /Pins of type Output and Output are connected: U1 pin 1 \(P\) and U2 pin 1 \(P\)/.test(m.text) && m.ids.includes(o1.id) && m.ids.includes(o2.id), JSON.stringify(m));
   // an input driven by a bidirectional pin is fine; an output on a power output is an error; an unspecified pin warns
   const i1 = place(c, "T:IN", [50.8, 165.1], "U3"), b1 = place(c, "T:BIDI", [76.2, 165.1], "U4"); K.createItem(d, _.lineNode("wire", [50.8, 165.1], [76.2, 165.1]));
   ms = sch.ercCheck(d); assert.ok(!ms.some((x) => x.ids.includes(i1.id) && /pin_to_pin|not driven/.test(x.code)), "input + bidi is clean"); assert.ok(b1);
   place(c, "T:OUT", [50.8, 177.8], "U5"); place(c, "T:PWRO", [76.2, 177.8], "U6"); K.createItem(d, _.lineNode("wire", [50.8, 177.8], [76.2, 177.8]));
-  ms = sch.ercCheck(d); assert.ok(ms.some((x) => x.code === "pin_to_pin_error" && /Output and Power output/.test(x.text)));
+  ms = sch.ercCheck(d); assert.ok(ms.some((x) => x.code === "pin_to_pin" && /Output and Power output/.test(x.text)));
   // a chip's power input fed by a passive pin: not driven until a PWR_FLAG (power output) joins the net
   const pi = place(c, "T:PWRI", [101.6, 152.4], "U7"); place(c, "T:PAS", [127, 152.4], "J1"); K.createItem(d, _.lineNode("wire", [101.6, 152.4], [127, 152.4]));
   ms = sch.ercCheck(d); m = ms.find((x) => x.code === "power_pin_not_driven");
