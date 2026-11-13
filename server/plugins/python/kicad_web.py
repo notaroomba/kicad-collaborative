@@ -1935,11 +1935,52 @@ def _board_stem():
     return os.path.splitext(os.path.basename(b.GetFileName() if b is not None else "board"))[0] or "board"
 
 
+def _plot_name(suffix, ext):
+    """BuildPlotFileName: the board's name, a dash and the suffix with the characters a file name cannot hold made '_'."""
+    import re
+    suffix = re.sub(r'[\\/:*?"<>|%.]', "_", str(suffix or "").strip())
+    return f"{_board_stem()}-{suffix}{ext}" if suffix else f"{_board_stem()}{ext}"
+
+
+def _fab_plot_page(board, opts, layers, suffix, fmt):
+    """PostScript, DXF, PDF and SVG: the editor's File → Plot writers, one file holding the layers asked for."""
+    import base64
+    flush()
+    names = [pcbnew._layer_name(l) for l in layers]
+    if not names:
+        return ""
+    common = names[1:] + [pcbnew._layer_name(l) for l in (opts.get("PlotOnAllLayersSequence") or []) if pcbnew._layer_name(l) not in names]
+    scale = opts.get("Scale")
+    res = _call("fab.plot", {
+        "format": int(fmt), "layers": names[:1], "commonLayers": common, "mirror": bool(opts.get("Mirror")), "negative": bool(opts.get("Negative")),
+        "plotFrameRef": bool(opts.get("PlotFrameRef")), "drillMarks": int(opts.get("DrillMarksType") or 0),
+        "blackAndWhite": bool(opts.get("BlackAndWhite", True)), "plotReference": bool(opts.get("PlotReference", True)),
+        "plotValue": bool(opts.get("PlotValue", True)), "useAuxOrigin": bool(opts.get("UseAuxOrigin")),
+        "scale": float(scale) if isinstance(scale, (int, float)) else 1.0, "autoScale": bool(opts.get("AutoScale")),
+        "svgPrecision": int(opts.get("SvgPrecision") or 4), "svgFitPageToBoard": bool(opts.get("SvgFitPageToBoard")),
+        "sketchPadsOnFab": bool(opts.get("SketchPadsOnFabLayers")), "plotPadNumbers": bool(opts.get("PlotPadNumbers")),
+        "sketchDnpOnFab": bool(opts.get("SketchDNPFPsOnFabLayers", True)), "hideDnpOnFab": bool(opts.get("HideDNPFPsOnFabLayers")),
+        "crossoutDnpOnFab": bool(opts.get("CrossoutDNPFPsOnFabLayers", True)), "subtractMaskFromSilk": bool(opts.get("SubtractMaskFromSilk")),
+        "dxfPolygonMode": bool(opts.get("DXFPlotPolygonMode", True)), "dxfImperial": int(opts.get("DXFPlotUnits") or 0) == 0,
+        "a4Output": bool(opts.get("A4Output")), "fineScaleX": float(opts.get("FineScaleAdjustX") or 1.0),
+        "fineScaleY": float(opts.get("FineScaleAdjustY") or 1.0), "widthAdjust": float(opts.get("WidthAdjust") or 0) / 1e6}) or {}
+    for w in res.get("warnings") or []:
+        log.warning("plot: %s", w)
+    if not res.get("base64"):
+        if res.get("missing"):
+            return ""                                           # a layer this board does not have
+        raise pcbnew.WebUnsupported("Plotting without a board open")
+    ext = os.path.splitext(res.get("name") or "")[1] or ".plt"
+    path = os.path.join(_out_dir(opts.get("OutputDirectory")), _plot_name(suffix, ext))
+    _write(path, base64.b64decode(res["base64"]))
+    return path
+
+
 def _fab_plot(board, opts, layers, suffix, fmt, sheet_desc):
+    if fmt in (pcbnew.PLOT_FORMAT_SVG, pcbnew.PLOT_FORMAT_PDF, pcbnew.PLOT_FORMAT_DXF, pcbnew.PLOT_FORMAT_POST):
+        return _fab_plot_page(board, opts, layers, suffix, fmt)
     if fmt != pcbnew.PLOT_FORMAT_GERBER:
-        kind = {pcbnew.PLOT_FORMAT_SVG: "SVG", pcbnew.PLOT_FORMAT_PDF: "PDF", pcbnew.PLOT_FORMAT_DXF: "DXF", pcbnew.PLOT_FORMAT_POST: "PostScript",
-                pcbnew.PLOT_FORMAT_HPGL: "HPGL"}.get(fmt, "that format")
-        raise pcbnew.WebUnsupported(f"Plotting to {kind} from a plugin (File → Plot makes {kind} files; plugins can plot Gerbers)")
+        raise pcbnew.WebUnsupported("Plotting to HPGL (KiCad itself no longer writes it; Gerber, PostScript, DXF, PDF and SVG are available)")
     flush()                                                    # what the plugin changed so far is part of the plot
     names = [pcbnew._layer_name(l) for l in layers]
     if not names:
@@ -1960,7 +2001,7 @@ def _fab_plot(board, opts, layers, suffix, fmt, sheet_desc):
     for w in res.get("warnings") or []:
         log.warning("plot: %s", w)
     ext = os.path.splitext(files[0]["name"])[1] or ".gbr"
-    path = os.path.join(_out_dir(opts.get("OutputDirectory")), f"{_board_stem()}-{suffix}{ext}" if suffix else f"{_board_stem()}{ext}")
+    path = os.path.join(_out_dir(opts.get("OutputDirectory")), _plot_name(suffix, ext))
     _write(path, files[0]["text"].encode("utf-8"))
     return path
 

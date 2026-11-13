@@ -673,6 +673,15 @@ _FLIP = {F_Cu: B_Cu, F_Mask: B_Mask, F_SilkS: B_SilkS, F_Adhes: B_Adhes, F_Paste
 _FLIP.update({v: k for k, v in _FLIP.items()})
 
 
+# LayerName() of KiCad 6 and later: what BOARD::GetStandardLayerName and GetLayerName answer (the file keeps the short names)
+_UI_NAMES = {F_SilkS: "F.Silkscreen", B_SilkS: "B.Silkscreen", F_CrtYd: "F.Courtyard", B_CrtYd: "B.Courtyard", F_Adhes: "F.Adhesive",
+             B_Adhes: "B.Adhesive", Dwgs_User: "User.Drawings", Cmts_User: "User.Comments", Eco1_User: "User.Eco1", Eco2_User: "User.Eco2"}
+
+
+def _ui_layer_name(layer):
+    return _UI_NAMES.get(int(layer), None) or _layer_name(layer)
+
+
 def _layer_id(name):
     if isinstance(name, int):
         return name
@@ -1512,6 +1521,13 @@ class BOARD_CONNECTED_ITEM(BOARD_ITEM):
         b = self._board
         if b is None:                        # no board yet to give the net its number: written when the item is added
             self._net_wanted = str(name)
+            if isinstance(self, PAD) and self._parent is not None:
+                # a pad of a footprint that is not on a board yet: the name is kept in the pad itself, because the
+                # footprint hands out new pad objects whenever it is moved or turned before it is added
+                if name:
+                    _set_kid(self._node, "net", str(name))
+                else:
+                    _drop_kid(self._node, "net")
             return
         self._net_wanted = None
         old = _kid(self._node, "net")
@@ -5749,6 +5765,12 @@ class BOARD(EDA_ITEM):
             item._write_net(item._net_wanted)
         if isinstance(item, FOOTPRINT):
             item._kids_cache = None
+            if not self._nets_by_name_only:         # pads given a net by name before the footprint had a board
+                for pad in item.Pads():
+                    k = _kid(pad._node, "net")
+                    if k is not None and len(k) == 2 and not isinstance(k[1], Sym):
+                        _drop_kid(pad._node, "net")
+                        pad._write_net(str(k[1]))
             if item._pending:                       # a new footprint is written where it was asked to be
                 p = item._pending
                 item._pending = None
@@ -5869,9 +5891,9 @@ class BOARD(EDA_ITEM):
         for _i, name, _t, user in self._layers:
             if name == std and user:
                 return user
-        return std
+        return _ui_layer_name(_layer_id(std)) if std in _LAYER_IDS else std
 
-    GetStandardLayerName = staticmethod(lambda layer: _layer_name(layer))
+    GetStandardLayerName = staticmethod(lambda layer: _ui_layer_name(layer))
 
     def GetVisibleElements(self):
         return _ItemList()
@@ -7401,7 +7423,7 @@ PCB_LAYER_ID_COUNT_OLD = 64
 
 
 def BOARD_GetStandardLayerName(layer):
-    return _layer_name(layer)
+    return _ui_layer_name(layer)
 
 
 def LoadPluginModule(Dirname, ModuleName, FileName):

@@ -351,6 +351,69 @@ if (only('Parasitics')) {
   } catch (e) { check('Parasitics runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.Steffen-W.KiCad-Parasitics', 30)); await shot('real-parasitics-fail'); }
 }
 
+// ---- Board2Pdf: PLOT_CONTROLLER plots each layer of each template to a PDF with the editor's File → Plot writer; the plugin's
+// own PyPDF4 recolours and merges them into one assembly document
+if (only('Board2Pdf')) {
+  const ID = 'com.gitlab.dennevi.Board2Pdf';
+  try {
+    await page.goto(`${BASE}${ecc83}`); await editorReady();
+    const actions = await install(ID);
+    const n0 = downloads.length;
+    await runAction(ID, actions[0]);
+    const f = await frameOf(ID);
+    await f.waitForSelector('text=Perform', { timeout: 120000 });
+    await shot('real-board2pdf-window');
+    await f.click('text=/^Perform$/');
+    // its message boxes are the editor's own dialog: "will now begin", then "All done!" (or what failed)
+    let last = '';
+    for (let i = 0; i < 12 && !/All done|failed/.test(last); i++) {
+      if (i > 0 && /Traceback/.test(await logTail(ID, 40))) throw new Error("the plugin raised");
+      await page.waitForSelector('#pluginPrompt', { timeout: 300000 });
+      last = await page.locator('#pluginPrompt').innerText();
+      if (i === 0) await shot('real-board2pdf-message');
+      await page.click('#pluginPrompt .btn.primary');
+      await page.waitForSelector('#pluginPrompt', { state: 'detached', timeout: 5000 }).catch(() => {});
+    }
+    check('Board2Pdf: it plots, recolours and merges without an error', /All done/.test(last) && /Assembly\.pdf/.test(last), last.slice(0, 400) + ' ' + await logTail(ID, 12));
+    await f.click('text=/^Exit$/').catch(() => {});
+    const got = await download(n0);
+    check('Board2Pdf: a file is handed over', !!got, await logTail(ID));
+    if (got) {
+      const files = /\.zip$/.test(got.name) ? unzip(got.bytes) : { [got.name]: got.bytes };
+      const name = Object.keys(files).find((k) => /-Assembly\.pdf$/.test(k));
+      check('Board2Pdf: the assembly PDF is among what it wrote', !!name, Object.keys(files).join());
+      if (name) {
+        const pdf = files[name]; const text = pdf.toString('latin1');
+        if (SHOTS) fs.writeFileSync(path.join(SHOTS, 'real-board2pdf-assembly.pdf'), pdf);
+        const box = /\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]/.exec(text);
+        const W = box ? +box[3] : 0, H = box ? +box[4] : 0, PT = 72 / 25.4;
+        check('Board2Pdf: two pages (top and bottom) of the board\'s A4 sheet', /\/Count 2\b/.test(text) && Math.abs(W - 297 * PT) < 0.1 && Math.abs(H - 210 * PT) < 0.1, `${W} x ${H}`);
+        const pages = [];
+        for (const m of text.matchAll(/stream\r?\n([\s\S]*?)\r?\nendstream/g)) {
+          let t = ''; try { t = zlib.inflateSync(Buffer.from(m[1], 'latin1')).toString('latin1'); } catch { t = m[1]; }
+          if (/\d [ml]\b/.test(t)) pages.push(t);
+        }
+        // the board's own outline, from its file: on page 1 where it is, on page 2 mirrored, in the template's grey
+        const boardText = fs.readFileSync(path.join(repo, 'demos', 'ecc83', 'ecc83-pp.kicad_pcb'), 'utf8');
+        const edges = [];
+        for (const m of boardText.matchAll(/\(gr_line\s+\(start ([-\d.]+) ([-\d.]+)\)\s+\(end ([-\d.]+) ([-\d.]+)\)[\s\S]*?\(layer "([^"]+)"\)/g)) if (m[5] === 'Edge.Cuts') edges.push([[+m[1], +m[2]], [+m[3], +m[4]]]);
+        const lines = (t) => { const out = []; let colour = '';
+          for (const m of t.matchAll(/([\d.]+) ([\d.]+) ([\d.]+) RG|([\d.]+) ([\d.]+) m\s+([\d.]+) ([\d.]+) l\s+S/g)) {
+            if (m[1]) colour = [m[1], m[2], m[3]].map((v) => (+v).toFixed(2)).join(' '); else out.push({ a: [+m[4], +m[5]], b: [+m[6], +m[7]], colour });
+          } return out; };
+        const has = (ls, p, q, colour) => ls.some((l) => (colour === undefined || l.colour === colour)
+          && [[l.a, l.b], [l.b, l.a]].some(([a, b]) => Math.abs(a[0] - p[0]) < 0.02 && Math.abs(a[1] - p[1]) < 0.02 && Math.abs(b[0] - q[0]) < 0.02 && Math.abs(b[1] - q[1]) < 0.02));
+        const at = (p, mirrored) => [(mirrored ? 297 - p[0] : p[0]) * PT, H - p[1] * PT];
+        const top = lines(pages[0] || ''), bottom = lines(pages[1] || ''); const grey = '0.34 0.34 0.34';
+        check('Board2Pdf: page 1 holds the board outline where the board has it, in the template\'s grey', edges.length >= 4 && edges.every(([p, q]) => has(top, at(p, false), at(q, false), grey)), `${edges.length} outline lines, ${top.length} lines on the page`);
+        check('Board2Pdf: page 2 holds the outline mirrored', edges.length >= 4 && edges.every(([p, q]) => has(bottom, at(p, true), at(q, true), grey) && !has(bottom, at(p, false), at(q, false))), `${bottom.length} lines on the page`);
+        check('Board2Pdf: the copper is recoloured to the template\'s light grey', (pages[0] || '').split('0.94118 0.94118 0.94118 rg').length > 20, `${(pages[0] || '').length} bytes`);
+        console.log(`      (${name}: ${pdf.length} bytes, ${pages.length} pages, ${top.length}+${bottom.length} stroked lines)`);
+      }
+    }
+  } catch (e) { check('Board2Pdf runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.gitlab.dennevi.Board2Pdf', 30)); await shot('real-board2pdf-fail'); }
+}
+
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
 

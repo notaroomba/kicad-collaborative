@@ -27,7 +27,7 @@
 #dockPlugins.closed.windowed > :not(.plg-frames) { display: none; }
 .plg-frame.plg-windowed { position: fixed; inset: auto; left: var(--plg-win-x, 0); top: var(--plg-win-y, 0); width: var(--plg-win-w, 0); height: var(--plg-win-h, 0); z-index: 71; background: var(--bench); }
 body.plg-win-drag .plg-frame { pointer-events: none; }
-.plg-winlay { z-index: 70; }
+.plg-winlay { z-index: 70 !important; }
 .plg-winlay.modeless { background: transparent; pointer-events: none; }
 .plg-winlay.modeless .plg-window { pointer-events: auto; }
 .plg-window { min-width: 280px; max-width: calc(100vw - 24px); outline: 0; }
@@ -54,7 +54,9 @@ body.plg-win-drag .plg-frame { pointer-events: none; }
 .plg-tb-btn.busy { color: var(--blue); border-color: var(--blue); }
 .plg-tb-btn svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 
-.plg-overlay { z-index: 80; }
+/* over a plugin's own window (71).  These rules sit in a cascade layer and theme.css (.kd-overlay, 60) does not, so only an
+   important declaration wins here; without it a plugin's message box opened under its window, out of reach. */
+.kd-overlay.plg-overlay { z-index: 80 !important; }
 .plg-from { margin-left: 10px; padding: 1px 6px; border: 1px solid var(--line); border-radius: var(--r-3); color: var(--ink-2); font-size: 10px; font-weight: 400; white-space: nowrap; }
 .plg-prompt { width: 440px; }
 .plg-prompt .kd-title { cursor: default; }

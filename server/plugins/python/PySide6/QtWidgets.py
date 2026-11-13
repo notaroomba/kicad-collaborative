@@ -1913,6 +1913,9 @@ class _Doc(QtGui.QTextDocument):
     toPlainText = toHtml = lambda self: self._edit.toPlainText()
     blockCount = lambda self: self._edit.blockCount()
     isEmpty = lambda self: not self._edit.toPlainText()
+    lineCount = lambda self: self._edit.toPlainText().count("\n") + 1
+    characterCount = lambda self: len(self._edit.toPlainText()) + 1
+    clear = lambda self: self._edit.clear()
 
 
 class QTextEdit(_TextBox):
@@ -5391,7 +5394,62 @@ class QCalendarWidget(QWidget):
 
 
 class QLCDNumber(QLabel):
-    display = lambda self, v: self.setText(str(v))
+    """A number display.  The digits are the page's own text in a fixed-pitch face rather than seven-segment shapes."""
+
+    class SegmentStyle(enum.IntEnum):
+        Outline, Filled, Flat = 0, 1, 2
+
+    class Mode(enum.IntEnum):
+        Hex, Dec, Oct, Bin = 0, 1, 2, 3
+
+    Outline, Filled, Flat = SegmentStyle.Outline, SegmentStyle.Filled, SegmentStyle.Flat
+    Hex, Dec, Oct, Bin = Mode.Hex, Mode.Dec, Mode.Oct, Mode.Bin
+    overflow = Signal()
+
+    def __init__(self, *a):
+        digits = next((x for x in a if isinstance(x, int) and not isinstance(x, bool)), 5)
+        super().__init__(*[x for x in a if not isinstance(x, int) or isinstance(x, bool)])
+        self._digits, self._value, self._style, self._mode = int(digits), 0, QLCDNumber.SegmentStyle.Filled, QLCDNumber.Mode.Dec
+        self.setText("0")
+
+    def display(self, v):
+        self._value = v
+        self.setText(str(v))
+
+    def value(self):
+        try:
+            return float(self._value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def intValue(self):
+        return int(round(self.value()))
+
+    def setDigitCount(self, n):
+        self._digits = int(n)
+
+    setNumDigits = setDigitCount
+
+    def digitCount(self):
+        return self._digits
+
+    def setSegmentStyle(self, style):
+        self._style = style
+
+    def segmentStyle(self):
+        return self._style
+
+    def setMode(self, mode):
+        self._mode = mode
+
+    def mode(self):
+        return self._mode
+
+    def setSmallDecimalPoint(self, *_):
+        pass
+
+    def checkOverflow(self, v):
+        return len(str(v)) > self._digits
 
 
 class QKeySequenceEdit(QLineEdit):

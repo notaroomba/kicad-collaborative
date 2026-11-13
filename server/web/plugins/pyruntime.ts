@@ -197,6 +197,7 @@ export function pythonRuntime(): void {
       case "fab.positions": out = await kicad.fab.positions(a); break;
       case "fab.bom": out = await kicad.fab.bom(a); break;
       case "fab.svg": out = await kicad.fab.svg(a); break;
+      case "fab.plot": out = await kicad.fab.plot(a); break;
       case "fab.drc": out = await kicad.fab.drc(a); break;
       case "fab.netlist": out = await kicad.fab.netlist(); break;
       case "fab.render": out = await kicad.fab.render(a); break;

@@ -293,6 +293,11 @@ export const fab: Record<string, (a: any) => Promise<unknown>> = {
   },
   bom: async (a) => { const { F, ctx } = await fabContext(); const lines = F.bom(ctx, { excludeDnp: !!a.excludeDnp }); return { csv: F.bomCsv(lines), lines: lines.length }; },
   /**
+   * pcbnew's PLOT_CONTROLLER for the formats File → Plot writes besides Gerber: one PostScript, DXF, PDF or SVG file of the
+   * given layers (the first is the plot's own layer, the rest are drawn with it), in KiCad's layer colours or black.
+   */
+  plot: async (a) => { const { F, ctx } = await fabContext(); const k = K(); return F.pluginPlot(ctx, a || {}, (l: string) => String(k.pcbColor(l))); },
+  /**
    * `kicad-cli pcb export svg`: the layers as the plot code reduces them (the same shapes the Gerbers hold), drawn in
    * KiCad's layer colours on the board's page or cropped to the board.  One file per layer, or all layers in one.
    */

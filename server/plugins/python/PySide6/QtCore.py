@@ -346,6 +346,141 @@ class QEventLoop(QObject):
     isRunning = lambda self: False
 
 
+# ----------------------------------------------------------------------------- animations
+
+class QEasingCurve:
+    class Type(enum.IntEnum):
+        Linear, InQuad, OutQuad, InOutQuad, OutInQuad, InCubic, OutCubic, InOutCubic, OutInCubic = range(9)
+        InOutSine, OutBounce, OutBack, InBack, InOutBack, OutElastic = 14, 41, 34, 33, 35, 30
+
+    def __init__(self, kind=None):
+        self._type = QEasingCurve.Type.Linear if kind is None else kind
+
+    def type(self):
+        return self._type
+
+    def setType(self, kind):
+        self._type = kind
+
+    def valueForProgress(self, t):
+        t = max(0.0, min(1.0, float(t)))
+        name = getattr(self._type, "name", "Linear")
+        if name.startswith("InOut"):
+            return 2 * t * t if t < 0.5 else 1 - 2 * (1 - t) * (1 - t)
+        if name.startswith("Out"):
+            return 1 - (1 - t) * (1 - t)
+        if name.startswith("In"):
+            return t * t
+        return t
+
+
+for _n, _v in QEasingCurve.Type.__members__.items():
+    setattr(QEasingCurve, _n, _v)
+
+
+class QAbstractAnimation(QObject):
+    finished = Signal()
+    stateChanged = Signal(object, object)
+    Stopped, Paused, Running = 0, 1, 2
+    KeepWhenStopped, DeleteWhenStopped = 0, 1
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._duration, self._state, self._loops = 250, 0, 1
+
+    def duration(self):
+        return self._duration
+
+    def setDuration(self, ms):
+        self._duration = int(ms)
+
+    def setLoopCount(self, n):
+        self._loops = int(n)
+
+    def state(self):
+        return self._state
+
+    def stop(self):
+        self._state = 0
+
+    def pause(self):
+        pass
+
+    def resume(self):
+        pass
+
+
+class QVariantAnimation(QAbstractAnimation):
+    valueChanged = Signal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._start = self._end = None
+        self._curve = QEasingCurve()
+
+    def setStartValue(self, v):
+        self._start = v
+
+    def startValue(self):
+        return self._start
+
+    def setEndValue(self, v):
+        self._end = v
+
+    def endValue(self):
+        return self._end
+
+    def setEasingCurve(self, c):
+        self._curve = c if isinstance(c, QEasingCurve) else QEasingCurve(c)
+
+    def easingCurve(self):
+        return self._curve
+
+    def currentValue(self):
+        return self._end
+
+    def _apply(self, v):
+        self.valueChanged.emit(v)
+
+    def start(self, *_):
+        # The page does not step values between frames: the animation arrives at once, as Qt's does when its
+        # duration is over, and says it finished.
+        self._state = 2
+        if self._end is not None:
+            self._apply(self._end)
+        self._state = 0
+        self.finished.emit()
+
+
+class QPropertyAnimation(QVariantAnimation):
+    def __init__(self, target=None, prop=b"", parent=None):
+        super().__init__(parent)
+        self._target = target
+        self._prop = prop.decode() if isinstance(prop, (bytes, bytearray)) else str(prop or "")
+
+    def setTargetObject(self, o):
+        self._target = o
+
+    def targetObject(self):
+        return self._target
+
+    def setPropertyName(self, name):
+        self._prop = name.decode() if isinstance(name, (bytes, bytearray)) else str(name)
+
+    def propertyName(self):
+        return self._prop.encode()
+
+    def _apply(self, v):
+        t, n = self._target, self._prop
+        if t is not None and n:
+            setter = getattr(t, "set" + n[:1].upper() + n[1:], None)
+            if callable(setter):
+                setter(v)
+            else:
+                t.setProperty(n, v)
+        self.valueChanged.emit(v)
+
+
 # ----------------------------------------------------------------------------- timers and time
 
 class QTimer(QObject):

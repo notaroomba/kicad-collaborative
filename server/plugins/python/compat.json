@@ -311,8 +311,7 @@
   "status": "works"
  },
  "com.gitlab.dennevi.Board2Pdf": {
-  "status": "opens",
-  "note": "It loads with its compiled packages (numpy, shapely and the like) and opens, but its result has not been checked here with its main button pressed."
+  "status": "works"
  },
  "com.gitlab.egloff-studio.z0-field-solver": {
   "status": "partly",

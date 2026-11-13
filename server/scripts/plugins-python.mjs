@@ -254,6 +254,15 @@ _kj.dumps(_ko)
     if (method === "fab.layers") return JSON.stringify({ layers: ["F.Cu", "B.Cu", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Edge.Cuts"] });
     if (method === "fab.bom") return JSON.stringify({ csv: "", lines: 0 });
     if (method === "fab.svg") { const ls = a.single ? [(a.layers || []).join("+")] : (a.layers || []); return JSON.stringify({ files: ls.map((l) => ({ name: a.single ? `${stem}.svg` : `${stem}-${l.replace(/\./g, "_")}.svg`, layer: l, text: '<svg xmlns="http://www.w3.org/2000/svg" width="10mm" height="10mm" viewBox="0 0 10 10"></svg>\n' })), warnings: [], missing: [], box: [0, 0, 10, 10], page: [297, 210] }); }
+    // PostScript, DXF, PDF and SVG plots are the editor's own writers (static/dist/fab.js) over the board as it stands,
+    // so what a plugin goes on to do with the file (merge, recolour, measure) is done to the real thing
+    if (method === "fab.plot") {
+      if (!globalThis.KiCadFab || !globalThis.KiCadFab.pluginPlot) { require(path.join(server, "static", "kicad-canvas.js")); require(path.join(server, "static", "dist", "fab.js")); }
+      let text = board;
+      if (edited) { try { text = py.runPython("import pcbnew as _p\n_p._Host.board._text() if _p._Host.board is not None else ''") || board; } catch { /* keep the file */ } }
+      const K = globalThis.KiCadCanvas, doc = K.parseDoc(text, "kicad_pcb");
+      return JSON.stringify(globalThis.KiCadFab.pluginPlot({ doc, setup: text, projectName: stem }, a, (l) => String(K.pcbColor(l))));
+    }
     if (method === "fab.drc") return JSON.stringify({ markers: [], parityError: "", note: "stand-in design rule check" });
     if (method === "fab.netlist") return JSON.stringify({ root: `${stem}.kicad_sch`, warnings: [], components: [], nets: [] });
     // KiCad's footprint libraries: the real files of the official repository at the server's pinned ref, fetched once and kept

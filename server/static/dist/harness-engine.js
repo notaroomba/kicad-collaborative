@@ -12858,9 +12858,9 @@ root.KiCadCanvas = api;
   }
   var IMAGE_LINE = 76;
   var IMAGE_PPI = 300;
-  function imageNode(p, base64) {
+  function imageNode(p, base642) {
     const chunks = [];
-    for (let i = 0; i < base64.length; i += IMAGE_LINE) chunks.push(base64.slice(i, i + IMAGE_LINE));
+    for (let i = 0; i < base642.length; i += IMAGE_LINE) chunks.push(base642.slice(i, i + IMAGE_LINE));
     return ["image", ["at", r45(p[0]), r45(p[1])], ["uuid", K7.newUuid()], ["data", ...chunks]];
   }
   function imageData(node) {
@@ -17506,13 +17506,13 @@ Link '${target2}' to this file?`)) return null;
       S2.imageWait = false;
       if (!file || S2.tool !== "image") return;
       const bytes = file.bytes || (file.base64 ? base64ToBytes(file.base64) : null);
-      const base64 = file.base64 || (bytes ? bytesToBase64(bytes) : "");
-      if (!base64) {
+      const base642 = file.base64 || (bytes ? bytesToBase64(bytes) : "");
+      if (!base642) {
         ctx.toast("Could not read the image");
         return;
       }
       const px = bytes ? imageSize(bytes) : null;
-      startCarry(ctx, "image", imageNode(S2.cursor || [0, 0], base64), S2.cursor);
+      startCarry(ctx, "image", imageNode(S2.cursor || [0, 0], base642), S2.cursor);
       if (S2.carry) S2.carry.size = px ? [px[0] * 25.4 / IMAGE_PPI, px[1] * 25.4 / IMAGE_PPI] : [20, 20];
     });
   }
@@ -21565,9 +21565,9 @@ Link '${target2}' to this file?`)) return null;
       cells
     ];
   }
-  function imageNode(x, y, base64, layer) {
+  function imageNode(x, y, base642, layer) {
     const data = ["data"];
-    for (let i = 0; i < base64.length; i += 76) data.push(base64.slice(i, i + 76));
+    for (let i = 0; i < base642.length; i += 76) data.push(base642.slice(i, i + 76));
     return ["image", ["at", r63(x), r63(y)], ["layer", layer], data];
   }
   var zoneFillNode = () => ["fill", ["thermal_gap", 0.5], ["thermal_bridge_width", 0.5], ["island_removal_mode", 0]];
@@ -58547,6 +58547,71 @@ async function plotBoard(ctx, req) {
   report3.push({ severity: "info", text: "Done." });
   return { files, report: report3 };
 }
+function base64(data) {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 32768));
+  return btoa(bin);
+}
+function pluginPlot(ctx, a, colorOf2) {
+  const format = Number(a.format);
+  if (![2, 3, 4, 5].includes(format)) throw new Error("plot: the format is PostScript (2), DXF (3), PDF (4) or SVG (5)");
+  const all2 = plottableLayers(ctx.doc);
+  const list = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, 80) : [];
+  const asked = [...list(a.layers), ...list(a.commonLayers)].filter((l, i, arr2) => arr2.indexOf(l) === i);
+  const have = asked.filter((l) => all2.includes(l)), missing = asked.filter((l) => !all2.includes(l));
+  if (!have.length) return { name: "", base64: "", missing, warnings: [] };
+  const flag2 = (v, d2) => typeof v === "boolean" ? v : d2;
+  const scales = [0, 1, 1.5, 2, 3];
+  const sel = a.autoScale ? 0 : Math.max(1, scales.indexOf(Number(a.scale) || 1));
+  const d = defaultPlotParams();
+  const params = Object.assign(d, {
+    format,
+    layerSelection: [have[0]],
+    plotOnAllLayers: have.slice(1),
+    mirror: !!a.mirror,
+    negative: !!a.negative,
+    plotFrameRef: !!a.plotFrameRef,
+    drillMarks: [0, 1, 2].includes(Number(a.drillMarks)) ? Number(a.drillMarks) : 0,
+    blackAndWhite: flag2(a.blackAndWhite, true),
+    plotReference: flag2(a.plotReference, true),
+    plotValue: flag2(a.plotValue, true),
+    useAuxOrigin: !!a.useAuxOrigin,
+    scaleSelection: sel,
+    svgPrecision: Math.max(3, Math.min(6, Math.round(Number(a.svgPrecision) || 4))),
+    svgFitPageToBoard: !!a.svgFitPageToBoard,
+    sketchPadsOnFab: !!a.sketchPadsOnFab,
+    plotPadNumbers: !!a.plotPadNumbers,
+    hideDnpOnFab: !!a.hideDnpOnFab,
+    sketchDnpOnFab: flag2(a.sketchDnpOnFab, true),
+    crossoutDnpOnFab: flag2(a.crossoutDnpOnFab, true),
+    subtractMaskFromSilk: !!a.subtractMaskFromSilk,
+    dxfPolygonMode: flag2(a.dxfPolygonMode, true),
+    dxfImperial: flag2(a.dxfImperial, true),
+    a4Output: !!a.a4Output,
+    fineScaleX: Number(a.fineScaleX) || 1,
+    fineScaleY: Number(a.fineScaleY) || 1,
+    widthAdjust: Number(a.widthAdjust) || 0,
+    pdfSingle: false,
+    dxfSingle: false,
+    pdfMetadata: false,
+    pdfFrontPopups: false,
+    pdfBackPopups: false
+  });
+  const colors = {};
+  for (const l of have) colors[l] = colorOf2(l);
+  const m = modelOf(ctx), board = projectNameOf(ctx), log = new PlotLog(), date = ctx.date || /* @__PURE__ */ new Date(), p = params;
+  const layer = have[0], lname = layerDisplayName(ctx.doc, layer);
+  const page = boardPage(m, { params: p, layer, common: have.slice(1), layerName: lname, colors, sheetColor: "#C872AB", background: null, pageNumber: 1, pageCount: 1, interactive: false }, log);
+  const title = ctx.doc.titleBlock && ctx.doc.titleBlock.title || "";
+  const name = plotFileName(board, lname, EXT[format]);
+  let data;
+  if (format === 5) data = writeSvg(page, { precision: p.svgPrecision, creator: "PCBNEW", fileName: name, date });
+  else if (format === 4) data = writePdf({ pages: [page], creator: "PCBNEW", title, date, fileName: name });
+  else if (format === 2) data = writePs({ pages: [page], creator: "PCBNEW", title, date }, { scaleX: p.fineScaleX || 1, scaleY: p.fineScaleY || 1, fileName: name, date });
+  else data = writeDxf([{ name: lname, color: colors[layer] || "#000000", page }], { imperial: p.dxfImperial, polygonMode: p.dxfPolygonMode, nativeText: !p.dxfUsePcbnewFont });
+  return { name, base64: base64(data), missing, warnings: [...log.messages] };
+}
 
 // web/fab/drilljob.ts
 var MAP_EXT = { 2: "ps", 1: "gbr", 3: "dxf", 5: "svg", 4: "pdf" };
@@ -60779,6 +60844,7 @@ function fillZones(ctx, rules, ids, prog) {
 }
 var api3 = {
   plotBoard,
+  pluginPlot,
   drillJob,
   drillReport,
   markerParts,
