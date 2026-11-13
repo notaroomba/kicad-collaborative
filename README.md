@@ -2,16 +2,15 @@
 
 # Junction
 
-Junction is KiCad with everyone in the same file. It is a fork of KiCad's schematic and PCB editors that adds live
+Design hardware together, live. Junction is a fork of KiCad's schematic and PCB editors that adds live
 multiplayer editing, a full editor in the browser, and a server any AI model can design through.
 
 [![Release](https://img.shields.io/github/v/release/notaroomba/junction)](https://github.com/notaroomba/junction/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue)](LICENSE)
 
-[![Junction demo: an AI builds an ESP32 board through MCP, two people edit one schematic, the autorouter, the 3D viewer](docs/media/junction-demo-preview.gif)](docs/media/junction-demo.mp4)
-
-The full video (1080p, about a minute) is at [docs/media/junction-demo.mp4](docs/media/junction-demo.mp4). Every shot
-is the real application; [how it was made](#how-the-demo-video-was-made) is below.
+<!-- The demo video. GitHub plays a video inline only from a github.com/user-attachments URL: to update it, drag
+     docs/media/junction-demo.mp4 into this file in GitHub's editor and let the URL it inserts replace the line below. -->
+[![Junction demo: Ada and Ben draw a Raspberry Pi Pico board together, an AI adds the crystal, they route it](docs/media/junction-demo-poster.jpg)](docs/media/junction-demo.mp4)
 
 ## Install
 
@@ -36,7 +35,7 @@ Projects are ordinary KiCad files. Everyone in a project should be on 2.0: it is
 
 <table>
 <tr>
-<td width="50%"><img src="docs/media/together.jpg" alt="Two browser windows on the same schematic, each showing the other person's named cursor" width="100%"><br><b>Live editing.</b> Two people in one schematic or board, on the desktop or in the browser, each with their own view. Cursors, selections, drags in progress and edits arrive as they happen.</td>
+<td width="50%"><img src="docs/media/together.jpg" alt="Ada and Ben drawing one Raspberry Pi Pico schematic from two browsers, each showing the other person's named cursor" width="100%"><br><b>Live editing.</b> Two people in one schematic or board, on the desktop or in the browser, each with their own view. Cursors, selections, drags in progress and edits arrive as they happen.</td>
 <td width="50%"><img src="docs/media/ai-board.jpg" alt="A routed four-layer ESP32 board in the browser editor, drawn by an AI through MCP" width="100%"><br><b>Design with any AI.</b> An MCP server lets Claude, ChatGPT, Gemini, Cursor or a local model read and edit your projects. Its edits appear in everyone's editor, with a cursor on them.</td>
 </tr>
 <tr>
@@ -81,8 +80,8 @@ make changes; the project's roles apply to it as they do to a person.
 
 Then ask for a board. The model works through a Python harness (`run_python`): one tool call places parts by
 name, wires them like the datasheet's application circuit, lays out and routes the board, and returns only what the
-script prints, so a design costs few tokens. The ESP32 board in the video is
-[two such scripts](server/scripts/demo-video/design).
+script prints, so a design costs few tokens. The Pico board in the video was drawn by
+[two such scripts](server/scripts/demo-video/pico) before it was taken apart and put back together on camera.
 
 ## Status
 
@@ -95,9 +94,8 @@ Junction 2.0.0 is the first release under this name (it was KiCad Collaborative 
 - **Windows and Linux builds come from CI** and have had less hands-on use than the macOS build.
 - **The browser editor follows KiCad closely, not perfectly.** Small differences in behaviour are still being found
   and fixed.
-- **AI-made boards need review.** The harness runs ERC, DRC and a design checklist, but in the video's run the
-  router left one ground pad of the barometer unconnected (119 of 121 connections, one DRC error), and nobody has
-  ordered and powered that board.
+- **AI-made boards need review.** The harness runs ERC, DRC and a design checklist, but nobody has ordered and
+  powered the board in the video.
 - **Vendor part search needs API keys** (Mouser, DigiKey) on a self-hosted server.
 
 [COLLABORATION.md](COLLABORATION.md) lists what synchronizes and how conflicts resolve.
@@ -106,18 +104,19 @@ Junction 2.0.0 is the first release under this name (it was KiCad Collaborative 
 
 The video is a web page played frame by frame, in the manner of
 [copper-kicad-mcp](https://github.com/claynicholson/copper-kicad-mcp)'s release video. The sources are in
-[server/scripts/demo-video](server/scripts/demo-video):
+[server/scripts/demo-video](server/scripts/demo-video). Every shot is the real application, against a local Junction
+server, but it is staged, and this is how:
 
-- `record.mjs` starts real browsers against a local Junction server, clicks and drags through the real interface,
-  calls the real MCP endpoint, and photographs what the browser painted.
-- `compose.html` is the video as a page: it frames the photographs and adds captions. `render.mjs` builds the
-  timeline, steps the page through every frame and encodes with ffmpeg.
-
-Three things are not as they would be on your screen. The long runs (the AI's two calls, the autorouter) are sped
-up, and the video says by how much. The mouse pointer is drawn by the page, because a headless browser has none.
-And the AI's two scripts were written by Claude in an earlier session with the live site and are replayed here
-through the same `run_python` tool, so that the footage can be recorded again for each release. The numbers in the
-captions are read from what the recorded runs returned.
+- The Pico board was designed first, by the [harness scripts](server/scripts/demo-video/pico). `prepare.mjs` then
+  took every part, wire and track out of it and kept them.
+- `record-pico.mjs` opens Ada's and Ben's editors in two browsers and puts the design back one item at a time, each
+  through that person's own editor, with their mouse moving to it. What the other window shows (the cursor, the item
+  arriving) is Junction's live sync doing its normal work.
+- The AI's part is a real `run_python` call through an access key named "Claude", with the crystal's items written
+  into the script beforehand. Its cursor and its edits arriving one by one are how Junction shows any AI's live run.
+  The chat panel is drawn by the video, not by an AI app.
+- The long stretches are sped up and the video says by how much. The mouse pointer is drawn by the page, because a
+  headless browser has none. The numbers in the captions are read from what the recording returned.
 
 ## Docs
 

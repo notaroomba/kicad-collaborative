@@ -21,6 +21,12 @@
   .prompt { position: absolute; left: 360px; top: 330px; width: 1120px; padding: 40px 48px; border-radius: 12px; background: #151517; box-shadow: 0 0 0 1px #2a2a2d;
             font-size: 36px; line-height: 1.45; min-height: 220px; box-sizing: border-box; }
   .prompt small { display: block; font-size: 22px; color: #8a8a90; margin-bottom: 18px; }
+  .chat { position: absolute; width: 560px; padding: 22px 26px; border-radius: 12px; background: #161618; box-shadow: 0 0 0 1px #2e2e32, 0 18px 50px rgba(0,0,0,.55);
+          font-size: 22px; line-height: 1.4; box-sizing: border-box; opacity: 0; }
+  .chat .head { font-size: 16px; color: #8a8a90; margin-bottom: 14px; letter-spacing: .02em; }
+  .chat .msg { margin-top: 12px; opacity: 0; }
+  .chat .msg b { display: block; font-size: 16px; font-weight: 500; color: #8a8a90; margin-bottom: 4px; }
+  .chat .msg.ai span { color: #c9c9ce; }
   .caret { display: inline-block; width: 3px; height: 38px; background: #ededed; vertical-align: -6px; margin-left: 2px; }
 </style>
 <div id="stage"><div id="layers"></div><div id="caption"></div><div id="speed"></div></div>
@@ -38,6 +44,9 @@
       if (s.kind === 'footage') for (const w of s.windows) {
         const box = document.createElement('div'); box.className = 'win'; box.style.cssText = `left:${w.x}px;top:${w.y}px;width:${w.w}px;height:${w.h}px`;
         const img = new Image(); box.appendChild(img); el.appendChild(box); L.imgs.push({ img, w, src: '' });
+        if (w.chat) { const c = document.createElement('div'); c.className = 'chat'; c.style.cssText = `left:${w.x + w.chat.x}px;top:${w.y + w.chat.y}px`;
+          c.innerHTML = `<div class="head">${w.chat.head}</div>` + w.chat.lines.map((l) => `<div class="msg${l.ai ? ' ai' : ''}"><b>${l.who}</b><span></span></div>`).join('');
+          el.appendChild(c); L.chat = { el: c, w }; }
         if (w.label) { const who = document.createElement('div'); who.className = 'who'; who.style.left = w.x + 'px'; who.textContent = w.label; el.appendChild(who); }
       } else if (s.kind === 'title') {
         el.innerHTML = `<img class="icon" src="${T.icon}"><h1>${s.title}</h1><p>${s.sub}</p>` + (s.code ? `<code>${s.code}</code>` : '');
@@ -61,6 +70,9 @@
           const fin = s.cutIn && c.at === 0 ? 1 : (local - c.at) / 0.25, fout = s.cutOut && c.until >= s.length ? 1 : (c.until - local) / 0.25;
           caption = c.text; capA = clamp(Math.min(fin, fout), 0, 1) * a;
         }
+        if (L.chat) { const C = L.chat.w.chat, ca = clamp(Math.min((local - C.at) / 0.3, (C.until - local) / 0.3), 0, 1); L.chat.el.style.opacity = ca;
+          L.chat.el.querySelectorAll('.msg').forEach((m, i) => { const l = C.lines[i], k = local - l.at; m.style.opacity = k > 0 ? 1 : 0;
+            const n = l.typing ? Math.round(clamp(k / l.typing, 0, 1) * l.text.length) : (k > 0 ? l.text.length : 0); m.querySelector('span').textContent = l.text.slice(0, n); }); }
         if (s.speed > 1.5) { speed = `${Math.round(s.speed)}× speed`; spA = a; }
       } else if (s.kind === 'prompt') {
         const n = Math.round(clamp((local - 0.4) / s.typing, 0, 1) * s.text.length);
