@@ -23,6 +23,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
+import zlib from "node:zlib";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -36,6 +37,18 @@ function zipNames(b64) {
   for (let i = buf.indexOf("PK\x01\x02", 0, "latin1"); i >= 0 && out.length < 60; i = buf.indexOf("PK\x01\x02", i + 46, "latin1")) {
     if (i + 46 > buf.length) break;
     const n = buf.readUInt16LE(i + 28); out.push(buf.toString("utf8", i + 46, i + 46 + n));
+  }
+  return out;
+}
+// The files inside a ZIP, as { name, base64 } (stored or deflated entries; that is all the runtime writes).
+function unzip(b64) {
+  const out = []; let buf; try { buf = Buffer.from(b64 || "", "base64"); } catch { return out; }
+  for (let i = buf.indexOf("PK\x01\x02", 0, "latin1"); i >= 0 && i + 46 <= buf.length; i = buf.indexOf("PK\x01\x02", i + 46, "latin1")) {
+    const method = buf.readUInt16LE(i + 10), size = buf.readUInt32LE(i + 20), n = buf.readUInt16LE(i + 28), at = buf.readUInt32LE(i + 42);
+    const name = buf.toString("utf8", i + 46, i + 46 + n);
+    if (name.endsWith("/") || at + 30 > buf.length) continue;
+    const start = at + 30 + buf.readUInt16LE(at + 26) + buf.readUInt16LE(at + 28);
+    try { const raw = buf.subarray(start, start + size); out.push({ name: path.basename(name), base64: (method === 8 ? zlib.inflateRawSync(raw) : raw).toString("base64") }); } catch { /* not readable: not offered */ }
   }
   return out;
 }
@@ -163,7 +176,7 @@ async function one(dir, boardPath, boardGiven) {
   if (driveSrc) for (const m of driveSrc.matchAll(/^# sibling: (\S+)$/gm)) { const f = path.resolve(server, "..", m[1]); siblings.push({ path: path.basename(f), text: fs.readFileSync(f, "utf8") }); }
   // The stand-in editor: hands out the board, accepts every dialog, records what the plugin asked for.
   let copied = ""; { const m = driveSrc && /^# copied: (\S+)$/m.exec(driveSrc); if (m) copied = fs.readFileSync(path.resolve(server, "..", m[1]), "utf8"); }
-  const libraryFiles = []; const moving = [];
+  const libraryFiles = []; const moving = []; const handedOver = [];
   const bridge = (method, json) => {
     const a = JSON.parse(json || "{}");
     calls.push({ method, summary: method === "design.commit" ? { create: a.create.length, update: a.update.length, transform: a.transform.length, remove: a.remove.length, kinds: kindsOf(a.create) } : method === "files.save" ? { filename: a.filename, bytes: Math.floor((a.base64 || "").length * 0.75), ...(/\.zip$/i.test(a.filename || "") ? { holds: zipNames(a.base64) } : {}) } : undefined });
@@ -186,7 +199,17 @@ async function one(dir, boardPath, boardGiven) {
     if (method === "design.copy") { copied = String(a.text || ""); return JSON.stringify({ copied: copied.length }); }
     if (method === "ui.confirm") { said.push(`${a.title || ""}: ${String(a.message || "").slice(0, 300)}`); return "true"; }
     if (method === "ui.prompt") { const v = {}; for (const f of a.fields || []) v[f.name] = f.default ?? ""; return JSON.stringify(v); }
-    if (method === "files.pick") return "null";
+    // "# pick: saved" in a drive: asked for a file, the person picks the one this plugin handed over last (a layout it
+    // saved, an export it made) that fits what the dialog accepts.  Without it nothing is picked.
+    if (method === "files.save" && typeof a.base64 === "string") handedOver.push({ name: a.filename, base64: a.base64 });
+    if (method === "files.pick") {
+      if (!driveSrc || !/^# pick: saved$/m.test(driveSrc)) return "null";
+      const exts = (a.accept || []).map((e) => String(e).toLowerCase());
+      // several files come as one ZIP: the person unpacks it and picks the file inside
+      const loose = handedOver.flatMap((h) => (/\.zip$/i.test(h.name) ? unzip(h.base64) : [h]));
+      const hit = loose.reverse().find((h) => !exts.length || exts.some((e) => h.name.toLowerCase().endsWith(e)));
+      return hit ? JSON.stringify(hit) : "null";
+    }
     // A plugin's storage in the editor.  STATE=<json file> keeps it between runs of this script, as the browser does.
     if (method === "storage.get") return JSON.stringify(store[a.key] ?? null);
     if (method === "storage.set") { store[a.key] = a.value ?? null; if (process.env.STATE) fs.writeFileSync(process.env.STATE, JSON.stringify(store)); return "null"; }

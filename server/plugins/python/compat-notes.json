@@ -120,6 +120,50 @@
     "com.github.mrcpuddington.kobeestudio": {
       "status": "works",
       "note": "Runs here. Place artwork puts the label on the board as a footprint that follows the cursor until you click; with an artwork selected the window opens on it and Update artwork replaces it in place."
+    },
+    "com.github.MitjaNemec.PlaceFootprints": {
+      "status": "works",
+      "note": "Runs here. Select one footprint first; the others are lined up, put in a grid or on a circle from it."
+    },
+    "com.github.MitjaNemec.ReplicateLayout": {
+      "status": "works",
+      "note": "Runs here. Select one footprint of the sheet that is laid out; the other sheets' parts, tracks and zones follow it. Locked footprints stay where they are unless you tick the box."
+    },
+    "com.github.MitjaNemec.SaveRestoreLayout": {
+      "status": "works",
+      "note": "Runs here. Save gives you the layout file as a download; Restore asks you to pick that file and lays the selected sheet out from it."
+    },
+    "com.github.MitjaNemec.SwapStubs": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.github.MitjaNemec.Archive3DModels": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.github.adamws.kicad-kbplacer": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.github.Huaqiu-Electronics.kicad-nextpcb-plugin": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.github.gauravmm.hierarchicalpcb": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.github.officialdyray.projectinstances": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.ahmedmikatonik.kisidian": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+    },
+    "com.github.jarrettr.stretch": {
+      "status": "opens",
+      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
     }
   }
 }

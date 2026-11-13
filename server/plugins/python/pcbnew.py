@@ -3958,6 +3958,36 @@ class FOOTPRINT(BOARD_ITEM):
         k = _kid(self._node, "clearance")
         return FromMM(_f(k[1])) if k is not None and len(k) > 1 else 0
 
+    def SetLocalClearance(self, v):
+        if v:
+            _set_kid(self._node, "clearance", ToMM(v))
+        else:
+            _drop_kid(self._node, "clearance")
+        self._touch()
+
+    def GetZoneConnection(self):
+        k = _kid(self._node, "zone_connect")
+        return int(_f(k[1])) if k is not None and len(k) > 1 else ZONE_CONNECTION_INHERITED
+
+    GetLocalZoneConnection = GetZoneConnection
+
+    def SetZoneConnection(self, v):
+        if v is None or int(v) == ZONE_CONNECTION_INHERITED:
+            _drop_kid(self._node, "zone_connect")
+        else:
+            _set_kid(self._node, "zone_connect", int(v))
+        self._touch()
+
+    SetLocalZoneConnection = SetZoneConnection
+
+    def SetLocalSolderPasteMarginRatio(self, v):
+        _drop_kid(self._node, "solder_paste_ratio")
+        if v:
+            _set_kid(self._node, "solder_paste_margin_ratio", float(v))
+        else:
+            _drop_kid(self._node, "solder_paste_margin_ratio")
+        self._touch()
+
     def GetLocalSolderMaskMargin(self):
         k = _kid(self._node, "solder_mask_margin")
         return FromMM(_f(k[1])) if k is not None and len(k) > 1 else 0
@@ -7283,8 +7313,16 @@ class PCB_IO_MGR:
     FindPluginTypeFromBoardPath = GuessPluginTypeFromLibPath
 
     @staticmethod
-    def Load(*_):
-        _unsupported("Loading boards of other formats")
+    def Load(kind, path, *_):
+        if kind != PCB_IO_MGR.KICAD_SEXP:
+            _unsupported("Loading boards of other formats")
+        return LoadBoard(path)
+
+    @staticmethod
+    def Save(kind, path, board, *_):
+        if kind != PCB_IO_MGR.KICAD_SEXP:
+            _unsupported("Saving boards in other formats")
+        return SaveBoard(path, board)
 
     IO_FIND = PluginFind
     FindPlugin = PluginFind

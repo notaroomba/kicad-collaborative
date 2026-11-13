@@ -3,7 +3,8 @@
   "status": "works"
  },
  "com.ahmedmikatonik.kisidian": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.alsoknownasfoo.spinrender": {
   "status": "works"
@@ -36,25 +37,31 @@
   "note": "Runs here. What it sends was checked against a stand-in for the vendor's service built from the plugin's own code, not against the live service: a search lists the parts answered, with price and stock. Needs network access granted."
  },
  "com.github.Huaqiu-Electronics.kicad-nextpcb-plugin": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.Mage-Control-Systems-Ltd.NCCM": {
   "status": "works"
  },
  "com.github.MitjaNemec.Archive3DModels": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.MitjaNemec.PlaceFootprints": {
-  "status": "works"
+  "status": "works",
+  "note": "Runs here. Select one footprint first; the others are lined up, put in a grid or on a circle from it."
  },
  "com.github.MitjaNemec.ReplicateLayout": {
-  "status": "works"
+  "status": "works",
+  "note": "Runs here. Select one footprint of the sheet that is laid out; the other sheets' parts, tracks and zones follow it. Locked footprints stay where they are unless you tick the box."
  },
  "com.github.MitjaNemec.SaveRestoreLayout": {
-  "status": "works"
+  "status": "works",
+  "note": "Runs here. Save gives you the layout file as a download; Restore asks you to pick that file and lays the selected sheet out from it."
  },
  "com.github.MitjaNemec.SwapStubs": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.Murali8051.Lioncircuits-PCB-Toolkit": {
   "status": "works"
@@ -88,7 +95,8 @@
   "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
  },
  "com.github.adamws.kicad-kbplacer": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.adamws.kicad-via-patterns": {
   "status": "works"
@@ -163,7 +171,8 @@
   "note": "Gerbers, drill files, BOM, position file and the ZIP are made. Its optional fabrication PDF step is skipped: PDF plots from kicad-cli are not available to plugins here yet."
  },
  "com.github.gauravmm.hierarchicalpcb": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.gauravmm.kleplacement": {
   "status": "works"
@@ -186,7 +195,8 @@
   "status": "works"
  },
  "com.github.jarrettr.stretch": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.joelsa.kicad-hide-references-plugin": {
   "status": "works"
@@ -220,7 +230,8 @@
   "note": "Runs here. Place artwork puts the label on the board as a footprint that follows the cursor until you click; with an artwork selected the window opens on it and Update artwork replaces it in place."
  },
  "com.github.officialdyray.projectinstances": {
-  "status": "works"
+  "status": "opens",
+  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
  },
  "com.github.ozzysv.holefinder": {
   "status": "works"

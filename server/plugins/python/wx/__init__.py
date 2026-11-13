@@ -2451,6 +2451,10 @@ class Window(EvtHandler):
     SetWindowStyleFlag = SetWindowStyle
     HasFlag = lambda self, f: bool(self._wx_style & f)
 
+    def ToggleWindowStyle(self, flag):
+        self._wx_style ^= flag
+        return bool(self._wx_style & flag)
+
     def GetHandle(self):
         return 0
 
@@ -5199,6 +5203,15 @@ class ProgressDialog:
 
     Close = Hide = lambda self, *a: (_bridge.status("") if _bridge is not None else None, True)[1]
     Show = Resume = Raise = Fit = SetSize = Centre = Center = Refresh = Update_ = Layout = SetFocus = SetTitle = lambda self, *a, **k: True
+    # it is a window on the desktop: plugins place it, keep it on top, restyle it
+    CentreOnParent = CenterOnParent = CentreOnScreen = CenterOnScreen = SetPosition = Move = SetMinSize = SetMaxSize = SetIcon = lambda self, *a, **k: True
+    SetWindowStyle = SetWindowStyleFlag = SetExtraStyle = Enable = Disable = lambda self, *a, **k: True
+    ToggleWindowStyle = lambda self, flag: False
+    GetWindowStyle = GetWindowStyleFlag = lambda self: 0
+    IsShown = IsShownOnScreen = lambda self: True
+    GetSize = lambda self: Size(300, 120)
+    GetPosition = lambda self: Point(0, 0)
+    GetTitle = lambda self: self._wx_title
     WasCancelled = WasSkipped = lambda self: False
     SetRange = lambda self, m: setattr(self, "_max", m)
     GetRange = lambda self: self._max
