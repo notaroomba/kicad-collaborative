@@ -217,6 +217,8 @@ set( KICOMMON_SRCS
     kicad_curl/kicad_curl.cpp
     kicad_curl/kicad_curl_easy.cpp
 
+    wakatime.cpp
+
     libraries/library_manager.cpp
     libraries/library_table.cpp
     libraries/library_table_parser.cpp
@@ -692,6 +694,7 @@ set( COMMON_DLG_SRCS
     dialogs/panel_maintenance.cpp
     dialogs/panel_maintenance_base.cpp
     dialogs/panel_mouse_settings.cpp
+    dialogs/panel_wakatime.cpp
     dialogs/panel_mouse_settings_base.cpp
     dialogs/panel_snapping.cpp
     dialogs/panel_snapping_base.cpp

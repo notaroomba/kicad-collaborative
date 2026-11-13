@@ -35,6 +35,8 @@
 #include <dialogs/git/panel_git_repos.h>
 #include <dialogs/panel_common_settings.h>
 #include <dialogs/panel_mouse_settings.h>
+#include <dialogs/panel_wakatime.h>
+#include <wakatime.h>
 #include <dialogs/panel_spacemouse.h>
 #include <dialogs/panel_data_collection.h>
 #include <dialogs/panel_plugin_settings.h>
@@ -1595,6 +1597,13 @@ void EDA_BASE_FRAME::ShowPreferences( const wxString& aStartPage, const wxString
 
         book->AddPage( hotkeysPanel, _( "Hotkeys" ) );
 
+        // Junction: WakaTime heartbeats (~/.wakatime.cfg); the browser editor has the same page
+        book->AddLazyPage(
+                []( wxWindow* aParent ) -> wxWindow*
+                {
+                    return new PANEL_WAKATIME( aParent );
+                }, _( "WakaTime" ) );
+
         book->AddLazyPage(
                 []( wxWindow* aParent ) -> wxWindow*
                 {
@@ -1943,6 +1952,7 @@ wxString EDA_BASE_FRAME::GetRedoActionDescription() const
 void EDA_BASE_FRAME::OnModify()
 {
     m_autoSaveRequired = true;
+    WAKATIME::Get().Activity( this, true );
 }
 
 

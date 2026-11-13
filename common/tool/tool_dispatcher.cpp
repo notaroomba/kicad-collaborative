@@ -39,6 +39,7 @@
 #include <view/wx_view_controls.h>
 #include <geometry/geometry_utils.h>
 #include <eda_draw_frame.h>
+#include <wakatime.h>
 #include <core/kicad_algo.h>
 
 #include <kiplatform/app.h>
@@ -600,6 +601,14 @@ void TOOL_DISPATCHER::DispatchWxEvent( wxEvent& aEvent )
         {
             m_toolMgr->GetToolHolder()->GetToolCanvas()->SetFocus();
         }
+    }
+
+    // Junction: someone is working in this editor; WAKATIME throttles to a heartbeat every two
+    // minutes (EVT_REFRESH_MOUSE comes from autopanning and the like, not from the person)
+    if( type == wxEVT_MOTION || type == wxEVT_MOUSEWHEEL || type == wxEVT_MAGNIFY
+            || isMouseClick( type ) || type == wxEVT_CHAR_HOOK || type == wxEVT_KEY_DOWN )
+    {
+        WAKATIME::Get().Activity( dynamic_cast<EDA_BASE_FRAME*>( m_toolMgr->GetToolHolder() ), false );
     }
 
     // Mouse handling
