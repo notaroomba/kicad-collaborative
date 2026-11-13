@@ -143,8 +143,14 @@ export interface SheetContext {
 }
 
 /** A parsed document (parseDoc): the chrome's KDoc with the canvas's items and the fields parseDoc and the app fill in. */
+/** SCHEMATIC_SETTINGS' intersheet reference options and SCHEMATIC::GetPageRefsMap for the open sheet (the editor fills it). */
+export interface IntersheetRefs { show: boolean; ownPage: boolean; short: boolean; prefix: string; suffix: string;
+  /** global label text -> the virtual page numbers it is on */ pages: Record<string, number[]>;
+  /** virtual page number -> the page number shown (GetVirtualPageToSheetPagesMap) */ names: Record<number, string>;
+  /** the open sheet's virtual page number */ current: number }
 export interface Doc extends Omit<KDoc, "items" | "bbox" | "page">, SheetContext {
   items: Map<string, Item>;
+  intersheetRefs?: IntersheetRefs | null;
   bbox: Box | null;
   page: Pt;
   schTheme?: string;

@@ -123,6 +123,7 @@ interface KiCadCanvasApi {
   schThemeColors(id: string): Record<string, string>;
   setSchTheme(id: string): boolean;
   setSchDisplay(o: { pinAltIcons?: boolean }, doc?: KDoc | null): void;
+  setIntersheetRefs(refs: { show: boolean; ownPage: boolean; short: boolean; prefix: string; suffix: string; pages: Record<string, number[]>; names: Record<number, string>; current: number } | null, doc?: KDoc | null): void;
   setSchFormatting(o: { textOffsetRatio?: number; labelSizeRatio?: number; pinSymbolSize?: number; showDnpMarkers?: boolean; lineWidth?: number; overbarHeight?: number; hopOverChoice?: number }, doc?: KDoc | null): boolean;
   schFormat: { textOffsetRatio: number; labelSizeRatio: number; pinSymbolSize: number; showDnpMarkers: boolean; overbarHeight: number; hopOverChoice: number };
   withSchTheme<T>(id: string, fn: () => T): T;

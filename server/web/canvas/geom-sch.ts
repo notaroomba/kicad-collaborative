@@ -75,9 +75,46 @@ export function hierShape(x: number, y: number, size: number, shape: string, spi
 
 export function spinText(spin: string): { rot: number; h: string } { return { rot: spin === "U" || spin === "B" ? 90 : 0, h: spin === "R" || spin === "U" ? "left" : "right" }; }
 
-export function labelFields(item: Item, n: SNode, color: string, layer: string, z: number): void {
+/**
+ * SCH_GLOBALLABEL::ResolveTextVar( INTERSHEET_REFS ): the pages the label's text is on (sorted, without this one unless
+ * "own page" is on), "first..last" in the short form with more than two, else comma-separated, between the prefix and
+ * suffix; "?" when the text is on no page.
+ */
+export function intersheetRefsText(refs: NonNullable<Doc["intersheetRefs"]>, label: string): string {
+  const list = refs.pages[label]; let ref = "";
+  if (!list) ref = "?";
+  else {
+    let pages = Array.from(new Set(list)).sort((a, b) => a - b);
+    if (!refs.ownPage) pages = pages.filter((p) => p !== refs.current);
+    const name = (p: number): string => (refs.names[p] !== undefined ? refs.names[p] : "");
+    ref = refs.short && pages.length > 2 ? `${name(pages[0])}..${name(pages[pages.length - 1])}` : pages.map(name).join(",");
+  }
+  return refs.prefix + ref + refs.suffix;
+}
+const INTERSHEET_FIELD = /^intersheet ?refs$/i;
+export function labelFields(item: Item, n: SNode, color: string, layer: string, z: number, doc?: Doc | null, labelLen = 0): void {
   for (const p of kids(n, "property")) {
-    const ef = effectsOf(p); const val = str(p[2]); if (!val || /^\$\{.*\}$/.test(val)) continue;
+    const ef = effectsOf(p); let val = str(p[2]);
+    // the global label's Intersheetrefs field: shown (whatever its own flag) when Formatting > Show inter-sheet
+    // references is on (SCHEMATIC::RecomputeIntersheetRefs sets it visible), its ${INTERSHEET_REFS} resolved
+    if (item.kind === "global_label" && INTERSHEET_FIELD.test(str(p[1])) && /\$\{INTERSHEET_REFS\}/.test(val)) {
+      const refs = doc && doc.intersheetRefs; if (!refs || !refs.show) continue;
+      val = val.replace(/\$\{INTERSHEET_REFS\}/g, intersheetRefsText(refs, str(n[1])));
+      let [px, py, pr] = atOf(p), just = ef.just;
+      // RecomputeIntersheetRefs: a lone field still on the label's own position is autoplaced first
+      // (SCH_LABEL_BASE::AutoplaceFields: beside the body, labelLen + 2 × text offset out along the spin)
+      const [lx, ly, lr] = atOf(n);
+      if (kids(n, "property").length === 1 && Math.abs(px - lx) < 1e-6 && Math.abs(py - ly) < 1e-6) {
+        const lef = effectsOf(n), margin = 2 * schFormat.textOffsetRatio * lef.size, d = labelLen + margin;
+        const spin = SPIN[((Math.round(lr) % 360) + 360) % 360] || "R";
+        if (spin === "L") { px = lx - d; pr = 0; just = ["right"]; } else if (spin === "R") { px = lx + d; pr = 0; just = ["left"]; }
+        else if (spin === "U") { py = ly - d; pr = 90; just = ["left"]; } else { py = ly + d; pr = 90; just = ["right"]; }
+      }
+      // LAYER_INTERSHEET_REFS draws in LAYER_GLOBLABEL's colour (RENDER_SETTINGS::GetLayerColor)
+      textLines(item, px, py, val, ef.size, colorOf(p) || SCH.glabel, pr, just, layer, { z, w: textPen(ef, ef.size), italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX, field: str(p[1]) });
+      continue;
+    }
+    if (!val || /^\$\{.*\}$/.test(val)) continue;
     const [px, py, pr] = atOf(p);
     // a hidden field: kept aside in LAYER_HIDDEN for show_hidden_fields, outside the hit boxes
     const sink: GeomSink = ef.hide ? { geom: [], bbox: null } : item;
@@ -122,7 +159,7 @@ export function buildSchGeom(doc: Doc, item: Item): void {
     G(item, { t: "line", x1: x - s, y1: y - s, x2: x + s, y2: y + s, w: SCH_PEN, color: SCH.noconnect, layer: "No-connects", z: SCH_Z.noconnect });
     G(item, { t: "line", x1: x - s, y1: y + s, x2: x + s, y2: y - s, w: SCH_PEN, color: SCH.noconnect, layer: "No-connects", z: SCH_Z.noconnect });
   } else if (k === "label" || k === "global_label" || k === "hierarchical_label" || k === "netclass_flag" || k === "directive_label") {
-    buildLabelGeom(item, n, k);
+    buildLabelGeom(item, n, k, doc);
   } else if (k === "text") {
     const [x, y, rot] = atOf(n); const ef = effectsOf(n);
     // SCH_TEXT::GetSchematicTextOffset: a fixed 0.25 mm lift; angles are kept upright (KeepUpright)
@@ -241,7 +278,7 @@ export function shapeGeom(item: GeomSink, g: SNode, gk: string, tf: Tf, color: s
   }
 }
 
-export function buildLabelGeom(item: Item, n: SNode, k: string): void {
+export function buildLabelGeom(item: Item, n: SNode, k: string, doc?: Doc | null): void {
   const [x, y, rot] = atOf(n); const ef = effectsOf(n); const text = str(n[1]); const size = ef.size;
   const spin = SPIN[((Math.round(rot) % 360) + 360) % 360] || "R"; const st = spinText(spin);
   const pen = textPen(ef, size), lpen = layoutPen(ef, size); const off = schFormat.textOffsetRatio * size;   // SCHEMATIC_SETTINGS::m_TextOffsetRatio
@@ -265,7 +302,8 @@ export function buildLabelGeom(item: Item, n: SNode, k: string): void {
     else if (shape === "bidirectional" || shape === "tri_state") { xo = -halfSize; pts[0][0] += halfSize; pts[3][0] -= halfSize; }
     pts = pts.map(([px, py]) => { const [rx, ry] = rotPt(px + xo, py, SPIN_ROT[spin]); return [x + rx, y + ry]; });
     G(item, { t: "poly", pts, close: true, w: pen, color, layer: "Labels", z: SCH_Z.globlabel });
-    labelFields(item, n, SCH.field, "Fields", SCH_Z.fields);
+    const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);   // GetBodyBoundingBox().GetSizeMax()
+    labelFields(item, n, SCH.field, "Fields", SCH_Z.fields, doc, Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)));
   } else if (k === "hierarchical_label") {
     const color = colorOf(n) || SCH.hlabel; const d = off + ef.sizeX;
     const to = spin === "L" ? [-d, 0] : spin === "U" ? [0, -d] : spin === "R" ? [d, 0] : [0, d];

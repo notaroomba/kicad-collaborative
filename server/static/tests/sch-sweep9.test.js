@@ -132,5 +132,20 @@ test("Place Sheet Pins: the next unplaced hierarchical label rides the sheet edg
   sch.onActivate("select", c);
 });
 
+test("inter-sheet references: ${INTERSHEET_REFS} resolves from the page refs map, shown only with the Formatting option", () => {
+  const R = (o) => Object.assign({ show: true, ownPage: true, short: false, prefix: "[", suffix: "]", pages: { SIG: [3, 1, 2] }, names: { 1: "1", 2: "2", 3: "7" }, current: 1 }, o || {});
+  assert.strictEqual(K.intersheetRefsText(R(), "SIG"), "[1,2,7]");
+  assert.strictEqual(K.intersheetRefsText(R({ ownPage: false }), "SIG"), "[2,7]");
+  assert.strictEqual(K.intersheetRefsText(R({ short: true }), "SIG"), "[1..7]");
+  assert.strictEqual(K.intersheetRefsText(R({ short: true, ownPage: false }), "SIG"), "[2,7]", "the short form needs more than two pages");
+  assert.strictEqual(K.intersheetRefsText(R({ prefix: "<", suffix: ">" }), "OTHER"), "<?>");
+  const d = K.parseDoc(HEAD + '(global_label "SIG" (shape input) (at 50.8 50.8 0) (fields_autoplaced yes) (effects (font (size 1.27 1.27)) (justify left)) (uuid "g1") (property "Intersheetrefs" "${INTERSHEET_REFS}" (at 50.8 50.8 0) (hide yes) (effects (font (size 1.27 1.27)) (justify left)))))');
+  const refText = () => d.items.get("g1").geom.filter((g) => g.field === "Intersheetrefs").map((g) => g.text);
+  assert.deepStrictEqual(refText(), [], "hidden by default (no settings)");
+  K.setIntersheetRefs(R(), d); assert.deepStrictEqual(refText(), ["[1,2,7]"]);
+  const g = d.items.get("g1").geom.find((x) => x.field === "Intersheetrefs"); assert.ok(g.x > 52, "autoplaced beside the label body, not on its anchor");
+  K.setIntersheetRefs(R({ show: false }), d); assert.deepStrictEqual(refText(), []);
+});
+
 console.log(`sch-sweep9: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

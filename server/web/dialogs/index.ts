@@ -29,6 +29,7 @@ import { editPageNumber } from "../editor/panels/hierarchy";
 import { findNetInNavigator } from "../editor/panels/netnav";
 import { assignNetclass } from "./assign-netclass";
 import { installSubSheets } from "./subsheets";
+import { installIntersheetRefs, refreshIntersheetRefs } from "./intersheet-refs";
 import { selectionIds } from "../editor/gestures";
 
 type Handler = import("../editor/types").ActionHandler;
@@ -66,7 +67,7 @@ function typing(ev: KeyboardEvent): boolean { const t = ev.target as HTMLElement
 
 /** Register everything; called once from editor/index.ts before the handled ids are published. */
 export function installDialogs(HANDLERS: Record<string, Handler>): void {
-  installSubSheets();
+  installSubSheets(); installIntersheetRefs();
   const needDoc = (fn: () => void, schOnly = false): Handler => () => { if (!E.kdoc) { toast("Open a document first"); return; } if (schOnly && !isSch()) { toast("This command belongs to the schematic editor"); return; } fn(); };
   const find = HANDLERS.find;
   Object.assign(HANDLERS, {
@@ -141,8 +142,8 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   // a newly opened document takes the preferences (grids, colours, display) and the project's schematic settings
   let lastDoc: unknown = null, lastPro: unknown = null, first = true;
   store.subscribe(() => {
-    if (E.kdoc && E.kdoc !== lastDoc) { lastDoc = E.kdoc; lastPro = E.proSettings; applyPrefs(first); first = false; applyProjectSettings(); void refreshOtherRefs(); }
-    else if (E.kdoc && E.proSettings !== lastPro) { lastPro = E.proSettings; applyProjectSettings(); }   // the .kicad_pro arrives after the first sheet
+    if (E.kdoc && E.kdoc !== lastDoc) { lastDoc = E.kdoc; lastPro = E.proSettings; applyPrefs(first); first = false; applyProjectSettings(); void refreshOtherRefs(); void refreshIntersheetRefs(); }
+    else if (E.kdoc && E.proSettings !== lastPro) { lastPro = E.proSettings; applyProjectSettings(); void refreshIntersheetRefs(); }   // the .kicad_pro arrives after the first sheet
   });
   onProjectChanged(applyProjectSettings);
   E.gridDefault = () => defaultGrid();
