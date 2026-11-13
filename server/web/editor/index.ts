@@ -27,6 +27,7 @@ import { followHypertext } from "./hypertext-follow";
 import { dragKeeps, dragModifier, selModifier } from "./selmodes";
 import { renderObjects, snapMm, syncItemsFromDoc, updateGridStatus, applyChanges, enterSheet, openDoc } from "./doc";
 import { $ } from "./dom";
+import { IS_MAC } from "../keys";
 import { cancelLongPress, moveLongPress, openClarifyMenu, openContextMenu, startLongPress } from "./contextmenu";
 import { DRAG_THRESHOLD_PX, cancelInteraction, clearAllSelection, markerUnder, rotateFieldMove, startFieldMove, copperUnderBeatsFootprint, installGestures, pinForClick, registerPointerUp, selectionChanged, selectionIds, startMove } from "./gestures";
 import { loadMe, navigate, route } from "./home";
@@ -440,7 +441,7 @@ function stagePointerMove(ev: PointerEvent, mm: [number, number]): void {
   }
   if (E.pan) { E.viewTouched = true; E.panX = ev.clientX - E.pan.x; E.panY = ev.clientY - E.pan.y; breakFollow(); applyView(); sendPresence(mm); return; }
   // "Pan on mouse movement with key" (input.motion_pan_modifier): moving with the key held pans the view
-  if (E.motionPanMod && (E.motionPanMod === "alt" ? ev.altKey : E.motionPanMod === "ctrl" ? ev.ctrlKey || ev.metaKey : ev.shiftKey) && !(ev.buttons & 1)) {
+  if (E.motionPanMod && (E.motionPanMod === "alt" ? ev.altKey : E.motionPanMod === "ctrl" ? (IS_MAC ? ev.metaKey : ev.ctrlKey) : ev.shiftKey) && !(ev.buttons & 1)) {
     if (E.metaPan) { E.viewTouched = true; E.panX += ev.clientX - E.metaPan[0]; E.panY += ev.clientY - E.metaPan[1]; breakFollow(); applyView(); }
     E.metaPan = [ev.clientX, ev.clientY]; return;
   }

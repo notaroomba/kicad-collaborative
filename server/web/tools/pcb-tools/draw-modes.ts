@@ -7,7 +7,7 @@ import { dimTrack } from "./draw-tools";
 import { gfxWidth } from "./nodes";
 import { lsGet, lsSet } from "./router-settings";
 import { S } from "./state";
-import { r6, samePt, vadd, vsub } from "./util";
+import { footprintEditorDefaults, r6, samePt, vadd, vsub } from "./util";
 
 // S.draw = { shape, start, cur, pts, … }: line/rect/circle take two clicks, an arc its start, end and
 // then a point on the arc, a bezier its start, two control points and end, a polygon / zone / rule area
@@ -31,14 +31,20 @@ export const DRAWING_TOOL_IDS = new Set(["via", "gline", "grect", "gcircle", "gt
 export function displayConstraintsMsg(msg: string) {
   try { if (typeof root.dispatchEvent === "function" && typeof CustomEvent === "function") root.dispatchEvent(new CustomEvent("kc:constraint-msg", { detail: { msg: msg || "" } })); } catch (e) { /* no DOM */ }
 }
+/**
+ * Each frame keeps its own line mode: PCBNEW_SETTINGS pcb_angle_snap_mode (LEADER_MODE::DIRECT, Free) and
+ * FOOTPRINT_EDITOR_SETTINGS' (LEADER_MODE::DEG45, footprint_editor_settings.cpp:57).
+ */
+export const FP_ANGLE_SNAP_KEY = "kc.fpedit.angleSnapMode";
+const snapKey = () => (footprintEditorDefaults() ? FP_ANGLE_SNAP_KEY : ANGLE_SNAP_KEY);
 export function angleSnapMode() {
-  if (!S.angleSnap) { const v = lsGet(ANGLE_SNAP_KEY); S.angleSnap = ANGLE_SNAP_MODES.includes(v!) ? v! : "free"; }
+  if (!S.angleSnap) { const v = lsGet(snapKey()); S.angleSnap = ANGLE_SNAP_MODES.includes(v!) ? v! : footprintEditorDefaults() ? "45" : "free"; }
   return S.angleSnap;
 }
 /** BOARD_EDITOR_CONTROL::ChangeLineMode: the new mode applies to the shape being drawn at once (refreshPreview). */
 export function setAngleSnap(ctx: PcbCtx, mode: string) {
   if (!ANGLE_SNAP_MODES.includes(mode)) return angleSnapMode();
-  S.angleSnap = mode; lsSet(ANGLE_SNAP_KEY, mode);
+  S.angleSnap = mode; lsSet(snapKey(), mode);
   if (ctx && S.draw && S.drawRaw) { drawTrack(S.draw, S.drawRaw, S.drawCtrl!); }
   if (S.move) displayConstraintsMsg(MOVE_SNAP_MSG[mode]!);   // doMoveSelection on angleSnapModeChanged
   if (ctx) ctx.requestRender();

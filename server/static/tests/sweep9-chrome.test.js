@@ -147,6 +147,13 @@ test("dock layout: the schematic's panes on the left, the board's Appearance on 
   assert.ok(T.DOCKS.sch.left.includes("hier") && T.DOCKS.sch.left.includes("props"));
   assert.ok(T.PANE_DEFAULT_HIDDEN.sch.includes("history") && T.PANE_DEFAULT_HIDDEN.pcb.includes("history"));
 });
+test("wheel zoom is about the pointer by default: the browser cannot warp it (center_on_zoom off unless ticked)", () => {
+  assert.equal(W.DEFAULT_WHEEL.centerOnZoom, false);
+});
+test("modifier names for the Mouse page go through keys.ts: Ctrl / Alt / Shift here, Cmd / Option / Shift on a Mac", () => {
+  const K = load(["keys.ts"]);
+  assert.deepEqual(["Ctrl", "Alt", "Shift"].map(K.modName), K.IS_MAC ? ["Cmd", "Option", "Shift"] : ["Ctrl", "Alt", "Shift"]);
+});
 
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

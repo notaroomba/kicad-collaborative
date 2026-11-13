@@ -440,9 +440,11 @@ function onWheel(ev: WheelEvent): void {
   const s: WheelSettings = Object.assign({}, DEFAULT_WHEEL, E.wheel || {});
   // a pinch arrives as ctrl+wheel with no Ctrl key held: a native zoom gesture (WX_VIEW_CONTROLS::onMagnify)
   if (ev.ctrlKey && !ctrlHeld) { zoomAtPointer(Math.pow(1.01, -dy), ev, r, s); return; }
+  // wx ControlDown() is Cmd on macOS (the physical Control key is RawControlDown, not a scroll modifier)
+  const ctrl = IS_MAC ? ev.metaKey : ev.ctrlKey;
   // "Native gestures": two-finger movement on a touchpad pans (a pixel-precise delta on both axes, or a fraction)
-  if (s.touchpadMode === "native" && ev.deltaMode === 0 && !ev.shiftKey && !ev.ctrlKey && !ev.altKey && (dx !== 0 && dy !== 0 || dy % 1 !== 0 || dx % 1 !== 0)) { panBy(-dx, -dy, mm); return; }
-  const act = wheelAction({ deltaX: dx, deltaY: dy, shiftKey: ev.shiftKey, ctrlKey: ev.ctrlKey, altKey: ev.altKey }, s, r.width, r.height);
+  if (s.touchpadMode === "native" && ev.deltaMode === 0 && !ev.shiftKey && !ctrl && !ev.altKey && (dx !== 0 && dy !== 0 || dy % 1 !== 0 || dx % 1 !== 0)) { panBy(-dx, -dy, mm); return; }
+  const act = wheelAction({ deltaX: dx, deltaY: dy, shiftKey: ev.shiftKey, ctrlKey: ctrl, altKey: ev.altKey }, s, r.width, r.height);
   if (!act) return;                                                          // KiCad forwards multi-modifier scrolls to the tools
   if (act.kind === "pan") { panBy(act.dx, act.dy, mm); return; }
   if (!E.zoomController || E.zoomControllerFor !== E.wheel) { E.zoomController = makeZoomController(s, IS_MAC ? "mac" : /Win/.test(navigator.platform || navigator.userAgent || "") ? "win" : "linux"); E.zoomControllerFor = E.wheel; }
@@ -454,8 +456,10 @@ function onWheel(ev: WheelEvent): void {
 /**
  * WX_VIEW_CONTROLS::onWheel's zoom: with "Center and warp cursor on zoom" (IsCursorWarpingEnabled) the view first
  * centres on the cursor (CenterOnCursor) and zooms about the centre, and the cursor is warped there.  The browser
- * cannot move the pointer, so the crosshair is drawn at the centre instead, and further notches with the pointer
- * still where it was zoom about the centre again until the pointer moves.  Otherwise the zoom is about the pointer.
+ * cannot move the pointer, so the design point under it would jump away from it: the web default is off (the zoom is
+ * about the pointer, keeping the cursor on the same design point as KiCad's warp does).  Ticked, the crosshair is
+ * drawn at the centre instead, and further notches with the pointer still where it was zoom about the centre again
+ * until the pointer moves.
  */
 function zoomAtPointer(factor: number, ev: { clientX: number; clientY: number }, r: DOMRect, s: WheelSettings): void {
   if (!s.centerOnZoom) { zoomBy(factor, ev.clientX - r.left, ev.clientY - r.top); requestZoomEnd(); return; }

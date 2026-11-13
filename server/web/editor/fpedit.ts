@@ -16,7 +16,7 @@
 import { setStatusBar, state, store } from "./appstore";
 import { keyName } from "../keys";
 import { E } from "./state";
-import { showPane } from "./panes";
+import { showPane, syncSchModes } from "./panes";
 import { commitObservers, setTool, toolCtx, undoStack } from "./tools";
 import { api, toast } from "./util";
 import { liveDocument, saveTextDocument, sendDocOps } from "./projectfile";
@@ -206,6 +206,7 @@ export function onFootprintOpened(snapSeq: number): void {
   if (state.project && state.docId) rememberFootprint(state.project.projectId, state.docId);
   // FOOTPRINT_EDITOR_SETTINGS' design settings for new graphics and text, never the project board's
   if (PT() && PT().useFootprintEditorDefaults) PT().useFootprintEditorDefaults(true);
+  syncSchModes();   // the Line Modes radio shows this frame's own mode (LEADER_MODE::DEG45 unless changed here)
   if (!FP.framed) {
     // FOOTPRINT_EDIT_FRAME's constructor: SetActiveLayer( F_SilkS )
     FP.framed = true;
@@ -1112,13 +1113,27 @@ async function showFootprintEditor(): Promise<void> {
 
 // ---------------------------------------------------------------- the handlers
 const fpOnly = (fn: () => unknown): ActionHandler => () => { if (isFpEdit()) fn(); };
+/**
+ * File > Close (ACTION_MENU::AddClose): KiCad closes the Footprint Editor frame only, asking first about unsaved
+ * changes.  A tab the board opened for it closes; otherwise the tab goes back to the project's editor (the board
+ * whose footprint this was, for a board copy) instead of leaving the project.
+ */
+async function closeFootprintEditor(): Promise<void> {
+  if (!(await canLeaveFootprint())) return;
+  const project = state.project; if (!project) return;
+  if (window.opener) { try { window.close(); } catch { /* not closable */ } if (window.closed) return; }
+  const board = FP.board ? FP.board.boardDocId : null;
+  location.href = `/p/${project.projectId}/edit` + (board ? `?doc=${encodeURIComponent(board)}` : "");
+}
+
 let installed = false;
 /** Called once from editor/index.ts after every module has loaded (actions.ts and doc.ts import each other). */
 let handlersRef: Record<string, ActionHandler> | null = null;
 export function installFpEditHandlers(HANDLERS: Record<string, ActionHandler>): void {
   if (installed) return; installed = true; handlersRef = HANDLERS;
-  const prevSave = HANDLERS.save; const prevRevert = HANDLERS.revert; const prevDatasheet = HANDLERS.showDatasheet;
+  const prevSave = HANDLERS.save; const prevRevert = HANDLERS.revert; const prevDatasheet = HANDLERS.showDatasheet; const prevClose = HANDLERS.close;
   Object.assign(HANDLERS, {
+  close: ((a) => { if (isFpEdit()) { void closeFootprintEditor(); return; } if (prevClose) prevClose(a); }) as ActionHandler,
   save: ((a) => { if (isFpEdit()) { saveFootprint(); return; } prevSave(a); }) as ActionHandler,
   revert: ((a) => { if (isFpEdit()) { revertFootprint(); return; } if (prevRevert) prevRevert(a); }) as ActionHandler,
   saveAs: fpOnly(saveAs), newFootprint: fpOnly(() => newFootprint()), createFootprint: fpOnly(() => createFootprint()), newLibrary: fpOnly(newLibrary), footprintProperties: fpOnly(footprintProperties),

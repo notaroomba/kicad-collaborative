@@ -7,7 +7,7 @@ import { loadHistory } from "./history";
 import { dropHistoryView } from "./versions";
 import { navigate, showView } from "./home";
 import { connect, requestResync, setConn } from "./net";
-import { setupEditorChrome } from "./panes";
+import { setupEditorChrome, storedAngleSnap } from "./panes";
 import { renderPeers, stopPresenceKeepalive } from "./peers";
 import { drawSelection, renderProps } from "./selection";
 import { E } from "./state";
@@ -292,7 +292,7 @@ export function gridIndex(): number { return gridList().findIndex((g) => Math.ab
 export function boardConstraintMsg(): string {
   const pt = (window as unknown as { PcbTools?: { angleSnapMode?: () => string } }).PcbTools;
   let m = pt && pt.angleSnapMode ? pt.angleSnapMode() : null;
-  if (!m) { try { m = localStorage.getItem("kc.pcbnew.angleSnapMode"); } catch (e) { m = null; } }
+  if (!m) m = storedAngleSnap();
   return m === "45" ? "Constrain to H, V, 45" : m === "90" ? "Constrain to H, V" : "";
 }
 if (typeof window !== "undefined") window.addEventListener("kc:constraint-msg", (ev) => { if (!isSch()) setStatusBar({ constraint: String((ev as CustomEvent<{ msg?: string }>).detail?.msg || "") }); });

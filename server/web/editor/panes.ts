@@ -29,16 +29,28 @@ export function savedPanes(ed: string): Record<string, boolean> { try { return J
 export function loadPanes(ed: "sch" | "pcb") {
   const saved = savedPanes(ed), out: Record<string, boolean> = {};
   for (const n of PANE_NAMES) { const allowed = n === "libtree" ? E.DOC_TYPE === "footprint" : !PANE_EDITOR_ONLY[n] || PANE_EDITOR_ONLY[n] === ed; out[n] = allowed && (saved[n] !== undefined ? !!saved[n] : !PANE_DEFAULT_HIDDEN[ed].includes(n)); }
+  out.filter = filterFollows(out, ed);
   return out;
+}
+
+/**
+ * The Selection Filter has no visibility of its own in KiCad: eeschema shows it whenever the Hierarchy, the Net
+ * Navigator or Properties is shown (SCH_EDIT_FRAME::updateSelectionFilterVisbility), the board and footprint editors
+ * with the Layers Manager (pcb_edit_frame.cpp:455, footprint_edit_frame.cpp:548).
+ */
+export function filterFollows(panes: Record<string, boolean>, ed: "sch" | "pcb"): boolean {
+  return ed === "sch" ? !!(panes.hier || panes.netnav || panes.props) : !!panes.appearance;
 }
 
 (E.hooks as Record<string, unknown>).showPane = (name: string, show?: unknown): void => showPane(name, show);   // dialogs/find.ts's "Show search panel"
 export function showPane(name: string, show?: unknown) {
   const ed = editorId();
   if (!PANE_NAMES.includes(name) || (PANE_EDITOR_ONLY[name] && PANE_EDITOR_ONLY[name] !== ed) || (name === "libtree" && E.DOC_TYPE !== "footprint")) return;
+  if (name === "filter") return;   // follows the panes it docks with (filterFollows)
   const next = show === undefined ? !E.panes[name] : !!show;
   E.panes = Object.assign({}, E.panes, { [name]: next });
-  const saved = savedPanes(ed); saved[name] = next;
+  E.panes.filter = filterFollows(E.panes, ed);
+  const saved = savedPanes(ed); saved[name] = next; delete saved.filter;
   try { localStorage.setItem(paneKey(ed), JSON.stringify(saved)); } catch (e) { /* no storage */ }
   store.set({ panes: E.panes });
   requestRender();
@@ -77,11 +89,18 @@ export function setupEditorChrome() {
 }
 
 // The schematic module owns its line / drag modes (Shift+Space, G, M); mirror them on the toolbar.
+/** The angle snap mode the board tools will read for this frame (tools/pcb-tools/draw-modes.ts angleSnapMode). */
+export function storedAngleSnap(): string {
+  const fp = E.DOC_TYPE === "footprint";
+  let v: string | null = null; try { v = localStorage.getItem(fp ? "kc.fpedit.angleSnapMode" : "kc.pcbnew.angleSnapMode"); } catch (e) { v = null; }
+  return v === "free" || v === "45" || v === "90" ? v : fp ? "45" : "free";
+}
 export function syncSchModes() {
   if (!isSch()) {   // the board's angle snap mode (PCBNEW_SETTINGS m_AngleSnapMode) on the same radio
     const pt = (window as unknown as { PcbTools?: { angleSnapMode?: () => string } }).PcbTools;
-    // until the board tools load, KiCad's default (pcbnew_settings.cpp pcb_angle_snap_mode: LEADER_MODE::DIRECT, Free)
-    const am = (pt && pt.angleSnapMode ? pt.angleSnapMode() : null) || "free";
+    // until the board tools load, the stored mode, else KiCad's default: pcbnew_settings.cpp pcb_angle_snap_mode
+    // LEADER_MODE::DIRECT (Free), footprint_editor_settings.cpp:57 LEADER_MODE::DEG45
+    const am = (pt && pt.angleSnapMode ? pt.angleSnapMode() : null) || storedAngleSnap();
     setRadio("Line modes", am === "free" ? "lineModeFree" : am === "45" ? "lineMode45" : "lineMode90");
     store.slice("viewport", { lineMode: am === "free" || am === "45" || am === "90" ? am : null, dragMode: null }); return;
   }

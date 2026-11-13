@@ -4,7 +4,7 @@
 // PCB Editor > Display Options, Grids, Origins & Axes, Editing Options.  Everything is kept in localStorage (prefs.ts) and applied on OK.
 import { trapTab } from "../tools/kicad-dialogs/shell";
 import { E, toast } from "./editor";
-import { keyName } from "../keys";
+import { keyName, modName } from "../keys";
 import { hotkeysPanel } from "./hotkeys-panel";
 import type { UserHotkeys } from "../menuspec";
 import { KD, checkbox, h, select } from "./dom";
@@ -299,7 +299,7 @@ function mousePage(pg: HTMLElement, p: Prefs): void {
       m.leftDrag, (v) => { m.leftDrag = v as Prefs["mouse"]["leftDrag"]; }, { id: "kd-pref-left" }),
     h("label", null, "Middle button drag:"), select(drag3, m.middleDrag, (v) => { m.middleDrag = v as Prefs["mouse"]["middleDrag"]; }, { id: "kd-pref-middle" }),
     h("label", null, "Right button drag:"), select(drag3, m.rightDrag, (v) => { m.rightDrag = v as Prefs["mouse"]["rightDrag"]; }, { id: "kd-pref-right" }),
-    h("label", null, "Pan on mouse movement with key:"), select([["", "None"], ["alt", "Alt"], ["ctrl", "Ctrl"], ["shift", "Shift"]], m.motionPanMod, (v) => { m.motionPanMod = v as ScrollMod; }, { id: "kd-pref-motionpan" })));
+    h("label", null, "Pan on mouse movement with key:"), select([["", "None"], ["alt", modName("Alt")], ["ctrl", modName("Ctrl")], ["shift", modName("Shift")]], m.motionPanMod, (v) => { m.motionPanMod = v as ScrollMod; }, { id: "kd-pref-motionpan" })));
   const sg = KD().staticBox(pg, "Scroll Gestures");
   const touch = select([["native", "Native gestures (recommended)"], ["scroll", "Configurable scroll gestures"]], m.touchpadMode, (v) => { m.touchpadMode = v as "native" | "scroll"; }, { id: "kd-pref-touchpad" });
   sg.append(h("div", { class: "kd-row" }, h("label", { style: "white-space:nowrap" }, "Touchpad navigation:"), touch),
@@ -307,7 +307,8 @@ function mousePage(pg: HTMLElement, p: Prefs): void {
     h("div", { style: "margin-bottom:4px" }, "Vertical touchpad or scroll wheel movement:"));
   const warn = h("div", { class: "kd-note", id: "kd-pref-scrollwarn", style: "color:var(--err);display:none" }, "Only one action can be assigned to each column");
   const grid = h("div", { id: "kd-pref-scrollgrid", style: "display:grid;grid-template-columns:max-content repeat(4, 42px) max-content;gap:4px 0;align-items:center;justify-items:center" });
-  const MODS: [ScrollMod, string][] = [["", "--"], ["ctrl", "Ctrl"], ["shift", "Shift"], ["alt", "Alt"]];
+  // panel_mouse_settings.cpp: the column labels are Cmd and Option on macOS
+  const MODS: [ScrollMod, string][] = [["", "--"], ["ctrl", modName("Ctrl")], ["shift", modName("Shift")], ["alt", modName("Alt")]];
   const radios: Record<string, HTMLInputElement[]> = {};
   const reverse: Record<string, HTMLInputElement> = {};
   const rowKey = { zoom: "zoomMod", panv: "panVMod", panh: "panHMod" } as const;

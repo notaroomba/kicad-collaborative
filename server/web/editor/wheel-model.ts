@@ -22,7 +22,7 @@ export type ScrollMod = "" | "ctrl" | "shift" | "alt";
 export type Platform = "mac" | "win" | "linux";
 
 export const DEFAULT_WHEEL: WheelSettings = { zoomMod: "", panHMod: "ctrl", panVMod: "shift", reverseZoom: false, reversePanH: false, horizontalPan: true,
-  zoomAcceleration: false, zoomSpeed: 1, zoomSpeedAuto: true, centerOnZoom: true, touchpadMode: "scroll" };
+  zoomAcceleration: false, zoomSpeed: 1, zoomSpeedAuto: true, centerOnZoom: false, touchpadMode: "scroll" };
 
 /** CONSTANT_ZOOM_CONTROLLER's platform scales and MANUAL_SCALE_FACTOR (include/view/zoom_controller.h). */
 export const GTK3_SCALE = 0.002, MAC_SCALE = 0.01, MSW_SCALE = 0.005, MANUAL_SCALE_FACTOR = 0.001, DEFAULT_ACCELERATION_SCALE = 5.0, ACC_TIMEOUT_MS = 500;

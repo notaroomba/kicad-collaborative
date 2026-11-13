@@ -14,7 +14,9 @@ export function Toast() {
     if (!toast) return;
     // In the editor the message is KiCad's infobar (WX_INFOBAR::ShowMessageFor): a bar over the top edge of the
     // canvas, laid over it rather than pushing it down; elsewhere a toast at the bottom of the window.
-    const stage = document.getElementById("stage");
+    // the Symbol Editor is its own frame over the editor, with its own infobar strip: the bar lies over its canvas
+    const se = document.getElementById("se-canvas");
+    const stage = se && se.offsetParent && se.getBoundingClientRect().width > 0 ? se : document.getElementById("stage");
     const measure = () => { const r = stage && stage.offsetParent ? stage.getBoundingClientRect() : null; setBox(r && r.width > 0 ? { left: r.left, top: r.top, width: r.width } : null); };
     measure();
     // A dock opening or closing while the bar is up (a plugin panel, the assistant) resizes the canvas: the bar follows it.

@@ -45,6 +45,9 @@ export function keyName(key: string | null | undefined): string {
   return [...mods, s.key].join("+");
 }
 
+/** A modifier key's own name ("Ctrl", "Alt", "Shift" in KiCad's notation): "Cmd" and "Option" on a Mac. */
+export function modName(mod: "Ctrl" | "Alt" | "Shift"): string { return keyName(`${mod}+X`).slice(0, -2); }
+
 /** The named keys as a macOS menu draws them (NSMenuItem key equivalents). */
 const MAC_MENU_KEYS: Record<string, string> = {
   Del: "⌦", Delete: "⌦", Backspace: "⌫", Back: "⌫", Esc: "⎋", Escape: "⎋", Tab: "⇥", Enter: "↩", Return: "↩",

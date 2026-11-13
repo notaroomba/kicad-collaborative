@@ -83,13 +83,25 @@ const isCheckable = (id: string) => MENU_CHECKS.has(id);
 /* The "Junction" title opens the application menu, like the application menu of a desktop program:
    the places outside the current editor (projects, public projects, the part libraries, plugins, GitHub, AI assistants)
    and the account.  Each entry is an editor action (web/editor/actions.ts HANDLERS). */
-interface AppEntry { id: string; label: string; icon: string; key?: string }
-function appEntries(me: AppState["me"], project: AppState["project"], inEditor: boolean): (AppEntry | "-")[] {
+interface AppEntry { id: string; label: string; icon: string; key?: string; why?: string | null }
+/** Who may copy the open project: the owner's setting (server/src/access.rs), which the server enforces too. */
+interface CopyRights { canCopy: boolean; guest: boolean }
+function appEntries(me: AppState["me"], project: AppState["project"], inEditor: boolean, r: CopyRights): (AppEntry | "-")[] {
   const out: (AppEntry | "-")[] = [
     { id: "home", label: "Projects", icon: "directory_open" },
     { id: "explore", label: "Explore Public Projects", icon: "search_tree" },
   ];
   if (me) out.push({ id: "newProject", label: "New Project...", icon: "add_board" }, { id: "openTrash", label: "Trash", icon: "trash" });
+  // the open project's web-only commands, which KiCad's menu bars have no place for: who is here, a copy of it, the
+  // .zip and the hand-off to the desktop app
+  if (inEditor && project) {
+    const noCopy = r.canCopy ? null : "The owner does not let viewers download or copy this project";
+    out.push("-",
+      { id: "tab-peers", label: "Collaborators", icon: "" },
+      { id: "clone", label: "Clone to My Account", icon: "duplicate", why: noCopy || (r.guest || !me ? "Sign in to make your own copy" : null) },
+      { id: "archive", label: "Download Project (.zip)", icon: "library_archive", why: noCopy || (!me ? "Sign in to download the project" : null) },
+      { id: "openInKicad", label: "Open in Junction...", icon: "icon_kicad" });
+  }
   out.push("-",
     { id: "symbolLibrary", label: "Symbol Library Browser", icon: "library_browser" },
     { id: "footprintLibrary", label: "Footprint Library Browser", icon: "library" },
@@ -103,11 +115,12 @@ function appEntries(me: AppState["me"], project: AppState["project"], inEditor: 
   return out;
 }
 function AppMenu({ inEditor }: { inEditor: boolean }) {
-  const me = useApp((s) => s.me), project = useApp((s) => s.project);
+  const me = useApp((s) => s.me), project = useApp((s) => s.project), can = useApp((s) => s.can), guest = useApp((s) => s.guest);
   const [open, setOpen] = useState(false), [sel, setSel] = useState(-1);
   const btn = useRef<HTMLButtonElement | null>(null), panel = useRef<HTMLDivElement | null>(null);
-  const entries = useMemo(() => appEntries(me, project, inEditor), [me, project, inEditor]);
-  const items = entries.map((e, i) => (e === "-" ? -1 : i)).filter((i) => i >= 0);
+  const canCopy = !can || can.copy;
+  const entries = useMemo(() => appEntries(me, project, inEditor, { canCopy, guest }), [me, project, inEditor, canCopy, guest]);
+  const items = entries.map((e, i) => (e === "-" || e.why ? -1 : i)).filter((i) => i >= 0);
   const close = useCallback((refocus?: boolean) => { setOpen(false); setSel(-1); if (refocus && btn.current) btn.current.focus(); }, []);
   const run = useCallback((e: AppEntry) => {
     close();
@@ -124,7 +137,7 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
         eat(); const at = items.indexOf(sel), n = items.length;
         setSel(items[at < 0 ? (k === "ArrowDown" ? 0 : n - 1) : (at + (k === "ArrowDown" ? 1 : n - 1)) % n]); return;
       }
-      if (k === "Enter" || k === " ") { eat(); const e = entries[sel]; if (e && e !== "-") run(e); return; }
+      if (k === "Enter" || k === " ") { eat(); const e = entries[sel]; if (e && e !== "-" && !e.why) run(e); return; }
       if (k === "Tab") { eat(); return; }
     };
     document.addEventListener("pointerdown", away, true); window.addEventListener("keydown", key, true); window.addEventListener("resize", () => close());
@@ -147,9 +160,9 @@ function AppMenu({ inEditor }: { inEditor: boolean }) {
           {entries.map((e, i) => e === "-"
             ? <div key={"sep" + i} className="h-px bg-line my-1 mx-1" role="separator" />
             : (
-              <button type="button" key={e.id} role="menuitem" data-appmenu={e.id}
-                className={cx(ROW, sel === i ? "bg-accent text-on-accent" : "bg-transparent")}
-                onMouseMove={() => setSel(i)} onClick={() => run(e)}>
+              <button type="button" key={e.id} role="menuitem" data-appmenu={e.id} aria-disabled={e.why ? "true" : undefined} title={e.why || undefined}
+                className={cx(ROW, e.why ? "bg-transparent text-ink-3" : sel === i ? "bg-accent text-on-accent" : "bg-transparent")}
+                onMouseMove={() => setSel(e.why ? -1 : i)} onClick={() => { if (!e.why) run(e); }}>
                 <span className="w-5 h-4 mr-1.5 shrink-0 flex items-center justify-center">{e.icon ? <KIcon name={e.icon} size={16} /> : null}</span>
                 <span className="flex-1">{e.label}</span>
               </button>

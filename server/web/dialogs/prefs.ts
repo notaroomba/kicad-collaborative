@@ -59,7 +59,7 @@ function pcbGrids(): GridPrefs { return { sizes: PCB_GRID_SIZES.slice(), names: 
 /** APP_SETTINGS_BASE::DefaultGridSizeList for pcbnew and the footprint editor: 1000 mil down to 1 mil, then 5 mm down to 0.01 mm. */
 const PCB_GRID_SIZES = PCB_DEFAULT_GRIDS;
 export const DEFAULT_PREFS: Prefs = {
-  mouse: { autoZoomSpeed: true, zoomSpeed: IS_MAC ? 5 : 1, middleDrag: "pan", rightDrag: "pan", centerOnZoom: true, autoPan: false, autoPanSpeed: 5, zoomAccel: false, leftDrag: "dragSelected", motionPanMod: "",
+  mouse: { autoZoomSpeed: true, zoomSpeed: IS_MAC ? 5 : 1, middleDrag: "pan", rightDrag: "pan", centerOnZoom: false, autoPan: false, autoPanSpeed: 5, zoomAccel: false, leftDrag: "dragSelected", motionPanMod: "",
     // TOUCHPAD_MODE: native gestures by default on Windows only
     touchpadMode: IS_WIN ? "native" : "scroll", zoomMod: "", panHMod: "ctrl", panVMod: "shift", reverseZoom: false, reversePanH: false, horizontalPan: true },
   schDisplay: { showHiddenPins: false, showHiddenFields: false, showPageLimits: true },
@@ -96,6 +96,10 @@ const OV_KEYS = ["connected", "wires", "vias", "text", "graphics"] as const;
  * override sizes picked again by value; a list the user changed is kept and opens on its first grid as before.
  */
 function migrate(raw: unknown): unknown {
+  // the old Mouse page (no left-drag setting yet) saved center_on_zoom = true although the wheel ignored it; the
+  // browser cannot warp the pointer, so a centring zoom is opt-in here and those settings take the new default
+  const mouse = raw && typeof raw === "object" ? (raw as { mouse?: Record<string, unknown> }).mouse : undefined;
+  if (mouse && typeof mouse === "object" && !("leftDrag" in mouse)) delete mouse.centerOnZoom;
   const grids = raw && typeof raw === "object" ? (raw as { grids?: Record<string, Record<string, unknown>> }).grids : undefined;
   if (!grids || typeof grids !== "object") return raw;
   const sch = grids.sch; if (sch && typeof sch === "object" && typeof sch.last !== "number") sch.last = 1;
