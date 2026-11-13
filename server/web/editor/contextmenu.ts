@@ -17,7 +17,7 @@ import { enterSheet, rootSchematic, setGridPitch } from "./doc";
 import { ARC_EDIT_MODE_MENU, evaluate, GRID_ORIGIN, menuFor, type MenuCtx, type MenuDef, type Resolved } from "./ctxmenus";
 import { activeModuleTool, clearAllSelection, hitsAt, interactionBusy, pcbState, pickAt, schState, selectAt, selectionBox, selectionChanged, selectionIds, selectionItems, selectItemId, stage, startMove, toolCtx, worldMm, zoomBy } from "./gestures";
 import { E } from "./state";
-import { nearestFootprint } from "./selection";
+import { HIT_PX, nearestFootprint } from "./selection";
 import { activeModule, deleteSelection, moduleTool, runModuleAction, selectAll, setTool } from "./tools";
 import { isSch, kicadZoom, pxPerMm, requestRender } from "./view";
 /** The table cell selection's view for the menu, filled in by editor/tablecells.ts at install. */
@@ -139,7 +139,8 @@ const SPECIAL: Record<string, (c: MenuCtx) => Run | string> = {
   "ACTIONS::unselectAll": () => () => clearAllSelection(),
   // SCH_EDIT_TOOL::SwapPinLabels (the error goes to the infobar)
   "SCH_ACTIONS::swapPinLabels": () => (schPins() ? () => { const P = schPins()!; const err = P.swapPinLabels(toolCtx(), (E.selPins as PinRef[]).slice()); if (err) toast(err, 5000); selectionChanged(); requestRender(); } : NOT_YET),
-  "ACTIONS::doDelete": () => (E.selField ? DESKTOP : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
+  // a board footprint field is hidden (EDIT_TOOL::DeleteItems, PCB_FIELD_T): the board module's Delete takes the selected field
+  "ACTIONS::doDelete": () => (E.selField ? (isSch() ? DESKTOP : moduleKey("Delete")) : E.selPins.length ? () => { /* SCH_EDIT_TOOL::DoDelete: a pin is never deleted on its own */ } : deleteAll),
   "SCH_ACTIONS::move": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("move"); } : NOT_YET),
   "SCH_ACTIONS::drag": () => (selectionItems().length || E.selPins.length ? () => { promotePin(); startMove("drag"); } : NOT_YET),
   "PCB_ACTIONS::move": () => (selectionItems().length || E.selField ? () => { startMove("move"); } : NOT_YET),
@@ -316,6 +317,31 @@ function ambiguousAt(mm: Mm): string[] {
  * candidates under a point after GuessSelectionCandidates, and doSelectionMenu between them at the pointer.
  */
 E.hooks.candidatesAt = (mm: Mm): string[] => (E.kdoc ? ambiguousAt(mm) : []);
+/**
+ * The footprint field (PCB_FIELD) RequestSelection's collector keeps at a point, or null: the field's text quad is
+ * under the point, the selection filter lets text through, and its own footprint is not collected there too —
+ * FilterCollectorForHierarchy drops a child whose footprint is a candidate, and GENERAL_COLLECTOR collects a
+ * footprint by its hull (FOOTPRINT::HitTestAccurate, which leaves the fields out) within the 5 px accuracy.
+ */
+E.hooks.fieldAt = (mm: Mm): { id: string; name: string } | null => {
+  if (isSch() || !E.kdoc) return null;
+  const f = store.get().filter as Record<string, boolean>; if (f.text === false) return null;
+  const hit = KiCadCanvas.fieldAt(E.kdoc as KDoc, mm[0], mm[1], E.hiddenLayers as Set<string>); if (!hit || hit.item.kind !== "footprint") return null;
+  if (f.footprints !== false && footprintHullHit(hit.item, mm)) return null;
+  return { id: hit.item.id, name: hit.name };
+};
+/** FOOTPRINT::HitTestAccurate as the editor approximates it (canvas hitTestDetail): the box of its shapes and pads, never its texts, within 5 px. */
+function footprintHullHit(it: KItem, mm: Mm): boolean {
+  const tol = HIT_PX / Math.max(1e-6, pxPerMm()), hidden = E.hiddenLayers as Set<string>;
+  const geomBox = KiCadCanvas.geomBox as (g: KGeom) => number[] | null;
+  let hull: number[] | null = null;
+  for (const g of it.geom) {
+    if ((g.layer && hidden.has(g.layer)) || g.padText || g.padNum || g.noBox || g.t === "text") continue;
+    const b = geomBox(g); if (!b) continue;
+    hull = hull ? [Math.min(hull[0], b[0]), Math.min(hull[1], b[1]), Math.max(hull[2], b[2]), Math.max(hull[3], b[3])] : b.slice();
+  }
+  return !!hull && mm[0] >= hull[0] - tol && mm[0] <= hull[2] + tol && mm[1] >= hull[1] - tol && mm[1] <= hull[3] + tol;
+}
 E.hooks.clarify = (ids: string[], then: () => void): void => {
   const c = (E.lastClient as [number, number] | null) || [window.innerWidth / 2, window.innerHeight / 2];
   clarifyPopup({ clientX: c[0], clientY: c[1] }, ids, then);

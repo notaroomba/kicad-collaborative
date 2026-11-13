@@ -43,6 +43,12 @@ export interface PcbCtx extends ToolCtx {
   candidatesAt?(mm: Pt): string[] | null;
   /** the clarification menu: picks one of the candidates, then calls back with a context for it (or null) */
   clarify?(cands: string[], done: (fresh: PcbCtx | null) => void): void;
+  /** the selected footprint field (the editor keeps it apart from the item selection), or null */
+  selectedField?(): { id: string; name: string } | null;
+  /** drop the selected footprint field (DeleteItems clears the selection first) */
+  clearField?(): void;
+  /** the footprint field the hover selection collects at a point (FilterCollectorForHierarchy applied), or null */
+  fieldAt?(mm: Pt): { id: string; name: string } | null;
   /** hand a drag the editor started to the module's move session */
   handoffDrag?(): unknown;
   /** the toolbar group's shown action (the Arc group follows the arc drawing mode) */

@@ -49,6 +49,7 @@ import { isTuningPattern, regenerateTuning, tuneStep, tuningPatternInfo } from "
 import { editTuningPattern, selectedTuningPattern, tuningNodeWithSettings } from "./tuning-edit";
 import { isTuneTool, tuneMode, tuneUpdate } from "./tuning-tool";
 import { clone, fmt, layerOf, r6, widthOf } from "./util";
+import { flipFieldChange, requestField, rotateFieldChange } from "./field-edit";
 import { diffPairMarkers, matchedLengthMarkers } from "./dru";
 
 // ---------------------------------------------------------------- actions: pcbnew's non-tool commands
@@ -263,6 +264,9 @@ export function rotateBy(ctx: PcbCtx, deg: number) {
   if (S.route) return true;   // isRouterActive: wxBell
   if (moveInFlight(ctx)) return moveTransform(ctx, "rotate", deg);
   if (!canEdit(ctx)) return true;
+  // a footprint field (PCB_FIELD_T): PCB_TEXT::Rotate about its own position; a selected field stays selected
+  const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+  if (fr) { const ch = rotateFieldChange(ctx.doc, fr, deg); if (ch) ctx.commit([ch], "rotate"); ctx.requestRender(); return true; }
   const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => rotateBy(c, deg) }); if (!sel) return true;
   const c = modificationPoint(ctx, sel.items, true);
   const ch = rotateChanges(ctx.doc, sel.ids, c[0], c[1], deg); if (ch.length) ctx.commit(ch, "rotate");
@@ -278,6 +282,9 @@ export function flipBy(ctx: PcbCtx) {
   if (S.route) return true;
   if (moveInFlight(ctx)) return moveTransform(ctx, "flip");
   if (!canEdit(ctx)) return true;
+  // a footprint field: PCB_TEXT::Flip about its own position ("Change Side / Flip")
+  const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+  if (fr) { const ch = flipFieldChange(ctx.doc, fr); if (ch) ctx.commit([ch], "flip"); ctx.requestRender(); return true; }
   const sel = requestSelection(ctx, { rerun: (c: PcbCtx) => flipBy(c) }); if (!sel) return true;
   const items = sel.items, one = items.length === 1 && items[0]!.kind !== "gr_rect" && items[0]!.kind !== "table";
   const b = bboxUnion(items); const cx = one ? anchorOf(items[0]!)[0] : b ? (b[0] + b[2]) / 2 : 0;

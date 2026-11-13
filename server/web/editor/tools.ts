@@ -49,6 +49,10 @@ export function toolCtx(extra?: Record<string, unknown>) {
     // drag handed to the module's move (a turn in flight)
     candidatesAt(mm: [number, number]) { return E.hooks && E.hooks.candidatesAt ? E.hooks.candidatesAt(mm) : null; },
     clarify(ids: string[], then: (ctx: ToolCtx) => void) { if (E.hooks && E.hooks.clarify) E.hooks.clarify(ids, () => then(toolCtx())); },
+    // a footprint field: the selected one (E.selField), the one the hover selection takes at a point, and dropping it
+    selectedField() { return !isSch() && E.selField ? { id: E.selField.id as string, name: E.selField.name as string } : null; },
+    fieldAt(mm: [number, number]) { return E.hooks && E.hooks.fieldAt ? E.hooks.fieldAt(mm) : null; },
+    clearField() { if (E.selField) { E.selField = null; drawSelection(); renderProps(); renderObjects(); requestRender(); } },
     handoffDrag() { return !!(E.hooks && E.hooks.handoffDrag && E.hooks.handoffDrag()); },
     // Ask a desktop editor in this document to do what the browser cannot (fill zones).
     requestDesktop(action: string) { if (!E.ws || E.ws.readyState !== 1 || !E.joinedDocId) return false; E.ws.send(JSON.stringify({ type: "request", docId: E.joinedDocId, action })); return true; },

@@ -12,6 +12,8 @@ import { distSeg } from "./hit";
 import { setLayer } from "./route-tool";
 import { K, S, lastCtx } from "./state";
 import { clone, pt, r6, widthOf } from "./util";
+import { cursorPoint } from "./clipboard";
+import { hideFieldChanges, requestField } from "./field-edit";
 
 /** + / - (PCB_CONTROL::LayerNext / LayerPrev): the next visible copper layer down or up the stack. */
 export function stepLayer(ctx: PcbCtx, forward: boolean) {
@@ -30,6 +32,9 @@ export function deleteSelection(ctx: PcbCtx) {
 }
 /** EDIT_TOOL::Remove with nothing selected: the item under the cursor (hover), locks honoured; silent. */
 export function hoverDelete(ctx: PcbCtx) {
+  // a footprint field (the selected one, or the one under the cursor) is hidden, never removed (DeleteItems, PCB_FIELD_T)
+  const fr = requestField(ctx, ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx));
+  if (fr) { ctx.commit(hideFieldChanges(ctx.doc, fr), "delete"); if (!fr.hover && ctx.clearField) ctx.clearField(); ctx.requestRender(); return; }
   const sel = requestSelection(ctx, { rerun: (c) => hoverDelete(c) }); if (!sel) return;
   ctx.commit(deleteChanges(ctx.doc, sel.ids), "delete"); applySelection(ctx, []);
 }
