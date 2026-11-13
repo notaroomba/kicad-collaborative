@@ -26,6 +26,7 @@ import { openSelectionProperties } from "./pointer";
 /** The table cell selection's view for the menu, filled in by editor/tablecells.ts at install. */
 export const tableMenu: { state(): { n: number; block: boolean; merged: boolean; structure: boolean } | null; pick(mm: Mm): boolean; actions: Record<string, () => boolean> } = { state: () => null, pick: () => false, actions: {} };
 import { toast } from "./util";
+import { IS_MAC } from "../keys";
 
 type Mm = [number, number];
 type Run = () => void;
@@ -419,7 +420,8 @@ function footprintHullHit(it: KItem, mm: Mm): boolean {
 }
 E.hooks.clarify = (ids: string[], then: () => void): void => {
   const c = (E.lastClient as [number, number] | null) || [window.innerWidth / 2, window.innerHeight / 2];
-  clarifyPopup({ clientX: c[0], clientY: c[1] }, ids, then);
+  const mm = E.lastCursorMm as Mm | null;
+  clarifyPopup({ clientX: c[0], clientY: c[1] }, ids, then, mm && !isSch() ? candidatesAt(mm) : null);
 };
 /** KiCad's "Clarify Selection" list: offered when the click could have meant more than one item. */
 function clarifyRows(mm: Mm): CtxItem | null {
@@ -442,13 +444,47 @@ export function openClarifyMenu(ev: { clientX: number; clientY: number }): boole
   const ids = candidatesAt(mm).slice(0, 100); if (ids.length < 2) return false;
   clarifyPopup(ev, ids, null); return true;
 }
-/** SELECTION_TOOL::doSelectionMenu: numbered rows, then Select All; `then` runs after a pick (the context menu). */
-function clarifyPopup(ev: { clientX: number; clientY: number }, ids: string[], then: (() => void) | null): void {
+/** BOARD_ITEM::GetMenuImage for a board candidate id (a pad key, a field key or an item id); undefined on a schematic. */
+const SHAPE_KINDS = new Set(["gr_line", "gr_rect", "gr_circle", "gr_arc", "gr_poly", "gr_curve", "gr_bbox", "fp_line", "fp_rect", "fp_circle", "fp_arc", "fp_poly", "fp_curve"]);
+function menuImage(id: string): string | undefined {
+  if (isSch() || !E.kdoc) return undefined;
+  if (id.includes("@field:")) return "text";   // PCB_FIELD is a PCB_TEXT
+  if (id.includes("#")) return "pad";
+  const it = (E.kdoc as KDoc).items.get(id); if (!it) return undefined;
+  const k = it.kind;
+  if (k === "footprint" || k === "group") return "module";   // PCB_GROUP::GetMenuImage is BITMAPS::module too
+  if (k === "segment" || k === "arc") return "add_tracks";
+  if (k === "via") return "via";
+  if (k === "zone") return "add_zone";
+  if (k === "gr_text") return "text";
+  if (k === "gr_text_box") return "add_textbox";
+  if (k === "table") return "table";
+  if (k === "image") return "image";
+  if (k === "target") return "add_pcb_target";
+  if (k === "barcode") return "add_barcode";
+  if (k === "point") return "add_point";
+  if (k === "dimension") {
+    const t = KiCadCanvas.kid(it.node, "type"), ty = t ? KiCadCanvas.str(t[1]) : "aligned";
+    return ty === "orthogonal" ? "add_orthogonal_dimension" : ty === "leader" ? "add_leader" : ty === "radial" ? "add_radial_dimension" : ty === "center" ? "add_center_dimension" : "add_aligned_dimension";
+  }
+  if (SHAPE_KINDS.has(k)) return k.startsWith("fp_") ? "show_mod_edge" : "add_dashed_line";
+  return undefined;
+}
+/**
+ * SELECTION_TOOL::doSelectionMenu: up to 100 rows, the first nine numbered ("&1  …", the number also the accelerator;
+ * macOS shows the accelerator only) with the item's GetMenuImage, then Select All (A) and, when the heuristics set
+ * candidates aside (COLLECTOR::HasAdditionalItems), Show More Choices... (M), which opens the menu again over all of
+ * them.  `then` runs after a pick (the context menu).
+ */
+function clarifyPopup(ev: { clientX: number; clientY: number }, ids: string[], then: (() => void) | null, all?: string[] | null): void {
   runners = new Map(); anchor = null;
-  const hoverOf = (id: string) => (id.includes("#") ? id.slice(0, id.indexOf("#")) : id);
+  ids = ids.slice(0, 100);
+  const hoverOf = (id: string) => (id.includes("#") ? id.slice(0, id.indexOf("#")) : id.includes("@field:") ? id.slice(0, id.indexOf("@field:")) : id);
   const pick = (list: string[]): void => { clearAllSelection(false); for (const id of list) selectCandidate(id); selectionChanged(); if (then) then(); };
-  const items: CtxItem[] = ids.map((id, i): CtxItem => ({ label: describe(id), key: i < 9 ? String(i + 1) : undefined, hover: hoverOf(id), run: runRow(() => pick([id])) }));
+  const items: CtxItem[] = ids.map((id, i): CtxItem => ({ label: i < 9 && !IS_MAC ? `${i + 1}  ${describe(id)}` : describe(id), key: i < 9 ? String(i + 1) : undefined, icon: menuImage(id), hover: hoverOf(id), run: runRow(() => pick([id])) }));
   items.push({ sep: true }, { label: "Select All", key: "A", run: runRow(() => pick(ids.filter((id) => !id.includes("#")))) });
+  const more = all ? all.filter((id) => !ids.includes(id)) : [];
+  if (more.length) items.push({ label: "Show More Choices...", key: "M", run: runRow(() => clarifyPopup(ev, ids.concat(more), then, null)) });
   E.contextMenuOpen = true; E.hoverId = null; stage.classList.remove("over-sel");
   store.set({ contextMenu: { id: ++menuId, x: ev.clientX, y: ev.clientY, items } });
   requestRender();
@@ -540,7 +576,7 @@ export function openContextMenu(ev: { clientX: number; clientY: number }): void 
       // PCB_SELECTION_TOOL::selectPoint on a right-click with nothing selected: more than one candidate left after the
       // heuristics opens the stand-alone Clarify Selection popup, and the context menu follows the pick
       const amb = isSch() ? [] : ambiguousAt(mm);
-      if (amb.length > 1) { clarifyPopup(ev, amb.slice(0, 100), () => show(ev.clientX, ev.clientY, mm, false)); return; }
+      if (amb.length > 1) { clarifyPopup(ev, amb.slice(0, 100), () => show(ev.clientX, ev.clientY, mm, false), candidatesAt(mm)); return; }
       if (amb.length === 1 && amb[0].includes("#")) { clearAllSelection(false); selectCandidate(amb[0]); selectionChanged(); }
       else if (amb.length || isSch()) selectAt(mm);
     }

@@ -26,7 +26,9 @@ EXTRA_ICONS = {"import", "export_file", "fabrication", "language", "add_zone", "
                # the Footprint Wizard frame's toolbar (editor/fpwizard.ts)
                "module_wizard", "reload", "refresh", "zoom_in", "zoom_out", "zoom_fit_in_page", "export_footprint_names",
                # the Net Inspector pane's configure button (pcbnew/widgets/net_inspector_panel.cpp)
-               "config"}
+               "config",
+               # Clarify Selection rows: the item icons of BOARD_ITEM::GetMenuImage with no action of their own
+               "add_dashed_line", "show_mod_edge", "drc", "add_pcb_target", "grid_select", "add_point"}
 
 
 MAC_IF = r"#\s*if(?:def\s+|\s+defined\(\s*)__WX(?:OSX_)?MAC__[ \t]*\)?[^\n]*\n"
