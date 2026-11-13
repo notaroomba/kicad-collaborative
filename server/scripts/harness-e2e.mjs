@@ -255,6 +255,25 @@ result = {"before": before, "after": warn(), "done": done, "again": board.silksc
 ` });
   const sk = (silk.data && silk.data.result) || {};
   check('the silkscreen pass: every reference beside its part and on nothing, pin names and the board name printed', !silk.isError && silk.data.ok === true && sk.done && sk.done.references === 8 && sk.done.hidden.length === 0 && Object.keys(sk.after).length === 0 && Object.keys(sk.before).length > 0 && sk.again === 0 && sk.errors === 0 && /v1/.test((sk.done.mark || {}).text || ''), silk.text.slice(0, 900));
+  // the physics: a fabricator's stackup written to the live board, the layout plan, and the review's extra rules
+  const phys = await call('run_python', { project: N2, live: false, timeout_s: 90, code: `
+import kicad_harness as kh
+board = project.board()
+before = board.stackup()
+st = board.stackup(fab="jlcpcb", layers=4, finish="enig")
+plan = board.plan()
+rv = board.review()
+result = {"assumed": before["assumed"], "build": st["build"], "finish": st["finish"], "w50": st["outer"]["width_50_ohm"], "min": board.info()["min_track_width"], "now": [l["thickness"] for l in board.stackup()["layers"] if l["type"] == "copper"],
+          "plan": sorted(plan.keys()), "rules": len(rv.get("findings", [])), "errors": board.check()["errors"], "pitch": round(kh.calc.via_pitch(2.45e9), 1), "ddr4": kh.calc.interface("ddr4")["bus_skew_mm"]}
+` });
+  const ph = (phys.data && phys.data.result) || {};
+  check('a fabricator stackup is set on the live board, the layout is planned from the netlist and reviewed', !phys.isError && phys.data.ok === true && ph.assumed === true && ph.build === 'JLC04161H-7628' && ph.finish === 'ENIG' && ph.w50 > 0.25 && ph.w50 < 0.45 && ph.min === 0.09
+    && (ph.now || []).join() === '0.035,0.0152,0.0152,0.035' && ph.plan.includes('stackup') && ph.plan.includes('place') && ph.errors === 0 && ph.pitch === 2.9 && ph.ddr4 === 0.25, phys.text.slice(0, 900));
+  const file = await call('read_document', { project: N2, document: 'board' });
+  check('the stackup is in the board file the server keeps', !file.isError && /\(copper_finish "ENIG"\)/.test(file.data.text) && /\(material "7628"\)/.test(file.data.text) && /In1\.Cu[^)]*\(type "copper"\) \(thickness 0\.0152\)/.test(file.data.text) && /"In1\.Cu" (signal|power)/.test(file.data.text), file.text.slice(0, 300));
+  const undone = await call('undo_changes', { project: N2 });
+  const back = await call('run_python', { project: N2, live: false, code: 'result = project.board().stackup()["assumed"]' });
+  check('undo takes the stackup back', !undone.isError && !back.isError && back.data.result === true, undone.text.slice(0, 300) + ' | ' + back.text.slice(0, 200));
 }
 
 // ------------------------------------------------------------------ scripts kept with the project

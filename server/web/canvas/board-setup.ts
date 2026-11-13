@@ -323,8 +323,13 @@ export function applyBoardSetup(doc: KDoc, change: KChange): boolean {
       if (/\.Cu$/.test(name) && type !== "user") doc.copper.push(name);
     }
   }
-  const d = doc as KDoc & { boardSetup?: BoardHeader };
+  const d = doc as KDoc & { boardSetup?: BoardHeader; setupNode?: SNode | null; generalNode?: SNode | null; stackup?: SNode | null };
   d.boardSetup = applyHeaderChange(d.boardSetup || { general: null, layers: null, setup: null, version: 0 }, change);
+  for (const p of change.properties || []) {
+    // the physical stackup and the board thickness follow the sections (impedance work and the 3D view read them)
+    if (p.name === "setup" && d.boardSetup.setup) { d.setupNode = d.boardSetup.setup; d.stackup = (kid(d.boardSetup.setup, "stackup") as SNode | null) || null; }
+    if (p.name === "general" && d.boardSetup.general) { d.generalNode = d.boardSetup.general; const t = kid(d.boardSetup.general, "thickness") as SNode | null; if (t) doc.thickness = num(t[1], 1.6); }
+  }
   return true;
 }
 

@@ -132,6 +132,19 @@ keys are set (`MOUSER_API_KEY`, `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET`; on
 server's accounts are used). `parts.lookup("TPS54331DR")` gives one part's maker, package and
 datasheet address, including Texas Instruments and Analog Devices product pages.
 
+## Layout by the physics
+
+The rules of RF, signal integrity, power, EMC, heat and manufacture are applied before placement and
+routing, then checked on the copper. `board.plan()` works the layout out from the netlist (what sits
+beside what, what goes on an edge, widths, order, the stackup to build on); `board.stackup(fab="jlcpcb",
+layers=4, finish="enig")` sets the physical stackup, material and finish and writes the fabricator's
+limits into the design rules (`material="flex"`, `"aluminium"`, `"rogers"`, `"ptfe"`; `board.bend_area(box)`
+on flex); `board.prepare()` puts antenna keep-outs and their ground vias in before routing;
+`board.finish()` adds RF fences, thermal vias and stitching after it; `board.review()` checks all of it.
+`kh.calc` has the sums (impedance, current, clearance, wavelength, via pitch, bend radius) and
+`kh.calc.interface("ddr4")` the rules of each bus from I2C to DDR5. `kh.materials.choose(...)` picks a
+material and finish for the job. The reference, with sources, is `../docs/pcb-design-rules.md`.
+
 ## Examples and tests
 
 `examples/rp2040_devboard.py` builds a complete RP2040 board (37 parts, 51 nets, routed) from one

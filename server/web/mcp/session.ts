@@ -168,7 +168,7 @@ export class DocSession {
     for (const c of changes) {
       // a page size change (set_page) carries what the page was, so it can be put back
       if (c.docProps) { if (c.was) { inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, docProps: { paper: c.was.paper, titleBlock: typeof c.was.titleBlock === "string" ? c.was.titleBlock : c.docProps.titleBlock }, was: { paper: c.docProps.paper, titleBlock: c.docProps.titleBlock } }); } continue; }
-      if (c.typeName === "BOARD_SETUP") { if (c.was && c.was.layers) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, properties: [{ name: "layers", after: { type: "sexpr", v: c.was.layers } }] }); continue; }
+      if (c.typeName === "BOARD_SETUP") { const back = ["general", "layers", "setup"].filter((n) => c.was && typeof c.was[n] === "string" && c.was[n]).map((n) => ({ name: n, after: { type: "sexpr", v: c.was[n] } })); if (back.length) inverse.push({ id: c.id, kind: "MODIFIED", typeName: c.typeName, properties: back }); continue; }
       const it = doc.items.get(c.id);
       if (c.kind === "ADDED") inverse.push({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] });
       else if (it) inverse.push({ id: c.id, kind: c.kind === "REMOVED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: k.serializeItem(doc, it) });

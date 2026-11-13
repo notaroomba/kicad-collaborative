@@ -29,7 +29,7 @@ export interface Fetched { ok: boolean; status: number; body: string }
 /** Where site-relative requests of the tool modules go (KiCad's libraries, vendor parts, the datasheet reader). */
 export type Backend = (url: string, init?: { method?: string; body?: string }) => Promise<Fetched>;
 
-interface Held { docId: string; path: string; docType: string; text: string; kdoc: any; changes: Map<string, any>; basis: Record<string, string>; lines: EditLine[]; dirty: boolean; paper?: string; titleBlock?: string; layers?: string }
+interface Held { docId: string; path: string; docType: string; text: string; kdoc: any; changes: Map<string, any>; basis: Record<string, string>; lines: EditLine[]; dirty: boolean; paper?: string; titleBlock?: string; layers?: string; setup?: string; general?: string }
 
 const HEADER = ["version", "generator", "generator_version", "general", "paper", "layers", "setup", "uuid", "title_block", "embedded_fonts"];
 const typeOf = (path: string) => (/\.kicad_pcb$/i.test(path) ? "kicad_pcb" : /\.kicad_sch$/i.test(path) ? "kicad_sch" : /\.kicad_pro$/i.test(path) ? "kicad_pro" : "");
@@ -111,7 +111,9 @@ export class Workspace {
     for (const n of base.slice(1)) {
       if (!Array.isArray(n) || !HEADER.includes(n[0])) continue;
       if (n[0] === "title_block" && h.titleBlock !== undefined) continue;      // replaced below, right after the paper as KiCad writes it
-      out.push(n[0] === "paper" && h.paper ? k.parse(h.paper) : n[0] === "layers" && h.layers ? k.parse(h.layers) : n);
+      if (n[0] === "layers" && h.general && !base.some((q: any) => Array.isArray(q) && q[0] === "general")) out.push(k.parse(h.general));   // a file with no (general …) gets one where KiCad writes it
+      out.push(n[0] === "paper" && h.paper ? k.parse(h.paper) : n[0] === "layers" && h.layers ? k.parse(h.layers) : n[0] === "setup" && h.setup ? k.parse(h.setup) : n[0] === "general" && h.general ? k.parse(h.general) : n);
+      if (n[0] === "layers" && h.setup && !base.some((q: any) => Array.isArray(q) && q[0] === "setup")) out.push(k.parse(h.setup));
       if (n[0] === "paper" && h.titleBlock) out.push(k.parse(h.titleBlock));
     }
     if (doc.type === "sch") out.push(["lib_symbols", ...doc.lib.values()]);
@@ -126,7 +128,7 @@ export class Workspace {
     const prop = await buildProposal({ title: args.title, rationale: args.rationale, edits: args.edits });
     for (const [id, was] of Object.entries(prop.basis)) if (!(id in h.basis) && !(h.changes.get(id)?.kind === "ADDED")) h.basis[id] = was;
     for (const c of prop.changes) {
-      if (c.typeName === "BOARD_SETUP") { k.boardSetup.applyBoardSetup(doc, c); const lp = (c.properties || []).find((q: any) => q.name === "layers"); if (lp && lp.after) h.layers = lp.after.v; h.dirty = true; continue; }   // layer stack: kept for the file's header
+      if (c.typeName === "BOARD_SETUP") { k.boardSetup.applyBoardSetup(doc, c); for (const q of c.properties || []) if (q.after && typeof q.after.v === "string" && (q.name === "layers" || q.name === "setup" || q.name === "general")) (h as any)[q.name] = q.after.v; h.dirty = true; continue; }   // layer stack: kept for the file's header
       if (c.docProps) { k.applyDocProps(doc, c.docProps); h.paper = c.docProps.paper; if (typeof c.docProps.titleBlock === "string") h.titleBlock = c.docProps.titleBlock; h.dirty = true; continue; }   // page size: kept for the file's header
       let ok = false; try { ok = k.applyChange(doc, c, ed.IU); } catch (e) { console.warn("harness: change not applied", e); }
       if (!ok && c.kind !== "REMOVED") throw new ToolError(`An edit could not be applied to ${h.path}; nothing after it was applied.`);

@@ -10,6 +10,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { ED, K, ToolError, fieldsOf, resolveDoc, schNets } from "./design";
 import { checkLayout } from "./layout";
+import { PHYSICS_MANUAL, PHYSICS_RULES, PHYSICS_SOURCE, physicsPlan, reviewPhysics } from "./review-physics";
 
 const W = window as any;
 const SCH = (): any => (W.CollabTools && W.CollabTools.sch) || null;
@@ -528,7 +529,9 @@ export async function reviewBoard(doc: any, path: string): Promise<any> {
       if (e.length) { const kinds = new Map<string, number>(); for (const m of e) kinds.set(m.code, (kinds.get(m.code) || 0) + 1); add("drc", "error", `The DRC reports ${e.length} error${e.length > 1 ? "s" : ""} (board.check() lists them).`, Array.from(kinds.entries()).map(([c, n]) => `${c}: ${n}`)); }
     } catch { /* no DRC here */ }
   }
-  return report("layout review", path, PCB_RULES, out, PCB_MANUAL);
+  // ---- the physics of the layout: RF, return paths, converters, heat, isolation (review-physics.ts)
+  try { reviewPhysics(doc, P, k, settings, add); } catch (err) { add("drc", "note", `The layout physics checks could not run: ${(err as Error).message}`); }
+  const r = report("layout review", path, PCB_RULES.concat(PHYSICS_RULES), out, PCB_MANUAL.concat(PHYSICS_MANUAL)); r.source += " " + PHYSICS_SOURCE; return r;
 }
 
 function report(check: string, path: string, rules: Rule[], findings: Finding[], manual: string[]) {
@@ -541,8 +544,9 @@ function report(check: string, path: string, rules: Rule[], findings: Finding[],
 }
 
 /** Review the open document (or the one named) against the checklists: a sheet against the schematic list, the board against the layout list. */
-export async function reviewDesign(input: { doc?: string; level?: string; rule?: string } = {}): Promise<unknown> {
+export async function reviewDesign(input: { doc?: string; level?: string; rule?: string; plan?: any } = {}): Promise<unknown> {
   const { doc, path } = await resolveDoc(input.doc);
+  if (input.plan) { const P = PCB(); if (doc.type === "sch" || !P) throw new ToolError("A layout plan needs the board."); return physicsPlan(doc, P, K(), P.designSettings(ED().proSettings || null), input.plan); }
   const r: any = doc.type === "sch" ? await reviewSchematic(doc, path) : await reviewBoard(doc, path);
   if (input.rule) r.findings = r.findings.filter((f: Finding) => f.rule === input.rule || f.rule.startsWith(input.rule + "."));
   if (input.level === "error") r.findings = r.findings.filter((f: Finding) => f.level === "error"); else if (input.level === "warning") r.findings = r.findings.filter((f: Finding) => f.level !== "note");

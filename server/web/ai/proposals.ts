@@ -724,6 +724,50 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           lines.push({ kind: "modify", text: `Copper layers ${now} → ${count} (${rows.filter((r: any) => r.copper).map((r: any) => r.name).join(", ")})`, ids: [] });
           break;
         }
+        case "set_stackup": {
+          // Board Setup, Physical Stackup: the copper and dielectric layers top to bottom with their thickness and material, the
+          // solder mask (a flex board's coverlay), the copper finish, and the board thickness that follows from them
+          pcbOnly(e.op); const BS = k.boardSetup; if (!BS || !BS.boardSetupChange) throw new ToolError("the board setup tools are not loaded in this editor");
+          const rows: any[] = Array.isArray(e.layers) ? e.layers : []; if (!rows.length) throw new ToolError("layers is the stack top to bottom: {name, type: copper, thickness} and {type: core or prepreg, thickness, material, epsilon_r, loss_tangent} between them");
+          const cu = rows.filter((r) => r && r.type === "copper").map((r) => String(r.name)); const have = (doc.copper as string[]).slice();
+          if (cu.join(",") !== have.join(",")) throw new ToolError(`the stackup's copper layers (${cu.join(", ") || "none"}) must be the board's, top to bottom (${have.join(", ")}); set_layers changes the layer count`);
+          const q = (s: any) => JSON.stringify(String(s)); const out: string[] = []; let total = 0, nd = 0, prev = "";
+          const mask = e.mask === false ? null : Object.assign({ thickness: 0.01 }, e.mask && typeof e.mask === "object" ? e.mask : {});
+          const maskRow = (side: string, name: string) => { const t = num(mask.thickness, "mask thickness"); if (t < 0 || t > 0.5) throw new ToolError("the solder mask or coverlay is 0 to 0.5 mm thick"); total += t;
+            return `(layer ${q(name)} (type ${q(side + " Solder Mask")})${mask.color ? ` (color ${q(mask.color)})` : ""} (thickness ${fmt(t)})${mask.material ? ` (material ${q(mask.material)})` : ""}${mask.epsilon_r ? ` (epsilon_r ${fmt(num(mask.epsilon_r, "mask epsilon_r"))})` : ""}${mask.loss_tangent ? ` (loss_tangent ${fmt(num(mask.loss_tangent, "mask loss_tangent"))})` : ""})`; };
+          out.push('(layer "F.SilkS" (type "Top Silk Screen"))', '(layer "F.Paste" (type "Top Solder Paste"))'); if (mask) out.push(maskRow("Top", "F.Mask"));
+          for (const r of rows) {
+            if (!r || typeof r !== "object") throw new ToolError("each stackup layer is an object");
+            const t = num(r.thickness, "thickness"); if (!(t > 0 && t <= 10)) throw new ToolError("a layer's thickness is in millimetres, above 0 and at most 10");
+            if (r.type === "copper") { if (prev === "copper") throw new ToolError(`there is no dielectric between two copper layers above ${r.name}`); out.push(`(layer ${q(r.name)} (type "copper") (thickness ${fmt(t)}))`); }
+            else if (r.type === "core" || r.type === "prepreg") {
+              if (!prev) throw new ToolError("the stack starts with the top copper layer");
+              const er = r.epsilon_r === undefined ? 4.5 : num(r.epsilon_r, "epsilon_r"); if (!(er >= 1 && er <= 20)) throw new ToolError("epsilon_r is the dielectric constant, 1 to 20");
+              const lt = r.loss_tangent === undefined ? 0.02 : num(r.loss_tangent, "loss_tangent");
+              const body = `(type ${q(r.type)}) (thickness ${fmt(t)}) (material ${q(r.material || "FR4")}) (epsilon_r ${fmt(er)}) (loss_tangent ${fmt(lt)})`;
+              if (prev === "copper") out.push(`(layer "dielectric ${++nd}" ${body})`); else out[out.length - 1] = out[out.length - 1].replace(/\)$/, ` addsublayer ${body})`);   // two sheets between the same copper: KiCad's sub-layers
+            } else throw new ToolError(`a stackup layer's type is copper, core or prepreg, not "${r.type}"`);
+            total += t; prev = r.type === "copper" ? "copper" : "dielectric";
+          }
+          if (prev !== "copper") throw new ToolError("the stack ends with the bottom copper layer");
+          if (mask) out.push(maskRow("Bottom", "B.Mask")); out.push('(layer "B.Paste" (type "Bottom Solder Paste"))', '(layer "B.SilkS" (type "Bottom Silk Screen"))');
+          const oldSetup = (doc.boardSetup && doc.boardSetup.setup) || doc.setupNode || null; const oldGen = (doc.boardSetup && doc.boardSetup.general) || doc.generalNode || null; const oldSt = oldSetup ? k.kid(oldSetup, "stackup") : null;
+          const finish = e.finish === undefined ? (oldSt && k.kid(oldSt, "copper_finish") ? k.str(k.kid(oldSt, "copper_finish")[1]) : "None") : String(e.finish);
+          if (BS.COPPER_FINISHES && !BS.COPPER_FINISHES.includes(finish)) throw new ToolError(`finish is one of: ${BS.COPPER_FINISHES.join(", ")}`);
+          out.push(`(copper_finish ${q(finish)})`, `(dielectric_constraints ${e.controlled ? "yes" : "no"})`);
+          for (const key of ["edge_connector", "edge_plating"]) { const n = oldSt ? k.kid(oldSt, key) : null; if (n) out.push(`(${key} ${k.str(n[1])})`); }
+          const st = k.parse(`(stackup ${out.join(" ")})`);
+          const setup: any[] = oldSetup ? k.parse(BS.sectionText(oldSetup)) : k.parse("(setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no))");
+          const at = setup.findIndex((n: any) => Array.isArray(n) && n[0] === "stackup"); if (at > 0) setup[at] = st; else setup.splice(1, 0, st);
+          const thick = e.thickness === undefined ? +total.toFixed(4) : num(e.thickness, "thickness"); if (!(thick > 0 && thick <= 20)) throw new ToolError("thickness is the finished board thickness in millimetres");
+          const general: any[] = oldGen ? k.parse(BS.sectionText(oldGen)) : k.parse("(general (thickness 1.6) (legacy_teardrops no))");
+          const gt = general.findIndex((n: any) => Array.isArray(n) && n[0] === "thickness"); if (gt > 0) general[gt] = ["thickness", thick]; else general.splice(1, 0, ["thickness", thick]);
+          const c = BS.boardSetupChange({ setup: BS.sectionText(setup), general: BS.sectionText(general) });
+          c.was = { setup: oldSetup ? BS.sectionText(oldSetup) : "", general: oldGen ? BS.sectionText(oldGen) : "" };
+          changes.push(c);
+          lines.push({ kind: "modify", text: `Physical stackup: ${cu.length} copper layers, ${nd} dielectric${nd === 1 ? "" : "s"}, ${fmt(thick)} mm thick${finish !== "None" ? ", " + finish : ""}${e.title ? ` (${String(e.title).slice(0, 80)})` : ""}`, ids: [] });
+          break;
+        }
         case "set_page": {
           // File, Page Settings: the paper and the title block's own lines (title, revision, date, company)
           schOnly(e.op); const paper = e.paper === undefined ? String(doc.paper || "A4") : text(e.paper, "paper");

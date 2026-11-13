@@ -370,7 +370,8 @@ const HEADER = ["version", "generator", "generator_version", "general", "paper",
 /** The document in KiCad's own format, as it stands now: the stored file's header with the live items. */
 function sourceText(sess: DocSession, doc: any): string {
   const k = K(); const base = k.parse(sess.file); const out: any[] = [base[0]];
-  for (const n of base.slice(1)) if (Array.isArray(n) && HEADER.includes(n[0])) out.push(n);
+  const bs = doc.boardSetup || {};   // board sections changed since the file was stored (layer count, stackup, thickness)
+  for (const n of base.slice(1)) if (Array.isArray(n) && HEADER.includes(n[0])) out.push((n[0] === "general" || n[0] === "layers" || n[0] === "setup") && bs[n[0]] ? bs[n[0]] : n);
   if (doc.type === "sch") out.push(["lib_symbols", ...doc.lib.values()]);
   for (const it of doc.items.values()) out.push(it.node);
   if (doc.type === "sch") { const si = base.find((n: any) => Array.isArray(n) && n[0] === "sheet_instances"); if (si) out.push(si); }
@@ -512,7 +513,7 @@ const TOOLS: Record<string, (req: Request) => Promise<Reply>> = {
   get_items: (req) => withDocument(req, req.args.document, async () => ({ result: await design.getItems(without(req.args)) })),
   get_geometry: (req) => withDocument(req, req.args.document, async () => ({ result: await design.geometry({ silk: req.args.silk === true }) })),
   check_layout: (req) => withDocument(req, req.args.document, async () => ({ result: await checkLayout({ within: req.args.within, of: req.args.of, wrap: req.args.wrap, limit: req.args.limit, free: req.args.free }) })),
-  review_design: (req) => withDocument(req, req.args.document, async () => ({ result: await reviewDesign({ level: req.args.level, rule: req.args.rule }) })),
+  review_design: (req) => withDocument(req, req.args.document, async () => ({ result: await reviewDesign({ level: req.args.level, rule: req.args.rule, plan: req.args.plan }) })),
   find_datasheets: (req) => withDocument(req, req.args.document, async () => ({ result: await design.findDatasheets(without(req.args)) })),
   get_board_info: (req) => withDocument(req, "board", async () => ({ result: await design.boardInfo() })),
   read_datasheet: async (req) => ({ result: await library.readDatasheet(req.args || {}) }),

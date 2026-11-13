@@ -26,6 +26,13 @@ from .transport import HarnessError, HostTransport, LocalEngine, McpTransport
 from . import rules as _rules
 
 _rules.install(Project, Schematic, Board)
+from . import physics as _physics  # noqa: E402
+from .physics import calc  # noqa: E402,F401
+
+_physics.install(Project, Schematic, Board)
+from . import stackups as _stackups
+from .stackups import BUILDS, FABS, FINISHES, MATERIALS, materials
+_stackups.install(Board)
 
 __all__ = ["open", "connect", "current", "Project", "Schematic", "Board", "Pin", "HarnessError", "parts"]
 __version__ = "0.1.0"
@@ -4014,7 +4021,797 @@ def install(Project, Schematic, Board) -> None:
     Board.silkscreen = _silkscreen
     Board.cleanup = _cleanup
     Board.score = _score
-`;var b=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
+`;var b=`"""The physics of a layout as calls: what the copper must do for the board to work.
+
+\`board.review()\` (rules.py) also runs the layout physics checks of the design engine (web/ai/review-physics.ts):
+antennas, RF feeds, return paths, differential pairs and memory buses, crystals, switching converters, thermal pads,
+amplifier inputs, isolation and spacing for the voltage.  The calls here put in the copper those checks ask for:
+
+    board.plan()                    BEFORE placing: what sits beside what, what goes on an edge, widths and order for routing
+    board.prepare()                 after placing, before routing: antenna keep-outs and their ground vias
+    board.finish()                  after routing: RF fences, thermal vias, stitching
+    board.antenna("AE1")            keep-out under and around an antenna on every layer, ground vias along its edge
+    board.fence_net("RF_ANT")       ground vias down both sides of a routed net (board.fence(path) does a free path)
+    board.thermal_vias("U1")        the via array of an exposed pad
+    board.stackup(fab="jlcpcb", layers=4)   the physical stackup of a fabricator's standard build (stackups.py)
+
+\`kh.calc\` has the sums a layout needs before it is drawn: wavelength and via pitch, the length at which a track is a
+transmission line, track width and via count for a current (IPC-2221), conductor spacing for a voltage (IPC-2221
+table 6-1), microstrip and stripline impedance, I2C pull-ups, and the routing rules of the common interfaces.
+The reference for all of it is server/docs/pcb-design-rules.md (get_design_guide topic "layout").
+
+The methods are attached to Board when the package is imported.
+"""
+from __future__ import annotations
+
+import math
+
+from . import rules as _rules
+from .transport import HarnessError
+
+
+def _r(v: float) -> float:
+    return round(v, 4)
+
+
+def _plan(self, **plan) -> dict:
+    r = self._call("review_design", plan={k: v for k, v in plan.items() if v is not None})
+    if r.get("error"):
+        raise HarnessError(r["error"])
+    return r
+
+
+def _has_zones(self) -> bool:
+    try:
+        return bool(self.fill().get("zones"))
+    except HarnessError:
+        return False
+
+
+# ---------------------------------------------------------------- review
+
+def _board_review(self, level: str | None = None, rule: str | None = None, limit: int = 40) -> dict:
+    """Check the board against the layout checklist and the layout physics (antenna keep-out and ground stitching,
+    RF feed, return paths under fast nets, pairs and memory buses, crystal, converter loops, thermal pads, amplifier
+    inputs, isolation gaps, spacing for the voltage).  The zones are filled first, because the ground checks read the
+    real copper.  Returns what Schematic.review returns."""
+    try:
+        self.fill()
+    except HarnessError:
+        pass
+    return _rules._review(self, level=level, rule=rule, limit=limit)
+
+
+# ---------------------------------------------------------------- copper the checks ask for
+
+def _antenna(self, ref: str | None = None, clearance: float | None = None, pitch: float = 2.0, kind: str | None = None,
+             size: float | None = None, drill: float | None = None) -> dict:
+    """Give an antenna what it needs from the board: a keep-out over its clear area on every copper layer (no pour, no
+    track, no via under or beside it) and a row of ground vias, \`pitch\` mm apart, along the edge of the ground that
+    faces it, so the pours of all layers act as one ground instead of radiating against each other.
+
+    ref: the antenna (every part with reference AE.. or ANT.., or an antenna footprint, when left out).
+    clearance: how far the clear area reaches beyond the part's courtyard (2 mm by default; take the figure from the
+    antenna's datasheet, which is binding).  Where the board edge is within 3 mm the area runs out to the edge.
+    kind="patch": a patch antenna (GPS) is the opposite case: it needs unbroken ground under it, so no keep-out is
+    added and only the ground around it is stitched.
+    Call it after the ground zones exist and before routing, or after routing to add what is missing; it refills
+    the zones.  Ground vias already standing in the clear area are taken out; tracks and vias of other nets there are
+    listed under "in_the_way" for you to move (board.unroute, then route again: the router keeps vias out of the area).
+    Returns {ref: {"keepout": box or None, "vias": n, "no_room": n, "removed": n, "in_the_way": [...], "edge_distance": mm}}."""
+    self.flush()
+    filled = _has_zones(self)
+    plan = _plan(self, what="antenna", ref=ref, clearance=clearance, pitch=pitch, size=size, kind=kind)
+    out = {}
+    for a in plan["antennas"]:
+        box = None
+        if not a.get("patch") and not a["has_keepout"]:
+            box = a["box"]
+            self.keepout(box, tracks=False, name=f"{a['ref']} antenna keep-out")      # the feed itself must get in
+            self.flush()
+        for vid in a.get("remove") or []:      # ground vias that stood where the clear area now is
+            self._edit({"op": "remove", "id": vid})
+        self.flush()
+        got = _rules._vias_checked(self, plan["net"], [tuple(p) for p in a["vias"]], size, drill) if a["vias"] else {"vias": 0, "removed": 0}
+        out[a["ref"]] = {"keepout": box, "vias": got["vias"], "no_room": a["no_room"] + got.get("removed", 0), "edge_distance": a["edge_distance"], "frequency_ghz": a.get("frequency_ghz"),
+                         "removed": len(a.get("remove") or []), "in_the_way": a.get("blocked") or []}
+        self.project.note(f"board: antenna {a['ref']}: {'keep-out added, ' if box else ''}{got['vias']} ground vias along its edge")
+    if filled:
+        try:
+            self.fill()
+        except HarnessError:
+            pass
+    self._geom = None
+    return out
+
+
+def _fence_net(self, net: str, spacing: float = 2.0, offset: float | None = None, size: float | None = None, drill: float | None = None) -> dict:
+    """Ground vias down both sides of a routed net, \`spacing\` mm apart: the fence of an RF feed or a clock.  Each via
+    stands \`offset\` mm from the track's centre line (by default just clear of it), only where ground is poured on two
+    layers and nothing is in the way.  board.fence(path, ...) fences a path you choose instead of a net.
+    Returns {"vias", "no_room", "spacing"}."""
+    self.flush()
+    _has_zones(self)
+    plan = _plan(self, what="fence", net=self._net(net), spacing=spacing, offset=offset, size=size)
+    got = _rules._vias_checked(self, plan["net"], [tuple(p) for p in plan["vias"]], size, drill) if plan["vias"] else {"vias": 0, "removed": 0}
+    out = {"vias": got["vias"], "no_room": plan["no_room"] + got.get("removed", 0), "spacing": plan["spacing"]}
+    self.project.note(f"board: fence of {out['vias']} ground vias along {net}")
+    return out
+
+
+def _thermal_vias(self, ref: str | None = None, pitch: float = 1.2, size: float = 0.6, drill: float = 0.3) -> dict:
+    """An array of vias in a part's exposed pad (every exposed pad on the board when no part is named), on the pad's
+    own net, \`pitch\` mm apart: the heat path into the planes and, on most parts, the main ground.  The drill stays at
+    0.3 mm so the vias do not wick the solder away (TI SLMA002).  Returns {ref: {"pad", "net", "vias", "had"}}."""
+    self.flush()
+    plan = _plan(self, what="thermal", ref=ref, pitch=pitch, size=size)
+    out = {}
+    for p in plan["pads"]:
+        if not p["net"]:
+            out[p["ref"]] = {"pad": p["pad"], "net": "", "vias": 0, "had": p["had"], "note": "the pad is on no net"}
+            continue
+        got = _rules._vias_checked(self, p["net"], [tuple(q) for q in p["vias"]], size, drill) if p["vias"] else {"vias": 0}
+        out[p["ref"]] = {"pad": p["pad"], "net": p["net"], "vias": got["vias"], "had": p["had"]}
+    if out:
+        self.project.note("board: thermal vias " + ", ".join(f"{k} +{v['vias']}" for k, v in out.items()))
+    return out
+
+
+# ---------------------------------------------------------------- before and after: plan, prepare, finish
+
+def _layout_plan(self, edge: str = "top") -> dict:
+    """Work the layout out from the netlist BEFORE anything is placed or routed.  Returns
+    {"place": {"near": {ref: ref}, "edges": {ref: side}}, "why": {ref: reason}, "apart": [[ref, ref]],
+     "route": {"widths": {net: mm}, "kinds": {net: kind}, "order": [nets]}, "pairs": [...], "notes": [...], "steps": [...]}.
+
+    place: what must sit beside what (each decoupling capacitor at its IC, the crystal and its capacitors at the
+    oscillator pins, a converter's inductor and capacitors round the converter, the matching network at the antenna,
+    ESD parts at their connector, feedback parts at the amplifier) and what goes on an edge (the antenna, on \`edge\`).
+    Hand it to autoplace: board.autoplace(near=plan["place"]["near"], edges={**plan["place"]["edges"], "J1": "left"}).
+    apart: pairs to keep far from each other (the converter's inductor and the antenna or the crystal).
+    route: hand it to board.route(**plan["route"]): RF nets at their 50 ohm width, supplies wide, pairs and crystal first.
+    notes say what the plan cannot do for you (a stackup that cannot give 50 ohm, a barrier to keep clear); steps is
+    the order of the calls.  Call it after board.sync()."""
+    self.flush()
+    plan = _plan(self, what="layout", edge=edge)
+    # the board to build it on, chosen before anything is placed: material, layer count and finish for what is on it
+    try:
+        from . import stackups as _st
+        kinds = set((plan.get("route") or {}).get("kinds", {}).values())
+        want = _st.choose(ghz=plan.get("radio_ghz") or None, radio=bool(plan.get("radio_ghz")) or "rf" in kinds, fast=bool(plan.get("pairs")) or "fast" in kinds)
+        have = _plan(self, what="stackup")
+        plan["stackup"] = {"recommended": want["stackup"], "why": want["why"], "now": {"copper_layers": len(have.get("copper_layers") or []), "thickness": have.get("thickness"), "assumed": have.get("assumed"), "flex": have.get("flex")}}
+        if not have.get("flex") and want["layers"] > len(have.get("copper_layers") or []):
+            plan.setdefault("notes", []).insert(0, f"The board has {len(have.get('copper_layers') or [])} copper layers; this design wants {want['layers']}. " + " ".join(want["why"][:1]) + f" Set it first: board.stackup(fab=\\"jlcpcb\\", layers={want['layers']}).")
+        elif have.get("assumed"):
+            plan.setdefault("notes", []).insert(0, "The board has no physical stackup yet, so impedance widths are estimates. Set the fabricator's: board.stackup(fab=\\"jlcpcb\\", layers=...).")
+    except HarnessError:
+        pass
+    self._layout = plan
+    self.project.note(f"board: layout plan: {len(plan['place']['near'])} parts tied to their neighbours, {len(plan['place']['edges'])} on an edge, {len(plan['notes'])} notes")
+    return plan
+
+
+def _prepare(self) -> dict:
+    """After placement and the ground zones, before routing: give every antenna its keep-out and the ground vias along
+    its edge, so the router never lays copper there.  Returns {"antennas": {...}}."""
+    out = {"antennas": {}}
+    try:
+        out["antennas"] = self.antenna()
+    except HarnessError as e:
+        if "no antenna" not in str(e):
+            raise
+    return out
+
+
+def _finish(self, stitch: float | None = 10.0) -> dict:
+    """After routing: what the copper still owes the physics.  Antenna edges get the vias the routing left room for,
+    every routed RF net gets its fence, exposed pads get their via arrays, the ground pours are stitched (every
+    \`stitch\` mm; None leaves that out) and the zones are filled again.  Returns what each step added; follow it with
+    board.review()."""
+    out: dict = {"antennas": {}, "fences": {}, "thermal": {}}
+    try:
+        out["antennas"] = self.antenna()
+    except HarnessError as e:
+        if "no antenna" not in str(e):
+            raise
+    plan = getattr(self, "_layout", None) or _plan(self, what="layout")
+    for net, kind in (plan.get("route", {}).get("kinds") or {}).items():
+        if kind != "rf":
+            continue
+        try:
+            out["fences"][net] = self.fence_net(net, spacing=max(1.0, min(2.0, (plan.get("radio_ghz") and calc.via_pitch(plan["radio_ghz"] * 1e9)) or 2.0)))["vias"]
+        except HarnessError:
+            out["fences"][net] = 0      # not routed
+    try:
+        out["thermal"] = {k: v["vias"] for k, v in self.thermal_vias().items()}
+    except HarnessError:
+        pass
+    if stitch:
+        try:
+            out["stitching"] = self.stitch(spacing=stitch)["vias"]
+        except HarnessError:
+            out["stitching"] = 0
+    try:
+        self.fill()
+    except HarnessError:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------- the sums
+
+C_MM_PER_NS = 299.792458
+
+
+class calc:      # noqa: N801  (a namespace: kh.calc.wavelength(...))
+    """The sums of board design.  Lengths in mm, frequencies in Hz, currents in A, voltages in V, temperatures in K."""
+
+    @staticmethod
+    def wavelength(freq_hz: float, er: float = 4.4) -> float:
+        """The wavelength in mm of a signal inside a dielectric (FR-4 by default; er=1 for air)."""
+        return C_MM_PER_NS * 1e9 / freq_hz / math.sqrt(er)
+
+    @staticmethod
+    def via_pitch(freq_hz: float, er: float = 4.4, fraction: float = 20) -> float:
+        """The largest gap in mm between stitching or fence vias that still looks like a wall at this frequency:
+        a twentieth of a wavelength (a tenth is the outer limit)."""
+        return calc.wavelength(freq_hz, er) / fraction
+
+    @staticmethod
+    def quarter_wave(freq_hz: float, er_eff: float = 1.0) -> float:
+        """The length in mm of a quarter-wave monopole (in air by default; a trace antenna on FR-4 is shorter by
+        about the square root of its effective permittivity, 1.5 to 2)."""
+        return C_MM_PER_NS * 1e9 / freq_hz / math.sqrt(er_eff) / 4
+
+    @staticmethod
+    def critical_length(rise_ns: float, er_eff: float = 3.3, fraction: float = 6) -> float:
+        """The track length in mm above which a signal with this rise time must be treated as a transmission line
+        (terminated, impedance controlled): a sixth of the edge's length on the board (Johnson and Graham)."""
+        return rise_ns * C_MM_PER_NS / math.sqrt(er_eff) / fraction
+
+    @staticmethod
+    def knee_frequency(rise_ns: float) -> float:
+        """The frequency in Hz below which most of a digital edge's energy lies: 0.5 / rise time."""
+        return 0.5 / (rise_ns * 1e-9)
+
+    @staticmethod
+    def track_width(amps: float, rise: float = 10.0, oz: float = 1.0, internal: bool = False) -> float:
+        """IPC-2221: the track width in mm that carries \`amps\` with a temperature rise of \`rise\` kelvin in copper of
+        \`oz\` ounces (35 um per ounce).  Inner layers need about 2.6 times the width of outer ones."""
+        k = 0.024 if internal else 0.048
+        area_mil2 = (amps / (k * rise ** 0.44)) ** (1 / 0.725)
+        return area_mil2 / (oz * 1.378) * 0.0254
+
+    @staticmethod
+    def track_current(width: float, rise: float = 10.0, oz: float = 1.0, internal: bool = False) -> float:
+        """IPC-2221: the current in A a track of this width carries for the temperature rise."""
+        k = 0.024 if internal else 0.048
+        return k * rise ** 0.44 * (width / 0.0254 * oz * 1.378) ** 0.725
+
+    @staticmethod
+    def via_current(drill: float = 0.3, plating: float = 0.025, rise: float = 10.0) -> float:
+        """The current in A one plated via carries (IPC-2221 on the barrel's copper cross section).  A 0.3 mm via with
+        25 um plating is good for about 1 A at 10 K; use several for a supply."""
+        area_mil2 = math.pi * (drill + plating) * plating / (0.0254 ** 2)
+        return 0.048 * rise ** 0.44 * area_mil2 ** 0.725
+
+    @staticmethod
+    def vias_for(amps: float, drill: float = 0.3, plating: float = 0.025, rise: float = 10.0) -> int:
+        """How many vias a current needs, with one to spare."""
+        return int(math.ceil(amps / calc.via_current(drill, plating, rise))) + 1
+
+    @staticmethod
+    def spacing(volts: float, where: str = "outer") -> float:
+        """IPC-2221 table 6-1: the least spacing in mm between conductors with \`volts\` (DC or AC peak) between them.
+        where: "outer" (under solder mask, column B4), "bare" (no mask, B2), "inner" (B1), "leads" (component leads
+        under coating, A6) or "bare leads" (A7).  Mains needs the larger distances of the product's safety standard."""
+        col = {"outer": "B4", "bare": "B2", "inner": "B1", "leads": "A6", "bare leads": "A7"}.get(where, where)
+        bands = [15, 30, 50, 100, 150, 170, 250, 300, 500]
+        table = {"B1": [0.05, 0.05, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.25], "B2": [0.1, 0.1, 0.64, 0.64, 0.64, 1.25, 1.25, 1.25, 2.5],
+                 "B4": [0.075, 0.075, 0.3, 0.3, 0.8, 0.8, 0.8, 0.8, 1.6], "A6": [0.13, 0.13, 0.13, 0.13, 0.4, 0.4, 0.4, 0.4, 0.8],
+                 "A7": [0.13, 0.25, 0.4, 0.5, 0.8, 0.8, 0.8, 0.8, 1.5]}
+        slope = {"B1": 0.0025, "B2": 0.005, "B4": 0.00305, "A6": 0.00305, "A7": 0.00305}
+        if col not in table:
+            raise HarnessError('where is "outer", "bare", "inner", "leads" or "bare leads".')
+        v = abs(volts)
+        for b, s in zip(bands, table[col]):
+            if v <= b:
+                return s
+        return round(table[col][-1] + (v - 500) * slope[col], 3)
+
+    @staticmethod
+    def microstrip(width: float, height: float, er: float = 4.4, copper: float = 0.035) -> float:
+        """Impedance in ohm of a track on an outer layer, \`height\` mm above its plane (Hammerstad, with Wheeler's
+        thickness correction; within a few percent for 0.1 < w/h < 3)."""
+        w, h, t = width, height, copper
+        we = w + t / math.pi * (1 + math.log(2 * h / t if w / h > 1 / (2 * math.pi) else 4 * math.pi * w / t)) if t > 0 else w
+        u = we / h
+        ee = (er + 1) / 2 + (er - 1) / 2 * (1 / math.sqrt(1 + 12 / u) + (0.04 * (1 - u) ** 2 if u < 1 else 0))
+        return 60 / math.sqrt(ee) * math.log(8 / u + u / 4) if u <= 1 else 120 * math.pi / (math.sqrt(ee) * (u + 1.393 + 0.667 * math.log(u + 1.444)))
+
+    @staticmethod
+    def stripline(width: float, spacing: float, er: float = 4.4, copper: float = 0.035) -> float:
+        """Impedance in ohm of a track on an inner layer centred between two planes \`spacing\` mm apart (IPC-2141)."""
+        return 60 / math.sqrt(er) * math.log(4 * spacing / (0.67 * math.pi * (0.8 * width + copper)))
+
+    @staticmethod
+    def width_for(ohms: float, height: float, er: float = 4.4, copper: float = 0.035, inner_spacing: float | None = None) -> float | None:
+        """The track width in mm that gives an impedance: a microstrip \`height\` above its plane, or with
+        inner_spacing a stripline between planes that far apart.  None when no width from 0.05 to 8 mm does."""
+        f = (lambda w: calc.stripline(w, inner_spacing, er, copper)) if inner_spacing else (lambda w: calc.microstrip(w, height, er, copper))
+        lo, hi = 0.05, 8.0
+        if f(lo) < ohms or f(hi) > ohms:
+            return None
+        for _ in range(60):
+            m = (lo + hi) / 2
+            lo, hi = (m, hi) if f(m) > ohms else (lo, m)
+        return round((lo + hi) / 2, 3)
+
+    @staticmethod
+    def pair(width: float, gap: float, height: float, er: float = 4.4, copper: float = 0.035) -> float:
+        """Differential impedance in ohm of an edge-coupled pair on an outer layer (IPC-2141 coupling factor)."""
+        return 2 * calc.microstrip(width, height, er, copper) * (1 - 0.48 * math.exp(-0.96 * gap / height))
+
+    @staticmethod
+    def i2c_pullup(volts: float = 3.3, bus_pf: float = 100, speed_khz: int = 400) -> dict:
+        """The range of I2C pull-up resistors in ohm for a supply, a bus capacitance and a speed: the least keeps the
+        sink current at 3 mA (20 mA above 400 kHz), the most meets the rise time (1000, 300, 120 ns)."""
+        rise = 1000e-9 if speed_khz <= 100 else 300e-9 if speed_khz <= 400 else 120e-9
+        sink = 0.003 if speed_khz <= 400 else 0.02
+        lo, hi = (volts - 0.4) / sink, rise / (0.8473 * bus_pf * 1e-12)
+        return {"min": round(lo), "max": round(hi), "use": round(min(hi, max(lo * 1.5, hi / 2)), -2)}
+
+    @staticmethod
+    def decoupling_resonance(farads: float, nh: float = 1.0) -> float:
+        """The frequency in Hz at which a capacitor and its mounting inductance (in nH: about 0.5 for an 0402 with
+        vias in the pads' shadow, 1 to 2 for tracks to vias) resonate; above it the capacitor is an inductor."""
+        return 1 / (2 * math.pi * math.sqrt(nh * 1e-9 * farads))
+
+    @staticmethod
+    def thermal_rise(watts: float, theta_ja: float) -> float:
+        """Temperature rise in K of a part that dissipates \`watts\` with a junction-to-ambient resistance in K/W."""
+        return watts * theta_ja
+
+    @staticmethod
+    def bend_radius(thickness: float, layers: int = 2, dynamic: bool = False) -> float:
+        """The tightest radius in mm for a flex board: 6 x thickness for one layer, 10 x for more, bent once;
+        15 x when it flexes in use."""
+        from .stackups import bend_radius as _b
+        return _b(thickness, layers, dynamic)
+
+    @staticmethod
+    def interface(name: str | None = None):
+        """The routing rules of an interface: {"impedance", "pair_impedance", "skew_mm", "bus_skew_mm", "max_mm",
+        "max_vias", "notes"}.  Names: usb2, usb3, hdmi, displayport, ethernet, pcie, sata, mipi, lvds, can, rs485,
+        sdram, ddr1, ddr2, ddr3, ddr4, ddr5, lpddr4, emmc, sd, qspi, spi, i2c, i2s, jtag, rf.  Without a name: the list of names."""
+        if name is None:
+            return sorted(INTERFACES)
+        key = name.lower().replace("-", "").replace("_", "").replace(" ", "").replace(".", "")
+        key = _ALIAS.get(key, key)
+        if key not in INTERFACES:
+            raise HarnessError(f"No rules for {name}. Known: {', '.join(sorted(INTERFACES))}.")
+        return dict(INTERFACES[key])
+
+
+def _i(z=None, zd=None, skew=None, bus=None, mx=None, vias=None, notes=""):
+    return {"impedance": z, "pair_impedance": zd, "skew_mm": skew, "bus_skew_mm": bus, "max_mm": mx, "max_vias": vias, "notes": notes}
+
+
+#: The routing rules of the common interfaces.  The engine's table (review-physics.ts INTERFACES) has the same
+#: figures and tests/test_physics.py holds the two together.
+INTERFACES = {
+    "usb2": _i(45, 90, 1.27, None, 300, 4, "D+ and D- side by side on one layer over unbroken ground; no stubs, no test points; ESD part at the connector; 90 ohm matters above about 50 mm, so on a small board keep the pair short and coupled."),
+    "usb3": _i(45, 90, 0.13, None, 140, 2, "SuperSpeed pairs: 100 nF (220 nF for 10 Gbit) AC coupling on each TX track, placed together near the connector; ground vias beside every signal via; clear the plane under the capacitor and connector pads; keep away from the 2.4 GHz antenna (its noise sits at 2.5 GHz)."),
+    "hdmi": _i(50, 100, 0.13, 2.5, 100, 2, "Four TMDS pairs, pairs matched to each other within the bus skew; ESD at the connector with flow-through routing; DDC pulled up to 5 V; no stubs."),
+    "displayport": _i(50, 100, 0.13, 2.5, 150, 2, "100 nF AC coupling on the main link lanes at the source; AUX pair with its bias resistors."),
+    "ethernet": _i(50, 100, 1.27, 2.5, 100, 2, "PHY to magnetics pairs short and symmetric; no copper on any layer under the magnetics between the PHY side and the cable side (the 1.5 kV isolation barrier); Bob Smith termination (75 ohm and 1 nF 2 kV) to chassis; 49.9 ohm terminations at the PHY where its datasheet asks; 25 MHz crystal rules apply."),
+    "pcie": _i(42.5, 85, 0.13, None, 250, 2, "85 ohm pairs (100 ohm for Gen1 and Gen2); 100 nF or 220 nF AC coupling on TX; REFCLK is a 100 ohm pair; lanes need not match each other; back-drill or avoid via stubs above 5 Gbit."),
+    "sata": _i(50, 100, 0.13, None, 140, 2, "10 nF AC coupling on all four tracks near the connector."),
+    "mipi": _i(50, 100, 0.13, 1.0, 250, 2, "CSI-2 and DSI D-PHY: each lane a 100 ohm pair, data lanes matched to the clock lane; no stubs, no test points; keep the flex connector's ground pins beside each pair."),
+    "lvds": _i(50, 100, 0.25, 2.5, 300, 2, "100 ohm termination across the pair at the receiver, right at its pins."),
+    "can": _i(None, 120, None, None, None, None, "120 ohm across CANH and CANL at each end of the bus only (two 60 ohm with 4.7 nF from the middle to ground is better); common mode choke and TVS at the connector; stubs under 0.3 m at 1 Mbit."),
+    "rs485": _i(None, 120, None, None, None, None, "120 ohm at each end of the cable, bias resistors at one place, TVS and series resistance at the connector; isolate the ground on long runs."),
+    "sdram": _i(50, None, None, 10.0, 150, 2, "Single data rate SDRAM: every signal matched loosely to the clock, a series resistor (22 to 33 ohm) on the clock and on long lines at the driver, the clock longest or equal, over unbroken ground."),
+    "ddr1": _i(50, 100, 0.65, 1.27, 150, 2, "SSTL-2: series (22 ohm) and parallel (50 ohm to VTT) termination on address, command and data unless point to point and short; data matched to its DQS per byte lane; address in a balanced tree (T) to the chips; VREF at half VDDQ, wide and decoupled; the differential clock a 100 ohm pair."),
+    "ddr2": _i(50, 100, 0.25, 0.65, 125, 2, "SSTL-18: data uses on-die termination; address, command and control in a balanced tree (T) matched to the clock, with VTT termination for more than two chips; each byte lane on one layer matched to its DQS pair; VREF wide and decoupled."),
+    "ddr3": _i(40, 80, 0.13, 0.5, 100, 2, "Data: each byte lane (8 DQ, DM) on one layer matched to its DQS pair; address, command and control routed fly-by from chip to chip in the clock's order, matched to the clock, ended in resistors to VTT; VREF wide, decoupled and quiet; data over ground, never over a split; the processor vendor's DDR layout guide is binding."),
+    "ddr4": _i(40, 80, 0.13, 0.25, 100, 2, "As DDR3 with tighter matching; data referenced to ground on both sides where possible; address may reference VDD; point to point data, fly-by address with VTT termination; follow the processor vendor's guide and simulate anything unusual."),
+    "ddr5": _i(40, 75, 0.13, 0.13, 75, 2, "Address and command are terminated on the die (no VTT resistors) and trained per pin; data per byte lane matched to its DQS within about a picosecond, with the package's own delays counted in; via stubs back-drilled or avoided, ground vias at every signal via; eight layers or more with data as stripline between grounds, low-loss laminate for long runs; the layout must follow the processor vendor's guide and be simulated."),
+    "lpddr4": _i(40, 80, 0.13, 0.25, 50, 2, "Point to point, package under or beside the processor; HDI (via in pad) boards are normal; follow the vendor's reference layout exactly."),
+    "emmc": _i(50, None, None, 2.5, 100, 2, "Clock, command and eight data lines matched to the clock; a series resistor (22 to 33 ohm) on the clock at the host; HS400 adds the data strobe and wants about 1 mm matching."),
+    "sd": _i(50, None, None, 2.5, 100, 2, "Clock, command and data matched to the clock; pull-ups (10 k to 47 k) on command and data where the host has none; ESD part at the socket; a series resistor on the clock at the host; card detect debounced."),
+    "qspi": _i(50, None, None, 2.5, 50, 2, "Flash right beside the processor; clock and data matched; a series resistor on the clock (and 0 ohm places on data) at the driving end; ground on both sides of the clock; nothing fast beside the crystal."),
+    "spi": _i(None, None, None, None, 150, None, "Short, with ground beside or under the clock; a series resistor (22 to 47 ohm) at the driver of a clock longer than about 50 mm; one chip select per device, pulled up."),
+    "i2c": _i(None, None, None, None, None, None, "Two pull-ups per bus, sized for its capacitance (kh.calc.i2c_pullup); at most 400 pF; keep SDA and SCL away from switch nodes; a buffer or lower speed for cables."),
+    "i2s": _i(None, None, None, 5.0, 150, None, "The master clock is a clock: over ground, away from analog audio and the antenna, series resistor at its source; keep digital audio out of the analog section."),
+    "jtag": _i(None, None, None, None, 150, None, "A series resistor on the clock at its driver; pull-ups or pull-downs as the chip asks; connector pads the probe can reach; reset on the connector."),
+    "rf": _i(50, None, None, None, None, 0, "One width, an outer layer, no via, no stub, bends in arcs or at 135 degrees, unbroken ground on the next layer, ground vias down both sides no more than a twentieth of a wavelength apart, a pi matching network at the antenna or connector."),
+}
+_ALIAS = {"usb": "usb2", "usb20": "usb2", "usbhs": "usb2", "usb30": "usb3", "usb31": "usb3", "usbss": "usb3", "superspeed": "usb3", "tmds": "hdmi", "dp": "displayport", "edp": "displayport",
+          "eth": "ethernet", "rgmii": "ethernet", "mdi": "ethernet", "sgmii": "pcie", "pciexpress": "pcie", "m2": "pcie", "nvme": "pcie", "csi": "mipi", "dsi": "mipi", "mipicsi": "mipi", "mipidsi": "mipi",
+          "canfd": "can", "rs422": "rs485", "ddr": "ddr3", "ddr3l": "ddr3", "sdr": "sdram", "ddrsdram": "ddr1", "lpddr2": "ddr2", "lpddr3": "lpddr4", "lpddr5": "lpddr4", "mmc": "emmc", "sdio": "sd", "sdcard": "sd", "microsd": "sd", "ospi": "qspi", "flash": "qspi",
+          "spiflash": "qspi", "octospi": "qspi", "iic": "i2c", "twi": "i2c", "swd": "jtag", "audio": "i2s", "antenna": "rf", "rf50": "rf", "lora": "rf", "gps": "rf", "gnss": "rf", "wifi": "rf", "ble": "rf", "bluetooth": "rf"}
+
+
+def install(Project, Schematic, Board) -> None:      # noqa: ARG001
+    Board.review = _board_review
+    Board.plan = _layout_plan
+    Board.prepare = _prepare
+    Board.finish = _finish
+    Board.antenna = _antenna
+    Board.fence_net = _fence_net
+    Board.thermal_vias = _thermal_vias
+`;var _=`"""Board stackups, materials, finishes and what each fabricator can build.
+
+    board.stackup(fab="jlcpcb", layers=4)                  # JLC04161H-7628, their 1.6 mm four-layer build, plus their limits as rules
+    board.stackup(fab="jlcpcb", layers=4, build="JLC04161H-3313")
+    board.stackup(fab="jlcpcb", material="flex", layers=2) # 0.11 mm polyimide, coverlay, ENIG, flex limits as rules
+    board.stackup(material="ro4350b", thickness=0.508)     # two-layer RF laminate
+    board.stackup()                                        # what the board has now
+    board.bend_area([x0, y0, x1, y1])                      # where a flex board bends: vias and parts are kept out
+    kh.materials.choose(ghz=5.8)                           # which material, finish and layer count suit the job, and why
+    kh.FABS["jlcpcb"]["flex"]                              # a fabricator's limits
+
+Choose the stackup BEFORE placing or routing: the 50 ohm width, the via size, the clearances and the layer count all
+follow from it.  The fabricator figures are from JLCPCB's and PCBWay's capability and stackup pages (read 2026-11);
+where a page did not give a figure the entry says "derived" or "typical" and the order should be checked against the
+fabricator's own calculator.  Material constants are the makers' datasheet values.
+"""
+from __future__ import annotations
+
+from .transport import HarnessError
+
+OZ = 0.035          # 1 oz copper, mm
+
+# name: dielectric constant, loss tangent, what it is for
+MATERIALS = {
+    "fr4": {"name": "FR4", "epsilon_r": 4.5, "loss_tangent": 0.02, "use": "Everything up to a few gigahertz on short runs: digital, power, 2.4 GHz radios with the antenna close to the chip."},
+    "fr4-tg170": {"name": "FR4 TG170", "epsilon_r": 4.5, "loss_tangent": 0.02, "use": "Lead-free assembly of thick or many-layer boards, hot environments, automotive: FR-4 that keeps its shape to 170 C."},
+    "polyimide": {"name": "Polyimide", "epsilon_r": 3.3, "loss_tangent": 0.008, "use": "Flex circuits: cables, hinges, folded boards, wearables.  Bends; everything else is harder (ENIG only, parts need stiffeners)."},
+    "aluminium": {"name": "Aluminium core", "epsilon_r": 4.5, "loss_tangent": 0.02, "use": "LED boards and power stages that must dump heat: one copper layer on a thin dielectric on an aluminium plate.  Surface-mount only, no plated holes."},
+    "copper-core": {"name": "Copper core", "epsilon_r": 4.5, "loss_tangent": 0.02, "use": "The hottest LEDs and power parts: like aluminium core with about twice the heat spreading, heavier and dearer."},
+    "ro4350b": {"name": "Rogers RO4350B", "epsilon_r": 3.66, "loss_tangent": 0.0037, "use": "RF from about 3 GHz up, or long 50 ohm runs, filters and couplers at any frequency: a quarter of FR-4's loss and a dielectric constant held to a tight tolerance.  Processes like FR-4."},
+    "ro4003c": {"name": "Rogers RO4003C", "epsilon_r": 3.55, "loss_tangent": 0.0027, "use": "As RO4350B with a little less loss; not flame rated."},
+    "ro3003": {"name": "Rogers RO3003", "epsilon_r": 3.0, "loss_tangent": 0.001, "use": "Millimetre-wave (24 and 77 GHz radar): ceramic-filled PTFE, very low loss, stable over temperature."},
+    "ptfe": {"name": "PTFE", "epsilon_r": 2.2, "loss_tangent": 0.0009, "use": "The lowest loss there is (RT/duroid 5880 class): microwave and millimetre-wave antennas, low-noise front ends.  Soft, dear, two layers at most at prototype fabs."},
+}
+_MAT_ALIAS = {"fr-4": "fr4", "flex": "polyimide", "pi": "polyimide", "fpc": "polyimide", "kapton": "polyimide", "aluminum": "aluminium", "al": "aluminium", "ims": "aluminium", "mcpcb": "aluminium",
+              "copper": "copper-core", "copper core": "copper-core", "rogers": "ro4350b", "ro4350": "ro4350b", "ro4003": "ro4003c", "teflon": "ptfe", "duroid": "ptfe", "high-tg": "fr4-tg170", "tg170": "fr4-tg170"}
+
+# what to ask for -> KiCad's name for it (Board Setup, Board Finish)
+FINISHES = {
+    "none": ("None", ""),
+    "hasl": ("HAL SnPb", "Cheapest, solders well, leaded.  The surface is uneven: not for 0.5 mm pitch and finer, BGAs or QFNs."),
+    "hasl-lf": ("HAL lead-free", "Lead-free and cheap.  Uneven like leaded HASL: not for fine pitch."),
+    "enig": ("ENIG", "Flat gold over nickel: the one to use for BGAs, QFNs, 0.5 mm pitch and finer, flex boards, touch pads and contacts that are pressed rather than soldered.  Keeps on the shelf."),
+    "enepig": ("ENEPIG", "ENIG with a palladium layer: for wire bonding and the most demanding joints."),
+    "osp": ("OSP", "A flat organic coating: cheap and good for fine pitch, but it keeps only months and tolerates few reflow passes."),
+    "immersion-silver": ("Immersion silver", "Flat and low loss at microwave frequencies; tarnishes, so pack and assemble promptly."),
+    "immersion-tin": ("Immersion tin", "Flat, good for press-fit pins; short shelf life."),
+    "hard-gold": ("Hard gold", "Thick plated gold for edge connectors and contacts that are mated many times.  Not for soldering."),
+}
+_FIN_ALIAS = {"hal": "hasl", "leaded hasl": "hasl", "lead-free hasl": "hasl-lf", "lead free hasl": "hasl-lf", "hasl lead-free": "hasl-lf", "lf-hasl": "hasl-lf", "immersion gold": "enig", "gold": "enig", "silver": "immersion-silver", "tin": "immersion-tin", "gold fingers": "hard-gold"}
+
+# What each fabricator can make, mm.  "rules" is what board.stackup() writes into the board's design rules.
+FABS = {
+    "jlcpcb": {
+        "name": "JLCPCB",
+        "rigid": {"layers": "1 to 32", "thickness": [0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0], "outer_copper_oz": [1, 2], "inner_copper_oz": [0.5, 1, 2],
+                  "track_space": {"1oz 2-layer": 0.10, "1oz multilayer": 0.09, "2oz 2-layer": 0.16, "2oz multilayer": 0.15},
+                  "via": {"hole": 0.15, "diameter": 0.25, "preferred_hole": 0.2, "note": "the via pad is at least 0.1 mm (better 0.15) larger than its hole; 0.3 mm hole with a 0.6 mm pad costs nothing extra"},
+                  "annular_ring": 0.15, "hole_to_hole": 0.2, "via_to_track": 0.2, "pth_to_track": 0.28, "copper_to_edge": 0.2, "copper_to_vcut": 0.4,
+                  "mask_bridge": 0.10, "silk_line": 0.15, "silk_height": 1.0, "castellated_hole": 0.5, "bga_pad": 0.25,
+                  "finishes": ["hasl", "hasl-lf", "enig", "osp"], "finish_notes": "No HASL on six layers and up, on boards 0.4 mm thick, or on RF laminates.  Aluminium boards are HASL only.",
+                  "impedance": "controlled on 4 layers and up, +/-10 percent"},
+        "flex": {"layers": [1, 2, 4], "thickness": {"1": [0.07, 0.11, 0.12], "2": [0.11, 0.12, 0.2, 0.19], "4": [0.2, 0.25, 0.3, 0.35, 0.4, 0.45]}, "copper_um": [12, 18, 35],
+                 "track_space": {"12um": 0.076, "18um": 0.09, "35um": 0.10}, "via": {"hole": 0.3, "diameter": 0.55, "extreme": "0.10 / 0.30 on two layers, 0.15 / 0.35 on four, at extra cost"},
+                 "annular_ring": 0.18, "copper_to_edge": 0.3, "coverlay_opening_to_track": 0.15, "coverlay_bridge": 0.5, "silk_line": 0.15, "silk_height": 1.0,
+                 "stiffeners": {"polyimide": [0.1, 0.15, 0.2, 0.225, 0.25], "fr4": [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6], "steel": [0.1, 0.2, 0.3], "tape": ["3M9077 0.05", "3M468 0.13", "tesa8854 0.1"]},
+                 "finishes": ["enig"], "bend_radius": "6 x thickness for one layer, 10 x for more, bent once; 10 to 15 x and adhesiveless polyimide if it flexes in use",
+                 "connector": "a 0.3 mm FPC connector takes the 0.11 mm board plus a 0.225 mm polyimide stiffener behind the contacts", "impedance": "not controlled; width only", "rigid_flex": False},
+        "metal": {"layers": [1], "finishes": ["hasl", "hasl-lf"], "note": "Aluminium and copper core are single-layer."},
+        "rf": {"layers": [2], "note": "Two-layer Rogers and PTFE cores, 1 oz copper; no HASL."},
+    },
+    "pcbway": {
+        "name": "PCBWay",
+        "rigid": {"layers": "1 to 14 quick-turn, more as advanced", "thickness": [0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.6, 2.0, 2.4, 2.6, 2.8, 3.0, 3.2], "outer_copper_oz": [1, 2, 3, 4, 5, 6, 7, 8], "inner_copper_oz": [1, 1.5, 2, 3, 4],
+                  "track_space": {"standard": 0.10, "1oz advanced (no surcharge)": 0.127, "2oz": 0.18},
+                  "via": {"hole": 0.2, "diameter": 0.45, "note": "0.15 mm holes are an extra charge; hole to board thickness no more than 1:8"},
+                  "annular_ring": 0.15, "hole_to_hole": 0.28, "copper_to_edge": 0.25, "mask_bridge": 0.10, "silk_line": 0.15, "silk_height": 0.8, "castellated_hole": 0.4,
+                  "finishes": ["hasl", "hasl-lf", "enig", "osp", "hard-gold", "immersion-silver", "immersion-tin", "enepig"], "impedance": "+/-10 percent"},
+        "flex": {"layers": "1 to 12", "track_space": {"all": 0.05}, "via": {"hole": 0.1, "diameter": 0.3}, "coverlay_bridge": 0.2, "copper_to_edge": 0.3,
+                 "finishes": ["hasl", "enig", "enepig", "hard-gold", "immersion-silver", "osp", "immersion-tin"], "bend_radius": "3 to 6 x thickness for one layer, 7 to 10 x for two, 10 to 15 x for more",
+                 "impedance": "+/-10 percent at 50 ohm and above", "rigid_flex": True, "note": "copper to edge and the via pad are derived (the page gives the drill only)"},
+        "metal": {"layers": [1, 2], "note": "Aluminium and copper base."},
+        "rf": {"layers": "2 and up", "note": "Rogers 4000 series alone or mixed with FR-4, PTFE; pure PTFE multilayer is not made."},
+    },
+}
+_FAB_ALIAS = {"jlc": "jlcpcb", "jlcpcb": "jlcpcb", "pcbway": "pcbway", "pcb way": "pcbway"}
+
+
+def _cu(name, oz):
+    return {"name": name, "type": "copper", "thickness": round(OZ * oz, 4)}
+
+
+def _di(kind, t, material="FR4", er=4.5, loss=0.02):
+    return {"type": kind, "thickness": round(t, 4), "material": material, "epsilon_r": er, "loss_tangent": loss}
+
+
+def _names(n):
+    return ["F.Cu"] + [f"In{i}.Cu" for i in range(1, n - 1)] + ["B.Cu"]
+
+
+# The fabricators' own named builds, as their stackup pages give them (copper, prepreg and core thickness in mm).
+BUILDS = {
+    "JLC04161H-7628": {"fab": "jlcpcb", "layers": 4, "thickness": 1.6, "pre": [("7628", 0.2104, 4.4)], "core": 1.065, "inner_oz": 0.0152 / OZ, "note": "JLCPCB's default four-layer build: 50 ohm on the outer layers is a track about 0.35 mm wide."},
+    "JLC04161H-3313": {"fab": "jlcpcb", "layers": 4, "thickness": 1.6, "pre": [("3313", 0.0994, 4.1)], "core": 1.265, "inner_oz": 0.0152 / OZ, "note": "Thin prepreg: 50 ohm on the outer layers is a track about 0.17 mm wide, which suits fine-pitch chips and RF."},
+    "JLC04161H-1080": {"fab": "jlcpcb", "layers": 4, "thickness": 1.6, "pre": [("1080", 0.0764, 3.91)], "core": 1.265, "inner_oz": 0.0152 / OZ, "note": "The thinnest prepreg: tightest coupling to the plane, narrowest 50 ohm track."},
+    "JLC06161H-3313": {"fab": "jlcpcb", "layers": 6, "thickness": 1.6, "six": [("3313", 0.0994, 4.1), 0.55, ("2116", 0.1088, 4.16), 0.55, ("3313", 0.0994, 4.1)], "inner_oz": 0.0152 / OZ, "note": "JLCPCB's six-layer build with thin outer prepreg."},
+    "JLC06161H-7628": {"fab": "jlcpcb", "layers": 6, "thickness": 1.6, "six": [("7628", 0.2104, 4.4), 0.4, ("7628", 0.2028, 4.4), 0.4, ("7628", 0.2104, 4.4)], "inner_oz": 0.0152 / OZ, "note": "JLCPCB's six-layer build in 7628."},
+    "PCBWAY-4L-1.6": {"fab": "pcbway", "layers": 4, "thickness": 1.6, "pre": [("7628", 0.1855, 4.74)], "core": 1.03, "inner_oz": 1.0, "note": "PCBWay's 1.6 mm four-layer build with 1 oz inner copper."},
+}
+_DEFAULT_BUILD = {("jlcpcb", 4): "JLC04161H-7628", ("jlcpcb", 6): "JLC06161H-3313", ("pcbway", 4): "PCBWAY-4L-1.6"}
+
+
+def material(name: str) -> dict:
+    """A material's constants and what it is for: material("rogers"), material("flex")."""
+    key = str(name or "fr4").strip().lower()
+    key = _MAT_ALIAS.get(key, key)
+    if key not in MATERIALS:
+        raise HarnessError(f'No material "{name}". Known: {", ".join(MATERIALS)}.')
+    return dict(MATERIALS[key], key=key)
+
+
+def _fab(name):
+    if not name:
+        return None
+    key = _FAB_ALIAS.get(str(name).strip().lower())
+    if not key:
+        raise HarnessError(f'No fabricator "{name}". Known: {", ".join(FABS)}.')
+    return key
+
+
+def build(fab: str | None = None, layers: int = 2, thickness: float | None = None, material_name: str = "fr4", copper_oz: float = 1.0, name: str | None = None) -> dict:
+    """The stack for an order: {"layers": [...top to bottom...], "thickness", "mask", "title", "derived", "notes"}.
+
+    A named build (BUILDS) is the fabricator's own figures.  Anything else is worked out from the board thickness
+    and is marked derived: check it against the fabricator's calculator before ordering controlled impedance."""
+    fab = _fab(fab)
+    m = material(material_name)
+    notes: list = []
+    if name or (m["key"] == "fr4" and thickness in (None, 1.6) and (fab, layers) in _DEFAULT_BUILD and copper_oz == 1.0):
+        bname = name or _DEFAULT_BUILD[(fab, layers)]
+        b = BUILDS.get(bname)
+        if not b:
+            raise HarnessError(f'No build "{bname}". Known: {", ".join(BUILDS)}.')
+        n = b["layers"]
+        cu = _names(n)
+        if n == 4:
+            p = b["pre"][0]
+            rows = [_cu(cu[0], 1), _di("prepreg", p[1], p[0], p[2]), _cu(cu[1], b["inner_oz"]), _di("core", b["core"], "FR4", 4.6), _cu(cu[2], b["inner_oz"]), _di("prepreg", p[1], p[0], p[2]), _cu(cu[3], 1)]
+        else:
+            s = b["six"]
+            rows = [_cu(cu[0], 1), _di("prepreg", s[0][1], s[0][0], s[0][2]), _cu(cu[1], b["inner_oz"]), _di("core", s[1], "FR4", 4.6), _cu(cu[2], b["inner_oz"]),
+                    _di("prepreg", s[2][1], s[2][0], s[2][2]), _cu(cu[3], b["inner_oz"]), _di("core", s[3], "FR4", 4.6), _cu(cu[4], b["inner_oz"]), _di("prepreg", s[4][1], s[4][0], s[4][2]), _cu(cu[5], 1)]
+        return {"layers": rows, "thickness": b["thickness"], "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": bname, "derived": False, "notes": [b["note"]], "fab": b["fab"], "material": "fr4"}
+
+    key = m["key"]
+    if key == "polyimide":
+        if layers not in (1, 2, 4):
+            notes.append("Prototype flex is one, two or four layers; more is a quoted job.")
+        n = max(2, layers)
+        cu_t = 0.018 if copper_oz == 1.0 else round(OZ * copper_oz, 4)       # half-ounce is the flex default: thinner copper bends further
+        thick_pi = thickness is not None and thickness >= 0.17 and n == 2
+        pi = 0.05 if thick_pi else 0.025
+        cover = {"thickness": 0.05 if thick_pi else 0.0275, "material": "Polyimide coverlay", "epsilon_r": 2.9, "color": "Yellow"}
+        rows = []
+        for i, nm in enumerate(_names(n)):
+            rows.append({"name": nm, "type": "copper", "thickness": cu_t})
+            if i < n - 1:
+                rows.append(_di("core" if i % 2 == 0 else "prepreg", pi, "Polyimide", 3.3, 0.008))
+        total = round(sum(r["thickness"] for r in rows) + 2 * cover["thickness"], 3)
+        if layers == 1:
+            notes.append("A one-layer flex has copper on the front only: keep B.Cu empty.")
+        if n > 2:
+            notes.append("The four-layer flex stack is derived: the fabricator's page gives finished thicknesses (0.2 to 0.45 mm), not the layers.")
+        notes.append(f"Bend it no tighter than {round(total * (6 if layers == 1 else 10), 2)} mm radius once, {round(total * 15, 2)} mm if it flexes in use. Parts and connector contacts need a stiffener behind them.")
+        return {"layers": rows, "thickness": total, "mask": cover, "title": f"{n}-layer flex, {int(pi * 1000)} um polyimide", "derived": n > 2 or fab == "pcbway", "notes": notes, "fab": fab, "material": key, "finish": "enig"}
+    if key in ("aluminium", "copper-core"):
+        total = thickness or 1.6
+        rows = [_cu("F.Cu", copper_oz), _di("prepreg", 0.1, "Thermal dielectric", 4.5, 0.02), _di("core", round(total - 0.1 - 2 * OZ * copper_oz, 4), m["name"], 4.5, 0.02), _cu("B.Cu", copper_oz)]
+        notes.append(f"{m['name']} boards are one-sided: every part is surface-mount on the front, nothing is routed on B.Cu and there are no vias. The review holds the board to that. The 0.1 mm dielectric is a typical figure.")
+        return {"layers": rows, "thickness": total, "mask": {"thickness": 0.01, "epsilon_r": 3.8, "color": "White"}, "title": f"{m['name']}, {total} mm", "derived": True, "notes": notes, "fab": fab, "material": key, "finish": "hasl-lf"}
+    if key in ("ro4350b", "ro4003c", "ro3003", "ptfe"):
+        if layers != 2:
+            notes.append("Prototype RF laminate is two layers. For more, ask for a hybrid: the RF laminate as the outer pair on an FR-4 core (PCBWay quotes it).")
+        total = thickness or 0.508
+        rows = [_cu("F.Cu", copper_oz), _di("core", round(total - 2 * OZ * copper_oz, 4) if total > 0.3 else total, m["name"], m["epsilon_r"], m["loss_tangent"]), _cu("B.Cu", copper_oz)]
+        notes.append("The usual cores are 0.254, 0.508, 0.762 and 1.524 mm; confirm the one the fabricator stocks.")
+        return {"layers": rows, "thickness": total, "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": f"{m['name']}, {total} mm", "derived": True, "notes": notes, "fab": fab, "material": key, "finish": "enig"}
+
+    # FR-4, any layer count and thickness
+    total = thickness or 1.6
+    n = max(2, layers)
+    cu = _names(n)
+    er, loss, mat = m["epsilon_r"], m["loss_tangent"], m["name"]
+    if n == 2:
+        rows = [_cu(cu[0], copper_oz), _di("core", round(total - 2 * OZ * copper_oz, 4), mat, er, loss), _cu(cu[1], copper_oz)]
+        return {"layers": rows, "thickness": total, "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": f"2-layer {mat}, {total} mm", "derived": False, "notes": [f"On two layers a 50 ohm track over {total} mm of board is about {round(total * 1.85, 2)} mm wide: use four layers, or a coplanar track with ground beside it, for radio and fast signals."], "fab": fab, "material": key}
+    inner = 0.5 if fab == "jlcpcb" else 1.0
+    pre = min(0.2104, max(0.0764, (total - n * OZ) / (n - 1) * 0.6))
+    gaps = n - 1
+    kinds = ["prepreg" if (i % 2 == 0) else "core" for i in range(gaps)]
+    n_pre = kinds.count("prepreg")
+    copper_total = 2 * OZ * copper_oz + (n - 2) * OZ * inner
+    core = max(0.08, (total - copper_total - n_pre * pre) / max(1, kinds.count("core")))
+    rows = []
+    for i, nm in enumerate(cu):
+        rows.append(_cu(nm, copper_oz if i in (0, n - 1) else inner))
+        if i < gaps:
+            rows.append(_di(kinds[i], pre if kinds[i] == "prepreg" else core, "7628" if kinds[i] == "prepreg" and pre > 0.15 else mat, 4.4 if kinds[i] == "prepreg" else 4.6, loss))
+    notes.append("This stack is derived from the board thickness. For controlled impedance use one of the fabricator's named builds (kh.BUILDS) or their calculator.")
+    return {"layers": rows, "thickness": total, "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": f"{n}-layer {mat}, {total} mm", "derived": True, "notes": notes, "fab": fab, "material": key}
+
+
+def rules_for(fab: str, material_name: str = "fr4", layers: int = 2, copper_oz: float = 1.0) -> dict:
+    """The fabricator's limits as design rules (mm), for board.rules(**...)."""
+    f = FABS[_fab(fab)]
+    key = material(material_name)["key"]
+    if key == "polyimide":
+        x = f["flex"]
+        ts = x["track_space"]
+        w = ts.get("all") or (ts["35um"] if copper_oz > 1.0 else ts["18um"])
+        return {"min_track_width": w, "min_clearance": w, "edge_clearance": x["copper_to_edge"], "hole_clearance": 0.2, "via_diameter": max(0.55, x["via"]["diameter"]), "via_drill": max(0.3, x["via"]["hole"])}
+    r = f["rigid"]
+    ts = r["track_space"]
+    if _fab(fab) == "jlcpcb":
+        w = ts[("2oz" if copper_oz >= 2 else "1oz") + (" multilayer" if layers > 2 else " 2-layer")]
+    else:
+        w = ts["2oz"] if copper_oz >= 2 else ts["1oz advanced (no surcharge)"]
+    return {"min_track_width": w, "min_clearance": w, "edge_clearance": max(0.2, r["copper_to_edge"]), "hole_clearance": r.get("via_to_track", 0.2)}
+
+
+def choose(ghz: float | None = None, flex: bool = False, dynamic: bool = False, watts: float | None = None, led: bool = False, fine_pitch: float | None = None,
+           bga: bool = False, fast: bool = False, radio: bool = False, edge_connector: bool = False, lead_free: bool = True) -> dict:
+    """Which material, layer count and finish suit a board, and why.
+
+    ghz: the highest radio frequency on it.  flex: it must bend (dynamic: it bends in use, not just once at
+    assembly).  watts / led: heat to get rid of.  fine_pitch: the finest pin pitch in mm.  bga: it has a BGA.
+    fast: USB 3, HDMI, DDR, PCIe or the like.  radio: any antenna.  edge_connector: gold fingers.
+    Returns {"material", "layers", "finish", "why": [...], "stackup": the arguments for board.stackup()}."""
+    why: list = []
+    mat, layers, finish = "fr4", 2, "hasl-lf" if lead_free else "hasl"
+    if flex:
+        mat, layers, finish = "polyimide", 2, "enig"
+        why.append("It bends, so it is a polyimide flex circuit; the finish is ENIG (the only one prototype flex fabs offer, and it is flat).")
+        if dynamic:
+            layers = 1 if not (fast or radio) else 2
+            why.append("It flexes in use: one or two layers, the thinnest copper, adhesiveless polyimide, bend radius at least 10 to 15 times the thickness, no vias or parts in the bend.")
+        else:
+            why.append("It bends once at assembly: radius at least 6 times the thickness for one layer, 10 times for two or more.")
+    elif (watts and watts >= 3 and not (fast or radio or bga)) or led:
+        mat, layers = ("copper-core" if watts and watts >= 30 else "aluminium"), 1
+        why.append("The heat goes straight through a thin dielectric into a metal plate; that beats any number of thermal vias in FR-4. One copper layer, surface-mount parts only.")
+    elif ghz and ghz >= 20:
+        mat, layers, finish = "ro3003", 2, "immersion-silver"
+        why.append("Above about 20 GHz only PTFE-based laminate keeps the loss and the dielectric constant in hand; silver or ENIG, never HASL.")
+    elif ghz and ghz >= 3:
+        mat, layers, finish = "ro4350b", 2, "enig"
+        why.append(f"At {ghz} GHz FR-4 loses several times what a hydrocarbon-ceramic laminate does and its dielectric constant varies from batch to batch; RO4350B holds 50 ohm and filter dimensions. If only a short feed carries the signal (a chip antenna beside the radio), four-layer FR-4 still does.")
+    if mat == "fr4":
+        if fast or radio or bga or (ghz and ghz >= 0.4):
+            layers = 4
+            why.append("Four layers: a solid ground plane directly under the top layer gives every fast or radio track its return path and a 50 ohm width that is routable.")
+        if bga and fine_pitch and fine_pitch <= 0.65:
+            layers = 6
+            why.append("A BGA at 0.65 mm pitch or finer needs more escape layers; at 0.4 mm it needs HDI (laser microvias in the pads), which is a quoted job.")
+        if fast and layers < 6 and bga:
+            layers = 6
+            why.append("Six layers let the fast buses run between two ground planes.")
+    if mat in ("fr4", "fr4-tg170"):
+        if bga or (fine_pitch and fine_pitch <= 0.5) or radio or layers >= 6:
+            finish = "enig"
+            why.append("ENIG: flat pads for the fine-pitch parts" + (", and JLCPCB does not offer HASL on six layers" if layers >= 6 else "") + ".")
+        if edge_connector:
+            why.append("Ask for hard gold on the edge-connector fingers, with a bevel; ENIG wears through after a few insertions.")
+    return {"material": mat, "layers": layers, "finish": finish, "why": why, "stackup": {"material": mat, "layers": layers, "finish": finish}}
+
+
+class materials:      # noqa: N801  (a namespace: kh.materials.choose(...))
+    """Board materials and finishes: kh.materials.table, kh.materials.finishes, kh.materials.get(name), kh.materials.choose(...)."""
+    table = MATERIALS
+    finishes = {k: v[1] for k, v in FINISHES.items() if v[1]}
+    get = staticmethod(material)
+    choose = staticmethod(choose)
+
+
+def bend_radius(thickness: float, layers: int = 2, dynamic: bool = False) -> float:
+    """The tightest radius in mm a flex board of this thickness should be bent to: 6 times the thickness for one
+    layer and 10 times for more when it is bent once; 15 times when it flexes in use."""
+    return round(thickness * (15 if dynamic else 6 if layers <= 1 else 10), 3)
+
+
+def _stackup(self, fab: str | None = None, layers: int | None = None, thickness: float | None = None, material: str | None = None, finish: str | None = None,
+             build: str | None = None, copper_oz: float = 1.0, rules: bool = True, custom: list | None = None) -> dict:
+    """Read or set the board's physical stackup (KiCad's Board Setup, Physical Stackup).
+
+    With no arguments: what the board has now ({"layers", "thickness", "finish", "flex", "outer": {"width_50_ohm"}}).
+    fab: "jlcpcb" or "pcbway": their build for this layer count, and their manufacturing limits written into the
+    design rules so the rule check holds the board to what they can make.  layers: the copper layer count (the
+    board is changed to it).  material: "fr4", "flex", "aluminium", "copper-core", "rogers", "ptfe" (kh.MATERIALS).
+    finish: "enig", "hasl", "hasl-lf", "osp", ... (kh.FINISHES).  build: one of the fabricator's named stacks
+    (kh.BUILDS, for example "JLC04161H-3313").  custom: your own stack top to bottom, [{"name": "F.Cu", "type":
+    "copper", "thickness": 0.035}, {"type": "prepreg", "thickness": 0.1, "material": "3313", "epsilon_r": 4.1}, ...].
+    Do this before placing and routing: track widths for 50 and 90 ohm come from it.
+    Returns what was set, with the 50 ohm width on the outer layer and notes on what the choice means."""
+    from . import physics as _physics
+    self.flush()
+    if fab is None and layers is None and thickness is None and material is None and finish is None and build is None and custom is None:
+        return _physics._plan(self, what="stackup")
+    have = len(self.info().get("copper_layers") or ["F.Cu", "B.Cu"])
+    notes: list = []
+    if custom is not None:
+        st = {"layers": list(custom), "thickness": thickness, "mask": {"thickness": 0.01, "epsilon_r": 3.8}, "title": "custom", "derived": False, "notes": [], "fab": _fab(fab), "material": globals()["material"](material or "fr4")["key"]}
+        want = sum(1 for r in custom if r.get("type") == "copper")
+    else:
+        b = BUILDS.get(build) if build else None
+        if build and not b:
+            raise HarnessError(f'No build "{build}". Known: {", ".join(BUILDS)}.')
+        want = b["layers"] if b else (layers or have)
+        st = globals()["build"](fab or (b["fab"] if b else None), want, thickness, material or "fr4", copper_oz, build)
+    want = max(2, want)
+    if want != have:
+        self.layers(want, planes=[f"In{i}.Cu" for i in range(1, want - 1) if i in (1, want - 2)] if want > 2 else None)
+    fkey = str(finish or st.get("finish") or "").strip().lower()
+    fkey = _FIN_ALIAS.get(fkey, fkey)
+    if fkey and fkey not in FINISHES:
+        raise HarnessError(f'No finish "{finish}". Known: {", ".join(FINISHES)}.')
+    fabkey = st.get("fab")
+    if fabkey and fkey and finish:
+        group = "flex" if st["material"] == "polyimide" else "metal" if st["material"] in ("aluminium", "copper-core") else "rigid"
+        offered = FABS[fabkey].get(group, {}).get("finishes")
+        if offered and fkey not in offered:
+            raise HarnessError(f"{FABS[fabkey]['name']} does not offer {FINISHES[fkey][0]} on this kind of board; it offers {', '.join(offered)}.")
+        if fabkey == "jlcpcb" and group == "rigid" and fkey.startswith("hasl") and want >= 6:
+            raise HarnessError("JLCPCB does not offer HASL on six layers and up; use ENIG.")
+    e = {"op": "set_stackup", "layers": st["layers"], "mask": st["mask"], "title": st["title"], "controlled": bool(fabkey and want >= 4)}
+    if st.get("thickness"):
+        e["thickness"] = st["thickness"]
+    if fkey:
+        e["finish"] = FINISHES[fkey][0]
+    self._edit(e)
+    self.flush()
+    self._geom = None
+    applied = None
+    if rules and fabkey:
+        applied = rules_for(fabkey, st["material"], want, copper_oz)
+        self.rules(**applied)
+    now = _physics._plan(self, what="stackup")
+    notes += st["notes"]
+    if fkey and FINISHES[fkey][1]:
+        notes.append(f"{FINISHES[fkey][0]}: {FINISHES[fkey][1]}")
+    if fabkey and FABS[fabkey].get("rigid", {}).get("finish_notes") and st["material"] == "fr4":
+        notes.append(FABS[fabkey]["rigid"]["finish_notes"])
+    out = {"build": st["title"], "fab": FABS[fabkey]["name"] if fabkey else None, "material": st["material"], "copper_layers": now.get("copper_layers"), "thickness": now.get("thickness"), "finish": now.get("finish"),
+           "derived": st["derived"], "outer": now.get("outer"), "rules": applied, "notes": notes}
+    return out
+
+
+def _bend_area(self, box, name: str = "bend") -> None:
+    """Mark where a flex board bends: a rule area over [x0, y0, x1, y1] on every copper layer that keeps vias and
+    footprints out (the autorouter, the placer and the rule check honour it).  Tracks may cross it; the review
+    checks that they cross straight, that the two sides are staggered and that no solid pour lies in it."""
+    if "bend" not in name.lower() and "flex" not in name.lower() and "fold" not in name.lower():
+        name = "bend " + name
+    self.keepout(box, tracks=False, vias=True, copper=False, footprints=True, name=name)
+    self.flush()
+
+
+def install(Board) -> None:
+    Board.stackup = _stackup
+    Board.bend_area = _bend_area
+`;var y=`"""Parts made without a model: symbols and footprints from datasheets and package dimensions.
 
     from kicad_harness import parts
     part = parts.from_datasheet("W25Q64JV.pdf", name="W25Q64JV", package="SOIC-8")
@@ -4476,7 +5273,7 @@ def _same_family(header: str, want: dict) -> bool:
 def _title_matches(title: str, pk: dict) -> bool:
     got = ds.packages(title + " ")
     return any(g["family"] == pk["family"] and g["pins"] == pk["pins"] for g in got)
-`;var _=`"""Reading a datasheet without a model: page text, the pin table and the package drawing's numbers.
+`;var w=`"""Reading a datasheet without a model: page text, the pin table and the package drawing's numbers.
 
 Datasheets are laid out for people, so this is a set of careful heuristics, and it says how sure
 it is.  What it cannot read is reported as missing, and only that small remainder needs a
@@ -4756,7 +5553,7 @@ def dim_tables(pages: list) -> list:
                     out.append(t)
             i = max(j, i + 1)
     return out
-`;var y=`"""Footprints computed from package dimensions, after IPC-7351B.
+`;var k=`"""Footprints computed from package dimensions, after IPC-7351B.
 
 Every generator takes the package's own dimensions (the numbers a datasheet's mechanical drawing
 gives) and returns a \`Footprint\`: pads, courtyard, fabrication outline, silkscreen and the text of
@@ -5170,7 +5967,7 @@ def header(name: str, pins: int, rows: int = 1, pitch: float = 2.54, lead: float
         for r in range(rows):
             fp.pad(n, x0 + r * pitch, y0 + i * pitch, pad, pad, "rect", drill=hole); n += 1
     return fp.finish(rows * pitch, per * pitch, 0.5)
-`;var w=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
+`;var x=`"""Finding parts: LCSC, Mouser and DigiKey listings, and Texas Instruments and Analog Devices datasheets.
 
     from kicad_harness import parts
     rows = parts.find("3.3V LDO SOT-23-5 500mA")            # every vendor that is set up, merged
@@ -5455,7 +6252,7 @@ def lookup(mpn: str, project=None) -> dict:
         elif not out["datasheet"] and own.get("datasheet_candidates"):
             out["datasheet_candidates"] = own["datasheet_candidates"]
     return out
-`;var x=`"""Schematic symbols drawn from a pin list.
+`;var v=`"""Schematic symbols drawn from a pin list.
 
 A symbol is a rectangle with the pins sorted onto its sides the way KiCad's library convention
 (KLC) asks: supplies on top, grounds at the bottom, inputs on the left, outputs on the right,
@@ -5644,9 +6441,9 @@ def symbol(name: str, pins: list, reference: str = "U", footprint: str = "", dat
 def library(symbols: list) -> str:
     """A .kicad_sym file holding the given symbol texts."""
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
-`;var f=require("node:fs"),O=globalThis,R=f.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
-`);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=f.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=f.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var G=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",b],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],B=`
+`;var p=require("node:fs"),H=globalThis,L=p.constants;process.binding=e=>{if(e==="constants")return{fs:L};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete H[e]}catch{}var G=new(require("node:string_decoder")).StringDecoder("utf8"),T=new Int32Array(new SharedArrayBuffer(4)),i="";function N(){let e=Buffer.alloc(65536);for(;;){let s=i.indexOf(`
+`);if(s>=0){let t=i.slice(0,s);return i=i.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),i+=G.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(T,0,0,4);continue}throw t}}var M=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/physics.py",b],["kicad_harness/stackups.py",_],["kicad_harness/parts/__init__.py",y],["kicad_harness/parts/datasheet.py",w],["kicad_harness/parts/footprint.py",k],["kicad_harness/parts/search.py",x],["kicad_harness/parts/symbol.py",v]],U=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -5677,6 +6474,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function H(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,p=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:p,stderr:p});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of G)i.FS.writeFile("/kh/"+r,l);i.runPython(B);let T=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(T(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
-`).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
-`),d(o),process.exit(0)}H().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});
+`;async function V(){let e=JSON.parse(N()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:S}=require(s+"pyodide.js"),o=await S({indexURL:s,jsglobals:{},stdout:f,stderr:f});o.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),N())}),o.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of M)o.FS.writeFile("/kh/"+r,l);o.runPython(U);let E=o.globals.get("__kc_run"),a;try{a=JSON.parse(String(E(String(e.code||""))))}catch(r){a={ok:!1,error:String(r&&r.message||r).split(`
+`).filter(Boolean).slice(-1)[0]||"The script failed."}}a.done=!0,a.output=n.join(`
+`),d(a),process.exit(0)}V().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

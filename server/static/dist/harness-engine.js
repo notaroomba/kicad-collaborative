@@ -339,8 +339,8 @@ function parse(text2) {
       }
       if (c === "(") out.push(list());
       else if (c === '"') {
-        const at = out.length;
-        if (at < 30) q |= 1 << at;
+        const at2 = out.length;
+        if (at2 < 30) q |= 1 << at2;
         out.push(quoted());
       } else out.push(atom());
     }
@@ -1379,7 +1379,7 @@ function buildDrawingSheet(page, vars, wks, firstPage, project) {
   const RB = [page[0] - setup.right, page[1] - setup.bottom];
   const resolve = varResolver(vars || {}, { project: project || null });
   const isFirst = firstPage !== false;
-  const at = (c, i, incr) => {
+  const at2 = (c, i, incr) => {
     const px = c.x + incr[0] * i, py = c.y + incr[1] * i;
     if (c.anchor === "lt") return [LT[0] + px, LT[1] + py];
     if (c.anchor === "lb") return [LT[0] + px, RB[1] - py];
@@ -1391,7 +1391,7 @@ function buildDrawingSheet(page, vars, wks, firstPage, project) {
     if (it.option === "page1only" && !isFirst) continue;
     if (it.option === "notonpage1" && isFirst) continue;
     const isText = it.kind === "tbtext";
-    const s0 = at(it.start, 0, it.incr), e0 = at(it.end, 0, it.incr);
+    const s0 = at2(it.start, 0, it.incr), e0 = at2(it.end, 0, it.incr);
     let bx0 = Math.min(LT[0], s0[0]), by0 = Math.min(LT[1], s0[1]);
     let bx1 = Math.max(RB[0], s0[0]), by1 = Math.max(RB[1], s0[1]);
     if (!isText) {
@@ -1421,11 +1421,11 @@ function buildDrawingSheet(page, vars, wks, firstPage, project) {
     let label = full;
     for (let j = 0; j < it.repeat; j++) {
       if (j > 0) {
-        const sp = at(it.start, j, it.incr);
-        if (!isText && !inside2(at(it.end, j, it.incr))) continue;
+        const sp = at2(it.start, j, it.incr);
+        if (!isText && !inside2(at2(it.end, j, it.incr))) continue;
         if (!inside2(sp)) continue;
       }
-      const [sx, sy] = at(it.start, j, it.incr);
+      const [sx, sy] = at2(it.start, j, it.incr);
       if (isText) {
         if (label) out.push({
           t: "text",
@@ -1444,7 +1444,7 @@ function buildDrawingSheet(page, vars, wks, firstPage, project) {
         });
         if (it.repeat > 1 && !escaped) label = incrementLabel(it.text, (j + 1) * it.incrLabel);
       } else {
-        const [ex, ey] = at(it.end, j, it.incr);
+        const [ex, ey] = at2(it.end, j, it.incr);
         if (it.kind === "line") out.push({ t: "line", x1: sx, y1: sy, x2: ex, y2: ey, w: lw });
         else out.push({ t: "rect", x: Math.min(sx, ex), y: Math.min(sy, ey), w: Math.abs(ex - sx), h: Math.abs(ey - sy), lw });
       }
@@ -1470,8 +1470,8 @@ function documentDrawingSheet(doc) {
     doc.projectName,
     doc.kicadVersion
   ].join("\0") + "\0" + JSON.stringify(doc.titleBlock || null) + "\0" + JSON.stringify(doc.sheetVars || null) + "\0" + JSON.stringify(doc.projectVars || null);
-  const hit4 = SHEET_CACHE.get(doc);
-  if (hit4 && hit4.key === key2 && hit4.wks === wks) return hit4.items;
+  const hit5 = SHEET_CACHE.get(doc);
+  if (hit5 && hit5.key === key2 && hit5.wks === wks) return hit5.items;
   const items = buildDrawingSheet(doc.page, sheetTextVars(doc), wks, doc.isFirstPage !== false, doc.projectVars || null);
   SHEET_CACHE.set(doc, { key: key2, wks, items });
   return items;
@@ -1861,23 +1861,23 @@ function curveOrientationDepth(e, lineW) {
 function endingShape(e, p, dir, lineW) {
   const [sx, sy] = effectiveSize(e, lineW);
   const ux = dir[0], uy = dir[1], nx = -uy, ny = ux;
-  const at = (x, y) => [p[0] + x * ux + y * nx, p[1] + x * uy + y * ny];
+  const at2 = (x, y) => [p[0] + x * ux + y * nx, p[1] + x * uy + y * ny];
   const hw = sy / 2, hx = sx / 2;
   switch (e.style) {
     case "arrow":
-      return [at(0, 0), at(-sx, hw), at(-sx, -hw), at(0, 0)];
+      return [at2(0, 0), at2(-sx, hw), at2(-sx, -hw), at2(0, 0)];
     case "arrow_open":
-      return [at(-sx, -hw), at(0, 0), at(-sx, hw)];
+      return [at2(-sx, -hw), at2(0, 0), at2(-sx, hw)];
     case "circle": {
       const out = [];
       for (let i = 0; i <= 32; i++) {
         const a = 2 * Math.PI * i / 32;
-        out.push(at(hx * Math.cos(a), hw * Math.sin(a)));
+        out.push(at2(hx * Math.cos(a), hw * Math.sin(a)));
       }
       return out;
     }
     case "square":
-      return [at(hx, hw), at(hx, -hw), at(-hx, -hw), at(-hx, hw), at(hx, hw)];
+      return [at2(hx, hw), at2(hx, -hw), at2(-hx, -hw), at2(-hx, hw), at2(hx, hw)];
   }
   return [];
 }
@@ -2615,8 +2615,8 @@ function buildPinGeomInner(item, g2, tf2, sym, type, shape2, px, py, pr, len) {
   if (showName) {
     if (inside2) {
       const dd = len + sym.nameOff;
-      const at = orient === "R" ? [pos[0] + dd, pos[1]] : orient === "L" ? [pos[0] - dd, pos[1]] : orient === "U" ? [pos[0], pos[1] - dd] : [pos[0], pos[1] + dd];
-      textGeom(item, at[0], at[1], pinName, nameEf.size, nameColor, vertical ? 90 : 0, [orient === "R" || orient === "U" ? "left" : "right", "middle"], "Pin names", { z: SCH_Z.pinName, w: nameThick });
+      const at2 = orient === "R" ? [pos[0] + dd, pos[1]] : orient === "L" ? [pos[0] - dd, pos[1]] : orient === "U" ? [pos[0], pos[1] - dd] : [pos[0], pos[1] + dd];
+      textGeom(item, at2[0], at2[1], pinName, nameEf.size, nameColor, vertical ? 90 : 0, [orient === "R" || orient === "U" ? "left" : "right", "middle"], "Pin names", { z: SCH_Z.pinName, w: nameThick });
     } else if (vertical) {
       textGeom(item, pos[0] - (clearance + nameEf.size / 2 + nameThick), alongY, pinName, nameEf.size, nameColor, 90, ["center", "middle"], "Pin names", { z: SCH_Z.pinName, w: nameThick });
     } else {
@@ -2967,19 +2967,19 @@ function hatchLines(pts, slope, spacing, lineLen) {
   return out;
 }
 function pointGeom(item, n2, tf2) {
-  const at = kid(n2, "at");
-  if (!at) return;
-  const [x, y] = tf2(num(at[1]), num(at[2]));
+  const at2 = kid(n2, "at");
+  if (!at2) return;
+  const [x, y] = tf2(num(at2[1]), num(at2[2]));
   const sz = kid(n2, "size"), size = (sz ? num(sz[1]) : 1) / 2, layer = layerOf(n2, "F.SilkS"), z = pcbZ(layer) + 0.9, w = 0.01;
   for (const [dx, dy] of [[1, 1], [1, -1]]) G(item, { t: "line", x1: x - size * dx, y1: y - size * dy, x2: x + size * dx, y2: y + size * dy, w, color: POINT_COLOR, layer, z, cap: "butt", point: true });
   G(item, { t: "circle", x, y, r: size / 2, w, color: pcbColor(layer), layer, z, point: true });
 }
 var POINT_COLOR = "#FF26E2";
 function barcodeGeom(item, n2, tf2, frot) {
-  const at = kid(n2, "at");
-  if (!at) return;
-  const [px, py] = tf2(num(at[1]), num(at[2]));
-  const rot3 = num(at[3]) + (frot || 0);
+  const at2 = kid(n2, "at");
+  if (!at2) return;
+  const [px, py] = tf2(num(at2[1]), num(at2[2]));
+  const rot3 = num(at2[3]) + (frot || 0);
   const sz = kid(n2, "size"), W10 = sz ? num(sz[1]) : 5, H = sz ? num(sz[2], W10) : 5;
   if (!(W10 > 0) || !(H > 0)) return;
   const layer = layerOf(n2, "F.SilkS"), color = pcbColor(layer), z = pcbZ(layer);
@@ -3277,11 +3277,11 @@ function buildFootprintGeom(doc, item) {
   const expand = (t) => t.replace(/\$\{(REFERENCE|VALUE|FOOTPRINT_NAME|LAYER)\}/g, (m, v) => v === "REFERENCE" ? item.ref : v === "VALUE" ? item.value : v === "LAYER" ? side : item.lib);
   const textAt = (p, text2) => {
     if (!isList(kid(p, "at"))) return;
-    const at = kid(p, "at");
+    const at2 = kid(p, "at");
     const [px, py, pr] = atOf(p);
     const layer = layerOf(p, side === "B.Cu" ? "B.SilkS" : "F.SilkS");
     const [x, y] = tf2(px, py);
-    const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
+    const unlocked = has(at2, "unlocked") || yesNo(p, "unlocked");
     const field2 = p[0] === "property" ? str(p[1]) : p[0] === "fp_text" ? str(p[1]) === "reference" ? "Reference" : str(p[1]) === "value" ? "Value" : null : null;
     const dxfText = { bold: !!effectsOf(p).bold };
     pcbTextGeom(item, p, x, y, expand(text2), pr, layer, field2 ? { upright: !unlocked, field: field2, dxfText } : { upright: !unlocked, dxfText });
@@ -3334,10 +3334,10 @@ function fpEditorVars(doc, text2, layer) {
 function buildFieldGeom(doc, item) {
   const p = item.node;
   if (!isList(kid(p, "at"))) return;
-  const at = kid(p, "at");
+  const at2 = kid(p, "at");
   const [px, py, pr] = atOf(p);
   const layer = layerOf(p, "F.SilkS");
-  const unlocked = has(at, "unlocked") || yesNo(p, "unlocked");
+  const unlocked = has(at2, "unlocked") || yesNo(p, "unlocked");
   const field2 = p[0] === "property" ? str(p[1]) : str(p[1]) === "reference" ? "Reference" : "Value";
   item.x = px;
   item.y = py;
@@ -3468,7 +3468,7 @@ function buildPadGeom(item, pad, tf2, side, doc, padIndex) {
   else if (pinType === "free" && shownNet.indexOf("unconnected-(") === 0) shownNet = "*";
   if (number || shownNet) {
     let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
-    const grow4 = (x, y, r) => {
+    const grow5 = (x, y, r) => {
       if (x - r < bx0) bx0 = x - r;
       if (y - r < by0) by0 = y - r;
       if (x + r > bx1) bx1 = x + r;
@@ -3478,16 +3478,16 @@ function buildPadGeom(item, pad, tf2, side, doc, padIndex) {
     if (shape2 === "custom" && firstLayer) {
       for (const sg of item.geom) {
         if (!sg.pad || sg.padIndex !== padIndex || sg.layer !== firstLayer || sg.hole) continue;
-        if (sg.t === "poly") for (const q of sg.pts) grow4(q[0], q[1], (sg.w || 0) / 2);
-        else if (sg.t === "circle" || sg.t === "arc") grow4(sg.x, sg.y, sg.r + (sg.w || 0) / 2);
+        if (sg.t === "poly") for (const q of sg.pts) grow5(q[0], q[1], (sg.w || 0) / 2);
+        else if (sg.t === "circle" || sg.t === "arc") grow5(sg.x, sg.y, sg.r + (sg.w || 0) / 2);
         else if (sg.t === "line") {
-          grow4(sg.x1, sg.y1, (sg.w || 0) / 2);
-          grow4(sg.x2, sg.y2, (sg.w || 0) / 2);
+          grow5(sg.x1, sg.y1, (sg.w || 0) / 2);
+          grow5(sg.x2, sg.y2, (sg.w || 0) / 2);
         } else if (sg.t === "pad") {
           const ca = Math.abs(Math.cos(sg.rot * Math.PI / 180)), sa = Math.abs(Math.sin(sg.rot * Math.PI / 180));
           const ex = (sg.w * ca + sg.h * sa) / 2, ey = (sg.w * sa + sg.h * ca) / 2;
-          grow4(sg.x - ex, sg.y - ey, 0);
-          grow4(sg.x + ex, sg.y + ey, 0);
+          grow5(sg.x - ex, sg.y - ey, 0);
+          grow5(sg.x + ex, sg.y + ey, 0);
         }
       }
     }
@@ -3889,10 +3889,10 @@ function copperStack(copper) {
 function stepCopperLayer(copper, current, forward, hidden) {
   const stack = copperStack(copper);
   if (!stack.length) return null;
-  const at = stack.indexOf(current);
-  if (at < 0) return forward ? stack[stack.length - 1] : stack[0];
+  const at2 = stack.indexOf(current);
+  if (at2 < 0) return forward ? stack[stack.length - 1] : stack[0];
   for (let n2 = 1; n2 <= stack.length; n2++) {
-    const l = stack[(at + (forward ? n2 : -n2) + stack.length * n2) % stack.length];
+    const l = stack[(at2 + (forward ? n2 : -n2) + stack.length * n2) % stack.length];
     if (!hidden || !hidden.has(l)) return l === current ? null : l;
   }
   return null;
@@ -3986,16 +3986,16 @@ function setProjectValue(text2, path2, value, floats = true) {
   } catch (e) {
     root4 = {};
   }
-  let at = root4;
+  let at2 = root4;
   for (let d = 0; d < path2.length - 1; d++) {
-    let next = obj(at[path2[d]]);
+    let next = obj(at2[path2[d]]);
     if (!next) {
       next = {};
-      at[path2[d]] = next;
+      at2[path2[d]] = next;
     }
-    at = next;
+    at2 = next;
   }
-  at[path2[path2.length - 1]] = value;
+  at2[path2[path2.length - 1]] = value;
   return JSON.stringify(root4, null, 2) + "\n";
 }
 function sizesToProject(text2, s) {
@@ -4283,14 +4283,14 @@ var PcbSizes = class {
   /** ' / \ on a selected via: the next larger (smaller) of the Default netclass via and the pre-defined vias. */
   steppedVia(diameter, forward) {
     const n2 = this.sizes.vias.length, def = defaultNetclass(this.sizes), eps = 1e-9;
-    const at = (i) => i > 0 ? this.sizes.vias[i] : { diameter: def.via_diameter, drill: def.via_drill };
+    const at2 = (i) => i > 0 ? this.sizes.vias[i] : { diameter: def.via_diameter, drill: def.via_drill };
     if (forward) {
       for (let i = 0; i < n2; i++) {
-        const c = at(i);
+        const c = at2(i);
         if (c.diameter > diameter + eps) return c;
       }
     } else for (let i = n2 - 1; i >= 0; i--) {
-      const c = at(i);
+      const c = at2(i);
       if (c.diameter < diameter - eps) return c;
     }
     return null;
@@ -4536,7 +4536,7 @@ function hitTestDetail(doc, x, y, slopMm, opts) {
     const b = it.bbox;
     if (x < b[0] - slopMm || x > b[2] + slopMm || y < b[1] - slopMm || y > b[3] + slopMm) continue;
     let onGeom = false, exact = false, hitLayer = null, vis = null, hull = null, hitClass = 2;
-    const grow4 = (b2, gb) => {
+    const grow5 = (b2, gb) => {
       if (!b2) return gb.slice();
       if (gb[0] < b2[0]) b2[0] = gb[0];
       if (gb[1] < b2[1]) b2[1] = gb[1];
@@ -4548,9 +4548,9 @@ function hitTestDetail(doc, x, y, slopMm, opts) {
       if (hidden && g2.layer && hidden.has(g2.layer)) continue;
       const gb = geomBox(g2);
       if (!gb) continue;
-      vis = grow4(vis, gb);
+      vis = grow5(vis, gb);
       if (g2.padText || g2.padNum || g2.noBox) continue;
-      if (g2.t !== "text") hull = grow4(hull, gb);
+      if (g2.t !== "text") hull = grow5(hull, gb);
       if (hitClass > 0 && x >= gb[0] - slopMm && x <= gb[2] + slopMm && y >= gb[1] - slopMm && y <= gb[3] + slopMm && geomHit(g2, x, y, slopMm)) {
         onGeom = true;
         if (!exact && (slopMm <= 0 || geomHit(g2, x, y, 0))) exact = true;
@@ -6668,10 +6668,10 @@ function canonical(it) {
   const own = uuidOf(file);
   if (!own) return { file, sig: serialize(file), derived: true };
   if (own === it.id) {
-    const bare = withoutUuid(file, it.id);
-    if (bare) {
-      const sig = serialize(bare);
-      if (derivesFrom(it.id, sig)) return { file: bare, sig, derived: true };
+    const bare2 = withoutUuid(file, it.id);
+    if (bare2) {
+      const sig = serialize(bare2);
+      if (derivesFrom(it.id, sig)) return { file: bare2, sig, derived: true };
     }
   }
   return { file, sig: serialize(file), derived: false };
@@ -7176,8 +7176,8 @@ function markFootprintSaved(doc, text2) {
     const own = uuidOf(c);
     let id = "", sig = "";
     if (own && byId.has(own)) {
-      const bare = withoutUuid(c, own);
-      const bs = bare ? serialize(bare) : "";
+      const bare2 = withoutUuid(c, own);
+      const bs = bare2 ? serialize(bare2) : "";
       sig = byId.get(own) === bs ? bs : serialize(c);
       id = own;
     } else {
@@ -7379,6 +7379,7 @@ function parseDoc(text2, docType) {
     } else if (k === "general") {
       const t = kid(node, "thickness");
       if (t && type === "pcb") doc.thickness = num(t[1], 1.6);
+      if (type === "pcb") doc.generalNode = node;
       continue;
     } else if (k === "net") {
       if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2]));
@@ -7388,6 +7389,7 @@ function parseDoc(text2, docType) {
       doc.auxOrigin = o.aux;
       doc.gridOrigin = o.grid;
       doc.stackup = kid(node, "stackup") || null;
+      doc.setupNode = node;
       continue;
     } else if (k === "embedded_files") {
       doc.embeddedFiles = node;
@@ -8563,15 +8565,15 @@ function replaceOrInsert(setup, key2, text2, before) {
     setup[i] = node;
     return;
   }
-  let at = setup.length;
+  let at2 = setup.length;
   for (const b of before) {
     const j = idxOf(setup, b);
     if (j > 0) {
-      at = j;
+      at2 = j;
       break;
     }
   }
-  setup.splice(at, 0, node);
+  setup.splice(at2, 0, node);
 }
 var AFTER_MASK = ["solder_mask_min_width", "pad_to_paste_clearance", "pad_to_paste_clearance_ratio", "allow_soldermask_bridges_in_footprints", "tenting", "covering", "plugging", "capping", "filling", "zone_defaults", "aux_axis_origin", "grid_origin", "pcbplotparams"];
 function editSetup(setup, e) {
@@ -8682,6 +8684,17 @@ function applyBoardSetup(doc, change) {
   }
   const d = doc;
   d.boardSetup = applyHeaderChange(d.boardSetup || { general: null, layers: null, setup: null, version: 0 }, change);
+  for (const p of change.properties || []) {
+    if (p.name === "setup" && d.boardSetup.setup) {
+      d.setupNode = d.boardSetup.setup;
+      d.stackup = kid(d.boardSetup.setup, "stackup") || null;
+    }
+    if (p.name === "general" && d.boardSetup.general) {
+      d.generalNode = d.boardSetup.general;
+      const t = kid(d.boardSetup.general, "thickness");
+      if (t) doc.thickness = num(t[1], 1.6);
+    }
+  }
   return true;
 }
 var boardSetup = {
@@ -9274,22 +9287,22 @@ var quote3 = (s) => '"' + s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(
 function qnode(key2, values) {
   return parse("(" + key2 + values.map((v) => " " + (typeof v === "number" ? String(v) : quote3(v))).join("") + ")");
 }
-function setKid(node, key2, values, before, bare = false) {
-  const c = bare ? [key2, ...values] : qnode(key2, values);
+function setKid(node, key2, values, before, bare2 = false) {
+  const c = bare2 ? [key2, ...values] : qnode(key2, values);
   const i = idxOf2(node, key2);
   if (i > 0) {
     node[i] = c;
     return c;
   }
-  let at = node.length;
+  let at2 = node.length;
   for (const b of before) {
     const j = idxOf2(node, b);
     if (j > 0) {
-      at = j;
+      at2 = j;
       break;
     }
   }
-  node.splice(at, 0, c);
+  node.splice(at2, 0, c);
   return c;
 }
 function delKid(node, key2) {
@@ -9829,13 +9842,13 @@ function newField(fp, name, value, o) {
   return parse(`(property ${quote3(name)} ${quote3(value)} (at 0 0${rot3 ? " " + rot3 : ""}) (layer "${back ? "B.Fab" : "F.Fab"}") (hide yes)${uuid ? ` (uuid "${uuid}")` : ""} (effects (font (size ${size} ${size}) (thickness ${thick}))${back ? " (justify mirror)" : ""}))`);
 }
 function insertField(fp, field2) {
-  let at = -1;
+  let at2 = -1;
   for (let j = 1; j < fp.length; j++) {
     const c = fp[j];
-    if (isList3(c) && c[0] === "property" && !str(c[1]).startsWith("ki_")) at = j;
+    if (isList3(c) && c[0] === "property" && !str(c[1]).startsWith("ki_")) at2 = j;
   }
-  if (at < 0) at = Math.max(idxOf2(fp, "tags"), idxOf2(fp, "descr"), idxOf2(fp, "at"), 1);
-  fp.splice(at + 1, 0, field2);
+  if (at2 < 0) at2 = Math.max(idxOf2(fp, "tags"), idxOf2(fp, "descr"), idxOf2(fp, "at"), 1);
+  fp.splice(at2 + 1, 0, field2);
 }
 function planUpdate(doc, netlist, o = {}) {
   const report3 = [];
@@ -10085,9 +10098,9 @@ function planUpdate(doc, netlist, o = {}) {
       else {
         say("action", `Change ${c.ref} footprint from '${curId}' to '${c.footprint}'.`);
         const fresh = clone(lib), a = atOf(node);
-        const at = [a[0], a[1]];
-        if (a[2]) at.push(a[2]);
-        setKid(fresh, "at", at, ["descr", "tags", "property"], true);
+        const at2 = [a[0], a[1]];
+        if (a[2]) at2.push(a[2]);
+        setKid(fresh, "at", at2, ["descr", "tags", "property"], true);
         setKid(fresh, "uuid", [fp.id], ["at"]);
         for (const name of ["Reference", "Value"]) {
           const from = prop(node, name), to = prop(fresh, name);
@@ -10203,12 +10216,12 @@ function footprintFromLibrary(mod, fpid, newUuid2) {
 function schematicParity(doc, netlist) {
   const out = [];
   const fps = Array.from(doc.items.values()).filter((it) => it.kind === "footprint");
-  const at = (fp) => {
+  const at2 = (fp) => {
     const a = atOf(fp.node);
     return [a[0] || 0, a[1] || 0];
   };
   const say = (code, text2, fp) => {
-    const p = fp ? at(fp) : [0, 0];
+    const p = fp ? at2(fp) : [0, 0];
     out.push({ code, severity: "warning", x: p[0], y: p[1], text: text2, ids: fp ? [fp.id] : [] });
   };
   const byPath = /* @__PURE__ */ new Map(), byRef2 = /* @__PURE__ */ new Map();
@@ -10313,27 +10326,27 @@ function sheetNodeText(inst, rootName) {
 var pt2 = (f, p) => `(${f(p ? p[0] : 0)}, ${f(p ? p[1] : 0)})`;
 function describeMember(m, doc, f) {
   const it = doc ? doc.items.get(m.id) : null, n2 = it ? it.node : null;
-  const at = n2 ? atOf(n2).slice(0, 2) : null;
+  const at2 = n2 ? atOf(n2).slice(0, 2) : null;
   switch (m.kind) {
     case "pin": {
       const shown = m.pinName && m.pinName !== "~" ? unescapeNetName(m.pinName) : "";
-      return { label: `Symbol '${m.ref || "?"}' pin '${unescapeNetName(m.pin || "")}'` + (shown ? ` (${shown})` : ""), at };
+      return { label: `Symbol '${m.ref || "?"}' pin '${unescapeNetName(m.pin || "")}'` + (shown ? ` (${shown})` : ""), at: at2 };
     }
     case "sheet_pin":
-      return { label: `Sheet '${m.text || ""}' pin '${unescapeNetName(m.pin || "")}'`, at };
+      return { label: `Sheet '${m.text || ""}' pin '${unescapeNetName(m.pin || "")}'`, at: at2 };
     case "label":
-      return { label: `Label '${unescapeNetName(m.text || "")}' at ${pt2(f, at)}`, at };
+      return { label: `Label '${unescapeNetName(m.text || "")}' at ${pt2(f, at2)}`, at: at2 };
     case "global_label":
-      return { label: `Global label '${unescapeNetName(m.text || "")}' at ${pt2(f, at)}`, at };
+      return { label: `Global label '${unescapeNetName(m.text || "")}' at ${pt2(f, at2)}`, at: at2 };
     case "hierarchical_label":
-      return { label: `Hierarchical label '${unescapeNetName(m.text || "")}' at ${pt2(f, at)}`, at };
+      return { label: `Hierarchical label '${unescapeNetName(m.text || "")}' at ${pt2(f, at2)}`, at: at2 };
     case "netclass_flag":
     case "directive_label":
-      return { label: `Netclass label '${unescapeNetName(m.text || (n2 ? str(n2[1]) : ""))}' at ${pt2(f, at)}`, at };
+      return { label: `Netclass label '${unescapeNetName(m.text || (n2 ? str(n2[1]) : ""))}' at ${pt2(f, at2)}`, at: at2 };
     case "junction":
-      return { label: `Junction at ${pt2(f, at)}`, at };
+      return { label: `Junction at ${pt2(f, at2)}`, at: at2 };
     case "no_connect":
-      return { label: `No-Connect at ${pt2(f, at)}`, at };
+      return { label: `No-Connect at ${pt2(f, at2)}`, at: at2 };
     case "wire":
     case "bus": {
       const p = n2 ? ptsOf(n2) : [];
@@ -10341,11 +10354,11 @@ function describeMember(m, doc, f) {
     }
     case "bus_entry": {
       const s = n2 ? kid(n2, "size") : null;
-      const e = at ? [at[0] + num(s ? s[1] : 0), at[1] + num(s ? s[2] : 0)] : null;
-      return { label: `Bus to wire entry from ${pt2(f, at)} to ${pt2(f, e)}`, at };
+      const e = at2 ? [at2[0] + num(s ? s[1] : 0), at2[1] + num(s ? s[2] : 0)] : null;
+      return { label: `Bus to wire entry from ${pt2(f, at2)} to ${pt2(f, e)}`, at: at2 };
     }
     default:
-      return { label: m.kind, at };
+      return { label: m.kind, at: at2 };
   }
 }
 var NOT_LISTED = /* @__PURE__ */ new Set(["wire", "bus", "junction", "bus_entry"]);
@@ -10812,10 +10825,10 @@ function boardItemBox(item, IU = 1e6) {
     return [x0, y0, Math.max(xs[0], xs[1]) + radius - x0 + 1, Math.max(ys[0], ys[1]) + radius - y0 + 1];
   }
   if (k === "via") {
-    const at = pt3(n2, "at");
-    if (!at) return null;
+    const at2 = pt3(n2, "at");
+    if (!at2) return null;
     const sN = kid(n2, "size"), dN = kid(n2, "drill");
-    const radius = Math.floor((Math.max(iu(sN ? num(sN[1]) : 0, IU), iu(dN ? num(dN[1]) : 0, IU)) + 1) / 2), x = iu(at[0], IU), y = iu(at[1], IU);
+    const radius = Math.floor((Math.max(iu(sN ? num(sN[1]) : 0, IU), iu(dN ? num(dN[1]) : 0, IU)) + 1) / 2), x = iu(at2[0], IU), y = iu(at2[1], IU);
     return [x - radius, y - radius, 2 * radius + 1, 2 * radius + 1];
   }
   const b = new Box();
@@ -10955,15 +10968,15 @@ function setPadChild(pad, key2, text2) {
     return;
   }
   const rank = PAD_ORDER.indexOf(key2);
-  let at = pad.length;
+  let at2 = pad.length;
   for (let j = 4; j < pad.length; j++) {
     const c = pad[j];
     if (isList4(c) && PAD_ORDER.indexOf(String(c[0])) > rank) {
-      at = j;
+      at2 = j;
       break;
     }
   }
-  pad.splice(at, 0, n2);
+  pad.splice(at2, 0, n2);
 }
 var TECH = [
   ["Front adhesive", "F.Adhes"],
@@ -11665,8 +11678,8 @@ function addRow(node0, isPcb, row2, below, uuid) {
   const pos = tablePosition(node, isPcb);
   const sources = Array.from({ length: T.cols }, (_, c) => T.cells[row2 * T.cols + c]);
   const cells = T.cells.slice();
-  const at = (below ? row2 + 1 : row2) * T.cols;
-  cells.splice(at, 0, ...sources.map((s) => copyCell(s, uuid())));
+  const at2 = (below ? row2 + 1 : row2) * T.cols;
+  cells.splice(at2, 0, ...sources.map((s) => copyCell(s, uuid())));
   const rows = T.rows + 1, heights = T.heights.slice(0, Math.max(T.heights.length, rows));
   for (let r = rows - 1; r > row2; r--) heights[r] = at0(heights, r - 1);
   setCells(node, cells);
@@ -12718,10 +12731,10 @@ root.KiCadCanvas = api;
   }
   function labelNode(kind, text2, p, rot3) {
     rot3 = (Math.round(rot3 || 0) % 360 + 360) % 360;
-    const at = ["at", r45(p[0]), r45(p[1]), rot3];
-    if (kind === "label") return ["label", text2, at, ["effects", fontNode(1.27), labelJustify(kind, rot3)]];
-    if (kind === "text") return ["text", text2, ["exclude_from_sim", "no"], at, ["effects", fontNode(1.27), labelJustify(kind, rot3)]];
-    const n2 = [kind, text2, ["shape", "input"], at];
+    const at2 = ["at", r45(p[0]), r45(p[1]), rot3];
+    if (kind === "label") return ["label", text2, at2, ["effects", fontNode(1.27), labelJustify(kind, rot3)]];
+    if (kind === "text") return ["text", text2, ["exclude_from_sim", "no"], at2, ["effects", fontNode(1.27), labelJustify(kind, rot3)]];
+    const n2 = [kind, text2, ["shape", "input"], at2];
     if (kind === "global_label") n2.push(["fields_autoplaced", "yes"]);
     n2.push(["effects", fontNode(1.27), labelJustify(kind, rot3)], ["uuid", K7.newUuid()]);
     if (kind === "global_label") n2.push(["property", "Intersheetrefs", "${INTERSHEET_REFS}", ["at", r45(p[0]), r45(p[1]), 0], ["hide", "yes"], ["effects", fontNode(1.27), ["justify", "left"]]]);
@@ -13257,22 +13270,22 @@ root.KiCadCanvas = api;
     return best;
   }
   function pickNonSymbol(ctx, mm2) {
-    const hit4 = hitNonSymbol(ctx.doc, mm2[0], mm2[1], Math.max(0.3, 5 * mmPerPx(ctx)));
-    if (!hit4) return null;
+    const hit5 = hitNonSymbol(ctx.doc, mm2[0], mm2[1], Math.max(0.3, 5 * mmPerPx(ctx)));
+    if (!hit5) return null;
     const allowed = root4.CollabEditor && root4.CollabEditor.pickAllowed;
-    if (allowed && !allowed(hit4)) return null;
+    if (allowed && !allowed(hit5)) return null;
     const pinExact = root4.CollabEditor && root4.CollabEditor.pinExactAt;
-    if (hit4.kind !== "junction" && pinExact && pinExact([mm2[0], mm2[1]])) return null;
+    if (hit5.kind !== "junction" && pinExact && pinExact([mm2[0], mm2[1]])) return null;
     const symId = K7.hitTest(ctx.doc, mm2[0], mm2[1], 0.5);
-    if (symId && !LINE_KINDS.has(hit4.kind)) {
+    if (symId && !LINE_KINDS.has(hit5.kind)) {
       const sym = ctx.doc.items.get(symId);
-      if (sym && area3(sym.bbox) < area3(rectOf(hit4))) return null;
+      if (sym && area3(sym.bbox) < area3(rectOf(hit5))) return null;
     }
-    return hit4;
+    return hit5;
   }
   function pickAny(ctx, mm2) {
-    const hit4 = pickNonSymbol(ctx, mm2);
-    if (hit4) return hit4;
+    const hit5 = pickNonSymbol(ctx, mm2);
+    if (hit5) return hit5;
     const id = K7.hitTest(ctx.doc, mm2[0], mm2[1], Math.max(0.3, 5 * mmPerPx(ctx)));
     return id ? ctx.doc.items.get(id) || null : null;
   }
@@ -13458,7 +13471,7 @@ ${body}
     }
     return out;
   }
-  function pasteChanges(doc, parsed, at, opts) {
+  function pasteChanges(doc, parsed, at2, opts) {
     const libs = [];
     for (const lib of parsed.libs) {
       const name = str3(lib[1]);
@@ -13490,7 +13503,7 @@ ${body}
       assignPastedRef(doc, n2, used);
     }
     const lead = fresh.find((n2) => n2[0] === "symbol") || fresh[0], a = anchorOf(lead[0], lead);
-    const dx = r45(at[0] - a[0]), dy = r45(at[1] - a[1]);
+    const dx = r45(at2[0] - a[0]), dy = r45(at2[1] - a[1]);
     for (const n2 of fresh) shiftNode(n2[0], n2, dx, dy);
     const changes = [], items = [];
     for (const n2 of fresh) {
@@ -13536,12 +13549,12 @@ ${body}
   function canFollow(ctx) {
     return S2.forceFollow || typeof document !== "undefined" && !!S2.dom && !!ctx.stage;
   }
-  function followPaste(ctx, ids, libs, at, label) {
+  function followPaste(ctx, ids, libs, at2, label) {
     const items = ids.map((id) => ctx.doc.items.get(id)).filter(Boolean);
     if (!items.length) return false;
     const mode2 = S2.dragMode;
     S2.dragMode = "move";
-    const d = beginDrag(ctx, items, at, false, { plain: true });
+    const d = beginDrag(ctx, items, at2, false, { plain: true });
     if (!d) {
       S2.dragMode = mode2;
       return false;
@@ -13568,7 +13581,7 @@ ${body}
     if (!editable(ctx)) return false;
     const KD = typeof root4.KDialogs !== "undefined" ? root4.KDialogs : null;
     if (opts && (opts.pasteMode || opts.keepAnnotations !== void 0) || !KD || !KD.open) return pasteSelection(ctx, Object.assign({ keepAnnotations: true }, opts || {}));
-    const at = snapCursor(ctx);
+    const at2 = snapCursor(ctx);
     let mode2 = S2.annotateAuto ? "unique" : "remove";
     const choices = [
       ["unique", "Assign unique reference designators to pasted symbols", "Finds the next available reference designator for any designators that already exist in the design."],
@@ -13585,7 +13598,7 @@ ${body}
         });
       },
       ok() {
-        setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode2, at })), 0);
+        setTimeout(() => pasteSelection(ctx, Object.assign({}, opts || {}, { pasteMode: mode2, at: at2 })), 0);
       }
     });
     return true;
@@ -13739,9 +13752,9 @@ ${body}
       }
       set value(v) {
         const os2 = this.options, want = String(v);
-        const hit4 = os2.find((o) => o.value === want) || null;
-        for (const o of os2) o.selected = o === hit4;
-        this.none = hit4 ? -1 : os2.length;
+        const hit5 = os2.find((o) => o.value === want) || null;
+        for (const o of os2) o.selected = o === hit5;
+        this.none = hit5 ? -1 : os2.length;
         this.sync();
       }
       get disabled() {
@@ -14011,10 +14024,10 @@ ${body}
         pop.replaceChildren(...os2.flatMap((o, i) => {
           const hd = this.head(o, os2[i - 1], "ksel-head");
           if (this.isSep(o)) {
-            const r23 = document.createElement("div");
-            r23.className = "ksel-sep";
-            r23.setAttribute("role", "separator");
-            return hd ? [hd, r23] : [r23];
+            const r24 = document.createElement("div");
+            r24.className = "ksel-sep";
+            r24.setAttribute("role", "separator");
+            return hd ? [hd, r24] : [r24];
           }
           const r = document.createElement("div");
           r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
@@ -14617,8 +14630,8 @@ ${body}
     const c = cursorOf(ctx);
     let lines = selectedItems(ctx).filter((x) => isNetLine(x.kind) && ptsOf2(x.node).length === 2);
     if (!lines.length) {
-      const hit4 = hitNonSymbol(ctx.doc, c[0], c[1], Math.max(0.3, 5 * mmPerPx(ctx)));
-      if (hit4 && isNetLine(hit4.kind)) lines = [hit4];
+      const hit5 = hitNonSymbol(ctx.doc, c[0], c[1], Math.max(0.3, 5 * mmPerPx(ctx)));
+      if (hit5 && isNetLine(hit5.kind)) lines = [hit5];
     }
     if (!lines.length) return false;
     const doc = ctx.doc, label = mode2 === "slice" ? "Slice Wire" : "Break Wire";
@@ -14670,10 +14683,10 @@ ${body}
     setSelectionIds(ctx, mode2 === "break" ? cuts.flatMap((x) => [x.head.id, x.tail.id]) : cuts.map((x) => x.head.id));
     return true;
   }
-  function splitLocal(doc, brk, item, at, force) {
+  function splitLocal(doc, brk, item, at2, force) {
     const pts = ptsOf2(item.node);
     if (pts.length !== 2) return null;
-    const q = force ? [r45(at[0]), r45(at[1])] : closestOnSeg(at, pts[0], pts[1]);
+    const q = force ? [r45(at2[0]), r45(at2[1])] : closestOnSeg(at2, pts[0], pts[1]);
     if (!force && (same(q, pts[0]) || same(q, pts[1]))) return null;
     if (!brk.orig.has(item.id) && !brk.local.has(item.id)) brk.orig.set(item.id, deep(item.node));
     const tailNode = deep(item.node);
@@ -16656,8 +16669,8 @@ Link '${target2}' to this file?`)) return null;
   }
   function placeSheetPin(ctx, sheet, name, p, side) {
     const node = deep(sheet.node), pin = sheetPinNode(name, p, side);
-    const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
-    if (at >= 0) node.splice(at, 0, pin);
+    const at2 = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
+    if (at2 >= 0) node.splice(at2, 0, pin);
     else node.push(pin);
     ctx.commit([modChange(ctx.doc, sheet, node)], "sheet pin");
     ctx.requestRender();
@@ -17208,8 +17221,8 @@ Link '${target2}' to this file?`)) return null;
       const s = kid4(n2, "start"), e = kid4(n2, "end");
       return [Math.min(num7(s[1]), num7(e[1])), Math.min(num7(s[2]), num7(e[2])), Math.max(num7(s[1]), num7(e[1])), Math.max(num7(s[2]), num7(e[2]))];
     }
-    const at = kid4(n2, "at"), sz = kid4(n2, "size");
-    const x = num7(at[1]), y = num7(at[2]), w = num7(sz[1]), h = num7(sz[2]);
+    const at2 = kid4(n2, "at"), sz = kid4(n2, "size");
+    const x = num7(at2[1]), y = num7(at2[2]), w = num7(sz[1]), h = num7(sz[2]);
     return [Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)];
   }
   function circleOf(a, b, c) {
@@ -17421,9 +17434,9 @@ Link '${target2}' to this file?`)) return null;
         e[1] = b[2];
         e[2] = b[3];
       } else {
-        const at = kid4(n2, "at"), sz = kid4(n2, "size");
-        at[1] = b[0];
-        at[2] = b[1];
+        const at2 = kid4(n2, "at"), sz = kid4(n2, "size");
+        at2[1] = b[0];
+        at2[2] = b[1];
         sz[1] = r45(b[2] - b[0]);
         sz[2] = r45(b[3] - b[1]);
       }
@@ -17432,9 +17445,9 @@ Link '${target2}' to this file?`)) return null;
       const fromRight = idx === 1 || idx === 3 || edge === 1, fromBottom = idx === 2 || idx === 3 || edge === 2;
       const [mw, mh] = sheetMin(pe.orig, ob, fromRight, fromBottom);
       const b = editBox(ob, ep, idx, p, mw, mh).map(r45);
-      const at = kid4(n2, "at"), sz = kid4(n2, "size"), dx = r45(b[0] - ob[0]), dy = r45(b[1] - ob[1]);
-      at[1] = b[0];
-      at[2] = b[1];
+      const at2 = kid4(n2, "at"), sz = kid4(n2, "size"), dx = r45(b[0] - ob[0]), dy = r45(b[1] - ob[1]);
+      at2[1] = b[0];
+      at2[2] = b[1];
       sz[1] = r45(b[2] - b[0]);
       sz[2] = r45(b[3] - b[1]);
       if (dx || dy) for (const f of kids2(n2, "property")) {
@@ -17605,11 +17618,11 @@ Link '${target2}' to this file?`)) return null;
   }
   var DANGLE_LABEL_COLOR = { label: "label", global_label: "glabel", hierarchical_label: "hlabel", netclass_flag: "netclass", directive_label: "netclass" };
   function danglingEnds(doc) {
-    const at = /* @__PURE__ */ new Map(), key2 = (p) => r45(p[0]) + "," + r45(p[1]);
+    const at2 = /* @__PURE__ */ new Map(), key2 = (p) => r45(p[0]) + "," + r45(p[1]);
     const add = (p, type, item) => {
       const k = key2(p);
-      let l = at.get(k);
-      if (!l) at.set(k, l = []);
+      let l = at2.get(k);
+      if (!l) at2.set(k, l = []);
       l.push({ type, item });
     };
     const lines = [], pins = [], labels = [];
@@ -17645,19 +17658,19 @@ Link '${target2}' to this file?`)) return null;
       if (it.kind !== "wire") continue;
       const p = ptsOf2(it.node);
       for (const e of [p[0], p[p.length - 1]]) {
-        const l = at.get(key2(e)) || [];
+        const l = at2.get(key2(e)) || [];
         if (!l.some((x) => x.item !== it && x.type !== "BUS_END" && x.type !== "BUS_ENTRY_END")) out.push({ p: e, what: "wire", item: it, color: "wire" });
       }
     }
     const PIN_OK = /* @__PURE__ */ new Set(["PIN_END", "LABEL_END", "SHEET_LABEL_END", "WIRE_END", "NO_CONNECT_END", "JUNCTION_END"]);
     for (const { q, item } of pins) {
       if (q.hidden && !globalPowerPin(doc, item, q)) continue;
-      const l = at.get(key2([q.x, q.y])) || [];
+      const l = at2.get(key2([q.x, q.y])) || [];
       if (!l.some((x) => x.item !== item && PIN_OK.has(x.type))) out.push({ p: [q.x, q.y], what: "pin", item, color: "pin" });
     }
     const LABEL_OK = /* @__PURE__ */ new Set(["PIN_END", "NO_CONNECT_END", "LABEL_END", "SHEET_LABEL_END"]);
     for (const lb of labels) {
-      const l = at.get(key2(lb.p)) || [];
+      const l = at2.get(key2(lb.p)) || [];
       if (l.some((x) => x.item !== lb.item && LABEL_OK.has(x.type))) continue;
       if (lines.some((ln) => segs(ln).some(([a, b]) => segDist2(lb.p, a, b) <= 1e-3))) continue;
       out.push({ p: lb.p, what: "label", item: lb.item, color: lb.color });
@@ -17905,13 +17918,13 @@ Link '${target2}' to this file?`)) return null;
   }
   var NET_PICK = /* @__PURE__ */ new Set(["wire", "bus", "junction", "bus_entry", "label", "global_label", "hierarchical_label", "netclass_flag", "directive_label"]);
   function terminalsOf(doc, it) {
-    const k = it.kind, n2 = it.node, at = () => atOf2(n2).slice(0, 2).map(r45);
+    const k = it.kind, n2 = it.node, at2 = () => atOf2(n2).slice(0, 2).map(r45);
     if (isNetLine(k)) return ptsOf2(n2).map((p) => ({ p: p.map(r45), net: k }));
-    if (k === "junction" || k === "netclass_flag" || k === "directive_label") return [{ p: at(), net: "any" }];
+    if (k === "junction" || k === "netclass_flag" || k === "directive_label") return [{ p: at2(), net: "any" }];
     if (k === "bus_entry") return connPoints(doc, it).map((p) => ({ p, net: "any" }));
-    if (k === "label") return [{ p: at(), net: "any", key: "local:" + str3(n2[1]) }];
-    if (k === "global_label") return [{ p: at(), net: "any", key: "global:" + str3(n2[1]) }];
-    if (k === "hierarchical_label") return [{ p: at(), net: "any", key: "hier:" + str3(n2[1]) }];
+    if (k === "label") return [{ p: at2(), net: "any", key: "local:" + str3(n2[1]) }];
+    if (k === "global_label") return [{ p: at2(), net: "any", key: "global:" + str3(n2[1]) }];
+    if (k === "hierarchical_label") return [{ p: at2(), net: "any", key: "hier:" + str3(n2[1]) }];
     if (k === "symbol") {
       const libId = str3((kid4(n2, "lib_id") || [])[1]), value = kids2(n2, "property").find((p) => str3(p[1]) === "Value");
       const key2 = isPowerSymbol(doc, libId) && value && symbolPins(doc, it).some((q) => q.type === "power_in") ? "global:" + str3(value[2]) : void 0;
@@ -17982,8 +17995,8 @@ Link '${target2}' to this file?`)) return null;
   }
   function pickNet(ctx, mm2) {
     const doc = ctx.doc, tol = Math.max(0.3, 5 * mmPerPx(ctx)), pinTol = Math.max(tol, 0.6);
-    const hit4 = hitNonSymbol(doc, mm2[0], mm2[1], tol);
-    if (hit4 && NET_PICK.has(hit4.kind)) return { item: hit4, at: mm2 };
+    const hit5 = hitNonSymbol(doc, mm2[0], mm2[1], tol);
+    if (hit5 && NET_PICK.has(hit5.kind)) return { item: hit5, at: mm2 };
     const pins = pinsAt(doc, mm2[0], mm2[1], pinTol);
     if (pins.length) return { item: pins[0].item, at: [pins[0].x, pins[0].y] };
     for (const it of doc.items.values()) if (it.kind === "sheet") for (const pin of kids2(it.node, "pin")) {
@@ -18268,7 +18281,7 @@ Link '${target2}' to this file?`)) return null;
       return;
     }
     if (S2.tool === "delete") {
-      const hit4 = ctx.viewOnly ? null : pickAny(ctx, mm2), id = hit4 ? hit4.id : null;
+      const hit5 = ctx.viewOnly ? null : pickAny(ctx, mm2), id = hit5 ? hit5.id : null;
       if (id !== S2.hover) {
         S2.hover = id;
         ctx.requestRender();
@@ -18681,8 +18694,8 @@ Link '${target2}' to this file?`)) return null;
       return;
     }
     S2.autoPress = autostartAt(ctx, mm2, ev, true) ? { mm: mm2, client: [ev.clientX, ev.clientY], mods: ev } : null;
-    const hit4 = ctx.viewOnly ? null : pickNonSymbol(ctx, mm2);
-    if (!hit4) {
+    const hit5 = ctx.viewOnly ? null : pickNonSymbol(ctx, mm2);
+    if (!hit5) {
       if (S2.sel) {
         S2.sel = null;
         ctx.requestRender();
@@ -18691,10 +18704,10 @@ Link '${target2}' to this file?`)) return null;
     }
     ev.stopImmediatePropagation();
     ev.preventDefault();
-    S2.sel = hit4.id;
+    S2.sel = hit5.id;
     S2.hover = null;
     ctx.setSelected(null);
-    S2.pending = { item: hit4, mm: mm2 };
+    S2.pending = { item: hit5, mm: mm2 };
     try {
       ctx.stage.setPointerCapture(ev.pointerId);
     } catch (e) {
@@ -18759,7 +18772,7 @@ Link '${target2}' to this file?`)) return null;
       }
       return;
     }
-    const hit4 = ctx.viewOnly ? null : pickNonSymbol(ctx, mm2), id = hit4 ? hit4.id : null;
+    const hit5 = ctx.viewOnly ? null : pickNonSymbol(ctx, mm2), id = hit5 ? hit5.id : null;
     if (id !== S2.hover) {
       S2.hover = id;
       ctx.requestRender();
@@ -19390,8 +19403,8 @@ Link '${target2}' to this file?`)) return null;
     return true;
   }
   function insertField2(node, p) {
-    const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances"));
-    if (at >= 0) node.splice(at, 0, p);
+    const at2 = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances"));
+    if (at2 >= 0) node.splice(at2, 0, p);
     else node.push(p);
   }
   var FLAG_KEYS = { setDNP: ["dnp", "yes", "no"], setExcludeFromBOM: ["in_bom", "no", "yes"], setExcludeFromSim: ["exclude_from_sim", "yes", "no"], setExcludeFromBoard: ["on_board", "no", "yes"], setExcludeFromPosFiles: ["in_pos_files", "no", "yes"] };
@@ -19402,12 +19415,12 @@ Link '${target2}' to this file?`)) return null;
       k[1] = val;
       return n2;
     }
-    let at = -1;
+    let at2 = -1;
     for (const a of FLAG_AFTER[key2] || []) {
-      at = n2.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === a);
-      if (at > 0) break;
+      at2 = n2.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === a);
+      if (at2 > 0) break;
     }
-    n2.splice(at > 0 ? at + 1 : n2.length, 0, [key2, val]);
+    n2.splice(at2 > 0 ? at2 + 1 : n2.length, 0, [key2, val]);
     return n2;
   }
   function toggleSymbolFlag(ctx, which) {
@@ -19858,8 +19871,8 @@ Link '${target2}' to this file?`)) return null;
         if (o.kind !== "hierarchical_label" || have.has(str3(o.node[1]))) continue;
         const py = Math.min(y + h, r45(y + 1.27 * ++row2));
         const pin = sheetPinNode(str3(o.node[1]), [x, py], "left");
-        const at = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
-        if (at >= 0) node.splice(at, 0, pin);
+        const at2 = node.findIndex((c) => Array.isArray(c) && c[0] === "instances");
+        if (at2 >= 0) node.splice(at2, 0, pin);
         else node.push(pin);
         have.add(str3(o.node[1]));
         added2++;
@@ -20007,9 +20020,9 @@ Link '${target2}' to this file?`)) return null;
     return true;
   }
   function selectNode(ctx) {
-    const hit4 = hitNonSymbol(ctx.doc, cursorOf(ctx)[0], cursorOf(ctx)[1], Math.max(0.3, 5 * mmPerPx(ctx)));
-    if (!hit4 || !isNetLine(hit4.kind)) return false;
-    setSelectionIds(ctx, [hit4.id]);
+    const hit5 = hitNonSymbol(ctx.doc, cursorOf(ctx)[0], cursorOf(ctx)[1], Math.max(0.3, 5 * mmPerPx(ctx)));
+    if (!hit5 || !isNetLine(hit5.kind)) return false;
+    setSelectionIds(ctx, [hit5.id]);
     return true;
   }
   function stepNetItem(ctx, dir) {
@@ -20082,8 +20095,8 @@ Link '${target2}' to this file?`)) return null;
     }
     return best;
   }
-  function unfoldBus(ctx, bus, member, at) {
-    const doc = ctx.doc, c = at || cursorOf(ctx), snapped = ctx.snap([c[0], c[1]]).map(r45);
+  function unfoldBus(ctx, bus, member, at2) {
+    const doc = ctx.doc, c = at2 || cursorOf(ctx), snapped = ctx.snap([c[0], c[1]]).map(r45);
     const p = nearestOnLine(bus, snapped);
     if (!p) return null;
     const seg = segs(bus)[0], horizontal = Math.abs(seg[0][1] - seg[1][1]) < 1e-6, vertical = Math.abs(seg[0][0] - seg[1][0]) < 1e-6;
@@ -20105,8 +20118,8 @@ Link '${target2}' to this file?`)) return null;
     const doc = ctx.doc;
     let bus = opts.bus ? typeof opts.bus === "string" ? doc.items.get(opts.bus) : opts.bus : selectedItems(ctx).find((it) => it.kind === "bus");
     if (!bus) {
-      const c = cursorOf(ctx), hit4 = hitNonSymbol(doc, c[0], c[1], Math.max(0.6, 8 * mmPerPx(ctx)));
-      if (hit4 && hit4.kind === "bus") bus = hit4;
+      const c = cursorOf(ctx), hit5 = hitNonSymbol(doc, c[0], c[1], Math.max(0.6, 8 * mmPerPx(ctx)));
+      if (hit5 && hit5.kind === "bus") bus = hit5;
     }
     if (!bus) {
       ctx.toast("Select a bus first");
@@ -20472,8 +20485,8 @@ Link '${target2}' to this file?`)) return null;
     if (!p) {
       if (!want) return false;
       p = K7.parse(`(pin ${JSON.stringify(ref.number)} (uuid ${JSON.stringify(K7.newUuid())}))`);
-      const at = n2.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "instances");
-      if (at > 0) n2.splice(at, 0, p);
+      const at2 = n2.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "instances");
+      if (at2 > 0) n2.splice(at2, 0, p);
       else n2.push(p);
     }
     const ai = p.findIndex((c, j) => j > 0 && Array.isArray(c) && c[0] === "alternate");
@@ -20514,9 +20527,9 @@ Link '${target2}' to this file?`)) return null;
     for (const l of labels) text2.set(l.id, str3(l.node[1]));
     for (let i = 0; i < labels.length - 1; i++) {
       const a = labels[i], b = labels[(i + 1) % labels.length];
-      const at = text2.get(a.id), bt = text2.get(b.id);
+      const at2 = text2.get(a.id), bt = text2.get(b.id);
       text2.set(a.id, bt);
-      text2.set(b.id, at);
+      text2.set(b.id, at2);
     }
     const changes = [];
     for (const l of new Set(labels)) {
@@ -20986,19 +20999,19 @@ Link '${target2}' to this file?`)) return null;
   };
   var ANGLED = (c) => isList5(c) && (c[0] === "pad" || c[0] === "property" || c[0] === "fp_text") && !!K7.kid(c, "at");
   function setAngle(c, a) {
-    const at = K7.kid(c, "at");
+    const at2 = K7.kid(c, "at");
     a = norm1803(r63(a));
     if (a === 0 && c[0] === "pad") {
-      at.length = Math.min(at.length, 3);
+      at2.length = Math.min(at2.length, 3);
       return;
     }
-    if (at.length >= 4) at[3] = a;
-    else if (a !== 0) at.push(a);
+    if (at2.length >= 4) at2[3] = a;
+    else if (a !== 0) at2.push(a);
   }
   function setFootprintAt(node, x, y, a) {
     K7.setAt(node, x, y, a);
-    const at = K7.kid(node, "at");
-    if (at && !K7.kid(node, "transform") && a === 0 && at.length === 4 && typeof at[3] === "number") at.length = 3;
+    const at2 = K7.kid(node, "at");
+    if (at2 && !K7.kid(node, "transform") && a === 0 && at2.length === 4 && typeof at2[3] === "number") at2.length = 3;
   }
   function rotateFootprintNode(node, deg2) {
     const [x, y, a0] = K7.atOf(node);
@@ -21056,8 +21069,8 @@ Link '${target2}' to this file?`)) return null;
       if (!isList5(c)) continue;
       const t = c[0];
       if (ANGLED(c)) {
-        const at = K7.kid(c, "at");
-        at[1] = r63(-K7.num(at[1]));
+        const at2 = K7.kid(c, "at");
+        at2[1] = r63(-K7.num(at2[1]));
         setAngle(c, -(K7.atOf(c)[2] - a0) + a1);
       }
       if (t === "pad") {
@@ -21151,15 +21164,15 @@ Link '${target2}' to this file?`)) return null;
   }
   var translateNode = (node, dx, dy) => mapNodePoints(node, (x, y) => [x + dx, y + dy]);
   function angleKid(node) {
-    const at = K7.kid(node, "at");
-    return at ? K7.num(at[3]) : 0;
+    const at2 = K7.kid(node, "at");
+    return at2 ? K7.num(at2[3]) : 0;
   }
   function setAngleKid(node, a) {
-    const at = K7.kid(node, "at");
-    if (!at) return;
+    const at2 = K7.kid(node, "at");
+    if (!at2) return;
     a = r63(norm3602(a));
-    if (at.length >= 4) at[3] = a;
-    else if (a !== 0) at.push(a);
+    if (at2.length >= 4) at2[3] = a;
+    else if (a !== 0) at2.push(a);
   }
   function rotateNode(node, cx, cy, deg2) {
     const k = node[0];
@@ -21650,24 +21663,24 @@ Link '${target2}' to this file?`)) return null;
       return node;
     }
     if (!on) return node;
-    let at = node.length;
+    let at2 = node.length;
     const before = LOCK_BEFORE[k] || (/^gr_/.test(k) ? ["layer"] : ["layer", "uuid"]);
     for (const b of before) {
       const c = K7.kid(node, b);
       if (c) {
-        at = node.indexOf(c);
+        at2 = node.indexOf(c);
         break;
       }
     }
     if (k === "gr_text" || k === "gr_text_box" || k === "table" || k === "group") {
       const u = K7.kid(node, "uuid");
-      if ((k === "table" || k === "group") && u) at = node.indexOf(u) + 1;
+      if ((k === "table" || k === "group") && u) at2 = node.indexOf(u) + 1;
     }
     if (/^gr_(line|rect|circle|arc|poly|curve)$/.test(k)) {
       const f = K7.kid(node, "fill") || K7.kid(node, "stroke");
-      if (f) at = node.indexOf(f) + 1;
+      if (f) at2 = node.indexOf(f) + 1;
     }
-    node.splice(at, 0, ["locked", "yes"]);
+    node.splice(at2, 0, ["locked", "yes"]);
     return node;
   }
   var lockChanges = (doc, ids, on) => transformChanges(doc, ids, (n2) => {
@@ -21990,14 +22003,14 @@ Link '${target2}' to this file?`)) return null;
     });
     return {
       query(b, slop) {
-        const hit4 = new Set(big);
+        const hit5 = new Set(big);
         const x0 = Math.floor((b[0] - slop) / cell), x1 = Math.floor((b[2] + slop) / cell), y0 = Math.floor((b[1] - slop) / cell), y1 = Math.floor((b[3] + slop) / cell);
         if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4096) return items.slice();
         for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
           const l = cells.get(key2(x, y));
-          if (l) for (const i of l) hit4.add(i);
+          if (l) for (const i of l) hit5.add(i);
         }
-        return [...hit4].sort((p, q) => p - q).filter((i) => boxesTouch(boxes[i], b, slop)).map((i) => items[i]);
+        return [...hit5].sort((p, q) => p - q).filter((i) => boxesTouch(boxes[i], b, slop)).map((i) => items[i]);
       }
     };
   }
@@ -27419,10 +27432,10 @@ Link '${target2}' to this file?`)) return null;
     });
   }
   function textPrims2(g2, out, knock, log) {
-    const at = out.length;
+    const at2 = out.length;
     textPrimsOf2(g2, out, knock, log);
     const dt = g2.dxfText;
-    if (!dt || g2.knockout || out.length === at) return;
+    if (!dt || g2.knockout || out.length === at2) return;
     const size = N2(g2.size, 1);
     const info = {
       text: S22(g2.raw) || S22(g2.text),
@@ -27437,7 +27450,7 @@ Link '${target2}' to this file?`)) return null;
       bold: !!dt.bold,
       mirror: !!g2.mirror
     };
-    for (let i = at; i < out.length; i++) out[i].text = info;
+    for (let i = at2; i < out.length; i++) out[i].text = info;
   }
   function textPrimsOf2(g2, out, knock, log) {
     const text2 = S22(g2.raw) || S22(g2.text);
@@ -27484,8 +27497,8 @@ Link '${target2}' to this file?`)) return null;
     if (g2.knockout && ends.length) knock.push({ k: "region", pts: knockoutBox2(ends, x0, y0, N2(g2.rot), margin + pen / 2) });
     for (const p of segs) dst.push(p);
   }
-  function geomPrims2(g2, out, knock, log, grow4 = 0) {
-    const w = N2(g2.w) + 2 * grow4;
+  function geomPrims2(g2, out, knock, log, grow5 = 0) {
+    const w = N2(g2.w) + 2 * grow5;
     if (g2.t === "line") {
       const pts = [[N2(g2.x1), N2(g2.y1)], [N2(g2.x2), N2(g2.y2)]];
       polyline2(pts, false, w, g2, out);
@@ -27497,7 +27510,7 @@ Link '${target2}' to this file?`)) return null;
     } else if (g2.t === "circle") {
       const x = N2(g2.x), y = N2(g2.y), r = N2(g2.r);
       if (g2.fill) {
-        const d = 2 * r + (g2.noStroke ? 0 : N2(g2.w)) + 2 * grow4;
+        const d = 2 * r + (g2.noStroke ? 0 : N2(g2.w)) + 2 * grow5;
         if (d > 0) out.push({ k: "circle", x, y, d });
       } else if (w > 0) {
         if (g2.dash) dashed2(circlePoints2(x, y, r, MAX_ERROR3).concat([[x + r, y]]), canvas2().dashPattern(S22(g2.dashType), w), w, out);
@@ -27507,7 +27520,7 @@ Link '${target2}' to this file?`)) return null;
       const pts = g2.pts || [];
       if (pts.length < 2) return;
       if (g2.fill && pts.length >= 3) out.push({ k: "region", pts });
-      if (!g2.noStroke || grow4 > 0) polyline2(pts, !!g2.close, g2.noStroke ? 2 * grow4 : w, g2, out);
+      if (!g2.noStroke || grow5 > 0) polyline2(pts, !!g2.close, g2.noStroke ? 2 * grow5 : w, g2, out);
     } else if (g2.t === "text") textPrims2(g2, out, knock, log);
   }
   function maskMargin2(pad, m, shape2) {
@@ -28265,13 +28278,13 @@ Link '${target2}' to this file?`)) return null;
       }
       return best;
     };
-    const at = (n2) => {
+    const at2 = (n2) => {
       const s = pts[n2.i];
       return n2.i + Math.hypot(n2.q[0] - s[0], n2.q[1] - s[1]) / Math.max(1e-12, Math.hypot(pts[n2.i + 1][0] - s[0], pts[n2.i + 1][1] - s[1]));
     };
     let na = near(a), nb = near(b);
     let P = pts;
-    if (at(na) > at(nb)) {
+    if (at2(na) > at2(nb)) {
       P = pts.slice().reverse();
       const ra = { i: P.length - 2 - na.i, q: na.q }, rb = { i: P.length - 2 - nb.i, q: nb.q };
       na = ra;
@@ -28353,8 +28366,8 @@ Link '${target2}' to this file?`)) return null;
     if (tpb < tpa) [tpa, tpb] = [tpb, tpa];
     if (tb <= tpa || ta >= tpb) return null;
     const tv = [0, tc(p.B), tc(na), tc(nb)].sort((x, y) => x - y), L2 = d[0] * d[0] + d[1] * d[1];
-    const at = (t) => [p.A[0] + d[0] * t / L2, p.A[1] + d[1] * t / L2];
-    const pClip = { A: at(tv[1]), B: at(tv[2]) };
+    const at2 = (t) => [p.A[0] + d[0] * t / L2, p.A[1] + d[1] * t / L2];
+    const pClip = { A: at2(tv[1]), B: at2(tv[2]) };
     return { pClip, nClip: { A: lineProject(n2, pClip.A), B: lineProject(n2, pClip.B) } };
   }
   var DP_PARALLELITY_THRESHOLD = 10;
@@ -29161,21 +29174,21 @@ Link '${target2}' to this file?`)) return null;
     for (const s0 of starts) {
       const prev = /* @__PURE__ */ new Map([[s0, null]]);
       const q = [s0];
-      let hit4 = null;
-      while (q.length && !hit4) {
+      let hit5 = null;
+      while (q.length && !hit5) {
         const a = q.shift();
         for (const b of nodes) {
           if (prev.has(b) || b.net !== s0.net || b.name && !ends.has(b)) continue;
           if (!b.layers.some((l) => a.layers.includes(l)) || shapeGap(a.shape, b.shape) > 1e-6) continue;
           prev.set(b, a);
           if (ends.has(b)) {
-            hit4 = b;
+            hit5 = b;
             break;
           }
           q.push(b);
         }
       }
-      for (let n2 = hit4; n2; n2 = prev.get(n2)) out.add(n2.node);
+      for (let n2 = hit5; n2; n2 = prev.get(n2)) out.add(n2.node);
     }
     return out;
   }
@@ -29511,7 +29524,7 @@ Link '${target2}' to this file?`)) return null;
       n2.ids.push(it.id);
       n2.total += L;
     }
-    const at = (it) => {
+    const at2 = (it) => {
       const a = K7.kid(it.node, "start");
       return [K7.num(a[1]), K7.num(a[2])];
     };
@@ -29521,7 +29534,7 @@ Link '${target2}' to this file?`)) return null;
         const r = rules[i], c = r.constraints.find((k) => k.type === "length");
         if (!c || !ruleMatches(r, doc, s, n2.first, null)) continue;
         if (r.severity === "ignore") break;
-        const name = `rule '${r.name}'`, [x, y] = at(n2.first);
+        const name = `rule '${r.name}'`, [x, y] = at2(n2.first);
         if (c.min != null && n2.total < c.min - 1e-6) out.push(Object.assign(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} min length ${mm4(c.min)}; actual ${mm4(n2.total)})`, n2.ids.slice())));
         else if (c.max != null && n2.total > c.max + 1e-6) out.push(marker("length_out_of_range", r.severity || "error", x, y, `Track length out of range (${name} max length ${mm4(c.max)}; actual ${mm4(n2.total)})`, n2.ids.slice()));
         break;
@@ -29561,7 +29574,7 @@ Link '${target2}' to this file?`)) return null;
           if (g2.c.max != null && skew > g2.c.max + 1e-6) kind = "max";
           else if (g2.c.min != null && n2 !== ref && skew < g2.c.min - 1e-6) kind = "min";
           if (!kind) continue;
-          const [x, y] = at(n2.first);
+          const [x, y] = at2(n2.first);
           out.push(marker("skew_out_of_range", g2.rule.severity || "error", x, y, `Skew between tracks out of range (${name} ${kind} skew ${mm4(kind === "max" ? g2.c.max : g2.c.min)}; actual ${mm4(n2.total - ref.total)}; target net length ${mm4(ref.total)} (from ${ref.name}); actual ${mm4(n2.total)})`, n2.ids.slice()));
         }
       }
@@ -29606,7 +29619,7 @@ Link '${target2}' to this file?`)) return null;
       }
       return null;
     };
-    const at = (it) => xy2(it, "start");
+    const at2 = (it) => xy2(it, "start");
     for (const [name, P] of byNet) {
       const m = matchDpSuffix(name);
       if (m.rv <= 0) continue;
@@ -29645,12 +29658,12 @@ Link '${target2}' to this file?`)) return null;
       let uncFail = false;
       if (uncR && uncR.c.max != null && uncR.c.max >= 0 && uncoupled > uncR.c.max + 1e-6) {
         uncFail = true;
-        const [x, y] = at(N22[0]);
+        const [x, y] = at2(N22[0]);
         out.push(marker("diff_pair_uncoupled_length_too_long", uncR.r.severity || "error", x, y, `Differential uncoupled length too long (rule '${uncR.r.name}' maximum uncoupled length ${mm4(uncR.c.max)}; actual ${mm4(uncoupled)})`, P.concat(N22).map((it) => it.id)));
       }
       if (gapR && (uncFail || !uncR)) for (const d of coupled) {
         if (!d.failMin && !d.failMax) continue;
-        const [x, y] = at(d.n);
+        const [x, y] = at2(d.n);
         out.push(marker("diff_pair_gap_out_of_range", gapR.r.severity || "error", x, y, `Differential pair gap out of range (rule '${gapR.r.name}' ${d.failMin ? "minimum" : "maximum"} gap ${mm4(d.failMin ? gapR.c.min : gapR.c.max)}; actual ${mm4(d.gap)})`, [d.p.id, d.n.id]));
       }
     }
@@ -29681,25 +29694,25 @@ Link '${target2}' to this file?`)) return null;
     }
     return [];
   }
-  function geomShapes(geoms, layer, grow4 = 0) {
+  function geomShapes(geoms, layer, grow5 = 0) {
     const out = [], knock = [];
     const log = new PlotLog2();
     for (const g2 of geoms) {
       if (g2.hiddenText || g2.point || g2.zoneOutline || g2.zoneHatch || g2.pad || g2.hole || g2.padText) continue;
       if (g2.layer === layer) geomPrims2(g2, out, knock, log, 0);
-      else if (g2.maskLayer === layer) geomPrims2(g2, out, knock, log, grow4 || (typeof g2.maskMargin === "number" ? g2.maskMargin : 0));
+      else if (g2.maskLayer === layer) geomPrims2(g2, out, knock, log, grow5 || (typeof g2.maskMargin === "number" ? g2.maskMargin : 0));
     }
     const shapes2 = [];
     for (const p of knock.concat(out)) for (const s of primShapes(p)) shapes2.push(s);
     return shapes2;
   }
-  function bboxOf4(shapes2, grow4) {
+  function bboxOf4(shapes2, grow5) {
     let b = [Infinity, Infinity, -Infinity, -Infinity];
     for (const s of shapes2) {
       const q = shapeBBox(s);
       b = [Math.min(b[0], q[0]), Math.min(b[1], q[1]), Math.max(b[2], q[2]), Math.max(b[3], q[3])];
     }
-    return [b[0] - grow4, b[1] - grow4, b[2] + grow4, b[3] + grow4];
+    return [b[0] - grow5, b[1] - grow5, b[2] + grow5, b[3] + grow5];
   }
   function rawGap(a, b) {
     const core = a.t === "poly" && b.t === "poly" ? polyPolyDist(a.pts, b.pts) : coreDist(a, b);
@@ -29873,18 +29886,18 @@ Link '${target2}' to this file?`)) return null;
           for (const l of ls) {
             if (!layers.has(l)) continue;
             const shape2 = padShape(p);
-            const grow4 = /\.Mask$/.test(l) ? padMaskMargin(p, it, ms) : 0;
+            const grow5 = /\.Mask$/.test(l) ? padMaskMargin(p, it, ms) : 0;
             if (/\.Cu$/.test(l) && npthNoCopper) continue;
-            push({ id: it.id, uuid: K7.uuidOf(p.node) || it.id + ":p" + p.index, kind: "pad", node: p.node, fp: it, layer: l, shapes: [shape2], grow: grow4, net, copper: cu, mask: mk2, pad: p, npthNoCopper });
+            push({ id: it.id, uuid: K7.uuidOf(p.node) || it.id + ":p" + p.index, kind: "pad", node: p.node, fp: it, layer: l, shapes: [shape2], grow: grow5, net, copper: cu, mask: mk2, pad: p, npthNoCopper });
           }
         }
         continue;
       }
       if (it.kind === "zone" && isRuleArea(n2)) continue;
       if (it.kind === "via") {
-        const at = K7.kid(n2, "at");
-        if (!at) continue;
-        const x = K7.num(at[1]), y = K7.num(at[2]);
+        const at2 = K7.kid(n2, "at");
+        if (!at2) continue;
+        const x = K7.num(at2[1]), y = K7.num(at2[2]);
         const size = K7.num((K7.kid(n2, "size") || [0, 0.6])[1], 0.6);
         const ls = K7.kid(n2, "layers");
         const pair = ls ? [K7.str(ls[1]), K7.str(ls[2])] : ["F.Cu", "B.Cu"];
@@ -30070,20 +30083,20 @@ Link '${target2}' to this file?`)) return null;
         const near = mask.filter((m) => touch(e.bbox, m.bbox, clearance + w));
         if (!near.length) continue;
         const gaps = near.map((m) => elementGap(e, m));
-        let hit4 = gaps.findIndex((g2) => collides(g2, clearance));
-        let actual = hit4 >= 0 ? gaps[hit4] : 0;
-        if (hit4 < 0) {
-          for (let i = 0; i < near.length && hit4 < 0; i++) for (let j = i + 1; j < near.length; j++) {
+        let hit5 = gaps.findIndex((g2) => collides(g2, clearance));
+        let actual = hit5 >= 0 ? gaps[hit5] : 0;
+        if (hit5 < 0) {
+          for (let i = 0; i < near.length && hit5 < 0; i++) for (let j = i + 1; j < near.length; j++) {
             if (gaps[i] >= w / 2 + clearance || gaps[j] >= w / 2 + clearance) continue;
             if (elementGap(near[i], near[j]) < w - EPS2) {
-              hit4 = i;
+              hit5 = i;
               actual = 0;
               break;
             }
           }
         }
-        if (hit4 < 0) continue;
-        const [x, y] = centre(e.bbox, near[hit4].bbox);
+        if (hit5 < 0) continue;
+        const [x, y] = centre(e.bbox, near[hit5].bbox);
         out.push(marker("silk_over_copper", defaultSeverity("silk_over_copper"), x, y, "Silkscreen clipped by solder mask" + detail(name, clearance, actual), [e.id]));
       }
     }
@@ -30670,8 +30683,8 @@ Link '${target2}' to this file?`)) return null;
         const dist = tan2 > 0 ? radius / tan2 : 0;
         const r1 = resize(incoming, dist);
         const arcStart = [cur2.p[0] - r1[0], cur2.p[1] - r1[1]];
-        const r23 = resize(perp(incoming), radius);
-        const center = [arcStart[0] + r23[0], arcStart[1] + r23[1]];
+        const r24 = resize(perp(incoming), radius);
+        const center = [arcStart[0] + r24[0], arcStart[1] + r24[1]];
         const arcEnd = reflect(cur2.p, center, arcStart);
         const origin = [arcStart[0] - center[0], arcStart[1] - center[1]];
         out.push(arcStart);
@@ -30723,8 +30736,8 @@ Link '${target2}' to this file?`)) return null;
     return cornerListToPolygon(cs, error);
   }
   function padShapePolygon(pad, shapePos2, maxError = MAX_ERROR_IU) {
-    const at = K7.kid(pad, "at") || [];
-    const orient = num32(at[3]);
+    const at2 = K7.kid(pad, "at") || [];
+    const orient = num32(at2[3]);
     const sz = K7.kid(pad, "size");
     const w = rnd(num32(sz && sz[1]) * IU), h = rnd(num32(sz && sz[2]) * IU);
     const shape2 = str32(pad[3]);
@@ -31290,10 +31303,10 @@ Link '${target2}' to this file?`)) return null;
             const A = chain[ia], B = chain[ib];
             const loc = [Math.trunc((A[0] + B[0]) / 2) / 1e6, Math.trunc((A[1] + B[1]) / 2) / 1e6];
             const dist = Math.round(Math.hypot(A[0] - B[0], A[1] - B[1])) / 1e6;
-            const at = { t: "circle", x: loc[0], y: loc[1], r: 0 };
-            const hit4 = ordered.filter((c) => shapeGap(c.shape, at) <= minW);
-            if (!hit4.length) continue;
-            const r = resolve(rules, "connection_width", doc, s, ruleItem2(hit4[0], layer), hit4[1] ? ruleItem2(hit4[1], layer) : null, Number(s.minConn) || 0);
+            const at2 = { t: "circle", x: loc[0], y: loc[1], r: 0 };
+            const hit5 = ordered.filter((c) => shapeGap(c.shape, at2) <= minW);
+            if (!hit5.length) continue;
+            const r = resolve(rules, "connection_width", doc, s, ruleItem2(hit5[0], layer), hit5[1] ? ruleItem2(hit5[1], layer) : null, Number(s.minConn) || 0);
             if (!r || r.min == null || Math.abs(r.min - minW) > 1e-9) continue;
             const m = marker(
               "connection_width",
@@ -31301,7 +31314,7 @@ Link '${target2}' to this file?`)) return null;
               loc[0],
               loc[1],
               `Copper connection too narrow (${r.name} minimum connection width ${mm4(r.min)}; actual ${mm4(dist)}) (${layerName3(doc, layer)})`,
-              Array.from(new Set(hit4.map((c) => c.id)))
+              Array.from(new Set(hit5.map((c) => c.id)))
             );
             m.layer = layer;
             m.rule = r.name;
@@ -31392,9 +31405,9 @@ Link '${target2}' to this file?`)) return null;
         return;
       }
       const actual = Math.max(0, coreDist(holeShape(a), holeShape(b)) - a.w / 2 - b.w / 2);
-      const hit4 = ruleOf("hole_to_hole", ri(a), ri(b));
-      if (hit4 && hit4.severity === "ignore") return;
-      const min = hit4 && hit4.min != null ? hit4.min : min0, name = hit4 ? hit4.name : "board setup constraints";
+      const hit5 = ruleOf("hole_to_hole", ri(a), ri(b));
+      if (hit5 && hit5.severity === "ignore") return;
+      const min = hit5 && hit5.min != null ? hit5.min : min0, name = hit5 ? hit5.name : "board setup constraints";
       if (min >= 0 && actual < Math.max(0, min - DRC_EPS)) out.push(marker("hole_to_hole", defaultSeverity2("hole_to_hole"), ca[0], ca[1], `Drilled hole too close to other hole (${name} min ${mm4(min)}; actual ${mm4(actual)})`, [p.id, q.id]));
     };
     const reach = Math.max(min0, worstRule, 0.01);
@@ -31474,9 +31487,9 @@ Link '${target2}' to this file?`)) return null;
         if (c.kind !== "pad" || h.kind === "via") {
           if (c.net === hNet && (c.kind !== "pad" || hNet)) continue;
         } else if (hNet && c.net === hNet) continue;
-        const hit4 = ruleOf("hole_clearance", { kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: [...c.layers][0] }, { kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer: [...c.layers][0] });
-        if (hit4 && hit4.severity === "ignore") continue;
-        const clr = hit4 && hit4.min != null ? hit4.min : min0, name = hit4 ? hit4.name : "board setup constraints hole";
+        const hit5 = ruleOf("hole_clearance", { kind: h.kind, node: h.kind === "pad" ? h.pad.node : doc.items.get(h.id).node, layer: [...c.layers][0] }, { kind: c.kind, node: c.kind === "pad" ? c.pad.node : c.item.node, layer: [...c.layers][0] });
+        if (hit5 && hit5.severity === "ignore") continue;
+        const clr = hit5 && hit5.min != null ? hit5.min : min0, name = hit5 ? hit5.name : "board setup constraints hole";
         if (c.kind === "pad" && !(clr > 0)) continue;
         const gap = shapeGap(c.shape, shape2);
         if (gap >= clr - DRC_EPS && !(clr === 0 && gap === 0 && coreDist(c.shape, shape2) < shapeOffset(c.shape) + shapeOffset(shape2) - DRC_EPS)) continue;
@@ -31497,8 +31510,8 @@ Link '${target2}' to this file?`)) return null;
     const out = [];
     const take = (n2, id, tf2, fp, layer) => {
       const k = kindOf(n2);
-      const at = pt4(n2, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K7.ptsOf(n2)[0] : null) || [0, 0];
-      out.push({ id, node: n2, kind: k, layer: layer || layerOf2(n2, "F.SilkS"), pos: tf2(at[0], at[1]), fp });
+      const at2 = pt4(n2, k.endsWith("text_box") ? "start" : "at") || (k.endsWith("text_box") ? K7.ptsOf(n2)[0] : null) || [0, 0];
+      out.push({ id, node: n2, kind: k, layer: layer || layerOf2(n2, "F.SilkS"), pos: tf2(at2[0], at2[1]), fp });
     };
     for (const it of doc.items.values()) {
       const n2 = it.node;
@@ -31531,9 +31544,9 @@ Link '${target2}' to this file?`)) return null;
       const silk = t.layer === "F.SilkS" || t.layer === "B.SilkS";
       const A = { kind: t.kind, node: t.node, layer: t.layer };
       const check2 = (type, implicit, implicitName, actual, what) => {
-        const hit4 = ruleOf(type, A, null);
-        if (hit4 && hit4.severity === "ignore") return;
-        const min = hit4 ? hit4.min : silk ? implicit : null, max = hit4 ? hit4.max : null, name = hit4 ? hit4.name : implicitName;
+        const hit5 = ruleOf(type, A, null);
+        if (hit5 && hit5.severity === "ignore") return;
+        const min = hit5 ? hit5.min : silk ? implicit : null, max = hit5 ? hit5.max : null, name = hit5 ? hit5.name : implicitName;
         if (min != null && min > 0 && actual < min - 1e-9) out.push(marker(type, defaultSeverity2(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} min ${what} ${mm4(min)}; actual ${mm4(actual)})`, [t.id]));
         if (max != null && actual > max + 1e-9) out.push(marker(type, defaultSeverity2(type), t.pos[0], t.pos[1], `${type === "text_height" ? "Text height out of range" : "Text thickness out of range"} (${name} max ${what} ${mm4(max)}; actual ${mm4(actual)})`, [t.id]));
       };
@@ -31828,19 +31841,19 @@ Link '${target2}' to this file?`)) return null;
     const g2 = f && K7.kid(f, "thermal_gap");
     return g2 ? K7.num(g2[1], 0.5) : 0.5;
   }
-  function padOutline(p, grow4) {
+  function padOutline(p, grow5) {
     const s = padShape(p);
     const N22 = 32;
     const out = [];
     if (s.t === "circle") {
       for (let i = 0; i < N22; i++) {
         const a = 2 * Math.PI * i / N22;
-        out.push([s.x + (s.r + grow4) * Math.cos(a), s.y + (s.r + grow4) * Math.sin(a)]);
+        out.push([s.x + (s.r + grow5) * Math.cos(a), s.y + (s.r + grow5) * Math.sin(a)]);
       }
       return out;
     }
     if (s.t === "seg") {
-      const r = s.r + grow4;
+      const r = s.r + grow5;
       const a = Math.atan2(s.b[1] - s.a[1], s.b[0] - s.a[0]);
       for (let i = 0; i <= N22 / 2; i++) {
         const t = a + Math.PI / 2 + Math.PI * i / (N22 / 2);
@@ -31853,7 +31866,7 @@ Link '${target2}' to this file?`)) return null;
       return out;
     }
     if (s.t === "rect") {
-      const rr = Math.max(0, s.rr + grow4);
+      const rr = Math.max(0, s.rr + grow5);
       const hw = s.w / 2 - s.rr, hh = s.h / 2 - s.rr;
       const R2 = rotator2(s.rot || 0);
       const corners2 = [[hw, hh, 0], [-hw, hh, Math.PI / 2], [-hw, -hh, Math.PI], [hw, -hh, 3 * Math.PI / 2]];
@@ -31952,10 +31965,10 @@ Link '${target2}' to this file?`)) return null;
           if (pb[0] > zb[2] || pb[2] < zb[0] || pb[1] > zb[3] || pb[3] < zb[1]) continue;
           if (padZoneConnection(p, fp, z.node) !== "thermal") continue;
           const A = { kind: "pad", node: p.node, parent: fp, layer }, B = { kind: "zone", node: z.node, item: z, layer };
-          const hit4 = rules.length ? evalRuleConstraint(rules, "min_resolved_spokes", doc, s, A, B) : null;
-          if (hit4 && hit4.severity === "ignore") continue;
-          const minCount = hit4 && hit4.min != null ? hit4.min : defMin;
-          const name = hit4 ? hit4.name : "board setup constraints zone fill strategy";
+          const hit5 = rules.length ? evalRuleConstraint(rules, "min_resolved_spokes", doc, s, A, B) : null;
+          if (hit5 && hit5.severity === "ignore") continue;
+          const minCount = hit5 && hit5.min != null ? hit5.min : defMin;
+          const name = hit5 ? hit5.name : "board setup constraints zone fill strategy";
           if (!(minCount > 0)) continue;
           const gh = rules.length ? evalRuleConstraint(rules, "thermal_relief_gap", doc, s, A, B) : null;
           const midGap = (gh && gh.min != null ? gh.min : thermalGap(p, fp, z.node)) / 2;
@@ -32361,10 +32374,10 @@ Link '${target2}' to this file?`)) return null;
         let need = Math.max(clr(a), clr(b), s.minClearance || 0), by = "";
         if (clrRules.length && boxesTouch(a.bbox, b.bbox, maxClr)) {
           const layer = [...a.layers].find((l) => b.layers.has(l)) || "";
-          const hit4 = ruleClearance(clrRules, doc, s, ruleItem2(a, layer), ruleItem2(b, layer));
-          if (hit4) {
-            need = hit4.min > 0 ? Math.max(hit4.min, s.minClearance || 0) : 0;
-            by = hit4.name;
+          const hit5 = ruleClearance(clrRules, doc, s, ruleItem2(a, layer), ruleItem2(b, layer));
+          if (hit5) {
+            need = hit5.min > 0 ? Math.max(hit5.min, s.minClearance || 0) : 0;
+            by = hit5.name;
           }
         }
         if (!need || !boxesTouch(a.bbox, b.bbox, need)) continue;
@@ -32447,9 +32460,9 @@ Link '${target2}' to this file?`)) return null;
     for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
       if (!fps[i].bbox || !fps[j].bbox || !boxesTouch(fps[i].bbox, fps[j].bbox, 0)) continue;
       for (const layer of ["F.CrtYd", "B.CrtYd"]) {
-        let hit4 = false;
-        for (const P of cy[i][layer]) for (const Q of cy[j][layer]) if (polysOverlap(P, Q)) hit4 = true;
-        if (hit4) {
+        let hit5 = false;
+        for (const P of cy[i][layer]) for (const Q of cy[j][layer]) if (polysOverlap(P, Q)) hit5 = true;
+        if (hit5) {
           const [x, y] = boxCenter(fps[i].bbox, fps[j].bbox);
           out.push(marker("courtyards_overlap", "error", x, y, `Courtyards overlap (${fps[i].ref || "footprint"} and ${fps[j].ref || "footprint"} on ${layer})`, [fps[i].id, fps[j].id]));
         }
@@ -32792,8 +32805,8 @@ Link '${target2}' to this file?`)) return null;
         const status = [], attrs = [];
         if (isLocked2(n2)) status.push("Locked");
         if (n2.includes("placed") || K7.kid(n2, "placed")) status.push("autoplaced");
-        const at = K7.kid(n2, "attr");
-        const toks = at ? at.slice(1).map(K7.str) : [];
+        const at2 = K7.kid(n2, "attr");
+        const toks = at2 ? at2.slice(1).map(K7.str) : [];
         if (toks.includes("board_only")) attrs.push("not in schematic");
         if (toks.includes("exclude_from_pos_files")) attrs.push("exclude from pos files");
         if (toks.includes("exclude_from_bom")) attrs.push("exclude from BOM");
@@ -33338,13 +33351,13 @@ Link '${target2}' to this file?`)) return null;
           m = { pts: null, hits: [] };
           for (const df of [false, true]) {
             const pts = legPts2(a, b, df);
-            let hit4 = null;
-            for (let k = 0; k + 1 < pts.length && !hit4; k++) hit4 = segHit(O, pts[k], pts[k + 1], r);
-            if (!hit4) {
+            let hit5 = null;
+            for (let k = 0; k + 1 < pts.length && !hit5; k++) hit5 = segHit(O, pts[k], pts[k + 1], r);
+            if (!hit5) {
               m.pts = pts;
               break;
             }
-            m.hits.push(hit4);
+            m.hits.push(hit5);
           }
           legMemo.set(key2, m);
         }
@@ -33663,7 +33676,7 @@ Link '${target2}' to this file?`)) return null;
     }
     if (layerOf2(item.node) !== S2.layer) setLayer(ctx, layerOf2(item.node));
     const a = pt4(item.node, "start"), b = pt4(item.node, "end");
-    const at = closestOnSeg(mm2, a, b);
+    const at2 = closestOnSeg(mm2, a, b);
     const s = settingsOf2(ctx);
     const st = tuneCopy(S2.tuneSettings[tuneMode()]);
     S2.tune.pattern = {
@@ -33674,8 +33687,8 @@ Link '${target2}' to this file?`)) return null;
       netName: netNameOf3(ctx, line2.net),
       netKey: line2.netKey,
       width: line2.width,
-      origin: at,
-      end: at,
+      origin: at2,
+      end: at2,
       cursor: mm2.slice(),
       st,
       clearance: netClearance(s, line2.netKey),
@@ -34271,7 +34284,7 @@ Link '${target2}' to this file?`)) return null;
     }
     return { scope: name ? unescapeName(name) : "", label: skew ? "current skew" : "current length", value: (skew ? "Skew: " : "Net: ") + msgValue(len, units), min, max };
   }
-  function drawTuneStatus(c, at, px, info) {
+  function drawTuneStatus(c, at2, px, info) {
     const css = (name, dflt) => {
       try {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -34283,7 +34296,7 @@ Link '${target2}' to this file?`)) return null;
     const head = 10 * px, txt = 12 * px, gw = 12 * px, mx = Math.round(12 * 0.4) * px, my = gw;
     const scope = info.scope ? 1 : 0, valueLines = 1, total = scope + 1 + valueLines;
     const w = gw * 38 + mx * 2, h = head * total + txt * valueLines;
-    const ox = at[0] + mx * 2, oy = at[1] - (h + my * 2);
+    const ox = at2[0] + mx * 2, oy = at2[1] - (h + my * 2);
     const ink = css("--color-ink", "#e0e0e0");
     c.save();
     c.globalAlpha = 0.9;
@@ -34959,7 +34972,7 @@ Link '${target2}' to this file?`)) return null;
     }
     return best ? { it, h: best } : null;
   }
-  function addCornerChanges(doc, id, at) {
+  function addCornerChanges(doc, id, at2) {
     const it = doc.items.get(id);
     if (!it) return [];
     if (it.kind === "zone" || it.kind === "gr_poly") {
@@ -34968,8 +34981,8 @@ Link '${target2}' to this file?`)) return null;
       let bi = -1, bd = Infinity, bp = null;
       for (let i = 0; i < pts.length; i++) {
         const a = pts[i], b = pts[(i + 1) % pts.length];
-        const q = closestOnSeg(at, a, b);
-        const d = Math.hypot(q[0] - at[0], q[1] - at[1]);
+        const q = closestOnSeg(at2, a, b);
+        const d = Math.hypot(q[0] - at2[0], q[1] - at2[1]);
         if (d < bd) {
           bd = d;
           bi = i;
@@ -34985,7 +34998,7 @@ Link '${target2}' to this file?`)) return null;
     }
     if (it.kind === "gr_line") {
       const a = pt4(it.node, "start"), b = pt4(it.node, "end");
-      const q = closestOnSeg(at, a, b);
+      const q = closestOnSeg(at2, a, b);
       if (samePt(q, a) || samePt(q, b)) return [];
       const first = clone2(it.node);
       setXY(first, "end", q);
@@ -35000,10 +35013,10 @@ Link '${target2}' to this file?`)) return null;
   function canAddCorner(it) {
     return !!it && (it.kind === "zone" || it.kind === "gr_poly" || it.kind === "gr_line");
   }
-  function canRemoveCorner(doc, id, at) {
+  function canRemoveCorner(doc, id, at2) {
     const it = doc.items.get(id);
     if (!it || it.kind !== "zone" && it.kind !== "gr_poly" || pePolyPts(it.node).length <= 3) return false;
-    return !at || removeCornerChanges(doc, id, at, handleTol()).length > 0;
+    return !at2 || removeCornerChanges(doc, id, at2, handleTol()).length > 0;
   }
   function closestOnSeg(p, a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
@@ -35011,14 +35024,14 @@ Link '${target2}' to this file?`)) return null;
     const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L));
     return [a[0] + t * dx, a[1] + t * dy];
   }
-  function removeCornerChanges(doc, id, at, tol) {
+  function removeCornerChanges(doc, id, at2, tol) {
     const it = doc.items.get(id);
     if (!it || it.kind !== "zone" && it.kind !== "gr_poly") return [];
     const pts = pePolyPts(it.node);
     if (pts.length <= 3) return [];
     let bi = -1, bd = tol;
     pts.forEach((p, i) => {
-      const d = Math.max(Math.abs(p[0] - at[0]), Math.abs(p[1] - at[1]));
+      const d = Math.max(Math.abs(p[0] - at2[0]), Math.abs(p[1] - at2[1]));
       if (d <= bd) {
         bd = d;
         bi = i;
@@ -35040,12 +35053,12 @@ Link '${target2}' to this file?`)) return null;
     const doc = liveDoc();
     if (!doc) return;
     const mm2 = ctx.worldMm(ev);
-    const hit4 = editHandleAt(doc, mm2[0], mm2[1], handleTol());
-    if (!hit4) return;
+    const hit5 = editHandleAt(doc, mm2[0], mm2[1], handleTol());
+    if (!hit5) return;
     ev.stopImmediatePropagation();
     ev.preventDefault();
-    S2.pedit = { id: hit4.it.id, kind: hit4.it.kind, key: hit4.h.key, orig: clone2(hit4.it.node), start: mm2, moved: false, ignoreGrid: !!hit4.h.ignoreGrid };
-    if (isTuningPattern(hit4.it)) genStartEdit(ctx, hit4.it);
+    S2.pedit = { id: hit5.it.id, kind: hit5.it.kind, key: hit5.h.key, orig: clone2(hit5.it.node), start: mm2, moved: false, ignoreGrid: !!hit5.h.ignoreGrid };
+    if (isTuningPattern(hit5.it)) genStartEdit(ctx, hit5.it);
     try {
       stage.setPointerCapture(ev.pointerId);
     } catch (e) {
@@ -35230,17 +35243,17 @@ Link '${target2}' to this file?`)) return null;
     return n2;
   }
   var canHaveNumber = (pad) => str4(pad[2]) !== "np_thru_hole" && !isAperture(pad);
-  function newPadNode(doc, type, selected, at, angle, number) {
+  function newPadNode(doc, type, selected, at2, angle, number) {
     const p = masterPad(doc, type, selected);
     p[1] = canHaveNumber(p) ? number || "" : "";
     const a = K7.kid(p, "at");
     a.length = 1;
-    a.push(r63(at[0]), r63(at[1]));
+    a.push(r63(at2[0]), r63(at2[1]));
     const ang = r63((angle % 360 + 360) % 360);
     if (ang) a.push(ang > 180 ? ang - 360 : ang);
     return p;
   }
-  function placePad(ctx, type, at, angle) {
+  function placePad(ctx, type, at2, angle) {
     const doc = ctx.doc;
     if (!doc) return null;
     const selected = S2.padTemplate || null;
@@ -35250,7 +35263,7 @@ Link '${target2}' to this file?`)) return null;
       number = nextPadNumber(doc, padMemory.lastNumber);
       padMemory.lastNumber = number;
     }
-    const node = newPadNode(doc, type, selected, at, angle, number);
+    const node = newPadNode(doc, type, selected, at2, angle, number);
     const ch = addedChange(doc, node);
     const t = typeFromPad(node);
     if (t) {
@@ -35260,8 +35273,8 @@ Link '${target2}' to this file?`)) return null;
     ctx.commit([ch], "Place pad");
     return ch;
   }
-  function moveAnchorChanges(doc, at) {
-    const [dx, dy] = [-at[0], -at[1]];
+  function moveAnchorChanges(doc, at2) {
+    const [dx, dy] = [-at2[0], -at2[1]];
     if (!dx && !dy) return [];
     const out = [];
     for (const it of doc.items.values()) {
@@ -35443,7 +35456,7 @@ Link '${target2}' to this file?`)) return null;
       used.add(p[2]);
     }
   }
-  function pasteChanges(doc, text2, at, opts) {
+  function pasteChanges(doc, text2, at2, opts) {
     opts = opts || {};
     const parsed = parseClipboard(text2);
     if (!parsed) return { changes: [], ids: [] };
@@ -35454,7 +35467,7 @@ Link '${target2}' to this file?`)) return null;
     if (opts.clearNets) clearNets(nodes, doc);
     const changes = [], ids = [];
     for (const n2 of nodes) {
-      if (at && (at[0] || at[1])) translateNode(n2, at[0], at[1]);
+      if (at2 && (at2[0] || at2[1])) translateNode(n2, at2[0], at2[1]);
       const c = addedChange(doc, n2);
       changes.push(c);
       ids.push(c.id);
@@ -35713,9 +35726,9 @@ Link '${target2}' to this file?`)) return null;
   function solidClr(s, net, o, layer) {
     return routeClearance(s, net, { kind: o.ckind === "hole" ? "hole" : o.ckind === "keepout" ? "keepout" : o.ckind === "edge" ? "edge" : o.ckind, net: o.net, id: o.id, src: o.src }, layer, S2.shoveDoc || null);
   }
-  function shoveNear(SW, st, box, grow4, fn) {
+  function shoveNear(SW, st, box, grow5, fn) {
     const C = SW.CELL, seen = /* @__PURE__ */ new Set();
-    for (let gx = Math.floor((box[0] - grow4) / C); gx <= Math.floor((box[2] + grow4) / C); gx++) for (let gy = Math.floor((box[1] - grow4) / C); gy <= Math.floor((box[3] + grow4) / C); gy++) {
+    for (let gx = Math.floor((box[0] - grow5) / C); gx <= Math.floor((box[2] + grow5) / C); gx++) for (let gy = Math.floor((box[1] - grow5) / C); gy <= Math.floor((box[3] + grow5) / C); gy++) {
       const l = SW.grid.get(gx + "," + gy);
       if (!l) continue;
       for (const o of l) {
@@ -35727,9 +35740,9 @@ Link '${target2}' to this file?`)) return null;
       }
     }
     for (const L of st.lines.values()) fn({ kind: "line", L });
-    for (const [id, at] of st.viaAt) {
+    for (const [id, at2] of st.viaAt) {
       const v = SW.vias.get(id);
-      if (v) fn(Object.assign({}, v, { at, moved: true }));
+      if (v) fn(Object.assign({}, v, { at: at2, moved: true }));
     }
   }
   var lineSegs = (L) => L.pts.length > 1 ? L.pts.slice(0, -1).map((p, i) => [p, L.pts[i + 1]]) : [];
@@ -35775,16 +35788,16 @@ Link '${target2}' to this file?`)) return null;
         if (g2 < solidClr(s, L.net, o, onLayer3) - ROUTE_EPS) score("solid", idx + probeDist(probe2, shapeCorePts(o.shape)[0]), { o });
       }
     };
-    const grow4 = (L.w || 0) / 2 + SW.maxW + 2;
+    const grow5 = (L.w || 0) / 2 + SW.maxW + 2;
     segs.forEach(([a, b], i) => {
       const probe2 = { t: "seg", a, b };
       const box = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])];
-      shoveNear(SW, st, box, grow4, (o) => consider(o, probe2, i * 1e4, L.w / 2, L.layer));
+      shoveNear(SW, st, box, grow5, (o) => consider(o, probe2, i * 1e4, L.w / 2, L.layer));
     });
     if (L.via) {
       const v = L.via;
       const probe2 = { t: "circle", x: v.at[0], y: v.at[1] };
-      for (const layer of v.layers) shoveNear(SW, st, [v.at[0], v.at[1], v.at[0], v.at[1]], v.r + grow4, (o) => consider(o, probe2, segs.length * 1e4, v.r, layer));
+      for (const layer of v.layers) shoveNear(SW, st, [v.at[0], v.at[1], v.at[0], v.at[1]], v.r + grow5, (o) => consider(o, probe2, segs.length * 1e4, v.r, layer));
     }
     if (found.solid) return Object.assign({ kind: "solid" }, found.solid);
     if (found.via) return Object.assign({ kind: "via" }, found.via);
@@ -35871,32 +35884,32 @@ Link '${target2}' to this file?`)) return null;
   function pushVia(SW, st, L, v, stack) {
     const s = SW.s;
     const R2 = v.r + pairClr(s, L.net, v.net) + HULL_EPS;
-    let at = v.at.slice();
+    let at2 = v.at.slice();
     for (let k = 0; k < 24; k++) {
       let moved = false;
       for (const [a, b] of lineSegs(L)) {
-        const q = closestOnSeg(at, a, b);
-        let d = Math.hypot(at[0] - q[0], at[1] - q[1]);
+        const q = closestOnSeg(at2, a, b);
+        let d = Math.hypot(at2[0] - q[0], at2[1] - q[1]);
         const need = R2 + L.w / 2;
         if (d >= need - 1e-9) continue;
-        let n2 = d > 1e-9 ? [(at[0] - q[0]) / d, (at[1] - q[1]) / d] : vunit([-(b[1] - a[1]), b[0] - a[0]]);
+        let n2 = d > 1e-9 ? [(at2[0] - q[0]) / d, (at2[1] - q[1]) / d] : vunit([-(b[1] - a[1]), b[0] - a[0]]);
         if (d <= 1e-9 && !n2[0] && !n2[1]) n2 = [1, 0];
-        at = [at[0] + n2[0] * (need - d), at[1] + n2[1] * (need - d)];
+        at2 = [at2[0] + n2[0] * (need - d), at2[1] + n2[1] * (need - d)];
         moved = true;
       }
       if (L.via) {
-        const d = Math.hypot(at[0] - L.via.at[0], at[1] - L.via.at[1]), need = R2 + L.via.r;
+        const d = Math.hypot(at2[0] - L.via.at[0], at2[1] - L.via.at[1]), need = R2 + L.via.r;
         if (d < need - 1e-9) {
-          const n2 = d > 1e-9 ? [(at[0] - L.via.at[0]) / d, (at[1] - L.via.at[1]) / d] : [1, 0];
-          at = [at[0] + n2[0] * (need - d), at[1] + n2[1] * (need - d)];
+          const n2 = d > 1e-9 ? [(at2[0] - L.via.at[0]) / d, (at2[1] - L.via.at[1]) / d] : [1, 0];
+          at2 = [at2[0] + n2[0] * (need - d), at2[1] + n2[1] * (need - d)];
           moved = true;
         }
       }
       if (!moved) break;
     }
-    at = rp(at);
+    at2 = rp(at2);
     const rank = L.rank - 1;
-    st.viaAt.set(v.id, at);
+    st.viaAt.set(v.id, at2);
     st.viaRank.set(v.id, rank);
     const item = SW.doc.items.get(v.id);
     for (const fl of item ? viaFanout(SW.doc, item) : []) {
@@ -35909,12 +35922,12 @@ Link '${target2}' to this file?`)) return null;
       }
       if (!peq(M.pts[0], v.at)) continue;
       M.rank = rank;
-      setLine(st, M, dragCorner45(M.pts, 0, at, 0));
+      setLine(st, M, dragCorner45(M.pts, 0, at2, 0));
       const i = stack.indexOf(M);
       if (i >= 0) stack.splice(i, 1);
       stack.push(M);
     }
-    stack.push({ proxy: true, key: "via:" + v.id, viaId: v.id, pts: [at], w: 0, layer: null, net: v.net, rank, via: { at, r: v.r, layers: v.layers } });
+    stack.push({ proxy: true, key: "via:" + v.id, viaId: v.id, pts: [at2], w: 0, layer: null, net: v.net, rank, via: { at: at2, r: v.r, layers: v.layers } });
     return true;
   }
   function shoveRun(SW, heads, rs) {
@@ -35925,21 +35938,21 @@ Link '${target2}' to this file?`)) return null;
     for (let iter = 0; stack.length; iter++) {
       if (iter >= limit || now() > deadline) return null;
       const cur2 = stack[stack.length - 1];
-      const hit4 = shoveNearest(SW, st, cur2);
-      if (!hit4) {
+      const hit5 = shoveNearest(SW, st, cur2);
+      if (!hit5) {
         stack.pop();
         continue;
       }
-      if (hit4.kind === "solid") {
+      if (hit5.kind === "solid") {
         if (cur2.head || cur2.proxy) return null;
-        const so = hit4.o;
+        const so = hit5.o;
         const w = walkLineAround(s, cur2, so.shape, so.ckind === "keepout" ? 0 : solidClr(s, cur2.net, so, cur2.layer));
         if (!w) return null;
         setLine(st, cur2, w);
         continue;
       }
-      if (hit4.kind === "via") {
-        const hv = hit4.o;
+      if (hit5.kind === "via") {
+        const hv = hit5.o;
         const v = st.viaAt.has(hv.id) ? Object.assign({}, hv, { at: st.viaAt.get(hv.id) }) : hv;
         const vr = st.viaRank.has(v.id) ? st.viaRank.get(v.id) : -Infinity;
         if (vr > cur2.rank) {
@@ -35952,7 +35965,7 @@ Link '${target2}' to this file?`)) return null;
         if (!pushVia(SW, st, cur2, v, stack)) return null;
         continue;
       }
-      const ob = hit4.L || shoveLineOf(SW, st, hit4.o);
+      const ob = hit5.L || shoveLineOf(SW, st, hit5.o);
       if (!ob) return null;
       if (ob.rank > cur2.rank) {
         if (cur2.head || cur2.proxy) return null;
@@ -35994,11 +36007,11 @@ Link '${target2}' to this file?`)) return null;
       }
       for (let i = Math.max(n2, 0); i < olds.length; i++) ops.push(opOn(olds[i], { del: olds[i].id }, grp));
     }
-    for (const [id, at] of st.viaAt) {
+    for (const [id, at2] of st.viaAt) {
       const it = doc.items.get(id);
       if (!it) continue;
       const node = clone2(it.node);
-      K7.kid(node, "at").splice(1, 2, r63(at[0]), r63(at[1]));
+      K7.kid(node, "at").splice(1, 2, r63(at2[0]), r63(at2[1]));
       ops.push(opOn(it, { set: id, node }));
     }
     return ops;
@@ -36010,12 +36023,12 @@ Link '${target2}' to this file?`)) return null;
       for (const id of L.ids) hidden.add(id);
       lines.push({ pts: L.pts, w: L.w, layer: L.layer });
     }
-    for (const [id, at] of st.viaAt) {
+    for (const [id, at2] of st.viaAt) {
       const it = doc.items.get(id);
       if (!it) continue;
       hidden.add(id);
       const v = viaNow(it.node);
-      vias.push({ at, size: v.size, drill: v.drill });
+      vias.push({ at: at2, size: v.size, drill: v.drill });
     }
     return { hidden, lines, vias };
   }
@@ -36108,15 +36121,15 @@ Link '${target2}' to this file?`)) return null;
     for (let a = 0; a < 360; a += 45) {
       const t = -a * Math.PI / 180;
       const v = [c[0] + len * Math.cos(t), c[1] - len * Math.sin(t)];
-      let hit4 = null;
+      let hit5 = null;
       for (let i = 0; i < 4; i++) {
         const q = segIntersect2(c, v, poly[i], poly[(i + 1) % 4]);
         if (q) {
-          hit4 = q;
+          hit5 = q;
           break;
         }
       }
-      if (hit4) out.push([c, rp(hit4)]);
+      if (hit5) out.push([c, rp(hit5)]);
     }
     return out;
   }
@@ -36221,7 +36234,7 @@ Link '${target2}' to this file?`)) return null;
     const bb = box;
     return bb ? [bb[0] - w, bb[1] - w, bb[2] + w, bb[3] + w] : null;
   }
-  var inBox = (b, p) => p[0] >= b[0] - PEPS && p[0] <= b[2] + PEPS && p[1] >= b[1] - PEPS && p[1] <= b[3] + PEPS;
+  var inBox2 = (b, p) => p[0] >= b[0] - PEPS && p[0] <= b[2] + PEPS && p[1] >= b[1] - PEPS && p[1] <= b[3] + PEPS;
   function mergeAllowed(path2, v1, v2, bypass, anchor, area32) {
     let covers = false;
     for (let i = v1; i < v2; i++) if (segPtDist(path2[i], path2[i + 1], anchor) <= 1e-6) {
@@ -36236,19 +36249,19 @@ Link '${target2}' to this file?`)) return null;
       }
       if (!keeps) return false;
     }
-    const p1 = path2[v1], p2 = path2[v2], in1 = inBox(area32, p1), in2 = inBox(area32, p2);
+    const p1 = path2[v1], p2 = path2[v2], in1 = inBox2(area32, p1), in2 = inBox2(area32, p2);
     if (in1 && in2) return true;
     const horiz = (a0, a1, b0, b1) => {
       const d1 = dir8(a0, a1), d2 = dir8(b0, b1);
       return d1 >= 0 && d1 === d2;
     };
-    if (v1 < path2.length - 1 && !in1 && in2 && inBox(area32, path2[v1 + 1])) return horiz(bypass[0], bypass[1], path2[v1], path2[v1 + 1]);
-    if (in1 && !in2 && inBox(area32, path2[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path2[v2 - 1], path2[v2]);
+    if (v1 < path2.length - 1 && !in1 && in2 && inBox2(area32, path2[v1 + 1])) return horiz(bypass[0], bypass[1], path2[v1], path2[v1 + 1]);
+    if (in1 && !in2 && inBox2(area32, path2[v2 - 1])) return horiz(bypass[bypass.length - 2], bypass[bypass.length - 1], path2[v2 - 1], path2[v2]);
     return false;
   }
   function optimizeDragged(O, pts, orig, p, w) {
     if (pts.length < 3) return pts;
-    let anchor = null, at = -1, bd = Infinity;
+    let anchor = null, at2 = -1, bd = Infinity;
     for (let i = 0; i + 1 < pts.length; i++) {
       const a = pts[i], b = pts[i + 1];
       const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
@@ -36258,11 +36271,11 @@ Link '${target2}' to this file?`)) return null;
       if (d < bd) {
         bd = d;
         anchor = q;
-        at = i;
+        at2 = i;
       }
     }
     let path2 = pts.map((q) => q.slice());
-    if (!path2.some((q) => peq(q, anchor))) path2.splice(at + 1, 0, anchor);
+    if (!path2.some((q) => peq(q, anchor))) path2.splice(at2 + 1, 0, anchor);
     const area32 = changedArea(pts, orig, w) || [p[0], p[1], p[0], p[1]];
     const r = w / 2;
     path2 = simplifyPts(path2);
@@ -36436,12 +36449,12 @@ Link '${target2}' to this file?`)) return null;
     const m = { ids: [it.id], start: snapCursor(ctx, mm2, /* @__PURE__ */ new Set([it.id]), {}).p, orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false };
     m.orig.set(it.id, clone2(it.node));
     if (it.kind === "via") {
-      const at = pt4(it.node, "at");
+      const at2 = pt4(it.node, "at");
       for (const sg of ctx.doc.items.values()) {
         if (sg.kind !== "segment" && sg.kind !== "arc") continue;
         for (const key2 of ["start", "end"]) {
           const q = pt4(sg.node, key2);
-          if (q && at && samePt(q, at)) {
+          if (q && at2 && samePt(q, at2)) {
             m.ends.push({ id: sg.id, key: key2 });
             if (!m.orig.has(sg.id)) m.orig.set(sg.id, clone2(sg.node));
           }
@@ -37090,13 +37103,13 @@ Link '${target2}' to this file?`)) return null;
   }
   function beginToolDrag(ctx, free) {
     const ids = selectionIds(ctx);
-    const at = cursorPoint(ctx);
+    const at2 = cursorPoint(ctx);
     let its = ids.size ? routableItems(ctx.doc, ids) : null;
     if (!its && !ids.size) {
-      const c = dragCandidate(ctx, at);
+      const c = dragCandidate(ctx, at2);
       if (c) its = [c];
     }
-    return !!its && beginInlineDrag(ctx, its, at, free, "tool");
+    return !!its && beginInlineDrag(ctx, its, at2, free, "tool");
   }
   function dragHighlight(ctx, d) {
     if (!d.netKey) return;
@@ -37359,8 +37372,8 @@ Link '${target2}' to this file?`)) return null;
     if (!free.length) return true;
     cancelOps();
     const mouse = opts.at ? opts.at.slice() : ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
-    const at = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || opts.drag && free.length === 1 && doc.items.get(free[0])?.kind === "footprint" ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
-    const m = { ids: free, start: at.slice(), orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
+    const at2 = opts.origin ? opts.origin.slice() : opts.placing && !opts.restore ? cursorPoint(ctx) : opts.sticky === false || opts.drag && free.length === 1 && doc.items.get(free[0])?.kind === "footprint" ? snapCursor(ctx, mouse, new Set(free), {}).p : bestDragOrigin(doc, free, mouse, ctx.gridPitch);
+    const m = { ids: free, start: at2.slice(), orig: /* @__PURE__ */ new Map(), ends: [], last: [0, 0], moved: false, sticky: opts.sticky !== false, placing: opts.placing || null, restore: opts.restore || null, hover: !!opts.hover };
     for (const id of free) m.orig.set(id, clone2(doc.items.get(id).node));
     const gen = !opts.placing && !opts.drag ? selectedTuningPattern(ctx, free) : null;
     if (gen) {
@@ -37399,8 +37412,8 @@ Link '${target2}' to this file?`)) return null;
       if (!it) continue;
       if (it.kind === "footprint") for (const p of padsOf(it)) pads.push(p);
       else if (it.kind === "via") {
-        const at = pt4(it.node, "at");
-        if (at) vias.push(at);
+        const at2 = pt4(it.node, "at");
+        if (at2) vias.push(at2);
       }
     }
     if (!pads.length && !vias.length) return;
@@ -37446,24 +37459,24 @@ Link '${target2}' to this file?`)) return null;
     for (const c of m.conns || []) for (const id of c.l.ids) gone.add(id);
     const moved = new Set(m.ids);
     const hits2 = /* @__PURE__ */ new Set();
-    let at = null;
-    const hit4 = (ob, p) => {
+    let at2 = null;
+    const hit5 = (ob, p) => {
       if (!hits2.has(ob)) {
         hits2.add(ob);
-        if (!at) at = p;
+        if (!at2) at2 = p;
       }
     };
     const segsOf = (pts) => pts.slice(0, -1).map((a, i) => ({ t: "seg", a, b: pts[i + 1] }));
     lines.forEach(({ l, pts }, i) => {
       if (pts.length < 2) return;
       const r = l.width / 2;
-      for (const ob of pathHits(routeObstacles(doc, s, l.netKey, l.layer, l.netKey ? null : new Set(l.ids)), pts, r)) if (!gone.has(ob.id)) hit4(ob, pts[0]);
+      for (const ob of pathHits(routeObstacles(doc, s, l.netKey, l.layer, l.netKey ? null : new Set(l.ids)), pts, r)) if (!gone.has(ob.id)) hit5(ob, pts[0]);
       lines.forEach((o, j) => {
         if (j <= i || o.l.layer !== l.layer || o.pts.length < 2 || l.netKey && o.l.netKey === l.netKey) return;
         const clr = Math.max(netClearance(s, l.netKey), netClearance(s, o.l.netKey), s.minClearance || 0);
         for (const a of segsOf(pts)) for (const b of segsOf(o.pts)) if (shapeGap(Object.assign({ r }, a), Object.assign({ r: o.l.width / 2 }, b)) < clr - ROUTE_EPS) {
           const shape2 = Object.assign({ r: o.l.width / 2 }, b);
-          hit4({ id: o.l.ids[0], kind: "segment", net: o.l.netKey, shape: shape2, bbox: shapeBBox(shape2), clr }, a.a);
+          hit5({ id: o.l.ids[0], kind: "segment", net: o.l.netKey, shape: shape2, bbox: shapeBBox(shape2), clr }, a.a);
         }
       });
     });
@@ -37472,7 +37485,7 @@ Link '${target2}' to this file?`)) return null;
       for (const layer of c.layers) {
         const O = routeObstacles(doc, s, c.net, layer, null);
         obstaclesNear(O, c.bbox, 0, (ob) => {
-          if (!moved.has(ob.id) && !gone.has(ob.id) && ob.kind !== "keepout" && shapeGap(c.shape, ob.shape) < ob.clr - ROUTE_EPS) hit4(ob, [c.pad.x, c.pad.y]);
+          if (!moved.has(ob.id) && !gone.has(ob.id) && ob.kind !== "keepout" && shapeGap(c.shape, ob.shape) < ob.clr - ROUTE_EPS) hit5(ob, [c.pad.x, c.pad.y]);
           return false;
         });
         for (const { l, pts } of lines) {
@@ -37480,7 +37493,7 @@ Link '${target2}' to this file?`)) return null;
           const clr = Math.max(netClearance(s, l.netKey), netClearance(s, c.net), s.minClearance || 0);
           for (const sg of segsOf(pts)) {
             const shape2 = Object.assign({ r: l.width / 2 }, sg);
-            if (shapeGap(c.shape, shape2) < clr - ROUTE_EPS) hit4({ id: l.ids[0], kind: "segment", net: l.netKey, shape: shape2, bbox: shapeBBox(shape2), clr }, [c.pad.x, c.pad.y]);
+            if (shapeGap(c.shape, shape2) < clr - ROUTE_EPS) hit5({ id: l.ids[0], kind: "segment", net: l.netKey, shape: shape2, bbox: shapeBBox(shape2), clr }, [c.pad.x, c.pad.y]);
           }
         }
       }
@@ -37488,7 +37501,7 @@ Link '${target2}' to this file?`)) return null;
     S2.rworld = null;
     S2.sworld = null;
     const out = Array.from(hits2);
-    out.at = at;
+    out.at = at2;
     return out;
   }
   function connLines(m, dx, dy) {
@@ -37609,11 +37622,11 @@ Link '${target2}' to this file?`)) return null;
         polyline22(c, pts, false);
       }
       if (d.via) {
-        const at = d.sol.viaAt || d.viaAt, v = viaNow(d.via.node);
+        const at2 = d.sol.viaAt || d.viaAt, v = viaNow(d.via.node);
         c.globalAlpha = 0.8;
         c.strokeStyle = "rgb(179, 179, 179)";
         c.lineWidth = Math.max((v.size - v.drill) / 2, px);
-        ring(c, at, (v.size + v.drill) / 4);
+        ring(c, at2, (v.size + v.drill) / 4);
       }
     }
     if (D.subs.some((d) => d.forceMark && !d.status) && D.cursor) drawStatusNote(c, D.cursor, px * (view.dpr || 1), "Track violates DRC.", "(Ctrl+click to commit anyway.)");
@@ -37630,11 +37643,11 @@ Link '${target2}' to this file?`)) return null;
     }
     line(c, e.a, e.b);
   }
-  function drawViaPreview(c, at, size, drill22, px, alpha) {
+  function drawViaPreview(c, at2, size, drill22, px, alpha) {
     c.globalAlpha = alpha;
     c.strokeStyle = "rgb(179, 179, 179)";
     c.lineWidth = Math.max((size - drill22) / 2, px);
-    ring(c, at, (size + drill22) / 4);
+    ring(c, at2, (size + drill22) / 4);
   }
   function previewOfNode(node) {
     if (node[0] === "segment") return { layer: layerOf2(node), width: widthOf2(node, 0.25), els: [{ t: "seg", a: pt4(node, "start"), b: pt4(node, "end") }] };
@@ -37693,14 +37706,14 @@ Link '${target2}' to this file?`)) return null;
     }
     const via = headVia(ctx, rt);
     if (via) {
-      const at = rt.target || rt.last;
+      const at2 = rt.target || rt.last;
       const clr = routeHaloClearance(ctx, rt);
       c.globalAlpha = 0.7;
       c.fillStyle = HALO_COLOR;
       c.beginPath();
-      c.arc(at[0], at[1], via.diameter / 2 + clr, 0, 2 * Math.PI);
+      c.arc(at2[0], at2[1], via.diameter / 2 + clr, 0, 2 * Math.PI);
       c.fill();
-      drawViaPreview(c, at, via.diameter, via.drill, px, 0.8);
+      drawViaPreview(c, at2, via.diameter, via.drill, px, 0.8);
     }
     if (rt.ratline && S2.showRatsnest) {
       c.globalAlpha = 1;
@@ -37721,7 +37734,7 @@ Link '${target2}' to this file?`)) return null;
     if (rt.loopHidden) for (const id of rt.loopHidden) out.add(id);
     return out.size ? out : null;
   }
-  function drawStatusNote(c, at, cpx, msg, hint) {
+  function drawStatusNote(c, at2, cpx, msg, hint) {
     const css = (name, dflt) => {
       try {
         const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -37738,7 +37751,7 @@ Link '${target2}' to this file?`)) return null;
     c.font = `${hs}px sans-serif`;
     const w2 = c.measureText(hint).width;
     const w = Math.max(w1, w2) + 2 * m, h = fs2 + hs + 3 * m;
-    const x = at[0] + 5 * m, y = at[1] - h - 5 * m;
+    const x = at2[0] + 5 * m, y = at2[1] - h - 5 * m;
     c.fillStyle = css("--color-panel", "#2b2b2b");
     c.strokeStyle = css("--color-ink", "#e0e0e0");
     c.lineWidth = cpx;
@@ -37842,11 +37855,11 @@ Link '${target2}' to this file?`)) return null;
     c.lineTo(b[0], b[1]);
     c.stroke();
   }
-  function drawShape(c, sh, grow4, colour, alpha) {
+  function drawShape(c, sh, grow5, colour, alpha) {
     c.globalAlpha = alpha;
     c.fillStyle = colour;
     c.strokeStyle = colour;
-    const off = shapeOffset(sh) + grow4;
+    const off = shapeOffset(sh) + grow5;
     if (sh.t === "circle") {
       c.beginPath();
       c.arc(sh.x, sh.y, Math.max(off, 1e-4), 0, Math.PI * 2);
@@ -38109,13 +38122,13 @@ Link '${target2}' to this file?`)) return null;
     }
     c.globalAlpha = 1;
   }
-  function drawPadPreview(c, doc, type, at, angle, px) {
+  function drawPadPreview(c, doc, type, at2, angle, px) {
     const pad = masterPad(doc, type, S2.padTemplate || null);
     const sz = K7.kid(pad, "size");
     const w = sz ? K7.num(sz[1]) : 1, h = sz ? K7.num(sz[2]) : 1;
     const layers = (K7.kid(pad, "layers") || []).slice(1).map(String);
     c.save();
-    c.translate(at[0], at[1]);
+    c.translate(at2[0], at2[1]);
     c.rotate(-angle * Math.PI / 180);
     c.globalAlpha = 0.6;
     c.strokeStyle = layers.some((l) => l === "B.Cu") && !layers.some((l) => l === "F.Cu" || l === "*.Cu") ? "#4D7FC4" : "#C83434";
@@ -38343,8 +38356,8 @@ Link '${target2}' to this file?`)) return null;
     if (turn >= 3) return { pts: [gw.mid.slice()], reached: false };
     if (turn > 0) {
       const ahead = rp(vadd(gw.mid, vmul(gw.d, h * Math.tan(turn * Math.PI / 8) + 1e-3)));
-      const r23 = run2(ahead);
-      r = { pts: simplifyPts([gw.mid.slice()].concat(r23.pts)), reached: r23.reached };
+      const r24 = run2(ahead);
+      r = { pts: simplifyPts([gw.mid.slice()].concat(r24.pts)), reached: r24.reached };
     }
     return r;
   }
@@ -38538,8 +38551,8 @@ Link '${target2}' to this file?`)) return null;
     if (L.vias) {
       const v = rt.placingVia;
       const layers = v.type === "through" ? viaSpan2(doc) : [v.span[0], v.span[1]];
-      for (const [at, net] of [[L.vias.P, rt.net], [L.vias.N, rt.netN]]) {
-        const node = viaNode(doc, at[0], at[1], v.diameter, v.drill, net, layers);
+      for (const [at2, net] of [[L.vias.P, rt.net], [L.vias.N, rt.netN]]) {
+        const node = viaNode(doc, at2[0], at2[1], v.diameter, v.drill, net, layers);
         if (v.type !== "through") node.splice(1, 0, v.type);
         node.push(["uuid", K7.newUuid()]);
         ops.push({ add: node });
@@ -38700,13 +38713,13 @@ Link '${target2}' to this file?`)) return null;
       c.lineWidth = w;
       polyline22(c, L.P, false);
       polyline22(c, L.N, false);
-      if (L.vias && rt.placingVia) for (const at of [L.vias.P, L.vias.N]) {
+      if (L.vias && rt.placingVia) for (const at2 of [L.vias.P, L.vias.N]) {
         c.globalAlpha = 0.7;
         c.fillStyle = HALO_COLOR;
         c.beginPath();
-        c.arc(at[0], at[1], rt.placingVia.diameter / 2 + clr, 0, 2 * Math.PI);
+        c.arc(at2[0], at2[1], rt.placingVia.diameter / 2 + clr, 0, 2 * Math.PI);
         c.fill();
-        drawViaPreview(c, at, rt.placingVia.diameter, rt.placingVia.drill, px, 0.8);
+        drawViaPreview(c, at2, rt.placingVia.diameter, rt.placingVia.drill, px, 0.8);
       }
     }
     if (rt.ratline && S2.showRatsnest) {
@@ -39153,8 +39166,8 @@ Link '${target2}' to this file?`)) return null;
     const k = l2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / l2)) : 0;
     return { item: it, point: [r63(a[0] + k * dx), r63(a[1] + k * dy)] };
   }
-  function showViolations(obs, at) {
-    S2.violations = obs.length ? { obs, at: at.slice() } : null;
+  function showViolations(obs, at2) {
+    S2.violations = obs.length ? { obs, at: at2.slice() } : null;
   }
   function startRefusal(ctx, p, mm2, net, width, layer, own, snapped) {
     const doc = ctx.doc;
@@ -39387,8 +39400,8 @@ Link '${target2}' to this file?`)) return null;
     const doc = routeDoc(ctx, rt);
     const cu = K7.pcbSizes.copperStack(copperOf(doc));
     const disallow = new Set(type === "through" ? [] : [rt.layer]);
-    const at = rt.target || rt.last;
-    layerPickerImpl({ layers: cu, current: rt.layer, disallow, at, client: S2.client }, (layer) => {
+    const at2 = rt.target || rt.last;
+    layerPickerImpl({ layers: cu, current: rt.layer, disallow, at: at2, client: S2.client }, (layer) => {
       if (!layer || !S2.route || S2.route !== rt) return;
       if (type !== "through" && layer === rt.layer) return;
       if (rt.placingVia) rt.placingVia = null;
@@ -39488,10 +39501,10 @@ Link '${target2}' to this file?`)) return null;
     applySelection(ctx, []);
   }
   var sizeUnits = () => appGlobal(() => editorState().units, "mm") || "mm";
-  function fmtSize(v, bare) {
+  function fmtSize(v, bare2) {
     const u = sizeUnits();
     const x = u === "mil" ? +(v / 0.0254).toFixed(2) : u === "in" ? +(v / 25.4).toFixed(5) : +v.toFixed(4);
-    return bare ? String(x) : x + (u === "mil" ? " mils" : u === "in" ? " in" : " mm");
+    return bare2 ? String(x) : x + (u === "mil" ? " mils" : u === "in" ? " in" : " mm");
   }
   function sizeSelection(ctx) {
     if (S2.modTool) return null;
@@ -39824,16 +39837,16 @@ Link '${target2}' to this file?`)) return null;
   }
   function viaFanout(doc, via) {
     const J = jointIndex(doc);
-    const at = pt4(via.node, "at");
-    if (!at) return [];
+    const at2 = pt4(via.node, "at");
+    if (!at2) return [];
     const key2 = J.NT.key(netOf3(via.node));
     const copper = doc.copper.length ? doc.copper : ["F.Cu", "B.Cu"];
     const layers = viaLayers(via.node, copper);
     const out = [], seen = /* @__PURE__ */ new Set();
-    for (const L of layers) for (const o of J.ends.get(L + "|" + ptKey(at)) || []) {
+    for (const L of layers) for (const o of J.ends.get(L + "|" + ptKey(at2)) || []) {
       if (o.kind !== "segment" && o.kind !== "arc" || seen.has(o.id) || J.NT.key(netOf3(o.node)) !== key2) continue;
       if (o.kind === "arc") {
-        const ln2 = arcStubLine(o, at, L, key2);
+        const ln2 = arcStubLine(o, at2, L, key2);
         seen.add(o.id);
         if (ln2) out.push(ln2);
         continue;
@@ -39841,7 +39854,7 @@ Link '${target2}' to this file?`)) return null;
       const ln = assembleLine(doc, o);
       if (!ln) continue;
       ln.ids.forEach((id) => seen.add(id));
-      if (peq(ln.pts[ln.pts.length - 1], at) && !peq(ln.pts[0], at)) {
+      if (peq(ln.pts[ln.pts.length - 1], at2) && !peq(ln.pts[0], at2)) {
         ln.pts.reverse();
         ln.ids.reverse();
       }
@@ -39850,10 +39863,10 @@ Link '${target2}' to this file?`)) return null;
     }
     return out;
   }
-  function arcStubLine(arc, at, layer, netKey) {
+  function arcStubLine(arc, at2, layer, netKey) {
     const a = pt4(arc.node, "start"), m = pt4(arc.node, "mid"), b = pt4(arc.node, "end");
     if (!a || !m || !b) return null;
-    const e = samePt(a, at) ? a : b;
+    const e = samePt(a, at2) ? a : b;
     const c = K7.arcFrom3(a, m, b);
     let diag = false;
     if (c) {
@@ -39861,7 +39874,7 @@ Link '${target2}' to this file?`)) return null;
       if ((m[0] - e[0]) * t[0] + (m[1] - e[1]) * t[1] > 0) t = [-t[0], -t[1]];
       diag = isDiagDir(dir8(e, [e[0] + t[0], e[1] + t[1]]));
     }
-    return { ids: [], pts: [at.slice(), at.slice()], index: 0, vertex: 0, width: widthOf2(arc.node, 0.25), layer, net: netOf3(arc.node), netKey, arc, arcDiag: diag, tmpl: arc };
+    return { ids: [], pts: [at2.slice(), at2.slice()], index: 0, vertex: 0, width: widthOf2(arc.node, 0.25), layer, net: netOf3(arc.node), netKey, arc, arcDiag: diag, tmpl: arc };
   }
   function snapGrab(ctx, it, mm2) {
     if (it.kind === "via") return pt4(it.node, "at").slice();
@@ -41218,8 +41231,8 @@ Link '${target2}' to this file?`)) return null;
   function setPickerImpl(fn) {
     pickerImpl = fn;
   }
-  function statusPopup(ctx, text2, at, ms) {
-    S2.popup = { text: text2, at: at.slice(), until: Date.now() + ms };
+  function statusPopup(ctx, text2, at2, ms) {
+    S2.popup = { text: text2, at: at2.slice(), until: Date.now() + ms };
     ctx.requestRender();
     if (typeof setTimeout === "function") setTimeout(() => {
       if (S2.popup && Date.now() >= S2.popup.until - 5) {
@@ -41302,24 +41315,24 @@ Link '${target2}' to this file?`)) return null;
     ctx.commit([addedChange(ctx.doc, textNode(text2, mm2[0], mm2[1], S2.gfxLayer))], "text");
   }
   var newItemDialogs = {};
-  function placeTextAt(ctx, at) {
+  function placeTextAt(ctx, at2) {
     if (ctx.viewOnly || S2.move) return;
     const dlg = newItemDialogs.gr_text;
     if (!dlg) {
       askText(ctx, "Text", "", (v) => {
-        if (v) placeText(ctx, at, v);
+        if (v) placeText(ctx, at2, v);
       });
       return;
     }
     applySelection(ctx, []);
-    dlg(ctx, textNode("", at[0], at[1], S2.gfxLayer), (n2) => {
+    dlg(ctx, textNode("", at2[0], at2[1], S2.gfxLayer), (n2) => {
       if (!n2 || !/[^\s]/.test(K7.str(n2[1]).replace(/\\n/g, ""))) return;
       const p = K7.atOf(n2);
-      const moved = Math.abs(p[0] - at[0]) > 1e-9 || Math.abs(p[1] - at[1]) > 1e-9;
+      const moved = Math.abs(p[0] - at2[0]) > 1e-9 || Math.abs(p[1] - at2[1]) > 1e-9;
       const c = addedChange(ctx.doc, n2);
       ctx.commit([c], "Draw Text", moved ? void 0 : { tentative: true });
       applySelection(ctx, [c.id]);
-      if (!moved) beginCarryMove(ctx, { placing: [c.id], origin: at });
+      if (!moved) beginCarryMove(ctx, { placing: [c.id], origin: at2 });
       ctx.requestRender();
     });
   }
@@ -42160,7 +42173,7 @@ Link '${target2}' to this file?`)) return null;
     const fmt32 = kid22(node, "format"), st = kid22(node, "style"), gt = kid22(node, "gr_text");
     const xs = K7.kids(kid22(node, "pts") || [], "xy").map((x) => toNm([K7.num(x[1]), K7.num(x[2])]));
     const ef = kid22(gt, "effects"), font = kid22(ef, "font"), sz = kid22(font, "size"), th = kid22(font, "thickness");
-    const at = kid22(gt, "at"), just = kid22(ef, "justify");
+    const at2 = kid22(gt, "at"), just = kid22(ef, "justify");
     const yesno = (p, k, d) => {
       const n2 = kid22(p, k);
       if (!n2) return d;
@@ -42190,8 +42203,8 @@ Link '${target2}' to this file?`)) return null;
       keepAligned: yesno(st, "keep_text_aligned", false),
       textFrame: K7.num(val(st, "text_frame", 0)),
       text: gt ? K7.str(gt[1]) : "",
-      textPos: at ? toNm([K7.num(at[1]), K7.num(at[2])]) : xs[0] || [0, 0],
-      textAngle: at && at.length > 3 ? K7.num(at[3]) : 0,
+      textPos: at2 ? toNm([K7.num(at2[1]), K7.num(at2[2])]) : xs[0] || [0, 0],
+      textAngle: at2 && at2.length > 3 ? K7.num(at2[3]) : 0,
       textH: Math.round((sz ? K7.num(sz[1]) : 1) * NM),
       textW: Math.round((sz ? K7.num(sz.length > 2 ? sz[2] : sz[1]) : 1) * NM),
       textThick: Math.round((th ? K7.num(th[1]) : 0) * NM),
@@ -42348,13 +42361,13 @@ Link '${target2}' to this file?`)) return null;
     const gt = K7.kid(node, "gr_text");
     if (gt) {
       gt[1] = m.text;
-      const at = K7.kid(gt, "at");
-      if (at) {
-        at[1] = mm2(m.textPos[0]);
-        at[2] = mm2(m.textPos[1]);
+      const at2 = K7.kid(gt, "at");
+      if (at2) {
+        at2[1] = mm2(m.textPos[0]);
+        at2[2] = mm2(m.textPos[1]);
         const a = g10(m.textAngle);
-        if (at.length > 3) at[3] = a;
-        else at.push(a);
+        if (at2.length > 3) at2[3] = a;
+        else at2.push(a);
       }
       const ef = K7.kid(gt, "effects"), j = ef && K7.kid(ef, "justify");
       if (j) {
@@ -42679,9 +42692,9 @@ Link '${target2}' to this file?`)) return null;
       }
       set value(v) {
         const os2 = this.options, want = String(v);
-        const hit4 = os2.find((o) => o.value === want) || null;
-        for (const o of os2) o.selected = o === hit4;
-        this.none = hit4 ? -1 : os2.length;
+        const hit5 = os2.find((o) => o.value === want) || null;
+        for (const o of os2) o.selected = o === hit5;
+        this.none = hit5 ? -1 : os2.length;
         this.sync();
       }
       get disabled() {
@@ -42951,10 +42964,10 @@ Link '${target2}' to this file?`)) return null;
         pop.replaceChildren(...os2.flatMap((o, i) => {
           const hd = this.head(o, os2[i - 1], "ksel-head");
           if (this.isSep(o)) {
-            const r23 = document.createElement("div");
-            r23.className = "ksel-sep";
-            r23.setAttribute("role", "separator");
-            return hd ? [hd, r23] : [r23];
+            const r24 = document.createElement("div");
+            r24.className = "ksel-sep";
+            r24.setAttribute("role", "separator");
+            return hd ? [hd, r24] : [r24];
           }
           const r = document.createElement("div");
           r.className = "ksel-opt" + (o === s ? " on" : "") + (i === this.hi ? " hi" : "") + (this.pickable(o) ? "" : " dis");
@@ -43972,8 +43985,8 @@ Link '${target2}' to this file?`)) return null;
     }
     if (!ids.length) {
       hover = true;
-      const at = ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
-      const cands = cursorCandidates(ctx, at).filter((id) => keep(ctx.doc.items.get(id)));
+      const at2 = ctx.cursor ? ctx.cursor.slice() : cursorPoint(ctx);
+      const cands = cursorCandidates(ctx, at2).filter((id) => keep(ctx.doc.items.get(id)));
       if (!cands.length) return null;
       if (cands.length > 1 && opts.rerun && typeof ctx.clarify === "function") {
         ctx.clarify(cands, (fresh) => {
@@ -45104,8 +45117,8 @@ Link '${target2}' to this file?`)) return null;
         dup.add(num72);
         continue;
       }
-      const at = K7.kid(p, "at");
-      out.set(num72, [K7.num(at && at[1]), K7.num(at && at[2])]);
+      const at2 = K7.kid(p, "at");
+      out.set(num72, [K7.num(at2 && at2[1]), K7.num(at2 && at2[2])]);
     }
     return out;
   }
@@ -45206,8 +45219,8 @@ Link '${target2}' to this file?`)) return null;
         const o = K7.kid(op, key2), w = K7.kid(np, key2);
         if (w) np.splice(np.indexOf(w), 1);
         if (o) {
-          const at = K7.kid(np, "uuid");
-          np.splice(at ? np.indexOf(at) : np.length, 0, K7.cloneNode(o));
+          const at2 = K7.kid(np, "uuid");
+          np.splice(at2 ? np.indexOf(at2) : np.length, 0, K7.cloneNode(o));
         }
       }
       stripNets(np);
@@ -45251,8 +45264,8 @@ Link '${target2}' to this file?`)) return null;
   function padSimilarity(a, b, fa = [0, 0, 0], fb = [0, 0, 0]) {
     let s = 1;
     const pos = (p, f) => {
-      const at = K7.kid(p, "at") || [];
-      const r = rotator2(f[2])(K7.num(at[1]), K7.num(at[2]));
+      const at2 = K7.kid(p, "at") || [];
+      const r = rotator2(f[2])(K7.num(at2[1]), K7.num(at2[2]));
       return [f[0] + r[0], f[1] + r[1]];
     };
     const pa = pos(a, fa), pb = pos(b, fb);
@@ -45302,7 +45315,7 @@ Link '${target2}' to this file?`)) return null;
   }
   function fieldRow(it) {
     const p = it.node;
-    const at = K7.kid(p, "at") || [];
+    const at2 = K7.kid(p, "at") || [];
     const e = K7.kid(p, "effects");
     const f = e ? K7.kid(e, "font") : null;
     const sz = f ? K7.kid(f, "size") : null;
@@ -45310,7 +45323,7 @@ Link '${target2}' to this file?`)) return null;
     const hide = K7.kid(p, "hide");
     const hidden = hide ? yes22(hide) : !!(e && (e.includes("hide") || yes22(K7.kid(e, "hide"))));
     const italic = !!(f && (f.includes("italic") || yes22(K7.kid(f, "italic"))));
-    const unl = !!(at.includes("unlocked") || yes22(K7.kid(p, "unlocked")));
+    const unl = !!(at2.includes("unlocked") || yes22(K7.kid(p, "unlocked")));
     return {
       id: it.id,
       name: fieldName2(p),
@@ -45321,10 +45334,10 @@ Link '${target2}' to this file?`)) return null;
       thick: num42(th && th[1], 0.15),
       italic,
       layer: str6((K7.kid(p, "layer") || [])[1]) || "F.Fab",
-      rot: num42(at[3], 0),
+      rot: num42(at2[3], 0),
       unconstrained: unl,
-      x: num42(at[1]),
-      y: num42(at[2])
+      x: num42(at2[1]),
+      y: num42(at2[2])
     };
   }
   function xyz(n2, key2, d) {
@@ -45698,12 +45711,12 @@ Please remove the objects that use these layers first.`, page: 1 };
       n2[n2.indexOf(cur2)] = node;
       return;
     }
-    let at = -1;
+    let at2 = -1;
     for (const a of after2) {
       const k = K7.kid(n2, a);
-      if (k) at = Math.max(at, n2.indexOf(k));
+      if (k) at2 = Math.max(at2, n2.indexOf(k));
     }
-    n2.splice(at >= 0 ? at + 1 : n2.length, 0, node);
+    n2.splice(at2 >= 0 ? at2 + 1 : n2.length, 0, node);
   }
   var PAD_ORDER2 = ["at", "size", "rect_delta", "drill", "property", "layers", "remove_unused_layers", "keep_end_layers", "zone_layer_connections", "roundrect_rratio", "chamfer_ratio", "chamfer", "net", "pinfunction", "pintype", "die_length", "die_delay"];
   var qs2 = (v) => '"' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
@@ -46370,10 +46383,10 @@ Press <esc> to cancel all; double-click to finish`;
   }
   function checkFootprint(doc) {
     const out = [];
-    const add = (code, detail2, ids, at) => {
+    const add = (code, detail2, ids, at2) => {
       const s = sev2(code);
       if (s === "ignore") return;
-      out.push({ code, severity: s, title: FP_CHECK_TITLES[code] || code, detail: detail2, ids, at });
+      out.push({ code, severity: s, title: FP_CHECK_TITLES[code] || code, detail: detail2, ids, at: at2 });
     };
     const header2 = (doc.fpState || { fp: ["footprint", ""] }).fp;
     const attrs = (K7.kid(header2, "attr") || []).slice(1).map(str8);
@@ -46415,8 +46428,8 @@ Press <esc> to cancel all; double-click to finish`;
       const la = layersOf2(a), lb = layersOf2(b);
       const cu = ["F.Cu", "B.Cu", ...Array.from({ length: 30 }, (_, k) => `In${k + 1}.Cu`)];
       if (!cu.some((l) => onLayer2(la, l) && onLayer2(lb, l))) continue;
-      const hit4 = polysTouch(padOutline2(a), padOutline2(b));
-      if (hit4) add("shorting_items", "", [pads[i].id, pads[j].id], hit4);
+      const hit5 = polysTouch(padOutline2(a), padOutline2(b));
+      if (hit5) add("shorting_items", "", [pads[i].id, pads[j].id], hit5);
     }
     if (netTie.length) {
       const nums = new Set(pads.map((p) => str8(p.node[1])));
@@ -46441,20 +46454,20 @@ Press <esc> to cancel all; double-click to finish`;
       for (const p of pads) {
         if (!onLayer2(layersOf2(p.node), mask)) continue;
         const mo = maskOutline(p.node, fpMask);
-        let hit4 = null;
+        let hit5 = null;
         for (const q of pts) if (pip(q, mo)) {
-          hit4 = q;
+          hit5 = q;
           break;
         }
-        if (!hit4) for (let i = 0; i + (closed ? 0 : 1) < pts.length && !hit4; i++) {
+        if (!hit5) for (let i = 0; i + (closed ? 0 : 1) < pts.length && !hit5; i++) {
           const a = pts[i], b = pts[(i + 1) % pts.length];
           for (let j = 0; j < mo.length; j++) if (segSeg(a, b, mo[j], mo[(j + 1) % mo.length]) <= w / 2) {
-            hit4 = a;
+            hit5 = a;
             break;
           }
         }
-        if (!hit4 && closed && pip(mo[0], pts)) hit4 = mo[0];
-        if (hit4) add("silk_over_copper", "", [g2.id, p.id], hit4);
+        if (!hit5 && closed && pip(mo[0], pts)) hit5 = mo[0];
+        if (hit5) add("silk_over_copper", "", [g2.id, p.id], hit5);
       }
     }
     return out;
@@ -46571,9 +46584,9 @@ Press <esc> to cancel all; double-click to finish`;
       if (ev.key === "Escape" && run) run.cancelled = true;
     }, true);
   }
-  function popup(ctx, at) {
+  function popup(ctx, at2) {
     if (!run) return;
-    S2.popup = { text: enumPopup(run.st), at: at.slice(), until: Number.MAX_SAFE_INTEGER };
+    S2.popup = { text: enumPopup(run.st), at: at2.slice(), until: Number.MAX_SAFE_INTEGER };
     ctx.requestRender();
   }
   function preview(ctx) {
@@ -46625,8 +46638,8 @@ Press <esc> to cancel all; double-click to finish`;
   }
   function enumDown(ev, mm2, ctx) {
     if (!run || !ctx.doc) return;
-    const now2 = Date.now(), at = run.clickAt;
-    const dbl = (ev.detail || 0) >= 2 || !!at && now2 - run.clickT < DBL_MS && Math.hypot(mm2[0] - at[0], mm2[1] - at[1]) < 0.3;
+    const now2 = Date.now(), at2 = run.clickAt;
+    const dbl = (ev.detail || 0) >= 2 || !!at2 && now2 - run.clickT < DBL_MS && Math.hypot(mm2[0] - at2[0], mm2[1] - at2[1]) < 0.3;
     run.clickT = now2;
     run.clickAt = mm2.slice();
     if (dbl) {
@@ -47300,9 +47313,9 @@ Press <esc> to cancel all; double-click to finish`;
     // app.js deletes a multi-selection through this; the prompt and the image picker are swappable for tests
     deleteChanges,
     // the app's drag of a mixed selection, and Move: everything selected goes along (sticky = follows the cursor until a click)
-    beginMove(ctx, at, sticky) {
+    beginMove(ctx, at2, sticky) {
       bind(ctx);
-      return beginCarryMove(ctx, { at, sticky });
+      return beginCarryMove(ctx, { at: at2, sticky });
     },
     unlockedIds(ctx, ids, quiet) {
       bind(ctx);
@@ -47996,8 +48009,8 @@ function pieces(s) {
   } else out.push(s);
   return out;
 }
-function stamp(G2, map, s, grow4, sign, far = grow4, near) {
-  if (far > grow4 && near) {
+function stamp(G2, map, s, grow5, sign, far = grow5, near) {
+  if (far > grow5 && near) {
     for (const p of pieces(s)) {
       const b = bboxOf2(p);
       const x0 = Math.max(0, Math.ceil((b[0] - far - G2.ox) / G2.g)), x1 = Math.min(G2.W - 1, Math.floor((b[2] + far - G2.ox) / G2.g));
@@ -48007,7 +48020,7 @@ function stamp(G2, map, s, grow4, sign, far = grow4, near) {
         let row2 = iy * G2.W + x0;
         for (let ix = x0; ix <= x1; ix++, row2++) {
           const d = pointGap(p, G2.ox + ix * G2.g, y);
-          if (d <= grow4 || d <= far && !near[row2]) map[row2] += sign;
+          if (d <= grow5 || d <= far && !near[row2]) map[row2] += sign;
         }
       }
     }
@@ -48015,12 +48028,12 @@ function stamp(G2, map, s, grow4, sign, far = grow4, near) {
   }
   for (const p of pieces(s)) {
     const b = bboxOf2(p);
-    const x0 = Math.max(0, Math.ceil((b[0] - grow4 - G2.ox) / G2.g)), x1 = Math.min(G2.W - 1, Math.floor((b[2] + grow4 - G2.ox) / G2.g));
-    const y0 = Math.max(0, Math.ceil((b[1] - grow4 - G2.oy) / G2.g)), y1 = Math.min(G2.H - 1, Math.floor((b[3] + grow4 - G2.oy) / G2.g));
+    const x0 = Math.max(0, Math.ceil((b[0] - grow5 - G2.ox) / G2.g)), x1 = Math.min(G2.W - 1, Math.floor((b[2] + grow5 - G2.ox) / G2.g));
+    const y0 = Math.max(0, Math.ceil((b[1] - grow5 - G2.oy) / G2.g)), y1 = Math.min(G2.H - 1, Math.floor((b[3] + grow5 - G2.oy) / G2.g));
     for (let iy = y0; iy <= y1; iy++) {
       const y = G2.oy + iy * G2.g;
       let row2 = iy * G2.W + x0;
-      for (let ix = x0; ix <= x1; ix++, row2++) if (pointGap(p, G2.ox + ix * G2.g, y) <= grow4) map[row2] += sign;
+      for (let ix = x0; ix <= x1; ix++, row2++) if (pointGap(p, G2.ox + ix * G2.g, y) <= grow5) map[row2] += sign;
     }
   }
 }
@@ -48055,7 +48068,7 @@ function pickGrid(pads, bounds, nLayers, forced) {
     if (!forced && area3 / (g2 * g2) > budget) continue;
     const off = (axis) => {
       const hist = /* @__PURE__ */ new Map();
-      let top = 0, at = 0;
+      let top = 0, at2 = 0;
       let sum = 0;
       for (const p of pads) {
         const wt = p.length > 2 ? p[2 + axis] : 1;
@@ -48065,10 +48078,10 @@ function pickGrid(pads, bounds, nLayers, forced) {
         hist.set(r, n2);
         if (n2 > top) {
           top = n2;
-          at = r;
+          at2 = r;
         }
       }
-      return { frac: sum ? top / sum : 1, off: at / 1e3 };
+      return { frac: sum ? top / sum : 1, off: at2 / 1e3 };
     };
     const fx = off(0), fy = off(1);
     const score = (fx.frac + fy.frac) / 2 - g2 * 0.6;
@@ -49184,7 +49197,7 @@ var Router = class _Router {
       } else single.push(net);
     }
     const minW = Math.max(s.minTrackWidth || 0, 0.09);
-    const r23 = (v) => Math.round(v * 100) / 100;
+    const r24 = (v) => Math.round(v * 100) / 100;
     for (const e of by.values()) {
       if (e.length !== 2) {
         single.push(...e);
@@ -49199,18 +49212,18 @@ var Router = class _Router {
         const w = widthFor(tr, target2, g2);
         if (w !== null && first === null) first = w;
         if (w !== null && w >= minW && w <= Math.max(0.6, cw * 3)) {
-          pick = { w: r23(w), g: r23(g2) };
+          pick = { w: r24(w), g: r24(g2) };
           break;
         }
       }
-      const rep = { nets: e.map((n2) => n2.key), target: target2, differential: true, layer: tr.layer, model, width: pick ? pick.w : first !== null ? r23(first) : null, gap: pick ? pick.g : r23(clr), applied: !!pick };
+      const rep = { nets: e.map((n2) => n2.key), target: target2, differential: true, layer: tr.layer, model, width: pick ? pick.w : first !== null ? r24(first) : null, gap: pick ? pick.g : r24(clr), applied: !!pick };
       if (pick) {
         for (const n2 of e) {
           this.zWidth.set(n2.key, pick.w);
           this.zGap.set(n2.key, pick.g);
         }
         rep.achieved = Math.round(zdiff(tr, pick.w, pick.g));
-      } else rep.note = first !== null ? `${target2} \u03A9 needs ${r23(first)} mm tracks on this stackup, more than the board can carry: routed at the class width (${Math.round(zdiff(tr, cw, clr))} \u03A9). A thinner dielectric under the layer (a 4-layer build) brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
+      } else rep.note = first !== null ? `${target2} \u03A9 needs ${r24(first)} mm tracks on this stackup, more than the board can carry: routed at the class width (${Math.round(zdiff(tr, cw, clr))} \u03A9). A thinner dielectric under the layer (a 4-layer build) brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
       this.zReports.push(rep);
     }
     for (const net of single) {
@@ -49219,11 +49232,11 @@ var Router = class _Router {
       const cw = this.classFor(net.key).width;
       const w = widthFor(tr, target2);
       const ok2 = w !== null && w >= minW && w <= Math.max(1.2, cw * 5);
-      const rep = { nets: [net.key], target: target2, differential: false, layer: tr.layer, model, width: w !== null ? r23(w) : null, applied: ok2 };
+      const rep = { nets: [net.key], target: target2, differential: false, layer: tr.layer, model, width: w !== null ? r24(w) : null, applied: ok2 };
       if (ok2) {
-        this.zWidth.set(net.key, r23(w));
-        rep.achieved = Math.round(z0(tr, r23(w)));
-      } else rep.note = w !== null && w < minW ? `${target2} \u03A9 needs a ${r23(w)} mm track on this stackup, under the board's minimum track width (${r23(minW)} mm): routed at the class width (${Math.round(z0(tr, cw))} \u03A9).` : w !== null ? `${target2} \u03A9 needs a ${r23(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} \u03A9). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
+        this.zWidth.set(net.key, r24(w));
+        rep.achieved = Math.round(z0(tr, r24(w)));
+      } else rep.note = w !== null && w < minW ? `${target2} \u03A9 needs a ${r24(w)} mm track on this stackup, under the board's minimum track width (${r24(minW)} mm): routed at the class width (${Math.round(z0(tr, cw))} \u03A9).` : w !== null ? `${target2} \u03A9 needs a ${r24(w)} mm track on this stackup, more than the board can carry: routed at the class width (${Math.round(z0(tr, cw))} \u03A9). A thinner dielectric under the layer (a 4-layer build), or a coplanar feed with ground beside it, brings the width down.` : `no track width gives ${target2} \u03A9 on this stackup`;
       this.zReports.push(rep);
     }
   }
@@ -49262,8 +49275,8 @@ var Router = class _Router {
           for (const end of ["a", "b"]) {
             const other = end === "a" ? "b" : "a";
             const cn = pr.cn, nEnd = pr.swap ? other : end, nOther = pr.swap ? end : other;
-            const side = (net, c, at) => {
-              const seen = /* @__PURE__ */ new Set([c[at].cluster]);
+            const side = (net, c, at2) => {
+              const seen = /* @__PURE__ */ new Set([c[at2].cluster]);
               let grew = true;
               while (grew) {
                 grew = false;
@@ -49393,12 +49406,12 @@ var Router = class _Router {
     this.lift(pr.p, 1, wide);
     this.lift(pr.n, 1, wide);
     let laid = null;
-    const wall = (m, at, cell, sign) => {
+    const wall = (m, at2, cell, sign) => {
       const R2 = Math.max(1.5, Math.hypot(Pa.p[0] - Na.p[0], Pa.p[1] - Na.p[1])), n2 = Math.ceil(R2 / G2.g), cx = cell.ix, cy = cell.iy;
       for (let dy = -n2; dy <= n2; dy++) for (let dx = -n2; dx <= n2; dx++) {
         const ix = cx + dx, iy = cy + dy;
         if (ix < 0 || iy < 0 || ix >= G2.W || iy >= G2.H) continue;
-        if ((dx * at.e[0] + dy * at.e[1]) * G2.g < -G2.g * 0.6) m[iy * G2.W + ix] += sign;
+        if ((dx * at2.e[0] + dy * at2.e[1]) * G2.g < -G2.g * 0.6) m[iy * G2.W + ix] += sign;
       }
     };
     try {
@@ -49509,12 +49522,12 @@ var Router = class _Router {
    *  chamfered corners.  Each adds 2A − 2.343·ch to the length. */
   humps(a, b, n2, A, S2, ch, side) {
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, nx = -uy * side, ny = ux * side;
-    const at = (x, y) => [r6(a[0] + ux * x + nx * y), r6(a[1] + uy * x + ny * y)];
+    const at2 = (x, y) => [r6(a[0] + ux * x + nx * y), r6(a[1] + uy * x + ny * y)];
     const out = [a];
     const s0 = (L - (2 * n2 - 1) * S2) / 2;
     for (let k = 0; k < n2; k++) {
       const x = s0 + 2 * k * S2;
-      out.push(at(x - ch, 0), at(x, ch), at(x, A - ch), at(x + ch, A), at(x + S2 - ch, A), at(x + S2, A - ch), at(x + S2, ch), at(x + S2 + ch, 0));
+      out.push(at2(x - ch, 0), at2(x, ch), at2(x, A - ch), at2(x + ch, A), at2(x + S2 - ch, A), at2(x + S2, A - ch), at2(x + S2, ch), at2(x + S2 + ch, 0));
     }
     out.push(b);
     return out;
@@ -49523,12 +49536,12 @@ var Router = class _Router {
    *  adds 0.828·a. */
   bumps(a, b, n2, h, r, side) {
     const L = Math.hypot(b[0] - a[0], b[1] - a[1]), ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L, nx = -uy * side, ny = ux * side;
-    const at = (x, y) => [r6(a[0] + ux * x + nx * y), r6(a[1] + uy * x + ny * y)];
+    const at2 = (x, y) => [r6(a[0] + ux * x + nx * y), r6(a[1] + uy * x + ny * y)];
     const out = [a];
     const one2 = 2 * h + r, s0 = (L - n2 * one2 - (n2 - 1) * r) / 2;
     for (let k = 0; k < n2; k++) {
       const x = s0 + k * (one2 + r);
-      out.push(at(x, 0), at(x + h, h), at(x + h + r, h), at(x + one2, 0));
+      out.push(at2(x, 0), at2(x + h, h), at2(x + h + r, h), at2(x + one2, 0));
     }
     out.push(b);
     return out;
@@ -49826,15 +49839,15 @@ var Router = class _Router {
       if (soft && !collect) {
         const full = conn.cls.full, plan = extra;
         extra = (nodes) => {
-          let hit4 = 0;
+          let hit5 = 0;
           for (let i = 0; i + 1 < nodes.length; i++) {
             const a = nodes[i], b = nodes[i + 1];
             if (a.l !== b.l) continue;
             const n2 = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy);
             const m = full[a.l];
-            for (let k = 0; k <= n2; k++) if (m[(a.iy + sy * k) * G2.W + a.ix + sx * k]) hit4++;
+            for (let k = 0; k <= n2; k++) if (m[(a.iy + sy * k) * G2.W + a.ix + sx * k]) hit5++;
           }
-          return hit4 * G2.g * 12 * this.W.length + (plan ? plan(nodes) : 0);
+          return hit5 * G2.g * 12 * this.W.length + (plan ? plan(nodes) : 0);
         };
       }
       if (!collect && this.rim && this.opts.edgeRuns !== true) {
@@ -50037,20 +50050,20 @@ var Router = class _Router {
     for (const o of this.conns) {
       if (!o.nodes || o.net === conn.net) continue;
       const need = Math.max(conn.cls.clr, o.cls.clr) + G2.margin + G2.g * 1.5;
-      let hit4 = false;
+      let hit5 = false;
       for (const sh of o.shapes) {
         const ob = bb(sh.shape);
         for (const m of mine) {
           if (ob[0] > m.bb[2] + need || ob[2] < m.bb[0] - need || ob[1] > m.bb[3] + need || ob[3] < m.bb[1] - need) continue;
           if (!sh.layers.some((x) => m.l.includes(x))) continue;
           if (P.shapeGap(sh.shape, m.s) < need) {
-            hit4 = true;
+            hit5 = true;
             break;
           }
         }
-        if (hit4) break;
+        if (hit5) break;
       }
-      if (hit4) out.push(o);
+      if (hit5) out.push(o);
     }
     return out;
   }
@@ -50348,7 +50361,7 @@ var Router = class _Router {
     const join = (a, b) => {
       parent[find(a)] = find(b);
     };
-    const at = (l, ix, iy) => {
+    const at2 = (l, ix, iy) => {
       const lab = label[l];
       return lab && ix >= 0 && iy >= 0 && ix < W10 && iy < H ? lab[iy * W10 + ix] : 0;
     };
@@ -50359,7 +50372,7 @@ var Router = class _Router {
       const cx = Math.round((a.p[0] - G2.ox) / G2.g), cy = Math.round((a.p[1] - G2.oy) / G2.g);
       for (const l of a.layers) for (let dy = -n2; dy <= n2; dy++) for (let dx = -n2; dx <= n2; dx++) {
         if (dx * dx + dy * dy > n2 * n2) continue;
-        const id = at(l, cx + dx, cy + dy);
+        const id = at2(l, cx + dx, cy + dy);
         if (id) join(a.grp || 0, ng + id);
       }
     }
@@ -50375,11 +50388,11 @@ var Router = class _Router {
       this.cellsOf(c, cells2, owner);
       for (const n2 of c.nodes) cells2.push(n2);
       for (const n2 of cells2) {
-        const id = at(n2.l, n2.ix, n2.iy);
+        const id = at2(n2.l, n2.ix, n2.iy);
         if (id) join(me, ng + id);
       }
       for (const gi of c.viaCells) for (let l = 0; l < label.length; l++) {
-        const id = at(l, gi % W10, gi / W10 | 0);
+        const id = at2(l, gi % W10, gi / W10 | 0);
         if (id) join(me, ng + id);
       }
     }
@@ -51035,9 +51048,9 @@ function defineKSelect() {
     }
     set value(v) {
       const os2 = this.options, want = String(v);
-      const hit4 = os2.find((o) => o.value === want) || null;
-      for (const o of os2) o.selected = o === hit4;
-      this.none = hit4 ? -1 : os2.length;
+      const hit5 = os2.find((o) => o.value === want) || null;
+      for (const o of os2) o.selected = o === hit5;
+      this.none = hit5 ? -1 : os2.length;
       this.sync();
     }
     get disabled() {
@@ -52078,10 +52091,10 @@ function place(K7, P, doc, settings, opts = {}) {
   const inset = Math.max(gap, 0.3);
   const stillBoxes = still.map((p) => geo(p, p.cur[2], p.cur[0], p.cur[1]));
   const placedPads = /* @__PURE__ */ new Map();
-  const addPad = (net, at) => {
+  const addPad = (net, at2) => {
     let l = placedPads.get(net);
     if (!l) placedPads.set(net, l = []);
-    l.push(at);
+    l.push(at2);
   };
   for (const p of still) for (const d of p.pads) if (d.net) {
     const [x, y] = rotv(p.cur[2], d.x, d.y);
@@ -58074,10 +58087,10 @@ function knockoutBox(pts, x, y, deg, margin) {
   });
 }
 function textPrims(g2, out, knock, log) {
-  const at = out.length;
+  const at2 = out.length;
   textPrimsOf(g2, out, knock, log);
   const dt = g2.dxfText;
-  if (!dt || g2.knockout || out.length === at) return;
+  if (!dt || g2.knockout || out.length === at2) return;
   const size = N(g2.size, 1);
   const info = {
     text: S(g2.raw) || S(g2.text),
@@ -58092,7 +58105,7 @@ function textPrims(g2, out, knock, log) {
     bold: !!dt.bold,
     mirror: !!g2.mirror
   };
-  for (let i = at; i < out.length; i++) out[i].text = info;
+  for (let i = at2; i < out.length; i++) out[i].text = info;
 }
 function textPrimsOf(g2, out, knock, log) {
   const text2 = S(g2.raw) || S(g2.text);
@@ -58166,8 +58179,8 @@ function textKnockout(g2, gap, log) {
   const x = oc && g2.face ? oc.x : N(g2.x), y = oc && g2.face ? oc.y : N(g2.y), deg = oc && g2.face ? oc.rot : N(g2.rot);
   return [knockoutBox(pts, x, y, deg, gap + pen / 2)];
 }
-function geomPrims(g2, out, knock, log, grow4 = 0) {
-  const w = N(g2.w) + 2 * grow4;
+function geomPrims(g2, out, knock, log, grow5 = 0) {
+  const w = N(g2.w) + 2 * grow5;
   if (g2.t === "line") {
     const pts = [[N(g2.x1), N(g2.y1)], [N(g2.x2), N(g2.y2)]];
     polyline(pts, false, w, g2, out);
@@ -58179,7 +58192,7 @@ function geomPrims(g2, out, knock, log, grow4 = 0) {
   } else if (g2.t === "circle") {
     const x = N(g2.x), y = N(g2.y), r = N(g2.r);
     if (g2.fill) {
-      const d = 2 * r + (g2.noStroke ? 0 : N(g2.w)) + 2 * grow4;
+      const d = 2 * r + (g2.noStroke ? 0 : N(g2.w)) + 2 * grow5;
       if (d > 0) out.push({ k: "circle", x, y, d });
     } else if (w > 0) {
       if (g2.dash) dashed(circlePoints(x, y, r, MAX_ERROR).concat([[x + r, y]]), canvas().dashPattern(S(g2.dashType), w), w, out);
@@ -58189,7 +58202,7 @@ function geomPrims(g2, out, knock, log, grow4 = 0) {
     const pts = g2.pts || [];
     if (pts.length < 2) return;
     if (g2.fill && pts.length >= 3) out.push({ k: "region", pts });
-    if (!g2.noStroke || grow4 > 0) polyline(pts, !!g2.close, g2.noStroke ? 2 * grow4 : w, g2, out);
+    if (!g2.noStroke || grow5 > 0) polyline(pts, !!g2.close, g2.noStroke ? 2 * grow5 : w, g2, out);
   } else if (g2.t === "text") textPrims(g2, out, knock, log);
 }
 function maskMargin(pad, m, shape2) {
@@ -58568,45 +58581,45 @@ function padNumber(pad, shape2, out) {
 function plotLayer(m, layer, opt, log, conn) {
   const out = [], knock = [];
   const cu = isCopper(layer), mask = /\.Mask$/.test(layer);
-  const tag = (at, k0, meta) => {
-    for (let i = at; i < out.length; i++) if (!out[i].meta) out[i].meta = meta;
+  const tag = (at2, k0, meta) => {
+    for (let i = at2; i < out.length; i++) if (!out[i].meta) out[i].meta = meta;
     for (let i = k0; i < knock.length; i++) if (!knock[i].meta) knock[i].meta = meta;
   };
   const first = m.copper[0], last = m.copper[m.copper.length - 1];
   const connections = conn || new Connections(m);
   const growOf = (g2) => g2.layer !== layer && g2.maskLayer === layer ? typeof g2.maskMargin === "number" ? g2.maskMargin : m.settings.maskExpansion : 0;
   const useGeom = (g2) => {
-    const grow4 = growOf(g2);
-    if (grow4 < 0 && N(g2.w) + 2 * grow4 <= 0 && !g2.fill) return;
-    geomPrims(g2, out, knock, log, grow4);
+    const grow5 = growOf(g2);
+    if (grow5 < 0 && N(g2.w) + 2 * grow5 <= 0 && !g2.fill) return;
+    geomPrims(g2, out, knock, log, grow5);
   };
   for (const item of m.doc.items.values()) {
     const k = item.kind;
     if (k === "footprint" || k === "segment" || k === "arc" || k === "via" || k === "zone" || k === "image" || k === "group" || k === "point" || k === "generated" || k === "gr_bbox" || k === "grid_item") continue;
-    const at = out.length, k0 = knock.length;
+    const at2 = out.length, k0 = knock.length;
     for (const g2 of item.geom) {
       if (g2.layer !== layer && g2.maskLayer !== layer) continue;
       if (g2.hiddenText || g2.point) continue;
       useGeom(g2);
     }
-    if (out.length > at || knock.length > k0) {
+    if (out.length > at2 || knock.length > k0) {
       const net = item.node ? netOf2(item.node, m) : "";
       const text2 = /text|dimension|table|barcode/.test(k);
-      tag(at, k0, layer === "Edge.Cuts" ? { af: "Profile" } : !cu ? {} : text2 || !net ? { af: "NonConductor" } : { af: "Conductor", info: 2, net });
+      tag(at2, k0, layer === "Edge.Cuts" ? { af: "Profile" } : !cu ? {} : text2 || !net ? { af: "NonConductor" } : { af: "Conductor", info: 2, net });
     }
   }
   const hidden = (fp) => fp.dnp && isFab(layer) && !!opt.hideDnpOnFab;
   const fpGeoms = m.footprints.map((fp) => hidden(fp) ? [] : footprintGeoms(fp, layer, opt));
   const fpMeta = (fp) => ({ info: 4, ref: fp.ref, af: layer === "Edge.Cuts" ? "Profile" : cu ? "EtchedComponent" : void 0 });
   fpGeoms.forEach((gs, i) => {
-    const at = out.length, k0 = knock.length;
+    const at2 = out.length, k0 = knock.length;
     for (const g2 of gs) if (g2.t === "text") useGeom(g2);
-    tag(at, k0, { info: 4, ref: m.footprints[i].ref, af: cu ? "NonConductor" : void 0 });
+    tag(at2, k0, { info: 4, ref: m.footprints[i].ref, af: cu ? "NonConductor" : void 0 });
   });
   fpGeoms.forEach((gs, i) => {
-    const at = out.length, k0 = knock.length;
+    const at2 = out.length, k0 = knock.length;
     for (const g2 of gs) if (g2.t !== "text") useGeom(g2);
-    tag(at, k0, fpMeta(m.footprints[i]));
+    tag(at2, k0, fpMeta(m.footprints[i]));
   });
   for (const fp of m.footprints) for (const pad of fp.pads) {
     if (!pad.layers.has(layer)) continue;
@@ -58618,9 +58631,9 @@ function plotLayer(m, layer, opt, log, conn) {
       }
       if (pad.type === "thru_hole" && !flashed(pad.removeUnused, pad.keepEnds, pad.zoneLayers, layer, first, last, pad.x, pad.y, Math.max(shape2.w, shape2.h) / 2, connections)) continue;
     }
-    const at = out.length;
+    const at2 = out.length;
     padPrims(pad, layer, m, out, cu ? opt.widthAdj || 0 : 0);
-    tag(at, knock.length, padMeta(pad, layer, m));
+    tag(at2, knock.length, padMeta(pad, layer, m));
   }
   if (isFab(layer) && opt.sketchPadsOnFab) {
     const side = layer === "F.Fab" ? "F.Cu" : "B.Cu";
@@ -62306,12 +62319,12 @@ function filledZoneNode(node, res, copper, clone2) {
     n2.push(["pts", ...o.map((p) => ["xy", r62(p[0]), r62(p[1])])]);
     polys.push(n2);
   });
-  let at = -1;
-  for (let i = 1; i < out.length; i++) if (Array.isArray(out[i]) && out[i][0] === "polygon") at = i;
-  if (at < 0) {
-    for (let i = 1; i < out.length; i++) if (Array.isArray(out[i]) && out[i][0] === "fill") at = i;
+  let at2 = -1;
+  for (let i = 1; i < out.length; i++) if (Array.isArray(out[i]) && out[i][0] === "polygon") at2 = i;
+  if (at2 < 0) {
+    for (let i = 1; i < out.length; i++) if (Array.isArray(out[i]) && out[i][0] === "fill") at2 = i;
   }
-  out.splice(at + 1, 0, ...polys);
+  out.splice(at2 + 1, 0, ...polys);
   return out;
 }
 function storedFill(node) {
@@ -62609,9 +62622,9 @@ function footprintModels(node) {
     if (!m) continue;
     const ref = { name: `${m[1]}/${m[2]}`, offset: xyzOf(c, "offset", 0), scale: xyzOf(c, "scale", 1), rotate: xyzOf(c, "rotate", 0) };
     if (/KICAD_COLLAB_3DMODELS/.test(path2)) {
-      const hit4 = VENDOR_FIELDS.map(([f, v]) => [v, fieldOf2(node, f)]).find(([, id]) => id);
-      if (!hit4) continue;
-      out.push({ ...ref, source: "vendor", url: `/api/parts/model.step?vendor=${hit4[0]}&id=${encodeURIComponent(hit4[1])}` });
+      const hit5 = VENDOR_FIELDS.map(([f, v]) => [v, fieldOf2(node, f)]).find(([, id]) => id);
+      if (!hit5) continue;
+      out.push({ ...ref, source: "vendor", url: `/api/parts/model.step?vendor=${hit5[0]}&id=${encodeURIComponent(hit5[1])}` });
     } else out.push({ ...ref, source: "kicad", url: `/api/kicad-lib/model?lib=${encodeURIComponent(m[1])}&name=${encodeURIComponent(m[2])}` });
   }
   return out;
@@ -62694,8 +62707,8 @@ async function rawSymbol(lib, name, depth = 0) {
   parent[1] = name;
   for (const c of parent) if (Array.isArray(c) && c[0] === "symbol" && typeof c[1] === "string" && c[1].startsWith(parentName + "_")) c[1] = name + c[1].slice(parentName.length);
   for (const p of k.kids(node, "property")) {
-    const at = parent.findIndex((c) => Array.isArray(c) && c[0] === "property" && k.str(c[1]) === k.str(p[1]) && (k.str(p[1]) !== "private" || k.str(c[2]) === k.str(p[2])));
-    if (at >= 0) parent[at] = p;
+    const at2 = parent.findIndex((c) => Array.isArray(c) && c[0] === "property" && k.str(c[1]) === k.str(p[1]) && (k.str(p[1]) !== "private" || k.str(c[2]) === k.str(p[2])));
+    if (at2 >= 0) parent[at2] = p;
     else {
       const last = parent.map((c, i) => Array.isArray(c) && c[0] === "property" ? i : -1).filter((i) => i >= 0).pop();
       parent.splice((last === void 0 ? 1 : last) + 1, 0, p);
@@ -62850,11 +62863,11 @@ async function findParts(input) {
   const out = { kind };
   if (input.library) {
     const l = await libList(kind, String(input.library));
-    const hit4 = l.items.filter((n2) => matches(n2, ws));
+    const hit5 = l.items.filter((n2) => matches(n2, ws));
     out.library = l.library;
-    out.count = hit4.length;
-    out.items = hit4.slice(0, 150).map((n2) => `${l.library}:${n2}`);
-    if (hit4.length > 150) out.note = `${hit4.length - 150} more; narrow the query.`;
+    out.count = hit5.length;
+    out.items = hit5.slice(0, 150).map((n2) => `${l.library}:${n2}`);
+    if (hit5.length > 150) out.note = `${hit5.length - 150} more; narrow the query.`;
     return out;
   }
   if (!ws.length) throw new ToolError("Give a query (words of the library, part number or part name), or a library to list.");
@@ -63019,13 +63032,13 @@ function styled(child, lx, ly, ang, size, text2) {
   const node = k.cloneNode(child);
   if (text2 !== void 0) node[2] = text2;
   for (let i = node.length - 1; i >= 2; i--) if (Array.isArray(node[i]) && node[i][0] === "hide") node.splice(i, 1);
-  let at = k.kid(node, "at");
-  if (!at) {
-    at = ["at", 0, 0, 0];
-    node.splice(3, 0, at);
+  let at2 = k.kid(node, "at");
+  if (!at2) {
+    at2 = ["at", 0, 0, 0];
+    node.splice(3, 0, at2);
   }
-  at.length = 1;
-  at.push(r42(lx), r42(ly), ang);
+  at2.length = 1;
+  at2.push(r42(lx), r42(ly), ang);
   let fx = k.kid(node, "effects");
   if (!fx) {
     fx = ["effects"];
@@ -63056,8 +63069,8 @@ var Frame = class {
     this.ang = ang;
     this.size = size;
     this.text = text2;
-    const at = (x, y) => measure(doc, fp, styled(child, x, y, ang, size, text2));
-    const b0 = at(0, 0), b1 = at(1, 0), b2 = at(0, 1);
+    const at2 = (x, y) => measure(doc, fp, styled(child, x, y, ang, size, text2));
+    const b0 = at2(0, 0), b1 = at2(1, 0), b2 = at2(0, 1);
     this.ok = !!(b0 && b1 && b2);
     const c = (b) => b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : [0, 0];
     this.c0 = c(b0);
@@ -63489,8 +63502,8 @@ async function resolveDoc(name) {
   }
   const entry = findDoc(name);
   if (!entry) throw new ToolError(`There is no document "${name}" in this project. The documents are: ${projectDocs().map((d) => d.path).join(", ") || "(none)"}.`);
-  const hit4 = cache2.get(entry.docId);
-  if (hit4 && Date.now() - hit4.at < 8e3) return { doc: hit4.doc, path: entry.path, docId: entry.docId, open: false };
+  const hit5 = cache2.get(entry.docId);
+  if (hit5 && Date.now() - hit5.at < 8e3) return { doc: hit5.doc, path: entry.path, docId: entry.docId, open: false };
   const r = await fetch(`/api/docs/${entry.docId}/content?v=${Date.now()}`);
   if (!r.ok) throw new ToolError(`Could not read ${entry.path} (${r.status}).`);
   let doc;
@@ -64232,12 +64245,12 @@ function leavesPin(body, sg) {
 function overlapsOf(doc, list, full) {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
-  const say = (what, a, b, at) => {
+  const say = (what, a, b, at2) => {
     const bn = typeof b === "string" ? b : b.name;
     const key2 = [what, a.owner, a.name, typeof b === "string" ? b : b.owner + b.name].join("|");
     if (seen.has(key2)) return;
     seen.add(key2);
-    out.push({ what, a: a.name, b: bn, at });
+    out.push({ what, a: a.name, b: bn, at: at2 });
   };
   const order = list.map((p, i) => i).sort((i, j) => list[i].box[0] - list[j].box[0]);
   const T = 0.2, B = 0.3;
@@ -64329,11 +64342,11 @@ function surroundings(doc, refs) {
   const want = new Set(refs.map((r) => r.toLowerCase()));
   const ids = /* @__PURE__ */ new Set();
   const key2 = (x, y) => `${Math.round(x * 100)},${Math.round(y * 100)}`;
-  const at = /* @__PURE__ */ new Map();
+  const at2 = /* @__PURE__ */ new Map();
   const put = (kx, v) => {
-    const l = at.get(kx);
+    const l = at2.get(kx);
     if (l) l.push(v);
-    else at.set(kx, [v]);
+    else at2.set(kx, [v]);
   };
   const start = [];
   for (const it of doc.items.values()) {
@@ -64362,7 +64375,7 @@ function surroundings(doc, refs) {
     const kx = todo.pop();
     if (seen.has(kx)) continue;
     seen.add(kx);
-    for (const v of at.get(kx) || []) {
+    for (const v of at2.get(kx) || []) {
       if (v.stop) continue;
       ids.add(v.id);
       if (v.other) todo.push(v.other);
@@ -64485,16 +64498,1420 @@ function itemsWithin(doc, box) {
   return out;
 }
 
+// web/ai/review-physics.ts
+var LIMITS = {
+  antennaClear: 0.5,
+  // no copper inside the antenna's courtyard grown by this (the datasheet's keep-out is usually larger)
+  antennaKeepout: 2,
+  // what board.antenna() clears around the part by default
+  antennaEdge: 3,
+  // an antenna further than this from every board edge is not at the edge
+  fencePitch: 3,
+  // ground vias no further apart than a twentieth of a wavelength at 2.4 GHz in FR-4
+  fenceReach: 2.5,
+  // a point of a ground edge or an RF track is fenced when a ground via is this close
+  rfShort: 6,
+  // a feed shorter than a tenth of a wavelength: its impedance hardly matters
+  impedanceTol: 0.2,
+  // an RF track's impedance may be this far from 50 ohm before it is reported
+  returnVia: 5.08,
+  // a ground via within 200 mil of a fast net's layer change (TI SPRAAR7); closer is better
+  usbSkew: 1.27,
+  // USB 2.0 pair length mismatch, 50 mil
+  fastSkew: 0.13,
+  // USB 3, HDMI, PCIe, SATA, SGMII pair mismatch, 5 mil
+  pairSkew: 0.5,
+  // any other pair
+  crystalFar: 10,
+  // a crystal further than this from its oscillator pins
+  crystalCap: 5,
+  // a load capacitor further than this from its crystal
+  hotLoopCap: 3,
+  // a converter's input capacitor further than this from its VIN pin
+  hotLoop: 10,
+  // VIN pin to capacitor to ground pin, around the loop
+  switchNode: 12,
+  // length of track on a switch node
+  bypassVia: 2,
+  // a decoupling capacitor's ground pad reaches the plane within this
+  quiet: 0.5,
+  // analog or high-impedance copper this close to a switch node or another net
+  highZLength: 10,
+  // length of a photodiode's summing node
+  esdFar: 10,
+  // an ESD part further than this from the connector it protects
+  thermalDrill: 0.33,
+  // a thermal via drill above this wicks solder out of the joint (TI SLMA002)
+  thermalPitch: 1.2
+  // pitch of a thermal pad's via array
+};
+var PHYSICS_RULES = [
+  { id: "antenna.keepout", what: "An antenna sits at a board edge with no copper under or around it on any layer" },
+  { id: "antenna.fence", what: "The ground edge around an antenna's clear area is stitched with vias no more than a twentieth of a wavelength apart" },
+  { id: "rf.feed", what: "An RF feed is short, one width, 50 ohm, on an outer layer with no via, bends gently, runs over unbroken ground and has ground vias down both sides" },
+  { id: "stackup.reference", what: "Fast and RF signals have a ground plane on the layer next to them" },
+  { id: "return.path", what: "Every fast net runs over unbroken ground for its whole length: never across a gap or a split in the plane" },
+  { id: "return.vias", what: "A fast net that changes layer has a ground via beside the signal via for its return current" },
+  { id: "pairs", what: "The two tracks of a differential pair are the same length, change layer together, run side by side and stay within the interface's length" },
+  { id: "bus.match", what: "The lines of a memory or card bus (SD, eMMC, QSPI flash, DDR) are matched to their clock or strobe" },
+  { id: "amplifier.input", what: "An amplifier's inverting input node is tiny: feedback parts at the pin, almost no track" },
+  { id: "crystal", what: "A crystal sits against its oscillator pins with its load capacitors, over ground, with no via in its tracks and nothing routed under it" },
+  { id: "switcher.loop", what: "A switching converter's input capacitor is at its VIN and ground pins, so the loop that carries the switched current is tiny" },
+  { id: "switcher.node", what: "A converter's switch node is short and on one layer, and its feedback track keeps away from the switch node and the inductor" },
+  { id: "bypass.return", what: "Every decoupling capacitor's ground pad reaches the ground plane right at the pad" },
+  { id: "thermal.pad", what: "An exposed thermal pad is tied to the planes through an array of small vias" },
+  { id: "esd.near", what: "ESD protection sits at the connector, before anything else on the line" },
+  { id: "analog.separation", what: "Analog tracks keep away from switch nodes" },
+  { id: "analog.highz", what: "A photodiode's or other high-impedance node is short, on one layer and has nothing routed beside it" },
+  { id: "isolation", what: "Nothing crosses the gap under an optocoupler or isolator, on any layer" },
+  { id: "creepage", what: "Conductors are spaced for the voltage between them (IPC-2221 table 6-1)" },
+  { id: "dfm.via_in_pad", what: "No open via in a small part's solder pad" },
+  { id: "flex.bend", what: "On a flex board nothing rigid sits where it bends: no vias, pads or parts, tracks straight across, no solid copper" },
+  { id: "flex.copper", what: "A flex board's copper suits bending: tracks on the two sides staggered, copper back from the edge, few layers where it flexes" },
+  { id: "stackup.material", what: "The board material suits the job: low-loss laminate for long gigahertz runs, one-sided copper on a metal core" }
+];
+var PHYSICS_MANUAL = [
+  "The antenna's datasheet layout was followed exactly (same ground size, same keep-out, same orientation), and the matching network was tuned on the finished board with a network analyser.",
+  "Nothing metal (battery, shield can, connector shell, display, enclosure wall) is within about 15 mm of the antenna in the assembled product.",
+  "Controlled-impedance tracks were sized with the fabricator's own stackup, and the order says which nets are controlled.",
+  "Every IC's datasheet layout section was read and its example followed (regulators, radios, converters and precision amplifiers above all).",
+  "Current-carrying tracks and vias are sized for their current and the allowed temperature rise (kh.calc.track_width, kh.calc.via_current).",
+  "Mains or other hazardous voltages: creepage and clearance meet the safety standard for the product (IEC 62368-1 or 60664-1), which asks for more than IPC-2221.",
+  "Precision analog: guard rings are driven at the potential of the node they guard, and the board is cleaned of flux where leakage matters."
+];
+var PHYSICS_SOURCE = "Layout physics: Espressif Hardware Design Guidelines (PCB layout); Johanson Technology and Silicon Labs AN1088 antenna layout notes; TI SPRAAR7 High-Speed Interface Layout Guidelines; TI SLMA002 PowerPAD; TI converter layout guidelines; ADI precision photodiode design; Johnson and Graham, High-Speed Digital Design; Bogatin, Signal and Power Integrity Simplified; Ott, Electromagnetic Compatibility Engineering; IPC-2221 table 6-1. Summarised in server/docs/pcb-design-rules.md.";
+var GROUND = /^(?:[ADP]?GND\w*|GNDREF|VSS\w*|EARTH|0V)$/i;
+var SUPPLY = /^(?:[+-]\d|\d+V\d*$|\d+(?:\.\d+)?V$|V(?:CC|DD|BUS|USB|BAT|IN|OUT|SYS|PP|AA|REF|MOTOR|S)\w*|VD?D?[A-Z]*_\w+|V\d+V?\d*|\w+_\d+V\d*$)/i;
+var bare = (n2) => n2.replace(/^\/(.*\/)?/, "");
+var isGnd = (n2) => !!n2 && GROUND.test(bare(n2));
+var isSup = (n2) => !!n2 && !isGnd(n2) && SUPPLY.test(bare(n2)) && !/_(EN|PG|FB|SENSE|OK)$/i.test(n2);
+var r22 = (v) => Math.round(v * 100) / 100;
+var at = (x, y) => `(${r22(x)}, ${r22(y)})`;
+var grow4 = (b, m) => [b[0] - m, b[1] - m, b[2] + m, b[3] + m];
+var hit4 = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+var inBox = (b, x, y) => x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3];
+var boxGap = (a, b) => Math.hypot(Math.max(0, a[0] - b[2], b[0] - a[2]), Math.max(0, a[1] - b[3], b[1] - a[3]));
+var rectShape = (b) => ({ t: "rect", x: (b[0] + b[2]) / 2, y: (b[1] + b[3]) / 2, w: b[2] - b[0], h: b[3] - b[1], rot: 0, rr: 0 });
+var inPoly2 = (pts, x, y) => {
+  let c = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if (a[1] > y !== b[1] > y && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+  }
+  return c;
+};
+function netVolts(name) {
+  const n2 = bare(name);
+  let m = /(-?\d+)V(\d+)(?!\d)/i.exec(n2);
+  if (m) return Number(`${m[1]}.${m[2]}`);
+  m = /(-?\d+(?:\.\d+)?)\s*V(?![A-Za-z])/i.exec(n2);
+  if (m) return Number(m[1]);
+  if (/^(AC_?[LN12]?|MAINS\w*|LINE|LIVE|NEUTRAL|VAC\w*|L_?IN|N_?IN|L|N)$/i.test(n2)) return 325;
+  if (/^V?(BUS|USB)\b|VBUS|VUSB/i.test(n2)) return 5;
+  if (/VBAT|LIPO|VCELL/i.test(n2)) return 4.2;
+  return null;
+}
+function ipcSpacing(volts, column = "B4") {
+  const bands = [15, 30, 50, 100, 150, 170, 250, 300, 500];
+  const table = {
+    B1: [0.05, 0.05, 0.1, 0.1, 0.2, 0.2, 0.2, 0.2, 0.25],
+    B2: [0.1, 0.1, 0.64, 0.64, 0.64, 1.25, 1.25, 1.25, 2.5],
+    B4: [0.075, 0.075, 0.3, 0.3, 0.8, 0.8, 0.8, 0.8, 1.6],
+    A6: [0.13, 0.13, 0.13, 0.13, 0.4, 0.4, 0.4, 0.4, 0.8],
+    A7: [0.13, 0.25, 0.4, 0.5, 0.8, 0.8, 0.8, 0.8, 1.5]
+  };
+  const slope = { B1: 25e-4, B2: 5e-3, B4: 305e-5, A6: 305e-5, A7: 305e-5 };
+  const v = Math.abs(volts), row2 = table[column] || table.B4;
+  const i = bands.findIndex((b) => v <= b);
+  return i >= 0 ? row2[i] : row2[8] + (v - 500) * slope[column];
+}
+var INTERFACES = {
+  usb2: { z: 45, zd: 90, skew: 1.27, bus: null, max: 300, vias: 4 },
+  usb3: { z: 45, zd: 90, skew: 0.13, bus: null, max: 140, vias: 2 },
+  hdmi: { z: 50, zd: 100, skew: 0.13, bus: 2.5, max: 100, vias: 2 },
+  displayport: { z: 50, zd: 100, skew: 0.13, bus: 2.5, max: 150, vias: 2 },
+  ethernet: { z: 50, zd: 100, skew: 1.27, bus: 2.5, max: 100, vias: 2 },
+  pcie: { z: 42.5, zd: 85, skew: 0.13, bus: null, max: 250, vias: 2 },
+  sata: { z: 50, zd: 100, skew: 0.13, bus: null, max: 140, vias: 2 },
+  mipi: { z: 50, zd: 100, skew: 0.13, bus: 1, max: 250, vias: 2 },
+  lvds: { z: 50, zd: 100, skew: 0.25, bus: 2.5, max: 300, vias: 2 },
+  can: { z: null, zd: 120, skew: null, bus: null, max: null, vias: null },
+  rs485: { z: null, zd: 120, skew: null, bus: null, max: null, vias: null },
+  sdram: { z: 50, zd: null, skew: null, bus: 10, max: 150, vias: 2 },
+  ddr1: { z: 50, zd: 100, skew: 0.65, bus: 1.27, max: 150, vias: 2 },
+  ddr2: { z: 50, zd: 100, skew: 0.25, bus: 0.65, max: 125, vias: 2 },
+  ddr3: { z: 40, zd: 80, skew: 0.13, bus: 0.5, max: 100, vias: 2 },
+  ddr4: { z: 40, zd: 80, skew: 0.13, bus: 0.25, max: 100, vias: 2 },
+  ddr5: { z: 40, zd: 75, skew: 0.13, bus: 0.13, max: 75, vias: 2 },
+  lpddr4: { z: 40, zd: 80, skew: 0.13, bus: 0.25, max: 50, vias: 2 },
+  emmc: { z: 50, zd: null, skew: null, bus: 2.5, max: 100, vias: 2 },
+  sd: { z: 50, zd: null, skew: null, bus: 2.5, max: 100, vias: 2 },
+  qspi: { z: 50, zd: null, skew: null, bus: 2.5, max: 50, vias: 2 },
+  spi: { z: null, zd: null, skew: null, bus: null, max: 150, vias: null },
+  i2c: { z: null, zd: null, skew: null, bus: null, max: null, vias: null },
+  i2s: { z: null, zd: null, skew: null, bus: 5, max: 150, vias: null },
+  jtag: { z: null, zd: null, skew: null, bus: null, max: 150, vias: null },
+  rf: { z: 50, zd: null, skew: null, bus: null, max: null, vias: 0 }
+};
+function pairInterface(name) {
+  const n2 = name.toUpperCase();
+  if (/SS[TR]X|USB3|USB_?SS/.test(n2)) return "usb3";
+  if (/HDMI|TMDS/.test(n2)) return "hdmi";
+  if (/(^|_)E?DP\d?_?(ML|LANE|AUX|TX)|DISPLAYPORT/.test(n2)) return "displayport";
+  if (/PCIE|PEX|(^|_)PE[TR]|SGMII/.test(n2)) return "pcie";
+  if (/SATA/.test(n2)) return "sata";
+  if (/CSI|DSI|MIPI/.test(n2)) return "mipi";
+  if (/LVDS/.test(n2)) return "lvds";
+  if (/MDI|ETH|ENET|(^|_)T[RD]D?\d?_?$|(^|_)RD\d?_?$|PHY_?[TR]X/.test(n2)) return "ethernet";
+  if (/DQS|(^|_)CK\d?_?$|DDR|MEM_?CLK/.test(n2)) return "ddr3";
+  if (/USB|(^|_)U?D_?$|(^|_)D[PM]?_?$/.test(n2)) return "usb2";
+  return "";
+}
+var BUSES = [
+  { name: "eMMC", iface: "emmc", bus: /^(E?MMC\d*)[_.]/i, clk: /^(CLK|CK|SCK)$/i, data: /^(D|DAT|DATA)\d$|^CMD$|^DS$/i },
+  { name: "SD card", iface: "sd", bus: /^(U?SD(IO|MMC|HC)?\d*|TF)[_.]/i, clk: /^(CLK|CK|SCK)$/i, data: /^(D|DAT|DATA)\d$|^CMD$/i },
+  { name: "flash", iface: "qspi", bus: /^((Q|O|X)SPI\d*|(SPI_?)?FLASH\d*|SPIQ|SPIHD)[_.]/i, clk: /^(S?CLK|SCK|CK)$/i, data: /^(IO|D|DQ|SIO|SD)\d$|^(MOSI|MISO|SDI|SDO|WP|HOLD)$/i }
+];
+var FLEX_MATERIAL = /polyimide|kapton|^PI\b|\bFPC\b|flex/i;
+var METAL_CORE = /alumin|copper core|metal core|IMS/i;
+var BEND_NAME = /bend|flex|fold/i;
+var FLEX_EDGE = 0.3;
+function physicalStack(doc, k) {
+  const st = doc.stackup || null;
+  const rows = [];
+  let finish = "None";
+  if (st) {
+    for (const l of k.kids(st, "layer")) {
+      const name = k.str(l[1]);
+      const groups = [[]];
+      for (let j = 2; j < l.length; j++) {
+        if (l[j] === "addsublayer") groups.push([]);
+        else if (Array.isArray(l[j])) groups[groups.length - 1].push(l[j]);
+      }
+      const type = k.str((groups[0].find((c) => c[0] === "type") || [0, ""])[1]);
+      for (const g2 of groups) {
+        const v = (key2) => {
+          const c = g2.find((q) => q[0] === key2);
+          return c ? c[1] : void 0;
+        };
+        const t = Number(v("thickness"));
+        if (!(t > 0)) continue;
+        rows.push({ name, type, copper: type === "copper", thickness: t, material: v("material") === void 0 ? "" : k.str(v("material")), er: Number(v("epsilon_r")) || 0, loss: Number(v("loss_tangent")) || 0 });
+      }
+    }
+    const cf = k.kid(st, "copper_finish");
+    if (cf) finish = k.str(cf[1]);
+  }
+  const have = rows.filter((r) => r.copper).length >= 2;
+  return { rows: have ? rows : [], thickness: have ? r22(rows.reduce((a, r) => a + r.thickness, 0)) : 0, finish, assumed: !have };
+}
+function radioGHz(fps, nets) {
+  const text2 = fps.map((f) => f.value + " " + f.lib).join(" ") + " " + Array.from(nets).join(" ");
+  const found = [];
+  if (/5\.?[0-9]?\s?GHZ|WIFI_?5G|5G_?WIFI|U-?NII|802\.11A[CX]?\b|UWB|DW1000|DW3/i.test(text2)) found.push([5.8, "5 GHz"]);
+  if (/2\.4|2450|BLE|BLUETOOTH|WIFI|WLAN|ESP32|ESP8266|ESP-|NRF5|NRF24|ZIGBEE|THREAD|CC25|CC26|RP2040W|CYW43|ATWINC/i.test(text2)) found.push([2.45, "2.4 GHz"]);
+  if (/GPS|GNSS|GLONASS|GALILEO|NEO-|MAX-M|L76|L80|L86|SAM-M|ATGM|TESEO|1575/i.test(text2)) found.push([1.575, "GPS L1"]);
+  if (/LTE|GSM|NB-?IOT|CAT-?M|SIM7|SIM8|BG9\d|EC2\d|SARA-|CELLULAR/i.test(text2)) found.push([2.7, "cellular"]);
+  if (/LORA|SX12[67]\d|RFM9\d|RFM6\d|LLCC68|STM32WL|RA-0\d|E22-|E220|915M|868M|SUB-?G|CC1[12]\d\d|SI44\d\d|RFM69/i.test(text2)) found.push([0.915, "sub-GHz (LoRa, 868/915 MHz)"]);
+  if (/433M|RFM9[68]|315M/i.test(text2) && !found.length) found.push([0.433, "433 MHz"]);
+  if (!found.length) return { ghz: 2.45, why: "2.4 GHz assumed" };
+  found.sort((a, b) => b[0] - a[0]);
+  return { ghz: found[0][0], why: found[0][1] };
+}
+var viaPitchFor = (ghz) => Math.max(1, Math.min(8, 299.79 / ghz / Math.sqrt(4.4) / 20));
+function survey(doc, P, k) {
+  const copper = doc.copper && doc.copper.length ? doc.copper.slice() : ["F.Cu", "B.Cu"];
+  const conds = P.conductors(doc);
+  const NT = P.netTable(doc);
+  const fps = [];
+  const byId = /* @__PURE__ */ new Map();
+  const noCourtyard = /* @__PURE__ */ new Set();
+  const keepouts = [];
+  const zoneOutlines = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  let zones = 0;
+  const expand = (ls) => ls.flatMap((l) => l === "F&B.Cu" ? ["F.Cu", "B.Cu"] : l === "*.Cu" ? copper : [l]);
+  for (const it of doc.items.values()) {
+    if (it.edge && it.bbox) {
+      x0 = Math.min(x0, it.bbox[0]);
+      y0 = Math.min(y0, it.bbox[1]);
+      x1 = Math.max(x1, it.bbox[2]);
+      y1 = Math.max(y1, it.bbox[3]);
+    }
+    if (it.kind === "footprint") {
+      let cy = null;
+      try {
+        const c = P.courtyards({ node: it.node });
+        let a = Infinity, b = Infinity, cc = -Infinity, d = -Infinity;
+        for (const kk of Object.keys(c)) for (const loop of c[kk]) for (const q of loop) {
+          a = Math.min(a, q[0]);
+          b = Math.min(b, q[1]);
+          cc = Math.max(cc, q[0]);
+          d = Math.max(d, q[1]);
+        }
+        if (a <= cc) cy = [a, b, cc, d];
+      } catch {
+      }
+      const f = { ref: it.ref || "?", value: it.value || "", lib: it.lib || "", x: it.x, y: it.y, side: it.layer === "B.Cu" ? "back" : "front", box: cy || it.bbox || [it.x - 0.5, it.y - 0.5, it.x + 0.5, it.y + 0.5], pads: [], id: it.id };
+      fps.push(f);
+      byId.set(it.id, f);
+      if (!cy) noCourtyard.add(f);
+    } else if (it.kind === "zone") {
+      const n2 = it.node;
+      const ls = k.kid(n2, "layers") || k.kid(n2, "layer");
+      const layers = expand(ls ? ls.slice(1).map((x) => k.str(x)) : []);
+      const poly = k.kid(n2, "polygon");
+      const pts = poly ? k.ptsOf(poly) : [];
+      if (!pts.length) continue;
+      const ko = k.kid(n2, "keepout");
+      if (ko) {
+        let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+        for (const q of pts) {
+          a = Math.min(a, q[0]);
+          b = Math.min(b, q[1]);
+          c = Math.max(c, q[0]);
+          d = Math.max(d, q[1]);
+        }
+        const cp2 = k.kid(ko, "copperpour");
+        const nm3 = k.kid(n2, "name");
+        keepouts.push({ box: [a, b, c, d], layers, copper: !!cp2 && k.str(cp2[1]) === "not_allowed", name: nm3 ? k.str(nm3[1]) : "" });
+      } else {
+        zones++;
+        const nn = k.kid(n2, "net_name");
+        const net = NT.key(P.netOf(n2)) || (nn ? k.str(nn[1]) : "");
+        const fl = k.kid(n2, "fill");
+        const md = fl ? k.kid(fl, "mode") : null;
+        zoneOutlines.push({ net, layers, pts, hatched: !!md && k.str(md[1]) === "hatch" });
+      }
+    }
+  }
+  const fills = /* @__PURE__ */ new Map();
+  let filled = 0;
+  const tracks = [], vias = [];
+  const stitches = [];
+  for (const c of conds) {
+    if (c.kind === "pad") {
+      const f = byId.get(c.item.id);
+      if (!f) continue;
+      const fnN = k.kid(c.pad.node, "pinfunction");
+      f.pads.push({ number: c.pad.number, x: c.pad.x, y: c.pad.y, net: c.net || "", fn: fnN ? k.str(fnN[1]) : "", type: c.pad.type, box: c.bbox, layers: c.layers, fp: f });
+      if (isGnd(c.net) && c.pad.type === "thru_hole") stitches.push({ x: c.pad.x, y: c.pad.y });
+    } else if (c.kind === "segment" || c.kind === "arc") tracks.push(c);
+    else if (c.kind === "via") {
+      vias.push(c);
+      if (isGnd(c.net)) stitches.push({ x: c.shape.x, y: c.shape.y });
+    } else if (c.kind === "zone") {
+      filled++;
+      for (const l of c.layers) {
+        const e = fills.get(l) || [];
+        fills.set(l, e);
+        e.push({ net: c.net, pts: c.shape.pts, box: c.bbox });
+      }
+    }
+  }
+  for (const f of noCourtyard) {
+    if (!f.pads.length) continue;
+    let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+    for (const p of f.pads) {
+      a = Math.min(a, p.box[0]);
+      b = Math.min(b, p.box[1]);
+      c = Math.max(c, p.box[2]);
+      d = Math.max(d, p.box[3]);
+    }
+    f.box = [a - 0.25, b - 0.25, c + 0.25, d + 0.25];
+  }
+  const outline = isFinite(x0) ? [x0, y0, x1, y1] : null;
+  const pourAt = (x, y, layer) => {
+    let other = "";
+    if (filled) {
+      for (const f of fills.get(layer) || []) {
+        if (!inBox(f.box, x, y) || !inPoly2(f.pts, x, y)) continue;
+        if (isGnd(f.net)) return "gnd";
+        other = "plane";
+      }
+      return other;
+    }
+    for (const z of zoneOutlines) {
+      if (!z.layers.includes(layer) || !inPoly2(z.pts, x, y)) continue;
+      if (isGnd(z.net)) return "gnd";
+      other = "plane";
+    }
+    return other;
+  };
+  const gndLayersAt = (x, y) => copper.filter((l) => pourAt(x, y, l) === "gnd").length;
+  const refLayers = (layer) => {
+    const i = copper.indexOf(layer);
+    return i < 0 ? [] : [copper[i - 1], copper[i + 1]].filter(Boolean);
+  };
+  const nearestStitch = (x, y, skip) => {
+    let d = Infinity;
+    for (const s of stitches) {
+      if (skip && Math.abs(s.x - skip.x) < 1e-6 && Math.abs(s.y - skip.y) < 1e-6) continue;
+      d = Math.min(d, Math.hypot(s.x - x, s.y - y));
+    }
+    return d;
+  };
+  const walk = (c, step, fn) => {
+    const pts = c.shape.t === "seg" ? [c.shape.a, c.shape.b] : c.shape.pts;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const n2 = Math.max(1, Math.round(L / step));
+      for (let j = 0; j < n2; j++) {
+        const t = (j + 0.5) / n2;
+        fn(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t);
+      }
+    }
+  };
+  const tracksOf = /* @__PURE__ */ new Map();
+  for (const t of tracks) {
+    if (!t.net) continue;
+    const e = tracksOf.get(t.net) || [];
+    tracksOf.set(t.net, e);
+    e.push(t);
+  }
+  const viasOf = /* @__PURE__ */ new Map();
+  for (const v of vias) {
+    if (!v.net) continue;
+    const e = viasOf.get(v.net) || [];
+    viasOf.set(v.net, e);
+    e.push(v);
+  }
+  const padsOf = /* @__PURE__ */ new Map();
+  for (const f of fps) for (const p of f.pads) {
+    if (!p.net) continue;
+    const e = padsOf.get(p.net) || [];
+    padsOf.set(p.net, e);
+    e.push(p);
+  }
+  const lengthOf = (net) => (tracksOf.get(net) || []).reduce((a, t) => a + t.length, 0);
+  return { copper, conds, fps, keepouts, zoneOutlines, zones, filled, outline, tracks, vias, stitches, pourAt, gndLayersAt, refLayers, nearestStitch, walk, tracksOf, viasOf, padsOf, lengthOf };
+}
+var isConnector = (f) => /^(J|P|CN|X|USB)\d/i.test(f.ref) || /^Connector/i.test(f.lib);
+var isAntenna = (f) => (/^(AE|ANT)\d/i.test(f.ref) || /antenna/i.test(f.lib + " " + f.value)) && !isConnector(f) && !/u\.?fl|sma|ipex|mmcx|coax/i.test(f.lib + " " + f.value);
+var isCrystal = (f) => (/^(Y|XTAL)\d/i.test(f.ref) || /crystal|xtal|resonator/i.test(f.lib + " " + f.value)) && !f.pads.some((p) => isSup(p.net));
+var isPowerInductor = (f) => /^L\d/i.test(f.ref) && (f.box[2] - f.box[0]) * (f.box[3] - f.box[1]) >= 4;
+var isEsd = (f) => /(^|[^a-z])(tvs|esd)|usblc|prtr5v|tpd\d|sp05|pesd|srv05|ip4220|pusb|nup\d|rclamp|esda|sm[abc]j\d|smf\d/i.test(f.lib + " " + f.value);
+var isIsolator = (f) => /isolator|optocoupl|opto_/i.test(f.lib) || /^(pc8\d\d|tlp\d|6n13\d|4n\d\d|hcpl|acpl|ltv-?\d|el8\d\d|fod\d|moc\d|vo\d{3}|iso\d{4}|adum\d|si8[6-9]\d|il7\d\d|sfh6\d)/i.test(f.value);
+var isPhotodiode = (f) => /photo_?diode|bpw\d|sfh2\d|vemd\d|temd\d|vbpw|s1223|s1337|s5971|pin_?pd/i.test(f.lib + " " + f.value);
+var isPatch = (f) => /patch/i.test(f.lib + " " + f.value);
+var isOpamp = (f) => /^Amplifier_(Operational|Instrumentation|Current|Difference|Audio|Video|Buffer)/i.test(f.lib) || /^(OPA\d|LM358|LM324|LM29\d\d|LMV\d|LMC\d|LMH\d|TL0[678]\d|TLV\d{3,4}|TLC\d{3}|AD8\d|ADA4|LT\d{4}|LTC6\d|MCP6\d|NE553|MAX4\d|MAX9\d|INA\d|OP\d{2,3}[A-Z]|THS\d|NCS\d|TSV\d|OPAMP)/i.test(f.value);
+var few = (l, n2 = 8) => l.length > n2 ? l.slice(0, n2).concat(`and ${l.length - n2} more`) : l;
+function thermalPad(f) {
+  if (f.pads.length < 5) return null;
+  const area3 = (p) => (p.box[2] - p.box[0]) * (p.box[3] - p.box[1]);
+  const sorted = f.pads.filter((p) => p.type === "smd").slice().sort((a, b) => area3(b) - area3(a));
+  if (sorted.length < 5) return null;
+  const big = sorted[0], med = area3(sorted[Math.floor(sorted.length / 2)]);
+  if (area3(big) < 2 || area3(big) < 3 * med) return null;
+  const w = f.box[2] - f.box[0], h = f.box[3] - f.box[1];
+  return Math.abs(big.x - (f.box[0] + f.box[2]) / 2) < w / 4 && Math.abs(big.y - (f.box[1] + f.box[3]) / 2) < h / 4 ? big : null;
+}
+function antennaRegion(S2, f, clear) {
+  const b = grow4(f.box, clear);
+  const o = S2.outline;
+  if (!o) return b;
+  const out = [b[0], b[1], b[2], b[3]];
+  if (b[0] - o[0] < LIMITS.antennaEdge) out[0] = o[0];
+  if (o[2] - b[2] < LIMITS.antennaEdge) out[2] = o[2];
+  if (b[1] - o[1] < LIMITS.antennaEdge) out[1] = o[1];
+  if (o[3] - b[3] < LIMITS.antennaEdge) out[3] = o[3];
+  return [Math.max(out[0], o[0]), Math.max(out[1], o[1]), Math.min(out[2], o[2]), Math.min(out[3], o[3])];
+}
+function ringPoints(S2, b, off, pitch, margin) {
+  const g2 = grow4(b, off), o = S2.outline;
+  const out = [];
+  const side = (ax, ay, bx, by) => {
+    const L = Math.hypot(bx - ax, by - ay);
+    const n2 = Math.max(1, Math.ceil(L / pitch));
+    for (let i = 0; i < n2; i++) out.push([ax + (bx - ax) * i / n2, ay + (by - ay) * i / n2]);
+  };
+  side(g2[0], g2[1], g2[2], g2[1]);
+  side(g2[2], g2[1], g2[2], g2[3]);
+  side(g2[2], g2[3], g2[0], g2[3]);
+  side(g2[0], g2[3], g2[0], g2[1]);
+  return o ? out.filter(([x, y]) => x >= o[0] + margin && x <= o[2] - margin && y >= o[1] + margin && y <= o[3] - margin) : out;
+}
+function reviewPhysics(doc, P, k, settings, add) {
+  const S2 = survey(doc, P, k);
+  const { copper, fps, tracksOf, viasOf, padsOf } = S2;
+  const gz = S2.zones > 0;
+  const twoGround = gz && copper.length >= 2;
+  const pairBase = /* @__PURE__ */ new Map();
+  for (const net of padsOf.keys()) {
+    const pn = pairName(net);
+    if (!pn) continue;
+    const e = pairBase.get(pn.base) || {};
+    pairBase.set(pn.base, e);
+    if (pn.pol > 0) e.p = net;
+    else e.n = net;
+  }
+  const paired = /* @__PURE__ */ new Set();
+  for (const e of pairBase.values()) if (e.p && e.n) {
+    paired.add(e.p);
+    paired.add(e.n);
+  }
+  const antennas = fps.filter(isAntenna);
+  const feedNets = /* @__PURE__ */ new Set();
+  for (const a of antennas) for (const p of a.pads) if (p.net && !isGnd(p.net)) feedNets.add(p.net);
+  const kindOf = (net) => isGnd(net) ? "supply" : feedNets.has(net) ? "rf" : netKind(net, paired.has(net) || void 0);
+  const rfNets = Array.from(padsOf.keys()).filter((n2) => kindOf(n2) === "rf"), fastNets = Array.from(padsOf.keys()).filter((n2) => kindOf(n2) === "fast");
+  const radio = radioGHz(fps, padsOf.keys());
+  const pitch = r22(viaPitchFor(radio.ghz)), reach = pitch / 2 + 1, rfShort = Math.max(3, r22(pitch * 2));
+  if (gz && !S2.filled) add("return.path", "note", "The zones are not filled, so the ground checks below read each pour's outline instead of its real copper. Fill them first (board.fill()).");
+  const antRegions = antennas.filter((a) => !isPatch(a)).map((a) => {
+    const ko = S2.keepouts.find((q) => q.copper && hit4(q.box, a.box));
+    return grow4(ko ? ko.box : antennaRegion(S2, a, LIMITS.antennaClear), 0.3);
+  });
+  {
+    const dirty = [], inland = [], open2 = [], bare_ = [], thin = [], noGround = [];
+    for (const a of antennas) {
+      const own = new Set(a.pads.map((p) => p.net).filter(Boolean));
+      const core = grow4(a.box, LIMITS.antennaClear), shape2 = rectShape(core);
+      const what = /* @__PURE__ */ new Set();
+      if (isPatch(a)) {
+        const cx = (a.box[0] + a.box[2]) / 2, cy = (a.box[1] + a.box[3]) / 2;
+        if (gz && !copper.some((l) => S2.pourAt(cx, cy, l) === "gnd")) noGround.push(`${a.ref}: no ground under it`);
+        const ringP = ringPoints(S2, a.box, 1, 0.5, 0.4).filter(([x, y]) => S2.gndLayersAt(x, y) >= 2);
+        if (ringP.length >= 4) {
+          const gaps = ringP.filter(([x, y]) => S2.nearestStitch(x, y) > reach);
+          if (gaps.length > ringP.length * 0.5) thin.push(`${a.ref}: ${Math.round(gaps.length * 0.5)} mm of the ground round the patch has no via within ${r22(reach)} mm`);
+        }
+        continue;
+      }
+      for (const c of S2.conds) {
+        if (!hit4(c.bbox, core)) continue;
+        if (c.kind === "pad") {
+          const f = c.item.id === a.id ? null : fps.find((q) => q.id === c.item.id);
+          if (f) what.add(`${f.ref} sits in it`);
+          continue;
+        }
+        if (c.kind !== "zone" && own.has(c.net)) continue;
+        if (P.shapeGap(c.shape, shape2) > 0) continue;
+        what.add(c.kind === "zone" ? `${bare(c.net) || "copper"} pour on ${Array.from(c.layers).join(", ")}` : `${c.kind === "via" ? "a via" : "a track"} of ${bare(c.net) || "no net"}`);
+      }
+      if (what.size) dirty.push(`${a.ref}: ${Array.from(what).slice(0, 5).join("; ")}`);
+      if (S2.outline) {
+        const o = S2.outline;
+        const d = Math.min(a.box[0] - o[0], o[2] - a.box[2], a.box[1] - o[1], o[3] - a.box[3]);
+        if (d > LIMITS.antennaEdge) inland.push(`${a.ref} is ${r22(d)} mm from the nearest board edge`);
+      }
+      const ko = S2.keepouts.find((q) => q.copper && hit4(q.box, a.box));
+      if (gz && !ko) open2.push(a.ref);
+      const region = ko ? ko.box : antennaRegion(S2, a, LIMITS.antennaClear);
+      const ring = ringPoints(S2, region, 1, 0.5, 0.4).filter(([x, y]) => S2.gndLayersAt(x, y) >= 2);
+      if (ring.length >= 4) {
+        const gaps = ring.filter(([x, y]) => S2.nearestStitch(x, y) > reach);
+        if (gaps.length === ring.length) bare_.push(a.ref);
+        else if (gaps.length > ring.length * 0.2) thin.push(`${a.ref}: ${Math.round(gaps.length * 0.5)} mm of ${Math.round(ring.length * 0.5)} mm of ground edge has no via within ${r22(reach)} mm, first near ${at(gaps[0][0], gaps[0][1])}`);
+      }
+    }
+    if (dirty.length) add("antenna.keepout", "error", "There is copper in an antenna's clear area. An antenna radiates into the space around it: copper under or beside it, on any layer, detunes it and swallows the signal. Clear every layer (board.antenna(ref) adds the keep-out and refills).", dirty);
+    if (inland.length) add("antenna.keepout", "warning", `An antenna belongs at a board edge, preferably a corner, pointing away from the rest of the board (within ${LIMITS.antennaEdge} mm of the edge).`, inland);
+    if (open2.length) add("antenna.keepout", "warning", "No keep-out area covers these antennas, so the next zone fill pours copper under them. board.antenna(ref) adds one on every layer.", open2);
+    if (bare_.length) add("antenna.fence", "error", `The ground around these antennas has no stitching vias. The edge of a ground pour that faces an antenna is part of the antenna: unstitched, the top and bottom pours are driven against each other and the edge radiates and resonates on its own. Tie the layers together along that edge with vias no more than ${pitch} mm apart (a twentieth of a wavelength; ${radio.why}): board.antenna(ref).`, bare_);
+    if (thin.length) add("antenna.fence", "warning", `The ground edge around an antenna needs a via at least every ${pitch} mm (a twentieth of a wavelength; ${radio.why}). board.antenna(ref) fills the gaps.`, thin);
+    if (noGround.length) add("antenna.keepout", "warning", "A patch antenna (GPS, GNSS) works against the ground plane under it: it needs unbroken ground beneath and around it, as large as its datasheet asks (often 50 mm square or more), not a keep-out.", noGround);
+  }
+  {
+    const stack = stackupOf(k, doc);
+    for (const net of rfNets) {
+      const segs = tracksOf.get(net) || [];
+      if (!segs.length) continue;
+      const name = bare(net);
+      const L = S2.lengthOf(net);
+      const items = [];
+      let level = "warning";
+      const nv = (viasOf.get(net) || []).length;
+      if (nv) items.push(`${nv} via${nv > 1 ? "s" : ""}: an RF track stays on one outer layer`);
+      const widths = Array.from(new Set(segs.map((t) => r22(t.width))));
+      if (widths.length > 1) items.push(`width changes (${widths.join(", ")} mm): every step is an impedance step`);
+      const layers = Array.from(new Set(segs.flatMap((t) => Array.from(t.layers))));
+      if (layers.some((l) => l !== copper[0] && l !== copper[copper.length - 1])) items.push(`runs on ${layers.join(", ")}: keep it on an outer layer`);
+      if (L > rfShort) {
+        const tr = traceOn(stack, layers[0]);
+        if (tr) {
+          const z = z0(tr, widths[0]);
+          if (Math.abs(z - 50) / 50 > LIMITS.impedanceTol) {
+            const w = widthFor(tr, 50);
+            items.push(`${r22(widths[0])} mm wide is about ${Math.round(z)} ohm over ${r22(tr.h)} mm of board${w ? `; 50 ohm needs ${r22(w)} mm` : ""}${tr.h > 0.5 ? " (a coplanar track with ground close beside it, a thinner board or four layers gets a practical width)" : ""}`);
+          }
+        }
+      }
+      let sharp = 0;
+      const ends = [];
+      for (const t of segs) {
+        if (t.shape.t !== "seg") continue;
+        const a = t.shape.a, b = t.shape.b;
+        const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        ends.push({ p: a, d: [(b[0] - a[0]) / l, (b[1] - a[1]) / l] }, { p: b, d: [(a[0] - b[0]) / l, (a[1] - b[1]) / l] });
+      }
+      for (let i = 0; i < ends.length; i++) for (let j = i + 1; j < ends.length; j++) {
+        if (Math.hypot(ends[i].p[0] - ends[j].p[0], ends[i].p[1] - ends[j].p[1]) > 1e-3) continue;
+        const dot = ends[i].d[0] * ends[j].d[0] + ends[i].d[1] * ends[j].d[1];
+        if (dot > -0.7 && dot < 0.999) sharp++;
+      }
+      if (sharp) items.push(`${sharp} sharp corner${sharp > 1 ? "s" : ""}: bend an RF track at 135 degrees or in an arc`);
+      let n2 = 0, noRef = 0, noFence = 0;
+      let first = null;
+      for (const t of segs) {
+        const refs = S2.refLayers(Array.from(t.layers)[0]);
+        S2.walk(t, 0.5, (x, y) => {
+          n2++;
+          if (antRegions.some((b) => inBox(b, x, y))) return;
+          if (refs.length && !refs.some((l) => S2.pourAt(x, y, l) === "gnd")) {
+            noRef++;
+            if (!first) first = [x, y];
+          }
+          if (S2.nearestStitch(x, y) > Math.max(pitch, 2.5)) noFence++;
+        });
+      }
+      if (gz && noRef * 0.5 > 0.5 && first) {
+        items.push(`${r22(noRef * 0.5)} mm of its ${r22(L)} mm has no ground under it on the next layer, first near ${at(first[0], first[1])}`);
+        level = "error";
+      }
+      if (twoGround && L > 3 && noFence > n2 * 0.3) items.push(`no ground via within ${Math.max(pitch, 2.5)} mm along ${Math.round(100 * noFence / n2)} % of it: fence it (board.fence_net("${name}"))`);
+      if (items.length) add("rf.feed", level, `RF net ${name} (${r22(L)} mm).`, items);
+      const pads = padsOf.get(net) || [];
+      if (pads.some((p) => isAntenna(p.fp)) && pads.some((p) => /^(U|IC)\d/i.test(p.fp.ref))) add("rf.feed", "note", `${name} runs straight from the chip to the antenna. Leave room for a pi matching network (a series part and a shunt to ground each side, placed at the antenna or the chip as its datasheet says) so the antenna can be tuned on the finished board.`);
+    }
+  }
+  const fastWithTracks = rfNets.concat(fastNets).filter((n2) => (tracksOf.get(n2) || []).length);
+  if (fastWithTracks.length) {
+    if (copper.length >= 4) {
+      const o = S2.outline;
+      const probe2 = o ? [0.25, 0.5, 0.75].flatMap((u) => [0.25, 0.5, 0.75].map((v) => [o[0] + (o[2] - o[0]) * u, o[1] + (o[3] - o[1]) * v])) : [];
+      const hits2 = probe2.filter(([x, y]) => S2.pourAt(x, y, copper[1]) === "gnd").length;
+      if (probe2.length && hits2 < 5) add("stackup.reference", "warning", `${copper[1]}, the layer under the parts, is not a ground plane. On four layers make it one, unbroken (signal, ground, power, signal or signal, ground, ground, signal): board.layers(4, planes=["${copper[1]}"]) and board.zone("GND", layer="${copper[1]}").`);
+    } else if (rfNets.some((n2) => S2.lengthOf(n2) > rfShort)) {
+      const st = stackupOf(k, doc);
+      const tr = traceOn(st, copper[0]);
+      if (tr && tr.h > 1) add("stackup.reference", "note", `A 50 ohm track on a two-layer ${r22(tr.h)} mm board is about ${r22(widthFor(tr, 50) || 3)} mm wide. Keep the feed shorter than ${rfShort} mm (a tenth of a wavelength; ${radio.why}), or use four layers (ground ${0.2} mm under the top) or a thinner board.`);
+    }
+  }
+  {
+    const cut = [], power = [];
+    let noPlane = 0;
+    for (const net of fastNets) {
+      const segs = tracksOf.get(net) || [];
+      if (!segs.length) continue;
+      let n2 = 0, bad = 0, pl = 0;
+      let first = null;
+      for (const t of segs) {
+        const refs = S2.refLayers(Array.from(t.layers)[0]);
+        if (!refs.length) continue;
+        S2.walk(t, 0.5, (x, y) => {
+          n2++;
+          const what = refs.map((l) => S2.pourAt(x, y, l));
+          if (what.includes("gnd")) return;
+          if (what.includes("plane")) pl++;
+          else {
+            bad++;
+            if (!first) first = [x, y];
+          }
+        });
+      }
+      if (!n2) continue;
+      if (!gz) {
+        noPlane++;
+        continue;
+      }
+      if (bad * 0.5 > Math.max(1, n2 * 0.05) && first) cut.push(`${bare(net)}: ${r22(bad * 0.5)} mm of ${r22(n2 * 0.5)} mm has no plane under it, first near ${at(first[0], first[1])}`);
+      else if (pl > n2 * 0.5) power.push(bare(net));
+    }
+    if (noPlane) add("return.path", "warning", `${noPlane} fast net${noPlane > 1 ? "s run" : " runs"} on a board with no ground plane. A signal's return current flows in the plane directly under its track; with no plane it finds its own way round, and the loop it makes radiates and picks up noise. Pour ground on the layer next to the signals.`);
+    if (cut.length) add("return.path", "warning", "These fast nets cross places with no ground on the layer next to them (a gap, a slot cut by other tracks, the edge of the pour). The return current has to detour round the gap, which makes a loop antenna and couples into every net that shares the detour. Move the track, close the gap, or route what cuts the plane somewhere else.", cut);
+    if (power.length) add("return.path", "note", "These fast nets run over a supply pour instead of ground. It works only where that supply is tightly decoupled to ground at both ends of the track; ground is the better reference.", power);
+  }
+  if (twoGround) {
+    const far = [];
+    for (const net of rfNets.concat(fastNets)) for (const v of viasOf.get(net) || []) {
+      const d = S2.nearestStitch(v.shape.x, v.shape.y);
+      if (d > LIMITS.returnVia) far.push(`${bare(net)} at ${at(v.shape.x, v.shape.y)}${isFinite(d) ? `: nearest ground via ${r22(d)} mm away` : ""}`);
+    }
+    if (far.length) add("return.vias", "warning", 'Where a fast signal changes layer its return current must change planes too, and it can only do that through a ground via. Put one beside each of these signal vias, as close as fits (board.route(fence=...) does it while routing; board.via("GND", (x, y)) by hand).', far);
+  }
+  {
+    const skew = [], vias = [], apart = [], long = [];
+    for (const [base, e] of pairBase) {
+      if (!e.p || !e.n) continue;
+      const tp = tracksOf.get(e.p) || [], tn = tracksOf.get(e.n) || [];
+      if (!tp.length || !tn.length) continue;
+      const name = bare(base).replace(/[_\-]$/, "") || bare(e.p);
+      const lp = S2.lengthOf(e.p), ln = S2.lengthOf(e.n);
+      const ifc = pairInterface(bare(e.p));
+      const rule = ifc ? INTERFACES[ifc] : null;
+      const label = ifc ? `${name} (${ifc})` : name;
+      const limit = rule && rule.skew ? rule.skew : LIMITS.pairSkew;
+      if (Math.abs(lp - ln) > limit + 1e-6) skew.push(`${label}: ${r22(lp)} mm and ${r22(ln)} mm, ${r22(Math.abs(lp - ln))} mm apart (limit ${limit} mm)`);
+      if (rule && rule.max && Math.max(lp, ln) > rule.max) long.push(`${label}: ${r22(Math.max(lp, ln))} mm (at most about ${rule.max} mm)`);
+      const vp = (viasOf.get(e.p) || []).length, vn = (viasOf.get(e.n) || []).length, vmax = rule && rule.vias ? rule.vias : 2;
+      if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`);
+      else if (vp > vmax) vias.push(`${name}: ${vp} vias on each track (at most ${vmax})`);
+      let n2 = 0, lone = 0;
+      for (const t of tp) {
+        const lay = Array.from(t.layers)[0];
+        const others = tn.filter((q) => q.layers.has(lay));
+        S2.walk(t, 0.5, (x, y) => {
+          n2++;
+          const reach2 = Math.max(1, 4 * t.width);
+          if (!others.some((q) => P.shapeGap({ t: "circle", x, y, r: 0 }, q.shape) <= reach2)) lone++;
+        });
+      }
+      if (lone * 0.5 > Math.max(3, n2 * 0.5 * 0.25)) apart.push(`${name}: ${r22(lone * 0.5)} mm of ${r22(lp)} mm runs without its partner beside it`);
+    }
+    if (skew.length) add("pairs", "warning", "The two tracks of a pair must be the same length, or the signal turns into common mode (noise out, noise in). Add a small serpentine to the shorter one at the end where the mismatch arises (board.route matches lengths when it routes the pair).", skew);
+    if (vias.length) add("pairs", "warning", "Both tracks of a pair change layer together, at the same place, the same number of times, and as rarely as possible.", vias);
+    if (long.length) add("pairs", "warning", "These pairs are longer than their interface is specified for on ordinary FR-4. Move the parts closer, or check the loss budget of the link.", long);
+    if (apart.length) add("pairs", "warning", "A pair's tracks run side by side at a constant gap from pad to pad. These split up: move the parts in the pair's path so both tracks reach them in the same order.", apart);
+  }
+  {
+    const out = [];
+    const routed = Array.from(tracksOf.keys());
+    for (const b of BUSES) {
+      const groups = /* @__PURE__ */ new Map();
+      for (const net of routed) {
+        const n2 = bare(net);
+        const m = b.bus.exec(n2);
+        if (!m) continue;
+        const rest = n2.slice(m[0].length);
+        const g2 = groups.get(m[1].toUpperCase()) || { data: [] };
+        groups.set(m[1].toUpperCase(), g2);
+        if (b.clk.test(rest)) g2.clk = net;
+        else if (b.data.test(rest)) g2.data.push(net);
+      }
+      for (const [prefix, g2] of groups) {
+        if (!g2.clk || g2.data.length < 2) continue;
+        const lim = INTERFACES[b.iface].bus, max = INTERFACES[b.iface].max;
+        const lc = S2.lengthOf(g2.clk);
+        const off = g2.data.map((n2) => ({ n: n2, d: S2.lengthOf(n2) - lc })).filter((q) => Math.abs(q.d) > lim).sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
+        if (off.length) out.push(`${prefix} (${b.name}): clock ${r22(lc)} mm; ${off.slice(0, 4).map((q) => `${bare(q.n)} ${q.d > 0 ? "+" : ""}${r22(q.d)} mm`).join(", ")} (within ${lim} mm)`);
+        const longest = Math.max(lc, ...g2.data.map((n2) => S2.lengthOf(n2)));
+        if (longest > max) out.push(`${prefix} (${b.name}): ${r22(longest)} mm long (keep it under about ${max} mm)`);
+      }
+    }
+    const dq = routed.map((net) => ({ net, m: /^(.*?)_?DQ(\d+)$/i.exec(bare(net)) })).filter((q) => q.m);
+    if (dq.length >= 8) {
+      const strobe = (prefix, lane) => routed.find((n2) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}_?(L|U)?DQS_?${lane}?_?(P|T|\\+)?$`, "i").test(bare(n2)) && (lane > 0 || !/DQS_?[1-9]/i.test(bare(n2))));
+      const gen = /DDR5/i.test(fps.map((f) => f.value).join(" ")) ? "ddr5" : /DDR4/i.test(fps.map((f) => f.value).join(" ")) ? "ddr4" : /DDR2/i.test(fps.map((f) => f.value).join(" ")) ? "ddr2" : "ddr3";
+      const lim = INTERFACES[gen].bus;
+      const lanes = /* @__PURE__ */ new Map();
+      for (const q of dq) {
+        const key2 = `${q.m[1]}|${Math.floor(Number(q.m[2]) / 8)}`;
+        const l = lanes.get(key2) || [];
+        lanes.set(key2, l);
+        l.push(q.net);
+      }
+      for (const [key2, nets] of lanes) {
+        const [prefix, lane] = key2.split("|");
+        const st = strobe(prefix, Number(lane));
+        if (!st) continue;
+        const ls = S2.lengthOf(st);
+        const off = nets.map((n2) => ({ n: n2, d: S2.lengthOf(n2) - ls })).filter((q) => Math.abs(q.d) > lim);
+        const lay = new Set(nets.flatMap((n2) => (tracksOf.get(n2) || []).flatMap((t) => Array.from(t.layers))));
+        if (off.length) out.push(`${prefix || "DDR"} byte lane ${lane} (${gen}): strobe ${r22(ls)} mm; ${off.slice(0, 4).map((q) => `${bare(q.n)} ${q.d > 0 ? "+" : ""}${r22(q.d)} mm`).join(", ")} (within ${lim} mm)`);
+        if (lay.size > 2) out.push(`${prefix || "DDR"} byte lane ${lane}: routed on ${Array.from(lay).join(", ")}; keep a byte lane on one layer (two at most, with equal vias)`);
+      }
+    }
+    if (out.length) add("bus.match", "warning", "The lines of a clocked bus must arrive together. Match each data line to its clock or strobe by lengthening the short ones with a gentle serpentine, away from the clock.", out);
+  }
+  {
+    const out = [];
+    for (const u of fps.filter(isOpamp)) for (const p of u.pads) {
+      if (!/^(-|IN-|-IN|INN|IN_N|VIN-|INM|IN\d-|-IN[A-D]?|IN[A-D]-|\d?IN-)$/i.test(p.fn) || !p.net || isGnd(p.net) || isSup(p.net)) continue;
+      const L = S2.lengthOf(p.net);
+      if (L > 8) out.push(`${u.ref}.${p.number} (${bare(p.net)}): ${r22(L)} mm of track on the inverting input`);
+      const farP = (padsOf.get(p.net) || []).filter((q) => /^(R|C)\d/i.test(q.fp.ref) && Math.hypot(q.x - p.x, q.y - p.y) > 6).map((q) => q.fp.ref);
+      if (farP.length) out.push(`${u.ref}.${p.number} (${bare(p.net)}): ${Array.from(new Set(farP)).slice(0, 4).join(", ")} more than 6 mm from the pin`);
+      const nv = (viasOf.get(p.net) || []).length;
+      if (nv > 1) out.push(`${u.ref}.${p.number} (${bare(p.net)}): ${nv} vias on the inverting input`);
+    }
+    if (out.length) add("amplifier.input", "warning", "An amplifier's inverting input is its summing node: capacitance there adds a pole inside the feedback loop (peaking, ringing, oscillation) and the node picks up everything near it. Put the feedback and gain parts right at the pin, keep the track a few millimetres long, and for a fast amplifier clear the planes under it.", out);
+  }
+  {
+    const out = [];
+    for (const y of fps.filter(isCrystal)) {
+      const sig = y.pads.filter((p) => p.net && !isGnd(p.net));
+      if (!sig.length) continue;
+      const nets = new Set(sig.map((p) => p.net));
+      for (const p of sig) {
+        const ic = (padsOf.get(p.net) || []).filter((q) => /^(U|IC)\d/i.test(q.fp.ref));
+        for (const q of ic) {
+          const d = Math.hypot(q.x - p.x, q.y - p.y);
+          if (d > LIMITS.crystalFar) out.push(`${y.ref}: ${r22(d)} mm from ${q.fp.ref}.${q.number}; a crystal sits right at its oscillator pins`);
+        }
+        const nv = (viasOf.get(p.net) || []).length;
+        if (nv) out.push(`${y.ref}: ${nv} via${nv > 1 ? "s" : ""} in ${bare(p.net)}; a crystal's tracks stay on the part's layer`);
+        for (const c of (padsOf.get(p.net) || []).filter((q) => /^C\d/i.test(q.fp.ref))) {
+          const d = Math.hypot(c.x - p.x, c.y - p.y);
+          if (d > LIMITS.crystalCap) out.push(`${y.ref}: load capacitor ${c.fp.ref} is ${r22(d)} mm away; it belongs beside the crystal with its ground at the crystal's ground`);
+        }
+      }
+      const under = /* @__PURE__ */ new Set();
+      const shape2 = rectShape(y.box);
+      for (const c of S2.conds) {
+        if (c.kind !== "segment" && c.kind !== "arc" && c.kind !== "via") continue;
+        if (!c.net || nets.has(c.net) || isGnd(c.net) || !hit4(c.bbox, y.box)) continue;
+        if (P.shapeGap(c.shape, shape2) <= 0) under.add(bare(c.net));
+      }
+      if (under.size) out.push(`${y.ref}: ${Array.from(under).slice(0, 5).join(", ")} routed under or through it; keep every other signal out from under a crystal, on every layer`);
+      if (gz && copper.length >= 2) {
+        const cx = (y.box[0] + y.box[2]) / 2, cy = (y.box[1] + y.box[3]) / 2;
+        const lay = y.side === "back" ? copper[copper.length - 1] : copper[0];
+        if (!S2.refLayers(lay).some((l) => S2.pourAt(cx, cy, l) === "gnd")) out.push(`${y.ref}: no ground under it on the next layer`);
+      }
+      for (const l of fps.filter(isPowerInductor)) {
+        const d = boxGap(l.box, y.box);
+        if (d < 5) out.push(`${y.ref}: inductor ${l.ref} is ${r22(d)} mm away; keep magnetic parts away from a crystal`);
+      }
+    }
+    if (out.length) add("crystal", "warning", "A crystal's two nodes are the most sensitive on a digital board: a few picofarads or a little coupled noise shifts or stops the oscillator.", out);
+  }
+  {
+    const loop = [], node = [];
+    const inductors = fps.filter(isPowerInductor);
+    const swNets = Array.from(padsOf.keys()).filter((n2) => kindOf(n2) === "switching");
+    for (const sw of swNets) {
+      const pads = padsOf.get(sw) || [];
+      const lp = pads.find((p) => /^L\d/i.test(p.fp.ref)), up = pads.find((p) => /^(U|IC)\d/i.test(p.fp.ref));
+      if (!lp || !up) continue;
+      const reg = up.fp, ind = lp.fp;
+      const outNet = (ind.pads.find((p) => p.net !== sw) || { net: "" }).net;
+      const gndPads = reg.pads.filter((p) => isGnd(p.net));
+      let vin = reg.pads.filter((p) => /^(P?VIN|IN|PVDD|AVIN|VCC|VDD|VS|SUP)\d*$/i.test(p.fn) && p.net && !isGnd(p.net) && p.net !== outNet);
+      if (!vin.length) vin = reg.pads.filter((p) => isSup(p.net) && p.net !== outNet);
+      const seen = /* @__PURE__ */ new Set();
+      for (const v of vin) {
+        if (seen.has(v.net)) continue;
+        seen.add(v.net);
+        let best = Infinity, cap = null, capGnd = null;
+        for (const c of (padsOf.get(v.net) || []).filter((q) => /^C\d/i.test(q.fp.ref))) {
+          const g2 = c.fp.pads.find((q) => isGnd(q.net));
+          if (!g2) continue;
+          const near = Math.min(...reg.pads.filter((q) => q.net === v.net).map((q) => Math.hypot(q.x - c.x, q.y - c.y)));
+          if (near < best) {
+            best = near;
+            cap = c;
+            capGnd = g2;
+          }
+        }
+        if (!cap || !capGnd) {
+          loop.push(`${reg.ref}: no capacitor from ${bare(v.net)} to ground`);
+          continue;
+        }
+        const back = gndPads.length ? Math.min(...gndPads.map((q) => Math.hypot(q.x - capGnd.x, q.y - capGnd.y))) : 0;
+        const round = best + back + Math.hypot(cap.x - capGnd.x, cap.y - capGnd.y);
+        if (best > LIMITS.hotLoopCap) loop.push(`${reg.ref}: input capacitor ${cap.fp.ref} is ${r22(best)} mm from the ${bare(v.net)} pin (at most ${LIMITS.hotLoopCap} mm)`);
+        else if (round > LIMITS.hotLoop) loop.push(`${reg.ref}: the loop ${bare(v.net)} pin, ${cap.fp.ref}, ground pin is ${r22(round)} mm round (at most ${LIMITS.hotLoop} mm); turn ${cap.fp.ref} so its ground pad faces the ground pin`);
+      }
+      const len = S2.lengthOf(sw);
+      if (len > LIMITS.switchNode) node.push(`${bare(sw)}: ${r22(len)} mm of track; move ${ind.ref} against ${reg.ref}`);
+      const nv = (viasOf.get(sw) || []).length;
+      if (nv) node.push(`${bare(sw)}: ${nv} via${nv > 1 ? "s" : ""}; keep the switch node on one layer`);
+      const swCopper = S2.conds.filter((c) => c.net === sw && c.kind !== "zone");
+      for (const fbp of reg.pads.filter((p) => /^(V?FB|VSENSE|VOS|ADJ)\d*$/i.test(p.fn) || /(^|[_\-.])V?FB\d*$/i.test(bare(p.net)))) {
+        const segs = tracksOf.get(fbp.net) || [];
+        let close = false, over = false;
+        for (const t of segs) {
+          if (swCopper.some((c) => [...c.layers].some((l) => t.layers.has(l)) && c.kind !== "pad" && P.shapeGap(t.shape, c.shape) < LIMITS.quiet)) close = true;
+          if (hit4(t.bbox, ind.box) && P.shapeGap(t.shape, rectShape(ind.box)) <= 0) over = true;
+        }
+        if (close) node.push(`${bare(fbp.net)}: the feedback track runs within ${LIMITS.quiet} mm of ${bare(sw)}`);
+        if (over) node.push(`${bare(fbp.net)}: the feedback track passes under ${ind.ref}`);
+      }
+    }
+    for (const l of inductors.filter((q) => q.pads.some((p) => kindOf(p.net) === "switching"))) for (const a of antennas) {
+      const d = boxGap(l.box, a.box);
+      if (d < 10) node.push(`${l.ref} is ${r22(d)} mm from antenna ${a.ref}; put the converter at the far end of the board`);
+    }
+    if (loop.length) add("switcher.loop", "warning", "In a switching converter the full load current is switched on and off in the loop from the input capacitor through the switches and back, in nanoseconds. That loop is the board's loudest transmitter: make it as small as the parts allow, capacitor right at the VIN and ground pins, on the same layer, with wide copper.", loop);
+    if (node.length) add("switcher.node", "warning", "The switch node swings the full input voltage at every cycle. Keep its copper short and just wide enough for the current, and take the feedback from the output capacitor along a quiet path.", node);
+  }
+  {
+    const epads = /* @__PURE__ */ new Map();
+    for (const f of fps) {
+      const e = thermalPad(f);
+      if (e) epads.set(e, f);
+    }
+    if (gz) {
+      const lost = [];
+      const ics = fps.filter((f) => /^(U|IC)\d/i.test(f.ref));
+      for (const c of fps.filter((f) => /^C\d/i.test(f.ref) && f.pads.length === 2)) {
+        const g2 = c.pads.find((p) => isGnd(p.net)), s = c.pads.find((p) => p.net && !isGnd(p.net));
+        if (!g2 || !s) continue;
+        if (!ics.some((u) => u.pads.some((p) => p.net === s.net && Math.hypot(p.x - s.x, p.y - s.y) < 5))) continue;
+        const lay = c.side === "back" ? copper[copper.length - 1] : copper[0];
+        if (S2.pourAt(g2.x, g2.y, lay) === "gnd" && (copper.length < 3 || S2.nearestStitch(g2.x, g2.y) <= LIMITS.bypassVia * 2)) continue;
+        if (S2.nearestStitch(g2.x, g2.y) <= LIMITS.bypassVia) continue;
+        lost.push(`${c.ref} (${bare(s.net)}) at ${at(g2.x, g2.y)}`);
+      }
+      if (lost.length) add("bypass.return", "warning", `A decoupling capacitor only works through a short loop: supply pin, capacitor, ground, and back to the chip's ground. These capacitors' ground pads are not in the ground pour and have no ground via within ${LIMITS.bypassVia} mm. Put a via to the plane right at each ground pad (board.via("GND", (x, y))).`, lost);
+    }
+    if (copper.length >= 2) {
+      const none = [], fewV = [], wide = [];
+      for (const [e, f] of epads) {
+        const inside2 = S2.vias.filter((v) => inBox(e.box, v.shape.x, v.shape.y));
+        const area3 = (e.box[2] - e.box[0]) * (e.box[3] - e.box[1]);
+        const need = Math.max(1, Math.min(9, Math.floor(area3 / 1.5)));
+        if (!inside2.length) none.push(`${f.ref} ${f.value} pad ${e.number} (${r22(e.box[2] - e.box[0])} x ${r22(e.box[3] - e.box[1])} mm, ${bare(e.net) || "no net"})`);
+        else if (inside2.length < need) fewV.push(`${f.ref} pad ${e.number}: ${inside2.length} via${inside2.length > 1 ? "s" : ""}, room for ${need}`);
+        const big = inside2.filter((v) => v.drill > LIMITS.thermalDrill + 1e-6);
+        if (big.length) wide.push(`${f.ref} pad ${e.number}: ${big[0].drill} mm drill`);
+      }
+      if (none.length) add("thermal.pad", "warning", "An exposed pad is the package's heat path and usually its main ground. Tie it to the planes with an array of vias inside the pad (board.thermal_vias(ref)); connect them to the plane solidly, not through thermal spokes.", none);
+      if (fewV.length) add("thermal.pad", "note", `More vias carry more heat: five to nine suit a small package, on about a ${LIMITS.thermalPitch} mm pitch (board.thermal_vias(ref)).`, fewV);
+      if (wide.length) add("thermal.pad", "note", `Vias in a solder pad wick solder away from the joint. Keep their drill at ${LIMITS.thermalDrill} mm or less, or have them plugged or tented from the far side.`, wide);
+    }
+    const inPad = [];
+    for (const f of fps) {
+      if (f.pads.length > 3) continue;
+      for (const p of f.pads) {
+        if (p.type !== "smd" || epads.has(p)) continue;
+        const a = (p.box[2] - p.box[0]) * (p.box[3] - p.box[1]);
+        if (a > 4) continue;
+        if (S2.vias.some((v) => inBox(p.box, v.shape.x, v.shape.y))) inPad.push(`${f.ref}.${p.number}`);
+      }
+    }
+    if (inPad.length) add("dfm.via_in_pad", "warning", "A via in a small part's solder pad drains the solder and stands the part on end (tombstoning) unless the fabricator fills and caps it, which costs extra. Move the via just off the pad on a short track.", inPad);
+  }
+  {
+    const lyr = (t) => Array.from(t.layers)[0];
+    const st = physicalStack(doc, k);
+    const flex = st.rows.some((r) => !r.copper && FLEX_MATERIAL.test(r.material));
+    const bends = S2.keepouts.filter((q) => BEND_NAME.test(q.name));
+    if (flex || bends.length) {
+      const total = st.thickness || doc.thickness || 0;
+      const rmin = total ? r22(total * (copper.length <= 1 ? 6 : 10)) : 0;
+      if (!bends.length) add("flex.bend", "note", "This is a flex board with no bend area marked. Mark where it bends (board.bend_area(box)): vias and parts are then kept out of it, and the review checks the copper that crosses it." + (rmin ? ` At ${r22(total)} mm thick it should bend no tighter than a ${rmin} mm radius once (about ${r22(total * 15)} mm if it flexes in use).` : ""));
+      const rigid = [], corners = [], solid = [], stacked = [];
+      for (const b of bends) {
+        const where = `the bend area at ${at((b.box[0] + b.box[2]) / 2, (b.box[1] + b.box[3]) / 2)}`;
+        for (const v of S2.vias) if (inBox(b.box, v.shape.x, v.shape.y)) rigid.push(`via at ${at(v.shape.x, v.shape.y)} (${bare(v.net) || "no net"})`);
+        for (const f of fps) {
+          if (hit4(f.box, b.box)) rigid.push(`${f.ref} ${f.value}`.trim() + ` is in ${where}`);
+        }
+        const inside2 = S2.tracks.filter((t) => hit4(t.bbox, b.box));
+        const ends = /* @__PURE__ */ new Map();
+        for (const t of inside2) {
+          if (t.shape.t !== "seg") {
+            corners.push(`${bare(t.net)}: a curved track in ${where}`);
+            continue;
+          }
+          const dir = Math.atan2(t.shape.b[1] - t.shape.a[1], t.shape.b[0] - t.shape.a[0]);
+          for (const q of [t.shape.a, t.shape.b]) {
+            if (!inBox(b.box, q[0], q[1])) continue;
+            const key2 = `${t.net}|${lyr(t)}|${Math.round(q[0] * 100)}|${Math.round(q[1] * 100)}`;
+            const e = ends.get(key2) || [];
+            ends.set(key2, e);
+            e.push(dir);
+          }
+        }
+        const bent = /* @__PURE__ */ new Set();
+        for (const [key2, dirs] of ends) if (dirs.length > 1 && dirs.some((d) => Math.abs(Math.sin(d - dirs[0])) > 0.09)) bent.add(key2.split("|")[0]);
+        for (const n2 of bent) corners.push(`${bare(n2)} turns a corner inside ${where}`);
+        const top = inside2.filter((t) => lyr(t) === copper[0] && t.shape.t === "seg"), bot = inside2.filter((t) => lyr(t) === copper[copper.length - 1] && t.shape.t === "seg");
+        const beams = /* @__PURE__ */ new Set();
+        for (const a of top) for (const c of bot) {
+          if (!hit4(a.bbox, c.bbox)) continue;
+          const mx = (a.shape.a[0] + a.shape.b[0]) / 2, my = (a.shape.a[1] + a.shape.b[1]) / 2;
+          const dx = c.shape.b[0] - c.shape.a[0], dy = c.shape.b[1] - c.shape.a[1];
+          const L = Math.hypot(dx, dy) || 1;
+          const off = Math.abs((mx - c.shape.a[0]) * dy - (my - c.shape.a[1]) * dx) / L;
+          const para = Math.abs(Math.sin(Math.atan2(dy, dx) - Math.atan2(a.shape.b[1] - a.shape.a[1], a.shape.b[0] - a.shape.a[0]))) < 0.09;
+          if (para && off < ((a.shape.r || 0.1) + (c.shape.r || 0.1)) / 2) beams.add(`${bare(a.net)} over ${bare(c.net)}`);
+        }
+        for (const x of beams) stacked.push(`${x} in ${where}`);
+        for (const z of S2.zoneOutlines) {
+          if (z.hatched) continue;
+          let a = Infinity, bb = Infinity, c = -Infinity, d = -Infinity;
+          for (const q of z.pts) {
+            a = Math.min(a, q[0]);
+            bb = Math.min(bb, q[1]);
+            c = Math.max(c, q[0]);
+            d = Math.max(d, q[1]);
+          }
+          if (hit4([a, bb, c, d], b.box)) solid.push(`the ${bare(z.net) || "unconnected"} pour on ${z.layers.join(", ")} crosses ${where}`);
+        }
+      }
+      if (rigid.length) add("flex.bend", "error", "Vias, pads and parts do not bend: a plated hole or a solder joint in a bend area cracks. Move them onto a part of the board that stays flat, or onto a stiffener.", few(rigid));
+      if (corners.length) add("flex.bend", "warning", "Run tracks straight across a bend, at right angles to the fold line, and turn corners outside it. A corner inside the bend concentrates the strain where the copper is weakest.", few(corners));
+      if (stacked.length) add("flex.copper", "warning", "Tracks lie directly over each other on the two sides of the bend (an I-beam). That stiffens the fold and cracks the outer copper: stagger them so each sits over the gap between the tracks on the other side.", few(stacked));
+      if (solid.length) add("flex.bend", "warning", "A solid copper pour across a bend is stiff and cracks. Use a hatched (cross-hatch) pour there, or keep the pour out of the bend area and carry ground across on a wide track.", few(solid));
+      if (bends.length && copper.length > 2) add("flex.copper", "warning", `The board has ${copper.length} copper layers and a bend area. Keep the bending part to one or two layers (the fabricator can leave the inner layers out of that region); bend radius grows with every layer.`);
+      if (S2.outline) {
+        const o = S2.outline;
+        const near = [];
+        for (const t of S2.tracks) {
+          const d = Math.min(t.bbox[0] - o[0], o[2] - t.bbox[2], t.bbox[1] - o[1], o[3] - t.bbox[3]);
+          if (d < FLEX_EDGE - 1e-6) near.push(`${bare(t.net)} on ${lyr(t)}: ${r22(Math.max(0, d))} mm from the edge`);
+          if (near.length > 12) break;
+        }
+        if (near.length) add("flex.copper", "warning", `Copper on a flex board stays at least ${FLEX_EDGE} mm from the outline (JLCPCB's flex limit); a tear starts where copper meets the cut edge.`, few(near));
+      }
+    }
+    const metal = st.rows.find((r) => !r.copper && METAL_CORE.test(r.material));
+    if (metal) {
+      const back = S2.tracks.filter((t) => lyr(t) !== copper[0]).length, through = S2.vias.length + fps.reduce((a, f) => a + f.pads.filter((p) => p.type === "thru_hole").length, 0);
+      if (back || through) add("stackup.material", "error", `The board is on a ${metal.material} core, which is one-sided: the copper is on the front only and a plated hole would short to the metal. Take away the ${back ? `${back} track${back > 1 ? "s" : ""} off the front layer` : ""}${back && through ? " and the " : ""}${through ? `${through} via${through > 1 ? "s" : ""} or through-hole pad${through > 1 ? "s" : ""}` : ""}, and use surface-mount parts only.`);
+    }
+    if (!st.assumed && radio.ghz >= 1) {
+      const lossy = st.rows.find((r) => !r.copper && r.loss >= 0.015);
+      const long = [];
+      for (const n2 of rfNets) {
+        const L = S2.lengthOf(n2);
+        if (L > 300 / (radio.ghz * 2)) long.push(`${bare(n2)}: ${r22(L)} mm at ${radio.ghz} GHz`);
+      }
+      if (lossy && long.length) add("stackup.material", "note", `These radio tracks are long for ${lossy.material || "FR-4"} (loss tangent ${lossy.loss}): standard FR-4 loses roughly 0.1 to 0.3 dB per 25 mm at 2.4 GHz and more above. Shorten them, or build the board on a low-loss laminate (kh.materials: Rogers RO4350B, PTFE).`, long);
+    }
+  }
+  {
+    const out = [];
+    for (const d of fps.filter(isEsd)) for (const p of d.pads) {
+      if (!p.net || isGnd(p.net)) continue;
+      const on = padsOf.get(p.net) || [];
+      const conn = on.filter((q) => q.fp !== d && isConnector(q.fp));
+      if (!conn.length) continue;
+      const dc = Math.min(...conn.map((q) => Math.hypot(q.x - p.x, q.y - p.y)));
+      const ic = on.filter((q) => /^(U|IC)\d/i.test(q.fp.ref) && q.fp !== d);
+      const di = ic.length ? Math.min(...ic.map((q) => Math.hypot(q.x - p.x, q.y - p.y))) : Infinity;
+      if (dc > LIMITS.esdFar || dc > di) {
+        out.push(`${d.ref} on ${bare(p.net)}: ${r22(dc)} mm from ${conn[0].fp.ref}${isFinite(di) && dc > di ? `, nearer to ${ic[0].fp.ref} (${r22(di)} mm)` : ""}`);
+        break;
+      }
+    }
+    if (out.length) add("esd.near", "warning", "An ESD strike must meet the protection before it meets anything else. Put the protection part right at the connector, with the track running connector, protection, then chip, and its ground straight into the plane.", out);
+  }
+  {
+    const swCopper = S2.conds.filter((c) => c.net && c.kind !== "zone" && c.kind !== "pad" && kindOf(c.net) === "switching");
+    const near = [];
+    if (swCopper.length) for (const [net, segs] of tracksOf) {
+      if (kindOf(net) !== "analog") continue;
+      let worst = Infinity, who = "";
+      for (const t of segs) for (const c of swCopper) {
+        if (![...c.layers].some((l) => t.layers.has(l)) || boxGap(t.bbox, c.bbox) > LIMITS.quiet) continue;
+        const g2 = P.shapeGap(t.shape, c.shape);
+        if (g2 < worst) {
+          worst = g2;
+          who = bare(c.net);
+        }
+      }
+      if (worst < LIMITS.quiet) near.push(`${bare(net)}: ${r22(worst)} mm from ${who}`);
+    }
+    if (near.length) add("analog.separation", "warning", `Analog tracks pick up whatever switches next to them. Keep them at least ${LIMITS.quiet} mm from a switch node, further where there is room, and never parallel to it (board.route(separate=...) holds the gap while routing).`, near);
+    const hz = [];
+    for (const d of fps.filter(isPhotodiode)) for (const p of d.pads) {
+      if (!p.net || isGnd(p.net) || isSup(p.net)) continue;
+      const segs = tracksOf.get(p.net) || [];
+      const name = bare(p.net);
+      const L = S2.lengthOf(p.net);
+      if (L > LIMITS.highZLength) hz.push(`${d.ref} ${name}: ${r22(L)} mm of track; put the amplifier's input right at the photodiode`);
+      const nv = (viasOf.get(p.net) || []).length;
+      if (nv) hz.push(`${d.ref} ${name}: ${nv} via${nv > 1 ? "s" : ""}; keep the photodiode and its amplifier on one side`);
+      const beside = /* @__PURE__ */ new Set();
+      for (const t of segs) for (const c of S2.conds) {
+        if (c.kind === "zone" || c.kind === "pad" || !c.net || c.net === p.net || isGnd(c.net) || ![...c.layers].some((l) => t.layers.has(l)) || boxGap(t.bbox, c.bbox) > LIMITS.quiet) continue;
+        if (P.shapeGap(t.shape, c.shape) < LIMITS.quiet) beside.add(bare(c.net));
+      }
+      if (beside.size) hz.push(`${d.ref} ${name}: ${Array.from(beside).slice(0, 4).join(", ")} within ${LIMITS.quiet} mm; leave a wide routing keep-out round it, or a guard track driven at the node's own potential`);
+    }
+    if (hz.length) add("analog.highz", "warning", "A photodiode's output is a current of nanoamps into a node of very high impedance: every picofarad on it costs bandwidth and adds noise, and any leakage across the board is signal.", hz);
+  }
+  {
+    const bridged = [], shared = [];
+    for (const f of fps.filter(isIsolator)) {
+      if (f.pads.length < 4) continue;
+      const gapOn = (axis2) => {
+        const ps = f.pads.slice().sort((a2, b2) => axis2 ? a2.y - b2.y : a2.x - b2.x);
+        let best = 0, cut = -1;
+        for (let i = 1; i < ps.length; i++) {
+          const g3 = axis2 ? ps[i].box[1] - ps[i - 1].box[3] : ps[i].box[0] - ps[i - 1].box[2];
+          if (g3 > best) {
+            best = g3;
+            cut = i;
+          }
+        }
+        return { best, lo: ps.slice(0, cut), hi: ps.slice(cut) };
+      };
+      const gx = gapOn(0), gy = gapOn(1);
+      const axis = gx.best >= gy.best ? 0 : 1;
+      const g2 = axis ? gy : gx;
+      if (g2.best < 1 || !g2.lo.length || !g2.hi.length) continue;
+      const a = Math.max(...g2.lo.map((p) => p.box[axis + 2])), b = Math.min(...g2.hi.map((p) => p.box[axis]));
+      const strip = axis ? [f.box[0], a + 0.1, f.box[2], b - 0.1] : [a + 0.1, f.box[1], b - 0.1, f.box[3]];
+      const shape2 = rectShape(strip);
+      const what = /* @__PURE__ */ new Set();
+      for (const c of S2.conds) {
+        if (c.kind === "pad" && c.item.id === f.id) continue;
+        if (!hit4(c.bbox, strip) || P.shapeGap(c.shape, shape2) > 0) continue;
+        what.add(c.kind === "zone" ? `${bare(c.net) || "copper"} pour on ${Array.from(c.layers).join(", ")}` : `${bare(c.net) || "copper"} ${c.kind}`);
+      }
+      if (what.size) bridged.push(`${f.ref} ${f.value} (${r22(b - a)} mm gap): ${Array.from(what).slice(0, 4).join("; ")}`);
+      const lo = new Set(g2.lo.map((p) => p.net).filter(Boolean));
+      const both = Array.from(new Set(g2.hi.map((p) => p.net).filter((n2) => n2 && lo.has(n2))));
+      if (both.length) shared.push(`${f.ref}: ${both.map(bare).join(", ")} on both sides`);
+    }
+    if (bridged.length) add("isolation", "error", "There is copper in the gap under an isolator. The gap between its two pin rows is the isolation barrier: any copper in it, on any layer, shortens the creepage path to less than the part's own rating. Keep every layer clear between the rows (board.keepout(box)), and for mains consider a slot in the board there.", bridged);
+    if (shared.length) add("isolation", "warning", "The same net is on both sides of an isolator, so nothing is isolated. Each side needs its own supply and its own ground.", shared);
+  }
+  {
+    const hv = /* @__PURE__ */ new Map();
+    for (const net of padsOf.keys()) {
+      if (isGnd(net)) continue;
+      const v = netVolts(net);
+      if (v !== null && Math.abs(v) >= 30) hv.set(net, v);
+    }
+    if (hv.size) {
+      const worst = /* @__PURE__ */ new Map();
+      const outer = /* @__PURE__ */ new Set([copper[0], copper[copper.length - 1]]);
+      const others = S2.conds.filter((c) => c.kind !== "zone");
+      for (const c of others) {
+        const v = hv.get(c.net);
+        if (v === void 0) continue;
+        for (const o of others) {
+          if (o.net === c.net || c.kind === "pad" && o.kind === "pad" && c.item.id === o.item.id && !o.net) continue;
+          if (![...c.layers].some((l) => o.layers.has(l))) continue;
+          const ov = hv.get(o.net) ?? (o.net ? netVolts(o.net) ?? 0 : 0);
+          const dv = Math.abs(v - ov) < 1 && hv.has(o.net) ? Math.abs(v) : Math.abs(v - ov);
+          if (dv < 30) continue;
+          const inner = ![...c.layers].some((l) => outer.has(l) && o.layers.has(l));
+          const need = ipcSpacing(dv, inner ? "B1" : "B4");
+          if (boxGap(c.bbox, o.bbox) >= need) continue;
+          const g2 = P.shapeGap(c.shape, o.shape);
+          if (g2 >= need - 1e-6) continue;
+          const key2 = [c.net, o.net].sort().join(" / ");
+          const w = worst.get(key2);
+          if (!w || g2 < w.gap) worst.set(key2, { gap: g2, need, x: (c.bbox[0] + c.bbox[2]) / 2, y: (c.bbox[1] + c.bbox[3]) / 2, v: dv });
+        }
+      }
+      if (worst.size) add("creepage", "error", "These conductors are closer than IPC-2221 allows for the voltage between them (table 6-1: B4 for outer layers under solder mask, B1 for inner layers). Widen the gap or raise the net class clearance (board.rules or a net class). A product connected to mains needs the larger distances of its safety standard, and a slot where the board cannot give them.", Array.from(worst.entries()).map(([kk, w]) => `${kk.split(" / ").map((n2) => bare(n2) || "unconnected copper").join(" to ")}: ${r22(w.gap)} mm near ${at(w.x, w.y)}, ${Math.round(w.v)} V needs ${w.need} mm`));
+    }
+  }
+  void settings;
+}
+function viaFits2(S2, P, x, y, r, clr, net, pads) {
+  const o = S2.outline;
+  if (o && (x < o[0] + r + 0.3 || x > o[2] - r - 0.3 || y < o[1] + r + 0.3 || y > o[3] - r - 0.3)) return false;
+  for (const kz of S2.keepouts) if (inBox(grow4(kz.box, r), x, y)) return false;
+  const b = [x - r - clr, y - r - clr, x + r + clr, y + r + clr];
+  const sh = { t: "circle", x, y, r };
+  for (const c of S2.conds) {
+    if (c.kind === "zone" || !hit4(c.bbox, b)) continue;
+    if (c.kind === "pad" && !pads && P.shapeGap(sh, c.shape) < (c.net === net ? 0.1 : clr)) return false;
+    if (c.kind === "via" && Math.hypot(c.shape.x - x, c.shape.y - y) < r + c.shape.r + 0.25) return false;
+    if (c.net !== net && P.shapeGap(sh, c.shape) < clr) return false;
+  }
+  return true;
+}
+function physicsPlan(doc, P, k, settings, plan) {
+  const S2 = survey(doc, P, k);
+  const size = plan.size > 0 ? plan.size : 0.6, r = size / 2;
+  const clr = Math.max(0.15, settings && settings.clearance || 0.2);
+  const gndNet = Array.from(S2.padsOf.keys()).find((n2) => isGnd(n2) && /^\/?GND$/i.test(n2)) || Array.from(S2.padsOf.keys()).find(isGnd) || "GND";
+  const find = (ref) => S2.fps.find((f) => f.ref.toLowerCase() === String(ref || "").toLowerCase());
+  const taken = [];
+  const free = (x, y, gap) => !taken.some((q) => Math.hypot(q[0] - x, q[1] - y) < gap);
+  const ground = (x, y) => S2.zones ? S2.gndLayersAt(x, y) >= Math.min(2, S2.copper.length) : true;
+  if (plan.what === "antenna") {
+    const ants = plan.ref ? [find(plan.ref)].filter(Boolean) : S2.fps.filter(isAntenna);
+    if (!ants.length) return { error: plan.ref ? `There is no part ${plan.ref} on the board.` : "The board has no antenna (a part with reference AE or ANT, or an antenna footprint)." };
+    const pitch = Math.max(0.8, plan.pitch || 2), out = [];
+    const radio = radioGHz(S2.fps, S2.padsOf.keys());
+    for (const a of ants) {
+      const patch = plan.kind ? plan.kind === "patch" : isPatch(a);
+      const box = patch ? a.box : antennaRegion(S2, a, plan.clearance >= 0 ? plan.clearance : LIMITS.antennaKeepout);
+      const have = S2.keepouts.some((q) => q.copper && hit4(q.box, a.box));
+      const pts = [];
+      let skipped = 0;
+      for (const [x, y] of ringPoints(S2, box, r + 0.4, pitch, r + 0.3)) {
+        if (S2.nearestStitch(x, y) < pitch * 0.6 || !free(x, y, pitch * 0.6)) continue;
+        let ok2 = null;
+        for (const [dx, dy] of [[0, 0], [0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4], [0.8, 0], [-0.8, 0], [0, 0.8], [0, -0.8]]) {
+          const px = x + dx, py = y + dy;
+          if (inBox(grow4(box, r + 0.2), px, py)) continue;
+          if (ground(px, py) && viaFits2(S2, P, px, py, r, clr, gndNet, false) && free(px, py, pitch * 0.6)) {
+            ok2 = [px, py];
+            break;
+          }
+        }
+        if (ok2) {
+          pts.push(ok2);
+          taken.push(ok2);
+        } else skipped++;
+      }
+      const remove = [], blocked = /* @__PURE__ */ new Set();
+      const own = new Set(a.pads.map((p) => p.net).filter(Boolean));
+      const shape2 = rectShape(box);
+      if (!patch) for (const c of S2.conds) {
+        if (c.kind === "zone" || c.kind === "pad" || !hit4(c.bbox, box) || P.shapeGap(c.shape, shape2) > 0) continue;
+        if (c.kind === "via" && isGnd(c.net) && inBox(box, c.shape.x, c.shape.y)) remove.push(c.id);
+        else if (!own.has(c.net)) blocked.add(`${c.kind === "via" ? "a via" : "a track"} of ${bare(c.net) || "no net"}`);
+      }
+      const edge = S2.outline ? Math.min(a.box[0] - S2.outline[0], S2.outline[2] - a.box[2], a.box[1] - S2.outline[1], S2.outline[3] - a.box[3]) : 0;
+      out.push({ ref: a.ref, box: box.map(r22), has_keepout: have, remove, blocked: Array.from(blocked), patch, frequency_ghz: radio.ghz, vias: pts.map((p) => [r22(p[0]), r22(p[1])]), no_room: skipped, edge_distance: r22(edge), feed: a.pads.map((p) => p.net).filter((n2) => n2 && !isGnd(n2)).map(bare) });
+    }
+    return { what: "antenna", net: gndNet, layers: S2.copper, antennas: out };
+  }
+  if (plan.what === "fence") {
+    const spacing = Math.max(0.6, plan.spacing || 2);
+    let paths = [];
+    let net = "";
+    if (plan.path) paths = [{ pts: plan.path.map((p) => [p[0], p[1]]), w: plan.width || 0.3 }];
+    else {
+      const want = String(plan.net || "");
+      net = Array.from(S2.tracksOf.keys()).find((n2) => n2 === want || bare(n2) === bare(want)) || "";
+      if (!net) return { error: `No routed net named ${want}. Route it first, or give path=[(x, y), ...].` };
+      paths = (S2.tracksOf.get(net) || []).map((t) => ({ pts: t.shape.t === "seg" ? [t.shape.a, t.shape.b] : t.shape.pts, w: t.width }));
+    }
+    const pts = [];
+    let wanted = 0;
+    for (const p of paths) {
+      const off = plan.offset > 0 ? plan.offset : p.w / 2 + Math.max(clr + 0.25, 0.5) + r;
+      for (let i = 1; i < p.pts.length; i++) {
+        const a = p.pts[i - 1], b = p.pts[i];
+        const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+        if (L < 1e-6) continue;
+        const ux = (b[0] - a[0]) / L, uy = (b[1] - a[1]) / L;
+        const n2 = Math.max(1, Math.round(L / spacing));
+        for (let j = 0; j <= n2; j++) for (const sgn of [1, -1]) {
+          const bx = a[0] + ux * L * j / n2, by = a[1] + uy * L * j / n2;
+          wanted++;
+          let ok2 = null;
+          for (const [dt, extra] of [[0, 0], [0, 0.3], [spacing / 4, 0], [-spacing / 4, 0], [0, 0.6]]) {
+            const x = bx + ux * dt - uy * sgn * (off + extra), y = by + uy * dt + ux * sgn * (off + extra);
+            if (!free(x, y, spacing * 0.6)) {
+              ok2 = null;
+              wanted--;
+              break;
+            }
+            if (S2.nearestStitch(x, y) < spacing * 0.5) {
+              ok2 = null;
+              wanted--;
+              break;
+            }
+            if (ground(x, y) && viaFits2(S2, P, x, y, r, clr, gndNet, false)) {
+              ok2 = [x, y];
+              break;
+            }
+          }
+          if (ok2) {
+            pts.push(ok2);
+            taken.push(ok2);
+          }
+        }
+      }
+    }
+    return { what: "fence", net: gndNet, of: bare(net), vias: pts.map((p) => [r22(p[0]), r22(p[1])]), no_room: Math.max(0, wanted - pts.length), spacing };
+  }
+  if (plan.what === "thermal") {
+    const parts = plan.ref ? [find(plan.ref)].filter(Boolean) : S2.fps;
+    if (plan.ref && !parts.length) return { error: `There is no part ${plan.ref} on the board.` };
+    const pitch = Math.max(0.6, plan.pitch || LIMITS.thermalPitch), out = [];
+    for (const f of parts) {
+      const e = thermalPad(f);
+      if (!e) {
+        if (plan.ref) return { error: `${f.ref} has no exposed pad (one large pad in the middle of the package).` };
+        continue;
+      }
+      const w = e.box[2] - e.box[0] - 2 * (r + 0.15), h = e.box[3] - e.box[1] - 2 * (r + 0.15);
+      const nx = Math.max(1, Math.floor(w / pitch) + 1), ny = Math.max(1, Math.floor(h / pitch) + 1);
+      const pts = [];
+      const cx = (e.box[0] + e.box[2]) / 2, cy = (e.box[1] + e.box[3]) / 2;
+      const have = S2.vias.filter((v) => inBox(e.box, v.shape.x, v.shape.y));
+      for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+        const x = cx + (i - (nx - 1) / 2) * Math.min(pitch, nx > 1 ? w / (nx - 1) : 0), y = cy + (j - (ny - 1) / 2) * Math.min(pitch, ny > 1 ? h / (ny - 1) : 0);
+        if (have.some((v) => Math.hypot(v.shape.x - x, v.shape.y - y) < r + v.shape.r + 0.2)) continue;
+        pts.push([x, y]);
+      }
+      out.push({ ref: f.ref, pad: e.number, net: e.net, size: [r22(e.box[2] - e.box[0]), r22(e.box[3] - e.box[1])], had: have.length, vias: pts.map((p) => [r22(p[0]), r22(p[1])]) });
+    }
+    return { what: "thermal", pads: out };
+  }
+  if (plan.what === "layout") return layoutPlan(S2, doc, k, plan);
+  if (plan.what === "stackup") {
+    const st = physicalStack(doc, k);
+    const sim = stackupOf(k, doc);
+    const outer = traceOn(sim, S2.copper[0]);
+    const w50 = outer ? widthFor(outer, 50) : null;
+    return {
+      what: "stackup",
+      copper_layers: S2.copper,
+      thickness: st.thickness || doc.thickness || 1.6,
+      finish: st.finish,
+      assumed: st.assumed,
+      layers: st.rows.map((r5) => ({ name: r5.name, type: r5.type, thickness: r5.thickness, material: r5.material, epsilon_r: r5.er, loss_tangent: r5.loss })),
+      flex: st.rows.some((r5) => !r5.copper && FLEX_MATERIAL.test(r5.material)),
+      bend_areas: S2.keepouts.filter((q) => BEND_NAME.test(q.name)).map((q) => q.box.map(r22)),
+      outer: outer ? { kind: outer.kind, height: r22(outer.h), epsilon_r: r22(outer.er), reference: outer.reference, width_50_ohm: w50 ? r22(w50) : null } : null
+    };
+  }
+  if (plan.what === "interfaces") return { what: "interfaces", interfaces: INTERFACES };
+  return { error: `Unknown plan "${plan.what}": antenna, fence, thermal, layout, stackup or interfaces.` };
+}
+function layoutPlan(S2, doc, k, plan) {
+  const { fps, padsOf, copper } = S2;
+  const near = {}, why = {}, edges = {};
+  const apart = [], notes = [];
+  const put = (ref, by, reason) => {
+    if (ref === by || near[ref]) return;
+    near[ref] = by;
+    why[ref] = reason;
+  };
+  const isIc = (f) => /^(U|IC)\d/i.test(f.ref);
+  const two = (f) => f.pads.length === 2;
+  const other = (f, net) => (f.pads.find((p) => p.net !== net) || { net: "" }).net;
+  const pairBase = /* @__PURE__ */ new Map();
+  for (const net of padsOf.keys()) {
+    const pn = pairName(net);
+    if (!pn) continue;
+    const e = pairBase.get(pn.base) || {};
+    pairBase.set(pn.base, e);
+    if (pn.pol > 0) e.p = net;
+    else e.n = net;
+  }
+  const paired = /* @__PURE__ */ new Set();
+  for (const e of pairBase.values()) if (e.p && e.n) {
+    paired.add(e.p);
+    paired.add(e.n);
+  }
+  const antennas = fps.filter(isAntenna);
+  const feed = /* @__PURE__ */ new Set();
+  for (const a of antennas) for (const p of a.pads) if (p.net && !isGnd(p.net)) feed.add(p.net);
+  const kindOf = (net) => isGnd(net) ? "supply" : feed.has(net) ? "rf" : netKind(net, paired.has(net) || void 0);
+  const radio = radioGHz(fps, padsOf.keys());
+  const converters = [];
+  const claimed = /* @__PURE__ */ new Set();
+  for (const [sw, pads] of padsOf) {
+    if (kindOf(sw) !== "switching") continue;
+    const lp = pads.find((p) => /^L\d/i.test(p.fp.ref)), up = pads.find((p) => isIc(p.fp));
+    if (!lp || !up) continue;
+    const reg = up.fp, ind = lp.fp;
+    converters.push({ reg, ind });
+    const outNet = other(ind, sw);
+    put(ind.ref, reg.ref, `inductor of ${reg.ref}: the switch node between them stays short`);
+    for (const c of pads.filter((p) => /^C\d/i.test(p.fp.ref))) put(c.fp.ref, reg.ref, `bootstrap capacitor of ${reg.ref}`);
+    for (const d of pads.filter((p) => /^D\d/i.test(p.fp.ref))) put(d.fp.ref, reg.ref, `catch diode of ${reg.ref}: it is in the switched loop`);
+    const vin = Array.from(new Set(reg.pads.filter((p) => isSup(p.net) && p.net !== outNet).map((p) => p.net)));
+    for (const v of vin) {
+      const caps = (padsOf.get(v) || []).filter((p) => /^C\d/i.test(p.fp.ref) && two(p.fp) && isGnd(other(p.fp, v)) && !claimed.has(p.fp.ref));
+      if (caps.length) {
+        put(caps[0].fp.ref, reg.ref, `input capacitor of ${reg.ref}: at its VIN and ground pins, the loop that carries the switched current`);
+        claimed.add(caps[0].fp.ref);
+      }
+    }
+    if (outNet) {
+      const caps = (padsOf.get(outNet) || []).filter((p) => /^C\d/i.test(p.fp.ref) && two(p.fp) && isGnd(other(p.fp, outNet)) && !claimed.has(p.fp.ref));
+      if (caps.length) {
+        put(caps[0].fp.ref, ind.ref, `output capacitor of ${reg.ref}: at the inductor, its ground back at the converter's ground`);
+        claimed.add(caps[0].fp.ref);
+      }
+    }
+    for (const fb of reg.pads.filter((p) => /^(V?FB|VSENSE|VOS|ADJ)\d*$/i.test(p.fn) || /(^|[_\-.])V?FB\d*$/i.test(bare(p.net)))) for (const q of (padsOf.get(fb.net) || []).filter((p) => /^(R|C)\d/i.test(p.fp.ref))) put(q.fp.ref, reg.ref, `feedback divider of ${reg.ref}: at the FB pin, away from the inductor`);
+  }
+  for (const y of fps.filter(isCrystal)) {
+    const sig = y.pads.filter((p) => p.net && !isGnd(p.net));
+    const ic = sig.flatMap((p) => (padsOf.get(p.net) || []).filter((q) => isIc(q.fp)))[0];
+    if (ic) put(y.ref, ic.fp.ref, `crystal of ${ic.fp.ref}: against its oscillator pins`);
+    for (const p of sig) for (const c of (padsOf.get(p.net) || []).filter((q) => /^C\d/i.test(q.fp.ref))) {
+      put(c.fp.ref, y.ref, `load capacitor of ${y.ref}`);
+      claimed.add(c.fp.ref);
+    }
+    for (const c of converters) apart.push([y.ref, c.ind.ref]);
+  }
+  const rails = Array.from(padsOf.keys()).filter(isSup);
+  for (const rail of rails) {
+    const caps = (padsOf.get(rail) || []).filter((p) => /^C\d/i.test(p.fp.ref) && two(p.fp) && isGnd(other(p.fp, rail)) && !claimed.has(p.fp.ref) && !near[p.fp.ref]).map((p) => p.fp);
+    const pins = (padsOf.get(rail) || []).filter((p) => isIc(p.fp));
+    if (!caps.length || !pins.length) continue;
+    const ics = [];
+    for (const p of pins) if (!ics.includes(p.fp)) ics.push(p.fp);
+    ics.sort((a, b) => b.pads.filter((p) => p.net === rail).length - a.pads.filter((p) => p.net === rail).length);
+    const want = [];
+    for (const u of ics) want.push(u);
+    for (const u of ics) for (let i = 1; i < u.pads.filter((p) => p.net === rail).length; i++) want.push(u);
+    caps.forEach((c, i) => put(c.ref, want[i % want.length].ref, `decoupling of ${want[i % want.length].ref} on ${bare(rail)}: at the supply pin, its ground straight into the plane`));
+  }
+  for (const a of antennas) {
+    if (!isPatch(a)) edges[a.ref] = typeof plan.edge === "string" ? plan.edge : "top";
+    for (const net of a.pads.map((p) => p.net).filter((n2) => n2 && !isGnd(n2))) for (const q of padsOf.get(net) || []) if (q.fp !== a && two(q.fp)) {
+      put(q.fp.ref, a.ref, `matching network of ${a.ref}: in line with the feed`);
+      const far = other(q.fp, net);
+      if (far && !isGnd(far)) {
+        for (const z of padsOf.get(far) || []) if (two(z.fp) && z.fp !== q.fp) put(z.fp.ref, q.fp.ref, `matching network of ${a.ref}`);
+      }
+    }
+    for (const c of converters) apart.push([a.ref, c.ind.ref]);
+    for (const y of fps.filter(isCrystal)) apart.push([a.ref, y.ref]);
+  }
+  for (const d of fps.filter(isEsd)) for (const p of d.pads) {
+    if (!p.net || isGnd(p.net)) continue;
+    const c = (padsOf.get(p.net) || []).find((q) => q.fp !== d && isConnector(q.fp));
+    if (c) {
+      put(d.ref, c.fp.ref, `protection of ${c.fp.ref}: the strike meets it before anything else`);
+      break;
+    }
+  }
+  for (const u of fps.filter(isOpamp)) for (const p of u.pads) {
+    if (!/^(-|IN-|-IN|INN|IN_N|VIN-|INM|IN\d-|-IN[A-D]?|IN[A-D]-|\d?IN-)$/i.test(p.fn) || !p.net || isGnd(p.net)) continue;
+    for (const q of (padsOf.get(p.net) || []).filter((z) => /^(R|C)\d/i.test(z.fp.ref))) put(q.fp.ref, u.ref, `feedback part of ${u.ref}: at the inverting input, so the summing node is tiny`);
+  }
+  for (const d of fps.filter(isPhotodiode)) for (const p of d.pads) {
+    if (!p.net || isGnd(p.net) || isSup(p.net)) continue;
+    const u = (padsOf.get(p.net) || []).find((q) => isIc(q.fp));
+    if (u) put(d.ref, u.fp.ref, `photodiode of ${u.fp.ref}: its node is nanoamps into megohms, so millimetres of track`);
+  }
+  for (const f of fps.filter(isIsolator)) notes.push(`${f.ref} is an isolation barrier: put it across the gap between the two sides and keep every layer clear under it (board.keepout).`);
+  const st = stackupOf(k, doc);
+  const top = traceOn(st, copper[0]);
+  const widths = {}, kinds = {};
+  const order = [];
+  const pairs = [];
+  for (const [base, e] of pairBase) {
+    if (!e.p || !e.n) continue;
+    const ifc = pairInterface(bare(e.p));
+    const r = ifc ? INTERFACES[ifc] : null;
+    pairs.push({ nets: [bare(e.p), bare(e.n)], interface: ifc || void 0, ohms: r ? r.zd : void 0, skew_mm: r ? r.skew : LIMITS.pairSkew, max_vias: r ? r.vias : 2 });
+    order.push(bare(e.p), bare(e.n));
+    void base;
+  }
+  for (const y of fps.filter(isCrystal)) for (const p of y.pads) if (p.net && !isGnd(p.net)) order.push(bare(p.net));
+  for (const net of padsOf.keys()) {
+    const kd = kindOf(net);
+    const n2 = bare(net);
+    if (kd === "rf") {
+      kinds[n2] = "rf";
+      order.push(n2);
+      const w = top ? widthFor(top, 50) : null;
+      if (w && w <= 1.2) widths[n2] = r22(w);
+      else notes.push(`${n2}: 50 ohm on this stackup needs a ${w ? r22(w) : "very wide"} mm track. Keep the feed under ${Math.max(3, r22(viaPitchFor(radio.ghz) * 2))} mm, or use four layers (board.stackup(layers=4)) so 50 ohm is about 0.35 mm.`);
+    } else if (kd === "switching") widths[n2] = 0.5;
+    else if (isSup(net)) widths[n2] = 0.5;
+  }
+  const fast = Array.from(padsOf.keys()).some((n2) => ["rf", "fast"].includes(kindOf(n2)));
+  if (fast && copper.length < 4) notes.push('The board has RF or fast nets on two layers. Four layers with ground on the layer under the parts (board.stackup(layers=4) or board.layers(4, planes=["In1.Cu"])) gives every signal an unbroken return path; on two layers keep the bottom an unbroken ground and route on top.');
+  if (antennas.length) notes.push(`Radio: ${radio.why}. Ground vias no more than ${r22(viaPitchFor(radio.ghz))} mm apart round the antenna and along the feed. The antenna's own datasheet layout (ground size, keep-out, matching values) is binding.`);
+  for (const c of converters) notes.push(`${c.reg.ref} is a switching converter: place it and ${c.ind.ref} at the far end of the board from ${antennas.length ? "the antenna and " : ""}the analog parts and the crystal.`);
+  const steps = [
+    "board.sync(); board.outline(...); board.stackup(fab=..., layers=...) or board.layers(...); board.rules(...)",
+    'plan = board.plan(); board.autoplace(near=plan["place"]["near"], edges={**plan["place"]["edges"], ...your connectors...}, groups=...)',
+    'board.zone("GND", layer=...) on every ground layer',
+    "board.prepare()    # antenna keep-outs and the ground vias along them, before any track is laid",
+    'board.route(**plan["route"])',
+    "board.finish()     # RF fence, thermal vias, stitching, refill",
+    "board.review()     # the proof: fix what it lists, in the placement if that is where it comes from"
+  ];
+  return { what: "layout", place: { near, edges }, why, apart: apart.map(([a, b]) => [a, b]), route: { widths, kinds, order: Array.from(new Set(order)) }, pairs, radio_ghz: antennas.length ? radio.ghz : void 0, copper_layers: copper.length, notes, steps };
+}
+
 // web/ai/review.ts
 var W5 = window;
 var SCH5 = () => W5.CollabTools && W5.CollabTools.sch || null;
 var PCB4 = () => W5.PcbTools || null;
-var r22 = (v) => Math.round(v * 100) / 100;
-var GROUND = /^(?:[ADP]?GND\w*|GNDREF|VSS\w*|EARTH|0V)$/i;
+var r23 = (v) => Math.round(v * 100) / 100;
+var GROUND2 = /^(?:[ADP]?GND\w*|GNDREF|VSS\w*|EARTH|0V)$/i;
 var NEGATIVE = /^(?:-\d|VEE|V-|VNEG)/i;
-var SUPPLY = /^(?:[+-]\d|\d+V\d*$|\d+(?:\.\d+)?V$|V(?:CC|DD|BUS|USB|BAT|IN|OUT|SYS|PP|AA|REF|MOTOR|S)\w*|VD?D?[A-Z]*_\w+|V\d+V?\d*|\w+_\d+V\d*$)/i;
+var SUPPLY2 = /^(?:[+-]\d|\d+V\d*$|\d+(?:\.\d+)?V$|V(?:CC|DD|BUS|USB|BAT|IN|OUT|SYS|PP|AA|REF|MOTOR|S)\w*|VD?D?[A-Z]*_\w+|V\d+V?\d*|\w+_\d+V\d*$)/i;
 var VAGUE_SUPPLY = /^(?:VCC|VDD|VEE|VPP|VAA|V\+|V-|VIN|VOUT|PWR|POWER)$/i;
-var isGround = (n2) => GROUND.test(n2);
+var isGround = (n2) => GROUND2.test(n2);
 function voltsOf(name) {
   const n2 = name.replace(/^\//, "");
   let m = /(-?\d+)V(\d+)(?!\d)/i.exec(n2);
@@ -64545,7 +65962,7 @@ function capVolts(f) {
   const m = /(\d+(?:\.\d+)?)\s*V/i.exec(v);
   return m ? Number(m[1]) : null;
 }
-var few = (l, n2 = 8) => l.length > n2 ? l.slice(0, n2).concat(`and ${l.length - n2} more`) : l;
+var few2 = (l, n2 = 8) => l.length > n2 ? l.slice(0, n2).concat(`and ${l.length - n2} more`) : l;
 var refSort = (a, b) => a.localeCompare(b, void 0, { numeric: true });
 var SCH_RULES = [
   { id: "power.symbols", what: "Power is distributed through supply symbols, not wires or labels" },
@@ -64593,7 +66010,7 @@ async function reviewSchematic(doc, path2) {
   const s = SCH5(), k = K4();
   if (!s) throw new ToolError("The schematic tools are not loaded.");
   const out = [];
-  const add = (rule, level, message, items) => out.push({ rule, level, message, count: items ? items.length : void 0, items: items && items.length ? few(items) : void 0 });
+  const add = (rule, level, message, items) => out.push({ rule, level, message, count: items ? items.length : void 0, items: items && items.length ? few2(items) : void 0 });
   const key2 = (x, y) => `${Math.round(x * 100)},${Math.round(y * 100)}`;
   const parts = [], powers = [], labels = [], texts = [], segs = [], buses = [], junctions = /* @__PURE__ */ new Set();
   let sheets = 0;
@@ -64632,7 +66049,7 @@ async function reviewSchematic(doc, path2) {
   for (const p of parts) byRef2.set(p.ref, p);
   const powerNames = new Set(powers.map((p) => p.value));
   const supplyNets = /* @__PURE__ */ new Set();
-  for (const n2 of nets) if (powerNames.has(n2.name) || SUPPLY.test(n2.name) && !/_(EN|PG|FB|SENSE|OK)$/i.test(n2.name)) supplyNets.add(n2.name);
+  for (const n2 of nets) if (powerNames.has(n2.name) || SUPPLY2.test(n2.name) && !/_(EN|PG|FB|SENSE|OK)$/i.test(n2.name)) supplyNets.add(n2.name);
   const rails = Array.from(supplyNets).filter((n2) => !isGround(n2));
   const isPassive = (p) => p.pins.length <= 2 && /^(R|C|L|FB|D|F|JP|SB|TP)\d/i.test(p.ref);
   const isIc = (p) => /^(U|IC)\d/i.test(p.ref) || p.pins.length >= 5 && !/^(J|P|CN|X|SW|K|RN)\d/i.test(p.ref) && p.pins.some((q) => q.type === "power_in");
@@ -64688,12 +66105,12 @@ async function reviewSchematic(doc, path2) {
     else groupPins.set(g2, [q]);
   }
   {
-    const bad = labels.filter((l) => SUPPLY.test(l.text) && !/_(EN|PG|FB|SENSE|OK)$/i.test(l.text) || isGround(l.text)).map((l) => `${l.text} at (${r22(l.x)}, ${r22(l.y)})`);
+    const bad = labels.filter((l) => SUPPLY2.test(l.text) && !/_(EN|PG|FB|SENSE|OK)$/i.test(l.text) || isGround(l.text)).map((l) => `${l.text} at (${r23(l.x)}, ${r23(l.y)})`);
     if (bad.length) add("power.symbols", "error", "These supplies are carried by net labels. Use a supply symbol (sch.net or sch.power draws one, sch.supply(name) makes one for a name KiCad's library lacks).", Array.from(new Set(bad)));
     const turned = [];
     for (const p of powers) {
       const mir = k.kid(p.it.node, "mirror");
-      if ((p.it.rot || 0) % 360 !== 0 || mir && k.str(mir[1]) === "x") turned.push(`${p.value} at (${r22(p.it.x)}, ${r22(p.it.y)}) is turned ${p.it.rot || 0}\xB0${mir ? " and mirrored" : ""}`);
+      if ((p.it.rot || 0) % 360 !== 0 || mir && k.str(mir[1]) === "x") turned.push(`${p.value} at (${r23(p.it.x)}, ${r23(p.it.y)}) is turned ${p.it.rot || 0}\xB0${mir ? " and mirrored" : ""}`);
     }
     if (turned.length) add("power.direction", "error", "Supply symbols point up and ground or negative symbols point down, always. Bend the wire and give the symbol room instead of turning it.", turned);
     const vague = rails.filter((n2) => VAGUE_SUPPLY.test(n2));
@@ -64732,11 +66149,11 @@ async function reviewSchematic(doc, path2) {
     for (const l of labels) {
       const g2 = groupAt(l.x, l.y);
       const pins = (g2 >= 0 ? groupPins.get(g2) : null) || parts.flatMap((p) => p.pins.filter((q) => Math.abs(q.x - l.x) < 1e-3 && Math.abs(q.y - l.y) < 1e-3));
-      if (l.kind === "label" && pins.length <= 1 && ((count.get(l.text) || 0) > 1 || sheets > 0)) stubs.push(`"${l.text}" at (${r22(l.x)}, ${r22(l.y)})${pins.length ? ` on ${pins[0].ref}.${pins[0].number}` : ""}`);
+      if (l.kind === "label" && pins.length <= 1 && ((count.get(l.text) || 0) > 1 || sheets > 0)) stubs.push(`"${l.text}" at (${r23(l.x)}, ${r23(l.y)})${pins.length ? ` on ${pins[0].ref}.${pins[0].number}` : ""}`);
       if (l.kind !== "label" && pins.length) {
         const drives = pins.some((q) => q.type === "output" || q.type === "power_out"), listens = pins.some((q) => q.type === "input"), both = pins.some((q) => q.type === "bidirectional" || q.type === "tri_state");
         const want = both || drives && listens ? "bidirectional" : drives ? "output" : listens ? "input" : "";
-        if (want && l.shape && l.shape !== want && !(want === "bidirectional" && l.shape === "tri_state")) shapes2.push(`"${l.text}" at (${r22(l.x)}, ${r22(l.y)}) is drawn as ${l.shape}; its wire has ${want === "bidirectional" ? "bidirectional pins" : want === "output" ? "an output pin, so the signal leaves here: output" : "only input pins, so the signal arrives here: input"}`);
+        if (want && l.shape && l.shape !== want && !(want === "bidirectional" && l.shape === "tri_state")) shapes2.push(`"${l.text}" at (${r23(l.x)}, ${r23(l.y)}) is drawn as ${l.shape}; its wire has ${want === "bidirectional" ? "bidirectional pins" : want === "output" ? "an output pin, so the signal leaves here: output" : "only input pins, so the signal arrives here: input"}`);
       }
     }
     if (stubs.length) add("labels.stubs", "warning", "A plain label on a wire that reaches one pin is just text: the reader cannot tell the net goes somewhere else. Use a global label with a direction shape (sch.globalize() converts them, sch.label draws one; a name that also labels a drawn-through wire is converted once that label is moved to a wire end).", stubs);
@@ -64757,7 +66174,7 @@ async function reviewSchematic(doc, path2) {
     if (byLabel + byWire >= 6 && byLabel > byWire) add("wires.first", "warning", `${byLabel} of ${byLabel + byWire} signal nets are joined by labels and only ${byWire} by a drawn wire. The eye follows a wire far faster than it finds a label: wire the parts of a block together and keep labels for nets that leave the block.`);
   }
   {
-    const slanted = segs.filter((g2) => Math.abs(g2[0] - g2[2]) > 1e-3 && Math.abs(g2[1] - g2[3]) > 1e-3).map((g2) => `(${r22(g2[0])}, ${r22(g2[1])}) to (${r22(g2[2])}, ${r22(g2[3])})`);
+    const slanted = segs.filter((g2) => Math.abs(g2[0] - g2[2]) > 1e-3 && Math.abs(g2[1] - g2[3]) > 1e-3).map((g2) => `(${r23(g2[0])}, ${r23(g2[1])}) to (${r23(g2[2])}, ${r23(g2[3])})`);
     const off = [];
     const og = (v) => Math.abs(v / 1.27 - Math.round(v / 1.27)) > 1e-3;
     for (const p of parts) if (p.pins.some((q) => og(q.x) || og(q.y))) off.push(p.ref);
@@ -64774,18 +66191,18 @@ async function reviewSchematic(doc, path2) {
         total++;
       }
     }
-    const busy = segs.filter((_, i) => cross[i] > 3).map((g2) => `(${r22(g2[0])}, ${r22(g2[1])}) to (${r22(g2[2])}, ${r22(g2[3])}) is crossed ${cross[segs.indexOf(g2)]} times`);
+    const busy = segs.filter((_, i) => cross[i] > 3).map((g2) => `(${r23(g2[0])}, ${r23(g2[1])}) to (${r23(g2[2])}, ${r23(g2[3])}) is crossed ${cross[segs.indexOf(g2)]} times`);
     if (slanted.length) add("wires.straight", "warning", "Wires run in the four cardinal directions; these are at an angle.", slanted);
     if (off.length) add("wires.straight", "warning", "These parts have pins off the 1.27 mm grid, so wires to them need small jogs.", off.sort(refSort));
     if (busy.length) add("wires.straight", "warning", `A wire should not be crossed more than three times (the sheet has ${total} crossings in all). Reorder the pins, move the part, or use a label or a bus here.`, busy);
-    const at = /* @__PURE__ */ new Map();
+    const at2 = /* @__PURE__ */ new Map();
     for (const p of parts) for (const q of p.pins) {
-      const l = at.get(key2(q.x, q.y));
+      const l = at2.get(key2(q.x, q.y));
       if (l) l.push(q);
-      else at.set(key2(q.x, q.y), [q]);
+      else at2.set(key2(q.x, q.y), [q]);
     }
     const direct = [];
-    for (const l of at.values()) {
+    for (const l of at2.values()) {
       const refs = Array.from(new Set(l.map((q) => q.ref)));
       if (refs.length > 1) direct.push(`${l.map((q) => `${q.ref}.${q.number}`).join(" on ")}`);
     }
@@ -64879,8 +66296,8 @@ async function reviewSchematic(doc, path2) {
         if (r === null || !r || v === null || !v) continue;
         const w = v * v / r, max = wattsOf(p.fields);
         if (max === null) continue;
-        if (w > max) hot.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r22(w * 1e3)} mW; its package is good for ${r22(max * 1e3)} mW`);
-        else if (w > max / 2) warm.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r22(w * 1e3)} mW of ${r22(max * 1e3)} mW`);
+        if (w > max) hot.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r23(w * 1e3)} mW; its package is good for ${r23(max * 1e3)} mW`);
+        else if (w > max / 2) warm.push(`${p.ref} ${p.value} across ${a} and ${b} dissipates ${r23(w * 1e3)} mW of ${r23(max * 1e3)} mW`);
       }
     }
     if (under.length) add("caps.voltage", "error", "Capacitors are rated for at least twice the voltage they work at (a ceramic loses most of its capacitance near its rated voltage).", under);
@@ -64938,7 +66355,7 @@ async function reviewSchematic(doc, path2) {
     if (mixed.length) add("domains", "warning", "These signals join ICs on different supply voltages. Check that each input tolerates the other side's level, and that neither side is powered through its pins while its own supply is off (a level shifter or a series resistor where it is not).", mixed);
   }
   {
-    const swapped = [], bare = [], open2 = [], floating = [];
+    const swapped = [], bare2 = [], open2 = [], floating = [];
     const pulled = (net) => (netPins.get(net) || []).some((q) => {
       if (!/^(R|RN)\d/i.test(q.ref)) return false;
       const r = byRef2.get(q.ref);
@@ -64954,14 +66371,14 @@ async function reviewSchematic(doc, path2) {
       const icOnly = (l) => l.filter((q) => isIc(byRef2.get(q.ref)));
       if (icOnly(tx).length >= 2 && !rx.length) swapped.push(`${n2.name}: ${tx.map((q) => `${q.ref}.${q.name}`).join(" and ")} are both transmitters`);
       if (icOnly(rx).length >= 2 && !tx.length) swapped.push(`${n2.name}: ${rx.map((q) => `${q.ref}.${q.name}`).join(" and ")} are both receivers`);
-      if (n2.named && /^(UART\d*_?)?(TXD?|RXD?)\d*$/i.test(n2.name)) bare.push(`${n2.name}: whose TX? Name it after its source (MCU_TX, GPS_TX)`);
+      if (n2.named && /^(UART\d*_?)?(TXD?|RXD?)\d*$/i.test(n2.name)) bare2.push(`${n2.name}: whose TX? Name it after its source (MCU_TX, GPS_TX)`);
       const od = n2.pins.some((q) => q.type === "open_collector" || q.type === "open_emitter") || n2.pins.some((q) => /^(SDA|SCL|SCK\/SCL|SDA\/SDI|I2C\d*_?(SDA|SCL))\d*$/i.test(q.name)) || /(^|_)(SDA|SCL)\d*$/i.test(n2.name);
       if (od && n2.pins.some((q) => isIc(byRef2.get(q.ref) || { pins: [], ref: "" })) && !pulled(n2.name)) open2.push(`${n2.name}: ${n2.pins.slice(0, 3).map((q) => `${q.ref}.${q.name || q.number}`).join(", ")}`);
       const ctl = n2.pins.filter((q) => q.type === "input" && /^~?\{?(N?RST|N?RESET|RUN|EN|ENABLE|SHDN|N?SHUTDOWN|BOOT\d*|CE|CHIP_EN|CHIP_PU|PWRKEY)\}?$/i.test(q.name) && isIc(byRef2.get(q.ref) || { pins: [], ref: "" }));
       if (ctl.length && !pulled(n2.name) && !n2.pins.some((q) => q.type === "output" || q.type === "power_out")) floating.push(`${n2.name}: ${ctl.map((q) => `${q.ref}.${q.name}`).join(", ")}`);
     }
     if (swapped.length) add("uart", "error", "UART lines cross: one side's TX goes to the other side's RX.", swapped);
-    if (bare.length) add("uart", "warning", "UART nets are named after the device that transmits on them.", bare);
+    if (bare2.length) add("uart", "warning", "UART nets are named after the device that transmits on them.", bare2);
     if (open2.length) add("pullups", "error", "Open-drain lines need a pull-up resistor to their supply (I2C: one on SDA and one on SCL).", open2);
     if (floating.length) add("pullups", "warning", "These reset, enable or boot pins have nothing that holds them in a known state at power up. Add a pull-up or pull-down resistor, or say in a note that the pin has one inside.", floating);
   }
@@ -65030,7 +66447,7 @@ async function reviewBoard(doc, path2) {
   const P = PCB4(), k = K4();
   if (!P) throw new ToolError("The board tools are not loaded.");
   const out = [];
-  const add = (rule, level, message, items) => out.push({ rule, level, message, count: items ? items.length : void 0, items: items && items.length ? few(items) : void 0 });
+  const add = (rule, level, message, items) => out.push({ rule, level, message, count: items ? items.length : void 0, items: items && items.length ? few2(items) : void 0 });
   const NT = P.netTable(doc);
   const settings = P.designSettings(ED().proSettings || null);
   const fps = [], tracks = [], vias = [], zones = [], silk = [];
@@ -65082,9 +66499,9 @@ async function reviewBoard(doc, path2) {
       if (/SilkS/.test(l)) silk.push({ text: k.str(it.node[1]), layer: l });
     }
   }
-  const bare = (n2) => n2.replace(/^\//, "");
-  const isGnd = (n2) => isGround(bare(n2));
-  const isSup = (n2) => !isGnd(n2) && SUPPLY.test(bare(n2)) && !/_(EN|PG|FB|SENSE|OK)$/i.test(n2);
+  const bare2 = (n2) => n2.replace(/^\//, "");
+  const isGnd2 = (n2) => isGround(bare2(n2));
+  const isSup2 = (n2) => !isGnd2(n2) && SUPPLY2.test(bare2(n2)) && !/_(EN|PG|FB|SENSE|OK)$/i.test(n2);
   const ics = fps.filter((f) => /^(U|IC)\d/i.test(f.ref)), caps = fps.filter((f) => /^C\d/i.test(f.ref));
   const smd = (side) => fps.some((f) => f.side === side && f.pads.length >= 2 && f.pads.some((p) => p.type === "smd"));
   {
@@ -65092,11 +66509,11 @@ async function reviewBoard(doc, path2) {
     for (const u of ics) {
       const seen = /* @__PURE__ */ new Set();
       for (const p of u.pads) {
-        if (!isSup(p.net) || seen.has(p.net + p.number)) continue;
+        if (!isSup2(p.net) || seen.has(p.net + p.number)) continue;
         seen.add(p.net + p.number);
         let best = Infinity, who = "";
         for (const c of caps) {
-          if (!c.pads.some((q) => isGnd(q.net))) continue;
+          if (!c.pads.some((q) => isGnd2(q.net))) continue;
           for (const q of c.pads) if (q.net === p.net) {
             const d = Math.hypot(q.x - p.x, q.y - p.y);
             if (d < best) {
@@ -65105,30 +66522,30 @@ async function reviewBoard(doc, path2) {
             }
           }
         }
-        if (!isFinite(best)) none.push(`${u.ref}.${p.number} (${bare(p.net)})`);
-        else if (best > 4) far.push(`${u.ref}.${p.number} (${bare(p.net)}): nearest capacitor ${who} is ${r22(best)} mm away`);
+        if (!isFinite(best)) none.push(`${u.ref}.${p.number} (${bare2(p.net)})`);
+        else if (best > 4) far.push(`${u.ref}.${p.number} (${bare2(p.net)}): nearest capacitor ${who} is ${r23(best)} mm away`);
       }
     }
     if (far.length) add("bypass.near", "warning", 'A bypass capacitor belongs within a couple of millimetres of the supply pin it serves, closer than anything else (board.autoplace(near={"C1": "U1"}) or board.place).', far);
     if (none.length) add("bypass.near", "error", "These IC supply pads have no capacitor on their net at all.", none);
   }
   {
-    const sig = tracks.filter((t) => t.net && !isSup(t.net) && !isGnd(t.net)).map((t) => t.width).sort((a, b) => a - b);
+    const sig = tracks.filter((t) => t.net && !isSup2(t.net) && !isGnd2(t.net)).map((t) => t.width).sort((a, b) => a - b);
     const usual = sig.length ? sig[Math.floor(sig.length / 2)] : 0;
     const thin = /* @__PURE__ */ new Map();
-    for (const t of tracks) if (isSup(t.net) && usual && t.width <= usual + 1e-6) thin.set(bare(t.net), Math.min(thin.get(bare(t.net)) ?? Infinity, t.width));
+    for (const t of tracks) if (isSup2(t.net) && usual && t.width <= usual + 1e-6) thin.set(bare2(t.net), Math.min(thin.get(bare2(t.net)) ?? Infinity, t.width));
     if (thin.size) add("power.width", "warning", `These supplies are routed no wider than a signal track (${usual} mm). Make power lines as wide as there is room for: board.route(widths={net: 0.5}) or a net class.`, Array.from(thin.entries()).map(([n2, w]) => `${n2}: ${w} mm`));
     const byNet = /* @__PURE__ */ new Map();
-    for (const v of vias) if (isSup(v.net)) {
+    for (const v of vias) if (isSup2(v.net)) {
       const l = byNet.get(v.net);
       if (l) l.push(v);
       else byNet.set(v.net, [v]);
     }
-    const lone = Array.from(byNet.entries()).filter(([, l]) => l.length === 1 && l[0].drill <= 0.3 + 1e-6).map(([n2, l]) => `${bare(n2)}: one via with a ${l[0].drill} mm drill`);
+    const lone = Array.from(byNet.entries()).filter(([, l]) => l.length === 1 && l[0].drill <= 0.3 + 1e-6).map(([n2, l]) => `${bare2(n2)}: one via with a ${l[0].drill} mm drill`);
     if (lone.length) add("power.vias", "warning", "These supplies change layer through a single small via. Use a larger drill or two or three vias side by side.", lone);
   }
   {
-    const gz = zones.filter((z) => isGnd(z.net));
+    const gz = zones.filter((z) => isGnd2(z.net));
     const layers = new Set(gz.flatMap((z) => z.layers.flatMap((l) => l === "F&B.Cu" ? ["F.Cu", "B.Cu"] : l === "*.Cu" ? doc.copper.slice() : [l])));
     const copper = doc.copper.slice();
     if (tracks.length || fps.length > 3) {
@@ -65138,8 +66555,8 @@ async function reviewBoard(doc, path2) {
       if (tight.length) add("ground.planes", "warning", `A ground zone's clearance (${tight[0].clearance} mm) is no larger than the design rule (${settings.clearance} mm). Give the pour more room than a track gets: about 0.2 mm for a 0.15 mm rule.`);
       if (layers.size >= 2 && isFinite(x0)) {
         const area3 = (x1 - x0) * (y1 - y0) / 100;
-        const n2 = vias.filter((v) => isGnd(v.net)).length + fps.reduce((a, f) => a + f.pads.filter((p) => p.type === "thru_hole" && isGnd(p.net)).length, 0);
-        if (n2 < Math.max(4, Math.round(area3))) add("ground.stitching", "warning", `${n2} ground via${n2 === 1 ? "" : "s"} tie the ground planes together on a ${r22(area3)} cm\xB2 board. Stitch them about every centimetre, and beside every signal via (board.stitch()).`);
+        const n2 = vias.filter((v) => isGnd2(v.net)).length + fps.reduce((a, f) => a + f.pads.filter((p) => p.type === "thru_hole" && isGnd2(p.net)).length, 0);
+        if (n2 < Math.max(4, Math.round(area3))) add("ground.stitching", "warning", `${n2} ground via${n2 === 1 ? "" : "s"} tie the ground planes together on a ${r23(area3)} cm\xB2 board. Stitch them about every centimetre, and beside every signal via (board.stitch()).`);
       }
     }
   }
@@ -65150,13 +66567,13 @@ async function reviewBoard(doc, path2) {
       for (const f of fps) if (f.box) used += (f.box[2] - f.box[0]) * (f.box[3] - f.box[1]);
       const backToo = fps.some((f) => f.side === "back" && f.pads.length >= 2);
       const share = used / (board * (backToo ? 2 : 1));
-      if (share < 0.2 && board > 400) add("size", "note", `Parts cover ${Math.round(share * 100)} % of the ${r22(x1 - x0)} x ${r22(y1 - y0)} mm board. Unless the size is fixed by a case or a connector pattern, it can be smaller.`);
+      if (share < 0.2 && board > 400) add("size", "note", `Parts cover ${Math.round(share * 100)} % of the ${r23(x1 - x0)} x ${r23(y1 - y0)} mm board. Unless the size is fixed by a case or a connector pattern, it can be smaller.`);
     }
-    const hit4 = (a, b, g2) => a[0] < b[2] + g2 && a[2] > b[0] - g2 && a[1] < b[3] + g2 && a[3] > b[1] - g2;
+    const hit5 = (a, b, g2) => a[0] < b[2] + g2 && a[2] > b[0] - g2 && a[1] < b[3] + g2 && a[3] > b[1] - g2;
     const tight = [];
     for (let i = 0; i < fps.length; i++) for (let j = i + 1; j < fps.length; j++) {
       const a = fps[i], b = fps[j];
-      if (a.side === b.side && a.box && b.box && hit4(a.box, b.box, -0.01)) tight.push(`${a.ref} and ${b.ref}`);
+      if (a.side === b.side && a.box && b.box && hit5(a.box, b.box, -0.01)) tight.push(`${a.ref} and ${b.ref}`);
     }
     if (tight.length) add("assembly.space", "error", "These courtyards overlap, so the parts cannot both be assembled (board.clashes() gives the amounts).", tight);
     const tps = fps.filter((f) => /^TP\d/i.test(f.ref) || /test ?point/i.test(f.lib));
@@ -65218,7 +66635,14 @@ async function reviewBoard(doc, path2) {
     } catch {
     }
   }
-  return report2("layout review", path2, PCB_RULES, out, PCB_MANUAL);
+  try {
+    reviewPhysics(doc, P, k, settings, add);
+  } catch (err) {
+    add("drc", "note", `The layout physics checks could not run: ${err.message}`);
+  }
+  const r = report2("layout review", path2, PCB_RULES.concat(PHYSICS_RULES), out, PCB_MANUAL.concat(PHYSICS_MANUAL));
+  r.source += " " + PHYSICS_SOURCE;
+  return r;
 }
 function report2(check2, path2, rules, findings, manual) {
   const order = { error: 0, warning: 1, note: 2 };
@@ -65240,6 +66664,11 @@ function report2(check2, path2, rules, findings, manual) {
 }
 async function reviewDesign(input = {}) {
   const { doc, path: path2 } = await resolveDoc(input.doc);
+  if (input.plan) {
+    const P = PCB4();
+    if (doc.type === "sch" || !P) throw new ToolError("A layout plan needs the board.");
+    return physicsPlan(doc, P, K4(), P.designSettings(ED().proSettings || null), input.plan);
+  }
   const r = doc.type === "sch" ? await reviewSchematic(doc, path2) : await reviewBoard(doc, path2);
   if (input.rule) r.findings = r.findings.filter((f) => f.rule === input.rule || f.rule.startsWith(input.rule + "."));
   if (input.level === "error") r.findings = r.findings.filter((f) => f.level === "error");
@@ -65419,8 +66848,8 @@ function globalizeLabels(doc, h, opts = {}) {
   const fixedNames = /* @__PURE__ */ new Set();
   for (const l of labels) {
     if (l.kind !== "label") continue;
-    const at = k.atOf(l.node);
-    const P = [at[0], at[1]];
+    const at2 = k.atOf(l.node);
+    const P = [at2[0], at2[1]];
     const pk = key(P[0], P[1]);
     const touching = wires.filter((w) => on(P, w));
     const endsHere = touching.filter((w) => key(w.a[0], w.a[1]) === pk || key(w.b[0], w.b[1]) === pk);
@@ -65433,9 +66862,9 @@ function globalizeLabels(doc, h, opts = {}) {
     const text2 = k.str(l.node[1]);
     if (want && !want.has(text2) || fixedNames.has(text2)) continue;
     if (!opts.all && !want && (count.get(text2) || 0) < 2 && !sheets) continue;
-    const at = k.atOf(l.node);
-    const P = [at[0], at[1]];
-    const rot3 = (Math.round(at[2] || 0) % 360 + 360) % 360;
+    const at2 = k.atOf(l.node);
+    const P = [at2[0], at2[1]];
+    const rot3 = (Math.round(at2[2] || 0) % 360 + 360) % 360;
     const pk = key(P[0], P[1]);
     const touching = wires.map((w, i) => ({ w, i })).filter(({ w }) => on(P, w));
     const endsHere = touching.filter(({ w }) => key(w.a[0], w.a[1]) === pk || key(w.b[0], w.b[1]) === pk);
@@ -65551,8 +66980,8 @@ function setField(doc, it, field2, value) {
   else {
     const [x, y] = k.atOf(node);
     p = doc.type === "sch" ? ["property", field2, value, ["at", r44(x), r44(y), 0], ["hide", "yes"], ["effects", ["font", ["size", 1.27, 1.27]]]] : ["property", field2, value, ["at", 0, 0, 0], ["layer", it.layer === "B.Cu" ? "B.Fab" : "F.Fab"], ["hide", "yes"], ["uuid", k.newUuid()], ["effects", ["font", ["size", 1, 1], ["thickness", 0.15]]]];
-    const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances" || c[0] === "pad" || c[0] === "fp_line" || c[0] === "fp_text" || c[0] === "model"));
-    if (at >= 0) node.splice(at, 0, p);
+    const at2 = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances" || c[0] === "pad" || c[0] === "fp_line" || c[0] === "fp_text" || c[0] === "model"));
+    if (at2 >= 0) node.splice(at2, 0, p);
     else node.push(p);
   }
   if (field2 === "Reference" && doc.type === "sch") for (const inst of k.kids(node, "instances")) for (const pr of k.kids(inst, "project")) for (const pa of k.kids(pr, "path")) {
@@ -65647,8 +67076,8 @@ function addSymbol(doc, e, taken) {
     else {
       const [x, y] = k.atOf(node);
       const np = ["property", name, String(value), ["at", r44(x), r44(y), 0], ["hide", "yes"], ["effects", ["font", ["size", 1.27, 1.27]]]];
-      const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances"));
-      if (at >= 0) node.splice(at, 0, np);
+      const at2 = node.findIndex((c) => Array.isArray(c) && (c[0] === "pin" || c[0] === "instances"));
+      if (at2 >= 0) node.splice(at2, 0, np);
       else node.push(np);
     }
   }
@@ -65674,10 +67103,10 @@ function addSymbol(doc, e, taken) {
       const T = k.symbolTransform(turn, e.mirror || "");
       const left = (box[0] + box[2]) / 2 < x, v = k.kids(out, "property").find((q) => k.str(q[1]) === "Value");
       if (v) {
-        const at = k.kid(v, "at");
-        if (at) {
-          at[1] = r44(left ? box[0] - 0.635 : box[2] + 0.635);
-          at[2] = r44(y);
+        const at2 = k.kid(v, "at");
+        if (at2) {
+          at2[1] = r44(left ? box[0] - 0.635 : box[2] + 0.635);
+          at2[2] = r44(y);
         }
         const flip = (T[1] !== 0 ? T[1] : T[0]) < 0, hj = left ? "right" : "left", stored = flip ? hj === "left" ? "right" : "left" : hj;
         let ef = k.kid(v, "effects");
@@ -65704,11 +67133,11 @@ function addSymbol(doc, e, taken) {
         const put = (name, px, py, hj) => {
           const f = k.kids(out, "property").find((q) => k.str(q[1]) === name);
           if (!f) return;
-          const at = k.kid(f, "at");
-          if (!at) return;
-          at[1] = r44(px);
-          at[2] = r44(py);
-          at[3] = turn === 90 || turn === 270 ? 90 : 0;
+          const at2 = k.kid(f, "at");
+          if (!at2) return;
+          at2[1] = r44(px);
+          at2[2] = r44(py);
+          at2[3] = turn === 90 || turn === 270 ? 90 : 0;
           let ef = k.kid(f, "effects");
           if (!ef) {
             ef = ["effects", ["font", ["size", 1.27, 1.27]]];
@@ -65742,8 +67171,8 @@ function points(e) {
 }
 function boardNet(doc, name) {
   const all2 = PCB5().boardNets(doc);
-  const bare = String(name).replace(/^\//, "");
-  const n2 = all2.find((x) => x.name === name) || all2.find((x) => x.name === "/" + bare) || all2.find((x) => x.name === bare);
+  const bare2 = String(name).replace(/^\//, "");
+  const n2 = all2.find((x) => x.name === name) || all2.find((x) => x.name === "/" + bare2) || all2.find((x) => x.name === bare2);
   if (!n2) throw new ToolError(`there is no net "${name}" on the board`);
   return n2;
 }
@@ -65912,9 +67341,9 @@ async function planSync(board, e) {
         rowH = Math.max(rowH, h);
       }
       if (part.path) {
-        const at = node.findIndex((c) => Array.isArray(c) && (c[0] === "attr" || c[0] === "fp_line" || c[0] === "fp_text" || c[0] === "pad"));
+        const at2 = node.findIndex((c) => Array.isArray(c) && (c[0] === "attr" || c[0] === "fp_line" || c[0] === "fp_text" || c[0] === "pad"));
         const tie = [["path", part.path], ["sheetname", "/"], ["sheetfile", part.sheetfile]];
-        if (at >= 0) node.splice(at, 0, ...tie);
+        if (at2 >= 0) node.splice(at2, 0, ...tie);
         else node.push(...tie);
       }
       P.translateNode(node, x, y);
@@ -66462,10 +67891,10 @@ function build(input) {
             let any = false;
             for (const m of moves) {
               const p = k.kids(node, "property").find((q) => k.str(q[1]) === m.field);
-              const at = p && k.kid(p, "at");
-              if (!at) continue;
-              at[1] = r44(k.num(at[1]) + m.dx);
-              at[2] = r44(k.num(at[2]) + m.dy);
+              const at2 = p && k.kid(p, "at");
+              if (!at2) continue;
+              at2[1] = r44(k.num(at2[1]) + m.dx);
+              at2[2] = r44(k.num(at2[2]) + m.dy);
               any = true;
             }
             if (!any) continue;
@@ -66562,18 +67991,18 @@ function build(input) {
           const want = (Array.isArray(e.pads) ? e.pads : [e.pad]).filter((v) => v !== void 0).map(String);
           if (!want.length) throw new ToolError("give pad (or pads): the pad numbers");
           const node = k.cloneNode(it.node);
-          const hit4 = [];
+          const hit5 = [];
           for (const pad of k.kids(node, "pad")) {
             if (!want.includes(k.str(pad[1]))) continue;
-            hit4.push(k.str(pad[1]));
-            const at = pad.findIndex((q) => Array.isArray(q) && q[0] === "zone_connect");
-            if (at >= 0) pad.splice(at, 1);
+            hit5.push(k.str(pad[1]));
+            const at2 = pad.findIndex((q) => Array.isArray(q) && q[0] === "zone_connect");
+            if (at2 >= 0) pad.splice(at2, 1);
             if (code !== null) {
               const before = pad.findIndex((q) => Array.isArray(q) && ["thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "tenting", "uuid", "tstamp", "teardrops"].includes(q[0]));
               pad.splice(before >= 0 ? before : pad.length, 0, ["zone_connect", code]);
             }
           }
-          const missing = want.find((w) => !hit4.includes(w));
+          const missing = want.find((w) => !hit5.includes(w));
           if (missing) throw new ToolError(`${nameOf(it)} has no pad ${missing}`);
           if (k.serialize(node) === k.serialize(it.node)) throw new ToolError(`${nameOf(it)} pad ${want.join(", ")} already connects that way`);
           touch(it, e.op);
@@ -66605,6 +68034,76 @@ function build(input) {
           c.was = { layers: BS.layersText(before) };
           changes.push(c);
           lines.push({ kind: "modify", text: `Copper layers ${now} \u2192 ${count} (${rows.filter((r) => r.copper).map((r) => r.name).join(", ")})`, ids: [] });
+          break;
+        }
+        case "set_stackup": {
+          pcbOnly(e.op);
+          const BS = k.boardSetup;
+          if (!BS || !BS.boardSetupChange) throw new ToolError("the board setup tools are not loaded in this editor");
+          const rows = Array.isArray(e.layers) ? e.layers : [];
+          if (!rows.length) throw new ToolError("layers is the stack top to bottom: {name, type: copper, thickness} and {type: core or prepreg, thickness, material, epsilon_r, loss_tangent} between them");
+          const cu = rows.filter((r) => r && r.type === "copper").map((r) => String(r.name));
+          const have = doc.copper.slice();
+          if (cu.join(",") !== have.join(",")) throw new ToolError(`the stackup's copper layers (${cu.join(", ") || "none"}) must be the board's, top to bottom (${have.join(", ")}); set_layers changes the layer count`);
+          const q = (s) => JSON.stringify(String(s));
+          const out = [];
+          let total = 0, nd = 0, prev = "";
+          const mask = e.mask === false ? null : Object.assign({ thickness: 0.01 }, e.mask && typeof e.mask === "object" ? e.mask : {});
+          const maskRow = (side, name) => {
+            const t = num6(mask.thickness, "mask thickness");
+            if (t < 0 || t > 0.5) throw new ToolError("the solder mask or coverlay is 0 to 0.5 mm thick");
+            total += t;
+            return `(layer ${q(name)} (type ${q(side + " Solder Mask")})${mask.color ? ` (color ${q(mask.color)})` : ""} (thickness ${fmt3(t)})${mask.material ? ` (material ${q(mask.material)})` : ""}${mask.epsilon_r ? ` (epsilon_r ${fmt3(num6(mask.epsilon_r, "mask epsilon_r"))})` : ""}${mask.loss_tangent ? ` (loss_tangent ${fmt3(num6(mask.loss_tangent, "mask loss_tangent"))})` : ""})`;
+          };
+          out.push('(layer "F.SilkS" (type "Top Silk Screen"))', '(layer "F.Paste" (type "Top Solder Paste"))');
+          if (mask) out.push(maskRow("Top", "F.Mask"));
+          for (const r of rows) {
+            if (!r || typeof r !== "object") throw new ToolError("each stackup layer is an object");
+            const t = num6(r.thickness, "thickness");
+            if (!(t > 0 && t <= 10)) throw new ToolError("a layer's thickness is in millimetres, above 0 and at most 10");
+            if (r.type === "copper") {
+              if (prev === "copper") throw new ToolError(`there is no dielectric between two copper layers above ${r.name}`);
+              out.push(`(layer ${q(r.name)} (type "copper") (thickness ${fmt3(t)}))`);
+            } else if (r.type === "core" || r.type === "prepreg") {
+              if (!prev) throw new ToolError("the stack starts with the top copper layer");
+              const er = r.epsilon_r === void 0 ? 4.5 : num6(r.epsilon_r, "epsilon_r");
+              if (!(er >= 1 && er <= 20)) throw new ToolError("epsilon_r is the dielectric constant, 1 to 20");
+              const lt = r.loss_tangent === void 0 ? 0.02 : num6(r.loss_tangent, "loss_tangent");
+              const body = `(type ${q(r.type)}) (thickness ${fmt3(t)}) (material ${q(r.material || "FR4")}) (epsilon_r ${fmt3(er)}) (loss_tangent ${fmt3(lt)})`;
+              if (prev === "copper") out.push(`(layer "dielectric ${++nd}" ${body})`);
+              else out[out.length - 1] = out[out.length - 1].replace(/\)$/, ` addsublayer ${body})`);
+            } else throw new ToolError(`a stackup layer's type is copper, core or prepreg, not "${r.type}"`);
+            total += t;
+            prev = r.type === "copper" ? "copper" : "dielectric";
+          }
+          if (prev !== "copper") throw new ToolError("the stack ends with the bottom copper layer");
+          if (mask) out.push(maskRow("Bottom", "B.Mask"));
+          out.push('(layer "B.Paste" (type "Bottom Solder Paste"))', '(layer "B.SilkS" (type "Bottom Silk Screen"))');
+          const oldSetup = doc.boardSetup && doc.boardSetup.setup || doc.setupNode || null;
+          const oldGen = doc.boardSetup && doc.boardSetup.general || doc.generalNode || null;
+          const oldSt = oldSetup ? k.kid(oldSetup, "stackup") : null;
+          const finish = e.finish === void 0 ? oldSt && k.kid(oldSt, "copper_finish") ? k.str(k.kid(oldSt, "copper_finish")[1]) : "None" : String(e.finish);
+          if (BS.COPPER_FINISHES && !BS.COPPER_FINISHES.includes(finish)) throw new ToolError(`finish is one of: ${BS.COPPER_FINISHES.join(", ")}`);
+          out.push(`(copper_finish ${q(finish)})`, `(dielectric_constraints ${e.controlled ? "yes" : "no"})`);
+          for (const key2 of ["edge_connector", "edge_plating"]) {
+            const n2 = oldSt ? k.kid(oldSt, key2) : null;
+            if (n2) out.push(`(${key2} ${k.str(n2[1])})`);
+          }
+          const st = k.parse(`(stackup ${out.join(" ")})`);
+          const setup = oldSetup ? k.parse(BS.sectionText(oldSetup)) : k.parse("(setup (pad_to_mask_clearance 0) (allow_soldermask_bridges_in_footprints no))");
+          const at2 = setup.findIndex((n2) => Array.isArray(n2) && n2[0] === "stackup");
+          if (at2 > 0) setup[at2] = st;
+          else setup.splice(1, 0, st);
+          const thick = e.thickness === void 0 ? +total.toFixed(4) : num6(e.thickness, "thickness");
+          if (!(thick > 0 && thick <= 20)) throw new ToolError("thickness is the finished board thickness in millimetres");
+          const general = oldGen ? k.parse(BS.sectionText(oldGen)) : k.parse("(general (thickness 1.6) (legacy_teardrops no))");
+          const gt = general.findIndex((n2) => Array.isArray(n2) && n2[0] === "thickness");
+          if (gt > 0) general[gt] = ["thickness", thick];
+          else general.splice(1, 0, ["thickness", thick]);
+          const c = BS.boardSetupChange({ setup: BS.sectionText(setup), general: BS.sectionText(general) });
+          c.was = { setup: oldSetup ? BS.sectionText(oldSetup) : "", general: oldGen ? BS.sectionText(oldGen) : "" };
+          changes.push(c);
+          lines.push({ kind: "modify", text: `Physical stackup: ${cu.length} copper layers, ${nd} dielectric${nd === 1 ? "" : "s"}, ${fmt3(thick)} mm thick${finish !== "None" ? ", " + finish : ""}${e.title ? ` (${String(e.title).slice(0, 80)})` : ""}`, ids: [] });
           break;
         }
         case "set_page": {
@@ -66807,9 +68306,9 @@ var Workspace = class {
     }
     const q = String(name).trim().toLowerCase();
     const strip = (s) => s.replace(/\.kicad_(sch|pcb)$/, "");
-    const hit4 = this.docs.find((d) => d.path.toLowerCase() === q) || this.docs.find((d) => baseName2(d.path).toLowerCase() === q) || this.docs.find((d) => strip(baseName2(d.path).toLowerCase()) === strip(q)) || (/^(board|pcb)$/.test(q) ? this.docs.find((d) => d.docType === "kicad_pcb") : void 0) || (/^(schematic|sch|sheet)$/.test(q) ? this.docs.find((d) => d.docType === "kicad_sch") : void 0);
-    if (!hit4) throw new ToolError(`There is no document "${name}" in this project. The documents are: ${this.docs.map((d) => d.path).join(", ")}.`);
-    return hit4;
+    const hit5 = this.docs.find((d) => d.path.toLowerCase() === q) || this.docs.find((d) => baseName2(d.path).toLowerCase() === q) || this.docs.find((d) => strip(baseName2(d.path).toLowerCase()) === strip(q)) || (/^(board|pcb)$/.test(q) ? this.docs.find((d) => d.docType === "kicad_pcb") : void 0) || (/^(schematic|sch|sheet)$/.test(q) ? this.docs.find((d) => d.docType === "kicad_sch") : void 0);
+    if (!hit5) throw new ToolError(`There is no document "${name}" in this project. The documents are: ${this.docs.map((d) => d.path).join(", ")}.`);
+    return hit5;
   }
   /** Make `h` the open document of a stand-in editor, the way the tool modules expect to find one. */
   open(h) {
@@ -66843,7 +68342,9 @@ var Workspace = class {
     for (const n2 of base.slice(1)) {
       if (!Array.isArray(n2) || !HEADER.includes(n2[0])) continue;
       if (n2[0] === "title_block" && h.titleBlock !== void 0) continue;
-      out.push(n2[0] === "paper" && h.paper ? k.parse(h.paper) : n2[0] === "layers" && h.layers ? k.parse(h.layers) : n2);
+      if (n2[0] === "layers" && h.general && !base.some((q) => Array.isArray(q) && q[0] === "general")) out.push(k.parse(h.general));
+      out.push(n2[0] === "paper" && h.paper ? k.parse(h.paper) : n2[0] === "layers" && h.layers ? k.parse(h.layers) : n2[0] === "setup" && h.setup ? k.parse(h.setup) : n2[0] === "general" && h.general ? k.parse(h.general) : n2);
+      if (n2[0] === "layers" && h.setup && !base.some((q) => Array.isArray(q) && q[0] === "setup")) out.push(k.parse(h.setup));
       if (n2[0] === "paper" && h.titleBlock) out.push(k.parse(h.titleBlock));
     }
     if (doc.type === "sch") out.push(["lib_symbols", ...doc.lib.values()]);
@@ -66864,8 +68365,7 @@ var Workspace = class {
     for (const c of prop2.changes) {
       if (c.typeName === "BOARD_SETUP") {
         k.boardSetup.applyBoardSetup(doc, c);
-        const lp = (c.properties || []).find((q) => q.name === "layers");
-        if (lp && lp.after) h.layers = lp.after.v;
+        for (const q of c.properties || []) if (q.after && typeof q.after.v === "string" && (q.name === "layers" || q.name === "setup" || q.name === "general")) h[q.name] = q.after.v;
         h.dirty = true;
         continue;
       }

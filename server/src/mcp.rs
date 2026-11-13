@@ -629,9 +629,10 @@ fn guide(topic: &str) -> Result<String, String> {
         "schematic" => "## Drawing schematics",
         "board" => "## Designing a board from a prompt",
         "routing" => "## Routing a board",
+        "layout" => "## Laying out a board by the physics",
         "review" => "## Reviewing a design",
         "python" => "## Scripting with Python",
-        other => return Err(format!("There is no topic \"{other}\". Topics: all, python, schematic, board, routing, review.")),
+        other => return Err(format!("There is no topic \"{other}\". Topics: all, python, schematic, board, routing, layout, review.")),
     };
     // Every topic comes with the opening section: how changes work here applies to all of them.
     let section = |h: &str| -> &str {
@@ -640,6 +641,10 @@ fn guide(topic: &str) -> Result<String, String> {
         let end = rest[2..].find("\n## ").map(|i| i + 2).unwrap_or(rest.len());
         rest[..end].trim_end()
     };
+    // A board is laid out by the physics: the board and routing topics bring that section with them.
+    if topic == "board" || topic == "routing" {
+        return Ok(format!("{}\n\n{}\n\n{}\n", section("## Working on a design"), section(heading), section("## Laying out a board by the physics")));
+    }
     Ok(format!("{}\n\n{}\n", section("## Working on a design"), section(heading)))
 }
 
@@ -1015,6 +1020,9 @@ mod tests {
         assert!(guide("").unwrap().contains("## Reviewing a design"));
         let routing = guide("routing").unwrap();
         assert!(routing.starts_with("## Working on a design") && routing.contains("## Routing a board") && !routing.contains("## Reviewing a design"));
+        assert!(routing.contains("## Laying out a board by the physics"));
+        let layout = guide("layout").unwrap();
+        assert!(layout.contains("board.plan(") && layout.contains("board.stackup(") && !layout.contains("## Routing a board"));
         assert!(guide("nope").is_err());
     }
 

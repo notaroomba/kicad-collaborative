@@ -88,9 +88,9 @@ export function parseDoc(text: string, docType?: string): Doc {
       // (0 "F.Cu" signal ["user name"])
       for (const l of node.slice(1)) if (isList(l)) { const name = str(l[1]), ltype = str(l[2]); doc.layers.set(name, { id: num(l[0]), type: ltype, userName: l[3] !== undefined ? str(l[3]) : "" }); if (/\.Cu$/.test(name) && ltype !== "user") doc.copper.push(name); }
     }
-    else if (k === "general") { const t = kid(node, "thickness"); if (t && type === "pcb") doc.thickness = num(t[1], 1.6); continue; }   // board thickness: the 3D viewer's extrusion
+    else if (k === "general") { const t = kid(node, "thickness"); if (t && type === "pcb") doc.thickness = num(t[1], 1.6); if (type === "pcb") doc.generalNode = node; continue; }   // board thickness: the 3D viewer's extrusion
     else if (k === "net") { if (type === "pcb") doc.nets.set(num(node[1], -1), str(node[2])); continue; }   // (net 3 "GND"): the board's net table
-    else if (type === "pcb" && k === "setup") { const o = setupOrigins(node); doc.auxOrigin = o.aux; doc.gridOrigin = o.grid; doc.stackup = kid(node, "stackup") || null; continue; }   // the physical stackup is kept for impedance work   // the drill / place and grid origins
+    else if (type === "pcb" && k === "setup") { const o = setupOrigins(node); doc.auxOrigin = o.aux; doc.gridOrigin = o.grid; doc.stackup = kid(node, "stackup") || null; doc.setupNode = node; continue; }   // the physical stackup is kept for impedance work   // the drill / place and grid origins
     else if (k === "embedded_files") { doc.embeddedFiles = node; continue; }   // read by the Simulation Model dialog (kicad-embed://)
     else if (k === "lib_symbols" || k === "generator" || k === "generator_version" || k === "general" || k === "setup" || k === "symbol_instances" || k === "embedded_fonts" || k === "embedded_files" || k === "uuid") continue;
     else addItem(doc, node);

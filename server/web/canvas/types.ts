@@ -142,6 +142,8 @@ export interface Doc extends Omit<KDoc, "items" | "bbox" | "page">, SheetContext
   uuid?: string;
   auxOrigin?: [number, number]; gridOrigin?: [number, number];
   stackup?: SNode | null;
+  /** the board file's (setup …) and (general …) sections as they stand (a stackup edit starts from them) */
+  setupNode?: SNode | null; generalNode?: SNode | null;
   /** board net name -> code (geom-pcb netCode), and the last code handed out */
   netCodes?: Map<string, number>; netSeq?: number;
   /** schematic settings the app reads from the project (junction size …) */

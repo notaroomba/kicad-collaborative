@@ -48,7 +48,7 @@
     "input_schema": {
       "type": "object",
       "properties": {
-        "topic": { "type": "string", "enum": ["all", "python", "schematic", "board", "routing", "review"], "description": "Which part to read; all when omitted." }
+        "topic": { "type": "string", "enum": ["all", "python", "schematic", "board", "routing", "layout", "review"], "description": "Which part to read; all when omitted." }
       },
       "additionalProperties": false
     }

@@ -25,6 +25,13 @@ from .transport import HarnessError, HostTransport, LocalEngine, McpTransport
 from . import rules as _rules
 
 _rules.install(Project, Schematic, Board)
+from . import physics as _physics  # noqa: E402
+from .physics import calc  # noqa: E402,F401
+
+_physics.install(Project, Schematic, Board)
+from . import stackups as _stackups
+from .stackups import BUILDS, FABS, FINISHES, MATERIALS, materials
+_stackups.install(Board)
 
 __all__ = ["open", "connect", "current", "Project", "Schematic", "Board", "Pin", "HarnessError", "parts"]
 __version__ = "0.1.0"
