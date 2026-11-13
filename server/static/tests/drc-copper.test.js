@@ -144,6 +144,29 @@ test("ERROR_OUTSIDE circle and oval: every vertex outside the true shape, chord 
   assert.ok(Math.max(...o.map((p) => (p[0] * 3 + p[1] * 4) / 5)) > 5 + 0.3175, "the ends pushed out");
 });
 
+test("sliver copper: ERROR_INSIDE at ARC_LOW_DEF keeps every vertex on the circle", () => {
+  const c = P.circleApprox(10, 10, 0.25, 0.02, "inside"); assert.equal(c.length % 8, 0); assert.ok(c.length < P.circleOutside(10, 10, 0.25).length);
+  for (const a of c) assert.ok(Math.abs(Math.hypot(a[0] - 10, a[1] - 10) - 0.25) < 2e-6);
+  const o = P.ovalApprox([0, 0], [3, 4], 0.635, 0.02, "inside");
+  for (const p of o) assert.ok(Math.abs((-p[0] * 4 + p[1] * 3) / 5) <= 0.3175 + 1e-6);
+  assert.ok(Math.max(...o.map((p) => (p[0] * 3 + p[1] * 4) / 5)) <= 5 + 0.3175 + 1e-6, "the ends not pushed out");
+});
+test("splitCollinearOutlines: a fractured bridge with no copper either side is cut in two; a touching edge is not", () => {
+  // two squares joined by a zero-width bridge along y = 1, out in one edge and back in two: an exterior waist
+  const bridged = [[0, 0], [2, 0], [2, 1], [5, 1], [5, 0], [7, 0], [7, 2], [5, 2], [5, 1], [3, 1], [2, 1], [2, 2], [0, 2]];
+  const out = P.splitCollinearOutlines([bridged]);
+  assert.ok(out.length >= 2, JSON.stringify(out));
+  // the very same edge back (a fracture cut) is skipped, as KiCad does
+  const exact = [[0, 0], [2, 0], [2, 1], [5, 1], [5, 0], [7, 0], [7, 2], [5, 2], [5, 1], [2, 1], [2, 2], [0, 2]];
+  assert.equal(P.splitCollinearOutlines([exact]).length, 1);
+  // a plain rectangle stays as it is (same array back)
+  const rect = [[0, 0], [4, 0], [4, 2], [0, 2]]; const same = [rect];
+  assert.equal(P.splitCollinearOutlines(same), same);
+  // a slot whose two long edges are 0.5 mm apart is not collinear
+  const u = [[0, 0], [3, 0], [3, 2], [2, 2], [2, 0.5], [1, 0.5], [1, 2], [0, 2]];
+  assert.equal(P.splitCollinearOutlines([u]).length, 1);
+});
+
 (async () => {
   for (const [name, fn] of asyncTests) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { failed++; console.log("  FAIL " + name + "\n       " + (e.stack || String(e)).split("\n").slice(0, 6).join("\n       ")); } }
   console.log(`${passed} passed, ${failed} failed`);
