@@ -288,7 +288,10 @@ stage.addEventListener("pointerdown", (ev) => {
   if (!isSch() && E.tool === "select" && mod && mod.selectPadAt) {
     const ps = CollabTools.pcb && CollabTools.pcb.state;
     let r: unknown = false;
-    if (!smodeOf(ev)) { try { r = mod.selectPadAt(ev, [x, y], toolCtx()); } catch (e) { console.warn(e); } }
+    const padMode = smodeOf(ev);
+    if (!padMode || padMode === "add") { try { r = mod.selectPadAt(ev, [x, y], toolCtx()); } catch (e) { console.warn(e); } }
+    // Shift+click on a pad adds it to the pads (and items) already selected (PCB_SELECTION_TOOL selectPoint, add mode)
+    if (r && padMode === "add") { drawSelection(); renderProps(); renderObjects(); requestRender(); ev.preventDefault(); return; }
     if (r === "box") { E.selection.clear(); E.selected = null; E.selField = null; E.selPins = []; drawSelection(); renderProps(); renderObjects(); requestRender(); startModuleBox(ev, x, y); return; }
     // a press on the selected pad: a move promotes it to its footprint (FilterCollectorForFreePads, allow free pads off)
     padWasSelected = r === true;
