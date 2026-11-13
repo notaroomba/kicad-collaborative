@@ -262,6 +262,16 @@ class Project:
         for d in self._open.values():
             d.flush()
 
+    def publish(self) -> int:
+        """Draw what has been planned so far for the people watching.  Inside run_python the edits of a script are worked
+        out in the host's copy of each document (every read sees them) and drawn live, each item once at its final place,
+        when the script ends; build(), autoplace() and route() call this when they finish, so a sheet is drawn as soon as
+        it is planned while the board is still being worked on.  Returns how many items were drawn (0 elsewhere)."""
+        self.commit()
+        if getattr(self.transport, "kind", "") != "host":
+            return 0
+        return int((self.transport.call("publish", {}) or {}).get("drawn") or 0)
+
     def save(self) -> list:
         """Commit, then write changed files back (local projects; an online project is always saved)."""
         self.commit()
@@ -999,7 +1009,7 @@ class Schematic(_Doc):
         {"overlaps": n, "by_kind": {...}, "first": [...]}.  Fields that are already clear stay where they are, so a sheet drawn
         by build() keeps its look; autoplace_fields() is the call that puts every field back beside its part."""
         self.flush()
-        self._edit({"op": "clear_fields"})
+        self._edit({"op": "clear_fields", "power": True})      # a supply symbol's name over a wire or another name moves too
         self.flush()
         r = self.layout(limit=12)
         return {"overlaps": r.get("count", 0), "by_kind": r.get("by_kind", {}), "first": [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]}
@@ -1375,7 +1385,12 @@ class Schematic(_Doc):
         fit = self.fit_page()
         if fit["fits"]:
             paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
-        # ---- 7. what was asked for against what is there
+        # ---- 7. the last look before anyone sees it: any name still drawn over a wire, a part or another name moves to
+        #         the nearest clear spot (supply symbols' names included), so the sheet is drawn without overlaps
+        if self.layout(limit=1).get("count"):
+            self._edit({"op": "clear_fields", "power": True})
+            self.flush()
+        # ---- 8. what was asked for against what is there
         wrong = self._miswired(nets)
         lay = self.layout(limit=8)
         out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
@@ -1392,6 +1407,7 @@ class Schematic(_Doc):
             out["overlap_list"] = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in lay.get("overlaps", [])]
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
                           + (f", {len(out['problems'])} problems" if out["problems"] else "") + (f", {out['overlaps']} overlaps" if out["overlaps"] else ""))
+        self.project.publish()
         return out
 
     def _miswired(self, nets: dict) -> list:
@@ -1856,12 +1872,14 @@ class Board(_Doc):
         self._groups[name] = {"refs": list(refs), "anchor": anchor or refs[0]}
 
     def autoplace(self, groups: dict | None = None, near: dict | None = None, edges: dict | None = None, fixed: dict | None = None,
-                  outline=None, spacing: float | None = None, only: list | None = None) -> dict:
+                  outline=None, spacing: float | None = None, only: list | None = None, fit: bool = False) -> dict:
         """Place footprints with the placement engine: blocks packed around their anchors, blocks arranged inside the outline.
 
         groups: {block: [refs]} (first ref is the anchor) in addition to those declared with group(); near: {ref: ref}
         for parts that must sit beside another (decoupling, crystal); edges: {ref: "left"|"right"|"top"|"bottom"};
-        fixed: {ref: (x, y[, rotation])}.  With nothing given the engine groups the parts itself.
+        fixed: {ref: (x, y[, rotation])}.  With nothing given the engine groups the parts itself.  fit=True pulls the
+        board outline in round the parts (the smallest rectangle in whole millimetres every block fits in, connectors
+        still on their edges) and redraws Edge.Cuts to it; give the outline first as the largest the board may be.
         """
         specs: dict = {}
         allg = dict(self._groups)
@@ -1887,11 +1905,14 @@ class Board(_Doc):
             e["outline"] = list(outline)
         if spacing is not None:
             e["spacing"] = spacing
+        if fit:
+            e["fit"] = True
         self._edit(e)
         res = self.flush() or {}
         d = next((x["auto_place"] for x in res.get("details") or [] if "auto_place" in x), {})
         out = {"placed": len(d.get("placements", [])), "score": d.get("score"), "outline": d.get("outline"), "unknown_refs": d.get("unknown_refs") or []}
         self.project.note(f"board: placed {out['placed']} footprints, score {out['score']}")
+        self.project.publish()
         return out
 
     # ---- copper
@@ -2055,6 +2076,7 @@ class Board(_Doc):
         if "left" not in out:
             out["left"] = self.unrouted()
         self.project.note(f"board: routed {out['routed']} of {out['connections']} connections, {out['vias']} vias, {out['length_mm']} mm" + (f", {len(out['unrouted'])} left" if out["unrouted"] else ""))
+        self.project.publish()
         return out
 
     def _autoroute(self, e: dict) -> dict:
@@ -2335,6 +2357,10 @@ SCRATCH_BOX = [SCRATCH[0] - 600.0, SCRATCH[1] - 400.0, SCRATCH[0] + 600.0, SCRAT
 ASSEMBLY_X = 2794.0
 DEBUG = False
 STUB = 1.27       # the short wire between a horizontal wire and the supply or ground symbol on it
+# How far out from a pin (in grid steps) the parts hanging on its wire may start.  When the neighbours' labels and parts
+# leave no room closer than this, the pin gets a short stub with the net's name and its parts are drawn beside the IC
+# from the same name: a person does not run a wire half way across the block to reach a pull-up.
+MAX_LEAD = 8
 
 
 def _up(v: float, g: float = G) -> float:
@@ -2360,7 +2386,10 @@ class Arranged:
         return self._info
 
     def fields(self):
-        return {"Datasheet": self.datasheet} if self.datasheet and self.datasheet != "~" else {}
+        f = {"Datasheet": self.datasheet} if self.datasheet and self.datasheet != "~" else {}
+        if self.footprint_id:
+            f["Footprint"] = self.footprint_id
+        return f
 
     def __str__(self):
         return self.lib_id
@@ -2375,14 +2404,19 @@ def arrange(sch, ref, spec, rank_of, net_of):
     A person swaps such pins in the symbol so the straps do not cross the signal wires; only plain IC boxes are touched
     (one unit, reference U, pins on a 2.54 grid), never connectors, discretes or symbols with a drawing of their own."""
     lib = spec.get("lib")
-    if not isinstance(lib, str) or lib.startswith(("Connector", "Device:", "Switch:", "power:")):
+    # a part we drew ourselves (parts.make, a datasheet part) may have its supply pins on top grouped by rail, whatever
+    # its size: interleaved supplies there (+3V3, +1V2, +3V3, VCCPLL) cross each other's rails and crowd their names
+    own = not isinstance(lib, str) and hasattr(lib, "facts")
+    if not own and (not isinstance(lib, str) or lib.startswith(("Connector", "Device:", "Switch:", "power:"))):
         return None
     try:
-        facts = sch.lib(lib)
-    except HarnessError:
+        facts = lib.facts() if own else sch.lib(lib)
+    except (HarnessError, AttributeError, TypeError):
         return None
     units = facts.get("units") or []
-    if len(units) != 1 or facts.get("reference_prefix", "U") != "U" or not 4 <= len(units[0].get("pins", [])) <= 24:      # nobody re-pins a microcontroller's symbol
+    if len(units) != 1 or facts.get("reference_prefix", "U") != "U" or len(units[0].get("pins", [])) < 4:
+        return None
+    if not own and len(units[0].get("pins", [])) > 24:      # nobody re-pins a microcontroller's library symbol
         return None
     # the side of each pin from the pins alone (the body box also counts the symbol's texts)
     xs, ys = [q["dx"] for q in units[0]["pins"] if not q.get("hidden")], [q["dy"] for q in units[0]["pins"] if not q.get("hidden")]
@@ -2432,7 +2466,23 @@ def arrange(sch, ref, spec, rank_of, net_of):
     for side, rows in sides.items():
         rows.sort(key=lambda r: r[0])
         order = [st for _, st in rows]
-        if side in ("left", "right"):
+        if side in ("top", "bottom") and len(order) > 1:
+            # pins of one rail side by side, the rail with most pins first, a free column between rails
+            nets = [net_of(st[0]["number"]) or f"~{st[0]['number']}" for st in order]
+            count = {n: nets.count(n) for n in nets}
+            first = {n: nets.index(n) for n in nets}
+            new = [st for _, st in sorted(zip(nets, order), key=lambda t: (-count[t[0]], first[t[0]], nets.index(t[0])))]
+            new_nets = [net_of(st[0]["number"]) or f"~{st[0]['number']}" for st in new]
+            if [st[0]["number"] for st in new] != [st[0]["number"] for st in order]:
+                changed = True
+                order = []
+                for i, st in enumerate(new):
+                    if i and new_nets[i] != new_nets[i - 1]:
+                        order.append(None)
+                    order.append(st)
+        elif side in ("left", "right") and own:
+            pass      # the sides of a part we drew keep the order it was drawn in
+        elif side in ("left", "right"):
             rk = lambda st: rank_of(st[0]["number"], st[0].get("type"))
             new = sorted(order, key=rk)
             changed = changed or [st[0]["number"] for st in new] != [st[0]["number"] for st in order]
@@ -2450,9 +2500,15 @@ def arrange(sch, ref, spec, rank_of, net_of):
     # the name carries the pin order: a sheet keeps the symbols it has seen, and a rebuild with another order must not get the old drawing back
     import hashlib
     sig = hashlib.sha1(repr([(k, [None if st is None else [q["number"] for q in st] for st in v]) for k, v in sorted(out.items())]).encode()).hexdigest()[:6]
-    name = re.sub(r"[^A-Za-z0-9_.+\\-]", "_", f"{lib.split(':', 1)[-1]}_{ref}_{sig}")
-    text, info = symgen.symbol(name, [], "U", "", facts.get("datasheet") or "", facts.get("description") or "", sides=out)
-    return Arranged(name, text, info, facts.get("datasheet") or "")
+    base = lib.name if own else lib.split(':', 1)[-1]
+    name = re.sub(r"[^A-Za-z0-9_.+\\-]", "_", f"{base}_{ref}_{sig}")
+    fp_id = getattr(lib, "footprint_id", "") if own else ""
+    datasheet = (getattr(lib, "datasheet", "") if own else "") or facts.get("datasheet") or ""
+    text, info = symgen.symbol(name, [], "U", fp_id, datasheet, facts.get("description") or "", sides=out)
+    a = Arranged(name, text, info, datasheet)
+    if own:      # the drawing changes, the footprint the part was made with stays
+        a.footprint_id, a.footprint = lib.footprint_id, lib.footprint
+    return a
 
 
 class Blocks:
@@ -3053,7 +3109,7 @@ class Blocks:
                     if not busy:
                         continue
                     plan = None
-                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), pe, used), 44):
+                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), pe, used), MAX_LEAD + 1):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, used=tuple(used), wired=wired)
                         if not plan or fits(plan, tk, sf, pe):
                             break
@@ -3089,7 +3145,7 @@ class Blocks:
             for idx, (run, net, k, origin, wired, busy, barred, _) in enumerate(later):
                 plan = None
                 if busy:
-                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), ends), 44):
+                    for i in range(start(net, origin, k, wired, first_lead.get(idx, 1), ends), MAX_LEAD + 1):
                         plan = self.trunk(g, net, origin[0], origin[1], d, k == "sig" and self.need_label(net, g, wired=wired), lead=i * G, wired=wired)
                         if not plan or fits(plan):
                             break
@@ -3151,6 +3207,7 @@ class Blocks:
                         order = nets_here
                     else:
                         caps = []
+            rail_rects: list = []      # the shared rails' symbols and wires, which the lone pins' symbols stand clear of
             if order:
                 lo, hi = power[0]["x"], power[-1]["x"]
                 spans = sorted((min(p["x"] for p in power if want(p) == n), max(p["x"] for p in power if want(p) == n)) for n in order)
@@ -3203,9 +3260,13 @@ class Blocks:
                         if n >= 3:
                             ops.append(("dot", (xx, rail)))
                     ops.append(("sym", net, (sx, rail)))
+                    rail_rects += [self.sym_rect(net, (sx, rail)), _rect(min(xs) - 0.2, rail - 0.2, max(xs) + 0.2, rail + 0.2)]
                     self.emit(ops)
                     railed |= {p["number"] for p in mine}
             prev = None
+            # what the symbols drawn so far on this side take up: each next symbol stands at the lowest height where its
+            # name touches none of them and its wire passes through none of their names (staggered when pins are close)
+            stood = list(rail_rects)
             for p in power:
                 if p["number"] in railed:
                     continue
@@ -3214,6 +3275,15 @@ class Blocks:
                 n = 3 if near and prev[1] == 1 else 1
                 if railed and power[0]["x"] < p["x"] < power[-1]["x"]:
                     n = 3       # a pin of another supply under a shared rail: its symbol stands above that rail's
+                if natural(net) and side == "top":
+                    for tries in range(8):
+                        E = (p["x"], p["y"] + v * (n * G + (STUB if n == 1 else 0)))
+                        me, wire = self.sym_rect(net, E), _rect(p["x"] - 0.2, E[1], p["x"] + 0.2, p["y"])
+                        if not any(_hit(_rect(me[0] - 0.4, me[1] - 0.3, me[2] + 0.4, me[3] + 0.3), b) for b in stood) \\
+                                and not any(_hit(wire, b) for b in stood if b[3] - b[1] > 1.0):     # a wire may cross a rail, not a name
+                            break
+                        n += 2
+                    stood.append(self.sym_rect(net, E))
 
                 E = (p["x"], p["y"] + v * (n * G + (STUB if n == 1 else 0)))
                 if natural(net):
@@ -3542,7 +3612,12 @@ def _power_flags(self) -> list:
 def _test_point(self, net: str, ref: str | None = None, expect: str | None = None,
                 footprint: str = "TestPoint:TestPoint_Pad_D1.0mm") -> str:
     """A test point on a net ("+3V3", "GND", "~{RESET}" or a pin like "U1.RUN").  \`expect\` is written beside it
-    ("3.3 V", "low while in reset"): tell the reader what to expect at a test point.  Returns its reference."""
+    ("3.3 V", "low while in reset"): tell the reader what to expect at a test point.  Returns its reference.
+
+    Planned before anything is drawn: one free box holds the point, its supply symbol (the point hangs straight under a
+    supply arrow, or stands straight on a ground symbol, so no wire runs past the symbol's name) or its label, and the
+    note beside it, so nothing of it lands on anything else or on the next test point."""
+    from .project import _GROUND
     self.flush()
     name = net
     if "." in net and not self._is_power(net):
@@ -3550,23 +3625,50 @@ def _test_point(self, net: str, ref: str | None = None, expect: str | None = Non
             name = self.pin(net)["net"] or net
         except HarnessError:
             name = net
-    at = None
-    try:      # room for the point, its supply symbol or label and its note, clear of the blocks
-        spot = self._call("check_layout", limit=1, free={"w": 25.4, "h": 20.32}).get("free")
-        if spot:
-            at = (round((spot["x"] + 10.16) / 1.27) * 1.27, round((spot["y"] + 10.16) / 1.27) * 1.27)
+    bare = name.lstrip("/")
+    power = bool(bare) and self._is_power(bare)
+    gnd = power and bool(_GROUND.match(bare))
+    note = f"{ref or 'TP'}: expect {expect}" if expect else ""
+    lines = self._note_lines(note.replace("TP:", "TP99:"), 60.0) if note else []
+    nw = max([w for _, w in lines] + [0.0])
+    w = max(15.24, nw + 2.54)
+    h = 17.78 + (len(lines) * 2.54 if lines else 0)     # the note gets its own line(s) under the point, clear of its name
+    spot = None
+    try:
+        spot = self._call("check_layout", limit=1, free={"w": round(w, 2), "h": h}).get("free")
     except HarnessError:
         pass
-    tp = self.place("Connector:TestPoint", at=at, ref=ref, value=name.lstrip("/"), footprint=footprint)
-    self.flush()
-    if name != net and (not name or name.startswith(("Net-(", "unconnected-"))):
-        self.connect(net, f"{tp}.1")
+    if spot:
+        x = round((spot["x"] + 5.08) / 1.27) * 1.27
+        y0 = round((spot["y"] + 2.54) / 1.27) * 1.27
     else:
-        self.net(name, f"{tp}.1")
-    self.flush()
+        x = y0 = None
+    if power and x is not None:
+        if gnd:       # the point stands on the ground symbol: circle up, pin down, a short wire to the symbol
+            pin_y, sym_y, rot = y0 + 10.16, y0 + 12.7, 0
+        else:         # the point hangs from the supply arrow: arrow up, a short wire, the circle under it
+            pin_y, sym_y, rot = y0 + 5.08, y0 + 2.54, 180
+        tp = self.place("Connector:TestPoint", at=(x, pin_y), ref=ref, value=bare, footprint=footprint, rotation=rot)
+        self._edit(self._power_edit(bare, x, sym_y))
+        self._edit({"op": "add_wire", "points": [[x, min(pin_y, sym_y)], [x, max(pin_y, sym_y)]]})
+        self.flush()
+        self._edit({"op": "clear_fields", "refs": [tp]})
+        self.flush()
+    else:
+        tp = self.place("Connector:TestPoint", at=(x, y0 + 7.62) if x is not None else None, ref=ref, value=bare, footprint=footprint)
+        self.flush()
+        if name != net and (not name or name.startswith(("Net-(", "unconnected-"))):
+            self.connect(net, f"{tp}.1")
+        else:
+            self.net(name, f"{tp}.1")
+        self.flush()
     if expect:
+        text = f"{tp}: expect {expect}"
         try:
-            self.note(f"{tp}: expect {expect}", near=tp)
+            if x is not None:
+                self.note(text, at=(x - 3.81, y0 + 15.24), width=60.0)
+            else:
+                self.note(text, near=tp)
         except HarnessError:
             pass
     return tp
@@ -3643,16 +3745,19 @@ def _board_fiducials(self, inset: float = 2.5) -> dict:
         raise HarnessError("The board has no fiducials. Add them in the schematic with sch.fiducials(), then board.sync().")
     o = g["outline"]
     placed = {}
+    # Every free spot on a 0.5 mm grid (the mark and its mask opening clear of every courtyard and of the marks
+    # already put down); each mark takes the free spot nearest its corner, so on a tightly packed board it still
+    # lands by the corner -- beside the part that fills it -- rather than wandering into the middle.
+    free, step = [], 0.5
+    nx, ny = int((o[2] - o[0] - 2 * 1.5) / step), int((o[3] - o[1] - 2 * 1.5) / step)
+    for i in range(nx + 1):
+        for j in range(ny + 1):
+            q = (o[0] + 1.5 + i * step, o[1] + 1.5 + j * step)
+            if _free_at(g, q, 1.2, skip=fids):
+                free.append(q)
     for ref, c in zip(fids, corners):
-        at, step = c, 1.0
-        dx = 1 if c[0] < (o[0] + o[2]) / 2 else -1
-        dy = 1 if c[1] < (o[1] + o[3]) / 2 else -1
-        for n in range(40):      # walk along the edge, then inward, until the mark and its mask opening are in the clear
-            cands = [(c[0] + dx * n * step, c[1]), (c[0], c[1] + dy * n * step), (c[0] + dx * n * step, c[1] + dy * n * step)]
-            hit = next((q for q in cands if _free_at(g, q, 1.2, skip=fids)), None)
-            if hit:
-                at = hit
-                break
+        cand = [q for q in free if all(math.hypot(q[0] - a[0], q[1] - a[1]) >= 3.0 for a in placed.values())]
+        at = min(cand, key=lambda q: math.hypot(q[0] - c[0], q[1] - c[1])) if cand else c
         self.place(ref, (_r(at[0]), _r(at[1])))
         placed[ref] = [_r(at[0]), _r(at[1])]
     self.flush()

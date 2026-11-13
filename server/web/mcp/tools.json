@@ -232,6 +232,7 @@
         "show": {"type": "boolean", "description": "true returns the stored script's text under script.code (default false)."},
         "title": {"type": "string", "description": "A few words naming what the script does. It is what the person sees in the list of changes."},
         "live": {"type": "boolean", "description": "Draw the edits step by step with a moving cursor (default true)."},
+        "plan": {"type": "boolean", "description": "Work the edits out first and draw each item once, at its final place, when the script ends or calls project.publish() (default true). false sends each batch as it is made."},
         "keep_on_error": {"type": "boolean", "description": "Keep the edits made before a failure instead of taking them back (default false)."},
         "timeout_s": {"type": "number", "description": "Time limit in seconds (default 180, at most 400)."}
       },

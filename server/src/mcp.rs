@@ -466,7 +466,7 @@ async fn settle(id: Option<String>, mut run: Run, wait: Duration) -> Result<Valu
             all.insert(id.clone(), run);
             Ok(json!([text_content(&json!({
                 "running": true, "run_id": id, "seconds": seconds,
-                "note": "Still working: the edits keep arriving in the document. Call get_run with this run_id to wait for the result; do not start the same call again.",
+                "note": "Still working: the design is drawn in the document as each part of the script finishes planning. Call get_run with this run_id to wait for the result; do not start the same call again.",
             }))]))
         }
     }

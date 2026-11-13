@@ -105,6 +105,8 @@ export class DocSession {
     const d = K().parseDoc(file, this.entry.docType);
     this.kdoc = d; this.file = file; this.lastSeq = seq; this.version++;
     for (const op of thenOps) { this.apply(op.changes || []); this.lastSeq = Math.max(this.lastSeq, Number(op.seq) || 0); }
+    // a document reloaded while a drawing is being planned keeps the plan on top of the server's copy
+    if (this.stage) for (const b of this.stage.batches) this.apply(b);
   }
 
   /** A change somebody else made.  Returns false when it showed a gap and a fresh base was asked for. */
@@ -163,7 +165,8 @@ export class DocSession {
    * with this peer's cursor on what it just drew, so the people in the document can follow the work.  The whole
    * of it takes a couple of seconds at most, however large the change is.
    */
-  async commit(changes: any[], live = false): Promise<UndoRecord> {
+  async commit(changes: any[], live = false, pace?: { steps: number; totalMs: number }): Promise<UndoRecord> {
+    if (this.stage && changes.some((c) => c.typeName !== "BOARD_SETUP")) throw new ToolError("A drawing is being planned in this document; publish it first.");
     const k = K(), doc = this.kdoc; const inverse: any[] = [];
     for (const c of changes) {
       // a page size change (set_page) carries what the page was, so it can be put back
@@ -173,14 +176,14 @@ export class DocSession {
       if (c.kind === "ADDED") inverse.push({ id: c.id, kind: "REMOVED", typeName: c.typeName, properties: [] });
       else if (it) inverse.push({ id: c.id, kind: c.kind === "REMOVED" ? "ADDED" : "MODIFIED", typeName: c.typeName, sexpr: k.serializeItem(doc, it) });
     }
-    const steps = live && changes.length > 1 ? Math.min(changes.length, LIVE_STEPS) : 1;
+    const steps = live && changes.length > 1 ? Math.min(changes.length, pace ? pace.steps : LIVE_STEPS) : 1;
     if (steps === 1) {
       this.apply(changes);
       await this.send(changes);
       this.show(changes.map((c) => c.id));
       if (live) await pause(LIVE_PAUSE_MS);
     } else {
-      const per = Math.ceil(changes.length / steps); const wait = Math.max(25, Math.min(LIVE_PAUSE_MS, Math.round(LIVE_TOTAL_MS / steps)));
+      const per = Math.ceil(changes.length / steps); const wait = Math.max(25, Math.min(LIVE_PAUSE_MS, Math.round((pace ? pace.totalMs : LIVE_TOTAL_MS) / steps)));
       for (let i = 0; i < changes.length; i += per) {
         const part = changes.slice(i, i + per);
         try { this.apply(part); await this.send(part); }
@@ -198,6 +201,67 @@ export class DocSession {
     for (const c of changes) { const it = doc.items.get(c.id); after[c.id] = it ? k.serialize(it.node) : null; }
     return { inverse: inverse.reverse(), after };
   }
+
+  // ---------------------------------------------------------------- planning a drawing before anyone sees it
+  //
+  // A script that draws a schematic works things out on the sheet itself: it draws a block, measures it, moves it,
+  // tidies its fields, fits the page.  Sent as it goes, the people watching would see parts appear somewhere off the
+  // page and jump into place.  While a stage is open the changes are applied to this copy only (every read of the
+  // document sees them, so the script can measure and check), and nothing is sent.  When the stage closes, what the
+  // planning ended with is drawn in one live change: each item once, at its final place, in the order it was first
+  // drawn, so the watchers see the circuit being drawn where it stays.
+
+  private stage: { batches: any[][]; before: Map<string, string | null>; types: Map<string, string>; order: string[]; page: { was: any; now: any; id: string; typeName: string } | null } | null = null;
+
+  get staging(): boolean { return !!this.stage; }
+
+  beginStage(): void { if (!this.stage) this.stage = { batches: [], before: new Map(), types: new Map(), order: [], page: null }; }
+
+  /** Changes applied here only, remembered for the drawing.  Returns the ids of the items they added. */
+  stageApply(changes: any[]): string[] {
+    this.beginStage(); const st = this.stage!; const k = K(), doc = this.kdoc; const added: string[] = [];
+    for (const c of changes) {
+      if (c.docProps) { if (st.page) st.page.now = c.docProps; else st.page = { was: c.was, now: c.docProps, id: c.id, typeName: c.typeName }; continue; }
+      if (!st.before.has(c.id)) { const it = doc.items.get(c.id); st.before.set(c.id, it ? k.serializeItem(doc, it) : null); st.order.push(c.id); }
+      if (c.typeName && !st.types.has(c.id)) st.types.set(c.id, c.typeName);
+      if (c.kind === "ADDED") added.push(c.id);
+    }
+    st.batches.push(changes);
+    if (!this.apply(changes)) throw new ToolError("The change could not be applied to the document.");
+    return added;
+  }
+
+  /** The stage as one list of changes from the document as it was to the document as planned; this copy goes back
+   *  to how it was (the changes are not applied here), ready for commit().  Null when nothing differs. */
+  private takeStage(): any[] | null {
+    const st = this.stage; this.stage = null; if (!st) return null;
+    const k = K(), doc = this.kdoc; const gone: any[] = [], drawn: any[] = [], back: any[] = [];
+    for (const id of st.order) {
+      const it = doc.items.get(id); const now = it ? k.serializeItem(doc, it) : null; const was = st.before.get(id) ?? null; const typeName = st.types.get(id) || (it && it.typeName);
+      if (now === was) continue;
+      if (now === null) { gone.push({ id, kind: "REMOVED", typeName, properties: [] }); back.push({ id, kind: "ADDED", typeName, sexpr: was }); }
+      else if (was === null) { drawn.push({ id, kind: "ADDED", typeName, sexpr: now }); back.push({ id, kind: "REMOVED", typeName, properties: [] }); }
+      else { drawn.push({ id, kind: "MODIFIED", typeName, sexpr: now }); back.push({ id, kind: "MODIFIED", typeName, sexpr: was }); }
+    }
+    const page: any[] = [];
+    if (st.page && st.page.was && (st.page.was.paper !== st.page.now.paper || (typeof st.page.was.titleBlock === "string" && st.page.was.titleBlock !== st.page.now.titleBlock))) {
+      page.push({ id: st.page.id, kind: "MODIFIED", typeName: st.page.typeName, docProps: st.page.now, was: st.page.was });
+      back.push({ id: st.page.id, kind: "MODIFIED", typeName: st.page.typeName, docProps: { paper: st.page.was.paper, titleBlock: typeof st.page.was.titleBlock === "string" ? st.page.was.titleBlock : st.page.now.titleBlock } });
+    } else if (st.page && st.page.was) back.push({ id: st.page.id, kind: "MODIFIED", typeName: st.page.typeName, docProps: { paper: st.page.was.paper, titleBlock: typeof st.page.was.titleBlock === "string" ? st.page.was.titleBlock : st.page.now.titleBlock } });
+    this.apply(back.reverse());
+    const all = [...page, ...gone, ...drawn];
+    return all.length ? all : null;
+  }
+
+  /** Draw what the stage planned, live, and close it.  Returns the undo record, or null when nothing changed. */
+  async publishStage(live: boolean): Promise<UndoRecord | null> {
+    const changes = this.takeStage(); if (!changes) return null;
+    // a whole drawing gets more steps and time than one batch: a block at a time, about a dozen seconds at most
+    return this.commit(changes, live, live ? { steps: Math.min(changes.length, Math.max(LIVE_STEPS, Math.min(160, Math.ceil(changes.length / 4)))), totalMs: 12000 } : undefined);
+  }
+
+  /** Throw the plan away: this copy goes back to the document as it was, and nothing was sent. */
+  dropStage(): void { this.takeStage(); }
 
   /** Tell the others where the work is: a cursor on what was just changed, with those items marked as this peer's selection. */
   private show(ids: string[]): void {

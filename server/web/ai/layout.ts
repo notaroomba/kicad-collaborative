@@ -104,7 +104,7 @@ function pieces(doc: any): { list: Piece[]; full: Map<string, Box> } {
  * the clear.  KiCad's Autoplace Fields looks at the wires and parts around a symbol, not at the labels on its
  * own pins, so a value can land on a pin's net label; this is the look a person takes afterwards.
  */
-export function fieldShifts(doc: any, input: { refs?: string[]; within?: number[] } = {}): { id: string; field: string; dx: number; dy: number }[] {
+export function fieldShifts(doc: any, input: { refs?: string[]; within?: number[]; power?: boolean } = {}): { id: string; field: string; dx: number; dy: number }[] {
   const { list } = pieces(doc); const out: { id: string; field: string; dx: number; dy: number }[] = [];
   const want = input.refs && input.refs.length ? new Set(input.refs.map((r) => r.toLowerCase())) : null; const within = input.within && input.within.length === 4 ? input.within : null;
   const T = 0.2, B = 0.3, G = 1.27;
@@ -123,7 +123,7 @@ export function fieldShifts(doc: any, input: { refs?: string[]; within?: number[
   steps.sort((a, b) => Math.hypot(a[0], a[1] * 1.01) - Math.hypot(b[0], b[1] * 1.01));
   for (const p of list) {
     if (!p.field) continue; const it = doc.items.get(p.id); if (!it) continue;
-    if (want ? !want.has(String(it.ref || "").toLowerCase()) : /^#/.test(it.ref || "")) continue;
+    if (want ? !want.has(String(it.ref || "").toLowerCase()) : !input.power && /^#/.test(it.ref || "")) continue;
     if (within && !(it.x >= within[0] && it.x <= within[2] && it.y >= within[1] && it.y <= within[3])) continue;
     if (!blocked(p, p.box)) continue;
     for (const [dx, dy] of steps) {

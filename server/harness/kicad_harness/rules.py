@@ -161,7 +161,12 @@ def _power_flags(self) -> list:
 def _test_point(self, net: str, ref: str | None = None, expect: str | None = None,
                 footprint: str = "TestPoint:TestPoint_Pad_D1.0mm") -> str:
     """A test point on a net ("+3V3", "GND", "~{RESET}" or a pin like "U1.RUN").  `expect` is written beside it
-    ("3.3 V", "low while in reset"): tell the reader what to expect at a test point.  Returns its reference."""
+    ("3.3 V", "low while in reset"): tell the reader what to expect at a test point.  Returns its reference.
+
+    Planned before anything is drawn: one free box holds the point, its supply symbol (the point hangs straight under a
+    supply arrow, or stands straight on a ground symbol, so no wire runs past the symbol's name) or its label, and the
+    note beside it, so nothing of it lands on anything else or on the next test point."""
+    from .project import _GROUND
     self.flush()
     name = net
     if "." in net and not self._is_power(net):
@@ -169,23 +174,50 @@ def _test_point(self, net: str, ref: str | None = None, expect: str | None = Non
             name = self.pin(net)["net"] or net
         except HarnessError:
             name = net
-    at = None
-    try:      # room for the point, its supply symbol or label and its note, clear of the blocks
-        spot = self._call("check_layout", limit=1, free={"w": 25.4, "h": 20.32}).get("free")
-        if spot:
-            at = (round((spot["x"] + 10.16) / 1.27) * 1.27, round((spot["y"] + 10.16) / 1.27) * 1.27)
+    bare = name.lstrip("/")
+    power = bool(bare) and self._is_power(bare)
+    gnd = power and bool(_GROUND.match(bare))
+    note = f"{ref or 'TP'}: expect {expect}" if expect else ""
+    lines = self._note_lines(note.replace("TP:", "TP99:"), 60.0) if note else []
+    nw = max([w for _, w in lines] + [0.0])
+    w = max(15.24, nw + 2.54)
+    h = 17.78 + (len(lines) * 2.54 if lines else 0)     # the note gets its own line(s) under the point, clear of its name
+    spot = None
+    try:
+        spot = self._call("check_layout", limit=1, free={"w": round(w, 2), "h": h}).get("free")
     except HarnessError:
         pass
-    tp = self.place("Connector:TestPoint", at=at, ref=ref, value=name.lstrip("/"), footprint=footprint)
-    self.flush()
-    if name != net and (not name or name.startswith(("Net-(", "unconnected-"))):
-        self.connect(net, f"{tp}.1")
+    if spot:
+        x = round((spot["x"] + 5.08) / 1.27) * 1.27
+        y0 = round((spot["y"] + 2.54) / 1.27) * 1.27
     else:
-        self.net(name, f"{tp}.1")
-    self.flush()
+        x = y0 = None
+    if power and x is not None:
+        if gnd:       # the point stands on the ground symbol: circle up, pin down, a short wire to the symbol
+            pin_y, sym_y, rot = y0 + 10.16, y0 + 12.7, 0
+        else:         # the point hangs from the supply arrow: arrow up, a short wire, the circle under it
+            pin_y, sym_y, rot = y0 + 5.08, y0 + 2.54, 180
+        tp = self.place("Connector:TestPoint", at=(x, pin_y), ref=ref, value=bare, footprint=footprint, rotation=rot)
+        self._edit(self._power_edit(bare, x, sym_y))
+        self._edit({"op": "add_wire", "points": [[x, min(pin_y, sym_y)], [x, max(pin_y, sym_y)]]})
+        self.flush()
+        self._edit({"op": "clear_fields", "refs": [tp]})
+        self.flush()
+    else:
+        tp = self.place("Connector:TestPoint", at=(x, y0 + 7.62) if x is not None else None, ref=ref, value=bare, footprint=footprint)
+        self.flush()
+        if name != net and (not name or name.startswith(("Net-(", "unconnected-"))):
+            self.connect(net, f"{tp}.1")
+        else:
+            self.net(name, f"{tp}.1")
+        self.flush()
     if expect:
+        text = f"{tp}: expect {expect}"
         try:
-            self.note(f"{tp}: expect {expect}", near=tp)
+            if x is not None:
+                self.note(text, at=(x - 3.81, y0 + 15.24), width=60.0)
+            else:
+                self.note(text, near=tp)
         except HarnessError:
             pass
     return tp
@@ -262,16 +294,19 @@ def _board_fiducials(self, inset: float = 2.5) -> dict:
         raise HarnessError("The board has no fiducials. Add them in the schematic with sch.fiducials(), then board.sync().")
     o = g["outline"]
     placed = {}
+    # Every free spot on a 0.5 mm grid (the mark and its mask opening clear of every courtyard and of the marks
+    # already put down); each mark takes the free spot nearest its corner, so on a tightly packed board it still
+    # lands by the corner -- beside the part that fills it -- rather than wandering into the middle.
+    free, step = [], 0.5
+    nx, ny = int((o[2] - o[0] - 2 * 1.5) / step), int((o[3] - o[1] - 2 * 1.5) / step)
+    for i in range(nx + 1):
+        for j in range(ny + 1):
+            q = (o[0] + 1.5 + i * step, o[1] + 1.5 + j * step)
+            if _free_at(g, q, 1.2, skip=fids):
+                free.append(q)
     for ref, c in zip(fids, corners):
-        at, step = c, 1.0
-        dx = 1 if c[0] < (o[0] + o[2]) / 2 else -1
-        dy = 1 if c[1] < (o[1] + o[3]) / 2 else -1
-        for n in range(40):      # walk along the edge, then inward, until the mark and its mask opening are in the clear
-            cands = [(c[0] + dx * n * step, c[1]), (c[0], c[1] + dy * n * step), (c[0] + dx * n * step, c[1] + dy * n * step)]
-            hit = next((q for q in cands if _free_at(g, q, 1.2, skip=fids)), None)
-            if hit:
-                at = hit
-                break
+        cand = [q for q in free if all(math.hypot(q[0] - a[0], q[1] - a[1]) >= 3.0 for a in placed.values())]
+        at = min(cand, key=lambda q: math.hypot(q[0] - c[0], q[1] - c[1])) if cand else c
         self.place(ref, (_r(at[0]), _r(at[1])))
         placed[ref] = [_r(at[0]), _r(at[1])]
     self.flush()

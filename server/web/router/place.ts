@@ -19,7 +19,7 @@ export interface PlaceSpec {
   fixed?: { x: number; y: number; rot?: number } | boolean;
   edge?: "left" | "right" | "top" | "bottom"; rot?: number; anchor?: boolean;
 }
-export interface PlaceOptions { footprints?: PlaceSpec[]; outline?: Box; spacing?: number; grid?: number }
+export interface PlaceOptions { footprints?: PlaceSpec[]; outline?: Box; spacing?: number; grid?: number; fit?: boolean; maxFill?: number }
 export interface Placement { ref: string; id: string; x: number; y: number; rot: number; side: "front" | "back"; group: string }
 export interface PlaceScore { ratsnest: number; overlaps: number; courtyardClashes: number; outside: number; area: number; clashes: [string, string][]; outsideRefs: string[] }
 export interface PlaceResult { placements: Placement[]; score: PlaceScore; outline: Box; outlineFromBoard: boolean; groups: { name: string; anchor: string; refs: string[]; box: Box }[]; unknown: string[] }
@@ -92,11 +92,13 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   // ---- groups
   const groupOf = new Map<string, Part[]>(); const join = (g: string, p: Part) => { p.group = g; let l = groupOf.get(g); if (!l) groupOf.set(g, l = []); l.push(p); };
   const loose: Part[] = [];
-  const isFixed = (p: Part) => !!p.spec && typeof p.spec.fixed === "object" && !!p.spec.fixed; const hasFixed = new Set<string>(); let solo = 0;
+  const isFixed = (p: Part) => !!p.spec && typeof p.spec.fixed === "object" && !!p.spec.fixed; const hasFixed = new Set<string>(), hasEdge = new Set<string>(); let solo = 0;
   for (const p of moving) {
     if (!(p.spec && p.spec.group)) { loose.push(p); continue; }
     // a group moves as one piece, so it can hold only one pinned part: any further ones stand on their own
     if (isFixed(p)) { if (hasFixed.has(p.spec.group)) { join(p.spec.group + "~" + (++solo), p); continue; } hasFixed.add(p.spec.group); }
+    // and only one part on a board edge: a group of three headers, each on its own edge, is three pieces
+    if (p.spec.edge) { if (hasEdge.has(p.spec.group)) { join(p.spec.group + "~" + (++solo), p); continue; } hasEdge.add(p.spec.group); }
     join(p.spec.group, p);
   }
   for (const p of loose) if (p.spec && p.spec.near && byRef.get(p.spec.near) && byRef.get(p.spec.near)!.group) join(byRef.get(p.spec.near)!.group, p);
@@ -177,7 +179,13 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     for (const p of still) area += (p.box[2] - p.box[0]) * (p.box[3] - p.box[1]);
     const side = Math.max(widest + 4, Math.ceil(Math.sqrt(area * 2.2))); outline = [100, 100, 100 + side, 100 + side];
   }
-  const O = outline; const inset = Math.max(gap, 0.3);
+  const inset = Math.max(gap, 0.3);
+  // what the grouping left: each attempt at a board size starts from it
+  const partState = all.map((p) => ({ p, x: p.x, y: p.y, rot: p.rot, placed: p.placed })); const blocks0 = blocks.map((b) => Object.assign({}, b));
+  const arrange = (O: Box, coarse = 1) => {
+  for (const st of partState) { st.p.x = st.x; st.p.y = st.y; st.p.rot = st.rot; st.p.placed = st.placed; }
+  blocks.length = 0; for (const b of blocks0) blocks.push(Object.assign({}, b, { parts: b.parts.slice(), x: 0, y: 0, rot: 0, placed: false }));
+  let squeezed = 0;
 
   // ---- 2. the blocks on the board
   const stillBoxes: Geo[] = still.map((p) => geo(p, p.cur[2], p.cur[0], p.cur[1]));
@@ -187,10 +195,13 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   const partBoxes = (b: Block, rot: number, x: number, y: number): Geo[] => b.parts.map((p) => { const [px, py] = rotv(rot, p.x, p.y); return geo(p, p.rot + rot, x + px, y + py); });
   const rebuildPads = () => { placedPads.clear(); for (const p of still) for (const d of p.pads) if (d.net) { const [x, y] = rotv(p.cur[2], d.x, d.y); addPad(d.net, [p.cur[0] + x, p.cur[1] + y]); } for (const b of blocks) if (b.placed) for (const d of blockPads(b)) { const [x, y] = rotv(b.rot, d.x, d.y); addPad(d.net, [b.x + x, b.y + y]); } };
   const legal = (b: Block, rot: number, x: number, y: number) => {
-    // the pads must be on the board; a courtyard may hang over its edge (connectors do)
-    const bb = shift(turnBox(b.box, rot), x, y), pb = shift(turnBox(b.padBox, rot), x, y); if (pb[0] < O[0] + inset - 1e-6 || pb[1] < O[1] + inset - 1e-6 || pb[2] > O[2] - inset + 1e-6 || pb[3] > O[3] - inset + 1e-6) return b.edge ? edgeOk(b, bb) && free(b, rot, x, y, bb) : false;
+    // every part's pads and courtyard on the board; only the connector of a block on an edge may hang over that edge
+    const bb = shift(turnBox(b.box, rot), x, y), pb = shift(turnBox(b.padBox, rot), x, y);
+    if (pb[0] < O[0] + inset - 1e-6 || pb[1] < O[1] + inset - 1e-6 || pb[2] > O[2] - inset + 1e-6 || pb[3] > O[3] - inset + 1e-6) { if (!b.edge || !edgeOk(b, bb)) return false; }
+    if (!inside(bb, O, 0)) for (const q of partBoxes(b, rot, x, y)) { if (b.edge && q.p === b.anchor) { if (!edgeOk(b, q.b)) return false; continue; } if (!inside(q.b, O, inset)) return false; }
     return free(b, rot, x, y, bb);
   };
+  const inside = (q: Box, o: Box, m: number) => q[0] >= o[0] + m - 1e-6 && q[1] >= o[1] + m - 1e-6 && q[2] <= o[2] - m + 1e-6 && q[3] <= o[3] - m + 1e-6;
   const edgeOk = (b: Block, bb: Box) => bb[0] >= O[0] - 1e-6 - (b.edge === "left" ? 1e3 : 0) && bb[1] >= O[1] - 1e-6 - (b.edge === "top" ? 1e3 : 0) && bb[2] <= O[2] + 1e-6 + (b.edge === "right" ? 1e3 : 0) && bb[3] <= O[3] + 1e-6 + (b.edge === "bottom" ? 1e3 : 0);
   const free = (b: Block, rot: number, x: number, y: number, bb: Box) => {
     let mine: Geo[] | null = null;
@@ -209,7 +220,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
     for (const d of pads) { const l = placedPads.get(d.net); if (!l) continue; const [dx, dy] = rotv(rot, d.x, d.y); let dmin = Infinity; for (const q of l) { const v = Math.abs(q[0] - x - dx) + Math.abs(q[1] - y - dy); if (v < dmin) dmin = v; } c += dmin * w(d.net); tied++; }
     return c + (Math.abs(x - cx) + Math.abs(y - cy)) * (tied ? 0.01 : 0.2);
   };
-  const g = opts.grid && opts.grid > 0 ? opts.grid : Math.max(0.5, Math.min(1.27, Math.round(Math.max(O[2] - O[0], O[3] - O[1]) / 80 * 4) / 4));
+  const g = coarse * (opts.grid && opts.grid > 0 ? opts.grid : Math.max(0.5, Math.min(1.27, Math.round(Math.max(O[2] - O[0], O[3] - O[1]) / 80 * 4) / 4)));
   const put = (b: Block, grid = g): boolean => {
     hug = long(b) && !b.edge ? b : null; const pads = blockPads(b); const ap = b.anchor; const spec = ap.spec;
     if (b.fixed && spec && typeof spec.fixed === "object" && spec.fixed) {   // the pinned part lands exactly where asked; its block comes with it
@@ -223,6 +234,10 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
       const inward: Pt = b.edge === "left" ? [1, 0] : b.edge === "right" ? [-1, 0] : b.edge === "top" ? [0, 1] : [0, -1]; let bestDot = -Infinity, pick = rots;
       for (const r of [0, 90, 180, 270]) { const v = rotv(r + ap.rot, pc[0] - bc[0], pc[1] - bc[1]); const dot = v[0] * inward[0] + v[1] * inward[1]; if (dot > bestDot + 1e-6) { bestDot = dot; pick = [r]; } else if (Math.abs(dot - bestDot) <= 1e-6) pick = pick.concat(r); }
       if (Math.hypot(pc[0] - bc[0], pc[1] - bc[1]) > 0.2) rots = pick;
+      else {   // pads in the middle of the body (a pin header): it lies along the edge, not across it
+        const along = (r: number) => { const t = turnBox(ap.box, ap.rot + r); return b.edge === "top" || b.edge === "bottom" ? t[2] - t[0] >= t[3] - t[1] - 1e-6 : t[3] - t[1] >= t[2] - t[0] - 1e-6; };
+        const lying = rots.filter(along); if (lying.length) rots = lying;
+      }
     }
     let best: { c: number; rot: number; x: number; y: number } | null = null;
     for (const rot of rots) {
@@ -243,6 +258,7 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   };
   /** Nowhere legal for a part: the spot where it is least in the way (the score will say so). */
   const squeeze = (b: Block) => {
+    squeezed++;
     let best: { c: number; x: number; y: number } | null = null; const tb = turnBox(b.padBox, 0); const pads = blockPads(b); const side = b.anchor.back; const others: Box[] = stillBoxes.filter((t) => t.p.back === side).map((t) => t.b);
     for (const o of blocks) if (o !== b && o.placed) for (const t of partBoxes(o, o.rot, o.x, o.y)) if (t.p.back === side) others.push(t.b);
     for (let y = O[1] + inset - tb[1]; y <= O[3] - inset - tb[3] + 1e-6; y += g) for (let x = O[0] + inset - tb[0]; x <= O[2] - inset - tb[2] + 1e-6; x += g) {
@@ -286,6 +302,30 @@ export function place(K: any, P: any, doc: any, settings: any, opts: PlaceOption
   }
   score.area = r3((O[2] - O[0]) * (O[3] - O[1]));
   const groups = blocks.filter((b) => !b.name.startsWith("~") ? blocks.find((o) => o.name === b.name) === b : true).map((b0) => { const b = { name: b0.name, anchor: b0.anchor, parts: b0.name.startsWith("~") ? b0.parts : blocks.filter((o) => o.name === b0.name).flatMap((o) => o.parts) }; let box: Box = [Infinity, Infinity, -Infinity, -Infinity]; for (const p of b.parts) { const q = finalBox.get(p)!; box = [Math.min(box[0], q[0]), Math.min(box[1], q[1]), Math.max(box[2], q[2]), Math.max(box[3], q[3])]; } return { name: b.name.startsWith("~") ? b.anchor.ref : b.name, anchor: b.anchor.ref, refs: b.parts.map((p) => p.ref), box: box.map(r3) as Box }; });
+  let fill = 0; for (const p of finalBox.keys()) if (p.movable) { const q = finalBox.get(p)!; fill += (q[2] - q[0]) * (q[3] - q[1]); } fill /= (O[2] - O[0]) * (O[3] - O[1]);
+  return { placements, score, groups, squeezed, O, fill };
+  };
+  // A board sized to its parts (opts.fit): the smallest outline of the same proportions, in whole millimetres, on
+  // which every block finds a legal place (nothing squeezed, nothing outside, no courtyard clash) -- the way a person
+  // pulls the outline in round the parts once they are placed.
+  const stillRefs = new Set(still.map((p) => p.ref)); const O0 = outline as Box;
+  let res = arrange(O0);
+  // a person's dense boards have courtyards over 37 to 46% of the board: fuller than that leaves no room to route
+  const maxFill = opts.maxFill && opts.maxFill > 0 ? opts.maxFill : 0.45;
+  const good = (r: ReturnType<typeof arrange>, fit = false) => !r.squeezed && r.score.outsideRefs.every((ref) => stillRefs.has(ref)) && r.score.courtyardClashes === 0 && (!fit || r.fill <= maxFill);
+  if (opts.fit && good(res)) {
+    const W0 = O0[2] - O0[0], H0 = O0[3] - O0[1];
+    const sized = (s: number): Box => { const w = Math.ceil(W0 * s), h = Math.ceil(H0 * s); return [O0[0], O0[1], O0[0] + w, O0[1] + h]; };
+    let lo = 0.3, hi = 1; let best = res;
+    for (let i = 0; i < 7; i++) { const mid = (lo + hi) / 2; const r = arrange(sized(mid), 2); if (good(r, true)) { best = r; hi = mid; } else lo = mid; }
+    // then each side on its own, as far as it goes
+    let O2 = best.O.slice() as Box;
+    for (const side of [2, 3]) { let a = side === 2 ? O2[0] + 5 : O2[1] + 5, b = O2[side]; while (b - a > 1) { const m = Math.round((a + b) / 2); const t = O2.slice() as Box; t[side] = m; const r = arrange(t, 2); if (good(r, true)) { best = r; b = m; O2 = t; } else a = m; } }
+    // the size found on a coarse search grid, placed for real; when the fine grid does not make it, a millimetre more each way
+    res = arrange(O2); for (let i = 0; i < 6 && !good(res); i++) { O2 = [O2[0], O2[1], O2[2] + 1, O2[3] + 1]; res = arrange(O2); }
+    if (!good(res)) res = arrange(O0);
+  }
+  const { placements, score, groups } = res; const O = res.O;
   return { placements, score, outline: O.map(r3) as Box, outlineFromBoard: fromBoard, groups, unknown };
 }
 

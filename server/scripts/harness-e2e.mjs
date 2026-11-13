@@ -140,7 +140,7 @@ result = {"unrouted": board.unrouted()}
   const bad = await call('run_python', { project: NAME, code: 'sch = project.schematic()\nsch.place("Device:R", ref="R77", value="1k")\nsch.commit() if hasattr(sch, "commit") else project.commit()\nsch.connect("R77.1", "U9.1")\n' });
   check('a failing script reports the line and the reason', !bad.isError && bad.data.ok === false && /U9/.test(bad.data.error) && /line 4/.test(bad.data.error), bad.text);
   const comps = await call('list_components', { project: NAME, document: 'schematic' });
-  check('and leaves nothing behind', /taken back/.test(bad.data.design || '') && !comps.data.components.some((c) => c.reference === 'R77') && comps.data.components.length === 10, `${comps.data.components.length} parts; ${bad.data.design}`);
+  check('and leaves nothing behind', /taken back|Nothing was changed/.test(bad.data.design || '') && !comps.data.components.some((c) => c.reference === 'R77') && comps.data.components.length === 10, `${comps.data.components.length} parts; ${bad.data.design}`);
 
   const syntax = await call('run_python', { project: NAME, code: 'x = (1,\nprint(x' });
   check('a syntax error is reported, not a crash', !syntax.isError && syntax.data.ok === false && /SyntaxError/.test(syntax.data.error), syntax.text);

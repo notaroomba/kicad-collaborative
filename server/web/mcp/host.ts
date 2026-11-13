@@ -189,7 +189,7 @@ function restoreRules(pro: any, was: { classes: unknown; rules: Record<string, u
   for (const [k, v] of Object.entries(was.rules)) if (v !== undefined) rules[k] = v;
 }
 
-async function applyChanges(req: Request, live = false): Promise<Reply> {
+async function applyChanges(req: Request, live = false, stage?: (sess: DocSession) => void): Promise<Reply> {
   const p = needProject(req); const args = req.args || {};
   return withDocument(req, args.document, async (sess, _doc, ed) => {
     const prop = await buildProposal({ title: args.title, rationale: args.rationale, edits: args.edits });
@@ -212,6 +212,18 @@ async function applyChanges(req: Request, live = false): Promise<Reply> {
       proCache.set(pro.docId, { at: Date.now(), text: saved.text });
     }
     let undo: UndoRecord = { inverse: [], after: {} };
+    if (stage && prop.changes.length) {
+      // planned, not yet drawn: the script reads and measures its plan here, and the watchers see it drawn when it is done
+      // (the board setup is a document header, not a drawing, and is sent at once)
+      const setup = prop.changes.filter((c: any) => c.typeName === "BOARD_SETUP"), rest = prop.changes.filter((c: any) => c.typeName !== "BOARD_SETUP");
+      if (setup.length) {
+        undo = await sess.commit(setup);
+      }
+      stage(sess);
+      const added = rest.length ? sess.stageApply(rest) : [];
+      return { result: Object.assign({ applied: true, changes: prop.changes.length, staged: true, added, board_rules: rules ? "written to the project file" : undefined }, summary),
+        record: setup.length || rules ? { docId: sess.entry.docId, title: prop.title, edits: summary.edits, undo: Object.assign({}, undo, rules ? { rules } : {}) } : undefined };
+    }
     if (prop.changes.length) {
       try { undo = await sess.commit(prop.changes, live); }
       catch (e) { if (rules) throw new ToolError(`${e instanceof Error ? e.message : String(e)} The board rules of this change were saved; the other edits were not applied.`); throw e; }
@@ -313,6 +325,22 @@ async function runPython(req: Request): Promise<Reply> {
   const live = a.live !== false; const title = typeof a.title === "string" && a.title.trim() ? a.title.trim().slice(0, 120) : "Python script";
   const limit = Math.max(5, Math.min(PY_MAX_S, Number(a.timeout_s) || PY_DEFAULT_S)) * 1000;
   const records: ChangeRecord[] = []; let calls = 0;
+  // Planned first, drawn after: while the script runs its edits stay in the host's copy of each document (it reads,
+  // measures and checks them there), and the people watching see each document drawn once, live, at its final
+  // places, when the script ends or calls project.publish().  plan: false sends each batch as it is made.
+  const plan = live && a.plan !== false;
+  const staged = new Map<string, { sess: DocSession; edits: string[] }>();
+  const stage = (sess: DocSession) => { sess.beginStage(); if (!staged.has(sess.entry.docId)) staged.set(sess.entry.docId, { sess, edits: [] }); };
+  const publish = async (): Promise<number> => {
+    let n = 0;
+    for (const [docId, st] of [...staged]) {
+      staged.delete(docId);
+      const undo = await st.sess.publishStage(live);
+      if (undo) { n += undo.inverse.length; records.push({ docId, title, edits: st.edits.slice(0, 200), undo }); }
+    }
+    return n;
+  };
+  const drop = () => { for (const st of staged.values()) st.sess.dropStage(); staged.clear(); };
 
   const answer = async (tool: string, args: any): Promise<unknown> => {
     calls++; args = args || {};
@@ -320,13 +348,18 @@ async function runPython(req: Request): Promise<Reply> {
     if (tool === "text") return withDocument(req, args.document, (sess, doc) => ({ document: sess.entry.path, text: sourceText(sess, doc) }));
     const sub: Request = Object.assign({}, req, { args });
     if (tool === "apply") {
-      const r = await applyChanges(Object.assign(sub, { tool: "apply_changes", args: Object.assign({}, args, { title: args.title || title, dry_run: false }) }), live);
+      const r = await applyChanges(Object.assign(sub, { tool: "apply_changes", args: Object.assign({}, args, { title: args.title || title, dry_run: false }) }), live, plan ? stage : undefined);
       if (r.record) records.push(r.record as ChangeRecord);
       const res: any = r.result; const c = res && res.connectivity;
+      if (res && res.staged) {
+        const st = [...staged.values()].find((x) => x.sess.entry.path === res.document); if (st) for (const e of res.edits || []) if (st.edits.length < 200) st.edits.push(e);
+        return Object.assign({}, res, { staged: undefined, connectivity: c && typeof c === "object" ? c.changed : undefined });
+      }
       // the ids of the items this batch made, as the local workspace gives them: the harness takes a via or a text back by its id
       const added = r.record ? ((r.record as ChangeRecord).undo.inverse || []).filter((x: any) => x.kind === "REMOVED").map((x: any) => x.id).reverse() : [];
       return Object.assign({}, res, { added, connectivity: c && typeof c === "object" ? c.changed : undefined });
     }
+    if (tool === "publish") return { drawn: await publish() };
     const name = HARNESS_CALLS[tool]; if (!name) throw new ToolError(`Unknown harness call ${tool}.`);
     sub.tool = name; return (await TOOLS[name](sub)).result;
   };
@@ -360,6 +393,10 @@ async function runPython(req: Request): Promise<Reply> {
     child.stdin.write(JSON.stringify({ code: a.code }) + "\n");
   });
 
+  if (done.ok) {
+    try { await publish(); }
+    catch (e) { drop(); Object.assign(done, { ok: false, error: `The finished drawing could not be sent: ${e instanceof Error ? plain(e.message) : String(e)}` }); }
+  } else drop();
   const seconds = Math.round((Date.now() - started) / 100) / 10;
   const output = clip(String(done.output || "").trim(), PY_OUTPUT_MAX) || undefined;
   const notes = Array.isArray(done.notes) && done.notes.length ? done.notes : undefined;

@@ -165,6 +165,16 @@ class Project:
         for d in self._open.values():
             d.flush()
 
+    def publish(self) -> int:
+        """Draw what has been planned so far for the people watching.  Inside run_python the edits of a script are worked
+        out in the host's copy of each document (every read sees them) and drawn live, each item once at its final place,
+        when the script ends; build(), autoplace() and route() call this when they finish, so a sheet is drawn as soon as
+        it is planned while the board is still being worked on.  Returns how many items were drawn (0 elsewhere)."""
+        self.commit()
+        if getattr(self.transport, "kind", "") != "host":
+            return 0
+        return int((self.transport.call("publish", {}) or {}).get("drawn") or 0)
+
     def save(self) -> list:
         """Commit, then write changed files back (local projects; an online project is always saved)."""
         self.commit()
@@ -902,7 +912,7 @@ class Schematic(_Doc):
         {"overlaps": n, "by_kind": {...}, "first": [...]}.  Fields that are already clear stay where they are, so a sheet drawn
         by build() keeps its look; autoplace_fields() is the call that puts every field back beside its part."""
         self.flush()
-        self._edit({"op": "clear_fields"})
+        self._edit({"op": "clear_fields", "power": True})      # a supply symbol's name over a wire or another name moves too
         self.flush()
         r = self.layout(limit=12)
         return {"overlaps": r.get("count", 0), "by_kind": r.get("by_kind", {}), "first": [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]}
@@ -1278,7 +1288,12 @@ class Schematic(_Doc):
         fit = self.fit_page()
         if fit["fits"]:
             paper = next((p for p in _PAPERS if p[0] == fit["paper"]), paper)
-        # ---- 7. what was asked for against what is there
+        # ---- 7. the last look before anyone sees it: any name still drawn over a wire, a part or another name moves to
+        #         the nearest clear spot (supply symbols' names included), so the sheet is drawn without overlaps
+        if self.layout(limit=1).get("count"):
+            self._edit({"op": "clear_fields", "power": True})
+            self.flush()
+        # ---- 8. what was asked for against what is there
         wrong = self._miswired(nets)
         lay = self.layout(limit=8)
         out = {"placed": len(placed), "nets": len(nets), "sections": len([b for b in blocks if b["framed"]]), "page": paper[0],
@@ -1295,6 +1310,7 @@ class Schematic(_Doc):
             out["overlap_list"] = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in lay.get("overlaps", [])]
         self.project.note(f"{self.path}: built {len(placed)} parts and {len(nets)} nets in {out['sections']} sections on {paper[0]}"
                           + (f", {len(out['problems'])} problems" if out["problems"] else "") + (f", {out['overlaps']} overlaps" if out["overlaps"] else ""))
+        self.project.publish()
         return out
 
     def _miswired(self, nets: dict) -> list:
@@ -1759,12 +1775,14 @@ class Board(_Doc):
         self._groups[name] = {"refs": list(refs), "anchor": anchor or refs[0]}
 
     def autoplace(self, groups: dict | None = None, near: dict | None = None, edges: dict | None = None, fixed: dict | None = None,
-                  outline=None, spacing: float | None = None, only: list | None = None) -> dict:
+                  outline=None, spacing: float | None = None, only: list | None = None, fit: bool = False) -> dict:
         """Place footprints with the placement engine: blocks packed around their anchors, blocks arranged inside the outline.
 
         groups: {block: [refs]} (first ref is the anchor) in addition to those declared with group(); near: {ref: ref}
         for parts that must sit beside another (decoupling, crystal); edges: {ref: "left"|"right"|"top"|"bottom"};
-        fixed: {ref: (x, y[, rotation])}.  With nothing given the engine groups the parts itself.
+        fixed: {ref: (x, y[, rotation])}.  With nothing given the engine groups the parts itself.  fit=True pulls the
+        board outline in round the parts (the smallest rectangle in whole millimetres every block fits in, connectors
+        still on their edges) and redraws Edge.Cuts to it; give the outline first as the largest the board may be.
         """
         specs: dict = {}
         allg = dict(self._groups)
@@ -1790,11 +1808,14 @@ class Board(_Doc):
             e["outline"] = list(outline)
         if spacing is not None:
             e["spacing"] = spacing
+        if fit:
+            e["fit"] = True
         self._edit(e)
         res = self.flush() or {}
         d = next((x["auto_place"] for x in res.get("details") or [] if "auto_place" in x), {})
         out = {"placed": len(d.get("placements", [])), "score": d.get("score"), "outline": d.get("outline"), "unknown_refs": d.get("unknown_refs") or []}
         self.project.note(f"board: placed {out['placed']} footprints, score {out['score']}")
+        self.project.publish()
         return out
 
     # ---- copper
@@ -1958,6 +1979,7 @@ class Board(_Doc):
         if "left" not in out:
             out["left"] = self.unrouted()
         self.project.note(f"board: routed {out['routed']} of {out['connections']} connections, {out['vias']} vias, {out['length_mm']} mm" + (f", {len(out['unrouted'])} left" if out["unrouted"] else ""))
+        self.project.publish()
         return out
 
     def _autoroute(self, e: dict) -> dict:

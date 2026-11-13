@@ -521,9 +521,21 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
             return { ref: q.ref, group: q.group, near: q.near, anchor: q.anchor === true ? true : undefined, side: q.side, edge: q.edge, rot: typeof q.rotation === "number" ? q.rotation : undefined,
               fixed: q.fixed && typeof q.fixed.x === "number" && typeof q.fixed.y === "number" ? { x: q.fixed.x, y: q.fixed.y, rot: q.fixed.rotation || 0 } : undefined }; });
           const outline = Array.isArray(e.outline) && e.outline.length === 4 && e.outline.every((v: any) => typeof v === "number") ? e.outline : undefined;
-          const res = R.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : undefined, outline, spacing: typeof e.spacing === "number" ? e.spacing : undefined });
+          const res = R.place(k, P, doc, P.designSettings(ed.proSettings || null), { footprints: specs.length ? specs : undefined, outline, spacing: typeof e.spacing === "number" ? e.spacing : undefined, fit: e.fit === true });
           const cs: any[] = R.placementChanges(k, P, doc, res.placements); if (!cs.length) throw new ToolError("the placement engine moved nothing");
           for (const c of cs) { const it = doc.items.get(c.id); if (it) touch(it, e.op); changes.push(c); }
+          if (e.fit === true) {
+            // the board pulled in round its parts: the rectangle on Edge.Cuts takes the size the placement settled on
+            const edges = (Array.from(doc.items.values()) as any[]).filter((it) => { const l = k.kid(it.node, "layer"); return l && k.str(l[1]) === "Edge.Cuts"; });
+            const O = res.outline as number[]; const rect = edges.length && edges.every((it) => it.node[0] === "gr_rect") ? edges[0] : null;
+            if (rect && !touched.has(rect.id)) {
+              const node = k.cloneNode(rect.node); const a = k.kid(node, "start"), b = k.kid(node, "end"); a[1] = r4(O[0]); a[2] = r4(O[1]); b[1] = r4(O[2]); b[2] = r4(O[3]);
+              touch(rect, e.op); changes.push(modified(doc, rect, node)); cs.push({ id: rect.id });
+              for (const extra of edges.slice(1)) if (!touched.has(extra.id)) { touch(extra, e.op); changes.push(removed(doc, extra)); }     // a second rectangle drawn over the first
+            } else if (!edges.length) {
+              const c = added(doc, k.parse(`(gr_rect (start ${r4(O[0])} ${r4(O[1])}) (end ${r4(O[2])} ${r4(O[3])}) (stroke (width 0.05) (type solid)) (fill no) (layer "Edge.Cuts"))`)); changes.push(c); cs.push(c);
+            }
+          }
           const byGroup = new Map<string, string[]>(); for (const pl of res.placements) { const g = pl.group || "ungrouped"; if (!byGroup.has(g)) byGroup.set(g, []); byGroup.get(g)!.push(pl.ref); }
           lines.push({ kind: "modify", text: `Place ${res.placements.length} footprint${res.placements.length === 1 ? "" : "s"} in ${byGroup.size} group${byGroup.size === 1 ? "" : "s"} inside (${res.outline.map(fmt).join(", ")})`, ids: cs.map((c) => c.id) });
           details.push({ auto_place: { outline: res.outline.map(r4), outline_from_board: res.outlineFromBoard, score: res.score, groups: res.groups, unknown_refs: res.unknown,
@@ -654,7 +666,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           // the look a person takes after Autoplace Fields: a reference or value still drawn over a label, a wire or a part moves to the nearest clear spot
           schOnly(e.op); const within = Array.isArray(e.within) && e.within.length === 4 ? e.within.map((v: unknown) => num(v, "within")) : undefined;
           const by = new Map<string, { field: string; dx: number; dy: number }[]>();
-          for (const f of e.snug ? snugFieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within }) : e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
+          for (const f of e.snug ? snugFieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within }) : e.inline ? inlineFieldShifts(doc, Array.isArray(e.refs) ? e.refs.map(String) : []) : fieldShifts(doc, { refs: Array.isArray(e.refs) ? e.refs.map(String) : undefined, within, power: e.power === true })) { if (!by.has(f.id)) by.set(f.id, []); by.get(f.id)!.push(f); }
           const ids: string[] = [];
           for (const [id, moves] of by) {
             const it = doc.items.get(id); if (!it || touched.has(it.id)) continue; const node = k.cloneNode(it.node); let any = false;
