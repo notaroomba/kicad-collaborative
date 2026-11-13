@@ -1,4 +1,5 @@
 import type { SchCtx, Pt, Mods, PtrEvent } from "./types";
+import { lineEndAt, selectThreshold, setSelEnd } from "./line-ends";
 import { root } from "../root";
 import { cancelCarry, placeText, startCarry } from "./carry";
 import { schArcUndo } from "./arcs";
@@ -133,9 +134,14 @@ export function onDownCapture(ev: PointerEvent) {
   // the release if the pointer has not travelled (a press-drag from the same place box-selects or moves instead)
   S.autoPress = autostartAt(ctx, mm, ev, true) ? { mm, client: [ev.clientX, ev.clientY], mods: ev } : null;
   const hit = ctx.viewOnly ? null : pickNonSymbol(ctx, mm);
-  if (!hit) { if (S.sel) { S.sel = null; ctx.requestRender(); } return; }
+  if (!hit) { if (S.sel) { S.sel = null; setSelEnd(null, null); ctx.requestRender(); } return; }
   ev.stopImmediatePropagation(); ev.preventDefault();
+  // selectPoint: a line clicked near one end is selected by that end (STARTPOINT / ENDPOINT).  A press on the item
+  // already selected keeps the selection as it is, so a drag moves what was selected (SCH_SELECTION_TOOL::Main only
+  // re-selects on a click, which onUpCapture does)
+  const already = S.sel === hit.id;
   S.sel = hit.id; S.hover = null; ctx.setSelected(null);
+  if (!already) setSelEnd(hit.id, lineEndAt(hit, mm, selectThreshold(ctx)));
   S.pending = { item: hit, mm };
   try { ctx.stage.setPointerCapture(ev.pointerId); } catch (e) { /* not a real pointer */ }
   ctx.requestRender();
@@ -147,7 +153,7 @@ export function autostartAt(ctx: SchCtx, mm: Pt, ev: Mods | null | undefined, pr
   const p = snapConn(ctx, mm, "wire"), kind = autostartKind(ctx.doc, p); if (!kind) return false;
   if (Math.hypot(p[0] - mm[0], p[1] - mm[1]) > Math.max((ctx.gridPitch || 1.27) * 0.5, 6 * mmPerPx(ctx))) return false;
   if (probe) return true;
-  S.sel = null; S.hover = null; S.pending = null; if (ctx.setSelection) ctx.setSelection([]); else ctx.setSelected(null);
+  S.sel = null; S.hover = null; S.pending = null; S.selEnds = null; if (ctx.setSelection) ctx.setSelection([]); else ctx.setSelected(null);
   switchTool(ctx, AUTOSTART_TOOL[kind]);
   startWire(ctx, kind, p, { quitOnDraw: true }); S.cursor = p;
   return true;
@@ -178,7 +184,9 @@ export function onMoveCapture(ev: PointerEvent) {
 export function onUpCapture(ev?: PtrEvent) {
   const ctx = S.ctx; if (!ctx) return;
   const press = S.autoPress; S.autoPress = null;
+  const pend = S.pending;
   S.pending = null;
+  if (pend && S.sel === pend.item.id && !S.drag) setSelEnd(pend.item.id, lineEndAt(pend.item, pend.mm, selectThreshold(ctx)));   // the click's selectPoint
   if (S.pedit) pointEditEnd(ctx, true);
   if (S.drag && S.drag.byPointer) { endDrag(ctx, true); return; }
   if (press && ev && Math.hypot(ev.clientX! - press.client[0], ev.clientY! - press.client[1]) < CLICK_PX && curTool() === "select" && !S.drag && !S.wire) {
@@ -224,7 +232,7 @@ export function onKeyCapture(ev: KeyboardEvent) {
     let took = true;
     if (S.pedit) pointEditEnd(ctx, false); else if (S.picker) closePicker(); else if (S.prompt) closePrompt(); else if (S.wire) cancelWire(ctx); else if (S.draw) cancelDraw(ctx);   // KiCad: Esc discards the wire being drawn
     else if (S.carry) cancelCarry(ctx); else if (S.drag) endDrag(ctx, false); else if (S.highlight) clearHighlight(ctx); else took = false;
-    if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; ctx.requestRender(); }
+    if (S.sel || S.hover) { S.sel = null; S.hover = null; S.pending = null; S.selEnds = null; ctx.requestRender(); }
     if (took) { ev.stopImmediatePropagation(); ev.preventDefault(); }   // first Escape ends the operation, the next one leaves the tool
   } else if (ev.key === "H" && ev.shiftKey && !ctx.viewOnly) {
     ev.stopImmediatePropagation(); ev.preventDefault();

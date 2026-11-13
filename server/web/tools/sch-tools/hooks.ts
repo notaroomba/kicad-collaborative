@@ -56,7 +56,7 @@ export function onActivate(toolId: string, ctx: SchCtx) {
   if (S.draw) S.draw = null;                      // an unfinished shape is dropped with its tool
   if (toolId === "arc") showSchArcMode(ctx);       // SelectToolbarAction( DrawArcForMode ): the Arc group shows the mode
   if (!toolOf(toolId)) { closePicker(); S.carry = null; ctx.requestRender(); return; }
-  S.sel = null; S.hover = null;
+  S.sel = null; S.hover = null; S.selEnds = null;
   if (toolId !== "place" && toolId !== "power" && toolId !== "image") S.carry = null;   // a carried duplicate rides into the place tool
   if (toolId !== "image") S.imageWait = false;    // a file chosen after leaving the tool is ignored anyway
   if (toolId === "junction") startCarry(ctx, "junction", junctionNode(S.cursor || [0, 0]), S.cursor);

@@ -31,7 +31,7 @@ export function selectedItems(ctx: SchCtx) {
 }
 export function setSelectionIds(ctx: SchCtx, ids: Iterable<string> | null) {
   ids = Array.from(ids || []).filter((id) => ctx.doc.items.has(id));
-  S.sel = null; S.hover = null; S.pending = null;
+  S.sel = null; S.hover = null; S.pending = null; S.selEnds = null;
   if (typeof ctx.setSelection === "function") ctx.setSelection(ids);
   else {
     if (ctx.selection && typeof ctx.selection.clear === "function") { ctx.selection.clear(); for (const id of ids) ctx.selection.add(id); }

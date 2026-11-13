@@ -63,6 +63,14 @@ export interface BreakCut { head: KItem; tail: KItem; p: Pt }
 /** A Break / Slice in flight: the items it split on this client only, until the click that commits. */
 export interface BreakJob { mode: string; label: string; orig: Map<string, SNode | null>; local: Set<string>; clicks: number }
 /** S.drag: a connected drag (or move) of one item or a multi-selection. */
+/**
+ * A line selected by one end (SCH_MOVE_TOOL): that end moves; `attach` is what holds its other end (the
+ * m_lineConnectionCache orthoLineDrag reads): the lines ending there, a junction, a pin or anything else.
+ */
+export interface PartialLine {
+  item: KItem; index: number; orig: Pt[];
+  attach?: { lines: LineEnd[]; junction: boolean; pin: boolean; any: boolean };
+}
 export interface SchDrag {
   items: { item: KItem; kind: string; orig: SNode }[];
   item: KItem; kind: string; orig: SNode | null;
@@ -79,6 +87,8 @@ export interface SchDrag {
   /** a paste / duplicate in flight: the ids of the items that only exist on this client */
   local?: Set<string>;
   pasted?: boolean; libs?: string[]; label?: string;
+  /** the lines selected by one end only: SCH_MOVE_TOOL moves that end alone (index into the point list) */
+  ends?: PartialLine[];
 }
 /** S.wire: the wire / bus / line being drawn. */
 export interface SchWire { kind: string; segs: Pt[][]; cur: Pt; quitOnDraw: boolean; stroke: SNode | null }
@@ -116,6 +126,8 @@ export type SchState = {
   autoStartWires: boolean; autoPress?: { mm: Pt; client: Pt; mods: { shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean } } | null; autoCursor?: string | null;
   dragEndedAt?: number; forceFollow?: boolean; internalSwitch?: boolean; multi?: Set<string> | null; otherRefs?: Iterable<string> | null;
   showDangling?: boolean; docGen: number;
+  /** the lines selected by one end only (STARTPOINT / ENDPOINT): id -> that end's index, 0 start, 1 end */
+  selEnds?: Map<string, number> | null;
   /** the modifier keys of the last pointer move (Shift turns the magnetic snap and its indicator off) */
   mods?: Mods | null;
   /** the stage cursor the drag-collision WARNING cursor replaced */

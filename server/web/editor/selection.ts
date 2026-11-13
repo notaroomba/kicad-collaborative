@@ -171,18 +171,24 @@ export function finishBoxSel(ev: { clientX: number; clientY: number }) {
   const moved = Math.hypot(ev.clientX - b.startClient[0], ev.clientY - b.startClient[1]);
   if (moved < 4) return;
   const picked: KItem[] = [];
+  // SelectMultiple: a line is taken by the box as a whole, or (contained mode) by one dangling end inside it
+  const schM = isSch() ? (CollabTools.sch as unknown as { boxLineFlags?: (d: KDoc, it: KItem, box: [number, number, number, number], contained: boolean) => "whole" | 0 | 1 | null | undefined; putSelEnd?: (id: string, end: 0 | 1 | null) => void; state?: { selEnds?: Map<string, number> | null } }) : null;
+  const partEnds = new Map<string, 0 | 1>();
   if (b.lasso) { for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind, it)) continue; const c = itemBoxCentre(it); if (c && pointInPoly(c, b.pts)) picked.push(it); } }
   else {
     const x0 = Math.min(b.start[0], b.cur[0]), x1 = Math.max(b.start[0], b.cur[0]), y0 = Math.min(b.start[1], b.cur[1]), y1 = Math.max(b.start[1], b.cur[1]), enclose = b.cur[0] >= b.start[0];
     const board = !isSch();
     for (const it of E.kdoc.items.values()) { if (!it.bbox || !filterAllows(it.kind, it)) continue; const bb = it.bbox;
       if (board && !KiCadCanvas.itemVisible(it, E.hiddenLayers)) continue;                 // nothing of it is shown: not selectable
+      const lf = schM && schM.boxLineFlags && (it.kind === "wire" || it.kind === "bus" || it.kind === "polyline") ? schM.boxLineFlags(E.kdoc, it, [x0, y0, x1, y1], enclose) : undefined;
+      if (lf !== undefined) { if (lf !== null) { if (lf !== "whole") partEnds.set(it.id, lf); picked.push(it); } continue; }   // a SCH_LINE by its own segment
       const inside = bb[0] >= x0 && bb[2] <= x1 && bb[1] >= y0 && bb[3] <= y1; let touches = bb[2] >= x0 && bb[0] <= x1 && bb[3] >= y0 && bb[1] <= y1;
       // a board item counts by its own shape (a diagonal track by its copper, a zone by its outline), a footprint by its box
       if (touches && !inside && board && it.kind !== "footprint" && it.geom && it.geom.length) touches = KiCadCanvas.itemTouchesRect(it, x0, y0, x1, y1, E.hiddenLayers);
       if (enclose ? inside : touches) picked.push(it); }
   }
   const pcbSel = CollabTools.pcb && CollabTools.pcb.state && CollabTools.pcb.state.sel;
+  if (schM && schM.state && !b.add) schM.state.selEnds = null;
   if (!b.add) { E.selPins = []; E.selection.clear(); if (pcbSel) pcbSel.clear(); if (CollabTools.pcb && CollabTools.pcb.state) CollabTools.pcb.state.padSel = null; }   // a box replaces the board module's own pick too
   // SelectMultiple(area, subtractive, exclusive_or): Ctrl+Shift takes the boxed items out, Ctrl toggles them, Shift adds
   if (b.mode === "remove" || b.mode === "toggle") {
@@ -194,7 +200,7 @@ export function finishBoxSel(ev: { clientX: number; clientY: number }) {
     setStatusBar({ message: "" });
     return;
   }
-  for (const it of picked) E.selection.add(it.id);
+  for (const it of picked) { const had = E.selection.has(it.id); E.selection.add(it.id); if (schM && schM.putSelEnd && (!had || !partEnds.has(it.id))) schM.putSelEnd(it.id, partEnds.has(it.id) ? partEnds.get(it.id)! : null); }
   // FilterCollectorForHierarchy: a boxed member of a group or generator (a tuning pattern's meanders) brings its
   // top-level parent, which this selection holds as the parent's id with all its members
   if (!isSch()) E.selection = groupExpand(E.selection);

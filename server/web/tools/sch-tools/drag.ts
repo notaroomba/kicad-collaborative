@@ -1,4 +1,4 @@
-import type { Anchor, LineEnd, Rider, SchCtx, SchDrag, Pt } from "./types";
+import type { Anchor, LineEnd, PartialLine, Rider, SchCtx, SchDrag, Pt } from "./types";
 import { symbolLibId } from "./autoplace";
 import { autoRotateChanges } from "./autorotate";
 import { collisionCursor, collisionInit } from "./collision";
@@ -144,20 +144,30 @@ export function lineCovers(doc: KDoc, kind: string, a: Pt, b: Pt) {             
 // anchor, riders of every moved net line come along, and a line whose ends all sit on moved items
 // (a wire between two dragged symbols) is promoted into the moved set so it just moves.
 export function beginDrag(ctx: SchCtx, items: KItem | KItem[], mm: Pt, byPointer?: boolean, opts?: { plain?: boolean }) {
-  const doc = ctx.doc, seen = new Set<string>(), list: KItem[] = [];
-  for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id)) { seen.add(it.id); list.push(it); }
-  if (!list.length) return null;
+  const doc = ctx.doc, seen = new Set<string>(), list: KItem[] = [], partial: PartialLine[] = [];
+  for (const it of Array.isArray(items) ? items : [items]) if (it && DRAG_KINDS.has(it.kind) && !seen.has(it.id)) {
+    seen.add(it.id);
+    // a line selected by one end (STARTPOINT / ENDPOINT): SCH_MOVE_TOOL::moveItem moves that end only
+    const e = !(opts && opts.plain) && S.selEnds ? S.selEnds.get(it.id) : undefined, pts = e === 0 || e === 1 ? ptsOf(it.node) : null;
+    if (pts && pts.length === 2) partial.push({ item: it, index: e!, orig: pts.map((q) => q.slice()) }); else list.push(it);
+  }
+  if (!list.length && !partial.length) return null;
   if (S.drag) endDrag(ctx, false);
-  const item = list[0], anchor0 = anchorOf(item.kind, item.node);
+  const item = list[0] || partial[0].item, anchor0 = list.length ? anchorOf(item.kind, item.node) : partial[0].orig[partial[0].index].slice();
   const d: SchDrag = { items: list.map((it) => ({ item: it, kind: it.kind, orig: deep(it.node) })), item, kind: item.kind, orig: null, anchor0, grab: [mm[0] - anchor0[0], mm[1] - anchor0[1]],
     last: [0, 0], applied: [0, 0], moved: false, byPointer: !!byPointer, riders: [], anchors: [], preview: [] };
-  d.orig = d.items[0].orig;
+  if (partial.length) d.ends = partial;
+  d.orig = d.items.length ? d.items[0].orig : deep(item.node);
   for (let pass = 0; pass < 8 && !(opts && opts.plain); pass++) {   // plain: new items (a paste) carry nothing along                   // re-resolve after each promotion, the moved set grew
-    const moving = new Set(d.items.map((e) => e.item.id));
+    const moving = new Set([...d.items.map((e) => e.item.id), ...partial.map((e) => e.item.id)]);
     d.riders = [];
     for (const e of d.items) for (const r of ridersOf(doc, e.item)) if (!moving.has(r.item.id)) { moving.add(r.item.id); d.riders.push(r); }
+    // a label on a partly selected line's moved end goes with it when dragging (getConnectedDragItems), not when moving
+    const endLabels: Rider[][] = partial.map((e) => isNetLine(e.item.kind) ? labelsAt(doc, e.orig[e.index]).filter((l) => !moving.has(l.id)).map((l) => ({ item: l, orig: atOf(l.node).slice(0, 2) })) : []);
+    for (const l of endLabels) for (const r of l) moving.add(r.item.id);
     d.anchors = [];
     for (const e of d.items) for (const p of connPoints(doc, e.item)) d.anchors.push(makeAnchor(doc, e.item, p, moving));
+    partial.forEach((e, i) => { if (!isNetLine(e.item.kind)) return; const a = makeAnchor(doc, e.item, e.orig[e.index], moving); a.followers.push(...endLabels[i]); d.anchors.push(a); });
     for (const r of d.riders) {
       if (r.item.kind === "junction") d.anchors.push(makeAnchor(doc, r.item, r.orig, moving));
       else if (r.item.kind === "bus_entry") for (const p of connPoints(doc, r.item)) d.anchors.push(makeAnchor(doc, r.item, p, moving));
@@ -167,7 +177,11 @@ export function beginDrag(ctx: SchCtx, items: KItem | KItem[], mm: Pt, byPointer
     const spanned: KItem[] = [], idx = new Map<string, Set<number>>();
     for (const a of d.anchors) for (const e of a.ends) { if (!idx.has(e.item.id)) idx.set(e.item.id, new Set()); idx.get(e.item.id)!.add(e.index); }
     for (const [id, ends] of idx) { const it = doc.items.get(id); const n = it ? ptsOf(it.node).length : 0; if (it && n > 1 && ends.has(0) && ends.has(n - 1)) spanned.push(it); }
-    if (!spanned.length) { for (const a of d.anchors) for (const f of a.followers) moving.add(f.item.id); break; }
+    if (!spanned.length) {
+      for (const a of d.anchors) for (const f of a.followers) moving.add(f.item.id);
+      for (const e of partial) e.attach = isNetLine(e.item.kind) ? partialAttach(doc, e, moving) : undefined;
+      break;
+    }
     for (const it of spanned) d.items.push({ item: it, kind: it.kind, orig: deep(it.node) });
   }
   // SCH_MOVE_TOOL: a SCH_DRAG_NET_COLLISION_MONITOR for any selection that is not graphics only
@@ -186,6 +200,12 @@ export function applyDrag(doc: KDoc, d: SchDrag, dx: number, dy: number) {
   for (const r of d.riders) { const [cx, cy] = atOf(r.item.node); shiftNode(r.item.kind, r.item.node, r4(r.orig[0] + dx - cx), r4(r.orig[1] + dy - cy)); K.replaceChange(doc, r.item); }
   d.preview = [];
   const connected = S.dragMode === "drag";
+  for (const e of d.ends || []) {
+    const g = partialGeometry(e, dx, dy, connected && !d.mode && S.lineMode !== "free");
+    setPts(e.item.node, g.pts); K.replaceChange(doc, e.item);
+    if (e.attach) for (const l of e.attach.lines) { const q = l.orig.map((v) => v.slice()); if (g.stretch === l) q[l.index] = [r4(q[l.index][0] + g.perp[0]), r4(q[l.index][1] + g.perp[1])]; setPts(l.item.node, q); K.replaceChange(doc, l.item); }
+    for (const x of g.extra) d.preview.push({ kind: e.item.kind, pts: x });
+  }
   for (const a of d.anchors) {
     const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)];
     for (const e of a.ends) {
@@ -193,7 +213,7 @@ export function applyDrag(doc: KDoc, d: SchDrag, dx: number, dy: number) {
       if (connected) { const g = endGeometry(e, Pn, d.mode ? "free" : S.lineMode); pts = g.extra ? (e.index === 0 ? [g.extra[1], g.extra[0], g.pts[1]] : [g.pts[0], g.extra[0], g.extra[1]]) : g.pts; }
       setPts(e.item.node, pts); K.replaceChange(doc, e.item);
     }
-    for (const f of a.followers) { const to = connected ? Pn : f.orig; const [cx, cy] = atOf(f.item.node); shiftNode("no_connect", f.item.node, r4(to[0] - cx), r4(to[1] - cy)); K.replaceChange(doc, f.item); }
+    for (const f of a.followers) { const to = connected ? Pn : f.orig; const [cx, cy] = atOf(f.item.node); shiftNode(f.item.kind, f.item.node, r4(to[0] - cx), r4(to[1] - cy)); K.replaceChange(doc, f.item); }
     if (connected && a.stub && !same(a.p, Pn)) d.preview.push({ kind: a.stub.kind, pts: [a.p, Pn] });
   }
 }
@@ -247,6 +267,17 @@ export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number) {
   const touched: Pt[] = [];
   for (const e of d.items) { const n = deep(e.item.node); shiftNode(e.kind, n, dx, dy); const c = modChange(doc, e.item, n); put(d.local && d.local.has(e.item.id) ? Object.assign(c, { kind: "ADDED" }) : c); }
   for (const r of d.riders) { const n = deep(r.item.node); shiftNode(r.item.kind, n, dx, dy); put(modChange(doc, r.item, n)); }
+  for (const e of d.ends || []) {
+    const g = partialGeometry(e, dx, dy, connected && !d.mode && S.lineMode !== "free"), pts = g.pts;
+    touched.push(...e.orig, ...pts);
+    if (same(pts[0], pts[1])) put(K.removeChange(e.item));
+    else { const n = deep(e.item.node); setPts(n, pts); put(modChange(doc, e.item, n)); }
+    if (g.stretch) {
+      const l = g.stretch, q = l.orig.map((v) => v.slice()); q[l.index] = [r4(q[l.index][0] + g.perp[0]), r4(q[l.index][1] + g.perp[1])]; touched.push(q[l.index]);
+      if (same(q[0], q[q.length - 1])) put(K.removeChange(l.item)); else { const n = deep(l.item.node); setPts(n, q); put(modChange(doc, l.item, n)); }
+    }
+    for (const x of g.extra) if (!same(x[0], x[1])) { put(addNode(doc, lineNode(e.item.kind, x[0], x[1])).change); touched.push(...x); }
+  }
   for (const e of d.items) for (const p of (d.local && isNetLine(e.kind) ? ptsOf(e.item.node) : connPoints(doc, e.item))) { if (!d.local) touched.push(p); touched.push([r4(p[0] + dx), r4(p[1] + dy)]); }
   if (connected) for (const a of d.anchors) {
     const Pn = [r4(a.p[0] + dx), r4(a.p[1] + dy)]; touched.push(a.p, Pn);
@@ -256,7 +287,7 @@ export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number) {
       const n = deep(e.item.node); setPts(n, g.pts); put(modChange(doc, e.item, n));
       if (g.extra) { put(addNode(doc, lineNode(e.item.kind, g.extra[0], g.extra[1])).change); touched.push(g.extra[0]); }
     }
-    for (const f of a.followers) { const n = deep(f.item.node); setAt(n, Pn[0], Pn[1]); put(modChange(doc, f.item, n)); }
+    for (const f of a.followers) { const n = deep(f.item.node), [cx, cy] = atOf(n); shiftNode(f.item.kind, n, r4(Pn[0] - cx), r4(Pn[1] - cy)); put(modChange(doc, f.item, n)); }
     if (a.stub && !same(a.p, Pn)) {
       if (a.stub.split) {                        // the line the label sat on becomes two lines meeting at the stub
         const m = a.stub.split, mp = ptsOf(m.node), n = deep(m.node);
@@ -266,7 +297,7 @@ export function dragChanges(ctx: SchCtx, d: SchDrag, dx: number, dy: number) {
       if (!lineCovers(doc, a.stub.kind, a.p, Pn)) put(addNode(doc, lineNode(a.stub.kind, a.p, Pn)).change);
     }
   }
-  const keep = new Set([...d.items.map((e) => e.item.id), ...d.riders.map((r) => r.item.id)]);
+  const keep = new Set([...d.items.map((e) => e.item.id), ...d.riders.map((r) => r.item.id), ...(d.ends || []).map((e) => e.item.id)]);
   for (const c of cleanupAt(doc, Array.from(out.values()), touched, keep, ctx.IU || 1e4)) put(c);
   for (const c of out.values()) if (c.kind === "ADDED") doc.items.delete(c.id);   // commit re-adds them from the fragments
   return autoRotateChanges(doc, Array.from(out.values()), ctx.IU || 1e4);
@@ -303,4 +334,41 @@ export function mergeAt(doc: KDoc, p: Pt, kind: string) {
   if (Math.abs(u[0] * v[1] - u[1] * v[0]) > 1e-6 || u[0] * v[0] + u[1] * v[1] >= 0) return null;   // must run straight through p
   const n = deep(A.item.node); setPts(n, A.index === 0 ? [fb, fa] : [fa, fb]);
   return [modChange(doc, A.item, n), K.removeChange(B.item)];
+}
+
+// ---------------------------------------------------------------- a line selected by one end (SCH_MOVE_TOOL)
+/** m_lineConnectionCache for the unselected end of a partly selected net line: what is attached there and not moving. */
+export function partialAttach(doc: KDoc, e: PartialLine, moving: Set<string>): NonNullable<PartialLine["attach"]> {
+  const q = e.orig[e.index === 0 ? 1 : 0], kinds = e.item.kind === "bus" ? ["bus"] : ["wire", "bus"];
+  const lines: LineEnd[] = [];
+  for (const kd of kinds) for (const le of lineEndsAt(doc, q[0], q[1], kd)) if (le.item !== e.item && !moving.has(le.item.id)) lines.push({ item: le.item, index: le.index, orig: ptsOf(le.item.node).map((v) => v.slice()) });
+  const j = junctionAt(doc, q[0], q[1]), junction = !!j && !moving.has(j.id);
+  const pin = pinsAt(doc, q[0], q[1]).some((p) => !moving.has(p.item.id)) || sheetPinsAt(doc, q).some((s) => !moving.has(s.id));
+  const any = lines.length > 0 || junction || pin || labelsAt(doc, q).some((l) => !moving.has(l.id)) || busEntriesAt(doc, q).some((b) => !moving.has(b.id))
+    || lineMidsAt(doc, q[0], q[1], e.item.kind === "bus" ? "bus" : "wire").some((m) => m !== e.item && !moving.has(m.id));
+  return { lines, junction, pin, any };
+}
+/**
+ * The points of a partly selected line moved by (dx, dy): moveItem moves the selected end; in DRAG with the line mode
+ * constrained, orthoLineDrag keeps an orthogonal line orthogonal for the part of the move across it — the attached
+ * line running that way stretches and the whole line shifts, a junction alone gets a new wire to the shifted end,
+ * anything else (a pin, a label) keeps the line and gets a bend at the moved end; a free end just moves.
+ * `stretch` is the attached line whose end follows by `perp`, `extra` the new lines.
+ */
+export function partialGeometry(e: PartialLine, dx: number, dy: number, ortho: boolean): { pts: Pt[]; perp: Pt; stretch: LineEnd | null; extra: Pt[][] } {
+  const pts = e.orig.map((v) => v.slice()), i = e.index, o = i === 0 ? 1 : 0, P = pts[i], Q = pts[o];
+  const Pn = [r4(P[0] + dx), r4(P[1] + dy)], none = { perp: [0, 0], stretch: null, extra: [] as Pt[][] };
+  const horiz = Math.abs(P[1] - Q[1]) <= 1e-6, vert = Math.abs(P[0] - Q[0]) <= 1e-6;
+  if (!ortho || !e.attach || !e.attach.any || (horiz && vert) || (!horiz && !vert)) { pts[i] = Pn; return { pts, ...none }; }
+  const perp: Pt = horiz ? [0, dy] : [dx, 0];
+  if (!perp[0] && !perp[1]) { pts[i] = Pn; return { pts, ...none }; }
+  const Qn = [r4(Q[0] + perp[0]), r4(Q[1] + perp[1])];
+  // a connected line running the way of the move (or shortened to nothing) lengthens / shortens
+  const along = (l: LineEnd) => { const a = l.orig[0], b = l.orig[l.orig.length - 1]; return l.orig.length === 2 && (horiz ? Math.abs(a[0] - b[0]) <= 1e-6 && Math.abs(a[1] - b[1]) > 1e-6 : Math.abs(a[1] - b[1]) <= 1e-6 && Math.abs(a[0] - b[0]) > 1e-6); };
+  const found = e.attach.lines.find(along) || null;
+  if (found) { pts[i] = Pn; pts[o] = Qn; return { pts, perp, stretch: found, extra: [] }; }
+  if (e.attach.junction && !e.attach.pin) { pts[i] = Pn; pts[o] = Qn; return { pts, perp, stretch: null, extra: [[Q, Qn]] }; }
+  // the bend: the line stays, running to the moved end's parallel coordinate, and a new segment goes across
+  const C = horiz ? [Pn[0], Q[1]] : [Q[0], Pn[1]];
+  pts[i] = C; return { pts, perp: [0, 0], stretch: null, extra: [[C, Pn]] };
 }

@@ -79,8 +79,12 @@ function boardSelected(): Set<string> | null {
     if (E.selField) extra.push(E.selField.id + "#field:" + E.selField.name);
     for (const p of (E.selPins || []) as { id: string; number: string }[]) extra.push(p.id + "#pin:" + p.number);
     if (S && S.drag && S.drag.items) for (const e of S.drag.items) if (e && e.item && e.item.id) extra.push(e.item.id);
-    if (!extra.length) return base;
-    const out = new Set<string>(base || []); for (const id of extra) out.add(id); return out;
+    if (!extra.length && !base) return base;
+    const out = new Set<string>(base || []); for (const id of extra) out.add(id);
+    // a line selected by one end ("id#end:N", STARTPOINT / ENDPOINT): the painter squares its other end
+    const keys = (CollabTools.sch as unknown as { selEndKeys?: (ids: Iterable<string>) => string[] }).selEndKeys;
+    if (keys) for (const k of keys([...out])) out.add(k);
+    return out;
   }
   if (!pcb || ((!pcb.sel || !pcb.sel.size) && !pcb.padSel)) return base;
   const out = new Set<string>(base || []); if (pcb.sel) for (const id of pcb.sel) out.add(id); if (pcb.padSel) out.add(pcb.padSel);
