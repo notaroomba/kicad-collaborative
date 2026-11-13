@@ -142,7 +142,7 @@ async function one(dir, boardPath, boardGiven) {
   // (many plugins only say "select something first" otherwise).  A drive's own "# select:" wins.
   if (process.env.SELECT && !startSelection.length) startSelection.push(...topLevelIds(board, process.env.SELECT));
   // the project file and schematics beside the board, as the editor hands them over
-  const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro)$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
+  const siblings = fs.readdirSync(path.dirname(boardPath)).filter((f) => /\.kicad_(sch|pro|sym)$|^(sym|fp)-lib-table$/.test(f)).map((f) => ({ path: f, text: fs.readFileSync(path.join(path.dirname(boardPath), f), "utf8") }));
   const calls = []; const said = []; let edited = false;
   // "# again": the drive is run a second time in a fresh interpreter that has only the plugin's storage from the first
   // run, as when the person comes back the next day (kc_run.RUN says which run it is).

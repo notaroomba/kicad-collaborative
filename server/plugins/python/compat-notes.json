@@ -60,6 +60,26 @@
     "com.pcbtools.kinotes": {
       "status": "works",
       "note": "Notes and tasks are kept per project in this browser, for you only; collaborators do not see them."
+    },
+    "com.github.jOaSbA.localize-dependencies": {
+      "status": "limited",
+      "note": "It opens and reads the project's library tables, but finds nothing to do: an online project already holds its own libraries, and KiCad's standard libraries are served by the editor."
+    },
+    "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
+      "status": "limited",
+      "note": "Saving a block reads what the schematic editor copied to the clipboard, which a plugin in the browser is not allowed to read."
+    },
+    "com.github.z2labs.eagle-exhumer": {
+      "status": "unsupported",
+      "note": "It drives KiCad's project manager window to import an Eagle project. The web editor has no such window."
+    },
+    "com.github.heronitec-solutions.kicomlib": {
+      "status": "opens",
+      "note": "It opens. It is a client for a KiComLib library server; nobody has tried it here against one."
+    },
+    "com.github.Steffen-W.impartGUI": {
+      "status": "limited",
+      "note": "It opens, but it imports parts into library folders on the computer, which the web editor does not read. Use the editor's own part search to add vendor parts."
     }
   }
 }

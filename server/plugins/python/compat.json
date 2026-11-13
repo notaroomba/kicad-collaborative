@@ -63,15 +63,15 @@
   "status": "works"
  },
  "com.github.Sajitha-Aldeniya.KiCAD-Schematic-Blocks-Plugin": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Error: Please enter a valid Block name.\"). Nobody has checked its result here yet."
+  "status": "limited",
+  "note": "Saving a block reads what the schematic editor copied to the clipboard, which a plugin in the browser is not allowed to read."
  },
  "com.github.Steffen-W.KiCad-Parasitics": {
   "status": "works"
  },
  "com.github.Steffen-W.impartGUI": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"WARNING: KICAD_3RD_PARTY is not defined in Environment Variables. Please add the entry manually: Preferences -> Configure Paths -> Environment Variables -> Add \"). Nobody has checked its result here yet."
+  "status": "limited",
+  "note": "It opens, but it imports parts into library folders on the computer, which the web editor does not read. Use the editor's own part search to add vendor parts."
  },
  "com.github.SteveMayze.pcb2fritzing": {
   "status": "works",
@@ -175,11 +175,11 @@
  },
  "com.github.heronitec-solutions.kicomlib": {
   "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "note": "It opens. It is a client for a KiComLib library server; nobody has tried it here against one."
  },
  "com.github.jOaSbA.localize-dependencies": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "limited",
+  "note": "It opens and reads the project's library tables, but finds nothing to do: an online project already holds its own libraries, and KiCad's standard libraries are served by the editor."
  },
  "com.github.jOaSbA.via-stitching": {
   "status": "opens",
@@ -208,8 +208,7 @@
   "status": "works"
  },
  "com.github.mey-26.kicad-layout-clone": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work. Nobody has checked its result here yet."
+  "status": "works"
  },
  "com.github.mey-26.pcb-heatmap": {
   "status": "works"
@@ -293,8 +292,8 @@
   "status": "works"
  },
  "com.github.z2labs.eagle-exhumer": {
-  "status": "opens",
-  "note": "It opens, but the test run did not see it do its work (it said: \"Eagle Exhumer: Open the PCB Editor from the KiCad project manager window (the Eagle import is a project-manager function).\"). Nobody has checked its result here yet."
+  "status": "unsupported",
+  "note": "It drives KiCad's project manager window to import an Eagle project. The web editor has no such window."
  },
  "com.github.z2labs.z2ems": {
   "status": "limited",
