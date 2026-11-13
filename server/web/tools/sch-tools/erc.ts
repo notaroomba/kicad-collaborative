@@ -1,5 +1,6 @@
 import type { SchCtx, Pt, ErcMarker } from "./types";
-import { type SymPin, symbolIsPower, symbolLibId, symbolPins } from "./autoplace";
+import { type SymPin, symbolIsPower, symbolPins } from "./autoplace";
+import { ellipsizeMenuText, itemDescription } from "./msgpanel";
 import { editable, selectedItems } from "./commands";
 import { lineEndsAt, lineMidsAt, pinsAt } from "./connect";
 import { LABEL_KINDS, busEntriesAt, isNetLine, labelsAt, noConnectsAt, sheetPinsAt } from "./drag";
@@ -69,31 +70,22 @@ export function noConnectAt(doc: KDoc, p: Pt) { return noConnectsAt(doc, p).leng
 export interface ErcItemRef { x: number; y: number; desc: string; len?: number }
 const PIN_SHAPE_TEXT: Record<string, string> = { line: "Line", inverted: "Inverted", clock: "Clock", inverted_clock: "Inverted clock", input_low: "Input low", clock_low: "Clock low", output_low: "Output low", edge_clock_high: "Falling edge clock", non_logic: "NonLogic" };
 const unesc = (t: string): string => { const u = (K as unknown as { unescapeText?(s: string): string }).unescapeText; return u ? u(t) : t; };
-/** KIUI::EllipsizeMenuText */
-const ellipsize = (t: string): string => { const m = unesc(t).replace(/[\n\r\t]/g, " "); return m.length > 36 ? m.slice(0, 34) + "..." : m; };
 /** SCH_PIN::GetItemDescription of a placed symbol's pin: "Symbol U1 Pin 3 [IN+, Input, Line]". */
 export function pinItemRef(t: ErcTerm & { pin: SymPin }): ErcItemRef {
   const name = t.pin.name && t.pin.name !== "~" ? unesc(t.pin.name) : "", type = PIN_TYPE_TEXT[t.pin.type] || "Unspecified", shape = PIN_SHAPE_TEXT[t.pin.shape || "line"] || "Line";
   const what = `${t.pin.hidden ? "Hidden pin" : "Pin"} ${t.pin.number} [${name ? name + ", " : ""}${type}, ${shape}]`;
   return { x: r4(t.p[0]), y: r4(t.p[1]), desc: `Symbol ${t.item.ref || "?"} ${what}` };
 }
-const LABEL_DESC: Record<string, string> = { label: "Label", global_label: "Global Label", hierarchical_label: "Hierarchical Label" };
-/** An item's GetPosition and GetItemDescription (eeschema's sch_*.cpp). */
-export function itemRef(it: KItem): ErcItemRef {
-  const n = it.node, at = atOf(n);
-  if (it.kind === "symbol") return { x: at[0], y: at[1], desc: `Symbol ${ellipsize(it.ref || "")} [${ellipsize(symbolLibId(n).split(":").pop() || "")}]` };
-  if (LABEL_DESC[it.kind]) return { x: at[0], y: at[1], desc: `${LABEL_DESC[it.kind]} '${ellipsize(str(n[1]))}'` };
-  if (it.kind === "sheet") { const nm = kids(n, "property").find((q) => str(q[1]) === "Sheetname" || str(q[1]) === "Sheet name"); return { x: at[0], y: at[1], desc: `Hierarchical Sheet '${ellipsize(nm ? str(nm[2]) : "")}'` }; }
-  if (it.kind === "no_connect") return { x: at[0], y: at[1], desc: "No Connect" };
-  if (it.kind === "junction") return { x: at[0], y: at[1], desc: "Junction" };
-  if (it.kind === "bus_entry") return { x: at[0], y: at[1], desc: "Bus to wire entry" };
-  if (it.kind === "wire" || it.kind === "bus" || it.kind === "polyline") {
-    const pts = ptsOf(n); const a = pts[0] || [0, 0], b = pts[pts.length - 1] || a;
-    const what = it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphic Line";
+/** An item's GetPosition and GetItemDescription (msgpanel.ts's itemDescription); a wire's or line's length is left as "%L" for the report's units. */
+export function itemRef(doc: KDoc, it: KItem): ErcItemRef {
+  const n = it.node, at = atOf(n), pts = it.kind === "wire" || it.kind === "bus" || it.kind === "polyline" ? ptsOf(n) : [];
+  if (pts.length === 2) {
+    const [a, b] = pts, what = it.kind === "wire" ? "Wire" : it.kind === "bus" ? "Bus" : "Graphic Line";
     const dir = a[0] === b[0] ? "Vertical " : a[1] === b[1] ? "Horizontal " : "";
     return { x: a[0], y: a[1], desc: `${dir}${what}, length %L`, len: Math.hypot(b[0] - a[0], b[1] - a[1]) };
   }
-  return { x: at[0], y: at[1], desc: it.kind };
+  const p = pts[0] || at;
+  return { x: p[0], y: p[1], desc: itemDescription(doc, it.id, "mm") || it.kind };
 }
 export function pinLabel(t: ErcTerm & { pin: SymPin }) { return `${t.item.ref || "?"} pin ${t.pin.number}${t.pin.name && t.pin.name !== "~" ? " (" + t.pin.name + ")" : ""}`; }
 export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
@@ -101,7 +93,7 @@ export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
   // refs: the main and aux items of ShowReport (default: the first two of ids, as items of this sheet)
   const markers: ErcMarker[] = [], mark = (code: string, severity: string, p: Pt, text: string, ids: Iterable<string>, refs?: ErcItemRef[], extra?: Record<string, unknown>) => {
     const idl = Array.from(new Set(ids || []));
-    const items = refs || idl.slice(0, 2).map((id) => doc.items.get(id)).filter((x): x is KItem => !!x).map(itemRef);
+    const items = refs || idl.slice(0, 2).map((id) => doc.items.get(id)).filter((x): x is KItem => !!x).map((x) => itemRef(doc, x));
     markers.push(Object.assign({ code, severity, x: r4(p[0]), y: r4(p[1]), text, ids: idl, items }, extra || {}));
   };
   const { nets } = ercNets(doc);
@@ -182,10 +174,10 @@ export function ercCheck(doc: KDoc, opts?: ErcOpts | null) {
     const pinNames = new Map<string, SNode>(); for (const pin of kids(it.node, "pin")) pinNames.set(str(pin[1]), pin);
     if (sub) {
       const hier = new Set<string>(); for (const o of sub.items.values()) if (o.kind === "hierarchical_label") hier.add(str(o.node[1]));
-      for (const [name, pin] of pinNames) if (!hier.has(name)) { const pp = atOf(pin); mark("hier_label_mismatch", "error", pp, `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id], [{ x: pp[0], y: pp[1], desc: `Hierarchical Sheet Pin '${ellipsize(name)}'` }]); }
+      for (const [name, pin] of pinNames) if (!hier.has(name)) { const pp = atOf(pin); mark("hier_label_mismatch", "error", pp, `Sheet pin ${name} has no matching hierarchical label in ${it.file || "the sheet"}`, [it.id], [{ x: pp[0], y: pp[1], desc: `Hierarchical Sheet Pin '${ellipsizeMenuText(name)}'` }]); }
       const [x, y] = atOf(it.node);
       // the main item is the label on the sub-sheet: the report lists it under that sheet (mainFile)
-      for (const name of hier) if (!pinNames.has(name)) { const lab = Array.from(sub.items.values()).find((o) => o.kind === "hierarchical_label" && str(o.node[1]) === name); mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id], lab ? [itemRef(lab)] : undefined, lab ? { mainFile: it.file, mainSheet: it.id } : undefined); }
+      for (const name of hier) if (!pinNames.has(name)) { const lab = Array.from(sub.items.values()).find((o) => o.kind === "hierarchical_label" && str(o.node[1]) === name); mark("hier_label_mismatch", "error", [x, y], `Hierarchical label ${name} in ${it.file || "the sheet"} has no sheet pin`, [it.id], lab ? [itemRef(sub, lab)] : undefined, lab ? { mainFile: it.file, mainSheet: it.id } : undefined); }
     }
   }
   if (opts.parentPins) { const pp = new Set(opts.parentPins); for (const it of doc.items.values()) if (it.kind === "hierarchical_label" && !pp.has(str(it.node[1]))) mark("hier_label_mismatch", "error", atOf(it.node), `Hierarchical label ${str(it.node[1])} has no sheet pin on the parent sheet`, [it.id]); }

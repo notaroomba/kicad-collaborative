@@ -167,7 +167,7 @@ export function openAnnotate(): void {
       const start = textInput(String(A.start), (v) => { A.start = Math.max(0, parseInt(v, 10) || 0); }, { id: "kd-ann-start", style: "width:70px", type: "number", min: "0" });
       const dark = effectiveTheme() === "dark";
       // bSizerXpos / bSizerYpos: the radio button, then annotate_down_right / annotate_right_down beside it
-      const withBmp = (row: HTMLElement, o: string) => h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:12px" }, row, h("img", { src: ORDER_BMP[o][dark ? 1 : 0], width: "24", height: "24", alt: "" }));
+      const withBmp = (row: HTMLElement, o: string) => h("div", { style: "display:flex;align-items:center;justify-content:space-between;gap:12px" }, row, h("img", { src: ORDER_BMP[o][dark ? 1 : 0], width: "24", height: "24", alt: "", "data-bitmap": o === "x" ? "annotate_down_right" : "annotate_right_down" }));
       const withTip = (row: HTMLElement, tip: string) => { row.title = tip; return row; };
       reuseSuffix = obj(obj(obj(projectJson()).schematic).annotation).reused_sheet_suffixes === true;
       initialReuse = reuseSuffix;
