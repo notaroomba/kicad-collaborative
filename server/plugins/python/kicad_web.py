@@ -2676,6 +2676,7 @@ def run_action(index):
         _seen_files = _tree(PROJECT_DIR)
         _state["asked_back"] = set()
         plugin.Run()
+        wx._flush_log()
         _carry_board_file()
     except SystemExit:
         pass

@@ -14,7 +14,8 @@
   "note": "It writes the .pcb3d file: the board as VRML in KiCad's own layout, each part's 3D model as a file of its own (KiCad's STEP models, tessellated by the editor's 3D viewer), and the layer drawings. The file's contents are checked here; opening it in Blender has not been tried. This package is the plugin's KiCad 6 version, so it is answered in KiCad 6's terms. A model file the project does not hold is left out."
  },
  "com.github.BatNoize.Dial-Scale-FrontPanel-Footprint-Wizard": {
-  "status": "works"
+  "status": "works",
+  "note": "Driven end to end: with 7 major and 24 minor ticks asked for, the footprint it places has exactly those lines at the right radii and angles, its mounting hole and its help circle."
  },
  "com.github.DIaLOGIKa-GmbH.kicad-coil-creator": {
   "status": "works"
@@ -26,7 +27,8 @@
   "status": "works"
  },
  "com.github.Huaqiu-Electronics.kicad-hqdfm-plugin": {
-  "status": "works"
+  "status": "partly",
+  "note": "Its Quick DFM Check runs and its layer count, board size, smallest track width, via rings and hole count are right. The spacings it reports are being checked against the true distances; until that passes, treat them as approximate."
  },
  "com.github.Huaqiu-Electronics.kicad-hqpcb-plugin": {
   "status": "works",
@@ -94,7 +96,7 @@
  },
  "com.github.adamws.kicad-git": {
   "status": "works",
-  "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
+  "note": "Its button opens the Save Version dialog, and the version you save there lands in the project's history (checked in the real editor). The version history stands in for git here: a commit is a saved version."
  },
  "com.github.adamws.kicad-kbplacer": {
   "status": "works",
@@ -160,7 +162,8 @@
   "status": "works"
  },
  "com.github.easyw.kicad-action-tools": {
-  "status": "works"
+  "status": "works",
+  "note": "All six commands are checked against the board file: annular rings, position files, move to layer, snap to grid and missing 3D models give the right results. Its DXF export reads the board file the way KiCad 5 wrote it, so on a current board it writes an empty drawing, here and on the desktop alike."
  },
  "com.github.easyw.kicad-rf-tools": {
   "status": "works"

@@ -91,7 +91,7 @@ else test("a legacy Python wizard answers describe / build / reset through kicad
   assert.strictEqual((d.footprint.match(/\(pad /g) || []).length, 8);
   assert.ok(/^\(footprint "Ring_8"/.test(d.footprint), d.footprint.slice(0, 40));
   assert.strictEqual((b.footprint.match(/\(pad /g) || []).length, 12);
-  assert.ok(/\(fp_circle /.test(d.footprint) && !/\(fp_circle /.test(b.footprint), "the outline follows its checkbox");
+  assert.ok(/\(fp_circle\s/.test(d.footprint) && !/\(fp_circle\s/.test(b.footprint), "the outline follows its checkbox");
   assert.strictEqual(bad.footprint, null);
   assert.ok(/below minimum/.test(bad.pages[0].params[0].error), JSON.stringify(bad.pages[0].params[0]));
   assert.ok(/Parameters have errors/.test(M.buildMessage(bad)), bad.messages);

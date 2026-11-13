@@ -489,6 +489,31 @@ if (only('Board2Pdf')) {
   } catch (e) { check('Board2Pdf runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.gitlab.dennevi.Board2Pdf', 30)); await shot('real-board2pdf-fail'); }
 }
 
+// ---- kicad-git: its button is the commit window; here that is the project's Save Version dialog, and a version is saved
+if (only('kicad-git')) {
+  const ID = 'com.github.adamws.kicad-git';
+  try {
+    await page.goto(`${BASE}${ecc83}`); await editorReady();
+    const pid = ecc83.split('/')[2];
+    const timeline = async () => page.evaluate(async (p) => (await (await fetch(`/api/projects/${p}/timeline`)).json()).versions || [], pid);
+    const before = await timeline();
+    const actions = await install(ID);
+    check('kicad-git: it adds its one toolbar command', actions.length === 1 && actions[0].name === 'Git Plugin', JSON.stringify(actions));
+    await runAction(ID, actions[0]);
+    await page.waitForSelector('[data-version-dialog] #versionName', { timeout: 60000 });
+    check('kicad-git: its button opens the Save Version dialog', true);
+    await shot('real-kicad-git-dialog');
+    const name = `From the git plugin ${Date.now() % 100000}`;
+    await page.fill('#versionName', name); await page.fill('#versionNote', 'Saved through the plugin\'s button');
+    await page.click('[data-version-dialog] button[type="submit"]');
+    await page.waitForFunction(() => !document.querySelector('[data-version-dialog]'), null, { timeout: 30000 });
+    let after = []; for (let i = 0; i < 40 && !(after = await timeline()).some((v) => v.name === name); i++) await page.waitForTimeout(250);
+    const saved = after.find((v) => v.name === name);
+    check('kicad-git: the version is in the project\'s history, with its note', !!saved && saved.description === 'Saved through the plugin\'s button' && after.length === before.length + 1, `${before.length} before, ${after.length} after`);
+    check('kicad-git: no error window from the plugin', !(await state()).prompt && !/Could not|Traceback/.test(await logTail(ID, 12)), await logTail(ID, 12));
+  } catch (e) { check('kicad-git runs', false, String(e).slice(0, 300) + ' ' + await logTail('com.github.adamws.kicad-git', 12)); await shot('real-kicad-git-fail'); }
+}
+
 check('no page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
 

@@ -158,7 +158,7 @@ def footprint_file(fp):
     name = str(fp.GetFPID().GetLibItemName()) or str(fp.GetValue()) or "footprint"
     body = [c for c in node[2:] if not (isinstance(c, list) and c and str(c[0]) in ("at", "uuid", "path", "sheetname", "sheetfile", "locked", "placed"))]
     head = ["(footprint " + pcbnew._quote(name), "  (version 20241229)", '  (generator "kicad_collaborative_wizard")', '  (generator_version "10.0")']
-    return "\n".join(head + ["  " + pcbnew._dump(c) for c in body]) + "\n)\n", name
+    return pcbnew._prettify(" ".join(head + [pcbnew._dump(c) for c in body]) + ")"), name
 
 
 def _safe_name(name):

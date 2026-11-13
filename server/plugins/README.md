@@ -293,6 +293,15 @@ How it works:
 - **Custom-shaped pads.** `PAD.MergePrimitivesAsPolygon` gives the anchor and every primitive (strokes at their
   width) about the pad's position. They are merged into one outline when the polygon library is loaded for the
   plugin, and otherwise handed over as overlapping outlines that cover the same copper.
+- **The board file is laid out as KiCad writes it.** `BOARD._text` (what `Save`, `SaveBoard` and the file beside
+  the project hold) and the footprint wizard's `.kicad_mod` go through `pcbnew._prettify`, a port of
+  `KICAD_FORMAT::Prettify`; a KiCad-saved board comes back byte for byte. Plugins that read the file line by line
+  depend on it.
+- **No `GetModules` or `Modules` on a board.** KiCad dropped them in version 6 and plugins test for them to tell
+  which KiCad they run in; with them present thirteen plugins took their KiCad 5 path.
+- **Log messages reach the person.** `wx.LogMessage`, `LogWarning` and `LogError` are collected while a handler
+  runs and shown together in one window when it is done, as wxLogGui does (`wx._flush_log`); `LogInfo`, `LogStatus`,
+  `LogVerbose` and `LogDebug` only go to the plugin's log.
 - **Fabrication files in the headless run.** `scripts/plugins-python.mjs` answers `fab.gerbers`, `fab.drill`,
   `fab.positions`, `fab.bom` and `fab.layers` with the editor's own writers (`static/dist/fab.js`), so a drive
   opens real Gerber, drill, placement and BOM files (`drive_util.gerber_drawn`, `holes_drilled`, `parts_placed`).

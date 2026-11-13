@@ -89,6 +89,61 @@ def _dump(node):
     return str(node)
 
 
+_PRETTY_TOKEN = None
+
+
+def _prettify(src):
+    """KICAD_FORMAT::Prettify (common/io/kicad/kicad_io_utils.cpp), the pass every KiCad writer runs over its compact
+    output: one tab per list level, a list that holds lists opens a line per child, runs of (xy ...) stay on a line up
+    to column 99 and a list of bare tokens wraps past column 72.  A file written here reads like one pcbnew saved,
+    which plugins that read the board file line by line rely on."""
+    global _PRETTY_TOKEN
+    if _PRETTY_TOKEN is None:
+        import re as _re
+        _PRETTY_TOKEN = _re.compile(r'"(?:[^"\\]|\\.)*"|[()]|[^\s()"]+')
+    out, depth, last, multi, in_xy, col = [], 0, "", False, False, 0
+    for m in _PRETTY_TOKEN.finditer(src):
+        t = m.group()
+        if t == "(":
+            is_xy = src.startswith("xy ", m.end())
+            if not out:
+                out.append("(")
+                col += 1
+            elif in_xy and is_xy and col < 99:
+                out.append(" (")
+                col += 2
+            else:
+                out.append("\n" + "\t" * depth + "(")
+                col = depth + 1
+            in_xy = is_xy
+            depth += 1
+            last = "("
+        elif t == ")":
+            if depth > 0:
+                depth -= 1
+            if last == ")" or multi:
+                out.append("\n" + "\t" * depth + ")")
+                col = depth + 1
+                multi = False
+            else:
+                out.append(")")
+                col += 1
+            last = ")"
+        else:
+            if last != "(":
+                if in_xy or col < 72:
+                    out.append(" ")
+                    col += 1
+                else:
+                    out.append("\n" + "\t" * depth)
+                    col = depth
+                    multi = True
+            out.append(t)
+            col += len(t)
+            last = t[-1]
+    return "".join(out) + "\n"
+
+
 def _num(v):
     s = f"{float(v):.6f}".rstrip("0").rstrip(".")
     return "0" if s in ("-0", "") else s
@@ -998,6 +1053,7 @@ PCB_FP_TEXT_T, PCB_FP_SHAPE_T, PCB_FP_ZONE_T = PCB_TEXT_T, PCB_SHAPE_T, PCB_ZONE
 PAD_ATTRIB_PTH, PAD_ATTRIB_SMD, PAD_ATTRIB_CONN, PAD_ATTRIB_NPTH = 0, 1, 2, 3
 CUST_PAD_SHAPE_IN_ZONE_OUTLINE, CUST_PAD_SHAPE_IN_ZONE_CONVEXHULL = 0, 1
 PAD_ATTRIB_STANDARD, PAD_ATTRIB_HOLE_NOT_PLATED = PAD_ATTRIB_PTH, PAD_ATTRIB_NPTH
+HOLE_ATTRIBUTE_HOLE_UNKNOWN, HOLE_ATTRIBUTE_HOLE_PAD, HOLE_ATTRIBUTE_HOLE_MECHANICAL = 0, 1, 2
 (PAD_SHAPE_CIRCLE, PAD_SHAPE_RECTANGLE, PAD_SHAPE_OVAL, PAD_SHAPE_TRAPEZOID, PAD_SHAPE_ROUNDRECT,
  PAD_SHAPE_CHAMFERED_RECT, PAD_SHAPE_CUSTOM) = range(7)
 PAD_SHAPE_RECT = PAD_SHAPE_RECTANGLE
@@ -3387,9 +3443,22 @@ class PAD(BOARD_CONNECTED_ITEM):
 
     def GetBoundingBox(self, *_):
         p, s = self.GetPosition(), self.GetSize()
-        if self.GetOrientation().AsDegrees() % 180:
-            s = VECTOR2I(s.y, s.x)
-        return BOX2I._of(p.x - s.x // 2, p.y - s.y // 2, p.x + s.x // 2, p.y + s.y // 2)
+        rot = self.GetOrientation().AsDegrees() % 180
+        if rot in (0, 90):
+            if rot:
+                s = VECTOR2I(s.y, s.x)
+            return BOX2I._of(p.x - s.x // 2, p.y - s.y // 2, p.x + s.x // 2, p.y + s.y // 2)
+        # turned by any other angle: the box around the turned outline (round ends as they are, not their corners)
+        hx, hy = s.x / 2.0, s.y / 2.0
+        shape = self.GetShape()
+        r = hx if shape == PAD_SHAPE_CIRCLE else min(hx, hy) if shape == PAD_SHAPE_OVAL else float(self.GetRoundRectCornerRadius()) if shape == PAD_SHAPE_ROUNDRECT else 0.0
+        r = min(r, hx, hy)
+        xs, ys = [], []
+        for x, y in ((-hx + r, -hy + r), (hx - r, -hy + r), (hx - r, hy - r), (-hx + r, hy - r)):
+            rx, ry = _rot(x, y, self.GetOrientation().AsDegrees())
+            xs.append(rx)
+            ys.append(ry)
+        return BOX2I._of(int(p.x + min(xs) - r), int(p.y + min(ys) - r), int(_math.ceil(p.x + max(xs) + r)), int(_math.ceil(p.y + max(ys) + r)))
 
     def GetBoundingRadius(self):
         s = self.GetSize()
@@ -5852,8 +5921,7 @@ class BOARD(EDA_ITEM):
         return self._of(FOOTPRINT)
 
     Footprints = GetFootprints
-    GetModules = GetFootprints
-    Modules = GetFootprints
+    # no GetModules / Modules: KiCad dropped them in version 6, and plugins test for them to tell which KiCad they run in
 
     def GetTracks(self):
         return self._of(PCB_TRACK)
@@ -6249,7 +6317,7 @@ class BOARD(EDA_ITEM):
             nets = [[Sym("net"), _n(c), n] for c, n in sorted(self._net_names.items())]
             first = next(i for i, h in enumerate(head) if h and h[0] == "net")
             head = [h for h in head[:first] if not (h and h[0] == "net")] + nets + [h for h in head[first:] if not (h and h[0] == "net")]
-        return "(kicad_pcb\n" + "\n".join("  " + _dump(n) for n in list(head) + [it._node for it in self._items if getattr(it, "_node", None) is not None]) + "\n)\n"
+        return _prettify("(kicad_pcb " + " ".join(_dump(n) for n in list(head) + [it._node for it in self._items if getattr(it, "_node", None) is not None]) + ")")
 
     def Save(self, path=None, *_):
         return SaveBoard(path or self._filename, self)

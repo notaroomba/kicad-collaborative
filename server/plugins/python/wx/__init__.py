@@ -1892,6 +1892,7 @@ def _call(fn, *a):
         if _before_event is not None:
             _before_event()
         fn(*a)
+        _flush_log()
     finally:
         if _after_event is not None:
             _after_event()
@@ -5835,19 +5836,48 @@ class _Log:
         print(text, end="")
 
 
+_pending_log = []          # (level, text): what wxLogGui would show in one window once the program is idle
+
+
+def _log(level, msg, a):
+    text = str(msg) % a if a else str(msg)
+    print(("", "Warning: ", "Error: ")[level] + text, file=_sys.stderr if level else _sys.stdout)
+    _pending_log.append((level, text))
+    if len(_pending_log) > 200:
+        del _pending_log[:100]
+
+
+def _flush_log():
+    """wxLogGui: messages, warnings and errors logged while an event was handled are shown to the person together, in
+    one window, when the handler is done (the desktop shows them at the next idle time)."""
+    if not _pending_log:
+        return
+    items = list(_pending_log)
+    del _pending_log[:]
+    level = max(l for l, _ in items)
+    try:
+        MessageBox("\n".join(t for _, t in items), "KiCad " + ("Information", "Warning", "Error")[level], OK | (ICON_INFORMATION, ICON_WARNING, ICON_ERROR)[level])
+    except Exception as e:                      # a log window must never break the plugin
+        print("the log window could not be shown:", e, file=_sys.stderr)
+
+
 def LogMessage(msg, *a):
+    _log(0, msg, a)
+
+
+def LogInfo(msg, *a):                           # shown on the desktop only in verbose mode; status text goes to the status bar
     print(str(msg) % a if a else str(msg))
 
 
-LogInfo = LogStatus = LogVerbose = LogDebug = LogMessage
+LogStatus = LogVerbose = LogDebug = LogInfo
 
 
 def LogWarning(msg, *a):
-    print("Warning:", str(msg) % a if a else str(msg), file=_sys.stderr)
+    _log(1, msg, a)
 
 
 def LogError(msg, *a):
-    print("Error:", str(msg) % a if a else str(msg), file=_sys.stderr)
+    _log(2, msg, a)
 
 
 LogSysError = LogFatalError = LogError
