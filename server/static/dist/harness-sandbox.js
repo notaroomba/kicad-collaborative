@@ -861,9 +861,55 @@ class Schematic(_Doc):
         """Everything drawn on top of something else, or off the page, as short lines.  An empty list is a clean sheet."""
         r = self.layout(limit=limit)
         out = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]
+        out += [f"wire crosses its own net without a junction: {n} at ({x}, {y})" for n, x, y in self.crossings()]
         if r.get("count", 0) > len(out):
             out.append(f"... and {r['count'] - len(out)} more")
         return out
+
+    def crossings(self) -> list:
+        """Places where two wires of the same net cross with no junction: [(net, x, y), ...].  Such a crossing reads as
+        unconnected although the names join the two, so it must not stay: \`build\` puts a junction on each."""
+        self.flush()
+        self._geom = None
+        g = self.geometry()
+        segs = [tuple(w) for w in g.get("wires", [])]
+        dots = {(round(j[0], 2), round(j[1], 2)) for j in g.get("junctions", [])}
+        on = lambda p, s: (abs(s[0] - s[2]) < 1e-6 and abs(p[0] - s[0]) < 1e-6 and min(s[1], s[3]) - 1e-6 <= p[1] <= max(s[1], s[3]) + 1e-6) or \\
+                          (abs(s[1] - s[3]) < 1e-6 and abs(p[1] - s[1]) < 1e-6 and min(s[0], s[2]) - 1e-6 <= p[0] <= max(s[0], s[2]) + 1e-6)
+        inside = lambda p, s: on(p, s) and min(abs(p[0] - s[0]) + abs(p[1] - s[1]), abs(p[0] - s[2]) + abs(p[1] - s[3])) > 1e-6
+        parent = list(range(len(segs)))
+
+        def find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+        for i, a in enumerate(segs):
+            for j in range(i + 1, len(segs)):
+                b = segs[j]
+                ends = [(a[0], a[1]), (a[2], a[3])], [(b[0], b[1]), (b[2], b[3])]
+                if any(on(p, b) for p in ends[0]) or any(on(p, a) for p in ends[1]):
+                    parent[find(i)] = find(j)
+        named: dict = {}
+        marks = [((p[3], p[4]), p[6]) for part in g.get("parts", []) for p in part.get("pins", []) if p[6]] + [((l[1], l[2]), l[0]) for l in g.get("labels", [])]
+        for at, net in marks:
+            for i, sg in enumerate(segs):
+                if on(at, sg):
+                    named.setdefault(find(i), net.lstrip("/"))
+        out = []
+        for i, a in enumerate(segs):
+            for j in range(i + 1, len(segs)):
+                b = segs[j]
+                h, v = (a, b) if abs(a[1] - a[3]) < 1e-6 else (b, a)
+                if not (abs(h[1] - h[3]) < 1e-6 and abs(v[0] - v[2]) < 1e-6):
+                    continue
+                p = (v[0], h[1])
+                if not (inside(p, h) and inside(p, v)) or (round(p[0], 2), round(p[1], 2)) in dots:
+                    continue
+                na, nb = named.get(find(i)), named.get(find(j))
+                if na and na == nb:
+                    out.append((na, p[0], p[1]))
+        return sorted(set(out))
 
     def autoplace_fields(self, *refs: str) -> None:
         """KiCad's Autoplace Fields for these parts (all parts without arguments): reference and value beside the body, clear of what is around."""
@@ -1128,6 +1174,7 @@ class Schematic(_Doc):
         intent = self._intent(parts, nets)
         drawer = Blocks(self, parts, nets, groups, intent, _GROUND, arrange_pins=swap_pins)
         drawer.force |= set(labels or [])
+        drawer.global_labels = bool(global_labels)      # a name at a wire end becomes a global label: a box centred on the wire, with a point
         for (ref, num), name in intent.items():      # a net wired inside its block has no label: remember it by one of its pins
             self.project.net_pins.setdefault(name, f"{ref}.{num}")
         bands, placed, problems = drawer.run()
@@ -1140,6 +1187,9 @@ class Schematic(_Doc):
         self.flush()
         self._repair(nets)
         self._join_labels(nets, groups, set(labels or []))
+        for _n, x, y in self.crossings():      # a wire that crosses its own net is joined to it there, so the drawing says what the netlist says
+            self.junction((x, y))
+        self.flush()
         if global_labels:      # a name at the end of a wire sends the net elsewhere: it is a global label with a direction, not text
             self.globalize()
         # ---- 3. measure each block as drawn, and what its heading and notes need
@@ -2197,6 +2247,16 @@ def arrange(sch, ref, spec, rank_of, net_of):
                     edge = [r[0] for r in sides[to]]
                     sides[to].append(((max(edge) + 2.54) if edge and side == "right" else (min(edge) - 2.54) if edge else 0.0, row[1]))
                     changed = True
+    else:
+        # a part that makes a supply reads left to right: its input supply comes in on the left (with the input capacitor
+        # there) and the outputs leave on the right, so a supply input the library drew on top moves to the left side
+        for row in list(sides["top"]):
+            q = row[1][0]
+            if q.get("type") == "power_in" and not q.get("hidden") and rank_of(q["number"], q.get("type")) == 2:
+                sides["top"].remove(row)
+                ys_left = [r[0] for r in sides["left"]]
+                sides["left"].append(((min(ys_left) - 2.54) if ys_left else 0.0, row[1]))
+                changed = True
     for side, rows in sides.items():
         rows.sort(key=lambda r: r[0])
         order = [st for _, st in rows]
@@ -2215,7 +2275,10 @@ def arrange(sch, ref, spec, rank_of, net_of):
     if not changed:
         return None
     from .parts import symbol as symgen
-    name = re.sub(r"[^A-Za-z0-9_.+\\-]", "_", f"{lib.split(':', 1)[-1]}_{ref}")
+    # the name carries the pin order: a sheet keeps the symbols it has seen, and a rebuild with another order must not get the old drawing back
+    import hashlib
+    sig = hashlib.sha1(repr([(k, [None if st is None else [q["number"] for q in st] for st in v]) for k, v in sorted(out.items())]).encode()).hexdigest()[:6]
+    name = re.sub(r"[^A-Za-z0-9_.+\\-]", "_", f"{lib.split(':', 1)[-1]}_{ref}_{sig}")
     text, info = symgen.symbol(name, [], "U", "", facts.get("datasheet") or "", facts.get("description") or "", sides=out)
     return Arranged(name, text, info, facts.get("datasheet") or "")
 
@@ -2398,7 +2461,7 @@ class Blocks:
         w = _up(self.width(net) + 0.6, 1.27)
         a = (at[0] + d * gap, at[1])
         e = (a[0] + d * w, at[1])
-        return [("wire", [at, e]), ("label", net, e, 180 if d > 0 else 0)], _rect(at[0], at[1] - 1.9, e[0] + d * 0.4, at[1] + 0.3), e
+        return [("wire", [at, e]), ("label", net, e, 180 if d > 0 else 0)], (_rect(at[0], at[1] - 1.25, e[0] + d * 3.2, at[1] + 1.25) if getattr(self, "global_labels", False) else _rect(at[0], at[1] - 1.9, e[0] + d * 0.4, at[1] + 0.3)), e
 
     def trunk(self, g, net, x, y, d, label, first=None, lead=G, used=(), wired=()):
         """Plan what hangs on and follows a wire leaving (x, y) in direction d (+1 right, -1 left) on this net."""
@@ -2693,6 +2756,11 @@ class Blocks:
                     for p in run[1:-1]:
                         ops.append(("dot", (bx, p["y"])))
                     origin = (bx, at["y"])
+                    if k == "sig" and len(run) % 2 == 0:
+                        # an even number of tied pins: the wire or name leaves from the middle of the tie, centred on the pair
+                        mid = (run[len(run) // 2 - 1]["y"] + run[len(run) // 2]["y"]) / 2
+                        if abs(mid / 1.27 - round(mid / 1.27)) < 1e-6:
+                            origin = (bx, round(mid, 4))
                     taken.append(_rect(run[0]["x"], run[0]["y"] - 0.2, bx, run[-1]["y"] + 0.2))
                 else:
                     origin = (at["x"], at["y"])
@@ -2764,13 +2832,27 @@ class Blocks:
                     continue
                 ys = sorted(e[3][1] for e in mine)
                 end = lvl if lvl is not None and (len(mine) > 1 or align) else max(rows) + G if gnd else min(rows) - G
+                straight = False
+                if len(mine) == 1 and mine[0][6]:
+                    # pins already tied by a bus beside them: the rail hangs straight off the end of that bus, with no step sideways
+                    X = mine[0][3][0]
+                    edge = max(p["y"] for p in mine[0][0]) if gnd else min(p["y"] for p in mine[0][0])
+                    if (end > edge + G) if gnd else (end < edge - G):
+                        rs = [_rect(X - 1.0, min(edge + 0.3, end), X + 1.0, max(edge + 0.3, end)) if gnd else _rect(X - 1.0, min(edge - 0.3, end), X + 1.0, max(edge - 0.3, end)), self.sym_rect(net, (X, end))]
+                        straight = not clash(rs)
+                        if straight:
+                            ys = [edge]
                 for i in range(2, 60):
+                    if straight:
+                        break
                     X = ps[0]["x"] + d * i * G
                     rs = [_rect(X - 1.0, min(ys[0], end), X + 1.0, max(ys[-1], end)), self.sym_rect(net, (X, end))]
                     if not clash(rs):
                         break
                 ops = []
                 for e in mine:
+                    if straight:
+                        continue
                     ops.append(("wire", [e[3], (X, e[3][1])]))
                     if e[6]:
                         ops.append(("dot", e[3]))
@@ -5119,7 +5201,7 @@ def library(symbols: list) -> str:
     return '(kicad_symbol_lib\\n\\t(version 20241209)\\n\\t(generator "kicad_harness")\\n\\t(generator_version "9.0")\\n' + "".join(symbols) + ")\\n"
 `;var p=require("node:fs"),O=globalThis,R=p.constants;process.binding=e=>{if(e==="constants")return{fs:R};throw new Error("not available")};for(let e of["WebSocket","fetch","XMLHttpRequest","EventSource","navigator"])try{delete O[e]}catch{}var z=new(require("node:string_decoder")).StringDecoder("utf8"),v=new Int32Array(new SharedArrayBuffer(4)),a="";function k(){let e=Buffer.alloc(65536);for(;;){let s=a.indexOf(`
 `);if(s>=0){let t=a.slice(0,s);return a=a.slice(s+1),t}let n=0;try{n=p.readSync(0,e,0,e.length,null)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}if(t&&t.code==="EOF")n=0;else throw t}n||process.exit(0),a+=z.write(e.subarray(0,n))}}function d(e){let s=Buffer.from(JSON.stringify(e)+`
-`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var B=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",b],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],G=`
+`,"utf8"),n=0;for(;n<s.length;)try{n+=p.writeSync(1,s,n,s.length-n)}catch(t){if(t&&t.code==="EAGAIN"){Atomics.wait(v,0,0,4);continue}throw t}}var G=[["kicad_harness/__init__.py",c],["kicad_harness/project.py",h],["kicad_harness/transport.py",m],["kicad_harness/sheet.py",u],["kicad_harness/rules.py",g],["kicad_harness/parts/__init__.py",b],["kicad_harness/parts/datasheet.py",_],["kicad_harness/parts/footprint.py",y],["kicad_harness/parts/search.py",w],["kicad_harness/parts/symbol.py",x]],B=`
 import json, sys, traceback
 sys.path.insert(0, "/kh")
 import kicad_harness as kh
@@ -5150,6 +5232,6 @@ def __kc_run(code):
     if project is not None and project.log:
         out["notes"] = project.log[-60:]
     return json.dumps(out)
-`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of B)i.FS.writeFile("/kh/"+r,l);i.runPython(G);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
+`;async function L(){let e=JSON.parse(k()),s=String(process.argv[2]||""),n=[],t=0,f=r=>{t<2e5&&(n.push(r),t+=r.length+1)},{loadPyodide:N}=require(s+"pyodide.js"),i=await N({indexURL:s,jsglobals:{},stdout:f,stderr:f});i.registerJsModule("_kc_host",{call:(r,l)=>(d({call:String(r),args:JSON.parse(String(l||"{}"))}),k())}),i.FS.mkdirTree("/kh/kicad_harness/parts");for(let[r,l]of G)i.FS.writeFile("/kh/"+r,l);i.runPython(B);let S=i.globals.get("__kc_run"),o;try{o=JSON.parse(String(S(String(e.code||""))))}catch(r){o={ok:!1,error:String(r&&r.message||r).split(`
 `).filter(Boolean).slice(-1)[0]||"The script failed."}}o.done=!0,o.output=n.join(`
 `),d(o),process.exit(0)}L().catch(e=>{try{d({done:!0,ok:!1,error:"The Python runtime could not be started: "+String(e&&e.message||e),output:""})}finally{process.exit(1)}});

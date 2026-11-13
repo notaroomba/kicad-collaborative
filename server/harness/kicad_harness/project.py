@@ -771,9 +771,55 @@ class Schematic(_Doc):
         """Everything drawn on top of something else, or off the page, as short lines.  An empty list is a clean sheet."""
         r = self.layout(limit=limit)
         out = [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]
+        out += [f"wire crosses its own net without a junction: {n} at ({x}, {y})" for n, x, y in self.crossings()]
         if r.get("count", 0) > len(out):
             out.append(f"... and {r['count'] - len(out)} more")
         return out
+
+    def crossings(self) -> list:
+        """Places where two wires of the same net cross with no junction: [(net, x, y), ...].  Such a crossing reads as
+        unconnected although the names join the two, so it must not stay: `build` puts a junction on each."""
+        self.flush()
+        self._geom = None
+        g = self.geometry()
+        segs = [tuple(w) for w in g.get("wires", [])]
+        dots = {(round(j[0], 2), round(j[1], 2)) for j in g.get("junctions", [])}
+        on = lambda p, s: (abs(s[0] - s[2]) < 1e-6 and abs(p[0] - s[0]) < 1e-6 and min(s[1], s[3]) - 1e-6 <= p[1] <= max(s[1], s[3]) + 1e-6) or \
+                          (abs(s[1] - s[3]) < 1e-6 and abs(p[1] - s[1]) < 1e-6 and min(s[0], s[2]) - 1e-6 <= p[0] <= max(s[0], s[2]) + 1e-6)
+        inside = lambda p, s: on(p, s) and min(abs(p[0] - s[0]) + abs(p[1] - s[1]), abs(p[0] - s[2]) + abs(p[1] - s[3])) > 1e-6
+        parent = list(range(len(segs)))
+
+        def find(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+        for i, a in enumerate(segs):
+            for j in range(i + 1, len(segs)):
+                b = segs[j]
+                ends = [(a[0], a[1]), (a[2], a[3])], [(b[0], b[1]), (b[2], b[3])]
+                if any(on(p, b) for p in ends[0]) or any(on(p, a) for p in ends[1]):
+                    parent[find(i)] = find(j)
+        named: dict = {}
+        marks = [((p[3], p[4]), p[6]) for part in g.get("parts", []) for p in part.get("pins", []) if p[6]] + [((l[1], l[2]), l[0]) for l in g.get("labels", [])]
+        for at, net in marks:
+            for i, sg in enumerate(segs):
+                if on(at, sg):
+                    named.setdefault(find(i), net.lstrip("/"))
+        out = []
+        for i, a in enumerate(segs):
+            for j in range(i + 1, len(segs)):
+                b = segs[j]
+                h, v = (a, b) if abs(a[1] - a[3]) < 1e-6 else (b, a)
+                if not (abs(h[1] - h[3]) < 1e-6 and abs(v[0] - v[2]) < 1e-6):
+                    continue
+                p = (v[0], h[1])
+                if not (inside(p, h) and inside(p, v)) or (round(p[0], 2), round(p[1], 2)) in dots:
+                    continue
+                na, nb = named.get(find(i)), named.get(find(j))
+                if na and na == nb:
+                    out.append((na, p[0], p[1]))
+        return sorted(set(out))
 
     def autoplace_fields(self, *refs: str) -> None:
         """KiCad's Autoplace Fields for these parts (all parts without arguments): reference and value beside the body, clear of what is around."""
@@ -1038,6 +1084,7 @@ class Schematic(_Doc):
         intent = self._intent(parts, nets)
         drawer = Blocks(self, parts, nets, groups, intent, _GROUND, arrange_pins=swap_pins)
         drawer.force |= set(labels or [])
+        drawer.global_labels = bool(global_labels)      # a name at a wire end becomes a global label: a box centred on the wire, with a point
         for (ref, num), name in intent.items():      # a net wired inside its block has no label: remember it by one of its pins
             self.project.net_pins.setdefault(name, f"{ref}.{num}")
         bands, placed, problems = drawer.run()
@@ -1050,6 +1097,9 @@ class Schematic(_Doc):
         self.flush()
         self._repair(nets)
         self._join_labels(nets, groups, set(labels or []))
+        for _n, x, y in self.crossings():      # a wire that crosses its own net is joined to it there, so the drawing says what the netlist says
+            self.junction((x, y))
+        self.flush()
         if global_labels:      # a name at the end of a wire sends the net elsewhere: it is a global label with a direction, not text
             self.globalize()
         # ---- 3. measure each block as drawn, and what its heading and notes need

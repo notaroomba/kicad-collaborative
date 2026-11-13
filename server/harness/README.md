@@ -72,9 +72,9 @@ parts show as their real model and lists under `without_model` the ones drawn as
 
 `build` swaps pins for a clean drawing, as a person does in the symbol editor: on the left and right of an IC (up to
 24 pins) supply straps go to the top, then pins whose parts rise to a supply, supply pins, signals, pins whose parts
-drop to ground, and ground straps at the bottom and a supply or ground pin drawn on the side of a sensor or logic part moves to the top or bottom edge, so all its supply pins share one rail with their capacitors (a regulator or charger keeps input and output on the sides) (`pins_swapped` in the result; `swap_pins=False` turns it off). A
+drop to ground, and ground straps at the bottom and a supply or ground pin drawn on the side of a sensor or logic part moves to the top or bottom edge, so all its supply pins share one rail with their capacitors (a regulator or charger reads left to right: its supply input moves to the left side with the input capacitor, outputs stay on the right) (`pins_swapped` in the result; `swap_pins=False` turns it off). A
 supply name KiCad's power library does not have (`VSYS`, `VDD_SPI`) gets a power symbol made for it instead of a
-label; `sch.supply("VMOTOR")` declares any name a supply. A part with one connected pin (an antenna) stands on the
+label; `sch.supply("VMOTOR")` declares any name a supply. Pins tied together by a short bus get their rail straight off the end of that bus, an even number of tied signal pins sends its wire or name out from the middle of the tie, and a wire that crosses its own net gets a junction (`sch.crossings()` lists any that are left, and `sch.overlaps()` reports them). A part with one connected pin (an antenna) stands on the
 end of the chain that feeds it.
 
 `build` draws each block like a datasheet's application circuit (`kicad_harness/sheet.py`): a wire leaves each
