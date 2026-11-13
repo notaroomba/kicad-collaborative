@@ -102,6 +102,8 @@ export function pcbTextGeom(item: Item, n: SNode, x: number, y: number, text: st
   const ex: TextExtra = Object.assign({ z, w: thick, mirror: ef.mirror, pcb: true, italic: ef.italic, ...faceOf(ef), sizeX: ef.sizeX }, knockout ? { knockout: true, layoutW: attrW } : null, extra || {});
   // (render_cache "text" angle (polygon …) …): the outlines KiCad drew this text with in an outline font, in board
   // coordinates.  A plot uses them as pcbnew does (the font itself cannot be read here); the screen draws the face.
+  // outlines belong to a text in an outline font: one put back in the KiCad font loses them (pcbnew writes none)
+  if (!ef.face) { const stale = kid(n, "render_cache"); if (stale) n.splice(n.indexOf(stale), 1); }
   const rc = ef.face ? trackedRenderCache(n, x, y, JSON.stringify([text, rot || 0, ef.size, ef.sizeX, ef.just, ef.bold, ef.italic, ef.face, layer])) : null;
   if (ef.hide) {
     const shadow: GeomSink = { geom: [], bbox: null }; textLines(shadow, x, y, text, ef.size, color, rot, ef.just, layer, ex);
@@ -109,8 +111,12 @@ export function pcbTextGeom(item: Item, n: SNode, x: number, y: number, text: st
     if (shadow.geom.length) (item.hiddenGeom = item.hiddenGeom || []).push(...shadow.geom);
     return null;
   }
-  if (rc) ex.outline = { node: rc, x, y, rot: rot || 0, shown: text };
-  if (ef.face) ex.block = { x, y, rot: rot || 0, text };
+  if (rc) ex.outline = { node: rc, x, y, rot: rot || 0, shown: text, upright: !!ex.upright };
+  if (ef.face) {
+    ex.block = { x, y, rot: rot || 0, text, upright: !!ex.upright };
+    // the node the text is written in (not enumerable: the record still copies to a worker), for serializeItem's outlines
+    Object.defineProperty(ex.block, "node", { value: n, enumerable: false });
+  }
   const first = textLines(item, x, y, text, ef.size, color, rot, ef.just, layer, ex);
   if (first && ef.face) first.outlineFirst = true;
   return first;

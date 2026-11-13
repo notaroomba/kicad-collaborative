@@ -243,6 +243,62 @@ test("text in an outline font with no stored outlines is plotted from the font f
   K.fontChanged();
 });
 
+test("a text set in an outline font is written with its outlines, as pcbnew stores them, and nothing else changes", () => {
+  const fs = require("fs"), file = path.join(__dirname, "..", "..", "..", "qa", "resources", "fonts", "NotoSans-Regular.ttf");
+  if (!fs.existsSync(file)) { console.log("  skip (no font file beside the server)"); return; }
+  const raw = fs.readFileSync(file), data = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.length);
+  const faced = `(gr_text "Hot" (at 10 10) (layer "F.SilkS") (uuid "o") (effects (font (face "Noto Sans") (size 2 2) (thickness 0.3)) (justify left bottom)))`;
+  const plain = `(gr_text "Plain" (at 10 20) (layer "F.SilkS") (uuid "p") (effects (font (size 2 2) (thickness 0.3)) (justify left bottom)))`;
+  const fp = `(footprint "R" (layer "F.Cu") (uuid "f") (at 30 30 90)
+    (property "Reference" "R1" (at 0 -2 90) (layer "F.SilkS") (uuid "fr") (effects (font (face "Noto Sans") (size 1 1) (thickness 0.15))))
+    (property "Value" "1k" (at 0 2 90) (layer "F.Fab") (uuid "fv") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at 0 0 90) (size 1 1) (layers "F.Cu") (uuid "fp1")))`;
+  K.fontChanged();
+  const d = K.parseDoc(mini(20261031, faced + plain + fp), "kicad_pcb");
+  const before = { o: K.serializeItem(d, d.items.get("o")), p: K.serializeItem(d, d.items.get("p")), f: K.serializeItem(d, d.items.get("f")) };
+  assert(!/render_cache/.test(before.o + before.f), "without the font file nothing is added");
+  K.setFontData("Noto Sans", false, false, { data, bold: false, italic: false });
+  const o = K.serializeItem(d, d.items.get("o"));
+  const m = /\(effects [^\n]*?\(justify left bottom\)\)\s*\(render_cache "Hot" 0\s*\(polygon\s*\(pts\s*\(xy [\d.]+ [\d.]+\)/.exec(o);
+  assert(m, "the outlines follow the effects, with the shown text and the angle: " + o.slice(0, 400));
+  assert.strictEqual((o.match(/\(polygon/g) || []).length, 3, "one polygon per letter");
+  assert.strictEqual(o.replace(/\(render_cache "Hot" 0(\s*\(polygon\s*\(pts(\s*\(xy [-\d.e]+ [-\d.e]+\))+\s*\)\s*\))+\s*\)/, "").replace(/\s+/g, " ").replace(/ \)/g, ")"), before.o.replace(/\s+/g, " ").replace(/ \)/g, ")"), "the rest of the text is written as before");
+  assert.strictEqual(K.serializeItem(d, d.items.get("p")), before.p, "a text in the KiCad font is left alone");
+  const f = K.serializeItem(d, d.items.get("f"));
+  assert(/\(property "Reference" "R1"[\s\S]*?\(render_cache "R1" 90/.test(f) && (f.match(/render_cache/g) || []).length === 1, "a footprint's text in a font gets them too, its other text does not: " + (f.match(/render_cache "[^"]*" [\d.]+/g) || []).join(", "));
+  // a KiCad (or an editor) without the font plots the stored outlines: where the font put them
+  const withFont = F.plotGerbers({ doc: d, setup: mini(20261031, ""), projectName: "o" }, { layers: ["F.SilkS"] }).files[0].text;
+  K.fontChanged();
+  const d2 = K.parseDoc(o, "kicad_pcb"); assert(d2.items.get("o"), "the written item reads back");
+  const r = F.plotGerbers({ doc: d2, setup: mini(20261031, ""), projectName: "o" }, { layers: ["F.SilkS"] });
+  assert(/G36/.test(r.files[0].text) && !r.warnings.some((w) => /Noto Sans/.test(w)), "plotted from the stored outlines without the font: " + r.warnings.join(" | "));
+  const xs = (t) => [...t.matchAll(/G36\*\s*X(-?\d+)Y(-?\d+)D02/g)].map((q) => q[1] + "," + q[2]).sort().join(" ");
+  assert.strictEqual(xs(r.files[0].text).split(" ").length >= 3, true);
+  assert(withFont.includes("G36"), "and the plot with the font has regions too");
+  // an edit: the text changes, the outlines are drawn again for the new string; a move carries them along
+  K.setFontData("Noto Sans", false, false, { data, bold: false, italic: false });
+  const it = d.items.get("o"); it.node[1] = "Hit"; K.buildGeom(d, it);
+  const e = K.serializeItem(d, it);
+  assert(/render_cache "Hit" 0/.test(e) && !/render_cache "Hot"/.test(e), "outlines of the new string");
+  const firstX = (t) => +/\(render_cache "[^"]*" [\d.]+\s*\(polygon\s*\(pts\s*\(xy ([-\d.]+)/.exec(t)[1];
+  K.moveItem(d, it, 15, 10, 1e6);
+  assert(Math.abs(firstX(K.serializeItem(d, it)) - firstX(e) - 5) < 1e-6, "moved with the text");
+  K.fontChanged();
+});
+
+test("pair kerning is read from the font's GPOS table", () => {
+  const fs = require("fs"), file = path.join(__dirname, "..", "..", "..", "qa", "resources", "fonts", "NotoSans-Regular.ttf");
+  if (!fs.existsSync(file)) { console.log("  skip (no font file beside the server)"); return; }
+  const raw = fs.readFileSync(file), data = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.length);
+  K.fontChanged(); K.setFontData("Noto Sans", false, false, { data, bold: false, italic: false });
+  const width = (text) => { const o = F.outlineText({ face: "Noto Sans", bold: false, italic: false, text, x: 0, y: 0, rot: 0, size: 10, sizeX: 10, h: "left", v: "bottom", mirror: false }); const x = o.polys.flat().map((q) => q[0]); return Math.max(...x) - Math.min(...x); };
+  // "AV" sits closer than its letters' own advances put it; "HH" does not kern
+  const av = width("AV"), a = width("A"), v = width("V"), hh = width("HH"), h = width("H");
+  assert(av < a + v - 0.2, `AV is kerned: ${av} against ${a} + ${v}`);
+  assert(hh > 2 * h, `HH is not: ${hh} against 2 x ${h}`);
+  K.fontChanged();
+});
+
 Promise.all(pending).then(() => { console.log(`\n${passed} passed, ${failed} failed`); process.exit(failed ? 1 : 0); });
 
 /** The entries of a zip archive (stored or deflated). */

@@ -69,6 +69,36 @@
 static const KIFONT::FONT* renderCacheKey( const KIFONT::FONT* aFont );
 static unsigned faceGeneration( const KIFONT::FONT* aFont );
 
+
+/**
+ * The stored glyph outlines of a text, for a copy of it.  They are the text's geometry when its
+ * font is not on this computer, and a copy made after loading is still that text.
+ */
+static std::unique_ptr<EDA_TEXT_RENDER_CACHE_DATA> copiedRenderCache( const EDA_TEXT_RENDER_CACHE_DATA* aCache )
+{
+    if( !aCache || aCache->glyphs.empty() )
+        return nullptr;
+
+    std::unique_ptr<EDA_TEXT_RENDER_CACHE_DATA> copy = std::make_unique<EDA_TEXT_RENDER_CACHE_DATA>();
+
+    for( const std::unique_ptr<KIFONT::GLYPH>& glyph : aCache->glyphs )
+    {
+        const KIFONT::OUTLINE_GLYPH* outline = dynamic_cast<const KIFONT::OUTLINE_GLYPH*>( glyph.get() );
+
+        if( !outline )
+            return nullptr;
+
+        copy->glyphs.emplace_back( std::make_unique<KIFONT::OUTLINE_GLYPH>( *outline ) );
+    }
+
+    copy->text = aCache->text;
+    copy->font = aCache->font;
+    copy->angle = aCache->angle;
+    copy->offset = aCache->offset;
+    copy->mirrored = aCache->mirrored;
+    return copy;
+}
+
 class OUTPUTFORMATTER;
 
 
@@ -127,7 +157,7 @@ EDA_TEXT::EDA_TEXT( const EDA_TEXT& aText ) :
     m_visible = aText.m_visible;
     m_legacyBoldStrokeWidth = aText.m_legacyBoldStrokeWidth;
 
-    m_render_cache.reset();
+    m_render_cache = copiedRenderCache( aText.m_render_cache.get() );
 
     {
         std::lock_guard<std::mutex> bboxLock( aText.m_bbox_cacheMutex );
@@ -161,7 +191,7 @@ EDA_TEXT& EDA_TEXT::operator=( const EDA_TEXT& aText )
     m_visible = aText.m_visible;
     m_legacyBoldStrokeWidth = aText.m_legacyBoldStrokeWidth;
 
-    m_render_cache.reset();
+    m_render_cache = copiedRenderCache( aText.m_render_cache.get() );
 
     {
         std::scoped_lock<std::mutex, std::mutex> bboxLock( m_bbox_cacheMutex, aText.m_bbox_cacheMutex );
@@ -375,6 +405,11 @@ int EDA_TEXT::legacyBoldStrokeWidth() const
 
 void EDA_TEXT::SetVisible( bool aVisible )
 {
+    // The board parser says this of every text it has just read, after its stored glyph outlines:
+    // saying what was already so must not throw them away.
+    if( m_visible == aVisible )
+        return;
+
     m_visible = aVisible;
     ClearRenderCache();
 }

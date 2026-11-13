@@ -245,6 +245,12 @@ await step('board text', a, async () => {
   const t = await textItem(a, /^REV A$/);
   check('the face is written first in the font, as KiCad writes it', /\["font",\["face","Roboto Mono"\],\["size"/.test(t.node), t.node);
   check('Bob\'s board has it', await until(async () => /\["face","Roboto Mono"\]/.test((await textItem(b, /^REV A$/)).node)));
+  // pcbnew stores the outlines of such a text in the board; so does the editor, and they reach everybody
+  const cached = (page) => until(async () => /\["render_cache","REV A",0,\["polygon",\["pts",\["xy",[\d.]+,[\d.]+\]/.test((await textItem(page, /^REV A$/)).node), 15000);
+  check('the text is written with its outlines, as KiCad stores them', await cached(a), (await textItem(a, /^REV A$/)).node.slice(0, 300));
+  check('and Bob\'s copy of the board has them', await cached(b), (await textItem(b, /^REV A$/)).node.slice(0, 300));
+  const kept = JSON.parse((await textItem(b, /^REV A$/)).node);
+  check('nothing else of the text changed', JSON.stringify(kept.filter((k) => !(Array.isArray(k) && k[0] === 'render_cache'))) === JSON.stringify(JSON.parse(t.node).filter((k) => !(Array.isArray(k) && k[0] === 'render_cache'))));
   check('and both draw it in Roboto Mono', (await until(() => faceOn(a, 'Roboto Mono'))) && (await until(() => faceOn(b, 'Roboto Mono'))));
   await a.keyboard.press('Escape'); await a.waitForTimeout(500);
   await shot(a, '08-board-alice'); await shot(b, '09-board-bob');

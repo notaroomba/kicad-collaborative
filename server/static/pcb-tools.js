@@ -2070,7 +2070,7 @@
     return m;
   }
 
-  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Core.js
+  // node_modules/clipper2-ts/dist/Core.js
   var ClipType;
   (function(ClipType2) {
     ClipType2[ClipType2["NoClip"] = 0] = "NoClip";
@@ -2729,7 +2729,7 @@
   var InvalidRect64 = Object.freeze(Rect64Utils.createInvalid());
   var InvalidRectD = Object.freeze(RectDUtils.createInvalid());
 
-  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Engine.js
+  // node_modules/clipper2-ts/dist/Engine.js
   var B02 = BigInt(0);
   var B22 = BigInt(2);
   var B42 = BigInt(4);
@@ -5594,7 +5594,7 @@
     }
   };
 
-  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Offset.js
+  // node_modules/clipper2-ts/dist/Offset.js
   var JoinType;
   (function(JoinType2) {
     JoinType2[JoinType2["Miter"] = 0] = "Miter";
@@ -6210,7 +6210,7 @@
     }
   };
 
-  // ../../../kicad-collaborative/server/node_modules/clipper2-ts/dist/Clipper.js
+  // node_modules/clipper2-ts/dist/Clipper.js
   var B23 = BigInt(2);
   function unionD(subject, clipOrFillRule, fillRuleOrPrecision, precision) {
     if (typeof clipOrFillRule === "number") {
@@ -6495,7 +6495,7 @@
     }
   }
 
-  // ../../../kicad-collaborative/server/node_modules/opentype.js/dist/opentype.module.js
+  // node_modules/opentype.js/dist/opentype.module.js
   if (!String.prototype.codePointAt) {
     (function() {
       var defineProperty = (function() {
@@ -6590,17 +6590,17 @@
   ]);
   var code_tree = new Tree();
   var lengths = new Uint8Array(288 + 32);
-  function tinf_build_bits_base(bits, base, delta, first) {
+  function tinf_build_bits_base(bits2, base, delta, first) {
     var i, sum;
     for (i = 0; i < delta; ++i) {
-      bits[i] = 0;
+      bits2[i] = 0;
     }
     for (i = 0; i < 30 - delta; ++i) {
-      bits[i + delta] = i / delta | 0;
+      bits2[i + delta] = i / delta | 0;
     }
     for (sum = first, i = 0; i < 30; ++i) {
       base[i] = sum;
-      sum += 1 << bits[i];
+      sum += 1 << bits2[i];
     }
   }
   function tinf_build_fixed_trees(lt, dt) {
@@ -17903,9 +17903,9 @@
   Font.prototype.getKerningValue = function(leftGlyph, rightGlyph) {
     leftGlyph = leftGlyph.index || leftGlyph;
     rightGlyph = rightGlyph.index || rightGlyph;
-    var gposKerning = this.position.defaultKerningTables;
-    if (gposKerning) {
-      return this.position.getKerningValue(gposKerning, leftGlyph, rightGlyph);
+    var gposKerning2 = this.position.defaultKerningTables;
+    if (gposKerning2) {
+      return this.position.getKerningValue(gposKerning2, leftGlyph, rightGlyph);
     }
     return this.kerningPairs[leftGlyph + "," + rightGlyph] || 0;
   };
@@ -18742,6 +18742,140 @@
   });
   var opentype_module_default = opentype;
 
+  // web/fab/gpos-kern.ts
+  var NONE = () => 0;
+  var bits = (v) => {
+    let n = 0;
+    for (let b = v & 255; b; b >>= 1) n += b & 1;
+    return n;
+  };
+  function gposKerning(data, script) {
+    try {
+      return read(new DataView(data), script);
+    } catch (e) {
+      return NONE;
+    }
+  }
+  function read(d, script) {
+    const tag = (o) => String.fromCharCode(d.getUint8(o), d.getUint8(o + 1), d.getUint8(o + 2), d.getUint8(o + 3));
+    const n = d.getUint16(4);
+    let gpos2 = 0;
+    for (let i = 0; i < n; i++) if (tag(12 + 16 * i) === "GPOS") gpos2 = d.getUint32(12 + 16 * i + 8);
+    if (!gpos2) return NONE;
+    const u16 = (o) => d.getUint16(o), i16 = (o) => d.getInt16(o);
+    const scripts = gpos2 + u16(gpos2 + 4), features = gpos2 + u16(gpos2 + 6), lookups = gpos2 + u16(gpos2 + 8);
+    const scriptOf2 = /* @__PURE__ */ new Map();
+    for (let i = 0, c = u16(scripts); i < c; i++) scriptOf2.set(tag(scripts + 2 + 6 * i), scripts + u16(scripts + 2 + 6 * i + 4));
+    const st = scriptOf2.get(script) ?? scriptOf2.get("DFLT") ?? scriptOf2.get("latn") ?? [...scriptOf2.values()][0];
+    if (st === void 0) return NONE;
+    let lang = u16(st) ? st + u16(st) : 0;
+    if (!lang && u16(st + 2)) lang = st + u16(st + 2 + 4);
+    if (!lang) return NONE;
+    const wanted = [];
+    for (let i = 0, c = u16(lang + 4); i < c; i++) {
+      const fi = u16(lang + 6 + 2 * i);
+      if (fi >= u16(features) || tag(features + 2 + 6 * fi) !== "kern") continue;
+      const ft = features + u16(features + 2 + 6 * fi + 4);
+      for (let k = 0, lc = u16(ft + 2); k < lc; k++) {
+        const li = u16(ft + 4 + 2 * k);
+        if (!wanted.includes(li)) wanted.push(li);
+      }
+    }
+    wanted.sort((a, b) => a - b);
+    const coverage = (o) => {
+      const m = /* @__PURE__ */ new Map();
+      if (u16(o) === 1) for (let i = 0, c = u16(o + 2); i < c; i++) m.set(u16(o + 4 + 2 * i), i);
+      else if (u16(o) === 2) for (let i = 0, c = u16(o + 2); i < c; i++) {
+        const s = u16(o + 4 + 6 * i), e = u16(o + 6 + 6 * i), ci = u16(o + 8 + 6 * i);
+        for (let g = s; g <= e; g++) m.set(g, ci + g - s);
+      }
+      return m;
+    };
+    const classes = (o) => {
+      const m = /* @__PURE__ */ new Map();
+      if (u16(o) === 1) {
+        const s = u16(o + 2);
+        for (let i = 0, c = u16(o + 4); i < c; i++) {
+          const cl = u16(o + 6 + 2 * i);
+          if (cl) m.set(s + i, cl);
+        }
+      } else if (u16(o) === 2) for (let i = 0, c = u16(o + 2); i < c; i++) {
+        const s = u16(o + 4 + 6 * i), e = u16(o + 6 + 6 * i), cl = u16(o + 8 + 6 * i);
+        if (cl) for (let g = s; g <= e; g++) m.set(g, cl);
+      }
+      return m;
+    };
+    const subtable = (o) => {
+      const format = u16(o), cov = coverage(o + u16(o + 2)), vf1 = u16(o + 4), vf2 = u16(o + 6);
+      const s1 = 2 * bits(vf1), s2 = 2 * bits(vf2), adv = vf1 & 4 ? 2 * bits(vf1 & 3) : -1;
+      if (format === 1) {
+        const sets = /* @__PURE__ */ new Map();
+        return (l, r) => {
+          const ci = cov.get(l);
+          if (ci === void 0 || ci >= u16(o + 8)) return void 0;
+          let set = sets.get(l);
+          if (!set) {
+            set = /* @__PURE__ */ new Map();
+            const ps = o + u16(o + 10 + 2 * ci);
+            for (let i = 0, c = u16(ps); i < c; i++) {
+              const rec = ps + 2 + i * (2 + s1 + s2);
+              set.set(u16(rec), adv < 0 ? 0 : i16(rec + 2 + adv));
+            }
+            sets.set(l, set);
+          }
+          return set.get(r);
+        };
+      }
+      if (format === 2) {
+        const c1 = classes(o + u16(o + 8)), c2 = classes(o + u16(o + 10)), n1 = u16(o + 12), n2 = u16(o + 14);
+        return (l, r) => {
+          if (!cov.has(l)) return void 0;
+          const a = c1.get(l) || 0, b = c2.get(r) || 0;
+          if (a >= n1 || b >= n2) return 0;
+          return adv < 0 ? 0 : i16(o + 16 + (a * n2 + b) * (s1 + s2) + adv);
+        };
+      }
+      return null;
+    };
+    const tables = [];
+    for (const li of wanted) {
+      if (li >= u16(lookups)) continue;
+      const lk = lookups + u16(lookups + 2 + 2 * li);
+      let type = u16(lk);
+      const subs = [];
+      for (let i = 0, c = u16(lk + 4); i < c; i++) {
+        let so = lk + u16(lk + 6 + 2 * i), t = type;
+        if (t === 9) {
+          t = u16(so + 2);
+          so += d.getUint32(so + 4);
+        }
+        if (t !== 2) continue;
+        const s = subtable(so);
+        if (s) subs.push(s);
+      }
+      if (subs.length) tables.push(subs);
+      type = 0;
+    }
+    if (!tables.length) return NONE;
+    const memo = /* @__PURE__ */ new Map();
+    return (l, r) => {
+      const key = l * 65536 + r;
+      let v = memo.get(key);
+      if (v === void 0) {
+        v = 0;
+        for (const subs of tables) for (const s of subs) {
+          const k = s(l, r);
+          if (k !== void 0) {
+            v += k;
+            break;
+          }
+        }
+        memo.set(key, v);
+      }
+      return v;
+    };
+  }
+
   // web/fab/outline-font.ts
   var EM = 1.4;
   var INTERLINE = 1.68;
@@ -18757,13 +18891,43 @@
     let f = PARSED.get(data);
     if (f === void 0) {
       try {
-        f = opentype_module_default.parse(data);
+        f = { font: opentype_module_default.parse(data), data, kern: /* @__PURE__ */ new Map() };
       } catch (e) {
         f = null;
       }
       PARSED.set(data, f);
     }
     return f;
+  }
+  function scriptOf(text) {
+    for (const ch of text) {
+      const c = ch.codePointAt(0);
+      if (c >= 1024 && c <= 1327) return "cyrl";
+      if (c >= 880 && c <= 1023) return "grek";
+      if (c > 64 && c < 592) return "latn";
+    }
+    return "latn";
+  }
+  function glyphsOf(font, text) {
+    try {
+      return font.stringToGlyphs(text);
+    } catch (e) {
+      return [...text].map((c) => font.charToGlyph(c));
+    }
+  }
+  function kerning(h, script, a, b) {
+    let k = h.kern.get(script);
+    if (!k) {
+      k = gposKerning(h.data, script);
+      h.kern.set(script, k);
+    }
+    const v = k(a.index, b.index);
+    if (v) return v;
+    try {
+      return h.font.getKerningValue(a, b) || 0;
+    } catch (e) {
+      return 0;
+    }
   }
   function fontFor(face, bold, italic) {
     const K4 = globalThis.KiCadCanvas;
@@ -18849,24 +19013,20 @@
     close();
     return out;
   }
-  function layLine(font, slant, line3, size, sizeX) {
+  function layLine(held, slant, line3, size, sizeX) {
+    const font = held.font;
     const laid = { contours: [], bars: [], width: 0 };
     let x = 0;
     for (const run2 of runs(line3)) {
       const small = run2.sup || run2.sub, k = small ? SUPERSUB : 1;
       const sx = sizeX * EM * k, sy = size * EM * k;
       const dy = run2.sub ? size * SUPERSUB * SUB_DROP : run2.sup ? -size * SUPERSUB * SUPER_RISE : 0;
-      const glyphs = font.stringToGlyphs(run2.text), start = x;
+      const glyphs = glyphsOf(font, run2.text), start = x, script = scriptOf(run2.text);
       for (let i = 0; i < glyphs.length; i++) {
         const g = glyphs[i];
         for (const c of contours(g)) laid.contours.push(c.map(([gx, gy]) => [x + (slant ? SQUEEZE * gx - SLANT * gy : gx) * sx, dy + gy * sy]));
         let adv = (g.advanceWidth || 0) / font.unitsPerEm;
-        if (i + 1 < glyphs.length) {
-          try {
-            adv += font.getKerningValue(g, glyphs[i + 1]) / font.unitsPerEm;
-          } catch (e) {
-          }
-        }
+        if (i + 1 < glyphs.length) adv += kerning(held, script, g, glyphs[i + 1]) / font.unitsPerEm;
         x += adv * sx;
       }
       if (run2.over && x > start) laid.bars.push([start + sizeX * 0.1, -size * OVERBAR, x - sizeX * 0.1, -size * OVERBAR]);
@@ -18955,8 +19115,8 @@
     oc.polys = null;
     const rc = oc.node;
     if (S2(rc[1]) !== oc.shown) return null;
-    const turn = ((num(rc[2], 0) - oc.rot) % 360 + 360) % 360;
-    if (Math.min(turn, 360 - turn) > 0.01) return null;
+    const full = oc.upright ? 180 : 360, turn = ((num(rc[2], 0) - oc.rot) % full + full) % full;
+    if (Math.min(turn, full - turn) > 0.01) return null;
     const polys = [];
     for (const p of rc.slice(3)) {
       if (!isList2(p) || str(p[0]) !== "polygon") continue;
@@ -25134,11 +25294,11 @@
       const rr = K.kid(pad, "roundrect_rratio");
       const radius = rr ? rnd(num3(rr[1]) * Math.min(w, h)) : 0;
       const ch = K.kid(pad, "chamfer");
-      let bits = 0;
-      for (const c of ch ? ch.slice(1) : []) bits |= CHAMFER_BITS[str3(c)] || 0;
+      let bits2 = 0;
+      for (const c of ch ? ch.slice(1) : []) bits2 |= CHAMFER_BITS[str3(c)] || 0;
       const cr = K.kid(pad, "chamfer_ratio");
       const ratio = cr ? num3(cr[1]) : 0.2;
-      local = roundChamferedRectToPolygon([w, h], shape === "roundrect" ? radius : 0, bits ? ratio : 0, bits, maxError);
+      local = roundChamferedRectToPolygon([w, h], shape === "roundrect" ? radius : 0, bits2 ? ratio : 0, bits2, maxError);
     }
     return local.map((p) => {
       const q = rot2(p, orient);

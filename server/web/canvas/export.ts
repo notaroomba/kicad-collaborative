@@ -1,9 +1,9 @@
 // kicad-canvas — GENERATED SOURCE MODULE (split from the former static/kicad-canvas.js; static/kicad-canvas.js is now the esbuild output of web/canvas/index.ts — edit these modules, not the bundle).
 import { PCB_BG, PCB_PAGE_LIMITS, PCB_SHEET, SCH, schTheme } from "./colors";
-import { inSchTheme } from "./geom";
+import { buildGeom, inSchTheme } from "./geom";
 import { bboxOf } from "./hit";
 import { FONT_EM, FONT_FAMILY, HIDDEN_TEXT_ALPHA, cssFamily, dashPattern, faceAvailable, makeCanvas, render, textMode, tracePath } from "./render";
-import { isList, kid, quotedMask, str, splitLines } from "./sexpr";
+import { QUOTED, isList, kid, quotedMask, str, splitLines } from "./sexpr";
 import { documentDrawingSheet } from "./sheet";
 import { TEXT_INTERLINE, lineOffsets, textWidth } from "./text";
 import { strokeLine, strokeOrigin } from "./stroke-font";
@@ -337,6 +337,44 @@ export function serializeItem(doc: Pick<Doc, "type" | "version" | "lib">, item: 
     const lib = item.kind === "symbol" ? (doc.lib.get(str((kid(item.node, "lib_name") || [])[1])) || doc.lib.get(str((kid(item.node, "lib_id") || [])[1]))) : null;
     return (lib ? "(lib_symbols " + serialize(lib) + ") " : "") + serialize(item.node);
   }
+  ensureRenderCaches(doc as Doc, item as Item);
   legacyBare = Number(doc.version) > 0 && Number(doc.version) < 20200000;
   try { return wrapFragment(doc, serialize(item.node)); } finally { legacyBare = false; }
+}
+
+/** What web/fab answers for a text record: the outlines to store with it, or null when what is stored still fits (or the font is not held). */
+export interface RenderCacheData { text: string; angle: number; polys: [number, number][][] }
+let renderCacheWriter: ((g: unknown) => RenderCacheData | null) | null = null;
+/** web/fab registers itself here once it is loaded: it reads the glyphs out of the font files. */
+export function setRenderCacheWriter(fn: ((g: unknown) => RenderCacheData | null) | null): void { renderCacheWriter = fn; }
+
+const CACHED_TEXT = new Set(["gr_text", "fp_text", "property", "gr_text_box", "fp_text_box", "table_cell"]);
+const namesFace = (n: SAtom): boolean => isList(n) && (n[0] === "face" || n.some(namesFace));
+const r6 = (v: number): number => Math.round(v * 1e6) / 1e6;
+/**
+ * pcbnew stores the outlines of a text set in an outline font with the text ((render_cache "text" angle
+ * (polygon (pts …)) …), PCB_IO_KICAD_SEXPR::formatRenderCache), so that a KiCad without the font still draws
+ * and plots it.  A text written here gets the same: its item is laid out as the screen lays it out and every
+ * such text whose stored outlines are missing or no longer fit is given new ones.  Nothing else of the item
+ * changes, and a text in the KiCad font is left alone.
+ */
+function ensureRenderCaches(doc: Doc, item: Item): void {
+  if (!renderCacheWriter || doc.type !== "pcb" || !doc.items || !isList(item.node) || !namesFace(item.node)) return;
+  try {
+    const scratch = Object.assign({}, item, { geom: [], hiddenGeom: null, bbox: null }) as Item;
+    buildGeom(doc, scratch);   // drops outlines that no longer belong to their text, moves the ones that do
+    const seen = new Set<unknown>(); let added = false;
+    for (const g of ([] as Geom[]).concat(scratch.geom || [], scratch.hiddenGeom || [])) {
+      const t = g as unknown as { t?: string; face?: string; outlineFirst?: boolean; block?: { node?: SAtom[] } };
+      if (t.t !== "text" || !t.face || !t.outlineFirst || !t.block || !t.block.node) continue;
+      const n = t.block.node; if (seen.has(n) || !CACHED_TEXT.has(str(n[0]))) continue; seen.add(n);
+      const data = renderCacheWriter(g); if (!data) continue;
+      const old = kid(n, "render_cache"); if (old) n.splice(n.indexOf(old), 1);
+      const rc: SAtom[] = ["render_cache", data.text, r6(data.angle)];
+      for (const poly of data.polys) rc.push(["polygon", (["pts"] as SAtom[]).concat(poly.map((q) => ["xy", r6(q[0]), r6(q[1])]))]);
+      QUOTED.set(rc as never, 2);   // the text is written quoted
+      const ef = kid(n, "effects"); n.splice(ef ? n.indexOf(ef) + 1 : n.length, 0, rc); added = true;
+    }
+    if (added) buildGeom(doc, scratch);   // notes where each text was when its outlines were drawn, so a later move carries them
+  } catch (e) { /* the item is written as it stands */ }
 }

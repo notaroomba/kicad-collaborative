@@ -136,6 +136,8 @@ interface KiCadCanvasApi {
   allFontData(): [string, boolean, boolean, import("./canvas/render").FontBytes][];
   /** set by the editor: fetch the font files of every text of a document before it is plotted */
   loadFontsFor: ((doc: unknown) => Promise<void>) | null;
+  /** web/fab registers the function that draws a text's outlines from its font file; serializeItem stores them with the text */
+  setRenderCacheWriter(fn: ((g: unknown) => import("./canvas/export").RenderCacheData | null) | null): void;
   /** the board editor's track / via sizes and routing controls (web/canvas/pcb-sizes.ts) */
   pcbSizes: typeof import("./canvas/pcb-sizes").pcbSizes;
   /** a library symbol (lib_symbols / .kicad_sym entry) as a drawable document in library space (web/canvas/libsym.ts) */

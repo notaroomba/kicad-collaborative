@@ -40,7 +40,7 @@ import { collapseSelectionTo, drawDrag, drawZoomRect, finishGroupDrag, finishZoo
 import { clearSelection, selectedSet, drawBoxSel, drawSelection, fieldLocalDelta, fieldOf, finishBoxSel, groupExpand, hitAny, nearestFootprint, renderProps, renderPropsInto, hitOpts } from "./selection";
 import { E } from "./state";
 import "./panels/index";
-import { activeModule, commitChanges, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack, unlockedForEdit } from "./tools";
+import { activeModule, commitChanges, commitObservers, deleteSelected, deleteSelection, moduleTool, moveOp, publishUndo, redoLast, redoStack, rotateSelected, runModuleHotkey, selectAll, setTool, toolCtx, undoLast, undoStack, unlockedForEdit } from "./tools";
 import { api, closePopover, toast } from "./util";
 import { saveTextDocument } from "./projectfile";
 import { applyView, cmtPanel, dragG, fitView, isSch, requestRender, stage, world, worldMm, zoomBy } from "./view";
@@ -53,7 +53,7 @@ import { importSymbolLibraries } from "../symedit/dialogs";
 import { comboOf, keyHooks, kicadActionAvailable, runKicadAction, runSpecHotkey, typingTarget } from "./hotkeys";
 import { selectionCount } from "./menu-actions";
 import { installTableCells } from "./tablecells";   // last: its imports must not reorder the modules above
-import { initFonts } from "./fonts";
+import { fontCommitObserver, initFonts } from "./fonts";
 window.CollabApp = { getState: store.get, subscribe: store.subscribe, dispatch: (a) => dispatchAction(a), renderProps: (el) => renderPropsInto(el), selectionCount };
 
 
@@ -66,7 +66,8 @@ document.addEventListener("click", (ev) => {
 window.addEventListener("popstate", route);
 
 KiCadCanvas.onAssetLoaded = () => requestRender();
-initFonts();
+initFonts({ doc: () => E.kdoc, send: (changes) => sendOp(changes as never) });
+commitObservers.push(fontCommitObserver);
 
 
 // ---- editing tools (schematic / board modules register on window.CollabTools) ----

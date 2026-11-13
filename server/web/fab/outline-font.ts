@@ -8,6 +8,7 @@
 // The layout is KiCad's: an em of 1.4 × the text height (m_outlineFontSizeCompensation), lines 1.68 × the height
 // apart, the block placed by FONT::getLinePositions, sub/superscripts at 0.64 and an overbar 1.23 heights up.
 import opentype from "opentype.js";
+import { gposKerning } from "./gpos-kern";
 import { fracture, union } from "./poly";
 import { type Pt } from "./prims";
 
@@ -15,7 +16,8 @@ interface FontBytes { data: ArrayBuffer; bold: boolean; italic: boolean }
 interface CanvasFonts { fontData?(face: string, bold: boolean, italic: boolean): FontBytes | null }
 interface PathCmd { type: string; x?: number; y?: number; x1?: number; y1?: number; x2?: number; y2?: number }
 interface OtGlyph { index: number; advanceWidth?: number; getPath(x: number, y: number, size: number): { commands: PathCmd[] } }
-interface OtFont { unitsPerEm: number; stringToGlyphs(s: string): OtGlyph[]; getKerningValue(a: OtGlyph, b: OtGlyph): number }
+interface OtFont { unitsPerEm: number; stringToGlyphs(s: string): OtGlyph[]; charToGlyph(c: string): OtGlyph; getKerningValue(a: OtGlyph, b: OtGlyph): number }
+interface Held { font: OtFont; data: ArrayBuffer; kern: Map<string, (l: number, r: number) => number> }
 
 const EM = 1.4;            // OUTLINE_FONT::m_outlineFontSizeCompensation
 const INTERLINE = 1.68;    // METRICS::m_InterlinePitch
@@ -25,18 +27,34 @@ const OVERBAR = 1.23;      // METRICS::m_OverbarHeight
 const SLANT = Math.sin(12 * Math.PI / 180), SQUEEZE = Math.cos(12 * Math.PI / 180);   // the 12° shear of a family without an italic
 const CURVE_STEPS = 8;
 
-const PARSED = new WeakMap<ArrayBuffer, OtFont | null>();
-function parsed(data: ArrayBuffer): OtFont | null {
+const PARSED = new WeakMap<ArrayBuffer, Held | null>();
+function parsed(data: ArrayBuffer): Held | null {
   let f = PARSED.get(data);
   if (f === undefined) {
-    try { f = (opentype as unknown as { parse(b: ArrayBuffer): OtFont }).parse(data); } catch (e) { f = null; }
+    try { f = { font: (opentype as unknown as { parse(b: ArrayBuffer): OtFont }).parse(data), data, kern: new Map() }; } catch (e) { f = null; }
     PARSED.set(data, f);
   }
   return f;
 }
 
+/** The script HarfBuzz would shape a run in, as far as kerning tables differ by it. */
+function scriptOf(text: string): string {
+  for (const ch of text) { const c = ch.codePointAt(0)!; if (c >= 0x400 && c <= 0x52f) return "cyrl"; if (c >= 0x370 && c <= 0x3ff) return "grek"; if (c > 0x40 && c < 0x250) return "latn"; }
+  return "latn";
+}
+/** The glyphs of a run: ligatures applied where opentype.js can read the font's substitutions, else letter by letter. */
+function glyphsOf(font: OtFont, text: string): OtGlyph[] {
+  try { return font.stringToGlyphs(text); } catch (e) { return [...text].map((c) => font.charToGlyph(c)); }
+}
+/** The advance adjustment between two glyphs, font units: GPOS pair kerning, else the old 'kern' table. */
+function kerning(h: Held, script: string, a: OtGlyph, b: OtGlyph): number {
+  let k = h.kern.get(script); if (!k) { k = gposKerning(h.data, script); h.kern.set(script, k); }
+  const v = k(a.index, b.index); if (v) return v;
+  try { return h.font.getKerningValue(a, b) || 0; } catch (e) { return 0; }
+}
+
 /** The font a text is drawn with: the file held for the face in that style, and whether it has to be slanted. */
-function fontFor(face: string, bold: boolean, italic: boolean): { font: OtFont; slant: boolean } | null {
+function fontFor(face: string, bold: boolean, italic: boolean): { font: Held; slant: boolean } | null {
   const K = (globalThis as unknown as { KiCadCanvas?: CanvasFonts }).KiCadCanvas;
   if (!K || typeof K.fontData !== "function") return null;
   // the style asked for; failing that whatever of the family is held (a text made bold after its font was loaded)
@@ -100,19 +118,20 @@ function contours(glyph: OtGlyph): Pt[][] {
 
 interface Laid { contours: Pt[][]; bars: [number, number, number, number][]; width: number }
 /** One line laid out from x = 0 on its baseline, in mm before the text's own transform (y down). */
-function layLine(font: OtFont, slant: boolean, line: string, size: number, sizeX: number): Laid {
+function layLine(held: Held, slant: boolean, line: string, size: number, sizeX: number): Laid {
+  const font = held.font;
   const laid: Laid = { contours: [], bars: [], width: 0 };
   let x = 0;
   for (const run of runs(line)) {
     const small = run.sup || run.sub, k = small ? SUPERSUB : 1;
     const sx = sizeX * EM * k, sy = size * EM * k;
     const dy = run.sub ? size * SUPERSUB * SUB_DROP : run.sup ? -size * SUPERSUB * SUPER_RISE : 0;
-    const glyphs = font.stringToGlyphs(run.text), start = x;
+    const glyphs = glyphsOf(font, run.text), start = x, script = scriptOf(run.text);
     for (let i = 0; i < glyphs.length; i++) {
       const g = glyphs[i];
       for (const c of contours(g)) laid.contours.push(c.map(([gx, gy]) => [x + (slant ? SQUEEZE * gx - SLANT * gy : gx) * sx, dy + gy * sy] as Pt));
       let adv = (g.advanceWidth || 0) / font.unitsPerEm;
-      if (i + 1 < glyphs.length) { try { adv += font.getKerningValue(g, glyphs[i + 1]) / font.unitsPerEm; } catch (e) { /* a table opentype.js cannot read: no kerning */ } }
+      if (i + 1 < glyphs.length) adv += kerning(held, script, g, glyphs[i + 1]) / font.unitsPerEm;
       x += adv * sx;
     }
     // drawMarkup: the bar a tenth of the width short at each end

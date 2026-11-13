@@ -12,7 +12,7 @@ import { type DrillFile, type DrillOptions, boardHoles, drillFiles } from "./dri
 import { type GerberAttrs, projectGuid, writeGerber } from "./gerber";
 import { type BoardModel, type FabDoc, type Node, DEFAULT_VARIANT, boardModel, boardVariantNames, isCopper } from "./model";
 import { type BomLine, type BomOptions, type Placement, type PlacementOptions, bom, bomCsv, placementAscii, placementCsv, placements, refCompare } from "./parts";
-import { PlotLog, type PlotOptions, centrePoints, plotFile } from "./plot";
+import { PlotLog, type PlotOptions, centrePoints, plotFile, renderCacheFor } from "./plot";
 import { type FabPreset, PRESETS, presetById, jlcPlacement } from "./presets";
 import { primPolys } from "./poly";
 import { type Prim, type Pt } from "./prims";
@@ -233,4 +233,6 @@ export function fillZones(ctx: FabContext, rules: FillRules, ids: string[] | nul
 export const api = { outlineText, vrmlModels: (ctx: FabContext) => vrmlModels(modelOf(ctx)), writeVrml: (ctx: FabContext, o: VrmlOptions, meshOf: Parameters<typeof writeVrml>[2]) => writeVrml(modelOf(ctx), o, meshOf), meshVrml, plotBoard, pluginPlot, drillJob, drillReport, markerParts, pnpGerber, pnpFileName, DEFAULT_VARIANT, variantNames: (variants: Node | null | undefined): string[] => boardVariantNames(variants || null, refCompare), writeSvg, writePdf, writePs, writeDxf, dxfTextString, writePng, paintPage, gerberJobFile, boardPage, plotFileName, outputPath, fillZones, filledZoneNode, storedFill, polyArea, PRESETS, presetById, plottableLayers, layerDisplayName, layerAttrs, protelExtension, model: modelOf, plotGerbers, drillFiles: drill, positions, bom: billOfMaterials, placementCsv, placementAscii, bomCsv,
   jlcPlacement, buildPackage, packageZip, zip, crc32, writeGerber, primPolys };
 export type KiCadFabApi = typeof api & { open?: () => void };
+// the canvas stores a text's outlines with it when it writes the item (canvas/export.ts ensureRenderCaches)
+{ const C = (globalThis as unknown as { KiCadCanvas?: { setRenderCacheWriter?(fn: typeof renderCacheFor): void } }).KiCadCanvas; if (C && C.setRenderCacheWriter) C.setRenderCacheWriter(renderCacheFor); }
 (globalThis as unknown as { KiCadFab: KiCadFabApi }).KiCadFab = Object.assign((globalThis as unknown as { KiCadFab?: KiCadFabApi }).KiCadFab || {}, api);

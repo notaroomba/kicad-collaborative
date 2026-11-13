@@ -26,7 +26,7 @@ import { PCB_BG, PCB_COLORS, PCB_HIDDEN_DEFAULT, SCH, SCH_DEFAULT, SCH_THEMES, p
 import { PAPER_SIZES, addItem, applyDocProps, computeBBox, mm2mils, paperSize, parseDoc, titleBlockOf } from "./doc";
 import type { Doc } from "./types";
 import { addChange, boardChangeExtras, createItem, fieldAt, fieldBoxes, groupMemberIds, moveItem, netNameOf, newUuid, pinPoints, pointInQuad, removeChange, replaceChange, typeNameOf, wireEndsAt } from "./edit";
-import { SvgPath, renderPng, renderSvg, serialize, serializeItem, svgDrawingSheet, wrapFragment } from "./export";
+import { SvgPath, renderPng, renderSvg, serialize, serializeItem, setRenderCacheWriter, svgDrawingSheet, wrapFragment } from "./export";
 import { buildGeom, ensureSchTheme, inSchTheme } from "./geom";
 import { hatchLines } from "./geom-pcb";
 import { ORIENT, resolveLib, schDisplay, schFormat, symbolTransform } from "./geom-sch";
@@ -84,7 +84,7 @@ export const api = {
   onAssetLoaded: null,
   // font hook: set to a function (face, bold, italic) => void; called the first time text in an outline font is
   // drawn, so the app can fetch the font (web/editor/fonts.ts) and call fontChanged(face) once it is on the page
-  onFontWanted: null, fontChanged, wantFace, faceAvailable, setFontData, fontData, allFontData, loadFontsFor: null,
+  onFontWanted: null, fontChanged, wantFace, faceAvailable, setFontData, fontData, allFontData, loadFontsFor: null, setRenderCacheWriter,
   hopShapes, wireHopShape, hopOver, drawHalo, SCH_SELECTION_SHADOW, HL_DIM, brightened, highlightColor, imageInfo, base64Bytes, IMAGE_CACHE, strokeOf, boxOf, cornersInSequence, shiftTable, tableCellShownText, cellAddr, parseCellAddress, autoPanDirection, autoPanStep, AUTOPAN_TICK_MS,
   darkened, mixColor, brightenedItemColor, lockedShadowMargin, footprintBodyBox, drawLockedShadow, DRC_HIGHLIGHTED, HL_FACTOR, HC_EDGE_MIN, viaSpans, umbilicalLines, viaStitchOutline, viaStitchTicks, gridItemGeom, gridItemArea, gridTakesPrecedence, autoSparsePitch,
   // the drawing sheet (web/canvas/sheet.ts): KiCad's built-in (kicad_wks …) description, its interpreter

@@ -152,6 +152,8 @@ async function withDocument<T>(req: Request, name: unknown, fn: (sess: DocSessio
   const p = needProject(req); const entry = findDocument(p, name); const sess = session(entry);
   const pro = await projectFile(p); const doc = await sess.current();
   sheetContext(doc, entry, p, pro);
+  // a board text set in a font is written with its outlines, as pcbnew stores them: the font files have to be here
+  if (doc && doc.type === "pcb" && req.canWrite) { try { await K().loadFontsFor(doc); } catch { /* written without outlines */ } }
   const ed = editorFor(req, p, sess, pro); W.CollabEditor = ed;
   try { return await fn(sess, doc, ed); } finally { W.CollabEditor = null; }
 }

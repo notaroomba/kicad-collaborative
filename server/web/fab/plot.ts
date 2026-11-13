@@ -84,7 +84,7 @@ function polyline(pts: Pt[], close: boolean, w: number, g: KGeom, out: Prim[]): 
 /** EDA_TEXT::GetEffectiveTextPenWidth: the pen never exceeds a quarter of the glyph size. */
 const clampPen = (pen: number, size: number, sizeX: number): number => Math.min(pen, Math.min(Math.abs(size), Math.abs(sizeX)) * 0.25);
 
-interface OutlineCache { node: Node; x: number; y: number; rot: number; shown: string; polys?: Pt[][] | null }
+interface OutlineCache { node: Node; x: number; y: number; rot: number; shown: string; upright?: boolean; polys?: Pt[][] | null }
 
 /**
  * The outlines KiCad stored for a text set in an outline font, when they still belong to the text: the same
@@ -95,8 +95,9 @@ function cachedOutlines(oc: OutlineCache, size: number, sizeX: number): Pt[][] |
   if (oc.polys !== undefined) return oc.polys;
   oc.polys = null;
   const rc = oc.node; if (S(rc[1]) !== oc.shown) return null;
-  const turn = ((num(rc[2], 0) - oc.rot) % 360 + 360) % 360;
-  if (Math.min(turn, 360 - turn) > 0.01) return null;
+  // PCB_TEXT::GetDrawRotation: a footprint text kept upright is stored at its angle folded into ]-90, 90]
+  const full = oc.upright ? 180 : 360, turn = ((num(rc[2], 0) - oc.rot) % full + full) % full;
+  if (Math.min(turn, full - turn) > 0.01) return null;
   const polys: Pt[][] = [];
   for (const p of rc.slice(3)) {
     if (!isList(p) || str(p[0]) !== "polygon") continue;
@@ -114,6 +115,24 @@ function cachedOutlines(oc: OutlineCache, size: number, sizeX: number): Pt[][] |
   if (!onX || !onY) return null;
   oc.polys = polys;
   return polys;
+}
+
+/**
+ * What pcbnew would store with a text set in an outline font (formatRenderCache): the outlines of every line,
+ * overbars as rounded strokes.  null when the stored ones still fit, or the font file is not held.
+ */
+export function renderCacheFor(gIn: unknown): { text: string; angle: number; polys: Pt[][] } | null {
+  const g = gIn as KGeom; const blk = g.block as { x: number; y: number; rot: number; text: string } | undefined;
+  if (!g.face || !blk) return null;
+  const size = N(g.size, 1), sizeX = N(g.sizeX) > 0 ? N(g.sizeX) : size;
+  const oc = g.outline as OutlineCache | undefined; if (oc && cachedOutlines(oc, size, sizeX)) return null;
+  const drawn = outlineText({ face: S(g.face), bold: !!g.bold, italic: !!g.italic, text: blk.text, x: blk.x, y: blk.y, rot: N(g.rot), size, sizeX, h: S(g.h) || "center", v: S(g.v) || "middle", mirror: !!g.mirror });
+  if (!drawn || (!drawn.polys.length && !drawn.bars.length)) return null;
+  const pen = clampPen(N(g.w) > 0 ? N(g.w) : size / 8, size, sizeX);
+  const polys = drawn.polys.concat(drawn.bars.map(([x1, y1, x2, y2]) => stadium(x1, y1, x2, y2, pen)));
+  let angle = ((blk.rot % 360) + 360) % 360;
+  if ((blk as { upright?: boolean }).upright) { while (angle > 90) angle -= 180; while (angle <= -90) angle += 180; }   // GetDrawRotation
+  return { text: blk.text, angle, polys };
 }
 
 /** The box a knockout text is cut out of: the box of what the text draws, in the text's own frame, grown by the margin. */

@@ -97,11 +97,11 @@ export type TextGeom = GeomFlags & {
   multiline?: boolean; knockout?: boolean | number[]; layoutW?: number;
   padMin?: number; padLayers?: string[]; minPx?: number;
   /** an outline-font text's stored render cache (board coordinates) and where the text was when it was noted */
-  outline?: { node: SNode; x: number; y: number; rot: number; shown: string };
+  outline?: { node: SNode; x: number; y: number; rot: number; shown: string; upright?: boolean };
   /** the first line of a text set in an outline font: the one its outlines (stored, or drawn from the font file) go out with */
   outlineFirst?: boolean;
   /** an outline-font text as a whole (every line, its anchor): what a plot lays out from the font file */
-  block?: { x: number; y: number; rot: number; text: string };
+  block?: { x: number; y: number; rot: number; text: string; upright?: boolean };
   /** a board text (PCB_TEXT / PCB_FIELD) a DXF plot may write as a TEXT entity (DXF_PLOTTER::plotOneLineOfText): its bold flag */
   dxfText?: { bold: boolean };
   /** a footprint text's own position (EDA_TEXT::GetTextPos, board coordinates): where its umbilical line starts */
