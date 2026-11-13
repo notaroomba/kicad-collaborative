@@ -21,7 +21,7 @@ import { placeCrosshair } from "./crosshair";
 import { renderObjects, snapMm, syncItemsFromDoc } from "./doc";
 import { sendOp } from "./net";
 import { breakFollow, sendPresence } from "./peers";
-import { clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps, selFilter } from "./selection";
+import { HIT_PX, clearSelection, drawSelection, filterAllows, nearestFootprint, renderProps, selFilter } from "./selection";
 import { E } from "./state";
 import { activeModule, moveOp as moveOpRaw, runModuleAction, setTool, toolCtx as toolCtxRaw, unlockedForEdit } from "./tools";
 import { applyView, canvas as canvasRaw, dragG as dragGRaw, isSch, pxPerMm, requestRender, requestRepaint, requestZoomEnd, stage as stageRaw, worldMm as worldMmRaw, zoomBy as zoomByRaw, zoomLimits } from "./view";
@@ -76,7 +76,7 @@ export function clearAllSelection(publish = true): void {
 const clickSlop = (): number => 5 / Math.max(1, E.zoom * 0.6);
 function pcbPick(mm: Mm): KItem | null {
   const d = doc(), t = pcbTools(); if (!d || !t) return null;
-  const it = t.hitTestItem(d, mm[0], mm[1], 0.15 + 2 / Math.max(1, pxPerMm()));
+  const it = t.hitTestItem(d, mm[0], mm[1], HIT_PX / Math.max(1, pxPerMm()));   // the same 5 px accuracy as hitsAt and the footprint test
   return it && filterAllows(it.kind, it) ? it : null;
 }
 /**
@@ -190,7 +190,7 @@ export function selectionBox(): [number, number, number, number] | null {
  */
 export function hitsAt(mm: Mm): KItem[] {
   const d = doc(); if (!d) return [];
-  const [x, y] = mm, tol = Math.max(0.1, 3 / Math.max(1, pxPerMm())), hidden = E.hiddenLayers as Set<string>;
+  const [x, y] = mm, tol = isSch() ? Math.max(0.1, 3 / Math.max(1, pxPerMm())) : HIT_PX / Math.max(1, pxPerMm()), hidden = E.hiddenLayers as Set<string>;
   const geomHit = KiCadCanvas.geomHit as (g: KGeom, x: number, y: number, tol: number) => boolean;
   const out: KItem[] = [];
   for (const it of d.items.values()) {
@@ -202,7 +202,10 @@ export function hitsAt(mm: Mm): KItem[] {
       if (g.layer && hidden.has(g.layer)) continue;
       if (g.padText || g.padNum || g.noBox) continue;
       if (it.kind === "zone" && g.fill) continue;
-      try { if (geomHit(g, x, y, tol)) { hit = true; break; } } catch { /* a geometry record the hit test does not know */ }
+      // a footprint's texts are its fields (PCB_FIELD, collected on their own): only a point on the text itself counts
+      // for the footprint, never the click tolerance around it (that ring is the footprint hull's business: FOOTPRINT::HitTestAccurate)
+      const t = it.kind === "footprint" && g.t === "text" ? 0 : tol;
+      try { if (geomHit(g, x, y, t)) { hit = true; break; } } catch { /* a geometry record the hit test does not know */ }
     }
     if (hit) out.push(it);
   }

@@ -10,6 +10,9 @@ import { esc } from "./util";
 
 /** Called by clearSelection: selections kept outside E (the table cell selection, editor/tablecells.ts). */
 export const clearHooks: (() => void)[] = [];
+/** GENERAL_COLLECTOR's accuracy (collectors.h: 5 px): one hit tolerance for a board click, the hover selection
+ *  R / F / M / Del use and the Clarify Selection candidates, so a point is a hit for all of them or for none. */
+export const HIT_PX = 5;
 import type { BoxSel, ItemSummary, SheetEntry } from "./types";
 import { dragG, isSch, pxPerMm, requestRender, requestRepaint, selG, svgText } from "./view";
 /** Board groups: a member drags/deletes with its whole group (KiCad's default). */
@@ -55,7 +58,7 @@ export function hitOpts() { return { hidden: E.hiddenLayers, side: !isSch() && E
 
    // {id, onGeom} of the latest nearestFootprint() call
 export function nearestFootprint(x: number, y: number, radiusMm: number): ItemSummary | SheetEntry | null {
-  if (E.kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; E.lastFpHit = KiCadCanvas.hitTestDetail(E.kdoc, x, y, Math.min(radiusMm, 3 / Math.max(1, pxPerMm())) /* ~3 device px, KiCad's hit tolerance */, hitOpts()); const id = E.lastFpHit ? E.lastFpHit.id : null; const hitIt = id ? E.kdoc.items.get(id) : null; if (hitIt && !filterAllows(hitIt.kind, hitIt)) return null; return id ? E.items.find((f2: ItemSummary) => f2.id === id) || E.sheets.find((sh: SheetEntry) => sh.id === id) /* a hierarchical sheet is picked like a symbol */ || null : null; }
+  if (E.kdoc) { const f = selFilter(); if ((isSch() && f.symbols === false) || (!isSch() && f.footprints === false)) return null; E.lastFpHit = KiCadCanvas.hitTestDetail(E.kdoc, x, y, Math.min(radiusMm, (isSch() ? 3 : HIT_PX) / Math.max(1, pxPerMm())) /* KiCad's hit accuracy: GENERAL_COLLECTOR's 5 px on a board */, hitOpts()); const id = E.lastFpHit ? E.lastFpHit.id : null; const hitIt = id ? E.kdoc.items.get(id) : null; if (hitIt && !filterAllows(hitIt.kind, hitIt)) return null; return id ? E.items.find((f2: ItemSummary) => f2.id === id) || E.sheets.find((sh: SheetEntry) => sh.id === id) /* a hierarchical sheet is picked like a symbol */ || null : null; }
   let best: ItemSummary | null = null, bestD = radiusMm;
   for (const fp of E.items) { const d = Math.hypot(fp.x / E.IU - x, fp.y / E.IU - y); if (d < bestD) { best = fp; bestD = d; } }
   return best;
