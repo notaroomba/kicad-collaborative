@@ -61,6 +61,7 @@ export interface RouteOptions {
   weights?: Partial<Weights>;
   powerWidth?: number;           // track width for supply nets (GND, +3V3, VBUS …) that have no class of their own; 0 keeps the class width.  Default: twice the class width, 0.3 to 0.5 mm
   impedance?: boolean;           // size tracks for the impedance their nets call for (a plan's impedance, else by name: USB 90 Ω, HDMI/Ethernet 100 Ω, antenna feeds 50 Ω); default true
+  splitPairs?: boolean;          // route a differential pair's two lines separately when no coupled run fits (default false: they stay unrouted and the report says why)
   fanoutLanes?: boolean | number; // keep a lane (mm, default 0.25) out from each fine-pitch chip pin for its own net only; false turns it off
   matchLengths?: boolean;        // lengthen the shorter members of a matched group with serpentines; default true
   match?: { nets: string[]; tolerance?: number; length?: number }[];   // nets to bring to one length (the longest, or the length given), within the tolerance in mm (default 0.25)
@@ -102,7 +103,8 @@ export interface Anchor { p: Pt; layers: number[]; shape: Shape | null; cluster:
 export interface Conn {
   id: number; net: string; cls: RuleClass; a: Anchor; b: Anchor; len: number;
   nodes: Node[] | null; shapes: Obstacle[]; viaCells: number[]; landed: number; rips: number; feat: Features | null; stubs: [Pt, Pt, number][]; zoneEnd: boolean; ends?: [Anchor, Anchor]; stitch?: boolean; moot?: boolean; pair?: boolean;
-  why?: string;
+  why?: string; pairOnly?: string;   // a differential pair's connection whose coupled run could not be laid: it is never routed alone
+  partner?: Conn;                    // the other line of a pair that cannot be one coupled run (its pads change layer): routed beside it
 }
 export interface RouteItem { kind: "segment" | "via"; node: any; net: any; netName: string; conn: number }
 export interface RouteResult {
@@ -560,7 +562,65 @@ export class Router {
     for (const pr of this.pairList) {
       if (pr.cp.nodes || pr.cn.nodes) continue; const key = pr.cp.id + "/" + pr.cn.id;
       const why = this.layPair(pr); if (why) this.pairReports.set(key, { p: pr.p.key, n: pr.n.key, coupled: false, reason: why });
+      // a short hop (pads a few millimetres apart, as from a connector to the ESD part beside it) is too short to need coupling: each line goes straight, the second along the first
+      if (why && Math.max(pr.cp.len, pr.cn.len) <= 3) { pr.cp.pairOnly = pr.cn.pairOnly = undefined; pr.cp.partner = pr.cn; pr.cn.partner = pr.cp; }
+      else pr.cp.pairOnly = pr.cn.pairOnly = why || undefined;
     }
+  }
+  /** A pair whose two ends are on different layers: a via pair side by side just off the pads of one end, a short
+   *  fan-out from those pads to the vias on their own layer, and from the vias the pair goes on as one coupled run on
+   *  the other end's layer.  Both lines change layer at the same place through matched vias. */
+  private layPairVias(pr: Pair): string {
+    const G = this.G, P = this.P, { cp, cn } = pr; const w = Math.min(cp.cls.width, cn.cls.width), clr = Math.max(cp.cls.clr, cn.cls.clr), gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0);
+    const viaD = Math.max(cp.cls.viaD, cn.cls.viaD), pitch = viaD + Math.max(clr, gap); const all = G.layers.map((_, l) => l).filter((l) => G.routable[l]);
+    if (!this.allowVias || !pr.p.guide.allowVias || !pr.n.guide.allowVias) return "its pads are not all on one layer and vias are not allowed";
+    const nEnd = (e: "a" | "b"): "a" | "b" => (pr.swap ? (e === "a" ? "b" : "a") : e);
+    const half = (a: Anchor) => { const sh = a.shape as any; return sh ? (sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0) : 0; };
+    let why = "its pads are not all on one layer, and there is no room for a via pair beside them";
+    for (const end of ["b", "a"] as const) {   // the via pair at one end; the coupled run on the other end's layer
+      const other = end === "a" ? "b" : "a"; const pv = cp[end], nv = cn[nEnd(end)], po = cp[other], no = cn[nEnd(other)];
+      const mine = all.filter((l) => pv.layers.includes(l) && nv.layers.includes(l)), run = all.filter((l) => po.layers.includes(l) && no.layers.includes(l));
+      if (!mine.length || !run.length) continue; const lv = mine[0];
+      const mx = (pv.p[0] + nv.p[0]) / 2, my = (pv.p[1] + nv.p[1]) / 2; let ux = nv.p[0] - pv.p[0], uy = nv.p[1] - pv.p[1]; const h = Math.hypot(ux, uy); if (h < 1e-6) continue; ux /= h; uy /= h;
+      const tx = (po.p[0] + no.p[0]) / 2 - mx, ty = (po.p[1] + no.p[1]) / 2 - my; let ex = -uy, ey = ux; if (ex * tx + ey * ty < 0) { ex = -ex; ey = -ey; }
+      const s1 = Math.max(half(pv), half(nv)) + clr + viaD / 2;
+      for (const t of [s1, s1 + 0.3, s1 + 0.6, s1 + 1, s1 + 1.6, s1 + 2.4, s1 + 3.2, s1 + 4]) for (const side of [0, 0.5, -0.5, 1, -1, 1.6, -1.6, 2.4, -2.4]) for (const dir of [1, -1]) for (const bend of [false, true]) {
+        const cx = mx + ex * t * dir + ux * side, cy = my + ey * t * dir + uy * side;
+        const cell = (x: number, y: number) => ({ ix: Math.round((x - G.ox) / G.g), iy: Math.round((y - G.oy) / G.g) });
+        const kp = cell(cx - ux * pitch / 2, cy - uy * pitch / 2), kn = cell(cx + ux * pitch / 2, cy + uy * pitch / 2); const vp = this.mm(kp), vn = this.mm(kn);
+        if (Math.hypot(vp[0] - vn[0], vp[1] - vn[1]) < viaD + clr - 1e-6) continue;
+        const via = (q: Pt): Shape => ({ t: "circle", x: q[0], y: q[1], r: viaD / 2 } as Shape), stub = (a: Pt, b: Pt) => ({ t: "seg", a, b, r: w / 2 } as Shape & { a: Pt; b: Pt });
+        // each line leaves its pad straight out past the pad's end, then turns to its via
+        const fan = (a: Anchor, v: Pt) => { const o = half(a) + w / 2 + 0.05, q: Pt = [r6(a.p[0] + ex * dir * o), r6(a.p[1] + ey * dir * o)]; return !bend || (q[0] - a.p[0]) * (v[0] - a.p[0]) + (q[1] - a.p[1]) * (v[1] - a.p[1]) < o * o ? [stub(a.p, v)] : [stub(a.p, q), stub(q, v)]; };
+        const sp = fan(pv, vp), sn = fan(nv, vn); const gapOK = (xs: Shape[], ys: Shape[]) => xs.every((x) => ys.every((y) => P.shapeGap(x, y) >= clr - 1e-4));
+        if (!gapOK(sp, sn) || !gapOK(sp, [via(vn)]) || !gapOK(sn, [via(vp)])) continue;
+        this.cur = cp; this.curSoft = false; if (!all.every((l) => this.clearOf(via(vp), l, pr.p.key, clr)) || !sp.every((x) => this.clearOf(x, lv, pr.p.key, clr))) continue;
+        this.cur = cn; if (!all.every((l) => this.clearOf(via(vn), l, pr.n.key, clr)) || !sn.every((x) => this.clearOf(x, lv, pr.n.key, clr))) continue;
+        // the vias stand in for that end's pads while the coupled run is laid
+        const keepP = cp[end], keepN = cn[nEnd(end)];
+        cp[end] = { p: vp, layers: run.slice(), shape: via(vp), cluster: keepP.cluster, grp: keepP.grp };
+        cn[nEnd(end)] = { p: vn, layers: run.slice(), shape: via(vn), cluster: keepN.cluster, grp: keepN.grp };
+        let r = ""; try { r = this.layPair(pr); } finally { cp[end] = keepP; cn[nEnd(end)] = keepN; }
+        if (r === "the two ends are too close together for a coupled run" && run.length) {   // the vias are right by the other end's pads: two short straight tracks
+          const l = run[0], tp = stub(vp, po.p), tn = stub(vn, no.p);
+          this.cur = cp; const okP = P.shapeGap(tp, tn) >= clr - 1e-4 && P.shapeGap(tp, via(vn)) >= clr - 1e-4 && P.shapeGap(tn, via(vp)) >= clr - 1e-4 && this.clearOf(tp, l, pr.p.key, clr); this.cur = cn; const okN = okP && this.clearOf(tn, l, pr.n.key, clr);
+          if (okN) {
+            const set = (c: Conn, sh: Shape) => { const nodes: Node[] = [{ ...cell(sh.a[0], sh.a[1]), l }, { ...cell(sh.b[0], sh.b[1]), l }]; c.shapes = [{ net: c.net, layers: [l], shape: sh, clr: c.cls.clr }]; c.nodes = nodes; c.viaCells = []; c.stubs = []; c.feat = featuresOf(G, nodes, this.pref); c.landed = -1; c.zoneEnd = false; c.pair = true; c.rips = 99; c.why = undefined; this.place(c, 1); };
+            set(cp, tp as any); set(cn, tn as any); const lp = Math.hypot(tp.a[0] - tp.b[0], tp.a[1] - tp.b[1]), ln = Math.hypot(tn.a[0] - tn.b[0], tn.a[1] - tn.b[1]);
+            this.pairReports.set(cp.id + "/" + cn.id, { p: pr.p.key, n: pr.n.key, coupled: true, layer: G.layers[l], width: w, gap: +gap.toFixed(4), lengthP: +lp.toFixed(3), lengthN: +ln.toFixed(3), skew: +Math.abs(lp - ln).toFixed(3) }); r = "";
+          }
+        }
+        if (r) { why = "its pads are not all on one layer, and from the via pair: " + r; continue; }
+        // the run must keep clear of the other line's via and fan-out too
+        const clash = cp.shapes.some((o) => P.shapeGap(o.shape, via(vn)) < clr - 1e-4 || (o.layers[0] === lv && !gapOK([o.shape], sn))) || cn.shapes.some((o) => P.shapeGap(o.shape, via(vp)) < clr - 1e-4 || (o.layers[0] === lv && !gapOK([o.shape], sp)));
+        if (clash) { this.rip(cp); this.rip(cn); this.pairReports.delete(cp.id + "/" + cn.id); why = "its pads are not all on one layer, and the run would crowd the via pair"; continue; }
+        const add = (c: Conn, sh: (Shape & { a: Pt; b: Pt })[], v: Pt, k: { ix: number; iy: number }) => { this.place(c, -1); let len = 0; for (const x of sh) { c.shapes.push({ net: c.net, layers: [lv], shape: x, clr: c.cls.clr }); len += Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1]); } c.shapes.push({ net: c.net, layers: all.slice(), shape: via(v), clr: c.cls.clr }); c.viaCells = [k.iy * G.W + k.ix]; this.place(c, 1); return len; };
+        const ap = add(cp, sp, vp, kp), an = add(cn, sn, vn, kn); const rep = this.pairReports.get(cp.id + "/" + cn.id);
+        if (rep) { rep.lengthP = +((rep.lengthP || 0) + ap).toFixed(3); rep.lengthN = +((rep.lengthN || 0) + an).toFixed(3); rep.skew = +Math.abs(rep.lengthP - rep.lengthN).toFixed(3); (rep as any).vias = 2; }
+        return "";
+      }
+    }
+    return why;
   }
   /** The two tracks of a pair from its centre line: each a constant distance to one side, mitred at the turns, and
    *  fanned to its own pads at the ends — checked exactly against each other and against everything around.
@@ -590,7 +650,7 @@ export class Router {
     const G = this.G, P = this.P, { cp, cn } = pr; const w = Math.min(cp.cls.width, cn.cls.width), clr = Math.max(cp.cls.clr, cn.cls.clr); const gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0), d = (w + gap) / 2;
     const Pa = cp.a, Pb = cp.b, Na = pr.swap ? cn.b : cn.a, Nb = pr.swap ? cn.a : cn.b;
     const layers = G.layers.map((_, l) => l).filter((l) => G.routable[l] && [Pa, Pb, Na, Nb].every((a) => a.layers.includes(l)));
-    if (!layers.length) return "its pads are not all on one layer";
+    if (!layers.length) return this.layPairVias(pr);
     const key = `pair/${w}/${gap}/${clr}` + (cp.cls.open === false ? "/q" : ""); let wide = G.classes.get(key);
     if (!wide) { wide = buildClass(G, key, 2 * w + gap, clr, cp.cls.viaD, cp.cls.viaDrill, cp.cls.kind, cp.cls.open !== false); for (const o of this.conns) if (o.nodes) for (const sh of o.shapes) stampClass(G, wide, sh, 1, false); }
     const half = (a: Anchor) => { const sh = a.shape as any; return sh ? (sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0) : 0; };
@@ -757,6 +817,24 @@ export class Router {
     const planned = new Set((this.opts.match || []).flatMap((g) => g.nets)); const bus = new Map<string, Member[]>();
     for (const pr of pairs) { if (planned.has(pr.p.key)) continue; const k = pairName(pr.p.key)!.base.replace(/~.*$/, "").replace(/[_\-]?(D|TX|RX|TD|RD|CLK|CK|LANE|L|MDI|DATA|TMDS)?_?\d*$/i, "").replace(/[_\-]+$/, ""); if (!k || /^\/?$/.test(k)) continue; const e = bus.get(k) || []; bus.set(k, e); e.push({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] }); }
     for (const [k, members] of bus) if (members.length > 1) groups.push({ name: k, members, tol: 0.25 });
+    // DDR memory: each byte lane (DQ0–7 with its DM, DQ8–15 …) to the length of its strobe pair, and the address,
+    // bank and command lines as one group to the length of the clock pair; a group per memory (the name in front)
+    {
+      const bare = (k: string) => k.replace(/^.*\//, ""); const memOf = new Map<string, { lanes: Map<number, Member[]>; cmd: Member[] }>(); const has = new Set<string>();
+      const later: [string, Member][] = []; const mem = (pre: string) => { let m = memOf.get(pre); if (!m) memOf.set(pre, m = { lanes: new Map(), cmd: [] }); return m; };
+      const lane = (pre: string, n: number) => { const m = mem(pre); let l = m.lanes.get(n); if (!l) m.lanes.set(n, l = []); return l; };
+      for (const pr of pairs) { if (planned.has(pr.p.key)) continue; const b = bare(pairName(pr.p.key)!.base.replace(/~.*$/, "")); let q = /^(.*?)_?(?:L|U)?DQS_?(\d*)_?$/i.exec(b);
+        if (q) { lane(q[1], q[2] ? +q[2] : /UDQS/i.test(b) ? 1 : 0).push({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] }); has.add(q[1]); continue; }
+        q = /^(.*?)_?(?:CK|CLK|MEM_?CLK)_?\d?_?$/i.exec(b); if (q && /DDR|MEM|SDRAM|DRAM/i.test(pr.p.key + q[1]) || (q && memOf.has(q[1]))) { mem(q![1]).cmd.unshift({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] }); has.add(q![1]); } }
+      for (const net of this.nets) { if (planned.has(net.key) || !net.conns.some((c) => c.nodes) || this.pairList?.some((pr) => pr.p === net || pr.n === net)) continue; const b = bare(net.key); const mb: Member = { nets: [net.key], conns: net.conns.filter((c) => c.nodes) };
+        let q = /^(.*?)_?DQ_?(\d+)$/i.exec(b); if (q) { lane(q[1], Math.floor(+q[2] / 8)).push(mb); continue; }
+        q = /^(.*?)_?(?:L|U)?DQM?_?(\d*)$/i.exec(b); if (q && /DM|DQM/i.test(b)) { lane(q[1], q[2] ? +q[2] : /UDM/i.test(b) ? 1 : 0).push(mb); continue; }
+        q = /^(.*?)_?(A\d+|BA\d|RAS|CAS|WE|CS\d?|CKE\d?|ODT\d?|RESET)_?N?$/i.exec(b); if (q) later.push([q[1], mb]); }
+      for (const [pre, mb] of later) if (memOf.has(pre)) mem(pre).cmd.push(mb);
+      for (const [pre, m] of memOf) { if (!has.has(pre)) continue;
+        for (const [n, members] of m.lanes) if (members.length > 1) groups.push({ name: `${pre || "DDR"} byte lane ${n}`, members, tol: 0.5 });
+        if (m.cmd.length > 1) groups.push({ name: `${pre || "DDR"} address and command`, members: m.cmd, tol: 1 }); }
+    }
     for (const g of groups) {
       const before = g.members.map(lenM); const target = g.length && g.length > 0 ? g.length : Math.max(...before);
       const rep: MatchReport = { group: g.name, target: +target.toFixed(3), tolerance: g.tol, members: [] }; this.matchReports.push(rep);
@@ -839,6 +917,12 @@ export class Router {
         const rim = this.rim, before = extra;
         extra = (nodes) => { let run = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const step = Math.hypot(sx, sy) * G.g; for (let k = 0; k < n; k++) if (rim[(a.iy + sy * k) * G.W + a.ix + sx * k] && rim[(a.iy + sy * (k + 1)) * G.W + a.ix + sx * (k + 1)]) run += step; }
           return Math.max(0, run - RIM_FREE_MM) * RIM_COST * this.W.length + (before ? before(nodes) : 0); };
+      }
+      const mate = conn.partner && conn.partner.nodes && conn.partner.nodes.length > 1 ? conn.partner.nodes : null;
+      if (mate && !collect) {   // the second line of a pair keeps beside the first: every mm farther than a pair pitch from it costs
+        const reach = (2 * conn.cls.width + 2 * conn.cls.clr + 0.3) / G.g, before = extra;
+        const near = (ix: number, iy: number, l: number) => { for (let i = 0; i + 1 < mate.length; i++) { const a = mate[i], b = mate[i + 1]; if (a.l !== l || b.l !== l) continue; const vx = b.ix - a.ix, vy = b.iy - a.iy, h = vx * vx + vy * vy; const t = h ? Math.max(0, Math.min(1, ((ix - a.ix) * vx + (iy - a.iy) * vy) / h)) : 0; if (Math.hypot(ix - a.ix - t * vx, iy - a.iy - t * vy) <= reach) return true; } return false; };
+        extra = (nodes) => { let lone = 0; for (let i = 0; i + 1 < nodes.length; i++) { const a = nodes[i], b = nodes[i + 1]; if (a.l !== b.l) continue; const n = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy); const step = Math.hypot(sx, sy) * G.g; for (let k = 0; k < n; k++) if (!near(a.ix + sx * k, a.iy + sy * k, a.l)) lone += step; } return lone * 3 * this.W.length + (before ? before(nodes) : 0); };
       }
       let used = 0; for (const c of net.conns) if (c.nodes && c !== conn && c.feat) used += c.feat.vias;
       const perConn = this.opts.maxViasPerConnection; const maxVias = Math.min(gd.maxVias - used, this.viaCap, perConn === undefined || perConn === null ? Infinity : Math.max(0, +perConn));
@@ -1021,6 +1105,8 @@ export class Router {
       while (queue.length) {
         if (timeUp()) { for (const c of queue) { failed.add(c.id); if (!c.nodes) c.why = "budget"; } break; }
         const c = queue.shift()!; if (c.nodes) continue; c.why = undefined;
+        // the two lines of a differential pair run together or not at all: never one on its own path
+        if (c.pairOnly && this.opts.splitPairs !== true) { c.why = "pair: " + c.pairOnly; failed.add(c.id); done++; continue; }
         let found = this.find(c, false);
         if (!found && ripUp && c.rips < RC) {
           const soft = this.find(c, true);
@@ -1076,10 +1162,11 @@ export class Router {
     const conns = this.conns; type Snap = Pick<Conn, "cls" | "nodes" | "shapes" | "viaCells" | "landed" | "feat" | "stubs" | "zoneEnd">;
     const snapOf = (): Snap[] => conns.map((c) => ({ cls: c.cls, nodes: c.nodes, shapes: c.shapes, viaCells: c.viaCells, landed: c.landed, feat: c.feat, stubs: c.stubs, zoneEnd: c.zoneEnd }));
     const back = (snap: Snap[]) => { for (const c of conns) if (c.nodes !== snap[c.id].nodes && c.nodes) this.place(c, -1); conns.forEach((c, i) => { if (c.nodes !== snap[i].nodes) { Object.assign(c, snap[i]); if (c.nodes) this.place(c, 1); } }); };
-    const lay = (c: Conn): boolean => { const f = this.find(c, false); if (f) this.commit(c, f); return !!f; };
+    const lay = (c: Conn): boolean => { if (c.pairOnly && this.opts.splitPairs !== true) return false; const f = this.find(c, false); if (f) this.commit(c, f); return !!f; };
     // lay c whatever it takes: routes in its way come out and are laid again the same way, a few levels deep;
     // a route laid in this attempt is never taken out again
     const force = (c: Conn, depth: number, keep: Set<Conn>): boolean => {
+      if (c.pairOnly && this.opts.splitPairs !== true) return false;   // one line of a pair is never forced through alone
       if (lay(c)) { keep.add(c); return true; } if (depth <= 0 || timeUp()) return false;
       const soft = this.find(c, true); if (!soft) return false; const bl = this.blockers(c, soft.res); if (!bl.length || bl.length > 12 || bl.some((b) => keep.has(b) || b.pair)) return false;
       const ripped: Conn[] = []; for (const b of bl) this.rip(b, ripped); if (ripped.some((r) => keep.has(r))) return false;
@@ -1313,6 +1400,7 @@ export class Router {
     for (const c of this.conns) {
       if (c.nodes || c.moot) continue; const rep: Partial<ConnReport> = {}; this.reports.set(c.id, rep);
       if (c.why === "budget") { rep.reason = "budget"; rep.detail = "the run stopped before this connection was tried"; continue; }
+      if (c.pairOnly && this.opts.splitPairs !== true) { rep.reason = "blocked"; rep.detail = `a differential pair is only laid as one coupled run, and ${c.pairOnly}: make room along its path (move or turn the parts in the way), or route it by hand`; continue; }
       if (c.why === "rule") { rep.reason = "rule"; const o = this.ruleHit.get(c.id); rep.blockedBy = { nets: o ? [o] : [], items: [] }; rep.detail = "the route found did not keep its clearance in the exact check"; continue; }
       const net = this.netOf(c.net); let ends: boolean[] = []; const gd = net.guide;
       this.lift(net, 1, c.cls); this.cur = c; this.curSoft = true; try { ends = [c.a, c.b].map((e) => !!this.access(e, c.cls.fixed)); } finally { this.lift(net, -1, c.cls); }

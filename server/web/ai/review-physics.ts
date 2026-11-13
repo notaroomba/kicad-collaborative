@@ -436,13 +436,15 @@ export function reviewPhysics(doc: any, P: any, k: any, settings: any, add: Add)
       const twice = [e.p, e.n].some((net) => { const seen = new Set<any>(); for (const q of padsOf.get(net) || []) { if (seen.has(q.fp)) return true; seen.add(q.fp); } return false; });
       if (twice && Math.abs(vp - vn) <= 2 && Math.max(vp, vn) <= vmax) { /* as the connector needs */ }
       else if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`); else if (vp > vmax) vias.push(`${name}: ${vp} vias on each track (at most ${vmax})`);
-      let n = 0, lone = 0; for (const t of tp) { const lay = Array.from(t.layers as Set<string>)[0]; const others = tn.filter((q) => q.layers.has(lay)); S.walk(t, 0.5, (x, y) => { n++; const reach = Math.max(1, 4 * t.width); if (!others.some((q) => P.shapeGap({ t: "circle", x, y, r: 0 }, q.shape) <= reach)) lone++; }); }
-      if (lone * 0.5 > Math.max(3, n * 0.5 * 0.25)) apart.push(`${name}: ${r2(lone * 0.5)} mm of ${r2(lp)} mm runs without its partner beside it`);
+      // coupled: the partner's track within a pair pitch or so of this one, everywhere but the fan-out at the pads
+      const ends = [...(padsOf.get(e.p) || []), ...(padsOf.get(e.n) || [])];
+      let n = 0, lone = 0; for (const t of tp) { const lay = Array.from(t.layers as Set<string>)[0]; const others = tn.filter((q) => q.layers.has(lay)); S.walk(t, 0.25, (x, y) => { if (ends.some((q) => Math.hypot(q.x - x, q.y - y) < 1.5)) return; n++; const reach = Math.max(0.6, 2.5 * t.width); if (!others.some((q) => P.shapeGap({ t: "circle", x, y, r: 0 }, q.shape) <= reach)) lone++; }); }
+      if (lone * 0.25 > Math.max(1.5, n * 0.25 * 0.1)) apart.push(`${name}: ${r2(lone * 0.25)} mm of ${r2(lp)} mm runs without its partner beside it`);
     }
     if (skew.length) add("pairs", "warning", "The two tracks of a pair must be the same length, or the signal turns into common mode (noise out, noise in). Add a small serpentine to the shorter one at the end where the mismatch arises (board.route matches lengths when it routes the pair).", skew);
     if (vias.length) add("pairs", "warning", "Both tracks of a pair change layer together, at the same place, the same number of times, and as rarely as possible.", vias);
     if (long.length) add("pairs", "warning", "These pairs are longer than their interface is specified for on ordinary FR-4. Move the parts closer, or check the loss budget of the link.", long);
-    if (apart.length) add("pairs", "warning", "A pair's tracks run side by side at a constant gap from pad to pad. These split up: move the parts in the pair's path so both tracks reach them in the same order.", apart);
+    if (apart.length) add("pairs.coupled", "error", "The two lines of a differential pair are routed the same way: side by side at a constant gap from pad to pad, as one path. These split up, so each line is on its own path. Lay them again as a pair (board.route lays a pair only as a coupled run), moving the parts in the pair's path if there is no room for it.", apart);
   }
 
   // ---- memory and card buses: every line matched to its clock or strobe

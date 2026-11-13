@@ -80947,7 +80947,140 @@ var Router = class _Router {
       const key3 = pr.cp.id + "/" + pr.cn.id;
       const why = this.layPair(pr);
       if (why) this.pairReports.set(key3, { p: pr.p.key, n: pr.n.key, coupled: false, reason: why });
+      if (why && Math.max(pr.cp.len, pr.cn.len) <= 3) {
+        pr.cp.pairOnly = pr.cn.pairOnly = void 0;
+        pr.cp.partner = pr.cn;
+        pr.cn.partner = pr.cp;
+      } else pr.cp.pairOnly = pr.cn.pairOnly = why || void 0;
     }
+  }
+  /** A pair whose two ends are on different layers: a via pair side by side just off the pads of one end, a short
+   *  fan-out from those pads to the vias on their own layer, and from the vias the pair goes on as one coupled run on
+   *  the other end's layer.  Both lines change layer at the same place through matched vias. */
+  layPairVias(pr) {
+    const G2 = this.G, P = this.P, { cp: cp2, cn } = pr;
+    const w = Math.min(cp2.cls.width, cn.cls.width), clr = Math.max(cp2.cls.clr, cn.cls.clr), gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0);
+    const viaD = Math.max(cp2.cls.viaD, cn.cls.viaD), pitch = viaD + Math.max(clr, gap);
+    const all2 = G2.layers.map((_, l) => l).filter((l) => G2.routable[l]);
+    if (!this.allowVias || !pr.p.guide.allowVias || !pr.n.guide.allowVias) return "its pads are not all on one layer and vias are not allowed";
+    const nEnd = (e) => pr.swap ? e === "a" ? "b" : "a" : e;
+    const half = (a) => {
+      const sh = a.shape;
+      return sh ? sh.t === "circle" ? sh.r : Math.max(sh.w || 0, sh.h || 0) / 2 || sh.r || 0 : 0;
+    };
+    let why = "its pads are not all on one layer, and there is no room for a via pair beside them";
+    for (const end of ["b", "a"]) {
+      const other = end === "a" ? "b" : "a";
+      const pv = cp2[end], nv = cn[nEnd(end)], po = cp2[other], no = cn[nEnd(other)];
+      const mine = all2.filter((l) => pv.layers.includes(l) && nv.layers.includes(l)), run = all2.filter((l) => po.layers.includes(l) && no.layers.includes(l));
+      if (!mine.length || !run.length) continue;
+      const lv = mine[0];
+      const mx = (pv.p[0] + nv.p[0]) / 2, my = (pv.p[1] + nv.p[1]) / 2;
+      let ux = nv.p[0] - pv.p[0], uy = nv.p[1] - pv.p[1];
+      const h = Math.hypot(ux, uy);
+      if (h < 1e-6) continue;
+      ux /= h;
+      uy /= h;
+      const tx = (po.p[0] + no.p[0]) / 2 - mx, ty = (po.p[1] + no.p[1]) / 2 - my;
+      let ex = -uy, ey = ux;
+      if (ex * tx + ey * ty < 0) {
+        ex = -ex;
+        ey = -ey;
+      }
+      const s1 = Math.max(half(pv), half(nv)) + clr + viaD / 2;
+      for (const t of [s1, s1 + 0.3, s1 + 0.6, s1 + 1, s1 + 1.6, s1 + 2.4, s1 + 3.2, s1 + 4]) for (const side of [0, 0.5, -0.5, 1, -1, 1.6, -1.6, 2.4, -2.4]) for (const dir of [1, -1]) for (const bend of [false, true]) {
+        const cx = mx + ex * t * dir + ux * side, cy = my + ey * t * dir + uy * side;
+        const cell = (x, y) => ({ ix: Math.round((x - G2.ox) / G2.g), iy: Math.round((y - G2.oy) / G2.g) });
+        const kp = cell(cx - ux * pitch / 2, cy - uy * pitch / 2), kn = cell(cx + ux * pitch / 2, cy + uy * pitch / 2);
+        const vp = this.mm(kp), vn = this.mm(kn);
+        if (Math.hypot(vp[0] - vn[0], vp[1] - vn[1]) < viaD + clr - 1e-6) continue;
+        const via = (q) => ({ t: "circle", x: q[0], y: q[1], r: viaD / 2 }), stub = (a, b) => ({ t: "seg", a, b, r: w / 2 });
+        const fan = (a, v) => {
+          const o = half(a) + w / 2 + 0.05, q = [r62(a.p[0] + ex * dir * o), r62(a.p[1] + ey * dir * o)];
+          return !bend || (q[0] - a.p[0]) * (v[0] - a.p[0]) + (q[1] - a.p[1]) * (v[1] - a.p[1]) < o * o ? [stub(a.p, v)] : [stub(a.p, q), stub(q, v)];
+        };
+        const sp = fan(pv, vp), sn = fan(nv, vn);
+        const gapOK = (xs, ys) => xs.every((x) => ys.every((y) => P.shapeGap(x, y) >= clr - 1e-4));
+        if (!gapOK(sp, sn) || !gapOK(sp, [via(vn)]) || !gapOK(sn, [via(vp)])) continue;
+        this.cur = cp2;
+        this.curSoft = false;
+        if (!all2.every((l) => this.clearOf(via(vp), l, pr.p.key, clr)) || !sp.every((x) => this.clearOf(x, lv, pr.p.key, clr))) continue;
+        this.cur = cn;
+        if (!all2.every((l) => this.clearOf(via(vn), l, pr.n.key, clr)) || !sn.every((x) => this.clearOf(x, lv, pr.n.key, clr))) continue;
+        const keepP = cp2[end], keepN = cn[nEnd(end)];
+        cp2[end] = { p: vp, layers: run.slice(), shape: via(vp), cluster: keepP.cluster, grp: keepP.grp };
+        cn[nEnd(end)] = { p: vn, layers: run.slice(), shape: via(vn), cluster: keepN.cluster, grp: keepN.grp };
+        let r = "";
+        try {
+          r = this.layPair(pr);
+        } finally {
+          cp2[end] = keepP;
+          cn[nEnd(end)] = keepN;
+        }
+        if (r === "the two ends are too close together for a coupled run" && run.length) {
+          const l = run[0], tp = stub(vp, po.p), tn = stub(vn, no.p);
+          this.cur = cp2;
+          const okP = P.shapeGap(tp, tn) >= clr - 1e-4 && P.shapeGap(tp, via(vn)) >= clr - 1e-4 && P.shapeGap(tn, via(vp)) >= clr - 1e-4 && this.clearOf(tp, l, pr.p.key, clr);
+          this.cur = cn;
+          const okN = okP && this.clearOf(tn, l, pr.n.key, clr);
+          if (okN) {
+            const set = (c, sh) => {
+              const nodes = [{ ...cell(sh.a[0], sh.a[1]), l }, { ...cell(sh.b[0], sh.b[1]), l }];
+              c.shapes = [{ net: c.net, layers: [l], shape: sh, clr: c.cls.clr }];
+              c.nodes = nodes;
+              c.viaCells = [];
+              c.stubs = [];
+              c.feat = featuresOf(G2, nodes, this.pref);
+              c.landed = -1;
+              c.zoneEnd = false;
+              c.pair = true;
+              c.rips = 99;
+              c.why = void 0;
+              this.place(c, 1);
+            };
+            set(cp2, tp);
+            set(cn, tn);
+            const lp = Math.hypot(tp.a[0] - tp.b[0], tp.a[1] - tp.b[1]), ln = Math.hypot(tn.a[0] - tn.b[0], tn.a[1] - tn.b[1]);
+            this.pairReports.set(cp2.id + "/" + cn.id, { p: pr.p.key, n: pr.n.key, coupled: true, layer: G2.layers[l], width: w, gap: +gap.toFixed(4), lengthP: +lp.toFixed(3), lengthN: +ln.toFixed(3), skew: +Math.abs(lp - ln).toFixed(3) });
+            r = "";
+          }
+        }
+        if (r) {
+          why = "its pads are not all on one layer, and from the via pair: " + r;
+          continue;
+        }
+        const clash = cp2.shapes.some((o) => P.shapeGap(o.shape, via(vn)) < clr - 1e-4 || o.layers[0] === lv && !gapOK([o.shape], sn)) || cn.shapes.some((o) => P.shapeGap(o.shape, via(vp)) < clr - 1e-4 || o.layers[0] === lv && !gapOK([o.shape], sp));
+        if (clash) {
+          this.rip(cp2);
+          this.rip(cn);
+          this.pairReports.delete(cp2.id + "/" + cn.id);
+          why = "its pads are not all on one layer, and the run would crowd the via pair";
+          continue;
+        }
+        const add = (c, sh, v, k) => {
+          this.place(c, -1);
+          let len = 0;
+          for (const x of sh) {
+            c.shapes.push({ net: c.net, layers: [lv], shape: x, clr: c.cls.clr });
+            len += Math.hypot(x.a[0] - x.b[0], x.a[1] - x.b[1]);
+          }
+          c.shapes.push({ net: c.net, layers: all2.slice(), shape: via(v), clr: c.cls.clr });
+          c.viaCells = [k.iy * G2.W + k.ix];
+          this.place(c, 1);
+          return len;
+        };
+        const ap = add(cp2, sp, vp, kp), an = add(cn, sn, vn, kn);
+        const rep = this.pairReports.get(cp2.id + "/" + cn.id);
+        if (rep) {
+          rep.lengthP = +((rep.lengthP || 0) + ap).toFixed(3);
+          rep.lengthN = +((rep.lengthN || 0) + an).toFixed(3);
+          rep.skew = +Math.abs(rep.lengthP - rep.lengthN).toFixed(3);
+          rep.vias = 2;
+        }
+        return "";
+      }
+    }
+    return why;
   }
   /** The two tracks of a pair from its centre line: each a constant distance to one side, mitred at the turns, and
    *  fanned to its own pads at the ends — checked exactly against each other and against everything around.
@@ -80996,7 +81129,7 @@ var Router = class _Router {
     const gap = Math.max(clr, this.opts.pairGap || 0, this.zGap.get(pr.p.key) || 0), d = (w + gap) / 2;
     const Pa = cp2.a, Pb = cp2.b, Na = pr.swap ? cn.b : cn.a, Nb = pr.swap ? cn.a : cn.b;
     const layers = G2.layers.map((_, l) => l).filter((l) => G2.routable[l] && [Pa, Pb, Na, Nb].every((a) => a.layers.includes(l)));
-    if (!layers.length) return "its pads are not all on one layer";
+    if (!layers.length) return this.layPairVias(pr);
     const key3 = `pair/${w}/${gap}/${clr}` + (cp2.cls.open === false ? "/q" : "");
     let wide = G2.classes.get(key3);
     if (!wide) {
@@ -81317,6 +81450,61 @@ var Router = class _Router {
       e.push({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] });
     }
     for (const [k, members] of bus) if (members.length > 1) groups.push({ name: k, members, tol: 0.25 });
+    {
+      const bare2 = (k) => k.replace(/^.*\//, "");
+      const memOf = /* @__PURE__ */ new Map();
+      const has2 = /* @__PURE__ */ new Set();
+      const later = [];
+      const mem = (pre) => {
+        let m = memOf.get(pre);
+        if (!m) memOf.set(pre, m = { lanes: /* @__PURE__ */ new Map(), cmd: [] });
+        return m;
+      };
+      const lane = (pre, n2) => {
+        const m = mem(pre);
+        let l = m.lanes.get(n2);
+        if (!l) m.lanes.set(n2, l = []);
+        return l;
+      };
+      for (const pr of pairs) {
+        if (planned.has(pr.p.key)) continue;
+        const b = bare2(pairName(pr.p.key).base.replace(/~.*$/, ""));
+        let q = /^(.*?)_?(?:L|U)?DQS_?(\d*)_?$/i.exec(b);
+        if (q) {
+          lane(q[1], q[2] ? +q[2] : /UDQS/i.test(b) ? 1 : 0).push({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] });
+          has2.add(q[1]);
+          continue;
+        }
+        q = /^(.*?)_?(?:CK|CLK|MEM_?CLK)_?\d?_?$/i.exec(b);
+        if (q && /DDR|MEM|SDRAM|DRAM/i.test(pr.p.key + q[1]) || q && memOf.has(q[1])) {
+          mem(q[1]).cmd.unshift({ nets: [pr.p.key, pr.n.key], pr, conns: [pr.cp, pr.cn] });
+          has2.add(q[1]);
+        }
+      }
+      for (const net of this.nets) {
+        if (planned.has(net.key) || !net.conns.some((c) => c.nodes) || this.pairList?.some((pr) => pr.p === net || pr.n === net)) continue;
+        const b = bare2(net.key);
+        const mb = { nets: [net.key], conns: net.conns.filter((c) => c.nodes) };
+        let q = /^(.*?)_?DQ_?(\d+)$/i.exec(b);
+        if (q) {
+          lane(q[1], Math.floor(+q[2] / 8)).push(mb);
+          continue;
+        }
+        q = /^(.*?)_?(?:L|U)?DQM?_?(\d*)$/i.exec(b);
+        if (q && /DM|DQM/i.test(b)) {
+          lane(q[1], q[2] ? +q[2] : /UDM/i.test(b) ? 1 : 0).push(mb);
+          continue;
+        }
+        q = /^(.*?)_?(A\d+|BA\d|RAS|CAS|WE|CS\d?|CKE\d?|ODT\d?|RESET)_?N?$/i.exec(b);
+        if (q) later.push([q[1], mb]);
+      }
+      for (const [pre, mb] of later) if (memOf.has(pre)) mem(pre).cmd.push(mb);
+      for (const [pre, m] of memOf) {
+        if (!has2.has(pre)) continue;
+        for (const [n2, members] of m.lanes) if (members.length > 1) groups.push({ name: `${pre || "DDR"} byte lane ${n2}`, members, tol: 0.5 });
+        if (m.cmd.length > 1) groups.push({ name: `${pre || "DDR"} address and command`, members: m.cmd, tol: 1 });
+      }
+    }
     for (const g2 of groups) {
       const before = g2.members.map(lenM);
       const target2 = g2.length && g2.length > 0 ? g2.length : Math.max(...before);
@@ -81484,6 +81672,31 @@ var Router = class _Router {
             for (let k = 0; k < n2; k++) if (rim[(a.iy + sy * k) * G2.W + a.ix + sx * k] && rim[(a.iy + sy * (k + 1)) * G2.W + a.ix + sx * (k + 1)]) run += step;
           }
           return Math.max(0, run - RIM_FREE_MM) * RIM_COST * this.W.length + (before ? before(nodes) : 0);
+        };
+      }
+      const mate = conn.partner && conn.partner.nodes && conn.partner.nodes.length > 1 ? conn.partner.nodes : null;
+      if (mate && !collect) {
+        const reach = (2 * conn.cls.width + 2 * conn.cls.clr + 0.3) / G2.g, before = extra;
+        const near = (ix, iy, l) => {
+          for (let i = 0; i + 1 < mate.length; i++) {
+            const a = mate[i], b = mate[i + 1];
+            if (a.l !== l || b.l !== l) continue;
+            const vx = b.ix - a.ix, vy = b.iy - a.iy, h = vx * vx + vy * vy;
+            const t = h ? Math.max(0, Math.min(1, ((ix - a.ix) * vx + (iy - a.iy) * vy) / h)) : 0;
+            if (Math.hypot(ix - a.ix - t * vx, iy - a.iy - t * vy) <= reach) return true;
+          }
+          return false;
+        };
+        extra = (nodes) => {
+          let lone = 0;
+          for (let i = 0; i + 1 < nodes.length; i++) {
+            const a = nodes[i], b = nodes[i + 1];
+            if (a.l !== b.l) continue;
+            const n2 = Math.max(Math.abs(b.ix - a.ix), Math.abs(b.iy - a.iy)), sx = Math.sign(b.ix - a.ix), sy = Math.sign(b.iy - a.iy);
+            const step = Math.hypot(sx, sy) * G2.g;
+            for (let k = 0; k < n2; k++) if (!near(a.ix + sx * k, a.iy + sy * k, a.l)) lone += step;
+          }
+          return lone * 3 * this.W.length + (before ? before(nodes) : 0);
         };
       }
       let used = 0;
@@ -81849,6 +82062,12 @@ ${p[0].toFixed(3)},${p[1].toFixed(3)}`;
         const c = queue2.shift();
         if (c.nodes) continue;
         c.why = void 0;
+        if (c.pairOnly && this.opts.splitPairs !== true) {
+          c.why = "pair: " + c.pairOnly;
+          failed.add(c.id);
+          done++;
+          continue;
+        }
         let found = this.find(c, false);
         if (!found && ripUp && c.rips < RC) {
           const soft = this.find(c, true);
@@ -81940,11 +82159,13 @@ ${p[0].toFixed(3)},${p[1].toFixed(3)}`;
       });
     };
     const lay = (c) => {
+      if (c.pairOnly && this.opts.splitPairs !== true) return false;
       const f2 = this.find(c, false);
       if (f2) this.commit(c, f2);
       return !!f2;
     };
     const force = (c, depth, keep) => {
+      if (c.pairOnly && this.opts.splitPairs !== true) return false;
       if (lay(c)) {
         keep.add(c);
         return true;
@@ -82457,6 +82678,11 @@ ${p[0].toFixed(3)},${p[1].toFixed(3)}`;
       if (c.why === "budget") {
         rep.reason = "budget";
         rep.detail = "the run stopped before this connection was tried";
+        continue;
+      }
+      if (c.pairOnly && this.opts.splitPairs !== true) {
+        rep.reason = "blocked";
+        rep.detail = `a differential pair is only laid as one coupled run, and ${c.pairOnly}: make room along its path (move or turn the parts in the way), or route it by hand`;
         continue;
       }
       if (c.why === "rule") {
@@ -100425,22 +100651,24 @@ function reviewPhysics(doc, P, k, settings, add) {
       if (twice && Math.abs(vp - vn) <= 2 && Math.max(vp, vn) <= vmax) {
       } else if (vp !== vn) vias.push(`${name}: ${vp} via${vp === 1 ? "" : "s"} on one track and ${vn} on the other`);
       else if (vp > vmax) vias.push(`${name}: ${vp} vias on each track (at most ${vmax})`);
+      const ends = [...padsOf.get(e.p) || [], ...padsOf.get(e.n) || []];
       let n2 = 0, lone = 0;
       for (const t of tp) {
         const lay = Array.from(t.layers)[0];
         const others = tn.filter((q) => q.layers.has(lay));
-        S2.walk(t, 0.5, (x, y) => {
+        S2.walk(t, 0.25, (x, y) => {
+          if (ends.some((q) => Math.hypot(q.x - x, q.y - y) < 1.5)) return;
           n2++;
-          const reach2 = Math.max(1, 4 * t.width);
+          const reach2 = Math.max(0.6, 2.5 * t.width);
           if (!others.some((q) => P.shapeGap({ t: "circle", x, y, r: 0 }, q.shape) <= reach2)) lone++;
         });
       }
-      if (lone * 0.5 > Math.max(3, n2 * 0.5 * 0.25)) apart.push(`${name}: ${r22(lone * 0.5)} mm of ${r22(lp)} mm runs without its partner beside it`);
+      if (lone * 0.25 > Math.max(1.5, n2 * 0.25 * 0.1)) apart.push(`${name}: ${r22(lone * 0.25)} mm of ${r22(lp)} mm runs without its partner beside it`);
     }
     if (skew.length) add("pairs", "warning", "The two tracks of a pair must be the same length, or the signal turns into common mode (noise out, noise in). Add a small serpentine to the shorter one at the end where the mismatch arises (board.route matches lengths when it routes the pair).", skew);
     if (vias.length) add("pairs", "warning", "Both tracks of a pair change layer together, at the same place, the same number of times, and as rarely as possible.", vias);
     if (long.length) add("pairs", "warning", "These pairs are longer than their interface is specified for on ordinary FR-4. Move the parts closer, or check the loss budget of the link.", long);
-    if (apart.length) add("pairs", "warning", "A pair's tracks run side by side at a constant gap from pad to pad. These split up: move the parts in the pair's path so both tracks reach them in the same order.", apart);
+    if (apart.length) add("pairs.coupled", "error", "The two lines of a differential pair are routed the same way: side by side at a constant gap from pad to pad, as one path. These split up, so each line is on its own path. Lay them again as a pair (board.route lays a pair only as a coupled run), moving the parts in the pair's path if there is no room for it.", apart);
   }
   {
     const out = [];

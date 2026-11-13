@@ -275,6 +275,14 @@ test("a differential pair runs side by side at a constant gap, and each track en
   const off = R.route(K, P, board(pad(100, 50, "D+"), pad(100.6, 50, "D-"), pad(120, 62, "D+"), pad(120.6, 62, "D-")), null, { pairs: false }); assert.equal(off.pairs.length, 0); assert.equal(off.routed, 2);
 });
 
+test("a pair whose coupled run cannot be laid is never routed as two lone tracks: it is left open and the report says why", () => {
+  const make = () => board(pad(100, 50, "D+"), pad(100.6, 50, "D-"), pad(120, 50, "D+"), pad(120.6, 50, "D-"), `(segment (start 110 38) (end 110 49.55) (width 0.2) (layer "F.Cu") (net "W1") (uuid "wl0F"))`, `(segment (start 110 38) (end 110 49.55) (width 0.2) (layer "B.Cu") (net "W1") (uuid "wl0B"))`, `(segment (start 110 50.45) (end 110 72) (width 0.2) (layer "F.Cu") (net "W2") (uuid "wl1F"))`, `(segment (start 110 50.45) (end 110 72) (width 0.2) (layer "B.Cu") (net "W2") (uuid "wl1B"))`);
+  const res = R.route(K, P, make(), null); const pr = res.pairs[0]; assert.equal(pr.coupled, false);
+  assert.equal(res.items.filter((i) => /^D/.test(i.netName)).length, 0, "neither line is laid on its own: " + JSON.stringify(res.pairs) + JSON.stringify(res.connections));
+  const why = (res.connections || []).filter((c) => /^D/.test(c.net)); assert.ok(why.length === 2 && why.every((c) => !c.routed && /coupled run/.test(c.detail || "")), JSON.stringify(why));
+  const split = R.route(K, P, make(), null, { splitPairs: true }); assert.ok(["D+", "D-"].some((n) => split.items.some((i) => i.netName === n)), "splitPairs routes them alone when asked");
+});
+
 const netLen = (res, net) => res.items.filter((i) => i.kind === "segment" && i.netName === net).reduce((a, i) => { const s = K.kid(i.node, "start"), e = K.kid(i.node, "end"); return a + Math.hypot(s[1] - e[1], s[2] - e[2]); }, 0);
 test("nets that are to match are brought to one length with serpentines, within the tolerance and the rules", () => {
   const make = () => board(smd(100, 45, "A0"), smd(125, 45, "A0"), smd(100, 52, "A1"), smd(118, 52, "A1"), smd(100, 59, "A2"), smd(112, 59, "A2"));
@@ -289,6 +297,21 @@ test("nets that are to match are brought to one length with serpentines, within 
     `(segment (start 101.5 58.2) (end 110.5 58.2) (width 0.2) (layer "F.Cu") (net "W") (uuid "w1"))`, `(segment (start 101.5 59.8) (end 110.5 59.8) (width 0.2) (layer "F.Cu") (net "W") (uuid "w2"))`);
   const r2 = R.route(K, P, tight, null, { match: [{ nets: ["A0", "A2"] }] }); const m2 = r2.matched[0].members.find((m) => m.nets[0] === "A2");
   apply(tight, r2); assert.deepEqual(errors(tight, null), [], "whatever was added keeps the rules"); assert.equal(typeof m2.matched, "boolean");
+});
+
+test("DDR: a byte lane's data lines are matched to its strobe pair, and the address lines to the clock", () => {
+  const rot = (s) => s.replace(/\(size 0.3 0.8\)/g, "(size 0.8 0.3)");
+  const doc = board(
+    ...[pad(100, 44, "DDR_DQS0_P"), pad(100, 44.6, "DDR_DQS0_N"), pad(124, 44, "DDR_DQS0_P"), pad(124, 44.6, "DDR_DQS0_N")].map(rot),
+    ...[0, 1, 2].map((i) => [rot(pad(100, 47 + i * 1.2, `DDR_DQ${i}`)), rot(pad(112 + i * 4, 47 + i * 1.2, `DDR_DQ${i}`))]).flat(),
+    ...[pad(100, 56, "DDR_CK_P"), pad(100, 56.6, "DDR_CK_N"), pad(124, 56, "DDR_CK_P"), pad(124, 56.6, "DDR_CK_N")].map(rot),
+    ...[0, 1].map((i) => [rot(pad(100, 59 + i * 1.2, `DDR_A${i}`)), rot(pad(110 + i * 5, 59 + i * 1.2, `DDR_A${i}`))]).flat());
+  const res = R.route(K, P, doc, null, { impedance: false });
+  const lane = res.matched.find((g) => /byte lane 0/.test(g.group)), cmd = res.matched.find((g) => /address and command/.test(g.group));
+  assert.ok(lane && cmd, JSON.stringify(res.matched.map((g) => g.group)));
+  assert.equal(lane.members.length, 4); assert.ok(lane.members.every((m) => m.matched), JSON.stringify(lane));
+  assert.equal(cmd.members.length, 3); assert.ok(cmd.members.every((m) => m.matched), JSON.stringify(cmd));
+  apply(doc, res); assert.deepEqual(errors(doc, null), []);
 });
 
 test("the pairs of one bus are matched to each other, and each pair's own skew is taken out", () => {
