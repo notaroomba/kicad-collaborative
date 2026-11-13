@@ -32,3 +32,11 @@
  */
 #define KICAD_COLLAB_PRODUCT_NAME     wxS( "KiCad Collaborative" )
 #define KICAD_COLLAB_PRODUCT_VERSION  wxS( "1.0.9" )
+
+/**
+ * The KiCad release this fork is based on, as shown to people (About dialog).
+ * The tree's own KICAD_VERSION is the 10.99 development number, which only means
+ * "not a standard release"; it is not the release the product descends from.
+ * Display only: never use it for file formats or settings paths.
+ */
+#define KICAD_COLLAB_BASE_KICAD       wxS( "10" )

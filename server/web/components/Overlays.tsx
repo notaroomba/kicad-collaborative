@@ -47,7 +47,7 @@ function PopoverBody({ p }: { p: PopoverState }) {
         </>
       );
     case "about":
-      return <><h4 className={H4}>KiCad Collaborative 1.0</h4><p className="note">Real-time collaboration for KiCad, based on KiCad 10.99.<br />Web editor v1: move, rotate, delete footprints; comments; history; live presence.</p></>;
+      return <><h4 className={H4}>KiCad Collaborative 1.0</h4><p className="note">Real-time collaboration for KiCad, based on KiCad 10.<br />Web editor v1: move, rotate, delete footprints; comments; history; live presence.</p></>;
     case "share":
       return (
         <>

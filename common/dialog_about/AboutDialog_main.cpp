@@ -1023,8 +1023,9 @@ static void buildKicadAboutBanner( EDA_BASE_FRAME* aParent, ABOUT_APP_INFO& aInf
     wxString version;
     version << KICAD_COLLAB_PRODUCT_VERSION
             << wxT( " (" ) << KICAD_COLLAB_PRODUCT_NAME << wxT( "), based on KiCad " )
-            << ( KIPLATFORM::APP::IsOperatingSystemUnsupported() ? wxString( wxS( "(UNSUPPORTED)" ) )
-                                                                 : GetBuildVersion() )
+            << KICAD_COLLAB_BASE_KICAD
+            << ( KIPLATFORM::APP::IsOperatingSystemUnsupported() ? wxString( wxS( " (UNSUPPORTED)" ) )
+                                                                 : wxString() )
 #ifdef DEBUG
             << wxT( ", debug" )
 #else

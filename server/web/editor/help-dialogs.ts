@@ -84,7 +84,7 @@ const LOGO = `<img src="/favicon.svg" width="64" height="64" alt="">`;
 /** The text KiCad's "Copy Version Info" puts on the clipboard, for this client. */
 export function versionInfo(): string {
   const spec = (window as unknown as { KiCadCanvas?: { VERSION?: string } }).KiCadCanvas;
-  return [`Application: KiCad Collaborative web editor`, `Version: ${PRODUCT_VERSION}, based on KiCad 10.99`, `Platform: ${navigator.platform || "browser"}, ${navigator.userAgent}`,
+  return [`Application: KiCad Collaborative web editor`, `Version: ${PRODUCT_VERSION}, based on KiCad 10`, `Platform: ${navigator.platform || "browser"}, ${navigator.userAgent}`,
     `Display: ${window.innerWidth}x${window.innerHeight} @ ${window.devicePixelRatio || 1}x`, `Locale: ${navigator.language}`, spec && spec.VERSION ? `Canvas: ${spec.VERSION}` : ""].filter(Boolean).join("\n");
 }
 
@@ -104,7 +104,7 @@ export function openAbout(): void {
   D.open({ title: "About KiCad Collaborative", width: 640,
     build(body) {
       body.innerHTML = `<div style="display:flex;gap:16px;align-items:center;margin-bottom:12px">${LOGO}<div><div style="font-size:20px;font-weight:700">KiCad Collaborative</div>
-        <div style="font-family:var(--mono);color:var(--ink-2);margin-top:2px" id="abVer">Version: ${esc(PRODUCT_VERSION)}, web editor</div><div style="color:var(--ink-2);margin-top:2px">Based on KiCad 10.99</div></div></div>
+        <div style="font-family:var(--mono);color:var(--ink-2);margin-top:2px" id="abVer">Version: ${esc(PRODUCT_VERSION)}, web editor</div><div style="color:var(--ink-2);margin-top:2px">Based on KiCad 10</div></div></div>
         <div id="abTabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line)">${Object.keys(pages).map((t, i) => `<button type="button" data-tab="${t}" class="${i ? "" : "on"}" style="border:1px solid var(--line);border-bottom:0;border-radius:var(--r-3) var(--r-3) 0 0;padding:5px 12px;background:${i ? "transparent" : "var(--panel)"};color:var(--ink);font:inherit;cursor:pointer">${t}</button>`).join("")}</div>
         <div id="abPage" style="height:260px;overflow:auto;border:1px solid var(--line);border-top:0;background:var(--panel);padding:10px 14px;line-height:1.5"></div>
         <div style="margin-top:10px"><button type="button" class="btn" id="abCopy">Copy Version Info</button></div>`;
