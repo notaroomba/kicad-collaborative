@@ -2,7 +2,8 @@
 # pick: server/scripts/plugin-drives/boards/keyboard-2x2.json
 """kbplacer: a board with four switches and four diodes scattered about, and a 2 by 2 keyboard layout picked with
 Browse.  Expect the switches on a 19.05 mm grid in layout order, each diode at the default offset from its switch
-(5.08, 4 mm, turned 90 degrees), and tracks joining each switch to its diode."""
+(5.08, 4 mm, turned 90 degrees), tracks joining each switch to its diode, and the rows and columns routed pad to
+pad except where two of them would cross."""
 import pcbnew
 import wx
 
@@ -51,4 +52,19 @@ def after_run(_action):
     nets = sorted({t.GetNetname() for t in tracks})
     for i in range(1, 5):
         assert "Net-(D%d-A)" % i in nets, "switch %d is not routed to its diode: %s" % (i, nets)
-    return {"placed": {r: _at(r) for r in REFS}, "tracks": len(tracks), "nets": nets}
+    # rows and columns: a straight track between the two pads of the net.  ROW0 (between the diodes of the top row)
+    # and COL1 (between the right-hand switches) would cross on the same layer at 53.34, 43.75 mm from the layout's
+    # origin, so the plugin lays whichever of the two it reaches first and refuses the other, as it does on a desktop.
+    mm = lambda v: (round(pcbnew.ToMM(v.x), 3), round(pcbnew.ToMM(v.y), 3))
+    pads = {}
+    for f in board.GetFootprints():
+        for p in f.Pads():
+            pads.setdefault(p.GetNetname(), []).append(mm(p.GetPosition()))
+    lines = {}
+    for t in tracks:
+        lines.setdefault(t.GetNetname(), []).append({mm(t.GetStart()), mm(t.GetEnd())})
+    joined = {net: lines.get(net) == [set(pads[net])] for net in ("ROW0", "ROW1", "COL0", "COL1")}
+    assert joined["ROW1"] and joined["COL0"], "rows and columns are not routed pad to pad: %s" % {n: lines.get(n) for n in joined}
+    assert joined["ROW0"] != joined["COL1"], "ROW0 and COL1 cross, so exactly one of them is laid: %s" % joined
+    assert len(tracks) == seen["tracks_before"] + 11, "%d tracks were drawn, not 11" % (len(tracks) - seen["tracks_before"])
+    return {"placed": {r: _at(r) for r in REFS}, "tracks": len(tracks), "nets": nets, "rows and columns": joined}

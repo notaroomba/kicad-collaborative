@@ -5803,6 +5803,12 @@ class BOARD(EDA_ITEM):
     def GetPads(self):
         return [p for f in self.GetFootprints() for p in f.Pads()]
 
+    def GetSortedPadListByXthenYCoord(self, into, net_code=-1):
+        """Fill the list given with the board's pads (or one net's), from left to right and, in a column, top down."""
+        pads = [p for p in self.GetPads() if net_code < 0 or p.GetNetCode() == net_code]
+        pads.sort(key=lambda p: (p.GetPosition().x, p.GetPosition().y))
+        into[:] = pads
+
     def AllConnectedItems(self):
         return list(self.GetTracks()) + self.GetPads() + self.Zones()
 
@@ -7522,7 +7528,7 @@ class _ItemList(list):
         return self[-1]
 
 
-TRACKS = FOOTPRINTS = DRAWINGS = PADS = ZONES = GROUPS = MARKERS = PCB_FIELDS = VIA_DIMENSION_Vector = VECTOR_VECTOR2I = wxPoint_Vector = intVector = base_seqVect = LSEQ = _ItemList
+TRACKS = FOOTPRINTS = DRAWINGS = PADS = PADS_VEC = ZONES = GROUPS = MARKERS = PCB_FIELDS = VIA_DIMENSION_Vector = VECTOR_VECTOR2I = wxPoint_Vector = intVector = base_seqVect = LSEQ = _ItemList
 PCBNEW_LAYER_ID_START = 0
 PCB_LAYER_ID_COUNT_OLD = 64
 

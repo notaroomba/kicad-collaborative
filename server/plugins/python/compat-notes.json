@@ -150,8 +150,8 @@
       "note": "Runs here. Checked on a board that names models of KiCad's 3D library: each was copied into packages3D as a STEP file, the footprints were pointed at the copies, the copies joined the project (the 3D viewer reads them from there), and a model the project does not have was named in the end report. KiCad's library publishes STEP only, so no .wrl copies are made; a model over 8 MB is handed over as a download instead."
     },
     "com.github.adamws.kicad-kbplacer": {
-      "status": "opens",
-      "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+      "status": "works",
+      "note": "Places the switches from a keyboard layout file and each diode beside its switch, then routes switch to diode and the rows and columns. Checked on a 2 by 2 keyboard: positions, turns and tracks match the layout; where a row and a column would cross on one layer it lays one and leaves the other, as on a desktop."
     },
     "com.github.Huaqiu-Electronics.kicad-nextpcb-plugin": {
       "status": "works",

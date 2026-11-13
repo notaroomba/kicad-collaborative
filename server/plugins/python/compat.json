@@ -95,8 +95,8 @@
   "note": "Its button opens the Save Version dialog. The project's version history stands in for git here: a commit is a saved version."
  },
  "com.github.adamws.kicad-kbplacer": {
-  "status": "opens",
-  "note": "It opens and its window responds, but its result has not been checked here yet: the earlier check only saw the plugin's own log or settings file."
+  "status": "works",
+  "note": "Places the switches from a keyboard layout file and each diode beside its switch, then routes switch to diode and the rows and columns. Checked on a 2 by 2 keyboard: positions, turns and tracks match the layout; where a row and a column would cross on one layer it lays one and leaves the other, as on a desktop."
  },
  "com.github.adamws.kicad-via-patterns": {
   "status": "works"
