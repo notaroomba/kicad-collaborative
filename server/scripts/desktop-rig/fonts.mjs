@@ -10,6 +10,7 @@
 //   node fonts.mjs web-sets       the browser sets a text in Lobster; the desktop follows
 //   node fonts.mjs desktop-set    after choosing a font in the desktop dialog: the browser follows
 //   node fonts.mjs shot <name>    a picture of the desktop
+//   RIG_APP=pcbnew …              the same with the board editor and the project's board
 //   node fonts.mjs alone          no project at all: a Google Font straight from Google
 import { createRequire } from 'node:module';
 import crypto from 'node:crypto';
@@ -40,11 +41,11 @@ const api = async (tok, url, o = {}) => {
   const buf = Buffer.from(await r.arrayBuffer()); let j = null; try { j = JSON.parse(buf.toString('utf8')); } catch { /* not JSON */ }
   return { status: r.status, j, buf, headers: r.headers };
 };
-const rig = () => JSON.parse(fs.readFileSync(`${RIG}/rig.json`, 'utf8'));
-const log = () => { try { return fs.readFileSync(`${RIG}/eeschema.log`, 'utf8'); } catch { return ''; } };
+const rig = () => { const r = JSON.parse(fs.readFileSync(`${RIG}/rig.json`, 'utf8')); r.docId = process.env.RIG_APP === 'pcbnew' ? r.pcbDocId : r.schDocId; return r; };
+const log = () => { try { return fs.readFileSync(`${RIG}/${APP}.log`, 'utf8'); } catch { return ''; } };
 const fetched = () => { try { return fs.readdirSync(`${RIG}/cache/kicad/10.99/fonts`).sort(); } catch { return []; } };
 const xenv = { ...process.env, DISPLAY: DISP };
-const shot = (name) => { fs.mkdirSync(SHOTS, { recursive: true }); execFileSync('import', ['-window', 'root', `${SHOTS}/${name}.png`], { env: xenv }); };
+const shot = (name0) => { const name = APP === 'pcbnew' ? name0.replace(/^(\d+)-desktop/, '$1-pcb-desktop') : name0; fs.mkdirSync(SHOTS, { recursive: true }); execFileSync('import', ['-window', 'root', `${SHOTS}/${name}.png`], { env: xenv }); };
 
 const text = (s, y, face, id) => `  (text "${s}" (exclude_from_sim no) (at 30 ${y} 0) (effects (font ${face ? `(face "${face}") ` : ''}(size 9 9)) (justify left bottom)) (uuid "6c2d2e7f-0000-4000-8000-00000000000${id}"))\n`;
 const SCH = `(kicad_sch (version 20250114) (generator "eeschema") (generator_version "9.0") (uuid "6c2d2e7f-0000-4000-8000-000000000001") (paper "A4")
@@ -54,6 +55,18 @@ ${text('Pacifico, a Google Font', 45, 'Pacifico', 2)}${text('Set by the browser'
 )
 `;
 
+const APP = process.env.RIG_APP === 'pcbnew' ? 'pcbnew' : 'eeschema', EXT = APP === 'pcbnew' ? 'kicad_pcb' : 'kicad_sch';
+const btext = (s, y, face, id) => `  (gr_text "${s}" (at 108 ${y} 0) (layer "F.SilkS") (uuid "7d3e3f80-0000-4000-8000-00000000000${id}") (effects (font ${face ? `(face "${face}") ` : ''}(size 4 4) (thickness 0.5)) (justify left bottom)))\n`;
+const PCB = `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6) (legacy_teardrops no))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user "F.Silkscreen") (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_rect (start 100 60) (end 200 110) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "7d3e3f80-0000-4000-8000-000000000001"))
+${btext('Pacifico, a Google Font', 72, 'Pacifico', 2)}${btext('Set by the browser', 82, '', 3)}${btext('A font from this computer', 92, LOCAL_FACE, 4)}${btext('Chosen in the desktop dialog', 102, '', 5)}  (embedded_fonts no)
+)
+`;
 async function browserAs(jwt, docId) {
   const { chromium } = require('playwright');
   const browser = await chromium.launch();
@@ -67,7 +80,7 @@ async function browserAs(jwt, docId) {
 const faceOn = (page, face) => page.evaluate((face) => document.fonts.check(`20px "${face}"`) && [...document.fonts].some((f) => f.family.replace(/"/g, '') === face && f.status === 'loaded') && window.KiCadCanvas.faceAvailable(face), face);
 const textItem = (page, re) => page.evaluate((src) => {
   const re = new RegExp(src);
-  for (const it of window.CollabEditor.kdoc.items.values()) if (it.kind === 'text' && re.test(String(it.node[1]))) return { id: it.id, bbox: it.bbox, node: JSON.stringify(it.node) };
+  for (const it of window.CollabEditor.kdoc.items.values()) if ((it.kind === 'text' || it.kind === 'gr_text') && re.test(String(it.node[1]))) return { id: it.id, bbox: it.bbox, node: JSON.stringify(it.node) };
   return null;
 }, re.source);
 const scr = (page, x, y) => page.evaluate(([x, y]) => {
@@ -87,23 +100,25 @@ if (cmd === 'setup') {
   for (const d of ['a', 'cache', 'shots']) fs.rmSync(`${RIG}/${d}`, { recursive: true, force: true });
   const dir = `${RIG}/a/${NAME}`; fs.mkdirSync(dir, { recursive: true }); fs.mkdirSync(`${RIG}/cache`, { recursive: true });
   fs.writeFileSync(`${dir}/${NAME}.kicad_sch`, SCH);
+  fs.writeFileSync(`${dir}/${NAME}.kicad_pcb`, PCB);
   fs.writeFileSync(`${dir}/${NAME}.kicad_pro`, JSON.stringify({ meta: { filename: `${NAME}.kicad_pro`, version: 3 } }, null, 2));
-  execFileSync('zip', ['-q', '-j', `${RIG}/p.zip`, `${dir}/${NAME}.kicad_sch`, `${dir}/${NAME}.kicad_pro`]);
+  fs.rmSync(`${RIG}/p.zip`, { force: true });
+  execFileSync('zip', ['-q', '-j', `${RIG}/p.zip`, `${dir}/${NAME}.kicad_sch`, `${dir}/${NAME}.kicad_pcb`, `${dir}/${NAME}.kicad_pro`]);
   const form = new FormData(); form.append('name', NAME); form.append('archive', new Blob([fs.readFileSync(`${RIG}/p.zip`)]), 'p.zip');
   const created = await api(alice, '/api/projects', { method: 'POST', body: form });
-  const pid = created.j.projectId, sch = created.j.docs.find((d) => d.docType === 'kicad_sch');
+  const pid = created.j.projectId, sch = created.j.docs.find((d) => d.docType === 'kicad_sch'), pcb = created.j.docs.find((d) => d.docType === 'kicad_pcb');
   const link = await api(alice, `/api/projects/${pid}/links`, { json: { role: 'editor' } });
   await api(bob, `/api/join/${link.j.token}`, { method: 'POST' });
   fs.mkdirSync(`${dir}/${NAME}.collab`, { recursive: true });
   fs.writeFileSync(`${dir}/${NAME}.collab/link.json`, JSON.stringify({ server: BASE, projectId: pid }));
-  fs.writeFileSync(`${RIG}/rig.json`, JSON.stringify({ alice, bob, pid, docId: sch.docId }, null, 1));
+  fs.writeFileSync(`${RIG}/rig.json`, JSON.stringify({ alice, bob, pid, schDocId: sch.docId, pcbDocId: pcb.docId }, null, 1));
   console.log(pid, sch.docId);
 } else if (cmd === 'launch' || cmd === 'alone') {
   try { execFileSync('pgrep', ['-f', `Xvfb ${DISP}`]); } catch {
     spawn('Xvfb', [DISP, '-screen', '0', '1600x1000x24'], { detached: true, stdio: 'ignore' }).unref(); await sleep(1000);
     spawn('openbox', [], { detached: true, stdio: 'ignore', env: xenv }).unref(); await sleep(500);
   }
-  let file = `${RIG}/a/${NAME}/${NAME}.kicad_sch`;
+  let file = `${RIG}/a/${NAME}/${NAME}.${EXT}`;
   const env = { ...xenv, KICAD_CONFIG_HOME: `${RIG}/cfg`, KICAD_CACHE_HOME: `${RIG}/cache`, KICAD_RUN_FROM_BUILD_DIR: '1', KICAD_LOG_TO_STDERR: '1', WXTRACE: 'COLLAB_FONTS', KICAD_COLLAB_SERVER: BASE };
   if (cmd === 'alone') {
     // Not an online project, and no token to reach one with.
@@ -116,8 +131,8 @@ if (cmd === 'setup') {
     env.KICAD_COLLAB_TOKEN = rig().alice;
   }
   for (const f of fs.readdirSync(path.dirname(file))) if (/\.lck$/.test(f)) fs.rmSync(path.join(path.dirname(file), f));
-  const out = fs.openSync(`${RIG}/eeschema.log`, 'w');
-  spawn(`${BUILD}/eeschema/eeschema`, [file], { cwd: BUILD, env, detached: true, stdio: ['ignore', out, out] }).unref();
+  const out = fs.openSync(`${RIG}/${APP}.log`, 'w');
+  spawn(`${BUILD}/${APP}/${APP}`, [file], { cwd: BUILD, env, detached: true, stdio: ['ignore', out, out] }).unref();
   console.log('started', file);
 } else if (cmd === 'shot') {
   shot(process.argv[3] || 'desktop');
@@ -134,7 +149,7 @@ if (cmd === 'setup') {
   const { browser, page } = await browserAs(bob, docId);
   check('the browser draws the Google Font', await until(() => faceOn(page, 'Pacifico')));
   check(`and the font from the desktop computer (${LOCAL_FACE})`, await until(() => faceOn(page, LOCAL_FACE)));
-  await page.waitForTimeout(500); await page.screenshot({ path: `${SHOTS}/11-browser-sees-the-desktop-font.png` });
+  await page.waitForTimeout(500); await page.screenshot({ path: `${SHOTS}/11-${APP === 'pcbnew' ? 'pcb-' : ''}browser-sees-the-desktop-font.png` });
   await browser.close();
   void alice;
 } else if (cmd === 'web-sets') {
@@ -143,7 +158,7 @@ if (cmd === 'setup') {
   const t = await textItem(page, /^Set by the browser$/);
   const [x, y] = await scr(page, (t.bbox[0] + t.bbox[2]) / 2, (t.bbox[1] + t.bbox[3]) / 2);
   await page.mouse.dblclick(x, y); await page.waitForSelector('.kd-dialog');
-  await page.click('#kd-txt-font'); await page.waitForSelector('.kd-font-pop');
+  await page.click(APP === 'pcbnew' ? '.kd-font[data-k="face"]' : '#kd-txt-font'); await page.waitForSelector('.kd-font-pop');
   await page.keyboard.type('lobster');
   await page.waitForFunction(() => { const r = document.querySelector('.kd-font-row.active'); return r && r.textContent === 'Lobster'; });
   await page.keyboard.press('Enter');
@@ -153,7 +168,7 @@ if (cmd === 'setup') {
   check('the desktop, which did not have Lobster, fetched it', await until(() => fetched().includes('Lobster-Regular.ttf')), fetched().join(', '));
   await sleep(2500); shot('12-desktop-after-the-browser-chose-lobster');
   await page.keyboard.press('Escape'); await page.waitForTimeout(400);
-  await page.screenshot({ path: `${SHOTS}/13-browser-chose-lobster.png` });
+  await page.screenshot({ path: `${SHOTS}/13-${APP === 'pcbnew' ? 'pcb-' : ''}browser-chose-lobster.png` });
   await browser.close();
 } else if (cmd === 'desktop-set') {
   const face = process.argv[3] || 'Orbitron';
@@ -162,7 +177,7 @@ if (cmd === 'setup') {
   check(`the browser has the text the desktop set in ${face}`, await until(async () => new RegExp(`\\["face","${face}"\\]`).test((await textItem(page, /^Chosen in the desktop dialog$/)).node)));
   check('and draws it in that font', await until(() => faceOn(page, face)));
   check('the desktop downloaded it when it was picked', fetched().some((f) => f.startsWith(face)), fetched().join(', '));
-  await page.waitForTimeout(500); await page.screenshot({ path: `${SHOTS}/15-browser-after-the-desktop-chose-${face.toLowerCase()}.png` });
+  await page.waitForTimeout(500); await page.screenshot({ path: `${SHOTS}/15-${APP === 'pcbnew' ? 'pcb-' : ''}browser-after-the-desktop-chose-${face.toLowerCase()}.png` });
   await browser.close();
 } else {
   console.log('setup | launch | opened | web-sets | desktop-set [face] | shot <name> | alone');
