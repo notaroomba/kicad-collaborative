@@ -874,7 +874,7 @@ export function drawHalo(ctx: Ctx2D, doc: Doc, ids: Iterable<string>, s: number,
         if (strokesOnly && base && HAS_PATH2D) {
           // the glyphs themselves, each stroke widened (SCH_PAINTER draws shadow text with m_StrokeWidth + shadowWidth)
           const tg = g as unknown as DrawTextG; const pen = tg.w > 0 ? tg.w : tg.size / 8;
-          ctx.save(); drawTextStroke(ctx, Object.assign({}, tg, { w: pen + extra, knockout: false }) as DrawTextG, minW + extra, halo, base, false); ctx.restore();
+          ctx.save(); drawTextStroke(ctx, Object.assign({}, tg, { w: pen + extra, knockout: false, layoutW: tg.layoutW !== undefined ? tg.layoutW : pen }) as DrawTextG, minW + extra, halo, base, false); ctx.restore();
           continue;
         }
         const w = typeof textWidth === "function" ? textWidth(g.text || "", g.size, g.w || 0.1524) : (g.text || "").length * g.size * 0.75;
@@ -959,6 +959,8 @@ export function drawTextStroke(ctx: Ctx2D, g: DrawTextG, minW: number, color: st
     drawStrokeText(ctx, base, Object.assign(spec, { layoutPen: lay }), bgColor || PCB_BG, minW);
     return;
   }
+  // the glyphs sit where the item's own pen places them (a widened shadow pen must not shift the layout)
+  if (g.layoutW !== undefined) (spec as { layoutPen?: number }).layoutPen = g.layoutW;
   if (g.multiline && text.indexOf("\n") >= 0) {
     // a drawing-sheet field carrying a \n: lines an interline apart, the block placed per EDA_TEXT::GetLinePositions
     const lines = splitLines(text), step = g.size * TEXT_INTERLINE, offs = lineOffsets(lines.length, g.v);
