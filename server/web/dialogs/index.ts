@@ -30,6 +30,7 @@ import { findNetInNavigator } from "../editor/panels/netnav";
 import { assignNetclass } from "./assign-netclass";
 import { installSubSheets } from "./subsheets";
 import { installIntersheetRefs, refreshIntersheetRefs } from "./intersheet-refs";
+import { onSheetOpened } from "./erc-hier";
 import { selectionIds } from "../editor/gestures";
 
 type Handler = import("../editor/types").ActionHandler;
@@ -142,7 +143,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
   // a newly opened document takes the preferences (grids, colours, display) and the project's schematic settings
   let lastDoc: unknown = null, lastPro: unknown = null, first = true;
   store.subscribe(() => {
-    if (E.kdoc && E.kdoc !== lastDoc) { lastDoc = E.kdoc; lastPro = E.proSettings; applyPrefs(first); first = false; applyProjectSettings(); void refreshOtherRefs(); void refreshIntersheetRefs(); }
+    if (E.kdoc && E.kdoc !== lastDoc) { lastDoc = E.kdoc; lastPro = E.proSettings; applyPrefs(first); first = false; applyProjectSettings(); void refreshOtherRefs(); void refreshIntersheetRefs(); onSheetOpened(); }
     else if (E.kdoc && E.proSettings !== lastPro) { lastPro = E.proSettings; applyProjectSettings(); void refreshIntersheetRefs(); }   // the .kicad_pro arrives after the first sheet
   });
   onProjectChanged(applyProjectSettings);

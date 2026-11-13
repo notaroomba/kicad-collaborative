@@ -9,7 +9,7 @@
 //
 // Exclusions are kept in the project's erc_exclusions (ERC_SETTINGS::m_ErcExclusions) in the form its erc schema
 // already uses, so a re-run excludes the same violations again (SCHEMATIC::ResolveERCExclusions).
-import { E, appState, applyView, centerOn, requestRender, toast, toolCtx } from "./editor";
+import { E, appState, applyView, centerOn, openDocId, requestRender, store, toast, toolCtx } from "./editor";
 import { syntaxHelp } from "../editor/syntax-help";
 import { KD, checkbox, download, h, popupMenu, type DlgApi, type PopItem } from "./dom";
 import { ERC_RULES, defaultSeverity, stepMarker } from "./erc-rules";
@@ -20,6 +20,7 @@ import { messageBox, textEntryBox } from "../editor/pcbdialogs/ui";
 import type { Units } from "../store";
 import { ercTextReport, sevOf, shownBy } from "./erc-report";
 import { sheetList, type SheetInstance } from "./sch-hierarchy";
+import { allMarkers, distribute, forgetHierErc, onSheetOpened, runHierErc, type HierMarker } from "./erc-hier";
 export { ercTextReport, sevOf, shownBy };
 
 export interface ErcViolation { code: string; severity: string; x: number; y: number; text: string; ids: string[]; base?: string; comment?: string; selected?: boolean; items?: { x: number; y: number; desc: string; len?: number }[] }
@@ -59,9 +60,19 @@ function storeExclusion(m: ErcViolation, on: boolean, comment = ""): Promise<voi
 
 interface SchModule { actions?: Record<string, { run(ctx: unknown, opts?: unknown): unknown }>; state: { markers?: ErcViolation[] }; itemDescription?(d: KDoc, id: string, u: string): string }
 const sch = (): SchModule | null => ((window as unknown as { CollabTools?: { sch?: SchModule } }).CollabTools || {}).sch || null;
-export const markers = (): ErcViolation[] => ((E as unknown as { markers?: ErcViolation[] }).markers || []).filter((m) => m && typeof m.code === "string");
-/** Hand a changed marker list (or the same list, changed) to the canvas and the module. */
-function publishMarkers(l: ErcViolation[]): void { const ctx = toolCtx() as unknown as { setMarkers?(l: unknown[]): void }; const s = sch(); if (s) s.state.markers = l; if (ctx.setMarkers) ctx.setMarkers(l); else requestRender(); }
+/** The open sheet's markers (on the canvas). */
+const liveMarkers = (): ErcViolation[] => ((E as unknown as { markers?: ErcViolation[] }).markers || []).filter((m) => m && typeof m.code === "string");
+/** Every marker of the hierarchy the last Run ERC found (the open sheet's are the canvas list itself). */
+export const markers = (): ErcViolation[] => allMarkers(liveMarkers() as unknown as HierMarker[]) as unknown as ErcViolation[];
+const hereDoc = (): string | null => (appState as unknown as { docId: string | null }).docId;
+const onOtherSheet = (m: ErcViolation): boolean => { const d = (m as { docId?: string }).docId; return !!d && d !== hereDoc(); };
+/** Hand a changed marker list (or the same list, changed) to the canvas and the module: each sheet keeps its own. */
+function publishMarkers(all: ErcViolation[]): void {
+  const l = distribute(all as unknown as HierMarker[]) as unknown as ErcViolation[];
+  const s = sch(); if (s) s.state.markers = l;
+  const EE = E as unknown as { markers: unknown[]; renderOpts: Record<string, unknown> };
+  EE.markers = l; EE.renderOpts.markers = l.length ? l : undefined; store.slice("viewport", { renderOpts: Object.assign({}, EE.renderOpts) }); requestRender();
+}
 
 // ---------------------------------------------------------------- the canvas side: the marker selected on the sheet
 /** The marker selected on the canvas (SCH_SELECTION_TOOL with a SCH_MARKER_T), or null. */
@@ -184,6 +195,12 @@ export function openErc(): void {
   // DIALOG_ERC::OnERCItemSelected: the marker is selected; with cross-probing its items are and the view centres on it
   const pick = (m: ErcViolation, fromCanvas = false) => {
     current = m;
+    // a marker on another sheet: that sheet opens (SCH_EDIT_FRAME::FocusOnItem changes the current sheet), then it is picked there
+    if (!fromCanvas && onOtherSheet(m)) {
+      const target = (m as { docId?: string }).docId!, before = E.kdoc; openDocId(target);
+      let tries = 0; const wait = (): void => { if (E.kdoc && E.kdoc !== before && hereDoc() === target) { onSheetOpened(); pick(m); return; } if (++tries < 100) setTimeout(wait, 100); };
+      setTimeout(wait, 100); refresh(); return;
+    }
     if (!fromCanvas) {
       const ctx = toolCtx();
       if (opts.crossprobe) ctx.setSelection(m.ids.filter((id) => E.kdoc && E.kdoc.items.has(id)));
@@ -237,7 +254,21 @@ export function openErc(): void {
     exclude(m) { const t = resolveMarker(m || current); if (t && !isExcluded(t)) exclude(t, true); },
     refresh() { refresh(); },
   };
-  const run = () => { const s = sch(); const a = s && s.actions && s.actions.runERC; if (!a) return; a.run(toolCtx(), { showAllErrors: opts.showAllErrors }); current = null; refresh(); };
+  // ERC_TESTER::RunTests over the whole hierarchy; a sheet outside it (or no hierarchy known) is checked alone
+  const run = async (): Promise<void> => {
+    const s = sch(); const a = s && s.actions && s.actions.runERC; if (!a) return;
+    const runBtn = api && api.body.ownerDocument.querySelector<HTMLButtonElement>("[data-btn=\"kd-erc-run\"]"); if (runBtn) runBtn.disabled = true;
+    try {
+      const live = await runHierErc({ showAllErrors: opts.showAllErrors }, (l) => withExclusions(l as unknown as ErcViolation[]) as unknown as HierMarker[]);
+      if (!live) { forgetHierErc(); a.run(toolCtx(), { showAllErrors: opts.showAllErrors }); }
+      else {
+        onSheetOpened();   // the canvas: this sheet's own markers (the others stay with their sheets)
+        const all = markers(), e = all.filter((m) => m.severity === "error").length, w = all.filter((m) => m.severity === "warning").length;
+        toast(all.length ? `ERC: ${e} error${e === 1 ? "" : "s"}, ${w} warning${w === 1 ? "" : "s"}` : "ERC: no problems found");
+      }
+    } finally { if (runBtn) runBtn.disabled = false; }
+    current = null; refresh();
+  };
   // DIALOG_ERC::OnDeleteOneClick / OnDeleteAllClick
   const delOne = () => { const c = resolveMarker(current); if (!c) return; current = null; publishMarkers(markers().filter((m) => m !== c)); refresh(); };
   // OnDeleteAllClick: with exclusions about, ask whether they go too (ClearUnresolvedERCExclusions + DeleteAllMarkers)
@@ -258,7 +289,8 @@ export function openErc(): void {
     let list: SheetInstance[] = []; try { list = await sheetList(); } catch { list = []; }
     const here = list.find((x) => x.docId === appState.docId);
     const sheetOf = (m: ErcViolation): string | null => {
-      const ms = (m as { mainSheet?: unknown }).mainSheet;
+      const ms = (m as { mainSheet?: unknown }).mainSheet, own = (m as { sheetPath?: string; docId?: string });
+      if (own.sheetPath && own.docId !== hereDoc()) return own.sheetPath;
       if (typeof ms === "string" && here) { const child = list.find((x) => x.parentDocId === here.docId && x.sheetItemId === ms && x.uuidPath.slice(0, -1).join("/") === here.uuidPath.join("/")); if (child) return child.sheetPath; }
       return here ? here.sheetPath : null;
     };
@@ -301,7 +333,7 @@ export function openErc(): void {
     },
     // m_buttonsSizer: Delete Marker / Delete All Markers on the left, then Run ERC / Close
     extra: [{ label: "Delete Marker", fn: delOne, id: "kd-erc-del" }, { label: "Delete All Markers", fn: delAll, id: "kd-erc-delall" }],
-    buttons: [{ label: "Run ERC", primary: true, isDefault: true, fn: run, id: "kd-erc-run" }, { label: "Close", close: true }],
+    buttons: [{ label: "Run ERC", primary: true, isDefault: true, fn: () => { void run(); }, id: "kd-erc-run" }, { label: "Close", close: true }],
     cancel() { live = null; },
   });
   // the canvas shows exclusions with the dialog's Exclusions box (DIALOG_ERC::syncCheckboxesFromSeverities → show_erc_exclusions)
