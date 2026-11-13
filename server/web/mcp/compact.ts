@@ -95,6 +95,18 @@ function uuidOfText(t: string): string {
   return "";
 }
 
+/** The items (by id) and library symbols (by name) a change's fragment carries, as text — canvas/ops.ts fragmentItems. */
+function fragmentParts(frag: string, kinds: Set<string>, onItem: (id: string, text: string) => void, onLib: (name: string, text: string) => void): void {
+  const walk = (t: string): void => {
+    const h = headOf(t);
+    if (h === "kicad_sch" || h === "kicad_pcb") { const l = cut(t); if (l) for (const c of l.children) if (c.head === "lib_symbols" || kinds.has(c.head)) walk(c.text); return; }
+    if (h === "lib_symbols") { const l = cut(t); if (l) for (const c of l.children) if (c.head === "symbol") { const name = firstArg(c.text); if (name !== null) onLib(name, c.text); } return; }
+    const id = uuidOfText(t); if (id) onItem(id, t);
+  };
+  let i = 0; const n = frag.length;
+  for (;;) { while (i < n && isWs(frag.charCodeAt(i))) i++; if (i >= n) break; const e = elementEnd(frag, i); if (e < 0) break; walk(frag.slice(i, e)); i = e; }
+}
+
 // ---------------------------------------------------------------- writing
 
 /** A node's text laid out as KiCad lays a file out, to sit at `depth` tabs. */
@@ -130,35 +142,33 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
   const ser = (n: any): string => k.serialize(n);
   const canon = (t: string): string => { const n = k.parse(t); if (!n) refuse("unreadable text"); return ser(n); };
 
+  // ---- the items of the stored file, and which of them the edits name
+  const ids: string[] = top!.children.map((c) => (kinds.has(c.head) ? uuidOfText(c.text) : ""));
+  const where = new Map<string, number>();   // item id -> index in top.children
+  ids.forEach((id, i) => { if (!id) return; if (where.has(id)) refuse("two items share the id " + id); where.set(id, i); });   // (no id: no op can name it, it stays as it is)
+  const touched = new Set<string>();
+  for (const op of ops) for (const c of op.changes || []) {
+    if (!c || typeof c !== "object") continue;
+    if (c.id !== undefined) touched.add(String(c.id));
+    const frag = c.sexpr || c.itemSexpr; if (typeof frag === "string") fragmentParts(frag, kinds, (id) => touched.add(id), () => undefined);
+  }
+  // A schematic is read whole (a removed symbol can take its library copy with it, which depends on every other
+  // symbol).  On a board an edit concerns only the item it names, so only those are read: the rest of a large
+  // board is never parsed, it is copied.
+  const inDoc = (i: number): boolean => sch || (ids[i] !== "" && touched.has(ids[i]));
+  const subset = (l: ListSpans, take: (c: Span, i: number) => boolean): string => l.open + l.children.filter((c, i) => !kinds.has(c.head) || take(c, i)).map((c) => c.lead + c.text).join("") + l.tail;
+
   // ---- the document as every browser has it
-  let doc = k.parseDoc(file, docType) || refuse("the stored file could not be read");
+  let doc = k.parseDoc(sch ? file : subset(top!, (_c, i) => inDoc(i)), docType) || refuse("the stored file could not be read");
   const before = new Map<string, string>(); for (const [id, it] of doc.items) before.set(id, ser(it.node));
   const libBefore = new Map<string, string>(); if (sch) for (const [name, n] of doc.lib) libBefore.set(name, ser(n));
-
-  // ---- its items in the file
-  const where = new Map<string, number>();   // item id -> index in top.children
-  top.children.forEach((c, i) => {
-    if (!kinds.has(c.head)) return;
-    const id = uuidOfText(c.text); if (!id) return;   // no identity: no op can name it, it stays as it is
-    if (where.has(id)) refuse("two items share the id " + id);
-    if (!before.has(id)) refuse("item " + id + " is in the file but not in the document");
-    where.set(id, i);
-  });
+  ids.forEach((id, i) => { if (id && inDoc(i) && !before.has(id)) refuse("item " + id + " is in the file but not in the document"); });
   for (const id of before.keys()) if (!where.has(id) && !id.startsWith("anon-")) refuse("item " + id + " is in the document but not in the file");
 
   // ---- the edits
   let paper: string | null = null, title: string | null = null; const sections: Record<string, string> = {};
   const fragText = new Map<string, string>();   // the text an edit carried for an item or a library symbol
-  const noteFragment = (frag: string): void => {
-    const walk = (t: string): void => {
-      const h = headOf(t);
-      if (h === "kicad_sch" || h === "kicad_pcb") { const l = cut(t); if (l) for (const c of l.children) if (c.head === "lib_symbols" || kinds.has(c.head)) walk(c.text); return; }
-      if (h === "lib_symbols") { const l = cut(t); if (l) for (const c of l.children) if (c.head === "symbol") { const name = firstArg(c.text); if (name !== null) fragText.set("lib:" + name, c.text); } return; }
-      const id = uuidOfText(t); if (id) fragText.set(id, t);
-    };
-    let i = 0; const n = frag.length;
-    for (;;) { while (i < n && isWs(frag.charCodeAt(i))) i++; if (i >= n) break; const e = elementEnd(frag, i); if (e < 0) break; walk(frag.slice(i, e)); i = e; }
-  };
+  const noteFragment = (frag: string): void => fragmentParts(frag, kinds, (id, t) => fragText.set(id, t), (name, t) => fragText.set("lib:" + name, t));
   for (const op of ops) for (const c of op.changes || []) {
     if (!c || typeof c !== "object") continue;
     if (c.docProps) {
@@ -248,8 +258,8 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
     } else if (i === libAt && sch) out.push(c.lead + (libText !== null ? libText : c.text));
     else if (!sch && sectionAt[c.head] === i && sections[c.head] !== undefined && !same(sections[c.head], c.text)) { out.push(c.lead + laidOut(sections[c.head], 1, mode)); changed++; }
     else if (kinds.has(c.head)) {
-      const id = uuidOfText(c.text);
-      if (!id || where.get(id) !== i) out.push(c.lead + c.text);
+      const id = ids[i];
+      if (!id || !inDoc(i)) out.push(c.lead + c.text);                          // not named by any edit: as stored
       else if (!live.has(id)) changed++;                                        // removed
       else {
         const node = doc.items.get(id).node;
@@ -265,12 +275,28 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
   if (!changed) return { ok: true, text: file, changed: 0 };
 
   // ---- read it back: it must be the document, and everything else must be the stored bytes
-  // (the document is reduced to what is compared and let go first: a large board is not held twice)
+  const topBack = cut(text) || refuse("the new file is not one list");
   const want = new Map<string, string>(), wantLib = new Map<string, string>(); let anonA = 0, anonB = 0;
   for (const [id, it] of doc.items) { if (id.startsWith("anon-")) anonA++; else want.set(id, ser(it.node)); }
   if (sch) for (const [name, n] of doc.lib) wantLib.set(name, ser(n));
-  doc = null; before.clear(); libBefore.clear(); fragText.clear();
-  const back = k.parseDoc(text, docType) || refuse("the new file could not be read back");
+  doc = null; before.clear(); libBefore.clear(); fragText.clear();   // (a large document is not held twice)
+  // items no edit named: each still there, once, as the stored text
+  const seen = new Set<string>(); let unnamedWas = 0, unnamedIs = 0;
+  ids.forEach((id, i) => { if (kinds.has(top!.children[i].head) && !id) unnamedWas++; });
+  const read = (c: Span): boolean => {   // whether this element of the new file goes through the reader
+    if (sch) return true;
+    const id = uuidOfText(c.text); if (!id) { unnamedIs++; return false; }
+    if (seen.has(id)) refuse("the new file has two items with the id " + id); seen.add(id);
+    if (want.has(id)) return true;
+    const at = where.get(id); if (at === undefined || inDoc(at) || top!.children[at].text !== c.text) refuse("item " + id + " came out differently");
+    return false;
+  };
+  const backText = sch ? text : subset(topBack!, (c) => read(c));
+  if (!sch) {
+    if (unnamedWas !== unnamedIs) refuse("the new file has a different number of unnamed items");
+    ids.forEach((id, i) => { if (id && !inDoc(i) && !seen.has(id)) refuse("item " + id + " is missing from the new file"); });
+  }
+  const back = k.parseDoc(backText, docType) || refuse("the new file could not be read back");
   for (const [id, it] of back.items) { if (id.startsWith("anon-")) { anonB++; continue; } const w = want.get(id); if (w === undefined) refuse("item " + id + " is in the new file but not in the document"); if (ser(it.node) !== w) refuse("item " + id + " reads back differently"); }
   for (const id of want.keys()) if (!back.items.has(id)) refuse("item " + id + " is missing from the new file");
   if (anonA !== anonB) refuse("the new file has a different number of unnamed items");
@@ -279,7 +305,6 @@ function fold(k: CanvasApi, docType: string, file: string, ops: FoldOp[]): FoldR
     for (const [name, w] of wantLib) { const b = back.lib.get(name); if (!b || ser(b) !== w) refuse("library symbol " + name + " reads back differently"); }
   }
   const kept = (l: ListSpans): string[] => l.children.filter((c) => !kinds.has(c.head) && c.head !== "paper" && c.head !== "title_block" && c.head !== "lib_symbols" && !(!sch && (BOARD_SECTIONS as readonly string[]).includes(c.head))).map((c) => c.text);
-  const topBack = cut(text) || refuse("the new file is not one list");
   const a = kept(top), b = kept(topBack!);
   if (a.length !== b.length || a.some((t, i) => t !== b[i]) || top.open !== topBack!.open) refuse("a section no edit touched came out differently");
   const section = (l: ListSpans, name: string): string | null => { const c = l.children.find((x) => x.head === name); return c ? c.text : null; };
