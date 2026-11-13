@@ -19,6 +19,12 @@ export function boxOf(item: Pick<KItem, "kind" | "node">): Box {
   const at = kid(n, "at")!, sz = kid(n, "size")!; const x = num(at[1]), y = num(at[2]), w = num(sz[1]), h = num(sz[2]);
   return [Math.min(x, x + w), Math.min(y, y + h), Math.max(x, x + w), Math.max(y, y + h)];
 }
+export const rectRadius = (n: SNode): number => { const r = kid(n, "radius"); return r ? Math.max(0, num(r[1])) : 0; };
+// Dragging RECT_RADIUS: x clamped to [ right - min( w, h ) / 2, right ], radius = right - x.
+export function rectRadiusFor(box: Box, x: number): number {
+  const maxR = Math.min(box[2] - box[0], box[3] - box[1]) / 2;
+  return box[2] - Math.min(Math.max(x, box[2] - maxR), box[2]);
+}
 export function circleOf(a: Pt, b: Pt, c: Pt): Pt | null {
   const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1])); if (Math.abs(d) < 1e-12) return null;
   const a2 = a[0] * a[0] + a[1] * a[1], b2 = b[0] * b[0] + b[1] * b[1], c2 = c[0] * c[0] + c[1] * c[1];
@@ -38,6 +44,9 @@ export function editPoints(doc: KDoc, item: KItem): EditPoints | null {
     const [x0, y0, x1, y1] = boxOf(item);
     const pts = [[x0, y0], [x1, y0], [x0, y1], [x1, y1]];
     if (k !== "sheet") pts.push([(x0 + x1) / 2, (y0 + y1) / 2]);     // RECT_CENTER
+    // RECT_RADIUS (RECTANGLE_POINT_EDIT_BEHAVIOR::MakePoints): a circle at ( right - corner radius, top ).  Text boxes
+    // get it in KiCad too, but the file format keeps no text box radius, so only rectangles carry it here.
+    if (k === "rectangle") { pts.push([x1 - rectRadius(n), y0]); return { pts, lines: RECT_LINES, guides: [], circles: [5] }; }
     return { pts, lines: RECT_LINES, guides: [] };
   }
   if (k === "circle") { const c = kp(n, "center"), r = num((kid(n, "radius") || [])[1]); return c ? { pts: [c, [c[0] + r, c[1]]], lines: [], guides: [] } : null; }
@@ -76,7 +85,7 @@ export function editBox(box: Box, ep: EditPoints, idx: number, p: Pt, minW: numb
     pinCorner(idx, tl, tr, bl, br, minW, minH);
     return [tl[0], tl[1], br[0], br[1]];
   }
-  if (idx === 4 && np === 5) { const dx = p[0] - (x0 + x1) / 2, dy = p[1] - (y0 + y1) / 2; return [x0 + dx, y0 + dy, x1 + dx, y1 + dy]; }
+  if (idx === 4 && np >= 5) { const dx = p[0] - (x0 + x1) / 2, dy = p[1] - (y0 + y1) / 2; return [x0 + dx, y0 + dy, x1 + dx, y1 + dy]; }
   const edge = idx - np;
   if (edge === 0) y0 = Math.min(p[1], y1 - minH); else if (edge === 1) x1 = Math.max(p[0], x0 + minW);
   else if (edge === 2) y1 = Math.max(p[1], y0 + minH); else if (edge === 3) x0 = Math.min(p[0], x1 - minW);
@@ -136,6 +145,11 @@ export function applyPointEdit(doc: KDoc, pe: PointEdit, p: Pt) {
     }
     const nm = arcMid(cc, ns, ne, ccw);
     for (const [key, q] of [["start", ns], ["mid", nm], ["end", ne]] as [string, Pt][]) { const kk = kid(n, key)!; kk[1] = r4(q[0]); kk[2] = r4(q[1]); }
+  } else if (k === "rectangle" && idx === 5 && ep.pts.length === 6) {
+    const r = r4(rectRadiusFor(boxOf({ kind: k, node: pe.orig }), p[0]));
+    const rk = kid(n, "radius"), at = rk ? n.indexOf(rk) : -1;
+    if (r > 0) { if (rk) rk[1] = r; else n.splice(n.indexOf(kid(n, "end")!) + 1, 0, ["radius", r]); }
+    else if (at >= 0) n.splice(at, 1);
   } else if (k === "rectangle" || k === "text_box") {
     const mn = k === "text_box" ? textBoxMinSize(pe.orig) : [0, 0];
     const b = editBox(boxOf({ kind: k, node: pe.orig }), ep, idx, p, Math.max(PE_MIN, mn[0]), Math.max(PE_MIN, mn[1])).map(r4);
@@ -239,13 +253,38 @@ export function pointEditEnd(ctx: SchCtx, commit: boolean) {
   ctx.requestRender();
   return changes;
 }
-// EDIT_POINTS::ViewDraw: filled squares in the aux-items colour with a lighter border; edge handles the same.
+// EDIT_POINTS::ViewDraw: each point a square (or a circle, SetDrawCircle) of POINT_SIZE px, filled in the
+// LAYER_AUX_ITEMS colour (inverted when too close to the background) then stroked BORDER_SIZE px in its border
+// shade; each edge's centre handle a circle the same way; indicator lines solid at BORDER_SIZE / 4 in the
+// border shade.  SCH_POINT_EDITOR never sets a point's hover or active state, so none is drawn here.
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+export const EDIT_BORDER_PX = IS_MAC ? 3 : 2;                  // EDIT_POINT::BORDER_SIZE (3 on macOS)
+export function editPointColors(aux: string, bg: string) {
+  let d = parseRgb(aux) || [0, 0, 0]; const b = parseRgb(bg);
+  if (b && (d[0] - b[0]) ** 2 + (d[1] - b[1]) ** 2 + (d[2] - b[2]) ** 2 < 0.5) d = [1 - d[0], 1 - d[1], 1 - d[2]];   // COLOR4D::Distance < 0.5: Invert
+  const br = d[0] * 0.299 + d[1] * 0.587 + d[2] * 0.117;
+  const shade = (f: number, dark: boolean) => "rgba(" + d.map((v) => Math.round(255 * (dark ? v * (1 - f) : v + (1 - v) * f))).join(",") + ",0.8)";
+  const [bf, dark] = br > 0.5 ? [0.7, true] : br > 0.2 ? [0.4, false] : [0.7, false];
+  return { fill: "rgb(" + d.map((v) => Math.round(255 * v)).join(",") + ")", border: shade(bf as number, dark as boolean) };
+}
+function parseRgb(c: string): number[] | null {
+  if (!c) return null;
+  let m = /^#([0-9a-f]{6})/i.exec(c); if (m) return [0, 2, 4].map((i) => parseInt(m![1].slice(i, i + 2), 16) / 255);
+  m = /^#([0-9a-f]{3})$/i.exec(c); if (m) return [0, 1, 2].map((i) => parseInt(m![1][i] + m![1][i], 16) / 255);
+  m = /rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/.exec(c); return m ? [+m[1] / 255, +m[2] / 255, +m[3] / 255] : null;
+}
 export function drawEditPoints(c: CanvasRenderingContext2D, ctx: SchCtx, px: number) {
   const t = S.pedit ? { item: S.pedit.item, ep: editPoints(ctx.doc, S.pedit.item) } : pointEditTarget(ctx); if (!t || !t.ep) return;
-  const fill = K.SCH.aux || "#000000", border = "rgba(179,179,179,0.8)", size = EDIT_POINT_PX * px / 2;
+  const { fill, border } = editPointColors(K.SCH.aux || "#000000", K.SCH.bg || "#F5F4EF"), size = EDIT_POINT_PX * px / 2, bw = EDIT_BORDER_PX * px;
+  const ep = t.ep, circ = new Set(ep.circles || []);
   c.save();
-  if (t.ep.guides.length) { c.strokeStyle = fill; c.lineWidth = px; c.setLineDash([3 * px, 3 * px]); c.beginPath(); for (const [a, b] of t.ep.guides) { c.moveTo(t.ep.pts[a][0], t.ep.pts[a][1]); c.lineTo(t.ep.pts[b][0], t.ep.pts[b][1]); } c.stroke(); c.setLineDash([]); }
-  c.fillStyle = fill; c.strokeStyle = border; c.lineWidth = 3 * px;
-  for (const h of editHandles(t.ep)) { c.strokeRect(h[0] - size, h[1] - size, 2 * size, 2 * size); c.fillRect(h[0] - size, h[1] - size, 2 * size, 2 * size); }
+  c.fillStyle = fill; c.strokeStyle = border; c.lineWidth = bw;
+  const dot = (h: Pt, round: boolean) => {
+    c.beginPath(); if (round) c.arc(h[0], h[1], size, 0, 2 * Math.PI); else c.rect(h[0] - size, h[1] - size, 2 * size, 2 * size);
+    c.fill(); c.stroke();
+  };
+  ep.pts.forEach((h, i) => dot(h, circ.has(i)));
+  for (const h of editHandles(ep).slice(ep.pts.length)) dot(h, true);
+  if (ep.guides.length) { c.lineWidth = bw / 4; c.beginPath(); for (const [a, b] of ep.guides) { c.moveTo(ep.pts[a][0], ep.pts[a][1]); c.lineTo(ep.pts[b][0], ep.pts[b][1]); } c.stroke(); }
   c.restore();
 }

@@ -1583,6 +1583,31 @@ test("smaller commands: break wire, symbol flags, units and body styles, referen
   _.highlightClick(c, [70, 63.55]); assert.ok(sch.state.highlight); assert.ok(sch.onKey("~", {}, c)); assert.strictEqual(sch.state.highlight, null); assert.strictEqual(sch.onKey("~", {}, c), false);
 });
 
+test("drag net collision (SCH_DRAG_NET_COLLISION_MONITOR): a junction joining two nets, a connection the move broke", () => {
+  let { d, c } = fresh();
+  const w = addWire(d, [12.7, 96.52], [25.4, 96.52]);               // into R1 pin 1
+  sch.setDragMode(c, "move");
+  assert.ok(_.beginDrag(c, d.items.get("s1"), [25.4, 100.33], true)); _.moveDrag(c, [25.4, 113.03]);
+  let m = _.collisionMarkers(d, sch.state.drag.collision, _.dragJunctions(d, sch.state.drag));
+  assert.strictEqual(m.breaks.length, 1, "the wire is left behind: one broken connection");
+  assert.deepStrictEqual([m.breaks[0].a, m.breaks[0].b].map(String).sort(), ["25.4,109.22", "25.4,96.52"].sort());
+  assert.ok(Math.abs(m.breaks[0].r - 0.1524) < 1e-9, "radius: the wire's pen (above the 800 IU floor)");
+  _.moveDrag(c, [25.4, 100.33]);
+  m = _.collisionMarkers(d, sch.state.drag.collision, _.dragJunctions(d, sch.state.drag));
+  assert.strictEqual(m.breaks.length, 0, "back in place: connected again");
+  _.endDrag(c, false); assert.ok(w);
+  ({ d, c } = fresh()); sch.setDragMode(c, "move");
+  addWire(d, [165.1, 50.8], [190.5, 50.8]); const v = addWire(d, [177.8, 38.1], [177.8, 44.45]);
+  assert.ok(_.beginDrag(c, v, [177.8, 44.45], true)); _.moveDrag(c, [177.8, 50.8]);
+  m = _.collisionMarkers(d, sch.state.drag.collision, _.dragJunctions(d, sch.state.drag));
+  assert.deepStrictEqual(m.junctions.map((j) => j.p), [[177.8, 50.8]], "the moved wire's end lands on another net's wire");
+  assert.ok(Math.abs(m.junctions[0].r - 0.9144 * 1.5) < 1e-9);
+  _.endDrag(c, false);
+  ({ d, c } = fresh());
+  const g = K.createItem(d, _.rectangleNode([150, 150], [160, 160]));
+  assert.ok(_.beginDrag(c, g, [150, 150], true)); assert.strictEqual(sch.state.drag.collision, null, "graphics only: no monitor"); _.endDrag(c, false);
+});
+
 // ---- the asynchronous sheet tool, then the checks over every fragment produced ----
 async function testAsync(name, fn) { try { await fn(); passed++; console.log("  ok   " + name); } catch (e) { failed++; console.log("  FAIL " + name + "\n       " + (e.stack || e).toString().split("\n").slice(0, 4).join("\n       ")); } }
 async function main() {
@@ -1725,7 +1750,8 @@ test("point editor: corners, edges and centre of a rectangle; circle radius; arc
   const { d, c } = fresh(); sch.onActivate("select", c);
   const rect = K.createItem(d, _.rectangleNode([101.6, 127], [127, 139.7]));
   const pe = (id, at, to) => { sch.state.sel = id; assert.ok(_.pointEditStart(c, at, {}), "a handle at " + at); _.pointEditMove(c, to, {}); return _.pointEditEnd(c, true); };
-  assert.deepStrictEqual(_.editHandles(_.editPoints(d, rect)).length, 9, "four corners, the centre, four edge midpoints");
+  assert.deepStrictEqual(_.editHandles(_.editPoints(d, rect)).length, 10, "four corners, the centre, RECT_RADIUS, four edge midpoints");
+  assert.deepStrictEqual(_.editPoints(d, rect).circles, [5], "RECT_RADIUS is drawn as a circle");
   let ch = pe(rect.id, [127, 139.7], [134.62, 144.78]);
   assert.strictEqual(lastCommit(c).label, "Move Point");
   let n = fragItem(ch[0]); assert.deepStrictEqual([kid(n, "start").slice(1), kid(n, "end").slice(1)], [[101.6, 127], [134.62, 144.78]]);
@@ -1741,6 +1767,12 @@ test("point editor: corners, edges and centre of a rectangle; circle radius; arc
   ch = pe(arc.id, [60.96, 152.4], [58.42, 152.4]); n = fragItem(ch[0]);
   assert.deepStrictEqual([kid(n, "start").slice(1), kid(n, "end").slice(1)], [[58.42, 152.4], [68.58, 152.4]], "both ends on the new radius");
   assert.deepStrictEqual(kid(n, "mid").slice(1), [63.5, 147.32], "the same side as before");
+  const rr = K.createItem(d, _.rectangleNode([0, 0], [10.16, 6.35])); kid(rr.node, "end"); rr.node.splice(rr.node.indexOf(kid(rr.node, "end")) + 1, 0, ["radius", 1.27]); K.replaceChange(d, rr);
+  assert.deepStrictEqual(_.editPoints(d, rr).pts[5], [8.89, 0], "RECT_RADIUS sits at ( right - radius, top )");
+  ch = pe(rr.id, [8.89, 0], [2.54, 2.54]); n = fragItem(ch[0]);
+  assert.strictEqual(kid(n, "radius")[1], 3.175, "clamped to half the shorter side");
+  assert.ok(n.indexOf(kid(n, "radius")) === n.indexOf(kid(n, "end")) + 1, "(radius) right after (end), as the writer puts it");
+  ch = pe(rr.id, [10.16 - 3.175, 0], [12.7, 0]); n = fragItem(ch[0]); assert.ok(!kid(n, "radius"), "radius 0: no (radius) token");
   const before = c.log.length; sch.state.sel = rect.id; assert.ok(!_.pointEditStart(c, [200, 200], {}), "away from the handles: not the point editor");
   _.pointEditStart(c, kid(n, "start").slice(1), {}); _.pointEditEnd(c, true); assert.strictEqual(c.log.length, before, "a click without a move commits nothing");
 });

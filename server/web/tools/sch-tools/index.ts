@@ -24,7 +24,7 @@ import { assignPastedRef, clipboardText, copyAsText, copySelection, cutSelection
 import { CLIP, clipRead, clipWrite, cursorOf, selectedItems, setSelectionIds } from "./commands";
 import { junctionAt, needsJunction, pinsAt } from "./connect";
 import { convertNode, convertSelection, validNetname } from "./convert";
-import { autostartKind, danglingEnds, danglingLabelIds, drawOverlay } from "./dangling";
+import { autostartKind, danglingEnds, danglingLabelIds, dragJunctions, drawOverlay } from "./dangling";
 import { type PromptFn, autostartAt, isPowerSymbol, onDownCapture, onKeyCapture, onUpCapture, pickSymbol, placeClassLabel, powerSymbols, setPromptImpl } from "./dom";
 import { beginDrag, bendPath, cancelDrag, cleanupAt, connPoints, cycleLineMode, endDrag, makeAnchor, mergeAt, modeText, moveDrag, ridersOf, setDragMode, setLineMode } from "./drag";
 import { cleanupSheetPins, ercCheck, ercNets, runERC, subsheetDoc, syncSheetPins } from "./erc";
@@ -38,7 +38,8 @@ import { selectConnection, selectNode, stepNetItem } from "./netwalk";
 import { SHEET_FILE_OFF, SHEET_NAME_OFF, arcNode, base64ToBytes, bezierNode, busEntryNode, bytesToBase64, circleNode, classLabelNode, imageData, imageNode, imageSize, junctionNode, labelNode, lineNode, noConnectNode, polygonNode, polylineNode, rectangleNode, ruleAreaNode, sheetNode, sheetPinNode, symbolNode, tableNode, drawTableNode, drawTableSize, textBoxNode } from "./nodes";
 import { MX, MY, RCCW, anchorOf, cloneNode, mirrorNode, mul, orientOf, orientSymbol, rotateNode, shiftNode, tFrom } from "./orient";
 import { ghostSegs } from "./overlay";
-import { applyPointEdit, editFollowers, editHandles, editPoints, pointEditEnd, pointEditMove, pointEditStart, textBoxMinSize } from "./point-edit";
+import { collisionInit, collisionMarkers } from "./collision";
+import { applyPointEdit, editFollowers, editHandles, editPointColors, editPoints, rectRadiusFor, pointEditEnd, pointEditMove, pointEditStart, textBoxMinSize } from "./point-edit";
 import { incrementSelection, incrementText, rememberPlaced, repeatLast } from "./repeat";
 import { deleteAt, deleteChanges, deleteSelected, duplicateSelected, orientSelected } from "./selection-edits";
 import { cancelDraw, drawClick, finishDraw } from "./shapes";
@@ -69,13 +70,13 @@ const sch = {
   actions, runAction, markers() { return S.markers; },
   // clipboard text in the desktop's format and its parser, ERC and annotation as pure functions over a doc
   clipboardText, parseClipboard, ercCheck, annotateChanges, clearAnnotationChanges, fieldsTableRows, fieldsTableChanges, busMembers,
-  _: { setFollow(on: boolean) { S.forceFollow = !!on; }, danglingLabelIds, schArcDrawMode, pinAt, pinBox, pinAltFunction, pinOf, pinProperties, pinHelper, PIN_HELPERS, swapPinLabels, singleNetLabelForPin, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
+  _: { setFollow(on: boolean) { S.forceFollow = !!on; }, danglingLabelIds, dragJunctions, schArcDrawMode, pinAt, pinBox, pinAltFunction, pinOf, pinProperties, pinHelper, PIN_HELPERS, swapPinLabels, singleNetLabelForPin, labelShapeForPin, pinAlternates, setAltPinFunction, labelOrientationForPoint, autoRotateNode, autoRotateChanges, autoRotateOf, setAutoRotate, setSpinOfNode, spinOfNode, textBoxMinSize, globalPowerPin, breakAgain, sourceLine, danglingEnds, endBreak, onKeyCapture, onUpCapture, onDownCapture, selectedItems, setSelectionIds, cursorOf, pasteChanges, pasteText, cutSelection, copySelection, duplicateSelection, copyAsText, incrementText, repeatLast, rememberPlaced,
     convertNode, convertSelection, validNetname, symbolPins, bodyBox, fieldExtent, autoplaceNode, autoplaceSelection, splitRef, setReference, assignPastedRef, annotate, clearAnnotation,
     ercNets, runERC, subsheetDoc, syncSheetPins, cleanupSheetPins, transformNode, transformChanges, transformSelected, selectionCentre, halfGrid, swapNodes, swapChanges, swapSelection,
     alignToGridChanges, alignToGrid, alignEdgeChanges, alignEdges, moveExactChanges, moveExactly, rotationCentre, breakWireChanges, breakWire, openFieldsTable, unfoldMembers, busLabelsOf, unfoldBus, unfoldAction,
     selectConnection, selectNode, stepNetItem, incrementSelection, editFieldPrompt, toggleSymbolFlag, stepUnit, cycleBodyStyle, placeNextUnit, libUnits, showDatasheet, CLIP, clipWrite, clipRead,
     lineNode, junctionNode, noConnectNode, busEntryNode, labelNode, symbolNode, orientSymbol, rotateNode, mirrorNode, cloneNode, shiftNode,
-    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, editPoints, editHandles, applyPointEdit, editFollowers, pointEditStart, pointEditMove, pointEditEnd, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
+    tFrom, orientOf, mul, RCCW, MX, MY, needsJunction, junctionAt, pinsAt, snapConn, simplify, simplifyWireList, computeBreakPoint, collisionInit, collisionMarkers, editPoints, editHandles, editPointColors, rectRadiusFor, applyPointEdit, editFollowers, pointEditStart, pointEditMove, pointEditEnd, wireFollow, wireClick, wirePoints, undoSegment, switchPosture, wireKey, isTerminalPoint, mergeOverlap,
     analyzePoint, autostartKind, autostartAt, explicitJunctionNeeded, explicitJunctionAllowed, previewJunctions, editTxn, txnCleanUp, txnTrimWire, singleClickPlace, busyMessage, vetoTool, startWire, cancelWire, hitNonSymbol, textRect, pickNonSymbol,
     beginDrag, moveDrag, endDrag, placeText, bendPath, connPoints, makeAnchor, ridersOf, cleanupAt, mergeAt, startCarry, placeCarry, dropCarry, finishWire, deleteSelected, duplicateSelected, orientSelected, modChange,
     // graphic shapes, directive labels, power symbols and the delete tool

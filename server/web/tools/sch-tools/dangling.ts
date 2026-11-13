@@ -6,6 +6,7 @@ import { BUS_TEXT, previewJunctions } from "./junction";
 import { anchorOf } from "./orient";
 import { outline, paint } from "./overlay";
 import { drawEditPoints } from "./point-edit";
+import { collisionCursor, collisionMarkers, drawCollision } from "./collision";
 import { snapAnchor, snapConn } from "./snap";
 import { drawSchArcPreview } from "./arcs";
 import { drawTableLines } from "./nodes";
@@ -171,8 +172,13 @@ export function drawOverlay(c: CanvasRenderingContext2D, view: KView, ctx: SchCt
       c.beginPath(); c.moveTo(s.pts[0][0], s.pts[0][1]); for (let i = 1; i < s.pts.length; i++) c.lineTo(s.pts[i][0], s.pts[i][1]); c.stroke(); c.restore();
     }
     // SCH_MOVE_TOOL: every step previews JUNCTION_HELPERS::PreviewJunctions of the selection and the drag lines
-    if (S.drag.moved) drawJunctionDots(c, dragJunctions(doc, S.drag), px);
-  }
+    let warn = false;
+    if (S.drag.moved) {
+      const js = dragJunctions(doc, S.drag); drawJunctionDots(c, js, px);
+      if (S.drag.collision) { const m = collisionMarkers(doc, S.drag.collision, js); drawCollision(c, m, px); warn = m.junctions.length + m.breaks.length > 0; }   // SCH_DRAG_NET_COLLISION_MONITOR::Update
+    }
+    collisionCursor(ctx.stage, warn);
+  } else if (S.collisionCursor != null) collisionCursor(ctx.stage, false);
   const w = S.wire;
   if (w) {
     // the segments in KiCad's preview colours (wire / bus / notes), then the junction dots the drop would add

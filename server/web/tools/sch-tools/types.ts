@@ -72,6 +72,8 @@ export interface SchDrag {
   mode?: string;
   brk?: BreakJob;
   restoreMode?: string;
+  /** SCH_DRAG_NET_COLLISION_MONITOR's state for this move */
+  collision?: import("./collision").NetCollision | null;
   /** "undo" when Ctrl+Z ended it */
   cancel?: string;
   /** a paste / duplicate in flight: the ids of the items that only exist on this client */
@@ -89,7 +91,7 @@ export interface SchDraw {
   arc?: import("../arc-geom").ArcGeom; started?: boolean; chainSeeded?: boolean; clickSeeded?: boolean; lastClick?: Pt;
 }
 /** The editable points of an item (point editor) and the segments between them. */
-export interface EditPoints { pts: Pt[]; lines: number[][]; guides: number[][] }
+export interface EditPoints { pts: Pt[]; lines: number[][]; guides: number[][]; circles?: number[] }
 /** An item that follows a point edit: a connected line end, a label or a no-connect on the edited point. */
 export interface EditFollower { item: KItem; orig: SNode; end?: number; at?: Pt; index?: number }
 /** S.pedit: a point-editor drag in flight. */
@@ -116,6 +118,8 @@ export type SchState = {
   showDangling?: boolean; docGen: number;
   /** the modifier keys of the last pointer move (Shift turns the magnetic snap and its indicator off) */
   mods?: Mods | null;
+  /** the stage cursor the drag-collision WARNING cursor replaced */
+  collisionCursor?: string | null;
   labelQueue?: SNode[] | null;
   lastLabelShape?: string; lastFlagShape?: string; lastAutoRotate?: boolean; autoRotateIds?: Set<string>;
   lastTextH?: string; lastTextV?: string; lastTextBold?: boolean; lastTextItalic?: boolean; lastTextVertical?: boolean; lastTextSpin?: number;

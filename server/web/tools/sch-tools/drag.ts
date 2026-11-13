@@ -1,6 +1,7 @@
 import type { Anchor, LineEnd, Rider, SchCtx, SchDrag, Pt } from "./types";
 import { symbolLibId } from "./autoplace";
 import { autoRotateChanges } from "./autorotate";
+import { collisionCursor, collisionInit } from "./collision";
 import { setSelectionIds } from "./commands";
 import { junctionAt, lineEndsAt, lineMidsAt, needsJunction, pinsAt } from "./connect";
 import { junctionNode, lineNode } from "./nodes";
@@ -169,6 +170,8 @@ export function beginDrag(ctx: SchCtx, items: KItem | KItem[], mm: Pt, byPointer
     if (!spanned.length) { for (const a of d.anchors) for (const f of a.followers) moving.add(f.item.id); break; }
     for (const it of spanned) d.items.push({ item: it, kind: it.kind, orig: deep(it.node) });
   }
+  // SCH_MOVE_TOOL: a SCH_DRAG_NET_COLLISION_MONITOR for any selection that is not graphics only
+  d.collision = d.items.some((e) => connPoints(doc, e.item).length) ? collisionInit(doc, d, !!(opts && opts.plain)) : null;
   S.drag = d; announceModes(ctx); return d;
 }
 // Live preview: the moved items and stretched ends are edited in place (restored by endDrag),
@@ -203,7 +206,7 @@ export function moveDrag(ctx: SchCtx, mm: Pt) {
   applyDrag(ctx.doc, d, dx, dy); ctx.requestRender();
 }
 export function endDrag(ctx: SchCtx, commit: boolean) {
-  const d = S.drag; S.drag = null; if (!d) return;
+  const d = S.drag; S.drag = null; collisionCursor(ctx.stage, false); if (!d) return;
   // only a drag that really moved (or a key-started move) eats the following double click; an unmoved
   // press/release on a selected item must leave the dblclick to open its properties (SCH_SELECTION_TOOL::Main)
   if (d.moved || !d.byPointer) S.dragEndedAt = Date.now();
