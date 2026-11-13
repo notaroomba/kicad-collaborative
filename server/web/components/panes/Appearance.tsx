@@ -12,6 +12,7 @@ import { cx } from "../../util";
 import { KIcon } from "../Icon";
 import { Collapsible, ColorPicker, ContextMenu, Swatch, pdispatch, useContextMenu, usePanels, type ColorAt, type MenuItem } from "./widgets";
 import { IS_MAC, keyName } from "../../keys";
+import { unescapeString } from "../../dialogs/sch-items-logic";
 
 // A list row (`.layer`): flex, centred, 8px gap, 3px/4px padding, 2px radius; callers add the hover fill.
 const ROW = "layer flex items-center gap-2 py-[3px] px-1 rounded-xs";
@@ -156,9 +157,10 @@ function ObjectsTab() {
 
 function netMenu(n: NetRow, pick: (ev: { clientX: number; clientY: number }) => void, ev: { clientX: number; clientY: number }): MenuItem[] {
   const cmd = (c: NetCmd) => () => pdispatch({ t: "netCmd", cmd: c, name: n.name });
+  const shown = unescapeString(n.name);   // NET_GRID_TABLE::Rebuild: UnescapeString( net->GetNetname() )
   return [
     { label: "Set Net Color", run: () => pick(ev) }, { label: "Clear Net Color", run: () => pdispatch({ t: "netColor", name: n.name, color: null }), disabled: !n.color }, "-",
-    { label: `Highlight ${n.name}`, run: cmd("highlight") }, { label: `Select Tracks and Vias in ${n.name}`, run: cmd("select") }, { label: `Unselect Tracks and Vias in ${n.name}`, run: cmd("unselect") }, "-",
+    { label: `Highlight ${shown}`, run: cmd("highlight") }, { label: `Select Tracks and Vias in ${shown}`, run: cmd("select") }, { label: `Unselect Tracks and Vias in ${shown}`, run: cmd("unselect") }, "-",
     { label: "Show All Nets", run: cmd("showAll") }, { label: "Hide All Other Nets", run: cmd("hideOthers") },
   ];
 }
@@ -179,8 +181,8 @@ function NetsTab({ pickColor }: { pickColor: (c: ColorAt) => void }) {
   const [q, setQ] = useState("");
   const menu = useContextMenu();
   const ql = q.trim().toLowerCase();
-  const list = ql ? nets.filter((n) => n.name.toLowerCase().includes(ql)) : nets;
-  const netColor = (n: NetRow) => (ev: { clientX: number; clientY: number }) => pickColor({ x: ev.clientX, y: ev.clientY, title: `${n.name} color`, color: n.color, canClear: !!n.color, clearLabel: "Clear Net Color", set: (c) => pdispatch({ t: "netColor", name: n.name, color: c }) });
+  const list = ql ? nets.filter((n) => unescapeString(n.name).toLowerCase().includes(ql)) : nets;
+  const netColor = (n: NetRow) => (ev: { clientX: number; clientY: number }) => pickColor({ x: ev.clientX, y: ev.clientY, title: `${unescapeString(n.name)} color`, color: n.color, canClear: !!n.color, clearLabel: "Clear Net Color", set: (c) => pdispatch({ t: "netColor", name: n.name, color: c }) });
   const classColor = (c: NetClassRow) => (ev: { clientX: number; clientY: number }) => pickColor({ x: ev.clientX, y: ev.clientY, title: `${c.name} color`, color: c.color, canClear: !!c.color, clearLabel: "Clear Netclass Color", set: (v) => pdispatch({ t: "classColor", name: c.name, color: v }) });
   return (
     <>
@@ -192,7 +194,7 @@ function NetsTab({ pickColor }: { pickColor: (c: ColorAt) => void }) {
             <div key={n.name} className={cx(ROW2, "hover:bg-panel")} data-net={n.name} onContextMenu={(ev) => menu.open(ev, netMenu(n, netColor(n), ev))}>
               <Swatch color={n.color} title="Left double click or middle click for color change, right click for menu" onPick={netColor(n)} />
               <Eye on={n.visible} k={n.name} title="Show or hide ratsnest for this net" onChange={(on) => pdispatch({ t: "netVisible", name: n.name, on })} />
-              <span className="overflow-hidden text-ellipsis">{n.name}</span>
+              <span className="overflow-hidden text-ellipsis">{unescapeString(n.name)}</span>
             </div>
           )) : <p className="note px-2">{nets.length ? "No nets match the filter." : "This board has no nets yet."}</p>}
         </div>

@@ -14,6 +14,7 @@ import { KC, isSchDoc, kdoc, panelStore, pcbTools, tctx } from "./core";
 import { commitWithOtherUnits } from "../../dialogs/sync-units";
 import * as VM from "../../canvas/variant-model";
 import { currentInstance } from "../schnets";
+import { unescapeString } from "../../dialogs/sch-items-logic";
 
 type Raw = string | number | boolean | null;
 interface PropDef {
@@ -247,7 +248,7 @@ function layerProp(doc: KDoc, copperOnly: boolean, def: string): PropDef {
 }
 function netProps(doc: KDoc): PropDef[] {
   // BOARD_CONNECTED_ITEM's "Net" is a net selector: the board's nets, <no net> first
-  const nets: [string, string][] = [["", "<no net>"], ...H().boardNetNames(doc).filter(Boolean).map((n): [string, string] => [n, n])];
+  const nets: [string, string][] = [["", "<no net>"], ...H().boardNetNames(doc).filter(Boolean).map((n): [string, string] => [n, unescapeString(n)])];   // pcb_track.cpp: UnescapeString( GetNetname() )
   return [{ group: "Net", name: "Net", type: "enum", choices: nets, get: (it) => H().netNameOf(doc, it.node) || "",
     set: (n, v) => { if (H().netNameOf(doc, n) === String(v || "")) return false; setNet(doc, n, String(v || "")); } },
     { group: "Net", name: "Net Class", type: "text", get: (it) => { const n = H().netNameOf(doc, it.node); return n ? netClassOf(n) : "Default"; } }];
@@ -332,7 +333,7 @@ function footprintProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
 function padProps(fp: KItem, doc: KDoc): PropDef[] {
   const h = H(), G = "Pad Properties"; const pads = h.kids(fp.node, "pad"); if (!pads.length) return [];
   let idx = padIndexOf.get(fp.id) || 0; if (idx >= pads.length) idx = 0;
-  const picker: PropDef = { group: G, name: "Pad", type: "enum", choices: pads.map((p, i): [string, string] => { const net = h.netNameOf(doc, p); return [String(i), h.str(p[1]) + (net ? " · " + net : "")]; }), get: () => String(idx), local: (v, x) => { padIndexOf.set(x.id, +(v as string) || 0); } };
+  const picker: PropDef = { group: G, name: "Pad", type: "enum", choices: pads.map((p, i): [string, string] => { const net = h.netNameOf(doc, p); return [String(i), h.str(p[1]) + (net ? " · " + unescapeString(net) : "")]; }), get: () => String(idx), local: (v, x) => { padIndexOf.set(x.id, +(v as string) || 0); } };
   const own = padDefs(doc, idx).filter((d) => (d.group === G || d.group === "Overrides" || d.group === PM || d.group === BD) && (!d.avail || d.avail(fp))).map((d) => d.group === "Overrides" ? Object.assign(d, { group: "Pad Overrides" }) : d);
   return [picker, ...own];
 }
@@ -343,7 +344,7 @@ function padDefs(doc: KDoc, idx: number): PropDef[] {
   const info = (x: KItem) => { const p = h.padNode(x.node, idx); return p ? h.padInfo(doc, p) : null; };
   const edit = (patch: (v: Raw, n: SNode) => Record<string, unknown>) => (n: SNode, v: Raw) => h.setPad(n, idx, patch(v, n), doc);
   const drillOf = (x: KItem): [number, number] => { const i = info(x); if (!i || !i.drill) return [0, 0]; const p = i.drill.split(/x/i).map(Number); return [p[0] || 0, p.length > 1 ? p[1] || 0 : p[0] || 0]; };
-  const nets: [string, string][] = [["", "<no net>"], ...h.boardNetNames(doc).map((n): [string, string] => [n, n])];
+  const nets: [string, string][] = [["", "<no net>"], ...h.boardNetNames(doc).map((n): [string, string] => [n, unescapeString(n)])];
   const tail = ["zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "teardrops", "tenting", "uuid", "tstamp", "padstack"];
   // the writer's order of a pad's children after (layers …) (PCB_IO_KICAD_SEXPR::format( PAD ))
   const ORDER = ["property", "sim_electrical_type", "layers", "remove_unused_layers", "keep_end_layers", "zone_layer_connections", "roundrect_rratio", "chamfer_ratio", "chamfer", "net", "pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", ...tail];
@@ -702,7 +703,7 @@ function tuningPatternProps(it: KItem, doc: KDoc): PropDef[] {
   const setXy = (n: SNode, k: string, i: 1 | 2, v: number) => { const c = h.kid(n, k), q = c && h.kid(c, "xy"); if (!q) return false; q[i] = r6(v); };
   const mode = (x: KItem) => strKid(x.node, "tuning_mode") || "single";
   const timeDomain = (x: KItem) => yn(x.node, "is_time_domain", false);
-  const nets: [string, string][] = [["", "<no net>"], ...h.boardNetNames(doc).filter(Boolean).map((n): [string, string] => [n, n])];
+  const nets: [string, string][] = [["", "<no net>"], ...h.boardNetNames(doc).filter(Boolean).map((n): [string, string] => [n, unescapeString(n)])];
   const pos = (name: string, i: 1 | 2): PropDef => ({ group: BASIC, name, type: "coord", get: (x) => (xyOf(x.node, "origin") || [0, 0])[i - 1],
     // PCB_GENERATOR::SetPosition moves the pattern: its origin and end shift, Update re-tunes it on the track there
     set: (n, v) => { const o = xyOf(n, "origin"); if (!o) return false; const d = (v as number) - o[i - 1]; setXy(n, "origin", i, o[i - 1] + d); const e = xyOf(n, "end"); if (e) setXy(n, "end", i, e[i - 1] + d); } });
