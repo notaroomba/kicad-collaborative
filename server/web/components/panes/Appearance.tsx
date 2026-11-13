@@ -242,15 +242,18 @@ function PresetsAndViewports() {
   return (
     <div className="flex-none px-1.5 py-1.5 border-t border-line bg-bench">
       <div className="mb-0.5" data-label="presets">Presets ({keyName(PRESET_SWITCH_KEY + "+Tab")}):</div>
-      <Select id="presetSel" className={SELECT} title="Layer presets" value={preset || ""}
-        options={[...(preset ? [] : [{ value: "", label: "(unsaved)" }]), ...builtin.map((p) => ({ value: p, label: p })), ...user.map((p) => ({ value: p, label: p })),
+      {/* rebuildLayerPresetsWidget: the built-in presets, then "---" and the user's own (both alphabetical), then
+          "---", Save, Delete; no preset matching what is shown selects that last separator (count - 3) */}
+      <Select id="presetSel" className={SELECT} title="Layer presets" value={preset && presets.includes(preset) ? preset : "\u0001sep"}
+        options={[...builtin.map((p) => ({ value: p, label: p })), ...(user.length ? [{ value: "\u0001sepUser", label: "---", sep: true }, ...user.map((p) => ({ value: p, label: p }))] : []),
           { value: "\u0001sep", label: "---", sep: true }, { value: "\u0001save", label: "Save preset..." }, { value: "\u0001delete", label: "Delete preset...", disabled: !user.length }]}
-        onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "presetSave" }); else if (v === "\u0001delete") pdispatch({ t: "presetDelete" }); else if (v) pdispatch({ t: "preset", name: v }); }} />
+        onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "presetSave" }); else if (v === "\u0001delete") pdispatch({ t: "presetDelete" }); else if (v && !v.startsWith("\u0001")) pdispatch({ t: "preset", name: v }); }} />
       <div className="mt-1.5 mb-0.5" data-label="viewports">Viewports ({keyName(VIEWPORT_SWITCH_KEY + "+Tab")}):</div>
-      <Select id="viewportSel" className={SELECT} title="Viewports" value={viewport && viewports.includes(viewport) ? viewport : ""}
-        options={[{ value: "", label: "(unsaved)" }, ...viewports.map((p) => ({ value: p, label: p })),
+      {/* rebuildViewportsWidget: the saved viewports, "---", Save, Delete; the separator while none is current */}
+      <Select id="viewportSel" className={SELECT} title="Viewports" value={viewport && viewports.includes(viewport) ? viewport : "\u0001sep"}
+        options={[...viewports.map((p) => ({ value: p, label: p })),
           { value: "\u0001sep", label: "---", sep: true }, { value: "\u0001save", label: "Save viewport..." }, { value: "\u0001delete", label: "Delete viewport...", disabled: !viewports.length }]}
-        onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "viewportSave" }); else if (v === "\u0001delete") pdispatch({ t: "viewportDelete" }); else if (v) pdispatch({ t: "viewport", name: v }); }} />
+        onChange={(v) => { if (v === "\u0001save") pdispatch({ t: "viewportSave" }); else if (v === "\u0001delete") pdispatch({ t: "viewportDelete" }); else if (v && !v.startsWith("\u0001")) pdispatch({ t: "viewport", name: v }); }} />
     </div>
   );
 }

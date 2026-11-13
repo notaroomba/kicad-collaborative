@@ -184,7 +184,37 @@ function layerRows(doc: KDoc): LayerInfo[] {
     return { key, name: layerDisplayName(doc, key), color: user.colors[key] || def, defaultColor: def, visible: !hidden.has(key), copper: isCu(key), tip: layerTip(key) };
   });
 }
-function allPresets(layers: string[]): Preset[] { return builtinPresets(layers).concat(proj.presets); }
+/** std::map order (m_layerPresets, m_viewports): wxString's ordinal comparison. */
+const byName = (a: { name: string }, b: { name: string }): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+/** APPEARANCE_CONTROLS::m_layerPresets: built-in and user presets in one alphabetical map. */
+function allPresets(layers: string[]): Preset[] { return builtinPresets(layers).concat(proj.presets.filter((p) => !BUILTIN_NAMES.includes(p.name))).sort(byName); }
+const BUILTIN_NAMES = ["All Layers", "No Layers", "All Copper Layers", "Inner Copper Layers", "Front Layers", "Front Assembly View", "Back Layers", "Back Assembly View"];
+
+// ---------------------------------------------------------------- MRUs (EDA_VIEW_SWITCHER, Ctrl+Tab / Shift+Tab)
+// m_presetMRU / m_viewportMRU: alphabetical when the presets are (re)loaded, then each preset or viewport applied,
+// saved or overwritten moves to the front (Insert( name, 0 )); a deleted one leaves.
+let presetMRU: string[] = [], viewportMRU: string[] = [], mruFor = "";
+function syncMRU(mru: string[], names: string[], reset: boolean): string[] {
+  if (reset) return names.slice();
+  const have = new Set(names); const kept = mru.filter((n) => have.has(n));
+  const fresh = names.filter((n) => !kept.includes(n));
+  return fresh.concat(kept);
+}
+const toFront = (mru: string[], name: string): string[] => [name, ...mru.filter((n) => n !== name)];
+/** The layer presets in most-recently-used order (APPEARANCE_CONTROLS::GetLayerPresetsMRU). */
+export function layerPresetsMRU(): string[] { publishAppearance(); return presetMRU.slice(); }
+/** The viewports in most-recently-used order (GetViewportsMRU). */
+export function viewportsMRU(): string[] { publishAppearance(); return viewportMRU.slice(); }
+/** APPEARANCE_CONTROLS::ApplyLayerPreset( name ): apply it and move it to the front of the MRU. */
+export function applyLayerPresetByName(name: string): void {
+  const p = allPresets(layerKeys()).find((x) => x.name === name); if (!p) return;
+  applyPreset(p); presetMRU = toFront(presetMRU, name); publishAppearance();
+}
+/** APPEARANCE_CONTROLS::ApplyViewport( name ). */
+export function applyViewportByName(name: string): void {
+  const v = proj.viewports.find((x) => x.name === name); if (!v) return;
+  E.viewTouched = true; fitBox(v.rect, 1); proj.viewport = v.name; saveProj(); viewportMRU = toFront(viewportMRU, name); publishAppearance();
+}
 function sameSet(a: string[], b: string[]): boolean { if (a.length !== b.length) return false; const s = new Set(a); return b.every((x) => s.has(x)); }
 function currentPreset(layers: LayerInfo[]): string | null {
   const vis = layers.filter((l) => l.visible).map((l) => l.key), flip = !!E.renderOpts.flip;
@@ -210,11 +240,15 @@ export function publishAppearance(): void {
   const netRows: NetRow[] = n.nets.map((x) => ({ name: x.name, code: x.code, color: proj.netColors[x.name] || null, visible: !hiddenNets.has(x.name), netclass: x.netclass }));
   const classRows: NetClassRow[] = n.classes.map((name) => ({ name, color: proj.classColors[name] || null, visible: !proj.hiddenClasses.includes(name) }));
   const names = layers.map((l) => l.key);
+  const reset = mruFor !== projFor; mruFor = projFor;
+  presetMRU = syncMRU(presetMRU, allPresets(names).map((p) => p.name), reset);
+  const vps = proj.viewports.slice().sort(byName);
+  viewportMRU = syncMRU(viewportMRU, vps.map((v) => v.name), reset);
   const ap: AppearanceState = {
     layers, active: E.activeLayer || "", objects, nets: netRows, netClasses: classRows,
     inactive: inactiveMode(), flip: !!E.renderOpts.flip, netColorMode: user.netColorMode, ratsnestMode: user.ratsnestMode,
-    presets: allPresets(names).map((p) => p.name), builtinPresets: builtinPresets(names).map((p) => p.name), preset: currentPreset(layers),
-    viewports: proj.viewports.map((v) => v.name), viewport: proj.viewport,
+    presets: allPresets(names).map((p) => p.name), builtinPresets: builtinPresets(names).sort(byName).map((p) => p.name), preset: currentPreset(layers),
+    viewports: vps.map((v) => v.name), viewport: proj.viewport,
   };
   panelStore.set({ appearance: ap });
 }
@@ -382,7 +416,7 @@ async function savePreset(): Promise<void> {
   const p: Preset = { name: nm, layers: st.layers.filter((l) => l.visible).map((l) => l.key), hiddenObjects: OBJECTS.filter((o) => !o.spacer && o.canHide !== false && !o.defaultHidden && !objectVisible(o.id)).map((o) => o.id), flip: st.flip, active: st.active };
   const i = proj.presets.findIndex((x) => x.name === nm);
   if (i >= 0) { if (!await confirmBox("Save Layer Preset", "Overwrite existing preset?", "Overwrite")) return; proj.presets[i] = p; } else proj.presets.push(p);
-  saveProj(); publishAppearance();
+  saveProj(); publishAppearance(); presetMRU = toFront(presetMRU, nm); publishAppearance();
 }
 async function deletePreset(): Promise<void> {
   if (!proj.presets.length) { toast("No user presets to delete"); return; }
@@ -396,7 +430,7 @@ async function saveViewport(): Promise<void> {
   const rect = r.map((v) => v / (E.IU as number)) as [number, number, number, number];
   const i = proj.viewports.findIndex((v) => v.name === nm);
   if (i >= 0) proj.viewports[i] = { name: nm, rect }; else proj.viewports.push({ name: nm, rect });
-  proj.viewport = nm; saveProj(); publishAppearance();
+  proj.viewport = nm; saveProj(); publishAppearance(); viewportMRU = toFront(viewportMRU, nm); publishAppearance();
 }
 async function deleteViewport(): Promise<void> {
   if (!proj.viewports.length) { toast("No viewports to delete"); return; }
@@ -438,10 +472,10 @@ export function appearanceDispatch(a: PanelAction): boolean {
       break;
     case "netColorMode": user.netColorMode = a.mode; saveUser(); break;
     case "ratsnestMode": { user.ratsnestMode = a.mode; saveUser(); const s = pcbState(); if (s) s.showRatsnest = a.mode !== "none"; user.objHidden = user.objHidden.filter((o) => o !== "ratsnest").concat(a.mode === "none" ? ["ratsnest"] : []); break; }
-    case "preset": { const p = allPresets(layerKeys()).find((x) => x.name === a.name); if (p) applyPreset(p); break; }
+    case "preset": applyLayerPresetByName(a.name); break;
     case "presetSave": void savePreset(); return true;
     case "presetDelete": void deletePreset(); return true;
-    case "viewport": { const v = proj.viewports.find((x) => x.name === a.name); if (v) { E.viewTouched = true; fitBox(v.rect, 1); proj.viewport = v.name; saveProj(); } break; }
+    case "viewport": applyViewportByName(a.name); break;
     case "viewportSave": void saveViewport(); return true;
     case "viewportDelete": void deleteViewport(); return true;
     default: return false;

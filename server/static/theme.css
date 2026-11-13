@@ -295,6 +295,14 @@ k-select.input { min-height: var(--h-md); height: auto; }
 .kd-font[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 .kd-font-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kd-font-chev { flex: none; color: var(--ink-2); font-size: 10px; }
+/* EDA_VIEW_SWITCHER (Ctrl+Tab / Shift+Tab on a board): a borderless stay-on-top box, its "View Preset Switcher"
+   caption and a borderless list, 5px margins (eda_view_switcher_base.cpp); rows padded as LIST_BOX_V/H_PADDING */
+.vsw { position: fixed; z-index: 95; box-sizing: border-box; padding: 5px; background: var(--panel); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--r-3); box-shadow: var(--shadow); font: 400 var(--fs-base)/1.35 var(--font); }
+.vsw-title { padding: 0 0 5px; white-space: nowrap; }
+.vsw-list { display: flex; flex-direction: column; min-width: 120px; padding: 4px 0; background: var(--paper); }
+.vsw-row { padding: 4px 10px; white-space: nowrap; }
+.vsw-row.on { background: var(--accent); color: var(--on-accent); }
 .kd-font-pop { position: fixed; z-index: 90; display: flex; flex-direction: column; background: var(--panel);
   border: 1px solid var(--line); border-radius: var(--r-2); box-shadow: var(--shadow);
   color: var(--ink); font: var(--fs-base)/1.3 var(--font); overflow: hidden; }
