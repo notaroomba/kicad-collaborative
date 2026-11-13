@@ -65,7 +65,7 @@ function watch(docId) {
 {
   const r = await fetch(`${BASE}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${jwt}` }, body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' }) });
   const tools = (await r.json()).result.tools; const py = tools.find((t) => t.name === 'run_python');
-  check('run_python and get_geometry are in the catalog', !!py && tools.some((t) => t.name === 'get_geometry') && py.inputSchema.required.join() === 'project,code' && /kicad_harness/.test(py.description));
+  check('run_python and get_geometry are in the catalog', !!py && tools.some((t) => t.name === 'get_geometry') && py.inputSchema.required.join() === 'project' && !!py.inputSchema.properties.script && /kicad_harness/.test(py.description));
   const guide = await call('get_design_guide', { topic: 'python' });
   check('the guide has the Python API', !guide.isError && /sch\.connect/.test(guide.text) && /parts\.from_datasheet/.test(guide.text), guide.text.slice(0, 200));
 }
@@ -246,6 +246,26 @@ result = {"layers": board.info()["copper_layers"], "left": routed["left"], "agai
   const b = (big.data && big.data.result) || {};
   check('a four layer board with a ground plane routes clean, by the schematic\'s net names', !big.isError && big.data.ok === true && (b.layers || []).join() === 'F.Cu,In1.Cu,In2.Cu,B.Cu' && Object.keys(b.left || { x: 1 }).length === 0 && b.open.length === 0 && b.errors === 0, big.text.slice(0, 700));
   check('routing a net that is already routed is a result, not an error', b.again === 0, JSON.stringify(b));
+}
+
+// ------------------------------------------------------------------ scripts kept with the project
+
+{
+  const first = await call('run_python', { project: NAME, script: 'count', code: 'sch = project.schematic()\nresult = {"parts": len(sch.parts()), "word": "one"}\n' });
+  check('a script sent with a name is stored and run', !first.isError && first.data.ok === true && first.data.result.word === 'one' && first.data.script.name === 'count' && first.data.script.state === 'saved', first.text.slice(0, 300));
+  const again = await call('run_python', { project: NAME, script: 'count' });
+  check('it runs again by its name alone', !again.isError && again.data.result.word === 'one' && again.data.result.parts === first.data.result.parts && again.data.script.state === 'run as stored', again.text.slice(0, 300));
+  const edited = await call('run_python', { project: NAME, script: 'count', edits: [{ old: '"one"', new: '"two"' }] });
+  check('edits change the stored script and run it', !edited.isError && edited.data.result.word === 'two' && edited.data.script.state === 'edited', edited.text.slice(0, 300));
+  const shown = await call('run_python', { project: NAME, script: 'count', run: false, show: true });
+  check('show returns the text without running', !shown.isError && shown.data.ran === false && /"word": "two"/.test(shown.data.script.code), shown.text.slice(0, 300));
+  const miss = await call('run_python', { project: NAME, script: 'count', edits: [{ old: 'nowhere', new: 'x' }] });
+  const twice = await call('run_python', { project: NAME, script: 'count', edits: [{ old: 'r', new: 'x' }] });
+  check('an edit that matches nothing, or more than one place, changes nothing and says so', miss.isError && /has no text/.test(miss.text) && twice.isError && /occurs \d+ times/.test(twice.text), miss.text.slice(0, 200) + ' | ' + twice.text.slice(0, 200));
+  const none = await call('run_python', { project: NAME, script: 'nope' });
+  check('an unknown script name lists the ones there are', none.isError && /no script named "nope"/.test(none.text) && /count/.test(none.text), none.text.slice(0, 300));
+  const proj = await call('get_project', { project: NAME });
+  check('get_project lists the stored scripts', !proj.isError && (proj.data.scripts || []).some((x) => x.name === 'count'), proj.text.slice(0, 400));
 }
 
 schWatch.ws.close(); pcbWatch.ws.close();

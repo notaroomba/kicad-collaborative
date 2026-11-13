@@ -219,7 +219,7 @@ function boardNet(doc: any, name: string): any {
 
 interface SyncAdd { ref: string; value: string; fpid: string; x: number; y: number; node: any; padNets: Record<string, string> }
 interface SyncUpdate { item: any; node: any; what: string; padNets: Record<string, string> }
-interface SyncPlan { adds: SyncAdd[]; updates: SyncUpdate[]; extra: string[]; nets: number; problems: string[] }
+interface SyncPlan { adds: SyncAdd[]; updates: SyncUpdate[]; extra: string[]; nets: number; problems: string[]; copper: { item: any; node: any }[]; renamed: Record<string, string> }
 const VENDOR_FIELDS: [string, string][] = [["LCSC", "lcsc"], ["Mouser", "mouser"], ["DigiKey", "digikey"]];
 
 /**
@@ -265,6 +265,7 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
 
   const onBoard = new Map<string, any>(); for (const it of board.items.values() as Iterable<any>) if (it.kind === "footprint" && it.ref) onBoard.set(it.ref, it);
   const adds: SyncAdd[] = [], updates: SyncUpdate[] = [];
+  const moved = new Map<string, Set<string>>();      // each net the board's pads are on now -> the nets the schematic puts those pads on
   const placements: Record<string, any> = e.placements && typeof e.placements === "object" ? e.placements : {};
   // park new parts in rows to the right of what is there (or from a sensible origin on an empty board)
   const bb = board.bbox && isFinite(board.bbox[0]) && board.items.size ? board.bbox : null;
@@ -276,6 +277,7 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
       const node = k.cloneNode(have.node); const what: string[] = []; const padNets: Record<string, string> = {};
       for (const pad of k.kids(node, "pad")) {
         const num = k.str(pad[1]); const want = part.pins.get(num) || ""; const cur = P.netOf(pad).name || ""; if (want) padNets[num] = want;
+        if (cur) { let to = moved.get(cur); if (!to) moved.set(cur, to = new Set()); to.add(want); }
         if (want === cur) continue;
         const i = pad.findIndex((q: any) => Array.isArray(q) && q[0] === "net"); if (i >= 0) pad.splice(i, 1); if (want) pad.push(netOf(want));
         what.push(`pad ${num} ${cur || "no net"} → ${want || "no net"}`);
@@ -314,7 +316,22 @@ async function planSync(board: any, e: Edit): Promise<SyncPlan> {
     } catch (err) { problems.push(`${ref}: ${err instanceof Error ? err.message : String(err)}`); }
   }
   const extra = Array.from(onBoard.keys()).filter((r) => !parts.has(r)).sort();
-  return { adds, updates, extra, nets: netNames.size, problems };
+  // A net whose pads all went to one other name was renamed on the sheet (a label became global, a wired net lost its
+  // label, a sheet was redrawn): its tracks, vias and zones take the new name too, so a routed board stays routed.
+  const renamed: Record<string, string> = {}; const copper: { item: any; node: any }[] = [];
+  for (const [cur, to] of moved) { const [only] = Array.from(to); if (to.size === 1 && only && only !== cur) renamed[cur] = only; }
+  if (Object.keys(renamed).length) for (const it of board.items.values() as Iterable<any>) {
+    if (it.kind !== "segment" && it.kind !== "arc" && it.kind !== "via" && it.kind !== "zone") continue;
+    const to = renamed[P.netOf(it.node).name || ""]; if (!to) continue;
+    const node = k.cloneNode(it.node); const ref = netOf(to);
+    for (const c of node) {
+      if (!Array.isArray(c)) continue;
+      if (c[0] === "net") { if (typeof c[1] === "number") { c[1] = ref.length === 3 ? ref[1] : c[1]; if (c.length > 2) c[2] = to; } else c[1] = to; }
+      else if (c[0] === "net_name") c[1] = to;
+    }
+    copper.push({ item: it, node });
+  }
+  return { adds, updates, extra, nets: netNames.size, problems, copper, renamed };
 }
 
 /** Turn the model's edits into changes plus a line of plain words for each.  Throws ToolError naming the edit at fault. */
@@ -506,8 +523,10 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           if (plan.problems.length && !plan.adds.length && !plan.updates.length) throw new ToolError(plan.problems.join("; "));
           for (const a of plan.adds) { const c = added(doc, a.node); c.padNets = a.padNets; changes.push(c); lines.push({ kind: "add", text: `Add ${a.ref} ${a.value} (${a.fpid}) at (${fmt(a.x)}, ${fmt(a.y)})`, ids: [c.id] }); }
           for (const u of plan.updates) { touch(u.item, e.op); const c = modified(doc, u.item, u.node); c.padNets = u.padNets; changes.push(c); lines.push({ kind: "modify", text: `Update ${u.item.ref}: ${u.what}`, ids: [u.item.id] }); }
+          for (const c of plan.copper) { touch(c.item, e.op); changes.push(modified(doc, c.item, c.node)); }
+          const names = Object.entries(plan.renamed); if (names.length) lines.push({ kind: "modify", text: `Rename ${names.length} net${names.length === 1 ? "" : "s"} on tracks, vias and zones: ${names.slice(0, 4).map(([a, b]) => `${a} → ${b}`).join(", ")}${names.length > 4 ? ` and ${names.length - 4} more` : ""}`, ids: plan.copper.map((c) => c.item.id) });
           if (!plan.adds.length && !plan.updates.length) throw new ToolError("the board already matches the schematic: every part is on it with the right nets" + (plan.extra.length ? `; on the board but not in the schematic: ${plan.extra.join(", ")}` : ""));
-          details.push({ update_from_schematic: { added: plan.adds.map((a) => a.ref), updated: plan.updates.map((u) => u.item.ref), nets: plan.nets, not_in_schematic: plan.extra, problems: plan.problems,
+          details.push({ update_from_schematic: { added: plan.adds.map((a) => a.ref), updated: plan.updates.map((u) => u.item.ref), nets: plan.nets, not_in_schematic: plan.extra, problems: plan.problems, nets_renamed: names.length ? plan.renamed : undefined, copper_renamed: plan.copper.length || undefined,
             note: !plan.adds.length ? undefined : plan.adds.every((a) => e.placements && typeof e.placements === "object" && e.placements[a.ref]) ? "New footprints are at the positions given in placements."
               : "New footprints without a position in placements are parked in rows beside the board; place them next (move edits, or give placements with this edit)." } });
           break;
@@ -681,14 +700,17 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
           schOnly(e.op); const paper = e.paper === undefined ? String(doc.paper || "A4") : text(e.paper, "paper");
           const lines4 = ["title", "rev", "date", "company"].filter((key) => e[key] !== undefined);
           if (e.paper === undefined && !lines4.length) throw new ToolError("give paper, or title, rev, date or company for the title block");
-          if (e.paper !== undefined && !["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
-          if (e.paper !== undefined && !lines4.length && doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
+          if (e.paper !== undefined && !["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger", "User"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal, USLedger, or User with width and height in millimetres");
+          // a page of the person's own size (Page Settings, "User (Custom)"): KiCad takes 25.4 mm to 1.2 m a side
+          const custom = e.paper !== undefined && paper === "User"; const cw = custom ? num(e.width, "width") : 0, ch = custom ? num(e.height, "height") : 0;
+          if (custom && !(cw >= 25.4 && cw <= 1200 && ch >= 25.4 && ch <= 1200)) throw new ToolError("a User page is 25.4 to 1200 mm wide and high");
+          if (e.paper !== undefined && !lines4.length && doc.paper === paper && !doc.portrait && (!custom || (Math.abs(doc.page[0] - cw) < 0.01 && Math.abs(doc.page[1] - ch) < 0.01))) throw new ToolError(`the page is already ${paper}`);
           const old = doc.titleBlock || {}; const tb: Record<string, any> = { ...old }; for (const key of lines4) tb[key] = String(e[key]);
           const block = (t: Record<string, any>) => { const out: string[] = []; for (const key of ["title", "date", "rev", "company"]) if (t[key]) out.push(`(${key} ${JSON.stringify(String(t[key]))})`); for (let n = 1; n <= 9; n++) if (t["comment" + n]) out.push(`(comment ${n} ${JSON.stringify(String(t["comment" + n]))})`); return out.length ? `(title_block ${out.join(" ")})` : ""; };
           const wasPaper = doc.paper === "User" ? `(paper "User" ${r4(doc.page[0])} ${r4(doc.page[1])})` : `(paper "${doc.paper || "A4"}"${doc.portrait ? " portrait" : ""})`;
-          changes.push({ id: "00000000-0000-0000-0000-0000000d0c00", kind: "MODIFIED", typeName: "PAGE_SETTINGS", docProps: { paper: e.paper === undefined ? wasPaper : `(paper "${paper}")`, titleBlock: block(tb) },
+          changes.push({ id: "00000000-0000-0000-0000-0000000d0c00", kind: "MODIFIED", typeName: "PAGE_SETTINGS", docProps: { paper: e.paper === undefined ? wasPaper : custom ? `(paper "User" ${r4(cw)} ${r4(ch)})` : `(paper "${paper}")`, titleBlock: block(tb) },
             was: { titleBlock: block(old), paper: wasPaper } });
-          lines.push({ kind: "modify", text: (e.paper !== undefined ? `Page size ${doc.paper || "A4"} → ${paper}` : "Title block") + (lines4.length ? `: ${lines4.map((key) => `${key} "${e[key]}"`).join(", ")}` : ""), ids: [] });
+          lines.push({ kind: "modify", text: (e.paper !== undefined ? `Page size ${doc.paper || "A4"} → ${custom ? `${fmt(cw)} x ${fmt(ch)} mm` : paper}` : "Title block") + (lines4.length ? `: ${lines4.map((key) => `${key} "${e[key]}"`).join(", ")}` : ""), ids: [] });
           break;
         }
         default: throw new ToolError(`unknown op "${e.op}"`);

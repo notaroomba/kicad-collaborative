@@ -88,6 +88,27 @@ function localList(kind: string, lib?: string): string[] | null {
   return any ? Array.from(out).sort() : null;
 }
 
+/** The models of one of KiCad's 3D libraries: a KiCad installation's folder, else the library's repository (kept for later runs). */
+async function modelList(lib: string): Promise<string[] | null> {
+  const strip = (n: string) => n.replace(/\.(step|stp|wrl)$/i, "");
+  const dirs = [process.env.KICAD10_3DMODEL_DIR, process.env.KICAD9_3DMODEL_DIR, process.env.KICAD8_3DMODEL_DIR, ...INSTALLS.map((d) => path.join(d, "3dmodels"))].filter((d): d is string => !!d);
+  for (const d of dirs) { const dir = path.join(d, lib + ".3dshapes"); if (fs.existsSync(dir)) return Array.from(new Set<string>((fs.readdirSync(dir) as string[]).filter((n) => /\.(step|stp|wrl)$/i.test(n)).map(strip))).sort(); }
+  const file = path.join(cacheDir(), "kicad-packages3D", lib + ".list.json");
+  if (fs.existsSync(file)) { try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch { /* read it again */ } }
+  if (process.env.KC_HARNESS_OFFLINE === "1" || !/^[A-Za-z0-9_.+-]+$/.test(lib)) return null;
+  const base = (process.env.KICAD_LIBS_URL || "https://gitlab.com").replace(/\/$/, ""); const names: string[] = [];
+  for (let page = 1; page <= 30; page++) {
+    const r = await curl(`${base}/api/v4/projects/kicad%2Flibraries%2Fkicad-packages3D/repository/tree?path=${enc(lib + ".3dshapes")}&ref=${enc(process.env.KICAD_LIBS_REF || "master")}&per_page=100&page=${page}`);
+    if (r.status === 404) break; if (r.status !== 200) return null;
+    let rows: any; try { rows = JSON.parse(r.body); } catch { return null; }
+    if (!Array.isArray(rows) || !rows.length) break;
+    for (const e of rows) if (e && typeof e.name === "string" && /\.(step|stp)$/i.test(e.name)) names.push(strip(e.name));
+    if (rows.length < 100) break;
+  }
+  names.sort(); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(names));
+  return names;
+}
+
 async function gitlab(kind: string, lib: string, name: string): Promise<string | null> {
   const repo = kind === "symbol" ? "kicad-symbols" : "kicad-footprints";
   const rel = kind === "symbol" ? `${lib}.kicad_symdir/${name}.kicad_sym` : `${lib}.pretty/${name}.kicad_mod`;
@@ -118,6 +139,7 @@ async function backend(url: string, init?: { method?: string; body?: string }): 
   }
   if (u.pathname === "/api/kicad-lib/list") {
     const kind = q.get("kind") || "symbol", lib = q.get("lib") || undefined;
+    if (kind === "model") { const items = lib ? await modelList(lib) : null; return items ? ok({ kind, library: lib, items }) : miss("KiCad's 3D model library could not be listed from here."); }
     const here = localList(kind, lib); if (here) return ok(lib ? { kind, library: lib, items: here } : { kind, libraries: here });
     const s = await server(url); if (s) return s;
     return miss("Listing KiCad's libraries needs a KiCad installation on this computer (set KICAD_SYMBOL_DIR and KICAD_FOOTPRINT_DIR) or a server.");

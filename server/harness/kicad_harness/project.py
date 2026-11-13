@@ -125,6 +125,25 @@ class Project:
     def schematic(self, name: str | None = None) -> "Schematic":
         return self._doc(name, "schematic")
 
+    def stored_net_pins(self) -> dict:
+        """Names of nets wired without a label, as build() left them in the parts' hidden "Net names" fields: name -> "REF.pin".
+        Read once per script, so a board script that did not draw the sheet can still name those nets."""
+        if not self.__dict__.get("_stored_names"):
+            self._stored_names = True
+            for d in self._docs:
+                if d["type"] != "schematic":
+                    continue
+                try:
+                    rows = self.transport.call("list_components", {"document": d["path"]}).get("components", [])
+                except HarnessError:
+                    continue
+                for c in rows:
+                    for pair in str(c.get("net_names") or "").split():
+                        num, _, name = pair.partition("=")
+                        if num and name:
+                            self.net_pins.setdefault(name, f"{c['ref']}.{num}")
+        return self.net_pins
+
     sheet = schematic
 
     def board(self) -> "Board":
@@ -369,6 +388,14 @@ class Schematic(_Doc):
         if lib_id not in self._facts:
             self._facts[lib_id] = self.project.transport.call("get_library_part", {"id": lib_id})
         return self._facts[lib_id]
+
+    def pin_names(self, lib_id: str, vendor: str | None = None) -> dict:
+        """A library symbol's pins as {number: "NAME (kind)"}, without its drawing: the cheap way to write a netlist for a
+        part that is not placed yet.  A symbol with several units gives a list, one dict per unit.  `vendor` ("lcsc", ...)
+        reads a vendor part by its id."""
+        r = self.project.transport.call("get_library_part", {"id": lib_id, "brief": True, **({"vendor": vendor} if vendor else {})})
+        r = r.get("symbol", r) if vendor else r
+        return r.get("pins") or r.get("units") or {}
 
     # ---- placing
     def place(self, lib, at=None, ref: str | None = None, value: str | None = None, footprint: str | None = None,
@@ -839,15 +866,45 @@ class Schematic(_Doc):
         r = self.layout(limit=12)
         return {"overlaps": r.get("count", 0), "by_kind": r.get("by_kind", {}), "first": [f"{o['what']}: {o['a']} / {o['b']} at ({o['x']}, {o['y']})" for o in r.get("overlaps", [])]}
 
-    def page(self, paper: str) -> None:
-        """Set the page size: "A4", "A3", "A2", "A1", "A0" (or the US sizes)."""
-        self._edit({"op": "set_page", "paper": paper})
+    def page(self, paper: str, width: float | None = None, height: float | None = None) -> None:
+        """Set the page size: "A3", "A2", "A1", "A0" (or the US sizes), or page("User", width, height) in millimetres."""
+        e = {"op": "set_page", "paper": paper}
+        if paper == "User":
+            e.update(width=round(float(width), 2), height=round(float(height), 2))
+        self._edit(e)
         self.flush()
 
-    def fit_page(self, margin: float = 2.54, papers: tuple | None = None) -> dict:
+    def _trim_page(self, out: dict, size, least, margin: float) -> dict:
+        """A drawing that needs more than the smallest paper but leaves a good part of the next standard size empty gets a
+        page of its own size: as wide and as high as the drawing, its margins and the title block under it need."""
+        ext = self.layout(limit=1).get("extent")
+        edge = 12.7 + margin
+        w = max(least[1], math.ceil((ext[2] - ext[0] + 2 * edge) / 10) * 10)
+        h = max(least[2], math.ceil((ext[3] - ext[1] + 2 * edge + 49.0 + margin) / 10) * 10)   # the title block stands under the drawing
+        if w > size[0] or h > size[1] or w * h > 0.85 * size[0] * size[1]:
+            return out
+        dx = round(((w - (ext[2] - ext[0])) / 2 - ext[0]) / GRID) * GRID
+        dy = round((edge - ext[1]) / GRID) * GRID
+        box = {"x0": ext[0] - 0.5, "y0": ext[1] - 0.5, "x1": ext[2] + 0.5, "y1": ext[3] + 0.5}
+        if dx or dy:
+            self._edit({"op": "move_region", **box, "dx": dx, "dy": dy})
+            self.flush()
+        self.page("User", w, h)
+        lay = self.layout(limit=1)
+        if any(k in ("outside the page border", "over the title block") for k in (lay.get("by_kind") or {})):
+            self.page(out["paper"])      # it does not sit right on the trimmed page: back to the standard one
+            if dx or dy:
+                self._edit({"op": "move_region", "x0": box["x0"] + dx, "y0": box["y0"] + dy, "x1": box["x1"] + dx, "y1": box["y1"] + dy, "dx": -dx, "dy": -dy})
+                self.flush()
+            return out
+        return dict(out, paper="User", size=[w, h], moved=[round(out["moved"][0] + dx, 2), round(out["moved"][1] + dy, 2)])
+
+    def fit_page(self, margin: float = 2.54, papers: tuple | None = None, custom: bool = True) -> dict:
         """Make the page fit what is drawn: the smallest paper ("A3", "A2", "A1", "A0", or the ones named in `papers`)
         that holds everything with `margin` to the border and clear of the title block, and the drawing moved as one piece
-        to the middle of it.  Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A3."""
+        to the middle of it.  A drawing too big for the smallest paper that would leave much of the next size empty gets a
+        page of its own size ("User", with "size": [w, h]) unless custom=False.
+        Returns {"paper", "was", "moved": [dx, dy], "fits"}; an empty sheet goes back to A3."""
         self.flush()
         r = self.layout(limit=1)
         was, ext = r.get("paper", "A4"), r.get("extent")
@@ -857,7 +914,7 @@ class Schematic(_Doc):
         def paper(name):
             nonlocal now
             if name != now:
-                self.page(name)
+                self.page(name, *((r.get("page") or [420, 297])[:2] if name == "User" else ()))
                 now = name
 
         if not ext:
@@ -883,7 +940,8 @@ class Schematic(_Doc):
                     self._edit({"op": "move_region", **box, "dx": dx, "dy": dy})
                     self.flush()
                 if not off():
-                    return {"paper": name, "was": was, "moved": [round(dx, 2), round(dy, 2)], "fits": True}
+                    out = {"paper": name, "was": was, "moved": [round(dx, 2), round(dy, 2)], "fits": True}
+                    return self._trim_page(out, (pw, ph), sizes[0], margin) if custom and name != sizes[0][0] else out
                 if dx or dy:   # it sits on the title block or the border there: back, and try the next place
                     self._edit({"op": "move_region", "x0": box["x0"] + dx, "y0": box["y0"] + dy, "x1": box["x1"] + dx, "y1": box["y1"] + dy, "dx": -dx, "dy": -dy})
                     self.flush()
@@ -1168,6 +1226,7 @@ class Schematic(_Doc):
                 self.supplies(supplies)
             except HarnessError as e:
                 problems.append(str(e))
+        self._remember_names(nets)
         # ---- 6. the page fits the drawing: the smallest paper it sits on (a sheet that had something on it was packed
         #         onto the page it had), and the drawing in the middle of it instead of up in a corner
         fit = self.fit_page()
@@ -1210,6 +1269,28 @@ class Schematic(_Doc):
                 out.append(f"{name}: also joined to {', '.join(sorted(extra))}")
         return out
 
+    def _remember_names(self, nets: dict) -> None:
+        """A net wired without a label has no name on the sheet (KiCad calls it after a pin).  The name the script gave it
+        is kept in a hidden field of one of its parts ("Net names": "7=DISCH 2=THRES"), so a later script, or the board,
+        can still ask for the net by that name."""
+        drawn = set(self.nets())
+        by_ref: dict = {}
+        for name in nets:
+            pin = self.project.net_pins.get(name)
+            if not pin or name in drawn or "/" + name in drawn:
+                continue
+            ref, _, num = pin.partition(".")
+            by_ref.setdefault(ref, []).append(f"{num}={name}")
+        have = {c["ref"]: c.get("net_names", "") for c in self._call("list_components").get("components", [])}
+        for ref, pairs in by_ref.items():
+            value = " ".join(sorted(pairs))
+            if ref in have and have[ref] != value:
+                self._edit({"op": "set_field", "ref": ref, "field": "Net names", "value": value})
+        for ref, old in have.items():      # a part whose nets all carry labels now
+            if old and ref not in by_ref:
+                self._edit({"op": "set_field", "ref": ref, "field": "Net names", "value": ""})
+        self.flush()
+
     def _join_labels(self, nets: dict, groups: dict, keep: set) -> int:
         """A net that stays inside its block and ended up as two names facing each other along a clear straight line is one
         wire instead: names are for nets that leave the block.  Returns how many nets were joined."""
@@ -1234,10 +1315,12 @@ class Schematic(_Doc):
                 else:
                     ends.append(at)
             a, b = ends
-            if _same(a, b) or (abs(a[0] - b[0]) > 1e-3 and abs(a[1] - b[1]) > 1e-3):
+            if _same(a, b):
                 continue
             rest = dict(g, wires=[w for w in g["wires"] if w not in gone], labels=[l for l in g["labels"] if l[0] != name])
-            if self._blocked([a, b], rest, (a, b)) or self._through_part([a, b], rest):
+            path = next((p for p in self._ways(a, b) if not self._blocked(p, rest, (a, b))
+                         and not any(self._through_part([u, v], rest) for u, v in zip(p, p[1:]))), None)
+            if path is None:
                 continue
             ids = []
             for l in labs:      # the two names and the wires under them, by where they are
@@ -1251,10 +1334,31 @@ class Schematic(_Doc):
                 continue
             for i in dict.fromkeys(ids):
                 self._edit({"op": "remove", "id": i})
-            self._edit({"op": "add_wire", "points": [list(a), list(b)]})
+            for u, v in zip(path, path[1:]):
+                self._edit({"op": "add_wire", "points": [list(u), list(v)]})
             self.flush()
             joined += 1
         return joined
+
+    @staticmethod
+    def _ways(a, b) -> list:
+        """The wires worth trying between two points: straight when they line up, else one step sideways part of the way
+        along (the longer direction first, the step at the middle and then nearer either end), else a single corner."""
+        if abs(a[0] - b[0]) < 1e-3 or abs(a[1] - b[1]) < 1e-3:
+            return [[a, b]]
+        grid = lambda v: round(v / 1.27) * 1.27
+        out = []
+        along_x = abs(a[0] - b[0]) >= abs(a[1] - b[1])
+        for axis in ((0, 1) if along_x else (1, 0)):
+            lo, hi = a[axis], b[axis]
+            for t in (0.5, 0.25, 0.75):
+                m = grid(lo + (hi - lo) * t)
+                if abs(m - lo) < 1.27 or abs(m - hi) < 1.27:
+                    continue
+                way = [a, (m, a[1]), (m, b[1]), b] if axis == 0 else [a, (a[0], m), (b[0], m), b]
+                if way not in out:
+                    out.append(way)
+        return out + [[a, (b[0], a[1]), b], [a, (a[0], b[1]), b]]
 
     def _through_part(self, path, g) -> bool:
         """Would a wire along `path` run through a part's body (between its pins) without ending on it?"""
@@ -1453,7 +1557,9 @@ class Board(_Doc):
 
     # ---- setting up
     def sync(self, placements: dict | None = None) -> dict:
-        """Update the board from the schematic: missing footprints are added, pad nets and values brought into line."""
+        """Update the board from the schematic: missing footprints are added, pad nets and values brought into line.
+        A net the sheet renamed (a redrawn sheet, a label added or dropped) keeps its tracks, vias and zones: they take the
+        new name with the pads, listed under "nets_renamed"."""
         e: dict = {"op": "update_from_schematic"}
         if placements:
             e["placements"] = {r: ({"x": v[0], "y": v[1], **({"rotation": v[2]} if len(v) > 2 else {})} if not isinstance(v, dict) else v) for r, v in placements.items()}
@@ -1473,6 +1579,9 @@ class Board(_Doc):
             return {"added": 0, "updated": 0, "nets": None, "problems": [], "not_in_schematic": [x.strip() for x in extra.group(1).split(",")] if extra else []}
         d = next((x["update_from_schematic"] for x in res.get("details") or [] if "update_from_schematic" in x), {})
         out = {"added": len(d.get("added", [])), "updated": len(d.get("updated", [])), "nets": d.get("nets"), "problems": d.get("problems") or [], "not_in_schematic": d.get("not_in_schematic") or []}
+        if d.get("nets_renamed"):      # nets the sheet now calls something else: their tracks, vias and zones were renamed with the pads
+            out["nets_renamed"] = d["nets_renamed"]
+            self.__dict__.pop("_names", None)
         self.project.note(f"board: synced from the schematic, {out['added']} added, {out['updated']} updated" + (f", problems: {'; '.join(out['problems'][:5])}" if out["problems"] else ""))
         return out
 
@@ -1729,6 +1838,8 @@ class Board(_Doc):
             names = self._names = set(self.nets())
         bare = name.lstrip("/")
         hit = name if name in names else "/" + bare if "/" + bare in names else bare if bare in names else None
+        if hit is None and bare not in self.project.net_pins:
+            self.project.stored_net_pins()
         if hit is None and bare in self.project.net_pins:     # a net wired inside its block: KiCad named it after a pin
             try:
                 hit = self.pad(self.project.net_pins[bare])["net"] or None
@@ -1772,6 +1883,7 @@ class Board(_Doc):
             opts.setdefault(fix(n), {})["width"] = w
         for n, kd in (kinds or {}).items():
             opts.setdefault(fix(n), {})["kind"] = kd
+        self.project.stored_net_pins()
         if self.project.net_pins:      # nets wired inside their block have KiCad's automatic names: tell the router what they were called
             known = set(self.nets())
             for name, pin in self.project.net_pins.items():

@@ -157,7 +157,7 @@ const T = () => tokens.access_token;
 
 {
   const init = await rpc(T(), 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'e2e', version: '1' } });
-  check('initialize: the version asked for, tools and prompts, instructions, the icon', init.result.serverInfo.icons[0].src === `${BASE}/icon-192.png` && (await fetch(`${BASE}/favicon.ico`)).headers.get('content-type') === 'image/x-icon' && init.result.protocolVersion === '2025-06-18' && init.result.capabilities.tools && init.result.capabilities.prompts && init.result.serverInfo.name === 'kicad-collaborative' && init.result.instructions.length > 200);
+  check('initialize: the version asked for, tools and prompts, instructions, the icon', init.result.serverInfo.icons[0].src === `${BASE}/icon-192.png` && (await fetch(`${BASE}/favicon.ico`)).headers.get('content-type') === 'image/x-icon' && init.result.protocolVersion === '2025-06-18' && init.result.capabilities.tools && init.result.capabilities.prompts && init.result.serverInfo.name === 'junction' && init.result.instructions.length > 200);
   const old = await rpc(T(), 'initialize', { protocolVersion: '1999-01-01' });
   check('an unknown protocol version is answered with one this server speaks', old.result.protocolVersion === '2025-06-18');
   const note = await fetch(`${BASE}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${T()}` }, body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) });

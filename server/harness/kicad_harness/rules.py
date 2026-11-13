@@ -12,6 +12,7 @@ The methods are attached to Schematic, Board and Project when the package is imp
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import re
 import uuid as _uuid
 
@@ -351,6 +352,67 @@ def _stitch(self, spacing: float = 10.0, net: str = "GND", margin: float = 1.5, 
     return out
 
 
+def _fence(self, path, spacing: float = 1.0, net: str = "GND", offset: float = 0.0, size: float | None = None, drill: float | None = None) -> dict:
+    """A row of vias on `net` along a path you choose: `path` is a list of points [(x, y), ...] in mm and a via goes
+    every `spacing` mm along it.  With `offset` the path is a centre line (a trace, the edge of a section) and two rows
+    are placed, one each side, `offset` mm from it: the fence beside an antenna feed or around a noisy block.  A via that
+    would stand inside a part or that the rules check finds too close to other copper is left out.
+    Returns {"vias", "tried", "removed"}."""
+    self.flush()
+    pts_in = [(float(p[0]), float(p[1])) for p in path]
+    if len(pts_in) < 2:
+        raise HarnessError("Give the path as at least two points: [(x0, y0), (x1, y1), ...].")
+    if spacing <= 0:
+        raise HarnessError("spacing is the distance between vias in mm.")
+    g = self.geometry()
+    name = self._net(net)
+    rows = [0.0] if not offset else [offset, -offset]
+    pts = []
+    for side in rows:
+        carry = 0.0     # how far into the next segment the next via falls
+        for (ax, ay), (bx, by) in zip(pts_in, pts_in[1:]):
+            L = math.hypot(bx - ax, by - ay)
+            if L < 1e-6:
+                continue
+            ux, uy = (bx - ax) / L, (by - ay) / L
+            d = carry
+            while d <= L + 1e-6:
+                at = (_r(ax + ux * d - uy * side), _r(ay + uy * d + ux * side))
+                if _free_at(g, at, 0.3) and all(math.hypot(at[0] - q[0], at[1] - q[1]) > spacing * 0.6 for q in pts):
+                    pts.append(at)
+                d += spacing
+            carry = d - L
+    out = _vias_checked(self, name, pts, size, drill)
+    self.project.note(f"board: fence of {out['vias']} vias on {name}")
+    return out
+
+
+def _vias_checked(self, name: str, pts: list, size, drill) -> dict:
+    """Place a via at each point, then take out those the rules check finds at fault."""
+    ids = {}
+    for at in pts:      # one batch each, so each via's id is known and a bad one can be taken out again
+        self.via(name, at, size=size, drill=drill)
+        res = self.flush() or {}
+        new = (res.get("added") or [None])[-1]
+        if new:
+            ids[new] = at
+    removed = 0
+    if ids:
+        r = self._call("run_checks")
+        bad = set()
+        for v in r.get("violations", []):
+            if v.get("severity") != "error" or v.get("code") in ("unconnected_items",):
+                continue
+            for vid, at in ids.items():
+                if abs(v["x"] - at[0]) < 0.6 and abs(v["y"] - at[1]) < 0.6:
+                    bad.add(vid)
+        for vid in bad:
+            self._edit({"op": "remove", "id": vid})
+            removed += 1
+        self.flush()
+    return {"vias": len(ids) - removed, "tried": len(pts), "removed": removed}
+
+
 def install(Project, Schematic, Board) -> None:
     Schematic.review = _review
     Board.review = _review
@@ -363,3 +425,4 @@ def install(Project, Schematic, Board) -> None:
     Board.fiducials = _board_fiducials
     Board.mark = _mark
     Board.stitch = _stitch
+    Board.fence = _fence

@@ -168,6 +168,7 @@ export async function listComponents(input: { doc?: string; filter?: string; inc
     else { row.footprint = it.lib || ""; row.side = it.layer === "B.Cu" ? "back" : "front"; }
     row.datasheet = usableUrl(f.Datasheet || "") ? "yes" : "no";
     const part = Object.keys(f).filter((n) => PART_FIELD.test(n) && f[n] && n !== "Description"); if (part.length) row.part_fields = part;
+    if (f["Net names"]) row.net_names = f["Net names"];   // names of nets wired without a label, by pin (kicad_harness build)
     if (it.id) row.id = it.id;
     return row;
   }).filter((r) => !q || [r.ref, r.value, r.footprint, r.lib_id || ""].some((s: string) => s.toLowerCase().includes(q)));

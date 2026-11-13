@@ -145,6 +145,12 @@ class Rules(unittest.TestCase):
         self.assertIn("V1", mark["text"])
         stitched = board.stitch(spacing=8)
         self.assertGreater(stitched["vias"], 0)
+        o = board.geometry()["outline"]
+        before = len(board._call("get_items", kinds=["via"])["items"])
+        fence = board.fence([(o[0] + 1.2, o[1] + 1.2), (o[2] - 1.2, o[1] + 1.2), (o[2] - 1.2, o[3] - 1.2)], spacing=1.5)   # along two edges
+        self.assertGreater(fence["vias"], 5, fence)
+        self.assertEqual(fence["vias"], fence["tried"] - fence["removed"])
+        self.assertEqual(len(board._call("get_items", kinds=["via"])["items"]) - before, fence["vias"])
         self.assertEqual(board.check()["errors"], 0, board.check())
         rv = board.review()
         bad = self.failed(rv)

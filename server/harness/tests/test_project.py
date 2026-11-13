@@ -126,6 +126,14 @@ class Blinker(unittest.TestCase):
         sch = self.project.schematic()
         return sch, sch.build(parts, nets, groups, no_connect=["U1.CONT"], **more)
 
+    def _wired(self, sch):
+        """A net of the fixture that build() drew as a wire inside its block, so no label carries its name: (name, a pin, another pin)."""
+        have = sch.nets()
+        for name, pin, other in (("DISCH", "U1.7", "R1.2"), ("THRES", "U1.6", "R2.2"), ("LED_K", "D1.1", "R3.1")):
+            if name not in have:
+                return name, pin, other
+        self.fail("no net of the fixture was wired inside its block")
+
     def test_groups_are_framed_sections_with_titles_and_notes_and_nothing_overlaps(self):
         sch, built = self._sheet(notes={"Indicator": "R3 is 330 ohm for 10 mA: the LED is read in daylight.", "Timer": ["C1 is 10 uF, not the usual 1 uF, for a 1 Hz blink."]})
         self.assertEqual(built["problems"], [])
@@ -181,6 +189,46 @@ class Blinker(unittest.TestCase):
         self.assertEqual(again["page"], built["page"])
         self.assertEqual(again["overlaps"], 0)
 
+    def test_a_later_script_finds_an_unlabelled_net_by_the_name_the_sheet_was_built_with(self):
+        sch, built = self._sheet()
+        self.assertEqual(built["problems"], [])
+        name, pin, other = self._wired(sch)                         # wired inside its block: no label carries the name
+        board = self.project.board()
+        board.outline(100, 100, 130, 125)
+        board.sync()
+        self.project.save()
+        self.project.close()
+        self.project = kh.open(self.dir)                             # another script, another day
+        board = self.project.board()
+        self.assertEqual(self.project.net_pins, {})
+        real = board._net(name)
+        self.assertNotEqual(real, name)
+        self.assertEqual(real, board.pad(pin)["net"])
+        self.assertEqual(sorted(p for p in board.nets()[real]["pads"]), sorted(board.nets()[board.pad(other)["net"]]["pads"]))
+        self.assertEqual(self.project.schematic().pin_names("Timer:NE555D")["7"].split(" ")[0], "DISCH")
+
+    def test_a_redrawn_sheet_keeps_a_routed_board_routed(self):
+        sch, built = self._sheet()
+        board = self.project.board()
+        board.outline(100, 100, 135, 130)
+        board.sync()
+        board.autoplace(outline=(100, 100, 135, 130))
+        routed = board.route(time_s=20)
+        self.assertEqual(routed["routed"], routed["connections"])
+        before = board.check()["errors"]
+        tracks = board.info()["track_length_mm"]
+        pin = self._wired(sch)[1]
+        old = board.pad(pin)["net"]
+        sch.clear()
+        self._sheet(labels=["DISCH", "THRES", "LED_K"])                 # the same circuit drawn again, with other net names
+        res = board.sync()
+        self.assertEqual(res["added"], 0)
+        self.assertIn(old, res.get("nets_renamed", {}))
+        self.assertNotEqual(board.pad(pin)["net"], old)
+        self.assertEqual(board.unrouted(), {})
+        self.assertEqual(board.check()["errors"], before)
+        self.assertEqual(board.info()["track_length_mm"], tracks)
+
     def test_fit_page_picks_the_smallest_paper_and_moves_the_drawing_onto_it(self):
         sch, built = self._sheet()
         nets = sch.nets()
@@ -195,8 +243,21 @@ class Blinker(unittest.TestCase):
         self.assertLess(abs((ext[0] - area[0]) - (area[2] - ext[2])), 2.6)      # in the middle, left to right
         self.assertEqual(sch.nets(), nets)                                       # moved as one piece: nothing came apart
         self.assertEqual(sch.fit_page()["moved"], [0.0, 0.0])                    # already fitted: nothing moves
+        # a drawing a little too wide for A3 gets a page of its own size instead of a half empty A2
+        ext = sch.layout(limit=1)["extent"]
+        sch.text("Far out", (ext[0] + 400, ext[1] + 5))
+        sch.flush()
+        wide = sch.fit_page()
+        self.assertEqual((wide["paper"], wide["fits"]), ("User", True))
+        lay = sch.layout(limit=1)
+        self.assertEqual((lay["paper"], lay["count"], lay["page"]), ("User", 0, wide["size"]))
+        self.assertTrue(420 < wide["size"][0] < 594 and wide["size"][1] == 297, wide)
+        self.assertEqual(sch.nets(), nets)
+        self.assertEqual(sch.fit_page(custom=False)["paper"], "A2")              # standard sizes only, when asked
+        self.project.save()
+        with open(os.path.join(self.dir, "blinky.kicad_sch"), encoding="utf-8") as f:
+            self.assertIn('(paper "A2")', f.read())
         sch.clear()
-        sch.page("A2")
         self.assertEqual(sch.fit_page()["paper"], "A3")                         # an empty sheet is the smallest page
 
     def test_the_layout_check_finds_what_is_drawn_over_something_else(self):

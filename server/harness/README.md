@@ -66,6 +66,13 @@ the sheet for a rebuild (`board.clear()` does the same on the board and keeps th
 local files) are the tools around them. `build` draws every block off the page, measures it as drawn and
 packs the blocks onto the smallest page they fit on, so its result has `overlaps: 0`.
 
+More for the board and for later scripts: `board.fence(path, spacing, net, offset)` is a row of vias along a path you
+choose; `board.sync()` after a redrawn sheet keeps the routing (a net the sheet renamed carries its tracks, vias and
+zones to the new name, listed under `nets_renamed`); a net wired without a label can still be named in a later script
+by the name `build` was given (kept in a hidden "Net names" field of one of its parts); `sch.pin_names("Lib:Name")`
+gives a library part's pins as {number: name}. On the site, `run_python` keeps scripts with the project: `script:
+"name"` with `code` stores one, the name alone runs it again, `edits: [{old, new}]` changes it.
+
 3D models: a footprint from KiCad's library or from a vendor names its model, and the web 3D view loads it by
 itself (KiCad's 3D library first, the vendor's STEP file for a vendor part). `board.models()` says how many
 parts show as their real model and lists under `without_model` the ones drawn as a stand-in shape, with the reason.

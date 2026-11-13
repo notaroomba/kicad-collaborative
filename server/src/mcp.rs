@@ -566,6 +566,7 @@ async fn get_project(state: &AppState, site: &str, p: &ProjectCtx) -> Result<Val
         "id": p.id, "name": p.name, "your_role": p.role, "url": format!("{site}/p/{}/edit", p.id),
         "documents": p.docs.iter().map(|d| json!({ "path": d.path, "type": kind(&d.doc_type) })).collect::<Vec<_>>(),
         "members": members.iter().map(|m| json!({ "login": m.login, "role": m.role })).collect::<Vec<_>>(),
+        "scripts": script_list(state, p).await,
         "note": "Schematic sheets and the board are what the document parameter of the other tools takes.",
     }))
 }
@@ -767,6 +768,17 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
         args["__site"] = json!(site);
     }
 
+    // run_python: a script kept with the project is run by its name, changed by a few replacements, or saved from
+    // `code`, so the whole text crosses the wire once.
+    let mut script_note: Option<Value> = None;
+    if name == "run_python" {
+        let p = project.as_ref().expect("project");
+        match stored_script(state, caller, p, &mut args).await? {
+            ScriptStep::Run(note) => script_note = note,
+            ScriptStep::Done(answer) => return Ok(json!([text_content(&answer)])),
+        }
+    }
+
     let width_px = args["width_px"].as_u64().unwrap_or(1500).clamp(400, 2000) as u32;
     let request = json!({
         "base": own_address(),
@@ -785,6 +797,9 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
         return Err(reply["error"].as_str().unwrap_or("The tool failed.").to_string());
     }
     let mut result = reply["result"].clone();
+    if let (Some(note), Some(obj)) = (script_note, result.as_object_mut()) {
+        obj.insert("script".into(), note);
+    }
 
     if let (Some(record), Some(p)) = (reply.get("record"), project.as_ref()) {
         match store_change(state, caller, p, record).await {
@@ -834,6 +849,87 @@ async fn call_tool(state: &AppState, caller: &Caller, site: &str, tool: &Tool, n
         ]));
     }
     Ok(json!([text_content(&result)]))
+}
+
+enum ScriptStep {
+    /// run the code now in `args["code"]`; the note, if any, goes into the result
+    Run(Option<Value>),
+    /// nothing to run: this is the answer
+    Done(Value),
+}
+
+/// The scripts kept with a project, newest first, for get_project.
+async fn script_list(state: &AppState, p: &ProjectCtx) -> Vec<Value> {
+    sqlx::query("SELECT name, length(code) AS n, updated_at FROM project_scripts WHERE project_id = $1 ORDER BY updated_at DESC LIMIT 100")
+        .bind(p.id).fetch_all(&state.pool).await.unwrap_or_default().iter()
+        .map(|r| json!({ "name": r.get::<String, _>("name"), "characters": r.get::<i32, _>("n"), "updated": r.get::<chrono::DateTime<chrono::Utc>, _>("updated_at").to_rfc3339() }))
+        .collect()
+}
+
+/// run_python's `script`, `edits`, `run` and `show`: load, change and save the named script, and leave the code to
+/// run in `args["code"]`.
+async fn stored_script(state: &AppState, caller: &Caller, p: &ProjectCtx, args: &mut Value) -> Result<ScriptStep, String> {
+    const MAX: usize = 200_000;
+    let run = args["run"].as_bool().unwrap_or(true);
+    let show = args["show"].as_bool().unwrap_or(false);
+    let given = args["code"].as_str().filter(|c| !c.trim().is_empty()).map(str::to_string);
+    let edits = args["edits"].as_array().cloned().unwrap_or_default();
+    let Some(script) = args["script"].as_str().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string) else {
+        if !edits.is_empty() || !run || show {
+            return Err("edits, run and show work on a stored script: give its name as `script`.".into());
+        }
+        return Ok(ScriptStep::Run(None));
+    };
+    if script.len() > 64 || !script.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')) {
+        return Err("A script name is up to 64 letters, digits, dots, dashes or underscores, for example \"schematic\" or \"board.v2\".".into());
+    }
+    let stored: Option<String> = sqlx::query_scalar("SELECT code FROM project_scripts WHERE project_id = $1 AND name = $2")
+        .bind(p.id).bind(&script).fetch_optional(&state.pool).await.map_err(internal)?;
+    let mut what = "run as stored";
+    let mut code = match (given, stored) {
+        (Some(code), old) => { what = if old.is_some() { "replaced" } else { "saved" }; code }
+        (None, Some(old)) => old,
+        (None, None) => {
+            let names: Vec<String> = script_list(state, p).await.iter().filter_map(|s| s["name"].as_str().map(str::to_string)).collect();
+            return Err(format!("{} has no script named \"{script}\".{} Send it once as `code` with this `script` name to store it.", p.name,
+                if names.is_empty() { String::new() } else { format!(" Its scripts: {}.", names.join(", ")) }));
+        }
+    };
+    for (i, e) in edits.iter().enumerate() {
+        let (Some(old), Some(new)) = (e["old"].as_str(), e["new"].as_str()) else {
+            return Err(format!("edit {}: give `old` (text now in the script) and `new` (what replaces it).", i + 1));
+        };
+        match code.matches(old).count() {
+            0 => return Err(format!("edit {}: the script \"{script}\" has no text {:?}. Nothing was changed; run_python with show: true and run: false prints the script.", i + 1, clip_chars(old, 80))),
+            1 => code = code.replacen(old, new, 1),
+            n => return Err(format!("edit {}: {:?} occurs {n} times in \"{script}\"; give more of the text around it so it names one place. Nothing was changed.", i + 1, clip_chars(old, 80))),
+        }
+        what = "edited";
+    }
+    if code.len() > MAX {
+        return Err("The script is too long (200,000 characters at most).".into());
+    }
+    if what != "run as stored" {
+        sqlx::query("INSERT INTO project_scripts (project_id, name, code, updated_by) VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (project_id, name) DO UPDATE SET code = EXCLUDED.code, updated_by = EXCLUDED.updated_by, updated_at = now()")
+            .bind(p.id).bind(&script).bind(&code).bind(caller.user.id).execute(&state.pool).await.map_err(internal)?;
+    }
+    let mut note = json!({ "name": script, "characters": code.chars().count(), "state": what });
+    if show {
+        note["code"] = json!(code);
+    }
+    if !run {
+        return Ok(ScriptStep::Done(json!({ "ok": true, "ran": false, "script": note })));
+    }
+    args["code"] = json!(code);
+    for k in ["script", "edits", "run", "show"] {
+        if let Some(o) = args.as_object_mut() { o.remove(k); }
+    }
+    Ok(ScriptStep::Run(Some(note)))
+}
+
+fn clip_chars(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.to_string() } else { format!("{}...", s.chars().take(n).collect::<String>()) }
 }
 
 async fn store_change(state: &AppState, caller: &Caller, p: &ProjectCtx, record: &Value) -> AppResult<i64> {

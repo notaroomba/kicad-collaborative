@@ -207,8 +207,30 @@ export async function findParts(input: { query?: string; kind?: string; library?
   return out;
 }
 
+/** The short answer of get_library_part: pin numbers with their names (and what kind of pin each is), pad numbers, sizes; no coordinates. */
+function briefPart(full: any): unknown {
+  const sym = (f: any) => {
+    const units = (f.units || []).map((u: any) => {
+      const pins: Record<string, string> = {};
+      for (const p of u.pins) pins[p.number] = (p.name || "") + (p.type && p.type !== "passive" ? ` (${String(p.type).replace(/_/g, " ")})` : "");
+      return pins;
+    });
+    return { lib_id: f.lib_id, reference_prefix: f.reference_prefix, footprint: f.footprint, description: f.description, power_symbol: f.power_symbol, pins: units.length === 1 ? units[0] : undefined, units: units.length > 1 ? units : undefined };
+  };
+  const fp = (f: any) => {
+    const b = f.courtyard_box || f.extent_box; const nums: string[] = Array.from(new Set((f.pad_list || []).map((p: any) => p.number).filter((n: any) => n !== undefined && n !== "")));
+    return { footprint: f.footprint, pads: f.pads, through_hole: f.through_hole, size_mm: b ? [r3(b[2] - b[0]), r3(b[3] - b[1])] : undefined, pad_numbers: nums.length <= 80 ? nums.join(" ") : undefined };
+  };
+  if (full && full.lib_id) return sym(full);
+  if (full && full.footprint && full.pad_list) return fp(full);
+  if (full && full.vendor) return { vendor: full.vendor, id: full.id, mpn: full.mpn, manufacturer: full.manufacturer, description: full.description, package: full.package, datasheet: full.datasheet,
+    symbol: full.symbol ? sym(full.symbol) : undefined, footprint: full.footprint ? fp(full.footprint) : undefined };
+  return full;
+}
+
 /** get_library_part: pins of a symbol or pads of a footprint, before it is on the design. */
-export async function getLibraryPart(input: { id?: string; kind?: string; vendor?: string }): Promise<unknown> {
+export async function getLibraryPart(input: { id?: string; kind?: string; vendor?: string; brief?: boolean }): Promise<unknown> {
+  if (input.brief) return briefPart(await getLibraryPart(Object.assign({}, input, { brief: false })));
   if (input.vendor) {
     const id = String(input.id || ""); const part = await vendorPart(input.vendor, id); const out: any = { vendor: part.vendor, id: part.vendor_id, mpn: part.mpn, manufacturer: part.manufacturer, description: part.description, package: part.package, datasheet: part.datasheet || undefined, fields: part.fields };
     if (part.cad && part.cad.symbol) { const s = await vendorSymbol(input.vendor, id); out.symbol = symbolFacts(s.libId, s.node); }

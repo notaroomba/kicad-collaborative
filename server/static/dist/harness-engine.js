@@ -61136,7 +61136,37 @@ async function findParts(input) {
   }
   return out;
 }
+function briefPart(full) {
+  const sym = (f) => {
+    const units = (f.units || []).map((u) => {
+      const pins = {};
+      for (const p of u.pins) pins[p.number] = (p.name || "") + (p.type && p.type !== "passive" ? ` (${String(p.type).replace(/_/g, " ")})` : "");
+      return pins;
+    });
+    return { lib_id: f.lib_id, reference_prefix: f.reference_prefix, footprint: f.footprint, description: f.description, power_symbol: f.power_symbol, pins: units.length === 1 ? units[0] : void 0, units: units.length > 1 ? units : void 0 };
+  };
+  const fp = (f) => {
+    const b = f.courtyard_box || f.extent_box;
+    const nums = Array.from(new Set((f.pad_list || []).map((p) => p.number).filter((n2) => n2 !== void 0 && n2 !== "")));
+    return { footprint: f.footprint, pads: f.pads, through_hole: f.through_hole, size_mm: b ? [r32(b[2] - b[0]), r32(b[3] - b[1])] : void 0, pad_numbers: nums.length <= 80 ? nums.join(" ") : void 0 };
+  };
+  if (full && full.lib_id) return sym(full);
+  if (full && full.footprint && full.pad_list) return fp(full);
+  if (full && full.vendor) return {
+    vendor: full.vendor,
+    id: full.id,
+    mpn: full.mpn,
+    manufacturer: full.manufacturer,
+    description: full.description,
+    package: full.package,
+    datasheet: full.datasheet,
+    symbol: full.symbol ? sym(full.symbol) : void 0,
+    footprint: full.footprint ? fp(full.footprint) : void 0
+  };
+  return full;
+}
 async function getLibraryPart(input) {
+  if (input.brief) return briefPart(await getLibraryPart(Object.assign({}, input, { brief: false })));
   if (input.vendor) {
     const id2 = String(input.id || "");
     const part = await vendorPart(input.vendor, id2);
@@ -61349,6 +61379,7 @@ async function listComponents(input) {
     row2.datasheet = usableUrl(f.Datasheet || "") ? "yes" : "no";
     const part = Object.keys(f).filter((n2) => PART_FIELD.test(n2) && f[n2] && n2 !== "Description");
     if (part.length) row2.part_fields = part;
+    if (f["Net names"]) row2.net_names = f["Net names"];
     if (it.id) row2.id = it.id;
     return row2;
   }).filter((r) => !q || [r.ref, r.value, r.footprint, r.lib_id || ""].some((s) => s.toLowerCase().includes(q)));
@@ -63521,6 +63552,7 @@ async function planSync(board, e) {
   const onBoard = /* @__PURE__ */ new Map();
   for (const it of board.items.values()) if (it.kind === "footprint" && it.ref) onBoard.set(it.ref, it);
   const adds = [], updates = [];
+  const moved = /* @__PURE__ */ new Map();
   const placements2 = e.placements && typeof e.placements === "object" ? e.placements : {};
   const bb = board.bbox && isFinite(board.bbox[0]) && board.items.size ? board.bbox : null;
   const x0 = bb ? bb[2] + 10 : 100, y0 = bb ? bb[1] : 60;
@@ -63538,6 +63570,11 @@ async function planSync(board, e) {
         const want = part.pins.get(num7) || "";
         const cur2 = P.netOf(pad).name || "";
         if (want) padNets[num7] = want;
+        if (cur2) {
+          let to = moved.get(cur2);
+          if (!to) moved.set(cur2, to = /* @__PURE__ */ new Set());
+          to.add(want);
+        }
         if (want === cur2) continue;
         const i = pad.findIndex((q) => Array.isArray(q) && q[0] === "net");
         if (i >= 0) pad.splice(i, 1);
@@ -63617,7 +63654,30 @@ async function planSync(board, e) {
     }
   }
   const extra = Array.from(onBoard.keys()).filter((r) => !parts.has(r)).sort();
-  return { adds, updates, extra, nets: netNames2.size, problems };
+  const renamed = {};
+  const copper = [];
+  for (const [cur2, to] of moved) {
+    const [only] = Array.from(to);
+    if (to.size === 1 && only && only !== cur2) renamed[cur2] = only;
+  }
+  if (Object.keys(renamed).length) for (const it of board.items.values()) {
+    if (it.kind !== "segment" && it.kind !== "arc" && it.kind !== "via" && it.kind !== "zone") continue;
+    const to = renamed[P.netOf(it.node).name || ""];
+    if (!to) continue;
+    const node = k.cloneNode(it.node);
+    const ref = netOf3(to);
+    for (const c of node) {
+      if (!Array.isArray(c)) continue;
+      if (c[0] === "net") {
+        if (typeof c[1] === "number") {
+          c[1] = ref.length === 3 ? ref[1] : c[1];
+          if (c.length > 2) c[2] = to;
+        } else c[1] = to;
+      } else if (c[0] === "net_name") c[1] = to;
+    }
+    copper.push({ item: it, node });
+  }
+  return { adds, updates, extra, nets: netNames2.size, problems, copper, renamed };
 }
 async function buildProposal(input) {
   await fetchSources(input.edits);
@@ -63921,6 +63981,12 @@ function build(input) {
             changes.push(c);
             lines.push({ kind: "modify", text: `Update ${u.item.ref}: ${u.what}`, ids: [u.item.id] });
           }
+          for (const c of plan.copper) {
+            touch(c.item, e.op);
+            changes.push(modified(doc, c.item, c.node));
+          }
+          const names = Object.entries(plan.renamed);
+          if (names.length) lines.push({ kind: "modify", text: `Rename ${names.length} net${names.length === 1 ? "" : "s"} on tracks, vias and zones: ${names.slice(0, 4).map(([a, b]) => `${a} \u2192 ${b}`).join(", ")}${names.length > 4 ? ` and ${names.length - 4} more` : ""}`, ids: plan.copper.map((c) => c.item.id) });
           if (!plan.adds.length && !plan.updates.length) throw new ToolError("the board already matches the schematic: every part is on it with the right nets" + (plan.extra.length ? `; on the board but not in the schematic: ${plan.extra.join(", ")}` : ""));
           details.push({ update_from_schematic: {
             added: plan.adds.map((a) => a.ref),
@@ -63928,6 +63994,8 @@ function build(input) {
             nets: plan.nets,
             not_in_schematic: plan.extra,
             problems: plan.problems,
+            nets_renamed: names.length ? plan.renamed : void 0,
+            copper_renamed: plan.copper.length || void 0,
             note: !plan.adds.length ? void 0 : plan.adds.every((a) => e.placements && typeof e.placements === "object" && e.placements[a.ref]) ? "New footprints are at the positions given in placements." : "New footprints without a position in placements are parked in rows beside the board; place them next (move edits, or give placements with this edit)."
           } });
           break;
@@ -64216,8 +64284,11 @@ function build(input) {
           const paper = e.paper === void 0 ? String(doc.paper || "A4") : text(e.paper, "paper");
           const lines4 = ["title", "rev", "date", "company"].filter((key2) => e[key2] !== void 0);
           if (e.paper === void 0 && !lines4.length) throw new ToolError("give paper, or title, rev, date or company for the title block");
-          if (e.paper !== void 0 && !["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal or USLedger");
-          if (e.paper !== void 0 && !lines4.length && doc.paper === paper && !doc.portrait) throw new ToolError(`the page is already ${paper}`);
+          if (e.paper !== void 0 && !["A5", "A4", "A3", "A2", "A1", "A0", "A", "B", "C", "D", "E", "USLetter", "USLegal", "USLedger", "User"].includes(paper)) throw new ToolError("paper is A5, A4, A3, A2, A1, A0, A, B, C, D, E, USLetter, USLegal, USLedger, or User with width and height in millimetres");
+          const custom = e.paper !== void 0 && paper === "User";
+          const cw = custom ? num6(e.width, "width") : 0, ch = custom ? num6(e.height, "height") : 0;
+          if (custom && !(cw >= 25.4 && cw <= 1200 && ch >= 25.4 && ch <= 1200)) throw new ToolError("a User page is 25.4 to 1200 mm wide and high");
+          if (e.paper !== void 0 && !lines4.length && doc.paper === paper && !doc.portrait && (!custom || Math.abs(doc.page[0] - cw) < 0.01 && Math.abs(doc.page[1] - ch) < 0.01)) throw new ToolError(`the page is already ${paper}`);
           const old = doc.titleBlock || {};
           const tb = { ...old };
           for (const key2 of lines4) tb[key2] = String(e[key2]);
@@ -64232,10 +64303,10 @@ function build(input) {
             id: "00000000-0000-0000-0000-0000000d0c00",
             kind: "MODIFIED",
             typeName: "PAGE_SETTINGS",
-            docProps: { paper: e.paper === void 0 ? wasPaper : `(paper "${paper}")`, titleBlock: block(tb) },
+            docProps: { paper: e.paper === void 0 ? wasPaper : custom ? `(paper "User" ${r43(cw)} ${r43(ch)})` : `(paper "${paper}")`, titleBlock: block(tb) },
             was: { titleBlock: block(old), paper: wasPaper }
           });
-          lines.push({ kind: "modify", text: (e.paper !== void 0 ? `Page size ${doc.paper || "A4"} \u2192 ${paper}` : "Title block") + (lines4.length ? `: ${lines4.map((key2) => `${key2} "${e[key2]}"`).join(", ")}` : ""), ids: [] });
+          lines.push({ kind: "modify", text: (e.paper !== void 0 ? `Page size ${doc.paper || "A4"} \u2192 ${custom ? `${fmt3(cw)} x ${fmt3(ch)} mm` : paper}` : "Title block") + (lines4.length ? `: ${lines4.map((key2) => `${key2} "${e[key2]}"`).join(", ")}` : ""), ids: [] });
           break;
         }
         default:
@@ -64706,6 +64777,42 @@ function localList(kind, lib) {
   }
   return any ? Array.from(out).sort() : null;
 }
+async function modelList(lib) {
+  const strip = (n2) => n2.replace(/\.(step|stp|wrl)$/i, "");
+  const dirs = [process.env.KICAD10_3DMODEL_DIR, process.env.KICAD9_3DMODEL_DIR, process.env.KICAD8_3DMODEL_DIR, ...INSTALLS.map((d) => path.join(d, "3dmodels"))].filter((d) => !!d);
+  for (const d of dirs) {
+    const dir = path.join(d, lib + ".3dshapes");
+    if (fs.existsSync(dir)) return Array.from(new Set(fs.readdirSync(dir).filter((n2) => /\.(step|stp|wrl)$/i.test(n2)).map(strip))).sort();
+  }
+  const file = path.join(cacheDir(), "kicad-packages3D", lib + ".list.json");
+  if (fs.existsSync(file)) {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+    }
+  }
+  if (process.env.KC_HARNESS_OFFLINE === "1" || !/^[A-Za-z0-9_.+-]+$/.test(lib)) return null;
+  const base = (process.env.KICAD_LIBS_URL || "https://gitlab.com").replace(/\/$/, "");
+  const names = [];
+  for (let page = 1; page <= 30; page++) {
+    const r = await curl(`${base}/api/v4/projects/kicad%2Flibraries%2Fkicad-packages3D/repository/tree?path=${enc(lib + ".3dshapes")}&ref=${enc(process.env.KICAD_LIBS_REF || "master")}&per_page=100&page=${page}`);
+    if (r.status === 404) break;
+    if (r.status !== 200) return null;
+    let rows;
+    try {
+      rows = JSON.parse(r.body);
+    } catch {
+      return null;
+    }
+    if (!Array.isArray(rows) || !rows.length) break;
+    for (const e of rows) if (e && typeof e.name === "string" && /\.(step|stp)$/i.test(e.name)) names.push(strip(e.name));
+    if (rows.length < 100) break;
+  }
+  names.sort();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(names));
+  return names;
+}
 async function gitlab(kind, lib, name) {
   const repo = kind === "symbol" ? "kicad-symbols" : "kicad-footprints";
   const rel = kind === "symbol" ? `${lib}.kicad_symdir/${name}.kicad_sym` : `${lib}.pretty/${name}.kicad_mod`;
@@ -64739,6 +64846,10 @@ async function backend(url, init) {
   }
   if (u.pathname === "/api/kicad-lib/list") {
     const kind = q.get("kind") || "symbol", lib = q.get("lib") || void 0;
+    if (kind === "model") {
+      const items = lib ? await modelList(lib) : null;
+      return items ? ok({ kind, library: lib, items }) : miss("KiCad's 3D model library could not be listed from here.");
+    }
     const here = localList(kind, lib);
     if (here) return ok(lib ? { kind, library: lib, items: here } : { kind, libraries: here });
     const s2 = await server(url);
