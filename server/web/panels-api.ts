@@ -32,7 +32,7 @@ export type LayerMenuCmd = "showAllCu" | "hideAllCu" | "hideAllButActive" | "sho
 export type NetCmd = "highlight" | "select" | "unselect" | "showAll" | "hideOthers";
 
 // ---------------------------------------------------------------- Properties (PROPERTIES_PANEL / PROPERTY_MANAGER)
-export type PropType = "text" | "longtext" | "length" | "coord" | "angle" | "number" | "int" | "bool" | "enum" | "color";
+export type PropType = "text" | "longtext" | "length" | "coord" | "angle" | "time" | "number" | "int" | "bool" | "enum" | "color";
 export interface PropRow {
   /** stable id: "<group>/<name>" */
   id: string; name: string; type: PropType;

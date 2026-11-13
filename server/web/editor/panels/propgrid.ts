@@ -30,6 +30,8 @@ interface PropDef {
   member?(node: SNode, v: Raw): boolean | void;
   /** a name the user may rename in the grid's label column (PCB_PROPERTIES_PANEL::isKeyEditable) */
   key?: "field" | "custom";
+  /** PROPERTY<…, std::optional<T>>: an empty cell is "no value" (the setter gets null), and 0 is a value */
+  optional?: boolean;
 }
 
 /** props.js's node editors (static/props.js `helpers`). */
@@ -236,6 +238,11 @@ const PAD_SIM_TYPES: [string, string][] = [["", "None"], ["source", "Source"], [
 const PAD_FAB_PROPS: [string, string][] = [["", "None"], ["pad_prop_bga", "BGA pad"], ["pad_prop_fiducial_glob", "Fiducial, global to board"], ["pad_prop_fiducial_loc", "Fiducial, local to footprint"], ["pad_prop_testpoint", "Test point pad"], ["pad_prop_heatsink", "Heatsink pad"], ["pad_prop_castellated", "Castellated pad"], ["pad_prop_mechanical", "Mechanical pad"], ["pad_prop_pressfit", "Press-fit pad"]];
 const PAD_ZONE_CONNECT: [string, string][] = [["", "Inherited"], ["0", "None"], ["1", "Thermal reliefs"], ["2", "Solid"], ["3", "Thermal reliefs for PTH"]];
 const PAD_SHAPES: [string, string][] = [["circle", "Circle"], ["rect", "Rectangle"], ["oval", "Oval"], ["trapezoid", "Trapezoid"], ["roundrect", "Rounded rectangle"], ["custom", "Custom"]];
+const PIN_TYPES: [string, string][] = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"].map((t): [string, string] => [t, t]);   // GetCanonicalElectricalTypeName
+const PAD_UNCONNECTED: [string, string][] = [["keep_all", "All copper layers"], ["remove_all", "Connected layers only"], ["remove_except_start_end", "Front, back and connected layers"], ["start_end_only", "Start and end layers only"]];
+const PAD_POST_MACHINING: [string, string][] = [["none", "Not post-machined"], ["counterbore", "Counterbore"], ["countersink", "Countersink"]];
+const PAD_BACKDRILL: [string, string][] = [["none", "No backdrill"], ["bottom", "Backdrill bottom"], ["top", "Backdrill top"], ["both", "Backdrill both"]];
+const PM = "Post-machining Properties", BD = "Backdrill Properties";
 const padIndexOf = new Map<string, number>();   // footprint id -> the pad the Pad Properties rows show
 
 /** FIELD_T's mandatory footprint fields (PCB_FIELD::IsMandatory): never renamed or removed from the panel. */
@@ -276,8 +283,9 @@ function customPropDefs(it: KItem): PropDef[] {
 function footprintProps(it: KItem, doc: KDoc, single: boolean): PropDef[] {
   const h = H();
   const attr = (name: string, key: string): PropDef => ({ group: "Attributes", name, type: "bool", get: (x) => !!h.footprintAttrs(x.node)[key], set: (n, v) => { h.setFootprintAttrs(n, { [key]: !!v }); } });
-  const over = (name: string, key: string, before: string[]): PropDef => ({ group: "Overrides", name, type: "length", get: (x) => { const k = h.kid(x.node, key); return k ? h.num(k[1]) : 0; },
-    set: (n, v) => { if (v) h.setKid(n, key, [r6(v as number)], before); else h.delKid(n, key); } });
+  // PROPERTY<FOOTPRINT, std::optional<int>>: empty is no override, 0 an override of 0 (the writer prints it)
+  const over = (name: string, key: string, before: string[]): PropDef => ({ group: "Overrides", name, type: "length", optional: true, get: (x) => { const k = h.kid(x.node, key); return k ? h.num(k[1]) : null; },
+    set: (n, v) => { if (v !== null && v !== undefined) h.setKid(n, key, [r6(v as number)], before); else h.delKid(n, key); } });
   const out: PropDef[] = [
     { group: BASIC, name: "Position X", type: "coord", get: (x) => K().atOf(x.node)[0], set: (n, v) => { h.setFootprintPosition(n, v as number, K().atOf(n)[1]); } },
     { group: BASIC, name: "Position Y", type: "coord", get: (x) => K().atOf(x.node)[1], set: (n, v) => { h.setFootprintPosition(n, K().atOf(n)[0], v as number); } },
@@ -304,7 +312,7 @@ function padProps(fp: KItem, doc: KDoc): PropDef[] {
   const h = H(), G = "Pad Properties"; const pads = h.kids(fp.node, "pad"); if (!pads.length) return [];
   let idx = padIndexOf.get(fp.id) || 0; if (idx >= pads.length) idx = 0;
   const picker: PropDef = { group: G, name: "Pad", type: "enum", choices: pads.map((p, i): [string, string] => { const net = h.netNameOf(doc, p); return [String(i), h.str(p[1]) + (net ? " · " + net : "")]; }), get: () => String(idx), local: (v, x) => { padIndexOf.set(x.id, +(v as string) || 0); } };
-  const own = padDefs(doc, idx).filter((d) => (d.group === G || d.group === "Overrides") && (!d.avail || d.avail(fp))).map((d) => d.group === "Overrides" ? Object.assign(d, { group: "Pad Overrides" }) : d);
+  const own = padDefs(doc, idx).filter((d) => (d.group === G || d.group === "Overrides" || d.group === PM || d.group === BD) && (!d.avail || d.avail(fp))).map((d) => d.group === "Overrides" ? Object.assign(d, { group: "Pad Overrides" }) : d);
   return [picker, ...own];
 }
 /** PAD's registered properties (pad.cpp PAD_DESC) for pad `idx` of a footprint item: Basic (position, orientation),
@@ -315,9 +323,7 @@ function padDefs(doc: KDoc, idx: number): PropDef[] {
   const edit = (patch: (v: Raw, n: SNode) => Record<string, unknown>) => (n: SNode, v: Raw) => h.setPad(n, idx, patch(v, n), doc);
   const drillOf = (x: KItem): [number, number] => { const i = info(x); if (!i || !i.drill) return [0, 0]; const p = i.drill.split(/x/i).map(Number); return [p[0] || 0, p.length > 1 ? p[1] || 0 : p[0] || 0]; };
   const nets: [string, string][] = [["", "<no net>"], ...h.boardNetNames(doc).map((n): [string, string] => [n, n])];
-  const padKid = (name: string, key: string, type: PropType, before: string[]): PropDef => ({ group: "Overrides", name, type, get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, key); return k ? h.num(k[1]) : 0; },
-    set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, key, [r6(v as number)], before); else h.delKid(p, key); } });
-  const tail = ["zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "tenting", "uuid", "tstamp"];
+  const tail = ["zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "teardrops", "tenting", "uuid", "tstamp", "padstack"];
   // the writer's order of a pad's children after (layers …) (PCB_IO_KICAD_SEXPR::format( PAD ))
   const ORDER = ["property", "sim_electrical_type", "layers", "remove_unused_layers", "keep_end_layers", "zone_layer_connections", "roundrect_rratio", "chamfer_ratio", "chamfer", "net", "pinfunction", "pintype", "die_length", "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", ...tail];
   const after = (key: string) => ORDER.slice(ORDER.indexOf(key) + 1);
@@ -325,37 +331,47 @@ function padDefs(doc: KDoc, idx: number): PropDef[] {
   const padType = (x: KItem) => { const p = pad(x); return p ? h.str(p[2]) : ""; };
   const isCopper = (x: KItem) => padType(x) !== "np_thru_hole";                           // isCopperPad: not NPTH
   const canHole = (x: KItem) => padType(x) === "thru_hole" || padType(x) === "np_thru_hole";   // padCanHaveHole
+  // PAD::SetSizeXProp / SetSizeYProp: not 0 or less; a circle pad takes the value on both axes
+  const sizeProp = (n: SNode, v: Raw, axis: "w" | "h") => { if (!((v as number) > 0)) return false; const p = h.padNode(n, idx); if (!p) return false; return h.setPad(n, idx, h.str(p[3]) === "circle" ? { w: v, h: v } : { [axis]: v }, doc); };
+  // hasNormalPadstack: no (padstack (mode front_inner_back|custom) …)
+  const normalStack = (x: KItem) => { const p = pad(x), ps = p && h.kid(p, "padstack"), m = ps && h.kid(ps, "mode"); return !m || h.str(m[1]) === "normal"; };
   const drillKid = (x: KItem) => { const p = pad(x); return p ? h.kid(p, "drill") : null; };
   const oblong = (x: KItem) => { const d = drillKid(x); return !!d && d.includes("oval"); };
   // PAD_UTILS::PadHasMeaningfulRoundingRadius on the front layer: a rounded (or chamfered) rectangle
-  const rounded = (x: KItem) => { const p = pad(x); return !!p && h.str(p[3]) === "roundrect"; };
+  const rounded = (x: KItem) => { const p = pad(x); return !!p && normalStack(x) && h.str(p[3]) === "roundrect"; };
   const rratio = (x: KItem) => { const p = pad(x), k = p && h.kid(p, "roundrect_rratio"); return k ? h.num(k[1]) : 0; };
   const minSide = (x: KItem) => { const i = info(x); return i ? Math.min(i.w, i.h) : 0; };
   const setRatio = (n: SNode, v: number) => { const p = h.padNode(n, idx); if (!p) return false; h.setKid(p, "roundrect_rratio", [r6(Math.max(0, Math.min(0.5, v)))], after("roundrect_rratio")); return true; };
-  /** An optional override written as (key value) in the writer's order, dropped when emptied (0). */
-  const optKid = (group: string, name: string, key: string, type: PropType, extra?: Partial<PropDef>): PropDef => Object.assign({ group, name, type,
+  /** A plain int the writer prints only when it is not 0 (die_length, die_delay): 0 drops (key value). */
+  const intKid = (group: string, name: string, key: string, type: PropType, extra?: Partial<PropDef>): PropDef => Object.assign({ group, name, type,
     get: (x: KItem) => { const p = pad(x), k = p && h.kid(p, key); return k ? h.num(k[1]) : 0; },
     set: (n: SNode, v: Raw) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, key, [r6(v as number)], after(key)); else h.delKid(p, key); } }, extra || {});
+  /** PROPERTY<PAD, std::optional<…>>: an empty cell is no override (no (key …)); 0 is an override of 0, written. */
+  const optKid = (group: string, name: string, key: string, type: PropType, extra?: Partial<PropDef>): PropDef => Object.assign({ group, name, type, optional: true,
+    get: (x: KItem) => { const p = pad(x), k = p && h.kid(p, key); return k ? h.num(k[1]) : null; },
+    set: (n: SNode, v: Raw) => { const p = h.padNode(n, idx); if (!p) return false; if (v !== null && v !== undefined) h.setKid(p, key, [r6(v as number)], after(key)); else h.delKid(p, key); } }, extra || {});
   // PAD::GetPosition is the board position: the footprint's position plus the pad's local offset rotated by the footprint
   const padPos = (n: SNode): [number, number] | null => { const p = h.padNode(n, idx); if (!p) return null; const [fx, fy, fr] = K().atOf(n), [lx, ly] = K().atOf(p); const [rx, ry] = padRot(lx, ly, fr); return [fx + rx, fy + ry]; };
   const setPos = (n: SNode, x: number, y: number): boolean => { const p = h.padNode(n, idx), at = p && h.kid(p, "at"); if (!at) return false; const [fx, fy, fr] = K().atOf(n); const [lx, ly] = padRot(x - fx, y - fy, -fr); at[1] = r6(lx); at[2] = r6(ly); return true; };
   return [
     { group: BASIC, name: "Position X", type: "coord", get: (x) => padPos(x.node)?.[0] ?? null, set: (n, v) => { const c = padPos(n); return !!c && setPos(n, v as number, c[1]); } },
     { group: BASIC, name: "Position Y", type: "coord", get: (x) => padPos(x.node)?.[1] ?? null, set: (n, v) => { const c = padPos(n); return !!c && setPos(n, c[0], v as number); } },
-    { group: BASIC, name: "Orientation", type: "angle", get: (x) => { const i = info(x); return i ? h.normDeg(i.rot - K().atOf(x.node)[2]) : null; }, set: edit((v, n) => ({ rot: (v as number) + K().atOf(n)[2] })) },
+    // PAD::GetOrientationDegrees: the board (absolute) angle, the one the pad's (at x y angle) stores
+    { group: BASIC, name: "Orientation", type: "angle", get: (x) => { const i = info(x); return i ? h.normDeg(i.rot) : null; }, set: edit((v) => ({ rot: v as number })) },
     { group: "Net", name: "Net", type: "enum", choices: nets, avail: isCopper, get: (x) => info(x)?.net ?? null, set: edit((v) => ({ net: String(v) })) },
     { group: "Net", name: "Net Class", type: "text", avail: isCopper, get: (x) => { const n = info(x)?.net; return n ? netClassOf(n) : "Default"; } },
     { group: G, name: "Pad Type", type: "enum", choices: PAD_TYPES, get: (x) => info(x)?.type ?? null, set: edit((v) => ({ type: String(v) })) },
-    { group: G, name: "Pad Shape", type: "enum", choices: PAD_SHAPES, get: (x) => info(x)?.shape ?? null, set: edit((v) => ({ shape: String(v) })) },
+    { group: G, name: "Pad Shape", type: "enum", choices: PAD_SHAPES, avail: normalStack, get: (x) => info(x)?.shape ?? null, set: edit((v) => ({ shape: String(v) })) },
     { group: G, name: "Pad Number", type: "text", avail: isCopper, get: (x) => info(x)?.number ?? null, set: edit((v) => ({ number: String(v) })) },
     { group: G, name: "Pin Name", type: "text", get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, "pinfunction"); return k ? h.str(k[1]) : ""; },
       set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, "pinfunction", [String(v)], after("pinfunction")); else h.delKid(p, "pinfunction"); } },
-    { group: G, name: "Pin Type", type: "text", get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, "pintype"); return k ? h.str(k[1]) : ""; },
+    { group: G, name: "Pin Type", type: "enum", choices: PIN_TYPES, get: (x) => { const p = h.padNode(x.node, idx), k = p && h.kid(p, "pintype"); return k ? h.str(k[1]) : ""; },
       set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, "pintype", [String(v)], after("pintype")); else h.delKid(p, "pintype"); } },
     { group: G, name: "Simulation Electrical Type", type: "enum", choices: PAD_SIM_TYPES, get: (x) => { const p = pad(x), k = p && h.kid(p, "sim_electrical_type"); return k ? h.str(k[1]) : ""; },
       set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, "sim_electrical_type", [String(v)], after("sim_electrical_type")); else h.delKid(p, "sim_electrical_type"); } },
-    { group: G, name: "Size X", type: "length", get: (x) => info(x)?.w ?? null, set: edit((v) => ({ w: v })) },
-    { group: G, name: "Size Y", type: "length", get: (x) => info(x)?.h ?? null, set: edit((v) => ({ h: v })) },
+    { group: G, name: "Size X", type: "length", avail: normalStack, get: (x) => info(x)?.w ?? null, set: (n, v) => sizeProp(n, v, "w") },
+    // circle pads have no usable Y size
+    { group: G, name: "Size Y", type: "length", avail: (x) => normalStack(x) && h.str(pad(x)?.[3]) !== "circle", get: (x) => info(x)?.h ?? null, set: (n, v) => sizeProp(n, v, "h") },
     { group: G, name: "Corner Radius Ratio", type: "number", avail: rounded, get: (x) => rratio(x), set: (n, v) => setRatio(n, v as number) },
     { group: G, name: "Corner Radius Size", type: "length", avail: rounded, get: (x) => r6(rratio(x) * minSide(x)),
       set: (n, v, it) => { const m = minSide(Object.assign({}, it, { node: n })); return m > 0 && setRatio(n, (v as number) / m); } },
@@ -366,10 +382,17 @@ function padDefs(doc: KDoc, idx: number): PropDef[] {
     { group: G, name: "Hole Size Y", type: "length", canWrite: canHole, avail: oblong, get: (x) => drillOf(x)[1], set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const d = h.padInfo(doc, p).drill.split(/x/i).map(Number); return h.setPad(n, idx, { drill: [d[0] || (v as number), v as number] }, doc); } },
     { group: G, name: "Fabrication Property", type: "enum", choices: PAD_FAB_PROPS, get: (x) => { const p = pad(x), k = p && h.kid(p, "property"); return k ? h.str(k[1]) : ""; },
       set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v) h.setKid(p, "property", [String(v)], after("property")); else h.delKid(p, "property"); } },
-    optKid(G, "Pad To Die Length", "die_length", "length", { avail: isCopper }),
-    padKid("Clearance Override", "clearance", "length", tail),
-    { group: "Overrides", name: "Soldermask Margin Override", type: "length", get: (x) => info(x)?.maskMargin ?? 0, set: edit((v) => ({ maskMargin: v || null })) },
-    { group: "Overrides", name: "Solderpaste Margin Override", type: "length", get: (x) => info(x)?.pasteMargin ?? 0, set: edit((v) => ({ pasteMargin: v || null })) },
+    // UNCONNECTED_LAYER_MODE: the writer keeps (remove_unused_layers) / (keep_end_layers) for a PTH pad only
+    { group: G, name: "Copper Layers", type: "enum", choices: PAD_UNCONNECTED, get: (x) => { const p = pad(x); return p ? unconnectedMode(p) : null; },
+      set: (n, v) => { const p = h.padNode(n, idx); if (!p || h.str(p[2]) !== "thru_hole") return false; setUnconnectedMode(p, String(v)); } },
+    intKid(G, "Pad To Die Length", "die_length", "length", { avail: isCopper }),
+    intKid(G, "Pad To Die Delay", "die_delay", "time", { avail: isCopper }),
+    ...postMachiningDefs(doc, idx, "Top", "front_post_machining"),
+    ...postMachiningDefs(doc, idx, "Bottom", "back_post_machining"),
+    ...backdrillDefs(doc, idx),
+    optKid("Overrides", "Clearance Override", "clearance", "length"),
+    { group: "Overrides", name: "Soldermask Margin Override", type: "length", optional: true, get: (x) => info(x)?.maskMargin ?? null, set: edit((v) => ({ maskMargin: v === undefined ? null : v })) },
+    { group: "Overrides", name: "Solderpaste Margin Override", type: "length", optional: true, get: (x) => info(x)?.pasteMargin ?? null, set: edit((v) => ({ pasteMargin: v === undefined ? null : v })) },
     optKid("Overrides", "Solderpaste Margin Ratio Override", "solder_paste_margin_ratio", "number"),
     // ZONE_CONNECTION: INHERITED is no (zone_connect), the others its number
     { group: "Overrides", name: "Zone Connection Style", type: "enum", choices: PAD_ZONE_CONNECT, get: (x) => { const p = pad(x), k = p && h.kid(p, "zone_connect"); return k ? String(h.num(k[1])) : ""; },
@@ -380,6 +403,98 @@ function padDefs(doc: KDoc, idx: number): PropDef[] {
     { group: "Overrides", name: "Thermal Relief Spoke Angle", type: "angle", get: (x) => { const p = pad(x), k = p && h.kid(p, "thermal_bridge_angle"); return k ? h.num(k[1]) : (p && h.str(p[3]) === "circle" ? 45 : 90); },
       set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const def = h.str(p[3]) === "circle" ? 45 : 90; const a = h.deg360(v as number); if (a === def) h.delKid(p, "thermal_bridge_angle"); else h.setKid(p, "thermal_bridge_angle", [r6(a)], after("thermal_bridge_angle")); } },
     optKid("Overrides", "Thermal Relief Gap", "thermal_gap", "length"),
+  ];
+}
+// the children of (pad …) in the writer's order (PCB_IO_KICAD_SEXPR::format( PAD )), so a new one lands in its place
+const PAD_CHILD_ORDER = ["at", "size", "rect_delta", "drill", "backdrill", "tertiary_drill", "front_post_machining", "back_post_machining", "property", "sim_electrical_type",
+  "layers", "remove_unused_layers", "keep_end_layers", "zone_layer_connections", "roundrect_rratio", "chamfer_ratio", "chamfer", "net", "pinfunction", "pintype", "die_length",
+  "die_delay", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio", "clearance", "zone_connect", "thermal_bridge_width", "thermal_bridge_angle", "thermal_gap",
+  "options", "primitives", "teardrops", "tenting", "uuid", "tstamp", "padstack"];
+const padAfter = (key: string) => PAD_CHILD_ORDER.slice(PAD_CHILD_ORDER.indexOf(key) + 1);
+/** PAD::GetUnconnectedLayerMode from (remove_unused_layers) and (keep_end_layers). */
+function unconnectedMode(p: SNode): string {
+  const h = H(); const flag = (key: string) => { const k = h.kid(p, key); return k ? h.str(k[1]) !== "no" : p.includes(key); };
+  if (!flag("remove_unused_layers")) return "keep_all";
+  return flag("keep_end_layers") ? "remove_except_start_end" : "remove_all";
+}
+/** PAD::SetUnconnectedLayerMode as the writer saves it: START_END_ONLY has no token of its own for a pad and is
+ *  written like REMOVE_ALL (GetRemoveUnconnected true, GetKeepTopBottom false). */
+function setUnconnectedMode(p: SNode, mode: string): void {
+  const h = H(); const remove = mode !== "keep_all";
+  h.setKid(p, "remove_unused_layers", [remove ? "yes" : "no"], padAfter("remove_unused_layers"));
+  if (!remove) { h.delKid(p, "keep_end_layers"); h.delKid(p, "zone_layer_connections"); return; }
+  h.setKid(p, "keep_end_layers", [mode === "remove_except_start_end" ? "yes" : "no"], padAfter("keep_end_layers"));
+  if (!h.kid(p, "zone_layer_connections")) h.setKid(p, "zone_layer_connections", [], padAfter("zone_layer_connections"));
+}
+const isRoundDrill = (p: SNode | null) => { const d = p && H().kid(p, "drill"); return !d || !d.includes("oval"); };   // GetDrillShape() == CIRCLE
+/** The "Post-machining Properties" rows of one side (PADSTACK::FrontPostMachining / BackPostMachining):
+ *  (front_post_machining counterbore|countersink (size s) (depth d) (angle a)), left out when not post-machined. */
+function postMachiningDefs(doc: KDoc, idx: number, side: "Top" | "Bottom", key: string): PropDef[] {
+  const h = H(); void doc;
+  const pad = (x: KItem) => h.padNode(x.node, idx);
+  const canHole = (x: KItem) => { const p = pad(x), t = p ? h.str(p[2]) : ""; return t === "thru_hole" || t === "np_thru_hole"; };
+  const node = (p: SNode | null) => (p ? h.kid(p, key) : null);
+  const mode = (x: KItem) => { const k = node(pad(x)); return k ? h.str(k[1]) : "none"; };
+  const round = (x: KItem) => isRoundDrill(pad(x));
+  const sub = (name: string, sk: string, type: PropType, show: (m: string) => boolean, before: string[]): PropDef => ({ group: PM, name, type, canWrite: canHole,
+    avail: (x) => round(x) && show(mode(x)),
+    get: (x) => { const k = node(pad(x)), v = k && h.kid(k, sk); return v ? h.num(v[1]) : 0; },
+    // the writer prints each only when it is above 0
+    set: (n, v) => { const k = node(h.padNode(n, idx)); if (!k) return false; if ((v as number) > 0) h.setKid(k, sk, [r6(v as number)], before); else h.delKid(k, sk); } });
+  return [
+    { group: PM, name: `${side} Post-machining`, type: "enum", choices: PAD_POST_MACHINING, canWrite: canHole, avail: round, get: mode,
+      set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const k = node(p);
+        if (v === "none") { if (!k) return false; h.delKid(p, key); return; }
+        if (k) k[1] = String(v); else h.setKid(p, key, [String(v)], padAfter(key)); } },
+    sub(`${side} Post-machining Size`, "size", "length", (m) => m === "counterbore" || m === "countersink", ["depth", "angle"]),
+    sub(`${side} Counterbore Depth`, "depth", "length", (m) => m === "counterbore", ["angle"]),
+    sub(`${side} Countersink Angle`, "angle", "angle", (m) => m === "countersink", []),
+  ];
+}
+/** The "Backdrill Properties" rows (PADSTACK::GetBackdrillMode & co.): a backdrill is a (backdrill …) or
+ *  (tertiary_drill …) child, (size s) (layers start must-cut), whose start layer is its side (F.Cu top, B.Cu bottom). */
+function backdrillDefs(doc: KDoc, idx: number): PropDef[] {
+  const h = H(); const cu = layerChoices(doc, true);
+  const pad = (x: KItem) => h.padNode(x.node, idx);
+  const SLOTS = ["backdrill", "tertiary_drill"];
+  const sizeOf = (k: SNode) => { const z = h.kid(k, "size"); return z ? h.num(z[1]) : 0; };
+  const startOf = (k: SNode) => { const l = h.kid(k, "layers"); return l ? h.str(l[1]) : ""; };
+  const endOf = (k: SNode) => { const l = h.kid(k, "layers"); return l && l.length > 2 ? h.str(l[2]) : ""; };
+  const sideLayer = (top: boolean) => (top ? "F.Cu" : "B.Cu");
+  /** findBackdrillDrill */
+  const find = (p: SNode | null, top: boolean): SNode | null => { if (!p) return null; for (const key of SLOTS) { const k = h.kid(p, key); if (k && sizeOf(k) > 0 && startOf(k) === sideLayer(top)) return k; } return null; };
+  /** backdrillWriteSlot: the side's drill, else its home slot (backdrill for the top, tertiary_drill for the bottom)
+   *  unless the other side holds it */
+  const slotKey = (p: SNode, top: boolean): string => {
+    const home = top ? "backdrill" : "tertiary_drill", other = top ? "tertiary_drill" : "backdrill", k = h.kid(p, home);
+    return k && sizeOf(k) > 0 && startOf(k) === sideLayer(!top) ? other : home;
+  };
+  const write = (p: SNode, top: boolean, size: number, end: string) => {
+    const k = find(p, top), key = k ? (k[0] as string) : slotKey(p, top);
+    h.setKid(p, key, [["size", r6(size)], ["layers", sideLayer(top), end || sideLayer(top)]], padAfter(key));
+  };
+  /** clearBackdrillSide: the writer leaves out a drill of size 0 */
+  const clear = (p: SNode, top: boolean) => { for (const key of SLOTS) { const k = h.kid(p, key); if (k && startOf(k) === sideLayer(top)) h.delKid(p, key); } };
+  const drill = (p: SNode) => { const d = h.kid(p, "drill"); if (!d) return 0; const v = d.slice(1).find((t) => typeof t === "number"); return typeof v === "number" ? v : 0; };
+  const mode = (x: KItem) => { const p = pad(x), t = !!find(p, true), b = !!find(p, false); return t && b ? "both" : t ? "top" : b ? "bottom" : "none"; };
+  const has = (top: boolean) => (x: KItem) => { if (!isRoundDrill(pad(x))) return false; const m = mode(x); return m === "both" || m === (top ? "top" : "bottom"); };
+  const sizeRow = (top: boolean): PropDef => ({ group: BD, name: `${top ? "Top" : "Bottom"} Backdrill Size`, type: "length", optional: true, avail: has(top),
+    get: (x) => { const k = find(pad(x), top); return k ? sizeOf(k) : null; },
+    set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; if (v === null || v === undefined || !((v as number) > 0)) { clear(p, top); return; } const k = find(p, top); write(p, top, v as number, k ? endOf(k) : ""); } });
+  const cutRow = (top: boolean): PropDef => ({ group: BD, name: `${top ? "Top" : "Bottom"} Backdrill Must-Cut`, type: "enum", choices: cu, avail: has(top),
+    get: (x) => { const k = find(pad(x), top); return k ? endOf(k) : null; },
+    set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false; const k = find(p, top); if (!k) return false; write(p, top, sizeOf(k), String(v)); } });
+  return [
+    { group: BD, name: "Backdrill Mode", type: "enum", choices: PAD_BACKDRILL, get: mode,
+      // PADSTACK::SetBackdrillMode: a new side starts on its own copper layer, 1.1 × the hole
+      set: (n, v) => { const p = h.padNode(n, idx); if (!p) return false;
+        for (const top of [true, false]) {
+          const want = v === "both" || v === (top ? "top" : "bottom"), k = find(p, top);
+          if (!want) { clear(p, top); continue; }
+          if (k) continue;
+          const size = r6(drill(p) * 1.1); if (size > 0) write(p, top, size, "");
+        } } },
+    sizeRow(false), cutRow(false), sizeRow(true), cutRow(true),
   ];
 }
 /** RotatePoint (trigo.cpp) with KiCad's Y-down board axes. */
@@ -650,6 +765,7 @@ function show(def: PropDef, raw: Raw): string {
   switch (def.type) {
     case "length": case "coord": return H().formatLength(raw as number, String(E.units || "mm"));
     case "angle": return trimNum(raw as number, 4) + "°";
+    case "time": return trimNum(raw as number, 4) + " ps";   // PGPROPERTY_TIME in the frame's time unit
     case "number": return trimNum(raw as number, 6);
     case "int": return String(Math.round(raw as number));
     case "bool": return raw ? "1" : "0";
@@ -729,10 +845,12 @@ function pinGrid(doc: KDoc): PropGrid | null {
 /** Parse the text of a row into the raw value its setter takes; a string return is the error to show. */
 function parse(def: PropDef, text: string): { v: Raw } | string {
   const t = String(text);
+  if (def.optional && !t.trim()) return { v: null };   // std::optional: an empty cell clears the value
   switch (def.type) {
     case "length": case "coord": { const v = H().evalExpr(t, String(E.units || "mm")); if (Number.isNaN(v)) return "Not a valid length"; if (def.type === "length" && v < 0) return "Must not be negative"; const ax = coordAxis(def); return { v: ax ? r6(fromDisplayAbsAxis(v, ax)) : v }; }
     case "angle": { const v = H().evalExpr(t.replace(/°|deg/gi, ""), ""); if (Number.isNaN(v)) return "Not a valid angle"; return { v }; }
     case "number": { const v = H().evalExpr(t, ""); if (Number.isNaN(v)) return "Not a valid number"; return { v }; }
+    case "time": { const m = /^\s*(.*?)\s*(fs|ps|ns)?\s*$/i.exec(t)!; const v = H().evalExpr(m[1], ""); if (Number.isNaN(v)) return "Not a valid time"; const u = (m[2] || "ps").toLowerCase(); return { v: u === "fs" ? v / 1000 : u === "ns" ? v * 1000 : v }; }
     case "int": { const v = H().evalExpr(t, ""); if (Number.isNaN(v)) return "Not a valid number"; return { v: Math.round(v) }; }
     case "bool": return { v: t === "1" || t === "true" };
     case "enum": if (def.choices && !def.choices.some((c) => c[0] === t)) return "Not one of the choices"; return { v: t };
