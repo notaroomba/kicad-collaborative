@@ -1726,7 +1726,7 @@ class Board(_Doc):
             if not todo:
                 break
             for ref, nums in todo.items():
-                self._edit({"op": "pad_connection", "ref": ref, "pads": sorted(set(nums)), "connect": "solid"})
+                self._edit({"op": "pad_connection", "ref": ref, "pads": sorted(set(nums)), "connect": "solid", "if_needed": True})
                 done += [f"{ref}.{n}" for n in sorted(set(nums))]
             self.flush()
         if done:

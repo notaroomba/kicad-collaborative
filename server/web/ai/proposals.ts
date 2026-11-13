@@ -726,7 +726,7 @@ function build(input: { title?: string; rationale?: string; edits?: Edit[] }): P
             if (code !== null) { const before = pad.findIndex((q: any) => Array.isArray(q) && ["thermal_bridge_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "tenting", "uuid", "tstamp", "teardrops"].includes(q[0])); pad.splice(before >= 0 ? before : pad.length, 0, ["zone_connect", code]); }
           }
           const missing = want.find((w: string) => !hit.includes(w)); if (missing) throw new ToolError(`${nameOf(it)} has no pad ${missing}`);
-          if (k.serialize(node) === k.serialize(it.node)) throw new ToolError(`${nameOf(it)} pad ${want.join(", ")} already connects that way`);
+          if (k.serialize(node) === k.serialize(it.node)) { if (e.if_needed === true) break; throw new ToolError(`${nameOf(it)} pad ${want.join(", ")} already connects that way`); }
           touch(it, e.op); changes.push(modified(doc, it, node));
           lines.push({ kind: "modify", text: `${nameOf(it)} pad ${want.join(", ")}: zone connection ${e.connect}`, ids: [it.id] });
           break;

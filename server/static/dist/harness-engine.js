@@ -103838,7 +103838,10 @@ function build(input) {
           }
           const missing = want.find((w) => !hit5.includes(w));
           if (missing) throw new ToolError(`${nameOf(it)} has no pad ${missing}`);
-          if (k.serialize(node) === k.serialize(it.node)) throw new ToolError(`${nameOf(it)} pad ${want.join(", ")} already connects that way`);
+          if (k.serialize(node) === k.serialize(it.node)) {
+            if (e.if_needed === true) break;
+            throw new ToolError(`${nameOf(it)} pad ${want.join(", ")} already connects that way`);
+          }
           touch(it, e.op);
           changes.push(modified(doc, it, node));
           lines.push({ kind: "modify", text: `${nameOf(it)} pad ${want.join(", ")}: zone connection ${e.connect}`, ids: [it.id] });
