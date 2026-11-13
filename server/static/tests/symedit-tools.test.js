@@ -228,6 +228,35 @@ await test("Properties panel: SCH_PIN rows in internal Y-down coordinates, edits
   const mixed = SP.sharedRows([[{ group: "G", name: "A", type: "text", value: "x" }], [{ group: "G", name: "A", type: "text", value: "y" }, { group: "G", name: "B", type: "text", value: "z" }]]);
   assert.deepStrictEqual(mixed.map((r) => [r.name, r.value, r.mixed]), [["A", "", true]]);
 });
+await test("canvas context menu: CONDITIONAL_MENU order, hidden entries, Zoom / Grid submenus", () => {
+  const C = load("symedit/ctxmenu.ts");
+  const base = { tool: "select", drawing: false, kinds: [], haveSymbol: true, editable: true, alias: false, canConvertStacked: false, canExplodeStacked: false };
+  assert.deepStrictEqual(C.symCanvasMenu(base), ["paste", "-", "symbolProperties", "pinTable", "-", "selectAll", "unselectAll", "-", "zoomMenu", "gridMenu"]);
+  assert.deepStrictEqual(C.symCanvasMenu({ ...base, kinds: ["pin"], canExplodeStacked: true }), ["move", "alignToGrid", "-", "rotateCCW", "rotateCW", "mirrorV", "mirrorH", "properties", "-", "explodeStackedPin", "-",
+    "pushPinLength", "pushPinNameSize", "pushPinNumSize", "-", "cut", "copy", "copyAsText", "paste", "duplicate", "doDelete", "-", "selectAll", "unselectAll", "-", "zoomMenu", "gridMenu"]);
+  const two = C.symCanvasMenu({ ...base, kinds: ["rectangle", "circle"] });
+  assert.ok(two.includes("swap") && !two.includes("properties") && !two.includes("copyAsText"));
+  assert.deepStrictEqual(C.symCanvasMenu({ ...base, tool: "draw", drawing: true, kinds: [] }), ["cancelInteractive", "-", "finishInteractive", "-", "zoomMenu", "gridMenu"]);
+  assert.deepStrictEqual(C.symCanvasMenu({ ...base, tool: "zoom" }), ["cancelInteractive", "-", "zoomMenu", "gridMenu"]);
+  assert.ok(!C.symCanvasMenu({ ...base, editable: false, kinds: ["pin"] }).includes("move"), "a read-only symbol has no Move");
+});
+await test("Align to Grid, Swap, Convert / Explode Stacked Pins", () => {
+  const sym = M.node('(symbol "U" (symbol "U_1_1" (rectangle (start -2.6 2.6) (end 2.54 -2.54) (stroke (width 0) (type default)) (fill (type none))) (pin input line (at -5.1 1.3 0) (length 2.6) (name "A" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27))))) (pin input line (at -5.1 1.3 0) (length 2.6) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))) (pin input line (at -5.1 1.3 0) (length 2.6) (name "A" (effects (font (size 1.27 1.27)))) (number "2" (effects (font (size 1.27 1.27))))) (pin output line (at 5.08 0 180) (length 2.54) (name "Y" (effects (font (size 1.27 1.27)))) (number "4" (effects (font (size 1.27 1.27)))))))');
+  const items = M.drawItems(sym).map((d) => d.node);
+  assert.ok(M.alignToGrid(items[0], 1.27)); assert.match(M.text(items[0]), /\(start -2\.54 2\.54\) \(end 2\.6 -2\.6\)/, "the shape moves, its size stays");
+  M.alignToGrid(items[1], 1.27); assert.match(M.text(items[1]), /\(at -5\.08 1\.27 0\) \(length 2\.54\)/);
+  assert.strictEqual(M.stackedNotation(["1", "2", "3", "5", "7", "8", "A1", "X"]), "[1-3,5,7,8,A1,X]");
+  assert.strictEqual(M.convertStackedPins(sym, [items[3]]), "At least two pins are needed to convert to stacked pins");
+  const cand = M.stackCandidates(sym, [items[2]]); assert.strictEqual(cand.length, 2, "pins at the selected pin's position");
+  assert.strictEqual(M.convertStackedPins(sym, [items[1], items[2], items[3]]), "All pins must be at the same location");
+  M.alignToGrid(items[2], 1.27); M.alignToGrid(items[3], 1.27);
+  assert.strictEqual(M.convertStackedPins(sym, [items[1], items[2], items[3]]), null);
+  assert.deepStrictEqual(M.allPins(sym).map((d) => M.pinInfo(d.node).number), ["[1-3]", "4"]);
+  const ex = M.explodeStackedPin(sym, M.allPins(sym)[0].node); assert.strictEqual(ex.length, 3);
+  assert.deepStrictEqual(M.allPins(sym).map((d) => [M.pinInfo(d.node).number, M.pinInfo(d.node).visible]), [["1", true], ["4", true], ["2", false], ["3", false]]);
+  const a = M.allPins(sym)[0].node, b = M.allPins(sym)[1].node; M.swapItems([a, b]);
+  assert.match(M.text(a), /\(at 5\.08 0 180\)/); assert.match(M.text(b), /\(at -5\.08 1\.27 0\)/);
+});
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);
 })();

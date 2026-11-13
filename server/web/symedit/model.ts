@@ -1174,3 +1174,97 @@ export function verifyLibTable(rows: LibTableRow[]): { rows: LibTableRow[]; erro
   for (let a = 0; a < out.length - 1; a++) for (let b = a + 1; b < out.length; b++) if (out[a].nickname === out[b].nickname) return { rows: out, error: `Multiple libraries cannot share the same nickname ('${out[a].nickname}').`, row: b };
   return { rows: out };
 }
+
+// ---------------------------------------------------------------- SYMBOL_EDITOR_MOVE_TOOL::AlignElements / SYMBOL_EDITOR_EDIT_TOOL::Swap
+/** EDA_ITEM::GetPosition of a library item (file coordinates): a pin's connection point, a text's or field's
+ *  anchor, a text box's corner, a circle's or arc's centre, a polygon's first vertex, else the shape's start. */
+export function itemPosition(n: Node): [number, number] {
+  const k = String(n[0]);
+  const p = (key: string): [number, number] | null => { const c = kid(n, key); return c ? [num(c[1]), num(c[2])] : null; };
+  if (k === "pin" || k === "text" || k === "property" || k === "text_box") return p("at") || [0, 0];
+  if (k === "circle" || k === "ellipse" || k === "ellipse_arc") return p("center") || [0, 0];
+  if (k === "arc") { const s = p("start"), m = p("mid"), e = p("end"); if (s && m && e) { const c = circleCenter(s, m, e); if (c) return c; } return s || [0, 0]; }
+  if (k === "polyline" || k === "bezier") { const pts = kid(n, "pts"); const xy = pts ? kids(pts, "xy")[0] : null; return xy ? [num(xy[1]), num(xy[2])] : [0, 0]; }
+  return p("start") || [0, 0];
+}
+function circleCenter(a: [number, number], b: [number, number], c: [number, number]): [number, number] | null {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1])); if (Math.abs(d) < 1e-12) return null;
+  const s = (p: [number, number]) => p[0] * p[0] + p[1] * p[1];
+  return [(s(a) * (b[1] - c[1]) + s(b) * (c[1] - a[1]) + s(c) * (a[1] - b[1])) / d, (s(a) * (c[0] - b[0]) + s(b) * (a[0] - c[0]) + s(c) * (b[0] - a[0])) / d];
+}
+/** SCH_ITEM::SetPosition: the item moves so its position lands on (x, y). */
+export function setItemPosition(n: Node, x: number, y: number): void { const [px, py] = itemPosition(n); if (px !== x || py !== y) moveNode(n, x - px, y - py); }
+/** AlignElements for one item: its position onto `grid`; a pin's length also rounds to the grid (when above 0). */
+export function alignToGrid(n: Node, grid: number): boolean {
+  const before = text(n); const [x, y] = itemPosition(n);
+  const al = (v: number) => +fmt(Math.round(v / grid) * grid);
+  setItemPosition(n, al(x), al(y));
+  if (n[0] === "pin") { const l = kid(n, "length"); if (l) { const nl = al(num(l[1])); if (nl > 0) l[1] = nl; } }
+  return text(n) !== before;
+}
+/** SYMBOL_EDITOR_EDIT_TOOL::Swap: each item in selection order trades positions with the next (pins also trade orientation). */
+export function swapItems(items: Node[]): void {
+  for (let i = 0; i < items.length - 1; i++) {
+    const a = items[i], b = items[i + 1];
+    const pa = itemPosition(a), pb = itemPosition(b);
+    setItemPosition(a, pb[0], pb[1]); setItemPosition(b, pa[0], pa[1]);
+    if (a[0] === "pin" && b[0] === "pin") { const aa = kid(a, "at"), ba = kid(b, "at"); if (aa && ba) { const o = aa[3]; aa[3] = ba[3]; ba[3] = o; } }
+  }
+}
+
+// ---------------------------------------------------------------- stacked pins (ConvertStackedPins / ExplodeStackedPin)
+const escStacked = (s: string): string => s.replace(/[[\],\-\\]/g, (c) => "\\" + c);   // EscapeStackedPinItem
+const isLong = (s: string): boolean => /^[+-]?\d+$/.test(s);
+/** ConvertStackedPins' collapseRanges: "[1-3,5,A1,A2,X]" from the pin numbers. */
+export function stackedNotation(numbers: string[]): string {
+  const groups = new Map<string, number[]>(); const other: string[] = [];
+  for (const n of numbers) {
+    if (!n) { other.push("(empty)"); continue; }
+    const m = /^(.*?)(\d+)$/.exec(n);
+    if (m) { const g = groups.get(m[1]) || []; g.push(Number(m[2])); groups.set(m[1], g); } else other.push(n);
+  }
+  const parts: string[] = [];
+  for (const prefix of [...groups.keys()].sort()) {
+    const nums = groups.get(prefix)!.sort((a, b) => a - b); const p = escStacked(prefix);
+    for (let i = 0; i < nums.length; i++) {
+      const start = nums[i]; let end = start;
+      while (i + 1 < nums.length && nums[i + 1] === nums[i] + 1) { i++; end = nums[i]; }
+      parts.push(end > start + 1 ? `${p}${start}-${p}${end}` : end === start + 1 ? `${p}${start},${p}${end}` : `${p}${start}`);
+    }
+  }
+  for (const o of other) parts.push(escStacked(o));
+  return "[" + parts.join(",") + "]";
+}
+const pinNumberOf = (p: Node): string => { const nb = kid(p, "number"); return nb ? str(nb[1]) : ""; };
+/** The pins ConvertStackedPins works on: the selected pins, or every pin at the one selected pin's position. */
+export function stackCandidates(sym: Node, sel: Node[]): Node[] {
+  if (sel.length === 1 && sel[0][0] === "pin") { const [x, y] = itemPosition(sel[0]); return allPins(sym).map((d) => d.node).filter((p) => { const [px, py] = itemPosition(p); return px === x && py === y; }); }
+  return sel.filter((n) => n[0] === "pin");
+}
+/** ConvertStackedPins: the first pin (by number) takes the stacked notation, the others go; an error message or null. */
+export function convertStackedPins(sym: Node, pins: Node[]): string | null {
+  if (pins.length < 2) return "At least two pins are needed to convert to stacked pins";
+  const [x, y] = itemPosition(pins[0]);
+  if (pins.some((p) => { const [px, py] = itemPosition(p); return px !== x || py !== y; })) return "All pins must be at the same location";
+  const sorted = [...pins].sort((a, b) => {
+    const na = pinNumberOf(a), nb = pinNumberOf(b), ia = isLong(na), ib = isLong(nb);
+    if (ia && ib) return Number(na) - Number(nb); if (ia !== ib) return ia ? -1 : 1; return na < nb ? -1 : na > nb ? 1 : 0;
+  });
+  const master = sorted[0]; const nb = kid(master, "number"); if (nb) nb[1] = stackedNotation(sorted.map(pinNumberOf));
+  for (const p of sorted.slice(1)) { const r = findRef(sym, p); if (r) removeDrawItem(sym, r); }
+  return null;
+}
+/** ExplodeStackedPin: the pin keeps the first number and shows; one hidden pin per other number (power inputs become passive). */
+export function explodeStackedPin(sym: Node, pin: Node): Node[] | string {
+  const nums = stackedNumbers(pinNumberOf(pin));
+  if (!nums || nums.length <= 1) return "Selected pin does not have valid stacked notation";
+  nums.sort((a, b) => (isLong(a) && isLong(b) ? Number(a) - Number(b) : a < b ? -1 : a > b ? 1 : 0));
+  const r = findRef(sym, pin); if (!r) return "Selected pin does not have valid stacked notation";
+  const i = pinInfo(pin, r.unit, r.body); const out: Node[] = [pin];
+  setPin(pin, { ...i, number: nums[0], visible: true });
+  for (const n of nums.slice(1)) {
+    const np = pinNode({ ...i, number: n, visible: false, type: i.type === "power_in" ? "passive" : i.type, alternates: [] });
+    addDrawItem(sym, r.unit, r.body, np); out.push(np);
+  }
+  return out;
+}

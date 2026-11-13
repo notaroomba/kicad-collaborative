@@ -21,6 +21,8 @@ import { ensureStyle, icon, meta, showMenu, closeMenus, type MenuEntry } from ".
 import { fitMenu } from "../menufit";
 import * as D from "./dialogs";
 import * as SP from "./props";
+import { symCanvasMenu, type SymMenuCtx } from "./ctxmenu";
+import { ZOOM_LIST } from "../tables";
 import { openSymbolFind, findNext as findNextMatch } from "./find";
 import type { Units } from "../store";
 import { saveToSchematic } from "./schematic";
@@ -30,7 +32,7 @@ import { GRID_PAGE, clonePrefs, defaultGrid, gridDefs, prefs, rememberGrid, save
 import { gridPitchFor, type GridClass } from "../dialogs/logic";
 import { ARC_MODE_ACTIONS, ARC_START_DIR_END, ARC_START_END_CENTER, ARC_START_END_MID, ARC_TANGENT, arcFromStartEndCenterDrag, arcFromStartEndMidDrag, arcFromStartTangentEnd, fromNm, toNm, type ArcSol } from "../tools/arc-geom";
 
-export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete";
+export type ToolId = "select" | "pin" | "text" | "textbox" | "rectangle" | "circle" | "ellipse" | "ellipse_arc" | "arc" | "bezier" | "polyline" | "polygon" | "anchor" | "delete" | "zoom";
 interface Row { name: string; desc: string; parent: string; units: number; power: boolean }
 export interface Lib { nick: string; kind: "project" | "official"; doc: LibBuffer | null; rows: Row[] | null; syms: Map<string, M.Node>; open: boolean; loading: boolean; error?: string }
 export interface Origin { docId: string; itemId: string; libId: string; ref: string; sheet: string }
@@ -38,7 +40,7 @@ export interface Origin { docId: string; itemId: string; libId: string; ref: str
 export interface Step { label: string; before: string; after: string }
 export interface Tab { lib: string; name: string; origin?: Origin; scratch?: M.Node; modified?: boolean; undo: Step[]; redo: Step[]; unit: number; body: number; sel: Set<string>; view: { s: number; px: number; py: number } | null; fitted?: boolean }
 
-const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawArcCenter: "arc", drawArcStartEndMid: "arc", drawArcStartEndCenter: "arc", drawArcTangent: "arc", drawArcStartDirEnd: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete" };
+const TOOL_ACTIONS: Record<string, ToolId> = { selectionTool: "select", placeSymbolPin: "pin", placeSymbolText: "text", drawSymbolTextBox: "textbox", drawRectangle: "rectangle", drawCircle: "circle", drawEllipse: "ellipse", drawEllipseArc: "ellipse_arc", drawArc: "arc", drawArcCenter: "arc", drawArcStartEndMid: "arc", drawArcStartEndCenter: "arc", drawArcTangent: "arc", drawArcStartDirEnd: "arc", drawBezier: "bezier", drawSymbolLines: "polyline", drawSymbolPolygon: "polygon", placeSymbolAnchor: "anchor", deleteTool: "delete", zoomTool: "zoom" };
 /** The Symbol Editor's grid list: its own window settings (Preferences > Symbol Editor > Grids), 100/50/25/10 mil by default. */
 const symGrids = (): number[] => prefs().grids.sym.sizes;
 const ANCHOR = "#0000FF";   // LAYER_SCHEMATIC_ANCHOR
@@ -97,7 +99,7 @@ export class SymbolEditor {
   private preview: M.Node | null = null;
   private kcache: { key: string; doc: KDoc } | null = null;
   private mouse = { x: 0, y: 0, in: false };           // doc mm (Y down)
-  private drag: { mode: "pan" | "band" | "move"; sx: number; sy: number; x0: number; y0: number; px?: number; py?: number; moved?: boolean; ids?: string[] } | null = null;
+  private drag: { mode: "pan" | "band" | "move" | "zoom"; sx: number; sy: number; x0: number; y0: number; px?: number; py?: number; moved?: boolean; ids?: string[] } | null = null;
   private carry: { ids: string[]; sx: number; sy: number; label: string; amend: boolean; base: string } | null = null;
   /** SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace: a new pin or text follows the cursor (IS_NEW | IS_MOVING) until the second click. */
   private floating: { kind: "pin"; pin: M.PinInfo } | { kind: "text"; node: M.Node; body: number; unit?: number } | null = null;
@@ -463,7 +465,7 @@ export class SymbolEditor {
   /** The pitch the cursor snaps to: the grid, or the override of the class of what is drawn or carried (Grid Overrides). */
   snapGrid(): number {
     const o = prefs().grids.sym.overrides; if (!o.enabled) return this.gridMm;
-    let cls: GridClass = this.tool !== "select" ? SYM_GRID_CLASS[this.tool] || null : null;
+    let cls: GridClass = this.tool !== "select" && this.tool !== "zoom" ? SYM_GRID_CLASS[this.tool] || null : null;
     const t = this.tab, sym = this.symbol();
     if (!cls && t && sym && t.sel.size) { const id = [...t.sel][0]; const n = nodeOf(sym, id); cls = id.startsWith("f:") ? "text" : n ? SYM_GRID_CLASS[String(n[0])] || null : null; }
     return gridPitchFor(cls, o, this.gridMm);
@@ -481,6 +483,16 @@ export class SymbolEditor {
     const r = this.cv.getBoundingClientRect(); const x = cx === undefined ? r.width / 2 : cx - r.left, y = cy === undefined ? r.height / 2 : cy - r.top;
     const s = Math.min(2000, Math.max(0.5, v.s * f)); v.px = x - (x - v.px) * (s / v.s); v.py = y - (y - v.py) * (s / v.s); v.s = s; this.paint(); this.renderStatus();
   }
+  /** ZOOM_TOOL::selectRegion, left button: the dragged box fills the view (a click without a box does nothing). */
+  zoomToArea(x0: number, y0: number, x1: number, y1: number): void {
+    const v = this.view(); const c = this.cv; if (!c) { this.paint(); return; }
+    const w = Math.abs(x1 - x0), hh = Math.abs(y1 - y0); if (w < 1e-9 || hh < 1e-9) { this.paint(); return; }
+    const ratio = Math.max(w / (c.clientWidth / v.s), hh / (c.clientHeight / v.s));
+    const s = Math.min(2000, Math.max(0.5, v.s / ratio)); const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    v.s = s; v.px = c.clientWidth / 2 - cx * s; v.py = c.clientHeight / 2 - cy * s; this.paint(); this.renderStatus();
+  }
+  /** The view's KiCad zoom factor (the status bar's Z). */
+  kzoom(): number { return this.view().s / 12; }
   resize(): void {
     const c = this.cv; if (!c) return; const dpr = window.devicePixelRatio || 1;
     const w = Math.max(1, Math.round(c.clientWidth * dpr)), hh = Math.max(1, Math.round(c.clientHeight * dpr));
@@ -501,6 +513,11 @@ export class SymbolEditor {
     const s = K().setViewTransform(ctx, view);
     // the symbol anchor (LAYER_SCHEMATIC_ANCHOR cross at the origin)
     const a = 6 * dpr / s; ctx.strokeStyle = ANCHOR; ctx.lineWidth = dpr / s; ctx.beginPath(); ctx.moveTo(-a, 0); ctx.lineTo(a, 0); ctx.moveTo(0, -a); ctx.lineTo(0, a); ctx.stroke();
+    if (this.drag && this.drag.mode === "zoom") {   // KIGFX::PREVIEW::SELECTION_AREA of ZOOM_TOOL::selectRegion
+      const [x0, y0] = [this.drag.x0, this.drag.y0], [x1, y1] = [this.mouse.x, this.mouse.y];
+      ctx.save(); ctx.lineWidth = dpr / s; ctx.strokeStyle = "#4F9CFF"; ctx.fillStyle = "rgba(79,156,255,.12)";
+      ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)); ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0)); ctx.restore();
+    }
     if (this.drag && this.drag.mode === "band") {
       const [x0, y0] = [this.drag.x0, this.drag.y0], [x1, y1] = [this.mouse.x, this.mouse.y];
       ctx.save(); ctx.lineWidth = dpr / s; ctx.strokeStyle = x1 >= x0 ? "#4F9CFF" : "#4FCF6F"; ctx.setLineDash(x1 >= x0 ? [] : [4 / s, 3 / s]);
@@ -965,6 +982,8 @@ export class SymbolEditor {
       libraryTreeSearch: () => { if (!this.showTree) { this.showTree = true; this.renderToolbars(); this.paint(); } const f = this.el.filter as HTMLInputElement | undefined; if (f) { f.focus(); f.select(); } },
       finishInteractive: () => { if (this.draw) this.finishDraw(); },
       deleteLastPoint: () => this.deleteLastPoint(),
+      alignToGrid: () => this.alignToGrid(), swap: () => this.swapSel(),
+      convertStackedPins: () => this.convertStacked(), explodeStackedPin: () => this.explodeStacked(),
     };
     for (const [id, t] of Object.entries(TOOL_ACTIONS)) A[id] = tool(t);
     // SCH_ACTIONS::drawArcCenter … drawArcStartDirEnd: Draw Arcs in that mode (drawArc keeps the mode last used)
@@ -1017,12 +1036,12 @@ export class SymbolEditor {
   /** EDA_DRAW_FRAME::ChangeUserUnits: kept as symbol_editor's system.units and system.last_imperial_units. */
   setUnits(u: Units): void { E.units = u; if (u !== "mm") E.lastImperial = u; saveUnits("symbol_editor", { units: u, lastImperial: (E.lastImperial === "in" ? "in" : "mil") as Units }); this.renderToolbars(); this.renderMsg(); this.renderStatus(); }
   setTool(t: ToolId): void {
-    if ((t !== "select") && this.readOnly()) { this.readOnlyNotice(); return; }
+    if (t !== "select" && t !== "zoom" && this.readOnly()) { this.readOnlyNotice(); return; }
     const sym = this.symbol();
-    if (t !== "select" && t !== "pin" && t !== "anchor" && t !== "delete" && sym && M.isDerived(sym)) { void messageBox(`Symbol ${M.symName(sym)} is a derived symbol. Symbol graphics will not be editable.`); return; }
+    if (t !== "select" && t !== "pin" && t !== "anchor" && t !== "delete" && t !== "zoom" && sym && M.isDerived(sym)) { void messageBox(`Symbol ${M.symName(sym)} is a derived symbol. Symbol graphics will not be editable.`); return; }
     this.cancelInteraction(); this.tool = t; this.renderToolbars(); this.renderStatus();
     // SYMBOL_EDITOR_DRAWING_TOOLS / PIN_TOOL / SCH_TOOL_BASE: TEXT for text, BULLSEYE for the anchor, REMOVE for delete, PENCIL for shapes
-    if (this.el.cwrap) this.el.cwrap.style.cursor = toolCursor(t === "select" ? "ARROW" : t === "text" ? "TEXT" : t === "anchor" ? "BULLSEYE" : t === "delete" ? "REMOVE" : "PENCIL");
+    if (this.el.cwrap) this.el.cwrap.style.cursor = toolCursor(t === "select" ? "ARROW" : t === "zoom" ? "ZOOM_IN" : t === "text" ? "TEXT" : t === "anchor" ? "BULLSEYE" : t === "delete" ? "REMOVE" : "PENCIL");
   }
   cancelInteraction(): void {
     if (this.carry) { const c = this.carry; this.carry = null; this.preview = null; if (c.amend) { const t = this.tab; const cur = this.symbol(); if (t && cur && t.undo.length) { const step = t.undo.pop()!; this.applyStep(t, cur, step.after, step.before); } } }
@@ -1030,6 +1049,30 @@ export class SymbolEditor {
   }
   selChanged(): void { this.renderMsg(); this.renderMenus(); this.paint(); }
   selectAll(): void { const t = this.tab; const doc = this.kdoc(); if (!t || !doc) return; t.sel = new Set([...doc.items.values()].filter((i) => i.movable).map((i) => i.id)); this.selChanged(); }
+  /** EE_GRID_HELPER::GetItemGrid for one item, with the grid overrides. */
+  private gridFor(n: M.Node): number { const o = prefs().grids.sym.overrides; return o.enabled ? gridPitchFor(SYM_GRID_CLASS[String(n[0])] || null, o, this.gridMm) : this.gridMm; }
+  /** SYMBOL_EDITOR_MOVE_TOOL::AlignElements. */
+  alignToGrid(): void {
+    const t = this.tab; if (!t || !t.sel.size || this.readOnly()) return;
+    this.edit("Align Items to Grid", (s) => { const ns = this.selNodes(s); for (const n of ns) M.alignToGrid(n, this.gridFor(n)); return ns; });
+  }
+  /** SYMBOL_EDITOR_EDIT_TOOL::Swap. */
+  swapSel(): void {
+    const t = this.tab; if (!t || t.sel.size < 2 || this.readOnly()) return;
+    this.edit("Swap", (s) => { const ns = this.selNodes(s); M.swapItems(ns); return ns; });
+  }
+  convertStacked(): void {
+    const t = this.tab; if (!t || this.readOnly()) return; let err: string | null = null;
+    this.edit("Convert Stacked Pins", (s) => { err = M.convertStackedPins(s, M.stackCandidates(s, this.selNodes(s))); return err ? false : []; });
+    if (err) this.infoBarError(err); else { t.sel.clear(); this.selChanged(); }
+  }
+  explodeStacked(): void {
+    const t = this.tab; if (!t || this.readOnly()) return; const ns0 = this.symbol() ? this.selNodes(this.symbol()!) : [];
+    if (ns0.length !== 1 || ns0[0][0] !== "pin") { this.infoBarError("Select a single pin with stacked notation to explode"); return; }
+    let err: string | null = null;
+    this.edit("Explode Stacked Pin", (s) => { const r = M.explodeStackedPin(s, this.selNodes(s)[0]); if (typeof r === "string") { err = r; return false; } return []; });
+    if (err) this.infoBarError(err); else { t.sel.clear(); this.selChanged(); }
+  }
   private selNodes(sym: M.Node): M.Node[] { const t = this.tab; return t ? [...t.sel].map((id) => nodeOf(sym, id)).filter((n): n is M.Node => !!n) : []; }
   private selCentre(): [number, number] {
     const doc = this.kdoc(); const t = this.tab; let bb: number[] | null = null;
@@ -1263,6 +1306,7 @@ export class SymbolEditor {
     if (ev.button === 1 || (ev.button === 0 && ev.altKey)) { this.drag = { mode: "pan", sx: ev.clientX, sy: ev.clientY, x0: v.px, y0: v.py }; (ev.target as Element).setPointerCapture(ev.pointerId); ev.preventDefault(); return; }
     if (ev.button === 2) { this.contextMenu(ev, x, y); return; }
     if (ev.button !== 0) return;
+    if (this.tool === "zoom") { this.drag = { mode: "zoom", sx: ev.clientX, sy: ev.clientY, x0: x, y0: y }; (ev.target as Element).setPointerCapture(ev.pointerId); return; }
     const t = this.tab; if (!t || !this.symbol()) return;
     const [fx, fy] = this.snapFile(x, y);
     if (this.carry) { this.finishCarry(); return; }
@@ -1305,6 +1349,7 @@ export class SymbolEditor {
       this.edit("Move", (s) => { const ns = ids.map((id) => nodeOf(s, id)).filter((n): n is M.Node => !!n); for (const n of ns) M.moveNode(n, fx1 - fx0, fy1 - fy0); return ns; });
       this.paint(); return;
     }
+    if (d.mode === "zoom") { this.zoomToArea(d.x0, d.y0, x, y); return; }
     if (d.mode === "band") {
       const t = this.tab; const doc = this.kdoc(); if (!t || !doc) return;
       const x0 = Math.min(d.x0, x), x1 = Math.max(d.x0, x), y0 = Math.min(d.y0, y), y1 = Math.max(d.y0, y);
@@ -1412,21 +1457,34 @@ export class SymbolEditor {
     const label = { rectangle: "Draw Rectangle", circle: "Draw Circle", ellipse: "Draw Ellipse", ellipse_arc: "Draw Elliptical Arc", arc: "Draw Arc", bezier: "Draw Bezier", polyline: "Draw Lines", polygon: "Draw Polygon" }[d.kind as string] || "Draw";
     this.edit(label, (s) => { M.addDrawItem(s, 0, t.body, n); return [n]; });
   }
+  /** The canvas context menu of the active tool (symedit/ctxmenu.ts): hidden entries, KiCad's order, Zoom / Grid submenus. */
   private contextMenu(ev: PointerEvent, x: number, y: number): void {
-    const t = this.tab; if (!t || !this.symbol()) return;
-    if (this.draw) { this.finishDraw(); return; }
-    const hit = this.hitAt(x, y); if (hit && !t.sel.has(hit)) { t.sel = new Set([hit]); this.selChanged(); }
-    const A = this.actions(); const has = t.sel.size > 0; const can = !this.readOnly();
-    const pin = [...t.sel].some((i) => i.startsWith("p:"));
-    const a = (id: string, en: boolean, label?: string): MenuEntry => this.act(id, A[id], { enabled: () => en, label });
-    const items: MenuEntry[] = [
-      a("properties", true, has ? "Properties..." : "Symbol Properties..."), { sep: true },
-      a("move", has && can), a("rotateCCW", has && can), a("rotateCW", has && can), a("mirrorV", has && can), a("mirrorH", has && can), { sep: true },
-      a("cut", has && can), a("copy", has), a("paste", can && !!this.clip), a("doDelete", has && can), a("duplicate", has && can), { sep: true },
-    ];
-    if (pin) items.push(a("pushPinLength", can), a("pushPinNameSize", can), a("pushPinNumSize", can), { sep: true });
-    items.push(a("selectAll", true), a("zoomFitScreen", true), { sep: true }, this.gridMenu());
+    const t = this.tab; const sym = this.symbol();
+    const drawing = !!(this.draw || this.floating || this.carry);
+    const tool: SymMenuCtx["tool"] = this.tool === "zoom" ? "zoom" : this.tool === "select" && !this.floating ? "select" : "draw";
+    // SCH_SELECTION_TOOL: a right click on an unselected item selects it first
+    if (tool === "select" && t && sym && !drawing) { const hit = this.hitAt(x, y); if (hit && !t.sel.has(hit)) { t.sel = new Set([hit]); this.selChanged(); } }
+    const nodes = t && sym ? this.selNodes(sym) : [];
+    const pinsSel = nodes.filter((n) => n[0] === "pin");
+    let conv = false, expl = false;
+    if (sym && nodes.length >= 2 && pinsSel.length === nodes.length) { const p0 = M.itemPosition(nodes[0]); conv = nodes.every((n) => { const p = M.itemPosition(n); return p[0] === p0[0] && p[1] === p0[1]; }); }
+    else if (sym && nodes.length === 1 && pinsSel.length === 1) { conv = M.stackCandidates(sym, nodes).length >= 2; const nb = K().kid(nodes[0] as unknown as SNode, "number"); const st = nb ? M.stackedNumbers(String(nb[1])) : null; expl = !!st && st.length > 1; }
+    const rows = symCanvasMenu({ tool, drawing, kinds: nodes.map((n) => String(n[0])), haveSymbol: !!sym, editable: !!sym && !this.readOnly(), alias: !!sym && M.isDerived(sym), canConvertStacked: conv, canExplodeStacked: expl });
+    const A = this.actions();
+    const items: MenuEntry[] = rows.map((r): MenuEntry => {
+      if (r === "-") return { sep: true };
+      if (r === "zoomMenu") return this.zoomMenu();
+      if (r === "gridMenu") return this.gridMenu();
+      if (r === "cancelInteractive") return this.act(r, () => { this.cancelInteraction(); this.setTool("select"); });
+      if (r === "paste") return this.act(r, A[r], { enabled: () => !!this.clip });
+      return this.act(r, A[r]);
+    });
     showMenu(ev.clientX, ev.clientY, items);
+  }
+  /** ZOOM_MENU::update: the zoom list, the entry within 10 % of the current zoom checked. */
+  private zoomMenu(): MenuEntry {
+    const cur = this.kzoom();
+    return { label: "Zoom", icon: "zoom_selection", sub: ZOOM_LIST.sch.map((f) => ({ label: `Zoom: ${f.toFixed(2)}`, check: () => Math.abs(f - cur) / cur < 0.1, enabled: () => true, run: () => this.zoomAt(f / this.kzoom()) })) };
   }
 
   // ---------------------------------------------------------------- keys
