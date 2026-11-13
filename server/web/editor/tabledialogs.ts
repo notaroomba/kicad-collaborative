@@ -14,6 +14,8 @@
 import { LINE_STYLES, tableDialog } from "./pcbdialogs/table";
 import { fontField } from "../dialogs/font-picker";
 import { box, checkField, errorMessage, fmtLen, form, h, lenField, messageBox, openDialog, parseLen, selectField, unitLabel, unitName, type Field } from "./pcbdialogs/ui";
+import { syntaxHelp } from "./syntax-help";
+import { boardXref } from "./pcbdialogs/xref";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -166,14 +168,6 @@ function swatch(rgba: string, mixed: boolean, ro: boolean, key: string): { el: H
   return { el: h("span", { style: "position:relative;display:inline-flex;align-items:center" }, sw, pick, clear), get: () => cur };
 }
 
-function syntaxHelp(isPcb: boolean): void {
-  messageBox("Syntax Help", [
-    "Overbar: ~{text}    Subscript: _{text}    Superscript: ^{text}",
-    "Text variables: ${VARIABLE}",
-    "Table cells: ${ROW} (row number), ${COL} (column number), ${ADDR} (cell address, such as A1)" + (isPcb ? ", ${LAYER}" : ""),
-    isPcb ? "Board: ${BOARD_NAME}, ${REFERENCE:FIELD} of a footprint" : "Schematic: ${SHEETNAME}, ${SHEETPATH}, ${R1:VALUE} of a symbol",
-  ].join("\n"));
-}
 
 // ---------------------------------------------------------------- Table Cell Properties
 export interface CellDialogOpts {
@@ -190,12 +184,16 @@ export function cellPropsDialog(ctx: ToolCtx, item: KItem, cells: number[], isPc
   if (!sel.length) return false;
   const ro = !!ctx.viewOnly;
   const { v, mixed } = mergedValues(sel.map((i) => list[i]), isPcb);
+  // a board cell shows text variable cross-references as ${REF:FIELD} (dialog_tablecell_properties.cpp:192, 414)
+  const xref = isPcb ? boardXref(doc) : null;
+  if (xref && !mixed.has("text")) v.text = xref.toRefs(v.text);
   const isMixed = (k: keyof CellValues) => mixed.has(k);
   let read: () => Patch = () => ({});
   let api: { close(): void } | null = null;
   const apply = (): boolean => {
     if (ro) return true;
     const patch = changedFields(read(), v, mixed);
+    if (xref && patch.text !== undefined) patch.text = xref.toKiids(String(patch.text).replace(/\r/g, ""));
     // the table as it is now (a peer may have edited it while the dialog was open), its cells found by uuid
     const cur = item.id ? doc.items.get(item.id) : item;
     if (!cur || cur.kind !== "table") return true;

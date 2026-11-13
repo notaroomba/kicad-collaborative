@@ -10,6 +10,8 @@ import { box, checkField, form, grid, h, coordField, lenField, notebook, numFiel
 import { dimensionDialog } from "./dimension";
 import { textBoxDialog } from "./textbox";
 import { tableDialog } from "./table";
+import { boardXref } from "./xref";
+import { syntaxHelpLink } from "../syntax-help";
 import { refImageDialog } from "./refimage";
 
 const isList = Array.isArray;
@@ -370,7 +372,7 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
   return itemDialog(ctx, item, "Text Properties", 560, (node, body, ro) => {
     const at = K().atOf(node), ly = kid(node, "layer"), fx = FH().fieldEffects(node);
     const eff = kid(node, "effects"), font = eff ? kid(eff, "font") : null, sz = font ? kid(font, "size") : null;
-    const text = h("textarea", { class: "pd-text", style: "min-height:90px", readOnly: ro, "data-key": "text" }); text.value = sval(node);   // the reader already turned the file's "\\n" into new lines
+    const text = h("textarea", { class: "pd-text", style: "min-height:90px", readOnly: ro, "data-key": "text" }); const xref = boardXref(doc), shownText = xref.toRefs(sval(node)); text.value = shownText;   // the reader already turned the file's "\\n" into new lines; cross-references shown as ${REF:FIELD}
     text.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.stopPropagation(); if (ev.shiftKey) { ev.preventDefault(); const ok = (body.parentElement as HTMLElement).querySelector<HTMLButtonElement>(".kd-foot > button:last-child"); if (ok) ok.click(); } } });   // SCINTILLA_TRICKS: Shift+Enter accepts, Enter is a new line
     const locked = checkField(PT().isLocked(node), "Locked", { ro, key: "locked" });
     const layer = selectField<string>(sval(ly), withCurrent(allLayers(doc), sval(ly)), { ro, key: "layer" });
@@ -380,14 +382,15 @@ function textDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => 
     const w = lenField(nval(sz, 2, 1), { ro, key: "width" }), ht = lenField(nval(sz, 1, 1), { ro, key: "height" }), th = lenField(fx.thick || 0.15, { ro, key: "thickness" });
     const x = coordField(at[0], "x", { ro, key: "x" }), y = coordField(at[1], "y", { ro, key: "y" }), rot = numField(at[2] || 0, { ro, key: "orientation" });
     const hj = selectField<string>(fx.h, [["left", "Left"], ["center", "Center"], ["right", "Right"]], { ro, key: "hjustify" }), vj = selectField<string>(fx.v, [["top", "Top"], ["center", "Center"], ["bottom", "Bottom"]], { ro, key: "vjustify" });
-    body.append(h("label", { class: "pd-lbl" }, "Text:"), text, h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
+    const help = syntaxHelpLink(true); help.style.margin = "3px";
+    body.append(h("label", { class: "pd-lbl" }, "Text:"), text, h("div", null, help), h("div", { class: "pd-row", style: "margin-top:8px" }, locked.el),
       h("div", { class: "pd-cols2" },
         form([["Layer:", layer.el], knockout.el, ["Font:", face.el], h("span", { class: "pd-inline" }, bold.el, italic.el, mirror.el), ["Horizontal:", hj.el], ["Vertical:", vj.el]], true),
         form([["Width:", w.el, unitLabel()], ["Height:", ht.el, unitLabel()], ["Thickness:", th.el, unitLabel()], ["Position X:", x.el, unitLabel()], ["Position Y:", y.el, unitLabel()], ["Orientation:", rot.el, unitLabel("deg")]])));
     return (n) => {
       if (!(w.get() > 0) || !(ht.get() > 0)) return "Text width and height must be greater than zero.";
       const t = text.value.replace(/\r/g, "");   // new lines stay new lines: the writer escapes them as "\\n"
-      if (t !== sval(n)) n[1] = t;
+      if (t !== shownText) { const stored = xref.toKiids(t); if (stored !== sval(n)) n[1] = stored; }
       if (locked.get() !== PT().isLocked(n)) PT().setLocked(n, locked.get());
       K().setAt(n, +f6(x.get()), +f6(y.get()), +f6(rot.get()));
       put(n, "layer", `(layer ${quote(layer.get())}${knockout.get() ? " knockout" : ""})`, ["uuid", "tstamp", "effects"]);
@@ -465,9 +468,10 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
     const props = (n: SNode): SNode[] => (K().kids(n, "property") as SNode[]).filter((p) => p.some((c) => isList(c)) && !String(p[1]).startsWith("ki_"));
     const MAND = ["Reference", "Value", "Datasheet", "Description"];
     const label = (n: string): string => (n === "Reference" ? "Reference designator" : n);
+    const xref = boardXref(doc);   // field text shows cross-references as ${REF:FIELD} (dialog_footprint_properties.cpp:272, 603)
     const rows: Record<string, CellValue>[] = props(node).map((p) => {
       const fx = FH().fieldEffects(p), a = FH().fieldAt(p), e = kid(p, "effects"), f = e ? kid(e, "font") : null, sz = f ? kid(f, "size") : null;
-      return { name: String(p[1]), label: label(String(p[1])), value: sval(p, 2), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
+      return { name: String(p[1]), label: label(String(p[1])), value: xref.toRefs(sval(p, 2)), show: !FH().fieldHidden(p), w: nval(sz, 2, fx.size), ht: nval(sz, 1, fx.size), th: fx.thick || 0.15, italic: fx.italic, layer: FH().fieldLayer(p), rot: a[2] || 0, x: a[0], y: a[1] };
     });
     const g = grid([{ label: "Name", key: "label", type: "ro", width: "130px" }, { label: "Value", key: "value" }, { label: "Show", key: "show", type: "check" }, { label: "Width", key: "w", type: "len" }, { label: "Height", key: "ht", type: "len" }, { label: "Thickness", key: "th", type: "len" },
       { label: "Italic", key: "italic", type: "check" }, { label: "Layer", key: "layer", type: "select", options: allLayers(doc), width: "120px" }, { label: "Orientation", key: "rot", type: "num" }, { label: "X Offset", key: "x", type: "len" }, { label: "Y Offset", key: "y", type: "len" }], rows, { ro, height: "170px" });
@@ -498,7 +502,7 @@ function footprintDialog(ctx: ToolCtx, item: KItem): boolean {
         const p = list.find((q) => String(q[1]) === r.name); if (!p) continue;
         if (MAND.slice(0, 1).includes(String(r.name)) && !String(r.value).trim()) return "Reference designator cannot be empty.";
         const fx = FH().fieldEffects(p), a = FH().fieldAt(p), e = kid(p, "effects"), f = e ? kid(e, "font") : null, sz = f ? kid(f, "size") : null;
-        if (String(r.value) !== sval(p, 2)) p[2] = String(r.value);
+        if (String(r.value) !== xref.toRefs(sval(p, 2))) { const v = xref.toKiids(String(r.value)); if (v !== sval(p, 2)) p[2] = v; }
         if (!!r.show === FH().fieldHidden(p)) FH().setFieldHidden(n, p, !r.show);
         const w = Number(r.w), ht = Number(r.ht), th = Number(r.th);
         if (isFinite(w) && isFinite(ht) && f && (w !== nval(sz, 2, fx.size) || ht !== nval(sz, 1, fx.size))) put(f, "size", `(size ${f6(ht)} ${f6(w)})`, ["thickness", "bold", "italic"]);

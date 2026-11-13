@@ -5,6 +5,8 @@
 // (TransferDataFromWindow) writes every cell's text and layer, the table's layer and lock, and the two strokes
 // (a stroke with neither of its lines on is written without width, its width -1); one "Edit Table" change.  The
 // table tool (DRAWING_TOOL::DrawTable) opens it on the table just drawn and commits "Draw Table" on OK.
+import { boardXref } from "./xref";
+import { syntaxHelpLink } from "../syntax-help";
 import { box, checkField, form, h, lenField, openDialog, selectField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
@@ -69,27 +71,65 @@ export function tableValues(node: SNode): TableValues {
 }
 
 /** TransferDataFromWindow on a copy of the node. */
-export function applyTable(orig: SNode, v: TableValues): SNode {
+export function applyTable(orig: SNode, v: TableValues, toKiids: (t: string) => string = (t) => t): SNode {
   const node = (K().cloneNode as (n: SNode) => SNode)(orig), T = tableCells(node), back = isBack(sval(kid(orig, "layer")));
   for (let r = 0; r < T.rows; r++) for (let c = 0; c < T.cols; c++) {
     const cell = T.cell(r, back ? T.cols - 1 - c : c); if (!cell) continue;
-    cell[1] = covered(cell) ? "" : (v.cells[r] && v.cells[r][c] !== undefined ? v.cells[r][c] : sval(cell)).replace(/\r/g, "");
+    cell[1] = covered(cell) ? "" : toKiids((v.cells[r] && v.cells[r][c] !== undefined ? v.cells[r][c] : sval(cell)).replace(/\r/g, ""));
     put(cell, "layer", `(layer ${quote(v.layer)})`, ["uuid", "effects"]);
   }
   put(node, "layer", `(layer ${quote(v.layer)})`, ["column_count"]);
   if (v.locked !== PT().isLocked(node)) PT().setLocked(node, v.locked);
-  const stroke = (on: boolean, w: number, style: string): string => (on ? ` (stroke (width ${f6(Math.max(0, isFinite(w) ? w : 0))}) (type ${style}))` : "");
-  put(node, "border", `(border (external ${v.external ? "yes" : "no"}) (header ${v.header ? "yes" : "no"})${stroke(v.external || v.header, v.borderWidth, v.borderStyle)})`, ["separators", "column_widths"]);
-  put(node, "separators", `(separators (rows ${v.rows ? "yes" : "no"}) (cols ${v.cols ? "yes" : "no"})${stroke(v.rows || v.cols, v.sepWidth, v.sepStyle)})`, ["column_widths", "row_heights"]);
+  put(node, "border", borderText(v), ["separators", "column_widths"]);
+  put(node, "separators", sepText(v), ["column_widths", "row_heights"]);
   return node;
+}
+
+const stroke = (on: boolean, w: number, style: string): string => (on ? ` (stroke (width ${f6(Math.max(0, isFinite(w) ? w : 0))}) (type ${style}))` : "");
+const borderText = (v: TableValues): string => `(border (external ${v.external ? "yes" : "no"}) (header ${v.header ? "yes" : "no"})${stroke(v.external || v.header, v.borderWidth, v.borderStyle)})`;
+const sepText = (v: TableValues): string => `(separators (rows ${v.rows ? "yes" : "no"}) (cols ${v.cols ? "yes" : "no"})${stroke(v.rows || v.cols, v.sepWidth, v.sepStyle)})`;
+type TableModel = { remapCells(a: SNode, b: SNode, idx: number[]): number[] };
+const TM = (): TableModel => (K() as unknown as { tableModel: TableModel }).tableModel;
+
+/** OK on an existing table: TransferDataFromWindow onto the table AS IT IS NOW (`base`, which a peer may have
+ *  changed while the dialog was open), writing only what the user changed against `v0` (the values the dialog
+ *  opened with, read from `node0`).  Each edited cell is found by its uuid (remapCells), so a peer's row/column
+ *  insert, span or other cell's text survives; a layer change rewrites the layer of every cell of the current
+ *  table.  `shown`: the (border …)/(separators …) text the dialog showed, so an untouched stroke keeps the file's
+ *  bytes.  Returns the new node, or null when nothing would change. */
+export function applyTableEdit(node0: SNode, base: SNode, v0: TableValues, v: TableValues, shown?: { border: string; sep: string }, toKiids: (t: string) => string = (t) => t): SNode | null {
+  const node = (K().cloneNode as (n: SNode) => SNode)(base), T0 = tableCells(node0), back0 = isBack(v0.layer);
+  const list = kids(kid(node, "cells"), "table_cell");
+  for (let r = 0; r < T0.rows; r++) for (let c = 0; c < T0.cols; c++) {
+    const text = v.cells[r] && v.cells[r][c] !== undefined ? v.cells[r][c].replace(/\r/g, "") : null;
+    if (text === null || text === (v0.cells[r] ? v0.cells[r][c] : "")) continue;
+    const i = r * T0.cols + (back0 ? T0.cols - 1 - c : c);
+    const src = T0.cell(r, back0 ? T0.cols - 1 - c : c); if (!src || covered(src)) continue;
+    const j = TM().remapCells(node0, base, [i])[0]; const cell = j === undefined ? null : list[j];
+    const stored = toKiids(text);
+    if (cell && !covered(cell) && String(cell[1] ?? "") !== stored) cell[1] = stored;
+  }
+  if (v.layer !== v0.layer) {
+    for (const cell of list) put(cell, "layer", `(layer ${quote(v.layer)})`, ["uuid", "effects"]);
+    put(node, "layer", `(layer ${quote(v.layer)})`, ["column_count"]);
+  }
+  if (v.locked !== v0.locked && v.locked !== PT().isLocked(node)) PT().setLocked(node, v.locked);
+  const bt = borderText(v), st = sepText(v);
+  const bShown = shown ? shown.border : borderText(v0), sShown = shown ? shown.sep : sepText(v0);
+  if (bt !== bShown && K().serialize(kid(node, "border") || []) !== K().serialize(K().parse(bt) as SNode)) put(node, "border", bt, ["separators", "column_widths"]);
+  if (st !== sShown && K().serialize(kid(node, "separators") || []) !== K().serialize(K().parse(st) as SNode)) put(node, "separators", st, ["column_widths", "row_heights"]);
+  return K().serialize(node) === K().serialize(base) ? null : node;
 }
 
 /** DIALOG_TABLE_PROPERTIES.  `create`: the dialog of a table being drawn (OK hands the node over, Cancel null). */
 export function tableDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc; if (!doc) return false;
-  const node0 = item.node, ro = !!ctx.viewOnly, v0 = tableValues(node0), T = tableCells(node0), back = isBack(v0.layer);
+  const node0 = item.node, ro = !!ctx.viewOnly, T = tableCells(node0), xref = boardXref(doc);
+  // show text variable cross-references in a human-readable format (ConvertKIIDsToCrossReferences)
+  const v0 = tableValues(node0); v0.cells = v0.cells.map((row) => row.map((t) => xref.toRefs(t))); const back = isBack(v0.layer);
   const inputs: (HTMLTextAreaElement | null)[][] = [];
   let f: Record<string, Field<string | number | boolean>> = {};
+  let shown: { border: string; sep: string } | null = null;   // the strokes as the dialog showed them at open
   const current = (): TableValues => ({
     cells: inputs.map((row, r) => row.map((t, c) => (t ? t.value : v0.cells[r][c]))), layer: String(f.layer.get()), locked: !!f.locked.get(),
     external: !!f.external.get(), header: !!f.header.get(), borderWidth: Number(f.borderWidth.get()), borderStyle: String(f.borderStyle.get()),
@@ -134,22 +174,26 @@ export function tableDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | n
       const external = checkField(v0.external, "External border", { ro, key: "external", onChange: sync }), header = checkField(v0.header, "Header border", { ro, key: "header", onChange: sync });
       const rows = checkField(v0.rows, "Row lines", { ro, key: "rows", onChange: sync }), cols2 = checkField(v0.cols, "Column lines", { ro, key: "cols", onChange: sync });
       f = { layer, locked, external, header, borderWidth: bw, borderStyle: bstyle, rows, cols: cols2, sepWidth: sw, sepStyle: sstyle } as unknown as Record<string, Field<string | number | boolean>>;
-      body.append(h("label", { class: "pd-lbl" }, "Cell contents:"), gridEl,
+      const help = typeof document !== "undefined" ? syntaxHelpLink(true) : null;
+      body.append(h("label", { class: "pd-lbl" }, "Cell contents:"), gridEl, ...(help ? [h("div", { style: "padding:3px" }, help)] : []),
         h("div", { class: "pd-cols2", style: "margin-top:10px" }, form([["Layer:", layer.el]], true), h("div", { class: "pd-row" }, locked.el)),
         h("div", { class: "pd-cols2" },
           box("", external.el, header.el, form([["Width:", bw.el, unitLabel()], ["Style:", bstyle.el]], true)),
           box("", rows.el, cols2.el, form([["Width:", sw.el, unitLabel()], ["Style:", sstyle.el]], true))));
       for (const b of Array.from(body.querySelectorAll<HTMLElement>(".pd-box > .hd"))) if (!b.textContent) b.remove();
+      const v1 = current(); shown = { border: borderText(v1), sep: sepText(v1) };
     },
     cancel: create ? () => create(null) : undefined,
     ok() {
       if (ro) return true;
       const v = current();
-      if (!create && JSON.stringify(v) === JSON.stringify(v0)) return true;   // nothing changed
-      const node = applyTable(node0, v);
-      if (create) { create(node); return true; }
-      if (K().serialize(node) === K().serialize(node0)) return true;
-      ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null })], "Edit Table");
+      if (create) { create(applyTable(node0, v, xref.toKiids)); return true; }
+      // an existing table is edited as it is now: a peer may have changed it while the dialog was open
+      const cur = doc.items.get(item.id);
+      if (!cur || cur.kind !== "table") return true;
+      const node = applyTableEdit(node0, cur.node, v0, v, shown || undefined, boardXref(doc).toKiids);
+      if (!node) return true;
+      ctx.commit([K().replaceChange(doc, { ...cur, node, geom: [], bbox: null })], "Edit Table");
       return true;
     } });
 }

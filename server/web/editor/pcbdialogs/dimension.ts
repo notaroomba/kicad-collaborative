@@ -7,6 +7,7 @@
 // way to make, so the Value choice offers Driven and Arbitrary as KiCad does for an unbound dimension.
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
 import { box, checkField, form, h, coordField, lenField, numField, openDialog, selectField, textField, unitLabel, type Field } from "./ui";
+import { boardXref } from "./xref";
 
 const isList = Array.isArray;
 const K = (): KiCadCanvasApi => KiCadCanvas;
@@ -113,7 +114,9 @@ export function dimensionDialog(ctx: ToolCtx, item: KItem): boolean {
   const doc = ctx.doc as KDoc; if (!doc) return false;
   const node0 = item.node, type = sval(kid(node0, "type")) || "aligned", ro = !!ctx.viewOnly;
   const center = type === "center", leader = type === "leader", aligned = type === "aligned" || type === "orthogonal";
-  const v0 = dimDialogValues(node0);
+  const xref = boardXref(doc), raw0 = dimDialogValues(node0);
+  // cross-references shown as ${REF:FIELD} (ConvertKIIDsToCrossReferences on the prefix, suffix and override text)
+  const v0 = { ...raw0, prefix: xref.toRefs(raw0.prefix), suffix: xref.toRefs(raw0.suffix), value: raw0.arbitrary ? xref.toRefs(raw0.value) : raw0.value };
   const fields: { [k: string]: Field<string | number | boolean> } = {};
   const reg = <T extends string | number | boolean>(k: string, f: Field<T>): Field<T> => { fields[k] = f as unknown as Field<string | number | boolean>; return f; };
   let preview: HTMLElement | null = null;
@@ -209,7 +212,9 @@ export function dimensionDialog(ctx: ToolCtx, item: KItem): boolean {
     ok() {
       if (ro) return true;
       const v = current(); if (JSON.stringify(v) === JSON.stringify(v0)) return true;   // nothing changed: the item stays as it is
-      const node = applyDimDialog(node0, v);
+      const back = (a: string, shown: string, orig: string): string => (a === shown ? orig : xref.toKiids(a));
+      const node = applyDimDialog(node0, { ...v, prefix: back(v.prefix, v0.prefix, raw0.prefix), suffix: back(v.suffix, v0.suffix, raw0.suffix),
+        value: v.arbitrary ? back(v.value, v0.value, raw0.value) : v.value });
       if (K().serialize(node) === K().serialize(node0)) return true;
       ctx.commit([K().replaceChange(doc, { ...item, node, geom: [], bbox: null })], "Edit Dimension Properties");
       return true;

@@ -7,6 +7,8 @@
 // GetMinSize when the text no longer fits.  An edited text box is one "Edit Text Box Properties" change; the text
 // box tool (DRAWING_TOOL::DrawRectangle) opens it on the box just drawn and commits "Draw Text Box" on OK.
 import { faceOfFont, fontField, setFaceOfFont } from "../../dialogs/font-picker";
+import { boardXref } from "./xref";
+import { syntaxHelpLink } from "../syntax-help";
 import { checkField, errorMessage, fmtLenU, form, h, lenField, numField, openDialog, selectField, unitLabel, type Field } from "./ui";
 
 const isList = Array.isArray;
@@ -148,7 +150,8 @@ const errorBox = (message: string, then?: () => void): void => errorMessage(mess
 /** DIALOG_TEXTBOX_PROPERTIES.  `create`: the dialog of a text box being drawn (OK hands the node over, Cancel null). */
 export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode | null) => void): boolean {
   const doc = ctx.doc as KDoc; if (!doc) return false;
-  const node0 = item.node, ro = !!ctx.viewOnly, v0 = textBoxValues(node0);
+  const node0 = item.node, ro = !!ctx.viewOnly, xref = boardXref(doc);
+  const v0 = textBoxValues(node0); v0.text = xref.toRefs(v0.text);   // cross-references shown as ${REF:FIELD}
   const inFootprint = node0[0] === "fp_text_box";
   const fields: Record<string, Field<string | number | boolean>> = {};
   const reg = <T extends string | number | boolean>(k: string, f: Field<T>): Field<T> => { fields[k] = f as unknown as Field<string | number | boolean>; return f; };
@@ -192,7 +195,8 @@ export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode |
           bw.input.disabled = bs.input.disabled = ro || !on;
         } }));
       const tools = h("span", { class: "pd-inline", style: "flex-wrap:wrap;gap:4px 10px" }, bold.el, italic.el, ...hal.map((f) => f.el), ...val.map((f) => f.el), mirrored.el);
-      body.append(presets, h("label", { class: "pd-lbl" }, "Text:"), text,
+      const help = syntaxHelpLink(true); help.style.margin = "3px";
+      body.append(presets, h("label", { class: "pd-lbl" }, "Text:"), text, h("div", null, help),
         h("div", { class: "pd-row", style: "margin:8px 0" }, locked.el),
         h("div", { class: "pd-cols2" },
           form([["Layer:", layer.el], ["Font:", reg("face", fontField(doc, v0.face, { ro, key: "face" })).el]], true),
@@ -214,7 +218,7 @@ export function textBoxDialog(ctx: ToolCtx, item: KItem, create?: (node: SNode |
       }
       const unchanged = JSON.stringify(v) === JSON.stringify(v0);
       if (!create && unchanged) return true;                          // nothing changed: the item stays as it is
-      const { node, clamped } = applyTextBox(node0, v, v0);
+      const { node, clamped } = applyTextBox(node0, v.text === v0.text ? { ...v, text: String(node0[1] ?? "") } : { ...v, text: xref.toKiids(v.text) }, v0);
       const finish = (): void => {
         if (create) { create(node); return; }
         if (K().serialize(node) === K().serialize(node0)) return;
