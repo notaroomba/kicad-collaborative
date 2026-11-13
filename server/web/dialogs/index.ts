@@ -108,6 +108,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     openPreferences: (() => openPreferences()) as Handler,
     // ACTIONS::gridProperties ("Edit Grids..."): COMMON_TOOLS::GridProperties opens Preferences on the editor's Grids page
     gridProperties: (() => openPreferences(GRID_PAGE[editorId()])) as Handler,
+    gridFast1: (() => { fastGrid(1); }) as Handler, gridFast2: (() => { fastGrid(2); }) as Handler, gridFastCycle: (() => { fastGrid("cycle"); }) as Handler,
   });
   installGroups(); wrapErc(); installSchItemDialogs(); installSimModel();
   // the canvas side of a selected ERC marker (SCH_INSPECTION_TOOL::CrossProbe): gestures.ts / index.ts ask here
@@ -134,7 +135,8 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     else if (ev.key === "F3" && mod && ev.shiftKey && !ev.altKey && isSch()) run = () => { findNextMarker(); };
     else if (mod && !ev.altKey && !ev.shiftKey && ev.key === ",") run = () => openPreferences();
     else if (mod && ev.shiftKey && !ev.altKey && k === "g") run = () => HANDLERS.toggleGridOverrides();
-    else if (ev.altKey && !mod && !ev.shiftKey && (ev.key === "1" || ev.key === "2")) run = () => { const mm = fastGrid(ev.key === "1" ? 1 : 2); if (mm) toast("Grid: " + gridLabel(mm)); };
+    // ACTIONS::gridFast1 / gridFast2 / gridFastCycle (Alt+1, Alt+2, Alt+4); the physical key, as Option+digit types a symbol on macOS
+    else if (ev.altKey && !mod && !ev.shiftKey && /^Digit[124]$/.test(ev.code)) run = () => { fastGrid(ev.code === "Digit1" ? 1 : ev.code === "Digit2" ? 2 : "cycle"); };
     if (!run) return;
     if (KD().isOpen() && !(mod && k === "f") && ev.key !== "F3") return;
     if (typing(ev) && !mod) return;

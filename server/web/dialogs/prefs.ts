@@ -239,8 +239,13 @@ export function applyPrefs(full = true): void {
 export function toggleGridOverrides(): boolean {
   const p = clonePrefs(), ed = editorId(); p.grids[ed].overrides.enabled = !p.grids[ed].overrides.enabled; savePrefs(p); return p.grids[ed].overrides.enabled;
 }
-/** Alt+1 / Alt+2: KiCad's fast grid switching. */
-export function fastGrid(n: 1 | 2): number | null {
-  const g = prefs().grids[editorId()], mm = g.sizes[n === 1 ? g.fast1 : g.fast2]; if (!mm) return null;
+/**
+ * COMMON_TOOLS::GridFast1 / GridFast2 (Alt+1 / Alt+2) and GridFastCycle (Alt+4: fast grid 2 when on fast grid 1, else
+ * fast grid 1).  The status bar's grid cell shows the change.
+ */
+export function fastGrid(n: 1 | 2 | "cycle"): number | null {
+  const g = prefs().grids[editorId()];
+  if (n === "cycle") { const cur = g.sizes.findIndex((s) => Math.abs(s - E.gridPitch) < 1e-9); n = cur === g.fast1 ? 2 : 1; }
+  const mm = g.sizes[n === 1 ? g.fast1 : g.fast2]; if (!mm) return null;
   E.gridPitch = mm; rememberGrid(mm); updateGridStatus(); requestRender(); return mm;
 }
