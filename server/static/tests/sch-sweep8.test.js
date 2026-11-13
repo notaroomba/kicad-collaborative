@@ -101,5 +101,24 @@ test("Unfold from Bus finds the bus under the cursor even when a graphic line li
   c.cursor = [58.42, 0]; assert.strictEqual(_.busForUnfolding(c), null);
 });
 
+test("AutoPlaceSheetPins: outputs right, the rest left, sorted, below existing pins, the sheet grows", () => {
+  const sheet = '(sheet (at 100 50) (size 20.32 5.08) (fields_autoplaced yes) (stroke (width 0.1524) (type solid)) (fill (color 0 0 0 0.0000)) (uuid "s1")' +
+    '(property "Sheetname" "sub" (at 100 49.2884 0) (effects (font (size 1.27 1.27)) (justify left bottom)))' +
+    '(property "Sheetfile" "sub.kicad_sch" (at 100 55.6646 0) (effects (font (size 1.27 1.27)) (justify left top)))' +
+    '(pin "A" input (at 100 52.54 180) (uuid "p1") (effects (font (size 1.27 1.27)) (justify left)))' +
+    '(instances (project "p" (path "/x" (page "2")))))';
+  const doc = K.parseDoc(HEAD + sheet + ")");
+  const HL = (n, shape) => `(hierarchical_label "${n}" (shape ${shape}) (at 10 10 180) (effects (font (size 1.27 1.27)) (justify right)) (uuid "${n}${shape}"))`;
+  const sub = K.parseDoc(HEAD + HL("Z", "input") + HL("A", "input") + HL("B", "bidirectional") + HL("OUT", "output") + HL("B", "input") + ")");
+  const n = _.autoPlaceSheetPinsNode(doc.items.get("s1").node, sub);
+  const pins = K.kids(n, "pin").map((p) => [K.str(p[1]), K.str(p[2]), +K.kid(p, "at")[1], +K.kid(p, "at")[2], +K.kid(p, "at")[3]]);
+  assert.deepStrictEqual(pins, [["A", "input", 100, 52.54, 180], ["B", "bidirectional", 100, 54.61, 180], ["Z", "input", 100, 57.15, 180], ["OUT", "output", 120.32, 52.07, 0]]);   // the column start is snapped to the 50 mil grid
+  assert.strictEqual(+K.kid(n, "size")[2], 10.16, "grown to the last pin plus a pitch");
+  const ff = K.kids(n, "property").find((p) => K.str(p[1]) === "Sheetfile");
+  assert.strictEqual(+K.kid(ff, "at")[2], 60.7446, "the file field follows the bottom edge");
+  assert.strictEqual(K.serialize(n).indexOf("(instances") > K.serialize(n).lastIndexOf("(pin "), true);
+  assert.strictEqual(_.autoPlaceSheetPinsNode(n, sub), null, "nothing left to place");
+});
+
 console.log(`sch-sweep8: ${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

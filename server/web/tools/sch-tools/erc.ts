@@ -193,6 +193,39 @@ export function syncSheetPins(ctx: SchCtx) {
   if (!changes.length) return false;
   ctx.commit(changes, "sync sheet pins"); return true;
 }
+/**
+ * GetUnplacedSheetPinLabels + AutoPlaceSheetPins (sch_tool_utils.cpp), for Autoplace All Sheet Pins: the sub-sheet's
+ * hierarchical labels with no pin yet, outputs down the right edge and the rest down the left, each column sorted by
+ * name and stacked below the pins already on that edge at a grid-snapped pitch; the sheet grows when they would run
+ * past its bottom.  Returns the new sheet node, or null when no label is unplaced.
+ */
+export function autoPlaceSheetPinsNode(sheetNode: SNode, sub: KDoc, textSize = 1.27): SNode | null {
+  const names = new Set<string>(kids(sheetNode, "pin").map((p) => str(p[1])));
+  const labels: { name: string; shape: string }[] = [];
+  for (const o of sub.items.values()) if (o.kind === "hierarchical_label") { const n = str(o.node[1]); if (!names.has(n)) { names.add(n); const sh = kid(o.node, "shape"); labels.push({ name: n, shape: sh ? str(sh[1]) : "input" }); } }
+  if (!labels.length) return null;
+  const IU = 1e4, iu = (mm: number) => Math.round(mm * IU), mm = (v: number) => r4(v / IU);
+  const grid = iu(1.27), ts = iu(textSize);
+  let pitch = Math.max(Math.round(ts * 2), iu(2.54)); pitch = Math.round(pitch / grid) * grid;
+  const margin = pitch, node = deep(sheetNode), [x, y] = atOf(node), size = kid(node, "size")!;
+  const leftX = iu(x), rightX = iu(x) + iu(num(size[1])), topY = iu(y), h0 = iu(num(size[2]));
+  let leftY = topY + margin - pitch, rightY = leftY;
+  for (const p of kids(node, "pin")) { const a = kid(p, "at"); if (!a) continue; const r = ((Math.round(num(a[3]) || 0) % 360) + 360) % 360, py = iu(num(a[2])); if (r === 0) rightY = Math.max(rightY, py); else if (r === 180) leftY = Math.max(leftY, py); }
+  const byText = (a: { name: string }, b: { name: string }) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const right = labels.filter((l) => l.shape === "output").sort(byText), left = labels.filter((l) => l.shape !== "output").sort(byText);
+  const needBot = Math.max(leftY + left.length * pitch, rightY + right.length * pitch) + margin;
+  if (needBot > topY + h0) {   // SCH_SHEET::Resize: the fields autoplaced below the sheet follow its bottom edge
+    const dh = needBot - topY - h0; size[2] = mm(needBot - topY);
+    for (const f of kids(node, "property")) { const fa = kid(f, "at"); if (fa && iu(num(fa[2])) >= topY + h0) fa[2] = mm(iu(num(fa[2])) + dh); }
+    for (const p of kids(node, "pin")) { const a = kid(p, "at"); if (a && iu(num(a[2])) === topY + h0 && (Math.round(num(a[3]) || 0) % 360 + 360) % 360 === 270) a[2] = mm(needBot); }
+  }
+  const column = (col: { name: string; shape: string }[], px: number, start: number, side: string) => {
+    let py = Math.round(start / grid) * grid;
+    for (const l of col) { py += pitch; const pin = sheetPinNode(l.name, [mm(px), mm(py)], side); pin[2] = l.shape; const i = node.findIndex((c) => Array.isArray(c) && c[0] === "instances"); if (i >= 0) node.splice(i, 0, pin); else node.push(pin); }
+  };
+  column(left, leftX, leftY, "left"); column(right, rightX, rightY, "right");
+  return node;
+}
 export function cleanupSheetPins(ctx: SchCtx) {
   if (!editable(ctx)) return false;
   const doc = ctx.doc, changes: KChange[] = [];

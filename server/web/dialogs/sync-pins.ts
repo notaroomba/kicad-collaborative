@@ -7,7 +7,7 @@ import { KD, h } from "./dom";
 import { kids, str } from "./logic";
 import { projectDocs, readDoc, submitDocOp } from "./project";
 
-interface SchInternals { sheetPinNode(name: string, p: [number, number], side: string): SNode; labelNode(kind: string, text: string, p: [number, number], rot: number): SNode; modChange(doc: KDoc, item: KItem, node: SNode): KChange; itemSexpr(doc: KDoc, kind: string, node: SNode): string; typeNameFor(item: { kind: string }): string }
+interface SchInternals { sheetPinNode(name: string, p: [number, number], side: string): SNode; labelNode(kind: string, text: string, p: [number, number], rot: number): SNode; modChange(doc: KDoc, item: KItem, node: SNode): KChange; itemSexpr(doc: KDoc, kind: string, node: SNode): string; typeNameFor(item: { kind: string }): string; autoPlaceSheetPinsNode(sheet: SNode, sub: KDoc, textSize?: number): SNode | null }
 const S = appState;
 const r4 = (v: number) => +v.toFixed(4);
 
@@ -68,4 +68,30 @@ export function openSyncSheetPins(): void {
         if (entry && !subs.has(entry.docId)) void readDoc(entry.docId, "kicad_sch").then((d) => { subs.set(entry.docId, d); render(); }, () => { page.replaceChildren(h("p", { class: "kd-note" }, "The sheet's file could not be read.")); });
       } })));
     } });
+}
+
+/** The project document a sheet symbol on the open page names (its Sheetfile beside this page, else by file name). */
+function sheetFileEntry(it: KItem) {
+  const here = projectDocs().find((d) => d.docId === S.docId), dir = here ? here.path.split("/").slice(0, -1).join("/") : "";
+  const f = it.file || "", path = dir ? `${dir}/${f}` : f, all = projectDocs().filter((d) => d.docType === "kicad_sch");
+  return all.find((d) => d.path === path) || all.find((d) => d.path.split("/").pop() === f.split("/").pop()) || null;
+}
+
+/**
+ * SCH_DRAWING_TOOLS::AutoPlaceAllSheetPins (the sheet context menu's Autoplace All Sheet Pins): pins for every
+ * hierarchical label of the selected sheet's file that has none, placed by AutoPlaceSheetPins in one commit;
+ * "No new hierarchical labels found." when there is nothing to add.  The selection is cleared either way.
+ */
+export async function autoplaceAllSheetPins(): Promise<void> {
+  const doc = E.kdoc as KDoc | null; if (!doc || E.viewOnly) return;
+  const ids = [...(E.selection as Set<string>)]; if (E.selected && !ids.includes(E.selected.id)) ids.unshift(E.selected.id);
+  const sheet = ids.map((id) => doc.items.get(id)).find((it) => it && it.kind === "sheet"); if (!sheet) return;
+  const entry = sheetFileEntry(sheet); let sub: KDoc | null = null;
+  if (entry) { try { sub = await readDoc(entry.docId, "kicad_sch"); } catch (e) { sub = null; } }
+  const cur = (E.kdoc as KDoc).items.get(sheet.id); if (!cur) return;
+  const I = CollabTools.sch!._ as unknown as SchInternals;
+  const node = sub ? I.autoPlaceSheetPinsNode(cur.node, sub) : null;
+  const ctx = toolCtx(); ctx.setSelection([]);
+  if (!node) { toast("No new hierarchical labels found.", 2000); return; }
+  ctx.commit([I.modChange(E.kdoc as KDoc, cur, node)], "Auto-place Sheet Pins");
 }

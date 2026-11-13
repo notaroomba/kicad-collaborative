@@ -22,7 +22,7 @@ import { openPreferences } from "./preferences";
 import { GRID_PAGE, applyPrefs, defaultGrid, editorId, fastGrid, gridLabel, prefs, rememberGrid, toggleGridOverrides } from "./prefs";
 import { obj, onProjectChanged, projectJson, readDoc, saveProject, submitDocOp } from "./project";
 import { openSchematicSetup, schRenderSettings } from "./schematic-setup";
-import { openSyncSheetPins } from "./sync-pins";
+import { autoplaceAllSheetPins, openSyncSheetPins } from "./sync-pins";
 import { openFabOutputs } from "../editor/fab-outputs";
 import { editPageNumber } from "../editor/panels/hierarchy";
 
@@ -80,6 +80,7 @@ export function installDialogs(HANDLERS: Record<string, Handler>): void {
     assignFootprints: needDoc(openAssignFootprints, true),
     schematicSetup: needDoc(() => openSchematicSetup(), true),
     syncAllSheetsPins: needDoc(openSyncSheetPins, true),
+    autoplaceAllSheetPins: needDoc(() => { void autoplaceAllSheetPins(); }, true),
     runERC: needDoc(openErc, true),
     prevMarker: ercPrevMarker as Handler, nextMarker: ercNextMarker as Handler,   // the schematic's; the board's are the module's (EDITOR_ONLY)
     excludeMarker: (() => { if (E.kdoc && isSch()) ercExcludeMarker(); }) as Handler,
