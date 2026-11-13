@@ -270,5 +270,18 @@ test("Shift+S: snapping to the active layer only (KiCad's default) or to all lay
   P.state.snapAllLayers = false; R.setActiveLayer("");
 });
 
+test("Grid Origin...: X / Y in the user's units, Reset zeroes both, OK moves the grid origin (no board change)", () => {
+  const doc = board(); const { ctx, log } = fakeCtx(doc); const R = K.pcbSizes.state; R.setGridOrigin([12.5, -3]);
+  let spec = null; pcb.setForm((sp) => { spec = sp; return true; });
+  pcb.runAction("gridOrigin", ctx); pcb.setForm(null);
+  assert.equal(spec.title, "Grid Origin");
+  assert.deepEqual(spec.fields.map((f) => f.label), ["X:", "Y:", "Reset"]);
+  assert.deepEqual([spec.fields[0].value, spec.fields[1].value, spec.fields[0].unit], [12.5, -3, "mm"]);
+  const vals = {}; spec.change("reset", true, (k, v) => { vals[k] = v; }); assert.deepEqual(vals, { x: 0, y: 0 });
+  spec.apply({ x: 25.4, y: 1.27 }); assert.deepEqual(R.gridOrigin, [25.4, 1.27]);
+  assert.equal(log.commits.length, 0);
+  R.setGridOrigin([0, 0]);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

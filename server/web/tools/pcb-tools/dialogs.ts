@@ -45,6 +45,11 @@ export let formImpl = function (spec: FormSpec): boolean {
           inputs[f.k!] = { type: "radio", get value() { const r = radios.find((x) => x.checked); return r ? r.value : f.value; } };
           body.appendChild(box); continue;
         }
+        if (f.type === "button") {   // a wxButton beside the fields (WX_PT_ENTRY_DIALOG's Reset): change(k, true, set)
+          const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = f.label!; b.dataset.k = f.k; if (f.tip) b.title = f.tip;
+          b.style.cssText = "margin:6px 0 2px;justify-self:start"; b.addEventListener("click", () => { if (spec.change) spec.change(f.k!, true, set); });
+          body.appendChild(b); continue;
+        }
         const row = document.createElement("label"); row.style.cssText = "display:grid;grid-template-columns:150px 1fr;gap:8px;align-items:center;margin:4px 0"; if (f.tip) row.title = f.tip;
         const span = document.createElement("span"); span.textContent = f.label!; row.appendChild(span);
         let inp: HTMLInputElement | HTMLSelectElement;
@@ -52,7 +57,10 @@ export let formImpl = function (spec: FormSpec): boolean {
         else if (f.type === "check") { inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = !!f.value; inp.style.width = "auto"; inp.style.justifySelf = "start"; }
         else { inp = document.createElement("input"); inp.type = f.type === "num" ? "number" : "text"; if (f.type === "num") inp.step = f.step || "any"; inp.value = (f.value === undefined || f.value === null ? "" : f.value) as string; }
         inp.dataset.k = f.k; inp.style.cssText += ";font:inherit;background:var(--panel,#0A1421);color:inherit;border:1px solid var(--line,#24374E);border-radius:3px;padding:3px 5px";
-        inputs[f.k!] = inp; row.appendChild(inp); body.appendChild(row);
+        inputs[f.k!] = inp;
+        if (f.unit) { const w = document.createElement("span"); w.style.cssText = "display:flex;gap:6px;align-items:center"; inp.style.flex = "1"; inp.style.minWidth = "0"; const u = document.createElement("span"); u.textContent = f.unit; w.append(inp, u); row.appendChild(w); }
+        else row.appendChild(inp);
+        body.appendChild(row);
         if (spec.change) { const k = f.k!, el = inp; el.addEventListener(f.type === "select" || f.type === "check" ? "change" : "input", () => spec.change!(k, el.type === "checkbox" ? (el as HTMLInputElement).checked : el.value, set)); }
       }
     },

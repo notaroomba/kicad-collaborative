@@ -27,7 +27,7 @@ import { DIM_TYPE } from "./dimensions";
 import { angleSnapMode, nextLineMode, setAngleSnap, stepDrawWidth } from "./draw-modes";
 import { askText } from "./draw-tools";
 import { drc, mm4 } from "./drc";
-import { cycleVia, cycleWidth, stepLayer } from "./edit-commands";
+import { cycleVia, cycleWidth, sizeUnits, stepLayer } from "./edit-commands";
 import { enterGroup, exitGroup, selectedTopGroup } from "./group-edit";
 import { applySelection, expandGroups, groupChanges, groupMembers, groupMembersChanges, groupOf, isLocked, lockChanges, selectedItems, selectionIds, topParentOf, ungroupChanges } from "./groups";
 import { itemAt } from "./guess";
@@ -546,6 +546,8 @@ act("routerUndoLastSegment", "Undo Last Segment", "", (ctx: PcbCtx) => routingOn
 act("selectLayerPair", "Set Layer Pair...", "", (ctx: PcbCtx) => { if (routingDialogs.layerPair) routingDialogs.layerPair(ctx); else ctx.toast("Set Layer Pair: dialogs are unavailable here"); return true; }, { menu: "-" });
 act("editPredefinedSizes", "Edit Pre-defined Sizes...", "", (ctx: PcbCtx) => { if (routingDialogs.sizes) routingDialogs.sizes(ctx); else ctx.toast("Edit Pre-defined Sizes: dialogs are unavailable here"); return true; }, { menu: "-" });
 // the grid origin and the drill / place file origin: picked with a one-shot tool, reset to the page origin
+// COMMON_TOOLS::GridOrigin: WX_PT_ENTRY_DIALOG "Grid Origin" (X: / Y: in the user's units, Reset sets both to 0)
+act("gridOrigin", "Grid Origin...", "", (ctx: PcbCtx) => { openGridOrigin(ctx); return true; }, { menu: false, tip: "Set the grid origin point" });
 act("gridResetOrigin", "Reset Grid Origin", "", (ctx: PcbCtx) => { sizesOf(ctx).setGridOrigin([0, 0]); ctx.toast("Grid origin reset"); ctx.requestRender(); return true; }, { menu: "-" });
 act("drillResetOrigin", "Reset Drill Origin", "", (ctx: PcbCtx) => { if (canEdit(ctx)) { sizesOf(ctx).setAuxOrigin([0, 0]); ctx.toast("Drill/place file origin reset"); ctx.requestRender(); } return true; }, { menu: "-" });
 act("changeTrackLayerNext", "Move Track to Next Layer", "", (ctx: PcbCtx) => { const ids = selectionOrToast(ctx, "Select tracks first"); if (!ids) return true; return commitSel(ctx, trackLayerChanges(ctx.doc, ids, 1), "track layer"); });
@@ -716,3 +718,19 @@ act("showFootprintBrowser", "Footprint Library Browser", "", libraryAction({ bro
 Object.freeze(ACTIONS);
 /** pcb.setRoutingDialogs: the routing dialogs the editor bundle hands over. */
 export function setRoutingDialogsImpl(d: RoutingDialogs) { routingDialogs = d; }
+
+/** The Grid Origin dialog; exported for the tests (the units come from the toolbar's size units). */
+export function openGridOrigin(ctx: PcbCtx) {
+  const R = sizesOf(ctx), u = sizeUnits(), per = u === "mil" ? 0.0254 : u === "in" ? 25.4 : 1, dp = u === "mil" ? 2 : u === "in" ? 5 : 4;
+  const show = (mm: number) => +(mm / per).toFixed(dp), back = (v: number) => Math.round(v * per * 1e6) / 1e6;
+  const [gx, gy] = R.gridOrigin;
+  return openForm<{ x: number; y: number }>({ title: "Grid Origin", width: 300, fields: [
+    { k: "x", label: "X:", type: "num", value: show(gx), unit: u === "mil" ? "mils" : u },
+    { k: "y", label: "Y:", type: "num", value: show(gy), unit: u === "mil" ? "mils" : u },
+    { k: "reset", label: "Reset", type: "button" }],
+    change: (k, _v, set) => { if (k === "reset") { set("x", 0); set("y", 0); } },
+    apply: (v) => {
+      const x = isNaN(v.x) ? gx : back(v.x), y = isNaN(v.y) ? gy : back(v.y);
+      R.setGridOrigin([x, y]); ctx.requestRender();
+    } });
+}

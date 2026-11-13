@@ -352,6 +352,8 @@ export type TunePicker = import("./tuning-tool").TunePicker;
 /** One field of a form (the dialogs the board commands open): its key, label, kind and value. */
 export interface FormField {
   k?: string; label?: string; type: string; value?: unknown; tip?: string; step?: string;
+  /** the units shown after a value (a UNIT_BINDER's units label) */
+  unit?: string;
   /** select / radio: [value, label(, tooltip)] pairs or plain values */
   options?: (string | (string | number)[])[];
   /** table: the columns, the rows of cells, a click on a row, the text of an empty table */
