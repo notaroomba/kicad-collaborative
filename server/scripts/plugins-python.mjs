@@ -211,6 +211,9 @@ async function one(dir, boardPath, boardGiven) {
     // saved, an export it made) that fits what the dialog accepts.  Without it nothing is picked.
     if (method === "files.save" && typeof a.base64 === "string") handedOver.push({ name: a.filename, base64: a.base64 });
     if (method === "files.pick") {
+      // "# pick: <path from the repository root>": the person picks that file from their computer
+      const given = driveSrc && /^# pick: (?!saved$)(\S+)$/m.exec(driveSrc);
+      if (given) { const f = path.resolve(server, "..", given[1]); return JSON.stringify({ name: path.basename(f), base64: fs.readFileSync(f).toString("base64") }); }
       if (!driveSrc || !/^# pick: saved$/m.test(driveSrc)) return "null";
       const exts = (a.accept || []).map((e) => String(e).toLowerCase());
       // several files come as one ZIP: the person unpacks it and picks the file inside

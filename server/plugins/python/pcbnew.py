@@ -1257,6 +1257,14 @@ class BOARD_ITEM(EDA_ITEM):
     def GetParent(self):
         return self._parent if self._parent is not None else self._board
 
+    def GetParentAsString(self):
+        # KiCad: the footprint's reference when the parent is a footprint, else the parent's id
+        p = self.GetParent()
+        if isinstance(p, FOOTPRINT):
+            return p.GetReference()
+        m = getattr(p, "m_Uuid", None)
+        return m.AsString() if m is not None else ""
+
     def GetParentFootprint(self):
         return self._parent
 
@@ -5000,12 +5008,20 @@ def _net_settings():
     return ns if isinstance(ns, dict) else {}
 
 
+class _NoSuchKey(KeyError, IndexError):
+    pass
+
+
 class _NetClassMap(dict):
     """Net classes by name, as KiCad hands them out: a mapping (KiCad 7 and later), which also answers the calls of the
     NETCLASSES object of KiCad 5 and 6 (NetClasses(), Find(), GetDefault(), GetCount()) that older plugins still make."""
 
     def NetClasses(self):
         return self
+
+    def __missing__(self, name):
+        # KiCad's map answers a name it does not hold with IndexError ("key not found"); plugins catch either
+        raise _NoSuchKey(name)
 
     def Find(self, name):
         return _netclasses().get(str(name))
