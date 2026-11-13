@@ -27,8 +27,8 @@
   "status": "works"
  },
  "com.github.Huaqiu-Electronics.kicad-hqdfm-plugin": {
-  "status": "partly",
-  "note": "Its Quick DFM Check runs and its layer count, board size, smallest track width, via rings and hole count are right. The spacings it reports are being checked against the true distances; until that passes, treat them as approximate."
+  "status": "works",
+  "note": "Its Quick DFM Check runs. Checked on a board with a part turned 45 degrees and tracks at every angle: layer count, board size and area, smallest track width, via rings and hole count are right, and every track-to-track, track-to-pad and pad-to-pad spacing it reports is the true distance to within 3 micrometres. Its online analysis uploads to the vendor's service and needs network access granted."
  },
  "com.github.Huaqiu-Electronics.kicad-hqpcb-plugin": {
   "status": "works",

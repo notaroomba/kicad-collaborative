@@ -4,9 +4,9 @@ found.  The board has a 48-pin part turned by 45 degrees, tracks at every angle 
 
 Expect, against the board file read here as text: 2 layers; 16.6 x 40.1 mm; the smallest track width (0.15 mm) with
 every track looked at and every 0.15 mm track listed; the via ring of 0.1 mm on all 87 vias; 88 drilled holes on
-660 square mm.  And against distances worked out here from the pads' and tracks' own outlines (a turned rounded
-rectangle is not its bounding box): every track-to-pad and pad-to-pad spacing it reports is the true one to within
-3 micrometres."""
+the board's own 605.29 square mm (its outline has a notch, a narrower plug and round corners).  And against distances worked out here from the pads' and tracks' own outlines (a turned rounded
+rectangle is not its bounding box): every track-to-track, track-to-pad and pad-to-pad spacing it reports is the true one
+to within 3 micrometres."""
 import math
 import re
 import pcbnew
@@ -63,6 +63,36 @@ def _gap(one, two):
     return max(0.0, d - ra - rb)
 
 
+def _outline_area(text):
+    """The board's area in square mm from its Edge.Cuts lines and arcs, chained into one loop: the area between the
+    loop's corners, plus or minus the bow of each arc (exact circle segments, not a polygon)."""
+    parts = []
+    for m in re.finditer(r'\(gr_(line|arc)\s*\(start ([-\d.]+) ([-\d.]+)\)\s*(?:\(mid ([-\d.]+) ([-\d.]+)\)\s*)?\(end ([-\d.]+) ([-\d.]+)\)(?:(?!\(gr_).)*?\(layer "Edge\.Cuts"\)', text, re.S):
+        a, b = (float(m.group(2)), float(m.group(3))), (float(m.group(6)), float(m.group(7)))
+        parts.append((a, b, (float(m.group(4)), float(m.group(5))) if m.group(1) == "arc" else None))
+    loop = [parts.pop(0)]
+    while parts:
+        end = loop[-1][1]
+        k = next(i for i, (a, b, _) in enumerate(parts) if math.dist(a, end) < 1e-6 or math.dist(b, end) < 1e-6)
+        a, b, mid = parts.pop(k)
+        loop.append((a, b, mid) if math.dist(a, end) < 1e-6 else (b, a, mid))
+    assert math.dist(loop[-1][1], loop[0][0]) < 1e-6, "the board outline is not one closed loop"
+    corners = sum(a[0] * b[1] - b[0] * a[1] for a, b, _ in loop) / 2
+    bows = 0.0
+    for a, b, mid in loop:
+        if mid is None:
+            continue
+        (ax, ay), (bx, by), (cx, cy) = a, mid, b
+        d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+        ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d
+        uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d
+        r = math.dist((ux, uy), a)
+        angle = 2 * math.asin(min(1.0, math.dist(a, b) / (2 * r)))
+        side = (b[0] - a[0]) * (mid[1] - a[1]) - (b[1] - a[1]) * (mid[0] - a[0])
+        bows += r * r / 2 * (angle - math.sin(angle)) * (1 if (side < 0) == (corners > 0) else -1)
+    return abs(corners) + bows
+
+
 def after_run(action):
     board = pcbnew.GetBoard()
     text = open(board.GetFileName(), encoding="utf-8").read()
@@ -88,7 +118,8 @@ def after_run(action):
     rings = [r for c in ring["check"] for r in c["result"]]
     assert abs(min((size - drill) / 2 for size, drill in vias) - 0.1) < 1e-9 and float(ring["display"]) == 0.1 and len(rings) == len(vias) and all(abs(float(r["value"]) - (float(r["pad_diameter"]) - float(r["hole_diameter"])) / 2) < 1e-9 for r in rings), (ring["display"], len(rings))
     density = found["Drill Hole Density"]["statistics"]
-    assert density["drill_count"] == holes and abs(density["board_area_mm2"] - 16.5 * 40) < 1e-6, density
+    area = _outline_area(text)
+    assert density["drill_count"] == holes and abs(density["board_area_mm2"] - area) < 0.05, (density, area)
 
     # ---- spacings, against the outlines themselves
     by_id = {}
@@ -101,25 +132,39 @@ def after_run(action):
     own = _gap(_piece_of_pad(u1["1"]), _piece_of_pad(u1["2"]))
     assert abs(own - 200000) < 5, f"this test's own geometry is off: pins 1 and 2 of U1 are {own} nm apart by it, not 0.2 mm"
 
-    def piece(item):
+    def pieces(item):
+        """An item as outlines-with-radius: one for a pad or a straight track, 64 short runs along a track arc (they
+        lie within a tenth of a micrometre of the true arc)."""
         if isinstance(item, pcbnew.PAD):
-            return None if item.GetShape() == pcbnew.PAD_SHAPE_CUSTOM else _piece_of_pad(item)
-        if isinstance(item, pcbnew.PCB_ARC) or isinstance(item, pcbnew.PCB_VIA):
+            return None if item.GetShape() == pcbnew.PAD_SHAPE_CUSTOM else [_piece_of_pad(item)]
+        if isinstance(item, pcbnew.PCB_VIA):
             return None
-        a, b = item.GetStart(), item.GetEnd()
-        return [(a.x, a.y), (b.x, b.y)] if (a.x, a.y) != (b.x, b.y) else [(a.x, a.y)], item.GetWidth() / 2.0
+        a, b, half = item.GetStart(), item.GetEnd(), item.GetWidth() / 2.0
+        if isinstance(item, pcbnew.PCB_ARC):
+            m = item.GetMid()
+            d = 2.0 * (a.x * (m.y - b.y) + m.x * (b.y - a.y) + b.x * (a.y - m.y))
+            cx = ((a.x * a.x + a.y * a.y) * (m.y - b.y) + (m.x * m.x + m.y * m.y) * (b.y - a.y) + (b.x * b.x + b.y * b.y) * (a.y - m.y)) / d
+            cy = ((a.x * a.x + a.y * a.y) * (b.x - m.x) + (m.x * m.x + m.y * m.y) * (a.x - b.x) + (b.x * b.x + b.y * b.y) * (m.x - a.x)) / d
+            r = math.hypot(a.x - cx, a.y - cy)
+            t0, t1, tm = (math.atan2(q.y - cy, q.x - cx) for q in (a, b, m))
+            sweep = (t1 - t0) % math.tau
+            if (tm - t0) % math.tau > sweep:
+                sweep -= math.tau
+            pts = [(cx + r * math.cos(t0 + sweep * i / 64), cy + r * math.sin(t0 + sweep * i / 64)) for i in range(65)]
+            return [([p, q], half) for p, q in zip(pts, pts[1:])]
+        return [([(a.x, a.y), (b.x, b.y)] if (a.x, a.y) != (b.x, b.y) else [(a.x, a.y)], half)]
 
     checked, wrong = {}, []
-    for name, key in (("Smallest Trace Spacing", "smallesttracespacing:tracetopadspacing"), ("SMD Spacing", "smdspacing:smdpadspacing")):
-        rows = [r for c in found[name]["check"] for r in c["result"] if r.get("rule_key") == key]
+    for name, keys in (("Smallest Trace Spacing", ("smallesttracespacing:tracetopadspacing", "smallesttracespacing:tracespacing")), ("SMD Spacing", ("smdspacing:smdpadspacing",))):
+        rows = [r for c in found[name]["check"] for r in c["result"] if r.get("rule_key") in keys]
         n = 0
         for r in rows:
             a, b = by_id.get(r.get("info") or r.get("id")), by_id.get(r.get("related_id"))
-            pa, pb = (piece(a) if a is not None else None), (piece(b) if b is not None else None)
+            pa, pb = (pieces(a) if a is not None else None), (pieces(b) if b is not None else None)
             if pa is None or pb is None:
                 continue
             n += 1
-            true = _gap(pa, pb) / 1e6
+            true = min(_gap(x, y) for x in pa for y in pb) / 1e6
             if abs(true - float(r["value"])) > 0.003:
                 wrong.append((name, r["value"], round(true, 4), r.get("layer"), type(a).__name__, type(b).__name__))
         checked[name] = (n, len(rows))
