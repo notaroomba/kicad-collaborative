@@ -208,8 +208,10 @@ try {
   eq('pull updates one file and adds the other', r.j.updated.map((u) => [u.path, u.action]), [['amp.kicad_sch', 'updated'], ['sub.kicad_sch', 'added']]);
   docs = await docsOf(alice, pid);
   check('pulled content is byte-identical', await localFile(alice, docs['amp.kicad_sch']) === SCH1 && await localFile(alice, docs['sub.kicad_sch']) === SCH0);
-  const cps = (await call(alice, 'GET', `/api/projects/${pid}/checkpoints`)).j.checkpoints;
-  check('the replaced version is kept as a checkpoint', cps.some((x) => x.path === 'amp.kicad_sch' && /^Before GitHub pull/.test(x.name)), JSON.stringify(cps));
+  // Kept as a version the server made itself (kind "auto"): listed in History, not among the named checkpoints.
+  const vj = (await call(alice, 'GET', `/api/projects/${pid}/versions`)).j;
+  const vs = Array.isArray(vj) ? vj : vj.versions || [];
+  check('the replaced version is kept in History', vs.some((v) => /^Before GitHub pull/.test(v.name) && (v.docs || []).some((d) => d.path === 'amp.kicad_sch')), JSON.stringify(vs).slice(0, 400));
   eq('in sync after the pull', (await status(alice, pid)).summary, { push: 0, pull: 0, conflict: 0, synced: 4, unsaved: 0 });
 
   // ============================================================ merge: both sides, different items
@@ -318,11 +320,14 @@ try {
   check('nothing left to overwrite afterwards', r.status === 409);
 
   // ============================================================ unsaved live edits
+  // Edits that exist only as ops are folded into the file by the server before a sync
+  // (compact.rs), so the guard below is for a journal the fold refuses.  A gap in the
+  // journal is one: the file those ops describe is not known, so nothing is folded.
   await db.query(`INSERT INTO ops (doc_id, seq, author_id, client_id, client_op_id, changes)
-                  SELECT $1, MAX(seq) + 1, $2, 'e2e', 'gh-e2e-op', '[]'::jsonb FROM snapshots WHERE doc_id = $1`, [docs['amp.kicad_sch'], aliceId]);
+                  SELECT $1, MAX(seq) + 2, $2, 'e2e', 'gh-e2e-op', '[]'::jsonb FROM snapshots WHERE doc_id = $1`, [docs['amp.kicad_sch'], aliceId]);
   await ctl('commit', { fullName: 'gh-alice/amp', files: { 'hw/amp.kicad_sch': SCH1.replace('"A3"', '"A2"') }, author: 'gh-bob' });
   st = await status(alice, pid);
-  check('unsaved edits are reported', st.summary.unsaved === 1 && st.files.find((f) => f.path === 'amp.kicad_sch').unsavedOps === 1, JSON.stringify(st.summary));
+  check('unsaved edits are reported', st.summary.unsaved === 1 && st.files.find((f) => f.path === 'amp.kicad_sch').unsavedOps > 0, JSON.stringify(st.summary));
   r = await call(alice, 'POST', `/api/projects/${pid}/github/pull`, {});
   check('pull refuses to replace a document with unsaved edits', r.j.updated.length === 0 && /live edits/.test(r.j.skipped[0]?.reason), JSON.stringify(r.j));
   check('…leaving it as it was', await localFile(alice, docs['amp.kicad_sch']) === SCH1);

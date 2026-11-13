@@ -17,7 +17,8 @@
 //! The project's content is each document's latest snapshot.  Edits newer than
 //! that live only as ops (the server has no document model to apply them), so
 //! before reading the files a connected desktop client is asked for a fresh
-//! snapshot, and a pull refuses to overwrite a document that still has unsaved ops.
+//! snapshot; what no desktop saves is folded into the file by the server (compact.rs),
+//! and a pull refuses to overwrite a document whose ops still could not be folded.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
