@@ -31,7 +31,7 @@
  * Keep KICAD_COLLAB_PRODUCT_VERSION in sync with packaging/VERSION.
  */
 #define KICAD_COLLAB_PRODUCT_NAME     wxS( "KiCad Collaborative" )
-#define KICAD_COLLAB_PRODUCT_VERSION  wxS( "1.0.9" )
+#define KICAD_COLLAB_PRODUCT_VERSION  wxS( "2.0.0" )
 
 /**
  * The KiCad release this fork is based on, as shown to people (About dialog).
