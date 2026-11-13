@@ -246,7 +246,7 @@ k-select.input { min-height: var(--h-md); height: auto; }
 /* the overlay only blocks input to the frame behind a modal dialog: KiCad does not dim the parent window */
 .kd-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
               background: transparent; }
-.kd-dialog { display: flex; flex-direction: column; min-width: 420px; max-width: min(760px, 94vw); max-height: 90vh;
+.kd-dialog { position: relative; display: flex; flex-direction: column; min-width: 420px; max-width: min(760px, 94vw); max-height: 90vh;
              background: var(--bench); color: var(--ink); border: 1px solid var(--line); border-radius: var(--r-3);
              box-shadow: var(--shadow-dialog); font: var(--fs-sm) var(--font); }
 .kd-title { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--paper);
@@ -254,7 +254,12 @@ k-select.input { min-height: var(--h-md); height: auto; }
             cursor: move; user-select: none; }
 .kd-title .kd-x { margin-left: auto; padding: 0 4px; color: var(--ink-2); font-size: 15px; line-height: 1; cursor: pointer; }
 .kd-title .kd-x:hover { color: var(--ink); }
-.kd-body { padding: 10px 14px; overflow: auto; }
+.kd-body { padding: 10px 14px; overflow: auto; flex: 1 1 auto; min-height: 0; }
+/* wxRESIZE_BORDER's size grip: the dotted corner at the bottom right */
+.kd-grip { position: absolute; right: 1px; bottom: 1px; width: 12px; height: 12px; cursor: nwse-resize; touch-action: none;
+           background: radial-gradient(circle, var(--ink-2) 1px, transparent 1.3px) 0 0 / 4px 4px;
+           clip-path: polygon(100% 0, 100% 100%, 0 100%); opacity: .7; }
+.kd-grip:hover { opacity: 1; }
 .kd-body h3 { margin: 10px 0 6px; color: var(--ink-2); font-size: var(--fs-xs); letter-spacing: .04em; text-transform: uppercase; }
 .kd-body h3:first-child { margin-top: 0; }
 .kd-body .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; }

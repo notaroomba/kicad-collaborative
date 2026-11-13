@@ -19,6 +19,41 @@ if (typeof document !== "undefined") document.addEventListener("keydown", (ev) =
   if (t && t.closest && t.closest(".kd-overlay, .kd-font-pop, #ctxMenu, [role='menu'], [data-popup-open]")) return;   // the overlay's own handler, a prompt on top, or an open menu
   ev.preventDefault(); ev.stopPropagation(); current.finish(false);
 }, true);
+// ---------------------------------------------------------------- DIALOG_SHIM's window geometry
+// A dialog is centred on its parent the first time; after the person moves or resizes it, the next opening of the
+// same dialog (KiCad keys the map by the dialog's class; here by its title) comes back where and as big as it was.
+// Browser storage is a per-viewer convenience, as the desktop's window-geometry settings are per user.
+interface Geometry { left: number; top: number; width?: number; height?: number }
+const GEOM_KEY = (title: string): string => "kd.geom." + title;
+/** Take the dialog out of the centring flexbox at its current place, so it can move and resize. */
+function detach(dlg: HTMLElement): void {
+  if (dlg.style.position === "fixed") return;
+  const r = dlg.getBoundingClientRect();
+  dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = r.left + "px"; dlg.style.top = r.top + "px";
+}
+function saveGeometry(title: string, dlg: HTMLElement, sized: boolean): void {
+  const r = dlg.getBoundingClientRect();
+  let prev: Geometry | null = null; try { prev = JSON.parse(localStorage.getItem(GEOM_KEY(title)) || "null"); } catch (e) { prev = null; }
+  const g: Geometry = { left: Math.round(r.left), top: Math.round(r.top) };
+  if (sized) { g.width = Math.round(r.width); g.height = Math.round(r.height); }
+  else if (prev && prev.width) { g.width = prev.width; g.height = prev.height; }
+  try { localStorage.setItem(GEOM_KEY(title), JSON.stringify(g)); } catch (e) { /* no storage: nothing remembered */ }
+}
+/** The geometry clamped to the window (the screen may have shrunk since). */
+export function clampGeometry(g: Geometry, vw: number, vh: number): Geometry {
+  const width = g.width ? Math.min(g.width, vw) : undefined, height = g.height ? Math.min(g.height, vh) : undefined;
+  const w = width || 240, h = height || 120;
+  return { left: Math.max(0, Math.min(g.left, vw - Math.min(w, vw))), top: Math.max(0, Math.min(g.top, vh - Math.min(h, vh))), width, height };
+}
+function restoreGeometry(title: string, dlg: HTMLElement): void {
+  let g: Geometry | null = null; try { g = JSON.parse(localStorage.getItem(GEOM_KEY(title)) || "null"); } catch (e) { g = null; }
+  if (!g || typeof g.left !== "number" || typeof g.top !== "number") return;
+  const c = clampGeometry(g, window.innerWidth, window.innerHeight);
+  dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = c.left + "px"; dlg.style.top = c.top + "px";
+  if (c.width) { dlg.style.width = c.width + "px"; dlg.style.maxWidth = "none"; }
+  if (c.height) { dlg.style.height = c.height + "px"; dlg.style.maxHeight = "none"; }
+}
+
 /** open({title, width, build(body, api), ok() -> false keeps it open, extra:[{label, fn}], readOnly}) */
 export function open(spec: DlgSpec): DlgApi {
   close();
@@ -49,13 +84,26 @@ export function open(spec: DlgSpec): DlgApi {
   });
   // the title bar drags the dialog around, like a desktop window
   let dragFrom: [number, number] | null = null;
-  tt.addEventListener("pointerdown", (ev) => { if ((ev.target as Element).classList.contains("kd-x")) return; const r = dlg.getBoundingClientRect(); dragFrom = [ev.clientX - r.left, ev.clientY - r.top]; dlg.style.position = "fixed"; dlg.style.margin = "0"; dlg.style.left = r.left + "px"; dlg.style.top = r.top + "px"; tt.setPointerCapture(ev.pointerId); });
+  tt.addEventListener("pointerdown", (ev) => { if ((ev.target as Element).classList.contains("kd-x")) return; const r = dlg.getBoundingClientRect(); dragFrom = [ev.clientX - r.left, ev.clientY - r.top]; detach(dlg); tt.setPointerCapture(ev.pointerId); });
   tt.addEventListener("pointermove", (ev) => { if (!dragFrom) return; dlg.style.left = Math.max(0, ev.clientX - dragFrom[0]) + "px"; dlg.style.top = Math.max(0, ev.clientY - dragFrom[1]) + "px"; });
-  tt.addEventListener("pointerup", () => { dragFrom = null; });
+  tt.addEventListener("pointerup", () => { if (dragFrom) saveGeometry(spec.title, dlg, false); dragFrom = null; });
+  // wxRESIZE_BORDER: a grip in the bottom-right corner resizes the dialog
+  const grip = el("div", "kd-grip"); grip.title = "Resize"; dlg.appendChild(grip);
+  let sizeFrom: [number, number, number, number] | null = null;
+  grip.addEventListener("pointerdown", (ev) => { ev.preventDefault(); const r = dlg.getBoundingClientRect(); detach(dlg); sizeFrom = [ev.clientX, ev.clientY, r.width, r.height]; grip.setPointerCapture(ev.pointerId); });
+  grip.addEventListener("pointermove", (ev) => {
+    if (!sizeFrom) return;
+    const r = dlg.getBoundingClientRect();
+    dlg.style.width = Math.max(240, Math.min(window.innerWidth - r.left, sizeFrom[2] + ev.clientX - sizeFrom[0])) + "px";
+    dlg.style.height = Math.max(120, Math.min(window.innerHeight - r.top, sizeFrom[3] + ev.clientY - sizeFrom[1])) + "px";
+    dlg.style.maxWidth = "none"; dlg.style.maxHeight = "none";
+  });
+  grip.addEventListener("pointerup", () => { if (sizeFrom) saveGeometry(spec.title, dlg, true); sizeFrom = null; });
   current = { ov, dlg, body, spec, finish };
   ensureCss();
   const api: DlgApi = { body, close, dlg, foot, finish, refocus(key) { const c = key !== undefined && body.querySelector<HTMLInputElement>(`[data-k="${key}"]`); if (c) { c.focus(); if (c.select && c.type === "text") c.select(); } } };
   spec.build(body, api);
+  restoreGeometry(spec.title, dlg);
   const first = body.querySelector<HTMLInputElement>("input:not([type=checkbox]), k-select, textarea, input"); if (first && !spec.readOnly && !first.disabled) { first.focus(); if (first.select && first.type === "text") first.select(); }
   if (!dlg.contains(document.activeElement)) dlg.focus();
   return api;
