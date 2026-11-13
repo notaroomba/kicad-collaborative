@@ -98,6 +98,7 @@ function menuCtx(): MenuCtx {
     hasLocked: items.some((it) => isLocked(it.node)), hasUnlocked: items.some((it) => !isLocked(it.node)),
     groupSelected: boardGroupSelected(), inGroup: !sch && !!(CollabTools.pcb && (CollabTools.pcb.state as { enteredGroup?: string | null }).enteredGroup),
     hasItems: !!E.kdoc && E.kdoc.items.size > 0, checks: attributeChecks(items),
+    overDrawingSheet: sch && !items.length && overDrawingSheet(),
     cells: cells ? { block: cells.block, merged: cells.merged, structure: cells.structure } : null,
   };
 }
@@ -106,11 +107,17 @@ function menuCtx(): MenuCtx {
 const moduleKey = (key: string): Run => () => { const m = activeModule(); if (m && m.onKey) { try { m.onKey(key, {}, toolCtx()); } catch (e) { console.warn(e); } requestRender(); } };
 const escape: Run = () => { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); };
 
+/** The cursor lies on a drawing-sheet item (SCH_EDIT_TOOL propertiesCondition with nothing selected). */
+function overDrawingSheet(): boolean {
+  const K = window.KDialogs as unknown as { overDrawingSheet?: (p: [number, number]) => boolean } | undefined, c = E.lastCursorMm as [number, number] | null;
+  return !!(K && K.overDrawingSheet && c && K.overDrawingSheet(c));
+}
 function openProperties(): void {
   const d = E.kdoc as KDoc | null, K = window.KDialogs; if (!d || !K) return;
   if (E.selField) { const it = d.items.get(E.selField.id); if (it) K.openField(toolCtx(), it, E.selField.name); return; }
   if (E.selPins.length) { if (E.selPins.length === 1) { const it = d.items.get(E.selPins[0].id); if (it) K.openItem(toolCtx(), it); } return; }   // Properties promotes a lone pin to its symbol; several pins open nothing
-  const it = selectionItems()[0]; if (it) K.openItem(toolCtx(), it);
+  const it = selectionItems()[0]; if (it) { K.openItem(toolCtx(), it); return; }
+  const sp = (K as unknown as { schProperties?: () => boolean }).schProperties; if (isSch() && sp) sp();   // nothing selected, over the drawing sheet: Page Settings
 }
 /** SCH_MOVE_TOOL: selected pins move as their parent symbols. */
 function promotePin(): void {

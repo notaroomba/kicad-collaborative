@@ -512,3 +512,28 @@ export function documentDrawingSheet(doc: SheetContext): SheetDraw[] {
   SHEET_CACHE.set(doc, { key, wks, items });
   return items;
 }
+
+/**
+ * DS_PROXY_VIEW_ITEM::HitTestDrawingSheetItems: whether a point is within `tol` of a drawing-sheet item: a line
+ * (TestSegmentHit with half its width), a rectangle's edges (DS_DRAW_ITEM_RECT::HitTest), or a text's box
+ * (EDA_TEXT::TextHitTest inflated by tol).
+ */
+export function hitTestDrawingSheet(doc: SheetContext, x: number, y: number, tol: number): boolean {
+  const seg = (ax: number, ay: number, bx: number, by: number, d: number) => {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, t = l2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / l2)) : 0;
+    return Math.hypot(x - (ax + t * dx), y - (ay + t * dy)) <= d;
+  };
+  for (const it of documentDrawingSheet(doc)) {
+    if (it.t === "line") { if (seg(it.x1, it.y1, it.x2, it.y2, tol + it.w / 2)) return true; }
+    else if (it.t === "rect") {
+      const d = tol + it.lw / 2, x1 = it.x + it.w, y1 = it.y + it.h;
+      if (seg(it.x, it.y, x1, it.y, d) || seg(x1, it.y, x1, y1, d) || seg(x1, y1, it.x, y1, d) || seg(it.x, y1, it.x, it.y, d)) return true;
+    } else {
+      const lines = it.text.split("\n"), w = Math.max(...lines.map((l) => textWidth(l, it.size, it.w))), h = it.size * (1 + (lines.length - 1) * 1.62);
+      let bw = w, bh = h; if (Math.abs(it.rot % 180) === 90) { bw = h; bh = w; }
+      const x0 = it.h === "center" ? it.x - bw / 2 : it.h === "right" ? it.x - bw : it.x, y0 = it.v === "middle" || it.v === "center" ? it.y - bh / 2 : it.v === "bottom" ? it.y - bh : it.y;
+      if (x >= x0 - tol && x <= x0 + bw + tol && y >= y0 - tol && y <= y0 + bh + tol) return true;
+    }
+  }
+  return false;
+}

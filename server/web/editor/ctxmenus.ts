@@ -40,6 +40,8 @@ export interface MenuCtx {
   groupSelected?: boolean; inGroup?: boolean;
   /** board is not empty (EDIT_TOOL's noItemsCondition) */
   hasItems: boolean;
+  /** schematic, nothing selected: the cursor is on a drawing-sheet item (HitTestDrawingSheetItems) */
+  overDrawingSheet?: boolean;
   /** check marks of the attribute entries, by action name */
   checks: Record<string, boolean>;
   /** a table cell selection (kinds are all "table_cell"): EDIT_TABLE_TOOL_BASE::addMenus' conditions */
@@ -131,9 +133,9 @@ const schSingleSymbol = and(count(1), onlyTypes(set("symbol")));
 const schMultipleSymbols = and(moreThan(1), onlyTypes(set("symbol")));
 /** SCH_EDIT_TOOL::Init orientCondition. */
 const schOrient: Cond = (c) => !c.drawingLine && c.kinds.some((k) => SCH_ROTATABLE.has(k));
-/** SCH_EDIT_TOOL::Init propertiesCondition (the drawing-sheet case of an empty selection is not offered). */
+/** SCH_EDIT_TOOL::Init propertiesCondition (an empty selection: the cursor on the drawing sheet, for Page Settings). */
 const schProperties: Cond = (c) => {
-  const first = c.kinds[0]; if (!first) return false;
+  const first = c.kinds[0]; if (!first) return !!c.overDrawingSheet;
   if (first === "table_cell") return c.kinds.every((k) => k === "table_cell");   // SCH_EDIT_TOOL::Properties: DIALOG_TABLECELL_PROPERTIES
   if (SCH_PROPS_SINGLE.has(first)) return c.kinds.length === 1;
   if (first === "gline" || first === "wire" || first === "bus" || first === "bus_entry" || first === "junction") {

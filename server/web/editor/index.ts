@@ -155,7 +155,10 @@ stage.addEventListener("dblclick", (ev) => {
   // KiCad: a double-click on a hierarchical sheet enters it (E opens its properties)
   if (isSch()) { const sh = E.sheets.find((r: SheetEntry) => x >= r.x / E.IU && x <= (r.x + r.w) / E.IU && y >= r.y / E.IU && y <= (r.y + r.h) / E.IU); if (sh) { const it = E.kdoc.items.get(sh.id); if (it && it.file) { enterSheet(it.file); return; } if (it) { KDialogs!.openItem(ctx, it); return; } } }
   const other = hitAny([x, y]); const it = other && E.kdoc.items.get(other.id);
-  if (it) KDialogs!.openItem(ctx, it);
+  if (it) { KDialogs!.openItem(ctx, it); return; }
+  // SCH_SELECTION_TOOL: a double-click on nothing posts SCH_ACTIONS::properties: over the drawing sheet, Page Settings
+  const sp = (KDialogs as unknown as { schProperties?: () => boolean }).schProperties;
+  if (isSch() && sp && !E.selection.size && !E.selected) sp();
 });
 
 // a press held still over overlapping items opens Clarify Selection (m_disambiguateTimer)

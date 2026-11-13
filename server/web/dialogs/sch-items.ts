@@ -684,12 +684,18 @@ export function schProperties(): boolean {
   if (t.dialog === "none" && items.length) return true;   // a no-connect
   // nothing selected, the cursor over the title block: Page Settings
   const S = CollabTools.sch ? CollabTools.sch.state as { cursor?: [number, number] } : null, cur = S && S.cursor, page = (E.kdoc as KDoc & { page?: [number, number] }).page;
-  if (!items.length && cur && page && cur[0] >= page[0] - 10 - 110 && cur[0] <= page[0] - 10 && cur[1] >= page[1] - 10 - 32 && cur[1] <= page[1] - 10) { openPageSettings(); return true; }
+  if (!items.length && cur && page && overDrawingSheet(cur)) { openPageSettings(); return true; }
   return false;
+}
+/** SCH_EDIT_TOOL propertiesCondition's empty-selection case: the drawing sheet shows and an item of it lies within five pixels. */
+export function overDrawingSheet(p: [number, number]): boolean {
+  const doc = E.kdoc as KDoc | null; if (!doc || doc.type !== "sch") return false;
+  const ppm = (toolCtx() as Ctx).pxPerMm || 1;
+  return KiCadCanvas.hitTestDrawingSheet(doc, p[0], p[1], 5 / ppm);
 }
 /** Hook the dialogs into kicad-dialogs.js (called once from dialogs/index.ts). */
 export function installSchItemDialogs(): void {
   const kd = (window as unknown as { KDialogs?: Record<string, unknown> }).KDialogs; if (!kd) return;
-  kd.schItemDialog = schItemDialog; kd.schFieldDialog = schFieldDialog; kd.confirm = confirmBox; kd.schProperties = schProperties;
+  kd.schItemDialog = schItemDialog; kd.schFieldDialog = schFieldDialog; kd.confirm = confirmBox; kd.schProperties = schProperties; kd.overDrawingSheet = overDrawingSheet;
   void HL;
 }
